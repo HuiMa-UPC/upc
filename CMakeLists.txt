@@ -29,14 +29,23 @@ set(APP_SOURCES
     src/main.cpp
     src/platform.cpp
     src/ui_theme.cpp
+    src/ui_feedback.cpp
     src/ui_shell.cpp
+    src/ring_buffer.cpp
+    src/protocol_mcu.cpp
+    src/job_status.cpp
     ui/common/page_common.cpp
+    ui/common/ui_keyboard.cpp
     ui/home/page_home.cpp
+    ui/files/files_open.cpp
+    ui/files/gcode_worker.cpp
     ui/control/page_control.cpp
+    ui/control/ctrl_backend.cpp
     ui/files/page_files.cpp
     ui/settings/page_settings.cpp
     ui/serial/page_serial.cpp
     ui/tcpclient/page_tcpclient.cpp
+    ui/tcpclient/tcpclient_backend.cpp
 )
 
 add_executable(${APP_TARGET} ${APP_SOURCES})

@@ -481,7 +481,6 @@ static int drm_dmabuf_set_plane(drm_dev_t * drm_dev, drm_buffer_t * buf)
     drm_add_plane_property(drm_dev, "CRTC_Y", 0);
     drm_add_plane_property(drm_dev, "CRTC_W", drm_dev->width);
     drm_add_plane_property(drm_dev, "CRTC_H", drm_dev->height);
- 
 
     ret = drmModeAtomicCommit(drm_dev->fd, drm_dev->req, flags, drm_dev);
     if(ret) {

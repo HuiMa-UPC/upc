@@ -1,16 +1,11 @@
 #include "page_tcpclient.hpp"
+#include "tcpclient_backend.hpp"
 #include "ui_theme.hpp"
 
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
-#include <unistd.h>
-#include <fcntl.h>
-#include <cerrno>
 #include <cstring>
 #include <cstdlib>
 
-static int g_tcp_fd = -1;
+/* ---------- 前端 UI 控件 ---------- */
 static lv_obj_t *g_kb = nullptr;
 static lv_obj_t *g_recv_ta = nullptr;
 static lv_obj_t *g_send_ta = nullptr;
@@ -18,43 +13,53 @@ static lv_obj_t *g_ip_ta = nullptr;
 static lv_obj_t *g_port_ta = nullptr;
 static lv_obj_t *g_status_lbl = nullptr;
 static lv_obj_t *g_btn_connect = nullptr;
-static lv_timer_t *g_read_timer = nullptr;
 
-static void tcp_read_cb(lv_timer_t *)
+/* ---------- 内部辅助 ---------- */
+static void update_connect_btn(bool connected)
 {
-    if(g_tcp_fd < 0) return;
-
-    char buf[256];
-    ssize_t n = recv(g_tcp_fd, buf, sizeof(buf) - 1, 0);
-    if(n > 0) {
-        buf[n] = '\0';
-        lv_textarea_add_text(g_recv_ta, buf);
-
-        const char *txt = lv_textarea_get_text(g_recv_ta);
-        size_t len = strlen(txt);
-        if(len > 8192) {
-            lv_textarea_set_text(g_recv_ta, txt + (len - 4096));
-        }
+    if(connected) {
+        lv_obj_set_style_bg_color(g_btn_connect, ui_color_danger, 0);
+        lv_label_set_text(lv_obj_get_child(g_btn_connect, 0), "Disconnect");
     }
-    else if(n == 0) {
-        close(g_tcp_fd);
-        g_tcp_fd = -1;
-        lv_timer_pause(g_read_timer);
-        lv_label_set_text(g_status_lbl, "Remote closed");
+    else {
         lv_obj_set_style_bg_color(g_btn_connect, ui_color_accent_dim, 0);
         lv_label_set_text(lv_obj_get_child(g_btn_connect, 0), "Connect");
     }
 }
 
+/* ---------- 后端回调 -> 更新 UI ---------- */
+static void on_tcp_state_changed(tcp_state_t state, const char *msg, void *)
+{
+    lv_label_set_text(g_status_lbl, msg ? msg : "");
+
+    switch(state) {
+        case TCP_STATE_CONNECTED:
+            update_connect_btn(true);
+            break;
+        case TCP_STATE_DISCONNECTED:
+        case TCP_STATE_REMOTE_CLOSED:
+        case TCP_STATE_ERROR:
+            update_connect_btn(false);
+            break;
+    }
+}
+
+static void on_tcp_data_received(const char *data, size_t /*len*/, void *)
+{
+    lv_textarea_add_text(g_recv_ta, data);
+
+    const char *txt = lv_textarea_get_text(g_recv_ta);
+    size_t len = strlen(txt);
+    if(len > 8192) {
+        lv_textarea_set_text(g_recv_ta, txt + (len - 4096));
+    }
+}
+
+/* ---------- UI 事件回调 ---------- */
 static void tcp_connect_cb(lv_event_t *)
 {
-    if(g_tcp_fd >= 0) {
-        lv_timer_pause(g_read_timer);
-        close(g_tcp_fd);
-        g_tcp_fd = -1;
-        lv_label_set_text(g_status_lbl, "Disconnected");
-        lv_obj_set_style_bg_color(g_btn_connect, ui_color_accent_dim, 0);
-        lv_label_set_text(lv_obj_get_child(g_btn_connect, 0), "Connect");
+    if(tcp_backend_is_connected()) {
+        tcp_backend_disconnect();
     }
     else {
         const char *ip = lv_textarea_get_text(g_ip_ta);
@@ -63,54 +68,17 @@ static void tcp_connect_cb(lv_event_t *)
             lv_label_set_text(g_status_lbl, "Empty IP/Port");
             return;
         }
-
         int port = atoi(port_str);
-        int fd = socket(AF_INET, SOCK_STREAM, 0);
-        if(fd < 0) {
-            lv_label_set_text(g_status_lbl, "Socket fail");
-            return;
-        }
-
-        struct timeval tv;
-        tv.tv_sec = 2;
-        tv.tv_usec = 0;
-        setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
-
-        struct sockaddr_in addr;
-        memset(&addr, 0, sizeof(addr));
-        addr.sin_family = AF_INET;
-        addr.sin_port = htons(port);
-        if(inet_pton(AF_INET, ip, &addr.sin_addr) <= 0) {
-            close(fd);
-            lv_label_set_text(g_status_lbl, "Invalid IP");
-            return;
-        }
-
-        if(connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
-            close(fd);
-            lv_label_set_text(g_status_lbl, "Connect failed");
-            return;
-        }
-
-        int flags = fcntl(fd, F_GETFL, 0);
-        fcntl(fd, F_SETFL, flags | O_NONBLOCK);
-
-        g_tcp_fd = fd;
-        lv_timer_resume(g_read_timer);
-        lv_label_set_text(g_status_lbl, "Connected");
-        lv_obj_set_style_bg_color(g_btn_connect, ui_color_danger, 0);
-        lv_label_set_text(lv_obj_get_child(g_btn_connect, 0), "Disconnect");
+        tcp_backend_connect(ip, port);
     }
 }
 
 static void tcp_send_cb(lv_event_t *)
 {
-    if(g_tcp_fd < 0) return;
-
     const char *text = lv_textarea_get_text(g_send_ta);
     if(text && text[0]) {
-        send(g_tcp_fd, text, strlen(text), 0);
-        send(g_tcp_fd, "\r\n", 2, 0);
+        tcp_backend_send(text, strlen(text));
+        tcp_backend_send("\r\n", 2);
     }
 }
 
@@ -126,8 +94,14 @@ static void ta_focus_cb(lv_event_t *e)
     }
 }
 
+/* ---------- 页面创建 ---------- */
 lv_obj_t *page_tcp_create(lv_obj_t *parent)
 {
+    /* 初始化后端并注册回调 */
+    tcp_backend_init();
+    tcp_backend_set_state_cb(on_tcp_state_changed, nullptr);
+    tcp_backend_set_data_cb(on_tcp_data_received, nullptr);
+
     lv_obj_t *page = lv_obj_create(parent);
     lv_obj_remove_style_all(page);
     lv_obj_set_size(page, LV_PCT(100), LV_PCT(100));
@@ -151,7 +125,7 @@ lv_obj_t *page_tcp_create(lv_obj_t *parent)
     g_ip_ta = lv_textarea_create(cfg_row);
     lv_textarea_set_one_line(g_ip_ta, true);
     lv_textarea_set_text(g_ip_ta, "192.168.1.100");
-    lv_obj_set_width(g_ip_ta, 220);
+    lv_obj_set_width(g_ip_ta, 130);
     lv_obj_add_event_cb(g_ip_ta, ta_focus_cb, LV_EVENT_FOCUSED, NULL);
 
     lv_obj_t *port_lbl = lv_label_create(cfg_row);
@@ -161,11 +135,11 @@ lv_obj_t *page_tcp_create(lv_obj_t *parent)
     g_port_ta = lv_textarea_create(cfg_row);
     lv_textarea_set_one_line(g_port_ta, true);
     lv_textarea_set_text(g_port_ta, "8080");
-    lv_obj_set_width(g_port_ta, 120);
+    lv_obj_set_width(g_port_ta, 70);
     lv_obj_add_event_cb(g_port_ta, ta_focus_cb, LV_EVENT_FOCUSED, NULL);
 
     g_btn_connect = lv_button_create(cfg_row);
-    lv_obj_set_size(g_btn_connect, 120, 48);
+    lv_obj_set_size(g_btn_connect, 72, 36);
     lv_obj_add_style(g_btn_connect, ui_style_btn_primary(), 0);
     lv_obj_add_event_cb(g_btn_connect, tcp_connect_cb, LV_EVENT_CLICKED, NULL);
     lv_obj_t *btn_lbl = lv_label_create(g_btn_connect);
@@ -207,7 +181,7 @@ lv_obj_t *page_tcp_create(lv_obj_t *parent)
     lv_obj_add_event_cb(g_send_ta, ta_focus_cb, LV_EVENT_FOCUSED, NULL);
 
     lv_obj_t *btn_send = lv_button_create(send_row);
-    lv_obj_set_size(btn_send, 100, 48);
+    lv_obj_set_size(btn_send, 64, 36);
     lv_obj_add_style(btn_send, ui_style_btn_primary(), 0);
     lv_obj_add_event_cb(btn_send, tcp_send_cb, LV_EVENT_CLICKED, NULL);
     lv_obj_t *send_btn_lbl = lv_label_create(btn_send);
@@ -217,13 +191,9 @@ lv_obj_t *page_tcp_create(lv_obj_t *parent)
     /* ---------- 触摸键盘 ---------- */
     g_kb = lv_keyboard_create(page);
     lv_obj_set_width(g_kb, LV_PCT(100));
-    lv_obj_set_height(g_kb, 240);
+    lv_obj_set_height(g_kb, 200);
     lv_keyboard_set_mode(g_kb, LV_KEYBOARD_MODE_TEXT_LOWER);
     lv_keyboard_set_textarea(g_kb, g_send_ta);
-
-    /* ---------- 定时轮询 ---------- */
-    g_read_timer = lv_timer_create(tcp_read_cb, 50, NULL);
-    lv_timer_pause(g_read_timer);
 
     return page;
 }

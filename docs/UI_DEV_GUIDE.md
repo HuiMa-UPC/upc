@@ -99,9 +99,9 @@ lv_obj_t *page_home_create(lv_obj_t *parent)
 - 页面根对象请 `lv_obj_set_size(page, LV_PCT(100), LV_PCT(100))`
 - 样式优先用 `ui_theme.hpp` 的 `ui_style_*()` 和配色常量，勿随意写死颜色
 - 控件尽量大，适应触摸屏：
-  - 正文：`ui_font_body()` 24px
-  - 标题：`ui_font_title()` 32px
-  - 图标：`ui_font_icon()` 28px
+  - 正文：`ui_font_body()` 16px
+  - 标题：`ui_font_title()` 20px
+  - 图标：`ui_font_icon()` 18px
 
 ## 关于显示方向（重要）
 

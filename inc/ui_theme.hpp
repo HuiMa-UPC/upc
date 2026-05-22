@@ -19,12 +19,25 @@ extern const lv_color_t ui_color_text_dim;
 extern const lv_color_t ui_color_border;
 extern const lv_color_t ui_color_danger;
 
-/* 横屏大控件尺寸（按 1920x1080 设计，小屏可缩放） */
-#define UI_SIDEBAR_W        280
-#define UI_NAV_ITEM_H       96
-#define UI_PAD              20
-#define UI_PAD_SM           12
-#define UI_RADIUS           10
+/* 横屏控件尺寸（按 1024x600 适配） */
+#define UI_SIDEBAR_W        188
+#define UI_NAV_ITEM_H       44
+#define UI_PAD              12
+#define UI_PAD_SM           8
+#define UI_RADIUS           6
+/** 表单标签列宽（Connection / Control 对齐用） */
+#define UI_FORM_LABEL_W     56
+#define UI_FORM_LABEL2_W    44
+/** G-code 解析增益行（左对齐标签，避免右对齐裁切） */
+#define UI_GAIN_LABEL_W     52
+#define UI_GAIN_TA_W        108
+#define UI_INPUT_H          36
+#define UI_TA_IP_W          150
+#define UI_TA_SHORT_W       72
+#define UI_BTN_CONN_W       92
+/** 进度条行左侧标题宽度（避免 CmdCache/DataCache 换行） */
+#define UI_BAR_TITLE_W      72
+#define UI_BAR_VALUE_W      56
 
 void ui_theme_init(void);
 

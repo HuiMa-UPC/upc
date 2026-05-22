@@ -44,6 +44,10 @@ static lv_display_t *init_drm_display(void)
     }
     lv_free(auto_card);
 
+    /* 强制设置为 1024x600（目标屏幕分辨率） */
+    lv_display_set_resolution(disp, 1024, 600);
+    lv_display_set_physical_resolution(disp, 1024, 600);
+
     fprintf(stderr, "DRM OK %ux%u\n",
             (unsigned)lv_display_get_horizontal_resolution(disp),
             (unsigned)lv_display_get_vertical_resolution(disp));

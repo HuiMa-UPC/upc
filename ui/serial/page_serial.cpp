@@ -147,7 +147,7 @@ lv_obj_t *page_serial_create(lv_obj_t *parent)
     g_dev_ta = lv_textarea_create(cfg_row);
     lv_textarea_set_one_line(g_dev_ta, true);
     lv_textarea_set_text(g_dev_ta, "/dev/ttyUSB0");
-    lv_obj_set_width(g_dev_ta, 240);
+    lv_obj_set_width(g_dev_ta, 140);
     lv_obj_add_event_cb(g_dev_ta, ta_focus_cb, LV_EVENT_FOCUSED, NULL);
 
     lv_obj_t *baud_lbl = lv_label_create(cfg_row);
@@ -157,10 +157,10 @@ lv_obj_t *page_serial_create(lv_obj_t *parent)
     g_baud_dd = lv_dropdown_create(cfg_row);
     lv_dropdown_set_options(g_baud_dd, "9600\n19200\n38400\n57600\n115200\n230400\n460800\n921600");
     lv_dropdown_set_selected(g_baud_dd, 4);
-    lv_obj_set_width(g_baud_dd, 140);
+    lv_obj_set_width(g_baud_dd, 80);
 
     g_btn_connect = lv_button_create(cfg_row);
-    lv_obj_set_size(g_btn_connect, 120, 48);
+    lv_obj_set_size(g_btn_connect, 72, 36);
     lv_obj_add_style(g_btn_connect, ui_style_btn_primary(), 0);
     lv_obj_add_event_cb(g_btn_connect, serial_connect_cb, LV_EVENT_CLICKED, NULL);
     lv_obj_t *btn_lbl = lv_label_create(g_btn_connect);
@@ -202,7 +202,7 @@ lv_obj_t *page_serial_create(lv_obj_t *parent)
     lv_obj_add_event_cb(g_send_ta, ta_focus_cb, LV_EVENT_FOCUSED, NULL);
 
     lv_obj_t *btn_send = lv_button_create(send_row);
-    lv_obj_set_size(btn_send, 100, 48);
+    lv_obj_set_size(btn_send, 64, 36);
     lv_obj_add_style(btn_send, ui_style_btn_primary(), 0);
     lv_obj_add_event_cb(btn_send, serial_send_cb, LV_EVENT_CLICKED, NULL);
     lv_obj_t *send_btn_lbl = lv_label_create(btn_send);
@@ -212,7 +212,7 @@ lv_obj_t *page_serial_create(lv_obj_t *parent)
     /* ---------- 触摸键盘 ---------- */
     g_kb = lv_keyboard_create(page);
     lv_obj_set_width(g_kb, LV_PCT(100));
-    lv_obj_set_height(g_kb, 240);
+    lv_obj_set_height(g_kb, 200);
     lv_keyboard_set_mode(g_kb, LV_KEYBOARD_MODE_TEXT_LOWER);
     lv_keyboard_set_textarea(g_kb, g_send_ta);
 

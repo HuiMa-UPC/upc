@@ -1,5 +1,6 @@
 #include "ui_shell.hpp"
 #include "ui_theme.hpp"
+#include "ui_keyboard.hpp"
 #include "page_home.hpp"
 #include "page_control.hpp"
 #include "page_files.hpp"
@@ -46,6 +47,9 @@ static void show_page(ui_page_id_t id)
         return;
     }
 
+    /* 页面切换时隐藏键盘，避免键盘残留在新页面上 */
+    ui_keyboard_hide();
+
     for(uint32_t i = 0; i < UI_PAGE_COUNT; i++) {
         if(g_pages[i]) {
             if(i == (uint32_t)id) {
@@ -60,6 +64,8 @@ static void show_page(ui_page_id_t id)
         }
     }
     g_active = id;
+
+    page_files_set_visible(id == UI_PAGE_FILES ? 1 : 0);
 }
 
 static void nav_click_cb(lv_event_t *e)
@@ -79,17 +85,19 @@ static lv_obj_t *make_nav_button(lv_obj_t *parent, const nav_item_def_t *def, ui
 
     lv_obj_set_flex_flow(btn, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(btn, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_column(btn, 16, 0);
+    lv_obj_set_style_pad_column(btn, 12, 0);
     lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, 0);
 
     lv_obj_t *icon = lv_label_create(btn);
     lv_label_set_text(icon, def->icon);
     lv_obj_set_style_text_font(icon, ui_font_icon(), 0);
-    lv_obj_set_width(icon, 48);
+    lv_obj_set_width(icon, 40);
 
     lv_obj_t *txt = lv_label_create(btn);
     lv_label_set_text(txt, def->label);
     lv_obj_set_flex_grow(txt, 1);
+    lv_label_set_long_mode(txt, LV_LABEL_LONG_MODE_CLIP);
+    lv_obj_set_style_text_align(txt, LV_TEXT_ALIGN_LEFT, 0);
 
     return btn;
 }
@@ -157,6 +165,9 @@ void ui_shell_init(void)
     }
 
     show_page(UI_PAGE_HOME);
+
+    /* 初始化全局软键盘 */
+    ui_keyboard_init(scr);
 }
 
 lv_obj_t *ui_shell_content_root(void)
