@@ -350,9 +350,48 @@ static void sync_parsing_slot_from_worker(void)
     }
 }
 
+/** Control Reset 等触发的 gcode_start_parse 不会经过 Open，须把 Files 进度重新挂到解析态 */
+static void files_attach_active_parse_if_needed(void)
+{
+    if(g_parsing_idx >= 0 || !gcode_is_parsing()) {
+        return;
+    }
+    if(g_active_idx < 0 || g_active_idx >= g_file_list.count) {
+        return;
+    }
+
+    g_parsing_idx = g_active_idx;
+    file_slot_t *slot = &g_slots[g_active_idx];
+    slot->state = FILE_SLOT_PARSING;
+    slot->parsed_lines = gcode_get_parsed_lines();
+    {
+        JOB_LOCK();
+        slot->packets = g_job_status.total_packets;
+    }
+}
+
+void page_files_notify_parse_restarted(void)
+{
+    if(g_active_idx < 0 || g_active_idx >= g_file_list.count) {
+        return;
+    }
+
+    g_parsing_idx = g_active_idx;
+    file_slot_t *slot = &g_slots[g_active_idx];
+    slot->state        = FILE_SLOT_PARSING;
+    slot->parsed_lines = 0;
+    slot->packets      = 0;
+    slot->total_lines  = gcode_get_total_lines();
+
+    if(g_page_visible && g_selected_idx == g_active_idx) {
+        refresh_detail_panel();
+    }
+}
+
 static void files_ui_timer_cb(lv_timer_t *)
 {
     job_status_update_ring();
+    files_attach_active_parse_if_needed();
 
     if(g_parsing_idx >= 0 && g_parsing_idx < g_file_list.count) {
         sync_parsing_slot_from_worker();
@@ -382,12 +421,12 @@ static void files_ui_timer_cb(lv_timer_t *)
             g_job_status.is_parsing = false;
         }
 
+        if(slot->state == FILE_SLOT_READY) {
+            ui_toast_show("G-code loaded — go to Control to Start", ui_color_accent, 2200);
+        } else {
+            ui_toast_show("Failed to open G-code file", ui_color_danger, 2500);
+        }
         if(g_selected_idx == finished_idx) {
-            if(slot->state == FILE_SLOT_READY) {
-                ui_toast_show("G-code loaded — go to Control to Start", ui_color_accent, 2200);
-            } else {
-                ui_toast_show("Failed to open G-code file", ui_color_danger, 2500);
-            }
             refresh_detail_panel();
         }
         return;

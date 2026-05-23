@@ -1,39 +1,20 @@
 #include "protocol_mcu.hpp"
 #include <cstring>
 
-/* ---------- 大小端辅助 ---------- */
-static inline uint16_t htons_u16(uint16_t v)
-{
-    return (uint16_t)((v >> 8) | (v << 8));
-}
-
 /* ---------- TCP 帧构造 ---------- */
 
-int build_motion_frame(const motion_subpack_t *pkts, int n,
+int build_motion_frame(const uint8_t *subpkts11, int n,
                        uint8_t *out, size_t out_size)
 {
-    if (!pkts || n <= 0 || n > 5957 || !out || out_size < (size_t)(3 + 11 * n))
+    if(!subpkts11 || n <= 0 || n > 5957 || !out || out_size < (size_t)(3 + 11 * n)) {
         return -1;
+    }
 
     out[0] = 0xBE;
     out[1] = 0xEF;
     out[2] = (uint8_t)n;
-
-    for (int i = 0; i < n; i++) {
-        uint8_t *p = &out[3 + i * 11];
-        p[0] = pkts[i].cmd;
-        p[1] = (uint8_t)(pkts[i].x >> 8);
-        p[2] = (uint8_t)(pkts[i].x & 0xFF);
-        p[3] = (uint8_t)(pkts[i].y >> 8);
-        p[4] = (uint8_t)(pkts[i].y & 0xFF);
-        p[5] = (uint8_t)(pkts[i].z >> 8);
-        p[6] = (uint8_t)(pkts[i].z & 0xFF);
-        p[7] = (uint8_t)(pkts[i].speed >> 8);
-        p[8] = (uint8_t)(pkts[i].speed & 0xFF);
-        p[9] = (uint8_t)(pkts[i].ld >> 8);
-        p[10] = (uint8_t)(pkts[i].ld & 0xFF);
-    }
-    return 3 + 11 * n;
+    memcpy(&out[3], subpkts11, (size_t)n * 11u);
+    return 3 + n * 11;
 }
 
 int build_heartbeat_frame(uint8_t *out, size_t out_size)

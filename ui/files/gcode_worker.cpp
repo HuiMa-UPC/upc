@@ -7,11 +7,15 @@
 #include <cstdio>
 #include <cstring>
 #include <cstdlib>
-#include <cctype>
 #include <libgen.h>
 #include <thread>
 #include <atomic>
 #include <chrono>
+#include <string>
+#include <regex>
+#include <algorithm>
+#include <cctype>
+#include <climits>
 
 /* ---------- G-code 解析状态 ---------- */
 static struct {
@@ -22,7 +26,6 @@ static struct {
     std::atomic<int> total_lines{0};
     std::atomic<int> parsed_lines{0};
     std::atomic<bool> file_read_exhausted{false};
-    std::atomic<bool> buffer_full_stopped{false};
     RingBuffer *target_rb = nullptr;
 
     /* 当前运动状态（未出现的字段保持前值） */
@@ -39,12 +42,12 @@ static struct {
 } g_w;
 
 /*
- * 解析规则对齐 docs/Qt/gcodeparserworker.cpp (GCodeLineConverter)
+ * 解析规则对齐 docs/Qt/gcodeparserworker.cpp (GCodeLineConverter)，使用 std::regex
  * - 空行 / 仅空白：跳过
- * - 注释：; 后整行丢弃；( 后整行丢弃（与 Qt normalizedCommandLine 一致）
- * - M3000：整行 ^M\s*0*3000\s*$ 或行尾 …M3000（可与 G1 同行，先运动包再换层标记）
- * - G0/G1：^G0*(\d+)，仅 G0/G1；X/Y/Z/F/E 更新模态坐标；首条 G 行须含至少一个参数
- * - E>0 记为 1，否则 0（与 Qt 一致）
+ * - 注释：; 后整行丢弃；( 后整行丢弃
+ * - M3000：^M\s*0*3000\s*$ 或 ^(.+)\bM\s*0*3000\s*$
+ * - G0/G1：^G0*(\d+)；X/Y/Z/F/E 用 global regex 提取
+ * - E>0 记为 1，否则 0
  */
 
 enum LineEmitKind : uint8_t {
@@ -57,196 +60,117 @@ struct LineParseOut {
     int count;
 };
 
-static void trim_inplace(char *s)
+/** 与 Qt 静态 QRegularExpression 对应，编译一次复用 */
+struct GcodeLineRegex {
+    const std::regex m3000_only;
+    const std::regex g1_then_m3000;
+    const std::regex g_cmd;
+    const std::regex coord;
+    const std::regex speed;
+    const std::regex e_param;
+
+    GcodeLineRegex()
+        : m3000_only(R"(^M\s*0*3000\s*$)",
+                     std::regex_constants::ECMAScript | std::regex_constants::icase)
+        , g1_then_m3000(R"(^(.+)\bM\s*0*3000\s*$)",
+                        std::regex_constants::ECMAScript | std::regex_constants::icase)
+        , g_cmd(R"(^G0*(\d+))",
+                std::regex_constants::ECMAScript | std::regex_constants::icase)
+        , coord(R"(([XYZ])([+-]?(?:\d+\.?\d*|\.\d+)))",
+                std::regex_constants::ECMAScript | std::regex_constants::icase)
+        , speed(R"([Ff]([+-]?(?:\d+\.?\d*|\.\d+)))",
+                std::regex_constants::ECMAScript)
+        , e_param(R"([Ee]([+-]?(?:\d+\.?\d*|\.\d+)))",
+                  std::regex_constants::ECMAScript)
+    {}
+};
+
+static const GcodeLineRegex &gcode_regex(void)
 {
-    if(!s) {
-        return;
-    }
-    char *start = s;
-    while(*start && std::isspace(static_cast<unsigned char>(*start))) {
-        start++;
-    }
-    if(start != s) {
-        memmove(s, start, strlen(start) + 1);
-    }
-    size_t len = strlen(s);
-    while(len > 0 && std::isspace(static_cast<unsigned char>(s[len - 1]))) {
-        s[--len] = '\0';
-    }
+    static const GcodeLineRegex k_re;
+    return k_re;
+}
+
+static void trim_string(std::string &s)
+{
+    const auto not_space = [](unsigned char c) { return !std::isspace(c); };
+    s.erase(s.begin(), std::find_if(s.begin(), s.end(), not_space));
+    s.erase(std::find_if(s.rbegin(), s.rend(), not_space).base(), s.end());
 }
 
 /** Qt: trim + ';' + '(' */
-static void normalize_command_line(char *line)
+static std::string normalize_command_line(const std::string &line)
 {
-    trim_inplace(line);
-    char *semi = strchr(line, ';');
-    if(semi) {
-        *semi = '\0';
-        trim_inplace(line);
+    std::string s = line;
+    trim_string(s);
+
+    const size_t semi = s.find(';');
+    if(semi != std::string::npos) {
+        s = s.substr(0, semi);
+        trim_string(s);
     }
-    char *lparen = strchr(line, '(');
-    if(lparen) {
-        *lparen = '\0';
-        trim_inplace(line);
+    const size_t lparen = s.find('(');
+    if(lparen != std::string::npos) {
+        s = s.substr(0, lparen);
+        trim_string(s);
     }
+    return s;
 }
 
-static bool is_line_empty(const char *s)
+static void line_parse_push(LineParseOut *out, LineEmitKind kind)
 {
-    return !s || s[0] == '\0';
-}
-
-/** ^M\s*0*3000\s*$ 大小写不敏感 */
-static bool matches_m3000_line_only(const char *normalized)
-{
-    const char *p = normalized;
-    while(*p && std::isspace(static_cast<unsigned char>(*p))) {
-        p++;
+    if(out->count < 2) {
+        out->kinds[out->count++] = static_cast<uint8_t>(kind);
     }
-    if(*p != 'M' && *p != 'm') {
-        return false;
-    }
-    p++;
-    while(*p == ' ' || *p == '\t') {
-        p++;
-    }
-    while(*p == '0') {
-        p++;
-    }
-    if(strncmp(p, "3000", 4) != 0) {
-        return false;
-    }
-    p += 4;
-    while(*p && std::isspace(static_cast<unsigned char>(*p))) {
-        p++;
-    }
-    return *p == '\0';
-}
-
-/**
- * 若行尾为 M3000，截断得到前缀并返回 true（s 被改写）
- * 例：G1 X1 Y1 M3000 -> 前缀 G1 X1 Y1
- */
-static bool split_trailing_m3000(char *normalized, char **prefix_out)
-{
-    size_t len = strlen(normalized);
-    while(len > 0 && std::isspace(static_cast<unsigned char>(normalized[len - 1]))) {
-        normalized[--len] = '\0';
-    }
-    if(len < 5) {
-        return false;
-    }
-
-    size_t pos = len;
-    if(pos < 4 || strcasecmp(normalized + pos - 4, "3000") != 0) {
-        return false;
-    }
-    pos -= 4;
-    while(pos > 0 && normalized[pos - 1] == '0') {
-        pos--;
-    }
-    while(pos > 0 && std::isspace(static_cast<unsigned char>(normalized[pos - 1]))) {
-        pos--;
-    }
-    if(pos == 0) {
-        return false;
-    }
-    const char m = normalized[pos - 1];
-    if(m != 'M' && m != 'm') {
-        return false;
-    }
-    pos--;
-
-    normalized[pos] = '\0';
-    trim_inplace(normalized);
-    *prefix_out = normalized;
-    return true;
-}
-
-static bool parse_gcode_number_prefix(const char *s, int *out_num)
-{
-    if(!s || (*s != 'G' && *s != 'g')) {
-        return false;
-    }
-    const char *p = s + 1;
-    while(*p == '0') {
-        p++;
-    }
-    if(!std::isdigit(static_cast<unsigned char>(*p))) {
-        return false;
-    }
-    int num = 0;
-    while(std::isdigit(static_cast<unsigned char>(*p))) {
-        num = num * 10 + (*p - '0');
-        p++;
-    }
-    *out_num = num;
-    return true;
-}
-
-static bool parse_float_param(const char *s, size_t *io_i, char axis, float *out_val)
-{
-    const size_t n = strlen(s);
-    while(*io_i < n) {
-        if(s[*io_i] == axis || s[*io_i] == static_cast<char>(toupper(axis))) {
-            size_t j = *io_i + 1;
-            char *endptr = nullptr;
-            const float v = strtof(s + j, &endptr);
-            if(endptr != s + j) {
-                *out_val = v;
-                *io_i = static_cast<size_t>(endptr - s);
-                return true;
-            }
-        }
-        (*io_i)++;
-    }
-    return false;
 }
 
 /** 解析一段 normalized 文本是否为 G0/G1 并更新模态；返回是否应下发运动包 */
-static bool parse_g1_segment(char *segment, bool *out_motion)
+static bool parse_g1_segment(const std::string &segment, bool *out_motion)
 {
     *out_motion = false;
-    trim_inplace(segment);
-    if(is_line_empty(segment)) {
+
+    std::string s = segment;
+    trim_string(s);
+    if(s.empty()) {
         return false;
     }
 
-    int gnum = -1;
-    if(!parse_gcode_number_prefix(segment, &gnum)) {
+    const GcodeLineRegex &re = gcode_regex();
+    std::smatch cmd_match;
+    /* 与 Qt QRegularExpression::match 一致：只要求行首为 G0/G1，允许后续 X/Y/Z… */
+    if(!std::regex_search(s, cmd_match, re.g_cmd) || cmd_match.position() != 0) {
         return false;
     }
+
+    const int gnum = std::atoi(cmd_match[1].str().c_str());
     if(gnum != 0 && gnum != 1) {
         return false;
     }
 
     bool has_any = false;
-    size_t i = 0;
 
-    float vx = 0, vy = 0, vz = 0, vf = 0;
-    if(parse_float_param(segment, &i, 'X', &vx)) {
-        g_w.x = vx;
+    for(std::sregex_iterator it(s.begin(), s.end(), re.coord), end; it != end; ++it) {
+        const std::string axis = (*it)[1].str();
+        const float value = std::strtof((*it)[2].str().c_str(), nullptr);
+        has_any = true;
+        switch(axis[0]) {
+            case 'X': case 'x': g_w.x = value; break;
+            case 'Y': case 'y': g_w.y = value; break;
+            case 'Z': case 'z': g_w.z = value; break;
+            default: break;
+        }
+    }
+
+    std::smatch speed_match;
+    if(std::regex_search(s, speed_match, re.speed)) {
+        g_w.f = std::strtof(speed_match[1].str().c_str(), nullptr);
         has_any = true;
     }
-    i = 0;
-    if(parse_float_param(segment, &i, 'Y', &vy)) {
-        g_w.y = vy;
-        has_any = true;
-    }
-    i = 0;
-    if(parse_float_param(segment, &i, 'Z', &vz)) {
-        g_w.z = vz;
-        has_any = true;
-    }
-    i = 0;
-    if(parse_float_param(segment, &i, 'F', &vf)) {
-        g_w.f = vf;
-        has_any = true;
-    }
-    i = 0;
-    float ve = 0;
-    if(parse_float_param(segment, &i, 'E', &ve)) {
-        g_w.e = (ve > 0.0f) ? 1 : 0;
+
+    std::smatch e_match;
+    if(std::regex_search(s, e_match, re.e_param)) {
+        const float e_val = std::strtof(e_match[1].str().c_str(), nullptr);
+        g_w.e = (e_val > 0.0f) ? 1 : 0;
         has_any = true;
     }
 
@@ -261,53 +185,41 @@ static bool parse_g1_segment(char *segment, bool *out_motion)
     return true;
 }
 
-static void line_parse_push(LineParseOut *out, LineEmitKind kind)
-{
-    if(out->count < 2) {
-        out->kinds[out->count++] = static_cast<uint8_t>(kind);
-    }
-}
-
 /** 单行可产生 0~2 条：G1 包 + M3000 标记（顺序与 Qt 一致） */
 static void parse_line_all(const char *raw_line, LineParseOut *out)
 {
     out->count = 0;
 
-    char buf[512];
-    strncpy(buf, raw_line, sizeof(buf) - 1);
-    buf[sizeof(buf) - 1] = '\0';
-    normalize_command_line(buf);
-
-    if(is_line_empty(buf)) {
+    const std::string normalized = normalize_command_line(raw_line);
+    if(normalized.empty()) {
         return;
     }
 
-    char work[512];
-    strncpy(work, buf, sizeof(work) - 1);
-    work[sizeof(work) - 1] = '\0';
+    const GcodeLineRegex &re = gcode_regex();
+    std::smatch split_match;
 
-    char *prefix = nullptr;
-    if(split_trailing_m3000(work, &prefix)) {
+    if(std::regex_match(normalized, split_match, re.g1_then_m3000)) {
+        std::string before = split_match[1].str();
+        trim_string(before);
+        if(before.empty()) {
+            line_parse_push(out, LINE_EMIT_LAYER);
+            return;
+        }
         bool motion = false;
-        if(prefix && prefix[0] != '\0') {
-            if(parse_g1_segment(prefix, &motion) && motion) {
-                line_parse_push(out, LINE_EMIT_MOTION);
-            }
+        if(parse_g1_segment(before, &motion) && motion) {
+            line_parse_push(out, LINE_EMIT_MOTION);
         }
         line_parse_push(out, LINE_EMIT_LAYER);
         return;
     }
 
-    if(matches_m3000_line_only(buf)) {
+    if(std::regex_match(normalized, re.m3000_only)) {
         line_parse_push(out, LINE_EMIT_LAYER);
         return;
     }
 
-    char gseg[512];
-    strncpy(gseg, buf, sizeof(gseg) - 1);
-    gseg[sizeof(gseg) - 1] = '\0';
     bool motion = false;
-    if(parse_g1_segment(gseg, &motion) && motion) {
+    if(parse_g1_segment(normalized, &motion) && motion) {
         line_parse_push(out, LINE_EMIT_MOTION);
     }
 }
@@ -431,62 +343,23 @@ static void sync_parse_progress(int lines, int packets)
     g_job_status.total_packets = packets;
 }
 
-static size_t ring_packets_for_pct(int pct)
-{
-    return (size_t)RB_MAX_PACKETS * (size_t)pct / 100U;
-}
-
-/** 发送期 55% 暂停入队；空闲预填允许至 100% */
-static size_t ring_producer_pause_packets(RingBuffer *rb)
-{
-    if(pipeline_is_sending()) {
-        return gcode_ring_high_water_mark();
-    }
-    if(rb) {
-        return rb->capacity();
-    }
-    return ring_packets_for_pct(RB_PRELOAD_PAUSE_PCT);
-}
-
-static void clear_buffer_full_if_has_space(RingBuffer *rb)
-{
-    if(!rb) {
-        return;
-    }
-    if(rb->count() < ring_producer_pause_packets(rb)) {
-        g_w.buffer_full_stopped.store(false);
-    }
-}
-
-/** 解析侧：已达暂停入队线，本行不再 push */
-static bool ring_should_pause_producer(RingBuffer *rb)
-{
-    return rb && rb->count() >= ring_producer_pause_packets(rb);
-}
-
-/** 每块解析结束后的节流（Qt 为定时器 tick，此处为 sleep） */
+/** 预填阶段 yield；发送期连续解析（Ring 满时 put_wait 阻塞，无需 sleep） */
 static void parser_chunk_yield(RingBuffer *rb)
 {
-    int delay_ms = GCODE_PARSE_CHUNK_INTERVAL_MS;
-
     if(pipeline_is_sending()) {
-        delay_ms = GCODE_PARSE_SEND_YIELD_MS;
-        if(job_status_parser_should_throttle()) {
-            delay_ms = GCODE_PARSE_MCU_PRESSURE_MS;
-        } else if(rb && ring_should_pause_producer(rb)) {
-            delay_ms = GCODE_PARSE_RING_HIGH_YIELD_MS;
-        }
-    } else if(rb && rb->count() + 64 >= rb->capacity()) {
-        /* 空闲预填接近满时略作让步 */
-        delay_ms = GCODE_PRELOAD_IDLE_MS;
+        return;
     }
 
+    int delay_ms = GCODE_PARSE_CHUNK_INTERVAL_MS;
+    if(rb && rb->count() + 64 >= rb->capacity()) {
+        delay_ms = GCODE_PRELOAD_IDLE_MS;
+    }
     if(delay_ms > 0) {
         std::this_thread::sleep_for(std::chrono::milliseconds(delay_ms));
     }
 }
 
-/* ---------- 解析线程（对齐 Qt onParseTimer + parseAndEnqueue） ---------- */
+/* ---------- 解析线程：Ring 满则 put_wait 阻塞，有空位立即续解析 ---------- */
 static void parser_thread_fn(void)
 {
     char line[256];
@@ -494,37 +367,28 @@ static void parser_thread_fn(void)
     int packets = 0;
 
     if(!g_w.fp || !g_w.target_rb) {
+        g_w.running.store(false);
+        JOB_LOCK();
+        g_job_status.is_parsing = false;
         return;
     }
 
     parser_load_gains_from_job();
 
     g_w.file_read_exhausted.store(false);
-    g_w.buffer_full_stopped.store(false);
     rewind(g_w.fp);
 
     while(g_w.running && !g_w.stop_req.load() && !g_w.file_read_exhausted.load()) {
         job_status_update_ring();
-        clear_buffer_full_if_has_space(g_w.target_rb);
-
-        const int chunk_limit = pipeline_is_sending()
-                                    ? GCODE_PARSE_CHUNK_LINES_SEND
-                                    : GCODE_PARSE_CHUNK_LINES;
 
         int chunk_lines = 0;
+        int since_sync  = 0;
+        const bool sending = pipeline_is_sending();
+        const int chunk_limit = sending ? INT_MAX : GCODE_PARSE_CHUNK_LINES;
+
         while(chunk_lines < chunk_limit &&
               g_w.running && !g_w.stop_req.load() &&
               !g_w.file_read_exhausted.load()) {
-
-            if(ring_should_pause_producer(g_w.target_rb)) {
-                g_w.buffer_full_stopped.store(true);
-                break;
-            }
-
-            if(pipeline_is_sending() && job_status_parser_should_throttle()) {
-                parser_chunk_yield(g_w.target_rb);
-                continue;
-            }
 
             if(!fgets(line, sizeof(line), g_w.fp)) {
                 g_w.file_read_exhausted.store(true);
@@ -535,10 +399,6 @@ static void parser_thread_fn(void)
             parse_line_all(line, &parsed);
             for(int i = 0; i < parsed.count; i++) {
                 if(g_w.stop_req.load()) {
-                    break;
-                }
-                if(ring_should_pause_producer(g_w.target_rb)) {
-                    g_w.buffer_full_stopped.store(true);
                     break;
                 }
                 if(parsed.kinds[i] == LINE_EMIT_LAYER) {
@@ -553,15 +413,21 @@ static void parser_thread_fn(void)
                     }
                     packets++;
                 }
-                clear_buffer_full_if_has_space(g_w.target_rb);
             }
 
-            if(g_w.stop_req.load() || g_w.buffer_full_stopped.load()) {
+            if(g_w.stop_req.load()) {
                 break;
             }
 
             lines++;
             chunk_lines++;
+            since_sync++;
+
+            if(sending && since_sync >= GCODE_PARSE_SEND_SYNC_LINES) {
+                sync_parse_progress(lines, packets);
+                job_status_update_ring();
+                since_sync = 0;
+            }
         }
 
         sync_parse_progress(lines, packets);
@@ -593,7 +459,6 @@ int gcode_open_file(const char *filepath)
     g_w.total_lines.store(cnt);
     g_w.parsed_lines.store(0);
     g_w.file_read_exhausted.store(false);
-    g_w.buffer_full_stopped.store(false);
     rewind(g_w.fp);
 
     /* 重置解析状态（与 Qt resetState 一致） */
@@ -612,13 +477,18 @@ int gcode_open_file(const char *filepath)
                  "%s", base);
         g_job_status.total_lines = cnt;
         g_job_status.parsed_lines = 0;
+        g_job_status.job_print_completed = false;
     }
     return 0;
 }
 
 void gcode_start_parse(RingBuffer *rb)
 {
-    if (!g_w.fp || !rb) return;
+    if(!g_w.fp || !rb) {
+        JOB_LOCK();
+        g_job_status.is_parsing = false;
+        return;
+    }
     /* Always join a finished/previous thread before assigning g_w.th again */
     gcode_stop_parse();
 
@@ -627,7 +497,6 @@ void gcode_start_parse(RingBuffer *rb)
     g_w.running.store(true);
     g_w.parsed_lines.store(0);
     g_w.file_read_exhausted.store(false);
-    g_w.buffer_full_stopped.store(false);
 
     {
         JOB_LOCK();
@@ -677,19 +546,9 @@ bool gcode_is_file_read_exhausted(void)
     return g_w.file_read_exhausted.load();
 }
 
-size_t gcode_ring_target_fill(void)
+bool gcode_is_file_open(void)
 {
-    return ring_packets_for_pct(RB_TARGET_FILL_PCT);
-}
-
-size_t gcode_ring_high_water_mark(void)
-{
-    return ring_packets_for_pct(RB_PRODUCER_PAUSE_PCT);
-}
-
-size_t gcode_ring_consumer_low_water(void)
-{
-    return ring_packets_for_pct(RB_CONSUMER_RESUME_PCT);
+    return g_w.fp != nullptr;
 }
 
 void gcode_close_file(void)

@@ -15,6 +15,9 @@ extern "C" {
  */
 lv_obj_t *page_common_create_placeholder(lv_obj_t *parent, const char *title, const char *hint);
 
+/** 带标题的卡片面板（Progress / Connection 等区块复用） */
+lv_obj_t *ui_make_card(lv_obj_t *parent, const char *title);
+
 #ifdef __cplusplus
 }
 #endif

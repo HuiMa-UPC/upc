@@ -4,6 +4,7 @@
 #include "gcode_parse_gains.hpp"
 #include "ui_theme.hpp"
 #include "ui_keyboard.hpp"
+#include "page_common.hpp"
 
 #include <cstring>
 #include <cstdio>
@@ -27,8 +28,6 @@ static lv_obj_t *g_lbl_file    = nullptr;
 static lv_obj_t *g_batch_ta    = nullptr;
 static lv_obj_t *g_interval_ta = nullptr;
 static lv_obj_t *g_btn_start   = nullptr;
-static lv_obj_t *g_btn_pause   = nullptr;
-static lv_obj_t *g_btn_stop    = nullptr;
 static lv_obj_t *g_btn_reset   = nullptr;
 static lv_obj_t *g_sw_layer    = nullptr;
 
@@ -37,25 +36,6 @@ static lv_obj_t *g_lbl_mcu_st = nullptr;
 static lv_obj_t *g_ta_img_scale  = nullptr;
 static lv_obj_t *g_ta_img_range   = nullptr;
 static lv_obj_t *g_ta_speed_gain  = nullptr;
-
-/* ---------- 辅助：创建卡片容器 ---------- */
-static lv_obj_t *make_card(lv_obj_t *parent, const char *title)
-{
-    lv_obj_t *card = lv_obj_create(parent);
-    lv_obj_add_style(card, ui_style_panel(), 0);
-    lv_obj_set_width(card, LV_PCT(100));
-    lv_obj_set_height(card, LV_SIZE_CONTENT);
-    lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_style_pad_all(card, UI_PAD, 0);
-    lv_obj_set_style_pad_row(card, UI_PAD_SM, 0);
-
-    if (title) {
-        lv_obj_t *lbl = lv_label_create(card);
-        lv_label_set_text(lbl, title);
-        lv_obj_add_style(lbl, ui_style_subtitle(), 0);
-    }
-    return card;
-}
 
 /* ---------- 事件回调 ---------- */
 static void update_tcp_btn(bool connected)
@@ -151,44 +131,6 @@ static void on_serial_click(lv_event_t *)
     }
 }
 
-static bool job_gcode_ready(void)
-{
-    job_status_update_ring();
-
-    bool ready = false;
-    JOB_LOCK();
-    if(g_job_status.current_file[0] == '\0') {
-        return false;
-    }
-    /* 解析未完成：至少一批包入队即可开跑（与 Qt 边解析边发送一致） */
-    if(g_job_status.is_parsing) {
-        int batch = g_job_status.batch_size;
-        if(batch <= 0) {
-            batch = 100;
-        }
-        ready = (g_job_status.total_packets >= batch);
-    } else {
-        /* Reset 清空 Ring 后须等 Files 重新 Open，或解析线程仍在补队 */
-        ready = (g_job_status.total_packets > 0 && g_job_status.ring_used > 0);
-    }
-    return ready;
-}
-
-static bool job_can_start(bool *out_layer_need_serial)
-{
-    if(!ctrl_tcp_is_connected() || !job_gcode_ready()) {
-        return false;
-    }
-    const bool layer_en = lv_obj_has_state(g_sw_layer, LV_STATE_CHECKED);
-    if(out_layer_need_serial) {
-        *out_layer_need_serial = layer_en;
-    }
-    if(layer_en && !ctrl_serial_is_open()) {
-        return false;
-    }
-    return true;
-}
-
 static void set_job_btn_enabled(lv_obj_t *btn, bool enabled)
 {
     if(!btn) {
@@ -201,56 +143,93 @@ static void set_job_btn_enabled(lv_obj_t *btn, bool enabled)
     }
 }
 
+/** Start 可用：Ring 中已有 ≥1 批包，或解析中且累计包数已达一批 */
+static bool job_gcode_ready(void)
+{
+    job_status_update_ring();
+
+    bool ready = false;
+    JOB_LOCK();
+    if(g_job_status.current_file[0] == '\0') {
+        return false;
+    }
+    int batch = g_job_status.batch_size;
+    if(batch <= 0) {
+        batch = 100;
+    }
+    if(g_job_status.ring_used >= (size_t)batch) {
+        ready = true;
+    } else if(g_job_status.is_parsing && g_job_status.total_packets >= batch) {
+        ready = true;
+    } else if(g_job_status.job_print_completed && ctrl_is_sending() == 0) {
+        /* 打印完成后 Ring 已空、解析会重填：仍允许点 Start */
+        ready = true;
+    }
+    return ready;
+}
+
+/** 发送作业流期间锁定 Parse / Job 配置区（按钮区由 set_job_btn_enabled 单独管理） */
+static void set_job_config_interactive(bool enabled)
+{
+    lv_obj_t *widgets[] = {
+        g_ta_img_scale, g_ta_img_range, g_ta_speed_gain,
+        g_batch_ta, g_interval_ta, g_sw_layer,
+    };
+
+    for(lv_obj_t *obj : widgets) {
+        if(!obj) {
+            continue;
+        }
+        if(enabled) {
+            lv_obj_remove_state(obj, LV_STATE_DISABLED);
+        } else {
+            lv_obj_add_state(obj, LV_STATE_DISABLED);
+            if(lv_obj_has_state(obj, LV_STATE_FOCUSED)) {
+                lv_obj_remove_state(obj, LV_STATE_FOCUSED);
+            }
+        }
+    }
+
+    if(!enabled) {
+        ui_keyboard_hide();
+    }
+}
+
 static void sync_start_button_label(bool is_sending, bool is_paused)
 {
     lv_obj_t *lbl = lv_obj_get_child(g_btn_start, 0);
     if(!lbl) {
         return;
     }
-    if(!is_sending) {
-        lv_label_set_text(lbl, "Start");
-    } else if(is_paused) {
-        lv_label_set_text(lbl, "Paused");
+    if(is_sending && !is_paused) {
+        lv_label_set_text(lbl, "Pause");
     } else {
-        lv_label_set_text(lbl, "Running");
+        lv_label_set_text(lbl, "Start");
     }
 }
 
 static void on_start_click(lv_event_t *)
 {
-    if(!job_can_start(nullptr)) {
+    if(!ctrl_tcp_is_connected()) {
         return;
     }
     if(ctrl_is_sending()) {
+        if(ctrl_is_paused()) {
+            ctrl_resume_sending();
+        } else {
+            ctrl_pause_sending();
+        }
+        return;
+    }
+    if(!job_gcode_ready()) {
         return;
     }
     ctrl_start_sending();
 }
 
-static void on_pause_click(lv_event_t *)
-{
-    if(!ctrl_is_sending() || !job_gcode_ready()) {
-        return;
-    }
-    if(ctrl_is_paused()) {
-        ctrl_resume_sending();
-    } else {
-        ctrl_pause_sending();
-    }
-}
-
-static void on_stop_click(lv_event_t *)
-{
-    if(!ctrl_is_sending()) {
-        return;
-    }
-    ctrl_stop_sending();
-}
-
 static void on_reset_click(lv_event_t *)
 {
     ctrl_send_reset();
-    lv_label_set_text(lv_obj_get_child(g_btn_start, 0), "Start");
 }
 
 static void on_layer_sw(lv_event_t *e)
@@ -263,7 +242,7 @@ static void status_refresh_cb(lv_timer_t *)
 {
     /* 先缓存数据并释放锁，避免在持有锁期间长时间调用 LVGL API */
     char file_name[256];
-    bool enable_layer, tcp_connected;
+    bool tcp_connected;
     bool is_sending, is_paused, mcu_cmd_tx_hold;
     uint16_t cmd_rate, data_rate;
     uint16_t cur_x, cur_y, cur_z, laser;
@@ -272,9 +251,7 @@ static void status_refresh_cb(lv_timer_t *)
         JOB_LOCK();
         strncpy(file_name, g_job_status.current_file, sizeof(file_name) - 1);
         file_name[sizeof(file_name) - 1] = '\0';
-        enable_layer = g_job_status.enable_layer_change;
         tcp_connected = g_job_status.tcp_connected;
-        is_sending = g_job_status.is_sending;
         cmd_rate  = g_job_status.cmd_cache_rate;
         data_rate = g_job_status.data_cache_rate;
         cur_x = g_job_status.current_x;
@@ -283,6 +260,7 @@ static void status_refresh_cb(lv_timer_t *)
         laser = g_job_status.laser_state;
         mcu_cmd_tx_hold = g_job_status.mcu_cmd_tx_hold;
     }
+    is_sending = ctrl_is_sending() != 0;
     is_paused = ctrl_is_paused() != 0;
 
     if(file_name[0]) {
@@ -291,17 +269,17 @@ static void status_refresh_cb(lv_timer_t *)
         lv_label_set_text(g_lbl_file, "File: --");
     }
 
-    const bool gcode_ready = (file_name[0] != '\0' && job_gcode_ready());
-    bool can_start = false;
-    if(tcp_connected && gcode_ready && !is_sending) {
-        can_start = !enable_layer || ctrl_serial_is_open();
-    }
-    const bool can_pause_stop = tcp_connected && gcode_ready && is_sending;
+    const bool has_file = (file_name[0] != '\0');
+    const bool gcode_ready = has_file && job_gcode_ready();
 
-    set_job_btn_enabled(g_btn_start, can_start);
-    set_job_btn_enabled(g_btn_pause, can_pause_stop);
-    set_job_btn_enabled(g_btn_stop, can_pause_stop);
+    const bool can_reset = tcp_connected;
+    const bool can_start_pause =
+        tcp_connected && (is_sending || gcode_ready);
+
+    set_job_btn_enabled(g_btn_reset, can_reset);
+    set_job_btn_enabled(g_btn_start, can_start_pause);
     sync_start_button_label(is_sending, is_paused);
+    set_job_config_interactive(!is_sending);
 
     int cmd_pct  = percent_rounded(cmd_rate,  65535);
     int data_pct = percent_rounded(data_rate, 65535);
@@ -471,7 +449,7 @@ lv_obj_t *page_control_create(lv_obj_t *parent)
     lv_obj_add_style(title, ui_style_title(), 0);
 
     /* === 连接卡片 === */
-    lv_obj_t *conn_card = make_card(page, "Connection");
+    lv_obj_t *conn_card = ui_make_card(page, "Connection");
 
     auto setup_conn_row = [](lv_obj_t *card) -> lv_obj_t * {
         lv_obj_t *row = lv_obj_create(card);
@@ -544,7 +522,7 @@ lv_obj_t *page_control_create(lv_obj_t *parent)
     snprintf(gain_init[1], sizeof(gain_init[1]), "%.3f", init_range);
     snprintf(gain_init[2], sizeof(gain_init[2]), "%.3f", init_speed);
 
-    lv_obj_t *parse_card = make_card(page, "G-code Parse");
+    lv_obj_t *parse_card = ui_make_card(page, "G-code Parse");
 
     lv_obj_t *gain_row1 = make_gain_form_row(parse_card);
     g_ta_img_scale = make_labeled_ta(gain_row1, "Scale:", gain_init[0],
@@ -574,7 +552,7 @@ lv_obj_t *page_control_create(lv_obj_t *parent)
     lv_label_set_long_mode(gain_hint, LV_LABEL_LONG_MODE_WRAP);
 
     /* === 作业控制卡片 === */
-    lv_obj_t *job_card = make_card(page, "Job Control");
+    lv_obj_t *job_card = ui_make_card(page, "Job Control");
     lv_obj_set_flex_grow(job_card, 1);
 
     g_lbl_file = lv_label_create(job_card);
@@ -609,26 +587,6 @@ lv_obj_t *page_control_create(lv_obj_t *parent)
     lv_obj_add_state(g_btn_start, LV_STATE_DISABLED);
     style_start_button(g_btn_start);
 
-    g_btn_pause = lv_button_create(ctrl_row);
-    lv_obj_set_size(g_btn_pause, 108, UI_INPUT_H);
-    lv_obj_add_style(g_btn_pause, ui_style_btn_primary(), 0);
-    lv_obj_add_event_cb(g_btn_pause, on_pause_click, LV_EVENT_CLICKED, NULL);
-    lv_obj_t *lbl_pause = lv_label_create(g_btn_pause);
-    lv_label_set_text(lbl_pause, "Pause");
-    lv_obj_center(lbl_pause);
-    style_start_button(g_btn_pause);
-    lv_obj_add_state(g_btn_pause, LV_STATE_DISABLED);
-
-    g_btn_stop = lv_button_create(ctrl_row);
-    lv_obj_set_size(g_btn_stop, 108, UI_INPUT_H);
-    lv_obj_add_style(g_btn_stop, ui_style_btn_primary(), 0);
-    lv_obj_add_event_cb(g_btn_stop, on_stop_click, LV_EVENT_CLICKED, NULL);
-    lv_obj_t *lbl_stop = lv_label_create(g_btn_stop);
-    lv_label_set_text(lbl_stop, "Stop");
-    lv_obj_center(lbl_stop);
-    style_start_button(g_btn_stop);
-    lv_obj_add_state(g_btn_stop, LV_STATE_DISABLED);
-
     g_btn_reset = lv_button_create(ctrl_row);
     lv_obj_set_size(g_btn_reset, 108, UI_INPUT_H);
     lv_obj_add_style(g_btn_reset, ui_style_btn_primary(), 0);
@@ -636,6 +594,8 @@ lv_obj_t *page_control_create(lv_obj_t *parent)
     lv_obj_t *lbl_reset = lv_label_create(g_btn_reset);
     lv_label_set_text(lbl_reset, "Reset");
     lv_obj_center(lbl_reset);
+    style_start_button(g_btn_reset);
+    lv_obj_add_state(g_btn_reset, LV_STATE_DISABLED);
 
     /* 换层开关 */
     lv_obj_t *layer_row = lv_obj_create(job_card);
@@ -652,6 +612,7 @@ lv_obj_t *page_control_create(lv_obj_t *parent)
 
     g_sw_layer = lv_switch_create(layer_row);
     lv_obj_add_event_cb(g_sw_layer, on_layer_sw, LV_EVENT_VALUE_CHANGED, NULL);
+    ctrl_set_enable_layer_change(0);
 
     /* 状态栏 */
     g_lbl_mcu_st = lv_label_create(page);

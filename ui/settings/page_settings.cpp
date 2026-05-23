@@ -4,6 +4,7 @@
 #include "ui_theme.hpp"
 #include "ui_keyboard.hpp"
 #include "ui_feedback.hpp"
+#include "page_common.hpp"
 
 #include <cstdio>
 #include <cstdlib>
@@ -105,24 +106,6 @@ static void sync_params_to_form(float param_a_max, uint8_t param_fly_en, float p
 }
 
 /* ---------- 辅助 ---------- */
-static lv_obj_t *make_card(lv_obj_t *parent, const char *title)
-{
-    lv_obj_t *card = lv_obj_create(parent);
-    lv_obj_add_style(card, ui_style_panel(), 0);
-    lv_obj_set_width(card, LV_PCT(100));
-    lv_obj_set_height(card, LV_SIZE_CONTENT);
-    lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_style_pad_all(card, UI_PAD, 0);
-    lv_obj_set_style_pad_row(card, UI_PAD_SM, 0);
-
-    if (title) {
-        lv_obj_t *lbl = lv_label_create(card);
-        lv_label_set_text(lbl, title);
-        lv_obj_add_style(lbl, ui_style_subtitle(), 0);
-    }
-    return card;
-}
-
 static lv_obj_t *make_param_row(lv_obj_t *parent, const char *name,
                                 const char *init_val, lv_obj_t **out_ta)
 {
@@ -233,7 +216,6 @@ static void settings_refresh_cb(lv_timer_t *)
         JOB_LOCK();
         tcp_conn     = g_job_status.tcp_connected;
         serial_conn  = g_job_status.serial_connected;
-        is_sending   = g_job_status.is_sending;
         read_ok      = g_job_status.param_read_valid;
         param_a_max  = g_job_status.param_a_max;
         param_fly_en = g_job_status.param_fly_enable;
@@ -243,6 +225,7 @@ static void settings_refresh_cb(lv_timer_t *)
         param_ls     = g_job_status.param_laser_start;
         param_le     = g_job_status.param_laser_stop;
     }
+    is_sending = ctrl_is_sending() != 0;
 
     const bool editable = tcp_conn && !is_sending;
     if(editable != g_last_editable) {
@@ -295,7 +278,7 @@ lv_obj_t *page_settings_create(lv_obj_t *parent)
     lv_obj_add_style(title, ui_style_title(), 0);
 
     /* 连接状态卡片 */
-    lv_obj_t *conn_card = make_card(page, "Connection Status");
+    lv_obj_t *conn_card = ui_make_card(page, "Connection Status");
     lv_obj_set_height(conn_card, LV_SIZE_CONTENT);
 
     g_lbl_tcp_conn = lv_label_create(conn_card);
@@ -307,7 +290,7 @@ lv_obj_t *page_settings_create(lv_obj_t *parent)
     lv_obj_set_style_text_color(g_lbl_serial_conn, ui_color_text_dim, 0);
 
     /* 参数卡片（两列布局） */
-    lv_obj_t *param_card = make_card(page, "Board Parameters");
+    lv_obj_t *param_card = ui_make_card(page, "Board Parameters");
     lv_obj_set_flex_grow(param_card, 1);
 
     /* 使用一个横向 flex 容器放左右两列 */

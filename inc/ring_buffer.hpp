@@ -11,8 +11,8 @@
 extern "C" {
 #endif
 
-/** 解析后运动指令队列容量（约 12B/包，32768≈384KB） */
-#define RB_MAX_PACKETS    32768
+
+#define RB_MAX_PACKETS    65536
 #define RB_PKT_DATA_LEN   11
 
 typedef enum {

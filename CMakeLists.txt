@@ -45,7 +45,6 @@ set(APP_SOURCES
     ui/settings/page_settings.cpp
     ui/serial/page_serial.cpp
     ui/tcpclient/page_tcpclient.cpp
-    ui/tcpclient/tcpclient_backend.cpp
 )
 
 add_executable(${APP_TARGET} ${APP_SOURCES})

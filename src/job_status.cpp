@@ -2,6 +2,8 @@
 #include "pipeline_tune.hpp"
 #include "gcode_parse_gains.hpp"
 
+#include <cstdio>
+
 job_status_t g_job_status;
 RingBuffer   g_ring_buffer;
 
@@ -13,9 +15,42 @@ void gcode_parse_gains_set_defaults(void)
     g_job_status.parse_speed_gain       = GCODE_DEFAULT_SPEED_GAIN;
 }
 
+void format_mcu_queue_rate_label(char *buf, size_t buf_size, uint16_t rate)
+{
+    if(!buf || buf_size == 0) {
+        return;
+    }
+    const double pct = (double)rate * 100.0 / (double)MCU_CACHE_RATE_MAX;
+    if(pct >= 100.0) {
+        snprintf(buf, buf_size, "100%%");
+    } else if(pct >= 10.0) {
+        snprintf(buf, buf_size, "%.1f%%", pct);
+    } else if(pct >= 0.005) {
+        snprintf(buf, buf_size, "%.2f%%", pct);
+    } else {
+        snprintf(buf, buf_size, "0%%");
+    }
+}
+
 static bool mcu_cmd_rate_at_least_pct(uint16_t rate, int pct)
 {
     return (uint32_t)rate * 100U >= (uint32_t)MCU_CACHE_RATE_MAX * (uint32_t)pct;
+}
+
+static bool mcu_cmd_rate_overloaded(uint16_t rate)
+{
+    if(rate >= MCU_CMD_BACKPRESSURE_ON_RATE) {
+        return true;
+    }
+    return mcu_cmd_rate_at_least_pct(rate, MCU_CMD_BACKPRESSURE_ON_PCT);
+}
+
+static bool mcu_cmd_rate_below_resume(uint16_t rate)
+{
+    if(rate >= MCU_CMD_BACKPRESSURE_OFF_RATE) {
+        return false;
+    }
+    return !mcu_cmd_rate_at_least_pct(rate, MCU_CMD_BACKPRESSURE_OFF_PCT);
 }
 
 void job_status_update_ring(void)
@@ -41,39 +76,13 @@ void job_status_sync_mcu_cmd_backpressure_locked(void)
     }
 
     const uint16_t cmd = g_job_status.cmd_cache_rate;
-    /* 尚未收到复位后第一条心跳前不做 Cmd 背压（避免沿用复位前的陈旧占用率） */
-    if(cmd == 0) {
-        g_job_status.mcu_cmd_tx_hold = false;
-        return;
-    }
     if(g_job_status.mcu_cmd_tx_hold) {
-        if(!mcu_cmd_rate_at_least_pct(cmd, MCU_CMD_BACKPRESSURE_OFF_PCT)) {
+        if(mcu_cmd_rate_below_resume(cmd)) {
             g_job_status.mcu_cmd_tx_hold = false;
         }
-    } else if(mcu_cmd_rate_at_least_pct(cmd, MCU_CMD_BACKPRESSURE_ON_PCT)) {
+    } else if(cmd > 0 && mcu_cmd_rate_overloaded(cmd)) {
         g_job_status.mcu_cmd_tx_hold = true;
     }
-}
-
-bool job_status_parser_should_throttle(void)
-{
-    bool throttle = false;
-    JOB_LOCK();
-    if(!g_job_status.is_sending) {
-        throttle = g_job_status.ring_full;
-    } else if(g_job_status.mcu_cmd_tx_hold) {
-        throttle = true;
-    } else if(g_job_status.cmd_cache_rate > 0 &&
-              mcu_cmd_rate_at_least_pct(g_job_status.cmd_cache_rate,
-                                        MCU_CMD_BACKPRESSURE_OFF_PCT)) {
-        /* 未到 90% 停发前，解析先减速，减轻下位机压力 */
-        throttle = true;
-    } else if(g_job_status.ring_capacity > 0) {
-        const size_t used = g_job_status.ring_used;
-        const size_t cap  = g_job_status.ring_capacity;
-        throttle = (used * 100U >= cap * (unsigned)GCODE_PARSE_RING_SLOW_PCT);
-    }
-    return throttle;
 }
 
 int percent_rounded(int num, int den)
@@ -85,4 +94,15 @@ int percent_rounded(int num, int den)
         return 100;
     }
     return (num * 100 + den / 2) / den;
+}
+
+int percent_tenths(int num, int den)
+{
+    if(den <= 0) {
+        return 0;
+    }
+    if(num >= den) {
+        return 1000;
+    }
+    return (num * 1000 + den / 2) / den;
 }

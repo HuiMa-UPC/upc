@@ -10,18 +10,8 @@ extern "C" {
 
 /* ---------- TCP 帧 ---------- */
 
-/* 运动子包: 11 bytes, 大端 */
-typedef struct {
-    uint8_t  cmd;       /* 0x01 */
-    uint16_t x;         /* big-endian, centered at 32767 */
-    uint16_t y;
-    uint16_t z;
-    uint16_t speed;
-    uint16_t ld;
-} motion_subpack_t;
-
-/* 构造运动帧 (含N个子包). 返回帧总长度 */
-int build_motion_frame(const motion_subpack_t *pkts, int n,
+/* 构造运动帧：subpkts11 为 n 个连续 11B 子包. 返回帧总长度 */
+int build_motion_frame(const uint8_t *subpkts11, int n,
                        uint8_t *out, size_t out_size);
 
 /* 构造心跳帧 */

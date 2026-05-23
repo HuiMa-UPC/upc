@@ -43,6 +43,8 @@ typedef struct {
     bool     serial_connected;
     /** 下位机 Cmd 缓存过高：暂停运动帧下发，解析线程仍运行 */
     bool     mcu_cmd_tx_hold;
+    /** 本轮 G-code 已全部下发完毕，允许再次 Start */
+    bool     job_print_completed;
 
     /* 参数镜像（用于UI显示） */
     float    param_a_max;
@@ -74,14 +76,17 @@ extern RingBuffer   g_ring_buffer;
 /** 从 g_ring_buffer 同步占用量到 g_job_status（UI 定时器 / 解析线程调用） */
 void job_status_update_ring(void);
 
+/** MCU 队列占用标签（小百分比保留两位小数） */
+void format_mcu_queue_rate_label(char *buf, size_t buf_size, uint16_t rate);
+
 /** 根据 cmd_cache_rate 更新 mcu_cmd_tx_hold（须在已持有 JOB_LOCK 时调用） */
 void job_status_sync_mcu_cmd_backpressure_locked(void);
 
-/** 发送中是否应对解析线程节流（Cmd 背压 / 占用偏高 / Ring 接近满） */
-bool job_status_parser_should_throttle(void);
-
 /** 计算百分比并四舍五入（通用，也用于 MCU cache rate -> 0..100） */
 int percent_rounded(int num, int den);
+
+/** 计算百分比 ×10 并四舍五入（用于 MCU rate 一位小数显示，1000 = 100.0%） */
+int percent_tenths(int num, int den);
 
 /* 辅助宏：上锁后安全读写 */
 #define JOB_LOCK()    std::lock_guard<std::mutex> _job_lock(g_job_status.mtx)
