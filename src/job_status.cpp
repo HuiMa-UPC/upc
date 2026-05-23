@@ -75,3 +75,14 @@ bool job_status_parser_should_throttle(void)
     }
     return throttle;
 }
+
+int percent_rounded(int num, int den)
+{
+    if(den <= 0) {
+        return 0;
+    }
+    if(num >= den) {
+        return 100;
+    }
+    return (num * 100 + den / 2) / den;
+}

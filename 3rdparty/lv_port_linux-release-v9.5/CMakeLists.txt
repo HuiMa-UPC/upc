@@ -58,17 +58,20 @@ if(TARGET lvgl)
     target_compile_definitions(lvgl PRIVATE
         _POSIX_C_SOURCE=200809L
         LV_USE_GLTF=0
-        LV_USE_OPENGLES=0
+        LV_USE_OPENGLES=1
         LV_USE_DEMO_GLTF=0
         LV_USE_3DTEXTURE=0
     )
     target_compile_options(lvgl PRIVATE -Wno-psabi)
 
-    # DRM UI 不用 GLTF：该目录 .c 含 C++ 原始字符串 R"(...)"，用 C 编译会刷屏告警
+
     get_target_property(_lvgl_sources lvgl SOURCES)
     set(_lvgl_sources_keep "")
     foreach(_src IN LISTS _lvgl_sources)
-        if(_src MATCHES "[/\\\\]libs[/\\\\]gltf[/\\\\]" OR _src MATCHES "[/\\\\]opengles[/\\\\]")
+        # if(_src MATCHES "[/\\\\]libs[/\\\\]gltf[/\\\\]" OR _src MATCHES "[/\\\\]opengles[/\\\\]")
+        #     continue()
+        # endif()
+        if(_src MATCHES "[/\\\\]libs[/\\\\]gltf[/\\\\]")
             continue()
         endif()
         list(APPEND _lvgl_sources_keep "${_src}")
@@ -83,7 +86,7 @@ if(TARGET lvgl)
 endif()
 
 # DRM / evdev（RK3588 板端需要）
-set(_LVGL_PORT_LIBS lvgl::lvgl m pthread rt dl)
+set(_LVGL_PORT_LIBS lvgl::lvgl m pthread rt dl -Wl,--no-as-needed gbm EGL GLESv2 mali_hook mali -Wl,--as-needed)
 
 find_package(PkgConfig QUIET)
 if(PKG_CONFIG_FOUND)

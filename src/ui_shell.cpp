@@ -85,13 +85,13 @@ static lv_obj_t *make_nav_button(lv_obj_t *parent, const nav_item_def_t *def, ui
 
     lv_obj_set_flex_flow(btn, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(btn, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_column(btn, 12, 0);
+    lv_obj_set_style_pad_column(btn, 18, 0);
     lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, 0);
 
     lv_obj_t *icon = lv_label_create(btn);
     lv_label_set_text(icon, def->icon);
     lv_obj_set_style_text_font(icon, ui_font_icon(), 0);
-    lv_obj_set_width(icon, 40);
+    lv_obj_set_width(icon, 64);
 
     lv_obj_t *txt = lv_label_create(btn);
     lv_label_set_text(txt, def->label);

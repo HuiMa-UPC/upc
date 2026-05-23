@@ -4,7 +4,7 @@
 #include "lvgl_wrap.hpp"
 
 #ifndef PLATFORM_TOUCH_DEVICE
-#define PLATFORM_TOUCH_DEVICE "/dev/input/event5"
+#define PLATFORM_TOUCH_DEVICE "/dev/input/event2"
 #endif
 
 #ifdef __cplusplus

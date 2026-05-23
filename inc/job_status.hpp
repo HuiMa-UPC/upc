@@ -80,6 +80,9 @@ void job_status_sync_mcu_cmd_backpressure_locked(void);
 /** 发送中是否应对解析线程节流（Cmd 背压 / 占用偏高 / Ring 接近满） */
 bool job_status_parser_should_throttle(void);
 
+/** 计算百分比并四舍五入（通用，也用于 MCU cache rate -> 0..100） */
+int percent_rounded(int num, int den);
+
 /* 辅助宏：上锁后安全读写 */
 #define JOB_LOCK()    std::lock_guard<std::mutex> _job_lock(g_job_status.mtx)
 

@@ -22,17 +22,6 @@ static lv_obj_t *g_lbl_ring_pct  = nullptr;
 static lv_obj_t *g_lbl_cmd_pct   = nullptr;
 static lv_obj_t *g_lbl_data_pct  = nullptr;
 
-static int percent_rounded(int num, int den)
-{
-    if(den <= 0) {
-        return 0;
-    }
-    if(num >= den) {
-        return 100;
-    }
-    return (num * 100 + den / 2) / den;
-}
-
 /** Ring 容量 32768，整数百分比需四舍五入，否则几百包也会显示 0% */
 static int ring_usage_percent(size_t used, size_t capacity)
 {
@@ -48,11 +37,7 @@ static int ring_usage_percent(size_t used, size_t capacity)
 static void format_ring_value_label(char *buf, size_t buf_size, size_t used, size_t capacity)
 {
     const int pct = ring_usage_percent(used, capacity);
-    if(used >= 1000) {
-        snprintf(buf, buf_size, "%uk %d%%", (unsigned)(used / 1000), pct);
-    } else {
-        snprintf(buf, buf_size, "%d%%", pct);
-    }
+    snprintf(buf, buf_size, "%d%%", pct);
 }
 
 static lv_obj_t *make_card(lv_obj_t *parent, const char *title)
@@ -100,7 +85,7 @@ static void make_bar_row(lv_obj_t *parent, const char *title,
 
     *out_bar = lv_bar_create(row);
     lv_obj_set_flex_grow(*out_bar, 1);
-    lv_obj_set_height(*out_bar, 14);
+    lv_obj_set_height(*out_bar, 22);
     lv_obj_set_style_min_width(*out_bar, 48, 0);
     lv_obj_set_style_bg_color(*out_bar, ui_color_panel_alt, 0);
     lv_obj_set_style_bg_color(*out_bar, bar_color, LV_PART_INDICATOR);

@@ -16,10 +16,12 @@
 #include <stdlib.h>
 #include <stdint.h>
 #include <gbm.h>
-#include <drm_fourcc.h>
+#include <drm/drm_fourcc.h>
 #include <xf86drm.h>
 #include <time.h>
 #include <unistd.h>
+#include <sys/select.h>
+#include <sys/time.h>
 #include "lv_linux_drm_egl_private.h"
 #include "../../../draw/lv_draw_buf.h"
 #include "../../opengles/lv_opengles_debug.h"

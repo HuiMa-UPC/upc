@@ -124,8 +124,7 @@ static lv_obj_t *make_card(lv_obj_t *parent, const char *title)
 }
 
 static lv_obj_t *make_param_row(lv_obj_t *parent, const char *name,
-                                const char *init_val, int width,
-                                lv_obj_t **out_ta)
+                                const char *init_val, lv_obj_t **out_ta)
 {
     lv_obj_t *row = lv_obj_create(parent);
     lv_obj_remove_style_all(row);
@@ -138,12 +137,13 @@ static lv_obj_t *make_param_row(lv_obj_t *parent, const char *name,
     lv_obj_t *lbl = lv_label_create(row);
     lv_label_set_text(lbl, name);
     lv_obj_set_style_text_color(lbl, ui_color_text_dim, 0);
-    lv_obj_set_width(lbl, 180);
+    lv_obj_set_width(lbl, 120);
+    lv_label_set_long_mode(lbl, LV_LABEL_LONG_MODE_CLIP);
 
     *out_ta = lv_textarea_create(row);
     lv_textarea_set_one_line(*out_ta, true);
     lv_textarea_set_text(*out_ta, init_val);
-    lv_obj_set_width(*out_ta, width);
+    lv_obj_set_flex_grow(*out_ta, 1);
     lv_obj_set_style_bg_color(*out_ta, ui_color_panel_alt, 0);
     lv_obj_set_style_border_color(*out_ta, ui_color_border, 0);
     lv_obj_set_style_border_width(*out_ta, 1, 0);
@@ -168,7 +168,8 @@ static lv_obj_t *make_switch_row(lv_obj_t *parent, const char *name, lv_obj_t **
     lv_obj_t *lbl = lv_label_create(row);
     lv_label_set_text(lbl, name);
     lv_obj_set_style_text_color(lbl, ui_color_text_dim, 0);
-    lv_obj_set_width(lbl, 100);
+    lv_obj_set_width(lbl, 120);
+    lv_label_set_long_mode(lbl, LV_LABEL_LONG_MODE_CLIP);
 
     *out_sw = lv_switch_create(row);
     lv_obj_add_event_cb(*out_sw, mark_form_dirty, LV_EVENT_VALUE_CHANGED, NULL);
@@ -332,11 +333,11 @@ lv_obj_t *page_settings_create(lv_obj_t *parent)
     lv_obj_set_style_text_color(lbl_motion, ui_color_accent, 0);
     lv_obj_add_style(lbl_motion, ui_style_subtitle(), 0);
 
-    make_param_row(col_left, "A_MAX",     "0.0000", 200, &g_ta_a_max);
+    make_param_row(col_left, "A_MAX",     "0.0000", &g_ta_a_max);
     make_switch_row(col_left, "FLY_ENABLE", &g_sw_fly_en);
-    make_param_row(col_left, "FLY_GAIN",  "0.0000", 200, &g_ta_fly_gain);
+    make_param_row(col_left, "FLY_GAIN",  "0.0000", &g_ta_fly_gain);
     make_switch_row(col_left, "ACC_ENABLE", &g_sw_acc_en);
-    make_param_row(col_left, "ACC_DELAT", "0.0000", 200, &g_ta_acc_del);
+    make_param_row(col_left, "ACC_DELAT", "0.0000", &g_ta_acc_del);
 
     /* 右列：Laser */
     lv_obj_t *col_right = lv_obj_create(cols);
@@ -352,8 +353,8 @@ lv_obj_t *page_settings_create(lv_obj_t *parent)
     lv_obj_set_style_text_color(lbl_laser, ui_color_accent, 0);
     lv_obj_add_style(lbl_laser, ui_style_subtitle(), 0);
 
-    make_param_row(col_right, "LASER_START", "0", 200, &g_ta_laser_s);
-    make_param_row(col_right, "LASER_STOP",  "0", 200, &g_ta_laser_e);
+    make_param_row(col_right, "LASER_START", "0", &g_ta_laser_s);
+    make_param_row(col_right, "LASER_STOP",  "0", &g_ta_laser_e);
 
     /* 按钮行 */
     lv_obj_t *btn_row = lv_obj_create(param_card);

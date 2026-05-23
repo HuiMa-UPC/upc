@@ -8,6 +8,7 @@
 #include <cstring>
 #include <cstdio>
 #include <cstdlib>
+#include <glob.h>
 
 /* ---------- 控件 ---------- */
 static lv_obj_t *g_ip_ta      = nullptr;
@@ -15,8 +16,10 @@ static lv_obj_t *g_port_ta    = nullptr;
 static lv_obj_t *g_btn_tcp    = nullptr;
 static lv_obj_t *g_lbl_tcp_st = nullptr;
 
-static lv_obj_t *g_serial_dev_ta  = nullptr;
-static lv_obj_t *g_serial_baud_ta = nullptr;
+static lv_obj_t *g_serial_dev_dd  = nullptr;
+static lv_obj_t *g_serial_baud_dd = nullptr;
+
+static const int k_bauds[] = {9600, 19200, 38400, 57600, 115200, 230400, 460800, 921600};
 static lv_obj_t *g_btn_serial     = nullptr;
 static lv_obj_t *g_lbl_serial_st  = nullptr;
 
@@ -86,6 +89,46 @@ static void on_tcp_click(lv_event_t *)
     }
 }
 
+static void style_dropdown(lv_obj_t *dd)
+{
+    lv_obj_set_height(dd, UI_INPUT_H);
+    lv_obj_set_style_bg_color(dd, ui_color_panel_alt, 0);
+    lv_obj_set_style_bg_opa(dd, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_color(dd, ui_color_border, 0);
+    lv_obj_set_style_border_width(dd, 1, 0);
+    lv_obj_set_style_radius(dd, UI_RADIUS, 0);
+    lv_obj_set_style_pad_hor(dd, UI_PAD_SM, 0);
+    lv_obj_set_style_text_font(dd, ui_font_body(), 0);
+    lv_obj_set_style_text_color(dd, ui_color_text, 0);
+}
+
+static void scan_serial_ports(void)
+{
+    const char *patterns[] = {
+        "/dev/ttyUSB*",
+        "/dev/ttyACM*",
+        "/dev/ttyS*",
+    };
+    char options[512] = {0};
+
+    for (size_t i = 0; i < sizeof(patterns)/sizeof(patterns[0]); i++) {
+        glob_t globbuf;
+        if (glob(patterns[i], 0, NULL, &globbuf) == 0) {
+            for (size_t j = 0; j < globbuf.gl_pathc; j++) {
+                if (options[0]) strncat(options, "\n", sizeof(options) - strlen(options) - 1);
+                strncat(options, globbuf.gl_pathv[j], sizeof(options) - strlen(options) - 1);
+            }
+            globfree(&globbuf);
+        }
+    }
+
+    if (options[0]) {
+        lv_dropdown_set_options(g_serial_dev_dd, options);
+    } else {
+        lv_dropdown_set_options(g_serial_dev_dd, "/dev/ttyUSB0");
+    }
+}
+
 static void on_serial_click(lv_event_t *)
 {
     if (ctrl_serial_is_open()) {
@@ -94,10 +137,10 @@ static void on_serial_click(lv_event_t *)
         lv_label_set_text(lv_obj_get_child(g_btn_serial, 0), "Connect");
         lv_label_set_text(g_lbl_serial_st, "Closed");
     } else {
-        const char *dev = lv_textarea_get_text(g_serial_dev_ta);
-        const char *baud_str = lv_textarea_get_text(g_serial_baud_ta);
-        int baud = atoi(baud_str);
-        if (baud <= 0) baud = 115200;
+        char dev[64] = {0};
+        lv_dropdown_get_selected_str(g_serial_dev_dd, dev, sizeof(dev));
+        uint16_t sel = lv_dropdown_get_selected(g_serial_baud_dd);
+        int baud = (sel < 8) ? k_bauds[sel] : 115200;
         if (ctrl_serial_open(dev, baud) == 0) {
             lv_obj_set_style_bg_color(g_btn_serial, ui_color_danger, 0);
             lv_label_set_text(lv_obj_get_child(g_btn_serial, 0), "Disconnect");
@@ -260,8 +303,8 @@ static void status_refresh_cb(lv_timer_t *)
     set_job_btn_enabled(g_btn_stop, can_pause_stop);
     sync_start_button_label(is_sending, is_paused);
 
-    int cmd_pct  = cmd_rate  * 100 / 65535;
-    int data_pct = data_rate * 100 / 65535;
+    int cmd_pct  = percent_rounded(cmd_rate,  65535);
+    int data_pct = percent_rounded(data_rate, 65535);
     const char *laser_txt = "--";
     if(tcp_connected) {
         laser_txt = (laser != 0) ? "ON" : "OFF";
@@ -458,12 +501,21 @@ lv_obj_t *page_control_create(lv_obj_t *parent)
 
     /* 串口行：与 TCP 同列宽 */
     lv_obj_t *ser_row = setup_conn_row(conn_card);
-    g_serial_dev_ta = make_labeled_ta(ser_row, "Serial:", "/dev/ttyUSB0",
-                                      UI_FORM_LABEL_W, UI_TA_IP_W, LV_KEYBOARD_MODE_TEXT_LOWER,
-                                      LV_TEXT_ALIGN_RIGHT);
-    g_serial_baud_ta = make_labeled_ta(ser_row, "Baud:", "115200",
-                                       UI_FORM_LABEL2_W, UI_TA_SHORT_W, LV_KEYBOARD_MODE_NUMBER,
-                                       LV_TEXT_ALIGN_RIGHT);
+    make_form_label(ser_row, "Serial:", UI_FORM_LABEL_W, LV_TEXT_ALIGN_RIGHT);
+
+    g_serial_dev_dd = lv_dropdown_create(ser_row);
+    lv_obj_set_width(g_serial_dev_dd, UI_TA_IP_W);
+    style_dropdown(g_serial_dev_dd);
+    scan_serial_ports();
+
+    make_form_label(ser_row, "Baud:", UI_FORM_LABEL2_W, LV_TEXT_ALIGN_RIGHT);
+
+    g_serial_baud_dd = lv_dropdown_create(ser_row);
+    lv_dropdown_set_options(g_serial_baud_dd, "9600\n19200\n38400\n57600\n115200\n230400\n460800\n921600");
+    lv_dropdown_set_selected(g_serial_baud_dd, 4);
+    lv_obj_set_width(g_serial_baud_dd, UI_TA_SHORT_W);
+    style_dropdown(g_serial_baud_dd);
+
     g_btn_serial = make_conn_button(ser_row, "Connect", on_serial_click);
     g_lbl_serial_st = lv_label_create(ser_row);
     lv_label_set_text(g_lbl_serial_st, "Closed");
@@ -543,12 +595,12 @@ lv_obj_t *page_control_create(lv_obj_t *parent)
     g_batch_ta = make_labeled_ta(ctrl_row, "Batch:", "100",
                                  UI_FORM_LABEL_W, UI_TA_SHORT_W, LV_KEYBOARD_MODE_NUMBER,
                                  LV_TEXT_ALIGN_RIGHT);
-    g_interval_ta = make_labeled_ta(ctrl_row, "Intv(ms):", "3",
+    g_interval_ta = make_labeled_ta(ctrl_row, "Intv:", "3",
                                     UI_FORM_LABEL2_W + 12, UI_TA_SHORT_W,
                                     LV_KEYBOARD_MODE_NUMBER, LV_TEXT_ALIGN_RIGHT);
 
     g_btn_start = lv_button_create(ctrl_row);
-    lv_obj_set_size(g_btn_start, 72, UI_INPUT_H);
+    lv_obj_set_size(g_btn_start, 120, UI_INPUT_H);
     lv_obj_add_style(g_btn_start, ui_style_btn_primary(), 0);
     lv_obj_add_event_cb(g_btn_start, on_start_click, LV_EVENT_CLICKED, NULL);
     lv_obj_t *lbl_start = lv_label_create(g_btn_start);
@@ -558,7 +610,7 @@ lv_obj_t *page_control_create(lv_obj_t *parent)
     style_start_button(g_btn_start);
 
     g_btn_pause = lv_button_create(ctrl_row);
-    lv_obj_set_size(g_btn_pause, 64, UI_INPUT_H);
+    lv_obj_set_size(g_btn_pause, 108, UI_INPUT_H);
     lv_obj_add_style(g_btn_pause, ui_style_btn_primary(), 0);
     lv_obj_add_event_cb(g_btn_pause, on_pause_click, LV_EVENT_CLICKED, NULL);
     lv_obj_t *lbl_pause = lv_label_create(g_btn_pause);
@@ -568,7 +620,7 @@ lv_obj_t *page_control_create(lv_obj_t *parent)
     lv_obj_add_state(g_btn_pause, LV_STATE_DISABLED);
 
     g_btn_stop = lv_button_create(ctrl_row);
-    lv_obj_set_size(g_btn_stop, 64, UI_INPUT_H);
+    lv_obj_set_size(g_btn_stop, 108, UI_INPUT_H);
     lv_obj_add_style(g_btn_stop, ui_style_btn_primary(), 0);
     lv_obj_add_event_cb(g_btn_stop, on_stop_click, LV_EVENT_CLICKED, NULL);
     lv_obj_t *lbl_stop = lv_label_create(g_btn_stop);
@@ -578,7 +630,7 @@ lv_obj_t *page_control_create(lv_obj_t *parent)
     lv_obj_add_state(g_btn_stop, LV_STATE_DISABLED);
 
     g_btn_reset = lv_button_create(ctrl_row);
-    lv_obj_set_size(g_btn_reset, 64, UI_INPUT_H);
+    lv_obj_set_size(g_btn_reset, 108, UI_INPUT_H);
     lv_obj_add_style(g_btn_reset, ui_style_btn_primary(), 0);
     lv_obj_add_event_cb(g_btn_reset, on_reset_click, LV_EVENT_CLICKED, NULL);
     lv_obj_t *lbl_reset = lv_label_create(g_btn_reset);

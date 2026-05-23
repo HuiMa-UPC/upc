@@ -740,7 +740,8 @@ static void indev_pointer_proc(lv_indev_t * i, lv_indev_data_t * data)
     i->pointer.last_raw_point.x = data->point.x;
     i->pointer.last_raw_point.y = data->point.y;
 
-    lv_display_rotate_point(i->disp, &data->point);
+    //added by lalin
+    //lv_display_rotate_point(i->disp, &data->point);
 
     /*Simple sanity check*/
     if(data->point.x < 0) {

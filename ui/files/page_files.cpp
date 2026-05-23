@@ -571,7 +571,7 @@ lv_obj_t *page_files_create(lv_obj_t *parent)
     lv_obj_set_style_pad_column(btn_row, UI_PAD_SM, 0);
 
     g_btn_open = lv_button_create(btn_row);
-    lv_obj_set_size(g_btn_open, 110, UI_INPUT_H);
+    lv_obj_set_size(g_btn_open, 192, UI_INPUT_H);
     lv_obj_add_style(g_btn_open, ui_style_btn_primary(), 0);
     lv_obj_add_event_cb(g_btn_open, on_open_click, LV_EVENT_CLICKED, NULL);
     lv_obj_set_style_bg_color(g_btn_open, ui_color_accent, LV_STATE_PRESSED);

@@ -141,12 +141,34 @@ static lv_point_t _evdev_process_pointer(lv_indev_t * indev, int x, int y)
 
     int offset_x = disp->offset_x;
     int offset_y = disp->offset_y;
-    int width = disp->hor_res;
-    int height = disp->ver_res;
+    //added by lalin
+    // int width = disp->hor_res;
+    // int height = disp->ver_res;
+    int width  = (disp->physical_hor_res > 0) ? disp->physical_hor_res : disp->hor_res;
+    int height = (disp->physical_ver_res > 0) ? disp->physical_ver_res : disp->ver_res;
 
     lv_point_t p;
     p.x = _evdev_calibrate(swapped_x, dsc->min_x, dsc->max_x, offset_x, offset_x + width - 1);
     p.y = _evdev_calibrate(swapped_y, dsc->min_y, dsc->max_y, offset_y, offset_y + height - 1);
+
+    //added by lalin
+     /* 物理->逻辑坐标旋转（绕过 lv_indev.c 里方向反了的 lv_display_rotate_point） */
+    lv_display_rotation_t rot = lv_display_get_rotation(disp);
+    if(rot == LV_DISPLAY_ROTATION_90) {
+        int32_t tmp = p.x;
+        p.x = p.y;                     /* 物理 Y -> 逻辑 X */
+        p.y = (width - 1) - tmp;       /* 物理 X 翻转 -> 逻辑 Y */
+    }
+    else if(rot == LV_DISPLAY_ROTATION_180) {
+        p.x = (width - 1) - p.x;
+        p.y = (height - 1) - p.y;
+    }
+    else if(rot == LV_DISPLAY_ROTATION_270) {
+        int32_t tmp = p.x;
+        p.x = (height - 1) - p.y;
+        p.y = tmp;
+    }
+
     return p;
 }
 

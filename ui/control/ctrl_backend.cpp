@@ -517,6 +517,8 @@ void ctrl_tcp_disconnect(void)
     {
         JOB_LOCK();
         g_job_status.tcp_connected = false;
+        g_job_status.cmd_cache_rate  = 0;
+        g_job_status.data_cache_rate = 0;
         g_job_status.param_read_valid = false;
         g_job_status.param_write_done = false;
     }
