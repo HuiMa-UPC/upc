@@ -7,14 +7,6 @@
 extern "C" {
 #endif
 
-/**
- * 页面占位模板（各 page_xxx.c 可调用或自行扩展）
- * @param parent 右侧内容区容器
- * @param title  页面标题
- * @param hint   开发提示文字
- */
-lv_obj_t *page_common_create_placeholder(lv_obj_t *parent, const char *title, const char *hint);
-
 /** 带标题的卡片面板（Progress / Connection 等区块复用） */
 lv_obj_t *ui_make_card(lv_obj_t *parent, const char *title);
 

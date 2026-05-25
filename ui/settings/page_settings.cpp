@@ -26,6 +26,7 @@ static lv_obj_t *g_btn_write = nullptr;
 
 static bool g_form_dirty = false;
 static bool g_last_editable = false;
+static bool g_last_tcp_conn = false;
 
 static void mark_form_dirty(lv_event_t *)
 {
@@ -39,8 +40,10 @@ static void set_obj_enabled(lv_obj_t *obj, bool enabled)
     }
     if(enabled) {
         lv_obj_remove_state(obj, LV_STATE_DISABLED);
+        lv_obj_add_flag(obj, LV_OBJ_FLAG_CLICKABLE);
     } else {
         lv_obj_add_state(obj, LV_STATE_DISABLED);
+        lv_obj_clear_flag(obj, LV_OBJ_FLAG_CLICKABLE);
         if(lv_obj_has_state(obj, LV_STATE_FOCUSED)) {
             lv_obj_remove_state(obj, LV_STATE_FOCUSED);
         }
@@ -106,13 +109,26 @@ static void sync_params_to_form(float param_a_max, uint8_t param_fly_en, float p
 }
 
 /* ---------- 辅助 ---------- */
+static void style_settings_ta(lv_obj_t *ta)
+{
+    lv_obj_set_height(ta, UI_INPUT_H);
+    lv_obj_set_style_bg_color(ta, ui_color_panel_alt, 0);
+    lv_obj_set_style_bg_opa(ta, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_color(ta, ui_color_border, 0);
+    lv_obj_set_style_border_width(ta, 1, 0);
+    lv_obj_set_style_radius(ta, UI_RADIUS, 0);
+    lv_obj_set_style_pad_hor(ta, UI_PAD_SM, 0);
+    lv_obj_set_style_text_font(ta, ui_font_body(), 0);
+    lv_obj_set_style_text_color(ta, ui_color_text, 0);
+}
+
 static lv_obj_t *make_param_row(lv_obj_t *parent, const char *name,
                                 const char *init_val, lv_obj_t **out_ta)
 {
     lv_obj_t *row = lv_obj_create(parent);
     lv_obj_remove_style_all(row);
     lv_obj_set_width(row, LV_PCT(100));
-    lv_obj_set_height(row, LV_SIZE_CONTENT);
+    lv_obj_set_height(row, UI_INPUT_H);
     lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_set_style_pad_column(row, UI_PAD_SM, 0);
@@ -120,18 +136,15 @@ static lv_obj_t *make_param_row(lv_obj_t *parent, const char *name,
     lv_obj_t *lbl = lv_label_create(row);
     lv_label_set_text(lbl, name);
     lv_obj_set_style_text_color(lbl, ui_color_text_dim, 0);
-    lv_obj_set_width(lbl, 120);
-    lv_label_set_long_mode(lbl, LV_LABEL_LONG_MODE_CLIP);
+    lv_obj_set_style_text_font(lbl, ui_font_body(), 0);
+    lv_obj_set_width(lbl, UI_SETTINGS_LABEL_W);
+    lv_label_set_long_mode(lbl, LV_LABEL_LONG_MODE_DOTS);
 
     *out_ta = lv_textarea_create(row);
     lv_textarea_set_one_line(*out_ta, true);
     lv_textarea_set_text(*out_ta, init_val);
     lv_obj_set_flex_grow(*out_ta, 1);
-    lv_obj_set_style_bg_color(*out_ta, ui_color_panel_alt, 0);
-    lv_obj_set_style_border_color(*out_ta, ui_color_border, 0);
-    lv_obj_set_style_border_width(*out_ta, 1, 0);
-    lv_obj_set_style_radius(*out_ta, UI_RADIUS, 0);
-    lv_obj_set_style_pad_hor(*out_ta, UI_PAD_SM, 0);
+    style_settings_ta(*out_ta);
 
     ui_keyboard_attach(*out_ta, LV_KEYBOARD_MODE_NUMBER);
     lv_obj_add_event_cb(*out_ta, mark_form_dirty, LV_EVENT_VALUE_CHANGED, NULL);
@@ -143,7 +156,7 @@ static lv_obj_t *make_switch_row(lv_obj_t *parent, const char *name, lv_obj_t **
     lv_obj_t *row = lv_obj_create(parent);
     lv_obj_remove_style_all(row);
     lv_obj_set_width(row, LV_PCT(100));
-    lv_obj_set_height(row, LV_SIZE_CONTENT);
+    lv_obj_set_height(row, UI_INPUT_H);
     lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_set_style_pad_column(row, UI_PAD_SM, 0);
@@ -151,12 +164,25 @@ static lv_obj_t *make_switch_row(lv_obj_t *parent, const char *name, lv_obj_t **
     lv_obj_t *lbl = lv_label_create(row);
     lv_label_set_text(lbl, name);
     lv_obj_set_style_text_color(lbl, ui_color_text_dim, 0);
-    lv_obj_set_width(lbl, 120);
-    lv_label_set_long_mode(lbl, LV_LABEL_LONG_MODE_CLIP);
+    lv_obj_set_style_text_font(lbl, ui_font_body(), 0);
+    lv_obj_set_width(lbl, UI_SETTINGS_LABEL_W);
+    lv_label_set_long_mode(lbl, LV_LABEL_LONG_MODE_DOTS);
 
     *out_sw = lv_switch_create(row);
     lv_obj_add_event_cb(*out_sw, mark_form_dirty, LV_EVENT_VALUE_CHANGED, NULL);
     return row;
+}
+
+static lv_obj_t *make_action_btn(lv_obj_t *parent, const char *caption, lv_event_cb_t cb)
+{
+    lv_obj_t *btn = lv_button_create(parent);
+    lv_obj_set_size(btn, UI_BTN_ACTION_W, UI_INPUT_H);
+    lv_obj_add_style(btn, ui_style_btn_primary(), 0);
+    lv_obj_add_event_cb(btn, cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_t *lbl = lv_label_create(btn);
+    lv_label_set_text(lbl, caption);
+    lv_obj_center(lbl);
+    return btn;
 }
 
 /* ---------- 回调 ---------- */
@@ -228,13 +254,18 @@ static void settings_refresh_cb(lv_timer_t *)
     is_sending = ctrl_is_sending() != 0;
 
     const bool editable = tcp_conn && !is_sending;
+    set_params_form_editable(editable);
     if(editable != g_last_editable) {
-        set_params_form_editable(editable);
         g_last_editable = editable;
         if(!editable) {
             g_form_dirty = false;
         }
     }
+
+    if(tcp_conn && !g_last_tcp_conn) {
+        g_form_dirty = false;
+    }
+    g_last_tcp_conn = tcp_conn;
 
     if(tcp_conn && is_sending) {
         lv_label_set_text_fmt(g_lbl_tcp_conn, "TCP: %s  " LV_SYMBOL_WARNING " Sending (locked)",
@@ -289,11 +320,27 @@ lv_obj_t *page_settings_create(lv_obj_t *parent)
     lv_label_set_text(g_lbl_serial_conn, "Serial: --");
     lv_obj_set_style_text_color(g_lbl_serial_conn, ui_color_text_dim, 0);
 
-    /* 参数卡片（两列布局） */
+    /* 参数卡片 */
     lv_obj_t *param_card = ui_make_card(page, "Board Parameters");
     lv_obj_set_flex_grow(param_card, 1);
+    lv_obj_set_style_min_height(param_card, 0, 0);
+    lv_obj_add_flag(param_card, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scroll_dir(param_card, LV_DIR_VER);
+    lv_obj_set_scrollbar_mode(param_card, LV_SCROLLBAR_MODE_AUTO);
 
-    /* 使用一个横向 flex 容器放左右两列 */
+    /* Read / Write 置于顶部，避免被裁切 */
+    lv_obj_t *btn_row = lv_obj_create(param_card);
+    lv_obj_remove_style_all(btn_row);
+    lv_obj_set_width(btn_row, LV_PCT(100));
+    lv_obj_set_height(btn_row, UI_INPUT_H);
+    lv_obj_set_flex_flow(btn_row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(btn_row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_column(btn_row, UI_PAD_SM, 0);
+
+    g_btn_read  = make_action_btn(btn_row, LV_SYMBOL_REFRESH " Read", on_read_params);
+    g_btn_write = make_action_btn(btn_row, LV_SYMBOL_SAVE " Write", on_set_params);
+
+    /* 两列参数区 */
     lv_obj_t *cols = lv_obj_create(param_card);
     lv_obj_remove_style_all(cols);
     lv_obj_set_width(cols, LV_PCT(100));
@@ -301,6 +348,7 @@ lv_obj_t *page_settings_create(lv_obj_t *parent)
     lv_obj_set_flex_flow(cols, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(cols, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
     lv_obj_set_style_pad_column(cols, UI_PAD, 0);
+    lv_obj_set_style_pad_top(cols, UI_PAD_SM, 0);
 
     /* 左列：Motion */
     lv_obj_t *col_left = lv_obj_create(cols);
@@ -338,31 +386,6 @@ lv_obj_t *page_settings_create(lv_obj_t *parent)
 
     make_param_row(col_right, "LASER_START", "0", &g_ta_laser_s);
     make_param_row(col_right, "LASER_STOP",  "0", &g_ta_laser_e);
-
-    /* 按钮行 */
-    lv_obj_t *btn_row = lv_obj_create(param_card);
-    lv_obj_remove_style_all(btn_row);
-    lv_obj_set_width(btn_row, LV_PCT(100));
-    lv_obj_set_height(btn_row, LV_SIZE_CONTENT);
-    lv_obj_set_flex_flow(btn_row, LV_FLEX_FLOW_ROW);
-    lv_obj_set_style_pad_column(btn_row, UI_PAD_SM, 0);
-    lv_obj_set_style_pad_top(btn_row, UI_PAD, 0);
-
-    g_btn_read = lv_button_create(btn_row);
-    lv_obj_set_size(g_btn_read, 90, 36);
-    lv_obj_add_style(g_btn_read, ui_style_btn_primary(), 0);
-    lv_obj_add_event_cb(g_btn_read, on_read_params, LV_EVENT_CLICKED, NULL);
-    lv_obj_t *lbl_r = lv_label_create(g_btn_read);
-    lv_label_set_text(lbl_r, LV_SYMBOL_REFRESH " Read");
-    lv_obj_center(lbl_r);
-
-    g_btn_write = lv_button_create(btn_row);
-    lv_obj_set_size(g_btn_write, 90, 36);
-    lv_obj_add_style(g_btn_write, ui_style_btn_primary(), 0);
-    lv_obj_add_event_cb(g_btn_write, on_set_params, LV_EVENT_CLICKED, NULL);
-    lv_obj_t *lbl_s = lv_label_create(g_btn_write);
-    lv_label_set_text(lbl_s, LV_SYMBOL_SAVE " Write");
-    lv_obj_center(lbl_s);
 
     set_params_form_editable(false);
     g_last_editable = false;

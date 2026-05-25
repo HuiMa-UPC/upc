@@ -1,8 +1,27 @@
 #include "ui_keyboard.hpp"
 #include "ui_theme.hpp"
+#include "job_status.hpp"
 
 static lv_obj_t *s_kb = nullptr;
 static lv_obj_t *s_current_ta = nullptr;
+
+static bool ta_input_allowed(lv_obj_t *ta)
+{
+    if(!ta) {
+        return false;
+    }
+    if(lv_obj_has_state(ta, LV_STATE_DISABLED)) {
+        return false;
+    }
+    if(!lv_obj_has_flag(ta, LV_OBJ_FLAG_CLICKABLE)) {
+        return false;
+    }
+    JOB_LOCK();
+    if(g_job_status.is_sending) {
+        return false;
+    }
+    return true;
+}
 
 /** 单行输入框：关闭聚焦自动滚动，避免文字在框内上下跳动 */
 static void style_single_line_ta(lv_obj_t *ta)
@@ -46,6 +65,14 @@ static void kb_event_cb(lv_event_t *e)
 static void ta_focus_cb(lv_event_t *e)
 {
     lv_obj_t *ta = (lv_obj_t *)lv_event_get_target(e);
+    if(!ta_input_allowed(ta)) {
+        lv_obj_remove_state(ta, LV_STATE_FOCUSED);
+        if(s_current_ta == ta) {
+            ui_keyboard_hide();
+        }
+        return;
+    }
+
     lv_keyboard_mode_t mode = (lv_keyboard_mode_t)(uintptr_t)lv_event_get_user_data(e);
 
     s_current_ta = ta;
@@ -72,9 +99,11 @@ static void ta_focus_cb(lv_event_t *e)
 void ui_keyboard_init(lv_obj_t *parent)
 {
     s_kb = lv_keyboard_create(parent);
-    lv_obj_set_size(s_kb, LV_PCT(100), LV_PCT(40));
+    lv_obj_set_size(s_kb, LV_PCT(100), LV_PCT(42));
     lv_obj_align(s_kb, LV_ALIGN_BOTTOM_MID, 0, 0);
     lv_obj_add_flag(s_kb, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_style_text_font(s_kb, ui_font_body(), LV_PART_MAIN);
+    lv_obj_set_style_text_font(s_kb, ui_font_body(), LV_PART_ITEMS);
 
     /* 监听 OK 与 Close 按钮 */
     lv_obj_add_event_cb(s_kb, kb_event_cb, LV_EVENT_READY, NULL);

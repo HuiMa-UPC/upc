@@ -40,9 +40,6 @@ extern "C" {
  */
 #define MCU_CMD_BACKPRESSURE_ON_PCT   90
 #define MCU_CMD_BACKPRESSURE_OFF_PCT  85
-/** 与 ON/OFF_PCT 对应的 rate 阈值（65535×pct/100） */
-#define MCU_CMD_BACKPRESSURE_ON_RATE  ((65535 * 90) / 100)   /* 58981 ≈ 90.0% */
-#define MCU_CMD_BACKPRESSURE_OFF_RATE ((65535 * 85) / 100)   /* 55704 ≈ 85.0% */
 /** M3000 换层：cmd/data rate 低于此阈值视为队列已排空（避免永远等精确 0） */
 #define MCU_LAYER_DRAIN_MAX_RATE      32
 #define MCU_CACHE_RATE_MAX            65535

@@ -55,12 +55,22 @@ typedef struct {
     int32_t  param_laser_start;
     int32_t  param_laser_stop;
     bool     param_read_valid;   /* 已成功解析过读参应答 */
-    bool     param_write_done; /* 写参后收到 Flash 保存脉冲(0x0D) */
 
     /* G-code 解析增益（Control 页设置，Files Open 重新解析时生效） */
     float    parse_image_scale_gain;
     float    parse_image_rang_gain;
     float    parse_speed_gain;
+
+    /* 振镜校准（CAL Files 页 Open；Control 页使能后解析/下发生效） */
+    char     cal_file[256];
+    bool     cal_file_loaded;
+    bool     enable_cal_apply;
+    bool     cal_has_gains;
+    float    cal_image_scale_gain;
+    float    cal_image_rang_gain;
+    float    cal_speed_gain;
+    int      cal_grid_nx;
+    int      cal_grid_ny;
 
     /* 发送配置 */
     int      batch_size;
@@ -76,6 +86,15 @@ extern RingBuffer   g_ring_buffer;
 /** 从 g_ring_buffer 同步占用量到 g_job_status（UI 定时器 / 解析线程调用） */
 void job_status_update_ring(void);
 
+/** 将 X/Y/Z 设为协议原点 offset（上电 / Reset 用） */
+void job_status_reset_mcu_position(void);
+
+/**
+ * 应用下位机 19B 坐标：各轴为 0 时不覆盖（下位机空闲常报 0，非有效 offset）
+ * 调用方已持有 JOB_LOCK
+ */
+void job_status_apply_mcu_position_locked(uint16_t x, uint16_t y, uint16_t z);
+
 /** MCU 队列占用标签（小百分比保留两位小数） */
 void format_mcu_queue_rate_label(char *buf, size_t buf_size, uint16_t rate);
 
@@ -87,6 +106,9 @@ int percent_rounded(int num, int den);
 
 /** 计算百分比 ×10 并四舍五入（用于 MCU rate 一位小数显示，1000 = 100.0%） */
 int percent_tenths(int num, int den);
+
+/** 下位机 19B 坐标 offset：G-code 逻辑 0 对应 raw 32768（Reset 时刷到该值） */
+#define MCU_COORD_ZERO_OFFSET 32768
 
 /* 辅助宏：上锁后安全读写 */
 #define JOB_LOCK()    std::lock_guard<std::mutex> _job_lock(g_job_status.mtx)

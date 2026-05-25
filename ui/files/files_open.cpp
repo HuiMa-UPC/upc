@@ -1,4 +1,6 @@
 #include "files_open.hpp"
+#include "gcode_parse.hpp"
+#include "job_status.hpp"
 
 #include <dirent.h>
 #include <sys/stat.h>
@@ -8,9 +10,33 @@
 #include <cstdio>
 #include <cstdlib>
 
-static const char *GCODE_DIR = "/home/Gcode";
+static const char *const GCODE_DIR_LOCAL = "/home/Gcode";
+static const char *const CAL_DIR_LOCAL   = "/home/CAL";
+static const char *const USB_DIR         = "/media/udisk0";
 
-/** 判断文件名是否以 .gcode / .nc / .txt 结尾（不区分大小写） */
+static files_storage_kind_t s_gcode_storage = FILES_STORAGE_LOCAL;
+static files_storage_kind_t s_cal_storage   = FILES_STORAGE_LOCAL;
+
+static const char *gcode_dir_path(void)
+{
+    return s_gcode_storage == FILES_STORAGE_USB ? USB_DIR : GCODE_DIR_LOCAL;
+}
+
+static const char *cal_dir_path(void)
+{
+    return s_cal_storage == FILES_STORAGE_USB ? USB_DIR : CAL_DIR_LOCAL;
+}
+
+void galva_set_storage_kind(files_storage_kind_t kind)
+{
+    s_gcode_storage = kind;
+}
+
+void cal_set_storage_kind(files_storage_kind_t kind)
+{
+    s_cal_storage = kind;
+}
+
 static bool has_gcode_ext(const char *name)
 {
     size_t len = strlen(name);
@@ -19,34 +45,44 @@ static bool has_gcode_ext(const char *name)
            (len > 4 && strcasecmp(name + len - 4, ".txt") == 0);
 }
 
-/**
- * @brief 扫描 G-code 目录，收集合法文件信息
- * @param out_list 输出文件列表（count 会被重置为 0 后重新填充）
- * @return 0 成功，-1 失败（目录无法打开）
- *
- * 遍历 /home/Gcode，跳过非普通文件和非法后缀，填充文件名与大小。
- */
-int galva_scan_files(gcode_file_list_t *out_list)
+static bool has_csv_ext(const char *name)
 {
-    if(!out_list) return -1;
+    const size_t len = strlen(name);
+    return len > 4 && strcasecmp(name + len - 4, ".csv") == 0;
+}
+
+static int scan_dir_files(const char *dir_path, gcode_file_list_t *out_list,
+                          bool (*match_ext)(const char *))
+{
+    if(!out_list || !dir_path || !match_ext) {
+        return -1;
+    }
     out_list->count = 0;
 
-    DIR *dir = opendir(GCODE_DIR);
-    if(!dir) return -1;
+    DIR *dir = opendir(dir_path);
+    if(!dir) {
+        return -1;
+    }
 
     struct dirent *ent;
     while((ent = readdir(dir)) != NULL && out_list->count < GCODE_MAX_FILES) {
-        /* 跳过目录等非普通文件（DT_UNKNOWN 留给 stat 二次确认） */
-        if(ent->d_type != DT_REG && ent->d_type != DT_UNKNOWN) continue;
-
-        if(!has_gcode_ext(ent->d_name)) continue;
+        if(ent->d_type != DT_REG && ent->d_type != DT_UNKNOWN) {
+            continue;
+        }
+        if(!match_ext(ent->d_name)) {
+            continue;
+        }
 
         char fullpath[512];
-        snprintf(fullpath, sizeof(fullpath), "%s/%s", GCODE_DIR, ent->d_name);
+        snprintf(fullpath, sizeof(fullpath), "%s/%s", dir_path, ent->d_name);
 
         struct stat st;
-        if(stat(fullpath, &st) != 0) continue;
-        if(!S_ISREG(st.st_mode)) continue;
+        if(stat(fullpath, &st) != 0) {
+            continue;
+        }
+        if(!S_ISREG(st.st_mode)) {
+            continue;
+        }
 
         gcode_file_info_t *info = &out_list->files[out_list->count];
         snprintf(info->name, sizeof(info->name), "%s", ent->d_name);
@@ -57,17 +93,81 @@ int galva_scan_files(gcode_file_list_t *out_list)
     return 0;
 }
 
-/**
- * @brief 组装完整文件路径
- * @param filename  纯文件名（不含目录）
- * @param out       输出缓冲区
- * @param out_size  缓冲区大小
- * @return 0 成功，-1 失败（参数非法或路径截断）
- */
+int galva_scan_files(gcode_file_list_t *out_list)
+{
+    return scan_dir_files(gcode_dir_path(), out_list, has_gcode_ext);
+}
+
 int galva_build_full_path(const char *filename, char *out, size_t out_size)
 {
-    if(!filename || !out || out_size == 0) return -1;
-    int n = snprintf(out, out_size, "%s/%s", GCODE_DIR, filename);
-    if(n < 0 || (size_t)n >= out_size) return -1;
+    if(!filename || !out || out_size == 0) {
+        return -1;
+    }
+    const int n = snprintf(out, out_size, "%s/%s", gcode_dir_path(), filename);
+    if(n < 0 || (size_t)n >= out_size) {
+        return -1;
+    }
+    return 0;
+}
+
+int cal_scan_files(gcode_file_list_t *out_list)
+{
+    return scan_dir_files(cal_dir_path(), out_list, has_csv_ext);
+}
+
+int cal_build_full_path(const char *filename, char *out, size_t out_size)
+{
+    if(!filename || !out || out_size == 0) {
+        return -1;
+    }
+    const int n = snprintf(out, out_size, "%s/%s", cal_dir_path(), filename);
+    if(n < 0 || (size_t)n >= out_size) {
+        return -1;
+    }
+    return 0;
+}
+
+int cal_load_file(const char *filename, char *err, size_t err_size)
+{
+    if(!filename || filename[0] == '\0') {
+        if(err && err_size > 0) {
+            snprintf(err, err_size, "no file selected");
+        }
+        return -1;
+    }
+
+    char path[512];
+    if(cal_build_full_path(filename, path, sizeof(path)) != 0) {
+        if(err && err_size > 0) {
+            snprintf(err, err_size, "path too long");
+        }
+        return -1;
+    }
+
+    galvo_cal_data_t parsed;
+    if(galvo_cal_parse_csv(path, &parsed, err, err_size) != 0) {
+        return -1;
+    }
+
+    galvo_cal_store(&parsed);
+
+    JOB_LOCK();
+    snprintf(g_job_status.cal_file, sizeof(g_job_status.cal_file), "%s", filename);
+    g_job_status.cal_file_loaded = true;
+    g_job_status.cal_has_gains = parsed.has_cal_gains;
+    g_job_status.cal_grid_nx = parsed.nx;
+    g_job_status.cal_grid_ny = parsed.ny;
+    if(parsed.has_cal_gains) {
+        g_job_status.cal_image_scale_gain = parsed.cal_image_scale_gain;
+        g_job_status.cal_image_rang_gain  = parsed.cal_image_rang_gain;
+        g_job_status.cal_speed_gain       = parsed.cal_speed_gain;
+    } else {
+        g_job_status.cal_image_scale_gain = 0.f;
+        g_job_status.cal_image_rang_gain  = 0.f;
+        g_job_status.cal_speed_gain       = 0.f;
+    }
+    if(!g_job_status.tcp_connected || !g_job_status.cal_file_loaded) {
+        g_job_status.enable_cal_apply = false;
+    }
     return 0;
 }

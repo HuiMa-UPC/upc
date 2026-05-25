@@ -10,7 +10,6 @@ extern "C" {
 
 /* ---------- 初始化/反初始化 ---------- */
 void ctrl_backend_init(void);
-void ctrl_backend_deinit(void);
 
 /* ---------- TCP ---------- */
 int  ctrl_tcp_connect(const char *ip, int port);
@@ -33,14 +32,19 @@ void ctrl_resume_sending(void);
 int  ctrl_is_sending(void);
 int  ctrl_is_paused(void);
 
+/** 换层等待：1=处于换层/首层串口握手等待，0=否 */
+int  ctrl_is_waiting_layer(void);
+
 /* ---------- 复位 ---------- */
 void ctrl_send_reset(void);
 
 /* ---------- 参数设置 ---------- */
 void ctrl_set_batch_size(int n);
 void ctrl_set_interval_ms(int ms);
-void ctrl_set_layer_height_um(uint16_t um);
 void ctrl_set_enable_layer_change(int en);
+
+void ctrl_set_enable_cal_apply(int en);
+int  ctrl_get_enable_cal_apply(void);
 
 /* ---------- 板参数读写 ---------- */
 void ctrl_request_read_params(void);
@@ -48,9 +52,6 @@ void ctrl_request_read_params(void);
 int ctrl_commit_params(float a_max, uint8_t fly_en, float fly_gain,
                        uint8_t acc_en, float acc_delat,
                        int32_t laser_start, int32_t laser_stop);
-
-/* ---------- 查询 ---------- */
-int  ctrl_get_sent_count(void);
 
 #ifdef __cplusplus
 }

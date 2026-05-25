@@ -133,8 +133,11 @@ static int serial_build_frame(uint8_t port, uint8_t cmd,
                               const uint8_t *value,
                               uint8_t *out, size_t out_size)
 {
-    size_t frame_len = 9 + tlen; /* SOF(2)+FrameType+Port+Cmd+Seq+Len+Type+Tlen+Value+Sum */
-    if (!out || out_size < frame_len) return -1;
+    /* SOF(2)+FrameType+Port+Cmd+Seq+Len+Type+Tlen + Value(tlen) + CheckSum(1) */
+    const size_t frame_len = 10u + (size_t)tlen;
+    if(!out || out_size < frame_len) {
+        return -1;
+    }
 
     out[0] = 0x5A;
     out[1] = 0xA5;
@@ -142,10 +145,12 @@ static int serial_build_frame(uint8_t port, uint8_t cmd,
     out[3] = port;
     out[4] = cmd;
     out[5] = 0x01;       /* Seq */
-    out[6] = 2 + tlen;   /* Len = Type + Tlen + Value */
+    out[6] = (uint8_t)(2 + tlen);   /* Len = Type + Tlen + Value */
     out[7] = type;
     out[8] = tlen;
-    if (tlen > 0 && value) memcpy(&out[9], value, tlen);
+    if(tlen > 0 && value) {
+        memcpy(&out[9], value, tlen);
+    }
     out[9 + tlen] = serial_checksum(out, 9 + tlen);
     return (int)frame_len;
 }
@@ -167,14 +172,9 @@ int serial_build_layer_done(uint16_t next_layer_height_um, uint8_t *out, size_t 
     return serial_build_frame(0xA4, 0x01, 0x05, 2, v, out, out_size);
 }
 
-int serial_build_print_done(uint8_t *out, size_t out_size)
+int serial_build_print_finished(uint8_t *out, size_t out_size)
 {
     return serial_build_frame(0xA4, 0x01, 0x06, 0, nullptr, out, out_size);
-}
-
-int serial_build_print_abort(uint8_t *out, size_t out_size)
-{
-    return serial_build_frame(0xA2, 0x40, 0x0B, 0, nullptr, out, out_size);
 }
 
 /* 解析 MCU->SOC 数据帧 */
@@ -185,7 +185,9 @@ serial_event_t serial_parse_frame(const uint8_t *data, size_t len)
     if (data[2] != 0xBB) return SERIAL_EVT_NONE; /* 只识别 MCU->SOC 数据帧 */
 
     uint8_t payload_len = data[6];
-    if (len < (size_t)(9 + payload_len - 2)) return SERIAL_EVT_NONE;
+    if(len < (size_t)(8 + payload_len)) {
+        return SERIAL_EVT_NONE;
+    }
 
     uint8_t calc = serial_checksum(data, 9 + payload_len - 2);
     if (calc != data[9 + payload_len - 2]) return SERIAL_EVT_NONE;
@@ -193,9 +195,6 @@ serial_event_t serial_parse_frame(const uint8_t *data, size_t len)
     uint8_t port = data[3];
     uint8_t cmd  = data[4];
     uint8_t type = data[7];
-
-    if (port == 0xA2 && cmd == 0x40 && type == 0x02)
-        return SERIAL_EVT_PRINT_PREPARING;
 
     if (port == 0xA4 && cmd == 0x01 && type == 0x02)
         return SERIAL_EVT_PRINT_CONDITION_OK;

@@ -24,7 +24,7 @@ static const nav_item_def_t k_nav_defs[UI_PAGE_COUNT] = {
     { LV_SYMBOL_FILE,     "Files",    page_files_create },
     { LV_SYMBOL_SETTINGS, "Settings", page_settings_create },
     { LV_SYMBOL_USB,      "Serial",   page_serial_create },
-    { LV_SYMBOL_WIFI,     "TCP",      page_tcp_create },
+    { LV_SYMBOL_WIFI,     "WiFi",      page_tcp_create },
 };
 
 static lv_obj_t *g_root;
@@ -32,7 +32,6 @@ static lv_obj_t *g_sidebar;
 static lv_obj_t *g_content;
 static lv_obj_t *g_nav_btns[UI_PAGE_COUNT];
 static lv_obj_t *g_pages[UI_PAGE_COUNT];
-static ui_page_id_t g_active = UI_PAGE_HOME;
 
 static void style_nav_btn(lv_obj_t *btn, bool active)
 {
@@ -63,7 +62,6 @@ static void show_page(ui_page_id_t id)
             style_nav_btn(g_nav_btns[i], i == (uint32_t)id);
         }
     }
-    g_active = id;
 
     page_files_set_visible(id == UI_PAGE_FILES ? 1 : 0);
 }
@@ -85,18 +83,18 @@ static lv_obj_t *make_nav_button(lv_obj_t *parent, const nav_item_def_t *def, ui
 
     lv_obj_set_flex_flow(btn, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(btn, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_column(btn, 18, 0);
+    lv_obj_set_style_pad_column(btn, UI_PAD_SM, 0);
     lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, 0);
 
     lv_obj_t *icon = lv_label_create(btn);
     lv_label_set_text(icon, def->icon);
     lv_obj_set_style_text_font(icon, ui_font_icon(), 0);
-    lv_obj_set_width(icon, 64);
+    lv_obj_set_width(icon, UI_NAV_ICON_W);
 
     lv_obj_t *txt = lv_label_create(btn);
     lv_label_set_text(txt, def->label);
     lv_obj_set_flex_grow(txt, 1);
-    lv_label_set_long_mode(txt, LV_LABEL_LONG_MODE_CLIP);
+    lv_label_set_long_mode(txt, LV_LABEL_LONG_MODE_DOTS);
     lv_obj_set_style_text_align(txt, LV_TEXT_ALIGN_LEFT, 0);
 
     return btn;
@@ -168,14 +166,4 @@ void ui_shell_init(void)
 
     /* 初始化全局软键盘 */
     ui_keyboard_init(scr);
-}
-
-lv_obj_t *ui_shell_content_root(void)
-{
-    return g_content;
-}
-
-void ui_shell_show_page(ui_page_id_t page)
-{
-    show_page(page);
 }

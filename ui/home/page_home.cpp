@@ -22,8 +22,58 @@ static lv_obj_t *g_lbl_ring_pct  = nullptr;
 static lv_obj_t *g_lbl_cmd_pct   = nullptr;
 static lv_obj_t *g_lbl_data_pct  = nullptr;
 
-static lv_obj_t *g_ind_tcp_tx   = nullptr;
-static lv_obj_t *g_lbl_tcp_tx_st = nullptr;
+static lv_obj_t *g_ind_tcp_tx = nullptr;
+static lv_obj_t *g_ind_layer_change = nullptr;
+static lv_obj_t *g_ind_cal_apply = nullptr;
+
+static void set_indicator_dot(lv_obj_t *dot, bool on)
+{
+    if(!dot) {
+        return;
+    }
+    lv_obj_set_style_bg_color(dot, on ? ui_color_accent : ui_color_text_dim, 0);
+}
+
+/** Progress 卡片：TCP Tx / Layer / CAL 单行指示灯 */
+static void add_indicator_item(lv_obj_t *row, const char *label, lv_obj_t **out_dot)
+{
+    lv_obj_t *item = lv_obj_create(row);
+    lv_obj_remove_style_all(item);
+    lv_obj_set_height(item, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(item, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(item, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_column(item, 8, 0);
+    lv_obj_set_style_bg_opa(item, LV_OPA_TRANSP, 0);
+
+    lv_obj_t *lbl = lv_label_create(item);
+    lv_label_set_text(lbl, label);
+    lv_obj_set_style_text_color(lbl, ui_color_text_dim, 0);
+    lv_obj_set_style_text_font(lbl, &lv_font_montserrat_18, 0);
+
+    *out_dot = lv_obj_create(item);
+    lv_obj_remove_style_all(*out_dot);
+    lv_obj_set_size(*out_dot, UI_INDICATOR_SZ, UI_INDICATOR_SZ);
+    lv_obj_set_style_radius(*out_dot, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_bg_opa(*out_dot, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_color(*out_dot, ui_color_text_dim, 0);
+    lv_obj_set_style_border_width(*out_dot, 0, 0);
+}
+
+static void make_progress_indicator_row(lv_obj_t *parent)
+{
+    lv_obj_t *row = lv_obj_create(parent);
+    lv_obj_remove_style_all(row);
+    lv_obj_set_width(row, LV_PCT(100));
+    lv_obj_set_height(row, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_column(row, UI_PAD, 0);
+    lv_obj_set_style_pad_bottom(row, UI_PAD_SM, 0);
+
+    add_indicator_item(row, "TCP Tx", &g_ind_tcp_tx);
+    add_indicator_item(row, "Layer", &g_ind_layer_change);
+    add_indicator_item(row, "CAL", &g_ind_cal_apply);
+}
 
 static void format_ring_value_label(char *buf, size_t buf_size, size_t used, size_t capacity)
 {
@@ -55,6 +105,7 @@ static void make_bar_row(lv_obj_t *parent, const char *title,
     lv_obj_t *lbl_title = lv_label_create(row);
     lv_label_set_text(lbl_title, title);
     lv_obj_set_style_text_color(lbl_title, ui_color_text_dim, 0);
+    lv_obj_set_style_text_font(lbl_title, ui_font_body(), 0);
     lv_obj_set_width(lbl_title, UI_BAR_TITLE_W);
     lv_label_set_long_mode(lbl_title, LV_LABEL_LONG_MODE_CLIP);
 
@@ -68,7 +119,7 @@ static void make_bar_row(lv_obj_t *parent, const char *title,
 
     *out_bar = lv_bar_create(row);
     lv_obj_set_flex_grow(*out_bar, 1);
-    lv_obj_set_height(*out_bar, 22);
+    lv_obj_set_height(*out_bar, UI_BAR_H);
     lv_obj_set_style_min_width(*out_bar, 48, 0);
     lv_obj_set_style_bg_color(*out_bar, ui_color_panel_alt, 0);
     lv_obj_set_style_bg_color(*out_bar, bar_color, LV_PART_INDICATOR);
@@ -76,39 +127,6 @@ static void make_bar_row(lv_obj_t *parent, const char *title,
     lv_obj_set_style_radius(*out_bar, UI_RADIUS, LV_PART_INDICATOR);
     lv_bar_set_range(*out_bar, 0, 100);
     lv_bar_set_value(*out_bar, 0, LV_ANIM_OFF);
-}
-
-/** Progress 卡片顶部的 TCP 运动帧下发指示灯（纯色圆点，无 LED 发光） */
-static void make_tcp_tx_indicator_row(lv_obj_t *parent)
-{
-    lv_obj_t *row = lv_obj_create(parent);
-    lv_obj_remove_style_all(row);
-    lv_obj_set_width(row, LV_PCT(100));
-    lv_obj_set_height(row, LV_SIZE_CONTENT);
-    lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_column(row, UI_PAD_SM, 0);
-    lv_obj_set_style_pad_bottom(row, UI_PAD_SM, 0);
-
-    lv_obj_t *lbl_title = lv_label_create(row);
-    lv_label_set_text(lbl_title, "TCP TX");
-    lv_obj_set_style_text_color(lbl_title, ui_color_text_dim, 0);
-    lv_obj_set_width(lbl_title, UI_BAR_TITLE_W);
-    lv_label_set_long_mode(lbl_title, LV_LABEL_LONG_MODE_CLIP);
-
-    g_ind_tcp_tx = lv_obj_create(row);
-    lv_obj_remove_style_all(g_ind_tcp_tx);
-    lv_obj_set_size(g_ind_tcp_tx, 16, 16);
-    lv_obj_set_style_radius(g_ind_tcp_tx, LV_RADIUS_CIRCLE, 0);
-    lv_obj_set_style_bg_opa(g_ind_tcp_tx, LV_OPA_COVER, 0);
-    lv_obj_set_style_bg_color(g_ind_tcp_tx, ui_color_text_dim, 0);
-    lv_obj_set_style_border_width(g_ind_tcp_tx, 0, 0);
-
-    g_lbl_tcp_tx_st = lv_label_create(row);
-    lv_label_set_text(g_lbl_tcp_tx_st, "Idle");
-    lv_obj_set_style_text_color(g_lbl_tcp_tx_st, ui_color_text_dim, 0);
-    lv_obj_set_flex_grow(g_lbl_tcp_tx_st, 1);
-    lv_label_set_long_mode(g_lbl_tcp_tx_st, LV_LABEL_LONG_MODE_CLIP);
 }
 
 static void status_update_cb(lv_timer_t *)
@@ -120,6 +138,9 @@ static void status_update_cb(lv_timer_t *)
     size_t ring_used, ring_capacity;
     uint16_t cmd_rate, data_rate, cur_x, cur_y, cur_z, laser;
     bool is_sending, is_parsing, tcp_connected, ring_full, mcu_cmd_tx_hold;
+    bool cal_enabled;
+    bool enable_layer_change;
+    const int waiting_layer = ctrl_is_waiting_layer();
 
     {
         JOB_LOCK();
@@ -139,6 +160,8 @@ static void status_update_cb(lv_timer_t *)
         is_parsing     = g_job_status.is_parsing;
         tcp_connected  = g_job_status.tcp_connected;
         mcu_cmd_tx_hold = g_job_status.mcu_cmd_tx_hold;
+        cal_enabled = g_job_status.enable_cal_apply;
+        enable_layer_change = g_job_status.enable_layer_change;
         if(g_job_status.flash_saved) {
             g_job_status.flash_saved = 0;
         }
@@ -178,31 +201,15 @@ static void status_update_cb(lv_timer_t *)
         lv_label_set_text(g_lbl_data_pct, data_val);
     }
 
-    /* 运动帧经 TCP 批量下发中（不含心跳；Pause / MCU 背压停发时灭） */
-    const bool tx_active = tcp_connected && is_sending &&
-                           (ctrl_is_paused() == 0) && !mcu_cmd_tx_hold;
-    if(g_ind_tcp_tx) {
-        lv_obj_set_style_bg_color(g_ind_tcp_tx,
-                                  tx_active ? ui_color_accent : ui_color_text_dim, 0);
-    }
-    if(g_lbl_tcp_tx_st) {
-        if(!tcp_connected) {
-            lv_label_set_text(g_lbl_tcp_tx_st, "Idle (no TCP)");
-            lv_obj_set_style_text_color(g_lbl_tcp_tx_st, ui_color_text_dim, 0);
-        } else if(is_sending && ctrl_is_paused() != 0) {
-            lv_label_set_text(g_lbl_tcp_tx_st, "Paused");
-            lv_obj_set_style_text_color(g_lbl_tcp_tx_st, ui_color_text_dim, 0);
-        } else if(is_sending && mcu_cmd_tx_hold) {
-            lv_label_set_text(g_lbl_tcp_tx_st, "TX hold (MCU Cmd full)");
-            lv_obj_set_style_text_color(g_lbl_tcp_tx_st, ui_color_danger, 0);
-        } else if(tx_active) {
-            lv_label_set_text(g_lbl_tcp_tx_st, "Sending motion frames");
-            lv_obj_set_style_text_color(g_lbl_tcp_tx_st, ui_color_accent, 0);
-        } else {
-            lv_label_set_text(g_lbl_tcp_tx_st, "Idle");
-            lv_obj_set_style_text_color(g_lbl_tcp_tx_st, ui_color_text_dim, 0);
-        }
-    }
+    /* TCP Tx：运动帧下发阶段亮（发送中、未暂停、非换层等待；背压短暂停发仍视为下发中） */
+    const bool tcp_tx_on = tcp_connected && is_sending &&
+                           (ctrl_is_paused() == 0) && (waiting_layer == 0);
+    const bool layer_on = enable_layer_change && (waiting_layer != 0);
+    const bool cal_on = cal_enabled;
+
+    set_indicator_dot(g_ind_tcp_tx, tcp_tx_on);
+    set_indicator_dot(g_ind_layer_change, layer_on);
+    set_indicator_dot(g_ind_cal_apply, cal_on);
 
     const char *laser_txt = "--";
     if(tcp_connected) {
@@ -214,7 +221,9 @@ static void status_update_cb(lv_timer_t *)
         cur_x, cur_y, cur_z, laser_txt);
 
     const char *st = "Idle";
-    if(mcu_cmd_tx_hold && is_sending) {
+    if(waiting_layer != 0) {
+        st = "Layer Change — waiting";
+    } else if(mcu_cmd_tx_hold && is_sending) {
         st = "MCU Cmd High (TX hold)";
     } else if(ring_full && (is_parsing || is_sending)) {
         st = "Ring Buffer Full";
@@ -250,6 +259,7 @@ lv_obj_t *page_home_create(lv_obj_t *parent)
     lv_obj_set_style_pad_all(page, UI_PAD, 0);
     lv_obj_set_style_pad_row(page, UI_PAD, 0);
     lv_obj_set_style_bg_opa(page, LV_OPA_TRANSP, 0);
+    lv_obj_clear_flag(page, LV_OBJ_FLAG_SCROLLABLE);
 
     /* 标题 */
     lv_obj_t *title = lv_label_create(page);
@@ -267,27 +277,29 @@ lv_obj_t *page_home_create(lv_obj_t *parent)
     /* 进度面板 */
     lv_obj_t *prog_card = ui_make_card(page, "Progress");
     lv_obj_set_height(prog_card, LV_SIZE_CONTENT);
+    lv_obj_clear_flag(prog_card, LV_OBJ_FLAG_SCROLLABLE);
 
-    make_tcp_tx_indicator_row(prog_card);
+    make_progress_indicator_row(prog_card);
     make_bar_row(prog_card, "Parse",   ui_color_accent,     &g_bar_parse, &g_lbl_parse_pct);
     make_bar_row(prog_card, "Ring",    ui_color_danger,     &g_bar_ring,  &g_lbl_ring_pct);
 
-    /* 下位机状态面板 */
+    /* 下位机状态面板（固定内容高度，避免 flex 拉伸后出现内部滚动条） */
     lv_obj_t *mcu_card = ui_make_card(page, "MCU Status");
-    lv_obj_set_flex_grow(mcu_card, 1);
+    lv_obj_set_height(mcu_card, LV_SIZE_CONTENT);
+    lv_obj_clear_flag(mcu_card, LV_OBJ_FLAG_SCROLLABLE);
 
     make_bar_row(mcu_card, "Cmd",  ui_color_accent,     &g_bar_cmd,  &g_lbl_cmd_pct);
     make_bar_row(mcu_card, "Data", ui_color_accent_dim, &g_bar_data, &g_lbl_data_pct);
 
-    /* 位置与激光状态（大字高亮） */
+    /* 位置与激光状态 */
     g_lbl_pos = lv_label_create(mcu_card);
     lv_label_set_text(g_lbl_pos,
         LV_SYMBOL_GPS " X:-- Y:-- Z:--   " LV_SYMBOL_CHARGE " Laser:--");
     lv_obj_set_style_text_color(g_lbl_pos, ui_color_text, 0);
     lv_obj_set_style_text_font(g_lbl_pos, ui_font_body(), 0);
     lv_obj_set_width(g_lbl_pos, LV_PCT(100));
-    lv_label_set_long_mode(g_lbl_pos, LV_LABEL_LONG_MODE_CLIP);
-    lv_obj_set_style_pad_top(g_lbl_pos, UI_PAD, 0);
+    lv_label_set_long_mode(g_lbl_pos, LV_LABEL_LONG_MODE_DOTS);
+    lv_obj_set_style_pad_top(g_lbl_pos, UI_PAD_SM, 0);
 
     /* 状态栏 */
     g_lbl_status = lv_label_create(page);

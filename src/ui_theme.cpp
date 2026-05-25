@@ -28,7 +28,7 @@ void ui_theme_init(void)
     lv_style_set_bg_color(&s_nav_active, ui_color_panel_alt);
     lv_style_set_bg_opa(&s_nav_active, LV_OPA_COVER);
     lv_style_set_border_side(&s_nav_active, LV_BORDER_SIDE_LEFT);
-    lv_style_set_border_width(&s_nav_active, 6);
+    lv_style_set_border_width(&s_nav_active, 8);
     lv_style_set_border_color(&s_nav_active, ui_color_accent);
     lv_style_set_radius(&s_nav_active, UI_RADIUS);
     lv_style_set_pad_all(&s_nav_active, UI_PAD_SM);
@@ -57,13 +57,21 @@ void ui_theme_init(void)
     lv_style_set_radius(&s_btn, UI_RADIUS);
     lv_style_set_text_color(&s_btn, ui_color_text);
     lv_style_set_text_font(&s_btn, ui_font_body());
-    lv_style_set_pad_hor(&s_btn, 20);
-    lv_style_set_pad_ver(&s_btn, 14);
+    lv_style_set_pad_hor(&s_btn, 24);
+    lv_style_set_pad_ver(&s_btn, 16);
 }
 
-const lv_font_t *ui_font_body(void)  { return &lv_font_montserrat_24; }
-const lv_font_t *ui_font_title(void) { return &lv_font_montserrat_32; }
-const lv_font_t *ui_font_icon(void)  { return &lv_font_montserrat_28; }
+void ui_theme_apply_switch(lv_obj_t *sw)
+{
+    if(!sw) {
+        return;
+    }
+    lv_obj_set_size(sw, UI_SWITCH_W, UI_SWITCH_H);
+}
+
+const lv_font_t *ui_font_body(void)  { return &lv_font_montserrat_32; }
+const lv_font_t *ui_font_title(void) { return &lv_font_montserrat_48; }
+const lv_font_t *ui_font_icon(void)  { return &lv_font_montserrat_32; }
 
 lv_style_t *ui_style_nav_item(void)        { return &s_nav; }
 lv_style_t *ui_style_nav_item_active(void) { return &s_nav_active; }

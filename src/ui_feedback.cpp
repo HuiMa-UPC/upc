@@ -78,7 +78,7 @@ void ui_toast_show(const char *msg, lv_color_t color, uint32_t duration_ms)
 
         lv_obj_t *lbl = lv_label_create(s_toast);
         lv_label_set_long_mode(lbl, LV_LABEL_LONG_MODE_WRAP);
-        lv_obj_set_width(lbl, 360);
+        lv_obj_set_width(lbl, 480);
         lv_obj_set_style_text_font(lbl, ui_font_body(), 0);
         lv_obj_set_user_data(s_toast, lbl);
     }

@@ -1,7 +1,7 @@
 #include "ctrl_backend.hpp"
 #include "protocol_mcu.hpp"
 #include "job_status.hpp"
-#include "gcode_parse_gains.hpp"
+#include "gcode_parse.hpp"
 #include "gcode_worker.hpp"
 #include "page_files.hpp"
 #include "pipeline_tune.hpp"
@@ -29,7 +29,7 @@ static std::atomic<bool> s_link_run{false};
 static std::atomic<bool> s_link_stop_req{false};
 
 /** TCP 连接后常态心跳间隔（与 UI「Intv(ms)」无关，后者仅控制发送线程轮询周期） */
-static constexpr int HEARTBEAT_INTERVAL_MS = 200;
+static constexpr int HEARTBEAT_INTERVAL_MS = 150;
 static std::atomic<bool> s_is_sending{false};
 static std::atomic<bool> s_is_paused{false};
 static std::atomic<int>  s_sent_count{0};
@@ -40,11 +40,12 @@ static uint16_t         s_layer_height_um = 100;
 static int              s_enable_layer_change = 0;
 
 static std::atomic<bool> s_waiting_layer{false};
-static std::atomic<bool> s_layer_handshake_done{false};
+/** 串口换层握手阶段（见 serial_handshake_phase_t） */
+static std::atomic<int>  s_serial_handshake_phase{0};
+static std::atomic<bool> s_serial_evt_condition_ok{false};
+static std::atomic<bool> s_serial_evt_print_ready{false};
 /** 是否已收到至少一帧 19B 常态应答（用于启动期限速） */
 static std::atomic<bool> s_mcu_eth_report_seen{false};
-/** 换层会话：首层发 PRINT_START，Reset/再次 Start 须置 true */
-static bool s_link_first_layer = true;
 
 static uint8_t          s_tcp_rx_accum[1024];
 static size_t           s_tcp_rx_accum_len = 0;
@@ -62,6 +63,27 @@ static std::deque<rb_packet_t> s_tcp_stage;
 static std::mutex              s_tcp_stage_mtx;
 /** M3000：已遇换层标记，等待下位机 cmd/data 均为 0 后再发串口（对齐 Qt enterLayerWait） */
 static std::atomic<bool>       s_layer_drain_pending{false};
+
+/** 串口自动打印握手阶段 */
+typedef enum {
+    SERIAL_HS_NONE = 0,
+    /** 已发 PRINT_REQUEST，等待「打印条件满足」 */
+    SERIAL_HS_WAIT_CONDITION_OK,
+    /** 已发 PRINT_START / LAYER_DONE，等待「打印准备完成」 */
+    SERIAL_HS_WAIT_PRINT_READY,
+} serial_handshake_phase_t;
+
+static void serial_handshake_reset(void)
+{
+    s_serial_handshake_phase.store(SERIAL_HS_NONE);
+    s_serial_evt_condition_ok.store(false);
+    s_serial_evt_print_ready.store(false);
+}
+/** Start 已点击但 Ring 未满：预填完成后自动开始下发 */
+static std::atomic<bool>       s_start_pending{false};
+
+static void ctrl_begin_sending(void);
+static void ctrl_try_complete_pending_start(void);
 
 /** 清空 TCP Stage 二级队列（线程安全） */
 static void tcp_stage_clear(void)
@@ -233,15 +255,12 @@ static void tcp_handle_frame(const uint8_t *frame, size_t len)
             JOB_LOCK();
             g_job_status.cmd_cache_rate  = resp.cmd_rate;
             g_job_status.data_cache_rate = resp.data_rate;
-            g_job_status.current_x       = resp.current_x;
-            g_job_status.current_y       = resp.current_y;
-            g_job_status.current_z       = resp.current_z;
             g_job_status.laser_state     = resp.laser_state;
             if(resp.flash_flag == 0x0D) {
                 g_job_status.flash_saved     = 1;
-                g_job_status.param_write_done = true;
             }
             job_status_sync_mcu_cmd_backpressure_locked();
+            job_status_apply_mcu_position_locked(resp.current_x, resp.current_y, resp.current_z);
         }
         if(s_rb) {
             job_status_update_ring();
@@ -326,19 +345,54 @@ static size_t serial_guess_frame_len(const uint8_t *buf, size_t avail)
     }
 
     const uint8_t payload_len = buf[6];
-    const size_t frame_len = 9u + (size_t)payload_len;
+    const size_t frame_len = 8u + (size_t)payload_len;
     if(avail < frame_len) {
         return 0;
     }
     return frame_len;
 }
 
-/** @brief 解析串口帧，识别 PRINT_READY 事件 */
+/** @brief 解析串口帧，记录打印条件满足 / 打印准备完成 */
 static void serial_handle_frame(const uint8_t *frame, size_t len)
 {
-    serial_event_t evt = serial_parse_frame(frame, len);
-    if(evt == SERIAL_EVT_PRINT_READY) {
-        s_layer_handshake_done.store(true);
+    const serial_event_t evt = serial_parse_frame(frame, len);
+    switch(evt) {
+    case SERIAL_EVT_PRINT_CONDITION_OK:
+        s_serial_evt_condition_ok.store(true);
+        break;
+    case SERIAL_EVT_PRINT_READY:
+        s_serial_evt_print_ready.store(true);
+        break;
+    default:
+        break;
+    }
+}
+
+/**
+ * @brief 根据串口上报推进握手：首层 REQUEST→条件满足→START→准备完成；换层 LAYER_DONE→准备完成
+ */
+static void link_process_serial_handshake(void)
+{
+    if(!s_waiting_layer.load() || !s_enable_layer_change || s_serial_fd < 0) {
+        return;
+    }
+
+    const int phase = s_serial_handshake_phase.load();
+
+    if(phase == SERIAL_HS_WAIT_CONDITION_OK && s_serial_evt_condition_ok.exchange(false)) {
+        uint8_t sbuf[32];
+        const int slen = serial_build_print_start(s_layer_height_um, sbuf, sizeof(sbuf));
+        if(slen > 0) {
+            serial_send_raw(sbuf, (size_t)slen);
+        }
+        s_serial_handshake_phase.store(SERIAL_HS_WAIT_PRINT_READY);
+        s_serial_evt_print_ready.store(false);
+        return;
+    }
+
+    if(phase == SERIAL_HS_WAIT_PRINT_READY && s_serial_evt_print_ready.exchange(false)) {
+        s_waiting_layer.store(false);
+        serial_handshake_reset();
     }
 }
 
@@ -407,7 +461,7 @@ static void link_thread_start(void)
 }
 
 /** 遇到 M3000：从 Stage 取出标记并进入换层等待（对齐 Qt flush + enterLayerWait） */
-static bool link_handle_layer_mark(bool *first_layer)
+static bool link_handle_layer_mark(void)
 {
     rb_pkt_type_t ptype;
     if(!tcp_stage_peek_type(&ptype) || ptype != RB_PKT_LAYER_MARK) {
@@ -420,7 +474,7 @@ static bool link_handle_layer_mark(bool *first_layer)
     }
 
     s_waiting_layer.store(true);
-    s_layer_handshake_done.store(false);
+    serial_handshake_reset();
 
     if(s_enable_layer_change) {
         s_layer_drain_pending.store(true);
@@ -429,12 +483,11 @@ static bool link_handle_layer_mark(bool *first_layer)
         s_waiting_layer.store(false);
     }
 
-    (void)first_layer;
     return true;
 }
 
-/** cmd/data 均为 0 后下发串口换层（对齐 Qt M3000 流程） */
-static void link_try_layer_serial_dispatch(bool *first_layer)
+/** cmd/data 均排空后下发「单层扫描完成」，再等打印准备完成 */
+static void link_try_layer_serial_dispatch(void)
 {
     if(!s_waiting_layer.load() || !s_layer_drain_pending.load()) {
         return;
@@ -442,6 +495,7 @@ static void link_try_layer_serial_dispatch(bool *first_layer)
     if(!s_enable_layer_change || s_serial_fd < 0) {
         s_layer_drain_pending.store(false);
         s_waiting_layer.store(false);
+        serial_handshake_reset();
         return;
     }
 
@@ -458,18 +512,14 @@ static void link_try_layer_serial_dispatch(bool *first_layer)
     }
 
     uint8_t sbuf[32];
-    int slen = 0;
-    if(*first_layer) {
-        slen = serial_build_print_start(s_layer_height_um, sbuf, sizeof(sbuf));
-    } else {
-        slen = serial_build_layer_done(s_layer_height_um, sbuf, sizeof(sbuf));
-    }
+    const int slen = serial_build_layer_done(s_layer_height_um, sbuf, sizeof(sbuf));
     if(slen > 0) {
         serial_send_raw(sbuf, (size_t)slen);
     }
 
     s_layer_drain_pending.store(false);
-    *first_layer = false;
+    s_serial_handshake_phase.store(SERIAL_HS_WAIT_PRINT_READY);
+    s_serial_evt_print_ready.store(false);
 }
 
 /** 从 Stage 组一批运动帧并 TCP 下发；返回本批包数，0 表示未发送 */
@@ -535,28 +585,22 @@ static int link_send_one_motion_batch(void)
 
 /**
  * @brief 运动帧发送（单轮单次 batch）
- * @param first_layer 首层标记，换层时用于发 PRINT_START
  *
  * 简化后的发送逻辑：
  *   1. RingBuffer → Stage 限量搬运
- *   2. 换层队列排空检测 + 串口换层帧下发
+ *   2. 换层队列排空检测 + 串口 LAYER_DONE
  *   3. 若处于换层等待则暂停
  *   4. 背压：cmd ≥ 80% 时停止下发
  *   5. 每轮只发送一个 batch（batch_size 个包），然后进入下一轮 interval_ms 轮询
- *
- * 解析线程与发送线程完全解耦：
- *   - 解析线程只管往 RingBuffer 塞数据，塞满就阻塞
- *   - 发送线程只管按固定 interval_ms 周期、固定 batch_size 搬运数据
- *   - 背压仅由发送线程根据 MCU cmd 水位控制，不影响解析线程
  */
-static void link_drain_motion_queue(bool *first_layer)
+static void link_drain_motion_queue(void)
 {
     if(!s_is_sending.load() || s_is_paused.load()) {
         return;
     }
 
     refill_tcp_stage_from_ring();
-    link_try_layer_serial_dispatch(first_layer);
+    link_try_layer_serial_dispatch();
 
     if(s_waiting_layer.load()) {
         return;
@@ -573,8 +617,8 @@ static void link_drain_motion_queue(bool *first_layer)
     }
 
     /* 每轮只发送一个 batch，然后进入下一轮 interval_ms 轮询 */
-    if(link_handle_layer_mark(first_layer)) {
-        link_try_layer_serial_dispatch(first_layer);
+    if(link_handle_layer_mark()) {
+        link_try_layer_serial_dispatch();
         return;
     }
 
@@ -595,6 +639,57 @@ static void ctrl_prefill_gcode_ring(void)
     page_files_notify_parse_restarted();
 }
 
+/** 真正进入发送态（假定 Ring 已 ≥ 一批） */
+static void ctrl_begin_sending(void)
+{
+    if(!s_link_run.load()) {
+        link_thread_start();
+    }
+
+    s_is_sending.store(true);
+    s_is_paused.store(false);
+    s_sent_count.store(0);
+    s_mcu_eth_report_seen.store(false);
+    tcp_stage_clear();
+
+    {
+        JOB_LOCK();
+        g_job_status.is_sending = true;
+        g_job_status.sent_packets = 0;
+        g_job_status.mcu_cmd_tx_hold = false;
+        g_job_status.job_print_completed = false;
+    }
+
+    /* 首层：1 打印请求 → 条件满足 → 4 打印开始 → 准备完成，再下发第一层运动帧 */
+    if(s_enable_layer_change && s_serial_fd >= 0) {
+        uint8_t sbuf[32];
+        const int slen = serial_build_print_request(sbuf, sizeof(sbuf));
+        if(slen > 0) {
+            serial_send_raw(sbuf, (size_t)slen);
+        }
+        s_waiting_layer.store(true);
+        s_layer_drain_pending.store(false);
+        serial_handshake_reset();
+        s_serial_handshake_phase.store(SERIAL_HS_WAIT_CONDITION_OK);
+    }
+}
+
+/** Ring 蓄满后完成用户已点击的 Start */
+static void ctrl_try_complete_pending_start(void)
+{
+    if(!s_start_pending.load() || s_is_sending.load() || s_tcp_fd < 0) {
+        return;
+    }
+
+    const int batch = s_batch_size > 0 ? s_batch_size : 100;
+    if(!s_rb || s_rb->count() < (size_t)batch) {
+        return;
+    }
+
+    s_start_pending.store(false);
+    ctrl_begin_sending();
+}
+
 /**
  * @brief Ring/Stage 已空、解析读完、且下位机 CMD/DATA 均排空时，判定为打印完成
  *
@@ -605,6 +700,8 @@ static void ctrl_prefill_gcode_ring(void)
  *   4. 文件已读到 EOF
  *   5. 下位机 cmd_cache_rate <= MCU_LAYER_DRAIN_MAX_RATE（≈0.05%）
  *   6. 下位机 data_cache_rate <= MCU_LAYER_DRAIN_MAX_RATE（≈0.05%）
+ *
+ * 换层使能且串口已连接时，下发串口「打印全部完成」(0xA4/0x01/0x06)。
  *
  * 注意：此处**不再**自动调用 ctrl_prefill_gcode_ring() 重新预填。
  */
@@ -635,6 +732,14 @@ static void link_try_finish_sending(void)
         }
         if(g_job_status.data_cache_rate > MCU_LAYER_DRAIN_MAX_RATE) {
             return;
+        }
+    }
+
+    if(s_enable_layer_change && s_serial_fd >= 0) {
+        uint8_t sbuf[32];
+        const int slen = serial_build_print_finished(sbuf, sizeof(sbuf));
+        if(slen > 0) {
+            serial_send_raw(sbuf, (size_t)slen);
         }
     }
 
@@ -693,26 +798,16 @@ static void link_thread_fn(void)
 
         /* 3. 非阻塞接收串口数据（粘包拆帧） */
         serial_drain_rx();
+        link_process_serial_handshake();
 
-        /* 4. 换层握手完成 → 继续发运动帧；首层在 PRINT_READY 后发 PRINT_START */
-        if(s_waiting_layer.load() && s_layer_handshake_done.load()) {
-            if(s_enable_layer_change && s_serial_fd >= 0 && s_link_first_layer) {
-                uint8_t sbuf[32];
-                const int slen = serial_build_print_start(s_layer_height_um, sbuf, sizeof(sbuf));
-                if(slen > 0) {
-                    serial_send_raw(sbuf, (size_t)slen);
-                }
-                s_link_first_layer = false;
-            }
-            s_waiting_layer.store(false);
-            s_layer_handshake_done.store(false);
-        }
+        /* 4. Ring 蓄满后自动完成挂起的 Start */
+        ctrl_try_complete_pending_start();
 
         /* 5. 运动帧：①→② refill + ②→TCP consume（对齐 Qt 定时器周期） */
-        link_drain_motion_queue(&s_link_first_layer);
+        link_drain_motion_queue();
         link_try_finish_sending();
 
-        /* 6. 轮询周期 = Intv(ms) */
+        /* 7. 轮询周期 = Intv(ms) */
         if(s_interval_ms > 0) {
             std::this_thread::sleep_for(std::chrono::milliseconds(s_interval_ms));
         }
@@ -736,26 +831,28 @@ void ctrl_backend_init(void)
     s_is_paused.store(false);
     s_sent_count.store(0);
     s_waiting_layer.store(false);
-    s_layer_handshake_done.store(false);
-    s_mcu_eth_report_seen.store(false);
     s_layer_drain_pending.store(false);
+    serial_handshake_reset();
+    s_mcu_eth_report_seen.store(false);
+    s_start_pending.store(false);
     s_serial_rx_accum_len = 0;
     tcp_stage_clear();
 
     JOB_LOCK();
     g_job_status.batch_size           = 100;
     g_job_status.interval_ms          = 3;
+    g_job_status.layer_height_um      = s_layer_height_um;
     g_job_status.enable_layer_change  = false;
+    g_job_status.cal_file[0]          = '\0';
+    g_job_status.cal_file_loaded      = false;
+    g_job_status.enable_cal_apply     = false;
+    g_job_status.cal_has_gains        = false;
+    g_job_status.cal_grid_nx          = 0;
+    g_job_status.cal_grid_ny          = 0;
     g_job_status.job_print_completed  = false;
-}
-
-/** 反初始化：停止发送、断开连接、停止链路线程 */
-void ctrl_backend_deinit(void)
-{
-    ctrl_stop_sending();
-    ctrl_tcp_disconnect();
-    ctrl_serial_close();
-    link_thread_stop();
+    g_job_status.current_x            = MCU_COORD_ZERO_OFFSET;
+    g_job_status.current_y            = MCU_COORD_ZERO_OFFSET;
+    g_job_status.current_z            = MCU_COORD_ZERO_OFFSET;
 }
 
 /* TCP */
@@ -825,7 +922,7 @@ void ctrl_tcp_disconnect(void)
         g_job_status.cmd_cache_rate  = 0;
         g_job_status.data_cache_rate = 0;
         g_job_status.param_read_valid = false;
-        g_job_status.param_write_done = false;
+        g_job_status.enable_cal_apply = false;
     }
 }
 
@@ -911,8 +1008,8 @@ void ctrl_set_ring_buffer(RingBuffer *rb) { s_rb = rb; }
 /**
  * @brief 开始向下位机发送运动帧
  *
- * 若 RingBuffer 数据不足，会自动调用 ctrl_prefill_gcode_ring() 从头预填。
- * 若启用换层且串口已连接，会先下发 PRINT_REQUEST 并进入换层等待。
+ * Ring 不足一批时会先预填并挂起 Start，Ring 满一批后由 link 线程自动开始下发。
+ * 若启用换层且串口已连接，开始下发时会先发 PRINT_REQUEST。
  */
 void ctrl_start_sending(void)
 {
@@ -922,49 +1019,29 @@ void ctrl_start_sending(void)
 
     const int batch = s_batch_size > 0 ? s_batch_size : 100;
     if(s_rb && s_rb->count() < (size_t)batch) {
-        ctrl_prefill_gcode_ring();
+        if(gcode_is_file_open() && !gcode_is_parsing()) {
+            ctrl_prefill_gcode_ring();
+        }
+        s_start_pending.store(true);
+        if(!s_link_run.load()) {
+            link_thread_start();
+        }
         return;
     }
 
-    if(!s_link_run.load()) {
-        link_thread_start();
-    }
-
-    s_is_sending.store(true);
-    s_is_paused.store(false);
-    s_sent_count.store(0);
-    s_link_first_layer = true;
-    s_mcu_eth_report_seen.store(false);
-    tcp_stage_clear();
-
-    {
-        JOB_LOCK();
-        g_job_status.is_sending = true;
-        g_job_status.sent_packets = 0;
-        g_job_status.mcu_cmd_tx_hold = false;
-        g_job_status.job_print_completed = false;
-    }
-
-    /* 若启用换层且串口已连接，先发打印请求 */
-    if(s_enable_layer_change && s_serial_fd >= 0) {
-        uint8_t sbuf[32];
-        int slen = serial_build_print_request(sbuf, sizeof(sbuf));
-        if(slen > 0) {
-            serial_send_raw(sbuf, (size_t)slen);
-        }
-        s_waiting_layer.store(true);
-        s_layer_handshake_done.store(false);
-    }
+    s_start_pending.store(false);
+    ctrl_begin_sending();
 }
 
 /** 立即停止发送，清空 Stage，重置所有换层/暂停状态 */
 void ctrl_stop_sending(void)
 {
+    s_start_pending.store(false);
     s_is_sending.store(false);
     s_is_paused.store(false);
     s_waiting_layer.store(false);
-    s_layer_handshake_done.store(false);
     s_layer_drain_pending.store(false);
+    serial_handshake_reset();
     tcp_stage_clear();
     {
         JOB_LOCK();
@@ -982,6 +1059,11 @@ int  ctrl_is_sending(void) { return s_is_sending.load(); }
 /** @return 1 处于暂停状态，0 未暂停 */
 int  ctrl_is_paused(void) { return s_is_paused.load(); }
 
+int ctrl_is_waiting_layer(void)
+{
+    return s_waiting_layer.load() ? 1 : 0;
+}
+
 /* 复位 */
 /**
  * @brief 发送复位帧并重置所有状态
@@ -991,6 +1073,8 @@ int  ctrl_is_paused(void) { return s_is_paused.load(); }
  */
 void ctrl_send_reset(void)
 {
+    s_start_pending.store(false);
+
     uint8_t frame[64];
     int flen = build_reset_frame(frame, sizeof(frame));
     if(flen > 0) {
@@ -1001,9 +1085,8 @@ void ctrl_send_reset(void)
     s_is_sending.store(false);
     s_is_paused.store(false);
     s_waiting_layer.store(false);
-    s_layer_handshake_done.store(false);
     s_layer_drain_pending.store(false);
-    s_link_first_layer = true;
+    serial_handshake_reset();
     s_mcu_eth_report_seen.store(false);
     tcp_stage_clear();
 
@@ -1014,6 +1097,10 @@ void ctrl_send_reset(void)
         g_job_status.mcu_cmd_tx_hold = false;
         g_job_status.cmd_cache_rate  = 0;
         g_job_status.data_cache_rate = 0;
+        g_job_status.current_x       = MCU_COORD_ZERO_OFFSET;
+        g_job_status.current_y       = MCU_COORD_ZERO_OFFSET;
+        g_job_status.current_z       = MCU_COORD_ZERO_OFFSET;
+        g_job_status.laser_state     = 0;
     }
 
     /* 清空 ①②；始终从头重新解析 G-code 预填 Ring */
@@ -1047,20 +1134,29 @@ void ctrl_set_interval_ms(int ms)
     g_job_status.interval_ms = s_interval_ms;
 }
 
-/** 设置换层层厚（微米），用于串口 PRINT_START / LAYER_DONE 帧 */
-void ctrl_set_layer_height_um(uint16_t um)
-{
-    s_layer_height_um = um;
-    JOB_LOCK();
-    g_job_status.layer_height_um = um;
-}
-
 /** 开启/关闭换层功能（开关状态同步到 job_status） */
 void ctrl_set_enable_layer_change(int en)
 {
     s_enable_layer_change = en ? 1 : 0;
     JOB_LOCK();
     g_job_status.enable_layer_change = en ? true : false;
+}
+
+void ctrl_set_enable_cal_apply(int en)
+{
+    JOB_LOCK();
+    if(en && (!g_job_status.tcp_connected || !g_job_status.cal_file_loaded ||
+              !g_job_status.cal_has_gains)) {
+        g_job_status.enable_cal_apply = false;
+        return;
+    }
+    g_job_status.enable_cal_apply = en ? true : false;
+}
+
+int ctrl_get_enable_cal_apply(void)
+{
+    JOB_LOCK();
+    return g_job_status.enable_cal_apply ? 1 : 0;
 }
 
 /* 板参数读写 */
@@ -1115,7 +1211,6 @@ int ctrl_commit_params(float a_max, uint8_t fly_en, float fly_gain,
 
     {
         JOB_LOCK();
-        g_job_status.param_write_done = false;
         g_job_status.flash_saved = 0;
     }
 
@@ -1156,6 +1251,3 @@ int ctrl_commit_params(float a_max, uint8_t fly_en, float fly_gain,
 
     return ret;
 }
-
-/** @return 已发送运动包总数 */
-int ctrl_get_sent_count(void) { return s_sent_count.load(); }

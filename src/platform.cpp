@@ -44,11 +44,12 @@ static lv_display_t *init_drm_display(void)
     }
     lv_free(auto_card);
 
-    lv_display_set_rotation(disp, LV_DISPLAY_ROTATION_90);
+    lv_display_set_rotation(disp, PLATFORM_DISPLAY_ROTATION);
 
-    fprintf(stderr, "DRM OK %ux%u\n",
+    fprintf(stderr, "DRM OK %ux%u (rotation=%d)\n",
             (unsigned)lv_display_get_horizontal_resolution(disp),
-            (unsigned)lv_display_get_vertical_resolution(disp));
+            (unsigned)lv_display_get_vertical_resolution(disp),
+            (int)PLATFORM_DISPLAY_ROTATION);
     return disp;
 }
 
@@ -66,6 +67,9 @@ static int init_touchscreen(lv_display_t *disp)
     }
 
     lv_indev_set_display(indev, disp);
+#if PLATFORM_EVDEV_SWAP_AXES
+    lv_evdev_set_swap_axes(indev, true);
+#endif
     fprintf(stderr, "touchscreen OK (%s)\n", dev);
     return 0;
 }

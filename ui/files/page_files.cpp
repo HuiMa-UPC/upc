@@ -1,4 +1,5 @@
 #include "page_files.hpp"
+#include "page_cal_files.hpp"
 #include "files_open.hpp"
 #include "gcode_worker.hpp"
 #include "ctrl_backend.hpp"
@@ -45,6 +46,79 @@ typedef struct {
 } file_slot_t;
 
 static file_slot_t g_slots[GCODE_MAX_FILES];
+
+static lv_obj_t *g_files_pager = nullptr;
+static lv_obj_t *g_pager_dots[2] = {nullptr, nullptr};
+static lv_obj_t *g_gcode_dir_view = nullptr;
+static lv_obj_t *g_gcode_files_view = nullptr;
+static lv_obj_t *g_cal_dir_view = nullptr;
+static lv_obj_t *g_cal_files_view = nullptr;
+
+/** U 盘按钮强调色（与主题绿色主色区分，仍适配深色 UI） */
+static const lv_color_t ui_color_storage_usb = LV_COLOR_MAKE(0x2a, 0x9d, 0xad);
+
+static void on_refresh_click(lv_event_t *);
+
+/** 每页宽度 = 视口宽，保证一次只显示一整页 */
+static void files_pager_sync_page_widths(lv_obj_t *pager)
+{
+    if(!pager) {
+        return;
+    }
+    lv_obj_update_layout(pager);
+    const int32_t w = lv_obj_get_content_width(pager);
+    const int32_t h = lv_obj_get_content_height(pager);
+    if(w <= 0 || h <= 0) {
+        return;
+    }
+    const uint32_t cnt = lv_obj_get_child_count(pager);
+    for(uint32_t i = 0; i < cnt; i++) {
+        lv_obj_t *child = lv_obj_get_child(pager, i);
+        lv_obj_set_size(child, w, h);
+    }
+}
+
+static void files_pager_update_dots(lv_obj_t *pager)
+{
+    if(!pager || !g_pager_dots[0]) {
+        return;
+    }
+    const int32_t w = lv_obj_get_content_width(pager);
+    if(w <= 0) {
+        return;
+    }
+    const int32_t x  = lv_obj_get_scroll_x(pager);
+    int page = (int)((x + w / 2) / w);
+    if(page < 0) {
+        page = 0;
+    }
+    if(page > 1) {
+        page = 1;
+    }
+    for(int i = 0; i < 2; i++) {
+        if(!g_pager_dots[i]) {
+            continue;
+        }
+        lv_obj_set_style_bg_color(g_pager_dots[i],
+            i == page ? ui_color_accent : ui_color_text_dim, 0);
+        lv_obj_set_style_bg_opa(g_pager_dots[i], LV_OPA_COVER, 0);
+    }
+}
+
+static void files_pager_size_cb(lv_event_t *e)
+{
+    lv_obj_t *pager = static_cast<lv_obj_t *>(lv_event_get_target(e));
+    files_pager_sync_page_widths(pager);
+    files_pager_update_dots(pager);
+}
+
+static void files_pager_scroll_cb(lv_event_t *e)
+{
+    if(lv_event_get_code(e) != LV_EVENT_SCROLL_END) {
+        return;
+    }
+    files_pager_update_dots(static_cast<lv_obj_t *>(lv_event_get_target(e)));
+}
 
 /** 重置单个文件槽位到初始状态 */
 static void reset_file_slot(int idx)
@@ -96,11 +170,25 @@ static void set_open_btn_enabled(bool enabled)
     }
     if(enabled) {
         lv_obj_remove_state(g_btn_open, LV_STATE_DISABLED);
+        lv_obj_add_flag(g_btn_open, LV_OBJ_FLAG_CLICKABLE);
         lv_obj_set_style_bg_color(g_btn_open, ui_color_accent_dim, 0);
     } else {
         lv_obj_add_state(g_btn_open, LV_STATE_DISABLED);
+        lv_obj_clear_flag(g_btn_open, LV_OBJ_FLAG_CLICKABLE);
         lv_obj_set_style_bg_color(g_btn_open, ui_color_panel_alt, 0);
     }
+}
+
+/** 打印进行中：禁止 Open / Refresh / 切换文件等破坏性操作 */
+static bool files_job_locked(void)
+{
+    return ctrl_is_sending() != 0;
+}
+
+static bool gcode_files_view_visible(void)
+{
+    return g_gcode_files_view &&
+           !lv_obj_has_flag(g_gcode_files_view, LV_OBJ_FLAG_HIDDEN);
 }
 
 /** 修改 Open 按钮的文本标签 */
@@ -127,7 +215,7 @@ static void update_open_button(void)
         return;
     }
 
-    if(ctrl_is_sending()) {
+    if(files_job_locked()) {
         set_open_btn_enabled(false);
         set_open_btn_caption(LV_SYMBOL_STOP "  Locked");
         return;
@@ -301,48 +389,33 @@ static void on_file_btn_click(lv_event_t *e)
     refresh_detail_panel();
 }
 
-/**
- * @brief 停止当前正在运行的作业
- *
- * 依次调用：停止发送 → 关闭文件/停止解析 → 清空 RingBuffer → 重置 parsing 索引
- */
 static void stop_active_job(void)
 {
-    if(ctrl_is_sending()) {
-        ctrl_stop_sending();
+    if(files_job_locked()) {
+        return;
     }
     gcode_close_file();
     g_ring_buffer.clear();
     g_parsing_idx = -1;
 }
 
-/**
- * @brief Refresh 按钮点击事件
- *
- * 停止当前作业，重新扫描 /home/Gcode 目录，重建文件列表 UI。
- */
-static void on_refresh_click(lv_event_t *)
+/** 根据 g_file_list 重建左侧文件按钮列表 */
+static void rebuild_gcode_list_buttons(void)
 {
-    stop_active_job();
-    g_active_idx = -1;
-    reset_all_slots();
-
     lv_obj_clean(g_list);
-    galva_scan_files(&g_file_list);
 
     if(g_file_list.count == 0) {
         lv_obj_t *lbl = lv_label_create(g_list);
-        lv_label_set_text(lbl, "No G-code files in /home/Gcode");
+        lv_label_set_text(lbl, "No G-code files found");
         lv_obj_set_style_text_color(lbl, ui_color_text_dim, 0);
         g_selected_idx = -1;
-        refresh_detail_panel();
         return;
     }
 
     for(int i = 0; i < g_file_list.count; i++) {
         lv_obj_t *btn = lv_button_create(g_list);
         lv_obj_set_width(btn, LV_PCT(100));
-        lv_obj_set_height(btn, 38);
+        lv_obj_set_height(btn, UI_LIST_ITEM_H);
         lv_obj_add_event_cb(btn, on_file_btn_click, LV_EVENT_CLICKED, (void *)(uintptr_t)i);
         lv_obj_set_style_radius(btn, UI_RADIUS, 0);
         lv_obj_set_style_pad_all(btn, UI_PAD_SM, 0);
@@ -354,7 +427,7 @@ static void on_refresh_click(lv_event_t *)
         lv_label_set_text(icon, LV_SYMBOL_FILE);
         lv_obj_set_style_text_font(icon, ui_font_icon(), 0);
         lv_obj_set_style_text_color(icon, ui_color_accent, 0);
-        lv_obj_set_width(icon, 28);
+        lv_obj_set_width(icon, 36);
 
         lv_obj_t *name = lv_label_create(btn);
         lv_label_set_text(name, g_file_list.files[i].name);
@@ -362,8 +435,31 @@ static void on_refresh_click(lv_event_t *)
         lv_obj_set_flex_grow(name, 1);
     }
 
-    g_selected_idx = 0;
+    if(g_selected_idx < 0 || g_selected_idx >= g_file_list.count) {
+        g_selected_idx = 0;
+    }
     update_list_selection();
+}
+
+/**
+ * @brief Refresh 按钮 / 目录选择后：重扫 G-code 目录并重建列表
+ *
+ * 打印进行中不停止作业、不清 RingBuffer，仅刷新列表 UI 并锁定 Open。
+ */
+static void on_refresh_click(lv_event_t *)
+{
+    if(files_job_locked()) {
+        ui_toast_show("Job running — refresh skipped", ui_color_text_dim, 1800);
+        refresh_detail_panel();
+        return;
+    }
+
+    stop_active_job();
+    g_active_idx = -1;
+    reset_all_slots();
+
+    galva_scan_files(&g_file_list);
+    rebuild_gcode_list_buttons();
     refresh_detail_panel();
 }
 
@@ -495,6 +591,10 @@ static void files_ui_timer_cb(lv_timer_t *)
     } else if(g_selected_idx >= 0) {
         update_open_button();
     }
+
+    if(files_job_locked() && g_page_visible && gcode_files_view_visible()) {
+        update_open_button();
+    }
 }
 
 /**
@@ -503,12 +603,159 @@ static void files_ui_timer_cb(lv_timer_t *)
  *
  * 隐藏时停止刷新进度条，避免切走页面后状态错乱。
  */
+static lv_obj_t *make_dir_pick_btn(lv_obj_t *parent, const char *caption, lv_color_t bg)
+{
+    lv_obj_t *btn = lv_button_create(parent);
+    lv_obj_set_width(btn, LV_PCT(100));
+    lv_obj_set_height(btn, 88);
+    lv_obj_set_style_bg_color(btn, bg, 0);
+    lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(btn, UI_RADIUS, 0);
+    lv_obj_set_style_shadow_width(btn, 0, 0);
+    lv_obj_set_style_border_width(btn, 0, 0);
+    lv_obj_set_style_text_color(btn, ui_color_text, 0);
+    lv_obj_set_style_text_font(btn, ui_font_body(), 0);
+
+    lv_obj_t *lbl = lv_label_create(btn);
+    lv_label_set_text(lbl, caption);
+    lv_obj_center(lbl);
+    return btn;
+}
+
+static void gcode_show_dir_picker(void)
+{
+    if(g_gcode_dir_view) {
+        lv_obj_remove_flag(g_gcode_dir_view, LV_OBJ_FLAG_HIDDEN);
+    }
+    if(g_gcode_files_view) {
+        lv_obj_add_flag(g_gcode_files_view, LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
+static void gcode_show_files(void)
+{
+    if(g_gcode_dir_view) {
+        lv_obj_add_flag(g_gcode_dir_view, LV_OBJ_FLAG_HIDDEN);
+    }
+    if(g_gcode_files_view) {
+        lv_obj_remove_flag(g_gcode_files_view, LV_OBJ_FLAG_HIDDEN);
+    }
+    refresh_detail_panel();
+}
+
+static void cal_show_dir_picker(void)
+{
+    if(g_cal_dir_view) {
+        lv_obj_remove_flag(g_cal_dir_view, LV_OBJ_FLAG_HIDDEN);
+    }
+    if(g_cal_files_view) {
+        lv_obj_add_flag(g_cal_files_view, LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
+static void cal_show_files(void)
+{
+    if(g_cal_dir_view) {
+        lv_obj_add_flag(g_cal_dir_view, LV_OBJ_FLAG_HIDDEN);
+    }
+    if(g_cal_files_view) {
+        lv_obj_remove_flag(g_cal_files_view, LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
+static void on_gcode_back_to_dir(lv_event_t *)
+{
+    gcode_show_dir_picker();
+}
+
+static void on_gcode_dir_pick_local(lv_event_t *)
+{
+    galva_set_storage_kind(FILES_STORAGE_LOCAL);
+    gcode_show_files();
+    if(!files_job_locked()) {
+        on_refresh_click(nullptr);
+    }
+}
+
+static void on_gcode_dir_pick_usb(lv_event_t *)
+{
+    galva_set_storage_kind(FILES_STORAGE_USB);
+    gcode_show_files();
+    if(!files_job_locked()) {
+        on_refresh_click(nullptr);
+    }
+}
+
+static void on_cal_dir_pick_local(lv_event_t *)
+{
+    cal_set_storage_kind(FILES_STORAGE_LOCAL);
+    cal_show_files();
+    page_cal_files_refresh_list();
+}
+
+static void on_cal_dir_pick_usb(lv_event_t *)
+{
+    cal_set_storage_kind(FILES_STORAGE_USB);
+    cal_show_files();
+    page_cal_files_refresh_list();
+}
+
+static lv_obj_t *build_dir_picker_view(lv_obj_t *parent, const char *title_text,
+                                       const char *swipe_hint,
+                                       lv_event_cb_t local_cb, lv_event_cb_t usb_cb)
+{
+    lv_obj_t *view = lv_obj_create(parent);
+    lv_obj_remove_style_all(view);
+    lv_obj_set_width(view, LV_PCT(100));
+    lv_obj_set_flex_grow(view, 1);
+    lv_obj_set_style_bg_color(view, ui_color_bg, 0);
+    lv_obj_set_style_bg_opa(view, LV_OPA_COVER, 0);
+    lv_obj_clear_flag(view, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_flex_flow(view, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(view, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_all(view, UI_PAD, 0);
+    lv_obj_set_style_pad_row(view, UI_PAD, 0);
+
+    lv_obj_t *card = lv_obj_create(view);
+    lv_obj_add_style(card, ui_style_panel(), 0);
+    lv_obj_set_width(card, 520);
+    lv_obj_set_height(card, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_all(card, UI_PAD, 0);
+    lv_obj_set_style_pad_row(card, UI_PAD, 0);
+    lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *title = lv_label_create(card);
+    lv_label_set_text(title, title_text);
+    lv_obj_add_style(title, ui_style_title(), 0);
+    lv_obj_set_width(title, LV_PCT(100));
+    lv_obj_set_style_text_align(title, LV_TEXT_ALIGN_CENTER, 0);
+
+    lv_obj_t *btn_local = make_dir_pick_btn(card, "Local directory", ui_color_accent_dim);
+    lv_obj_add_event_cb(btn_local, local_cb, LV_EVENT_CLICKED, NULL);
+
+    lv_obj_t *btn_usb = make_dir_pick_btn(card, "USB directory", ui_color_storage_usb);
+    lv_obj_add_event_cb(btn_usb, usb_cb, LV_EVENT_CLICKED, NULL);
+
+    if(swipe_hint && swipe_hint[0] != '\0') {
+        lv_obj_t *hint = lv_label_create(view);
+        lv_label_set_text(hint, swipe_hint);
+        lv_obj_set_style_text_color(hint, ui_color_text_dim, 0);
+        lv_obj_set_style_text_align(hint, LV_TEXT_ALIGN_CENTER, 0);
+    }
+
+    return view;
+}
+
 void page_files_set_visible(int visible)
 {
     g_page_visible = (visible != 0);
     if(g_page_visible) {
         sync_parsing_slot_from_worker();
         refresh_detail_panel();
+        if(files_job_locked()) {
+            update_open_button();
+        }
     }
 }
 
@@ -517,7 +764,7 @@ void page_files_set_visible(int visible)
  *
  * 完整链路：
  *   1. 合法性检查（是否选中文件、是否正在发送）
- *   2. 组装完整文件路径（/home/Gcode/xxx.gcode）
+ *   2. 组装完整文件路径（当前 G-code 目录/xxx.gcode）
  *   3. 清理其他文件槽位的解析状态
  *   4. 停止当前任务、重置当前槽位
  *   5. 标记当前槽位为 "解析中"
@@ -534,7 +781,7 @@ static void begin_open_selected_file(void)
     }
 
     /* 2. 若当前正在向下位机发送，禁止切换文件 */
-    if(ctrl_is_sending()) {
+    if(files_job_locked()) {
         ui_toast_show("Stop the job before switching G-code", ui_color_danger, 2500);
         refresh_detail_panel();
         return;
@@ -597,18 +844,10 @@ static void on_open_click(lv_event_t *)
 }
 
 /**
- * @brief 创建 Files 页面
- * @param parent LVGL 父对象
- * @return 页面根对象
- *
- * 页面布局：
- * - 顶部标题栏 + Refresh 按钮
- * - 左侧 38%：文件列表
- * - 右侧 62%：文件详情面板（名称、大小、行数、进度条、状态、Open 按钮）
+ * @brief 构建 G-code Files 子页（供 tileview 第一屏使用）
  */
-lv_obj_t *page_files_create(lv_obj_t *parent)
+static void build_gcode_files_page(lv_obj_t *page)
 {
-    lv_obj_t *page = lv_obj_create(parent);
     lv_obj_remove_style_all(page);
     lv_obj_set_size(page, LV_PCT(100), LV_PCT(100));
     lv_obj_set_flex_flow(page, LV_FLEX_FLOW_COLUMN);
@@ -620,11 +859,21 @@ lv_obj_t *page_files_create(lv_obj_t *parent)
     lv_obj_set_width(title_row, LV_PCT(100));
     lv_obj_set_height(title_row, LV_SIZE_CONTENT);
     lv_obj_set_flex_flow(title_row, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(title_row, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_flex_align(title_row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_column(title_row, UI_PAD_SM, 0);
+
+    lv_obj_t *btn_back = lv_button_create(title_row);
+    lv_obj_add_style(btn_back, ui_style_btn_primary(), 0);
+    lv_obj_set_style_bg_color(btn_back, ui_color_panel_alt, 0);
+    lv_obj_add_event_cb(btn_back, on_gcode_back_to_dir, LV_EVENT_CLICKED, NULL);
+    lv_obj_t *back_lbl = lv_label_create(btn_back);
+    lv_label_set_text(back_lbl, LV_SYMBOL_LEFT " Dir");
+    lv_obj_center(back_lbl);
 
     lv_obj_t *title = lv_label_create(title_row);
     lv_label_set_text(title, LV_SYMBOL_FILE "  G-code Files");
     lv_obj_add_style(title, ui_style_title(), 0);
+    lv_obj_set_flex_grow(title, 1);
 
     lv_obj_t *btn_refresh = lv_button_create(title_row);
     lv_obj_add_style(btn_refresh, ui_style_btn_primary(), 0);
@@ -632,6 +881,10 @@ lv_obj_t *page_files_create(lv_obj_t *parent)
     lv_obj_t *refresh_lbl = lv_label_create(btn_refresh);
     lv_label_set_text(refresh_lbl, LV_SYMBOL_REFRESH " Refresh");
     lv_obj_center(refresh_lbl);
+
+    lv_obj_t *hint = lv_label_create(page);
+    lv_label_set_text(hint, LV_SYMBOL_RIGHT " Swipe right for CAL Files");
+    lv_obj_set_style_text_color(hint, ui_color_text_dim, 0);
 
     lv_obj_t *body = lv_obj_create(page);
     lv_obj_remove_style_all(body);
@@ -654,6 +907,9 @@ lv_obj_t *page_files_create(lv_obj_t *parent)
     lv_obj_set_flex_grow(g_list, 1);
     lv_obj_set_flex_flow(g_list, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_style_pad_row(g_list, UI_PAD_SM, 0);
+    lv_obj_add_flag(g_list, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scroll_dir(g_list, LV_DIR_VER);
+    lv_obj_set_scrollbar_mode(g_list, LV_SCROLLBAR_MODE_AUTO);
 
     g_detail = lv_obj_create(body);
     lv_obj_add_style(g_detail, ui_style_panel(), 0);
@@ -707,7 +963,7 @@ lv_obj_t *page_files_create(lv_obj_t *parent)
     lv_obj_set_style_pad_column(btn_row, UI_PAD_SM, 0);
 
     g_btn_open = lv_button_create(btn_row);
-    lv_obj_set_size(g_btn_open, 192, UI_INPUT_H);
+    lv_obj_set_size(g_btn_open, UI_BTN_OPEN_W, UI_INPUT_H);
     lv_obj_add_style(g_btn_open, ui_style_btn_primary(), 0);
     lv_obj_add_event_cb(g_btn_open, on_open_click, LV_EVENT_CLICKED, NULL);
     lv_obj_set_style_bg_color(g_btn_open, ui_color_accent, LV_STATE_PRESSED);
@@ -717,8 +973,106 @@ lv_obj_t *page_files_create(lv_obj_t *parent)
 
     reset_all_slots();
     g_ui_timer = lv_timer_create(files_ui_timer_cb, 120, nullptr);
+}
 
-    on_refresh_click(nullptr);
+/**
+ * @brief 创建 Files 页面（G-code / CAL 横向分页，手机式左右滑动）
+ */
+lv_obj_t *page_files_create(lv_obj_t *parent)
+{
+    lv_obj_t *page = lv_obj_create(parent);
+    lv_obj_remove_style_all(page);
+    lv_obj_set_size(page, LV_PCT(100), LV_PCT(100));
+    lv_obj_set_flex_flow(page, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_all(page, 0, 0);
+    lv_obj_set_style_pad_row(page, 0, 0);
+    lv_obj_clear_flag(page, LV_OBJ_FLAG_SCROLLABLE);
+
+    g_files_pager = lv_obj_create(page);
+    lv_obj_remove_style_all(g_files_pager);
+    lv_obj_set_width(g_files_pager, LV_PCT(100));
+    lv_obj_set_flex_grow(g_files_pager, 1);
+    lv_obj_set_flex_flow(g_files_pager, LV_FLEX_FLOW_ROW);
+    lv_obj_set_style_pad_all(g_files_pager, 0, 0);
+    lv_obj_set_style_pad_column(g_files_pager, 0, 0);
+    lv_obj_set_style_border_width(g_files_pager, 0, 0);
+    lv_obj_set_style_bg_opa(g_files_pager, LV_OPA_TRANSP, 0);
+    lv_obj_add_flag(g_files_pager, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(g_files_pager, LV_OBJ_FLAG_SCROLL_ONE);
+    lv_obj_set_scroll_dir(g_files_pager, LV_DIR_HOR);
+    lv_obj_set_scroll_snap_x(g_files_pager, LV_SCROLL_SNAP_START);
+    lv_obj_set_scrollbar_mode(g_files_pager, LV_SCROLLBAR_MODE_OFF);
+    lv_obj_add_event_cb(g_files_pager, files_pager_size_cb, LV_EVENT_SIZE_CHANGED, NULL);
+    lv_obj_add_event_cb(g_files_pager, files_pager_scroll_cb, LV_EVENT_SCROLL_END, NULL);
+
+    lv_obj_t *gcode_tab = lv_obj_create(g_files_pager);
+    lv_obj_remove_style_all(gcode_tab);
+    lv_obj_add_flag(gcode_tab, LV_OBJ_FLAG_SNAPPABLE);
+    lv_obj_clear_flag(gcode_tab, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_size(gcode_tab, LV_PCT(100), LV_PCT(100));
+    lv_obj_set_flex_flow(gcode_tab, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_all(gcode_tab, 0, 0);
+
+    g_gcode_dir_view = build_dir_picker_view(
+        gcode_tab,
+        "Select the Gcode dir",
+        LV_SYMBOL_RIGHT " Swipe right for CAL",
+        on_gcode_dir_pick_local,
+        on_gcode_dir_pick_usb);
+
+    g_gcode_files_view = lv_obj_create(gcode_tab);
+    lv_obj_remove_style_all(g_gcode_files_view);
+    lv_obj_set_width(g_gcode_files_view, LV_PCT(100));
+    lv_obj_set_flex_grow(g_gcode_files_view, 1);
+    lv_obj_clear_flag(g_gcode_files_view, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(g_gcode_files_view, LV_OBJ_FLAG_HIDDEN);
+
+    lv_obj_t *cal_tab = lv_obj_create(g_files_pager);
+    lv_obj_remove_style_all(cal_tab);
+    lv_obj_add_flag(cal_tab, LV_OBJ_FLAG_SNAPPABLE);
+    lv_obj_clear_flag(cal_tab, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_size(cal_tab, LV_PCT(100), LV_PCT(100));
+    lv_obj_set_flex_flow(cal_tab, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_all(cal_tab, 0, 0);
+
+    g_cal_dir_view = build_dir_picker_view(
+        cal_tab,
+        "Select the CAL dir",
+        LV_SYMBOL_LEFT " Swipe left for G-code",
+        on_cal_dir_pick_local,
+        on_cal_dir_pick_usb);
+
+    g_cal_files_view = lv_obj_create(cal_tab);
+    lv_obj_remove_style_all(g_cal_files_view);
+    lv_obj_set_width(g_cal_files_view, LV_PCT(100));
+    lv_obj_set_flex_grow(g_cal_files_view, 1);
+    lv_obj_clear_flag(g_cal_files_view, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(g_cal_files_view, LV_OBJ_FLAG_HIDDEN);
+
+    build_gcode_files_page(g_gcode_files_view);
+    page_cal_files_set_back_cb(cal_show_dir_picker);
+    page_cal_files_build(g_cal_files_view);
+
+    files_pager_sync_page_widths(g_files_pager);
+
+    lv_obj_t *dots_row = lv_obj_create(page);
+    lv_obj_remove_style_all(dots_row);
+    lv_obj_set_width(dots_row, LV_PCT(100));
+    lv_obj_set_height(dots_row, 28);
+    lv_obj_set_flex_flow(dots_row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(dots_row, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_column(dots_row, 10, 0);
+    lv_obj_clear_flag(dots_row, LV_OBJ_FLAG_SCROLLABLE);
+
+    for(int i = 0; i < 2; i++) {
+        g_pager_dots[i] = lv_obj_create(dots_row);
+        lv_obj_remove_style_all(g_pager_dots[i]);
+        lv_obj_set_size(g_pager_dots[i], 10, 10);
+        lv_obj_set_style_radius(g_pager_dots[i], LV_RADIUS_CIRCLE, 0);
+        lv_obj_set_style_bg_color(g_pager_dots[i],
+            i == 0 ? ui_color_accent : ui_color_text_dim, 0);
+        lv_obj_set_style_bg_opa(g_pager_dots[i], LV_OPA_COVER, 0);
+    }
 
     return page;
 }

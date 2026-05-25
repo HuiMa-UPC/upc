@@ -1,18 +1,30 @@
 #include "job_status.hpp"
 #include "pipeline_tune.hpp"
-#include "gcode_parse_gains.hpp"
 
 #include <cstdio>
 
 job_status_t g_job_status;
 RingBuffer   g_ring_buffer;
 
-void gcode_parse_gains_set_defaults(void)
+void job_status_reset_mcu_position(void)
 {
     JOB_LOCK();
-    g_job_status.parse_image_scale_gain = GCODE_DEFAULT_IMAGE_SCALE_GAIN;
-    g_job_status.parse_image_rang_gain  = GCODE_DEFAULT_IMAGE_RANG_GAIN;
-    g_job_status.parse_speed_gain       = GCODE_DEFAULT_SPEED_GAIN;
+    g_job_status.current_x = MCU_COORD_ZERO_OFFSET;
+    g_job_status.current_y = MCU_COORD_ZERO_OFFSET;
+    g_job_status.current_z = MCU_COORD_ZERO_OFFSET;
+}
+
+void job_status_apply_mcu_position_locked(uint16_t x, uint16_t y, uint16_t z)
+{
+    if(x != 0) {
+        g_job_status.current_x = x;
+    }
+    if(y != 0) {
+        g_job_status.current_y = y;
+    }
+    if(z != 0) {
+        g_job_status.current_z = z;
+    }
 }
 
 void format_mcu_queue_rate_label(char *buf, size_t buf_size, uint16_t rate)
@@ -39,17 +51,11 @@ static bool mcu_cmd_rate_at_least_pct(uint16_t rate, int pct)
 
 static bool mcu_cmd_rate_overloaded(uint16_t rate)
 {
-    if(rate >= MCU_CMD_BACKPRESSURE_ON_RATE) {
-        return true;
-    }
     return mcu_cmd_rate_at_least_pct(rate, MCU_CMD_BACKPRESSURE_ON_PCT);
 }
 
 static bool mcu_cmd_rate_below_resume(uint16_t rate)
 {
-    if(rate >= MCU_CMD_BACKPRESSURE_OFF_RATE) {
-        return false;
-    }
     return !mcu_cmd_rate_at_least_pct(rate, MCU_CMD_BACKPRESSURE_OFF_PCT);
 }
 

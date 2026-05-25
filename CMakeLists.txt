@@ -34,6 +34,7 @@ set(APP_SOURCES
     src/ring_buffer.cpp
     src/protocol_mcu.cpp
     src/job_status.cpp
+    src/gcode_parse.cpp
     ui/common/page_common.cpp
     ui/common/ui_keyboard.cpp
     ui/home/page_home.cpp
@@ -42,6 +43,7 @@ set(APP_SOURCES
     ui/control/page_control.cpp
     ui/control/ctrl_backend.cpp
     ui/files/page_files.cpp
+    ui/files/page_cal_files.cpp
     ui/settings/page_settings.cpp
     ui/serial/page_serial.cpp
     ui/tcpclient/page_tcpclient.cpp

@@ -2,7 +2,7 @@
 #include "job_status.hpp"
 #include "protocol_mcu.hpp"
 #include "pipeline_tune.hpp"
-#include "gcode_parse_gains.hpp"
+#include "gcode_parse.hpp"
 
 #include <cstdio>
 #include <cstring>
@@ -39,6 +39,9 @@ static struct {
     float image_scale_gain = GCODE_DEFAULT_IMAGE_SCALE_GAIN;
     float image_rang_gain  = GCODE_DEFAULT_IMAGE_RANG_GAIN;
     float speed_gain       = GCODE_DEFAULT_SPEED_GAIN;
+
+    bool  cal_apply = false;
+    galvo_cal_data_t cal_data;
 } g_w;
 
 /*
@@ -261,13 +264,39 @@ static void int_to_u16_bytes(int value, uint8_t *low_byte, uint8_t *high_byte)
     *high_byte = static_cast<uint8_t>((value >> 8) & 0xFF);
 }
 
-/** 每次 Open/重新解析前从 job_status 读取 Control 页增益 */
+/** 每次 Open/重新解析前从 job_status 读取 Control 页增益或 CAL 文件增益 */
 static void parser_load_gains_from_job(void)
 {
+    bool use_cal = false;
+    bool cal_enabled = false;
+    bool cal_has_gains = false;
+    float cal_scale = 0.f;
+    float cal_range = 0.f;
+    float cal_speed = 0.f;
+
     JOB_LOCK();
-    g_w.image_scale_gain = g_job_status.parse_image_scale_gain;
-    g_w.image_rang_gain  = g_job_status.parse_image_rang_gain;
-    g_w.speed_gain       = g_job_status.parse_speed_gain;
+    cal_enabled = g_job_status.enable_cal_apply;
+    use_cal = cal_enabled && g_job_status.cal_file_loaded;
+    cal_has_gains = g_job_status.cal_has_gains;
+    if(use_cal && cal_has_gains) {
+        cal_scale = g_job_status.cal_image_scale_gain;
+        cal_range = g_job_status.cal_image_rang_gain;
+        cal_speed = g_job_status.cal_speed_gain;
+    } else {
+        g_w.image_scale_gain = g_job_status.parse_image_scale_gain;
+        g_w.image_rang_gain  = g_job_status.parse_image_rang_gain;
+        g_w.speed_gain       = g_job_status.parse_speed_gain;
+    }
+    g_w.cal_apply = use_cal && (galvo_cal_is_valid() != 0);
+    if(!use_cal) {
+        g_w.cal_apply = false;
+    }
+
+    if(use_cal && cal_has_gains) {
+        g_w.image_scale_gain = cal_scale;
+        g_w.image_rang_gain  = cal_range;
+        g_w.speed_gain       = cal_speed;
+    }
     if(g_w.image_rang_gain < 1e-6f) {
         g_w.image_rang_gain = GCODE_DEFAULT_IMAGE_RANG_GAIN;
     }
@@ -276,6 +305,15 @@ static void parser_load_gains_from_job(void)
     }
     if(g_w.speed_gain < 1e-6f) {
         g_w.speed_gain = GCODE_DEFAULT_SPEED_GAIN;
+    }
+
+    if(g_w.cal_apply) {
+        galvo_cal_copy(&g_w.cal_data);
+        if(!g_w.cal_data.valid) {
+            g_w.cal_apply = false;
+        }
+    } else {
+        galvo_cal_clear(&g_w.cal_data);
     }
 }
 
@@ -289,8 +327,19 @@ static bool build_and_push_packet(RingBuffer *rb)
     pkt.type = RB_PKT_MOTION;
     pkt.data[0] = 0x01;
 
-    const float ox = g_w.x * g_w.image_scale_gain;
-    const float oy = g_w.y * g_w.image_scale_gain;
+    float out_x = g_w.x;
+    float out_y = g_w.y;
+    if(g_w.cal_apply && g_w.cal_data.valid) {
+        double ddx = 0.0;
+        double ddy = 0.0;
+        if(galvo_cal_interpolate_delta(&g_w.cal_data, g_w.x, g_w.y, &ddx, &ddy)) {
+            out_x = g_w.x - static_cast<float>(ddx);
+            out_y = g_w.y - static_cast<float>(ddy);
+        }
+    }
+
+    const float ox = out_x * g_w.image_scale_gain;
+    const float oy = out_y * g_w.image_scale_gain;
     const float oz = g_w.z * g_w.image_scale_gain;
 
     uint8_t lo = 0;
@@ -581,6 +630,8 @@ void gcode_stop_parse(void)
     {
         JOB_LOCK();
         g_job_status.is_parsing = false;
+        /* 同步最终进度：确保 UI 在解析被外部停止时也能显示已解析的行数 */
+        g_job_status.parsed_lines = g_w.parsed_lines.load();
     }
 }
 

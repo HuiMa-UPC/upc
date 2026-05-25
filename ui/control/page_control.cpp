@@ -1,7 +1,7 @@
 #include "page_control.hpp"
 #include "ctrl_backend.hpp"
 #include "job_status.hpp"
-#include "gcode_parse_gains.hpp"
+#include "gcode_parse.hpp"
 #include "ui_theme.hpp"
 #include "ui_keyboard.hpp"
 #include "page_common.hpp"
@@ -30,6 +30,7 @@ static lv_obj_t *g_interval_ta = nullptr;
 static lv_obj_t *g_btn_start   = nullptr;
 static lv_obj_t *g_btn_reset   = nullptr;
 static lv_obj_t *g_sw_layer    = nullptr;
+static lv_obj_t *g_sw_cal      = nullptr;
 
 static lv_obj_t *g_lbl_mcu_st = nullptr;
 
@@ -174,13 +175,10 @@ static bool job_gcode_ready(void)
     return ready;
 }
 
-/** 发送作业流期间锁定 Parse / Job 配置区（按钮区由 set_job_btn_enabled 单独管理） */
+/** 发送作业流期间锁定 Batch / Intv（增益与换层/校准由专用 sync 处理） */
 static void set_job_config_interactive(bool enabled)
 {
-    lv_obj_t *widgets[] = {
-        g_ta_img_scale, g_ta_img_range, g_ta_speed_gain,
-        g_batch_ta, g_interval_ta, g_sw_layer,
-    };
+    lv_obj_t *widgets[] = { g_batch_ta, g_interval_ta };
 
     for(lv_obj_t *obj : widgets) {
         if(!obj) {
@@ -241,11 +239,116 @@ static void on_reset_click(lv_event_t *)
     ctrl_send_reset();
 }
 
-/** 换层开关状态变化事件 */
+/** 换层开关状态变化事件（须串口已连接） */
 static void on_layer_sw(lv_event_t *e)
 {
     lv_obj_t *sw = (lv_obj_t *)lv_event_get_target(e);
+    if(!ctrl_serial_is_open()) {
+        lv_obj_remove_state(sw, LV_STATE_CHECKED);
+        ctrl_set_enable_layer_change(0);
+        return;
+    }
     ctrl_set_enable_layer_change(lv_obj_has_state(sw, LV_STATE_CHECKED) ? 1 : 0);
+}
+
+/** 串口未连接时禁止勾选换层；发送中锁定 */
+static void sync_layer_switch_interactive(bool serial_connected, bool is_sending)
+{
+    if(!g_sw_layer) {
+        return;
+    }
+    if(is_sending) {
+        lv_obj_add_state(g_sw_layer, LV_STATE_DISABLED);
+        lv_obj_clear_flag(g_sw_layer, LV_OBJ_FLAG_CLICKABLE);
+        return;
+    }
+    if(serial_connected) {
+        lv_obj_remove_state(g_sw_layer, LV_STATE_DISABLED);
+        lv_obj_add_flag(g_sw_layer, LV_OBJ_FLAG_CLICKABLE);
+        return;
+    }
+    lv_obj_add_state(g_sw_layer, LV_STATE_DISABLED);
+    lv_obj_clear_flag(g_sw_layer, LV_OBJ_FLAG_CLICKABLE);
+    if(lv_obj_has_state(g_sw_layer, LV_STATE_CHECKED)) {
+        lv_obj_remove_state(g_sw_layer, LV_STATE_CHECKED);
+        ctrl_set_enable_layer_change(0);
+    }
+}
+
+/** TCP 未连或未 Open CAL 文件（或无 CAL 增益行）时禁止校准使能；发送中锁定 */
+static void sync_cal_switch_interactive(bool tcp_connected, bool cal_loaded,
+                                        bool cal_has_gains, bool is_sending)
+{
+    if(!g_sw_cal) {
+        return;
+    }
+    const bool can_use = tcp_connected && cal_loaded && cal_has_gains && !is_sending;
+    if(!can_use) {
+        lv_obj_add_state(g_sw_cal, LV_STATE_DISABLED);
+        lv_obj_clear_flag(g_sw_cal, LV_OBJ_FLAG_CLICKABLE);
+        if(!tcp_connected || !cal_loaded || !cal_has_gains) {
+            if(lv_obj_has_state(g_sw_cal, LV_STATE_CHECKED)) {
+                lv_obj_remove_state(g_sw_cal, LV_STATE_CHECKED);
+            }
+            ctrl_set_enable_cal_apply(0);
+        }
+        return;
+    }
+    lv_obj_remove_state(g_sw_cal, LV_STATE_DISABLED);
+    lv_obj_add_flag(g_sw_cal, LV_OBJ_FLAG_CLICKABLE);
+    if(ctrl_get_enable_cal_apply()) {
+        lv_obj_add_state(g_sw_cal, LV_STATE_CHECKED);
+    } else {
+        lv_obj_remove_state(g_sw_cal, LV_STATE_CHECKED);
+    }
+}
+
+/** 校准使能时锁定 Parse 增益输入（改由 CAL 文件提供） */
+static void sync_parse_gain_interactive(bool cal_enabled, bool is_sending)
+{
+    const bool editable = !is_sending && !cal_enabled;
+    lv_obj_t *widgets[] = { g_ta_img_scale, g_ta_img_range, g_ta_speed_gain };
+    for(lv_obj_t *obj : widgets) {
+        if(!obj) {
+            continue;
+        }
+        if(editable) {
+            lv_obj_remove_state(obj, LV_STATE_DISABLED);
+            lv_obj_add_flag(obj, LV_OBJ_FLAG_CLICKABLE);
+        } else {
+            lv_obj_add_state(obj, LV_STATE_DISABLED);
+            lv_obj_clear_flag(obj, LV_OBJ_FLAG_CLICKABLE);
+            if(lv_obj_has_state(obj, LV_STATE_FOCUSED)) {
+                lv_obj_remove_state(obj, LV_STATE_FOCUSED);
+            }
+        }
+    }
+    if(!editable) {
+        ui_keyboard_hide();
+    }
+}
+
+static void on_cal_sw(lv_event_t *e)
+{
+    lv_obj_t *sw = (lv_obj_t *)lv_event_get_target(e);
+    if(!ctrl_tcp_is_connected()) {
+        lv_obj_remove_state(sw, LV_STATE_CHECKED);
+        ctrl_set_enable_cal_apply(0);
+        return;
+    }
+    bool cal_loaded = false;
+    bool cal_has_gains = false;
+    {
+        JOB_LOCK();
+        cal_loaded = g_job_status.cal_file_loaded;
+        cal_has_gains = g_job_status.cal_has_gains;
+    }
+    if(!cal_loaded || !cal_has_gains) {
+        lv_obj_remove_state(sw, LV_STATE_CHECKED);
+        ctrl_set_enable_cal_apply(0);
+        return;
+    }
+    ctrl_set_enable_cal_apply(lv_obj_has_state(sw, LV_STATE_CHECKED) ? 1 : 0);
 }
 
 /**
@@ -264,6 +367,7 @@ static void status_refresh_cb(lv_timer_t *)
     char file_name[256];
     bool tcp_connected;
     bool is_sending, is_paused, mcu_cmd_tx_hold;
+    bool cal_loaded, cal_enabled, cal_has_gains;
     uint16_t cmd_rate, data_rate;
     uint16_t cur_x, cur_y, cur_z, laser;
 
@@ -279,9 +383,13 @@ static void status_refresh_cb(lv_timer_t *)
         cur_z = g_job_status.current_z;
         laser = g_job_status.laser_state;
         mcu_cmd_tx_hold = g_job_status.mcu_cmd_tx_hold;
+        cal_loaded = g_job_status.cal_file_loaded;
+        cal_enabled = g_job_status.enable_cal_apply;
+        cal_has_gains = g_job_status.cal_has_gains;
     }
     is_sending = ctrl_is_sending() != 0;
     is_paused = ctrl_is_paused() != 0;
+    const bool serial_connected = ctrl_serial_is_open() != 0;
 
     if(file_name[0]) {
         lv_label_set_text_fmt(g_lbl_file, "File: %s", file_name);
@@ -300,6 +408,9 @@ static void status_refresh_cb(lv_timer_t *)
     set_job_btn_enabled(g_btn_start, can_start_pause);
     sync_start_button_label(is_sending, is_paused);
     set_job_config_interactive(!is_sending);
+    sync_layer_switch_interactive(serial_connected, is_sending);
+    sync_cal_switch_interactive(tcp_connected, cal_loaded, cal_has_gains, is_sending);
+    sync_parse_gain_interactive(cal_enabled, is_sending);
 
     int cmd_pct  = percent_rounded(cmd_rate,  65535);
     int data_pct = percent_rounded(data_rate, 65535);
@@ -325,8 +436,9 @@ static lv_obj_t *make_form_label(lv_obj_t *parent, const char *text, int width,
     lv_obj_t *lbl = lv_label_create(parent);
     lv_label_set_text(lbl, text);
     lv_obj_set_width(lbl, width);
-    lv_label_set_long_mode(lbl, LV_LABEL_LONG_MODE_CLIP);
+    lv_label_set_long_mode(lbl, LV_LABEL_LONG_MODE_DOTS);
     lv_obj_set_style_text_color(lbl, ui_color_text_dim, 0);
+    lv_obj_set_style_text_font(lbl, ui_font_body(), 0);
     lv_obj_set_style_text_align(lbl, align, 0);
     return lbl;
 }
@@ -454,11 +566,11 @@ static lv_obj_t *make_conn_button(lv_obj_t *parent, const char *text,
  * @param parent LVGL 父对象
  * @return 页面根对象
  *
- * 页面分区：
+ * 页面分区（标题固定，其余在 scroll 内纵向滑动）：
  * 1. Connection 卡片（TCP IP/Port/Connect + Serial Dev/Baud/Connect）
  * 2. G-code Parse 卡片（Scale / Range / Speed 增益输入）
  * 3. Job Control 卡片（Batch / Intv / Start / Reset / Layer Switch）
- * 4. 底部 MCU 状态栏
+ * 4. MCU 状态栏
  */
 lv_obj_t *page_control_create(lv_obj_t *parent)
 {
@@ -471,13 +583,28 @@ lv_obj_t *page_control_create(lv_obj_t *parent)
     lv_obj_set_style_pad_row(page, UI_PAD, 0);
     lv_obj_set_style_bg_opa(page, LV_OPA_TRANSP, 0);
 
-    /* 标题 */
+    /* 标题固定；下方为可纵向滑动的内容区（类似手机长页滚动） */
     lv_obj_t *title = lv_label_create(page);
     lv_label_set_text(title, LV_SYMBOL_PLAY "  Control");
     lv_obj_add_style(title, ui_style_title(), 0);
 
+    lv_obj_t *scroll = lv_obj_create(page);
+    lv_obj_remove_style_all(scroll);
+    lv_obj_set_width(scroll, LV_PCT(100));
+    lv_obj_set_flex_grow(scroll, 1);
+    lv_obj_set_style_min_height(scroll, 0, 0);
+    lv_obj_set_flex_flow(scroll, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_row(scroll, UI_PAD, 0);
+    lv_obj_set_style_pad_bottom(scroll, UI_PAD, 0);
+    lv_obj_set_style_bg_opa(scroll, LV_OPA_TRANSP, 0);
+    lv_obj_add_flag(scroll, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scroll_dir(scroll, LV_DIR_VER);
+    lv_obj_set_scrollbar_mode(scroll, LV_SCROLLBAR_MODE_AUTO);
+
+    lv_obj_t *content = scroll;
+
     /* === 连接卡片 === */
-    lv_obj_t *conn_card = ui_make_card(page, "Connection");
+    lv_obj_t *conn_card = ui_make_card(content, "Connection");
 
     auto setup_conn_row = [](lv_obj_t *card) -> lv_obj_t * {
         lv_obj_t *row = lv_obj_create(card);
@@ -550,7 +677,7 @@ lv_obj_t *page_control_create(lv_obj_t *parent)
     snprintf(gain_init[1], sizeof(gain_init[1]), "%.3f", init_range);
     snprintf(gain_init[2], sizeof(gain_init[2]), "%.3f", init_speed);
 
-    lv_obj_t *parse_card = ui_make_card(page, "G-code Parse");
+    lv_obj_t *parse_card = ui_make_card(content, "G-code Parse");
 
     lv_obj_t *gain_row1 = make_gain_form_row(parse_card);
     g_ta_img_scale = make_labeled_ta(gain_row1, "Scale:", gain_init[0],
@@ -565,6 +692,14 @@ lv_obj_t *page_control_create(lv_obj_t *parent)
                                       UI_GAIN_LABEL_W, UI_GAIN_TA_W,
                                       LV_KEYBOARD_MODE_NUMBER, LV_TEXT_ALIGN_LEFT);
 
+    lv_obj_t *cal_row = make_gain_form_row(parse_card);
+    make_form_label(cal_row, "Enable Calibration:", UI_SWITCH_LABEL_W, LV_TEXT_ALIGN_LEFT);
+    g_sw_cal = lv_switch_create(cal_row);
+    ui_theme_apply_switch(g_sw_cal);
+    lv_obj_add_event_cb(g_sw_cal, on_cal_sw, LV_EVENT_VALUE_CHANGED, NULL);
+    lv_obj_add_state(g_sw_cal, LV_STATE_DISABLED);
+    ctrl_set_enable_cal_apply(0);
+
     for(lv_obj_t *ta : {g_ta_img_scale, g_ta_img_range, g_ta_speed_gain}) {
         lv_obj_add_event_cb(ta, on_parse_gain_ta_event, LV_EVENT_VALUE_CHANGED, NULL);
         lv_obj_add_event_cb(ta, on_parse_gain_ta_event, LV_EVENT_DEFOCUSED, NULL);
@@ -574,14 +709,14 @@ lv_obj_t *page_control_create(lv_obj_t *parent)
 
     lv_obj_t *gain_hint = lv_label_create(parse_card);
     lv_label_set_text(gain_hint,
-                      "Adjust gains here; re-open the G-code file in Files to re-parse.");
+                      "Change gains or calibration, then re-open G-code in Files.");
     lv_obj_set_style_text_color(gain_hint, ui_color_text_dim, 0);
     lv_obj_set_width(gain_hint, LV_PCT(100));
     lv_label_set_long_mode(gain_hint, LV_LABEL_LONG_MODE_WRAP);
 
     /* === 作业控制卡片 === */
-    lv_obj_t *job_card = ui_make_card(page, "Job Control");
-    lv_obj_set_flex_grow(job_card, 1);
+    lv_obj_t *job_card = ui_make_card(content, "Job Control");
+    lv_obj_set_height(job_card, LV_SIZE_CONTENT);
 
     g_lbl_file = lv_label_create(job_card);
     lv_label_set_text(g_lbl_file, "File: --");
@@ -602,11 +737,11 @@ lv_obj_t *page_control_create(lv_obj_t *parent)
                                  UI_FORM_LABEL_W, UI_TA_SHORT_W, LV_KEYBOARD_MODE_NUMBER,
                                  LV_TEXT_ALIGN_RIGHT);
     g_interval_ta = make_labeled_ta(ctrl_row, "Intv:", "3",
-                                    UI_FORM_LABEL2_W + 12, UI_TA_SHORT_W,
+                                    UI_FORM_LABEL2_W, UI_TA_SHORT_W,
                                     LV_KEYBOARD_MODE_NUMBER, LV_TEXT_ALIGN_RIGHT);
 
     g_btn_start = lv_button_create(ctrl_row);
-    lv_obj_set_size(g_btn_start, 120, UI_INPUT_H);
+    lv_obj_set_size(g_btn_start, UI_BTN_JOB_W, UI_INPUT_H);
     lv_obj_add_style(g_btn_start, ui_style_btn_primary(), 0);
     lv_obj_add_event_cb(g_btn_start, on_start_click, LV_EVENT_CLICKED, NULL);
     lv_obj_t *lbl_start = lv_label_create(g_btn_start);
@@ -621,7 +756,7 @@ lv_obj_t *page_control_create(lv_obj_t *parent)
     }
 
     g_btn_reset = lv_button_create(ctrl_row);
-    lv_obj_set_size(g_btn_reset, 108, UI_INPUT_H);
+    lv_obj_set_size(g_btn_reset, UI_BTN_JOB_W, UI_INPUT_H);
     lv_obj_add_style(g_btn_reset, ui_style_btn_primary(), 0);
     lv_obj_add_event_cb(g_btn_reset, on_reset_click, LV_EVENT_CLICKED, NULL);
     lv_obj_t *lbl_reset = lv_label_create(g_btn_reset);
@@ -646,14 +781,19 @@ lv_obj_t *page_control_create(lv_obj_t *parent)
 
     lv_obj_t *lbl_layer = lv_label_create(layer_row);
     lv_label_set_text(lbl_layer, "Enable Layer Change:");
+    lv_obj_set_width(lbl_layer, UI_SWITCH_LABEL_W);
+    lv_label_set_long_mode(lbl_layer, LV_LABEL_LONG_MODE_DOTS);
     lv_obj_set_style_text_color(lbl_layer, ui_color_text_dim, 0);
+    lv_obj_set_style_text_font(lbl_layer, ui_font_body(), 0);
 
     g_sw_layer = lv_switch_create(layer_row);
+    ui_theme_apply_switch(g_sw_layer);
     lv_obj_add_event_cb(g_sw_layer, on_layer_sw, LV_EVENT_VALUE_CHANGED, NULL);
+    lv_obj_add_state(g_sw_layer, LV_STATE_DISABLED);
     ctrl_set_enable_layer_change(0);
 
-    /* 状态栏 */
-    g_lbl_mcu_st = lv_label_create(page);
+    /* 状态栏（随内容一起滚动） */
+    g_lbl_mcu_st = lv_label_create(content);
     lv_label_set_text(g_lbl_mcu_st, "Cache: --");
     lv_obj_set_style_text_color(g_lbl_mcu_st, ui_color_text_dim, 0);
     lv_obj_set_width(g_lbl_mcu_st, LV_PCT(100));

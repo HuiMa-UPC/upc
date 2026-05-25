@@ -4,18 +4,6 @@ RingBuffer::RingBuffer()
 {
 }
 
-void RingBuffer::put(const rb_packet_t& pkt)
-{
-    std::unique_lock<std::mutex> lock(mtx);
-    cv_not_full.wait(lock, [this] { return cnt < RB_MAX_PACKETS; });
-
-    buf[tail] = pkt;
-    tail = (tail + 1) % RB_MAX_PACKETS;
-    ++cnt;
-
-    cv_not_empty.notify_one();
-}
-
 bool RingBuffer::put_wait(const rb_packet_t& pkt, const std::atomic<bool> *stop_flag)
 {
     std::unique_lock<std::mutex> lock(mtx);
@@ -80,12 +68,6 @@ size_t RingBuffer::count() const
 size_t RingBuffer::capacity() const
 {
     return RB_MAX_PACKETS;
-}
-
-size_t RingBuffer::space_left() const
-{
-    std::lock_guard<std::mutex> lock(mtx);
-    return RB_MAX_PACKETS - cnt;
 }
 
 void RingBuffer::clear()

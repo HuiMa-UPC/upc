@@ -13,7 +13,7 @@
 lvgl-upc/
 ├── inc/                          # 全局头文件
 │   ├── lvgl_wrap.hpp             # LVGL 统一包含（C/C++ 兼容）
-│   ├── platform.hpp              # 平台初始化（DRM / evdev / 主循环）
+│   ├── platform.hpp              # 平台初始化（DRM / evdev / 旋转与触摸宏）
 │   ├── ui_shell.hpp              # 页面壳：导航栏 + 内容区切换
 │   ├── ui_theme.hpp              # 主题常量、配色、尺寸、字体接口
 │   ├── ui_feedback.hpp           # Toast / 提示消息
@@ -22,7 +22,7 @@ lvgl-upc/
 │
 ├── src/                          # 全局源码
 │   ├── main.cpp                  # 入口：platform_init → ui_shell_init → 主循环
-│   ├── platform.cpp              # DRM 显示初始化、触摸 evdev、tick/主循环
+│   ├── platform.cpp              # DRM 显示、触摸 evdev、旋转/校准、tick/主循环
 │   ├── ui_shell.cpp              # 页面壳实现：左侧导航 + 右侧内容区
 │   ├── ui_theme.cpp              # 主题样式初始化、字体映射
 │   ├── ui_feedback.cpp           # Toast 实现
@@ -404,18 +404,98 @@ killall weston weston-keyboard weston-desktop-shell
 ./demo
 ```
 
-### 6.3 调试触摸方向
+### 6.3 屏幕旋转与触摸方向
 
-如果屏幕旋转 90° 后触摸方向不对，检查 `src/platform.cpp` 中 `touch_read_cb` 的坐标公式：
+显示与触摸的初始化均在 **`src/platform.cpp`**；可调宏定义在 **`inc/platform.hpp`**。
+
+#### 6.3.1 修改屏幕旋转
+
+当前默认：**物理 1080×1920（竖屏）→ 逻辑 1920×1080（横屏）**，通过 DRM/EGL 旋转 90°。
+
+在 `inc/platform.hpp` 中修改：
 
 ```cpp
-case LV_DISPLAY_ROTATION_90:
-    data->point.x = ny * (hr - 1);          /* 物理 Y -> 逻辑 X */
-    data->point.y = (1.0f - nx) * (vr - 1); /* 物理 X 翻转 -> 逻辑 Y */
-    break;
+#define PLATFORM_DISPLAY_ROTATION LV_DISPLAY_ROTATION_90
 ```
 
-如需要调整方向，直接修改 `nx` / `ny` 的映射关系即可。
+可选值：
+
+| 宏值 | 效果 |
+|------|------|
+| `LV_DISPLAY_ROTATION_0` | 不旋转，逻辑分辨率与物理面板一致 |
+| `LV_DISPLAY_ROTATION_90` | 顺时针 90°（**当前默认**，横屏 UI） |
+| `LV_DISPLAY_ROTATION_180` | 旋转 180° |
+| `LV_DISPLAY_ROTATION_270` | 顺时针 270°（等同逆时针 90°） |
+
+`init_drm_display()` 内会调用：
+
+```cpp
+lv_display_set_rotation(disp, PLATFORM_DISPLAY_ROTATION);
+```
+
+修改后执行 `cmake --build build` 即可，**无需**重新 `cmake -S`（除非改了 LVGL 配置）。
+
+也可在 CMake 中覆盖（示例）：
+
+```cmake
+target_compile_definitions(${APP_TARGET} PRIVATE
+    PLATFORM_DISPLAY_ROTATION=LV_DISPLAY_ROTATION_270)
+```
+
+#### 6.3.2 触摸设备路径
+
+| 方式 | 说明 |
+|------|------|
+| **`PLATFORM_TOUCH_DEVICE`**（`inc/platform.hpp`） | 编译期默认，当前为 `/dev/input/event2` |
+| **环境变量 `LV_LINUX_EVDEV_POINTER_DEVICE`** | 运行时覆盖，优先级更高 |
+
+板端可用 `evtest` 或 `ls -l /dev/input/event*` 确认触摸节点。
+
+#### 6.3.3 触摸方向（与显示旋转对齐）
+
+触摸由 LVGL evdev 驱动创建，并绑定到同一 `display`：
+
+```cpp
+lv_indev_t *indev = lv_evdev_create(LV_INDEV_TYPE_POINTER, dev);
+lv_indev_set_display(indev, disp);
+```
+
+绑定后，驱动会在 **`3rdparty/lv_port_linux-release-v9.5/lvgl/src/drivers/evdev/lv_evdev.c`** 的 `_evdev_process_pointer()` 中，根据 `lv_display_get_rotation(disp)` 将物理触摸坐标变换为逻辑 UI 坐标（项目内已含 90°/180°/270° 补丁）。
+
+**因此：改 `PLATFORM_DISPLAY_ROTATION` 后，触摸一般会随显示一起对齐**，无需在 `platform.cpp` 里手写坐标公式。
+
+若出现 **X/Y 轴对调**（例如横向滑动时指针纵向移动），在 `inc/platform.hpp` 启用：
+
+```cpp
+#define PLATFORM_EVDEV_SWAP_AXES 1
+```
+
+或在 `init_touchscreen()` 中调用 `lv_evdev_set_swap_axes(indev, true)`。
+
+若 **边距不准**（能点但偏移），在 `lv_indev_set_display` 之后增加校准：
+
+```cpp
+lv_evdev_set_calibration(indev, min_x, min_y, max_x, max_y);
+```
+
+`min_x/max_x/min_y/max_y` 可用 `evtest /dev/input/eventX` 查看 `ABS_X` / `ABS_Y` 的最小/最大值。
+
+若 **方向仍镜像或反了**（改旋转角后个别轴翻转不对），需编辑 `lv_evdev.c` 中对应 `LV_DISPLAY_ROTATION_xxx` 分支的坐标映射（约 157–170 行），然后重新编译。
+
+#### 6.3.4 DRM 显示设备
+
+| 环境变量 | 说明 |
+|----------|------|
+| `LV_LINUX_DRM_CARD` | 指定 DRM 设备路径；未设置时由 `lv_linux_drm_find_device_path()` 自动探测 |
+
+启动日志示例：
+
+```text
+DRM OK 1920x1080 (rotation=1)
+touchscreen OK (/dev/input/event2)
+```
+
+其中 `rotation=1` 对应 `LV_DISPLAY_ROTATION_90`（枚举从 0 起）。
 
 ---
 

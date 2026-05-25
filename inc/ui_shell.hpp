@@ -20,11 +20,6 @@ typedef enum {
 /** 初始化横屏壳：左侧导航 + 右侧页面区 */
 void ui_shell_init(void);
 
-/** 获取右侧内容根容器（各 page 模块也可只用 parent 参数） */
-lv_obj_t *ui_shell_content_root(void);
-
-void ui_shell_show_page(ui_page_id_t page);
-
 #ifdef __cplusplus
 }
 #endif

@@ -65,13 +65,11 @@ float float_from_u16_pair(uint16_t lo, uint16_t hi);
 int serial_build_print_request (uint8_t *out, size_t out_size);
 int serial_build_print_start    (uint16_t layer_height_um, uint8_t *out, size_t out_size);
 int serial_build_layer_done     (uint16_t next_layer_height_um, uint8_t *out, size_t out_size);
-int serial_build_print_done     (uint8_t *out, size_t out_size);
-int serial_build_print_abort    (uint8_t *out, size_t out_size);
+int serial_build_print_finished (uint8_t *out, size_t out_size);
 
 /* 串口帧解析. 返回命令类型, <0表示未识别或校验失败 */
 typedef enum {
     SERIAL_EVT_NONE = 0,
-    SERIAL_EVT_PRINT_PREPARING,     /* 打印准备中 */
     SERIAL_EVT_PRINT_READY,         /* 打印准备完成(可以出光) */
     SERIAL_EVT_PRINT_CONDITION_OK,  /* 打印条件满足 */
 } serial_event_t;

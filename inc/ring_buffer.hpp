@@ -11,7 +11,7 @@
 extern "C" {
 #endif
 
-
+/** 解析后运动指令队列容量（约 12B/包，65536≈768KB） */
 #define RB_MAX_PACKETS    65536
 #define RB_PKT_DATA_LEN   11
 
@@ -29,9 +29,6 @@ class RingBuffer {
 public:
     RingBuffer();
 
-    /* Producer: blocks if full */
-    void put(const rb_packet_t& pkt);
-
     /** Wait for space; return false if stop_flag becomes true while full */
     bool put_wait(const rb_packet_t& pkt, const std::atomic<bool> *stop_flag);
 
@@ -44,7 +41,6 @@ public:
     bool empty() const;
     size_t count() const;
     size_t capacity() const;
-    size_t space_left() const;
 
     void clear();
 
