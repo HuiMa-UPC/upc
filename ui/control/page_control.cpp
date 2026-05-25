@@ -150,29 +150,23 @@ static void set_job_btn_enabled(lv_obj_t *btn, bool enabled)
     }
 }
 
-/** Start 可用：Ring 中已有 ≥1 批包，或解析中且累计包数已达一批 */
+/** Start 可用：Ring 满一批，或小文件已全部解析入队，或打印完成后可再次 Start */
 static bool job_gcode_ready(void)
 {
-    job_status_update_ring();
-
-    bool ready = false;
-    JOB_LOCK();
-    if(g_job_status.current_file[0] == '\0') {
+    bool has_file = false;
+    bool print_done = false;
+    {
+        JOB_LOCK();
+        has_file = (g_job_status.current_file[0] != '\0');
+        print_done = g_job_status.job_print_completed;
+    }
+    if(!has_file) {
         return false;
     }
-    int batch = g_job_status.batch_size;
-    if(batch <= 0) {
-        batch = 100;
+    if(print_done && ctrl_is_sending() == 0) {
+        return true;
     }
-    if(g_job_status.ring_used >= (size_t)batch) {
-        ready = true;
-    } else if(g_job_status.is_parsing && g_job_status.total_packets >= batch) {
-        ready = true;
-    } else if(g_job_status.job_print_completed && ctrl_is_sending() == 0) {
-        /* 打印完成后 Ring 已空、解析会重填：仍允许点 Start */
-        ready = true;
-    }
-    return ready;
+    return ctrl_ring_ready_for_start() != 0;
 }
 
 /** 发送作业流期间锁定 Batch / Intv（增益与换层/校准由专用 sync 处理） */
@@ -199,8 +193,8 @@ static void set_job_config_interactive(bool enabled)
     }
 }
 
-/** 根据发送/暂停状态同步 Start 按钮的文本（Start / Pause） */
-static void sync_start_button_label(bool is_sending, bool is_paused)
+/** 根据发送/暂停/预填状态同步 Start 按钮文案 */
+static void sync_start_button_label(bool is_sending, bool is_paused, bool start_pending)
 {
     lv_obj_t *lbl = lv_obj_get_child(g_btn_start, 0);
     if(!lbl) {
@@ -208,6 +202,8 @@ static void sync_start_button_label(bool is_sending, bool is_paused)
     }
     if(is_sending && !is_paused) {
         lv_label_set_text(lbl, "Pause");
+    } else if(start_pending) {
+        lv_label_set_text(lbl, "Preparing...");
     } else {
         lv_label_set_text(lbl, "Start");
     }
@@ -225,6 +221,9 @@ static void on_start_click(lv_event_t *)
         } else {
             ctrl_pause_sending();
         }
+        return;
+    }
+    if(ctrl_is_start_pending()) {
         return;
     }
     if(!job_gcode_ready()) {
@@ -389,6 +388,7 @@ static void status_refresh_cb(lv_timer_t *)
     }
     is_sending = ctrl_is_sending() != 0;
     is_paused = ctrl_is_paused() != 0;
+    const bool start_pending = ctrl_is_start_pending() != 0;
     const bool serial_connected = ctrl_serial_is_open() != 0;
 
     if(file_name[0]) {
@@ -402,11 +402,11 @@ static void status_refresh_cb(lv_timer_t *)
 
     const bool can_reset = tcp_connected;
     const bool can_start_pause =
-        tcp_connected && (is_sending || gcode_ready);
+        tcp_connected && !start_pending && (is_sending || gcode_ready);
 
     set_job_btn_enabled(g_btn_reset, can_reset);
     set_job_btn_enabled(g_btn_start, can_start_pause);
-    sync_start_button_label(is_sending, is_paused);
+    sync_start_button_label(is_sending, is_paused, start_pending);
     set_job_config_interactive(!is_sending);
     sync_layer_switch_interactive(serial_connected, is_sending);
     sync_cal_switch_interactive(tcp_connected, cal_loaded, cal_has_gains, is_sending);

@@ -35,6 +35,12 @@ int  ctrl_is_paused(void);
 /** 换层等待：1=处于换层/首层串口握手等待，0=否 */
 int  ctrl_is_waiting_layer(void);
 
+/** Ring 是否满足 Start 门槛：≥1 批，或小文件已全部解析入队 */
+int  ctrl_ring_ready_for_start(void);
+
+/** 1=已点 Start 且正在等待 Ring 预填/重解析，0=否 */
+int  ctrl_is_start_pending(void);
+
 /* ---------- 复位 ---------- */
 void ctrl_send_reset(void);
 

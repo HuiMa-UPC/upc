@@ -674,6 +674,57 @@ static void ctrl_begin_sending(void)
     }
 }
 
+/** Ring 是否满足 Start 门槛：≥1 批，或小文件已全部解析入队 */
+static bool ring_meets_start_threshold(void)
+{
+    if(!s_rb) {
+        return false;
+    }
+    job_status_update_ring();
+    const size_t count = s_rb->count();
+    const int batch = s_batch_size > 0 ? s_batch_size : 100;
+
+    if(count >= (size_t)batch) {
+        return true;
+    }
+    if(gcode_is_parsing()) {
+        int total = 0;
+        {
+            JOB_LOCK();
+            total = g_job_status.total_packets;
+        }
+        if(total >= batch && count > 0) {
+            return true;
+        }
+        /* 重打印预填：用户已点 Start，小文件 EOF 后不必等解析线程 join */
+        if(s_start_pending.load() && gcode_is_file_read_exhausted() &&
+           total > 0 && total < batch && count > 0) {
+            return true;
+        }
+        return false;
+    }
+    if(gcode_is_file_open()) {
+        int total = 0;
+        {
+            JOB_LOCK();
+            total = g_job_status.total_packets;
+        }
+        /* 小文件：解析已结束，Ring 内已有全部待发数据（可少于 batch） */
+        return total > 0 && count > 0;
+    }
+    return false;
+}
+
+int ctrl_ring_ready_for_start(void)
+{
+    return ring_meets_start_threshold() ? 1 : 0;
+}
+
+int ctrl_is_start_pending(void)
+{
+    return s_start_pending.load() ? 1 : 0;
+}
+
 /** Ring 蓄满后完成用户已点击的 Start */
 static void ctrl_try_complete_pending_start(void)
 {
@@ -681,8 +732,7 @@ static void ctrl_try_complete_pending_start(void)
         return;
     }
 
-    const int batch = s_batch_size > 0 ? s_batch_size : 100;
-    if(!s_rb || s_rb->count() < (size_t)batch) {
+    if(!ring_meets_start_threshold()) {
         return;
     }
 
@@ -1008,7 +1058,7 @@ void ctrl_set_ring_buffer(RingBuffer *rb) { s_rb = rb; }
 /**
  * @brief 开始向下位机发送运动帧
  *
- * Ring 不足一批时会先预填并挂起 Start，Ring 满一批后由 link 线程自动开始下发。
+ * Ring 不足一批时会先预填并挂起 Start；满一批或小文件全部入队后由 link 线程自动开始下发。
  * 若启用换层且串口已连接，开始下发时会先发 PRINT_REQUEST。
  */
 void ctrl_start_sending(void)
@@ -1017,8 +1067,7 @@ void ctrl_start_sending(void)
         return;
     }
 
-    const int batch = s_batch_size > 0 ? s_batch_size : 100;
-    if(s_rb && s_rb->count() < (size_t)batch) {
+    if(!ring_meets_start_threshold()) {
         if(gcode_is_file_open() && !gcode_is_parsing()) {
             ctrl_prefill_gcode_ring();
         }
@@ -1066,14 +1115,39 @@ int ctrl_is_waiting_layer(void)
 
 /* 复位 */
 /**
+ * @brief 换层打印进行中：经串口下发「打印终止」(0xA2/0x40/type=0x0B)
+ *
+ * 条件：换层已启用、串口已连接，且处于发送/换层等待/队列排空等待之一。
+ */
+static void ctrl_send_serial_print_terminate_if_needed(void)
+{
+    if(!s_enable_layer_change || s_serial_fd < 0) {
+        return;
+    }
+    const bool layer_job_active =
+        s_is_sending.load() || s_waiting_layer.load() || s_layer_drain_pending.load();
+    if(!layer_job_active) {
+        return;
+    }
+
+    uint8_t sbuf[32];
+    const int slen = serial_build_print_terminate(sbuf, sizeof(sbuf));
+    if(slen > 0) {
+        serial_send_raw(sbuf, (size_t)slen);
+    }
+}
+
+/**
  * @brief 发送复位帧并重置所有状态
  *
- * 下发复位帧 → 停止发送 → 清空 RingBuffer/Stage → 从头预填解析。
+ * 换层打印中：先串口打印终止，再 TCP 复位并清 Ring/Stage、重新预填解析。
  * 通信线程保持运行，心跳继续。
  */
 void ctrl_send_reset(void)
 {
     s_start_pending.store(false);
+
+    ctrl_send_serial_print_terminate_if_needed();
 
     uint8_t frame[64];
     int flen = build_reset_frame(frame, sizeof(frame));

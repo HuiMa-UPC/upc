@@ -66,6 +66,7 @@ int serial_build_print_request (uint8_t *out, size_t out_size);
 int serial_build_print_start    (uint16_t layer_height_um, uint8_t *out, size_t out_size);
 int serial_build_layer_done     (uint16_t next_layer_height_um, uint8_t *out, size_t out_size);
 int serial_build_print_finished (uint8_t *out, size_t out_size);
+int serial_build_print_terminate(uint8_t *out, size_t out_size);
 
 /* 串口帧解析. 返回命令类型, <0表示未识别或校验失败 */
 typedef enum {

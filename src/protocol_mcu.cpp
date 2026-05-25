@@ -177,6 +177,12 @@ int serial_build_print_finished(uint8_t *out, size_t out_size)
     return serial_build_frame(0xA4, 0x01, 0x06, 0, nullptr, out, out_size);
 }
 
+int serial_build_print_terminate(uint8_t *out, size_t out_size)
+{
+    /* 协议第 8 条：Port=0xA2 Cmd=0x40 Type=0x0B（与打印请求同端口/命令字） */
+    return serial_build_frame(0xA2, 0x40, 0x0B, 0, nullptr, out, out_size);
+}
+
 /* 解析 MCU->SOC 数据帧 */
 serial_event_t serial_parse_frame(const uint8_t *data, size_t len)
 {
