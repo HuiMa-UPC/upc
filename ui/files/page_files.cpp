@@ -46,6 +46,7 @@ typedef struct {
 
 static file_slot_t g_slots[GCODE_MAX_FILES];
 
+/** 重置单个文件槽位到初始状态 */
 static void reset_file_slot(int idx)
 {
     if(idx < 0 || idx >= GCODE_MAX_FILES) {
@@ -57,6 +58,7 @@ static void reset_file_slot(int idx)
     g_slots[idx].packets      = 0;
 }
 
+/** 重置所有文件槽位 */
 static void reset_all_slots(void)
 {
     for(int i = 0; i < GCODE_MAX_FILES; i++) {
@@ -64,6 +66,7 @@ static void reset_all_slots(void)
     }
 }
 
+/** 将字节数格式化为人类可读字符串（B / KB / MB） */
 static void format_size(long size, char *out, size_t out_size)
 {
     if(size < 1024) {
@@ -75,6 +78,7 @@ static void format_size(long size, char *out, size_t out_size)
     }
 }
 
+/** 设置文件列表按钮的选中/未选中视觉样式 */
 static void set_btn_selected_style(lv_obj_t *btn, bool selected)
 {
     lv_obj_set_style_bg_color(btn,
@@ -84,6 +88,7 @@ static void set_btn_selected_style(lv_obj_t *btn, bool selected)
         selected ? ui_color_accent : ui_color_border, 0);
 }
 
+/** 启用或禁用 Open 按钮，并同步切换视觉状态 */
 static void set_open_btn_enabled(bool enabled)
 {
     if(!g_btn_open) {
@@ -98,6 +103,7 @@ static void set_open_btn_enabled(bool enabled)
     }
 }
 
+/** 修改 Open 按钮的文本标签 */
 static void set_open_btn_caption(const char *caption)
 {
     if(g_open_lbl && caption) {
@@ -105,6 +111,14 @@ static void set_open_btn_caption(const char *caption)
     }
 }
 
+/**
+ * @brief 根据当前选中项和发送状态更新 Open 按钮的可用性与文案
+ *
+ * - 未选中文件：禁用，显示 "Open"
+ * - 正在发送：禁用，显示 "Locked"
+ * - 当前选中的文件正在解析：显示 "Opening"
+ * - 其他：显示 "Open"
+ */
 static void update_open_button(void)
 {
     if(g_selected_idx < 0 || g_selected_idx >= g_file_list.count) {
@@ -127,7 +141,15 @@ static void update_open_button(void)
     }
 }
 
-/** Refresh right panel for g_selected_idx only (no disk I/O) */
+/**
+ * @brief 刷新右侧详情面板（仅根据内存状态，不涉及磁盘 I/O）
+ *
+ * 根据 g_selected_idx 对应的文件信息和槽位状态，更新：
+ * - 文件名、大小、行数
+ * - 解析进度条与百分比
+ * - 状态文本（Parsing / Ready / Failed / Selected）
+ * - Open 按钮状态
+ */
 static void refresh_detail_panel(void)
 {
     const int idx = g_selected_idx;
@@ -254,6 +276,7 @@ static void refresh_detail_panel(void)
     update_open_button();
 }
 
+/** 遍历文件列表，同步按钮选中样式与 g_selected_idx */
 static void update_list_selection(void)
 {
     const uint32_t cnt = lv_obj_get_child_count(g_list);
@@ -266,6 +289,7 @@ static void update_list_selection(void)
     }
 }
 
+/** 文件列表项点击事件：更新选中索引并刷新详情面板 */
 static void on_file_btn_click(lv_event_t *e)
 {
     const int idx = (int)(uintptr_t)lv_event_get_user_data(e);
@@ -277,6 +301,11 @@ static void on_file_btn_click(lv_event_t *e)
     refresh_detail_panel();
 }
 
+/**
+ * @brief 停止当前正在运行的作业
+ *
+ * 依次调用：停止发送 → 关闭文件/停止解析 → 清空 RingBuffer → 重置 parsing 索引
+ */
 static void stop_active_job(void)
 {
     if(ctrl_is_sending()) {
@@ -287,6 +316,11 @@ static void stop_active_job(void)
     g_parsing_idx = -1;
 }
 
+/**
+ * @brief Refresh 按钮点击事件
+ *
+ * 停止当前作业，重新扫描 /home/Gcode 目录，重建文件列表 UI。
+ */
 static void on_refresh_click(lv_event_t *)
 {
     stop_active_job();
@@ -333,6 +367,11 @@ static void on_refresh_click(lv_event_t *)
     refresh_detail_panel();
 }
 
+/**
+ * @brief 从解析 worker 同步进度到当前 parsing 槽位
+ *
+ * 由 UI 定时器调用，用于刷新进度条和状态文本。
+ */
 static void sync_parsing_slot_from_worker(void)
 {
     if(g_parsing_idx < 0 || g_parsing_idx >= g_file_list.count) {
@@ -350,7 +389,12 @@ static void sync_parsing_slot_from_worker(void)
     }
 }
 
-/** Control Reset 等触发的 gcode_start_parse 不会经过 Open，须把 Files 进度重新挂到解析态 */
+/**
+ * @brief 被动检测并挂接外部重启的解析线程
+ *
+ * 当 Control 页触发 Reset 并重新调用 gcode_start_parse 时，
+ * Files 页可能未收到通知，此函数在定时器中检测并自动挂接进度。
+ */
 static void files_attach_active_parse_if_needed(void)
 {
     if(g_parsing_idx >= 0 || !gcode_is_parsing()) {
@@ -370,6 +414,11 @@ static void files_attach_active_parse_if_needed(void)
     }
 }
 
+/**
+ * @brief 外部通知：解析已被重启，Files 页需重新挂接进度
+ *
+ * 由 ui_shell 或 Control 页在 Reset 后调用，将当前 active 文件槽位置为 PARSING 并重置计数器。
+ */
 void page_files_notify_parse_restarted(void)
 {
     if(g_active_idx < 0 || g_active_idx >= g_file_list.count) {
@@ -388,6 +437,15 @@ void page_files_notify_parse_restarted(void)
     }
 }
 
+/**
+ * @brief Files 页 UI 定时器回调（约 120ms 周期）
+ *
+ * 职责：
+ * 1. 更新 RingBuffer 水位
+ * 2. 被动挂接外部重启的解析线程
+ * 3. 同步解析进度并刷新 UI
+ * 4. 检测解析完成，切换槽位状态并弹出 toast
+ */
 static void files_ui_timer_cb(lv_timer_t *)
 {
     job_status_update_ring();
@@ -439,6 +497,12 @@ static void files_ui_timer_cb(lv_timer_t *)
     }
 }
 
+/**
+ * @brief Files 页显示/隐藏切换
+ * @param visible 1 显示，0 隐藏
+ *
+ * 隐藏时停止刷新进度条，避免切走页面后状态错乱。
+ */
 void page_files_set_visible(int visible)
 {
     g_page_visible = (visible != 0);
@@ -448,13 +512,28 @@ void page_files_set_visible(int visible)
     }
 }
 
+/**
+ * @brief 打开选中的 G-code 文件并启动后台解析线程
+ *
+ * 完整链路：
+ *   1. 合法性检查（是否选中文件、是否正在发送）
+ *   2. 组装完整文件路径（/home/Gcode/xxx.gcode）
+ *   3. 清理其他文件槽位的解析状态
+ *   4. 停止当前任务、重置当前槽位
+ *   5. 标记当前槽位为 "解析中"
+ *   6. 打开文件并预统计总行数（gcode_open_file）
+ *   7. 清零全局作业状态（total_packets / sent_packets / parsed_lines）
+ *   8. 启动解析线程（gcode_start_parse），逐行读取写入 g_ring_buffer
+ */
 static void begin_open_selected_file(void)
 {
+    /* 1. 检查是否已选中文件 */
     if(g_selected_idx < 0 || g_selected_idx >= g_file_list.count) {
         ui_toast_show("Please select a file first", ui_color_danger, 1800);
         return;
     }
 
+    /* 2. 若当前正在向下位机发送，禁止切换文件 */
     if(ctrl_is_sending()) {
         ui_toast_show("Stop the job before switching G-code", ui_color_danger, 2500);
         refresh_detail_panel();
@@ -465,7 +544,7 @@ static void begin_open_selected_file(void)
     char path[512];
     galva_build_full_path(g_file_list.files[idx].name, path, sizeof(path));
 
-    /* Switching / re-parse: stop background worker without touching selection UI */
+    /* 3. 切换/重新解析时：清理非当前选中文件的槽位状态，避免残留 */
     if(g_active_idx >= 0 && g_active_idx < g_file_list.count && g_active_idx != idx) {
         reset_file_slot(g_active_idx);
     }
@@ -473,13 +552,17 @@ static void begin_open_selected_file(void)
         reset_file_slot(g_parsing_idx);
     }
 
+    /* 4. 停止正在运行的后台任务（解析线程、发送线程），并清空 RingBuffer */
     stop_active_job();
+    /* 重置当前槽位状态（清除旧的解析进度、失败标记等） */
     reset_file_slot(idx);
 
+    /* 5. 标记当前文件槽位进入 "解析中" 状态 */
     g_slots[idx].state = FILE_SLOT_PARSING;
     g_parsing_idx = idx;
     g_active_idx = idx;
 
+    /* 6. 打开 G-code 文件；gcode_open_file 内部会 fopen 并 fgets 预统计总行数 */
     if(gcode_open_file(path) != 0) {
         g_slots[idx].state = FILE_SLOT_FAILED;
         g_parsing_idx = -1;
@@ -489,8 +572,10 @@ static void begin_open_selected_file(void)
         return;
     }
 
+    /* 记录文件总行数，用于 UI 进度展示 */
     g_slots[idx].total_lines = gcode_get_total_lines();
 
+    /* 7. 清零全局作业计数器，准备新一轮解析/发送 */
     {
         JOB_LOCK();
         g_job_status.total_packets = 0;
@@ -500,15 +585,27 @@ static void begin_open_selected_file(void)
         g_job_status.is_parsing = true;
     }
 
+    /* 8. 启动后台解析线程：逐行读取 → 解析 G0/G1/M3000 → 写入 g_ring_buffer */
     gcode_start_parse(&g_ring_buffer);
     refresh_detail_panel();
 }
 
+/** Open 按钮点击事件：打开选中文件并启动解析 */
 static void on_open_click(lv_event_t *)
 {
     begin_open_selected_file();
 }
 
+/**
+ * @brief 创建 Files 页面
+ * @param parent LVGL 父对象
+ * @return 页面根对象
+ *
+ * 页面布局：
+ * - 顶部标题栏 + Refresh 按钮
+ * - 左侧 38%：文件列表
+ * - 右侧 62%：文件详情面板（名称、大小、行数、进度条、状态、Open 按钮）
+ */
 lv_obj_t *page_files_create(lv_obj_t *parent)
 {
     lv_obj_t *page = lv_obj_create(parent);

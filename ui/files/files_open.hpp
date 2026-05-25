@@ -20,13 +20,10 @@ typedef struct {
     gcode_file_info_t files[GCODE_MAX_FILES];
 } gcode_file_list_t;
 
-/** 扫描 /home/Gcode 目录，过滤 .gcode/.nc/.txt */
+/** 扫描 /home/Gcode 目录，过滤 .gcode/.nc/.txt 后缀的文件 */
 int galva_scan_files(gcode_file_list_t *out_list);
 
-/** 统计指定文件的行数，失败返回 -1 */
-int galva_count_lines(const char *filename);
-
-/** 组装完整路径 */
+/** 组装完整路径：out = GCODE_DIR/filename */
 int galva_build_full_path(const char *filename, char *out, size_t out_size);
 
 #ifdef __cplusplus

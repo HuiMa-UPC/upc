@@ -38,6 +38,7 @@ static lv_obj_t *g_ta_img_range   = nullptr;
 static lv_obj_t *g_ta_speed_gain  = nullptr;
 
 /* ---------- 事件回调 ---------- */
+/** 根据 TCP 连接状态更新按钮颜色和文案 */
 static void update_tcp_btn(bool connected)
 {
     if (connected) {
@@ -51,6 +52,7 @@ static void update_tcp_btn(bool connected)
     }
 }
 
+/** TCP Connect/Disconnect 按钮点击事件 */
 static void on_tcp_click(lv_event_t *)
 {
     if (ctrl_tcp_is_connected()) {
@@ -69,6 +71,7 @@ static void on_tcp_click(lv_event_t *)
     }
 }
 
+/** 统一设置串口下拉框样式 */
 static void style_dropdown(lv_obj_t *dd)
 {
     lv_obj_set_height(dd, UI_INPUT_H);
@@ -82,6 +85,7 @@ static void style_dropdown(lv_obj_t *dd)
     lv_obj_set_style_text_color(dd, ui_color_text, 0);
 }
 
+/** 扫描 /dev/ttyUSB* /dev/ttyACM* /dev/ttyS*，填充串口设备下拉框 */
 static void scan_serial_ports(void)
 {
     const char *patterns[] = {
@@ -109,6 +113,7 @@ static void scan_serial_ports(void)
     }
 }
 
+/** Serial Connect/Disconnect 按钮点击事件 */
 static void on_serial_click(lv_event_t *)
 {
     if (ctrl_serial_is_open()) {
@@ -131,6 +136,7 @@ static void on_serial_click(lv_event_t *)
     }
 }
 
+/** 设置按钮的启用/禁用状态（安全判空） */
 static void set_job_btn_enabled(lv_obj_t *btn, bool enabled)
 {
     if(!btn) {
@@ -195,6 +201,7 @@ static void set_job_config_interactive(bool enabled)
     }
 }
 
+/** 根据发送/暂停状态同步 Start 按钮的文本（Start / Pause） */
 static void sync_start_button_label(bool is_sending, bool is_paused)
 {
     lv_obj_t *lbl = lv_obj_get_child(g_btn_start, 0);
@@ -208,6 +215,7 @@ static void sync_start_button_label(bool is_sending, bool is_paused)
     }
 }
 
+/** Start/Pause 按钮点击事件 */
 static void on_start_click(lv_event_t *)
 {
     if(!ctrl_tcp_is_connected()) {
@@ -227,17 +235,29 @@ static void on_start_click(lv_event_t *)
     ctrl_start_sending();
 }
 
+/** Reset 按钮点击事件 */
 static void on_reset_click(lv_event_t *)
 {
     ctrl_send_reset();
 }
 
+/** 换层开关状态变化事件 */
 static void on_layer_sw(lv_event_t *e)
 {
     lv_obj_t *sw = (lv_obj_t *)lv_event_get_target(e);
     ctrl_set_enable_layer_change(lv_obj_has_state(sw, LV_STATE_CHECKED) ? 1 : 0);
 }
 
+/**
+ * @brief UI 状态定时刷新回调（200ms 周期）
+ *
+ * 职责：
+ * 1. 缓存 job_status 数据并释放锁
+ * 2. 更新文件名称、MCU 状态栏
+ * 3. 控制 Start/Reset 按钮可用性
+ * 4. 同步 Start 按钮文案（Start / Pause）
+ * 5. 锁定/解锁增益配置区
+ */
 static void status_refresh_cb(lv_timer_t *)
 {
     /* 先缓存数据并释放锁，避免在持有锁期间长时间调用 LVGL API */
@@ -298,19 +318,7 @@ static void status_refresh_cb(lv_timer_t *)
     }
 }
 
-static void style_textarea(lv_obj_t *ta)
-{
-    lv_obj_set_height(ta, UI_INPUT_H);
-    lv_obj_set_style_bg_color(ta, ui_color_panel_alt, 0);
-    lv_obj_set_style_bg_opa(ta, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_color(ta, ui_color_border, 0);
-    lv_obj_set_style_border_width(ta, 1, 0);
-    lv_obj_set_style_radius(ta, UI_RADIUS, 0);
-    lv_obj_set_style_pad_hor(ta, UI_PAD_SM, 0);
-    lv_obj_set_style_text_font(ta, ui_font_body(), 0);
-    lv_obj_set_style_text_color(ta, ui_color_text, 0);
-}
-
+/** 创建表单标签（固定宽度、灰色、右对齐/左对齐） */
 static lv_obj_t *make_form_label(lv_obj_t *parent, const char *text, int width,
                                  lv_text_align_t align)
 {
@@ -323,6 +331,10 @@ static lv_obj_t *make_form_label(lv_obj_t *parent, const char *text, int width,
     return lbl;
 }
 
+/**
+ * @brief 创建带标签的单行文本输入框
+ * @return 文本输入框对象
+ */
 static lv_obj_t *make_labeled_ta(lv_obj_t *parent, const char *label,
                                  const char *init_text, int label_w, int ta_w,
                                  lv_keyboard_mode_t kb_mode,
@@ -334,11 +346,21 @@ static lv_obj_t *make_labeled_ta(lv_obj_t *parent, const char *label,
     lv_textarea_set_one_line(ta, true);
     lv_textarea_set_text(ta, init_text);
     lv_obj_set_width(ta, ta_w);
-    style_textarea(ta);
+    /* 统一样式（原 style_textarea 已内联） */
+    lv_obj_set_height(ta, UI_INPUT_H);
+    lv_obj_set_style_bg_color(ta, ui_color_panel_alt, 0);
+    lv_obj_set_style_bg_opa(ta, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_color(ta, ui_color_border, 0);
+    lv_obj_set_style_border_width(ta, 1, 0);
+    lv_obj_set_style_radius(ta, UI_RADIUS, 0);
+    lv_obj_set_style_pad_hor(ta, UI_PAD_SM, 0);
+    lv_obj_set_style_text_font(ta, ui_font_body(), 0);
+    lv_obj_set_style_text_color(ta, ui_color_text, 0);
     ui_keyboard_attach(ta, kb_mode);
     return ta;
 }
 
+/** 创建增益表单行容器（横向 flex，无背景） */
 static lv_obj_t *make_gain_form_row(lv_obj_t *parent)
 {
     lv_obj_t *row = lv_obj_create(parent);
@@ -352,6 +374,7 @@ static lv_obj_t *make_gain_form_row(lv_obj_t *parent)
     return row;
 }
 
+/** 解析增益输入文本，无效时返回默认值 */
 static float parse_gain_text(const char *text, float default_val)
 {
     if(!text || text[0] == '\0') {
@@ -365,13 +388,7 @@ static float parse_gain_text(const char *text, float default_val)
     return v;
 }
 
-static void format_gain_ta(lv_obj_t *ta, float value)
-{
-    char buf[24];
-    snprintf(buf, sizeof(buf), "%.3f", value);
-    lv_textarea_set_text(ta, buf);
-}
-
+/** 从 UI 增益输入框读取数值并同步到 job_status */
 static void sync_parse_gains_from_ui(void)
 {
     const float scale = parse_gain_text(lv_textarea_get_text(g_ta_img_scale),
@@ -387,6 +404,12 @@ static void sync_parse_gains_from_ui(void)
     g_job_status.parse_speed_gain       = (spd > 1e-6f) ? spd : GCODE_DEFAULT_SPEED_GAIN;
 }
 
+/**
+ * @brief 增益输入框事件处理（DEFOCUSED / READY / VALUE_CHANGED）
+ *
+ * 失去焦点或确认时：格式化显示为 3 位小数
+ * 任何变更时：同步到 job_status 供解析线程读取
+ */
 static void on_parse_gain_ta_event(lv_event_t *e)
 {
     const lv_event_code_t code = lv_event_get_code(e);
@@ -399,7 +422,10 @@ static void on_parse_gain_ta_event(lv_event_t *e)
         } else if(ta == g_ta_speed_gain) {
             def = GCODE_DEFAULT_SPEED_GAIN;
         }
-        format_gain_ta(ta, parse_gain_text(lv_textarea_get_text(ta), def));
+        /* 原 format_gain_ta 已内联：格式化显示为 3 位小数 */
+        char fmt_buf[24];
+        snprintf(fmt_buf, sizeof(fmt_buf), "%.3f", parse_gain_text(lv_textarea_get_text(ta), def));
+        lv_textarea_set_text(ta, fmt_buf);
     }
 
     if(code == LV_EVENT_DEFOCUSED || code == LV_EVENT_READY ||
@@ -408,6 +434,7 @@ static void on_parse_gain_ta_event(lv_event_t *e)
     }
 }
 
+/** 创建连接卡片中的 Connect/Disconnect 按钮 */
 static lv_obj_t *make_conn_button(lv_obj_t *parent, const char *text,
                                   lv_event_cb_t cb)
 {
@@ -422,16 +449,17 @@ static lv_obj_t *make_conn_button(lv_obj_t *parent, const char *text,
     return btn;
 }
 
-static void style_start_button(lv_obj_t *btn)
-{
-    lv_obj_set_style_bg_color(btn, ui_color_panel_alt, LV_STATE_DISABLED);
-    lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, LV_STATE_DISABLED);
-    lv_obj_t *lbl = lv_obj_get_child(btn, 0);
-    if(lbl) {
-        lv_obj_set_style_text_color(lbl, ui_color_text_dim, LV_STATE_DISABLED);
-    }
-}
-
+/**
+ * @brief 创建 Control 页面
+ * @param parent LVGL 父对象
+ * @return 页面根对象
+ *
+ * 页面分区：
+ * 1. Connection 卡片（TCP IP/Port/Connect + Serial Dev/Baud/Connect）
+ * 2. G-code Parse 卡片（Scale / Range / Speed 增益输入）
+ * 3. Job Control 卡片（Batch / Intv / Start / Reset / Layer Switch）
+ * 4. 底部 MCU 状态栏
+ */
 lv_obj_t *page_control_create(lv_obj_t *parent)
 {
     lv_obj_t *page = lv_obj_create(parent);
@@ -585,7 +613,12 @@ lv_obj_t *page_control_create(lv_obj_t *parent)
     lv_label_set_text(lbl_start, "Start");
     lv_obj_center(lbl_start);
     lv_obj_add_state(g_btn_start, LV_STATE_DISABLED);
-    style_start_button(g_btn_start);
+    /* 原 style_start_button 已内联：设置 DISABLED 态样式 */
+    lv_obj_set_style_bg_color(g_btn_start, ui_color_panel_alt, LV_STATE_DISABLED);
+    lv_obj_set_style_bg_opa(g_btn_start, LV_OPA_COVER, LV_STATE_DISABLED);
+    if(lbl_start) {
+        lv_obj_set_style_text_color(lbl_start, ui_color_text_dim, LV_STATE_DISABLED);
+    }
 
     g_btn_reset = lv_button_create(ctrl_row);
     lv_obj_set_size(g_btn_reset, 108, UI_INPUT_H);
@@ -594,7 +627,12 @@ lv_obj_t *page_control_create(lv_obj_t *parent)
     lv_obj_t *lbl_reset = lv_label_create(g_btn_reset);
     lv_label_set_text(lbl_reset, "Reset");
     lv_obj_center(lbl_reset);
-    style_start_button(g_btn_reset);
+    /* 原 style_start_button 已内联：设置 DISABLED 态样式 */
+    lv_obj_set_style_bg_color(g_btn_reset, ui_color_panel_alt, LV_STATE_DISABLED);
+    lv_obj_set_style_bg_opa(g_btn_reset, LV_OPA_COVER, LV_STATE_DISABLED);
+    if(lbl_reset) {
+        lv_obj_set_style_text_color(lbl_reset, ui_color_text_dim, LV_STATE_DISABLED);
+    }
     lv_obj_add_state(g_btn_reset, LV_STATE_DISABLED);
 
     /* 换层开关 */

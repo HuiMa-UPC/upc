@@ -222,6 +222,8 @@ static void status_update_cb(lv_timer_t *)
         st = "Running";
     } else if(is_parsing) {
         st = "Parsing";
+    } else if(parsed_lines > 0 && total_lines > 0 && parsed_lines >= total_lines) {
+        st = "Parse Complete — ready to Start";
     }
 
     lv_label_set_text_fmt(g_lbl_status, LV_SYMBOL_HOME " Status: %s", st);

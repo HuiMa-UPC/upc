@@ -91,6 +91,7 @@ static const GcodeLineRegex &gcode_regex(void)
     return k_re;
 }
 
+/** 去除字符串首尾空白字符 */
 static void trim_string(std::string &s)
 {
     const auto not_space = [](unsigned char c) { return !std::isspace(c); };
@@ -115,13 +116,6 @@ static std::string normalize_command_line(const std::string &line)
         trim_string(s);
     }
     return s;
-}
-
-static void line_parse_push(LineParseOut *out, LineEmitKind kind)
-{
-    if(out->count < 2) {
-        out->kinds[out->count++] = static_cast<uint8_t>(kind);
-    }
 }
 
 /** 解析一段 normalized 文本是否为 G0/G1 并更新模态；返回是否应下发运动包 */
@@ -202,25 +196,25 @@ static void parse_line_all(const char *raw_line, LineParseOut *out)
         std::string before = split_match[1].str();
         trim_string(before);
         if(before.empty()) {
-            line_parse_push(out, LINE_EMIT_LAYER);
+            if(out->count < 2) out->kinds[out->count++] = LINE_EMIT_LAYER;
             return;
         }
         bool motion = false;
         if(parse_g1_segment(before, &motion) && motion) {
-            line_parse_push(out, LINE_EMIT_MOTION);
+            if(out->count < 2) out->kinds[out->count++] = LINE_EMIT_MOTION;
         }
-        line_parse_push(out, LINE_EMIT_LAYER);
+        if(out->count < 2) out->kinds[out->count++] = LINE_EMIT_LAYER;
         return;
     }
 
     if(std::regex_match(normalized, re.m3000_only)) {
-        line_parse_push(out, LINE_EMIT_LAYER);
+        if(out->count < 2) out->kinds[out->count++] = LINE_EMIT_LAYER;
         return;
     }
 
     bool motion = false;
     if(parse_g1_segment(normalized, &motion) && motion) {
-        line_parse_push(out, LINE_EMIT_MOTION);
+        if(out->count < 2) out->kinds[out->count++] = LINE_EMIT_MOTION;
     }
 }
 
@@ -254,6 +248,7 @@ static void coordinate_to_offset_bytes(float coordinate_value, float image_rang_
     *high_byte = static_cast<uint8_t>((offset_value >> 8) & 0xFF);
 }
 
+/** 将 int 截断/饱和到 16bit 后拆分为低字节和高字节 */
 static void int_to_u16_bytes(int value, uint8_t *low_byte, uint8_t *high_byte)
 {
     if(value > 65535) {
@@ -284,6 +279,10 @@ static void parser_load_gains_from_job(void)
     }
 }
 
+/**
+ * @brief 将当前模态坐标组装成 11B 运动子包，写入 RingBuffer
+ * @return true 成功（或已被 stop），false 异常
+ */
 static bool build_and_push_packet(RingBuffer *rb)
 {
     rb_packet_t pkt;
@@ -321,6 +320,10 @@ static bool build_and_push_packet(RingBuffer *rb)
     return rb->put_wait(pkt, &g_w.stop_req);
 }
 
+/**
+ * @brief 向 RingBuffer 写入换层标记包（RB_PKT_LAYER_MARK）
+ * @return true 成功（或已被 stop），false 异常
+ */
 static bool push_layer_mark(RingBuffer *rb)
 {
     rb_packet_t pkt;
@@ -329,12 +332,7 @@ static bool push_layer_mark(RingBuffer *rb)
     return rb->put_wait(pkt, &g_w.stop_req);
 }
 
-static bool pipeline_is_sending(void)
-{
-    JOB_LOCK();
-    return g_job_status.is_sending;
-}
-
+/** @brief 同步解析进度到全局 job_status（含线程安全锁） */
 static void sync_parse_progress(int lines, int packets)
 {
     g_w.parsed_lines.store(lines);
@@ -343,13 +341,14 @@ static void sync_parse_progress(int lines, int packets)
     g_job_status.total_packets = packets;
 }
 
-/** 预填阶段 yield；发送期连续解析（Ring 满时 put_wait 阻塞，无需 sleep） */
+/**
+ * @brief 解析线程 chunk 结束后的 yield
+ *
+ * 解析线程不受发送状态影响；仅在 RingBuffer 接近满时让出 CPU，
+ * 避免在预填阶段空转占用过多 CPU。Ring 满时 put_wait() 会自动阻塞。
+ */
 static void parser_chunk_yield(RingBuffer *rb)
 {
-    if(pipeline_is_sending()) {
-        return;
-    }
-
     int delay_ms = GCODE_PARSE_CHUNK_INTERVAL_MS;
     if(rb && rb->count() + 64 >= rb->capacity()) {
         delay_ms = GCODE_PRELOAD_IDLE_MS;
@@ -359,13 +358,34 @@ static void parser_chunk_yield(RingBuffer *rb)
     }
 }
 
-/* ---------- 解析线程：Ring 满则 put_wait 阻塞，有空位立即续解析 ---------- */
+/**
+ * @brief G-code 解析线程主函数
+ *
+ * 该线程由 gcode_start_parse() 创建，职责是：
+ *   1. 逐行读取已打开的 G-code 文件
+ *   2. 解析每行：提取 G0/G1 运动指令 和 M3000 换层标记
+ *   3. 将解析结果组装成 rb_packet_t，写入 RingBuffer（g_w.target_rb）
+ *   4. RingBuffer 满时 put_wait() 自动阻塞，有空位后自动续解析
+ *   5. 同步解析进度（parsed_lines / total_packets）到全局 job_status
+ *
+ * 两级循环结构：
+ *   - 外层 while：控制整体解析生命周期（running / stop_req / EOF）
+ *   - 内层 while：按 chunk 批量解析（固定 GCODE_PARSE_CHUNK_LINES 批量入队）
+ *
+ * 与 TCP 发送线程的关系：
+ *   - 解析线程是生产者 → RingBuffer → 发送线程是消费者
+ *   - 两者通过 RingBuffer 解耦，解析线程不关心发送线程状态
+ *   - RingBuffer 满时 put_wait() 自动阻塞，有空位后自动续解析
+ *   - 解析线程按固定 chunk 批量工作，chunk 间 yield 让出 CPU
+ */
 static void parser_thread_fn(void)
 {
-    char line[256];
-    int lines = 0;
-    int packets = 0;
+    char line[256];          /* 单行 G-code 缓冲 */
+    int lines = 0;           /* 累计已解析行数 */
+    int packets = 0;         /* 累计已生成运动包数（不含换层标记） */
 
+    /* ---------- 启动检查 ---------- */
+    /* 文件未打开或 RingBuffer 未绑定：无法开始解析，直接退出 */
     if(!g_w.fp || !g_w.target_rb) {
         g_w.running.store(false);
         JOB_LOCK();
@@ -373,40 +393,51 @@ static void parser_thread_fn(void)
         return;
     }
 
+    /* 从 job_status 读取 Control 页设置的解析增益（scale/range/speed） */
     parser_load_gains_from_job();
 
+    /* 重置 EOF 标志，文件指针回到开头（支持重新解析） */
     g_w.file_read_exhausted.store(false);
     rewind(g_w.fp);
 
+    /* ---------- 外层循环：整体解析生命周期 ---------- */
     while(g_w.running && !g_w.stop_req.load() && !g_w.file_read_exhausted.load()) {
+        /* 更新 RingBuffer 水位到 job_status（供 UI 进度条显示） */
         job_status_update_ring();
 
-        int chunk_lines = 0;
-        int since_sync  = 0;
-        const bool sending = pipeline_is_sending();
-        const int chunk_limit = sending ? INT_MAX : GCODE_PARSE_CHUNK_LINES;
+        /* ---------- 内层循环：按 chunk 批量解析 ---------- */
+        int chunk_lines = 0;   /* 当前 chunk 已解析行数 */
+        int since_sync  = 0;   /* 距离上次同步进度的行数 */
+        /* 固定 chunk 批量入队，不受发送状态影响 */
+        const int chunk_limit = GCODE_PARSE_CHUNK_LINES;
 
         while(chunk_lines < chunk_limit &&
               g_w.running && !g_w.stop_req.load() &&
               !g_w.file_read_exhausted.load()) {
 
+            /* 1. 从文件读取一行 */
             if(!fgets(line, sizeof(line), g_w.fp)) {
-                g_w.file_read_exhausted.store(true);
+                g_w.file_read_exhausted.store(true);  /* EOF 或读取出错 */
                 break;
             }
 
+            /* 2. 解析单行：可能产生 0~2 个输出（MOTION + LAYER） */
             LineParseOut parsed;
             parse_line_all(line, &parsed);
+
+            /* 3. 将解析结果写入 RingBuffer */
             for(int i = 0; i < parsed.count; i++) {
                 if(g_w.stop_req.load()) {
                     break;
                 }
                 if(parsed.kinds[i] == LINE_EMIT_LAYER) {
+                    /* M3000：写入换层标记包（RB_PKT_LAYER_MARK） */
                     if(!push_layer_mark(g_w.target_rb)) {
                         g_w.stop_req.store(true);
                         break;
                     }
                 } else if(parsed.kinds[i] == LINE_EMIT_MOTION) {
+                    /* G0/G1：写入 11B 运动子包（RB_PKT_MOTION） */
                     if(!build_and_push_packet(g_w.target_rb)) {
                         g_w.stop_req.store(true);
                         break;
@@ -419,22 +450,28 @@ static void parser_thread_fn(void)
                 break;
             }
 
+            /* 4. 更新计数器 */
             lines++;
             chunk_lines++;
             since_sync++;
 
-            if(sending && since_sync >= GCODE_PARSE_SEND_SYNC_LINES) {
+            /* 5. 固定间隔同步进度到 UI */
+            if(since_sync >= GCODE_PARSE_SEND_SYNC_LINES) {
                 sync_parse_progress(lines, packets);
                 job_status_update_ring();
                 since_sync = 0;
             }
         }
 
+        /* chunk 结束：同步一次进度 */
         sync_parse_progress(lines, packets);
         job_status_update_ring();
+
+        /* chunk 结束后让出 CPU；Ring 满时 put_wait 已阻塞，无需额外 sleep */
         parser_chunk_yield(g_w.target_rb);
     }
 
+    /* ---------- 解析结束清理 ---------- */
     sync_parse_progress(lines, packets);
     {
         JOB_LOCK();
@@ -445,6 +482,15 @@ static void parser_thread_fn(void)
 }
 
 /* ---------- 公共接口 ---------- */
+
+/**
+ * @brief 打开并预处理 G-code 文件
+ * @param filepath 完整文件路径
+ * @return 0 成功，-1 失败
+ *
+ * 内部会先关闭旧文件，然后 fopen 并 fgets 预统计总行数，
+ * 最后重置解析坐标状态机。
+ */
 
 int gcode_open_file(const char *filepath)
 {
@@ -482,6 +528,13 @@ int gcode_open_file(const char *filepath)
     return 0;
 }
 
+/**
+ * @brief 启动后台解析线程
+ * @param rb 目标 RingBuffer，解析结果将写入此处
+ *
+ * 若已有线程在运行，会先调用 gcode_stop_parse() 安全结束。
+ * 线程入口为 parser_thread_fn()。
+ */
 void gcode_start_parse(RingBuffer *rb)
 {
     if(!g_w.fp || !rb) {
@@ -509,6 +562,11 @@ void gcode_start_parse(RingBuffer *rb)
     g_w.th = std::thread(parser_thread_fn);
 }
 
+/**
+ * @brief 请求停止解析线程并等待其结束
+ *
+ * 置位 stop_req，清空 RingBuffer 以解除 put_wait 阻塞，然后 join 线程。
+ */
 void gcode_stop_parse(void)
 {
     g_w.stop_req.store(true);
@@ -526,31 +584,41 @@ void gcode_stop_parse(void)
     }
 }
 
+/** @return 文件总行数（gcode_open_file 时预统计） */
 int gcode_get_total_lines(void)
 {
     return g_w.total_lines.load();
 }
 
+/** @return 已解析行数（解析线程实时更新） */
 int gcode_get_parsed_lines(void)
 {
     return g_w.parsed_lines.load();
 }
 
+/** @return 解析线程是否仍在运行 */
 bool gcode_is_parsing(void)
 {
     return g_w.running.load();
 }
 
+/** @return 文件是否已读到 EOF */
 bool gcode_is_file_read_exhausted(void)
 {
     return g_w.file_read_exhausted.load();
 }
 
+/** @return 当前是否有已打开的文件句柄 */
 bool gcode_is_file_open(void)
 {
     return g_w.fp != nullptr;
 }
 
+/**
+ * @brief 关闭文件并停止解析线程
+ *
+ * 内部调用 gcode_stop_parse() + fclose，并重置行数计数器。
+ */
 void gcode_close_file(void)
 {
     gcode_stop_parse();
@@ -560,4 +628,5 @@ void gcode_close_file(void)
     }
     g_w.total_lines.store(0);
     g_w.parsed_lines.store(0);
+    g_w.file_read_exhausted.store(false);
 }

@@ -63,12 +63,14 @@ static std::mutex              s_tcp_stage_mtx;
 /** M3000：已遇换层标记，等待下位机 cmd/data 均为 0 后再发串口（对齐 Qt enterLayerWait） */
 static std::atomic<bool>       s_layer_drain_pending{false};
 
+/** 清空 TCP Stage 二级队列（线程安全） */
 static void tcp_stage_clear(void)
 {
     std::lock_guard<std::mutex> lock(s_tcp_stage_mtx);
     s_tcp_stage.clear();
 }
 
+/** @return Stage 队列当前包数（线程安全） */
 static size_t tcp_stage_count(void)
 {
     std::lock_guard<std::mutex> lock(s_tcp_stage_mtx);
@@ -109,6 +111,10 @@ static void refill_tcp_stage_from_ring(void)
     job_status_update_ring();
 }
 
+/**
+ * @brief 偷看 Stage 队首包类型（不弹出）
+ * @return true 成功，false 队列为空
+ */
 static bool tcp_stage_peek_type(rb_pkt_type_t *ptype)
 {
     if(!ptype) {
@@ -122,6 +128,10 @@ static bool tcp_stage_peek_type(rb_pkt_type_t *ptype)
     return true;
 }
 
+/**
+ * @brief 弹出 Stage 队首包
+ * @return true 成功，false 队列为空
+ */
 static bool tcp_stage_pop_front(rb_packet_t *pkt)
 {
     if(!pkt) {
@@ -137,6 +147,7 @@ static bool tcp_stage_pop_front(rb_packet_t *pkt)
 }
 
 /* ---------- TCP 辅助 ---------- */
+/** @brief 通过 TCP socket 发送原始数据（线程安全锁） */
 static int tcp_send_raw(const uint8_t *data, size_t len)
 {
     if(s_tcp_fd < 0 || !data || len == 0) {
@@ -147,6 +158,7 @@ static int tcp_send_raw(const uint8_t *data, size_t len)
     return (n == (ssize_t)len) ? 0 : -1;
 }
 
+/** @brief 非阻塞接收 TCP 数据 */
 static int tcp_recv_nonblock(uint8_t *buf, size_t buf_size)
 {
     if (s_tcp_fd < 0) return -1;
@@ -187,6 +199,13 @@ static size_t tcp_guess_frame_len(const uint8_t *buf, size_t avail)
     return 1;
 }
 
+/**
+ * @brief 解析并处理一帧完整的 TCP 应答
+ *
+ * 支持两种帧：
+ * - 81B 读参应答：解析板参数并存入 job_status
+ * - 19B 常态/心跳应答：更新 cmd/data/坐标/激光/背压状态
+ */
 static void tcp_handle_frame(const uint8_t *frame, size_t len)
 {
     if(len >= 81 && frame[0] == 0xBE && frame[1] == 0xEF && frame[3] == 0x0E) {
@@ -230,6 +249,11 @@ static void tcp_handle_frame(const uint8_t *frame, size_t len)
     }
 }
 
+/**
+ * @brief 非阻塞读取 TCP 数据，粘包拆帧后逐帧处理
+ *
+ * 使用 s_tcp_rx_accum 累积未处理数据，循环调用 tcp_guess_frame_len 拆帧。
+ */
 static void tcp_drain_rx(void)
 {
     uint8_t chunk[256];
@@ -272,6 +296,7 @@ static void tcp_drain_rx(void)
 }
 
 /* ---------- 串口辅助 ---------- */
+/** @brief 通过串口发送原始数据 */
 static int serial_send_raw(const uint8_t *data, size_t len)
 {
     if (s_serial_fd < 0 || !data || len == 0) return -1;
@@ -279,6 +304,7 @@ static int serial_send_raw(const uint8_t *data, size_t len)
     return (n == (ssize_t)len) ? 0 : -1;
 }
 
+/** @brief 非阻塞读取串口数据 */
 static int serial_recv_nonblock(uint8_t *buf, size_t buf_size)
 {
     if (s_serial_fd < 0) return -1;
@@ -307,6 +333,7 @@ static size_t serial_guess_frame_len(const uint8_t *buf, size_t avail)
     return frame_len;
 }
 
+/** @brief 解析串口帧，识别 PRINT_READY 事件 */
 static void serial_handle_frame(const uint8_t *frame, size_t len)
 {
     serial_event_t evt = serial_parse_frame(frame, len);
@@ -315,6 +342,11 @@ static void serial_handle_frame(const uint8_t *frame, size_t len)
     }
 }
 
+/**
+ * @brief 非阻塞读取串口数据，粘包拆帧后逐帧处理
+ *
+ * 逻辑与 tcp_drain_rx 相同，使用 s_serial_rx_accum 累积。
+ */
 static void serial_drain_rx(void)
 {
     uint8_t chunk[64];
@@ -360,6 +392,7 @@ static void serial_drain_rx(void)
 
 static void link_thread_fn(void);
 
+/** 启动链路线程（若已在运行则忽略） */
 static void link_thread_start(void)
 {
     if(s_link_run.load()) {
@@ -501,18 +534,21 @@ static int link_send_one_motion_batch(void)
 }
 
 /**
- * Qt 发送主循环：refillStage → consumeBatch → flushPacketBatch。
- * 背压仅看下位机 cmd/data 与 Cmd hold，不按 Ring 水位停 TCP。
+ * @brief 运动帧发送（单轮单次 batch）
+ * @param first_layer 首层标记，换层时用于发 PRINT_START
+ *
+ * 简化后的发送逻辑：
+ *   1. RingBuffer → Stage 限量搬运
+ *   2. 换层队列排空检测 + 串口换层帧下发
+ *   3. 若处于换层等待则暂停
+ *   4. 背压：cmd ≥ 80% 时停止下发
+ *   5. 每轮只发送一个 batch（batch_size 个包），然后进入下一轮 interval_ms 轮询
+ *
+ * 解析线程与发送线程完全解耦：
+ *   - 解析线程只管往 RingBuffer 塞数据，塞满就阻塞
+ *   - 发送线程只管按固定 interval_ms 周期、固定 batch_size 搬运数据
+ *   - 背压仅由发送线程根据 MCU cmd 水位控制，不影响解析线程
  */
-static bool link_mcu_cmd_tx_hold_active(void)
-{
-    bool hold = false;
-    JOB_LOCK();
-    job_status_sync_mcu_cmd_backpressure_locked();
-    hold = g_job_status.mcu_cmd_tx_hold;
-    return hold;
-}
-
 static void link_drain_motion_queue(bool *first_layer)
 {
     if(!s_is_sending.load() || s_is_paused.load()) {
@@ -520,73 +556,33 @@ static void link_drain_motion_queue(bool *first_layer)
     }
 
     refill_tcp_stage_from_ring();
-
     link_try_layer_serial_dispatch(first_layer);
 
     if(s_waiting_layer.load()) {
         return;
     }
 
+    /* 背压：cmd ≥ 80% 时本轮停止下发（由 interval_ms 轮询周期自然降速） */
     uint16_t cmd_snap = 0;
-    uint16_t data_snap = 0;
     {
         JOB_LOCK();
-        cmd_snap  = g_job_status.cmd_cache_rate;
-        data_snap = g_job_status.data_cache_rate;
+        cmd_snap = g_job_status.cmd_cache_rate;
     }
-
-    if(link_mcu_cmd_tx_hold_active()) {
+    if(cmd_snap >= (65535 * 80 / 100)) {
         return;
     }
 
-    int burst_cap = LINK_SEND_BURST_DEFAULT;
-    if(!s_mcu_eth_report_seen.load()) {
-        /* Reset/Start 后尚未收到新 19B：保守发送，勿按本地 data=0 猛灌 */
-        burst_cap = LINK_SEND_BURST_UNTIL_MCU_REPORT;
-    } else if(cmd_snap >= MCU_CMD_BACKPRESSURE_ON_RATE) {
-        burst_cap = LINK_SEND_BURST_UNTIL_MCU_REPORT;
-    } else if(cmd_snap >= MCU_CMD_BACKPRESSURE_WARN_RATE) {
-        burst_cap = LINK_SEND_BURST_CMD_PRESSURE;
-    } else if(data_snap < MCU_DATA_FEED_MIN_RATE &&
-              cmd_snap >= MCU_DATA_FEED_MIN_CMD_RATE &&
-              cmd_snap < MCU_CMD_BACKPRESSURE_WARN_RATE) {
-        burst_cap = LINK_SEND_BURST_MAX_BATCHES;
+    /* 每轮只发送一个 batch，然后进入下一轮 interval_ms 轮询 */
+    if(link_handle_layer_mark(first_layer)) {
+        link_try_layer_serial_dispatch(first_layer);
+        return;
     }
 
-    {
-        const size_t host_q = (s_rb ? s_rb->count() : 0) + tcp_stage_count();
-        if(gcode_is_parsing() && host_q < RING_TCP_STARVE_MIN_PKTS &&
-           burst_cap > LINK_SEND_BURST_UNTIL_MCU_REPORT) {
-            burst_cap = LINK_SEND_BURST_UNTIL_MCU_REPORT;
-        }
+    if(tcp_stage_count() == 0) {
+        return;
     }
 
-    int bursts = 0;
-    while(bursts < burst_cap &&
-          s_is_sending.load() && !s_is_paused.load() && !s_link_stop_req.load()) {
-
-        if(s_waiting_layer.load()) {
-            break;
-        }
-
-        if(link_mcu_cmd_tx_hold_active()) {
-            break;
-        }
-
-        if(link_handle_layer_mark(first_layer)) {
-            link_try_layer_serial_dispatch(first_layer);
-            break;
-        }
-
-        if(tcp_stage_count() == 0) {
-            break;
-        }
-
-        if(link_send_one_motion_batch() <= 0) {
-            break;
-        }
-        bursts++;
-    }
+    link_send_one_motion_batch();
 }
 
 /** 文件仍打开且未在解析时，从头预填 Ring（Reset / 打印完成共用） */
@@ -599,7 +595,19 @@ static void ctrl_prefill_gcode_ring(void)
     page_files_notify_parse_restarted();
 }
 
-/** Ring/Stage 已空且解析读完时自动结束发送 */
+/**
+ * @brief Ring/Stage 已空、解析读完、且下位机 CMD/DATA 均排空时，判定为打印完成
+ *
+ * 完成判断标准（须全部满足）：
+ *   1. 主机端 RingBuffer 为空
+ *   2. 主机端 Stage 队列为空
+ *   3. 解析线程已退出
+ *   4. 文件已读到 EOF
+ *   5. 下位机 cmd_cache_rate <= MCU_LAYER_DRAIN_MAX_RATE（≈0.05%）
+ *   6. 下位机 data_cache_rate <= MCU_LAYER_DRAIN_MAX_RATE（≈0.05%）
+ *
+ * 注意：此处**不再**自动调用 ctrl_prefill_gcode_ring() 重新预填。
+ */
 static void link_try_finish_sending(void)
 {
     if(!s_is_sending.load() || s_is_paused.load() || s_waiting_layer.load()) {
@@ -618,6 +626,18 @@ static void link_try_finish_sending(void)
         return;
     }
 
+    /* 5. 下位机 CMD 队列须已排空 */
+    /* 6. 下位机 DATA 队列须已排空 */
+    {
+        JOB_LOCK();
+        if(g_job_status.cmd_cache_rate > MCU_LAYER_DRAIN_MAX_RATE) {
+            return;
+        }
+        if(g_job_status.data_cache_rate > MCU_LAYER_DRAIN_MAX_RATE) {
+            return;
+        }
+    }
+
     s_is_sending.store(false);
     s_is_paused.store(false);
     {
@@ -627,9 +647,10 @@ static void link_try_finish_sending(void)
         g_job_status.job_print_completed = true;
     }
 
-    ctrl_prefill_gcode_ring();
+    /* 不再自动预填：避免下位机 Data 未排空时误判完成并重新解析 */
 }
 
+/** 请求链路线程停止并等待其结束 */
 static void link_thread_stop(void)
 {
     if(!s_link_run.load() && !s_link_th.joinable()) {
@@ -659,7 +680,8 @@ static void link_thread_fn(void)
         /* 2. 未在发运动流时周期心跳（暂停 / 空闲 / 仅连接） */
         const bool motion_stream_active =
             s_is_sending.load() && !s_is_paused.load() && !s_waiting_layer.load();
-        if(!motion_stream_active && now >= next_hb && s_tcp_fd >= 0) {
+        const bool local_data_pending = (s_rb && !s_rb->empty()) || gcode_is_parsing();
+        if((!motion_stream_active || !local_data_pending) && now >= next_hb && s_tcp_fd >= 0) {
             uint8_t hb[64];
             int hblen = build_heartbeat_frame(hb, sizeof(hb));
             if(hblen > 0) {
@@ -700,6 +722,7 @@ static void link_thread_fn(void)
 
 /* ---------- 公共接口 ---------- */
 
+/** 初始化后端状态：重置所有标志、清空 Stage、设置默认值 */
 void ctrl_backend_init(void)
 {
     gcode_parse_gains_set_defaults();
@@ -726,6 +749,7 @@ void ctrl_backend_init(void)
     g_job_status.job_print_completed  = false;
 }
 
+/** 反初始化：停止发送、断开连接、停止链路线程 */
 void ctrl_backend_deinit(void)
 {
     ctrl_stop_sending();
@@ -735,6 +759,14 @@ void ctrl_backend_deinit(void)
 }
 
 /* TCP */
+/**
+ * @brief 建立 TCP 连接到下位机
+ * @param ip   目标 IP 地址
+ * @param port 目标端口
+ * @return 0 成功，负数失败
+ *
+ * 连接成功后：设为非阻塞、启动链路线程、下发读参请求。
+ */
 int ctrl_tcp_connect(const char *ip, int port)
 {
     if (s_tcp_fd >= 0) ctrl_tcp_disconnect();
@@ -774,6 +806,7 @@ int ctrl_tcp_connect(const char *ip, int port)
     return 0;
 }
 
+/** 断开 TCP 连接并清理相关状态 */
 void ctrl_tcp_disconnect(void)
 {
     ctrl_stop_sending();
@@ -796,9 +829,16 @@ void ctrl_tcp_disconnect(void)
     }
 }
 
+/** @return 1 TCP 已连接，0 未连接 */
 int ctrl_tcp_is_connected(void) { return s_tcp_fd >= 0; }
 
 /* Serial */
+/**
+ * @brief 打开串口设备
+ * @param device 设备路径，如 /dev/ttyUSB0
+ * @param baud   波特率
+ * @return 0 成功，-1 失败
+ */
 int ctrl_serial_open(const char *device, int baud)
 {
     if (s_serial_fd >= 0) ctrl_serial_close();
@@ -846,6 +886,7 @@ int ctrl_serial_open(const char *device, int baud)
     return 0;
 }
 
+/** 关闭串口设备 */
 void ctrl_serial_close(void)
 {
     if (s_serial_fd >= 0) {
@@ -859,12 +900,20 @@ void ctrl_serial_close(void)
     }
 }
 
+/** @return 1 串口已打开，0 未打开 */
 int ctrl_serial_is_open(void) { return s_serial_fd >= 0; }
 
 /* RingBuffer */
+/** 绑定全局 RingBuffer，供解析线程写入、发送线程读取 */
 void ctrl_set_ring_buffer(RingBuffer *rb) { s_rb = rb; }
 
 /* 发送控制 */
+/**
+ * @brief 开始向下位机发送运动帧
+ *
+ * 若 RingBuffer 数据不足，会自动调用 ctrl_prefill_gcode_ring() 从头预填。
+ * 若启用换层且串口已连接，会先下发 PRINT_REQUEST 并进入换层等待。
+ */
 void ctrl_start_sending(void)
 {
     if(s_tcp_fd < 0) {
@@ -908,6 +957,7 @@ void ctrl_start_sending(void)
     }
 }
 
+/** 立即停止发送，清空 Stage，重置所有换层/暂停状态 */
 void ctrl_stop_sending(void)
 {
     s_is_sending.store(false);
@@ -923,12 +973,22 @@ void ctrl_stop_sending(void)
     }
 }
 
+/** 暂停发送（运动帧暂停下发，链路线程和心跳继续） */
 void ctrl_pause_sending(void) { s_is_paused.store(true); }
+/** 恢复发送 */
 void ctrl_resume_sending(void) { s_is_paused.store(false); }
+/** @return 1 正在发送运动帧，0 未发送 */
 int  ctrl_is_sending(void) { return s_is_sending.load(); }
+/** @return 1 处于暂停状态，0 未暂停 */
 int  ctrl_is_paused(void) { return s_is_paused.load(); }
 
 /* 复位 */
+/**
+ * @brief 发送复位帧并重置所有状态
+ *
+ * 下发复位帧 → 停止发送 → 清空 RingBuffer/Stage → 从头预填解析。
+ * 通信线程保持运行，心跳继续。
+ */
 void ctrl_send_reset(void)
 {
     uint8_t frame[64];
@@ -971,6 +1031,7 @@ void ctrl_send_reset(void)
 }
 
 /* 参数设置 */
+/** 设置每批运动帧的包数上限（受 kMaxMotionBatch=100 限制） */
 void ctrl_set_batch_size(int n)
 {
     s_batch_size = (n > 0 && n <= kMaxMotionBatch) ? n : kMaxMotionBatch;
@@ -978,6 +1039,7 @@ void ctrl_set_batch_size(int n)
     g_job_status.batch_size = s_batch_size;
 }
 
+/** 设置链路线程轮询周期（影响运动帧发送频率） */
 void ctrl_set_interval_ms(int ms)
 {
     s_interval_ms = (ms > 0) ? ms : 3;
@@ -985,6 +1047,7 @@ void ctrl_set_interval_ms(int ms)
     g_job_status.interval_ms = s_interval_ms;
 }
 
+/** 设置换层层厚（微米），用于串口 PRINT_START / LAYER_DONE 帧 */
 void ctrl_set_layer_height_um(uint16_t um)
 {
     s_layer_height_um = um;
@@ -992,6 +1055,7 @@ void ctrl_set_layer_height_um(uint16_t um)
     g_job_status.layer_height_um = um;
 }
 
+/** 开启/关闭换层功能（开关状态同步到 job_status） */
 void ctrl_set_enable_layer_change(int en)
 {
     s_enable_layer_change = en ? 1 : 0;
@@ -1000,6 +1064,7 @@ void ctrl_set_enable_layer_change(int en)
 }
 
 /* 板参数读写 */
+/** 向下位机发送读参请求（应答为 81B 帧） */
 void ctrl_request_read_params(void)
 {
     if(s_tcp_fd < 0) {
@@ -1012,6 +1077,7 @@ void ctrl_request_read_params(void)
     }
 }
 
+/** @brief 下发单条写参命令 */
 static int tcp_send_writeparam(uint8_t obj, uint16_t p0, uint16_t p1,
                                uint16_t p2, uint16_t p3)
 {
@@ -1023,6 +1089,13 @@ static int tcp_send_writeparam(uint8_t obj, uint16_t p0, uint16_t p1,
     return tcp_send_raw(frame, (size_t)flen);
 }
 
+/**
+ * @brief 向下位机提交板参数
+ * @return 0 成功，-1 TCP 未连接，-2 曾处于发送态已先 Stop
+ *
+ * 若当前正在发送，会先调用 ctrl_stop_sending()，然后逐条下发写参命令，
+ * 最后发送读参请求用于验证。
+ */
 int ctrl_commit_params(float a_max, uint8_t fly_en, float fly_gain,
                        uint8_t acc_en, float acc_delat,
                        int32_t laser_start, int32_t laser_stop)
@@ -1084,4 +1157,5 @@ int ctrl_commit_params(float a_max, uint8_t fly_en, float fly_gain,
     return ret;
 }
 
+/** @return 已发送运动包总数 */
 int ctrl_get_sent_count(void) { return s_sent_count.load(); }
