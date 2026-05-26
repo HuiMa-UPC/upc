@@ -9,6 +9,9 @@ extern "C" {
 
 lv_obj_t *page_home_create(lv_obj_t *parent);
 
+/** 刷新监控区；@p force 为 true 时忽略 ui_generation 跳过逻辑 */
+void page_home_refresh(bool force);
+
 #ifdef __cplusplus
 }
 #endif

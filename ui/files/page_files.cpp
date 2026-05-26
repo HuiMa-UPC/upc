@@ -21,8 +21,8 @@ static lv_obj_t *g_bar_parse = nullptr;
 static lv_obj_t *g_btn_open = nullptr;
 static lv_obj_t *g_open_lbl = nullptr;
 static lv_obj_t *g_detail = nullptr;
-static lv_timer_t *g_ui_timer = nullptr;
 static bool g_page_visible = false;
+static uint32_t s_files_last_ui_gen = 0;
 
 static gcode_file_list_t g_file_list;
 static int g_selected_idx = -1;
@@ -189,6 +189,12 @@ static bool gcode_files_view_visible(void)
 {
     return g_gcode_files_view &&
            !lv_obj_has_flag(g_gcode_files_view, LV_OBJ_FLAG_HIDDEN);
+}
+
+static bool cal_files_view_visible(void)
+{
+    return g_cal_files_view &&
+           !lv_obj_has_flag(g_cal_files_view, LV_OBJ_FLAG_HIDDEN);
 }
 
 /** 修改 Open 按钮的文本标签 */
@@ -542,8 +548,19 @@ void page_files_notify_parse_restarted(void)
  * 3. 同步解析进度并刷新 UI
  * 4. 检测解析完成，切换槽位状态并弹出 toast
  */
-static void files_ui_timer_cb(lv_timer_t *)
+void page_files_refresh(void)
 {
+    if(!g_page_visible) {
+        return;
+    }
+
+    const uint32_t gen = job_status_ui_generation();
+    const bool parsing_active = (g_parsing_idx >= 0 && gcode_is_parsing());
+    if(!parsing_active && gen == s_files_last_ui_gen) {
+        return;
+    }
+    s_files_last_ui_gen = gen;
+
     job_status_update_ring();
     files_attach_active_parse_if_needed();
 
@@ -592,8 +609,12 @@ static void files_ui_timer_cb(lv_timer_t *)
         update_open_button();
     }
 
-    if(files_job_locked() && g_page_visible && gcode_files_view_visible()) {
+    if(files_job_locked() && gcode_files_view_visible()) {
         update_open_button();
+    }
+
+    if(cal_files_view_visible()) {
+        page_cal_files_refresh_ui();
     }
 }
 
@@ -734,7 +755,7 @@ static lv_obj_t *build_dir_picker_view(lv_obj_t *parent, const char *title_text,
     lv_obj_t *btn_local = make_dir_pick_btn(card, "Local directory", ui_color_accent_dim);
     lv_obj_add_event_cb(btn_local, local_cb, LV_EVENT_CLICKED, NULL);
 
-    lv_obj_t *btn_usb = make_dir_pick_btn(card, "USB directory", ui_color_storage_usb);
+    lv_obj_t *btn_usb = make_dir_pick_btn(card, "Local directory", ui_color_storage_usb);
     lv_obj_add_event_cb(btn_usb, usb_cb, LV_EVENT_CLICKED, NULL);
 
     if(swipe_hint && swipe_hint[0] != '\0') {
@@ -751,11 +772,8 @@ void page_files_set_visible(int visible)
 {
     g_page_visible = (visible != 0);
     if(g_page_visible) {
-        sync_parsing_slot_from_worker();
-        refresh_detail_panel();
-        if(files_job_locked()) {
-            update_open_button();
-        }
+        s_files_last_ui_gen = 0;
+        page_files_refresh();
     }
 }
 
@@ -972,7 +990,6 @@ static void build_gcode_files_page(lv_obj_t *page)
     lv_obj_center(g_open_lbl);
 
     reset_all_slots();
-    g_ui_timer = lv_timer_create(files_ui_timer_cb, 120, nullptr);
 }
 
 /**

@@ -40,8 +40,8 @@ extern "C" {
  */
 #define MCU_CMD_BACKPRESSURE_ON_PCT   90
 #define MCU_CMD_BACKPRESSURE_OFF_PCT  85
-/** M3000 换层：cmd/data rate 低于此阈值视为队列已排空（避免永远等精确 0） */
-#define MCU_LAYER_DRAIN_MAX_RATE      32
+/** M3000 换层 / 打印完成：cmd、data rate 须均为 0 才发串口换层或判定结束 */
+#define MCU_LAYER_DRAIN_MAX_RATE      0
 #define MCU_CACHE_RATE_MAX            65535
 
 #ifdef __cplusplus

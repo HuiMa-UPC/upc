@@ -2,6 +2,7 @@
 #include "protocol_mcu.hpp"
 #include "job_status.hpp"
 #include "gcode_parse.hpp"
+#include "gcode_coord_map.hpp"
 #include "gcode_worker.hpp"
 #include "page_files.hpp"
 #include "pipeline_tune.hpp"
@@ -44,8 +45,6 @@ static std::atomic<bool> s_waiting_layer{false};
 static std::atomic<int>  s_serial_handshake_phase{0};
 static std::atomic<bool> s_serial_evt_condition_ok{false};
 static std::atomic<bool> s_serial_evt_print_ready{false};
-/** 是否已收到至少一帧 19B 常态应答（用于启动期限速） */
-static std::atomic<bool> s_mcu_eth_report_seen{false};
 
 static uint8_t          s_tcp_rx_accum[1024];
 static size_t           s_tcp_rx_accum_len = 0;
@@ -85,11 +84,132 @@ static std::atomic<bool>       s_start_pending{false};
 static void ctrl_begin_sending(void);
 static void ctrl_try_complete_pending_start(void);
 
+using frame_guess_fn  = size_t (*)(const uint8_t *, size_t);
+using frame_handle_fn = void (*)(const uint8_t *, size_t);
+
+static int  serial_send_raw(const uint8_t *data, size_t len);
+static void tcp_stage_clear(void);
+
+static void drain_framed_rx(int (*recv_fn)(uint8_t *, size_t),
+                            uint8_t *chunk, size_t chunk_sz,
+                            uint8_t *accum, size_t accum_cap, size_t *accum_len,
+                            frame_guess_fn guess, frame_handle_fn handle)
+{
+    for(;;) {
+        const int n = recv_fn(chunk, chunk_sz);
+        if(n <= 0) {
+            break;
+        }
+
+        if(*accum_len + (size_t)n > accum_cap) {
+            const size_t keep = accum_cap / 2;
+            if(*accum_len > keep) {
+                memmove(accum, accum + *accum_len - keep, keep);
+                *accum_len = keep;
+            }
+        }
+        memcpy(accum + *accum_len, chunk, (size_t)n);
+        *accum_len += (size_t)n;
+
+        size_t pos = 0;
+        while(pos < *accum_len) {
+            const size_t avail = *accum_len - pos;
+            const size_t flen = guess(accum + pos, avail);
+            if(flen == 0) {
+                break;
+            }
+            if(flen == 1) {
+                pos++;
+                continue;
+            }
+            handle(accum + pos, flen);
+            pos += flen;
+        }
+
+        if(pos > 0) {
+            memmove(accum, accum + pos, *accum_len - pos);
+            *accum_len -= pos;
+        }
+    }
+}
+
+static void serial_send_buf(const uint8_t *buf, int len)
+{
+    if(len > 0) {
+        serial_send_raw(buf, (size_t)len);
+    }
+}
+
+static void job_status_get_mcu_rates(uint16_t *cmd, uint16_t *data)
+{
+    JOB_LOCK();
+    if(cmd) {
+        *cmd = g_job_status.cmd_cache_rate;
+    }
+    if(data) {
+        *data = g_job_status.data_cache_rate;
+    }
+}
+
+static int job_total_packets(void)
+{
+    JOB_LOCK();
+    return g_job_status.total_packets;
+}
+
+static void ctrl_notify_ui(void)
+{
+    job_status_ui_bump();
+}
+
+/** 停止运动下发相关状态（不关 TCP/串口） */
+static void ctrl_reset_motion_job_state(bool clear_start_pending)
+{
+    if(clear_start_pending) {
+        s_start_pending.store(false);
+    }
+    s_is_sending.store(false);
+    s_is_paused.store(false);
+    s_waiting_layer.store(false);
+    s_layer_drain_pending.store(false);
+    serial_handshake_reset();
+    tcp_stage_clear();
+    JOB_LOCK();
+    g_job_status.is_sending = false;
+    g_job_status.mcu_cmd_tx_hold = false;
+    ctrl_notify_ui();
+}
+
 /** 清空 TCP Stage 二级队列（线程安全） */
 static void tcp_stage_clear(void)
 {
     std::lock_guard<std::mutex> lock(s_tcp_stage_mtx);
     s_tcp_stage.clear();
+}
+
+static void tcp_stage_apply_motion_gcode_delta(float dx_gcode, float dy_gcode,
+                                               float image_scale_gain, float image_rang_gain)
+{
+    if(dx_gcode == 0.f && dy_gcode == 0.f) {
+        return;
+    }
+
+    std::lock_guard<std::mutex> lock(s_tcp_stage_mtx);
+    for(rb_packet_t &pkt : s_tcp_stage) {
+        if(pkt.type == RB_PKT_MOTION) {
+            gcode_motion_packet_nudge_gcode(&pkt, dx_gcode, dy_gcode, image_scale_gain,
+                                            image_rang_gain);
+        }
+    }
+}
+
+static void center_offset_apply_delta_to_queues(float dx_gcode, float dy_gcode,
+                                                float scale_gain, float rang_gain)
+{
+    if(s_rb) {
+        s_rb->apply_motion_gcode_delta(dx_gcode, dy_gcode, scale_gain, rang_gain);
+    }
+    tcp_stage_apply_motion_gcode_delta(dx_gcode, dy_gcode, scale_gain, rang_gain);
 }
 
 /** @return Stage 队列当前包数（线程安全） */
@@ -242,6 +362,7 @@ static void tcp_handle_frame(const uint8_t *frame, size_t len)
             g_job_status.param_laser_start = ps.laser_start;
             g_job_status.param_laser_stop  = ps.laser_stop;
             g_job_status.param_read_valid  = true;
+            job_status_ui_bump();
         }
         return;
     }
@@ -251,7 +372,6 @@ static void tcp_handle_frame(const uint8_t *frame, size_t len)
         tcp_response_t resp;
         /* 心跳 / 运动帧下发后下位机均回 19B 常态应答（含 cmd/data/坐标/激光） */
         if(parse_tcp_response(frame, len, &resp) == 0) {
-            s_mcu_eth_report_seen.store(true);
             JOB_LOCK();
             g_job_status.cmd_cache_rate  = resp.cmd_rate;
             g_job_status.data_cache_rate = resp.data_rate;
@@ -268,50 +388,12 @@ static void tcp_handle_frame(const uint8_t *frame, size_t len)
     }
 }
 
-/**
- * @brief 非阻塞读取 TCP 数据，粘包拆帧后逐帧处理
- *
- * 使用 s_tcp_rx_accum 累积未处理数据，循环调用 tcp_guess_frame_len 拆帧。
- */
 static void tcp_drain_rx(void)
 {
     uint8_t chunk[256];
-    for(;;) {
-        int n = tcp_recv_nonblock(chunk, sizeof(chunk));
-        if(n <= 0) {
-            break;
-        }
-
-        if(s_tcp_rx_accum_len + (size_t)n > sizeof(s_tcp_rx_accum)) {
-            const size_t keep = sizeof(s_tcp_rx_accum) / 2;
-            if(s_tcp_rx_accum_len > keep) {
-                memmove(s_tcp_rx_accum, s_tcp_rx_accum + s_tcp_rx_accum_len - keep, keep);
-                s_tcp_rx_accum_len = keep;
-            }
-        }
-        memcpy(s_tcp_rx_accum + s_tcp_rx_accum_len, chunk, (size_t)n);
-        s_tcp_rx_accum_len += (size_t)n;
-
-        size_t pos = 0;
-        while(pos < s_tcp_rx_accum_len) {
-            const size_t avail = s_tcp_rx_accum_len - pos;
-            const size_t flen = tcp_guess_frame_len(s_tcp_rx_accum + pos, avail);
-            if(flen == 0) {
-                break;
-            }
-            if(flen == 1) {
-                pos++;
-                continue;
-            }
-            tcp_handle_frame(s_tcp_rx_accum + pos, flen);
-            pos += flen;
-        }
-
-        if(pos > 0) {
-            memmove(s_tcp_rx_accum, s_tcp_rx_accum + pos, s_tcp_rx_accum_len - pos);
-            s_tcp_rx_accum_len -= pos;
-        }
-    }
+    drain_framed_rx(tcp_recv_nonblock, chunk, sizeof(chunk),
+                    s_tcp_rx_accum, sizeof(s_tcp_rx_accum), &s_tcp_rx_accum_len,
+                    tcp_guess_frame_len, tcp_handle_frame);
 }
 
 /* ---------- 串口辅助 ---------- */
@@ -381,10 +463,7 @@ static void link_process_serial_handshake(void)
 
     if(phase == SERIAL_HS_WAIT_CONDITION_OK && s_serial_evt_condition_ok.exchange(false)) {
         uint8_t sbuf[32];
-        const int slen = serial_build_print_start(s_layer_height_um, sbuf, sizeof(sbuf));
-        if(slen > 0) {
-            serial_send_raw(sbuf, (size_t)slen);
-        }
+        serial_send_buf(sbuf, serial_build_print_start(s_layer_height_um, sbuf, sizeof(sbuf)));
         s_serial_handshake_phase.store(SERIAL_HS_WAIT_PRINT_READY);
         s_serial_evt_print_ready.store(false);
         return;
@@ -396,52 +475,12 @@ static void link_process_serial_handshake(void)
     }
 }
 
-/**
- * @brief 非阻塞读取串口数据，粘包拆帧后逐帧处理
- *
- * 逻辑与 tcp_drain_rx 相同，使用 s_serial_rx_accum 累积。
- */
 static void serial_drain_rx(void)
 {
     uint8_t chunk[64];
-    for(;;) {
-        const int n = serial_recv_nonblock(chunk, sizeof(chunk));
-        if(n <= 0) {
-            break;
-        }
-
-        if(s_serial_rx_accum_len + (size_t)n > sizeof(s_serial_rx_accum)) {
-            const size_t keep = sizeof(s_serial_rx_accum) / 2;
-            if(s_serial_rx_accum_len > keep) {
-                memmove(s_serial_rx_accum,
-                        s_serial_rx_accum + s_serial_rx_accum_len - keep,
-                        keep);
-                s_serial_rx_accum_len = keep;
-            }
-        }
-        memcpy(s_serial_rx_accum + s_serial_rx_accum_len, chunk, (size_t)n);
-        s_serial_rx_accum_len += (size_t)n;
-
-        size_t pos = 0;
-        while(pos < s_serial_rx_accum_len) {
-            const size_t avail = s_serial_rx_accum_len - pos;
-            const size_t flen = serial_guess_frame_len(s_serial_rx_accum + pos, avail);
-            if(flen == 0) {
-                break;
-            }
-            if(flen == 1) {
-                pos++;
-                continue;
-            }
-            serial_handle_frame(s_serial_rx_accum + pos, flen);
-            pos += flen;
-        }
-
-        if(pos > 0) {
-            memmove(s_serial_rx_accum, s_serial_rx_accum + pos, s_serial_rx_accum_len - pos);
-            s_serial_rx_accum_len -= pos;
-        }
-    }
+    drain_framed_rx(serial_recv_nonblock, chunk, sizeof(chunk),
+                    s_serial_rx_accum, sizeof(s_serial_rx_accum), &s_serial_rx_accum_len,
+                    serial_guess_frame_len, serial_handle_frame);
 }
 
 static void link_thread_fn(void);
@@ -475,14 +514,10 @@ static bool link_handle_layer_mark(void)
 
     s_waiting_layer.store(true);
     serial_handshake_reset();
-
-    if(s_enable_layer_change) {
-        s_layer_drain_pending.store(true);
-    } else {
-        s_layer_drain_pending.store(false);
+    s_layer_drain_pending.store(s_enable_layer_change != 0);
+    if(!s_enable_layer_change) {
         s_waiting_layer.store(false);
     }
-
     return true;
 }
 
@@ -501,21 +536,13 @@ static void link_try_layer_serial_dispatch(void)
 
     uint16_t cmd_snap = 0;
     uint16_t data_snap = 0;
-    {
-        JOB_LOCK();
-        cmd_snap  = g_job_status.cmd_cache_rate;
-        data_snap = g_job_status.data_cache_rate;
-    }
-
+    job_status_get_mcu_rates(&cmd_snap, &data_snap);
     if(cmd_snap > MCU_LAYER_DRAIN_MAX_RATE || data_snap > MCU_LAYER_DRAIN_MAX_RATE) {
         return;
     }
 
     uint8_t sbuf[32];
-    const int slen = serial_build_layer_done(s_layer_height_um, sbuf, sizeof(sbuf));
-    if(slen > 0) {
-        serial_send_raw(sbuf, (size_t)slen);
-    }
+    serial_send_buf(sbuf, serial_build_layer_done(s_layer_height_um, sbuf, sizeof(sbuf)));
 
     s_layer_drain_pending.store(false);
     s_serial_handshake_phase.store(SERIAL_HS_WAIT_PRINT_READY);
@@ -606,12 +633,8 @@ static void link_drain_motion_queue(void)
         return;
     }
 
-    /* 背压：cmd ≥ 80% 时本轮停止下发（由 interval_ms 轮询周期自然降速） */
     uint16_t cmd_snap = 0;
-    {
-        JOB_LOCK();
-        cmd_snap = g_job_status.cmd_cache_rate;
-    }
+    job_status_get_mcu_rates(&cmd_snap, nullptr);
     if(cmd_snap >= (65535 * 80 / 100)) {
         return;
     }
@@ -635,6 +658,7 @@ static void ctrl_prefill_gcode_ring(void)
     if(!s_rb || !gcode_is_file_open() || gcode_is_parsing()) {
         return;
     }
+    /* 可能 join 解析线程，且 notify 会触发 Files 页 JOB_LOCK；调用方勿持 JOB_LOCK */
     gcode_start_parse(s_rb);
     page_files_notify_parse_restarted();
 }
@@ -649,7 +673,6 @@ static void ctrl_begin_sending(void)
     s_is_sending.store(true);
     s_is_paused.store(false);
     s_sent_count.store(0);
-    s_mcu_eth_report_seen.store(false);
     tcp_stage_clear();
 
     {
@@ -659,14 +682,12 @@ static void ctrl_begin_sending(void)
         g_job_status.mcu_cmd_tx_hold = false;
         g_job_status.job_print_completed = false;
     }
+    ctrl_notify_ui();
 
     /* 首层：1 打印请求 → 条件满足 → 4 打印开始 → 准备完成，再下发第一层运动帧 */
     if(s_enable_layer_change && s_serial_fd >= 0) {
         uint8_t sbuf[32];
-        const int slen = serial_build_print_request(sbuf, sizeof(sbuf));
-        if(slen > 0) {
-            serial_send_raw(sbuf, (size_t)slen);
-        }
+        serial_send_buf(sbuf, serial_build_print_request(sbuf, sizeof(sbuf)));
         s_waiting_layer.store(true);
         s_layer_drain_pending.store(false);
         serial_handshake_reset();
@@ -687,16 +708,11 @@ static bool ring_meets_start_threshold(void)
     if(count >= (size_t)batch) {
         return true;
     }
+    const int total = job_total_packets();
     if(gcode_is_parsing()) {
-        int total = 0;
-        {
-            JOB_LOCK();
-            total = g_job_status.total_packets;
-        }
         if(total >= batch && count > 0) {
             return true;
         }
-        /* 重打印预填：用户已点 Start，小文件 EOF 后不必等解析线程 join */
         if(s_start_pending.load() && gcode_is_file_read_exhausted() &&
            total > 0 && total < batch && count > 0) {
             return true;
@@ -704,12 +720,6 @@ static bool ring_meets_start_threshold(void)
         return false;
     }
     if(gcode_is_file_open()) {
-        int total = 0;
-        {
-            JOB_LOCK();
-            total = g_job_status.total_packets;
-        }
-        /* 小文件：解析已结束，Ring 内已有全部待发数据（可少于 batch） */
         return total > 0 && count > 0;
     }
     return false;
@@ -748,8 +758,8 @@ static void ctrl_try_complete_pending_start(void)
  *   2. 主机端 Stage 队列为空
  *   3. 解析线程已退出
  *   4. 文件已读到 EOF
- *   5. 下位机 cmd_cache_rate <= MCU_LAYER_DRAIN_MAX_RATE（≈0.05%）
- *   6. 下位机 data_cache_rate <= MCU_LAYER_DRAIN_MAX_RATE（≈0.05%）
+ *   5. 下位机 cmd_cache_rate == 0
+ *   6. 下位机 data_cache_rate == 0
  *
  * 换层使能且串口已连接时，下发串口「打印全部完成」(0xA4/0x01/0x06)。
  *
@@ -773,36 +783,27 @@ static void link_try_finish_sending(void)
         return;
     }
 
-    /* 5. 下位机 CMD 队列须已排空 */
-    /* 6. 下位机 DATA 队列须已排空 */
-    {
-        JOB_LOCK();
-        if(g_job_status.cmd_cache_rate > MCU_LAYER_DRAIN_MAX_RATE) {
-            return;
-        }
-        if(g_job_status.data_cache_rate > MCU_LAYER_DRAIN_MAX_RATE) {
-            return;
-        }
+    uint16_t cmd_snap = 0;
+    uint16_t data_snap = 0;
+    job_status_get_mcu_rates(&cmd_snap, &data_snap);
+    if(cmd_snap > MCU_LAYER_DRAIN_MAX_RATE || data_snap > MCU_LAYER_DRAIN_MAX_RATE) {
+        return;
     }
 
     if(s_enable_layer_change && s_serial_fd >= 0) {
         uint8_t sbuf[32];
-        const int slen = serial_build_print_finished(sbuf, sizeof(sbuf));
-        if(slen > 0) {
-            serial_send_raw(sbuf, (size_t)slen);
-        }
+        serial_send_buf(sbuf, serial_build_print_finished(sbuf, sizeof(sbuf)));
     }
 
     s_is_sending.store(false);
     s_is_paused.store(false);
-    {
-        JOB_LOCK();
-        g_job_status.is_sending = false;
-        g_job_status.mcu_cmd_tx_hold = false;
-        g_job_status.job_print_completed = true;
-    }
+    JOB_LOCK();
+    g_job_status.is_sending = false;
+    g_job_status.mcu_cmd_tx_hold = false;
+    g_job_status.job_print_completed = true;
 
     /* 不再自动预填：避免下位机 Data 未排空时误判完成并重新解析 */
+    ctrl_notify_ui();
 }
 
 /** 请求链路线程停止并等待其结束 */
@@ -820,6 +821,20 @@ static void link_thread_stop(void)
 }
 
 /* ---------- TCP 连接后的通信线程（心跳 + 收应答 + 可选发运动帧） ---------- */
+static int link_thread_sleep_ms(void)
+{
+    if(s_is_sending.load() && !s_is_paused.load()) {
+        return (s_interval_ms > 0) ? s_interval_ms : 3;
+    }
+    if(s_waiting_layer.load() || s_layer_drain_pending.load()) {
+        return 10;
+    }
+    if(s_tcp_fd >= 0) {
+        return HEARTBEAT_INTERVAL_MS;
+    }
+    return 50;
+}
+
 static void link_thread_fn(void)
 {
     using clock = std::chrono::steady_clock;
@@ -857,9 +872,9 @@ static void link_thread_fn(void)
         link_drain_motion_queue();
         link_try_finish_sending();
 
-        /* 7. 轮询周期 = Intv(ms) */
-        if(s_interval_ms > 0) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(s_interval_ms));
+        const int sleep_ms = link_thread_sleep_ms();
+        if(sleep_ms > 0) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(sleep_ms));
         }
     }
 
@@ -883,8 +898,8 @@ void ctrl_backend_init(void)
     s_waiting_layer.store(false);
     s_layer_drain_pending.store(false);
     serial_handshake_reset();
-    s_mcu_eth_report_seen.store(false);
     s_start_pending.store(false);
+    s_tcp_rx_accum_len = 0;
     s_serial_rx_accum_len = 0;
     tcp_stage_clear();
 
@@ -940,11 +955,11 @@ int ctrl_tcp_connect(const char *ip, int port)
     fcntl(fd, F_SETFL, flags | O_NONBLOCK);
 
     s_tcp_fd = fd;
-    s_mcu_eth_report_seen.store(false);
     {
         JOB_LOCK();
         g_job_status.tcp_connected = true;
     }
+    ctrl_notify_ui();
 
     link_thread_start();
 
@@ -959,7 +974,6 @@ void ctrl_tcp_disconnect(void)
     ctrl_stop_sending();
     link_thread_stop();
     s_tcp_rx_accum_len = 0;
-    s_mcu_eth_report_seen.store(false);
     tcp_stage_clear();
 
     if(s_tcp_fd >= 0) {
@@ -974,6 +988,7 @@ void ctrl_tcp_disconnect(void)
         g_job_status.param_read_valid = false;
         g_job_status.enable_cal_apply = false;
     }
+    ctrl_notify_ui();
 }
 
 /** @return 1 TCP 已连接，0 未连接 */
@@ -1030,6 +1045,7 @@ int ctrl_serial_open(const char *device, int baud)
         JOB_LOCK();
         g_job_status.serial_connected = true;
     }
+    ctrl_notify_ui();
     return 0;
 }
 
@@ -1045,6 +1061,7 @@ void ctrl_serial_close(void)
         JOB_LOCK();
         g_job_status.serial_connected = false;
     }
+    ctrl_notify_ui();
 }
 
 /** @return 1 串口已打开，0 未打开 */
@@ -1085,24 +1102,21 @@ void ctrl_start_sending(void)
 /** 立即停止发送，清空 Stage，重置所有换层/暂停状态 */
 void ctrl_stop_sending(void)
 {
-    s_start_pending.store(false);
-    s_is_sending.store(false);
-    s_is_paused.store(false);
-    s_waiting_layer.store(false);
-    s_layer_drain_pending.store(false);
-    serial_handshake_reset();
-    tcp_stage_clear();
-    {
-        JOB_LOCK();
-        g_job_status.is_sending = false;
-        g_job_status.mcu_cmd_tx_hold = false;
-    }
+    ctrl_reset_motion_job_state(true);
 }
 
 /** 暂停发送（运动帧暂停下发，链路线程和心跳继续） */
-void ctrl_pause_sending(void) { s_is_paused.store(true); }
+void ctrl_pause_sending(void)
+{
+    s_is_paused.store(true);
+    ctrl_notify_ui();
+}
 /** 恢复发送 */
-void ctrl_resume_sending(void) { s_is_paused.store(false); }
+void ctrl_resume_sending(void)
+{
+    s_is_paused.store(false);
+    ctrl_notify_ui();
+}
 /** @return 1 正在发送运动帧，0 未发送 */
 int  ctrl_is_sending(void) { return s_is_sending.load(); }
 /** @return 1 处于暂停状态，0 未暂停 */
@@ -1131,10 +1145,7 @@ static void ctrl_send_serial_print_terminate_if_needed(void)
     }
 
     uint8_t sbuf[32];
-    const int slen = serial_build_print_terminate(sbuf, sizeof(sbuf));
-    if(slen > 0) {
-        serial_send_raw(sbuf, (size_t)slen);
-    }
+    serial_send_buf(sbuf, serial_build_print_terminate(sbuf, sizeof(sbuf)));
 }
 
 /**
@@ -1145,50 +1156,37 @@ static void ctrl_send_serial_print_terminate_if_needed(void)
  */
 void ctrl_send_reset(void)
 {
-    s_start_pending.store(false);
-
     ctrl_send_serial_print_terminate_if_needed();
 
     uint8_t frame[64];
-    int flen = build_reset_frame(frame, sizeof(frame));
+    const int flen = build_reset_frame(frame, sizeof(frame));
     if(flen > 0) {
         tcp_send_raw(frame, (size_t)flen);
     }
 
+    ctrl_reset_motion_job_state(true);
     s_sent_count.store(0);
-    s_is_sending.store(false);
-    s_is_paused.store(false);
-    s_waiting_layer.store(false);
-    s_layer_drain_pending.store(false);
-    serial_handshake_reset();
-    s_mcu_eth_report_seen.store(false);
-    tcp_stage_clear();
+
+    /* 先停解析线程并 join，避免与清 Ring / 重解析竞态；同时解除 put_wait 阻塞 */
+    gcode_stop_parse();
+    if(s_rb) {
+        s_rb->clear();
+    }
 
     {
         JOB_LOCK();
-        g_job_status.is_sending = false;
         g_job_status.sent_packets = 0;
-        g_job_status.mcu_cmd_tx_hold = false;
         g_job_status.cmd_cache_rate  = 0;
         g_job_status.data_cache_rate = 0;
         g_job_status.current_x       = MCU_COORD_ZERO_OFFSET;
         g_job_status.current_y       = MCU_COORD_ZERO_OFFSET;
         g_job_status.current_z       = MCU_COORD_ZERO_OFFSET;
         g_job_status.laser_state     = 0;
-    }
-
-    /* 清空 ①②；始终从头重新解析 G-code 预填 Ring */
-    if(s_rb) {
-        s_rb->clear();
-    }
-    if(s_rb) {
-        ctrl_prefill_gcode_ring();
-    }
-    {
-        JOB_LOCK();
         g_job_status.job_print_completed = false;
     }
-    /* 通信线程保持运行，心跳继续 */
+
+    /* 勿在 JOB_LOCK 内调用：page_files_notify → refresh_detail_panel 会再次 JOB_LOCK（死锁） */
+    ctrl_prefill_gcode_ring();
 }
 
 /* 参数设置 */
@@ -1233,6 +1231,56 @@ int ctrl_get_enable_cal_apply(void)
     return g_job_status.enable_cal_apply ? 1 : 0;
 }
 
+void ctrl_center_offset_nudge(float dx_gcode, float dy_gcode)
+{
+    if(s_tcp_fd < 0) {
+        return;
+    }
+    if(dx_gcode == 0.f && dy_gcode == 0.f) {
+        return;
+    }
+
+    float scale_gain = 0.f;
+    float rang_gain  = 0.f;
+    gcode_get_active_image_gains(&scale_gain, &rang_gain);
+
+    {
+        JOB_LOCK();
+        g_job_status.center_offset_x += dx_gcode;
+        g_job_status.center_offset_y += dy_gcode;
+    }
+
+    center_offset_apply_delta_to_queues(dx_gcode, dy_gcode, scale_gain, rang_gain);
+    ctrl_notify_ui();
+}
+
+void ctrl_center_offset_reset(void)
+{
+    if(s_tcp_fd < 0) {
+        return;
+    }
+
+    float dx_back = 0.f;
+    float dy_back = 0.f;
+    float scale_gain = 0.f;
+    float rang_gain  = 0.f;
+
+    {
+        JOB_LOCK();
+        dx_back = -g_job_status.center_offset_x;
+        dy_back = -g_job_status.center_offset_y;
+        g_job_status.center_offset_x = 0.f;
+        g_job_status.center_offset_y = 0.f;
+    }
+
+    gcode_get_active_image_gains(&scale_gain, &rang_gain);
+
+    if(dx_back != 0.f || dy_back != 0.f) {
+        center_offset_apply_delta_to_queues(dx_back, dy_back, scale_gain, rang_gain);
+    }
+    ctrl_notify_ui();
+}
+
 /* 板参数读写 */
 /** 向下位机发送读参请求（应答为 81B 帧） */
 void ctrl_request_read_params(void)
@@ -1240,6 +1288,11 @@ void ctrl_request_read_params(void)
     if(s_tcp_fd < 0) {
         return;
     }
+    {
+        JOB_LOCK();
+        g_job_status.param_read_valid = false;
+    }
+    job_status_ui_bump();
     uint8_t frame[64];
     int flen = build_readparam_frame(frame, sizeof(frame));
     if(flen > 0) {
@@ -1288,36 +1341,44 @@ int ctrl_commit_params(float a_max, uint8_t fly_en, float fly_gain,
         g_job_status.flash_saved = 0;
     }
 
-    auto pause_between = []() {
+    auto write_or_fail = [&](uint8_t obj, uint16_t wp0, uint16_t wp1,
+                             uint16_t wp2, uint16_t wp3) -> bool {
+        if(tcp_send_writeparam(obj, wp0, wp1, wp2, wp3) != 0) {
+            return false;
+        }
         std::this_thread::sleep_for(std::chrono::milliseconds(3));
+        return true;
     };
 
-    float_to_u16_pair(a_max / 100000000.0f, &p0, &p1);
-    if(tcp_send_writeparam(0, p0, p1, 0, 0) != 0) return -1;
-    pause_between();
-
-    if(tcp_send_writeparam(1, fly_en ? 1u : 0u, 0, 0, 0) != 0) return -1;
-    pause_between();
-
+    /* 与读回一致：线上 float = 内部 a_max / MCU_PARAM_A_MAX_SCALE（勿再除一次） */
+    float_to_u16_pair(a_max, &p0, &p1);
+    if(!write_or_fail(0, p0, p1, 0, 0)) {
+        return -1;
+    }
+    if(!write_or_fail(1, fly_en ? 1u : 0u, 0, 0, 0)) {
+        return -1;
+    }
     float_to_u16_pair(fly_gain, &p0, &p1);
-    if(tcp_send_writeparam(2, p0, p1, 0, 0) != 0) return -1;
-    pause_between();
-
-    if(tcp_send_writeparam(3, acc_en ? 1u : 0u, 0, 0, 0) != 0) return -1;
-    pause_between();
-
+    if(!write_or_fail(2, p0, p1, 0, 0)) {
+        return -1;
+    }
+    if(!write_or_fail(3, acc_en ? 1u : 0u, 0, 0, 0)) {
+        return -1;
+    }
     float_to_u16_pair(acc_delat, &p0, &p1);
-    if(tcp_send_writeparam(4, p0, p1, 0, 0) != 0) return -1;
-    pause_between();
-
+    if(!write_or_fail(4, p0, p1, 0, 0)) {
+        return -1;
+    }
     p0 = (uint16_t)((uint32_t)laser_start & 0xFFFFu);
     p1 = (uint16_t)(((uint32_t)laser_start >> 16) & 0xFFFFu);
-    if(tcp_send_writeparam(5, p0, p1, 0, 0) != 0) return -1;
-    pause_between();
-
+    if(!write_or_fail(5, p0, p1, 0, 0)) {
+        return -1;
+    }
     p0 = (uint16_t)((uint32_t)laser_stop & 0xFFFFu);
     p1 = (uint16_t)(((uint32_t)laser_stop >> 16) & 0xFFFFu);
-    if(tcp_send_writeparam(6, p0, p1, 0, 0) != 0) return -1;
+    if(!write_or_fail(6, p0, p1, 0, 0)) {
+        return -1;
+    }
 
     /* 写完后读回验证；Flash 保存标志在后续 19B 心跳里 byte[8]=0x0D */
     std::this_thread::sleep_for(std::chrono::milliseconds(20));

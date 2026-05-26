@@ -70,6 +70,7 @@ void ui_theme_apply_switch(lv_obj_t *sw)
 }
 
 const lv_font_t *ui_font_body(void)  { return &lv_font_montserrat_32; }
+const lv_font_t *ui_font_form(void)  { return &lv_font_montserrat_24; }
 const lv_font_t *ui_font_title(void) { return &lv_font_montserrat_48; }
 const lv_font_t *ui_font_icon(void)  { return &lv_font_montserrat_32; }
 

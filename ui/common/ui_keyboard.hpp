@@ -25,6 +25,15 @@ void ui_keyboard_attach(lv_obj_t *ta, lv_keyboard_mode_t mode);
  */
 void ui_keyboard_hide(void);
 
+/** 若 @p ta 正绑定键盘，则隐藏并取消其聚焦（定时器锁定某输入框时调用） */
+void ui_keyboard_release_if_focused(lv_obj_t *ta);
+
+/** @p ta 是否为当前绑定且已显示的键盘目标 */
+bool ui_keyboard_is_bound(const lv_obj_t *ta);
+
+/** 键盘是否正在显示（任意输入框） */
+bool ui_keyboard_is_open(void);
+
 #ifdef __cplusplus
 }
 #endif

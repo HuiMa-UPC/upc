@@ -1,4 +1,5 @@
 #include "ring_buffer.hpp"
+#include "gcode_coord_map.hpp"
 
 RingBuffer::RingBuffer()
 {
@@ -75,4 +76,22 @@ void RingBuffer::clear()
     std::lock_guard<std::mutex> lock(mtx);
     head = tail = cnt = 0;
     cv_not_full.notify_all();
+}
+
+void RingBuffer::apply_motion_gcode_delta(float dx_gcode, float dy_gcode,
+                                          float image_scale_gain, float image_rang_gain)
+{
+    if(dx_gcode == 0.f && dy_gcode == 0.f) {
+        return;
+    }
+
+    std::lock_guard<std::mutex> lock(mtx);
+    for(size_t i = 0; i < cnt; ++i) {
+        const size_t idx = (head + i) % RB_MAX_PACKETS;
+        rb_packet_t &pkt = buf[idx];
+        if(pkt.type == RB_PKT_MOTION) {
+            gcode_motion_packet_nudge_gcode(&pkt, dx_gcode, dy_gcode, image_scale_gain,
+                                            image_rang_gain);
+        }
+    }
 }

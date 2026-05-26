@@ -15,7 +15,6 @@
 #include <regex>
 #include <algorithm>
 #include <cctype>
-#include <climits>
 
 /* ---------- G-code 解析状态 ---------- */
 static struct {
@@ -92,6 +91,33 @@ static const GcodeLineRegex &gcode_regex(void)
 {
     static const GcodeLineRegex k_re;
     return k_re;
+}
+
+static void emit_parse_kind(LineParseOut *out, uint8_t kind)
+{
+    if(out->count < 2) {
+        out->kinds[out->count++] = kind;
+    }
+}
+
+static void reset_parser_motion_state(void)
+{
+    g_w.x = g_w.y = g_w.z = g_w.f = 0.0f;
+    g_w.e = 0;
+    g_w.state_initialized = false;
+}
+
+static void apply_gain_defaults(void)
+{
+    if(g_w.image_rang_gain < 1e-6f) {
+        g_w.image_rang_gain = GCODE_DEFAULT_IMAGE_RANG_GAIN;
+    }
+    if(g_w.image_scale_gain < 1e-6f) {
+        g_w.image_scale_gain = GCODE_DEFAULT_IMAGE_SCALE_GAIN;
+    }
+    if(g_w.speed_gain < 1e-6f) {
+        g_w.speed_gain = GCODE_DEFAULT_SPEED_GAIN;
+    }
 }
 
 /** 去除字符串首尾空白字符 */
@@ -199,26 +225,39 @@ static void parse_line_all(const char *raw_line, LineParseOut *out)
         std::string before = split_match[1].str();
         trim_string(before);
         if(before.empty()) {
-            if(out->count < 2) out->kinds[out->count++] = LINE_EMIT_LAYER;
+            emit_parse_kind(out, LINE_EMIT_LAYER);
             return;
         }
         bool motion = false;
         if(parse_g1_segment(before, &motion) && motion) {
-            if(out->count < 2) out->kinds[out->count++] = LINE_EMIT_MOTION;
+            emit_parse_kind(out, LINE_EMIT_MOTION);
         }
-        if(out->count < 2) out->kinds[out->count++] = LINE_EMIT_LAYER;
+        emit_parse_kind(out, LINE_EMIT_LAYER);
         return;
     }
 
     if(std::regex_match(normalized, re.m3000_only)) {
-        if(out->count < 2) out->kinds[out->count++] = LINE_EMIT_LAYER;
+        emit_parse_kind(out, LINE_EMIT_LAYER);
         return;
     }
 
     bool motion = false;
     if(parse_g1_segment(normalized, &motion) && motion) {
-        if(out->count < 2) out->kinds[out->count++] = LINE_EMIT_MOTION;
+        emit_parse_kind(out, LINE_EMIT_MOTION);
     }
+}
+
+/** 将 int 截断/饱和到 16bit 后拆分为低字节和高字节 */
+static void int_to_u16_bytes(int value, uint8_t *low_byte, uint8_t *high_byte)
+{
+    if(value > 65535) {
+        value = 65535;
+    }
+    if(value < 0) {
+        value = 0;
+    }
+    *low_byte  = static_cast<uint8_t>(value & 0xFF);
+    *high_byte = static_cast<uint8_t>((value >> 8) & 0xFF);
 }
 
 /**
@@ -239,74 +278,26 @@ static void coordinate_to_offset_bytes(float coordinate_value, float image_rang_
     }
 
     const float normalized = coordinate_value / image_rang_gain;
-    int offset_value = static_cast<int>(normalized * 32767.0f + 32768.0f);
-    if(offset_value > 65535) {
-        offset_value = 65535;
-    }
-    if(offset_value < 0) {
-        offset_value = 0;
-    }
-
-    *low_byte  = static_cast<uint8_t>(offset_value & 0xFF);
-    *high_byte = static_cast<uint8_t>((offset_value >> 8) & 0xFF);
-}
-
-/** 将 int 截断/饱和到 16bit 后拆分为低字节和高字节 */
-static void int_to_u16_bytes(int value, uint8_t *low_byte, uint8_t *high_byte)
-{
-    if(value > 65535) {
-        value = 65535;
-    }
-    if(value < 0) {
-        value = 0;
-    }
-    *low_byte  = static_cast<uint8_t>(value & 0xFF);
-    *high_byte = static_cast<uint8_t>((value >> 8) & 0xFF);
+    const int offset_value = static_cast<int>(normalized * 32767.0f + 32768.0f);
+    int_to_u16_bytes(offset_value, low_byte, high_byte);
 }
 
 /** 每次 Open/重新解析前从 job_status 读取 Control 页增益或 CAL 文件增益 */
 static void parser_load_gains_from_job(void)
 {
-    bool use_cal = false;
-    bool cal_enabled = false;
-    bool cal_has_gains = false;
-    float cal_scale = 0.f;
-    float cal_range = 0.f;
-    float cal_speed = 0.f;
+    bool use_cal_gains = false;
 
-    JOB_LOCK();
-    cal_enabled = g_job_status.enable_cal_apply;
-    use_cal = cal_enabled && g_job_status.cal_file_loaded;
-    cal_has_gains = g_job_status.cal_has_gains;
-    if(use_cal && cal_has_gains) {
-        cal_scale = g_job_status.cal_image_scale_gain;
-        cal_range = g_job_status.cal_image_rang_gain;
-        cal_speed = g_job_status.cal_speed_gain;
-    } else {
-        g_w.image_scale_gain = g_job_status.parse_image_scale_gain;
-        g_w.image_rang_gain  = g_job_status.parse_image_rang_gain;
-        g_w.speed_gain       = g_job_status.parse_speed_gain;
+    {
+        JOB_LOCK();
+        use_cal_gains = g_job_status.enable_cal_apply && g_job_status.cal_file_loaded &&
+                        g_job_status.cal_has_gains;
+        g_w.speed_gain = use_cal_gains ? g_job_status.cal_speed_gain
+                                       : g_job_status.parse_speed_gain;
     }
-    g_w.cal_apply = use_cal && (galvo_cal_is_valid() != 0);
-    if(!use_cal) {
-        g_w.cal_apply = false;
-    }
+    gcode_get_active_image_gains(&g_w.image_scale_gain, &g_w.image_rang_gain);
+    apply_gain_defaults();
 
-    if(use_cal && cal_has_gains) {
-        g_w.image_scale_gain = cal_scale;
-        g_w.image_rang_gain  = cal_range;
-        g_w.speed_gain       = cal_speed;
-    }
-    if(g_w.image_rang_gain < 1e-6f) {
-        g_w.image_rang_gain = GCODE_DEFAULT_IMAGE_RANG_GAIN;
-    }
-    if(g_w.image_scale_gain < 1e-6f) {
-        g_w.image_scale_gain = GCODE_DEFAULT_IMAGE_SCALE_GAIN;
-    }
-    if(g_w.speed_gain < 1e-6f) {
-        g_w.speed_gain = GCODE_DEFAULT_SPEED_GAIN;
-    }
-
+    g_w.cal_apply = use_cal_gains && (galvo_cal_is_valid() != 0);
     if(g_w.cal_apply) {
         galvo_cal_copy(&g_w.cal_data);
         if(!g_w.cal_data.valid) {
@@ -336,6 +327,12 @@ static bool build_and_push_packet(RingBuffer *rb)
             out_x = g_w.x - static_cast<float>(ddx);
             out_y = g_w.y - static_cast<float>(ddy);
         }
+    }
+
+    {
+        JOB_LOCK();
+        out_x += g_job_status.center_offset_x;
+        out_y += g_job_status.center_offset_y;
     }
 
     const float ox = out_x * g_w.image_scale_gain;
@@ -388,6 +385,7 @@ static void sync_parse_progress(int lines, int packets)
     JOB_LOCK();
     g_job_status.parsed_lines = lines;
     g_job_status.total_packets = packets;
+    job_status_ui_bump();
 }
 
 /**
@@ -405,6 +403,45 @@ static void parser_chunk_yield(RingBuffer *rb)
     if(delay_ms > 0) {
         std::this_thread::sleep_for(std::chrono::milliseconds(delay_ms));
     }
+}
+
+/** 将 parse_line_all 结果写入 Ring；@return false 表示应停止解析 */
+static bool emit_line_parse_result(RingBuffer *rb, const LineParseOut *parsed, int *packets)
+{
+    for(int i = 0; i < parsed->count; i++) {
+        if(g_w.stop_req.load()) {
+            return false;
+        }
+        if(parsed->kinds[i] == LINE_EMIT_LAYER) {
+            if(!push_layer_mark(rb)) {
+                g_w.stop_req.store(true);
+                return false;
+            }
+        } else if(parsed->kinds[i] == LINE_EMIT_MOTION) {
+            if(!build_and_push_packet(rb)) {
+                g_w.stop_req.store(true);
+                return false;
+            }
+            (*packets)++;
+        }
+    }
+    return !g_w.stop_req.load();
+}
+
+static int count_file_lines(FILE *fp)
+{
+    int cnt = 0;
+    char buf[256];
+    while(fgets(buf, sizeof(buf), fp)) {
+        cnt++;
+    }
+    return cnt;
+}
+
+static void parser_set_not_parsing(void)
+{
+    JOB_LOCK();
+    g_job_status.is_parsing = false;
 }
 
 /**
@@ -437,8 +474,7 @@ static void parser_thread_fn(void)
     /* 文件未打开或 RingBuffer 未绑定：无法开始解析，直接退出 */
     if(!g_w.fp || !g_w.target_rb) {
         g_w.running.store(false);
-        JOB_LOCK();
-        g_job_status.is_parsing = false;
+        parser_set_not_parsing();
         return;
     }
 
@@ -473,29 +509,7 @@ static void parser_thread_fn(void)
             /* 2. 解析单行：可能产生 0~2 个输出（MOTION + LAYER） */
             LineParseOut parsed;
             parse_line_all(line, &parsed);
-
-            /* 3. 将解析结果写入 RingBuffer */
-            for(int i = 0; i < parsed.count; i++) {
-                if(g_w.stop_req.load()) {
-                    break;
-                }
-                if(parsed.kinds[i] == LINE_EMIT_LAYER) {
-                    /* M3000：写入换层标记包（RB_PKT_LAYER_MARK） */
-                    if(!push_layer_mark(g_w.target_rb)) {
-                        g_w.stop_req.store(true);
-                        break;
-                    }
-                } else if(parsed.kinds[i] == LINE_EMIT_MOTION) {
-                    /* G0/G1：写入 11B 运动子包（RB_PKT_MOTION） */
-                    if(!build_and_push_packet(g_w.target_rb)) {
-                        g_w.stop_req.store(true);
-                        break;
-                    }
-                    packets++;
-                }
-            }
-
-            if(g_w.stop_req.load()) {
+            if(!emit_line_parse_result(g_w.target_rb, &parsed, &packets)) {
                 break;
             }
 
@@ -522,10 +536,7 @@ static void parser_thread_fn(void)
 
     /* ---------- 解析结束清理 ---------- */
     sync_parse_progress(lines, packets);
-    {
-        JOB_LOCK();
-        g_job_status.is_parsing = false;
-    }
+    parser_set_not_parsing();
     job_status_update_ring();
     g_w.running.store(false);
 }
@@ -547,19 +558,13 @@ int gcode_open_file(const char *filepath)
     g_w.fp = fopen(filepath, "r");
     if (!g_w.fp) return -1;
 
-    /* 预读统计行数 */
-    int cnt = 0;
-    char buf[256];
-    while (fgets(buf, sizeof(buf), g_w.fp)) cnt++;
+    const int cnt = count_file_lines(g_w.fp);
     g_w.total_lines.store(cnt);
     g_w.parsed_lines.store(0);
     g_w.file_read_exhausted.store(false);
     rewind(g_w.fp);
 
-    /* 重置解析状态（与 Qt resetState 一致） */
-    g_w.x = g_w.y = g_w.z = g_w.f = 0.0f;
-    g_w.e = 0;
-    g_w.state_initialized = false;
+    reset_parser_motion_state();
     parser_load_gains_from_job();
 
     {
@@ -587,8 +592,7 @@ int gcode_open_file(const char *filepath)
 void gcode_start_parse(RingBuffer *rb)
 {
     if(!g_w.fp || !rb) {
-        JOB_LOCK();
-        g_job_status.is_parsing = false;
+        parser_set_not_parsing();
         return;
     }
     /* Always join a finished/previous thread before assigning g_w.th again */
@@ -606,6 +610,7 @@ void gcode_start_parse(RingBuffer *rb)
         g_job_status.parsed_lines = 0;
         g_job_status.total_packets = 0;
         g_job_status.sent_packets = 0;
+        job_status_ui_bump();
     }
 
     g_w.th = std::thread(parser_thread_fn);
@@ -619,21 +624,19 @@ void gcode_start_parse(RingBuffer *rb)
 void gcode_stop_parse(void)
 {
     g_w.stop_req.store(true);
-    /* Unblock parser if it is waiting on a full ring buffer */
     if(g_w.target_rb) {
         g_w.target_rb->clear();
     }
-    if (g_w.th.joinable()) {
+    if(g_w.th.joinable()) {
         g_w.th.join();
     }
     g_w.running.store(false);
-    {
-        JOB_LOCK();
-        g_job_status.is_parsing = false;
-        /* 同步最终进度：确保 UI 在解析被外部停止时也能显示已解析的行数 */
-        g_job_status.parsed_lines = g_w.parsed_lines.load();
-    }
+    JOB_LOCK();
+    g_job_status.is_parsing = false;
+    g_job_status.parsed_lines = g_w.parsed_lines.load();
+    job_status_ui_bump();
 }
+
 
 /** @return 文件总行数（gcode_open_file 时预统计） */
 int gcode_get_total_lines(void)

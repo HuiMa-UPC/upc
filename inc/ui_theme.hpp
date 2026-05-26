@@ -32,9 +32,15 @@ extern const lv_color_t ui_color_danger;
 /** 表单标签列宽（Connection / Control 对齐用） */
 #define UI_FORM_LABEL_W     120
 #define UI_FORM_LABEL2_W    96
-/** G-code 解析增益行（左对齐标签） */
-#define UI_GAIN_LABEL_W     112
-#define UI_GAIN_TA_W        220
+/** G-code Parse 三列增益同一行（适配 ~600px 内容区宽） */
+#define UI_GAIN_ROW_LABEL_W 120
+#define UI_GAIN_ROW_TA_W    130
+/** 中心点方向键（3D 打印风格 D-pad） */
+#define UI_JOG_BTN_SZ       72
+#define UI_JOG_HOME_SZ      64
+#define UI_JOG_STEP_W       100
+#define UI_JOG_STEP_BTN_H   48
+#define UI_JOG_BLOCK_MIN_H  260
 #define UI_INPUT_H          72
 #define UI_TA_IP_W          320
 #define UI_TA_SHORT_W       152
@@ -48,8 +54,12 @@ extern const lv_color_t ui_color_danger;
 #define UI_SWITCH_LABEL_W     248
 #define UI_SWITCH_W           88
 #define UI_SWITCH_H           44
-/** Settings 参数名标签列 */
-#define UI_SETTINGS_LABEL_W   168
+/** Settings 参数行高（较正文略矮，配合 ui_font_form） */
+#define UI_SETTINGS_ROW_H     56
+/** Settings 参数名标签列（容纳 LASER_START / FLY_ENABLE 等） */
+#define UI_SETTINGS_LABEL_W   208
+/** Settings 数值输入框固定宽度（不再 flex 撑满） */
+#define UI_SETTINGS_TA_W      128
 #define UI_LIST_ITEM_H        72
 #define UI_BTN_OPEN_W         256
 #define UI_BTN_ACTION_W       168
@@ -58,6 +68,8 @@ extern const lv_color_t ui_color_danger;
 void ui_theme_init(void);
 
 const lv_font_t *ui_font_body(void);
+/** Settings / 密集表单（Montserrat 24） */
+const lv_font_t *ui_font_form(void);
 const lv_font_t *ui_font_title(void);
 const lv_font_t *ui_font_icon(void);
 

@@ -75,26 +75,58 @@ int parse_tcp_response(const uint8_t *data, size_t len, tcp_response_t *resp)
     return 0;
 }
 
+static float param_block_float_le(const uint8_t *block11)
+{
+    const uint16_t lo = (uint16_t)block11[2] | ((uint16_t)block11[3] << 8);
+    const uint16_t hi = (uint16_t)block11[4] | ((uint16_t)block11[5] << 8);
+    return float_from_u16_pair(lo, hi);
+}
+
 int parse_readparam_response(const uint8_t *data, size_t len, param_set_t *out)
 {
-    if (!data || len < 81 || !out) return -1;
-    if (data[0] != 0xBE || data[1] != 0xEF || data[3] != 0x0E)
+    if(!data || len < 81 || !out) {
         return -1;
+    }
+    if(data[0] != 0xBE || data[1] != 0xEF || data[3] != 0x0E) {
+        return -1;
+    }
+    /* [2]=从 [3] 到帧尾的字节数，7×11+1=78 */
+    if(data[2] < 78) {
+        return -1;
+    }
 
-    const uint8_t *base = &data[4]; /* skip header+ID */
-    for (int obj = 0; obj < 7; obj++) {
-        const uint8_t *p = base + obj * 11;
-        uint16_t p0 = (uint16_t)p[2] | ((uint16_t)p[3] << 8);
-        uint16_t p1 = (uint16_t)p[4] | ((uint16_t)p[5] << 8);
-        switch (obj) {
-            /* 与下位机一致：线上为 a_max/1e8 的 float，UI 直接显示该值 */
-            case 0: out->a_max = float_from_u16_pair(p0, p1); break;
-            case 1: out->fly_enable = (p0 != 0); break;
-            case 2: out->fly_gain = float_from_u16_pair(p0, p1); break;
-            case 3: out->acc_enable = (p0 != 0); break;
-            case 4: out->acc_delat = float_from_u16_pair(p0, p1); break;
-            case 5: out->laser_start = (int32_t)((uint32_t)p0 | ((uint32_t)p1 << 16)); break;
-            case 6: out->laser_stop  = (int32_t)((uint32_t)p0 | ((uint32_t)p1 << 16)); break;
+    const uint8_t *base = &data[4];
+    for(int obj = 0; obj < 7; obj++) {
+        const uint8_t *block = base + obj * 11;
+        if(block[0] != 0x0E || block[1] != (uint8_t)obj) {
+            return -1;
+        }
+        const uint16_t p0 = (uint16_t)block[2] | ((uint16_t)block[3] << 8);
+        const uint16_t p1 = (uint16_t)block[4] | ((uint16_t)block[5] << 8);
+        switch(obj) {
+            case 0:
+                out->a_max = param_block_float_le(block);
+                break;
+            case 1:
+                out->fly_enable = (p0 != 0);
+                break;
+            case 2:
+                out->fly_gain = param_block_float_le(block);
+                break;
+            case 3:
+                out->acc_enable = (p0 != 0);
+                break;
+            case 4:
+                out->acc_delat = param_block_float_le(block);
+                break;
+            case 5:
+                out->laser_start = (int32_t)((uint32_t)p0 | ((uint32_t)p1 << 16));
+                break;
+            case 6:
+                out->laser_stop = (int32_t)((uint32_t)p0 | ((uint32_t)p1 << 16));
+                break;
+            default:
+                return -1;
         }
     }
     return 0;

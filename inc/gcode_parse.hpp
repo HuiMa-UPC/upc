@@ -15,6 +15,9 @@ extern "C" {
 /** 将 Control 页 Parse 增益恢复为默认值（写入 g_job_status） */
 void gcode_parse_gains_set_defaults(void);
 
+/** 当前生效的 image scale/range（CAL 使能时用 CAL 增益，否则用 Parse 增益） */
+void gcode_get_active_image_gains(float *scale_gain, float *rang_gain);
+
 #ifdef __cplusplus
 }
 #endif

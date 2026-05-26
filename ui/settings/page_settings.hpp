@@ -9,6 +9,9 @@ extern "C" {
 
 lv_obj_t *page_settings_create(lv_obj_t *parent);
 
+/** 刷新连接状态与参数表单可编辑性 */
+void page_settings_refresh(bool force);
+
 #ifdef __cplusplus
 }
 #endif

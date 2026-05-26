@@ -1,10 +1,34 @@
+/**
+ * @file job_status.cpp
+ * @brief 全局作业状态与 RingBuffer 实例，及跨模块共用的状态维护函数
+ *
+ * 本文件只负责：
+ *   - 定义 g_job_status、g_ring_buffer
+ *   - Ring 水位同步、MCU 坐标/背压、百分比与队列标签等工具实现
+ *
+ * 不负责：TCP/串口收发、G-code 解析、UI 控件（由各模块在读写 g_job_status 时协作完成）
+ */
+
 #include "job_status.hpp"
 #include "pipeline_tune.hpp"
 
+#include <atomic>
 #include <cstdio>
 
 job_status_t g_job_status;
 RingBuffer   g_ring_buffer;
+
+static std::atomic<uint32_t> s_ui_generation{0};
+
+void job_status_ui_bump(void)
+{
+    s_ui_generation.fetch_add(1U, std::memory_order_relaxed);
+}
+
+uint32_t job_status_ui_generation(void)
+{
+    return s_ui_generation.load(std::memory_order_relaxed);
+}
 
 void job_status_reset_mcu_position(void)
 {
@@ -44,6 +68,7 @@ void format_mcu_queue_rate_label(char *buf, size_t buf_size, uint16_t rate)
     }
 }
 
+/** rate 是否达到给定百分比阈值（相对 MCU_CACHE_RATE_MAX=65535） */
 static bool mcu_cmd_rate_at_least_pct(uint16_t rate, int pct)
 {
     return (uint32_t)rate * 100U >= (uint32_t)MCU_CACHE_RATE_MAX * (uint32_t)pct;
@@ -67,11 +92,13 @@ void job_status_update_ring(void)
     JOB_LOCK();
     g_job_status.ring_used     = used;
     g_job_status.ring_capacity = cap;
+    /* 发送期与预填期可用不同 Ring 暂停阈值（见 pipeline_tune.hpp） */
     const unsigned pause_pct = g_job_status.is_sending
                                    ? (unsigned)RB_PRODUCER_PAUSE_PCT
                                    : (unsigned)RB_PRELOAD_PAUSE_PCT;
     const size_t pause_pkts = (cap * pause_pct) / 100U;
     g_job_status.ring_full     = (cap > 0 && used >= pause_pkts);
+    job_status_ui_bump();
 }
 
 void job_status_sync_mcu_cmd_backpressure_locked(void)

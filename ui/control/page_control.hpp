@@ -9,6 +9,9 @@ extern "C" {
 
 lv_obj_t *page_control_create(lv_obj_t *parent);
 
+/** 刷新控件门控与作业区标签 */
+void page_control_refresh(void);
+
 #ifdef __cplusplus
 }
 #endif

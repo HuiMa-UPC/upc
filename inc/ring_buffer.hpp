@@ -44,6 +44,10 @@ public:
 
     void clear();
 
+    /** 对队列中所有 RB_PKT_MOTION 的 X/Y 施加 G-code 平面平移（实时中心偏移） */
+    void apply_motion_gcode_delta(float dx_gcode, float dy_gcode,
+                                  float image_scale_gain, float image_rang_gain);
+
 private:
     mutable std::mutex mtx;
     std::condition_variable cv_not_full;

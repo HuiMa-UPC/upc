@@ -18,13 +18,16 @@ typedef struct {
     page_factory_t factory;
 } nav_item_def_t;
 
+/** 全局 UI 刷新周期（仅刷新当前可见页） */
+static constexpr uint32_t kShellRefreshMs = 200;
+
 static const nav_item_def_t k_nav_defs[UI_PAGE_COUNT] = {
     { LV_SYMBOL_HOME,     "Home",     page_home_create },
     { LV_SYMBOL_PLAY,     "Control",  page_control_create },
     { LV_SYMBOL_FILE,     "Files",    page_files_create },
     { LV_SYMBOL_SETTINGS, "Settings", page_settings_create },
     { LV_SYMBOL_USB,      "Serial",   page_serial_create },
-    { LV_SYMBOL_WIFI,     "WiFi",      page_tcp_create },
+    { LV_SYMBOL_WIFI,     "WIFI",      page_tcp_create },
 };
 
 static lv_obj_t *g_root;
@@ -32,6 +35,32 @@ static lv_obj_t *g_sidebar;
 static lv_obj_t *g_content;
 static lv_obj_t *g_nav_btns[UI_PAGE_COUNT];
 static lv_obj_t *g_pages[UI_PAGE_COUNT];
+static ui_page_id_t g_active_page = UI_PAGE_HOME;
+
+static void shell_refresh_page(ui_page_id_t id, bool force)
+{
+    switch(id) {
+    case UI_PAGE_HOME:
+        page_home_refresh(force);
+        break;
+    case UI_PAGE_CONTROL:
+        page_control_refresh();
+        break;
+    case UI_PAGE_FILES:
+        page_files_refresh();
+        break;
+    case UI_PAGE_SETTINGS:
+        page_settings_refresh(force);
+        break;
+    default:
+        break;
+    }
+}
+
+static void shell_refresh_cb(lv_timer_t *)
+{
+    shell_refresh_page(g_active_page, false);
+}
 
 static void style_nav_btn(lv_obj_t *btn, bool active)
 {
@@ -49,6 +78,8 @@ static void show_page(ui_page_id_t id)
     /* 页面切换时隐藏键盘，避免键盘残留在新页面上 */
     ui_keyboard_hide();
 
+    g_active_page = id;
+
     for(uint32_t i = 0; i < UI_PAGE_COUNT; i++) {
         if(g_pages[i]) {
             if(i == (uint32_t)id) {
@@ -64,6 +95,7 @@ static void show_page(ui_page_id_t id)
     }
 
     page_files_set_visible(id == UI_PAGE_FILES ? 1 : 0);
+    shell_refresh_page(id, true);
 }
 
 static void nav_click_cb(lv_event_t *e)
@@ -163,6 +195,8 @@ void ui_shell_init(void)
     }
 
     show_page(UI_PAGE_HOME);
+
+    lv_timer_create(shell_refresh_cb, kShellRefreshMs, nullptr);
 
     /* 初始化全局软键盘 */
     ui_keyboard_init(scr);

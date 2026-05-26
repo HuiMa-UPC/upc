@@ -52,6 +52,10 @@ void ctrl_set_enable_layer_change(int en);
 void ctrl_set_enable_cal_apply(int en);
 int  ctrl_get_enable_cal_apply(void);
 
+/* ---------- 振镜中心点偏移（仅须 TCP 已连接；打印中可交互） ---------- */
+void ctrl_center_offset_nudge(float dx_gcode, float dy_gcode);
+void ctrl_center_offset_reset(void);
+
 /* ---------- 板参数读写 ---------- */
 void ctrl_request_read_params(void);
 /** @return 0 已下发；<0 失败（-1 未连接 TCP；-2 曾处于发送态已先 Stop） */

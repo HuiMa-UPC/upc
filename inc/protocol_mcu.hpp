@@ -8,6 +8,9 @@
 extern "C" {
 #endif
 
+/** 下位机 A_MAX 线上值为内部加速度 / 该系数（见 docs/tcp下位机 tcpServerRAW.c） */
+#define MCU_PARAM_A_MAX_SCALE  100000000.0f
+
 /* ---------- TCP 帧 ---------- */
 
 /* 构造运动帧：subpkts11 为 n 个连续 11B 子包. 返回帧总长度 */

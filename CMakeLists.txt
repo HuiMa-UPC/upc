@@ -35,6 +35,7 @@ set(APP_SOURCES
     src/protocol_mcu.cpp
     src/job_status.cpp
     src/gcode_parse.cpp
+    src/gcode_coord_map.cpp
     ui/common/page_common.cpp
     ui/common/ui_keyboard.cpp
     ui/home/page_home.cpp
@@ -46,6 +47,8 @@ set(APP_SOURCES
     ui/files/page_cal_files.cpp
     ui/settings/page_settings.cpp
     ui/serial/page_serial.cpp
+    ui/serial/mcu_protocol.cpp
+    ui/serial/serial_backend.cpp
     ui/tcpclient/page_tcpclient.cpp
 )
 

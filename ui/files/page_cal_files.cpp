@@ -263,21 +263,38 @@ static void on_cal_open_click(lv_event_t *)
     err[0] = '\0';
     const char *name = g_cal_file_list.files[g_cal_selected_idx].name;
     if(cal_load_file(name, err, sizeof(err)) != 0) {
-        ui_toast_show(err[0] ? err : "Failed to load CAL file", ui_color_danger, 2500);
+        ui_toast_show(err[0] ? err : "Failed to load CAL file", ui_color_danger, 3500);
         refresh_cal_detail();
         return;
     }
 
     g_cal_loaded_idx = g_cal_selected_idx;
-    ui_toast_show("CAL file loaded", ui_color_accent, 2000);
+
+    bool cal_has_gains = false;
+    {
+        JOB_LOCK();
+        cal_has_gains = g_job_status.cal_has_gains;
+    }
+    if(!cal_has_gains) {
+        ui_toast_show(
+            "CAL format error: need CAL,scale,range,speed row (Control cannot enable)",
+            ui_color_danger, 4500);
+    } else {
+        ui_toast_show("CAL file loaded", ui_color_accent, 2000);
+    }
     refresh_cal_detail();
 }
 
-static void cal_ui_timer_cb(lv_timer_t *)
+static void cal_ui_refresh_impl(void)
 {
     if(g_cal_selected_idx >= 0) {
         update_cal_open_button();
     }
+}
+
+void page_cal_files_refresh_ui(void)
+{
+    cal_ui_refresh_impl();
 }
 
 static void on_cal_back_click(lv_event_t *)
@@ -398,8 +415,6 @@ void page_cal_files_build(lv_obj_t *parent)
     g_cal_open_lbl = lv_label_create(g_btn_cal_open);
     lv_label_set_text(g_cal_open_lbl, LV_SYMBOL_PLAY "  Open");
     lv_obj_center(g_cal_open_lbl);
-
-    lv_timer_create(cal_ui_timer_cb, 200, nullptr);
 }
 
 void page_cal_files_refresh_list(void)

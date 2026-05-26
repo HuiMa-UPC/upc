@@ -17,6 +17,24 @@ void gcode_parse_gains_set_defaults(void)
     g_job_status.parse_speed_gain       = GCODE_DEFAULT_SPEED_GAIN;
 }
 
+void gcode_get_active_image_gains(float *scale_gain, float *rang_gain)
+{
+    if(!scale_gain && !rang_gain) {
+        return;
+    }
+    JOB_LOCK();
+    const bool use_cal = g_job_status.enable_cal_apply && g_job_status.cal_file_loaded &&
+                         g_job_status.cal_has_gains;
+    if(scale_gain) {
+        *scale_gain = use_cal ? g_job_status.cal_image_scale_gain
+                              : g_job_status.parse_image_scale_gain;
+    }
+    if(rang_gain) {
+        *rang_gain = use_cal ? g_job_status.cal_image_rang_gain
+                             : g_job_status.parse_image_rang_gain;
+    }
+}
+
 static galvo_cal_data_t g_loaded_cal;
 static std::mutex       g_cal_mtx;
 

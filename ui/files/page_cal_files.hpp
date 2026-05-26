@@ -16,6 +16,9 @@ void page_cal_files_set_back_cb(void (*cb)(void));
 /** 按当前 CAL 扫描目录重建文件列表 */
 void page_cal_files_refresh_list(void);
 
+/** 刷新 CAL 详情区 Open 按钮等轻量 UI */
+void page_cal_files_refresh_ui(void);
+
 #ifdef __cplusplus
 }
 #endif
