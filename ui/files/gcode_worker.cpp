@@ -320,24 +320,59 @@ static bool build_and_push_packet(RingBuffer *rb)
 
     float out_x = g_w.x;
     float out_y = g_w.y;
+#if GCODE_MOTION_COORD_DEBUG
+    double dbg_cal_ddx = 0.0;
+    double dbg_cal_ddy = 0.0;
+    bool   dbg_cal_ok  = false;
+#endif
     if(g_w.cal_apply && g_w.cal_data.valid) {
         double ddx = 0.0;
         double ddy = 0.0;
         if(galvo_cal_interpolate_delta(&g_w.cal_data, g_w.x, g_w.y, &ddx, &ddy)) {
+#if GCODE_MOTION_COORD_DEBUG
+            dbg_cal_ddx = ddx;
+            dbg_cal_ddy = ddy;
+            dbg_cal_ok  = true;
+#endif
             out_x = g_w.x - static_cast<float>(ddx);
             out_y = g_w.y - static_cast<float>(ddy);
         }
     }
 
+#if GCODE_MOTION_COORD_DEBUG
+    const float dbg_after_cal_x = out_x;
+    const float dbg_after_cal_y = out_y;
+#endif
+
+    float center_dx = 0.f;
+    float center_dy = 0.f;
     {
         JOB_LOCK();
-        out_x += g_job_status.center_offset_x;
-        out_y += g_job_status.center_offset_y;
+        center_dx = g_job_status.center_offset_x;
+        center_dy = g_job_status.center_offset_y;
+        out_x += center_dx;
+        out_y += center_dy;
     }
 
     const float ox = out_x * g_w.image_scale_gain;
     const float oy = out_y * g_w.image_scale_gain;
     const float oz = g_w.z * g_w.image_scale_gain;
+
+#if GCODE_MOTION_COORD_DEBUG
+    if(dbg_cal_ok) {
+        GCODE_MOTION_COORD_DBG(
+            "parse(%.4f,%.4f) cal(%.4f,%.4f) delta(%.4f,%.4f) center(%.4f,%.4f) off(%.4f,%.4f) "
+            "scale(%.4f,%.4f) scale_gain=%.4f",
+            g_w.x, g_w.y, dbg_after_cal_x, dbg_after_cal_y, dbg_cal_ddx, dbg_cal_ddy,
+            out_x, out_y, center_dx, center_dy, ox, oy, g_w.image_scale_gain);
+    } else {
+        GCODE_MOTION_COORD_DBG(
+            "parse(%.4f,%.4f) cal(%.4f,%.4f) delta(none) center(%.4f,%.4f) off(%.4f,%.4f) "
+            "scale(%.4f,%.4f) scale_gain=%.4f",
+            g_w.x, g_w.y, dbg_after_cal_x, dbg_after_cal_y,
+            out_x, out_y, center_dx, center_dy, ox, oy, g_w.image_scale_gain);
+    }
+#endif
 
     uint8_t lo = 0;
     uint8_t hi = 0;
@@ -353,6 +388,21 @@ static bool build_and_push_packet(RingBuffer *rb)
     coordinate_to_offset_bytes(oz, g_w.image_rang_gain, &lo, &hi);
     pkt.data[5] = lo;
     pkt.data[6] = hi;
+
+#if GCODE_MOTION_COORD_DEBUG
+    {
+        const uint16_t map_x = static_cast<uint16_t>(pkt.data[1]) |
+                               (static_cast<uint16_t>(pkt.data[2]) << 8);
+        const uint16_t map_y = static_cast<uint16_t>(pkt.data[3]) |
+                               (static_cast<uint16_t>(pkt.data[4]) << 8);
+        const uint16_t map_z = static_cast<uint16_t>(pkt.data[5]) |
+                               (static_cast<uint16_t>(pkt.data[6]) << 8);
+        GCODE_MOTION_COORD_DBG(
+            "mapped u16 X=%u Y=%u Z=%u rang_gain=%.4f (pre_map %.4f,%.4f,%.4f)",
+            (unsigned)map_x, (unsigned)map_y, (unsigned)map_z,
+            g_w.image_rang_gain, ox, oy, oz);
+    }
+#endif
 
     int speed_int = static_cast<int>(g_w.f * g_w.speed_gain);
     int_to_u16_bytes(speed_int, &lo, &hi);

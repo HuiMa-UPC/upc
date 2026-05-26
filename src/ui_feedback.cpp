@@ -1,6 +1,8 @@
 #include "ui_feedback.hpp"
 #include "ui_theme.hpp"
 
+#include <cstdint>
+
 static lv_obj_t *s_toast = nullptr;
 static lv_timer_t *s_toast_timer = nullptr;
 static lv_timer_t *s_toast_fade_timer = nullptr;
@@ -112,4 +114,128 @@ void ui_status_set(lv_obj_t *lbl, const char *msg, lv_color_t color)
     }
     lv_label_set_text(lbl, msg ? msg : "");
     lv_obj_set_style_text_color(lbl, color, 0);
+}
+
+void ui_action_btn_set_state(lv_obj_t *btn, bool visible, bool enabled,
+                              const lv_color_t *enabled_bg)
+{
+    if(!btn) {
+        return;
+    }
+    if(visible) {
+        lv_obj_remove_flag(btn, LV_OBJ_FLAG_HIDDEN);
+    } else {
+        lv_obj_add_flag(btn, LV_OBJ_FLAG_HIDDEN);
+    }
+    if(enabled) {
+        lv_obj_remove_state(btn, LV_STATE_DISABLED);
+        lv_obj_add_flag(btn, LV_OBJ_FLAG_CLICKABLE);
+        if(enabled_bg) {
+            lv_obj_set_style_bg_color(btn, *enabled_bg, 0);
+        }
+    } else {
+        lv_obj_add_state(btn, LV_STATE_DISABLED);
+        lv_obj_clear_flag(btn, LV_OBJ_FLAG_CLICKABLE);
+        if(enabled_bg) {
+            lv_obj_set_style_bg_color(btn, ui_color_panel_alt, 0);
+        }
+    }
+}
+
+static lv_obj_t *s_confirm_box = nullptr;
+static ui_confirm_cb s_confirm_cb = nullptr;
+static ui_confirm_cb s_cancel_cb = nullptr;
+static void *s_confirm_user = nullptr;
+
+static void confirm_dialog_finish(bool confirmed)
+{
+    ui_confirm_cb cb = confirmed ? s_confirm_cb : s_cancel_cb;
+    void *user = s_confirm_user;
+
+    s_confirm_cb = nullptr;
+    s_cancel_cb = nullptr;
+    s_confirm_user = nullptr;
+
+    if(s_confirm_box) {
+        lv_msgbox_close(s_confirm_box);
+        s_confirm_box = nullptr;
+    }
+
+    if(cb) {
+        cb(user);
+    }
+}
+
+static void confirm_btn_click_cb(lv_event_t *e)
+{
+    if(lv_event_get_code(e) != LV_EVENT_CLICKED) {
+        return;
+    }
+    const bool confirmed = lv_event_get_user_data(e) != nullptr;
+    confirm_dialog_finish(confirmed);
+}
+
+static void confirm_style_footer_btn(lv_obj_t *btn)
+{
+    lv_obj_set_size(btn, UI_CONFIRM_BTN_W, UI_CONFIRM_BTN_H);
+    lv_obj_set_style_text_font(btn, ui_font_body(), 0);
+    lv_obj_set_style_radius(btn, UI_RADIUS, 0);
+    lv_obj_set_style_pad_hor(btn, UI_PAD, 0);
+}
+
+void ui_confirm_show(const char *title, const char *message,
+                     const char *confirm_text, const char *cancel_text,
+                     ui_confirm_cb on_confirm, ui_confirm_cb on_cancel,
+                     void *user_data)
+{
+    if(s_confirm_box) {
+        lv_msgbox_close(s_confirm_box);
+        s_confirm_box = nullptr;
+    }
+
+    s_confirm_cb = on_confirm;
+    s_cancel_cb = on_cancel;
+    s_confirm_user = user_data;
+
+    s_confirm_box = lv_msgbox_create(nullptr);
+    lv_obj_set_width(s_confirm_box, UI_CONFIRM_BOX_W);
+    lv_obj_set_style_pad_all(s_confirm_box, UI_PAD, 0);
+    lv_obj_set_style_pad_row(s_confirm_box, UI_PAD_SM, 0);
+
+    lv_msgbox_add_title(s_confirm_box, title ? title : "Confirm");
+    lv_obj_t *title_lbl = lv_msgbox_get_title(s_confirm_box);
+    if(title_lbl) {
+        lv_obj_set_style_text_font(title_lbl, ui_font_title(), 0);
+    }
+
+    if(message && message[0] != '\0') {
+        lv_obj_t *txt = lv_msgbox_add_text(s_confirm_box, message);
+        lv_obj_set_style_text_font(txt, ui_font_body(), 0);
+        lv_label_set_long_mode(txt, LV_LABEL_LONG_MODE_WRAP);
+        lv_obj_set_width(txt, UI_CONFIRM_TEXT_W);
+    }
+
+    lv_obj_t *content = lv_msgbox_get_content(s_confirm_box);
+    if(content) {
+        lv_obj_set_style_pad_all(content, UI_PAD_SM, 0);
+    }
+
+    lv_obj_t *btn_cancel = lv_msgbox_add_footer_button(
+        s_confirm_box, cancel_text ? cancel_text : "Cancel");
+    confirm_style_footer_btn(btn_cancel);
+    lv_obj_add_event_cb(btn_cancel, confirm_btn_click_cb, LV_EVENT_CLICKED, nullptr);
+
+    lv_obj_t *btn_ok = lv_msgbox_add_footer_button(
+        s_confirm_box, confirm_text ? confirm_text : "OK");
+    confirm_style_footer_btn(btn_ok);
+    lv_obj_add_event_cb(btn_ok, confirm_btn_click_cb, LV_EVENT_CLICKED,
+                        reinterpret_cast<void *>(static_cast<intptr_t>(1)));
+    lv_obj_set_style_bg_color(btn_ok, ui_color_danger, 0);
+    lv_obj_set_style_bg_color(btn_ok, ui_color_danger, LV_STATE_PRESSED);
+
+    lv_obj_t *footer = lv_msgbox_get_footer(s_confirm_box);
+    if(footer) {
+        lv_obj_set_style_pad_all(footer, UI_PAD_SM, 0);
+        lv_obj_set_style_pad_column(footer, UI_PAD, 0);
+    }
 }

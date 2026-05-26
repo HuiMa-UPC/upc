@@ -17,10 +17,13 @@ static lv_obj_t *g_lbl_cal_gains = nullptr;
 static lv_obj_t *g_lbl_cal_status = nullptr;
 static lv_obj_t *g_btn_cal_open = nullptr;
 static lv_obj_t *g_cal_open_lbl = nullptr;
+static lv_obj_t *g_btn_cal_load = nullptr;
+static lv_obj_t *g_btn_cal_delete = nullptr;
 
 static gcode_file_list_t g_cal_file_list;
 static int g_cal_selected_idx = -1;
 static int g_cal_loaded_idx = -1;
+static char s_cal_delete_name[GCODE_NAME_LEN];
 static void (*s_back_cb)(void) = nullptr;
 
 void page_cal_files_set_back_cb(void (*cb)(void))
@@ -69,6 +72,49 @@ static void set_open_btn_caption(const char *caption)
     }
 }
 
+/** 当前选中 CAL 是否已通过 Open 加载 */
+static bool is_selected_cal_opened(void)
+{
+    if(g_cal_selected_idx < 0 || g_cal_selected_idx >= g_cal_file_list.count) {
+        return false;
+    }
+    const char *name = g_cal_file_list.files[g_cal_selected_idx].name;
+    bool loaded = false;
+    {
+        JOB_LOCK();
+        loaded = g_job_status.cal_file_loaded &&
+                 (strcmp(g_job_status.cal_file, name) == 0);
+    }
+    return loaded;
+}
+
+static void cal_copy_progress_cb(long done, long total, void *)
+{
+    char status[96];
+    if(total > 0) {
+        snprintf(status, sizeof(status),
+                 LV_SYMBOL_LOOP " Copying to /home/CAL: %ld%%",
+                 done * 100 / total);
+    } else {
+        snprintf(status, sizeof(status),
+                 LV_SYMBOL_LOOP " Copying to /home/CAL...");
+    }
+    ui_status_set(g_lbl_cal_status, status, ui_color_accent);
+    lv_timer_handler();
+}
+
+static void update_cal_action_buttons(void)
+{
+    const bool has_sel = (g_cal_selected_idx >= 0 && g_cal_selected_idx < g_cal_file_list.count);
+    const bool usb = (cal_get_storage_kind() == FILES_STORAGE_USB);
+    const bool locked = (ctrl_is_sending() != 0);
+    const bool opened = is_selected_cal_opened();
+    const bool enabled = has_sel && !opened && !locked;
+
+    ui_action_btn_set_state(g_btn_cal_load, usb, enabled && usb, nullptr);
+    ui_action_btn_set_state(g_btn_cal_delete, !usb, enabled && !usb, nullptr);
+}
+
 static void update_cal_list_selection(void)
 {
     const uint32_t cnt = lv_obj_get_child_count(g_cal_list);
@@ -101,9 +147,23 @@ static void update_cal_open_button(void)
     }
 }
 
+static void cal_set_io_buttons_locked(bool locked)
+{
+    if(locked) {
+        const bool usb = (cal_get_storage_kind() == FILES_STORAGE_USB);
+        ui_action_btn_set_state(g_btn_cal_load, usb, false, nullptr);
+        ui_action_btn_set_state(g_btn_cal_delete, !usb, false, nullptr);
+        set_open_btn_enabled(false);
+        return;
+    }
+    update_cal_open_button();
+    update_cal_action_buttons();
+}
+
 static void refresh_cal_detail(void)
 {
     update_cal_open_button();
+    update_cal_action_buttons();
 
     if(g_cal_selected_idx < 0 || g_cal_selected_idx >= g_cal_file_list.count) {
         lv_label_set_text(g_lbl_cal_name, "No file selected");
@@ -285,11 +345,86 @@ static void on_cal_open_click(lv_event_t *)
     refresh_cal_detail();
 }
 
+static void on_cal_load_click(lv_event_t *)
+{
+    if(g_cal_selected_idx < 0 || g_cal_selected_idx >= g_cal_file_list.count) {
+        ui_toast_show("Please select a CAL file first", ui_color_danger, 1800);
+        return;
+    }
+    if(is_selected_cal_opened()) {
+        ui_toast_show("File is open — Load unavailable", ui_color_danger, 2500);
+        return;
+    }
+
+    const char *name = g_cal_file_list.files[g_cal_selected_idx].name;
+    cal_set_io_buttons_locked(true);
+    ui_status_set(g_lbl_cal_status, LV_SYMBOL_LOOP " Copying to /home/CAL...", ui_color_accent);
+    lv_timer_handler();
+
+    char err[128];
+    err[0] = '\0';
+    const int rc = cal_copy_usb_to_local(name, err, sizeof(err),
+                                         cal_copy_progress_cb, nullptr);
+    cal_set_io_buttons_locked(false);
+    if(rc != 0) {
+        ui_toast_show(err[0] ? err : "Copy failed", ui_color_danger, 3000);
+        refresh_cal_detail();
+        return;
+    }
+
+    ui_toast_show("Copied to /home/CAL", ui_color_accent, 2200);
+    refresh_cal_detail();
+}
+
+static void cal_delete_confirmed(void *)
+{
+    const char *name = s_cal_delete_name;
+    cal_set_io_buttons_locked(true);
+    ui_status_set(g_lbl_cal_status, LV_SYMBOL_TRASH " Deleting file...", ui_color_text_dim);
+    lv_timer_handler();
+
+    char err[128];
+    err[0] = '\0';
+    const int rc = cal_delete_local_file(name, err, sizeof(err));
+    cal_set_io_buttons_locked(false);
+    if(rc != 0) {
+        ui_toast_show(err[0] ? err : "Delete failed", ui_color_danger, 3000);
+        refresh_cal_detail();
+        return;
+    }
+
+    ui_toast_show("File deleted", ui_color_accent, 1800);
+    rebuild_cal_file_list_ui();
+}
+
+static void on_cal_delete_click(lv_event_t *)
+{
+    if(g_cal_selected_idx < 0 || g_cal_selected_idx >= g_cal_file_list.count) {
+        ui_toast_show("Please select a CAL file first", ui_color_danger, 1800);
+        return;
+    }
+    if(ctrl_is_sending() || is_selected_cal_opened()) {
+        ui_toast_show(ctrl_is_sending()
+                          ? "Stop the job before deleting"
+                          : "File is open — Delete unavailable",
+                      ui_color_danger, 2500);
+        return;
+    }
+
+    const char *name = g_cal_file_list.files[g_cal_selected_idx].name;
+    snprintf(s_cal_delete_name, sizeof(s_cal_delete_name), "%s", name);
+
+    char msg[320];
+    snprintf(msg, sizeof(msg),
+             "Delete \"%s\"?\nThis action cannot be undone.", name);
+    ui_confirm_show("Delete file", msg, "Delete", "Cancel",
+                    cal_delete_confirmed, nullptr, nullptr);
+}
+
 static void cal_ui_refresh_impl(void)
 {
-    if(g_cal_selected_idx >= 0) {
-        update_cal_open_button();
-    }
+    update_cal_open_button();
+    update_cal_action_buttons();
 }
 
 void page_cal_files_refresh_ui(void)
@@ -409,12 +544,31 @@ void page_cal_files_build(lv_obj_t *parent)
     lv_obj_set_style_pad_column(btn_row, UI_PAD_SM, 0);
 
     g_btn_cal_open = lv_button_create(btn_row);
-    lv_obj_set_size(g_btn_cal_open, UI_BTN_OPEN_W, UI_INPUT_H);
+    lv_obj_set_size(g_btn_cal_open, UI_BTN_JOB_W, UI_INPUT_H);
     lv_obj_add_style(g_btn_cal_open, ui_style_btn_primary(), 0);
     lv_obj_add_event_cb(g_btn_cal_open, on_cal_open_click, LV_EVENT_CLICKED, NULL);
     g_cal_open_lbl = lv_label_create(g_btn_cal_open);
     lv_label_set_text(g_cal_open_lbl, LV_SYMBOL_PLAY "  Open");
     lv_obj_center(g_cal_open_lbl);
+
+    g_btn_cal_load = lv_button_create(btn_row);
+    lv_obj_set_size(g_btn_cal_load, UI_BTN_JOB_W, UI_INPUT_H);
+    lv_obj_add_style(g_btn_cal_load, ui_style_btn_primary(), 0);
+    lv_obj_add_event_cb(g_btn_cal_load, on_cal_load_click, LV_EVENT_CLICKED, NULL);
+    lv_obj_t *load_lbl = lv_label_create(g_btn_cal_load);
+    lv_label_set_text(load_lbl, LV_SYMBOL_DOWNLOAD "  Load");
+    lv_obj_center(load_lbl);
+    lv_obj_add_flag(g_btn_cal_load, LV_OBJ_FLAG_HIDDEN);
+
+    g_btn_cal_delete = lv_button_create(btn_row);
+    lv_obj_set_size(g_btn_cal_delete, UI_BTN_JOB_W, UI_INPUT_H);
+    lv_obj_add_style(g_btn_cal_delete, ui_style_btn_primary(), 0);
+    lv_obj_add_event_cb(g_btn_cal_delete, on_cal_delete_click, LV_EVENT_CLICKED, NULL);
+    lv_obj_set_style_bg_color(g_btn_cal_delete, ui_color_danger, LV_STATE_PRESSED);
+    lv_obj_t *delete_lbl = lv_label_create(g_btn_cal_delete);
+    lv_label_set_text(delete_lbl, LV_SYMBOL_TRASH "  Delete");
+    lv_obj_center(delete_lbl);
+    lv_obj_add_flag(g_btn_cal_delete, LV_OBJ_FLAG_HIDDEN);
 }
 
 void page_cal_files_refresh_list(void)

@@ -2,7 +2,6 @@
 #include "protocol_mcu.hpp"
 #include "job_status.hpp"
 #include "gcode_parse.hpp"
-#include "gcode_coord_map.hpp"
 #include "gcode_worker.hpp"
 #include "page_files.hpp"
 #include "pipeline_tune.hpp"
@@ -185,31 +184,6 @@ static void tcp_stage_clear(void)
 {
     std::lock_guard<std::mutex> lock(s_tcp_stage_mtx);
     s_tcp_stage.clear();
-}
-
-static void tcp_stage_apply_motion_gcode_delta(float dx_gcode, float dy_gcode,
-                                               float image_scale_gain, float image_rang_gain)
-{
-    if(dx_gcode == 0.f && dy_gcode == 0.f) {
-        return;
-    }
-
-    std::lock_guard<std::mutex> lock(s_tcp_stage_mtx);
-    for(rb_packet_t &pkt : s_tcp_stage) {
-        if(pkt.type == RB_PKT_MOTION) {
-            gcode_motion_packet_nudge_gcode(&pkt, dx_gcode, dy_gcode, image_scale_gain,
-                                            image_rang_gain);
-        }
-    }
-}
-
-static void center_offset_apply_delta_to_queues(float dx_gcode, float dy_gcode,
-                                                float scale_gain, float rang_gain)
-{
-    if(s_rb) {
-        s_rb->apply_motion_gcode_delta(dx_gcode, dy_gcode, scale_gain, rang_gain);
-    }
-    tcp_stage_apply_motion_gcode_delta(dx_gcode, dy_gcode, scale_gain, rang_gain);
 }
 
 /** @return Stage 队列当前包数（线程安全） */
@@ -661,6 +635,27 @@ static void ctrl_prefill_gcode_ring(void)
     /* 可能 join 解析线程，且 notify 会触发 Files 页 JOB_LOCK；调用方勿持 JOB_LOCK */
     gcode_start_parse(s_rb);
     page_files_notify_parse_restarted();
+}
+
+/**
+ * @brief 空闲态下从头重新解析当前 G-code（清空 Stage，重启解析线程）
+ *
+ * 用于校准使能切换、Parse 增益变更等需重建 Ring 内容的场景。
+ */
+void ctrl_reparse_gcode(void)
+{
+    if(!s_rb || s_tcp_fd < 0) {
+        return;
+    }
+    if(s_is_sending.load() || s_start_pending.load()) {
+        return;
+    }
+    if(!gcode_is_file_open()) {
+        return;
+    }
+
+    tcp_stage_clear();
+    ctrl_prefill_gcode_ring();
 }
 
 /** 真正进入发送态（假定 Ring 已 ≥ 一批） */
@@ -1236,21 +1231,18 @@ void ctrl_center_offset_nudge(float dx_gcode, float dy_gcode)
     if(s_tcp_fd < 0) {
         return;
     }
+    if(s_is_sending.load() || s_start_pending.load()) {
+        return;
+    }
     if(dx_gcode == 0.f && dy_gcode == 0.f) {
         return;
     }
-
-    float scale_gain = 0.f;
-    float rang_gain  = 0.f;
-    gcode_get_active_image_gains(&scale_gain, &rang_gain);
 
     {
         JOB_LOCK();
         g_job_status.center_offset_x += dx_gcode;
         g_job_status.center_offset_y += dy_gcode;
     }
-
-    center_offset_apply_delta_to_queues(dx_gcode, dy_gcode, scale_gain, rang_gain);
     ctrl_notify_ui();
 }
 
@@ -1259,24 +1251,14 @@ void ctrl_center_offset_reset(void)
     if(s_tcp_fd < 0) {
         return;
     }
-
-    float dx_back = 0.f;
-    float dy_back = 0.f;
-    float scale_gain = 0.f;
-    float rang_gain  = 0.f;
+    if(s_is_sending.load() || s_start_pending.load()) {
+        return;
+    }
 
     {
         JOB_LOCK();
-        dx_back = -g_job_status.center_offset_x;
-        dy_back = -g_job_status.center_offset_y;
         g_job_status.center_offset_x = 0.f;
         g_job_status.center_offset_y = 0.f;
-    }
-
-    gcode_get_active_image_gains(&scale_gain, &rang_gain);
-
-    if(dx_back != 0.f || dy_back != 0.f) {
-        center_offset_apply_delta_to_queues(dx_back, dy_back, scale_gain, rang_gain);
     }
     ctrl_notify_ui();
 }

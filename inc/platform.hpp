@@ -4,7 +4,7 @@
 #include "lvgl_wrap.hpp"
 
 #ifndef PLATFORM_TOUCH_DEVICE
-#define PLATFORM_TOUCH_DEVICE "/dev/input/event2"
+#define PLATFORM_TOUCH_DEVICE "/dev/input/event5"
 #endif
 
 /** 显示旋转：LV_DISPLAY_ROTATION_0 / _90 / _180 / _270（见 platform.cpp） */

@@ -3,6 +3,7 @@
 #include "job_status.hpp"
 
 #include <dirent.h>
+#include <errno.h>
 #include <sys/stat.h>
 #include <unistd.h>
 #include <strings.h>
@@ -32,9 +33,161 @@ void galva_set_storage_kind(files_storage_kind_t kind)
     s_gcode_storage = kind;
 }
 
+files_storage_kind_t galva_get_storage_kind(void)
+{
+    return s_gcode_storage;
+}
+
 void cal_set_storage_kind(files_storage_kind_t kind)
 {
     s_cal_storage = kind;
+}
+
+files_storage_kind_t cal_get_storage_kind(void)
+{
+    return s_cal_storage;
+}
+
+static bool is_safe_basename(const char *name)
+{
+    if(!name || name[0] == '\0') {
+        return false;
+    }
+    if(strchr(name, '/') != nullptr || strstr(name, "..") != nullptr) {
+        return false;
+    }
+    return true;
+}
+
+static int ensure_dir_exists(const char *path)
+{
+    struct stat st;
+    if(stat(path, &st) == 0) {
+        return S_ISDIR(st.st_mode) ? 0 : -1;
+    }
+    return mkdir(path, 0755) == 0 ? 0 : -1;
+}
+
+static int copy_file_overwrite(const char *src, const char *dst,
+                               files_copy_progress_cb progress, void *progress_user,
+                               char *err, size_t err_size)
+{
+    struct stat st;
+    long total = 0;
+    if(stat(src, &st) == 0 && S_ISREG(st.st_mode)) {
+        total = (long)st.st_size;
+    }
+
+    FILE *in = fopen(src, "rb");
+    if(!in) {
+        if(err && err_size > 0) {
+            snprintf(err, err_size, "cannot read source: %s", strerror(errno));
+        }
+        return -1;
+    }
+
+    FILE *out = fopen(dst, "wb");
+    if(!out) {
+        fclose(in);
+        if(err && err_size > 0) {
+            snprintf(err, err_size, "cannot write destination: %s", strerror(errno));
+        }
+        return -1;
+    }
+
+    if(progress) {
+        progress(0, total, progress_user);
+    }
+
+    char buf[8192];
+    size_t n;
+    long done = 0;
+    while((n = fread(buf, 1, sizeof(buf), in)) > 0) {
+        if(fwrite(buf, 1, n, out) != n) {
+            fclose(in);
+            fclose(out);
+            if(err && err_size > 0) {
+                snprintf(err, err_size, "write failed: %s", strerror(errno));
+            }
+            return -1;
+        }
+        done += (long)n;
+        if(progress) {
+            progress(done, total, progress_user);
+        }
+    }
+    if(ferror(in)) {
+        fclose(in);
+        fclose(out);
+        if(err && err_size > 0) {
+            snprintf(err, err_size, "read failed: %s", strerror(errno));
+        }
+        return -1;
+    }
+
+    fclose(in);
+    fclose(out);
+    if(progress && total > 0) {
+        progress(total, total, progress_user);
+    }
+    return 0;
+}
+
+static int copy_usb_to_local_dir(const char *filename, const char *local_dir,
+                                 files_copy_progress_cb progress, void *progress_user,
+                                 char *err, size_t err_size)
+{
+    if(!is_safe_basename(filename)) {
+        if(err && err_size > 0) {
+            snprintf(err, err_size, "invalid file name");
+        }
+        return -1;
+    }
+    if(ensure_dir_exists(local_dir) != 0) {
+        if(err && err_size > 0) {
+            snprintf(err, err_size, "cannot create %s", local_dir);
+        }
+        return -1;
+    }
+
+    char src[512];
+    char dst[512];
+    if(snprintf(src, sizeof(src), "%s/%s", USB_DIR, filename) >= (int)sizeof(src) ||
+       snprintf(dst, sizeof(dst), "%s/%s", local_dir, filename) >= (int)sizeof(dst)) {
+        if(err && err_size > 0) {
+            snprintf(err, err_size, "path too long");
+        }
+        return -1;
+    }
+
+    return copy_file_overwrite(src, dst, progress, progress_user, err, err_size);
+}
+
+static int delete_local_dir_file(const char *filename, const char *local_dir,
+                                 char *err, size_t err_size)
+{
+    if(!is_safe_basename(filename)) {
+        if(err && err_size > 0) {
+            snprintf(err, err_size, "invalid file name");
+        }
+        return -1;
+    }
+
+    char path[512];
+    if(snprintf(path, sizeof(path), "%s/%s", local_dir, filename) >= (int)sizeof(path)) {
+        if(err && err_size > 0) {
+            snprintf(err, err_size, "path too long");
+        }
+        return -1;
+    }
+
+    if(unlink(path) != 0) {
+        if(err && err_size > 0) {
+            snprintf(err, err_size, "delete failed: %s", strerror(errno));
+        }
+        return -1;
+    }
+    return 0;
 }
 
 static bool has_gcode_ext(const char *name)
@@ -170,4 +323,52 @@ int cal_load_file(const char *filename, char *err, size_t err_size)
         g_job_status.enable_cal_apply = false;
     }
     return 0;
+}
+
+int galva_copy_usb_to_local(const char *filename, char *err, size_t err_size,
+                            files_copy_progress_cb progress, void *progress_user)
+{
+    if(s_gcode_storage != FILES_STORAGE_USB) {
+        if(err && err_size > 0) {
+            snprintf(err, err_size, "Load is only available on USB view");
+        }
+        return -1;
+    }
+    return copy_usb_to_local_dir(filename, GCODE_DIR_LOCAL, progress, progress_user,
+                                 err, err_size);
+}
+
+int cal_copy_usb_to_local(const char *filename, char *err, size_t err_size,
+                          files_copy_progress_cb progress, void *progress_user)
+{
+    if(s_cal_storage != FILES_STORAGE_USB) {
+        if(err && err_size > 0) {
+            snprintf(err, err_size, "Load is only available on USB view");
+        }
+        return -1;
+    }
+    return copy_usb_to_local_dir(filename, CAL_DIR_LOCAL, progress, progress_user,
+                                 err, err_size);
+}
+
+int galva_delete_local_file(const char *filename, char *err, size_t err_size)
+{
+    if(s_gcode_storage != FILES_STORAGE_LOCAL) {
+        if(err && err_size > 0) {
+            snprintf(err, err_size, "Delete is only available on local view");
+        }
+        return -1;
+    }
+    return delete_local_dir_file(filename, GCODE_DIR_LOCAL, err, err_size);
+}
+
+int cal_delete_local_file(const char *filename, char *err, size_t err_size)
+{
+    if(s_cal_storage != FILES_STORAGE_LOCAL) {
+        if(err && err_size > 0) {
+            snprintf(err, err_size, "Delete is only available on local view");
+        }
+        return -1;
+    }
+    return delete_local_dir_file(filename, CAL_DIR_LOCAL, err, err_size);
 }

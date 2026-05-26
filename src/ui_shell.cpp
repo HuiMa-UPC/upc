@@ -36,6 +36,118 @@ static lv_obj_t *g_content;
 static lv_obj_t *g_nav_btns[UI_PAGE_COUNT];
 static lv_obj_t *g_pages[UI_PAGE_COUNT];
 static ui_page_id_t g_active_page = UI_PAGE_HOME;
+static bool g_page_transition_running = false;
+static lv_obj_t *g_anim_out_page = nullptr;
+static lv_obj_t *g_anim_in_page = nullptr;
+
+static void shell_refresh_page(ui_page_id_t id, bool force);
+static void style_nav_btn(lv_obj_t *btn, bool active);
+
+static void page_anim_set_opa(void *obj, int32_t v)
+{
+    lv_obj_set_style_opa(static_cast<lv_obj_t *>(obj), static_cast<lv_opa_t>(v), 0);
+}
+
+static void page_anim_set_x(void *obj, int32_t v)
+{
+    lv_obj_set_style_translate_x(static_cast<lv_obj_t *>(obj), v, 0);
+}
+
+static void page_reset_visual(lv_obj_t *page)
+{
+    if(!page) {
+        return;
+    }
+    lv_obj_set_style_opa(page, LV_OPA_COVER, 0);
+    lv_obj_set_style_translate_x(page, 0, 0);
+}
+
+static void page_transition_complete(lv_anim_t *)
+{
+    if(g_anim_out_page) {
+        lv_obj_add_flag(g_anim_out_page, LV_OBJ_FLAG_HIDDEN);
+        page_reset_visual(g_anim_out_page);
+        g_anim_out_page = nullptr;
+    }
+    if(g_anim_in_page) {
+        page_reset_visual(g_anim_in_page);
+        g_anim_in_page = nullptr;
+    }
+    g_page_transition_running = false;
+    shell_refresh_page(g_active_page, true);
+}
+
+static void page_show_instant(ui_page_id_t id)
+{
+    g_active_page = id;
+
+    for(uint32_t i = 0; i < UI_PAGE_COUNT; i++) {
+        if(g_pages[i]) {
+            if(i == (uint32_t)id) {
+                page_reset_visual(g_pages[i]);
+                lv_obj_clear_flag(g_pages[i], LV_OBJ_FLAG_HIDDEN);
+            } else {
+                lv_obj_add_flag(g_pages[i], LV_OBJ_FLAG_HIDDEN);
+                page_reset_visual(g_pages[i]);
+            }
+        }
+        if(g_nav_btns[i]) {
+            style_nav_btn(g_nav_btns[i], i == (uint32_t)id);
+        }
+    }
+
+    page_files_set_visible(id == UI_PAGE_FILES ? 1 : 0);
+    shell_refresh_page(id, true);
+}
+
+static void page_transition(ui_page_id_t from, ui_page_id_t to)
+{
+    lv_obj_t *out_page = g_pages[from];
+    lv_obj_t *in_page = g_pages[to];
+    if(!out_page || !in_page) {
+        page_show_instant(to);
+        return;
+    }
+
+    g_page_transition_running = true;
+    g_anim_out_page = out_page;
+    g_anim_in_page = in_page;
+
+    page_files_set_visible(to == UI_PAGE_FILES ? 1 : 0);
+
+    lv_obj_clear_flag(in_page, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_style_opa(in_page, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_translate_x(in_page, UI_PAGE_ANIM_SLIDE, 0);
+    lv_obj_move_foreground(in_page);
+
+    lv_anim_t a_out;
+    lv_anim_init(&a_out);
+    lv_anim_set_var(&a_out, out_page);
+    lv_anim_set_exec_cb(&a_out, page_anim_set_opa);
+    lv_anim_set_values(&a_out, LV_OPA_COVER, LV_OPA_TRANSP);
+    lv_anim_set_duration(&a_out, UI_PAGE_ANIM_MS);
+    lv_anim_set_path_cb(&a_out, lv_anim_path_ease_in);
+    lv_anim_start(&a_out);
+
+    lv_anim_t a_in_opa;
+    lv_anim_init(&a_in_opa);
+    lv_anim_set_var(&a_in_opa, in_page);
+    lv_anim_set_exec_cb(&a_in_opa, page_anim_set_opa);
+    lv_anim_set_values(&a_in_opa, LV_OPA_TRANSP, LV_OPA_COVER);
+    lv_anim_set_duration(&a_in_opa, UI_PAGE_ANIM_MS);
+    lv_anim_set_path_cb(&a_in_opa, lv_anim_path_ease_out);
+    lv_anim_start(&a_in_opa);
+
+    lv_anim_t a_in_x;
+    lv_anim_init(&a_in_x);
+    lv_anim_set_var(&a_in_x, in_page);
+    lv_anim_set_exec_cb(&a_in_x, page_anim_set_x);
+    lv_anim_set_values(&a_in_x, UI_PAGE_ANIM_SLIDE, 0);
+    lv_anim_set_duration(&a_in_x, UI_PAGE_ANIM_MS);
+    lv_anim_set_path_cb(&a_in_x, lv_anim_path_ease_out);
+    lv_anim_set_completed_cb(&a_in_x, page_transition_complete);
+    lv_anim_start(&a_in_x);
+}
 
 static void shell_refresh_page(ui_page_id_t id, bool force)
 {
@@ -59,6 +171,9 @@ static void shell_refresh_page(ui_page_id_t id, bool force)
 
 static void shell_refresh_cb(lv_timer_t *)
 {
+    if(g_page_transition_running) {
+        return;
+    }
     shell_refresh_page(g_active_page, false);
 }
 
@@ -69,39 +184,40 @@ static void style_nav_btn(lv_obj_t *btn, bool active)
     lv_obj_add_style(btn, active ? ui_style_nav_item_active() : ui_style_nav_item(), 0);
 }
 
-static void show_page(ui_page_id_t id)
+static void show_page(ui_page_id_t id, bool instant)
 {
     if(id >= UI_PAGE_COUNT) {
         return;
     }
+    if(g_page_transition_running) {
+        return;
+    }
+    if(id == g_active_page && !instant) {
+        return;
+    }
 
-    /* 页面切换时隐藏键盘，避免键盘残留在新页面上 */
     ui_keyboard_hide();
 
-    g_active_page = id;
-
     for(uint32_t i = 0; i < UI_PAGE_COUNT; i++) {
-        if(g_pages[i]) {
-            if(i == (uint32_t)id) {
-                lv_obj_clear_flag(g_pages[i], LV_OBJ_FLAG_HIDDEN);
-            }
-            else {
-                lv_obj_add_flag(g_pages[i], LV_OBJ_FLAG_HIDDEN);
-            }
-        }
         if(g_nav_btns[i]) {
             style_nav_btn(g_nav_btns[i], i == (uint32_t)id);
         }
     }
 
-    page_files_set_visible(id == UI_PAGE_FILES ? 1 : 0);
-    shell_refresh_page(id, true);
+    if(instant) {
+        page_show_instant(id);
+        return;
+    }
+
+    const ui_page_id_t from = g_active_page;
+    g_active_page = id;
+    page_transition(from, id);
 }
 
 static void nav_click_cb(lv_event_t *e)
 {
     ui_page_id_t id = (ui_page_id_t)(uintptr_t)lv_event_get_user_data(e);
-    show_page(id);
+    show_page(id, false);
 }
 
 static lv_obj_t *make_nav_button(lv_obj_t *parent, const nav_item_def_t *def, ui_page_id_t id)
@@ -194,7 +310,7 @@ void ui_shell_init(void)
         }
     }
 
-    show_page(UI_PAGE_HOME);
+    show_page(UI_PAGE_HOME, true);
 
     lv_timer_create(shell_refresh_cb, kShellRefreshMs, nullptr);
 

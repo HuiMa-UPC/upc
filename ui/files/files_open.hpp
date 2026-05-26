@@ -25,11 +25,16 @@ typedef enum {
     FILES_STORAGE_USB   = 1,
 } files_storage_kind_t;
 
+/** 文件拷贝进度回调（done/total 字节数） */
+typedef void (*files_copy_progress_cb)(long done_bytes, long total_bytes, void *user_data);
+
 /** G-code：本机 /home/Gcode，U 盘 /media/udisk0 */
 void galva_set_storage_kind(files_storage_kind_t kind);
+files_storage_kind_t galva_get_storage_kind(void);
 
 /** CAL：本机 /home/CAL，U 盘 /media/udisk0 */
 void cal_set_storage_kind(files_storage_kind_t kind);
+files_storage_kind_t cal_get_storage_kind(void);
 
 /** 扫描当前 G-code 目录，过滤 .gcode/.nc/.txt */
 int galva_scan_files(gcode_file_list_t *out_list);
@@ -48,6 +53,20 @@ int cal_build_full_path(const char *filename, char *out, size_t out_size);
  * @return 0 成功，-1 失败（err 可选）
  */
 int cal_load_file(const char *filename, char *err, size_t err_size);
+
+/** U 盘 G-code 拷贝到 /home/Gcode，同名覆盖 */
+int galva_copy_usb_to_local(const char *filename, char *err, size_t err_size,
+                            files_copy_progress_cb progress, void *progress_user);
+
+/** U 盘 CAL 拷贝到 /home/CAL，同名覆盖 */
+int cal_copy_usb_to_local(const char *filename, char *err, size_t err_size,
+                          files_copy_progress_cb progress, void *progress_user);
+
+/** 删除本机 G-code 目录中的文件（仅 LOCAL 视图） */
+int galva_delete_local_file(const char *filename, char *err, size_t err_size);
+
+/** 删除本机 CAL 目录中的文件（仅 LOCAL 视图） */
+int cal_delete_local_file(const char *filename, char *err, size_t err_size);
 
 #ifdef __cplusplus
 }

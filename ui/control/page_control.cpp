@@ -4,6 +4,7 @@
 #include "gcode_parse.hpp"
 #include "ui_theme.hpp"
 #include "ui_keyboard.hpp"
+#include "ui_feedback.hpp"
 #include "page_common.hpp"
 
 #include <cstdint>
@@ -50,6 +51,9 @@ enum {
 };
 
 static lv_obj_t *g_jog_widgets[JOG_W_COUNT] = {};
+static lv_obj_t *g_lbl_center_off_x = nullptr;
+static lv_obj_t *g_lbl_center_off_y = nullptr;
+static lv_obj_t *g_btn_center_enable = nullptr;
 
 static float g_jog_step = 1.f;
 static const float k_jog_steps[] = {0.01f, 0.1f, 1.f, 10.f};
@@ -398,9 +402,12 @@ static void sync_layer_switch_interactive(bool serial_connected, bool is_sending
 static void on_cal_sw(lv_event_t *e)
 {
     lv_obj_t *sw = static_cast<lv_obj_t *>(lv_event_get_target(e));
+    const int want_en = lv_obj_has_state(sw, LV_STATE_CHECKED) ? 1 : 0;
+
     if(!ctrl_tcp_is_connected()) {
         lv_obj_remove_state(sw, LV_STATE_CHECKED);
         ctrl_set_enable_cal_apply(0);
+        ui_toast_show("TCP not connected", ui_color_danger, 2000);
         return;
     }
     bool cal_loaded = false;
@@ -413,9 +420,41 @@ static void on_cal_sw(lv_event_t *e)
     if(!cal_loaded || !cal_has_gains) {
         lv_obj_remove_state(sw, LV_STATE_CHECKED);
         ctrl_set_enable_cal_apply(0);
+        ui_toast_show("Load valid CAL file first (need CAL,scale,range,speed)",
+                      ui_color_danger, 4000);
         return;
     }
-    ctrl_set_enable_cal_apply(lv_obj_has_state(sw, LV_STATE_CHECKED) ? 1 : 0);
+    if(ctrl_is_sending() || ctrl_is_start_pending()) {
+        if(want_en) {
+            lv_obj_remove_state(sw, LV_STATE_CHECKED);
+        } else {
+            lv_obj_add_state(sw, LV_STATE_CHECKED);
+        }
+        ui_toast_show("Stop the job before changing calibration", ui_color_danger, 2500);
+        return;
+    }
+    bool has_file = false;
+    {
+        JOB_LOCK();
+        has_file = (g_job_status.current_file[0] != '\0');
+    }
+    if(!has_file) {
+        if(want_en) {
+            lv_obj_remove_state(sw, LV_STATE_CHECKED);
+        } else {
+            lv_obj_add_state(sw, LV_STATE_CHECKED);
+        }
+        ui_toast_show("Open G-code first", ui_color_danger, 2000);
+        return;
+    }
+
+    ctrl_set_enable_cal_apply(want_en);
+    ctrl_reparse_gcode();
+    if(want_en) {
+        ui_toast_show("Calibration enabled, re-parsing G-code", ui_color_accent, 2500);
+    } else {
+        ui_toast_show("Calibration disabled, re-parsing G-code", ui_color_accent, 2500);
+    }
 }
 
 static void sync_cal_switch_interactive(bool tcp_connected, bool cal_loaded,
@@ -602,6 +641,24 @@ static void on_jog_home(lv_event_t *)
     ctrl_center_offset_reset();
 }
 
+static void on_center_offset_enable(lv_event_t *)
+{
+    if(ctrl_is_sending() || ctrl_is_start_pending()) {
+        return;
+    }
+    bool has_file = false;
+    {
+        JOB_LOCK();
+        has_file = (g_job_status.current_file[0] != '\0');
+    }
+    if(!has_file) {
+        ui_toast_show("Open G-code first", ui_color_danger, 2000);
+        return;
+    }
+    ctrl_reparse_gcode();
+    ui_toast_show("Re-parsing G-code", ui_color_accent, 2000);
+}
+
 static void on_jog_step_click(lv_event_t *e)
 {
     const int idx = static_cast<int>(reinterpret_cast<intptr_t>(lv_event_get_user_data(e)));
@@ -622,12 +679,25 @@ static void on_jog_step_click(lv_event_t *e)
     }
 }
 
-static void sync_jog_interactive(bool tcp_connected)
+static void sync_jog_interactive(bool can_edit)
 {
     for(int i = 0; i < JOG_W_COUNT; ++i) {
         if(g_jog_widgets[i]) {
-            set_obj_enabled(g_jog_widgets[i], tcp_connected);
+            set_obj_enabled(g_jog_widgets[i], can_edit);
         }
+    }
+}
+
+static void sync_center_offset_panel(bool can_enable, float off_x, float off_y)
+{
+    if(g_lbl_center_off_x) {
+        lv_label_set_text_fmt(g_lbl_center_off_x, "X: %.3f", off_x);
+    }
+    if(g_lbl_center_off_y) {
+        lv_label_set_text_fmt(g_lbl_center_off_y, "Y: %.3f", off_y);
+    }
+    if(g_btn_center_enable) {
+        set_obj_enabled(g_btn_center_enable, can_enable);
     }
 }
 
@@ -656,6 +726,26 @@ static void make_center_jog_panel(lv_obj_t *parent)
 
     const lv_coord_t gap = UI_PAD_SM;
     const lv_coord_t dpad_w = UI_JOG_BTN_SZ * 3 + gap * 2;
+
+    lv_obj_t *offset_col = lv_obj_create(jog_block);
+    lv_obj_remove_style_all(offset_col);
+    lv_obj_set_width(offset_col, UI_FORM_LABEL2_W + UI_JOG_STEP_W);
+    lv_obj_set_height(offset_col, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(offset_col, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(offset_col, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER,
+                          LV_FLEX_ALIGN_START);
+    lv_obj_set_style_pad_row(offset_col, UI_PAD_SM, 0);
+    lv_obj_clear_flag(offset_col, LV_OBJ_FLAG_SCROLLABLE);
+
+    g_lbl_center_off_x = lv_label_create(offset_col);
+    lv_label_set_text(g_lbl_center_off_x, "X: 0.000");
+    lv_obj_set_style_text_color(g_lbl_center_off_x, ui_color_text, 0);
+    lv_obj_set_width(g_lbl_center_off_x, LV_PCT(100));
+
+    g_lbl_center_off_y = lv_label_create(offset_col);
+    lv_label_set_text(g_lbl_center_off_y, "Y: 0.000");
+    lv_obj_set_style_text_color(g_lbl_center_off_y, ui_color_text, 0);
+    lv_obj_set_width(g_lbl_center_off_y, LV_PCT(100));
 
     lv_obj_t *dpad = lv_obj_create(jog_block);
     lv_obj_remove_style_all(dpad);
@@ -716,12 +806,40 @@ static void make_center_jog_panel(lv_obj_t *parent)
     }
 }
 
+/** G-code Parse 底行：左侧 Calibration 开关，右侧 Enable（应用中心偏移并重解析） */
+static void make_parse_cal_enable_row(lv_obj_t *parent)
+{
+    lv_obj_t *row = make_control_flex_row(parent, UI_PAD_SM);
+    make_form_label(row, "Calibration:", UI_SWITCH_LABEL_W, LV_TEXT_ALIGN_LEFT);
+    g_sw_cal = lv_switch_create(row);
+    ui_theme_apply_switch(g_sw_cal);
+    lv_obj_add_event_cb(g_sw_cal, on_cal_sw, LV_EVENT_VALUE_CHANGED, nullptr);
+
+    lv_obj_t *fill = lv_obj_create(row);
+    lv_obj_remove_style_all(fill);
+    lv_obj_set_height(fill, 1);
+    lv_obj_set_flex_grow(fill, 1);
+    lv_obj_clear_flag(fill, LV_OBJ_FLAG_CLICKABLE);
+
+    g_btn_center_enable = lv_button_create(row);
+    lv_obj_set_size(g_btn_center_enable, UI_BTN_JOB_W, UI_JOG_STEP_BTN_H);
+    lv_obj_add_style(g_btn_center_enable, ui_style_btn_primary(), 0);
+    lv_obj_add_event_cb(g_btn_center_enable, on_center_offset_enable, LV_EVENT_CLICKED, nullptr);
+    lv_obj_t *enable_lbl = lv_label_create(g_btn_center_enable);
+    if(enable_lbl) {
+        lv_label_set_text(enable_lbl, "Enable");
+        lv_obj_center(enable_lbl);
+    }
+}
+
 static void page_control_refresh_impl(void)
 {
     char file_name[256];
     bool tcp_connected;
     bool is_sending, is_paused;
     bool cal_loaded, cal_enabled, cal_has_gains;
+    float center_off_x = 0.f;
+    float center_off_y = 0.f;
 
     {
         JOB_LOCK();
@@ -731,12 +849,19 @@ static void page_control_refresh_impl(void)
         cal_loaded      = g_job_status.cal_file_loaded;
         cal_enabled     = g_job_status.enable_cal_apply;
         cal_has_gains   = g_job_status.cal_has_gains;
+        center_off_x    = g_job_status.center_offset_x;
+        center_off_y    = g_job_status.center_offset_y;
     }
 
     is_sending = ctrl_is_sending() != 0;
     is_paused  = ctrl_is_paused() != 0;
     const bool start_pending    = ctrl_is_start_pending() != 0;
     const bool serial_connected = ctrl_serial_is_open() != 0;
+    const bool offset_idle      = !is_sending && !start_pending;
+    const bool has_gcode_file   = (file_name[0] != '\0');
+
+    sync_center_offset_panel(tcp_connected && offset_idle && has_gcode_file,
+                             center_off_x, center_off_y);
 
     lv_label_set_text_fmt(g_lbl_file, "File: %s", file_name[0] ? file_name : "--");
 
@@ -776,6 +901,7 @@ static void page_control_refresh_impl(void)
         };
         set_widgets_editable(gain_widgets, 3, false, true);
         sync_jog_interactive(false);
+        sync_center_offset_panel(false, center_off_x, center_off_y);
     } else {
         /* 已连 TCP：锁定 IP/Port，其余解锁（Layer 仍须串口已连） */
         set_widget_editable(g_ip_ta, false, false);
@@ -802,7 +928,7 @@ static void page_control_refresh_impl(void)
             g_ta_img_scale, g_ta_img_range, g_ta_speed_gain,
         };
         set_widgets_editable(gain_widgets, 3, !is_sending && !cal_enabled, true);
-        sync_jog_interactive(true);
+        sync_jog_interactive(offset_idle);
     }
 }
 
@@ -889,8 +1015,7 @@ lv_obj_t *page_control_create(lv_obj_t *parent)
 
     make_center_jog_panel(parse_card);
 
-    make_labeled_switch_row(parse_card, "Calibration:", UI_SWITCH_LABEL_W,
-                            &g_sw_cal, on_cal_sw);
+    make_parse_cal_enable_row(parse_card);
     lv_obj_add_state(g_sw_cal, LV_STATE_DISABLED);
     ctrl_set_enable_cal_apply(0);
 

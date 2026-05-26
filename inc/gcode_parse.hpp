@@ -12,6 +12,25 @@ extern "C" {
 #define GCODE_DEFAULT_IMAGE_RANG_GAIN   100.0f
 #define GCODE_DEFAULT_SPEED_GAIN        167.12f
 
+/**
+ * 运动点坐标变换调试：1=开启，0=关闭（也可在编译选项 -DGCODE_MOTION_COORD_DEBUG=1）
+ * 每个 G0/G1 运动包打印：解析 XY、校准后 XY、中心偏移后 XY、乘 scale 后 XY、Range 映射 u16。
+ */
+#ifndef GCODE_MOTION_COORD_DEBUG
+#define GCODE_MOTION_COORD_DEBUG 0
+#endif
+
+#if GCODE_MOTION_COORD_DEBUG
+#include <stdio.h>
+#define GCODE_MOTION_COORD_DBG(fmt, ...)                                                      \
+    do {                                                                                      \
+        fprintf(stderr, "[gcode_motion] " fmt "\n", ##__VA_ARGS__);                           \
+        fflush(stderr);                                                                       \
+    } while(0)
+#else
+#define GCODE_MOTION_COORD_DBG(fmt, ...) ((void)0)
+#endif
+
 /** 将 Control 页 Parse 增益恢复为默认值（写入 g_job_status） */
 void gcode_parse_gains_set_defaults(void);
 

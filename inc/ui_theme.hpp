@@ -51,7 +51,7 @@ extern const lv_color_t ui_color_danger;
 #define UI_BAR_H              28
 #define UI_INDICATOR_SZ       20
 /** 开关行标签宽（Enable Layer Change / Enable Calibration 单行） */
-#define UI_SWITCH_LABEL_W     248
+#define UI_SWITCH_LABEL_W     130
 #define UI_SWITCH_W           88
 #define UI_SWITCH_H           44
 /** Settings 参数行高（较正文略矮，配合 ui_font_form） */
@@ -63,7 +63,15 @@ extern const lv_color_t ui_color_danger;
 #define UI_LIST_ITEM_H        72
 #define UI_BTN_OPEN_W         256
 #define UI_BTN_ACTION_W       168
-#define UI_BTN_JOB_W          148
+#define UI_BTN_JOB_W          152
+/** 二次确认对话框 */
+#define UI_CONFIRM_BOX_W      640
+#define UI_CONFIRM_TEXT_W     580
+#define UI_CONFIRM_BTN_W      200
+#define UI_CONFIRM_BTN_H      UI_INPUT_H
+/** 主导航页面切换动画 */
+#define UI_PAGE_ANIM_MS       320
+#define UI_PAGE_ANIM_SLIDE    28
 
 void ui_theme_init(void);
 

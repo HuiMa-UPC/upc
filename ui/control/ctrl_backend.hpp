@@ -52,6 +52,9 @@ void ctrl_set_enable_layer_change(int en);
 void ctrl_set_enable_cal_apply(int en);
 int  ctrl_get_enable_cal_apply(void);
 
+/** 空闲且已 Open G-code 时从头重新解析（校准/增益切换后重建 Ring） */
+void ctrl_reparse_gcode(void);
+
 /* ---------- 振镜中心点偏移（仅须 TCP 已连接；打印中可交互） ---------- */
 void ctrl_center_offset_nudge(float dx_gcode, float dy_gcode);
 void ctrl_center_offset_reset(void);
