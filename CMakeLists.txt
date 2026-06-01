@@ -1,78 +1,54 @@
 cmake_minimum_required(VERSION 3.16)
 
-if(NOT CMAKE_TOOLCHAIN_FILE)
-    set(CMAKE_TOOLCHAIN_FILE "${CMAKE_SOURCE_DIR}/cmake/toolchain-aarch64-buildroot.cmake"
-        CACHE FILEPATH "Cross toolchain (optional)")
-endif()
+# 选择交叉编译环境
+set(TOOLCHAIN  toolchain-aarch64-buildroot)
+set(CMAKE_TOOLCHAIN_FILE "${CMAKE_SOURCE_DIR}/cmake/${TOOLCHAIN}.cmake"
+    CACHE FILEPATH "Cross toolchain (optional)")
 
-project(upc LANGUAGES C CXX)
-
+project(rongsu_ui 
+        VERSION 1.0.0
+        LANGUAGES C CXX
+)
+# 设置C/C++标准
 set(CMAKE_C_STANDARD 99)
 set(CMAKE_C_STANDARD_REQUIRED ON)
-set(CMAKE_C_EXTENSIONS OFF)
-
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(CMAKE_CXX_EXTENSIONS OFF)
-
+# 构建生成路径json
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
-    set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
-endif()
+# 打印配置摘要
+message(STATUS "========================================")
+message(STATUS "Project: ${PROJECT_NAME} v${PROJECT_VERSION}")
+message(STATUS "Toolchain: ${TOOLCHAIN}")
+message(STATUS "========================================")
 
-set(APP_TARGET demo CACHE STRING "Application executable name")
+# 公共编译选项
+add_compile_options(-Wall -Wextra -O3)
+add_compile_definitions(_POSIX_C_SOURCE=200809L)
 
+# 子模块
 add_subdirectory(3rdparty/lv_port_linux-release-v9.5)
+add_subdirectory(middleware)
+add_subdirectory(services)
+add_subdirectory(ui)
 
-set(APP_SOURCES
-    src/main.cpp
-    src/platform.cpp
-    src/ui_theme.cpp
-    src/ui_feedback.cpp
-    src/ui_shell.cpp
-    src/ring_buffer.cpp
-    src/protocol_mcu.cpp
-    src/job_status.cpp
-    src/gcode_parse.cpp
-    src/gcode_coord_map.cpp
-    ui/common/page_common.cpp
-    ui/common/ui_keyboard.cpp
-    ui/home/page_home.cpp
-    ui/files/files_open.cpp
-    ui/files/gcode_worker.cpp
-    ui/control/page_control.cpp
-    ui/control/ctrl_backend.cpp
-    ui/files/page_files.cpp
-    ui/files/page_cal_files.cpp
-    ui/settings/page_settings.cpp
-    ui/serial/page_serial.cpp
-    ui/serial/mcu_protocol.cpp
-    ui/serial/serial_backend.cpp
-    ui/tcpclient/page_tcpclient.cpp
+# 可执行文件
+add_executable(${PROJECT_NAME}
+    app/src/main.cpp
+    app/src/platform.cpp
 )
 
-add_executable(${APP_TARGET} ${APP_SOURCES})
-
-target_include_directories(${APP_TARGET} PRIVATE 
-                            ${CMAKE_SOURCE_DIR}/inc
-                            ${CMAKE_SOURCE_DIR}/ui/common
-                            ${CMAKE_SOURCE_DIR}/ui/control
-                            ${CMAKE_SOURCE_DIR}/ui/files
-                            ${CMAKE_SOURCE_DIR}/ui/home
-                            ${CMAKE_SOURCE_DIR}/ui/settings
-                            ${CMAKE_SOURCE_DIR}/ui/serial
-                            ${CMAKE_SOURCE_DIR}/ui/tcpclient
-                          )
-
-target_compile_definitions(${APP_TARGET} PRIVATE _POSIX_C_SOURCE=200809L)
-
-target_compile_options(${APP_TARGET} PRIVATE
-    $<$<COMPILE_LANGUAGE:C>:-Wall -Wextra -O3>
-    $<$<COMPILE_LANGUAGE:CXX>:-Wall -Wextra -O3>
+target_include_directories(${PROJECT_NAME}
+    PRIVATE
+        "${CMAKE_SOURCE_DIR}/app/inc"
 )
 
-target_link_libraries(${APP_TARGET} PRIVATE lvgl::port)
-
-find_package(Threads REQUIRED)
-target_link_libraries(${APP_TARGET} PRIVATE Threads::Threads)
+target_link_libraries(${PROJECT_NAME}
+    PRIVATE
+        ui::port
+        services::port
+        middleware::port
+        lvgl::port
+        
+)
