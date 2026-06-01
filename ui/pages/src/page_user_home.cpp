@@ -608,6 +608,20 @@ void page_user_home_refresh(bool /*force*/)
     if(g_lbl_oxygen) {
         lv_label_set_text_fmt(g_lbl_oxygen, "%.1f%%", snap.oxygen_percent);
     }
+
+    /* 打印模式下的环境标签也由同一快照驱动（MCUService 的 APP_Update_Ntf） */
+    if(g_env_lbl_pm_indoor) {
+        lv_label_set_text_fmt(g_env_lbl_pm_indoor, "%.1f", snap.pm25_indoor);
+    }
+    if(g_env_lbl_pm_cabin) {
+        lv_label_set_text_fmt(g_env_lbl_pm_cabin, "%.1f", snap.pm25_cabin);
+    }
+    if(g_env_lbl_temp) {
+        lv_label_set_text_fmt(g_env_lbl_temp, "%.1f°C", snap.temperature_c);
+    }
+    if(g_env_lbl_oxygen) {
+        lv_label_set_text_fmt(g_env_lbl_oxygen, "%.1f%%", snap.oxygen_percent);
+    }
 }
 
 lv_obj_t *page_user_home_create(lv_obj_t *parent)
@@ -686,19 +700,6 @@ void page_user_home_printing_update(const control_progress_t *p)
 {
     if(!p || !g_printing_active) {
         return;
-    }
-
-    if(g_env_lbl_pm_indoor) {
-        lv_label_set_text_fmt(g_env_lbl_pm_indoor, "%.1f", (double)p->pm25_indoor);
-    }
-    if(g_env_lbl_pm_cabin) {
-        lv_label_set_text_fmt(g_env_lbl_pm_cabin, "%.1f", (double)p->pm25_cabin);
-    }
-    if(g_env_lbl_temp) {
-        lv_label_set_text_fmt(g_env_lbl_temp, "%.1f°C", (double)p->temperature_c);
-    }
-    if(g_env_lbl_oxygen) {
-        lv_label_set_text_fmt(g_env_lbl_oxygen, "%.1f%%", (double)p->oxygen_percent);
     }
 
     if(g_prog_bar) {

@@ -29,7 +29,7 @@ target_link_libraries(${SERVICES_TARGET}
 )
 
 # 调试日志总开关：cmake -DSERVICES_DEBUG=ON/OFF
-option(SERVICES_DEBUG "Print services debug trace to stderr" ON)
+option(SERVICES_DEBUG "Print services debug trace to stderr" OFF)
 
 if(SERVICES_DEBUG)
     target_compile_definitions(${SERVICES_TARGET} PUBLIC SERVICES_DEBUG=1)

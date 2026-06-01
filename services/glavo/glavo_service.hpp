@@ -2,11 +2,11 @@
 #define GLAVO_SERVICE_HPP
 
 #include "service_base.hpp"
+#include "tcp_sender.hpp"
 #include "msg_types.hpp"
 #include <atomic>
 #include <cstring>
 #include <string>
-#include <thread>
 #include <vector>
 
 namespace services {
@@ -24,13 +24,17 @@ protected:
 
 private:
     void handle_dir_open(const middleware::Message& msg);
+    void handle_file_info_req(const middleware::Message& msg);
     void handle_print_start(const middleware::Message& msg);
     void handle_print_terminate(const middleware::Message& msg);
 
     void send_dir_open_empty(const middleware::Message& req);
-    void send_print_progress(int progress_percent);
     void stop_print_job();
-    void print_progress_thread_fn();
+    void on_tcp_job_event(TcpJobEvent ev);
+    void on_motion_batch_sent();
+    void publish_terminate_done();
+    void reset_print_progress_state();
+    void send_print_progress(bool force_complete);
 
     template <typename T>
     static bool read_inline_pod(const middleware::MsgPayload& payload, T& out) {
@@ -42,19 +46,16 @@ private:
         return true;
     }
 
-    /** 构建完整路径 */
     std::string make_full_path(const std::string& dir, const std::string& name);
-
-    /** 当前打开的目录路径 */
-    std::string current_dir_path_;
-    /** 当前目录下的文件/目录列表（按索引顺序） */
-    std::vector<std::string> current_entries_;
-
-    /** 从 Inline payload 中提取字符串 */
     static std::string payload_to_string(const middleware::MsgPayload& payload);
 
+    std::string current_dir_path_;
+    std::vector<std::string> current_entries_;
+    std::string current_file_path_;
+
     std::atomic<bool> print_running_{false};
-    std::thread print_progress_thread_;
+    int last_print_pct_     = -1;
+    bool last_parse_done_   = false;
 };
 
 } // namespace services

@@ -29,9 +29,12 @@ enum class MsgType : uint32_t {
     UI_Purify_Req,  /**< UI → MCU 启动净化 */
     APP_Purify_Progress,  /**< MCU → UI 净化进度 */
     APP_Purify_Rsp,  /**< MCU → UI 净化完成 */
+    UI_FileInfo_Req,  /**< UI → GLAVO 请求文件详细信息（PrintStartReqPayload） */
+    APP_FileInfo_Rsp,  /**< GLAVO → UI 文件详细信息响应（FileInfoPayload） */
     UI_Print_Start_Req,  /**< UI → GLAVO 按 file_index 启动打印作业（PrintStartReqPayload） */
-    APP_Print_Progress_Ntf,  /**< GLAVO → UI 打印进度推送 */
+    APP_Print_Progress_Ntf,  /**< GLAVO → UI 打印进度推送（percent；环境数据见 APP_Update_Ntf） */
     UI_Print_Terminate_Req,  /**< UI → GLAVO 终止打印作业 */
+    APP_Print_Terminate_Done, /**< GLAVO → UI 终止清理完成 */
 };
 
 enum class MsgPriority : uint8_t {
@@ -233,9 +236,17 @@ struct FsDirHeader {
     uint32_t count;
 };
 
-/** UI_Print_Start_Req 载荷：按索引启动打印（Inline） */
+/** UI_FileInfo_Req / UI_Print_Start_Req 通用载荷：按索引操作文件（Inline） */
 struct PrintStartReqPayload {
     uint32_t file_index;
+};
+
+/** APP_FileInfo_Rsp 载荷：文件预扫描信息（Inline） */
+struct FileInfoPayload {
+    uint32_t file_index;   /**< 请求时的文件索引 */
+    uint32_t total_lines;  /**< G-code 总行数（预扫描） */
+    uint32_t file_size;    /**< 文件大小（字节） */
+    int8_t   ok;           /**< 0=失败/未找到，1=成功 */
 };
 
 /** APP_Print_Progress_Ntf 载荷：打印进度推送（Inline） */

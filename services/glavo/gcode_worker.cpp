@@ -1,6 +1,7 @@
 #include "gcode_worker.hpp"
 #include "gcode_config.hpp"
 #include "cal_parser.hpp"
+#include "print_job_state.hpp"
 
 #include <cstdio>
 #include <cstring>
@@ -188,7 +189,24 @@ void GcodeWorker::parser_load_gains()
 void GcodeWorker::sync_parse_progress(int lines, int packets)
 {
     parsed_lines_.store(lines);
-    (void)packets;
+    total_motion_packets_.store(packets);
+    PrintJobState::instance().set_total_packets(packets);
+
+    if (progress_cb_) {
+        const int total = total_lines_.load();
+        int pct = 0;
+        if (total > 0) {
+            pct = lines * 100 / total;
+            if (pct > 100) pct = 100;
+        }
+        const int last = progress_last_reported_.load();
+        // 每 5% 变化或完成时上报，避免消息风暴
+        if (pct >= 100 || pct >= last + 5) {
+            progress_cb_(lines, total);
+            progress_last_reported_.store(pct);
+        }
+    }
+
 #if SERVICES_DEBUG
     printf("[GcodeWorker] progress %d/%d lines, packets=%d\n",
            lines, total_lines_.load(), packets);
@@ -240,7 +258,15 @@ bool GcodeWorker::parse_g1_segment(const std::string &segment, bool *out_motion)
         switch(axis[0]) {
             case 'X': case 'x': x_ = value; break;
             case 'Y': case 'y': y_ = value; break;
-            case 'Z': case 'z': z_ = value; break;
+            case 'Z': case 'z':
+                z_ = value;
+                {
+                    const uint16_t um = gcode_z_to_layer_um(z_);
+                    if(um > 0) {
+                        last_layer_height_um_ = um;
+                    }
+                }
+                break;
             default: break;
         }
     }
@@ -391,6 +417,7 @@ bool GcodeWorker::push_layer_mark()
     rb_packet_t pkt;
     pkt.type = RB_PKT_LAYER_MARK;
     std::memset(pkt.data, 0, sizeof(pkt.data));
+    rb_layer_mark_set_height_um(pkt, last_layer_height_um_);
     return rb_.put_wait(pkt, stop_req_);
 }
 
@@ -461,6 +488,7 @@ void GcodeWorker::parser_thread_fn()
             if(!emit_line_parse_result(&parsed, &packets)) {
                 break;
             }
+            total_motion_packets_.store(packets);
 
             lines++;
             chunk_lines++;
@@ -487,10 +515,21 @@ void GcodeWorker::parser_thread_fn()
         parser_chunk_yield();
     }
 
+    sync_parse_progress(lines, packets);
+    total_motion_packets_.store(packets);
+
     running_.store(false);
 }
 
 /* ---------- 公共接口 ---------- */
+
+void GcodeWorker::set_progress_callback(ProgressCb cb) {
+    progress_cb_ = std::move(cb);
+}
+
+void GcodeWorker::clear_progress_callback() {
+    progress_cb_ = nullptr;
+}
 
 int GcodeWorker::open_file(const std::string& filepath)
 {
@@ -500,11 +539,13 @@ int GcodeWorker::open_file(const std::string& filepath)
 
     const int cnt = count_file_lines(fp_);
     total_lines_.store(cnt);
+    total_motion_packets_.store(0);
     parsed_lines_.store(0);
     file_read_exhausted_.store(false);
     // rewind 放在 start_parse() 中，支持"重新解析"场景
     
     reset_parser_motion_state();
+    last_layer_height_um_ = GCODE_DEFAULT_LAYER_UM;
 
 #if SERVICES_DEBUG
     {
@@ -528,7 +569,9 @@ void GcodeWorker::start_parse()
     stop_req_.store(false);
     running_.store(true);
     parsed_lines_.store(0);
+    total_motion_packets_.store(0);
     file_read_exhausted_.store(false);
+    progress_last_reported_.store(0);
     rewind(fp_);
 
     th_ = std::thread(&GcodeWorker::parser_thread_fn, this);
@@ -552,8 +595,14 @@ void GcodeWorker::close_file()
         fp_ = nullptr;
     }
     total_lines_.store(0);
+    total_motion_packets_.store(0);
     parsed_lines_.store(0);
     file_read_exhausted_.store(false);
+}
+
+int GcodeWorker::get_total_motion_packets() const
+{
+    return total_motion_packets_.load();
 }
 
 int GcodeWorker::get_total_lines() const
@@ -598,6 +647,11 @@ void GcodeWorker::set_center_offset(float dx, float dy)
 {
     center_offset_x_ = dx;
     center_offset_y_ = dy;
+}
+
+uint16_t GcodeWorker::get_layer_height_um() const
+{
+    return last_layer_height_um_;
 }
 
 } // namespace services

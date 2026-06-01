@@ -6,11 +6,14 @@
 
 #include "glavo_service.hpp"
 #include "mcu_service.hpp"
+#include "tcp_sender.hpp"
+#include "device_config.hpp"
 
 #include "ui_app.hpp"
 
 #include <chrono>
 #include <thread>
+#include <cstdio>
 
 int main(int argc, char** argv) {
     (void)argc;
@@ -25,11 +28,24 @@ int main(int argc, char** argv) {
     glavo_service.init();
     mcu_service.init();
 
+    auto& tcp = services::TcpSender::instance();
+
+    while(tcp.connect_tcp(GLAVO_TCP_DEFAULT_IP, GLAVO_TCP_DEFAULT_PORT) != 0) {
+        std::this_thread::sleep_for(
+            std::chrono::milliseconds(TCP_RECONNECT_INTERVAL_MS));
+    }
+
+    while(tcp.open_serial(GLAVO_SERIAL_DEFAULT_DEVICE, GLAVO_SERIAL_DEFAULT_BAUD) != 0) {
+        std::this_thread::sleep_for(
+            std::chrono::milliseconds(TCP_RECONNECT_INTERVAL_MS));
+    }
+
+    tcp.start_link_thread();
+
     if (platform_init() != 0) {
         return 1;
     }
 
-    /* UI 订阅就绪后再启动后端，避免 env 推送等消息在订阅前入队丢失 */
     ui::app_init(lv_scr_act());
 
     glavo_service.start();

@@ -31,7 +31,9 @@ using PurifyProgressCb = std::function<void(int progress)>;
 using PurifyDoneCb     = std::function<void()>;
 using FsDirCb          = std::function<void(const middleware::FileEntryPayload* files,
                                             uint32_t count)>;
+using FileInfoCb       = std::function<void(const middleware::FileInfoPayload&)>;
 using PrintProgressCb  = std::function<void(const middleware::PrintProgressPayload&)>;
+using PrintTerminateDoneCb = std::function<void()>;
 
 class UiMsgProxy {
 public:
@@ -64,9 +66,13 @@ public:
     void send_fs_dir_open();
     void register_fs_dir(FsDirCb cb);
 
+    void send_file_info_req(uint32_t file_index);
+    void register_file_info(FileInfoCb cb);
+
     void send_print_start(uint32_t file_index);
     void register_print_progress(PrintProgressCb cb);
     void send_print_terminate();
+    void register_print_terminate_done(PrintTerminateDoneCb cb);
 
 private:
     UiMsgProxy() = default;
@@ -102,7 +108,9 @@ private:
     PurifyProgressCb purify_progress_cb_;
     PurifyDoneCb     purify_done_cb_;
     FsDirCb          fs_dir_cb_;
+    FileInfoCb       file_info_cb_;
     PrintProgressCb  print_progress_cb_;
+    PrintTerminateDoneCb print_terminate_done_cb_;
 };
 
 } // namespace ui

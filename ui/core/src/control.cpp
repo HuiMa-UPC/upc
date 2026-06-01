@@ -30,11 +30,16 @@ ui_modal_dialog_t *g_current_dlg = nullptr;
 control_file_t g_active_file = {};
 lv_timer_t *g_purify_ui_tick = nullptr;
 
+/* 文件确认对话框中需动态更新的标签（由 APP_FileInfo_Rsp 驱动） */
+lv_obj_t *g_confirm_lines_lbl = nullptr;
+lv_obj_t *g_confirm_size_lbl  = nullptr;
+
 /* ---------- 后端异步状态（UiMsgProxy 适配，仅本文件使用） ---------- */
 bool  g_proxy_wired = false;
 bool  g_pm25_high = false;
 int   g_purify_progress = 0;
 bool  g_job_running = false;
+bool  g_terminate_pending = false;
 
 DoneCb g_pm25_cb = nullptr;
 void  *g_pm25_u = nullptr;
@@ -155,6 +160,34 @@ void wire_msg_proxy()
         }
     });
 
+    proxy.register_file_info([](const middleware::FileInfoPayload &p) {
+        if(g_state != CONTROL_STATE_FILE_CONFIRM) {
+            return;
+        }
+        if(g_confirm_lines_lbl) {
+            if(p.ok) {
+                lv_label_set_text_fmt(g_confirm_lines_lbl, "%u lines", p.total_lines);
+            } else {
+                lv_label_set_text(g_confirm_lines_lbl, "—");
+            }
+        }
+        if(g_confirm_size_lbl) {
+            if(p.ok) {
+                char sz[32];
+                if(p.file_size < 1024) {
+                    std::snprintf(sz, sizeof(sz), "%u B", p.file_size);
+                } else if(p.file_size < 1024 * 1024) {
+                    std::snprintf(sz, sizeof(sz), "%.1f KB", p.file_size / 1024.0);
+                } else {
+                    std::snprintf(sz, sizeof(sz), "%.2f MB", p.file_size / (1024.0 * 1024.0));
+                }
+                lv_label_set_text(g_confirm_size_lbl, sz);
+            } else {
+                lv_label_set_text(g_confirm_size_lbl, "—");
+            }
+        }
+    });
+
     proxy.register_print_progress([](const middleware::PrintProgressPayload &p) {
         if(g_job_prog_cb) {
             control_progress_t pr = {};
@@ -169,6 +202,20 @@ void wire_msg_proxy()
         if(p.progress_percent >= 100 && g_job_running) {
             g_job_running = false;
             invoke_done(g_job_done_cb, g_job_u);
+        }
+    });
+
+    proxy.register_print_terminate_done([]() {
+        if(!g_terminate_pending) {
+            return;
+        }
+        g_terminate_pending = false;
+        g_job_running = false;
+        g_job_prog_cb = nullptr;
+        g_job_done_cb = nullptr;
+        g_job_u = nullptr;
+        if(g_state == CONTROL_STATE_PRINTING) {
+            enter_state(CONTROL_STATE_IDLE);
         }
     });
 }
@@ -272,10 +319,7 @@ void backend_start_job(const control_file_t *file, ProgressCb prog_cb, DoneCb do
 
 void backend_terminate_job()
 {
-    g_job_running = false;
-    g_job_prog_cb = nullptr;
-    g_job_done_cb = nullptr;
-    g_job_u = nullptr;
+    g_terminate_pending = true;
     ui::UiMsgProxy::instance().send_print_terminate();
 }
 
@@ -305,6 +349,8 @@ void close_current_dialog(void)
         ui_modal_dialog_close(g_current_dlg);
         g_current_dlg = nullptr;
     }
+    g_confirm_lines_lbl = nullptr;
+    g_confirm_size_lbl  = nullptr;
 }
 
 /* ============================================================================
@@ -514,6 +560,7 @@ void on_file_card_click(lv_event_t *e)
         return;
     }
     g_active_file = *file;
+    ui::UiMsgProxy::instance().send_file_info_req(static_cast<uint32_t>(index));
     enter_state(CONTROL_STATE_FILE_CONFIRM);
 }
 
@@ -611,6 +658,7 @@ ui_modal_dialog_t *show_file_select(lv_obj_t *parent)
 void on_file_confirm_cancel(lv_event_t * /*e*/)
 {
     if(g_state == CONTROL_STATE_FILE_CONFIRM) {
+        ui::UiMsgProxy::instance().send_print_terminate();
         enter_state(CONTROL_STATE_FILE_SELECT);
     }
 }
@@ -687,6 +735,24 @@ ui_modal_dialog_t *show_file_confirm(lv_obj_t *parent, const control_file_t *fil
     char mat[32];
     std::snprintf(mat, sizeof(mat), "%.1f g", (double)file->material_g);
     make_info_pair("Material Usage", mat, user_color_accent);
+
+    /* 动态详情：由 APP_FileInfo_Rsp 回填 */
+    auto make_dynamic_pair = [&](const char *caption, lv_obj_t **out_lbl) {
+        lv_obj_t *cap = lv_label_create(info_col);
+        lv_label_set_text(cap, caption);
+        lv_obj_set_style_text_color(cap, user_color_text_dim, 0);
+        lv_obj_set_style_text_font(cap, user_font_caption(), 0);
+
+        lv_obj_t *val = lv_label_create(info_col);
+        lv_label_set_text(val, "—");
+        lv_obj_set_style_text_color(val, user_color_text, 0);
+        lv_obj_set_style_text_font(val, user_font_text(), 0);
+        lv_label_set_long_mode(val, LV_LABEL_LONG_MODE_DOTS);
+        lv_obj_set_width(val, LV_PCT(100));
+        *out_lbl = val;
+    };
+    make_dynamic_pair("Total Lines", &g_confirm_lines_lbl);
+    make_dynamic_pair("File Size",   &g_confirm_size_lbl);
 
     lv_obj_t *supply_row = lv_obj_create(dlg->body);
     lv_obj_remove_style_all(supply_row);
@@ -829,10 +895,6 @@ void pf_on_print_done(void * /*u*/)
 void terminate_confirm_yes(void * /*u*/)
 {
     backend_terminate_job();
-    if(g_state == CONTROL_STATE_PRINTING) {
-        ui_toast_show("Print terminated", user_color_status_err, 2000);
-        enter_state(CONTROL_STATE_IDLE);
-    }
 }
 
 void terminate_confirm_no(void * /*u*/) {}

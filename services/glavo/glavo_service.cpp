@@ -1,24 +1,61 @@
 #include "glavo_service.hpp"
 #include "gcode_worker.hpp"
+#include "tcp_sender.hpp"
+#include "print_job_state.hpp"
 #include "msg_types.hpp"
 #include "buffer_pool.hpp"
 
 #include <dirent.h>
 #include <sys/stat.h>
 #include <cstring>
+#include <cstdint>
 #include <string>
-#include <thread>
-#include <chrono>
 
 namespace services {
 
 namespace {
 
-/** 适配 MemPool 16KB 档块：header + N × FileEntryPayload */
 constexpr size_t kFsDirMaxEntries =
     (16384u - sizeof(middleware::FsDirHeader)) / sizeof(middleware::FileEntryPayload);
 
-/** 检查文件名是否匹配允许的后缀 */
+int percent_rounded(int num, int den)
+{
+    if(den <= 0) {
+        return 0;
+    }
+    if(num >= den) {
+        return 100;
+    }
+    return num * 100 / den;
+}
+
+/** 打印进度分母：解析完成后用最终包数；解析中用行数比例外推，避免 sent/已解析 虚高 */
+int progress_denominator(int sent_packets)
+{
+    const int parsed_packets = GcodeWorker::instance().get_total_motion_packets();
+    if(parsed_packets <= 0) {
+        return 0;
+    }
+
+    const bool parse_done = GcodeWorker::instance().is_file_read_exhausted() &&
+                            !GcodeWorker::instance().is_parsing();
+    if(parse_done) {
+        return parsed_packets;
+    }
+
+    const int parsed_lines = GcodeWorker::instance().get_parsed_lines();
+    const int total_lines  = GcodeWorker::instance().get_total_lines();
+    if(parsed_lines > 0 && total_lines > parsed_lines) {
+        const int64_t estimated =
+            (static_cast<int64_t>(parsed_packets) * total_lines) / parsed_lines;
+        if(estimated > parsed_packets) {
+            return static_cast<int>(estimated);
+        }
+    }
+
+    return parsed_packets + sent_packets + 1;
+}
+
 bool has_allowed_ext(const std::string& name) {
     static const char* allowed[] = {".txt", ".nc", ".gcode"};
     for (const char* ext : allowed) {
@@ -63,11 +100,18 @@ GlavoService::~GlavoService() {
 
 bool GlavoService::do_init() {
     GcodeWorker::instance().parser_load_gains();
+    TcpSender::instance().bind_ring_buffer(&GcodeWorker::instance().ring_buffer());
+    TcpSender::instance().set_job_event_callback(
+        [this](TcpJobEvent ev) { on_tcp_job_event(ev); });
+    TcpSender::instance().set_progress_callback(
+        [this]() { on_motion_batch_sent(); });
     return true;
 }
 
 bool GlavoService::do_start() {
     subscribe(middleware::MsgType::Fs_DirOpen_Req,
+        [this](const middleware::Message& msg) { on_message(msg); });
+    subscribe(middleware::MsgType::UI_FileInfo_Req,
         [this](const middleware::Message& msg) { on_message(msg); });
     subscribe(middleware::MsgType::UI_Print_Start_Req,
         [this](const middleware::Message& msg) { on_message(msg); });
@@ -86,6 +130,9 @@ void GlavoService::handle_message(const middleware::Message& msg) {
         case middleware::MsgType::Fs_DirOpen_Req:
             handle_dir_open(msg);
             break;
+        case middleware::MsgType::UI_FileInfo_Req:
+            handle_file_info_req(msg);
+            break;
         case middleware::MsgType::UI_Print_Start_Req:
             handle_print_start(msg);
             break;
@@ -94,6 +141,111 @@ void GlavoService::handle_message(const middleware::Message& msg) {
             break;
         default:
             break;
+    }
+}
+
+void GlavoService::on_tcp_job_event(TcpJobEvent ev) {
+    switch(ev) {
+        case TcpJobEvent::PrintCompleted:
+            send_print_progress(true);
+            print_running_.store(false);
+            break;
+        case TcpJobEvent::TerminateDone:
+        case TcpJobEvent::PrintError:
+            print_running_.store(false);
+            publish_terminate_done();
+            break;
+    }
+}
+
+void GlavoService::reset_print_progress_state() {
+    last_print_pct_   = -1;
+    last_parse_done_  = false;
+}
+
+void GlavoService::on_motion_batch_sent() {
+    if(!print_running_.load()) {
+        return;
+    }
+    send_print_progress(false);
+}
+
+void GlavoService::send_print_progress(bool force_complete) {
+    const auto job = PrintJobState::instance().snapshot();
+
+    const bool parse_done = GcodeWorker::instance().is_file_read_exhausted() &&
+                            !GcodeWorker::instance().is_parsing();
+
+    if(parse_done && !last_parse_done_) {
+        last_print_pct_ = -1;
+    }
+    last_parse_done_ = parse_done;
+
+    int denom = 0;
+    if(!force_complete && !job.job_completed) {
+        denom = progress_denominator(job.sent_packets);
+        if(denom <= 0) {
+            return;
+        }
+    }
+
+    int pct = 0;
+    if(force_complete || job.job_completed) {
+        pct = 100;
+    } else {
+        pct = percent_rounded(job.sent_packets, denom);
+        if(!parse_done) {
+            if(pct > 95) {
+                pct = 95;
+            }
+        } else if(pct >= 100) {
+            pct = 99;
+        }
+    }
+
+    if(!force_complete && !job.job_completed) {
+        if(last_print_pct_ >= 0) {
+            if(pct <= last_print_pct_) {
+                return;
+            }
+            if(pct - last_print_pct_ < 1) {
+                return;
+            }
+        }
+    } else if(last_print_pct_ >= 100) {
+        return;
+    }
+
+    last_print_pct_ = pct;
+
+    middleware::PrintProgressPayload p{};
+    p.progress_percent  = pct;
+    p.remaining_minutes = 0;
+    p.pm25_indoor       = 0.f;
+    p.pm25_cabin        = 0.f;
+    p.temperature_c     = 0.f;
+    p.oxygen_percent    = 0.f;
+
+    middleware::Message ntf(middleware::MsgType::APP_Print_Progress_Ntf,
+        static_cast<middleware::ModuleId>(module_id()),
+        middleware::ModuleId::UI);
+    ntf.payload = middleware::MsgPayload::from_bytes(
+        reinterpret_cast<const uint8_t*>(&p), sizeof(p));
+    if(!publish_async(ntf)) {
+#if SERVICES_DEBUG
+        printf("[GlavoService] print_progress publish failed pct=%d\n", pct);
+#endif
+    }
+}
+
+void GlavoService::publish_terminate_done() {
+    middleware::Message ntf(middleware::MsgType::APP_Print_Terminate_Done,
+        static_cast<middleware::ModuleId>(module_id()),
+        middleware::ModuleId::UI);
+    if (!publish_async(ntf)) {
+#if SERVICES_DEBUG
+        printf("[GlavoService] terminate_done publish failed\n");
+#endif
     }
 }
 
@@ -193,23 +345,73 @@ void GlavoService::handle_dir_open(const middleware::Message& msg) {
 #endif
 }
 
+void GlavoService::handle_file_info_req(const middleware::Message& msg) {
+    middleware::PrintStartReqPayload req{};
+    if (!read_inline_pod(msg.payload, req)) {
+#if SERVICES_DEBUG
+        printf("[GlavoService] file_info_req: invalid payload\n");
+#endif
+        return;
+    }
+
+    middleware::FileInfoPayload rsp{};
+    rsp.file_index = req.file_index;
+    rsp.ok = 0;
+    rsp.total_lines = 0;
+    rsp.file_size = 0;
+
+    const size_t idx = static_cast<size_t>(req.file_index);
+    if (idx < current_entries_.size()) {
+        const std::string full_path = make_full_path(current_dir_path_, current_entries_[idx]);
+        struct stat st;
+        if (stat(full_path.c_str(), &st) == 0) {
+            rsp.file_size = static_cast<uint32_t>(st.st_size);
+            stop_print_job();
+            if(TcpSender::instance().is_sending()) {
+                TcpSender::instance().request_terminate();
+            }
+            if (GcodeWorker::instance().open_file(full_path) == 0) {
+                rsp.total_lines = static_cast<uint32_t>(GcodeWorker::instance().get_total_lines());
+                rsp.ok = 1;
+                current_file_path_ = full_path;
+                PrintJobState::instance().reset_job_counters();
+                reset_print_progress_state();
+                GcodeWorker::instance().start_parse();
+            }
+        }
+    }
+
+    middleware::Message out(middleware::MsgType::APP_FileInfo_Rsp,
+        static_cast<middleware::ModuleId>(module_id()), msg.sender_id);
+    out.payload = middleware::MsgPayload::from_bytes(
+        reinterpret_cast<const uint8_t*>(&rsp), sizeof(rsp));
+    if (!publish_async(out)) {
+#if SERVICES_DEBUG
+        printf("[GlavoService] file_info_req: publish_async failed\n");
+#endif
+    }
+
+#if SERVICES_DEBUG
+    printf("[GlavoService] file_info_req: index=%u ok=%d lines=%u size=%u path=%s\n",
+        rsp.file_index, rsp.ok, rsp.total_lines, rsp.file_size,
+        current_file_path_.c_str());
+#endif
+}
+
 void GlavoService::handle_print_start(const middleware::Message& msg) {
     middleware::PrintStartReqPayload req{};
     if (!read_inline_pod(msg.payload, req)) {
 #if SERVICES_DEBUG
         printf("[GlavoService] print_start: invalid payload\n");
 #endif
-        send_print_progress(100);
         return;
     }
 
     const size_t idx = static_cast<size_t>(req.file_index);
     if (idx >= current_entries_.size()) {
 #if SERVICES_DEBUG
-        printf("[GlavoService] print_start: index %zu out of range (count=%zu)\n",
-            idx, current_entries_.size());
+        printf("[GlavoService] print_start: index out of range\n");
 #endif
-        send_print_progress(100);
         return;
     }
 
@@ -218,94 +420,51 @@ void GlavoService::handle_print_start(const middleware::Message& msg) {
     struct stat st;
     if (stat(full_path.c_str(), &st) != 0) {
 #if SERVICES_DEBUG
-        printf("[GlavoService] print_start: stat failed path=%s\n", full_path.c_str());
+        printf("[GlavoService] print_start: stat failed\n");
 #endif
-        send_print_progress(100);
         return;
     }
 
-    stop_print_job();
+    const bool already_parsing = (full_path == current_file_path_) &&
+                                  GcodeWorker::instance().is_file_open() &&
+                                  GcodeWorker::instance().is_parsing();
 
-    if (GcodeWorker::instance().open_file(full_path) != 0) {
+    if (!already_parsing) {
+        stop_print_job();
+        if(TcpSender::instance().is_sending()) {
+            TcpSender::instance().request_terminate();
+        }
+        if (GcodeWorker::instance().open_file(full_path) != 0) {
 #if SERVICES_DEBUG
-        printf("[GlavoService] print_start: open failed path=%s\n", full_path.c_str());
+            printf("[GlavoService] print_start: open failed\n");
 #endif
-        send_print_progress(100);
-        return;
+            return;
+        }
+        current_file_path_ = full_path;
+        PrintJobState::instance().reset_job_counters();
+        reset_print_progress_state();
+        GcodeWorker::instance().start_parse();
     }
 
-    GcodeWorker::instance().start_parse();
     print_running_.store(true);
-    print_progress_thread_ = std::thread(&GlavoService::print_progress_thread_fn, this);
+    reset_print_progress_state();
+    TcpSender::instance().begin_sending();
 
 #if SERVICES_DEBUG
-    printf("[GlavoService] print_start: index=%u path=%s\n",
-        req.file_index, full_path.c_str());
+    printf("[GlavoService] print_start: path=%s\n", full_path.c_str());
 #endif
-}
-
-void GlavoService::send_print_progress(int progress_percent) {
-    middleware::PrintProgressPayload p{};
-    p.progress_percent = progress_percent;
-    p.remaining_minutes = 0;
-    p.pm25_indoor = 0.0f;
-    p.pm25_cabin = 0.0f;
-    p.temperature_c = 0.0f;
-    p.oxygen_percent = 0.0f;
-
-    middleware::Message ntf(middleware::MsgType::APP_Print_Progress_Ntf,
-        static_cast<middleware::ModuleId>(module_id()),
-        middleware::ModuleId::UI);
-    ntf.payload = middleware::MsgPayload::from_bytes(
-        reinterpret_cast<const uint8_t*>(&p), sizeof(p));
-    if (!publish_async(ntf)) {
-#if SERVICES_DEBUG
-        printf("[GlavoService] print progress publish failed (%d%%)\n", progress_percent);
-#endif
-    }
 }
 
 void GlavoService::stop_print_job() {
     print_running_.store(false);
     GcodeWorker::instance().stop_parse();
-    if (print_progress_thread_.joinable()) {
-        print_progress_thread_.join();
-    }
-}
-
-void GlavoService::print_progress_thread_fn() {
-    while (print_running_.load()) {
-        const int total = GcodeWorker::instance().get_total_lines();
-        const int parsed = GcodeWorker::instance().get_parsed_lines();
-        const bool exhausted = GcodeWorker::instance().is_file_read_exhausted();
-        const bool parsing = GcodeWorker::instance().is_parsing();
-
-        int pct = 0;
-        if (total > 0) {
-            pct = parsed * 100 / total;
-            if (pct > 100) {
-                pct = 100;
-            }
-        }
-        if (exhausted && !parsing) {
-            pct = 100;
-        }
-
-        send_print_progress(pct);
-
-        if (pct >= 100 || (exhausted && !parsing)) {
-            break;
-        }
-
-        std::this_thread::sleep_for(std::chrono::milliseconds(200));
-    }
-    print_running_.store(false);
-    send_print_progress(100);
 }
 
 void GlavoService::handle_print_terminate(const middleware::Message& msg) {
     (void)msg;
-    stop_print_job();
+    print_running_.store(false);
+    GcodeWorker::instance().stop_parse();
+    TcpSender::instance().request_terminate();
 }
 
 } // namespace services

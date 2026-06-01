@@ -42,8 +42,8 @@ if(NOT DEFINED THREAD_POOL_QUEUE_DEPTH)
 endif()
 
 # 调试日志总开关：cmake -DMIDDLEWARE_DEBUG=ON
-option(MIDDLEWARE_DEBUG "Print middleware debug trace to stderr" ON)
-option(MIDDLEWARE_DEBUG_VERBOSE_POOL "Log every MemPool/BufferPool alloc/free (noisy)" ON)
+option(MIDDLEWARE_DEBUG "Print middleware debug trace to stderr" OFF)
+option(MIDDLEWARE_DEBUG_VERBOSE_POOL "Log every MemPool/BufferPool alloc/free (noisy)" OFF)
 
 target_compile_definitions(${MIDDLEWARE_TARGET}
     PUBLIC

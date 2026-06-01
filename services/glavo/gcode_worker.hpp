@@ -3,9 +3,11 @@
 
 #include "ring_buffer.hpp"
 #include "cal_parser.hpp"
+#include "device_config.hpp"
 #include <string>
 #include <atomic>
 #include <thread>
+#include <functional>
 
 namespace services {
 
@@ -33,8 +35,22 @@ public:
     bool is_file_read_exhausted(void) const;
     bool is_file_open(void) const;
 
+    using ProgressCb = std::function<void(int parsed_lines, int total_lines)>;
+
+    /** 设置解析进度回调（在解析线程中调用，需保证线程安全） */
+    void set_progress_callback(ProgressCb cb);
+
+    /** 清除解析进度回调 */
+    void clear_progress_callback();
+
     /** 访问解析结果队列（供消费者读取） */
     RingBuffer& ring_buffer();
+
+    /** 当前层厚 (μm)，来自 G-code Z 模态；默认 GCODE_DEFAULT_LAYER_UM */
+    uint16_t get_layer_height_um() const;
+
+    /** 文件内运动指令总数（解析完成后写入，不含 M3000） */
+    int get_total_motion_packets() const;
 
     /** 设置解析增益参数 */
     void set_parse_gains(float speed_gain, float scale_gain, float rang_gain);
@@ -72,6 +88,7 @@ private:
     std::atomic<bool> running_{false};
     std::atomic<bool> stop_req_{false};     //解析线程停止请求
     std::atomic<int> total_lines_{0};       //总行数
+    std::atomic<int> total_motion_packets_{0}; //运动包总数（预扫描）
     std::atomic<int> parsed_lines_{0};      //已解析的行数
     std::atomic<bool> file_read_exhausted_{false};  //文件是否已经读取完毕
 
@@ -96,6 +113,12 @@ private:
 
     // 解析结果队列
     RingBuffer rb_;
+
+    // 进度回调
+    ProgressCb progress_cb_;
+    std::atomic<int> progress_last_reported_{0};
+
+    uint16_t last_layer_height_um_ = GCODE_DEFAULT_LAYER_UM;
 };
 
 } // namespace services

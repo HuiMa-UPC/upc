@@ -100,6 +100,16 @@ void UiMsgProxy::init()
             fs_dir_cb_(files, count);
         }));
 
+    /* GLAVO：文件详细信息响应 */
+    subs_.push_back(bus.subscribe(
+        middleware::MsgType::APP_FileInfo_Rsp, middleware::ModuleId::UI,
+        [this](const middleware::Message& msg) {
+            middleware::FileInfoPayload p{};
+            if (file_info_cb_ && read_inline_pod(msg, p)) {
+                file_info_cb_(p);
+            }
+        }));
+
     /* GLAVO：打印进度推送 */
     subs_.push_back(bus.subscribe(
         middleware::MsgType::APP_Print_Progress_Ntf, middleware::ModuleId::UI,
@@ -107,6 +117,14 @@ void UiMsgProxy::init()
             middleware::PrintProgressPayload p{};
             if (print_progress_cb_ && read_inline_pod(msg, p)) {
                 print_progress_cb_(p);
+            }
+        }));
+
+    subs_.push_back(bus.subscribe(
+        middleware::MsgType::APP_Print_Terminate_Done, middleware::ModuleId::UI,
+        [this](const middleware::Message&) {
+            if (print_terminate_done_cb_) {
+                print_terminate_done_cb_();
             }
         }));
 }
@@ -186,6 +204,18 @@ void UiMsgProxy::register_fs_dir(FsDirCb cb)
     fs_dir_cb_ = std::move(cb);
 }
 
+void UiMsgProxy::send_file_info_req(uint32_t file_index)
+{
+    const middleware::PrintStartReqPayload req{file_index};
+    publish_pod(middleware::MsgType::UI_FileInfo_Req,
+                middleware::ModuleId::APP_GLAVO, req);
+}
+
+void UiMsgProxy::register_file_info(FileInfoCb cb)
+{
+    file_info_cb_ = std::move(cb);
+}
+
 void UiMsgProxy::send_print_start(uint32_t file_index)
 {
     const middleware::PrintStartReqPayload req{file_index};
@@ -196,6 +226,11 @@ void UiMsgProxy::send_print_start(uint32_t file_index)
 void UiMsgProxy::register_print_progress(PrintProgressCb cb)
 {
     print_progress_cb_ = std::move(cb);
+}
+
+void UiMsgProxy::register_print_terminate_done(PrintTerminateDoneCb cb)
+{
+    print_terminate_done_cb_ = std::move(cb);
 }
 
 void UiMsgProxy::send_print_terminate()
