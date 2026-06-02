@@ -39,6 +39,17 @@ else()
     message(STATUS "services: debug logging DISABLED")
 endif()
 
+# TCP/串口链路调试开关：cmake -DTCP_DEBUG=ON/OFF
+option(TCP_DEBUG "Print TCP sender and serial link debug trace to stderr" OFF)
+
+if(TCP_DEBUG)
+    target_compile_definitions(${SERVICES_TARGET} PUBLIC TCP_DEBUG=1)
+    message(STATUS "services: TCP link debug logging ENABLED")
+else()
+    target_compile_definitions(${SERVICES_TARGET} PUBLIC TCP_DEBUG=0)
+    message(STATUS "services: TCP link debug logging DISABLED")
+endif()
+
 target_compile_options(${SERVICES_TARGET}
     PRIVATE
         -Wall -Wextra

@@ -3,7 +3,7 @@
 
 /** TCP / 串口默认连接参数 */
 #ifndef GLAVO_TCP_DEFAULT_IP
-#define GLAVO_TCP_DEFAULT_IP  "192.168.1.112"
+#define GLAVO_TCP_DEFAULT_IP  "192.168.1.30"
 #endif
 
 #ifndef GLAVO_TCP_DEFAULT_PORT
@@ -20,7 +20,7 @@
 
 /** 换层：0=跳过 M3000 等待与串口换层；1=完整换层流程 */
 #ifndef GLAVO_ENABLE_LAYER_CHANGE
-#define GLAVO_ENABLE_LAYER_CHANGE  0
+#define GLAVO_ENABLE_LAYER_CHANGE  1
 #endif
 
 #ifndef GCODE_DEFAULT_LAYER_UM

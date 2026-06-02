@@ -352,8 +352,10 @@ bool GcodeWorker::build_and_push_packet()
         }
     }
 
-    float cal_x = out_x;
-    float cal_y = out_y;
+#if SERVICES_DEBUG
+    const float cal_x = out_x;
+    const float cal_y = out_y;
+#endif
 
     float center_dx = center_offset_x_;
     float center_dy = center_offset_y_;
@@ -362,12 +364,11 @@ bool GcodeWorker::build_and_push_packet()
 
     const float ox = out_x * image_scale_gain_;
     const float oy = out_y * image_scale_gain_;
-    const float oz = z_ * image_scale_gain_;
 
 #if SERVICES_DEBUG
     GCODE_MOTION_COORD_DBG(
-        "parse(%.4f,%.4f) cal(%.4f,%.4f) center(%.4f,%.4f) off(%.4f,%.4f) scale(%.4f,%.4f) scale_gain=%.4f",
-        x_, y_, cal_x, cal_y, out_x, out_y, center_dx, center_dy, ox, oy, image_scale_gain_);
+        "parse(%.4f,%.4f,%.4f) cal(%.4f,%.4f) center(%.4f,%.4f) off(%.4f,%.4f) scale(%.4f,%.4f) scale_gain=%.4f",
+        x_, y_, z_, cal_x, cal_y, out_x, out_y, center_dx, center_dy, ox, oy, image_scale_gain_);
 #endif
 
     uint8_t lo = 0;
@@ -381,9 +382,9 @@ bool GcodeWorker::build_and_push_packet()
     pkt.data[3] = lo;
     pkt.data[4] = hi;
 
-    coordinate_to_offset_bytes(oz, image_rang_gain_, &lo, &hi);
-    pkt.data[5] = lo;
-    pkt.data[6] = hi;
+    /* Z 仅用于层厚（串口换层）；TCP 运动子包 Z 固定为 0 */
+    pkt.data[5] = 0;
+    pkt.data[6] = 0;
 
 #if SERVICES_DEBUG
     {
@@ -391,12 +392,10 @@ bool GcodeWorker::build_and_push_packet()
                                (static_cast<uint16_t>(pkt.data[2]) << 8);
         const uint16_t map_y = static_cast<uint16_t>(pkt.data[3]) |
                                (static_cast<uint16_t>(pkt.data[4]) << 8);
-        const uint16_t map_z = static_cast<uint16_t>(pkt.data[5]) |
-                               (static_cast<uint16_t>(pkt.data[6]) << 8);
         GCODE_MOTION_COORD_DBG(
-            "mapped u16 X=%u Y=%u Z=%u rang_gain=%.4f (pre_map %.4f,%.4f,%.4f)",
-            (unsigned)map_x, (unsigned)map_y, (unsigned)map_z,
-            image_rang_gain_, ox, oy, oz);
+            "mapped u16 X=%u Y=%u Z=0 rang_gain=%.4f (pre_map %.4f,%.4f layer_z=%.4f)",
+            (unsigned)map_x, (unsigned)map_y,
+            image_rang_gain_, ox, oy, z_);
     }
 #endif
 
