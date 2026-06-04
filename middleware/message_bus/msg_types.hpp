@@ -10,25 +10,24 @@ namespace middleware {
 
 enum class ModuleId : uint32_t {
     UI        = 0x01,
-    APP_MCU,    /**< MCU 板后端服务 */
-    APP_GLAVO,  /**< 振镜控制板后端服务 */
+    APP_GLAVO,  /**< 振镜/串口统一后端服务 */
 };
 
 enum class MsgType : uint32_t {
-    APP_Update_Ntf      = 0x1000,  /**< MCU → UI 环境/状态推送 */
-    UI_PM25_Req,  /**< UI → MCU PM2.5 检测请求 */
-    APP_PM25_Rsp ,  /**< MCU → UI PM2.5 检测响应 */
-    UI_CLOSE_DOOR_Req,  /**< UI → MCU 关门检测请求 */
-    APP_CLOSE_DOOR_Rsp,  /**< MCU → UI 关门检测响应 */
+    APP_Update_Ntf      = 0x1000,  /**< GLAVO → UI 环境/状态推送（串口 0x9B 上报） */
+    UI_PM25_Req,  /**< UI → GLAVO PM2.5 检测请求 */
+    APP_PM25_Rsp ,  /**< GLAVO → UI PM2.5 检测响应 */
+    UI_CLOSE_DOOR_Req,  /**< UI → GLAVO 关门检测请求 */
+    APP_CLOSE_DOOR_Rsp,  /**< GLAVO → UI 关门检测响应 */
     Fs_DirOpen_Req,  /**< UI → GLAVO 打开目录（无 body） */
     Fs_DirOpen_Rsp,  /**< GLAVO → UI 目录+文件列表（BufferRef：FsDirHeader + N×FileEntryPayload） */
 
-    // ---- 打印流程：MCU / GLAVO 作业 ----
-    UI_OpenDoor_Req,  /**< UI → MCU 开门动作请求 */
-    APP_OpenDoor_Rsp,  /**< MCU → UI 开门完成 */
-    UI_Purify_Req,  /**< UI → MCU 启动净化 */
-    APP_Purify_Progress,  /**< MCU → UI 净化进度 */
-    APP_Purify_Rsp,  /**< MCU → UI 净化完成 */
+    // ---- 打印流程 / 舱体控制 ----
+    UI_OpenDoor_Req,  /**< UI → GLAVO 开门动作请求 */
+    APP_OpenDoor_Rsp,  /**< GLAVO → UI 开门完成 */
+    UI_Purify_Req,  /**< UI → GLAVO 启动净化（暂未实现） */
+    APP_Purify_Progress,  /**< GLAVO → UI 净化进度 */
+    APP_Purify_Rsp,  /**< GLAVO → UI 净化完成 */
     UI_FileInfo_Req,  /**< UI → GLAVO 请求文件详细信息（PrintStartReqPayload） */
     APP_FileInfo_Rsp,  /**< GLAVO → UI 文件详细信息响应（FileInfoPayload） */
     UI_Print_Start_Req,  /**< UI → GLAVO 按 file_index 启动打印作业（PrintStartReqPayload） */

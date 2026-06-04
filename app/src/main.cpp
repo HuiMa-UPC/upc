@@ -5,7 +5,6 @@
 #include "buffer_pool.hpp"
 
 #include "glavo_service.hpp"
-#include "mcu_service.hpp"
 #include "tcp_sender.hpp"
 #include "device_config.hpp"
 
@@ -24,9 +23,7 @@ int main(int argc, char** argv) {
     middleware::MsgBus::instance().init();
 
     services::GlavoService glavo_service;
-    services::MCUService mcu_service;
     glavo_service.init();
-    mcu_service.init();
 
     auto& tcp = services::TcpSender::instance();
 
@@ -49,7 +46,6 @@ int main(int argc, char** argv) {
     ui::app_init(lv_scr_act());
 
     glavo_service.start();
-    mcu_service.start();
 
     while (1) {
         const uint32_t delay = lv_timer_handler();

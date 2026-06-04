@@ -1,7 +1,10 @@
 #include "tcp_sender.hpp"
 #include "protocol_mcu.hpp"
 #include "print_job_state.hpp"
-#include "gcode_worker.hpp"
+#include "parser_manager.hpp"
+#include "parser_worker.hpp"
+#include "msg_bus.hpp"
+#include "msg_types.hpp"
 
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -19,6 +22,11 @@
 namespace services {
 
 namespace {
+
+IParserWorker* active_parser()
+{
+    return ParserManager::instance().active();
+}
 
 #if TCP_DEBUG
 /**
@@ -142,6 +150,93 @@ size_t serial_guess_frame_len(const uint8_t* buf, size_t avail)
     return avail < frame_len ? 0 : frame_len;
 }
 
+#if TCP_DEBUG
+void serial_log_rx_frame(const uint8_t* frame, size_t len)
+{
+    char hex[256];
+    hex_dump(frame, len, hex, sizeof(hex));
+
+    serial_sensor_report_t sensor{};
+    serial_sensor_err_t serr = SERIAL_SENSOR_ERR_NONE;
+    if(serial_parse_sensor_report_detail(frame, len, &sensor, &serr) == 0) {
+        printf("[TcpSender][RX] SENSOR OK len=%zu %s\n", len, hex);
+        printf("[TcpSender][RX]   O2=%.1f%% press=%d mbar temp=%.1fC hum=%.1f%% "
+               "PM2.5=%.0f powder=%u subs=%.1fC hall=0x%04X seq=%u\n",
+               sensor.oxygen_percent,
+               static_cast<int>(sensor.pressure_mbar),
+               sensor.temperature_c,
+               sensor.humidity_percent,
+               sensor.pm25_ug_m3,
+               static_cast<unsigned>(sensor.powder_present),
+               sensor.substrate_temp_c,
+               static_cast<unsigned>(sensor.hall_bitmap),
+               len >= 6 ? static_cast<unsigned>(frame[5]) : 0u);
+        return;
+    }
+
+    if(serial_frame_is_sensor_report(frame, len)) {
+        uint8_t calc = 0;
+        uint8_t rx   = 0;
+        const int cret = serial_frame_checksum_check(frame, len, &calc, &rx);
+        if(serr == SERIAL_SENSOR_ERR_CHECKSUM || cret == -2) {
+            printf("[TcpSender][RX] SENSOR FAIL len=%zu err=%s calc=%02X rx=%02X "
+                   "len_field=%u tlv=%02X/%02X %s\n",
+                   len,
+                   serial_sensor_err_string(serr),
+                   calc,
+                   rx,
+                   len >= 7 ? static_cast<unsigned>(frame[6]) : 0u,
+                   len >= 8 ? static_cast<unsigned>(frame[7]) : 0u,
+                   len >= 9 ? static_cast<unsigned>(frame[8]) : 0u,
+                   hex);
+        } else {
+            printf("[TcpSender][RX] SENSOR FAIL len=%zu err=%s len_field=%u "
+                   "tlv=%02X/%02X %s\n",
+                   len,
+                   serial_sensor_err_string(serr),
+                   len >= 7 ? static_cast<unsigned>(frame[6]) : 0u,
+                   len >= 8 ? static_cast<unsigned>(frame[7]) : 0u,
+                   len >= 9 ? static_cast<unsigned>(frame[8]) : 0u,
+                   hex);
+        }
+        return;
+    }
+
+    const serial_event_t evt = serial_parse_frame(frame, len);
+    if(evt != SERIAL_EVT_NONE) {
+        const char* evt_name = "UNKNOWN";
+        switch(evt) {
+            case SERIAL_EVT_PRINT_READY:        evt_name = "PRINT_READY";        break;
+            case SERIAL_EVT_PRINT_CONDITION_OK: evt_name = "PRINT_CONDITION_OK"; break;
+            default: break;
+        }
+        printf("[TcpSender][RX] LAYER len=%zu event=%s %s\n", len, evt_name, hex);
+        return;
+    }
+
+    if(len >= 3 && frame[0] == 0x5A && frame[1] == 0xA5 && frame[2] == 0xBB) {
+        uint8_t calc = 0;
+        uint8_t rx   = 0;
+        const int cret = serial_frame_checksum_check(frame, len, &calc, &rx);
+        printf("[TcpSender][RX] SERIAL UNKNOWN len=%zu port=%02X cmd=%02X seq=%u "
+               "len_field=%u type=%02X checksum=%s calc=%02X rx=%02X %s\n",
+               len,
+               len >= 4 ? frame[3] : 0,
+               len >= 5 ? frame[4] : 0,
+               len >= 6 ? static_cast<unsigned>(frame[5]) : 0u,
+               len >= 7 ? static_cast<unsigned>(frame[6]) : 0u,
+               len >= 8 ? frame[7] : 0,
+               cret == 0 ? "OK" : (cret == -2 ? "BAD" : "N/A"),
+               calc,
+               rx,
+               hex);
+        return;
+    }
+
+    printf("[TcpSender][RX] SERIAL BAD len=%zu %s\n", len, hex);
+}
+#endif
+
 /**
  * @brief 串口帧处理函数
  * @param frame 完整帧数据指针
@@ -152,20 +247,18 @@ size_t serial_guess_frame_len(const uint8_t* buf, size_t avail)
  */
 void serial_handle_frame(const uint8_t* frame, size_t len)
 {
-    const serial_event_t evt = serial_parse_frame(frame, len);
 #if TCP_DEBUG
-    if(evt != SERIAL_EVT_NONE) {
-        char hex[128];
-        hex_dump(frame, len, hex, sizeof(hex));
-        const char* evt_name = "UNKNOWN";
-        switch(evt) {
-            case SERIAL_EVT_PRINT_READY:        evt_name = "PRINT_READY";        break;
-            case SERIAL_EVT_PRINT_CONDITION_OK: evt_name = "PRINT_CONDITION_OK"; break;
-            default: break;
-        }
-        printf("[TcpSender][RX] serial event: %s, frame[%zu] = %s\n", evt_name, len, hex);
-    }
+    serial_log_rx_frame(frame, len);
 #endif
+
+    serial_sensor_report_t sensor{};
+    serial_sensor_err_t serr = SERIAL_SENSOR_ERR_NONE;
+    if(serial_parse_sensor_report_detail(frame, len, &sensor, &serr) == 0) {
+        TcpSender::instance().on_sensor_report(sensor);
+        return;
+    }
+
+    const serial_event_t evt = serial_parse_frame(frame, len);
     if(evt != SERIAL_EVT_NONE) {
         TcpSender::instance().notify_serial_event(evt);
     }
@@ -199,17 +292,23 @@ void drain_framed_rx(int (*recv_fn)(uint8_t*, size_t),
         if(n <= 0) {
             break; // 无数据或出错，结束本次排空
         }
-        // 防溢出：若累积缓冲区快满了，丢弃前半部分最旧数据
-        if(*accum_len + (size_t)n > accum_cap) {
-            const size_t keep = accum_cap / 2;
-            if(*accum_len > keep) {
-                std::memmove(accum, accum + *accum_len - keep, keep);
-                *accum_len = keep;
+        // 防溢出：追加前必须腾出空间（旧逻辑在 accum_len 较小时会越界写）
+        if((size_t)n > accum_cap) {
+            std::memcpy(accum, chunk + n - accum_cap, accum_cap);
+            *accum_len = accum_cap;
+        } else {
+            while(*accum_len + (size_t)n > accum_cap) {
+                const size_t drop = *accum_len + (size_t)n - accum_cap;
+                if(drop >= *accum_len) {
+                    *accum_len = 0;
+                    break;
+                }
+                std::memmove(accum, accum + drop, *accum_len - drop);
+                *accum_len -= drop;
             }
+            std::memcpy(accum + *accum_len, chunk, (size_t)n);
+            *accum_len += (size_t)n;
         }
-        // 追加新数据
-        std::memcpy(accum + *accum_len, chunk, (size_t)n);
-        *accum_len += (size_t)n;
 
         // 分帧解析
         size_t pos = 0;
@@ -323,7 +422,6 @@ int TcpSender::connect_tcp(const char* ip, int port)
     tcp_port_ = port;
 
     tcp_fd_ = fd;
-    PrintJobState::instance().set_tcp_connected(true);
     tcp_rx_accum_len_ = 0; // 清空接收累积区
 
 #if SERVICES_DEBUG
@@ -381,7 +479,6 @@ int TcpSender::open_serial(const char* device, int baud)
 
     serial_fd_ = fd;
     serial_rx_accum_len_ = 0;
-    PrintJobState::instance().set_serial_open(true);
 
 #if SERVICES_DEBUG
     printf("[TcpSender] serial open %s @ %d\n", device, baud);
@@ -421,15 +518,11 @@ void TcpSender::stop()
         close(serial_fd_);
         serial_fd_ = -1;
     }
-    PrintJobState::instance().set_tcp_connected(false);
-    PrintJobState::instance().set_serial_open(false);
 }
 
 /* ---------- 状态查询 ---------- */
 
-bool TcpSender::is_link_running() const { return link_run_.load(); }
 bool TcpSender::is_tcp_connected() const { return tcp_fd_ >= 0; }
-bool TcpSender::is_serial_open() const { return serial_fd_ >= 0; }
 bool TcpSender::is_sending() const { return is_sending_.load(); }
 
 /* ---------- 事件与回调 ---------- */
@@ -439,6 +532,97 @@ void TcpSender::emit_event(TcpJobEvent ev)
     if(event_cb_) {
         event_cb_(ev);
     }
+}
+
+void TcpSender::enqueue_serial_tx(const uint8_t* data, size_t len)
+{
+    if(!data || len == 0 || len > sizeof(SerialTxItem::data)) {
+        return;
+    }
+    SerialTxItem item{};
+    std::memcpy(item.data, data, len);
+    item.len = len;
+    std::lock_guard<std::mutex> lock(serial_tx_mtx_);
+    if(serial_tx_queue_.size() >= kSerialTxQueueMax) {
+        serial_tx_queue_.pop_front();
+    }
+    serial_tx_queue_.push_back(item);
+}
+
+EnvSnapshotCache TcpSender::env_snapshot() const
+{
+    std::lock_guard<std::mutex> lock(env_mtx_);
+    return env_cache_;
+}
+
+void TcpSender::drain_serial_tx_queue()
+{
+    if(serial_fd_ < 0) {
+        return;
+    }
+    for(;;) {
+        SerialTxItem item{};
+        {
+            std::lock_guard<std::mutex> lock(serial_tx_mtx_);
+            if(serial_tx_queue_.empty()) {
+                break;
+            }
+            item = serial_tx_queue_.front();
+            serial_tx_queue_.pop_front();
+        }
+        serial_send_raw(item.data, item.len);
+    }
+}
+
+void TcpSender::on_sensor_report(const serial_sensor_report_t& report)
+{
+    {
+        std::lock_guard<std::mutex> lock(env_mtx_);
+        env_cache_.pm25_cabin      = report.pm25_ug_m3;
+        env_cache_.pm25_indoor     = report.pm25_ug_m3;
+        env_cache_.temperature_c   = report.temperature_c;
+        env_cache_.oxygen_percent  = report.oxygen_percent;
+        env_cache_.humidity_percent = report.humidity_percent;
+        env_cache_.valid           = true;
+    }
+    publish_env_update_ntf();
+}
+
+void TcpSender::publish_env_update_ntf()
+{
+    const EnvSnapshotCache snap = env_snapshot();
+    if(!snap.valid) {
+        return;
+    }
+
+    const auto job = PrintJobState::instance().snapshot();
+    middleware::UserHomeStatus status = middleware::UserHomeStatus::Idle;
+    if(job.is_sending) {
+        status = middleware::UserHomeStatus::Printing;
+    } else if(job.job_error) {
+        status = middleware::UserHomeStatus::Error;
+    } else if(job.job_completed) {
+        status = middleware::UserHomeStatus::Ready;
+    } else if(is_tcp_connected()) {
+        status = middleware::UserHomeStatus::Ready;
+    }
+
+    middleware::EnvSnapshotPayload p{};
+    std::snprintf(p.device_name, sizeof(p.device_name), "%s", "Rongsu-3D");
+    p.status         = static_cast<uint32_t>(status);
+    p.wifi_connected = is_tcp_connected() ? 1 : 0;
+    p.signal_bars    = p.wifi_connected ? 3 : 0;
+    p.pm25_indoor    = snap.pm25_indoor;
+    p.pm25_cabin     = snap.pm25_cabin;
+    p.temperature_c  = snap.temperature_c;
+    p.oxygen_percent = snap.oxygen_percent;
+
+    middleware::Message ntf(middleware::MsgType::APP_Update_Ntf,
+        middleware::ModuleId::APP_GLAVO,
+        middleware::ModuleId::UI);
+    ntf.payload = middleware::MsgPayload::from_bytes(
+        reinterpret_cast<const uint8_t*>(&p), sizeof(p));
+    (void)middleware::MsgBus::instance().publish_async(ntf);
 }
 
 void TcpSender::notify_serial_event(serial_event_t evt)
@@ -473,7 +657,6 @@ int TcpSender::tcp_send_raw(const uint8_t* data, size_t len)
         if(n < 0 && (errno == EPIPE || errno == ECONNRESET)) {
             close(tcp_fd_);
             tcp_fd_ = -1;
-            PrintJobState::instance().set_tcp_connected(false);
         }
         return -1;
     }
@@ -496,7 +679,6 @@ int TcpSender::tcp_recv_nonblock(uint8_t* buf, size_t buf_size)
         // 对端优雅关闭
         close(tcp_fd_);
         tcp_fd_ = -1;
-        PrintJobState::instance().set_tcp_connected(false);
         return -1;
     }
     return (int)n;
@@ -550,9 +732,21 @@ int TcpSender::serial_recv_nonblock(uint8_t* buf, size_t buf_size)
 void TcpSender::serial_drain_rx()
 {
     uint8_t chunk[64];
+#if TCP_DEBUG
+    auto recv_fn = +[](uint8_t* b, size_t s) -> int {
+        const int n = TcpSender::instance().serial_recv_nonblock(b, s);
+        if(n > 0) {
+            char hex[256];
+            hex_dump(b, static_cast<size_t>(n), hex, sizeof(hex));
+            printf("[TcpSender][RX] serial raw chunk[%d] = %s\n", n, hex);
+        }
+        return n;
+    };
+#else
     auto recv_fn = +[](uint8_t* b, size_t s) -> int {
         return TcpSender::instance().serial_recv_nonblock(b, s);
     };
+#endif
     drain_framed_rx(recv_fn, chunk, sizeof(chunk),
                     serial_rx_accum_, sizeof(serial_rx_accum_), &serial_rx_accum_len_,
                     serial_guess_frame_len,
@@ -644,12 +838,28 @@ void TcpSender::refill_tcp_stage_from_ring()
 bool TcpSender::mcu_rates_drained() const
 {
     const auto snap = PrintJobState::instance().snapshot();
-    return snap.cmd_cache_rate == 0 && snap.data_cache_rate == 0;
+    return snap.cmd_cache_rate  <= static_cast<uint16_t>(MCU_DRAIN_MAX_RATE) &&
+           snap.data_cache_rate <= static_cast<uint16_t>(MCU_DRAIN_MAX_RATE);
 }
 
 bool TcpSender::motion_stream_active() const
 {
-    return is_sending_.load() && !waiting_layer_.load() && !terminate_pending_.load();
+    /* natural_complete_pending 阶段须发心跳刷新 rate，不能视为活跃下发 */
+    return is_sending_.load() && !waiting_layer_.load() &&
+           !terminate_pending_.load() && !natural_complete_pending_.load();
+}
+
+void TcpSender::poll_mcu_drain_heartbeat()
+{
+    if(tcp_fd_ < 0) {
+        return;
+    }
+    uint8_t hb[64];
+    const int hblen = build_heartbeat_frame(hb, sizeof(hb));
+    if(hblen > 0) {
+        tcp_send_raw(hb, (size_t)hblen);
+        tcp_drain_rx();
+    }
 }
 
 /* ---------- 开始阈值判断 ---------- */
@@ -660,38 +870,41 @@ bool TcpSender::motion_stream_active() const
  *
  * 判定逻辑：
  * 1. 若 RingBuffer 中已缓存 >= TCP_BATCH_SIZE 个包，直接满足；
- * 2. 若 GcodeWorker 仍在解析中：
+ * 2. 若解析器仍在解析中：
  *    - 若总运动包数 >= batch 且当前有包，则满足；
  *    - 若处于 start_pending 挂起状态，且文件已读完、总包数 < batch 但 > 0，
  *      说明文件很小，也满足；
- * 3. 若 GcodeWorker 已结束解析但文件已打开：只要总包数 > 0 且有包，即满足。
+ * 3. 若解析器已结束解析但文件已打开：只要总包数 > 0 且有包，即满足。
  */
 bool TcpSender::ring_meets_start_threshold() const
 {
     if(!rb_) {
         return false;
     }
+
+    IParserWorker* parser = active_parser();
+    if(!parser) {
+        return false;
+    }
+
     const size_t count = rb_->count();
     const int batch = TCP_BATCH_SIZE;
-    int total = GcodeWorker::instance().get_total_motion_packets();
-    if(total <= 0) {
-        total = PrintJobState::instance().snapshot().total_packets;
-    }
+    const int total = parser->get_total_motion_packets();
 
     if(count >= static_cast<size_t>(batch)) {
         return true;
     }
-    if(GcodeWorker::instance().is_parsing()) {
+    if(parser->is_parsing()) {
         if(total >= batch && count > 0) {
             return true;
         }
-        if(start_pending_.load() && GcodeWorker::instance().is_file_read_exhausted() &&
+        if(start_pending_.load() && parser->is_file_read_exhausted() &&
            total > 0 && total < batch && count > 0) {
             return true; // 小文件特例
         }
         return false;
     }
-    if(GcodeWorker::instance().is_file_open()) {
+    if(parser->is_file_open()) {
         return total > 0 && count > 0;
     }
     return false;
@@ -708,6 +921,7 @@ void TcpSender::reset_motion_state(bool clear_start_pending)
     waiting_layer_.store(false);
     layer_drain_pending_.store(false);
     natural_complete_pending_.store(false);
+    natural_complete_since_ = {};
     serial_handshake_phase_.store(SERIAL_HS_NONE);
     serial_evt_condition_ok_.store(false);
     serial_evt_print_ready_.store(false);
@@ -722,10 +936,12 @@ void TcpSender::begin_sending_internal()
     waiting_layer_.store(false);
     layer_drain_pending_.store(false);
     natural_complete_pending_.store(false);
+    natural_complete_since_ = {};
     tcp_stage_clear();
 
     // 记录首层高度，用于串口首次握手
-    first_layer_height_um_  = GcodeWorker::instance().get_layer_height_um();
+    IParserWorker* parser = active_parser();
+    first_layer_height_um_  = parser ? parser->get_layer_height_um() : GCODE_DEFAULT_LAYER_UM;
     active_layer_height_um_ = first_layer_height_um_;
 
     // 重置 PrintJobState 中的发送相关计数与标志
@@ -847,8 +1063,8 @@ void TcpSender::run_manual_terminate_cleanup()
     send_tcp_reset();
     send_serial_print_terminate();
 
-    // 2. 停止 Gcode 解析、清空 RingBuffer 与 stage 队列
-    GcodeWorker::instance().stop_parse();
+    // 2. 停止解析、清空 RingBuffer 与 stage 队列
+    ParserManager::instance().stop_parse();
     if(rb_) {
         rb_->clear();
     }
@@ -1115,20 +1331,53 @@ void TcpSender::link_try_finish_sending()
     if(rb_ && !rb_->empty()) {
         return; // RingBuffer 仍有数据
     }
-    if(GcodeWorker::instance().is_parsing()) {
-        return; // GcodeWorker 仍在解析，可能还有新数据产生
+    IParserWorker* parser = active_parser();
+    if(!parser) {
+        return;
     }
-    if(!GcodeWorker::instance().is_file_read_exhausted()) {
+    if(parser->is_parsing()) {
+        return; // 解析器仍在解析，可能还有新数据产生
+    }
+    if(!parser->is_file_read_exhausted()) {
         return; // 文件尚未读完
     }
+
+    const auto now = std::chrono::steady_clock::now();
+
     // 所有运动包已下发，但需等 MCU 缓存排空才算真正完成
     if(!mcu_rates_drained()) {
+        if(!natural_complete_pending_.load()) {
+            natural_complete_since_ = now;
+#if TCP_DEBUG
+            const auto snap = PrintJobState::instance().snapshot();
+            printf("[TcpSender] finish wait: MCU drain pending cmd_rate=%u data_rate=%u\n",
+                   static_cast<unsigned>(snap.cmd_cache_rate),
+                   static_cast<unsigned>(snap.data_cache_rate));
+#endif
+        }
         natural_complete_pending_.store(true);
-        return;
+        poll_mcu_drain_heartbeat();
+
+        if(MCU_DRAIN_TIMEOUT_MS > 0 &&
+           natural_complete_since_.time_since_epoch().count() != 0 &&
+           now - natural_complete_since_ >=
+               std::chrono::milliseconds(MCU_DRAIN_TIMEOUT_MS)) {
+#if TCP_DEBUG
+            const auto snap = PrintJobState::instance().snapshot();
+            printf("[TcpSender] finish wait: drain timeout (%d ms), force complete "
+                   "cmd_rate=%u data_rate=%u\n",
+                   MCU_DRAIN_TIMEOUT_MS,
+                   static_cast<unsigned>(snap.cmd_cache_rate),
+                   static_cast<unsigned>(snap.data_cache_rate));
+#endif
+        } else {
+            return;
+        }
     }
 
     // 真正自然完成：执行清理并上报事件
     natural_complete_pending_.store(false);
+    natural_complete_since_ = {};
     is_sending_.store(false);
     run_natural_complete_cleanup();
 }
@@ -1197,7 +1446,8 @@ void TcpSender::link_thread_fn()
                 tcp_drain_rx(); // 心跳发送后再排空一次 RX
             }
 
-            // ---------- 串口 RX 与握手 ----------
+            // ---------- 串口 TX 队列与 RX、握手 ----------
+            drain_serial_tx_queue();
             serial_drain_rx();
             link_process_serial_handshake();
 

@@ -64,11 +64,6 @@ size_t RingBuffer::count() const
     return cnt;
 }
 
-size_t RingBuffer::capacity() const
-{
-    return RB_MAX_PACKETS;
-}
-
 void RingBuffer::clear()
 {
     std::lock_guard<std::mutex> lock(mtx);

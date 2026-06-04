@@ -1,5 +1,9 @@
 #include "glavo_service.hpp"
-#include "gcode_worker.hpp"
+#include "parser_context.hpp"
+#include "parser_manager.hpp"
+#include "parser_registry.hpp"
+#include "parser_worker.hpp"
+#include "cal_parser.hpp"
 #include "tcp_sender.hpp"
 #include "print_job_state.hpp"
 #include "msg_types.hpp"
@@ -29,22 +33,31 @@ int percent_rounded(int num, int den)
     return num * 100 / den;
 }
 
+IParserWorker* active_parser()
+{
+    return ParserManager::instance().active();
+}
+
 /** 打印进度分母：解析完成后用最终包数；解析中用行数比例外推，避免 sent/已解析 虚高 */
 int progress_denominator(int sent_packets)
 {
-    const int parsed_packets = GcodeWorker::instance().get_total_motion_packets();
+    IParserWorker* parser = active_parser();
+    if(!parser) {
+        return 0;
+    }
+
+    const int parsed_packets = parser->get_total_motion_packets();
     if(parsed_packets <= 0) {
         return 0;
     }
 
-    const bool parse_done = GcodeWorker::instance().is_file_read_exhausted() &&
-                            !GcodeWorker::instance().is_parsing();
+    const bool parse_done = parser->is_file_read_exhausted() && !parser->is_parsing();
     if(parse_done) {
         return parsed_packets;
     }
 
-    const int parsed_lines = GcodeWorker::instance().get_parsed_lines();
-    const int total_lines  = GcodeWorker::instance().get_total_lines();
+    const int parsed_lines = parser->get_parsed_lines();
+    const int total_lines  = parser->get_total_lines();
     if(parsed_lines > 0 && total_lines > parsed_lines) {
         const int64_t estimated =
             (static_cast<int64_t>(parsed_packets) * total_lines) / parsed_lines;
@@ -54,18 +67,6 @@ int progress_denominator(int sent_packets)
     }
 
     return parsed_packets + sent_packets + 1;
-}
-
-bool has_allowed_ext(const std::string& name) {
-    static const char* allowed[] = {".txt", ".nc", ".gcode"};
-    for (const char* ext : allowed) {
-        const size_t ext_len = std::strlen(ext);
-        if (name.size() >= ext_len &&
-            std::strcmp(name.c_str() + name.size() - ext_len, ext) == 0) {
-            return true;
-        }
-    }
-    return false;
 }
 
 } // namespace
@@ -99,8 +100,8 @@ GlavoService::~GlavoService() {
 }
 
 bool GlavoService::do_init() {
-    GcodeWorker::instance().parser_load_gains();
-    TcpSender::instance().bind_ring_buffer(&GcodeWorker::instance().ring_buffer());
+    ParserContext::instance().load_calibration(CAL_DEFAULT_FILE_PATH);
+    ParserManager::instance().bind_tcp_output();
     TcpSender::instance().set_job_event_callback(
         [this](TcpJobEvent ev) { on_tcp_job_event(ev); });
     TcpSender::instance().set_progress_callback(
@@ -116,6 +117,14 @@ bool GlavoService::do_start() {
     subscribe(middleware::MsgType::UI_Print_Start_Req,
         [this](const middleware::Message& msg) { on_message(msg); });
     subscribe(middleware::MsgType::UI_Print_Terminate_Req,
+        [this](const middleware::Message& msg) { on_message(msg); });
+    subscribe(middleware::MsgType::UI_PM25_Req,
+        [this](const middleware::Message& msg) { on_message(msg); });
+    subscribe(middleware::MsgType::UI_CLOSE_DOOR_Req,
+        [this](const middleware::Message& msg) { on_message(msg); });
+    subscribe(middleware::MsgType::UI_OpenDoor_Req,
+        [this](const middleware::Message& msg) { on_message(msg); });
+    subscribe(middleware::MsgType::UI_Purify_Req,
         [this](const middleware::Message& msg) { on_message(msg); });
     return true;
 }
@@ -139,9 +148,61 @@ void GlavoService::handle_message(const middleware::Message& msg) {
         case middleware::MsgType::UI_Print_Terminate_Req:
             handle_print_terminate(msg);
             break;
+        case middleware::MsgType::UI_PM25_Req:
+            handle_pm25_request(msg);
+            break;
+        case middleware::MsgType::UI_CLOSE_DOOR_Req:
+            handle_close_door_request(msg);
+            break;
+        case middleware::MsgType::UI_OpenDoor_Req:
+            handle_open_door_request(msg);
+            break;
+        case middleware::MsgType::UI_Purify_Req:
+            handle_purify_request(msg);
+            break;
         default:
             break;
     }
+}
+
+void GlavoService::handle_pm25_request(const middleware::Message& msg) {
+    const auto env = TcpSender::instance().env_snapshot();
+    middleware::Pm25ResultPayload p{};
+    p.is_high   = (env.valid && env.pm25_cabin > 35.0f) ? 1 : 0;
+    p.pm25_cabin = env.valid ? env.pm25_cabin : 0.f;
+
+    middleware::Message rsp(middleware::MsgType::APP_PM25_Rsp,
+        static_cast<middleware::ModuleId>(module_id()), msg.sender_id);
+    rsp.payload = middleware::MsgPayload::from_bytes(
+        reinterpret_cast<const uint8_t*>(&p), sizeof(p));
+    (void)publish_async(rsp);
+}
+
+void GlavoService::handle_close_door_request(const middleware::Message& msg) {
+    middleware::DoorResultPayload p{};
+    p.ok = 1;
+
+    middleware::Message rsp(middleware::MsgType::APP_CLOSE_DOOR_Rsp,
+        static_cast<middleware::ModuleId>(module_id()), msg.sender_id);
+    rsp.payload = middleware::MsgPayload::from_bytes(
+        reinterpret_cast<const uint8_t*>(&p), sizeof(p));
+    (void)publish_async(rsp);
+}
+
+void GlavoService::handle_open_door_request(const middleware::Message& msg) {
+    middleware::DoorResultPayload p{};
+    p.ok = 1;
+
+    middleware::Message rsp(middleware::MsgType::APP_OpenDoor_Rsp,
+        static_cast<middleware::ModuleId>(module_id()), msg.sender_id);
+    rsp.payload = middleware::MsgPayload::from_bytes(
+        reinterpret_cast<const uint8_t*>(&p), sizeof(p));
+    (void)publish_async(rsp);
+}
+
+void GlavoService::handle_purify_request(const middleware::Message& msg) {
+    (void)msg;
+    /* 净化：协议与下位机流程待定，暂不响应 */
 }
 
 void GlavoService::on_tcp_job_event(TcpJobEvent ev) {
@@ -173,8 +234,10 @@ void GlavoService::on_motion_batch_sent() {
 void GlavoService::send_print_progress(bool force_complete) {
     const auto job = PrintJobState::instance().snapshot();
 
-    const bool parse_done = GcodeWorker::instance().is_file_read_exhausted() &&
-                            !GcodeWorker::instance().is_parsing();
+    IParserWorker* parser = active_parser();
+    const bool parse_done = parser &&
+                            parser->is_file_read_exhausted() &&
+                            !parser->is_parsing();
 
     if(parse_done && !last_parse_done_) {
         last_print_pct_ = -1;
@@ -218,13 +281,15 @@ void GlavoService::send_print_progress(bool force_complete) {
 
     last_print_pct_ = pct;
 
+    const auto env = TcpSender::instance().env_snapshot();
+
     middleware::PrintProgressPayload p{};
     p.progress_percent  = pct;
     p.remaining_minutes = 0;
-    p.pm25_indoor       = 0.f;
-    p.pm25_cabin        = 0.f;
-    p.temperature_c     = 0.f;
-    p.oxygen_percent    = 0.f;
+    p.pm25_indoor       = env.valid ? env.pm25_indoor : 0.f;
+    p.pm25_cabin        = env.valid ? env.pm25_cabin : 0.f;
+    p.temperature_c     = env.valid ? env.temperature_c : 0.f;
+    p.oxygen_percent    = env.valid ? env.oxygen_percent : 0.f;
 
     middleware::Message ntf(middleware::MsgType::APP_Print_Progress_Ntf,
         static_cast<middleware::ModuleId>(module_id()),
@@ -260,6 +325,14 @@ void GlavoService::send_dir_open_empty(const middleware::Message& req) {
 }
 
 void GlavoService::handle_dir_open(const middleware::Message& msg) {
+    if(!ParserRegistry::instance().has_any()) {
+#if SERVICES_DEBUG
+        printf("[GlavoService] dir_open: no parser registered, returning empty list\n");
+#endif
+        send_dir_open_empty(msg);
+        return;
+    }
+
     std::string path = payload_to_string(msg.payload);
     if (path.empty()) {
         path = "/home/Gcode";
@@ -286,7 +359,7 @@ void GlavoService::handle_dir_open(const middleware::Message& msg) {
         if (std::strcmp(entry->d_name, ".") == 0 || std::strcmp(entry->d_name, "..") == 0) {
             continue;
         }
-        if (!has_allowed_ext(entry->d_name)) {
+        if(!ParserRegistry::instance().match_filename(entry->d_name)) {
             continue;
         }
         current_entries_.push_back(entry->d_name);
@@ -370,13 +443,16 @@ void GlavoService::handle_file_info_req(const middleware::Message& msg) {
             if(TcpSender::instance().is_sending()) {
                 TcpSender::instance().request_terminate();
             }
-            if (GcodeWorker::instance().open_file(full_path) == 0) {
-                rsp.total_lines = static_cast<uint32_t>(GcodeWorker::instance().get_total_lines());
+            if(ParserManager::instance().open_file(full_path) == 0) {
+                IParserWorker* parser = active_parser();
+                rsp.total_lines = parser
+                    ? static_cast<uint32_t>(parser->get_total_lines())
+                    : 0u;
                 rsp.ok = 1;
                 current_file_path_ = full_path;
                 PrintJobState::instance().reset_job_counters();
                 reset_print_progress_state();
-                GcodeWorker::instance().start_parse();
+                ParserManager::instance().start_parse();
             }
         }
     }
@@ -425,16 +501,18 @@ void GlavoService::handle_print_start(const middleware::Message& msg) {
         return;
     }
 
+    IParserWorker* parser = active_parser();
     const bool already_parsing = (full_path == current_file_path_) &&
-                                  GcodeWorker::instance().is_file_open() &&
-                                  GcodeWorker::instance().is_parsing();
+                                 parser &&
+                                 parser->is_file_open() &&
+                                 parser->is_parsing();
 
-    if (!already_parsing) {
+    if(!already_parsing) {
         stop_print_job();
         if(TcpSender::instance().is_sending()) {
             TcpSender::instance().request_terminate();
         }
-        if (GcodeWorker::instance().open_file(full_path) != 0) {
+        if(ParserManager::instance().open_file(full_path) != 0) {
 #if SERVICES_DEBUG
             printf("[GlavoService] print_start: open failed\n");
 #endif
@@ -443,7 +521,7 @@ void GlavoService::handle_print_start(const middleware::Message& msg) {
         current_file_path_ = full_path;
         PrintJobState::instance().reset_job_counters();
         reset_print_progress_state();
-        GcodeWorker::instance().start_parse();
+        ParserManager::instance().start_parse();
     }
 
     print_running_.store(true);
@@ -457,13 +535,13 @@ void GlavoService::handle_print_start(const middleware::Message& msg) {
 
 void GlavoService::stop_print_job() {
     print_running_.store(false);
-    GcodeWorker::instance().stop_parse();
+    ParserManager::instance().stop_parse();
 }
 
 void GlavoService::handle_print_terminate(const middleware::Message& msg) {
     (void)msg;
     print_running_.store(false);
-    GcodeWorker::instance().stop_parse();
+    ParserManager::instance().stop_parse();
     TcpSender::instance().request_terminate();
 }
 

@@ -1,17 +1,23 @@
 cmake_minimum_required(VERSION 3.16)
 
 set(SERVICES_TARGET services)
+set(SERVICES_PARSERS_TARGET services_parsers)
 
-file(GLOB_RECURSE SERVICES_SOURCES CONFIGURE_DEPENDS
+file(GLOB SERVICES_CORE_SOURCES CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/*.c*"
+    "${CMAKE_CURRENT_SOURCE_DIR}/parser/*.c*"
     "${CMAKE_CURRENT_SOURCE_DIR}/glavo/*.c*"
-    "${CMAKE_CURRENT_SOURCE_DIR}/mcu/*.c*"
 )
-if(NOT SERVICES_SOURCES)
-    message(FATAL_ERROR "services: no source files found")
+
+file(GLOB SERVICES_PARSER_SOURCES CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/glavo/parsers/*/*.c*"
+)
+
+if(NOT SERVICES_CORE_SOURCES)
+    message(FATAL_ERROR "services: no core source files found")
 endif()
 
-add_library(${SERVICES_TARGET} STATIC ${SERVICES_SOURCES})
+add_library(${SERVICES_TARGET} STATIC ${SERVICES_CORE_SOURCES})
 add_library(services::port ALIAS ${SERVICES_TARGET})
 
 target_compile_features(${SERVICES_TARGET} PUBLIC cxx_std_17)
@@ -19,14 +25,35 @@ target_compile_features(${SERVICES_TARGET} PUBLIC cxx_std_17)
 target_include_directories(${SERVICES_TARGET}
     PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/parser>
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/glavo>
-        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/mcu>
 )
 
 target_link_libraries(${SERVICES_TARGET}
     PUBLIC
         middleware::port
 )
+
+# 各协议解析插件（独立静态库，链接时需 --whole-archive 以保证静态注册生效）
+if(SERVICES_PARSER_SOURCES)
+    add_library(${SERVICES_PARSERS_TARGET} STATIC ${SERVICES_PARSER_SOURCES})
+    add_library(services::parsers ALIAS ${SERVICES_PARSERS_TARGET})
+
+    target_compile_features(${SERVICES_PARSERS_TARGET} PUBLIC cxx_std_17)
+    target_link_libraries(${SERVICES_PARSERS_TARGET} PUBLIC ${SERVICES_TARGET})
+
+    file(GLOB PARSER_PLUGIN_DIRS LIST_DIRECTORIES true
+        "${CMAKE_CURRENT_SOURCE_DIR}/glavo/parsers/*")
+    foreach(_parser_dir IN LISTS PARSER_PLUGIN_DIRS)
+        if(IS_DIRECTORY "${_parser_dir}")
+            target_include_directories(${SERVICES_PARSERS_TARGET}
+                PUBLIC
+                    $<BUILD_INTERFACE:${_parser_dir}>)
+        endif()
+    endforeach()
+else()
+    message(STATUS "services: no parser plugins under glavo/parsers/")
+endif()
 
 # 调试日志总开关：cmake -DSERVICES_DEBUG=ON/OFF
 option(SERVICES_DEBUG "Print services debug trace to stderr" OFF)
@@ -50,14 +77,19 @@ else()
     message(STATUS "services: TCP link debug logging DISABLED")
 endif()
 
-target_compile_options(${SERVICES_TARGET}
-    PRIVATE
-        -Wall -Wextra
-        $<$<CONFIG:Debug>:-O0>
-        $<$<CONFIG:Release>:-O2>
-)
+foreach(_svc_tgt IN ITEMS ${SERVICES_TARGET} ${SERVICES_PARSERS_TARGET})
+    if(TARGET ${_svc_tgt})
+        target_compile_options(${_svc_tgt}
+            PRIVATE
+                -Wall -Wextra
+                $<$<CONFIG:Debug>:-O0>
+                $<$<CONFIG:Release>:-O2>
+        )
+    endif()
+endforeach()
 
 set(SERVICES_TARGET ${SERVICES_TARGET} PARENT_SCOPE)
+set(SERVICES_PARSERS_TARGET ${SERVICES_PARSERS_TARGET} PARENT_SCOPE)
 
 if(SERVICES_STANDALONE_BUILD)
     message(STATUS "services v1.0.0 (standalone)")

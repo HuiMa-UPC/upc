@@ -42,19 +42,6 @@ int build_reset_frame(uint8_t* out, size_t out_size)
     return 14;
 }
 
-int build_readparam_frame(uint8_t* out, size_t out_size)
-{
-    if(!out || out_size < 14) {
-        return -1;
-    }
-    out[0] = 0xBE;
-    out[1] = 0xEF;
-    out[2] = 0x01;
-    out[3] = 0x0E;
-    std::memset(&out[4], 0, 10);
-    return 14;
-}
-
 int parse_tcp_response(const uint8_t* data, size_t len, tcp_response_t* resp)
 {
     if(!data || len < 19 || !resp) {
@@ -64,13 +51,8 @@ int parse_tcp_response(const uint8_t* data, size_t len, tcp_response_t* resp)
         return -1;
     }
 
-    resp->cmd_rate   = (uint16_t)data[4] | ((uint16_t)data[5] << 8);
-    resp->data_rate  = (uint16_t)data[6] | ((uint16_t)data[7] << 8);
-    resp->flash_flag = data[8];
-    resp->current_x  = (uint16_t)data[11] | ((uint16_t)data[12] << 8);
-    resp->current_y  = (uint16_t)data[13] | ((uint16_t)data[14] << 8);
-    resp->current_z  = (uint16_t)data[15] | ((uint16_t)data[16] << 8);
-    resp->laser_state = (uint16_t)data[17] | ((uint16_t)data[18] << 8);
+    resp->cmd_rate  = (uint16_t)data[4] | ((uint16_t)data[5] << 8);
+    resp->data_rate = (uint16_t)data[6] | ((uint16_t)data[7] << 8);
     return 0;
 }
 
@@ -138,6 +120,120 @@ int serial_build_print_terminate(uint8_t* out, size_t out_size)
     return serial_build_frame(0xA2, 0x40, 0x0B, 0, nullptr, out, out_size);
 }
 
+static int16_t serial_read_le16(const uint8_t* p)
+{
+    return (int16_t)((uint16_t)p[0] | ((uint16_t)p[1] << 8u));
+}
+
+int serial_frame_is_sensor_report(const uint8_t* data, size_t len)
+{
+    if(!data || len < 5) {
+        return 0;
+    }
+    return (data[0] == 0x5A && data[1] == 0xA5 && data[2] == 0xBB &&
+            data[3] == 0xA5 && data[4] == 0x9B) ? 1 : 0;
+}
+
+int serial_frame_checksum_check(const uint8_t* data, size_t len,
+                                uint8_t* calc_out, uint8_t* rx_out)
+{
+    if(!data || len < 8) {
+        return -1;
+    }
+    const uint8_t payload_len = data[6];
+    if(len < (size_t)(8 + payload_len)) {
+        return -1;
+    }
+    const uint8_t calc = serial_checksum(data, 9 + payload_len - 2);
+    const uint8_t rx   = data[9 + payload_len - 2];
+    if(calc_out) {
+        *calc_out = calc;
+    }
+    if(rx_out) {
+        *rx_out = rx;
+    }
+    return calc == rx ? 0 : -2;
+}
+
+const char* serial_sensor_err_string(serial_sensor_err_t err)
+{
+    switch(err) {
+        case SERIAL_SENSOR_ERR_NONE:        return "OK";
+        case SERIAL_SENSOR_ERR_PARAM:       return "PARAM";
+        case SERIAL_SENSOR_ERR_TOO_SHORT:   return "TOO_SHORT";
+        case SERIAL_SENSOR_ERR_SOF:         return "SOF";
+        case SERIAL_SENSOR_ERR_PORT_CMD:    return "PORT_CMD";
+        case SERIAL_SENSOR_ERR_TLV:         return "TLV";
+        case SERIAL_SENSOR_ERR_INCOMPLETE:  return "INCOMPLETE";
+        case SERIAL_SENSOR_ERR_CHECKSUM:    return "CHECKSUM";
+        default:                            return "UNKNOWN";
+    }
+}
+
+int serial_parse_sensor_report_detail(const uint8_t* data, size_t len,
+                                      serial_sensor_report_t* out,
+                                      serial_sensor_err_t* err_out)
+{
+    auto fail = [err_out](serial_sensor_err_t e) -> int {
+        if(err_out) {
+            *err_out = e;
+        }
+        return -1;
+    };
+
+    if(!data || !out) {
+        return fail(SERIAL_SENSOR_ERR_PARAM);
+    }
+    if(len < 25) {
+        return fail(SERIAL_SENSOR_ERR_TOO_SHORT);
+    }
+    if(data[0] != 0x5A || data[1] != 0xA5 || data[2] != 0xBB) {
+        return fail(SERIAL_SENSOR_ERR_SOF);
+    }
+    if(data[3] != 0xA5 || data[4] != 0x9B) {
+        return fail(SERIAL_SENSOR_ERR_PORT_CMD);
+    }
+
+    const uint8_t payload_len = data[6];
+    if(payload_len != 0x11 || data[7] != 0x02 || data[8] != 0x0F) {
+        return fail(SERIAL_SENSOR_ERR_TLV);
+    }
+    if(len < (size_t)(8 + payload_len)) {
+        return fail(SERIAL_SENSOR_ERR_INCOMPLETE);
+    }
+
+    if(serial_frame_checksum_check(data, len, nullptr, nullptr) != 0) {
+        return fail(SERIAL_SENSOR_ERR_CHECKSUM);
+    }
+
+    const uint8_t* v = &data[9];
+    const int16_t o2_raw   = serial_read_le16(v + 0);
+    const int16_t press    = serial_read_le16(v + 2);
+    const int16_t temp_raw = serial_read_le16(v + 4);
+    const int16_t hum_raw  = serial_read_le16(v + 6);
+    const int16_t pm_raw   = serial_read_le16(v + 8);
+
+    out->oxygen_percent     = (float)o2_raw / 10.0f;
+    out->pressure_mbar      = press;
+    out->temperature_c      = (float)temp_raw / 10.0f;
+    out->humidity_percent   = (float)hum_raw / 10.0f;
+    out->pm25_ug_m3         = (float)pm_raw;
+    out->powder_present     = v[10];
+    out->substrate_temp_c   = (float)serial_read_le16(v + 11) / 10.0f;
+    out->hall_bitmap        = (uint16_t)serial_read_le16(v + 13);
+
+    if(err_out) {
+        *err_out = SERIAL_SENSOR_ERR_NONE;
+    }
+    return 0;
+}
+
+int serial_parse_sensor_report(const uint8_t* data, size_t len,
+                               serial_sensor_report_t* out)
+{
+    return serial_parse_sensor_report_detail(data, len, out, nullptr);
+}
+
 serial_event_t serial_parse_frame(const uint8_t* data, size_t len)
 {
     if(!data || len < 10) {
@@ -160,6 +256,10 @@ serial_event_t serial_parse_frame(const uint8_t* data, size_t len)
     const uint8_t port = data[3];
     const uint8_t cmd  = data[4];
     const uint8_t type = data[7];
+
+    if(port == 0xA5 && cmd == 0x9B) {
+        return SERIAL_EVT_NONE;
+    }
 
     if(port == 0xA4 && cmd == 0x01 && type == 0x02) {
         return SERIAL_EVT_PRINT_CONDITION_OK;

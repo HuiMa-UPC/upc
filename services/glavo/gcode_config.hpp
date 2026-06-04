@@ -30,10 +30,6 @@
 #define GCODE_PARSE_CHUNK_INTERVAL_MS   10
 #endif
 
-#ifndef GCODE_PRELOAD_IDLE_MS
-#define GCODE_PRELOAD_IDLE_MS           100
-#endif
-
 
 #if SERVICES_DEBUG
 #define GCODE_MOTION_COORD_DBG(fmt, ...) printf("[GcodeCoord] " fmt "\n", ##__VA_ARGS__)

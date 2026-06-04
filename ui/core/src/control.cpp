@@ -506,13 +506,26 @@ void on_insert_shortcut(lv_event_t * /*e*/)
     }
 }
 
+/* 右上角 "X"：取消打印流程，回到空闲态（enter_state 会统一关弹窗/隐藏遮罩） */
+void on_insert_close(lv_event_t * /*e*/)
+{
+    if(g_state == CONTROL_STATE_D1_INSERT_PROMPT) {
+        enter_state(CONTROL_STATE_IDLE);
+    }
+}
+
 ui_modal_dialog_t *show_insert_prompt(lv_obj_t *parent)
 {
-    const ui_modal_dialog_cfg_t cfg =
+    ui_modal_dialog_cfg_t cfg =
         ui_modal_dialog_cfg_user("Insert Print Board?", USER_DLG_W, false);
+        cfg.with_close_btn = true;
     ui_modal_dialog_t *dlg = ui_modal_dialog_open(parent, &cfg);
     if(!dlg) {
         return nullptr;
+    }
+
+     if(dlg->close_btn) {
+        lv_obj_add_event_cb(dlg->close_btn, on_insert_close, LV_EVENT_CLICKED, nullptr);
     }
 
     ui_board_anim_create(dlg->body,

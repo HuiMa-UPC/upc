@@ -58,4 +58,15 @@
 #define MCU_CMD_BACKPRESSURE_PCT  80
 #endif
 
+/** 完成判定：cmd/data rate ≤ 此值视为下位机缓存已排空（0=严格归零） */
+#ifndef MCU_DRAIN_MAX_RATE
+#define MCU_DRAIN_MAX_RATE  0
+#endif
+
+/** 主机包已发完但 rate 长期不降时的强制完成超时（毫秒） */
+#ifndef MCU_DRAIN_TIMEOUT_MS
+#define MCU_DRAIN_TIMEOUT_MS  60000
+#endif
+
+
 #endif // DEVICE_CONFIG_HPP

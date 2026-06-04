@@ -33,6 +33,8 @@ typedef struct ui_modal_dialog_t {
     lv_obj_t *title;    /**< 标题 label */
     lv_obj_t *body;     /**< 正文容器，调用方往这里 append 子节点 */
     lv_obj_t *footer;   /**< 底栏容器，调用方往这里 append 按钮（可空） */
+    lv_obj_t *close_btn; /**< 右上角关闭按钮（cfg.with_close_btn 为 true 时才有，否则为空）；
+                              调用方自行 lv_obj_add_event_cb 处理点击 */
 } ui_modal_dialog_t;
 
 /** 一组可选样式参数（NULL 用默认） */
@@ -41,6 +43,7 @@ typedef struct {
     int32_t     card_width;     /**< 0 = USER_DLG_W */
     bool        with_footer;    /**< true 时创建 footer 容器 */
     bool        accent_underline; /**< true 时标题下加橙色分割线 */
+    bool        with_close_btn; /**< true 时在卡片右上角加一个 "X" 关闭按钮 */
 } ui_modal_dialog_cfg_t;
 
 /**

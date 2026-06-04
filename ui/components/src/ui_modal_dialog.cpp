@@ -108,6 +108,30 @@ ui_modal_dialog_t *ui_modal_dialog_open(lv_obj_t *parent,
         dlg->footer = footer;
     }
 
+    /* ---- 右上角关闭按钮（可选）---- */
+    if(cfg->with_close_btn) {
+        lv_obj_t *btn = lv_button_create(card);
+        lv_obj_remove_style_all(btn);
+        /* 用方形触摸目标，尺寸跟随 profile（1024≈40 / 1280≈44 / 1920≈64）*/
+        lv_obj_set_size(btn, USER_BACK_BTN_H, USER_BACK_BTN_H);
+        /* 脱离 flex 布局，绝对贴卡片右上角（受 card pad 约束，留出内边距）*/
+        lv_obj_add_flag(btn, LV_OBJ_FLAG_IGNORE_LAYOUT);
+        lv_obj_align(btn, LV_ALIGN_TOP_RIGHT, 0, 0);
+        lv_obj_set_style_radius(btn, LV_RADIUS_CIRCLE, 0);
+        lv_obj_set_style_bg_opa(btn, LV_OPA_TRANSP, 0);
+        lv_obj_set_style_bg_color(btn, user_color_panel_alt, LV_STATE_PRESSED);
+        lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, LV_STATE_PRESSED);
+        lv_obj_clear_flag(btn, LV_OBJ_FLAG_SCROLLABLE);
+
+        lv_obj_t *x = lv_label_create(btn);
+        lv_label_set_text(x, LV_SYMBOL_CLOSE);
+        lv_obj_set_style_text_color(x, user_color_text_dim, 0);
+        lv_obj_set_style_text_font(x, user_font_icon(), 0);
+        lv_obj_center(x);
+
+        dlg->close_btn = btn;
+    }
+
     /* 弹窗刚出现时做一个 fade-in，避免突兀 */
     lv_obj_set_style_opa(backdrop, LV_OPA_TRANSP, 0);
     lv_obj_fade_in(backdrop, 180, 0);

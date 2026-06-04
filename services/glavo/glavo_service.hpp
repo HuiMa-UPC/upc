@@ -27,6 +27,10 @@ private:
     void handle_file_info_req(const middleware::Message& msg);
     void handle_print_start(const middleware::Message& msg);
     void handle_print_terminate(const middleware::Message& msg);
+    void handle_pm25_request(const middleware::Message& msg);
+    void handle_close_door_request(const middleware::Message& msg);
+    void handle_open_door_request(const middleware::Message& msg);
+    void handle_purify_request(const middleware::Message& msg);
 
     void send_dir_open_empty(const middleware::Message& req);
     void stop_print_job();

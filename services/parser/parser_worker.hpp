@@ -1,0 +1,33 @@
+#ifndef PARSER_WORKER_HPP
+#define PARSER_WORKER_HPP
+
+#include "ring_buffer.hpp"
+#include <cstdint>
+#include <string>
+
+namespace services {
+
+/** 切片文件解析器抽象接口；各协议在 parsers/<name>/ 下实现 */
+class IParserWorker {
+public:
+    virtual ~IParserWorker() = default;
+
+    virtual int  open_file(const std::string& filepath) = 0;
+    virtual void start_parse() = 0;
+    virtual void stop_parse() = 0;
+    virtual void close_file() = 0;
+
+    virtual int  get_total_lines() const = 0;
+    virtual int  get_parsed_lines() const = 0;
+    virtual int  get_total_motion_packets() const = 0;
+    virtual bool is_parsing() const = 0;
+    virtual bool is_file_read_exhausted() const = 0;
+    virtual bool is_file_open() const = 0;
+
+    virtual RingBuffer& ring_buffer() = 0;
+    virtual uint16_t get_layer_height_um() const = 0;
+};
+
+} // namespace services
+
+#endif // PARSER_WORKER_HPP

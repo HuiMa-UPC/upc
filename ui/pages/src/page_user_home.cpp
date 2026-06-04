@@ -609,7 +609,7 @@ void page_user_home_refresh(bool /*force*/)
         lv_label_set_text_fmt(g_lbl_oxygen, "%.1f%%", snap.oxygen_percent);
     }
 
-    /* 打印模式下的环境标签也由同一快照驱动（MCUService 的 APP_Update_Ntf） */
+    /* 打印模式下的环境标签也由同一快照驱动（串口 0x9B → APP_Update_Ntf） */
     if(g_env_lbl_pm_indoor) {
         lv_label_set_text_fmt(g_env_lbl_pm_indoor, "%.1f", snap.pm25_indoor);
     }

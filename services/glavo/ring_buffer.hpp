@@ -38,7 +38,6 @@ public:
 
     bool empty() const;
     size_t count() const;
-    size_t capacity() const;
 
     void clear();
 
@@ -52,6 +51,31 @@ private:
     size_t tail = 0;
     size_t cnt  = 0;
 };
+
+/** RB_PKT_LAYER_MARK：data[0..1] 为层厚 uint16 LE (μm) */
+inline void rb_layer_mark_set_height_um(rb_packet_t& pkt, uint16_t um)
+{
+    pkt.data[0] = (uint8_t)(um & 0xFF);
+    pkt.data[1] = (uint8_t)(um >> 8);
+}
+
+inline uint16_t rb_layer_mark_get_height_um(const rb_packet_t& pkt)
+{
+    return (uint16_t)pkt.data[0] | ((uint16_t)pkt.data[1] << 8);
+}
+
+/** G-code Z 模态值 (μm) → uint16，无效时返回 0 */
+inline uint16_t gcode_z_to_layer_um(float z_um)
+{
+    if(z_um <= 0.f) {
+        return 0;
+    }
+    const float rounded = z_um + 0.5f;
+    if(rounded > 65535.f) {
+        return 65535;
+    }
+    return (uint16_t)rounded;
+}
 
 } // namespace services
 

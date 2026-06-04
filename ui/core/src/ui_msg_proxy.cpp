@@ -23,7 +23,7 @@ void UiMsgProxy::init()
             }
         }));
 
-    /* MCU：PM2.5 / 开关门 / 净化 */
+    /* GLAVO：PM2.5 / 开关门 / 净化 */
     subs_.push_back(bus.subscribe(
         middleware::MsgType::APP_PM25_Rsp, middleware::ModuleId::UI,
         [this](const middleware::Message& msg) {
@@ -138,7 +138,7 @@ void UiMsgProxy::send_pm25_check()
 {
     middleware::Message msg(middleware::MsgType::UI_PM25_Req,
                             middleware::ModuleId::UI,
-                            middleware::ModuleId::APP_MCU);
+                            middleware::ModuleId::APP_GLAVO);
     middleware::MsgBus::instance().publish_async(msg);
 }
 
@@ -151,7 +151,7 @@ void UiMsgProxy::send_open_door()
 {
     middleware::Message msg(middleware::MsgType::UI_OpenDoor_Req,
                             middleware::ModuleId::UI,
-                            middleware::ModuleId::APP_MCU);
+                            middleware::ModuleId::APP_GLAVO);
     middleware::MsgBus::instance().publish_async(msg);
 }
 
@@ -164,7 +164,7 @@ void UiMsgProxy::send_close_door_check()
 {
     middleware::Message msg(middleware::MsgType::UI_CLOSE_DOOR_Req,
                             middleware::ModuleId::UI,
-                            middleware::ModuleId::APP_MCU);
+                            middleware::ModuleId::APP_GLAVO);
     middleware::MsgBus::instance().publish_async(msg);
 }
 
@@ -177,7 +177,7 @@ void UiMsgProxy::send_purify()
 {
     middleware::Message msg(middleware::MsgType::UI_Purify_Req,
                             middleware::ModuleId::UI,
-                            middleware::ModuleId::APP_MCU);
+                            middleware::ModuleId::APP_GLAVO);
     middleware::MsgBus::instance().publish_async(msg);
 }
 

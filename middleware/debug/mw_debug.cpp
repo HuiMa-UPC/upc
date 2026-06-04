@@ -64,7 +64,6 @@ void append_truncated_text(char* buf, size_t buf_size, const uint8_t* data, size
 const char* mw_debug_module_name(ModuleId id) {
     switch (id) {
         case ModuleId::UI: return "UI";
-        case ModuleId::APP_MCU: return "APP_MCU";
         case ModuleId::APP_GLAVO: return "APP_GLAVO";
         default: return "?";
     }

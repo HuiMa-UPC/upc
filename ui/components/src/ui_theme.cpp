@@ -261,6 +261,126 @@ static const ui_theme_t s_theme_1280 = {
     /* profile_id */ UI_RES_1280,
 };
 
+
+/* ----------------------------------------------------------------------------
+ *  1024×600 物理横屏 profile
+ *  以 1280 套为基准按 ≈0.8 线性缩小（1024/1280=0.8, 600/720=0.83），
+ *  并对触摸关键控件（按钮/输入框高度）做 ~40px 下限保护，保证可点。
+ * -------------------------------------------------------------------------- */
+static const ui_theme_t s_theme_1024 = {
+    /* 开发者 Shell */
+    /* ui_sidebar_w           */ 192,
+    /* ui_nav_item_h          */ 52,
+    /* ui_nav_icon_w          */ 44,
+    /* ui_pad                 */ 14,
+    /* ui_pad_sm              */ 8,
+    /* ui_radius              */ 6,
+    /* ui_form_label_w        */ 64,
+    /* ui_form_label2_w       */ 52,
+    /* ui_gain_row_label_w    */ 68,
+    /* ui_gain_row_ta_w       */ 72,
+    /* ui_jog_btn_sz          */ 44,
+    /* ui_jog_home_sz         */ 40,
+    /* ui_jog_step_w          */ 56,
+    /* ui_jog_step_btn_h      */ 32,
+    /* ui_jog_block_min_h     */ 142,
+    /* ui_input_h             */ 40,
+    /* ui_ta_ip_w             */ 176,
+    /* ui_ta_short_w          */ 84,
+    /* ui_btn_conn_w          */ 106,
+    /* ui_bar_title_w         */ 80,
+    /* ui_bar_value_w         */ 64,
+    /* ui_bar_h               */ 16,
+    /* ui_indicator_sz        */ 12,
+    /* ui_switch_label_w      */ 76,
+    /* ui_switch_w            */ 48,
+    /* ui_switch_h            */ 26,
+    /* ui_settings_row_h      */ 36,
+    /* ui_settings_label_w    */ 118,
+    /* ui_settings_ta_w       */ 74,
+    /* ui_list_item_h         */ 40,
+    /* ui_btn_open_w          */ 138,
+    /* ui_btn_action_w        */ 94,
+    /* ui_btn_job_w           */ 84,
+    /* ui_confirm_box_w       */ 352,
+    /* ui_confirm_text_w      */ 320,
+    /* ui_confirm_btn_w       */ 112,
+    /* ui_confirm_btn_h       */ 40,   /* == ui_input_h */
+    /* ui_page_anim_ms        */ 220,
+    /* ui_page_anim_slide     */ 16,
+    /* ui_btn_pad_hor         */ 13,
+    /* ui_btn_pad_ver         */ 8,
+    /* ui_nav_active_border   */ 5,
+
+    /* 用户 Shell */
+    /* user_sidebar_w         */ 64,
+    /* user_nav_item_h        */ 56,
+    /* user_nav_icon_sz       */ 32,
+    /* user_nav_icon_pad      */ 6,
+    /* user_topbar_h          */ 68,
+    /* user_topbar_pad_hor    */ 22,
+    /* user_topbar_pad_ver    */ 16,
+    /* user_pad               */ 22,
+    /* user_pad_sm            */ 11,
+    /* user_pad_lg            */ 36,
+    /* user_radius            */ 11,
+    /* user_btn_primary_w     */ 122,
+    /* user_btn_primary_h     */ 44,
+    /* user_btn_door_sz       */ 200,
+    /* user_btn_door_icon_sz  */ 54,
+    /* user_value_label_w     */ 150,
+    /* user_status_dot_sz     */ 10,
+    /* user_home_device_w     */ 304,
+    /* user_home_device_h     */ 352,
+    /* user_back_btn_w        */ 102,
+    /* user_back_btn_h        */ 40,
+
+    /* 打印流程 */
+    /* user_dlg_w                 */ 400,
+    /* user_dlg_pad               */ 22,
+    /* user_dlg_pad_lg            */ 32,
+    /* user_dlg_title_pad_bottom  */ 12,
+    /* user_dlg_radius            */ 16,
+    /* user_dlg_body_min_h        */ 144,
+    /* user_dlg_btn_ghost_h       */ 36,
+    /* user_dlg_footer_btn_w      */ 144,
+    /* user_dlg_footer_btn_h      */ 44,
+    /* user_file_dlg_w            */ 600,
+    /* user_file_dlg_preview_w    */ 192,
+    /* user_file_dlg_preview_h    */ 144,
+    /* user_file_sel_w            */ 900,   /* < 1024，留边距 */
+    /* user_file_sel_h            */ 440,   /* < 600，留边距 */
+    /* user_file_card_w           */ 176,
+    /* user_file_card_h           */ 144,
+    /* user_file_thumb_h          */ 86,
+    /* user_slide_w               */ 288,
+    /* user_slide_h               */ 48,
+    /* user_slide_knob_sz         */ 40,
+    /* user_spinner_sz            */ 88,
+    /* user_spinner_stroke        */ 6,
+    /* user_progress_w            */ 288,
+    /* user_progress_h            */ 12,
+    /* user_print_bar_h           */ 76,
+    /* user_print_bar_pad_hor     */ 18,
+    /* user_print_bar_pad_ver     */ 11,
+    /* user_print_bar_gap         */ 18,
+    /* user_print_terminate_w     */ 102,
+    /* user_print_terminate_h     */ 40,
+
+    /* 字体（dev） */
+    /* font_body          */ &lv_font_montserrat_20,
+    /* font_form          */ &lv_font_montserrat_16,
+    /* font_title         */ &lv_font_montserrat_28,
+    /* font_icon          */ &lv_font_montserrat_20,
+    /* 字体（user） */
+    /* font_user_value    */ &lv_font_montserrat_24,
+    /* font_user_text     */ &lv_font_montserrat_16,
+    /* font_user_caption  */ &lv_font_montserrat_14,
+    /* font_user_icon     */ &lv_font_montserrat_20,
+
+    /* profile_id */ UI_RES_1024,
+};
+
 /** 当前生效的 profile，默认 1920；ui_theme_init() 中会按实际屏分辨率改指。 */
 const ui_theme_t *g_ui = &s_theme_1920;
 
@@ -291,6 +411,10 @@ static void pick_profile(void)
         g_ui = &s_theme_1280;
         return;
     }
+    if(s_forced_profile == UI_RES_1024) {
+        g_ui = &s_theme_1024;
+        return;
+    }
 
     /* 2) 环境变量覆盖（方便板上 SSH 调试不重编） */
     const char *env = std::getenv("LVGL_UPC_PROFILE");
@@ -303,23 +427,37 @@ static void pick_profile(void)
             g_ui = &s_theme_1280;
             return;
         }
+        if(std::strcmp(env, "3") == 0) {
+            g_ui = &s_theme_1024;
+            return;
+        }
     }
 
     /* 3) 默认按当前 display 的最长边自动挑：
      *      ≥1600 → 1920 套尺寸
-     *      <1600 → 1280 套尺寸
+     *      ≥1100 → 1280 套尺寸
+     *      <1100 → 1024 套尺寸（1024×600 物理横屏）
      *    选最长边而不是宽度，是为了兼容竖屏/旋转还未生效的极端情形。 */
     lv_display_t *disp = lv_display_get_default();
     int32_t w = disp ? lv_display_get_horizontal_resolution(disp) : 1920;
     int32_t h = disp ? lv_display_get_vertical_resolution(disp)   : 1080;
     int32_t max_dim = w > h ? w : h;
 
-    g_ui = (max_dim >= 1600) ? &s_theme_1920 : &s_theme_1280;
+        if(max_dim >= 1600) {
+        g_ui = &s_theme_1920;
+    } else if(max_dim >= 1100) {
+        g_ui = &s_theme_1280;
+    } else {
+        g_ui = &s_theme_1024;
+    }
+
+    const char *name = (g_ui->profile_id == UI_RES_1920) ? "1920"
+                     : (g_ui->profile_id == UI_RES_1280) ? "1280"
+                                                         : "1024";
 
     std::fprintf(stderr,
         "ui_theme: detected %dx%d → profile %s\n",
-        (int)w, (int)h,
-        g_ui->profile_id == UI_RES_1920 ? "1920" : "1280");
+        (int)w, (int)h,name);
 }
 
 void ui_theme_init(void)

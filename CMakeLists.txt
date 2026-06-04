@@ -50,5 +50,14 @@ target_link_libraries(${PROJECT_NAME}
         services::port
         middleware::port
         lvgl::port
-        
 )
+
+# 强制链接 parsers 插件库中所有 .o，否则 gcode_register 等静态注册会被 --gc-sections 裁掉
+if(TARGET services_parsers)
+    target_link_libraries(${PROJECT_NAME}
+        PRIVATE
+            -Wl,--whole-archive
+            services_parsers
+            -Wl,--no-whole-archive
+    )
+endif()

@@ -7,6 +7,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <chrono>
 #include <deque>
 #include <functional>
 #include <mutex>
@@ -20,7 +21,7 @@ namespace services {
  * 用于向上层（如 UI 或打印控制逻辑）报告打印任务的最终状态变化。
  */
 enum class TcpJobEvent : uint8_t {
-    PrintCompleted = 0, /**< 打印自然完成（RingBuffer 已空、GcodeWorker 已结束且 MCU 缓存已排空） */
+    PrintCompleted = 0, /**< 打印自然完成（RingBuffer 已空、解析器已结束且 MCU 缓存已排空） */
     TerminateDone,      /**< 用户手动终止或异常中断后的清理已完成 */
     PrintError,         /**< 打印过程中发生错误（如 TCP 断线）导致的终止 */
 };
@@ -29,6 +30,16 @@ enum class TcpJobEvent : uint8_t {
 using TcpJobEventCb = std::function<void(TcpJobEvent)>;
 /** @brief 进度回调类型：每成功下发一批运动包后触发，用于更新进度条等 UI */
 using TcpProgressCb = std::function<void()>;
+
+/** @brief 环境传感器缓存（串口 0x9B 上报解析结果，供 UI/打印进度读取） */
+struct EnvSnapshotCache {
+    float pm25_indoor     = 0.f;
+    float pm25_cabin      = 0.f;
+    float temperature_c   = 0.f;
+    float oxygen_percent  = 0.f;
+    float humidity_percent = 0.f;
+    bool  valid           = false;
+};
 
 /**
  * @brief 振镜 TCP/串口链路线程管理类（单例）
@@ -82,12 +93,8 @@ public:
     /** @brief 停止链路线程，关闭 TCP 与串口 fd，重置所有状态 */
     void stop();
 
-    /** @brief 链路线程是否正在运行 */
-    bool is_link_running() const;
     /** @brief TCP 是否处于已连接状态（fd >= 0） */
     bool is_tcp_connected() const;
-    /** @brief 串口是否已打开 */
-    bool is_serial_open() const;
     /** @brief 当前是否处于“正在下发运动包”阶段 */
     bool is_sending() const;
 
@@ -103,6 +110,15 @@ public:
     void request_terminate();
 
     /**
+     * @brief 将串口发送帧入队，由 link_thread 统一 write（线程安全）
+     * @note 队列满时丢弃最旧一条
+     */
+    void enqueue_serial_tx(const uint8_t* data, size_t len);
+
+    /** @brief 读取最新环境传感器快照（线程安全） */
+    [[nodiscard]] EnvSnapshotCache env_snapshot() const;
+
+    /**
      * @brief 设置 TCP_NODELAY，禁用 Nagle 算法以降低发包延迟
      * @param sockfd 已连接的 socket 文件描述符
      */
@@ -113,6 +129,10 @@ public:
      * @param evt 由 serial_parse_frame 解析出的串口事件
      */
     void notify_serial_event(serial_event_t evt);
+
+    void on_sensor_report(const serial_sensor_report_t& report);
+    void publish_env_update_ntf();
+    void drain_serial_tx_queue();
 
 private:
     TcpSender();
@@ -162,7 +182,7 @@ private:
 
     /** @brief 主链路逻辑：尝试从 tcp_stage_ 批量下发运动包 */
     void link_drain_motion_queue();
-    /** @brief 尝试结束打印：检查 RingBuffer、GcodeWorker、MCU 缓存是否全部排空 */
+    /** @brief 尝试结束打印：检查 RingBuffer、解析器、MCU 缓存是否全部排空 */
     void link_try_finish_sending();
     /**
      * @brief 处理队列头部的换层标记（Layer Mark）
@@ -186,8 +206,8 @@ private:
     void run_manual_terminate_cleanup();
     /** @brief 执行自然完成后的清理：发 finished、回调 PrintCompleted */
     void run_natural_complete_cleanup();
-    /** @brief 触发上层事件回调 */
     void emit_event(TcpJobEvent ev);
+    void poll_mcu_drain_heartbeat();
 
     /** @brief 判断 MCU 的指令缓存与数据缓存是否均已排空 */
     bool mcu_rates_drained() const;
@@ -219,6 +239,7 @@ private:
     std::atomic<bool> start_pending_{false};           /**< begin_sending 已调用但 RingBuffer 未达阈值，等待中 */
     std::atomic<bool> terminate_pending_{false};       /**< 收到终止请求，待链路线程执行清理 */
     std::atomic<bool> natural_complete_pending_{false};/**< 运动包已发完，等待 MCU 缓存排空以触发自然完成 */
+    std::chrono::steady_clock::time_point natural_complete_since_{};
 
     /* ---------- 换层/串口握手状态 ---------- */
     std::atomic<bool> waiting_layer_{false};           /**< 当前是否处于换层等待状态 */
@@ -244,7 +265,18 @@ private:
     uint8_t serial_rx_accum_[256]{}; /**< 串口接收分帧累积缓冲区 */
     size_t  serial_rx_accum_len_ = 0;/**< 串口累积缓冲区当前有效长度 */
 
+    struct SerialTxItem {
+        uint8_t data[64]{};
+        size_t  len = 0;
+    };
+    std::deque<SerialTxItem> serial_tx_queue_;
+    mutable std::mutex serial_tx_mtx_;
+
+    EnvSnapshotCache env_cache_{};
+    mutable std::mutex env_mtx_;
+
     /* ---------- 常量 ---------- */
+    static constexpr size_t kSerialTxQueueMax = 32;
     static constexpr int kMaxMotionBatch = TCP_BATCH_SIZE; /**< 单次下发的最大运动包数量 */
 };
 
