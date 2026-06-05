@@ -2,8 +2,9 @@
 
 > 命名空间：`ui`  
 > CMake 目标：`ui::port`（静态库 `ui`）  
-> 依赖：[`middleware/AGENTS.md`](../middleware/AGENTS.md)、`lvgl::port`  
-> 业务服务由可执行文件 `rongsu_ui` 链接 `services::port`，`ui` 库本身不直接依赖 services
+> 可执行文件：`rongsu_ui`（`main.cpp`、`platform.cpp`）  
+> 依赖：[`common/contract/README.md`](../common/contract/README.md)、[`common/middleware/AGENTS.md`](../common/middleware/AGENTS.md)、`upc::ipc`、`lvgl::port`  
+> **禁止**链接 `glavo/lib`；后端经 IPC + `MsgPort` + `UiMsgProxy`
 
 ---
 
@@ -23,7 +24,7 @@
 - **pages 只画本页 UI**；流程与切页在 **core**。
 - **后端通信只走 `UiMsgProxy`**（core）；pages 禁止直接 `MsgBus::subscribe` / `publish`。
 - **LVGL 只在 UI 线程操作**：后台通过 `publish_async` + 主循环 `process()` 间接更新界面。
-- **页面注册在 `core/ui_app.cpp`**：`app/main.cpp` 只调用 `ui::app_init()`。
+- **页面注册在 `lib/core/ui_app.cpp`**：`ui/main.cpp` 只调用 `ui::app_init()`。
 
 ---
 
@@ -31,13 +32,15 @@
 
 ```
 ui/
-├── README.md               # 四层职责与依赖方向（权威说明）
+├── main.cpp                # 进程入口
+├── platform.cpp/hpp        # DRM / LVGL 平台
 ├── CMakeLists.txt
 ├── AGENTS.md
-├── core/                   # PageManager、UiMsgProxy、control、ui_app
-├── pages/                  # page_user_* 布局
-├── components/             # ui_* 公用控件
-└── assets/                 # 图片/字库 .c/.h
+└── lib/
+    ├── core/               # PageManager、UiMsgProxy、control、ui_app
+    ├── pages/              # page_user_* 布局
+    ├── components/         # ui_* 公用控件
+    └── assets/             # 图片/字库
 ```
 
 **include 方式**（链接 `ui::port` 后可用）：
@@ -56,15 +59,15 @@ ui/
 
 ```cmake
 add_subdirectory(ui)
-target_link_libraries(rongsu_ui PRIVATE ui::port services::port middleware::port lvgl::port)
+target_link_libraries(rongsu_ui PRIVATE ui::port upc::ipc upc::process upc::debug)
 ```
 
 `ui/CMakeLists.txt` 自动 GLOB（`CONFIGURE_DEPENDS`）：
 
-- `core/src/*.c*`
-- `pages/src/*.c*`
-- `components/src/*.c*`
-- `assets/src/*.c*`
+- `lib/core/src/*.c*`
+- `lib/pages/src/*.c*`
+- `lib/components/src/*.c*`
+- `lib/assets/src/*.c*`
 
 **新增页面 `.cpp` 放入 `pages/src/` 即可**，一般无需改 CMake。
 

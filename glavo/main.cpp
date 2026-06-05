@@ -1,0 +1,160 @@
+#include "process_ctl.hpp"
+#include "process_config.hpp"
+#include "msg_port.hpp"
+#include "glavo_service.hpp"
+#include "tcp_sender.hpp"
+#include "device_config.hpp"
+
+#include <chrono>
+#include <cstdio>
+#include <cstring>
+#include <thread>
+#include <unistd.h>
+
+namespace {
+
+const ProcessConfig kProc = process_config_glavo();
+
+const char* ipc_socket_path() {
+    const char* env = std::getenv("UPC_IPC_SOCKET");
+    return (env && env[0]) ? env : UPC_IPC_SOCKET_DEFAULT;
+}
+
+int start_glavo(char daemon) {
+    process_install_signals();
+
+    if (daemon) {
+        const int running = process_check_running(kProc.pid_file);
+        if (running > 0) {
+            std::fprintf(stderr, "%s already running (PID: %d)\n",
+                kProc.name, running);
+            return 1;
+        }
+        if (process_daemonize(kProc.log_file) < 0) {
+            std::fprintf(stderr, "%s daemonize failed\n", kProc.name);
+            return 2;
+        }
+        if (process_write_pid(kProc.pid_file) < 0) {
+            std::fprintf(stderr, "%s cannot write PID file\n", kProc.name);
+            return 3;
+        }
+        std::printf("Starting %s (PID: %d)...\n", kProc.name, getpid());
+    }
+
+    auto& port = middleware::MsgPort::instance();
+    if (!port.set_mode_ipc_server(middleware::ModuleId::APP_GLAVO,
+                                  ipc_socket_path())) {
+        std::fprintf(stderr, "%s IPC listen failed on %s\n",
+            kProc.name, ipc_socket_path());
+        return 4;
+    }
+    if (!port.init()) {
+        return 5;
+    }
+
+    services::GlavoService glavo_service;
+    if (!glavo_service.init()) {
+        return 6;
+    }
+
+    auto& tcp = services::TcpSender::instance();
+    while (tcp.connect_tcp(GLAVO_TCP_DEFAULT_IP, GLAVO_TCP_DEFAULT_PORT) != 0) {
+        std::this_thread::sleep_for(
+            std::chrono::milliseconds(TCP_RECONNECT_INTERVAL_MS));
+        if (g_shutdown_requested) {
+            if (daemon) {
+                process_remove_pid(kProc.pid_file);
+            }
+            return 0;
+        }
+    }
+
+    while (tcp.open_serial(GLAVO_SERIAL_DEFAULT_DEVICE, GLAVO_SERIAL_DEFAULT_BAUD) != 0) {
+        std::this_thread::sleep_for(
+            std::chrono::milliseconds(TCP_RECONNECT_INTERVAL_MS));
+        if (g_shutdown_requested) {
+            if (daemon) {
+                process_remove_pid(kProc.pid_file);
+            }
+            return 0;
+        }
+    }
+
+    tcp.start_link_thread();
+    glavo_service.start();
+
+    std::printf("%s ready (IPC %s, waiting for UI peer)\n",
+        kProc.name, ipc_socket_path());
+
+    while (!g_shutdown_requested) {
+        port.process();
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+
+    glavo_service.stop();
+    port.shutdown();
+    if (daemon) {
+        process_remove_pid(kProc.pid_file);
+    }
+    return 0;
+}
+
+int stop_glavo() {
+    const int pid = process_check_running(kProc.pid_file);
+    if (pid == 0) {
+        std::printf("%s not running\n", kProc.name);
+        return 1;
+    }
+    std::printf("Stopping %s (PID: %d)...\n", kProc.name, pid);
+    if (kill(static_cast<pid_t>(pid), SIGTERM) < 0) {
+        perror("kill failed");
+        return 2;
+    }
+    int timeout = 50;
+    while (timeout-- > 0) {
+        if (kill(static_cast<pid_t>(pid), 0) != 0) {
+            std::printf("%s stopped\n", kProc.name);
+            process_remove_pid(kProc.pid_file);
+            return 0;
+        }
+        usleep(100000);
+    }
+    std::printf("Force killing %s...\n", kProc.name);
+    kill(static_cast<pid_t>(pid), SIGKILL);
+    process_remove_pid(kProc.pid_file);
+    return 0;
+}
+
+int status_glavo() {
+    const int pid = process_check_running(kProc.pid_file);
+    if (pid > 0) {
+        std::printf("%s running (PID: %d)\n", kProc.name, pid);
+        return 0;
+    }
+    std::printf("%s not running\n", kProc.name);
+    return 1;
+}
+
+} // namespace
+
+int main(int argc, char** argv) {
+    if (argc < 2) {
+        std::printf("Usage: %s {start|stop|status|run}\n", argv[0]);
+        return 1;
+    }
+    const char* cmd = argv[1];
+    if (std::strcmp(cmd, "start") == 0) {
+        return start_glavo(1);
+    }
+    if (std::strcmp(cmd, "stop") == 0) {
+        return stop_glavo();
+    }
+    if (std::strcmp(cmd, "status") == 0) {
+        return status_glavo();
+    }
+    if (std::strcmp(cmd, "run") == 0) {
+        return start_glavo(0);
+    }
+    std::fprintf(stderr, "Unknown command: %s\n", cmd);
+    return 1;
+}
