@@ -1,5 +1,5 @@
 #include "mem_pool.hpp"
-#include "mw_debug.hpp"
+#include "rs_log.hpp"
 #include <cstring>
 
 namespace middleware {
@@ -96,9 +96,7 @@ bool MemPool::init() {
     }
     
     initialized_ = true;
-#if MW_DEBUG_MEMPOOL
-    MW_LOG_MEMPOOL("init ok (5 classes x 16 blocks)");
-#endif
+    UPC_LOG_MEM_POOL(Info, "init ok (5 classes x 16 blocks)");
     return true;
 }
 
@@ -114,11 +112,7 @@ void* MemPool::allocate(size_t size) {
     void* ptr = nullptr;
     bool pool_full = false;
     bool system_heap = false;
-#if MW_DEBUG_MEMPOOL
     size_t class_size = 0;
-    size_t used = 0;
-    size_t total = 0;
-#endif
 
     {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -130,16 +124,9 @@ void* MemPool::allocate(size_t size) {
 
         for (size_t i = 0; i < 5; ++i) {
             if (size <= sizes[i]) {
-#if MW_DEBUG_MEMPOOL
                 class_size = sizes[i];
-#endif
                 ptr = allocators_[i]->allocate();
-                if (ptr) {
-#if MW_DEBUG_MEMPOOL
-                    used = allocators_[i]->used_count();
-                    total = allocators_[i]->total_blocks();
-#endif
-                } else {
+                if (!ptr) {
                     pool_full = true;
                 }
                 break;
@@ -151,20 +138,15 @@ void* MemPool::allocate(size_t size) {
     }
 
     if (system_heap) {
-#if MW_DEBUG_MEMPOOL
-        MW_LOG_MEMPOOL("alloc %zuB -> system heap", size);
-#endif
         return ::operator new(size);
     }
 
-#if MW_DEBUG_MEMPOOL
     if (ptr) {
-        MW_LOG_MEMPOOL("alloc %zuB -> class %zuB (used %zu/%zu)",
-            size, class_size, used, total);
-    } else if (pool_full) {
-        MW_LOG_MEMPOOL("alloc %zuB -> class %zuB FAILED (pool full)", size, class_size);
+        return ptr;
     }
-#endif
+    if (pool_full) {
+        UPC_LOG_MEM_POOL(Error, "alloc %zuB class %zuB FAILED (pool full)", size, class_size);
+    }
     return ptr;
 }
 
@@ -181,41 +163,34 @@ void MemPool::deallocate(void* ptr) {
     }
 
     bool system_heap = true;
-#if MW_DEBUG_MEMPOOL
-    size_t class_size = 0;
-    size_t used = 0;
-    size_t total = 0;
-#endif
 
     {
         std::lock_guard<std::mutex> lock(mutex_);
         for (auto& alloc : allocators_) {
             if (alloc && alloc->owns(ptr)) {
-#if MW_DEBUG_MEMPOOL
-                class_size = alloc->block_size();
-#endif
                 alloc->deallocate(ptr);
-#if MW_DEBUG_MEMPOOL
-                used = alloc->used_count();
-                total = alloc->total_blocks();
-#endif
                 system_heap = false;
                 break;
             }
         }
     }
 
-#if MW_DEBUG_MEMPOOL
-    if (system_heap) {
-        MW_LOG_MEMPOOL("free system heap %p", ptr);
-    } else {
-        MW_LOG_MEMPOOL("free class %zuB (used %zu/%zu)", class_size, used, total);
-    }
-#endif
-
     if (system_heap) {
         ::operator delete(ptr);
     }
+}
+
+size_t MemPool::get_block_size(void* ptr) const {
+    if (!ptr) {
+        return 0;
+    }
+    std::lock_guard<std::mutex> lock(mutex_);
+    for (const auto& alloc : allocators_) {
+        if (alloc && alloc->owns(ptr)) {
+            return alloc->block_size();
+        }
+    }
+    return 0;
 }
 
 std::array<MemPool::ClassStats, 5> MemPool::get_stats() const {
@@ -227,20 +202,10 @@ std::array<MemPool::ClassStats, 5> MemPool::get_stats() const {
         }
         stats[i].block_size = allocators_[i]->block_size();
         stats[i].total_blocks = allocators_[i]->total_blocks();
-        stats[i].free_blocks = allocators_[i]->free_count();
         stats[i].used_blocks = allocators_[i]->used_count();
+        stats[i].free_blocks = allocators_[i]->free_count();
     }
     return stats;
-}
-
-size_t MemPool::get_block_size(void* ptr) const {
-    std::lock_guard<std::mutex> lock(mutex_);
-    for (auto& alloc : allocators_) {
-        if (alloc && alloc->owns(ptr)) {
-            return alloc->block_size();
-        }
-    }
-    return 0;
 }
 
 // ============================================

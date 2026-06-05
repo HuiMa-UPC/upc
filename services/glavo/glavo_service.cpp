@@ -8,6 +8,7 @@
 #include "print_job_state.hpp"
 #include "msg_types.hpp"
 #include "buffer_pool.hpp"
+#include "rs_log.hpp"
 
 #include <dirent.h>
 #include <sys/stat.h>
@@ -175,7 +176,12 @@ void GlavoService::handle_pm25_request(const middleware::Message& msg) {
         static_cast<middleware::ModuleId>(module_id()), msg.sender_id);
     rsp.payload = middleware::MsgPayload::from_bytes(
         reinterpret_cast<const uint8_t*>(&p), sizeof(p));
-    (void)publish_async(rsp);
+    if(!publish_async(rsp)) {
+        UPC_LOG_GLAVO_SERVICE(Warn, "pm25_rsp publish_async failed");
+    } else {
+        UPC_LOG_GLAVO_SERVICE(Debug, "pm25_rsp high=%u cabin=%.1f",
+            p.is_high, p.pm25_cabin);
+    }
 }
 
 void GlavoService::handle_close_door_request(const middleware::Message& msg) {
@@ -186,7 +192,9 @@ void GlavoService::handle_close_door_request(const middleware::Message& msg) {
         static_cast<middleware::ModuleId>(module_id()), msg.sender_id);
     rsp.payload = middleware::MsgPayload::from_bytes(
         reinterpret_cast<const uint8_t*>(&p), sizeof(p));
-    (void)publish_async(rsp);
+    if(!publish_async(rsp)) {
+        UPC_LOG_GLAVO_SERVICE(Warn, "close_door_rsp publish_async failed");
+    }
 }
 
 void GlavoService::handle_open_door_request(const middleware::Message& msg) {
@@ -197,22 +205,30 @@ void GlavoService::handle_open_door_request(const middleware::Message& msg) {
         static_cast<middleware::ModuleId>(module_id()), msg.sender_id);
     rsp.payload = middleware::MsgPayload::from_bytes(
         reinterpret_cast<const uint8_t*>(&p), sizeof(p));
-    (void)publish_async(rsp);
+    if(!publish_async(rsp)) {
+        UPC_LOG_GLAVO_SERVICE(Warn, "open_door_rsp publish_async failed");
+    }
 }
 
 void GlavoService::handle_purify_request(const middleware::Message& msg) {
     (void)msg;
-    /* 净化：协议与下位机流程待定，暂不响应 */
+    UPC_LOG_GLAVO_SERVICE(Debug, "purify_req: not implemented");
 }
 
 void GlavoService::on_tcp_job_event(TcpJobEvent ev) {
     switch(ev) {
         case TcpJobEvent::PrintCompleted:
+            UPC_LOG_GLAVO_SERVICE(Info, "tcp_job_event: PrintCompleted");
             send_print_progress(true);
             print_running_.store(false);
             break;
         case TcpJobEvent::TerminateDone:
+            UPC_LOG_GLAVO_SERVICE(Info, "tcp_job_event: TerminateDone");
+            print_running_.store(false);
+            publish_terminate_done();
+            break;
         case TcpJobEvent::PrintError:
+            UPC_LOG_GLAVO_SERVICE(Warn, "tcp_job_event: PrintError");
             print_running_.store(false);
             publish_terminate_done();
             break;
@@ -297,9 +313,7 @@ void GlavoService::send_print_progress(bool force_complete) {
     ntf.payload = middleware::MsgPayload::from_bytes(
         reinterpret_cast<const uint8_t*>(&p), sizeof(p));
     if(!publish_async(ntf)) {
-#if SERVICES_DEBUG
-        printf("[GlavoService] print_progress publish failed pct=%d\n", pct);
-#endif
+        UPC_LOG_GLAVO_SERVICE(Warn, "print_progress publish failed pct=%d", pct);
     }
 }
 
@@ -308,9 +322,7 @@ void GlavoService::publish_terminate_done() {
         static_cast<middleware::ModuleId>(module_id()),
         middleware::ModuleId::UI);
     if (!publish_async(ntf)) {
-#if SERVICES_DEBUG
-        printf("[GlavoService] terminate_done publish failed\n");
-#endif
+        UPC_LOG_GLAVO_SERVICE(Warn, "terminate_done publish_async failed");
     }
 }
 
@@ -318,17 +330,13 @@ void GlavoService::send_dir_open_empty(const middleware::Message& req) {
     middleware::Message rsp(middleware::MsgType::Fs_DirOpen_Rsp,
         static_cast<middleware::ModuleId>(module_id()), req.sender_id);
     if (!publish_async(rsp)) {
-#if SERVICES_DEBUG
-        printf("[GlavoService] dir_open: publish_async empty rsp failed\n");
-#endif
+        UPC_LOG_GLAVO_SERVICE(Warn, "dir_open: publish_async empty rsp failed");
     }
 }
 
 void GlavoService::handle_dir_open(const middleware::Message& msg) {
     if(!ParserRegistry::instance().has_any()) {
-#if SERVICES_DEBUG
-        printf("[GlavoService] dir_open: no parser registered, returning empty list\n");
-#endif
+        UPC_LOG_GLAVO_SERVICE(Warn, "dir_open: no parser registered, returning empty list");
         send_dir_open_empty(msg);
         return;
     }
@@ -351,9 +359,7 @@ void GlavoService::handle_dir_open(const middleware::Message& msg) {
     struct dirent* entry;
     while ((entry = readdir(dir)) != nullptr) {
         if (current_entries_.size() >= kFsDirMaxEntries) {
-#if SERVICES_DEBUG
-            printf("[GlavoService] dir_open: truncated at %zu entries\n", kFsDirMaxEntries);
-#endif
+            UPC_LOG_GLAVO_SERVICE(Warn, "dir_open: truncated at %zu entries", kFsDirMaxEntries);
             break;
         }
         if (std::strcmp(entry->d_name, ".") == 0 || std::strcmp(entry->d_name, "..") == 0) {
@@ -378,9 +384,7 @@ void GlavoService::handle_dir_open(const middleware::Message& msg) {
 
     const uint32_t buf_id = middleware::BufferPool::instance().allocate(total_size);
     if (buf_id == middleware::INVALID_BUFFER_ID) {
-#if SERVICES_DEBUG
-        printf("[GlavoService] dir_open: BufferPool allocate failed (size=%zu)\n", total_size);
-#endif
+        UPC_LOG_GLAVO_SERVICE(Error, "dir_open: BufferPool allocate failed (size=%zu)", total_size);
         send_dir_open_empty(msg);
         return;
     }
@@ -408,22 +412,14 @@ void GlavoService::handle_dir_open(const middleware::Message& msg) {
         static_cast<middleware::ModuleId>(module_id()), msg.sender_id);
     rsp.payload = middleware::MsgPayload::from_buffer(buf_id, 0, static_cast<uint32_t>(total_size));
     if (!publish_async(rsp)) {
-#if SERVICES_DEBUG
-        printf("[GlavoService] dir_open: publish_async failed (count=%u)\n", count);
-#endif
+        UPC_LOG_GLAVO_SERVICE(Warn, "dir_open: publish_async failed (count=%u)", count);
     }
-
-#if SERVICES_DEBUG
-    printf("[GlavoService] dir_open: path=%s count=%u size=%zu\n", path.c_str(), count, total_size);
-#endif
 }
 
 void GlavoService::handle_file_info_req(const middleware::Message& msg) {
     middleware::PrintStartReqPayload req{};
     if (!read_inline_pod(msg.payload, req)) {
-#if SERVICES_DEBUG
-        printf("[GlavoService] file_info_req: invalid payload\n");
-#endif
+        UPC_LOG_GLAVO_SERVICE(Warn, "file_info_req: invalid payload");
         return;
     }
 
@@ -462,32 +458,20 @@ void GlavoService::handle_file_info_req(const middleware::Message& msg) {
     out.payload = middleware::MsgPayload::from_bytes(
         reinterpret_cast<const uint8_t*>(&rsp), sizeof(rsp));
     if (!publish_async(out)) {
-#if SERVICES_DEBUG
-        printf("[GlavoService] file_info_req: publish_async failed\n");
-#endif
+        UPC_LOG_GLAVO_SERVICE(Warn, "file_info_req: publish_async failed");
     }
-
-#if SERVICES_DEBUG
-    printf("[GlavoService] file_info_req: index=%u ok=%d lines=%u size=%u path=%s\n",
-        rsp.file_index, rsp.ok, rsp.total_lines, rsp.file_size,
-        current_file_path_.c_str());
-#endif
 }
 
 void GlavoService::handle_print_start(const middleware::Message& msg) {
     middleware::PrintStartReqPayload req{};
     if (!read_inline_pod(msg.payload, req)) {
-#if SERVICES_DEBUG
-        printf("[GlavoService] print_start: invalid payload\n");
-#endif
+        UPC_LOG_GLAVO_SERVICE(Warn, "print_start: invalid payload");
         return;
     }
 
     const size_t idx = static_cast<size_t>(req.file_index);
     if (idx >= current_entries_.size()) {
-#if SERVICES_DEBUG
-        printf("[GlavoService] print_start: index out of range\n");
-#endif
+        UPC_LOG_GLAVO_SERVICE(Warn, "print_start: index out of range");
         return;
     }
 
@@ -495,9 +479,7 @@ void GlavoService::handle_print_start(const middleware::Message& msg) {
 
     struct stat st;
     if (stat(full_path.c_str(), &st) != 0) {
-#if SERVICES_DEBUG
-        printf("[GlavoService] print_start: stat failed\n");
-#endif
+        UPC_LOG_GLAVO_SERVICE(Warn, "print_start: stat failed");
         return;
     }
 
@@ -513,9 +495,7 @@ void GlavoService::handle_print_start(const middleware::Message& msg) {
             TcpSender::instance().request_terminate();
         }
         if(ParserManager::instance().open_file(full_path) != 0) {
-#if SERVICES_DEBUG
-            printf("[GlavoService] print_start: open failed\n");
-#endif
+            UPC_LOG_GLAVO_SERVICE(Error, "print_start: open failed");
             return;
         }
         current_file_path_ = full_path;
@@ -528,9 +508,7 @@ void GlavoService::handle_print_start(const middleware::Message& msg) {
     reset_print_progress_state();
     TcpSender::instance().begin_sending();
 
-#if SERVICES_DEBUG
-    printf("[GlavoService] print_start: path=%s\n", full_path.c_str());
-#endif
+    UPC_LOG_GLAVO_SERVICE(Info, "print_start: index=%u", req.file_index);
 }
 
 void GlavoService::stop_print_job() {
@@ -540,6 +518,7 @@ void GlavoService::stop_print_job() {
 
 void GlavoService::handle_print_terminate(const middleware::Message& msg) {
     (void)msg;
+    UPC_LOG_GLAVO_SERVICE(Info, "print_terminate requested");
     print_running_.store(false);
     ParserManager::instance().stop_parse();
     TcpSender::instance().request_terminate();

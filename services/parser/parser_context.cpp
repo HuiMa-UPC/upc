@@ -1,5 +1,6 @@
 #include "parser_context.hpp"
 #include "gcode_config.hpp"
+#include "rs_log.hpp"
 
 #include <cstdio>
 
@@ -27,18 +28,16 @@ void ParserContext::load_calibration(const char* path)
             range_gain_  = GCODE_DEFAULT_IMAGE_RANG_GAIN;
             speed_gain_  = GCODE_DEFAULT_SPEED_GAIN;
         }
-#if SERVICES_DEBUG
-        printf("[ParserContext] CAL loaded: scale=%.3f range=%.3f speed=%.3f grid=%dx%d\n",
-               scale_gain_, range_gain_, speed_gain_, cal_data_.nx, cal_data_.ny);
-#endif
+        UPC_LOG_PARSER_CONTEXT(Info,
+            "CAL loaded: scale=%.3f range=%.3f speed=%.3f grid=%dx%d",
+            scale_gain_, range_gain_, speed_gain_, cal_data_.nx, cal_data_.ny);
     } else {
         scale_gain_ = GCODE_DEFAULT_IMAGE_SCALE_GAIN;
         range_gain_  = GCODE_DEFAULT_IMAGE_RANG_GAIN;
         speed_gain_  = GCODE_DEFAULT_SPEED_GAIN;
-#if SERVICES_DEBUG
-        printf("[ParserContext] CAL load failed, using defaults: scale=%.3f range=%.3f speed=%.3f\n",
-               scale_gain_, range_gain_, speed_gain_);
-#endif
+        UPC_LOG_PARSER_CONTEXT(Warn,
+            "CAL load failed, using defaults: scale=%.3f range=%.3f speed=%.3f",
+            scale_gain_, range_gain_, speed_gain_);
     }
 }
 

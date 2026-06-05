@@ -1,5 +1,6 @@
 #include "gcode_worker.hpp"
 #include "gcode_config.hpp"
+#include "rs_log.hpp"
 #include "parser_context.hpp"
 
 #include <algorithm>
@@ -155,20 +156,15 @@ void GcodeWorker::apply_calibration_from_context()
 {
     const ParserContext& ctx = ParserContext::instance();
 
-    cal_data_clear(&cal_data_);
-    enable_cal_ = false;
-
     if(ctx.cal_valid()) {
         cal_data_ = ctx.cal_data();
-        enable_cal_ = true;
-        image_scale_gain_ = ctx.scale_gain();
-        image_rang_gain_  = ctx.range_gain();
-        speed_gain_       = ctx.speed_gain();
     } else {
-        image_scale_gain_ = ctx.scale_gain();
-        image_rang_gain_  = ctx.range_gain();
-        speed_gain_       = ctx.speed_gain();
+        cal_data_clear(&cal_data_);
     }
+
+    image_scale_gain_ = ctx.scale_gain();
+    image_rang_gain_  = ctx.range_gain();
+    speed_gain_       = ctx.speed_gain();
 
     apply_gain_defaults();
 }
@@ -177,11 +173,6 @@ void GcodeWorker::sync_parse_progress(int lines, int packets)
 {
     parsed_lines_.store(lines);
     total_motion_packets_.store(packets);
-
-#if SERVICES_DEBUG
-    printf("[GcodeWorker] progress %d/%d lines, packets=%d\n",
-           lines, total_lines_.load(), packets);
-#endif
 }
 
 void GcodeWorker::parser_chunk_yield()
@@ -304,7 +295,7 @@ bool GcodeWorker::build_and_push_packet()
     float out_x = x_;
     float out_y = y_;
 
-    if(enable_cal_ && cal_data_.valid) {
+    if(cal_data_.valid) {
         double dx = 0.0;
         double dy = 0.0;
         if(cal_interpolate_delta(&cal_data_, x_, y_, &dx, &dy)) {
@@ -313,19 +304,8 @@ bool GcodeWorker::build_and_push_packet()
         }
     }
 
-#if SERVICES_DEBUG
-    const float cal_x = out_x;
-    const float cal_y = out_y;
-#endif
-
     const float ox = out_x * image_scale_gain_;
     const float oy = out_y * image_scale_gain_;
-
-#if SERVICES_DEBUG
-    GCODE_MOTION_COORD_DBG(
-        "parse(%.4f,%.4f,%.4f) cal(%.4f,%.4f) scale(%.4f,%.4f) scale_gain=%.4f",
-        x_, y_, z_, cal_x, cal_y, ox, oy, image_scale_gain_);
-#endif
 
     uint8_t lo = 0;
     uint8_t hi = 0;
@@ -340,19 +320,6 @@ bool GcodeWorker::build_and_push_packet()
 
     pkt.data[5] = 0;
     pkt.data[6] = 0;
-
-#if SERVICES_DEBUG
-    {
-        const uint16_t map_x = static_cast<uint16_t>(pkt.data[1]) |
-                               (static_cast<uint16_t>(pkt.data[2]) << 8);
-        const uint16_t map_y = static_cast<uint16_t>(pkt.data[3]) |
-                               (static_cast<uint16_t>(pkt.data[4]) << 8);
-        GCODE_MOTION_COORD_DBG(
-            "mapped u16 X=%u Y=%u Z=0 rang_gain=%.4f (pre_map %.4f,%.4f layer_z=%.4f)",
-            (unsigned)map_x, (unsigned)map_y,
-            image_rang_gain_, ox, oy, z_);
-    }
-#endif
 
     int speed_int = static_cast<int>(f_ * speed_gain_);
     int_to_u16_bytes(speed_int, &lo, &hi);
@@ -490,14 +457,12 @@ int GcodeWorker::open_file(const std::string& filepath)
     reset_parser_motion_state();
     last_layer_height_um_ = GCODE_DEFAULT_LAYER_UM;
 
-#if SERVICES_DEBUG
     {
         char path_copy[512];
         snprintf(path_copy, sizeof(path_copy), "%s", filepath.c_str());
         const char* base = basename(path_copy);
-        printf("[GcodeWorker] open file: %s (lines=%d)\n", base, cnt);
+        UPC_LOG_GCODE_WORKER(Info, "open file: %s (lines=%d)", base, cnt);
     }
-#endif
     return 0;
 }
 

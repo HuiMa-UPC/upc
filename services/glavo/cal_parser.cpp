@@ -1,5 +1,6 @@
 #include "cal_parser.hpp"
 #include "gcode_config.hpp"
+#include "rs_log.hpp"
 
 #include <cstdio>
 #include <cstring>
@@ -98,15 +99,9 @@ int cal_parse_csv(const char *path, CalData *out)
     }
     cal_data_clear(out);
 
-#if SERVICES_DEBUG
-    printf("[CalParser] opening: %s\n", path);
-#endif
-
     FILE *fp = fopen(path, "r");
     if (!fp) {
-#if SERVICES_DEBUG
-        printf("[CalParser] fopen failed: %s\n", path);
-#endif
+        UPC_LOG_CAL_PARSER(Error, "fopen failed: %s", path);
         return -1;
     }
 
@@ -210,16 +205,13 @@ int cal_parse_csv(const char *path, CalData *out)
     fclose(fp);
 
     if (nx < 2 || ny < 2 || grid_x <= 0.0 || grid_y <= 0.0) {
-#if SERVICES_DEBUG
-        printf("[CalParser] parse failed: missing valid Table row (nx=%d ny=%d gx=%.3f gy=%.3f)\n",
-               nx, ny, grid_x, grid_y);
-#endif
+        UPC_LOG_CAL_PARSER(Error,
+            "parse failed: missing valid Table row (nx=%d ny=%d gx=%.3f gy=%.3f)",
+            nx, ny, grid_x, grid_y);
         return -1;
     }
     if (nx > 64 || ny > 64) {
-#if SERVICES_DEBUG
-        printf("[CalParser] parse failed: grid too large (%dx%d)\n", nx, ny);
-#endif
+        UPC_LOG_CAL_PARSER(Error, "parse failed: grid too large (%dx%d)", nx, ny);
         return -1;
     }
 
@@ -233,16 +225,13 @@ int cal_parse_csv(const char *path, CalData *out)
         auto itx = x_rows.find(label);
         auto ity = y_rows.find(label);
         if (itx == x_rows.end() || ity == y_rows.end()) {
-#if SERVICES_DEBUG
-            printf("[CalParser] parse failed: missing X%d or Y%d row\n", label, label);
-#endif
+            UPC_LOG_CAL_PARSER(Error, "parse failed: missing X%d or Y%d row", label, label);
             return -1;
         }
         if ((int)itx->second.size() != nx || (int)ity->second.size() != nx) {
-#if SERVICES_DEBUG
-            printf("[CalParser] parse failed: row %d column count mismatch (got %zu/%zu, expect %d)\n",
-                   label, itx->second.size(), ity->second.size(), nx);
-#endif
+            UPC_LOG_CAL_PARSER(Error,
+                "parse failed: row %d column count mismatch (got %zu/%zu, expect %d)",
+                label, itx->second.size(), ity->second.size(), nx);
             return -1;
         }
         for (int i = 0; i < nx; ++i) {
@@ -271,12 +260,9 @@ int cal_parse_csv(const char *path, CalData *out)
     out->range_gain = cal_range;
     out->speed_gain = cal_speed;
 
-#if SERVICES_DEBUG
-    printf("[CalParser] parsed OK: nx=%d ny=%d grid=(%.3f,%.3f) span=(%.3f..%.3f,%.3f..%.3f) has_gains=%d\n",
-           out->nx, out->ny, out->grid_x, out->grid_y,
-           out->x_min, out->x_max, out->y_min, out->y_max,
-           out->has_gains);
-#endif
+    UPC_LOG_CAL_PARSER(Info,
+        "parsed OK: nx=%d ny=%d grid=(%.3f,%.3f) has_gains=%d",
+        out->nx, out->ny, out->grid_x, out->grid_y, out->has_gains);
     return 0;
 }
 

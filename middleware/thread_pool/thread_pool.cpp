@@ -1,5 +1,5 @@
 #include "thread_pool.hpp"
-#include "mw_debug.hpp"
+#include "rs_log.hpp"
 
 namespace middleware {
 
@@ -62,9 +62,8 @@ ThreadPool::ThreadPool(size_t num_threads) {
             }
         });
     }
-#if MIDDLEWARE_DEBUG
-    MW_LOG_THREADPOOL("init threads=%zu queue_depth=%d", num_threads, THREAD_POOL_QUEUE_DEPTH);
-#endif
+    UPC_LOG_THREAD_POOL(Info, "init threads=%zu queue_depth=%d",
+        num_threads, THREAD_POOL_QUEUE_DEPTH);
 }
 
 ThreadPool::~ThreadPool() {
@@ -77,18 +76,13 @@ bool ThreadPool::submit(TaskFunc task) {
     {
         std::lock_guard<std::mutex> lock(queue_mutex_);
         if (normal_queue_.size() >= THREAD_POOL_QUEUE_DEPTH) {
-#if MIDDLEWARE_DEBUG
-            MW_LOG_THREADPOOL("submit FAIL (queue full depth=%zu)", normal_queue_.size());
-#endif
+            UPC_LOG_THREAD_POOL(Error, "submit FAIL (queue full depth=%zu)",
+                normal_queue_.size());
             return false;
         }
         normal_queue_.push(std::move(task));
     }
     cv_.notify_one();
-#if MIDDLEWARE_DEBUG
-    MW_LOG_THREADPOOL("submit ok queued=%zu active=%zu",
-        queue_depth(), active_count());
-#endif
     return true;
 }
 
@@ -98,18 +92,12 @@ bool ThreadPool::submit_urgent(TaskFunc task) {
     {
         std::lock_guard<std::mutex> lock(queue_mutex_);
         if (urgent_queue_.size() >= THREAD_POOL_QUEUE_DEPTH / 4) {
-#if MIDDLEWARE_DEBUG
-            MW_LOG_THREADPOOL("submit_urgent FAIL (urgent queue full)");
-#endif
-            return false;  // 紧急队列更小
+            UPC_LOG_THREAD_POOL(Error, "submit_urgent FAIL (urgent queue full)");
+            return false;
         }
         urgent_queue_.push(std::move(task));
     }
     cv_.notify_one();
-#if MIDDLEWARE_DEBUG
-    MW_LOG_THREADPOOL("submit_urgent ok queued=%zu active=%zu",
-        queue_depth(), active_count());
-#endif
     return true;
 }
 
@@ -127,10 +115,8 @@ size_t ThreadPool::thread_count() const noexcept {
 }
 
 void ThreadPool::shutdown() {
-#if MIDDLEWARE_DEBUG
-    MW_LOG_THREADPOOL("shutdown threads=%zu queued=%zu active=%zu",
+    UPC_LOG_THREAD_POOL(Info, "shutdown threads=%zu queued=%zu active=%zu",
         workers_.size(), queue_depth(), active_count());
-#endif
     running_.store(false);
     cv_.notify_all();
     

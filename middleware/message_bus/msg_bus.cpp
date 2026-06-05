@@ -1,5 +1,6 @@
 #include "msg_bus.hpp"
-#include "mw_debug.hpp"
+#include "rs_msg_format.hpp"
+#include "rs_log.hpp"
 #include <algorithm>
 
 namespace middleware {
@@ -72,9 +73,7 @@ bool MsgBus::init() {
     if (initialized_.exchange(true)) {
         return true;
     }
-#if MIDDLEWARE_DEBUG
-    MW_LOG_MSGBUS("init ok queue_depth=%d", MSG_BUS_QUEUE_DEPTH);
-#endif
+    UPC_LOG_MSG_BUS(Info, "init ok queue_depth=%d", MSG_BUS_QUEUE_DEPTH);
     return true;
 }
 
@@ -114,24 +113,18 @@ Subscription MsgBus::subscribe(MsgType type, ModuleId module_id, MsgHandler hand
 
     uint32_t id = next_sub_id_.fetch_add(1);
 
-#if MIDDLEWARE_DEBUG
     size_t total = 0;
-#endif
     {
         std::lock_guard<std::mutex> lock(subscribers_mutex_);
         subscribers_.push_back({id, type, module_id, std::move(handler)});
-#if MIDDLEWARE_DEBUG
         total = subscribers_.size();
-#endif
     }
 
-#if MIDDLEWARE_DEBUG
-    MW_LOG_MSGBUS("subscribe id=%u type=%s module=%s total=%zu",
+    UPC_LOG_MSG_BUS(Debug, "subscribe id=%u type=%s module=%s total=%zu",
         id,
-        mw_debug_msgtype_name(type),
-        mw_debug_module_name(module_id),
+        upc_msg_type_name(type),
+        upc_msg_module_name(module_id),
         total);
-#endif
 
     return Subscription(id, this);
 }
@@ -141,65 +134,46 @@ Subscription MsgBus::subscribe_all(ModuleId module_id, MsgHandler handler) {
 }
 
 void MsgBus::unsubscribe(uint32_t sub_id) {
-#if MIDDLEWARE_DEBUG
     size_t total = 0;
     bool removed = false;
-#endif
     {
         std::lock_guard<std::mutex> lock(subscribers_mutex_);
-#if MIDDLEWARE_DEBUG
         const size_t before = subscribers_.size();
-#endif
         subscribers_.erase(
             std::remove_if(subscribers_.begin(), subscribers_.end(),
                 [sub_id](const auto& s) { return s.id == sub_id; }),
             subscribers_.end());
-#if MIDDLEWARE_DEBUG
         removed = subscribers_.size() != before;
         total = subscribers_.size();
-#endif
     }
-#if MIDDLEWARE_DEBUG
     if (removed) {
-        MW_LOG_MSGBUS("unsubscribe id=%u total=%zu", sub_id, total);
+        UPC_LOG_MSG_BUS(Debug, "unsubscribe id=%u total=%zu", sub_id, total);
     }
-#endif
 }
 
 bool MsgBus::publish(const Message& msg) {
-#if MIDDLEWARE_DEBUG
-    mw_debug_log_message("PUBLISH", msg);
-#endif
+    upc_msg_log_message("PUBLISH", msg);
     return deliver(msg);
 }
 
 bool MsgBus::publish_async(const Message& msg) {
-#if MIDDLEWARE_DEBUG
     size_t queue_depth = 0;
-#endif
     bool pushed = false;
     {
         std::lock_guard<std::mutex> lock(queue_mutex_);
         pushed = msg_queue_.push(msg);
-#if MIDDLEWARE_DEBUG
         if (pushed) {
             queue_depth = msg_queue_.size();
         }
-#endif
     }
     if (!pushed) {
-#if MIDDLEWARE_DEBUG
-        MW_LOG_MSGBUS("ENQUEUE FAIL %s %s->%s (queue full)",
-            mw_debug_msgtype_name(msg.type),
-            mw_debug_module_name(msg.sender_id),
-            mw_debug_module_name(msg.target_id));
-#endif
-        // MsgPayload 析构函数会在 msg 被销毁时自动释放 BufferRef
+        UPC_LOG_MSG_BUS(Error, "ENQUEUE FAIL %s %s->%s (queue full)",
+            upc_msg_type_name(msg.type),
+            upc_msg_module_name(msg.sender_id),
+            upc_msg_module_name(msg.target_id));
         return false;
     }
-#if MIDDLEWARE_DEBUG
-    mw_debug_log_message("ENQUEUE", msg, 0, queue_depth);
-#endif
+    upc_msg_log_message("ENQUEUE", msg, 0, queue_depth);
     return true;
 }
 
@@ -222,9 +196,7 @@ void MsgBus::process() {
         }
     }
     if (delivered > 0) {
-#if MIDDLEWARE_DEBUG
-        MW_LOG_MSGBUS("process delivered=%zu", delivered);
-#endif
+        UPC_LOG_MSG_BUS(Debug, "process delivered=%zu", delivered);
     }
 }
 
@@ -260,18 +232,14 @@ bool MsgBus::deliver(const Message& msg) {
     }
 
     if (handlers.empty()) {
-#if MIDDLEWARE_DEBUG
-        MW_LOG_MSGBUS("DELIVER miss %s %s->%s (no subscriber)",
-            mw_debug_msgtype_name(msg.type),
-            mw_debug_module_name(msg.sender_id),
-            mw_debug_module_name(msg.target_id));
-#endif
+        UPC_LOG_MSG_BUS(Warn, "DELIVER miss %s %s->%s (no subscriber)",
+            upc_msg_type_name(msg.type),
+            upc_msg_module_name(msg.sender_id),
+            upc_msg_module_name(msg.target_id));
         return false;
     }
 
-#if MIDDLEWARE_DEBUG
-    mw_debug_log_message("DELIVER", msg, handlers.size());
-#endif
+    upc_msg_log_message("DELIVER", msg, handlers.size());
     invoke_handlers(msg, handlers);
     return true;
 }

@@ -1,4 +1,5 @@
 #include "service_base.hpp"
+#include "rs_log.hpp"
 #include "msg_types.hpp"
 #include <cstdio>
 #include <iostream>
@@ -102,12 +103,11 @@ void ServiceBase::on_message(const middleware::Message& msg) {
         {
             std::lock_guard<std::mutex> lock(worker_mutex_);
             if (worker_queue_.size() >= kWorkerQueueDepth) {
-#if SERVICES_DEBUG
-                std::fprintf(stderr,
-                    "[ServiceBase:%s] worker queue full (%zu), drop %u\n",
-                    config_.name.c_str(), kWorkerQueueDepth,
-                    static_cast<unsigned>(static_cast<uint32_t>(msg.type)));
-#endif
+                UPC_LOG_SERVICE_BASE(Warn,
+                    "worker queue full (%zu), drop type=%u service=%s",
+                    kWorkerQueueDepth,
+                    static_cast<unsigned>(static_cast<uint32_t>(msg.type)),
+                    config_.name.c_str());
                 return;
             }
             worker_queue_.push(msg);

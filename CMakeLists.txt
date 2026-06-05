@@ -27,7 +27,11 @@ message(STATUS "========================================")
 add_compile_options(-Wall -Wextra -O3)
 add_compile_definitions(_POSIX_C_SOURCE=200809L)
 
+# 调试日志总开关（middleware + services）；子开关默认见 debug/upc_log_modules.hpp
+option(UPC_DEBUG "Enable unified debug logging (middleware+services)" ON)
+
 # 子模块
+add_subdirectory(debug)
 add_subdirectory(3rdparty/lv_port_linux-release-v9.5)
 add_subdirectory(middleware)
 add_subdirectory(services)
@@ -47,17 +51,27 @@ target_include_directories(${PROJECT_NAME}
 target_link_libraries(${PROJECT_NAME}
     PRIVATE
         ui::port
-        services::port
         middleware::port
         lvgl::port
+        upc::debug
 )
 
-# 强制链接 parsers 插件库中所有 .o，否则 gcode_register 等静态注册会被 --gc-sections 裁掉
-if(TARGET services_parsers)
-    target_link_libraries(${PROJECT_NAME}
-        PRIVATE
-            -Wl,--whole-archive
-            services_parsers
-            -Wl,--no-whole-archive
-    )
+# services + parsers 整库链接：静态注册 + 避免 .a 按需抽 obj 漏掉 GlavoService 等符号
+if(TARGET services)
+    if(TARGET services_parsers)
+        target_link_libraries(${PROJECT_NAME}
+            PRIVATE
+                -Wl,--whole-archive
+                services
+                services_parsers
+                -Wl,--no-whole-archive
+        )
+    else()
+        target_link_libraries(${PROJECT_NAME}
+            PRIVATE
+                -Wl,--whole-archive
+                services
+                -Wl,--no-whole-archive
+        )
+    endif()
 endif()

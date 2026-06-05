@@ -70,7 +70,6 @@ private:
     bool  state_initialized_ = false;
 
     CalData cal_data_;
-    bool    enable_cal_ = false;
 
     RingBuffer rb_;
 

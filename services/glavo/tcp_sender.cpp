@@ -5,6 +5,7 @@
 #include "parser_worker.hpp"
 #include "msg_bus.hpp"
 #include "msg_types.hpp"
+#include "rs_log.hpp"
 
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -28,25 +29,55 @@ IParserWorker* active_parser()
     return ParserManager::instance().active();
 }
 
-#if TCP_DEBUG
-/**
- * @brief 将字节数组格式化为十六进制字符串，用于调试打印
- * @param data  数据指针
- * @param len   数据长度
- * @param out   输出缓冲区
- * @param out_size 输出缓冲区大小
- */
-void hex_dump(const uint8_t* data, size_t len, char* out, size_t out_size)
+#if UPC_DEBUG && UPC_MOD_TCP_SENDER
+void serial_log_rx_frame(const uint8_t* frame, size_t len)
 {
-    size_t pos = 0;
-    for(size_t i = 0; i < len && pos + 3 < out_size; i++) {
-        pos += std::snprintf(out + pos, out_size - pos, "%02X ", data[i]);
+    serial_sensor_report_t sensor{};
+    serial_sensor_err_t serr = SERIAL_SENSOR_ERR_NONE;
+    if(serial_parse_sensor_report_detail(frame, len, &sensor, &serr) == 0) {
+        UPC_LOG_TCP_SENDER(Debug,
+            "RX SENSOR OK O2=%.1f%% press=%d mbar temp=%.1fC hum=%.1f%% "
+            "PM2.5=%.0f powder=%u seq=%u",
+            sensor.oxygen_percent,
+            static_cast<int>(sensor.pressure_mbar),
+            sensor.temperature_c,
+            sensor.humidity_percent,
+            sensor.pm25_ug_m3,
+            static_cast<unsigned>(sensor.powder_present),
+            len >= 6 ? static_cast<unsigned>(frame[5]) : 0u);
+        return;
     }
-    if(pos > 0 && pos < out_size) {
-        out[pos - 1] = '\0'; // 去掉末尾空格
-    } else if(out_size > 0) {
-        out[0] = '\0';
+
+    if(serial_frame_is_sensor_report(frame, len)) {
+        UPC_LOG_TCP_SENDER(Warn, "RX SENSOR FAIL len=%zu err=%s",
+            len, serial_sensor_err_string(serr));
+        return;
     }
+
+    const serial_event_t evt = serial_parse_frame(frame, len);
+    if(evt != SERIAL_EVT_NONE) {
+        const char* evt_name = "UNKNOWN";
+        switch(evt) {
+            case SERIAL_EVT_PRINT_READY:        evt_name = "PRINT_READY";        break;
+            case SERIAL_EVT_PRINT_CONDITION_OK: evt_name = "PRINT_CONDITION_OK"; break;
+            default: break;
+        }
+        UPC_LOG_TCP_SENDER(Info, "RX LAYER event=%s len=%zu", evt_name, len);
+        return;
+    }
+
+    if(len >= 3 && frame[0] == 0x5A && frame[1] == 0xA5 && frame[2] == 0xBB) {
+        UPC_LOG_TCP_SENDER(Warn,
+            "RX SERIAL UNKNOWN len=%zu port=%02X cmd=%02X seq=%u len_field=%u",
+            len,
+            len >= 4 ? frame[3] : 0,
+            len >= 5 ? frame[4] : 0,
+            len >= 6 ? static_cast<unsigned>(frame[5]) : 0u,
+            len >= 7 ? static_cast<unsigned>(frame[6]) : 0u);
+        return;
+    }
+
+    UPC_LOG_TCP_SENDER(Warn, "RX SERIAL BAD len=%zu", len);
 }
 #endif
 
@@ -150,92 +181,6 @@ size_t serial_guess_frame_len(const uint8_t* buf, size_t avail)
     return avail < frame_len ? 0 : frame_len;
 }
 
-#if TCP_DEBUG
-void serial_log_rx_frame(const uint8_t* frame, size_t len)
-{
-    char hex[256];
-    hex_dump(frame, len, hex, sizeof(hex));
-
-    serial_sensor_report_t sensor{};
-    serial_sensor_err_t serr = SERIAL_SENSOR_ERR_NONE;
-    if(serial_parse_sensor_report_detail(frame, len, &sensor, &serr) == 0) {
-        printf("[TcpSender][RX] SENSOR OK len=%zu %s\n", len, hex);
-        printf("[TcpSender][RX]   O2=%.1f%% press=%d mbar temp=%.1fC hum=%.1f%% "
-               "PM2.5=%.0f powder=%u subs=%.1fC hall=0x%04X seq=%u\n",
-               sensor.oxygen_percent,
-               static_cast<int>(sensor.pressure_mbar),
-               sensor.temperature_c,
-               sensor.humidity_percent,
-               sensor.pm25_ug_m3,
-               static_cast<unsigned>(sensor.powder_present),
-               sensor.substrate_temp_c,
-               static_cast<unsigned>(sensor.hall_bitmap),
-               len >= 6 ? static_cast<unsigned>(frame[5]) : 0u);
-        return;
-    }
-
-    if(serial_frame_is_sensor_report(frame, len)) {
-        uint8_t calc = 0;
-        uint8_t rx   = 0;
-        const int cret = serial_frame_checksum_check(frame, len, &calc, &rx);
-        if(serr == SERIAL_SENSOR_ERR_CHECKSUM || cret == -2) {
-            printf("[TcpSender][RX] SENSOR FAIL len=%zu err=%s calc=%02X rx=%02X "
-                   "len_field=%u tlv=%02X/%02X %s\n",
-                   len,
-                   serial_sensor_err_string(serr),
-                   calc,
-                   rx,
-                   len >= 7 ? static_cast<unsigned>(frame[6]) : 0u,
-                   len >= 8 ? static_cast<unsigned>(frame[7]) : 0u,
-                   len >= 9 ? static_cast<unsigned>(frame[8]) : 0u,
-                   hex);
-        } else {
-            printf("[TcpSender][RX] SENSOR FAIL len=%zu err=%s len_field=%u "
-                   "tlv=%02X/%02X %s\n",
-                   len,
-                   serial_sensor_err_string(serr),
-                   len >= 7 ? static_cast<unsigned>(frame[6]) : 0u,
-                   len >= 8 ? static_cast<unsigned>(frame[7]) : 0u,
-                   len >= 9 ? static_cast<unsigned>(frame[8]) : 0u,
-                   hex);
-        }
-        return;
-    }
-
-    const serial_event_t evt = serial_parse_frame(frame, len);
-    if(evt != SERIAL_EVT_NONE) {
-        const char* evt_name = "UNKNOWN";
-        switch(evt) {
-            case SERIAL_EVT_PRINT_READY:        evt_name = "PRINT_READY";        break;
-            case SERIAL_EVT_PRINT_CONDITION_OK: evt_name = "PRINT_CONDITION_OK"; break;
-            default: break;
-        }
-        printf("[TcpSender][RX] LAYER len=%zu event=%s %s\n", len, evt_name, hex);
-        return;
-    }
-
-    if(len >= 3 && frame[0] == 0x5A && frame[1] == 0xA5 && frame[2] == 0xBB) {
-        uint8_t calc = 0;
-        uint8_t rx   = 0;
-        const int cret = serial_frame_checksum_check(frame, len, &calc, &rx);
-        printf("[TcpSender][RX] SERIAL UNKNOWN len=%zu port=%02X cmd=%02X seq=%u "
-               "len_field=%u type=%02X checksum=%s calc=%02X rx=%02X %s\n",
-               len,
-               len >= 4 ? frame[3] : 0,
-               len >= 5 ? frame[4] : 0,
-               len >= 6 ? static_cast<unsigned>(frame[5]) : 0u,
-               len >= 7 ? static_cast<unsigned>(frame[6]) : 0u,
-               len >= 8 ? frame[7] : 0,
-               cret == 0 ? "OK" : (cret == -2 ? "BAD" : "N/A"),
-               calc,
-               rx,
-               hex);
-        return;
-    }
-
-    printf("[TcpSender][RX] SERIAL BAD len=%zu %s\n", len, hex);
-}
-#endif
 
 /**
  * @brief 串口帧处理函数
@@ -247,7 +192,7 @@ void serial_log_rx_frame(const uint8_t* frame, size_t len)
  */
 void serial_handle_frame(const uint8_t* frame, size_t len)
 {
-#if TCP_DEBUG
+#if UPC_DEBUG && UPC_MOD_TCP_SENDER
     serial_log_rx_frame(frame, len);
 #endif
 
@@ -408,9 +353,7 @@ int TcpSender::connect_tcp(const char* ip, int port)
 
     // 禁用 Nagle 算法，确保小帧及时发出
     if(!set_tcp_nodelay(fd)) {
-#if SERVICES_DEBUG
-        printf("[TcpSender] TCP_NODELAY set failed\n");
-#endif
+        UPC_LOG_TCP_SENDER(Warn, "TCP_NODELAY set failed");
     }
 
     // 设为非阻塞模式，方便链路线程做轮询式收发
@@ -424,9 +367,7 @@ int TcpSender::connect_tcp(const char* ip, int port)
     tcp_fd_ = fd;
     tcp_rx_accum_len_ = 0; // 清空接收累积区
 
-#if SERVICES_DEBUG
-    printf("[TcpSender] TCP connected %s:%d (NODELAY=1)\n", ip, port);
-#endif
+    UPC_LOG_TCP_SENDER(Info, "TCP connected %s:%d (NODELAY=1)", ip, port);
     return 0;
 }
 
@@ -480,9 +421,7 @@ int TcpSender::open_serial(const char* device, int baud)
     serial_fd_ = fd;
     serial_rx_accum_len_ = 0;
 
-#if SERVICES_DEBUG
-    printf("[TcpSender] serial open %s @ %d\n", device, baud);
-#endif
+    UPC_LOG_TCP_SENDER(Info, "serial open %s @ %d", device, baud);
     return 0;
 }
 
@@ -622,20 +561,20 @@ void TcpSender::publish_env_update_ntf()
         middleware::ModuleId::UI);
     ntf.payload = middleware::MsgPayload::from_bytes(
         reinterpret_cast<const uint8_t*>(&p), sizeof(p));
-    (void)middleware::MsgBus::instance().publish_async(ntf);
+    if(!middleware::MsgBus::instance().publish_async(ntf)) {
+        UPC_LOG_TCP_SENDER(Warn, "APP_Update_Ntf publish_async failed");
+    }
 }
 
 void TcpSender::notify_serial_event(serial_event_t evt)
 {
-#if TCP_DEBUG
     const char* evt_name = "UNKNOWN";
     switch(evt) {
         case SERIAL_EVT_PRINT_CONDITION_OK: evt_name = "PRINT_CONDITION_OK"; break;
         case SERIAL_EVT_PRINT_READY:        evt_name = "PRINT_READY";        break;
         default:                            evt_name = "NONE";               break;
     }
-    printf("[TcpSender] notify_serial_event: %s\n", evt_name);
-#endif
+    UPC_LOG_TCP_SENDER(Info, "notify_serial_event: %s", evt_name);
     if(evt == SERIAL_EVT_PRINT_CONDITION_OK) {
         serial_evt_condition_ok_.store(true);
     } else if(evt == SERIAL_EVT_PRINT_READY) {
@@ -703,13 +642,6 @@ int TcpSender::serial_send_raw(const uint8_t* data, size_t len)
     if(serial_fd_ < 0 || !data || len == 0) {
         return -1;
     }
-#if TCP_DEBUG
-    {
-        char hex[256];
-        hex_dump(data, len, hex, sizeof(hex));
-        printf("[TcpSender][TX] serial raw[%zu] = %s\n", len, hex);
-    }
-#endif
     const ssize_t n = write(serial_fd_, data, len);
     return n == (ssize_t)len ? 0 : -1;
 }
@@ -732,21 +664,9 @@ int TcpSender::serial_recv_nonblock(uint8_t* buf, size_t buf_size)
 void TcpSender::serial_drain_rx()
 {
     uint8_t chunk[64];
-#if TCP_DEBUG
-    auto recv_fn = +[](uint8_t* b, size_t s) -> int {
-        const int n = TcpSender::instance().serial_recv_nonblock(b, s);
-        if(n > 0) {
-            char hex[256];
-            hex_dump(b, static_cast<size_t>(n), hex, sizeof(hex));
-            printf("[TcpSender][RX] serial raw chunk[%d] = %s\n", n, hex);
-        }
-        return n;
-    };
-#else
     auto recv_fn = +[](uint8_t* b, size_t s) -> int {
         return TcpSender::instance().serial_recv_nonblock(b, s);
     };
-#endif
     drain_framed_rx(recv_fn, chunk, sizeof(chunk),
                     serial_rx_accum_, sizeof(serial_rx_accum_), &serial_rx_accum_len_,
                     serial_guess_frame_len,
@@ -956,9 +876,7 @@ void TcpSender::begin_sending_internal()
         uint8_t sbuf[32];
         const int slen = serial_build_print_request(sbuf, sizeof(sbuf));
         if(slen > 0) {
-#if TCP_DEBUG
-            printf("[TcpSender] serial TX cmd: PRINT_REQUEST\n");
-#endif
+            UPC_LOG_TCP_SENDER(Info, "serial TX cmd: PRINT_REQUEST");
             serial_send_raw(sbuf, (size_t)slen);
         }
         waiting_layer_.store(true);
@@ -968,9 +886,7 @@ void TcpSender::begin_sending_internal()
     }
 #endif
 
-#if SERVICES_DEBUG
-    printf("[TcpSender] begin_sending\n");
-#endif
+    UPC_LOG_TCP_SENDER(Info, "begin_sending");
 }
 
 void TcpSender::begin_sending()
@@ -1030,9 +946,7 @@ void TcpSender::send_serial_print_terminate()
         uint8_t sbuf[32];
         const int slen = serial_build_print_terminate(sbuf, sizeof(sbuf));
         if(slen > 0) {
-#if TCP_DEBUG
-            printf("[TcpSender] serial TX cmd: PRINT_TERMINATE\n");
-#endif
+            UPC_LOG_TCP_SENDER(Info, "serial TX cmd: PRINT_TERMINATE");
             serial_send_raw(sbuf, (size_t)slen);
         }
     }
@@ -1046,9 +960,7 @@ void TcpSender::send_serial_print_finished()
         uint8_t sbuf[32];
         const int slen = serial_build_print_finished(sbuf, sizeof(sbuf));
         if(slen > 0) {
-#if TCP_DEBUG
-            printf("[TcpSender] serial TX cmd: PRINT_FINISHED\n");
-#endif
+            UPC_LOG_TCP_SENDER(Info, "serial TX cmd: PRINT_FINISHED");
             serial_send_raw(sbuf, (size_t)slen);
         }
     }
@@ -1111,10 +1023,8 @@ void TcpSender::link_process_serial_handshake()
         uint8_t sbuf[32];
         const int slen = serial_build_print_start(first_layer_height_um_, sbuf, sizeof(sbuf));
         if(slen > 0) {
-#if TCP_DEBUG
-            printf("[TcpSender] serial TX cmd: PRINT_START (layer=%u um)\n",
-                   static_cast<unsigned>(first_layer_height_um_));
-#endif
+            UPC_LOG_TCP_SENDER(Info, "serial TX cmd: PRINT_START (layer=%u um)",
+                static_cast<unsigned>(first_layer_height_um_));
             serial_send_raw(sbuf, (size_t)slen);
         }
         serial_handshake_phase_.store(SERIAL_HS_WAIT_PRINT_READY);
@@ -1197,10 +1107,8 @@ void TcpSender::link_try_layer_serial_dispatch()
     uint8_t sbuf[32];
     const int slen = serial_build_layer_done(active_layer_height_um_, sbuf, sizeof(sbuf));
     if(slen > 0) {
-#if TCP_DEBUG
-        printf("[TcpSender] serial TX cmd: LAYER_DONE (next_layer=%u um)\n",
-               static_cast<unsigned>(active_layer_height_um_));
-#endif
+        UPC_LOG_TCP_SENDER(Info, "serial TX cmd: LAYER_DONE (next_layer=%u um)",
+            static_cast<unsigned>(active_layer_height_um_));
         serial_send_raw(sbuf, (size_t)slen);
     }
     layer_drain_pending_.store(false);
@@ -1267,10 +1175,6 @@ int TcpSender::link_send_one_motion_batch()
     // 更新已发送包计数
     const int sent = PrintJobState::instance().snapshot().sent_packets + n;
     PrintJobState::instance().set_sent_packets(sent);
-
-#if TCP_DEBUG
-    printf("[TcpSender] motion batch sent: %d packets (total sent=%d)\n", n, sent);
-#endif
 
     // 触发进度回调
     if(progress_cb_) {
@@ -1348,12 +1252,6 @@ void TcpSender::link_try_finish_sending()
     if(!mcu_rates_drained()) {
         if(!natural_complete_pending_.load()) {
             natural_complete_since_ = now;
-#if TCP_DEBUG
-            const auto snap = PrintJobState::instance().snapshot();
-            printf("[TcpSender] finish wait: MCU drain pending cmd_rate=%u data_rate=%u\n",
-                   static_cast<unsigned>(snap.cmd_cache_rate),
-                   static_cast<unsigned>(snap.data_cache_rate));
-#endif
         }
         natural_complete_pending_.store(true);
         poll_mcu_drain_heartbeat();
@@ -1362,14 +1260,12 @@ void TcpSender::link_try_finish_sending()
            natural_complete_since_.time_since_epoch().count() != 0 &&
            now - natural_complete_since_ >=
                std::chrono::milliseconds(MCU_DRAIN_TIMEOUT_MS)) {
-#if TCP_DEBUG
             const auto snap = PrintJobState::instance().snapshot();
-            printf("[TcpSender] finish wait: drain timeout (%d ms), force complete "
-                   "cmd_rate=%u data_rate=%u\n",
-                   MCU_DRAIN_TIMEOUT_MS,
-                   static_cast<unsigned>(snap.cmd_cache_rate),
-                   static_cast<unsigned>(snap.data_cache_rate));
-#endif
+            UPC_LOG_TCP_SENDER(Warn,
+                "finish wait: drain timeout (%d ms), force complete cmd_rate=%u data_rate=%u",
+                MCU_DRAIN_TIMEOUT_MS,
+                static_cast<unsigned>(snap.cmd_cache_rate),
+                static_cast<unsigned>(snap.data_cache_rate));
         } else {
             return;
         }

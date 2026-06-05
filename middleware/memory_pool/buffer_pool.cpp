@@ -1,6 +1,6 @@
 #include "buffer_pool.hpp"
 #include "mem_pool.hpp"
-#include "mw_debug.hpp"
+#include "rs_log.hpp"
 
 #include <new>
 
@@ -13,7 +13,6 @@ uint8_t* alloc_buffer_bytes(size_t size) {
     if (ptr) {
         return static_cast<uint8_t*>(ptr);
     }
-    /* MemPool 档块耗尽或 >16K 时 MemPool 已走 system heap；档块满则在此兜底 */
     return static_cast<uint8_t*>(::operator new(size));
 }
 
@@ -25,9 +24,6 @@ void free_buffer_bytes(uint8_t* ptr) {
 
 } // namespace
 
-// ============================================
-// BufferPool
-// ============================================
 BufferPool& BufferPool::instance() {
     static BufferPool instance;
     return instance;
@@ -38,9 +34,7 @@ bool BufferPool::init(size_t max_buffers) {
     if (initialized_) return true;
     buffers_.resize(max_buffers);
     initialized_ = true;
-#if MIDDLEWARE_DEBUG
-    MW_LOG_BUFFERPOOL("init ok capacity=%zu", max_buffers);
-#endif
+    UPC_LOG_BUFFER_POOL(Info, "init ok capacity=%zu", max_buffers);
     return true;
 }
 
@@ -61,10 +55,6 @@ void BufferPool::deinit() {
 
 BufferId BufferPool::allocate(size_t size) {
     BufferId id = INVALID_BUFFER_ID;
-#if MW_DEBUG_BUFFERPOOL
-    size_t used_count = 0;
-    size_t capacity = 0;
-#endif
 
     {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -72,9 +62,6 @@ BufferId BufferPool::allocate(size_t size) {
             return INVALID_BUFFER_ID;
         }
 
-#if MW_DEBUG_BUFFERPOOL
-        capacity = buffers_.size();
-#endif
         for (size_t i = 0; i < buffers_.size(); ++i) {
             if (!buffers_[i].used) {
                 uint8_t* ptr = alloc_buffer_bytes(size);
@@ -86,87 +73,43 @@ BufferId BufferPool::allocate(size_t size) {
                 buffers_[i].ref_count = 1;
                 buffers_[i].used = true;
                 id = static_cast<BufferId>(i);
-#if MW_DEBUG_BUFFERPOOL
-                used_count = get_stats_locked().used_count;
-#endif
                 break;
             }
         }
     }
 
-#if MW_DEBUG_BUFFERPOOL
-    if (id != INVALID_BUFFER_ID) {
-        MW_LOG_BUFFERPOOL("alloc id=%u size=%zu (used %zu/%zu)",
-            static_cast<unsigned>(id), size, used_count, capacity);
-    } else {
-        MW_LOG_BUFFERPOOL("alloc size=%zu FAILED (pool full)", size);
+    if (id == INVALID_BUFFER_ID) {
+        UPC_LOG_BUFFER_POOL(Error, "alloc size=%zu FAILED (pool full)", size);
     }
-#endif
     return id;
 }
 
 void BufferPool::acquire(BufferId id) {
-#if MW_DEBUG_BUFFERPOOL
-    uint32_t ref = 0;
-    bool ok = false;
-#endif
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        if (id < buffers_.size() && buffers_[id].used) {
-#if MW_DEBUG_BUFFERPOOL
-            ref = ++buffers_[id].ref_count;
-            ok = true;
-#else
-            ++buffers_[id].ref_count;
-#endif
-        }
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (id < buffers_.size() && buffers_[id].used) {
+        ++buffers_[id].ref_count;
     }
-#if MW_DEBUG_BUFFERPOOL
-    if (ok) {
-        MW_LOG_BUFFERPOOL("acquire id=%u ref=%u", static_cast<unsigned>(id), ref);
-    }
-#endif
 }
 
 void BufferPool::release(BufferId id) {
-#if MW_DEBUG_BUFFERPOOL
-    uint32_t ref = 0;
-    bool freed = false;
-#endif
     {
         std::lock_guard<std::mutex> lock(mutex_);
         if (id >= buffers_.size() || !buffers_[id].used) {
             return;
         }
         if (buffers_[id].ref_count == 0) {
-#if MW_DEBUG_BUFFERPOOL
-            MW_LOG_BUFFERPOOL("release id=%u IGNORE (ref already 0)", static_cast<unsigned>(id));
-#endif
+            UPC_LOG_BUFFER_POOL(Warn, "release id=%u IGNORE (ref already 0)",
+                static_cast<unsigned>(id));
             return;
         }
 
-#if MW_DEBUG_BUFFERPOOL
-        ref = --buffers_[id].ref_count;
-        if (ref == 0) {
-#else
         if (--buffers_[id].ref_count == 0) {
-#endif
             free_buffer_bytes(buffers_[id].data);
             buffers_[id].data = nullptr;
             buffers_[id].size = 0;
             buffers_[id].used = false;
-#if MW_DEBUG_BUFFERPOOL
-            freed = true;
-#endif
         }
     }
-#if MW_DEBUG_BUFFERPOOL
-    if (freed) {
-        MW_LOG_BUFFERPOOL("release id=%u (freed)", static_cast<unsigned>(id));
-    } else {
-        MW_LOG_BUFFERPOOL("release id=%u ref=%u", static_cast<unsigned>(id), ref);
-    }
-#endif
 }
 
 uint8_t* BufferPool::get_ptr(BufferId id) {
@@ -210,9 +153,6 @@ BufferPool::Stats BufferPool::get_stats_locked() const {
     return s;
 }
 
-// ============================================
-// BufferHandle RAII
-// ============================================
 BufferHandle::BufferHandle(BufferId id) : id_(id) {}
 
 BufferHandle::~BufferHandle() {

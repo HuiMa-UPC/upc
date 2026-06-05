@@ -1,6 +1,7 @@
-#include "mw_debug.hpp"
+#include "rs_msg_format.hpp"
+#include "rs_log.hpp"
 
-#if MIDDLEWARE_DEBUG
+#if UPC_DEBUG && UPC_MOD_MSG_BUS
 
 #include "msg_bus.hpp"
 #include "mem_pool.hpp"
@@ -61,7 +62,7 @@ void append_truncated_text(char* buf, size_t buf_size, const uint8_t* data, size
 
 } // namespace
 
-const char* mw_debug_module_name(ModuleId id) {
+const char* upc_msg_module_name(ModuleId id) {
     switch (id) {
         case ModuleId::UI: return "UI";
         case ModuleId::APP_GLAVO: return "APP_GLAVO";
@@ -69,7 +70,7 @@ const char* mw_debug_module_name(ModuleId id) {
     }
 }
 
-const char* mw_debug_msgtype_name(MsgType type) {
+const char* upc_msg_type_name(MsgType type) {
     switch (type) {
         case MsgType::APP_Update_Ntf: return "APP_Update_Ntf";
         case MsgType::UI_PM25_Req: return "UI_PM25_Req";
@@ -78,13 +79,22 @@ const char* mw_debug_msgtype_name(MsgType type) {
         case MsgType::APP_CLOSE_DOOR_Rsp: return "APP_CLOSE_DOOR_Rsp";
         case MsgType::Fs_DirOpen_Req: return "Fs_DirOpen_Req";
         case MsgType::Fs_DirOpen_Rsp: return "Fs_DirOpen_Rsp";
-    
-
+        case MsgType::UI_OpenDoor_Req: return "UI_OpenDoor_Req";
+        case MsgType::APP_OpenDoor_Rsp: return "APP_OpenDoor_Rsp";
+        case MsgType::UI_Purify_Req: return "UI_Purify_Req";
+        case MsgType::APP_Purify_Progress: return "APP_Purify_Progress";
+        case MsgType::APP_Purify_Rsp: return "APP_Purify_Rsp";
+        case MsgType::UI_FileInfo_Req: return "UI_FileInfo_Req";
+        case MsgType::APP_FileInfo_Rsp: return "APP_FileInfo_Rsp";
+        case MsgType::UI_Print_Start_Req: return "UI_Print_Start_Req";
+        case MsgType::APP_Print_Progress_Ntf: return "APP_Print_Progress_Ntf";
+        case MsgType::UI_Print_Terminate_Req: return "UI_Print_Terminate_Req";
+        case MsgType::APP_Print_Terminate_Done: return "APP_Print_Terminate_Done";
         default: return "Msg";
     }
 }
 
-const char* mw_debug_payload_summary(const MsgPayload& payload, char* buf, size_t buf_size) {
+const char* upc_msg_payload_summary(const MsgPayload& payload, char* buf, size_t buf_size) {
     if (!buf || buf_size == 0) {
         return "";
     }
@@ -121,70 +131,72 @@ const char* mw_debug_payload_summary(const MsgPayload& payload, char* buf, size_
     return buf;
 }
 
-void mw_debug_log_message(const char* phase, const Message& msg,
+void upc_msg_log_message(const char* phase, const Message& msg,
     size_t handler_count, size_t queue_depth) {
     char payload[128];
-    mw_debug_payload_summary(msg.payload, payload, sizeof(payload));
+    upc_msg_payload_summary(msg.payload, payload, sizeof(payload));
 
     if (handler_count > 0) {
-        MW_LOG_MSGBUS("%s %s %s->%s pri=%u handlers=%zu payload={%s}",
+        UPC_LOG_MSG_BUS(Debug,
+            "%s %s %s->%s pri=%u handlers=%zu payload={%s}",
             phase,
-            mw_debug_msgtype_name(msg.type),
-            mw_debug_module_name(msg.sender_id),
-            mw_debug_module_name(msg.target_id),
+            upc_msg_type_name(msg.type),
+            upc_msg_module_name(msg.sender_id),
+            upc_msg_module_name(msg.target_id),
             static_cast<unsigned>(msg.priority),
             handler_count,
             payload);
     } else {
-        MW_LOG_MSGBUS("%s %s %s->%s pri=%u queue=%zu payload={%s}",
+        UPC_LOG_MSG_BUS(Debug,
+            "%s %s %s->%s pri=%u queue=%zu payload={%s}",
             phase,
-            mw_debug_msgtype_name(msg.type),
-            mw_debug_module_name(msg.sender_id),
-            mw_debug_module_name(msg.target_id),
+            upc_msg_type_name(msg.type),
+            upc_msg_module_name(msg.sender_id),
+            upc_msg_module_name(msg.target_id),
             static_cast<unsigned>(msg.priority),
             queue_depth,
             payload);
     }
 }
 
-void mw_debug_dump_status() {
-    MW_LOG_MSGBUS("status pending=%zu full=%s subs=%zu",
+void upc_msg_dump_status() {
+    UPC_LOG_MSG_BUS(Info, "status pending=%zu full=%s subs=%zu",
         MsgBus::instance().pending_count(),
         MsgBus::instance().is_full() ? "yes" : "no",
         MsgBus::instance().subscriber_count());
 
-#if MW_DEBUG_MEMPOOL
+#if UPC_MOD_MEM_POOL
     const auto mem_stats = MemPool::instance().get_stats();
     for (const auto& s : mem_stats) {
         if (s.total_blocks == 0) {
             continue;
         }
-        MW_LOG_MEMPOOL("class %zuB: used=%zu/%zu free=%zu",
+        UPC_LOG_MEM_POOL(Debug, "class %zuB: used=%zu/%zu free=%zu",
             s.block_size, s.used_blocks, s.total_blocks, s.free_blocks);
     }
 #endif
 
-#if MW_DEBUG_BUFFERPOOL
+#if UPC_MOD_BUFFER_POOL
     const auto buf_stats = BufferPool::instance().get_stats();
-    MW_LOG_BUFFERPOOL("buffers used=%zu/%zu bytes=%zu",
+    UPC_LOG_BUFFER_POOL(Debug, "buffers used=%zu/%zu bytes=%zu",
         buf_stats.used_count, buf_stats.capacity, buf_stats.bytes_used);
 #endif
 }
 
-void mw_debug_dump_thread_pool(const ThreadPool* pool) {
+void upc_msg_dump_thread_pool(const ThreadPool* pool) {
     if (!pool) {
-        MW_LOG_THREADPOOL("status (null pool)");
+        UPC_LOG_THREAD_POOL(Warn, "status (null pool)");
         return;
     }
-    MW_LOG_THREADPOOL("status threads=%zu active=%zu queued=%zu",
+    UPC_LOG_THREAD_POOL(Info, "status threads=%zu active=%zu queued=%zu",
         pool->thread_count(), pool->active_count(), pool->queue_depth());
 }
 
 } // namespace middleware
 
-#else
+#else /* !(UPC_DEBUG && UPC_MOD_MSG_BUS) */
 
 namespace middleware {
 } // namespace middleware
 
-#endif // MIDDLEWARE_DEBUG
+#endif /* UPC_DEBUG && UPC_MOD_MSG_BUS */
