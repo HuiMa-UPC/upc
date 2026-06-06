@@ -11,7 +11,8 @@
 | `ipc_endpoint.*` | 平台/架构 | Unix socket listen/connect/帧读写 |
 | `ipc_msg_bus.*` | 平台/架构 | 进程内订阅表 + 跨进程收发 |
 | `msg_port.*` | 平台/架构 | **唯一业务入口**，UI/Glavo 只 include 此文件 |
-| `ipc_config.hpp` | 运维/平台 | 套接字路径默认值 |
+| `ipc_config.hpp` | 运维/平台 | 套接字路径、SHM 名称默认值 |
+| `ipc_shm_*` | 平台/架构 | POSIX 共享内存帧环（YUV420SP triple buffer） |
 
 **不要改**（除非全员评审）：
 
@@ -41,7 +42,8 @@ ui / services  →  msg_port.hpp  →  upc::ipc  →  middleware::port
 
 见 [`common/contract/README.md`](../contract/README.md) §4（四步流程 + 命名规范）。
 
-## 后续：日志进程 / 共享内存
+## 共享内存（视频数据面）
 
-- 日志旁路：broker 或第三 socket 订阅 `MsgType` 子集（当前未实现）  
-- 视频流：新建 `ipc_shm_*`，不改现有 socket 帧格式
+- 控制面：现有 MsgPort socket（Start/Stop、`FrameReady{slot,seq}`）
+- 数据面：`ipc_shm_region` / `ipc_shm_ring`（命名空间 `upc_ipc`）
+- 学习示例：`little/example/demo04_shm/`

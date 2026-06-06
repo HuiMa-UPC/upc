@@ -5,6 +5,9 @@ set(UPC_IPC_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/ipc_endpoint.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ipc_msg_bus.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/msg_port.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ipc_shm_layout.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ipc_shm_region.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ipc_shm_ring.cpp
 )
 
 add_library(${UPC_IPC_TARGET} STATIC ${UPC_IPC_SOURCES})
@@ -26,7 +29,7 @@ target_link_libraries(${UPC_IPC_TARGET}
 
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     find_package(Threads REQUIRED)
-    target_link_libraries(${UPC_IPC_TARGET} PUBLIC Threads::Threads)
+    target_link_libraries(${UPC_IPC_TARGET} PUBLIC Threads::Threads rt)
 endif()
 
 target_compile_options(${UPC_IPC_TARGET}
