@@ -1,6 +1,8 @@
 #include "process_ctl.hpp"
 #include "process_config.hpp"
 #include "msg_port.hpp"
+#include "upc_sys_monitor.hpp"
+#include "rs_log.hpp"
 #include "glavo_service.hpp"
 #include "tcp_sender.hpp"
 #include "device_config.hpp"
@@ -21,6 +23,7 @@ const char* ipc_socket_path() {
 }
 
 int start_glavo(char daemon) {
+    upc::log_set_process_name(kProc.name);
     process_install_signals();
 
     if (daemon) {
@@ -88,6 +91,7 @@ int start_glavo(char daemon) {
 
     while (!g_shutdown_requested) {
         port.process();
+        upc_sys_monitor_tick();
         std::this_thread::sleep_for(std::chrono::milliseconds(2));
     }
 

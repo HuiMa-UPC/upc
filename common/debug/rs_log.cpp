@@ -2,6 +2,7 @@
 
 #include <cstdarg>
 #include <cstdio>
+#include <cstring>
 #include <ctime>
 
 #if defined(_POSIX_C_SOURCE) && _POSIX_C_SOURCE >= 199309L
@@ -9,6 +10,24 @@
 #endif
 
 namespace upc {
+
+namespace {
+
+char g_process_name[32] = "?";
+
+const char* log_process_name() {
+    return g_process_name[0] ? g_process_name : "?";
+}
+
+} // namespace
+
+void log_set_process_name(const char* name) {
+    if (!name || !name[0]) {
+        return;
+    }
+    std::strncpy(g_process_name, name, sizeof(g_process_name) - 1);
+    g_process_name[sizeof(g_process_name) - 1] = '\0';
+}
 
 const char* level_name(Level level) {
     switch (level) {
@@ -45,8 +64,9 @@ void log_write(Level level, const char* src, const char* module,
         std::snprintf(ts, sizeof(ts), "time=?");
     }
 
-    std::fprintf(stderr, "%s level=%s src=%s module=%s ",
-        ts, level_name(level), src ? src : "?", module ? module : "?");
+    std::fprintf(stderr, "%s level=%s proc=%s src=%s module=%s ",
+        ts, level_name(level), log_process_name(),
+        src ? src : "?", module ? module : "?");
 
     va_list args;
     va_start(args, fmt);

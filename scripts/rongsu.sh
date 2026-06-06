@@ -1,7 +1,7 @@
 #!/bin/sh
 # 统一启动 / 停止 rongsu_glavo + rongsu_ui
 # 用法: rongsu.sh {start|stop|status|run}
-# 环境: RONGSU_BIN 指向含两个可执行文件的目录，默认 /usr/bin
+# 环境: RONGSU_BIN 指向含两个可执行文件的目录，默认 /home
 
 set -e
 

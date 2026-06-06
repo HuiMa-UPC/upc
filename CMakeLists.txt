@@ -1,6 +1,7 @@
 cmake_minimum_required(VERSION 3.16)
 
-set(TOOLCHAIN toolchain-aarch64-buildroot)
+set(TOOLCHAIN k1mini-buildroot-toolchain)
+# set(TOOLCHAIN atk-dlrk356x-toolchain)
 set(CMAKE_TOOLCHAIN_FILE "${CMAKE_SOURCE_DIR}/cmake/${TOOLCHAIN}.cmake"
     CACHE FILEPATH "Cross toolchain (optional)")
 

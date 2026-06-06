@@ -19,6 +19,10 @@
 
 `start` 时 `process_daemonize` 将 stdout/stderr 重定向到对应 `log_file`（含 `UPC_LOG_*`）。
 
+`UPC_LOG_*` 行格式：`时间 level=… proc=rongsu_ui|glavo src=… module=… 消息`（`run` 双进程同终端时靠 `proc=` 区分）。
+
+`HostMonitor`（`upc_sys_monitor_tick`）：UI 与 Glavo 主循环各调用一次，约每 60s 写入各自 `log_file`；`cpu_proc`/`rss` 为本进程，其余为整机指标。
+
 ## 启动
 
 ```bash

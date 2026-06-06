@@ -31,8 +31,32 @@ IParserWorker* active_parser()
 }
 
 #if UPC_DEBUG && UPC_MOD_TCP_SENDER
+
+/** 串口帧十六进制转储（5A A5 AA/BB …）；单条最多展示 64 字节 */
+void serial_log_frame_hex(const char* dir, const uint8_t* data, size_t len)
+{
+    if(!dir || !data || len == 0) {
+        return;
+    }
+    constexpr size_t kMaxShow = 64;
+    const size_t show = len > kMaxShow ? kMaxShow : len;
+    char hex[320];
+    size_t pos = 0;
+    for(size_t i = 0; i < show && pos + 4 < sizeof(hex); i++) {
+        pos += static_cast<size_t>(std::snprintf(
+            hex + pos, sizeof(hex) - pos, "%02X%s",
+            data[i], (i + 1 < show) ? " " : ""));
+    }
+    if(len > show && pos + 16 < sizeof(hex)) {
+        std::snprintf(hex + pos, sizeof(hex) - pos, " ... +%zuB", len - show);
+    }
+    UPC_LOG_TCP_SENDER(Debug, "SERIAL_%s frame[%zu] %s", dir, len, hex);
+}
+
 void serial_log_rx_frame(const uint8_t* frame, size_t len)
 {
+    serial_log_frame_hex("RX", frame, len);
+
     serial_sensor_report_t sensor{};
     serial_sensor_err_t serr = SERIAL_SENSOR_ERR_NONE;
     if(serial_parse_sensor_report_detail(frame, len, &sensor, &serr) == 0) {
@@ -643,6 +667,9 @@ int TcpSender::serial_send_raw(const uint8_t* data, size_t len)
     if(serial_fd_ < 0 || !data || len == 0) {
         return -1;
     }
+#if UPC_DEBUG && UPC_MOD_TCP_SENDER
+    serial_log_frame_hex("TX", data, len);
+#endif
     const ssize_t n = write(serial_fd_, data, len);
     return n == (ssize_t)len ? 0 : -1;
 }

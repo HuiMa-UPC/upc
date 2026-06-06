@@ -148,7 +148,7 @@ endif()
 set(_LVGL_PORT_LIBS
     lvgl::lvgl
     m pthread rt dl
-    -Wl,--no-as-needed gbm EGL GLESv2 mali_hook mali
+    -Wl,--no-as-needed gbm EGL GLESv2  mali
     -Wl,--as-needed
 )
 
@@ -169,18 +169,6 @@ else()
         list(APPEND _LVGL_PORT_LIBS ${_DRM_LIB})
     else()
         message(WARNING "libdrm not found; DRM driver may fail at link/run time")
-    endif()
-endif()
-
-# libevdev：Linux 输入事件库，用于触摸屏输入
-if(LIBEVDEV_FOUND)
-    list(APPEND _LVGL_PORT_LIBS ${LIBEVDEV_LIBRARIES})
-else()
-    find_library(_EVDEV_LIB evdev)
-    if(_EVDEV_LIB)
-        list(APPEND _LVGL_PORT_LIBS ${_EVDEV_LIB})
-    else()
-        message(WARNING "libevdev not found; touch input may fail")
     endif()
 endif()
 

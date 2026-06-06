@@ -4,6 +4,7 @@
 #include "msg_port.hpp"
 #include "ui_app.hpp"
 #include "upc_sys_monitor.hpp"
+#include "rs_log.hpp"
 
 #include <chrono>
 #include <cstdio>
@@ -37,6 +38,7 @@ bool connect_ipc_with_retry() {
 }
 
 int start_ui(char daemon) {
+    upc::log_set_process_name(kProc.name);
     process_install_signals();
 
     if (daemon) {
