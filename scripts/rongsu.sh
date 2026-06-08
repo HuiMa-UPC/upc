@@ -1,7 +1,10 @@
 #!/bin/sh
 # 统一启动 / 停止 rongsu_glavo + rongsu_ui
 # 用法: rongsu.sh {start|stop|status|run}
-# 环境: RONGSU_BIN 指向含两个可执行文件的目录，默认 /home
+# 环境:
+#   RONGSU_BIN                    可执行文件目录，默认 /home
+#   UPC_IPC_SOCKET                Glavo listen socket
+#   UPC_IPC_PEER_STARTUP_WAIT_MS  等待 socket 超时，默认 10000
 
 set -e
 
@@ -9,6 +12,23 @@ BIN_DIR="${RONGSU_BIN:-/home}"
 GLAVO="$BIN_DIR/rongsu_glavo"
 UI="$BIN_DIR/rongsu_ui"
 SOCK="${UPC_IPC_SOCKET:-/tmp/upc_glavo.sock}"
+WAIT_MS="${UPC_IPC_PEER_STARTUP_WAIT_MS:-10000}"
+
+wait_for_socket() {
+    sock="$1"
+    label="$2"
+    elapsed=0
+    step=100
+    while [ "$elapsed" -lt "$WAIT_MS" ]; do
+        if [ -S "$sock" ]; then
+            return 0
+        fi
+        sleep 0.1
+        elapsed=$((elapsed + step))
+    done
+    echo "Timeout waiting for $label socket: $sock" >&2
+    return 1
+}
 
 cmd="${1:-}"
 
@@ -17,8 +37,9 @@ start_daemon() {
         echo "Missing binaries under $BIN_DIR (set RONGSU_BIN)" >&2
         exit 1
     fi
+    rm -f "$SOCK"
     "$GLAVO" start
-    sleep 0.5
+    wait_for_socket "$SOCK" "glavo"
     "$UI" start
     echo "Started glavo + ui"
 }
@@ -47,7 +68,7 @@ run_foreground() {
 
     "$GLAVO" run &
     GPID=$!
-    sleep 0.5
+    wait_for_socket "$SOCK" "glavo"
     "$UI" run &
     UPID=$!
 

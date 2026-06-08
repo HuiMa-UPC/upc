@@ -6,7 +6,7 @@
 |--------|------|
 | **`contract/`** | **[消息命名规范与总表](contract/README.md)**（方案 A，无独立 .hpp） |
 | `middleware/` | `msg_types.hpp` 消息契约源码、MsgBus、内存池 |
-| `ipc/` | Unix socket、`MsgPort` 门面 |
+| `ipc/` | Unix socket、`MsgPort` 门面（UI **Hub 多连接** / 后端 Server） |
 | `debug/` | `UPC_LOG_*`、`upc_sys_monitor` |
 | `process/` | PID、守护进程、`process_config`（日志路径） |
 
@@ -26,5 +26,7 @@
 ## 启动
 
 ```bash
-scripts/rongsu.sh start   # 先 glavo 后 ui
+scripts/rongsu.sh start   # 先 glavo（wait socket），后 ui
 ```
+
+UI 与 Glavo 为**独立进程**；UI 经 `MsgPort` Hub 连接各后端 socket（当前仅 Glavo）。一对多策略见 [`ipc/AGENTS.md`](ipc/AGENTS.md)、[`ui/AGENTS.md`](../ui/AGENTS.md) §11。

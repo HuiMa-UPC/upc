@@ -118,7 +118,7 @@ ParserRegistry::instance().register_parser({
 3. 仅保留后缀匹配 `ParserRegistry::all_extensions()` 的文件（**统一转小写比较**）
 4. 通过 `Fs_DirOpen_Rsp` 返回给 UI
 
-### 4.4 初始化顺序（`app/src/main.cpp`）
+### 4.4 初始化顺序（`glavo/main.cpp`）
 
 ```cpp
 services::GlavoService glavo_service;
@@ -174,12 +174,14 @@ stop()  → do_stop()
 
 ---
 
-## 7. 添加新后端 Service
+## 7. 添加新后端进程
 
-1. 在 `middleware/message_bus/msg_types.hpp` 增加 `ModuleId` / `MsgType`
-2. 继承 `ServiceBase`，实现 `do_init` / `do_start` / `handle_message`
-3. 在 `app/src/main.cpp` 实例化、`init()`、`start()`
-4. 在 `UiMsgProxy` 封装 send/register
+1. 在 `middleware/message_bus/msg_types.hpp` 增加 `ModuleId` / `MsgType` / Payload
+2. 新建可执行进程（参考 `glavo/main.cpp`）：`set_mode_ipc_server` + `GlavoService` 或等价 Service
+3. `ipc_config.hpp` 增加默认 socket；`scripts/rongsu.sh` 先于 UI 启动并 `wait_for_socket`
+4. UI 侧：`main.cpp` 增加 `add_ipc_peer`；新建 `XxxMsgProxy`（见 [ui/AGENTS.md §11](../ui/AGENTS.md)）
+
+同一 Glavo 进程内新增业务能力：继承 `ServiceBase`、在 `GlavoService` 中 `subscribe` / `handle_*`，UI 仍走 `UiMsgProxy`。
 
 ---
 
@@ -212,4 +214,4 @@ stop()  → do_stop()
 | [middleware/AGENTS.md](../middleware/AGENTS.md) | MsgBus、MsgType、BufferPool |
 | [ui/AGENTS.md](../ui/AGENTS.md) | control、UiMsgProxy |
 | [lib/parser/README.md](lib/parser/README.md) | 协议开发者：接口、输出格式、校准 |
-| `app/src/main.cpp` | GlavoService / TcpSender 集成 |
+| `glavo/main.cpp` | GlavoService / TcpSender 集成 |

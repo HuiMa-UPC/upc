@@ -90,9 +90,8 @@ int start_glavo(char daemon) {
         kProc.name, ipc_socket_path());
 
     while (!g_shutdown_requested) {
-        port.process();
+        port.process(2);
         upc_sys_monitor_tick();
-        std::this_thread::sleep_for(std::chrono::milliseconds(2));
     }
 
     glavo_service.stop();

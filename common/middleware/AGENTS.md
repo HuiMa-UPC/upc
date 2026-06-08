@@ -112,11 +112,11 @@ CMake 开启 `MIDDLEWARE_DEBUG_VERBOSE_POOL` 时会注入 `MW_DEBUG_MEMPOOL=1` �
 
 ```
 [MW|MSGBUS] init ok queue_depth=256
-[MW|MSGBUS] subscribe id=1 type=DemoHelloRsp module=UI total=1
-[MW|MSGBUS] ENQUEUE DemoHelloReq UI->APP pri=1 queue=1 payload={inline(0)}
+[MW|MSGBUS] subscribe id=1 type=APP_OpenDoor_Rsp module=UI total=1
+[MW|MSGBUS] ENQUEUE UI_OpenDoor_Req UI->APP_GLAVO pri=1 queue=1 payload={inline(0)}
 [MW|MSGBUS] process delivered=1
-[MW|MSGBUS] DELIVER DemoHelloReq UI->APP pri=1 handlers=1 payload={inline(0)}
-[MW|MSGBUS] ENQUEUE DemoHelloRsp APP->UI pri=1 queue=1 payload={inline(10)="HelloWorld"}
+[MW|MSGBUS] DELIVER UI_OpenDoor_Req UI->APP_GLAVO pri=1 handlers=1 payload={inline(0)}
+[MW|MSGBUS] ENQUEUE APP_OpenDoor_Rsp APP_GLAVO->UI pri=1 queue=1 payload={inline(N)}
 ```
 
 文本 payload 会自动截断至 48 字符；二进制 Inline 显示为 `inline(N,bin)`。
@@ -202,24 +202,26 @@ void app_shutdown() {
 
 ### 5.1 核心类型
 
-当前仓库 **Demo 精简版** 枚举（`message_bus/msg_types.hpp`）：
+当前仓库枚举（`message_bus/msg_types.hpp`）摘要：
 
 ```cpp
 enum class ModuleId : uint32_t {
-    UI  = 0x01,
-    APP = 0x02,
+    UI        = 0x01,
+    APP_GLAVO = 0x02,   // rongsu_glavo
 };
 
 enum class MsgType : uint32_t {
-    DemoHelloReq = 0x1000,
-    DemoHelloRsp,
+    APP_Update_Ntf = 0x1000,
+    UI_PM25_Req,
+    APP_PM25_Rsp,
+    // … 舱体 / 文件系统 / 打印流程，见 msg_types.hpp
 };
 ```
 
 - **`Message`**：`type` + `sender_id` + `target_id` + `payload`
-- **`MsgPayload`**：内联字节 / 缓冲区引用 / 数值 / 指针（Demo 使用 Inline 字符串）
+- **`MsgPayload`**：内联字节 / 缓冲区引用 / 数值 / 指针（结构化 Payload 见 `msg_types.hpp`）
 
-扩展新业务能力时，在 `msg_types.hpp` 追加 `ModuleId` / `MsgType`（见 §5.5）。
+扩展新后端或消息时，在 `msg_types.hpp` 追加 `ModuleId` / `MsgType`（见 §5.5），并同步 [`contract/README.md`](../contract/README.md)。
 
 ### 5.2 订阅（RAII，析构自动取消）
 
@@ -233,11 +235,11 @@ class MyService {
 public:
     void start() {
         sub_ = MsgBus::instance().subscribe(
-            MsgType::DemoHelloReq,
-            ModuleId::APP,
+            MsgType::UI_OpenDoor_Req,
+            ModuleId::APP_GLAVO,
             [](const Message& msg) {
                 (void)msg;
-                // 处理后 publish_async DemoHelloRsp → UI
+                // 处理后 publish_async APP_OpenDoor_Rsp → UI
             });
     }
 };
@@ -249,8 +251,8 @@ public:
 ### 5.3 发布与 UI 线程消费
 
 ```cpp
-// 异步：UI 发 DemoHelloReq
-Message req(MsgType::DemoHelloReq, ModuleId::UI, ModuleId::APP);
+// 异步：UI 发 UI_OpenDoor_Req
+Message req(MsgType::UI_OpenDoor_Req, ModuleId::UI, ModuleId::APP_GLAVO);
 MsgBus::instance().publish_async(req);
 
 // 主循环消费
@@ -294,7 +296,7 @@ rb.read(buf, sizeof(buf));
 
 | 范围 | 用途 | 示例 |
 |------|------|------|
-| `0x01` ~ `0x0F` | 核心/UI | `UI`, `APP` |
+| `0x01` ~ `0x0F` | 核心/UI | `UI`, `APP_GLAVO` |
 | `0x10` ~ `0x1F` | 设备/驱动服务 | `ETH`, `UART`, `WIFI`, `CAMERA`, `FS` |
 | `0x20` ~ `0xFF` | 预留业务模块 | 按需扩展 |
 | `0x100` 步进 | 消息类型分段 | 网络 `0x100`、串口 `0x200`、WiFi `0x300`… |
@@ -366,7 +368,7 @@ enum class MsgType : uint32_t {
 constexpr MsgType MSG_PAGE_SWITCH =
     static_cast<MsgType>(static_cast<uint32_t>(MsgType::UserBase) + 1);
 
-Message m(MSG_PAGE_SWITCH, ModuleId::APP, ModuleId::UI);
+Message m(MSG_PAGE_SWITCH, ModuleId::APP_GLAVO, ModuleId::UI);
 ```
 
 添加后：在发送方 `publish` / `publish_async`，在接收方 `subscribe(新类型, module_id, handler)`。
@@ -522,29 +524,26 @@ pool.shutdown();  // 析构时也会调用
 
 ---
 
-## 8. 典型架构（Demo 前后端）
+## 8. 典型架构（UI ↔ Glavo）
 
 | 通道 | ModuleId | Service | UI 出口 |
 |------|----------|---------|---------|
-| Demo | `APP` | `DemoService` | `UiMsgProxy::send_demo_hello` / `register_demo_hello` |
+| Glavo | `APP_GLAVO` | `GlavoService` | `UiMsgProxy::send_*` / `register_*` |
+
+跨进程时 UI 使用 `MsgPort`（Hub）而非直接 `MsgBus::publish` 到 Glavo；`MsgPort::process()` 内部将 IPC 帧投递到本地 `MsgBus`。详见 [`ipc/AGENTS.md`](../ipc/AGENTS.md)。
 
 ```
-PageHome 按钮
-  → UiMsgProxy::send_demo_hello()
-  → DemoHelloReq (UI → APP)
-  → DemoService
-  → DemoHelloRsp (APP → UI)
-  → UiMsgProxy 回调 → lv_label_set_text
+PageControl 按钮
+  → UiMsgProxy::send_open_door()
+  → UI_OpenDoor_Req (UI → APP_GLAVO, publish_async)
+  → rongsu_glavo / GlavoService
+  → APP_OpenDoor_Rsp (APP_GLAVO → UI)
+  → UiMsgProxy 回调 → 更新 LVGL 控件
 ```
 
-### 8.1 Demo Payload 约定
+### 8.1 Payload 约定
 
-| 消息 | Payload |
-|------|---------|
-| `DemoHelloReq` | Empty（无 body） |
-| `DemoHelloRsp` | Inline 字符串（如 `"HelloWorld"`） |
-
-扩展新 Service 时可复用：`from_bytes` / `from_value` / `BufferRef`（见 §6.2）。
+结构化 Payload 定义在 `msg_types.hpp`（如 `DoorResultPayload`、`PrintProgressPayload`）。完整契约见 [`contract/README.md`](../contract/README.md)。
 
 ---
 
@@ -608,14 +607,13 @@ int main() {
     MsgBus::instance().init();
 
     auto sub = MsgBus::instance().subscribe(
-        MsgType::DemoHelloRsp, ModuleId::UI,
+        MsgType::APP_OpenDoor_Rsp, ModuleId::UI,
         [](const Message& msg) {
-            if (msg.payload.type == MsgPayload::Type::Inline) {
-                // msg.payload.data.bytes, msg.payload.length
-            }
+            (void)msg;
+            // 解析 DoorResultPayload
         });
 
-    Message req(MsgType::DemoHelloReq, ModuleId::UI, ModuleId::APP);
+    Message req(MsgType::UI_OpenDoor_Req, ModuleId::UI, ModuleId::APP_GLAVO);
     MsgBus::instance().publish_async(req);
 
     for (int i = 0; i < 100; ++i) {
@@ -636,8 +634,9 @@ int main() {
 
 | 文档 | 内容 |
 |------|------|
-| [ui/AGENTS.md](../ui/AGENTS.md) | PageHome、UiMsgProxy |
-| [services/AGENTS.md](../services/AGENTS.md) | DemoService |
-| `message_bus/msg_types.hpp` | 当前仅 `UI`/`APP`、`DemoHello*` |
+| [ui/AGENTS.md](../../ui/AGENTS.md) | Page、UiMsgProxy、多后端 §11 |
+| [glavo/AGENTS.md](../../glavo/AGENTS.md) | GlavoService、server 模式 |
+| [ipc/AGENTS.md](../ipc/AGENTS.md) | MsgPort Hub、跨进程路由 |
+| `message_bus/msg_types.hpp` | ModuleId / MsgType / Payload 契约 |
+| [contract/README.md](../contract/README.md) | 消息总表与命名规范 |
 | `debug/mw_debug.hpp` | `MW_LOG_*` 宏、`mw_debug_dump_*` API |
-| `app/src/main.cpp` | Demo 最小集成 |

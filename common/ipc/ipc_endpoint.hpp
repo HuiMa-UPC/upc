@@ -8,11 +8,6 @@
 
 namespace upc_ipc {
 
-enum class IpcRole {
-    Server,
-    Client,
-};
-
 /** 单连接 Unix 域套接字；服务端 listen 与 accept 分离，便于 Glavo 先起设备链路 */
 class IpcEndpoint {
 public:
@@ -32,6 +27,8 @@ public:
     void close();
     [[nodiscard]] bool connected() const noexcept { return conn_fd_ >= 0; }
     [[nodiscard]] bool listening() const noexcept { return listen_fd_ >= 0; }
+    [[nodiscard]] int conn_fd() const;
+    [[nodiscard]] int listen_fd() const;
 
     bool send_frame(const std::vector<uint8_t>& frame);
     void recv_pending(std::vector<std::vector<uint8_t>>& out_frames);

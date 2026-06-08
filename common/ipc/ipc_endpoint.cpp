@@ -16,6 +16,16 @@ IpcEndpoint::~IpcEndpoint() {
     close();
 }
 
+int IpcEndpoint::conn_fd() const {
+    std::lock_guard<std::mutex> lock(io_mtx_);
+    return conn_fd_;
+}
+
+int IpcEndpoint::listen_fd() const {
+    std::lock_guard<std::mutex> lock(io_mtx_);
+    return listen_fd_;
+}
+
 void IpcEndpoint::set_conn_nonblocking() {
 #if defined(__linux__) || defined(__unix__)
     if (conn_fd_ < 0) {

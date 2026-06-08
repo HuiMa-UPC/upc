@@ -3,6 +3,7 @@ set(UPC_IPC_TARGET upc_ipc)
 set(UPC_IPC_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/ipc_wire.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ipc_endpoint.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ipc_poller.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ipc_msg_bus.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/msg_port.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ipc_shm_layout.cpp

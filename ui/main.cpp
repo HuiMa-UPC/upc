@@ -25,8 +25,19 @@ bool connect_ipc_with_retry() {
     auto& port = middleware::MsgPort::instance();
     for (int i = 0; i < 100; ++i) {
         port.shutdown();
-        if (port.set_mode_ipc_client(middleware::ModuleId::UI, ipc_socket_path()) &&
-            port.init() && port.peer_connected()) {
+        if (!port.set_mode_ipc_hub(middleware::ModuleId::UI)) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            continue;
+        }
+        if (!port.add_ipc_peer(middleware::ModuleId::APP_GLAVO, ipc_socket_path(),
+                               true)) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            continue;
+        }
+        if (!port.init()) {
+            continue;
+        }
+        if (port.peer_connected()) {
             return true;
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
@@ -81,11 +92,10 @@ int start_ui(char daemon) {
     auto& port = middleware::MsgPort::instance();
     while (!g_shutdown_requested) {
         const uint32_t delay = lv_timer_handler();
-        port.process();
-        port.process();
+        const int wait_ms = delay > 0 ? static_cast<int>(delay) : 1;
+        port.process(wait_ms);
+        port.process(0);
         upc_sys_monitor_tick();
-        std::this_thread::sleep_for(
-            std::chrono::milliseconds(delay > 0 ? delay : 1));
     }
 
     port.shutdown();
