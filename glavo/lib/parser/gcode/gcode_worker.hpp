@@ -43,17 +43,20 @@ private:
     void parser_chunk_yield();
 
     bool build_and_push_packet();
+    bool push_power_packet(uint16_t power);
     bool push_layer_mark();
     bool emit_line_parse_result(const struct LineParseOut* parsed, int* packets);
 
     void parse_line_all(const char* raw_line, struct LineParseOut* out);
     bool parse_g1_segment(const std::string& segment, bool* out_motion);
+    int  prescan_emit_packets();
 
     FILE* fp_ = nullptr;
     std::thread th_;
     std::atomic<bool> running_{false};
     std::atomic<bool> stop_req_{false};
     std::atomic<int> total_lines_{0};
+    std::atomic<int> prescan_emit_packets_{0};
     std::atomic<int> total_motion_packets_{0};
     std::atomic<int> parsed_lines_{0};
     std::atomic<bool> file_read_exhausted_{false};

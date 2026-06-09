@@ -61,6 +61,9 @@ void log_write(Level level, const char* src, const char* module,
 #define UPC_LOG_GCODE_WORKER(lvl, fmt, ...) \
     UPC_LOG_MOD_(UPC_MOD_GCODE_WORKER, lvl, "SVC", "GcodeWorker", fmt, ##__VA_ARGS__)
 
+#define UPC_LOG_OVF_WORKER(lvl, fmt, ...) \
+    UPC_LOG_MOD_(UPC_MOD_OVF_WORKER, lvl, "SVC", "OvfWorker", fmt, ##__VA_ARGS__)
+
 #define UPC_LOG_SERVICE_BASE(lvl, fmt, ...) \
     UPC_LOG_MOD_(UPC_MOD_SERVICE_BASE, lvl, "SVC", "ServiceBase", fmt, ##__VA_ARGS__)
 

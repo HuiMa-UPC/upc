@@ -33,10 +33,12 @@ GcodeWorker::~GcodeWorker()
 enum LineEmitKind : uint8_t {
     LINE_EMIT_MOTION = 1,
     LINE_EMIT_LAYER  = 2,
+    LINE_EMIT_POWER  = 3,
 };
 
 struct LineParseOut {
     uint8_t kinds[2];
+    uint16_t power_values[2];
     int count;
 };
 
@@ -75,6 +77,40 @@ static void emit_parse_kind(LineParseOut* out, uint8_t kind)
     if(out->count < 2) {
         out->kinds[out->count++] = kind;
     }
+}
+
+static void emit_parse_power(LineParseOut* out, uint16_t power)
+{
+    if(out->count < 2) {
+        out->power_values[out->count] = power;
+        out->kinds[out->count++] = LINE_EMIT_POWER;
+    }
+}
+
+/** 独立功率行：仅大写 S + 十进制整数，允许 S 与数字间空格 */
+static bool parse_standalone_s_line(const std::string& normalized, uint16_t* out_power)
+{
+    static const std::regex k_s_only(R"(^S\s*(\d+)\s*$)");
+    std::smatch match;
+    if(!std::regex_match(normalized, match, k_s_only)) {
+        return false;
+    }
+
+    const std::string& digits = match[1].str();
+    for(const char c : digits) {
+        if(!std::isdigit(static_cast<unsigned char>(c))) {
+            return false;
+        }
+    }
+
+    char* end = nullptr;
+    const unsigned long val = std::strtoul(digits.c_str(), &end, 10);
+    if(end == digits.c_str() || (end && *end != '\0') || val > 65535UL) {
+        return false;
+    }
+
+    *out_power = static_cast<uint16_t>(val);
+    return true;
 }
 
 static void trim_string(std::string& s)
@@ -257,6 +293,17 @@ void GcodeWorker::parse_line_all(const char* raw_line, LineParseOut* out)
         return;
     }
 
+    if(normalized[0] == 'S') {
+        uint16_t power = 0;
+        if(parse_standalone_s_line(normalized, &power)) {
+            emit_parse_power(out, power);
+            return;
+        }
+        UPC_LOG_GCODE_WORKER(Warn, "skip invalid standalone S line: %s",
+                             normalized.c_str());
+        return;
+    }
+
     const GcodeLineRegex& re = gcode_regex();
     std::smatch split_match;
 
@@ -333,6 +380,17 @@ bool GcodeWorker::build_and_push_packet()
     return rb_.put_wait(pkt, stop_req_);
 }
 
+bool GcodeWorker::push_power_packet(uint16_t power)
+{
+    rb_packet_t pkt;
+    pkt.type = RB_PKT_MOTION;
+    std::memset(pkt.data, 0, sizeof(pkt.data));
+    pkt.data[0] = 0x02;
+    pkt.data[9]  = static_cast<uint8_t>(power & 0xFF);
+    pkt.data[10] = static_cast<uint8_t>(power >> 8);
+    return rb_.put_wait(pkt, stop_req_);
+}
+
 bool GcodeWorker::push_layer_mark()
 {
     rb_packet_t pkt;
@@ -359,6 +417,12 @@ bool GcodeWorker::emit_line_parse_result(const LineParseOut* parsed, int* packet
                 return false;
             }
             (*packets)++;
+        } else if(parsed->kinds[i] == LINE_EMIT_POWER) {
+            if(!push_power_packet(parsed->power_values[i])) {
+                stop_req_.store(true);
+                return false;
+            }
+            (*packets)++;
         }
     }
     return !stop_req_.load();
@@ -372,6 +436,27 @@ static int count_file_lines(FILE* fp)
         cnt++;
     }
     return cnt;
+}
+
+int GcodeWorker::prescan_emit_packets()
+{
+    if(!fp_) {
+        return 0;
+    }
+
+    char line[256];
+    int emits = 0;
+    while(fgets(line, sizeof(line), fp_)) {
+        LineParseOut parsed{};
+        parse_line_all(line, &parsed);
+        for(int i = 0; i < parsed.count; ++i) {
+            if(parsed.kinds[i] == LINE_EMIT_MOTION ||
+               parsed.kinds[i] == LINE_EMIT_POWER) {
+                ++emits;
+            }
+        }
+    }
+    return emits;
 }
 
 void GcodeWorker::parser_thread_fn()
@@ -449,19 +534,25 @@ int GcodeWorker::open_file(const std::string& filepath)
     }
 
     const int cnt = count_file_lines(fp_);
+    rewind(fp_);
+    reset_parser_motion_state();
+    const int emit_est = prescan_emit_packets();
+    rewind(fp_);
+    reset_parser_motion_state();
+
     total_lines_.store(cnt);
+    prescan_emit_packets_.store(emit_est);
     total_motion_packets_.store(0);
     parsed_lines_.store(0);
     file_read_exhausted_.store(false);
-
-    reset_parser_motion_state();
     last_layer_height_um_ = GCODE_DEFAULT_LAYER_UM;
 
     {
         char path_copy[512];
         snprintf(path_copy, sizeof(path_copy), "%s", filepath.c_str());
         const char* base = basename(path_copy);
-        UPC_LOG_GCODE_WORKER(Info, "open file: %s (lines=%d)", base, cnt);
+        UPC_LOG_GCODE_WORKER(Info,
+            "open file: %s (lines=%d emit_est=%d)", base, cnt, emit_est);
     }
     return 0;
 }
@@ -501,6 +592,7 @@ void GcodeWorker::close_file()
         fp_ = nullptr;
     }
     total_lines_.store(0);
+    prescan_emit_packets_.store(0);
     total_motion_packets_.store(0);
     parsed_lines_.store(0);
     file_read_exhausted_.store(false);

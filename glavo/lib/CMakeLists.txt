@@ -17,8 +17,15 @@ set(SERVICES_CORE_SOURCES
 )
 
 set(SERVICES_PARSER_SOURCES
+    #Gcode
     ${CMAKE_CURRENT_SOURCE_DIR}/parser/gcode/gcode_worker.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/parser/gcode/gcode_register.cpp
+    #OVF
+    ${CMAKE_CURRENT_SOURCE_DIR}/parser/ovf/ovf_worker.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/parser/ovf/ovf_register.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/parser/ovf/build_processor_strategy.pb.cc
+    ${CMAKE_CURRENT_SOURCE_DIR}/parser/ovf/open_vector_format.pb.cc
+    ${CMAKE_CURRENT_SOURCE_DIR}/parser/ovf/ovf_lut.pb.cc
 )
 
 # 协议插件目录：parser/ 下各子目录（框架 .cpp 在 parser/ 根，不纳入此 GLOB）
@@ -59,7 +66,11 @@ add_library(${SERVICES_PARSERS_TARGET} STATIC ${SERVICES_PARSER_SOURCES})
 add_library(services::parsers ALIAS ${SERVICES_PARSERS_TARGET})
 
 target_compile_features(${SERVICES_PARSERS_TARGET} PUBLIC cxx_std_17)
-target_link_libraries(${SERVICES_PARSERS_TARGET} PUBLIC ${SERVICES_TARGET})
+target_link_libraries(${SERVICES_PARSERS_TARGET} 
+    PUBLIC 
+        ${SERVICES_TARGET}
+        protobuf
+)
 
 foreach(_parser_dir IN LISTS PARSER_PLUGIN_DIRS)
     if(IS_DIRECTORY "${_parser_dir}")
