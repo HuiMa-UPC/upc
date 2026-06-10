@@ -20,4 +20,12 @@ inline ProcessConfig process_config_glavo() {
     };
 }
 
+inline ProcessConfig process_config_test_camera() {
+    return ProcessConfig{
+        "/var/run/test_camera.pid",
+        "/var/log/test_camera.log",
+        "test_camera",
+    };
+}
+
 #endif

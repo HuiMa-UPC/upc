@@ -16,6 +16,7 @@
 |------|----------|-----|
 | UI | `/var/log/rongsu_ui.log` | `/var/run/rongsu_ui.pid` |
 | Glavo | `/var/log/rongsu_glavo.log` | `/var/run/rongsu_glavo.pid` |
+| test_camera | `/var/log/test_camera.log` | `/var/run/test_camera.pid` |
 
 `start` 时 `process_daemonize` 将 stdout/stderr 重定向到对应 `log_file`（含 `UPC_LOG_*`）。
 

@@ -66,6 +66,7 @@ const char* upc_msg_module_name(ModuleId id) {
     switch (id) {
         case ModuleId::UI: return "UI";
         case ModuleId::APP_GLAVO: return "APP_GLAVO";
+        case ModuleId::APP_CAMERA: return "APP_CAMERA";
         default: return "?";
     }
 }
@@ -90,6 +91,11 @@ const char* upc_msg_type_name(MsgType type) {
         case MsgType::APP_Print_Progress_Ntf: return "APP_Print_Progress_Ntf";
         case MsgType::UI_Print_Terminate_Req: return "UI_Print_Terminate_Req";
         case MsgType::APP_Print_Terminate_Done: return "APP_Print_Terminate_Done";
+        case MsgType::UI_Camera_Stream_Start_Req: return "UI_Camera_Stream_Start_Req";
+        case MsgType::APP_Camera_Stream_Start_Rsp: return "APP_Camera_Stream_Start_Rsp";
+        case MsgType::UI_Camera_Stream_Stop_Req: return "UI_Camera_Stream_Stop_Req";
+        case MsgType::APP_Camera_Stream_Stop_Done: return "APP_Camera_Stream_Stop_Done";
+        case MsgType::APP_Camera_Frame_Ntf: return "APP_Camera_Frame_Ntf";
         default: return "Msg";
     }
 }

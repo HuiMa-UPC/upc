@@ -70,4 +70,7 @@ void log_write(Level level, const char* src, const char* module,
 #define UPC_LOG_SYS_MONITOR(lvl, fmt, ...) \
     UPC_LOG_MOD_(UPC_MOD_SYS_MONITOR, lvl, "SYS", "HostMonitor", fmt, ##__VA_ARGS__)
 
+#define UPC_LOG_TEST_CAMERA(lvl, fmt, ...) \
+    UPC_LOG_MOD_(UPC_MOD_TEST_CAMERA, lvl, "TEST", "TestCamera", fmt, ##__VA_ARGS__)
+
 #endif /* RS_LOG_HPP */

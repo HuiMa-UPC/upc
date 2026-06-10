@@ -18,8 +18,9 @@ namespace middleware {
 
 /** 进程身份；新增后端时追加枚举并更新 contract/README.md §5 */
 enum class ModuleId : uint32_t {
-    UI        = 0x01,
-    APP_GLAVO = 0x02,  /**< 振镜/串口后端 rongsu_glavo */
+    UI         = 0x01,
+    APP_GLAVO  = 0x02,  /**< 振镜/串口后端 rongsu_glavo */
+    APP_CAMERA = 0x03,  /**< 相机 / test_camera 伪相机后端 */
 };
 
 /**
@@ -56,6 +57,13 @@ enum class MsgType : uint32_t {
     APP_Print_Progress_Ntf,   /**< [GLAVO_Print_Progress_Ntf] PrintProgressPayload */
     UI_Print_Terminate_Req,
     APP_Print_Terminate_Done, /**< [GLAVO_Print_Terminate_Done] Empty */
+
+    // ---- UI ↔ CAMERA：视频流（控制面 socket；像素走 SHM） ----
+    UI_Camera_Stream_Start_Req = 0x2000, /**< Empty 或 CameraStreamStartReqPayload */
+    APP_Camera_Stream_Start_Rsp,         /**< CameraStreamInfoPayload */
+    UI_Camera_Stream_Stop_Req,           /**< Empty */
+    APP_Camera_Stream_Stop_Done,         /**< Empty */
+    APP_Camera_Frame_Ntf,                /**< CameraFrameNtfPayload（可选唤醒 UI） */
 };
 
 enum class MsgPriority : uint8_t {
@@ -279,6 +287,28 @@ struct PrintProgressPayload {
     float    pm25_cabin;
     float    temperature_c;
     float    oxygen_percent;
+};
+
+/** UI_Camera_Stream_Start_Req：可选 basename；空串则用后端默认 demo_1024x600.nv12 */
+struct CameraStreamStartReqPayload {
+    char video_name[64];
+};
+
+/** APP_Camera_Stream_Start_Rsp：SHM 帧环参数（Inline） */
+struct CameraStreamInfoPayload {
+    char     shm_name[64];
+    uint32_t width;
+    uint32_t height;
+    uint32_t stride_y;
+    uint32_t format;   /**< upc_ipc::IpcShmPixelFormat 数值 */
+    uint32_t fps;
+    int8_t   ok;       /**< 1=成功，0=失败（如无视频文件） */
+    uint8_t  reserved[3];
+};
+
+/** APP_Camera_Frame_Ntf：新帧序号（Inline；像素在 SHM） */
+struct CameraFrameNtfPayload {
+    uint32_t seq;
 };
 
 } // namespace middleware

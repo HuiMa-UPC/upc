@@ -1,0 +1,49 @@
+#ifndef CAMERA_TEST_CONFIG_HPP
+#define CAMERA_TEST_CONFIG_HPP
+
+#include "ipc_shm_types.hpp"
+
+/** NV12 裸流默认目录与文件名（1024×600） */
+#ifndef TEST_CAMERA_VIDEO_DIR_DEFAULT
+#define TEST_CAMERA_VIDEO_DIR_DEFAULT  "/home/test"
+#endif
+
+#ifndef TEST_CAMERA_VIDEO_NAME_DEFAULT
+#define TEST_CAMERA_VIDEO_NAME_DEFAULT "demo_1024x600.nv12"
+#endif
+
+#ifndef TEST_CAMERA_WIDTH_DEFAULT
+#define TEST_CAMERA_WIDTH_DEFAULT  1024u
+#endif
+
+#ifndef TEST_CAMERA_HEIGHT_DEFAULT
+#define TEST_CAMERA_HEIGHT_DEFAULT 600u
+#endif
+
+#ifndef TEST_CAMERA_FPS_DEFAULT
+#define TEST_CAMERA_FPS_DEFAULT  25u
+#endif
+
+/** POSIX shm 名（须以 '/' 开头） */
+#ifndef TEST_CAMERA_SHM_NAME_DEFAULT
+#define TEST_CAMERA_SHM_NAME_DEFAULT "/upc_camera_preview"
+#endif
+
+#ifndef TEST_CAMERA_SHM_SLOT_COUNT
+#define TEST_CAMERA_SHM_SLOT_COUNT 3u
+#endif
+
+/** 环境变量 UPC_TEST_CAMERA_VIDEO：覆盖为完整路径 */
+#ifndef TEST_CAMERA_ENV_VIDEO_PATH
+#define TEST_CAMERA_ENV_VIDEO_PATH "UPC_TEST_CAMERA_VIDEO"
+#endif
+
+#ifndef TEST_CAMERA_ENV_FPS
+#define TEST_CAMERA_ENV_FPS "UPC_TEST_CAMERA_FPS"
+#endif
+
+#ifndef TEST_CAMERA_ENV_LOOP
+#define TEST_CAMERA_ENV_LOOP "UPC_TEST_CAMERA_LOOP"
+#endif
+
+#endif /* CAMERA_TEST_CONFIG_HPP */
