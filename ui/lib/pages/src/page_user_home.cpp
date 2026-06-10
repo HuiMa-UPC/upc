@@ -3,6 +3,7 @@
 #include "ui_user_widgets.hpp"
 #include "ui_feedback.hpp"
 #include "ui_msg_proxy.hpp"
+#include "camera_preview.hpp"
 #include "control.hpp"
 #include "snowpod_device_img.h"
 #include "ui_slide_unlock.hpp"
@@ -120,6 +121,7 @@ ui_slide_unlock_t *g_door_slide = nullptr; /**< 首页"滑动开门"控件 */
 /* ---------- 打印中模式：摄像头 + 双底条 ---------- */
 lv_obj_t *g_print_area      = nullptr; /**< 摄像头 + 双底条容器（默认隐藏） */
 lv_obj_t *g_camera_viewport = nullptr; /**< 摄像头画面容器 */
+lv_obj_t *g_camera_hint     = nullptr; /**< 占位提示 */
 lv_obj_t *g_camera_image    = nullptr; /**< 真实视频帧图像槽（先隐藏） */
 lv_obj_t *g_env_lbl_pm_indoor = nullptr;
 lv_obj_t *g_env_lbl_pm_cabin  = nullptr;
@@ -516,12 +518,12 @@ lv_obj_t *build_printing_area(lv_obj_t *parent)
     lv_obj_clear_flag(g_camera_viewport, LV_OBJ_FLAG_SCROLLABLE);
 
     /* 占位提示文字 */
-    lv_obj_t *hint = lv_label_create(g_camera_viewport);
-    lv_label_set_text(hint, LV_SYMBOL_VIDEO "  Camera not connected\n(live cabin feed will appear while printing)");
-    lv_obj_set_style_text_color(hint, user_color_text_dim, 0);
-    lv_obj_set_style_text_font(hint, user_font_text(), 0);
-    lv_obj_set_style_text_align(hint, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_center(hint);
+    g_camera_hint = lv_label_create(g_camera_viewport);
+    lv_label_set_text(g_camera_hint, LV_SYMBOL_VIDEO "  Camera not connected\n(live cabin feed will appear while printing)");
+    lv_obj_set_style_text_color(g_camera_hint, user_color_text_dim, 0);
+    lv_obj_set_style_text_font(g_camera_hint, user_font_text(), 0);
+    lv_obj_set_style_text_align(g_camera_hint, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_center(g_camera_hint);
 
     /* 真实视频帧 lv_image 占位（默认隐藏） */
     g_camera_image = lv_image_create(g_camera_viewport);
@@ -652,6 +654,16 @@ lv_obj_t *page_user_home_create(lv_obj_t *parent)
     return page;
 }
 
+static void deferred_camera_start_cb(void* /*user*/)
+{
+    ui::CameraPreviewPlayer::instance().start(g_camera_image, g_camera_hint);
+}
+
+void page_user_home_request_camera_preview(void)
+{
+    lv_async_call(deferred_camera_start_cb, nullptr);
+}
+
 void page_user_home_enter_printing_mode(const control_file_t *file)
 {
     if(g_printing_active) {
@@ -678,10 +690,14 @@ void page_user_home_enter_printing_mode(const control_file_t *file)
         ui_user_format_duration_min(dur, sizeof(dur), file->duration_min);
         lv_label_set_text_fmt(g_prog_remaining, "Remaining %s", dur);
     }
+
+    page_user_home_request_camera_preview();
 }
 
 void page_user_home_exit_printing_mode(void)
 {
+    ui::CameraPreviewPlayer::instance().stop();
+
     if(!g_printing_active) {
         return;
     }

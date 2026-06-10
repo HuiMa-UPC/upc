@@ -1,11 +1,13 @@
 #include "platform.hpp"
 #include "process_ctl.hpp"
 #include "process_config.hpp"
+#include "ipc_config.hpp"
 #include "msg_port.hpp"
 #include "ui_app.hpp"
 #include "upc_sys_monitor.hpp"
 #include "rs_log.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <cstring>
@@ -21,6 +23,11 @@ const char* ipc_socket_path() {
     return (env && env[0]) ? env : UPC_IPC_SOCKET_DEFAULT;
 }
 
+const char* camera_ipc_socket_path() {
+    const char* env = std::getenv("UPC_CAMERA_IPC_SOCKET");
+    return (env && env[0]) ? env : UPC_CAMERA_IPC_SOCKET_DEFAULT;
+}
+
 bool connect_ipc_with_retry() {
     auto& port = middleware::MsgPort::instance();
     for (int i = 0; i < 100; ++i) {
@@ -34,6 +41,8 @@ bool connect_ipc_with_retry() {
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
             continue;
         }
+        (void)port.add_ipc_peer(middleware::ModuleId::APP_CAMERA,
+                                camera_ipc_socket_path(), false);
         if (!port.init()) {
             continue;
         }
@@ -91,8 +100,11 @@ int start_ui(char daemon) {
 
     auto& port = middleware::MsgPort::instance();
     while (!g_shutdown_requested) {
+        /* 先泵 IPC，避免大画面 lv_timer_handler 拖慢 Glavo 控制消息 */
+        port.process(0);
         const uint32_t delay = lv_timer_handler();
-        const int wait_ms = delay > 0 ? static_cast<int>(delay) : 1;
+        int wait_ms = delay > 0 ? static_cast<int>(delay) : 1;
+        wait_ms = std::min(wait_ms, 8);
         port.process(wait_ms);
         port.process(0);
         upc_sys_monitor_tick();

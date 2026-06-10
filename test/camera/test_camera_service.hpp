@@ -46,6 +46,8 @@ private:
     std::atomic<bool> stream_running_{false};
     std::atomic<bool> stop_stream_{false};
     bool loop_video_ = true;
+    bool frame_ntf_enabled_ =
+        (TEST_CAMERA_FRAME_NTF_DEFAULT != 0);
     uint32_t stream_width_  = TEST_CAMERA_WIDTH_DEFAULT;
     uint32_t stream_height_ = TEST_CAMERA_HEIGHT_DEFAULT;
     uint32_t stream_fps_    = TEST_CAMERA_FPS_DEFAULT;

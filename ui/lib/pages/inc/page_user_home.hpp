@@ -14,6 +14,7 @@ void page_user_home_refresh(bool force);
 void page_user_home_enter_printing_mode(const control_file_t *file);
 void page_user_home_exit_printing_mode(void);
 void page_user_home_printing_update(const control_progress_t *p);
+void page_user_home_request_camera_preview(void);
 
 #ifdef __cplusplus
 }

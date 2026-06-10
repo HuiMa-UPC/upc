@@ -30,6 +30,24 @@ target_link_libraries(${UI_TARGET}
         lvgl::port
 )
 
+if(CMAKE_SYSROOT)
+    find_library(UPC_RGA_LIB NAMES rga
+        PATHS
+            ${CMAKE_SYSROOT}/usr/lib
+            ${CMAKE_SYSROOT}/lib
+        NO_DEFAULT_PATH)
+else()
+    find_library(UPC_RGA_LIB NAMES rga)
+endif()
+
+if(UPC_RGA_LIB)
+    message(STATUS "ui: linking librga ${UPC_RGA_LIB}")
+    target_link_libraries(${UI_TARGET} PRIVATE ${UPC_RGA_LIB})
+    target_compile_definitions(${UI_TARGET} PRIVATE UPC_UI_HAS_RGA=1)
+else()
+    message(WARNING "ui: librga not found — camera preview RGA path disabled")
+endif()
+
 target_compile_options(${UI_TARGET}
     PRIVATE
         -Wall -Wextra

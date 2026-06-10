@@ -984,11 +984,11 @@ void enter_state(control_state_t s)
         backend_unfreeze_files();
         overlay_hide();
         ui::PageManager::instance().switch_to("user_home");
-        page_user_home_enter_printing_mode(&g_active_file);
         backend_start_job(&g_active_file,
                                      pf_on_print_progress,
                                      pf_on_print_done,
                                      nullptr);
+        page_user_home_enter_printing_mode(&g_active_file);
         break;
     }
 }

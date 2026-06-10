@@ -2,6 +2,8 @@
 
 #include "page_manager.hpp"
 #include "ui_msg_proxy.hpp"
+#include "camera_msg_proxy.hpp"
+#include "camera_preview.hpp"
 #include "ui_simple_page.hpp"
 
 #include "page_user_home.hpp"
@@ -33,6 +35,8 @@ void app_init(lv_obj_t* screen) {
     lv_obj_set_style_bg_opa(screen, LV_OPA_COVER, 0);
 
     UiMsgProxy::instance().init();
+    CameraMsgProxy::instance().init();
+    CameraPreviewPlayer::instance().init();
 
     PageManager::instance().init(screen);
 

@@ -55,9 +55,16 @@ bool TestCameraService::init()
     }
 
     stream_fps_ = read_fps_from_env();
+
+    const char* ntf_env = std::getenv(TEST_CAMERA_ENV_FRAME_NTF);
+    if(ntf_env && ntf_env[0]) {
+        frame_ntf_enabled_ = (ntf_env[0] != '0');
+    }
+
     subscribe_messages();
-    UPC_LOG_TEST_CAMERA(Info, "init loop=%d fps=%u",
-                        loop_video_ ? 1 : 0, stream_fps_);
+    UPC_LOG_TEST_CAMERA(Info, "init loop=%d fps=%u frame_ntf=%d",
+                        loop_video_ ? 1 : 0, stream_fps_,
+                        frame_ntf_enabled_ ? 1 : 0);
     return true;
 }
 
@@ -188,6 +195,14 @@ bool TestCameraService::start_streaming(const std::string& video_path)
         return false;
     }
 
+    if(const upc_ipc::IpcShmGlobalHeader* hdr = producer_.header()) {
+        UPC_LOG_TEST_CAMERA(Info,
+            "SHM created name=%s %ux%u stride_y=%u slots=%u slot_stride=%u "
+            "frame_bytes=%zu",
+            TEST_CAMERA_SHM_NAME_DEFAULT, hdr->width, hdr->height, hdr->stride_y,
+            hdr->slot_count, hdr->slot_stride_bytes, source_.frame_bytes());
+    }
+
     stop_stream_.store(false);
     stream_running_.store(true);
     stream_thread_ = std::thread(&TestCameraService::stream_thread_fn, this);
@@ -216,6 +231,7 @@ void TestCameraService::stream_thread_fn()
     uint32_t frames_1s = 0;
     uint32_t last_seq  = 0;
     uint32_t last_slot = 0;
+    bool logged_first_commit = false;
 
     while(!stop_stream_.load(std::memory_order_relaxed)) {
         const auto now = clock::now();
@@ -248,7 +264,21 @@ void TestCameraService::stream_thread_fn()
 
         const uint32_t seq =
             producer_.commit_slot(*slot, monotonic_us());
-        notify_frame(seq);
+        if(!logged_first_commit && payload) {
+            const uint32_t sy = stream_width_;
+            const size_t y_size = static_cast<size_t>(sy) * stream_height_;
+            UPC_LOG_TEST_CAMERA(Info,
+                "first frame committed slot=%u seq=%u payload=%p "
+                "Y[0]=%u Y[mid]=%u UV[0]=%u UV[1]=%u read_bytes=%zu",
+                *slot, seq, static_cast<void*>(payload),
+                payload[0],
+                payload[y_size / 2u + stream_width_ / 2u],
+                payload[y_size], payload[y_size + 1u], frame_bytes);
+            logged_first_commit = true;
+        }
+        if(frame_ntf_enabled_) {
+            notify_frame(seq);
+        }
         frames_1s++;
         last_seq  = seq;
         last_slot = *slot;

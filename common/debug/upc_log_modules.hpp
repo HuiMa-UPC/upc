@@ -57,6 +57,9 @@
 #ifndef UPC_MOD_TEST_CAMERA
 #define UPC_MOD_TEST_CAMERA 1
 #endif
+#ifndef UPC_MOD_CAMERA_PREVIEW
+#define UPC_MOD_CAMERA_PREVIEW 1
+#endif
 
 #else /* !UPC_DEBUG */
 
@@ -74,6 +77,7 @@
 #define UPC_MOD_SERVICE_BASE 0
 #define UPC_MOD_SYS_MONITOR 0
 #define UPC_MOD_TEST_CAMERA 0
+#define UPC_MOD_CAMERA_PREVIEW 0
 
 #endif /* UPC_DEBUG */
 
