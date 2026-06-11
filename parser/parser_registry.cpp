@@ -3,7 +3,7 @@
 #include <algorithm>
 #include <cctype>
 
-namespace services {
+namespace upc::parser {
 
 namespace {
 
@@ -121,4 +121,4 @@ IParserWorker* ParserRegistry::any_worker() const
     return nullptr;
 }
 
-} // namespace services
+} // namespace upc::parser

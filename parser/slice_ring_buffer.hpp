@@ -1,5 +1,5 @@
-#ifndef RING_BUFFER_HPP
-#define RING_BUFFER_HPP
+#ifndef SLICE_RING_BUFFER_HPP
+#define SLICE_RING_BUFFER_HPP
 
 #include <cstddef>
 #include <cstdint>
@@ -7,7 +7,7 @@
 #include <mutex>
 #include <condition_variable>
 
-namespace services {
+namespace upc::parser {
 
 /** 解析后运动指令队列容量（约 12B/包，65536≈768KB） */
 #define RB_MAX_PACKETS    65536
@@ -77,6 +77,6 @@ inline uint16_t gcode_z_to_layer_um(float z_um)
     return (uint16_t)rounded;
 }
 
-} // namespace services
+} // namespace upc::parser
 
-#endif // RING_BUFFER_HPP
+#endif /* SLICE_RING_BUFFER_HPP */

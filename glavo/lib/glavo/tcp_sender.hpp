@@ -1,7 +1,8 @@
 #ifndef TCP_SENDER_HPP
 #define TCP_SENDER_HPP
 
-#include "ring_buffer.hpp"
+#include "slice_ring_buffer.hpp"
+#include "parser_config.hpp"
 #include "device_config.hpp"
 #include "protocol_mcu.hpp"
 
@@ -13,7 +14,7 @@
 #include <mutex>
 #include <thread>
 
-namespace services {
+namespace upc::glavo {
 
 /**
  * @brief TCP 发送器链路事件枚举
@@ -60,7 +61,7 @@ public:
     static TcpSender& instance();
 
     /** @brief 绑定 RingBuffer，作为运动包的数据来源 */
-    void bind_ring_buffer(RingBuffer* rb);
+    void bind_ring_buffer(upc::parser::RingBuffer* rb);
 
     /** @brief 设置链路事件回调（如打印完成、终止完成） */
     void set_job_event_callback(TcpJobEventCb cb);
@@ -162,9 +163,9 @@ private:
     /** @brief 获取 tcp_stage_ 当前包数（线程安全） */
     size_t tcp_stage_count();
     /** @brief 查看队列头部包的类型，不移除（线程安全） */
-    bool tcp_stage_peek_type(rb_pkt_type_t* ptype);
+    bool tcp_stage_peek_type(upc::parser::rb_pkt_type_t* ptype);
     /** @brief 从队列头部取出一个包（线程安全） */
-    bool tcp_stage_pop_front(rb_packet_t* pkt);
+    bool tcp_stage_pop_front(upc::parser::rb_packet_t* pkt);
     /** @brief 从 RingBuffer 批量预取包到 tcp_stage_，减少链路线程加锁粒度 */
     void refill_tcp_stage_from_ring();
 
@@ -217,7 +218,7 @@ private:
     int link_thread_sleep_ms() const;
 
     /* ---------- 核心依赖 ---------- */
-    RingBuffer* rb_ = nullptr;          /**< 绑定的 RingBuffer，运动包来源 */
+    upc::parser::RingBuffer* rb_ = nullptr;          /**< 绑定的 RingBuffer，运动包来源 */
     TcpJobEventCb event_cb_;            /**< 链路事件回调 */
     TcpProgressCb progress_cb_;         /**< 进度更新回调 */
 
@@ -255,7 +256,7 @@ private:
     int sent_at_layer_ready_ = 0;
 
     /* ---------- 预取队列 ---------- */
-    std::deque<rb_packet_t> tcp_stage_;      /**< 从 RingBuffer 预取出来的包暂存队列 */
+    std::deque<upc::parser::rb_packet_t> tcp_stage_;      /**< 从 RingBuffer 预取出来的包暂存队列 */
     mutable std::mutex tcp_stage_mtx_;       /**< 保护 tcp_stage_ 的互斥锁 */
     std::mutex tcp_send_mtx_;                /**< 保护 TCP send 的互斥锁（避免多线程并发写 socket） */
 
@@ -280,6 +281,6 @@ private:
     static constexpr int kMaxMotionBatch = TCP_BATCH_SIZE; /**< 单次下发的最大运动包数量 */
 };
 
-} // namespace services
+} // namespace upc::glavo
 
 #endif

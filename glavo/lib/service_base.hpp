@@ -11,7 +11,7 @@
 #include <condition_variable>
 #include <queue>
 
-namespace services {
+namespace upc::glavo {
 
 // Service 生命周期状态
 enum class ServiceState {
@@ -81,6 +81,6 @@ private:
     void worker_loop();  /**< 工作线程主循环 */
 };
 
-} // namespace services
+} // namespace upc::glavo
 
 #endif

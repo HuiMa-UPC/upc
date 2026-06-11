@@ -1,14 +1,12 @@
 #ifndef CAL_PARSER_HPP
 #define CAL_PARSER_HPP
 
-#include <vector>
+#include "parser_config.hpp"
+
 #include <cstddef>
+#include <vector>
 
-#ifndef CAL_DEFAULT_FILE_PATH
-#define CAL_DEFAULT_FILE_PATH  "/home/CAL/cal.csv"
-#endif
-
-namespace services {
+namespace upc::parser {
 
 struct CalData {
     bool valid = false;
@@ -43,6 +41,6 @@ int cal_parse_csv(const char *path, CalData *out);
 int cal_interpolate_delta(const CalData *cal, double x, double y,
                           double *out_dx, double *out_dy);
 
-} // namespace services
+} // namespace upc::parser
 
 #endif // CAL_PARSER_HPP

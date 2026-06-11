@@ -55,10 +55,10 @@
 #define UPC_MOD_SYS_MONITOR 1
 #endif
 #ifndef UPC_MOD_TEST_CAMERA
-#define UPC_MOD_TEST_CAMERA 1
+#define UPC_MOD_TEST_CAMERA 0
 #endif
 #ifndef UPC_MOD_CAMERA_PREVIEW
-#define UPC_MOD_CAMERA_PREVIEW 1
+#define UPC_MOD_CAMERA_PREVIEW 0
 #endif
 
 #else /* !UPC_DEBUG */

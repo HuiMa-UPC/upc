@@ -1,5 +1,5 @@
 #include "cal_parser.hpp"
-#include "gcode_config.hpp"
+#include "parser_config.hpp"
 #include "rs_log.hpp"
 
 #include <cstdio>
@@ -9,7 +9,7 @@
 #include <vector>
 #include <map>
 
-namespace services {
+namespace upc::parser {
 
 /* ---------- 内部辅助 ---------- */
 
@@ -283,4 +283,4 @@ int cal_interpolate_delta(const CalData *cal, double x, double y,
     return 1;
 }
 
-} // namespace services
+} // namespace upc::parser

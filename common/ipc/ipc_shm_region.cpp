@@ -9,11 +9,19 @@
 
 namespace upc_ipc {
 
+/** 析构：确保映射被安全关闭 */
 IpcShmRegion::~IpcShmRegion()
 {
     close();
 }
 
+/**
+ * 创建共享内存对象：
+ * 1. 以 O_CREAT | O_EXCL | O_RDWR 创建，防止覆盖已有对象；
+ * 2. ftruncate 设置大小；
+ * 3. mmap 映射到进程地址空间。
+ * 若任何步骤失败则自动回滚（unlink / close）。
+ */
 IpcShmError IpcShmRegion::create(const char* name, size_t size)
 {
     close();
@@ -49,6 +57,12 @@ IpcShmError IpcShmRegion::create(const char* name, size_t size)
     return IpcShmError::Ok;
 }
 
+/**
+ * 打开已有共享内存对象：
+ * 1. shm_open 获取文件描述符；
+ * 2. fstat 获取实际大小；
+ * 3. mmap 按指定权限映射。
+ */
 IpcShmError IpcShmRegion::open(const char* name, bool read_only)
 {
     close();
@@ -82,6 +96,10 @@ IpcShmError IpcShmRegion::open(const char* name, bool read_only)
     return IpcShmError::Ok;
 }
 
+/**
+ * 关闭映射：先 munmap 解除内存映射，再关闭 fd，最后重置所有内部状态。
+ * 注意：不会执行 shm_unlink，如需删除对象请调用 unlink_name()。
+ */
 void IpcShmRegion::close()
 {
     if (base_ && base_ != MAP_FAILED) {
@@ -98,6 +116,10 @@ void IpcShmRegion::close()
     name_.clear();
 }
 
+/**
+ * 调用 shm_unlink 删除系统中的共享内存对象。
+ * 仅在 name_ 非空时执行，失败返回 IoError。
+ */
 IpcShmError IpcShmRegion::unlink_name() const
 {
     if (name_.empty()) {

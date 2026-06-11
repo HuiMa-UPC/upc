@@ -1,6 +1,6 @@
 #include "ovf_worker.hpp"
 #include "ovf_config.hpp"
-#include "gcode_config.hpp"
+#include "parser_config.hpp"
 #include "rs_log.hpp"
 #include "parser_context.hpp"
 
@@ -10,7 +10,7 @@
 #include <libgen.h>
 #include <thread>
 
-namespace services {
+namespace upc::parser {
 
 namespace {
 
@@ -430,4 +430,4 @@ uint16_t OvfWorker::get_layer_height_um() const
     return last_layer_height_um_;
 }
 
-} // namespace services
+} // namespace upc::parser

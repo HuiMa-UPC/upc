@@ -6,11 +6,11 @@ namespace {
 struct OvfParserRegistrar {
     OvfParserRegistrar()
     {
-        services::ParserRegistry::instance().register_parser({
+        upc::parser::ParserRegistry::instance().register_parser({
             .id = "ovf",
             .extensions = {".ovf"},
-            .factory = []() -> services::IParserWorker* {
-                return &services::OvfWorker::instance();
+            .factory = []() -> upc::parser::IParserWorker* {
+                return &upc::parser::OvfWorker::instance();
             },
         });
     }

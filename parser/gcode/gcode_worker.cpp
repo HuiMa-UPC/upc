@@ -1,5 +1,5 @@
 #include "gcode_worker.hpp"
-#include "gcode_config.hpp"
+#include "parser_config.hpp"
 #include "rs_log.hpp"
 #include "parser_context.hpp"
 
@@ -15,7 +15,7 @@
 #include <string>
 #include <thread>
 
-namespace services {
+namespace upc::parser {
 
 GcodeWorker& GcodeWorker::instance()
 {
@@ -638,4 +638,4 @@ uint16_t GcodeWorker::get_layer_height_um() const
     return last_layer_height_um_;
 }
 
-} // namespace services
+} // namespace upc::parser

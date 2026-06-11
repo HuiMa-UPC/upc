@@ -9,7 +9,7 @@
 #include <string>
 #include <thread>
 
-namespace services {
+namespace upc::parser {
 
 /** Open Vector Format（protobuf Job）解析器 */
 class OvfWorker : public IParserWorker {
@@ -70,6 +70,6 @@ private:
     uint16_t last_layer_height_um_ = OVF_DEFAULT_LAYER_UM;
 };
 
-} // namespace services
+} // namespace upc::parser
 
 #endif // OVF_WORKER_HPP

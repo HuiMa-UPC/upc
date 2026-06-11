@@ -53,16 +53,16 @@ void log_write(Level level, const char* src, const char* module,
     UPC_LOG_MOD_(UPC_MOD_TCP_SENDER, lvl, "SVC", "TcpSender", fmt, ##__VA_ARGS__)
 
 #define UPC_LOG_CAL_PARSER(lvl, fmt, ...) \
-    UPC_LOG_MOD_(UPC_MOD_CAL_PARSER, lvl, "SVC", "CalParser", fmt, ##__VA_ARGS__)
+    UPC_LOG_MOD_(UPC_MOD_CAL_PARSER, lvl, "PARSER", "CalParser", fmt, ##__VA_ARGS__)
 
 #define UPC_LOG_PARSER_CONTEXT(lvl, fmt, ...) \
-    UPC_LOG_MOD_(UPC_MOD_PARSER_CONTEXT, lvl, "SVC", "ParserContext", fmt, ##__VA_ARGS__)
+    UPC_LOG_MOD_(UPC_MOD_PARSER_CONTEXT, lvl, "PARSER", "ParserContext", fmt, ##__VA_ARGS__)
 
 #define UPC_LOG_GCODE_WORKER(lvl, fmt, ...) \
-    UPC_LOG_MOD_(UPC_MOD_GCODE_WORKER, lvl, "SVC", "GcodeWorker", fmt, ##__VA_ARGS__)
+    UPC_LOG_MOD_(UPC_MOD_GCODE_WORKER, lvl, "PARSER", "GcodeWorker", fmt, ##__VA_ARGS__)
 
 #define UPC_LOG_OVF_WORKER(lvl, fmt, ...) \
-    UPC_LOG_MOD_(UPC_MOD_OVF_WORKER, lvl, "SVC", "OvfWorker", fmt, ##__VA_ARGS__)
+    UPC_LOG_MOD_(UPC_MOD_OVF_WORKER, lvl, "PARSER", "OvfWorker", fmt, ##__VA_ARGS__)
 
 #define UPC_LOG_SERVICE_BASE(lvl, fmt, ...) \
     UPC_LOG_MOD_(UPC_MOD_SERVICE_BASE, lvl, "SVC", "ServiceBase", fmt, ##__VA_ARGS__)

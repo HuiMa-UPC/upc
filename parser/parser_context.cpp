@@ -1,10 +1,10 @@
 #include "parser_context.hpp"
-#include "gcode_config.hpp"
+#include "parser_config.hpp"
 #include "rs_log.hpp"
 
 #include <cstdio>
 
-namespace services {
+namespace upc::parser {
 
 ParserContext& ParserContext::instance()
 {
@@ -41,4 +41,4 @@ void ParserContext::load_calibration(const char* path)
     }
 }
 
-} // namespace services
+} // namespace upc::parser

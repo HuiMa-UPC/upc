@@ -1,8 +1,7 @@
 #include "parser_manager.hpp"
 #include "parser_registry.hpp"
-#include "tcp_sender.hpp"
 
-namespace services {
+namespace upc::parser {
 
 ParserManager& ParserManager::instance()
 {
@@ -10,15 +9,16 @@ ParserManager& ParserManager::instance()
     return mgr;
 }
 
-void ParserManager::bind_tcp_output()
+void ParserManager::set_ring_buffer_sink(RingBufferSink sink)
 {
-    IParserWorker* worker = ParserRegistry::instance().any_worker();
-    if(!worker) {
-        return;
-    }
+    sink_ = std::move(sink);
+}
 
-    active_ = worker;
-    TcpSender::instance().bind_ring_buffer(&worker->ring_buffer());
+void ParserManager::notify_sink()
+{
+    if(sink_ && active_) {
+        sink_(&active_->ring_buffer());
+    }
 }
 
 int ParserManager::open_file(const std::string& path)
@@ -33,7 +33,7 @@ int ParserManager::open_file(const std::string& path)
             active_->stop_parse();
         }
         active_ = worker;
-        TcpSender::instance().bind_ring_buffer(&worker->ring_buffer());
+        notify_sink();
     }
 
     return worker->open_file(path);
@@ -53,4 +53,4 @@ void ParserManager::stop_parse()
     }
 }
 
-} // namespace services
+} // namespace upc::parser

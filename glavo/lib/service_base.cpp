@@ -5,7 +5,7 @@
 #include <cstdio>
 #include <iostream>
 
-namespace services {
+namespace upc::glavo {
 
 namespace {
 constexpr size_t kWorkerQueueDepth = 64;
@@ -165,4 +165,4 @@ void ServiceBase::subscribe(middleware::MsgType type, middleware::MsgHandler han
     subscriptions_.push_back(std::move(sub));
 }
 
-} // namespace services
+} // namespace upc::glavo

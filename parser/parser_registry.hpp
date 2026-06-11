@@ -6,7 +6,7 @@
 #include <string>
 #include <vector>
 
-namespace services {
+namespace upc::parser {
 
 struct ParserRegistration {
     const char* id = nullptr;
@@ -49,6 +49,6 @@ private:
 /** 提取文件名后缀并转小写，无后缀返回空串 */
 std::string file_extension_lower(const std::string& filename);
 
-} // namespace services
+} // namespace upc::parser
 
 #endif // PARSER_REGISTRY_HPP

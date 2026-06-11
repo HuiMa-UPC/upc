@@ -3,7 +3,7 @@
 
 #include "cal_parser.hpp"
 
-namespace services {
+namespace upc::parser {
 
 /** 启动时加载一次的共享校准/增益数据，各协议解析器按需读取 */
 class ParserContext {
@@ -28,6 +28,6 @@ private:
     bool    cal_valid_   = false;
 };
 
-} // namespace services
+} // namespace upc::parser
 
 #endif // PARSER_CONTEXT_HPP

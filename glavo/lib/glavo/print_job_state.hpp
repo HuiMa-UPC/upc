@@ -1,11 +1,10 @@
 #ifndef PRINT_JOB_STATE_HPP
 #define PRINT_JOB_STATE_HPP
 
-#include "ring_buffer.hpp"
 #include <cstdint>
 #include <mutex>
 
-namespace services {
+namespace upc::glavo {
 
 struct PrintJobSnapshot {
     bool     is_sending      = false;
@@ -36,6 +35,6 @@ private:
     PrintJobSnapshot snap_;
 };
 
-} // namespace services
+} // namespace upc::glavo
 
 #endif

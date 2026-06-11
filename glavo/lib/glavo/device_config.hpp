@@ -23,10 +23,6 @@
 #define GLAVO_ENABLE_LAYER_CHANGE  1
 #endif
 
-#ifndef GCODE_DEFAULT_LAYER_UM
-#define GCODE_DEFAULT_LAYER_UM  30u
-#endif
-
 /** 运动下发：每轮 batch 包数与轮询间隔 */
 #ifndef TCP_BATCH_SIZE
 #define TCP_BATCH_SIZE  100

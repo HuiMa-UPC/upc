@@ -1,6 +1,6 @@
 #include "print_job_state.hpp"
 
-namespace services {
+namespace upc::glavo {
 
 PrintJobState& PrintJobState::instance()
 {
@@ -55,4 +55,4 @@ void PrintJobState::reset_job_counters()
     snap_.data_cache_rate = 0;
 }
 
-} // namespace services
+} // namespace upc::glavo

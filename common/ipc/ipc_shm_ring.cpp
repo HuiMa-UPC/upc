@@ -6,11 +6,19 @@ namespace upc_ipc {
 
 namespace {
 
+/** 将 Slot 状态枚举转换为底层 uint32_t，用于原子操作 */
 uint32_t expected_state(IpcShmSlotState state)
 {
     return static_cast<uint32_t>(state);
 }
 
+/**
+ * 对指定槽位执行 CAS（Compare-And-Swap）原子状态转换。
+ * @param slot      目标槽位
+ * @param expected  期望的当前状态
+ * @param desired   目标状态
+ * @return CAS 成功返回 true，失败返回 false
+ */
 bool cas_slot_state(IpcShmSlotHeader& slot, IpcShmSlotState expected,
                     IpcShmSlotState desired)
 {
@@ -22,11 +30,16 @@ bool cas_slot_state(IpcShmSlotHeader& slot, IpcShmSlotState expected,
 
 } // namespace
 
+/** 析构：确保资源被正确释放 */
 IpcShmRingProducer::~IpcShmRingProducer()
 {
     destroy();
 }
 
+/**
+ * 创建共享内存区域，初始化全局头与所有槽位为 Empty 状态。
+ * 若之前已创建过，会先执行 destroy 清理旧资源。
+ */
 IpcShmError IpcShmRingProducer::create(const IpcShmRingCreateParams& params)
 {
     destroy();
@@ -63,6 +76,10 @@ IpcShmError IpcShmRingProducer::create(const IpcShmRingCreateParams& params)
     return IpcShmError::Ok;
 }
 
+/**
+ * 销毁生产者：关闭共享内存映射；
+ * 若是创建者（creator）则同时执行 unlink，删除系统共享内存对象。
+ */
 void IpcShmRingProducer::destroy()
 {
     if (active_ && region_.is_creator()) {
@@ -77,6 +94,10 @@ void IpcShmRingProducer::destroy()
     active_       = false;
 }
 
+/**
+ * 遍历所有槽位，尝试将 Empty 状态的槽位 CAS 为 Writing。
+ * 用于在生产者写入前抢占一个可用槽位。
+ */
 std::optional<uint32_t> IpcShmRingProducer::acquire_write_slot()
 {
     if (!active_ || !hdr_ || !slots_) {
@@ -92,6 +113,10 @@ std::optional<uint32_t> IpcShmRingProducer::acquire_write_slot()
     return std::nullopt;
 }
 
+/**
+ * 取消写操作：将之前被置为 Writing 的槽位回滚为 Empty。
+ * 通常在写入失败或放弃该帧时调用。
+ */
 void IpcShmRingProducer::cancel_write_slot(uint32_t slot_index)
 {
     if (!active_ || !hdr_ || slot_index >= hdr_->slot_count) {
@@ -101,6 +126,10 @@ void IpcShmRingProducer::cancel_write_slot(uint32_t slot_index)
                                    std::memory_order_release);
 }
 
+/**
+ * 提交槽位数据：写入时间戳、递增序列号，并将状态置为 Ready，使消费者可见。
+ * 调用前该槽位必须已处于 Writing 状态。
+ */
 uint32_t IpcShmRingProducer::commit_slot(uint32_t slot_index,
                                          uint64_t timestamp_us)
 {
@@ -118,6 +147,10 @@ uint32_t IpcShmRingProducer::commit_slot(uint32_t slot_index,
     return next_seq;
 }
 
+/**
+ * 根据槽位索引计算并返回对应 payload 区域的指针。
+ * 生产者可在 acquire_write_slot 后调用此函数填充图像数据。
+ */
 uint8_t* IpcShmRingProducer::slot_payload(uint32_t slot_index)
 {
     if (!active_ || !hdr_ || !payload_base_) {
@@ -127,11 +160,16 @@ uint8_t* IpcShmRingProducer::slot_payload(uint32_t slot_index)
                                     slot_index);
 }
 
+/** 析构：确保共享内存映射被正确关闭 */
 IpcShmRingConsumer::~IpcShmRingConsumer()
 {
     close();
 }
 
+/**
+ * 打开指定名称的共享内存，校验全局头魔数，计算槽位与 payload 偏移。
+ * 若校验失败或打开失败则自动 close 并返回错误码。
+ */
 IpcShmError IpcShmRingConsumer::open(const char* name)
 {
     close();
@@ -169,6 +207,7 @@ IpcShmError IpcShmRingConsumer::open(const char* name)
     return IpcShmError::Ok;
 }
 
+/** 关闭共享内存映射并重置内部状态 */
 void IpcShmRingConsumer::close()
 {
     region_.close();
@@ -179,6 +218,11 @@ void IpcShmRingConsumer::close()
     last_seen_seq_ = 0;
 }
 
+/**
+ * 扫描所有 Ready 状态的槽位，选择 seq 最大（即最新）的一帧；
+ * 通过 CAS 将其状态从 Ready 转为 Reading，防止与其他消费者竞争。
+ * 更新 last_seen_seq_ 以避免重复消费同一帧。
+ */
 std::optional<IpcShmFrameView> IpcShmRingConsumer::acquire_latest_frame()
 {
     if (!active_ || !hdr_ || !slots_ || !payload_base_) {
@@ -217,6 +261,10 @@ std::optional<IpcShmFrameView> IpcShmRingConsumer::acquire_latest_frame()
     return view;
 }
 
+/**
+ * 释放已读取完毕的槽位，将其状态重置为 Empty，供生产者循环复用。
+ * 调用者必须确保该槽位当前处于 Reading 状态。
+ */
 void IpcShmRingConsumer::release_slot(uint32_t slot_index)
 {
     if (!active_ || !hdr_ || slot_index >= hdr_->slot_count) {

@@ -1,6 +1,8 @@
-#include "ring_buffer.hpp"
+#include "slice_ring_buffer.hpp"
 
-namespace services {
+#include <chrono>
+
+namespace upc::parser {
 
 RingBuffer::RingBuffer()
 {
@@ -72,4 +74,4 @@ void RingBuffer::clear()
 }
 
 
-} // namespace services
+} // namespace upc::parser

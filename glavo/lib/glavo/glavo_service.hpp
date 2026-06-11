@@ -11,7 +11,7 @@
 #include <string>
 #include <vector>
 
-namespace services {
+namespace upc::glavo {
 
 class GlavoService : public ServiceBase {
 public:
@@ -64,6 +64,6 @@ private:
     bool last_parse_done_   = false;
 };
 
-} // namespace services
+} // namespace upc::glavo
 
 #endif

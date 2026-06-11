@@ -1,11 +1,11 @@
 #ifndef PARSER_WORKER_HPP
 #define PARSER_WORKER_HPP
 
-#include "ring_buffer.hpp"
+#include "slice_ring_buffer.hpp"
 #include <cstdint>
 #include <string>
 
-namespace services {
+namespace upc::parser {
 
 /** 切片文件解析器抽象接口；各协议在 parsers/<name>/ 下实现 */
 class IParserWorker {
@@ -28,6 +28,6 @@ public:
     virtual uint16_t get_layer_height_um() const = 0;
 };
 
-} // namespace services
+} // namespace upc::parser
 
 #endif // PARSER_WORKER_HPP

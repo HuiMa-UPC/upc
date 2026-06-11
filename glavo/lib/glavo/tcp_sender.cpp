@@ -21,13 +21,15 @@
 #include <cstdio>
 #include <thread>
 
-namespace services {
+namespace upc::glavo {
+
+namespace parser = upc::parser;
 
 namespace {
 
-IParserWorker* active_parser()
+parser::IParserWorker* active_parser()
 {
-    return ParserManager::instance().active();
+    return parser::ParserManager::instance().active();
 }
 
 #if UPC_DEBUG && UPC_MOD_TCP_SENDER
@@ -322,7 +324,7 @@ TcpSender::~TcpSender()
 
 /* ---------- 依赖注入与回调设置 ---------- */
 
-void TcpSender::bind_ring_buffer(RingBuffer* rb)
+void TcpSender::bind_ring_buffer(parser::RingBuffer* rb)
 {
     rb_ = rb;
 }
@@ -715,7 +717,7 @@ size_t TcpSender::tcp_stage_count()
     return tcp_stage_.size();
 }
 
-bool TcpSender::tcp_stage_peek_type(rb_pkt_type_t* ptype)
+bool TcpSender::tcp_stage_peek_type(parser::rb_pkt_type_t* ptype)
 {
     if(!ptype) {
         return false;
@@ -724,11 +726,11 @@ bool TcpSender::tcp_stage_peek_type(rb_pkt_type_t* ptype)
     if(tcp_stage_.empty()) {
         return false;
     }
-    *ptype = static_cast<rb_pkt_type_t>(tcp_stage_.front().type);
+    *ptype = static_cast<parser::rb_pkt_type_t>(tcp_stage_.front().type);
     return true;
 }
 
-bool TcpSender::tcp_stage_pop_front(rb_packet_t* pkt)
+bool TcpSender::tcp_stage_pop_front(parser::rb_packet_t* pkt)
 {
     if(!pkt) {
         return false;
@@ -765,12 +767,12 @@ void TcpSender::refill_tcp_stage_from_ring()
             }
         }
 
-        rb_pkt_type_t ptype;
+        parser::rb_pkt_type_t ptype;
         if(!rb_->peek_type(ptype)) {
             break; // RingBuffer 已空
         }
 
-        rb_packet_t pkt;
+        parser::rb_packet_t pkt;
         if(!rb_->get(pkt, 5)) {
             break; // 获取失败（超时或无数据）
         }
@@ -830,7 +832,7 @@ bool TcpSender::ring_meets_start_threshold() const
         return false;
     }
 
-    IParserWorker* parser = active_parser();
+    parser::IParserWorker* parser = active_parser();
     if(!parser) {
         return false;
     }
@@ -888,7 +890,7 @@ void TcpSender::begin_sending_internal()
     tcp_stage_clear();
 
     // 记录首层高度，用于串口首次握手
-    IParserWorker* parser = active_parser();
+    parser::IParserWorker* parser = active_parser();
     first_layer_height_um_  = parser ? parser->get_layer_height_um() : GCODE_DEFAULT_LAYER_UM;
     active_layer_height_um_ = first_layer_height_um_;
 
@@ -1004,7 +1006,7 @@ void TcpSender::run_manual_terminate_cleanup()
     send_serial_print_terminate();
 
     // 2. 停止解析、清空 RingBuffer 与 stage 队列
-    ParserManager::instance().stop_parse();
+    parser::ParserManager::instance().stop_parse();
     if(rb_) {
         rb_->clear();
     }
@@ -1071,12 +1073,12 @@ void TcpSender::link_process_serial_handshake()
 
 bool TcpSender::link_handle_layer_mark()
 {
-    rb_pkt_type_t ptype;
-    if(!tcp_stage_peek_type(&ptype) || ptype != RB_PKT_LAYER_MARK) {
+    parser::rb_pkt_type_t ptype;
+    if(!tcp_stage_peek_type(&ptype) || ptype != parser::RB_PKT_LAYER_MARK) {
         return false; // 队列头部不是换层标记
     }
 
-    rb_packet_t mark;
+    parser::rb_packet_t mark;
     if(!tcp_stage_pop_front(&mark)) {
         return false;
     }
@@ -1086,7 +1088,7 @@ bool TcpSender::link_handle_layer_mark()
         return false; // 无串口时不进行换层握手
     }
     // 读取换层标记中的下层成高（协议 0x05 载荷）
-    const uint16_t mark_um = rb_layer_mark_get_height_um(mark);
+    const uint16_t mark_um = parser::rb_layer_mark_get_height_um(mark);
     if(mark_um > 0) {
         active_layer_height_um_ = mark_um;
     }
@@ -1153,25 +1155,25 @@ int TcpSender::link_send_one_motion_batch()
         return 0; // 暂存队列为空
     }
 
-    rb_packet_t staged[kMaxMotionBatch];
+    parser::rb_packet_t staged[kMaxMotionBatch];
     int n = 0;
 
     // 从 tcp_stage_ 头部连续取出运动包，遇到 LayerMark 或非运动包则停止
     for(int i = 0; i < kMaxMotionBatch; i++) {
-        rb_pkt_type_t ptype;
+        parser::rb_pkt_type_t ptype;
         if(!tcp_stage_peek_type(&ptype)) {
             break; // 队列为空
         }
-        if(ptype == RB_PKT_LAYER_MARK) {
+        if(ptype == parser::RB_PKT_LAYER_MARK) {
             break; // 遇到换层标记，留待外层处理
         }
-        if(ptype != RB_PKT_MOTION) {
+        if(ptype != parser::RB_PKT_MOTION) {
             // 遇到未知类型包，丢弃并终止本轮批量
-            rb_packet_t discard;
+            parser::rb_packet_t discard;
             tcp_stage_pop_front(&discard);
             break;
         }
-        rb_packet_t rp;
+        parser::rb_packet_t rp;
         if(!tcp_stage_pop_front(&rp)) {
             break;
         }
@@ -1263,7 +1265,7 @@ void TcpSender::link_try_finish_sending()
     if(rb_ && !rb_->empty()) {
         return; // RingBuffer 仍有数据
     }
-    IParserWorker* parser = active_parser();
+    parser::IParserWorker* parser = active_parser();
     if(!parser) {
         return;
     }
@@ -1391,4 +1393,4 @@ void TcpSender::link_thread_fn()
     }
 }
 
-} // namespace services
+} // namespace upc::glavo

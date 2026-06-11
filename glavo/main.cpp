@@ -55,12 +55,12 @@ int start_glavo(char daemon) {
         return 5;
     }
 
-    services::GlavoService glavo_service;
+    upc::glavo::GlavoService glavo_service;
     if (!glavo_service.init()) {
         return 6;
     }
 
-    auto& tcp = services::TcpSender::instance();
+    auto& tcp = upc::glavo::TcpSender::instance();
     while (tcp.connect_tcp(GLAVO_TCP_DEFAULT_IP, GLAVO_TCP_DEFAULT_PORT) != 0) {
         std::this_thread::sleep_for(
             std::chrono::milliseconds(TCP_RECONNECT_INTERVAL_MS));

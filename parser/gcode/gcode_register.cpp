@@ -6,11 +6,11 @@ namespace {
 struct GcodeParserRegistrar {
     GcodeParserRegistrar()
     {
-        services::ParserRegistry::instance().register_parser({
+        upc::parser::ParserRegistry::instance().register_parser({
             .id = "gcode",
             .extensions = {".gcode", ".nc"},
-            .factory = []() -> services::IParserWorker* {
-                return &services::GcodeWorker::instance();
+            .factory = []() -> upc::parser::IParserWorker* {
+                return &upc::parser::GcodeWorker::instance();
             },
         });
     }

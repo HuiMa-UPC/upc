@@ -1,7 +1,7 @@
 #ifndef OVF_CONFIG_HPP
 #define OVF_CONFIG_HPP
 
-#include "device_config.hpp"
+#include "parser_config.hpp"
 
 /** OVF 默认层厚（μm），WorkPlane 无 z_pos_in_mm 时使用 */
 #ifndef OVF_DEFAULT_LAYER_UM

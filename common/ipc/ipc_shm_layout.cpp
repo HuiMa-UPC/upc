@@ -6,6 +6,7 @@ namespace upc_ipc {
 
 namespace {
 
+/** 将 value 向上对齐到 alignment 的整数倍（alignment 须为 2 的幂） */
 size_t align_up(size_t value, size_t alignment)
 {
     return (value + alignment - 1u) & ~(alignment - 1u);
@@ -13,6 +14,12 @@ size_t align_up(size_t value, size_t alignment)
 
 } // namespace
 
+/**
+ * 计算共享内存布局：
+ * 1. 根据格式计算单帧 payload 大小；
+ * 2. 按对齐要求依次排布 GlobalHeader、SlotHeader[]、Payload[]；
+ * 3. 汇总总字节数。
+ */
 IpcShmLayout ipc_shm_compute_layout(const IpcShmRingCreateParams& params)
 {
     IpcShmLayout layout{};
@@ -42,6 +49,10 @@ IpcShmLayout ipc_shm_compute_layout(const IpcShmRingCreateParams& params)
     return layout;
 }
 
+/**
+ * 用创建参数与布局结果填充全局头部，供消费者读取以重建帧信息。
+ * 调用前会先将 hdr 清零。
+ */
 void ipc_shm_fill_global_header(IpcShmGlobalHeader& hdr,
                                 const IpcShmRingCreateParams& params,
                                 const IpcShmLayout& layout)
@@ -63,6 +74,9 @@ void ipc_shm_fill_global_header(IpcShmGlobalHeader& hdr,
         static_cast<uint32_t>(layout.slot_stride_bytes * params.slot_count);
 }
 
+/**
+ * 校验全局头部：检查魔数、版本、分辨率、slot 数量及支持的像素格式。
+ */
 bool ipc_shm_validate_global_header(const IpcShmGlobalHeader& hdr)
 {
     if (hdr.magic != IPC_SHM_MAGIC || hdr.version != IPC_SHM_VERSION) {
@@ -78,6 +92,10 @@ bool ipc_shm_validate_global_header(const IpcShmGlobalHeader& hdr)
            IpcShmPixelFormat::YUV420SP;
 }
 
+/**
+ * 根据槽位信息填充帧视图：解析 Y/UV 平面地址与大小，并拷贝元数据（seq、timestamp 等）。
+ * 若 payload_base 无效，则仅填充元数据，平面指针保持为空。
+ */
 void ipc_shm_frame_view_from_slot(const IpcShmGlobalHeader& hdr,
                                   const uint8_t* payload_base,
                                   uint32_t slot_index,
@@ -106,6 +124,7 @@ void ipc_shm_frame_view_from_slot(const IpcShmGlobalHeader& hdr,
     out.uv_size          = y_size / 2u;
 }
 
+/** 计算指定槽位在 payload 区域中的可写地址 */
 uint8_t* ipc_shm_slot_payload_ptr(uint8_t* payload_base, uint32_t slot_stride,
                                   uint32_t slot_index)
 {
@@ -115,6 +134,7 @@ uint8_t* ipc_shm_slot_payload_ptr(uint8_t* payload_base, uint32_t slot_stride,
     return payload_base + static_cast<size_t>(slot_stride) * slot_index;
 }
 
+/** 计算指定槽位在 payload 区域中的只读地址 */
 const uint8_t* ipc_shm_slot_payload_ptr(const uint8_t* payload_base,
                                         uint32_t slot_stride,
                                         uint32_t slot_index)

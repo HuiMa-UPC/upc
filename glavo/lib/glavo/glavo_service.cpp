@@ -1,9 +1,10 @@
 #include "glavo_service.hpp"
+#include "glavo_parser_bridge.hpp"
+#include "parser_config.hpp"
 #include "parser_context.hpp"
 #include "parser_manager.hpp"
 #include "parser_registry.hpp"
 #include "parser_worker.hpp"
-#include "cal_parser.hpp"
 #include "tcp_sender.hpp"
 #include "print_job_state.hpp"
 #include "msg_types.hpp"
@@ -16,7 +17,9 @@
 #include <cstdint>
 #include <string>
 
-namespace services {
+namespace upc::glavo {
+
+namespace parser = upc::parser;
 
 namespace {
 
@@ -34,15 +37,15 @@ int percent_rounded(int num, int den)
     return num * 100 / den;
 }
 
-IParserWorker* active_parser()
+parser::IParserWorker* active_parser()
 {
-    return ParserManager::instance().active();
+    return parser::ParserManager::instance().active();
 }
 
 /** 打印进度分母：解析完成后用最终包数；解析中用行数比例外推，避免 sent/已解析 虚高 */
 int progress_denominator(int sent_packets)
 {
-    IParserWorker* parser = active_parser();
+    parser::IParserWorker* parser = active_parser();
     if(!parser) {
         return 0;
     }
@@ -101,8 +104,8 @@ GlavoService::~GlavoService() {
 }
 
 bool GlavoService::do_init() {
-    ParserContext::instance().load_calibration(CAL_DEFAULT_FILE_PATH);
-    ParserManager::instance().bind_tcp_output();
+    parser::ParserContext::instance().load_calibration(CAL_DEFAULT_FILE_PATH);
+    glavo_parser_bind_init();
     TcpSender::instance().set_job_event_callback(
         [this](TcpJobEvent ev) { on_tcp_job_event(ev); });
     TcpSender::instance().set_progress_callback(
@@ -250,7 +253,7 @@ void GlavoService::on_motion_batch_sent() {
 void GlavoService::send_print_progress(bool force_complete) {
     const auto job = PrintJobState::instance().snapshot();
 
-    IParserWorker* parser = active_parser();
+    parser::IParserWorker* parser = active_parser();
     const bool parse_done = parser &&
                             parser->is_file_read_exhausted() &&
                             !parser->is_parsing();
@@ -335,7 +338,7 @@ void GlavoService::send_dir_open_empty(const middleware::Message& req) {
 }
 
 void GlavoService::handle_dir_open(const middleware::Message& msg) {
-    if(!ParserRegistry::instance().has_any()) {
+    if(!parser::ParserRegistry::instance().has_any()) {
         UPC_LOG_GLAVO_SERVICE(Warn, "dir_open: no parser registered, returning empty list");
         send_dir_open_empty(msg);
         return;
@@ -365,7 +368,7 @@ void GlavoService::handle_dir_open(const middleware::Message& msg) {
         if (std::strcmp(entry->d_name, ".") == 0 || std::strcmp(entry->d_name, "..") == 0) {
             continue;
         }
-        if(!ParserRegistry::instance().match_filename(entry->d_name)) {
+        if(!parser::ParserRegistry::instance().match_filename(entry->d_name)) {
             continue;
         }
         current_entries_.push_back(entry->d_name);
@@ -439,8 +442,8 @@ void GlavoService::handle_file_info_req(const middleware::Message& msg) {
             if(TcpSender::instance().is_sending()) {
                 TcpSender::instance().request_terminate();
             }
-            if(ParserManager::instance().open_file(full_path) == 0) {
-                IParserWorker* parser = active_parser();
+            if(parser::ParserManager::instance().open_file(full_path) == 0) {
+                parser::IParserWorker* parser = active_parser();
                 rsp.total_lines = parser
                     ? static_cast<uint32_t>(parser->get_total_lines())
                     : 0u;
@@ -448,7 +451,7 @@ void GlavoService::handle_file_info_req(const middleware::Message& msg) {
                 current_file_path_ = full_path;
                 PrintJobState::instance().reset_job_counters();
                 reset_print_progress_state();
-                ParserManager::instance().start_parse();
+                parser::ParserManager::instance().start_parse();
             }
         }
     }
@@ -483,7 +486,7 @@ void GlavoService::handle_print_start(const middleware::Message& msg) {
         return;
     }
 
-    IParserWorker* parser = active_parser();
+    parser::IParserWorker* parser = active_parser();
     const bool already_parsing = (full_path == current_file_path_) &&
                                  parser &&
                                  parser->is_file_open() &&
@@ -494,14 +497,14 @@ void GlavoService::handle_print_start(const middleware::Message& msg) {
         if(TcpSender::instance().is_sending()) {
             TcpSender::instance().request_terminate();
         }
-        if(ParserManager::instance().open_file(full_path) != 0) {
+        if(parser::ParserManager::instance().open_file(full_path) != 0) {
             UPC_LOG_GLAVO_SERVICE(Error, "print_start: open failed");
             return;
         }
         current_file_path_ = full_path;
         PrintJobState::instance().reset_job_counters();
         reset_print_progress_state();
-        ParserManager::instance().start_parse();
+        parser::ParserManager::instance().start_parse();
     }
 
     print_running_.store(true);
@@ -513,15 +516,15 @@ void GlavoService::handle_print_start(const middleware::Message& msg) {
 
 void GlavoService::stop_print_job() {
     print_running_.store(false);
-    ParserManager::instance().stop_parse();
+    parser::ParserManager::instance().stop_parse();
 }
 
 void GlavoService::handle_print_terminate(const middleware::Message& msg) {
     (void)msg;
     UPC_LOG_GLAVO_SERVICE(Info, "print_terminate requested");
     print_running_.store(false);
-    ParserManager::instance().stop_parse();
+    parser::ParserManager::instance().stop_parse();
     TcpSender::instance().request_terminate();
 }
 
-} // namespace services
+} // namespace upc::glavo

@@ -3,12 +3,12 @@
 
 #include "parser_worker.hpp"
 #include "cal_parser.hpp"
-#include "device_config.hpp"
+#include "parser_config.hpp"
 #include <atomic>
 #include <string>
 #include <thread>
 
-namespace services {
+namespace upc::parser {
 
 class GcodeWorker : public IParserWorker {
 public:
@@ -79,6 +79,6 @@ private:
     uint16_t last_layer_height_um_ = GCODE_DEFAULT_LAYER_UM;
 };
 
-} // namespace services
+} // namespace upc::parser
 
 #endif // GCODE_WORKER_HPP

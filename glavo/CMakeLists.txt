@@ -14,21 +14,10 @@ target_link_libraries(rongsu_glavo
         upc::process
         upc::ipc
         upc::debug
+        -Wl,--whole-archive
+        upc::parser_gcode
+        upc::parser_ovf
+        -Wl,--no-whole-archive
+        upc::glavo
+        upc::parser
 )
-
-if(TARGET services_parsers)
-    target_link_libraries(rongsu_glavo
-        PRIVATE
-            -Wl,--whole-archive
-            services
-            services_parsers
-            -Wl,--no-whole-archive
-    )
-elseif(TARGET services)
-    target_link_libraries(rongsu_glavo
-        PRIVATE
-            -Wl,--whole-archive
-            services
-            -Wl,--no-whole-archive
-    )
-endif()
