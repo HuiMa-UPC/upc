@@ -64,5 +64,19 @@
 #define MCU_DRAIN_TIMEOUT_MS  60000
 #endif
 
+/** 串口 ACK：0=关闭（兼容旧 MCU）；1=AA 等 BA + BB 回 AB + 超时重传 */
+#ifndef GLAVO_SERIAL_ACK_ENABLE
+#define GLAVO_SERIAL_ACK_ENABLE  0
+#endif
+
+#ifndef GLAVO_SERIAL_ACK_TIMEOUT_MS
+#define GLAVO_SERIAL_ACK_TIMEOUT_MS  500
+#endif
+
+/** 首次发送后的重传次数（不含首发） */
+#ifndef GLAVO_SERIAL_ACK_MAX_RETRY
+#define GLAVO_SERIAL_ACK_MAX_RETRY  3
+#endif
+
 
 #endif // DEVICE_CONFIG_HPP

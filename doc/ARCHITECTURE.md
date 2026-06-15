@@ -21,6 +21,7 @@
 | `test/` | [TEST.md](../test/TEST.md) | 独立测试进程（camera 等） |
 | `common/` | [COMMON.md](../common/COMMON.md) | 契约、middleware、ipc、debug、process |
 | `parser/` | [PARSER.md](../parser/PARSER.md) | G-code/OVF 解析库（Glavo 链接） |
+| `protocol/` | [PROTOCOL.md](../protocol/PROTOCOL.md) | MCU 线协议（TCP `BE EF` + 串口 `5A A5`） |
 
 ## Glavo 库（`glavo/lib/`）
 
@@ -28,9 +29,15 @@
 |------|------|--------|
 | `GlavoService` | `glavo_service.*` | IPC 业务编排（打印/目录/门控） |
 | `McuLink` | `mcu_link.*` | TCP 运动 + 串口握手/传感器 |
-| `protocol_mcu` | `protocol_mcu.*` | MCU 帧编解码（无 I/O） |
 | `ServiceBase` | `service_base.*` | MsgBus 生命周期 + 工作线程 |
 | `PrintJobState` | `print_job_state.*` | 打印任务计数/状态 |
+
+## protocol/ 库
+
+| 子目录 | 协议表 | 说明 |
+|--------|--------|------|
+| `protocol/tcp/` | `doc/SOC-_MCU TCP报文.xlsx` | 运动/心跳/复位组包，RX 背压解析 |
+| `protocol/serial/` | `doc/SOC_-_MCU串口通信协议.xlsx` | 打印握手 + 环境上报 |
 
 ## 数据流（打印）
 
@@ -46,7 +53,7 @@ UI → IPC → GlavoService → ParserManager → RingBuffer
 - Glavo **禁止**链接 `lvgl`
 - 跨进程回复 UI：**必须** `publish_async()`，目标 `ModuleId::UI`
 - 消息契约：**只改** `common/contract/README.md` + `msg_types.hpp`（四步流程）
-- MCU 协议实现：`protocol_mcu.*` + `mcu_link.*`（无独立 YAML 表时以代码为准）
+- MCU 协议实现：`protocol/`（`upc::protocol`）+ `mcu_link.*`；权威表见 `doc/*.xlsx`
 
 ## 文档与 Agent 入口
 

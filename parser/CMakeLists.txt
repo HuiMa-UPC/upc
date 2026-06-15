@@ -5,11 +5,11 @@ set(UPC_PARSER_GCODE_TARGET upc_parser_gcode)
 set(UPC_PARSER_OVF_TARGET upc_parser_ovf)
 
 set(UPC_PARSER_CORE_SOURCES
-    ${CMAKE_CURRENT_SOURCE_DIR}/slice_ring_buffer.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cal_parser.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/parser_context.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/parser_registry.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/parser_manager.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/lib/slice_ring_buffer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/lib/cal_parser.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/lib/parser_context.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/lib/parser_registry.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/lib/parser_manager.cpp
 )
 
 add_library(${UPC_PARSER_TARGET} STATIC ${UPC_PARSER_CORE_SOURCES})
@@ -19,7 +19,7 @@ target_compile_features(${UPC_PARSER_TARGET} PUBLIC cxx_std_17)
 
 target_include_directories(${UPC_PARSER_TARGET}
     PUBLIC
-        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_CURRENT_SOURCE_DIR}/lib
         ${CMAKE_CURRENT_SOURCE_DIR}/gcode
         ${CMAKE_CURRENT_SOURCE_DIR}/ovf
 )

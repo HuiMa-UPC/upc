@@ -9,7 +9,7 @@
 |------|------|------|
 | `GlavoService` | `lib/glavo_service.*` | IPC：目录/打印/门控/进度 |
 | `McuLink` | `lib/mcu_link.*` | TCP 运动下发 + 串口握手/传感器 |
-| `protocol_mcu` | `lib/protocol_mcu.*` | 帧组包/解包（无 socket） |
+| `protocol` | [`protocol/PROTOCOL.md`](../protocol/PROTOCOL.md) | 线协议编解码（`upc::protocol`，无 I/O） |
 | `ServiceBase` | `lib/service_base.*` | 工作线程 + MsgBus |
 | `glavo_parser_bridge` | `lib/glavo_parser_bridge.*` | RingBuffer → McuLink |
 | 解析 | [`parser/PARSER.md`](../parser/PARSER.md) | 独立库，禁止在 Glavo 里 `#include` 具体 worker |

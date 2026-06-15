@@ -4,7 +4,7 @@
 #include "slice_ring_buffer.hpp"
 #include "parser_config.hpp"
 #include "device_config.hpp"
-#include "protocol_mcu.hpp"
+#include "protocol.hpp"
 
 #include <atomic>
 #include <cstdint>
@@ -131,11 +131,19 @@ public:
      */
     void notify_serial_event(serial_event_t evt);
 
+    void handle_serial_rx_frame(const uint8_t* frame, size_t len);
+
     void on_sensor_report(const serial_sensor_report_t& report);
     void publish_env_update_ntf();
     void drain_serial_tx_queue();
 
 private:
+    struct SerialReliableItem {
+        uint8_t data[64]{};
+        size_t  len = 0;
+        bool    abort_print_on_fail = false;
+    };
+
     McuLink();
     ~McuLink();
     McuLink(const McuLink&) = delete;
@@ -157,6 +165,15 @@ private:
     int serial_recv_nonblock(uint8_t* buf, size_t buf_size);
     /** @brief 排空串口接收缓冲区，并做帧解析与事件分发 */
     void serial_drain_rx();
+
+    void on_serial_mcu_ack(const uint8_t* frame, size_t len);
+    void send_soc_ack_for_bb(const uint8_t* frame, size_t len);
+    void serial_send_aa_reliable(const uint8_t* data, size_t len,
+                                 bool abort_print_on_fail);
+    void link_process_serial_reliable_tx();
+    void serial_clear_reliable();
+    void serial_start_reliable_item(const SerialReliableItem& item);
+    void serial_advance_reliable_queue();
 
     /** @brief 清空 tcp_stage_ 暂存队列 */
     void tcp_stage_clear();
@@ -272,6 +289,18 @@ private:
     };
     std::deque<SerialTxItem> serial_tx_queue_;
     mutable std::mutex serial_tx_mtx_;
+
+    struct SerialReliablePending {
+        bool active = false;
+        uint8_t data[64]{};
+        size_t  len = 0;
+        serial_ack_key_t key{};
+        int retry_count = 0;
+        bool abort_print_on_fail = false;
+        std::chrono::steady_clock::time_point deadline{};
+    };
+    SerialReliablePending serial_reliable_pending_{};
+    std::deque<SerialReliableItem> serial_reliable_queue_;
 
     EnvSnapshotCache env_cache_{};
     mutable std::mutex env_mtx_;

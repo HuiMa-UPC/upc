@@ -206,7 +206,11 @@ void wire_msg_proxy()
     });
 
     proxy.register_print_terminate_done([]() {
-        if(!g_terminate_pending) {
+        /* 用户按 Terminate 时 g_terminate_pending=true；后端主动终止（如串口 ACK
+         * 超时）也会发同一消息，此时需根据打印状态退出界面。 */
+        const bool user_terminate = g_terminate_pending;
+        const bool active_print = (g_state == CONTROL_STATE_PRINTING || g_job_running);
+        if(!user_terminate && !active_print) {
             return;
         }
         g_terminate_pending = false;

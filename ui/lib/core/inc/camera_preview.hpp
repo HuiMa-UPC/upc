@@ -23,7 +23,7 @@ class CameraPreviewPlayer {
 public:
     static CameraPreviewPlayer& instance();
 
-    /** 进程启动时注册 CameraMsgProxy 回调（ui_app::app_init） */
+    /** 进程启动时 RGA 预热 + 注册 CameraMsgProxy 回调（ui_app::app_init） */
     void init();
 
     /** 进入打印模式：发 Start_Req，成功后开 SHM + 解码线程 */

@@ -6,6 +6,7 @@
 #include <rga/im2d.h>
 #include <rga/rga.h>
 
+#include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <cstring>
@@ -27,6 +28,14 @@ constexpr int kNv12RgaFormat = RK_FORMAT_YCbCr_420_SP;
 /** LVGL XRGB8888 + NanoVG 纹理按 BGRX 内存布局上传 */
 constexpr int kDstRgaFormat = RK_FORMAT_BGRX_8888;
 
+/** 冷启动时 RGA 驱动可能未就绪，短暂重试可提高首帧成功率 */
+constexpr int kRgaRetryCount       = 3;
+constexpr int kRgaRetryDelayMs     = 10;
+/** 开流后跳过前几帧，等 SHM 生产者稳定写入 */
+constexpr uint32_t kRgaWarmupSkipFrames = 2u;
+/** 进程启动 dummy blit 分辨率（仅预热，不参与显示） */
+constexpr int kRgaDummyW = 16;
+constexpr int kRgaDummyH = 16;
 
 //临时
 // void dump_bgrx_frame_once(const char* path, const uint8_t* data, size_t bytes)
@@ -48,6 +57,83 @@ const char* rga_status_str(IM_STATUS st)
 {
     const char* msg = imStrError(st);
     return msg ? msg : "unknown";
+}
+
+bool rga_status_ok(IM_STATUS st)
+{
+    return st == IM_STATUS_SUCCESS || st == IM_STATUS_NOERROR;
+}
+
+/**
+ * UI 进程启动时探活 + dummy blit，把 RGA 首次 ioctl 提前到进打印预览之前。
+ * 失败只记日志，不阻塞 UI 启动。
+ */
+void rga_warmup_once()
+{
+    static std::atomic<bool> done{false};
+    if(done.exchange(true)) {
+        return;
+    }
+
+    const IM_STATUS hdr_st = imcheckHeader();
+    if(rga_status_ok(hdr_st)) {
+        UPC_LOG_CAMERA_PREVIEW(Info, "RGA imcheckHeader ok");
+    } else {
+        UPC_LOG_CAMERA_PREVIEW(Warn,
+            "RGA imcheckHeader fail st=%d (%s)",
+            static_cast<int>(hdr_st), rga_status_str(hdr_st));
+    }
+
+    static uint8_t src_nv12[static_cast<size_t>(kRgaDummyW) *
+                            static_cast<size_t>(kRgaDummyH) * 3u / 2u];
+    static uint8_t dst_bgrx[static_cast<size_t>(kRgaDummyW) *
+                            static_cast<size_t>(kRgaDummyH) * 4u];
+    std::memset(src_nv12, 0x10, sizeof(src_nv12));
+    std::memset(dst_bgrx, 0, sizeof(dst_bgrx));
+
+    rga_buffer_t src = wrapbuffer_virtualaddr(
+        src_nv12, kRgaDummyW, kRgaDummyH, kNv12RgaFormat, kRgaDummyW, kRgaDummyH);
+    rga_buffer_t dst_buf = wrapbuffer_virtualaddr(
+        dst_bgrx, kRgaDummyW, kRgaDummyH, kDstRgaFormat, kRgaDummyW, kRgaDummyH);
+    const im_rect rect{0, 0, kRgaDummyW, kRgaDummyH};
+
+    const IM_STATUS chk = imcheck(src, dst_buf, rect, rect);
+    if(!rga_status_ok(chk)) {
+        UPC_LOG_CAMERA_PREVIEW(Warn,
+            "RGA warmup imcheck fail st=%d (%s)",
+            static_cast<int>(chk), rga_status_str(chk));
+        return;
+    }
+
+    const IM_STATUS st =
+        imcvtcolor(src, dst_buf, kNv12RgaFormat, kDstRgaFormat);
+    if(rga_status_ok(st)) {
+        UPC_LOG_CAMERA_PREVIEW(Info, "RGA warmup dummy blit ok %dx%d",
+                               kRgaDummyW, kRgaDummyH);
+    } else {
+        UPC_LOG_CAMERA_PREVIEW(Warn,
+            "RGA warmup dummy blit fail st=%d (%s)",
+            static_cast<int>(st), rga_status_str(st));
+    }
+}
+
+bool rga_cvtcolor_checked(rga_buffer_t src, rga_buffer_t dst_buf, const im_rect& rect,
+                          IM_STATUS* out_st)
+{
+    const IM_STATUS chk = imcheck(src, dst_buf, rect, rect);
+    if(!rga_status_ok(chk)) {
+        if(out_st) {
+            *out_st = chk;
+        }
+        return false;
+    }
+
+    const IM_STATUS st =
+        imcvtcolor(src, dst_buf, kNv12RgaFormat, kDstRgaFormat);
+    if(out_st) {
+        *out_st = st;
+    }
+    return rga_status_ok(st);
 }
 
 void log_nv12_probe(const char* tag, const upc_ipc::IpcShmFrameView& frame)
@@ -103,6 +189,8 @@ CameraPreviewPlayer& CameraPreviewPlayer::instance()
 
 void CameraPreviewPlayer::init()
 {
+    rga_warmup_once();
+
     CameraMsgProxy::instance().register_stream_start_rsp(
         [this](const middleware::CameraStreamInfoPayload& info) {
             on_stream_start_rsp(info);
@@ -300,12 +388,13 @@ void CameraPreviewPlayer::decode_thread_fn()
     uint32_t frames_ok = 0;
     uint32_t frames_rga_fail = 0;
     uint32_t frames_no_slot = 0;
+    uint32_t warmup_skip = kRgaWarmupSkipFrames;
     auto stats_since = std::chrono::steady_clock::now();
 
     UPC_LOG_CAMERA_PREVIEW(Info,
-        "decode thread started target_fps=%u period_us=%lld nv12_fmt=YCrCb420SP "
-        "dst_fmt=BGRX8888",
-        fps_, static_cast<long long>(frame_period.count()));
+        "decode thread started target_fps=%u period_us=%lld nv12_fmt=YCbCr420SP "
+        "dst_fmt=BGRX8888 warmup_skip=%u",
+        fps_, static_cast<long long>(frame_period.count()), warmup_skip);
 
     while(!stop_decode_.load(std::memory_order_relaxed)) {
         const auto tick_start = std::chrono::steady_clock::now();
@@ -321,27 +410,33 @@ void CameraPreviewPlayer::decode_thread_fn()
                 logged_first_shm = true;
             }
 
-            const size_t dst_bytes = frame_buf_[write_idx].size();
-            if(convert_frame_rga(*frame, frame_buf_[write_idx].data(), dst_bytes)) {
-                ++frames_ok;
-                display_buf_.store(write_idx, std::memory_order_release);
-                if(!logged_first_rga) {
-                    log_xrgb_probe("first_rga_out", frame_buf_[write_idx].data(),
-                                   width_, height_, pixel_stride_px_);
-
-                    //临时
-                    // dump_bgrx_frame_once("/tmp/camera_rga_bgrx.bin",
-                    //  frame_buf_[write_idx].data(),
-                    //  frame_buf_[write_idx].size());
-
-                    logged_first_rga = true;
-                }
-                write_idx = (write_idx + 1) % kFrameBufCount;
+            if(warmup_skip > 0) {
+                --warmup_skip;
+                consumer_.release_slot(frame->slot_index);
             } else {
-                ++frames_rga_fail;
-            }
+                const size_t dst_bytes = frame_buf_[write_idx].size();
+                if(convert_frame_rga(*frame, frame_buf_[write_idx].data(), dst_bytes)) {
+                    ++frames_ok;
+                    display_buf_.store(write_idx, std::memory_order_release);
+                    if(!logged_first_rga) {
+                        log_xrgb_probe("first_rga_out",
+                                       frame_buf_[write_idx].data(),
+                                       width_, height_, pixel_stride_px_);
 
-            consumer_.release_slot(frame->slot_index);
+                        //临时
+                        // dump_bgrx_frame_once("/tmp/camera_rga_bgrx.bin",
+                        //  frame_buf_[write_idx].data(),
+                        //  frame_buf_[write_idx].size());
+
+                        logged_first_rga = true;
+                    }
+                    write_idx = (write_idx + 1) % kFrameBufCount;
+                } else {
+                    ++frames_rga_fail;
+                }
+
+                consumer_.release_slot(frame->slot_index);
+            }
         }
 
         const auto now = std::chrono::steady_clock::now();
@@ -371,12 +466,20 @@ bool CameraPreviewPlayer::convert_frame_rga(const upc_ipc::IpcShmFrameView& fram
     if(!dst || dst_bytes == 0 || !frame.y_plane || pixel_stride_px_ == 0) {
         return false;
     }
+    if(frame.width != width_ || frame.height != height_) {
+        return false;
+    }
 
     const int w = static_cast<int>(frame.width);
     const int h = static_cast<int>(frame.height);
     const int stride_y = static_cast<int>(
         frame.stride_y > 0 ? frame.stride_y : frame.width);
     const int dst_stride_px = static_cast<int>(pixel_stride_px_);
+    const size_t need_dst =
+        static_cast<size_t>(dst_stride_px) * static_cast<size_t>(h) * 4u;
+    if(dst_bytes < need_dst || w <= 0 || h <= 0) {
+        return false;
+    }
 
     rga_buffer_t src = wrapbuffer_virtualaddr(
         const_cast<uint8_t*>(frame.y_plane), w, h,
@@ -385,24 +488,38 @@ bool CameraPreviewPlayer::convert_frame_rga(const upc_ipc::IpcShmFrameView& fram
     rga_buffer_t dst_buf = wrapbuffer_virtualaddr(
         dst, w, h, kDstRgaFormat, dst_stride_px, h);
 
-    const IM_STATUS st = imcvtcolor(src, dst_buf, kNv12RgaFormat, kDstRgaFormat);
-    const bool ok = (st == IM_STATUS_SUCCESS || st == IM_STATUS_NOERROR);
-    if(!ok) {
-        static std::atomic<uint32_t> fail_log_count{0};
-        const uint32_t n =
-            fail_log_count.fetch_add(1, std::memory_order_relaxed);
-        if(n < 8u) {
-            UPC_LOG_CAMERA_PREVIEW(Warn,
-                "RGA imcvtcolor fail #%u st=%d (%s) %dx%d stride_y=%d "
-                "dst_stride_px=%d dst_bytes=%zu",
-                n + 1u, static_cast<int>(st), rga_status_str(st), w, h, stride_y,
-                dst_stride_px, dst_bytes);
-        } else if(n == 8u) {
-            UPC_LOG_CAMERA_PREVIEW(Warn,
-                "RGA imcvtcolor fail (suppressing further warnings)");
+    const im_rect rect{0, 0, w, h};
+
+    for(int attempt = 0; attempt < kRgaRetryCount; ++attempt) {
+        IM_STATUS st = IM_STATUS_FAILED;
+        if(rga_cvtcolor_checked(src, dst_buf, rect, &st)) {
+            return true;
+        }
+
+        const bool last_attempt = (attempt + 1 >= kRgaRetryCount);
+        if(last_attempt) {
+            static std::atomic<uint32_t> fail_log_count{0};
+            const uint32_t n =
+                fail_log_count.fetch_add(1, std::memory_order_relaxed);
+            if(n < 8u) {
+                UPC_LOG_CAMERA_PREVIEW(Warn,
+                    "RGA cvt fail #%u st=%d (%s) %dx%d stride_y=%d "
+                    "dst_stride_px=%d attempt=%d/%d",
+                    n + 1u, static_cast<int>(st), rga_status_str(st),
+                    w, h, stride_y, dst_stride_px,
+                    attempt + 1, kRgaRetryCount);
+            } else if(n == 8u) {
+                UPC_LOG_CAMERA_PREVIEW(Warn,
+                    "RGA cvt fail (suppressing further warnings)");
+            }
+        }
+
+        if(!last_attempt) {
+            std::this_thread::sleep_for(
+                std::chrono::milliseconds(kRgaRetryDelayMs));
         }
     }
-    return ok;
+    return false;
 }
 
 void CameraPreviewPlayer::schedule_ui_timer()

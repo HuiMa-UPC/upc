@@ -1,5 +1,5 @@
 #include "mcu_link.hpp"
-#include "protocol_mcu.hpp"
+#include "protocol.hpp"
 #include "print_job_state.hpp"
 #include "parser_manager.hpp"
 #include "parser_worker.hpp"
@@ -59,6 +59,14 @@ void serial_log_rx_frame(const uint8_t* frame, size_t len)
 {
     serial_log_frame_hex("RX", frame, len);
 
+    if(serial_is_mcu_ack(frame, len)) {
+        UPC_LOG_MCU_LINK(Debug, "RX MCU_ACK port=%02X cmd=%02X type=%02X",
+            len >= 4 ? frame[3] : 0,
+            len >= 5 ? frame[4] : 0,
+            len >= 8 ? frame[7] : 0);
+        return;
+    }
+
     serial_sensor_report_t sensor{};
     serial_sensor_err_t serr = SERIAL_SENSOR_ERR_NONE;
     if(serial_parse_sensor_report_detail(frame, len, &sensor, &serr) == 0) {
@@ -85,6 +93,7 @@ void serial_log_rx_frame(const uint8_t* frame, size_t len)
     if(evt != SERIAL_EVT_NONE) {
         const char* evt_name = "UNKNOWN";
         switch(evt) {
+            case SERIAL_EVT_PRINT_PREPARING:    evt_name = "PRINT_PREPARING";    break;
             case SERIAL_EVT_PRINT_READY:        evt_name = "PRINT_READY";        break;
             case SERIAL_EVT_PRINT_CONDITION_OK: evt_name = "PRINT_CONDITION_OK"; break;
             default: break;
@@ -128,47 +137,7 @@ using frame_guess_fn  = size_t (*)(const uint8_t*, size_t);
 using frame_handle_fn = void (*)(const uint8_t*, size_t);
 
 /**
- * @brief TCP 帧长度猜测函数
- * @param buf   接收缓冲区指针
- * @param avail 缓冲区中可用字节数
- * @return 完整帧长度；0 表示数据不足，1 表示当前字节非法应跳过
- *
- * 协议格式：
- * - 心跳/状态帧：0xBE 0xEF 0x10 0x01 ...（固定 19 字节）
- * - 运动响应帧：0xBE 0xEF pkg_num ...（pkg_num ∈ [1,63]，总长度 3 + pkg_num*11）
- */
-size_t tcp_guess_frame_len(const uint8_t* buf, size_t avail)
-{
-    if(avail < 4) {
-        return 0; // 头信息不足，等待更多数据
-    }
-    // 检查同步字
-    if(buf[0] != 0xBE || buf[1] != 0xEF) {
-        return 1; // 非法字节，跳过
-    }
-    // 心跳/状态响应帧（固定 19 字节）
-    if(buf[2] == 0x10 && buf[3] == 0x01 && avail >= 19) {
-        return 19;
-    }
-    // 运动响应帧：pkg_num 表示包含多少个包的响应
-    const uint8_t pkg_num = buf[2];
-    if(pkg_num > 0 && pkg_num < 64) {
-        const size_t need = 3u + (size_t)pkg_num * 11u;
-        if(avail >= need) {
-            return need;
-        }
-        return 0; // 数据不足，等待
-    }
-    return 1; // 非法 pkg_num，跳过同步字后重试
-}
-
-/**
- * @brief TCP 帧处理函数
- * @param frame 完整帧数据指针
- * @param len   帧长度
- *
- * 当前仅处理心跳/状态响应帧，解析出 MCU 的 cmd_rate 与 data_rate，
- * 并更新到 PrintJobState 中，供背压控制和完成检测使用。
+ * @brief TCP 帧处理函数（MCU→SOC，Length+ID 格式）
  */
 void tcp_handle_frame(const uint8_t* frame, size_t len)
 {
@@ -182,34 +151,6 @@ void tcp_handle_frame(const uint8_t* frame, size_t len)
 }
 
 /**
- * @brief 串口帧长度猜测函数
- * @param buf   接收缓冲区指针
- * @param avail 可用字节数
- * @return 完整帧长度；0 表示不足，1 表示非法字节应跳过
- *
- * 串口协议：0x5A 0xA5 0xBB [3..5 保留] [6 payload_len] [payload] [checksum]
- * 总长度 = 8 + payload_len
- */
-size_t serial_guess_frame_len(const uint8_t* buf, size_t avail)
-{
-    if(avail < 7) {
-        return 0; // 头部长度不足
-    }
-    // 同步字检查
-    if(buf[0] != 0x5A || buf[1] != 0xA5) {
-        return 1; // 非法，跳过一字节
-    }
-    // 固定类型字节检查
-    if(buf[2] != 0xBB) {
-        return 1;
-    }
-    const uint8_t payload_len = buf[6];
-    const size_t frame_len = 8u + (size_t)payload_len;
-    return avail < frame_len ? 0 : frame_len;
-}
-
-
-/**
  * @brief 串口帧处理函数
  * @param frame 完整帧数据指针
  * @param len   帧长度
@@ -219,21 +160,7 @@ size_t serial_guess_frame_len(const uint8_t* buf, size_t avail)
  */
 void serial_handle_frame(const uint8_t* frame, size_t len)
 {
-#if UPC_DEBUG && UPC_MOD_MCU_LINK
-    serial_log_rx_frame(frame, len);
-#endif
-
-    serial_sensor_report_t sensor{};
-    serial_sensor_err_t serr = SERIAL_SENSOR_ERR_NONE;
-    if(serial_parse_sensor_report_detail(frame, len, &sensor, &serr) == 0) {
-        McuLink::instance().on_sensor_report(sensor);
-        return;
-    }
-
-    const serial_event_t evt = serial_parse_frame(frame, len);
-    if(evt != SERIAL_EVT_NONE) {
-        McuLink::instance().notify_serial_event(evt);
-    }
+    McuLink::instance().handle_serial_rx_frame(frame, len);
 }
 
 /**
@@ -484,6 +411,7 @@ void McuLink::stop()
         close(serial_fd_);
         serial_fd_ = -1;
     }
+    serial_clear_reliable();
 }
 
 /* ---------- 状态查询 ---------- */
@@ -597,15 +525,51 @@ void McuLink::notify_serial_event(serial_event_t evt)
 {
     const char* evt_name = "UNKNOWN";
     switch(evt) {
+        case SERIAL_EVT_PRINT_PREPARING:    evt_name = "PRINT_PREPARING";    break;
         case SERIAL_EVT_PRINT_CONDITION_OK: evt_name = "PRINT_CONDITION_OK"; break;
         case SERIAL_EVT_PRINT_READY:        evt_name = "PRINT_READY";        break;
         default:                            evt_name = "NONE";               break;
     }
     UPC_LOG_MCU_LINK(Info, "notify_serial_event: %s", evt_name);
+    if(evt == SERIAL_EVT_PRINT_PREPARING) {
+        return;
+    }
     if(evt == SERIAL_EVT_PRINT_CONDITION_OK) {
         serial_evt_condition_ok_.store(true);
     } else if(evt == SERIAL_EVT_PRINT_READY) {
         serial_evt_print_ready_.store(true);
+    }
+}
+
+void McuLink::handle_serial_rx_frame(const uint8_t* frame, size_t len)
+{
+#if UPC_DEBUG && UPC_MOD_MCU_LINK
+    serial_log_rx_frame(frame, len);
+#endif
+
+    if(serial_is_mcu_ack(frame, len)) {
+        on_serial_mcu_ack(frame, len);
+        return;
+    }
+
+    if(!serial_is_mcu_data(frame, len)) {
+        return;
+    }
+
+#if GLAVO_SERIAL_ACK_ENABLE
+    send_soc_ack_for_bb(frame, len);
+#endif
+
+    serial_sensor_report_t sensor{};
+    serial_sensor_err_t serr = SERIAL_SENSOR_ERR_NONE;
+    if(serial_parse_sensor_report_detail(frame, len, &sensor, &serr) == 0) {
+        on_sensor_report(sensor);
+        return;
+    }
+
+    const serial_event_t evt = serial_parse_frame(frame, len);
+    if(evt != SERIAL_EVT_NONE) {
+        notify_serial_event(evt);
     }
 }
 
@@ -658,7 +622,7 @@ void McuLink::tcp_drain_rx()
     };
     drain_framed_rx(recv_fn, chunk, sizeof(chunk),
                     tcp_rx_accum_, sizeof(tcp_rx_accum_), &tcp_rx_accum_len_,
-                    tcp_guess_frame_len,
+                    tcp_guess_rx_frame_len,
                     +[](const uint8_t* f, size_t l) { tcp_handle_frame(f, l); });
 }
 
@@ -674,6 +638,168 @@ int McuLink::serial_send_raw(const uint8_t* data, size_t len)
 #endif
     const ssize_t n = write(serial_fd_, data, len);
     return n == (ssize_t)len ? 0 : -1;
+}
+
+void McuLink::serial_clear_reliable()
+{
+    serial_reliable_pending_ = {};
+    serial_reliable_queue_.clear();
+}
+
+void McuLink::serial_start_reliable_item(const SerialReliableItem& item)
+{
+    if(item.len == 0 || item.len > sizeof(item.data)) {
+        return;
+    }
+
+    serial_reliable_pending_.active = true;
+    std::memcpy(serial_reliable_pending_.data, item.data, item.len);
+    serial_reliable_pending_.len = item.len;
+    serial_reliable_pending_.retry_count = 0;
+    serial_reliable_pending_.abort_print_on_fail = item.abort_print_on_fail;
+
+    serial_ack_key_t key{};
+    if(serial_extract_ack_key(item.data, item.len, &key) != 0) {
+        serial_reliable_pending_.active = false;
+        UPC_LOG_MCU_LINK(Warn, "serial reliable: bad AA key");
+        return;
+    }
+    serial_reliable_pending_.key = key;
+
+    serial_send_raw(item.data, item.len);
+    serial_reliable_pending_.deadline =
+        std::chrono::steady_clock::now() +
+        std::chrono::milliseconds(GLAVO_SERIAL_ACK_TIMEOUT_MS);
+
+    UPC_LOG_MCU_LINK(Debug,
+        "serial reliable TX port=%02X cmd=%02X type=%02X abort=%d",
+        key.port, key.cmd, key.type, item.abort_print_on_fail ? 1 : 0);
+}
+
+void McuLink::serial_advance_reliable_queue()
+{
+    serial_reliable_pending_.active = false;
+    if(serial_reliable_queue_.empty()) {
+        return;
+    }
+    const SerialReliableItem next = serial_reliable_queue_.front();
+    serial_reliable_queue_.pop_front();
+    serial_start_reliable_item(next);
+}
+
+void McuLink::serial_send_aa_reliable(const uint8_t* data, size_t len,
+                                      bool abort_print_on_fail)
+{
+    if(!data || len == 0 || len > sizeof(SerialReliableItem::data)) {
+        return;
+    }
+
+#if !GLAVO_SERIAL_ACK_ENABLE
+    serial_send_raw(data, len);
+    return;
+#endif
+
+    if(!serial_is_soc_data(data, len)) {
+        serial_send_raw(data, len);
+        return;
+    }
+
+    SerialReliableItem item{};
+    std::memcpy(item.data, data, len);
+    item.len = len;
+    item.abort_print_on_fail = abort_print_on_fail;
+
+    if(serial_reliable_pending_.active) {
+        serial_reliable_queue_.push_back(item);
+        return;
+    }
+    serial_start_reliable_item(item);
+}
+
+void McuLink::on_serial_mcu_ack(const uint8_t* frame, size_t len)
+{
+#if !GLAVO_SERIAL_ACK_ENABLE
+    (void)frame;
+    (void)len;
+    return;
+#endif
+    if(!serial_reliable_pending_.active) {
+        return;
+    }
+
+    serial_ack_key_t key{};
+    if(serial_extract_ack_key(frame, len, &key) != 0) {
+        return;
+    }
+    if(!serial_ack_keys_match(&key, &serial_reliable_pending_.key)) {
+        return;
+    }
+
+    UPC_LOG_MCU_LINK(Debug,
+        "serial reliable ACK port=%02X cmd=%02X type=%02X",
+        key.port, key.cmd, key.type);
+    serial_advance_reliable_queue();
+}
+
+void McuLink::send_soc_ack_for_bb(const uint8_t* frame, size_t len)
+{
+#if !GLAVO_SERIAL_ACK_ENABLE
+    (void)frame;
+    (void)len;
+    return;
+#endif
+    uint8_t ack[16];
+    const int alen = serial_build_soc_ack(frame, len, ack, sizeof(ack));
+    if(alen > 0) {
+        serial_send_raw(ack, (size_t)alen);
+    }
+}
+
+void McuLink::link_process_serial_reliable_tx()
+{
+#if !GLAVO_SERIAL_ACK_ENABLE
+    return;
+#endif
+    if(!serial_reliable_pending_.active) {
+        return;
+    }
+
+    const auto now = std::chrono::steady_clock::now();
+    if(now < serial_reliable_pending_.deadline) {
+        return;
+    }
+
+    if(serial_reliable_pending_.retry_count >= GLAVO_SERIAL_ACK_MAX_RETRY) {
+        UPC_LOG_MCU_LINK(Warn,
+            "serial reliable timeout port=%02X cmd=%02X type=%02X retries=%d",
+            serial_reliable_pending_.key.port,
+            serial_reliable_pending_.key.cmd,
+            serial_reliable_pending_.key.type,
+            serial_reliable_pending_.retry_count);
+
+        const bool abort = serial_reliable_pending_.abort_print_on_fail;
+        serial_clear_reliable();
+
+        if(abort) {
+            PrintJobState::instance().set_job_error(true);
+            parser::ParserManager::instance().stop_parse();
+            request_terminate();
+        }
+        return;
+    }
+
+    ++serial_reliable_pending_.retry_count;
+    serial_send_raw(serial_reliable_pending_.data,
+                    serial_reliable_pending_.len);
+    serial_reliable_pending_.deadline =
+        now + std::chrono::milliseconds(GLAVO_SERIAL_ACK_TIMEOUT_MS);
+
+    UPC_LOG_MCU_LINK(Warn,
+        "serial reliable retry #%d port=%02X cmd=%02X type=%02X",
+        serial_reliable_pending_.retry_count,
+        serial_reliable_pending_.key.port,
+        serial_reliable_pending_.key.cmd,
+        serial_reliable_pending_.key.type);
 }
 
 int McuLink::serial_recv_nonblock(uint8_t* buf, size_t buf_size)
@@ -699,7 +825,7 @@ void McuLink::serial_drain_rx()
     };
     drain_framed_rx(recv_fn, chunk, sizeof(chunk),
                     serial_rx_accum_, sizeof(serial_rx_accum_), &serial_rx_accum_len_,
-                    serial_guess_frame_len,
+                    serial_guess_rx_frame_len,
                     +[](const uint8_t* f, size_t l) { serial_handle_frame(f, l); });
 }
 
@@ -877,6 +1003,7 @@ void McuLink::reset_motion_state(bool clear_start_pending)
     serial_evt_print_ready_.store(false);
     sent_at_layer_ready_ = 0;
     tcp_stage_clear();
+    serial_clear_reliable();
     PrintJobState::instance().set_sending(false);
 }
 
@@ -907,7 +1034,7 @@ void McuLink::begin_sending_internal()
         const int slen = serial_build_print_request(sbuf, sizeof(sbuf));
         if(slen > 0) {
             UPC_LOG_MCU_LINK(Info, "serial TX cmd: PRINT_REQUEST");
-            serial_send_raw(sbuf, (size_t)slen);
+            serial_send_aa_reliable(sbuf, (size_t)slen, true);
         }
         waiting_layer_.store(true);
         serial_handshake_phase_.store(SERIAL_HS_WAIT_CONDITION_OK);
@@ -977,7 +1104,7 @@ void McuLink::send_serial_print_terminate()
         const int slen = serial_build_print_terminate(sbuf, sizeof(sbuf));
         if(slen > 0) {
             UPC_LOG_MCU_LINK(Info, "serial TX cmd: PRINT_TERMINATE");
-            serial_send_raw(sbuf, (size_t)slen);
+            serial_send_aa_reliable(sbuf, (size_t)slen, false);
         }
     }
 #endif
@@ -991,7 +1118,7 @@ void McuLink::send_serial_print_finished()
         const int slen = serial_build_print_finished(sbuf, sizeof(sbuf));
         if(slen > 0) {
             UPC_LOG_MCU_LINK(Info, "serial TX cmd: PRINT_FINISHED");
-            serial_send_raw(sbuf, (size_t)slen);
+            serial_send_aa_reliable(sbuf, (size_t)slen, false);
         }
     }
 #endif
@@ -1055,7 +1182,7 @@ void McuLink::link_process_serial_handshake()
         if(slen > 0) {
             UPC_LOG_MCU_LINK(Info, "serial TX cmd: PRINT_START (layer=%u um)",
                 static_cast<unsigned>(first_layer_height_um_));
-            serial_send_raw(sbuf, (size_t)slen);
+            serial_send_aa_reliable(sbuf, (size_t)slen, true);
         }
         serial_handshake_phase_.store(SERIAL_HS_WAIT_PRINT_READY);
         serial_evt_print_ready_.store(false);
@@ -1139,7 +1266,7 @@ void McuLink::link_try_layer_serial_dispatch()
     if(slen > 0) {
         UPC_LOG_MCU_LINK(Info, "serial TX cmd: LAYER_DONE (next_layer=%u um)",
             static_cast<unsigned>(active_layer_height_um_));
-        serial_send_raw(sbuf, (size_t)slen);
+        serial_send_aa_reliable(sbuf, (size_t)slen, true);
     }
     layer_drain_pending_.store(false);
     // 转入等待 PRINT_READY 状态
@@ -1375,6 +1502,7 @@ void McuLink::link_thread_fn()
             // ---------- 串口 TX 队列与 RX、握手 ----------
             drain_serial_tx_queue();
             serial_drain_rx();
+            link_process_serial_reliable_tx();
             link_process_serial_handshake();
 
             // ---------- 开始发送（处理挂起的 begin_sending） ----------
