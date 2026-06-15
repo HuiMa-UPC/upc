@@ -4,7 +4,7 @@
 #include "upc_sys_monitor.hpp"
 #include "rs_log.hpp"
 #include "glavo_service.hpp"
-#include "tcp_sender.hpp"
+#include "mcu_link.hpp"
 #include "device_config.hpp"
 
 #include <chrono>
@@ -60,8 +60,8 @@ int start_glavo(char daemon) {
         return 6;
     }
 
-    auto& tcp = upc::glavo::TcpSender::instance();
-    while (tcp.connect_tcp(GLAVO_TCP_DEFAULT_IP, GLAVO_TCP_DEFAULT_PORT) != 0) {
+    auto& mcu = upc::glavo::McuLink::instance();
+    while (mcu.connect_tcp(GLAVO_TCP_DEFAULT_IP, GLAVO_TCP_DEFAULT_PORT) != 0) {
         std::this_thread::sleep_for(
             std::chrono::milliseconds(TCP_RECONNECT_INTERVAL_MS));
         if (g_shutdown_requested) {
@@ -72,7 +72,7 @@ int start_glavo(char daemon) {
         }
     }
 
-    while (tcp.open_serial(GLAVO_SERIAL_DEFAULT_DEVICE, GLAVO_SERIAL_DEFAULT_BAUD) != 0) {
+    while (mcu.open_serial(GLAVO_SERIAL_DEFAULT_DEVICE, GLAVO_SERIAL_DEFAULT_BAUD) != 0) {
         std::this_thread::sleep_for(
             std::chrono::milliseconds(TCP_RECONNECT_INTERVAL_MS));
         if (g_shutdown_requested) {
@@ -83,7 +83,7 @@ int start_glavo(char daemon) {
         }
     }
 
-    tcp.start_link_thread();
+    mcu.start_link_thread();
     glavo_service.start();
 
     std::printf("%s ready (IPC %s, waiting for UI peer)\n",

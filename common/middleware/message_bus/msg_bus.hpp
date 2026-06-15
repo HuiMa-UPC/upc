@@ -73,8 +73,13 @@ public:
     [[nodiscard]] size_t pending_count() const noexcept;
     [[nodiscard]] bool is_full() const noexcept;
     [[nodiscard]] size_t subscriber_count() const noexcept;
+
+    // MsgBus(const MsgBus&) = delete;
+	// MsgBus& operator=(const MsgBus&) = delete;
     
 private:
+    
+
     struct Subscriber {
         uint32_t id;
         MsgType type;           // MsgType{0} = 订阅所有

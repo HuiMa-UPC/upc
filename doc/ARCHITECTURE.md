@@ -1,0 +1,60 @@
+# 项目架构索引（单一真相）
+
+> Agent / 开发者改模块前先查此表。细节见各模块 `*.md`，不要在此重复长文。
+
+## 进程
+
+| 进程 | 可执行文件 | 入口 | 模块文档 | 日志 |
+|------|------------|------|----------|------|
+| UI | `rongsu_ui` | `ui/main.cpp` | [ui/UI.md](../ui/UI.md) | `/var/log/rongsu_ui.log` |
+| Glavo | `rongsu_glavo` | `glavo/main.cpp` | [glavo/GLAVO.md](../glavo/GLAVO.md) | `/var/log/rongsu_glavo.log` |
+| 相机测试 | `test_camera` | `test/camera/main.cpp` | [test/TEST.md](../test/TEST.md) | `/var/log/test_camera.log` |
+
+启动：`scripts/rongsu.sh start`（先后端、再 UI）。
+
+## 顶层目录
+
+| 目录 | 文档 | 职责 |
+|------|------|------|
+| `ui/` | [UI.md](../ui/UI.md) | LVGL 界面、UiMsgProxy、IPC Hub 客户端 |
+| `glavo/` | [GLAVO.md](../glavo/GLAVO.md) | 打印编排、McuLink、IPC Server |
+| `test/` | [TEST.md](../test/TEST.md) | 独立测试进程（camera 等） |
+| `common/` | [COMMON.md](../common/COMMON.md) | 契约、middleware、ipc、debug、process |
+| `parser/` | [PARSER.md](../parser/PARSER.md) | G-code/OVF 解析库（Glavo 链接） |
+
+## Glavo 库（`glavo/lib/`）
+
+| 符号 | 路径 | 一句话 |
+|------|------|--------|
+| `GlavoService` | `glavo_service.*` | IPC 业务编排（打印/目录/门控） |
+| `McuLink` | `mcu_link.*` | TCP 运动 + 串口握手/传感器 |
+| `protocol_mcu` | `protocol_mcu.*` | MCU 帧编解码（无 I/O） |
+| `ServiceBase` | `service_base.*` | MsgBus 生命周期 + 工作线程 |
+| `PrintJobState` | `print_job_state.*` | 打印任务计数/状态 |
+
+## 数据流（打印）
+
+```
+UI → IPC → GlavoService → ParserManager → RingBuffer
+                              ↓
+                         McuLink → TCP（运动）+ 串口（握手/传感器）
+```
+
+## 跨模块红线
+
+- UI **禁止**链接 `glavo/lib`、`parser/` 业务库
+- Glavo **禁止**链接 `lvgl`
+- 跨进程回复 UI：**必须** `publish_async()`，目标 `ModuleId::UI`
+- 消息契约：**只改** `common/contract/README.md` + `msg_types.hpp`（四步流程）
+- MCU 协议实现：`protocol_mcu.*` + `mcu_link.*`（无独立 YAML 表时以代码为准）
+
+## 文档与 Agent 入口
+
+| 类型 | 路径 |
+|------|------|
+| 架构索引 | `doc/ARCHITECTURE.md`（本文件） |
+| 模块说明 | `{ui,glavo,test,common,parser}/*.md`、`common/{ipc,middleware}/*.md` |
+| Cursor Rules | `.cursor/rules/*.mdc` |
+| 并发检查 MCP | `.cursor/mcp/cpp-concurrency-check.py` |
+| 日志 | [doc/LOG_GUIDE.md](LOG_GUIDE.md) |
+| 消息契约 | [common/contract/README.md](../common/contract/README.md) |

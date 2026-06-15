@@ -5,7 +5,7 @@
 #include "parser_manager.hpp"
 #include "parser_registry.hpp"
 #include "parser_worker.hpp"
-#include "tcp_sender.hpp"
+#include "mcu_link.hpp"
 #include "print_job_state.hpp"
 #include "msg_types.hpp"
 #include "buffer_pool.hpp"
@@ -106,9 +106,9 @@ GlavoService::~GlavoService() {
 bool GlavoService::do_init() {
     parser::ParserContext::instance().load_calibration(CAL_DEFAULT_FILE_PATH);
     glavo_parser_bind_init();
-    TcpSender::instance().set_job_event_callback(
-        [this](TcpJobEvent ev) { on_tcp_job_event(ev); });
-    TcpSender::instance().set_progress_callback(
+    McuLink::instance().set_job_event_callback(
+        [this](McuLinkEvent ev) { on_mcu_link_event(ev); });
+    McuLink::instance().set_progress_callback(
         [this]() { on_motion_batch_sent(); });
     return true;
 }
@@ -170,7 +170,7 @@ void GlavoService::handle_message(const middleware::Message& msg) {
 }
 
 void GlavoService::handle_pm25_request(const middleware::Message& msg) {
-    const auto env = TcpSender::instance().env_snapshot();
+    const auto env = McuLink::instance().env_snapshot();
     middleware::Pm25ResultPayload p{};
     p.is_high   = (env.valid && env.pm25_cabin > 35.0f) ? 1 : 0;
     p.pm25_cabin = env.valid ? env.pm25_cabin : 0.f;
@@ -218,19 +218,19 @@ void GlavoService::handle_purify_request(const middleware::Message& msg) {
     UPC_LOG_GLAVO_SERVICE(Debug, "purify_req: not implemented");
 }
 
-void GlavoService::on_tcp_job_event(TcpJobEvent ev) {
+void GlavoService::on_mcu_link_event(McuLinkEvent ev) {
     switch(ev) {
-        case TcpJobEvent::PrintCompleted:
+        case McuLinkEvent::PrintCompleted:
             UPC_LOG_GLAVO_SERVICE(Info, "tcp_job_event: PrintCompleted");
             send_print_progress(true);
             print_running_.store(false);
             break;
-        case TcpJobEvent::TerminateDone:
+        case McuLinkEvent::TerminateDone:
             UPC_LOG_GLAVO_SERVICE(Info, "tcp_job_event: TerminateDone");
             print_running_.store(false);
             publish_terminate_done();
             break;
-        case TcpJobEvent::PrintError:
+        case McuLinkEvent::PrintError:
             UPC_LOG_GLAVO_SERVICE(Warn, "tcp_job_event: PrintError");
             print_running_.store(false);
             publish_terminate_done();
@@ -300,7 +300,7 @@ void GlavoService::send_print_progress(bool force_complete) {
 
     last_print_pct_ = pct;
 
-    const auto env = TcpSender::instance().env_snapshot();
+    const auto env = McuLink::instance().env_snapshot();
 
     middleware::PrintProgressPayload p{};
     p.progress_percent  = pct;
@@ -439,8 +439,8 @@ void GlavoService::handle_file_info_req(const middleware::Message& msg) {
         if (stat(full_path.c_str(), &st) == 0) {
             rsp.file_size = static_cast<uint32_t>(st.st_size);
             stop_print_job();
-            if(TcpSender::instance().is_sending()) {
-                TcpSender::instance().request_terminate();
+            if(McuLink::instance().is_sending()) {
+                McuLink::instance().request_terminate();
             }
             if(parser::ParserManager::instance().open_file(full_path) == 0) {
                 parser::IParserWorker* parser = active_parser();
@@ -494,8 +494,8 @@ void GlavoService::handle_print_start(const middleware::Message& msg) {
 
     if(!already_parsing) {
         stop_print_job();
-        if(TcpSender::instance().is_sending()) {
-            TcpSender::instance().request_terminate();
+        if(McuLink::instance().is_sending()) {
+            McuLink::instance().request_terminate();
         }
         if(parser::ParserManager::instance().open_file(full_path) != 0) {
             UPC_LOG_GLAVO_SERVICE(Error, "print_start: open failed");
@@ -509,7 +509,7 @@ void GlavoService::handle_print_start(const middleware::Message& msg) {
 
     print_running_.store(true);
     reset_print_progress_state();
-    TcpSender::instance().begin_sending();
+    McuLink::instance().begin_sending();
 
     UPC_LOG_GLAVO_SERVICE(Info, "print_start: index=%u", req.file_index);
 }
@@ -524,7 +524,7 @@ void GlavoService::handle_print_terminate(const middleware::Message& msg) {
     UPC_LOG_GLAVO_SERVICE(Info, "print_terminate requested");
     print_running_.store(false);
     parser::ParserManager::instance().stop_parse();
-    TcpSender::instance().request_terminate();
+    McuLink::instance().request_terminate();
 }
 
 } // namespace upc::glavo

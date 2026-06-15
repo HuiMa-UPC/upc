@@ -4,7 +4,7 @@
 /** Glavo 侧 IPC API：处理 UI 请求、推送 Ntf/Rsp。契约见 common/contract/README.md */
 
 #include "service_base.hpp"
-#include "tcp_sender.hpp"
+#include "mcu_link.hpp"
 #include "msg_types.hpp"
 #include <atomic>
 #include <cstring>
@@ -36,7 +36,7 @@ private:
 
     void send_dir_open_empty(const middleware::Message& req);
     void stop_print_job();
-    void on_tcp_job_event(TcpJobEvent ev);
+    void on_mcu_link_event(McuLinkEvent ev);
     void on_motion_batch_sent();
     void publish_terminate_done();
     void reset_print_progress_state();

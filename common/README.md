@@ -88,7 +88,7 @@
 
 | MsgType（当前枚举） | 规范名（新消息参照） | 方向 | Payload | UI API | Glavo 处理 |
 |---------------------|----------------------|------|---------|--------|------------|
-| `APP_Update_Ntf` | `GLAVO_Env_Update_Ntf` | Glavo→UI | `EnvSnapshotPayload` | `register_env_update` | `TcpSender` 推送 |
+| `APP_Update_Ntf` | `GLAVO_Env_Update_Ntf` | Glavo→UI | `EnvSnapshotPayload` | `register_env_update` | `McuLink` 推送 |
 | `UI_PM25_Req` | — | UI→Glavo | Empty | `send_pm25_check` | `handle_pm25_req` |
 | `APP_PM25_Rsp` | `GLAVO_PM25_Check_Rsp` | Glavo→UI | `Pm25ResultPayload` | `register_pm25_result` | PM2.5 流程 |
 | `UI_CLOSE_DOOR_Req` | — | UI→Glavo | Empty | `send_close_door_check` | 关门检测 |
@@ -214,4 +214,4 @@ enum class ModuleId : uint32_t {
 | `common/ipc/ipc_endpoint.*` | Socket 传输 | 平台组 |
 | `common/ipc/ipc_msg_bus.*` | 单 peer 路由（待扩展 broker） | 平台组 |
 | `ui/lib/core/ui_msg_proxy.*` | UI 侧 API | UI 组 |
-| `glavo/lib/glavo/glavo_service.*` | Glavo 侧 API | Glavo 组 |
+| `glavo/lib/glavo_service.*` | Glavo 侧 API | Glavo 组 |

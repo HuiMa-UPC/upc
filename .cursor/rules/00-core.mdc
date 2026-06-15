@@ -1,0 +1,13 @@
+---
+description: 全项目红线与文档入口；改代码前先查 doc/ARCHITECTURE.md
+alwaysApply: true
+---
+
+# 核心约定
+
+1. **模块文档**：`ui/UI.md`、`glavo/GLAVO.md`、`parser/PARSER.md`、`test/TEST.md`、`common/COMMON.md`；子模块 `common/ipc/IPC.md`、`common/middleware/MIDDLEWARE.md`
+2. **架构索引**：`doc/ARCHITECTURE.md`（进程/符号/路径表 — 重命名模块先改此处）
+3. **消息契约**：改 MsgType/Payload 走 `common/contract/README.md` 四步 + `msg_types.hpp`
+4. **链接边界**：UI 禁止 glavo/lib；Glavo 禁止 lvgl；test 禁止 ui/glavo 业务库
+5. **跨进程**：回复 UI 必须 `publish_async()`，目标 `ModuleId::UI`
+6. **并发检查**（可选）：MCP `cpp-concurrency` 的 `scan_hotspots`

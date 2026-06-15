@@ -3,7 +3,7 @@
 
 namespace upc::glavo {
 
-/** 将 upc::parser 的 RingBuffer 输出绑定到 TcpSender */
+/** 将 upc::parser 的 RingBuffer 输出绑定到 McuLink */
 void glavo_parser_bind_init();
 
 } // namespace upc::glavo

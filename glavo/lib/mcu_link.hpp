@@ -1,5 +1,5 @@
-#ifndef TCP_SENDER_HPP
-#define TCP_SENDER_HPP
+#ifndef MCU_LINK_HPP
+#define MCU_LINK_HPP
 
 #include "slice_ring_buffer.hpp"
 #include "parser_config.hpp"
@@ -17,20 +17,20 @@
 namespace upc::glavo {
 
 /**
- * @brief TCP 发送器链路事件枚举
+ * @brief MCU 链路（TCP + 串口）打印任务事件
  *
- * 用于向上层（如 UI 或打印控制逻辑）报告打印任务的最终状态变化。
+ * 用于向上层（GlavoService / UI）报告打印完成、终止或错误。
  */
-enum class TcpJobEvent : uint8_t {
+enum class McuLinkEvent : uint8_t {
     PrintCompleted = 0, /**< 打印自然完成（RingBuffer 已空、解析器已结束且 MCU 缓存已排空） */
     TerminateDone,      /**< 用户手动终止或异常中断后的清理已完成 */
     PrintError,         /**< 打印过程中发生错误（如 TCP 断线）导致的终止 */
 };
 
-/** @brief 链路事件回调类型：接收到 TcpJobEvent 时通知上层 */
-using TcpJobEventCb = std::function<void(TcpJobEvent)>;
+/** @brief 链路事件回调类型：接收到 McuLinkEvent 时通知上层 */
+using McuLinkEventCb = std::function<void(McuLinkEvent)>;
 /** @brief 进度回调类型：每成功下发一批运动包后触发，用于更新进度条等 UI */
-using TcpProgressCb = std::function<void()>;
+using McuLinkProgressCb = std::function<void()>;
 
 /** @brief 环境传感器缓存（串口 0x9B 上报解析结果，供 UI/打印进度读取） */
 struct EnvSnapshotCache {
@@ -43,11 +43,11 @@ struct EnvSnapshotCache {
 };
 
 /**
- * @brief 振镜 TCP/串口链路线程管理类（单例）
+ * @brief MCU 双通道链路管理（TCP 运动 + 串口握手/传感器，单例）
  *
  * 职责：
- * - 维护与振镜控制板的 TCP 长连接（非阻塞）及心跳；
- * - 维护与 MCU 的串口通信（换层同步、打印状态握手）；
+ * - TCP：与振镜控制板长连接、心跳、运动包批量下发、MCU 速率反馈；
+ * - 串口：打印握手、换层、终止/完成、环境传感器上报；
  * - 从 RingBuffer 批量取运动包，按协议组帧后下发；
  * - 处理换层标记（Layer Mark），通过串口与 MCU 进行层间握手；
  * - 支持用户主动终止（terminate）与自然完成两种结束路径。
@@ -55,22 +55,22 @@ struct EnvSnapshotCache {
  * 线程模型：所有网络/串口 I/O 与协议处理集中在独立的 link_thread_fn 线程中，
  * 对外接口仅做状态设置与原子标志操作，避免跨线程直接操作 fd。
  */
-class TcpSender {
+class McuLink {
 public:
-    /** @brief 获取 TcpSender 单例实例 */
-    static TcpSender& instance();
+    /** @brief 获取 McuLink 单例实例 */
+    static McuLink& instance();
 
     /** @brief 绑定 RingBuffer，作为运动包的数据来源 */
     void bind_ring_buffer(upc::parser::RingBuffer* rb);
 
     /** @brief 设置链路事件回调（如打印完成、终止完成） */
-    void set_job_event_callback(TcpJobEventCb cb);
+    void set_job_event_callback(McuLinkEventCb cb);
 
     /**
      * @brief 设置进度回调
      * @note 每成功下发一批运动包后，在链路线程中调用。
      */
-    void set_progress_callback(TcpProgressCb cb);
+    void set_progress_callback(McuLinkProgressCb cb);
 
     /**
      * @brief 建立 TCP 连接（阻塞式单次尝试）
@@ -136,10 +136,10 @@ public:
     void drain_serial_tx_queue();
 
 private:
-    TcpSender();
-    ~TcpSender();
-    TcpSender(const TcpSender&) = delete;
-    TcpSender& operator=(const TcpSender&) = delete;
+    McuLink();
+    ~McuLink();
+    McuLink(const McuLink&) = delete;
+    McuLink& operator=(const McuLink&) = delete;
 
     /** @brief 链路线程主函数：负责心跳、RX 排空、运动包下发、状态机推进 */
     void link_thread_fn();
@@ -207,7 +207,7 @@ private:
     void run_manual_terminate_cleanup();
     /** @brief 执行自然完成后的清理：发 finished、回调 PrintCompleted */
     void run_natural_complete_cleanup();
-    void emit_event(TcpJobEvent ev);
+    void emit_event(McuLinkEvent ev);
     void poll_mcu_drain_heartbeat();
 
     /** @brief 判断 MCU 的指令缓存与数据缓存是否均已排空 */
@@ -219,8 +219,8 @@ private:
 
     /* ---------- 核心依赖 ---------- */
     upc::parser::RingBuffer* rb_ = nullptr;          /**< 绑定的 RingBuffer，运动包来源 */
-    TcpJobEventCb event_cb_;            /**< 链路事件回调 */
-    TcpProgressCb progress_cb_;         /**< 进度更新回调 */
+    McuLinkEventCb event_cb_;            /**< 链路事件回调 */
+    McuLinkProgressCb progress_cb_;         /**< 进度更新回调 */
 
     /* ---------- 网络/串口配置 ---------- */
     char tcp_ip_[64] = GLAVO_TCP_DEFAULT_IP; /**< 当前连接或重连使用的 IP */

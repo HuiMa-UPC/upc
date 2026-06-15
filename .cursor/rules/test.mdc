@@ -1,0 +1,13 @@
+---
+description: test 进程 — test_camera、SHM、IPC server
+globs: test/**
+alwaysApply: false
+---
+
+# test/
+
+读 [test/TEST.md](../../test/TEST.md)。
+
+- 独立进程，不链接 lvgl / upc_glavo
+- `test_camera`：IPC server + SHM 预览数据源
+- 与 UI 的 CameraMsgProxy / CameraPreviewPlayer 配合

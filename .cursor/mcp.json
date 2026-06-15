@@ -1,0 +1,8 @@
+{
+    "mcpServers": {
+      "cpp-concurrency": {
+        "command": "python3",
+        "args": ["${workspaceFolder}/.cursor/mcp/cpp-concurrency-check.py"]
+      }
+    }
+  }

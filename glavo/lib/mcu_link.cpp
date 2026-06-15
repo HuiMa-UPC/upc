@@ -1,4 +1,4 @@
-#include "tcp_sender.hpp"
+#include "mcu_link.hpp"
 #include "protocol_mcu.hpp"
 #include "print_job_state.hpp"
 #include "parser_manager.hpp"
@@ -32,7 +32,7 @@ parser::IParserWorker* active_parser()
     return parser::ParserManager::instance().active();
 }
 
-#if UPC_DEBUG && UPC_MOD_TCP_SENDER
+#if UPC_DEBUG && UPC_MOD_MCU_LINK
 
 /** 串口帧十六进制转储（5A A5 AA/BB …）；单条最多展示 64 字节 */
 void serial_log_frame_hex(const char* dir, const uint8_t* data, size_t len)
@@ -52,7 +52,7 @@ void serial_log_frame_hex(const char* dir, const uint8_t* data, size_t len)
     if(len > show && pos + 16 < sizeof(hex)) {
         std::snprintf(hex + pos, sizeof(hex) - pos, " ... +%zuB", len - show);
     }
-    UPC_LOG_TCP_SENDER(Debug, "SERIAL_%s frame[%zu] %s", dir, len, hex);
+    UPC_LOG_MCU_LINK(Debug, "SERIAL_%s frame[%zu] %s", dir, len, hex);
 }
 
 void serial_log_rx_frame(const uint8_t* frame, size_t len)
@@ -62,7 +62,7 @@ void serial_log_rx_frame(const uint8_t* frame, size_t len)
     serial_sensor_report_t sensor{};
     serial_sensor_err_t serr = SERIAL_SENSOR_ERR_NONE;
     if(serial_parse_sensor_report_detail(frame, len, &sensor, &serr) == 0) {
-        UPC_LOG_TCP_SENDER(Debug,
+        UPC_LOG_MCU_LINK(Debug,
             "RX SENSOR OK O2=%.1f%% press=%d mbar temp=%.1fC hum=%.1f%% "
             "PM2.5=%.0f powder=%u seq=%u",
             sensor.oxygen_percent,
@@ -76,7 +76,7 @@ void serial_log_rx_frame(const uint8_t* frame, size_t len)
     }
 
     if(serial_frame_is_sensor_report(frame, len)) {
-        UPC_LOG_TCP_SENDER(Warn, "RX SENSOR FAIL len=%zu err=%s",
+        UPC_LOG_MCU_LINK(Warn, "RX SENSOR FAIL len=%zu err=%s",
             len, serial_sensor_err_string(serr));
         return;
     }
@@ -89,12 +89,12 @@ void serial_log_rx_frame(const uint8_t* frame, size_t len)
             case SERIAL_EVT_PRINT_CONDITION_OK: evt_name = "PRINT_CONDITION_OK"; break;
             default: break;
         }
-        UPC_LOG_TCP_SENDER(Info, "RX LAYER event=%s len=%zu", evt_name, len);
+        UPC_LOG_MCU_LINK(Info, "RX LAYER event=%s len=%zu", evt_name, len);
         return;
     }
 
     if(len >= 3 && frame[0] == 0x5A && frame[1] == 0xA5 && frame[2] == 0xBB) {
-        UPC_LOG_TCP_SENDER(Warn,
+        UPC_LOG_MCU_LINK(Warn,
             "RX SERIAL UNKNOWN len=%zu port=%02X cmd=%02X seq=%u len_field=%u",
             len,
             len >= 4 ? frame[3] : 0,
@@ -104,7 +104,7 @@ void serial_log_rx_frame(const uint8_t* frame, size_t len)
         return;
     }
 
-    UPC_LOG_TCP_SENDER(Warn, "RX SERIAL BAD len=%zu", len);
+    UPC_LOG_MCU_LINK(Warn, "RX SERIAL BAD len=%zu", len);
 }
 #endif
 
@@ -214,25 +214,25 @@ size_t serial_guess_frame_len(const uint8_t* buf, size_t avail)
  * @param frame 完整帧数据指针
  * @param len   帧长度
  *
- * 解析帧为串口事件，并通过 TcpSender 单例分发到 notify_serial_event，
+ * 解析帧为串口事件，并通过 McuLink 单例分发到 notify_serial_event，
  * 驱动串口握手状态机前进。
  */
 void serial_handle_frame(const uint8_t* frame, size_t len)
 {
-#if UPC_DEBUG && UPC_MOD_TCP_SENDER
+#if UPC_DEBUG && UPC_MOD_MCU_LINK
     serial_log_rx_frame(frame, len);
 #endif
 
     serial_sensor_report_t sensor{};
     serial_sensor_err_t serr = SERIAL_SENSOR_ERR_NONE;
     if(serial_parse_sensor_report_detail(frame, len, &sensor, &serr) == 0) {
-        TcpSender::instance().on_sensor_report(sensor);
+        McuLink::instance().on_sensor_report(sensor);
         return;
     }
 
     const serial_event_t evt = serial_parse_frame(frame, len);
     if(evt != SERIAL_EVT_NONE) {
-        TcpSender::instance().notify_serial_event(evt);
+        McuLink::instance().notify_serial_event(evt);
     }
 }
 
@@ -309,39 +309,39 @@ void drain_framed_rx(int (*recv_fn)(uint8_t*, size_t),
 
 /* ---------- 单例与生命周期 ---------- */
 
-TcpSender& TcpSender::instance()
+McuLink& McuLink::instance()
 {
-    static TcpSender inst;
+    static McuLink inst;
     return inst;
 }
 
-TcpSender::TcpSender() = default;
+McuLink::McuLink() = default;
 
-TcpSender::~TcpSender()
+McuLink::~McuLink()
 {
     stop(); // 确保析构时线程已结束、fd 已关闭
 }
 
 /* ---------- 依赖注入与回调设置 ---------- */
 
-void TcpSender::bind_ring_buffer(parser::RingBuffer* rb)
+void McuLink::bind_ring_buffer(parser::RingBuffer* rb)
 {
     rb_ = rb;
 }
 
-void TcpSender::set_job_event_callback(TcpJobEventCb cb)
+void McuLink::set_job_event_callback(McuLinkEventCb cb)
 {
     event_cb_ = std::move(cb);
 }
 
-void TcpSender::set_progress_callback(TcpProgressCb cb)
+void McuLink::set_progress_callback(McuLinkProgressCb cb)
 {
     progress_cb_ = std::move(cb);
 }
 
 /* ---------- 静态工具 ---------- */
 
-bool TcpSender::set_tcp_nodelay(int sockfd)
+bool McuLink::set_tcp_nodelay(int sockfd)
 {
     int flag = 1;
     return setsockopt(sockfd, IPPROTO_TCP, TCP_NODELAY, &flag, sizeof(flag)) == 0;
@@ -349,7 +349,7 @@ bool TcpSender::set_tcp_nodelay(int sockfd)
 
 /* ---------- TCP 连接 ---------- */
 
-int TcpSender::connect_tcp(const char* ip, int port)
+int McuLink::connect_tcp(const char* ip, int port)
 {
     if(!ip || port <= 0) {
         return -1; // 参数非法
@@ -380,7 +380,7 @@ int TcpSender::connect_tcp(const char* ip, int port)
 
     // 禁用 Nagle 算法，确保小帧及时发出
     if(!set_tcp_nodelay(fd)) {
-        UPC_LOG_TCP_SENDER(Warn, "TCP_NODELAY set failed");
+        UPC_LOG_MCU_LINK(Warn, "TCP_NODELAY set failed");
     }
 
     // 设为非阻塞模式，方便链路线程做轮询式收发
@@ -394,13 +394,13 @@ int TcpSender::connect_tcp(const char* ip, int port)
     tcp_fd_ = fd;
     tcp_rx_accum_len_ = 0; // 清空接收累积区
 
-    UPC_LOG_TCP_SENDER(Info, "TCP connected %s:%d (NODELAY=1)", ip, port);
+    UPC_LOG_MCU_LINK(Info, "TCP connected %s:%d (NODELAY=1)", ip, port);
     return 0;
 }
 
 /* ---------- 串口打开与配置 ---------- */
 
-int TcpSender::open_serial(const char* device, int baud)
+int McuLink::open_serial(const char* device, int baud)
 {
     if(!device) {
         return -1;
@@ -448,13 +448,13 @@ int TcpSender::open_serial(const char* device, int baud)
     serial_fd_ = fd;
     serial_rx_accum_len_ = 0;
 
-    UPC_LOG_TCP_SENDER(Info, "serial open %s @ %d", device, baud);
+    UPC_LOG_MCU_LINK(Info, "serial open %s @ %d", device, baud);
     return 0;
 }
 
 /* ---------- 链路线程控制 ---------- */
 
-void TcpSender::start_link_thread()
+void McuLink::start_link_thread()
 {
     if(link_run_.load()) {
         return; // 已在运行
@@ -464,10 +464,10 @@ void TcpSender::start_link_thread()
     if(link_th_.joinable()) {
         link_th_.join(); // 等待旧线程结束（理论上不应发生）
     }
-    link_th_ = std::thread(&TcpSender::link_thread_fn, this);
+    link_th_ = std::thread(&McuLink::link_thread_fn, this);
 }
 
-void TcpSender::stop()
+void McuLink::stop()
 {
     // 设置停止标志
     link_stop_.store(true);
@@ -488,19 +488,19 @@ void TcpSender::stop()
 
 /* ---------- 状态查询 ---------- */
 
-bool TcpSender::is_tcp_connected() const { return tcp_fd_ >= 0; }
-bool TcpSender::is_sending() const { return is_sending_.load(); }
+bool McuLink::is_tcp_connected() const { return tcp_fd_ >= 0; }
+bool McuLink::is_sending() const { return is_sending_.load(); }
 
 /* ---------- 事件与回调 ---------- */
 
-void TcpSender::emit_event(TcpJobEvent ev)
+void McuLink::emit_event(McuLinkEvent ev)
 {
     if(event_cb_) {
         event_cb_(ev);
     }
 }
 
-void TcpSender::enqueue_serial_tx(const uint8_t* data, size_t len)
+void McuLink::enqueue_serial_tx(const uint8_t* data, size_t len)
 {
     if(!data || len == 0 || len > sizeof(SerialTxItem::data)) {
         return;
@@ -515,13 +515,13 @@ void TcpSender::enqueue_serial_tx(const uint8_t* data, size_t len)
     serial_tx_queue_.push_back(item);
 }
 
-EnvSnapshotCache TcpSender::env_snapshot() const
+EnvSnapshotCache McuLink::env_snapshot() const
 {
     std::lock_guard<std::mutex> lock(env_mtx_);
     return env_cache_;
 }
 
-void TcpSender::drain_serial_tx_queue()
+void McuLink::drain_serial_tx_queue()
 {
     if(serial_fd_ < 0) {
         return;
@@ -540,7 +540,7 @@ void TcpSender::drain_serial_tx_queue()
     }
 }
 
-void TcpSender::on_sensor_report(const serial_sensor_report_t& report)
+void McuLink::on_sensor_report(const serial_sensor_report_t& report)
 {
     {
         std::lock_guard<std::mutex> lock(env_mtx_);
@@ -554,7 +554,7 @@ void TcpSender::on_sensor_report(const serial_sensor_report_t& report)
     publish_env_update_ntf();
 }
 
-void TcpSender::publish_env_update_ntf()
+void McuLink::publish_env_update_ntf()
 {
     const EnvSnapshotCache snap = env_snapshot();
     if(!snap.valid) {
@@ -589,11 +589,11 @@ void TcpSender::publish_env_update_ntf()
     ntf.payload = middleware::MsgPayload::from_bytes(
         reinterpret_cast<const uint8_t*>(&p), sizeof(p));
     if(!middleware::MsgPort::instance().publish_async(ntf)) {
-        UPC_LOG_TCP_SENDER(Warn, "APP_Update_Ntf publish_async failed");
+        UPC_LOG_MCU_LINK(Warn, "APP_Update_Ntf publish_async failed");
     }
 }
 
-void TcpSender::notify_serial_event(serial_event_t evt)
+void McuLink::notify_serial_event(serial_event_t evt)
 {
     const char* evt_name = "UNKNOWN";
     switch(evt) {
@@ -601,7 +601,7 @@ void TcpSender::notify_serial_event(serial_event_t evt)
         case SERIAL_EVT_PRINT_READY:        evt_name = "PRINT_READY";        break;
         default:                            evt_name = "NONE";               break;
     }
-    UPC_LOG_TCP_SENDER(Info, "notify_serial_event: %s", evt_name);
+    UPC_LOG_MCU_LINK(Info, "notify_serial_event: %s", evt_name);
     if(evt == SERIAL_EVT_PRINT_CONDITION_OK) {
         serial_evt_condition_ok_.store(true);
     } else if(evt == SERIAL_EVT_PRINT_READY) {
@@ -611,7 +611,7 @@ void TcpSender::notify_serial_event(serial_event_t evt)
 
 /* ---------- TCP 原始收发 ---------- */
 
-int TcpSender::tcp_send_raw(const uint8_t* data, size_t len)
+int McuLink::tcp_send_raw(const uint8_t* data, size_t len)
 {
     if(tcp_fd_ < 0 || !data || len == 0) {
         return -1;
@@ -629,7 +629,7 @@ int TcpSender::tcp_send_raw(const uint8_t* data, size_t len)
     return 0;
 }
 
-int TcpSender::tcp_recv_nonblock(uint8_t* buf, size_t buf_size)
+int McuLink::tcp_recv_nonblock(uint8_t* buf, size_t buf_size)
 {
     if(tcp_fd_ < 0 || !buf) {
         return -1;
@@ -650,11 +650,11 @@ int TcpSender::tcp_recv_nonblock(uint8_t* buf, size_t buf_size)
     return (int)n;
 }
 
-void TcpSender::tcp_drain_rx()
+void McuLink::tcp_drain_rx()
 {
     uint8_t chunk[256];
     auto recv_fn = +[](uint8_t* b, size_t s) -> int {
-        return TcpSender::instance().tcp_recv_nonblock(b, s);
+        return McuLink::instance().tcp_recv_nonblock(b, s);
     };
     drain_framed_rx(recv_fn, chunk, sizeof(chunk),
                     tcp_rx_accum_, sizeof(tcp_rx_accum_), &tcp_rx_accum_len_,
@@ -664,19 +664,19 @@ void TcpSender::tcp_drain_rx()
 
 /* ---------- 串口原始收发 ---------- */
 
-int TcpSender::serial_send_raw(const uint8_t* data, size_t len)
+int McuLink::serial_send_raw(const uint8_t* data, size_t len)
 {
     if(serial_fd_ < 0 || !data || len == 0) {
         return -1;
     }
-#if UPC_DEBUG && UPC_MOD_TCP_SENDER
+#if UPC_DEBUG && UPC_MOD_MCU_LINK
     serial_log_frame_hex("TX", data, len);
 #endif
     const ssize_t n = write(serial_fd_, data, len);
     return n == (ssize_t)len ? 0 : -1;
 }
 
-int TcpSender::serial_recv_nonblock(uint8_t* buf, size_t buf_size)
+int McuLink::serial_recv_nonblock(uint8_t* buf, size_t buf_size)
 {
     if(serial_fd_ < 0 || !buf) {
         return -1;
@@ -691,11 +691,11 @@ int TcpSender::serial_recv_nonblock(uint8_t* buf, size_t buf_size)
     return (int)n;
 }
 
-void TcpSender::serial_drain_rx()
+void McuLink::serial_drain_rx()
 {
     uint8_t chunk[64];
     auto recv_fn = +[](uint8_t* b, size_t s) -> int {
-        return TcpSender::instance().serial_recv_nonblock(b, s);
+        return McuLink::instance().serial_recv_nonblock(b, s);
     };
     drain_framed_rx(recv_fn, chunk, sizeof(chunk),
                     serial_rx_accum_, sizeof(serial_rx_accum_), &serial_rx_accum_len_,
@@ -705,19 +705,19 @@ void TcpSender::serial_drain_rx()
 
 /* ---------- tcp_stage_ 队列操作 ---------- */
 
-void TcpSender::tcp_stage_clear()
+void McuLink::tcp_stage_clear()
 {
     std::lock_guard<std::mutex> lock(tcp_stage_mtx_);
     tcp_stage_.clear();
 }
 
-size_t TcpSender::tcp_stage_count()
+size_t McuLink::tcp_stage_count()
 {
     std::lock_guard<std::mutex> lock(tcp_stage_mtx_);
     return tcp_stage_.size();
 }
 
-bool TcpSender::tcp_stage_peek_type(parser::rb_pkt_type_t* ptype)
+bool McuLink::tcp_stage_peek_type(parser::rb_pkt_type_t* ptype)
 {
     if(!ptype) {
         return false;
@@ -730,7 +730,7 @@ bool TcpSender::tcp_stage_peek_type(parser::rb_pkt_type_t* ptype)
     return true;
 }
 
-bool TcpSender::tcp_stage_pop_front(parser::rb_packet_t* pkt)
+bool McuLink::tcp_stage_pop_front(parser::rb_packet_t* pkt)
 {
     if(!pkt) {
         return false;
@@ -752,7 +752,7 @@ bool TcpSender::tcp_stage_pop_front(parser::rb_packet_t* pkt)
  * - 若 tcp_stage_ 已有 TCP_STAGE_MAX_PACKETS 个包则停止，避免内存无限增长；
  * - 对 RingBuffer 的 peek/get 操作限时 5ms，防止阻塞链路线程。
  */
-void TcpSender::refill_tcp_stage_from_ring()
+void McuLink::refill_tcp_stage_from_ring()
 {
     if(!rb_) {
         return;
@@ -785,21 +785,21 @@ void TcpSender::refill_tcp_stage_from_ring()
 
 /* ---------- 状态辅助 ---------- */
 
-bool TcpSender::mcu_rates_drained() const
+bool McuLink::mcu_rates_drained() const
 {
     const auto snap = PrintJobState::instance().snapshot();
     return snap.cmd_cache_rate  <= static_cast<uint16_t>(MCU_DRAIN_MAX_RATE) &&
            snap.data_cache_rate <= static_cast<uint16_t>(MCU_DRAIN_MAX_RATE);
 }
 
-bool TcpSender::motion_stream_active() const
+bool McuLink::motion_stream_active() const
 {
     /* natural_complete_pending 阶段须发心跳刷新 rate，不能视为活跃下发 */
     return is_sending_.load() && !waiting_layer_.load() &&
            !terminate_pending_.load() && !natural_complete_pending_.load();
 }
 
-void TcpSender::poll_mcu_drain_heartbeat()
+void McuLink::poll_mcu_drain_heartbeat()
 {
     if(tcp_fd_ < 0) {
         return;
@@ -826,7 +826,7 @@ void TcpSender::poll_mcu_drain_heartbeat()
  *      说明文件很小，也满足；
  * 3. 若解析器已结束解析但文件已打开：只要总包数 > 0 且有包，即满足。
  */
-bool TcpSender::ring_meets_start_threshold() const
+bool McuLink::ring_meets_start_threshold() const
 {
     if(!rb_) {
         return false;
@@ -862,7 +862,7 @@ bool TcpSender::ring_meets_start_threshold() const
 
 /* ---------- 运动状态管理 ---------- */
 
-void TcpSender::reset_motion_state(bool clear_start_pending)
+void McuLink::reset_motion_state(bool clear_start_pending)
 {
     if(clear_start_pending) {
         start_pending_.store(false);
@@ -880,7 +880,7 @@ void TcpSender::reset_motion_state(bool clear_start_pending)
     PrintJobState::instance().set_sending(false);
 }
 
-void TcpSender::begin_sending_internal()
+void McuLink::begin_sending_internal()
 {
     is_sending_.store(true);
     waiting_layer_.store(false);
@@ -906,7 +906,7 @@ void TcpSender::begin_sending_internal()
         uint8_t sbuf[32];
         const int slen = serial_build_print_request(sbuf, sizeof(sbuf));
         if(slen > 0) {
-            UPC_LOG_TCP_SENDER(Info, "serial TX cmd: PRINT_REQUEST");
+            UPC_LOG_MCU_LINK(Info, "serial TX cmd: PRINT_REQUEST");
             serial_send_raw(sbuf, (size_t)slen);
         }
         waiting_layer_.store(true);
@@ -916,10 +916,10 @@ void TcpSender::begin_sending_internal()
     }
 #endif
 
-    UPC_LOG_TCP_SENDER(Info, "begin_sending");
+    UPC_LOG_MCU_LINK(Info, "begin_sending");
 }
 
-void TcpSender::begin_sending()
+void McuLink::begin_sending()
 {
     if(tcp_fd_ < 0) {
         return; // TCP 未连接，无法开始
@@ -936,7 +936,7 @@ void TcpSender::begin_sending()
     begin_sending_internal();
 }
 
-void TcpSender::try_complete_pending_start()
+void McuLink::try_complete_pending_start()
 {
     if(!start_pending_.load() || is_sending_.load() || tcp_fd_ < 0) {
         return;
@@ -950,7 +950,7 @@ void TcpSender::try_complete_pending_start()
 
 /* ---------- 终止请求 ---------- */
 
-void TcpSender::request_terminate()
+void McuLink::request_terminate()
 {
     terminate_pending_.store(true);
     is_sending_.store(false);
@@ -960,7 +960,7 @@ void TcpSender::request_terminate()
 
 /* ---------- 清理辅助：协议帧发送 ---------- */
 
-void TcpSender::send_tcp_reset()
+void McuLink::send_tcp_reset()
 {
     uint8_t frame[64];
     const int flen = build_reset_frame(frame, sizeof(frame));
@@ -969,28 +969,28 @@ void TcpSender::send_tcp_reset()
     }
 }
 
-void TcpSender::send_serial_print_terminate()
+void McuLink::send_serial_print_terminate()
 {
 #if GLAVO_ENABLE_LAYER_CHANGE
     if(serial_fd_ >= 0) {
         uint8_t sbuf[32];
         const int slen = serial_build_print_terminate(sbuf, sizeof(sbuf));
         if(slen > 0) {
-            UPC_LOG_TCP_SENDER(Info, "serial TX cmd: PRINT_TERMINATE");
+            UPC_LOG_MCU_LINK(Info, "serial TX cmd: PRINT_TERMINATE");
             serial_send_raw(sbuf, (size_t)slen);
         }
     }
 #endif
 }
 
-void TcpSender::send_serial_print_finished()
+void McuLink::send_serial_print_finished()
 {
 #if GLAVO_ENABLE_LAYER_CHANGE
     if(serial_fd_ >= 0) {
         uint8_t sbuf[32];
         const int slen = serial_build_print_finished(sbuf, sizeof(sbuf));
         if(slen > 0) {
-            UPC_LOG_TCP_SENDER(Info, "serial TX cmd: PRINT_FINISHED");
+            UPC_LOG_MCU_LINK(Info, "serial TX cmd: PRINT_FINISHED");
             serial_send_raw(sbuf, (size_t)slen);
         }
     }
@@ -999,7 +999,7 @@ void TcpSender::send_serial_print_finished()
 
 /* ---------- 终止/完成清理流程 ---------- */
 
-void TcpSender::run_manual_terminate_cleanup()
+void McuLink::run_manual_terminate_cleanup()
 {
     // 1. 向振镜发 Reset，向 MCU 发终止通知
     send_tcp_reset();
@@ -1017,10 +1017,10 @@ void TcpSender::run_manual_terminate_cleanup()
     reset_motion_state(true);
     PrintJobState::instance().reset_job_counters();
 
-    emit_event(was_error ? TcpJobEvent::PrintError : TcpJobEvent::TerminateDone);
+    emit_event(was_error ? McuLinkEvent::PrintError : McuLinkEvent::TerminateDone);
 }
 
-void TcpSender::run_natural_complete_cleanup()
+void McuLink::run_natural_complete_cleanup()
 {
     // 1. 通知 MCU 打印完成，并向振镜发 Reset
     send_serial_print_finished();
@@ -1031,12 +1031,12 @@ void TcpSender::run_natural_complete_cleanup()
     PrintJobState::instance().set_job_completed(true);
     PrintJobState::instance().set_sending(false);
 
-    emit_event(TcpJobEvent::PrintCompleted);
+    emit_event(McuLinkEvent::PrintCompleted);
 }
 
 /* ---------- 串口握手与换层处理 ---------- */
 
-void TcpSender::link_process_serial_handshake()
+void McuLink::link_process_serial_handshake()
 {
 #if !GLAVO_ENABLE_LAYER_CHANGE
     return; // 换层功能未启用，无需串口握手
@@ -1053,7 +1053,7 @@ void TcpSender::link_process_serial_handshake()
         uint8_t sbuf[32];
         const int slen = serial_build_print_start(first_layer_height_um_, sbuf, sizeof(sbuf));
         if(slen > 0) {
-            UPC_LOG_TCP_SENDER(Info, "serial TX cmd: PRINT_START (layer=%u um)",
+            UPC_LOG_MCU_LINK(Info, "serial TX cmd: PRINT_START (layer=%u um)",
                 static_cast<unsigned>(first_layer_height_um_));
             serial_send_raw(sbuf, (size_t)slen);
         }
@@ -1071,7 +1071,7 @@ void TcpSender::link_process_serial_handshake()
     }
 }
 
-bool TcpSender::link_handle_layer_mark()
+bool McuLink::link_handle_layer_mark()
 {
     parser::rb_pkt_type_t ptype;
     if(!tcp_stage_peek_type(&ptype) || ptype != parser::RB_PKT_LAYER_MARK) {
@@ -1109,7 +1109,7 @@ bool TcpSender::link_handle_layer_mark()
 #endif
 }
 
-void TcpSender::link_try_layer_serial_dispatch()
+void McuLink::link_try_layer_serial_dispatch()
 {
 #if !GLAVO_ENABLE_LAYER_CHANGE
     return;
@@ -1137,7 +1137,7 @@ void TcpSender::link_try_layer_serial_dispatch()
     uint8_t sbuf[32];
     const int slen = serial_build_layer_done(active_layer_height_um_, sbuf, sizeof(sbuf));
     if(slen > 0) {
-        UPC_LOG_TCP_SENDER(Info, "serial TX cmd: LAYER_DONE (next_layer=%u um)",
+        UPC_LOG_MCU_LINK(Info, "serial TX cmd: LAYER_DONE (next_layer=%u um)",
             static_cast<unsigned>(active_layer_height_um_));
         serial_send_raw(sbuf, (size_t)slen);
     }
@@ -1149,7 +1149,7 @@ void TcpSender::link_try_layer_serial_dispatch()
 
 /* ---------- 运动包批量下发 ---------- */
 
-int TcpSender::link_send_one_motion_batch()
+int McuLink::link_send_one_motion_batch()
 {
     if(tcp_stage_count() == 0) {
         return 0; // 暂存队列为空
@@ -1215,7 +1215,7 @@ int TcpSender::link_send_one_motion_batch()
 
 /* ---------- 链路主逻辑：运动队列排空与完成检测 ---------- */
 
-void TcpSender::link_drain_motion_queue()
+void McuLink::link_drain_motion_queue()
 {
     if(!is_sending_.load()) {
         return; // 未开始发送
@@ -1254,7 +1254,7 @@ void TcpSender::link_drain_motion_queue()
     link_send_one_motion_batch();
 }
 
-void TcpSender::link_try_finish_sending()
+void McuLink::link_try_finish_sending()
 {
     if(!is_sending_.load() || waiting_layer_.load()) {
         return; // 未发送中，或正在换层等待
@@ -1291,7 +1291,7 @@ void TcpSender::link_try_finish_sending()
            now - natural_complete_since_ >=
                std::chrono::milliseconds(MCU_DRAIN_TIMEOUT_MS)) {
             const auto snap = PrintJobState::instance().snapshot();
-            UPC_LOG_TCP_SENDER(Warn,
+            UPC_LOG_MCU_LINK(Warn,
                 "finish wait: drain timeout (%d ms), force complete cmd_rate=%u data_rate=%u",
                 MCU_DRAIN_TIMEOUT_MS,
                 static_cast<unsigned>(snap.cmd_cache_rate),
@@ -1310,7 +1310,7 @@ void TcpSender::link_try_finish_sending()
 
 /* ---------- 链路线程休眠策略 ---------- */
 
-int TcpSender::link_thread_sleep_ms() const
+int McuLink::link_thread_sleep_ms() const
 {
     if(terminate_pending_.load()) {
         return 5; // 终止请求需快速响应
@@ -1329,7 +1329,7 @@ int TcpSender::link_thread_sleep_ms() const
 
 /* ---------- 链路线程主循环 ---------- */
 
-void TcpSender::link_thread_fn()
+void McuLink::link_thread_fn()
 {
     using clock = std::chrono::steady_clock;
     auto next_hb = clock::now(); // 下次心跳发送时间点

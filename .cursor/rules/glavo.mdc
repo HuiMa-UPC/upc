@@ -1,0 +1,14 @@
+---
+description: Glavo 与 parser — 打印、McuLink、IPC server
+globs: glavo/**,parser/**
+alwaysApply: false
+---
+
+# glavo/ + parser/
+
+改 Glavo/打印/MCU 前读 [glavo/GLAVO.md](../../glavo/GLAVO.md) 与 [parser/PARSER.md](../../parser/PARSER.md)。
+
+- `GlavoService` 编排 IPC；`McuLink` 负责 TCP+串口；`protocol_mcu` 仅编解码
+- 禁止直接依赖具体 `GcodeWorker`；用 `ParserManager::active()`
+- 工作线程回复 UI：`publish_async` only
+- MCU 协议以 `protocol_mcu.*` / `mcu_link.*` 为准

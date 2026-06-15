@@ -45,7 +45,7 @@ tail -f /var/log/rongsu_ui.log /var/log/rongsu_glavo.log
 ```
 2017-08-05 12:56:07.610562 level=DEBUG proc=rongsu_ui src=MW module=MSGBUS IPC_RX APP_OpenDoor_Rsp APP_GLAVO->UI pri=1 queue=0 payload={inline(1,bin) val=1}
 2017-08-05 14:22:06.507732 level=INFO  proc=rongsu_glavo src=SYS module=HostMonitor cpu_sys=0.6% cpu_proc=0.1% temp=44.4C mem_avail=3759MB/3901MB rss=51MB
-2017-08-05 14:22:10.123456 level=DEBUG proc=rongsu_glavo src=SVC module=TcpSender SERIAL_TX frame[11] 5A A5 AA A2 40 01 04 01 00 XX
+2017-08-05 14:22:10.123456 level=DEBUG proc=rongsu_glavo src=SVC module=McuLink SERIAL_TX frame[11] 5A A5 AA A2 40 01 04 01 00 XX
 ```
 
 | 字段 | 含义 |
@@ -68,7 +68,7 @@ tail -f /var/log/rongsu_ui.log /var/log/rongsu_glavo.log
 | **MemPool** | MW | 少用 | 内存池分配统计 |
 | **BufferPool** | MW | 少用 | 缓冲区池统计 |
 | **ThreadPool** | MW | 少用 | 线程池状态 |
-| **TcpSender** | SVC | **仅 Glavo** | TCP/串口连接、协议帧十六进制、传感器、打印握手 |
+| **McuLink** | SVC | **仅 Glavo** | TCP/串口连接、协议帧十六进制、传感器、打印握手 |
 | **GlavoService** | SVC | **仅 Glavo** | 目录扫描、打印流程、PM2.5/门控等业务 |
 | **ServiceBase** | SVC | **仅 Glavo** | 工作线程队列满、丢消息 |
 | **CalParser** / **ParserContext** / **GcodeWorker** | SVC | **仅 Glavo** | 解析器插件 |
@@ -78,7 +78,7 @@ tail -f /var/log/rongsu_ui.log /var/log/rongsu_glavo.log
 
 ```bash
 grep 'module=MSGBUS'  /var/log/rongsu_ui.log      # UI 侧 IPC
-grep 'module=TcpSender' /var/log/rongsu_glavo.log # 串口/TCP
+grep 'module=McuLink' /var/log/rongsu_glavo.log # 串口/TCP
 grep 'module=HostMonitor' /var/log/rongsu_*.log   # 双进程资源
 ```
 
@@ -132,7 +132,7 @@ IPC_TX   APP_OpenDoor_Rsp     APP_GLAVO->UI     # Glavo 回响应
 
 ---
 
-## 5. 串口 / TCP 日志（仅 Glavo · TcpSender）
+## 5. 串口 / TCP 日志（仅 Glavo · McuLink）
 
 ### 5.1 串口帧十六进制
 
@@ -208,7 +208,7 @@ grep 'module=IPC' /var/log/rongsu_*.log
 ### 7.3 打印卡住
 
 ```bash
-grep -E 'TcpSender|GlavoService|PRINT_|LAYER|SERIAL_' /var/log/rongsu_glavo.log
+grep -E 'McuLink|GlavoService|PRINT_|LAYER|SERIAL_' /var/log/rongsu_glavo.log
 ```
 
 看串口握手：`PRINT_REQUEST` → `PRINT_CONDITION_OK` → `PRINT_START` → `PRINT_READY` → `LAYER_DONE` 循环。
@@ -235,14 +235,14 @@ cmake -B build -DUPC_DEBUG=ON     # 默认 ON
 
 ```bash
 cmake -B build -DUPC_DEBUG=ON \
-  -DCMAKE_CXX_FLAGS="-DUPC_MOD_TCP_SENDER=0 -DUPC_MOD_MEM_POOL=0"
+  -DCMAKE_CXX_FLAGS="-DUPC_MOD_MCU_LINK=0 -DUPC_MOD_MEM_POOL=0"
 ```
 
 常用降噪：
 
 | 宏 | 效果 |
 |----|------|
-| `UPC_MOD_TCP_SENDER=0` | 关闭串口/TCP（含 `SERIAL_*`） |
+| `UPC_MOD_MCU_LINK=0` | 关闭串口/TCP（含 `SERIAL_*`） |
 | `UPC_MOD_MSG_BUS=0` | 关闭 `IPC_*` 消息流（保留 `UPC_MOD_IPC` 连接日志需单独关） |
 | `UPC_MOD_IPC=0` | 关闭 IPC 连接类日志 |
 | `UPC_MOD_SYS_MONITOR=0` | 关闭 HostMonitor |
@@ -260,7 +260,7 @@ cmake -B build -DUPC_DEBUG=ON \
 
 1. **stdout 无 `proc=`**：仅 `UPC_LOG_*` 结构化；启动 banner 用 `printf`。
 2. **双进程时钟**：时间戳为各进程本机墙钟，一般一致；NTP 偏差大时对照需注意。
-3. **传感器日志量大**：`SERIAL_RX` + `RX SENSOR OK` 可能刷屏，调试完可关 `UPC_MOD_TCP_SENDER`。
+3. **传感器日志量大**：`SERIAL_RX` + `RX SENSOR OK` 可能刷屏，调试完可关 `UPC_MOD_MCU_LINK`。
 4. **大 payload**：日志只打摘要，不传完整目录列表字节；完整数据在业务层处理。
 
 ---

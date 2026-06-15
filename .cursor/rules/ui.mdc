@@ -1,0 +1,14 @@
+---
+description: UI 模块 — LVGL、Proxy、禁止链接 glavo
+globs: ui/**
+alwaysApply: false
+---
+
+# ui/
+
+改 UI 前读 [ui/UI.md](../../ui/UI.md)。
+
+- 后端通信只走 `UiMsgProxy` / `CameraMsgProxy` 等，pages 禁止直接 MsgPort
+- 主循环：`lv_timer_handler` + `MsgPort::process`
+- 新页面：`pages/src` + `ui_app.cpp` 注册
+- IPC Hub：`main.cpp` 的 `add_ipc_peer`

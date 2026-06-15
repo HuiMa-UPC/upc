@@ -49,8 +49,8 @@ void log_write(Level level, const char* src, const char* module,
 #define UPC_LOG_GLAVO_SERVICE(lvl, fmt, ...) \
     UPC_LOG_MOD_(UPC_MOD_GLAVO_SERVICE, lvl, "SVC", "GlavoService", fmt, ##__VA_ARGS__)
 
-#define UPC_LOG_TCP_SENDER(lvl, fmt, ...) \
-    UPC_LOG_MOD_(UPC_MOD_TCP_SENDER, lvl, "SVC", "TcpSender", fmt, ##__VA_ARGS__)
+#define UPC_LOG_MCU_LINK(lvl, fmt, ...) \
+    UPC_LOG_MOD_(UPC_MOD_MCU_LINK, lvl, "SVC", "McuLink", fmt, ##__VA_ARGS__)
 
 #define UPC_LOG_CAL_PARSER(lvl, fmt, ...) \
     UPC_LOG_MOD_(UPC_MOD_CAL_PARSER, lvl, "PARSER", "CalParser", fmt, ##__VA_ARGS__)
