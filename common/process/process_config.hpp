@@ -28,4 +28,12 @@ inline ProcessConfig process_config_test_camera() {
     };
 }
 
+inline ProcessConfig process_config_camera() {
+    return ProcessConfig{
+        "/var/run/rongsu_camera.pid",
+        "/var/log/rongsu_camera.log",
+        "rongsu_camera",
+    };
+}
+
 #endif

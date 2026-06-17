@@ -19,6 +19,7 @@
 
 ```
 rongsu_glavo ──listen──► /tmp/upc_glavo.sock ◄──┐
+rongsu_camera ──listen──► /tmp/upc_camera.sock ◄──┼── rongsu_ui (Hub)
 test_camera  ──listen──► /tmp/upc_camera.sock ◄──┼── rongsu_ui (Hub)
                                                  ◄──┘
 ```
@@ -42,6 +43,7 @@ UI 主循环：`process(wait_ms)` + `process(0)`；Glavo：`process(2)`。
 | 进程 | 路径 |
 |------|------|
 | Glavo | `/tmp/upc_glavo.sock`（`UPC_IPC_SOCKET` 可覆盖） |
+| rongsu_camera | `/tmp/upc_camera.sock` |
 | test_camera | `/tmp/upc_camera.sock` |
 
 ## 新增后端（平台层）
@@ -57,4 +59,4 @@ UI 主循环：`process(wait_ms)` + `process(0)`；Glavo：`process(2)`。
 
 ## 相关文档
 
-- [ui/UI.md](../../ui/UI.md) · [glavo/GLAVO.md](../../glavo/GLAVO.md) · [test/TEST.md](../../test/TEST.md)
+- [ui/UI.md](../../ui/UI.md) · [glavo/GLAVO.md](../../glavo/GLAVO.md) · [camera/CAMERA.md](../../camera/CAMERA.md) · [test/TEST.md](../../test/TEST.md)

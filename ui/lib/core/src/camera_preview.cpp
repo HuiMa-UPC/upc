@@ -19,7 +19,7 @@ namespace ui {
 
 namespace {
 
-constexpr int kFrameBufCount = 2;
+constexpr int kFrameBufCount = 3;
 /** 主线程刷新上限 ~20fps，减轻 lv_timer_handler 占用 */
 constexpr uint32_t kUiRefreshPeriodMs = 50u;
 
@@ -64,6 +64,11 @@ bool rga_status_ok(IM_STATUS st)
     return st == IM_STATUS_SUCCESS || st == IM_STATUS_NOERROR;
 }
 
+bool rga_cvtcolor_checked(rga_buffer_t src, rga_buffer_t dst_buf, const im_rect& rect,
+                          IM_STATUS* out_st);
+bool rga_nv12_to_bgrx(uint8_t* src_nv12, int w, int h, int src_stride_y,
+                      uint8_t* dst, int dst_stride_px, IM_STATUS* out_st);
+
 /**
  * UI 进程启动时探活 + dummy blit，把 RGA 首次 ioctl 提前到进打印预览之前。
  * 失败只记日志，不阻塞 UI 启动。
@@ -91,29 +96,15 @@ void rga_warmup_once()
     std::memset(src_nv12, 0x10, sizeof(src_nv12));
     std::memset(dst_bgrx, 0, sizeof(dst_bgrx));
 
-    rga_buffer_t src = wrapbuffer_virtualaddr(
-        src_nv12, kRgaDummyW, kRgaDummyH, kNv12RgaFormat, kRgaDummyW, kRgaDummyH);
-    rga_buffer_t dst_buf = wrapbuffer_virtualaddr(
-        dst_bgrx, kRgaDummyW, kRgaDummyH, kDstRgaFormat, kRgaDummyW, kRgaDummyH);
-    const im_rect rect{0, 0, kRgaDummyW, kRgaDummyH};
-
-    const IM_STATUS chk = imcheck(src, dst_buf, rect, rect);
-    if(!rga_status_ok(chk)) {
-        UPC_LOG_CAMERA_PREVIEW(Warn,
-            "RGA warmup imcheck fail st=%d (%s)",
-            static_cast<int>(chk), rga_status_str(chk));
-        return;
-    }
-
-    const IM_STATUS st =
-        imcvtcolor(src, dst_buf, kNv12RgaFormat, kDstRgaFormat);
-    if(rga_status_ok(st)) {
+    IM_STATUS warm_st = IM_STATUS_FAILED;
+    if(rga_nv12_to_bgrx(src_nv12, kRgaDummyW, kRgaDummyH, kRgaDummyW,
+                        dst_bgrx, kRgaDummyW, &warm_st)) {
         UPC_LOG_CAMERA_PREVIEW(Info, "RGA warmup dummy blit ok %dx%d",
                                kRgaDummyW, kRgaDummyH);
     } else {
         UPC_LOG_CAMERA_PREVIEW(Warn,
             "RGA warmup dummy blit fail st=%d (%s)",
-            static_cast<int>(st), rga_status_str(st));
+            static_cast<int>(warm_st), rga_status_str(warm_st));
     }
 }
 
@@ -128,12 +119,61 @@ bool rga_cvtcolor_checked(rga_buffer_t src, rga_buffer_t dst_buf, const im_rect&
         return false;
     }
 
-    const IM_STATUS st =
-        imcvtcolor(src, dst_buf, kNv12RgaFormat, kDstRgaFormat);
+    IM_STATUS st = imcvtcolor_t(src, dst_buf, kNv12RgaFormat, kDstRgaFormat,
+                                IM_YUV_TO_RGB_BT601_LIMIT, 1);
+    if(!rga_status_ok(st)) {
+        st = imcvtcolor_t(src, dst_buf, kNv12RgaFormat, kDstRgaFormat,
+                          IM_COLOR_SPACE_DEFAULT, 1);
+    }
     if(out_st) {
         *out_st = st;
     }
     return rga_status_ok(st);
+}
+
+/**
+ * NV12→BGRX：须 importbuffer + wrapbuffer_handle，避免 wrapbuffer_virtualaddr
+ * 导致 rect=[0,0,0,0] 的 RGA_BLIT Invalid argument。
+ */
+bool rga_nv12_to_bgrx(uint8_t* src_nv12, int w, int h, int src_stride_y,
+                      uint8_t* dst, int dst_stride_px, IM_STATUS* out_st)
+{
+    if(!src_nv12 || !dst || w <= 0 || h <= 0 || src_stride_y <= 0 ||
+       dst_stride_px <= 0) {
+        return false;
+    }
+
+    const int src_bytes = src_stride_y * h * 3 / 2;
+    const int dst_bytes = dst_stride_px * h * 4;
+
+    rga_buffer_handle_t src_h =
+        importbuffer_virtualaddr(src_nv12, src_bytes);
+    rga_buffer_handle_t dst_h =
+        importbuffer_virtualaddr(dst, dst_bytes);
+    if(src_h == 0 || dst_h == 0) {
+        if(src_h) {
+            releasebuffer_handle(src_h);
+        }
+        if(dst_h) {
+            releasebuffer_handle(dst_h);
+        }
+        if(out_st) {
+            *out_st = IM_STATUS_FAILED;
+        }
+        return false;
+    }
+
+    rga_buffer_t src = wrapbuffer_handle(src_h, w, h, kNv12RgaFormat,
+                                         src_stride_y, h);
+    rga_buffer_t dst_buf = wrapbuffer_handle(dst_h, w, h, kDstRgaFormat,
+                                            dst_stride_px, h);
+    const im_rect rect{0, 0, w, h};
+
+    const bool ok = rga_cvtcolor_checked(src, dst_buf, rect, out_st);
+
+    releasebuffer_handle(src_h);
+    releasebuffer_handle(dst_h);
+    return ok;
 }
 
 void log_nv12_probe(const char* tag, const upc_ipc::IpcShmFrameView& frame)
@@ -141,8 +181,7 @@ void log_nv12_probe(const char* tag, const upc_ipc::IpcShmFrameView& frame)
     if(!frame.y_plane || frame.width == 0 || frame.height == 0) {
         return;
     }
-    const uint32_t sy =
-        frame.stride_y > 0 ? frame.stride_y : frame.width;
+    const uint32_t sy = frame.width;
     const size_t y_size = static_cast<size_t>(sy) * frame.height;
     const uint8_t* y = frame.y_plane;
     const uint8_t* uv = frame.uv_plane ? frame.uv_plane : (y + y_size);
@@ -155,6 +194,18 @@ void log_nv12_probe(const char* tag, const upc_ipc::IpcShmFrameView& frame)
         tag, frame.slot_index, frame.seq, frame.width, frame.height, sy,
         static_cast<const void*>(y), static_cast<const void*>(uv),
         y[0], y[mid_y_off < y_size ? mid_y_off : 0], uv[0], uv[1]);
+}
+
+/** 解码写入时避开 LVGL 正在显示的 buffer，减轻撕裂/重影 */
+int pick_write_buf(int candidate, int shown, int buf_count)
+{
+    for(int i = 0; i < buf_count; ++i) {
+        const int idx = (candidate + i) % buf_count;
+        if(idx != shown) {
+            return idx;
+        }
+    }
+    return candidate;
 }
 
 void log_xrgb_probe(const char* tag, const uint8_t* dst, uint32_t w, uint32_t h,
@@ -272,6 +323,11 @@ void CameraPreviewPlayer::stop()
 void CameraPreviewPlayer::on_stream_start_rsp(
     const middleware::CameraStreamInfoPayload& info)
 {
+    UPC_LOG_CAMERA_PREVIEW(Info,
+        "stream start rsp ok=%d %ux%u@%u shm=%s active=%d",
+        info.ok, info.width, info.height, info.fps, info.shm_name,
+        active_.load() ? 1 : 0);
+
     if(!active_.load()) {
         if(info.ok &&
            middleware::MsgPort::instance().peer_connected(
@@ -367,6 +423,7 @@ void CameraPreviewPlayer::apply_stream_start_ui(
     stream_up_.store(true);
     begin_decode_thread();
     schedule_ui_timer();
+    show_hint(LV_SYMBOL_VIDEO "  Loading preview...");
 }
 
 void CameraPreviewPlayer::begin_decode_thread()
@@ -414,6 +471,7 @@ void CameraPreviewPlayer::decode_thread_fn()
                 --warmup_skip;
                 consumer_.release_slot(frame->slot_index);
             } else {
+                write_idx = pick_write_buf(write_idx, shown_buf_, kFrameBufCount);
                 const size_t dst_bytes = frame_buf_[write_idx].size();
                 if(convert_frame_rga(*frame, frame_buf_[write_idx].data(), dst_bytes)) {
                     ++frames_ok;
@@ -472,8 +530,8 @@ bool CameraPreviewPlayer::convert_frame_rga(const upc_ipc::IpcShmFrameView& fram
 
     const int w = static_cast<int>(frame.width);
     const int h = static_cast<int>(frame.height);
-    const int stride_y = static_cast<int>(
-        frame.stride_y > 0 ? frame.stride_y : frame.width);
+    /* SHM 紧凑 NV12：行 stride 恒为 width */
+    const int stride_y = w;
     const int dst_stride_px = static_cast<int>(pixel_stride_px_);
     const size_t need_dst =
         static_cast<size_t>(dst_stride_px) * static_cast<size_t>(h) * 4u;
@@ -481,18 +539,10 @@ bool CameraPreviewPlayer::convert_frame_rga(const upc_ipc::IpcShmFrameView& fram
         return false;
     }
 
-    rga_buffer_t src = wrapbuffer_virtualaddr(
-        const_cast<uint8_t*>(frame.y_plane), w, h,
-        kNv12RgaFormat, stride_y, h);
-
-    rga_buffer_t dst_buf = wrapbuffer_virtualaddr(
-        dst, w, h, kDstRgaFormat, dst_stride_px, h);
-
-    const im_rect rect{0, 0, w, h};
-
     for(int attempt = 0; attempt < kRgaRetryCount; ++attempt) {
         IM_STATUS st = IM_STATUS_FAILED;
-        if(rga_cvtcolor_checked(src, dst_buf, rect, &st)) {
+        if(rga_nv12_to_bgrx(const_cast<uint8_t*>(frame.y_plane), w, h,
+                            stride_y, dst, dst_stride_px, &st)) {
             return true;
         }
 
@@ -519,6 +569,19 @@ bool CameraPreviewPlayer::convert_frame_rga(const upc_ipc::IpcShmFrameView& fram
                 std::chrono::milliseconds(kRgaRetryDelayMs));
         }
     }
+
+    static std::atomic<uint32_t> rga_fail_hint_count{0};
+    if(rga_fail_hint_count.fetch_add(1) == 0 && hint_) {
+        lv_async_call(
+            [](void* user) {
+                auto* self = static_cast<CameraPreviewPlayer*>(user);
+                if(self && self->active_.load() && self->hint_) {
+                    self->show_hint(LV_SYMBOL_WARNING "  RGA convert failed");
+                }
+            },
+            this);
+    }
+
     return false;
 }
 

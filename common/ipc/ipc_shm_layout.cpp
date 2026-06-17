@@ -108,7 +108,6 @@ void ipc_shm_frame_view_from_slot(const IpcShmGlobalHeader& hdr,
     out.timestamp_us = slot.timestamp_us;
     out.width        = hdr.width;
     out.height       = hdr.height;
-    out.stride_y     = hdr.stride_y;
     out.format       = static_cast<IpcShmPixelFormat>(hdr.format);
 
     const uint8_t* base =
@@ -117,11 +116,14 @@ void ipc_shm_frame_view_from_slot(const IpcShmGlobalHeader& hdr,
         return;
     }
 
-    const size_t y_size = static_cast<size_t>(hdr.stride_y) * hdr.height;
+    const size_t y_size =
+        static_cast<size_t>(hdr.width) * hdr.height;
     out.y_plane          = base;
     out.y_size           = y_size;
     out.uv_plane         = base + y_size;
     out.uv_size          = y_size / 2u;
+    /* 紧凑布局：有效行 stride 为 width，hdr.stride_y 仅作兼容字段 */
+    out.stride_y         = hdr.width;
 }
 
 /** 计算指定槽位在 payload 区域中的可写地址 */

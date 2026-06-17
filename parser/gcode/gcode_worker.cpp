@@ -44,7 +44,6 @@ struct LineParseOut {
 
 struct GcodeLineRegex {
     const std::regex m3000_only;
-    const std::regex g1_then_m3000;
     const std::regex g_cmd;
     const std::regex coord;
     const std::regex speed;
@@ -53,8 +52,6 @@ struct GcodeLineRegex {
     GcodeLineRegex()
         : m3000_only(R"(^M\s*0*3000\s*$)",
                      std::regex_constants::ECMAScript | std::regex_constants::icase)
-        , g1_then_m3000(R"(^(.+)\bM\s*0*3000\s*$)",
-                        std::regex_constants::ECMAScript | std::regex_constants::icase)
         , g_cmd(R"(^G0*(\d+))",
                 std::regex_constants::ECMAScript | std::regex_constants::icase)
         , coord(R"(([XYZ])([+-]?(?:\d+\.?\d*|\.\d+)))",
@@ -286,13 +283,14 @@ bool GcodeWorker::parse_g1_segment(const std::string& segment, bool* out_motion)
 
 void GcodeWorker::parse_line_all(const char* raw_line, LineParseOut* out)
 {
+    //1. 初始化 + 行规范化
     out->count = 0;
-
     const std::string normalized = normalize_command_line(raw_line);
     if(normalized.empty()) {
         return;
     }
 
+    //2. 独立功率行：仅大写 S + 十进制整数，允许 S 与数字间空格
     if(normalized[0] == 'S') {
         uint16_t power = 0;
         if(parse_standalone_s_line(normalized, &power)) {
@@ -305,22 +303,6 @@ void GcodeWorker::parse_line_all(const char* raw_line, LineParseOut* out)
     }
 
     const GcodeLineRegex& re = gcode_regex();
-    std::smatch split_match;
-
-    if(std::regex_match(normalized, split_match, re.g1_then_m3000)) {
-        std::string before = split_match[1].str();
-        trim_string(before);
-        if(before.empty()) {
-            emit_parse_kind(out, LINE_EMIT_LAYER);
-            return;
-        }
-        bool motion = false;
-        if(parse_g1_segment(before, &motion) && motion) {
-            emit_parse_kind(out, LINE_EMIT_MOTION);
-        }
-        emit_parse_kind(out, LINE_EMIT_LAYER);
-        return;
-    }
 
     if(std::regex_match(normalized, re.m3000_only)) {
         emit_parse_kind(out, LINE_EMIT_LAYER);

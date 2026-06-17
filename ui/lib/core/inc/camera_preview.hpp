@@ -68,8 +68,8 @@ private:
     uint32_t fps_    = 25;
     uint32_t pixel_stride_px_ = 0;
 
-    std::vector<uint8_t> frame_buf_[2];
-    lv_image_dsc_t       img_dsc_[2]{};
+    std::vector<uint8_t> frame_buf_[3];
+    lv_image_dsc_t       img_dsc_[3]{};
     std::atomic<int>     display_buf_{-1};
     int                  shown_buf_ = -1;
     bool                 logged_first_ui_show_ = false;

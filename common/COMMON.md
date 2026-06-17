@@ -2,7 +2,7 @@
 
 > 索引：[doc/ARCHITECTURE.md](../doc/ARCHITECTURE.md)
 
-跨 `ui/`、`glavo/`、`test/` 共用；契约变更需相关组知晓。
+跨 `ui/`、`glavo/`、`camera/`、`test/` 共用；契约变更需相关组知晓。
 
 ## 子目录
 
@@ -11,8 +11,8 @@
 | **`contract/`** | [contract/README.md](contract/README.md) | 消息命名与总表（改 MsgType 从这里走） |
 | **`middleware/`** | [middleware/MIDDLEWARE.md](middleware/MIDDLEWARE.md) | MsgBus、内存池、线程池 |
 | **`ipc/`** | [ipc/IPC.md](ipc/IPC.md) | Unix socket、`MsgPort`、SHM 帧环 |
-| **`debug/`** | — | `UPC_LOG_*`、`upc_sys_monitor` |
-| **`process/`** | — | PID、daemon、`process_config` |
+| **`debug/`** | [debug/DEBUG.md](debug/DEBUG.md) | `UPC_LOG_*`、`upc_sys_monitor` |
+| **`process/`** | [process/PROCESS.md](process/PROCESS.md) | PID、daemon、`process_config` |
 
 ## 进程与日志
 

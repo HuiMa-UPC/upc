@@ -254,6 +254,24 @@ std::optional<IpcShmFrameView> IpcShmRingConsumer::acquire_latest_frame()
         return std::nullopt;
     }
 
+    /* 丢弃更旧的 Ready 槽，避免占满 ring 且误读陈旧帧 */
+    for (uint32_t i = 0; i < hdr_->slot_count; ++i) {
+        if (static_cast<int>(i) == best_idx) {
+            continue;
+        }
+        IpcShmSlotHeader& other = slots_[i];
+        const uint32_t ost =
+            other.state.load(std::memory_order_acquire);
+        if (ost != expected_state(IpcShmSlotState::Ready)) {
+            continue;
+        }
+        const uint32_t oseq = other.seq.load(std::memory_order_acquire);
+        if (oseq < best_seq) {
+            other.state.store(expected_state(IpcShmSlotState::Empty),
+                              std::memory_order_release);
+        }
+    }
+
     IpcShmFrameView view{};
     ipc_shm_frame_view_from_slot(*hdr_, payload_base_,
                                static_cast<uint32_t>(best_idx), slot, view);

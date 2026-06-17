@@ -13,6 +13,7 @@
 
 namespace {
 
+/** commit_slot 用单调时钟时间戳（微秒） */
 uint64_t monotonic_us()
 {
     using clock = std::chrono::steady_clock;
@@ -22,6 +23,7 @@ uint64_t monotonic_us()
             .count());
 }
 
+/** 从 StartReq payload 取出 video_name；无内联数据时返回空串 */
 bool read_start_req_name(const middleware::MsgPayload& payload, char* out, size_t out_size)
 {
     if(!out || out_size == 0) {
@@ -49,6 +51,7 @@ TestCameraService::~TestCameraService()
 
 bool TestCameraService::init()
 {
+    // 运行时配置：循环播放、帧率、是否发 Frame_Ntf
     const char* loop_env = std::getenv(TEST_CAMERA_ENV_LOOP);
     if(loop_env && loop_env[0] == '0') {
         loop_video_ = false;
@@ -78,6 +81,7 @@ void TestCameraService::subscribe_messages()
 {
     auto& port = middleware::MsgPort::instance();
 
+    // 以 APP_CAMERA 身份订阅 UI 发起的流控请求
     subs_.push_back(port.subscribe(
         middleware::MsgType::UI_Camera_Stream_Start_Req,
         middleware::ModuleId::APP_CAMERA,
@@ -136,6 +140,7 @@ uint32_t TestCameraService::read_fps_from_env()
 
 void TestCameraService::handle_stream_start(const middleware::Message& msg)
 {
+    // 重复 Start 时先停旧流，再按新路径重建 SHM
     if(stream_running_.load()) {
         stop_streaming();
     }
@@ -180,6 +185,7 @@ bool TestCameraService::start_streaming(const std::string& video_path)
     };
 
     upc_ipc::IpcShmError err = producer_.create(params);
+    // 上次异常退出可能残留同名 shm，先 unlink 再创建
     if(err == upc_ipc::IpcShmError::AlreadyExists) {
         upc_ipc::IpcShmRegion tmp;
         if(tmp.open(TEST_CAMERA_SHM_NAME_DEFAULT, false) == upc_ipc::IpcShmError::Ok) {
@@ -211,6 +217,7 @@ bool TestCameraService::start_streaming(const std::string& video_path)
 
 void TestCameraService::stop_streaming()
 {
+    // 置位后 join 推流线程，再销毁 SHM 与文件句柄
     stop_stream_.store(true);
     if(stream_thread_.joinable()) {
         stream_thread_.join();
@@ -225,6 +232,8 @@ void TestCameraService::stream_thread_fn()
     const size_t frame_bytes = source_.frame_bytes();
     const auto frame_period =
         std::chrono::microseconds(1000000u / (stream_fps_ > 0 ? stream_fps_ : 1u));
+
+    // 推流主循环：限速 → 占槽写帧 → commit → 可选通知 UI
 
     using clock = std::chrono::steady_clock;
     auto stats_since   = clock::now();
@@ -247,6 +256,7 @@ void TestCameraService::stream_thread_fn()
 
         std::optional<uint32_t> slot = producer_.acquire_write_slot();
         if(!slot) {
+            // UI 尚未消费完槽位，短暂退让避免忙等
             std::this_thread::sleep_for(std::chrono::milliseconds(2));
             continue;
         }
@@ -265,6 +275,7 @@ void TestCameraService::stream_thread_fn()
         const uint32_t seq =
             producer_.commit_slot(*slot, monotonic_us());
         if(!logged_first_commit && payload) {
+            // 首帧采样若干像素，便于确认 Y/UV 布局与读长正确
             const uint32_t sy = stream_width_;
             const size_t y_size = static_cast<size_t>(sy) * stream_height_;
             UPC_LOG_TEST_CAMERA(Info,
@@ -292,6 +303,7 @@ void TestCameraService::stream_thread_fn()
 
 void TestCameraService::send_stream_start_rsp(const middleware::Message& req, bool ok)
 {
+    // 跨进程回复须 publish_async，目标为原请求方 sender_id
     middleware::CameraStreamInfoPayload info{};
     std::snprintf(info.shm_name, sizeof(info.shm_name), "%s",
                   TEST_CAMERA_SHM_NAME_DEFAULT);
@@ -313,6 +325,7 @@ void TestCameraService::send_stream_start_rsp(const middleware::Message& req, bo
 
 void TestCameraService::send_stream_stop_done(const middleware::Message& req)
 {
+    // 无 payload，仅通知 UI 推流已结束
     middleware::Message done(
         middleware::MsgType::APP_Camera_Stream_Stop_Done,
         middleware::ModuleId::APP_CAMERA,
@@ -322,6 +335,7 @@ void TestCameraService::send_stream_stop_done(const middleware::Message& req)
 
 void TestCameraService::notify_frame(uint32_t seq)
 {
+    // 仅传序号；UI 按 shm_name 自行读对应 slot
     middleware::CameraFrameNtfPayload ntf{};
     ntf.seq = seq;
 

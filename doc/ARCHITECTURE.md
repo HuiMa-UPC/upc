@@ -8,9 +8,11 @@
 |------|------------|------|----------|------|
 | UI | `rongsu_ui` | `ui/main.cpp` | [ui/UI.md](../ui/UI.md) | `/var/log/rongsu_ui.log` |
 | Glavo | `rongsu_glavo` | `glavo/main.cpp` | [glavo/GLAVO.md](../glavo/GLAVO.md) | `/var/log/rongsu_glavo.log` |
+| 相机 | `rongsu_camera` | `camera/main.cpp` | [camera/CAMERA.md](../camera/CAMERA.md) | `/var/log/rongsu_camera.log` |
 | 相机测试 | `test_camera` | `test/camera/main.cpp` | [test/TEST.md](../test/TEST.md) | `/var/log/test_camera.log` |
 
 启动：`scripts/rongsu.sh start`（先后端、再 UI）。
+注意：测试伪进程和真实进程互斥，比如相机进程和相机测试进程只能启动一个
 
 ## 顶层目录
 
@@ -19,6 +21,7 @@
 | `ui/` | [UI.md](../ui/UI.md) | LVGL 界面、UiMsgProxy、IPC Hub 客户端 |
 | `glavo/` | [GLAVO.md](../glavo/GLAVO.md) | 打印编排、McuLink、IPC Server |
 | `test/` | [TEST.md](../test/TEST.md) | 独立测试进程（camera 等） |
+| `camera/` | [CAMERA.md](../camera/CAMERA.md) | 相机采集、SHM 预览、IPC Server |
 | `common/` | [COMMON.md](../common/COMMON.md) | 契约、middleware、ipc、debug、process |
 | `parser/` | [PARSER.md](../parser/PARSER.md) | G-code/OVF 解析库（Glavo 链接） |
 | `protocol/` | [PROTOCOL.md](../protocol/PROTOCOL.md) | MCU 线协议（TCP `BE EF` + 串口 `5A A5`） |
