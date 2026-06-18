@@ -80,4 +80,23 @@
 #define CAMERA_ENV_FRAME_NTF "UPC_CAMERA_FRAME_NTF"
 #endif
 
+/** 打印录像：临时 H.264 目录与会话子目录前缀 */
+#ifndef CAMERA_PRINT_VIDEO_TMP_DIR
+#define CAMERA_PRINT_VIDEO_TMP_DIR  "/tmp/print_vid"
+#endif
+
+#ifndef CAMERA_PRINT_VIDEO_OUT_DIR
+#define CAMERA_PRINT_VIDEO_OUT_DIR  "/home/video"
+#endif
+
+/** 输出文件后缀（MPP 输出 Annex-B H.264  elementary stream，非 MP4 容器） */
+#ifndef CAMERA_PRINT_VIDEO_OUT_EXT
+#define CAMERA_PRINT_VIDEO_OUT_EXT  ".h264"
+#endif
+
+/** 写入 H.264 时标注的层帧率（仅 metadata 用途；raw .h264 无容器时间轴） */
+#ifndef CAMERA_PRINT_VIDEO_LAYER_FPS
+#define CAMERA_PRINT_VIDEO_LAYER_FPS  5u
+#endif
+
 #endif /* CAMERA_DEVICE_CONFIG_HPP */

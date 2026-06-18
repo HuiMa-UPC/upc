@@ -5,11 +5,14 @@
 #include "msg_port.hpp"
 #include "ipc_shm_ring.hpp"
 #include "vi_capture.hpp"
+#include "print_video_recorder.hpp"
 
 #include <atomic>
 #include <string>
 #include <thread>
 #include <vector>
+
+#include <cstring>
 
 namespace upc::camera {
 
@@ -29,6 +32,18 @@ private:
     void handle_message(const middleware::Message& msg);
     void handle_stream_start(const middleware::Message& msg);
     void handle_stream_stop(const middleware::Message& msg);
+    void handle_print_video(const middleware::Message& msg);
+
+    template <typename T>
+    static bool read_inline_pod(const middleware::MsgPayload& payload, T& out)
+    {
+        if(payload.type != middleware::MsgPayload::Type::Inline ||
+           payload.length < sizeof(T)) {
+            return false;
+        }
+        std::memcpy(&out, payload.data.bytes.data(), sizeof(T));
+        return true;
+    }
 
     bool start_streaming();
     void stop_streaming();
@@ -54,6 +69,8 @@ private:
     uint32_t stream_height_ = CAMERA_HEIGHT_DEFAULT;
     uint32_t stream_fps_    = CAMERA_FPS_DEFAULT;
     uint32_t shm_stride_y_  = CAMERA_WIDTH_DEFAULT;
+
+    PrintVideoRecorder print_video_;
 };
 
 } // namespace upc::camera

@@ -23,14 +23,17 @@
 ```
 test_camera ──SHM──► CameraPreviewPlayer（rongsu_ui）
             ──IPC──► CameraMsgProxy（Start/Stop stream）
+                      └─ RGA/SW NV12→BGRX + lv_image（与 rongsu_camera 同契约）
 ```
+
+UI 解码路径与对接 `rongsu_camera` 相同；差异仅在 SHM 数据源（文件帧 vs 真机 V4L2）。
 
 `scripts/rongsu.sh`：`UPC_ENABLE_TEST_CAMERA=auto` 时若存在二进制则启动。
 
 ## 红线
 
 - 禁止链接 `ui::port`、`upc_glavo`
-- 消息类型与 UI 约定见 `msg_types.hpp` + [contract/README.md](../common/contract/README.md)
+- 消息类型与 UI 约定见 `msg_types.hpp` + [common/README.md](../common/README.md)
 
 ## 相关文档
 

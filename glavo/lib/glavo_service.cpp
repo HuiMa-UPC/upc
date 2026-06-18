@@ -1,4 +1,5 @@
 #include "glavo_service.hpp"
+#include "print_video_notify.hpp"
 #include "glavo_parser_bridge.hpp"
 #include "parser_config.hpp"
 #include "parser_context.hpp"
@@ -114,22 +115,19 @@ bool GlavoService::do_init() {
 }
 
 bool GlavoService::do_start() {
-    subscribe(middleware::MsgType::Fs_DirOpen_Req,
-        [this](const middleware::Message& msg) { on_message(msg); });
-    subscribe(middleware::MsgType::UI_FileInfo_Req,
-        [this](const middleware::Message& msg) { on_message(msg); });
-    subscribe(middleware::MsgType::UI_Print_Start_Req,
-        [this](const middleware::Message& msg) { on_message(msg); });
-    subscribe(middleware::MsgType::UI_Print_Terminate_Req,
-        [this](const middleware::Message& msg) { on_message(msg); });
-    subscribe(middleware::MsgType::UI_PM25_Req,
-        [this](const middleware::Message& msg) { on_message(msg); });
-    subscribe(middleware::MsgType::UI_CLOSE_DOOR_Req,
-        [this](const middleware::Message& msg) { on_message(msg); });
-    subscribe(middleware::MsgType::UI_OpenDoor_Req,
-        [this](const middleware::Message& msg) { on_message(msg); });
-    subscribe(middleware::MsgType::UI_Purify_Req,
-        [this](const middleware::Message& msg) { on_message(msg); });
+    static constexpr middleware::MsgType k_subs[] = {
+        middleware::MsgType::Fs_DirOpen_Req,
+        middleware::MsgType::UI_FileInfo_Req,
+        middleware::MsgType::UI_Print_Start_Req,
+        middleware::MsgType::UI_Print_Terminate_Req,
+        middleware::MsgType::UI_PM25_Req,
+        middleware::MsgType::UI_CLOSE_DOOR_Req,
+        middleware::MsgType::UI_OpenDoor_Req,
+        middleware::MsgType::UI_Purify_Req,
+    };
+    for(middleware::MsgType t : k_subs) {
+        subscribe(t, [this](const middleware::Message& msg) { on_message(msg); });
+    }
     return true;
 }
 
@@ -187,30 +185,28 @@ void GlavoService::handle_pm25_request(const middleware::Message& msg) {
     }
 }
 
-void GlavoService::handle_close_door_request(const middleware::Message& msg) {
+void GlavoService::send_door_rsp(const middleware::Message& msg,
+                                 middleware::MsgType rsp_type)
+{
     middleware::DoorResultPayload p{};
     p.ok = 1;
 
-    middleware::Message rsp(middleware::MsgType::APP_CLOSE_DOOR_Rsp,
+    middleware::Message rsp(rsp_type,
         static_cast<middleware::ModuleId>(module_id()), msg.sender_id);
     rsp.payload = middleware::MsgPayload::from_bytes(
         reinterpret_cast<const uint8_t*>(&p), sizeof(p));
     if(!publish_async(rsp)) {
-        UPC_LOG_GLAVO_SERVICE(Warn, "close_door_rsp publish_async failed");
+        UPC_LOG_GLAVO_SERVICE(Warn, "door_rsp publish_async failed type=%u",
+                              static_cast<unsigned>(rsp_type));
     }
 }
 
-void GlavoService::handle_open_door_request(const middleware::Message& msg) {
-    middleware::DoorResultPayload p{};
-    p.ok = 1;
+void GlavoService::handle_close_door_request(const middleware::Message& msg) {
+    send_door_rsp(msg, middleware::MsgType::APP_CLOSE_DOOR_Rsp);
+}
 
-    middleware::Message rsp(middleware::MsgType::APP_OpenDoor_Rsp,
-        static_cast<middleware::ModuleId>(module_id()), msg.sender_id);
-    rsp.payload = middleware::MsgPayload::from_bytes(
-        reinterpret_cast<const uint8_t*>(&p), sizeof(p));
-    if(!publish_async(rsp)) {
-        UPC_LOG_GLAVO_SERVICE(Warn, "open_door_rsp publish_async failed");
-    }
+void GlavoService::handle_open_door_request(const middleware::Message& msg) {
+    send_door_rsp(msg, middleware::MsgType::APP_OpenDoor_Rsp);
 }
 
 void GlavoService::handle_purify_request(const middleware::Message& msg) {
@@ -222,16 +218,18 @@ void GlavoService::on_mcu_link_event(McuLinkEvent ev) {
     switch(ev) {
         case McuLinkEvent::PrintCompleted:
             UPC_LOG_GLAVO_SERVICE(Info, "tcp_job_event: PrintCompleted");
+            PrintVideoNotify::instance().on_print_finish();
             send_print_progress(true);
             print_running_.store(false);
             break;
         case McuLinkEvent::TerminateDone:
-            UPC_LOG_GLAVO_SERVICE(Info, "tcp_job_event: TerminateDone");
-            print_running_.store(false);
-            publish_terminate_done();
-            break;
         case McuLinkEvent::PrintError:
-            UPC_LOG_GLAVO_SERVICE(Warn, "tcp_job_event: PrintError");
+            if(ev == McuLinkEvent::TerminateDone) {
+                UPC_LOG_GLAVO_SERVICE(Info, "tcp_job_event: TerminateDone");
+            } else {
+                UPC_LOG_GLAVO_SERVICE(Warn, "tcp_job_event: PrintError");
+            }
+            PrintVideoNotify::instance().on_print_abort();
             print_running_.store(false);
             publish_terminate_done();
             break;
@@ -509,6 +507,7 @@ void GlavoService::handle_print_start(const middleware::Message& msg) {
 
     print_running_.store(true);
     reset_print_progress_state();
+    PrintVideoNotify::instance().on_print_start(current_file_path_);
     McuLink::instance().begin_sending();
 
     UPC_LOG_GLAVO_SERVICE(Info, "print_start: index=%u", req.file_index);
@@ -523,6 +522,7 @@ void GlavoService::handle_print_terminate(const middleware::Message& msg) {
     (void)msg;
     UPC_LOG_GLAVO_SERVICE(Info, "print_terminate requested");
     print_running_.store(false);
+    PrintVideoNotify::instance().on_print_abort();
     parser::ParserManager::instance().stop_parse();
     McuLink::instance().request_terminate();
 }

@@ -15,7 +15,7 @@
 | **订阅** | `MsgPort::subscribe(MsgType, ModuleId, handler)` — 按消息类型 + 本进程身份过滤 |
 | **发布** | `MsgPort::publish_async(Message)` — `sender_id` / `target_id` 决定本地投递或跨进程发送 |
 | **泵** | 各进程主循环调用 `MsgPort::process()` 收包、投递、消费本地队列 |
-| **传输** | 当前为 **1 对 1 Unix socket**（Glavo listen，UI connect） |
+| **传输** | UI **Hub** 多连接 + 后端 **Server**（见 [ipc/IPC.md](ipc/IPC.md)） |
 
 ```
 ┌─────────────┐     subscribe/register_*      ┌──────────────┐
@@ -39,8 +39,9 @@
 
 | 值 | 含义 | 进程 |
 |----|------|------|
-| `UI` | 界面 | `rongsu_ui` |
+| `UI` | 界面 / IPC Hub | `rongsu_ui` |
 | `APP_GLAVO` | 振镜/串口后端 | `rongsu_glavo` |
+| `APP_CAMERA` | 相机后端 | `rongsu_camera` / `test_camera` |
 | `0` | 广播（`target_id` 专用） | — |
 
 新增后端进程时在此枚举追加（见 [§5 多后端拓扑](#5-多后端拓扑)）。
@@ -106,15 +107,23 @@
 | `APP_Print_Progress_Ntf` | `GLAVO_Print_Progress_Ntf` | Glavo→UI | `PrintProgressPayload` | `register_print_progress` | 进度推送 |
 | `UI_Print_Terminate_Req` | — | UI→Glavo | Empty | `send_print_terminate` | 终止作业 |
 | `APP_Print_Terminate_Done` | `GLAVO_Print_Terminate_Done` | Glavo→UI | Empty | `register_print_terminate_done` | — |
+| `UI_Camera_Stream_Start_Req` | — | UI→Camera | `CameraStreamStartReqPayload` | `CameraMsgProxy::send_stream_start` | 开预览 |
+| `APP_Camera_Stream_Start_Rsp` | — | Camera→UI | `CameraStreamInfoPayload` | `register_stream_start_rsp` | SHM 参数 |
+| `UI_Camera_Stream_Stop_Req` | — | UI→Camera | Empty | `send_stream_stop` | 关预览 |
+| `APP_Camera_Frame_Ntf` | — | Camera→UI | `CameraFrameNtfPayload` | （可选） | 帧序号；默认关 |
+| `APP_Print_Video_Session_Start_Ntf` | — | Glavo→Camera（Hub FWD） | `PrintVideoSessionPayload` | — | `PrintVideoNotify` / `CameraService` |
+| `APP_Print_Layer_Snap_Ntf` | — | Glavo→Camera（Hub FWD） | `PrintVideoLayerSnapPayload` | — | 换层 Snap |
+| `APP_Print_Video_Session_Finish_Ntf` | — | Glavo→Camera（Hub FWD） | `PrintVideoSessionPayload` | — | ffmpeg 合成 MP4 |
+| `APP_Print_Video_Session_Abort_Ntf` | — | Glavo→Camera（Hub FWD） | `PrintVideoSessionPayload` | — | 删临时目录 |
 
 ---
 
 ## 4. 新增消息（固定四步）
 
 1. **`msg_types.hpp`** — 增加 `MsgType` + POD + 注释（本表同步一行）
-2. **`glavo/.../glavo_service.cpp`** — `subscribe` + `handle_*` + 发 `_Rsp`/`_Ntf`
-3. **`ui/lib/core/ui_msg_proxy.*`** — `send_*` + `register_*`
-4. **无需改** `ipc_wire`（Inline / BufferRef 自动编解码）
+2. **发送侧进程** — `subscribe` + `handle_*` 或 `publish_*`（Glavo / Camera / UI 各自实现）
+3. **UI 侧** — 若需界面交互：`ui_msg_proxy.*` 或 `camera_msg_proxy.*` 的 `send_*` + `register_*`（纯后端互访可跳过）
+4. **Hub 转发** — `target_id` 指向其它后端时，UI `IpcMsgBus::deliver_frames` 自动 `IPC_FWD`；一般无需改 `ipc_wire`
 
 Wire 协议版本：`WIRE_VERSION`（[`ipc_wire.hpp`](../ipc/ipc_wire.hpp)）。仅当帧格式变更时递增。
 
@@ -122,84 +131,34 @@ Wire 协议版本：`WIRE_VERSION`（[`ipc_wire.hpp`](../ipc/ipc_wire.hpp)）。
 
 ## 5. 多后端拓扑
 
-### 5.1 现状（两进程）
-
-- `IpcMsgBus` 只维护 **一个** `peer_id_` 与 **一条** socket
-- Glavo：`init_server` → `peer_id = UI`
-- UI：`init_client` → `peer_id = APP_GLAVO`
-- **后端之间无法直接通信**；所有 UI↔Glavo 消息必经这条链路
-
-### 5.2 多后端时的问题
-
-若增加 `rongsu_camera`、`rongsu_logger` 等进程：
-
-| 需求 | 现状能否满足 |
-|------|--------------|
-| UI ↔ 多个后端 | ❌ UI 只能连一个 server |
-| Glavo ↔ Camera | ❌ 无 socket、无路由 |
-| 任意进程广播 | ⚠️ 仅契约支持 `target_id=0`，传输层未做多跳 |
-
-### 5.3 推荐演进路线
-
-#### 方案 1：中心 Broker（**推荐，3 个及以上进程**）
-
-新增 `rongsu_broker`（或 `upc_msgd`）：
+### 5.1 现状（UI Hub，方案 2 已落地）
 
 ```
-        ┌──────────┐
-        │  Broker  │  维护 ModuleId → connection 路由表
-        └──┬───┬───┘
-     ┌─────┘   └─────┐
-  rongsu_ui    rongsu_glavo    rongsu_camera ...
-  (client)      (client)         (client)
+rongsu_glavo ──listen──► /tmp/upc_glavo.sock ◄──┐
+rongsu_camera ──listen──► /tmp/upc_camera.sock ◄──┼── rongsu_ui (Hub)
+test_camera  ──listen──► /tmp/upc_camera.sock ◄──┘
 ```
 
-- 所有进程 **统一作为 client** 连接 broker（Unix socket 或 abstract namespace）
-- 帧格式 **不变**（仍用 `ipc_wire`）；broker 只根据 `target_id` 转发，不解析业务
-- `MsgPort` 演进：`init_broker_client(local_id)` + 路由表替代固定 `peer_id_`
-- 后端互访：Camera `publish_async` 且 `target_id = APP_GLAVO` 即可，与 UI 发消息相同
+- UI：`set_mode_ipc_hub` + `add_ipc_peer(APP_GLAVO, …)` + `add_ipc_peer(APP_CAMERA, …, required=false)`
+- 各后端：`set_mode_ipc_server`，单连接 UI
+- **后端互访**：Glavo `publish_async` 且 `target_id = APP_CAMERA` → UI Hub **`IPC_FWD`** → Camera（UI 不跑业务 handler）
+- **大流量**：预览 NV12 走 SHM `/upc_camera_preview`；控制仍走 MsgPort
 
-优点：拓扑清晰、易加进程、易做日志旁路订阅。  
-缺点：broker 成为单点（可 supervise 重启、连接断线重连）。
+详见 [ipc/IPC.md](ipc/IPC.md)。
 
-#### 方案 2：UI 多连接（仅「UI 访问多后端」）
+### 5.2 后续演进（可选）
 
-- UI 内 `MsgPort` 持有 `map<ModuleId, IpcEndpoint>`
-- 每个后端独立 socket（如 `/tmp/upc_glavo.sock`、`/tmp/upc_camera.sock`）
-- Glavo 与 Camera **仍不能直连**
+| 需求 | 现状 | 可选方案 |
+|------|------|----------|
+| UI ↔ 多后端 | ✅ Hub 多 peer | — |
+| Glavo ↔ Camera | ✅ Hub 转发 | 独立 Broker 减轻 UI 负担 |
+| IPC 与 LVGL 同线程 | 主循环 `process(0)` 前置 + poll 上限 8ms | 独立 I/O 线程（仅 poll + FWD） |
 
-适合：后端互不通信，只被 UI 调度。
+**中心 Broker**（进程继续增多、或 UI 不想兼 Hub）：各进程 client 连 broker，按 `target_id` 转发，帧格式不变（未实施）。
 
-#### 方案 3：后端 Mesh（不推荐首发）
+**大流量旁路**：控制走 socket；像素走 `ipc_shm_*`（camera 预览已用）。
 
-每对进程一条 socket，连接数 O(n²)，运维与重连复杂，除非强实时点对点且无 broker。
-
-#### 方案 4：大流量旁路（视频等）
-
-控制消息仍走 socket + `MsgPort`；大块数据用 **独立 SHM**（`ipc_shm_*`），元数据用现有 `MsgType` 通知。与 broker 正交。
-
-### 5.4 契约层预留
-
-新增进程时在 `ModuleId` 追加，例如：
-
-```cpp
-enum class ModuleId : uint32_t {
-    UI         = 0x01,
-    APP_GLAVO  = 0x02,
-    APP_CAMERA = 0x03,  // 示例：视觉/监控
-    APP_LOG    = 0x04,  // 示例：日志汇聚
-};
-```
-
-`MsgType` 使用新域前缀（`CAMERA_`、`LOG_` 等），遵循 §2 命名规范。
-
-### 5.5 实施顺序建议
-
-| 阶段 | 内容 |
-|------|------|
-| **现在** | 两进程 + 本文档 + `msg_types.hpp` 分组注释 |
-| **+1 后端** | 可先方案 2（UI 双连接），改动面小 |
-| **≥3 进程或后端互访** | 上 Broker（方案 1），一次性替换 `IpcMsgBus` 路由 |
+新增进程时在 `ModuleId` 追加（如 `APP_LOG`），`MsgType` 用域前缀（`LOG_` 等），遵循 §2 命名规范。
 
 ---
 
@@ -207,11 +166,16 @@ enum class ModuleId : uint32_t {
 
 | 路径 | 职责 | 维护方 |
 |------|------|--------|
-| `common/contract/README.md` | 本文档、消息总表 | 架构 / 双组评审 |
+| `common/README.md` | 本文档、消息总表 | 架构 / 双组评审 |
 | `common/middleware/message_bus/msg_types.hpp` | **唯一源码契约** | 双组评审 |
 | `common/ipc/msg_port.hpp` | 业务唯一 IPC 入口 | 平台组 |
 | `common/ipc/ipc_wire.*` | 线协议 | 平台组 |
 | `common/ipc/ipc_endpoint.*` | Socket 传输 | 平台组 |
-| `common/ipc/ipc_msg_bus.*` | 单 peer 路由（待扩展 broker） | 平台组 |
-| `ui/lib/core/ui_msg_proxy.*` | UI 侧 API | UI 组 |
+| `common/ipc/ipc_msg_bus.*` | Hub 多 peer 路由 + FWD | 平台组 |
+| `ui/lib/core/ui_msg_proxy.*` | UI ↔ Glavo API | UI 组 |
+| `ui/lib/core/camera_msg_proxy.*` | UI ↔ Camera 预览 IPC | UI 组 |
+| `ui/lib/core/camera_preview.*` | SHM 预览解码 + LVGL 显示 | UI 组 |
+| `ui/lib/core/rga_dma_buf.*` | RGA dma32 heap 缓冲 | UI 组 |
 | `glavo/lib/glavo_service.*` | Glavo 侧 API | Glavo 组 |
+| `glavo/lib/print_video_notify.*` | Glavo → Camera 录像 IPC | Glavo 组 |
+| `camera/lib/camera_service.*` | Camera IPC + 录像 | Camera 组 |

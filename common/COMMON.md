@@ -8,7 +8,7 @@
 
 | 子目录 | 文档 | 职责 |
 |--------|------|------|
-| **`contract/`** | [contract/README.md](contract/README.md) | 消息命名与总表（改 MsgType 从这里走） |
+| **契约文档** | [README.md](README.md) | 消息命名与总表（改 MsgType 从这里走） |
 | **`middleware/`** | [middleware/MIDDLEWARE.md](middleware/MIDDLEWARE.md) | MsgBus、内存池、线程池 |
 | **`ipc/`** | [ipc/IPC.md](ipc/IPC.md) | Unix socket、`MsgPort`、SHM 帧环 |
 | **`debug/`** | [debug/DEBUG.md](debug/DEBUG.md) | `UPC_LOG_*`、`upc_sys_monitor` |
@@ -20,12 +20,14 @@
 |------|------|-----|
 | UI | `/var/log/rongsu_ui.log` | `/var/run/rongsu_ui.pid` |
 | Glavo | `/var/log/rongsu_glavo.log` | `/var/run/rongsu_glavo.pid` |
+| Camera | `/var/log/rongsu_camera.log` | `/var/run/rongsu_camera.pid` |
 | test_camera | `/var/log/test_camera.log` | `/var/run/test_camera.pid` |
 
-## 启动
+## 构建与启动
 
 ```bash
-scripts/rongsu.sh start   # glavo [+ test_camera] → ui
+./build.sh                # 全量编译，产物 output/
+scripts/rongsu.sh start   # glavo [+ camera | test_camera] → ui
 ```
 
 UI 为 IPC **Hub**；后端各 **Server**。详见 [ipc/IPC.md](ipc/IPC.md)。

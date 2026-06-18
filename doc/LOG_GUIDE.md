@@ -2,7 +2,7 @@
 
 > 适用：`rongsu_ui` + `rongsu_glavo` 双进程架构  
 > 源码：`common/debug/rs_log.cpp`、`upc_log_modules.hpp`  
-> 消息契约：[`common/contract/README.md`](../contract/README.md)
+> 消息契约：[`common/README.md`](../common/README.md)
 
 ---
 
@@ -70,6 +70,8 @@ tail -f /var/log/rongsu_ui.log /var/log/rongsu_glavo.log
 | **ThreadPool** | MW | 少用 | 线程池状态 |
 | **McuLink** | SVC | **仅 Glavo** | TCP/串口连接、协议帧十六进制、传感器、打印握手 |
 | **GlavoService** | SVC | **仅 Glavo** | 目录扫描、打印流程、PM2.5/门控等业务 |
+| **CameraService** | SVC | **仅 Camera** | 预览推流、SHM commit、打印录像会话 |
+| **CameraPreview** | SVC | **仅 UI** | 预览 SHM 消费、RGA/SW 解码、LVGL 换帧 |
 | **ServiceBase** | SVC | **仅 Glavo** | 工作线程队列满、丢消息 |
 | **CalParser** / **ParserContext** / **GcodeWorker** | SVC | **仅 Glavo** | 解析器插件 |
 | **HostMonitor** | SYS | UI + Glavo | 约每 60s 一条 CPU/内存/温度 |
@@ -106,7 +108,7 @@ IPC_TX UI_OpenDoor_Req UI->APP_GLAVO pri=1 queue=0 payload={empty}
 
 | 片段 | 含义 |
 |------|------|
-| `UI_OpenDoor_Req` | 消息类型（完整表见 contract/README.md §3） |
+| `UI_OpenDoor_Req` | 消息类型（完整表见 common/README.md §3） |
 | `UI->APP_GLAVO` | 发送方 ModuleId → 接收方 ModuleId |
 | `pri=1` | 优先级（0=Low … 3=Realtime） |
 | `queue=0` | 入队时队列深度（DELIVER 行则为 `handlers=N`） |
@@ -218,6 +220,35 @@ grep -E 'McuLink|GlavoService|PRINT_|LAYER|SERIAL_' /var/log/rongsu_glavo.log
 - Glavo：`RX SENSOR OK`、`APP_Update_Ntf` 的 `IPC_TX`
 - UI：`APP_Update_Ntf` 的 `IPC_RX` + `IPC_DELIVER`
 
+### 7.5 摄像头预览
+
+**UI（`module=CameraPreview`）：**
+
+| 日志关键字 | 含义 |
+|------------|------|
+| `stream start rsp ok=1` | Camera 应答分辨率/fps/SHM 名 |
+| `SHM opened name=/upc_camera_preview` | 消费者打开 ring |
+| `decode ready … rga_path=1` | RGA 路径就绪（`0` 为软件回退） |
+| `decode thread started … rga_path=` | 解码线程已启动 |
+| `decode 1s: ok=… fail=… no_frame=…` | 每秒统计；`fail>0` 查 RGA |
+| `RGA dma heap using` | 首次 dma32 分配成功（仅一条） |
+| `RGA dma32 alloc failed, using software` | 退化为 SW 转换 |
+
+**Camera（`module=CameraService`）：**
+
+| 日志关键字 | 含义 |
+|------------|------|
+| `first frame committed` | 首帧写入 SHM（可看 Y/UV 探测值） |
+| `stream 1s: committed=30` | 推流帧率（应接近协商 fps） |
+| `print_video session start` | 打印录像会话（`layer_fps` 与预览 fps 无关） |
+
+对照：Camera `committed` 与 UI `decode 1s ok` 应同量级；开流首秒 UI `ok` 偏低多为启动对齐，第二秒应收敛。
+
+```bash
+grep 'module=CameraPreview' /var/log/rongsu_ui.log
+grep 'module=CameraService'  /var/log/rongsu_camera.log
+```
+
 ---
 
 ## 8. 编译开关与降噪
@@ -252,7 +283,7 @@ cmake -B build -DUPC_DEBUG=ON \
 ## 9. 与消息契约的关系
 
 - **日志里的消息名**（如 `UI_OpenDoor_Req`）与 **`msg_types.hpp` / contract 总表** 一一对应。
-- 新增业务消息时，除改代码外建议在 [`contract/README.md`](../contract/README.md) §3 补一行，便于后人对照日志。
+- 新增业务消息时，除改代码外建议在 [`common/README.md`](../common/README.md) §3 补一行，便于后人对照日志。
 
 ---
 

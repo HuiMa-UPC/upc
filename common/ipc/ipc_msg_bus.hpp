@@ -77,6 +77,11 @@ private:
     bool enqueue_local(const middleware::Message& msg);
     void deliver_frames(const std::vector<std::vector<uint8_t>>& frames,
                         middleware::ModuleId expected_sender);
+    [[nodiscard]] bool should_forward_to_peer(
+        const middleware::Message& msg) const;
+    [[nodiscard]] bool needs_local_handling(const middleware::Message& msg) const;
+    bool send_outbound_from_local(const middleware::Message& msg,
+                                  bool warn_on_fail);
     void poll_io(int timeout_ms);
     void pump_inbound_fallback(int timeout_ms);
     void handle_poll_event(PollSlot* slot, uint32_t events);

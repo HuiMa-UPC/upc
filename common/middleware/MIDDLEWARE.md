@@ -18,7 +18,7 @@
 
 - **`Message`**：`type`、`source_id`、`target_id`、`payload`
 - **`ModuleId`**：`UI`、`APP_GLAVO`、`APP_CAMERA` 等
-- **`MsgType`**：见 [contract/README.md](../contract/README.md) 总表
+- **`MsgType`**：见 [common/README.md](../README.md) 总表
 - **`MsgPayload`**：Inline / BufferRef
 
 改消息：**contract 四步** + `msg_types.hpp`，不要只改文档。
@@ -46,5 +46,5 @@ ParserManager → RingBuffer → McuLink（TCP + 串口）
 
 ## 相关文档
 
-- [contract/README.md](../contract/README.md) — 消息命名与 Payload
+- [common/README.md](../README.md) — 消息命名与 Payload
 - [glavo/GLAVO.md](../../glavo/GLAVO.md) · [ui/UI.md](../../ui/UI.md)

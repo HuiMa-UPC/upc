@@ -4,9 +4,11 @@
 #include "lvgl_wrap.hpp"
 #include "msg_types.hpp"
 #include "ipc_shm_ring.hpp"
+#include "rga_dma_buf.hpp"
 
 #include <atomic>
 #include <cstddef>
+#include <cstdint>
 #include <thread>
 #include <vector>
 
@@ -23,7 +25,7 @@ class CameraPreviewPlayer {
 public:
     static CameraPreviewPlayer& instance();
 
-    /** 进程启动时 RGA 预热 + 注册 CameraMsgProxy 回调（ui_app::app_init） */
+    /** 注册 CameraMsgProxy 回调（ui_app::app_init） */
     void init();
 
     /** 进入打印模式：发 Start_Req，成功后开 SHM + 解码线程 */
@@ -35,6 +37,21 @@ public:
     [[nodiscard]] bool active() const noexcept { return active_; }
 
 private:
+    static constexpr int kFrameSlots = 3;
+
+    /** 显示缓冲：优先 dma32，失败时退化为 heap vector */
+    struct FrameSlot {
+        RgaDmaBuf            dma;
+        std::vector<uint8_t> sw;
+
+        void clear();
+        bool alloc(size_t bytes, bool use_dma);
+        [[nodiscard]] uint8_t* data() noexcept;
+        [[nodiscard]] size_t size() const noexcept;
+        [[nodiscard]] int fd() const noexcept;
+        [[nodiscard]] bool is_dma() const noexcept { return dma.valid(); }
+    };
+
     CameraPreviewPlayer() = default;
 
     void on_stream_start_rsp(const middleware::CameraStreamInfoPayload& info);
@@ -45,11 +62,13 @@ private:
     void show_hint(const char* text);
     void schedule_ui_timer();
     void delete_ui_timer();
+    void clear_frame_buffers();
+    bool setup_frame_buffers(size_t frame_bytes, size_t nv12_bytes,
+                             uint32_t row_stride_bytes);
 
     static void ui_timer_cb(lv_timer_t* timer);
     static void async_apply_stream_start(void* user);
-    bool convert_frame_rga(const upc_ipc::IpcShmFrameView& frame,
-                           uint8_t* dst, size_t dst_bytes);
+    bool convert_frame(const upc_ipc::IpcShmFrameView& frame, int slot_idx);
 
     lv_obj_t* image_ = nullptr;
     lv_obj_t* hint_  = nullptr;
@@ -68,8 +87,10 @@ private:
     uint32_t fps_    = 25;
     uint32_t pixel_stride_px_ = 0;
 
-    std::vector<uint8_t> frame_buf_[3];
-    lv_image_dsc_t       img_dsc_[3]{};
+    FrameSlot            slots_[kFrameSlots];
+    RgaDmaBuf            nv12_staging_;
+    bool                 rga_path_ready_ = false;
+    lv_image_dsc_t       img_dsc_[kFrameSlots]{};
     std::atomic<int>     display_buf_{-1};
     int                  shown_buf_ = -1;
     bool                 logged_first_ui_show_ = false;

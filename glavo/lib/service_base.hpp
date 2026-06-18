@@ -62,7 +62,6 @@ protected:
     virtual void handle_message(const middleware::Message& msg) = 0;
 
     // 工具方法
-    void publish(const middleware::Message& msg);
     [[nodiscard]] bool publish_async(const middleware::Message& msg);
     void subscribe(middleware::MsgType type, middleware::MsgHandler handler);
 

@@ -31,6 +31,24 @@ void ensure_poller_open(IpcPoller& poller) {
     }
 }
 
+/** Server 仅连 UI Hub；wire 保留逻辑 sender，transport peer 恒为 UI */
+bool ipc_sender_mismatch_warn(IpcBusMode mode, middleware::ModuleId expected_sender,
+                              middleware::ModuleId wire_sender)
+{
+    if (expected_sender == middleware::ModuleId{0} ||
+        wire_sender == middleware::ModuleId{0}) {
+        return false;
+    }
+    if (wire_sender == expected_sender) {
+        return false;
+    }
+    if (mode == IpcBusMode::Server &&
+        expected_sender == middleware::ModuleId::UI) {
+        return false;
+    }
+    return true;
+}
+
 } // namespace
 
 IpcMsgBus& IpcMsgBus::instance()
@@ -334,30 +352,6 @@ bool IpcMsgBus::deliver_local(const middleware::Message& msg)
 bool IpcMsgBus::send_to_peer(middleware::ModuleId peer_id,
                              const middleware::Message& msg)
 {
-    if (mode_ == IpcBusMode::Server) {
-        if (peer_id != server_peer_id_ || !server_endpoint_.connected()) {
-            return false;
-        }
-
-        std::vector<uint8_t> frame;
-        if (!wire_encode(msg, frame)) {
-            UPC_LOG_IPC(Error, "wire_encode fail %s %s->%s",
-                        upc_msg_type_name(msg.type),
-                        upc_msg_module_name(msg.sender_id),
-                        upc_msg_module_name(msg.target_id));
-            return false;
-        }
-        if (!server_endpoint_.send_frame(frame)) {
-            return false;
-        }
-        upc_msg_log_message("IPC_TX", msg);
-        return true;
-    }
-
-    if (mode_ != IpcBusMode::Hub) {
-        return false;
-    }
-
     std::vector<uint8_t> frame;
     if (!wire_encode(msg, frame)) {
         UPC_LOG_IPC(Error, "wire_encode fail %s %s->%s",
@@ -367,14 +361,26 @@ bool IpcMsgBus::send_to_peer(middleware::ModuleId peer_id,
         return false;
     }
 
-    std::lock_guard<std::mutex> lock(peers_mtx_);
-    PeerEntry* peer = find_peer(peer_id);
-    if (!peer || !peer->endpoint.connected()) {
+    if (mode_ == IpcBusMode::Server) {
+        if (peer_id != server_peer_id_ || !server_endpoint_.connected()) {
+            return false;
+        }
+        if (!server_endpoint_.send_frame(frame)) {
+            return false;
+        }
+    } else if (mode_ == IpcBusMode::Hub) {
+        std::lock_guard<std::mutex> lock(peers_mtx_);
+        PeerEntry* peer = find_peer(peer_id);
+        if (!peer || !peer->endpoint.connected()) {
+            return false;
+        }
+        if (!peer->endpoint.send_frame(frame)) {
+            return false;
+        }
+    } else {
         return false;
     }
-    if (!peer->endpoint.send_frame(frame)) {
-        return false;
-    }
+
     upc_msg_log_message("IPC_TX", msg);
     return true;
 }
@@ -414,6 +420,74 @@ bool IpcMsgBus::send_to_all_peers(const middleware::Message& msg)
     return any_sent;
 }
 
+bool IpcMsgBus::should_forward_to_peer(const middleware::Message& msg) const
+{
+    return mode_ == IpcBusMode::Hub &&
+           msg.target_id != middleware::ModuleId{0} &&
+           msg.target_id != local_id_ &&
+           is_registered_peer(msg.target_id);
+}
+
+bool IpcMsgBus::needs_local_handling(const middleware::Message& msg) const
+{
+    if (msg.target_id == middleware::ModuleId{0} ||
+        msg.target_id == local_id_) {
+        return true;
+    }
+    return mode_ != IpcBusMode::Server &&
+           !is_registered_peer(msg.target_id);
+}
+
+bool IpcMsgBus::send_outbound_from_local(const middleware::Message& msg,
+                                         bool warn_on_fail)
+{
+    if (msg.sender_id != local_id_) {
+        return true;
+    }
+
+    const bool broadcast = msg.target_id == middleware::ModuleId{0};
+    if (broadcast) {
+        if (send_to_all_peers(msg)) {
+            return true;
+        }
+        if (warn_on_fail) {
+            UPC_LOG_IPC(Warn, "IPC_TX broadcast fail %s (no peer ready)",
+                        upc_msg_type_name(msg.type));
+        }
+        return false;
+    }
+
+    if (mode_ == IpcBusMode::Server) {
+        if (msg.target_id == local_id_) {
+            return true;
+        }
+        if (send_to_peer(server_peer_id_, msg)) {
+            return true;
+        }
+        if (warn_on_fail) {
+            UPC_LOG_IPC(Warn, "IPC_TX fail %s %s->%s (hub not ready)",
+                        upc_msg_type_name(msg.type),
+                        upc_msg_module_name(msg.sender_id),
+                        upc_msg_module_name(msg.target_id));
+        }
+        return false;
+    }
+
+    if (!is_registered_peer(msg.target_id)) {
+        return true;
+    }
+    if (send_to_peer(msg.target_id, msg)) {
+        return true;
+    }
+    if (warn_on_fail) {
+        UPC_LOG_IPC(Warn, "IPC_TX fail %s %s->%s (peer not ready)",
+                    upc_msg_type_name(msg.type),
+                    upc_msg_module_name(msg.sender_id),
+                    upc_msg_module_name(msg.target_id));
+    }
+    return false;
+}
+
 bool IpcMsgBus::enqueue_local(const middleware::Message& msg)
 {
     size_t queue_depth = 0;
@@ -440,61 +514,19 @@ bool IpcMsgBus::enqueue_local(const middleware::Message& msg)
 
 bool IpcMsgBus::publish_async(const middleware::Message& msg)
 {
-    const bool broadcast = msg.target_id == middleware::ModuleId{0};
-    const bool from_local = msg.sender_id == local_id_;
-    bool ok               = true;
-
-    if (from_local) {
-        if (broadcast) {
-            if (!send_to_all_peers(msg)) {
-                UPC_LOG_IPC(Warn, "IPC_TX broadcast fail %s (no peer ready)",
-                            upc_msg_type_name(msg.type));
-                ok = false;
-            }
-        } else if (is_registered_peer(msg.target_id)) {
-            if (!send_to_peer(msg.target_id, msg)) {
-                UPC_LOG_IPC(Warn, "IPC_TX fail %s %s->%s (peer not ready)",
-                            upc_msg_type_name(msg.type),
-                            upc_msg_module_name(msg.sender_id),
-                            upc_msg_module_name(msg.target_id));
-                ok = false;
-            }
-        }
+    bool ok = send_outbound_from_local(msg, true);
+    if (needs_local_handling(msg) && !enqueue_local(msg)) {
+        ok = false;
     }
-
-    if (broadcast || !is_registered_peer(msg.target_id)) {
-        if (!enqueue_local(msg)) {
-            ok = false;
-        }
-    }
-
     return ok;
 }
 
 bool IpcMsgBus::publish_sync(const middleware::Message& msg)
 {
-    const bool broadcast = msg.target_id == middleware::ModuleId{0};
-    const bool from_local = msg.sender_id == local_id_;
-    bool ok               = true;
-
-    if (from_local) {
-        if (broadcast) {
-            if (!send_to_all_peers(msg)) {
-                ok = false;
-            }
-        } else if (is_registered_peer(msg.target_id)) {
-            if (!send_to_peer(msg.target_id, msg)) {
-                ok = false;
-            }
-        }
+    bool ok = send_outbound_from_local(msg, false);
+    if (needs_local_handling(msg) && !deliver_local(msg)) {
+        ok = false;
     }
-
-    if (broadcast || !is_registered_peer(msg.target_id)) {
-        if (!deliver_local(msg)) {
-            ok = false;
-        }
-    }
-
     return ok;
 }
 
@@ -508,15 +540,24 @@ void IpcMsgBus::deliver_frames(
             UPC_LOG_IPC(Warn, "wire_decode fail frame_bytes=%zu", frame.size());
             continue;
         }
-        if (expected_sender != middleware::ModuleId{0} &&
-            msg.sender_id != middleware::ModuleId{0} &&
-            msg.sender_id != expected_sender) {
+        if (ipc_sender_mismatch_warn(mode_, expected_sender, msg.sender_id)) {
             UPC_LOG_IPC(Warn, "IPC_RX sender mismatch expect=%s got=%s",
                         upc_msg_module_name(expected_sender),
                         upc_msg_module_name(msg.sender_id));
         }
         upc_msg_log_message("IPC_RX", msg);
-        deliver_local(msg);
+
+        const bool hub_fwd = should_forward_to_peer(msg);
+        if (!hub_fwd) {
+            deliver_local(msg);
+        } else if (!send_to_peer(msg.target_id, msg)) {
+            UPC_LOG_IPC(Warn, "IPC_FWD fail %s %s->%s",
+                        upc_msg_type_name(msg.type),
+                        upc_msg_module_name(msg.sender_id),
+                        upc_msg_module_name(msg.target_id));
+        } else {
+            upc_msg_log_message("IPC_FWD", msg);
+        }
     }
 }
 

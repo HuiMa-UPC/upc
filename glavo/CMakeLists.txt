@@ -7,6 +7,7 @@ set(UPC_GLAVO_SOURCES
     ${GLAVO_LIB_DIR}/glavo_parser_bridge.cpp
     ${GLAVO_LIB_DIR}/mcu_link.cpp
     ${GLAVO_LIB_DIR}/print_job_state.cpp
+    ${GLAVO_LIB_DIR}/print_video_notify.cpp
 )
 
 add_library(${UPC_GLAVO_TARGET} STATIC ${UPC_GLAVO_SOURCES})

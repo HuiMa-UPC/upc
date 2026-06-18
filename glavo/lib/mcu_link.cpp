@@ -1,6 +1,7 @@
 #include "mcu_link.hpp"
 #include "protocol.hpp"
 #include "print_job_state.hpp"
+#include "print_video_notify.hpp"
 #include "parser_manager.hpp"
 #include "parser_worker.hpp"
 #include "msg_bus.hpp"
@@ -1002,6 +1003,7 @@ void McuLink::reset_motion_state(bool clear_start_pending)
     serial_evt_condition_ok_.store(false);
     serial_evt_print_ready_.store(false);
     sent_at_layer_ready_ = 0;
+    current_layer_snapped_ = false;
     tcp_stage_clear();
     serial_clear_reliable();
     PrintJobState::instance().set_sending(false);
@@ -1020,6 +1022,7 @@ void McuLink::begin_sending_internal()
     parser::IParserWorker* parser = active_parser();
     first_layer_height_um_  = parser ? parser->get_layer_height_um() : GCODE_DEFAULT_LAYER_UM;
     active_layer_height_um_ = first_layer_height_um_;
+    current_layer_snapped_  = false;
 
     // 重置 PrintJobState 中的发送相关计数与标志
     PrintJobState::instance().set_sending(true);
@@ -1147,9 +1150,25 @@ void McuLink::run_manual_terminate_cleanup()
     emit_event(was_error ? McuLinkEvent::PrintError : McuLinkEvent::TerminateDone);
 }
 
+void McuLink::link_try_final_layer_snap()
+{
+#if !GLAVO_ENABLE_LAYER_SNAP
+    return;
+#endif
+    if(current_layer_snapped_) {
+        return;
+    }
+    if(PrintJobState::instance().snapshot().sent_packets <= sent_at_layer_ready_) {
+        return;
+    }
+    PrintVideoNotify::instance().on_layer_snap(active_layer_height_um_);
+    current_layer_snapped_ = true;
+}
+
 void McuLink::run_natural_complete_cleanup()
 {
-    // 1. 通知 MCU 打印完成，并向振镜发 Reset
+    // 1. 末层无 M3000 时补 Snap，再通知 MCU 打印完成
+    link_try_final_layer_snap();
     send_serial_print_finished();
     send_tcp_reset();
 
@@ -1193,6 +1212,7 @@ void McuLink::link_process_serial_handshake()
     if(phase == SERIAL_HS_WAIT_PRINT_READY &&
        serial_evt_print_ready_.exchange(false)) {
         sent_at_layer_ready_ = PrintJobState::instance().snapshot().sent_packets;
+        current_layer_snapped_ = false;
         waiting_layer_.store(false);
         serial_handshake_phase_.store(SERIAL_HS_NONE);
     }
@@ -1259,6 +1279,11 @@ void McuLink::link_try_layer_serial_dispatch()
     if(PrintJobState::instance().snapshot().sent_packets <= sent_at_layer_ready_) {
         return;
     }
+
+#if GLAVO_ENABLE_LAYER_SNAP
+    PrintVideoNotify::instance().on_layer_snap(active_layer_height_um_);
+    current_layer_snapped_ = true;
+#endif
 
     // 发送 layer_done 帧，通知 MCU 当前层已结束
     uint8_t sbuf[32];

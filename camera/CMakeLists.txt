@@ -4,6 +4,7 @@ add_executable(rongsu_camera
     main.cpp
     ${CAMERA_LIB_DIR}/camera_service.cpp
     ${CAMERA_LIB_DIR}/vi_capture.cpp
+    ${CAMERA_LIB_DIR}/print_video_recorder.cpp
 )
 
 target_compile_features(rongsu_camera PRIVATE cxx_std_17)
@@ -47,6 +48,27 @@ if(UPC_RKAIQ_LIB)
     )
 else()
     message(WARNING "camera: librkaiq not found — build may fail on target")
+endif()
+
+if(CMAKE_SYSROOT)
+    find_library(UPC_ROCKCHIP_MPP_LIB NAMES rockchip_mpp
+        PATHS
+            ${CMAKE_SYSROOT}/usr/lib
+            ${CMAKE_SYSROOT}/lib
+        NO_DEFAULT_PATH)
+else()
+    find_library(UPC_ROCKCHIP_MPP_LIB NAMES rockchip_mpp)
+endif()
+
+if(UPC_ROCKCHIP_MPP_LIB)
+    message(STATUS "camera: linking librockchip_mpp ${UPC_ROCKCHIP_MPP_LIB}")
+    target_link_libraries(rongsu_camera PRIVATE ${UPC_ROCKCHIP_MPP_LIB})
+    target_include_directories(rongsu_camera
+        PRIVATE
+            ${CMAKE_SYSROOT}/usr/include
+            ${CMAKE_SYSROOT}/usr/include/rockchip)
+else()
+    message(WARNING "camera: librockchip_mpp not found — print_video H264 disabled")
 endif()
 
 target_compile_options(rongsu_camera

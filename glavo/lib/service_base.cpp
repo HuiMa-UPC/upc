@@ -2,8 +2,6 @@
 #include "msg_port.hpp"
 #include "rs_log.hpp"
 #include "msg_types.hpp"
-#include <cstdio>
-#include <iostream>
 
 namespace upc::glavo {
 
@@ -149,10 +147,6 @@ void ServiceBase::worker_loop() {
             handle_message(msg);
         }
     }
-}
-
-void ServiceBase::publish(const middleware::Message& msg) {
-    middleware::MsgPort::instance().publish(msg);
 }
 
 bool ServiceBase::publish_async(const middleware::Message& msg) {

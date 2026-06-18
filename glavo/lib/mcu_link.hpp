@@ -209,6 +209,8 @@ private:
     bool link_handle_layer_mark();
     /** @brief 若 MCU 缓存已排空，向串口发送“本层已完成”通知，启动下一层握手 */
     void link_try_layer_serial_dispatch();
+    /** @brief 打印自然完成前补末层 Snap（文件末尾无 M3000 时） */
+    void link_try_final_layer_snap();
     /** @brief 从 tcp_stage_ 取一批运动包，组帧后通过 TCP 下发 */
     int link_send_one_motion_batch();
     /** @brief 处理串口打印前的握手状态机（CONDITION_OK -> PRINT_READY） */
@@ -271,6 +273,8 @@ private:
     uint16_t first_layer_height_um_  = GCODE_DEFAULT_LAYER_UM; /**< 首层高度（微米），用于串口首次握手 */
     /** 收到 PRINT_READY 时的 sent_packets，用于判定本层是否已下发扫描指令 */
     int sent_at_layer_ready_ = 0;
+    /** 当前层是否已在换层排空路径拍过照（避免完成时重复 Snap） */
+    bool current_layer_snapped_ = false;
 
     /* ---------- 预取队列 ---------- */
     std::deque<upc::parser::rb_packet_t> tcp_stage_;      /**< 从 RingBuffer 预取出来的包暂存队列 */

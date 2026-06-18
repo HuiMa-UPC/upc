@@ -64,6 +64,12 @@ enum class MsgType : uint32_t {
     UI_Camera_Stream_Stop_Req,           /**< Empty */
     APP_Camera_Stream_Stop_Done,         /**< Empty */
     APP_Camera_Frame_Ntf,                /**< CameraFrameNtfPayload（可选唤醒 UI） */
+
+    // ---- GLAVO → CAMERA：打印层拍照录像（控制面；像素仍走预览 SHM） ----
+    APP_Print_Video_Session_Start_Ntf = 0x2100, /**< PrintVideoSessionPayload */
+    APP_Print_Layer_Snap_Ntf,                   /**< PrintVideoLayerSnapPayload */
+    APP_Print_Video_Session_Finish_Ntf,         /**< PrintVideoSessionPayload */
+    APP_Print_Video_Session_Abort_Ntf,          /**< PrintVideoSessionPayload */
 };
 
 enum class MsgPriority : uint8_t {
@@ -309,6 +315,23 @@ struct CameraStreamInfoPayload {
 /** APP_Camera_Frame_Ntf：新帧序号（Inline；像素在 SHM） */
 struct CameraFrameNtfPayload {
     uint32_t seq;
+};
+
+/** GLAVO→CAMERA 打印录像会话（Start/Finish/Abort 共用） */
+struct PrintVideoSessionPayload {
+    char     session_id[32];
+    char     job_name[64];   /**< 用于输出 MP4 文件名 */
+    uint32_t width;          /**< 0=Camera 默认 */
+    uint32_t height;         /**< 0=Camera 默认 */
+    uint32_t layer_fps;      /**< MP4 层帧率；0=默认 */
+};
+
+/** GLAVO→CAMERA 单层拍照（换层排空后、LAYER_DONE 前） */
+struct PrintVideoLayerSnapPayload {
+    char     session_id[32];
+    uint32_t layer_index;    /**< 1-based */
+    uint16_t layer_height_um;
+    uint16_t reserved;
 };
 
 } // namespace middleware

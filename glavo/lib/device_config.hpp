@@ -78,5 +78,9 @@
 #define GLAVO_SERIAL_ACK_MAX_RETRY  3
 #endif
 
+/** 换层排空后向 Camera 发 Layer_Snap_Ntf：0=关；1=每层拍照录像 */
+#ifndef GLAVO_ENABLE_LAYER_SNAP
+#define GLAVO_ENABLE_LAYER_SNAP  1
+#endif
 
 #endif // DEVICE_CONFIG_HPP
