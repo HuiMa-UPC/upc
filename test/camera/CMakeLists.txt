@@ -1,6 +1,7 @@
 add_executable(test_camera
     main.cpp
     file_frame_source.cpp
+    test_camera_dma_source.cpp
     test_camera_service.cpp
 )
 

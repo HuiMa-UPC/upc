@@ -67,11 +67,10 @@ tail -f /var/log/rongsu_ui.log /var/log/rongsu_glavo.log
 | **IPC** | MW | UI + Glavo | 套接字：listen/connect、peer 连接/断开、编解码失败 |
 | **MemPool** | MW | 少用 | 内存池分配统计 |
 | **BufferPool** | MW | 少用 | 缓冲区池统计 |
-| **ThreadPool** | MW | 少用 | 线程池状态 |
 | **McuLink** | SVC | **仅 Glavo** | TCP/串口连接、协议帧十六进制、传感器、打印握手 |
 | **GlavoService** | SVC | **仅 Glavo** | 目录扫描、打印流程、PM2.5/门控等业务 |
-| **CameraService** | SVC | **仅 Camera** | 预览推流、SHM commit、打印录像会话 |
-| **CameraPreview** | SVC | **仅 UI** | 预览 SHM 消费、RGA/SW 解码、LVGL 换帧 |
+| **CameraService** | SVC | **仅 Camera** | 预览 dma fd 推流、元数据环 commit、打印录像会话 |
+| **CameraPreview** | SVC | **仅 UI** | 预览 dma fd 元数据环消费、RGA/SW 解码、LVGL 换帧 |
 | **ServiceBase** | SVC | **仅 Glavo** | 工作线程队列满、丢消息 |
 | **CalParser** / **ParserContext** / **GcodeWorker** | SVC | **仅 Glavo** | 解析器插件 |
 | **HostMonitor** | SYS | UI + Glavo | 约每 60s 一条 CPU/内存/温度 |

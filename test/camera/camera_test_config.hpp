@@ -1,9 +1,7 @@
 #ifndef CAMERA_TEST_CONFIG_HPP
 #define CAMERA_TEST_CONFIG_HPP
 
-#include "ipc_shm_types.hpp"
-
-/** NV12 裸流默认目录与文件名（1024×600） */
+/** NV12 裸流默认目录与文件名 */
 #ifndef TEST_CAMERA_VIDEO_DIR_DEFAULT
 #define TEST_CAMERA_VIDEO_DIR_DEFAULT  "/home/test"
 #endif
@@ -24,16 +22,6 @@
 #define TEST_CAMERA_FPS_DEFAULT  25u
 #endif
 
-/** POSIX shm 名（须以 '/' 开头） */
-#ifndef TEST_CAMERA_SHM_NAME_DEFAULT
-#define TEST_CAMERA_SHM_NAME_DEFAULT "/upc_camera_preview"
-#endif
-
-#ifndef TEST_CAMERA_SHM_SLOT_COUNT
-#define TEST_CAMERA_SHM_SLOT_COUNT 3u
-#endif
-
-/** 环境变量 UPC_TEST_CAMERA_VIDEO：覆盖为完整路径 */
 #ifndef TEST_CAMERA_ENV_VIDEO_PATH
 #define TEST_CAMERA_ENV_VIDEO_PATH "UPC_TEST_CAMERA_VIDEO"
 #endif
@@ -46,13 +34,27 @@
 #define TEST_CAMERA_ENV_LOOP "UPC_TEST_CAMERA_LOOP"
 #endif
 
-/** 0=纯 SHM（默认，UI poll）；1=每帧额外发 APP_Camera_Frame_Ntf */
+/** 0=纯 poll；1=每帧额外发 APP_Camera_Frame_Ntf */
 #ifndef TEST_CAMERA_FRAME_NTF_DEFAULT
 #define TEST_CAMERA_FRAME_NTF_DEFAULT 0
 #endif
 
 #ifndef TEST_CAMERA_ENV_FRAME_NTF
 #define TEST_CAMERA_ENV_FRAME_NTF "UPC_TEST_CAMERA_FRAME_NTF"
+#endif
+
+/** dma 元数据环名称 */
+#ifndef TEST_CAMERA_SHM_NAME_DEFAULT
+#define TEST_CAMERA_SHM_NAME_DEFAULT "/upc_camera_preview"
+#endif
+
+#ifndef TEST_CAMERA_SHM_SLOT_COUNT
+#define TEST_CAMERA_SHM_SLOT_COUNT 3u
+#endif
+
+/** NV12 Y 平面 stride 对齐要求（RGA 通常要求 16/64 字节对齐） */
+#ifndef TEST_CAMERA_STRIDE_ALIGN
+#define TEST_CAMERA_STRIDE_ALIGN  16u
 #endif
 
 #endif /* CAMERA_TEST_CONFIG_HPP */

@@ -1,7 +1,7 @@
 #include "test_camera_service.hpp"
 #include "file_frame_source.hpp"
 #include "camera_test_config.hpp"
-#include "ipc_shm_region.hpp"
+#include "ipc_dma_frame_ring.hpp"
 #include "msg_port.hpp"
 #include "rs_log.hpp"
 
@@ -13,7 +13,6 @@
 
 namespace {
 
-/** commit_slot 用单调时钟时间戳（微秒） */
 uint64_t monotonic_us()
 {
     using clock = std::chrono::steady_clock;
@@ -23,7 +22,6 @@ uint64_t monotonic_us()
             .count());
 }
 
-/** 从 StartReq payload 取出 video_name；无内联数据时返回空串 */
 bool read_start_req_name(const middleware::MsgPayload& payload, char* out, size_t out_size)
 {
     if(!out || out_size == 0) {
@@ -40,6 +38,14 @@ bool read_start_req_name(const middleware::MsgPayload& payload, char* out, size_
     return true;
 }
 
+inline uint32_t align_up(uint32_t v, uint32_t align)
+{
+    if(align == 0) {
+        return v;
+    }
+    return (v + align - 1u) & ~(align - 1u);
+}
+
 } // namespace
 
 TestCameraService::TestCameraService() = default;
@@ -51,7 +57,6 @@ TestCameraService::~TestCameraService()
 
 bool TestCameraService::init()
 {
-    // 运行时配置：循环播放、帧率、是否发 Frame_Ntf
     const char* loop_env = std::getenv(TEST_CAMERA_ENV_LOOP);
     if(loop_env && loop_env[0] == '0') {
         loop_video_ = false;
@@ -81,7 +86,6 @@ void TestCameraService::subscribe_messages()
 {
     auto& port = middleware::MsgPort::instance();
 
-    // 以 APP_CAMERA 身份订阅 UI 发起的流控请求
     subs_.push_back(port.subscribe(
         middleware::MsgType::UI_Camera_Stream_Start_Req,
         middleware::ModuleId::APP_CAMERA,
@@ -140,7 +144,6 @@ uint32_t TestCameraService::read_fps_from_env()
 
 void TestCameraService::handle_stream_start(const middleware::Message& msg)
 {
-    // 重复 Start 时先停旧流，再按新路径重建 SHM
     if(stream_running_.load()) {
         stop_streaming();
     }
@@ -151,12 +154,17 @@ void TestCameraService::handle_stream_start(const middleware::Message& msg)
 
     if(!ok) {
         UPC_LOG_TEST_CAMERA(Error, "stream start failed path=%s", path.c_str());
-    } else {
-        UPC_LOG_TEST_CAMERA(Info,
-            "streaming %s %ux%u @ %u fps shm=%s",
-            path.c_str(), stream_width_, stream_height_, stream_fps_,
-            TEST_CAMERA_SHM_NAME_DEFAULT);
+        return;
     }
+
+    stop_stream_.store(false);
+    stream_running_.store(true);
+    stream_thread_ = std::thread(&TestCameraService::stream_thread_fn, this);
+
+    UPC_LOG_TEST_CAMERA(Info,
+        "streaming %s %ux%u @ %u fps shm=%s stride_y=%u",
+        path.c_str(), stream_width_, stream_height_, stream_fps_,
+        TEST_CAMERA_SHM_NAME_DEFAULT, dma_stride_y_);
 }
 
 void TestCameraService::handle_stream_stop(const middleware::Message& msg)
@@ -166,6 +174,37 @@ void TestCameraService::handle_stream_stop(const middleware::Message& msg)
     UPC_LOG_TEST_CAMERA(Info, "stream stopped");
 }
 
+void TestCameraService::copy_frame_to_dma(uint32_t dst_idx, const uint8_t* src_nv12,
+                                          uint32_t width, uint32_t height,
+                                          uint32_t src_stride,
+                                          uint32_t dst_stride)
+{
+    if(!src_nv12 || dst_idx >= dma_source_.count() || width == 0 || height == 0) {
+        return;
+    }
+    void* dst_va = dma_source_.va(dst_idx);
+    if(!dst_va) {
+        return;
+    }
+
+    uint8_t* dst_y  = static_cast<uint8_t*>(dst_va);
+    uint8_t* dst_uv = dst_y + static_cast<size_t>(dst_stride) * height;
+    const uint8_t* src_y  = src_nv12;
+    const uint8_t* src_uv = src_y + static_cast<size_t>(src_stride) * height;
+    const uint32_t uv_h = height / 2u;
+
+    for(uint32_t row = 0; row < height; ++row) {
+        std::memcpy(dst_y + static_cast<size_t>(row) * dst_stride,
+                    src_y + static_cast<size_t>(row) * src_stride,
+                    width);
+    }
+    for(uint32_t row = 0; row < uv_h; ++row) {
+        std::memcpy(dst_uv + static_cast<size_t>(row) * dst_stride,
+                    src_uv + static_cast<size_t>(row) * src_stride,
+                    width);
+    }
+}
+
 bool TestCameraService::start_streaming(const std::string& video_path)
 {
     if(!source_.open(video_path, stream_width_, stream_height_)) {
@@ -173,67 +212,61 @@ bool TestCameraService::start_streaming(const std::string& video_path)
         return false;
     }
 
+    dma_stride_y_ = align_up(stream_width_, TEST_CAMERA_STRIDE_ALIGN);
+    constexpr uint32_t kDmaBufCount = 4u;
+
+    if(!dma_source_.alloc(kDmaBufCount, dma_stride_y_, stream_height_)) {
+        source_.close();
+        UPC_LOG_TEST_CAMERA(Error, "dma source alloc failed");
+        return false;
+    }
+
     producer_.destroy();
 
-    const upc_ipc::IpcShmRingCreateParams params{
+    const upc_ipc::IpcShmError err = producer_.create(
         TEST_CAMERA_SHM_NAME_DEFAULT,
         stream_width_,
         stream_height_,
-        0,
-        TEST_CAMERA_SHM_SLOT_COUNT,
-        upc_ipc::IpcShmPixelFormat::YUV420SP,
-    };
+        dma_stride_y_,
+        upc_ipc::kDmaFrameFormatNv12,
+        TEST_CAMERA_SHM_SLOT_COUNT);
 
-    upc_ipc::IpcShmError err = producer_.create(params);
-    // 上次异常退出可能残留同名 shm，先 unlink 再创建
-    if(err == upc_ipc::IpcShmError::AlreadyExists) {
-        upc_ipc::IpcShmRegion tmp;
-        if(tmp.open(TEST_CAMERA_SHM_NAME_DEFAULT, false) == upc_ipc::IpcShmError::Ok) {
-            tmp.unlink_name();
-            tmp.close();
-        }
-        err = producer_.create(params);
-    }
-    if(err != upc_ipc::IpcShmError::Ok) {
+    if(err != upc_ipc::IpcShmError::OK) {
+        dma_source_.shutdown();
         source_.close();
-        UPC_LOG_TEST_CAMERA(Error, "shm create failed err=%d",
+        UPC_LOG_TEST_CAMERA(Error, "dma frame ring create failed err=%d",
                             static_cast<int>(err));
         return false;
     }
 
-    if(const upc_ipc::IpcShmGlobalHeader* hdr = producer_.header()) {
-        UPC_LOG_TEST_CAMERA(Info,
-            "SHM created name=%s %ux%u stride_y=%u slots=%u slot_stride=%u "
-            "frame_bytes=%zu",
-            TEST_CAMERA_SHM_NAME_DEFAULT, hdr->width, hdr->height, hdr->stride_y,
-            hdr->slot_count, hdr->slot_stride_bytes, source_.frame_bytes());
-    }
+    UPC_LOG_TEST_CAMERA(Info,
+        "dma frame ring created name=%s %ux%u stride_y=%u slots=%u bufs=%u",
+        TEST_CAMERA_SHM_NAME_DEFAULT, stream_width_, stream_height_,
+        dma_stride_y_, TEST_CAMERA_SHM_SLOT_COUNT, kDmaBufCount);
 
-    stop_stream_.store(false);
-    stream_running_.store(true);
-    stream_thread_ = std::thread(&TestCameraService::stream_thread_fn, this);
     return true;
 }
 
 void TestCameraService::stop_streaming()
 {
-    // 置位后 join 推流线程，再销毁 SHM 与文件句柄
     stop_stream_.store(true);
     if(stream_thread_.joinable()) {
         stream_thread_.join();
     }
     stream_running_.store(false);
     producer_.destroy();
+    dma_source_.shutdown();
     source_.close();
 }
 
 void TestCameraService::stream_thread_fn()
 {
-    const size_t frame_bytes = source_.frame_bytes();
+    const size_t file_frame_bytes = source_.frame_bytes();
+    const uint32_t file_stride    = stream_width_;
     const auto frame_period =
         std::chrono::microseconds(1000000u / (stream_fps_ > 0 ? stream_fps_ : 1u));
 
-    // 推流主循环：限速 → 占槽写帧 → commit → 可选通知 UI
+    std::vector<uint8_t> file_buf(file_frame_bytes);
 
     using clock = std::chrono::steady_clock;
     auto stats_since   = clock::now();
@@ -247,7 +280,7 @@ void TestCameraService::stream_thread_fn()
         if(now - stats_since >= std::chrono::seconds(1)) {
             UPC_LOG_TEST_CAMERA(Debug,
                 "stream 1s: committed=%u last_seq=%u last_slot=%u bytes=%zu",
-                frames_1s, last_seq, last_slot, frame_bytes);
+                frames_1s, last_seq, last_slot, file_frame_bytes);
             frames_1s  = 0;
             stats_since = now;
         }
@@ -256,14 +289,11 @@ void TestCameraService::stream_thread_fn()
 
         std::optional<uint32_t> slot = producer_.acquire_write_slot();
         if(!slot) {
-            // UI 尚未消费完槽位，短暂退让避免忙等
             std::this_thread::sleep_for(std::chrono::milliseconds(2));
             continue;
         }
 
-        uint8_t* payload = producer_.slot_payload(*slot);
-        if(!payload ||
-           !source_.read_frame(payload, frame_bytes, loop_video_)) {
+        if(!source_.read_frame(file_buf.data(), file_buf.size(), loop_video_)) {
             producer_.cancel_write_slot(*slot);
             if(stop_stream_.load()) {
                 break;
@@ -272,19 +302,29 @@ void TestCameraService::stream_thread_fn()
             continue;
         }
 
+        const int buf_idx = dma_source_.acquire();
+        if(buf_idx < 0) {
+            producer_.cancel_write_slot(*slot);
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+            continue;
+        }
+
+        copy_frame_to_dma(static_cast<uint32_t>(buf_idx), file_buf.data(),
+                          stream_width_, stream_height_, file_stride, dma_stride_y_);
+
         const uint32_t seq =
-            producer_.commit_slot(*slot, monotonic_us());
-        if(!logged_first_commit && payload) {
-            // 首帧采样若干像素，便于确认 Y/UV 布局与读长正确
-            const uint32_t sy = stream_width_;
-            const size_t y_size = static_cast<size_t>(sy) * stream_height_;
+            producer_.commit_slot(*slot, monotonic_us(),
+                                  static_cast<uint32_t>(buf_idx));
+
+        if(!logged_first_commit) {
+            const size_t y_size = static_cast<size_t>(stream_width_) * stream_height_;
             UPC_LOG_TEST_CAMERA(Info,
-                "first frame committed slot=%u seq=%u payload=%p "
-                "Y[0]=%u Y[mid]=%u UV[0]=%u UV[1]=%u read_bytes=%zu",
-                *slot, seq, static_cast<void*>(payload),
-                payload[0],
-                payload[y_size / 2u + stream_width_ / 2u],
-                payload[y_size], payload[y_size + 1u], frame_bytes);
+                "first frame committed slot=%u seq=%u buf_idx=%d "
+                "Y[0]=%u Y[mid]=%u UV[0]=%u UV[1]=%u",
+                *slot, seq, buf_idx,
+                file_buf[0],
+                file_buf[y_size / 2u + stream_width_ / 2u],
+                file_buf[y_size], file_buf[y_size + 1u]);
             logged_first_commit = true;
         }
         if(frame_ntf_enabled_) {
@@ -293,6 +333,15 @@ void TestCameraService::stream_thread_fn()
         frames_1s++;
         last_seq  = seq;
         last_slot = *slot;
+
+        if(!producer_.wait_slot_empty(*slot, 1000)) {
+            UPC_LOG_TEST_CAMERA(Warn,
+                "slot release timeout slot=%u seq=%u buf_idx=%d (backpressure)",
+                *slot, seq, buf_idx);
+            continue;
+        }
+
+        dma_source_.release(static_cast<uint32_t>(buf_idx));
 
         const auto elapsed = clock::now() - tick_start;
         if(elapsed < frame_period) {
@@ -303,16 +352,17 @@ void TestCameraService::stream_thread_fn()
 
 void TestCameraService::send_stream_start_rsp(const middleware::Message& req, bool ok)
 {
-    // 跨进程回复须 publish_async，目标为原请求方 sender_id
     middleware::CameraStreamInfoPayload info{};
     std::snprintf(info.shm_name, sizeof(info.shm_name), "%s",
                   TEST_CAMERA_SHM_NAME_DEFAULT);
-    info.width    = stream_width_;
-    info.height   = stream_height_;
-    info.stride_y = 0;
-    info.format   = static_cast<uint32_t>(upc_ipc::IpcShmPixelFormat::YUV420SP);
-    info.fps      = stream_fps_;
-    info.ok       = ok ? 1 : 0;
+    info.width         = stream_width_;
+    info.height        = stream_height_;
+    info.stride_y      = dma_stride_y_;
+    info.format        = upc_ipc::kDmaFrameFormatNv12;
+    info.fps           = stream_fps_;
+    info.dma_buf_count = ok ? dma_source_.count() : 0;
+    info.dma_mode      = ok ? 1 : 0;
+    info.ok            = ok ? 1 : 0;
 
     middleware::Message rsp(
         middleware::MsgType::APP_Camera_Stream_Start_Rsp,
@@ -320,12 +370,19 @@ void TestCameraService::send_stream_start_rsp(const middleware::Message& req, bo
         req.sender_id);
     rsp.payload = middleware::MsgPayload::from_bytes(
         reinterpret_cast<const uint8_t*>(&info), sizeof(info));
-    middleware::MsgPort::instance().publish_async(rsp);
+
+    auto& port = middleware::MsgPort::instance();
+    if(ok && dma_source_.count() > 0) {
+        if(!port.publish_to_peer_with_fds(rsp, dma_source_.ipc_fds())) {
+            UPC_LOG_TEST_CAMERA(Error, "stream start rsp with fds failed");
+        }
+    } else {
+        port.publish_async(rsp);
+    }
 }
 
 void TestCameraService::send_stream_stop_done(const middleware::Message& req)
 {
-    // 无 payload，仅通知 UI 推流已结束
     middleware::Message done(
         middleware::MsgType::APP_Camera_Stream_Stop_Done,
         middleware::ModuleId::APP_CAMERA,
@@ -335,7 +392,6 @@ void TestCameraService::send_stream_stop_done(const middleware::Message& req)
 
 void TestCameraService::notify_frame(uint32_t seq)
 {
-    // 仅传序号；UI 按 shm_name 自行读对应 slot
     middleware::CameraFrameNtfPayload ntf{};
     ntf.seq = seq;
 

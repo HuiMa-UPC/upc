@@ -121,4 +121,24 @@ void MsgPort::process(int io_timeout_ms)
     }
 }
 
+bool MsgPort::publish_to_peer_with_fds(const Message& msg,
+                                       const std::vector<int>& fds)
+{
+    if (mode_ == MsgPortMode::InProcess) {
+        (void)fds;
+        return MsgBus::instance().publish_async(msg);
+    }
+    return upc_ipc::IpcMsgBus::instance().send_to_peer_with_fds(msg.target_id,
+                                                                msg, fds);
+}
+
+bool MsgPort::take_peer_dma_fds(ModuleId peer_id, std::vector<int>& out_fds)
+{
+    if (mode_ == MsgPortMode::InProcess) {
+        out_fds.clear();
+        return false;
+    }
+    return upc_ipc::IpcMsgBus::instance().take_pending_dma_fds(peer_id, out_fds);
+}
+
 } // namespace middleware

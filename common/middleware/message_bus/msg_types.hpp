@@ -302,14 +302,17 @@ struct CameraStreamStartReqPayload {
 
 /** APP_Camera_Stream_Start_Rsp：SHM 帧环参数（Inline） */
 struct CameraStreamInfoPayload {
-    char     shm_name[64];
+    char     shm_name[64];        /**< SHM 状态环名称 */
+    char     dma_socket_path[64]; /**< ABI 保留；fd 经 IPC SCM_RIGHTS 传递 */
     uint32_t width;
     uint32_t height;
-    uint32_t stride_y;
-    uint32_t format;   /**< upc_ipc::IpcShmPixelFormat 数值 */
+    uint32_t stride_y;            /**< Y 平面实际 stride（字节） */
+    uint32_t format;              /**< NV12 fourcc，见 upc_ipc::kDmaFrameFormatNv12 */
     uint32_t fps;
-    int8_t   ok;       /**< 1=成功，0=失败（如无视频文件） */
-    uint8_t  reserved[3];
+    uint32_t dma_buf_count;       /**< V4L2 buffer 数量（与 IPC 附带 fd 数一致） */
+    int8_t   ok;                  /**< 1=成功，0=失败 */
+    uint8_t  dma_mode;            /**< 固定为 1：dma fd 旁路模式；SHM 仅保留元数据 */
+    uint8_t  reserved[2];
 };
 
 /** APP_Camera_Frame_Ntf：新帧序号（Inline；像素在 SHM） */

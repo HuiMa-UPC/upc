@@ -6,9 +6,8 @@ set(UPC_IPC_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/ipc_poller.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ipc_msg_bus.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/msg_port.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/ipc_shm_layout.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/ipc_shm_region.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/ipc_shm_ring.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dma_heap_buffer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ipc_dma_frame_ring.cpp
 )
 
 add_library(${UPC_IPC_TARGET} STATIC ${UPC_IPC_SOURCES})

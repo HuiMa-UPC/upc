@@ -43,9 +43,6 @@ void log_write(Level level, const char* src, const char* module,
 #define UPC_LOG_BUFFER_POOL(lvl, fmt, ...) \
     UPC_LOG_MOD_(UPC_MOD_BUFFER_POOL, lvl, "MW", "BufferPool", fmt, ##__VA_ARGS__)
 
-#define UPC_LOG_THREAD_POOL(lvl, fmt, ...) \
-    UPC_LOG_MOD_(UPC_MOD_THREAD_POOL, lvl, "MW", "ThreadPool", fmt, ##__VA_ARGS__)
-
 #define UPC_LOG_GLAVO_SERVICE(lvl, fmt, ...) \
     UPC_LOG_MOD_(UPC_MOD_GLAVO_SERVICE, lvl, "SVC", "GlavoService", fmt, ##__VA_ARGS__)
 

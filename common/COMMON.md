@@ -2,7 +2,7 @@
 
 > 索引：[doc/ARCHITECTURE.md](../doc/ARCHITECTURE.md)
 
-跨 `ui/`、`glavo/`、`camera/`、`test/` 共用；契约变更需相关组知晓。
+跨 `app/`、`test/` 共用；契约变更需相关组知晓。
 
 ## 子目录
 
@@ -34,6 +34,6 @@ UI 为 IPC **Hub**；后端各 **Server**。详见 [ipc/IPC.md](ipc/IPC.md)。
 
 ## 链接边界
 
-- **UI**：`upc::ipc` + `ui::port`，**禁止** `glavo/lib`
+- **UI**：`upc::ipc` + `ui::port`，**禁止** `app/glavo/lib`
 - **Glavo**：`upc_glavo` + `upc::ipc` + `parser`，**禁止** lvgl
-- **test_camera**：`middleware` + `upc::ipc`，**禁止** lvgl / glavo
+- **test_camera**：`middleware` + `upc::ipc`，**禁止** lvgl / `app/glavo`

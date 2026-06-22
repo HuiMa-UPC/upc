@@ -27,23 +27,20 @@
 #ifndef UPC_MOD_BUFFER_POOL
 #define UPC_MOD_BUFFER_POOL 1
 #endif
-#ifndef UPC_MOD_THREAD_POOL
-#define UPC_MOD_THREAD_POOL 1
-#endif
 #ifndef UPC_MOD_GLAVO_SERVICE
 #define UPC_MOD_GLAVO_SERVICE 1
 #endif
 #ifndef UPC_MOD_MCU_LINK
-#define UPC_MOD_MCU_LINK 0
+#define UPC_MOD_MCU_LINK 1
 #endif
 #ifndef UPC_MOD_CAL_PARSER
-#define UPC_MOD_CAL_PARSER 0
+#define UPC_MOD_CAL_PARSER 1
 #endif
 #ifndef UPC_MOD_PARSER_CONTEXT
-#define UPC_MOD_PARSER_CONTEXT 0
+#define UPC_MOD_PARSER_CONTEXT 1
 #endif
 #ifndef UPC_MOD_GCODE_WORKER
-#define UPC_MOD_GCODE_WORKER 0
+#define UPC_MOD_GCODE_WORKER 1
 #endif
 #ifndef UPC_MOD_OVF_WORKER
 #define UPC_MOD_OVF_WORKER 0
@@ -61,7 +58,7 @@
 #define UPC_MOD_TEST_CAMERA 0
 #endif
 #ifndef UPC_MOD_CAMERA_PREVIEW
-#define UPC_MOD_CAMERA_PREVIEW 1
+#define UPC_MOD_CAMERA_PREVIEW 0
 #endif
 
 #else /* !UPC_DEBUG */
@@ -70,7 +67,6 @@
 #define UPC_MOD_IPC 0
 #define UPC_MOD_MEM_POOL 0
 #define UPC_MOD_BUFFER_POOL 0
-#define UPC_MOD_THREAD_POOL 0
 #define UPC_MOD_GLAVO_SERVICE 0
 #define UPC_MOD_MCU_LINK 0
 #define UPC_MOD_CAL_PARSER 0

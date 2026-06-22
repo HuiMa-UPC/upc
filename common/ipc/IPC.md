@@ -13,7 +13,10 @@
 | `ipc_endpoint.*` | Unix stream socket listen/connect/帧收发 |
 | `ipc_poller.*` | Linux epoll 封装（非 Linux 走 fallback 轮询） |
 | `ipc_config.hpp` | 默认 socket 路径、重连/启动超时 |
-| `ipc_shm_{types,layout,region,ring}.*` | 预览等大流量 SHM 帧环 |
+| `ipc_dma_frame_ring.*` | 预览 dma fd 元数据环 |
+| `dma_heap_buffer.*` | dma-heap 单个缓冲区分配 |
+
+`dma_heap_buffer.*` 同时被 UI `RgaDmaBuf`、camera `CameraDmaFrameSource` 与 `test_camera_dma_source` 复用，避免各自维护 dma-heap 候选列表。
 
 **契约勿随意改**：`msg_types.hpp`、`common/README.md`
 
@@ -90,7 +93,7 @@ Glavo publish_async(target=APP_CAMERA)
 
 - 转发在 **`IpcMsgBus::deliver_frames`** 内同步完成，不经过 UiMsgProxy。
 - **wire `sender_id`** 保留逻辑源（如 `APP_GLAVO`）；Camera/Glavo Server 的 transport 对端恒为 UI，**不对 Hub 转发报文打 sender mismatch**。
-- 预览像素走 **`ipc_shm_*`**，控制消息走 MsgPort。
+- 预览像素走 **dma fd 旁路 + `ipc_dma_frame_ring`** 元数据环，控制消息走 MsgPort。
 
 ## 日志阶段
 
@@ -123,8 +126,9 @@ Glavo publish_async(target=APP_CAMERA)
 5. `scripts/rongsu.sh` — 启动顺序 + `wait_for_socket`
 6. UI 业务 — 独立 `XxxMsgProxy`
 
-大流量：控制走 MsgPort；像素走 `ipc_shm_*`（camera 预览：NV12 ring，UI 侧 RGA/SW 转 BGRX）。
+大流量：控制走 MsgPort；像素走主 IPC SCM_RIGHTS 传 dma fd + `ipc_dma_frame_ring` 元数据环（camera 预览：NV12，UI 侧 RGA/SW 转 BGRX）。
+详见 `app/camera/lib/camera_dma_frame_source.*`、`test/camera/test_camera_dma_source.*` 与 `app/ui/lib/core/camera_preview.*`。
 
 ## 相关文档
 
-- [ui/UI.md](../../ui/UI.md) · [glavo/GLAVO.md](../../glavo/GLAVO.md) · [camera/CAMERA.md](../../camera/CAMERA.md) · [test/TEST.md](../../test/TEST.md)
+- [app/ui/UI.md](../../app/ui/UI.md) · [app/glavo/GLAVO.md](../../app/glavo/GLAVO.md) · [app/camera/CAMERA.md](../../app/camera/CAMERA.md) · [test/TEST.md](../../test/TEST.md)

@@ -1,14 +1,13 @@
 ---
-description: Glavo 与 parser — 打印、McuLink、IPC server
-globs: glavo/**,parser/**
+description: Glavo 进程 — 打印编排、McuLink、Parser
+globs: app/glavo/**,app/parser/**
 alwaysApply: false
 ---
 
-# glavo/ + parser/
+# app/glavo/ + app/parser/
 
-改 Glavo/打印/MCU 前读 [glavo/GLAVO.md](../../glavo/GLAVO.md) 与 [parser/PARSER.md](../../parser/PARSER.md)。
+改 Glavo/打印/MCU 前读 [app/glavo/GLAVO.md](../../app/glavo/GLAVO.md) 与 [app/parser/PARSER.md](../../app/parser/PARSER.md)。
 
-- `GlavoService` 编排 IPC；`McuLink` 负责双通道 I/O；`protocol/` 仅编解码
-- 禁止直接依赖具体 `GcodeWorker`；用 `ParserManager::active()`
-- 工作线程回复 UI：`publish_async` only
-- MCU 协议以 `protocol/` + `mcu_link.*` 为准；表见 `doc/*.xlsx`
+- `GlavoService` 编排 IPC；`McuLink` 负责双通道 I/O；`app/protocol/` 仅编解码
+- 解析输出为 `RingBuffer` 的 `rb_packet_t`
+- MCU 协议以 `app/protocol/` + `mcu_link.*` 为准；表见 `doc/*.xlsx`

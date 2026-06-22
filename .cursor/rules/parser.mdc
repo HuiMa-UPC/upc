@@ -1,12 +1,12 @@
 ---
-description: parser 库 — G-code/OVF 解析、RingBuffer 输出
-globs: parser/**
+description: 切片解析库 — Gcode/OVF、ParserManager
+globs: app/parser/**
 alwaysApply: false
 ---
 
-# parser/
+# app/parser/
 
-改解析器/新切片格式前读 [parser/PARSER.md](../../parser/PARSER.md)。
+改解析器/新切片格式前读 [app/parser/PARSER.md](../../app/parser/PARSER.md)。
 
 - 输出为 `RingBuffer` 中的 `rb_packet_t`，不是 G 代码原文
 - 通过 `ParserManager` / `ParserRegistry` 访问，禁止直接依赖具体 Worker

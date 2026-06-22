@@ -6,7 +6,6 @@ set(MIDDLEWARE_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/message_bus/ring_buffer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/memory_pool/mem_pool.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/memory_pool/buffer_pool.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/thread_pool/thread_pool.cpp
     ${CMAKE_SOURCE_DIR}/common/debug/rs_msg_format.cpp
 )
 
@@ -19,10 +18,8 @@ target_include_directories(${MIDDLEWARE_TARGET}
     PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/message_bus>
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/memory_pool>
-        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/thread_pool>
         $<INSTALL_INTERFACE:include/middleware/message_bus>
         $<INSTALL_INTERFACE:include/middleware/memory_pool>
-        $<INSTALL_INTERFACE:include/middleware/thread_pool>
 )
 
 target_link_libraries(${MIDDLEWARE_TARGET}
@@ -37,19 +34,10 @@ endif()
 if(NOT DEFINED MEM_POOL_MAX_BUFFERS)
     set(MEM_POOL_MAX_BUFFERS 256)
 endif()
-if(NOT DEFINED THREAD_POOL_MAX_THREADS)
-    set(THREAD_POOL_MAX_THREADS 4)
-endif()
-if(NOT DEFINED THREAD_POOL_QUEUE_DEPTH)
-    set(THREAD_POOL_QUEUE_DEPTH 64)
-endif()
-
 target_compile_definitions(${MIDDLEWARE_TARGET}
     PUBLIC
         MSG_BUS_QUEUE_DEPTH=${MSG_BUS_QUEUE_DEPTH}
         MEM_POOL_MAX_BUFFERS=${MEM_POOL_MAX_BUFFERS}
-        THREAD_POOL_MAX_THREADS=${THREAD_POOL_MAX_THREADS}
-        THREAD_POOL_QUEUE_DEPTH=${THREAD_POOL_QUEUE_DEPTH}
 )
 
 target_compile_options(${MIDDLEWARE_TARGET}

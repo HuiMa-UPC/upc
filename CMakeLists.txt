@@ -21,11 +21,7 @@ add_compile_definitions(_POSIX_C_SOURCE=200809L)
 option(UPC_DEBUG "Enable unified debug logging (middleware+services)" ON)
 
 add_subdirectory(common)
-add_subdirectory(parser)
-add_subdirectory(protocol)
 add_subdirectory(3rdparty/lv_port_linux-release-v9.5)
-add_subdirectory(ui)
-add_subdirectory(glavo)
-add_subdirectory(camera)
+add_subdirectory(app)
 add_subdirectory(test)
 

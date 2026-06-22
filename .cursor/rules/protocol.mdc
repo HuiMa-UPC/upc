@@ -1,14 +1,14 @@
 ---
-description: MCU 线协议 — TCP BE EF 与串口 5A A5
-globs: protocol/**
+description: MCU 线协议 — TCP BE EF、串口 5A A5
+globs: app/protocol/**
 alwaysApply: false
 ---
 
-# protocol/
+# app/protocol/
 
-改 MCU 帧格式/命令前读 [protocol/PROTOCOL.md](../../protocol/PROTOCOL.md)。
+改 MCU 帧格式/命令前读 [app/protocol/PROTOCOL.md](../../app/protocol/PROTOCOL.md)。
 
 - TCP（`BE EF`）：`doc/SOC-_MCU TCP报文.xlsx` — TX 用 pkg_num，RX 用 Length+ID
 - 串口（`5A A5`）：`doc/SOC_-_MCU串口通信协议.xlsx`；ACK 开关 `GLAVO_SERIAL_ACK_ENABLE`（`device_config.hpp`）
 - **禁止**依赖 glavo/parser/ui/lvgl/ipc
-- I/O 与状态机留在 `glavo/McuLink`
+- I/O 与状态机留在 `app/glavo/McuLink`

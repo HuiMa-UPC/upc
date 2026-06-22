@@ -9,7 +9,6 @@
 |------|------|
 | `message_bus/` | `MsgBus`、`MsgType`、`MsgPayload`、异步队列 |
 | `memory_pool/` | 固定块池、`BufferPool` |
-| `thread_pool/` | 工作线程池（目录名历史拼写 `tread_pool`） |
 | `debug/` | `MW_LOG_*`（middleware 内部调试） |
 
 无 LVGL 依赖；UI / Glavo / test 均可链接。
@@ -47,4 +46,4 @@ ParserManager → RingBuffer → McuLink（TCP + 串口）
 ## 相关文档
 
 - [common/README.md](../README.md) — 消息命名与 Payload
-- [glavo/GLAVO.md](../../glavo/GLAVO.md) · [ui/UI.md](../../ui/UI.md)
+- [app/glavo/GLAVO.md](../../app/glavo/GLAVO.md) · [app/ui/UI.md](../../app/ui/UI.md)

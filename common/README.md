@@ -108,13 +108,17 @@
 | `UI_Print_Terminate_Req` | — | UI→Glavo | Empty | `send_print_terminate` | 终止作业 |
 | `APP_Print_Terminate_Done` | `GLAVO_Print_Terminate_Done` | Glavo→UI | Empty | `register_print_terminate_done` | — |
 | `UI_Camera_Stream_Start_Req` | — | UI→Camera | `CameraStreamStartReqPayload` | `CameraMsgProxy::send_stream_start` | 开预览 |
-| `APP_Camera_Stream_Start_Rsp` | — | Camera→UI | `CameraStreamInfoPayload` | `register_stream_start_rsp` | SHM 参数 |
+| `APP_Camera_Stream_Start_Rsp` | — | Camera→UI | `CameraStreamInfoPayload` | `register_stream_start_rsp` | SHM 参数 / dma fd 旁路信息 |
 | `UI_Camera_Stream_Stop_Req` | — | UI→Camera | Empty | `send_stream_stop` | 关预览 |
 | `APP_Camera_Frame_Ntf` | — | Camera→UI | `CameraFrameNtfPayload` | （可选） | 帧序号；默认关 |
 | `APP_Print_Video_Session_Start_Ntf` | — | Glavo→Camera（Hub FWD） | `PrintVideoSessionPayload` | — | `PrintVideoNotify` / `CameraService` |
 | `APP_Print_Layer_Snap_Ntf` | — | Glavo→Camera（Hub FWD） | `PrintVideoLayerSnapPayload` | — | 换层 Snap |
 | `APP_Print_Video_Session_Finish_Ntf` | — | Glavo→Camera（Hub FWD） | `PrintVideoSessionPayload` | — | ffmpeg 合成 MP4 |
 | `APP_Print_Video_Session_Abort_Ntf` | — | Glavo→Camera（Hub FWD） | `PrintVideoSessionPayload` | — | 删临时目录 |
+
+`CameraStreamInfoPayload.dma_mode` 当前固定为 `1`：
+- 预览统一走 **dma fd 旁路**：后端通过 `dma_socket_path` 一次性发送 dma_buf fd；SHM `/upc_camera_preview` 仅保留 slot 状态元数据，像素不再走 SHM payload。
+- `test_camera` 与 `rongsu_camera` 使用同一套契约。
 
 ---
 
@@ -142,7 +146,7 @@ test_camera  ──listen──► /tmp/upc_camera.sock ◄──┘
 - UI：`set_mode_ipc_hub` + `add_ipc_peer(APP_GLAVO, …)` + `add_ipc_peer(APP_CAMERA, …, required=false)`
 - 各后端：`set_mode_ipc_server`，单连接 UI
 - **后端互访**：Glavo `publish_async` 且 `target_id = APP_CAMERA` → UI Hub **`IPC_FWD`** → Camera（UI 不跑业务 handler）
-- **大流量**：预览 NV12 走 SHM `/upc_camera_preview`；控制仍走 MsgPort
+- **大流量**：预览 NV12 走 dma fd 旁路 + `/upc_camera_preview` 元数据环；控制仍走 MsgPort
 
 详见 [ipc/IPC.md](ipc/IPC.md)。
 
@@ -156,7 +160,7 @@ test_camera  ──listen──► /tmp/upc_camera.sock ◄──┘
 
 **中心 Broker**（进程继续增多、或 UI 不想兼 Hub）：各进程 client 连 broker，按 `target_id` 转发，帧格式不变（未实施）。
 
-**大流量旁路**：控制走 socket；像素走 `ipc_shm_*`（camera 预览已用）。
+**大流量旁路**：控制走 socket；像素走 dma fd + `ipc_dma_frame_ring` 元数据环（camera 预览已用）。
 
 新增进程时在 `ModuleId` 追加（如 `APP_LOG`），`MsgType` 用域前缀（`LOG_` 等），遵循 §2 命名规范。
 
@@ -172,10 +176,10 @@ test_camera  ──listen──► /tmp/upc_camera.sock ◄──┘
 | `common/ipc/ipc_wire.*` | 线协议 | 平台组 |
 | `common/ipc/ipc_endpoint.*` | Socket 传输 | 平台组 |
 | `common/ipc/ipc_msg_bus.*` | Hub 多 peer 路由 + FWD | 平台组 |
-| `ui/lib/core/ui_msg_proxy.*` | UI ↔ Glavo API | UI 组 |
-| `ui/lib/core/camera_msg_proxy.*` | UI ↔ Camera 预览 IPC | UI 组 |
-| `ui/lib/core/camera_preview.*` | SHM 预览解码 + LVGL 显示 | UI 组 |
-| `ui/lib/core/rga_dma_buf.*` | RGA dma32 heap 缓冲 | UI 组 |
-| `glavo/lib/glavo_service.*` | Glavo 侧 API | Glavo 组 |
-| `glavo/lib/print_video_notify.*` | Glavo → Camera 录像 IPC | Glavo 组 |
-| `camera/lib/camera_service.*` | Camera IPC + 录像 | Camera 组 |
+| `app/ui/lib/core/ui_msg_proxy.*` | UI ↔ Glavo API | UI 组 |
+| `app/ui/lib/core/camera_msg_proxy.*` | UI ↔ Camera 预览 IPC | UI 组 |
+| `app/ui/lib/core/camera_preview.*` | dma fd 预览解码 + LVGL 显示 | UI 组 |
+| `app/ui/lib/core/rga_dma_buf.*` | RGA dma32 heap 缓冲（封装 `common/ipc/dma_heap_buffer`） | UI 组 |
+| `app/glavo/lib/glavo_service.*` | Glavo 侧 API | Glavo 组 |
+| `app/glavo/lib/print_video_notify.*` | Glavo → Camera 录像 IPC | Glavo 组 |
+| `app/camera/lib/camera_service.*` | Camera IPC + 录像 | Camera 组 |

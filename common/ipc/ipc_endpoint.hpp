@@ -8,6 +8,12 @@
 
 namespace upc_ipc {
 
+/** 单次 inbound：普通 wire 帧，或 wire+SCM_RIGHTS（fds 非空） */
+struct InboundWireUnit {
+    std::vector<uint8_t> frame;
+    std::vector<int>     fds;
+};
+
 /** 单连接 Unix 域套接字；服务端 listen 与 accept 分离，便于 Glavo 先起设备链路 */
 class IpcEndpoint {
 public:
@@ -31,10 +37,16 @@ public:
     [[nodiscard]] int listen_fd() const;
 
     bool send_frame(const std::vector<uint8_t>& frame);
-    void recv_pending(std::vector<std::vector<uint8_t>>& out_frames);
+    /** wire 帧与 dma fd 同一 sendmsg（UPDF 魔数），仅走 SCM_RIGHTS */
+    bool send_frame_with_fds(const std::vector<uint8_t>& frame,
+                             const std::vector<int>& fds);
+    void recv_pending(std::vector<InboundWireUnit>& out_units);
 
 private:
     bool write_exact(const uint8_t* buf, size_t n);
+    bool peek_fd_frame_magic() const;
+    bool recv_fd_frame_unit(InboundWireUnit& out);
+    void parse_stream_frames(std::vector<InboundWireUnit>& out_units);
 
     void set_conn_nonblocking();
 

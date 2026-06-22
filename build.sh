@@ -69,9 +69,9 @@ do_collect_outputs() {
     mkdir -p "$OUTPUT_DIR"
 
     local -a artifacts=(
-        "ui/rongsu_ui"
-        "glavo/rongsu_glavo"
-        "camera/rongsu_camera"
+        "app/ui/rongsu_ui"
+        "app/glavo/rongsu_glavo"
+        "app/camera/rongsu_camera"
         "test/camera/test_camera"
     )
 

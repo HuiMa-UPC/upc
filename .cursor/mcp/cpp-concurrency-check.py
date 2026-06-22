@@ -2,7 +2,7 @@
 """
 rongsu_upc 项目 C++ 并发 / 内存序静态检查 MCP Server。
 
-覆盖模块：ipc_shm_ring、ServiceBase、McuLink、slice_ring_buffer、
+覆盖模块：ipc_dma_frame_ring、ServiceBase、McuLink、slice_ring_buffer、
 camera_preview、parser worker 等。规则为启发式，不能替代 TSan/审查。
 """
 
@@ -22,17 +22,18 @@ SERVER_VERSION = "2.0.0"
 
 # 项目内并发热点（相对仓库根目录）
 DEFAULT_HOTSPOTS = [
-    "common/ipc/ipc_shm_ring.cpp",
-    "common/ipc/ipc_shm_ring.hpp",
-    "common/ipc/ipc_shm_layout.hpp",
-    "glavo/lib/service_base.cpp",
-    "glavo/lib/glavo_service.cpp",
-    "glavo/lib/mcu_link.cpp",
-    "glavo/lib/print_job_state.cpp",
-    "parser/slice_ring_buffer.cpp",
-    "parser/slice_ring_buffer.hpp",
-    "parser/gcode/gcode_worker.cpp",
-    "ui/lib/core/src/camera_preview.cpp",
+    "common/ipc/ipc_dma_frame_ring.cpp",
+    "common/ipc/ipc_dma_frame_ring.hpp",
+    "app/camera/lib/camera_dma_frame_source.cpp",
+    "app/camera/lib/camera_dma_frame_source.hpp",
+    "app/glavo/lib/service_base.cpp",
+    "app/glavo/lib/glavo_service.cpp",
+    "app/glavo/lib/mcu_link.cpp",
+    "app/glavo/lib/print_job_state.cpp",
+    "app/parser/lib/slice_ring_buffer.cpp",
+    "app/parser/lib/slice_ring_buffer.hpp",
+    "app/parser/gcode/gcode_worker.cpp",
+    "app/ui/lib/core/src/camera_preview.cpp",
     "test/camera/test_camera_service.cpp",
 ]
 
@@ -109,9 +110,9 @@ def strip_comments(code: str) -> str:
     return re.sub(r"//[^\n]*", "", code)
 
 
-def analyze_ipc_shm(path: str, code: str) -> list[Issue]:
+def analyze_ipc_dma(path: str, code: str) -> list[Issue]:
     issues: list[Issue] = []
-    if "IpcShm" not in code and "ipc_shm" not in code:
+    if "IpcDmaFrame" not in code:
         return issues
 
     body = strip_comments(code)
@@ -119,7 +120,7 @@ def analyze_ipc_shm(path: str, code: str) -> list[Issue]:
     if "compare_exchange_strong" in body:
         if "memory_order_acq_rel" not in body:
             issues.append(Issue(
-                "error", "ipc_shm",
+                "error", "ipc_dma",
                 "CAS (compare_exchange_strong) 应显式使用 memory_order_acq_rel / acquire 配对",
                 line_no(code, "compare_exchange_strong"),
             ))
@@ -132,8 +133,8 @@ def analyze_ipc_shm(path: str, code: str) -> list[Issue]:
             if "memory_order" not in snippet:
                 ln = code.count("\n", 0, m.start()) + 1
                 issues.append(Issue(
-                    "warn", "ipc_shm",
-                    "compare_exchange_strong 未显式指定 memory_order（默认为 seq_cst，SHM 热路径建议 acq_rel）",
+                    "warn", "ipc_dma",
+                    "compare_exchange_strong 未显式指定 memory_order（默认为 seq_cst，DMA 帧环热路径建议 acq_rel）",
                     ln,
                 ))
 
@@ -152,7 +153,7 @@ def analyze_ipc_shm(path: str, code: str) -> list[Issue]:
                 if m.group(2) not in ("acquire", "seq_cst"):
                     ln = code.count("\n", 0, m.start()) + 1
                     issues.append(Issue(
-                        "warn", "ipc_shm",
+                        "warn", "ipc_dma",
                         f"acquire_latest_frame 内 seq.load(memory_order_{m.group(2)}) 建议 acquire",
                         ln,
                     ))
@@ -162,30 +163,19 @@ def analyze_ipc_shm(path: str, code: str) -> list[Issue]:
                 if m.group(2) not in ("acquire", "seq_cst"):
                     ln = code.count("\n", 0, m.start()) + 1
                     issues.append(Issue(
-                        "warn", "ipc_shm",
+                        "warn", "ipc_dma",
                         f"acquire_latest_frame 内 state.load(memory_order_{m.group(2)}) 建议 acquire",
                         ln,
                     ))
 
-    for m in re.finditer(
-        r"IpcShmSlotState::(\w+)[^\n]*IpcShmSlotState::(\w+)", body
-    ):
+    for m in re.finditer(r"kState(\w+)[^\n]*kState(\w+)", body):
         pair = (m.group(1), m.group(2))
         if pair not in VALID_SHM_TRANSITIONS:
             ln = code.count("\n", 0, m.start()) + 1
             issues.append(Issue(
-                "warn", "ipc_shm",
-                f"可疑 SHM 槽位状态转换: {pair[0]} -> {pair[1]}",
+                "warn", "ipc_dma",
+                f"可疑 DMA 帧环槽位状态转换: {pair[0]} -> {pair[1]}",
                 ln,
-            ))
-
-    # 调用 slot_payload()，而非头文件里的声明
-    if re.search(r"slot_payload\s*\(", body) and "acquire_write_slot" not in body:
-        if "IpcShmRingProducer::slot_payload" not in body:
-            issues.append(Issue(
-                "warn", "ipc_shm",
-                "调用 slot_payload() 前应 acquire_write_slot()（仅 Writing 状态可写 payload）",
-                line_no(code, "slot_payload("),
             ))
 
     if "commit_slot" in body and path.endswith(".cpp"):
@@ -196,8 +186,8 @@ def analyze_ipc_shm(path: str, code: str) -> list[Issue]:
         )
         if commit_fn and "timestamp_us" not in commit_fn.group(0):
             issues.append(Issue(
-                "info", "ipc_shm",
-                "commit_slot 实现中应设置 timestamp_us，再 release 发布 seq/state",
+                "info", "ipc_dma",
+                "commit_slot 实现中应设置 timestamp_us / buffer_idx，再 release 发布 seq/state",
                 line_no(code, "commit_slot"),
             ))
 
@@ -367,7 +357,7 @@ def analyze_file(path: Path) -> tuple[str, list[Issue]]:
     rel = str(path.relative_to(PROJECT_ROOT)) if path.is_relative_to(PROJECT_ROOT) else str(path)
     issues: list[Issue] = []
     for fn in (
-        analyze_ipc_shm,
+        analyze_ipc_dma,
         analyze_service_base,
         analyze_mcu_link,
         analyze_ring_buffer,
@@ -468,7 +458,7 @@ TOOLS = {
             "properties": {
                 "file_path": {
                     "type": "string",
-                    "description": "例如 common/ipc/ipc_shm_ring.cpp",
+                    "description": "例如 common/ipc/ipc_dma_frame_ring.cpp",
                 },
             },
             "required": ["file_path"],
@@ -476,7 +466,7 @@ TOOLS = {
         "handler": tool_check_file,
     },
     "scan_hotspots": {
-        "description": "扫描项目内并发热点文件（ipc_shm、ServiceBase、McuLink、RingBuffer、camera_preview、parser worker 等）",
+        "description": "扫描项目内并发热点文件（ipc_dma_frame_ring、ServiceBase、McuLink、RingBuffer、camera_preview、parser worker 等）",
         "inputSchema": {
             "type": "object",
             "properties": {

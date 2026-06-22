@@ -197,6 +197,10 @@ void IpcMsgBus::shutdown()
 
     initialized_ = false;
     mode_        = IpcBusMode::None;
+    {
+        std::lock_guard<std::mutex> lock(pending_dma_fds_mtx_);
+        pending_dma_fds_.clear();
+    }
     UPC_LOG_IPC(Info, "shutdown");
 }
 
@@ -385,6 +389,80 @@ bool IpcMsgBus::send_to_peer(middleware::ModuleId peer_id,
     return true;
 }
 
+bool IpcMsgBus::send_to_peer_with_fds(middleware::ModuleId peer_id,
+                                      const middleware::Message& msg,
+                                      const std::vector<int>& fds)
+{
+    if (fds.empty()) {
+        return send_to_peer(peer_id, msg);
+    }
+
+    std::vector<uint8_t> frame;
+    if (!wire_encode(msg, frame)) {
+        UPC_LOG_IPC(Error, "wire_encode fail (with fds) %s",
+                    upc_msg_type_name(msg.type));
+        return false;
+    }
+
+    if (mode_ == IpcBusMode::Server) {
+        if (peer_id != server_peer_id_ || !server_endpoint_.connected()) {
+            return false;
+        }
+        if (!server_endpoint_.send_frame_with_fds(frame, fds)) {
+            UPC_LOG_IPC(Error, "send_frame_with_fds fail %s fds=%zu",
+                        upc_msg_type_name(msg.type), fds.size());
+            return false;
+        }
+    } else if (mode_ == IpcBusMode::Hub) {
+        std::lock_guard<std::mutex> lock(peers_mtx_);
+        PeerEntry* peer = find_peer(peer_id);
+        if (!peer || !peer->endpoint.connected()) {
+            return false;
+        }
+        if (!peer->endpoint.send_frame_with_fds(frame, fds)) {
+            return false;
+        }
+    } else {
+        return false;
+    }
+
+    upc_msg_log_message("IPC_TX", msg);
+    UPC_LOG_IPC(Info, "IPC_TX fds %s count=%zu",
+                upc_msg_type_name(msg.type), fds.size());
+    return true;
+}
+
+void IpcMsgBus::stash_pending_dma_fds(middleware::ModuleId sender,
+                                      std::vector<int> fds)
+{
+    if (fds.empty()) {
+        return;
+    }
+    const uint32_t key = static_cast<uint32_t>(sender);
+    std::lock_guard<std::mutex> lock(pending_dma_fds_mtx_);
+    auto& slot = pending_dma_fds_[key];
+    for (int fd : fds) {
+        if (fd >= 0) {
+            slot.push_back(fd);
+        }
+    }
+}
+
+bool IpcMsgBus::take_pending_dma_fds(middleware::ModuleId peer_id,
+                                     std::vector<int>& out_fds)
+{
+    out_fds.clear();
+    const uint32_t key = static_cast<uint32_t>(peer_id);
+    std::lock_guard<std::mutex> lock(pending_dma_fds_mtx_);
+    auto it = pending_dma_fds_.find(key);
+    if (it == pending_dma_fds_.end() || it->second.empty()) {
+        return false;
+    }
+    out_fds = std::move(it->second);
+    pending_dma_fds_.erase(it);
+    return true;
+}
+
 bool IpcMsgBus::send_to_all_peers(const middleware::Message& msg)
 {
     bool any_sent = false;
@@ -531,19 +609,26 @@ bool IpcMsgBus::publish_sync(const middleware::Message& msg)
 }
 
 void IpcMsgBus::deliver_frames(
-    const std::vector<std::vector<uint8_t>>& frames,
+    const std::vector<InboundWireUnit>& units,
     middleware::ModuleId expected_sender)
 {
-    for (const auto& frame : frames) {
+    for (const auto& unit : units) {
         middleware::Message msg;
-        if (!wire_decode(frame.data(), frame.size(), msg)) {
-            UPC_LOG_IPC(Warn, "wire_decode fail frame_bytes=%zu", frame.size());
+        if (!wire_decode(unit.frame.data(), unit.frame.size(), msg)) {
+            UPC_LOG_IPC(Warn, "wire_decode fail frame_bytes=%zu",
+                        unit.frame.size());
             continue;
         }
         if (ipc_sender_mismatch_warn(mode_, expected_sender, msg.sender_id)) {
             UPC_LOG_IPC(Warn, "IPC_RX sender mismatch expect=%s got=%s",
                         upc_msg_module_name(expected_sender),
                         upc_msg_module_name(msg.sender_id));
+        }
+        if (!unit.fds.empty()) {
+            stash_pending_dma_fds(msg.sender_id, unit.fds);
+            UPC_LOG_IPC(Info, "IPC_RX fds %s from %s count=%zu",
+                        upc_msg_type_name(msg.type),
+                        upc_msg_module_name(msg.sender_id), unit.fds.size());
         }
         upc_msg_log_message("IPC_RX", msg);
 
@@ -714,8 +799,8 @@ void IpcMsgBus::handle_poll_event(PollSlot* slot, uint32_t events)
     }
 
     const bool was_connected = ep->connected();
-    std::vector<std::vector<uint8_t>> frames;
-    ep->recv_pending(frames);
+    std::vector<InboundWireUnit> units;
+    ep->recv_pending(units);
 
     if (was_connected && !ep->connected()) {
         if (slot->kind == PollKind::HubPeer) {
@@ -727,7 +812,7 @@ void IpcMsgBus::handle_poll_event(PollSlot* slot, uint32_t events)
         poll_unregister(reg_fd);
     }
 
-    deliver_frames(frames, peer_id);
+    deliver_frames(units, peer_id);
 #endif
 }
 
@@ -766,12 +851,12 @@ void IpcMsgBus::pump_inbound_fallback(int timeout_ms)
             UPC_LOG_IPC(Info, "peer connected");
         }
 
-        std::vector<std::vector<uint8_t>> frames;
-        server_endpoint_.recv_pending(frames);
+        std::vector<InboundWireUnit> units;
+        server_endpoint_.recv_pending(units);
         if (was_connected && !server_endpoint_.connected()) {
             UPC_LOG_IPC(Warn, "peer disconnected");
         }
-        deliver_frames(frames, server_peer_id_);
+        deliver_frames(units, server_peer_id_);
         return;
     }
 
@@ -781,7 +866,7 @@ void IpcMsgBus::pump_inbound_fallback(int timeout_ms)
 
     struct Batch {
         middleware::ModuleId peer_id{};
-        std::vector<std::vector<uint8_t>> frames;
+        std::vector<InboundWireUnit> units;
     };
     std::vector<Batch> batches;
 
@@ -792,7 +877,7 @@ void IpcMsgBus::pump_inbound_fallback(int timeout_ms)
             const bool was_connected = peer->endpoint.connected();
             Batch batch{};
             batch.peer_id = peer->peer_id;
-            peer->endpoint.recv_pending(batch.frames);
+            peer->endpoint.recv_pending(batch.units);
 
             if (was_connected && !peer->endpoint.connected()) {
                 UPC_LOG_IPC(Warn, "peer disconnected %s",
@@ -802,14 +887,14 @@ void IpcMsgBus::pump_inbound_fallback(int timeout_ms)
                             upc_msg_module_name(peer->peer_id));
             }
 
-            if (!batch.frames.empty()) {
+            if (!batch.units.empty()) {
                 batches.push_back(std::move(batch));
             }
         }
     }
 
     for (const auto& batch : batches) {
-        deliver_frames(batch.frames, batch.peer_id);
+        deliver_frames(batch.units, batch.peer_id);
     }
 }
 

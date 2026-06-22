@@ -6,7 +6,6 @@
 #include "msg_bus.hpp"
 #include "mem_pool.hpp"
 #include "buffer_pool.hpp"
-#include "thread_pool.hpp"
 
 #include <cctype>
 #include <cstring>
@@ -196,14 +195,6 @@ void upc_msg_dump_status() {
 #endif
 }
 
-void upc_msg_dump_thread_pool(const ThreadPool* pool) {
-    if (!pool) {
-        UPC_LOG_THREAD_POOL(Warn, "status (null pool)");
-        return;
-    }
-    UPC_LOG_THREAD_POOL(Info, "status threads=%zu active=%zu queued=%zu",
-        pool->thread_count(), pool->active_count(), pool->queue_depth());
-}
 
 } // namespace middleware
 

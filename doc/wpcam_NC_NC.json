@@ -6,7 +6,7 @@
 		},
 		"Gain2Reg":	{
 			"GainMode":	"EXPGAIN_MODE_LINEAR",
-			"GainRange":	[1, 28, 32, 0, 1, 32, 896],
+			"GainRange":	[1, 1713.71, 64, 0, 1, 64, 109632],
 			"GainRange_len":	7
 		},
 		"Time2Reg":	{
@@ -15,7 +15,7 @@
 		"CISGainSet":	{
 			"CISAgainRange":	{
 				"Min":	1,
-				"Max":	29.5
+				"Max":	53.975
 			},
 			"CISExtraAgainRange":	{
 				"Min":	1,
@@ -23,19 +23,19 @@
 			},
 			"CISDgainRange":	{
 				"Min":	1,
-				"Max":	125
+				"Max":	31.75
 			},
 			"CISIspDgainRange":	{
 				"Min":	1,
-				"Max":	76.7
+				"Max":	8
 			},
 			"CISHdrGainIndSetEn":	1
 		},
 		"CISTimeSet":	{
 			"Linear":	{
-				"CISTimeRegMin":	6,
+				"CISTimeRegMin":	2,
 				"CISLinTimeRegMaxFac":	{
-					"fCoeff":	[1, 128]
+					"fCoeff":	[1, 4]
 				},
 				"CISTimeRegOdevity":	{
 					"fCoeff":	[1, 0]
@@ -47,10 +47,10 @@
 					"CISTimeRegUnEqualEn":	1,
 					"CISTimeRegMin":	2,
 					"CISHdrTimeRegSumFac":	{
-						"fCoeff":	[1, 26]
+						"fCoeff":	[1, 10]
 					},
 					"CISTimeRegMax":	{
-						"Coeff":	[0, 0, 0]
+						"Coeff":	[59, 0, 0]
 					},
 					"CISTimeRegOdevity":	{
 						"fCoeff":	[2, 0]
@@ -59,15 +59,15 @@
 				{
 					"name":	"HDR_THREE_FRAME",
 					"CISTimeRegUnEqualEn":	1,
-					"CISTimeRegMin":	3,
+					"CISTimeRegMin":	2,
 					"CISHdrTimeRegSumFac":	{
-						"fCoeff":	[1, 39]
+						"fCoeff":	[1, 10]
 					},
 					"CISTimeRegMax":	{
 						"Coeff":	[0, 0, 0]
 					},
 					"CISTimeRegOdevity":	{
-						"fCoeff":	[3, 0]
+						"fCoeff":	[1, 0]
 					}
 				}
 			]
@@ -84,7 +84,7 @@
 				"dcg_mode":	{
 					"Coeff":	[0, 0, 0]
 				},
-				"dcg_ratio":	2.6,
+				"dcg_ratio":	11,
 				"sync_switch":	0,
 				"lcg2hcg_gain_th":	32,
 				"hcg2lcg_gain_th":	16
@@ -95,7 +95,7 @@
 				"dcg_mode":	{
 					"Coeff":	[0, 0, 0]
 				},
-				"dcg_ratio":	2.6,
+				"dcg_ratio":	3.5,
 				"sync_switch":	1,
 				"lcg2hcg_gain_th":	32,
 				"hcg2lcg_gain_th":	16
@@ -105,12 +105,12 @@
 			"Linear":	{
 				"time_update":	2,
 				"gain_update":	2,
-				"dcg_update":	1
+				"dcg_update":	2
 			},
 			"Hdr":	{
 				"time_update":	2,
 				"gain_update":	2,
-				"dcg_update":	1
+				"dcg_update":	2
 			}
 		},
 		"CISMinFps":	10,
@@ -145,8 +145,8 @@
 										"ManualTimeEn":	1,
 										"ManualGainEn":	1,
 										"ManualIspDgainEn":	1,
-										"TimeValue":	0.01,
-										"GainValue":	1,
+										"TimeValue":	0.02,
+										"GainValue":	6,
 										"IspDGainValue":	1
 									},
 									"HdrAE":	{
@@ -178,7 +178,7 @@
 								},
 								"AecFrameRateMode":	{
 									"isFpsFix":	1,
-									"FpsValue":	30
+									"FpsValue":	0
 								},
 								"AecAntiFlicker":	{
 									"enable":	1,
@@ -188,7 +188,7 @@
 								"AecEnvLvCalib":	{
 									"Enable":	0,
 									"CalibFNumber":	1.6,
-									"CurveCoeff":	[0.02859, 0.5972]
+									"CurveCoeff":	[0.0286, 0.5972]
 								},
 								"AecWinScale":	{
 									"InRawWinScale":	{
@@ -218,7 +218,7 @@
 								"Evbias":	0,
 								"StrategyMode":	"AECV2_STRATEGY_MODE_LOWLIGHT",
 								"InitExp":	{
-									"InitTimeValue":	0.005,
+									"InitTimeValue":	0.003,
 									"InitGainValue":	1,
 									"InitIspDGainValue":	1,
 									"InitPIrisGainValue":	512,
@@ -226,14 +226,14 @@
 									"InitHDCIrisTargetValue":	0
 								},
 								"Route":	{
-									"TimeDot":	[0, 0.01, 0.01, 0.02, 0.02, 0.03, 0.03, 0.04, 0.04],
-									"TimeDot_len":	9,
-									"GainDot":	[1, 1, 16, 16, 24, 24, 32, 32, 64],
-									"GainDot_len":	9,
-									"IspDGainDot":	[1, 1, 1, 1, 1, 1, 1, 1, 1],
-									"IspDGainDot_len":	9,
-									"PIrisDot":	[512, 512, 512, 512, 512, 512, 512, 512, 512],
-									"PIrisDot_len":	9
+									"TimeDot":	[0, 0.01, 0.01, 0.03, 0.03, 0.03],
+									"TimeDot_len":	6,
+									"GainDot":	[1, 1, 4, 4, 8, 128],
+									"GainDot_len":	6,
+									"IspDGainDot":	[1, 1, 1, 1, 1, 1],
+									"IspDGainDot_len":	6,
+									"PIrisDot":	[512, 512, 512, 512, 512, 512],
+									"PIrisDot_len":	6
 								},
 								"DySetpoint":	{
 									"ExpLevel":	[0, 0.128, 0.256, 0.768, 1.28, 2.048],
@@ -242,7 +242,7 @@
 									"DySetpoint_len":	6
 								},
 								"BackLightCtrl":	{
-									"Enable":	1,
+									"Enable":	0,
 									"StrBias":	0,
 									"MeasArea":	"AECV2_MEASURE_AREA_AUTO",
 									"OEROILowTh":	150,
@@ -474,8 +474,8 @@
 							"manualPara":	{
 								"mode":	"CALIB_MWB_MODE_SCENE",
 								"cfg":	{
-									"mwbGain":	[1.1631, 1, 1, 3.458],
-									"scene":	"CALIB_WB_SCENE_CLOUDY_DAYLIGHT",
+									"mwbGain":	[1.32703, 1, 1, 3.31432],
+									"scene":	"CALIB_WB_SCENE_DAYLIGHT",
 									"cct":	{
 										"CCT":	5000,
 										"CCRI":	0
@@ -484,13 +484,13 @@
 							},
 							"autoPara":	{
 								"hdrPara":	{
-									"frameChooseMode":	"CALIB_AWB_HDR_FR_CH_MANUAL",
+									"frameChooseMode":	"CALIB_AWB_HDR_FR_CH_AUTO",
 									"frameChoose":	1
 								},
 								"lscBypassEnable":	0,
 								"uvDetectionEnable":	1,
 								"xyDetectionEnable":	1,
-								"yuvDetectionEnable":	0,
+								"yuvDetectionEnable":	1,
 								"lsUsedForYuvDet":	["A", "CWF", "D50", "D65", "D75", "HZ", "TL84"],
 								"lsUsedForYuvDet_len":	7,
 								"blkStatisticsEnable":	1,
@@ -521,10 +521,10 @@
 									"minY_len":	1
 								},
 								"rgb2TcsPara":	{
-									"pseudoLuminanceWeight":	[0.374426, 0.37544, 0.250134],
-									"rotationMat":	[-0.502759, 0.864427, -0.094356, 0.864427, 0.502759, 0.596739, 0, 0, 1]
+									"pseudoLuminanceWeight":	[0.374422, 0.374774, 0.250804],
+									"rotationMat":	[-0.537513, 0.843256, -0.130646, 0.843256, 0.537513, 0.689946, 0, 0, 1]
 								},
-								"rgb2RotationYuvMat":	[0.029297, 0.134766, 0.013672, 38.3125, -0.085938, 0, 0.0625, 139.5, 0.042969, -0.052734, 0.054688, 107.875, 0, 0, 0, 1],
+								"rgb2RotationYuvMat":	[0.0234375, 0.134766, 0.0136719, 41.5625, -0.0859375, -0.00390625, 0.0625, 141.75, 0.0449219, -0.046875, 0.0527344, 105.625, 0, 0, 0, 1],
 								"extraWpRange":	[
 									{
 										"domain":	"CALIB_AWB_EXTRA_RANGE_DOMAIN_UV",
@@ -616,25 +616,25 @@
 									{
 										"name":	"A",
 										"doorType":	"CALIB_AWB_DOOR_TYPE_INDOOR",
-										"standardGainValue":	[1.1631, 1, 1, 3.458],
+										"standardGainValue":	[1.33574, 1, 1, 3.23439],
 										"uvRegion":	{
-											"u":	[124.451, 23.5808, 28.0639, 124.397],
-											"v":	[127.539, 141.412, 104.112, 126.12]
+											"u":	[123.442, 56.8389, 52.3037, 123.134],
+											"v":	[125.872, 103.151, 121.317, 126.836]
 										},
 										"xyRegion":	{
-											"normal":	[-1.5592, -1.0938, 0.1068, -0.0892],
-											"big":	[-1.5592, -1.0938, 0.1368, -0.1411]
+											"normal":	[-1.39834, -0.939941, 0.130977, -0.0290234],
+											"big":	[-1.39834, -0.939941, 0.160977, -0.0590234]
 										},
 										"rtYuvRegion":	{
-											"thcurve_u":	[66, 130, 258, 514, 770, 1282],
-											"thcure_th":	[0, 0, 0, 0, 1, 4],
-											"lineVector":	[10, 150.5, 107.812, 180.375, 89.375, 108.75],
+											"thcurve_u":	[50, 54, 70, 78, 110, 142],
+											"thcure_th":	[4, 4, 4, 4, 4, 4],
+											"lineVector":	[10, 152.25, 105.313, 182.125, 96.3125, 107.25],
 											"disP1P2":	15
 										},
-										"staWeight":	[100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 95, 90, 80, 70, 60, 50],
+										"staWeight":	[100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 90, 75],
 										"dayGainLvThSet":	[1024, 8192],
-										"defaultDayGainLow":	[1.8139, 1, 1, 1.9736],
-										"defaultDayGainHigh":	[2.0971, 1, 1, 1.648],
+										"defaultDayGainLow":	[1.90858, 1, 1, 1.99856],
+										"defaultDayGainHigh":	[2.32272, 1, 1, 1.76158],
 										"xyType2Enable":	1,
 										"weight":	{
 											"lumaValue":	[0, 2, 4, 8, 32, 128, 1024, 8192, 65536, 262144],
@@ -646,25 +646,25 @@
 									{
 										"name":	"CWF",
 										"doorType":	"CALIB_AWB_DOOR_TYPE_INDOOR",
-										"standardGainValue":	[1.8732, 1, 1, 2.8215],
+										"standardGainValue":	[1.99993, 1, 1, 2.8367],
 										"uvRegion":	{
-											"u":	[38.77, 50.6134, 125.705, 125.296],
-											"v":	[81.4279, 58.7859, 125.055, 125.56]
+											"u":	[125.3, 79.6915, 70.571, 124.633],
+											"v":	[124.527, 79.8713, 86.3124, 125.156]
 										},
 										"xyRegion":	{
-											"normal":	[-1.0932, -0.5294, -0.0866, -0.1931],
-											"big":	[-1.094, -0.5289, -0.0791, -0.2201]
+											"normal":	[-0.936993, -0.495313, -0.0444781, -0.155147],
+											"big":	[-0.938958, -0.495313, -0.0444781, -0.175233]
 										},
 										"rtYuvRegion":	{
-											"thcurve_u":	[57, 121, 249, 505, 761, 1273],
-											"thcure_th":	[0, 0, 0, 0, 1, 4],
-											"lineVector":	[10, 144.75, 109.938, 188.25, 115.312, 98.125],
+											"thcurve_u":	[50, 54, 70, 78, 110, 142],
+											"thcure_th":	[4, 4, 4, 4, 4, 4],
+											"lineVector":	[10, 147.5, 107.188, 188.063, 116.125, 98.75],
 											"disP1P2":	15
 										},
-										"staWeight":	[100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 95, 90, 80, 70, 60, 50],
+										"staWeight":	[100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 90, 75],
 										"dayGainLvThSet":	[1024, 8192],
-										"defaultDayGainLow":	[1.8139, 1, 1, 1.9736],
-										"defaultDayGainHigh":	[2.0971, 1, 1, 1.648],
+										"defaultDayGainLow":	[1.90858, 1, 1, 1.99856],
+										"defaultDayGainHigh":	[2.32272, 1, 1, 1.76158],
 										"xyType2Enable":	1,
 										"weight":	{
 											"lumaValue":	[0, 2, 4, 8, 32, 128, 1024, 8192, 65536, 262144],
@@ -1038,22 +1038,22 @@
 								"Gamma_en":	1,
 								"Gamma_out_segnum":	"GAMMATYPE_LOG",
 								"Gamma_out_offset":	0,
-								"Gamma_curve":	[0, 5, 9, 14, 18, 23, 27, 32, 36, 45, 54, 63, 72, 90, 108, 126, 144, 180, 216, 252, 288, 358, 428, 497, 565, 696, 820, 937, 1044, 1228, 1381, 1513, 1634, 1870, 2082, 2251, 2390, 2633, 2847, 3045, 3220, 3543, 3796, 3991, 4095]
+								"Gamma_curve": [0, 96, 133, 160, 182, 202, 219, 235, 259, 285, 308, 329, 368, 401, 432, 468, 519, 564, 605, 666, 733, 793, 848, 945, 1032, 1112, 1206, 1335, 1452, 1558, 1715, 1886, 2039, 2181, 2433, 2657, 2861, 3049, 3223, 3388, 3542, 3690, 3831, 3966, 4095]
 							}
 						},
 						"ablc_calib":	{
 							"BlcTuningPara":	{
 								"enable":	1,
 								"BLC_Data":	{
-									"ISO":	[50, 100, 200, 400, 800, 1600, 3200, 10000, 12800, 25600, 51200, 102400, 204800],
+									"ISO":	[50, 100, 200, 400, 800, 1400, 3200, 6400, 12800, 25600, 51200, 102400, 204800],
 									"ISO_len":	13,
-									"R_Channel":	[259, 260.562, 260.125, 259.875, 259.938, 259.625, 258.125, 256.688, 253.312, 247.188, 256, 256, 256],
+									"R_Channel":	[144.5625, 145.5625, 146.625, 147.375, 147.8125, 147.9375, 147.9375, 147.9375, 147.9375, 147.9375, 147.9375, 147.9375, 147.9375],
 									"R_Channel_len":	13,
-									"Gr_Channel":	[258, 259.25, 260.125, 259.75, 260, 259.75, 258.125, 256.562, 252.875, 247.5, 256, 256, 256],
+									"Gr_Channel":	[144.5625, 145.5625, 146.6875, 147.375, 148, 147.9375, 147.9375, 147.9375, 147.9375, 147.9375, 147.9375, 147.9375, 147.9375],
 									"Gr_Channel_len":	13,
-									"Gb_Channel":	[258, 259.25, 260.125, 259.75, 260, 259.75, 258.188, 256.438, 253.125, 247.438, 256, 256, 256],
+									"Gb_Channel":	[144.625, 145.5625, 146.75, 147.5625, 148.3125, 148.1875, 148.1875, 148.1875, 148.1875, 148.1875, 148.1875, 148.1875, 148.1875],
 									"Gb_Channel_len":	13,
-									"B_Channel":	[259, 260.562, 260.125, 259.875, 259.938, 259.688, 258.062, 256.625, 252.75, 246.25, 256, 256, 256],
+									"B_Channel":	[144.5625, 145.5, 146.625, 147.375, 147.8125, 147.6875, 147.6875, 147.6875, 147.6875, 147.6875, 147.6875, 147.6875, 147.6875],
 									"B_Channel_len":	13
 								}
 							},
@@ -1134,7 +1134,7 @@
 						},
 						"adehaze_calib_v11":	{
 							"DehazeTuningPara":	{
-								"Enable":	1,
+								"Enable":	0,
 								"CtrlDataType":	"CTRLDATATYPE_ENVLV",
 								"cfg_alpha":	0,
 								"ByPassThr":	0.01,
@@ -1173,12 +1173,12 @@
 									}
 								},
 								"enhance_setting":	{
-									"en":	1,
+									"en":	0,
 									"enhance_curve":	[0, 64, 128, 192, 256, 320, 384, 448, 512, 576, 640, 704, 768, 832, 896, 960, 1023],
 									"EnhanceData":	{
-										"CtrlData":	[0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.7, 0.9, 0.94, 0.95, 0.96, 0.98, 1],
-										"enhance_value":	[1.25, 1.25, 1.25, 1.25, 1.25, 1.25, 1.25, 1.25, 1.25, 1.25, 1.25, 1.25, 1.25],
-										"enhance_chroma":	[1.1, 1.1, 1.1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
+										"CtrlData":	[0, 0.03, 0.2, 0.3, 0.4, 0.5, 0.7, 0.9, 0.94, 0.95, 0.96, 0.98, 1],
+										"enhance_value":	[1.8, 1.7, 1.7, 1.6, 1.5, 1.4, 1.3, 1.3, 1.2, 1.2, 1.2, 1.2, 1.2],
+										"enhance_chroma":	[1.2, 1.2, 1.2, 1.2, 1.2, 1.1, 1.1, 1.1, 1.1, 1.1, 1.1, 1.1, 1.1]
 									}
 								},
 								"hist_setting":	{
@@ -1389,9 +1389,9 @@
 									"MS_offset":	[0.38, 0.38, 0.38, 0.38, 0.38, 0.38, 0.38, 0.38, 0.38, 0.38, 0.38, 0.38, 0.38]
 								},
 								"ByPassThr":	0.01,
-								"OECurve_damp":	0.3,
-								"MDCurveLM_damp":	0.3,
-								"MDCurveMS_damp":	0.3
+								"OECurve_damp":	0.5,
+								"MDCurveLM_damp":	0.5,
+								"MDCurveMS_damp":	0.5
 							}
 						},
 						"adrc_calib_v10":	{
@@ -1437,7 +1437,7 @@
 						},
 						"cpsl":	{
 							"param":	{
-								"enable":	1,
+								"enable":	0,
 								"mode":	"RK_AIQ_OP_MODE_AUTO",
 								"force_gray":	1,
 								"light_src":	"LED",
@@ -1452,22 +1452,22 @@
 						"debayer":	{
 							"param":	{
 								"debayer_en":	1,
-								"debayer_filter1":	[2, -6, 0, 6, -2],
-								"debayer_filter2":	[2, -4, 4, -4, 2],
+								"debayer_filter1":	[2, -4, 0, 4, -2],
+								"debayer_filter2":	[2, -3, 2, -3, 2],
 								"debayer_gain_offset":	4,
 								"debayer_offset":	1,
 								"debayer_clip_en":	1,
 								"debayer_filter_g_en":	1,
 								"debayer_filter_c_en":	1,
-								"debayer_thed0":	3,
-								"debayer_thed1":	6,
+								"debayer_thed0":	5,
+								"debayer_thed1":	10,
 								"debayer_dist_scale":	8,
-								"debayer_cnr_strength":	5,
+								"debayer_cnr_strength":	3,
 								"debayer_shift_num":	2,
 								"array":	{
 									"ISO":	[50, 100, 200, 400, 800, 1600, 3200, 6400, 12800],
-									"sharp_strength":	[4, 4, 4, 4, 4, 4, 4, 4, 4],
-									"debayer_hf_offset":	[1, 1, 1, 1, 1, 1, 1, 1, 1]
+									"sharp_strength":	[4, 4, 4, 4, 3, 2, 1, 0, 0],
+									"debayer_hf_offset":	[1, 1, 1, 1, 2, 2, 3, 3, 3]
 								}
 							}
 						},
@@ -2508,67 +2508,67 @@
 											{
 												"iso":	50,
 												"lumapoint":	[512, 1024, 1536, 2048, 3072, 4096, 5120, 6144, 7168, 8192, 9216, 10240, 11264, 12288, 13312, 14336],
-												"sigma":	[197, 182, 167, 155, 133, 118, 108, 102, 99, 97, 94, 91, 87, 87, 87, 87]
+												"sigma":	[165, 161, 157, 154, 150, 147, 144, 141, 137, 132, 126, 118, 109, 99, 90, 87]
 											},
 											{
 												"iso":	100,
 												"lumapoint":	[512, 1024, 1536, 2048, 3072, 4096, 5120, 6144, 7168, 8192, 9216, 10240, 11264, 12288, 13312, 14336],
-												"sigma":	[315, 287, 262, 239, 200, 171, 152, 142, 137, 135, 133, 129, 122, 112, 100, 88]
+												"sigma":	[230, 225, 220, 216, 211, 207, 203, 199, 194, 187, 178, 167, 155, 141, 128, 118]
 											},
 											{
 												"iso":	200,
 												"lumapoint":	[512, 1024, 1536, 2048, 3072, 4096, 5120, 6144, 7168, 8192, 9216, 10240, 11264, 12288, 13312, 14336],
-												"sigma":	[442, 403, 368, 335, 280, 240, 213, 198, 192, 190, 187, 182, 173, 160, 143, 126]
+												"sigma":	[340, 330, 322, 314, 303, 294, 286, 279, 271, 262, 251, 237, 221, 204, 185, 168]
 											},
 											{
 												"iso":	400,
 												"lumapoint":	[512, 1024, 1536, 2048, 3072, 4096, 5120, 6144, 7168, 8192, 9216, 10240, 11264, 12288, 13312, 14336],
-												"sigma":	[639, 577, 521, 469, 383, 321, 283, 266, 262, 264, 264, 259, 246, 224, 197, 169]
+												"sigma":	[514, 494, 477, 463, 441, 425, 413, 403, 393, 380, 364, 344, 321, 295, 269, 246]
 											},
 											{
 												"iso":	800,
 												"lumapoint":	[512, 1024, 1536, 2048, 3072, 4096, 5120, 6144, 7168, 8192, 9216, 10240, 11264, 12288, 13312, 14336],
-												"sigma":	[880, 792, 711, 637, 515, 428, 377, 358, 358, 364, 367, 361, 343, 312, 273, 234]
+												"sigma":	[824, 779, 739, 704, 650, 612, 587, 569, 554, 539, 519, 494, 464, 429, 392, 360]
 											},
 											{
 												"iso":	1600,
 												"lumapoint":	[512, 1024, 1536, 2048, 3072, 4096, 5120, 6144, 7168, 8192, 9216, 10240, 11264, 12288, 13312, 14336],
-												"sigma":	[1260, 1120, 992, 875, 679, 541, 467, 450, 465, 487, 499, 492, 463, 411, 342, 272]
+												"sigma":	[1590, 1435, 1297, 1177, 990, 874, 816, 795, 788, 775, 745, 693, 622, 543, 490, 520]
 											},
 											{
 												"iso":	3200,
 												"lumapoint":	[512, 1024, 1536, 2048, 3072, 4096, 5120, 6144, 7168, 8192, 9216, 10240, 11264, 12288, 13312, 14336],
-												"sigma":	[1629, 1453, 1292, 1146, 905, 739, 653, 632, 647, 669, 678, 663, 620, 547, 451, 352]
+												"sigma":	[1895, 1613, 1367, 1165, 923, 908, 1031, 1180, 1298, 1362, 1363, 1301, 1184, 1036, 913, 924]
 											},
 											{
 												"iso":	6400,
 												"lumapoint":	[512, 1024, 1536, 2048, 3072, 4096, 5120, 6144, 7168, 8192, 9216, 10240, 11264, 12288, 13312, 14336],
-												"sigma":	[1854, 1695, 1551, 1421, 1209, 1059, 967, 919, 898, 886, 868, 834, 781, 705, 613, 519]
+												"sigma":	[2348, 2192, 2030, 1866, 1562, 1348, 1302, 1451, 1737, 2086, 2443, 2771, 3038, 3214, 3258, 3110]
 											},
 											{
 												"iso":	12800,
 												"lumapoint":	[512, 1024, 1536, 2048, 3072, 4096, 5120, 6144, 7168, 8192, 9216, 10240, 11264, 12288, 13312, 14336],
-												"sigma":	[2469, 2283, 2115, 1964, 1716, 1538, 1420, 1348, 1302, 1266, 1225, 1168, 1088, 985, 862, 736]
+												"sigma":	[2348, 2192, 2030, 1866, 1562, 1348, 1302, 1451, 1737, 2086, 2443, 2771, 3038, 3214, 3258, 3110]
 											},
 											{
 												"iso":	25600,
 												"lumapoint":	[512, 1024, 1536, 2048, 3072, 4096, 5120, 6144, 7168, 8192, 9216, 10240, 11264, 12288, 13312, 14336],
-												"sigma":	[3707, 3428, 3172, 2939, 2544, 2244, 2033, 1899, 1820, 1772, 1731, 1680, 1607, 1506, 1376, 1224]
+												"sigma":	[2348, 2192, 2030, 1866, 1562, 1348, 1302, 1451, 1737, 2086, 2443, 2771, 3038, 3214, 3258, 3110]
 											},
 											{
 												"iso":	51200,
 												"lumapoint":	[512, 1024, 1536, 2048, 3072, 4096, 5120, 6144, 7168, 8192, 9216, 10240, 11264, 12288, 13312, 14336],
-												"sigma":	[768, 768, 768, 768, 640, 640, 640, 640, 512, 512, 512, 512, 512, 512, 512, 384]
+												"sigma":	[2348, 2192, 2030, 1866, 1562, 1348, 1302, 1451, 1737, 2086, 2443, 2771, 3038, 3214, 3258, 3110]
 											},
 											{
 												"iso":	102400,
 												"lumapoint":	[512, 1024, 1536, 2048, 3072, 4096, 5120, 6144, 7168, 8192, 9216, 10240, 11264, 12288, 13312, 14336],
-												"sigma":	[768, 768, 768, 768, 640, 640, 640, 640, 512, 512, 512, 512, 512, 512, 512, 384]
+												"sigma":	[2348, 2192, 2030, 1866, 1562, 1348, 1302, 1451, 1737, 2086, 2443, 2771, 3038, 3214, 3258, 3110]
 											},
 											{
 												"iso":	204800,
 												"lumapoint":	[512, 1024, 1536, 2048, 3072, 4096, 5120, 6144, 7168, 8192, 9216, 10240, 11264, 12288, 13312, 14336],
-												"sigma":	[768, 768, 768, 768, 640, 640, 640, 640, 512, 512, 512, 512, 512, 512, 512, 384]
+												"sigma":	[2348, 2192, 2030, 1866, 1562, 1348, 1302, 1451, 1737, 2086, 2443, 2771, 3038, 3214, 3258, 3110]
 											}
 										],
 										"Calib_ISO_len":	13
@@ -2579,68 +2579,68 @@
 										"Calib_ISO":	[
 											{
 												"iso":	50,
-												"lumapoint":	[256, 512, 768, 1024, 1280, 1536, 1792, 2048, 2304, 2560, 2816, 3072, 3328, 3584, 3840, 4095],
-												"sigma":	[768, 768, 768, 768, 640, 640, 640, 640, 512, 512, 512, 512, 512, 512, 512, 384]
+												"lumapoint":	[512, 1024, 1536, 2048, 3072, 4096, 5120, 6144, 7168, 8192, 9216, 10240, 11264, 12288, 13312, 14336],
+												"sigma":	[93, 106, 115, 121, 128, 130, 128, 124, 117, 110, 103, 95, 88, 87, 87, 87]
 											},
 											{
 												"iso":	100,
-												"lumapoint":	[256, 512, 768, 1024, 1280, 1536, 1792, 2048, 2304, 2560, 2816, 3072, 3328, 3584, 3840, 4095],
-												"sigma":	[768, 768, 768, 768, 640, 640, 640, 640, 512, 512, 512, 512, 512, 512, 512, 384]
+												"lumapoint":	[512, 1024, 1536, 2048, 3072, 4096, 5120, 6144, 7168, 8192, 9216, 10240, 11264, 12288, 13312, 14336],
+												"sigma":	[124, 143, 156, 166, 177, 180, 177, 172, 163, 154, 144, 134, 124, 116, 108, 101]
 											},
 											{
 												"iso":	200,
-												"lumapoint":	[256, 512, 768, 1024, 1280, 1536, 1792, 2048, 2304, 2560, 2816, 3072, 3328, 3584, 3840, 4095],
-												"sigma":	[768, 768, 768, 768, 640, 640, 640, 640, 512, 512, 512, 512, 512, 512, 512, 384]
+												"lumapoint":	[512, 1024, 1536, 2048, 3072, 4096, 5120, 6144, 7168, 8192, 9216, 10240, 11264, 12288, 13312, 14336],
+												"sigma":	[182, 207, 225, 237, 251, 254, 251, 242, 231, 217, 203, 189, 176, 165, 154, 142]
 											},
 											{
 												"iso":	400,
-												"lumapoint":	[256, 512, 768, 1024, 1280, 1536, 1792, 2048, 2304, 2560, 2816, 3072, 3328, 3584, 3840, 4095],
-												"sigma":	[768, 768, 768, 768, 640, 640, 640, 640, 512, 512, 512, 512, 512, 512, 512, 384]
+												"lumapoint":	[512, 1024, 1536, 2048, 3072, 4096, 5120, 6144, 7168, 8192, 9216, 10240, 11264, 12288, 13312, 14336],
+												"sigma":	[262, 297, 321, 338, 357, 361, 356, 344, 327, 308, 288, 269, 251, 234, 219, 202]
 											},
 											{
 												"iso":	800,
-												"lumapoint":	[256, 512, 768, 1024, 1280, 1536, 1792, 2048, 2304, 2560, 2816, 3072, 3328, 3584, 3840, 4095],
-												"sigma":	[768, 768, 768, 768, 640, 640, 640, 640, 512, 512, 512, 512, 512, 512, 512, 384]
+												"lumapoint":	[512, 1024, 1536, 2048, 3072, 4096, 5120, 6144, 7168, 8192, 9216, 10240, 11264, 12288, 13312, 14336],
+												"sigma":	[405, 448, 479, 500, 523, 525, 515, 495, 469, 441, 412, 384, 358, 335, 312, 287]
 											},
 											{
 												"iso":	1600,
-												"lumapoint":	[256, 512, 768, 1024, 1280, 1536, 1792, 2048, 2304, 2560, 2816, 3072, 3328, 3584, 3840, 4095],
-												"sigma":	[768, 768, 768, 768, 640, 640, 640, 640, 512, 512, 512, 512, 512, 512, 512, 384]
+												"lumapoint":	[512, 1024, 1536, 2048, 3072, 4096, 5120, 6144, 7168, 8192, 9216, 10240, 11264, 12288, 13312, 14336],
+												"sigma":	[587, 624, 652, 671, 690, 691, 678, 656, 627, 595, 560, 525, 491, 457, 422, 383]
 											},
 											{
 												"iso":	3200,
-												"lumapoint":	[256, 512, 768, 1024, 1280, 1536, 1792, 2048, 2304, 2560, 2816, 3072, 3328, 3584, 3840, 4095],
-												"sigma":	[768, 768, 768, 768, 640, 640, 640, 640, 512, 512, 512, 512, 512, 512, 512, 384]
+												"lumapoint":	[512, 1024, 1536, 2048, 3072, 4096, 5120, 6144, 7168, 8192, 9216, 10240, 11264, 12288, 13312, 14336],
+												"sigma":	[618, 760, 855, 919, 991, 1010, 995, 958, 908, 851, 794, 740, 692, 648, 606, 552]
 											},
 											{
 												"iso":	6400,
-												"lumapoint":	[256, 512, 768, 1024, 1280, 1536, 1792, 2048, 2304, 2560, 2816, 3072, 3328, 3584, 3840, 4095],
-												"sigma":	[768, 768, 768, 768, 640, 640, 640, 640, 512, 512, 512, 512, 512, 512, 512, 384]
+												"lumapoint":	[512, 1024, 1536, 2048, 3072, 4096, 5120, 6144, 7168, 8192, 9216, 10240, 11264, 12288, 13312, 14336],
+												"sigma":	[881, 1087, 1225, 1320, 1426, 1456, 1438, 1388, 1318, 1238, 1155, 1076, 1004, 937, 869, 784]
 											},
 											{
 												"iso":	12800,
-												"lumapoint":	[256, 512, 768, 1024, 1280, 1536, 1792, 2048, 2304, 2560, 2816, 3072, 3328, 3584, 3840, 4095],
-												"sigma":	[768, 768, 768, 768, 640, 640, 640, 640, 512, 512, 512, 512, 512, 512, 512, 384]
+												"lumapoint":	[512, 1024, 1536, 2048, 3072, 4096, 5120, 6144, 7168, 8192, 9216, 10240, 11264, 12288, 13312, 14336],
+												"sigma":	[1227, 1514, 1710, 1849, 2014, 2077, 2074, 2024, 1942, 1839, 1725, 1605, 1484, 1362, 1231, 1076]
 											},
 											{
 												"iso":	25600,
-												"lumapoint":	[256, 512, 768, 1024, 1280, 1536, 1792, 2048, 2304, 2560, 2816, 3072, 3328, 3584, 3840, 4095],
-												"sigma":	[768, 768, 768, 768, 640, 640, 640, 640, 512, 512, 512, 512, 512, 512, 512, 384]
+												"lumapoint":	[512, 1024, 1536, 2048, 3072, 4096, 5120, 6144, 7168, 8192, 9216, 10240, 11264, 12288, 13312, 14336],
+												"sigma":	[1819, 2060, 2254, 2413, 2650, 2803, 2889, 2916, 2892, 2821, 2705, 2548, 2350, 2113, 1836, 1520]
 											},
 											{
 												"iso":	51200,
-												"lumapoint":	[256, 512, 768, 1024, 1280, 1536, 1792, 2048, 2304, 2560, 2816, 3072, 3328, 3584, 3840, 4095],
-												"sigma":	[768, 768, 768, 768, 640, 640, 640, 640, 512, 512, 512, 512, 512, 512, 512, 384]
+												"lumapoint":	[512, 1024, 1536, 2048, 3072, 4096, 5120, 6144, 7168, 8192, 9216, 10240, 11264, 12288, 13312, 14336],
+												"sigma":	[159, 188, 208, 222, 238, 243, 240, 233, 222, 209, 195, 182, 170, 159, 149, 138]
 											},
 											{
 												"iso":	102400,
-												"lumapoint":	[256, 512, 768, 1024, 1280, 1536, 1792, 2048, 2304, 2560, 2816, 3072, 3328, 3584, 3840, 4095],
-												"sigma":	[768, 768, 768, 768, 640, 640, 640, 640, 512, 512, 512, 512, 512, 512, 512, 384]
+												"lumapoint":	[512, 1024, 1536, 2048, 3072, 4096, 5120, 6144, 7168, 8192, 9216, 10240, 11264, 12288, 13312, 14336],
+												"sigma":	[159, 188, 208, 222, 238, 243, 240, 233, 222, 209, 195, 182, 170, 159, 149, 138]
 											},
 											{
 												"iso":	204800,
-												"lumapoint":	[256, 512, 768, 1024, 1280, 1536, 1792, 2048, 2304, 2560, 2816, 3072, 3328, 3584, 3840, 4095],
-												"sigma":	[768, 768, 768, 768, 640, 640, 640, 640, 512, 512, 512, 512, 512, 512, 512, 384]
+												"lumapoint":	[512, 1024, 1536, 2048, 3072, 4096, 5120, 6144, 7168, 8192, 9216, 10240, 11264, 12288, 13312, 14336],
+												"sigma":	[159, 188, 208, 222, 238, 243, 240, 233, 222, 209, 195, 182, 170, 159, 149, 138]
 											}
 										],
 										"Calib_ISO_len":	13
@@ -2658,39 +2658,39 @@
 											{
 												"iso":	50,
 												"gauss_guide":	0,
-												"filter_strength":	0.35,
-												"edgesofts":	2,
+												"filter_strength":	0.2,
+												"edgesofts":	1,
 												"ratio":	0.01,
-												"weight":	1
+												"weight":	0.49
 											},
 											{
 												"iso":	100,
 												"gauss_guide":	0,
-												"filter_strength":	0.45,
-												"edgesofts":	2,
+												"filter_strength":	0.3,
+												"edgesofts":	1,
 												"ratio":	0.01,
-												"weight":	1
+												"weight":	0.5
 											},
 											{
 												"iso":	200,
 												"gauss_guide":	0,
-												"filter_strength":	0.5,
+												"filter_strength":	0.4,
 												"edgesofts":	2,
 												"ratio":	0.01,
-												"weight":	1
+												"weight":	0.5
 											},
 											{
 												"iso":	400,
 												"gauss_guide":	0,
-												"filter_strength":	0.55,
-												"edgesofts":	2,
+												"filter_strength":	0.5,
+												"edgesofts":	1,
 												"ratio":	0.01,
-												"weight":	1
+												"weight":	0.7
 											},
 											{
 												"iso":	800,
 												"gauss_guide":	0,
-												"filter_strength":	0.75,
+												"filter_strength":	1,
 												"edgesofts":	2,
 												"ratio":	0.01,
 												"weight":	1
@@ -2698,7 +2698,7 @@
 											{
 												"iso":	1600,
 												"gauss_guide":	1,
-												"filter_strength":	1,
+												"filter_strength":	0.65,
 												"edgesofts":	2,
 												"ratio":	0.01,
 												"weight":	1
@@ -2706,7 +2706,7 @@
 											{
 												"iso":	3200,
 												"gauss_guide":	1,
-												"filter_strength":	1.2,
+												"filter_strength":	0.65,
 												"edgesofts":	2,
 												"ratio":	0.01,
 												"weight":	1
@@ -2714,7 +2714,7 @@
 											{
 												"iso":	6400,
 												"gauss_guide":	1,
-												"filter_strength":	1.5,
+												"filter_strength":	0.7,
 												"edgesofts":	2,
 												"ratio":	0.01,
 												"weight":	1
@@ -2722,7 +2722,7 @@
 											{
 												"iso":	12800,
 												"gauss_guide":	1,
-												"filter_strength":	1.5,
+												"filter_strength":	0.7,
 												"edgesofts":	2,
 												"ratio":	0.01,
 												"weight":	1
@@ -2730,7 +2730,7 @@
 											{
 												"iso":	25600,
 												"gauss_guide":	1,
-												"filter_strength":	1.5,
+												"filter_strength":	0.7,
 												"edgesofts":	2,
 												"ratio":	0.01,
 												"weight":	1
@@ -2738,7 +2738,7 @@
 											{
 												"iso":	51200,
 												"gauss_guide":	1,
-												"filter_strength":	1.5,
+												"filter_strength":	0.7,
 												"edgesofts":	2,
 												"ratio":	0.01,
 												"weight":	1
@@ -2746,7 +2746,7 @@
 											{
 												"iso":	102400,
 												"gauss_guide":	1,
-												"filter_strength":	1.5,
+												"filter_strength":	0.7,
 												"edgesofts":	2,
 												"ratio":	0.01,
 												"weight":	1
@@ -2754,7 +2754,7 @@
 											{
 												"iso":	204800,
 												"gauss_guide":	1,
-												"filter_strength":	1.5,
+												"filter_strength":	0.7,
 												"edgesofts":	2,
 												"ratio":	0.01,
 												"weight":	1
@@ -2769,7 +2769,7 @@
 											{
 												"iso":	50,
 												"gauss_guide":	0,
-												"filter_strength":	0.55,
+												"filter_strength":	0.16,
 												"edgesofts":	2,
 												"ratio":	0.01,
 												"weight":	1
@@ -2801,8 +2801,8 @@
 											{
 												"iso":	800,
 												"gauss_guide":	0,
-												"filter_strength":	0.65,
-												"edgesofts":	2,
+												"filter_strength":	1.5,
+												"edgesofts":	1,
 												"ratio":	0.01,
 												"weight":	1
 											},
@@ -2810,14 +2810,14 @@
 												"iso":	1600,
 												"gauss_guide":	1,
 												"filter_strength":	0.65,
-												"edgesofts":	2,
+												"edgesofts":	1,
 												"ratio":	0.01,
 												"weight":	1
 											},
 											{
 												"iso":	3200,
 												"gauss_guide":	1,
-												"filter_strength":	0.65,
+												"filter_strength":	4,
 												"edgesofts":	2,
 												"ratio":	0.01,
 												"weight":	1
@@ -2825,7 +2825,7 @@
 											{
 												"iso":	6400,
 												"gauss_guide":	1,
-												"filter_strength":	0.7,
+												"filter_strength":	6,
 												"edgesofts":	2,
 												"ratio":	0.01,
 												"weight":	1
@@ -2833,7 +2833,7 @@
 											{
 												"iso":	12800,
 												"gauss_guide":	1,
-												"filter_strength":	0.7,
+												"filter_strength":	4.44,
 												"edgesofts":	2,
 												"ratio":	0.01,
 												"weight":	1
@@ -2841,7 +2841,7 @@
 											{
 												"iso":	25600,
 												"gauss_guide":	1,
-												"filter_strength":	0.7,
+												"filter_strength":	4,
 												"edgesofts":	2,
 												"ratio":	0.01,
 												"weight":	1
@@ -2877,7 +2877,7 @@
 								"Setting_len":	2
 							},
 							"Bayernr3D":	{
-								"enable":	1,
+								"enable":	0,
 								"Setting":	[
 									{
 										"SNR_Mode":	"LSNR",
@@ -3126,16 +3126,16 @@
 												"color_sat_adj":	40,
 												"color_sat_adj_alpha":	0.8,
 												"hf_spikes_reducion_strength":	0.5,
-												"hf_denoise_strength":	4.2,
-												"hf_color_sat":	4.5,
+												"hf_denoise_strength":	8,
+												"hf_color_sat":	1.5,
 												"hf_denoise_alpha":	0,
 												"hf_bf_wgt_clip":	0,
-												"thumb_spikes_reducion_strength":	0.2,
-												"thumb_denoise_strength":	4.2,
+												"thumb_spikes_reducion_strength":	0.5,
+												"thumb_denoise_strength":	8,
 												"thumb_color_sat":	4,
-												"lf_denoise_strength":	4,
+												"lf_denoise_strength":	8,
 												"lf_color_sat":	4,
-												"lf_denoise_alpha":	1
+												"lf_denoise_alpha":	0.8
 											},
 											{
 												"iso":	100,
@@ -3146,16 +3146,16 @@
 												"color_sat_adj":	40,
 												"color_sat_adj_alpha":	0.8,
 												"hf_spikes_reducion_strength":	0.5,
-												"hf_denoise_strength":	8.2,
-												"hf_color_sat":	3.5,
+												"hf_denoise_strength":	8,
+												"hf_color_sat":	1.5,
 												"hf_denoise_alpha":	0,
 												"hf_bf_wgt_clip":	0,
-												"thumb_spikes_reducion_strength":	0.2,
-												"thumb_denoise_strength":	8.2,
+												"thumb_spikes_reducion_strength":	0.5,
+												"thumb_denoise_strength":	8,
 												"thumb_color_sat":	4,
-												"lf_denoise_strength":	4,
+												"lf_denoise_strength":	8,
 												"lf_color_sat":	4,
-												"lf_denoise_alpha":	1
+												"lf_denoise_alpha":	0.8
 											},
 											{
 												"iso":	200,
@@ -3166,16 +3166,16 @@
 												"color_sat_adj":	40,
 												"color_sat_adj_alpha":	0.8,
 												"hf_spikes_reducion_strength":	0.5,
-												"hf_denoise_strength":	10.2,
-												"hf_color_sat":	2.5,
+												"hf_denoise_strength":	8,
+												"hf_color_sat":	1.5,
 												"hf_denoise_alpha":	0,
 												"hf_bf_wgt_clip":	0,
-												"thumb_spikes_reducion_strength":	0.2,
-												"thumb_denoise_strength":	10.2,
+												"thumb_spikes_reducion_strength":	0.5,
+												"thumb_denoise_strength":	8,
 												"thumb_color_sat":	4,
 												"lf_denoise_strength":	4,
 												"lf_color_sat":	4,
-												"lf_denoise_alpha":	1
+												"lf_denoise_alpha":	0.8
 											},
 											{
 												"iso":	400,
@@ -3186,16 +3186,16 @@
 												"color_sat_adj":	40,
 												"color_sat_adj_alpha":	0.8,
 												"hf_spikes_reducion_strength":	0.5,
-												"hf_denoise_strength":	20.2,
+												"hf_denoise_strength":	12,
 												"hf_color_sat":	1.5,
 												"hf_denoise_alpha":	0,
-												"hf_bf_wgt_clip":	8,
-												"thumb_spikes_reducion_strength":	0.2,
-												"thumb_denoise_strength":	20.2,
-												"thumb_color_sat":	3,
-												"lf_denoise_strength":	8,
-												"lf_color_sat":	3.5,
-												"lf_denoise_alpha":	1
+												"hf_bf_wgt_clip":	0,
+												"thumb_spikes_reducion_strength":	0.5,
+												"thumb_denoise_strength":	12,
+												"thumb_color_sat":	4,
+												"lf_denoise_strength":	12,
+												"lf_color_sat":	4,
+												"lf_denoise_alpha":	0.8
 											},
 											{
 												"iso":	800,
@@ -3205,17 +3205,17 @@
 												"cnr_g_gain":	1,
 												"color_sat_adj":	30,
 												"color_sat_adj_alpha":	0.8,
-												"hf_spikes_reducion_strength":	0.6,
-												"hf_denoise_strength":	40.2,
-												"hf_color_sat":	1,
+												"hf_spikes_reducion_strength":	0.5,
+												"hf_denoise_strength":	16,
+												"hf_color_sat":	1.5,
 												"hf_denoise_alpha":	0,
-												"hf_bf_wgt_clip":	16,
-												"thumb_spikes_reducion_strength":	0.2,
-												"thumb_denoise_strength":	40.2,
-												"thumb_color_sat":	2,
-												"lf_denoise_strength":	14,
-												"lf_color_sat":	2.5,
-												"lf_denoise_alpha":	1
+												"hf_bf_wgt_clip":	0,
+												"thumb_spikes_reducion_strength":	0.5,
+												"thumb_denoise_strength":	16,
+												"thumb_color_sat":	4,
+												"lf_denoise_strength":	16,
+												"lf_color_sat":	4,
+												"lf_denoise_alpha":	0.8
 											},
 											{
 												"iso":	1600,
@@ -3223,19 +3223,19 @@
 												"lf_bypass":	0,
 												"cnr_exgain":	1,
 												"cnr_g_gain":	1,
-												"color_sat_adj":	20,
+												"color_sat_adj":	40,
 												"color_sat_adj_alpha":	0.8,
-												"hf_spikes_reducion_strength":	0.7,
-												"hf_denoise_strength":	80.2,
-												"hf_color_sat":	0.5,
+												"hf_spikes_reducion_strength":	0.5,
+												"hf_denoise_strength":	20,
+												"hf_color_sat":	1.5,
 												"hf_denoise_alpha":	0,
-												"hf_bf_wgt_clip":	32,
-												"thumb_spikes_reducion_strength":	0.2,
-												"thumb_denoise_strength":	80.2,
-												"thumb_color_sat":	1,
-												"lf_denoise_strength":	24,
-												"lf_color_sat":	1.5,
-												"lf_denoise_alpha":	1
+												"hf_bf_wgt_clip":	0,
+												"thumb_spikes_reducion_strength":	0.5,
+												"thumb_denoise_strength":	20,
+												"thumb_color_sat":	4,
+												"lf_denoise_strength":	20,
+												"lf_color_sat":	4,
+												"lf_denoise_alpha":	0.8
 											},
 											{
 												"iso":	3200,
@@ -3243,19 +3243,19 @@
 												"lf_bypass":	0,
 												"cnr_exgain":	1,
 												"cnr_g_gain":	1,
-												"color_sat_adj":	10,
+												"color_sat_adj":	40,
 												"color_sat_adj_alpha":	0.8,
-												"hf_spikes_reducion_strength":	0.8,
-												"hf_denoise_strength":	160.2,
-												"hf_color_sat":	0.2,
+												"hf_spikes_reducion_strength":	0.5,
+												"hf_denoise_strength":	24,
+												"hf_color_sat":	1.5,
 												"hf_denoise_alpha":	0,
-												"hf_bf_wgt_clip":	64,
+												"hf_bf_wgt_clip":	0,
 												"thumb_spikes_reducion_strength":	0.2,
-												"thumb_denoise_strength":	160.2,
-												"thumb_color_sat":	0.5,
-												"lf_denoise_strength":	34,
-												"lf_color_sat":	1,
-												"lf_denoise_alpha":	1
+												"thumb_denoise_strength":	24,
+												"thumb_color_sat":	4,
+												"lf_denoise_strength":	24,
+												"lf_color_sat":	4,
+												"lf_denoise_alpha":	0.8
 											},
 											{
 												"iso":	6400,
@@ -3263,19 +3263,19 @@
 												"lf_bypass":	0,
 												"cnr_exgain":	1,
 												"cnr_g_gain":	1,
-												"color_sat_adj":	10,
+												"color_sat_adj":	40,
 												"color_sat_adj_alpha":	0.8,
-												"hf_spikes_reducion_strength":	0.8,
-												"hf_denoise_strength":	320.2,
-												"hf_color_sat":	0.1,
+												"hf_spikes_reducion_strength":	0.5,
+												"hf_denoise_strength":	28,
+												"hf_color_sat":	1.5,
 												"hf_denoise_alpha":	0,
-												"hf_bf_wgt_clip":	128,
-												"thumb_spikes_reducion_strength":	0.2,
-												"thumb_denoise_strength":	320.2,
-												"thumb_color_sat":	0.5,
-												"lf_denoise_strength":	44,
-												"lf_color_sat":	0.5,
-												"lf_denoise_alpha":	1
+												"hf_bf_wgt_clip":	0,
+												"thumb_spikes_reducion_strength":	0.5,
+												"thumb_denoise_strength":	28,
+												"thumb_color_sat":	4,
+												"lf_denoise_strength":	28,
+												"lf_color_sat":	4,
+												"lf_denoise_alpha":	0.8
 											},
 											{
 												"iso":	12800,
@@ -3283,19 +3283,19 @@
 												"lf_bypass":	0,
 												"cnr_exgain":	1,
 												"cnr_g_gain":	1,
-												"color_sat_adj":	10,
+												"color_sat_adj":	40,
 												"color_sat_adj_alpha":	0.8,
 												"hf_spikes_reducion_strength":	0.8,
-												"hf_denoise_strength":	640.2,
-												"hf_color_sat":	0.1,
+												"hf_denoise_strength":	32,
+												"hf_color_sat":	1.5,
 												"hf_denoise_alpha":	0,
-												"hf_bf_wgt_clip":	128,
-												"thumb_spikes_reducion_strength":	0.2,
-												"thumb_denoise_strength":	640.2,
-												"thumb_color_sat":	0.5,
-												"lf_denoise_strength":	54,
-												"lf_color_sat":	0.5,
-												"lf_denoise_alpha":	1
+												"hf_bf_wgt_clip":	0,
+												"thumb_spikes_reducion_strength":	0.5,
+												"thumb_denoise_strength":	32,
+												"thumb_color_sat":	4,
+												"lf_denoise_strength":	32,
+												"lf_color_sat":	4,
+												"lf_denoise_alpha":	0.8
 											},
 											{
 												"iso":	25600,
@@ -3303,19 +3303,19 @@
 												"lf_bypass":	0,
 												"cnr_exgain":	1,
 												"cnr_g_gain":	1,
-												"color_sat_adj":	10,
+												"color_sat_adj":	40,
 												"color_sat_adj_alpha":	0.8,
 												"hf_spikes_reducion_strength":	0.5,
-												"hf_denoise_strength":	640.2,
-												"hf_color_sat":	0.1,
+												"hf_denoise_strength":	32,
+												"hf_color_sat":	1.5,
 												"hf_denoise_alpha":	0,
 												"hf_bf_wgt_clip":	0,
-												"thumb_spikes_reducion_strength":	0.2,
-												"thumb_denoise_strength":	640.2,
-												"thumb_color_sat":	0.5,
-												"lf_denoise_strength":	64,
+												"thumb_spikes_reducion_strength":	0.5,
+												"thumb_denoise_strength":	32,
+												"thumb_color_sat":	4,
+												"lf_denoise_strength":	32,
 												"lf_color_sat":	4,
-												"lf_denoise_alpha":	1
+												"lf_denoise_alpha":	0.8
 											},
 											{
 												"iso":	51200,
@@ -3326,16 +3326,16 @@
 												"color_sat_adj":	40,
 												"color_sat_adj_alpha":	0.8,
 												"hf_spikes_reducion_strength":	0.5,
-												"hf_denoise_strength":	10.2,
+												"hf_denoise_strength":	16,
 												"hf_color_sat":	1.5,
 												"hf_denoise_alpha":	0,
 												"hf_bf_wgt_clip":	0,
-												"thumb_spikes_reducion_strength":	0.2,
-												"thumb_denoise_strength":	10.2,
+												"thumb_spikes_reducion_strength":	0.5,
+												"thumb_denoise_strength":	16,
 												"thumb_color_sat":	4,
-												"lf_denoise_strength":	4,
+												"lf_denoise_strength":	16,
 												"lf_color_sat":	4,
-												"lf_denoise_alpha":	1
+												"lf_denoise_alpha":	0.8
 											},
 											{
 												"iso":	102400,
@@ -3346,16 +3346,16 @@
 												"color_sat_adj":	40,
 												"color_sat_adj_alpha":	0.8,
 												"hf_spikes_reducion_strength":	0.5,
-												"hf_denoise_strength":	10.2,
+												"hf_denoise_strength":	16,
 												"hf_color_sat":	1.5,
 												"hf_denoise_alpha":	0,
 												"hf_bf_wgt_clip":	0,
-												"thumb_spikes_reducion_strength":	0.2,
-												"thumb_denoise_strength":	10.2,
+												"thumb_spikes_reducion_strength":	0.5,
+												"thumb_denoise_strength":	16,
 												"thumb_color_sat":	4,
-												"lf_denoise_strength":	4,
+												"lf_denoise_strength":	16,
 												"lf_color_sat":	4,
-												"lf_denoise_alpha":	1
+												"lf_denoise_alpha":	0.8
 											},
 											{
 												"iso":	204800,
@@ -3366,16 +3366,16 @@
 												"color_sat_adj":	40,
 												"color_sat_adj_alpha":	0.8,
 												"hf_spikes_reducion_strength":	0.5,
-												"hf_denoise_strength":	10.2,
+												"hf_denoise_strength":	16,
 												"hf_color_sat":	1.5,
 												"hf_denoise_alpha":	0,
 												"hf_bf_wgt_clip":	0,
-												"thumb_spikes_reducion_strength":	0.2,
-												"thumb_denoise_strength":	10.2,
+												"thumb_spikes_reducion_strength":	0.5,
+												"thumb_denoise_strength":	16,
 												"thumb_color_sat":	4,
-												"lf_denoise_strength":	4,
+												"lf_denoise_strength":	16,
 												"lf_color_sat":	4,
-												"lf_denoise_alpha":	1
+												"lf_denoise_alpha":	0.8
 											}
 										],
 										"Tuning_ISO_len":	13
@@ -3393,16 +3393,16 @@
 												"color_sat_adj":	40,
 												"color_sat_adj_alpha":	0.8,
 												"hf_spikes_reducion_strength":	0.5,
-												"hf_denoise_strength":	10.2,
+												"hf_denoise_strength":	8,
 												"hf_color_sat":	1.5,
 												"hf_denoise_alpha":	0,
 												"hf_bf_wgt_clip":	0,
-												"thumb_spikes_reducion_strength":	0.2,
-												"thumb_denoise_strength":	4,
+												"thumb_spikes_reducion_strength":	0.5,
+												"thumb_denoise_strength":	8,
 												"thumb_color_sat":	4,
-												"lf_denoise_strength":	4,
+												"lf_denoise_strength":	8,
 												"lf_color_sat":	4,
-												"lf_denoise_alpha":	1
+												"lf_denoise_alpha":	0.8
 											},
 											{
 												"iso":	100,
@@ -3413,16 +3413,16 @@
 												"color_sat_adj":	40,
 												"color_sat_adj_alpha":	0.8,
 												"hf_spikes_reducion_strength":	0.5,
-												"hf_denoise_strength":	10.2,
+												"hf_denoise_strength":	8,
 												"hf_color_sat":	1.5,
 												"hf_denoise_alpha":	0,
 												"hf_bf_wgt_clip":	0,
-												"thumb_spikes_reducion_strength":	0.2,
-												"thumb_denoise_strength":	4,
+												"thumb_spikes_reducion_strength":	0.5,
+												"thumb_denoise_strength":	8,
 												"thumb_color_sat":	4,
-												"lf_denoise_strength":	4,
+												"lf_denoise_strength":	8,
 												"lf_color_sat":	4,
-												"lf_denoise_alpha":	1
+												"lf_denoise_alpha":	0.8
 											},
 											{
 												"iso":	200,
@@ -3433,16 +3433,16 @@
 												"color_sat_adj":	40,
 												"color_sat_adj_alpha":	0.8,
 												"hf_spikes_reducion_strength":	0.5,
-												"hf_denoise_strength":	10.2,
+												"hf_denoise_strength":	8,
 												"hf_color_sat":	1.5,
 												"hf_denoise_alpha":	0,
 												"hf_bf_wgt_clip":	0,
-												"thumb_spikes_reducion_strength":	0.2,
-												"thumb_denoise_strength":	4,
+												"thumb_spikes_reducion_strength":	0.5,
+												"thumb_denoise_strength":	8,
 												"thumb_color_sat":	4,
-												"lf_denoise_strength":	4,
+												"lf_denoise_strength":	8,
 												"lf_color_sat":	4,
-												"lf_denoise_alpha":	1
+												"lf_denoise_alpha":	0.8
 											},
 											{
 												"iso":	400,
@@ -3453,16 +3453,16 @@
 												"color_sat_adj":	40,
 												"color_sat_adj_alpha":	0.8,
 												"hf_spikes_reducion_strength":	0.5,
-												"hf_denoise_strength":	10.2,
+												"hf_denoise_strength":	12,
 												"hf_color_sat":	1.5,
 												"hf_denoise_alpha":	0,
 												"hf_bf_wgt_clip":	0,
-												"thumb_spikes_reducion_strength":	0.2,
-												"thumb_denoise_strength":	4,
+												"thumb_spikes_reducion_strength":	0.5,
+												"thumb_denoise_strength":	12,
 												"thumb_color_sat":	4,
-												"lf_denoise_strength":	4,
+												"lf_denoise_strength":	12,
 												"lf_color_sat":	4,
-												"lf_denoise_alpha":	1
+												"lf_denoise_alpha":	0.8
 											},
 											{
 												"iso":	800,
@@ -3473,16 +3473,16 @@
 												"color_sat_adj":	40,
 												"color_sat_adj_alpha":	0.8,
 												"hf_spikes_reducion_strength":	0.5,
-												"hf_denoise_strength":	10.2,
+												"hf_denoise_strength":	16,
 												"hf_color_sat":	1.5,
 												"hf_denoise_alpha":	0,
 												"hf_bf_wgt_clip":	0,
-												"thumb_spikes_reducion_strength":	0.2,
-												"thumb_denoise_strength":	4,
+												"thumb_spikes_reducion_strength":	0.5,
+												"thumb_denoise_strength":	16,
 												"thumb_color_sat":	4,
-												"lf_denoise_strength":	4,
+												"lf_denoise_strength":	16,
 												"lf_color_sat":	4,
-												"lf_denoise_alpha":	1
+												"lf_denoise_alpha":	0.8
 											},
 											{
 												"iso":	1600,
@@ -3493,16 +3493,16 @@
 												"color_sat_adj":	40,
 												"color_sat_adj_alpha":	0.8,
 												"hf_spikes_reducion_strength":	0.5,
-												"hf_denoise_strength":	10.2,
+												"hf_denoise_strength":	20,
 												"hf_color_sat":	1.5,
 												"hf_denoise_alpha":	0,
 												"hf_bf_wgt_clip":	0,
-												"thumb_spikes_reducion_strength":	0.2,
-												"thumb_denoise_strength":	4,
+												"thumb_spikes_reducion_strength":	0.5,
+												"thumb_denoise_strength":	20,
 												"thumb_color_sat":	4,
-												"lf_denoise_strength":	4,
+												"lf_denoise_strength":	20,
 												"lf_color_sat":	4,
-												"lf_denoise_alpha":	1
+												"lf_denoise_alpha":	0.8
 											},
 											{
 												"iso":	3200,
@@ -3513,16 +3513,16 @@
 												"color_sat_adj":	40,
 												"color_sat_adj_alpha":	0.8,
 												"hf_spikes_reducion_strength":	0.5,
-												"hf_denoise_strength":	10.2,
+												"hf_denoise_strength":	24,
 												"hf_color_sat":	1.5,
 												"hf_denoise_alpha":	0,
 												"hf_bf_wgt_clip":	0,
-												"thumb_spikes_reducion_strength":	0.2,
-												"thumb_denoise_strength":	4,
+												"thumb_spikes_reducion_strength":	0.5,
+												"thumb_denoise_strength":	24,
 												"thumb_color_sat":	4,
-												"lf_denoise_strength":	4,
+												"lf_denoise_strength":	24,
 												"lf_color_sat":	4,
-												"lf_denoise_alpha":	1
+												"lf_denoise_alpha":	0.8
 											},
 											{
 												"iso":	6400,
@@ -3533,16 +3533,16 @@
 												"color_sat_adj":	40,
 												"color_sat_adj_alpha":	0.8,
 												"hf_spikes_reducion_strength":	0.5,
-												"hf_denoise_strength":	10.2,
+												"hf_denoise_strength":	28,
 												"hf_color_sat":	1.5,
 												"hf_denoise_alpha":	0,
 												"hf_bf_wgt_clip":	0,
-												"thumb_spikes_reducion_strength":	0.2,
-												"thumb_denoise_strength":	4,
+												"thumb_spikes_reducion_strength":	0.5,
+												"thumb_denoise_strength":	28,
 												"thumb_color_sat":	4,
-												"lf_denoise_strength":	4,
+												"lf_denoise_strength":	28,
 												"lf_color_sat":	4,
-												"lf_denoise_alpha":	1
+												"lf_denoise_alpha":	0.8
 											},
 											{
 												"iso":	12800,
@@ -3553,16 +3553,16 @@
 												"color_sat_adj":	40,
 												"color_sat_adj_alpha":	0.8,
 												"hf_spikes_reducion_strength":	0.5,
-												"hf_denoise_strength":	10.2,
+												"hf_denoise_strength":	32,
 												"hf_color_sat":	1.5,
 												"hf_denoise_alpha":	0,
 												"hf_bf_wgt_clip":	0,
-												"thumb_spikes_reducion_strength":	0.2,
-												"thumb_denoise_strength":	4,
+												"thumb_spikes_reducion_strength":	0.5,
+												"thumb_denoise_strength":	32,
 												"thumb_color_sat":	4,
-												"lf_denoise_strength":	4,
+												"lf_denoise_strength":	32,
 												"lf_color_sat":	4,
-												"lf_denoise_alpha":	1
+												"lf_denoise_alpha":	0.8
 											},
 											{
 												"iso":	25600,
@@ -3573,16 +3573,16 @@
 												"color_sat_adj":	40,
 												"color_sat_adj_alpha":	0.8,
 												"hf_spikes_reducion_strength":	0.5,
-												"hf_denoise_strength":	10.2,
+												"hf_denoise_strength":	32,
 												"hf_color_sat":	1.5,
 												"hf_denoise_alpha":	0,
 												"hf_bf_wgt_clip":	0,
-												"thumb_spikes_reducion_strength":	0.2,
-												"thumb_denoise_strength":	4,
+												"thumb_spikes_reducion_strength":	0.5,
+												"thumb_denoise_strength":	32,
 												"thumb_color_sat":	4,
-												"lf_denoise_strength":	4,
+												"lf_denoise_strength":	32,
 												"lf_color_sat":	4,
-												"lf_denoise_alpha":	1
+												"lf_denoise_alpha":	0.8
 											},
 											{
 												"iso":	51200,
@@ -3593,16 +3593,16 @@
 												"color_sat_adj":	40,
 												"color_sat_adj_alpha":	0.8,
 												"hf_spikes_reducion_strength":	0.5,
-												"hf_denoise_strength":	10.2,
+												"hf_denoise_strength":	16,
 												"hf_color_sat":	1.5,
 												"hf_denoise_alpha":	0,
 												"hf_bf_wgt_clip":	0,
-												"thumb_spikes_reducion_strength":	0.2,
-												"thumb_denoise_strength":	4,
+												"thumb_spikes_reducion_strength":	0.5,
+												"thumb_denoise_strength":	16,
 												"thumb_color_sat":	4,
-												"lf_denoise_strength":	4,
+												"lf_denoise_strength":	16,
 												"lf_color_sat":	4,
-												"lf_denoise_alpha":	1
+												"lf_denoise_alpha":	0.8
 											},
 											{
 												"iso":	102400,
@@ -3613,16 +3613,16 @@
 												"color_sat_adj":	40,
 												"color_sat_adj_alpha":	0.8,
 												"hf_spikes_reducion_strength":	0.5,
-												"hf_denoise_strength":	10.2,
+												"hf_denoise_strength":	16,
 												"hf_color_sat":	1.5,
 												"hf_denoise_alpha":	0,
 												"hf_bf_wgt_clip":	0,
-												"thumb_spikes_reducion_strength":	0.2,
-												"thumb_denoise_strength":	4,
+												"thumb_spikes_reducion_strength":	0.5,
+												"thumb_denoise_strength":	16,
 												"thumb_color_sat":	4,
-												"lf_denoise_strength":	4,
+												"lf_denoise_strength":	16,
 												"lf_color_sat":	4,
-												"lf_denoise_alpha":	1
+												"lf_denoise_alpha":	0.8
 											},
 											{
 												"iso":	204800,
@@ -3633,16 +3633,16 @@
 												"color_sat_adj":	40,
 												"color_sat_adj_alpha":	0.8,
 												"hf_spikes_reducion_strength":	0.5,
-												"hf_denoise_strength":	10.2,
+												"hf_denoise_strength":	16,
 												"hf_color_sat":	1.5,
 												"hf_denoise_alpha":	0,
 												"hf_bf_wgt_clip":	0,
-												"thumb_spikes_reducion_strength":	0.2,
-												"thumb_denoise_strength":	4,
+												"thumb_spikes_reducion_strength":	0.5,
+												"thumb_denoise_strength":	16,
 												"thumb_color_sat":	4,
-												"lf_denoise_strength":	4,
+												"lf_denoise_strength":	16,
 												"lf_color_sat":	4,
-												"lf_denoise_alpha":	1
+												"lf_denoise_alpha":	0.8
 											}
 										],
 										"Tuning_ISO_len":	13
@@ -3661,81 +3661,81 @@
 										"Calib_ISO":	[
 											{
 												"iso":	50,
-												"sigma_curve":	[-1.58577e-12, 1.59691e-8, -0.0000552654, 0.0708498, -6.8867],
-												"ynr_ci_l":	0.253087,
-												"ynr_ci_h":	0.187941
+												"sigma_curve":	[-1.62211e-013, 9.48382e-010, -6.26608e-007, -0.00478032, 28.8438],
+												"ynr_ci_l":	0.256479,
+												"ynr_ci_h":	0.22138
 											},
 											{
 												"iso":	100,
-												"sigma_curve":	[-2.30437e-12, 2.33339e-8, -0.0000815671, 0.107435, -18.6103],
-												"ynr_ci_l":	0.272347,
-												"ynr_ci_h":	0.185673
+												"sigma_curve":	[-4.79625e-013, 3.38224e-009, -6.58041e-006, -0.000292982, 37.1443],
+												"ynr_ci_l":	0.256987,
+												"ynr_ci_h":	0.217345
 											},
 											{
 												"iso":	200,
-												"sigma_curve":	[-2.9543e-12, 2.99975e-8, -0.000105523, 0.140934, -27.8599],
-												"ynr_ci_l":	0.293494,
-												"ynr_ci_h":	0.184545
+												"sigma_curve":	[-1.36971e-012, 1.05691e-008, -2.60099e-005, 0.0191222, 44.1979],
+												"ynr_ci_l":	0.263123,
+												"ynr_ci_h":	0.215899
 											},
 											{
 												"iso":	400,
-												"sigma_curve":	[-3.8325e-12, 3.86221e-8, -0.000135279, 0.180858, -36.7451],
-												"ynr_ci_l":	0.320561,
-												"ynr_ci_h":	0.188807
+												"sigma_curve":	[-3.20951e-012, 2.54802e-008, -6.69494e-005, 0.0624708, 49.3192],
+												"ynr_ci_l":	0.283831,
+												"ynr_ci_h":	0.220736
 											},
 											{
 												"iso":	800,
-												"sigma_curve":	[-5.64887e-12, 5.69765e-8, -0.000200136, 0.270229, -62.8133],
-												"ynr_ci_l":	0.342085,
-												"ynr_ci_h":	0.193425
+												"sigma_curve":	[-3.57531e-012, 2.63123e-008, -5.9091e-005, 0.0324591, 102.271],
+												"ynr_ci_l":	0.287516,
+												"ynr_ci_h":	0.217742
 											},
 											{
 												"iso":	1600,
-												"sigma_curve":	[-6.27323e-12, 6.56993e-8, -0.000240324, 0.335133, -73.1904],
-												"ynr_ci_l":	0.326508,
-												"ynr_ci_h":	0.175401
+												"sigma_curve":	[2.10565e-013, -7.15668e-009, 4.50965e-005, -0.107438, 207.7],
+												"ynr_ci_l":	0.260889,
+												"ynr_ci_h":	0.204789
 											},
 											{
 												"iso":	3200,
-												"sigma_curve":	[-9.54355e-12, 9.95475e-8, -0.000363008, 0.498333, -86.8053],
-												"ynr_ci_l":	0.284965,
-												"ynr_ci_h":	0.155055
+												"sigma_curve":	[-7.20273e-012, 5.87969e-008, -0.000154201, 0.114551, 200.677],
+												"ynr_ci_l":	0.251277,
+												"ynr_ci_h":	0.197436
 											},
 											{
 												"iso":	6400,
-												"sigma_curve":	[-1.53792e-11, 1.57096e-7, -0.000558055, 0.734976, -93.4242],
-												"ynr_ci_l":	0.265956,
-												"ynr_ci_h":	0.146282
+												"sigma_curve":	[-1.5225e-011, 1.34935e-007, -0.000413395, 0.463263, 138.561],
+												"ynr_ci_l":	0.247816,
+												"ynr_ci_h":	0.196219
 											},
 											{
 												"iso":	12800,
-												"sigma_curve":	[-1.59047e-11, 1.67655e-7, -0.000615123, 0.81315, -11.5222],
-												"ynr_ci_l":	0.246206,
-												"ynr_ci_h":	0.138213
+												"sigma_curve":	[-1.5225e-011, 1.34935e-007, -0.000413395, 0.463263, 138.561],
+												"ynr_ci_l":	0.247816,
+												"ynr_ci_h":	0.196219
 											},
 											{
 												"iso":	25600,
-												"sigma_curve":	[-1.60638e-11, 1.69747e-7, -0.000624892, 0.838371, -65.514],
-												"ynr_ci_l":	0.311621,
-												"ynr_ci_h":	0.169386
+												"sigma_curve":	[-1.5225e-011, 1.34935e-007, -0.000413395, 0.463263, 138.561],
+												"ynr_ci_l":	0.247816,
+												"ynr_ci_h":	0.196219
 											},
 											{
 												"iso":	51200,
-												"sigma_curve":	[0, 0, 0, 0.0299, 10.9382],
-												"ynr_ci_l":	1.1,
-												"ynr_ci_h":	0.5
+												"sigma_curve":	[-1.5225e-011, 1.34935e-007, -0.000413395, 0.463263, 138.561],
+												"ynr_ci_l":	0.247816,
+												"ynr_ci_h":	0.196219
 											},
 											{
 												"iso":	102400,
-												"sigma_curve":	[0, 0, 0, 0.0299, 10.9382],
-												"ynr_ci_l":	1.1,
-												"ynr_ci_h":	0.5
+												"sigma_curve":	[-1.5225e-011, 1.34935e-007, -0.000413395, 0.463263, 138.561],
+												"ynr_ci_l":	0.247816,
+												"ynr_ci_h":	0.196219
 											},
 											{
 												"iso":	204800,
-												"sigma_curve":	[0, 0, 0, 0.0299, 10.9382],
-												"ynr_ci_l":	1.1,
-												"ynr_ci_h":	0.5
+												"sigma_curve":	[-1.5225e-011, 1.34935e-007, -0.000413395, 0.463263, 138.561],
+												"ynr_ci_l":	0.247816,
+												"ynr_ci_h":	0.196219
 											}
 										],
 										"Calib_ISO_len":	13
@@ -3746,79 +3746,79 @@
 										"Calib_ISO":	[
 											{
 												"iso":	50,
-												"sigma_curve":	[0, 0, 0, 0.0299, 10.9382],
-												"ynr_ci_l":	0.5,
-												"ynr_ci_h":	1
+												"sigma_curve":	[-2.69646e-013, 2.86064e-009, -1.0481e-005, 0.012482, 14.805],
+												"ynr_ci_l":	0.226678,
+												"ynr_ci_h":	0.289415
 											},
 											{
 												"iso":	100,
-												"sigma_curve":	[0, 0, 0, 0.0299, 10.9382],
-												"ynr_ci_l":	0.5,
-												"ynr_ci_h":	1
+												"sigma_curve":	[-6.12691e-013, 5.89558e-009, -2.01077e-005, 0.0243184, 15.9406],
+												"ynr_ci_l":	0.215314,
+												"ynr_ci_h":	0.259995
 											},
 											{
 												"iso":	200,
-												"sigma_curve":	[0, 0, 0, 0.0299, 10.9382],
-												"ynr_ci_l":	0.5,
-												"ynr_ci_h":	1
+												"sigma_curve":	[7.09575e-014, 3.7711e-011, -2.56293e-006, 0.000338655, 38.6948],
+												"ynr_ci_l":	0.214596,
+												"ynr_ci_h":	0.228294
 											},
 											{
 												"iso":	400,
-												"sigma_curve":	[0, 0, 0, 0.0299, 10.9382],
-												"ynr_ci_l":	0.5,
-												"ynr_ci_h":	1
+												"sigma_curve":	[1.02018e-012, -8.86816e-009, 2.58194e-005, -0.036919, 69.0676],
+												"ynr_ci_l":	0.226733,
+												"ynr_ci_h":	0.217653
 											},
 											{
 												"iso":	800,
-												"sigma_curve":	[0, 0, 0, 0.0299, 10.9382],
-												"ynr_ci_l":	0.5,
-												"ynr_ci_h":	1
+												"sigma_curve":	[-5.61747e-012, 5.51053e-008, -0.00019652, 0.289936, -83.1767],
+												"ynr_ci_l":	0.242544,
+												"ynr_ci_h":	0.225505
 											},
 											{
 												"iso":	1600,
-												"sigma_curve":	[0, 0, 0, 0.0299, 10.9382],
-												"ynr_ci_l":	0.5,
-												"ynr_ci_h":	1
+												"sigma_curve":	[-7.40282e-012, 7.23099e-008, -0.000253899, 0.358878, -78.3104],
+												"ynr_ci_l":	0.205196,
+												"ynr_ci_h":	0.204973
 											},
 											{
 												"iso":	3200,
-												"sigma_curve":	[0, 0, 0, 0.0299, 10.9382],
-												"ynr_ci_l":	0.5,
-												"ynr_ci_h":	1
+												"sigma_curve":	[-2.26312e-012, 2.208e-008, -7.31596e-005, 0.0590642, 157.423],
+												"ynr_ci_l":	0.184429,
+												"ynr_ci_h":	0.184878
 											},
 											{
 												"iso":	6400,
-												"sigma_curve":	[0, 0, 0, 0.0299, 10.9382],
-												"ynr_ci_l":	0.5,
-												"ynr_ci_h":	1
+												"sigma_curve":	[-6.95027e-012, 6.71032e-008, -0.000225873, 0.244609, 175.853],
+												"ynr_ci_l":	0.17518,
+												"ynr_ci_h":	0.173976
 											},
 											{
 												"iso":	12800,
-												"sigma_curve":	[0, 0, 0, 0.0299, 10.9382],
-												"ynr_ci_l":	0.5,
-												"ynr_ci_h":	1
+												"sigma_curve":	[-1.92617e-011, 1.8905e-007, -0.000663475, 0.882172, -34.6649],
+												"ynr_ci_l":	0.187721,
+												"ynr_ci_h":	0.180997
 											},
 											{
 												"iso":	25600,
-												"sigma_curve":	[0, 0, 0, 0.0299, 10.9382],
-												"ynr_ci_l":	0.5,
-												"ynr_ci_h":	1
+												"sigma_curve":	[-2.34723e-011, 2.29904e-007, -0.000815695, 1.12713, -82.7871],
+												"ynr_ci_l":	0.192701,
+												"ynr_ci_h":	0.195909
 											},
 											{
 												"iso":	51200,
-												"sigma_curve":	[0, 0, 0, 0.0299, 10.9382],
-												"ynr_ci_l":	0.5,
-												"ynr_ci_h":	1
+												"sigma_curve":	[-1.55114e-011, 1.48433e-007, -0.000552589, 0.803504, 197.286],
+												"ynr_ci_l":	0.187182,
+												"ynr_ci_h":	0.199207
 											},
 											{
 												"iso":	102400,
-												"sigma_curve":	[0, 0, 0, 0.0299, 10.9382],
+												"sigma_curve":	[-7.80229e-013, 6.77367e-009, -2.20431e-005, 0.0298751, 10.9382],
 												"ynr_ci_l":	0.5,
 												"ynr_ci_h":	1
 											},
 											{
 												"iso":	204800,
-												"sigma_curve":	[0, 0, 0, 0.0299, 10.9382],
+												"sigma_curve":	[-7.80229e-013, 6.77367e-009, -2.20431e-005, 0.0298751, 10.9382],
 												"ynr_ci_l":	0.5,
 												"ynr_ci_h":	1
 											}
@@ -3842,17 +3842,17 @@
 												"ynr_lgft3x3_bypass":	0,
 												"ynr_flt1x1_bypass":	0,
 												"ynr_sft5x5_bypass":	0,
-												"low_bf_0":	0.4,
-												"low_bf_1":	0.35,
-												"low_thred_adj":	0.25,
-												"low_peak_supress":	0.8,
-												"low_edge_adj_thresh":	512,
-												"low_center_weight":	0.8,
-												"low_dist_adj":	32,
-												"low_weight":	0.1,
+												"low_bf_0":	0.5,
+												"low_bf_1":	0.5,
+												"low_thred_adj":	0.5,
+												"low_peak_supress":	0.5,
+												"low_edge_adj_thresh":	7,
+												"low_center_weight":	0.3,
+												"low_dist_adj":	8,
+												"low_weight":	0.5,
 												"low_filt_strength_0":	0.7,
 												"low_filt_strength_1":	0.85,
-												"low_bi_weight":	0.2,
+												"low_bi_weight":	0.3,
 												"base_filter_weight_0":	0.28,
 												"base_filter_weight_1":	0.46,
 												"base_filter_weight_2":	0.26,
@@ -3870,17 +3870,17 @@
 												"ynr_lgft3x3_bypass":	0,
 												"ynr_flt1x1_bypass":	0,
 												"ynr_sft5x5_bypass":	0,
-												"low_bf_0":	0.4,
-												"low_bf_1":	0.35,
-												"low_thred_adj":	0.25,
-												"low_peak_supress":	0.8,
-												"low_edge_adj_thresh":	256,
-												"low_center_weight":	0.75,
-												"low_dist_adj":	24,
-												"low_weight":	0.1,
+												"low_bf_0":	0.5,
+												"low_bf_1":	0.5,
+												"low_thred_adj":	0.5,
+												"low_peak_supress":	0.5,
+												"low_edge_adj_thresh":	7,
+												"low_center_weight":	0.3,
+												"low_dist_adj":	8,
+												"low_weight":	0.5,
 												"low_filt_strength_0":	0.7,
 												"low_filt_strength_1":	0.85,
-												"low_bi_weight":	0.2,
+												"low_bi_weight":	0.3,
 												"base_filter_weight_0":	0.28,
 												"base_filter_weight_1":	0.46,
 												"base_filter_weight_2":	0.26,
@@ -3898,17 +3898,17 @@
 												"ynr_lgft3x3_bypass":	0,
 												"ynr_flt1x1_bypass":	0,
 												"ynr_sft5x5_bypass":	0,
-												"low_bf_0":	0.4,
-												"low_bf_1":	0.35,
-												"low_thred_adj":	0.25,
-												"low_peak_supress":	0.8,
-												"low_edge_adj_thresh":	128,
-												"low_center_weight":	0.75,
-												"low_dist_adj":	24,
-												"low_weight":	0.15,
+												"low_bf_0":	0.5,
+												"low_bf_1":	0.5,
+												"low_thred_adj":	0.5,
+												"low_peak_supress":	0.5,
+												"low_edge_adj_thresh":	7,
+												"low_center_weight":	0.3,
+												"low_dist_adj":	8,
+												"low_weight":	0.5,
 												"low_filt_strength_0":	0.7,
 												"low_filt_strength_1":	0.85,
-												"low_bi_weight":	0.2,
+												"low_bi_weight":	0.3,
 												"base_filter_weight_0":	0.28,
 												"base_filter_weight_1":	0.46,
 												"base_filter_weight_2":	0.26,
@@ -3926,17 +3926,17 @@
 												"ynr_lgft3x3_bypass":	0,
 												"ynr_flt1x1_bypass":	0,
 												"ynr_sft5x5_bypass":	0,
-												"low_bf_0":	0.45,
-												"low_bf_1":	0.35,
-												"low_thred_adj":	0.25,
-												"low_peak_supress":	0.75,
-												"low_edge_adj_thresh":	64,
-												"low_center_weight":	0.7,
-												"low_dist_adj":	16,
-												"low_weight":	0.2,
+												"low_bf_0":	0.7,
+												"low_bf_1":	0.7,
+												"low_thred_adj":	0.7,
+												"low_peak_supress":	0.5,
+												"low_edge_adj_thresh":	7,
+												"low_center_weight":	0.3,
+												"low_dist_adj":	8,
+												"low_weight":	0.5,
 												"low_filt_strength_0":	0.7,
 												"low_filt_strength_1":	0.85,
-												"low_bi_weight":	0.2,
+												"low_bi_weight":	0.3,
 												"base_filter_weight_0":	0.28,
 												"base_filter_weight_1":	0.46,
 												"base_filter_weight_2":	0.26,
@@ -3954,17 +3954,17 @@
 												"ynr_lgft3x3_bypass":	0,
 												"ynr_flt1x1_bypass":	0,
 												"ynr_sft5x5_bypass":	0,
-												"low_bf_0":	0.45,
-												"low_bf_1":	0.35,
-												"low_thred_adj":	0.25,
-												"low_peak_supress":	0.7,
-												"low_edge_adj_thresh":	32,
-												"low_center_weight":	0.7,
-												"low_dist_adj":	16,
-												"low_weight":	0.25,
+												"low_bf_0":	1,
+												"low_bf_1":	1,
+												"low_thred_adj":	0.8,
+												"low_peak_supress":	0.5,
+												"low_edge_adj_thresh":	7,
+												"low_center_weight":	0.3,
+												"low_dist_adj":	8,
+												"low_weight":	0.5,
 												"low_filt_strength_0":	0.7,
 												"low_filt_strength_1":	0.85,
-												"low_bi_weight":	0.2,
+												"low_bi_weight":	0.3,
 												"base_filter_weight_0":	0.28,
 												"base_filter_weight_1":	0.46,
 												"base_filter_weight_2":	0.26,
@@ -3973,7 +3973,7 @@
 												"hi_min_adj":	0.9,
 												"hi_edge_thed":	100,
 												"high_direction_weight":	[1, 1, 1, 1, 0.5, 0.5, 0.5, 0.5],
-												"rnr_strength":	[1, 1, 1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.8, 2, 2.2, 2.5, 3, 3.5, 4, 5, 6]
+												"rnr_strength": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
 											},
 											{
 												"iso":	1600,
@@ -3982,17 +3982,17 @@
 												"ynr_lgft3x3_bypass":	0,
 												"ynr_flt1x1_bypass":	0,
 												"ynr_sft5x5_bypass":	0,
-												"low_bf_0":	0.5,
-												"low_bf_1":	0.4,
-												"low_thred_adj":	0.25,
-												"low_peak_supress":	0.6,
-												"low_edge_adj_thresh":	16,
-												"low_center_weight":	0.6,
-												"low_dist_adj":	12,
-												"low_weight":	0.3,
+												"low_bf_0":	1,
+												"low_bf_1":	1,
+												"low_thred_adj":	1,
+												"low_peak_supress":	0.5,
+												"low_edge_adj_thresh":	7,
+												"low_center_weight":	0.3,
+												"low_dist_adj":	8,
+												"low_weight":	0.5,
 												"low_filt_strength_0":	0.7,
 												"low_filt_strength_1":	0.85,
-												"low_bi_weight":	0.2,
+												"low_bi_weight":	0.3,
 												"base_filter_weight_0":	0.28,
 												"base_filter_weight_1":	0.46,
 												"base_filter_weight_2":	0.26,
@@ -4001,7 +4001,7 @@
 												"hi_min_adj":	0.9,
 												"hi_edge_thed":	100,
 												"high_direction_weight":	[1, 1, 1, 1, 0.5, 0.5, 0.5, 0.5],
-												"rnr_strength":	[1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.8, 2, 2.5, 3, 3.8, 4.5, 5.5, 6, 6.5, 7, 8]
+												"rnr_strength":	[1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
 											},
 											{
 												"iso":	3200,
@@ -4010,17 +4010,17 @@
 												"ynr_lgft3x3_bypass":	0,
 												"ynr_flt1x1_bypass":	0,
 												"ynr_sft5x5_bypass":	0,
-												"low_bf_0":	0.55,
-												"low_bf_1":	0.5,
-												"low_thred_adj":	0.25,
+												"low_bf_0":	1,
+												"low_bf_1":	1,
+												"low_thred_adj":	1,
 												"low_peak_supress":	0.5,
 												"low_edge_adj_thresh":	7,
-												"low_center_weight":	0.5,
+												"low_center_weight":	0.3,
 												"low_dist_adj":	8,
-												"low_weight":	0.4,
+												"low_weight":	0.5,
 												"low_filt_strength_0":	0.7,
 												"low_filt_strength_1":	0.85,
-												"low_bi_weight":	0.2,
+												"low_bi_weight":	0.3,
 												"base_filter_weight_0":	0.28,
 												"base_filter_weight_1":	0.46,
 												"base_filter_weight_2":	0.26,
@@ -4029,7 +4029,7 @@
 												"hi_min_adj":	0.9,
 												"hi_edge_thed":	100,
 												"high_direction_weight":	[1, 1, 1, 1, 0.5, 0.5, 0.5, 0.5],
-												"rnr_strength":	[1, 1.5, 1.6, 1.7, 1.8, 1.9, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+												"rnr_strength":	[1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
 											},
 											{
 												"iso":	6400,
@@ -4038,17 +4038,17 @@
 												"ynr_lgft3x3_bypass":	0,
 												"ynr_flt1x1_bypass":	0,
 												"ynr_sft5x5_bypass":	0,
-												"low_bf_0":	0.6,
-												"low_bf_1":	0.5,
-												"low_thred_adj":	0.25,
+												"low_bf_0":	1,
+												"low_bf_1":	1,
+												"low_thred_adj":	1,
 												"low_peak_supress":	0.5,
 												"low_edge_adj_thresh":	7,
-												"low_center_weight":	0.4,
+												"low_center_weight":	0.3,
 												"low_dist_adj":	8,
 												"low_weight":	0.5,
 												"low_filt_strength_0":	0.7,
 												"low_filt_strength_1":	0.85,
-												"low_bi_weight":	0.2,
+												"low_bi_weight":	0.3,
 												"base_filter_weight_0":	0.28,
 												"base_filter_weight_1":	0.46,
 												"base_filter_weight_2":	0.26,
@@ -4057,7 +4057,7 @@
 												"hi_min_adj":	0.9,
 												"hi_edge_thed":	100,
 												"high_direction_weight":	[1, 1, 1, 1, 0.5, 0.5, 0.5, 0.5],
-												"rnr_strength":	[1, 1.5, 1.6, 1.7, 1.8, 1.9, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+												"rnr_strength": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
 											},
 											{
 												"iso":	12800,
@@ -4066,17 +4066,17 @@
 												"ynr_lgft3x3_bypass":	0,
 												"ynr_flt1x1_bypass":	0,
 												"ynr_sft5x5_bypass":	0,
-												"low_bf_0":	0.6,
-												"low_bf_1":	0.5,
-												"low_thred_adj":	0.25,
+												"low_bf_0":	1,
+												"low_bf_1":	1,
+												"low_thred_adj":	1,
 												"low_peak_supress":	0.5,
 												"low_edge_adj_thresh":	7,
-												"low_center_weight":	0.4,
+												"low_center_weight":	0.3,
 												"low_dist_adj":	8,
 												"low_weight":	0.5,
 												"low_filt_strength_0":	0.7,
 												"low_filt_strength_1":	0.85,
-												"low_bi_weight":	0.2,
+												"low_bi_weight":	0.3,
 												"base_filter_weight_0":	0.28,
 												"base_filter_weight_1":	0.46,
 												"base_filter_weight_2":	0.26,
@@ -4085,7 +4085,7 @@
 												"hi_min_adj":	0.9,
 												"hi_edge_thed":	100,
 												"high_direction_weight":	[1, 1, 1, 1, 0.5, 0.5, 0.5, 0.5],
-												"rnr_strength":	[1, 1.5, 1.6, 1.7, 1.8, 1.9, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+												"rnr_strength":	[1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
 											},
 											{
 												"iso":	25600,
@@ -4094,17 +4094,17 @@
 												"ynr_lgft3x3_bypass":	0,
 												"ynr_flt1x1_bypass":	0,
 												"ynr_sft5x5_bypass":	0,
-												"low_bf_0":	1.1,
-												"low_bf_1":	0.5,
-												"low_thred_adj":	0.25,
+												"low_bf_0":	1.5,
+												"low_bf_1":	1.5,
+												"low_thred_adj":	1.5,
 												"low_peak_supress":	0.5,
 												"low_edge_adj_thresh":	7,
-												"low_center_weight":	0.4,
+												"low_center_weight":	0.3,
 												"low_dist_adj":	8,
 												"low_weight":	0.5,
 												"low_filt_strength_0":	0.7,
 												"low_filt_strength_1":	0.85,
-												"low_bi_weight":	0.2,
+												"low_bi_weight":	0.3,
 												"base_filter_weight_0":	0.28,
 												"base_filter_weight_1":	0.46,
 												"base_filter_weight_2":	0.26,
@@ -4113,7 +4113,7 @@
 												"hi_min_adj":	0.9,
 												"hi_edge_thed":	100,
 												"high_direction_weight":	[1, 1, 1, 1, 0.5, 0.5, 0.5, 0.5],
-												"rnr_strength":	[1, 1.5, 1.6, 1.7, 1.8, 1.9, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+												"rnr_strength":	[1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
 											},
 											{
 												"iso":	51200,
@@ -4122,17 +4122,17 @@
 												"ynr_lgft3x3_bypass":	0,
 												"ynr_flt1x1_bypass":	0,
 												"ynr_sft5x5_bypass":	0,
-												"low_bf_0":	1.1,
+												"low_bf_0":	0.5,
 												"low_bf_1":	0.5,
-												"low_thred_adj":	0.25,
+												"low_thred_adj":	0.5,
 												"low_peak_supress":	0.5,
 												"low_edge_adj_thresh":	7,
-												"low_center_weight":	0.4,
+												"low_center_weight":	0.3,
 												"low_dist_adj":	8,
 												"low_weight":	0.5,
 												"low_filt_strength_0":	0.7,
 												"low_filt_strength_1":	0.85,
-												"low_bi_weight":	0.2,
+												"low_bi_weight":	0.3,
 												"base_filter_weight_0":	0.28,
 												"base_filter_weight_1":	0.46,
 												"base_filter_weight_2":	0.26,
@@ -4150,17 +4150,17 @@
 												"ynr_lgft3x3_bypass":	0,
 												"ynr_flt1x1_bypass":	0,
 												"ynr_sft5x5_bypass":	0,
-												"low_bf_0":	1.1,
+												"low_bf_0":	0.5,
 												"low_bf_1":	0.5,
-												"low_thred_adj":	0.25,
+												"low_thred_adj":	0.5,
 												"low_peak_supress":	0.5,
 												"low_edge_adj_thresh":	7,
-												"low_center_weight":	0.4,
+												"low_center_weight":	0.3,
 												"low_dist_adj":	8,
 												"low_weight":	0.5,
 												"low_filt_strength_0":	0.7,
 												"low_filt_strength_1":	0.85,
-												"low_bi_weight":	0.2,
+												"low_bi_weight":	0.3,
 												"base_filter_weight_0":	0.28,
 												"base_filter_weight_1":	0.46,
 												"base_filter_weight_2":	0.26,
@@ -4178,9 +4178,9 @@
 												"ynr_lgft3x3_bypass":	0,
 												"ynr_flt1x1_bypass":	0,
 												"ynr_sft5x5_bypass":	0,
-												"low_bf_0":	1.1,
+												"low_bf_0":	0.5,
 												"low_bf_1":	0.5,
-												"low_thred_adj":	0.25,
+												"low_thred_adj":	0.5,
 												"low_peak_supress":	0.5,
 												"low_edge_adj_thresh":	7,
 												"low_center_weight":	0.4,
@@ -4188,7 +4188,7 @@
 												"low_weight":	0.5,
 												"low_filt_strength_0":	0.7,
 												"low_filt_strength_1":	0.85,
-												"low_bi_weight":	0.2,
+												"low_bi_weight":	0.3,
 												"base_filter_weight_0":	0.28,
 												"base_filter_weight_1":	0.46,
 												"base_filter_weight_2":	0.26,
@@ -4214,16 +4214,16 @@
 												"ynr_flt1x1_bypass":	0,
 												"ynr_sft5x5_bypass":	0,
 												"low_bf_0":	0.5,
-												"low_bf_1":	0.6,
-												"low_thred_adj":	0.25,
+												"low_bf_1":	0.5,
+												"low_thred_adj":	0.5,
 												"low_peak_supress":	0.5,
 												"low_edge_adj_thresh":	7,
-												"low_center_weight":	0.4,
+												"low_center_weight":	0.3,
 												"low_dist_adj":	8,
 												"low_weight":	0.5,
 												"low_filt_strength_0":	0.7,
 												"low_filt_strength_1":	0.85,
-												"low_bi_weight":	0.2,
+												"low_bi_weight":	0.3,
 												"base_filter_weight_0":	0.28,
 												"base_filter_weight_1":	0.46,
 												"base_filter_weight_2":	0.26,
@@ -4242,16 +4242,16 @@
 												"ynr_flt1x1_bypass":	0,
 												"ynr_sft5x5_bypass":	0,
 												"low_bf_0":	0.5,
-												"low_bf_1":	0.6,
-												"low_thred_adj":	0.25,
+												"low_bf_1":	0.5,
+												"low_thred_adj":	0.5,
 												"low_peak_supress":	0.5,
 												"low_edge_adj_thresh":	7,
-												"low_center_weight":	0.4,
+												"low_center_weight":	0.3,
 												"low_dist_adj":	8,
 												"low_weight":	0.5,
 												"low_filt_strength_0":	0.7,
 												"low_filt_strength_1":	0.85,
-												"low_bi_weight":	0.2,
+												"low_bi_weight":	0.3,
 												"base_filter_weight_0":	0.28,
 												"base_filter_weight_1":	0.46,
 												"base_filter_weight_2":	0.26,
@@ -4270,16 +4270,16 @@
 												"ynr_flt1x1_bypass":	0,
 												"ynr_sft5x5_bypass":	0,
 												"low_bf_0":	0.5,
-												"low_bf_1":	0.6,
-												"low_thred_adj":	0.25,
+												"low_bf_1":	0.5,
+												"low_thred_adj":	0.5,
 												"low_peak_supress":	0.5,
 												"low_edge_adj_thresh":	7,
-												"low_center_weight":	0.4,
+												"low_center_weight":	0.3,
 												"low_dist_adj":	8,
 												"low_weight":	0.5,
 												"low_filt_strength_0":	0.7,
 												"low_filt_strength_1":	0.85,
-												"low_bi_weight":	0.2,
+												"low_bi_weight":	0.3,
 												"base_filter_weight_0":	0.28,
 												"base_filter_weight_1":	0.46,
 												"base_filter_weight_2":	0.26,
@@ -4297,17 +4297,17 @@
 												"ynr_lgft3x3_bypass":	0,
 												"ynr_flt1x1_bypass":	0,
 												"ynr_sft5x5_bypass":	0,
-												"low_bf_0":	0.5,
-												"low_bf_1":	0.6,
-												"low_thred_adj":	0.25,
+												"low_bf_0":	0.7,
+												"low_bf_1":	0.7,
+												"low_thred_adj":	0.7,
 												"low_peak_supress":	0.5,
 												"low_edge_adj_thresh":	7,
-												"low_center_weight":	0.4,
+												"low_center_weight":	0.3,
 												"low_dist_adj":	8,
 												"low_weight":	0.5,
 												"low_filt_strength_0":	0.7,
 												"low_filt_strength_1":	0.85,
-												"low_bi_weight":	0.2,
+												"low_bi_weight":	0.3,
 												"base_filter_weight_0":	0.28,
 												"base_filter_weight_1":	0.46,
 												"base_filter_weight_2":	0.26,
@@ -4325,17 +4325,17 @@
 												"ynr_lgft3x3_bypass":	0,
 												"ynr_flt1x1_bypass":	0,
 												"ynr_sft5x5_bypass":	0,
-												"low_bf_0":	0.5,
-												"low_bf_1":	0.6,
-												"low_thred_adj":	0.25,
+												"low_bf_0":	1,
+												"low_bf_1":	1,
+												"low_thred_adj":	0.8,
 												"low_peak_supress":	0.5,
 												"low_edge_adj_thresh":	7,
-												"low_center_weight":	0.4,
+												"low_center_weight":	0.3,
 												"low_dist_adj":	8,
 												"low_weight":	0.5,
 												"low_filt_strength_0":	0.7,
 												"low_filt_strength_1":	0.85,
-												"low_bi_weight":	0.2,
+												"low_bi_weight":	0.3,
 												"base_filter_weight_0":	0.28,
 												"base_filter_weight_1":	0.46,
 												"base_filter_weight_2":	0.26,
@@ -4353,17 +4353,17 @@
 												"ynr_lgft3x3_bypass":	0,
 												"ynr_flt1x1_bypass":	0,
 												"ynr_sft5x5_bypass":	0,
-												"low_bf_0":	0.5,
-												"low_bf_1":	0.6,
-												"low_thred_adj":	0.25,
+												"low_bf_0":	1,
+												"low_bf_1": 1,
+												"low_thred_adj":	1,
 												"low_peak_supress":	0.5,
 												"low_edge_adj_thresh":	7,
-												"low_center_weight":	0.4,
+												"low_center_weight":	0.3,
 												"low_dist_adj":	8,
 												"low_weight":	0.5,
 												"low_filt_strength_0":	0.7,
 												"low_filt_strength_1":	0.85,
-												"low_bi_weight":	0.2,
+												"low_bi_weight":	0.3,
 												"base_filter_weight_0":	0.28,
 												"base_filter_weight_1":	0.46,
 												"base_filter_weight_2":	0.26,
@@ -4381,17 +4381,17 @@
 												"ynr_lgft3x3_bypass":	0,
 												"ynr_flt1x1_bypass":	0,
 												"ynr_sft5x5_bypass":	0,
-												"low_bf_0":	0.5,
-												"low_bf_1":	0.6,
-												"low_thred_adj":	0.25,
+												"low_bf_0":	1,
+												"low_bf_1":	1,
+												"low_thred_adj":	1,
 												"low_peak_supress":	0.5,
 												"low_edge_adj_thresh":	7,
-												"low_center_weight":	0.4,
+												"low_center_weight":	0.3,
 												"low_dist_adj":	8,
 												"low_weight":	0.5,
 												"low_filt_strength_0":	0.7,
 												"low_filt_strength_1":	0.85,
-												"low_bi_weight":	0.2,
+												"low_bi_weight":	0.3,
 												"base_filter_weight_0":	0.28,
 												"base_filter_weight_1":	0.46,
 												"base_filter_weight_2":	0.26,
@@ -4409,17 +4409,17 @@
 												"ynr_lgft3x3_bypass":	0,
 												"ynr_flt1x1_bypass":	0,
 												"ynr_sft5x5_bypass":	0,
-												"low_bf_0":	0.5,
-												"low_bf_1":	0.6,
-												"low_thred_adj":	0.25,
+												"low_bf_0":	1,
+												"low_bf_1":	1,
+												"low_thred_adj":	1,
 												"low_peak_supress":	0.5,
 												"low_edge_adj_thresh":	7,
-												"low_center_weight":	0.4,
+												"low_center_weight":	0.3,
 												"low_dist_adj":	8,
 												"low_weight":	0.5,
 												"low_filt_strength_0":	0.7,
 												"low_filt_strength_1":	0.85,
-												"low_bi_weight":	0.2,
+												"low_bi_weight":	0.3,
 												"base_filter_weight_0":	0.28,
 												"base_filter_weight_1":	0.46,
 												"base_filter_weight_2":	0.26,
@@ -4437,17 +4437,17 @@
 												"ynr_lgft3x3_bypass":	0,
 												"ynr_flt1x1_bypass":	0,
 												"ynr_sft5x5_bypass":	0,
-												"low_bf_0":	0.5,
-												"low_bf_1":	0.6,
-												"low_thred_adj":	0.25,
+												"low_bf_0":	1,
+												"low_bf_1":	1,
+												"low_thred_adj":	1,
 												"low_peak_supress":	0.5,
 												"low_edge_adj_thresh":	7,
-												"low_center_weight":	0.4,
+												"low_center_weight":	0.3,
 												"low_dist_adj":	8,
 												"low_weight":	0.5,
 												"low_filt_strength_0":	0.7,
 												"low_filt_strength_1":	0.85,
-												"low_bi_weight":	0.2,
+												"low_bi_weight":	0.3,
 												"base_filter_weight_0":	0.28,
 												"base_filter_weight_1":	0.46,
 												"base_filter_weight_2":	0.26,
@@ -4465,17 +4465,17 @@
 												"ynr_lgft3x3_bypass":	0,
 												"ynr_flt1x1_bypass":	0,
 												"ynr_sft5x5_bypass":	0,
-												"low_bf_0":	0.5,
-												"low_bf_1":	0.6,
-												"low_thred_adj":	0.25,
+												"low_bf_0":	1.5,
+												"low_bf_1":	1.5,
+												"low_thred_adj":	1.5,
 												"low_peak_supress":	0.5,
 												"low_edge_adj_thresh":	7,
-												"low_center_weight":	0.4,
+												"low_center_weight":	0.3,
 												"low_dist_adj":	8,
 												"low_weight":	0.5,
 												"low_filt_strength_0":	0.7,
 												"low_filt_strength_1":	0.85,
-												"low_bi_weight":	0.2,
+												"low_bi_weight":	0.3,
 												"base_filter_weight_0":	0.28,
 												"base_filter_weight_1":	0.46,
 												"base_filter_weight_2":	0.26,
@@ -4494,16 +4494,16 @@
 												"ynr_flt1x1_bypass":	0,
 												"ynr_sft5x5_bypass":	0,
 												"low_bf_0":	0.5,
-												"low_bf_1":	0.6,
-												"low_thred_adj":	0.25,
+												"low_bf_1":	0.5,
+												"low_thred_adj":	0.5,
 												"low_peak_supress":	0.5,
 												"low_edge_adj_thresh":	7,
-												"low_center_weight":	0.4,
+												"low_center_weight":	0.3,
 												"low_dist_adj":	8,
 												"low_weight":	0.5,
 												"low_filt_strength_0":	0.7,
 												"low_filt_strength_1":	0.85,
-												"low_bi_weight":	0.2,
+												"low_bi_weight":	0.3,
 												"base_filter_weight_0":	0.28,
 												"base_filter_weight_1":	0.46,
 												"base_filter_weight_2":	0.26,
@@ -4522,16 +4522,16 @@
 												"ynr_flt1x1_bypass":	0,
 												"ynr_sft5x5_bypass":	0,
 												"low_bf_0":	0.5,
-												"low_bf_1":	0.6,
-												"low_thred_adj":	0.25,
+												"low_bf_1":	0.5,
+												"low_thred_adj":	0.5,
 												"low_peak_supress":	0.5,
 												"low_edge_adj_thresh":	7,
-												"low_center_weight":	0.4,
+												"low_center_weight":	0.3,
 												"low_dist_adj":	8,
 												"low_weight":	0.5,
 												"low_filt_strength_0":	0.7,
 												"low_filt_strength_1":	0.85,
-												"low_bi_weight":	0.2,
+												"low_bi_weight":	0.3,
 												"base_filter_weight_0":	0.28,
 												"base_filter_weight_1":	0.46,
 												"base_filter_weight_2":	0.26,
@@ -4550,16 +4550,16 @@
 												"ynr_flt1x1_bypass":	0,
 												"ynr_sft5x5_bypass":	0,
 												"low_bf_0":	0.5,
-												"low_bf_1":	0.6,
-												"low_thred_adj":	0.25,
+												"low_bf_1":	0.5,
+												"low_thred_adj":	0.5,
 												"low_peak_supress":	0.5,
 												"low_edge_adj_thresh":	7,
-												"low_center_weight":	0.4,
+												"low_center_weight":	0.3,
 												"low_dist_adj":	8,
-												"low_weight":	0.5,
+												"low_weight":	0.3,
 												"low_filt_strength_0":	0.7,
 												"low_filt_strength_1":	0.85,
-												"low_bi_weight":	0.2,
+												"low_bi_weight":	0.5,
 												"base_filter_weight_0":	0.28,
 												"base_filter_weight_1":	0.46,
 												"base_filter_weight_2":	0.26,
@@ -4589,7 +4589,7 @@
 											{
 												"iso":	50,
 												"pbf_gain":	0.8,
-												"pbf_ratio":	0.1,
+												"pbf_ratio":	0,
 												"pbf_add":	1,
 												"gaus_ratio":	0,
 												"sharp_ratio":	12,
@@ -4599,7 +4599,7 @@
 												"luma_para":	{
 													"luma_point":	[0, 64, 128, 256, 384, 640, 896, 1024],
 													"luma_sigma":	[8, 12, 16, 16, 24, 20, 16, 16],
-													"hf_clip":	[64, 96, 142, 196, 240, 200, 148, 96],
+													"hf_clip":	[64, 96, 128, 160, 192, 160, 128, 0],
 													"local_sharp_strength":	[1023, 1023, 1023, 1023, 1023, 1023, 1023, 1023]
 												},
 												"kernel_para":	{
@@ -4621,7 +4621,7 @@
 												"luma_para":	{
 													"luma_point":	[0, 64, 128, 256, 384, 640, 896, 1024],
 													"luma_sigma":	[12, 16, 20, 24, 28, 24, 20, 20],
-													"hf_clip":	[64, 96, 142, 186, 230, 200, 148, 96],
+													"hf_clip":	[64, 96, 142, 186, 230, 200, 148, 96],                                  
 													"local_sharp_strength":	[1023, 1023, 1023, 1023, 1023, 1023, 1023, 1023]
 												},
 												"kernel_para":	{

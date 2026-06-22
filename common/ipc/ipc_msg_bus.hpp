@@ -52,6 +52,14 @@ public:
     [[nodiscard]] bool peer_connected() const noexcept;
     [[nodiscard]] bool peer_connected(middleware::ModuleId peer_id) const noexcept;
 
+    /** 服务端经 IPC 连接附带 SCM_RIGHTS 发送（如 Camera Start_Rsp + dma fd） */
+    bool send_to_peer_with_fds(middleware::ModuleId peer_id,
+                               const middleware::Message& msg,
+                               const std::vector<int>& fds);
+    /** UI Hub：取走 peer 最近随 wire 帧送达的 dma fd（取走后清空） */
+    bool take_pending_dma_fds(middleware::ModuleId peer_id,
+                              std::vector<int>& out_fds);
+
 private:
     enum class PollKind : uint8_t {
         HubPeer,
@@ -75,8 +83,10 @@ private:
 
     bool deliver_local(const middleware::Message& msg);
     bool enqueue_local(const middleware::Message& msg);
-    void deliver_frames(const std::vector<std::vector<uint8_t>>& frames,
+    void deliver_frames(const std::vector<InboundWireUnit>& units,
                         middleware::ModuleId expected_sender);
+    void stash_pending_dma_fds(middleware::ModuleId sender,
+                               std::vector<int> fds);
     [[nodiscard]] bool should_forward_to_peer(
         const middleware::Message& msg) const;
     [[nodiscard]] bool needs_local_handling(const middleware::Message& msg) const;
@@ -121,6 +131,9 @@ private:
     middleware::PriorityMsgQueue local_queue_;
     std::mutex queue_mtx_;
     bool initialized_{false};
+
+    std::unordered_map<uint32_t, std::vector<int>> pending_dma_fds_;
+    mutable std::mutex pending_dma_fds_mtx_;
 };
 
 } // namespace upc_ipc

@@ -14,6 +14,8 @@
 #include "msg_bus.hpp"
 #include "ipc_config.hpp"
 
+#include <vector>
+
 namespace middleware {
 
 enum class MsgPortMode : uint8_t {
@@ -50,6 +52,12 @@ public:
     /** 所有 required peer 均已连接 */
     [[nodiscard]] bool peer_connected() const noexcept;
     [[nodiscard]] bool peer_connected(ModuleId peer_id) const noexcept;
+
+    /** 经已有 IPC 连接附带 SCM_RIGHTS 发送（Camera Start_Rsp + dma fd） */
+    bool publish_to_peer_with_fds(const Message& msg,
+                                  const std::vector<int>& fds);
+    /** UI Hub：取走 peer 随 wire 帧附带的 dma fd */
+    bool take_peer_dma_fds(ModuleId peer_id, std::vector<int>& out_fds);
 
 private:
     MsgPortMode mode_{MsgPortMode::InProcess};
