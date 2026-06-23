@@ -4,6 +4,14 @@ if(NOT DEFINED UPC_DEBUG)
     set(UPC_DEBUG OFF)
 endif()
 
+if(NOT DEFINED UPC_LOG_ENABLED)
+    if(UPC_DEBUG)
+        set(UPC_LOG_ENABLED 1)
+    else()
+        set(UPC_LOG_ENABLED 0)
+    endif()
+endif()
+
 set(UPC_DEBUG_TARGET upc_debug)
 
 add_library(${UPC_DEBUG_TARGET} STATIC
@@ -25,5 +33,7 @@ else()
     target_compile_definitions(${UPC_DEBUG_TARGET} PUBLIC UPC_DEBUG=0)
     message(STATUS "upc_debug: logging DISABLED")
 endif()
+
+target_compile_definitions(${UPC_DEBUG_TARGET} PUBLIC UPC_LOG_ENABLED=${UPC_LOG_ENABLED})
 
 set(UPC_DEBUG_TARGET ${UPC_DEBUG_TARGET} PARENT_SCOPE)

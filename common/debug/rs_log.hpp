@@ -4,6 +4,14 @@
 #include "upc_log_modules.hpp"
 #include <cstdarg>
 
+/**
+ * 日志总开关 UPC_LOG_ENABLED（由 CMake 注入 0/1，默认跟随 UPC_DEBUG）。
+ * UPC_LOG_ENABLED=0 时所有 UPC_LOG_* 宏为空操作，不调用 log_write。
+ */
+#ifndef UPC_LOG_ENABLED
+#define UPC_LOG_ENABLED UPC_DEBUG
+#endif
+
 namespace upc {
 
 enum class Level : int {
@@ -26,7 +34,7 @@ void log_write(Level level, const char* src, const char* module,
 
 #define UPC_LOG_MOD_(mod_on, lvl, src, module, fmt, ...)                        \
     do {                                                                        \
-        if ((UPC_DEBUG) && (mod_on)) {                                          \
+        if ((UPC_LOG_ENABLED) && (mod_on)) {                                    \
             upc::log_write(upc::Level::lvl, src, module, fmt, ##__VA_ARGS__);   \
         }                                                                       \
     } while (0)

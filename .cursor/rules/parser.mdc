@@ -12,3 +12,4 @@ alwaysApply: false
 - 通过 `ParserManager` / `ParserRegistry` 访问，禁止直接依赖具体 Worker
 - 新插件需 `--whole-archive` 静态注册
 - UI 禁止链接 parser
+- **独立构建**：`cmake -S . -B build`（无 common）；日志用 `lib/log/rs_log.hpp` 桩；OVF 需 `find_package(Protobuf)`

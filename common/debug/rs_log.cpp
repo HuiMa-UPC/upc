@@ -42,7 +42,7 @@ const char* level_name(Level level) {
 
 void log_write(Level level, const char* src, const char* module,
                const char* fmt, ...) {
-#if UPC_DEBUG
+#if UPC_LOG_ENABLED
     char ts[32];
     ts[0] = '\0';
 

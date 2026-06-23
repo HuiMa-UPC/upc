@@ -1,0 +1,3 @@
+[submodule "app/parser"]
+	path = app/parser
+	url = git@gitee.com:rs-rd-department-2/rongsu-parser.git
