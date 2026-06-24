@@ -384,7 +384,7 @@ lv_obj_t *build_print_env_panel(lv_obj_t *parent)
     lv_obj_set_height(panel, USER_PRINT_BAR_H);
     lv_obj_set_flex_grow(panel, 1);
     lv_obj_set_style_bg_color(panel, user_color_panel, 0);
-    lv_obj_set_style_bg_opa(panel, LV_OPA_80, 0);
+    lv_obj_set_style_bg_opa(panel, LV_OPA_COVER, 0);
     lv_obj_set_style_radius(panel, USER_RADIUS, 0);
     lv_obj_set_style_border_width(panel, 1, 0);
     lv_obj_set_style_border_color(panel, user_color_divider, 0);
@@ -410,7 +410,7 @@ lv_obj_t *build_print_progress_panel(lv_obj_t *parent)
     lv_obj_set_height(panel, USER_PRINT_BAR_H);
     lv_obj_set_flex_grow(panel, 1);
     lv_obj_set_style_bg_color(panel, user_color_panel, 0);
-    lv_obj_set_style_bg_opa(panel, LV_OPA_80, 0);
+    lv_obj_set_style_bg_opa(panel, LV_OPA_COVER, 0);
     lv_obj_set_style_radius(panel, USER_RADIUS, 0);
     lv_obj_set_style_border_width(panel, 1, 0);
     lv_obj_set_style_border_color(panel, user_color_divider, 0);
@@ -525,9 +525,11 @@ lv_obj_t *build_printing_area(lv_obj_t *parent)
     lv_obj_set_style_text_align(g_camera_hint, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_center(g_camera_hint);
 
-    /* 真实视频帧 lv_image 占位（默认隐藏） */
+    /* 真实视频帧 lv_image 占位（默认隐藏）
+     * COVER：按预览区宽度等比缩放（竖屏 1024 宽铺满），上下居中裁切溢出部分。 */
     g_camera_image = lv_image_create(g_camera_viewport);
     lv_obj_set_size(g_camera_image, LV_PCT(100), LV_PCT(100));
+    lv_image_set_inner_align(g_camera_image, LV_IMAGE_ALIGN_COVER);
     lv_obj_center(g_camera_image);
     lv_obj_add_flag(g_camera_image, LV_OBJ_FLAG_HIDDEN);
 
@@ -636,7 +638,8 @@ lv_obj_t *page_user_home_create(lv_obj_t *parent)
     lv_obj_set_flex_flow(page, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_style_pad_all(page, 0, 0);
     lv_obj_set_style_pad_row(page, 0, 0);
-    lv_obj_set_style_bg_opa(page, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_bg_color(page, user_color_bg, 0);
+    lv_obj_set_style_bg_opa(page, LV_OPA_COVER, 0);
     lv_obj_clear_flag(page, LV_OBJ_FLAG_SCROLLABLE);
     g_page_root = page;
 

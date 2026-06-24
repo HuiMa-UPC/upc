@@ -163,6 +163,11 @@ void ui_confirm_show(const char *title, const char *message,
     s_confirm_user = user_data;
 
     s_confirm_box = lv_msgbox_create(nullptr);
+    lv_obj_t *backdrop = lv_obj_get_parent(s_confirm_box);
+    if(backdrop) {
+        lv_obj_set_style_bg_color(backdrop, lv_color_black(), 0);
+        lv_obj_set_style_bg_opa(backdrop, LV_OPA_COVER, 0);
+    }
     lv_obj_set_width(s_confirm_box, UI_CONFIRM_BOX_W);
     lv_obj_set_style_pad_all(s_confirm_box, UI_PAD, 0);
     lv_obj_set_style_pad_row(s_confirm_box, UI_PAD_SM, 0);

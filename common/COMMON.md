@@ -9,7 +9,7 @@
 | 子目录 | 文档 | 职责 |
 |--------|------|------|
 | **契约文档** | [README.md](README.md) | 消息命名与总表（改 MsgType 从这里走） |
-| **`middleware/`** | [middleware/MIDDLEWARE.md](middleware/MIDDLEWARE.md) | MsgBus、内存池、线程池 |
+| **`middleware/`** | [middleware/MIDDLEWARE.md](middleware/MIDDLEWARE.md) | MsgBus、内存池 |
 | **`ipc/`** | [ipc/IPC.md](ipc/IPC.md) | Unix socket、`MsgPort`、SHM 帧环 |
 | **`debug/`** | [debug/DEBUG.md](debug/DEBUG.md) | `UPC_LOG_*`、`upc_sys_monitor` |
 | **`process/`** | [process/PROCESS.md](process/PROCESS.md) | PID、daemon、`process_config` |
@@ -27,7 +27,8 @@
 
 ```bash
 ./build.sh                # 全量编译，产物 output/
-scripts/rongsu.sh start   # glavo [+ camera | test_camera] → ui
+scripts/rongsu.sh start   # glavo [+ test_camera] → ui（开发默认）
+# 板端生产：单独 rongsu_camera start（与 test_camera 互斥，同 /tmp/upc_camera.sock）
 ```
 
 UI 为 IPC **Hub**；后端各 **Server**。详见 [ipc/IPC.md](ipc/IPC.md)。

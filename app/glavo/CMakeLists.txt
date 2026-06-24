@@ -2,7 +2,6 @@ set(UPC_GLAVO_TARGET upc_glavo)
 set(GLAVO_LIB_DIR ${CMAKE_CURRENT_SOURCE_DIR}/lib)
 
 set(UPC_GLAVO_SOURCES
-    ${GLAVO_LIB_DIR}/service_base.cpp
     ${GLAVO_LIB_DIR}/glavo_service.cpp
     ${GLAVO_LIB_DIR}/glavo_parser_bridge.cpp
     ${GLAVO_LIB_DIR}/mcu_link.cpp

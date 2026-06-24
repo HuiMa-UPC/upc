@@ -41,7 +41,7 @@ void PageManager::init(lv_obj_t* screen) {
     lv_obj_set_style_pad_hor(menu_panel_, USER_PAD_SM, 0);
     lv_obj_set_style_pad_row(menu_panel_, USER_PAD_SM, 0);
     lv_obj_set_style_bg_color(menu_panel_, user_color_panel, 0);
-    lv_obj_set_style_bg_opa(menu_panel_, LV_OPA_40, 0);
+    lv_obj_set_style_bg_opa(menu_panel_, LV_OPA_COVER, 0);
     lv_obj_set_style_border_width(menu_panel_, 1, 0);
     lv_obj_set_style_border_color(menu_panel_, user_color_divider, 0);
     lv_obj_set_style_border_opa(menu_panel_, LV_OPA_50, 0);
@@ -60,7 +60,8 @@ void PageManager::init(lv_obj_t* screen) {
     lv_obj_set_style_pad_all(content_panel_, 0, 0);
     lv_obj_set_style_border_width(content_panel_, 0, 0);
     lv_obj_set_style_radius(content_panel_, 0, 0);
-    lv_obj_set_style_bg_opa(content_panel_, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_bg_color(content_panel_, user_color_bg, 0);
+    lv_obj_set_style_bg_opa(content_panel_, LV_OPA_COVER, 0);
     lv_obj_clear_flag(content_panel_, LV_OBJ_FLAG_SCROLLABLE);
 }
 

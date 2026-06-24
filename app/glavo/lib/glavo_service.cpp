@@ -1,4 +1,5 @@
 #include "glavo_service.hpp"
+#include "msg_port.hpp"
 #include "print_video_notify.hpp"
 #include "glavo_parser_bridge.hpp"
 #include "parser_config.hpp"
@@ -23,6 +24,8 @@ namespace upc::glavo {
 namespace parser = upc::parser;
 
 namespace {
+
+constexpr size_t kWorkerQueueDepth = 64;
 
 constexpr size_t kFsDirMaxEntries =
     (16384u - sizeof(middleware::FsDirHeader)) / sizeof(middleware::FileEntryPayload);
@@ -93,28 +96,48 @@ std::string GlavoService::make_full_path(const std::string& dir, const std::stri
     return dir + "/" + name;
 }
 
-GlavoService::GlavoService()
-    : ServiceBase(ServiceConfig{
-          "glavo",
-          static_cast<uint32_t>(middleware::ModuleId::APP_GLAVO),
-          true
-      }) {}
+GlavoService::GlavoService() = default;
 
 GlavoService::~GlavoService() {
     stop_print_job();
+    if (state() == ServiceState::Running) {
+        stop();
+    }
+    // 兜底：若工作线程仍在 joinable，强制唤醒并回收
+    if (worker_thread_.joinable()) {
+        worker_running_.store(false);
+        worker_cv_.notify_all();
+        worker_thread_.join();
+    }
 }
 
-bool GlavoService::do_init() {
+GlavoService::ServiceState GlavoService::state() const noexcept {
+    return state_.load();
+}
+
+uint32_t GlavoService::module_id() noexcept {
+    return static_cast<uint32_t>(middleware::ModuleId::APP_GLAVO);
+}
+
+bool GlavoService::init() {
+    if (state() != ServiceState::Idle) return false;
+
+    state_ = ServiceState::Initializing;
     parser::ParserContext::instance().load_calibration(CAL_DEFAULT_FILE_PATH);
     glavo_parser_bind_init();
     McuLink::instance().set_job_event_callback(
         [this](McuLinkEvent ev) { on_mcu_link_event(ev); });
     McuLink::instance().set_progress_callback(
         [this]() { on_motion_batch_sent(); });
+    state_ = ServiceState::Idle;
     return true;
 }
 
-bool GlavoService::do_start() {
+bool GlavoService::start() {
+    if (state() != ServiceState::Idle) return false;
+
+    state_ = ServiceState::Running;
+
     static constexpr middleware::MsgType k_subs[] = {
         middleware::MsgType::Fs_DirOpen_Req,
         middleware::MsgType::UI_FileInfo_Req,
@@ -128,12 +151,92 @@ bool GlavoService::do_start() {
     for(middleware::MsgType t : k_subs) {
         subscribe(t, [this](const middleware::Message& msg) { on_message(msg); });
     }
+
+    worker_running_.store(true);
+    worker_thread_ = std::thread(&GlavoService::worker_loop, this);
     return true;
 }
 
-bool GlavoService::do_stop() {
+bool GlavoService::stop() {
+    if (state() != ServiceState::Running) return false;
+
+    state_ = ServiceState::Stopping;
+
+    if (worker_thread_.joinable()) {
+        {
+            std::lock_guard<std::mutex> lock(worker_mutex_);
+            worker_running_.store(false);
+        }
+        worker_cv_.notify_all();
+        worker_thread_.join();
+
+        // 清空残留消息（pop 会销毁 Message，MsgPayload RAII 释放 BufferRef）
+        std::lock_guard<std::mutex> lock(worker_mutex_);
+        while (!worker_queue_.empty()) {
+            worker_queue_.pop();
+        }
+    }
+
     stop_print_job();
+    subscriptions_.clear();
+    state_ = ServiceState::Idle;
     return true;
+}
+
+void GlavoService::on_message(const middleware::Message& msg) {
+    if (state() != ServiceState::Running) return;
+
+    {
+        std::lock_guard<std::mutex> lock(worker_mutex_);
+        if (worker_queue_.size() >= kWorkerQueueDepth) {
+            UPC_LOG_GLAVO_SERVICE(Warn,
+                "worker queue full (%zu), drop type=%u",
+                kWorkerQueueDepth,
+                static_cast<unsigned>(static_cast<uint32_t>(msg.type)));
+            return;
+        }
+        worker_queue_.push(msg);
+    }
+    worker_cv_.notify_one();
+}
+
+void GlavoService::worker_loop() {
+    while (worker_running_.load()) {
+        middleware::Message msg;
+
+        {
+            std::unique_lock<std::mutex> lock(worker_mutex_);
+            worker_cv_.wait(lock, [this]() {
+                return !worker_running_.load() || !worker_queue_.empty();
+            });
+
+            if (!worker_running_.load() && worker_queue_.empty()) {
+                break;
+            }
+
+            if (worker_queue_.empty()) {
+                continue;
+            }
+
+            msg = std::move(worker_queue_.front());
+            worker_queue_.pop();
+        }
+
+        // 在工作线程中处理消息；回发 UI 须 publish_async，禁止 MsgPort::publish 同步路径
+        if (state() == ServiceState::Running) {
+            handle_message(msg);
+        }
+    }
+}
+
+bool GlavoService::publish_async(const middleware::Message& msg) {
+    return middleware::MsgPort::instance().publish_async(msg);
+}
+
+void GlavoService::subscribe(middleware::MsgType type, middleware::MsgHandler handler) {
+    auto sub = middleware::MsgPort::instance().subscribe(type,
+        static_cast<middleware::ModuleId>(module_id()), std::move(handler));
+    subscriptions_.push_back(std::move(sub));
 }
 
 void GlavoService::handle_message(const middleware::Message& msg) {

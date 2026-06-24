@@ -22,6 +22,7 @@ void SimplePage::on_enter()
 {
     if(root_) {
         lv_obj_clear_flag(root_, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_move_foreground(root_);
     }
     if(refresh_) {
         refresh_(true);

@@ -1,16 +1,15 @@
 # glavo/ — Glavo 进程
 
 > 索引：[doc/ARCHITECTURE.md](../../doc/ARCHITECTURE.md)  
-> 可执行文件：**`rongsu_glavo`** · 库 **`upc_glavo`**
+> 可执行文件：**`rongsu_glavo`** · 库 **`upc::glavo`**（CMake target `upc_glavo`）
 
 ## 文件职责
 
 | 文件 | 职责 |
 |------|------|
 | `main.cpp` | 进程守护、IPC Server、McuLink 连接、`MsgPort::process` 循环 |
-| `lib/glavo_service.*` | IPC 业务：目录/打印/门控/进度 |
+| `lib/glavo_service.*` | IPC 业务 + 工作线程 + 订阅/发布（目录/打印/门控/进度） |
 | `lib/mcu_link.*` | TCP 运动下发 + 串口握手/传感器/换层 Snap 触发 |
-| `lib/service_base.*` | 工作线程 + 订阅/发布封装 |
 | `lib/glavo_parser_bridge.*` | `ParserManager` RingBuffer → `McuLink` |
 | `lib/print_video_notify.*` | 换层 Snap / 录像会话 → Camera（经 UI Hub） |
 | `lib/print_job_state.*` | 发送包计数、完成/错误标志（McuLink 与进度共用） |
@@ -41,7 +40,7 @@ UI → GlavoService（工作线程）→ ParserManager → RingBuffer → McuLin
 | `UI_Print_Terminate_Req` | `stop_parse` + `request_terminate` + `on_print_abort` |
 | `UI_PM25_Req` / 门控 Req | 环境快照或占位 Rsp |
 
-跨进程回复 UI：**必须** `publish_async`（`ServiceBase` 工作线程内禁止 `MsgPort::publish` 同步路径）。
+跨进程回复 UI：**必须** `publish_async`（`GlavoService` 工作线程内禁止 `MsgPort::publish` 同步路径）。
 
 ### 打印层录像（Glavo → Camera）
 

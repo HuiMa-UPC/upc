@@ -2,7 +2,7 @@
 """
 rongsu_upc 项目 C++ 并发 / 内存序静态检查 MCP Server。
 
-覆盖模块：ipc_dma_frame_ring、ServiceBase、McuLink、slice_ring_buffer、
+覆盖模块：ipc_dma_frame_ring、GlavoService、McuLink、slice_ring_buffer、
 camera_preview、parser worker 等。规则为启发式，不能替代 TSan/审查。
 """
 
@@ -26,8 +26,8 @@ DEFAULT_HOTSPOTS = [
     "common/ipc/ipc_dma_frame_ring.hpp",
     "app/camera/lib/camera_dma_frame_source.cpp",
     "app/camera/lib/camera_dma_frame_source.hpp",
-    "app/glavo/lib/service_base.cpp",
     "app/glavo/lib/glavo_service.cpp",
+    "app/glavo/lib/glavo_service.hpp",
     "app/glavo/lib/mcu_link.cpp",
     "app/glavo/lib/print_job_state.cpp",
     "app/parser/lib/slice_ring_buffer.cpp",
@@ -194,9 +194,9 @@ def analyze_ipc_dma(path: str, code: str) -> list[Issue]:
     return issues
 
 
-def analyze_service_base(path: str, code: str) -> list[Issue]:
+def analyze_glavo_service(path: str, code: str) -> list[Issue]:
     issues: list[Issue] = []
-    if path.endswith("service_base.cpp") or path.endswith("service_base.hpp"):
+    if not (path.endswith("glavo_service.cpp") or path.endswith("glavo_service.hpp")):
         return issues
 
     body = strip_comments(code)
@@ -209,7 +209,7 @@ def analyze_service_base(path: str, code: str) -> list[Issue]:
             continue
         ln = code.count("\n", 0, m.start()) + 1
         issues.append(Issue(
-            "error", "service_base",
+            "error", "glavo_service",
             "handle_message / 工作线程中调用 publish() 可能阻塞 MsgBus；回复 UI 应使用 publish_async()",
             ln,
         ))
@@ -358,7 +358,7 @@ def analyze_file(path: Path) -> tuple[str, list[Issue]]:
     issues: list[Issue] = []
     for fn in (
         analyze_ipc_dma,
-        analyze_service_base,
+        analyze_glavo_service,
         analyze_mcu_link,
         analyze_ring_buffer,
         analyze_camera_preview,
@@ -413,7 +413,7 @@ def format_report(paths_results: list[tuple[str, list[Issue]]]) -> str:
         "./tsan_test",
         "```",
         "",
-        "重点人工审查：SHM slot 状态机、ServiceBase 工作线程回 UI、camera 解码线程与 LVGL。",
+        "重点人工审查：SHM slot 状态机、GlavoService 工作线程回 UI、camera 解码线程与 LVGL。",
     ])
     return "\n".join(lines)
 
@@ -466,7 +466,7 @@ TOOLS = {
         "handler": tool_check_file,
     },
     "scan_hotspots": {
-        "description": "扫描项目内并发热点文件（ipc_dma_frame_ring、ServiceBase、McuLink、RingBuffer、camera_preview、parser worker 等）",
+        "description": "扫描项目内并发热点文件（ipc_dma_frame_ring、GlavoService、McuLink、RingBuffer、camera_preview、parser worker 等）",
         "inputSchema": {
             "type": "object",
             "properties": {

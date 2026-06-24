@@ -77,7 +77,7 @@ lv_obj_t *ui_user_make_accent_preview(lv_obj_t *parent, int32_t w, int32_t h)
     lv_obj_remove_style_all(obj);
     lv_obj_set_size(obj, w, h);
     lv_obj_set_style_bg_color(obj, user_color_accent_dim, 0);
-    lv_obj_set_style_bg_opa(obj, LV_OPA_70, 0);
+    lv_obj_set_style_bg_opa(obj, LV_OPA_COVER, 0);
     lv_obj_set_style_bg_grad_color(obj, user_color_accent, 0);
     lv_obj_set_style_bg_grad_dir(obj, LV_GRAD_DIR_VER, 0);
     lv_obj_set_style_radius(obj, USER_RADIUS, 0);
@@ -126,7 +126,7 @@ lv_obj_t *ui_user_make_frosted_card(lv_obj_t *parent, bool flex_grow)
     }
     lv_obj_set_style_radius(card, USER_RADIUS, 0);
     lv_obj_set_style_bg_color(card, user_color_panel, 0);
-    lv_obj_set_style_bg_opa(card, LV_OPA_60, 0);
+    lv_obj_set_style_bg_opa(card, LV_OPA_COVER, 0);
     lv_obj_set_style_border_width(card, 1, 0);
     lv_obj_set_style_border_color(card, user_color_divider, 0);
     lv_obj_set_style_pad_all(card, USER_PAD, 0);

@@ -93,7 +93,7 @@ void open_dev_password_dialog(void)
     lv_obj_remove_style_all(g_dlg_mask);
     lv_obj_set_size(g_dlg_mask, LV_PCT(100), LV_PCT(100));
     lv_obj_set_style_bg_color(g_dlg_mask, lv_color_black(), 0);
-    lv_obj_set_style_bg_opa(g_dlg_mask, LV_OPA_60, 0);
+    lv_obj_set_style_bg_opa(g_dlg_mask, LV_OPA_COVER, 0);
     lv_obj_clear_flag(g_dlg_mask, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_flag(g_dlg_mask, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_event_cb(g_dlg_mask, on_dlg_mask_click, LV_EVENT_CLICKED, nullptr);
@@ -193,7 +193,8 @@ lv_obj_t *page_user_settings_create(lv_obj_t *parent)
     lv_obj_set_flex_flow(page, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_style_pad_all(page, USER_PAD, 0);
     lv_obj_set_style_pad_row(page, USER_PAD, 0);
-    lv_obj_set_style_bg_opa(page, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_bg_color(page, user_color_bg, 0);
+    lv_obj_set_style_bg_opa(page, LV_OPA_COVER, 0);
     lv_obj_clear_flag(page, LV_OBJ_FLAG_SCROLLABLE);
 
     lv_obj_t *title = lv_label_create(page);

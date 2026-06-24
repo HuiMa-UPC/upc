@@ -15,20 +15,21 @@
 - **入口**：`test/camera/main.cpp`
 - **IPC**：`set_mode_ipc_server(APP_CAMERA)`，默认 `/tmp/upc_camera.sock`
 - **SHM**：`/upc_camera_preview`（dma fd 元数据环，见 `ipc_dma_frame_ring`）
+- **dma fd**：经主 IPC `SCM_RIGHTS` 随 `APP_Camera_Stream_Start_Rsp` 传递；UI 侧 `MsgPort::take_peer_dma_fds`
 - **数据源**：`file_frame_source` 读 `.nv12` 等（配置见 `camera_test_config.hpp`）
 - **日志**：`/var/log/test_camera.log`，`UPC_MOD_TEST_CAMERA`
 
 ### 与 UI 关系
 
 ```
-test_camera ──dma fd + 元数据环──► CameraPreviewPlayer（rongsu_ui）
-            ──IPC───────────────► CameraMsgProxy（Start/Stop stream）
+test_camera ──主 IPC SCM_RIGHTS + 元数据环──► CameraPreviewPlayer（rongsu_ui）
+            ──IPC Start/Stop──────────────► CameraMsgProxy
                                     └─ RGA/SW NV12→BGRX + lv_image（与 rongsu_camera 同契约）
 ```
 
-UI 解码路径与对接 `rongsu_camera` 相同；差异仅在数据源（文件帧 vs 真机 V4L2），两者都走 dma fd 旁路。
+UI 解码路径与对接 `rongsu_camera` 相同；差异仅在数据源（文件帧 vs 真机 V4L2），两者都走 dma fd 旁路（主 IPC 传 fd，非独立 socket）。
 
-`scripts/rongsu.sh`：`UPC_ENABLE_TEST_CAMERA=auto` 时若存在二进制则启动。
+`scripts/rongsu.sh`：`UPC_ENABLE_TEST_CAMERA=auto` 时若存在二进制则启动；**不**启动 `rongsu_camera`。
 
 ## 红线
 

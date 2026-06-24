@@ -38,6 +38,7 @@ test_camera  ──listen──► /tmp/upc_camera.sock ◄──┘
 | `set_mode_ipc_hub` + `add_ipc_peer` | UI Hub |
 | `set_mode_ipc_server` | Glavo / Camera / test |
 | `subscribe` / `publish_async` / `process` | 共用 |
+| `take_peer_dma_fds(ModuleId)` | UI Hub 从指定 peer 取 SCM_RIGHTS 附带的 dma fd（预览开流） |
 | `publish` | 同步投递（InProcess 或 IPC `publish_sync`；Glavo 工作线程慎用） |
 | `publish_async_broadcast` | `target_id=0` 广播 |
 | `peer_connected(ModuleId)` | 单 peer 连接状态 |

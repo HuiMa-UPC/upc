@@ -59,14 +59,14 @@ enum class MsgType : uint32_t {
     APP_Print_Terminate_Done, /**< [GLAVO_Print_Terminate_Done] Empty */
 
     // ---- UI ↔ CAMERA：视频流（控制面 socket；像素走 SHM） ----
-    UI_Camera_Stream_Start_Req = 0x2000, /**< Empty 或 CameraStreamStartReqPayload */
+    UI_Camera_Stream_Start_Req, /**< Empty 或 CameraStreamStartReqPayload */
     APP_Camera_Stream_Start_Rsp,         /**< CameraStreamInfoPayload */
     UI_Camera_Stream_Stop_Req,           /**< Empty */
     APP_Camera_Stream_Stop_Done,         /**< Empty */
     APP_Camera_Frame_Ntf,                /**< CameraFrameNtfPayload（可选唤醒 UI） */
 
     // ---- GLAVO → CAMERA：打印层拍照录像（控制面；像素仍走预览 SHM） ----
-    APP_Print_Video_Session_Start_Ntf = 0x2100, /**< PrintVideoSessionPayload */
+    APP_Print_Video_Session_Start_Ntf, /**< PrintVideoSessionPayload */
     APP_Print_Layer_Snap_Ntf,                   /**< PrintVideoLayerSnapPayload */
     APP_Print_Video_Session_Finish_Ntf,         /**< PrintVideoSessionPayload */
     APP_Print_Video_Session_Abort_Ntf,          /**< PrintVideoSessionPayload */

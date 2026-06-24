@@ -6,7 +6,7 @@
 		},
 		"Gain2Reg":	{
 			"GainMode":	"EXPGAIN_MODE_LINEAR",
-			"GainRange":	[1, 1713.71, 64, 0, 1, 64, 109632],
+			"GainRange":	[1, 28, 32, 0, 1, 32, 896],
 			"GainRange_len":	7
 		},
 		"Time2Reg":	{
@@ -15,27 +15,27 @@
 		"CISGainSet":	{
 			"CISAgainRange":	{
 				"Min":	1,
-				"Max":	53.975
+				"Max":	29.5
 			},
 			"CISExtraAgainRange":	{
 				"Min":	1,
-				"Max":	1
+				"Max":	76.7
 			},
 			"CISDgainRange":	{
 				"Min":	1,
-				"Max":	31.75
+				"Max":	125
 			},
 			"CISIspDgainRange":	{
 				"Min":	1,
-				"Max":	8
+				"Max":	1
 			},
 			"CISHdrGainIndSetEn":	1
 		},
 		"CISTimeSet":	{
 			"Linear":	{
-				"CISTimeRegMin":	2,
+				"CISTimeRegMin":	6,
 				"CISLinTimeRegMaxFac":	{
-					"fCoeff":	[1, 4]
+					"fCoeff":	[1, 128]
 				},
 				"CISTimeRegOdevity":	{
 					"fCoeff":	[1, 0]
@@ -47,10 +47,10 @@
 					"CISTimeRegUnEqualEn":	1,
 					"CISTimeRegMin":	2,
 					"CISHdrTimeRegSumFac":	{
-						"fCoeff":	[1, 10]
+						"fCoeff":	[1, 26]
 					},
 					"CISTimeRegMax":	{
-						"Coeff":	[59, 0, 0]
+						"Coeff":	[0, 0, 0]
 					},
 					"CISTimeRegOdevity":	{
 						"fCoeff":	[2, 0]
@@ -59,15 +59,15 @@
 				{
 					"name":	"HDR_THREE_FRAME",
 					"CISTimeRegUnEqualEn":	1,
-					"CISTimeRegMin":	2,
+					"CISTimeRegMin":	3,
 					"CISHdrTimeRegSumFac":	{
-						"fCoeff":	[1, 10]
+						"fCoeff":	[1, 39]
 					},
 					"CISTimeRegMax":	{
 						"Coeff":	[0, 0, 0]
 					},
 					"CISTimeRegOdevity":	{
-						"fCoeff":	[1, 0]
+						"fCoeff":	[3, 0]
 					}
 				}
 			]
@@ -84,7 +84,7 @@
 				"dcg_mode":	{
 					"Coeff":	[0, 0, 0]
 				},
-				"dcg_ratio":	11,
+				"dcg_ratio":	2.6,
 				"sync_switch":	0,
 				"lcg2hcg_gain_th":	32,
 				"hcg2lcg_gain_th":	16
@@ -95,7 +95,7 @@
 				"dcg_mode":	{
 					"Coeff":	[0, 0, 0]
 				},
-				"dcg_ratio":	3.5,
+				"dcg_ratio":	2.6,
 				"sync_switch":	1,
 				"lcg2hcg_gain_th":	32,
 				"hcg2lcg_gain_th":	16
@@ -105,12 +105,12 @@
 			"Linear":	{
 				"time_update":	2,
 				"gain_update":	2,
-				"dcg_update":	2
+				"dcg_update":	1
 			},
 			"Hdr":	{
 				"time_update":	2,
 				"gain_update":	2,
-				"dcg_update":	2
+				"dcg_update":	1
 			}
 		},
 		"CISMinFps":	10,
@@ -145,8 +145,8 @@
 										"ManualTimeEn":	1,
 										"ManualGainEn":	1,
 										"ManualIspDgainEn":	1,
-										"TimeValue":	0.02,
-										"GainValue":	6,
+										"TimeValue":	0.01,
+										"GainValue":	1,
 										"IspDGainValue":	1
 									},
 									"HdrAE":	{
@@ -178,7 +178,7 @@
 								},
 								"AecFrameRateMode":	{
 									"isFpsFix":	1,
-									"FpsValue":	0
+									"FpsValue":	30
 								},
 								"AecAntiFlicker":	{
 									"enable":	1,
@@ -213,12 +213,12 @@
 							},
 							"LinearAeCtrl":	{
 								"RawStatsEn":	1,
-								"ToleranceIn":	10,
-								"ToleranceOut":	15,
-								"Evbias":	0,
+								"ToleranceIn":	15,
+								"ToleranceOut":	20,
+								"Evbias":	0.3,
 								"StrategyMode":	"AECV2_STRATEGY_MODE_LOWLIGHT",
 								"InitExp":	{
-									"InitTimeValue":	0.003,
+									"InitTimeValue":	0.01,
 									"InitGainValue":	1,
 									"InitIspDGainValue":	1,
 									"InitPIrisGainValue":	512,
@@ -226,9 +226,9 @@
 									"InitHDCIrisTargetValue":	0
 								},
 								"Route":	{
-									"TimeDot":	[0, 0.01, 0.01, 0.03, 0.03, 0.03],
+									"TimeDot":	[0.001, 0.005, 0.01, 0.02, 0.03, 0.03],
 									"TimeDot_len":	6,
-									"GainDot":	[1, 1, 4, 4, 8, 128],
+									"GainDot":	[1, 1, 1, 2, 4, 8],
 									"GainDot_len":	6,
 									"IspDGainDot":	[1, 1, 1, 1, 1, 1],
 									"IspDGainDot_len":	6,
@@ -236,9 +236,9 @@
 									"PIrisDot_len":	6
 								},
 								"DySetpoint":	{
-									"ExpLevel":	[0, 0.128, 0.256, 0.768, 1.28, 2.048],
+									"ExpLevel":	[0, 0.096, 0.192, 0.576, 0.96, 1.344],
 									"ExpLevel_len":	6,
-									"DySetpoint":	[40, 38, 35, 30, 28, 24],
+									"DySetpoint":	[50, 48, 45, 42, 40, 38],
 									"DySetpoint_len":	6
 								},
 								"BackLightCtrl":	{
@@ -250,13 +250,13 @@
 									"LvLowTh":	0.3125,
 									"LvHighTh":	7.5,
 									"BacklitSetPoint":	{
-										"ExpLevel":	[0, 0.128, 0.256, 0.768, 1.28, 2.048],
+										"ExpLevel": [0.096, 0.192, 0.384, 0.576, 0.96, 1.344],
 										"ExpLevel_len":	6,
 										"NonOEPdfTh":	[0.4, 0.45, 0.55, 0.65, 0.75, 1],
 										"NonOEPdfTh_len":	6,
 										"LowLightPdfTh":	[0.2, 0.2, 0.22, 0.25, 0.3, 0.35],
 										"LowLightPdfTh_len":	6,
-										"TargetLLLuma":	[20, 18, 17, 15, 14, 12],
+										"TargetLLLuma":	[25, 22, 20, 18, 15, 12],
 										"TargetLLLuma_len":	6
 									}
 								},
@@ -343,9 +343,9 @@
 										"NonOEPdfTh_len":	6,
 										"LowLightPdfTh":	[0.2, 0.22, 0.25, 0.3, 0.35, 0.4],
 										"LowLightPdfTh_len":	6,
-										"LSetPoint":	[75, 72, 68, 60, 52, 45],
+										"LSetPoint":	[75, 70, 65, 60, 45, 40],
 										"LSetPoint_len":	6,
-										"TargetLLLuma":	[35, 34, 33, 28, 25, 22],
+										"TargetLLLuma":	[35, 32, 30, 28, 25, 20],
 										"TargetLLLuma_len":	6
 									}
 								},
@@ -413,7 +413,7 @@
 							},
 							"SyncTest":	{
 								"Enable":	0,
-								"IntervalFrm":	10,
+								"IntervalFrm":	60,
 								"AlterExp":	{
 									"LinearAE":	[
 										{
@@ -569,7 +569,7 @@
 										"wpDiffWeiLvValueTh":	64
 									},
 									"wpDiffwei_y":	[0, 16, 32, 64, 96, 128, 192, 224, 240],
-									"perfectBin":	[0, 0, 1, 1, 1, 1, 1, 1],
+									"perfectBin":	[0, 0, 1, 1, 1, 1, 1, 0],
 									"wpDiffWeightLvSet":	[
 										{
 											"LvValue":	256,
@@ -616,25 +616,25 @@
 									{
 										"name":	"A",
 										"doorType":	"CALIB_AWB_DOOR_TYPE_INDOOR",
-										"standardGainValue":	[1.33574, 1, 1, 3.23439],
+										"standardGainValue":	[0.9491, 1, 1, 3.1568],
 										"uvRegion":	{
-											"u":	[123.442, 56.8389, 52.3037, 123.134],
-											"v":	[125.872, 103.151, 121.317, 126.836]
+											"u":	[125.1, 52.7, 48.9, 124.8],
+											"v":	[128, 153.5, 126.7, 126.7]
 										},
 										"xyRegion":	{
-											"normal":	[-1.39834, -0.939941, 0.130977, -0.0290234],
-											"big":	[-1.39834, -0.939941, 0.160977, -0.0590234]
+											"normal":	[-1.6387, -1.1551, 0.1012, -0.0257],
+											"big":	[-1.6387, -1.1551, 0.1127, -0.0337]
 										},
 										"rtYuvRegion":	{
 											"thcurve_u":	[50, 54, 70, 78, 110, 142],
-											"thcure_th":	[4, 4, 4, 4, 4, 4],
-											"lineVector":	[10, 152.25, 105.313, 182.125, 96.3125, 107.25],
+											"thcure_th":	[0.4, 0.5, 0.5, 0.76, 1, 4],
+											"lineVector":	[10, 165.4375, 107.4375, 170.375, 81.5625, 109.6875],
 											"disP1P2":	15
 										},
 										"staWeight":	[100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 90, 75],
 										"dayGainLvThSet":	[1024, 8192],
-										"defaultDayGainLow":	[1.90858, 1, 1, 1.99856],
-										"defaultDayGainHigh":	[2.32272, 1, 1, 1.76158],
+										"defaultDayGainLow":	[1.4795, 1, 1, 1.9685],
+										"defaultDayGainHigh":	[1.7847, 1, 1, 1.7354],
 										"xyType2Enable":	1,
 										"weight":	{
 											"lumaValue":	[0, 2, 4, 8, 32, 128, 1024, 8192, 65536, 262144],
@@ -646,25 +646,25 @@
 									{
 										"name":	"CWF",
 										"doorType":	"CALIB_AWB_DOOR_TYPE_INDOOR",
-										"standardGainValue":	[1.99993, 1, 1, 2.8367],
+										"standardGainValue":	[1.627, 1, 1, 2.8968],
 										"uvRegion":	{
-											"u":	[125.3, 79.6915, 70.571, 124.633],
-											"v":	[124.527, 79.8713, 86.3124, 125.156]
+											"u":	[126.1, 63.3, 57.6, 125.8],
+											"v":	[125.9, 89.9, 105.1, 126.4]
 										},
 										"xyRegion":	{
-											"normal":	[-0.936993, -0.495313, -0.0444781, -0.155147],
-											"big":	[-0.938958, -0.495313, -0.0444781, -0.175233]
+											"normal":	[-0.9531, -0.6487, -0.1099, -0.1716],
+											"big":	[-1.0683, -0.6487, -0.1099, -0.1716]
 										},
 										"rtYuvRegion":	{
 											"thcurve_u":	[50, 54, 70, 78, 110, 142],
-											"thcure_th":	[4, 4, 4, 4, 4, 4],
-											"lineVector":	[10, 147.5, 107.188, 188.063, 116.125, 98.75],
+											"thcure_th":	[0.4, 0.5, 0.5, 0.76, 1, 4],
+											"lineVector":	[10, 156.9375, 110.0625, 184.5625, 110.25, 98.6875],
 											"disP1P2":	15
 										},
 										"staWeight":	[100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 90, 75],
 										"dayGainLvThSet":	[1024, 8192],
-										"defaultDayGainLow":	[1.90858, 1, 1, 1.99856],
-										"defaultDayGainHigh":	[2.32272, 1, 1, 1.76158],
+										"defaultDayGainLow":	[1.4795, 1, 1, 1.9685],
+										"defaultDayGainHigh":	[1.7847, 1, 1, 1.7354],
 										"xyType2Enable":	1,
 										"weight":	{
 											"lumaValue":	[0, 2, 4, 8, 32, 128, 1024, 8192, 65536, 262144],
@@ -676,25 +676,25 @@
 									{
 										"name":	"D50",
 										"doorType":	"CALIB_AWB_DOOR_TYPE_AMBIGUITY",
-										"standardGainValue":	[1.8139, 1, 1, 1.9736],
+										"standardGainValue":	[1.4795, 1, 1, 1.9685],
 										"uvRegion":	{
-											"u":	[49.1426, 65.3983, 125.856, 125.665],
-											"v":	[61.0215, 46.014, 124.398, 125.069]
+											"u":	[126.4, 73.5, 63.1, 125.9],
+											"v":	[125.2, 83.1, 100.5, 126.1]
 										},
 										"xyRegion":	{
-											"normal":	[-0.5282, -0.1675, 0.1238, -0.1278],
-											"big":	[-0.5282, -0.1675, 0.1501, -0.1747]
+											"normal":	[-0.6487, -0.3217, 0.1556, -0.0703],
+											"big":	[-0.6487, -0.3217, 0.1856, -0.0921]
 										},
 										"rtYuvRegion":	{
-											"thcurve_u":	[35, 99, 227, 355, 611, 1123],
-											"thcure_th":	[0, 0, 0, 0, 1, 4],
-											"lineVector":	[10, 143.562, 108.25, 189.812, 122.625, 106.688],
+											"thcurve_u":	[50, 54, 70, 78, 110, 142],
+											"thcure_th":	[0.4, 0.5, 0.5, 0.76, 1, 4],
+											"lineVector":	[10, 156.8125, 107.5, 185.4375, 112.25, 110.3125],
 											"disP1P2":	15
 										},
-										"staWeight":	[100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100],
+										"staWeight":	[100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 90, 75],
 										"dayGainLvThSet":	[1024, 8192],
-										"defaultDayGainLow":	[1.8139, 1, 1, 1.9736],
-										"defaultDayGainHigh":	[2.0971, 1, 1, 1.648],
+										"defaultDayGainLow":	[1.4795, 1, 1, 1.9685],
+										"defaultDayGainHigh":	[1.7847, 1, 1, 1.7354],
 										"xyType2Enable":	1,
 										"weight":	{
 											"lumaValue":	[0, 2, 4, 8, 32, 128, 1024, 8192, 65536, 262144],
@@ -706,25 +706,25 @@
 									{
 										"name":	"D65",
 										"doorType":	"CALIB_AWB_DOOR_TYPE_OUTDOOR",
-										"standardGainValue":	[2.0971, 1, 1, 1.648],
+										"standardGainValue":	[1.7847, 1, 1, 1.7354],
 										"uvRegion":	{
-											"u":	[65.2126, 90, 127.101, 125.886],
-											"v":	[45.9214, 33, 123.549, 124.376]
+											"u":	[126.6, 95, 81.6, 125.9],
+											"v":	[124.5, 78.9, 90.6, 125.1]
 										},
 										"xyRegion":	{
-											"normal":	[-0.1675, 0.0853, 0.091, -0.1176],
-											"big":	[-0.1675, 0.0853, 0.1129, -0.1293]
+											"normal":	[-0.3217, -0.0831, 0.0818, -0.0782],
+											"big":	[-0.3217, -0.0831, 0.1118, -0.1082]
 										},
 										"rtYuvRegion":	{
-											"thcurve_u":	[29, 93, 221, 477, 733, 989],
-											"thcure_th":	[0, 0, 0, 0, 1, 4],
-											"lineVector":	[10, 140.812, 108.5, 190.938, 135.375, 108.188],
+											"thcurve_u":	[50, 54, 70, 78, 110, 142],
+											"thcure_th":	[0.4, 0.5, 0.5, 0.76, 1, 4],
+											"lineVector":	[10, 153.75, 107.4375, 188.6875, 124.8125, 111.0625],
 											"disP1P2":	15
 										},
-										"staWeight":	[100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 90, 80, 70],
+										"staWeight":	[100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 90, 75],
 										"dayGainLvThSet":	[1024, 8192],
-										"defaultDayGainLow":	[1.8139, 1, 1, 1.9736],
-										"defaultDayGainHigh":	[2.0971, 1, 1, 1.648],
+										"defaultDayGainLow":	[1.4795, 1, 1, 1.9685],
+										"defaultDayGainHigh":	[1.7847, 1, 1, 1.7354],
 										"xyType2Enable":	1,
 										"weight":	{
 											"lumaValue":	[0, 2, 4, 8, 32, 128, 1024, 8192, 65536, 262144],
@@ -736,25 +736,25 @@
 									{
 										"name":	"D75",
 										"doorType":	"CALIB_AWB_DOOR_TYPE_OUTDOOR",
-										"standardGainValue":	[2.2953, 1, 1, 1.521],
+										"standardGainValue":	[1.8691, 1, 1, 1.5492],
 										"uvRegion":	{
-											"u":	[127.903, 126.6, 84.7189, 107.273],
-											"v":	[123.983, 124.243, 36.129, 20.4018]
+											"u":	[127.8, 108.3, 94.3, 127],
+											"v":	[124.5, 73.9, 80.3, 125]
 										},
 										"xyRegion":	{
-											"normal":	[0.0853, 0.2637, 0.0431, -0.1169],
-											"big":	[0.0853, 0.2929, 0.0731, -0.1415]
+											"normal":	[-0.0831, 0.0862, 0.0841, -0.0759],
+											"big":	[-0.0831, 0.0862, 0.1141, -0.1059]
 										},
 										"rtYuvRegion":	{
-											"thcurve_u":	[34, 98, 226, 482, 738, 994],
-											"thcure_th":	[0, 0, 0, 0, 1, 4],
-											"lineVector":	[10, 139.562, 108.312, 191, 141.75, 108.938],
+											"thcurve_u":	[50, 54, 70, 78, 110, 142],
+											"thcure_th":	[0.4, 0.5, 0.5, 0.76, 1, 4],
+											"lineVector":	[10, 152.625, 107.0625, 189.5, 130.1875, 113.9375],
 											"disP1P2":	15
 										},
-										"staWeight":	[100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 90, 80, 70, 50],
+										"staWeight":	[100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 90, 75],
 										"dayGainLvThSet":	[1024, 8192],
-										"defaultDayGainLow":	[1.8139, 1, 1, 1.9736],
-										"defaultDayGainHigh":	[2.0971, 1, 1, 1.648],
+										"defaultDayGainLow":	[1.4795, 1, 1, 1.9685],
+										"defaultDayGainHigh":	[1.7847, 1, 1, 1.7354],
 										"xyType2Enable":	1,
 										"weight":	{
 											"lumaValue":	[0, 2, 4, 8, 32, 128, 1024, 8192, 65536, 262144],
@@ -766,25 +766,25 @@
 									{
 										"name":	"HZ",
 										"doorType":	"CALIB_AWB_DOOR_TYPE_INDOOR",
-										"standardGainValue":	[0.9184, 1, 1, 4.4322],
+										"standardGainValue":	[0.7375, 1, 1, 3.7431],
 										"uvRegion":	{
-											"u":	[124.479, 27.5601, 23.4976, 124.564],
-											"v":	[128.893, 164.418, 141.349, 127.539]
+											"u":	[125.1, 57.4, 48.1, 124.5],
+											"v":	[129.2, 172.4, 153.1, 128.1]
 										},
 										"xyRegion":	{
-											"normal":	[-2.1758, -1.5617, 0.1196, -0.113],
-											"big":	[-2.1758, -1.5598, 0.1453, -0.1397]
+											"normal":	[-2.0656, -1.6387, 0.0669, -0.0635],
+											"big":	[-2.0656, -1.6387, 0.0772, -0.0738]
 										},
 										"rtYuvRegion":	{
-											"thcurve_u":	[76, 140, 268, 524, 1036, 1292],
-											"thcure_th":	[0, 0, 0, 0, 1, 4],
-											"lineVector":	[10, 154.125, 106.562, 172.438, 74.625, 113.938],
+											"thcurve_u":	[50, 54, 70, 78, 110, 142],
+											"thcure_th":	[0.4, 0.5, 0.5, 0.76, 1, 4],
+											"lineVector":	[10, 171.25, 106.375, 158.1875, 67.5625, 113.5625],
 											"disP1P2":	15
 										},
-										"staWeight":	[100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 95, 90, 80, 70, 60, 50],
+										"staWeight":	[100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 90, 75],
 										"dayGainLvThSet":	[1024, 8192],
-										"defaultDayGainLow":	[1.8139, 1, 1, 1.9736],
-										"defaultDayGainHigh":	[2.0971, 1, 1, 1.648],
+										"defaultDayGainLow":	[1.4795, 1, 1, 1.9685],
+										"defaultDayGainHigh":	[1.7847, 1, 1, 1.7354],
 										"xyType2Enable":	1,
 										"weight":	{
 											"lumaValue":	[0, 2, 4, 8, 32, 128, 1024, 8192, 65536, 262144],
@@ -796,25 +796,25 @@
 									{
 										"name":	"TL84",
 										"doorType":	"CALIB_AWB_DOOR_TYPE_INDOOR",
-										"standardGainValue":	[1.6412, 1, 1, 2.706],
+										"standardGainValue":	[1.4552, 1, 1, 2.7741],
 										"uvRegion":	{
-											"u":	[124.397, 28.1157, 42.7178, 125.448],
-											"v":	[126.128, 104.119, 72.8606, 125.398]
+											"u":	[126, 58.8, 49.8, 125.8],
+											"v":	[126, 99.4, 128, 126.7]
 										},
 										"xyRegion":	{
-											"normal":	[-1.0942, -0.5294, 0.1333, -0.0523],
-											"big":	[-1.0942, -0.5294, 0.1553, -0.0792]
+											"normal":	[-1.1551, -0.6491, 0.0175, -0.1099],
+											"big":	[-1.1551, -0.6491, 0.041, -0.1099]
 										},
 										"rtYuvRegion":	{
-											"thcurve_u":	[61, 125, 253, 509, 765, 1277],
-											"thcure_th":	[0, 0, 0, 0, 1, 4],
-											"lineVector":	[10, 145.75, 108.938, 187.25, 109.625, 102.812],
+											"thcurve_u":	[50, 54, 70, 78, 110, 142],
+											"thcure_th":	[0.4, 0.5, 0.5, 0.76, 1, 4],
+											"lineVector":	[10, 158.125, 109.3125, 183.0625, 105.625, 101.9375],
 											"disP1P2":	15
 										},
-										"staWeight":	[100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 95, 90, 80, 70, 60, 50],
+										"staWeight":	[100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 90, 75],
 										"dayGainLvThSet":	[1024, 8192],
-										"defaultDayGainLow":	[1.8139, 1, 1, 1.9736],
-										"defaultDayGainHigh":	[2.0971, 1, 1, 1.648],
+										"defaultDayGainLow":	[1.4795, 1, 1, 1.9685],
+										"defaultDayGainHigh":	[1.7847, 1, 1, 1.7354],
 										"xyType2Enable":	1,
 										"weight":	{
 											"lumaValue":	[0, 2, 4, 8, 32, 128, 1024, 8192, 65536, 262144],
@@ -844,7 +844,7 @@
 								"tolerance":	{
 									"lumaValue":	[256, 512, 32768, 131072],
 									"lumaValue_len":	4,
-									"toleranceValue":	[0.05, 0.05, 0.05, 0.05],
+									"toleranceValue":	[0, 0, 0, 0],
 									"toleranceValue_len":	4
 								},
 								"runInterval":	{
@@ -858,43 +858,43 @@
 									"dFMin":	0.7,
 									"dFMax":	0.9,
 									"lvIIRsize":	4,
-									"lvVarTh":	0.06
+									"lvVarTh":	0.04
 								},
 								"wbGainAdjust":	{
 									"enable":	0,
 									"lutAll":	[
 										{
 											"lumaValue":	128,
-											"ct_grid_num":	7,
+											"ct_grid_num":	10,
 											"cri_grid_num":	9,
-											"ct_in_range":	[2000, 8000],
+											"ct_in_range":	[1000, 10000],
 											"cri_in_range":	[-1, 1],
-											"ct_lut_out":	[2000, 3000, 4150, 5200, 6200, 7200, 8200, 2000, 3000, 4150, 5200, 6200, 7200, 8200, 2000, 3000, 4150, 5200, 6200, 7200, 8200, 2000, 3000, 4150, 5200, 6200, 7200, 8200, 2000, 3000, 4150, 5200, 6200, 7200, 8200, 2000, 3000, 4150, 5200, 6200, 7200, 8200, 2000, 3000, 4150, 5200, 6200, 7200, 8200, 2000, 3000, 4150, 5200, 6200, 7200, 8200, 2000, 3000, 4150, 5200, 6200, 7200, 8200],
-											"ct_lut_out_len":	63,
-											"cri_lut_out":	[-1, -1, -1, -1, -1, -1, -1, -0.75, -0.75, -0.75, -0.75, -0.75, -0.75, -0.75, -0.5, -0.5, -0.5, -0.5, -0.5, -0.5, -0.5, -0.25, -0.25, -0.25, -0.25, -0.25, -0.25, -0.25, 0, 0, 0, 0, 0, 0, 0, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.75, 0.75, 0.75, 0.75, 0.75, 0.75, 0.75, 1, 1, 1, 1, 1, 1, 1],
-											"cri_lut_out_len":	63
+											"ct_lut_out":	[1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000, 9000, 10000, 1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000, 9000, 10000, 1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000, 9000, 10000, 1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000, 9000, 10000, 1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000, 9000, 10000, 1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000, 9000, 10000, 1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000, 9000, 10000, 1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000, 9000, 10000, 1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000, 9000, 10000],
+											"ct_lut_out_len":	90,
+											"cri_lut_out":	[-1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -0.75, -0.75, -0.75, -0.75, -0.75, -0.75, -0.75, -0.75, -0.75, -0.75, -0.5, -0.5, -0.5, -0.5, -0.5, -0.5, -0.5, -0.5, -0.5, -0.5, -0.25, -0.25, -0.25, -0.25, -0.25, -0.25, -0.25, -0.25, -0.25, -0.25, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.75, 0.75, 0.75, 0.75, 0.75, 0.75, 0.75, 0.75, 0.75, 0.75, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+											"cri_lut_out_len":	90
 										},
 										{
 											"lumaValue":	8192,
-											"ct_grid_num":	7,
+											"ct_grid_num":	10,
 											"cri_grid_num":	9,
-											"ct_in_range":	[2000, 8000],
+											"ct_in_range":	[1000, 10000],
 											"cri_in_range":	[-1, 1],
-											"ct_lut_out":	[2000, 3000, 4150, 5200, 6200, 7200, 8200, 2000, 3000, 4150, 5200, 6200, 7200, 8200, 2000, 3000, 4150, 5200, 6200, 7200, 8200, 2000, 3000, 4150, 5200, 6200, 7200, 8200, 2000, 3000, 4150, 5200, 6200, 7200, 8200, 2000, 3000, 4150, 5200, 6200, 7200, 8200, 2000, 3000, 4150, 5200, 6200, 7200, 8200, 2000, 3000, 4150, 5200, 6200, 7200, 8200, 2000, 3000, 4150, 5200, 6200, 7200, 8200],
-											"ct_lut_out_len":	63,
-											"cri_lut_out":	[-1, -1, -1, -1, -1, -1, -1, -0.75, -0.75, -0.75, -0.75, -0.75, -0.75, -0.75, -0.5, -0.5, -0.5, -0.5, -0.5, -0.5, -0.5, -0.25, -0.25, -0.25, -0.25, -0.25, -0.25, -0.25, 0, 0, 0, 0, 0, 0, 0, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.75, 0.75, 0.75, 0.75, 0.75, 0.75, 0.75, 1, 1, 1, 1, 1, 1, 1],
-											"cri_lut_out_len":	63
+											"ct_lut_out":	[1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000, 9000, 10000, 1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000, 9000, 10000, 1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000, 9000, 10000, 1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000, 9000, 10000, 1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000, 9000, 10000, 1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000, 9000, 10000, 1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000, 9000, 10000, 1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000, 9000, 10000, 1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000, 9000, 10000],
+											"ct_lut_out_len":	90,
+											"cri_lut_out":	[-1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -0.75, -0.75, -0.75, -0.75, -0.75, -0.75, -0.75, -0.75, -0.75, -0.75, -0.5, -0.5, -0.5, -0.5, -0.5, -0.5, -0.5, -0.5, -0.5, -0.5, -0.25, -0.25, -0.25, -0.25, -0.25, -0.25, -0.25, -0.25, -0.25, -0.25, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.75, 0.75, 0.75, 0.75, 0.75, 0.75, 0.75, 0.75, 0.75, 0.75, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+											"cri_lut_out_len":	90
 										},
 										{
 											"lumaValue":	65536,
-											"ct_grid_num":	7,
+											"ct_grid_num":	10,
 											"cri_grid_num":	9,
-											"ct_in_range":	[2000, 8000],
+											"ct_in_range":	[1000, 10000],
 											"cri_in_range":	[-1, 1],
-											"ct_lut_out":	[2000, 3000, 4150, 5200, 6200, 7200, 8200, 2000, 3000, 4150, 5200, 6200, 7200, 8200, 2000, 3000, 4150, 5200, 6200, 7200, 8200, 2000, 3000, 4150, 5200, 6200, 7200, 8200, 2000, 3000, 4150, 5200, 6200, 7200, 8200, 2000, 3000, 4150, 5200, 6200, 7200, 8200, 2000, 3000, 4150, 5200, 6200, 7200, 8200, 2000, 3000, 4150, 5200, 6200, 7200, 8200, 2000, 3000, 4150, 5200, 6200, 7200, 8200],
-											"ct_lut_out_len":	63,
-											"cri_lut_out":	[-1, -1, -1, -1, -1, -1, -1, -0.75, -0.75, -0.75, -0.75, -0.75, -0.75, -0.75, -0.5, -0.5, -0.5, -0.5, -0.5, -0.5, -0.5, -0.25, -0.25, -0.25, -0.25, -0.25, -0.25, -0.25, 0, 0, 0, 0, 0, 0, 0, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.75, 0.75, 0.75, 0.75, 0.75, 0.75, 0.75, 1, 1, 1, 1, 1, 1, 1],
-											"cri_lut_out_len":	63
+											"ct_lut_out":	[1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000, 9000, 10000, 1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000, 9000, 10000, 1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000, 9000, 10000, 1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000, 9000, 10000, 1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000, 9000, 10000, 1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000, 9000, 10000, 1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000, 9000, 10000, 1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000, 9000, 10000, 1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000, 9000, 10000],
+											"ct_lut_out_len":	90,
+											"cri_lut_out":	[-1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -0.75, -0.75, -0.75, -0.75, -0.75, -0.75, -0.75, -0.75, -0.75, -0.75, -0.5, -0.5, -0.5, -0.5, -0.5, -0.5, -0.5, -0.5, -0.5, -0.5, -0.25, -0.25, -0.25, -0.25, -0.25, -0.25, -0.25, -0.25, -0.25, -0.25, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.75, 0.75, 0.75, 0.75, 0.75, 0.75, 0.75, 0.75, 0.75, 0.75, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+											"cri_lut_out_len":	90
 										}
 									],
 									"lutAll_len":	3
@@ -905,12 +905,12 @@
 								},
 								"wbGainClip":	{
 									"enable":	0,
-									"cct":	[1000, 2856, 4100, 6500, 7500],
-									"cct_len":	5,
-									"cri_bound_up":	[0.091, 0.091, 0.18, 0.12, 0.12],
-									"cri_bound_up_len":	5,
-									"cri_bound_low":	[0.07, 0.07, 0.16, 0.16, 0.16],
-									"cri_bound_low_len":	5
+									"cct":	[1000, 2856, 4100, 6500, 7500, 10000],
+									"cct_len":	6,
+									"cri_bound_up":	[0.3, 0.3, 0.3, 0.3, 0.3, 0.3],
+									"cri_bound_up_len":	6,
+									"cri_bound_low":	[0.3, 0.3, 0.3, 0.3, 0.3, 0.3],
+									"cri_bound_low_len":	6
 								},
 								"division":	{
 									"lumaValThLow":	110,
@@ -930,7 +930,7 @@
 								"lumaValueMatrix":	[0, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072, 262144],
 								"defaultNightGainWeight":	[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
 								"probCalcDis":	{
-									"proDis_THH":	4.6124,
+									"proDis_THH":	6.6124,
 									"proDis_THL":	0.0269
 								},
 								"probCalcLv":	{
@@ -938,7 +938,7 @@
 									"outdoorLumaValThHigh":	45745
 								},
 								"probCalcWp":	{
-									"wpNumPercTh":	0.05,
+									"wpNumPercTh":	0.0031,
 									"wpNumPercTh2":	0.2
 								},
 								"converged":	{
@@ -962,64 +962,53 @@
 								"weightForNightGainCalc_len":	4,
 								"singleColorProces":	{
 									"enable":	1,
-									"colorBlock":	[
-										{
+									"colorBlock":	[{
 											"index":	15,
-											"meanC":	35.3633,
-											"meanH":	37.4399
-										},
-										{
+											"meanC":	31.703003,
+											"meanH":	29.392561
+										}, {
 											"index":	13,
-											"meanC":	33.0579,
-											"meanH":	-70.7248
-										},
-										{
+											"meanC":	21.254284,
+											"meanH":	-75.79232
+										}, {
 											"index":	5,
-											"meanC":	15.2252,
-											"meanH":	-60.6484
-										},
-										{
+											"meanC":	11.746689,
+											"meanH":	-60.827145
+										}, {
 											"index":	10,
-											"meanC":	16.2914,
-											"meanH":	-37.0949
-										},
-										{
+											"meanC":	13.996216,
+											"meanH":	-28.015261
+										}, {
 											"index":	14,
-											"meanC":	23.6518,
-											"meanH":	147.088
-										},
-										{
+											"meanC":	19.495422,
+											"meanH":	152.068924
+										}, {
 											"index":	16,
-											"meanC":	43.6867,
-											"meanH":	94.2567
-										}
-									],
+											"meanC":	33.827354,
+											"meanH":	91.958199
+										}],
 									"colorBlock_len":	6,
-									"lsUsedForEstimation":	[
-										{
+									"lsUsedForEstimation":	[{
 											"name":	"A",
-											"RGain":	1.1631,
-											"BGain":	3.45798
-										},
-										{
+											"RGain":	0.949074,
+											"BGain":	3.156764
+										}, {
 											"name":	"TL84",
-											"RGain":	1.64118,
-											"BGain":	2.70596
-										},
-										{
+											"RGain":	1.455221,
+											"BGain":	2.774115
+										}, {
 											"name":	"D50",
-											"RGain":	1.81386,
-											"BGain":	1.97361
-										}
-									],
+											"RGain":	1.479496,
+											"BGain":	1.968505
+										}],
 									"lsUsedForEstimation_len":	3,
 									"alpha":	0.9
 								},
-								"lineRgBg":	[-0.8887, -0.4586, -2.6193],
-								"lineRgProjCCT":	[1, -0.0003, 0.4311],
+								"lineRgBg":	[-0.862065, -0.506798, -2.418006],
+								"lineRgProjCCT":	[1, -0.000229, 0.294156],
 								"chrAdpttAdj":	{
 									"enable":	0,
-									"targetGain":	[2.0971, 1, 1, 1.648],
+									"targetGain":	[1.7847, 1, 1, 1.7354],
 									"laCalcFactor":	40
 								},
 								"remosaicCfg":	{
@@ -1459,15 +1448,15 @@
 								"debayer_clip_en":	1,
 								"debayer_filter_g_en":	1,
 								"debayer_filter_c_en":	1,
-								"debayer_thed0":	5,
-								"debayer_thed1":	10,
+								"debayer_thed0":	6,
+								"debayer_thed1":	12,
 								"debayer_dist_scale":	8,
-								"debayer_cnr_strength":	3,
+								"debayer_cnr_strength":	6,
 								"debayer_shift_num":	2,
 								"array":	{
 									"ISO":	[50, 100, 200, 400, 800, 1600, 3200, 6400, 12800],
-									"sharp_strength":	[4, 4, 4, 4, 3, 2, 1, 0, 0],
-									"debayer_hf_offset":	[1, 1, 1, 1, 2, 2, 3, 3, 3]
+									"sharp_strength":	[4, 4, 4, 3, 2, 1, 1, 1, 1],
+									"debayer_hf_offset":	[1, 1, 1, 2, 2, 3, 3, 3, 3]
 								}
 							}
 						},
@@ -2681,43 +2670,43 @@
 											},
 											{
 												"iso":	400,
-												"gauss_guide":	0,
-												"filter_strength":	0.5,
+												"gauss_guide":	1,
+												"filter_strength":	0.45,
 												"edgesofts":	1,
-												"ratio":	0.01,
-												"weight":	0.7
+												"ratio":	0.05,
+												"weight":	0.45
 											},
 											{
 												"iso":	800,
-												"gauss_guide":	0,
-												"filter_strength":	1,
-												"edgesofts":	2,
-												"ratio":	0.01,
-												"weight":	1
+												"gauss_guide":	1,
+												"filter_strength":	0.6,
+												"edgesofts":	1,
+												"ratio":	0.04,
+												"weight":	0.55
 											},
 											{
 												"iso":	1600,
 												"gauss_guide":	1,
-												"filter_strength":	0.65,
-												"edgesofts":	2,
-												"ratio":	0.01,
-												"weight":	1
+												"filter_strength":	0.75,
+												"edgesofts":	1,
+												"ratio":	0.03,
+												"weight":	0.65
 											},
 											{
 												"iso":	3200,
 												"gauss_guide":	1,
-												"filter_strength":	0.65,
+												"filter_strength":	0.9,
 												"edgesofts":	2,
-												"ratio":	0.01,
-												"weight":	1
+												"ratio":	0.02,
+												"weight":	0.75
 											},
 											{
 												"iso":	6400,
 												"gauss_guide":	1,
-												"filter_strength":	0.7,
+												"filter_strength":	1.0,
 												"edgesofts":	2,
 												"ratio":	0.01,
-												"weight":	1
+												"weight":	0.85
 											},
 											{
 												"iso":	12800,
@@ -2768,27 +2757,27 @@
 										"Tuning_ISO":	[
 											{
 												"iso":	50,
-												"gauss_guide":	0,
-												"filter_strength":	0.16,
-												"edgesofts":	2,
-												"ratio":	0.01,
-												"weight":	1
+												"gauss_guide":	1,
+												"filter_strength":	0.1,
+												"edgesofts":	0,
+												"ratio":	0.1,
+												"weight":	0.2
 											},
 											{
 												"iso":	100,
-												"gauss_guide":	0,
-												"filter_strength":	0.55,
-												"edgesofts":	2,
-												"ratio":	0.01,
-												"weight":	1
+												"gauss_guide":	1,
+												"filter_strength":	0.15,
+												"edgesofts":	0,
+												"ratio":	0.08,
+												"weight":	0.25
 											},
 											{
 												"iso":	200,
-												"gauss_guide":	0,
-												"filter_strength":	0.6,
-												"edgesofts":	2,
-												"ratio":	0.01,
-												"weight":	1
+												"gauss_guide":	1,
+												"filter_strength":	0.2,
+												"edgesofts":	0,
+												"ratio":	0.06,
+												"weight":	0.3
 											},
 											{
 												"iso":	400,
@@ -2876,234 +2865,234 @@
 								],
 								"Setting_len":	2
 							},
-							"Bayernr3D":	{
-								"enable":	0,
-								"Setting":	[
-									{
-										"SNR_Mode":	"LSNR",
-										"Sensor_Mode":	"lcg",
-										"Tuning_ISO":	[
-											{
-												"iso":	50,
-												"filter_strength":	0.2,
-												"sp_filter_strength":	0.55,
-												"lo_clipwgt":	0.045,
-												"hi_clipwgt":	0.015,
-												"softwgt":	0
-											},
-											{
-												"iso":	100,
-												"filter_strength":	0.2,
-												"sp_filter_strength":	0.55,
-												"lo_clipwgt":	0.045,
-												"hi_clipwgt":	0.015,
-												"softwgt":	0
-											},
-											{
-												"iso":	200,
-												"filter_strength":	0.2,
-												"sp_filter_strength":	0.6,
-												"lo_clipwgt":	0.045,
-												"hi_clipwgt":	0.015,
-												"softwgt":	0
-											},
-											{
-												"iso":	400,
-												"filter_strength":	0.2,
-												"sp_filter_strength":	0.6,
-												"lo_clipwgt":	0.045,
-												"hi_clipwgt":	0.02,
-												"softwgt":	0
-											},
-											{
-												"iso":	800,
-												"filter_strength":	0.15,
-												"sp_filter_strength":	0.65,
-												"lo_clipwgt":	0.045,
-												"hi_clipwgt":	0.025,
-												"softwgt":	0
-											},
-											{
-												"iso":	1600,
-												"filter_strength":	0.1,
-												"sp_filter_strength":	0.65,
-												"lo_clipwgt":	0.045,
-												"hi_clipwgt":	0.03,
-												"softwgt":	0
-											},
-											{
-												"iso":	3200,
-												"filter_strength":	0.05,
-												"sp_filter_strength":	0.65,
-												"lo_clipwgt":	0.045,
-												"hi_clipwgt":	0.04,
-												"softwgt":	0
-											},
-											{
-												"iso":	6400,
-												"filter_strength":	0.03,
-												"sp_filter_strength":	0.7,
-												"lo_clipwgt":	0.04,
-												"hi_clipwgt":	0.06,
-												"softwgt":	0
-											},
-											{
-												"iso":	12800,
-												"filter_strength":	0.02,
-												"sp_filter_strength":	0.7,
-												"lo_clipwgt":	0.04,
-												"hi_clipwgt":	0.08,
-												"softwgt":	0
-											},
-											{
-												"iso":	25600,
-												"filter_strength":	0.01,
-												"sp_filter_strength":	0.7,
-												"lo_clipwgt":	0.0322,
-												"hi_clipwgt":	0.1,
-												"softwgt":	0
-											},
-											{
-												"iso":	51200,
-												"filter_strength":	0.01,
-												"sp_filter_strength":	0.7,
-												"lo_clipwgt":	0.0322,
-												"hi_clipwgt":	0.1,
-												"softwgt":	0
-											},
-											{
-												"iso":	102400,
-												"filter_strength":	0.01,
-												"sp_filter_strength":	0.7,
-												"lo_clipwgt":	0.0322,
-												"hi_clipwgt":	0.1,
-												"softwgt":	0
-											},
-											{
-												"iso":	204800,
-												"filter_strength":	0.01,
-												"sp_filter_strength":	0.7,
-												"lo_clipwgt":	0.0322,
-												"hi_clipwgt":	0.1,
-												"softwgt":	0
-											}
-										],
-										"Tuning_ISO_len":	13
-									},
-									{
-										"SNR_Mode":	"HSNR",
-										"Sensor_Mode":	"hcg",
-										"Tuning_ISO":	[
-											{
-												"iso":	50,
-												"filter_strength":	0.2,
-												"sp_filter_strength":	0.55,
-												"lo_clipwgt":	0.0322,
-												"hi_clipwgt":	0.0322,
-												"softwgt":	0
-											},
-											{
-												"iso":	100,
-												"filter_strength":	0.2,
-												"sp_filter_strength":	0.55,
-												"lo_clipwgt":	0.0322,
-												"hi_clipwgt":	0.0322,
-												"softwgt":	0
-											},
-											{
-												"iso":	200,
-												"filter_strength":	0.2,
-												"sp_filter_strength":	0.6,
-												"lo_clipwgt":	0.0322,
-												"hi_clipwgt":	0.0322,
-												"softwgt":	0
-											},
-											{
-												"iso":	400,
-												"filter_strength":	0.2,
-												"sp_filter_strength":	0.6,
-												"lo_clipwgt":	0.0322,
-												"hi_clipwgt":	0.0322,
-												"softwgt":	0
-											},
-											{
-												"iso":	800,
-												"filter_strength":	0.15,
-												"sp_filter_strength":	0.65,
-												"lo_clipwgt":	0.0322,
-												"hi_clipwgt":	0.0322,
-												"softwgt":	0
-											},
-											{
-												"iso":	1600,
-												"filter_strength":	0.1,
-												"sp_filter_strength":	0.65,
-												"lo_clipwgt":	0.0322,
-												"hi_clipwgt":	0.0322,
-												"softwgt":	0
-											},
-											{
-												"iso":	3200,
-												"filter_strength":	0.06,
-												"sp_filter_strength":	0.65,
-												"lo_clipwgt":	0.0322,
-												"hi_clipwgt":	0.0322,
-												"softwgt":	0
-											},
-											{
-												"iso":	6400,
-												"filter_strength":	0.06,
-												"sp_filter_strength":	0.7,
-												"lo_clipwgt":	0.0322,
-												"hi_clipwgt":	0.0322,
-												"softwgt":	0
-											},
-											{
-												"iso":	12800,
-												"filter_strength":	0.06,
-												"sp_filter_strength":	0.7,
-												"lo_clipwgt":	0.0322,
-												"hi_clipwgt":	0.0322,
-												"softwgt":	0
-											},
-											{
-												"iso":	25600,
-												"filter_strength":	0.06,
-												"sp_filter_strength":	0.7,
-												"lo_clipwgt":	0.0322,
-												"hi_clipwgt":	0.0322,
-												"softwgt":	0
-											},
-											{
-												"iso":	51200,
-												"filter_strength":	0.06,
-												"sp_filter_strength":	0.7,
-												"lo_clipwgt":	0.0322,
-												"hi_clipwgt":	0.0322,
-												"softwgt":	0
-											},
-											{
-												"iso":	102400,
-												"filter_strength":	0.06,
-												"sp_filter_strength":	0.7,
-												"lo_clipwgt":	0.0322,
-												"hi_clipwgt":	0.0322,
-												"softwgt":	0
-											},
-											{
-												"iso":	204800,
-												"filter_strength":	0.06,
-												"sp_filter_strength":	0.7,
-												"lo_clipwgt":	0.0322,
-												"hi_clipwgt":	0.0322,
-												"softwgt":	0
-											}
-										],
-										"Tuning_ISO_len":	13
-									}
+							"Bayernr3D": {
+							"enable": 1,
+							"Setting": [
+							{
+								"SNR_Mode": "LSNR",
+								"Sensor_Mode": "lcg",
+								"Tuning_ISO": [
+								{
+									"iso": 50,
+									"filter_strength": 0.12,
+									"sp_filter_strength": 0.45,
+									"lo_clipwgt": 0.03,
+									"hi_clipwgt": 0.08,
+									"softwgt": 0.35
+								},
+								{
+									"iso": 100,
+									"filter_strength": 0.12,
+									"sp_filter_strength": 0.45,
+									"lo_clipwgt": 0.03,
+									"hi_clipwgt": 0.08,
+									"softwgt": 0.35
+								},
+								{
+									"iso": 200,
+									"filter_strength": 0.12,
+									"sp_filter_strength": 0.45,
+									"lo_clipwgt": 0.03,
+									"hi_clipwgt": 0.08,
+									"softwgt": 0.35
+								},
+								{
+									"iso": 400,
+									"filter_strength": 0.1,
+									"sp_filter_strength": 0.5,
+									"lo_clipwgt": 0.025,
+									"hi_clipwgt": 0.1,
+									"softwgt": 0.4
+								},
+								{
+									"iso": 800,
+									"filter_strength": 0.1,
+									"sp_filter_strength": 0.5,
+									"lo_clipwgt": 0.025,
+									"hi_clipwgt": 0.1,
+									"softwgt": 0.4
+								},
+								{
+									"iso": 1600,
+									"filter_strength": 0.08,
+									"sp_filter_strength": 0.55,
+									"lo_clipwgt": 0.02,
+									"hi_clipwgt": 0.12,
+									"softwgt": 0.45
+								},
+								{
+									"iso": 3200,
+									"filter_strength": 0.08,
+									"sp_filter_strength": 0.55,
+									"lo_clipwgt": 0.02,
+									"hi_clipwgt": 0.12,
+									"softwgt": 0.45
+								},
+								{
+									"iso": 6400,
+									"filter_strength": 0.06,
+									"sp_filter_strength": 0.6,
+									"lo_clipwgt": 0.018,
+									"hi_clipwgt": 0.15,
+									"softwgt": 0.5
+								},
+								{
+									"iso": 12800,
+									"filter_strength": 0.06,
+									"sp_filter_strength": 0.6,
+									"lo_clipwgt": 0.018,
+									"hi_clipwgt": 0.15,
+									"softwgt": 0.5
+								},
+								{
+									"iso": 25600,
+									"filter_strength": 0.05,
+									"sp_filter_strength": 0.65,
+									"lo_clipwgt": 0.015,
+									"hi_clipwgt": 0.18,
+									"softwgt": 0.55
+								},
+								{
+									"iso": 51200,
+									"filter_strength": 0.05,
+									"sp_filter_strength": 0.65,
+									"lo_clipwgt": 0.015,
+									"hi_clipwgt": 0.18,
+									"softwgt": 0.55
+								},
+								{
+									"iso": 102400,
+									"filter_strength": 0.05,
+									"sp_filter_strength": 0.65,
+									"lo_clipwgt": 0.015,
+									"hi_clipwgt": 0.18,
+									"softwgt": 0.55
+								},
+								{
+									"iso": 204800,
+									"filter_strength": 0.05,
+									"sp_filter_strength": 0.65,
+									"lo_clipwgt": 0.015,
+									"hi_clipwgt": 0.18,
+									"softwgt": 0.55
+								}
 								],
-								"Setting_len":	2
+								"Tuning_ISO_len": 13
+							},
+							{
+								"SNR_Mode": "HSNR",
+								"Sensor_Mode": "hcg",
+								"Tuning_ISO": [
+								{
+									"iso": 50,
+									"filter_strength": 0.1,
+									"sp_filter_strength": 0.4,
+									"lo_clipwgt": 0.025,
+									"hi_clipwgt": 0.06,
+									"softwgt": 0.3
+								},
+								{
+									"iso": 100,
+									"filter_strength": 0.1,
+									"sp_filter_strength": 0.4,
+									"lo_clipwgt": 0.025,
+									"hi_clipwgt": 0.06,
+									"softwgt": 0.3
+								},
+								{
+									"iso": 200,
+									"filter_strength": 0.1,
+									"sp_filter_strength": 0.4,
+									"lo_clipwgt": 0.025,
+									"hi_clipwgt": 0.06,
+									"softwgt": 0.3
+								},
+								{
+									"iso": 400,
+									"filter_strength": 0.08,
+									"sp_filter_strength": 0.45,
+									"lo_clipwgt": 0.02,
+									"hi_clipwgt": 0.08,
+									"softwgt": 0.35
+								},
+								{
+									"iso": 800,
+									"filter_strength": 0.08,
+									"sp_filter_strength": 0.45,
+									"lo_clipwgt": 0.02,
+									"hi_clipwgt": 0.08,
+									"softwgt": 0.35
+								},
+								{
+									"iso": 1600,
+									"filter_strength": 0.06,
+									"sp_filter_strength": 0.5,
+									"lo_clipwgt": 0.018,
+									"hi_clipwgt": 0.1,
+									"softwgt": 0.4
+								},
+								{
+									"iso": 3200,
+									"filter_strength": 0.06,
+									"sp_filter_strength": 0.5,
+									"lo_clipwgt": 0.018,
+									"hi_clipwgt": 0.1,
+									"softwgt": 0.4
+								},
+								{
+									"iso": 6400,
+									"filter_strength": 0.05,
+									"sp_filter_strength": 0.55,
+									"lo_clipwgt": 0.015,
+									"hi_clipwgt": 0.12,
+									"softwgt": 0.45
+								},
+								{
+									"iso": 12800,
+									"filter_strength": 0.05,
+									"sp_filter_strength": 0.55,
+									"lo_clipwgt": 0.015,
+									"hi_clipwgt": 0.12,
+									"softwgt": 0.45
+								},
+								{
+									"iso": 25600,
+									"filter_strength": 0.04,
+									"sp_filter_strength": 0.6,
+									"lo_clipwgt": 0.012,
+									"hi_clipwgt": 0.15,
+									"softwgt": 0.5
+								},
+								{
+									"iso": 51200,
+									"filter_strength": 0.04,
+									"sp_filter_strength": 0.6,
+									"lo_clipwgt": 0.012,
+									"hi_clipwgt": 0.15,
+									"softwgt": 0.5
+								},
+								{
+									"iso": 102400,
+									"filter_strength": 0.04,
+									"sp_filter_strength": 0.6,
+									"lo_clipwgt": 0.012,
+									"hi_clipwgt": 0.15,
+									"softwgt": 0.5
+								},
+								{
+									"iso": 204800,
+									"filter_strength": 0.04,
+									"sp_filter_strength": 0.6,
+									"lo_clipwgt": 0.012,
+									"hi_clipwgt": 0.15,
+									"softwgt": 0.5
+								}
+								],
+								"Tuning_ISO_len": 13
 							}
+							],
+							"Setting_len": 2
+						}
 						},
 						"cnr_v1":	{
 							"Version":	"",
@@ -4633,10 +4622,10 @@
 											{
 												"iso":	200,
 												"pbf_gain":	0.8,
-												"pbf_ratio":	0.4,
+												"pbf_ratio":	0,
 												"pbf_add":	1,
 												"gaus_ratio":	0,
-												"sharp_ratio":	10,
+												"sharp_ratio":	9,
 												"bf_gain":	3,
 												"bf_ratio":	1,
 												"bf_add":	32,
@@ -4655,7 +4644,7 @@
 											{
 												"iso":	400,
 												"pbf_gain":	0.8,
-												"pbf_ratio":	0.6,
+												"pbf_ratio":	0,
 												"pbf_add":	1,
 												"gaus_ratio":	0,
 												"sharp_ratio":	9,
@@ -4677,9 +4666,9 @@
 											{
 												"iso":	800,
 												"pbf_gain":	0.8,
-												"pbf_ratio":	0.6,
+												"pbf_ratio":	0.2,
 												"pbf_add":	1,
-												"gaus_ratio":	1,
+												"gaus_ratio":	0.3,
 												"sharp_ratio":	7,
 												"bf_gain":	4,
 												"bf_ratio":	1,
@@ -4699,10 +4688,10 @@
 											{
 												"iso":	1600,
 												"pbf_gain":	0.8,
-												"pbf_ratio":	0.7,
+												"pbf_ratio":	0.2,
 												"pbf_add":	1,
-												"gaus_ratio":	1,
-												"sharp_ratio":	5,
+												"gaus_ratio":	0.5,
+												"sharp_ratio":	6,
 												"bf_gain":	4,
 												"bf_ratio":	1,
 												"bf_add":	32,
@@ -4721,10 +4710,10 @@
 											{
 												"iso":	3200,
 												"pbf_gain":	0.8,
-												"pbf_ratio":	0.7,
+												"pbf_ratio":	0.2,
 												"pbf_add":	1,
-												"gaus_ratio":	1,
-												"sharp_ratio":	3,
+												"gaus_ratio":	0.8,
+												"sharp_ratio":	8,
 												"bf_gain":	4,
 												"bf_ratio":	1,
 												"bf_add":	32,
@@ -4743,10 +4732,10 @@
 											{
 												"iso":	6400,
 												"pbf_gain":	0.8,
-												"pbf_ratio":	0.8,
+												"pbf_ratio":	0.3,
 												"pbf_add":	1,
 												"gaus_ratio":	1,
-												"sharp_ratio":	2,
+												"sharp_ratio":	8,
 												"bf_gain":	4,
 												"bf_ratio":	1,
 												"bf_add":	32,
@@ -4765,10 +4754,10 @@
 											{
 												"iso":	12800,
 												"pbf_gain":	0.8,
-												"pbf_ratio":	0.8,
+												"pbf_ratio":	0.4,
 												"pbf_add":	1,
 												"gaus_ratio":	1,
-												"sharp_ratio":	2,
+												"sharp_ratio":	8,
 												"bf_gain":	4,
 												"bf_ratio":	1,
 												"bf_add":	32,
@@ -4790,7 +4779,7 @@
 												"pbf_ratio":	0.4,
 												"pbf_add":	1,
 												"gaus_ratio":	1,
-												"sharp_ratio":	2,
+												"sharp_ratio":	8,
 												"bf_gain":	4,
 												"bf_ratio":	1,
 												"bf_add":	32,
@@ -4812,7 +4801,7 @@
 												"pbf_ratio":	0.4,
 												"pbf_add":	1,
 												"gaus_ratio":	1,
-												"sharp_ratio":	2,
+												"sharp_ratio":	8,
 												"bf_gain":	4,
 												"bf_ratio":	1,
 												"bf_add":	32,
@@ -4834,7 +4823,7 @@
 												"pbf_ratio":	0.4,
 												"pbf_add":	1,
 												"gaus_ratio":	1,
-												"sharp_ratio":	2,
+												"sharp_ratio":	8,
 												"bf_gain":	4,
 												"bf_ratio":	1,
 												"bf_add":	32,
@@ -4856,7 +4845,7 @@
 												"pbf_ratio":	0.4,
 												"pbf_add":	1,
 												"gaus_ratio":	1,
-												"sharp_ratio":	2,
+												"sharp_ratio":	8,
 												"bf_gain":	4,
 												"bf_ratio":	1,
 												"bf_add":	32,
@@ -4885,7 +4874,7 @@
 												"pbf_ratio":	0,
 												"pbf_add":	1,
 												"gaus_ratio":	0,
-												"sharp_ratio":	6,
+												"sharp_ratio":	15,
 												"bf_gain":	2,
 												"bf_ratio":	1,
 												"bf_add":	32,
@@ -4907,7 +4896,7 @@
 												"pbf_ratio":	0,
 												"pbf_add":	1,
 												"gaus_ratio":	0,
-												"sharp_ratio":	6,
+												"sharp_ratio":	15,
 												"bf_gain":	3,
 												"bf_ratio":	1,
 												"bf_add":	32,
@@ -4929,7 +4918,7 @@
 												"pbf_ratio":	0,
 												"pbf_add":	1,
 												"gaus_ratio":	0,
-												"sharp_ratio":	6,
+												"sharp_ratio":	15,
 												"bf_gain":	3,
 												"bf_ratio":	1,
 												"bf_add":	32,
@@ -4951,7 +4940,7 @@
 												"pbf_ratio":	0,
 												"pbf_add":	1,
 												"gaus_ratio":	0,
-												"sharp_ratio":	7,
+												"sharp_ratio":	15,
 												"bf_gain":	4,
 												"bf_ratio":	1,
 												"bf_add":	32,
@@ -4972,8 +4961,8 @@
 												"pbf_gain":	0.8,
 												"pbf_ratio":	0.2,
 												"pbf_add":	1,
-												"gaus_ratio":	1,
-												"sharp_ratio":	7,
+												"gaus_ratio":	0.3,
+												"sharp_ratio":	12,
 												"bf_gain":	4,
 												"bf_ratio":	1,
 												"bf_add":	32,
@@ -4994,8 +4983,8 @@
 												"pbf_gain":	0.8,
 												"pbf_ratio":	0.2,
 												"pbf_add":	1,
-												"gaus_ratio":	1,
-												"sharp_ratio":	8,
+												"gaus_ratio":	0.5,
+												"sharp_ratio":	10,
 												"bf_gain":	4,
 												"bf_ratio":	1,
 												"bf_add":	32,
@@ -5016,7 +5005,7 @@
 												"pbf_gain":	0.8,
 												"pbf_ratio":	0.2,
 												"pbf_add":	1,
-												"gaus_ratio":	1,
+												"gaus_ratio":	0.8,
 												"sharp_ratio":	8,
 												"bf_gain":	4,
 												"bf_ratio":	1,

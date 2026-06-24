@@ -1,4 +1,4 @@
-# 项目架构索引（单一真相）
+# 项目架构索引
 
 > Agent / 开发者改模块前先查此表。细节见各模块 `*.md`，不要在此重复长文。
 
@@ -11,9 +11,10 @@
 | 相机 | `rongsu_camera` | `app/camera/main.cpp` | [camera/CAMERA.md](../app/camera/CAMERA.md) | `/var/log/rongsu_camera.log` |
 | 相机测试 | `test_camera` | `test/camera/main.cpp` | [test/TEST.md](../test/TEST.md) | `/var/log/test_camera.log` |
 
-启动：`scripts/rongsu.sh start`（先后端、再 UI）。  
+启动：`scripts/rongsu.sh start`（Glavo → 可选 `test_camera` → UI）。  
 编译：`./build.sh`（Release + 工具链，产物在 `output/`；`clean` / `reconfigure` 见脚本头注释）。  
-注意：测试伪进程和真实进程互斥，比如相机进程和相机测试进程只能启动一个。
+**开发默认**：`rongsu.sh` 不启 `rongsu_camera`，由 `test_camera` 充当 `APP_CAMERA`（同 socket `/tmp/upc_camera.sock`）。  
+**板端生产**：单独启动 `rongsu_camera`；与 `test_camera` **互斥**，二者只能运行其一。
 
 ## 顶层目录
 
@@ -34,33 +35,52 @@
 | `app/parser/` | [PARSER.md](../app/parser/PARSER.md) | G-code/OVF 解析库（Glavo 链接） |
 | `app/protocol/` | [PROTOCOL.md](../app/protocol/PROTOCOL.md) | MCU 线协议（TCP `BE EF` + 串口 `5A A5`） |
 
-## Glavo 库（`app/glavo/lib/`）
+## Glavo 库（`app/glavo/lib/` → `upc::glavo`）
 
 | 符号 | 路径 | 一句话 |
 |------|------|--------|
-| `GlavoService` | `glavo_service.*` | IPC 业务编排（打印/目录/门控） |
+| `GlavoService` | `glavo_service.*` | IPC 业务编排 + 工作线程（打印/目录/门控） |
 | `McuLink` | `mcu_link.*` | TCP 运动 + 串口握手/传感器 |
-| `ServiceBase` | `service_base.*` | MsgBus 生命周期 + 工作线程 |
 | `PrintJobState` | `print_job_state.*` | 打印任务计数/状态 |
 | `PrintVideoNotify` | `print_video_notify.*` | 换层 Snap / 录像会话 IPC → Camera |
+| `glavo_parser_bind_init()` | `glavo_parser_bridge.*` | RingBuffer → McuLink 绑定 |
+| `device_config.hpp` | 头文件 | TCP/串口默认、`GLAVO_ENABLE_LAYER_SNAP` 等 |
 
-## Camera 库（`app/camera/lib/`）
+## Camera（`app/camera/lib/` → 源编入 `rongsu_camera`，无独立静态库）
 
 | 符号 | 路径 | 一句话 |
 |------|------|--------|
-| `CameraService` | `camera_service.*` | IPC Server + SHM 推流 |
+| `CameraService` | `camera_service.*` | IPC Server + SHM 推流 + 录像分派 |
 | `PrintVideoRecorder` | `print_video_recorder.*` | SHM 取帧 + MPP H.264 + ffmpeg MP4 |
 | `ViCapture` | `vi_capture.*` | rkaiq + V4L2 NV12 |
+| `CameraDmaFrameSource` | `camera_dma_frame_source.*` | V4L2 dma fd 导出、stride padding |
+| `device_config.hpp` | 头文件 | 设备/分辨率/IQ/SHM/录像路径宏 |
 
-## UI core 预览（`app/ui/lib/core/`）
+## UI core（`app/ui/lib/core/` → `ui::port` 一部分）
 
 | 符号 | 路径 | 一句话 |
 |------|------|--------|
-| `CameraPreviewPlayer` | `camera_preview.*` | SHM 元数据环 + dma fd → RGA/SW BGRX → LVGL |
+| `UiMsgProxy` | `ui_msg_proxy.*` | UI ↔ Glavo IPC 封装 |
 | `CameraMsgProxy` | `camera_msg_proxy.*` | 预览开停 IPC |
+| `CameraPreviewPlayer` | `camera_preview.*` | SHM 元数据环 + dma fd → RGA/SW BGRX → LVGL |
 | `RgaDmaBuf` | `rga_dma_buf.*` | dma32 heap 缓冲（RGA fd 导入） |
+| `PageManager` / `SimplePage` | `page_manager.*` / `ui_simple_page.*` | 侧边栏 + 页面路由 |
+| `app_init()` | `ui_app.*` | 主题、Proxy、页面注册、control |
+| `control_*` | `control.*` | 打印状态机 + overlay UI |
 
-## protocol/ 库（`app/protocol/`）
+## UI 页面（`app/ui/lib/pages/`）
+
+| Page ID | 文件 | 状态 |
+|---------|------|------|
+| `user_home` | `page_user_home.*` | 首页：环境、打印模式、预览 |
+| `user_history` | `page_user_history.*` | skeleton 占位 |
+| `user_control` | `page_user_control.*` | skeleton 占位 |
+| `user_settings` | `page_user_settings.*` | 设置列表 + 开发者密码弹窗 |
+| `user_message` | `page_user_message.*` | skeleton 占位 |
+
+注册入口：`ui_app.cpp`（不在 `main.cpp` include 各页面头）。
+
+## protocol/ 库（`app/protocol/` → `upc::protocol`）
 
 | 子目录 | 协议表 | 说明 |
 |--------|--------|------|
@@ -77,7 +97,7 @@ UI → IPC → GlavoService → ParserManager → RingBuffer
                     PrintVideoNotify → IPC(UI Hub FWD) → Camera → MP4
 ```
 
-预览像素：后端（`rongsu_camera` / `test_camera`）→ 主 IPC SCM_RIGHTS 传 dma_buf fd + SHM `/upc_camera_preview` 元数据环 → UI `CameraPreviewPlayer`（RGA `importbuffer_fd` 或 SW 转 BGRX；与控制 IPC 分离）。
+预览像素：后端（`rongsu_camera` / `test_camera`）→ 主 IPC `SCM_RIGHTS` 传 dma_buf fd + SHM `/upc_camera_preview` 元数据环 → UI `CameraPreviewPlayer`（`MsgPort::take_peer_dma_fds` + RGA `importbuffer_fd` 或 SW 转 BGRX；与控制 IPC 分离）。
 
 ## 跨模块红线
 
@@ -85,7 +105,7 @@ UI → IPC → GlavoService → ParserManager → RingBuffer
 - Glavo **禁止**链接 `lvgl`
 - test **禁止**链接 `app/ui`、`app/glavo` 业务库
 - 跨进程回复 UI：**必须** `publish_async()`，目标 `ModuleId::UI`
-- 消息契约：**只改** `common/README.md` + `msg_types.hpp`（四步流程）
+- 消息契约：**只改** [common/README.md](../common/README.md) + `msg_types.hpp`（四步流程）
 - MCU 协议实现：`app/protocol/`（`upc::protocol`）+ `mcu_link.*`；权威表见 `doc/*.xlsx`
 
 ## 文档与 Agent 入口

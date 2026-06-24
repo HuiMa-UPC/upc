@@ -10,6 +10,6 @@ alwaysApply: false
 
 - IPC：[common/ipc/IPC.md](../../common/ipc/IPC.md)
 - Middleware：[common/middleware/MIDDLEWARE.md](../../common/middleware/MIDDLEWARE.md)
-- 契约：[common/contract/README.md](../../common/contract/README.md)
+- 契约：[common/README.md](../../common/README.md)
 
 勿在业务进程重复实现线协议；MsgType 变更走 contract 流程。

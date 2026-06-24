@@ -117,7 +117,8 @@
 | `APP_Print_Video_Session_Abort_Ntf` | — | Glavo→Camera（Hub FWD） | `PrintVideoSessionPayload` | — | 删临时目录 |
 
 `CameraStreamInfoPayload.dma_mode` 当前固定为 `1`：
-- 预览统一走 **dma fd 旁路**：后端通过 `dma_socket_path` 一次性发送 dma_buf fd；SHM `/upc_camera_preview` 仅保留 slot 状态元数据，像素不再走 SHM payload。
+- 预览统一走 **dma fd 旁路**：后端经主 IPC（`/tmp/upc_camera.sock`）`SCM_RIGHTS` 附带 dma_buf fd；UI 侧 `MsgPort::take_peer_dma_fds(APP_CAMERA)` 接收。SHM `/upc_camera_preview` 仅保留 slot 状态元数据，像素不再走 SHM payload。
+- `dma_socket_path` 字段为 ABI 保留，当前未使用独立 socket。
 - `test_camera` 与 `rongsu_camera` 使用同一套契约。
 
 ---

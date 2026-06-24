@@ -1,7 +1,7 @@
 # camera/ — 相机后端进程
 
 > 索引：[doc/ARCHITECTURE.md](../../doc/ARCHITECTURE.md)  
-> 可执行文件：**`rongsu_camera`**
+> 可执行文件：**`rongsu_camera`** · 库源在 `lib/`，**无独立静态库**（源直接编入可执行文件）
 
 ## 文件职责
 
@@ -23,9 +23,10 @@
 Sensor → rkaiq ISP → /dev/video0 (NV12)
   → ViCapture VIDIOC_EXPBUF 导出 dma_buf fd
   → CameraService 推流线程：
-      · 通过 /tmp/upc_camera_dma.sock (SCM_RIGHTS) 一次性把所有 fd 发给 UI
+      · 经主 IPC（/tmp/upc_camera.sock）SCM_RIGHTS 一次性把所有 fd 发给 UI Hub
       · SHM /upc_camera_preview 是 `IpcDmaFrameRing` 元数据环，只保留 slot 状态/seq/buffer_idx（不再存像素）
   → UI CameraPreviewPlayer：
+      · MsgPort::take_peer_dma_fds(APP_CAMERA) 接收 fd 表
       · 按 buffer_idx 找到 dma_buf fd
       · RGA importbuffer_fd(src_fd) 直接做 NV12→BGRX（零拷贝源）
       · 失败时 mmap 源 fd 做软件回退
@@ -83,11 +84,12 @@ Glavo→Camera 经 UI Hub 转发；`sender_id` 仍为 `APP_GLAVO`（见 IPC.md�
 
 SHM 元数据环：`stride_y` 为 V4L2 实际 Y stride（dma 模式），`buffer_idx` 指向 fd 表；像素走 dma fd。
 
-## 新增文件
+## 库文件一览
 
 | 文件 | 职责 |
 |------|------|
 | `lib/camera_dma_frame_source.*` | V4L2 dma fd 导出、stride padding；开流经主 IPC SCM_RIGHTS 传 fd |
+| `lib/device_config.hpp` | 设备、分辨率、IQ、SHM、录像路径宏 |
 
 ## 红线
 

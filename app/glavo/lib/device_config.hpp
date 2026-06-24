@@ -45,8 +45,9 @@
 #define TCP_STAGE_MAX_PACKETS  4096
 #endif
 
+//每轮从 RingBuffer 抽到 tcp_stage_ 的上限
 #ifndef REFILL_STAGE_MAX_PACKETS
-#define REFILL_STAGE_MAX_PACKETS  200
+#define REFILL_STAGE_MAX_PACKETS  500
 #endif
 
 /** cmd 缓存背压：≥ 80% 暂停运动下发 */
