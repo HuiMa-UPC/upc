@@ -30,6 +30,8 @@ typedef struct {
     void                 *user_data;
     int32_t               track_w;     /**< 轨道宽，<=0 用 USER_SLIDE_W */
     int32_t               track_h;     /**< 轨道高，<=0 用 USER_SLIDE_H */
+    bool                  custom_accent; /**< true 时用 accent_color 替代默认橙色 */
+    lv_color_t            accent_color;  /**< knob/解锁文字配色（custom_accent=true 生效） */
 } ui_slide_unlock_cfg_t;
 
 /** 在 parent 上创建一个滑动解锁条；返回句柄供后续销毁/查询用 */

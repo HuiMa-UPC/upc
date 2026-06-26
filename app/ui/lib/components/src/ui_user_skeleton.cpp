@@ -12,8 +12,7 @@ lv_obj_t *ui_user_skeleton_create(lv_obj_t *parent,
     lv_obj_set_flex_flow(page, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_style_pad_all(page, USER_PAD, 0);
     lv_obj_set_style_pad_row(page, USER_PAD, 0);
-    lv_obj_set_style_bg_color(page, user_color_bg, 0);
-    lv_obj_set_style_bg_opa(page, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_opa(page, LV_OPA_TRANSP, 0);
     lv_obj_clear_flag(page, LV_OBJ_FLAG_SCROLLABLE);
 
     lv_obj_t *title_lbl = lv_label_create(page);

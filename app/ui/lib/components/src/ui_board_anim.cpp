@@ -63,7 +63,7 @@ ui_board_anim_t *ui_board_anim_create(lv_obj_t *parent,
     lv_obj_set_size(slot, board_w + USER_PAD, slot_h);
     lv_obj_set_pos(slot, (width - (board_w + USER_PAD)) / 2, slot_y);
     lv_obj_set_style_bg_color(slot, user_color_panel_alt, 0);
-    lv_obj_set_style_bg_opa(slot, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_opa(slot, LV_OPA_40, 0);
     lv_obj_set_style_radius(slot, USER_RADIUS, 0);
     lv_obj_set_style_border_width(slot, 2, 0);
     lv_obj_set_style_border_color(slot, user_color_divider, 0);

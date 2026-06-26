@@ -14,9 +14,29 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <deque>
 #include <vector>
 
 namespace {
+
+constexpr const char* kPathLocalGcode = "/home/Gcode";
+constexpr const char* kPathUsbMount   = "/media/udisk0";
+
+enum class FileTab : uint8_t {
+    Local = 0,
+    Usb   = 1,
+};
+
+middleware::PrintFileSource file_tab_to_source(FileTab tab)
+{
+    return tab == FileTab::Usb ? middleware::PrintFileSource::Usb
+                               : middleware::PrintFileSource::Local;
+}
+
+const char* file_tab_dir_path(FileTab tab)
+{
+    return tab == FileTab::Usb ? kPathUsbMount : kPathLocalGcode;
+}
 
 /* ============================================================================
  *  状态机全局
@@ -30,9 +50,37 @@ ui_modal_dialog_t *g_current_dlg = nullptr;
 control_file_t g_active_file = {};
 lv_timer_t *g_purify_ui_tick = nullptr;
 
-/* 文件确认对话框中需动态更新的标签（由 APP_FileInfo_Rsp 驱动） */
-lv_obj_t *g_confirm_lines_lbl = nullptr;
-lv_obj_t *g_confirm_size_lbl  = nullptr;
+/* ---- 选择文件屏（设计稿 1.1.5）：底板 + 本机/USB 源 + 右侧详情面板 ---- */
+lv_obj_t *g_file_panel   = nullptr;   /**< 选择文件页根（PageManager 托管，常驻不销毁） */
+bool      g_files_page_active = false; /**< 选择文件页当前是否可见（PageManager on_enter/on_exit 维护） */
+const char *g_home_section_view = "user_home"; /**< 首页区当前视图："user_home" 或 "user_files" */
+lv_obj_t *g_file_grid    = nullptr;   /**< 文件行列表容器（源切换/响应时重建） */
+int       g_sel_index    = -1;
+FileTab   g_file_tab     = FileTab::Local;
+
+/* 本机/USB 滑动胶囊分段控件：轨道 + 滑动高亮块 + 两个文字 */
+lv_obj_t *g_seg_pill     = nullptr;   /**< 滑动高亮块（随选中左右移动） */
+lv_obj_t *g_seg_lbl_local = nullptr;
+lv_obj_t *g_seg_lbl_usb   = nullptr;
+
+/* 右侧详情面板：选中文件后填充 */
+lv_obj_t *g_detail_hint     = nullptr;  /**< 未选文件时的占位提示 */
+lv_obj_t *g_detail_body     = nullptr;  /**< 详情内容容器（选中后显示） */
+lv_obj_t *g_detail_name_lbl = nullptr;
+lv_obj_t *g_detail_time_lbl = nullptr;       /**< 本机：预估耗时 */
+lv_obj_t *g_detail_mat_lbl  = nullptr;       /**< 本机：预估耗材 */
+lv_obj_t *g_detail_size_lbl = nullptr;       /**< USB：文件大小 */
+lv_obj_t *g_detail_meta_local = nullptr;     /**< 本机详情 meta 行（耗时/耗材） */
+lv_obj_t *g_detail_meta_usb   = nullptr;     /**< USB 详情 meta 行（文件大小） */
+lv_obj_t *g_detail_secondary_btn = nullptr;  /**< 底部次按钮（本机=删除；USB 隐藏） */
+lv_obj_t *g_detail_secondary_lbl = nullptr;  /**< 次按钮文字 */
+ui_modal_dialog_t *g_confirm_dlg = nullptr;
+ui_modal_dialog_t *g_prepare_dlg = nullptr;
+
+/* 顶部供应度（耗材/滤芯）。默认值=后端未就绪时的占位（设计稿示例 48% 充足）。 */
+middleware::SupplyStatusPayload g_supply = {48.0f, 48.0f, 1, 1};
+lv_obj_t *g_supply_mat_bar = nullptr, *g_supply_mat_pct = nullptr, *g_supply_mat_status = nullptr;
+lv_obj_t *g_supply_filt_bar = nullptr, *g_supply_filt_pct = nullptr, *g_supply_filt_status = nullptr;
 
 /* ---------- 后端异步状态（UiMsgProxy 适配，仅本文件使用） ---------- */
 bool  g_proxy_wired = false;
@@ -58,12 +106,27 @@ void      *g_job_u = nullptr;
 void (*g_on_action_fail)(const char *message) = nullptr;
 
 std::vector<control_file_t> g_files;
-std::vector<control_file_t> g_files_snapshot;
-bool g_files_frozen = false;
+
+/** Fs_DirOpen 请求队列：Glavo 按 FIFO 应答，弹出项须与当前 Tab 一致才刷新 UI */
+std::deque<FileTab> g_dir_open_pending;
+
+void request_fs_dir_open(FileTab tab)
+{
+    g_dir_open_pending.push_back(tab);
+    ui::UiMsgProxy::instance().send_fs_dir_open(file_tab_dir_path(tab));
+}
 
 void enter_state(control_state_t s);
 void start_purify_ui_tick(void);
 void stop_purify_ui_tick(void);
+void rebuild_file_grid(void);
+void refresh_supply_bars(void);
+void highlight_file_rows(void);
+void update_detail_panel(const control_file_t *file);
+void close_confirm_dlg(void);
+void close_prepare_dlg(void);
+void abort_print_flow(void);
+void show_prepare_dlg(void);
 
 void invoke_done(DoneCb &cb, void *&user)
 {
@@ -78,7 +141,7 @@ void invoke_done(DoneCb &cb, void *&user)
 
 const std::vector<control_file_t> &active_files()
 {
-    return g_files_frozen ? g_files_snapshot : g_files;
+    return g_files;
 }
 
 void copy_file_entry(control_file_t &dst, const middleware::FileEntryPayload &src)
@@ -90,6 +153,8 @@ void copy_file_entry(control_file_t &dst, const middleware::FileEntryPayload &sr
     dst.index        = src.index;
     dst.duration_min = src.duration_min;
     dst.material_g   = src.material_g;
+    dst.file_size    = src.file_size;
+    dst.line_count   = src.line_count;
 }
 
 void wire_msg_proxy()
@@ -146,46 +211,67 @@ void wire_msg_proxy()
     });
 
     proxy.register_fs_dir([](const middleware::FileEntryPayload *files, uint32_t count) {
-        if(g_files_frozen) {
+        if(g_dir_open_pending.empty()) {
             return;
         }
+        const FileTab rsp_tab = g_dir_open_pending.front();
+        g_dir_open_pending.pop_front();
+        if(rsp_tab != g_file_tab) {
+            return;
+        }
+
+        /* 记住刷新前的选中文件名，刷新后按名字恢复选择（USB 热插拔自动重扫时不丢选） */
+        char prev_name[64] = {0};
+        const bool had_sel = (g_sel_index >= 0 &&
+                              g_sel_index < static_cast<int>(g_files.size()));
+        if(had_sel) {
+            std::snprintf(prev_name, sizeof(prev_name), "%s", g_files[g_sel_index].name);
+        }
+
         g_files.clear();
-        if(!files || count == 0) {
-            return;
+        if(files && count > 0) {
+            for(uint32_t i = 0; i < count; i++) {
+                control_file_t f = {};
+                copy_file_entry(f, files[i]);
+                g_files.push_back(f);
+            }
         }
-        for(uint32_t i = 0; i < count; i++) {
-            control_file_t f = {};
-            copy_file_entry(f, files[i]);
-            g_files.push_back(f);
+
+        /* 恢复选择：原选中文件若仍在则保持，否则回空态 */
+        g_sel_index = -1;
+        if(had_sel) {
+            for(size_t i = 0; i < g_files.size(); i++) {
+                if(std::strcmp(g_files[i].name, prev_name) == 0) {
+                    g_sel_index = static_cast<int>(i);
+                    g_active_file = g_files[i];
+                    break;
+                }
+            }
+        }
+
+        /* 选择文件页可见时，目录响应到达即重建网格并同步详情 */
+        if(g_files_page_active) {
+            rebuild_file_grid();
+            update_detail_panel(g_sel_index >= 0 ? &g_active_file : nullptr);
         }
     });
 
-    proxy.register_file_info([](const middleware::FileInfoPayload &p) {
-        if(g_state != CONTROL_STATE_FILE_CONFIRM) {
+    proxy.register_supply_status([](const middleware::SupplyStatusPayload &p) {
+        g_supply = p;
+        refresh_supply_bars();
+    });
+
+    proxy.register_print_prepare_done([](bool ok) {
+        if(g_state != CONTROL_STATE_PREPARE_WAIT) {
             return;
         }
-        if(g_confirm_lines_lbl) {
-            if(p.ok) {
-                lv_label_set_text_fmt(g_confirm_lines_lbl, "%u lines", p.total_lines);
-            } else {
-                lv_label_set_text(g_confirm_lines_lbl, "—");
-            }
+        close_prepare_dlg();
+        if(!ok) {
+            ui_toast_show("Prepare failed", user_color_status_err, 2500);
+            enter_state(CONTROL_STATE_IDLE);
+            return;
         }
-        if(g_confirm_size_lbl) {
-            if(p.ok) {
-                char sz[32];
-                if(p.file_size < 1024) {
-                    std::snprintf(sz, sizeof(sz), "%u B", p.file_size);
-                } else if(p.file_size < 1024 * 1024) {
-                    std::snprintf(sz, sizeof(sz), "%.1f KB", p.file_size / 1024.0);
-                } else {
-                    std::snprintf(sz, sizeof(sz), "%.2f MB", p.file_size / (1024.0 * 1024.0));
-                }
-                lv_label_set_text(g_confirm_size_lbl, sz);
-            } else {
-                lv_label_set_text(g_confirm_size_lbl, "—");
-            }
-        }
+        enter_state(CONTROL_STATE_D1_INSERT_PROMPT);
     });
 
     proxy.register_print_progress([](const middleware::PrintProgressPayload &p) {
@@ -229,7 +315,9 @@ void backend_reset_session()
     g_pm25_high = false;
     g_purify_progress = 0;
     g_job_running = false;
-    ui::UiMsgProxy::instance().send_fs_dir_open();
+    g_file_tab = FileTab::Local;
+    g_sel_index = -1;
+    ui::UiMsgProxy::instance().send_supply_status();
 }
 
 void backend_cancel_pending()
@@ -277,18 +365,6 @@ void backend_start_close_door(DoneCb cb, void *u)
     ui::UiMsgProxy::instance().send_close_door_check();
 }
 
-void backend_freeze_files()
-{
-    g_files_snapshot = g_files;
-    g_files_frozen = true;
-}
-
-void backend_unfreeze_files()
-{
-    g_files_frozen = false;
-    g_files_snapshot.clear();
-}
-
 size_t backend_file_count()
 {
     return active_files().size();
@@ -300,16 +376,6 @@ const control_file_t *backend_get_file(size_t index)
     return index < files.size() ? &files[index] : nullptr;
 }
 
-void backend_get_supply_status(bool *material_ready, bool *hepa_ready)
-{
-    if(material_ready) {
-        *material_ready = true;
-    }
-    if(hepa_ready) {
-        *hepa_ready = true;
-    }
-}
-
 void backend_start_job(const control_file_t *file, ProgressCb prog_cb, DoneCb done_cb, void *u)
 {
     g_job_prog_cb = prog_cb;
@@ -318,7 +384,7 @@ void backend_start_job(const control_file_t *file, ProgressCb prog_cb, DoneCb do
     g_job_running = true;
 
     const uint32_t file_index = file ? file->index : 0;
-    ui::UiMsgProxy::instance().send_print_start(file_index);
+    ui::UiMsgProxy::instance().send_print_start(file_index, file_tab_to_source(g_file_tab));
 }
 
 void backend_terminate_job()
@@ -353,8 +419,10 @@ void close_current_dialog(void)
         ui_modal_dialog_close(g_current_dlg);
         g_current_dlg = nullptr;
     }
-    g_confirm_lines_lbl = nullptr;
-    g_confirm_size_lbl  = nullptr;
+    close_confirm_dlg();
+    close_prepare_dlg();
+    /* 注意：选择文件页（g_file_panel 及其内部控件）现由 PageManager 托管、常驻不销毁，
+     * 这里不再删除/清空其句柄。 */
 }
 
 /* ============================================================================
@@ -514,14 +582,14 @@ void on_insert_shortcut(lv_event_t * /*e*/)
 void on_insert_close(lv_event_t * /*e*/)
 {
     if(g_state == CONTROL_STATE_D1_INSERT_PROMPT) {
-        enter_state(CONTROL_STATE_IDLE);
+        abort_print_flow();
     }
 }
 
 ui_modal_dialog_t *show_insert_prompt(lv_obj_t *parent)
 {
     ui_modal_dialog_cfg_t cfg =
-        ui_modal_dialog_cfg_user("Insert Print Board?", USER_DLG_W, false);
+        ui_modal_dialog_cfg_user("Is the build plate inserted?", USER_DLG_W, false);
         cfg.with_close_btn = true;
     ui_modal_dialog_t *dlg = ui_modal_dialog_open(parent, &cfg);
     if(!dlg) {
@@ -532,18 +600,21 @@ ui_modal_dialog_t *show_insert_prompt(lv_obj_t *parent)
         lv_obj_add_event_cb(dlg->close_btn, on_insert_close, LV_EVENT_CLICKED, nullptr);
     }
 
+    ui_user_make_body_label(dlg->body,
+                            "Insert the build plate, then close the door");
+
     ui_board_anim_create(dlg->body,
                          USER_DLG_W - USER_DLG_PAD * 2,
                          USER_DLG_BODY_MIN_H);
 
     ui_slide_unlock_cfg_t slide_cfg = {};
-    slide_cfg.hint_text = "Slide to Unlock  " LV_SYMBOL_RIGHT LV_SYMBOL_RIGHT LV_SYMBOL_RIGHT;
+    slide_cfg.hint_text = "SWIPE TO OPEN  " LV_SYMBOL_RIGHT LV_SYMBOL_RIGHT LV_SYMBOL_RIGHT;
     slide_cfg.on_unlocked = on_insert_unlocked;
     slide_cfg.user_data = dlg;
     ui_slide_unlock_create(dlg->body, &slide_cfg);
 
     ui_user_make_ghost_link_btn(dlg->body,
-                                "Board inserted, start printing " LV_SYMBOL_RIGHT,
+                                "Plate inserted, start printing " LV_SYMBOL_RIGHT,
                                 on_insert_shortcut);
     return dlg;
 }
@@ -568,251 +639,796 @@ ui_modal_dialog_t *show_door_close_check(lv_obj_t *parent)
     return dlg;
 }
 
+/* 文件大小（字节）→ 人类可读字符串 */
+void format_file_size(char *buf, size_t n, uint32_t bytes)
+{
+    if(bytes >= 1024u * 1024u) {
+        std::snprintf(buf, n, "%.1f MB", (double)bytes / (1024.0 * 1024.0));
+    } else if(bytes >= 1024u) {
+        std::snprintf(buf, n, "%.1f KB", (double)bytes / 1024.0);
+    } else {
+        std::snprintf(buf, n, "%u B", bytes);
+    }
+}
+
+/* 选中文件 → 填充右侧详情面板。
+ * 本机：预估耗时/耗材 + 删除按钮（原样）；USB：仅文件大小，无次按钮。 */
+void update_detail_panel(const control_file_t *file)
+{
+    const bool has = (file != nullptr);
+    if(g_detail_hint) {
+        if(has) lv_obj_add_flag(g_detail_hint, LV_OBJ_FLAG_HIDDEN);
+        else    lv_obj_clear_flag(g_detail_hint, LV_OBJ_FLAG_HIDDEN);
+    }
+    if(g_detail_body) {
+        if(has) lv_obj_clear_flag(g_detail_body, LV_OBJ_FLAG_HIDDEN);
+        else    lv_obj_add_flag(g_detail_body, LV_OBJ_FLAG_HIDDEN);
+    }
+    if(!has) {
+        return;
+    }
+
+    const bool is_usb = (g_file_tab == FileTab::Usb);
+
+    if(g_detail_name_lbl) {
+        lv_label_set_text(g_detail_name_lbl, file->name);
+    }
+
+    /* meta 行：本机显示耗时/耗材，USB 显示文件大小（互斥） */
+    if(g_detail_meta_local) {
+        if(is_usb) lv_obj_add_flag(g_detail_meta_local, LV_OBJ_FLAG_HIDDEN);
+        else       lv_obj_clear_flag(g_detail_meta_local, LV_OBJ_FLAG_HIDDEN);
+    }
+    if(g_detail_meta_usb) {
+        if(is_usb) lv_obj_clear_flag(g_detail_meta_usb, LV_OBJ_FLAG_HIDDEN);
+        else       lv_obj_add_flag(g_detail_meta_usb, LV_OBJ_FLAG_HIDDEN);
+    }
+    if(!is_usb) {
+        if(g_detail_time_lbl) {
+            char dur[32];
+            ui_user_format_duration_min(dur, sizeof(dur), file->duration_min);
+            lv_label_set_text(g_detail_time_lbl, dur);
+        }
+        if(g_detail_mat_lbl) {
+            lv_label_set_text_fmt(g_detail_mat_lbl, "%.1f g", (double)file->material_g);
+        }
+    } else if(g_detail_size_lbl) {
+        char sz[32];
+        format_file_size(sz, sizeof(sz), file->file_size);
+        lv_label_set_text(g_detail_size_lbl, sz);
+    }
+
+    /* 次按钮：仅本机显示“删除该文件”，USB 无次按钮 */
+    if(g_detail_secondary_btn) {
+        if(is_usb) lv_obj_add_flag(g_detail_secondary_btn, LV_OBJ_FLAG_HIDDEN);
+        else       lv_obj_clear_flag(g_detail_secondary_btn, LV_OBJ_FLAG_HIDDEN);
+    }
+    if(g_detail_secondary_lbl) {
+        lv_label_set_text(g_detail_secondary_lbl, "Delete File");
+    }
+}
+
 void on_file_card_click(lv_event_t *e)
 {
     const size_t index =
         static_cast<size_t>(reinterpret_cast<uintptr_t>(lv_event_get_user_data(e)));
     const control_file_t *file = backend_get_file(index);
-    if(!file || g_state != CONTROL_STATE_FILE_SELECT) {
+    if(!file || !g_files_page_active) {
         return;
     }
+    /* 再次点击已选中的文件 → 取消选中，回到空态 */
+    if(g_sel_index == static_cast<int>(index)) {
+        g_sel_index = -1;
+        update_detail_panel(nullptr);
+        highlight_file_rows();
+        return;
+    }
+    g_sel_index = static_cast<int>(index);
     g_active_file = *file;
-    ui::UiMsgProxy::instance().send_file_info_req(static_cast<uint32_t>(index));
-    enter_state(CONTROL_STATE_FILE_CONFIRM);
+    update_detail_panel(file);
+    highlight_file_rows();
+    /* 不再在选择时请求 file_info：详情用目录项数据即可，避免后端为预览而全量解析阻塞 */
 }
 
 void on_file_select_cancel(lv_event_t * /*e*/)
 {
-    enter_state(CONTROL_STATE_IDLE);
+    /* 选择文件页的返回键：首页区视图切回仪表盘 */
+    g_home_section_view = "user_home";
+    ui::PageManager::instance().switch_to("user_home");
 }
 
+/* 详情面板「Start Print」→ Prepare → D1… */
+void on_detail_start_print(lv_event_t * /*e*/)
+{
+    if(!g_files_page_active || g_sel_index < 0) {
+        return;
+    }
+    enter_state(CONTROL_STATE_PREPARE_WAIT);
+    ui::UiMsgProxy::instance().send_print_prepare(
+        static_cast<uint32_t>(g_sel_index), file_tab_to_source(g_file_tab));
+}
+
+void close_confirm_dlg(void)
+{
+    if(g_confirm_dlg) {
+        ui_modal_dialog_close(g_confirm_dlg);
+        g_confirm_dlg = nullptr;
+    }
+}
+
+void on_delete_cancel(lv_event_t * /*e*/)
+{
+    close_confirm_dlg();
+}
+
+void on_delete_confirm(lv_event_t * /*e*/)
+{
+    close_confirm_dlg();
+    if(g_state != CONTROL_STATE_IDLE || g_sel_index < 0 || g_file_tab != FileTab::Local) {
+        return;
+    }
+    const uint32_t idx = static_cast<uint32_t>(g_sel_index);
+    ui::UiMsgProxy::instance().send_fs_delete_ntf(idx, middleware::PrintFileSource::Local);
+    g_sel_index = -1;
+    g_active_file = {};
+    update_detail_panel(nullptr);
+    request_fs_dir_open(FileTab::Local);
+}
+
+/* 通用二次确认弹窗页脚按钮：cancel=描边；confirm=填充色（危险/强调） */
+lv_obj_t *make_confirm_footer_btn(lv_obj_t *footer, const char *text,
+                                  bool filled, lv_color_t fill_color,
+                                  lv_event_cb_t cb)
+{
+    lv_obj_t *btn = lv_button_create(footer);
+    lv_obj_remove_style_all(btn);
+    lv_obj_set_size(btn, USER_DLG_FOOTER_BTN_W, USER_DLG_FOOTER_BTN_H);
+    lv_obj_set_style_radius(btn, LV_RADIUS_CIRCLE, 0);
+    if(filled) {
+        lv_obj_set_style_bg_color(btn, fill_color, 0);
+        lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, 0);
+        lv_obj_set_style_bg_opa(btn, LV_OPA_80, LV_STATE_PRESSED);
+    } else {
+        lv_obj_set_style_bg_opa(btn, LV_OPA_TRANSP, 0);
+        lv_obj_set_style_bg_color(btn, user_color_panel_alt, LV_STATE_PRESSED);
+        lv_obj_set_style_bg_opa(btn, LV_OPA_30, LV_STATE_PRESSED);
+        lv_obj_set_style_border_width(btn, 1, 0);
+        lv_obj_set_style_border_color(btn, user_color_divider, 0);
+    }
+    lv_obj_add_event_cb(btn, cb, LV_EVENT_CLICKED, nullptr);
+    lv_obj_t *lbl = lv_label_create(btn);
+    lv_label_set_text(lbl, text);
+    lv_obj_set_style_text_color(lbl, user_color_text, 0);
+    lv_obj_set_style_text_font(lbl, user_font_text(), 0);
+    lv_obj_center(lbl);
+    return btn;
+}
+
+/* 通用二次确认弹窗（用户层 ui_modal_dialog 风格）：取消(描边) + 确认(填充色)。
+ * 删除文件 / 终止打印共用，保证两处风格一致。 */
+void open_user_confirm_dialog(lv_obj_t *parent, const char *title, const char *body,
+                              const char *cancel_text, const char *confirm_text,
+                              lv_color_t confirm_color,
+                              lv_event_cb_t cancel_cb, lv_event_cb_t confirm_cb)
+{
+    if(g_confirm_dlg || !parent) {
+        return;
+    }
+    ui_modal_dialog_cfg_t cfg = ui_modal_dialog_cfg_user(title, USER_DLG_W, true);
+    g_confirm_dlg = ui_modal_dialog_open(parent, &cfg);
+    if(!g_confirm_dlg) {
+        return;
+    }
+
+    lv_obj_t *body_lbl = ui_user_make_body_label(g_confirm_dlg->body, body);
+    lv_label_set_long_mode(body_lbl, LV_LABEL_LONG_MODE_WRAP);
+    lv_obj_set_width(body_lbl, LV_PCT(100));
+    lv_obj_set_style_text_align(body_lbl, LV_TEXT_ALIGN_CENTER, 0);
+
+    make_confirm_footer_btn(g_confirm_dlg->footer, cancel_text, false,
+                            user_color_panel_alt, cancel_cb);
+    make_confirm_footer_btn(g_confirm_dlg->footer, confirm_text, true,
+                            confirm_color, confirm_cb);
+}
+
+/* 删除二次确认弹窗：取消 / 删除（红色危险按钮） */
+void show_delete_confirm(void)
+{
+    char msg[96];
+    std::snprintf(msg, sizeof(msg), "\"%s\" will be permanently deleted.", g_active_file.name);
+    /* 文件页 IDLE 时 g_overlay 隐藏，须挂 top layer（同 control_terminate_request） */
+    open_user_confirm_dialog(lv_layer_top(), "Delete this file?", msg,
+                             "Cancel", "Delete", ui_color_danger,
+                             on_delete_cancel, on_delete_confirm);
+}
+
+void close_prepare_dlg(void)
+{
+    if(g_prepare_dlg) {
+        ui_modal_dialog_close(g_prepare_dlg);
+        g_prepare_dlg = nullptr;
+    }
+}
+
+void show_prepare_dlg(void)
+{
+    if(g_prepare_dlg || !g_overlay) {
+        return;
+    }
+    ui_modal_dialog_cfg_t cfg =
+        ui_modal_dialog_cfg_user("Preparing Print File", USER_DLG_W, false);
+    g_prepare_dlg = ui_modal_dialog_open(g_overlay, &cfg);
+    if(!g_prepare_dlg) {
+        return;
+    }
+
+    ui_user_make_body_label(g_prepare_dlg->body,
+                            "Copying and scanning file, please wait");
+
+    lv_obj_t *vc = ui_user_make_spinner_container(g_prepare_dlg->body, USER_SPINNER_SZ);
+    ui_arc_spinner_t *sp = ui_arc_spinner_create(vc, USER_SPINNER_SZ);
+    if(sp && sp->root) {
+        lv_obj_center(sp->root);
+    }
+}
+
+void abort_print_flow(void)
+{
+    ui::UiMsgProxy::instance().send_parser_exit();
+    enter_state(CONTROL_STATE_IDLE);
+    g_home_section_view = "user_files";
+    if(g_files_page_active) {
+        /* 保持当前 Tab，不刷新列表 */
+    } else {
+        ui::PageManager::instance().switch_to("user_files");
+    }
+}
+
+/* 详情面板底部次按钮：仅本机显示 → 删除该文件（二次确认） */
+void on_detail_secondary(lv_event_t * /*e*/)
+{
+    if(g_state != CONTROL_STATE_IDLE || g_sel_index < 0 || g_file_tab != FileTab::Local) {
+        return;
+    }
+    show_delete_confirm();
+}
+
+void refresh_supply_bars(void)
+{
+    if(g_supply_mat_bar) {
+        lv_bar_set_value(g_supply_mat_bar, (int)g_supply.material_pct, LV_ANIM_ON);
+        lv_obj_set_style_bg_color(g_supply_mat_bar,
+            g_supply.material_ok ? user_color_status_ok : user_color_status_err,
+            LV_PART_INDICATOR);
+    }
+    if(g_supply_mat_pct) {
+        lv_label_set_text_fmt(g_supply_mat_pct, "%d%%", (int)g_supply.material_pct);
+    }
+    if(g_supply_mat_status) {
+        lv_label_set_text(g_supply_mat_status, g_supply.material_ok ? "Adequate" : "Low");
+        lv_obj_set_style_text_color(g_supply_mat_status,
+            g_supply.material_ok ? user_color_status_ok : user_color_status_err, 0);
+    }
+    if(g_supply_filt_bar) {
+        lv_bar_set_value(g_supply_filt_bar, (int)g_supply.filter_pct, LV_ANIM_ON);
+        lv_obj_set_style_bg_color(g_supply_filt_bar,
+            g_supply.filter_ok ? user_color_status_ok : user_color_status_err,
+            LV_PART_INDICATOR);
+    }
+    if(g_supply_filt_pct) {
+        lv_label_set_text_fmt(g_supply_filt_pct, "%d%%", (int)g_supply.filter_pct);
+    }
+    if(g_supply_filt_status) {
+        lv_label_set_text(g_supply_filt_status, g_supply.filter_ok ? "Adequate" : "Low");
+        lv_obj_set_style_text_color(g_supply_filt_status,
+            g_supply.filter_ok ? user_color_status_ok : user_color_status_err, 0);
+    }
+}
+
+/* 移动滑动胶囊高亮块到当前源，并刷新两个文字的明暗 */
+void seg_set_active(FileTab tab, bool animate)
+{
+    if(g_seg_pill) {
+        const int32_t pill_w = lv_obj_get_width(g_seg_pill);
+        const int32_t target = (tab == FileTab::Local) ? 0 : pill_w;
+        if(animate) {
+            lv_anim_t a;
+            lv_anim_init(&a);
+            lv_anim_set_var(&a, g_seg_pill);
+            lv_anim_set_exec_cb(&a, (lv_anim_exec_xcb_t)lv_obj_set_x);
+            lv_anim_set_values(&a, lv_obj_get_x(g_seg_pill), target);
+            lv_anim_set_duration(&a, 180);
+            lv_anim_set_path_cb(&a, lv_anim_path_ease_out);
+            lv_anim_start(&a);
+        } else {
+            lv_obj_set_x(g_seg_pill, target);
+        }
+    }
+    if(g_seg_lbl_local) {
+        lv_obj_set_style_text_color(g_seg_lbl_local,
+            tab == FileTab::Local ? user_color_text : user_color_text_dim, 0);
+    }
+    if(g_seg_lbl_usb) {
+        lv_obj_set_style_text_color(g_seg_lbl_usb,
+            tab == FileTab::Usb ? user_color_text : user_color_text_dim, 0);
+    }
+}
+
+void switch_source(FileTab tab)
+{
+    if(g_file_tab == tab) {
+        return;
+    }
+    g_file_tab = tab;
+    g_sel_index = -1;
+    seg_set_active(tab, true);
+    update_detail_panel(nullptr);
+    g_files.clear();
+    rebuild_file_grid();
+    request_fs_dir_open(tab);
+}
+
+void on_tab_local(lv_event_t * /*e*/) { switch_source(FileTab::Local); }
+void on_tab_usb(lv_event_t * /*e*/)   { switch_source(FileTab::Usb); }
+
+/* 设计稿为横向列表行：缩略图 + 名称 + （耗时 / 耗材）meta */
 lv_obj_t *make_file_card(lv_obj_t *parent, const control_file_t *file, size_t index)
 {
-    lv_obj_t *card = lv_button_create(parent);
-    lv_obj_remove_style_all(card);
-    lv_obj_set_size(card, USER_FILE_CARD_W, USER_FILE_CARD_H);
-    lv_obj_set_style_bg_color(card, user_color_panel, 0);
-    lv_obj_set_style_bg_opa(card, LV_OPA_COVER, 0);
-    lv_obj_set_style_bg_color(card, user_color_panel_alt, LV_STATE_PRESSED);
-    lv_obj_set_style_border_width(card, 1, 0);
-    lv_obj_set_style_border_color(card, user_color_divider, 0);
-    lv_obj_set_style_border_color(card, user_color_accent, LV_STATE_PRESSED);
-    lv_obj_set_style_radius(card, USER_RADIUS, 0);
-    lv_obj_set_style_pad_all(card, USER_PAD_SM, 0);
-    lv_obj_set_style_pad_row(card, USER_PAD_SM, 0);
-    lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_flex_align(card, LV_FLEX_ALIGN_START,
-                          LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
-    lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_add_event_cb(card, on_file_card_click, LV_EVENT_CLICKED,
+    const int32_t thumb_sz = USER_PAD * 3;   /* 方形缩略图，随 profile 缩放 */
+
+    lv_obj_t *row = lv_button_create(parent);
+    lv_obj_remove_style_all(row);
+    lv_obj_set_width(row, LV_PCT(100));
+    lv_obj_set_height(row, LV_SIZE_CONTENT);
+    lv_obj_set_style_bg_color(row, user_color_panel, 0);
+    lv_obj_set_style_bg_opa(row, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_color(row, user_color_panel_alt, LV_STATE_PRESSED);
+    lv_obj_set_style_border_width(row, 1, 0);
+    lv_obj_set_style_border_color(row, user_color_divider, 0);
+    lv_obj_set_style_radius(row, USER_RADIUS, 0);
+    lv_obj_set_style_pad_all(row, USER_PAD_SM, 0);
+    lv_obj_set_style_pad_column(row, USER_PAD, 0);
+    lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(row, LV_FLEX_ALIGN_START,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_event_cb(row, on_file_card_click, LV_EVENT_SHORT_CLICKED,
                         reinterpret_cast<void *>(static_cast<uintptr_t>(index)));
 
-    lv_obj_t *thumb = ui_user_make_accent_preview(card, LV_PCT(100), USER_FILE_THUMB_H);
+    /* 缩略图（中性灰圆角块 + 文件图标，无设计稿渲染图时的占位） */
+    lv_obj_t *thumb = lv_obj_create(row);
+    lv_obj_remove_style_all(thumb);
+    lv_obj_set_size(thumb, thumb_sz, thumb_sz);
+    lv_obj_set_style_bg_color(thumb, user_color_panel_alt, 0);
+    lv_obj_set_style_bg_opa(thumb, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(thumb, USER_RADIUS, 0);
+    lv_obj_clear_flag(thumb, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_remove_flag(thumb, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_t *ticon = lv_label_create(thumb);
+    lv_label_set_text(ticon, LV_SYMBOL_FILE);
+    lv_obj_set_style_text_color(ticon, user_color_text_dim, 0);
+    lv_obj_set_style_text_font(ticon, user_font_text(), 0);
+    lv_obj_center(ticon);
 
-    lv_obj_t *type_lbl = lv_label_create(thumb);
-    lv_label_set_text(type_lbl, ".gcode");
-    lv_obj_set_style_text_color(type_lbl, user_color_text, 0);
-    lv_obj_set_style_text_font(type_lbl, user_font_text(), 0);
-    lv_obj_set_style_text_opa(type_lbl, LV_OPA_80, 0);
-    lv_obj_align(type_lbl, LV_ALIGN_BOTTOM_RIGHT, -USER_PAD_SM, -USER_PAD_SM);
+    /* 文字列：名称 + meta */
+    lv_obj_t *col = lv_obj_create(row);
+    lv_obj_remove_style_all(col);
+    lv_obj_set_flex_grow(col, 1);
+    lv_obj_set_height(col, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(col, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_row(col, USER_PAD_SM / 2, 0);
+    lv_obj_set_style_bg_opa(col, LV_OPA_TRANSP, 0);
+    lv_obj_clear_flag(col, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_remove_flag(col, LV_OBJ_FLAG_CLICKABLE);
 
-    lv_obj_t *name = lv_label_create(card);
+    lv_obj_t *name = lv_label_create(col);
     lv_label_set_text(name, file->name);
     lv_label_set_long_mode(name, LV_LABEL_LONG_MODE_DOTS);
     lv_obj_set_width(name, LV_PCT(100));
     lv_obj_set_style_text_color(name, user_color_text, 0);
     lv_obj_set_style_text_font(name, user_font_text(), 0);
 
-    char info[64];
-    ui_user_format_file_meta(info, sizeof(info),
-                             file->duration_min, file->material_g);
-    lv_obj_t *meta = lv_label_create(card);
-    lv_label_set_text(meta, info);
-    lv_obj_set_style_text_color(meta, user_color_text_dim, 0);
-    lv_obj_set_style_text_font(meta, user_font_caption(), 0);
-
-    return card;
-}
-
-ui_modal_dialog_t *show_file_select(lv_obj_t *parent)
-{
-    const ui_modal_dialog_cfg_t cfg =
-        ui_modal_dialog_cfg_user("Select Print File", USER_FILE_SEL_W, true);
-    ui_modal_dialog_t *dlg = ui_modal_dialog_open(parent, &cfg);
-    if(!dlg) {
-        return nullptr;
+    /* USB 列表行不显示预估耗时/耗材（仅本机显示） */
+    if(g_file_tab != FileTab::Usb) {
+        char info[64];
+        ui_user_format_file_meta(info, sizeof(info),
+                                 file->duration_min, file->material_g);
+        lv_obj_t *meta = lv_label_create(col);
+        lv_label_set_text(meta, info);
+        lv_obj_set_style_text_color(meta, user_color_text_dim, 0);
+        lv_obj_set_style_text_font(meta, user_font_caption(), 0);
     }
 
-    lv_obj_t *grid = lv_obj_create(dlg->body);
-    lv_obj_remove_style_all(grid);
-    lv_obj_set_width(grid, LV_PCT(100));
-    lv_obj_set_height(grid, USER_FILE_SEL_H);
-    lv_obj_set_flex_flow(grid, LV_FLEX_FLOW_ROW_WRAP);
-    lv_obj_set_flex_align(grid, LV_FLEX_ALIGN_START,
-                          LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
-    lv_obj_set_style_pad_column(grid, USER_PAD, 0);
-    lv_obj_set_style_pad_row(grid, USER_PAD, 0);
-    lv_obj_set_style_bg_opa(grid, LV_OPA_TRANSP, 0);
+    return row;
+}
 
+void highlight_file_rows(void)
+{
+    if(!g_file_grid) {
+        return;
+    }
+    const uint32_t n = lv_obj_get_child_count(g_file_grid);
+    for(uint32_t i = 0; i < n; i++) {
+        lv_obj_t *row = lv_obj_get_child(g_file_grid, i);
+        const bool sel = (static_cast<int>(i) == g_sel_index);
+        /* 选中态：橙描边 + 橙色半透明底（设计稿 #FF7843@0.1 + 橙边） */
+        lv_obj_set_style_border_color(row,
+            sel ? user_color_accent : user_color_divider, 0);
+        lv_obj_set_style_border_width(row, sel ? 2 : 1, 0);
+        lv_obj_set_style_bg_color(row, sel ? user_color_accent : user_color_panel, 0);
+        lv_obj_set_style_bg_opa(row, sel ? LV_OPA_10 : LV_OPA_COVER, 0);
+    }
+}
+
+void rebuild_file_grid(void)
+{
+    if(!g_file_grid) {
+        return;
+    }
+    /* 保存重建前的滚动位置，重建后恢复（切回页面刷新目录时不跳回顶端） */
+    const int32_t prev_scroll_y = lv_obj_get_scroll_y(g_file_grid);
+
+    lv_obj_clean(g_file_grid);
     const size_t n = backend_file_count();
     if(n == 0) {
-        lv_obj_t *empty = ui_user_make_body_label(grid, "No print files available");
+        lv_obj_t *empty = ui_user_make_body_label(g_file_grid, "No print files available");
         lv_obj_set_style_text_align(empty, LV_TEXT_ALIGN_CENTER, 0);
         lv_obj_set_width(empty, LV_PCT(100));
-    } else {
-        for(size_t i = 0; i < n; i++) {
-            const control_file_t *file = backend_get_file(i);
-            if(file) {
-                make_file_card(grid, file, i);
-            }
+        return;
+    }
+    for(size_t i = 0; i < n; i++) {
+        const control_file_t *file = backend_get_file(i);
+        if(file) {
+            make_file_card(g_file_grid, file, i);
         }
     }
+    highlight_file_rows();
 
-    ui_user_make_footer_ghost_btn(dlg->footer, "Cancel", on_file_select_cancel);
-    return dlg;
+    /* 先让布局/滚动范围生效，再恢复滚动位置（超出范围会被自动钳制） */
+    lv_obj_update_layout(g_file_grid);
+    lv_obj_scroll_to_y(g_file_grid, prev_scroll_y, LV_ANIM_OFF);
 }
 
-void on_file_confirm_cancel(lv_event_t * /*e*/)
+/* 本机/USB 滑动胶囊分段控件：胶囊轨道 + 浮动滑块(g_seg_pill) + 两个透明点击按钮 */
+lv_obj_t *make_source_segment(lv_obj_t *parent)
 {
-    if(g_state == CONTROL_STATE_FILE_CONFIRM) {
-        ui::UiMsgProxy::instance().send_print_terminate();
-        enter_state(CONTROL_STATE_FILE_SELECT);
+    const int32_t seg_h   = USER_BACK_BTN_H * 3 / 2;      /* 比返回钮更高，避免偏扁 */
+    const int32_t seg_w   = USER_BACK_BTN_H * 9 / 2;      /* ≈3:1，贴近设计稿胶囊比例 */
+    const int32_t inner_w = seg_w - USER_PAD_SM;          /* 去掉左右内边距 */
+    const int32_t pill_w  = inner_w / 2;
+
+    lv_obj_t *track = lv_obj_create(parent);
+    lv_obj_remove_style_all(track);
+    lv_obj_set_size(track, seg_w, seg_h);
+    lv_obj_set_style_radius(track, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_bg_color(track, lv_color_black(), 0);
+    lv_obj_set_style_bg_opa(track, LV_OPA_30, 0);
+    lv_obj_set_style_pad_all(track, USER_PAD_SM / 2, 0);
+    lv_obj_set_flex_flow(track, LV_FLEX_FLOW_ROW);
+    lv_obj_clear_flag(track, LV_OBJ_FLAG_SCROLLABLE);
+
+    /* 浮动滑块（不参与 flex，绝对定位、可动画） */
+    g_seg_pill = lv_obj_create(track);
+    lv_obj_remove_style_all(g_seg_pill);
+    lv_obj_add_flag(g_seg_pill, LV_OBJ_FLAG_FLOATING);
+    lv_obj_clear_flag(g_seg_pill, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_clear_flag(g_seg_pill, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_size(g_seg_pill, pill_w, seg_h - USER_PAD_SM);
+    lv_obj_set_pos(g_seg_pill, 0, 0);
+    lv_obj_set_style_radius(g_seg_pill, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_bg_color(g_seg_pill, user_color_panel_alt, 0);
+    lv_obj_set_style_bg_opa(g_seg_pill, LV_OPA_COVER, 0);
+
+    /* 两个等宽透明点击按钮 */
+    lv_obj_t *btn_local = lv_button_create(track);
+    lv_obj_remove_style_all(btn_local);
+    lv_obj_set_size(btn_local, pill_w, LV_PCT(100));
+    lv_obj_set_style_bg_opa(btn_local, LV_OPA_TRANSP, 0);
+    lv_obj_add_event_cb(btn_local, on_tab_local, LV_EVENT_CLICKED, nullptr);
+    g_seg_lbl_local = lv_label_create(btn_local);
+    lv_label_set_text(g_seg_lbl_local, "Local");
+    lv_obj_set_style_text_font(g_seg_lbl_local, user_font_text(), 0);
+    lv_obj_center(g_seg_lbl_local);
+
+    lv_obj_t *btn_usb = lv_button_create(track);
+    lv_obj_remove_style_all(btn_usb);
+    lv_obj_set_size(btn_usb, pill_w, LV_PCT(100));
+    lv_obj_set_style_bg_opa(btn_usb, LV_OPA_TRANSP, 0);
+    lv_obj_add_event_cb(btn_usb, on_tab_usb, LV_EVENT_CLICKED, nullptr);
+    g_seg_lbl_usb = lv_label_create(btn_usb);
+    lv_label_set_text(g_seg_lbl_usb, "USB");
+    lv_obj_set_style_text_font(g_seg_lbl_usb, user_font_text(), 0);
+    lv_obj_center(g_seg_lbl_usb);
+
+    seg_set_active(g_file_tab, false);
+    return track;
+}
+
+/* 详情面板内的「耗时 / 耗材」小项：caption + value（value 句柄回传以便刷新） */
+void make_detail_inline_kv(lv_obj_t *parent, const char *caption,
+                           lv_color_t value_color, lv_obj_t **out_val)
+{
+    lv_obj_t *col = lv_obj_create(parent);
+    lv_obj_remove_style_all(col);
+    lv_obj_set_size(col, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(col, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_bg_opa(col, LV_OPA_TRANSP, 0);
+    lv_obj_clear_flag(col, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *cap = lv_label_create(col);
+    lv_label_set_text(cap, caption);
+    lv_obj_set_style_text_color(cap, user_color_text_dim, 0);
+    lv_obj_set_style_text_font(cap, user_font_caption(), 0);
+
+    lv_obj_t *val = lv_label_create(col);
+    lv_label_set_text(val, "—");
+    lv_obj_set_style_text_color(val, value_color, 0);
+    lv_obj_set_style_text_font(val, user_font_text(), 0);
+    if(out_val) {
+        *out_val = val;
     }
 }
 
-void on_file_confirm_ok(lv_event_t * /*e*/)
+void build_detail_panel(lv_obj_t *parent)
 {
-    if(g_state == CONTROL_STATE_FILE_CONFIRM) {
-        enter_state(CONTROL_STATE_PRINTING);
-    }
-}
-
-ui_modal_dialog_t *show_file_confirm(lv_obj_t *parent, const control_file_t *file)
-{
-    if(!file) {
-        return nullptr;
-    }
-
-    const ui_modal_dialog_cfg_t cfg =
-        ui_modal_dialog_cfg_user("Confirm Print File", USER_FILE_DLG_W, true);
-    ui_modal_dialog_t *dlg = ui_modal_dialog_open(parent, &cfg);
-    if(!dlg) {
-        return nullptr;
-    }
-
-    lv_obj_t *meta_row = lv_obj_create(dlg->body);
-    lv_obj_remove_style_all(meta_row);
-    lv_obj_set_width(meta_row, LV_PCT(100));
-    lv_obj_set_height(meta_row, USER_FILE_DLG_PREVIEW_H);
-    lv_obj_set_flex_flow(meta_row, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(meta_row, LV_FLEX_ALIGN_START,
+    lv_obj_t *panel = lv_obj_create(parent);
+    lv_obj_remove_style_all(panel);
+    lv_obj_set_width(panel, LV_PCT(100));
+    lv_obj_set_flex_grow(panel, 1);
+    lv_obj_set_style_bg_opa(panel, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_pad_all(panel, 0, 0);
+    lv_obj_set_flex_flow(panel, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(panel, LV_FLEX_ALIGN_START,
                           LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
-    lv_obj_set_style_pad_column(meta_row, USER_PAD, 0);
-    lv_obj_set_style_bg_opa(meta_row, LV_OPA_TRANSP, 0);
-    lv_obj_clear_flag(meta_row, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_style_pad_row(panel, USER_PAD, 0);
+    lv_obj_clear_flag(panel, LV_OBJ_FLAG_SCROLLABLE);
 
-    lv_obj_t *preview = ui_user_make_accent_preview(meta_row,
-        USER_FILE_DLG_PREVIEW_W, USER_FILE_DLG_PREVIEW_H);
+    /* 未选文件时的占位提示（垂直居中） */
+    g_detail_hint = ui_user_make_body_label(panel, "Select a file to continue");
+    lv_obj_set_width(g_detail_hint, LV_PCT(100));
+    lv_obj_set_style_text_align(g_detail_hint, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_flex_grow(g_detail_hint, 1);
 
-    lv_obj_t *preview_icon = lv_label_create(preview);
-    lv_label_set_text(preview_icon, LV_SYMBOL_FILE);
-    lv_obj_set_style_text_color(preview_icon, user_color_text, 0);
-    lv_obj_set_style_text_font(preview_icon, user_font_value(), 0);
-    lv_obj_center(preview_icon);
+    /* 选中后显示的详情内容 */
+    g_detail_body = lv_obj_create(panel);
+    lv_obj_remove_style_all(g_detail_body);
+    lv_obj_set_width(g_detail_body, LV_PCT(100));
+    lv_obj_set_flex_grow(g_detail_body, 1);
+    lv_obj_set_flex_flow(g_detail_body, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_row(g_detail_body, USER_PAD, 0);
+    lv_obj_set_style_bg_opa(g_detail_body, LV_OPA_TRANSP, 0);
+    lv_obj_clear_flag(g_detail_body, LV_OBJ_FLAG_SCROLLABLE);
 
-    lv_obj_t *info_col = lv_obj_create(meta_row);
-    lv_obj_remove_style_all(info_col);
-    lv_obj_set_size(info_col, LV_PCT(100), USER_FILE_DLG_PREVIEW_H);
-    lv_obj_set_flex_grow(info_col, 1);
-    lv_obj_set_flex_flow(info_col, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_flex_align(info_col, LV_FLEX_ALIGN_SPACE_AROUND,
+    /* 大缩略图（中性灰占位） */
+    lv_obj_t *preview = lv_obj_create(g_detail_body);
+    lv_obj_remove_style_all(preview);
+    lv_obj_set_size(preview, LV_PCT(100), USER_FILE_DLG_PREVIEW_H);
+    lv_obj_set_style_bg_color(preview, user_color_panel_alt, 0);
+    lv_obj_set_style_bg_opa(preview, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(preview, USER_RADIUS, 0);
+    lv_obj_clear_flag(preview, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_t *picon = lv_label_create(preview);
+    lv_label_set_text(picon, LV_SYMBOL_FILE);
+    lv_obj_set_style_text_color(picon, user_color_text_dim, 0);
+    lv_obj_set_style_text_font(picon, user_font_value(), 0);
+    lv_obj_center(picon);
+
+    /* 文件名 */
+    g_detail_name_lbl = lv_label_create(g_detail_body);
+    lv_label_set_text(g_detail_name_lbl, "—");
+    lv_label_set_long_mode(g_detail_name_lbl, LV_LABEL_LONG_MODE_DOTS);
+    lv_obj_set_width(g_detail_name_lbl, LV_PCT(100));
+    lv_obj_set_style_text_color(g_detail_name_lbl, user_color_text, 0);
+    lv_obj_set_style_text_font(g_detail_name_lbl, user_font_text(), 0);
+
+    /* 本机 meta：耗时 / 耗材 一行 */
+    g_detail_meta_local = lv_obj_create(g_detail_body);
+    lv_obj_remove_style_all(g_detail_meta_local);
+    lv_obj_set_width(g_detail_meta_local, LV_PCT(100));
+    lv_obj_set_height(g_detail_meta_local, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(g_detail_meta_local, LV_FLEX_FLOW_ROW);
+    lv_obj_set_style_pad_column(g_detail_meta_local, USER_PAD_LG, 0);
+    lv_obj_set_style_bg_opa(g_detail_meta_local, LV_OPA_TRANSP, 0);
+    lv_obj_clear_flag(g_detail_meta_local, LV_OBJ_FLAG_SCROLLABLE);
+    make_detail_inline_kv(g_detail_meta_local, "Est. Time", user_color_text, &g_detail_time_lbl);
+    make_detail_inline_kv(g_detail_meta_local, "Material", user_color_accent, &g_detail_mat_lbl);
+
+    /* USB meta：文件大小（与本机 meta 互斥显示） */
+    g_detail_meta_usb = lv_obj_create(g_detail_body);
+    lv_obj_remove_style_all(g_detail_meta_usb);
+    lv_obj_set_width(g_detail_meta_usb, LV_PCT(100));
+    lv_obj_set_height(g_detail_meta_usb, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(g_detail_meta_usb, LV_FLEX_FLOW_ROW);
+    lv_obj_set_style_bg_opa(g_detail_meta_usb, LV_OPA_TRANSP, 0);
+    lv_obj_clear_flag(g_detail_meta_usb, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(g_detail_meta_usb, LV_OBJ_FLAG_HIDDEN);
+    make_detail_inline_kv(g_detail_meta_usb, "File Size", user_color_text, &g_detail_size_lbl);
+
+    /* 撑开，把按钮顶到底部 */
+    lv_obj_t *sp = lv_obj_create(g_detail_body);
+    lv_obj_remove_style_all(sp);
+    lv_obj_set_width(sp, LV_PCT(100));
+    lv_obj_set_flex_grow(sp, 1);
+    lv_obj_set_style_bg_opa(sp, LV_OPA_TRANSP, 0);
+
+    lv_obj_t *btn_start = lv_button_create(g_detail_body);
+    lv_obj_add_style(btn_start, user_style_btn_primary(), 0);
+    lv_obj_set_width(btn_start, LV_PCT(100));
+    lv_obj_set_height(btn_start, USER_DLG_FOOTER_BTN_H);
+    lv_obj_add_event_cb(btn_start, on_detail_start_print, LV_EVENT_CLICKED, nullptr);
+    lv_obj_t *bl = lv_label_create(btn_start);
+    lv_label_set_text(bl, "Start Print");
+    lv_obj_set_style_text_color(bl, user_color_text, 0);
+    lv_obj_set_style_text_font(bl, user_font_text(), 0);
+    lv_obj_center(bl);
+
+    /* 次按钮：仅本机显示“删除该文件”（USB 无次按钮，在 update_detail_panel 中隐藏） */
+    g_detail_secondary_btn = lv_button_create(g_detail_body);
+    lv_obj_t *sec = g_detail_secondary_btn;
+    lv_obj_remove_style_all(sec);
+    lv_obj_set_width(sec, LV_PCT(100));
+    lv_obj_set_height(sec, USER_DLG_BTN_GHOST_H);
+    lv_obj_set_style_bg_opa(sec, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_bg_color(sec, user_color_panel_alt, LV_STATE_PRESSED);
+    lv_obj_set_style_bg_opa(sec, LV_OPA_30, LV_STATE_PRESSED);
+    lv_obj_set_style_radius(sec, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_border_width(sec, 1, 0);
+    lv_obj_set_style_border_color(sec, user_color_divider, 0);
+    lv_obj_clear_flag(sec, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_event_cb(sec, on_detail_secondary, LV_EVENT_CLICKED, nullptr);
+
+    g_detail_secondary_lbl = lv_label_create(sec);
+    lv_label_set_text(g_detail_secondary_lbl, "Delete File");
+    lv_obj_set_style_text_color(g_detail_secondary_lbl, user_color_text, 0);
+    lv_obj_set_style_text_font(g_detail_secondary_lbl, user_font_text(), 0);
+    lv_obj_center(g_detail_secondary_lbl);
+}
+
+/* 列表上/下滚动（设计稿右侧圆形箭头按钮）。
+ * LVGL：正 dy 使内容下移（看上面的项）；负 dy 看下面的项。 */
+void on_list_scroll_up(lv_event_t * /*e*/)
+{
+    if(g_file_grid) {
+        /* bounded 版按内容范围钳制，到顶端即停、不过冲卡住 */
+        lv_obj_scroll_by_bounded(g_file_grid, 0, lv_obj_get_height(g_file_grid) * 3 / 4, LV_ANIM_ON);
+    }
+}
+
+void on_list_scroll_down(lv_event_t * /*e*/)
+{
+    if(g_file_grid) {
+        lv_obj_scroll_by_bounded(g_file_grid, 0, -lv_obj_get_height(g_file_grid) * 3 / 4, LV_ANIM_ON);
+    }
+}
+
+/* 圆形图标按钮（返回箭头等） */
+lv_obj_t *make_round_icon_btn(lv_obj_t *parent, const char *symbol, lv_event_cb_t cb)
+{
+    lv_obj_t *btn = lv_button_create(parent);
+    lv_obj_remove_style_all(btn);
+    lv_obj_set_size(btn, USER_BACK_BTN_H, USER_BACK_BTN_H);
+    lv_obj_set_style_radius(btn, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_bg_color(btn, user_color_panel, 0);
+    lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_color(btn, user_color_panel_alt, LV_STATE_PRESSED);
+    lv_obj_set_style_border_width(btn, 1, 0);
+    lv_obj_set_style_border_color(btn, user_color_divider, 0);
+    lv_obj_clear_flag(btn, LV_OBJ_FLAG_SCROLLABLE);
+    if(cb) {
+        lv_obj_add_event_cb(btn, cb, LV_EVENT_CLICKED, nullptr);
+    }
+    lv_obj_t *icon = lv_label_create(btn);
+    lv_label_set_text(icon, symbol);
+    lv_obj_set_style_text_color(icon, user_color_text, 0);
+    lv_obj_set_style_text_font(icon, user_font_text(), 0);
+    lv_obj_center(icon);
+    return btn;
+}
+
+/* 选择文件页内容：建入 PageManager 内容区（parent 已在侧栏右侧），填满整块。
+ * 返回页根，供 page_user_files_create 交给 PageManager 托管。 */
+lv_obj_t *show_file_select(lv_obj_t *parent)
+{
+    lv_obj_t *page = lv_obj_create(parent);
+    lv_obj_remove_style_all(page);
+    lv_obj_set_size(page, LV_PCT(100), LV_PCT(100));
+    lv_obj_set_style_bg_color(page, user_color_bg, 0);
+    lv_obj_set_style_bg_opa(page, LV_OPA_COVER, 0);
+    lv_obj_set_style_pad_hor(page, USER_PAD_LG, 0);
+    lv_obj_set_style_pad_ver(page, USER_PAD, 0);
+    lv_obj_set_style_pad_column(page, USER_PAD, 0);
+    lv_obj_set_flex_flow(page, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(page, LV_FLEX_ALIGN_START,
                           LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
-    lv_obj_set_style_pad_left(info_col, USER_PAD_SM, 0);
-    lv_obj_set_style_bg_opa(info_col, LV_OPA_TRANSP, 0);
-    lv_obj_clear_flag(info_col, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_clear_flag(page, LV_OBJ_FLAG_SCROLLABLE);
+    g_file_panel = page;
 
-    auto make_info_pair = [&](const char *caption, const char *value, lv_color_t color) {
-        lv_obj_t *cap = lv_label_create(info_col);
-        lv_label_set_text(cap, caption);
-        lv_obj_set_style_text_color(cap, user_color_text_dim, 0);
-        lv_obj_set_style_text_font(cap, user_font_caption(), 0);
+    /* ============ 左半（略宽）：顶部 返回+分段胶囊；下方 文件列表 ============ */
+    lv_obj_t *left = lv_obj_create(page);
+    lv_obj_remove_style_all(left);
+    lv_obj_set_height(left, LV_PCT(100));
+    lv_obj_set_flex_grow(left, 11);          /* 左:右 ≈ 11:9，左半略宽 */
+    lv_obj_set_flex_flow(left, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(left, LV_FLEX_ALIGN_START,
+                          LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
+    lv_obj_set_style_pad_row(left, USER_PAD, 0);
+    lv_obj_set_style_bg_opa(left, LV_OPA_TRANSP, 0);
+    lv_obj_clear_flag(left, LV_OBJ_FLAG_SCROLLABLE);
 
-        lv_obj_t *val = lv_label_create(info_col);
-        lv_label_set_text(val, value);
-        lv_obj_set_style_text_color(val, color, 0);
-        lv_obj_set_style_text_font(val, user_font_text(), 0);
-        lv_label_set_long_mode(val, LV_LABEL_LONG_MODE_DOTS);
-        lv_obj_set_width(val, LV_PCT(100));
-    };
-
-    make_info_pair("File", file->name, user_color_text);
-    char dur[32];
-    ui_user_format_duration_min(dur, sizeof(dur), file->duration_min);
-    make_info_pair("Est. Print Time", dur, user_color_text);
-    char mat[32];
-    std::snprintf(mat, sizeof(mat), "%.1f g", (double)file->material_g);
-    make_info_pair("Material Usage", mat, user_color_accent);
-
-    /* 动态详情：由 APP_FileInfo_Rsp 回填 */
-    auto make_dynamic_pair = [&](const char *caption, lv_obj_t **out_lbl) {
-        lv_obj_t *cap = lv_label_create(info_col);
-        lv_label_set_text(cap, caption);
-        lv_obj_set_style_text_color(cap, user_color_text_dim, 0);
-        lv_obj_set_style_text_font(cap, user_font_caption(), 0);
-
-        lv_obj_t *val = lv_label_create(info_col);
-        lv_label_set_text(val, "—");
-        lv_obj_set_style_text_color(val, user_color_text, 0);
-        lv_obj_set_style_text_font(val, user_font_text(), 0);
-        lv_label_set_long_mode(val, LV_LABEL_LONG_MODE_DOTS);
-        lv_obj_set_width(val, LV_PCT(100));
-        *out_lbl = val;
-    };
-    make_dynamic_pair("Total Lines", &g_confirm_lines_lbl);
-    make_dynamic_pair("File Size",   &g_confirm_size_lbl);
-
-    lv_obj_t *supply_row = lv_obj_create(dlg->body);
-    lv_obj_remove_style_all(supply_row);
-    lv_obj_set_width(supply_row, LV_PCT(100));
-    lv_obj_set_height(supply_row, LV_SIZE_CONTENT);
-    lv_obj_set_style_bg_color(supply_row, user_color_panel_alt, 0);
-    lv_obj_set_style_bg_opa(supply_row, LV_OPA_COVER, 0);
-    lv_obj_set_style_radius(supply_row, USER_RADIUS, 0);
-    lv_obj_set_style_pad_all(supply_row, USER_PAD_SM, 0);
-    lv_obj_set_style_pad_column(supply_row, USER_PAD_LG, 0);
-    lv_obj_set_flex_flow(supply_row, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(supply_row, LV_FLEX_ALIGN_START,
+    /* 左半顶部：返回圆钮 + 本机/USB 滑动胶囊 */
+    lv_obj_t *lhead = lv_obj_create(left);
+    lv_obj_remove_style_all(lhead);
+    lv_obj_set_width(lhead, LV_PCT(100));
+    lv_obj_set_height(lhead, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(lhead, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(lhead, LV_FLEX_ALIGN_START,
                           LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_clear_flag(supply_row, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_style_pad_column(lhead, USER_PAD, 0);
+    lv_obj_set_style_bg_opa(lhead, LV_OPA_TRANSP, 0);
+    lv_obj_clear_flag(lhead, LV_OBJ_FLAG_SCROLLABLE);
+    make_round_icon_btn(lhead, LV_SYMBOL_LEFT, on_file_select_cancel);
+    make_source_segment(lhead);
 
-    lv_obj_t *label = lv_label_create(supply_row);
-    lv_label_set_text(label, "Supply Check");
-    lv_obj_set_style_text_color(label, user_color_text_dim, 0);
-    lv_obj_set_style_text_font(label, user_font_caption(), 0);
+    /* 文件列表（纵向行，可滚动） */
+    g_file_grid = lv_obj_create(left);
+    lv_obj_remove_style_all(g_file_grid);
+    lv_obj_set_width(g_file_grid, LV_PCT(100));
+    lv_obj_set_flex_grow(g_file_grid, 1);
+    lv_obj_set_flex_flow(g_file_grid, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(g_file_grid, LV_FLEX_ALIGN_START,
+                          LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
+    lv_obj_set_style_pad_row(g_file_grid, USER_PAD_SM, 0);
+    lv_obj_set_style_pad_right(g_file_grid, USER_PAD_SM, 0);  /* 给滚动条留白 */
+    lv_obj_set_style_bg_opa(g_file_grid, LV_OPA_TRANSP, 0);
+    rebuild_file_grid();
 
-    bool material_ready = false;
-    bool hepa_ready = false;
-    backend_get_supply_status(&material_ready, &hepa_ready);
-    ui_user_make_supply_indicator(supply_row, "Material", material_ready);
-    ui_user_make_supply_indicator(supply_row, "HEPA", hepa_ready);
+    /* ============ 中间：上/下滚动箭头（圆形按钮，纵向居中） ============ */
+    lv_obj_t *arrows = lv_obj_create(page);
+    lv_obj_remove_style_all(arrows);
+    lv_obj_set_width(arrows, LV_SIZE_CONTENT);
+    lv_obj_set_height(arrows, LV_PCT(100));
+    lv_obj_set_flex_flow(arrows, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(arrows, LV_FLEX_ALIGN_CENTER,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_row(arrows, USER_PAD, 0);
+    lv_obj_set_style_bg_opa(arrows, LV_OPA_TRANSP, 0);
+    lv_obj_clear_flag(arrows, LV_OBJ_FLAG_SCROLLABLE);
+    make_round_icon_btn(arrows, LV_SYMBOL_UP, on_list_scroll_up);
+    make_round_icon_btn(arrows, LV_SYMBOL_DOWN, on_list_scroll_down);
 
-    ui_user_make_footer_ghost_btn(dlg->footer, "Cancel", on_file_confirm_cancel);
-    lv_obj_t *btn_ok = lv_button_create(dlg->footer);
-    lv_obj_add_style(btn_ok, user_style_btn_primary(), 0);
-    lv_obj_set_size(btn_ok, USER_DLG_FOOTER_BTN_W, USER_DLG_FOOTER_BTN_H);
-    const bool all_ready = material_ready && hepa_ready;
-    if(!all_ready) {
-        lv_obj_add_state(btn_ok, LV_STATE_DISABLED);
-    }
-    lv_obj_add_event_cb(btn_ok, on_file_confirm_ok, LV_EVENT_CLICKED, nullptr);
+    /* ============ 右半：顶部 常驻供应度状态栏；下方 详情/空态 ============ */
+    lv_obj_t *right = lv_obj_create(page);
+    lv_obj_remove_style_all(right);
+    lv_obj_set_height(right, LV_PCT(100));
+    lv_obj_set_flex_grow(right, 9);
+    lv_obj_set_flex_flow(right, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(right, LV_FLEX_ALIGN_START,
+                          LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
+    lv_obj_set_style_pad_row(right, USER_PAD, 0);
+    lv_obj_set_style_bg_opa(right, LV_OPA_TRANSP, 0);
+    lv_obj_clear_flag(right, LV_OBJ_FLAG_SCROLLABLE);
 
-    lv_obj_t *lbl_ok = lv_label_create(btn_ok);
-    lv_label_set_text(lbl_ok, "Confirm Print");
-    lv_obj_set_style_text_color(lbl_ok, user_color_text, 0);
-    lv_obj_set_style_text_font(lbl_ok, user_font_text(), 0);
-    lv_obj_center(lbl_ok);
+    /* 右半顶部：耗材/滤芯供应度（常驻，未选文件时也显示） */
+    lv_obj_t *supply = lv_obj_create(right);
+    lv_obj_remove_style_all(supply);
+    lv_obj_set_width(supply, LV_PCT(100));
+    lv_obj_set_height(supply, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(supply, LV_FLEX_FLOW_ROW);
+    lv_obj_set_style_pad_column(supply, USER_PAD_LG, 0);
+    lv_obj_set_style_bg_opa(supply, LV_OPA_TRANSP, 0);
+    lv_obj_clear_flag(supply, LV_OBJ_FLAG_SCROLLABLE);
+    ui_user_make_supply_bar(supply, "Material", g_supply.material_ok != 0,
+                            (int)g_supply.material_pct,
+                            &g_supply_mat_bar, &g_supply_mat_pct, &g_supply_mat_status);
+    ui_user_make_supply_bar(supply, "Filter", g_supply.filter_ok != 0,
+                            (int)g_supply.filter_pct,
+                            &g_supply_filt_bar, &g_supply_filt_pct, &g_supply_filt_status);
 
-    return dlg;
+    /* 右半下方：详情面板（含未选时的空态提示） */
+    build_detail_panel(right);
+    update_detail_panel(nullptr);
+
+    return page;
 }
 
 /* ============================================================================
@@ -861,7 +1477,23 @@ void pf_on_door_close_check_done(void * /*u*/)
     if(g_state != CONTROL_STATE_D4_DOOR_CLOSE_CHECK) {
         return;
     }
-    enter_state(CONTROL_STATE_FILE_SELECT);
+    /* 关门检测通过后，先弹「是否开始打印」二次确认，再真正开打 */
+    enter_state(CONTROL_STATE_CONFIRM_START);
+}
+
+/* 开始打印确认：Start → 真正开打 */
+void on_start_confirm(lv_event_t * /*e*/)
+{
+    if(g_state == CONTROL_STATE_CONFIRM_START) {
+        enter_state(CONTROL_STATE_PRINTING);   /* 内部 close_current_dialog 关确认弹窗 */
+    }
+}
+
+/* 开始打印确认：Cancel → 通知后端退出解析(终止/清 ringbuffer/退线程，后端待实现)，
+ * 回到点击开始打印前的文件选择 Tab 页（PageManager 托管，状态保留） */
+void on_start_cancel(lv_event_t * /*e*/)
+{
+    abort_print_flow();
 }
 
 void pf_purify_tick(lv_timer_t *t)
@@ -909,12 +1541,16 @@ void pf_on_print_done(void * /*u*/)
     enter_state(CONTROL_STATE_IDLE);
 }
 
-void terminate_confirm_yes(void * /*u*/)
+void on_terminate_cancel(lv_event_t * /*e*/)
 {
-    backend_terminate_job();
+    close_confirm_dlg();
 }
 
-void terminate_confirm_no(void * /*u*/) {}
+void on_terminate_confirm(lv_event_t * /*e*/)
+{
+    close_confirm_dlg();
+    backend_terminate_job();
+}
 
 void on_backend_action_fail(const char *message)
 {
@@ -940,9 +1576,13 @@ void enter_state(control_state_t s)
     switch(s) {
     case CONTROL_STATE_IDLE:
         backend_cancel_pending();
-        backend_unfreeze_files();
         page_user_home_exit_printing_mode();
         overlay_hide();
+        break;
+
+    case CONTROL_STATE_PREPARE_WAIT:
+        overlay_show();
+        show_prepare_dlg();
         break;
 
     case CONTROL_STATE_D1_INSERT_PROMPT:
@@ -972,21 +1612,17 @@ void enter_state(control_state_t s)
         backend_start_close_door(pf_on_door_close_check_done, nullptr);
         break;
 
-    case CONTROL_STATE_FILE_SELECT:
+    case CONTROL_STATE_CONFIRM_START:
         overlay_show();
-        backend_freeze_files();
-        g_current_dlg = show_file_select(g_overlay);
-        break;
-
-    case CONTROL_STATE_FILE_CONFIRM:
-        backend_unfreeze_files();
-        overlay_show();
-        g_current_dlg = show_file_confirm(g_overlay, &g_active_file);
+        open_user_confirm_dialog(g_overlay, "Start Printing?",
+                                 "All checks passed. Begin the print job now?",
+                                 "Cancel", "Start", user_color_accent,
+                                 on_start_cancel, on_start_confirm);
         break;
 
     case CONTROL_STATE_PRINTING:
-        backend_unfreeze_files();
         overlay_hide();
+        g_home_section_view = "user_home";   /* 打印中首页图标回仪表盘 */
         ui::PageManager::instance().switch_to("user_home");
         backend_start_job(&g_active_file,
                                      pf_on_print_progress,
@@ -1029,7 +1665,39 @@ void control_start(void)
     if(g_state != CONTROL_STATE_IDLE) {
         return;
     }
-    enter_state(CONTROL_STATE_D1_INSERT_PROMPT);
+    /* 设计稿入口：切到「选择文件」隐藏页（PageManager 托管，状态保留） */
+    g_home_section_view = "user_files";   /* 首页区视图切到选择文件 */
+    ui::PageManager::instance().switch_to("user_files");
+}
+
+const char *control_home_section_target(void)
+{
+    return g_home_section_view;
+}
+
+/* ---- 选择文件页（PageManager 隐藏页 "user_files"）生命周期 ---- */
+lv_obj_t *page_user_files_create(lv_obj_t *parent)
+{
+    /* 仅首次创建时复位到本机/未选；之后切走再回来由 PageManager 隐藏/显示保留状态 */
+    g_file_tab = FileTab::Local;
+    g_sel_index = -1;
+    return show_file_select(parent);
+}
+
+void page_user_files_refresh(bool /*force*/)
+{
+    /* on_enter：标记可见，并刷新当前 Tab 目录 + 供应（选中项由 register_fs_dir 按名恢复） */
+    g_files_page_active = true;
+    g_dir_open_pending.clear();
+    request_fs_dir_open(g_file_tab);
+    ui::UiMsgProxy::instance().send_supply_status();
+}
+
+void page_user_files_exit(void)
+{
+    g_files_page_active = false;
+    g_dir_open_pending.clear();
+    close_confirm_dlg();
 }
 
 void control_cancel(void)
@@ -1047,9 +1715,11 @@ void control_terminate_request(void)
     if(g_state != CONTROL_STATE_PRINTING) {
         return;
     }
-    ui_confirm_show("Terminate Print",
-                    "Are you sure you want to terminate the current print job? "
-                    "Progress cannot be recovered.",
-                    "Terminate", "Cancel",
-                    terminate_confirm_yes, terminate_confirm_no, nullptr);
+    /* 与删除确认同款风格（用户层 ui_modal_dialog）。打印中 overlay 可能隐藏，
+     * 故挂到 top layer 确保始终可见。 */
+    open_user_confirm_dialog(lv_layer_top(), "Terminate Print?",
+                             "Are you sure you want to terminate the current print job? "
+                             "Progress cannot be recovered.",
+                             "Cancel", "Terminate", ui_color_danger,
+                             on_terminate_cancel, on_terminate_confirm);
 }

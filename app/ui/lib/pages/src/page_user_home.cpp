@@ -102,9 +102,7 @@ void home_trigger_door_open(void)
 lv_obj_t *g_lbl_dev_name = nullptr;
 lv_obj_t *g_dot_status   = nullptr;
 lv_obj_t *g_lbl_status   = nullptr;
-lv_obj_t *g_lbl_wifi     = nullptr;
-lv_obj_t *g_lbl_signal   = nullptr;
-lv_obj_t *g_btn_start    = nullptr;
+lv_obj_t *g_btn_files    = nullptr;   /**< 右上角 "My Files" 磨砂按钮 */
 
 /* ---------- 数值（左/右 各 2 块） ---------- */
 lv_obj_t *g_lbl_pm_indoor = nullptr;
@@ -133,9 +131,48 @@ lv_obj_t *g_prog_remaining    = nullptr; /**< "剩余 45 min" */
 lv_obj_t *g_prog_file_name    = nullptr;
 bool      g_printing_active   = false;
 
-void on_start_print_click(lv_event_t *)
+void apply_camera_preview_layout(uint32_t src_w);
+void on_camera_viewport_size_changed(lv_event_t *e);
+
+/** 预览：宽贴满 viewport，高等比缩放后居中裁剪（解码层仍输出全帧） */
+void apply_camera_preview_layout(uint32_t src_w)
 {
-    /* 不再使用 mock toast，转为真正的打印流程入口。 */
+    if(!g_camera_image || !g_camera_viewport || src_w == 0) {
+        return;
+    }
+
+    lv_obj_update_layout(g_camera_viewport);
+    const int32_t vp_w = lv_obj_get_width(g_camera_viewport);
+    const int32_t vp_h = lv_obj_get_height(g_camera_viewport);
+    if(vp_w <= 0 || vp_h <= 0) {
+        return;
+    }
+
+    lv_obj_set_size(g_camera_image, vp_w, vp_h);
+    lv_obj_center(g_camera_image);
+    lv_image_set_inner_align(g_camera_image, LV_IMAGE_ALIGN_CENTER);
+    const uint32_t zoom =
+        static_cast<uint32_t>(static_cast<int64_t>(vp_w) * 256 / static_cast<int32_t>(src_w));
+    lv_image_set_scale(g_camera_image, zoom > 0 ? zoom : LV_SCALE_NONE);
+    lv_obj_invalidate(g_camera_image);
+}
+
+void on_camera_viewport_size_changed(lv_event_t * /*e*/)
+{
+    uint32_t src_w = 1024u;
+    if(ui::CameraPreviewPlayer::instance().active()) {
+        src_w = ui::CameraPreviewPlayer::instance().stream_width();
+        if(src_w == 0) {
+            src_w = 1024u;
+        }
+    }
+    apply_camera_preview_layout(src_w);
+}
+
+void on_files_click(lv_event_t *)
+{
+    /* 设计稿右上角为 "我的文件" 入口。后端文件管理流程后续重建，
+     * 暂复用现有打印编排作为占位，保证流程可达。 */
     control_start();
 }
 
@@ -161,7 +198,42 @@ void on_terminate_click(lv_event_t *)
     control_terminate_request();
 }
 
-/** 顶部状态条：左侧设备名/状态 + 右侧 "开始打印" 橙色按钮 */
+/** 右上角 "My Files" 磨砂按钮：橙色半透明底 + 橙边 + 图标 + 文字（对齐设计稿 Frame520） */
+lv_obj_t *build_files_button(lv_obj_t *parent)
+{
+    lv_obj_t *btn = lv_button_create(parent);
+    lv_obj_remove_style_all(btn);
+    lv_obj_set_height(btn, USER_BTN_PRIMARY_H);
+    lv_obj_set_width(btn, LV_SIZE_CONTENT);
+    lv_obj_set_style_bg_color(btn, user_color_accent, 0);
+    lv_obj_set_style_bg_opa(btn, LV_OPA_20, 0);
+    lv_obj_set_style_bg_opa(btn, LV_OPA_40, LV_STATE_PRESSED);
+    lv_obj_set_style_radius(btn, USER_RADIUS, 0);
+    lv_obj_set_style_border_width(btn, 1, 0);
+    lv_obj_set_style_border_color(btn, user_color_accent, 0);
+    lv_obj_set_style_border_opa(btn, LV_OPA_40, 0);
+    lv_obj_set_style_pad_hor(btn, USER_PAD, 0);
+    lv_obj_set_style_pad_ver(btn, USER_PAD_SM, 0);
+    lv_obj_set_style_pad_column(btn, USER_PAD_SM, 0);
+    lv_obj_set_flex_flow(btn, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(btn, LV_FLEX_ALIGN_CENTER,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_add_event_cb(btn, on_files_click, LV_EVENT_CLICKED, nullptr);
+
+    lv_obj_t *icon = lv_label_create(btn);
+    lv_label_set_text(icon, LV_SYMBOL_DIRECTORY);
+    lv_obj_set_style_text_color(icon, user_color_accent, 0);
+    lv_obj_set_style_text_font(icon, user_font_text(), 0);
+
+    lv_obj_t *txt = lv_label_create(btn);
+    lv_label_set_text(txt, "My Files");
+    lv_obj_set_style_text_color(txt, user_color_accent, 0);
+    lv_obj_set_style_text_font(txt, user_font_text(), 0);
+
+    return btn;
+}
+
+/** 顶部状态条：左侧 设备名 + 状态点 + 状态文字；右侧 "My Files" 磨砂按钮 */
 lv_obj_t *build_topbar(lv_obj_t *parent)
 {
     lv_obj_t *bar = lv_obj_create(parent);
@@ -177,23 +249,15 @@ lv_obj_t *build_topbar(lv_obj_t *parent)
     lv_obj_set_style_bg_opa(bar, LV_OPA_TRANSP, 0);
     lv_obj_clear_flag(bar, LV_OBJ_FLAG_SCROLLABLE);
 
-    g_lbl_wifi = lv_label_create(bar);
-    lv_label_set_text(g_lbl_wifi, LV_SYMBOL_WIFI);
-    lv_obj_set_style_text_color(g_lbl_wifi, user_color_text, 0);
-    lv_obj_set_style_text_font(g_lbl_wifi, user_font_text(), 0);
-
-    g_lbl_signal = lv_label_create(bar);
-    /* LVGL 没有专门的信号格图标，用 BLUETOOTH 占位（视觉相近）。
-     * 后续接入 Material 图标字体时替换为真实 signal 图标。 */
-    lv_label_set_text(g_lbl_signal, LV_SYMBOL_BLUETOOTH);
-    lv_obj_set_style_text_color(g_lbl_signal, user_color_text, 0);
-    lv_obj_set_style_text_font(g_lbl_signal, user_font_text(), 0);
+    lv_obj_t *lbl_wifi = lv_label_create(bar);
+    lv_label_set_text(lbl_wifi, LV_SYMBOL_WIFI);
+    lv_obj_set_style_text_color(lbl_wifi, user_color_text, 0);
+    lv_obj_set_style_text_font(lbl_wifi, user_font_text(), 0);
 
     g_lbl_dev_name = lv_label_create(bar);
     lv_label_set_text(g_lbl_dev_name, "SNOWPOD A1");
     lv_obj_set_style_text_color(g_lbl_dev_name, user_color_text, 0);
     lv_obj_set_style_text_font(g_lbl_dev_name, user_font_text(), 0);
-    lv_obj_set_style_pad_left(g_lbl_dev_name, USER_PAD_SM, 0);
 
     g_dot_status = lv_obj_create(bar);
     lv_obj_remove_style_all(g_dot_status);
@@ -208,23 +272,14 @@ lv_obj_t *build_topbar(lv_obj_t *parent)
     lv_obj_set_style_text_color(g_lbl_status, user_color_status_ok, 0);
     lv_obj_set_style_text_font(g_lbl_status, user_font_text(), 0);
 
-    /* 用一个 flex_grow 撑开把后面按钮顶到右边 */
+    /* 用一个 flex_grow 撑开把按钮顶到右边 */
     lv_obj_t *spacer = lv_obj_create(bar);
     lv_obj_remove_style_all(spacer);
     lv_obj_set_height(spacer, 1);
     lv_obj_set_flex_grow(spacer, 1);
     lv_obj_set_style_bg_opa(spacer, LV_OPA_TRANSP, 0);
 
-    g_btn_start = lv_button_create(bar);
-    lv_obj_add_style(g_btn_start, user_style_btn_primary(), 0);
-    lv_obj_set_size(g_btn_start, USER_BTN_PRIMARY_W, USER_BTN_PRIMARY_H);
-    lv_obj_add_event_cb(g_btn_start, on_start_print_click, LV_EVENT_CLICKED, nullptr);
-
-    lv_obj_t *btn_lbl = lv_label_create(g_btn_start);
-    lv_label_set_text(btn_lbl, "Start Print");
-    lv_obj_set_style_text_color(btn_lbl, user_color_text, 0);
-    lv_obj_set_style_text_font(btn_lbl, user_font_text(), 0);
-    lv_obj_center(btn_lbl);
+    g_btn_files = build_files_button(bar);
 
     return bar;
 }
@@ -255,6 +310,28 @@ lv_obj_t *build_device_placeholder(lv_obj_t *parent)
     lv_obj_clear_flag(box, LV_OBJ_FLAG_SCROLLABLE);
     /* 允许子图缩放后超出布局盒而不被裁剪 */
     lv_obj_set_style_clip_corner(box, false, 0);
+
+    /* 橙色辉光（对齐设计稿 filter0_f：#FF9E6D 0.5 高斯模糊光团）。
+     * LVGL 无法直接渲染 SVG 的 feGaussianBlur，这里用"圆角块 + 大范围阴影"
+     * 复刻高斯模糊光晕——阴影本身即是高斯模糊的圆角矩形。
+     * 光团中心位于设备约 (36% 宽, 45% 高) 处，先于设备图创建，确保位于其后。 */
+    {
+        const int32_t gw = dev_h * 36 / 100;   /* 光团本体宽（≈ 设计 155/427） */
+        const int32_t gh = dev_h * 43 / 100;   /* 光团本体高（≈ 设计 183/427） */
+        lv_obj_t *glow = lv_obj_create(box);
+        lv_obj_remove_style_all(glow);
+        lv_obj_add_flag(glow, LV_OBJ_FLAG_FLOATING);
+        lv_obj_clear_flag(glow, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_set_size(glow, gw, gh);
+        lv_obj_set_style_radius(glow, LV_RADIUS_CIRCLE, 0);
+        lv_obj_set_style_bg_color(glow, lv_color_hex(0xFF9E6D), 0);
+        lv_obj_set_style_bg_opa(glow, LV_OPA_40, 0);
+        lv_obj_set_style_shadow_color(glow, lv_color_hex(0xFF9E6D), 0);
+        lv_obj_set_style_shadow_opa(glow, LV_OPA_50, 0);
+        lv_obj_set_style_shadow_width(glow, dev_h * 45 / 100, 0);
+        lv_obj_set_style_shadow_spread(glow, dev_h * 5 / 100, 0);
+        lv_obj_set_pos(glow, dev_w * 359 / 1000 - gw / 2, dev_h * 452 / 1000 - gh / 2);
+    }
 
     /* 设备主体 */
     lv_obj_t *dev = lv_image_create(box);
@@ -327,8 +404,10 @@ lv_obj_t *build_door_floating(lv_obj_t *parent)
     cfg.hint_text  = "Slide to Open  " LV_SYMBOL_RIGHT LV_SYMBOL_RIGHT LV_SYMBOL_RIGHT;
     cfg.on_unlocked = on_door_slide_unlocked;
     cfg.user_data  = nullptr;
-    cfg.track_w    = USER_BTN_DOOR_SZ;       /* 用门控件宽度，贴右下角 */
+    cfg.track_w    = USER_SLIDE_W;           /* 宽胶囊（对齐设计稿 432/1280），避免文字截断 */
     cfg.track_h    = USER_BTN_DOOR_ICON_SZ;
+    cfg.custom_accent = true;                /* 设计稿为红色渐变滑块 */
+    cfg.accent_color  = user_color_status_err;
     g_door_slide = ui_slide_unlock_create(parent, &cfg);
 
     lv_obj_t *root = ui_slide_unlock_get_root(g_door_slide);
@@ -384,7 +463,7 @@ lv_obj_t *build_print_env_panel(lv_obj_t *parent)
     lv_obj_set_height(panel, USER_PRINT_BAR_H);
     lv_obj_set_flex_grow(panel, 1);
     lv_obj_set_style_bg_color(panel, user_color_panel, 0);
-    lv_obj_set_style_bg_opa(panel, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_opa(panel, LV_OPA_80, 0);
     lv_obj_set_style_radius(panel, USER_RADIUS, 0);
     lv_obj_set_style_border_width(panel, 1, 0);
     lv_obj_set_style_border_color(panel, user_color_divider, 0);
@@ -410,7 +489,7 @@ lv_obj_t *build_print_progress_panel(lv_obj_t *parent)
     lv_obj_set_height(panel, USER_PRINT_BAR_H);
     lv_obj_set_flex_grow(panel, 1);
     lv_obj_set_style_bg_color(panel, user_color_panel, 0);
-    lv_obj_set_style_bg_opa(panel, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_opa(panel, LV_OPA_80, 0);
     lv_obj_set_style_radius(panel, USER_RADIUS, 0);
     lv_obj_set_style_border_width(panel, 1, 0);
     lv_obj_set_style_border_color(panel, user_color_divider, 0);
@@ -516,6 +595,8 @@ lv_obj_t *build_printing_area(lv_obj_t *parent)
     lv_obj_set_style_border_width(g_camera_viewport, 1, 0);
     lv_obj_set_style_border_color(g_camera_viewport, user_color_divider, 0);
     lv_obj_clear_flag(g_camera_viewport, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_event_cb(g_camera_viewport, on_camera_viewport_size_changed,
+                        LV_EVENT_SIZE_CHANGED, nullptr);
 
     /* 占位提示文字 */
     g_camera_hint = lv_label_create(g_camera_viewport);
@@ -525,13 +606,10 @@ lv_obj_t *build_printing_area(lv_obj_t *parent)
     lv_obj_set_style_text_align(g_camera_hint, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_center(g_camera_hint);
 
-    /* 真实视频帧 lv_image 占位（默认隐藏）
-     * COVER：按预览区宽度等比缩放（竖屏 1024 宽铺满），上下居中裁切溢出部分。 */
+    /* 真实视频帧 lv_image 占位（默认隐藏） */
     g_camera_image = lv_image_create(g_camera_viewport);
-    lv_obj_set_size(g_camera_image, LV_PCT(100), LV_PCT(100));
-    lv_image_set_inner_align(g_camera_image, LV_IMAGE_ALIGN_COVER);
-    lv_obj_center(g_camera_image);
     lv_obj_add_flag(g_camera_image, LV_OBJ_FLAG_HIDDEN);
+    apply_camera_preview_layout(1024u);
 
     /* 底部双面板 */
     lv_obj_t *bottom = lv_obj_create(area);
@@ -577,6 +655,11 @@ lv_color_t status_color(user_home_status_t s)
 
 } /* namespace */
 
+void page_user_home_update_camera_preview_layout(uint32_t src_w)
+{
+    apply_camera_preview_layout(src_w);
+}
+
 void page_user_home_refresh(bool /*force*/)
 {
     const user_home_snapshot_t &snap = g_snap;
@@ -590,14 +673,6 @@ void page_user_home_refresh(bool /*force*/)
     }
     if(g_dot_status) {
         lv_obj_set_style_bg_color(g_dot_status, status_color(snap.status), 0);
-    }
-    if(g_lbl_wifi) {
-        lv_obj_set_style_text_color(g_lbl_wifi,
-            snap.wifi_connected ? user_color_text : user_color_icon_off, 0);
-    }
-    if(g_lbl_signal) {
-        lv_obj_set_style_text_color(g_lbl_signal,
-            snap.signal_bars > 0 ? user_color_text : user_color_icon_off, 0);
     }
 
     if(g_lbl_pm_indoor) {
@@ -638,8 +713,7 @@ lv_obj_t *page_user_home_create(lv_obj_t *parent)
     lv_obj_set_flex_flow(page, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_style_pad_all(page, 0, 0);
     lv_obj_set_style_pad_row(page, 0, 0);
-    lv_obj_set_style_bg_color(page, user_color_bg, 0);
-    lv_obj_set_style_bg_opa(page, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_opa(page, LV_OPA_TRANSP, 0);
     lv_obj_clear_flag(page, LV_OBJ_FLAG_SCROLLABLE);
     g_page_root = page;
 
@@ -676,12 +750,13 @@ void page_user_home_enter_printing_mode(const control_file_t *file)
 
     if(g_normal_area) lv_obj_add_flag(g_normal_area, LV_OBJ_FLAG_HIDDEN);
     if(g_door_float)  lv_obj_add_flag(g_door_float,  LV_OBJ_FLAG_HIDDEN);
-    if(g_btn_start)   lv_obj_add_flag(g_btn_start,   LV_OBJ_FLAG_HIDDEN);
+    if(g_btn_files)   lv_obj_add_flag(g_btn_files,   LV_OBJ_FLAG_HIDDEN);
     if(g_print_area)  lv_obj_clear_flag(g_print_area, LV_OBJ_FLAG_HIDDEN);
 
     /* 状态条切到 "正在打印" */
     home_set_status(USER_HOME_STATUS_PRINTING);
     page_user_home_refresh(true);
+    page_user_home_update_camera_preview_layout(1024u);
 
     if(file && g_prog_file_name) {
         lv_label_set_text(g_prog_file_name, file->name);
@@ -709,7 +784,7 @@ void page_user_home_exit_printing_mode(void)
     if(g_print_area)  lv_obj_add_flag(g_print_area, LV_OBJ_FLAG_HIDDEN);
     if(g_normal_area) lv_obj_clear_flag(g_normal_area, LV_OBJ_FLAG_HIDDEN);
     if(g_door_float)  lv_obj_clear_flag(g_door_float,  LV_OBJ_FLAG_HIDDEN);
-    if(g_btn_start)   lv_obj_clear_flag(g_btn_start,   LV_OBJ_FLAG_HIDDEN);
+    if(g_btn_files)   lv_obj_clear_flag(g_btn_files,   LV_OBJ_FLAG_HIDDEN);
 
     home_set_status(USER_HOME_STATUS_READY);
     page_user_home_refresh(true);

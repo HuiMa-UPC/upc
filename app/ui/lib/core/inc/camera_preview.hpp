@@ -35,6 +35,7 @@ public:
     void stop();
 
     [[nodiscard]] bool active() const noexcept { return active_; }
+    [[nodiscard]] uint32_t stream_width() const noexcept { return width_; }
 
 private:
     static constexpr int kFrameSlots = 3;

@@ -57,6 +57,16 @@ lv_obj_t *ui_user_make_status_dot(lv_obj_t *parent, bool ready);
 lv_obj_t *ui_user_make_supply_indicator(lv_obj_t *parent, const char *name,
                                         bool ready);
 
+/**
+ * 供应度卡片（设计稿 1.1.5 顶部「耗材可用/滤芯可用 + 进度条 + 百分比」）。
+ * 名称行 + 状态(Adequate/Low) + 进度条 + 百分比。out_* 接刷新句柄（可为 NULL）。
+ */
+lv_obj_t *ui_user_make_supply_bar(lv_obj_t *parent, const char *name,
+                                  bool ok, int percent,
+                                  lv_obj_t **out_bar,
+                                  lv_obj_t **out_pct_lbl,
+                                  lv_obj_t **out_status_lbl);
+
 /** 设置页列表行：左标题 + 右可选按钮 */
 lv_obj_t *ui_user_make_setting_row(lv_obj_t *parent, const char *label,
                                    const char *btn_text, lv_event_cb_t btn_cb);

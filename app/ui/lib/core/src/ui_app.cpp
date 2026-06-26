@@ -15,6 +15,7 @@
 #include "ui_theme.hpp"
 #include "ui_keyboard.hpp"
 #include "control.hpp"
+#include "nav_icons.h"
 
 namespace ui {
 
@@ -44,28 +45,41 @@ void app_init(lv_obj_t* screen) {
         std::make_unique<SimplePage>("user_home",
                                      page_user_home_create,
                                      page_user_home_refresh),
-        LV_SYMBOL_HOME);
+        &nav_icon_home);
     PageManager::instance().register_page(
         std::make_unique<SimplePage>("user_history",
                                      page_user_history_create,
                                      page_user_history_refresh),
-        LV_SYMBOL_LIST);
+        &nav_icon_history);
     PageManager::instance().register_page(
         std::make_unique<SimplePage>("user_control",
                                      page_user_control_create,
                                      page_user_control_refresh),
-        LV_SYMBOL_SETTINGS);
+        &nav_icon_control);
     PageManager::instance().register_page(
         std::make_unique<SimplePage>("user_settings",
                                      page_user_settings_create,
                                      page_user_settings_refresh,
                                      settings_page_exit),
-        LV_SYMBOL_DRIVE);
+        &nav_icon_settings);
     PageManager::instance().register_page(
         std::make_unique<SimplePage>("user_message",
                                      page_user_message_create,
                                      page_user_message_refresh),
-        LV_SYMBOL_BELL);
+        &nav_icon_message);
+
+    /* 选择文件页：隐藏页（无侧边栏图标），归属首页菜单按钮，由「My Files」进入 */
+    PageManager::instance().register_hidden_page(
+        std::make_unique<SimplePage>("user_files",
+                                     page_user_files_create,
+                                     page_user_files_refresh,
+                                     page_user_files_exit),
+        "user_home");
+
+    /* 首页图标点击 → 首页区当前视图（仪表盘 / 选择文件页），实现“回到上次视图” */
+    PageManager::instance().set_menu_target_resolver(
+        "user_home",
+        []() { return std::string(control_home_section_target()); });
 
     ui_keyboard_init(screen);
     control_init(screen);

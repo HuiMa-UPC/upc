@@ -18,7 +18,7 @@ const lv_color_t ui_color_text_dim   = LV_COLOR_MAKE(0x8b, 0x94, 0x9e);
 const lv_color_t ui_color_border     = LV_COLOR_MAKE(0x30, 0x36, 0x3d);
 const lv_color_t ui_color_danger     = LV_COLOR_MAKE(0xf8, 0x51, 0x49);
 
-const lv_color_t user_color_bg         = LV_COLOR_MAKE(0x10, 0x10, 0x10);
+const lv_color_t user_color_bg         = LV_COLOR_MAKE(0x0a, 0x09, 0x09);
 const lv_color_t user_color_panel      = LV_COLOR_MAKE(0x1c, 0x1c, 0x1c);
 const lv_color_t user_color_panel_alt  = LV_COLOR_MAKE(0x26, 0x26, 0x26);
 const lv_color_t user_color_accent     = LV_COLOR_MAKE(0xff, 0x7a, 0x45);
@@ -27,7 +27,7 @@ const lv_color_t user_color_text       = LV_COLOR_MAKE(0xff, 0xff, 0xff);
 const lv_color_t user_color_text_dim   = LV_COLOR_MAKE(0x9a, 0x9a, 0x9a);
 const lv_color_t user_color_icon_off   = LV_COLOR_MAKE(0x55, 0x55, 0x55);
 const lv_color_t user_color_divider    = LV_COLOR_MAKE(0x33, 0x33, 0x33);
-const lv_color_t user_color_status_ok  = LV_COLOR_MAKE(0x3f, 0xcc, 0x6a);
+const lv_color_t user_color_status_ok  = LV_COLOR_MAKE(0x52, 0xff, 0x92);
 const lv_color_t user_color_status_err = LV_COLOR_MAKE(0xff, 0x4d, 0x4d);
 
 /* ============================================================================
@@ -313,10 +313,10 @@ static const ui_theme_t s_theme_1024 = {
     /* ui_nav_active_border   */ 5,
 
     /* 用户 Shell */
-    /* user_sidebar_w         */ 64,
-    /* user_nav_item_h        */ 56,
-    /* user_nav_icon_sz       */ 32,
-    /* user_nav_icon_pad      */ 6,
+    /* user_sidebar_w         */ 80,
+    /* user_nav_item_h        */ 72,
+    /* user_nav_icon_sz       */ 44,
+    /* user_nav_icon_pad      */ 8,
     /* user_topbar_h          */ 68,
     /* user_topbar_pad_hor    */ 22,
     /* user_topbar_pad_ver    */ 16,

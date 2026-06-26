@@ -254,7 +254,7 @@ extern const ui_theme_t *g_ui;
 #define USER_DLG_PAD_LG             (g_ui->user_dlg_pad_lg)
 #define USER_DLG_TITLE_PAD_BOTTOM   (g_ui->user_dlg_title_pad_bottom)
 #define USER_DLG_RADIUS             (g_ui->user_dlg_radius)
-#define USER_DLG_BACKDROP_OPA       LV_OPA_COVER   /* 全屏遮罩不透明，避免底层页面透底 */
+#define USER_DLG_BACKDROP_OPA       LV_OPA_70   /* 跟分辨率无关，固定 */
 #define USER_DLG_BODY_MIN_H         (g_ui->user_dlg_body_min_h)
 #define USER_DLG_BTN_GHOST_H        (g_ui->user_dlg_btn_ghost_h)
 #define USER_DLG_FOOTER_BTN_W       (g_ui->user_dlg_footer_btn_w)

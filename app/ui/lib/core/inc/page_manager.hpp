@@ -5,6 +5,7 @@
 #include <string>
 #include <vector>
 #include <memory>
+#include <functional>
 
 namespace ui {
 
@@ -73,6 +74,35 @@ public:
      */
     void register_page(PagePtr page, const char* menu_icon);
 
+    /**
+     * @brief 注册页面（使用图片图标，推荐：可还原设计稿自定义图标）
+     * @param page         页面智能指针
+     * @param menu_icon_img A8/ARGB 图标资源（lv_image_dsc_t）；运行时按选中态 recolor
+     *
+     * 图标用 lv_image 显示并随选中态着色（未选 user_color_icon_off / 选中 user_color_accent）。
+     */
+    void register_page(PagePtr page, const lv_image_dsc_t* menu_icon_img);
+
+    /**
+     * @brief 注册「隐藏页」：有页面、但不在侧边栏生成菜单按钮。
+     *
+     * 用于非顶层导航目的地（如从首页「My Files」进入的选择文件页）：
+     * 只能通过 switch_to(name) 编程切换，享受 PageManager 的创建一次/隐藏显示/状态保留。
+     *
+     * @param owner_menu 归属菜单页名：该隐藏页激活时，用此页的菜单按钮表示高亮
+     *                   （如选择文件页归属 "user_home"，使首页图标保持高亮）。空=不映射。
+     */
+    void register_hidden_page(PagePtr page, std::string owner_menu = std::string());
+
+    /**
+     * @brief 为某菜单页设置「动态目标解析器」。
+     *
+     * 设置后，点击该页的侧边栏按钮不再固定切到本页，而是切到 resolver() 返回的页名。
+     * 用于把首页图标做成「首页区」入口：返回首页区当前视图（仪表盘 / 选择文件页）。
+     */
+    void set_menu_target_resolver(const std::string& page_name,
+                                  std::function<std::string()> resolver);
+
     /** 
      * @brief 切换到指定页面（非栈式切换）
      * @param name 页面名称
@@ -89,6 +119,9 @@ private:
     struct PageEntry {
         PagePtr page;           /**< 页面实例 */
         lv_obj_t* menu_btn = nullptr; /**< 左侧菜单按钮对象 */
+        lv_obj_t* menu_icon_img = nullptr; /**< 图片图标对象（图片图标时非空，用于选中态 recolor） */
+        std::string owner_menu;  /**< 隐藏页：激活时用此页的菜单按钮高亮（空=无映射） */
+        std::function<std::string()> target_resolver; /**< 菜单按钮点击的动态目标（空=切到本页） */
         bool created = false;   /**< 标记页面是否已执行过 on_create */
     };
 

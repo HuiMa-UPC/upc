@@ -65,6 +65,11 @@ ui_modal_dialog_t *ui_modal_dialog_open(lv_obj_t *parent,
         lv_obj_set_style_text_font(title, user_font_value(), 0);
         lv_obj_set_style_text_align(title, LV_TEXT_ALIGN_CENTER, 0);
         lv_obj_set_width(title, LV_PCT(100));
+        /* 有右上角关闭按钮时，左右对称预留其宽度，避免居中标题压到 "X" */
+        if(cfg->with_close_btn) {
+            lv_obj_set_style_pad_left(title, USER_BACK_BTN_H + USER_PAD_SM, 0);
+            lv_obj_set_style_pad_right(title, USER_BACK_BTN_H + USER_PAD_SM, 0);
+        }
         dlg->title = title;
 
         if(cfg->accent_underline) {

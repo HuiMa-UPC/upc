@@ -13,7 +13,6 @@ void UiMsgProxy::init()
 {
     auto& bus = middleware::MsgPort::instance();
 
-    /* 首页环境快照 */
     subs_.push_back(bus.subscribe(
         middleware::MsgType::APP_Update_Ntf, middleware::ModuleId::UI,
         [this](const middleware::Message& msg) {
@@ -23,7 +22,6 @@ void UiMsgProxy::init()
             }
         }));
 
-    /* GLAVO：PM2.5 / 开关门 / 净化 */
     subs_.push_back(bus.subscribe(
         middleware::MsgType::APP_PM25_Rsp, middleware::ModuleId::UI,
         [this](const middleware::Message& msg) {
@@ -68,7 +66,6 @@ void UiMsgProxy::init()
             }
         }));
 
-    /* GLAVO：目录列表（进程内 BufferRef；IPC 经 wire 解码后可能为 Inline 或 BufferRef） */
     subs_.push_back(bus.subscribe(
         middleware::MsgType::Fs_DirOpen_Rsp, middleware::ModuleId::UI,
         [this](const middleware::Message& msg) {
@@ -99,21 +96,9 @@ void UiMsgProxy::init()
             const uint32_t count = hdr->count <= max_count ? hdr->count : max_count;
             const auto* files = reinterpret_cast<const middleware::FileEntryPayload*>(
                 base + sizeof(middleware::FsDirHeader));
-            /* 回调内须同步拷贝数据，勿保存 files 裸指针（buffer 随 msg 析构释放） */
             fs_dir_cb_(files, count);
         }));
 
-    /* GLAVO：文件详细信息响应 */
-    subs_.push_back(bus.subscribe(
-        middleware::MsgType::APP_FileInfo_Rsp, middleware::ModuleId::UI,
-        [this](const middleware::Message& msg) {
-            middleware::FileInfoPayload p{};
-            if (file_info_cb_ && read_inline_pod(msg, p)) {
-                file_info_cb_(p);
-            }
-        }));
-
-    /* GLAVO：打印进度推送 */
     subs_.push_back(bus.subscribe(
         middleware::MsgType::APP_Print_Progress_Ntf, middleware::ModuleId::UI,
         [this](const middleware::Message& msg) {
@@ -128,6 +113,24 @@ void UiMsgProxy::init()
         [this](const middleware::Message&) {
             if (print_terminate_done_cb_) {
                 print_terminate_done_cb_();
+            }
+        }));
+
+    subs_.push_back(bus.subscribe(
+        middleware::MsgType::APP_Supply_Status_Rsp, middleware::ModuleId::UI,
+        [this](const middleware::Message& msg) {
+            middleware::SupplyStatusPayload p{};
+            if (supply_status_cb_ && read_inline_pod(msg, p)) {
+                supply_status_cb_(p);
+            }
+        }));
+
+    subs_.push_back(bus.subscribe(
+        middleware::MsgType::APP_Print_Prepare_Rsp, middleware::ModuleId::UI,
+        [this](const middleware::Message& msg) {
+            middleware::PrintPrepareRspPayload p{};
+            if (print_prepare_done_cb_ && read_inline_pod(msg, p)) {
+                print_prepare_done_cb_(p.ok != 0);
             }
         }));
 }
@@ -194,12 +197,24 @@ void UiMsgProxy::register_purify_done(PurifyDoneCb cb)
     purify_done_cb_ = std::move(cb);
 }
 
-void UiMsgProxy::send_fs_dir_open()
+void UiMsgProxy::send_fs_dir_open(const char* path)
 {
     middleware::Message msg(middleware::MsgType::Fs_DirOpen_Req,
                             middleware::ModuleId::UI,
                             middleware::ModuleId::APP_GLAVO);
+    if(path && path[0] != '\0') {
+        msg.payload = middleware::MsgPayload::from_bytes(
+            reinterpret_cast<const uint8_t*>(path),
+            std::strlen(path));
+    }
     middleware::MsgPort::instance().publish_async(msg);
+}
+
+void UiMsgProxy::send_fs_delete_ntf(uint32_t file_index, middleware::PrintFileSource source)
+{
+    const middleware::FsDeleteNtfPayload payload{file_index, source, {}};
+    publish_pod(middleware::MsgType::Fs_Delete_Ntf,
+                middleware::ModuleId::APP_GLAVO, payload);
 }
 
 void UiMsgProxy::register_fs_dir(FsDirCb cb)
@@ -207,21 +222,34 @@ void UiMsgProxy::register_fs_dir(FsDirCb cb)
     fs_dir_cb_ = std::move(cb);
 }
 
-void UiMsgProxy::send_file_info_req(uint32_t file_index)
+void UiMsgProxy::send_supply_status()
 {
-    const middleware::PrintStartReqPayload req{file_index};
-    publish_pod(middleware::MsgType::UI_FileInfo_Req,
+    middleware::Message msg(middleware::MsgType::UI_Supply_Status_Req,
+                            middleware::ModuleId::UI,
+                            middleware::ModuleId::APP_GLAVO);
+    middleware::MsgPort::instance().publish_async(msg);
+}
+
+void UiMsgProxy::register_supply_status(SupplyStatusCb cb)
+{
+    supply_status_cb_ = std::move(cb);
+}
+
+void UiMsgProxy::send_print_prepare(uint32_t file_index, middleware::PrintFileSource source)
+{
+    const middleware::PrintPrepareReqPayload req{file_index, source, {}};
+    publish_pod(middleware::MsgType::UI_Print_Prepare_Req,
                 middleware::ModuleId::APP_GLAVO, req);
 }
 
-void UiMsgProxy::register_file_info(FileInfoCb cb)
+void UiMsgProxy::register_print_prepare_done(PrintPrepareDoneCb cb)
 {
-    file_info_cb_ = std::move(cb);
+    print_prepare_done_cb_ = std::move(cb);
 }
 
-void UiMsgProxy::send_print_start(uint32_t file_index)
+void UiMsgProxy::send_print_start(uint32_t file_index, middleware::PrintFileSource source)
 {
-    const middleware::PrintStartReqPayload req{file_index};
+    const middleware::PrintStartReqPayload req{file_index, source, {}};
     publish_pod(middleware::MsgType::UI_Print_Start_Req,
                 middleware::ModuleId::APP_GLAVO, req);
 }
@@ -239,6 +267,14 @@ void UiMsgProxy::register_print_terminate_done(PrintTerminateDoneCb cb)
 void UiMsgProxy::send_print_terminate()
 {
     middleware::Message msg(middleware::MsgType::UI_Print_Terminate_Req,
+                            middleware::ModuleId::UI,
+                            middleware::ModuleId::APP_GLAVO);
+    middleware::MsgPort::instance().publish_async(msg);
+}
+
+void UiMsgProxy::send_parser_exit()
+{
+    middleware::Message msg(middleware::MsgType::UI_Parser_Exit_Ntf,
                             middleware::ModuleId::UI,
                             middleware::ModuleId::APP_GLAVO);
     middleware::MsgPort::instance().publish_async(msg);

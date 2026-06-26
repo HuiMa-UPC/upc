@@ -39,11 +39,10 @@
 
 | 符号 | 路径 | 一句话 |
 |------|------|--------|
-| `GlavoService` | `glavo_service.*` | IPC 业务编排 + 工作线程（打印/目录/门控） |
+| `GlavoService` | `glavo_service.*` | IPC 业务编排 + 工作线程（打印/目录/门控）；`init()` 绑定 RingBuffer → `McuLink` |
 | `McuLink` | `mcu_link.*` | TCP 运动 + 串口握手/传感器 |
 | `PrintJobState` | `print_job_state.*` | 打印任务计数/状态 |
 | `PrintVideoNotify` | `print_video_notify.*` | 换层 Snap / 录像会话 IPC → Camera |
-| `glavo_parser_bind_init()` | `glavo_parser_bridge.*` | RingBuffer → McuLink 绑定 |
 | `device_config.hpp` | 头文件 | TCP/串口默认、`GLAVO_ENABLE_LAYER_SNAP` 等 |
 
 ## Camera（`app/camera/lib/` → 源编入 `rongsu_camera`，无独立静态库）

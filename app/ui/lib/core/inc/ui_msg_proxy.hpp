@@ -11,19 +11,6 @@ namespace ui {
 /**
  * @file ui_msg_proxy.hpp
  * @brief UI 与消息总线之间的唯一门面（Facade，经 MsgPort）
- *
- * 职责划分：
- *   - init()：订阅所有「后端 → UI」的固定消息类型（订阅句柄保存在 subs_）
- *   - send_*：UI 发起的请求（Empty / Inline POD），异步 publish
- *   - register_*：由页面或 control 在运行时挂载的业务回调（单槽，后注册覆盖前次）
- *
- * 线程：register_* 收到的回调均在 UI 线程（MsgPort::process）中执行，可安全操作 LVGL。
- *
- * 使用者：
- *   - page_user_home：register_env_update / send_open_door（首页环境、滑动开门）
- *   - control：打印流程相关的 send_* / register_*（见 control.cpp）
- *
- * 消息契约与总表：common/contract/README.md（send_* / register_* 与 MsgType 一一对应）
  */
 
 using EnvUpdateCb      = std::function<void(const middleware::EnvSnapshotPayload&)>;
@@ -33,24 +20,19 @@ using PurifyProgressCb = std::function<void(int progress)>;
 using PurifyDoneCb     = std::function<void()>;
 using FsDirCb          = std::function<void(const middleware::FileEntryPayload* files,
                                             uint32_t count)>;
-using FileInfoCb       = std::function<void(const middleware::FileInfoPayload&)>;
 using PrintProgressCb  = std::function<void(const middleware::PrintProgressPayload&)>;
 using PrintTerminateDoneCb = std::function<void()>;
+using SupplyStatusCb   = std::function<void(const middleware::SupplyStatusPayload&)>;
+using PrintPrepareDoneCb = std::function<void(bool ok)>;
 
 class UiMsgProxy {
 public:
     static UiMsgProxy& instance();
 
-    /**
-     * 建立 MsgBus 订阅（仅消息分发，不绑定业务逻辑）。
-     * 须在 app_init 中、任何 register_* 之前调用一次。
-     */
     void init();
 
-    /* ---- 首页环境推送（MCU 周期 APP_Update_Ntf）---- */
     void register_env_update(EnvUpdateCb cb);
 
-    /* ---- 打印流程：MCU ---- */
     void send_pm25_check();
     void register_pm25_result(Pm25ResultCb cb);
 
@@ -64,22 +46,32 @@ public:
     void register_purify_progress(PurifyProgressCb cb);
     void register_purify_done(PurifyDoneCb cb);
 
-    /* ---- 打印流程：振镜 / 文件 / 作业 ---- */
-    void send_fs_dir_open();
-    void register_fs_dir(FsDirCb cb);
+    /** path 为空或 Local 默认路径时打开 /home/Gcode（config.json 列表） */
+    void send_fs_dir_open(const char* path = nullptr);
 
-    void send_file_info_req(uint32_t file_index);
-    void register_file_info(FileInfoCb cb);
+    void send_supply_status();
+    void register_supply_status(SupplyStatusCb cb);
 
-    void send_print_start(uint32_t file_index);
+    void send_print_prepare(uint32_t file_index, middleware::PrintFileSource source);
+    void register_print_prepare_done(PrintPrepareDoneCb cb);
+
+    void send_print_start(uint32_t file_index, middleware::PrintFileSource source);
     void register_print_progress(PrintProgressCb cb);
+
     void send_print_terminate();
     void register_print_terminate_done(PrintTerminateDoneCb cb);
+
+    /** D1 X / 二次确认 Cancel：退出解析线程并清空 RingBuffer */
+    void send_parser_exit();
+
+    /** Local 详情页删除确认：通知 Glavo 删文件 + 更新 config.json */
+    void send_fs_delete_ntf(uint32_t file_index, middleware::PrintFileSource source);
+
+    void register_fs_dir(FsDirCb cb);
 
 private:
     UiMsgProxy() = default;
 
-    /** 从 Inline payload 解析 POD；长度不足时返回 false */
     template <typename T>
     static bool read_inline_pod(const middleware::Message& msg, T& out) {
         if (msg.payload.type != middleware::MsgPayload::Type::Inline ||
@@ -90,7 +82,6 @@ private:
         return true;
     }
 
-    /** 发送带 Inline POD 的请求 */
     template <typename T>
     void publish_pod(middleware::MsgType type, middleware::ModuleId target, const T& pod) {
         middleware::Message msg(type, middleware::ModuleId::UI, target);
@@ -99,10 +90,8 @@ private:
         middleware::MsgPort::instance().publish_async(msg);
     }
 
-    /** init() 时创建的订阅，生命周期与 UiMsgProxy 单例一致 */
     std::vector<middleware::Subscription> subs_;
 
-    /* 业务回调单槽（由 register_* 赋值，init 里的 lambda 转调） */
     EnvUpdateCb      env_update_cb_;
     Pm25ResultCb     pm25_result_cb_;
     DoorResultCb     open_door_cb_;
@@ -110,9 +99,10 @@ private:
     PurifyProgressCb purify_progress_cb_;
     PurifyDoneCb     purify_done_cb_;
     FsDirCb          fs_dir_cb_;
-    FileInfoCb       file_info_cb_;
     PrintProgressCb  print_progress_cb_;
     PrintTerminateDoneCb print_terminate_done_cb_;
+    SupplyStatusCb   supply_status_cb_;
+    PrintPrepareDoneCb print_prepare_done_cb_;
 };
 
 } // namespace ui

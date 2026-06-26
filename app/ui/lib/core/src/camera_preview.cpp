@@ -1,5 +1,6 @@
 #include "camera_preview.hpp"
 #include "camera_msg_proxy.hpp"
+#include "page_user_home.hpp"
 #include "msg_port.hpp"
 #include "rs_log.hpp"
 
@@ -776,7 +777,8 @@ void CameraPreviewPlayer::ui_timer_cb(lv_timer_t* timer)
     }
     self->shown_buf_.store(idx, std::memory_order_relaxed);
 
-    if(!self->logged_first_ui_show_) {
+    const bool first_show = !self->logged_first_ui_show_;
+    if(first_show) {
         self->logged_first_ui_show_ = true;
         UPC_LOG_CAMERA_PREVIEW(Info,
             "ui first show buf=%d w=%u h=%u stride=%u cf=XRGB8888",
@@ -785,6 +787,9 @@ void CameraPreviewPlayer::ui_timer_cb(lv_timer_t* timer)
     }
 
     lv_image_set_src(self->image_, &self->img_dsc_[idx]);
+    if(first_show) {
+        page_user_home_update_camera_preview_layout(self->width_);
+    }
     lv_obj_clear_flag(self->image_, LV_OBJ_FLAG_HIDDEN);
     if(self->hint_) {
         lv_obj_add_flag(self->hint_, LV_OBJ_FLAG_HIDDEN);

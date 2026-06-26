@@ -40,8 +40,9 @@ enum class MsgType : uint32_t {
     APP_CLOSE_DOOR_Rsp,       /**< [GLAVO_Door_Close_Rsp] DoorResultPayload */
 
     // ---- UI ↔ GLAVO：文件系统 ----
-    Fs_DirOpen_Req,           /**< [FS_Dir_Open_Req] Empty */
+    Fs_DirOpen_Req,           /**< [FS_Dir_Open_Req] Empty 或 path 字符串 */
     Fs_DirOpen_Rsp,           /**< [FS_Dir_Open_Rsp] FsDirHeader + FileEntryPayload[] */
+    Fs_Delete_Ntf,            /**< [FS_Delete_Ntf] FsDeleteNtfPayload：删除 Local 文件 */
 
     // ---- UI ↔ GLAVO：舱体控制 ----
     UI_OpenDoor_Req,
@@ -51,12 +52,17 @@ enum class MsgType : uint32_t {
     APP_Purify_Rsp,           /**< [GLAVO_Purify_Done] Empty */
 
     // ---- UI ↔ GLAVO：打印流程 ----
-    UI_FileInfo_Req,          /**< PrintStartReqPayload */
-    APP_FileInfo_Rsp,         /**< [GLAVO_FileInfo_Rsp] FileInfoPayload */
-    UI_Print_Start_Req,       /**< PrintStartReqPayload */
+    UI_Print_Prepare_Req,     /**< PrintPrepareReqPayload：轻量预处理 + USB 复制 */
+    APP_Print_Prepare_Rsp,    /**< PrintPrepareRspPayload */
+    UI_Parser_Exit_Ntf,       /**< Empty：取消解析（D1 X / 二次确认 Cancel） */
+    UI_Print_Start_Req,       /**< PrintStartReqPayload：正式解析 + 下发 */
     APP_Print_Progress_Ntf,   /**< [GLAVO_Print_Progress_Ntf] PrintProgressPayload */
     UI_Print_Terminate_Req,
     APP_Print_Terminate_Done, /**< [GLAVO_Print_Terminate_Done] Empty */
+
+    // ---- UI ↔ GLAVO：耗材/滤芯 ----
+    UI_Supply_Status_Req,     /**< Empty */
+    APP_Supply_Status_Rsp,    /**< [GLAVO_Supply_Status_Rsp] SupplyStatusPayload */
 
     // ---- UI ↔ CAMERA：视频流（控制面 socket；像素走 SHM） ----
     UI_Camera_Stream_Start_Req, /**< Empty 或 CameraStreamStartReqPayload */
@@ -258,13 +264,21 @@ struct DoorResultPayload {
     uint8_t ok;
 };
 
+/** 打印文件来源（Prepare / Start 共用；Local 列表来自 config.json） */
+enum class PrintFileSource : uint8_t {
+    Local = 0,
+    Usb   = 1,
+};
+
 /** 单个可打印文件项（与 ui::control_file_t 字段对齐；由 Fs_DirOpen_Rsp 一次性返回） */
 struct FileEntryPayload {
-    uint32_t index;          /**< 目录列表中的序号（0-based，与 UI_Print_Start_Req 一致） */
+    uint32_t index;          /**< 目录列表中的序号（0-based） */
     char     name[64];
     char     path[128];
-    uint32_t duration_min;
-    float    material_g;
+    uint32_t duration_min;   /**< 预估耗时（分钟）；本期可为 0 */
+    float    material_g;     /**< 预估耗材（克）；本期可为 0 */
+    uint32_t file_size;      /**< 文件大小（字节） */
+    uint32_t line_count;     /**< 轻量预处理行数 */
 };
 
 /** Fs_DirOpen_Rsp BufferRef 布局：[FsDirHeader][FileEntryPayload × count] */
@@ -272,18 +286,31 @@ struct FsDirHeader {
     uint32_t count;
 };
 
-/** UI_FileInfo_Req / UI_Print_Start_Req 通用载荷：按索引操作文件（Inline） */
-struct PrintStartReqPayload {
-    uint32_t file_index;
+/** APP_Supply_Status_Rsp 载荷：耗材/滤芯可用度（Inline） */
+struct SupplyStatusPayload {
+    float   material_pct;   /**< 耗材余量 0..100 */
+    float   filter_pct;     /**< 滤芯余量 0..100 */
+    uint8_t material_ok;    /**< 1=充足 0=不足 */
+    uint8_t filter_ok;      /**< 1=充足 0=不足 */
 };
 
-/** APP_FileInfo_Rsp 载荷：文件预扫描信息（Inline） */
-struct FileInfoPayload {
-    uint32_t file_index;   /**< 请求时的文件索引 */
-    uint32_t total_lines;  /**< G-code 总行数（预扫描） */
-    uint32_t file_size;    /**< 文件大小（字节） */
-    int8_t   ok;           /**< 0=失败/未找到，1=成功 */
+/** UI_Print_Prepare_Req / UI_Print_Start_Req 共用：按 Tab 来源 + 索引 */
+struct PrintPrepareReqPayload {
+    uint32_t        file_index;
+    PrintFileSource file_source;
+    uint8_t         reserved[3];
 };
+
+struct PrintPrepareRspPayload {
+    int8_t ok;   /**< 1=成功，0=失败 */
+    uint8_t reserved[3];
+};
+
+/** UI_Print_Start_Req 载荷：与 Prepare 相同（来源 + 索引） */
+using PrintStartReqPayload = PrintPrepareReqPayload;
+
+/** Fs_Delete_Ntf 载荷：文件来源 + 索引（Local 列表删除） */
+using FsDeleteNtfPayload = PrintPrepareReqPayload;
 
 /** APP_Print_Progress_Ntf 载荷：打印进度推送（Inline） */
 struct PrintProgressPayload {

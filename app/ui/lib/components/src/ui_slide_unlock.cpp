@@ -13,6 +13,7 @@ struct ui_slide_unlock_t {
     int32_t               min_x;
     int32_t               max_x;
     int32_t               threshold;     /**< >= 此 x 视为解锁 */
+    lv_color_t            accent;        /**< knob/解锁文字配色 */
     bool                  unlocked;
     bool                  dragging;
     int32_t               press_origin_x;
@@ -100,7 +101,7 @@ static void on_pressing(lv_event_t *e)
         knob_set_x(self, self->max_x);
         lv_obj_remove_flag(self->knob, LV_OBJ_FLAG_CLICKABLE);
         if(self->hint) {
-            lv_obj_set_style_text_color(self->hint, user_color_accent, 0);
+            lv_obj_set_style_text_color(self->hint, self->accent, 0);
             lv_obj_set_style_text_opa(self->hint, LV_OPA_COVER, 0);
         }
         if(self->on_unlocked) {
@@ -133,6 +134,7 @@ ui_slide_unlock_t *ui_slide_unlock_create(lv_obj_t *parent,
     }
     self->on_unlocked = cfg->on_unlocked;
     self->user_data = cfg->user_data;
+    self->accent = cfg->custom_accent ? cfg->accent_color : user_color_accent;
 
     const int32_t track_w = cfg->track_w > 0 ? cfg->track_w : USER_SLIDE_W;
     const int32_t track_h = cfg->track_h > 0 ? cfg->track_h : USER_SLIDE_H;
@@ -172,11 +174,11 @@ ui_slide_unlock_t *ui_slide_unlock_create(lv_obj_t *parent,
     lv_obj_t *knob = lv_obj_create(track);
     lv_obj_remove_style_all(knob);
     lv_obj_set_size(knob, knob_sz, knob_sz);
-    lv_obj_set_style_bg_color(knob, user_color_accent, 0);
+    lv_obj_set_style_bg_color(knob, self->accent, 0);
     lv_obj_set_style_bg_opa(knob, LV_OPA_COVER, 0);
     lv_obj_set_style_radius(knob, LV_RADIUS_CIRCLE, 0);
     lv_obj_set_style_shadow_width(knob, 20, 0);
-    lv_obj_set_style_shadow_color(knob, user_color_accent, 0);
+    lv_obj_set_style_shadow_color(knob, self->accent, 0);
     lv_obj_set_style_shadow_opa(knob, LV_OPA_40, 0);
     lv_obj_add_flag(knob, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_clear_flag(knob, LV_OBJ_FLAG_SCROLLABLE);

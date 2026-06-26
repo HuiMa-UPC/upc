@@ -77,7 +77,7 @@ lv_obj_t *ui_user_make_accent_preview(lv_obj_t *parent, int32_t w, int32_t h)
     lv_obj_remove_style_all(obj);
     lv_obj_set_size(obj, w, h);
     lv_obj_set_style_bg_color(obj, user_color_accent_dim, 0);
-    lv_obj_set_style_bg_opa(obj, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_opa(obj, LV_OPA_70, 0);
     lv_obj_set_style_bg_grad_color(obj, user_color_accent, 0);
     lv_obj_set_style_bg_grad_dir(obj, LV_GRAD_DIR_VER, 0);
     lv_obj_set_style_radius(obj, USER_RADIUS, 0);
@@ -126,7 +126,7 @@ lv_obj_t *ui_user_make_frosted_card(lv_obj_t *parent, bool flex_grow)
     }
     lv_obj_set_style_radius(card, USER_RADIUS, 0);
     lv_obj_set_style_bg_color(card, user_color_panel, 0);
-    lv_obj_set_style_bg_opa(card, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_opa(card, LV_OPA_60, 0);
     lv_obj_set_style_border_width(card, 1, 0);
     lv_obj_set_style_border_color(card, user_color_divider, 0);
     lv_obj_set_style_pad_all(card, USER_PAD, 0);
@@ -216,6 +216,78 @@ lv_obj_t *ui_user_make_supply_indicator(lv_obj_t *parent, const char *name,
     lv_obj_set_style_text_font(status_lbl, user_font_caption(), 0);
 
     return row;
+}
+
+lv_obj_t *ui_user_make_supply_bar(lv_obj_t *parent, const char *name,
+                                  bool ok, int percent,
+                                  lv_obj_t **out_bar,
+                                  lv_obj_t **out_pct_lbl,
+                                  lv_obj_t **out_status_lbl)
+{
+    if(percent < 0)   percent = 0;
+    if(percent > 100) percent = 100;
+
+    lv_obj_t *card = lv_obj_create(parent);
+    lv_obj_remove_style_all(card);
+    lv_obj_set_height(card, LV_SIZE_CONTENT);
+    lv_obj_set_flex_grow(card, 1);
+    lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_all(card, 0, 0);
+    lv_obj_set_style_pad_row(card, USER_PAD_SM / 2, 0);
+    lv_obj_set_style_bg_opa(card, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(card, 0, 0);
+    lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
+
+    /* 第一行：名称 + 状态 */
+    lv_obj_t *head = lv_obj_create(card);
+    lv_obj_remove_style_all(head);
+    lv_obj_set_width(head, LV_PCT(100));
+    lv_obj_set_height(head, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(head, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(head, LV_FLEX_ALIGN_SPACE_BETWEEN,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_bg_opa(head, LV_OPA_TRANSP, 0);
+    lv_obj_clear_flag(head, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *name_lbl = lv_label_create(head);
+    lv_label_set_text(name_lbl, name ? name : "");
+    lv_obj_set_style_text_color(name_lbl, user_color_text, 0);
+    lv_obj_set_style_text_font(name_lbl, user_font_text(), 0);
+
+    lv_obj_t *status_lbl = lv_label_create(head);
+    lv_label_set_text(status_lbl, ok ? "Adequate" : "Low");
+    lv_obj_set_style_text_color(status_lbl,
+        ok ? user_color_status_ok : user_color_status_err, 0);
+    lv_obj_set_style_text_font(status_lbl, user_font_caption(), 0);
+
+    /* 第二行：进度条 + 百分比 */
+    lv_obj_t *bar_row = lv_obj_create(card);
+    lv_obj_remove_style_all(bar_row);
+    lv_obj_set_width(bar_row, LV_PCT(100));
+    lv_obj_set_height(bar_row, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(bar_row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(bar_row, LV_FLEX_ALIGN_START,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_column(bar_row, USER_PAD_SM, 0);
+    lv_obj_set_style_bg_opa(bar_row, LV_OPA_TRANSP, 0);
+    lv_obj_clear_flag(bar_row, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *bar = ui_user_make_progress_bar(bar_row, LV_PCT(100), USER_PROGRESS_H);
+    lv_obj_set_flex_grow(bar, 1);
+    lv_obj_set_style_bg_color(bar,
+        ok ? user_color_status_ok : user_color_status_err, LV_PART_INDICATOR);
+    lv_bar_set_value(bar, percent, LV_ANIM_OFF);
+
+    lv_obj_t *pct_lbl = lv_label_create(bar_row);
+    lv_label_set_text_fmt(pct_lbl, "%d%%", percent);
+    lv_obj_set_style_text_color(pct_lbl,
+        ok ? user_color_accent : user_color_status_err, 0);
+    lv_obj_set_style_text_font(pct_lbl, user_font_caption(), 0);
+
+    if(out_bar)        *out_bar = bar;
+    if(out_pct_lbl)    *out_pct_lbl = pct_lbl;
+    if(out_status_lbl) *out_status_lbl = status_lbl;
+    return card;
 }
 
 lv_obj_t *ui_user_make_setting_row(lv_obj_t *parent, const char *label,

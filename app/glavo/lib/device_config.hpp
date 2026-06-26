@@ -67,7 +67,7 @@
 
 /** 串口 ACK：0=关闭（兼容旧 MCU）；1=AA 等 BA + BB 回 AB + 超时重传 */
 #ifndef GLAVO_SERIAL_ACK_ENABLE
-#define GLAVO_SERIAL_ACK_ENABLE  1
+#define GLAVO_SERIAL_ACK_ENABLE  0
 #endif
 
 #ifndef GLAVO_SERIAL_ACK_TIMEOUT_MS

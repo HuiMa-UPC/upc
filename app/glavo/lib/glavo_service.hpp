@@ -3,6 +3,7 @@
 
 /** Glavo 侧 IPC API：处理 UI 请求、推送 Ntf/Rsp。契约见 common/contract/README.md */
 
+#include "gcode_manifest.hpp"
 #include "mcu_link.hpp"
 #include "msg_port.hpp"
 #include "msg_types.hpp"
@@ -25,7 +26,6 @@ public:
     GlavoService(const GlavoService&) = delete;
     GlavoService& operator=(const GlavoService&) = delete;
 
-    // 生命周期
     bool init();
     bool start();
     bool stop();
@@ -41,9 +41,12 @@ private:
 
     void handle_message(const middleware::Message& msg);
     void handle_dir_open(const middleware::Message& msg);
-    void handle_file_info_req(const middleware::Message& msg);
+    void handle_fs_delete_ntf(const middleware::Message& msg);
+    void handle_print_prepare(const middleware::Message& msg);
+    void handle_parser_exit(const middleware::Message& msg);
     void handle_print_start(const middleware::Message& msg);
     void handle_print_terminate(const middleware::Message& msg);
+    void handle_supply_status_req(const middleware::Message& msg);
     void handle_pm25_request(const middleware::Message& msg);
     void handle_close_door_request(const middleware::Message& msg);
     void handle_open_door_request(const middleware::Message& msg);
@@ -51,14 +54,22 @@ private:
 
     void send_door_rsp(const middleware::Message& msg, middleware::MsgType rsp_type);
     void send_dir_open_empty(const middleware::Message& req);
+    void send_dir_open_entries(const middleware::Message& req,
+                               const std::vector<GcodeManifestEntry>& local_entries,
+                               const std::string& base_path);
+    void send_dir_open_usb(const middleware::Message& req, const std::string& usb_path);
     void stop_print_job();
+    void clear_prepare_session();
+    bool light_scan_line_count(const std::string& path, uint32_t& line_count);
+    bool copy_usb_to_local(const std::string& src, const std::string& dst);
+    bool run_print_prepare(middleware::PrintFileSource source, uint32_t index,
+                           std::string& local_path_out);
     void on_mcu_link_event(McuLinkEvent ev);
     void on_motion_batch_sent();
     void publish_terminate_done();
     void reset_print_progress_state();
     void send_print_progress(bool force_complete);
 
-    // 消息入口 (由 MsgBus 订阅回调，转发至工作线程)
     void on_message(const middleware::Message& msg);
     void worker_loop();
     [[nodiscard]] bool publish_async(const middleware::Message& msg);
@@ -82,15 +93,18 @@ private:
     std::atomic<ServiceState> state_{ServiceState::Idle};
     std::vector<middleware::Subscription> subscriptions_;
 
-    // 工作线程：IPC 业务在工作线程中处理，回 UI 须 publish_async
     std::thread worker_thread_;
     std::queue<middleware::Message> worker_queue_;
     std::mutex worker_mutex_;
     std::condition_variable worker_cv_;
     std::atomic<bool> worker_running_{false};
 
-    std::string current_dir_path_;
-    std::vector<std::string> current_entries_;
+    std::vector<GcodeManifestEntry> local_manifest_;
+    std::vector<std::string>        usb_entries_;
+
+    std::string prepared_local_path_;
+    bool        prepare_ready_ = false;
+
     std::string current_file_path_;
 
     std::atomic<bool> print_running_{false};

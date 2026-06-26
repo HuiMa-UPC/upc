@@ -8,9 +8,8 @@
 | 文件 | 职责 |
 |------|------|
 | `main.cpp` | 进程守护、IPC Server、McuLink 连接、`MsgPort::process` 循环 |
-| `lib/glavo_service.*` | IPC 业务 + 工作线程 + 订阅/发布（目录/打印/门控/进度） |
+| `lib/glavo_service.*` | IPC 业务 + 工作线程 + 订阅/发布（目录/打印/门控/进度）；`init()` 内绑定 RingBuffer → `McuLink` |
 | `lib/mcu_link.*` | TCP 运动下发 + 串口握手/传感器/换层 Snap 触发 |
-| `lib/glavo_parser_bridge.*` | `ParserManager` RingBuffer → `McuLink` |
 | `lib/print_video_notify.*` | 换层 Snap / 录像会话 → Camera（经 UI Hub） |
 | `lib/print_job_state.*` | 发送包计数、完成/错误标志（McuLink 与进度共用） |
 | `lib/device_config.hpp` | TCP/串口默认、Layer Snap 开关 |
@@ -35,8 +34,10 @@ UI → GlavoService（工作线程）→ ParserManager → RingBuffer → McuLin
 | 消息 | 处理 |
 |------|------|
 | `Fs_DirOpen_Req` | 按 `ParserRegistry` 后缀列目录 |
-| `UI_FileInfo_Req` | 打开文件、预解析行数 |
-| `UI_Print_Start_Req` | `begin_sending` + `PrintVideoNotify::on_print_start` |
+| `Fs_Delete_Ntf` | 删除 Local 文件（磁盘 + config.json） |
+| `UI_Print_Prepare_Req` | 轻量预处理（USB 复制、行数扫描、写 config.json） |
+| `UI_Parser_Exit_Ntf` | 取消解析（stop_parse + 清会话） |
+| `UI_Print_Start_Req` | 正式解析 + `begin_sending` + `PrintVideoNotify::on_print_start` |
 | `UI_Print_Terminate_Req` | `stop_parse` + `request_terminate` + `on_print_abort` |
 | `UI_PM25_Req` / 门控 Req | 环境快照或占位 Rsp |
 
