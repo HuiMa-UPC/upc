@@ -121,6 +121,22 @@ void MsgPort::process(int io_timeout_ms)
     }
 }
 
+bool MsgPort::start_ipc_io_thread()
+{
+    if (mode_ != MsgPortMode::Ipc) {
+        return false;
+    }
+    return upc_ipc::IpcMsgBus::instance().start_io_thread();
+}
+
+bool MsgPort::ipc_io_thread_running() const noexcept
+{
+    if (mode_ != MsgPortMode::Ipc) {
+        return false;
+    }
+    return upc_ipc::IpcMsgBus::instance().io_thread_running();
+}
+
 bool MsgPort::publish_to_peer_with_fds(const Message& msg,
                                        const std::vector<int>& fds)
 {

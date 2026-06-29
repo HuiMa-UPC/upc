@@ -133,6 +133,15 @@ void UiMsgProxy::init()
                 print_prepare_done_cb_(p.ok != 0);
             }
         }));
+
+    subs_.push_back(bus.subscribe(
+        middleware::MsgType::APP_Mcu_Ota_Status_Ntf, middleware::ModuleId::UI,
+        [this](const middleware::Message& msg) {
+            middleware::McuOtaStatusPayload p{};
+            if (mcu_ota_status_cb_ && read_inline_pod(msg, p)) {
+                mcu_ota_status_cb_(p);
+            }
+        }));
 }
 
 void UiMsgProxy::register_env_update(EnvUpdateCb cb)
@@ -278,6 +287,27 @@ void UiMsgProxy::send_parser_exit()
                             middleware::ModuleId::UI,
                             middleware::ModuleId::APP_GLAVO);
     middleware::MsgPort::instance().publish_async(msg);
+}
+
+void UiMsgProxy::send_mcu_ota_start()
+{
+    middleware::Message msg(middleware::MsgType::UI_Mcu_Ota_Start_Req,
+                            middleware::ModuleId::UI,
+                            middleware::ModuleId::APP_GLAVO);
+    middleware::MsgPort::instance().publish_async(msg);
+}
+
+void UiMsgProxy::send_mcu_ota_cancel()
+{
+    middleware::Message msg(middleware::MsgType::UI_Mcu_Ota_Cancel_Ntf,
+                            middleware::ModuleId::UI,
+                            middleware::ModuleId::APP_GLAVO);
+    middleware::MsgPort::instance().publish_async(msg);
+}
+
+void UiMsgProxy::register_mcu_ota_status(McuOtaStatusCb cb)
+{
+    mcu_ota_status_cb_ = std::move(cb);
 }
 
 } // namespace ui

@@ -76,6 +76,11 @@ enum class MsgType : uint32_t {
     APP_Print_Layer_Snap_Ntf,                   /**< PrintVideoLayerSnapPayload */
     APP_Print_Video_Session_Finish_Ntf,         /**< PrintVideoSessionPayload */
     APP_Print_Video_Session_Abort_Ntf,          /**< PrintVideoSessionPayload */
+
+    // ---- UI ↔ GLAVO：MCU OTA（测试） ----
+    UI_Mcu_Ota_Start_Req,       /**< Empty：扫描 /home/image 最新 .bin 并下发 */
+    UI_Mcu_Ota_Cancel_Ntf,      /**< Empty：测试用，SOC 侧中止 OTA 会话 */
+    APP_Mcu_Ota_Status_Ntf,     /**< McuOtaStatusPayload */
 };
 
 enum class MsgPriority : uint8_t {
@@ -362,6 +367,23 @@ struct PrintVideoLayerSnapPayload {
     uint32_t layer_index;    /**< 1-based */
     uint16_t layer_height_um;
     uint16_t reserved;
+};
+
+/** APP_Mcu_Ota_Status_Ntf：MCU OTA 进度/状态（测试 UI） */
+enum class McuOtaState : uint8_t {
+    Idle         = 0,
+    Preparing    = 1,
+    Transferring = 2,
+    Verifying    = 3,
+    Success      = 4,
+    Failed       = 5,
+    Cancelled    = 6,
+};
+
+struct McuOtaStatusPayload {
+    McuOtaState state;
+    uint8_t     progress;   /**< MCU byte[9] 0~255 */
+    uint8_t     reserved[2];
 };
 
 } // namespace middleware

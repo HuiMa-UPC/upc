@@ -3,7 +3,9 @@
 #include "ui_user_widgets.hpp"
 #include "ui_keyboard.hpp"
 #include "ui_feedback.hpp"
-
+#include "ui_modal_dialog.hpp"
+#include "ui_msg_proxy.hpp"
+#include "msg_types.hpp"
 
 #include <cstring>
 
@@ -34,6 +36,118 @@ lv_obj_t *g_dlg_mask    = nullptr;
 lv_obj_t *g_dlg_box     = nullptr;
 lv_obj_t *g_dlg_pwd_ta  = nullptr;
 lv_obj_t *g_dlg_err_lbl = nullptr;
+
+ui_modal_dialog_t *g_ota_dlg = nullptr;
+lv_obj_t *g_ota_status_lbl = nullptr;
+lv_obj_t *g_ota_bar = nullptr;
+bool g_ota_proxy_wired = false;
+
+struct OtaUiUpdate {
+    middleware::McuOtaStatusPayload status;
+};
+
+void ota_close_dialog(void);
+
+const char *ota_state_text(middleware::McuOtaState state)
+{
+    switch(state) {
+    case middleware::McuOtaState::Preparing:
+        return "Preparing OTA...";
+    case middleware::McuOtaState::Transferring:
+        return "Transferring firmware...";
+    case middleware::McuOtaState::Verifying:
+        return "Verifying on MCU...";
+    case middleware::McuOtaState::Success:
+        return "OTA successful";
+    case middleware::McuOtaState::Failed:
+        return "OTA failed";
+    case middleware::McuOtaState::Cancelled:
+        return "OTA cancelled";
+    default:
+        return "OTA...";
+    }
+}
+
+void ota_ui_apply_async(void *user)
+{
+    auto *upd = static_cast<OtaUiUpdate *>(user);
+    if(!upd) {
+        return;
+    }
+    if(g_ota_status_lbl) {
+        char buf[96];
+        const int pct = (upd->status.progress * 100) / 255;
+        std::snprintf(buf, sizeof(buf), "%s (%d%%)",
+                      ota_state_text(upd->status.state), pct);
+        lv_label_set_text(g_ota_status_lbl, buf);
+    }
+    if(g_ota_bar) {
+        lv_bar_set_value(g_ota_bar, upd->status.progress, LV_ANIM_OFF);
+    }
+    delete upd;
+}
+
+void wire_ota_proxy_once()
+{
+    if(g_ota_proxy_wired) {
+        return;
+    }
+    g_ota_proxy_wired = true;
+    ui::UiMsgProxy::instance().register_mcu_ota_status(
+        [](const middleware::McuOtaStatusPayload &st) {
+            auto *upd = new OtaUiUpdate{};
+            upd->status = st;
+            lv_async_call(ota_ui_apply_async, upd);
+        });
+}
+
+/* TEST ONLY: 右上角 X 中止 SOC OTA 会话，便于联调卡死退出 */
+void on_ota_close(lv_event_t *)
+{
+    ui::UiMsgProxy::instance().send_mcu_ota_cancel();
+    ota_close_dialog();
+}
+
+void open_ota_dialog(void)
+{
+    if(g_ota_dlg) {
+        return;
+    }
+    wire_ota_proxy_once();
+
+    ui_modal_dialog_cfg_t cfg =
+        ui_modal_dialog_cfg_user("MCU OTA (Test)", USER_DLG_W, false);
+    cfg.with_close_btn = true;
+    g_ota_dlg = ui_modal_dialog_open(lv_screen_active(), &cfg);
+    if(!g_ota_dlg) {
+        return;
+    }
+    if(g_ota_dlg->close_btn) {
+        lv_obj_add_event_cb(g_ota_dlg->close_btn, on_ota_close,
+                            LV_EVENT_CLICKED, nullptr);
+    }
+
+    g_ota_status_lbl = ui_user_make_body_label(g_ota_dlg->body, "Starting...");
+    g_ota_bar = ui_user_make_progress_bar(
+        g_ota_dlg->body, LV_PCT(100), USER_PROGRESS_H);
+    lv_bar_set_value(g_ota_bar, 0, LV_ANIM_OFF);
+}
+
+void ota_close_dialog(void)
+{
+    if(g_ota_dlg) {
+        ui_modal_dialog_close(g_ota_dlg);
+        g_ota_dlg         = nullptr;
+        g_ota_status_lbl  = nullptr;
+        g_ota_bar         = nullptr;
+    }
+}
+
+void on_ota_entry_click(lv_event_t *)
+{
+    open_ota_dialog();
+    ui::UiMsgProxy::instance().send_mcu_ota_start();
+}
 
 void dlg_close(void);
 
@@ -186,6 +300,7 @@ void page_user_settings_refresh(bool /*force*/)
 void page_user_settings_dismiss_dialog(void)
 {
     dlg_close();
+    ota_close_dialog();
 }
 
 lv_obj_t *page_user_settings_create(lv_obj_t *parent)
@@ -211,6 +326,7 @@ lv_obj_t *page_user_settings_create(lv_obj_t *parent)
     ui_user_make_setting_row(card, "Sound", nullptr, nullptr);
     ui_user_make_setting_row(card, "Network", nullptr, nullptr);
     ui_user_make_setting_row(card, "About", nullptr, nullptr);
+    ui_user_make_setting_row(card, "MCU OTA (Test)", "Start", on_ota_entry_click);
     ui_user_make_setting_row(card, "Developer Mode", "Enter", on_dev_entry_click);
 
     /* 软件版本信息行：左侧标签 + 右侧版本号（纯文本，无功能） */

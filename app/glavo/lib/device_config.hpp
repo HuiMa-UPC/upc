@@ -67,7 +67,7 @@
 
 /** 串口 ACK：0=关闭（兼容旧 MCU）；1=AA 等 BA + BB 回 AB + 超时重传 */
 #ifndef GLAVO_SERIAL_ACK_ENABLE
-#define GLAVO_SERIAL_ACK_ENABLE  0
+#define GLAVO_SERIAL_ACK_ENABLE  1
 #endif
 
 #ifndef GLAVO_SERIAL_ACK_TIMEOUT_MS
@@ -77,6 +77,15 @@
 /** 首次发送后的重传次数（不含首发） */
 #ifndef GLAVO_SERIAL_ACK_MAX_RETRY
 #define GLAVO_SERIAL_ACK_MAX_RETRY  3
+#endif
+
+/** MCU OTA 测试：固件目录与块大小 */
+#ifndef GLAVO_OTA_IMAGE_DIR
+#define GLAVO_OTA_IMAGE_DIR  "/home/image"
+#endif
+
+#ifndef GLAVO_OTA_CHUNK_SIZE
+#define GLAVO_OTA_CHUNK_SIZE  1024
 #endif
 
 /** 换层排空后向 Camera 发 Layer_Snap_Ntf：0=关；1=每层拍照录像 */

@@ -24,6 +24,7 @@ using PrintProgressCb  = std::function<void(const middleware::PrintProgressPaylo
 using PrintTerminateDoneCb = std::function<void()>;
 using SupplyStatusCb   = std::function<void(const middleware::SupplyStatusPayload&)>;
 using PrintPrepareDoneCb = std::function<void(bool ok)>;
+using McuOtaStatusCb   = std::function<void(const middleware::McuOtaStatusPayload&)>;
 
 class UiMsgProxy {
 public:
@@ -69,6 +70,11 @@ public:
 
     void register_fs_dir(FsDirCb cb);
 
+    /** MCU OTA 测试（Settings） */
+    void send_mcu_ota_start();
+    void send_mcu_ota_cancel();
+    void register_mcu_ota_status(McuOtaStatusCb cb);
+
 private:
     UiMsgProxy() = default;
 
@@ -103,6 +109,7 @@ private:
     PrintTerminateDoneCb print_terminate_done_cb_;
     SupplyStatusCb   supply_status_cb_;
     PrintPrepareDoneCb print_prepare_done_cb_;
+    McuOtaStatusCb   mcu_ota_status_cb_;
 };
 
 } // namespace ui

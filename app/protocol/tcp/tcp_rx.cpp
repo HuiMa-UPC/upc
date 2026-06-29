@@ -11,7 +11,14 @@ int tcp_parse_status_response(const uint8_t* data, size_t len, tcp_response_t* r
         return -1;
     }
 
-    resp->cmd_rate  = (uint16_t)data[4] | ((uint16_t)data[5] << 8);
-    resp->data_rate = (uint16_t)data[6] | ((uint16_t)data[7] << 8);
+    resp->cmd_rate     = 0;
+    resp->data_rate    = 0;
+    resp->event_flag   = 0;
+    resp->ota_progress = 0;
+
+    resp->cmd_rate     = (uint16_t)data[4] | ((uint16_t)data[5] << 8);
+    resp->data_rate    = (uint16_t)data[6] | ((uint16_t)data[7] << 8);
+    resp->event_flag   = data[8];
+    resp->ota_progress = data[9];
     return 0;
 }

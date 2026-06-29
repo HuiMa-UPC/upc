@@ -2,6 +2,7 @@
 #include "msg_port.hpp"
 #include "print_video_notify.hpp"
 #include "parser_config.hpp"
+#include "device_config.hpp"
 #include "parser_context.hpp"
 #include "parser_manager.hpp"
 #include "parser_registry.hpp"
@@ -143,6 +144,10 @@ bool GlavoService::init() {
         [this](McuLinkEvent ev) { on_mcu_link_event(ev); });
     McuLink::instance().set_progress_callback(
         [this]() { on_motion_batch_sent(); });
+    McuLink::instance().set_ota_status_callback(
+        [this](const middleware::McuOtaStatusPayload& st) {
+            publish_mcu_ota_status(st);
+        });
     gcode_manifest_load(kLocalConfigPath, local_manifest_);
     state_ = ServiceState::Idle;
     return true;
@@ -165,6 +170,8 @@ bool GlavoService::start() {
         middleware::MsgType::UI_CLOSE_DOOR_Req,
         middleware::MsgType::UI_OpenDoor_Req,
         middleware::MsgType::UI_Purify_Req,
+        middleware::MsgType::UI_Mcu_Ota_Start_Req,
+        middleware::MsgType::UI_Mcu_Ota_Cancel_Ntf,
     };
     for(middleware::MsgType t : k_subs) {
         subscribe(t, [this](const middleware::Message& msg) { on_message(msg); });
@@ -290,6 +297,12 @@ void GlavoService::handle_message(const middleware::Message& msg) {
             break;
         case middleware::MsgType::UI_Purify_Req:
             handle_purify_request(msg);
+            break;
+        case middleware::MsgType::UI_Mcu_Ota_Start_Req:
+            handle_mcu_ota_start(msg);
+            break;
+        case middleware::MsgType::UI_Mcu_Ota_Cancel_Ntf:
+            handle_mcu_ota_cancel(msg);
             break;
         default:
             break;
@@ -875,6 +888,36 @@ void GlavoService::handle_print_terminate(const middleware::Message& msg) {
     parser::ParserManager::instance().stop_parse();
     McuLink::instance().request_terminate();
     clear_prepare_session();
+}
+
+void GlavoService::handle_mcu_ota_start(const middleware::Message& msg) {
+    (void)msg;
+    if(McuLink::instance().ota_active()) {
+        UPC_LOG_GLAVO_SERVICE(Warn, "mcu_ota_start: already active");
+        return;
+    }
+    if(!McuLink::instance().start_mcu_ota(GLAVO_OTA_IMAGE_DIR)) {
+        middleware::McuOtaStatusPayload st{};
+        st.state    = middleware::McuOtaState::Failed;
+        st.progress = 0;
+        publish_mcu_ota_status(st);
+    }
+}
+
+void GlavoService::handle_mcu_ota_cancel(const middleware::Message& msg) {
+    (void)msg;
+    McuLink::instance().cancel_mcu_ota();
+}
+
+void GlavoService::publish_mcu_ota_status(
+    const middleware::McuOtaStatusPayload& st)
+{
+    middleware::Message out(middleware::MsgType::APP_Mcu_Ota_Status_Ntf,
+                            middleware::ModuleId::APP_GLAVO,
+                            middleware::ModuleId::UI);
+    out.payload = middleware::MsgPayload::from_bytes(
+        reinterpret_cast<const uint8_t*>(&st), sizeof(st));
+    (void)publish_async(out);
 }
 
 } // namespace upc::glavo

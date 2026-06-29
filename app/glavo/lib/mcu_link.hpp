@@ -5,6 +5,7 @@
 #include "parser_config.hpp"
 #include "device_config.hpp"
 #include "protocol.hpp"
+#include "mcu_ota_session.hpp"
 
 #include <atomic>
 #include <cstdint>
@@ -110,6 +111,17 @@ public:
     /** @brief 请求异步终止打印（用户手动停止或 TCP 断线触发） */
     void request_terminate();
 
+    /** @brief 设置 MCU OTA 状态回调（测试） */
+    void set_ota_status_callback(McuOtaStatusCb cb);
+
+    /** @brief 开始 MCU OTA（扫描 image_dir 下最新 .bin） */
+    bool start_mcu_ota(const char* image_dir = nullptr);
+
+    /** @brief 测试用：中止 SOC 侧 OTA 会话 */
+    void cancel_mcu_ota();
+
+    [[nodiscard]] bool ota_active() const;
+
     /**
      * @brief 将串口发送帧入队，由 link_thread 统一 write（线程安全）
      * @note 队列满时丢弃最旧一条
@@ -136,6 +148,9 @@ public:
     void on_sensor_report(const serial_sensor_report_t& report);
     void publish_env_update_ntf();
     void drain_serial_tx_queue();
+
+    /** TCP 常态应答（运动/OTA），供分帧回调使用 */
+    void on_tcp_status_response(const tcp_response_t& resp);
 
 private:
     struct SerialReliableItem {
@@ -228,6 +243,7 @@ private:
     void run_natural_complete_cleanup();
     void emit_event(McuLinkEvent ev);
     void poll_mcu_drain_heartbeat();
+    void ota_tick();
 
     /** @brief 判断 MCU 的指令缓存与数据缓存是否均已排空 */
     bool mcu_rates_drained() const;
@@ -308,6 +324,8 @@ private:
 
     EnvSnapshotCache env_cache_{};
     mutable std::mutex env_mtx_;
+
+    McuOtaSession ota_session_;
 
     /* ---------- 常量 ---------- */
     static constexpr size_t kSerialTxQueueMax = 32;

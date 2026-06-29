@@ -13,6 +13,7 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <vector>
 
@@ -47,6 +48,14 @@ public:
     bool publish_async(const middleware::Message& msg);
     bool publish_sync(const middleware::Message& msg);
     void process(int io_timeout_ms = 0);
+
+    /**
+     * Hub 模式：后台线程专职 epoll 收包与 IPC_FWD；
+     * 本进程订阅回调改由主线程 process() 消费 local_queue_。
+     */
+    bool start_io_thread();
+    void stop_io_thread();
+    [[nodiscard]] bool io_thread_running() const noexcept;
 
     /** 所有 required peer 均已连接（hub）；server 模式下对端 UI 已连接 */
     [[nodiscard]] bool peer_connected() const noexcept;
@@ -83,6 +92,8 @@ private:
 
     bool deliver_local(const middleware::Message& msg);
     bool enqueue_local(const middleware::Message& msg);
+    void process_local_queue();
+    void io_thread_loop();
     void deliver_frames(const std::vector<InboundWireUnit>& units,
                         middleware::ModuleId expected_sender);
     void stash_pending_dma_fds(middleware::ModuleId sender,
@@ -134,6 +145,10 @@ private:
 
     std::unordered_map<uint32_t, std::vector<int>> pending_dma_fds_;
     mutable std::mutex pending_dma_fds_mtx_;
+
+    std::thread io_thread_;
+    std::atomic<bool> io_thread_running_{false};
+    std::atomic<bool> io_thread_stop_{false};
 };
 
 } // namespace upc_ipc

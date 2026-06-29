@@ -7,7 +7,6 @@
 #include "upc_sys_monitor.hpp"
 #include "rs_log.hpp"
 
-#include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <cstring>
@@ -99,13 +98,20 @@ int start_ui(char daemon) {
     ui::app_init(lv_scr_act());
 
     auto& port = middleware::MsgPort::instance();
+    if (!port.start_ipc_io_thread()) {
+        std::fprintf(stderr, "%s IPC io thread start failed\n", kProc.name);
+        port.shutdown();
+        if (daemon) {
+            process_remove_pid(kProc.pid_file);
+        }
+        return 6;
+    }
+
     while (!g_shutdown_requested) {
-        /* 先泵 IPC，避免大画面 lv_timer_handler 拖慢 Glavo 控制消息 */
+        /* 消费 IO 线程入队的本地消息（订阅回调在 UI 主线程） */
         port.process(0);
         const uint32_t delay = lv_timer_handler();
-        int wait_ms = delay > 0 ? static_cast<int>(delay) : 1;
-        wait_ms = std::min(wait_ms, 8);
-        port.process(wait_ms);
+        (void)delay;
         port.process(0);
         upc_sys_monitor_tick();
     }

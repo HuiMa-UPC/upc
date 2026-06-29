@@ -172,6 +172,8 @@ bool IpcMsgBus::init_client(middleware::ModuleId local_id,
 
 void IpcMsgBus::shutdown()
 {
+    stop_io_thread();
+
     {
         std::lock_guard<std::mutex> lock(subs_mtx_);
         subscribers_.clear();
@@ -634,7 +636,12 @@ void IpcMsgBus::deliver_frames(
 
         const bool hub_fwd = should_forward_to_peer(msg);
         if (!hub_fwd) {
-            deliver_local(msg);
+            if (io_thread_running_.load(std::memory_order_acquire) &&
+                needs_local_handling(msg)) {
+                enqueue_local(msg);
+            } else {
+                deliver_local(msg);
+            }
         } else if (!send_to_peer(msg.target_id, msg)) {
             UPC_LOG_IPC(Warn, "IPC_FWD fail %s %s->%s",
                         upc_msg_type_name(msg.type),
@@ -926,15 +933,8 @@ void IpcMsgBus::try_reconnect_peers()
     }
 }
 
-void IpcMsgBus::process(int io_timeout_ms)
+void IpcMsgBus::process_local_queue()
 {
-    if (mode_ == IpcBusMode::Server || mode_ == IpcBusMode::Hub) {
-        if (mode_ == IpcBusMode::Hub) {
-            try_reconnect_peers();
-        }
-        poll_io(io_timeout_ms);
-    }
-
     middleware::PriorityMsgQueue local;
     {
         std::lock_guard<std::mutex> lock(queue_mtx_);
@@ -950,6 +950,75 @@ void IpcMsgBus::process(int io_timeout_ms)
     }
     if (delivered > 0) {
         UPC_LOG_IPC(Debug, "process delivered=%zu", delivered);
+    }
+}
+
+void IpcMsgBus::process(int io_timeout_ms)
+{
+    if (!io_thread_running_.load(std::memory_order_acquire)) {
+        if (mode_ == IpcBusMode::Server || mode_ == IpcBusMode::Hub) {
+            if (mode_ == IpcBusMode::Hub) {
+                try_reconnect_peers();
+            }
+            poll_io(io_timeout_ms);
+        }
+    }
+
+    process_local_queue();
+}
+
+bool IpcMsgBus::start_io_thread()
+{
+    if (mode_ != IpcBusMode::Hub || !initialized_) {
+        UPC_LOG_IPC(Error, "start_io_thread requires hub mode");
+        return false;
+    }
+    if (io_thread_running_.load(std::memory_order_acquire)) {
+        return true;
+    }
+
+    io_thread_stop_.store(false, std::memory_order_release);
+    try {
+        io_thread_ = std::thread([this]() { io_thread_loop(); });
+    } catch (...) {
+        io_thread_running_.store(false, std::memory_order_release);
+        UPC_LOG_IPC(Error, "start_io_thread thread create failed");
+        return false;
+    }
+    io_thread_running_.store(true, std::memory_order_release);
+
+    UPC_LOG_IPC(Info, "io thread started");
+    return true;
+}
+
+void IpcMsgBus::stop_io_thread()
+{
+    if (!io_thread_running_.load(std::memory_order_acquire)) {
+        return;
+    }
+
+    io_thread_stop_.store(true, std::memory_order_release);
+    if (io_thread_.joinable()) {
+        io_thread_.join();
+    }
+    io_thread_running_.store(false, std::memory_order_release);
+    UPC_LOG_IPC(Info, "io thread stopped");
+}
+
+bool IpcMsgBus::io_thread_running() const noexcept
+{
+    return io_thread_running_.load(std::memory_order_acquire);
+}
+
+void IpcMsgBus::io_thread_loop()
+{
+    constexpr int kIoPollMs = 50;
+
+    while (!io_thread_stop_.load(std::memory_order_acquire)) {
+        if (mode_ == IpcBusMode::Hub) {
+            try_reconnect_peers();
+        }
+        poll_io(kIoPollMs);
     }
 }
 

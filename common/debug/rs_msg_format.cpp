@@ -106,6 +106,9 @@ const char* upc_msg_type_name(MsgType type) {
             return "APP_Print_Video_Session_Finish_Ntf";
         case MsgType::APP_Print_Video_Session_Abort_Ntf:
             return "APP_Print_Video_Session_Abort_Ntf";
+        case MsgType::UI_Mcu_Ota_Start_Req: return "UI_Mcu_Ota_Start_Req";
+        case MsgType::UI_Mcu_Ota_Cancel_Ntf: return "UI_Mcu_Ota_Cancel_Ntf";
+        case MsgType::APP_Mcu_Ota_Status_Ntf: return "APP_Mcu_Ota_Status_Ntf";
         default: return "Msg";
     }
 }

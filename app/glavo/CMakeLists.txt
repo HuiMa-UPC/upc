@@ -5,6 +5,7 @@ set(UPC_GLAVO_SOURCES
     ${GLAVO_LIB_DIR}/glavo_service.cpp
     ${GLAVO_LIB_DIR}/gcode_manifest.cpp
     ${GLAVO_LIB_DIR}/mcu_link.cpp
+    ${GLAVO_LIB_DIR}/mcu_ota_session.cpp
     ${GLAVO_LIB_DIR}/print_job_state.cpp
     ${GLAVO_LIB_DIR}/print_video_notify.cpp
 )

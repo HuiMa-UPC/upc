@@ -146,7 +146,7 @@ void tcp_handle_frame(const uint8_t* frame, size_t len)
        frame[2] == 0x10 && frame[3] == 0x01) {
         tcp_response_t resp{};
         if(parse_tcp_response(frame, len, &resp) == 0) {
-            PrintJobState::instance().set_mcu_rates(resp.cmd_rate, resp.data_rate);
+            McuLink::instance().on_tcp_status_response(resp);
         }
     }
 }
@@ -1464,6 +1464,9 @@ void McuLink::link_try_finish_sending()
 
 int McuLink::link_thread_sleep_ms() const
 {
+    if(ota_session_.is_active()) {
+        return TCP_SEND_INTERVAL_MS;
+    }
     if(terminate_pending_.load()) {
         return 5; // 终止请求需快速响应
     }
@@ -1479,6 +1482,54 @@ int McuLink::link_thread_sleep_ms() const
     return 50; // 无连接时的默认轮询间隔
 }
 
+/* ---------- OTA（测试） ---------- */
+
+void McuLink::set_ota_status_callback(McuOtaStatusCb cb)
+{
+    ota_session_.set_status_callback(std::move(cb));
+}
+
+bool McuLink::start_mcu_ota(const char* image_dir)
+{
+    if(!is_tcp_connected()) {
+        UPC_LOG_MCU_LINK(Error, "OTA start: TCP not connected");
+        return false;
+    }
+    if(is_sending_.load()) {
+        UPC_LOG_MCU_LINK(Warn, "OTA start: print active");
+        return false;
+    }
+    return ota_session_.start(image_dir);
+}
+
+void McuLink::cancel_mcu_ota()
+{
+    ota_session_.cancel();
+}
+
+bool McuLink::ota_active() const
+{
+    return ota_session_.is_active();
+}
+
+void McuLink::on_tcp_status_response(const tcp_response_t& resp)
+{
+    ota_session_.on_status_response(resp);
+    if(!ota_session_.is_active()) {
+        PrintJobState::instance().set_mcu_rates(resp.cmd_rate, resp.data_rate);
+    }
+}
+
+void McuLink::ota_tick()
+{
+    ota_session_.tick(
+        +[](const uint8_t* data, size_t len) -> int {
+            return McuLink::instance().tcp_send_raw(data, len);
+        },
+        +[]() { McuLink::instance().tcp_drain_rx(); },
+        tcp_fd_ >= 0);
+}
+
 /* ---------- 链路线程主循环 ---------- */
 
 void McuLink::link_thread_fn()
@@ -1492,12 +1543,12 @@ void McuLink::link_thread_fn()
         // ---------- TCP RX 排空与断线检测 ----------
         if(tcp_fd_ >= 0) {
             tcp_drain_rx();
-        } else if(is_sending_.load()) {
+        } else if(is_sending_.load() && !ota_session_.is_active()) {
             // TCP 在发送过程中断开：标记错误并触发终止流程
             PrintJobState::instance().set_job_error(true);
             is_sending_.store(false);
             terminate_pending_.store(true);
-        } else if(!terminate_pending_.load()) {
+        } else if(!terminate_pending_.load() && !ota_session_.is_active()) {
             // 空闲断线：尝试自动重连
             connect_tcp(tcp_ip_, tcp_port_);
             if(tcp_fd_ < 0) {
@@ -1507,14 +1558,16 @@ void McuLink::link_thread_fn()
             }
         }
 
-        // ---------- 终止处理 ----------
-        if(terminate_pending_.load()) {
+        if(ota_session_.is_active()) {
+            ota_tick();
+        } else if(terminate_pending_.load()) {
             run_manual_terminate_cleanup();
             terminate_pending_.store(false);
         } else {
             // ---------- 心跳 ----------
             const bool stream = motion_stream_active();
-            if(!stream && tcp_fd_ >= 0 && now >= next_hb) {
+            if(!stream && !ota_session_.suppress_idle_heartbeat() &&
+               tcp_fd_ >= 0 && now >= next_hb) {
                 uint8_t hb[64];
                 const int hblen = build_heartbeat_frame(hb, sizeof(hb));
                 if(hblen > 0) {

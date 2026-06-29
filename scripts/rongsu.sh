@@ -13,7 +13,7 @@ set -e
 BIN_DIR="${RONGSU_BIN:-/home}"
 GLAVO="$BIN_DIR/rongsu_glavo"
 UI="$BIN_DIR/rongsu_ui"
-TEST_CAMERA="$BIN_DIR/test_camera"
+TEST_CAMERA="$BIN_DIR/rongsu_camera"
 SOCK="${UPC_IPC_SOCKET:-/tmp/upc_glavo.sock}"
 CAM_SOCK="${UPC_CAMERA_IPC_SOCKET:-/tmp/upc_camera.sock}"
 WAIT_MS="${UPC_IPC_PEER_STARTUP_WAIT_MS:-10000}"

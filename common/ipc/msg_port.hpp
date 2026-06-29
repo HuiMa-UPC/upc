@@ -48,6 +48,13 @@ public:
     bool publish_async_broadcast(const Message& msg);
     void process(int io_timeout_ms = 0);
 
+    /**
+     * Hub 模式：启动后台 IPC 线程（epoll + Hub 转发）；
+     * 之后 process() 仅消费本地队列，供 UI 主线程与 LVGL 并行。
+     */
+    bool start_ipc_io_thread();
+    [[nodiscard]] bool ipc_io_thread_running() const noexcept;
+
     [[nodiscard]] MsgPortMode mode() const noexcept { return mode_; }
     /** 所有 required peer 均已连接 */
     [[nodiscard]] bool peer_connected() const noexcept;

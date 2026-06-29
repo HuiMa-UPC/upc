@@ -51,6 +51,9 @@ private:
     void handle_close_door_request(const middleware::Message& msg);
     void handle_open_door_request(const middleware::Message& msg);
     void handle_purify_request(const middleware::Message& msg);
+    void handle_mcu_ota_start(const middleware::Message& msg);
+    void handle_mcu_ota_cancel(const middleware::Message& msg);
+    void publish_mcu_ota_status(const middleware::McuOtaStatusPayload& st);
 
     void send_door_rsp(const middleware::Message& msg, middleware::MsgType rsp_type);
     void send_dir_open_empty(const middleware::Message& req);
