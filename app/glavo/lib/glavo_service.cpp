@@ -34,9 +34,10 @@ constexpr size_t kWorkerQueueDepth = 64;
 constexpr size_t kFsDirMaxEntries =
     (16384u - sizeof(middleware::FsDirHeader)) / sizeof(middleware::FileEntryPayload);
 
-constexpr const char* kLocalGcodeDir  = "/home/Gcode";
-constexpr const char* kUsbMountDir      = "/media/udisk0";
-constexpr const char* kLocalConfigPath  = "/home/Gcode/config.json";
+static std::string local_config_path()
+{
+    return std::string(GLAVO_LOCAL_GCODE_DIR) + "/config.json";
+}
 
 int percent_rounded(int num, int den)
 {
@@ -82,11 +83,6 @@ int progress_denominator(int sent_packets)
     }
 
     return parsed_packets + sent_packets + 1;
-}
-
-bool is_local_dir_path(const std::string& path)
-{
-    return path.empty() || path == kLocalGcodeDir;
 }
 
 } // namespace
@@ -148,7 +144,7 @@ bool GlavoService::init() {
         [this](const middleware::McuOtaStatusPayload& st) {
             publish_mcu_ota_status(st);
         });
-    gcode_manifest_load(kLocalConfigPath, local_manifest_);
+    gcode_manifest_load(local_config_path(), local_manifest_);
     state_ = ServiceState::Idle;
     return true;
 }
@@ -624,14 +620,20 @@ void GlavoService::handle_dir_open(const middleware::Message& msg) {
         return;
     }
 
-    const std::string path = payload_to_string(msg.payload);
-    if(is_local_dir_path(path)) {
-        gcode_manifest_load(kLocalConfigPath, local_manifest_);
-        send_dir_open_entries(msg, local_manifest_, kLocalGcodeDir);
+    middleware::FsDirOpenReqPayload req{};
+    if(!read_inline_pod(msg.payload, req)) {
+        UPC_LOG_GLAVO_SERVICE(Warn, "dir_open: invalid payload");
+        send_dir_open_empty(msg);
         return;
     }
 
-    send_dir_open_usb(msg, path.empty() ? kUsbMountDir : path);
+    if(req.list_source == middleware::PrintFileSource::Local) {
+        gcode_manifest_load(local_config_path(), local_manifest_);
+        send_dir_open_entries(msg, local_manifest_, GLAVO_LOCAL_GCODE_DIR);
+        return;
+    }
+
+    send_dir_open_usb(msg, GLAVO_USB_MOUNT_DIR);
 }
 
 void GlavoService::handle_fs_delete_ntf(const middleware::Message& msg) {
@@ -649,7 +651,7 @@ void GlavoService::handle_fs_delete_ntf(const middleware::Message& msg) {
         return;
     }
 
-    gcode_manifest_load(kLocalConfigPath, local_manifest_);
+    gcode_manifest_load(local_config_path(), local_manifest_);
     const size_t idx = static_cast<size_t>(req.file_index);
     if(idx >= local_manifest_.size()) {
         UPC_LOG_GLAVO_SERVICE(Warn, "fs_delete_ntf: index out of range %u", req.file_index);
@@ -657,7 +659,7 @@ void GlavoService::handle_fs_delete_ntf(const middleware::Message& msg) {
     }
 
     const std::string name = local_manifest_[idx].name;
-    const std::string full_path = make_full_path(kLocalGcodeDir, name);
+    const std::string full_path = make_full_path(GLAVO_LOCAL_GCODE_DIR, name);
     if(std::remove(full_path.c_str()) != 0) {
         UPC_LOG_GLAVO_SERVICE(Warn, "fs_delete_ntf: remove file failed %s", full_path.c_str());
     }
@@ -666,9 +668,9 @@ void GlavoService::handle_fs_delete_ntf(const middleware::Message& msg) {
         UPC_LOG_GLAVO_SERVICE(Warn, "fs_delete_ntf: manifest remove failed");
         return;
     }
-    if(!gcode_manifest_save(kLocalConfigPath, local_manifest_)) {
+    if(!gcode_manifest_save(local_config_path(), local_manifest_)) {
         UPC_LOG_GLAVO_SERVICE(Warn, "fs_delete_ntf: config save failed");
-        gcode_manifest_load(kLocalConfigPath, local_manifest_);
+        gcode_manifest_load(local_config_path(), local_manifest_);
         return;
     }
 
@@ -735,7 +737,7 @@ bool GlavoService::run_print_prepare(middleware::PrintFileSource source, uint32_
     current_file_path_.clear();
 
     if(source == middleware::PrintFileSource::Local) {
-        gcode_manifest_load(kLocalConfigPath, local_manifest_);
+        gcode_manifest_load(local_config_path(), local_manifest_);
     }
 
     std::string basename;
@@ -744,8 +746,8 @@ bool GlavoService::run_print_prepare(middleware::PrintFileSource source, uint32_
             return false;
         }
         basename = usb_entries_[index];
-        const std::string src = make_full_path(kUsbMountDir, basename);
-        const std::string dst = make_full_path(kLocalGcodeDir, basename);
+        const std::string src = make_full_path(GLAVO_USB_MOUNT_DIR, basename);
+        const std::string dst = make_full_path(GLAVO_LOCAL_GCODE_DIR, basename);
         if(!copy_usb_to_local(src, dst)) {
             UPC_LOG_GLAVO_SERVICE(Warn, "prepare: usb copy failed %s", src.c_str());
             return false;
@@ -756,7 +758,7 @@ bool GlavoService::run_print_prepare(middleware::PrintFileSource source, uint32_
             return false;
         }
         basename = local_manifest_[index].name;
-        local_path_out = make_full_path(kLocalGcodeDir, basename);
+        local_path_out = make_full_path(GLAVO_LOCAL_GCODE_DIR, basename);
     }
 
     uint32_t line_count = 0;
@@ -779,10 +781,10 @@ bool GlavoService::run_print_prepare(middleware::PrintFileSource source, uint32_
     entry.mtime       = static_cast<int64_t>(st.st_mtime);
 
     if(source == middleware::PrintFileSource::Usb) {
-        gcode_manifest_load(kLocalConfigPath, local_manifest_);
+        gcode_manifest_load(local_config_path(), local_manifest_);
     }
     gcode_manifest_upsert(local_manifest_, entry);
-    if(!gcode_manifest_save(kLocalConfigPath, local_manifest_)) {
+    if(!gcode_manifest_save(local_config_path(), local_manifest_)) {
         UPC_LOG_GLAVO_SERVICE(Warn, "prepare: config save failed");
         return false;
     }
@@ -893,7 +895,7 @@ void GlavoService::handle_print_terminate(const middleware::Message& msg) {
 void GlavoService::handle_mcu_ota_start(const middleware::Message& msg) {
     (void)msg;
     if(McuLink::instance().ota_active()) {
-        UPC_LOG_GLAVO_SERVICE(Warn, "mcu_ota_start: already active");
+        UPC_LOG_MCU_OTA(Warn, "mcu_ota_start: already active");
         return;
     }
     if(!McuLink::instance().start_mcu_ota(GLAVO_OTA_IMAGE_DIR)) {

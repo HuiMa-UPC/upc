@@ -142,6 +142,15 @@ using frame_handle_fn = void (*)(const uint8_t*, size_t);
  */
 void tcp_handle_frame(const uint8_t* frame, size_t len)
 {
+#if UPC_DEBUG && UPC_MOD_MCU_LINK
+    /* 下位机 TCP 初始化完成主动上报：BE EF 01 0F（见 doc/SOC-_MCU TCP报文.xlsx） */
+    if(len == 4 && frame[0] == TCP_SOF0 && frame[1] == TCP_SOF1 &&
+       frame[2] == 0x01 && frame[3] == 0x0F) {
+        UPC_LOG_MCU_LINK(Info, "RX TCP link ready (BE EF 01 0F)");
+        return;
+    }
+#endif
+
     if(len >= 19 && frame[0] == 0xBE && frame[1] == 0xEF &&
        frame[2] == 0x10 && frame[3] == 0x01) {
         tcp_response_t resp{};
@@ -277,11 +286,11 @@ bool McuLink::set_tcp_nodelay(int sockfd)
 
 /* ---------- TCP 连接 ---------- */
 
-int McuLink::connect_tcp(const char* ip, int port)
+int McuLink::connect_tcp()
 {
-    if(!ip || port <= 0) {
-        return -1; // 参数非法
-    }
+    const char* ip = GLAVO_TCP_DEFAULT_IP;
+    const int   port = GLAVO_TCP_DEFAULT_PORT;
+
     // 若已有连接，先关闭旧 fd
     if(tcp_fd_ >= 0) {
         close(tcp_fd_);
@@ -314,10 +323,6 @@ int McuLink::connect_tcp(const char* ip, int port)
     // 设为非阻塞模式，方便链路线程做轮询式收发
     const int flags = fcntl(fd, F_GETFL, 0);
     fcntl(fd, F_SETFL, flags | O_NONBLOCK);
-
-    // 保存地址信息，供断线后自动重连使用
-    std::snprintf(tcp_ip_, sizeof(tcp_ip_), "%s", ip);
-    tcp_port_ = port;
 
     tcp_fd_ = fd;
     tcp_rx_accum_len_ = 0; // 清空接收累积区
@@ -1492,11 +1497,11 @@ void McuLink::set_ota_status_callback(McuOtaStatusCb cb)
 bool McuLink::start_mcu_ota(const char* image_dir)
 {
     if(!is_tcp_connected()) {
-        UPC_LOG_MCU_LINK(Error, "OTA start: TCP not connected");
+        UPC_LOG_MCU_OTA(Error, "OTA start: TCP not connected");
         return false;
     }
     if(is_sending_.load()) {
-        UPC_LOG_MCU_LINK(Warn, "OTA start: print active");
+        UPC_LOG_MCU_OTA(Warn, "OTA start: print active");
         return false;
     }
     return ota_session_.start(image_dir);
@@ -1515,6 +1520,12 @@ bool McuLink::ota_active() const
 void McuLink::on_tcp_status_response(const tcp_response_t& resp)
 {
     ota_session_.on_status_response(resp);
+#if GLAVO_OTA_POST_RECONNECT_ENABLE
+    if(ota_session_.take_post_success_reconnect()) {
+        ota_post_reconnect_.store(true);
+        UPC_LOG_MCU_OTA(Info, "OTA success: schedule TCP post-reconnect");
+    }
+#endif
     if(!ota_session_.is_active()) {
         PrintJobState::instance().set_mcu_rates(resp.cmd_rate, resp.data_rate);
     }
@@ -1528,6 +1539,29 @@ void McuLink::ota_tick()
         },
         +[]() { McuLink::instance().tcp_drain_rx(); },
         tcp_fd_ >= 0);
+}
+
+void McuLink::link_try_ota_post_reconnect()
+{
+    const bool ota_pending = ota_post_reconnect_.load();
+    if(ota_pending && ota_session_.is_active()) {
+        return;
+    }
+
+    const int rc = connect_tcp();
+    if(rc == 0) {
+        if(ota_pending) {
+            ota_post_reconnect_.store(false);
+            UPC_LOG_MCU_OTA(Info, "OTA post-reconnect TCP OK %s:%d",
+                            GLAVO_TCP_DEFAULT_IP, GLAVO_TCP_DEFAULT_PORT);
+        }
+        return;
+    }
+
+    if(ota_pending) {
+        UPC_LOG_MCU_OTA(Warn, "OTA post-reconnect TCP fail %s:%d rc=%d",
+                        GLAVO_TCP_DEFAULT_IP, GLAVO_TCP_DEFAULT_PORT, rc);
+    }
 }
 
 /* ---------- 链路线程主循环 ---------- */
@@ -1549,12 +1583,14 @@ void McuLink::link_thread_fn()
             is_sending_.store(false);
             terminate_pending_.store(true);
         } else if(!terminate_pending_.load() && !ota_session_.is_active()) {
-            // 空闲断线：尝试自动重连
-            connect_tcp(tcp_ip_, tcp_port_);
-            if(tcp_fd_ < 0) {
-                std::this_thread::sleep_for(
-                    std::chrono::milliseconds(TCP_RECONNECT_INTERVAL_MS));
-                continue; // 重连失败，跳过本轮其余逻辑
+            // 空闲断线或 OTA 成功后：尝试 connect_tcp（OTA 时强制刷新已有 fd）
+            if(tcp_fd_ < 0 || ota_post_reconnect_.load()) {
+                link_try_ota_post_reconnect();
+                if(tcp_fd_ < 0) {
+                    std::this_thread::sleep_for(
+                        std::chrono::milliseconds(TCP_RECONNECT_INTERVAL_MS));
+                    continue; // 重连失败，跳过本轮其余逻辑
+                }
             }
         }
 

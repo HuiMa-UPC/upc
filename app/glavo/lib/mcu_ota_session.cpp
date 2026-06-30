@@ -8,7 +8,6 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-#include <algorithm>
 #include <cerrno>
 #include <cstring>
 #include <vector>
@@ -24,6 +23,17 @@ bool ends_with_bin(const char* name)
     }
     const size_t n = std::strlen(name);
     return n >= 4 && std::strcmp(name + n - 4, ".bin") == 0;
+}
+
+const char* ota_evt_name(uint8_t flag)
+{
+    switch(flag) {
+    case TCP_EVT_OTA_READY:      return "OTA_READY(0x03)";
+    case TCP_EVT_OTA_CHUNK_DONE: return "CHUNK_DONE(0x23)";
+    case TCP_EVT_OTA_ALL_DONE:   return "ALL_DONE(0x13)";
+    case TCP_EVT_OTA_FAILED:     return "FAILED(0xE3)";
+    default:                     return "UNKNOWN";
+    }
 }
 
 } // namespace
@@ -44,6 +54,11 @@ bool McuOtaSession::suppress_idle_heartbeat() const noexcept
     return phase_ == Phase::WaitReady || phase_ == Phase::Streaming;
 }
 
+bool McuOtaSession::take_post_success_reconnect() noexcept
+{
+    return post_success_reconnect_.exchange(false);
+}
+
 void McuOtaSession::reset_file()
 {
     if(file_fd_ >= 0) {
@@ -51,11 +66,12 @@ void McuOtaSession::reset_file()
         file_fd_ = -1;
     }
     bin_path_.clear();
-    file_size_    = 0;
-    total_chunks_ = 0;
-    next_seq_     = 0;
-    begin_sent_   = false;
-    waiting_      = WaitEvent::None;
+    file_size_          = 0;
+    total_chunks_       = 0;
+    next_seq_           = 0;
+    hb_sent_after_last_ = false;
+    end_sent_           = false;
+    waiting_            = WaitEvent::None;
 }
 
 bool McuOtaSession::open_newest_bin(const char* dir)
@@ -67,7 +83,7 @@ bool McuOtaSession::open_newest_bin(const char* dir)
 
     DIR* dp = ::opendir(dir);
     if(!dp) {
-        UPC_LOG_MCU_LINK(Error, "OTA opendir fail %s errno=%d", dir, errno);
+        UPC_LOG_MCU_OTA(Error, "OTA opendir fail %s errno=%d", dir, errno);
         return false;
     }
 
@@ -97,13 +113,13 @@ bool McuOtaSession::open_newest_bin(const char* dir)
     ::closedir(dp);
 
     if(best_path.empty()) {
-        UPC_LOG_MCU_LINK(Error, "OTA no .bin in %s", dir);
+        UPC_LOG_MCU_OTA(Error, "OTA no .bin in %s", dir);
         return false;
     }
 
     const int fd = ::open(best_path.c_str(), O_RDONLY | O_CLOEXEC);
     if(fd < 0) {
-        UPC_LOG_MCU_LINK(Error, "OTA open fail %s errno=%d",
+        UPC_LOG_MCU_OTA(Error, "OTA open fail %s errno=%d",
                          best_path.c_str(), errno);
         return false;
     }
@@ -119,9 +135,8 @@ bool McuOtaSession::open_newest_bin(const char* dir)
     file_size_ = static_cast<uint32_t>(file_stat.st_size);
     const uint32_t chunk = static_cast<uint32_t>(GLAVO_OTA_CHUNK_SIZE);
     total_chunks_ = (file_size_ + chunk - 1u) / chunk;
-    next_seq_     = 0;
 
-    UPC_LOG_MCU_LINK(Info, "OTA bin %s size=%u chunks=%u",
+    UPC_LOG_MCU_OTA(Info, "OTA bin %s size=%u chunks=%u",
                      bin_path_.c_str(), file_size_, total_chunks_);
     return true;
 }
@@ -129,7 +144,7 @@ bool McuOtaSession::open_newest_bin(const char* dir)
 bool McuOtaSession::start(const char* image_dir)
 {
     if(is_active()) {
-        UPC_LOG_MCU_LINK(Warn, "OTA already active");
+        UPC_LOG_MCU_OTA(Warn, "OTA already active");
         return false;
     }
 
@@ -139,9 +154,7 @@ bool McuOtaSession::start(const char* image_dir)
     }
 
     cancel_requested_.store(false);
-    phase_      = Phase::WaitReady;
-    waiting_    = WaitEvent::None;
-    begin_sent_ = false;
+    phase_ = Phase::WaitReady;
     notify(middleware::McuOtaState::Preparing, 0);
     return true;
 }
@@ -171,25 +184,35 @@ void McuOtaSession::finish(middleware::McuOtaState state, uint8_t progress)
     reset_file();
     if(state == middleware::McuOtaState::Success) {
         phase_ = Phase::Done;
+        post_success_reconnect_.store(true);
     } else if(state == middleware::McuOtaState::Cancelled) {
         phase_ = Phase::Cancelled;
     } else {
         phase_ = Phase::Failed;
     }
-    waiting_ = WaitEvent::None;
 }
 
-bool McuOtaSession::send_begin(int (*tcp_send)(const uint8_t*, size_t))
+bool McuOtaSession::send_ota_ctrl(uint8_t mode, int (*tcp_send)(const uint8_t*, size_t))
 {
     uint8_t frame[32];
-    const int len = tcp_build_ota_begin_frame(frame, sizeof(frame));
+    const int len = tcp_build_ota_ctrl_frame(mode, frame, sizeof(frame));
     if(len <= 0 || !tcp_send || tcp_send(frame, static_cast<size_t>(len)) != 0) {
-        UPC_LOG_MCU_LINK(Error, "OTA send 0x03 fail");
+        UPC_LOG_MCU_OTA(Error, "OTA send 0x03 mode=0x%02X fail", mode);
         return false;
     }
-    begin_sent_ = true;
-    waiting_    = WaitEvent::Ready;
-    UPC_LOG_MCU_LINK(Info, "OTA TX begin");
+    UPC_LOG_MCU_OTA(Info, "OTA TX ctrl 0x03 mode=0x%02X", mode);
+    return true;
+}
+
+bool McuOtaSession::send_heartbeat(int (*tcp_send)(const uint8_t*, size_t))
+{
+    uint8_t frame[32];
+    const int len = tcp_build_heartbeat_frame(frame, sizeof(frame));
+    if(len <= 0 || !tcp_send || tcp_send(frame, static_cast<size_t>(len)) != 0) {
+        UPC_LOG_MCU_OTA(Error, "OTA send heartbeat 0x0B fail");
+        return false;
+    }
+    UPC_LOG_MCU_OTA(Debug, "OTA TX heartbeat 0x0B");
     return true;
 }
 
@@ -209,7 +232,7 @@ bool McuOtaSession::send_chunk(int (*tcp_send)(const uint8_t*, size_t))
     std::vector<uint8_t> buf(len);
     const ssize_t rd = ::pread(file_fd_, buf.data(), len, static_cast<off_t>(off));
     if(rd != static_cast<ssize_t>(len)) {
-        UPC_LOG_MCU_LINK(Error, "OTA read fail seq=%u", next_seq_);
+        UPC_LOG_MCU_OTA(Error, "OTA read fail seq=%u", next_seq_);
         return false;
     }
 
@@ -218,35 +241,39 @@ bool McuOtaSession::send_chunk(int (*tcp_send)(const uint8_t*, size_t))
         static_cast<uint16_t>(next_seq_), buf.data(), len,
         frame, sizeof(frame));
     if(flen <= 0 || !tcp_send || tcp_send(frame, static_cast<size_t>(flen)) != 0) {
-        UPC_LOG_MCU_LINK(Error, "OTA send data seq=%u fail", next_seq_);
+        UPC_LOG_MCU_OTA(Error, "OTA send data seq=%u fail", next_seq_);
         return false;
     }
 
     waiting_ = WaitEvent::ChunkAck;
     notify(middleware::McuOtaState::Transferring, last_progress_);
-    UPC_LOG_MCU_LINK(Debug, "OTA TX data seq=%u len=%u", next_seq_, len);
+    UPC_LOG_MCU_OTA(Debug, "OTA TX data seq=%u len=%u", next_seq_, len);
     return true;
 }
 
 void McuOtaSession::handle_event(uint8_t flag, uint8_t progress)
 {
-    if(flag == TCP_EVT_NONE) {
-        if(progress > 0) {
-            last_progress_ = progress;
-        }
-        return;
+    if(progress > 0) {
+        last_progress_ = progress;
     }
 
-    last_progress_ = progress;
+    if(flag != TCP_EVT_NONE) {
+        UPC_LOG_MCU_OTA(Debug,
+                        "OTA RX evt=0x%02X %s progress=%u phase=%u waiting=%u seq=%u/%u",
+                        flag, ota_evt_name(flag), progress,
+                        static_cast<unsigned>(phase_),
+                        static_cast<unsigned>(waiting_),
+                        next_seq_, total_chunks_);
+    }
 
     if(flag == TCP_EVT_OTA_FAILED) {
-        UPC_LOG_MCU_LINK(Error, "OTA MCU fail evt=0xE3");
+        UPC_LOG_MCU_OTA(Error, "OTA MCU fail evt=0xE3");
         finish(middleware::McuOtaState::Failed, progress);
         return;
     }
 
     if(phase_ == Phase::WaitReady && flag == TCP_EVT_OTA_READY) {
-        UPC_LOG_MCU_LINK(Info, "OTA MCU ready");
+        UPC_LOG_MCU_OTA(Info, "OTA MCU ready");
         phase_   = Phase::Streaming;
         waiting_ = WaitEvent::None;
         notify(middleware::McuOtaState::Transferring, progress);
@@ -259,17 +286,28 @@ void McuOtaSession::handle_event(uint8_t flag, uint8_t progress)
         waiting_ = WaitEvent::None;
         notify(middleware::McuOtaState::Transferring, progress);
         if(next_seq_ >= total_chunks_) {
-            UPC_LOG_MCU_LINK(Info, "OTA all chunks sent, wait complete");
-            phase_   = Phase::WaitComplete;
-            waiting_ = WaitEvent::Complete;
+            UPC_LOG_MCU_OTA(Info, "OTA all chunks sent, wait heartbeat rsp");
+            phase_              = Phase::WaitHbAfterLast;
+            hb_sent_after_last_ = false;
             notify(middleware::McuOtaState::Verifying, progress);
         }
         return;
     }
 
-    if(phase_ == Phase::WaitComplete && flag == TCP_EVT_OTA_ALL_DONE) {
-        UPC_LOG_MCU_LINK(Info, "OTA MCU complete evt=0x13");
+    if(phase_ == Phase::WaitComplete && waiting_ == WaitEvent::Complete &&
+       flag == TCP_EVT_OTA_ALL_DONE) {
+        UPC_LOG_MCU_OTA(Info, "OTA MCU complete evt=0x13");
         finish(middleware::McuOtaState::Success, progress);
+        return;
+    }
+
+    if(flag == TCP_EVT_OTA_ALL_DONE || flag == TCP_EVT_OTA_CHUNK_DONE ||
+       flag == TCP_EVT_OTA_READY) {
+        UPC_LOG_MCU_OTA(Warn,
+                        "OTA RX ignored evt=0x%02X phase=%u waiting=%u",
+                        flag,
+                        static_cast<unsigned>(phase_),
+                        static_cast<unsigned>(waiting_));
     }
 }
 
@@ -278,6 +316,17 @@ void McuOtaSession::on_status_response(const tcp_response_t& resp)
     if(!is_active()) {
         return;
     }
+
+    if(phase_ == Phase::WaitHbAfterLast && hb_sent_after_last_) {
+        UPC_LOG_MCU_OTA(Info, "OTA RX heartbeat rsp evt=0x%02X progress=%u",
+                        resp.event_flag, resp.ota_progress);
+        phase_ = Phase::WaitComplete;
+        if(resp.ota_progress > 0) {
+            last_progress_ = resp.ota_progress;
+        }
+        return;
+    }
+
     handle_event(resp.event_flag, resp.ota_progress);
 }
 
@@ -286,7 +335,7 @@ void McuOtaSession::tick(int (*tcp_send)(const uint8_t*, size_t),
                          bool tcp_connected)
 {
     if(cancel_requested_.load()) {
-        UPC_LOG_MCU_LINK(Info, "OTA cancelled (test)");
+        UPC_LOG_MCU_OTA(Info, "OTA cancelled (test)");
         finish(middleware::McuOtaState::Cancelled, last_progress_);
         cancel_requested_.store(false);
         return;
@@ -299,7 +348,7 @@ void McuOtaSession::tick(int (*tcp_send)(const uint8_t*, size_t),
 
     if(!tcp_connected) {
         if(phase_ != Phase::WaitComplete) {
-            UPC_LOG_MCU_LINK(Error, "OTA TCP disconnected");
+            UPC_LOG_MCU_OTA(Error, "OTA TCP disconnected");
             finish(middleware::McuOtaState::Failed, last_progress_);
         }
         return;
@@ -309,18 +358,36 @@ void McuOtaSession::tick(int (*tcp_send)(const uint8_t*, size_t),
         tcp_drain_rx();
     }
 
-    if(phase_ == Phase::WaitReady) {
-        if(!begin_sent_) {
-            (void)send_begin(tcp_send);
+    switch(phase_) {
+    case Phase::WaitReady:
+        if(waiting_ == WaitEvent::None &&
+           send_ota_ctrl(TCP_OTA_MODE_BEGIN, tcp_send)) {
+            waiting_ = WaitEvent::Ready;
         }
-        return;
-    }
+        break;
 
-    if(phase_ == Phase::Streaming && waiting_ == WaitEvent::None) {
-        (void)send_chunk(tcp_send);
-    }
+    case Phase::Streaming:
+        if(waiting_ == WaitEvent::None) {
+            (void)send_chunk(tcp_send);
+        }
+        break;
 
-    /* WaitComplete：由 McuLink 恢复空闲心跳，本处仅 drain RX */
+    case Phase::WaitHbAfterLast:
+        if(!hb_sent_after_last_ && send_heartbeat(tcp_send)) {
+            hb_sent_after_last_ = true;
+        }
+        break;
+
+    case Phase::WaitComplete:
+        if(!end_sent_ && send_ota_ctrl(TCP_OTA_MODE_END, tcp_send)) {
+            end_sent_ = true;
+            waiting_  = WaitEvent::Complete;
+        }
+        break;
+
+    default:
+        break;
+    }
 }
 
 } // namespace upc::glavo

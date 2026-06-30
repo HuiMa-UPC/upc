@@ -40,7 +40,7 @@ enum class MsgType : uint32_t {
     APP_CLOSE_DOOR_Rsp,       /**< [GLAVO_Door_Close_Rsp] DoorResultPayload */
 
     // ---- UI ↔ GLAVO：文件系统 ----
-    Fs_DirOpen_Req,           /**< [FS_Dir_Open_Req] Empty 或 path 字符串 */
+    Fs_DirOpen_Req,           /**< [FS_Dir_Open_Req] FsDirOpenReqPayload */
     Fs_DirOpen_Rsp,           /**< [FS_Dir_Open_Rsp] FsDirHeader + FileEntryPayload[] */
     Fs_Delete_Ntf,            /**< [FS_Delete_Ntf] FsDeleteNtfPayload：删除 Local 文件 */
 
@@ -269,10 +269,16 @@ struct DoorResultPayload {
     uint8_t ok;
 };
 
-/** 打印文件来源（Prepare / Start 共用；Local 列表来自 config.json） */
+/** 打印文件来源（DirOpen / Prepare / Start 共用；Local 列表来自 config.json） */
 enum class PrintFileSource : uint8_t {
     Local = 0,
     Usb   = 1,
+};
+
+/** Fs_DirOpen_Req：UI 只传来源序号，目录路径由 Glavo 配置 */
+struct FsDirOpenReqPayload {
+    PrintFileSource list_source;
+    uint8_t         reserved[3];
 };
 
 /** 单个可打印文件项（与 ui::control_file_t 字段对齐；由 Fs_DirOpen_Rsp 一次性返回） */

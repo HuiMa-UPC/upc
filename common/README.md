@@ -94,7 +94,7 @@
 | `APP_PM25_Rsp` | `GLAVO_PM25_Check_Rsp` | Glavo→UI | `Pm25ResultPayload` | `register_pm25_result` | PM2.5 流程 |
 | `UI_CLOSE_DOOR_Req` | — | UI→Glavo | Empty | `send_close_door_check` | 关门检测 |
 | `APP_CLOSE_DOOR_Rsp` | `GLAVO_Door_Close_Rsp` | Glavo→UI | `DoorResultPayload` | `register_close_door_result` | — |
-| `Fs_DirOpen_Req` | `FS_Dir_Open_Req` | UI→Glavo | path 字符串（空=`/home/Gcode`） | `send_fs_dir_open(path?)` | `handle_dir_open` |
+| `Fs_DirOpen_Req` | `FS_Dir_Open_Req` | UI→Glavo | `FsDirOpenReqPayload`（`PrintFileSource` 0=Local，1=USB） | `send_fs_dir_open(source)` | `handle_dir_open` |
 | `Fs_DirOpen_Rsp` | `FS_Dir_Open_Rsp` | Glavo→UI | `FsDirHeader` + `FileEntryPayload[]` | `register_fs_dir` | Local=config.json；USB=扫盘 |
 | `Fs_Delete_Ntf` | `FS_Delete_Ntf` | UI→Glavo | `FsDeleteNtfPayload` | `send_fs_delete_ntf` | 删 Local 文件 + 更新 config.json |
 | `UI_OpenDoor_Req` | — | UI→Glavo | Empty | `send_open_door` | 开门 |

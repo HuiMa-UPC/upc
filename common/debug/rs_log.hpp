@@ -57,6 +57,9 @@ void log_write(Level level, const char* src, const char* module,
 #define UPC_LOG_MCU_LINK(lvl, fmt, ...) \
     UPC_LOG_MOD_(UPC_MOD_MCU_LINK, lvl, "SVC", "McuLink", fmt, ##__VA_ARGS__)
 
+#define UPC_LOG_MCU_OTA(lvl, fmt, ...) \
+    UPC_LOG_MOD_(UPC_MOD_MCU_OTA, lvl, "SVC", "McuOta", fmt, ##__VA_ARGS__)
+
 #define UPC_LOG_CAL_PARSER(lvl, fmt, ...) \
     UPC_LOG_MOD_(UPC_MOD_CAL_PARSER, lvl, "PARSER", "CalParser", fmt, ##__VA_ARGS__)
 

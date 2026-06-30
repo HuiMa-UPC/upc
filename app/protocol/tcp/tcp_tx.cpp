@@ -2,6 +2,28 @@
 #include "tcp_frame.hpp"
 #include <cstring>
 
+namespace {
+
+/** 单 FRAME 子包（11B）：BE EF 01 + CMD + payload[10] */
+int tcp_build_frame11(uint8_t cmd, const uint8_t payload[10], uint8_t* out, size_t out_size)
+{
+    if(!out || out_size < 14) {
+        return -1;
+    }
+    out[0] = TCP_SOF0;
+    out[1] = TCP_SOF1;
+    out[2] = 0x01;
+    out[3] = cmd;
+    if(payload) {
+        std::memcpy(&out[4], payload, 10);
+    } else {
+        std::memset(&out[4], 0, 10);
+    }
+    return 14;
+}
+
+} // namespace
+
 int tcp_build_motion_frame(const uint8_t* subpkts11, int n,
                            uint8_t* out, size_t out_size)
 {
@@ -19,41 +41,19 @@ int tcp_build_motion_frame(const uint8_t* subpkts11, int n,
 
 int tcp_build_heartbeat_frame(uint8_t* out, size_t out_size)
 {
-    if(!out || out_size < 14) {
-        return -1;
-    }
-    out[0] = TCP_SOF0;
-    out[1] = TCP_SOF1;
-    out[2] = 0x01;
-    out[3] = 0x0B;
-    std::memset(&out[4], 0, 10);
-    return 14;
+    return tcp_build_frame11(0x0B, nullptr, out, out_size);
 }
 
 int tcp_build_reset_frame(uint8_t* out, size_t out_size)
 {
-    if(!out || out_size < 14) {
-        return -1;
-    }
-    out[0] = TCP_SOF0;
-    out[1] = TCP_SOF1;
-    out[2] = 0x01;
-    out[3] = 0x0A;
-    std::memset(&out[4], 0, 10);
-    return 14;
+    return tcp_build_frame11(0x0A, nullptr, out, out_size);
 }
 
-int tcp_build_ota_begin_frame(uint8_t* out, size_t out_size)
+int tcp_build_ota_ctrl_frame(uint8_t mode, uint8_t* out, size_t out_size)
 {
-    if(!out || out_size < 14) {
-        return -1;
-    }
-    out[0] = TCP_SOF0;
-    out[1] = TCP_SOF1;
-    out[2] = 0x01;
-    out[3] = 0x03;
-    std::memset(&out[4], 0, 10);
-    return 14;
+    uint8_t payload[10]{};
+    payload[0] = mode;
+    return tcp_build_frame11(0x03, payload, out, out_size);
 }
 
 int tcp_build_ota_data_frame(uint16_t seq, const uint8_t* data, uint16_t len,

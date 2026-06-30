@@ -272,6 +272,7 @@ cmake -B build -DUPC_DEBUG=ON \
 | 宏 | 效果 |
 |----|------|
 | `UPC_MOD_MCU_LINK=0` | 关闭串口/TCP（含 `SERIAL_*`） |
+| `UPC_MOD_MCU_OTA=0` | 关闭 OTA 传输日志（`module=McuOta`）；不影响 McuLink 其它日志 |
 | `UPC_MOD_MSG_BUS=0` | 关闭 `IPC_*` 消息流（保留 `UPC_MOD_IPC` 连接日志需单独关） |
 | `UPC_MOD_IPC=0` | 关闭 IPC 连接类日志 |
 | `UPC_MOD_SYS_MONITOR=0` | 关闭 HostMonitor |

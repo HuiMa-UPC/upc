@@ -67,7 +67,7 @@
 
 /** 串口 ACK：0=关闭（兼容旧 MCU）；1=AA 等 BA + BB 回 AB + 超时重传 */
 #ifndef GLAVO_SERIAL_ACK_ENABLE
-#define GLAVO_SERIAL_ACK_ENABLE  1
+#define GLAVO_SERIAL_ACK_ENABLE  0
 #endif
 
 #ifndef GLAVO_SERIAL_ACK_TIMEOUT_MS
@@ -88,9 +88,23 @@
 #define GLAVO_OTA_CHUNK_SIZE  1024
 #endif
 
+/** OTA Success（0x13）后链路线程循环 connect_tcp 直至成功：0=关；1=开 */
+#ifndef GLAVO_OTA_POST_RECONNECT_ENABLE
+#define GLAVO_OTA_POST_RECONNECT_ENABLE  1
+#endif
+
 /** 换层排空后向 Camera 发 Layer_Snap_Ntf：0=关；1=每层拍照录像 */
 #ifndef GLAVO_ENABLE_LAYER_SNAP
 #define GLAVO_ENABLE_LAYER_SNAP  1
+#endif
+
+/** 打印文件目录（仅 Glavo 使用；UI 通过 PrintFileSource 0/1 选择） */
+#ifndef GLAVO_LOCAL_GCODE_DIR
+#define GLAVO_LOCAL_GCODE_DIR  "/home/Gcode"
+#endif
+
+#ifndef GLAVO_USB_MOUNT_DIR
+#define GLAVO_USB_MOUNT_DIR  "/media/udisk0"
 #endif
 
 #endif // DEVICE_CONFIG_HPP

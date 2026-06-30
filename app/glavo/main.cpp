@@ -61,7 +61,7 @@ int start_glavo(char daemon) {
     }
 
     auto& mcu = upc::glavo::McuLink::instance();
-    while (mcu.connect_tcp(GLAVO_TCP_DEFAULT_IP, GLAVO_TCP_DEFAULT_PORT) != 0) {
+    while (mcu.connect_tcp() != 0) {
         std::this_thread::sleep_for(
             std::chrono::milliseconds(TCP_RECONNECT_INTERVAL_MS));
         if (g_shutdown_requested) {

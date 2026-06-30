@@ -47,8 +47,8 @@ public:
     void register_purify_progress(PurifyProgressCb cb);
     void register_purify_done(PurifyDoneCb cb);
 
-    /** path 为空或 Local 默认路径时打开 /home/Gcode（config.json 列表） */
-    void send_fs_dir_open(const char* path = nullptr);
+    /** 列目录：只传 PrintFileSource（0=本机 Local，1=USB）；路径由 Glavo device_config 配置 */
+    void send_fs_dir_open(middleware::PrintFileSource source);
 
     void send_supply_status();
     void register_supply_status(SupplyStatusCb cb);

@@ -16,7 +16,8 @@ using McuOtaStatusCb = std::function<void(const middleware::McuOtaStatusPayload&
 /**
  * @brief MCU 以太网 OTA 会话（一问一答，测试用）
  *
- * WaitReady/Streaming 期间抑制空闲 0x0B；全部 DATA 发完后恢复心跳等 0x13。
+ * WaitReady/Streaming 期间抑制空闲 0x0B。
+ * 全部 DATA 发完后：发心跳 → 收应答 → 发 0x03 Mode=0x02 → 等 MCU 0x13 完成。
  */
 class McuOtaSession {
 public:
@@ -35,11 +36,15 @@ public:
     [[nodiscard]] bool is_active() const noexcept;
     [[nodiscard]] bool suppress_idle_heartbeat() const noexcept;
 
+    /** OTA Success 后由 McuLink 取走一次，触发链路线程 TCP 重连 */
+    [[nodiscard]] bool take_post_success_reconnect() noexcept;
+
 private:
     enum class Phase : uint8_t {
         None,
         WaitReady,
         Streaming,
+        WaitHbAfterLast,
         WaitComplete,
         Done,
         Failed,
@@ -57,7 +62,8 @@ private:
     bool open_newest_bin(const char* dir);
     void notify(middleware::McuOtaState state, uint8_t progress);
     void finish(middleware::McuOtaState state, uint8_t progress);
-    bool send_begin(int (*tcp_send)(const uint8_t*, size_t));
+    bool send_ota_ctrl(uint8_t mode, int (*tcp_send)(const uint8_t*, size_t));
+    bool send_heartbeat(int (*tcp_send)(const uint8_t*, size_t));
     bool send_chunk(int (*tcp_send)(const uint8_t*, size_t));
     void handle_event(uint8_t flag, uint8_t progress);
 
@@ -65,13 +71,15 @@ private:
     Phase phase_{Phase::None};
     WaitEvent waiting_{WaitEvent::None};
     std::atomic<bool> cancel_requested_{false};
+    std::atomic<bool> post_success_reconnect_{false};
 
     int file_fd_{-1};
     std::string bin_path_;
     uint32_t file_size_{0};
     uint32_t total_chunks_{0};
     uint32_t next_seq_{0};
-    bool begin_sent_{false};
+    bool hb_sent_after_last_{false};
+    bool end_sent_{false};
     uint8_t last_progress_{0};
 };
 

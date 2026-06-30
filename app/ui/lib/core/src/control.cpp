@@ -19,9 +19,6 @@
 
 namespace {
 
-constexpr const char* kPathLocalGcode = "/home/Gcode";
-constexpr const char* kPathUsbMount   = "/media/udisk0";
-
 enum class FileTab : uint8_t {
     Local = 0,
     Usb   = 1,
@@ -31,11 +28,6 @@ middleware::PrintFileSource file_tab_to_source(FileTab tab)
 {
     return tab == FileTab::Usb ? middleware::PrintFileSource::Usb
                                : middleware::PrintFileSource::Local;
-}
-
-const char* file_tab_dir_path(FileTab tab)
-{
-    return tab == FileTab::Usb ? kPathUsbMount : kPathLocalGcode;
 }
 
 /* ============================================================================
@@ -113,7 +105,7 @@ std::deque<FileTab> g_dir_open_pending;
 void request_fs_dir_open(FileTab tab)
 {
     g_dir_open_pending.push_back(tab);
-    ui::UiMsgProxy::instance().send_fs_dir_open(file_tab_dir_path(tab));
+    ui::UiMsgProxy::instance().send_fs_dir_open(file_tab_to_source(tab));
 }
 
 void enter_state(control_state_t s);

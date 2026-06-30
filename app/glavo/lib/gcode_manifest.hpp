@@ -1,7 +1,7 @@
 #ifndef GCODE_MANIFEST_HPP
 #define GCODE_MANIFEST_HPP
 
-/** Local 目录 manifest：/home/Gcode/config.json（UI Local 列表唯一数据源） */
+/** Local 目录 manifest：GLAVO_LOCAL_GCODE_DIR/config.json（UI Local 列表唯一数据源） */
 
 #include <cstdint>
 #include <string>

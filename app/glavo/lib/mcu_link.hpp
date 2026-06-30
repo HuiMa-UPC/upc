@@ -74,12 +74,10 @@ public:
     void set_progress_callback(McuLinkProgressCb cb);
 
     /**
-     * @brief 建立 TCP 连接（阻塞式单次尝试）
-     * @param ip   目标 IP 地址字符串，如 "192.168.1.100"
-     * @param port 目标端口
-     * @return 0 表示成功，负值表示失败（-1 参数错误/-2 IP 非法/-3 connect 失败）
+     * @brief 建立 TCP 连接（单次尝试，地址见 GLAVO_TCP_DEFAULT_IP/PORT）
+     * @return 0 表示成功，负值表示失败（-1 socket 失败/-2 IP 非法/-3 connect 失败）
      */
-    int connect_tcp(const char* ip, int port);
+    int connect_tcp();
 
     /**
      * @brief 打开串口设备（单次尝试）
@@ -244,6 +242,8 @@ private:
     void emit_event(McuLinkEvent ev);
     void poll_mcu_drain_heartbeat();
     void ota_tick();
+    /** @brief OTA Success 后尝试 connect_tcp（含强制刷新已有 fd） */
+    void link_try_ota_post_reconnect();
 
     /** @brief 判断 MCU 的指令缓存与数据缓存是否均已排空 */
     bool mcu_rates_drained() const;
@@ -256,10 +256,6 @@ private:
     upc::parser::RingBuffer* rb_ = nullptr;          /**< 绑定的 RingBuffer，运动包来源 */
     McuLinkEventCb event_cb_;            /**< 链路事件回调 */
     McuLinkProgressCb progress_cb_;         /**< 进度更新回调 */
-
-    /* ---------- 网络/串口配置 ---------- */
-    char tcp_ip_[64] = GLAVO_TCP_DEFAULT_IP; /**< 当前连接或重连使用的 IP */
-    int  tcp_port_   = GLAVO_TCP_DEFAULT_PORT; /**< 当前连接或重连使用的端口 */
 
     /* ---------- 文件描述符 ---------- */
     int tcp_fd_    = -1; /**< TCP socket 文件描述符，-1 表示未连接 */
@@ -326,6 +322,7 @@ private:
     mutable std::mutex env_mtx_;
 
     McuOtaSession ota_session_;
+    std::atomic<bool> ota_post_reconnect_{false};
 
     /* ---------- 常量 ---------- */
     static constexpr size_t kSerialTxQueueMax = 32;

@@ -206,17 +206,11 @@ void UiMsgProxy::register_purify_done(PurifyDoneCb cb)
     purify_done_cb_ = std::move(cb);
 }
 
-void UiMsgProxy::send_fs_dir_open(const char* path)
+void UiMsgProxy::send_fs_dir_open(middleware::PrintFileSource source)
 {
-    middleware::Message msg(middleware::MsgType::Fs_DirOpen_Req,
-                            middleware::ModuleId::UI,
-                            middleware::ModuleId::APP_GLAVO);
-    if(path && path[0] != '\0') {
-        msg.payload = middleware::MsgPayload::from_bytes(
-            reinterpret_cast<const uint8_t*>(path),
-            std::strlen(path));
-    }
-    middleware::MsgPort::instance().publish_async(msg);
+    const middleware::FsDirOpenReqPayload payload{source, {}};
+    publish_pod(middleware::MsgType::Fs_DirOpen_Req,
+                middleware::ModuleId::APP_GLAVO, payload);
 }
 
 void UiMsgProxy::send_fs_delete_ntf(uint32_t file_index, middleware::PrintFileSource source)

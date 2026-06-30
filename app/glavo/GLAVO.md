@@ -66,6 +66,7 @@ UI → GlavoService（工作线程）→ ParserManager → RingBuffer → McuLin
 ## 日志
 
 - McuLink：`module=McuLink`，开关 `UPC_MOD_MCU_LINK`
+- McuOta：`module=McuOta`，开关 `UPC_MOD_MCU_OTA`（OTA 传输/应答，与 McuLink 独立）
 - 详见 [doc/LOG_GUIDE.md](../../doc/LOG_GUIDE.md)
 
 ## 相关文档
