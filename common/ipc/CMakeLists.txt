@@ -22,6 +22,12 @@ target_include_directories(${UPC_IPC_TARGET}
         ${CMAKE_SOURCE_DIR}/common/middleware/memory_pool
 )
 
+# 工具链 sysroot 缺 <linux/dma-heap.h>，用项目内 vendoring 的 UAPI 头兜底
+target_include_directories(${UPC_IPC_TARGET}
+    SYSTEM PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/compat
+)
+
 target_link_libraries(${UPC_IPC_TARGET}
     PUBLIC
         middleware::port

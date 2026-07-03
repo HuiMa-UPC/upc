@@ -94,7 +94,7 @@
 | `APP_PM25_Rsp` | `GLAVO_PM25_Check_Rsp` | Glavo→UI | `Pm25ResultPayload` | `register_pm25_result` | PM2.5 流程 |
 | `UI_CLOSE_DOOR_Req` | — | UI→Glavo | Empty | `send_close_door_check` | 关门检测 |
 | `APP_CLOSE_DOOR_Rsp` | `GLAVO_Door_Close_Rsp` | Glavo→UI | `DoorResultPayload` | `register_close_door_result` | — |
-| `Fs_DirOpen_Req` | `FS_Dir_Open_Req` | UI→Glavo | `FsDirOpenReqPayload`（`PrintFileSource` 0=Local，1=USB） | `send_fs_dir_open(source)` | `handle_dir_open` |
+| `Fs_DirOpen_Req` | `FS_Dir_Open_Req` | UI→Glavo | path 字符串（空=`/home/Gcode`） | `send_fs_dir_open(path?)` | `handle_dir_open` |
 | `Fs_DirOpen_Rsp` | `FS_Dir_Open_Rsp` | Glavo→UI | `FsDirHeader` + `FileEntryPayload[]` | `register_fs_dir` | Local=config.json；USB=扫盘 |
 | `Fs_Delete_Ntf` | `FS_Delete_Ntf` | UI→Glavo | `FsDeleteNtfPayload` | `send_fs_delete_ntf` | 删 Local 文件 + 更新 config.json |
 | `UI_OpenDoor_Req` | — | UI→Glavo | Empty | `send_open_door` | 开门 |
@@ -119,6 +119,37 @@
 | `APP_Print_Layer_Snap_Ntf` | — | Glavo→Camera（Hub FWD） | `PrintVideoLayerSnapPayload` | — | 换层 Snap |
 | `APP_Print_Video_Session_Finish_Ntf` | — | Glavo→Camera（Hub FWD） | `PrintVideoSessionPayload` | — | ffmpeg 合成 MP4 |
 | `APP_Print_Video_Session_Abort_Ntf` | — | Glavo→Camera（Hub FWD） | `PrintVideoSessionPayload` | — | 删临时目录 |
+| `UI_Debug_Axis_Jog_Req` | — | UI→Glavo | `DebugAxisJogPayload` | `DebugMsgProxy::send_axis_jog` | **后端待实现** |
+| `UI_Debug_Axis_Hold_Stop_Req` | — | UI→Glavo | `DebugAxisPayload` | `send_axis_hold_stop` | 长按松手停 |
+| `UI_Debug_Axis_SetZero_Req` | — | UI→Glavo | `DebugAxisPayload` | `send_axis_set_zero` | Z 工作零点 |
+| `UI_Debug_Axis_Home_Req` | — | UI→Glavo | `DebugAxisPayload` | `send_axis_home` | 轴回 Home（Z 0x11 / S 0x10） |
+| `UI_Debug_Galvo_Move_Req` | — | UI→Glavo | `DebugGalvoMovePayload` | `send_galvo_move` | 振镜步进（预留 TCP） |
+| `UI_Debug_Galvo_Home_Req` | — | UI→Glavo | Empty | `send_galvo_home` | 振镜回中 |
+| `UI_Debug_Galvo_RedLight_Req` | — | UI→Glavo | `DebugOnOffPayload` | `send_galvo_red_light` | 红光 |
+| `UI_Debug_Galvo_Param_Save_Req` | — | UI→Glavo | `DebugGalvoParamPayload` | `send_galvo_param_save` | Scale/步长 |
+| `UI_Debug_Galvo_Calib_Req` | — | UI→Glavo | Empty | `send_galvo_calib` | 开始标定 |
+| `UI_Debug_Device_Req` | — | UI→Glavo | `DebugDevicePayload` | `send_device` | 设备/门/电机/照明 |
+| `UI_Debug_Powder_Bucket_Req` | — | UI→Glavo | `DebugBucketPayload` | `send_powder_bucket` | 粉桶 |
+| `UI_Debug_Pusher_Req` | — | UI→Glavo | `DebugOnOffPayload` | `send_pusher` | 三通推杆 |
+| `UI_Debug_Recycle_Motor_Req` | — | UI→Glavo | `DebugMotorPayload` | `send_recycle_motor` | 回粉电机（后端逻辑预留，暂不下发串口） |
+| `UI_Debug_Fan_Req` | — | UI→Glavo | `DebugFanPayload` | `send_fan` | 风扇开/关（占空比走 Fan_Duty_Req） |
+| `UI_Debug_Switch_Req` | — | UI→Glavo | `DebugSwitchPayload` | `send_switch` | 激光/洗气/底板加热 |
+| `UI_Debug_CleanTest_Start_Req` | — | UI→Glavo | Empty | `send_clean_test_start` | 清粉测试开启（关闭暂不使用） |
+| `UI_Debug_Laser_Power_Set_Req` | — | UI→Glavo | `DebugLaserPowerPayload` | `send_laser_power_set` | 激光手动功率 0–100 |
+| `UI_Debug_Laser_Power_Reset_Req` | — | UI→Glavo | Empty | `send_laser_power_reset` | 取消手动功率、恢复外控 |
+| `UI_Debug_Laser_AlarmReset_Req` | — | UI→Glavo | Empty | `send_laser_alarm_reset` | 激光器报警复位（1301） |
+| `GLAVO_Debug_Laser_Ntf` | — | Glavo→UI | `DebugLaserStatePayload` | `register_laser` | 激光器状态/报警/功率/温度 |
+| `UI_Debug_Fan_Duty_Req` | — | UI→Glavo | `DebugFanPayload` | `send_fan_duty` | 仅设风扇占空比（35–100） |
+| `UI_Debug_PrintParam_Set_Req` | — | UI→Glavo | `DebugPrintParamPayload` | `send_print_layer_param` | 打印层参数（层厚 + 平衡×1000） |
+| `GLAVO_Debug_Sensor_Ntf` | — | Glavo→UI | `DebugSensorPayload` | `register_sensor` | 7 路传感器 |
+| `GLAVO_Debug_Axis_Ntf` | — | Glavo→UI | `DebugAxisStatePayload` | `register_axis` | Z/S/D + Z 工作坐标 |
+| `GLAVO_Debug_Device_Ntf` | — | Glavo→UI | `DebugDeviceStatePayload` | `register_device` | 设备行状态 |
+| `GLAVO_Debug_Galvo_Ntf` | — | Glavo→UI | `DebugGalvoStatePayload` | `register_galvo` | 振镜 X/Y + 红光 |
+| `GLAVO_Debug_PowderBucket_Ntf` | — | Glavo→UI | `DebugPowderBucketStatePayload` | （Tab2 待接） | 粉桶状态 |
+| `GLAVO_Debug_Pusher_Ntf` | — | Glavo→UI | `DebugPusherStatePayload` | （Tab2 待接） | 推粉状态 |
+| `GLAVO_Debug_RecycleMotor_Ntf` | — | Glavo→UI | `DebugRecycleMotorStatePayload` | （Tab2 待接） | 回粉电机状态 |
+| `GLAVO_Debug_Fan_Ntf` | — | Glavo→UI | `DebugFanStatePayload` | （Tab2 待接） | 风扇状态 |
+| `GLAVO_Debug_Switch_Ntf` | — | Glavo→UI | `DebugSwitchStatePayload` | （Tab2 待接） | 开关状态 |
 
 `CameraStreamInfoPayload.dma_mode` 当前固定为 `1`：
 - 预览统一走 **dma fd 旁路**：后端经主 IPC（`/tmp/upc_camera.sock`）`SCM_RIGHTS` 附带 dma_buf fd；UI 侧 `MsgPort::take_peer_dma_fds(APP_CAMERA)` 接收。SHM `/upc_camera_preview` 仅保留 slot 状态元数据，像素不再走 SHM payload。

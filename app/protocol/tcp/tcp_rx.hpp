@@ -11,11 +11,13 @@ extern "C" {
 /** MCU→SOC 常态应答 byte[8] 通用标志（单次脉冲） */
 enum tcp_status_event_flag : uint8_t {
     TCP_EVT_NONE            = 0x00,
-    TCP_EVT_FLASH_SAVED     = 0x0D,
     TCP_EVT_OTA_READY       = 0x03,
-    TCP_EVT_OTA_CHUNK_DONE  = 0x23,
+    TCP_EVT_OTA_HEADER_OK   = 0x0A, /**< 首包帧头/地址校验通过 */
+    TCP_EVT_OTA_HEADER_BAD  = 0x0B, /**< 首包地址错误，SOC 换固件重试 */
     TCP_EVT_OTA_ALL_DONE    = 0x13,
+    TCP_EVT_OTA_CHUNK_DONE  = 0x23,
     TCP_EVT_OTA_FAILED      = 0xE3,
+    TCP_EVT_FLASH_SAVED     = 0x0D,
 };
 
 typedef struct {

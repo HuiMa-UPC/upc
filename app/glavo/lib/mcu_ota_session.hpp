@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <functional>
 #include <string>
+#include <vector>
 
 namespace upc::glavo {
 
@@ -16,7 +17,9 @@ using McuOtaStatusCb = std::function<void(const middleware::McuOtaStatusPayload&
 /**
  * @brief MCU 以太网 OTA 会话（一问一答，测试用）
  *
- * WaitReady/Streaming 期间抑制空闲 0x0B。
+ * /home/image 下全部 .bin 按文件名字典序依次尝试；MCU 0x03 就绪后发 seq=0 首包，
+ * 等 0x0A（正确）或 0x0B（换下一个 .bin 并重发 0x03 BEGIN）；seq>=1 每包等 0x23。
+ * WaitReady/WaitHeaderAck/Streaming 期间抑制空闲心跳 TX（FRAME CMD=0x0B）。
  * 全部 DATA 发完后：发心跳 → 收应答 → 发 0x03 Mode=0x02 → 等 MCU 0x13 完成。
  */
 class McuOtaSession {
@@ -43,6 +46,7 @@ private:
     enum class Phase : uint8_t {
         None,
         WaitReady,
+        WaitHeaderAck,
         Streaming,
         WaitHbAfterLast,
         WaitComplete,
@@ -54,12 +58,16 @@ private:
     enum class WaitEvent : uint8_t {
         None,
         Ready,
+        HeaderAck,
         ChunkAck,
         Complete,
     };
 
-    void reset_file();
-    bool open_newest_bin(const char* dir);
+    void reset_file_state();
+    void reset_candidates();
+    bool scan_bin_candidates(const char* dir);
+    bool open_candidate(size_t index);
+    void on_header_rejected(uint8_t progress);
     void notify(middleware::McuOtaState state, uint8_t progress);
     void finish(middleware::McuOtaState state, uint8_t progress);
     bool send_ota_ctrl(uint8_t mode, int (*tcp_send)(const uint8_t*, size_t));
@@ -72,6 +80,9 @@ private:
     WaitEvent waiting_{WaitEvent::None};
     std::atomic<bool> cancel_requested_{false};
     std::atomic<bool> post_success_reconnect_{false};
+
+    std::vector<std::string> candidate_paths_;
+    size_t candidate_index_{0};
 
     int file_fd_{-1};
     std::string bin_path_;

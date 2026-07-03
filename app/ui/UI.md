@@ -16,28 +16,30 @@
 
 - **禁止**链接 `app/glavo/lib`、`app/parser/`
 - **禁止** pages 直接 `MsgPort::subscribe` / `publish` → 走 **Proxy**
-- **LVGL 仅 UI 主线程**；入站消息由 IO 线程 `IPC_ENQUEUE`，主循环 `process()` 投递订阅回调
+- **LVGL 仅 UI 线程**；后端回调经 `publish_async` + 主循环 `process()`
 - 页面注册只在 **`ui_app.cpp`**，不在 `main.cpp` include 各页面头
 
 ## 主循环（`main.cpp`）
 
-IPC 收包与 Hub 转发在 **后台 IO 线程**；主线程 `process(0)` 消费本地队列（Proxy 回调）后与 LVGL 渲染并行。
+IPC 收包、`deliver_local`（Proxy 回调）与 LVGL 渲染**同一线程**；渲染前先泵 IPC，避免大画面刷新拖慢 Glavo 控制消息。
 
 ```cpp
 connect_ipc_with_retry();  // hub + add_ipc_peer
 platform_init();
 ui::app_init(lv_scr_act());
-port.start_ipc_io_thread();  // epoll + IPC_FWD
 
 while (!g_shutdown_requested) {
-    port.process(0);           // drain 本地队列 → 订阅回调（UI 主线程）
-    lv_timer_handler();
-    port.process(0);
+    port.process(0);                        // 渲染前先 drain IPC
+    const uint32_t delay = lv_timer_handler();
+    int wait_ms = delay > 0 ? (int)delay : 1;
+    wait_ms = std::min(wait_ms, 8);         // 限制 blocked poll，避免拖死 IPC
+    port.process(wait_ms);
+    port.process(0);                        // 同帧 Req/Rsp
     upc_sys_monitor_tick();
 }
 ```
 
-后端→后端（如 Glavo→Camera 打印录像）由 Hub IO 线程 **`IPC_FWD` 同步转发**，不经过 UiMsgProxy。预览像素走 dma fd 旁路 + SHM 元数据环，不走 MsgPort payload。
+后端→后端（如 Glavo→Camera 打印录像）由 Hub 在 `process()` 内 **`IPC_FWD` 同步转发**，不经过 UiMsgProxy。预览像素走 dma fd 旁路 + SHM 元数据环，不走 MsgPort payload。
 
 ## PageManager 约定
 

@@ -61,16 +61,9 @@ int start_glavo(char daemon) {
     }
 
     auto& mcu = upc::glavo::McuLink::instance();
-    while (mcu.connect_tcp() != 0) {
-        std::this_thread::sleep_for(
-            std::chrono::milliseconds(TCP_RECONNECT_INTERVAL_MS));
-        if (g_shutdown_requested) {
-            if (daemon) {
-                process_remove_pid(kProc.pid_file);
-            }
-            return 0;
-        }
-    }
+    /* TCP 振镜为可选链路：首次尝试一次即可，连不上由 link 线程后台自动重连，
+     * 不阻塞串口/调试链路的启动（否则振镜未接时串口与 UI_Debug_* 都无法工作）。 */
+    mcu.connect_tcp();
 
     while (mcu.open_serial(GLAVO_SERIAL_DEFAULT_DEVICE, GLAVO_SERIAL_DEFAULT_BAUD) != 0) {
         std::this_thread::sleep_for(

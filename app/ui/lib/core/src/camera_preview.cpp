@@ -4,7 +4,7 @@
 #include "msg_port.hpp"
 #include "rs_log.hpp"
 
-#include <rga/im2d.h>
+#include <rga/im2d.hpp>  // C++ 重载 importbuffer_fd(fd,size)/wrapbuffer_handle(...)，内部含 im2d.h
 #include <rga/rga.h>
 
 #include <linux/dma-buf.h>

@@ -13,6 +13,10 @@ endif()
 add_library(${UI_TARGET} STATIC ${UI_SOURCES})
 add_library(ui::port ALIAS ${UI_TARGET})
 
+target_compile_definitions(${UI_TARGET} PRIVATE
+    "UPC_SW_VERSION=\"${UPC_PRODUCT_VERSION}\""
+)
+
 target_compile_features(${UI_TARGET} PUBLIC cxx_std_17)
 
 target_include_directories(${UI_TARGET}

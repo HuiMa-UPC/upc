@@ -39,7 +39,6 @@ test_camera  ──listen──► /tmp/upc_camera.sock ◄──┘
 | `set_mode_ipc_server` | Glavo / Camera / test |
 | `subscribe` / `publish_async` / `process` | 共用 |
 | `take_peer_dma_fds(ModuleId)` | UI Hub 从指定 peer 取 SCM_RIGHTS 附带的 dma fd（预览开流） |
-| `start_ipc_io_thread()` | UI Hub：后台 epoll + 转发（`app/ui/main.cpp`） |
 | `publish` | 同步投递（InProcess 或 IPC `publish_sync`；Glavo 工作线程慎用） |
 | `publish_async_broadcast` | `target_id=0` 广播 |
 | `peer_connected(ModuleId)` | 单 peer 连接状态 |
@@ -48,8 +47,8 @@ test_camera  ──listen──► /tmp/upc_camera.sock ◄──┘
 
 ### 进程主循环
 
-- **UI**：后台 **IPC 线程** `poll_io` + Hub `IPC_FWD`；主线程 `process(0)` 消费本地队列 → `lv_timer_handler()` → `process(0)`（见 `start_ipc_io_thread()`）
-- **Glavo / Camera**：`process(2)`（I/O + 本地队列投递，单线程）
+- **UI**：`process(0)` → `lv_timer_handler()` → `process(min(delay,8))` → `process(0)`
+- **Glavo / Camera**：`process(2)`（I/O + 本地队列投递）
 
 ## 发布与投递
 
@@ -68,8 +67,8 @@ test_camera  ──listen──► /tmp/upc_camera.sock ◄──┘
 
 1. `wire_decode` → 可选 sender 校验（见下）
 2. `IPC_RX` 日志
-3. **Hub 且 `target` 为其它 peer**：**仅** `IPC_FWD`，不本地投递
-4. 否则：IO 线程模式下 **`IPC_ENQUEUE`**（主线程 `process` 再 `IPC_DELIVER`）；单线程模式直接 `deliver_local`
+3. **Hub 且 `target` 为其它 peer**：**仅** `IPC_FWD`，不 `deliver_local`
+4. 否则 `deliver_local` → 匹配 `MsgType` + `module_id==target_id` 的订阅回调
 5. 无订阅 → `IPC_DELIVER miss`（仅对应在本地应处理的报文）
 
 ### `publish_async` vs `publish_sync`

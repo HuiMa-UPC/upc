@@ -81,6 +81,41 @@ enum class MsgType : uint32_t {
     UI_Mcu_Ota_Start_Req,       /**< Empty：扫描 /home/image 最新 .bin 并下发 */
     UI_Mcu_Ota_Cancel_Ntf,      /**< Empty：测试用，SOC 侧中止 OTA 会话 */
     APP_Mcu_Ota_Status_Ntf,     /**< McuOtaStatusPayload */
+
+    // ---- UI → GLAVO：调试页手动控制（后端待实现，前端先发送） ----
+    UI_Debug_Axis_Jog_Req,          /**< DebugAxisJogPayload：点动/长按点动 */
+    UI_Debug_Axis_Hold_Stop_Req,    /**< DebugAxisPayload：长按松手停 */
+    UI_Debug_Axis_SetZero_Req,      /**< DebugAxisPayload：设工作零点（Z 轴） */
+    UI_Debug_Axis_Home_Req,         /**< DebugAxisPayload：轴回 Home/归零（Z/S） */
+    UI_Debug_Galvo_Move_Req,        /**< DebugGalvoMovePayload：振镜方向步进 */
+    UI_Debug_Galvo_Home_Req,        /**< Empty：振镜回中/复位 */
+    UI_Debug_Galvo_RedLight_Req,    /**< DebugOnOffPayload：红光开关 */
+    UI_Debug_Galvo_Param_Save_Req,  /**< DebugGalvoParamPayload：保存 Scale/步长 */
+    UI_Debug_Galvo_Calib_Req,       /**< Empty：开始标定测试 */
+    UI_Debug_Device_Req,            /**< DebugDevicePayload：设备/门/电机/照明 */
+    UI_Debug_Powder_Bucket_Req,     /**< DebugBucketPayload：粉桶开关 */
+    UI_Debug_Pusher_Req,            /**< DebugOnOffPayload：三通推杆放/停 */
+    UI_Debug_Recycle_Motor_Req,     /**< DebugMotorPayload：回粉电机 */
+    UI_Debug_Fan_Req,               /**< DebugFanPayload：风扇 */
+    UI_Debug_Switch_Req,            /**< DebugSwitchPayload：激光/洗气/底板加热 */
+    UI_Debug_CleanTest_Start_Req,   /**< Empty：清粉测试开启（关闭暂不使用） */
+    UI_Debug_Fan_Duty_Req,          /**< DebugFanPayload：仅设风扇占空比（不开关） */
+    UI_Debug_PrintParam_Set_Req,    /**< DebugPrintParamPayload：打印层参数 */
+    UI_Debug_Laser_Power_Set_Req,   /**< DebugLaserPowerPayload：激光手动功率 */
+    UI_Debug_Laser_Power_Reset_Req, /**< Empty：取消手动功率，恢复外控 */
+    UI_Debug_Laser_AlarmReset_Req,  /**< Empty：激光器报警复位（固定 1301） */
+
+    // ---- GLAVO → UI：调试页状态回读（按模块拆分） ----
+    GLAVO_Debug_Sensor_Ntf,         /**< DebugSensorPayload：顶部 7 路传感器 */
+    GLAVO_Debug_Axis_Ntf,           /**< DebugAxisStatePayload：Z/S/D 位置 + Z 工作坐标 */
+    GLAVO_Debug_Device_Ntf,         /**< DebugDeviceStatePayload：设备/门/电机/照明 */
+    GLAVO_Debug_Galvo_Ntf,          /**< DebugGalvoStatePayload：振镜 X/Y + 红光 */
+    GLAVO_Debug_PowderBucket_Ntf,   /**< DebugPowderBucketStatePayload */
+    GLAVO_Debug_Pusher_Ntf,         /**< DebugPusherStatePayload */
+    GLAVO_Debug_RecycleMotor_Ntf,   /**< DebugRecycleMotorStatePayload */
+    GLAVO_Debug_Fan_Ntf,            /**< DebugFanStatePayload */
+    GLAVO_Debug_Switch_Ntf,         /**< DebugSwitchStatePayload */
+    GLAVO_Debug_Laser_Ntf,          /**< DebugLaserStatePayload：激光器状态/报警/功率/温度 */
 };
 
 enum class MsgPriority : uint8_t {
@@ -390,6 +425,173 @@ struct McuOtaStatusPayload {
     McuOtaState state;
     uint8_t     progress;   /**< MCU byte[9] 0~255 */
     uint8_t     reserved[2];
+};
+
+// ============================================================================
+// 调试页（手动控制/标定）契约 —— 前端发送，后端（Glavo）待实现
+// 命名见 common/README.md §3；枚举跨进程时按 uint8_t 传输
+// ============================================================================
+
+enum class DebugAxis        : uint8_t { Z = 0, S = 1, D = 2 };
+enum class DebugJogMode     : uint8_t { Click = 0, Hold = 1 };
+enum class DebugGalvoAxis   : uint8_t { X = 0, Y = 1 };
+enum class DebugDeviceTarget: uint8_t { Device = 0, Door = 1, Motor = 2, Light = 3 };
+enum class DebugMotorAction : uint8_t { Stop = 0, Forward = 1, Reverse = 2 };
+enum class DebugSwitchTarget: uint8_t { Laser = 0, GasWash = 1, BaseHeat = 2 };
+enum class DebugPowderStatus: uint8_t { Available = 0, Busy = 1, Fault = 2 };
+
+/** UI_Debug_Axis_Jog_Req：轴点动 / 长按点动 */
+struct DebugAxisJogPayload {
+    uint8_t axis;       /**< DebugAxis */
+    uint8_t mode;       /**< DebugJogMode：Click=单步，Hold=持续 */
+    int8_t  dir;        /**< +1 / -1 */
+    uint8_t reserved;
+    float   value;      /**< Click=步距(mm/°)，Hold=速度(mm·°/s) */
+};
+
+/** UI_Debug_Axis_Hold_Stop_Req / UI_Debug_Axis_SetZero_Req */
+struct DebugAxisPayload {
+    uint8_t axis;       /**< DebugAxis */
+    uint8_t reserved[3];
+};
+
+/** UI_Debug_Galvo_Move_Req：振镜方向步进 */
+struct DebugGalvoMovePayload {
+    uint8_t axis;       /**< DebugGalvoAxis */
+    int8_t  dir;        /**< +1 / -1 */
+    uint8_t reserved[2];
+    float   step_mm;
+};
+
+/** 通用开关：UI_Debug_Galvo_RedLight_Req / UI_Debug_Pusher_Req */
+struct DebugOnOffPayload {
+    uint8_t on;
+    uint8_t reserved[3];
+};
+
+/** UI_Debug_Galvo_Param_Save_Req：保存 Scale / 步长 */
+struct DebugGalvoParamPayload {
+    float scale;
+    float step_mm;
+};
+
+/** UI_Debug_Device_Req：设备/门/电机/照明 */
+struct DebugDevicePayload {
+    uint8_t target;     /**< DebugDeviceTarget */
+    uint8_t on;
+    uint8_t reserved[2];
+};
+
+/** UI_Debug_Powder_Bucket_Req：粉桶开关 */
+struct DebugBucketPayload {
+    uint8_t bucket_id;  /**< 1 / 2 */
+    uint8_t on;
+    uint8_t reserved[2];
+};
+
+/** UI_Debug_Recycle_Motor_Req：回粉电机 */
+struct DebugMotorPayload {
+    uint8_t action;     /**< DebugMotorAction */
+    uint8_t reserved[3];
+};
+
+/** UI_Debug_Fan_Req：风扇开关 + 占空比 */
+struct DebugFanPayload {
+    uint8_t on;
+    uint8_t reserved[3];
+    float   duty;       /**< 0..100 (%) */
+};
+
+/** UI_Debug_Switch_Req：激光/洗气/底板加热 */
+struct DebugSwitchPayload {
+    uint8_t target;     /**< DebugSwitchTarget */
+    uint8_t on;
+    uint8_t reserved[2];
+};
+
+/** UI_Debug_PrintParam_Set_Req：打印层参数（层厚 + 平衡系数×1000） */
+struct DebugPrintParamPayload {
+    uint16_t layer_um;        /**< 层厚 um */
+    uint16_t balance_x1000;   /**< 平衡系数 × 1000 */
+};
+
+/** UI_Debug_Laser_Power_Set_Req：激光手动功率百分比 */
+struct DebugLaserPowerPayload {
+    uint8_t percent;          /**< 0..100 */
+    uint8_t reserved[3];
+};
+
+/** GLAVO_Debug_Laser_Ntf：激光器状态上报（原始值，界面自行换算） */
+struct DebugLaserStatePayload {
+    uint16_t status;          /**< bit0 红光/bit1 激光输出/bit2 Ready/bit3 外部输出有效 */
+    uint16_t alarm;           /**< laser_alarm 打包报警位 */
+    uint16_t power_raw;       /**< 功率原始值 0..255 */
+    uint16_t pump_temp_raw;   /**< 泵浦温度原始值 */
+};
+
+/** GLAVO_Debug_Sensor_Ntf：顶部 7 路传感器快照 */
+struct DebugSensorPayload {
+    float   oxygen_percent;
+    float   pressure_kpa;
+    float   pm25;
+    float   humidity_pct;
+    float   cabin_temp_c;
+    float   baseplate_temp_c;
+    uint8_t powder_status;   /**< DebugPowderStatus */
+    uint8_t reserved[3];
+};
+
+/** GLAVO_Debug_Axis_Ntf：Z/S/D 实际位置 + Z 工作坐标 */
+struct DebugAxisStatePayload {
+    float z_pos_mm;
+    float s_pos_mm;
+    float d_pos_deg;
+    float z_work_zero_mm;
+};
+
+/** GLAVO_Debug_Device_Ntf：设备快捷行状态 */
+struct DebugDeviceStatePayload {
+    uint8_t device_awake;
+    uint8_t door_open;
+    uint8_t motor_on;
+    uint8_t light_on;
+};
+
+/** GLAVO_Debug_Galvo_Ntf：振镜 X/Y + 红光 */
+struct DebugGalvoStatePayload {
+    float   x;
+    float   y;
+    uint8_t red_light_on;
+    uint8_t reserved[3];
+};
+
+struct DebugPowderBucketStatePayload {
+    uint8_t bucket1_open;
+    uint8_t bucket2_open;
+    uint8_t reserved[2];
+};
+
+struct DebugPusherStatePayload {
+    uint8_t pusher_on;
+    uint8_t reserved[3];
+};
+
+struct DebugRecycleMotorStatePayload {
+    uint8_t state;      /**< DebugMotorAction */
+    uint8_t reserved[3];
+};
+
+struct DebugFanStatePayload {
+    uint8_t on;
+    uint8_t reserved[3];
+    float   duty;
+};
+
+struct DebugSwitchStatePayload {
+    uint8_t laser_on;
+    uint8_t gas_wash_on;
+    uint8_t base_heat_on;
+    uint8_t reserved;
 };
 
 } // namespace middleware

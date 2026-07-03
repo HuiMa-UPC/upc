@@ -8,5 +8,6 @@
 #include "serial_frame.hpp"
 #include "serial_print.hpp"
 #include "serial_env.hpp"
+#include "serial_debug.hpp"
 
 #endif

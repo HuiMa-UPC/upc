@@ -16,7 +16,7 @@ using CameraStreamStopDoneCb = std::function<void()>;
  * @brief UI ↔ test_camera / APP_CAMERA 控制面（像素走 SHM，不经 MsgBus）
  *
  * 不订阅 APP_Camera_Frame_Ntf；UI 侧自行 poll SHM。
- * 回调在 UI 主线程 process() 中执行（IO 线程仅入队）；勿在非 UI 线程操作 LVGL。
+ * 回调均在 MsgPort::process 线程执行，勿操作 LVGL。
  */
 class CameraMsgProxy {
 public:

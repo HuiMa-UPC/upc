@@ -21,8 +21,8 @@ const lv_color_t ui_color_danger     = LV_COLOR_MAKE(0xf8, 0x51, 0x49);
 const lv_color_t user_color_bg         = LV_COLOR_MAKE(0x0a, 0x09, 0x09);
 const lv_color_t user_color_panel      = LV_COLOR_MAKE(0x1c, 0x1c, 0x1c);
 const lv_color_t user_color_panel_alt  = LV_COLOR_MAKE(0x26, 0x26, 0x26);
-const lv_color_t user_color_accent     = LV_COLOR_MAKE(0xff, 0x7a, 0x45);
-const lv_color_t user_color_accent_dim = LV_COLOR_MAKE(0xd9, 0x5a, 0x28);
+const lv_color_t user_color_accent     = LV_COLOR_MAKE(0x42, 0x58, 0xff);
+const lv_color_t user_color_accent_dim = LV_COLOR_MAKE(0x31, 0x44, 0xd6);
 const lv_color_t user_color_text       = LV_COLOR_MAKE(0xff, 0xff, 0xff);
 const lv_color_t user_color_text_dim   = LV_COLOR_MAKE(0x9a, 0x9a, 0x9a);
 const lv_color_t user_color_icon_off   = LV_COLOR_MAKE(0x55, 0x55, 0x55);
@@ -315,7 +315,7 @@ static const ui_theme_t s_theme_1024 = {
     /* 用户 Shell */
     /* user_sidebar_w         */ 80,
     /* user_nav_item_h        */ 72,
-    /* user_nav_icon_sz       */ 44,
+    /* user_nav_icon_sz       */ 54,
     /* user_nav_icon_pad      */ 8,
     /* user_topbar_h          */ 68,
     /* user_topbar_pad_hor    */ 22,

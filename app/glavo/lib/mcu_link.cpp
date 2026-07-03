@@ -369,8 +369,11 @@ int McuLink::open_serial(const char* device, int baud)
     tty.c_cflag |= (CLOCAL | CREAD);           // 忽略调制解调器状态，启用接收
     tty.c_cflag &= ~(PARENB | CSTOPB | CSIZE); // 无校验、1 位停止位
     tty.c_cflag |= CS8;                        // 8 位数据位
-    tty.c_lflag &= ~(ICANON | ECHO | ECHOE | ISIG); // 原始输入（非规范模式）
-    tty.c_iflag &= ~(IXON | IXOFF | IXANY);    // 关闭软件流控
+    tty.c_lflag &= ~(ICANON | ECHO | ECHOE | ISIG | IEXTEN); // 原始输入（非规范模式）
+    /* 完全原始输入：务必清 ICRNL/INLCR/IGNCR，否则收到的 0x0D 会被内核转成 0x0A，
+     * 破坏二进制帧内容与校验和（曾导致传感器帧 TLV-len 0x0D 被收成 0x0A）。 */
+    tty.c_iflag &= ~(IXON | IXOFF | IXANY | ICRNL | INLCR | IGNCR |
+                     ISTRIP | INPCK | PARMRK | BRKINT | IGNBRK);
     tty.c_oflag &= ~OPOST;                     // 原始输出
     tty.c_cc[VMIN]  = 0;                       // 非阻塞读的最小字符数
     tty.c_cc[VTIME] = 0;                       // 非阻塞读的超时时间（deciseconds）
@@ -434,7 +437,7 @@ void McuLink::emit_event(McuLinkEvent ev)
     }
 }
 
-void McuLink::enqueue_serial_tx(const uint8_t* data, size_t len)
+void McuLink::enqueue_serial_tx(const uint8_t* data, size_t len, bool reliable)
 {
     if(!data || len == 0 || len > sizeof(SerialTxItem::data)) {
         return;
@@ -442,6 +445,7 @@ void McuLink::enqueue_serial_tx(const uint8_t* data, size_t len)
     SerialTxItem item{};
     std::memcpy(item.data, data, len);
     item.len = len;
+    item.reliable = reliable;
     std::lock_guard<std::mutex> lock(serial_tx_mtx_);
     if(serial_tx_queue_.size() >= kSerialTxQueueMax) {
         serial_tx_queue_.pop_front();
@@ -470,7 +474,13 @@ void McuLink::drain_serial_tx_queue()
             item = serial_tx_queue_.front();
             serial_tx_queue_.pop_front();
         }
-        serial_send_raw(item.data, item.len);
+        /* reliable 项走带 ACK 的可靠通道（本函数在 link 线程内调用，
+         * 与 serial_reliable_* 状态机同线程，无需额外加锁） */
+        if(item.reliable) {
+            serial_send_aa_reliable(item.data, item.len, false);
+        } else {
+            serial_send_raw(item.data, item.len);
+        }
     }
 }
 
@@ -486,6 +496,34 @@ void McuLink::on_sensor_report(const serial_sensor_report_t& report)
         env_cache_.valid           = true;
     }
     publish_env_update_ntf();
+    publish_debug_sensor_ntf(report);   /* 调试页顶部 7 路传感器回读 */
+
+    UPC_LOG_MCU_LINK(Info,
+        "sensor: O2=%.1f%% P=%dmbar T=%.1fC RH=%.1f%% PM2.5=%.1f base=%.1fC powder=%d",
+        static_cast<double>(report.oxygen_percent), report.pressure_mbar,
+        static_cast<double>(report.temperature_c),
+        static_cast<double>(report.humidity_percent),
+        static_cast<double>(report.pm25_ug_m3),
+        static_cast<double>(report.substrate_temp_c), report.powder_present);
+}
+
+void McuLink::on_motion_pos_report(const serial_motion_pos_t& pos)
+{
+    publish_debug_axis_ntf(pos);        /* 调试页三轴位置 + Z 工作坐标回读 */
+
+    UPC_LOG_MCU_LINK(Info,
+        "motion: Z=%.3fmm Zwork=%.3fmm S=%.3fmm D=%.3fdeg",
+        static_cast<double>(pos.z_pos_mm), static_cast<double>(pos.z_work_zero_mm),
+        static_cast<double>(pos.s_pos_mm), static_cast<double>(pos.d_pos_deg));
+}
+
+void McuLink::on_laser_report(const serial_laser_report_t& report)
+{
+    publish_debug_laser_ntf(report);    /* 调试页 Laser 标签状态回读 */
+
+    UPC_LOG_MCU_LINK(Info,
+        "laser: status=0x%04X alarm=0x%04X power=%u pump=%u",
+        report.status, report.alarm, report.power_raw, report.pump_temp_raw);
 }
 
 void McuLink::publish_env_update_ntf()
@@ -525,6 +563,56 @@ void McuLink::publish_env_update_ntf()
     if(!middleware::MsgPort::instance().publish_async(ntf)) {
         UPC_LOG_MCU_LINK(Warn, "APP_Update_Ntf publish_async failed");
     }
+}
+
+void McuLink::publish_debug_sensor_ntf(const serial_sensor_report_t& report)
+{
+    middleware::DebugSensorPayload p{};
+    p.oxygen_percent   = report.oxygen_percent;
+    p.pressure_kpa     = static_cast<float>(report.pressure_mbar) / 10.0f; /* mbar→kPa */
+    p.pm25             = report.pm25_ug_m3;
+    p.humidity_pct     = report.humidity_percent;
+    p.cabin_temp_c     = report.temperature_c;
+    p.baseplate_temp_c = report.substrate_temp_c;
+    p.powder_status    = report.powder_present
+        ? static_cast<uint8_t>(middleware::DebugPowderStatus::Available)
+        : static_cast<uint8_t>(middleware::DebugPowderStatus::Fault);
+
+    middleware::Message ntf(middleware::MsgType::GLAVO_Debug_Sensor_Ntf,
+        middleware::ModuleId::APP_GLAVO, middleware::ModuleId::UI);
+    ntf.payload = middleware::MsgPayload::from_bytes(
+        reinterpret_cast<const uint8_t*>(&p), sizeof(p));
+    middleware::MsgPort::instance().publish_async(ntf);
+}
+
+void McuLink::publish_debug_axis_ntf(const serial_motion_pos_t& pos)
+{
+    middleware::DebugAxisStatePayload p{};
+    p.z_pos_mm       = pos.z_pos_mm;
+    p.s_pos_mm       = pos.s_pos_mm;
+    p.d_pos_deg      = pos.d_pos_deg;
+    p.z_work_zero_mm = pos.z_work_zero_mm;
+
+    middleware::Message ntf(middleware::MsgType::GLAVO_Debug_Axis_Ntf,
+        middleware::ModuleId::APP_GLAVO, middleware::ModuleId::UI);
+    ntf.payload = middleware::MsgPayload::from_bytes(
+        reinterpret_cast<const uint8_t*>(&p), sizeof(p));
+    middleware::MsgPort::instance().publish_async(ntf);
+}
+
+void McuLink::publish_debug_laser_ntf(const serial_laser_report_t& report)
+{
+    middleware::DebugLaserStatePayload p{};
+    p.status        = report.status;
+    p.alarm         = report.alarm;
+    p.power_raw     = report.power_raw;
+    p.pump_temp_raw = report.pump_temp_raw;
+
+    middleware::Message ntf(middleware::MsgType::GLAVO_Debug_Laser_Ntf,
+        middleware::ModuleId::APP_GLAVO, middleware::ModuleId::UI);
+    ntf.payload = middleware::MsgPayload::from_bytes(
+        reinterpret_cast<const uint8_t*>(&p), sizeof(p));
+    middleware::MsgPort::instance().publish_async(ntf);
 }
 
 void McuLink::notify_serial_event(serial_event_t evt)
@@ -570,6 +658,20 @@ void McuLink::handle_serial_rx_frame(const uint8_t* frame, size_t len)
     serial_sensor_err_t serr = SERIAL_SENSOR_ERR_NONE;
     if(serial_parse_sensor_report_detail(frame, len, &sensor, &serr) == 0) {
         on_sensor_report(sensor);
+        return;
+    }
+
+    /* 运动轴位置上报（0x9B + TLV 0x05）：Z/S/D 位置 + Z 工作坐标 */
+    serial_motion_pos_t mpos{};
+    if(serial_parse_motion_pos_report(frame, len, &mpos) == 0) {
+        on_motion_pos_report(mpos);
+        return;
+    }
+
+    /* 激光器状态上报（0x9B + TLV 0x03）：状态/报警/功率/泵浦温度 */
+    serial_laser_report_t laser{};
+    if(serial_parse_laser_report(frame, len, &laser) == 0) {
+        on_laser_report(laser);
         return;
     }
 
@@ -1570,11 +1672,19 @@ void McuLink::link_thread_fn()
 {
     using clock = std::chrono::steady_clock;
     auto next_hb = clock::now(); // 下次心跳发送时间点
+    auto next_tcp_retry = clock::now(); // 下次 TCP 重连尝试时间点
 
     while(link_run_.load() && !link_stop_.load()) {
         const auto now = clock::now();
 
-        // ---------- TCP RX 排空与断线检测 ----------
+        // ---------- 串口 TX/RX/可靠重传：独立于 TCP，始终处理 ----------
+        // 串口（MCU 调试链路）与 TCP（振镜）相互独立；即使振镜未连接，
+        // 调试命令（UI_Debug_*）与传感器上报也必须照常收发。
+        drain_serial_tx_queue();
+        serial_drain_rx();
+        link_process_serial_reliable_tx();
+
+        // ---------- TCP RX 排空与断线检测/重连（不阻塞串口） ----------
         if(tcp_fd_ >= 0) {
             tcp_drain_rx();
         } else if(is_sending_.load() && !ota_session_.is_active()) {
@@ -1583,13 +1693,12 @@ void McuLink::link_thread_fn()
             is_sending_.store(false);
             terminate_pending_.store(true);
         } else if(!terminate_pending_.load() && !ota_session_.is_active()) {
-            // 空闲断线或 OTA 成功后：尝试 connect_tcp（OTA 时强制刷新已有 fd）
+            // 空闲断线或 OTA 成功后：节流式 connect_tcp（固定 IP/PORT）
             if(tcp_fd_ < 0 || ota_post_reconnect_.load()) {
-                link_try_ota_post_reconnect();
-                if(tcp_fd_ < 0) {
-                    std::this_thread::sleep_for(
-                        std::chrono::milliseconds(TCP_RECONNECT_INTERVAL_MS));
-                    continue; // 重连失败，跳过本轮其余逻辑
+                if(ota_post_reconnect_.load() || now >= next_tcp_retry) {
+                    link_try_ota_post_reconnect();
+                    next_tcp_retry =
+                        now + std::chrono::milliseconds(TCP_RECONNECT_INTERVAL_MS);
                 }
             }
         }
@@ -1613,10 +1722,7 @@ void McuLink::link_thread_fn()
                 tcp_drain_rx(); // 心跳发送后再排空一次 RX
             }
 
-            // ---------- 串口 TX 队列与 RX、握手 ----------
-            drain_serial_tx_queue();
-            serial_drain_rx();
-            link_process_serial_reliable_tx();
+            // ---------- 串口换层握手（打印流程相关） ----------
             link_process_serial_handshake();
 
             // ---------- 开始发送（处理挂起的 begin_sending） ----------

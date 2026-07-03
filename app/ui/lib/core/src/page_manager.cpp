@@ -27,8 +27,7 @@ void PageManager::init(lv_obj_t* screen) {
     lv_obj_set_flex_align(shell_, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
 
     lv_obj_set_style_bg_color(shell_, user_color_bg, 0);
-    lv_obj_set_style_bg_grad_color(shell_, user_color_panel, 0);
-    lv_obj_set_style_bg_grad_dir(shell_, LV_GRAD_DIR_VER, 0);
+    lv_obj_set_style_bg_grad_dir(shell_, LV_GRAD_DIR_NONE, 0);
     lv_obj_set_style_bg_opa(shell_, LV_OPA_COVER, 0);
 
     menu_panel_ = lv_obj_create(shell_);

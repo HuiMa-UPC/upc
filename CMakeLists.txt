@@ -9,6 +9,10 @@ project(rongsu_upc
         VERSION 1.0.0
         LANGUAGES C CXX
 )
+
+# 产品发布版本（UI About 等展示；与 project VERSION 独立）
+set(UPC_PRODUCT_VERSION "v3.6" CACHE STRING "Product release version string")
+
 set(CMAKE_C_STANDARD 99)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_STANDARD 17)

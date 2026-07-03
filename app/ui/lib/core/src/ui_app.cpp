@@ -3,6 +3,7 @@
 #include "page_manager.hpp"
 #include "ui_msg_proxy.hpp"
 #include "camera_msg_proxy.hpp"
+#include "debug_msg_proxy.hpp"
 #include "camera_preview.hpp"
 #include "ui_simple_page.hpp"
 
@@ -11,6 +12,7 @@
 #include "page_user_control.hpp"
 #include "page_user_settings.hpp"
 #include "page_user_message.hpp"
+#include "page_user_debug.hpp"
 
 #include "ui_theme.hpp"
 #include "ui_keyboard.hpp"
@@ -37,6 +39,7 @@ void app_init(lv_obj_t* screen) {
 
     UiMsgProxy::instance().init();
     CameraMsgProxy::instance().init();
+    DebugMsgProxy::instance().init();
     CameraPreviewPlayer::instance().init();
 
     PageManager::instance().init(screen);
@@ -75,6 +78,15 @@ void app_init(lv_obj_t* screen) {
                                      page_user_files_refresh,
                                      page_user_files_exit),
         "user_home");
+
+    /* 调试页：隐藏页（无侧边栏图标），归属设置页菜单按钮；
+     * 由 Settings → Debug（密码 "888"）进入 */
+    PageManager::instance().register_hidden_page(
+        std::make_unique<SimplePage>("user_debug",
+                                     page_user_debug_create,
+                                     page_user_debug_refresh,
+                                     page_user_debug_exit),
+        "user_settings");
 
     /* 首页图标点击 → 首页区当前视图（仪表盘 / 选择文件页），实现“回到上次视图” */
     PageManager::instance().set_menu_target_resolver(

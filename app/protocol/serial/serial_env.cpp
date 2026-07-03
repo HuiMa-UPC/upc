@@ -45,7 +45,8 @@ int serial_parse_sensor_report_detail(const uint8_t* data, size_t len,
     if(!data || !out) {
         return fail(SERIAL_SENSOR_ERR_PARAM);
     }
-    if(len < 25) {
+    /* 当前 MCU 上报为 13 字节 Value（无 Hall）：整帧 = 8 + payload_len(0x0F) = 23 */
+    if(len < 23) {
         return fail(SERIAL_SENSOR_ERR_TOO_SHORT);
     }
     if(data[0] != SERIAL_SOF0 || data[1] != SERIAL_SOF1 ||
@@ -57,7 +58,7 @@ int serial_parse_sensor_report_detail(const uint8_t* data, size_t len,
     }
 
     const uint8_t payload_len = data[6];
-    if(payload_len != 0x11 || data[7] != 0x02 || data[8] != 0x0F) {
+    if(payload_len != 0x0F || data[7] != 0x02 || data[8] != 0x0D) {
         return fail(SERIAL_SENSOR_ERR_TLV);
     }
     if(len < (size_t)(8 + payload_len)) {
@@ -82,7 +83,7 @@ int serial_parse_sensor_report_detail(const uint8_t* data, size_t len,
     out->pm25_ug_m3         = (float)pm_raw;
     out->powder_present     = v[10];
     out->substrate_temp_c   = (float)serial_read_le16(v + 11) / 10.0f;
-    out->hall_bitmap        = (uint16_t)serial_read_le16(v + 13);
+    out->hall_bitmap        = 0;   /* 当前固件不上报 Hall（value 仅 13 字节） */
 
     if(err_out) {
         *err_out = SERIAL_SENSOR_ERR_NONE;

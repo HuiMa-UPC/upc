@@ -121,10 +121,13 @@ public:
     [[nodiscard]] bool ota_active() const;
 
     /**
-     * @brief 将串口发送帧入队，由 link_thread 统一 write（线程安全）
+     * @brief 将串口发送帧入队，由 link_thread 统一发送（线程安全）
+     * @param reliable true 时经 serial_send_aa_reliable 走带 ACK 的可靠通道
+     *                 （需 GLAVO_SERIAL_ACK_ENABLE=1 才真正重传，否则等同裸发）；
+     *                 false 时裸发不等 ACK。
      * @note 队列满时丢弃最旧一条
      */
-    void enqueue_serial_tx(const uint8_t* data, size_t len);
+    void enqueue_serial_tx(const uint8_t* data, size_t len, bool reliable = false);
 
     /** @brief 读取最新环境传感器快照（线程安全） */
     [[nodiscard]] EnvSnapshotCache env_snapshot() const;
@@ -144,7 +147,12 @@ public:
     void handle_serial_rx_frame(const uint8_t* frame, size_t len);
 
     void on_sensor_report(const serial_sensor_report_t& report);
+    void on_motion_pos_report(const serial_motion_pos_t& pos);
+    void on_laser_report(const serial_laser_report_t& report);
     void publish_env_update_ntf();
+    void publish_debug_sensor_ntf(const serial_sensor_report_t& report);
+    void publish_debug_axis_ntf(const serial_motion_pos_t& pos);
+    void publish_debug_laser_ntf(const serial_laser_report_t& report);
     void drain_serial_tx_queue();
 
     /** TCP 常态应答（运动/OTA），供分帧回调使用 */
@@ -302,6 +310,7 @@ private:
     struct SerialTxItem {
         uint8_t data[64]{};
         size_t  len = 0;
+        bool    reliable = false;  /**< 是否走带 ACK 的可靠发送通道 */
     };
     std::deque<SerialTxItem> serial_tx_queue_;
     mutable std::mutex serial_tx_mtx_;

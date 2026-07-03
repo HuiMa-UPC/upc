@@ -1,0 +1,1668 @@
+#include "page_user_debug.hpp"
+#include "ui_theme.hpp"
+#include "ui_user_widgets.hpp"
+#include "ui_keyboard.hpp"
+#include "ui_feedback.hpp"
+#include "page_manager.hpp"
+#include "debug_msg_proxy.hpp"
+
+#include <cstdint>
+#include <cstdlib>
+#include <cstdio>
+#include <cstring>
+
+/**
+ * @file page_user_debug.cpp
+ * @brief 调试页（开发者/工厂手动控制台）—— "移动控制" Tab。
+ *
+ * 顶部 7 路传感器条 + 设备快捷行（设备/门/电机/照明）+ Tab（移动控制/其他控制）。
+ * 移动控制：左列 Z/S/D 三轴卡（点击移动/长按移动），右列 振镜坐标卡 + 振镜标定卡。
+ * 命令经 DebugMsgProxy → APP_GLAVO（后端待实现）；图标暂用 LV_SYMBOL/文字占位。
+ */
+
+namespace {
+
+using middleware::DebugAxis;
+using middleware::DebugJogMode;
+using middleware::DebugGalvoAxis;
+using middleware::DebugDeviceTarget;
+using middleware::DebugMotorAction;
+using middleware::DebugSwitchTarget;
+
+/* ---- 三轴配置（英文标签，受 Montserrat 字库约束） ---- */
+struct AxisCfg {
+    DebugAxis   axis;
+    const char *title;
+    const char *unit;        /**< 距离单位 */
+    const char *speed_unit;  /**< 速度单位 */
+    bool        has_zero;    /**< Z 轴有"工作零点" */
+    bool        rotational;  /**< D 轴用旋转箭头 */
+};
+
+const AxisCfg kAxes[3] = {
+    { DebugAxis::Z, "Print Plane Height (Z)", "mm", "mm/s", true,  false },
+    { DebugAxis::S, "Powder Scraper (S)",     "mm", "mm/s", false, false },
+    { DebugAxis::D, "Powder Bucket Rod (D)",  "\xC2\xB0", "\xC2\xB0/s", false, true },
+};
+
+/* 协议 INC/JOG 为 int16 整数（mm·°/mm·°·s），步距/速度默认 0 */
+constexpr float kAxisDefaultStep = 0.0f;
+
+/* 振镜单次步长候选 */
+const float kGalvoSteps[4] = { 0.01f, 0.1f, 1.0f, 10.0f };
+
+/* ---- 页面对象/状态 ---- */
+lv_obj_t *g_tab1 = nullptr;          /**< 移动控制内容 */
+lv_obj_t *g_tab2 = nullptr;          /**< 其他控制内容 */
+lv_obj_t *g_tab3 = nullptr;          /**< 激光器控制内容 */
+
+/* Laser 标签页回读控件 */
+lv_obj_t *g_laser_status_lbl[4] = { nullptr };  /**< 红光/输出/Ready/外部 状态字 */
+lv_obj_t *g_laser_status_dot[4] = { nullptr };  /**< 对应状态圆点 */
+lv_obj_t *g_laser_alarm_box     = nullptr;      /**< 报警列表容器 */
+lv_obj_t *g_laser_temp_lbl      = nullptr;      /**< 泵浦温度读数 */
+lv_obj_t *g_laser_power_lbl     = nullptr;      /**< 功率读数 */
+lv_obj_t *g_laser_power_ta      = nullptr;      /**< 设置功率输入 */
+
+lv_obj_t *g_sensor_val[7] = { nullptr };
+lv_obj_t *g_axis_pos[3]   = { nullptr };
+lv_obj_t *g_axis_step[3]  = { nullptr };   /**< 点击距离/速度输入（按 tab 复用） */
+lv_obj_t *g_axis_ctrl[3]  = { nullptr };   /**< 控制区容器（按子 tab 重建） */
+uint8_t   g_axis_mode[3]  = { 0, 0, 0 };   /**< 0=点击 1=长按 */
+/** 各轴 × 子 tab 的步距/速度记忆（切换子 tab 不丢值） */
+float     g_axis_step_saved[3][2] = {};
+lv_obj_t *g_z_zero_lbl     = nullptr;
+lv_obj_t *g_galvo_x_lbl    = nullptr;
+lv_obj_t *g_galvo_y_lbl    = nullptr;
+lv_obj_t *g_galvo_scale_ta = nullptr;
+lv_obj_t *g_galvo_step_seg = nullptr;
+lv_obj_t *g_dev_btn[4]     = { nullptr };
+lv_obj_t *g_dev_state[4]   = { nullptr };   /**< 设备快捷行状态字（已唤醒/休眠中…） */
+lv_obj_t *g_fan_duty_ta      = nullptr;     /**< 其他控制：风扇占空比输入 */
+lv_obj_t *g_print_layer_ta   = nullptr;     /**< 其他控制：打印层厚输入 */
+lv_obj_t *g_print_balance_ta = nullptr;     /**< 其他控制：打印平衡系数×1000 输入 */
+
+/* 设备快捷行状态字（受 Montserrat 字库约束，沿用英文） */
+const char *const kDevOn[4]  = { "Awake", "Open", "Running", "On" };
+const char *const kDevOff[4] = { "Sleeping", "Closed", "Sleeping", "Off" };
+
+/* jog 按钮 user_data 编码：axis(2bit)<<2 | dirbit<<1 | mode */
+inline void *jog_ud(uint8_t axis, int dir, uint8_t mode) {
+    const uintptr_t v = (static_cast<uintptr_t>(axis) << 2) |
+                        ((dir < 0 ? 0u : 1u) << 1) | (mode & 1u);
+    return reinterpret_cast<void *>(v);
+}
+inline void jog_decode(void *ud, uint8_t &axis, int &dir, uint8_t &mode) {
+    const uintptr_t v = reinterpret_cast<uintptr_t>(ud);
+    axis = static_cast<uint8_t>((v >> 2) & 0x3u);
+    dir  = ((v >> 1) & 1u) ? 1 : -1;
+    mode = static_cast<uint8_t>(v & 1u);
+}
+
+float read_ta_float(lv_obj_t *ta) {
+    if(!ta) {
+        return 0.0f;
+    }
+    const char *s = lv_textarea_get_text(ta);
+    return s ? static_cast<float>(std::atof(s)) : 0.0f;
+}
+
+/* 圆形图标按钮（jog / dpad / 设备开关复用） */
+lv_obj_t *make_circle_btn(lv_obj_t *parent, int32_t sz, const char *sym,
+                          lv_event_cb_t cb, void *ud, bool accent = false)
+{
+    lv_obj_t *btn = lv_button_create(parent);
+    lv_obj_remove_style_all(btn);
+    lv_obj_set_size(btn, sz, sz);
+    lv_obj_set_style_radius(btn, LV_RADIUS_CIRCLE, 0);
+    if(accent) {
+        lv_obj_set_style_bg_color(btn, user_color_accent, 0);
+        lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, 0);
+    } else {
+        lv_obj_set_style_bg_color(btn, user_color_text, 0);
+        lv_obj_set_style_bg_opa(btn, 13, 0);
+    }
+    lv_obj_set_style_bg_opa(btn, LV_OPA_40, LV_STATE_PRESSED);
+    if(cb) {
+        lv_obj_add_event_cb(btn, cb, LV_EVENT_CLICKED, ud);
+    }
+    lv_obj_t *l = lv_label_create(btn);
+    lv_label_set_text(l, sym);
+    lv_obj_set_style_text_color(l, user_color_text, 0);
+    lv_obj_set_style_text_font(l, user_font_text(), 0);
+    lv_obj_center(l);
+    return btn;
+}
+
+void on_back_click(lv_event_t *)
+{
+    ui::PageManager::instance().switch_to("user_settings");
+}
+
+/* ---- jog 事件 ---- */
+void on_jog_click(lv_event_t *e)
+{
+    uint8_t axis, mode; int dir;
+    jog_decode(lv_event_get_user_data(e), axis, dir, mode);
+    ui::DebugMsgProxy::instance().send_axis_jog(
+        static_cast<DebugAxis>(axis), DebugJogMode::Click, dir,
+        read_ta_float(g_axis_step[axis]));
+}
+
+void on_jog_hold(lv_event_t *e)
+{
+    const lv_event_code_t code = lv_event_get_code(e);
+    uint8_t axis, mode; int dir;
+    jog_decode(lv_event_get_user_data(e), axis, dir, mode);
+    auto &proxy = ui::DebugMsgProxy::instance();
+    if(code == LV_EVENT_PRESSED) {
+        proxy.send_axis_jog(static_cast<DebugAxis>(axis), DebugJogMode::Hold, dir,
+                            read_ta_float(g_axis_step[axis]));
+    } else { /* RELEASED / PRESS_LOST */
+        proxy.send_axis_hold_stop(static_cast<DebugAxis>(axis));
+    }
+}
+
+/* 归零按钮：发送轴回 Home（仅 Z/S；D 轴无此按钮） */
+void on_axis_home(lv_event_t *e)
+{
+    const uint8_t axis = static_cast<uint8_t>(
+        reinterpret_cast<uintptr_t>(lv_event_get_user_data(e)));
+    if(axis >= 2) {
+        return;
+    }
+    ui::DebugMsgProxy::instance().send_axis_home(static_cast<DebugAxis>(axis));
+}
+
+void on_set_zero(lv_event_t *e)
+{
+    const uint8_t axis = static_cast<uint8_t>(
+        reinterpret_cast<uintptr_t>(lv_event_get_user_data(e)));
+    ui::DebugMsgProxy::instance().send_axis_set_zero(static_cast<DebugAxis>(axis));
+    ui_toast_show("Work zero set", user_color_accent, 1200);
+}
+
+/* ---- 顶部传感器条 ---- */
+lv_obj_t *make_sensor_cell(lv_obj_t *parent, const char *caption, int idx)
+{
+    lv_obj_t *cell = lv_obj_create(parent);
+    lv_obj_remove_style_all(cell);
+    lv_obj_set_height(cell, LV_PCT(100));
+    lv_obj_set_flex_grow(cell, 1);
+    lv_obj_set_flex_flow(cell, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(cell, LV_FLEX_ALIGN_CENTER,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_row(cell, USER_PAD_SM / 2, 0);
+    lv_obj_set_style_bg_opa(cell, LV_OPA_TRANSP, 0);
+    lv_obj_clear_flag(cell, LV_OBJ_FLAG_SCROLLABLE);
+    /* 左侧分隔线 */
+    if(idx > 0) {
+        lv_obj_set_style_border_width(cell, 1, 0);
+        lv_obj_set_style_border_color(cell, user_color_divider, 0);
+        lv_obj_set_style_border_side(cell, LV_BORDER_SIDE_LEFT, 0);
+    }
+    lv_obj_t *cap = lv_label_create(cell);
+    lv_label_set_text(cap, caption);
+    lv_obj_set_style_text_color(cap, user_color_text_dim, 0);
+    lv_obj_set_style_text_font(cap, user_font_caption(), 0);
+
+    lv_obj_t *val = lv_label_create(cell);
+    lv_label_set_text(val, "--");
+    lv_obj_set_style_text_color(val, user_color_text, 0);
+    lv_obj_set_style_text_font(val, user_font_text(), 0);
+    if(idx >= 0 && idx < 7) {
+        g_sensor_val[idx] = val;
+    }
+    return cell;
+}
+
+lv_obj_t *build_sensor_strip(lv_obj_t *parent)
+{
+    lv_obj_t *strip = ui_user_make_frosted_card(parent, false);
+    lv_obj_set_height(strip, USER_TOPBAR_H);
+    lv_obj_set_flex_flow(strip, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(strip, LV_FLEX_ALIGN_SPACE_BETWEEN,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_ver(strip, USER_PAD_SM, 0);
+    lv_obj_set_style_pad_hor(strip, 0, 0);
+
+    const char *caps[7] = {
+        "Oxygen", "Pressure", "PM2.5", "Humidity",
+        "Cabin Temp", "Plate Temp", "Powder",
+    };
+    for(int i = 0; i < 7; i++) {
+        make_sensor_cell(strip, caps[i], i);
+    }
+    return strip;
+}
+
+/* ---- 设备快捷行 ---- */
+void on_device_toggle(lv_event_t *e)
+{
+    lv_obj_t *btn = lv_event_get_target_obj(e);
+    const uint8_t target = static_cast<uint8_t>(
+        reinterpret_cast<uintptr_t>(lv_event_get_user_data(e)));
+    const bool on = lv_obj_has_state(btn, LV_STATE_CHECKED);
+    if(target < 4 && g_dev_state[target]) {
+        lv_label_set_text(g_dev_state[target], on ? kDevOn[target] : kDevOff[target]);
+        lv_obj_set_style_text_color(g_dev_state[target],
+                                    on ? user_color_accent : user_color_text_dim, 0);
+    }
+    ui::DebugMsgProxy::instance().send_device(
+        static_cast<DebugDeviceTarget>(target), on);
+}
+
+lv_obj_t *make_device_toggle(lv_obj_t *parent, DebugDeviceTarget target,
+                             const char *name, const char *sym)
+{
+    lv_obj_t *grp = lv_obj_create(parent);
+    lv_obj_remove_style_all(grp);
+    lv_obj_set_size(grp, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(grp, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(grp, LV_FLEX_ALIGN_CENTER,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_column(grp, USER_PAD_SM, 0);
+    lv_obj_set_style_bg_opa(grp, LV_OPA_TRANSP, 0);
+    lv_obj_clear_flag(grp, LV_OBJ_FLAG_SCROLLABLE);
+
+    /* 左列：名称 + 状态字（纵向） */
+    lv_obj_t *col = lv_obj_create(grp);
+    lv_obj_remove_style_all(col);
+    lv_obj_set_size(col, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(col, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(col, LV_FLEX_ALIGN_CENTER,
+                          LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
+    lv_obj_set_style_bg_opa(col, LV_OPA_TRANSP, 0);
+    lv_obj_clear_flag(col, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *lbl = lv_label_create(col);
+    lv_label_set_text(lbl, name);
+    lv_obj_set_style_text_color(lbl, user_color_text_dim, 0);
+    lv_obj_set_style_text_font(lbl, user_font_caption(), 0);
+
+    const uint8_t ti = static_cast<uint8_t>(target);
+    lv_obj_t *state = lv_label_create(col);
+    lv_label_set_text(state, ti < 4 ? kDevOff[ti] : "");
+    lv_obj_set_style_text_color(state, user_color_text_dim, 0);
+    lv_obj_set_style_text_font(state, user_font_text(), 0);
+    if(ti < 4) {
+        g_dev_state[ti] = state;
+    }
+
+    lv_obj_t *btn = lv_button_create(grp);
+    lv_obj_remove_style_all(btn);
+    lv_obj_set_size(btn, USER_BTN_DOOR_ICON_SZ, USER_BTN_DOOR_ICON_SZ);
+    lv_obj_set_style_radius(btn, LV_RADIUS_CIRCLE, 0);
+    lv_obj_add_flag(btn, LV_OBJ_FLAG_CHECKABLE);
+    lv_obj_set_style_bg_color(btn, user_color_text, 0);
+    lv_obj_set_style_bg_opa(btn, 13, 0);
+    lv_obj_set_style_bg_color(btn, user_color_accent, LV_STATE_CHECKED);
+    lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, LV_STATE_CHECKED);
+    lv_obj_add_event_cb(btn, on_device_toggle, LV_EVENT_VALUE_CHANGED,
+                        reinterpret_cast<void *>(static_cast<uintptr_t>(
+                            static_cast<uint8_t>(target))));
+    if(static_cast<uint8_t>(target) < 4) {
+        g_dev_btn[static_cast<uint8_t>(target)] = btn;
+    }
+    lv_obj_t *ic = lv_label_create(btn);
+    lv_label_set_text(ic, sym);
+    lv_obj_set_style_text_color(ic, user_color_text, 0);
+    lv_obj_set_style_text_font(ic, user_font_icon(), 0);
+    lv_obj_center(ic);
+    return grp;
+}
+
+void on_tab_changed(lv_event_t *e)
+{
+    lv_obj_t *seg = lv_event_get_target_obj(e);
+    const uint8_t sel = ui_user_segmented_get_selected(seg);
+    auto set_vis = [](lv_obj_t *o, bool show) {
+        if(!o) return;
+        if(show) lv_obj_clear_flag(o, LV_OBJ_FLAG_HIDDEN);
+        else     lv_obj_add_flag(o, LV_OBJ_FLAG_HIDDEN);
+    };
+    set_vis(g_tab1, sel == 0);
+    set_vis(g_tab2, sel == 1);
+    set_vis(g_tab3, sel == 2);
+}
+
+/*
+ * 让分段控件按内容宽度显示：ui_user_make_segmented 的段默认 flex_grow=1，
+ * 需父级有固定宽度才撑得开；未设固定宽（按内容摆放）时 grow 会把段压成 0 宽
+ * 导致不显示。关掉各段 grow，使其按文字宽度自适应。
+ */
+void seg_fit_content(lv_obj_t *seg)
+{
+    if(!seg) {
+        return;
+    }
+    for(uint32_t i = 0; i < lv_obj_get_child_count(seg); i++) {
+        lv_obj_set_flex_grow(lv_obj_get_child(seg, i), 0);
+    }
+}
+
+lv_obj_t *build_control_row(lv_obj_t *parent)
+{
+    lv_obj_t *row = lv_obj_create(parent);
+    lv_obj_remove_style_all(row);
+    lv_obj_set_width(row, LV_PCT(100));
+    lv_obj_set_height(row, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(row, LV_FLEX_ALIGN_START,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_column(row, USER_PAD, 0);
+    lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, 0);
+    lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
+
+    const char *tabs[3] = { "Move", "Other", "Laser" };
+    lv_obj_t *seg = ui_user_make_segmented(row, tabs, 3, 0);
+    lv_obj_add_event_cb(seg, on_tab_changed, LV_EVENT_VALUE_CHANGED, nullptr);
+    seg_fit_content(seg);
+
+    lv_obj_t *spacer = lv_obj_create(row);
+    lv_obj_remove_style_all(spacer);
+    lv_obj_set_height(spacer, 1);
+    lv_obj_set_flex_grow(spacer, 1);
+    lv_obj_set_style_bg_opa(spacer, LV_OPA_TRANSP, 0);
+
+    make_device_toggle(row, DebugDeviceTarget::Device, "Device", LV_SYMBOL_POWER);
+    make_device_toggle(row, DebugDeviceTarget::Door,   "Door",   LV_SYMBOL_DRIVE);
+    make_device_toggle(row, DebugDeviceTarget::Motor,  "Motor",  LV_SYMBOL_REFRESH);
+    make_device_toggle(row, DebugDeviceTarget::Light,  "Light",  LV_SYMBOL_CHARGE);
+    return row;
+}
+
+/* ---- 三轴卡 ---- */
+/** integer=true 时按整数显示（协议 int16 / uint8 字段，如轴步距、风扇占空比） */
+lv_obj_t *make_value_input(lv_obj_t *parent, float value, bool integer = false)
+{
+    lv_obj_t *ta = lv_textarea_create(parent);
+    lv_textarea_set_one_line(ta, true);
+    char buf[16];
+    std::snprintf(buf, sizeof(buf), integer ? "%.0f" : "%.2f",
+                  static_cast<double>(value));
+    lv_textarea_set_text(ta, buf);
+    lv_obj_set_width(ta, UI_TA_SHORT_W);
+    lv_obj_set_height(ta, UI_INPUT_H);
+    lv_obj_set_style_text_font(ta, user_font_text(), 0);
+    lv_obj_set_style_bg_color(ta, user_color_bg, 0);
+    lv_obj_set_style_border_color(ta, user_color_divider, 0);
+    lv_obj_set_style_text_color(ta, user_color_text, 0);
+    ui_keyboard_attach(ta, LV_KEYBOARD_MODE_NUMBER);
+    return ta;
+}
+
+void rebuild_axis_ctrl(int idx)
+{
+    if(idx < 0 || idx >= 3 || !g_axis_ctrl[idx]) {
+        return;
+    }
+    const AxisCfg &cfg = kAxes[idx];
+    const bool hold = (g_axis_mode[idx] == 1);
+    lv_obj_t *box = g_axis_ctrl[idx];
+    /* 销毁旧输入框前先关键盘，避免 s_current_ta 悬空 */
+    ui_keyboard_hide();
+    lv_obj_clean(box);
+    g_axis_step[idx] = nullptr;
+
+    lv_obj_t *cap = lv_label_create(box);
+    lv_label_set_text(cap, hold ? "Speed" : "Step");
+    lv_obj_set_style_text_color(cap, user_color_text_dim, 0);
+    lv_obj_set_style_text_font(cap, user_font_caption(), 0);
+
+    g_axis_step[idx] = make_value_input(box, g_axis_step_saved[idx][g_axis_mode[idx]], true);
+
+    lv_obj_t *unit = lv_label_create(box);
+    lv_label_set_text(unit, hold ? cfg.speed_unit : cfg.unit);
+    lv_obj_set_style_text_color(unit, user_color_text_dim, 0);
+    lv_obj_set_style_text_font(unit, user_font_caption(), 0);
+
+    lv_obj_t *spacer = lv_obj_create(box);
+    lv_obj_remove_style_all(spacer);
+    lv_obj_set_height(spacer, 1);
+    lv_obj_set_flex_grow(spacer, 1);
+    lv_obj_set_style_bg_opa(spacer, LV_OPA_TRANSP, 0);
+
+    const int32_t bsz = USER_BACK_BTN_H;
+    const uint8_t a = static_cast<uint8_t>(cfg.axis);
+    if(hold) {
+        const char *lsym = LV_SYMBOL_LEFT, *rsym = LV_SYMBOL_RIGHT;
+        lv_obj_t *bl = make_circle_btn(box, bsz, lsym, nullptr, nullptr);
+        lv_obj_add_event_cb(bl, on_jog_hold, LV_EVENT_PRESSED, jog_ud(a, -1, 1));
+        lv_obj_add_event_cb(bl, on_jog_hold, LV_EVENT_RELEASED, jog_ud(a, -1, 1));
+        lv_obj_add_event_cb(bl, on_jog_hold, LV_EVENT_PRESS_LOST, jog_ud(a, -1, 1));
+        lv_obj_t *br = make_circle_btn(box, bsz, rsym, nullptr, nullptr);
+        lv_obj_add_event_cb(br, on_jog_hold, LV_EVENT_PRESSED, jog_ud(a, +1, 1));
+        lv_obj_add_event_cb(br, on_jog_hold, LV_EVENT_RELEASED, jog_ud(a, +1, 1));
+        lv_obj_add_event_cb(br, on_jog_hold, LV_EVENT_PRESS_LOST, jog_ud(a, +1, 1));
+    } else {
+        const char *lsym = cfg.rotational ? LV_SYMBOL_LEFT  : LV_SYMBOL_MINUS;
+        const char *rsym = cfg.rotational ? LV_SYMBOL_RIGHT : LV_SYMBOL_PLUS;
+        make_circle_btn(box, bsz, lsym, on_jog_click, jog_ud(a, -1, 0));
+        make_circle_btn(box, bsz, rsym, on_jog_click, jog_ud(a, +1, 0));
+    }
+    if(a < 2) {   /* 仅 Z/S 卡保留归零（回 Home）按钮；D 轴删除 */
+        make_circle_btn(box, bsz, LV_SYMBOL_REFRESH, on_axis_home,
+                        reinterpret_cast<void *>(static_cast<uintptr_t>(a)));
+    }
+}
+
+void on_axis_subtab_changed(lv_event_t *e)
+{
+    lv_obj_t *seg = lv_event_get_target_obj(e);
+    const int idx = static_cast<int>(
+        reinterpret_cast<uintptr_t>(lv_event_get_user_data(e)));
+    if(idx < 0 || idx >= 3) {
+        return;
+    }
+    const uint8_t new_mode = ui_user_segmented_get_selected(seg);
+    if(new_mode == g_axis_mode[idx]) {
+        return;
+    }
+    /* 切换子 tab 前保存当前模式下的输入值 */
+    if(g_axis_step[idx]) {
+        g_axis_step_saved[idx][g_axis_mode[idx]] =
+            read_ta_float(g_axis_step[idx]);
+    }
+    ui_keyboard_hide();
+    g_axis_mode[idx] = new_mode;
+    rebuild_axis_ctrl(idx);
+}
+
+lv_obj_t *build_axis_card(lv_obj_t *parent, int idx)
+{
+    const AxisCfg &cfg = kAxes[idx];
+    lv_obj_t *card = ui_user_make_frosted_card(parent, false);
+    lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_row(card, USER_PAD_SM, 0);
+
+    /* 头部：标题 + 位置读数 */
+    lv_obj_t *head = lv_obj_create(card);
+    lv_obj_remove_style_all(head);
+    lv_obj_set_width(head, LV_PCT(100));
+    lv_obj_set_height(head, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(head, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(head, LV_FLEX_ALIGN_SPACE_BETWEEN,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_bg_opa(head, LV_OPA_TRANSP, 0);
+
+    lv_obj_t *title = lv_label_create(head);
+    lv_label_set_text(title, cfg.title);
+    lv_obj_set_style_text_color(title, user_color_accent, 0);
+    lv_obj_set_style_text_font(title, user_font_text(), 0);
+
+    lv_obj_t *pos = lv_label_create(head);
+    lv_label_set_text_fmt(pos, "Pos 0.000 %s", cfg.unit);
+    lv_obj_set_style_text_color(pos, user_color_text, 0);
+    lv_obj_set_style_text_font(pos, user_font_text(), 0);
+    g_axis_pos[idx] = pos;
+
+    /* Z 轴：工作零点 */
+    if(cfg.has_zero) {
+        lv_obj_t *zrow = lv_obj_create(card);
+        lv_obj_remove_style_all(zrow);
+        lv_obj_set_width(zrow, LV_PCT(100));
+        lv_obj_set_height(zrow, LV_SIZE_CONTENT);
+        lv_obj_set_flex_flow(zrow, LV_FLEX_FLOW_ROW);
+        lv_obj_set_flex_align(zrow, LV_FLEX_ALIGN_SPACE_BETWEEN,
+                              LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+        lv_obj_set_style_bg_opa(zrow, LV_OPA_TRANSP, 0);
+
+        g_z_zero_lbl = lv_label_create(zrow);
+        lv_label_set_text(g_z_zero_lbl, "Work zero 0.000 mm");
+        lv_obj_set_style_text_color(g_z_zero_lbl, user_color_text_dim, 0);
+        lv_obj_set_style_text_font(g_z_zero_lbl, user_font_caption(), 0);
+
+        lv_obj_t *zbtn = lv_button_create(zrow);
+        lv_obj_add_style(zbtn, user_style_btn_ghost(), 0);
+        lv_obj_set_height(zbtn, USER_BTN_PRIMARY_H);
+        lv_obj_add_event_cb(zbtn, on_set_zero, LV_EVENT_CLICKED,
+                            reinterpret_cast<void *>(static_cast<uintptr_t>(
+                                static_cast<uint8_t>(cfg.axis))));
+        lv_obj_t *zl = lv_label_create(zbtn);
+        lv_label_set_text(zl, "Set work zero");
+        lv_obj_center(zl);
+    }
+
+    /* 子 tab：点击移动 / 长按移动 */
+    const char *subs[2] = { "Click move", "Long-press" };
+    lv_obj_t *seg = ui_user_make_segmented(card, subs, 2, 0);
+    lv_obj_set_width(seg, LV_PCT(100));
+    lv_obj_add_event_cb(seg, on_axis_subtab_changed, LV_EVENT_VALUE_CHANGED,
+                        reinterpret_cast<void *>(static_cast<uintptr_t>(idx)));
+
+    /* 控制区（按子 tab 重建） */
+    lv_obj_t *box = lv_obj_create(card);
+    lv_obj_remove_style_all(box);
+    lv_obj_set_width(box, LV_PCT(100));
+    lv_obj_set_height(box, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(box, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(box, LV_FLEX_ALIGN_START,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_column(box, USER_PAD_SM, 0);
+    lv_obj_set_style_bg_color(box, lv_color_hex(0x08080B), 0);
+    lv_obj_set_style_bg_opa(box, LV_OPA_20, 0);
+    lv_obj_set_style_radius(box, USER_RADIUS, 0);
+    lv_obj_set_style_pad_all(box, USER_PAD_SM, 0);
+    lv_obj_clear_flag(box, LV_OBJ_FLAG_SCROLLABLE);
+    g_axis_ctrl[idx] = box;
+    g_axis_mode[idx] = 0;
+    rebuild_axis_ctrl(idx);
+
+    return card;
+}
+
+/* ---- 振镜坐标卡 ---- */
+float galvo_step()
+{
+    const uint8_t s = g_galvo_step_seg ? ui_user_segmented_get_selected(g_galvo_step_seg) : 0;
+    return kGalvoSteps[s < 4 ? s : 0];
+}
+
+void on_galvo_dir(lv_event_t *e)
+{
+    const uintptr_t v = reinterpret_cast<uintptr_t>(lv_event_get_user_data(e));
+    const auto axis = static_cast<DebugGalvoAxis>((v >> 1) & 1u);
+    const int dir = (v & 1u) ? 1 : -1;
+    ui::DebugMsgProxy::instance().send_galvo_move(axis, dir, galvo_step());
+}
+
+void on_galvo_home(lv_event_t *)
+{
+    ui::DebugMsgProxy::instance().send_galvo_home();
+}
+
+void on_redlight_changed(lv_event_t *e)
+{
+    lv_obj_t *seg = lv_event_get_target_obj(e);
+    ui::DebugMsgProxy::instance().send_galvo_red_light(
+        ui_user_segmented_get_selected(seg) == 0);
+}
+
+void on_galvo_save(lv_event_t *)
+{
+    ui::DebugMsgProxy::instance().send_galvo_param_save(
+        read_ta_float(g_galvo_scale_ta), galvo_step());
+    ui_toast_show("Saved", user_color_accent, 1200);
+}
+
+void on_calib_click(lv_event_t *)
+{
+    ui::DebugMsgProxy::instance().send_galvo_calib();
+    ui_toast_show("Calibration started", user_color_accent, 1500);
+}
+
+lv_obj_t *make_galvo_readout(lv_obj_t *parent, const char *axis_name, lv_obj_t **out)
+{
+    lv_obj_t *row = lv_obj_create(parent);
+    lv_obj_remove_style_all(row);
+    lv_obj_set_size(row, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_style_pad_column(row, USER_PAD_SM, 0);
+    lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, 0);
+
+    lv_obj_t *n = lv_label_create(row);
+    lv_label_set_text(n, axis_name);
+    lv_obj_set_style_text_color(n, user_color_text_dim, 0);
+    lv_obj_set_style_text_font(n, user_font_text(), 0);
+
+    lv_obj_t *v = lv_label_create(row);
+    lv_label_set_text(v, "0.000");
+    lv_obj_set_style_text_color(v, user_color_text, 0);
+    lv_obj_set_style_text_font(v, user_font_text(), 0);
+    if(out) *out = v;
+    return row;
+}
+
+lv_obj_t *build_dpad(lv_obj_t *parent)
+{
+    const int32_t bsz = USER_BTN_DOOR_ICON_SZ;
+    lv_obj_t *pad = lv_obj_create(parent);
+    lv_obj_remove_style_all(pad);
+    lv_obj_set_size(pad, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(pad, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(pad, LV_FLEX_ALIGN_CENTER,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_row(pad, USER_PAD_SM, 0);
+    lv_obj_set_style_bg_opa(pad, LV_OPA_TRANSP, 0);
+    lv_obj_clear_flag(pad, LV_OBJ_FLAG_SCROLLABLE);
+
+    auto make_dir = [&](lv_obj_t *p, const char *sym, uint8_t axis, int dir) {
+        const uintptr_t v = (static_cast<uintptr_t>(axis) << 1) | (dir > 0 ? 1u : 0u);
+        return make_circle_btn(p, bsz, sym, on_galvo_dir, reinterpret_cast<void *>(v));
+    };
+    auto make_mid_row = [&]() {
+        lv_obj_t *r = lv_obj_create(pad);
+        lv_obj_remove_style_all(r);
+        lv_obj_set_size(r, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+        lv_obj_set_flex_flow(r, LV_FLEX_FLOW_ROW);
+        lv_obj_set_style_pad_column(r, USER_PAD_SM, 0);
+        lv_obj_set_style_bg_opa(r, LV_OPA_TRANSP, 0);
+        return r;
+    };
+
+    /* 上 +Y */
+    make_dir(pad, "Y", static_cast<uint8_t>(DebugGalvoAxis::Y), +1);
+    /* 中：-X 复位 +X */
+    lv_obj_t *mid = make_mid_row();
+    make_dir(mid, "-X", static_cast<uint8_t>(DebugGalvoAxis::X), -1);
+    make_circle_btn(mid, bsz, LV_SYMBOL_REFRESH, on_galvo_home, nullptr);
+    make_dir(mid, "X", static_cast<uint8_t>(DebugGalvoAxis::X), +1);
+    /* 下 -Y */
+    make_dir(pad, "-Y", static_cast<uint8_t>(DebugGalvoAxis::Y), -1);
+    return pad;
+}
+
+lv_obj_t *build_galvo_card(lv_obj_t *parent)
+{
+    lv_obj_t *card = ui_user_make_frosted_card(parent, false);
+    lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_row(card, USER_PAD_SM, 0);
+
+    lv_obj_t *title = lv_label_create(card);
+    lv_label_set_text(title, "Galvo Coordinate");
+    lv_obj_set_style_text_color(title, user_color_accent, 0);
+    lv_obj_set_style_text_font(title, user_font_text(), 0);
+
+    /* 主行：左信息 + 右方向盘 */
+    lv_obj_t *body = lv_obj_create(card);
+    lv_obj_remove_style_all(body);
+    lv_obj_set_width(body, LV_PCT(100));
+    lv_obj_set_height(body, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(body, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(body, LV_FLEX_ALIGN_SPACE_BETWEEN,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_bg_opa(body, LV_OPA_TRANSP, 0);
+    lv_obj_clear_flag(body, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *left = lv_obj_create(body);
+    lv_obj_remove_style_all(left);
+    lv_obj_set_flex_grow(left, 1);
+    lv_obj_set_height(left, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(left, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_row(left, USER_PAD_SM, 0);
+    lv_obj_set_style_bg_opa(left, LV_OPA_TRANSP, 0);
+    lv_obj_clear_flag(left, LV_OBJ_FLAG_SCROLLABLE);
+
+    make_galvo_readout(left, "X", &g_galvo_x_lbl);
+    make_galvo_readout(left, "Y", &g_galvo_y_lbl);
+
+    build_dpad(body);
+
+    /* Scale / 红光：整行（卡片直接子，避免窄列裁剪） */
+    lv_obj_t *scale_row = lv_obj_create(card);
+    lv_obj_remove_style_all(scale_row);
+    lv_obj_set_width(scale_row, LV_PCT(100));
+    lv_obj_set_height(scale_row, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(scale_row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(scale_row, LV_FLEX_ALIGN_START,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_column(scale_row, USER_PAD_SM, 0);
+    lv_obj_set_style_bg_opa(scale_row, LV_OPA_TRANSP, 0);
+    lv_obj_clear_flag(scale_row, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_t *scap = lv_label_create(scale_row);
+    lv_label_set_text(scap, "Scale");
+    lv_obj_set_style_text_color(scap, user_color_text_dim, 0);
+    lv_obj_set_style_text_font(scap, user_font_caption(), 0);
+    g_galvo_scale_ta = make_value_input(scale_row, 0.01f);
+
+    lv_obj_t *rl_row = lv_obj_create(card);
+    lv_obj_remove_style_all(rl_row);
+    lv_obj_set_width(rl_row, LV_PCT(100));
+    lv_obj_set_height(rl_row, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(rl_row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(rl_row, LV_FLEX_ALIGN_START,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_column(rl_row, USER_PAD_SM, 0);
+    lv_obj_set_style_bg_opa(rl_row, LV_OPA_TRANSP, 0);
+    lv_obj_clear_flag(rl_row, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_t *rlcap = lv_label_create(rl_row);
+    lv_label_set_text(rlcap, "Red light");
+    lv_obj_set_style_text_color(rlcap, user_color_text_dim, 0);
+    lv_obj_set_style_text_font(rlcap, user_font_caption(), 0);
+    const char *onoff[2] = { "On", "Off" };
+    lv_obj_t *rl_seg = ui_user_make_segmented(rl_row, onoff, 2, 1);
+    lv_obj_add_event_cb(rl_seg, on_redlight_changed, LV_EVENT_VALUE_CHANGED, nullptr);
+    seg_fit_content(rl_seg);
+
+    /* 底行：步长 + 保存 */
+    lv_obj_t *foot = lv_obj_create(card);
+    lv_obj_remove_style_all(foot);
+    lv_obj_set_width(foot, LV_PCT(100));
+    lv_obj_set_height(foot, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(foot, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(foot, LV_FLEX_ALIGN_START,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_column(foot, USER_PAD_SM, 0);
+    lv_obj_set_style_bg_opa(foot, LV_OPA_TRANSP, 0);
+
+    lv_obj_t *stepcap = lv_label_create(foot);
+    lv_label_set_text(stepcap, "Step(mm)");
+    lv_obj_set_style_text_color(stepcap, user_color_text_dim, 0);
+    lv_obj_set_style_text_font(stepcap, user_font_caption(), 0);
+    const char *steps[4] = { "0.01", "0.1", "1", "10" };
+    g_galvo_step_seg = ui_user_make_segmented(foot, steps, 4, 2);
+    seg_fit_content(g_galvo_step_seg);
+
+    lv_obj_t *spacer = lv_obj_create(foot);
+    lv_obj_remove_style_all(spacer);
+    lv_obj_set_height(spacer, 1);
+    lv_obj_set_flex_grow(spacer, 1);
+    lv_obj_set_style_bg_opa(spacer, LV_OPA_TRANSP, 0);
+
+    lv_obj_t *save = lv_button_create(foot);
+    lv_obj_add_style(save, user_style_btn_primary(), 0);
+    lv_obj_set_size(save, USER_BTN_PRIMARY_W, USER_BTN_PRIMARY_H);
+    lv_obj_add_event_cb(save, on_galvo_save, LV_EVENT_CLICKED, nullptr);
+    lv_obj_t *sl = lv_label_create(save);
+    lv_label_set_text(sl, "Save");
+    lv_obj_center(sl);
+    return card;
+}
+
+lv_obj_t *build_calib_card(lv_obj_t *parent)
+{
+    lv_obj_t *card = ui_user_make_frosted_card(parent, false);
+    lv_obj_set_flex_flow(card, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(card, LV_FLEX_ALIGN_SPACE_BETWEEN,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+
+    lv_obj_t *info = lv_obj_create(card);
+    lv_obj_remove_style_all(info);
+    lv_obj_set_flex_grow(info, 1);
+    lv_obj_set_height(info, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(info, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_row(info, USER_PAD_SM / 2, 0);
+    lv_obj_set_style_bg_opa(info, LV_OPA_TRANSP, 0);
+
+    lv_obj_t *title = lv_label_create(info);
+    lv_label_set_text(title, "Galvo Calibration");
+    lv_obj_set_style_text_color(title, user_color_accent, 0);
+    lv_obj_set_style_text_font(title, user_font_text(), 0);
+    lv_obj_t *hint = lv_label_create(info);
+    lv_label_set_text(hint, "Insert photo paper and close the door first");
+    lv_obj_set_style_text_color(hint, user_color_text_dim, 0);
+    lv_obj_set_style_text_font(hint, user_font_caption(), 0);
+
+    lv_obj_t *btn = lv_button_create(card);
+    lv_obj_remove_style_all(btn);
+    lv_obj_set_height(btn, USER_BTN_PRIMARY_H);
+    lv_obj_set_style_bg_color(btn, ui_color_danger, 0);
+    lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_opa(btn, LV_OPA_80, LV_STATE_PRESSED);
+    lv_obj_set_style_radius(btn, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_pad_hor(btn, USER_PAD, 0);
+    lv_obj_add_event_cb(btn, on_calib_click, LV_EVENT_CLICKED, nullptr);
+    lv_obj_t *bl = lv_label_create(btn);
+    lv_label_set_text(bl, "Start calibration");
+    lv_obj_set_style_text_color(bl, user_color_text, 0);
+    lv_obj_set_style_text_font(bl, user_font_text(), 0);
+    lv_obj_center(bl);
+    return card;
+}
+
+lv_obj_t *make_scroll_col(lv_obj_t *parent)
+{
+    lv_obj_t *col = lv_obj_create(parent);
+    lv_obj_remove_style_all(col);
+    lv_obj_set_height(col, LV_PCT(100));
+    lv_obj_set_flex_grow(col, 1);
+    lv_obj_set_flex_flow(col, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_row(col, USER_PAD_SM, 0);
+    lv_obj_set_style_bg_opa(col, LV_OPA_TRANSP, 0);
+    lv_obj_set_scroll_dir(col, LV_DIR_VER);
+    lv_obj_set_scrollbar_mode(col, LV_SCROLLBAR_MODE_OFF);
+    return col;
+}
+
+/* ============================ Tab2 其他控制 ============================ */
+
+/** 风扇占空比读数（限幅 0–100） */
+float read_fan_duty()
+{
+    float d = g_fan_duty_ta ? read_ta_float(g_fan_duty_ta) : 0.0f;
+    if(d < 0.0f)   d = 0.0f;
+    if(d > 100.0f) d = 100.0f;
+    return d;
+}
+
+/* 开关控件上下文：点击即本地翻转状态字 + 发命令（后端待实现，无害发送） */
+struct DbgToggleCtx {
+    lv_obj_t   *state_lbl;
+    const char *on_txt;
+    const char *off_txt;
+    uint8_t     kind;   /**< 0 粉桶 / 1 推粉 / 2 风扇 / 3 其他开关 / 4 清粉 */
+    uint8_t     arg;    /**< 粉桶号 / DebugSwitchTarget */
+};
+
+void on_dbg_toggle_delete(lv_event_t *e)
+{
+    delete static_cast<DbgToggleCtx *>(lv_event_get_user_data(e));
+}
+
+void on_dbg_toggle(lv_event_t *e)
+{
+    lv_obj_t *btn = lv_event_get_target_obj(e);
+    auto *c = static_cast<DbgToggleCtx *>(lv_event_get_user_data(e));
+    const bool on = lv_obj_has_state(btn, LV_STATE_CHECKED);
+    if(c->state_lbl) {
+        lv_label_set_text(c->state_lbl, on ? c->on_txt : c->off_txt);
+        lv_obj_set_style_text_color(c->state_lbl,
+                                    on ? user_color_accent : user_color_text_dim, 0);
+    }
+    auto &proxy = ui::DebugMsgProxy::instance();
+    switch(c->kind) {
+        case 0: proxy.send_powder_bucket(c->arg, on); break;
+        case 1: proxy.send_pusher(on); break;
+        case 2: proxy.send_fan(on); break;   /* 风扇开/关；占空比由 Send 按钮单独下发 */
+        case 3: proxy.send_switch(static_cast<DebugSwitchTarget>(c->arg), on); break;
+        case 4: if(on) proxy.send_clean_test_start(); break;  /* 仅开触发，关占位 */
+        default: break;
+    }
+}
+
+/** 名称+状态字 + 圆形开关按钮（CHECKABLE）；vertical=true 竖排(标签在上)，false 横排(标签在左) */
+lv_obj_t *make_dbg_toggle(lv_obj_t *parent, const char *name,
+                          const char *on_txt, const char *off_txt,
+                          const char *sym, bool initial_on,
+                          uint8_t kind, uint8_t arg, bool vertical = true)
+{
+    lv_obj_t *grp = lv_obj_create(parent);
+    lv_obj_remove_style_all(grp);
+    lv_obj_set_size(grp, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(grp, vertical ? LV_FLEX_FLOW_COLUMN : LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(grp, LV_FLEX_ALIGN_CENTER,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    if(vertical) {
+        lv_obj_set_style_pad_row(grp, USER_PAD_SM / 2, 0);
+    } else {
+        lv_obj_set_style_pad_column(grp, USER_PAD_SM, 0);
+    }
+    lv_obj_set_style_bg_opa(grp, LV_OPA_TRANSP, 0);
+    lv_obj_clear_flag(grp, LV_OBJ_FLAG_SCROLLABLE);
+
+    /* 竖排：名称/状态 直接进 grp；横排：套一个纵向 col 放名称/状态，按钮在右 */
+    lv_obj_t *lblbox = grp;
+    if(!vertical) {
+        lblbox = lv_obj_create(grp);
+        lv_obj_remove_style_all(lblbox);
+        lv_obj_set_size(lblbox, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+        lv_obj_set_flex_flow(lblbox, LV_FLEX_FLOW_COLUMN);
+        lv_obj_set_flex_align(lblbox, LV_FLEX_ALIGN_CENTER,
+                              LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
+        lv_obj_set_style_bg_opa(lblbox, LV_OPA_TRANSP, 0);
+        lv_obj_clear_flag(lblbox, LV_OBJ_FLAG_SCROLLABLE);
+    }
+
+    lv_obj_t *lbl = lv_label_create(lblbox);
+    lv_label_set_text(lbl, name);
+    lv_obj_set_style_text_color(lbl, user_color_text_dim, 0);
+    lv_obj_set_style_text_font(lbl, user_font_caption(), 0);
+
+    lv_obj_t *state = lv_label_create(lblbox);
+    lv_label_set_text(state, initial_on ? on_txt : off_txt);
+    lv_obj_set_style_text_color(state,
+                                initial_on ? user_color_accent : user_color_text_dim, 0);
+    lv_obj_set_style_text_font(state, user_font_text(), 0);
+
+    lv_obj_t *btn = lv_button_create(grp);
+    lv_obj_remove_style_all(btn);
+    lv_obj_set_size(btn, USER_BTN_DOOR_ICON_SZ, USER_BTN_DOOR_ICON_SZ);
+    lv_obj_set_style_radius(btn, LV_RADIUS_CIRCLE, 0);
+    lv_obj_add_flag(btn, LV_OBJ_FLAG_CHECKABLE);
+    lv_obj_set_style_bg_color(btn, user_color_text, 0);
+    lv_obj_set_style_bg_opa(btn, 13, 0);
+    lv_obj_set_style_bg_color(btn, user_color_accent, LV_STATE_CHECKED);
+    lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, LV_STATE_CHECKED);
+    if(initial_on) {
+        lv_obj_add_state(btn, LV_STATE_CHECKED);
+    }
+
+    auto *ctx = new DbgToggleCtx{ state, on_txt, off_txt, kind, arg };
+    lv_obj_add_event_cb(btn, on_dbg_toggle, LV_EVENT_VALUE_CHANGED, ctx);
+    lv_obj_add_event_cb(btn, on_dbg_toggle_delete, LV_EVENT_DELETE, ctx);
+
+    lv_obj_t *ic = lv_label_create(btn);
+    lv_label_set_text(ic, sym);
+    lv_obj_set_style_text_color(ic, user_color_text, 0);
+    lv_obj_set_style_text_font(ic, user_font_icon(), 0);
+    lv_obj_center(ic);
+    return grp;
+}
+
+/* 回粉电机按钮上下文（点动动作：Stop / Forward / Reverse） */
+struct MotorBtnCtx {
+    lv_obj_t *state_lbl;
+    uint8_t   action;   /**< DebugMotorAction */
+};
+
+void on_motor_btn_delete(lv_event_t *e)
+{
+    delete static_cast<MotorBtnCtx *>(lv_event_get_user_data(e));
+}
+
+void on_recycle_motor(lv_event_t *e)
+{
+    auto *c = static_cast<MotorBtnCtx *>(lv_event_get_user_data(e));
+    const auto act = static_cast<DebugMotorAction>(c->action);
+    ui::DebugMsgProxy::instance().send_recycle_motor(act);
+    if(c->state_lbl) {
+        const bool running = (act != DebugMotorAction::Stop);
+        const char *t = (act == DebugMotorAction::Forward) ? "Forward"
+                      : (act == DebugMotorAction::Reverse) ? "Reverse" : "Stopped";
+        lv_label_set_text(c->state_lbl, t);
+        lv_obj_set_style_text_color(c->state_lbl,
+                                    running ? user_color_accent : user_color_text_dim, 0);
+    }
+}
+
+/** 回粉电机点动按钮：电源(Stop) 高亮，左右为正反转 */
+lv_obj_t *make_motor_btn(lv_obj_t *parent, const char *sym,
+                         DebugMotorAction action, lv_obj_t *state_lbl, bool accent)
+{
+    auto *ctx = new MotorBtnCtx{ state_lbl, static_cast<uint8_t>(action) };
+    lv_obj_t *b = make_circle_btn(parent, USER_BTN_DOOR_ICON_SZ, sym,
+                                  on_recycle_motor, ctx, accent);
+    lv_obj_add_event_cb(b, on_motor_btn_delete, LV_EVENT_DELETE, ctx);
+    return b;
+}
+
+/** 一行卡片容器（横向 flex，等高） */
+lv_obj_t *make_card_row(lv_obj_t *parent)
+{
+    lv_obj_t *row = lv_obj_create(parent);
+    lv_obj_remove_style_all(row);
+    lv_obj_set_width(row, LV_PCT(100));
+    lv_obj_set_flex_grow(row, 1);
+    lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(row, LV_FLEX_ALIGN_START,
+                          LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
+    lv_obj_set_style_pad_column(row, USER_PAD, 0);
+    lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, 0);
+    lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
+    return row;
+}
+
+/* 回粉电机：名称+状态在上，电源(Stop)/反转/正转 三键在下一行 */
+void build_recycle_motor_controls(lv_obj_t *foot)
+{
+    lv_obj_t *grp = lv_obj_create(foot);
+    lv_obj_remove_style_all(grp);
+    lv_obj_set_size(grp, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(grp, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(grp, LV_FLEX_ALIGN_CENTER,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_row(grp, USER_PAD_SM / 2, 0);
+    lv_obj_set_style_bg_opa(grp, LV_OPA_TRANSP, 0);
+    lv_obj_clear_flag(grp, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *nm = lv_label_create(grp);
+    lv_label_set_text(nm, "Motor");
+    lv_obj_set_style_text_color(nm, user_color_text_dim, 0);
+    lv_obj_set_style_text_font(nm, user_font_caption(), 0);
+    lv_obj_t *st = lv_label_create(grp);
+    lv_label_set_text(st, "Stopped");
+    lv_obj_set_style_text_color(st, user_color_text_dim, 0);
+    lv_obj_set_style_text_font(st, user_font_text(), 0);
+
+    lv_obj_t *btnrow = lv_obj_create(grp);
+    lv_obj_remove_style_all(btnrow);
+    lv_obj_set_size(btnrow, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(btnrow, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(btnrow, LV_FLEX_ALIGN_CENTER,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_column(btnrow, USER_PAD_SM, 0);
+    lv_obj_set_style_bg_opa(btnrow, LV_OPA_TRANSP, 0);
+    lv_obj_clear_flag(btnrow, LV_OBJ_FLAG_SCROLLABLE);
+
+    make_motor_btn(btnrow, LV_SYMBOL_POWER, DebugMotorAction::Stop,    st, false);
+    make_motor_btn(btnrow, LV_SYMBOL_LEFT,  DebugMotorAction::Reverse, st, false);
+    make_motor_btn(btnrow, LV_SYMBOL_RIGHT, DebugMotorAction::Forward, st, false);
+}
+
+/* ---- 小工具：卡片标题 / 暗色小标签 / 文本框整数读数 ---- */
+void add_card_title(lv_obj_t *card, const char *title)
+{
+    lv_obj_t *t = lv_label_create(card);
+    lv_label_set_text(t, title);
+    lv_obj_set_style_text_color(t, user_color_accent, 0);
+    lv_obj_set_style_text_font(t, user_font_text(), 0);
+}
+
+void add_caption(lv_obj_t *parent, const char *txt)
+{
+    lv_obj_t *l = lv_label_create(parent);
+    lv_label_set_text(l, txt);
+    lv_obj_set_style_text_color(l, user_color_text_dim, 0);
+    lv_obj_set_style_text_font(l, user_font_caption(), 0);
+}
+
+uint16_t read_u16_ta(lv_obj_t *ta)
+{
+    float f = read_ta_float(ta);
+    if(f < 0.0f)      f = 0.0f;
+    if(f > 65535.0f)  f = 65535.0f;
+    return static_cast<uint16_t>(f + 0.5f);
+}
+
+/* ---- Fan：Send 只发占空比；开关只发风机开/关 ---- */
+void on_fan_send_click(lv_event_t *)
+{
+    ui::DebugMsgProxy::instance().send_fan_duty(read_fan_duty());
+}
+
+/* ---- Print Params：Send 下发层厚 + 平衡系数×1000 ---- */
+void on_print_param_send(lv_event_t *)
+{
+    ui::DebugMsgProxy::instance().send_print_layer_param(
+        read_u16_ta(g_print_layer_ta), read_u16_ta(g_print_balance_ta));
+}
+
+/** 整宽主按钮（圆角矩形，蓝底） */
+lv_obj_t *make_send_button(lv_obj_t *parent, lv_event_cb_t cb, bool full_width)
+{
+    lv_obj_t *btn = lv_button_create(parent);
+    lv_obj_add_style(btn, user_style_btn_primary(), 0);
+    lv_obj_set_height(btn, USER_BTN_PRIMARY_H);
+    if(full_width) {
+        lv_obj_set_width(btn, LV_PCT(100));
+    } else {
+        lv_obj_set_width(btn, USER_BTN_PRIMARY_W);
+    }
+    lv_obj_add_event_cb(btn, cb, LV_EVENT_CLICKED, nullptr);
+    lv_obj_t *l = lv_label_create(btn);
+    lv_label_set_text(l, "Send");
+    lv_obj_center(l);
+    return btn;
+}
+
+/* 打印参数卡：层厚 + 平衡系数 两个整数输入 + 整宽 Send */
+void build_print_params_card(lv_obj_t *parent)
+{
+    lv_obj_t *card = ui_user_make_frosted_card(parent, false);
+    lv_obj_set_width(card, LV_PCT(100));
+    lv_obj_set_height(card, LV_SIZE_CONTENT);   /* 按内容高度，避免 Send 被裁 */
+    lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(card, LV_FLEX_ALIGN_START,
+                          LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
+    lv_obj_set_style_pad_row(card, USER_PAD_SM / 2, 0);
+    add_card_title(card, "Print Params");
+
+    /* 标签与输入框同一行，压缩纵向高度 */
+    auto make_labeled_input = [&](const char *cap_txt, float val) -> lv_obj_t * {
+        lv_obj_t *row = lv_obj_create(card);
+        lv_obj_remove_style_all(row);
+        lv_obj_set_width(row, LV_PCT(100));
+        lv_obj_set_height(row, LV_SIZE_CONTENT);
+        lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+        lv_obj_set_flex_align(row, LV_FLEX_ALIGN_START,
+                              LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+        lv_obj_set_style_pad_column(row, USER_PAD_SM, 0);
+        lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, 0);
+        lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
+        add_caption(row, cap_txt);
+        lv_obj_t *ta = make_value_input(row, val, true);
+        lv_obj_set_flex_grow(ta, 1);
+        return ta;
+    };
+    g_print_layer_ta   = make_labeled_input("Layer (um)", 50.0f);
+    g_print_balance_ta = make_labeled_input("Balance", 1000.0f);
+
+    make_send_button(card, on_print_param_send, true);
+}
+
+/* 风扇卡：Duty 行 + Send(发占空比) 与 开关 上下排列 */
+void build_fan_card(lv_obj_t *parent)
+{
+    lv_obj_t *card = ui_user_make_frosted_card(parent, false);
+    lv_obj_set_width(card, LV_PCT(100));
+    lv_obj_set_height(card, LV_SIZE_CONTENT);   /* 按内容高度，避免 Send/开关被裁 */
+    lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(card, LV_FLEX_ALIGN_START,
+                          LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
+    lv_obj_set_style_pad_row(card, USER_PAD_SM / 2, 0);
+    add_card_title(card, "Fan");
+
+    /* Duty 行 */
+    lv_obj_t *drow = lv_obj_create(card);
+    lv_obj_remove_style_all(drow);
+    lv_obj_set_width(drow, LV_PCT(100));
+    lv_obj_set_height(drow, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(drow, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(drow, LV_FLEX_ALIGN_START,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_column(drow, USER_PAD_SM, 0);
+    lv_obj_set_style_bg_opa(drow, LV_OPA_TRANSP, 0);
+    lv_obj_clear_flag(drow, LV_OBJ_FLAG_SCROLLABLE);
+    add_caption(drow, "Duty");
+    g_fan_duty_ta = make_value_input(drow, 0.0f, true);
+    add_caption(drow, "%");
+
+    /* Send（发占空比）与 开关 并排：Send 左，开关右 */
+    lv_obj_t *frow = lv_obj_create(card);
+    lv_obj_remove_style_all(frow);
+    lv_obj_set_width(frow, LV_PCT(100));
+    lv_obj_set_height(frow, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(frow, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(frow, LV_FLEX_ALIGN_START,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_column(frow, USER_PAD, 0);
+    lv_obj_set_style_bg_opa(frow, LV_OPA_TRANSP, 0);
+    lv_obj_clear_flag(frow, LV_OBJ_FLAG_SCROLLABLE);
+    make_send_button(frow, on_fan_send_click, false);
+    make_dbg_toggle(frow, "Fan", "On", "Off", LV_SYMBOL_POWER, false, 2, 0, false);
+}
+
+/* 网格行：横向 flex、均匀分布 */
+lv_obj_t *make_switch_grid_row(lv_obj_t *parent)
+{
+    lv_obj_t *r = lv_obj_create(parent);
+    lv_obj_remove_style_all(r);
+    lv_obj_set_width(r, LV_PCT(100));
+    lv_obj_set_height(r, LV_SIZE_CONTENT);
+    lv_obj_set_flex_grow(r, 1);
+    lv_obj_set_flex_flow(r, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(r, LV_FLEX_ALIGN_SPACE_EVENLY,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_bg_opa(r, LV_OPA_TRANSP, 0);
+    lv_obj_clear_flag(r, LV_OBJ_FLAG_SCROLLABLE);
+    return r;
+}
+
+/* 合并后的大“其他开关”卡：2 行网格容纳粉桶/三通/清粉/激光/洗气/基板加热/回粉电机 */
+void build_other_switches_card(lv_obj_t *parent)
+{
+    lv_obj_t *card = ui_user_make_frosted_card(parent, false);
+    lv_obj_set_width(card, 1);
+    lv_obj_set_flex_grow(card, 8);
+    lv_obj_set_height(card, LV_PCT(100));
+    lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_row(card, USER_PAD_SM, 0);
+    add_card_title(card, "Other Switches");
+
+    lv_obj_t *grid = lv_obj_create(card);
+    lv_obj_remove_style_all(grid);
+    lv_obj_set_width(grid, LV_PCT(100));
+    lv_obj_set_flex_grow(grid, 1);
+    lv_obj_set_flex_flow(grid, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(grid, LV_FLEX_ALIGN_SPACE_EVENLY,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_bg_opa(grid, LV_OPA_TRANSP, 0);
+    lv_obj_clear_flag(grid, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *rowA = make_switch_grid_row(grid);
+    make_dbg_toggle(rowA, "Bucket 1", "Open", "Closed", LV_SYMBOL_POWER, false, 0, 1);
+    make_dbg_toggle(rowA, "Bucket 2", "Open", "Closed", LV_SYMBOL_POWER, false, 0, 2);
+    make_dbg_toggle(rowA, "3-way Rod", "Feeding", "Stopped", LV_SYMBOL_PLAY, false, 1, 0);
+    make_dbg_toggle(rowA, "Powder Clean", "On", "Off", LV_SYMBOL_POWER, false, 4, 0);
+
+    lv_obj_t *rowB = make_switch_grid_row(grid);
+    make_dbg_toggle(rowB, "Laser", "On", "Off", LV_SYMBOL_POWER, false, 3,
+                    static_cast<uint8_t>(DebugSwitchTarget::Laser));
+    make_dbg_toggle(rowB, "Gas Wash", "On", "Off", LV_SYMBOL_POWER, false, 3,
+                    static_cast<uint8_t>(DebugSwitchTarget::GasWash));
+    make_dbg_toggle(rowB, "Base Heat", "On", "Off", LV_SYMBOL_POWER, false, 3,
+                    static_cast<uint8_t>(DebugSwitchTarget::BaseHeat));
+    build_recycle_motor_controls(rowB);
+}
+
+lv_obj_t *build_other_tab(lv_obj_t *body)
+{
+    lv_obj_t *tab = lv_obj_create(body);
+    lv_obj_remove_style_all(tab);
+    lv_obj_set_size(tab, LV_PCT(100), LV_PCT(100));
+    lv_obj_set_flex_flow(tab, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_row(tab, USER_PAD, 0);
+    lv_obj_set_style_bg_opa(tab, LV_OPA_TRANSP, 0);
+    lv_obj_add_flag(tab, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_clear_flag(tab, LV_OBJ_FLAG_SCROLLABLE);
+
+    /* 单行：左列(Print Params + Fan) + 右(合并大 Other Switches) */
+    lv_obj_t *row = make_card_row(tab);
+
+    lv_obj_t *left = lv_obj_create(row);
+    lv_obj_remove_style_all(left);
+    lv_obj_set_width(left, 1);
+    lv_obj_set_flex_grow(left, 4);
+    lv_obj_set_height(left, LV_PCT(100));
+    lv_obj_set_flex_flow(left, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_row(left, USER_PAD_SM, 0);
+    lv_obj_set_style_bg_opa(left, LV_OPA_TRANSP, 0);
+    lv_obj_clear_flag(left, LV_OBJ_FLAG_SCROLLABLE);
+
+    build_print_params_card(left);
+    build_fan_card(left);
+
+    build_other_switches_card(row);
+
+    return tab;
+}
+
+/* ============================ Laser 激光器 ============================= */
+
+/* 状态位对应文字（bit0 红光 / bit1 激光输出 / bit2 Ready / bit3 外部输出有效） */
+const char *const kLaserStatusOn[4]  = {
+    "Red Light On", "Laser Emitting", "Ready", "Ext Output Valid" };
+const char *const kLaserStatusOff[4] = {
+    "Red Light Off", "Laser Idle", "Not Ready", "Ext Output Invalid" };
+
+/* laser_alarm 位 → 名称（低字节 0x0067 / 高字节 0x0081） */
+struct LaserAlarmBit { uint8_t bit; const char *name; };
+const LaserAlarmBit kLaserAlarms[] = {
+    { 0,  "PD1 Alarm" },   { 1,  "PD2 Alarm" },   { 2,  "Interlock" },
+    { 3,  "DB25 E-Stop" }, { 4,  "QCW Pulse" },   { 5,  "QCW Duty" },
+    { 8,  "MCU Temp" },    { 9,  "Pump OC1" },    { 10, "Pump OC2" },
+    { 11, "QBH Install" }, { 12, "Pump Voltage" },{ 13, "QBH Temp" },
+    { 14, "Voltage" },
+};
+
+/** 依据 laser_alarm 位刷新报警列表；0 则清空 */
+void update_laser_alarms(uint16_t alarm)
+{
+    if(!g_laser_alarm_box) {
+        return;
+    }
+    lv_obj_clean(g_laser_alarm_box);
+    for(const LaserAlarmBit &a : kLaserAlarms) {
+        if(alarm & (1u << a.bit)) {
+            lv_obj_t *l = lv_label_create(g_laser_alarm_box);
+            lv_label_set_text(l, a.name);
+            lv_obj_set_style_text_color(l, ui_color_danger, 0);
+            lv_obj_set_style_text_font(l, user_font_text(), 0);
+        }
+    }
+}
+
+void on_laser_power_send(lv_event_t *)
+{
+    uint16_t v = read_u16_ta(g_laser_power_ta);
+    if(v > 100) {
+        v = 100;
+    }
+    ui::DebugMsgProxy::instance().send_laser_power_set(static_cast<uint8_t>(v));
+}
+
+void on_laser_power_cancel(lv_event_t *)
+{
+    ui::DebugMsgProxy::instance().send_laser_power_reset();
+    ui_toast_show("Power to external", user_color_accent, 1200);
+}
+
+void on_laser_alarm_reset(lv_event_t *)
+{
+    ui::DebugMsgProxy::instance().send_laser_alarm_reset();
+    ui_toast_show("Alarm reset sent", user_color_accent, 1200);
+}
+
+/* 值行：左标题 + 弹性留白 + 右白值 */
+lv_obj_t *make_value_row(lv_obj_t *parent, const char *cap, lv_obj_t **out_val)
+{
+    lv_obj_t *row = lv_obj_create(parent);
+    lv_obj_remove_style_all(row);
+    lv_obj_set_width(row, LV_PCT(100));
+    lv_obj_set_height(row, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(row, LV_FLEX_ALIGN_SPACE_BETWEEN,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, 0);
+    lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
+    add_caption(row, cap);
+    lv_obj_t *v = lv_label_create(row);
+    lv_label_set_text(v, "--");
+    lv_obj_set_style_text_color(v, user_color_text, 0);
+    lv_obj_set_style_text_font(v, user_font_text(), 0);
+    if(out_val) {
+        *out_val = v;
+    }
+    return row;
+}
+
+/* 状态行：圆点 + 文字 */
+void make_laser_status_row(lv_obj_t *parent, int idx)
+{
+    lv_obj_t *row = lv_obj_create(parent);
+    lv_obj_remove_style_all(row);
+    lv_obj_set_width(row, LV_PCT(100));
+    lv_obj_set_height(row, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(row, LV_FLEX_ALIGN_START,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_column(row, USER_PAD_SM, 0);
+    lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, 0);
+    lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *dot = lv_obj_create(row);
+    lv_obj_remove_style_all(dot);
+    lv_obj_set_size(dot, USER_STATUS_DOT_SZ, USER_STATUS_DOT_SZ);
+    lv_obj_set_style_radius(dot, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_bg_color(dot, user_color_icon_off, 0);
+    lv_obj_set_style_bg_opa(dot, LV_OPA_COVER, 0);
+    lv_obj_clear_flag(dot, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *lbl = lv_label_create(row);
+    lv_label_set_text(lbl, kLaserStatusOff[idx]);
+    lv_obj_set_style_text_color(lbl, user_color_text_dim, 0);
+    lv_obj_set_style_text_font(lbl, user_font_text(), 0);
+
+    g_laser_status_dot[idx] = dot;
+    g_laser_status_lbl[idx] = lbl;
+}
+
+lv_obj_t *make_ghost_button(lv_obj_t *parent, const char *txt, lv_event_cb_t cb)
+{
+    lv_obj_t *btn = lv_button_create(parent);
+    lv_obj_add_style(btn, user_style_btn_ghost(), 0);
+    lv_obj_set_height(btn, USER_BTN_PRIMARY_H);
+    lv_obj_set_style_pad_hor(btn, USER_PAD, 0);
+    lv_obj_add_event_cb(btn, cb, LV_EVENT_CLICKED, nullptr);
+    lv_obj_t *l = lv_label_create(btn);
+    lv_label_set_text(l, txt);
+    lv_obj_center(l);
+    return btn;
+}
+
+/* 一行：左标题 + 右按钮（SPACE_BETWEEN） */
+lv_obj_t *make_action_row(lv_obj_t *parent, const char *cap)
+{
+    lv_obj_t *row = lv_obj_create(parent);
+    lv_obj_remove_style_all(row);
+    lv_obj_set_width(row, LV_PCT(100));
+    lv_obj_set_height(row, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(row, LV_FLEX_ALIGN_SPACE_BETWEEN,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_column(row, USER_PAD_SM, 0);
+    lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, 0);
+    lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
+    add_caption(row, cap);
+    return row;
+}
+
+/* 列容器内的 frosted 卡（内容高度、纵向） */
+lv_obj_t *make_laser_card(lv_obj_t *parent, const char *title)
+{
+    lv_obj_t *card = ui_user_make_frosted_card(parent, false);
+    lv_obj_set_width(card, LV_PCT(100));
+    lv_obj_set_height(card, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(card, LV_FLEX_ALIGN_START,
+                          LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
+    lv_obj_set_style_pad_row(card, USER_PAD_SM / 2, 0);
+    add_card_title(card, title);
+    return card;
+}
+
+lv_obj_t *build_laser_tab(lv_obj_t *body)
+{
+    lv_obj_t *tab = lv_obj_create(body);
+    lv_obj_remove_style_all(tab);
+    lv_obj_set_size(tab, LV_PCT(100), LV_PCT(100));
+    lv_obj_set_flex_flow(tab, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(tab, LV_FLEX_ALIGN_START,
+                          LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
+    lv_obj_set_style_pad_column(tab, USER_PAD, 0);
+    lv_obj_set_style_bg_opa(tab, LV_OPA_TRANSP, 0);
+    lv_obj_add_flag(tab, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_clear_flag(tab, LV_OBJ_FLAG_SCROLLABLE);
+
+    /* 左：Alarm */
+    lv_obj_t *alarm_card = ui_user_make_frosted_card(tab, false);
+    lv_obj_set_width(alarm_card, 1);
+    lv_obj_set_flex_grow(alarm_card, 3);
+    lv_obj_set_height(alarm_card, LV_PCT(100));
+    lv_obj_set_flex_flow(alarm_card, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_row(alarm_card, USER_PAD_SM, 0);
+    add_card_title(alarm_card, "Alarm");
+    g_laser_alarm_box = lv_obj_create(alarm_card);
+    lv_obj_remove_style_all(g_laser_alarm_box);
+    lv_obj_set_width(g_laser_alarm_box, LV_PCT(100));
+    lv_obj_set_flex_grow(g_laser_alarm_box, 1);
+    lv_obj_set_flex_flow(g_laser_alarm_box, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_row(g_laser_alarm_box, USER_PAD_SM / 2, 0);
+    lv_obj_set_style_bg_opa(g_laser_alarm_box, LV_OPA_TRANSP, 0);
+    lv_obj_set_scroll_dir(g_laser_alarm_box, LV_DIR_VER);
+    lv_obj_set_scrollbar_mode(g_laser_alarm_box, LV_SCROLLBAR_MODE_OFF);
+
+    /* 中：Status */
+    lv_obj_t *status_card = ui_user_make_frosted_card(tab, false);
+    lv_obj_set_width(status_card, 1);
+    lv_obj_set_flex_grow(status_card, 3);
+    lv_obj_set_height(status_card, LV_PCT(100));
+    lv_obj_set_flex_flow(status_card, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_row(status_card, USER_PAD_SM, 0);
+    add_card_title(status_card, "Status");
+    for(int i = 0; i < 4; i++) {
+        make_laser_status_row(status_card, i);
+    }
+
+    /* 右：Laser Data + Power Control + Alarm Ops */
+    lv_obj_t *right = lv_obj_create(tab);
+    lv_obj_remove_style_all(right);
+    lv_obj_set_width(right, 1);
+    lv_obj_set_flex_grow(right, 4);
+    lv_obj_set_height(right, LV_PCT(100));
+    lv_obj_set_flex_flow(right, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_row(right, USER_PAD_SM, 0);
+    lv_obj_set_style_bg_opa(right, LV_OPA_TRANSP, 0);
+    lv_obj_clear_flag(right, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *data_card = make_laser_card(right, "Laser Data");
+    make_value_row(data_card, "Temperature", &g_laser_temp_lbl);
+    make_value_row(data_card, "Power", &g_laser_power_lbl);
+
+    lv_obj_t *pc_card = make_laser_card(right, "Power Control");
+    lv_obj_t *setrow = lv_obj_create(pc_card);
+    lv_obj_remove_style_all(setrow);
+    lv_obj_set_width(setrow, LV_PCT(100));
+    lv_obj_set_height(setrow, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(setrow, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(setrow, LV_FLEX_ALIGN_START,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_column(setrow, USER_PAD_SM, 0);
+    lv_obj_set_style_bg_opa(setrow, LV_OPA_TRANSP, 0);
+    lv_obj_clear_flag(setrow, LV_OBJ_FLAG_SCROLLABLE);
+    add_caption(setrow, "Set Power (%)");
+    g_laser_power_ta = make_value_input(setrow, 0.0f, true);
+    
+    lv_obj_t *pwr_send = make_send_button(setrow, on_laser_power_send, false);
+    lv_obj_set_width(pwr_send, LV_SIZE_CONTENT);
+    lv_obj_set_style_pad_hor(pwr_send, USER_PAD, 0);
+
+    lv_obj_t *cancelrow = make_action_row(pc_card, "Cancel Power");
+    make_ghost_button(cancelrow, "Cancel", on_laser_power_cancel);
+
+    lv_obj_t *ops_card = make_laser_card(right, "Alarm Ops");
+    lv_obj_t *opsrow = make_action_row(ops_card, "Laser Alarm Reset");
+    lv_obj_t *rst = lv_button_create(opsrow);
+    lv_obj_add_style(rst, user_style_btn_primary(), 0);
+    lv_obj_set_size(rst, USER_BTN_PRIMARY_W, USER_BTN_PRIMARY_H);
+    lv_obj_add_event_cb(rst, on_laser_alarm_reset, LV_EVENT_CLICKED, nullptr);
+    lv_obj_t *rst_lbl = lv_label_create(rst);
+    lv_label_set_text(rst_lbl, "Reset");
+    lv_obj_center(rst_lbl);
+
+    return tab;
+}
+
+void bind_debug_callbacks()
+{
+    auto &proxy = ui::DebugMsgProxy::instance();
+
+    proxy.register_sensor([](const middleware::DebugSensorPayload &p) {
+        if(g_sensor_val[0]) lv_label_set_text_fmt(g_sensor_val[0], "%.1f%%", static_cast<double>(p.oxygen_percent));
+        if(g_sensor_val[1]) lv_label_set_text_fmt(g_sensor_val[1], "%.1f", static_cast<double>(p.pressure_kpa));
+        if(g_sensor_val[2]) lv_label_set_text_fmt(g_sensor_val[2], "%.1f", static_cast<double>(p.pm25));
+        if(g_sensor_val[3]) lv_label_set_text_fmt(g_sensor_val[3], "%.1f%%", static_cast<double>(p.humidity_pct));
+        if(g_sensor_val[4]) lv_label_set_text_fmt(g_sensor_val[4], "%.1f", static_cast<double>(p.cabin_temp_c));
+        if(g_sensor_val[5]) lv_label_set_text_fmt(g_sensor_val[5], "%.1f", static_cast<double>(p.baseplate_temp_c));
+        if(g_sensor_val[6]) {
+            const char *txt = (p.powder_status == 0) ? "OK"
+                            : (p.powder_status == 1) ? "Busy" : "Fault";
+            lv_label_set_text(g_sensor_val[6], txt);
+        }
+    });
+
+    proxy.register_axis([](const middleware::DebugAxisStatePayload &p) {
+        if(g_axis_pos[0]) lv_label_set_text_fmt(g_axis_pos[0], "Pos %.3f mm", static_cast<double>(p.z_pos_mm));
+        if(g_axis_pos[1]) lv_label_set_text_fmt(g_axis_pos[1], "Pos %.3f mm", static_cast<double>(p.s_pos_mm));
+        if(g_axis_pos[2]) lv_label_set_text_fmt(g_axis_pos[2], "Pos %.3f \xC2\xB0", static_cast<double>(p.d_pos_deg));
+        if(g_z_zero_lbl)  lv_label_set_text_fmt(g_z_zero_lbl, "Work zero %.3f mm", static_cast<double>(p.z_work_zero_mm));
+    });
+
+    proxy.register_galvo([](const middleware::DebugGalvoStatePayload &p) {
+        if(g_galvo_x_lbl) lv_label_set_text_fmt(g_galvo_x_lbl, "%.3f", static_cast<double>(p.x));
+        if(g_galvo_y_lbl) lv_label_set_text_fmt(g_galvo_y_lbl, "%.3f", static_cast<double>(p.y));
+    });
+
+    proxy.register_device([](const middleware::DebugDeviceStatePayload &p) {
+        const uint8_t on[4] = { p.device_awake, p.door_open, p.motor_on, p.light_on };
+        for(int i = 0; i < 4; i++) {
+            if(g_dev_btn[i]) {
+                if(on[i]) lv_obj_add_state(g_dev_btn[i], LV_STATE_CHECKED);
+                else      lv_obj_clear_state(g_dev_btn[i], LV_STATE_CHECKED);
+            }
+            if(g_dev_state[i]) {
+                lv_label_set_text(g_dev_state[i], on[i] ? kDevOn[i] : kDevOff[i]);
+                lv_obj_set_style_text_color(g_dev_state[i],
+                    on[i] ? user_color_accent : user_color_text_dim, 0);
+            }
+        }
+    });
+
+    proxy.register_laser([](const middleware::DebugLaserStatePayload &p) {
+        for(int i = 0; i < 4; i++) {
+            const bool on = (p.status & (1u << i)) != 0;
+            if(g_laser_status_lbl[i]) {
+                lv_label_set_text(g_laser_status_lbl[i],
+                                  on ? kLaserStatusOn[i] : kLaserStatusOff[i]);
+                lv_obj_set_style_text_color(g_laser_status_lbl[i],
+                    on ? user_color_accent : user_color_text_dim, 0);
+            }
+            if(g_laser_status_dot[i]) {
+                lv_obj_set_style_bg_color(g_laser_status_dot[i],
+                    on ? user_color_status_ok : user_color_icon_off, 0);
+            }
+        }
+        if(g_laser_temp_lbl) {
+            lv_label_set_text_fmt(g_laser_temp_lbl, "%u \xC2\xB0""C",
+                                  static_cast<unsigned>(p.pump_temp_raw));
+        }
+        if(g_laser_power_lbl) {
+            /* 原始 0..255 → 百分比 */
+            lv_label_set_text_fmt(g_laser_power_lbl, "%u%%",
+                static_cast<unsigned>(p.power_raw * 100u / 255u));
+        }
+        update_laser_alarms(p.alarm);
+    });
+}
+
+void reset_globals()
+{
+    g_tab1 = g_tab2 = g_tab3 = nullptr;
+    g_laser_alarm_box = g_laser_temp_lbl = g_laser_power_lbl = g_laser_power_ta = nullptr;
+    for(int i = 0; i < 4; i++) {
+        g_laser_status_lbl[i] = nullptr;
+        g_laser_status_dot[i] = nullptr;
+    }
+    g_z_zero_lbl = g_galvo_x_lbl = g_galvo_y_lbl = nullptr;
+    g_galvo_scale_ta = g_galvo_step_seg = nullptr;
+    for(int i = 0; i < 7; i++) g_sensor_val[i] = nullptr;
+    for(int i = 0; i < 3; i++) {
+        g_axis_pos[i] = g_axis_step[i] = g_axis_ctrl[i] = nullptr;
+        g_axis_mode[i] = 0;
+        g_axis_step_saved[i][0] = kAxisDefaultStep;
+        g_axis_step_saved[i][1] = kAxisDefaultStep;
+    }
+    for(int i = 0; i < 4; i++) { g_dev_btn[i] = nullptr; g_dev_state[i] = nullptr; }
+    g_fan_duty_ta = nullptr;
+    g_print_layer_ta = nullptr;
+    g_print_balance_ta = nullptr;
+}
+
+} /* namespace */
+
+void page_user_debug_refresh(bool /*force*/)
+{
+    /* 读数由 DebugMsgProxy 回调驱动，无需周期刷新 */
+}
+
+void page_user_debug_exit(void)
+{
+    ui_keyboard_hide();
+    auto &proxy = ui::DebugMsgProxy::instance();
+    proxy.register_sensor(nullptr);
+    proxy.register_axis(nullptr);
+    proxy.register_galvo(nullptr);
+    proxy.register_device(nullptr);
+    proxy.register_laser(nullptr);
+}
+
+lv_obj_t *page_user_debug_create(lv_obj_t *parent)
+{
+    reset_globals();
+
+    lv_obj_t *page = lv_obj_create(parent);
+    lv_obj_remove_style_all(page);
+    lv_obj_set_size(page, LV_PCT(100), LV_PCT(100));
+    lv_obj_set_flex_flow(page, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_all(page, USER_PAD, 0);
+    lv_obj_set_style_pad_row(page, USER_PAD_SM, 0);
+    lv_obj_set_style_bg_opa(page, LV_OPA_TRANSP, 0);
+    lv_obj_clear_flag(page, LV_OBJ_FLAG_SCROLLABLE);
+
+    /* 顶行：返回按钮 + 传感器条 */
+    lv_obj_t *toprow = lv_obj_create(page);
+    lv_obj_remove_style_all(toprow);
+    lv_obj_set_width(toprow, LV_PCT(100));
+    lv_obj_set_height(toprow, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(toprow, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(toprow, LV_FLEX_ALIGN_START,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_column(toprow, USER_PAD_SM, 0);
+    lv_obj_set_style_bg_opa(toprow, LV_OPA_TRANSP, 0);
+    lv_obj_clear_flag(toprow, LV_OBJ_FLAG_SCROLLABLE);
+
+    make_circle_btn(toprow, USER_BACK_BTN_H, LV_SYMBOL_LEFT, on_back_click, nullptr);
+    lv_obj_t *strip = build_sensor_strip(toprow);
+    lv_obj_set_flex_grow(strip, 1);   /* 占满返回钮右侧剩余宽度，避免 100% 宽越界裁剪 */
+
+    /* Tab + 设备行 */
+    build_control_row(page);
+
+    /* 内容区 */
+    lv_obj_t *body = lv_obj_create(page);
+    lv_obj_remove_style_all(body);
+    lv_obj_set_width(body, LV_PCT(100));
+    lv_obj_set_flex_grow(body, 1);
+    lv_obj_set_style_bg_opa(body, LV_OPA_TRANSP, 0);
+    lv_obj_clear_flag(body, LV_OBJ_FLAG_SCROLLABLE);
+
+    /* Tab1 移动控制：左 Z/S/D 三轴，右 振镜 + 标定 */
+    g_tab1 = lv_obj_create(body);
+    lv_obj_remove_style_all(g_tab1);
+    lv_obj_set_size(g_tab1, LV_PCT(100), LV_PCT(100));
+    lv_obj_set_flex_flow(g_tab1, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(g_tab1, LV_FLEX_ALIGN_START,
+                          LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
+    lv_obj_set_style_pad_column(g_tab1, USER_PAD, 0);
+    lv_obj_set_style_bg_opa(g_tab1, LV_OPA_TRANSP, 0);
+    lv_obj_clear_flag(g_tab1, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *left = make_scroll_col(g_tab1);
+    build_axis_card(left, 0);
+    build_axis_card(left, 1);
+    build_axis_card(left, 2);
+
+    lv_obj_t *right = make_scroll_col(g_tab1);
+    build_galvo_card(right);
+    build_calib_card(right);
+
+    /* Tab2 其他控制：粉桶/推粉/回粉电机/风扇/其他开关 */
+    g_tab2 = build_other_tab(body);
+
+    /* Tab3 激光器 */
+    g_tab3 = build_laser_tab(body);
+
+    bind_debug_callbacks();
+    return page;
+}

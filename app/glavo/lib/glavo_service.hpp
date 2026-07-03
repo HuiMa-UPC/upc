@@ -55,6 +55,25 @@ private:
     void handle_mcu_ota_cancel(const middleware::Message& msg);
     void publish_mcu_ota_status(const middleware::McuOtaStatusPayload& st);
 
+    /* ---- 调试页手动控制：UI_Debug_* → serial_debug 组帧 → McuLink 串口下发 ----
+     * 振镜（以太网 TCP）、回粉电机 后端逻辑预留，故不订阅、不下发。 */
+    void handle_debug_axis_jog(const middleware::Message& msg);
+    void handle_debug_axis_hold_stop(const middleware::Message& msg);
+    void handle_debug_axis_set_zero(const middleware::Message& msg);
+    void handle_debug_axis_home(const middleware::Message& msg);
+    void handle_debug_device(const middleware::Message& msg);
+    void handle_debug_powder_bucket(const middleware::Message& msg);
+    void handle_debug_pusher(const middleware::Message& msg);
+    void handle_debug_fan(const middleware::Message& msg);
+    void handle_debug_fan_duty(const middleware::Message& msg);
+    void handle_debug_switch(const middleware::Message& msg);
+    void handle_debug_clean_test_start(const middleware::Message& msg);
+    void handle_debug_print_param(const middleware::Message& msg);
+    void handle_debug_laser_power_set(const middleware::Message& msg);
+    void handle_debug_laser_power_reset(const middleware::Message& msg);
+    void handle_debug_laser_alarm_reset(const middleware::Message& msg);
+    void debug_tx(const uint8_t* frame, int n);
+
     void send_door_rsp(const middleware::Message& msg, middleware::MsgType rsp_type);
     void send_dir_open_empty(const middleware::Message& req);
     void send_dir_open_entries(const middleware::Message& req,

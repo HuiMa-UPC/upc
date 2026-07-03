@@ -71,6 +71,29 @@ lv_obj_t *ui_user_make_supply_bar(lv_obj_t *parent, const char *name,
 lv_obj_t *ui_user_make_setting_row(lv_obj_t *parent, const char *label,
                                    const char *btn_text, lv_event_cb_t btn_cb);
 
+/**
+ * 分段选择控件（如 Wi-Fi 开/关、移动步长 0.01/0.1/1/10）。
+ * 暗色胶囊容器内水平排布 count 段，选中段以浅白填充高亮。
+ * 点击某段会切换选中并向 **容器对象** 发送 LV_EVENT_VALUE_CHANGED。
+ * 调用方：
+ *   lv_obj_t *seg = ui_user_make_segmented(parent, labels, n, 0);
+ *   lv_obj_add_event_cb(seg, my_cb, LV_EVENT_VALUE_CHANGED, ud);
+ *   uint8_t idx = ui_user_segmented_get_selected(seg);
+ * @param labels   段文字数组（count 个）
+ * @param count    段数量（1..8）
+ * @param selected 初始选中段索引
+ * @return 容器对象（即事件源）
+ */
+lv_obj_t *ui_user_make_segmented(lv_obj_t *parent,
+                                 const char *const labels[], uint8_t count,
+                                 uint8_t selected);
+
+/** 设置分段控件当前选中段（不触发回调） */
+void ui_user_segmented_set_selected(lv_obj_t *seg, uint8_t index);
+
+/** 读取分段控件当前选中段索引 */
+uint8_t ui_user_segmented_get_selected(lv_obj_t *seg);
+
 #ifdef __cplusplus
 }
 #endif

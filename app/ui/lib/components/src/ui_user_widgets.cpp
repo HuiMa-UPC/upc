@@ -2,6 +2,7 @@
 #include "ui_theme.hpp"
 
 #include <cstdio>
+#include <cstdint>
 
 ui_modal_dialog_cfg_t ui_modal_dialog_cfg_user(const char *title,
                                                int32_t card_width,
@@ -322,6 +323,102 @@ lv_obj_t *ui_user_make_setting_row(lv_obj_t *parent, const char *label,
         lv_obj_center(btn_lbl);
     }
     return row;
+}
+
+/* ---------------------------------------------------------------------------
+ *  分段选择控件
+ *  选中态完全由各段按钮的 LV_STATE_CHECKED 样式驱动，切换时只改 state，
+ *  并把当前选中索引缓存在容器的 user_data 上。
+ * ------------------------------------------------------------------------- */
+static void segmented_apply_state(lv_obj_t *seg, uint8_t index)
+{
+    const uint32_t n = lv_obj_get_child_count(seg);
+    for(uint32_t i = 0; i < n; i++) {
+        lv_obj_t *btn = lv_obj_get_child(seg, i);
+        if(!btn) {
+            continue;
+        }
+        if(i == index) {
+            lv_obj_add_state(btn, LV_STATE_CHECKED);
+        } else {
+            lv_obj_clear_state(btn, LV_STATE_CHECKED);
+        }
+    }
+    lv_obj_set_user_data(seg, reinterpret_cast<void *>(static_cast<intptr_t>(index)));
+}
+
+static void segmented_seg_clicked(lv_event_t *e)
+{
+    lv_obj_t *btn = lv_event_get_target_obj(e);
+    lv_obj_t *seg = lv_obj_get_parent(btn);
+    if(!seg) {
+        return;
+    }
+    const uint8_t index =
+        static_cast<uint8_t>(reinterpret_cast<intptr_t>(lv_obj_get_user_data(btn)));
+    segmented_apply_state(seg, index);
+    lv_obj_send_event(seg, LV_EVENT_VALUE_CHANGED, nullptr);
+}
+
+lv_obj_t *ui_user_make_segmented(lv_obj_t *parent,
+                                 const char *const labels[], uint8_t count,
+                                 uint8_t selected)
+{
+    lv_obj_t *seg = lv_obj_create(parent);
+    lv_obj_remove_style_all(seg);
+    lv_obj_set_height(seg, LV_SIZE_CONTENT);
+    lv_obj_set_width(seg, LV_SIZE_CONTENT);
+    lv_obj_set_style_radius(seg, USER_RADIUS, 0);
+    lv_obj_set_style_bg_color(seg, lv_color_hex(0x08080B), 0);
+    lv_obj_set_style_bg_opa(seg, LV_OPA_20, 0);
+    lv_obj_set_style_pad_all(seg, USER_PAD_SM / 2, 0);
+    lv_obj_set_style_pad_column(seg, USER_PAD_SM / 2, 0);
+    lv_obj_set_flex_flow(seg, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(seg, LV_FLEX_ALIGN_CENTER,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_clear_flag(seg, LV_OBJ_FLAG_SCROLLABLE);
+
+    for(uint8_t i = 0; i < count; i++) {
+        lv_obj_t *btn = lv_button_create(seg);
+        lv_obj_remove_style_all(btn);
+        lv_obj_set_height(btn, LV_SIZE_CONTENT);
+        lv_obj_set_flex_grow(btn, 1);
+        lv_obj_set_style_radius(btn, USER_RADIUS - 2 > 0 ? USER_RADIUS - 2 : USER_RADIUS, 0);
+        lv_obj_set_style_pad_ver(btn, USER_PAD_SM, 0);
+        lv_obj_set_style_pad_hor(btn, USER_PAD_SM, 0);
+        lv_obj_set_style_bg_opa(btn, LV_OPA_TRANSP, 0);
+        /* 选中段：浅白填充 + 白字（对齐设计稿 0.08 白）；
+         * 文字色设在按钮上，子 label 继承（未选灰、选中白） */
+        lv_obj_set_style_bg_color(btn, user_color_text, LV_STATE_CHECKED);
+        lv_obj_set_style_bg_opa(btn, 24, LV_STATE_CHECKED);
+        lv_obj_set_style_text_color(btn, user_color_text_dim, 0);
+        lv_obj_set_style_text_color(btn, user_color_text, LV_STATE_CHECKED);
+        lv_obj_add_event_cb(btn, segmented_seg_clicked, LV_EVENT_CLICKED, nullptr);
+        lv_obj_set_user_data(btn, reinterpret_cast<void *>(static_cast<intptr_t>(i)));
+
+        lv_obj_t *lbl = lv_label_create(btn);
+        lv_label_set_text(lbl, labels && labels[i] ? labels[i] : "");
+        lv_obj_set_style_text_font(lbl, user_font_text(), 0);
+        lv_obj_center(lbl);
+    }
+
+    segmented_apply_state(seg, selected < count ? selected : 0);
+    return seg;
+}
+
+void ui_user_segmented_set_selected(lv_obj_t *seg, uint8_t index)
+{
+    if(seg) {
+        segmented_apply_state(seg, index);
+    }
+}
+
+uint8_t ui_user_segmented_get_selected(lv_obj_t *seg)
+{
+    if(!seg) {
+        return 0;
+    }
+    return static_cast<uint8_t>(reinterpret_cast<intptr_t>(lv_obj_get_user_data(seg)));
 }
 
 lv_obj_t *ui_user_make_footer_ghost_btn(lv_obj_t *footer, const char *text,

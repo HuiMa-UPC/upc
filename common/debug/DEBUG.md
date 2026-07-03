@@ -18,7 +18,6 @@
 |----|-------------|----------|
 | `UPC_MOD_GLAVO_SERVICE` | GlavoService | rongsu_glavo |
 | `UPC_MOD_MCU_LINK` | McuLink | rongsu_glavo |
-| `UPC_MOD_MCU_OTA` | McuOta（OTA 传输/应答） | rongsu_glavo |
 | `UPC_MOD_CAMERA_SERVICE` | CameraService | rongsu_camera |
 | `UPC_MOD_CAMERA_PREVIEW` | CameraPreview | rongsu_ui |
 | `UPC_MOD_MSG_BUS` / `UPC_MOD_IPC` | MSGBUS / IPC | 全部 |
