@@ -84,6 +84,17 @@ void serial_log_rx_frame(const uint8_t* frame, size_t len)
         return;
     }
 
+    /* 运动轴位置上报（0xA5 0x9B + TLV 0x05）：与传感器帧同 Port/Cmd，需在
+     * serial_frame_is_sensor_report 之前判定，否则会被误记为 RX SENSOR FAIL。 */
+    serial_motion_pos_t mpos{};
+    if(serial_parse_motion_pos_report(frame, len, &mpos) == 0) {
+        UPC_LOG_MCU_LINK(Debug,
+            "RX MOTION OK Z=%.3fmm Zwork=%.3fmm S=%.3fmm D=%.3fdeg",
+            static_cast<double>(mpos.z_pos_mm), static_cast<double>(mpos.z_work_zero_mm),
+            static_cast<double>(mpos.s_pos_mm), static_cast<double>(mpos.d_pos_deg));
+        return;
+    }
+
     if(serial_frame_is_sensor_report(frame, len)) {
         UPC_LOG_MCU_LINK(Warn, "RX SENSOR FAIL len=%zu err=%s",
             len, serial_sensor_err_string(serr));

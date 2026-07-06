@@ -232,6 +232,7 @@ bool GlavoService::start()
         middleware::MsgType::UI_Debug_Device_Req,
         middleware::MsgType::UI_Debug_Powder_Bucket_Req,
         middleware::MsgType::UI_Debug_Pusher_Req,
+        middleware::MsgType::UI_Debug_Recycle_Motor_Req,   /* 内门（原回粉电机块） */
         middleware::MsgType::UI_Debug_Fan_Req,
         middleware::MsgType::UI_Debug_Fan_Duty_Req,
         middleware::MsgType::UI_Debug_Switch_Req,
@@ -411,6 +412,9 @@ void GlavoService::handle_message(const middleware::Message& msg)
             break;
         case middleware::MsgType::UI_Debug_Pusher_Req:
             handle_debug_pusher(msg);
+            break;
+        case middleware::MsgType::UI_Debug_Recycle_Motor_Req:
+            handle_debug_inner_door(msg);
             break;
         case middleware::MsgType::UI_Debug_Fan_Req:
             handle_debug_fan(msg);
@@ -1266,12 +1270,24 @@ void GlavoService::handle_debug_powder_bucket(const middleware::Message& msg)
 /** @brief 推粉器开关 */
 void GlavoService::handle_debug_pusher(const middleware::Message& msg)
 {
-    middleware::DebugOnOffPayload p{};
+    /* 筛粉电机：action 0=停止 1=筛粉运行 2=反转倒渣 */
+    middleware::DebugMotorPayload p{};
     if(!read_inline_pod(msg.payload, p)) {
         return;
     }
     uint8_t buf[SERIAL_DEBUG_MAX_FRAME];
-    debug_tx(buf, serial_debug_build_pusher(p.on != 0, buf, sizeof(buf)));
+    debug_tx(buf, serial_debug_build_sieve_motor(p.action, buf, sizeof(buf)));
+}
+
+/** @brief 内门：action 0=停止 1=开 2=关（原回粉电机块改为内门） */
+void GlavoService::handle_debug_inner_door(const middleware::Message& msg)
+{
+    middleware::DebugMotorPayload p{};
+    if(!read_inline_pod(msg.payload, p)) {
+        return;
+    }
+    uint8_t buf[SERIAL_DEBUG_MAX_FRAME];
+    debug_tx(buf, serial_debug_build_inner_door(p.action, buf, sizeof(buf)));
 }
 
 /** @brief 风扇开/关（占空比由 handle_debug_fan_duty 单独下发） */

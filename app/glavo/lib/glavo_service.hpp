@@ -64,6 +64,7 @@ private:
     void handle_debug_device(const middleware::Message& msg);
     void handle_debug_powder_bucket(const middleware::Message& msg);
     void handle_debug_pusher(const middleware::Message& msg);
+    void handle_debug_inner_door(const middleware::Message& msg);
     void handle_debug_fan(const middleware::Message& msg);
     void handle_debug_fan_duty(const middleware::Message& msg);
     void handle_debug_switch(const middleware::Message& msg);

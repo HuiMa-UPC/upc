@@ -96,6 +96,10 @@ ui_modal_dialog_t *g_dlg     = nullptr;
 lv_obj_t          *g_pwd_ta  = nullptr;
 lv_obj_t          *g_pwd_err = nullptr;
 
+/* 开发者密码进程级解锁标记：本次 App 运行期间输对一次即置位，后续进 Debug
+ * 免密；进程(重启 App)后静态量复位，需重新输入。 */
+bool g_dev_unlocked = false;
+
 ui_modal_dialog_t *g_ota_dlg = nullptr;
 lv_obj_t *g_ota_status_lbl = nullptr;
 lv_obj_t *g_ota_bar = nullptr;
@@ -250,6 +254,7 @@ void on_dev_confirm(lv_event_t *)
     }
     const char *input = lv_textarea_get_text(g_pwd_ta);
     if(input && std::strcmp(input, kDevPassword) == 0) {
+        g_dev_unlocked = true;   /* 本次运行期间免密 */
         dlg_close();
         ui::PageManager::instance().switch_to("user_debug");
         return;
@@ -572,9 +577,13 @@ void update_nav_highlight(void)
 void on_nav_click(lv_event_t *e)
 {
     const int id = static_cast<int>(reinterpret_cast<intptr_t>(lv_event_get_user_data(e)));
-    /* Debug：保留密码门，通过后进调试页（不切换右侧详情） */
+    /* Debug：首次需密码门，本次运行已解锁则直接进调试页（不切换右侧详情） */
     if(id == NAV_DEBUG) {
-        open_dev_password_dialog();
+        if(g_dev_unlocked) {
+            ui::PageManager::instance().switch_to("user_debug");
+        } else {
+            open_dev_password_dialog();
+        }
         return;
     }
     g_selected = id;

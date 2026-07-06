@@ -142,14 +142,14 @@ void DebugMsgProxy::send_powder_bucket(uint8_t bucket_id, bool on)
     publish_pod(middleware::MsgType::UI_Debug_Powder_Bucket_Req, p);
 }
 
-void DebugMsgProxy::send_pusher(bool on)
+void DebugMsgProxy::send_sieve(middleware::DebugMotorAction action)
 {
-    middleware::DebugOnOffPayload p{};
-    p.on = on ? 1 : 0;
+    middleware::DebugMotorPayload p{};
+    p.action = static_cast<uint8_t>(action);
     publish_pod(middleware::MsgType::UI_Debug_Pusher_Req, p);
 }
 
-void DebugMsgProxy::send_recycle_motor(middleware::DebugMotorAction action)
+void DebugMsgProxy::send_inner_door(middleware::DebugMotorAction action)
 {
     middleware::DebugMotorPayload p{};
     p.action = static_cast<uint8_t>(action);

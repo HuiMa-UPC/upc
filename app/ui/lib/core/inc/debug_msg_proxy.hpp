@@ -43,8 +43,8 @@ public:
 
     /* ---- Tab2 其他控制 ---- */
     void send_powder_bucket(uint8_t bucket_id, bool on);
-    void send_pusher(bool on);
-    void send_recycle_motor(middleware::DebugMotorAction action);
+    void send_sieve(middleware::DebugMotorAction action);   /**< 筛粉电机：停止/运行/反转倒渣 */
+    void send_inner_door(middleware::DebugMotorAction action);   /**< 内门：停止/开/关 */
     void send_fan(bool on);               /**< 风扇开/关 */
     void send_fan_duty(float duty);       /**< 仅设占空比 */
     void send_switch(middleware::DebugSwitchTarget target, bool on);

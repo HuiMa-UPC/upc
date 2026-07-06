@@ -28,31 +28,36 @@ enum class ModuleId : uint32_t {
  * - UI_*   ：UI 发起
  * - APP_*  ：Glavo 发起（历史名，等价于规范中的 GLAVO_*，新消息优先 GLAVO_*）
  * - Fs_*   ：文件系统（历史名，规范为 FS_*）
+ *
+ * 【重要】这是 UI / Glavo / Camera 三进程共享的线协议枚举。每个分段的首个成员都
+ * 显式赋基址（0x10x0 递增），段内成员自动递增。新增消息只能【追加到所在分段末尾】，
+ * 严禁在分段中间插入或删除——否则会改变其后成员的数值，造成跨进程枚举错位、消息
+ * 无法路由。若某段将写满，请新开一个基址分段，不要挤占相邻段。
  */
 enum class MsgType : uint32_t {
     // ---- GLAVO → UI：环境与状态推送 ----
     APP_Update_Ntf = 0x1000,  /**< [GLAVO_Env_Update_Ntf] EnvSnapshotPayload */
 
     // ---- UI → GLAVO：舱体检测 ----
-    UI_PM25_Req,
+    UI_PM25_Req = 0x1010,
     APP_PM25_Rsp,             /**< [GLAVO_PM25_Check_Rsp] Pm25ResultPayload */
     UI_CLOSE_DOOR_Req,
     APP_CLOSE_DOOR_Rsp,       /**< [GLAVO_Door_Close_Rsp] DoorResultPayload */
 
     // ---- UI ↔ GLAVO：文件系统 ----
-    Fs_DirOpen_Req,           /**< [FS_Dir_Open_Req] FsDirOpenReqPayload */
+    Fs_DirOpen_Req = 0x1020,  /**< [FS_Dir_Open_Req] FsDirOpenReqPayload */
     Fs_DirOpen_Rsp,           /**< [FS_Dir_Open_Rsp] FsDirHeader + FileEntryPayload[] */
     Fs_Delete_Ntf,            /**< [FS_Delete_Ntf] FsDeleteNtfPayload：删除 Local 文件 */
 
     // ---- UI ↔ GLAVO：舱体控制 ----
-    UI_OpenDoor_Req,
+    UI_OpenDoor_Req = 0x1030,
     APP_OpenDoor_Rsp,         /**< [GLAVO_Door_Open_Rsp] DoorResultPayload */
     UI_Purify_Req,
     APP_Purify_Progress,      /**< [GLAVO_Purify_Progress_Ntf] Value */
     APP_Purify_Rsp,           /**< [GLAVO_Purify_Done] Empty */
 
     // ---- UI ↔ GLAVO：打印流程 ----
-    UI_Print_Prepare_Req,     /**< PrintPrepareReqPayload：轻量预处理 + USB 复制 */
+    UI_Print_Prepare_Req = 0x1040, /**< PrintPrepareReqPayload：轻量预处理 + USB 复制 */
     APP_Print_Prepare_Rsp,    /**< PrintPrepareRspPayload */
     UI_Parser_Exit_Ntf,       /**< Empty：取消解析（D1 X / 二次确认 Cancel） */
     UI_Print_Start_Req,       /**< PrintStartReqPayload：正式解析 + 下发 */
@@ -61,29 +66,29 @@ enum class MsgType : uint32_t {
     APP_Print_Terminate_Done, /**< [GLAVO_Print_Terminate_Done] Empty */
 
     // ---- UI ↔ GLAVO：耗材/滤芯 ----
-    UI_Supply_Status_Req,     /**< Empty */
+    UI_Supply_Status_Req = 0x1060, /**< Empty */
     APP_Supply_Status_Rsp,    /**< [GLAVO_Supply_Status_Rsp] SupplyStatusPayload */
 
     // ---- UI ↔ CAMERA：视频流（控制面 socket；像素走 SHM） ----
-    UI_Camera_Stream_Start_Req, /**< Empty 或 CameraStreamStartReqPayload */
+    UI_Camera_Stream_Start_Req = 0x1070, /**< Empty 或 CameraStreamStartReqPayload */
     APP_Camera_Stream_Start_Rsp,         /**< CameraStreamInfoPayload */
     UI_Camera_Stream_Stop_Req,           /**< Empty */
     APP_Camera_Stream_Stop_Done,         /**< Empty */
     APP_Camera_Frame_Ntf,                /**< CameraFrameNtfPayload（可选唤醒 UI） */
 
     // ---- GLAVO → CAMERA：打印层拍照录像（控制面；像素仍走预览 SHM） ----
-    APP_Print_Video_Session_Start_Ntf, /**< PrintVideoSessionPayload */
+    APP_Print_Video_Session_Start_Ntf = 0x1080, /**< PrintVideoSessionPayload */
     APP_Print_Layer_Snap_Ntf,                   /**< PrintVideoLayerSnapPayload */
     APP_Print_Video_Session_Finish_Ntf,         /**< PrintVideoSessionPayload */
     APP_Print_Video_Session_Abort_Ntf,          /**< PrintVideoSessionPayload */
 
     // ---- UI ↔ GLAVO：MCU OTA（测试） ----
-    UI_Mcu_Ota_Start_Req,       /**< Empty：扫描 /home/image 最新 .bin 并下发 */
+    UI_Mcu_Ota_Start_Req = 0x1090, /**< Empty：扫描 /home/image 最新 .bin 并下发 */
     UI_Mcu_Ota_Cancel_Ntf,      /**< Empty：测试用，SOC 侧中止 OTA 会话 */
     APP_Mcu_Ota_Status_Ntf,     /**< McuOtaStatusPayload */
 
     // ---- UI → GLAVO：调试页手动控制（后端待实现，前端先发送） ----
-    UI_Debug_Axis_Jog_Req,          /**< DebugAxisJogPayload：点动/长按点动 */
+    UI_Debug_Axis_Jog_Req = 0x1100, /**< DebugAxisJogPayload：点动/长按点动 */
     UI_Debug_Axis_Hold_Stop_Req,    /**< DebugAxisPayload：长按松手停 */
     UI_Debug_Axis_SetZero_Req,      /**< DebugAxisPayload：设工作零点（Z 轴） */
     UI_Debug_Axis_Home_Req,         /**< DebugAxisPayload：轴回 Home/归零（Z/S） */
@@ -94,8 +99,8 @@ enum class MsgType : uint32_t {
     UI_Debug_Galvo_Calib_Req,       /**< Empty：开始标定测试 */
     UI_Debug_Device_Req,            /**< DebugDevicePayload：设备/门/电机/照明 */
     UI_Debug_Powder_Bucket_Req,     /**< DebugBucketPayload：粉桶开关 */
-    UI_Debug_Pusher_Req,            /**< DebugOnOffPayload：三通推杆放/停 */
-    UI_Debug_Recycle_Motor_Req,     /**< DebugMotorPayload：回粉电机 */
+    UI_Debug_Pusher_Req,            /**< DebugMotorPayload：筛粉电机 停止/运行/反转倒渣 */
+    UI_Debug_Recycle_Motor_Req,     /**< DebugMotorPayload：内门 停止/开/关（原回粉电机块改为内门） */
     UI_Debug_Fan_Req,               /**< DebugFanPayload：风扇 */
     UI_Debug_Switch_Req,            /**< DebugSwitchPayload：激光/洗气/底板加热 */
     UI_Debug_CleanTest_Start_Req,   /**< Empty：清粉测试开启（关闭暂不使用） */
@@ -106,7 +111,7 @@ enum class MsgType : uint32_t {
     UI_Debug_Laser_AlarmReset_Req,  /**< Empty：激光器报警复位（固定 1301） */
 
     // ---- GLAVO → UI：调试页状态回读（按模块拆分） ----
-    GLAVO_Debug_Sensor_Ntf,         /**< DebugSensorPayload：顶部 7 路传感器 */
+    GLAVO_Debug_Sensor_Ntf = 0x1200, /**< DebugSensorPayload：顶部 7 路传感器 */
     GLAVO_Debug_Axis_Ntf,           /**< DebugAxisStatePayload：Z/S/D 位置 + Z 工作坐标 */
     GLAVO_Debug_Device_Ntf,         /**< DebugDeviceStatePayload：设备/门/电机/照明 */
     GLAVO_Debug_Galvo_Ntf,          /**< DebugGalvoStatePayload：振镜 X/Y + 红光 */

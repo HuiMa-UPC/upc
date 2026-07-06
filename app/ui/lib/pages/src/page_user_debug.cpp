@@ -115,14 +115,22 @@ lv_obj_t *make_circle_btn(lv_obj_t *parent, int32_t sz, const char *sym,
     lv_obj_remove_style_all(btn);
     lv_obj_set_size(btn, sz, sz);
     lv_obj_set_style_radius(btn, LV_RADIUS_CIRCLE, 0);
+    /* 常态白色描边：标出可点击范围（对齐展示图） */
+    lv_obj_set_style_border_width(btn, 1, 0);
+    lv_obj_set_style_border_color(btn, user_color_accent, 0);
+    lv_obj_set_style_border_opa(btn, LV_OPA_COVER, 0);
     if(accent) {
         lv_obj_set_style_bg_color(btn, user_color_accent, 0);
         lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, 0);
     } else {
+        /* 更浅的填充，与背景拉开区分度 */
         lv_obj_set_style_bg_color(btn, user_color_text, 0);
-        lv_obj_set_style_bg_opa(btn, 13, 0);
+        lv_obj_set_style_bg_opa(btn, LV_OPA_20, 0);
     }
-    lv_obj_set_style_bg_opa(btn, LV_OPA_40, LV_STATE_PRESSED);
+    /* 点击反馈：蓝底 + 蓝边 */
+    lv_obj_set_style_bg_color(btn, user_color_accent, LV_STATE_PRESSED);
+    lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, LV_STATE_PRESSED);
+    lv_obj_set_style_border_color(btn, user_color_accent, LV_STATE_PRESSED);
     if(cb) {
         lv_obj_add_event_cb(btn, cb, LV_EVENT_CLICKED, ud);
     }
@@ -294,10 +302,16 @@ lv_obj_t *make_device_toggle(lv_obj_t *parent, DebugDeviceTarget target,
     lv_obj_set_size(btn, USER_BTN_DOOR_ICON_SZ, USER_BTN_DOOR_ICON_SZ);
     lv_obj_set_style_radius(btn, LV_RADIUS_CIRCLE, 0);
     lv_obj_add_flag(btn, LV_OBJ_FLAG_CHECKABLE);
+    lv_obj_set_style_border_width(btn, 1, 0);
+    lv_obj_set_style_border_color(btn, user_color_accent, 0);
     lv_obj_set_style_bg_color(btn, user_color_text, 0);
-    lv_obj_set_style_bg_opa(btn, 13, 0);
+    lv_obj_set_style_bg_opa(btn, LV_OPA_20, 0);
     lv_obj_set_style_bg_color(btn, user_color_accent, LV_STATE_CHECKED);
     lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, LV_STATE_CHECKED);
+    lv_obj_set_style_bg_color(btn, user_color_accent, LV_STATE_PRESSED);
+    lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, LV_STATE_PRESSED);
+    lv_obj_set_style_border_color(btn, user_color_accent, LV_STATE_CHECKED);
+    lv_obj_set_style_border_color(btn, user_color_accent, LV_STATE_PRESSED);
     lv_obj_add_event_cb(btn, on_device_toggle, LV_EVENT_VALUE_CHANGED,
                         reinterpret_cast<void *>(static_cast<uintptr_t>(
                             static_cast<uint8_t>(target))));
@@ -341,6 +355,28 @@ void seg_fit_content(lv_obj_t *seg)
     }
 }
 
+/*
+ * 分段控件调试页专用样式：缩小段间距，每段加蓝色边框，选中段填充蓝底白字。
+ * 仅作用于本页传入的分段控件，不改动共享的 ui_user_make_segmented，避免影响其它页面。
+ */
+void style_debug_seg(lv_obj_t *seg)
+{
+    if(!seg) {
+        return;
+    }
+    lv_obj_set_style_pad_column(seg, 2, 0);   /* 段间距缩小 */
+    for(uint32_t i = 0; i < lv_obj_get_child_count(seg); i++) {
+        lv_obj_t *b = lv_obj_get_child(seg, i);
+        /* 每段蓝色边框 */
+        lv_obj_set_style_border_width(b, 1, 0);
+        lv_obj_set_style_border_color(b, user_color_accent, 0);
+        lv_obj_set_style_border_opa(b, LV_OPA_COVER, 0);
+        /* 选中段：蓝底白字 */
+        lv_obj_set_style_bg_color(b, user_color_accent, LV_STATE_CHECKED);
+        lv_obj_set_style_bg_opa(b, LV_OPA_COVER, LV_STATE_CHECKED);
+    }
+}
+
 lv_obj_t *build_control_row(lv_obj_t *parent)
 {
     lv_obj_t *row = lv_obj_create(parent);
@@ -358,6 +394,7 @@ lv_obj_t *build_control_row(lv_obj_t *parent)
     lv_obj_t *seg = ui_user_make_segmented(row, tabs, 3, 0);
     lv_obj_add_event_cb(seg, on_tab_changed, LV_EVENT_VALUE_CHANGED, nullptr);
     seg_fit_content(seg);
+    style_debug_seg(seg);
 
     lv_obj_t *spacer = lv_obj_create(row);
     lv_obj_remove_style_all(spacer);
@@ -386,7 +423,9 @@ lv_obj_t *make_value_input(lv_obj_t *parent, float value, bool integer = false)
     lv_obj_set_height(ta, UI_INPUT_H);
     lv_obj_set_style_text_font(ta, user_font_text(), 0);
     lv_obj_set_style_bg_color(ta, user_color_bg, 0);
-    lv_obj_set_style_border_color(ta, user_color_divider, 0);
+    /* 蓝色加粗边框 */
+    lv_obj_set_style_border_width(ta, 2, 0);
+    lv_obj_set_style_border_color(ta, user_color_accent, 0);
     lv_obj_set_style_text_color(ta, user_color_text, 0);
     ui_keyboard_attach(ta, LV_KEYBOARD_MODE_NUMBER);
     return ta;
@@ -514,13 +553,24 @@ lv_obj_t *build_axis_card(lv_obj_t *parent, int idx)
         lv_obj_set_style_text_font(g_z_zero_lbl, user_font_caption(), 0);
 
         lv_obj_t *zbtn = lv_button_create(zrow);
-        lv_obj_add_style(zbtn, user_style_btn_ghost(), 0);
-        lv_obj_set_height(zbtn, USER_BTN_PRIMARY_H);
+        lv_obj_remove_style_all(zbtn);
+        lv_obj_set_width(zbtn, LV_SIZE_CONTENT);
+        lv_obj_set_height(zbtn, LV_SIZE_CONTENT);
+        lv_obj_set_style_radius(zbtn, USER_RADIUS, 0);
+        lv_obj_set_style_pad_hor(zbtn, USER_PAD_SM, 0);
+        lv_obj_set_style_pad_ver(zbtn, USER_PAD_SM / 2, 0);
+        /* 底色蓝，按下反馈红 */
+        lv_obj_set_style_bg_color(zbtn, user_color_accent, 0);
+        lv_obj_set_style_bg_opa(zbtn, LV_OPA_COVER, 0);
+        lv_obj_set_style_bg_color(zbtn, ui_color_danger, LV_STATE_PRESSED);
+        lv_obj_set_style_bg_opa(zbtn, LV_OPA_COVER, LV_STATE_PRESSED);
+        lv_obj_set_style_text_color(zbtn, user_color_text, 0);
         lv_obj_add_event_cb(zbtn, on_set_zero, LV_EVENT_CLICKED,
                             reinterpret_cast<void *>(static_cast<uintptr_t>(
                                 static_cast<uint8_t>(cfg.axis))));
         lv_obj_t *zl = lv_label_create(zbtn);
         lv_label_set_text(zl, "Set work zero");
+        lv_obj_set_style_text_font(zl, user_font_text(), 0);
         lv_obj_center(zl);
     }
 
@@ -530,6 +580,7 @@ lv_obj_t *build_axis_card(lv_obj_t *parent, int idx)
     lv_obj_set_width(seg, LV_PCT(100));
     lv_obj_add_event_cb(seg, on_axis_subtab_changed, LV_EVENT_VALUE_CHANGED,
                         reinterpret_cast<void *>(static_cast<uintptr_t>(idx)));
+    style_debug_seg(seg);
 
     /* 控制区（按子 tab 重建） */
     lv_obj_t *box = lv_obj_create(card);
@@ -724,6 +775,7 @@ lv_obj_t *build_galvo_card(lv_obj_t *parent)
     lv_obj_t *rl_seg = ui_user_make_segmented(rl_row, onoff, 2, 1);
     lv_obj_add_event_cb(rl_seg, on_redlight_changed, LV_EVENT_VALUE_CHANGED, nullptr);
     seg_fit_content(rl_seg);
+    style_debug_seg(rl_seg);
 
     /* 底行：步长 + 保存 */
     lv_obj_t *foot = lv_obj_create(card);
@@ -743,6 +795,7 @@ lv_obj_t *build_galvo_card(lv_obj_t *parent)
     const char *steps[4] = { "0.01", "0.1", "1", "10" };
     g_galvo_step_seg = ui_user_make_segmented(foot, steps, 4, 2);
     seg_fit_content(g_galvo_step_seg);
+    style_debug_seg(g_galvo_step_seg);
 
     lv_obj_t *spacer = lv_obj_create(foot);
     lv_obj_remove_style_all(spacer);
@@ -852,8 +905,7 @@ void on_dbg_toggle(lv_event_t *e)
     }
     auto &proxy = ui::DebugMsgProxy::instance();
     switch(c->kind) {
-        case 0: proxy.send_powder_bucket(c->arg, on); break;
-        case 1: proxy.send_pusher(on); break;
+        //case 0: proxy.send_powder_bucket(c->arg, on); break;  // 粉桶1/2功能暂时屏蔽
         case 2: proxy.send_fan(on); break;   /* 风扇开/关；占空比由 Send 按钮单独下发 */
         case 3: proxy.send_switch(static_cast<DebugSwitchTarget>(c->arg), on); break;
         case 4: if(on) proxy.send_clean_test_start(); break;  /* 仅开触发，关占位 */
@@ -910,10 +962,19 @@ lv_obj_t *make_dbg_toggle(lv_obj_t *parent, const char *name,
     lv_obj_set_size(btn, USER_BTN_DOOR_ICON_SZ, USER_BTN_DOOR_ICON_SZ);
     lv_obj_set_style_radius(btn, LV_RADIUS_CIRCLE, 0);
     lv_obj_add_flag(btn, LV_OBJ_FLAG_CHECKABLE);
+    lv_obj_set_style_border_width(btn, 1, 0);
+    lv_obj_set_style_border_color(btn, user_color_accent, 0);
     lv_obj_set_style_bg_color(btn, user_color_text, 0);
-    lv_obj_set_style_bg_opa(btn, 13, 0);
+    lv_obj_set_style_bg_opa(btn, LV_OPA_20, 0);
     lv_obj_set_style_bg_color(btn, user_color_accent, LV_STATE_CHECKED);
     lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, LV_STATE_CHECKED);
+    lv_obj_set_style_bg_color(btn, user_color_accent, LV_STATE_PRESSED);
+    lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, LV_STATE_PRESSED);
+    lv_obj_set_style_border_color(btn, user_color_accent, LV_STATE_CHECKED);
+    lv_obj_set_style_border_color(btn, user_color_accent, LV_STATE_PRESSED);
+    if(vertical) {
+        lv_obj_set_style_margin_top(btn, USER_PAD_SM, 0);   /* 竖排时按钮与标签拉开间距 */
+    }
     if(initial_on) {
         lv_obj_add_state(btn, LV_STATE_CHECKED);
     }
@@ -930,41 +991,92 @@ lv_obj_t *make_dbg_toggle(lv_obj_t *parent, const char *name,
     return grp;
 }
 
-/* 回粉电机按钮上下文（点动动作：Stop / Forward / Reverse） */
-struct MotorBtnCtx {
+/* 点动电机类控件（筛粉电机 / 内门）：3 个点动键 [< 停止▶ >] + 共享状态字。
+ * device：0=筛粉电机 1=内门。action 与 DebugMotorAction 对齐：0=停止 1=正转/开 2=反转/关。 */
+struct MomentBtnCtx {
     lv_obj_t *state_lbl;
-    uint8_t   action;   /**< DebugMotorAction */
+    uint8_t   device;
+    uint8_t   action;
 };
 
-void on_motor_btn_delete(lv_event_t *e)
+void on_moment_btn_delete(lv_event_t *e)
 {
-    delete static_cast<MotorBtnCtx *>(lv_event_get_user_data(e));
+    delete static_cast<MomentBtnCtx *>(lv_event_get_user_data(e));
 }
 
-void on_recycle_motor(lv_event_t *e)
+/* 点动：按下即发对应帧，并把该块状态字更新为运行/停止文案 */
+void on_moment_btn(lv_event_t *e)
 {
-    auto *c = static_cast<MotorBtnCtx *>(lv_event_get_user_data(e));
+    auto *c = static_cast<MomentBtnCtx *>(lv_event_get_user_data(e));
+    if(!c) {
+        return;
+    }
     const auto act = static_cast<DebugMotorAction>(c->action);
-    ui::DebugMsgProxy::instance().send_recycle_motor(act);
+    const char *txt;
+    if(c->device == 0) {          /* 筛粉电机：正转0x13 / 停止0x15 / 反转0x14 */
+        ui::DebugMsgProxy::instance().send_sieve(act);
+        txt = (act == DebugMotorAction::Forward) ? "Running"
+            : (act == DebugMotorAction::Reverse) ? "Reversing" : "Stopped";
+    } else {                      /* 内门：开0x0C / 停止0x0E / 关0x0D */
+        ui::DebugMsgProxy::instance().send_inner_door(act);
+        txt = (act == DebugMotorAction::Forward) ? "Open"
+            : (act == DebugMotorAction::Reverse) ? "Closed" : "Stopped";
+    }
     if(c->state_lbl) {
-        const bool running = (act != DebugMotorAction::Stop);
-        const char *t = (act == DebugMotorAction::Forward) ? "Forward"
-                      : (act == DebugMotorAction::Reverse) ? "Reverse" : "Stopped";
-        lv_label_set_text(c->state_lbl, t);
+        lv_label_set_text(c->state_lbl, txt);
         lv_obj_set_style_text_color(c->state_lbl,
-                                    running ? user_color_accent : user_color_text_dim, 0);
+            (act != DebugMotorAction::Stop) ? user_color_accent : user_color_text_dim, 0);
     }
 }
 
-/** 回粉电机点动按钮：电源(Stop) 高亮，左右为正反转 */
-lv_obj_t *make_motor_btn(lv_obj_t *parent, const char *sym,
-                         DebugMotorAction action, lv_obj_t *state_lbl, bool accent)
+/** 点动键：sym 图标，device+action 编码进 ctx；点动即发帧并刷新状态字 */
+lv_obj_t *make_moment_btn(lv_obj_t *parent, const char *sym,
+                          uint8_t device, DebugMotorAction action, lv_obj_t *state_lbl)
 {
-    auto *ctx = new MotorBtnCtx{ state_lbl, static_cast<uint8_t>(action) };
-    lv_obj_t *b = make_circle_btn(parent, USER_BTN_DOOR_ICON_SZ, sym,
-                                  on_recycle_motor, ctx, accent);
-    lv_obj_add_event_cb(b, on_motor_btn_delete, LV_EVENT_DELETE, ctx);
+    auto *ctx = new MomentBtnCtx{ state_lbl, device, static_cast<uint8_t>(action) };
+    lv_obj_t *b = make_circle_btn(parent, USER_BTN_DOOR_ICON_SZ, sym, on_moment_btn, ctx);
+    lv_obj_add_event_cb(b, on_moment_btn_delete, LV_EVENT_DELETE, ctx);
     return b;
+}
+
+/* 点动电机单元：名称+状态在上，[< 停止▶ >] 三键在下一行（与标签留出间距）。
+ * 左 < = 反转/关，中 ▶ = 停止，右 > = 正转/开。 */
+void build_moment_motor_controls(lv_obj_t *parent, const char *name, uint8_t device)
+{
+    lv_obj_t *grp = lv_obj_create(parent);
+    lv_obj_remove_style_all(grp);
+    lv_obj_set_size(grp, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(grp, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(grp, LV_FLEX_ALIGN_CENTER,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_row(grp, USER_PAD_SM / 2, 0);
+    lv_obj_set_style_bg_opa(grp, LV_OPA_TRANSP, 0);
+    lv_obj_clear_flag(grp, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *nm = lv_label_create(grp);
+    lv_label_set_text(nm, name);
+    lv_obj_set_style_text_color(nm, user_color_text_dim, 0);
+    lv_obj_set_style_text_font(nm, user_font_caption(), 0);
+    lv_obj_t *st = lv_label_create(grp);
+    lv_label_set_text(st, "Stopped");
+    lv_obj_set_style_text_color(st, user_color_text_dim, 0);
+    lv_obj_set_style_text_font(st, user_font_text(), 0);
+
+    lv_obj_t *btnrow = lv_obj_create(grp);
+    lv_obj_remove_style_all(btnrow);
+    lv_obj_set_size(btnrow, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(btnrow, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(btnrow, LV_FLEX_ALIGN_CENTER,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_column(btnrow, USER_PAD_SM, 0);
+    lv_obj_set_style_margin_top(btnrow, USER_PAD_SM, 0);   /* 与标签拉开间距 */
+    lv_obj_set_style_bg_opa(btnrow, LV_OPA_TRANSP, 0);
+    lv_obj_clear_flag(btnrow, LV_OBJ_FLAG_SCROLLABLE);
+
+    /* 左 < 反转/关，中 ▶ 停止，右 > 正转/开 */
+    make_moment_btn(btnrow, LV_SYMBOL_LEFT,  device, DebugMotorAction::Reverse, st);
+    make_moment_btn(btnrow, LV_SYMBOL_PLAY,  device, DebugMotorAction::Stop,    st);
+    make_moment_btn(btnrow, LV_SYMBOL_RIGHT, device, DebugMotorAction::Forward, st);
 }
 
 /** 一行卡片容器（横向 flex，等高） */
@@ -981,43 +1093,6 @@ lv_obj_t *make_card_row(lv_obj_t *parent)
     lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, 0);
     lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
     return row;
-}
-
-/* 回粉电机：名称+状态在上，电源(Stop)/反转/正转 三键在下一行 */
-void build_recycle_motor_controls(lv_obj_t *foot)
-{
-    lv_obj_t *grp = lv_obj_create(foot);
-    lv_obj_remove_style_all(grp);
-    lv_obj_set_size(grp, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
-    lv_obj_set_flex_flow(grp, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_flex_align(grp, LV_FLEX_ALIGN_CENTER,
-                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_row(grp, USER_PAD_SM / 2, 0);
-    lv_obj_set_style_bg_opa(grp, LV_OPA_TRANSP, 0);
-    lv_obj_clear_flag(grp, LV_OBJ_FLAG_SCROLLABLE);
-
-    lv_obj_t *nm = lv_label_create(grp);
-    lv_label_set_text(nm, "Motor");
-    lv_obj_set_style_text_color(nm, user_color_text_dim, 0);
-    lv_obj_set_style_text_font(nm, user_font_caption(), 0);
-    lv_obj_t *st = lv_label_create(grp);
-    lv_label_set_text(st, "Stopped");
-    lv_obj_set_style_text_color(st, user_color_text_dim, 0);
-    lv_obj_set_style_text_font(st, user_font_text(), 0);
-
-    lv_obj_t *btnrow = lv_obj_create(grp);
-    lv_obj_remove_style_all(btnrow);
-    lv_obj_set_size(btnrow, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
-    lv_obj_set_flex_flow(btnrow, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(btnrow, LV_FLEX_ALIGN_CENTER,
-                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_column(btnrow, USER_PAD_SM, 0);
-    lv_obj_set_style_bg_opa(btnrow, LV_OPA_TRANSP, 0);
-    lv_obj_clear_flag(btnrow, LV_OBJ_FLAG_SCROLLABLE);
-
-    make_motor_btn(btnrow, LV_SYMBOL_POWER, DebugMotorAction::Stop,    st, false);
-    make_motor_btn(btnrow, LV_SYMBOL_LEFT,  DebugMotorAction::Reverse, st, false);
-    make_motor_btn(btnrow, LV_SYMBOL_RIGHT, DebugMotorAction::Forward, st, false);
 }
 
 /* ---- 小工具：卡片标题 / 暗色小标签 / 文本框整数读数 ---- */
@@ -1193,7 +1268,7 @@ void build_other_switches_card(lv_obj_t *parent)
     lv_obj_t *rowA = make_switch_grid_row(grid);
     make_dbg_toggle(rowA, "Bucket 1", "Open", "Closed", LV_SYMBOL_POWER, false, 0, 1);
     make_dbg_toggle(rowA, "Bucket 2", "Open", "Closed", LV_SYMBOL_POWER, false, 0, 2);
-    make_dbg_toggle(rowA, "3-way Rod", "Feeding", "Stopped", LV_SYMBOL_PLAY, false, 1, 0);
+    build_moment_motor_controls(rowA, "Sieve Motor", 0);
     make_dbg_toggle(rowA, "Powder Clean", "On", "Off", LV_SYMBOL_POWER, false, 4, 0);
 
     lv_obj_t *rowB = make_switch_grid_row(grid);
@@ -1203,7 +1278,7 @@ void build_other_switches_card(lv_obj_t *parent)
                     static_cast<uint8_t>(DebugSwitchTarget::GasWash));
     make_dbg_toggle(rowB, "Base Heat", "On", "Off", LV_SYMBOL_POWER, false, 3,
                     static_cast<uint8_t>(DebugSwitchTarget::BaseHeat));
-    build_recycle_motor_controls(rowB);
+    build_moment_motor_controls(rowB, "Inner Door", 1);
 }
 
 lv_obj_t *build_other_tab(lv_obj_t *body)
@@ -1291,6 +1366,7 @@ void on_laser_power_cancel(lv_event_t *)
 void on_laser_alarm_reset(lv_event_t *)
 {
     ui::DebugMsgProxy::instance().send_laser_alarm_reset();
+    update_laser_alarms(0);   /* 本地立即清空 Alarm 列表，后续以 MCU 上报为准 */
     ui_toast_show("Alarm reset sent", user_color_accent, 1200);
 }
 
@@ -1583,7 +1659,11 @@ void reset_globals()
 
 void page_user_debug_refresh(bool /*force*/)
 {
-    /* 读数由 DebugMsgProxy 回调驱动，无需周期刷新 */
+    /* 读数由 DebugMsgProxy 回调驱动。页面对象由 PageManager 缓存（on_create 仅首次执行），
+     * 而 page_user_debug_exit 退页时会清空回调；on_enter 每次都会调本函数，故必须在此
+     * 重新挂载回调，否则「返回后再进入」将因回调为空而不再刷新读数。g_* 指针在缓存的
+     * 页面对象上始终有效，可安全重挂。 */
+    bind_debug_callbacks();
 }
 
 void page_user_debug_exit(void)

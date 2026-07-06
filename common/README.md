@@ -130,8 +130,8 @@
 | `UI_Debug_Galvo_Calib_Req` | — | UI→Glavo | Empty | `send_galvo_calib` | 开始标定 |
 | `UI_Debug_Device_Req` | — | UI→Glavo | `DebugDevicePayload` | `send_device` | 设备/门/电机/照明 |
 | `UI_Debug_Powder_Bucket_Req` | — | UI→Glavo | `DebugBucketPayload` | `send_powder_bucket` | 粉桶 |
-| `UI_Debug_Pusher_Req` | — | UI→Glavo | `DebugOnOffPayload` | `send_pusher` | 三通推杆 |
-| `UI_Debug_Recycle_Motor_Req` | — | UI→Glavo | `DebugMotorPayload` | `send_recycle_motor` | 回粉电机（后端逻辑预留，暂不下发串口） |
+| `UI_Debug_Pusher_Req` | — | UI→Glavo | `DebugMotorPayload` | `send_sieve` | 筛粉电机（0=停止/1=筛粉运行/2=反转倒渣） |
+| `UI_Debug_Recycle_Motor_Req` | — | UI→Glavo | `DebugMotorPayload` | `send_inner_door` | 内门（0=停止/1=开/2=关；原回粉电机块改为内门） |
 | `UI_Debug_Fan_Req` | — | UI→Glavo | `DebugFanPayload` | `send_fan` | 风扇开/关（占空比走 Fan_Duty_Req） |
 | `UI_Debug_Switch_Req` | — | UI→Glavo | `DebugSwitchPayload` | `send_switch` | 激光/洗气/底板加热 |
 | `UI_Debug_CleanTest_Start_Req` | — | UI→Glavo | Empty | `send_clean_test_start` | 清粉测试开启（关闭暂不使用） |

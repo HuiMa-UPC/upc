@@ -26,10 +26,17 @@
 #define SDBG_TLV_LIGHT_ON       0x06
 #define SDBG_TLV_LIGHT_OFF      0x07
 #define SDBG_TLV_DOOR_OPEN      0x08
+#define SDBG_TLV_INNERDOOR_OPEN  0x0C  /* TLV_INNERDOOR_OPEN：内门开 */
+#define SDBG_TLV_INNERDOOR_CLOSE 0x0D  /* TLV_INNERDOOR_CLOSED：内门关 */
+#define SDBG_TLV_INNERDOOR_STOP  0x0E  /* TLV_INNERDOOR_STOP：内门停止 */
 #define SDBG_TLV_HOT_OPEN       0x0A
 #define SDBG_TLV_HOT_CLOSE      0x0B
 #define SDBG_TLV_LASER_ENABLE   0x11
 #define SDBG_TLV_LASER_DISABLE  0x12
+/* 筛粉电机（原三通推杆改为筛粉电机；Cmd 0x9A，无 Value） */
+#define SDBG_TLV_SIEVE_RUN      0x13  /* TLV_POWDER_STRAINER_ENABLE：筛粉运行(正转) */
+#define SDBG_TLV_SIEVE_REVERSE  0x14  /* TLV_POWDER_STRAINER_DISABLE：反转倒渣 */
+#define SDBG_TLV_SIEVE_STOP     0x15  /* TLV_POWDER_MOTOR_STOP：筛粉停止 */
 
 /* 粉桶（Cmd 0x8A） */
 #define SDBG_TLV_POWDER_ON      0x01
@@ -59,6 +66,8 @@
 #define SDBG_CMD_D_MOVE         0xB4
 #define SDBG_CMD_SENSOR_SET     0x9A
 #define SDBG_CMD_SENSOR_REPORT  0x9B
+/* 运动轴位置上报：SensorsTask 复用 CMD_SNESOR_VALUE_REPORT(0x9B)，Port 0xA5 + TLV 0x05 */
+#define SDBG_TLV_MOTION_POS_REPORT 0x05
 #define SDBG_CMD_POWDER_SUPPLY  0x8A
 #define SDBG_CMD_GAS_CONTROL    0x86
 #define SDBG_CMD_PRINTING_CTRL  0x81
@@ -187,11 +196,30 @@ int serial_debug_build_powder_bucket(uint8_t bucket_id, bool on,
                                  1, &v, out, out_size);
 }
 
-int serial_debug_build_pusher(bool on, uint8_t* out, size_t out_size)
+int serial_debug_build_sieve_motor(uint8_t action, uint8_t* out, size_t out_size)
 {
+    /* action 与 DebugMotorAction 对齐：0=停止 1=筛粉运行(正转) 2=反转倒渣 */
+    uint8_t tlv;
+    switch(action) {
+        case 1:  tlv = SDBG_TLV_SIEVE_RUN;     break;
+        case 2:  tlv = SDBG_TLV_SIEVE_REVERSE; break;
+        default: tlv = SDBG_TLV_SIEVE_STOP;    break;
+    }
     return serial_build_aa_frame(SDBG_PORT_SENSORS, SDBG_CMD_SENSOR_SET,
-                                 on ? SDBG_TLV_TJ_OPEN : SDBG_TLV_TJ_CLOSED,
-                                 0, nullptr, out, out_size);
+                                 tlv, 0, nullptr, out, out_size);
+}
+
+int serial_debug_build_inner_door(uint8_t action, uint8_t* out, size_t out_size)
+{
+    /* action 与 DebugMotorAction 对齐：0=停止 1=开 2=关 */
+    uint8_t tlv;
+    switch(action) {
+        case 1:  tlv = SDBG_TLV_INNERDOOR_OPEN;  break;
+        case 2:  tlv = SDBG_TLV_INNERDOOR_CLOSE; break;
+        default: tlv = SDBG_TLV_INNERDOOR_STOP;  break;
+    }
+    return serial_build_aa_frame(SDBG_PORT_SENSORS, SDBG_CMD_SENSOR_SET,
+                                 tlv, 0, nullptr, out, out_size);
 }
 
 int serial_debug_build_fan_switch(bool on, uint8_t* out, size_t out_size)
@@ -319,7 +347,8 @@ int serial_parse_laser_report(const uint8_t* data, size_t len,
     return 0;
 }
 
-/* ====================== 运动位置上报解析（0x9B + 0x05） ================ */
+/* ========= 运动轴位置上报解析（SensorsTask：0xA5 0x9B + TLV 0x05） ======= */
+/* Value 16 字节，顺序 Z / Z工作坐标 / S / D。整帧 = 8 + payload_len(0x12) = 26。 */
 
 int serial_frame_is_motion_pos_report(const uint8_t* data, size_t len)
 {
@@ -329,7 +358,7 @@ int serial_frame_is_motion_pos_report(const uint8_t* data, size_t len)
     return (data[0] == SERIAL_SOF0 && data[1] == SERIAL_SOF1 &&
             data[2] == SERIAL_FT_MCU_TO_SOC &&
             data[3] == SDBG_PORT_SENSORS && data[4] == SDBG_CMD_SENSOR_REPORT &&
-            data[7] == 0x05) ? 1 : 0;
+            data[7] == SDBG_TLV_MOTION_POS_REPORT) ? 1 : 0;
 }
 
 int serial_parse_motion_pos_report(const uint8_t* data, size_t len,
@@ -349,7 +378,7 @@ int serial_parse_motion_pos_report(const uint8_t* data, size_t len,
         return -4;
     }
     const uint8_t payload_len = data[6];
-    if(payload_len != 0x12 || data[7] != 0x05 || data[8] != 0x10) {
+    if(payload_len != 0x12 || data[7] != SDBG_TLV_MOTION_POS_REPORT || data[8] != 0x10) {
         return -5;
     }
     if(len < (size_t)(8 + payload_len)) {
@@ -359,6 +388,7 @@ int serial_parse_motion_pos_report(const uint8_t* data, size_t len,
         return -7;
     }
 
+    /* Value 顺序：Z(0..3) / Z工作坐标(4..7) / S(8..11) / D(12..15) */
     const uint8_t* v = &data[9];
     out->z_pos_mm       = (float)sdbg_read_le32(v + 0)  / 10000.0f;
     out->z_work_zero_mm = (float)sdbg_read_le32(v + 4)  / 10000.0f;

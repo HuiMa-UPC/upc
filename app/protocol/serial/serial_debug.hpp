@@ -83,8 +83,18 @@ int serial_debug_build_light(bool on, uint8_t* out, size_t out_size);
 int serial_debug_build_powder_bucket(uint8_t bucket_id, bool on,
                                      uint8_t* out, size_t out_size);
 
-/** 三通过粉(on=true,0x05) / 三通堵粉(on=false,0x04)。Port=SENSORS。 */
-int serial_debug_build_pusher(bool on, uint8_t* out, size_t out_size);
+/**
+ * 筛粉电机（原三通推杆已改为筛粉电机）。action 与 DebugMotorAction 对齐：
+ * 0=停止(TLV 0x15) / 1=筛粉运行·正转(0x13) / 2=反转倒渣(0x14)。
+ * Port=SENSORS，Cmd=0x9A，无 Value。
+ */
+int serial_debug_build_sieve_motor(uint8_t action, uint8_t* out, size_t out_size);
+
+/**
+ * 内门（原回粉电机块改为内门）。action 与 DebugMotorAction 对齐：
+ * 0=停止(TLV 0x0E) / 1=开(0x0C) / 2=关(0x0D)。Port=SENSORS，Cmd=0x9A，无 Value。
+ */
+int serial_debug_build_inner_door(uint8_t action, uint8_t* out, size_t out_size);
 
 /** 风扇开/关。Port=SENSORS，TLV=0x02/0x03。 */
 int serial_debug_build_fan_switch(bool on, uint8_t* out, size_t out_size);
@@ -132,7 +142,8 @@ int serial_parse_laser_report(const uint8_t* data, size_t len,
                               serial_laser_report_t* out);
 
 /* ====================================================================== */
-/*  状态回读：运动轴位置上报（MCU→SOC，Cmd 0x9B + TLV 0x05）              */
+/*  状态回读：运动轴位置上报（SensorsTask，MCU→SOC）                        */
+/*  帧：Port 0xA5 + Cmd 0x9B + TLV 0x05，Len 16；Value 顺序 Z/Zwork/S/D。 */
 /*  注：顶部 7 路传感器上报（TLV 0x02）由 serial_env.* 解析，此处不重复。   */
 /* ====================================================================== */
 
