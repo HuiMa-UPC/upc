@@ -13,7 +13,7 @@ using CameraStreamStartRspCb = std::function<void(
 using CameraStreamStopDoneCb = std::function<void()>;
 
 /**
- * @brief UI ↔ test_camera / APP_CAMERA 控制面（像素走 SHM，不经 MsgBus）
+ * @brief UI ↔ APP_CAMERA（`rongsu_camera`）控制面（像素走 SHM，不经 MsgBus）
  *
  * 不订阅 APP_Camera_Frame_Ntf；UI 侧自行 poll SHM。
  * 回调均在 MsgPort::process 线程执行，勿操作 LVGL。

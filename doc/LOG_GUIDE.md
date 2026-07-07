@@ -1,7 +1,7 @@
 # UPC 日志阅读指南
 
 > 适用：`rongsu_ui` + `rongsu_glavo` 双进程架构  
-> 源码：`common/debug/rs_log.cpp`、`upc_log_modules.hpp`  
+> 源码：`common/debug/rs_log.cpp`、`common/process/log_rotating.cpp`、`upc_log_modules.hpp`  
 > 消息契约：[`common/README.md`](../common/README.md)
 
 ---
@@ -10,19 +10,20 @@
 
 | 启动方式 | UI 日志 | Glavo 日志 |
 |----------|---------|------------|
-| `scripts/rongsu.sh start` | `/var/log/rongsu_ui.log` | `/var/log/rongsu_glavo.log` |
+| `scripts/rongsu.sh start` | `/var/log/rongsu_ui{1,2,3}.log` | `/var/log/rongsu_glavo{1,2,3}.log` |
 | `rongsu_ui start` / `rongsu_glavo start` | 同上（各自重定向） | 同上 |
 | `scripts/rongsu.sh run` | **终端 stderr**（两进程混在一起） | **终端 stderr** |
 | `rongsu_ui run` / `rongsu_glavo run` | 当前终端 | 当前终端 |
 
 - 所有 `UPC_LOG_*` 写到 **stderr**（`start` 时被守护进程重定向到 log 文件）。
+- 每个进程最多 **3 个** log 文件（`{前缀}1.log` ~ `{前缀}3.log`），单文件 **5MB** 上限，写满后按 1→2→3→1 循环；**断电重启不清空**，从上次未满文件 append 继续。
 - `printf` 等 stdout 输出**不是**结构化日志，一般只有启动提示。
 - **没有独立日志进程**；哪条进程打的，就看对应文件或 `proc=` 字段。
 
 实时查看（daemon 模式）：
 
 ```bash
-tail -f /var/log/rongsu_ui.log /var/log/rongsu_glavo.log
+tail -f /var/log/rongsu_ui{1,2,3}.log /var/log/rongsu_glavo{1,2,3}.log
 ```
 
 前台 `run` 时按进程过滤：
@@ -77,8 +78,8 @@ tail -f /var/log/rongsu_ui.log /var/log/rongsu_glavo.log
 快速过滤：
 
 ```bash
-grep 'module=MSGBUS'  /var/log/rongsu_ui.log      # UI 侧 IPC
-grep 'module=McuLink' /var/log/rongsu_glavo.log # 串口/TCP
+grep 'module=MSGBUS'  /var/log/rongsu_ui*.log      # UI 侧 IPC
+grep 'module=McuLink' /var/log/rongsu_glavo*.log # 串口/TCP
 grep 'module=HostMonitor' /var/log/rongsu_*.log   # 双进程资源
 ```
 
@@ -188,10 +189,10 @@ cpu_sys=0.6% cpu_proc=0.1% temp=44.4C mem_avail=3759MB/3901MB rss=51MB
 
 ### 7.1 UI 点了按钮没反应
 
-1. `rongsu_ui.log` 是否有对应 `IPC_TX UI_*_Req`？
+1. `rongsu_ui*.log` 是否有对应 `IPC_TX UI_*_Req`？
    - 无 → UI 业务未调用 `send_*`
    - 有 → 继续
-2. `rongsu_glavo.log` 是否有 `IPC_RX` 同类型 + `IPC_DELIVER`？
+2. `rongsu_glavo*.log` 是否有 `IPC_RX` 同类型 + `IPC_DELIVER`？
    - 无 RX → IPC 未连通，查 `module=IPC` 的 connect/listen
    - 有 RX 无 DELIVER → Glavo 未 subscribe
 3. Glavo 是否有 `IPC_TX *_Rsp`？
@@ -208,7 +209,7 @@ grep 'module=IPC' /var/log/rongsu_*.log
 ### 7.3 打印卡住
 
 ```bash
-grep -E 'McuLink|GlavoService|PRINT_|LAYER|SERIAL_' /var/log/rongsu_glavo.log
+grep -E 'McuLink|GlavoService|PRINT_|LAYER|SERIAL_' /var/log/rongsu_glavo*.log
 ```
 
 看串口握手：`PRINT_REQUEST` → `PRINT_CONDITION_OK` → `PRINT_START` → `PRINT_READY` → `LAYER_DONE` 循环。
@@ -243,8 +244,8 @@ grep -E 'McuLink|GlavoService|PRINT_|LAYER|SERIAL_' /var/log/rongsu_glavo.log
 对照：Camera `committed` 与 UI `decode 1s ok` 应同量级；开流首秒 UI `ok` 偏低多为启动对齐，第二秒应收敛。
 
 ```bash
-grep 'module=CameraPreview' /var/log/rongsu_ui.log
-grep 'module=CameraService'  /var/log/rongsu_camera.log
+grep 'module=CameraPreview' /var/log/rongsu_ui*.log
+grep 'module=CameraService'  /var/log/rongsu_camera*.log
 ```
 
 ---

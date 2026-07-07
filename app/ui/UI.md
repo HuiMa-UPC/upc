@@ -86,7 +86,7 @@ while (!g_shutdown_requested) {
 预览统一走 dma fd 旁路（`dma_mode=1`）：
 
 ```
-rongsu_camera / test_camera 经主 IPC（/tmp/upc_camera.sock）SCM_RIGHTS 附带 dma_buf fd 表
+rongsu_camera 经主 IPC（/tmp/upc_camera.sock）SCM_RIGHTS 附带 dma_buf fd 表
   → CameraPreviewPlayer::on_stream_start_rsp 调用 MsgPort::take_peer_dma_fds(APP_CAMERA)
   → SHM /upc_camera_preview 只读 slot 状态/seq/buffer_idx
   → 解码线程 acquire_latest_frame 得到 buffer_idx

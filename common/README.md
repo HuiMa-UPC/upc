@@ -41,7 +41,7 @@
 |----|------|------|
 | `UI` | 界面 / IPC Hub | `rongsu_ui` |
 | `APP_GLAVO` | 振镜/串口后端 | `rongsu_glavo` |
-| `APP_CAMERA` | 相机后端 | `rongsu_camera` / `test_camera` |
+| `APP_CAMERA` | 相机后端 | `rongsu_camera` |
 | `0` | 广播（`target_id` 专用） | — |
 
 新增后端进程时在此枚举追加（见 [§5 多后端拓扑](#5-多后端拓扑)）。
@@ -154,7 +154,6 @@
 `CameraStreamInfoPayload.dma_mode` 当前固定为 `1`：
 - 预览统一走 **dma fd 旁路**：后端经主 IPC（`/tmp/upc_camera.sock`）`SCM_RIGHTS` 附带 dma_buf fd；UI 侧 `MsgPort::take_peer_dma_fds(APP_CAMERA)` 接收。SHM `/upc_camera_preview` 仅保留 slot 状态元数据，像素不再走 SHM payload。
 - `dma_socket_path` 字段为 ABI 保留，当前未使用独立 socket。
-- `test_camera` 与 `rongsu_camera` 使用同一套契约。
 
 ---
 
@@ -176,7 +175,6 @@ Wire 协议版本：`WIRE_VERSION`（[`ipc_wire.hpp`](../ipc/ipc_wire.hpp)）。
 ```
 rongsu_glavo ──listen──► /tmp/upc_glavo.sock ◄──┐
 rongsu_camera ──listen──► /tmp/upc_camera.sock ◄──┼── rongsu_ui (Hub)
-test_camera  ──listen──► /tmp/upc_camera.sock ◄──┘
 ```
 
 - UI：`set_mode_ipc_hub` + `add_ipc_peer(APP_GLAVO, …)` + `add_ipc_peer(APP_CAMERA, …, required=false)`

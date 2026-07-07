@@ -1,4 +1,5 @@
 #include "rs_log.hpp"
+#include "log_rotating.hpp"
 
 #include <cstdarg>
 #include <cstdio>
@@ -64,17 +65,27 @@ void log_write(Level level, const char* src, const char* module,
         std::snprintf(ts, sizeof(ts), "time=?");
     }
 
+    char msg_buf[2048];
+    va_list args;
+    va_start(args, fmt);
+    const int msg_len = std::vsnprintf(msg_buf, sizeof(msg_buf), fmt, args);
+    va_end(args);
+
+    const std::size_t est = 96U
+        + (msg_len > 0 ? static_cast<std::size_t>(msg_len) : 0U) + 1U;
+    log_rotating_before_write(est);
+
     std::fprintf(stderr, "%s level=%s proc=%s src=%s module=%s ",
         ts, level_name(level), log_process_name(),
         src ? src : "?", module ? module : "?");
 
-    va_list args;
-    va_start(args, fmt);
-    std::vfprintf(stderr, fmt, args);
-    va_end(args);
+    if (msg_len > 0) {
+        std::fwrite(msg_buf, 1, static_cast<std::size_t>(msg_len), stderr);
+    }
 
     std::fputc('\n', stderr);
     std::fflush(stderr);
+    log_rotating_after_write();
 #else
     (void)level;
     (void)src;

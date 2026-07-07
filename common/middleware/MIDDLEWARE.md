@@ -11,7 +11,7 @@
 | `memory_pool/` | 固定块池、`BufferPool` |
 | `debug/` | `MW_LOG_*`（middleware 内部调试） |
 
-无 LVGL 依赖；UI / Glavo / test 均可链接。
+无 LVGL 依赖；UI / Glavo / Camera 均可链接。
 
 ## 核心类型（源码为准）
 

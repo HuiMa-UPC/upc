@@ -6,22 +6,18 @@
 
 | 进程 | 可执行文件 | 入口 | 模块文档 | 日志 |
 |------|------------|------|----------|------|
-| UI | `rongsu_ui` | `app/ui/main.cpp` | [ui/UI.md](../app/ui/UI.md) | `/var/log/rongsu_ui.log` |
-| Glavo | `rongsu_glavo` | `app/glavo/main.cpp` | [glavo/GLAVO.md](../app/glavo/GLAVO.md) | `/var/log/rongsu_glavo.log` |
-| 相机 | `rongsu_camera` | `app/camera/main.cpp` | [camera/CAMERA.md](../app/camera/CAMERA.md) | `/var/log/rongsu_camera.log` |
-| 相机测试 | `test_camera` | `test/camera/main.cpp` | [test/TEST.md](../test/TEST.md) | `/var/log/test_camera.log` |
+| UI | `rongsu_ui` | `app/ui/main.cpp` | [ui/UI.md](../app/ui/UI.md) | `/var/log/rongsu_ui{1,2,3}.log` |
+| Glavo | `rongsu_glavo` | `app/glavo/main.cpp` | [glavo/GLAVO.md](../app/glavo/GLAVO.md) | `/var/log/rongsu_glavo{1,2,3}.log` |
+| 相机 | `rongsu_camera` | `app/camera/main.cpp` | [camera/CAMERA.md](../app/camera/CAMERA.md) | `/var/log/rongsu_camera{1,2,3}.log` |
 
-启动：`scripts/rongsu.sh start`（Glavo → 可选 `test_camera` → UI）。  
-编译：`./build.sh`（Release + 工具链，产物在 `output/`；`clean` / `reconfigure` 见脚本头注释）。  
-**开发默认**：`rongsu.sh` 不启 `rongsu_camera`，由 `test_camera` 充当 `APP_CAMERA`（同 socket `/tmp/upc_camera.sock`）。  
-**板端生产**：单独启动 `rongsu_camera`；与 `test_camera` **互斥**，二者只能运行其一。
+启动：`scripts/rongsu.sh start`（Glavo → `rongsu_camera` → UI）。  
+编译：`./build.sh`（Release + 工具链，产物在 `output/`；`clean` / `reconfigure` 见脚本头注释）。
 
 ## 顶层目录
 
 | 目录 | 文档 | 职责 |
 |------|------|------|
 | `app/` | — | 应用层进程与业务库（见下表）；构建入口 `app/CMakeLists.txt` |
-| `test/` | [TEST.md](../test/TEST.md) | 独立测试进程（camera 等） |
 | `common/` | [COMMON.md](../common/COMMON.md) | 契约、middleware、ipc、debug、process |
 | `3rdparty/` | — | LVGL 等第三方依赖 |
 
@@ -96,13 +92,13 @@ UI → IPC → GlavoService → ParserManager → RingBuffer
                     PrintVideoNotify → IPC(UI Hub FWD) → Camera → MP4
 ```
 
-预览像素：后端（`rongsu_camera` / `test_camera`）→ 主 IPC `SCM_RIGHTS` 传 dma_buf fd + SHM `/upc_camera_preview` 元数据环 → UI `CameraPreviewPlayer`（`MsgPort::take_peer_dma_fds` + RGA `importbuffer_fd` 或 SW 转 BGRX；与控制 IPC 分离）。
+预览像素：`rongsu_camera` → 主 IPC `SCM_RIGHTS` 传 dma_buf fd + SHM `/upc_camera_preview` 元数据环 → UI `CameraPreviewPlayer`（`MsgPort::take_peer_dma_fds` + RGA `importbuffer_fd` 或 SW 转 BGRX；与控制 IPC 分离）。
 
 ## 跨模块红线
 
 - UI **禁止**链接 `app/glavo/lib`、`app/parser/` 业务库
 - Glavo **禁止**链接 `lvgl`
-- test **禁止**链接 `app/ui`、`app/glavo` 业务库
+- Camera **禁止**链接 `app/ui`、`app/glavo`、lvgl
 - 跨进程回复 UI：**必须** `publish_async()`，目标 `ModuleId::UI`
 - 消息契约：**只改** [common/README.md](../common/README.md) + `msg_types.hpp`（四步流程）
 - MCU 协议实现：`app/protocol/`（`upc::protocol`）+ `mcu_link.*`；权威表见 `doc/*.xlsx`
@@ -112,7 +108,7 @@ UI → IPC → GlavoService → ParserManager → RingBuffer
 | 类型 | 路径 |
 |------|------|
 | 架构索引 | `doc/ARCHITECTURE.md`（本文件） |
-| 模块说明 | `app/{ui,glavo,camera,parser,protocol}/*.md`、`test/*.md`、`common/{ipc,middleware}/*.md` |
+| 模块说明 | `app/{ui,glavo,camera,parser,protocol}/*.md`、`common/{ipc,middleware}/*.md` |
 | Cursor Rules | `.cursor/rules/*.mdc` |
 | 并发检查 MCP | `.cursor/mcp/cpp-concurrency-check.py` |
 | 日志 | [doc/LOG_GUIDE.md](LOG_GUIDE.md) |

@@ -3,11 +3,11 @@
 
 #include "process_ctl.hpp"
 
-/** 每进程独立 PID 与日志文件（守护进程 start 时 stderr/stdout 重定向到 log_file） */
+/** 每进程独立 PID 与三文件循环日志（守护进程 start 时 stderr/stdout 重定向到 log_baseN.log） */
 inline ProcessConfig process_config_ui() {
     return ProcessConfig{
         "/var/run/rongsu_ui.pid",
-        "/var/log/rongsu_ui.log",
+        "/var/log/rongsu_ui",
         "rongsu_ui",
     };
 }
@@ -15,23 +15,15 @@ inline ProcessConfig process_config_ui() {
 inline ProcessConfig process_config_glavo() {
     return ProcessConfig{
         "/var/run/rongsu_glavo.pid",
-        "/var/log/rongsu_glavo.log",
+        "/var/log/rongsu_glavo",
         "rongsu_glavo",
-    };
-}
-
-inline ProcessConfig process_config_test_camera() {
-    return ProcessConfig{
-        "/var/run/test_camera.pid",
-        "/var/log/test_camera.log",
-        "test_camera",
     };
 }
 
 inline ProcessConfig process_config_camera() {
     return ProcessConfig{
         "/var/run/rongsu_camera.pid",
-        "/var/log/rongsu_camera.log",
+        "/var/log/rongsu_camera",
         "rongsu_camera",
     };
 }

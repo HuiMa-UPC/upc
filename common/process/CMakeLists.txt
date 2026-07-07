@@ -1,4 +1,4 @@
-add_library(upc_process STATIC process_ctl.cpp)
+add_library(upc_process STATIC process_ctl.cpp log_rotating.cpp)
 add_library(upc::process ALIAS upc_process)
 
 target_include_directories(upc_process

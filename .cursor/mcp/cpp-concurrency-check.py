@@ -34,7 +34,7 @@ DEFAULT_HOTSPOTS = [
     "app/parser/lib/slice_ring_buffer.hpp",
     "app/parser/gcode/gcode_worker.cpp",
     "app/ui/lib/core/src/camera_preview.cpp",
-    "test/camera/test_camera_service.cpp",
+    "app/camera/lib/camera_service.cpp",
 ]
 
 VALID_SHM_TRANSITIONS = {

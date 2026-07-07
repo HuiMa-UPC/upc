@@ -27,5 +27,4 @@ option(UPC_DEBUG "Enable unified debug logging (middleware+services)" ON)
 add_subdirectory(common)
 add_subdirectory(3rdparty/lv_port_linux-release-v9.5)
 add_subdirectory(app)
-add_subdirectory(test)
 

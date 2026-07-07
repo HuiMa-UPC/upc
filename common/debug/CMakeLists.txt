@@ -34,6 +34,11 @@ else()
     message(STATUS "upc_debug: logging DISABLED")
 endif()
 
+target_link_libraries(${UPC_DEBUG_TARGET}
+    PUBLIC
+        upc::process
+)
+
 target_compile_definitions(${UPC_DEBUG_TARGET} PUBLIC UPC_LOG_ENABLED=${UPC_LOG_ENABLED})
 
 set(UPC_DEBUG_TARGET ${UPC_DEBUG_TARGET} PARENT_SCOPE)

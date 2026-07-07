@@ -16,7 +16,7 @@
 | `ipc_dma_frame_ring.*` | 预览 dma fd 元数据环 |
 | `dma_heap_buffer.*` | dma-heap 单个缓冲区分配 |
 
-`dma_heap_buffer.*` 同时被 UI `RgaDmaBuf`、camera `CameraDmaFrameSource` 与 `test_camera_dma_source` 复用，避免各自维护 dma-heap 候选列表。
+`dma_heap_buffer.*` 同时被 UI `RgaDmaBuf` 与 camera `CameraDmaFrameSource` 复用，避免各自维护 dma-heap 候选列表。
 
 **契约勿随意改**：`msg_types.hpp`、`common/README.md`
 
@@ -25,7 +25,6 @@
 ```
 rongsu_glavo ──listen──► /tmp/upc_glavo.sock ◄──┐
 rongsu_camera ──listen──► /tmp/upc_camera.sock ◄──┼── rongsu_ui (Hub)
-test_camera  ──listen──► /tmp/upc_camera.sock ◄──┘
 ```
 
 - 后端之间**无** socket；UI 多连接。
@@ -36,7 +35,7 @@ test_camera  ──listen──► /tmp/upc_camera.sock ◄──┘
 | API | 用途 |
 |-----|------|
 | `set_mode_ipc_hub` + `add_ipc_peer` | UI Hub |
-| `set_mode_ipc_server` | Glavo / Camera / test |
+| `set_mode_ipc_server` | Glavo / Camera |
 | `subscribe` / `publish_async` / `process` | 共用 |
 | `take_peer_dma_fds(ModuleId)` | UI Hub 从指定 peer 取 SCM_RIGHTS 附带的 dma fd（预览开流） |
 | `publish` | 同步投递（InProcess 或 IPC `publish_sync`；Glavo 工作线程慎用） |
@@ -114,7 +113,7 @@ Glavo publish_async(target=APP_CAMERA)
 | 进程 | 路径 |
 |------|------|
 | Glavo | `/tmp/upc_glavo.sock`（`UPC_IPC_SOCKET` 可覆盖） |
-| rongsu_camera / test_camera | `/tmp/upc_camera.sock` |
+| rongsu_camera | `/tmp/upc_camera.sock` |
 
 `ipc_config.hpp`：`UPC_IPC_PEER_RECONNECT_INTERVAL_MS`（Hub 重连）、`UPC_IPC_PEER_STARTUP_WAIT_MS`（`rongsu.sh` 等待 listen）。
 
@@ -128,8 +127,8 @@ Glavo publish_async(target=APP_CAMERA)
 6. UI 业务 — 独立 `XxxMsgProxy`
 
 大流量：控制走 MsgPort；像素走主 IPC SCM_RIGHTS 传 dma fd + `ipc_dma_frame_ring` 元数据环（camera 预览：NV12，UI 侧 RGA/SW 转 BGRX）。
-详见 `app/camera/lib/camera_dma_frame_source.*`、`test/camera/test_camera_dma_source.*` 与 `app/ui/lib/core/camera_preview.*`。
+详见 `app/camera/lib/camera_dma_frame_source.*` 与 `app/ui/lib/core/camera_preview.*`。
 
 ## 相关文档
 
-- [app/ui/UI.md](../../app/ui/UI.md) · [app/glavo/GLAVO.md](../../app/glavo/GLAVO.md) · [app/camera/CAMERA.md](../../app/camera/CAMERA.md) · [test/TEST.md](../../test/TEST.md)
+- [app/ui/UI.md](../../app/ui/UI.md) · [app/glavo/GLAVO.md](../../app/glavo/GLAVO.md) · [app/camera/CAMERA.md](../../app/camera/CAMERA.md)

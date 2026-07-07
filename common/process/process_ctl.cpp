@@ -1,8 +1,8 @@
 #include "process_ctl.hpp"
+#include "log_rotating.hpp"
 
 #include <cstdlib>
 #include <unistd.h>
-#include <fcntl.h>
 #include <sys/stat.h>
 #include <signal.h>
 
@@ -56,7 +56,7 @@ void process_remove_pid(const char* pid_file) {
     unlink(pid_file);
 }
 
-int process_daemonize(const char* log_file) {
+int process_daemonize(const char* log_base) {
     pid_t pid = fork();
     if (pid < 0) {
         return -1;
@@ -77,12 +77,7 @@ int process_daemonize(const char* log_file) {
         exit(0);
     }
 
-    const int fd = open(log_file, O_WRONLY | O_CREAT | O_APPEND, 0644);
-    if (fd >= 0) {
-        dup2(fd, STDOUT_FILENO);
-        dup2(fd, STDERR_FILENO);
-        close(fd);
-    }
+    log_rotating_init(log_base);
 
     chdir("/");
     umask(0);

@@ -20,7 +20,7 @@ namespace middleware {
 enum class ModuleId : uint32_t {
     UI         = 0x01,
     APP_GLAVO  = 0x02,  /**< 振镜/串口后端 rongsu_glavo */
-    APP_CAMERA = 0x03,  /**< 相机 / test_camera 伪相机后端 */
+    APP_CAMERA = 0x03,  /**< 相机后端 rongsu_camera */
 };
 
 /**
@@ -373,7 +373,7 @@ struct PrintProgressPayload {
     float    oxygen_percent;
 };
 
-/** UI_Camera_Stream_Start_Req：可选 basename；空串则用后端默认 demo_1024x600.nv12 */
+/** UI_Camera_Stream_Start_Req：可选 `video_name`（ABI 保留；`rongsu_camera` 忽略，走 ViCapture 设备配置） */
 struct CameraStreamStartReqPayload {
     char video_name[64];
 };

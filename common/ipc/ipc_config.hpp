@@ -16,7 +16,7 @@
 #define UPC_IPC_PEER_STARTUP_WAIT_MS 10000
 #endif
 
-/** test_camera / 正式相机 IPC listen socket（UI hub add_ipc_peer） */
+/** rongsu_camera IPC listen socket（UI hub add_ipc_peer） */
 #ifndef UPC_CAMERA_IPC_SOCKET_DEFAULT
 #define UPC_CAMERA_IPC_SOCKET_DEFAULT "/tmp/upc_camera.sock"
 #endif
