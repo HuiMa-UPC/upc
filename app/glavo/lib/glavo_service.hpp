@@ -46,6 +46,8 @@ private:
     void handle_parser_exit(const middleware::Message& msg);
     void handle_print_start(const middleware::Message& msg);
     void handle_print_terminate(const middleware::Message& msg);
+    void handle_print_pause(const middleware::Message& msg);
+    void handle_print_resume(const middleware::Message& msg);
     void handle_supply_status_req(const middleware::Message& msg);
     void handle_pm25_request(const middleware::Message& msg);
     void handle_close_door_request(const middleware::Message& msg);
@@ -90,6 +92,7 @@ private:
     void on_mcu_link_event(McuLinkEvent ev);
     void on_motion_batch_sent();
     void publish_terminate_done();
+    void publish_print_pause_done(bool paused);
     void reset_print_progress_state();
     void send_print_progress(bool force_complete);
 

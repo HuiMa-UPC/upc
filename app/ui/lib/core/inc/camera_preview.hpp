@@ -36,6 +36,7 @@ public:
 
     [[nodiscard]] bool active() const noexcept { return active_; }
     [[nodiscard]] uint32_t stream_width() const noexcept { return width_; }
+    [[nodiscard]] uint32_t stream_height() const noexcept { return height_; }
 
 private:
     static constexpr int kFrameSlots = 3;

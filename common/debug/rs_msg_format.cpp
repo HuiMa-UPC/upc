@@ -92,6 +92,9 @@ const char* upc_msg_type_name(MsgType type) {
         case MsgType::APP_Print_Progress_Ntf: return "APP_Print_Progress_Ntf";
         case MsgType::UI_Print_Terminate_Req: return "UI_Print_Terminate_Req";
         case MsgType::APP_Print_Terminate_Done: return "APP_Print_Terminate_Done";
+        case MsgType::UI_Print_Pause_Req: return "UI_Print_Pause_Req";
+        case MsgType::UI_Print_Resume_Req: return "UI_Print_Resume_Req";
+        case MsgType::APP_Print_Pause_Rsp: return "APP_Print_Pause_Rsp";
         case MsgType::UI_Supply_Status_Req: return "UI_Supply_Status_Req";
         case MsgType::APP_Supply_Status_Rsp: return "APP_Supply_Status_Rsp";
         case MsgType::UI_Camera_Stream_Start_Req: return "UI_Camera_Stream_Start_Req";

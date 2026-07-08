@@ -5,8 +5,8 @@
 #include "ui_modal_dialog.hpp"
 #include "ui_user_widgets.hpp"
 #include "ui_slide_unlock.hpp"
-#include "ui_board_anim.hpp"
 #include "ui_arc_spinner.hpp"
+#include "print_flow_img.h"
 
 #include "page_user_home.hpp"
 #include "page_manager.hpp"
@@ -40,7 +40,6 @@ lv_obj_t *g_overlay = nullptr;
 control_state_t g_state = CONTROL_STATE_IDLE;
 ui_modal_dialog_t *g_current_dlg = nullptr;
 control_file_t g_active_file = {};
-lv_timer_t *g_purify_ui_tick = nullptr;
 
 /* ---- 选择文件屏（设计稿 1.1.5）：底板 + 本机/USB 源 + 右侧详情面板 ---- */
 lv_obj_t *g_file_panel   = nullptr;   /**< 选择文件页根（PageManager 托管，常驻不销毁） */
@@ -109,16 +108,15 @@ void request_fs_dir_open(FileTab tab)
 }
 
 void enter_state(control_state_t s);
-void start_purify_ui_tick(void);
-void stop_purify_ui_tick(void);
 void rebuild_file_grid(void);
 void refresh_supply_bars(void);
 void highlight_file_rows(void);
 void update_detail_panel(const control_file_t *file);
 void close_confirm_dlg(void);
 void close_prepare_dlg(void);
-void abort_print_flow(void);
 void show_prepare_dlg(void);
+void goto_file_selection(void);
+lv_obj_t *make_round_icon_btn(lv_obj_t *parent, const char *symbol, lv_event_cb_t cb);
 
 void invoke_done(DoneCb &cb, void *&user)
 {
@@ -263,7 +261,8 @@ void wire_msg_proxy()
             enter_state(CONTROL_STATE_IDLE);
             return;
         }
-        enter_state(CONTROL_STATE_D1_INSERT_PROMPT);
+        /* 打印版/舱门预确认已在文件选择之前完成，预处理成功即开始打印 */
+        enter_state(CONTROL_STATE_PRINTING);
     });
 
     proxy.register_print_progress([](const middleware::PrintProgressPayload &p) {
@@ -418,217 +417,471 @@ void close_current_dialog(void)
 }
 
 /* ============================================================================
- *  D2：PM2.5 检测 / 净化弹窗 UI
+ *  打印前预确认弹窗（Figma 1.1.x）：
+ *    - 宽入口弹窗（g_plate_*）：是否已放入打印版 → 已放入 / 未放入 子视图
+ *    - 窄舱门弹窗（g_door_*） ：Opening → DoorOpened（监测）→ DoorClosed（用户确认）
+ *  公共小部件：Mask required 徽标、缩放插画。
  * ============================================================================ */
 
-enum class DoorStepVariant { Check, Purify };
+/* ---- 宽入口弹窗：持久句柄（header 常驻，仅切换 content 子视图） ---- */
+lv_obj_t *g_plate_content  = nullptr;   /**< 子视图内容容器（choose/inserted/notinserted 重建） */
+lv_obj_t *g_plate_back_btn = nullptr;   /**< 返回圆钮（choose 视图隐藏） */
 
-struct door_step_state_t {
-    lv_obj_t         *body_lbl;
-    lv_obj_t         *visual_container;
-    ui_arc_spinner_t *spinner;
-    lv_obj_t         *bar;
-    DoorStepVariant   variant;
-};
+/* ---- 窄舱门弹窗：持久句柄 ---- */
+lv_obj_t         *g_door_body_parent = nullptr;  /**< 弹窗 body 容器（插画挂这里） */
+lv_obj_t         *g_door_img_box = nullptr;  /**< 插画缩放盒（切 variant 时重建） */
+lv_obj_t         *g_door_title   = nullptr;
+lv_obj_t         *g_door_body    = nullptr;
+lv_obj_t         *g_door_action  = nullptr;  /**< spinner / label / 确认按钮容器（切 variant 时重建） */
+ui_arc_spinner_t *g_door_spinner = nullptr;
 
-void door_step_teardown_visuals(door_step_state_t *st)
+/** 红色「Mask required」徽标（Figma：红字 + 红色半透明底胶囊）。 */
+lv_obj_t *make_mask_badge(lv_obj_t *parent)
 {
-    if(!st) {
+    lv_obj_t *badge = lv_obj_create(parent);
+    lv_obj_remove_style_all(badge);
+    lv_obj_set_size(badge, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_set_style_bg_color(badge, user_color_status_err, 0);
+    lv_obj_set_style_bg_opa(badge, LV_OPA_20, 0);
+    lv_obj_set_style_radius(badge, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_border_width(badge, 1, 0);
+    lv_obj_set_style_border_color(badge, user_color_status_err, 0);
+    lv_obj_set_style_border_opa(badge, LV_OPA_40, 0);
+    lv_obj_set_style_pad_hor(badge, USER_PAD, 0);
+    lv_obj_set_style_pad_ver(badge, USER_PAD_SM / 2, 0);
+    lv_obj_clear_flag(badge, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *lbl = lv_label_create(badge);
+    lv_label_set_text(lbl, LV_SYMBOL_WARNING "  Mask required");
+    lv_obj_set_style_text_color(lbl, user_color_status_err, 0);
+    lv_obj_set_style_text_font(lbl, user_font_caption(), 0);
+    lv_obj_center(lbl);
+    return badge;
+}
+
+/** 缩放插画：把 master 位图（dsc）等比缩放到显示宽 target_w，装进等大的盒子。 */
+lv_obj_t *make_illustration(lv_obj_t *parent, const lv_image_dsc_t *dsc, int32_t target_w)
+{
+    const int32_t nat_w = (int32_t)dsc->header.w;
+    const int32_t nat_h = (int32_t)dsc->header.h;
+    const int32_t scale = nat_w > 0 ? (256 * target_w) / nat_w : 256;
+    const int32_t w = nat_w * scale / 256;
+    const int32_t h = nat_h * scale / 256;
+
+    lv_obj_t *box = lv_obj_create(parent);
+    lv_obj_remove_style_all(box);
+    lv_obj_set_size(box, w, h);
+    lv_obj_set_style_bg_opa(box, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_clip_corner(box, false, 0);
+    lv_obj_clear_flag(box, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *im = lv_image_create(box);
+    lv_image_set_src(im, dsc);
+    lv_image_set_pivot(im, 0, 0);
+    lv_image_set_scale(im, scale);
+    lv_obj_set_pos(im, 0, 0);
+    return box;
+}
+
+/* -------------------------- 宽入口弹窗子视图 -------------------------- */
+
+void plate_show_choose(void);          /* choose：两卡片 */
+void plate_show_inserted(void);        /* 已放入：选择打印任务 */
+void plate_show_notinserted(void);     /* 未放入：滑动开门 */
+
+void on_plate_back(lv_event_t * /*e*/)
+{
+    if(g_state == CONTROL_STATE_PLATE_PROMPT) {
+        plate_show_choose();
+    }
+}
+
+/* 右上角 "X"：取消预确认，回到首页（enter_state 统一关弹窗/隐藏遮罩） */
+void on_plate_close(lv_event_t * /*e*/)
+{
+    if(g_state == CONTROL_STATE_PLATE_PROMPT) {
+        enter_state(CONTROL_STATE_IDLE);
+    }
+}
+
+void on_plate_pick_inserted(lv_event_t * /*e*/)
+{
+    if(g_state == CONTROL_STATE_PLATE_PROMPT) {
+        plate_show_inserted();
+    }
+}
+
+void on_plate_pick_notinserted(lv_event_t * /*e*/)
+{
+    if(g_state == CONTROL_STATE_PLATE_PROMPT) {
+        plate_show_notinserted();
+    }
+}
+
+/* 已放入 → 选择打印任务 */
+void on_plate_select_task(lv_event_t * /*e*/)
+{
+    if(g_state == CONTROL_STATE_PLATE_PROMPT) {
+        goto_file_selection();
+    }
+}
+
+/* 未放入 → 滑动开门解锁 */
+void on_plate_swipe_open(void * /*u*/)
+{
+    if(g_state == CONTROL_STATE_PLATE_PROMPT) {
+        enter_state(CONTROL_STATE_DOOR_OPENING);
+    }
+}
+
+/* 单张大卡片（已放入/未放入）：左插画 + 右文字/操作列 */
+lv_obj_t *plate_make_single_card(const lv_image_dsc_t *img, int32_t img_w)
+{
+    lv_obj_t *card = lv_obj_create(g_plate_content);
+    lv_obj_remove_style_all(card);
+    lv_obj_set_width(card, LV_PCT(100));
+    lv_obj_set_height(card, LV_SIZE_CONTENT);
+    lv_obj_set_style_bg_color(card, lv_color_black(), 0);
+    lv_obj_set_style_bg_opa(card, LV_OPA_20, 0);
+    lv_obj_set_style_radius(card, USER_DLG_RADIUS, 0);
+    lv_obj_set_style_border_width(card, 1, 0);
+    lv_obj_set_style_border_color(card, user_color_divider, 0);
+    lv_obj_set_style_pad_all(card, USER_DLG_PAD, 0);
+    lv_obj_set_style_pad_column(card, USER_PAD_LG, 0);
+    lv_obj_set_flex_flow(card, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(card, LV_FLEX_ALIGN_CENTER,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
+
+    make_illustration(card, img, img_w);
+    return card;
+}
+
+/* choose 子视图：两张可点卡片（我已放入 / 还未放入） */
+lv_obj_t *plate_make_choice_card(const lv_image_dsc_t *img, int32_t img_w,
+                                 const char *label, lv_event_cb_t cb)
+{
+    lv_obj_t *card = lv_button_create(g_plate_content);
+    lv_obj_remove_style_all(card);
+    lv_obj_set_height(card, LV_SIZE_CONTENT);
+    lv_obj_set_flex_grow(card, 1);
+    lv_obj_set_style_bg_color(card, lv_color_black(), 0);
+    lv_obj_set_style_bg_opa(card, LV_OPA_20, 0);
+    lv_obj_set_style_bg_opa(card, LV_OPA_40, LV_STATE_PRESSED);
+    lv_obj_set_style_radius(card, USER_DLG_RADIUS, 0);
+    lv_obj_set_style_border_width(card, 1, 0);
+    lv_obj_set_style_border_color(card, user_color_divider, 0);
+    lv_obj_set_style_border_color(card, user_color_accent, LV_STATE_PRESSED);
+    lv_obj_set_style_pad_all(card, USER_DLG_PAD, 0);
+    lv_obj_set_style_pad_row(card, USER_PAD_LG, 0);
+    lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(card, LV_FLEX_ALIGN_CENTER,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_event_cb(card, cb, LV_EVENT_CLICKED, nullptr);
+
+    make_illustration(card, img, img_w);
+
+    lv_obj_t *lbl = lv_label_create(card);
+    lv_label_set_text(lbl, label);
+    lv_obj_set_style_text_color(lbl, user_color_text, 0);
+    lv_obj_set_style_text_font(lbl, user_font_text(), 0);
+    return card;
+}
+
+void plate_show_choose(void)
+{
+    if(!g_plate_content) {
         return;
     }
-    if(st->spinner) {
-        ui_arc_spinner_destroy(st->spinner);
-        st->spinner = nullptr;
+    if(g_plate_back_btn) {
+        lv_obj_add_flag(g_plate_back_btn, LV_OBJ_FLAG_HIDDEN);
     }
-    if(st->bar) {
-        lv_obj_delete(st->bar);
-        st->bar = nullptr;
-    }
+    lv_obj_clean(g_plate_content);
+    lv_obj_set_flex_flow(g_plate_content, LV_FLEX_FLOW_ROW);
+    lv_obj_set_style_pad_column(g_plate_content, USER_DLG_PAD, 0);
+    lv_obj_set_style_pad_row(g_plate_content, 0, 0);
+
+    const int32_t img_w = USER_HOME_DEVICE_W * 85 / 100;
+    plate_make_choice_card(&img_plate_single, img_w, "Plate inserted",
+                           on_plate_pick_inserted);
+    plate_make_choice_card(&img_plate_double, img_w, "Not inserted yet",
+                           on_plate_pick_notinserted);
 }
 
-void door_step_build_check_visual(door_step_state_t *st)
+/* 右文字/操作列（已放入 / 未放入 共用骨架） */
+lv_obj_t *plate_make_text_col(lv_obj_t *card)
 {
-    door_step_teardown_visuals(st);
-    st->spinner = ui_arc_spinner_create(st->visual_container, USER_SPINNER_SZ);
-    if(st->spinner) {
-        lv_obj_center(st->spinner->root);
-    }
+    lv_obj_t *col = lv_obj_create(card);
+    lv_obj_remove_style_all(col);
+    lv_obj_set_flex_grow(col, 1);
+    lv_obj_set_height(col, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(col, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(col, LV_FLEX_ALIGN_CENTER,
+                          LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
+    lv_obj_set_style_pad_row(col, USER_PAD, 0);
+    lv_obj_set_style_bg_opa(col, LV_OPA_TRANSP, 0);
+    lv_obj_clear_flag(col, LV_OBJ_FLAG_SCROLLABLE);
+    return col;
 }
 
-void door_step_build_purify_visual(door_step_state_t *st)
+void plate_show_inserted(void)
 {
-    door_step_teardown_visuals(st);
-    lv_obj_t *bar = ui_user_make_progress_bar(st->visual_container,
-                                              USER_PROGRESS_W, USER_PROGRESS_H);
-    lv_obj_center(bar);
-    st->bar = bar;
-}
-
-void door_step_apply_variant(ui_modal_dialog_t *dlg,
-                             door_step_state_t *st,
-                             DoorStepVariant v)
-{
-    st->variant = v;
-    if(v == DoorStepVariant::Check) {
-        ui_modal_dialog_set_title(dlg, "Preparing to Open");
-        if(st->body_lbl) {
-            lv_label_set_text(st->body_lbl,
-                              "Checking PM2.5, please do not operate the device");
-        }
-        door_step_build_check_visual(st);
-    } else {
-        ui_modal_dialog_set_title(dlg, "PM2.5 Level Too High");
-        if(st->body_lbl) {
-            lv_label_set_text(st->body_lbl, "Purifying air automatically");
-        }
-        door_step_build_purify_visual(st);
-    }
-}
-
-void door_step_state_free(lv_event_t *e)
-{
-    auto *st = static_cast<door_step_state_t *>(lv_event_get_user_data(e));
-    if(st) {
-        door_step_teardown_visuals(st);
-        delete st;
-    }
-}
-
-ui_modal_dialog_t *show_door_step(lv_obj_t *parent, DoorStepVariant variant)
-{
-    const char *title = (variant == DoorStepVariant::Check)
-                        ? "Preparing to Open" : "PM2.5 Level Too High";
-    const ui_modal_dialog_cfg_t cfg = ui_modal_dialog_cfg_user(title, USER_DLG_W, false);
-    ui_modal_dialog_t *dlg = ui_modal_dialog_open(parent, &cfg);
-    if(!dlg) {
-        return nullptr;
-    }
-
-    auto *st = new door_step_state_t{};
-    st->body_lbl = ui_user_make_body_label(dlg->body,
-        (variant == DoorStepVariant::Check)
-        ? "Checking PM2.5, please do not operate the device"
-        : "Purifying air automatically");
-
-    lv_obj_t *vc = lv_obj_create(dlg->body);
-    lv_obj_remove_style_all(vc);
-    lv_obj_set_size(vc, USER_DLG_W - USER_DLG_PAD * 2, USER_SPINNER_SZ + USER_PAD);
-    lv_obj_set_style_bg_opa(vc, LV_OPA_TRANSP, 0);
-    lv_obj_clear_flag(vc, LV_OBJ_FLAG_SCROLLABLE);
-    st->visual_container = vc;
-
-    door_step_apply_variant(dlg, st,
-        variant == DoorStepVariant::Check ? DoorStepVariant::Check
-                                          : DoorStepVariant::Purify);
-
-    lv_obj_set_user_data(dlg->root, st);
-    lv_obj_add_event_cb(dlg->root, door_step_state_free, LV_EVENT_DELETE, st);
-    return dlg;
-}
-
-void door_step_set_progress(ui_modal_dialog_t *dlg, int percent)
-{
-    if(!dlg || !dlg->root) {
+    if(!g_plate_content) {
         return;
     }
-    auto *st = static_cast<door_step_state_t *>(lv_obj_get_user_data(dlg->root));
-    if(!st || !st->bar) {
+    if(g_plate_back_btn) {
+        lv_obj_clear_flag(g_plate_back_btn, LV_OBJ_FLAG_HIDDEN);
+    }
+    lv_obj_clean(g_plate_content);
+    lv_obj_set_flex_flow(g_plate_content, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_column(g_plate_content, 0, 0);
+
+    lv_obj_t *card = plate_make_single_card(&img_plate_single, USER_HOME_DEVICE_W);
+    lv_obj_t *col = plate_make_text_col(card);
+
+    lv_obj_t *t = lv_label_create(col);
+    lv_label_set_text(t, "Plate inserted");
+    lv_obj_set_style_text_color(t, user_color_text, 0);
+    lv_obj_set_style_text_font(t, user_font_value(), 0);
+
+    lv_obj_t *s = lv_label_create(col);
+    lv_label_set_text(s, "Tap the button below to choose a print file");
+    lv_label_set_long_mode(s, LV_LABEL_LONG_MODE_WRAP);
+    lv_obj_set_width(s, LV_PCT(100));
+    lv_obj_set_style_text_color(s, user_color_text_dim, 0);
+    lv_obj_set_style_text_font(s, user_font_caption(), 0);
+
+    lv_obj_t *btn = lv_button_create(col);
+    lv_obj_add_style(btn, user_style_btn_primary(), 0);
+    lv_obj_set_height(btn, USER_DLG_FOOTER_BTN_H);
+    lv_obj_set_style_margin_top(btn, USER_PAD, 0);
+    lv_obj_add_event_cb(btn, on_plate_select_task, LV_EVENT_CLICKED, nullptr);
+    lv_obj_t *bl = lv_label_create(btn);
+    lv_label_set_text(bl, "Select Print Task");
+    lv_obj_set_style_text_color(bl, user_color_text, 0);
+    lv_obj_set_style_text_font(bl, user_font_text(), 0);
+    lv_obj_center(bl);
+}
+
+void plate_show_notinserted(void)
+{
+    if(!g_plate_content) {
         return;
     }
-    if(percent < 0)   percent = 0;
-    if(percent > 100) percent = 100;
-    lv_bar_set_value(st->bar, percent, LV_ANIM_ON);
-}
-
-void door_step_switch_to_purify(ui_modal_dialog_t *dlg)
-{
-    if(!dlg || !dlg->root) {
-        return;
+    if(g_plate_back_btn) {
+        lv_obj_clear_flag(g_plate_back_btn, LV_OBJ_FLAG_HIDDEN);
     }
-    auto *st = static_cast<door_step_state_t *>(lv_obj_get_user_data(dlg->root));
-    if(!st) {
-        return;
-    }
-    door_step_apply_variant(dlg, st, DoorStepVariant::Purify);
-}
+    lv_obj_clean(g_plate_content);
+    lv_obj_set_flex_flow(g_plate_content, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_column(g_plate_content, 0, 0);
 
-/* ============================================================================
- *  D1 / D4 / 文件选择 / 文件确认 弹窗 UI
- * ============================================================================ */
+    lv_obj_t *card = plate_make_single_card(&img_plate_double, USER_HOME_DEVICE_W);
+    lv_obj_t *col = plate_make_text_col(card);
 
-void on_insert_unlocked(void * /*u*/)
-{
-    if(g_state == CONTROL_STATE_D1_INSERT_PROMPT) {
-        enter_state(CONTROL_STATE_D2_DOOR_OPENING);
-    }
-}
+    lv_obj_t *t = lv_label_create(col);
+    lv_label_set_text(t, "Not inserted yet");
+    lv_obj_set_style_text_color(t, user_color_text, 0);
+    lv_obj_set_style_text_font(t, user_font_value(), 0);
 
-void on_insert_shortcut(lv_event_t * /*e*/)
-{
-    if(g_state == CONTROL_STATE_D1_INSERT_PROMPT) {
-        enter_state(CONTROL_STATE_D4_DOOR_CLOSE_CHECK);
-    }
-}
+    lv_obj_t *s = lv_label_create(col);
+    lv_label_set_text(s, "Swipe below to open the door and insert the plate. "
+                         "Please wear a mask.");
+    lv_label_set_long_mode(s, LV_LABEL_LONG_MODE_WRAP);
+    lv_obj_set_width(s, LV_PCT(100));
+    lv_obj_set_style_text_color(s, user_color_text_dim, 0);
+    lv_obj_set_style_text_font(s, user_font_caption(), 0);
 
-/* 右上角 "X"：取消打印流程，回到空闲态（enter_state 会统一关弹窗/隐藏遮罩） */
-void on_insert_close(lv_event_t * /*e*/)
-{
-    if(g_state == CONTROL_STATE_D1_INSERT_PROMPT) {
-        abort_print_flow();
-    }
-}
-
-ui_modal_dialog_t *show_insert_prompt(lv_obj_t *parent)
-{
-    ui_modal_dialog_cfg_t cfg =
-        ui_modal_dialog_cfg_user("Is the build plate inserted?", USER_DLG_W, false);
-        cfg.with_close_btn = true;
-    ui_modal_dialog_t *dlg = ui_modal_dialog_open(parent, &cfg);
-    if(!dlg) {
-        return nullptr;
-    }
-
-     if(dlg->close_btn) {
-        lv_obj_add_event_cb(dlg->close_btn, on_insert_close, LV_EVENT_CLICKED, nullptr);
-    }
-
-    ui_user_make_body_label(dlg->body,
-                            "Insert the build plate, then close the door");
-
-    ui_board_anim_create(dlg->body,
-                         USER_DLG_W - USER_DLG_PAD * 2,
-                         USER_DLG_BODY_MIN_H);
+    make_mask_badge(col);
 
     ui_slide_unlock_cfg_t slide_cfg = {};
-    slide_cfg.hint_text = "SWIPE TO OPEN  " LV_SYMBOL_RIGHT LV_SYMBOL_RIGHT LV_SYMBOL_RIGHT;
-    slide_cfg.on_unlocked = on_insert_unlocked;
-    slide_cfg.user_data = dlg;
-    ui_slide_unlock_create(dlg->body, &slide_cfg);
-
-    ui_user_make_ghost_link_btn(dlg->body,
-                                "Plate inserted, start printing " LV_SYMBOL_RIGHT,
-                                on_insert_shortcut);
-    return dlg;
+    slide_cfg.hint_text     = "SWIPE TO OPEN  " LV_SYMBOL_RIGHT LV_SYMBOL_RIGHT LV_SYMBOL_RIGHT;
+    slide_cfg.on_unlocked   = on_plate_swipe_open;
+    slide_cfg.user_data     = nullptr;
+    slide_cfg.track_w       = USER_SLIDE_W;
+    slide_cfg.custom_accent = true;
+    slide_cfg.accent_color  = user_color_status_err;
+    ui_slide_unlock_t *slide = ui_slide_unlock_create(col, &slide_cfg);
+    lv_obj_t *sr = ui_slide_unlock_get_root(slide);
+    if(sr) {
+        lv_obj_set_style_margin_top(sr, USER_PAD, 0);
+    }
 }
 
-ui_modal_dialog_t *show_door_close_check(lv_obj_t *parent)
+/* 宽入口弹窗：backdrop + 宽卡片 + 常驻 header（返回/标题/副标题/关闭）+ content */
+ui_modal_dialog_t *show_plate_prompt(lv_obj_t *parent)
 {
-    const ui_modal_dialog_cfg_t cfg =
-        ui_modal_dialog_cfg_user("Checking Door", USER_DLG_W, false);
+    const int32_t disp_w = lv_display_get_horizontal_resolution(nullptr);
+    const int32_t wide_w = disp_w > 0 ? disp_w * 70 / 100 : USER_DLG_W * 2;
+
+    ui_modal_dialog_cfg_t cfg = ui_modal_dialog_cfg_user(nullptr, wide_w, false);
     ui_modal_dialog_t *dlg = ui_modal_dialog_open(parent, &cfg);
     if(!dlg) {
         return nullptr;
     }
 
-    ui_user_make_body_label(dlg->body,
-                            "Verifying the door is closed and locked");
+    /* header 行：返回钮（choose 隐藏）+ 标题/副标题列（flex_grow）+ 关闭钮 */
+    lv_obj_t *header = lv_obj_create(dlg->body);
+    lv_obj_remove_style_all(header);
+    lv_obj_set_width(header, LV_PCT(100));
+    lv_obj_set_height(header, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(header, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(header, LV_FLEX_ALIGN_START,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_column(header, USER_PAD, 0);
+    lv_obj_set_style_bg_opa(header, LV_OPA_TRANSP, 0);
+    lv_obj_clear_flag(header, LV_OBJ_FLAG_SCROLLABLE);
 
-    lv_obj_t *vc = ui_user_make_spinner_container(dlg->body, USER_SPINNER_SZ);
-    ui_arc_spinner_t *sp = ui_arc_spinner_create(vc, USER_SPINNER_SZ);
-    if(sp && sp->root) {
-        lv_obj_center(sp->root);
-    }
+    g_plate_back_btn = make_round_icon_btn(header, LV_SYMBOL_LEFT, on_plate_back);
+    lv_obj_add_flag(g_plate_back_btn, LV_OBJ_FLAG_HIDDEN);
+
+    lv_obj_t *tcol = lv_obj_create(header);
+    lv_obj_remove_style_all(tcol);
+    lv_obj_set_flex_grow(tcol, 1);
+    lv_obj_set_height(tcol, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(tcol, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_row(tcol, USER_PAD_SM / 2, 0);
+    lv_obj_set_style_bg_opa(tcol, LV_OPA_TRANSP, 0);
+    lv_obj_clear_flag(tcol, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *title = lv_label_create(tcol);
+    lv_label_set_text(title, "Is the build plate inserted?");
+    lv_obj_set_style_text_color(title, user_color_text, 0);
+    lv_obj_set_style_text_font(title, user_font_value(), 0);
+
+    lv_obj_t *sub = lv_label_create(tcol);
+    lv_label_set_text(sub, "Insert the build plate before printing, then close the door");
+    lv_obj_set_style_text_color(sub, user_color_text_dim, 0);
+    lv_obj_set_style_text_font(sub, user_font_caption(), 0);
+
+    lv_obj_t *close = make_round_icon_btn(header, LV_SYMBOL_CLOSE, on_plate_close);
+    (void)close;
+
+    /* content 容器：内容自适应高度，由子视图重建 */
+    g_plate_content = lv_obj_create(dlg->body);
+    lv_obj_remove_style_all(g_plate_content);
+    lv_obj_set_width(g_plate_content, LV_PCT(100));
+    lv_obj_set_height(g_plate_content, LV_SIZE_CONTENT);
+    lv_obj_set_style_bg_opa(g_plate_content, LV_OPA_TRANSP, 0);
+    lv_obj_clear_flag(g_plate_content, LV_OBJ_FLAG_SCROLLABLE);
+
+    plate_show_choose();
     return dlg;
+}
+
+/* -------------------------- 窄舱门弹窗 -------------------------- */
+
+enum class DoorVariant { Opening, DoorOpened, DoorClosed };
+
+void on_door_closed_confirm_btn(lv_event_t *e);
+void door_apply_variant(DoorVariant v);
+
+/* 舱门弹窗：backdrop + 卡片 + 插画 + Mask 徽标 + 标题 + 说明 + 操作区 */
+ui_modal_dialog_t *show_door_dialog(lv_obj_t *parent, DoorVariant variant)
+{
+    ui_modal_dialog_cfg_t cfg = ui_modal_dialog_cfg_user(nullptr, USER_DLG_W, false);
+    ui_modal_dialog_t *dlg = ui_modal_dialog_open(parent, &cfg);
+    if(!dlg) {
+        return nullptr;
+    }
+
+    g_door_img_box = nullptr;
+    g_door_spinner = nullptr;
+    g_door_body_parent = dlg->body;
+
+    make_mask_badge(dlg->body);
+
+    g_door_title = lv_label_create(dlg->body);
+    lv_obj_set_style_text_color(g_door_title, user_color_text, 0);
+    lv_obj_set_style_text_font(g_door_title, user_font_value(), 0);
+    lv_obj_set_style_text_align(g_door_title, LV_TEXT_ALIGN_CENTER, 0);
+
+    g_door_body = lv_label_create(dlg->body);
+    lv_label_set_long_mode(g_door_body, LV_LABEL_LONG_MODE_WRAP);
+    lv_obj_set_width(g_door_body, LV_PCT(100));
+    lv_obj_set_style_text_color(g_door_body, user_color_text_dim, 0);
+    lv_obj_set_style_text_font(g_door_body, user_font_caption(), 0);
+    lv_obj_set_style_text_align(g_door_body, LV_TEXT_ALIGN_CENTER, 0);
+
+    /* 操作区：spinner（Opening）/ 状态 label（DoorOpened）/ 确认按钮（DoorClosed） */
+    g_door_action = lv_obj_create(dlg->body);
+    lv_obj_remove_style_all(g_door_action);
+    lv_obj_set_width(g_door_action, LV_PCT(100));
+    lv_obj_set_height(g_door_action, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(g_door_action, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(g_door_action, LV_FLEX_ALIGN_CENTER,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_bg_opa(g_door_action, LV_OPA_TRANSP, 0);
+    lv_obj_clear_flag(g_door_action, LV_OBJ_FLAG_SCROLLABLE);
+
+    door_apply_variant(variant);
+    return dlg;
+}
+
+/* 切换舱门弹窗形态：更新插画 / 文案 / 操作区 */
+void door_apply_variant(DoorVariant v)
+{
+    if(!g_door_title || !g_door_body || !g_door_action || !g_door_body_parent) {
+        return;
+    }
+
+    /* 插画：置于 body 顶部（Mask 徽标之前）。先删旧再建新。 */
+    if(g_door_img_box) {
+        lv_obj_delete(g_door_img_box);
+        g_door_img_box = nullptr;
+    }
+    const lv_image_dsc_t *img = &img_device_unlock;
+    if(v == DoorVariant::DoorOpened) {
+        img = &img_plate_double;
+    } else if(v == DoorVariant::DoorClosed) {
+        img = &img_device_lock;
+    }
+    g_door_img_box = make_illustration(g_door_body_parent, img, USER_DLG_W * 82 / 100);
+    lv_obj_move_to_index(g_door_img_box, 0);   /* 插画在最上方 */
+
+    /* 操作区重建 */
+    if(g_door_spinner) {
+        ui_arc_spinner_destroy(g_door_spinner);
+        g_door_spinner = nullptr;
+    }
+    lv_obj_clean(g_door_action);
+
+    if(v == DoorVariant::Opening) {
+        lv_label_set_text(g_door_title, "Opening the Door");
+        lv_label_set_text(g_door_body, "Please wear a mask");
+        g_door_spinner = ui_arc_spinner_create(g_door_action, USER_SPINNER_SZ);
+        if(g_door_spinner && g_door_spinner->root) {
+            lv_obj_center(g_door_spinner->root);
+        }
+        return;
+    }
+
+    if(v == DoorVariant::DoorOpened) {
+        lv_label_set_text(g_door_title, "Door Opened");
+        lv_label_set_text(g_door_body, "Please wear a mask and insert the plate");
+
+        lv_obj_t *hint = lv_label_create(g_door_action);
+        lv_label_set_text(hint, "Door Not Closed");
+        lv_obj_set_style_text_color(hint, user_color_text_dim, 0);
+        lv_obj_set_style_text_font(hint, user_font_caption(), 0);
+        lv_obj_set_style_text_align(hint, LV_TEXT_ALIGN_CENTER, 0);
+        lv_obj_set_width(hint, LV_PCT(100));
+        return;
+    }
+
+    lv_label_set_text(g_door_title, "Confirm Door Closed");
+    lv_label_set_text(g_door_body, "Confirm to start selecting a print task");
+
+    lv_obj_t *btn = lv_button_create(g_door_action);
+    lv_obj_add_style(btn, user_style_btn_primary(), 0);
+    lv_obj_set_height(btn, USER_DLG_FOOTER_BTN_H);
+    lv_obj_set_width(btn, USER_DLG_FOOTER_BTN_W + USER_PAD_LG);
+    lv_obj_add_event_cb(btn, on_door_closed_confirm_btn, LV_EVENT_CLICKED, nullptr);
+    lv_obj_t *bl = lv_label_create(btn);
+    lv_label_set_text(bl, "Door Closed");
+    lv_obj_set_style_text_color(bl, user_color_text, 0);
+    lv_obj_set_style_text_font(bl, user_font_text(), 0);
+    lv_obj_center(bl);
 }
 
 /* 文件大小（字节）→ 人类可读字符串 */
@@ -861,18 +1114,6 @@ void show_prepare_dlg(void)
     ui_arc_spinner_t *sp = ui_arc_spinner_create(vc, USER_SPINNER_SZ);
     if(sp && sp->root) {
         lv_obj_center(sp->root);
-    }
-}
-
-void abort_print_flow(void)
-{
-    ui::UiMsgProxy::instance().send_parser_exit();
-    enter_state(CONTROL_STATE_IDLE);
-    g_home_section_view = "user_files";
-    if(g_files_page_active) {
-        /* 保持当前 Tab，不刷新列表 */
-    } else {
-        ui::PageManager::instance().switch_to("user_files");
     }
 }
 
@@ -1427,94 +1668,55 @@ lv_obj_t *show_file_select(lv_obj_t *parent)
  *  后端回调 → 状态推进
  * ============================================================================ */
 
-bool is_door_prep_state(void)
+/* 未放入分支：开门 → 门已开启等待页 → 关门监测 Rsp → 关门确认页 */
+void pf_on_close_door_done(void * /*u*/)
 {
-    return g_state == CONTROL_STATE_D2_DOOR_OPENING ||
-           g_state == CONTROL_STATE_D2_PURIFYING;
+    if(g_state != CONTROL_STATE_DOOR_CONFIRM) {
+        return;
+    }
+    door_apply_variant(DoorVariant::DoorClosed);
 }
 
-void pf_start_open_door_then_close_check(void)
+void on_door_closed_confirm_btn(lv_event_t * /*e*/)
+{
+    if(g_state != CONTROL_STATE_DOOR_CONFIRM) {
+        return;
+    }
+    goto_file_selection();
+}
+
+void pf_start_open_door(void)
 {
     backend_start_open_door([](void * /*u*/) {
-        if(is_door_prep_state()) {
-            enter_state(CONTROL_STATE_D4_DOOR_CLOSE_CHECK);
+        if(g_state != CONTROL_STATE_DOOR_OPENING) {
+            return;
         }
+        enter_state(CONTROL_STATE_DOOR_CONFIRM);
+        backend_start_close_door(pf_on_close_door_done, nullptr);
     }, nullptr);
 }
 
 void pf_on_pm25_check_done(void * /*u*/)
 {
-    if(g_state != CONTROL_STATE_D2_DOOR_OPENING) {
+    if(g_state != CONTROL_STATE_DOOR_OPENING) {
         return;
     }
     if(g_pm25_high) {
-        g_state = CONTROL_STATE_D2_PURIFYING;
-        if(g_current_dlg) {
-            door_step_switch_to_purify(g_current_dlg);
+        /* PM2.5 偏高：先自动净化，loading 文案切到净化提示，完成后再开门 */
+        if(g_door_body) {
+            lv_label_set_text(g_door_body, "PM2.5 high, purifying air");
         }
-        start_purify_ui_tick();
         backend_start_purify([](void *) {
-            if(g_state == CONTROL_STATE_D2_PURIFYING) {
-                stop_purify_ui_tick();
-                pf_start_open_door_then_close_check();
+            if(g_state == CONTROL_STATE_DOOR_OPENING) {
+                if(g_door_body) {
+                    lv_label_set_text(g_door_body, "Please wear a mask");
+                }
+                pf_start_open_door();
             }
         }, nullptr);
         return;
     }
-    pf_start_open_door_then_close_check();
-}
-
-void pf_on_door_close_check_done(void * /*u*/)
-{
-    if(g_state != CONTROL_STATE_D4_DOOR_CLOSE_CHECK) {
-        return;
-    }
-    /* 关门检测通过后，先弹「是否开始打印」二次确认，再真正开打 */
-    enter_state(CONTROL_STATE_CONFIRM_START);
-}
-
-/* 开始打印确认：Start → 真正开打 */
-void on_start_confirm(lv_event_t * /*e*/)
-{
-    if(g_state == CONTROL_STATE_CONFIRM_START) {
-        enter_state(CONTROL_STATE_PRINTING);   /* 内部 close_current_dialog 关确认弹窗 */
-    }
-}
-
-/* 开始打印确认：Cancel → 通知后端退出解析(终止/清 ringbuffer/退线程，后端待实现)，
- * 回到点击开始打印前的文件选择 Tab 页（PageManager 托管，状态保留） */
-void on_start_cancel(lv_event_t * /*e*/)
-{
-    abort_print_flow();
-}
-
-void pf_purify_tick(lv_timer_t *t)
-{
-    if(g_state != CONTROL_STATE_D2_PURIFYING || !g_current_dlg) {
-        lv_timer_delete(t);
-        return;
-    }
-    door_step_set_progress(g_current_dlg,
-                           g_purify_progress);
-    if(g_purify_progress >= 100) {
-        lv_timer_delete(t);
-    }
-}
-
-void start_purify_ui_tick(void)
-{
-    if(g_purify_ui_tick) {
-        lv_timer_delete(g_purify_ui_tick);
-    }
-    g_purify_ui_tick = lv_timer_create(pf_purify_tick, 80, nullptr);
-}
-
-void stop_purify_ui_tick(void)
-{
-    if(g_purify_ui_tick) {
-        lv_timer_delete(g_purify_ui_tick);
-        g_purify_ui_tick = nullptr;
-    }
+    pf_start_open_door();
 }
 
 void pf_on_print_progress(const control_progress_t *p, void * /*u*/)
@@ -1560,8 +1762,15 @@ void on_backend_action_fail(const char *message)
 
 void enter_state(control_state_t s)
 {
-    stop_purify_ui_tick();
     close_current_dialog();
+    g_plate_content    = nullptr;
+    g_plate_back_btn   = nullptr;
+    g_door_body_parent = nullptr;
+    g_door_img_box     = nullptr;
+    g_door_title       = nullptr;
+    g_door_body        = nullptr;
+    g_door_action      = nullptr;
+    g_door_spinner     = nullptr;
 
     g_state = s;
 
@@ -1572,44 +1781,25 @@ void enter_state(control_state_t s)
         overlay_hide();
         break;
 
-    case CONTROL_STATE_PREPARE_WAIT:
+    case CONTROL_STATE_PLATE_PROMPT:
         overlay_show();
-        show_prepare_dlg();
+        g_current_dlg = show_plate_prompt(g_overlay);
         break;
 
-    case CONTROL_STATE_D1_INSERT_PROMPT:
+    case CONTROL_STATE_DOOR_OPENING:
         overlay_show();
-        g_current_dlg = show_insert_prompt(g_overlay);
-        break;
-
-    case CONTROL_STATE_D2_DOOR_OPENING:
-        overlay_show();
-        g_current_dlg = show_door_step(g_overlay, DoorStepVariant::Check);
+        g_current_dlg = show_door_dialog(g_overlay, DoorVariant::Opening);
         backend_start_pm25(pf_on_pm25_check_done, nullptr);
         break;
 
-    case CONTROL_STATE_D2_PURIFYING:
+    case CONTROL_STATE_DOOR_CONFIRM:
         overlay_show();
-        if(!g_current_dlg) {
-            g_current_dlg = show_door_step(g_overlay, DoorStepVariant::Purify);
-        } else {
-            door_step_switch_to_purify(g_current_dlg);
-        }
-        start_purify_ui_tick();
+        g_current_dlg = show_door_dialog(g_overlay, DoorVariant::DoorOpened);
         break;
 
-    case CONTROL_STATE_D4_DOOR_CLOSE_CHECK:
+    case CONTROL_STATE_PREPARE_WAIT:
         overlay_show();
-        g_current_dlg = show_door_close_check(g_overlay);
-        backend_start_close_door(pf_on_door_close_check_done, nullptr);
-        break;
-
-    case CONTROL_STATE_CONFIRM_START:
-        overlay_show();
-        open_user_confirm_dialog(g_overlay, "Start Printing?",
-                                 "All checks passed. Begin the print job now?",
-                                 "Cancel", "Start", user_color_accent,
-                                 on_start_cancel, on_start_confirm);
+        show_prepare_dlg();
         break;
 
     case CONTROL_STATE_PRINTING:
@@ -1623,6 +1813,18 @@ void enter_state(control_state_t s)
         page_user_home_enter_printing_mode(&g_active_file);
         break;
     }
+}
+
+/* 预确认完成 → 进入文件选择页（PageManager 隐藏页 "user_files"，状态保留）。
+ * 关闭当前 overlay 弹窗并回到 IDLE，让文件页在空闲态下正常工作。 */
+void goto_file_selection(void)
+{
+    close_current_dialog();
+    backend_cancel_pending();
+    g_state = CONTROL_STATE_IDLE;
+    overlay_hide();
+    g_home_section_view = "user_files";
+    ui::PageManager::instance().switch_to("user_files");
 }
 
 } /* namespace */
@@ -1657,9 +1859,8 @@ void control_start(void)
     if(g_state != CONTROL_STATE_IDLE) {
         return;
     }
-    /* 设计稿入口：切到「选择文件」隐藏页（PageManager 托管，状态保留） */
-    g_home_section_view = "user_files";   /* 首页区视图切到选择文件 */
-    ui::PageManager::instance().switch_to("user_files");
+    /* Figma 入口：先弹「是否已放入打印版」两卡片预确认，再进入文件选择 */
+    enter_state(CONTROL_STATE_PLATE_PROMPT);
 }
 
 const char *control_home_section_target(void)

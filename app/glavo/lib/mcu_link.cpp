@@ -1113,6 +1113,7 @@ void McuLink::reset_motion_state(bool clear_start_pending)
         start_pending_.store(false);
     }
     is_sending_.store(false);
+    user_paused_.store(false);
     waiting_layer_.store(false);
     layer_drain_pending_.store(false);
     natural_complete_pending_.store(false);
@@ -1129,6 +1130,7 @@ void McuLink::reset_motion_state(bool clear_start_pending)
 
 void McuLink::begin_sending_internal()
 {
+    user_paused_.store(false);
     is_sending_.store(true);
     waiting_layer_.store(false);
     layer_drain_pending_.store(false);
@@ -1200,10 +1202,22 @@ void McuLink::try_complete_pending_start()
 
 void McuLink::request_terminate()
 {
+    user_paused_.store(false);
     terminate_pending_.store(true);
     is_sending_.store(false);
     start_pending_.store(false);
     PrintJobState::instance().set_sending(false);
+}
+
+void McuLink::set_user_dispatch_paused(bool paused)
+{
+    user_paused_.store(paused);
+    UPC_LOG_MCU_LINK(Info, "user dispatch paused=%d", paused ? 1 : 0);
+}
+
+bool McuLink::is_user_dispatch_paused() const noexcept
+{
+    return user_paused_.load();
 }
 
 /* ---------- 清理辅助：协议帧发送 ---------- */
@@ -1421,6 +1435,9 @@ void McuLink::link_try_layer_serial_dispatch()
 
 int McuLink::link_send_one_motion_batch()
 {
+    if(user_paused_.load()) {
+        return 0; // 用户暂停：不下发 TCP 运动包
+    }
     if(tcp_stage_count() == 0) {
         return 0; // 暂存队列为空
     }
@@ -1526,6 +1543,9 @@ void McuLink::link_drain_motion_queue()
 
 void McuLink::link_try_finish_sending()
 {
+    if(user_paused_.load()) {
+        return; // 暂停期间不判自然完成，恢复后再继续
+    }
     if(!is_sending_.load() || waiting_layer_.load()) {
         return; // 未发送中，或正在换层等待
     }

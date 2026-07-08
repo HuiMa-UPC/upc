@@ -788,7 +788,7 @@ void CameraPreviewPlayer::ui_timer_cb(lv_timer_t* timer)
 
     lv_image_set_src(self->image_, &self->img_dsc_[idx]);
     if(first_show) {
-        page_user_home_update_camera_preview_layout(self->width_);
+        page_user_home_update_camera_preview_layout(self->width_, self->height_);
     }
     lv_obj_clear_flag(self->image_, LV_OBJ_FLAG_HIDDEN);
     if(self->hint_) {

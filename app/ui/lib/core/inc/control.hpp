@@ -12,19 +12,20 @@ extern "C" {
  * @brief 打印全流程：状态机 + 步骤 overlay UI + UiMsgProxy 后端适配（见 control.cpp）
  */
 
-/* 流程顺序：
- *   选文件页 → Start Print → PREPARE → D1 基板 → D2 PM2.5/开门 → D4 关门
- *   → CONFIRM 二次确认 → PRINTING（预览 + Print Start）
+/* 流程顺序（对齐 Figma「打印前预确认」1.1.x 弹窗序列）：
+ *   My Files → PLATE_PROMPT（是否已放入打印版：两卡片入口）
+ *     ├─ 已放入 → 选择打印任务 → 选文件页
+ *     └─ 未放入 → 滑动开门 → DOOR_OPENING（PM2.5/开门 loading）
+ *                 → DOOR_CONFIRM（门已开启等待 → 关门 Rsp → 用户确认关门）→ 选文件页
+ *   选文件页 → Start Print → PREPARE → PRINTING（预览 + Print Start）
  */
 typedef enum {
     CONTROL_STATE_IDLE = 0,
-    CONTROL_STATE_PREPARE_WAIT,
-    CONTROL_STATE_D1_INSERT_PROMPT,
-    CONTROL_STATE_D2_DOOR_OPENING,
-    CONTROL_STATE_D2_PURIFYING,
-    CONTROL_STATE_D4_DOOR_CLOSE_CHECK,
-    CONTROL_STATE_CONFIRM_START,
-    CONTROL_STATE_PRINTING,
+    CONTROL_STATE_PLATE_PROMPT,     /**< 入口：是否已放入打印版（两卡片 + 已放入/未放入子视图） */
+    CONTROL_STATE_DOOR_OPENING,     /**< 未放入分支：PM2.5 检测 + 开门 loading */
+    CONTROL_STATE_DOOR_CONFIRM,     /**< 舱门：DoorOpened 等待关门监测 → DoorClosed 用户确认 */
+    CONTROL_STATE_PREPARE_WAIT,     /**< 选文件后：预处理 loading */
+    CONTROL_STATE_PRINTING,         /**< 打印中（预览 + 进度） */
 } control_state_t;
 
 typedef struct {

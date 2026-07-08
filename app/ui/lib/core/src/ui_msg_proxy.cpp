@@ -117,6 +117,15 @@ void UiMsgProxy::init()
         }));
 
     subs_.push_back(bus.subscribe(
+        middleware::MsgType::APP_Print_Pause_Rsp, middleware::ModuleId::UI,
+        [this](const middleware::Message& msg) {
+            middleware::PrintPauseStatePayload p{};
+            if (print_pause_done_cb_ && read_inline_pod(msg, p)) {
+                print_pause_done_cb_(p.paused != 0);
+            }
+        }));
+
+    subs_.push_back(bus.subscribe(
         middleware::MsgType::APP_Supply_Status_Rsp, middleware::ModuleId::UI,
         [this](const middleware::Message& msg) {
             middleware::SupplyStatusPayload p{};
@@ -270,6 +279,27 @@ void UiMsgProxy::register_print_terminate_done(PrintTerminateDoneCb cb)
 void UiMsgProxy::send_print_terminate()
 {
     middleware::Message msg(middleware::MsgType::UI_Print_Terminate_Req,
+                            middleware::ModuleId::UI,
+                            middleware::ModuleId::APP_GLAVO);
+    middleware::MsgPort::instance().publish_async(msg);
+}
+
+void UiMsgProxy::register_print_pause_done(PrintPauseDoneCb cb)
+{
+    print_pause_done_cb_ = std::move(cb);
+}
+
+void UiMsgProxy::send_print_pause()
+{
+    middleware::Message msg(middleware::MsgType::UI_Print_Pause_Req,
+                            middleware::ModuleId::UI,
+                            middleware::ModuleId::APP_GLAVO);
+    middleware::MsgPort::instance().publish_async(msg);
+}
+
+void UiMsgProxy::send_print_resume()
+{
+    middleware::Message msg(middleware::MsgType::UI_Print_Resume_Req,
                             middleware::ModuleId::UI,
                             middleware::ModuleId::APP_GLAVO);
     middleware::MsgPort::instance().publish_async(msg);

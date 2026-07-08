@@ -22,6 +22,7 @@ using FsDirCb          = std::function<void(const middleware::FileEntryPayload* 
                                             uint32_t count)>;
 using PrintProgressCb  = std::function<void(const middleware::PrintProgressPayload&)>;
 using PrintTerminateDoneCb = std::function<void()>;
+using PrintPauseDoneCb = std::function<void(bool paused)>;
 using SupplyStatusCb   = std::function<void(const middleware::SupplyStatusPayload&)>;
 using PrintPrepareDoneCb = std::function<void(bool ok)>;
 using McuOtaStatusCb   = std::function<void(const middleware::McuOtaStatusPayload&)>;
@@ -61,6 +62,11 @@ public:
 
     void send_print_terminate();
     void register_print_terminate_done(PrintTerminateDoneCb cb);
+
+    /** 暂停/恢复打印。回执经 register_print_pause_done（仅打印进行中有效）。 */
+    void send_print_pause();
+    void send_print_resume();
+    void register_print_pause_done(PrintPauseDoneCb cb);
 
     /** D1 X / 二次确认 Cancel：退出解析线程并清空 RingBuffer */
     void send_parser_exit();
@@ -107,6 +113,7 @@ private:
     FsDirCb          fs_dir_cb_;
     PrintProgressCb  print_progress_cb_;
     PrintTerminateDoneCb print_terminate_done_cb_;
+    PrintPauseDoneCb print_pause_done_cb_;
     SupplyStatusCb   supply_status_cb_;
     PrintPrepareDoneCb print_prepare_done_cb_;
     McuOtaStatusCb   mcu_ota_status_cb_;

@@ -69,6 +69,8 @@ void apply_env(const middleware::EnvSnapshotPayload &p)
     page_user_home_refresh(false);
 }
 
+void set_pause_ui(bool paused);   /* 定义见下方（打印中底条按钮区） */
+
 void home_env_init(void)
 {
     if(!g_env_defaults_loaded) {
@@ -85,6 +87,10 @@ void home_env_init(void)
     }
     ui::UiMsgProxy::instance().register_env_update(
         [](const middleware::EnvSnapshotPayload &p) { apply_env(p); });
+
+    /* 暂停/恢复回执：以后端状态为准同步按钮图标 */
+    ui::UiMsgProxy::instance().register_print_pause_done(
+        [](bool paused) { set_pause_ui(paused); });
 }
 
 void home_set_status(user_home_status_t s)
@@ -99,10 +105,11 @@ void home_trigger_door_open(void)
 }
 
 /* ---------- 顶部状态条 ---------- */
+lv_obj_t *g_topbar       = nullptr;   /**< 顶部状态条根（打印中浮于摄像头之上） */
 lv_obj_t *g_lbl_dev_name = nullptr;
 lv_obj_t *g_dot_status   = nullptr;
 lv_obj_t *g_lbl_status   = nullptr;
-lv_obj_t *g_btn_files    = nullptr;   /**< 右上角 "My Files" 磨砂按钮 */
+lv_obj_t *g_btn_files    = nullptr;   /**< 右上角 "Start" 磨砂按钮 */
 
 /* ---------- 数值（左/右 各 2 块） ---------- */
 lv_obj_t *g_lbl_pm_indoor = nullptr;
@@ -121,24 +128,41 @@ lv_obj_t *g_print_area      = nullptr; /**< 摄像头 + 双底条容器（默认
 lv_obj_t *g_camera_viewport = nullptr; /**< 摄像头画面容器 */
 lv_obj_t *g_camera_hint     = nullptr; /**< 占位提示 */
 lv_obj_t *g_camera_image    = nullptr; /**< 真实视频帧图像槽（先隐藏） */
-lv_obj_t *g_env_lbl_pm_indoor = nullptr;
-lv_obj_t *g_env_lbl_pm_cabin  = nullptr;
+lv_obj_t *g_env_lbl_pm_indoor = nullptr;   /**< EXTERIOR PM2.5 数值 */
+lv_obj_t *g_env_lbl_pm_cabin  = nullptr;   /**< INTERIOR PM2.5 数值 */
 lv_obj_t *g_env_lbl_temp      = nullptr;
 lv_obj_t *g_env_lbl_oxygen    = nullptr;
+lv_obj_t *g_env_bar_indoor    = nullptr;   /**< EXTERIOR PM2.5 mini 进度条 */
+lv_obj_t *g_env_bar_cabin     = nullptr;   /**< INTERIOR PM2.5 mini 进度条 */
+lv_obj_t *g_env_status_indoor = nullptr;   /**< EXTERIOR 状态："● Good"/"● Too poor…" */
+lv_obj_t *g_env_status_cabin  = nullptr;   /**< INTERIOR 状态 */
 lv_obj_t *g_prog_bar          = nullptr;
 lv_obj_t *g_prog_value        = nullptr; /**< "37%" */
 lv_obj_t *g_prog_remaining    = nullptr; /**< "剩余 45 min" */
 lv_obj_t *g_prog_file_name    = nullptr;
+lv_obj_t *g_btn_pause         = nullptr; /**< 暂停/恢复按钮（终止按钮左侧） */
+lv_obj_t *g_pause_icon        = nullptr; /**< 暂停按钮图标（PAUSE ↔ PLAY） */
+bool      g_print_paused      = false;   /**< 当前是否暂停（乐观切换，后端回执校正） */
 bool      g_printing_active   = false;
 
-void apply_camera_preview_layout(uint32_t src_w);
+void apply_camera_preview_layout(uint32_t src_w, uint32_t src_h);
 void on_camera_viewport_size_changed(lv_event_t *e);
 
 /** 预览：宽贴满 viewport，高等比缩放后居中裁剪（解码层仍输出全帧） */
-void apply_camera_preview_layout(uint32_t src_w)
+void apply_camera_preview_layout(uint32_t src_w, uint32_t src_h)
 {
     if(!g_camera_image || !g_camera_viewport || src_w == 0) {
         return;
+    }
+
+    if(src_h == 0) {
+        const auto &player = ui::CameraPreviewPlayer::instance();
+        if(player.active()) {
+            src_h = player.stream_height();
+        }
+        if(src_h == 0) {
+            src_h = 1280u;   /* 与 CAMERA_HEIGHT_DEFAULT 一致，开流前占位 */
+        }
     }
 
     lv_obj_update_layout(g_camera_viewport);
@@ -151,22 +175,25 @@ void apply_camera_preview_layout(uint32_t src_w)
     lv_obj_set_size(g_camera_image, vp_w, vp_h);
     lv_obj_center(g_camera_image);
     lv_image_set_inner_align(g_camera_image, LV_IMAGE_ALIGN_CENTER);
-    const uint32_t zoom =
-        static_cast<uint32_t>(static_cast<int64_t>(vp_w) * 256 / static_cast<int32_t>(src_w));
-    lv_image_set_scale(g_camera_image, zoom > 0 ? zoom : LV_SCALE_NONE);
+    /* 宽贴满：仅按宽度缩放，高度超出 viewport 的部分由父容器居中裁切（无左右黑边） */
+    const int64_t zoom_w = static_cast<int64_t>(vp_w) * 256 / static_cast<int32_t>(src_w);
+    const uint32_t zoom = static_cast<uint32_t>(zoom_w > 0 ? zoom_w : 256);
+    lv_image_set_scale(g_camera_image, zoom);
     lv_obj_invalidate(g_camera_image);
 }
 
 void on_camera_viewport_size_changed(lv_event_t * /*e*/)
 {
     uint32_t src_w = 1024u;
+    uint32_t src_h = 0u;
     if(ui::CameraPreviewPlayer::instance().active()) {
         src_w = ui::CameraPreviewPlayer::instance().stream_width();
+        src_h = ui::CameraPreviewPlayer::instance().stream_height();
         if(src_w == 0) {
             src_w = 1024u;
         }
     }
-    apply_camera_preview_layout(src_w);
+    apply_camera_preview_layout(src_w, src_h);
 }
 
 void on_files_click(lv_event_t *)
@@ -198,7 +225,33 @@ void on_terminate_click(lv_event_t *)
     control_terminate_request();
 }
 
-/** 右上角 "My Files" 磨砂按钮：橙色半透明底 + 橙边 + 图标 + 文字（对齐设计稿 Frame520） */
+/** 同步暂停按钮图标：暂停态显示"播放"图标（表示可恢复），运行态显示"暂停"图标。 */
+void set_pause_ui(bool paused)
+{
+    g_print_paused = paused;
+    if(g_pause_icon) {
+        lv_label_set_text(g_pause_icon, paused ? LV_SYMBOL_PLAY : LV_SYMBOL_PAUSE);
+    }
+}
+
+/** 暂停/恢复：乐观切换图标并发请求；后端回执经 register_print_pause_done 校正。 */
+void on_pause_click(lv_event_t *)
+{
+    if(!control_is_printing()) {
+        return;
+    }
+    const bool want_pause = !g_print_paused;
+    set_pause_ui(want_pause);
+    if(want_pause) {
+        ui::UiMsgProxy::instance().send_print_pause();
+        ui_toast_show("Print paused", user_color_accent, 1500);
+    } else {
+        ui::UiMsgProxy::instance().send_print_resume();
+        ui_toast_show("Print resumed", user_color_accent, 1500);
+    }
+}
+
+/** 右上角 "Start" 磨砂按钮：橙色半透明底 + 橙边 + 图标 + 文字（对齐设计稿 Frame520） */
 lv_obj_t *build_files_button(lv_obj_t *parent)
 {
     lv_obj_t *btn = lv_button_create(parent);
@@ -226,14 +279,14 @@ lv_obj_t *build_files_button(lv_obj_t *parent)
     lv_obj_set_style_text_font(icon, user_font_text(), 0);
 
     lv_obj_t *txt = lv_label_create(btn);
-    lv_label_set_text(txt, "My Files");
+    lv_label_set_text(txt, "Start");
     lv_obj_set_style_text_color(txt, user_color_accent, 0);
     lv_obj_set_style_text_font(txt, user_font_text(), 0);
 
     return btn;
 }
 
-/** 顶部状态条：左侧 设备名 + 状态点 + 状态文字；右侧 "My Files" 磨砂按钮 */
+/** 顶部状态条：左侧 设备名 + 状态点 + 状态文字；右侧 "Start" 磨砂按钮 */
 lv_obj_t *build_topbar(lv_obj_t *parent)
 {
     lv_obj_t *bar = lv_obj_create(parent);
@@ -430,14 +483,89 @@ lv_obj_t *build_door_floating(lv_obj_t *parent)
  *    │   [环境条 A]    [进度条 B + 终止按钮]             │
  *    └─────────────────────────────────────────────────┘
  * ------------------------------------------------------------------------- */
-lv_obj_t *make_print_chip(lv_obj_t *parent, const char *caption,
-                          lv_obj_t **out_value)
+/* 1px 竖分隔线 */
+lv_obj_t *make_v_divider(lv_obj_t *parent)
+{
+    lv_obj_t *ln = lv_obj_create(parent);
+    lv_obj_remove_style_all(ln);
+    lv_obj_set_size(ln, 1, LV_PCT(72));
+    lv_obj_set_style_bg_color(ln, user_color_divider, 0);
+    lv_obj_set_style_bg_opa(ln, LV_OPA_COVER, 0);
+    lv_obj_clear_flag(ln, LV_OBJ_FLAG_SCROLLABLE);
+    return ln;
+}
+
+/* PM2.5 块：标题 + 大数值+单位 + mini 进度条 + 状态文案（Good / Too poor…） */
+lv_obj_t *make_pm_block(lv_obj_t *parent, const char *caption,
+                        lv_obj_t **out_val, lv_obj_t **out_bar, lv_obj_t **out_status)
+{
+    lv_obj_t *col = lv_obj_create(parent);
+    lv_obj_remove_style_all(col);
+    lv_obj_set_flex_grow(col, 1);
+    lv_obj_set_height(col, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(col, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_row(col, USER_PAD_SM, 0);
+    lv_obj_set_style_bg_opa(col, LV_OPA_TRANSP, 0);
+    lv_obj_clear_flag(col, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *cap = lv_label_create(col);
+    lv_label_set_text(cap, caption);
+    lv_obj_set_style_text_color(cap, user_color_text_dim, 0);
+    lv_obj_set_style_text_font(cap, user_font_caption(), 0);
+
+    /* 数值 + 单位 */
+    lv_obj_t *vrow = lv_obj_create(col);
+    lv_obj_remove_style_all(vrow);
+    lv_obj_set_size(vrow, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(vrow, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(vrow, LV_FLEX_ALIGN_START,
+                          LV_FLEX_ALIGN_END, LV_FLEX_ALIGN_END);
+    lv_obj_set_style_pad_column(vrow, USER_PAD_SM / 2, 0);
+    lv_obj_set_style_bg_opa(vrow, LV_OPA_TRANSP, 0);
+    lv_obj_clear_flag(vrow, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *val = lv_label_create(vrow);
+    lv_label_set_text(val, "--");
+    lv_obj_set_style_text_color(val, user_color_text, 0);
+    lv_obj_set_style_text_font(val, user_font_value(), 0);
+    if(out_val) *out_val = val;
+
+    lv_obj_t *unit = lv_label_create(vrow);
+    lv_label_set_text(unit, "ug/m3");
+    lv_obj_set_style_text_color(unit, user_color_text_dim, 0);
+    lv_obj_set_style_text_font(unit, user_font_caption(), 0);
+
+    /* mini 进度条 */
+    lv_obj_t *bar = lv_bar_create(col);
+    lv_obj_remove_style_all(bar);
+    lv_obj_set_size(bar, LV_PCT(90), USER_PROGRESS_H / 2 > 0 ? USER_PROGRESS_H / 2 : 6);
+    lv_obj_set_style_bg_color(bar, user_color_panel_alt, LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(bar, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_radius(bar, LV_RADIUS_CIRCLE, LV_PART_MAIN);
+    lv_obj_set_style_bg_color(bar, user_color_status_ok, LV_PART_INDICATOR);
+    lv_obj_set_style_bg_opa(bar, LV_OPA_COVER, LV_PART_INDICATOR);
+    lv_obj_set_style_radius(bar, LV_RADIUS_CIRCLE, LV_PART_INDICATOR);
+    lv_bar_set_range(bar, 0, 100);
+    lv_bar_set_value(bar, 0, LV_ANIM_OFF);
+    if(out_bar) *out_bar = bar;
+
+    lv_obj_t *st = lv_label_create(col);
+    lv_label_set_text(st, LV_SYMBOL_OK "  Good");
+    lv_obj_set_style_text_color(st, user_color_status_ok, 0);
+    lv_obj_set_style_text_font(st, user_font_caption(), 0);
+    if(out_status) *out_status = st;
+
+    return col;
+}
+
+/* 小 kv 卡：标题 + 数值（设备温度 / 氧气浓度） */
+lv_obj_t *make_env_kv(lv_obj_t *parent, const char *caption, lv_obj_t **out_val)
 {
     lv_obj_t *col = lv_obj_create(parent);
     lv_obj_remove_style_all(col);
     lv_obj_set_size(col, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
     lv_obj_set_flex_flow(col, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_style_pad_row(col, 4, 0);
+    lv_obj_set_style_pad_row(col, USER_PAD_SM / 2, 0);
     lv_obj_set_style_bg_opa(col, LV_OPA_TRANSP, 0);
     lv_obj_clear_flag(col, LV_OBJ_FLAG_SCROLLABLE);
 
@@ -450,9 +578,7 @@ lv_obj_t *make_print_chip(lv_obj_t *parent, const char *caption,
     lv_label_set_text(val, "--");
     lv_obj_set_style_text_color(val, user_color_text, 0);
     lv_obj_set_style_text_font(val, user_font_text(), 0);
-    if(out_value) {
-        *out_value = val;
-    }
+    if(out_val) *out_val = val;
     return col;
 }
 
@@ -460,8 +586,8 @@ lv_obj_t *build_print_env_panel(lv_obj_t *parent)
 {
     lv_obj_t *panel = lv_obj_create(parent);
     lv_obj_remove_style_all(panel);
-    lv_obj_set_height(panel, USER_PRINT_BAR_H);
-    lv_obj_set_flex_grow(panel, 1);
+    lv_obj_set_height(panel, LV_SIZE_CONTENT);
+    lv_obj_set_flex_grow(panel, 3);   /* 左:右 ≈ 3:2（对齐 Figma 656:420） */
     lv_obj_set_style_bg_color(panel, user_color_panel, 0);
     lv_obj_set_style_bg_opa(panel, LV_OPA_80, 0);
     lv_obj_set_style_radius(panel, USER_RADIUS, 0);
@@ -471,23 +597,63 @@ lv_obj_t *build_print_env_panel(lv_obj_t *parent)
     lv_obj_set_style_pad_ver(panel, USER_PRINT_BAR_PAD_VER, 0);
     lv_obj_set_style_pad_column(panel, USER_PRINT_BAR_GAP, 0);
     lv_obj_set_flex_flow(panel, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(panel, LV_FLEX_ALIGN_SPACE_BETWEEN,
+    lv_obj_set_flex_align(panel, LV_FLEX_ALIGN_START,
                           LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_clear_flag(panel, LV_OBJ_FLAG_SCROLLABLE);
 
-    make_print_chip(panel, "Indoor PM2.5", &g_env_lbl_pm_indoor);
-    make_print_chip(panel, "Cabin PM2.5", &g_env_lbl_pm_cabin);
-    make_print_chip(panel, "Temperature", &g_env_lbl_temp);
-    make_print_chip(panel, "Oxygen",      &g_env_lbl_oxygen);
+    make_pm_block(panel, "EXTERIOR PM2.5", &g_env_lbl_pm_indoor,
+                  &g_env_bar_indoor, &g_env_status_indoor);
+    make_v_divider(panel);
+    make_pm_block(panel, "INTERIOR PM2.5", &g_env_lbl_pm_cabin,
+                  &g_env_bar_cabin, &g_env_status_cabin);
+
+    make_v_divider(panel);
+
+    /* 温度 / 氧气 两个小 kv 竖排 */
+    lv_obj_t *kv = lv_obj_create(panel);
+    lv_obj_remove_style_all(kv);
+    lv_obj_set_size(kv, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(kv, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_row(kv, USER_PAD, 0);
+    lv_obj_set_style_bg_opa(kv, LV_OPA_TRANSP, 0);
+    lv_obj_clear_flag(kv, LV_OBJ_FLAG_SCROLLABLE);
+    make_env_kv(kv, "DEVICE TEMP", &g_env_lbl_temp);
+    make_env_kv(kv, "O2 CONCENTRATION", &g_env_lbl_oxygen);
+
     return panel;
+}
+
+/* 进度面板内的一个 kv（TIME LEFT / PRINT PROGRESS）：小标题 + 数值 */
+lv_obj_t *make_prog_kv(lv_obj_t *parent, const char *caption,
+                       lv_color_t val_color, lv_obj_t **out_val)
+{
+    lv_obj_t *col = lv_obj_create(parent);
+    lv_obj_remove_style_all(col);
+    lv_obj_set_size(col, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(col, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_row(col, USER_PAD_SM / 2, 0);
+    lv_obj_set_style_bg_opa(col, LV_OPA_TRANSP, 0);
+    lv_obj_clear_flag(col, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *cap = lv_label_create(col);
+    lv_label_set_text(cap, caption);
+    lv_obj_set_style_text_color(cap, user_color_text_dim, 0);
+    lv_obj_set_style_text_font(cap, user_font_caption(), 0);
+
+    lv_obj_t *val = lv_label_create(col);
+    lv_label_set_text(val, "--");
+    lv_obj_set_style_text_color(val, val_color, 0);
+    lv_obj_set_style_text_font(val, user_font_text(), 0);
+    if(out_val) *out_val = val;
+    return col;
 }
 
 lv_obj_t *build_print_progress_panel(lv_obj_t *parent)
 {
     lv_obj_t *panel = lv_obj_create(parent);
     lv_obj_remove_style_all(panel);
-    lv_obj_set_height(panel, USER_PRINT_BAR_H);
-    lv_obj_set_flex_grow(panel, 1);
+    lv_obj_set_height(panel, LV_SIZE_CONTENT);
+    lv_obj_set_flex_grow(panel, 2);   /* 左:右 ≈ 3:2 */
     lv_obj_set_style_bg_color(panel, user_color_panel, 0);
     lv_obj_set_style_bg_opa(panel, LV_OPA_80, 0);
     lv_obj_set_style_radius(panel, USER_RADIUS, 0);
@@ -495,42 +661,40 @@ lv_obj_t *build_print_progress_panel(lv_obj_t *parent)
     lv_obj_set_style_border_color(panel, user_color_divider, 0);
     lv_obj_set_style_pad_hor(panel, USER_PRINT_BAR_PAD_HOR, 0);
     lv_obj_set_style_pad_ver(panel, USER_PRINT_BAR_PAD_VER, 0);
-    lv_obj_set_style_pad_column(panel, USER_PRINT_BAR_GAP, 0);
+    lv_obj_set_style_pad_column(panel, USER_PAD, 0);
     lv_obj_set_flex_flow(panel, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(panel, LV_FLEX_ALIGN_SPACE_BETWEEN,
+    lv_obj_set_flex_align(panel, LV_FLEX_ALIGN_START,
                           LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_clear_flag(panel, LV_OBJ_FLAG_SCROLLABLE);
 
-    /* 左：文件名 + 进度条 + 百分比 */
-    lv_obj_t *left = lv_obj_create(panel);
-    lv_obj_remove_style_all(left);
-    lv_obj_set_flex_grow(left, 1);
-    lv_obj_set_height(left, LV_SIZE_CONTENT);
-    lv_obj_set_flex_flow(left, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_style_pad_row(left, 4, 0);
-    lv_obj_set_style_bg_opa(left, LV_OPA_TRANSP, 0);
-    lv_obj_clear_flag(left, LV_OBJ_FLAG_SCROLLABLE);
+    /* 缩略图（打印件预览占位：中性灰圆角块 + 图片图标，方形） */
+    const int32_t thumb_sz = USER_PRINT_TERMINATE_H + USER_PRINT_BAR_PAD_VER * 2;
+    lv_obj_t *thumb = lv_obj_create(panel);
+    lv_obj_remove_style_all(thumb);
+    lv_obj_set_size(thumb, thumb_sz, thumb_sz);
+    lv_obj_set_style_bg_color(thumb, user_color_panel_alt, 0);
+    lv_obj_set_style_bg_opa(thumb, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(thumb, USER_RADIUS, 0);
+    lv_obj_clear_flag(thumb, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_t *thumb_icon = lv_label_create(thumb);
+    lv_label_set_text(thumb_icon, LV_SYMBOL_IMAGE);
+    lv_obj_set_style_text_color(thumb_icon, user_color_text_dim, 0);
+    lv_obj_set_style_text_font(thumb_icon, user_font_value(), 0);
+    lv_obj_center(thumb_icon);
 
-    g_prog_file_name = lv_label_create(left);
-    lv_label_set_text(g_prog_file_name, "—");
-    lv_label_set_long_mode(g_prog_file_name, LV_LABEL_LONG_MODE_DOTS);
-    lv_obj_set_width(g_prog_file_name, LV_PCT(100));
-    lv_obj_set_style_text_color(g_prog_file_name, user_color_text_dim, 0);
-    lv_obj_set_style_text_font(g_prog_file_name, user_font_caption(), 0);
+    /* 中列：进度条 + (TIME LEFT / PRINT PROGRESS) */
+    lv_obj_t *mid = lv_obj_create(panel);
+    lv_obj_remove_style_all(mid);
+    lv_obj_set_flex_grow(mid, 1);
+    lv_obj_set_height(mid, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(mid, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_row(mid, USER_PAD_SM, 0);
+    lv_obj_set_style_bg_opa(mid, LV_OPA_TRANSP, 0);
+    lv_obj_clear_flag(mid, LV_OBJ_FLAG_SCROLLABLE);
 
-    lv_obj_t *bar_row = lv_obj_create(left);
-    lv_obj_remove_style_all(bar_row);
-    lv_obj_set_width(bar_row, LV_PCT(100));
-    lv_obj_set_height(bar_row, LV_SIZE_CONTENT);
-    lv_obj_set_flex_flow(bar_row, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(bar_row, LV_FLEX_ALIGN_START,
-                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_column(bar_row, USER_PAD_SM, 0);
-    lv_obj_set_style_bg_opa(bar_row, LV_OPA_TRANSP, 0);
-
-    g_prog_bar = lv_bar_create(bar_row);
+    g_prog_bar = lv_bar_create(mid);
     lv_obj_remove_style_all(g_prog_bar);
-    lv_obj_set_size(g_prog_bar, LV_PCT(70), USER_PROGRESS_H);
+    lv_obj_set_size(g_prog_bar, LV_PCT(100), USER_PROGRESS_H / 2 > 0 ? USER_PROGRESS_H / 2 : 8);
     lv_obj_set_style_bg_color(g_prog_bar, user_color_panel_alt, LV_PART_MAIN);
     lv_obj_set_style_bg_opa(g_prog_bar, LV_OPA_COVER, LV_PART_MAIN);
     lv_obj_set_style_radius(g_prog_bar, LV_RADIUS_CIRCLE, LV_PART_MAIN);
@@ -540,21 +704,41 @@ lv_obj_t *build_print_progress_panel(lv_obj_t *parent)
     lv_bar_set_range(g_prog_bar, 0, 100);
     lv_bar_set_value(g_prog_bar, 0, LV_ANIM_OFF);
 
-    g_prog_value = lv_label_create(bar_row);
-    lv_label_set_text(g_prog_value, "0%");
-    lv_obj_set_style_text_color(g_prog_value, user_color_accent, 0);
-    lv_obj_set_style_text_font(g_prog_value, user_font_text(), 0);
+    lv_obj_t *kv_row = lv_obj_create(mid);
+    lv_obj_remove_style_all(kv_row);
+    lv_obj_set_width(kv_row, LV_PCT(100));
+    lv_obj_set_height(kv_row, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(kv_row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(kv_row, LV_FLEX_ALIGN_START,
+                          LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
+    lv_obj_set_style_pad_column(kv_row, USER_PAD_LG, 0);
+    lv_obj_set_style_bg_opa(kv_row, LV_OPA_TRANSP, 0);
+    lv_obj_clear_flag(kv_row, LV_OBJ_FLAG_SCROLLABLE);
+    make_prog_kv(kv_row, "TIME LEFT", user_color_text, &g_prog_remaining);
+    make_prog_kv(kv_row, "PROGRESS", user_color_accent, &g_prog_value);
+    /* 文件名不在打印底条显示（贴 Figma）；保留句柄避免刷新逻辑空指针 */
+    g_prog_file_name = nullptr;
 
-    /* 中：剩余时间 */
-    g_prog_remaining = lv_label_create(panel);
-    lv_label_set_text(g_prog_remaining, "Remaining — min");
-    lv_obj_set_style_text_color(g_prog_remaining, user_color_text, 0);
-    lv_obj_set_style_text_font(g_prog_remaining, user_font_text(), 0);
+    /* 右：暂停 + 终止（竖排两颗，节省横向空间；暂停在上/左，终止其后） */
+    g_btn_pause = lv_button_create(panel);
+    lv_obj_remove_style_all(g_btn_pause);
+    lv_obj_set_size(g_btn_pause, USER_PRINT_TERMINATE_H, USER_PRINT_TERMINATE_H);
+    lv_obj_set_style_bg_color(g_btn_pause, user_color_accent, 0);
+    lv_obj_set_style_bg_opa(g_btn_pause, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_opa(g_btn_pause, LV_OPA_80, LV_STATE_PRESSED);
+    lv_obj_set_style_radius(g_btn_pause, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_border_width(g_btn_pause, 0, 0);
+    lv_obj_add_event_cb(g_btn_pause, on_pause_click, LV_EVENT_CLICKED, nullptr);
+    g_pause_icon = lv_label_create(g_btn_pause);
+    lv_label_set_text(g_pause_icon, LV_SYMBOL_PAUSE);
+    lv_obj_set_style_text_color(g_pause_icon, user_color_text, 0);
+    lv_obj_set_style_text_font(g_pause_icon, user_font_text(), 0);
+    lv_obj_center(g_pause_icon);
 
-    /* 右：终止任务 */
+    /* 右：终止任务（圆形，仅图标，避免文字过宽被裁） */
     lv_obj_t *btn = lv_button_create(panel);
     lv_obj_remove_style_all(btn);
-    lv_obj_set_size(btn, USER_PRINT_TERMINATE_W, USER_PRINT_TERMINATE_H);
+    lv_obj_set_size(btn, USER_PRINT_TERMINATE_H, USER_PRINT_TERMINATE_H);
     lv_obj_set_style_bg_color(btn, ui_color_danger, 0);
     lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, 0);
     lv_obj_set_style_bg_opa(btn, LV_OPA_80, LV_STATE_PRESSED);
@@ -563,7 +747,7 @@ lv_obj_t *build_print_progress_panel(lv_obj_t *parent)
     lv_obj_add_event_cb(btn, on_terminate_click, LV_EVENT_CLICKED, nullptr);
 
     lv_obj_t *btn_lbl = lv_label_create(btn);
-    lv_label_set_text(btn_lbl, "Terminate");
+    lv_label_set_text(btn_lbl, LV_SYMBOL_STOP);
     lv_obj_set_style_text_color(btn_lbl, user_color_text, 0);
     lv_obj_set_style_text_font(btn_lbl, user_font_text(), 0);
     lv_obj_center(btn_lbl);
@@ -573,28 +757,26 @@ lv_obj_t *build_print_progress_panel(lv_obj_t *parent)
 
 lv_obj_t *build_printing_area(lv_obj_t *parent)
 {
+    /* 打印中：整块内容区全屏铺满。area 为浮层（脱离首页纵向 flex），
+     * 覆盖包括状态栏在内的整个内容区；摄像头做背景，状态栏/底部面板浮于其上。 */
     lv_obj_t *area = lv_obj_create(parent);
     lv_obj_remove_style_all(area);
-    lv_obj_set_width(area, LV_PCT(100));
-    lv_obj_set_flex_grow(area, 1);
-    lv_obj_set_flex_flow(area, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_style_pad_hor(area, USER_PAD, 0);
-    lv_obj_set_style_pad_bottom(area, USER_PAD, 0);
-    lv_obj_set_style_pad_row(area, USER_PAD, 0);
+    lv_obj_add_flag(area, LV_OBJ_FLAG_FLOATING);
+    lv_obj_set_size(area, LV_PCT(100), LV_PCT(100));
+    lv_obj_set_pos(area, 0, 0);
+    lv_obj_set_style_pad_all(area, 0, 0);
     lv_obj_set_style_bg_opa(area, LV_OPA_TRANSP, 0);
     lv_obj_clear_flag(area, LV_OBJ_FLAG_SCROLLABLE);
 
-    /* 摄像头预览容器（占据剩余高度） */
+    /* 摄像头预览容器：铺满 area（全屏背景，无圆角/边框） */
     g_camera_viewport = lv_obj_create(area);
     lv_obj_remove_style_all(g_camera_viewport);
-    lv_obj_set_width(g_camera_viewport, LV_PCT(100));
-    lv_obj_set_flex_grow(g_camera_viewport, 1);
+    lv_obj_set_size(g_camera_viewport, LV_PCT(100), LV_PCT(100));
+    lv_obj_set_pos(g_camera_viewport, 0, 0);
     lv_obj_set_style_bg_color(g_camera_viewport, lv_color_black(), 0);
     lv_obj_set_style_bg_opa(g_camera_viewport, LV_OPA_COVER, 0);
-    lv_obj_set_style_radius(g_camera_viewport, USER_RADIUS, 0);
-    lv_obj_set_style_border_width(g_camera_viewport, 1, 0);
-    lv_obj_set_style_border_color(g_camera_viewport, user_color_divider, 0);
     lv_obj_clear_flag(g_camera_viewport, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_clear_flag(g_camera_viewport, LV_OBJ_FLAG_OVERFLOW_VISIBLE);
     lv_obj_add_event_cb(g_camera_viewport, on_camera_viewport_size_changed,
                         LV_EVENT_SIZE_CHANGED, nullptr);
 
@@ -609,16 +791,20 @@ lv_obj_t *build_printing_area(lv_obj_t *parent)
     /* 真实视频帧 lv_image 占位（默认隐藏） */
     g_camera_image = lv_image_create(g_camera_viewport);
     lv_obj_add_flag(g_camera_image, LV_OBJ_FLAG_HIDDEN);
-    apply_camera_preview_layout(1024u);
+    apply_camera_preview_layout(1024u, 1280u);
 
-    /* 底部双面板 */
+    /* 底部双面板：浮于摄像头之上，贴底居中，两侧留内边距。
+     * 高度自适应内容（cross STRETCH 使两块等高），避免固定高度裁切文字。 */
     lv_obj_t *bottom = lv_obj_create(area);
     lv_obj_remove_style_all(bottom);
+    lv_obj_add_flag(bottom, LV_OBJ_FLAG_FLOATING);
     lv_obj_set_width(bottom, LV_PCT(100));
-    lv_obj_set_height(bottom, USER_PRINT_BAR_H);
+    lv_obj_set_height(bottom, LV_SIZE_CONTENT);
+    lv_obj_align(bottom, LV_ALIGN_BOTTOM_MID, 0, -USER_PAD);
     lv_obj_set_flex_flow(bottom, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(bottom, LV_FLEX_ALIGN_SPACE_BETWEEN,
+    lv_obj_set_flex_align(bottom, LV_FLEX_ALIGN_START,
                           LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_hor(bottom, USER_PAD, 0);
     lv_obj_set_style_pad_column(bottom, USER_PAD, 0);
     lv_obj_set_style_bg_opa(bottom, LV_OPA_TRANSP, 0);
     lv_obj_clear_flag(bottom, LV_OBJ_FLAG_SCROLLABLE);
@@ -653,11 +839,39 @@ lv_color_t status_color(user_home_status_t s)
     }
 }
 
+/* PM2.5 开门阈值（与 Glavo handle_pm25_request 的 pm25_cabin>35 一致） */
+constexpr float kPmGateThreshold = 35.0f;
+/* mini 进度条满量程（μg/m³）：用于把浓度映射为条形填充百分比 */
+constexpr float kPmBarFullScale  = 100.0f;
+
+/** 刷新单个 PM2.5 块：数值、进度条填充 + 颜色、状态文案（Good / Too poor…）。 */
+void update_pm_block(lv_obj_t *val_lbl, lv_obj_t *bar, lv_obj_t *status_lbl, float pm)
+{
+    if(val_lbl) {
+        lv_label_set_text_fmt(val_lbl, "%.1f", pm);
+    }
+    const bool ok = (pm <= kPmGateThreshold);
+    const lv_color_t c = ok ? user_color_status_ok : user_color_status_err;
+    if(bar) {
+        int fill = static_cast<int>(pm * 100.0f / kPmBarFullScale + 0.5f);
+        if(fill < 0)   fill = 0;
+        if(fill > 100) fill = 100;
+        lv_bar_set_value(bar, fill, LV_ANIM_ON);
+        lv_obj_set_style_bg_color(bar, c, LV_PART_INDICATOR);
+    }
+    if(status_lbl) {
+        lv_label_set_text(status_lbl,
+                          ok ? LV_SYMBOL_OK "  Good"
+                             : LV_SYMBOL_WARNING "  Too poor to open the gate");
+        lv_obj_set_style_text_color(status_lbl, c, 0);
+    }
+}
+
 } /* namespace */
 
-void page_user_home_update_camera_preview_layout(uint32_t src_w)
+void page_user_home_update_camera_preview_layout(uint32_t src_w, uint32_t src_h)
 {
-    apply_camera_preview_layout(src_w);
+    apply_camera_preview_layout(src_w, src_h);
 }
 
 void page_user_home_refresh(bool /*force*/)
@@ -689,17 +903,15 @@ void page_user_home_refresh(bool /*force*/)
     }
 
     /* 打印模式下的环境标签也由同一快照驱动（串口 0x9B → APP_Update_Ntf） */
-    if(g_env_lbl_pm_indoor) {
-        lv_label_set_text_fmt(g_env_lbl_pm_indoor, "%.1f", snap.pm25_indoor);
-    }
-    if(g_env_lbl_pm_cabin) {
-        lv_label_set_text_fmt(g_env_lbl_pm_cabin, "%.1f", snap.pm25_cabin);
-    }
+    update_pm_block(g_env_lbl_pm_indoor, g_env_bar_indoor, g_env_status_indoor,
+                    snap.pm25_indoor);
+    update_pm_block(g_env_lbl_pm_cabin, g_env_bar_cabin, g_env_status_cabin,
+                    snap.pm25_cabin);
     if(g_env_lbl_temp) {
-        lv_label_set_text_fmt(g_env_lbl_temp, "%.1f°C", snap.temperature_c);
+        lv_label_set_text_fmt(g_env_lbl_temp, "%.1f °C", snap.temperature_c);
     }
     if(g_env_lbl_oxygen) {
-        lv_label_set_text_fmt(g_env_lbl_oxygen, "%.1f%%", snap.oxygen_percent);
+        lv_label_set_text_fmt(g_env_lbl_oxygen, "%.1f %%", snap.oxygen_percent);
     }
 }
 
@@ -717,7 +929,7 @@ lv_obj_t *page_user_home_create(lv_obj_t *parent)
     lv_obj_clear_flag(page, LV_OBJ_FLAG_SCROLLABLE);
     g_page_root = page;
 
-    build_topbar(page);
+    g_topbar = build_topbar(page);
     g_normal_area = build_main_area(page);
 
     /* 打印中模式：摄像头 + 双底条；与 g_normal_area 互斥显示。 */
@@ -752,11 +964,19 @@ void page_user_home_enter_printing_mode(const control_file_t *file)
     if(g_door_float)  lv_obj_add_flag(g_door_float,  LV_OBJ_FLAG_HIDDEN);
     if(g_btn_files)   lv_obj_add_flag(g_btn_files,   LV_OBJ_FLAG_HIDDEN);
     if(g_print_area)  lv_obj_clear_flag(g_print_area, LV_OBJ_FLAG_HIDDEN);
+    /* 摄像头浮层置于最底层：状态栏/其它 sibling 自然浮于其上。
+     * 注意：不能用 move_foreground(topbar)——那会改变 topbar 在纵向 flex 中的
+     * 子节点顺序，导致退出打印后状态栏跑到页面底部。print_area 是 FLOATING，
+     * 移到背景只改 z 序、不影响布局。 */
+    if(g_print_area)  lv_obj_move_background(g_print_area);
+
+    /* 复位暂停按钮为"运行"态 */
+    set_pause_ui(false);
 
     /* 状态条切到 "正在打印" */
     home_set_status(USER_HOME_STATUS_PRINTING);
     page_user_home_refresh(true);
-    page_user_home_update_camera_preview_layout(1024u);
+    page_user_home_update_camera_preview_layout(1024u, 0u);
 
     if(file && g_prog_file_name) {
         lv_label_set_text(g_prog_file_name, file->name);
@@ -766,7 +986,7 @@ void page_user_home_enter_printing_mode(const control_file_t *file)
     if(g_prog_remaining && file) {
         char dur[32];
         ui_user_format_duration_min(dur, sizeof(dur), file->duration_min);
-        lv_label_set_text_fmt(g_prog_remaining, "Remaining %s", dur);
+        lv_label_set_text(g_prog_remaining, dur);
     }
 
     page_user_home_request_camera_preview();
@@ -785,6 +1005,7 @@ void page_user_home_exit_printing_mode(void)
     if(g_normal_area) lv_obj_clear_flag(g_normal_area, LV_OBJ_FLAG_HIDDEN);
     if(g_door_float)  lv_obj_clear_flag(g_door_float,  LV_OBJ_FLAG_HIDDEN);
     if(g_btn_files)   lv_obj_clear_flag(g_btn_files,   LV_OBJ_FLAG_HIDDEN);
+    set_pause_ui(false);
 
     home_set_status(USER_HOME_STATUS_READY);
     page_user_home_refresh(true);
@@ -805,6 +1026,6 @@ void page_user_home_printing_update(const control_progress_t *p)
     if(g_prog_remaining) {
         char dur[32];
         ui_user_format_duration_min(dur, sizeof(dur), p->remaining_minutes);
-        lv_label_set_text_fmt(g_prog_remaining, "Remaining %s", dur);
+        lv_label_set_text(g_prog_remaining, dur);
     }
 }

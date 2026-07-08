@@ -20,7 +20,7 @@ namespace middleware {
 enum class ModuleId : uint32_t {
     UI         = 0x01,
     APP_GLAVO  = 0x02,  /**< 振镜/串口后端 rongsu_glavo */
-    APP_CAMERA = 0x03,  /**< 相机后端 rongsu_camera */
+    APP_CAMERA = 0x03,  /**< 相机 / test_camera 伪相机后端 */
 };
 
 /**
@@ -64,6 +64,9 @@ enum class MsgType : uint32_t {
     APP_Print_Progress_Ntf,   /**< [GLAVO_Print_Progress_Ntf] PrintProgressPayload */
     UI_Print_Terminate_Req,
     APP_Print_Terminate_Done, /**< [GLAVO_Print_Terminate_Done] Empty */
+    UI_Print_Pause_Req,       /**< Empty：暂停打印（McuLink 停止 TCP 运动下发） */
+    UI_Print_Resume_Req,      /**< Empty：恢复打印 */
+    APP_Print_Pause_Rsp,      /**< [GLAVO_Print_Pause_Rsp] PrintPauseStatePayload：暂停/恢复响应（Pause/Resume Req 共用） */
 
     // ---- UI ↔ GLAVO：耗材/滤芯 ----
     UI_Supply_Status_Req = 0x1060, /**< Empty */
@@ -363,6 +366,12 @@ using PrintStartReqPayload = PrintPrepareReqPayload;
 /** Fs_Delete_Ntf 载荷：文件来源 + 索引（Local 列表删除） */
 using FsDeleteNtfPayload = PrintPrepareReqPayload;
 
+/** APP_Print_Pause_Rsp 载荷：暂停/恢复状态响应（Inline；Pause/Resume Req 共用） */
+struct PrintPauseStatePayload {
+    uint8_t paused;   /**< 1=已暂停 0=已恢复 */
+    uint8_t reserved[3];
+};
+
 /** APP_Print_Progress_Ntf 载荷：打印进度推送（Inline） */
 struct PrintProgressPayload {
     int32_t  progress_percent;
@@ -373,7 +382,7 @@ struct PrintProgressPayload {
     float    oxygen_percent;
 };
 
-/** UI_Camera_Stream_Start_Req：可选 `video_name`（ABI 保留；`rongsu_camera` 忽略，走 ViCapture 设备配置） */
+/** UI_Camera_Stream_Start_Req：可选 basename；空串则用后端默认 demo_1024x600.nv12 */
 struct CameraStreamStartReqPayload {
     char video_name[64];
 };

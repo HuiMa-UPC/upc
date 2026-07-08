@@ -109,6 +109,13 @@ public:
     /** @brief 请求异步终止打印（用户手动停止或 TCP 断线触发） */
     void request_terminate();
 
+    /**
+     * @brief 用户暂停/恢复：仅 gate TCP 运动包批量下发（`link_send_one_motion_batch`）
+     * @note 不影响 is_sending_、解析线程、换层串口与 TCP 心跳
+     */
+    void set_user_dispatch_paused(bool paused);
+    [[nodiscard]] bool is_user_dispatch_paused() const noexcept;
+
     /** @brief 设置 MCU OTA 状态回调（测试） */
     void set_ota_status_callback(McuOtaStatusCb cb);
 
@@ -276,6 +283,7 @@ private:
 
     /* ---------- 发送状态机 ---------- */
     std::atomic<bool> is_sending_{false};              /**< 是否正在下发运动包 */
+    std::atomic<bool> user_paused_{false};             /**< 用户暂停：停止 TCP 运动下发，解析与换层逻辑继续 */
     std::atomic<bool> start_pending_{false};           /**< begin_sending 已调用但 RingBuffer 未达阈值，等待中 */
     std::atomic<bool> terminate_pending_{false};       /**< 收到终止请求，待链路线程执行清理 */
     std::atomic<bool> natural_complete_pending_{false};/**< 运动包已发完，等待 MCU 缓存排空以触发自然完成 */

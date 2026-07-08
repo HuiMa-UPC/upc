@@ -217,6 +217,8 @@ bool GlavoService::start()
         middleware::MsgType::UI_Parser_Exit_Ntf,
         middleware::MsgType::UI_Print_Start_Req,
         middleware::MsgType::UI_Print_Terminate_Req,
+        middleware::MsgType::UI_Print_Pause_Req,
+        middleware::MsgType::UI_Print_Resume_Req,
         middleware::MsgType::UI_Supply_Status_Req,
         middleware::MsgType::UI_PM25_Req,
         middleware::MsgType::UI_CLOSE_DOOR_Req,
@@ -370,6 +372,12 @@ void GlavoService::handle_message(const middleware::Message& msg)
             break;
         case middleware::MsgType::UI_Print_Terminate_Req:
             handle_print_terminate(msg);
+            break;
+        case middleware::MsgType::UI_Print_Pause_Req:
+            handle_print_pause(msg);
+            break;
+        case middleware::MsgType::UI_Print_Resume_Req:
+            handle_print_resume(msg);
             break;
         case middleware::MsgType::UI_Supply_Status_Req:
             handle_supply_status_req(msg);
@@ -894,10 +902,47 @@ void GlavoService::handle_print_terminate(const middleware::Message& msg)
     (void)msg;
     UPC_LOG_GLAVO_SERVICE(Info, "print_terminate requested");
     print_running_.store(false);
+    McuLink::instance().set_user_dispatch_paused(false);
     PrintVideoNotify::instance().on_print_abort();
     parser::ParserManager::instance().stop_parse();
     McuLink::instance().request_terminate();
     clear_prepare_session();
+}
+
+/** @brief 处理 UI_Print_Pause_Req：暂停 TCP 运动下发（解析继续，RingBuffer 满则自然阻塞） */
+void GlavoService::handle_print_pause(const middleware::Message& msg)
+{
+    (void)msg;
+    if(!print_running_.load()) {
+        UPC_LOG_GLAVO_SERVICE(Debug, "print_pause ignored: not running");
+        return;
+    }
+    McuLink& link = McuLink::instance();
+    if(link.is_user_dispatch_paused()) {
+        publish_print_pause_done(true);
+        return;
+    }
+    link.set_user_dispatch_paused(true);
+    UPC_LOG_GLAVO_SERVICE(Info, "print_pause accepted");
+    publish_print_pause_done(true);
+}
+
+/** @brief 处理 UI_Print_Resume_Req：恢复 TCP 运动下发 */
+void GlavoService::handle_print_resume(const middleware::Message& msg)
+{
+    (void)msg;
+    if(!print_running_.load()) {
+        UPC_LOG_GLAVO_SERVICE(Debug, "print_resume ignored: not running");
+        return;
+    }
+    McuLink& link = McuLink::instance();
+    if(!link.is_user_dispatch_paused()) {
+        publish_print_pause_done(false);
+        return;
+    }
+    link.set_user_dispatch_paused(false);
+    UPC_LOG_GLAVO_SERVICE(Info, "print_resume accepted");
+    publish_print_pause_done(false);
 }
 
 /** @brief 重置进度推送的去重状态（last_print_pct_ / last_parse_done_） */
@@ -1004,6 +1049,23 @@ void GlavoService::publish_terminate_done()
     }
 }
 
+/** @brief 向 UI 回复 APP_Print_Pause_Rsp（paused=1 暂停 / 0 恢复） */
+void GlavoService::publish_print_pause_done(bool paused)
+{
+    middleware::PrintPauseStatePayload p{};
+    p.paused = paused ? 1 : 0;
+
+    middleware::Message ntf(middleware::MsgType::APP_Print_Pause_Rsp,
+        static_cast<middleware::ModuleId>(module_id()),
+        middleware::ModuleId::UI);
+    ntf.payload = middleware::MsgPayload::from_bytes(
+        reinterpret_cast<const uint8_t*>(&p), sizeof(p));
+    if(!publish_async(ntf)) {
+        UPC_LOG_GLAVO_SERVICE(Warn, "print_pause_done publish failed paused=%d",
+                              paused ? 1 : 0);
+    }
+}
+
 /**
  * @brief McuLink 作业事件回调：完成/终止/错误时更新 UI 与本地状态
  *
@@ -1091,13 +1153,13 @@ void GlavoService::send_door_rsp(const middleware::Message& msg,
     }
 }
 
-/** @brief 处理 UI_CLOSE_DOOR_Req */
+/** @brief 处理 UI_CLOSE_DOOR_Req（关门传感器待接入，当前占位立即确认已关） */
 void GlavoService::handle_close_door_request(const middleware::Message& msg)
 {
     send_door_rsp(msg, middleware::MsgType::APP_CLOSE_DOOR_Rsp);
 }
 
-/** @brief 处理 UI_OpenDoor_Req */
+/** @brief 处理 UI_OpenDoor_Req（MCU 开门待接入，当前占位立即确认已开） */
 void GlavoService::handle_open_door_request(const middleware::Message& msg)
 {
     send_door_rsp(msg, middleware::MsgType::APP_OpenDoor_Rsp);

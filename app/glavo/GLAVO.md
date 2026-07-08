@@ -39,6 +39,8 @@ UI → GlavoService（工作线程）→ ParserManager → RingBuffer → McuLin
 | `UI_Parser_Exit_Ntf` | 取消解析（stop_parse + 清会话） |
 | `UI_Print_Start_Req` | 正式解析 + `begin_sending` + `PrintVideoNotify::on_print_start` |
 | `UI_Print_Terminate_Req` | `stop_parse` + `request_terminate` + `on_print_abort` |
+| `UI_Print_Pause_Req` | `set_user_dispatch_paused(true)`，仅停 TCP 运动下发 |
+| `UI_Print_Resume_Req` | `set_user_dispatch_paused(false)`，恢复 TCP 运动下发 |
 | `UI_PM25_Req` / 门控 Req | 环境快照或占位 Rsp |
 
 跨进程回复 UI：**必须** `publish_async`（`GlavoService` 工作线程内禁止 `MsgPort::publish` 同步路径）。
