@@ -5,7 +5,7 @@
 #include "ui_msg_proxy.hpp"
 #include "camera_preview.hpp"
 #include "control.hpp"
-#include "snowpod_device_img.h"
+#include "home_assets.h"
 #include "ui_slide_unlock.hpp"
 
 #include <cstdio>
@@ -109,7 +109,7 @@ lv_obj_t *g_topbar       = nullptr;   /**< 顶部状态条根（打印中浮于�
 lv_obj_t *g_lbl_dev_name = nullptr;
 lv_obj_t *g_dot_status   = nullptr;
 lv_obj_t *g_lbl_status   = nullptr;
-lv_obj_t *g_btn_files    = nullptr;   /**< 右上角 "Start" 磨砂按钮 */
+lv_obj_t *g_btn_files    = nullptr;   /**< 右上角 "My Files" 磨砂按钮 */
 
 /* ---------- 数值（左/右 各 2 块） ---------- */
 lv_obj_t *g_lbl_pm_indoor = nullptr;
@@ -132,10 +132,12 @@ lv_obj_t *g_env_lbl_pm_indoor = nullptr;   /**< EXTERIOR PM2.5 数值 */
 lv_obj_t *g_env_lbl_pm_cabin  = nullptr;   /**< INTERIOR PM2.5 数值 */
 lv_obj_t *g_env_lbl_temp      = nullptr;
 lv_obj_t *g_env_lbl_oxygen    = nullptr;
-lv_obj_t *g_env_bar_indoor    = nullptr;   /**< EXTERIOR PM2.5 mini 进度条 */
-lv_obj_t *g_env_bar_cabin     = nullptr;   /**< INTERIOR PM2.5 mini 进度条 */
+lv_obj_t *g_env_bar_indoor    = nullptr;   /**< EXTERIOR PM2.5 mini 进度条（打印面板） */
+lv_obj_t *g_env_bar_cabin     = nullptr;   /**< INTERIOR PM2.5 mini 进度条（打印面板） */
 lv_obj_t *g_env_status_indoor = nullptr;   /**< EXTERIOR 状态："● Good"/"● Too poor…" */
 lv_obj_t *g_env_status_cabin  = nullptr;   /**< INTERIOR 状态 */
+lv_obj_t *g_home_bar_indoor   = nullptr;   /**< 首页 EXTERIOR PM2.5 mini 进度条 */
+lv_obj_t *g_home_bar_cabin    = nullptr;   /**< 首页 INTERIOR PM2.5 mini 进度条 */
 lv_obj_t *g_prog_bar          = nullptr;
 lv_obj_t *g_prog_value        = nullptr; /**< "37%" */
 lv_obj_t *g_prog_remaining    = nullptr; /**< "剩余 45 min" */
@@ -145,7 +147,7 @@ lv_obj_t *g_pause_icon        = nullptr; /**< 暂停按钮图标（PAUSE ↔ PLA
 bool      g_print_paused      = false;   /**< 当前是否暂停（乐观切换，后端回执校正） */
 bool      g_printing_active   = false;
 
-void apply_camera_preview_layout(uint32_t src_w, uint32_t src_h);
+void apply_camera_preview_layout(uint32_t src_w, uint32_t src_h = 0);
 void on_camera_viewport_size_changed(lv_event_t *e);
 
 /** 预览：宽贴满 viewport，高等比缩放后居中裁剪（解码层仍输出全帧） */
@@ -153,16 +155,6 @@ void apply_camera_preview_layout(uint32_t src_w, uint32_t src_h)
 {
     if(!g_camera_image || !g_camera_viewport || src_w == 0) {
         return;
-    }
-
-    if(src_h == 0) {
-        const auto &player = ui::CameraPreviewPlayer::instance();
-        if(player.active()) {
-            src_h = player.stream_height();
-        }
-        if(src_h == 0) {
-            src_h = 1280u;   /* 与 CAMERA_HEIGHT_DEFAULT 一致，开流前占位 */
-        }
     }
 
     lv_obj_update_layout(g_camera_viewport);
@@ -175,25 +167,30 @@ void apply_camera_preview_layout(uint32_t src_w, uint32_t src_h)
     lv_obj_set_size(g_camera_image, vp_w, vp_h);
     lv_obj_center(g_camera_image);
     lv_image_set_inner_align(g_camera_image, LV_IMAGE_ALIGN_CENTER);
-    /* 宽贴满：仅按宽度缩放，高度超出 viewport 的部分由父容器居中裁切（无左右黑边） */
+    /* cover 填充：取宽/高两方向缩放比的较大者，保证画面上下左右都铺满 viewport
+     * （多出的一侧居中裁切），不留黑边。 */
+    if(src_h == 0 && ui::CameraPreviewPlayer::instance().active()) {
+        src_h = ui::CameraPreviewPlayer::instance().stream_height();
+    }
     const int64_t zoom_w = static_cast<int64_t>(vp_w) * 256 / static_cast<int32_t>(src_w);
-    const uint32_t zoom = static_cast<uint32_t>(zoom_w > 0 ? zoom_w : 256);
-    lv_image_set_scale(g_camera_image, zoom);
+    const int64_t zoom_h = src_h > 0
+                           ? static_cast<int64_t>(vp_h) * 256 / static_cast<int32_t>(src_h)
+                           : zoom_w;
+    const uint32_t zoom = static_cast<uint32_t>(zoom_w > zoom_h ? zoom_w : zoom_h);
+    lv_image_set_scale(g_camera_image, zoom > 0 ? zoom : LV_SCALE_NONE);
     lv_obj_invalidate(g_camera_image);
 }
 
 void on_camera_viewport_size_changed(lv_event_t * /*e*/)
 {
     uint32_t src_w = 1024u;
-    uint32_t src_h = 0u;
     if(ui::CameraPreviewPlayer::instance().active()) {
         src_w = ui::CameraPreviewPlayer::instance().stream_width();
-        src_h = ui::CameraPreviewPlayer::instance().stream_height();
         if(src_w == 0) {
             src_w = 1024u;
         }
     }
-    apply_camera_preview_layout(src_w, src_h);
+    apply_camera_preview_layout(src_w);
 }
 
 void on_files_click(lv_event_t *)
@@ -237,9 +234,6 @@ void set_pause_ui(bool paused)
 /** 暂停/恢复：乐观切换图标并发请求；后端回执经 register_print_pause_done 校正。 */
 void on_pause_click(lv_event_t *)
 {
-    if(!control_is_printing()) {
-        return;
-    }
     const bool want_pause = !g_print_paused;
     set_pause_ui(want_pause);
     if(want_pause) {
@@ -251,7 +245,7 @@ void on_pause_click(lv_event_t *)
     }
 }
 
-/** 右上角 "Start" 磨砂按钮：橙色半透明底 + 橙边 + 图标 + 文字（对齐设计稿 Frame520） */
+/** 右上角 "My Files" 磨砂按钮：橙色半透明底 + 橙边 + 图标 + 文字（对齐设计稿 Frame520） */
 lv_obj_t *build_files_button(lv_obj_t *parent)
 {
     lv_obj_t *btn = lv_button_create(parent);
@@ -279,14 +273,14 @@ lv_obj_t *build_files_button(lv_obj_t *parent)
     lv_obj_set_style_text_font(icon, user_font_text(), 0);
 
     lv_obj_t *txt = lv_label_create(btn);
-    lv_label_set_text(txt, "Start");
+    lv_label_set_text(txt, "Print Files");
     lv_obj_set_style_text_color(txt, user_color_accent, 0);
     lv_obj_set_style_text_font(txt, user_font_text(), 0);
 
     return btn;
 }
 
-/** 顶部状态条：左侧 设备名 + 状态点 + 状态文字；右侧 "Start" 磨砂按钮 */
+/** 顶部状态条：左侧 设备名 + 状态点 + 状态文字；右侧 "My Files" 磨砂按钮 */
 lv_obj_t *build_topbar(lv_obj_t *parent)
 {
     lv_obj_t *bar = lv_obj_create(parent);
@@ -337,128 +331,161 @@ lv_obj_t *build_topbar(lv_obj_t *parent)
     return bar;
 }
 
-/* 设备/倒影资源的 master 像素尺寸（必须与 tools/gen_device_img.py 输出一致） */
-#define SNOWPOD_DEV_MASTER_W   520
-#define SNOWPOD_DEV_MASTER_H   723
-#define SNOWPOD_REF_MASTER_W   520
-#define SNOWPOD_REF_MASTER_H   304
-
-/** 中央设备图 + 地面倒影。
- *  设备图按 master 渲染（520×723），这里用 lv_image_set_scale 缩放，使设备显示
- *  高度 ≈ USER_HOME_DEVICE_H（1920 档 660 / 1280 档 440），倒影按同比例贴在脚下。
- *  pivot 设 (0,0)，缩放围绕左上角，便于用绝对坐标精确摆放。 */
-lv_obj_t *build_device_placeholder(lv_obj_t *parent)
+/* 首页环境数值块（对齐 Figma 1.1.1）：顶部细分隔线 + 图标+标题 + 大数值+小单位
+ * +（PM 才有）mini 进度条。right=true 时整体右对齐（右列 温度/氧气）。 */
+lv_obj_t *home_make_metric(lv_obj_t *parent, const lv_image_dsc_t *icon,
+                           const char *caption, const char *unit,
+                           bool right, bool with_bar,
+                           lv_obj_t **out_val, lv_obj_t **out_bar)
 {
-    /* 256 = 100%。让设备显示高度对齐 USER_HOME_DEVICE_H。 */
-    const int32_t scale = (256 * USER_HOME_DEVICE_H) / SNOWPOD_DEV_MASTER_H;
-    const int32_t dev_w = SNOWPOD_DEV_MASTER_W * scale / 256;
-    const int32_t dev_h = SNOWPOD_DEV_MASTER_H * scale / 256;
-    const int32_t ref_w = SNOWPOD_REF_MASTER_W * scale / 256;
-    const int32_t ref_h = SNOWPOD_REF_MASTER_H * scale / 256;
+    const lv_flex_align_t cross = right ? LV_FLEX_ALIGN_END : LV_FLEX_ALIGN_START;
 
-    lv_obj_t *box = lv_obj_create(parent);
-    lv_obj_remove_style_all(box);
-    lv_obj_set_size(box, dev_w, dev_h + ref_h);
-    lv_obj_set_style_bg_opa(box, LV_OPA_TRANSP, 0);
-    lv_obj_clear_flag(box, LV_OBJ_FLAG_SCROLLABLE);
-    /* 允许子图缩放后超出布局盒而不被裁剪 */
-    lv_obj_set_style_clip_corner(box, false, 0);
+    lv_obj_t *col = lv_obj_create(parent);
+    lv_obj_remove_style_all(col);
+    lv_obj_set_width(col, USER_VALUE_LABEL_W + USER_PAD_LG);
+    lv_obj_set_height(col, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(col, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(col, LV_FLEX_ALIGN_START, cross, cross);
+    lv_obj_set_style_pad_row(col, USER_PAD_SM, 0);
+    lv_obj_set_style_bg_opa(col, LV_OPA_TRANSP, 0);
+    lv_obj_clear_flag(col, LV_OBJ_FLAG_SCROLLABLE);
 
-    /* 橙色辉光（对齐设计稿 filter0_f：#FF9E6D 0.5 高斯模糊光团）。
-     * LVGL 无法直接渲染 SVG 的 feGaussianBlur，这里用"圆角块 + 大范围阴影"
-     * 复刻高斯模糊光晕——阴影本身即是高斯模糊的圆角矩形。
-     * 光团中心位于设备约 (36% 宽, 45% 高) 处，先于设备图创建，确保位于其后。 */
-    {
-        const int32_t gw = dev_h * 36 / 100;   /* 光团本体宽（≈ 设计 155/427） */
-        const int32_t gh = dev_h * 43 / 100;   /* 光团本体高（≈ 设计 183/427） */
-        lv_obj_t *glow = lv_obj_create(box);
-        lv_obj_remove_style_all(glow);
-        lv_obj_add_flag(glow, LV_OBJ_FLAG_FLOATING);
-        lv_obj_clear_flag(glow, LV_OBJ_FLAG_SCROLLABLE);
-        lv_obj_set_size(glow, gw, gh);
-        lv_obj_set_style_radius(glow, LV_RADIUS_CIRCLE, 0);
-        lv_obj_set_style_bg_color(glow, lv_color_hex(0xFF9E6D), 0);
-        lv_obj_set_style_bg_opa(glow, LV_OPA_40, 0);
-        lv_obj_set_style_shadow_color(glow, lv_color_hex(0xFF9E6D), 0);
-        lv_obj_set_style_shadow_opa(glow, LV_OPA_50, 0);
-        lv_obj_set_style_shadow_width(glow, dev_h * 45 / 100, 0);
-        lv_obj_set_style_shadow_spread(glow, dev_h * 5 / 100, 0);
-        lv_obj_set_pos(glow, dev_w * 359 / 1000 - gw / 2, dev_h * 452 / 1000 - gh / 2);
+    /* 顶部细分隔线 */
+    lv_obj_t *div = lv_obj_create(col);
+    lv_obj_remove_style_all(div);
+    lv_obj_set_size(div, LV_PCT(100), 1);
+    lv_obj_set_style_bg_color(div, user_color_text, 0);
+    lv_obj_set_style_bg_opa(div, LV_OPA_30, 0);
+    lv_obj_set_style_margin_bottom(div, USER_PAD_SM, 0);
+
+    /* 图标 + 标题 */
+    lv_obj_t *hdr = lv_obj_create(col);
+    lv_obj_remove_style_all(hdr);
+    lv_obj_set_size(hdr, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(hdr, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(hdr, LV_FLEX_ALIGN_START,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_column(hdr, USER_PAD_SM, 0);
+    lv_obj_set_style_bg_opa(hdr, LV_OPA_TRANSP, 0);
+    lv_obj_clear_flag(hdr, LV_OBJ_FLAG_SCROLLABLE);
+
+    if(icon) {
+        lv_obj_t *ic = lv_image_create(hdr);
+        lv_image_set_src(ic, icon);
+        lv_obj_set_style_image_recolor(ic, user_color_text_dim, 0);
+        lv_obj_set_style_image_recolor_opa(ic, LV_OPA_COVER, 0);
     }
+    lv_obj_t *cap = lv_label_create(hdr);
+    lv_label_set_text(cap, caption);
+    lv_obj_set_style_text_color(cap, user_color_text_dim, 0);
+    lv_obj_set_style_text_font(cap, user_font_caption(), 0);
 
-    /* 设备主体 */
-    lv_obj_t *dev = lv_image_create(box);
-    lv_image_set_src(dev, &snowpod_device_img);
-    lv_image_set_pivot(dev, 0, 0);
-    lv_image_set_scale(dev, scale);
-    lv_obj_set_pos(dev, 0, 0);
+    /* 大数值 + 小单位 */
+    lv_obj_t *vrow = lv_obj_create(col);
+    lv_obj_remove_style_all(vrow);
+    lv_obj_set_size(vrow, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(vrow, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(vrow, LV_FLEX_ALIGN_START,
+                          LV_FLEX_ALIGN_END, LV_FLEX_ALIGN_END);
+    lv_obj_set_style_pad_column(vrow, USER_PAD_SM / 2, 0);
+    lv_obj_set_style_bg_opa(vrow, LV_OPA_TRANSP, 0);
+    lv_obj_clear_flag(vrow, LV_OBJ_FLAG_SCROLLABLE);
 
-    /* 地面倒影（已预翻转 + 渐隐），贴在设备脚下、水平居中 */
-    lv_obj_t *ref = lv_image_create(box);
-    lv_image_set_src(ref, &snowpod_reflection_img);
-    lv_image_set_pivot(ref, 0, 0);
-    lv_image_set_scale(ref, scale);
-    lv_obj_set_pos(ref, (dev_w - ref_w) / 2, dev_h);
+    lv_obj_t *val = lv_label_create(vrow);
+    lv_label_set_text(val, "--");
+    lv_obj_set_style_text_color(val, user_color_text, 0);
+    lv_obj_set_style_text_font(val, user_font_value(), 0);
+    if(out_val) *out_val = val;
 
-    return box;
+    lv_obj_t *u = lv_label_create(vrow);
+    lv_label_set_text(u, unit);
+    lv_obj_set_style_text_color(u, user_color_text_dim, 0);
+    lv_obj_set_style_text_font(u, user_font_caption(), 0);
+    lv_obj_set_style_margin_bottom(u, USER_PAD_SM, 0);
+
+    if(with_bar) {
+        lv_obj_t *bar = lv_bar_create(col);
+        lv_obj_remove_style_all(bar);
+        lv_obj_set_size(bar, LV_PCT(100), USER_PROGRESS_H / 2 > 0 ? USER_PROGRESS_H / 2 : 6);
+        lv_obj_set_style_bg_color(bar, user_color_panel_alt, LV_PART_MAIN);
+        lv_obj_set_style_bg_opa(bar, LV_OPA_COVER, LV_PART_MAIN);
+        lv_obj_set_style_radius(bar, LV_RADIUS_CIRCLE, LV_PART_MAIN);
+        lv_obj_set_style_bg_color(bar, user_color_accent, LV_PART_INDICATOR);
+        lv_obj_set_style_bg_opa(bar, LV_OPA_COVER, LV_PART_INDICATOR);
+        lv_obj_set_style_radius(bar, LV_RADIUS_CIRCLE, LV_PART_INDICATOR);
+        lv_bar_set_range(bar, 0, 100);
+        lv_bar_set_value(bar, 0, LV_ANIM_OFF);
+        if(out_bar) *out_bar = bar;
+    }
+    return col;
 }
 
-/** 中部主区：左 metrics | 中央设备 | 右 metrics */
+/** 中部主区：全屏整机背景（RGB565）+ 左右环境数值浮层。
+ *  area 为覆盖整个内容区的浮层（含状态栏区域），整机背景一直顶到最上；
+ *  状态栏在其后创建 → 浮于背景之上，顶部不再留黑边。 */
 lv_obj_t *build_main_area(lv_obj_t *parent)
 {
-    lv_obj_t *row = lv_obj_create(parent);
-    lv_obj_remove_style_all(row);
-    lv_obj_set_width(row, LV_PCT(100));
-    lv_obj_set_flex_grow(row, 1);
-    lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(row, LV_FLEX_ALIGN_SPACE_BETWEEN,
-                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_hor(row, USER_PAD_LG, 0);
-    lv_obj_set_style_pad_column(row, USER_PAD, 0);
-    lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, 0);
-    lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_t *area = lv_obj_create(parent);
+    lv_obj_remove_style_all(area);
+    lv_obj_add_flag(area, LV_OBJ_FLAG_FLOATING);
+    lv_obj_set_size(area, LV_PCT(100), LV_PCT(100));
+    lv_obj_set_pos(area, 0, 0);
+    lv_obj_set_style_bg_opa(area, LV_OPA_TRANSP, 0);
+    lv_obj_clear_flag(area, LV_OBJ_FLAG_SCROLLABLE);
 
-    /* 左列：室内 PM2.5 / 舱内 PM2.5
-     * 高度锁到中央设备一样高 + 行的 cross-axis 是 center，
-     * 三块就会一起垂直居中，底部会留出空间给右下角的开门浮动按钮。 */
-    lv_obj_t *col_left = lv_obj_create(row);
+    /* 整机背景大图：铺满 area、等比 cover、居中（源 1120x700） */
+    lv_obj_t *bg = lv_image_create(area);
+    lv_image_set_src(bg, &home_bg);
+    lv_obj_set_size(bg, LV_PCT(100), LV_PCT(100));
+    lv_image_set_inner_align(bg, LV_IMAGE_ALIGN_COVER);
+    lv_obj_center(bg);
+
+    /* 左列环境浮层：EXTERIOR / INTERIOR PM2.5（图标 + 数值 + mini 进度条） */
+    lv_obj_t *col_left = lv_obj_create(area);
     lv_obj_remove_style_all(col_left);
-    lv_obj_set_width(col_left, USER_VALUE_LABEL_W);
-    lv_obj_set_height(col_left, USER_HOME_DEVICE_H);
+    lv_obj_add_flag(col_left, LV_OBJ_FLAG_FLOATING);
+    lv_obj_set_size(col_left, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
     lv_obj_set_flex_flow(col_left, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_flex_align(col_left, LV_FLEX_ALIGN_SPACE_BETWEEN,
-                          LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
+    lv_obj_set_style_pad_row(col_left, USER_PAD_LG, 0);
     lv_obj_set_style_bg_opa(col_left, LV_OPA_TRANSP, 0);
-    ui_user_make_metric_block(col_left, "Indoor PM 2.5", LV_TEXT_ALIGN_LEFT, &g_lbl_pm_indoor);
-    ui_user_make_metric_block(col_left, "Cabin PM 2.5", LV_TEXT_ALIGN_LEFT, &g_lbl_pm_cabin);
+    lv_obj_clear_flag(col_left, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_align(col_left, LV_ALIGN_LEFT_MID, USER_PAD_LG, 0);
+    home_make_metric(col_left, &ic_pm, "EXTERIOR PM2.5", "ug/m3",
+                     false, true, &g_lbl_pm_indoor, &g_home_bar_indoor);
+    home_make_metric(col_left, &ic_pm, "INTERIOR PM2.5", "ug/m3",
+                     false, true, &g_lbl_pm_cabin, &g_home_bar_cabin);
 
-    /* 中央设备 */
-    build_device_placeholder(row);
-
-    /* 右列：设备温度 / 氧气浓度（高度同左列） */
-    lv_obj_t *col_right = lv_obj_create(row);
+    /* 右列环境浮层：DEVICE TEMP / O2 CONC.（图标 + 数值，无进度条，右对齐） */
+    lv_obj_t *col_right = lv_obj_create(area);
     lv_obj_remove_style_all(col_right);
-    lv_obj_set_width(col_right, USER_VALUE_LABEL_W);
-    lv_obj_set_height(col_right, USER_HOME_DEVICE_H);
+    lv_obj_add_flag(col_right, LV_OBJ_FLAG_FLOATING);
+    lv_obj_set_size(col_right, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
     lv_obj_set_flex_flow(col_right, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_flex_align(col_right, LV_FLEX_ALIGN_SPACE_BETWEEN,
+    lv_obj_set_flex_align(col_right, LV_FLEX_ALIGN_START,
                           LV_FLEX_ALIGN_END, LV_FLEX_ALIGN_END);
+    lv_obj_set_style_pad_row(col_right, USER_PAD_LG, 0);
     lv_obj_set_style_bg_opa(col_right, LV_OPA_TRANSP, 0);
-    ui_user_make_metric_block(col_right, "Temperature", LV_TEXT_ALIGN_RIGHT, &g_lbl_temp);
-    ui_user_make_metric_block(col_right, "Oxygen", LV_TEXT_ALIGN_RIGHT, &g_lbl_oxygen);
+    lv_obj_clear_flag(col_right, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_align(col_right, LV_ALIGN_RIGHT_MID, -USER_PAD_LG, 0);
+    home_make_metric(col_right, &ic_temp, "DEVICE TEMP", "\xC2\xB0""C",
+                     true, false, &g_lbl_temp, nullptr);
+    home_make_metric(col_right, &ic_o2, "O2 CONC.", "%",
+                     true, false, &g_lbl_oxygen, nullptr);
 
-    return row;
+    return area;
 }
 
 /** 右下角浮动 "Slide to Open" 滑动解锁条（真正可拖动；滑到底触发开门） */
 lv_obj_t *build_door_floating(lv_obj_t *parent)
 {
     ui_slide_unlock_cfg_t cfg = {};
-    cfg.hint_text  = "Slide to Open  " LV_SYMBOL_RIGHT LV_SYMBOL_RIGHT LV_SYMBOL_RIGHT;
+    cfg.hint_text  = "SWIPE TO OPEN  " LV_SYMBOL_RIGHT LV_SYMBOL_RIGHT LV_SYMBOL_RIGHT;
     cfg.on_unlocked = on_door_slide_unlocked;
     cfg.user_data  = nullptr;
-    cfg.track_w    = USER_SLIDE_W;           /* 宽胶囊（对齐设计稿 432/1280），避免文字截断 */
-    cfg.track_h    = USER_BTN_DOOR_ICON_SZ;
+    /* 首页开门滑块放大 ~1.33×（更贴设计稿 432×96 的大胶囊，且更好按）。
+     * 仅放大首页这处；USER_SLIDE_W 仍被打印前"未放入"弹窗复用，保持原尺寸。 */
+    cfg.track_w    = USER_SLIDE_W * 4 / 3;
+    cfg.track_h    = USER_BTN_DOOR_ICON_SZ * 4 / 3;
     cfg.custom_accent = true;                /* 设计稿为红色渐变滑块 */
     cfg.accent_color  = user_color_status_err;
     g_door_slide = ui_slide_unlock_create(parent, &cfg);
@@ -776,7 +803,6 @@ lv_obj_t *build_printing_area(lv_obj_t *parent)
     lv_obj_set_style_bg_color(g_camera_viewport, lv_color_black(), 0);
     lv_obj_set_style_bg_opa(g_camera_viewport, LV_OPA_COVER, 0);
     lv_obj_clear_flag(g_camera_viewport, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_clear_flag(g_camera_viewport, LV_OBJ_FLAG_OVERFLOW_VISIBLE);
     lv_obj_add_event_cb(g_camera_viewport, on_camera_viewport_size_changed,
                         LV_EVENT_SIZE_CHANGED, nullptr);
 
@@ -791,7 +817,7 @@ lv_obj_t *build_printing_area(lv_obj_t *parent)
     /* 真实视频帧 lv_image 占位（默认隐藏） */
     g_camera_image = lv_image_create(g_camera_viewport);
     lv_obj_add_flag(g_camera_image, LV_OBJ_FLAG_HIDDEN);
-    apply_camera_preview_layout(1024u, 1280u);
+    apply_camera_preview_layout(1024u);
 
     /* 底部双面板：浮于摄像头之上，贴底居中，两侧留内边距。
      * 高度自适应内容（cross STRETCH 使两块等高），避免固定高度裁切文字。 */
@@ -889,17 +915,14 @@ void page_user_home_refresh(bool /*force*/)
         lv_obj_set_style_bg_color(g_dot_status, status_color(snap.status), 0);
     }
 
-    if(g_lbl_pm_indoor) {
-        lv_label_set_text_fmt(g_lbl_pm_indoor, "%.1f", snap.pm25_indoor);
-    }
-    if(g_lbl_pm_cabin) {
-        lv_label_set_text_fmt(g_lbl_pm_cabin, "%.1f", snap.pm25_cabin);
-    }
+    /* 首页环境（单位为独立静态标签，数值只填数字）；PM 块带 mini 进度条 + 阈值配色 */
+    update_pm_block(g_lbl_pm_indoor, g_home_bar_indoor, nullptr, snap.pm25_indoor);
+    update_pm_block(g_lbl_pm_cabin,  g_home_bar_cabin,  nullptr, snap.pm25_cabin);
     if(g_lbl_temp) {
-        lv_label_set_text_fmt(g_lbl_temp, "%.1f°C", snap.temperature_c);
+        lv_label_set_text_fmt(g_lbl_temp, "%.1f", snap.temperature_c);
     }
     if(g_lbl_oxygen) {
-        lv_label_set_text_fmt(g_lbl_oxygen, "%.1f%%", snap.oxygen_percent);
+        lv_label_set_text_fmt(g_lbl_oxygen, "%.1f", snap.oxygen_percent);
     }
 
     /* 打印模式下的环境标签也由同一快照驱动（串口 0x9B → APP_Update_Ntf） */
@@ -929,8 +952,9 @@ lv_obj_t *page_user_home_create(lv_obj_t *parent)
     lv_obj_clear_flag(page, LV_OBJ_FLAG_SCROLLABLE);
     g_page_root = page;
 
-    g_topbar = build_topbar(page);
+    /* 先建首页主区（全屏整机背景浮层，置于最底），再建状态栏——状态栏遂浮于背景之上。 */
     g_normal_area = build_main_area(page);
+    g_topbar = build_topbar(page);
 
     /* 打印中模式：摄像头 + 双底条；与 g_normal_area 互斥显示。 */
     g_print_area = build_printing_area(page);

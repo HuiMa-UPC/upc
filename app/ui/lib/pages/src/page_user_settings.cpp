@@ -613,7 +613,9 @@ lv_obj_t *make_nav_item(lv_obj_t *parent, NavId id)
     lv_obj_add_event_cb(btn, on_nav_click, LV_EVENT_CLICKED,
                         reinterpret_cast<void *>(static_cast<intptr_t>(id)));
 
-    const int32_t icon_sz = lv_font_get_line_height(user_font_text());
+    /* 图标尺寸取导航行高的 ~55%（A8 图形本身只占位图约 75%，故不宜再用文字行高，
+     * 否则视觉过小）。行高足够（1024档 72 / 1280档 68），不会裁切。 */
+    const int32_t icon_sz = USER_NAV_ITEM_H * 5 / 9;
     lv_obj_t *icon = lv_image_create(btn);
     lv_image_set_src(icon, d.icon);
     lv_obj_set_size(icon, icon_sz, icon_sz);
