@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# 全量编译 rongsu_upc（UI / Glavo / Camera 等全部目标）
+# 全量编译 rongsu_upc（UI / Glavo / Camera / Broker 等全部目标）
 #
 # 用法:
 #   ./build.sh              配置（若尚未配置）并编译
-#   ./build.sh clean        删除 build/ 与 output/ 
+#   ./build.sh clean        删除 build/ 与 output/（含 install/）
 # 环境变量（可选）:
 #   BUILD_DIR     构建目录，默认 ./build
 #   OUTPUT_DIR    产物输出目录，默认 ./output
@@ -17,6 +17,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BUILD_DIR="${BUILD_DIR:-$ROOT/build}"
 OUTPUT_DIR="${OUTPUT_DIR:-$ROOT/output}"
+INSTALL_DIR="${OUTPUT_DIR}/install"
 BUILD_TYPE="${BUILD_TYPE:-Release}"
 JOBS="${JOBS:-$(nproc 2>/dev/null || echo 4)}"
 UPC_DEBUG="${UPC_DEBUG:-ON}"
@@ -69,6 +70,7 @@ do_collect_outputs() {
     mkdir -p "$OUTPUT_DIR"
 
     local -a artifacts=(
+        "app/broker/rongsu_broker"
         "app/ui/rongsu_ui"
         "app/glavo/rongsu_glavo"
         "app/camera/rongsu_camera"
@@ -88,6 +90,54 @@ do_collect_outputs() {
     done
 }
 
+do_collect_sdk() {
+    rm -rf "$INSTALL_DIR"
+    echo "==> 生成协作 SDK: $INSTALL_DIR"
+
+    install_sdk_libs() {
+        local pkg="$1"
+        shift
+        local lib_dir="$INSTALL_DIR/$pkg/lib"
+        mkdir -p "$lib_dir"
+        local rel base
+        for rel in "$@"; do
+            if [[ ! -f "$BUILD_DIR/$rel" ]]; then
+                echo "错误: 未找到静态库 $BUILD_DIR/$rel" >&2
+                exit 1
+            fi
+            base="$(basename "$rel")"
+            install -m 644 "$BUILD_DIR/$rel" "$lib_dir/$base"
+            echo "  $pkg/lib/$base"
+        done
+    }
+
+    install_sdk_headers() {
+        local pkg="$1"
+        local src_root="$2"
+        local inc_dir="$INSTALL_DIR/$pkg/include"
+        local hdr rel
+        while IFS= read -r -d '' hdr; do
+            rel="${hdr#$src_root/}"
+            install -D -m 644 "$hdr" "$inc_dir/$rel"
+        done < <(find "$src_root" -type f \( -name '*.hpp' -o -name '*.h' \) -print0 | sort -z)
+        local n
+        n="$(find "$inc_dir" -type f | wc -l)"
+        echo "  $pkg/include/ ($n headers)"
+    }
+
+    install_sdk_libs common "common/libupc_common.a"
+    install_sdk_headers common "$ROOT/common"
+
+    install_sdk_libs parser \
+        "app/parser/libupc_parser.a" \
+        "app/parser/libupc_parser_gcode.a" \
+        "app/parser/libupc_parser_ovf.a"
+    install_sdk_headers parser "$ROOT/app/parser"
+
+    install_sdk_libs protocol "app/protocol/libupc_protocol.a"
+    install_sdk_headers protocol "$ROOT/app/protocol"
+}
+
 case "$cmd" in
     build)
         if [[ ! -f "$BUILD_DIR/CMakeCache.txt" ]]; then
@@ -95,11 +145,13 @@ case "$cmd" in
         fi
         do_build
         do_collect_outputs
+        do_collect_sdk
         echo ""
         echo "编译完成。产物目录: $OUTPUT_DIR"
+        echo "协作 SDK: $INSTALL_DIR (common/ parser/ protocol/ 各含 lib/ + include/)"
         ;;
     clean)
-        echo "==> 删除 $BUILD_DIR 与 $OUTPUT_DIR"
+        echo "==> 删除 $BUILD_DIR 与 $OUTPUT_DIR（含 install/）"
         rm -rf "$BUILD_DIR" "$OUTPUT_DIR"
         ;;
     *)
@@ -107,5 +159,3 @@ case "$cmd" in
         exit 1
         ;;
 esac
-
-

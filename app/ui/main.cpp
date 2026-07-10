@@ -1,7 +1,6 @@
 #include "platform.hpp"
 #include "process_ctl.hpp"
 #include "upc_contract.hpp"
-#include "ipc_config.hpp"
 #include "msg_port.hpp"
 #include "ui_app.hpp"
 #include "upc_sys_monitor.hpp"
@@ -17,33 +16,28 @@ namespace {
 
 const ProcessConfig kProc = process_config_ui();
 
-const char* ipc_socket_path() {
-    const char* env = std::getenv("UPC_IPC_SOCKET");
-    return (env && env[0]) ? env : UPC_IPC_SOCKET_DEFAULT;
-}
-
-const char* camera_ipc_socket_path() {
-    const char* env = std::getenv("UPC_CAMERA_IPC_SOCKET");
-    return (env && env[0]) ? env : UPC_CAMERA_IPC_SOCKET_DEFAULT;
+const char* broker_socket_path() {
+    const char* env = std::getenv("UPC_BROKER_SOCKET");
+    return (env && env[0]) ? env : UPC_BROKER_SOCKET_DEFAULT;
 }
 
 bool connect_ipc_with_retry() {
     auto& port = middleware::MsgPort::instance();
     for (int i = 0; i < 100; ++i) {
         port.shutdown();
-        if (!port.set_mode_ipc_hub(middleware::ModuleId::UI)) {
+        if (!port.set_mode_ipc_client(middleware::ModuleId::UI,
+                                      broker_socket_path())) {
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
             continue;
         }
-        if (!port.add_ipc_peer(middleware::ModuleId::APP_GLAVO, ipc_socket_path(),
-                               true)) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
-            continue;
-        }
-        (void)port.add_ipc_peer(middleware::ModuleId::APP_CAMERA,
-                                camera_ipc_socket_path(), false);
         if (!port.init()) {
             continue;
+        }
+        for (int j = 0; j < 20; ++j) {
+            port.process(50);
+            if (port.peer_connected()) {
+                return true;
+            }
         }
         if (port.peer_connected()) {
             return true;
@@ -80,8 +74,8 @@ int start_ui(char daemon) {
 
     if (!connect_ipc_with_retry()) {
         std::fprintf(stderr,
-            "%s IPC connect failed (%s) — start rongsu_glavo first\n",
-            kProc.name, ipc_socket_path());
+            "%s IPC connect failed (%s) — start rongsu_broker + rongsu_glavo first\n",
+            kProc.name, broker_socket_path());
         if (daemon) {
             process_remove_pid(kProc.pid_file);
         }
@@ -98,18 +92,8 @@ int start_ui(char daemon) {
     ui::app_init(lv_scr_act());
 
     auto& port = middleware::MsgPort::instance();
-    if (!port.start_ipc_io_thread()) {
-        std::fprintf(stderr, "%s IPC io thread start failed\n", kProc.name);
-        port.shutdown();
-        if (daemon) {
-            process_remove_pid(kProc.pid_file);
-        }
-        return 6;
-    }
-
     while (!g_shutdown_requested) {
-        /* 消费 IO 线程入队的本地消息（订阅回调在 UI 主线程） */
-        port.process(0);
+        port.process(8);
         const uint32_t delay = lv_timer_handler();
         (void)delay;
         port.process(0);

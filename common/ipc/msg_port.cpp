@@ -16,29 +16,16 @@ void MsgPort::set_mode_in_process()
     mode_ = MsgPortMode::InProcess;
 }
 
-bool MsgPort::set_mode_ipc_server(ModuleId local_id, const char* socket_path)
+bool MsgPort::set_mode_ipc_broker(const char* socket_path)
 {
     mode_ = MsgPortMode::Ipc;
-    return upc_ipc::IpcMsgBus::instance().init_server(local_id, socket_path);
+    return upc_ipc::IpcMsgBus::instance().init_broker(socket_path);
 }
 
-bool MsgPort::set_mode_ipc_hub(ModuleId local_id)
+bool MsgPort::set_mode_ipc_client(ModuleId local_id, const char* broker_path)
 {
     mode_ = MsgPortMode::Ipc;
-    return upc_ipc::IpcMsgBus::instance().init_hub(local_id);
-}
-
-bool MsgPort::add_ipc_peer(ModuleId peer_id, const char* socket_path,
-                           bool required, bool connect_now)
-{
-    return upc_ipc::IpcMsgBus::instance().add_peer(peer_id, socket_path,
-                                                   required, connect_now);
-}
-
-bool MsgPort::set_mode_ipc_client(ModuleId local_id, const char* socket_path)
-{
-    mode_ = MsgPortMode::Ipc;
-    return upc_ipc::IpcMsgBus::instance().init_client(local_id, socket_path);
+    return upc_ipc::IpcMsgBus::instance().init_ipc_client(local_id, broker_path);
 }
 
 bool MsgPort::init()
@@ -119,22 +106,6 @@ void MsgPort::process(int io_timeout_ms)
     } else {
         upc_ipc::IpcMsgBus::instance().process(io_timeout_ms);
     }
-}
-
-bool MsgPort::start_ipc_io_thread()
-{
-    if (mode_ != MsgPortMode::Ipc) {
-        return false;
-    }
-    return upc_ipc::IpcMsgBus::instance().start_io_thread();
-}
-
-bool MsgPort::ipc_io_thread_running() const noexcept
-{
-    if (mode_ != MsgPortMode::Ipc) {
-        return false;
-    }
-    return upc_ipc::IpcMsgBus::instance().io_thread_running();
 }
 
 bool MsgPort::publish_to_peer_with_fds(const Message& msg,

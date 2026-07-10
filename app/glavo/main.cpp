@@ -17,9 +17,9 @@ namespace {
 
 const ProcessConfig kProc = process_config_glavo();
 
-const char* ipc_socket_path() {
-    const char* env = std::getenv("UPC_IPC_SOCKET");
-    return (env && env[0]) ? env : UPC_IPC_SOCKET_DEFAULT;
+const char* broker_socket_path() {
+    const char* env = std::getenv("UPC_BROKER_SOCKET");
+    return (env && env[0]) ? env : UPC_BROKER_SOCKET_DEFAULT;
 }
 
 int start_glavo(char daemon) {
@@ -45,10 +45,10 @@ int start_glavo(char daemon) {
     }
 
     auto& port = middleware::MsgPort::instance();
-    if (!port.set_mode_ipc_server(middleware::ModuleId::APP_GLAVO,
-                                  ipc_socket_path())) {
-        std::fprintf(stderr, "%s IPC listen failed on %s\n",
-            kProc.name, ipc_socket_path());
+    if (!port.set_mode_ipc_client(middleware::ModuleId::APP_GLAVO,
+                                  broker_socket_path())) {
+        std::fprintf(stderr, "%s IPC connect failed on %s\n",
+            kProc.name, broker_socket_path());
         return 4;
     }
     if (!port.init()) {
@@ -79,8 +79,8 @@ int start_glavo(char daemon) {
     mcu.start_link_thread();
     glavo_service.start();
 
-    std::printf("%s ready (IPC %s, waiting for UI peer)\n",
-        kProc.name, ipc_socket_path());
+    std::printf("%s ready (IPC broker %s)\n",
+        kProc.name, broker_socket_path());
 
     while (!g_shutdown_requested) {
         port.process(2);

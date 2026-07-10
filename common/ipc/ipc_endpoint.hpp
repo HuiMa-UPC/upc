@@ -25,8 +25,15 @@ public:
 
     /** 服务端：bind + listen，不阻塞等待 UI */
     bool listen_on(const char* socket_path);
-    /** 服务端：非阻塞 accept，成功则 connected() 为 true */
+    /** 服务端：非阻塞 accept，单连接模式（conn_fd_ 存于本 endpoint） */
     bool try_accept();
+    /**
+     * 服务端：非阻塞 accept，返回新 client fd（listen 端点不占用 conn_fd_）。
+     * 调用方负责 close；Broker 等多连接场景使用。
+     */
+    int accept_connection();
+    /** 已连接 fd 绑定到本端点（Broker accept 等多连接场景） */
+    bool attach_connected_fd(int fd);
     /** 客户端：连接已 listen 的服务端 */
     bool connect_to(const char* socket_path);
 

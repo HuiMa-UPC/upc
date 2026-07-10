@@ -6,15 +6,14 @@
 #include "msg_queue.hpp"
 #include "msg_runtime.hpp"
 
-#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <functional>
 #include <memory>
 #include <mutex>
 #include <string>
-#include <thread>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace upc_ipc {
@@ -23,21 +22,16 @@ using IpcHandler = std::function<void(const middleware::Message&)>;
 
 enum class IpcBusMode : uint8_t {
     None   = 0,
-    Server = 1,
-    Hub    = 2,
+    Broker = 1,
+    Client = 2,
 };
 
 class IpcMsgBus {
 public:
     static IpcMsgBus& instance();
 
-    bool init_server(middleware::ModuleId local_id, const char* socket_path);
-    /** UI 多连接 hub（先 init_hub，再 add_peer） */
-    bool init_hub(middleware::ModuleId local_id);
-    bool add_peer(middleware::ModuleId peer_id, const char* socket_path,
-                  bool required, bool connect_now = true);
-    /** 兼容旧 API：等价 init_hub + add_peer(APP_GLAVO, …, required=true) */
-    bool init_client(middleware::ModuleId local_id, const char* socket_path);
+    bool init_broker(const char* socket_path);
+    bool init_ipc_client(middleware::ModuleId local_id, const char* broker_path);
     void shutdown();
 
     uint32_t subscribe(middleware::MsgType type,
@@ -49,85 +43,33 @@ public:
     bool publish_sync(const middleware::Message& msg);
     void process(int io_timeout_ms = 0);
 
-    /**
-     * Hub 模式：后台线程专职 epoll 收包与 IPC_FWD；
-     * 本进程订阅回调改由主线程 process() 消费 local_queue_。
-     */
-    bool start_io_thread();
-    void stop_io_thread();
-    [[nodiscard]] bool io_thread_running() const noexcept;
-
-    /** 所有 required peer 均已连接（hub）；server 模式下对端 UI 已连接 */
     [[nodiscard]] bool peer_connected() const noexcept;
     [[nodiscard]] bool peer_connected(middleware::ModuleId peer_id) const noexcept;
 
-    /** 服务端经 IPC 连接附带 SCM_RIGHTS 发送（如 Camera Start_Rsp + dma fd） */
     bool send_to_peer_with_fds(middleware::ModuleId peer_id,
                                const middleware::Message& msg,
                                const std::vector<int>& fds);
-    /** UI Hub：取走 peer 最近随 wire 帧送达的 dma fd（取走后清空） */
     bool take_pending_dma_fds(middleware::ModuleId peer_id,
                               std::vector<int>& out_fds);
 
 private:
     enum class PollKind : uint8_t {
-        HubPeer,
-        ServerListen,
-        ServerConn,
+        BrokerListen,
+        BrokerClient,
+        ClientConn,
     };
 
-    struct PeerEntry {
-        middleware::ModuleId peer_id{};
-        std::string socket_path;
-        bool required = false;
-        IpcEndpoint endpoint;
-        std::chrono::steady_clock::time_point last_reconnect_attempt{};
+    struct BrokerClientSlot {
+        std::unique_ptr<IpcEndpoint> endpoint;
+        middleware::ModuleId module_id{middleware::ModuleId{0}};
+        bool registered{false};
     };
 
     struct PollSlot {
         PollKind kind{};
-        middleware::ModuleId hub_peer_id{};
+        BrokerClientSlot* broker_client{nullptr};
         int fd = -1;
     };
-
-    bool deliver_local(const middleware::Message& msg);
-    bool enqueue_local(const middleware::Message& msg);
-    void process_local_queue();
-    void io_thread_loop();
-    void deliver_frames(const std::vector<InboundWireUnit>& units,
-                        middleware::ModuleId expected_sender);
-    void stash_pending_dma_fds(middleware::ModuleId sender,
-                               std::vector<int> fds);
-    [[nodiscard]] bool should_forward_to_peer(
-        const middleware::Message& msg) const;
-    [[nodiscard]] bool needs_local_handling(const middleware::Message& msg) const;
-    bool send_outbound_from_local(const middleware::Message& msg,
-                                  bool warn_on_fail);
-    void poll_io(int timeout_ms);
-    void pump_inbound_fallback(int timeout_ms);
-    void handle_poll_event(PollSlot* slot, uint32_t events);
-    void try_reconnect_peers();
-    void try_accept_peer();
-    bool poll_register_hub_peer(PeerEntry& peer);
-    bool poll_register_server_listen();
-    bool poll_register_server_conn();
-    void poll_unregister(int fd);
-    void poll_clear();
-    bool is_registered_peer(middleware::ModuleId id) const;
-    PeerEntry* find_peer(middleware::ModuleId id);
-    const PeerEntry* find_peer(middleware::ModuleId id) const;
-    bool send_to_peer(middleware::ModuleId peer_id, const middleware::Message& msg);
-    bool send_to_all_peers(const middleware::Message& msg);
-
-    IpcBusMode mode_{IpcBusMode::None};
-    IpcEndpoint server_endpoint_;
-    IpcPoller poller_;
-    std::unordered_map<int, std::unique_ptr<PollSlot>> poll_slots_;
-    middleware::ModuleId local_id_{middleware::ModuleId::UI};
-    middleware::ModuleId server_peer_id_{middleware::ModuleId::UI};
-
-    std::vector<std::unique_ptr<PeerEntry>> peers_;
-    mutable std::mutex peers_mtx_;
 
     struct LocalSub {
         uint32_t id;
@@ -135,9 +77,53 @@ private:
         middleware::ModuleId module_id;
         IpcHandler handler;
     };
+
+    bool deliver_local(const middleware::Message& msg);
+    bool enqueue_local(const middleware::Message& msg);
+    void process_local_queue();
+    void deliver_client_frames(const std::vector<InboundWireUnit>& units);
+    void handle_broker_client_io(BrokerClientSlot& slot);
+    void broker_unregister_client(BrokerClientSlot& slot, bool notify_offline);
+    void broker_broadcast_reg_notify(uint32_t event, middleware::ModuleId module_id);
+    void broker_send_reg_snapshot(BrokerClientSlot& slot);
+    bool broker_route_wire(BrokerClientSlot& from, const InboundWireUnit& unit);
+    bool client_send_reg();
+    void apply_reg_notify(uint32_t event, middleware::ModuleId module_id);
+    void try_reconnect_broker();
+    void accept_broker_client();
+    [[nodiscard]] bool needs_local_handling(const middleware::Message& msg) const;
+    bool send_outbound_from_local(const middleware::Message& msg, bool warn_on_fail);
+    bool send_wire_frame(const std::vector<uint8_t>& frame);
+    bool send_wire_frame_with_fds(const std::vector<uint8_t>& frame,
+                                  const middleware::Message& msg,
+                                  const std::vector<int>& fds);
+    void stash_pending_dma_fds(middleware::ModuleId sender, std::vector<int> fds);
+    void poll_io(int timeout_ms);
+    void pump_inbound_fallback(int timeout_ms);
+    void handle_poll_event(PollSlot* slot, uint32_t events);
+    bool poll_register_broker_client(BrokerClientSlot& slot);
+    bool poll_register_client_conn();
+    bool poll_register_broker_listen();
+    void poll_unregister(int fd);
+    void poll_clear();
+
+    IpcBusMode mode_{IpcBusMode::None};
+    IpcEndpoint server_endpoint_;
+    IpcEndpoint client_endpoint_;
+    std::string broker_path_;
+    std::chrono::steady_clock::time_point client_last_reconnect_{};
+    std::unordered_set<uint32_t> online_remote_peers_;
+    mutable std::mutex online_peers_mtx_;
+    std::vector<std::unique_ptr<BrokerClientSlot>> broker_clients_;
+    std::unordered_map<uint32_t, BrokerClientSlot*> broker_module_index_;
+    mutable std::mutex broker_clients_mtx_;
+    IpcPoller poller_;
+    std::unordered_map<int, std::unique_ptr<PollSlot>> poll_slots_;
+    middleware::ModuleId local_id_{middleware::ModuleId::UI};
+
     std::vector<LocalSub> subscribers_;
     std::mutex subs_mtx_;
-    std::atomic<uint32_t> next_sub_id_{1};
+    uint32_t next_sub_id_{1};
 
     middleware::PriorityMsgQueue local_queue_;
     std::mutex queue_mtx_;
@@ -145,10 +131,6 @@ private:
 
     std::unordered_map<uint32_t, std::vector<int>> pending_dma_fds_;
     mutable std::mutex pending_dma_fds_mtx_;
-
-    std::thread io_thread_;
-    std::atomic<bool> io_thread_running_{false};
-    std::atomic<bool> io_thread_stop_{false};
 };
 
 } // namespace upc_ipc

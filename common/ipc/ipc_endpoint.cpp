@@ -1,6 +1,7 @@
 #include "ipc_endpoint.hpp"
 
 #include "rs_log.hpp"
+#include "upc_contract.hpp"
 
 #include <cerrno>
 #include <cstring>
@@ -86,7 +87,7 @@ bool IpcEndpoint::listen_on(const char* socket_path) {
         ::close(fd);
         return false;
     }
-    if (::listen(fd, 1) < 0) {
+    if (::listen(fd, UPC_IPC_LISTEN_BACKLOG) < 0) {
         ::close(fd);
         return false;
     }
@@ -103,16 +104,57 @@ bool IpcEndpoint::try_accept() {
 #if !defined(__linux__) && !defined(__unix__)
     return false;
 #else
+    const int fd = accept_connection();
+    if (fd < 0) {
+        return false;
+    }
     std::lock_guard<std::mutex> lock(io_mtx_);
-    if (conn_fd_ >= 0 || listen_fd_ < 0) {
-        return conn_fd_ >= 0;
+    if (conn_fd_ >= 0) {
+        ::close(fd);
+        return true;
+    }
+    conn_fd_ = fd;
+    set_conn_nonblocking();
+    return true;
+#endif
+}
+
+int IpcEndpoint::accept_connection() {
+#if !defined(__linux__) && !defined(__unix__)
+    return -1;
+#else
+    std::lock_guard<std::mutex> lock(io_mtx_);
+    if (listen_fd_ < 0) {
+        return -1;
     }
 
     const int fd = ::accept(listen_fd_, nullptr, nullptr);
     if (fd < 0) {
+        return -1;
+    }
+
+    const int flags = ::fcntl(fd, F_GETFL, 0);
+    if (flags >= 0) {
+        ::fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+    }
+    return fd;
+#endif
+}
+
+bool IpcEndpoint::attach_connected_fd(int fd) {
+#if !defined(__linux__) && !defined(__unix__)
+    (void)fd;
+    return false;
+#else
+    if (fd < 0) {
         return false;
     }
+    std::lock_guard<std::mutex> lock(io_mtx_);
+    if (conn_fd_ >= 0) {
+        ::close(conn_fd_);
+    }
     conn_fd_ = fd;
+    rx_accum_.clear();
     set_conn_nonblocking();
     return true;
 #endif

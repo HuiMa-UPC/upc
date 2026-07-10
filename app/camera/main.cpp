@@ -1,7 +1,6 @@
 #include "process_ctl.hpp"
 #include "upc_contract.hpp"
 #include "msg_port.hpp"
-#include "ipc_config.hpp"
 #include "upc_sys_monitor.hpp"
 #include "rs_log.hpp"
 #include "camera_service.hpp"
@@ -14,10 +13,10 @@ namespace {
 
 const ProcessConfig kProc = process_config_camera();
 
-const char* camera_ipc_socket_path()
+const char* broker_socket_path()
 {
-    const char* env = std::getenv("UPC_CAMERA_IPC_SOCKET");
-    return (env && env[0]) ? env : UPC_CAMERA_IPC_SOCKET_DEFAULT;
+    const char* env = std::getenv("UPC_BROKER_SOCKET");
+    return (env && env[0]) ? env : UPC_BROKER_SOCKET_DEFAULT;
 }
 
 int start_camera(char daemon)
@@ -44,10 +43,10 @@ int start_camera(char daemon)
     }
 
     auto& port = middleware::MsgPort::instance();
-    if(!port.set_mode_ipc_server(middleware::ModuleId::APP_CAMERA,
-                                 camera_ipc_socket_path())) {
-        UPC_LOG_CAMERA_SERVICE(Error, "IPC listen failed on %s",
-                               camera_ipc_socket_path());
+    if(!port.set_mode_ipc_client(middleware::ModuleId::APP_CAMERA,
+                                 broker_socket_path())) {
+        UPC_LOG_CAMERA_SERVICE(Error, "IPC connect failed on %s",
+                               broker_socket_path());
         return 4;
     }
     if(!port.init()) {
@@ -61,8 +60,8 @@ int start_camera(char daemon)
         return 6;
     }
 
-    UPC_LOG_CAMERA_SERVICE(Info, "ready IPC %s, waiting for UI peer",
-                             camera_ipc_socket_path());
+    UPC_LOG_CAMERA_SERVICE(Info, "ready IPC broker %s",
+                             broker_socket_path());
 
     while(!g_shutdown_requested) {
         port.process(2);

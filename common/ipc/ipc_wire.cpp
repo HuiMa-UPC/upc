@@ -131,4 +131,29 @@ bool wire_decode(const uint8_t* data, size_t len, middleware::Message& out) {
     return true;
 }
 
+bool wire_peek_route(const uint8_t* data, size_t len,
+                     middleware::ModuleId& sender_id,
+                     middleware::ModuleId& target_id)
+{
+    if (len < sizeof(WireHeader)) {
+        return false;
+    }
+
+    WireHeader hdr{};
+    std::memcpy(&hdr, data, sizeof(hdr));
+    if (hdr.magic != WIRE_MAGIC || hdr.version != WIRE_VERSION) {
+        return false;
+    }
+    if (hdr.payload_length > WIRE_MAX_PAYLOAD) {
+        return false;
+    }
+    if (sizeof(WireHeader) + hdr.payload_length != len) {
+        return false;
+    }
+
+    sender_id = static_cast<middleware::ModuleId>(hdr.sender_id);
+    target_id = static_cast<middleware::ModuleId>(hdr.target_id);
+    return true;
+}
+
 } // namespace upc_ipc

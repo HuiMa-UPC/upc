@@ -1,20 +1,19 @@
 #!/bin/sh
-# 统一启动 / 停止 rongsu_glavo + rongsu_camera + rongsu_ui
+# 统一启动 / 停止 rongsu_broker + rongsu_glavo + rongsu_camera + rongsu_ui
 # 用法: rongsu.sh {start|stop|status|run}
 # 环境:
 #   RONGSU_BIN                    可执行文件目录，默认 /home
-#   UPC_IPC_SOCKET                Glavo listen socket
-#   UPC_CAMERA_IPC_SOCKET         rongsu_camera listen socket
+#   UPC_BROKER_SOCKET             Broker listen socket
 #   UPC_IPC_PEER_STARTUP_WAIT_MS  等待 socket 超时，默认 10000
 
 set -e
 
 BIN_DIR="${RONGSU_BIN:-/home}"
+BROKER="$BIN_DIR/rongsu_broker"
 GLAVO="$BIN_DIR/rongsu_glavo"
 UI="$BIN_DIR/rongsu_ui"
 CAMERA="$BIN_DIR/rongsu_camera"
-SOCK="${UPC_IPC_SOCKET:-/tmp/upc_glavo.sock}"
-CAM_SOCK="${UPC_CAMERA_IPC_SOCKET:-/tmp/upc_camera.sock}"
+BROKER_SOCK="${UPC_BROKER_SOCKET:-/tmp/upc_broker.sock}"
 WAIT_MS="${UPC_IPC_PEER_STARTUP_WAIT_MS:-10000}"
 
 wait_for_socket() {
@@ -36,28 +35,31 @@ wait_for_socket() {
 cmd="${1:-}"
 
 start_daemon() {
-    if [ ! -x "$GLAVO" ] || [ ! -x "$UI" ] || [ ! -x "$CAMERA" ]; then
+    if [ ! -x "$BROKER" ] || [ ! -x "$GLAVO" ] || [ ! -x "$UI" ] || [ ! -x "$CAMERA" ]; then
         echo "Missing binaries under $BIN_DIR (set RONGSU_BIN)" >&2
         exit 1
     fi
-    rm -f "$SOCK" "$CAM_SOCK"
+    rm -f "$BROKER_SOCK"
+    "$BROKER" start
+    wait_for_socket "$BROKER_SOCK" "broker"
     "$GLAVO" start
-    wait_for_socket "$SOCK" "glavo"
     "$CAMERA" start
-    wait_for_socket "$CAM_SOCK" "rongsu_camera"
     "$UI" start
-    echo "Started glavo + rongsu_camera + ui"
+    echo "Started broker + glavo + rongsu_camera + ui"
 }
 
 stop_all() {
     "$UI" stop || true
     "$CAMERA" stop || true
     "$GLAVO" stop || true
-    rm -f "$SOCK" "$CAM_SOCK"
-    echo "Stopped ui + rongsu_camera + glavo"
+    "$BROKER" stop || true
+    rm -f "$BROKER_SOCK"
+    echo "Stopped ui + rongsu_camera + glavo + broker"
 }
 
 status_all() {
+    echo "=== Broker ==="
+    "$BROKER" status || true
     echo "=== Glavo ==="
     "$GLAVO" status || true
     echo "=== rongsu_camera ==="
@@ -67,25 +69,27 @@ status_all() {
 }
 
 run_foreground() {
-    if [ ! -x "$GLAVO" ] || [ ! -x "$UI" ] || [ ! -x "$CAMERA" ]; then
+    if [ ! -x "$BROKER" ] || [ ! -x "$GLAVO" ] || [ ! -x "$UI" ] || [ ! -x "$CAMERA" ]; then
         echo "Missing binaries under $BIN_DIR" >&2
         exit 1
     fi
-    rm -f "$SOCK" "$CAM_SOCK"
-    trap 'kill $GPID $CPID $UPID 2>/dev/null; rm -f "$SOCK" "$CAM_SOCK"; exit' INT TERM
+    rm -f "$BROKER_SOCK"
+    trap 'kill $BPID $GPID $CPID $UPID 2>/dev/null; rm -f "$BROKER_SOCK"; exit' INT TERM
+
+    "$BROKER" run &
+    BPID=$!
+    wait_for_socket "$BROKER_SOCK" "broker"
 
     "$GLAVO" run &
     GPID=$!
-    wait_for_socket "$SOCK" "glavo"
 
     "$CAMERA" run &
     CPID=$!
-    wait_for_socket "$CAM_SOCK" "rongsu_camera"
 
     "$UI" run &
     UPID=$!
 
-    wait $GPID $CPID $UPID
+    wait $BPID $GPID $CPID $UPID
 }
 
 case "$cmd" in

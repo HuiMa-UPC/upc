@@ -27,6 +27,7 @@ set(UPC_COMMON_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/ipc/ipc_wire.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ipc/ipc_endpoint.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ipc/ipc_poller.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ipc/ipc_reg.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ipc/ipc_msg_bus.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ipc/msg_port.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ipc/dma_heap_buffer.cpp

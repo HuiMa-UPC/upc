@@ -1,5 +1,6 @@
 add_subdirectory(parser)
 add_subdirectory(protocol)
+add_subdirectory(broker)
 add_subdirectory(ui)
 add_subdirectory(glavo)
 add_subdirectory(camera)

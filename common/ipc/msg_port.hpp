@@ -3,16 +3,15 @@
 
 /**
  * @file msg_port.hpp
- * @brief UI / Glavo 统一消息门面（多人协作边界）
+ * @brief UI / Glavo / Camera 统一消息门面（多人协作边界）
  *
  * 发布/订阅 API：subscribe / publish_async / process
- * 消息契约与命名：common/contract/README.md
+ * 消息契约：common/upc_contract.hpp
  *
- * UI 多后端：set_mode_ipc_hub + add_ipc_peer；单播设 target_id，广播用
- * publish_async_broadcast 或 target_id=ModuleId{0}。
+ * Broker 拓扑：业务进程 set_mode_ipc_client；Broker 进程 set_mode_ipc_broker。
  */
 #include "msg_bus.hpp"
-#include "ipc_config.hpp"
+#include "upc_contract.hpp"
 
 #include <vector>
 
@@ -28,15 +27,9 @@ public:
     static MsgPort& instance();
 
     void set_mode_in_process();
-    bool set_mode_ipc_server(middleware::ModuleId local_id,
-                             const char* socket_path = UPC_IPC_SOCKET_DEFAULT);
-    /** UI 侧多连接 hub（配合 add_ipc_peer） */
-    bool set_mode_ipc_hub(middleware::ModuleId local_id = ModuleId::UI);
-    bool add_ipc_peer(ModuleId peer_id, const char* socket_path, bool required,
-                      bool connect_now = true);
-    /** 兼容：等价 set_mode_ipc_hub + add_ipc_peer(APP_GLAVO, …) */
+    bool set_mode_ipc_broker(const char* socket_path = UPC_BROKER_SOCKET_DEFAULT);
     bool set_mode_ipc_client(middleware::ModuleId local_id,
-                             const char* socket_path = UPC_IPC_SOCKET_DEFAULT);
+                             const char* broker_path = UPC_BROKER_SOCKET_DEFAULT);
 
     bool init();
     void shutdown();
@@ -44,26 +37,15 @@ public:
     Subscription subscribe(MsgType type, ModuleId module_id, MsgHandler handler);
     bool publish(const Message& msg);
     bool publish_async(const Message& msg);
-    /** 广播到所有已连接的 backend peer（内部 target_id=0） */
     bool publish_async_broadcast(const Message& msg);
     void process(int io_timeout_ms = 0);
 
-    /**
-     * Hub 模式：启动后台 IPC 线程（epoll + Hub 转发）；
-     * 之后 process() 仅消费本地队列，供 UI 主线程与 LVGL 并行。
-     */
-    bool start_ipc_io_thread();
-    [[nodiscard]] bool ipc_io_thread_running() const noexcept;
-
     [[nodiscard]] MsgPortMode mode() const noexcept { return mode_; }
-    /** 所有 required peer 均已连接 */
     [[nodiscard]] bool peer_connected() const noexcept;
     [[nodiscard]] bool peer_connected(ModuleId peer_id) const noexcept;
 
-    /** 经已有 IPC 连接附带 SCM_RIGHTS 发送（Camera Start_Rsp + dma fd） */
     bool publish_to_peer_with_fds(const Message& msg,
                                   const std::vector<int>& fds);
-    /** UI Hub：取走 peer 随 wire 帧附带的 dma fd */
     bool take_peer_dma_fds(ModuleId peer_id, std::vector<int>& out_fds);
 
 private:

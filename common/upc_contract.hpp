@@ -19,7 +19,12 @@
 // §1 IPC 默认配置（环境变量 UPC_IPC_SOCKET 等可覆盖运行时路径）
 // ============================================================================
 
-/** Glavo 监听、UI 连接的 Unix 域套接字（环境变量 UPC_IPC_SOCKET 可覆盖） */
+/** 中央 Broker listen socket（环境变量 UPC_BROKER_SOCKET 可覆盖） */
+#ifndef UPC_BROKER_SOCKET_DEFAULT
+#define UPC_BROKER_SOCKET_DEFAULT "/tmp/upc_broker.sock"
+#endif
+
+/** @deprecated 旧 Hub/Server 拓扑；新进程统一连 UPC_BROKER_SOCKET_DEFAULT */
 #ifndef UPC_IPC_SOCKET_DEFAULT
 #define UPC_IPC_SOCKET_DEFAULT "/tmp/upc_glavo.sock"
 #endif
@@ -34,9 +39,14 @@
 #define UPC_IPC_PEER_STARTUP_WAIT_MS 10000
 #endif
 
-/** rongsu_camera IPC listen socket（UI hub add_ipc_peer） */
+/** @deprecated 旧 Camera Server socket；Camera 现连 Broker */
 #ifndef UPC_CAMERA_IPC_SOCKET_DEFAULT
 #define UPC_CAMERA_IPC_SOCKET_DEFAULT "/tmp/upc_camera.sock"
+#endif
+
+/** Broker listen backlog（accept 队列深度） */
+#ifndef UPC_IPC_LISTEN_BACKLOG
+#define UPC_IPC_LISTEN_BACKLOG 8
 #endif
 
 // ============================================================================
@@ -159,6 +169,14 @@ inline ProcessConfig process_config_camera() {
     };
 }
 
+inline ProcessConfig process_config_broker() {
+    return ProcessConfig{
+        "/var/run/rongsu_broker.pid",
+        "/var/log/rongsu_broker",
+        "rongsu_broker",
+    };
+}
+
 // ============================================================================
 // §4 线协议 ABI 常量（帧格式实现见 ipc/ipc_wire.hpp）
 // ============================================================================
@@ -172,6 +190,14 @@ constexpr std::size_t WIRE_MAX_PAYLOAD = 65536u;
 /** wire 帧 + SCM_RIGHTS 复合包魔数（小端 "UPDF"），与 [len][body] 普通帧区分 */
 constexpr uint32_t IPC_FD_FRAME_MAGIC    = 0x46445055u;
 constexpr uint32_t IPC_FD_FRAME_MAX_FDS  = 32u;
+
+/** connect 后首帧 reg（不进 MsgType）；小端 "UPRG" */
+constexpr uint32_t IPC_REG_MAGIC         = 0x47525055u;
+constexpr uint32_t IPC_REG_VERSION       = 1u;
+/** Broker → client 上下线通知；小端 "URNF" */
+constexpr uint32_t IPC_REG_NOTIFY_MAGIC  = 0x464E5255u;
+constexpr uint32_t IPC_REG_EVENT_ONLINE  = 1u;
+constexpr uint32_t IPC_REG_EVENT_OFFLINE = 2u;
 
 enum class WirePayloadType : uint8_t {
     Empty  = 0,

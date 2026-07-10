@@ -34,8 +34,9 @@ scripts/rongsu.sh start   # glavo + rongsu_camera → ui
 | UI | `/var/log/rongsu_ui{1,2,3}.log` | `/var/run/rongsu_ui.pid` |
 | Glavo | `/var/log/rongsu_glavo{1,2,3}.log` | `/var/run/rongsu_glavo.pid` |
 | Camera | `/var/log/rongsu_camera{1,2,3}.log` | `/var/run/rongsu_camera.pid` |
+| Broker | `/var/log/rongsu_broker{1,2,3}.log` | `/var/run/rongsu_broker.pid` |
 
-UI 为 IPC **Hub**；后端各 **Server**。
+各业务进程为 IPC **Client**，连中央 **Broker**（`rongsu_broker`）。
 
 ## 链接边界
 
@@ -56,18 +57,22 @@ UI 为 IPC **Hub**；后端各 **Server**。
 | **订阅** | `MsgPort::subscribe(MsgType, ModuleId, handler)` — 按消息类型 + 本进程身份过滤 |
 | **发布** | `MsgPort::publish_async(Message)` — `sender_id` / `target_id` 决定本地投递或跨进程发送 |
 | **泵** | 各进程主循环调用 `MsgPort::process()` 收包、投递、消费本地队列 |
-| **传输** | UI **Hub** 多连接 + 后端 **Server**（见 [§ IPC](#ipc跨进程通信)） |
+| **传输** | 各进程 **Client** 连 Broker；Broker 按 `target_id` 转发（见 [§ IPC](#ipc跨进程通信)） |
 
 ```
 ┌─────────────┐     subscribe/register_*      ┌──────────────┐
 │  rongsu_ui  │ ◄────────────────────────────►│ UiMsgProxy   │
 └──────┬──────┘                               └──────┬───────┘
        │ MsgPort (client)                              │
-       │         ═══════ /tmp/upc_glavo.sock ═══════  │
-       │ MsgPort (server)                              │
-┌──────▼──────┐                               ┌──────▼───────┐
-│rongsu_glavo │ ◄────────────────────────────►│ GlavoService │
-└─────────────┘     subscribe/handle_*        └──────────────┘
+       │         ═══════ /tmp/upc_broker.sock ═══════  │
+       │                    ▲                          │
+       │         ┌──────────┴──────────┐              │
+       │         │   rongsu_broker     │              │
+       │         └──────────▲──────────┘              │
+       │ MsgPort (client)   │                          │
+┌──────▼──────┐      ┌──────▼──────┐           ┌──────▼───────┐
+│rongsu_glavo │      │rongsu_camera│           │ GlavoService │
+└─────────────┘      └─────────────┘           └──────────────┘
 ```
 
 **业务代码禁止**直接 include `ipc_msg_bus.hpp` / 操作 socket；只走 `msg_port.hpp` 或各进程 API 封装（`UiMsgProxy`、`GlavoService`）。
@@ -206,7 +211,7 @@ UI 为 IPC **Hub**；后端各 **Server**。
 1. **`upc_contract.hpp`** — 增加 `MsgType` + POD + 注释（本表同步一行）
 2. **发送侧进程** — `subscribe` + `handle_*` 或 `publish_*`（Glavo / Camera / UI 各自实现）
 3. **UI 侧** — 若需界面交互：`ui_msg_proxy.*` 或 `camera_msg_proxy.*` 的 `send_*` + `register_*`（纯后端互访可跳过）
-4. **Hub 转发** — `target_id` 指向其它后端时，UI `IpcMsgBus::deliver_frames` 自动 `IPC_FWD`；一般无需改 `ipc_wire`
+4. **Broker 转发** — `target_id` 指向其它 ModuleId 时由 Broker 转发；业务侧一般无需改 `ipc_wire`
 
 Wire 协议版本：`WIRE_VERSION`（[`ipc_wire.hpp`](../ipc/ipc_wire.hpp)）。仅当帧格式变更时递增。
 
@@ -214,31 +219,22 @@ Wire 协议版本：`WIRE_VERSION`（[`ipc_wire.hpp`](../ipc/ipc_wire.hpp)）。
 
 ## 消息契约 · 多后端拓扑
 
-### 5.1 现状（UI Hub，方案 2 已落地）
+### 5.1 现状（Broker 已落地）
 
 ```
-rongsu_glavo ──listen──► /tmp/upc_glavo.sock ◄──┐
-rongsu_camera ──listen──► /tmp/upc_camera.sock ◄──┼── rongsu_ui (Hub)
+rongsu_broker ──listen──► /tmp/upc_broker.sock ◄── UI / Glavo / Camera (Client)
 ```
 
-- UI：`set_mode_ipc_hub` + `add_ipc_peer(APP_GLAVO, …)` + `add_ipc_peer(APP_CAMERA, …, required=false)`
-- 各后端：`set_mode_ipc_server`，单连接 UI
-- **后端互访**：Glavo `publish_async` 且 `target_id = APP_CAMERA` → UI Hub **`IPC_FWD`** → Camera（UI 不跑业务 handler）
+- 各进程：`set_mode_ipc_client(ModuleId, UPC_BROKER_SOCKET_DEFAULT)`
+- Broker：`set_mode_ipc_broker`（或 `IpcMsgBus::init_broker`），零业务 subscribe
+- **后端互访**：Glavo `publish_async` 且 `target_id = APP_CAMERA` → Broker 转发 → Camera
 - **大流量**：预览 NV12 走 dma fd 旁路 + `/upc_camera_preview` 元数据环；控制仍走 MsgPort
 
 详见下文 [§ IPC](#ipc跨进程通信)。
 
-### 5.2 后续演进（可选）
+### 5.2 历史（已废弃 Hub 拓扑）
 
-| 需求 | 现状 | 可选方案 |
-|------|------|----------|
-| UI ↔ 多后端 | ✅ Hub 多 peer | — |
-| Glavo ↔ Camera | ✅ Hub 转发 | 独立 Broker 减轻 UI 负担 |
-| IPC 与 LVGL 同线程 | 主循环 `process(0)` 前置 + poll 上限 8ms | 独立 I/O 线程（仅 poll + FWD） |
-
-**中心 Broker**（进程继续增多、或 UI 不想兼 Hub）：各进程 client 连 broker，按 `target_id` 转发，帧格式不变（未实施）。
-
-**大流量旁路**：控制走 socket；像素走 dma fd + `ipc_dma_frame_ring` 元数据环（camera 预览已用）。
+旧方案：UI Hub + Glavo/Camera 各自 listen（`/tmp/upc_glavo.sock`、`/tmp/upc_camera.sock`）。仓库已切换为 Broker，勿再使用 `set_mode_ipc_hub` / `set_mode_ipc_server`。
 
 新增进程时在 `ModuleId` 追加（如 `APP_LOG`），`MsgType` 用域前缀（`LOG_` 等），遵循 §2 命名规范。
 
@@ -273,41 +269,40 @@ rongsu_camera ──listen──► /tmp/upc_camera.sock ◄──┼── rong
 | 文件 | 职责 |
 |------|------|
 | `msg_port.*` | 业务门面：InProcess / IPC 模式切换 |
-| `ipc_msg_bus.*` | Hub 路由、订阅表、epoll I/O、`publish` 出站/入站 |
+| `ipc_msg_bus.*` | Broker 路由 / Client 出站、订阅表、epoll I/O |
+| `ipc_reg.*` | connect 后 reg 帧与上下线 notify |
 | `ipc_wire.*` | 线协议编解码（`WIRE_VERSION`） |
 | `ipc_endpoint.*` | Unix stream socket listen/connect/帧收发 |
 | `ipc_poller.*` | Linux epoll 封装（非 Linux 走 fallback 轮询） |
-| `ipc_config.hpp` | 兼容包装 → `upc_contract.hpp` §1 |
-| `ipc_dma_frame_ring.*` | 预览 dma fd 元数据环 |
+| `ipc_reg.*` | connect 后 reg 帧与上下线 notify |
 | `dma_heap_buffer.*` | dma-heap 单个缓冲区分配 |
 
 `dma_heap_buffer.*` 同时被 UI `RgaDmaBuf` 与 camera `CameraDmaFrameSource` 复用，避免各自维护 dma-heap 候选列表。
 
 **契约勿随意改**：`upc_contract.hpp`、本文档消息总表
 
-## 拓扑（方案 2）
+## 拓扑（Broker）
 
 ```
-rongsu_glavo ──listen──► /tmp/upc_glavo.sock ◄──┐
-rongsu_camera ──listen──► /tmp/upc_camera.sock ◄──┼── rongsu_ui (Hub)
+rongsu_broker ──listen──► /tmp/upc_broker.sock ◄── rongsu_ui / rongsu_glavo / rongsu_camera (Client)
 ```
 
-- 后端之间**无** socket；UI 多连接。
+- connect 后首帧 **reg**（`IPC_REG_MAGIC`，不进 MsgType）；同 `ModuleId` 重连踢旧连接。
+- Broker **零业务 subscribe**；仅按 wire `target_id` 转发（含 UPDF fd 透传）。
 - 路由靠 **`MsgType` + `target_id`**，不靠 socket fd。
+- 启动顺序：`broker → glavo → camera → ui`（`scripts/rongsu.sh`）。
 
 ## MsgPort 速查
 
 | API | 用途 |
 |-----|------|
-| `set_mode_ipc_hub` + `add_ipc_peer` | UI Hub |
-| `set_mode_ipc_server` | Glavo / Camera |
+| `set_mode_ipc_broker` | Broker 进程 listen |
+| `set_mode_ipc_client(ModuleId)` | UI / Glavo / Camera 连 Broker |
 | `subscribe` / `publish_async` / `process` | 共用 |
-| `take_peer_dma_fds(ModuleId)` | UI Hub 从指定 peer 取 SCM_RIGHTS 附带的 dma fd（预览开流） |
+| `take_peer_dma_fds(ModuleId)` | UI 从指定 sender 取 SCM_RIGHTS 附带的 dma fd（预览开流） |
 | `publish` | 同步投递（InProcess 或 IPC `publish_sync`；Glavo 工作线程慎用） |
 | `publish_async_broadcast` | `target_id=0` 广播 |
-| `peer_connected(ModuleId)` | 单 peer 连接状态 |
-
-**兼容 API**（仓库内 UI 已用 hub+add_peer，未调用）：`set_mode_ipc_client` ≡ hub + 仅连 Glavo。
+| `peer_connected(ModuleId)` | Broker 在线 + reg notify 已知 peer |
 
 ### 进程主循环
 
@@ -322,16 +317,15 @@ rongsu_camera ──listen──► /tmp/upc_camera.sock ◄──┼── rong
 
 | 模式 | `target` | 行为 |
 |------|----------|------|
-| Server | 本进程 | 仅本地队列/同步投递 |
-| Server | 其它后端 | **只** `send_to_peer(UI)`，wire 内 `target_id` 不变 |
-| Hub | 已注册 peer | `send_to_peer(target)` |
-| Hub / Server | `0`（广播） | 所有已连接 peer |
+| Client | 本进程 | 仅本地队列/同步投递 |
+| Client | 其它 ModuleId | 经 Broker 转发（wire `target_id` 不变） |
+| Client | `0`（广播） | Broker 转发至所有已注册 client（除发送方） |
 
 ### 入站（`deliver_frames`）
 
 1. `wire_decode` → 可选 sender 校验（见下）
 2. `IPC_RX` 日志
-3. **Hub 且 `target` 为其它 peer**：**仅** `IPC_FWD`，不 `deliver_local`
+3. **Broker**：按 `target_id` 转发至对应 client（含 UPDF fd）；本进程 Client 只 `deliver_local`
 4. 否则 `deliver_local` → 匹配 `MsgType` + `module_id==target_id` 的订阅回调
 5. 无订阅 → `IPC_DELIVER miss`（仅对应在本地应处理的报文）
 
@@ -344,13 +338,12 @@ rongsu_camera ──listen──► /tmp/upc_camera.sock ◄──┼── rong
 
 跨进程回复 UI：**必须** `publish_async`，目标 `ModuleId::UI`。
 
-## Hub 转发（后端互访）
+## Broker 转发（后端互访）
 
 ```
 Glavo publish_async(target=APP_CAMERA)
-  → wire 发往 UI（sender=GLAVO, target=CAMERA）
-  → UI IPC_RX
-  → IPC_FWD → Camera
+  → Client 发往 Broker
+  → Broker 按 target_id 转发
   → Camera IPC_RX + IPC_DELIVER
 ```
 
@@ -377,18 +370,16 @@ Glavo publish_async(target=APP_CAMERA)
 
 | 进程 | 路径 |
 |------|------|
-| Glavo | `/tmp/upc_glavo.sock`（`UPC_IPC_SOCKET` 可覆盖） |
-| rongsu_camera | `/tmp/upc_camera.sock` |
+| Broker | `/tmp/upc_broker.sock`（`UPC_BROKER_SOCKET` 可覆盖） |
 
-`upc_contract.hpp` §1：`UPC_IPC_PEER_RECONNECT_INTERVAL_MS`（Hub 重连）、`UPC_IPC_PEER_STARTUP_WAIT_MS`（`rongsu.sh` 等待 listen）。
+`upc_contract.hpp` §1：`UPC_IPC_PEER_RECONNECT_INTERVAL_MS`（Client 重连）、`UPC_IPC_PEER_STARTUP_WAIT_MS`（`rongsu.sh` 等待 listen）。
 
 ## 新增后端（平台层）
 
-1. `upc_contract.hpp` — `ModuleId` / `MsgType` / Payload / socket（contract 四步）
-2. 新进程 `main` — `set_mode_ipc_server` + `process` 循环
-3. UI `main.cpp` — `add_ipc_peer`
-4. `scripts/rongsu.sh` — 启动顺序 + `wait_for_socket`
-5. UI 业务 — 独立 `XxxMsgProxy`
+1. `upc_contract.hpp` — `ModuleId` / `MsgType` / Payload（contract 四步）
+2. 新进程 `main` — `set_mode_ipc_client` + `process` 循环
+3. `scripts/rongsu.sh` — 启动顺序（Broker 最先）
+4. UI 业务 — 独立 `XxxMsgProxy`
 
 大流量：控制走 MsgPort；像素走主 IPC SCM_RIGHTS 传 dma fd + `ipc_dma_frame_ring` 元数据环（camera 预览：NV12，UI 侧 RGA/SW 转 BGRX）。
 详见 `app/camera/lib/camera_dma_frame_source.*` 与 `app/ui/lib/core/camera_preview.*`。

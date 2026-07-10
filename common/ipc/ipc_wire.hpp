@@ -24,6 +24,10 @@ struct WireHeader {
 
 bool wire_encode(const middleware::Message& msg, std::vector<uint8_t>& out);
 bool wire_decode(const uint8_t* data, size_t len, middleware::Message& out);
+/** Broker 路由：只读 header 中的 sender/target，不解 payload */
+bool wire_peek_route(const uint8_t* data, size_t len,
+                     middleware::ModuleId& sender_id,
+                     middleware::ModuleId& target_id);
 
 } // namespace upc_ipc
 
