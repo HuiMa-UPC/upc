@@ -6,7 +6,7 @@
 #include "gcode_manifest.hpp"
 #include "mcu_link.hpp"
 #include "msg_port.hpp"
-#include "msg_types.hpp"
+#include "msg_runtime.hpp"
 #include <atomic>
 #include <condition_variable>
 #include <cstring>

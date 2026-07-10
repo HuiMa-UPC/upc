@@ -1,15 +1,10 @@
 ---
-description: common 平台层 — ipc、middleware、contract
+description: common/ 平台库与跨进程契约
 globs: common/**
-alwaysApply: false
 ---
 
 # common/
 
-读 [common/COMMON.md](../../common/COMMON.md)；子模块：
+读 [common/COMMON.md](../../common/COMMON.md)（契约、IPC、Middleware、Debug、Process 合一文档）。
 
-- IPC：[common/ipc/IPC.md](../../common/ipc/IPC.md)
-- Middleware：[common/middleware/MIDDLEWARE.md](../../common/middleware/MIDDLEWARE.md)
-- 契约：[common/README.md](../../common/README.md)
-
-勿在业务进程重复实现线协议；MsgType 变更走 contract 流程。
+勿在业务进程重复实现线协议；MsgType 变更走 contract 四步 + `upc_contract.hpp`。

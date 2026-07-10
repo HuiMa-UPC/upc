@@ -2,7 +2,7 @@
 #define MCU_OTA_SESSION_HPP
 
 #include "tcp_rx.hpp"
-#include "msg_types.hpp"
+#include "msg_runtime.hpp"
 
 #include <atomic>
 #include <cstdint>

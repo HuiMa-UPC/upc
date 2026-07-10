@@ -1,7 +1,7 @@
 #ifndef MSG_BUS_HPP
 #define MSG_BUS_HPP
 
-#include "msg_types.hpp"
+#include "msg_runtime.hpp"
 #include "msg_queue.hpp"
 #include <functional>
 #include <memory>

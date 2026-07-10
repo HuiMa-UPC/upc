@@ -5,7 +5,7 @@
 #include "parser_manager.hpp"
 #include "parser_worker.hpp"
 #include "msg_bus.hpp"
-#include "msg_types.hpp"
+#include "msg_runtime.hpp"
 #include "rs_log.hpp"
 #include "msg_port.hpp"
 

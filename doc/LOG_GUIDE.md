@@ -1,8 +1,8 @@
 # UPC 日志阅读指南
 
 > 适用：`rongsu_ui` + `rongsu_glavo` 双进程架构  
-> 源码：`common/debug/rs_log.cpp`、`common/process/log_rotating.cpp`、`upc_log_modules.hpp`  
-> 消息契约：[`common/README.md`](../common/README.md)
+> 源码：`common/debug/rs_log.cpp`、`common/process/log_rotating.cpp`、`upc_contract.hpp` §2  
+> 消息契约：[`common/COMMON.md`](../common/COMMON.md)
 
 ---
 
@@ -107,7 +107,7 @@ IPC_TX UI_OpenDoor_Req UI->APP_GLAVO pri=1 queue=0 payload={empty}
 
 | 片段 | 含义 |
 |------|------|
-| `UI_OpenDoor_Req` | 消息类型（完整表见 common/README.md §3） |
+| `UI_OpenDoor_Req` | 消息类型（完整表见 common/COMMON.md 消息总表） |
 | `UI->APP_GLAVO` | 发送方 ModuleId → 接收方 ModuleId |
 | `pri=1` | 优先级（0=Low … 3=Realtime） |
 | `queue=0` | 入队时队列深度（DELIVER 行则为 `handlers=N`） |
@@ -261,7 +261,7 @@ cmake -B build -DUPC_DEBUG=ON     # 默认 ON
 
 ### 8.2 子模块开关
 
-默认值见 `upc_log_modules.hpp`（`UPC_DEBUG=ON` 时多为 1）。关闭某一类日志可在编译时定义，例如：
+默认值见 `upc_contract.hpp` §2（`UPC_DEBUG=ON` 时多为 1）。关闭某一类日志可在编译时定义，例如：
 
 ```bash
 cmake -B build -DUPC_DEBUG=ON \
@@ -282,8 +282,8 @@ cmake -B build -DUPC_DEBUG=ON \
 
 ## 9. 与消息契约的关系
 
-- **日志里的消息名**（如 `UI_OpenDoor_Req`）与 **`msg_types.hpp` / contract 总表** 一一对应。
-- 新增业务消息时，除改代码外建议在 [`common/README.md`](../common/README.md) §3 补一行，便于后人对照日志。
+- **日志里的消息名**（如 `UI_OpenDoor_Req`）与 **`upc_contract.hpp` / COMMON.md 总表** 一一对应。
+- 新增业务消息时，除改代码外建议在 [`common/COMMON.md`](../common/COMMON.md) 消息总表补一行，便于后人对照日志。
 
 ---
 
@@ -302,8 +302,8 @@ cmake -B build -DUPC_DEBUG=ON \
 |------|------|
 | `common/debug/rs_log.cpp` | 格式输出、`proc=` |
 | `common/debug/rs_log.hpp` | `UPC_LOG_*` 宏 |
-| `common/debug/upc_log_modules.hpp` | 模块子开关 |
+| `common/upc_contract.hpp` §2 | 模块子开关 |
 | `common/debug/rs_msg_format.cpp` | MSGBUS 消息摘要格式化 |
 | `common/debug/upc_sys_monitor.cpp` | HostMonitor |
-| `common/process/process_config.hpp` | 日志文件路径 |
+| `common/upc_contract.hpp` §3 | 日志文件路径 |
 | `scripts/rongsu.sh` | `start` / `run` 启动方式 |

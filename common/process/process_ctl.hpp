@@ -1,15 +1,10 @@
 #ifndef PROCESS_CTL_HPP
 #define PROCESS_CTL_HPP
 
+#include "upc_contract.hpp"
+
 #include <csignal>
 #include <cstdio>
-
-struct ProcessConfig {
-    const char* pid_file;
-    /** 日志路径前缀，实际文件为 {log_base}1.log ~ {log_base}3.log（5MB 轮转） */
-    const char* log_base;
-    const char* name;
-};
 
 extern volatile sig_atomic_t g_shutdown_requested;
 

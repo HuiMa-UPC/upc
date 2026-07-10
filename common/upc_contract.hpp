@@ -1,22 +1,193 @@
-#ifndef MSG_TYPES_HPP
-#define MSG_TYPES_HPP
+#ifndef UPC_CONTRACT_HPP
+#define UPC_CONTRACT_HPP
 
 /**
- * @file msg_types.hpp
- * @brief 跨进程消息契约（ModuleId / MsgType / Payload / Message）
+ * @file upc_contract.hpp
+ * @brief UPC 跨进程唯一契约头文件（IPC 配置 / 日志开关 / 进程注册 / 线协议 ABI / MsgType / Payload）
  *
- * 命名规范与消息总表见：common/contract/README.md
- * 业务代码通过 msg_port.hpp 收发，勿直接操作 IPC 传输层。
+ * 新增 ModuleId、MsgType、Payload、socket 路径、日志模块、进程条目时【只改本文件】，
+ * 并同步 common/COMMON.md 消息总表（contract 四步流程）。
+ *
+ * 运行时 Message / MsgPayload（依赖 BufferPool）见 msg_runtime.hpp；
+ * 业务 IPC 入口见 ipc/msg_port.hpp。
  */
 
-#include "buffer_pool.hpp"
+#include <cstddef>
 #include <cstdint>
-#include <cstring>
-#include <array>
+
+// ============================================================================
+// §1 IPC 默认配置（环境变量 UPC_IPC_SOCKET 等可覆盖运行时路径）
+// ============================================================================
+
+/** Glavo 监听、UI 连接的 Unix 域套接字（环境变量 UPC_IPC_SOCKET 可覆盖） */
+#ifndef UPC_IPC_SOCKET_DEFAULT
+#define UPC_IPC_SOCKET_DEFAULT "/tmp/upc_glavo.sock"
+#endif
+
+/** UI hub 模式下，已断开的 peer 后台重连间隔（毫秒） */
+#ifndef UPC_IPC_PEER_RECONNECT_INTERVAL_MS
+#define UPC_IPC_PEER_RECONNECT_INTERVAL_MS 3000
+#endif
+
+/** rongsu.sh 等待后端 listen socket 出现的超时（毫秒） */
+#ifndef UPC_IPC_PEER_STARTUP_WAIT_MS
+#define UPC_IPC_PEER_STARTUP_WAIT_MS 10000
+#endif
+
+/** rongsu_camera IPC listen socket（UI hub add_ipc_peer） */
+#ifndef UPC_CAMERA_IPC_SOCKET_DEFAULT
+#define UPC_CAMERA_IPC_SOCKET_DEFAULT "/tmp/upc_camera.sock"
+#endif
+
+// ============================================================================
+// §2 调试日志子开关（总开关 UPC_DEBUG 由根 CMakeLists 注入）
+// ============================================================================
+
+/**
+ * 总开关 UPC_DEBUG 由根 CMakeLists 注入（ON=1 / OFF=0）。
+ * 子开关 UPC_MOD_* 仅在此设默认值；关闭某模块：-DUPC_MOD_MCU_LINK=0
+ * 逻辑：UPC_DEBUG=OFF 时所有日志宏为空；ON 时再看对应 UPC_MOD_* 是否为 1。
+ *
+ * 注意：UPC_LOG_* 为打印宏，UPC_MOD_* 为模块子开关，勿混用同名。
+ */
+
+#ifndef UPC_DEBUG
+#define UPC_DEBUG 1
+#endif
+
+#if UPC_DEBUG
+
+#ifndef UPC_MOD_MSG_BUS
+#define UPC_MOD_MSG_BUS 1
+#endif
+#ifndef UPC_MOD_IPC
+#define UPC_MOD_IPC 1
+#endif
+#ifndef UPC_MOD_MEM_POOL
+#define UPC_MOD_MEM_POOL 1
+#endif
+#ifndef UPC_MOD_BUFFER_POOL
+#define UPC_MOD_BUFFER_POOL 1
+#endif
+#ifndef UPC_MOD_GLAVO_SERVICE
+#define UPC_MOD_GLAVO_SERVICE 1
+#endif
+#ifndef UPC_MOD_MCU_LINK
+#define UPC_MOD_MCU_LINK 1
+#endif
+#ifndef UPC_MOD_CAL_PARSER
+#define UPC_MOD_CAL_PARSER 1
+#endif
+#ifndef UPC_MOD_PARSER_CONTEXT
+#define UPC_MOD_PARSER_CONTEXT 1
+#endif
+#ifndef UPC_MOD_GCODE_WORKER
+#define UPC_MOD_GCODE_WORKER 1
+#endif
+#ifndef UPC_MOD_OVF_WORKER
+#define UPC_MOD_OVF_WORKER 0
+#endif
+#ifndef UPC_MOD_SERVICE_BASE
+#define UPC_MOD_SERVICE_BASE 1
+#endif
+#ifndef UPC_MOD_SYS_MONITOR
+#define UPC_MOD_SYS_MONITOR 1
+#endif
+#ifndef UPC_MOD_CAMERA_SERVICE
+#define UPC_MOD_CAMERA_SERVICE 1
+#endif
+#ifndef UPC_MOD_CAMERA_PREVIEW
+#define UPC_MOD_CAMERA_PREVIEW 0
+#endif
+#ifndef UPC_MOD_MCU_OTA
+#define UPC_MOD_MCU_OTA 1
+#endif
+
+#else /* !UPC_DEBUG */
+
+#define UPC_MOD_MSG_BUS 0
+#define UPC_MOD_IPC 0
+#define UPC_MOD_MEM_POOL 0
+#define UPC_MOD_BUFFER_POOL 0
+#define UPC_MOD_GLAVO_SERVICE 0
+#define UPC_MOD_MCU_LINK 0
+#define UPC_MOD_CAL_PARSER 0
+#define UPC_MOD_PARSER_CONTEXT 0
+#define UPC_MOD_GCODE_WORKER 0
+#define UPC_MOD_OVF_WORKER 0
+#define UPC_MOD_SERVICE_BASE 0
+#define UPC_MOD_SYS_MONITOR 0
+#define UPC_MOD_CAMERA_SERVICE 0
+#define UPC_MOD_CAMERA_PREVIEW 0
+#define UPC_MOD_MCU_OTA 0
+
+#endif /* UPC_DEBUG */
+
+// ============================================================================
+// §3 进程注册表（PID / 日志路径；daemon 实现见 process/process_ctl.hpp）
+// ============================================================================
+
+struct ProcessConfig {
+    const char* pid_file;
+    /** 日志路径前缀，实际文件为 {log_base}1.log ~ {log_base}3.log（5MB 轮转） */
+    const char* log_base;
+    const char* name;
+};
+
+/** 每进程独立 PID 与三文件循环日志（守护进程 start 时 stderr/stdout 重定向到 log_baseN.log） */
+inline ProcessConfig process_config_ui() {
+    return ProcessConfig{
+        "/var/run/rongsu_ui.pid",
+        "/var/log/rongsu_ui",
+        "rongsu_ui",
+    };
+}
+
+inline ProcessConfig process_config_glavo() {
+    return ProcessConfig{
+        "/var/run/rongsu_glavo.pid",
+        "/var/log/rongsu_glavo",
+        "rongsu_glavo",
+    };
+}
+
+inline ProcessConfig process_config_camera() {
+    return ProcessConfig{
+        "/var/run/rongsu_camera.pid",
+        "/var/log/rongsu_camera",
+        "rongsu_camera",
+    };
+}
+
+// ============================================================================
+// §4 线协议 ABI 常量（帧格式实现见 ipc/ipc_wire.hpp）
+// ============================================================================
+
+namespace upc_ipc {
+
+constexpr uint32_t WIRE_MAGIC   = 0x31504355u;
+constexpr uint32_t WIRE_VERSION = 1u;
+constexpr std::size_t WIRE_MAX_PAYLOAD = 65536u;
+
+/** wire 帧 + SCM_RIGHTS 复合包魔数（小端 "UPDF"），与 [len][body] 普通帧区分 */
+constexpr uint32_t IPC_FD_FRAME_MAGIC    = 0x46445055u;
+constexpr uint32_t IPC_FD_FRAME_MAX_FDS  = 32u;
+
+enum class WirePayloadType : uint8_t {
+    Empty  = 0,
+    Inline = 1,
+    Value  = 3,
+};
+
+} // namespace upc_ipc
+
+// ============================================================================
+// §5 消息契约（ModuleId / MsgType / POD Payload）
+// ============================================================================
 
 namespace middleware {
 
-/** 进程身份；新增后端时追加枚举并更新 contract/README.md §5 */
+/** 进程身份；新增后端时追加枚举并更新 common/COMMON.md §多后端拓扑 */
 enum class ModuleId : uint32_t {
     UI         = 0x01,
     APP_GLAVO  = 0x02,  /**< 振镜/串口后端 rongsu_glavo */
@@ -133,154 +304,8 @@ enum class MsgPriority : uint8_t {
     Realtime  = 3
 };
 
-struct MsgPayload {
-    static constexpr size_t INLINE_SIZE = 256;
-
-    enum class Type : uint8_t {
-        Empty,
-        Inline,
-        BufferRef,
-        Value,
-    };
-
-    Type type = Type::Empty;
-
-    union {
-        std::array<uint8_t, INLINE_SIZE> bytes;
-        struct {
-            uint32_t buf_id;
-            uint32_t offset;
-            uint32_t length;
-        } buffer_ref;
-        uint32_t value;
-    } data{};
-
-    size_t length = 0;
-
-    MsgPayload() = default;
-    ~MsgPayload();
-    MsgPayload(const MsgPayload& other);
-    MsgPayload& operator=(const MsgPayload& other);
-    MsgPayload(MsgPayload&& other) noexcept;
-    MsgPayload& operator=(MsgPayload&& other) noexcept;
-
-    static MsgPayload from_bytes(const uint8_t* src, size_t len) {
-        MsgPayload p;
-        if (!src || len == 0) {
-            return p;
-        }
-
-        if (len <= INLINE_SIZE) {
-            p.type = Type::Inline;
-            p.length = len;
-            std::memcpy(p.data.bytes.data(), src, len);
-            return p;
-        }
-
-        const BufferId id = BufferPool::instance().allocate(len);
-        if (id != INVALID_BUFFER_ID) {
-            uint8_t* ptr = BufferPool::instance().get_ptr(id);
-            if (ptr) {
-                std::memcpy(ptr, src, len);
-                return from_buffer(id, 0, static_cast<uint32_t>(len));
-            }
-            BufferPool::instance().release(id);
-        }
-
-        /* 大 payload 分配失败：返回 Empty，禁止截断为 Inline */
-        return p;
-    }
-
-    static MsgPayload from_buffer(uint32_t buf_id, uint32_t offset, uint32_t len) {
-        MsgPayload p;
-        p.type = Type::BufferRef;
-        p.data.buffer_ref = {buf_id, offset, len};
-        p.length = len;
-        return p;
-    }
-
-    static MsgPayload from_value(uint32_t v) {
-        MsgPayload p;
-        p.type = Type::Value;
-        p.data.value = v;
-        p.length = sizeof(v);
-        return p;
-    }
-};
-
-// MsgPayload RAII 实现（利用 BufferPool 引用计数）
-inline MsgPayload::~MsgPayload() {
-    if (type == Type::BufferRef) {
-        BufferPool::instance().release(data.buffer_ref.buf_id);
-    }
-}
-
-inline MsgPayload::MsgPayload(const MsgPayload& other) : type(other.type), length(other.length) {
-    data = other.data;
-    if (type == Type::BufferRef) {
-        BufferPool::instance().acquire(data.buffer_ref.buf_id);
-    }
-}
-
-inline MsgPayload& MsgPayload::operator=(const MsgPayload& other) {
-    if (this != &other) {
-        if (type == Type::BufferRef) {
-            BufferPool::instance().release(data.buffer_ref.buf_id);
-        }
-        type = other.type;
-        length = other.length;
-        if (type == Type::BufferRef) {
-            BufferPool::instance().acquire(other.data.buffer_ref.buf_id);
-        }
-        data = other.data;
-    }
-    return *this;
-}
-
-inline MsgPayload::MsgPayload(MsgPayload&& other) noexcept
-    : type(other.type), data(other.data), length(other.length) {
-    other.type = Type::Empty;
-    other.length = 0;
-}
-
-inline MsgPayload& MsgPayload::operator=(MsgPayload&& other) noexcept {
-    if (this != &other) {
-        if (type == Type::BufferRef) {
-            BufferPool::instance().release(data.buffer_ref.buf_id);
-        }
-        type = other.type;
-        data = other.data;
-        length = other.length;
-        other.type = Type::Empty;
-        other.length = 0;
-    }
-    return *this;
-}
-
-struct Message {
-    MsgType      type;
-    MsgPriority  priority = MsgPriority::Normal;
-    ModuleId     sender_id;
-    ModuleId     target_id = ModuleId{0};
-    uint32_t     timestamp = 0;
-    MsgPayload   payload;
-
-    Message() = default;
-
-    Message(MsgType t, ModuleId sender, ModuleId target = ModuleId{0})
-        : type(t), sender_id(sender), target_id(target) {}
-
-    Message(const Message&) = default;
-    Message& operator=(const Message&) = default;
-    Message(Message&&) = default;
-    Message& operator=(Message&&) = default;
-    ~Message() = default;
-};
-
-// ============================================================================
 // Payload 契约（POD，可 memcpy；跨进程由 ipc_wire 序列化）
 // 命名：\<动作\>Payload / \<动作\>ReqPayload / \<动作\>RspPayload
-// ============================================================================
 
 enum class UserHomeStatus : uint32_t {
     Idle     = 0,
@@ -441,10 +466,7 @@ struct McuOtaStatusPayload {
     uint8_t     reserved[2];
 };
 
-// ============================================================================
-// 调试页（手动控制/标定）契约 —— 前端发送，后端（Glavo）待实现
-// 命名见 common/README.md §3；枚举跨进程时按 uint8_t 传输
-// ============================================================================
+// 调试页（手动控制/标定）契约 —— 命名见 common/COMMON.md；枚举跨进程时按 uint8_t 传输
 
 enum class DebugAxis        : uint8_t { Z = 0, S = 1, D = 2 };
 enum class DebugJogMode     : uint8_t { Click = 0, Hold = 1 };
@@ -610,4 +632,4 @@ struct DebugSwitchStatePayload {
 
 } // namespace middleware
 
-#endif
+#endif /* UPC_CONTRACT_HPP */

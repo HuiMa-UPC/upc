@@ -1,6 +1,6 @@
 #include "platform.hpp"
 #include "process_ctl.hpp"
-#include "process_config.hpp"
+#include "upc_contract.hpp"
 #include "ipc_config.hpp"
 #include "msg_port.hpp"
 #include "ui_app.hpp"

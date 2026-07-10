@@ -111,7 +111,7 @@ rongsu_camera 经主 IPC（/tmp/upc_camera.sock）SCM_RIGHTS 附带 dma_buf fd �
 - UI = **Hub**；`add_ipc_peer(ModuleId, path, required)`
 - 单播：`target_id = APP_*`；广播：`target_id = 0`
 - 启动顺序见 `scripts/rongsu.sh`
-- 细节：[common/ipc/IPC.md](../../common/ipc/IPC.md)
+- 细节：[common/COMMON.md](../../common/COMMON.md) § IPC
 
 当前 peer：`APP_GLAVO`（required）、`APP_CAMERA`（optional，预览 + 打印录像转发）。
 
@@ -129,4 +129,4 @@ rongsu_camera 经主 IPC（/tmp/upc_camera.sock）SCM_RIGHTS 附带 dma_buf fd �
 
 ## 相关文档
 
-- [glavo/GLAVO.md](../glavo/GLAVO.md) · [common/ipc/IPC.md](../../common/ipc/IPC.md) · [common/README.md](../../common/README.md)
+- [glavo/GLAVO.md](../glavo/GLAVO.md) · [common/COMMON.md](../../common/COMMON.md)

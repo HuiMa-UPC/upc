@@ -13,7 +13,7 @@ namespace ui {
  * @brief 调试页（手动控制/标定）与消息总线之间的门面，独立于 UiMsgProxy。
  *
  * send_*：UI → APP_GLAVO（命令）。后端未实现时为无害发送。
- * register_*：APP_GLAVO → UI 状态回读回调（按模块拆分，见 msg_types.hpp）。
+ * register_*：APP_GLAVO → UI 状态回读回调（按模块拆分，见 upc_contract.hpp）。
  */
 
 using DebugSensorCb  = std::function<void(const middleware::DebugSensorPayload&)>;

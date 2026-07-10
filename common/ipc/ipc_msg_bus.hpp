@@ -4,7 +4,7 @@
 #include "ipc_endpoint.hpp"
 #include "ipc_poller.hpp"
 #include "msg_queue.hpp"
-#include "msg_types.hpp"
+#include "msg_runtime.hpp"
 
 #include <atomic>
 #include <chrono>

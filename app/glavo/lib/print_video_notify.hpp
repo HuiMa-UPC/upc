@@ -1,7 +1,7 @@
 #ifndef PRINT_VIDEO_NOTIFY_HPP
 #define PRINT_VIDEO_NOTIFY_HPP
 
-#include "msg_types.hpp"
+#include "msg_runtime.hpp"
 
 #include <cstdint>
 #include <string>

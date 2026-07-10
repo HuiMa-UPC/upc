@@ -94,8 +94,8 @@ SHM 元数据环：`stride_y` 为 V4L2 实际 Y stride（dma 模式），`buffer
 ## 红线
 
 - 禁止链接 `ui::port`、`upc::glavo`、lvgl
-- 改消息契约：[common/README.md](../../common/README.md) 四步
+- 改消息契约：[common/COMMON.md](../../common/COMMON.md) 四步
 
 ## 相关文档
 
-- [common/ipc/IPC.md](../../common/ipc/IPC.md) · [ui/UI.md](../ui/UI.md) · [glavo/GLAVO.md](../glavo/GLAVO.md)
+- [common/COMMON.md](../../common/COMMON.md) · [ui/UI.md](../ui/UI.md) · [glavo/GLAVO.md](../glavo/GLAVO.md)

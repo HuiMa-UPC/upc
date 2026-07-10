@@ -3,7 +3,7 @@
 
 #include "ipc_dma_frame_ring.hpp"
 #include "lvgl_wrap.hpp"
-#include "msg_types.hpp"
+#include "msg_runtime.hpp"
 #include "rga_dma_buf.hpp"
 
 #include <atomic>

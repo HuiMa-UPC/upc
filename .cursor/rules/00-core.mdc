@@ -5,9 +5,9 @@ alwaysApply: true
 
 # 核心约定
 
-1. **模块文档**：`app/ui/UI.md`、`app/glavo/GLAVO.md`、`app/parser/PARSER.md`、`app/protocol/PROTOCOL.md`、`app/camera/CAMERA.md`、`common/COMMON.md`；子模块 `common/ipc/IPC.md`、`common/middleware/MIDDLEWARE.md`
+1. **模块文档**：`app/ui/UI.md`、`app/glavo/GLAVO.md`、`app/parser/PARSER.md`、`app/protocol/PROTOCOL.md`、`app/camera/CAMERA.md`、`common/COMMON.md`
 2. **架构索引**：`doc/ARCHITECTURE.md`（进程/符号/路径表 — 重命名模块先改此处）
-3. **消息契约**：改 MsgType/Payload 走 `common/README.md` 四步 + `msg_types.hpp`
+3. **消息契约**：改 MsgType/Payload 走 `common/COMMON.md` 四步 + `upc_contract.hpp`
 4. **链接边界**：UI 禁止 `app/glavo/lib`；Glavo 禁止 lvgl；Camera 禁止 `app/ui`、`app/glavo`、lvgl
 5. **跨进程**：回复 UI 必须 `publish_async()`，目标 `ModuleId::UI`
 6. **并发检查**（可选）：MCP `cpp-concurrency` 的 `scan_hotspots`

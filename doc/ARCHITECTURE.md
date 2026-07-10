@@ -100,7 +100,7 @@ UI → IPC → GlavoService → ParserManager → RingBuffer
 - Glavo **禁止**链接 `lvgl`
 - Camera **禁止**链接 `app/ui`、`app/glavo`、lvgl
 - 跨进程回复 UI：**必须** `publish_async()`，目标 `ModuleId::UI`
-- 消息契约：**只改** [common/README.md](../common/README.md) + `msg_types.hpp`（四步流程）
+- 消息契约：**只改** [common/COMMON.md](../common/COMMON.md) + `upc_contract.hpp`（四步流程）
 - MCU 协议实现：`app/protocol/`（`upc::protocol`）+ `mcu_link.*`；权威表见 `doc/*.xlsx`
 
 ## 文档与 Agent 入口
@@ -112,4 +112,4 @@ UI → IPC → GlavoService → ParserManager → RingBuffer
 | Cursor Rules | `.cursor/rules/*.mdc` |
 | 并发检查 MCP | `.cursor/mcp/cpp-concurrency-check.py` |
 | 日志 | [doc/LOG_GUIDE.md](LOG_GUIDE.md) |
-| 消息契约 | [common/README.md](../common/README.md)（`msg_types.hpp` 总表） |
+| 消息契约 | [common/COMMON.md](../common/COMMON.md)（`upc_contract.hpp` 总表） |

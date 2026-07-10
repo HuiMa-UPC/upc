@@ -1,7 +1,7 @@
 #ifndef MSG_QUEUE_HPP
 #define MSG_QUEUE_HPP
 
-#include "msg_types.hpp"
+#include "msg_runtime.hpp"
 #include <cstddef>
 #include <deque>
 

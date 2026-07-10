@@ -1,7 +1,7 @@
 #ifndef RS_LOG_HPP
 #define RS_LOG_HPP
 
-#include "upc_log_modules.hpp"
+#include "upc_contract.hpp"
 #include <cstdarg>
 
 /**

@@ -1,26 +1,12 @@
 #ifndef UPC_IPC_WIRE_HPP
 #define UPC_IPC_WIRE_HPP
 
-#include "msg_types.hpp"
+#include "msg_runtime.hpp"
 #include <cstddef>
 #include <cstdint>
 #include <vector>
 
 namespace upc_ipc {
-
-constexpr uint32_t WIRE_MAGIC   = 0x31504355u;
-constexpr uint32_t WIRE_VERSION = 1u;
-constexpr size_t WIRE_MAX_PAYLOAD = 65536u;
-
-/** wire 帧 + SCM_RIGHTS 复合包魔数（小端 "UPDF"），与 [len][body] 普通帧区分 */
-constexpr uint32_t IPC_FD_FRAME_MAGIC    = 0x46445055u;
-constexpr uint32_t IPC_FD_FRAME_MAX_FDS  = 32u;
-
-enum class WirePayloadType : uint8_t {
-    Empty  = 0,
-    Inline = 1,
-    Value  = 3,
-};
 
 struct WireHeader {
     uint32_t magic;

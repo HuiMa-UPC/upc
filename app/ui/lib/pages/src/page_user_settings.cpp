@@ -7,7 +7,7 @@
 #include "page_manager.hpp"
 #include "settings_icons.h"
 #include "ui_msg_proxy.hpp"
-#include "msg_types.hpp"
+#include "msg_runtime.hpp"
 
 #include <cstdint>
 #include <cstdio>

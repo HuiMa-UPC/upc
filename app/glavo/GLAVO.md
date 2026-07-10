@@ -57,7 +57,7 @@ UI → GlavoService（工作线程）→ ParserManager → RingBuffer → McuLin
 | 完成 | `PrintCompleted` | `APP_Print_Video_Session_Finish_Ntf` |
 | 中止 | 终止 / `PrintError` | `APP_Print_Video_Session_Abort_Ntf` |
 
-`PrintVideoNotify::publish_to_camera`：`publish_async`，`target_id = APP_CAMERA`，经 [common/ipc/IPC.md](../../common/ipc/IPC.md) Hub 转发。
+`PrintVideoNotify::publish_to_camera`：`publish_async`，`target_id = APP_CAMERA`，经 [common/COMMON.md](../../common/COMMON.md) Hub 转发。
 
 ## 红线
 
@@ -72,4 +72,4 @@ UI → GlavoService（工作线程）→ ParserManager → RingBuffer → McuLin
 
 ## 相关文档
 
-- [ui/UI.md](../ui/UI.md) · [camera/CAMERA.md](../camera/CAMERA.md) · [common/ipc/IPC.md](../../common/ipc/IPC.md)
+- [ui/UI.md](../ui/UI.md) · [camera/CAMERA.md](../camera/CAMERA.md) · [common/COMMON.md](../../common/COMMON.md)

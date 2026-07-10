@@ -17,7 +17,7 @@
 #include "parser_worker.hpp"
 #include "mcu_link.hpp"
 #include "print_job_state.hpp"
-#include "msg_types.hpp"
+#include "msg_runtime.hpp"
 #include "buffer_pool.hpp"
 #include "rs_log.hpp"
 

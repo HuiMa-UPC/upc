@@ -3,7 +3,7 @@
 #include "device_config.hpp"
 #include "ipc_dma_frame_ring.hpp"
 #include "msg_port.hpp"
-#include "msg_types.hpp"
+#include "msg_runtime.hpp"
 #include "rs_log.hpp"
 
 #include <chrono>

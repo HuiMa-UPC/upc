@@ -1,8 +1,8 @@
 #ifndef RS_MSG_FORMAT_HPP
 #define RS_MSG_FORMAT_HPP
 
-#include "upc_log_modules.hpp"
-#include "msg_types.hpp"
+#include "upc_contract.hpp"
+#include "msg_runtime.hpp"
 #include <cstddef>
 
 namespace middleware {

@@ -1,5 +1,5 @@
 #include "process_ctl.hpp"
-#include "process_config.hpp"
+#include "upc_contract.hpp"
 #include "msg_port.hpp"
 #include "ipc_config.hpp"
 #include "upc_sys_monitor.hpp"
