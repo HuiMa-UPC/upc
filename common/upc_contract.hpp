@@ -24,11 +24,6 @@
 #define UPC_BROKER_SOCKET_DEFAULT "/tmp/upc_broker.sock"
 #endif
 
-/** @deprecated 旧 Hub/Server 拓扑；新进程统一连 UPC_BROKER_SOCKET_DEFAULT */
-#ifndef UPC_IPC_SOCKET_DEFAULT
-#define UPC_IPC_SOCKET_DEFAULT "/tmp/upc_glavo.sock"
-#endif
-
 /** UI hub 模式下，已断开的 peer 后台重连间隔（毫秒） */
 #ifndef UPC_IPC_PEER_RECONNECT_INTERVAL_MS
 #define UPC_IPC_PEER_RECONNECT_INTERVAL_MS 3000
@@ -37,11 +32,6 @@
 /** rongsu.sh 等待后端 listen socket 出现的超时（毫秒） */
 #ifndef UPC_IPC_PEER_STARTUP_WAIT_MS
 #define UPC_IPC_PEER_STARTUP_WAIT_MS 10000
-#endif
-
-/** @deprecated 旧 Camera Server socket；Camera 现连 Broker */
-#ifndef UPC_CAMERA_IPC_SOCKET_DEFAULT
-#define UPC_CAMERA_IPC_SOCKET_DEFAULT "/tmp/upc_camera.sock"
 #endif
 
 /** Broker listen backlog（accept 队列深度） */
