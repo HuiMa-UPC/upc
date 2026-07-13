@@ -183,6 +183,11 @@ void DebugMsgProxy::send_clean_test_start()
     publish_empty(middleware::MsgType::UI_Debug_CleanTest_Start_Req);
 }
 
+void DebugMsgProxy::send_clean_test_close()
+{
+    publish_empty(middleware::MsgType::UI_Debug_CleanTest_Close_Req);
+}
+
 void DebugMsgProxy::send_print_layer_param(uint16_t layer_um, uint16_t balance_x1000)
 {
     middleware::DebugPrintParamPayload p{};

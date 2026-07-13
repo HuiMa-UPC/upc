@@ -304,6 +304,8 @@ const lv_font_t *user_font_value(void);
 const lv_font_t *user_font_text(void);
 const lv_font_t *user_font_caption(void);
 const lv_font_t *user_font_icon(void);
+/** 中文字体（子集，编译进固件）。用于需要中文标签的页面，如调试测试页。 */
+const lv_font_t *user_font_cjk(void);
 
 /* ---- 预置样式 ---- */
 lv_style_t *user_style_btn_primary(void);

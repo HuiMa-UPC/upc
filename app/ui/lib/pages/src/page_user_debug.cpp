@@ -1,4 +1,5 @@
 #include "page_user_debug.hpp"
+#include "page_user_debug_test.hpp"
 #include "ui_theme.hpp"
 #include "ui_user_widgets.hpp"
 #include "ui_keyboard.hpp"
@@ -15,7 +16,8 @@
  * @file page_user_debug.cpp
  * @brief 调试页（开发者/工厂手动控制台）—— "移动控制" Tab。
  *
- * 顶部 7 路传感器条 + 设备快捷行（设备/门/电机/照明）+ Tab（移动控制/其他控制）。
+ * 顶部 7 路传感器条 + 设备快捷行（设备/门/电机/照明）+ Tab（Move/Other/Laser/Test）。
+ * Test（测试）Tab 为自动化用例表，实现见 page_user_debug_test.cpp（中文界面）。
  * 移动控制：左列 Z/S/D 三轴卡（点击移动/长按移动），右列 振镜坐标卡 + 振镜标定卡。
  * 命令经 DebugMsgProxy → APP_GLAVO（后端待实现）；图标暂用 LV_SYMBOL/文字占位。
  */
@@ -33,16 +35,17 @@ using middleware::DebugSwitchTarget;
 struct AxisCfg {
     DebugAxis   axis;
     const char *title;
-    const char *unit;        /**< 距离单位 */
+    const char *unit;        /**< 距离单位（位置显示） */
+    const char *step_unit;   /**< 点击移动(增量)输入单位；Z 为 um */
     const char *speed_unit;  /**< 速度单位 */
     bool        has_zero;    /**< Z 轴有"工作零点" */
     bool        rotational;  /**< D 轴用旋转箭头 */
 };
 
 const AxisCfg kAxes[3] = {
-    { DebugAxis::Z, "Print Plane Height (Z)", "mm", "mm/s", true,  false },
-    { DebugAxis::S, "Powder Scraper (S)",     "mm", "mm/s", false, false },
-    { DebugAxis::D, "Powder Bucket Rod (D)",  "\xC2\xB0", "\xC2\xB0/s", false, true },
+    { DebugAxis::Z, "Print Plane Height (Z)", "mm", "um", "mm/s", true,  false },
+    { DebugAxis::S, "Powder Scraper (S)",     "mm", "mm", "mm/s", false, false },
+    { DebugAxis::D, "Powder Bucket Rod (D)",  "\xC2\xB0", "\xC2\xB0", "\xC2\xB0/s", false, true },
 };
 
 /* 协议 INC/JOG 为 int16 整数（mm·°/mm·°·s），步距/速度默认 0 */
@@ -55,6 +58,7 @@ const float kGalvoSteps[4] = { 0.01f, 0.1f, 1.0f, 10.0f };
 lv_obj_t *g_tab1 = nullptr;          /**< 移动控制内容 */
 lv_obj_t *g_tab2 = nullptr;          /**< 其他控制内容 */
 lv_obj_t *g_tab3 = nullptr;          /**< 激光器控制内容 */
+lv_obj_t *g_tab4 = nullptr;          /**< 测试（自动化用例表）内容 */
 
 /* Laser 标签页回读控件 */
 lv_obj_t *g_laser_status_lbl[4] = { nullptr };  /**< 红光/输出/Ready/外部 状态字 */
@@ -106,6 +110,11 @@ float read_ta_float(lv_obj_t *ta) {
     const char *s = lv_textarea_get_text(ta);
     return s ? static_cast<float>(std::atof(s)) : 0.0f;
 }
+
+/* 调试页按钮尺寸：在主题默认基础上放大约 1/3，便于触摸（仅本页使用，不影响其它页面）。
+ * 依赖运行时 g_ui，必须在构建期（函数内）取值，不能做全局 constexpr。 */
+inline int32_t dbg_axis_btn_sz()  { return USER_BACK_BTN_H * 4 / 3; }        /* 轴 +/- < > 复位 */
+inline int32_t dbg_round_btn_sz() { return USER_BTN_DOOR_ICON_SZ * 4 / 3; }  /* 振镜 / 其他开关圆钮 */
 
 /* 圆形图标按钮（jog / dpad / 设备开关复用） */
 lv_obj_t *make_circle_btn(lv_obj_t *parent, int32_t sz, const char *sym,
@@ -338,6 +347,7 @@ void on_tab_changed(lv_event_t *e)
     set_vis(g_tab1, sel == 0);
     set_vis(g_tab2, sel == 1);
     set_vis(g_tab3, sel == 2);
+    set_vis(g_tab4, sel == 3);
 }
 
 /*
@@ -390,8 +400,8 @@ lv_obj_t *build_control_row(lv_obj_t *parent)
     lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, 0);
     lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
 
-    const char *tabs[3] = { "Move", "Other", "Laser" };
-    lv_obj_t *seg = ui_user_make_segmented(row, tabs, 3, 0);
+    const char *tabs[4] = { "Move", "Other", "Laser", "Test" };
+    lv_obj_t *seg = ui_user_make_segmented(row, tabs, 4, 0);
     lv_obj_add_event_cb(seg, on_tab_changed, LV_EVENT_VALUE_CHANGED, nullptr);
     seg_fit_content(seg);
     style_debug_seg(seg);
@@ -450,9 +460,11 @@ void rebuild_axis_ctrl(int idx)
     lv_obj_set_style_text_font(cap, user_font_caption(), 0);
 
     g_axis_step[idx] = make_value_input(box, g_axis_step_saved[idx][g_axis_mode[idx]], true);
+    /* 输入框收窄，把 Speed/Step 一组整体压向左侧，给右侧放大后的 +/- < > 复位按钮留出空间 */
+    lv_obj_set_width(g_axis_step[idx], UI_TA_SHORT_W * 2 / 3);
 
     lv_obj_t *unit = lv_label_create(box);
-    lv_label_set_text(unit, hold ? cfg.speed_unit : cfg.unit);
+    lv_label_set_text(unit, hold ? cfg.speed_unit : cfg.step_unit);
     lv_obj_set_style_text_color(unit, user_color_text_dim, 0);
     lv_obj_set_style_text_font(unit, user_font_caption(), 0);
 
@@ -462,7 +474,7 @@ void rebuild_axis_ctrl(int idx)
     lv_obj_set_flex_grow(spacer, 1);
     lv_obj_set_style_bg_opa(spacer, LV_OPA_TRANSP, 0);
 
-    const int32_t bsz = USER_BACK_BTN_H;
+    const int32_t bsz = dbg_axis_btn_sz();
     const uint8_t a = static_cast<uint8_t>(cfg.axis);
     if(hold) {
         const char *lsym = LV_SYMBOL_LEFT, *rsym = LV_SYMBOL_RIGHT;
@@ -555,10 +567,9 @@ lv_obj_t *build_axis_card(lv_obj_t *parent, int idx)
         lv_obj_t *zbtn = lv_button_create(zrow);
         lv_obj_remove_style_all(zbtn);
         lv_obj_set_width(zbtn, LV_SIZE_CONTENT);
-        lv_obj_set_height(zbtn, LV_SIZE_CONTENT);
+        lv_obj_set_height(zbtn, USER_BTN_PRIMARY_H);   /* 调高按钮高度 */
         lv_obj_set_style_radius(zbtn, USER_RADIUS, 0);
-        lv_obj_set_style_pad_hor(zbtn, USER_PAD_SM, 0);
-        lv_obj_set_style_pad_ver(zbtn, USER_PAD_SM / 2, 0);
+        lv_obj_set_style_pad_hor(zbtn, USER_PAD, 0);
         /* 底色蓝，按下反馈红 */
         lv_obj_set_style_bg_color(zbtn, user_color_accent, 0);
         lv_obj_set_style_bg_opa(zbtn, LV_OPA_COVER, 0);
@@ -590,7 +601,7 @@ lv_obj_t *build_axis_card(lv_obj_t *parent, int idx)
     lv_obj_set_flex_flow(box, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(box, LV_FLEX_ALIGN_START,
                           LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_column(box, USER_PAD_SM, 0);
+    lv_obj_set_style_pad_column(box, USER_PAD_SM / 2, 0);   /* 缩小列间距，给按钮更多横向空间 */
     lv_obj_set_style_bg_color(box, lv_color_hex(0x08080B), 0);
     lv_obj_set_style_bg_opa(box, LV_OPA_20, 0);
     lv_obj_set_style_radius(box, USER_RADIUS, 0);
@@ -667,7 +678,7 @@ lv_obj_t *make_galvo_readout(lv_obj_t *parent, const char *axis_name, lv_obj_t *
 
 lv_obj_t *build_dpad(lv_obj_t *parent)
 {
-    const int32_t bsz = USER_BTN_DOOR_ICON_SZ;
+    const int32_t bsz = dbg_round_btn_sz();
     lv_obj_t *pad = lv_obj_create(parent);
     lv_obj_remove_style_all(pad);
     lv_obj_set_size(pad, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
@@ -908,17 +919,22 @@ void on_dbg_toggle(lv_event_t *e)
         //case 0: proxy.send_powder_bucket(c->arg, on); break;  // 粉桶1/2功能暂时屏蔽
         case 2: proxy.send_fan(on); break;   /* 风扇开/关；占空比由 Send 按钮单独下发 */
         case 3: proxy.send_switch(static_cast<DebugSwitchTarget>(c->arg), on); break;
-        case 4: if(on) proxy.send_clean_test_start(); break;  /* 仅开触发，关占位 */
+        case 4: if(on) proxy.send_clean_test_start();          /* 开：启动清粉测试 */
+                else   proxy.send_clean_test_close();          /* 关：中止清粉测试 (TLV 0x21) */
+                break;
         default: break;
     }
 }
 
-/** 名称+状态字 + 圆形开关按钮（CHECKABLE）；vertical=true 竖排(标签在上)，false 横排(标签在左) */
+/** 名称+状态字 + 圆形开关按钮（CHECKABLE）；vertical=true 竖排(标签在上)，false 横排(标签在左)。
+ * btn_sz<=0 用默认放大尺寸 dbg_round_btn_sz()；需要更小的按钮（如 Fan 那种横排紧凑行）可显式传入。 */
 lv_obj_t *make_dbg_toggle(lv_obj_t *parent, const char *name,
                           const char *on_txt, const char *off_txt,
                           const char *sym, bool initial_on,
-                          uint8_t kind, uint8_t arg, bool vertical = true)
+                          uint8_t kind, uint8_t arg, bool vertical = true,
+                          int32_t btn_sz = 0)
 {
+    const int32_t toggle_btn_sz = (btn_sz > 0) ? btn_sz : dbg_round_btn_sz();
     lv_obj_t *grp = lv_obj_create(parent);
     lv_obj_remove_style_all(grp);
     lv_obj_set_size(grp, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
@@ -959,7 +975,7 @@ lv_obj_t *make_dbg_toggle(lv_obj_t *parent, const char *name,
 
     lv_obj_t *btn = lv_button_create(grp);
     lv_obj_remove_style_all(btn);
-    lv_obj_set_size(btn, USER_BTN_DOOR_ICON_SZ, USER_BTN_DOOR_ICON_SZ);
+    lv_obj_set_size(btn, toggle_btn_sz, toggle_btn_sz);
     lv_obj_set_style_radius(btn, LV_RADIUS_CIRCLE, 0);
     lv_obj_add_flag(btn, LV_OBJ_FLAG_CHECKABLE);
     lv_obj_set_style_border_width(btn, 1, 0);
@@ -1034,7 +1050,7 @@ lv_obj_t *make_moment_btn(lv_obj_t *parent, const char *sym,
                           uint8_t device, DebugMotorAction action, lv_obj_t *state_lbl)
 {
     auto *ctx = new MomentBtnCtx{ state_lbl, device, static_cast<uint8_t>(action) };
-    lv_obj_t *b = make_circle_btn(parent, USER_BTN_DOOR_ICON_SZ, sym, on_moment_btn, ctx);
+    lv_obj_t *b = make_circle_btn(parent, dbg_round_btn_sz(), sym, on_moment_btn, ctx);
     lv_obj_add_event_cb(b, on_moment_btn_delete, LV_EVENT_DELETE, ctx);
     return b;
 }
@@ -1225,17 +1241,19 @@ void build_fan_card(lv_obj_t *parent)
     lv_obj_set_style_bg_opa(frow, LV_OPA_TRANSP, 0);
     lv_obj_clear_flag(frow, LV_OBJ_FLAG_SCROLLABLE);
     make_send_button(frow, on_fan_send_click, false);
-    make_dbg_toggle(frow, "Fan", "On", "Off", LV_SYMBOL_POWER, false, 2, 0, false);
+    /* Fan 开关与 Send 同一横排，空间紧张：用原始（较小）尺寸避免显示不全 */
+    make_dbg_toggle(frow, "Fan", "On", "Off", LV_SYMBOL_POWER, false, 2, 0, false,
+                    USER_BTN_DOOR_ICON_SZ);
 }
 
-/* 网格行：横向 flex、均匀分布 */
+/* 网格行：横向 flex、均匀分布。高度按内容自适应（不再 flex_grow 撑满），
+ * 便于所在容器在纵向放不下时滚动显示。 */
 lv_obj_t *make_switch_grid_row(lv_obj_t *parent)
 {
     lv_obj_t *r = lv_obj_create(parent);
     lv_obj_remove_style_all(r);
     lv_obj_set_width(r, LV_PCT(100));
     lv_obj_set_height(r, LV_SIZE_CONTENT);
-    lv_obj_set_flex_grow(r, 1);
     lv_obj_set_flex_flow(r, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(r, LV_FLEX_ALIGN_SPACE_EVENLY,
                           LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
@@ -1260,10 +1278,12 @@ void build_other_switches_card(lv_obj_t *parent)
     lv_obj_set_width(grid, LV_PCT(100));
     lv_obj_set_flex_grow(grid, 1);
     lv_obj_set_flex_flow(grid, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_flex_align(grid, LV_FLEX_ALIGN_SPACE_EVENLY,
+    /* 顶部对齐 + 行距；按钮放大后纵向放不下时可上下滑动查看 */
+    lv_obj_set_flex_align(grid, LV_FLEX_ALIGN_START,
                           LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_row(grid, USER_PAD, 0);
     lv_obj_set_style_bg_opa(grid, LV_OPA_TRANSP, 0);
-    lv_obj_clear_flag(grid, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scroll_dir(grid, LV_DIR_VER);
 
     lv_obj_t *rowA = make_switch_grid_row(grid);
     make_dbg_toggle(rowA, "Bucket 1", "Open", "Closed", LV_SYMBOL_POWER, false, 0, 1);
@@ -1583,6 +1603,8 @@ void bind_debug_callbacks()
         if(g_axis_pos[1]) lv_label_set_text_fmt(g_axis_pos[1], "Pos %.3f mm", static_cast<double>(p.s_pos_mm));
         if(g_axis_pos[2]) lv_label_set_text_fmt(g_axis_pos[2], "Pos %.3f \xC2\xB0", static_cast<double>(p.d_pos_deg));
         if(g_z_zero_lbl)  lv_label_set_text_fmt(g_z_zero_lbl, "Work zero %.3f mm", static_cast<double>(p.z_work_zero_mm));
+        /* 转发给「测试」Tab，供“等待到位”闭环判断使用（proxy 只有单一 axis 订阅槽） */
+        ui::debug_test_feed_axis(p);
     });
 
     proxy.register_galvo([](const middleware::DebugGalvoStatePayload &p) {
@@ -1634,7 +1656,8 @@ void bind_debug_callbacks()
 
 void reset_globals()
 {
-    g_tab1 = g_tab2 = g_tab3 = nullptr;
+    ui::debug_test_reset();
+    g_tab1 = g_tab2 = g_tab3 = g_tab4 = nullptr;
     g_laser_alarm_box = g_laser_temp_lbl = g_laser_power_lbl = g_laser_power_ta = nullptr;
     for(int i = 0; i < 4; i++) {
         g_laser_status_lbl[i] = nullptr;
@@ -1669,6 +1692,7 @@ void page_user_debug_refresh(bool /*force*/)
 void page_user_debug_exit(void)
 {
     ui_keyboard_hide();
+    ui::debug_test_stop_flow();   /* 退页停止正在运行的测试流程（含点动补停） */
     auto &proxy = ui::DebugMsgProxy::instance();
     proxy.register_sensor(nullptr);
     proxy.register_axis(nullptr);
@@ -1742,6 +1766,9 @@ lv_obj_t *page_user_debug_create(lv_obj_t *parent)
 
     /* Tab3 激光器 */
     g_tab3 = build_laser_tab(body);
+
+    /* Tab4 测试（自动化用例表，中文界面） */
+    g_tab4 = ui::build_debug_test_tab(body);
 
     bind_debug_callbacks();
     return page;

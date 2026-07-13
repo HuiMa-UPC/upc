@@ -75,8 +75,9 @@ public:
     void set_progress_callback(McuLinkProgressCb cb);
 
     /**
-     * @brief 建立 TCP 连接（单次尝试，地址见 GLAVO_TCP_DEFAULT_IP/PORT）
-     * @return 0 表示成功，负值表示失败（-1 socket 失败/-2 IP 非法/-3 connect 失败）
+     * @brief 建立 TCP 连接（非阻塞 connect + poll 超时，地址见 GLAVO_TCP_DEFAULT_IP/PORT）
+     * @return 0 成功；-1 socket 失败；-2 IP 非法；-3 connect 立即失败；
+     *         -4 poll 超时或出错；-5 连接最终失败（SO_ERROR）
      */
     int connect_tcp();
 
@@ -362,6 +363,8 @@ private:
     std::atomic<bool> terminate_pending_{false};       /**< 收到终止请求，待链路线程执行清理 */
     std::atomic<bool> natural_complete_pending_{false};/**< 运动包已发完，等待 MCU 缓存排空以触发自然完成 */
     std::chrono::steady_clock::time_point natural_complete_since_{};
+    std::atomic<bool> completing_cleanup_{false};      /**< 自然完成清理中：忽略 TCP hangup 触发的误终止 */
+    std::atomic<bool> mcu_rates_seen_nonempty_{false};   /**< 本作业曾观测到 MCU 缓存非空（防短 G-code 初值 0 误判排空） */
 
     /* ---------- 换层/串口握手状态 ---------- */
     std::atomic<bool> waiting_layer_{false};           /**< 当前是否处于换层等待状态 */

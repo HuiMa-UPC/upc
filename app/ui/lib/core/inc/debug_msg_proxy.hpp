@@ -49,6 +49,7 @@ public:
     void send_fan_duty(float duty);       /**< 仅设占空比 */
     void send_switch(middleware::DebugSwitchTarget target, bool on);
     void send_clean_test_start();
+    void send_clean_test_close();
     void send_print_layer_param(uint16_t layer_um, uint16_t balance_x1000);
 
     /* ---- Laser 激光器 ---- */

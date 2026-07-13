@@ -497,5 +497,25 @@ const lv_font_t *user_font_text(void)      { return g_ui->font_user_text; }
 const lv_font_t *user_font_caption(void)   { return g_ui->font_user_caption; }
 const lv_font_t *user_font_icon(void)      { return g_ui->font_user_icon; }
 
+/* 中文字体：思源黑体子集 TTF，经 LVGL TinyTTF 运行时渲染（字号 16）。
+ * 数据源 lib/assets/src/lv_font_cjk_data.c 由 tools/gen_cjk_font.py 生成
+ *   （从 page_user_debug_test.cpp 自动采集用字并子集化），新增中文后重跑该脚本即可。
+ * 需 LV_USE_TINY_TTF=1（见 configs/rongsu_ui.defaults）。首次调用惰性创建并缓存；
+ * 若创建失败则回退到 Montserrat（中文不显示）以保证不崩。 */
+ extern "C" {
+    extern const unsigned char lv_font_cjk_ttf[];
+    extern const unsigned int  lv_font_cjk_ttf_len;
+    }
+    const lv_font_t *user_font_cjk(void)
+    {
+        static lv_font_t *s_cjk = nullptr;
+        if(!s_cjk) {
+            /* 字号 18（比 Montserrat 常用 16 大一号）；改此值即整体调节测试页中文字号 */
+            s_cjk = lv_tiny_ttf_create_data(lv_font_cjk_ttf,
+                                            static_cast<size_t>(lv_font_cjk_ttf_len), 18);
+        }
+        return s_cjk ? s_cjk : user_font_text();
+    }
+
 lv_style_t *user_style_btn_primary(void)   { return &s_user_btn_primary; }
 lv_style_t *user_style_btn_ghost(void)     { return &s_user_btn_ghost; }

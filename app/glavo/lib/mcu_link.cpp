@@ -13,6 +13,7 @@
 #include <arpa/inet.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <poll.h>
 #include <termios.h>
 #include <sys/epoll.h>
 #include <sys/eventfd.h>
@@ -465,6 +466,16 @@ void McuLink::epoll_unregister_tcp()
  */
 void McuLink::on_tcp_hangup()
 {
+    if(completing_cleanup_.load()) {
+        epoll_unregister_tcp();
+        if(tcp_fd_ >= 0) {
+            ::close(tcp_fd_);
+            tcp_fd_ = -1;
+        }
+        tcp_rx_accum_len_ = 0;
+        reschedule_timers();
+        return;
+    }
     if(is_sending_.load() && !ota_session_.is_active()) {
         PrintJobState::instance().set_job_error(true);
         is_sending_.store(false);
@@ -640,7 +651,7 @@ void McuLink::link_run_print_pipeline()
     if(ota_session_.is_active()) {
         return;
     }
-    if(terminate_pending_.load()) {
+    if(terminate_pending_.load() || completing_cleanup_.load()) {
         return;
     }
     link_process_serial_handshake();
@@ -738,8 +749,9 @@ void McuLink::process_wake_flags()
 /* ---------- TCP 连接 ---------- */
 
 /**
- * @brief 建立与 MCU 的 TCP 连接（非阻塞）
- * @return 0 成功；-1 socket 失败；-2 IP 无效；-3 connect 失败
+ * @brief 建立与 MCU 的 TCP 连接（非阻塞 connect + poll 超时）
+ * @return 0 成功；-1 socket 失败；-2 IP 无效；-3 connect 立即失败；
+ *         -4 poll 超时或出错；-5 连接最终失败（SO_ERROR）
  */
 int McuLink::connect_tcp()
 {
@@ -766,19 +778,40 @@ int McuLink::connect_tcp()
         return -2; // IP 地址格式错误
     }
 
-    if(connect(fd, reinterpret_cast<struct sockaddr*>(&addr), sizeof(addr)) < 0) {
-        close(fd);
-        return -3; // 连接失败
+    // 连接前即设非阻塞：避免阻塞式 connect() 卡住 epoll 链路线程
+    // （该线程还负责串口 TX/RX；阻塞会拖延调试/控制命令下发）。
+    const int flags = fcntl(fd, F_GETFL, 0);
+    fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+
+    const int rc = connect(fd, reinterpret_cast<struct sockaddr*>(&addr), sizeof(addr));
+    if(rc < 0) {
+        if(errno != EINPROGRESS) {
+            close(fd);
+            return -3; // 立即失败（如 ECONNREFUSED / 无路由）
+        }
+        // 连接进行中：poll 等待最多 GLAVO_TCP_CONNECT_TIMEOUT_MS，超时即放弃
+        struct pollfd pfd{};
+        pfd.fd = fd;
+        pfd.events = POLLOUT;
+        const int pr = poll(&pfd, 1, GLAVO_TCP_CONNECT_TIMEOUT_MS);
+        if(pr <= 0) {
+            close(fd);
+            return -4; // 超时(0) 或 poll 出错(<0)
+        }
+        int soerr = 0;
+        socklen_t slen = sizeof(soerr);
+        if(getsockopt(fd, SOL_SOCKET, SO_ERROR, &soerr, &slen) < 0 || soerr != 0) {
+            close(fd);
+            return -5; // 连接最终失败（SO_ERROR）
+        }
     }
+    // rc==0：connect 立即成功（本机/极快网络）；否则 EINPROGRESS 后 poll 已确认成功
 
     // 禁用 Nagle 算法，确保小帧及时发出
     if(!set_tcp_nodelay(fd)) {
         UPC_LOG_MCU_LINK(Warn, "TCP_NODELAY set failed");
     }
-
-    // 设为非阻塞模式，方便链路线程做轮询式收发
-    const int flags = fcntl(fd, F_GETFL, 0);
-    fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+    // socket 已在连接前设为非阻塞，收发轮询沿用
 
     tcp_fd_ = fd;
     tcp_rx_accum_len_ = 0; // 清空接收累积区
@@ -1492,8 +1525,15 @@ void McuLink::refill_tcp_stage_from_ring()
 bool McuLink::mcu_rates_drained() const
 {
     const auto snap = PrintJobState::instance().snapshot();
-    return snap.cmd_cache_rate  <= static_cast<uint16_t>(MCU_DRAIN_MAX_RATE) &&
-           snap.data_cache_rate <= static_cast<uint16_t>(MCU_DRAIN_MAX_RATE);
+    if(snap.cmd_cache_rate  > static_cast<uint16_t>(MCU_DRAIN_MAX_RATE) ||
+       snap.data_cache_rate > static_cast<uint16_t>(MCU_DRAIN_MAX_RATE)) {
+        return false;
+    }
+    /* 已下发运动包后，须先观测到缓存非空再接受归零，避免短 G-code 心跳未刷新时误判 */
+    if(snap.sent_packets > 0 && !mcu_rates_seen_nonempty_.load()) {
+        return false;
+    }
+    return true;
 }
 
 bool McuLink::motion_stream_active() const
@@ -1577,6 +1617,7 @@ void McuLink::reset_motion_state(bool clear_start_pending)
     layer_drain_pending_.store(false);
     natural_complete_pending_.store(false);
     natural_complete_since_ = {};
+    mcu_rates_seen_nonempty_.store(false);
     serial_handshake_phase_.store(SERIAL_HS_NONE);
     serial_evt_condition_ok_.store(false);
     serial_evt_print_ready_.store(false);
@@ -1595,6 +1636,7 @@ void McuLink::begin_sending_internal()
     layer_drain_pending_.store(false);
     natural_complete_pending_.store(false);
     natural_complete_since_ = {};
+    mcu_rates_seen_nonempty_.store(false);
     tcp_stage_clear();
 
     // 记录首层高度，用于串口首次握手
@@ -1763,18 +1805,25 @@ void McuLink::link_try_final_layer_snap()
 
 void McuLink::run_natural_complete_cleanup()
 {
+    bool expected = false;
+    if(!completing_cleanup_.compare_exchange_strong(expected, true)) {
+        return;
+    }
+
     // 1. 末层无 M3000 时补 Snap，再通知 MCU 打印完成
     link_try_final_layer_snap();
     send_serial_print_finished();
-    send_tcp_reset();
 
-    // 2. 重置状态并上报完成事件
+    // 2. 先清发送态，再发 TCP Reset（避免 is_sending 时 hangup 误触发 terminate）
     reset_motion_state(true);
     PrintJobState::instance().set_job_completed(true);
     PrintJobState::instance().set_sending(false);
+    send_tcp_reset();
 
     emit_event(McuLinkEvent::PrintCompleted);
     reschedule_timers();
+
+    completing_cleanup_.store(false);
 }
 
 /* ---------- 串口握手与换层处理 ---------- */
@@ -2008,6 +2057,9 @@ void McuLink::link_drain_motion_queue()
 
 void McuLink::link_try_finish_sending()
 {
+    if(completing_cleanup_.load()) {
+        return;
+    }
     if(user_paused_.load()) {
         return; // 暂停期间不判自然完成，恢复后再继续
     }
@@ -2204,8 +2256,25 @@ void McuLink::on_tcp_status_response(const tcp_response_t& resp)
     }
 #endif
     if(!ota_session_.is_active()) {
+        const auto prev = PrintJobState::instance().snapshot();
+        if(resp.cmd_rate > static_cast<uint16_t>(MCU_DRAIN_MAX_RATE) ||
+           resp.data_rate > static_cast<uint16_t>(MCU_DRAIN_MAX_RATE)) {
+            mcu_rates_seen_nonempty_.store(true);
+        }
         PrintJobState::instance().set_mcu_rates(resp.cmd_rate, resp.data_rate);
-        if(poller_ready_.load()) {
+
+        const bool rates_changed =
+            prev.cmd_cache_rate != resp.cmd_rate ||
+            prev.data_cache_rate != resp.data_rate;
+        if(natural_complete_pending_.load() && progress_cb_ && rates_changed) {
+            progress_cb_();
+        }
+
+        if(completing_cleanup_.load()) {
+            return;
+        }
+        /* 排空阶段由 DrainHb 定时器驱动 finish 检测，避免每个心跳重入 pipeline */
+        if(!natural_complete_pending_.load() && poller_ready_.load()) {
             link_run_print_pipeline();
             reschedule_timers();
         }

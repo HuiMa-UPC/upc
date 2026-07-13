@@ -293,7 +293,8 @@ enum class MsgType : uint32_t {
     UI_Debug_Recycle_Motor_Req,     /**< DebugMotorPayload：内门 停止/开/关（原回粉电机块改为内门） */
     UI_Debug_Fan_Req,               /**< DebugFanPayload：风扇 */
     UI_Debug_Switch_Req,            /**< DebugSwitchPayload：激光/洗气/底板加热 */
-    UI_Debug_CleanTest_Start_Req,   /**< Empty：清粉测试开启（关闭暂不使用） */
+    UI_Debug_CleanTest_Start_Req,   /**< Empty：清粉测试开启） */
+    UI_Debug_CleanTest_Close_Req,   /**< Empty：清粉测试关闭/中止 */
     UI_Debug_Fan_Duty_Req,          /**< DebugFanPayload：仅设风扇占空比（不开关） */
     UI_Debug_PrintParam_Set_Req,    /**< DebugPrintParamPayload：打印层参数 */
     UI_Debug_Laser_Power_Set_Req,   /**< DebugLaserPowerPayload：激光手动功率 */
@@ -421,6 +422,8 @@ struct PrintProgressPayload {
     float    pm25_cabin;
     float    temperature_c;
     float    oxygen_percent;
+    uint16_t cmd_cache_rate;   /**< MCU 指令缓存占用率（TCP 心跳，0=排空） */
+    uint16_t data_cache_rate;  /**< MCU 数据缓存占用率（TCP 心跳，0=排空） */
 };
 
 /** UI_Camera_Stream_Start_Req：可选 basename；空串则用后端默认 demo_1024x600.nv12 */

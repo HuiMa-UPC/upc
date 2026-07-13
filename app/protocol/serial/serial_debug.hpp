@@ -106,8 +106,11 @@ int serial_debug_build_fan_duty(uint8_t duty, uint8_t* out, size_t out_size);
 int serial_debug_build_switch(uint8_t target, bool on,
                               uint8_t* out, size_t out_size);
 
-/** 清粉测试开启（关闭暂不使用，不提供）。Port=PRINTING，Cmd=0x81，TLV=0x20。 */
+/** 清粉测试开启。Port=PRINTING，Cmd=0x81，TLV=0x20。 */
 int serial_debug_build_clean_test_start(uint8_t* out, size_t out_size);
+
+/** 清粉测试关闭/中止。Port=PRINTING，Cmd=0x81，TLV=0x21。 */
+int serial_debug_build_clean_test_close(uint8_t* out, size_t out_size);
 
 /**
  * 打印层参数：layer_um(uint16 LE) + balance_x1000(uint16 LE)。

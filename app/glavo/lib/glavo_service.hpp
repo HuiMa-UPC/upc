@@ -8,8 +8,10 @@
 #include "msg_port.hpp"
 #include "msg_runtime.hpp"
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <cstring>
+#include <deque>
 #include <mutex>
 #include <queue>
 #include <string>
@@ -71,6 +73,7 @@ private:
     void handle_debug_fan_duty(const middleware::Message& msg);
     void handle_debug_switch(const middleware::Message& msg);
     void handle_debug_clean_test_start(const middleware::Message& msg);
+    void handle_debug_clean_test_close(const middleware::Message& msg);
     void handle_debug_print_param(const middleware::Message& msg);
     void handle_debug_laser_power_set(const middleware::Message& msg);
     void handle_debug_laser_power_reset(const middleware::Message& msg);
@@ -90,7 +93,7 @@ private:
     bool run_print_prepare(middleware::PrintFileSource source, uint32_t index,
                            std::string& local_path_out);
     void on_mcu_link_event(McuLinkEvent ev);
-    void on_motion_batch_sent();
+    void enqueue_link_event(McuLinkEvent ev);
     void publish_terminate_done();
     void publish_print_pause_done(bool paused);
     void reset_print_progress_state();
@@ -121,6 +124,7 @@ private:
 
     std::thread worker_thread_;
     std::queue<middleware::Message> worker_queue_;
+    std::deque<McuLinkEvent> link_event_queue_;
     std::mutex worker_mutex_;
     std::condition_variable worker_cv_;
     std::atomic<bool> worker_running_{false};
@@ -136,6 +140,9 @@ private:
     std::atomic<bool> print_running_{false};
     int last_print_pct_     = -1;
     bool last_parse_done_   = false;
+    uint16_t last_sent_cmd_rate_  = 0xffff;
+    uint16_t last_sent_data_rate_ = 0xffff;
+    std::chrono::steady_clock::time_point last_drain_progress_at_{};
 };
 
 } // namespace upc::glavo

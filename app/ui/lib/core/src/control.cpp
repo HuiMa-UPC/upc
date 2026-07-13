@@ -1,5 +1,6 @@
 #include "control.hpp"
 #include "ui_msg_proxy.hpp"
+#include "msg_port.hpp"
 #include "ui_theme.hpp"
 #include "ui_feedback.hpp"
 #include "ui_modal_dialog.hpp"
@@ -77,8 +78,19 @@ lv_obj_t *g_supply_filt_bar = nullptr, *g_supply_filt_pct = nullptr, *g_supply_f
 bool  g_proxy_wired = false;
 bool  g_pm25_high = false;
 int   g_purify_progress = 0;
-bool  g_job_running = false;
 bool  g_terminate_pending = false;
+int   g_last_print_progress = 0;
+uint16_t g_last_cmd_cache_rate = 0;
+uint16_t g_last_data_cache_rate = 0;
+lv_timer_t *g_print_peer_watch_timer = nullptr;
+lv_timer_t *g_print_stall_timer = nullptr;
+lv_timer_t *g_offline_exit_timer = nullptr;
+lv_timer_t *g_terminate_timeout_timer = nullptr;
+
+constexpr uint32_t PRINT_PEER_WATCH_MS      = 500u;
+constexpr uint32_t PRINT_DRAIN_FALLBACK_MS  = 60000u;
+constexpr uint32_t PRINT_OFFLINE_EXIT_MS    = 3000u;
+constexpr uint32_t TERMINATE_TIMEOUT_MS     = 8000u;
 
 DoneCb g_pm25_cb = nullptr;
 void  *g_pm25_u = nullptr;
@@ -117,6 +129,17 @@ void close_prepare_dlg(void);
 void show_prepare_dlg(void);
 void goto_file_selection(void);
 lv_obj_t *make_round_icon_btn(lv_obj_t *parent, const char *symbol, lv_event_cb_t cb);
+void stop_print_watchdogs(void);
+void start_print_peer_watch(void);
+void finish_printing(bool notify_complete);
+void try_exit_print_preview(bool notify_complete);
+void arm_drain_fallback_timer(void);
+void cancel_drain_fallback_timer(void);
+void arm_offline_exit_timer(void);
+void on_print_peer_watch(lv_timer_t *timer);
+void on_print_drain_fallback(lv_timer_t *timer);
+void on_offline_exit(lv_timer_t *timer);
+void on_terminate_timeout(lv_timer_t *timer);
 
 void invoke_done(DoneCb &cb, void *&user)
 {
@@ -145,6 +168,164 @@ void copy_file_entry(control_file_t &dst, const middleware::FileEntryPayload &sr
     dst.material_g   = src.material_g;
     dst.file_size    = src.file_size;
     dst.line_count   = src.line_count;
+}
+
+static bool mcu_cache_drained(uint16_t cmd_rate, uint16_t data_rate)
+{
+    return cmd_rate == 0 && data_rate == 0;
+}
+
+static bool print_ready_to_exit(void)
+{
+    return g_last_print_progress >= 99;
+}
+
+void cancel_drain_fallback_timer(void)
+{
+    if(g_print_stall_timer) {
+        lv_timer_delete(g_print_stall_timer);
+        g_print_stall_timer = nullptr;
+    }
+}
+
+void arm_drain_fallback_timer(void)
+{
+    if(g_print_stall_timer) {
+        return;
+    }
+    g_print_stall_timer = lv_timer_create(on_print_drain_fallback,
+        PRINT_DRAIN_FALLBACK_MS, nullptr);
+    lv_timer_set_repeat_count(g_print_stall_timer, 1);
+}
+
+void arm_offline_exit_timer(void)
+{
+    if(g_offline_exit_timer) {
+        return;
+    }
+    g_offline_exit_timer = lv_timer_create(on_offline_exit,
+        PRINT_OFFLINE_EXIT_MS, nullptr);
+    lv_timer_set_repeat_count(g_offline_exit_timer, 1);
+}
+
+void try_exit_print_preview(bool notify_complete)
+{
+    if(g_state != CONTROL_STATE_PRINTING || g_terminate_pending) {
+        return;
+    }
+    if(!print_ready_to_exit()) {
+        return;
+    }
+    if(!mcu_cache_drained(g_last_cmd_cache_rate, g_last_data_cache_rate)) {
+        arm_drain_fallback_timer();
+        return;
+    }
+    cancel_drain_fallback_timer();
+    finish_printing(notify_complete);
+}
+
+void stop_print_watchdogs(void)
+{
+    if(g_print_peer_watch_timer) {
+        lv_timer_delete(g_print_peer_watch_timer);
+        g_print_peer_watch_timer = nullptr;
+    }
+    if(g_print_stall_timer) {
+        lv_timer_delete(g_print_stall_timer);
+        g_print_stall_timer = nullptr;
+    }
+    if(g_terminate_timeout_timer) {
+        lv_timer_delete(g_terminate_timeout_timer);
+        g_terminate_timeout_timer = nullptr;
+    }
+    if(g_offline_exit_timer) {
+        lv_timer_delete(g_offline_exit_timer);
+        g_offline_exit_timer = nullptr;
+    }
+}
+
+void finish_printing(bool notify_complete)
+{
+    if(g_state != CONTROL_STATE_PRINTING) {
+        stop_print_watchdogs();
+        g_terminate_pending = false;
+        return;
+    }
+
+    stop_print_watchdogs();
+    g_terminate_pending = false;
+    g_last_print_progress = 0;
+    g_last_cmd_cache_rate = 0;
+    g_last_data_cache_rate = 0;
+
+    if(notify_complete && g_job_done_cb) {
+        DoneCb done_cb = g_job_done_cb;
+        void *done_u = g_job_u;
+        g_job_prog_cb = nullptr;
+        g_job_done_cb = nullptr;
+        g_job_u = nullptr;
+        done_cb(done_u);
+        return;
+    }
+
+    g_job_prog_cb = nullptr;
+    g_job_done_cb = nullptr;
+    g_job_u = nullptr;
+    enter_state(CONTROL_STATE_IDLE);
+}
+
+void on_print_peer_watch(lv_timer_t * /*timer*/)
+{
+    if(g_state != CONTROL_STATE_PRINTING) {
+        stop_print_watchdogs();
+        return;
+    }
+    if(middleware::MsgPort::instance().peer_connected(middleware::ModuleId::APP_GLAVO)) {
+        return;
+    }
+    if(g_terminate_pending) {
+        finish_printing(false);
+        return;
+    }
+    if(print_ready_to_exit() &&
+       !mcu_cache_drained(g_last_cmd_cache_rate, g_last_data_cache_rate)) {
+        arm_offline_exit_timer();
+        return;
+    }
+    finish_printing(false);
+}
+
+void on_offline_exit(lv_timer_t * /*timer*/)
+{
+    g_offline_exit_timer = nullptr;
+    if(g_state == CONTROL_STATE_PRINTING) {
+        finish_printing(g_last_print_progress >= 100);
+    }
+}
+
+void on_print_drain_fallback(lv_timer_t * /*timer*/)
+{
+    g_print_stall_timer = nullptr;
+    if(g_state == CONTROL_STATE_PRINTING && print_ready_to_exit()) {
+        finish_printing(g_last_print_progress >= 100);
+    }
+}
+
+void on_terminate_timeout(lv_timer_t * /*timer*/)
+{
+    g_terminate_timeout_timer = nullptr;
+    if(g_state == CONTROL_STATE_PRINTING && g_terminate_pending) {
+        finish_printing(false);
+    }
+}
+
+void start_print_peer_watch(void)
+{
+    stop_print_watchdogs();
+    g_last_print_progress = 0;
+    g_last_cmd_cache_rate = 0;
+    g_last_data_cache_rate = 0;
+    g_print_peer_watch_timer = lv_timer_create(on_print_peer_watch, PRINT_PEER_WATCH_MS, nullptr);
 }
 
 void wire_msg_proxy()
@@ -266,6 +447,9 @@ void wire_msg_proxy()
     });
 
     proxy.register_print_progress([](const middleware::PrintProgressPayload &p) {
+        g_last_print_progress   = p.progress_percent;
+        g_last_cmd_cache_rate   = p.cmd_cache_rate;
+        g_last_data_cache_rate  = p.data_cache_rate;
         if(g_job_prog_cb) {
             control_progress_t pr = {};
             pr.progress_percent  = p.progress_percent;
@@ -276,28 +460,19 @@ void wire_msg_proxy()
             pr.oxygen_percent    = p.oxygen_percent;
             g_job_prog_cb(&pr, g_job_u);
         }
-        if(p.progress_percent >= 100 && g_job_running) {
-            g_job_running = false;
-            invoke_done(g_job_done_cb, g_job_u);
+        if(p.progress_percent < 99) {
+            cancel_drain_fallback_timer();
+            return;
         }
+        try_exit_print_preview(p.progress_percent >= 100);
     });
 
     proxy.register_print_terminate_done([]() {
-        /* 用户按 Terminate 时 g_terminate_pending=true；后端主动终止（如串口 ACK
-         * 超时）也会发同一消息，此时需根据打印状态退出界面。 */
         const bool user_terminate = g_terminate_pending;
-        const bool active_print = (g_state == CONTROL_STATE_PRINTING || g_job_running);
-        if(!user_terminate && !active_print) {
+        if(!user_terminate && g_state != CONTROL_STATE_PRINTING) {
             return;
         }
-        g_terminate_pending = false;
-        g_job_running = false;
-        g_job_prog_cb = nullptr;
-        g_job_done_cb = nullptr;
-        g_job_u = nullptr;
-        if(g_state == CONTROL_STATE_PRINTING) {
-            enter_state(CONTROL_STATE_IDLE);
-        }
+        finish_printing(false);
     });
 }
 
@@ -305,7 +480,6 @@ void backend_reset_session()
 {
     g_pm25_high = false;
     g_purify_progress = 0;
-    g_job_running = false;
     g_file_tab = FileTab::Local;
     g_sel_index = -1;
     ui::UiMsgProxy::instance().send_supply_status();
@@ -321,7 +495,6 @@ void backend_cancel_pending()
     g_close_u = nullptr;
     g_purify_cb = nullptr;
     g_purify_u = nullptr;
-    g_job_running = false;
     g_job_prog_cb = nullptr;
     g_job_done_cb = nullptr;
     g_job_u = nullptr;
@@ -372,7 +545,6 @@ void backend_start_job(const control_file_t *file, ProgressCb prog_cb, DoneCb do
     g_job_prog_cb = prog_cb;
     g_job_done_cb = done_cb;
     g_job_u = u;
-    g_job_running = true;
 
     const uint32_t file_index = file ? file->index : 0;
     ui::UiMsgProxy::instance().send_print_start(file_index, file_tab_to_source(g_file_tab));
@@ -381,7 +553,17 @@ void backend_start_job(const control_file_t *file, ProgressCb prog_cb, DoneCb do
 void backend_terminate_job()
 {
     g_terminate_pending = true;
+    if(!middleware::MsgPort::instance().peer_connected(middleware::ModuleId::APP_GLAVO)) {
+        finish_printing(false);
+        return;
+    }
     ui::UiMsgProxy::instance().send_print_terminate();
+    if(g_terminate_timeout_timer) {
+        lv_timer_delete(g_terminate_timeout_timer);
+    }
+    g_terminate_timeout_timer = lv_timer_create(on_terminate_timeout,
+        TERMINATE_TIMEOUT_MS, nullptr);
+    lv_timer_set_repeat_count(g_terminate_timeout_timer, 1);
 }
 
 /* ============================================================================
@@ -1776,6 +1958,7 @@ void enter_state(control_state_t s)
 
     switch(s) {
     case CONTROL_STATE_IDLE:
+        stop_print_watchdogs();
         backend_cancel_pending();
         page_user_home_exit_printing_mode();
         overlay_hide();
@@ -1811,6 +1994,7 @@ void enter_state(control_state_t s)
                                      pf_on_print_done,
                                      nullptr);
         page_user_home_enter_printing_mode(&g_active_file);
+        start_print_peer_watch();
         break;
     }
 }

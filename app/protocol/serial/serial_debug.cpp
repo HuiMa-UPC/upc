@@ -46,6 +46,7 @@
 #define SDBG_TLV_GAS_OFF        0x02
 /* 清粉测试（Cmd 0x81） */
 #define SDBG_TLV_CLEAN_START    0x20
+#define SDBG_TLV_CLEAN_CLOSE    0x21
 /* 打印层参数（Cmd 0xB5） */
 #define SDBG_TLV_PRINT_LAYER    0x01
 /* 激光器手动功率（Cmd 0x87） */
@@ -260,6 +261,12 @@ int serial_debug_build_clean_test_start(uint8_t* out, size_t out_size)
 {
     return serial_build_aa_frame(SDBG_PORT_PRINTING, SDBG_CMD_PRINTING_CTRL,
                                  SDBG_TLV_CLEAN_START, 0, nullptr, out, out_size);
+}
+
+int serial_debug_build_clean_test_close(uint8_t* out, size_t out_size)
+{
+    return serial_build_aa_frame(SDBG_PORT_PRINTING, SDBG_CMD_PRINTING_CTRL,
+                                 SDBG_TLV_CLEAN_CLOSE, 0, nullptr, out, out_size);
 }
 
 int serial_debug_build_print_layer_param(uint16_t layer_um, uint16_t balance_x1000,

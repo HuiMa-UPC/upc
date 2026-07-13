@@ -1019,10 +1019,6 @@ void page_user_home_enter_printing_mode(const control_file_t *file)
 void page_user_home_exit_printing_mode(void)
 {
     ui::CameraPreviewPlayer::instance().stop();
-
-    if(!g_printing_active) {
-        return;
-    }
     g_printing_active = false;
 
     if(g_print_area)  lv_obj_add_flag(g_print_area, LV_OBJ_FLAG_HIDDEN);

@@ -42,6 +42,7 @@ namespace parser = upc::parser;
 namespace {
 
 constexpr size_t kWorkerQueueDepth = 64;
+constexpr int kDrainProgressMinMs = 200;
 
 constexpr size_t kFsDirMaxEntries =
     (16384u - sizeof(middleware::FsDirHeader)) / sizeof(middleware::FileEntryPayload);
@@ -188,9 +189,12 @@ bool GlavoService::init()
             McuLink::instance().bind_ring_buffer(rb);
         });
     McuLink::instance().set_job_event_callback(
-        [this](McuLinkEvent ev) { on_mcu_link_event(ev); });
-    McuLink::instance().set_progress_callback(
-        [this]() { on_motion_batch_sent(); });
+        [this](McuLinkEvent ev) { enqueue_link_event(ev); });
+    McuLink::instance().set_progress_callback([this]() {
+        if(print_running_.load()) {
+            send_print_progress(false);
+        }
+    });
     McuLink::instance().set_ota_status_callback(
         [this](const middleware::McuOtaStatusPayload& st) {
             publish_mcu_ota_status(st);
@@ -239,6 +243,7 @@ bool GlavoService::start()
         middleware::MsgType::UI_Debug_Fan_Duty_Req,
         middleware::MsgType::UI_Debug_Switch_Req,
         middleware::MsgType::UI_Debug_CleanTest_Start_Req,
+        middleware::MsgType::UI_Debug_CleanTest_Close_Req,
         middleware::MsgType::UI_Debug_PrintParam_Set_Req,
         middleware::MsgType::UI_Debug_Laser_Power_Set_Req,
         middleware::MsgType::UI_Debug_Laser_Power_Reset_Req,
@@ -275,6 +280,7 @@ bool GlavoService::stop()
         while (!worker_queue_.empty()) {
             worker_queue_.pop();
         }
+        link_event_queue_.clear();
     }
 
     stop_print_job();
@@ -307,20 +313,52 @@ void GlavoService::on_message(const middleware::Message& msg)
     worker_cv_.notify_one();
 }
 
+void GlavoService::enqueue_link_event(McuLinkEvent ev)
+{
+    if(state() != ServiceState::Running) {
+        return;
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(worker_mutex_);
+        if(link_event_queue_.size() >= kWorkerQueueDepth) {
+            UPC_LOG_GLAVO_SERVICE(Warn, "link event queue full, drop ev=%d",
+                                  static_cast<int>(ev));
+            return;
+        }
+        link_event_queue_.push_back(ev);
+    }
+    worker_cv_.notify_one();
+}
+
 /** @brief worker 线程主循环：出队并在 Running 状态下分派 handle_message */
 void GlavoService::worker_loop()
 {
     while (worker_running_.load()) {
         middleware::Message msg;
+        bool has_msg = false;
 
         {
             std::unique_lock<std::mutex> lock(worker_mutex_);
             worker_cv_.wait(lock, [this]() {
-                return !worker_running_.load() || !worker_queue_.empty();
+                return !worker_running_.load() ||
+                       !worker_queue_.empty() ||
+                       !link_event_queue_.empty();
             });
 
-            if (!worker_running_.load() && worker_queue_.empty()) {
+            if (!worker_running_.load() &&
+                worker_queue_.empty() &&
+                link_event_queue_.empty()) {
                 break;
+            }
+
+            while (!link_event_queue_.empty() &&
+                   state() == ServiceState::Running) {
+                const McuLinkEvent ev = link_event_queue_.front();
+                link_event_queue_.pop_front();
+                lock.unlock();
+                on_mcu_link_event(ev);
+                lock.lock();
             }
 
             if (worker_queue_.empty()) {
@@ -329,9 +367,10 @@ void GlavoService::worker_loop()
 
             msg = std::move(worker_queue_.front());
             worker_queue_.pop();
+            has_msg = true;
         }
 
-        if (state() == ServiceState::Running) {
+        if (has_msg && state() == ServiceState::Running) {
             handle_message(msg);
         }
     }
@@ -435,6 +474,9 @@ void GlavoService::handle_message(const middleware::Message& msg)
             break;
         case middleware::MsgType::UI_Debug_CleanTest_Start_Req:
             handle_debug_clean_test_start(msg);
+            break;
+        case middleware::MsgType::UI_Debug_CleanTest_Close_Req:
+            handle_debug_clean_test_close(msg);
             break;
         case middleware::MsgType::UI_Debug_PrintParam_Set_Req:
             handle_debug_print_param(msg);
@@ -948,17 +990,11 @@ void GlavoService::handle_print_resume(const middleware::Message& msg)
 /** @brief 重置进度推送的去重状态（last_print_pct_ / last_parse_done_） */
 void GlavoService::reset_print_progress_state()
 {
-    last_print_pct_   = -1;
-    last_parse_done_  = false;
-}
-
-/** @brief McuLink 每发送一批 motion 数据后的回调，驱动进度 Ntf */
-void GlavoService::on_motion_batch_sent()
-{
-    if(!print_running_.load()) {
-        return;
-    }
-    send_print_progress(false);
+    last_print_pct_        = -1;
+    last_parse_done_       = false;
+    last_sent_cmd_rate_    = 0xffff;
+    last_sent_data_rate_   = 0xffff;
+    last_drain_progress_at_ = {};
 }
 
 /**
@@ -1004,11 +1040,25 @@ void GlavoService::send_print_progress(bool force_complete)
     }
 
     if(!force_complete && !job.job_completed) {
-        if(last_print_pct_ >= 0) {
-            if(pct <= last_print_pct_) {
+        const bool rates_changed =
+            job.cmd_cache_rate != last_sent_cmd_rate_ ||
+            job.data_cache_rate != last_sent_data_rate_;
+        const bool drained =
+            job.cmd_cache_rate == 0 && job.data_cache_rate == 0;
+        if(pct >= 99 && rates_changed && !drained) {
+            const auto now = std::chrono::steady_clock::now();
+            if(last_drain_progress_at_.time_since_epoch().count() != 0 &&
+               now - last_drain_progress_at_ <
+                   std::chrono::milliseconds(kDrainProgressMinMs)) {
                 return;
             }
-            if(pct - last_print_pct_ < 1) {
+            last_drain_progress_at_ = now;
+        }
+        if(last_print_pct_ >= 0) {
+            if(pct <= last_print_pct_ && !rates_changed) {
+                return;
+            }
+            if(pct - last_print_pct_ < 1 && !rates_changed) {
                 return;
             }
         }
@@ -1016,7 +1066,9 @@ void GlavoService::send_print_progress(bool force_complete)
         return;
     }
 
-    last_print_pct_ = pct;
+    last_print_pct_       = pct;
+    last_sent_cmd_rate_   = job.cmd_cache_rate;
+    last_sent_data_rate_  = job.data_cache_rate;
 
     const auto env = McuLink::instance().env_snapshot();
 
@@ -1027,6 +1079,8 @@ void GlavoService::send_print_progress(bool force_complete)
     p.pm25_cabin        = env.valid ? env.pm25_cabin : 0.f;
     p.temperature_c     = env.valid ? env.temperature_c : 0.f;
     p.oxygen_percent    = env.valid ? env.oxygen_percent : 0.f;
+    p.cmd_cache_rate    = job.cmd_cache_rate;
+    p.data_cache_rate   = job.data_cache_rate;
 
     middleware::Message ntf(middleware::MsgType::APP_Print_Progress_Ntf,
         static_cast<middleware::ModuleId>(module_id()),
@@ -1069,7 +1123,7 @@ void GlavoService::publish_print_pause_done(bool paused)
 /**
  * @brief McuLink 作业事件回调：完成/终止/错误时更新 UI 与本地状态
  *
- * PrintCompleted → 100% 进度 + 清会话；
+ * PrintCompleted → 100% 进度 + Terminate_Done（双通道通知 UI 退出）+ 清会话；
  * TerminateDone/PrintError → 终止完成 Ntf + 清会话。
  */
 void GlavoService::on_mcu_link_event(McuLinkEvent ev)
@@ -1079,6 +1133,7 @@ void GlavoService::on_mcu_link_event(McuLinkEvent ev)
             UPC_LOG_GLAVO_SERVICE(Info, "tcp_job_event: PrintCompleted");
             PrintVideoNotify::instance().on_print_finish();
             send_print_progress(true);
+            publish_terminate_done();
             print_running_.store(false);
             clear_prepare_session();
             break;
@@ -1396,6 +1451,14 @@ void GlavoService::handle_debug_clean_test_start(const middleware::Message& msg)
     (void)msg;
     uint8_t buf[SERIAL_DEBUG_MAX_FRAME];
     debug_tx(buf, serial_debug_build_clean_test_start(buf, sizeof(buf)));
+}
+
+/** @brief 关闭/中止清洁测试流程 */
+void GlavoService::handle_debug_clean_test_close(const middleware::Message& msg)
+{
+    (void)msg;
+    uint8_t buf[SERIAL_DEBUG_MAX_FRAME];
+    debug_tx(buf, serial_debug_build_clean_test_close(buf, sizeof(buf)));
 }
 
 /** @brief 下发打印层参数（层厚、平衡系数等） */

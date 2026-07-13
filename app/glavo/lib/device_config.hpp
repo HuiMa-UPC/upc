@@ -40,6 +40,12 @@
 #define TCP_RECONNECT_INTERVAL_MS  1000
 #endif
 
+/** TCP 连接(connect)等待上限（毫秒）：非阻塞 connect + poll 等待，避免
+ * 阻塞式 connect 卡住链路线程进而拖延串口 TX。振镜离线时单次重连最多阻塞此值。 */
+#ifndef GLAVO_TCP_CONNECT_TIMEOUT_MS
+#define GLAVO_TCP_CONNECT_TIMEOUT_MS  200
+#endif
+
 /** Ring → Stage 二级队列 */
 #ifndef TCP_STAGE_MAX_PACKETS
 #define TCP_STAGE_MAX_PACKETS  4096
