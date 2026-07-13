@@ -4,8 +4,6 @@
 #include "print_video_notify.hpp"
 #include "parser_manager.hpp"
 #include "parser_worker.hpp"
-#include "msg_bus.hpp"
-#include "msg_runtime.hpp"
 #include "rs_log.hpp"
 #include "msg_port.hpp"
 
@@ -16,11 +14,25 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <termios.h>
+#include <sys/epoll.h>
+#include <sys/eventfd.h>
+#include <sys/timerfd.h>
 
 #include <cerrno>
 #include <cstring>
 #include <cstdio>
 #include <thread>
+#include <vector>
+
+/**
+ * @file mcu_link.cpp
+ * @brief McuLink 实现：TCP 运动下发 + 串口握手/传感器，epoll 事件驱动链路线程。
+ *
+ * 线程模型：
+ * - 所有 serial_fd / tcp_fd I/O 仅在 link_thread_fn 中执行；
+ * - 其他线程通过 wake_link() / RingBuffer produce_notify 唤醒链路线程；
+ * - 定时任务由 timerfd 驱动，无 sleep 轮询。
+ */
 
 namespace upc::glavo {
 
@@ -28,6 +40,7 @@ namespace parser = upc::parser;
 
 namespace {
 
+/** @brief 获取 ParserManager 当前活跃的解析 worker */
 parser::IParserWorker* active_parser()
 {
     return parser::ParserManager::instance().active();
@@ -35,7 +48,7 @@ parser::IParserWorker* active_parser()
 
 #if UPC_DEBUG && UPC_MOD_MCU_LINK
 
-/** 串口帧十六进制转储（5A A5 AA/BB …）；单条最多展示 64 字节 */
+/** @brief 调试：将串口帧以十六进制转储（单条最多 64 字节） */
 void serial_log_frame_hex(const char* dir, const uint8_t* data, size_t len)
 {
     if(!dir || !data || len == 0) {
@@ -56,6 +69,7 @@ void serial_log_frame_hex(const char* dir, const uint8_t* data, size_t len)
     UPC_LOG_MCU_LINK(Debug, "SERIAL_%s frame[%zu] %s", dir, len, hex);
 }
 
+/** @brief 调试：解析并打印串口 RX 帧类型（传感器/轴/激光/握手/未知） */
 void serial_log_rx_frame(const uint8_t* frame, size_t len)
 {
     serial_log_frame_hex("RX", frame, len);
@@ -149,42 +163,6 @@ using frame_guess_fn  = size_t (*)(const uint8_t*, size_t);
 using frame_handle_fn = void (*)(const uint8_t*, size_t);
 
 /**
- * @brief TCP 帧处理函数（MCU→SOC，Length+ID 格式）
- */
-void tcp_handle_frame(const uint8_t* frame, size_t len)
-{
-#if UPC_DEBUG && UPC_MOD_MCU_LINK
-    /* 下位机 TCP 初始化完成主动上报：BE EF 01 0F（见 doc/SOC-_MCU TCP报文.xlsx） */
-    if(len == 4 && frame[0] == TCP_SOF0 && frame[1] == TCP_SOF1 &&
-       frame[2] == 0x01 && frame[3] == 0x0F) {
-        UPC_LOG_MCU_LINK(Info, "RX TCP link ready (BE EF 01 0F)");
-        return;
-    }
-#endif
-
-    if(len >= 19 && frame[0] == 0xBE && frame[1] == 0xEF &&
-       frame[2] == 0x10 && frame[3] == 0x01) {
-        tcp_response_t resp{};
-        if(parse_tcp_response(frame, len, &resp) == 0) {
-            McuLink::instance().on_tcp_status_response(resp);
-        }
-    }
-}
-
-/**
- * @brief 串口帧处理函数
- * @param frame 完整帧数据指针
- * @param len   帧长度
- *
- * 解析帧为串口事件，并通过 McuLink 单例分发到 notify_serial_event，
- * 驱动串口握手状态机前进。
- */
-void serial_handle_frame(const uint8_t* frame, size_t len)
-{
-    McuLink::instance().handle_serial_rx_frame(frame, len);
-}
-
-/**
  * @brief 通用分帧接收处理函数
  * @param recv_fn    非阻塞接收函数，返回读取到的字节数（<=0 表示无数据或断开）
  * @param chunk      单次 recv 使用的临时缓冲区
@@ -257,6 +235,7 @@ void drain_framed_rx(int (*recv_fn)(uint8_t*, size_t),
 
 /* ---------- 单例与生命周期 ---------- */
 
+/** @brief 获取 McuLink 全局单例 */
 McuLink& McuLink::instance()
 {
     static McuLink inst;
@@ -265,6 +244,7 @@ McuLink& McuLink::instance()
 
 McuLink::McuLink() = default;
 
+/** @brief 析构时停止链路线程并关闭所有 fd */
 McuLink::~McuLink()
 {
     stop(); // 确保析构时线程已结束、fd 已关闭
@@ -272,16 +252,25 @@ McuLink::~McuLink()
 
 /* ---------- 依赖注入与回调设置 ---------- */
 
+/**
+ * @brief 绑定解析器 RingBuffer，并注册生产唤醒回调
+ * @param rb 运动包环形缓冲区；为 nullptr 时仅解绑
+ */
 void McuLink::bind_ring_buffer(parser::RingBuffer* rb)
 {
     rb_ = rb;
+    if(rb_) {
+        rb_->set_produce_notify([this]() { notify_rb_produced(); });
+    }
 }
 
+/** @brief 设置打印任务生命周期事件回调（完成/终止/错误等） */
 void McuLink::set_job_event_callback(McuLinkEventCb cb)
 {
     event_cb_ = std::move(cb);
 }
 
+/** @brief 设置发送进度回调（每批运动包下发后触发） */
 void McuLink::set_progress_callback(McuLinkProgressCb cb)
 {
     progress_cb_ = std::move(cb);
@@ -289,14 +278,469 @@ void McuLink::set_progress_callback(McuLinkProgressCb cb)
 
 /* ---------- 静态工具 ---------- */
 
+/** @brief 对 TCP socket 启用 TCP_NODELAY，降低小帧延迟 */
 bool McuLink::set_tcp_nodelay(int sockfd)
 {
     int flag = 1;
     return setsockopt(sockfd, IPPROTO_TCP, TCP_NODELAY, &flag, sizeof(flag)) == 0;
 }
 
+/** @brief TCP 帧处理（MCU→SOC，Length+ID 格式） */
+void McuLink::tcp_handle_frame(const uint8_t* frame, size_t len)
+{
+#if UPC_DEBUG && UPC_MOD_MCU_LINK
+    /* 下位机 TCP 初始化完成主动上报：BE EF 01 0F（见 doc/SOC-_MCU TCP报文.xlsx） */
+    if(len == 4 && frame[0] == TCP_SOF0 && frame[1] == TCP_SOF1 &&
+       frame[2] == 0x01 && frame[3] == 0x0F) {
+        UPC_LOG_MCU_LINK(Info, "RX TCP link ready (BE EF 01 0F)");
+        return;
+    }
+#endif
+
+    if(len >= 19 && frame[0] == 0xBE && frame[1] == 0xEF &&
+       frame[2] == 0x10 && frame[3] == 0x01) {
+        tcp_response_t resp{};
+        if(parse_tcp_response(frame, len, &resp) == 0) {
+            instance().on_tcp_status_response(resp);
+        }
+    }
+}
+
+/**
+ * @brief 串口帧处理：解析并分发到 handle_serial_rx_frame
+ *
+ * 驱动串口握手状态机前进。
+ */
+void McuLink::serial_handle_frame(const uint8_t* frame, size_t len)
+{
+    instance().handle_serial_rx_frame(frame, len);
+}
+
+/* ---------- epoll / eventfd / timerfd ---------- */
+
+namespace {
+
+/** @brief 创建非阻塞、close-on-exec 的 eventfd，用于跨线程唤醒 */
+int create_event_fd()
+{
+    return ::eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
+}
+
+/** @brief 创建非阻塞、close-on-exec 的 timerfd，用于定时任务 */
+int create_timer_fd()
+{
+    return ::timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK | TFD_CLOEXEC);
+}
+
+/** @brief 将毫秒数转换为 timespec，供 timerfd_settime 使用 */
+void ms_to_timespec(int ms, timespec& ts)
+{
+    ts.tv_sec  = static_cast<time_t>(ms / 1000);
+    ts.tv_nsec = static_cast<long>(ms % 1000) * 1000000L;
+}
+
+} // namespace
+
+/** @brief 排空 eventfd 计数，避免 EPOLLIN 持续触发 */
+void McuLink::drain_eventfd(int efd)
+{
+    if(efd < 0) {
+        return;
+    }
+    uint64_t cnt = 0;
+    while(::read(efd, &cnt, sizeof(cnt)) == static_cast<ssize_t>(sizeof(cnt))) {}
+}
+
+/** @brief 排空 timerfd 到期计数，避免重复触发 */
+void McuLink::drain_timerfd(int tfd)
+{
+    if(tfd < 0) {
+        return;
+    }
+    uint64_t exp = 0;
+    while(::read(tfd, &exp, sizeof(exp)) == static_cast<ssize_t>(sizeof(exp))) {}
+}
+
+/** @brief 将 timerfd 设为周期性定时器 */
+void McuLink::arm_timer_periodic(int tfd, int interval_ms)
+{
+    if(tfd < 0 || interval_ms <= 0) {
+        return;
+    }
+    itimerspec its{};
+    ms_to_timespec(interval_ms, its.it_value);
+    its.it_interval = its.it_value;
+    ::timerfd_settime(tfd, 0, &its, nullptr);
+}
+
+/** @brief 将 timerfd 设为单次定时器 */
+void McuLink::arm_timer_oneshot_ms(int tfd, int ms)
+{
+    if(tfd < 0 || ms <= 0) {
+        return;
+    }
+    itimerspec its{};
+    ms_to_timespec(ms, its.it_value);
+    ::timerfd_settime(tfd, 0, &its, nullptr);
+}
+
+/** @brief 关闭 timerfd 定时（清零 itimerspec） */
+void McuLink::disarm_timer(int tfd)
+{
+    if(tfd < 0) {
+        return;
+    }
+    itimerspec its{};
+    ::timerfd_settime(tfd, 0, &its, nullptr);
+}
+
+/**
+ * @brief 跨线程唤醒链路线程
+ * @param flags WAKE_* 位掩码，由 process_wake_flags() 消费
+ */
+void McuLink::wake_link(uint32_t flags)
+{
+    pending_wake_.fetch_or(flags, std::memory_order_release);
+    if(wake_fd_ < 0) {
+        return;
+    }
+    const uint64_t inc = 1;
+    ssize_t n = 0;
+    do {
+        n = ::write(wake_fd_, &inc, sizeof(inc));
+    } while(n < 0 && errno == EINTR);
+}
+
+/** @brief RingBuffer 生产通知：写入 rb_wake_fd_ 唤醒预取/下发 */
+void McuLink::notify_rb_produced()
+{
+    if(rb_wake_fd_ < 0) {
+        return;
+    }
+    const uint64_t inc = 1;
+    ssize_t n = 0;
+    do {
+        n = ::write(rb_wake_fd_, &inc, sizeof(inc));
+    } while(n < 0 && errno == EINTR);
+}
+
+/** @brief 将 fd 注册到 epoll，并关联 LinkPollCtx */
+bool McuLink::epoll_add_fd(int fd, uint32_t events, LinkPollCtx* ctx)
+{
+    if(fd < 0 || !poller_.valid()) {
+        return false;
+    }
+    return poller_.add(fd, events, ctx);
+}
+
+/** @brief 从 epoll 注销 fd */
+void McuLink::epoll_del_fd(int fd)
+{
+    if(fd < 0 || !poller_.valid()) {
+        return;
+    }
+    poller_.del(fd);
+}
+
+/** @brief 将当前 tcp_fd_ 注册到 epoll（含 RDHUP/ERR） */
+void McuLink::epoll_register_tcp()
+{
+    if(tcp_fd_ >= 0) {
+        epoll_add_fd(tcp_fd_, EPOLLIN | EPOLLRDHUP | EPOLLERR, &ctx_tcp_);
+    }
+}
+
+/** @brief 从 epoll 注销 tcp_fd_ */
+void McuLink::epoll_unregister_tcp()
+{
+    if(tcp_fd_ >= 0) {
+        epoll_del_fd(tcp_fd_);
+    }
+}
+
+/**
+ * @brief TCP 连接断开统一处理
+ *
+ * 打印中且非 OTA 时标记 job_error；关闭 fd、清空 RX 累积区并重排定时器。
+ */
+void McuLink::on_tcp_hangup()
+{
+    if(is_sending_.load() && !ota_session_.is_active()) {
+        PrintJobState::instance().set_job_error(true);
+        is_sending_.store(false);
+        terminate_pending_.store(true);
+    }
+    epoll_unregister_tcp();
+    if(tcp_fd_ >= 0) {
+        ::close(tcp_fd_);
+        tcp_fd_ = -1;
+    }
+    tcp_rx_accum_len_ = 0;
+    reschedule_timers();
+}
+
+/**
+ * @brief 初始化 epoll 轮询：创建 wake/rb_wake/timerfd 并注册所有 fd
+ *
+ * 必须在 link_thread_fn 启动时调用；完成后置 poller_ready_ 并重排定时器。
+ */
+void McuLink::init_link_poll()
+{
+    poller_.reopen();
+
+    wake_fd_    = create_event_fd();
+    rb_wake_fd_ = create_event_fd();
+    tmr_dispatch_fd_      = create_timer_fd();
+    tmr_heartbeat_fd_     = create_timer_fd();
+    tmr_drain_hb_fd_      = create_timer_fd();
+    tmr_drain_timeout_fd_ = create_timer_fd();
+    tmr_reconnect_fd_     = create_timer_fd();
+    tmr_ota_fd_           = create_timer_fd();
+    tmr_serial_ack_fd_    = create_timer_fd();
+
+    constexpr uint32_t ev_in = EPOLLIN;
+
+    if(serial_fd_ >= 0) {
+        epoll_add_fd(serial_fd_, ev_in | EPOLLRDHUP, &ctx_serial_);
+    }
+    epoll_add_fd(wake_fd_, ev_in, &ctx_wake_);
+    epoll_add_fd(rb_wake_fd_, ev_in, &ctx_rb_wake_);
+
+    epoll_add_fd(tmr_dispatch_fd_, ev_in, &ctx_tmr_dispatch_);
+    epoll_add_fd(tmr_heartbeat_fd_, ev_in, &ctx_tmr_heartbeat_);
+    epoll_add_fd(tmr_drain_hb_fd_, ev_in, &ctx_tmr_drain_hb_);
+    epoll_add_fd(tmr_drain_timeout_fd_, ev_in, &ctx_tmr_drain_timeout_);
+    epoll_add_fd(tmr_reconnect_fd_, ev_in, &ctx_tmr_reconnect_);
+    epoll_add_fd(tmr_ota_fd_, ev_in, &ctx_tmr_ota_);
+    epoll_add_fd(tmr_serial_ack_fd_, ev_in, &ctx_tmr_serial_ack_);
+
+    if(tcp_fd_ >= 0) {
+        epoll_register_tcp();
+    }
+
+    poller_ready_.store(true);
+    reschedule_timers();
+}
+
+/** @brief 关闭 epoll 轮询：注销 fd、关闭 timerfd/eventfd 并释放 poller */
+void McuLink::shutdown_link_poll()
+{
+    poller_ready_.store(false);
+
+    disarm_timer(tmr_dispatch_fd_);
+    disarm_timer(tmr_heartbeat_fd_);
+    disarm_timer(tmr_drain_hb_fd_);
+    disarm_timer(tmr_drain_timeout_fd_);
+    disarm_timer(tmr_reconnect_fd_);
+    disarm_timer(tmr_ota_fd_);
+    disarm_timer(tmr_serial_ack_fd_);
+
+    if(serial_fd_ >= 0) {
+        epoll_del_fd(serial_fd_);
+    }
+    epoll_unregister_tcp();
+    epoll_del_fd(wake_fd_);
+    epoll_del_fd(rb_wake_fd_);
+    epoll_del_fd(tmr_dispatch_fd_);
+    epoll_del_fd(tmr_heartbeat_fd_);
+    epoll_del_fd(tmr_drain_hb_fd_);
+    epoll_del_fd(tmr_drain_timeout_fd_);
+    epoll_del_fd(tmr_reconnect_fd_);
+    epoll_del_fd(tmr_ota_fd_);
+    epoll_del_fd(tmr_serial_ack_fd_);
+
+    auto close_fd = [](int& fd) {
+        if(fd >= 0) {
+            ::close(fd);
+            fd = -1;
+        }
+    };
+    close_fd(wake_fd_);
+    close_fd(rb_wake_fd_);
+    close_fd(tmr_dispatch_fd_);
+    close_fd(tmr_heartbeat_fd_);
+    close_fd(tmr_drain_hb_fd_);
+    close_fd(tmr_drain_timeout_fd_);
+    close_fd(tmr_reconnect_fd_);
+    close_fd(tmr_ota_fd_);
+    close_fd(tmr_serial_ack_fd_);
+
+    poller_.close();
+}
+
+/**
+ * @brief 按当前业务状态重排所有 timerfd
+ *
+ * OTA、重连、心跳、运动下发、排空、串口 ACK 等定时器互斥启用。
+ */
+void McuLink::reschedule_timers()
+{
+    if(!poller_ready_.load()) {
+        return;
+    }
+
+    disarm_timer(tmr_dispatch_fd_);
+    disarm_timer(tmr_heartbeat_fd_);
+    disarm_timer(tmr_drain_hb_fd_);
+    disarm_timer(tmr_drain_timeout_fd_);
+    disarm_timer(tmr_reconnect_fd_);
+    disarm_timer(tmr_ota_fd_);
+    disarm_timer(tmr_serial_ack_fd_);
+
+    if(ota_session_.is_active()) {
+        arm_timer_periodic(tmr_ota_fd_, TCP_SEND_INTERVAL_MS);
+        return;
+    }
+
+    if(tcp_fd_ < 0 && !terminate_pending_.load() && !is_sending_.load()) {
+        arm_timer_periodic(tmr_reconnect_fd_, TCP_RECONNECT_INTERVAL_MS);
+    }
+
+    if(tcp_fd_ >= 0 && !motion_stream_active() && !natural_complete_pending_.load()
+       && !ota_session_.suppress_idle_heartbeat()) {
+        arm_timer_periodic(tmr_heartbeat_fd_, TCP_HEARTBEAT_INTERVAL_MS);
+    }
+
+    if(motion_stream_active() && !user_paused_.load()) {
+        arm_timer_periodic(tmr_dispatch_fd_, TCP_SEND_INTERVAL_MS);
+    }
+
+    if(start_pending_.load() && !is_sending_.load() && tcp_fd_ >= 0) {
+        arm_timer_periodic(tmr_dispatch_fd_, TCP_SEND_INTERVAL_MS);
+    }
+
+    if(natural_complete_pending_.load()) {
+        arm_timer_periodic(tmr_drain_hb_fd_, TCP_HEARTBEAT_INTERVAL_MS);
+        if(MCU_DRAIN_TIMEOUT_MS > 0) {
+            arm_timer_oneshot_ms(tmr_drain_timeout_fd_, MCU_DRAIN_TIMEOUT_MS);
+        }
+    }
+
+#if GLAVO_SERIAL_ACK_ENABLE
+    if(serial_reliable_pending_.active) {
+        const auto now = std::chrono::steady_clock::now();
+        const auto ms_left = std::chrono::duration_cast<std::chrono::milliseconds>(
+            serial_reliable_pending_.deadline - now).count();
+        if(ms_left > 0) {
+            arm_timer_oneshot_ms(tmr_serial_ack_fd_, static_cast<int>(ms_left));
+        } else {
+            arm_timer_oneshot_ms(tmr_serial_ack_fd_, 1);
+        }
+    }
+#endif
+}
+
+/**
+ * @brief 打印主流程：串口握手 → 挂起启动 → 预取 → 下发 → 完成检测
+ *
+ * OTA 活跃或终止挂起时直接返回。
+ */
+void McuLink::link_run_print_pipeline()
+{
+    if(ota_session_.is_active()) {
+        return;
+    }
+    if(terminate_pending_.load()) {
+        return;
+    }
+    link_process_serial_handshake();
+    try_complete_pending_start();
+    if(is_sending_.load()) {
+        refill_tcp_stage_from_ring();
+        link_drain_motion_queue();
+        link_try_finish_sending();
+    }
+}
+
+/** @brief 空闲心跳：无运动流时周期性发送 TCP 心跳并尝试完成挂起启动 */
+void McuLink::link_run_idle_heartbeat()
+{
+    if(tcp_fd_ < 0) {
+        return;
+    }
+    if(motion_stream_active() || ota_session_.is_active()) {
+        return;
+    }
+    if(ota_session_.suppress_idle_heartbeat()) {
+        return;
+    }
+    uint8_t hb[64];
+    const int hblen = build_heartbeat_frame(hb, sizeof(hb));
+    if(hblen > 0) {
+        tcp_send_raw(hb, static_cast<size_t>(hblen));
+    }
+    tcp_drain_rx();
+    try_complete_pending_start();
+}
+
+/** @brief timerfd 到期分发：按 LinkTimerId 调用对应业务逻辑 */
+void McuLink::dispatch_timer(LinkTimerId id)
+{
+    switch(id) {
+    case LinkTimerId::Dispatch:
+        link_run_print_pipeline();
+        reschedule_timers();
+        break;
+    case LinkTimerId::Heartbeat:
+        link_run_idle_heartbeat();
+        break;
+    case LinkTimerId::DrainHb:
+        poll_mcu_drain_heartbeat();
+        link_try_finish_sending();
+        reschedule_timers();
+        break;
+    case LinkTimerId::DrainTimeout:
+        link_try_finish_sending();
+        reschedule_timers();
+        break;
+    case LinkTimerId::Reconnect:
+        if(!terminate_pending_.load() && !ota_session_.is_active()) {
+            if(tcp_fd_ < 0 || ota_post_reconnect_.load()) {
+                link_try_ota_post_reconnect();
+            }
+        }
+        reschedule_timers();
+        break;
+    case LinkTimerId::Ota:
+        ota_tick();
+        reschedule_timers();
+        break;
+    case LinkTimerId::SerialAck:
+        link_process_serial_reliable_tx();
+        reschedule_timers();
+        break;
+    }
+}
+
+/** @brief 消费 wake_fd_ 写入的 WAKE_* 标志并执行对应动作 */
+void McuLink::process_wake_flags()
+{
+    const uint32_t flags = pending_wake_.exchange(0, std::memory_order_acq_rel);
+
+    if(flags & WAKE_STOP) {
+        link_run_.store(false);
+    }
+
+    if(flags & WAKE_SERIAL_TX) {
+        drain_serial_tx_queue();
+        link_process_serial_reliable_tx();
+    }
+
+    if(flags & WAKE_CONTROL) {
+        link_run_print_pipeline();
+    }
+
+    if(flags != 0) {
+        reschedule_timers();
+    }
+}
+
 /* ---------- TCP 连接 ---------- */
 
+/**
+ * @brief 建立与 MCU 的 TCP 连接（非阻塞）
+ * @return 0 成功；-1 socket 失败；-2 IP 无效；-3 connect 失败
+ */
 int McuLink::connect_tcp()
 {
     const char* ip = GLAVO_TCP_DEFAULT_IP;
@@ -304,7 +748,8 @@ int McuLink::connect_tcp()
 
     // 若已有连接，先关闭旧 fd
     if(tcp_fd_ >= 0) {
-        close(tcp_fd_);
+        epoll_unregister_tcp();
+        ::close(tcp_fd_);
         tcp_fd_ = -1;
     }
 
@@ -339,11 +784,19 @@ int McuLink::connect_tcp()
     tcp_rx_accum_len_ = 0; // 清空接收累积区
 
     UPC_LOG_MCU_LINK(Info, "TCP connected %s:%d (NODELAY=1)", ip, port);
+    if(poller_ready_.load()) {
+        epoll_register_tcp();
+        reschedule_timers();
+    }
     return 0;
 }
 
 /* ---------- 串口打开与配置 ---------- */
 
+/**
+ * @brief 打开并配置串口（8N1 原始模式、非阻塞）
+ * @return 0 成功；-1 失败
+ */
 int McuLink::open_serial(const char* device, int baud)
 {
     if(!device) {
@@ -401,12 +854,12 @@ int McuLink::open_serial(const char* device, int baud)
 
 /* ---------- 链路线程控制 ---------- */
 
+/** @brief 启动链路线程（epoll 事件循环），已在运行时直接返回 */
 void McuLink::start_link_thread()
 {
     if(link_run_.load()) {
         return; // 已在运行
     }
-    link_stop_.store(false);
     link_run_.store(true);
     if(link_th_.joinable()) {
         link_th_.join(); // 等待旧线程结束（理论上不应发生）
@@ -414,21 +867,21 @@ void McuLink::start_link_thread()
     link_th_ = std::thread(&McuLink::link_thread_fn, this);
 }
 
+/** @brief 停止链路线程，关闭 poll/TCP/串口并清空可靠发送队列 */
 void McuLink::stop()
 {
-    // 设置停止标志
-    link_stop_.store(true);
     link_run_.store(false);
+    wake_link(WAKE_STOP);
     if(link_th_.joinable()) {
-        link_th_.join(); // 等待线程结束
+        link_th_.join();
     }
-    // 关闭文件描述符
+    shutdown_link_poll();
     if(tcp_fd_ >= 0) {
-        close(tcp_fd_);
+        ::close(tcp_fd_);
         tcp_fd_ = -1;
     }
     if(serial_fd_ >= 0) {
-        close(serial_fd_);
+        ::close(serial_fd_);
         serial_fd_ = -1;
     }
     serial_clear_reliable();
@@ -436,7 +889,9 @@ void McuLink::stop()
 
 /* ---------- 状态查询 ---------- */
 
+/** @brief TCP 是否已连接 */
 bool McuLink::is_tcp_connected() const { return tcp_fd_ >= 0; }
+/** @brief 是否处于运动包下发中 */
 bool McuLink::is_sending() const { return is_sending_.load(); }
 
 /* ---------- 事件与回调 ---------- */
@@ -462,6 +917,7 @@ void McuLink::enqueue_serial_tx(const uint8_t* data, size_t len, bool reliable)
         serial_tx_queue_.pop_front();
     }
     serial_tx_queue_.push_back(item);
+    wake_link(WAKE_SERIAL_TX);
 }
 
 EnvSnapshotCache McuLink::env_snapshot() const
@@ -644,6 +1100,10 @@ void McuLink::notify_serial_event(serial_event_t evt)
     } else if(evt == SERIAL_EVT_PRINT_READY) {
         serial_evt_print_ready_.store(true);
     }
+    if(poller_ready_.load()) {
+        link_run_print_pipeline();
+        reschedule_timers();
+    }
 }
 
 void McuLink::handle_serial_rx_frame(const uint8_t* frame, size_t len)
@@ -704,8 +1164,7 @@ int McuLink::tcp_send_raw(const uint8_t* data, size_t len)
     if(n != (ssize_t)len) {
         // 对端断开或连接重置，关闭 fd 并更新状态
         if(n < 0 && (errno == EPIPE || errno == ECONNRESET)) {
-            close(tcp_fd_);
-            tcp_fd_ = -1;
+            on_tcp_hangup();
         }
         return -1;
     }
@@ -725,9 +1184,7 @@ int McuLink::tcp_recv_nonblock(uint8_t* buf, size_t buf_size)
         return -1; // 其他错误
     }
     if(n == 0) {
-        // 对端优雅关闭
-        close(tcp_fd_);
-        tcp_fd_ = -1;
+        on_tcp_hangup();
         return -1;
     }
     return (int)n;
@@ -742,7 +1199,7 @@ void McuLink::tcp_drain_rx()
     drain_framed_rx(recv_fn, chunk, sizeof(chunk),
                     tcp_rx_accum_, sizeof(tcp_rx_accum_), &tcp_rx_accum_len_,
                     tcp_guess_rx_frame_len,
-                    +[](const uint8_t* f, size_t l) { tcp_handle_frame(f, l); });
+                    +[](const uint8_t* f, size_t l) { McuLink::tcp_handle_frame(f, l); });
 }
 
 /* ---------- 串口原始收发 ---------- */
@@ -793,6 +1250,7 @@ void McuLink::serial_start_reliable_item(const SerialReliableItem& item)
     UPC_LOG_MCU_LINK(Debug,
         "serial reliable TX port=%02X cmd=%02X type=%02X abort=%d",
         key.port, key.cmd, key.type, item.abort_print_on_fail ? 1 : 0);
+    reschedule_timers();
 }
 
 void McuLink::serial_advance_reliable_queue()
@@ -919,6 +1377,7 @@ void McuLink::link_process_serial_reliable_tx()
         serial_reliable_pending_.key.port,
         serial_reliable_pending_.key.cmd,
         serial_reliable_pending_.key.type);
+    reschedule_timers();
 }
 
 int McuLink::serial_recv_nonblock(uint8_t* buf, size_t buf_size)
@@ -945,7 +1404,7 @@ void McuLink::serial_drain_rx()
     drain_framed_rx(recv_fn, chunk, sizeof(chunk),
                     serial_rx_accum_, sizeof(serial_rx_accum_), &serial_rx_accum_len_,
                     serial_guess_rx_frame_len,
-                    +[](const uint8_t* f, size_t l) { serial_handle_frame(f, l); });
+                    +[](const uint8_t* f, size_t l) { McuLink::serial_handle_frame(f, l); });
 }
 
 /* ---------- tcp_stage_ 队列操作 ---------- */
@@ -995,7 +1454,7 @@ bool McuLink::tcp_stage_pop_front(parser::rb_packet_t* pkt)
  * 预取策略：
  * - 每次最多取 REFILL_STAGE_MAX_PACKETS 个包；
  * - 若 tcp_stage_ 已有 TCP_STAGE_MAX_PACKETS 个包则停止，避免内存无限增长；
- * - 对 RingBuffer 的 peek/get 操作限时 5ms，防止阻塞链路线程。
+ * - 对 RingBuffer 的 peek/get 操作为非阻塞（get timeout=0）。
  */
 void McuLink::refill_tcp_stage_from_ring()
 {
@@ -1018,8 +1477,8 @@ void McuLink::refill_tcp_stage_from_ring()
         }
 
         parser::rb_packet_t pkt;
-        if(!rb_->get(pkt, 5)) {
-            break; // 获取失败（超时或无数据）
+        if(!rb_->get(pkt, 0)) {
+            break;
         }
 
         std::lock_guard<std::mutex> lock(tcp_stage_mtx_);
@@ -1167,23 +1626,25 @@ void McuLink::begin_sending_internal()
 #endif
 
     UPC_LOG_MCU_LINK(Info, "begin_sending");
+    reschedule_timers();
 }
 
 void McuLink::begin_sending()
 {
     if(tcp_fd_ < 0) {
-        return; // TCP 未连接，无法开始
+        return;
     }
     if(is_sending_.load()) {
-        return; // 已在发送中
+        return;
     }
     if(!ring_meets_start_threshold()) {
-        // 缓存不足，设置挂起标志，由链路线程在条件满足时自动启动
         start_pending_.store(true);
+        wake_link(WAKE_CONTROL);
         return;
     }
     start_pending_.store(false);
     begin_sending_internal();
+    wake_link(WAKE_CONTROL);
 }
 
 void McuLink::try_complete_pending_start()
@@ -1207,12 +1668,14 @@ void McuLink::request_terminate()
     is_sending_.store(false);
     start_pending_.store(false);
     PrintJobState::instance().set_sending(false);
+    wake_link(WAKE_CONTROL);
 }
 
 void McuLink::set_user_dispatch_paused(bool paused)
 {
     user_paused_.store(paused);
     UPC_LOG_MCU_LINK(Info, "user dispatch paused=%d", paused ? 1 : 0);
+    wake_link(WAKE_CONTROL);
 }
 
 bool McuLink::is_user_dispatch_paused() const noexcept
@@ -1280,6 +1743,7 @@ void McuLink::run_manual_terminate_cleanup()
     PrintJobState::instance().reset_job_counters();
 
     emit_event(was_error ? McuLinkEvent::PrintError : McuLinkEvent::TerminateDone);
+    reschedule_timers();
 }
 
 void McuLink::link_try_final_layer_snap()
@@ -1310,6 +1774,7 @@ void McuLink::run_natural_complete_cleanup()
     PrintJobState::instance().set_sending(false);
 
     emit_event(McuLinkEvent::PrintCompleted);
+    reschedule_timers();
 }
 
 /* ---------- 串口握手与换层处理 ---------- */
@@ -1575,6 +2040,7 @@ void McuLink::link_try_finish_sending()
         }
         natural_complete_pending_.store(true);
         poll_mcu_drain_heartbeat();
+        reschedule_timers();
 
         if(MCU_DRAIN_TIMEOUT_MS > 0 &&
            natural_complete_since_.time_since_epoch().count() != 0 &&
@@ -1598,26 +2064,96 @@ void McuLink::link_try_finish_sending()
     run_natural_complete_cleanup();
 }
 
-/* ---------- 链路线程休眠策略 ---------- */
+/* ---------- 链路线程主循环（epoll 事件驱动） ---------- */
 
-int McuLink::link_thread_sleep_ms() const
+void McuLink::link_thread_fn()
 {
-    if(ota_session_.is_active()) {
-        return TCP_SEND_INTERVAL_MS;
+    init_link_poll();
+
+    while(link_run_.load()) {
+        std::vector<upc_ipc::PollEvent> events;
+        const int n = poller_.wait(events, -1);
+        if(n < 0) {
+            if(errno == EINTR) {
+                continue;
+            }
+            UPC_LOG_MCU_LINK(Error, "epoll_wait failed errno=%d", errno);
+            break;
+        }
+
+        for(const upc_ipc::PollEvent& ev : events) {
+            auto* ctx = static_cast<LinkPollCtx*>(ev.user_data);
+            if(!ctx) {
+                continue;
+            }
+
+            if(ev.events & (EPOLLERR | EPOLLHUP | EPOLLRDHUP)) {
+                if(ctx->kind == LinkFdKind::Tcp) {
+                    on_tcp_hangup();
+                }
+            }
+
+            if(!(ev.events & EPOLLIN)) {
+                continue;
+            }
+
+            switch(ctx->kind) {
+            case LinkFdKind::Serial:
+                serial_drain_rx();
+                link_process_serial_handshake();
+                link_process_serial_reliable_tx();
+                break;
+            case LinkFdKind::Tcp:
+                tcp_drain_rx();
+                break;
+            case LinkFdKind::Wake:
+                drain_eventfd(wake_fd_);
+                process_wake_flags();
+                break;
+            case LinkFdKind::RbWake:
+                drain_eventfd(rb_wake_fd_);
+                link_run_print_pipeline();
+                reschedule_timers();
+                break;
+            case LinkFdKind::Timer: {
+                int tfd = -1;
+                switch(ctx->timer_id) {
+                case LinkTimerId::Dispatch:
+                    tfd = tmr_dispatch_fd_;
+                    break;
+                case LinkTimerId::Heartbeat:
+                    tfd = tmr_heartbeat_fd_;
+                    break;
+                case LinkTimerId::DrainHb:
+                    tfd = tmr_drain_hb_fd_;
+                    break;
+                case LinkTimerId::DrainTimeout:
+                    tfd = tmr_drain_timeout_fd_;
+                    break;
+                case LinkTimerId::Reconnect:
+                    tfd = tmr_reconnect_fd_;
+                    break;
+                case LinkTimerId::Ota:
+                    tfd = tmr_ota_fd_;
+                    break;
+                case LinkTimerId::SerialAck:
+                    tfd = tmr_serial_ack_fd_;
+                    break;
+                }
+                drain_timerfd(tfd);
+                dispatch_timer(ctx->timer_id);
+                break;
+            }
+            }
+        }
+
+        if(terminate_pending_.load()) {
+            run_manual_terminate_cleanup();
+            terminate_pending_.store(false);
+        }
     }
-    if(terminate_pending_.load()) {
-        return 5; // 终止请求需快速响应
-    }
-    if(is_sending_.load() && !waiting_layer_.load()) {
-        return TCP_SEND_INTERVAL_MS; // 活跃下发期间按固定间隔轮询
-    }
-    if(waiting_layer_.load() || natural_complete_pending_.load()) {
-        return 10; // 换层等待或完成等待，稍快轮询
-    }
-    if(tcp_fd_ >= 0) {
-        return TCP_HEARTBEAT_INTERVAL_MS; // 空闲但有连接，按心跳间隔休眠
-    }
-    return 50; // 无连接时的默认轮询间隔
+
+    shutdown_link_poll();
 }
 
 /* ---------- OTA（测试） ---------- */
@@ -1637,12 +2173,17 @@ bool McuLink::start_mcu_ota(const char* image_dir)
         UPC_LOG_MCU_OTA(Warn, "OTA start: print active");
         return false;
     }
-    return ota_session_.start(image_dir);
+    if(!ota_session_.start(image_dir)) {
+        return false;
+    }
+    wake_link(WAKE_CONTROL);
+    return true;
 }
 
 void McuLink::cancel_mcu_ota()
 {
     ota_session_.cancel();
+    wake_link(WAKE_CONTROL);
 }
 
 bool McuLink::ota_active() const
@@ -1657,10 +2198,17 @@ void McuLink::on_tcp_status_response(const tcp_response_t& resp)
     if(ota_session_.take_post_success_reconnect()) {
         ota_post_reconnect_.store(true);
         UPC_LOG_MCU_OTA(Info, "OTA success: schedule TCP post-reconnect");
+        if(poller_ready_.load()) {
+            reschedule_timers();
+        }
     }
 #endif
     if(!ota_session_.is_active()) {
         PrintJobState::instance().set_mcu_rates(resp.cmd_rate, resp.data_rate);
+        if(poller_ready_.load()) {
+            link_run_print_pipeline();
+            reschedule_timers();
+        }
     }
 }
 
@@ -1694,81 +2242,6 @@ void McuLink::link_try_ota_post_reconnect()
     if(ota_pending) {
         UPC_LOG_MCU_OTA(Warn, "OTA post-reconnect TCP fail %s:%d rc=%d",
                         GLAVO_TCP_DEFAULT_IP, GLAVO_TCP_DEFAULT_PORT, rc);
-    }
-}
-
-/* ---------- 链路线程主循环 ---------- */
-
-void McuLink::link_thread_fn()
-{
-    using clock = std::chrono::steady_clock;
-    auto next_hb = clock::now(); // 下次心跳发送时间点
-    auto next_tcp_retry = clock::now(); // 下次 TCP 重连尝试时间点
-
-    while(link_run_.load() && !link_stop_.load()) {
-        const auto now = clock::now();
-
-        // ---------- 串口 TX/RX/可靠重传：独立于 TCP，始终处理 ----------
-        // 串口（MCU 调试链路）与 TCP（振镜）相互独立；即使振镜未连接，
-        // 调试命令（UI_Debug_*）与传感器上报也必须照常收发。
-        drain_serial_tx_queue();
-        serial_drain_rx();
-        link_process_serial_reliable_tx();
-
-        // ---------- TCP RX 排空与断线检测/重连（不阻塞串口） ----------
-        if(tcp_fd_ >= 0) {
-            tcp_drain_rx();
-        } else if(is_sending_.load() && !ota_session_.is_active()) {
-            // TCP 在发送过程中断开：标记错误并触发终止流程
-            PrintJobState::instance().set_job_error(true);
-            is_sending_.store(false);
-            terminate_pending_.store(true);
-        } else if(!terminate_pending_.load() && !ota_session_.is_active()) {
-            // 空闲断线或 OTA 成功后：节流式 connect_tcp（固定 IP/PORT）
-            if(tcp_fd_ < 0 || ota_post_reconnect_.load()) {
-                if(ota_post_reconnect_.load() || now >= next_tcp_retry) {
-                    link_try_ota_post_reconnect();
-                    next_tcp_retry =
-                        now + std::chrono::milliseconds(TCP_RECONNECT_INTERVAL_MS);
-                }
-            }
-        }
-
-        if(ota_session_.is_active()) {
-            ota_tick();
-        } else if(terminate_pending_.load()) {
-            run_manual_terminate_cleanup();
-            terminate_pending_.store(false);
-        } else {
-            // ---------- 心跳 ----------
-            const bool stream = motion_stream_active();
-            if(!stream && !ota_session_.suppress_idle_heartbeat() &&
-               tcp_fd_ >= 0 && now >= next_hb) {
-                uint8_t hb[64];
-                const int hblen = build_heartbeat_frame(hb, sizeof(hb));
-                if(hblen > 0) {
-                    tcp_send_raw(hb, (size_t)hblen);
-                }
-                next_hb = now + std::chrono::milliseconds(TCP_HEARTBEAT_INTERVAL_MS);
-                tcp_drain_rx(); // 心跳发送后再排空一次 RX
-            }
-
-            // ---------- 串口换层握手（打印流程相关） ----------
-            link_process_serial_handshake();
-
-            // ---------- 开始发送（处理挂起的 begin_sending） ----------
-            try_complete_pending_start();
-
-            // ---------- 运动包下发 ----------
-            link_drain_motion_queue();
-
-            // ---------- 完成检测 ----------
-            link_try_finish_sending();
-        }
-
-        // ---------- 休眠等待下一轮 ----------
-        std::this_thread::sleep_for(
-            std::chrono::milliseconds(link_thread_sleep_ms()));
     }
 }
 
