@@ -892,6 +892,26 @@ void GlavoService::handle_parser_exit(const middleware::Message& msg)
     clear_prepare_session();
 }
 
+void GlavoService::launch_print_from_prepared(const std::string& full_path)
+{
+    if(parser::ParserManager::instance().open_file(full_path) != 0) {
+        UPC_LOG_GLAVO_SERVICE(Error, "print_start: open failed path=%s",
+                              full_path.c_str());
+        print_running_.store(false);
+        return;
+    }
+    current_file_path_ = full_path;
+    PrintJobState::instance().reset_job_counters();
+    reset_print_progress_state();
+    parser::ParserManager::instance().start_parse();
+
+    print_running_.store(true);
+    PrintVideoNotify::instance().on_print_start(current_file_path_);
+    McuLink::instance().begin_sending();
+
+    UPC_LOG_GLAVO_SERVICE(Info, "print_start: path=%s", full_path.c_str());
+}
+
 /** @brief 处理 UI_Print_Start_Req：在已 prepare 的文件上启动解析与 McuLink 发送 */
 void GlavoService::handle_print_start(const middleware::Message& msg)
 {
@@ -912,23 +932,19 @@ void GlavoService::handle_print_start(const middleware::Message& msg)
     const std::string& full_path = prepared_local_path_;
 
     stop_print_job();
-    if(McuLink::instance().is_sending()) {
-        McuLink::instance().request_terminate();
-    }
-    if(parser::ParserManager::instance().open_file(full_path) != 0) {
-        UPC_LOG_GLAVO_SERVICE(Error, "print_start: open failed");
+    auto& link = McuLink::instance();
+    if(link.is_sending() || link.is_terminate_pending()) {
+        /* 异步 terminate 完成前不得 open/begin，否则清理会清掉新作业 */
+        link.request_terminate();
+        deferred_print_start_ = true;
+        UPC_LOG_GLAVO_SERVICE(Info,
+            "print_start deferred until terminate done path=%s",
+            full_path.c_str());
         return;
     }
-    current_file_path_ = full_path;
-    PrintJobState::instance().reset_job_counters();
-    reset_print_progress_state();
-    parser::ParserManager::instance().start_parse();
 
-    print_running_.store(true);
-    PrintVideoNotify::instance().on_print_start(current_file_path_);
-    McuLink::instance().begin_sending();
-
-    UPC_LOG_GLAVO_SERVICE(Info, "print_start: path=%s", full_path.c_str());
+    deferred_print_start_ = false;
+    launch_print_from_prepared(full_path);
 }
 
 /** @brief 停止解析线程并将 print_running_ 置 false（不请求 Mcu 终止） */
@@ -943,6 +959,7 @@ void GlavoService::handle_print_terminate(const middleware::Message& msg)
 {
     (void)msg;
     UPC_LOG_GLAVO_SERVICE(Info, "print_terminate requested");
+    deferred_print_start_ = false;
     print_running_.store(false);
     McuLink::instance().set_user_dispatch_paused(false);
     PrintVideoNotify::instance().on_print_abort();
@@ -1131,6 +1148,7 @@ void GlavoService::on_mcu_link_event(McuLinkEvent ev)
     switch(ev) {
         case McuLinkEvent::PrintCompleted:
             UPC_LOG_GLAVO_SERVICE(Info, "tcp_job_event: PrintCompleted");
+            deferred_print_start_ = false;
             PrintVideoNotify::instance().on_print_finish();
             send_print_progress(true);
             publish_terminate_done();
@@ -1143,6 +1161,16 @@ void GlavoService::on_mcu_link_event(McuLinkEvent ev)
                 UPC_LOG_GLAVO_SERVICE(Info, "tcp_job_event: TerminateDone");
             } else {
                 UPC_LOG_GLAVO_SERVICE(Warn, "tcp_job_event: PrintError");
+            }
+            if(deferred_print_start_) {
+                deferred_print_start_ = false;
+                if(prepare_ready_ && !prepared_local_path_.empty()) {
+                    UPC_LOG_GLAVO_SERVICE(Info,
+                        "print_start resume after terminate path=%s",
+                        prepared_local_path_.c_str());
+                    launch_print_from_prepared(prepared_local_path_);
+                    break;
+                }
             }
             PrintVideoNotify::instance().on_print_abort();
             print_running_.store(false);

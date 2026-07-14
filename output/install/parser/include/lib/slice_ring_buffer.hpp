@@ -4,7 +4,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <atomic>
-#include <functional>
 #include <mutex>
 #include <condition_variable>
 #include "parser_config.hpp"
@@ -39,11 +38,7 @@ public:
 
     void clear();
 
-    /** 消费者入队后回调（如 McuLink epoll 唤醒）；在 put_wait 成功入队后调用 */
-    void set_produce_notify(std::function<void()> fn);
-
 private:
-    std::function<void()> produce_notify_;
     mutable std::mutex mtx;
     std::condition_variable cv_not_full;
     std::condition_variable cv_not_empty;

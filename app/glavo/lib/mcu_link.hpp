@@ -6,7 +6,6 @@
 #include "device_config.hpp"
 #include "protocol.hpp"
 #include "mcu_ota_session.hpp"
-#include "ipc_poller.hpp"
 
 #include <atomic>
 #include <cstdint>
@@ -54,8 +53,8 @@ struct EnvSnapshotCache {
  * - 处理换层标记（Layer Mark），通过串口与 MCU 进行层间握手；
  * - 支持用户主动终止（terminate）与自然完成两种结束路径。
  *
- * 线程模型：所有网络/串口 I/O 与协议处理集中在独立的 link_thread_fn 线程中；
- * epoll + eventfd + timerfd 事件唤醒（无 sleep 轮询），对外 API 通过 wake 通知链路线程。
+ * 线程模型：所有网络/串口 I/O 与协议处理集中在独立的 link_thread_fn 线程中
+ *（轮询 + link_thread_sleep_ms 延时）；对外接口仅做状态设置与原子标志操作。
  */
 class McuLink {
 public:
@@ -100,11 +99,15 @@ public:
     /** @brief 当前是否处于“正在下发运动包”阶段 */
     bool is_sending() const;
 
+    /** @brief 是否已请求终止、待链路线程执行清理（尚未发 TerminateDone） */
+    [[nodiscard]] bool is_terminate_pending() const noexcept;
+
     /**
      * @brief 用户确认开始打印后调用
      *
      * 若 RingBuffer 中可用包数不足，则设置 start_pending_ 标志，
      * 待 RingBuffer 累积到阈值后由链路线程自动启动。
+     * terminate/cleanup 进行中会拒绝起印（避免与清理竞态）。
      */
     void begin_sending();
 
@@ -141,7 +144,6 @@ public:
     /** @brief 读取最新环境传感器快照（线程安全） */
     [[nodiscard]] EnvSnapshotCache env_snapshot() const;
 
-private:
     /**
      * @brief 设置 TCP_NODELAY，禁用 Nagle 算法以降低发包延迟
      * @param sockfd 已连接的 socket 文件描述符
@@ -167,9 +169,8 @@ private:
 
     /** TCP 常态应答（运动/OTA），供分帧回调使用 */
     void on_tcp_status_response(const tcp_response_t& resp);
-    static void tcp_handle_frame(const uint8_t* frame, size_t len);
-    static void serial_handle_frame(const uint8_t* frame, size_t len);
 
+private:
     struct SerialReliableItem {
         uint8_t data[64]{};
         size_t  len = 0;
@@ -181,59 +182,13 @@ private:
     McuLink(const McuLink&) = delete;
     McuLink& operator=(const McuLink&) = delete;
 
-    /** @brief 链路线程主函数：epoll 多路复用 + 事件分发 */
+    /** @brief 链路线程主函数：负责心跳、RX 排空、运动包下发、状态机推进 */
     void link_thread_fn();
 
-    enum class LinkFdKind : uint8_t {
-        Serial,
-        Tcp,
-        Wake,
-        RbWake,
-        Timer,
-    };
-
-    enum class LinkTimerId : uint8_t {
-        Dispatch,
-        Heartbeat,
-        DrainHb,
-        DrainTimeout,
-        Reconnect,
-        Ota,
-        SerialAck,
-    };
-
-    enum LinkWake : uint32_t {
-        WAKE_SERIAL_TX = 1u << 0,
-        WAKE_CONTROL   = 1u << 1,
-        WAKE_STOP      = 1u << 2,
-    };
-
-    struct LinkPollCtx {
-        LinkFdKind    kind;
-        LinkTimerId   timer_id;
-    };
-
-    void wake_link(uint32_t flags);
-    void notify_rb_produced();
-    void init_link_poll();
-    void shutdown_link_poll();
-    bool epoll_add_fd(int fd, uint32_t events, LinkPollCtx* ctx);
-    void epoll_del_fd(int fd);
-    void epoll_register_tcp();
-    void epoll_unregister_tcp();
-    void reschedule_timers();
-    void dispatch_timer(LinkTimerId id);
-    void process_wake_flags();
-    void link_run_print_pipeline();
-    void link_run_idle_heartbeat();
-    void on_tcp_hangup();
-    static void drain_eventfd(int efd);
-    static void drain_timerfd(int tfd);
-    static void arm_timer_periodic(int tfd, int interval_ms);
-    static void arm_timer_oneshot_ms(int tfd, int ms);
-    static void disarm_timer(int tfd);
-
-    /** @brief TCP 原始发送（带互斥锁，遇 EPIPE/ECONNRESET 自动关闭 fd） */
+    /**
+     * @brief TCP 原始发送（非阻塞完整写：短写续传，EAGAIN 分片等 POLLOUT）
+     * @return 0 整帧写完；-1 未写出、可整批重试；-2 半写/hangup，禁止整批重发
+     */
     int tcp_send_raw(const uint8_t* data, size_t len);
     /** @brief TCP 非阻塞接收，返回读取到的字节数（0 表示暂无数据，-1 表示出错或断开） */
     int tcp_recv_nonblock(uint8_t* buf, size_t buf_size);
@@ -317,6 +272,8 @@ private:
     bool mcu_rates_drained() const;
     /** @brief 当前是否处于“应持续发运动包”的活跃流状态 */
     bool motion_stream_active() const;
+    /** @brief 根据当前状态决定链路线程每次循环的休眠间隔（ms） */
+    int link_thread_sleep_ms() const;
 
     /* ---------- 核心依赖 ---------- */
     upc::parser::RingBuffer* rb_ = nullptr;          /**< 绑定的 RingBuffer，运动包来源 */
@@ -326,31 +283,6 @@ private:
     /* ---------- 文件描述符 ---------- */
     int tcp_fd_    = -1; /**< TCP socket 文件描述符，-1 表示未连接 */
     int serial_fd_ = -1; /**< 串口文件描述符，-1 表示未打开 */
-
-    /* ---------- epoll 事件驱动 ---------- */
-    upc_ipc::IpcPoller poller_;
-    std::atomic<bool> poller_ready_{false};
-    int wake_fd_    = -1;
-    int rb_wake_fd_ = -1;
-    int tmr_dispatch_fd_     = -1;
-    int tmr_heartbeat_fd_    = -1;
-    int tmr_drain_hb_fd_     = -1;
-    int tmr_drain_timeout_fd_ = -1;
-    int tmr_reconnect_fd_    = -1;
-    int tmr_ota_fd_          = -1;
-    int tmr_serial_ack_fd_   = -1;
-    std::atomic<uint32_t> pending_wake_{0};
-    LinkPollCtx ctx_serial_{LinkFdKind::Serial, LinkTimerId::Dispatch};
-    LinkPollCtx ctx_tcp_{LinkFdKind::Tcp, LinkTimerId::Dispatch};
-    LinkPollCtx ctx_wake_{LinkFdKind::Wake, LinkTimerId::Dispatch};
-    LinkPollCtx ctx_rb_wake_{LinkFdKind::RbWake, LinkTimerId::Dispatch};
-    LinkPollCtx ctx_tmr_dispatch_{LinkFdKind::Timer, LinkTimerId::Dispatch};
-    LinkPollCtx ctx_tmr_heartbeat_{LinkFdKind::Timer, LinkTimerId::Heartbeat};
-    LinkPollCtx ctx_tmr_drain_hb_{LinkFdKind::Timer, LinkTimerId::DrainHb};
-    LinkPollCtx ctx_tmr_drain_timeout_{LinkFdKind::Timer, LinkTimerId::DrainTimeout};
-    LinkPollCtx ctx_tmr_reconnect_{LinkFdKind::Timer, LinkTimerId::Reconnect};
-    LinkPollCtx ctx_tmr_ota_{LinkFdKind::Timer, LinkTimerId::Ota};
-    LinkPollCtx ctx_tmr_serial_ack_{LinkFdKind::Timer, LinkTimerId::SerialAck};
 
     /* ---------- 链路线程控制 ---------- */
     std::thread link_th_;             /**< 链路线程句柄 */
@@ -363,8 +295,8 @@ private:
     std::atomic<bool> terminate_pending_{false};       /**< 收到终止请求，待链路线程执行清理 */
     std::atomic<bool> natural_complete_pending_{false};/**< 运动包已发完，等待 MCU 缓存排空以触发自然完成 */
     std::chrono::steady_clock::time_point natural_complete_since_{};
-    std::atomic<bool> completing_cleanup_{false};      /**< 自然完成清理中：忽略 TCP hangup 触发的误终止 */
-    std::atomic<bool> mcu_rates_seen_nonempty_{false};   /**< 本作业曾观测到 MCU 缓存非空（防短 G-code 初值 0 误判排空） */
+    std::atomic<bool> completing_cleanup_{false};      /**< 自然完成清理中：忽略 TCP 断线误判终止 */
+    std::atomic<bool> mcu_rates_seen_nonempty_{false}; /**< 本作业曾观测到 MCU 缓存非空（防短 G-code 初值 0 误判排空） */
 
     /* ---------- 换层/串口握手状态 ---------- */
     std::atomic<bool> waiting_layer_{false};           /**< 当前是否处于换层等待状态 */
@@ -374,8 +306,7 @@ private:
     std::atomic<bool> serial_evt_print_ready_{false};  /**< 串口收到打印准备就绪事件 */
 
     /* ---------- 层高信息 ---------- */
-    uint16_t active_layer_height_um_ = GCODE_DEFAULT_LAYER_UM; /**< 当前层高度（微米） */
-    uint16_t first_layer_height_um_  = GCODE_DEFAULT_LAYER_UM; /**< 首层高度（微米），用于串口首次握手 */
+    uint16_t active_layer_height_um_ = GCODE_DEFAULT_LAYER_UM; /**< 当前/下层高度（微米）：首层握手 PRINT_START 与换层 LAYER_DONE 共用 */
     /** 收到 PRINT_READY 时的 sent_packets，用于判定本层是否已下发扫描指令 */
     int sent_at_layer_ready_ = 0;
     /** 当前层是否已在换层排空路径拍过照（避免完成时重复 Snap） */

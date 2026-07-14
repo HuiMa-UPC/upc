@@ -47,6 +47,8 @@ private:
     void handle_print_prepare(const middleware::Message& msg);
     void handle_parser_exit(const middleware::Message& msg);
     void handle_print_start(const middleware::Message& msg);
+    /** @brief 在已 prepare 的路径上真正 open/parse/begin（供起印与延迟起印共用） */
+    void launch_print_from_prepared(const std::string& full_path);
     void handle_print_terminate(const middleware::Message& msg);
     void handle_print_pause(const middleware::Message& msg);
     void handle_print_resume(const middleware::Message& msg);
@@ -136,6 +138,12 @@ private:
     bool        prepare_ready_ = false;
 
     std::string current_file_path_;
+
+    /**
+     * 上一作业仍在 terminate 清理时收到新的 Start_Req：先等 TerminateDone，
+     * 再 launch_print_from_prepared，避免与 run_manual_terminate_cleanup 竞态。
+     */
+    bool deferred_print_start_{false};
 
     std::atomic<bool> print_running_{false};
     int last_print_pct_     = -1;

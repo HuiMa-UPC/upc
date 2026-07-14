@@ -469,10 +469,16 @@ void wire_msg_proxy()
 
     proxy.register_print_terminate_done([]() {
         const bool user_terminate = g_terminate_pending;
-        if(!user_terminate && g_state != CONTROL_STATE_PRINTING) {
+        if(user_terminate) {
+            /* 用户终止：立即退预览，不等双缓冲 */
+            finish_printing(false);
             return;
         }
-        finish_printing(false);
+        if(g_state != CONTROL_STATE_PRINTING) {
+            return;
+        }
+        /* 自然完成也会发 Terminate_Done：须与 Progress 一致，双缓冲为 0 才退 */
+        try_exit_print_preview(true);
     });
 }
 
