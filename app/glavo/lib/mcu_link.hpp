@@ -121,6 +121,13 @@ public:
     void set_user_dispatch_paused(bool paused);
     [[nodiscard]] bool is_user_dispatch_paused() const noexcept;
 
+    /** @brief 运动已发完、正在等 MCU 双缓冲排空（自然完成尾段） */
+    [[nodiscard]] bool is_natural_complete_pending() const noexcept;
+    /** @brief 换层/首层串口握手等待中（TCP 运动下发暂停） */
+    [[nodiscard]] bool is_waiting_layer() const noexcept;
+    /** @brief 本作业曾观测到 MCU 缓存非空（防初值 0,0 误判已排空） */
+    [[nodiscard]] bool mcu_rates_have_been_nonempty() const noexcept;
+
     /** @brief 设置 MCU OTA 状态回调（测试） */
     void set_ota_status_callback(McuOtaStatusCb cb);
 

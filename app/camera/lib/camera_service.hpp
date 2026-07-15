@@ -56,6 +56,7 @@ private:
 
     ViCaptureConfig build_capture_config();
     static uint32_t read_fps_from_env();
+    static uint32_t read_warmup_frames_from_env();
 
     std::vector<middleware::Subscription> subs_;
     upc_ipc::IpcDmaFrameRingProducer producer_;
@@ -68,9 +69,10 @@ private:
     std::atomic<bool> stop_stream_{false};
     bool frame_ntf_enabled_ = (CAMERA_FRAME_NTF_DEFAULT != 0);
 
-    uint32_t stream_width_  = CAMERA_WIDTH_DEFAULT;
-    uint32_t stream_height_ = CAMERA_HEIGHT_DEFAULT;
-    uint32_t stream_fps_    = CAMERA_FPS_DEFAULT;
+    uint32_t stream_width_         = CAMERA_WIDTH_DEFAULT;
+    uint32_t stream_height_        = CAMERA_HEIGHT_DEFAULT;
+    uint32_t stream_fps_           = CAMERA_FPS_DEFAULT;
+    uint32_t stream_warmup_frames_ = CAMERA_WARMUP_FRAMES_DEFAULT;
 };
 
 } // namespace upc::camera

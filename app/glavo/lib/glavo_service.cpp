@@ -65,6 +65,40 @@ int percent_rounded(int num, int den)
     return num * 100 / den;
 }
 
+/** 下发段映射到 0–95：raw=sent*100/denom → raw*95/100 */
+int map_send_progress_to_95(int sent_packets, int denom)
+{
+    const int raw = percent_rounded(sent_packets, denom);
+    if(raw <= 0) {
+        return 0;
+    }
+    if(raw >= 100) {
+        return 95;
+    }
+    return raw * 95 / 100;
+}
+
+/**
+ * 排空段 95–99：按 MCU cmd/data 缓存占用估算空闲度。
+ * rate 量程与背压一致（0～65535）；未观测到非空缓存时固定 95，避免初值 0,0 冲到 99。
+ */
+int map_drain_progress_95_to_99(uint16_t cmd_rate, uint16_t data_rate,
+                                bool rates_seen_nonempty)
+{
+    if(!rates_seen_nonempty) {
+        return 95;
+    }
+    if(cmd_rate == 0 && data_rate == 0) {
+        return 99;
+    }
+    constexpr uint32_t kFull = 65535u;
+    const uint32_t avg =
+        (static_cast<uint32_t>(cmd_rate) + static_cast<uint32_t>(data_rate)) / 2u;
+    const uint32_t fill = avg > kFull ? kFull : avg;
+    const int bump = static_cast<int>((kFull - fill) * 4u / kFull);
+    return 95 + bump;
+}
+
 /** @brief 获取当前活跃的 G-code 解析 worker，无则返回 nullptr */
 parser::IParserWorker* active_parser()
 {
@@ -1018,20 +1052,21 @@ void GlavoService::reset_print_progress_state()
  * @brief 计算并推送 APP_Print_Progress_Ntf
  * @param force_complete true 时强制 100%（打印完成事件）
  *
- * 解析未完成时进度上限 95%；解析完成但未 job_completed 时最高 99%。
+ * 两段式进度（防短文件瞬间 99%、区分发送与排空）：
+ * - 下发段 0～95：sent_packets / denom 线性映射；
+ * - 排空段 95～99：natural_complete_pending 时按 MCU 双缓冲占用；
+ * - 完成 100：仅 force_complete / job_completed。
+ * 百分比单调不回退；暂停 / 换层等待时冻结百分比。
  */
 void GlavoService::send_print_progress(bool force_complete)
 {
     const auto job = PrintJobState::instance().snapshot();
+    McuLink& link = McuLink::instance();
 
     parser::IParserWorker* parser = active_parser();
     const bool parse_done = parser &&
                             parser->is_file_read_exhausted() &&
                             !parser->is_parsing();
-
-    if(parse_done && !last_parse_done_) {
-        last_print_pct_ = -1;
-    }
     last_parse_done_ = parse_done;
 
     int denom = 0;
@@ -1046,13 +1081,37 @@ void GlavoService::send_print_progress(bool force_complete)
     if(force_complete || job.job_completed) {
         pct = 100;
     } else {
-        pct = percent_rounded(job.sent_packets, denom);
-        if(!parse_done) {
+        const bool paused = link.is_user_dispatch_paused();
+        const bool waiting_layer = link.is_waiting_layer();
+        const bool draining = link.is_natural_complete_pending();
+
+        if((paused || waiting_layer) && last_print_pct_ >= 0) {
+            /* 暂停/换层：冻结显示，仍可因 rate 变化带环境字段推送 */
+            pct = last_print_pct_;
+            if(pct > 99) {
+                pct = 99;
+            }
+        } else if(draining) {
+            pct = map_drain_progress_95_to_99(job.cmd_cache_rate,
+                                              job.data_cache_rate,
+                                              link.mcu_rates_have_been_nonempty());
+            if(last_print_pct_ >= 0 && pct < last_print_pct_) {
+                pct = last_print_pct_;
+            }
+            if(pct > 99) {
+                pct = 99;
+            }
+        } else {
+            pct = map_send_progress_to_95(job.sent_packets, denom);
+            if(!parse_done && pct > 95) {
+                pct = 95;
+            }
+            if(last_print_pct_ >= 0 && pct < last_print_pct_) {
+                pct = last_print_pct_;
+            }
             if(pct > 95) {
                 pct = 95;
             }
-        } else if(pct >= 100) {
-            pct = 99;
         }
     }
 
@@ -1062,7 +1121,7 @@ void GlavoService::send_print_progress(bool force_complete)
             job.data_cache_rate != last_sent_data_rate_;
         const bool drained =
             job.cmd_cache_rate == 0 && job.data_cache_rate == 0;
-        if(pct >= 99 && rates_changed && !drained) {
+        if(pct >= 95 && rates_changed && !drained) {
             const auto now = std::chrono::steady_clock::now();
             if(last_drain_progress_at_.time_since_epoch().count() != 0 &&
                now - last_drain_progress_at_ <
@@ -1087,7 +1146,7 @@ void GlavoService::send_print_progress(bool force_complete)
     last_sent_cmd_rate_   = job.cmd_cache_rate;
     last_sent_data_rate_  = job.data_cache_rate;
 
-    const auto env = McuLink::instance().env_snapshot();
+    const auto env = link.env_snapshot();
 
     middleware::PrintProgressPayload p{};
     p.progress_percent  = pct;

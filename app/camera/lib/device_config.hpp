@@ -26,6 +26,18 @@
 #define CAMERA_ENV_FPS  "UPC_CAMERA_FPS"
 #endif
 
+/**
+ * 开流后前 N 帧只喂 ISP/AE，不 commit 到 SHM，避免预览首帧由暗变亮。
+ * 环境变量 UPC_CAMERA_WARMUP_FRAMES 可覆盖（0=关闭）。
+ */
+#ifndef CAMERA_WARMUP_FRAMES_DEFAULT
+#define CAMERA_WARMUP_FRAMES_DEFAULT  12u
+#endif
+
+#ifndef CAMERA_ENV_WARMUP_FRAMES
+#define CAMERA_ENV_WARMUP_FRAMES  "UPC_CAMERA_WARMUP_FRAMES"
+#endif
+
 /** ISP 校准文件目录与主 json */
 #ifndef CAMERA_IQ_DIR_DEFAULT
 #define CAMERA_IQ_DIR_DEFAULT  "/home"

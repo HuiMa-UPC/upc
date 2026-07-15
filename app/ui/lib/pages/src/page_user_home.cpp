@@ -6,6 +6,7 @@
 #include "camera_preview.hpp"
 #include "control.hpp"
 #include "home_assets.h"
+#include "home_btn_icons.h"
 #include "ui_slide_unlock.hpp"
 
 #include <cstdio>
@@ -147,28 +148,43 @@ lv_obj_t *g_pause_icon        = nullptr; /**< 暂停按钮图标（PAUSE ↔ PLA
 bool      g_print_paused      = false;   /**< 当前是否暂停（乐观切换，后端回执校正） */
 bool      g_printing_active   = false;
 
+/* ---------- 顶栏"查看监控"入口 + 待机监控（摄像头全屏）视图 ---------- */
+lv_obj_t *g_btn_camera             = nullptr; /**< 顶栏圆形"查看监控"按钮 */
+lv_obj_t *g_monitor_area           = nullptr; /**< 监控浮层（默认隐藏，与 normal/print 互斥） */
+lv_obj_t *g_monitor_camera_viewport= nullptr;
+lv_obj_t *g_monitor_camera_hint    = nullptr;
+lv_obj_t *g_monitor_camera_image   = nullptr; /**< 监控视频帧槽（复用同一 CameraPreviewPlayer） */
+lv_obj_t *g_mon_env_pm_ext         = nullptr; /**< 右上环境面板：EXTERIOR PM2.5 数值 */
+lv_obj_t *g_mon_env_pm_int         = nullptr; /**< INTERIOR PM2.5 数值 */
+lv_obj_t *g_mon_env_o2             = nullptr; /**< O2 CONC. 数值 */
+lv_obj_t *g_mon_env_temp           = nullptr; /**< DEVICE TEMP 数值 */
+ui_slide_unlock_t *g_monitor_door  = nullptr; /**< 监控界面的滑动开门 */
+bool      g_monitor_active         = false;
+
 void apply_camera_preview_layout(uint32_t src_w, uint32_t src_h = 0);
 void on_camera_viewport_size_changed(lv_event_t *e);
+void enter_monitor_mode(void);
+void exit_monitor_mode(void);
 
-/** 预览：宽贴满 viewport，高等比缩放后居中裁剪（解码层仍输出全帧） */
-void apply_camera_preview_layout(uint32_t src_w, uint32_t src_h)
+/** 预览布局（通用）：宽贴满 viewport，高等比缩放后居中裁剪（解码层仍输出全帧）。
+ *  打印区与监控区共用同一算法，只是作用于不同的 viewport/image。 */
+static void cam_apply_layout(lv_obj_t *vp, lv_obj_t *img, uint32_t src_w, uint32_t src_h)
 {
-    if(!g_camera_image || !g_camera_viewport || src_w == 0) {
+    if(!img || !vp || src_w == 0) {
         return;
     }
 
-    lv_obj_update_layout(g_camera_viewport);
-    const int32_t vp_w = lv_obj_get_width(g_camera_viewport);
-    const int32_t vp_h = lv_obj_get_height(g_camera_viewport);
+    lv_obj_update_layout(vp);
+    const int32_t vp_w = lv_obj_get_width(vp);
+    const int32_t vp_h = lv_obj_get_height(vp);
     if(vp_w <= 0 || vp_h <= 0) {
         return;
     }
 
-    lv_obj_set_size(g_camera_image, vp_w, vp_h);
-    lv_obj_center(g_camera_image);
-    lv_image_set_inner_align(g_camera_image, LV_IMAGE_ALIGN_CENTER);
-    /* cover 填充：取宽/高两方向缩放比的较大者，保证画面上下左右都铺满 viewport
-     * （多出的一侧居中裁切），不留黑边。 */
+    lv_obj_set_size(img, vp_w, vp_h);
+    lv_obj_center(img);
+    lv_image_set_inner_align(img, LV_IMAGE_ALIGN_CENTER);
+    /* cover 填充：取宽/高两方向缩放比的较大者，保证画面铺满 viewport（多出侧居中裁切）。 */
     if(src_h == 0 && ui::CameraPreviewPlayer::instance().active()) {
         src_h = ui::CameraPreviewPlayer::instance().stream_height();
     }
@@ -177,8 +193,13 @@ void apply_camera_preview_layout(uint32_t src_w, uint32_t src_h)
                            ? static_cast<int64_t>(vp_h) * 256 / static_cast<int32_t>(src_h)
                            : zoom_w;
     const uint32_t zoom = static_cast<uint32_t>(zoom_w > zoom_h ? zoom_w : zoom_h);
-    lv_image_set_scale(g_camera_image, zoom > 0 ? zoom : LV_SCALE_NONE);
-    lv_obj_invalidate(g_camera_image);
+    lv_image_set_scale(img, zoom > 0 ? zoom : LV_SCALE_NONE);
+    lv_obj_invalidate(img);
+}
+
+void apply_camera_preview_layout(uint32_t src_w, uint32_t src_h)
+{
+    cam_apply_layout(g_camera_viewport, g_camera_image, src_w, src_h);
 }
 
 void on_camera_viewport_size_changed(lv_event_t * /*e*/)
@@ -191,6 +212,18 @@ void on_camera_viewport_size_changed(lv_event_t * /*e*/)
         }
     }
     apply_camera_preview_layout(src_w);
+}
+
+void on_monitor_viewport_size_changed(lv_event_t * /*e*/)
+{
+    uint32_t src_w = 1024u;
+    if(ui::CameraPreviewPlayer::instance().active()) {
+        src_w = ui::CameraPreviewPlayer::instance().stream_width();
+        if(src_w == 0) {
+            src_w = 1024u;
+        }
+    }
+    cam_apply_layout(g_monitor_camera_viewport, g_monitor_camera_image, src_w, 0);
 }
 
 void on_files_click(lv_event_t *)
@@ -245,20 +278,63 @@ void on_pause_click(lv_event_t *)
     }
 }
 
-/** 右上角 "My Files" 磨砂按钮：橙色半透明底 + 橙边 + 图标 + 文字（对齐设计稿 Frame520） */
+/** 按钮内图标：A8 掩膜 recolor 成白色，等比缩放到 target；外套固定尺寸盒，
+ *  保证在 flex 布局里只占 target×target（避免 96px 源图撑开按钮）。 */
+lv_obj_t *make_btn_icon(lv_obj_t *parent, const lv_image_dsc_t *src, int32_t target)
+{
+    lv_obj_t *box = lv_obj_create(parent);
+    lv_obj_remove_style_all(box);
+    lv_obj_set_size(box, target, target);
+    lv_obj_set_style_bg_opa(box, LV_OPA_TRANSP, 0);
+    lv_obj_remove_flag(box, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_remove_flag(box, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *img = lv_image_create(box);
+    lv_image_set_src(img, src);
+    lv_obj_set_style_image_recolor(img, lv_color_white(), 0);
+    lv_obj_set_style_image_recolor_opa(img, LV_OPA_COVER, 0);
+    lv_obj_remove_flag(img, LV_OBJ_FLAG_CLICKABLE);
+    lv_image_set_pivot(img, 48, 48);                 /* 96×96 源图中心 */
+    lv_image_set_scale(img, (uint32_t)(256 * target / 96));
+    lv_obj_center(img);
+    return box;
+}
+
+/** 右上角 "Start Print" 主按钮：蓝色对角渐变玻璃胶囊 + 白色亮边 + 图标 + 文字
+ *  （对齐 Figma node 2513:19772；无中文字库，文字用英文 "Start Print"）。 */
 lv_obj_t *build_files_button(lv_obj_t *parent)
 {
     lv_obj_t *btn = lv_button_create(parent);
     lv_obj_remove_style_all(btn);
-    lv_obj_set_height(btn, USER_BTN_PRIMARY_H);
+    /* 比通用主按钮再高一点（×5/4，贴近 Figma 64px 胶囊），避免过扁。 */
+    lv_obj_set_height(btn, USER_BTN_PRIMARY_H * 5 / 4);
     lv_obj_set_width(btn, LV_SIZE_CONTENT);
-    lv_obj_set_style_bg_color(btn, user_color_accent, 0);
-    lv_obj_set_style_bg_opa(btn, LV_OPA_20, 0);
-    lv_obj_set_style_bg_opa(btn, LV_OPA_40, LV_STATE_PRESSED);
-    lv_obj_set_style_radius(btn, USER_RADIUS, 0);
+    /* 蓝色对角(45°)渐变（对齐 Figma #4054FD → #4D80EE），带少量半透明玻璃感，
+     * 与首页滑动解锁材质统一。bg_grad 只存指针，一次性按钮用函数内 static 描述符。 */
+    static lv_grad_dsc_t s_btn_grad;
+    static bool s_btn_grad_ready = false;
+    if(!s_btn_grad_ready) {
+        const lv_color_t cols[2] = { lv_color_hex(0x4054FD), lv_color_hex(0x4D80EE) };
+        const lv_opa_t   opa[2]  = { LV_OPA_COVER, LV_OPA_COVER };
+        const uint8_t    frac[2] = { 0, 255 };
+        lv_grad_init_stops(&s_btn_grad, cols, opa, frac, 2);
+        lv_grad_linear_init(&s_btn_grad, LV_GRAD_LEFT, LV_GRAD_TOP,
+                            LV_GRAD_RIGHT, LV_GRAD_BOTTOM, LV_GRAD_EXTEND_PAD);
+        s_btn_grad_ready = true;
+    }
+    lv_obj_set_style_bg_color(btn, lv_color_hex(0x4054FD), 0);
+    lv_obj_set_style_bg_grad(btn, &s_btn_grad, 0);
+    lv_obj_set_style_bg_opa(btn, LV_OPA_90, 0);              /* 保留一点通透 */
+    lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, LV_STATE_PRESSED);
+    lv_obj_set_style_radius(btn, LV_RADIUS_CIRCLE, 0);       /* 胶囊 */
+    /* 玻璃亮边（近似 Figma 白色渐变描边）+ 柔和蓝色投影 */
     lv_obj_set_style_border_width(btn, 1, 0);
-    lv_obj_set_style_border_color(btn, user_color_accent, 0);
+    lv_obj_set_style_border_color(btn, lv_color_white(), 0);
     lv_obj_set_style_border_opa(btn, LV_OPA_40, 0);
+    lv_obj_set_style_shadow_width(btn, 16, 0);
+    lv_obj_set_style_shadow_ofs_y(btn, 4, 0);
+    lv_obj_set_style_shadow_color(btn, lv_color_hex(0x4054FD), 0);
+    lv_obj_set_style_shadow_opa(btn, LV_OPA_40, 0);
     lv_obj_set_style_pad_hor(btn, USER_PAD, 0);
     lv_obj_set_style_pad_ver(btn, USER_PAD_SM, 0);
     lv_obj_set_style_pad_column(btn, USER_PAD_SM, 0);
@@ -267,20 +343,46 @@ lv_obj_t *build_files_button(lv_obj_t *parent)
                           LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_add_event_cb(btn, on_files_click, LV_EVENT_CLICKED, nullptr);
 
-    lv_obj_t *icon = lv_label_create(btn);
-    lv_label_set_text(icon, LV_SYMBOL_DIRECTORY);
-    lv_obj_set_style_text_color(icon, user_color_accent, 0);
-    lv_obj_set_style_text_font(icon, user_font_text(), 0);
+    make_btn_icon(btn, &ic_folder, USER_BTN_PRIMARY_H * 5 / 8);
 
     lv_obj_t *txt = lv_label_create(btn);
-    lv_label_set_text(txt, "Print Files");
-    lv_obj_set_style_text_color(txt, user_color_accent, 0);
+    lv_label_set_text(txt, "Start Print");
+    lv_obj_set_style_text_color(txt, lv_color_white(), 0);
     lv_obj_set_style_text_font(txt, user_font_text(), 0);
 
     return btn;
 }
 
-/** 顶部状态条：左侧 设备名 + 状态点 + 状态文字；右侧 "My Files" 磨砂按钮 */
+void on_camera_btn_click(lv_event_t * /*e*/)
+{
+    enter_monitor_mode();
+}
+
+/** 顶栏"查看监控"圆钮：灰色玻璃 + 摄像头图标（次级样式，位于"Start Print"左侧）。 */
+lv_obj_t *build_camera_button(lv_obj_t *parent)
+{
+    const int32_t sz = USER_BTN_PRIMARY_H * 5 / 4;   /* 与 Start Print 同高，圆形 */
+    lv_obj_t *btn = lv_button_create(parent);
+    lv_obj_remove_style_all(btn);
+    lv_obj_set_size(btn, sz, sz);
+    lv_obj_set_style_bg_color(btn, lv_color_hex(0x757575), 0);
+    lv_obj_set_style_bg_opa(btn, LV_OPA_20, 0);
+    lv_obj_set_style_bg_opa(btn, LV_OPA_40, LV_STATE_PRESSED);
+    lv_obj_set_style_radius(btn, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_border_width(btn, 1, 0);
+    lv_obj_set_style_border_color(btn, lv_color_white(), 0);
+    lv_obj_set_style_border_opa(btn, LV_OPA_30, 0);
+    lv_obj_set_flex_flow(btn, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(btn, LV_FLEX_ALIGN_CENTER,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_add_event_cb(btn, on_camera_btn_click, LV_EVENT_CLICKED, nullptr);
+
+    make_btn_icon(btn, &ic_camera, USER_BTN_PRIMARY_H * 5 / 8);
+
+    return btn;
+}
+
+/** 顶部状态条：左侧 设备名 + 状态点 + 状态文字；右侧 "查看监控"圆钮 + "Start Print" 按钮 */
 lv_obj_t *build_topbar(lv_obj_t *parent)
 {
     lv_obj_t *bar = lv_obj_create(parent);
@@ -326,6 +428,7 @@ lv_obj_t *build_topbar(lv_obj_t *parent)
     lv_obj_set_flex_grow(spacer, 1);
     lv_obj_set_style_bg_opa(spacer, LV_OPA_TRANSP, 0);
 
+    g_btn_camera = build_camera_button(bar);
     g_btn_files = build_files_button(bar);
 
     return bar;
@@ -338,14 +441,16 @@ lv_obj_t *home_make_metric(lv_obj_t *parent, const lv_image_dsc_t *icon,
                            bool right, bool with_bar,
                            lv_obj_t **out_val, lv_obj_t **out_bar)
 {
-    const lv_flex_align_t cross = right ? LV_FLEX_ALIGN_END : LV_FLEX_ALIGN_START;
+    /* 外层竖列：顶部细线 +（图标+文本列）行 +（PM 才有）mini 进度条。
+     * right=true 时把"图标+文本"整组在块内靠右对齐（图标仍在左，仅整组贴右）。 */
+    const lv_flex_align_t group_align = right ? LV_FLEX_ALIGN_END : LV_FLEX_ALIGN_START;
 
     lv_obj_t *col = lv_obj_create(parent);
     lv_obj_remove_style_all(col);
     lv_obj_set_width(col, USER_VALUE_LABEL_W + USER_PAD_LG);
     lv_obj_set_height(col, LV_SIZE_CONTENT);
     lv_obj_set_flex_flow(col, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_flex_align(col, LV_FLEX_ALIGN_START, cross, cross);
+    lv_obj_set_flex_align(col, LV_FLEX_ALIGN_START, group_align, group_align);
     lv_obj_set_style_pad_row(col, USER_PAD_SM, 0);
     lv_obj_set_style_bg_opa(col, LV_OPA_TRANSP, 0);
     lv_obj_clear_flag(col, LV_OBJ_FLAG_SCROLLABLE);
@@ -358,30 +463,43 @@ lv_obj_t *home_make_metric(lv_obj_t *parent, const lv_image_dsc_t *icon,
     lv_obj_set_style_bg_opa(div, LV_OPA_30, 0);
     lv_obj_set_style_margin_bottom(div, USER_PAD_SM, 0);
 
-    /* 图标 + 标题 */
-    lv_obj_t *hdr = lv_obj_create(col);
-    lv_obj_remove_style_all(hdr);
-    lv_obj_set_size(hdr, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
-    lv_obj_set_flex_flow(hdr, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(hdr, LV_FLEX_ALIGN_START,
+    /* 行：[图标] [文本列]，图标相对 标题+数值 垂直居中（对齐 Figma 2824:3882）。 */
+    lv_obj_t *row = lv_obj_create(col);
+    lv_obj_remove_style_all(row);
+    lv_obj_set_size(row, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(row, LV_FLEX_ALIGN_START,
                           LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_column(hdr, USER_PAD_SM, 0);
-    lv_obj_set_style_bg_opa(hdr, LV_OPA_TRANSP, 0);
-    lv_obj_clear_flag(hdr, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_style_pad_column(row, USER_PAD_SM, 0);
+    lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, 0);
+    lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
 
     if(icon) {
-        lv_obj_t *ic = lv_image_create(hdr);
+        lv_obj_t *ic = lv_image_create(row);
         lv_image_set_src(ic, icon);
         lv_obj_set_style_image_recolor(ic, user_color_text_dim, 0);
         lv_obj_set_style_image_recolor_opa(ic, LV_OPA_COVER, 0);
     }
-    lv_obj_t *cap = lv_label_create(hdr);
+
+    /* 文本列：标题（上，字距近似 0.1em）+ 数值行（下） */
+    lv_obj_t *tcol = lv_obj_create(row);
+    lv_obj_remove_style_all(tcol);
+    lv_obj_set_size(tcol, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(tcol, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(tcol, LV_FLEX_ALIGN_START,
+                          LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
+    lv_obj_set_style_pad_row(tcol, USER_PAD_SM, 0);
+    lv_obj_set_style_bg_opa(tcol, LV_OPA_TRANSP, 0);
+    lv_obj_clear_flag(tcol, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *cap = lv_label_create(tcol);
     lv_label_set_text(cap, caption);
     lv_obj_set_style_text_color(cap, user_color_text_dim, 0);
     lv_obj_set_style_text_font(cap, user_font_caption(), 0);
+    lv_obj_set_style_text_letter_space(cap, 2, 0);
 
-    /* 大数值 + 小单位 */
-    lv_obj_t *vrow = lv_obj_create(col);
+    /* 大数值 + 小单位（底对齐） */
+    lv_obj_t *vrow = lv_obj_create(tcol);
     lv_obj_remove_style_all(vrow);
     lv_obj_set_size(vrow, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
     lv_obj_set_flex_flow(vrow, LV_FLEX_FLOW_ROW);
@@ -455,7 +573,8 @@ lv_obj_t *build_main_area(lv_obj_t *parent)
     home_make_metric(col_left, &ic_pm, "INTERIOR PM2.5", "ug/m3",
                      false, true, &g_lbl_pm_cabin, &g_home_bar_cabin);
 
-    /* 右列环境浮层：DEVICE TEMP / O2 CONC.（图标 + 数值，无进度条，右对齐） */
+    /* 右列环境浮层：DEVICE TEMP / O2 CONC.（图标 + 数值，无进度条；
+     * 两块统一"图标在左、左对齐"，使温度与氧气浓度上下对齐） */
     lv_obj_t *col_right = lv_obj_create(area);
     lv_obj_remove_style_all(col_right);
     lv_obj_add_flag(col_right, LV_OBJ_FLAG_FLOATING);
@@ -468,9 +587,9 @@ lv_obj_t *build_main_area(lv_obj_t *parent)
     lv_obj_clear_flag(col_right, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_align(col_right, LV_ALIGN_RIGHT_MID, -USER_PAD_LG, 0);
     home_make_metric(col_right, &ic_temp, "DEVICE TEMP", "\xC2\xB0""C",
-                     true, false, &g_lbl_temp, nullptr);
+                     false, false, &g_lbl_temp, nullptr);
     home_make_metric(col_right, &ic_o2, "O2 CONC.", "%",
-                     true, false, &g_lbl_oxygen, nullptr);
+                     false, false, &g_lbl_oxygen, nullptr);
 
     return area;
 }
@@ -479,7 +598,7 @@ lv_obj_t *build_main_area(lv_obj_t *parent)
 lv_obj_t *build_door_floating(lv_obj_t *parent)
 {
     ui_slide_unlock_cfg_t cfg = {};
-    cfg.hint_text  = "SWIPE TO OPEN  " LV_SYMBOL_RIGHT LV_SYMBOL_RIGHT LV_SYMBOL_RIGHT;
+    cfg.hint_text  = "SWIPE TO OPEN";   /* 箭头由控件绘制 3 个 chevron */
     cfg.on_unlocked = on_door_slide_unlocked;
     cfg.user_data  = nullptr;
     /* 首页开门滑块放大 ~1.33×（更贴设计稿 432×96 的大胶囊，且更好按）。
@@ -841,6 +960,240 @@ lv_obj_t *build_printing_area(lv_obj_t *parent)
     return area;
 }
 
+/* ============================================================================
+ *  待机"查看监控"：全屏摄像头 + 右上环境面板 + 左下 EXIT + 右下滑动开门
+ * ============================================================================ */
+
+/* 环境面板单列：标题(上) + 数值+单位(下)；value 输出到 *out_val。 */
+lv_obj_t *monitor_env_col(lv_obj_t *parent, const char *caption,
+                          const char *unit, lv_obj_t **out_val)
+{
+    lv_obj_t *col = lv_obj_create(parent);
+    lv_obj_remove_style_all(col);
+    lv_obj_set_size(col, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(col, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(col, LV_FLEX_ALIGN_CENTER,
+                          LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
+    lv_obj_set_style_pad_row(col, USER_PAD_SM, 0);
+    lv_obj_set_style_bg_opa(col, LV_OPA_TRANSP, 0);
+    lv_obj_clear_flag(col, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *cap = lv_label_create(col);
+    lv_label_set_text(cap, caption);
+    lv_obj_set_style_text_color(cap, user_color_text_dim, 0);
+    lv_obj_set_style_text_font(cap, user_font_caption(), 0);
+    lv_obj_set_style_text_letter_space(cap, 1, 0);
+
+    lv_obj_t *vrow = lv_obj_create(col);
+    lv_obj_remove_style_all(vrow);
+    lv_obj_set_size(vrow, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(vrow, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(vrow, LV_FLEX_ALIGN_START,
+                          LV_FLEX_ALIGN_END, LV_FLEX_ALIGN_END);
+    lv_obj_set_style_pad_column(vrow, USER_PAD_SM / 2, 0);
+    lv_obj_set_style_bg_opa(vrow, LV_OPA_TRANSP, 0);
+    lv_obj_clear_flag(vrow, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *val = lv_label_create(vrow);
+    lv_label_set_text(val, "--");
+    lv_obj_set_style_text_color(val, user_color_text, 0);
+    lv_obj_set_style_text_font(val, user_font_text(), 0);
+    if(out_val) *out_val = val;
+
+    if(unit) {
+        lv_obj_t *u = lv_label_create(vrow);
+        lv_label_set_text(u, unit);
+        lv_obj_set_style_text_color(u, user_color_text_dim, 0);
+        lv_obj_set_style_text_font(u, user_font_caption(), 0);
+    }
+    return col;
+}
+
+/* 右上环境玻璃面板（4 列）。LVGL 无背景模糊 → 半透明深底 + 细白描边近似玻璃。 */
+lv_obj_t *build_env_panel(lv_obj_t *parent)
+{
+    lv_obj_t *panel = lv_obj_create(parent);
+    lv_obj_remove_style_all(panel);
+    lv_obj_set_size(panel, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(panel, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(panel, LV_FLEX_ALIGN_START,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_all(panel, USER_PAD, 0);
+    lv_obj_set_style_pad_column(panel, USER_PAD_LG, 0);
+    lv_obj_set_style_bg_color(panel, lv_color_black(), 0);
+    lv_obj_set_style_bg_opa(panel, LV_OPA_40, 0);
+    lv_obj_set_style_radius(panel, USER_RADIUS, 0);
+    lv_obj_set_style_border_width(panel, 1, 0);
+    lv_obj_set_style_border_color(panel, lv_color_white(), 0);
+    lv_obj_set_style_border_opa(panel, LV_OPA_10, 0);
+    lv_obj_clear_flag(panel, LV_OBJ_FLAG_SCROLLABLE);
+
+    monitor_env_col(panel, "EXTERIOR PM2.5", "ug/m3", &g_mon_env_pm_ext);
+    monitor_env_col(panel, "INTERIOR PM2.5", "ug/m3", &g_mon_env_pm_int);
+    monitor_env_col(panel, "O2 CONC.", "%", &g_mon_env_o2);
+    monitor_env_col(panel, "DEVICE TEMP", "\xC2\xB0""C", &g_mon_env_temp);
+    return panel;
+}
+
+void on_monitor_exit_click(lv_event_t * /*e*/)
+{
+    exit_monitor_mode();
+}
+
+/* EXIT 灰玻璃按钮（图标 + 文字），左下角 */
+lv_obj_t *build_monitor_exit_button(lv_obj_t *parent)
+{
+    lv_obj_t *btn = lv_button_create(parent);
+    lv_obj_remove_style_all(btn);
+    lv_obj_set_height(btn, USER_BTN_PRIMARY_H * 5 / 4);
+    lv_obj_set_width(btn, LV_SIZE_CONTENT);
+    lv_obj_set_style_bg_color(btn, lv_color_hex(0x757575), 0);
+    lv_obj_set_style_bg_opa(btn, LV_OPA_20, 0);
+    lv_obj_set_style_bg_opa(btn, LV_OPA_40, LV_STATE_PRESSED);
+    lv_obj_set_style_radius(btn, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_border_width(btn, 1, 0);
+    lv_obj_set_style_border_color(btn, lv_color_white(), 0);
+    lv_obj_set_style_border_opa(btn, LV_OPA_30, 0);
+    lv_obj_set_style_pad_hor(btn, USER_PAD, 0);
+    lv_obj_set_style_pad_column(btn, USER_PAD_SM, 0);
+    lv_obj_set_flex_flow(btn, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(btn, LV_FLEX_ALIGN_CENTER,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_add_event_cb(btn, on_monitor_exit_click, LV_EVENT_CLICKED, nullptr);
+
+    lv_obj_t *icon = lv_label_create(btn);
+    lv_label_set_text(icon, LV_SYMBOL_LEFT);
+    lv_obj_set_style_text_color(icon, lv_color_white(), 0);
+    lv_obj_set_style_text_font(icon, user_font_text(), 0);
+
+    lv_obj_t *txt = lv_label_create(btn);
+    lv_label_set_text(txt, "EXIT");
+    lv_obj_set_style_text_color(txt, lv_color_white(), 0);
+    lv_obj_set_style_text_font(txt, user_font_text(), 0);
+    return btn;
+}
+
+/* 监控界面滑动开门：解锁触发开门，短延时弹回复位（与首页一致） */
+void monitor_door_reset_cb(lv_timer_t *t)
+{
+    lv_timer_delete(t);
+    if(g_monitor_door) {
+        ui_slide_unlock_reset(g_monitor_door);
+    }
+}
+
+void on_monitor_door_unlocked(void * /*u*/)
+{
+    home_trigger_door_open();
+    ui_toast_show("Open Door", user_color_accent, 1500);
+    lv_timer_t *t = lv_timer_create(monitor_door_reset_cb, 700, nullptr);
+    lv_timer_set_repeat_count(t, 1);
+}
+
+lv_obj_t *build_monitor_area(lv_obj_t *parent)
+{
+    lv_obj_t *area = lv_obj_create(parent);
+    lv_obj_remove_style_all(area);
+    lv_obj_add_flag(area, LV_OBJ_FLAG_FLOATING);
+    lv_obj_set_size(area, LV_PCT(100), LV_PCT(100));
+    lv_obj_set_pos(area, 0, 0);
+    lv_obj_set_style_pad_all(area, 0, 0);
+    lv_obj_set_style_bg_opa(area, LV_OPA_TRANSP, 0);
+    lv_obj_clear_flag(area, LV_OBJ_FLAG_SCROLLABLE);
+
+    /* 摄像头全屏背景 */
+    g_monitor_camera_viewport = lv_obj_create(area);
+    lv_obj_remove_style_all(g_monitor_camera_viewport);
+    lv_obj_set_size(g_monitor_camera_viewport, LV_PCT(100), LV_PCT(100));
+    lv_obj_set_pos(g_monitor_camera_viewport, 0, 0);
+    lv_obj_set_style_bg_color(g_monitor_camera_viewport, lv_color_black(), 0);
+    lv_obj_set_style_bg_opa(g_monitor_camera_viewport, LV_OPA_COVER, 0);
+    lv_obj_clear_flag(g_monitor_camera_viewport, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_event_cb(g_monitor_camera_viewport, on_monitor_viewport_size_changed,
+                        LV_EVENT_SIZE_CHANGED, nullptr);
+
+    g_monitor_camera_hint = lv_label_create(g_monitor_camera_viewport);
+    lv_label_set_text(g_monitor_camera_hint, LV_SYMBOL_VIDEO "  Camera not connected\n(live cabin feed will appear here)");
+    lv_obj_set_style_text_color(g_monitor_camera_hint, user_color_text_dim, 0);
+    lv_obj_set_style_text_font(g_monitor_camera_hint, user_font_text(), 0);
+    lv_obj_set_style_text_align(g_monitor_camera_hint, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_center(g_monitor_camera_hint);
+
+    g_monitor_camera_image = lv_image_create(g_monitor_camera_viewport);
+    lv_obj_add_flag(g_monitor_camera_image, LV_OBJ_FLAG_HIDDEN);
+
+    /* 右上：环境小面板 */
+    lv_obj_t *env = build_env_panel(area);
+    lv_obj_add_flag(env, LV_OBJ_FLAG_FLOATING);
+    lv_obj_align(env, LV_ALIGN_TOP_RIGHT, -USER_PAD, USER_PAD);
+
+    /* 左下：EXIT */
+    lv_obj_t *exit_btn = build_monitor_exit_button(area);
+    lv_obj_add_flag(exit_btn, LV_OBJ_FLAG_FLOATING);
+    lv_obj_align(exit_btn, LV_ALIGN_BOTTOM_LEFT, USER_PAD, -USER_PAD);
+
+    /* 右下：滑动开门（与首页同尺寸/配色） */
+    ui_slide_unlock_cfg_t cfg = {};
+    cfg.hint_text     = "SWIPE TO OPEN";
+    cfg.on_unlocked   = on_monitor_door_unlocked;
+    cfg.user_data     = nullptr;
+    cfg.track_w       = USER_SLIDE_W * 4 / 3;
+    cfg.track_h       = USER_BTN_DOOR_ICON_SZ * 4 / 3;
+    cfg.custom_accent = true;
+    cfg.accent_color  = user_color_status_err;
+    g_monitor_door = ui_slide_unlock_create(area, &cfg);
+    lv_obj_t *door_root = ui_slide_unlock_get_root(g_monitor_door);
+    if(door_root) {
+        lv_obj_add_flag(door_root, LV_OBJ_FLAG_FLOATING);
+        lv_obj_align(door_root, LV_ALIGN_BOTTOM_RIGHT, -USER_PAD, -USER_PAD);
+    }
+
+    return area;
+}
+
+static void deferred_monitor_camera_start_cb(void * /*user*/)
+{
+    ui::CameraPreviewPlayer::instance().start(g_monitor_camera_image, g_monitor_camera_hint);
+}
+
+void enter_monitor_mode(void)
+{
+    if(g_monitor_active || g_printing_active) {
+        return;
+    }
+    g_monitor_active = true;
+
+    if(g_normal_area)  lv_obj_add_flag(g_normal_area, LV_OBJ_FLAG_HIDDEN);
+    if(g_door_float)   lv_obj_add_flag(g_door_float,  LV_OBJ_FLAG_HIDDEN);
+    if(g_btn_files)    lv_obj_add_flag(g_btn_files,   LV_OBJ_FLAG_HIDDEN);
+    if(g_btn_camera)   lv_obj_add_flag(g_btn_camera,  LV_OBJ_FLAG_HIDDEN);
+    if(g_monitor_area) lv_obj_clear_flag(g_monitor_area, LV_OBJ_FLAG_HIDDEN);
+    /* 监控层移到背景：顶部状态栏（保留设备状态）与左侧导航栏自然浮于其上。 */
+    if(g_monitor_area) lv_obj_move_background(g_monitor_area);
+    if(g_monitor_door) ui_slide_unlock_reset(g_monitor_door);
+
+    page_user_home_refresh(true);
+    cam_apply_layout(g_monitor_camera_viewport, g_monitor_camera_image, 1024u, 0u);
+    lv_async_call(deferred_monitor_camera_start_cb, nullptr);
+}
+
+void exit_monitor_mode(void)
+{
+    ui::CameraPreviewPlayer::instance().stop();
+    if(!g_monitor_active) {
+        return;
+    }
+    g_monitor_active = false;
+
+    if(g_monitor_area) lv_obj_add_flag(g_monitor_area, LV_OBJ_FLAG_HIDDEN);
+    if(g_normal_area)  lv_obj_clear_flag(g_normal_area, LV_OBJ_FLAG_HIDDEN);
+    if(g_door_float)   lv_obj_clear_flag(g_door_float,  LV_OBJ_FLAG_HIDDEN);
+    if(g_btn_files)    lv_obj_clear_flag(g_btn_files,   LV_OBJ_FLAG_HIDDEN);
+    if(g_btn_camera)   lv_obj_clear_flag(g_btn_camera,  LV_OBJ_FLAG_HIDDEN);
+
+    page_user_home_refresh(true);
+}
+
 /* ---------- 数据刷新 ---------- */
 
 const char *status_text(user_home_status_t s)
@@ -936,6 +1289,12 @@ void page_user_home_refresh(bool /*force*/)
     if(g_env_lbl_oxygen) {
         lv_label_set_text_fmt(g_env_lbl_oxygen, "%.1f %%", snap.oxygen_percent);
     }
+
+    /* 待机查看监控：右上环境小面板（单位为独立标签，数值只填数字） */
+    if(g_mon_env_pm_ext) lv_label_set_text_fmt(g_mon_env_pm_ext, "%.1f", snap.pm25_indoor);
+    if(g_mon_env_pm_int) lv_label_set_text_fmt(g_mon_env_pm_int, "%.1f", snap.pm25_cabin);
+    if(g_mon_env_o2)     lv_label_set_text_fmt(g_mon_env_o2,     "%.1f", snap.oxygen_percent);
+    if(g_mon_env_temp)   lv_label_set_text_fmt(g_mon_env_temp,   "%.1f", snap.temperature_c);
 }
 
 lv_obj_t *page_user_home_create(lv_obj_t *parent)
@@ -960,6 +1319,10 @@ lv_obj_t *page_user_home_create(lv_obj_t *parent)
     g_print_area = build_printing_area(page);
     lv_obj_add_flag(g_print_area, LV_OBJ_FLAG_HIDDEN);
 
+    /* 待机查看监控层：摄像头全屏 + 右上环境面板 + 左下 EXIT + 右下开门；默认隐藏。 */
+    g_monitor_area = build_monitor_area(page);
+    lv_obj_add_flag(g_monitor_area, LV_OBJ_FLAG_HIDDEN);
+
     /* 底部胶囊浮动按钮：相对于 page 绝对定位 */
     g_door_float = build_door_floating(page);
 
@@ -982,11 +1345,16 @@ void page_user_home_enter_printing_mode(const control_file_t *file)
     if(g_printing_active) {
         return;
     }
+    /* 若正在查看监控，先退出（CameraPreviewPlayer 单例，二者不能同时用） */
+    if(g_monitor_active) {
+        exit_monitor_mode();
+    }
     g_printing_active = true;
 
     if(g_normal_area) lv_obj_add_flag(g_normal_area, LV_OBJ_FLAG_HIDDEN);
     if(g_door_float)  lv_obj_add_flag(g_door_float,  LV_OBJ_FLAG_HIDDEN);
     if(g_btn_files)   lv_obj_add_flag(g_btn_files,   LV_OBJ_FLAG_HIDDEN);
+    if(g_btn_camera)  lv_obj_add_flag(g_btn_camera,  LV_OBJ_FLAG_HIDDEN);
     if(g_print_area)  lv_obj_clear_flag(g_print_area, LV_OBJ_FLAG_HIDDEN);
     /* 摄像头浮层置于最底层：状态栏/其它 sibling 自然浮于其上。
      * 注意：不能用 move_foreground(topbar)——那会改变 topbar 在纵向 flex 中的
@@ -1025,6 +1393,7 @@ void page_user_home_exit_printing_mode(void)
     if(g_normal_area) lv_obj_clear_flag(g_normal_area, LV_OBJ_FLAG_HIDDEN);
     if(g_door_float)  lv_obj_clear_flag(g_door_float,  LV_OBJ_FLAG_HIDDEN);
     if(g_btn_files)   lv_obj_clear_flag(g_btn_files,   LV_OBJ_FLAG_HIDDEN);
+    if(g_btn_camera)  lv_obj_clear_flag(g_btn_camera,  LV_OBJ_FLAG_HIDDEN);
     set_pause_ui(false);
 
     home_set_status(USER_HOME_STATUS_READY);

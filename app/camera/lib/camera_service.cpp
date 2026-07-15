@@ -39,7 +39,8 @@ CameraService::~CameraService()
 
 bool CameraService::init()
 {
-    stream_fps_ = read_fps_from_env();
+    stream_fps_            = read_fps_from_env();
+    stream_warmup_frames_  = read_warmup_frames_from_env();
 
     const char* ntf_env = std::getenv(CAMERA_ENV_FRAME_NTF);
     if(ntf_env && ntf_env[0]) {
@@ -48,9 +49,9 @@ bool CameraService::init()
 
     subscribe_messages();
     UPC_LOG_CAMERA_SERVICE(Info,
-        "init device=%s %ux%u@%u iq=%s/%s shm=%s frame_ntf=%d",
+        "init device=%s %ux%u@%u warmup_frames=%u iq=%s/%s shm=%s frame_ntf=%d",
         env_or_default(CAMERA_ENV_DEVICE, CAMERA_V4L2_DEVICE_DEFAULT),
-        stream_width_, stream_height_, stream_fps_,
+        stream_width_, stream_height_, stream_fps_, stream_warmup_frames_,
         env_or_default(CAMERA_ENV_IQ_DIR, CAMERA_IQ_DIR_DEFAULT),
         env_or_default(CAMERA_ENV_IQ_FILE, CAMERA_IQ_FILE_DEFAULT),
         CAMERA_SHM_NAME_DEFAULT, frame_ntf_enabled_ ? 1 : 0);
@@ -85,6 +86,19 @@ uint32_t CameraService::read_fps_from_env()
     const long v = std::strtol(env, nullptr, 10);
     if(v <= 0 || v > 120) {
         return CAMERA_FPS_DEFAULT;
+    }
+    return static_cast<uint32_t>(v);
+}
+
+uint32_t CameraService::read_warmup_frames_from_env()
+{
+    const char* env = std::getenv(CAMERA_ENV_WARMUP_FRAMES);
+    if(!env || !env[0]) {
+        return CAMERA_WARMUP_FRAMES_DEFAULT;
+    }
+    const long v = std::strtol(env, nullptr, 10);
+    if(v < 0 || v > 120) {
+        return CAMERA_WARMUP_FRAMES_DEFAULT;
     }
     return static_cast<uint32_t>(v);
 }
@@ -291,6 +305,13 @@ void CameraService::stream_thread_fn()
     uint32_t last_seq  = 0;
     uint32_t last_slot = 0;
     bool logged_first_commit = false;
+    uint32_t warmup_left = stream_warmup_frames_;
+
+    if(warmup_left > 0) {
+        UPC_LOG_CAMERA_SERVICE(Info,
+            "AE warmup: discarding first %u frames before SHM commit",
+            warmup_left);
+    }
 
     while(!stop_stream_.load(std::memory_order_relaxed)) {
         const auto now = clock::now();
@@ -303,6 +324,28 @@ void CameraService::stream_thread_fn()
         }
 
         const auto tick_start = clock::now();
+
+        /* AE 预热：只 dequeue/queue 喂 ISP，不占 SHM slot、不 commit。 */
+        if(warmup_left > 0) {
+            std::optional<uint32_t> buf_idx = capture_.dequeue_frame(2000);
+            if(!buf_idx) {
+                if(stop_stream_.load()) {
+                    break;
+                }
+                continue;
+            }
+            capture_.queue_frame(*buf_idx);
+            --warmup_left;
+            if(warmup_left == 0) {
+                UPC_LOG_CAMERA_SERVICE(Info,
+                    "AE warmup done, committing frames to SHM");
+            }
+            const auto elapsed = clock::now() - tick_start;
+            if(elapsed < frame_period) {
+                std::this_thread::sleep_for(frame_period - elapsed);
+            }
+            continue;
+        }
 
         std::optional<uint32_t> slot = producer_.acquire_write_slot();
         if(!slot) {

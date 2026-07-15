@@ -458,6 +458,21 @@ bool McuLink::is_terminate_pending() const noexcept
     return terminate_pending_.load();
 }
 
+bool McuLink::is_natural_complete_pending() const noexcept
+{
+    return natural_complete_pending_.load();
+}
+
+bool McuLink::is_waiting_layer() const noexcept
+{
+    return waiting_layer_.load();
+}
+
+bool McuLink::mcu_rates_have_been_nonempty() const noexcept
+{
+    return mcu_rates_seen_nonempty_.load();
+}
+
 /* ---------- 事件与回调 ---------- */
 
 void McuLink::emit_event(McuLinkEvent ev)

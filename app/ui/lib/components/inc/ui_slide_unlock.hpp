@@ -11,12 +11,12 @@ extern "C" {
  * @file ui_slide_unlock.hpp
  * @brief 滑动解锁控件（用于 D1 "滑动解锁开门"）
  *
- * 行为：
- *   - 一条胶囊形轨道（深灰底）。
- *   - 左侧一个橙色圆形 knob，用户按住拖动到最右端时触发 unlock 回调。
- *   - 中部一段提示文字（如 "滑动开门 >>>"），随 knob 推进逐字变橙。
- *   - 中途释放则 knob 用动画弹回左端。
- *   - 解锁后控件自动 disable（防止双触发），由调用方决定是否销毁。
+ * 行为（对齐 Figma「滑动控件示意」）：
+ *   - 一条半透明玻璃胶囊轨道。
+ *   - 左端一段红色玻璃胶囊，按住向右拖动时"生长"，前沿圆头带开门图标与高光。
+ *   - 静止态显示提示文字 + 3 个 chevron 箭头；拖动中隐藏；到底变 "RELEASE TO OPEN"。
+ *   - 滑到底不自动触发，需在末端「松手」才触发 unlock 回调；中途松手则动画回弹。
+ *   - 解锁后控件自动 disable（防止双触发），由调用方决定是否销毁/复位。
  *
  * 不依赖任何业务模块，可被多个弹窗复用。
  */
@@ -25,7 +25,7 @@ typedef void (*ui_slide_unlock_cb_t)(void *user_data);
 typedef struct ui_slide_unlock_t ui_slide_unlock_t;
 
 typedef struct {
-    const char           *hint_text;   /**< 中间提示文字，NULL = "Slide to Open" */
+    const char           *hint_text;   /**< 静止态提示文字，NULL = "SWIPE TO OPEN" */
     ui_slide_unlock_cb_t  on_unlocked; /**< 解锁回调（在 LVGL 主线程） */
     void                 *user_data;
     int32_t               track_w;     /**< 轨道宽，<=0 用 USER_SLIDE_W */

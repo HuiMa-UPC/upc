@@ -194,7 +194,10 @@ void PageManager::switch_to(const std::string& name) {
         return;
     }
 
-    if (control_is_printing() && name != "user_home") {
+    /* 打印中放开导航（可切 history/control/settings/message/home），
+     * 仅禁止再次进入"选文件"页，避免打印中重复触发开始打印流程。
+     * （control_start() 另有 g_state!=IDLE 防重入作为双保险。） */
+    if (control_is_printing() && name == "user_files") {
         ui_toast_show("Printing in progress", user_color_accent, 2000);
         return;
     }
