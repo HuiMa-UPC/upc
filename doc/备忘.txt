@@ -1,0 +1,11 @@
+更新交叉编译环境：
+cd /buildroot/
+make sdk
+将buildroot\output\rockchip_rk3568\的host/文件夹打包到opt并重命名
+
+修改交叉编译环境：
+# 进入交叉 sysroot 的头文件目录（按你实际工具链路径）
+cd /opt/k1mini-buildroot-toolchain/aarch64-buildroot-linux-gnu/sysroot/usr/include
+# 需要 root 时加 sudo
+ln -sfn drm/drm.h      drm.h
+ln -sfn drm/drm_mode.h drm_mode.h

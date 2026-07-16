@@ -26,6 +26,7 @@ scripts/rongsu.sh start   # glavo + rongsu_camera → ui
 | `ipc/` | Unix socket、`MsgPort`、SHM/dma 帧环 |
 | `debug/` | `UPC_LOG_*`、`upc_sys_monitor` |
 | `process/` | PID、daemon、`log_rotating` |
+| `fs_manifest/` | 本地清单 JSON（G-code `config.json`；后续可加打印历史等） |
 
 ## 进程与日志
 
@@ -140,8 +141,8 @@ scripts/rongsu.sh start   # glavo + rongsu_camera → ui
 | `APP_PM25_Rsp` | `GLAVO_PM25_Check_Rsp` | Glavo→UI | `Pm25ResultPayload` | `register_pm25_result` | PM2.5 流程 |
 | `UI_CLOSE_DOOR_Req` | — | UI→Glavo | Empty | `send_close_door_check` | 关门检测 |
 | `APP_CLOSE_DOOR_Rsp` | `GLAVO_Door_Close_Rsp` | Glavo→UI | `DoorResultPayload` | `register_close_door_result` | — |
-| `Fs_DirOpen_Req` | `FS_Dir_Open_Req` | UI→Glavo | path 字符串（空=`/home/Gcode`） | `send_fs_dir_open(path?)` | `handle_dir_open` |
-| `Fs_DirOpen_Rsp` | `FS_Dir_Open_Rsp` | Glavo→UI | `FsDirHeader` + `FileEntryPayload[]` | `register_fs_dir` | Local=config.json；USB=扫盘 |
+| `Fs_DirOpen_Req` | `FS_Dir_Open_Req` | UI→Glavo | `PrintFileSource`（仅 USB） | `send_fs_dir_open` | Local 不走 IPC，UI 直读 `/home/Gcode/config.json` |
+| `Fs_DirOpen_Rsp` | `FS_Dir_Open_Rsp` | Glavo→UI | `FsDirHeader` + `FileEntryPayload[]` | `register_fs_dir` | **仅 USB** 扫盘应答 |
 | `Fs_Delete_Ntf` | `FS_Delete_Ntf` | UI→Glavo | `FsDeleteNtfPayload` | `send_fs_delete_ntf` | 删 Local 文件 + 更新 config.json |
 | `UI_OpenDoor_Req` | — | UI→Glavo | Empty | `send_open_door` | 开门 |
 | `APP_OpenDoor_Rsp` | `GLAVO_Door_Open_Rsp` | Glavo→UI | `DoorResultPayload` | `register_open_door_result` | — |
@@ -166,8 +167,8 @@ scripts/rongsu.sh start   # glavo + rongsu_camera → ui
 | `APP_Camera_Frame_Ntf` | — | Camera→UI | `CameraFrameNtfPayload` | （可选） | 帧序号；默认关 |
 | `APP_Print_Video_Session_Start_Ntf` | — | Glavo→Camera（Hub FWD） | `PrintVideoSessionPayload` | — | `PrintVideoNotify` / `CameraService` |
 | `APP_Print_Layer_Snap_Ntf` | — | Glavo→Camera（Hub FWD） | `PrintVideoLayerSnapPayload` | — | 换层 Snap |
-| `APP_Print_Video_Session_Finish_Ntf` | — | Glavo→Camera（Hub FWD） | `PrintVideoSessionPayload` | — | ffmpeg 合成 MP4 |
-| `APP_Print_Video_Session_Abort_Ntf` | — | Glavo→Camera（Hub FWD） | `PrintVideoSessionPayload` | — | 删临时目录 |
+| `APP_Print_Video_Session_Finish_Ntf` | — | Glavo→Camera（Hub FWD） | `PrintVideoSessionPayload` | — | ffmpeg remux MP4 + 末帧 jpg |
+| `APP_Print_Video_Session_Abort_Ntf` | — | Glavo→Camera（Hub FWD） | `PrintVideoSessionPayload` | — | 有帧同样 remux；0 帧清临时 |
 | `UI_Debug_Axis_Jog_Req` | — | UI→Glavo | `DebugAxisJogPayload` | `DebugMsgProxy::send_axis_jog` | **后端待实现** |
 | `UI_Debug_Axis_Hold_Stop_Req` | — | UI→Glavo | `DebugAxisPayload` | `send_axis_hold_stop` | 长按松手停 |
 | `UI_Debug_Axis_SetZero_Req` | — | UI→Glavo | `DebugAxisPayload` | `send_axis_set_zero` | Z 工作零点 |
@@ -248,6 +249,7 @@ rongsu_broker ──listen──► /tmp/upc_broker.sock ◄── UI / Glavo / 
 | `common/upc_contract.hpp` | **唯一源码契约**（MsgType / Payload / IPC 配置 / 日志开关 / 进程表 / WIRE ABI） | 双组评审 |
 | `common/middleware/message_bus/msg_runtime.hpp` | 进程内 `Message` / `MsgPayload`（依赖 BufferPool） | 平台组 |
 | `common/CMakeLists.txt` | 统一静态库 `upc::common`（兼容别名 `upc::ipc` 等） | 平台组 |
+| `common/fs_manifest/gcode_manifest.*` | Local `/home/Gcode/config.json` 读写（UI 读列表 + Glavo 写） | 平台 / UI / Glavo |
 | `common/ipc/msg_port.hpp` | 业务唯一 IPC 入口 | 平台组 |
 | `common/ipc/ipc_wire.*` | 线协议 | 平台组 |
 | `common/ipc/ipc_endpoint.*` | Socket 传输 | 平台组 |

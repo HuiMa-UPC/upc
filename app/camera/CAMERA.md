@@ -10,7 +10,7 @@
 | `main.cpp` | IPC Server、`CameraService` 生命周期、`process(2)` 循环 |
 | `lib/camera_service.*` | 流控 IPC、dma fd 元数据环推流、录像消息分派 |
 | `lib/vi_capture.*` | rkaiq ISP + V4L2 NV12 采集 |
-| `lib/print_video_recorder.*` | 元数据环 + dma fd 取帧 → MPP H.264 → `/home/video/*.h264` |
+| `lib/print_video_recorder.*` | 元数据环 + dma fd 取帧 → MPP H.264 → ffmpeg remux `.mp4` + 末帧 `.jpg` |
 | `lib/device_config.hpp` | 设备、分辨率、IQ、SHM、录像路径宏 |
 
 ## 数据路径
@@ -45,8 +45,13 @@ Glavo Snap IPC → PrintVideoRecorder worker
   → `IpcDmaFrameRingConsumer::acquire_latest_frame` 拿到 `buffer_idx`
   → 通过 fd 回调 `mmap` 取 NV12（如 stride 有 padding 会按 active width 解压）
   → MPP encode → /tmp/print_vid/{session}/layers.h264
-  → finish/abort → EOS flush → /home/video/{job}.h264
+  → finish/abort → EOS flush
+  → ffmpeg remux（-c copy）→ /home/video/{job}.mp4
+  → ffmpeg 抽末帧 → /home/video/{job}.jpg
+  → 删除临时 .h264 / session 目录
 ```
+
+0 帧时不生成 `/home/video` 产物。remux 失败时保留临时 `.h264` 便于排查。
 
 Snap 依赖预览流已开（同一 SHM）；与 UI 解码线程共享 ring，偶发 `snap miss` 见日志。
 
@@ -61,8 +66,8 @@ Snap 依赖预览流已开（同一 SHM）；与 UI 解码线程共享 ring，�
 | `UI_Camera_Stream_Stop_Req` | 停流、关闭 dma fd 旁路、销毁 SHM |
 | `APP_Print_Video_Session_Start_Ntf` | 建录像会话、开 dma fd 元数据环 consumer |
 | `APP_Print_Layer_Snap_Ntf` | 入队 LayerSnap job |
-| `APP_Print_Video_Session_Finish_Ntf` | 入队 Finish，保存 `.h264` |
-| `APP_Print_Video_Session_Abort_Ntf` | 入队 Abort，有帧同样保存 |
+| `APP_Print_Video_Session_Finish_Ntf` | 入队 Finish，remux `.mp4` + 末帧 `.jpg` |
+| `APP_Print_Video_Session_Abort_Ntf` | 入队 Abort，有帧同样 remux |
 
 Glavo→Camera 经 UI Hub 转发；`sender_id` 仍为 `APP_GLAVO`（见 IPC.md）。
 
@@ -79,7 +84,9 @@ Glavo→Camera 经 UI Hub 转发；`sender_id` 仍为 `APP_GLAVO`（见 IPC.md�
 | V4L2 缓冲 | 4 | `CAMERA_V4L2_BUF_COUNT` |
 | SHM 槽位 | 3 | `CAMERA_SHM_SLOT_COUNT` |
 | 录像临时 | `/tmp/print_vid/{session}/layers.h264` | `CAMERA_PRINT_VIDEO_TMP_DIR` |
-| 录像输出 | `/home/video/{job}.h264` | `CAMERA_PRINT_VIDEO_OUT_DIR` / `_EXT` |
+| 录像输出 | `/home/video/{job}.mp4` | `CAMERA_PRINT_VIDEO_OUT_DIR` / `_EXT` |
+| 缩略图 | `/home/video/{job}.jpg` | `CAMERA_PRINT_VIDEO_THUMB_EXT` |
+| ffmpeg | `/usr/bin/ffmpeg` | `CAMERA_FFMPEG_BIN` |
 | 层编码 fps | 5 | `CAMERA_PRINT_VIDEO_LAYER_FPS` |
 
 SHM 元数据环：`stride_y` 为 V4L2 实际 Y stride（dma 模式），`buffer_idx` 指向 fd 表；像素走 dma fd。

@@ -56,6 +56,15 @@ while (!g_shutdown_requested) {
 
 `Subscription` 必须保存在 `subs_` 等成员中。其它后端用独立 `XxxMsgProxy`，不要堆进 UiMsgProxy。
 
+### 选文件页目录数据
+
+| Tab | 数据源 |
+|-----|--------|
+| **Local** | UI 直接读 `/home/Gcode/config.json`（`common/fs_manifest/gcode_manifest.*`），**不发** `Fs_DirOpen_Req` |
+| **USB** | `send_fs_dir_open(Usb)` → Glavo 扫盘 → `Fs_DirOpen_Rsp` |
+
+删除 Local / Prepare / Start 仍走 IPC。
+
 ## 页面（`lib/pages/`）
 
 | Page ID | 文件 | 说明 |

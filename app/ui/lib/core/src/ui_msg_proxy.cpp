@@ -217,6 +217,10 @@ void UiMsgProxy::register_purify_done(PurifyDoneCb cb)
 
 void UiMsgProxy::send_fs_dir_open(middleware::PrintFileSource source)
 {
+    /* Local 列表由 UI 读 config.json；DirOpen 仅 USB */
+    if(source != middleware::PrintFileSource::Usb) {
+        return;
+    }
     const middleware::FsDirOpenReqPayload payload{source, {}};
     publish_pod(middleware::MsgType::Fs_DirOpen_Req,
                 middleware::ModuleId::APP_GLAVO, payload);

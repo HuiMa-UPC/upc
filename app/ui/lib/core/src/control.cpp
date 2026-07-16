@@ -1,6 +1,7 @@
 #include "control.hpp"
 #include "ui_msg_proxy.hpp"
 #include "msg_port.hpp"
+#include "gcode_manifest.hpp"
 #include "ui_theme.hpp"
 #include "ui_feedback.hpp"
 #include "ui_modal_dialog.hpp"
@@ -110,20 +111,78 @@ void (*g_on_action_fail)(const char *message) = nullptr;
 
 std::vector<control_file_t> g_files;
 
-/** Fs_DirOpen 请求队列：Glavo 按 FIFO 应答，弹出项须与当前 Tab 一致才刷新 UI */
+/** USB Fs_DirOpen 请求队列：Glavo 按 FIFO 应答，弹出项须与当前 Tab 一致才刷新 UI */
 std::deque<FileTab> g_dir_open_pending;
+
+void rebuild_file_grid(void);
+void update_detail_panel(const control_file_t *file);
+
+void apply_files_list(const std::vector<control_file_t>& files)
+{
+    char prev_name[64] = {0};
+    const bool had_sel = (g_sel_index >= 0 &&
+                          g_sel_index < static_cast<int>(g_files.size()));
+    if(had_sel) {
+        std::snprintf(prev_name, sizeof(prev_name), "%s", g_files[g_sel_index].name);
+    }
+
+    g_files = files;
+
+    g_sel_index = -1;
+    if(had_sel) {
+        for(size_t i = 0; i < g_files.size(); i++) {
+            if(std::strcmp(g_files[i].name, prev_name) == 0) {
+                g_sel_index = static_cast<int>(i);
+                g_active_file = g_files[i];
+                break;
+            }
+        }
+    }
+
+    if(g_files_page_active) {
+        rebuild_file_grid();
+        update_detail_panel(g_sel_index >= 0 ? &g_active_file : nullptr);
+    }
+}
+
+/** Local：UI 直接读 /home/Gcode/config.json（不经 Fs_DirOpen IPC） */
+void load_local_files_from_config()
+{
+    std::vector<upc::GcodeManifestEntry> entries;
+    if(!upc::gcode_manifest_load(UPC_LOCAL_GCODE_CONFIG, entries)) {
+        entries.clear();
+    }
+
+    std::vector<control_file_t> files;
+    files.reserve(entries.size());
+    for(size_t i = 0; i < entries.size(); ++i) {
+        const auto& e = entries[i];
+        control_file_t f = {};
+        f.index = static_cast<uint32_t>(i);
+        std::snprintf(f.name, sizeof(f.name), "%s", e.name.c_str());
+        std::snprintf(f.path, sizeof(f.path), "%s/%s", UPC_LOCAL_GCODE_DIR, e.name.c_str());
+        f.duration_min = e.duration_sec / 60u;
+        f.material_g   = e.material_g;
+        f.file_size    = e.file_size;
+        f.line_count   = e.line_count;
+        files.push_back(f);
+    }
+    apply_files_list(files);
+}
 
 void request_fs_dir_open(FileTab tab)
 {
-    g_dir_open_pending.push_back(tab);
-    ui::UiMsgProxy::instance().send_fs_dir_open(file_tab_to_source(tab));
+    if(tab == FileTab::Local) {
+        load_local_files_from_config();
+        return;
+    }
+    g_dir_open_pending.push_back(FileTab::Usb);
+    ui::UiMsgProxy::instance().send_fs_dir_open(middleware::PrintFileSource::Usb);
 }
 
 void enter_state(control_state_t s);
-void rebuild_file_grid(void);
 void refresh_supply_bars(void);
 void highlight_file_rows(void);
-void update_detail_panel(const control_file_t *file);
 void close_confirm_dlg(void);
 void close_prepare_dlg(void);
 void show_prepare_dlg(void);
@@ -381,50 +440,26 @@ void wire_msg_proxy()
         invoke_done(g_purify_cb, g_purify_u);
     });
 
+    /* USB 列表经 Fs_DirOpen IPC；Local 由 load_local_files_from_config 直读盘 */
     proxy.register_fs_dir([](const middleware::FileEntryPayload *files, uint32_t count) {
         if(g_dir_open_pending.empty()) {
             return;
         }
-        const FileTab rsp_tab = g_dir_open_pending.front();
         g_dir_open_pending.pop_front();
-        if(rsp_tab != g_file_tab) {
+        if(g_file_tab != FileTab::Usb) {
             return;
         }
 
-        /* 记住刷新前的选中文件名，刷新后按名字恢复选择（USB 热插拔自动重扫时不丢选） */
-        char prev_name[64] = {0};
-        const bool had_sel = (g_sel_index >= 0 &&
-                              g_sel_index < static_cast<int>(g_files.size()));
-        if(had_sel) {
-            std::snprintf(prev_name, sizeof(prev_name), "%s", g_files[g_sel_index].name);
-        }
-
-        g_files.clear();
+        std::vector<control_file_t> next;
         if(files && count > 0) {
+            next.reserve(count);
             for(uint32_t i = 0; i < count; i++) {
                 control_file_t f = {};
                 copy_file_entry(f, files[i]);
-                g_files.push_back(f);
+                next.push_back(f);
             }
         }
-
-        /* 恢复选择：原选中文件若仍在则保持，否则回空态 */
-        g_sel_index = -1;
-        if(had_sel) {
-            for(size_t i = 0; i < g_files.size(); i++) {
-                if(std::strcmp(g_files[i].name, prev_name) == 0) {
-                    g_sel_index = static_cast<int>(i);
-                    g_active_file = g_files[i];
-                    break;
-                }
-            }
-        }
-
-        /* 选择文件页可见时，目录响应到达即重建网格并同步详情 */
-        if(g_files_page_active) {
-            rebuild_file_grid();
-            update_detail_panel(g_sel_index >= 0 ? &g_active_file : nullptr);
-        }
+        apply_files_list(next);
     });
 
     proxy.register_supply_status([](const middleware::SupplyStatusPayload &p) {
@@ -2069,7 +2104,7 @@ lv_obj_t *page_user_files_create(lv_obj_t *parent)
 
 void page_user_files_refresh(bool /*force*/)
 {
-    /* on_enter：标记可见，并刷新当前 Tab 目录 + 供应（选中项由 register_fs_dir 按名恢复） */
+    /* on_enter：标记可见；Local 读 config.json，USB 走 Fs_DirOpen；选中项按名恢复 */
     g_files_page_active = true;
     g_dir_open_pending.clear();
     request_fs_dir_open(g_file_tab);

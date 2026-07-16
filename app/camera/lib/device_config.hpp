@@ -106,12 +106,22 @@
 #define CAMERA_PRINT_VIDEO_OUT_DIR  "/home/video"
 #endif
 
-/** 输出文件后缀（MPP 输出 Annex-B H.264  elementary stream，非 MP4 容器） */
+/** 成品视频后缀：Finish/Abort 时由 ffmpeg 将临时 Annex-B H.264 remux 为 MP4 */
 #ifndef CAMERA_PRINT_VIDEO_OUT_EXT
-#define CAMERA_PRINT_VIDEO_OUT_EXT  ".h264"
+#define CAMERA_PRINT_VIDEO_OUT_EXT  ".mp4"
 #endif
 
-/** 写入 H.264 时标注的层帧率（仅 metadata 用途；raw .h264 无容器时间轴） */
+/** 延时摄影缩略图后缀（抽 MP4 最后一帧） */
+#ifndef CAMERA_PRINT_VIDEO_THUMB_EXT
+#define CAMERA_PRINT_VIDEO_THUMB_EXT  ".jpg"
+#endif
+
+/** 板端 ffmpeg 可执行文件（rootfs 需已部署） */
+#ifndef CAMERA_FFMPEG_BIN
+#define CAMERA_FFMPEG_BIN  "/usr/bin/ffmpeg"
+#endif
+
+/** 层帧率：MPP 编码 fps，并作为 remux 时 -framerate（CFR） */
 #ifndef CAMERA_PRINT_VIDEO_LAYER_FPS
 #define CAMERA_PRINT_VIDEO_LAYER_FPS  5u
 #endif

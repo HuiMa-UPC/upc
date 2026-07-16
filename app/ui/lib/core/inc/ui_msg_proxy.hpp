@@ -48,7 +48,7 @@ public:
     void register_purify_progress(PurifyProgressCb cb);
     void register_purify_done(PurifyDoneCb cb);
 
-    /** 列目录：只传 PrintFileSource（0=本机 Local，1=USB）；路径由 Glavo device_config 配置 */
+    /** 列目录：当前 UI 仅对 USB 调用；Local 由 control 直读 config.json */
     void send_fs_dir_open(middleware::PrintFileSource source);
 
     void send_supply_status();

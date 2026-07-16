@@ -15,6 +15,7 @@
 #include <cctype>
 #include <cerrno>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
@@ -22,7 +23,6 @@
 #include <unistd.h>
 #include <linux/dma-buf.h>
 
-#include <array>
 #include <vector>
 
 namespace upc::camera {
@@ -209,10 +209,10 @@ void PrintVideoRecorder::worker_fn()
             (void)handle_layer_snap(job);
             break;
         case PrintVideoJobKind::FinishMux:
-            finalize_session_h264(false);
+            finalize_session(false);
             break;
         case PrintVideoJobKind::AbortCleanup:
-            finalize_session_h264(true);
+            finalize_session(true);
             break;
         }
     }
@@ -552,7 +552,60 @@ bool PrintVideoRecorder::handle_layer_snap(const PrintVideoJob& job)
     return true;
 }
 
-void PrintVideoRecorder::finalize_session_h264(bool aborted)
+int PrintVideoRecorder::run_shell_cmd(const char* cmd, const char* log_tag)
+{
+    if(!cmd || !cmd[0]) {
+        return -1;
+    }
+    UPC_LOG_CAMERA_SERVICE(Info, "print_video %s: %s",
+                           log_tag ? log_tag : "cmd", cmd);
+    const int rc = std::system(cmd);
+    if(rc != 0) {
+        UPC_LOG_CAMERA_SERVICE(Error,
+            "print_video %s failed rc=%d",
+            log_tag ? log_tag : "cmd", rc);
+    }
+    return rc;
+}
+
+bool PrintVideoRecorder::remux_h264_to_mp4(const char* h264_path,
+                                           const char* mp4_path) const
+{
+    if(!h264_path || !h264_path[0] || !mp4_path || !mp4_path[0]) {
+        return false;
+    }
+
+    const uint32_t fps =
+        layer_fps_ > 0 ? layer_fps_ : CAMERA_PRINT_VIDEO_LAYER_FPS;
+
+    /* 裸流无容器时间轴：须 -framerate；分辨率由 Annex-B 内 SPS/PPS 解析 */
+    char cmd[1024];
+    std::snprintf(
+        cmd, sizeof(cmd),
+        "%s -y -loglevel error "
+        "-f h264 -framerate %u -i '%s' "
+        "-c copy -movflags +faststart '%s'",
+        CAMERA_FFMPEG_BIN, fps, h264_path, mp4_path);
+    return run_shell_cmd(cmd, "ffmpeg remux") == 0;
+}
+
+bool PrintVideoRecorder::extract_last_frame_thumb(const char* mp4_path,
+                                                  const char* jpg_path) const
+{
+    if(!mp4_path || !mp4_path[0] || !jpg_path || !jpg_path[0]) {
+        return false;
+    }
+
+    /* -sseof -1：从文件末尾往前，取最后一帧作为缩略图 */
+    char cmd[1024];
+    std::snprintf(
+        cmd, sizeof(cmd),
+        "%s -y -loglevel error -sseof -1 -i '%s' -frames:v 1 -q:v 5 '%s'",
+        CAMERA_FFMPEG_BIN, mp4_path, jpg_path);
+    return run_shell_cmd(cmd, "ffmpeg thumb") == 0;
+}
+
+void PrintVideoRecorder::finalize_session(bool aborted)
 {
     close_consumer();
     if(encoder_open_) {
@@ -575,31 +628,44 @@ void PrintVideoRecorder::finalize_session_h264(bool aborted)
     }
 
     mkdir_p(CAMERA_PRINT_VIDEO_OUT_DIR);
-    const std::string out_path =
+    const std::string mp4_path =
         std::string(CAMERA_PRINT_VIDEO_OUT_DIR) + "/" + job_name_ +
         CAMERA_PRINT_VIDEO_OUT_EXT;
+    const std::string jpg_path =
+        std::string(CAMERA_PRINT_VIDEO_OUT_DIR) + "/" + job_name_ +
+        CAMERA_PRINT_VIDEO_THUMB_EXT;
 
-    /* 同名覆盖：rename 在 Linux 上会替换已存在文件；copy 用 wb 截断写 */
-    (void)std::remove(out_path.c_str());
+    (void)std::remove(mp4_path.c_str());
+    (void)std::remove(jpg_path.c_str());
 
-    bool saved = false;
-    if(std::rename(h264_path_.c_str(), out_path.c_str()) == 0) {
-        saved = true;
-    } else if(copy_file(h264_path_.c_str(), out_path.c_str())) {
-        saved = true;
+    if(!remux_h264_to_mp4(h264_path_.c_str(), mp4_path.c_str())) {
+        UPC_LOG_CAMERA_SERVICE(Error,
+            "print_video remux fail keep h264=%s dst=%s%s",
+            h264_path_.c_str(), mp4_path.c_str(),
+            aborted ? " (aborted)" : "");
+        /* remux 失败：保留 /tmp 下裸流便于排查，不清 session 目录 */
+        session_id_.clear();
+        /* 故意不清 session_dir_/h264_path_ 的磁盘文件；仅复位状态 */
+        session_dir_.clear();
+        h264_path_.clear();
+        header_written_ = false;
+        return;
     }
 
-    if(saved) {
-        UPC_LOG_CAMERA_SERVICE(Info,
-            "print_video saved -> %s (MPP H.264%s)",
-            out_path.c_str(), aborted ? ", aborted" : "");
-    } else {
+    if(!extract_last_frame_thumb(mp4_path.c_str(), jpg_path.c_str())) {
         UPC_LOG_CAMERA_SERVICE(Warn,
-            "print_video save failed dst=%s src=%s errno=%d",
-            out_path.c_str(), h264_path_.c_str(), errno);
+            "print_video thumb fail mp4=%s jpg=%s (mp4 kept)",
+            mp4_path.c_str(), jpg_path.c_str());
     }
 
+    /* remux 成功后删除临时裸流并清会话目录 */
+    (void)std::remove(h264_path_.c_str());
     remove_session_dir();
+
+    UPC_LOG_CAMERA_SERVICE(Info,
+        "print_video saved -> %s (+%s)%s",
+        mp4_path.c_str(), jpg_path.c_str(), aborted ? " aborted" : "");
+
     session_id_.clear();
     session_dir_.clear();
     h264_path_.clear();
@@ -614,41 +680,6 @@ bool PrintVideoRecorder::remove_session_dir()
     char cmd[512];
     std::snprintf(cmd, sizeof(cmd), "rm -rf '%s'", session_dir_.c_str());
     return std::system(cmd) == 0;
-}
-
-bool PrintVideoRecorder::copy_file(const char* src, const char* dst)
-{
-    if(!src || !dst) {
-        return false;
-    }
-    FILE* in = std::fopen(src, "rb");
-    if(!in) {
-        return false;
-    }
-    FILE* out = std::fopen(dst, "wb");
-    if(!out) {
-        std::fclose(in);
-        return false;
-    }
-
-    std::array<uint8_t, 65536> buf{};
-    bool ok = true;
-    for(;;) {
-        const size_t n = std::fread(buf.data(), 1, buf.size(), in);
-        if(n == 0) {
-            break;
-        }
-        if(std::fwrite(buf.data(), 1, n, out) != n) {
-            ok = false;
-            break;
-        }
-    }
-
-    if(std::fclose(out) != 0) {
-        ok = false;
-    }
-    std::fclose(in);
-    return ok;
 }
 
 bool PrintVideoRecorder::mkdir_p(const char* path)

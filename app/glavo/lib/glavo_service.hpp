@@ -84,9 +84,6 @@ private:
 
     void send_door_rsp(const middleware::Message& msg, middleware::MsgType rsp_type);
     void send_dir_open_empty(const middleware::Message& req);
-    void send_dir_open_entries(const middleware::Message& req,
-                               const std::vector<GcodeManifestEntry>& local_entries,
-                               const std::string& base_path);
     void send_dir_open_usb(const middleware::Message& req, const std::string& usb_path);
     void stop_print_job();
     void clear_prepare_session();
@@ -131,8 +128,8 @@ private:
     std::condition_variable worker_cv_;
     std::atomic<bool> worker_running_{false};
 
-    std::vector<GcodeManifestEntry> local_manifest_;
-    std::vector<std::string>        usb_entries_;
+    std::vector<upc::GcodeManifestEntry> local_manifest_;
+    std::vector<std::string>             usb_entries_;
 
     std::string prepared_local_path_;
     bool        prepare_ready_ = false;

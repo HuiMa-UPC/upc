@@ -32,6 +32,8 @@ set(UPC_COMMON_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/ipc/msg_port.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ipc/dma_heap_buffer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ipc/ipc_dma_frame_ring.cpp
+    # fs_manifest（跨进程共用的本地清单 JSON，如 G-code / 后续打印历史）
+    ${CMAKE_CURRENT_SOURCE_DIR}/fs_manifest/gcode_manifest.cpp
 )
 
 add_library(${UPC_COMMON_TARGET} STATIC ${UPC_COMMON_SOURCES})
@@ -56,7 +58,7 @@ target_include_directories(${UPC_COMMON_TARGET}
         ${CMAKE_CURRENT_SOURCE_DIR}/process
         ${CMAKE_CURRENT_SOURCE_DIR}/ipc
         ${CMAKE_CURRENT_SOURCE_DIR}/middleware
-        ${CMAKE_CURRENT_SOURCE_DIR}/middleware
+        ${CMAKE_CURRENT_SOURCE_DIR}/fs_manifest
 )
 
 # 工具链 sysroot 缺 <linux/dma-heap.h>，用项目内 vendoring 的 UAPI 头兜底

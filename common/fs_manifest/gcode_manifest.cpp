@@ -4,7 +4,7 @@
 #include <fstream>
 #include <sstream>
 
-namespace upc::glavo {
+namespace upc {
 
 namespace {
 
@@ -202,4 +202,4 @@ bool gcode_manifest_remove_at(std::vector<GcodeManifestEntry>& entries, size_t i
     return true;
 }
 
-} // namespace upc::glavo
+} // namespace upc

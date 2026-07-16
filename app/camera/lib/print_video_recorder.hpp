@@ -29,7 +29,10 @@ struct PrintVideoJob {
     uint16_t          layer_height_um = 0;
 };
 
-/** 打印层拍照：dma 元数据环取帧 → MPP H.264；完成时 MPP EOS flush 后保存 .h264 */
+/**
+ * 打印层拍照：dma 元数据环取帧 → MPP H.264；
+ * Finish/Abort 时 EOS flush → ffmpeg remux 为 .mp4 + 抽最后一帧 .jpg，再删临时 .h264。
+ */
 class PrintVideoRecorder {
 public:
     PrintVideoRecorder() = default;
@@ -62,12 +65,16 @@ private:
     bool encode_nv12_frame(const uint8_t* nv12, size_t bytes, uint32_t layer_index);
     bool grab_latest_nv12(std::vector<uint8_t>& out);
     bool handle_layer_snap(const PrintVideoJob& job);
-    void finalize_session_h264(bool aborted);
+    void finalize_session(bool aborted);
     bool append_encoder_output_to_h264();
+    /** ffmpeg：临时 Annex-B H.264 remux 为 MP4（-c copy） */
+    bool remux_h264_to_mp4(const char* h264_path, const char* mp4_path) const;
+    /** ffmpeg：从 MP4 抽最后一帧为 JPEG 缩略图 */
+    bool extract_last_frame_thumb(const char* mp4_path, const char* jpg_path) const;
     bool remove_session_dir();
-    static bool copy_file(const char* src, const char* dst);
     static bool mkdir_p(const char* path);
     static std::string sanitize_filename(const char* name);
+    static int run_shell_cmd(const char* cmd, const char* log_tag);
 
     std::mutex              mtx_;
     std::condition_variable cv_;

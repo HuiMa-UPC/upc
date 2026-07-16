@@ -8,11 +8,12 @@
 | 文件 | 职责 |
 |------|------|
 | `main.cpp` | 进程守护、IPC Server、McuLink 连接、`MsgPort::process` 循环 |
-| `lib/glavo_service.*` | IPC 业务 + 工作线程 + 订阅/发布（目录/打印/门控/进度）；`init()` 内绑定 RingBuffer → `McuLink` |
+| `lib/glavo_service.*` | IPC 业务 + 工作线程 + 订阅/发布（USB 目录/打印/门控/进度）；`init()` 内绑定 RingBuffer → `McuLink` |
 | `lib/mcu_link.*` | TCP 运动下发 + 串口握手/传感器/换层 Snap 触发 |
 | `lib/print_video_notify.*` | 换层 Snap / 录像会话 → Camera（经 UI Hub） |
 | `lib/print_job_state.*` | 发送包计数、完成/错误标志（McuLink 与进度共用） |
 | `lib/device_config.hpp` | TCP/串口默认、Layer Snap 开关 |
+| `common/fs_manifest/gcode_manifest.*` | Local `config.json` 读写（与 UI 共用；Prepare/Delete 时更新） |
 
 解析库见 [parser/PARSER.md](../parser/PARSER.md)；线协议见 [protocol/PROTOCOL.md](../protocol/PROTOCOL.md)。
 
@@ -33,7 +34,7 @@ UI → GlavoService（工作线程）→ ParserManager → RingBuffer → McuLin
 
 | 消息 | 处理 |
 |------|------|
-| `Fs_DirOpen_Req` | 按 `ParserRegistry` 后缀列目录 |
+| `Fs_DirOpen_Req` | **仅 USB** 扫盘；非 Usb 源忽略并回空列表 |
 | `Fs_Delete_Ntf` | 删除 Local 文件（磁盘 + config.json） |
 | `UI_Print_Prepare_Req` | 轻量预处理（USB 复制、行数扫描、写 config.json） |
 | `UI_Parser_Exit_Ntf` | 取消解析（stop_parse + 清会话） |

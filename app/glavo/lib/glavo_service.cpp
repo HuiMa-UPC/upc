@@ -35,6 +35,12 @@ namespace upc::glavo {
 
 namespace parser = upc::parser;
 
+using ::upc::GcodeManifestEntry;
+using ::upc::gcode_manifest_load;
+using ::upc::gcode_manifest_save;
+using ::upc::gcode_manifest_upsert;
+using ::upc::gcode_manifest_remove_at;
+
 /* ============================================================================
  * 文件内辅助常量与工具函数
  * ============================================================================ */
@@ -50,7 +56,7 @@ constexpr size_t kFsDirMaxEntries =
 /** @brief 本地 G-code 清单配置文件路径 */
 std::string local_config_path()
 {
-    return std::string(GLAVO_LOCAL_GCODE_DIR) + "/config.json";
+    return UPC_LOCAL_GCODE_CONFIG;
 }
 
 /** @brief 将分子/分母换算为 0–100 的整数百分比（四舍五入向下取整） */
@@ -543,60 +549,6 @@ void GlavoService::send_dir_open_empty(const middleware::Message& req)
     }
 }
 
-/**
- * @brief 用本地 manifest 条目组 Fs_DirOpen_Rsp 并通过 BufferPool 发送
- * @param base_path 条目 path 字段的前缀目录
- */
-void GlavoService::send_dir_open_entries(const middleware::Message& req,
-                                         const std::vector<GcodeManifestEntry>& entries,
-                                         const std::string& base_path)
-{
-    const uint32_t count = static_cast<uint32_t>(entries.size());
-    if(count == 0) {
-        send_dir_open_empty(req);
-        return;
-    }
-
-    const size_t header_size = sizeof(middleware::FsDirHeader);
-    const size_t entries_size = static_cast<size_t>(count) * sizeof(middleware::FileEntryPayload);
-    const size_t total_size = header_size + entries_size;
-
-    const uint32_t buf_id = middleware::BufferPool::instance().allocate(total_size);
-    if (buf_id == middleware::INVALID_BUFFER_ID) {
-        send_dir_open_empty(req);
-        return;
-    }
-
-    uint8_t* base = middleware::BufferPool::instance().get_ptr(buf_id);
-    if (!base) {
-        middleware::BufferPool::instance().release(buf_id);
-        send_dir_open_empty(req);
-        return;
-    }
-
-    auto* hdr = reinterpret_cast<middleware::FsDirHeader*>(base);
-    hdr->count = count;
-    auto* files = reinterpret_cast<middleware::FileEntryPayload*>(base + header_size);
-    for (uint32_t i = 0; i < count; i++) {
-        const auto& e = entries[i];
-        files[i].index = i;
-        snprintf(files[i].name, sizeof(files[i].name), "%s", e.name.c_str());
-        const std::string full = make_full_path(base_path, e.name);
-        snprintf(files[i].path, sizeof(files[i].path), "%s", full.c_str());
-        files[i].duration_min = e.duration_sec / 60u;
-        files[i].material_g   = e.material_g;
-        files[i].file_size    = e.file_size;
-        files[i].line_count   = e.line_count;
-    }
-
-    middleware::Message rsp(middleware::MsgType::Fs_DirOpen_Rsp,
-        static_cast<middleware::ModuleId>(module_id()), req.sender_id);
-    rsp.payload = middleware::MsgPayload::from_buffer(buf_id, 0, static_cast<uint32_t>(total_size));
-    if (!publish_async(rsp)) {
-        UPC_LOG_GLAVO_SERVICE(Warn, "dir_open: publish_async failed (count=%u)", count);
-    }
-}
-
 /** @brief 扫描 USB 挂载目录，过滤支持的 G-code 后缀后组 Fs_DirOpen_Rsp */
 void GlavoService::send_dir_open_usb(const middleware::Message& req, const std::string& usb_path)
 {
@@ -674,7 +626,7 @@ void GlavoService::send_dir_open_usb(const middleware::Message& req, const std::
     }
 }
 
-/** @brief 处理 Fs_DirOpen_Req：本地清单或 USB 目录列表 */
+/** @brief 处理 Fs_DirOpen_Req：仅 USB 扫盘（Local 列表由 UI 直读 config.json） */
 void GlavoService::handle_dir_open(const middleware::Message& msg)
 {
     if(!parser::ParserRegistry::instance().has_any()) {
@@ -689,9 +641,11 @@ void GlavoService::handle_dir_open(const middleware::Message& msg)
         return;
     }
 
-    if(req.list_source == middleware::PrintFileSource::Local) {
-        gcode_manifest_load(local_config_path(), local_manifest_);
-        send_dir_open_entries(msg, local_manifest_, GLAVO_LOCAL_GCODE_DIR);
+    if(req.list_source != middleware::PrintFileSource::Usb) {
+        UPC_LOG_GLAVO_SERVICE(Warn,
+            "dir_open: ignored non-Usb source=%u (Local is UI config.json)",
+            static_cast<unsigned>(req.list_source));
+        send_dir_open_empty(msg);
         return;
     }
 

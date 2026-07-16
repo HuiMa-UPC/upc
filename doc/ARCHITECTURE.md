@@ -35,7 +35,8 @@
 
 | 符号 | 路径 | 一句话 |
 |------|------|--------|
-| `GlavoService` | `glavo_service.*` | IPC 业务编排 + 工作线程（打印/目录/门控）；`init()` 绑定 RingBuffer → `McuLink` |
+| `GlavoService` | `glavo_service.*` | IPC 业务编排 + 工作线程（打印/USB 目录/门控）；`init()` 绑定 RingBuffer → `McuLink` |
+| `gcode_manifest` | `common/fs_manifest/gcode_manifest.*` | Local `/home/Gcode/config.json`（UI 读列表，Glavo Prepare/Delete 写） |
 | `McuLink` | `mcu_link.*` | TCP 运动 + 串口握手/传感器 |
 | `PrintJobState` | `print_job_state.*` | 打印任务计数/状态 |
 | `PrintVideoNotify` | `print_video_notify.*` | 换层 Snap / 录像会话 IPC → Camera |
@@ -46,7 +47,7 @@
 | 符号 | 路径 | 一句话 |
 |------|------|--------|
 | `CameraService` | `camera_service.*` | IPC Server + SHM 推流 + 录像分派 |
-| `PrintVideoRecorder` | `print_video_recorder.*` | SHM 取帧 + MPP H.264 + ffmpeg MP4 |
+| `PrintVideoRecorder` | `print_video_recorder.*` | MPP H.264 → ffmpeg remux MP4 + 末帧 jpg |
 | `ViCapture` | `vi_capture.*` | rkaiq + V4L2 NV12 |
 | `CameraDmaFrameSource` | `camera_dma_frame_source.*` | V4L2 dma fd 导出、stride padding |
 | `device_config.hpp` | 头文件 | 设备/分辨率/IQ/SHM/录像路径宏 |

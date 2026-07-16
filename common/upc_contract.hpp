@@ -354,15 +354,15 @@ struct DoorResultPayload {
     uint8_t ok;
 };
 
-/** 打印文件来源（DirOpen / Prepare / Start 共用；Local 列表来自 config.json） */
+/** 打印文件来源（DirOpen 仅 USB；Prepare / Start 共用；Local 列表由 UI 读 config.json） */
 enum class PrintFileSource : uint8_t {
     Local = 0,
     Usb   = 1,
 };
 
-/** Fs_DirOpen_Req：UI 只传来源序号，目录路径由 Glavo 配置 */
+/** Fs_DirOpen_Req：仅 USB；路径由 Glavo device_config 配置（Local 不走此消息） */
 struct FsDirOpenReqPayload {
-    PrintFileSource list_source;
+    PrintFileSource list_source; /**< 须为 Usb */
     uint8_t         reserved[3];
 };
 
@@ -454,7 +454,7 @@ struct CameraFrameNtfPayload {
 /** GLAVO→CAMERA 打印录像会话（Start/Finish/Abort 共用） */
 struct PrintVideoSessionPayload {
     char     session_id[32];
-    char     job_name[64];   /**< 用于输出 MP4 文件名 */
+    char     job_name[64];   /**< 用于输出 /home/video/{job}.mp4 文件名 */
     uint32_t width;          /**< 0=Camera 默认 */
     uint32_t height;         /**< 0=Camera 默认 */
     uint32_t layer_fps;      /**< MP4 层帧率；0=默认 */
