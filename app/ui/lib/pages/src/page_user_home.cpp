@@ -107,6 +107,7 @@ void home_trigger_door_open(void)
 
 /* ---------- 顶部状态条 ---------- */
 lv_obj_t *g_topbar       = nullptr;   /**< 顶部状态条根（打印中浮于摄像头之上） */
+lv_obj_t *g_lbl_wifi     = nullptr;   /**< 顶栏 WiFi 图标（按连接状态变色） */
 lv_obj_t *g_lbl_dev_name = nullptr;
 lv_obj_t *g_dot_status   = nullptr;
 lv_obj_t *g_lbl_status   = nullptr;
@@ -402,6 +403,7 @@ lv_obj_t *build_topbar(lv_obj_t *parent)
     lv_label_set_text(lbl_wifi, LV_SYMBOL_WIFI);
     lv_obj_set_style_text_color(lbl_wifi, user_color_text, 0);
     lv_obj_set_style_text_font(lbl_wifi, user_font_text(), 0);
+    g_lbl_wifi = lbl_wifi;
 
     g_lbl_dev_name = lv_label_create(bar);
     lv_label_set_text(g_lbl_dev_name, "SNOWPOD A1");
@@ -1153,7 +1155,8 @@ lv_obj_t *build_monitor_area(lv_obj_t *parent)
 
 static void deferred_monitor_camera_start_cb(void * /*user*/)
 {
-    ui::CameraPreviewPlayer::instance().start(g_monitor_camera_image, g_monitor_camera_hint);
+    ui::CameraPreviewPlayer::instance().start(
+        g_monitor_camera_image, g_monitor_camera_hint, "monitor");
 }
 
 void enter_monitor_mode(void)
@@ -1257,6 +1260,12 @@ void page_user_home_refresh(bool /*force*/)
 {
     const user_home_snapshot_t &snap = g_snap;
 
+    if(g_lbl_wifi) {
+        /* 连上=正常白，断开=灰暗，作为顶栏 WiFi 连接状态指示 */
+        lv_obj_set_style_text_color(g_lbl_wifi,
+            snap.wifi_connected ? user_color_text : user_color_text_dim, 0);
+    }
+
     if(g_lbl_dev_name) {
         lv_label_set_text(g_lbl_dev_name, snap.device_name);
     }
@@ -1332,7 +1341,8 @@ lv_obj_t *page_user_home_create(lv_obj_t *parent)
 
 static void deferred_camera_start_cb(void* /*user*/)
 {
-    ui::CameraPreviewPlayer::instance().start(g_camera_image, g_camera_hint);
+    ui::CameraPreviewPlayer::instance().start(
+        g_camera_image, g_camera_hint, "print");
 }
 
 void page_user_home_request_camera_preview(void)

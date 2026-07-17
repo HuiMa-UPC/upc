@@ -6,9 +6,9 @@
 
 | 进程 | 可执行文件 | 入口 | 模块文档 | 日志 |
 |------|------------|------|----------|------|
-| UI | `rongsu_ui` | `app/ui/main.cpp` | [ui/UI.md](../app/ui/UI.md) | `/var/log/rongsu_ui{1,2,3}.log` |
-| Glavo | `rongsu_glavo` | `app/glavo/main.cpp` | [glavo/GLAVO.md](../app/glavo/GLAVO.md) | `/var/log/rongsu_glavo{1,2,3}.log` |
-| 相机 | `rongsu_camera` | `app/camera/main.cpp` | [camera/CAMERA.md](../app/camera/CAMERA.md) | `/var/log/rongsu_camera{1,2,3}.log` |
+| UI | `rongsu_ui` | `app/ui/main.cpp` | [ui/UI.md](../app/ui/UI.md) | `/data/rongsu_ui{1,2,3}.log` |
+| Glavo | `rongsu_glavo` | `app/glavo/main.cpp` | [glavo/GLAVO.md](../app/glavo/GLAVO.md) | `/data/rongsu_glavo{1,2,3}.log` |
+| 相机 | `rongsu_camera` | `app/camera/main.cpp` | [camera/CAMERA.md](../app/camera/CAMERA.md) | `/data/rongsu_camera{1,2,3}.log` |
 
 启动：`scripts/rongsu.sh start`（Glavo → `rongsu_camera` → UI）。  
 编译：`./build.sh`（Release + 工具链，产物在 `output/`；`clean` / `reconfigure` 见脚本头注释）。
@@ -37,6 +37,8 @@
 |------|------|--------|
 | `GlavoService` | `glavo_service.*` | IPC 业务编排 + 工作线程（打印/USB 目录/门控）；`init()` 绑定 RingBuffer → `McuLink` |
 | `gcode_manifest` | `common/fs_manifest/gcode_manifest.*` | Local `/home/Gcode/config.json`（UI 读列表，Glavo Prepare/Delete 写） |
+| `print_history_manifest` | `common/fs_manifest/print_history_manifest.*` | `/home/video/manifest.json`（Camera upsert，UI 历史页读） |
+| `print_history_manifest` | `common/fs_manifest/print_history_manifest.*` | `/home/video/manifest.json`（Camera 写，UI 历史页读） |
 | `McuLink` | `mcu_link.*` | TCP 运动 + 串口握手/传感器 |
 | `PrintJobState` | `print_job_state.*` | 打印任务计数/状态 |
 | `PrintVideoNotify` | `print_video_notify.*` | 换层 Snap / 录像会话 IPC → Camera |
@@ -47,7 +49,7 @@
 | 符号 | 路径 | 一句话 |
 |------|------|--------|
 | `CameraService` | `camera_service.*` | IPC Server + SHM 推流 + 录像分派 |
-| `PrintVideoRecorder` | `print_video_recorder.*` | MPP H.264 → ffmpeg remux MP4 + 末帧 jpg |
+| `PrintVideoRecorder` | `print_video_recorder.*` | MPP H.264 → remux MP4/jpg + upsert `manifest.json` |
 | `ViCapture` | `vi_capture.*` | rkaiq + V4L2 NV12 |
 | `CameraDmaFrameSource` | `camera_dma_frame_source.*` | V4L2 dma fd 导出、stride padding |
 | `device_config.hpp` | 头文件 | 设备/分辨率/IQ/SHM/录像路径宏 |

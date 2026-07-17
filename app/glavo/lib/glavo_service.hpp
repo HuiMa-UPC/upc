@@ -5,6 +5,7 @@
 
 #include "gcode_manifest.hpp"
 #include "mcu_link.hpp"
+#include "wifi_manager.hpp"
 #include "msg_port.hpp"
 #include "msg_runtime.hpp"
 #include <atomic>
@@ -60,6 +61,18 @@ private:
     void handle_mcu_ota_start(const middleware::Message& msg);
     void handle_mcu_ota_cancel(const middleware::Message& msg);
     void publish_mcu_ota_status(const middleware::McuOtaStatusPayload& st);
+
+    /* ---- 网络 / WiFi：UI_Wifi_* → WifiManager(ConnMan)，回推 State/Scan/Saved ---- */
+    void handle_wifi_enable(const middleware::Message& msg);
+    void handle_wifi_scan(const middleware::Message& msg);
+    void handle_wifi_connect(const middleware::Message& msg);
+    void handle_wifi_forget(const middleware::Message& msg);
+    void handle_wifi_disconnect(const middleware::Message& msg);
+    void handle_wifi_info(const middleware::Message& msg);
+    void handle_wifi_saved(const middleware::Message& msg);
+    void publish_wifi_state(const WifiSnapshot& snap);
+    void publish_wifi_list(WifiListKind kind, const std::vector<WifiEntry>& entries);
+    void publish_wifi_connect_result(bool ok, const std::string& ssid);
 
     /* ---- 调试页手动控制：UI_Debug_* → serial_debug 组帧 → McuLink 串口下发 ----
      * 振镜（以太网 TCP）、回粉电机 后端逻辑预留，故不订阅、不下发。 */

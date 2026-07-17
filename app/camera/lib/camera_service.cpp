@@ -301,9 +301,12 @@ void CameraService::stream_thread_fn()
 
     using clock = std::chrono::steady_clock;
     auto stats_since   = clock::now();
-    uint32_t frames_1s = 0;
-    uint32_t last_seq  = 0;
-    uint32_t last_slot = 0;
+    uint32_t frames_1s       = 0;
+    uint32_t last_seq        = 0;
+    uint32_t last_slot       = 0;
+    uint32_t slot_fail_1s    = 0;
+    uint32_t dequeue_fail_1s = 0;
+    uint32_t timeout_1s      = 0;
     bool logged_first_commit = false;
     uint32_t warmup_left = stream_warmup_frames_;
 
@@ -316,10 +319,13 @@ void CameraService::stream_thread_fn()
     while(!stop_stream_.load(std::memory_order_relaxed)) {
         const auto now = clock::now();
         if(now - stats_since >= std::chrono::seconds(1)) {
-            UPC_LOG_CAMERA_SERVICE(Debug,
-                "stream 1s: committed=%u last_seq=%u last_slot=%u",
-                frames_1s, last_seq, last_slot);
-            frames_1s   = 0;
+            /* 流诊断受 UPC_MOD_CAMERA_PREVIEW 控制，便于与 UI decode 1s 对照 */
+            UPC_LOG_CAMERA_PREVIEW(Debug,
+                "stream 1s: committed=%u last_seq=%u last_slot=%u "
+                "slot_fail=%u dequeue_fail=%u release_timeout=%u",
+                frames_1s, last_seq, last_slot,
+                slot_fail_1s, dequeue_fail_1s, timeout_1s);
+            frames_1s = slot_fail_1s = dequeue_fail_1s = timeout_1s = 0;
             stats_since = now;
         }
 
@@ -349,6 +355,7 @@ void CameraService::stream_thread_fn()
 
         std::optional<uint32_t> slot = producer_.acquire_write_slot();
         if(!slot) {
+            ++slot_fail_1s;
             std::this_thread::sleep_for(std::chrono::milliseconds(2));
             continue;
         }
@@ -356,6 +363,7 @@ void CameraService::stream_thread_fn()
         std::optional<uint32_t> buf_idx = capture_.dequeue_frame(2000);
         if(!buf_idx) {
             producer_.cancel_write_slot(*slot);
+            ++dequeue_fail_1s;
             if(stop_stream_.load()) {
                 break;
             }
@@ -369,6 +377,7 @@ void CameraService::stream_thread_fn()
             if(padded_idx < 0) {
                 capture_.queue_frame(*buf_idx);
                 producer_.cancel_write_slot(*slot);
+                ++slot_fail_1s;
                 std::this_thread::sleep_for(std::chrono::milliseconds(2));
                 continue;
             }
@@ -385,6 +394,16 @@ void CameraService::stream_thread_fn()
 
         const uint32_t seq =
             producer_.commit_slot(*slot, monotonic_us(), slot_buf_idx);
+        if(seq == 0) {
+            producer_.cancel_write_slot(*slot);
+            ++slot_fail_1s;
+            if(dma_source_.stride_aligned()) {
+                capture_.queue_frame(slot_buf_idx);
+            } else {
+                dma_source_.release_padded(slot_buf_idx);
+            }
+            continue;
+        }
 
         if(!logged_first_commit) {
             UPC_LOG_CAMERA_SERVICE(Info,
@@ -403,6 +422,7 @@ void CameraService::stream_thread_fn()
         const bool slot_released =
             producer_.wait_slot_empty(*slot, 1000);
         if(!slot_released) {
+            ++timeout_1s;
             UPC_LOG_CAMERA_SERVICE(Warn,
                 "slot release timeout slot=%u seq=%u buf_idx=%u (backpressure)",
                 *slot, seq, slot_buf_idx);

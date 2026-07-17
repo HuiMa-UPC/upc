@@ -1,6 +1,8 @@
 #include "print_video_recorder.hpp"
 
 #include "device_config.hpp"
+#include "gcode_manifest.hpp"
+#include "print_history_manifest.hpp"
 #include "rs_log.hpp"
 
 #include <rockchip/mpp_err.h>
@@ -17,6 +19,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <ctime>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
@@ -100,6 +103,7 @@ void PrintVideoRecorder::on_session_start(
         }
     }
     job_name_    = sanitize_filename(info.job_name);
+    start_unix_  = static_cast<int64_t>(std::time(nullptr));
     if(info.width > 0) {
         stream_width_ = info.width;
     }
@@ -129,9 +133,10 @@ void PrintVideoRecorder::on_session_start(
     session_active_ = true;
     open_consumer();
     UPC_LOG_CAMERA_SERVICE(Info,
-        "print_video session start id=%s job=%s dir=%s %ux%u layer_fps=%u",
+        "print_video session start id=%s job=%s dir=%s %ux%u layer_fps=%u start_unix=%lld",
         session_id_.c_str(), job_name_.c_str(), session_dir_.c_str(),
-        stream_width_, stream_height_, layer_fps_);
+        stream_width_, stream_height_, layer_fps_,
+        static_cast<long long>(start_unix_));
 }
 
 void PrintVideoRecorder::on_layer_snap(
@@ -617,23 +622,31 @@ void PrintVideoRecorder::finalize_session(bool aborted)
 
     if(!had_h264) {
         UPC_LOG_CAMERA_SERVICE(Warn,
-            "print_video %s with no frames session=%s",
+            "print_video %s with no frames session=%s (no manifest)",
             aborted ? "abort" : "finish", session_id_.c_str());
         remove_session_dir();
         session_id_.clear();
         session_dir_.clear();
         h264_path_.clear();
+        start_unix_ = 0;
         header_written_ = false;
         return;
     }
 
     mkdir_p(CAMERA_PRINT_VIDEO_OUT_DIR);
+
+    /* 命名：{job_name}_{YYYYMMDD_HHMMSS}.mp4 / .jpg（同名打印保留多份） */
+    const int64_t stamp_unix =
+        start_unix_ > 0 ? start_unix_ : static_cast<int64_t>(std::time(nullptr));
+    const std::string stamp = format_stamp_local(stamp_unix);
+    const std::string base =
+        (job_name_.empty() ? std::string("print") : job_name_) + "_" + stamp;
+    const std::string video_name = base + CAMERA_PRINT_VIDEO_OUT_EXT;
+    const std::string thumb_name = base + CAMERA_PRINT_VIDEO_THUMB_EXT;
     const std::string mp4_path =
-        std::string(CAMERA_PRINT_VIDEO_OUT_DIR) + "/" + job_name_ +
-        CAMERA_PRINT_VIDEO_OUT_EXT;
+        std::string(CAMERA_PRINT_VIDEO_OUT_DIR) + "/" + video_name;
     const std::string jpg_path =
-        std::string(CAMERA_PRINT_VIDEO_OUT_DIR) + "/" + job_name_ +
-        CAMERA_PRINT_VIDEO_THUMB_EXT;
+        std::string(CAMERA_PRINT_VIDEO_OUT_DIR) + "/" + thumb_name;
 
     (void)std::remove(mp4_path.c_str());
     (void)std::remove(jpg_path.c_str());
@@ -643,11 +656,11 @@ void PrintVideoRecorder::finalize_session(bool aborted)
             "print_video remux fail keep h264=%s dst=%s%s",
             h264_path_.c_str(), mp4_path.c_str(),
             aborted ? " (aborted)" : "");
-        /* remux 失败：保留 /tmp 下裸流便于排查，不清 session 目录 */
+        /* remux 失败：保留 /tmp 下裸流便于排查，不清 session 目录、不写 manifest */
         session_id_.clear();
-        /* 故意不清 session_dir_/h264_path_ 的磁盘文件；仅复位状态 */
         session_dir_.clear();
         h264_path_.clear();
+        start_unix_ = 0;
         header_written_ = false;
         return;
     }
@@ -657,6 +670,8 @@ void PrintVideoRecorder::finalize_session(bool aborted)
             "print_video thumb fail mp4=%s jpg=%s (mp4 kept)",
             mp4_path.c_str(), jpg_path.c_str());
     }
+
+    upsert_print_history(aborted, video_name, thumb_name);
 
     /* remux 成功后删除临时裸流并清会话目录 */
     (void)std::remove(h264_path_.c_str());
@@ -669,6 +684,7 @@ void PrintVideoRecorder::finalize_session(bool aborted)
     session_id_.clear();
     session_dir_.clear();
     h264_path_.clear();
+    start_unix_ = 0;
     header_written_ = false;
 }
 
@@ -721,6 +737,83 @@ std::string PrintVideoRecorder::sanitize_filename(const char* name)
         s = "print";
     }
     return s;
+}
+
+std::string PrintVideoRecorder::format_stamp_local(int64_t unix_sec)
+{
+    std::time_t t = static_cast<std::time_t>(unix_sec);
+    if(t <= 0) {
+        t = std::time(nullptr);
+    }
+    std::tm tm_buf{};
+    if(localtime_r(&t, &tm_buf) == nullptr) {
+        return "19700101_000000";
+    }
+    char buf[32];
+    std::snprintf(buf, sizeof(buf), "%04d%02d%02d_%02d%02d%02d",
+                  tm_buf.tm_year + 1900, tm_buf.tm_mon + 1, tm_buf.tm_mday,
+                  tm_buf.tm_hour, tm_buf.tm_min, tm_buf.tm_sec);
+    return buf;
+}
+
+void PrintVideoRecorder::upsert_print_history(
+    bool aborted, const std::string& video_name,
+    const std::string& thumb_name) const
+{
+    if(video_name.empty()) {
+        return;
+    }
+
+    const int64_t start =
+        start_unix_ > 0 ? start_unix_ : static_cast<int64_t>(std::time(nullptr));
+    const int64_t end = static_cast<int64_t>(std::time(nullptr));
+    uint32_t duration = 0;
+    if(end > start) {
+        duration = static_cast<uint32_t>(end - start);
+    }
+
+    upc::PrintHistoryEntry entry;
+    entry.job_name     = job_name_.empty() ? "print" : job_name_;
+    entry.start_unix   = start;
+    entry.duration_sec = duration;
+    entry.material_g   = upc::print_history_lookup_material_g(
+        UPC_LOCAL_GCODE_CONFIG, entry.job_name);
+    entry.status = aborted ? upc::PrintHistoryStatus::Terminated
+                           : upc::PrintHistoryStatus::Complete;
+    entry.video  = video_name;
+    entry.thumb  = thumb_name;
+
+    std::vector<upc::PrintHistoryEntry> entries;
+    if(!upc::print_history_manifest_load(UPC_PRINT_VIDEO_MANIFEST, entries)) {
+        UPC_LOG_CAMERA_SERVICE(Warn,
+            "print_history load fail path=%s (rewrite)",
+            UPC_PRINT_VIDEO_MANIFEST);
+        entries.clear();
+    }
+    upc::print_history_manifest_upsert(entries, entry);
+
+    /* 写临时文件再 rename，避免 UI 读到半截 JSON */
+    const std::string tmp_path =
+        std::string(UPC_PRINT_VIDEO_MANIFEST) + ".tmp";
+    if(!upc::print_history_manifest_save(tmp_path, entries)) {
+        UPC_LOG_CAMERA_SERVICE(Error,
+            "print_history save fail tmp=%s", tmp_path.c_str());
+        (void)std::remove(tmp_path.c_str());
+        return;
+    }
+    if(std::rename(tmp_path.c_str(), UPC_PRINT_VIDEO_MANIFEST) != 0) {
+        UPC_LOG_CAMERA_SERVICE(Error,
+            "print_history rename fail %s -> %s: %s",
+            tmp_path.c_str(), UPC_PRINT_VIDEO_MANIFEST, std::strerror(errno));
+        (void)std::remove(tmp_path.c_str());
+        return;
+    }
+
+    UPC_LOG_CAMERA_SERVICE(Info,
+        "print_history upsert job=%s status=%s video=%s duration=%u material_g=%.2f",
+        entry.job_name.c_str(), upc::print_history_status_str(entry.status),
+        entry.video.c_str(), entry.duration_sec,
+        static_cast<double>(entry.material_g));
 }
 
 } // namespace upc::camera

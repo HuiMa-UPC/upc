@@ -26,6 +26,13 @@ using PrintPauseDoneCb = std::function<void(bool paused)>;
 using SupplyStatusCb   = std::function<void(const middleware::SupplyStatusPayload&)>;
 using PrintPrepareDoneCb = std::function<void(bool ok)>;
 using McuOtaStatusCb   = std::function<void(const middleware::McuOtaStatusPayload&)>;
+/* 网络 / WiFi（前端预留，待后端对齐） */
+using WifiStateCb      = std::function<void(const middleware::WifiStatePayload&)>;
+using WifiListCb       = std::function<void(const middleware::WifiEntryPayload* items,
+                                            uint32_t count)>;
+using WifiConnectResultCb = std::function<void(bool ok, const char* ssid)>;
+
+                                            
 
 class UiMsgProxy {
 public:
@@ -81,6 +88,19 @@ public:
     void send_mcu_ota_cancel();
     void register_mcu_ota_status(McuOtaStatusCb cb);
 
+    /* ---- 网络 / WiFi（前端预留，后端接口到位后即可用；未上线时无人响应，不影响运行） ---- */
+    void send_wifi_enable(bool enable);
+    void send_wifi_scan();
+    void send_wifi_connect(const char* ssid, const char* password);
+    void send_wifi_forget(const char* ssid);
+    void send_wifi_disconnect(const char* ssid);   /**< 断开当前连接 */
+    void send_wifi_info();
+    void send_wifi_saved_query();   /**< 请求已保存网络列表 → GLAVO_Wifi_Saved_Rsp */
+    void register_wifi_state(WifiStateCb cb);   /**< GLAVO_Wifi_State_Ntf */
+    void register_wifi_scan(WifiListCb cb);     /**< GLAVO_Wifi_Scan_Rsp */
+    void register_wifi_saved(WifiListCb cb);    /**< GLAVO_Wifi_Saved_Rsp */
+    void register_wifi_connect_result(WifiConnectResultCb cb); /**< GLAVO_Wifi_Connect_Rsp */
+
 private:
     UiMsgProxy() = default;
 
@@ -102,6 +122,9 @@ private:
         middleware::MsgPort::instance().publish_async(msg);
     }
 
+    /** 解析 WiFi 列表消息（[WifiListHeader][WifiEntryPayload×N]）并回调 */
+    void dispatch_wifi_list(const middleware::Message& msg, const WifiListCb& cb);
+
     std::vector<middleware::Subscription> subs_;
 
     EnvUpdateCb      env_update_cb_;
@@ -117,6 +140,10 @@ private:
     SupplyStatusCb   supply_status_cb_;
     PrintPrepareDoneCb print_prepare_done_cb_;
     McuOtaStatusCb   mcu_ota_status_cb_;
+    WifiStateCb      wifi_state_cb_;
+    WifiListCb       wifi_scan_cb_;
+    WifiListCb       wifi_saved_cb_;
+    WifiConnectResultCb wifi_connect_result_cb_;
 };
 
 } // namespace ui

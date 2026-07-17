@@ -26,16 +26,16 @@ scripts/rongsu.sh start   # glavo + rongsu_camera → ui
 | `ipc/` | Unix socket、`MsgPort`、SHM/dma 帧环 |
 | `debug/` | `UPC_LOG_*`、`upc_sys_monitor` |
 | `process/` | PID、daemon、`log_rotating` |
-| `fs_manifest/` | 本地清单 JSON（G-code `config.json`；后续可加打印历史等） |
+| `fs_manifest/` | 本地清单 JSON（G-code `config.json`、打印历史 `manifest.json`） |
 
 ## 进程与日志
 
 | 进程 | 日志 | PID |
 |------|------|-----|
-| UI | `/var/log/rongsu_ui{1,2,3}.log` | `/var/run/rongsu_ui.pid` |
-| Glavo | `/var/log/rongsu_glavo{1,2,3}.log` | `/var/run/rongsu_glavo.pid` |
-| Camera | `/var/log/rongsu_camera{1,2,3}.log` | `/var/run/rongsu_camera.pid` |
-| Broker | `/var/log/rongsu_broker{1,2,3}.log` | `/var/run/rongsu_broker.pid` |
+| UI | `/data/rongsu_ui{1,2,3}.log` | `/var/run/rongsu_ui.pid` |
+| Glavo | `/data/rongsu_glavo{1,2,3}.log` | `/var/run/rongsu_glavo.pid` |
+| Camera | `/data/rongsu_camera{1,2,3}.log` | `/var/run/rongsu_camera.pid` |
+| Broker | `/data/rongsu_broker{1,2,3}.log` | `/var/run/rongsu_broker.pid` |
 
 各业务进程为 IPC **Client**，连中央 **Broker**（`rongsu_broker`）。
 
@@ -167,8 +167,9 @@ scripts/rongsu.sh start   # glavo + rongsu_camera → ui
 | `APP_Camera_Frame_Ntf` | — | Camera→UI | `CameraFrameNtfPayload` | （可选） | 帧序号；默认关 |
 | `APP_Print_Video_Session_Start_Ntf` | — | Glavo→Camera（Hub FWD） | `PrintVideoSessionPayload` | — | `PrintVideoNotify` / `CameraService` |
 | `APP_Print_Layer_Snap_Ntf` | — | Glavo→Camera（Hub FWD） | `PrintVideoLayerSnapPayload` | — | 换层 Snap |
-| `APP_Print_Video_Session_Finish_Ntf` | — | Glavo→Camera（Hub FWD） | `PrintVideoSessionPayload` | — | ffmpeg remux MP4 + 末帧 jpg |
-| `APP_Print_Video_Session_Abort_Ntf` | — | Glavo→Camera（Hub FWD） | `PrintVideoSessionPayload` | — | 有帧同样 remux；0 帧清临时 |
+| `APP_Print_Video_Session_Finish_Ntf` | — | Glavo→Camera（Hub FWD） | `PrintVideoSessionPayload` | — | remux MP4 + jpg + manifest `complete` |
+| `APP_Print_Video_Session_Abort_Ntf` | — | Glavo→Camera（Hub FWD） | `PrintVideoSessionPayload` | — | 有帧同样 remux + manifest `terminated` |
+| `APP_Print_Video_Session_Abort_Ntf` | — | Glavo→Camera（Hub FWD） | `PrintVideoSessionPayload` | — | 有帧同样 remux + manifest `terminated`；0 帧清临时 |
 | `UI_Debug_Axis_Jog_Req` | — | UI→Glavo | `DebugAxisJogPayload` | `DebugMsgProxy::send_axis_jog` | **后端待实现** |
 | `UI_Debug_Axis_Hold_Stop_Req` | — | UI→Glavo | `DebugAxisPayload` | `send_axis_hold_stop` | 长按松手停 |
 | `UI_Debug_Axis_SetZero_Req` | — | UI→Glavo | `DebugAxisPayload` | `send_axis_set_zero` | Z 工作零点 |
@@ -250,6 +251,8 @@ rongsu_broker ──listen──► /tmp/upc_broker.sock ◄── UI / Glavo / 
 | `common/middleware/message_bus/msg_runtime.hpp` | 进程内 `Message` / `MsgPayload`（依赖 BufferPool） | 平台组 |
 | `common/CMakeLists.txt` | 统一静态库 `upc::common`（兼容别名 `upc::ipc` 等） | 平台组 |
 | `common/fs_manifest/gcode_manifest.*` | Local `/home/Gcode/config.json` 读写（UI 读列表 + Glavo 写） | 平台 / UI / Glavo |
+| `common/fs_manifest/print_history_manifest.*` | `/home/video/manifest.json`（Camera 写，UI 历史页读） | 平台 / Camera / UI |
+| `common/fs_manifest/print_history_manifest.*` | `/home/video/manifest.json`（Camera remux 后写；UI 历史页读） | 平台 / Camera / UI |
 | `common/ipc/msg_port.hpp` | 业务唯一 IPC 入口 | 平台组 |
 | `common/ipc/ipc_wire.*` | 线协议 | 平台组 |
 | `common/ipc/ipc_endpoint.*` | Socket 传输 | 平台组 |
@@ -452,9 +455,9 @@ ParserManager → RingBuffer → McuLink（TCP + 串口）
 
 | 函数 | 可执行文件 | PID 文件 | 日志（前缀，实际为 `N.log`，N=1..3） |
 |------|------------|----------|------|
-| `process_config_ui()` | `rongsu_ui` | `/var/run/rongsu_ui.pid` | `/var/log/rongsu_ui` |
-| `process_config_glavo()` | `rongsu_glavo` | `/var/run/rongsu_glavo.pid` | `/var/log/rongsu_glavo` |
-| `process_config_camera()` | `rongsu_camera` | `/var/run/rongsu_camera.pid` | `/var/log/rongsu_camera` |
+| `process_config_ui()` | `rongsu_ui` | `/var/run/rongsu_ui.pid` | `/data/rongsu_ui` |
+| `process_config_glavo()` | `rongsu_glavo` | `/var/run/rongsu_glavo.pid` | `/data/rongsu_glavo` |
+| `process_config_camera()` | `rongsu_camera` | `/var/run/rongsu_camera.pid` | `/data/rongsu_camera` |
 
 各进程 `main.cpp` 支持 `{start|stop|status|run}`；`start` 时 stderr/stdout 重定向到 `{log_base}N.log`（单文件上限 5MB，三文件循环；重启不清空已有文件）。
 

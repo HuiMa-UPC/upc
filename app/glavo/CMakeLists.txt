@@ -7,6 +7,7 @@ set(UPC_GLAVO_SOURCES
     ${GLAVO_LIB_DIR}/mcu_ota_session.cpp
     ${GLAVO_LIB_DIR}/print_job_state.cpp
     ${GLAVO_LIB_DIR}/print_video_notify.cpp
+    ${GLAVO_LIB_DIR}/wifi_manager.cpp
 )
 
 add_library(${UPC_GLAVO_TARGET} STATIC ${UPC_GLAVO_SOURCES})
@@ -21,6 +22,21 @@ target_include_directories(${UPC_GLAVO_TARGET}
         ${CMAKE_SOURCE_DIR}/common/ipc
 )
 
+# ---------- wpa_supplicant 控制接口（WiFi：libwpa_client / wpa_ctrl.h） ----------
+if(CMAKE_SYSROOT)
+    find_library(UPC_WPA_CLIENT_LIB NAMES wpa_client
+        PATHS
+            ${CMAKE_SYSROOT}/usr/lib
+            ${CMAKE_SYSROOT}/lib
+        NO_DEFAULT_PATH)
+else()
+    find_library(UPC_WPA_CLIENT_LIB NAMES wpa_client)
+endif()
+
+if(NOT UPC_WPA_CLIENT_LIB)
+    message(FATAL_ERROR "libwpa_client not found in sysroot (required by WifiManager)")
+endif()
+
 target_link_libraries(${UPC_GLAVO_TARGET}
     PUBLIC
         upc::protocol
@@ -28,6 +44,8 @@ target_link_libraries(${UPC_GLAVO_TARGET}
         middleware::port
         upc::ipc
         upc::debug
+    PRIVATE
+        ${UPC_WPA_CLIENT_LIB}
 )
 
 target_compile_options(${UPC_GLAVO_TARGET}

@@ -1,5 +1,6 @@
 #include "mcu_link.hpp"
 #include "protocol.hpp"
+#include "wifi_manager.hpp"
 #include "print_job_state.hpp"
 #include "print_video_notify.hpp"
 #include "parser_manager.hpp"
@@ -593,8 +594,12 @@ void McuLink::publish_env_update_ntf()
     middleware::EnvSnapshotPayload p{};
     std::snprintf(p.device_name, sizeof(p.device_name), "%s", "Rongsu-3D");
     p.status         = static_cast<uint32_t>(status);
-    p.wifi_connected = is_tcp_connected() ? 1 : 0;
-    p.signal_bars    = p.wifi_connected ? 3 : 0;
+
+    /* WiFi 图标状态取 ConnMan 真实值（首页与设置页共用同一数据源）。 */
+    const WifiSnapshot wifi = WifiManager::instance().snapshot();
+    p.wifi_connected = wifi.connected ? 1 : 0;
+    p.signal_bars    = wifi.signal_bars;
+
     p.pm25_indoor    = snap.pm25_indoor;
     p.pm25_cabin     = snap.pm25_cabin;
     p.temperature_c  = snap.temperature_c;

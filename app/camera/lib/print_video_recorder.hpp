@@ -8,6 +8,7 @@
 #include <atomic>
 #include <condition_variable>
 #include <cstdint>
+#include <ctime>
 #include <functional>
 #include <mutex>
 #include <queue>
@@ -31,7 +32,8 @@ struct PrintVideoJob {
 
 /**
  * 打印层拍照：dma 元数据环取帧 → MPP H.264；
- * Finish/Abort 时 EOS flush → ffmpeg remux 为 .mp4 + 抽最后一帧 .jpg，再删临时 .h264。
+ * Finish/Abort 时 EOS flush → ffmpeg remux 为 .mp4 + 抽最后一帧 .jpg，再删临时 .h264，
+ * 并 upsert /home/video/manifest.json（含 complete/terminated 状态）。
  */
 class PrintVideoRecorder {
 public:
@@ -71,9 +73,15 @@ private:
     bool remux_h264_to_mp4(const char* h264_path, const char* mp4_path) const;
     /** ffmpeg：从 MP4 抽最后一帧为 JPEG 缩略图 */
     bool extract_last_frame_thumb(const char* mp4_path, const char* jpg_path) const;
+    /** remux 成功后 upsert /home/video/manifest.json */
+    void upsert_print_history(bool aborted,
+                              const std::string& video_name,
+                              const std::string& thumb_name) const;
     bool remove_session_dir();
     static bool mkdir_p(const char* path);
     static std::string sanitize_filename(const char* name);
+    /** 本地墙钟 → YYYYMMDD_HHMMSS */
+    static std::string format_stamp_local(int64_t unix_sec);
     static int run_shell_cmd(const char* cmd, const char* log_tag);
 
     std::mutex              mtx_;
@@ -95,6 +103,7 @@ private:
     std::string job_name_;
     std::string session_dir_;
     std::string h264_path_;
+    int64_t     start_unix_ = 0; /**< Session_Start 墙钟秒，写入 manifest */
 
     void*    mpp_ctx_      = nullptr;
     void*    mpp_api_      = nullptr;

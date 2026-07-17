@@ -97,7 +97,7 @@
 #define UPC_MOD_CAMERA_SERVICE 1
 #endif
 #ifndef UPC_MOD_CAMERA_PREVIEW
-#define UPC_MOD_CAMERA_PREVIEW 0
+#define UPC_MOD_CAMERA_PREVIEW 1
 #endif
 #ifndef UPC_MOD_MCU_OTA
 #define UPC_MOD_MCU_OTA 1
@@ -138,7 +138,7 @@ struct ProcessConfig {
 inline ProcessConfig process_config_ui() {
     return ProcessConfig{
         "/var/run/rongsu_ui.pid",
-        "/var/log/rongsu_ui",
+        "/data/rongsu_ui",
         "rongsu_ui",
     };
 }
@@ -146,7 +146,7 @@ inline ProcessConfig process_config_ui() {
 inline ProcessConfig process_config_glavo() {
     return ProcessConfig{
         "/var/run/rongsu_glavo.pid",
-        "/var/log/rongsu_glavo",
+        "/data/rongsu_glavo",
         "rongsu_glavo",
     };
 }
@@ -154,7 +154,7 @@ inline ProcessConfig process_config_glavo() {
 inline ProcessConfig process_config_camera() {
     return ProcessConfig{
         "/var/run/rongsu_camera.pid",
-        "/var/log/rongsu_camera",
+        "/data/rongsu_camera",
         "rongsu_camera",
     };
 }
@@ -162,7 +162,7 @@ inline ProcessConfig process_config_camera() {
 inline ProcessConfig process_config_broker() {
     return ProcessConfig{
         "/var/run/rongsu_broker.pid",
-        "/var/log/rongsu_broker",
+        "/data/rongsu_broker",
         "rongsu_broker",
     };
 }
@@ -312,6 +312,19 @@ enum class MsgType : uint32_t {
     GLAVO_Debug_Fan_Ntf,            /**< DebugFanStatePayload */
     GLAVO_Debug_Switch_Ntf,         /**< DebugSwitchStatePayload */
     GLAVO_Debug_Laser_Ntf,          /**< DebugLaserStatePayload：激光器状态/报警/功率/温度 */
+
+    // ---- UI ↔ GLAVO：网络 / WiFi（ConnMan 后端） ----
+    UI_Wifi_Enable_Req = 0x1300, /**< WifiEnableReqPayload：开/关 WiFi */
+    UI_Wifi_Scan_Req,            /**< Empty：扫描可用网络 */
+    UI_Wifi_Connect_Req,        /**< WifiConnectReqPayload：连接 SSID(+密码) */
+    UI_Wifi_Forget_Req,         /**< WifiForgetReqPayload：忘记网络 */
+    UI_Wifi_Info_Req,           /**< Empty：请求当前网络信息 */
+    GLAVO_Wifi_State_Ntf,       /**< WifiStatePayload：连接/SSID/IP/信号（GLAVO 推送） */
+    GLAVO_Wifi_Scan_Rsp,        /**< [WifiListHeader][WifiEntryPayload×N]：扫描结果 */
+    GLAVO_Wifi_Saved_Rsp,       /**< [WifiListHeader][WifiEntryPayload×N]：已保存列表 */
+    UI_Wifi_Saved_Req,          /**< Empty：请求已保存网络列表 → GLAVO_Wifi_Saved_Rsp */
+    UI_Wifi_Disconnect_Req,     /**< WifiForgetReqPayload(复用 ssid)：断开当前连接 */
+    GLAVO_Wifi_Connect_Rsp,     /**< WifiConnectRspPayload：连接结果（成功/失败），失败用于弹提示 */
 };
 
 enum class MsgPriority : uint8_t {
@@ -347,6 +360,54 @@ struct EnvSnapshotPayload {
 struct Pm25ResultPayload {
     uint8_t is_high;
     float   pm25_cabin;
+};
+
+// ---- 网络 / WiFi 载荷 ----
+enum class WifiSecurity : uint32_t { Open = 0, WPA2 = 1, WPA3 = 2 };
+
+/** UI_Wifi_Enable_Req：开/关 WiFi（Inline） */
+struct WifiEnableReqPayload {
+    uint8_t enable;   /**< 1=开 0=关 */
+};
+
+/** UI_Wifi_Connect_Req：连接指定网络（Inline） */
+struct WifiConnectReqPayload {
+    char ssid[64];
+    char password[64];
+};
+
+/** UI_Wifi_Forget_Req：忘记网络（Inline） */
+struct WifiForgetReqPayload {
+    char ssid[64];
+};
+
+/** GLAVO_Wifi_State_Ntf：当前网络状态（Inline）——首页图标 + 设置详情共用 */
+struct WifiStatePayload {
+    uint8_t  enabled;       /**< WiFi 开关是否开 */
+    uint8_t  connected;     /**< 是否已连接 */
+    int32_t  signal_bars;   /**< 信号格数 0..4 */
+    char     ssid[64];      /**< 当前 SSID，未连为空 */
+    char     ip_addr[46];   /**< 当前 IP 文本，未连为空 */
+};
+
+/** GLAVO_Wifi_Scan_Rsp / GLAVO_Wifi_Saved_Rsp BufferRef 布局：[WifiListHeader][WifiEntryPayload × count] */
+struct WifiListHeader {
+    uint32_t count;
+};
+
+/** 单个 WiFi 条目（扫描 / 已保存共用） */
+struct WifiEntryPayload {
+    char     ssid[64];
+    int32_t  signal_bars;   /**< 0..4 */
+    uint32_t security;      /**< WifiSecurity */
+    uint8_t  saved;         /**< 是否已保存 */
+    uint8_t  connected;     /**< 是否当前连接 */
+};
+
+/** GLAVO_Wifi_Connect_Rsp：连接结果（Inline）。ok=0 时 UI 弹"连接失败"提示 */
+struct WifiConnectRspPayload {
+    uint8_t ok;             /**< 1=成功 0=失败(如密码错/超时) */
+    char    ssid[64];
 };
 
 /** APP_CLOSE_DOOR_Rsp / APP_OpenDoor_Rsp 载荷：动作结果（Inline） */

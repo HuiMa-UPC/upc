@@ -28,8 +28,12 @@ public:
     /** 注册 CameraMsgProxy 回调（ui_app::app_init） */
     void init();
 
-    /** 进入打印模式：发 Start_Req，成功后开 dma 元数据环 + 解码线程 */
-    void start(lv_obj_t* image_widget, lv_obj_t* hint_widget);
+    /**
+     * @brief 进入预览：发 Start_Req，成功后开 dma 元数据环 + 解码线程
+     * @param scene 场景标签（如 "monitor"/"print"），仅用于诊断日志；可为 nullptr
+     */
+    void start(lv_obj_t* image_widget, lv_obj_t* hint_widget,
+               const char* scene = nullptr);
 
     /** 退出打印 / 终止任务：停线程、关资源、发 Stop_Req */
     void stop();
@@ -77,6 +81,7 @@ private:
     lv_obj_t* image_ = nullptr;
     lv_obj_t* hint_  = nullptr;
     lv_timer_t* ui_timer_ = nullptr;
+    char scene_[32] = {}; /**< start() 传入的场景标签，供诊断日志 */
 
     upc_ipc::IpcDmaFrameRingConsumer consumer_;
 

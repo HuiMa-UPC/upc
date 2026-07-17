@@ -151,12 +151,165 @@ void UiMsgProxy::init()
                 mcu_ota_status_cb_(p);
             }
         }));
+    
+    /* ---- 网络 / WiFi（前端预留，待后端对齐） ---- */
+    subs_.push_back(bus.subscribe(
+        middleware::MsgType::GLAVO_Wifi_State_Ntf, middleware::ModuleId::UI,
+        [this](const middleware::Message& msg) {
+            middleware::WifiStatePayload p{};
+            if (wifi_state_cb_ && read_inline_pod(msg, p)) {
+                wifi_state_cb_(p);
+            }
+        }));
+
+    subs_.push_back(bus.subscribe(
+        middleware::MsgType::GLAVO_Wifi_Scan_Rsp, middleware::ModuleId::UI,
+        [this](const middleware::Message& msg) {
+            dispatch_wifi_list(msg, wifi_scan_cb_);
+        }));
+
+    subs_.push_back(bus.subscribe(
+        middleware::MsgType::GLAVO_Wifi_Saved_Rsp, middleware::ModuleId::UI,
+        [this](const middleware::Message& msg) {
+            dispatch_wifi_list(msg, wifi_saved_cb_);
+        }));
+    
+    subs_.push_back(bus.subscribe(
+        middleware::MsgType::GLAVO_Wifi_Connect_Rsp, middleware::ModuleId::UI,
+        [this](const middleware::Message& msg) {
+            middleware::WifiConnectRspPayload p{};
+            if (wifi_connect_result_cb_ && read_inline_pod(msg, p)) {
+                p.ssid[sizeof(p.ssid) - 1] = '\0';
+                wifi_connect_result_cb_(p.ok != 0, p.ssid);
+            }
+        }));
+
+}
+
+/* 解析 [WifiListHeader][WifiEntryPayload × count]（BufferRef/Inline 皆可），仿 Fs_DirOpen_Rsp。 */
+void UiMsgProxy::dispatch_wifi_list(const middleware::Message& msg, const WifiListCb& cb)
+{
+    if (!cb) {
+        return;
+    }
+    const uint8_t* base = nullptr;
+    size_t data_len = 0;
+    if (msg.payload.type == middleware::MsgPayload::Type::BufferRef) {
+        const auto& ref = msg.payload.data.buffer_ref;
+        base = middleware::BufferPool::instance().get_ptr(ref.buf_id);
+        data_len = ref.length;
+    } else if (msg.payload.type == middleware::MsgPayload::Type::Inline) {
+        base = msg.payload.data.bytes.data();
+        data_len = msg.payload.length;
+    } else {
+        cb(nullptr, 0);
+        return;
+    }
+    if (!base || data_len < sizeof(middleware::WifiListHeader)) {
+        cb(nullptr, 0);
+        return;
+    }
+    const auto* hdr = reinterpret_cast<const middleware::WifiListHeader*>(base);
+    const uint32_t max_count = static_cast<uint32_t>(
+        (data_len - sizeof(middleware::WifiListHeader)) /
+        sizeof(middleware::WifiEntryPayload));
+    const uint32_t count = hdr->count <= max_count ? hdr->count : max_count;
+    const auto* items = reinterpret_cast<const middleware::WifiEntryPayload*>(
+        base + sizeof(middleware::WifiListHeader));
+    cb(items, count);
+
 }
 
 void UiMsgProxy::register_env_update(EnvUpdateCb cb)
 {
     env_update_cb_ = std::move(cb);
 }
+
+void UiMsgProxy::register_wifi_connect_result(WifiConnectResultCb cb)
+{
+    wifi_connect_result_cb_ = std::move(cb);
+}
+
+/* ---- 网络 / WiFi（前端预留，待后端对齐） ---- */
+void UiMsgProxy::send_wifi_enable(bool enable)
+{
+    const middleware::WifiEnableReqPayload payload{ enable ? uint8_t(1) : uint8_t(0) };
+    publish_pod(middleware::MsgType::UI_Wifi_Enable_Req,
+                middleware::ModuleId::APP_GLAVO, payload);
+}
+
+void UiMsgProxy::send_wifi_scan()
+{
+    middleware::Message msg(middleware::MsgType::UI_Wifi_Scan_Req,
+                            middleware::ModuleId::UI,
+                            middleware::ModuleId::APP_GLAVO);
+    middleware::MsgPort::instance().publish_async(msg);
+}
+
+void UiMsgProxy::send_wifi_connect(const char* ssid, const char* password)
+{
+    middleware::WifiConnectReqPayload payload{};
+    if (ssid) {
+        std::strncpy(payload.ssid, ssid, sizeof(payload.ssid) - 1);
+    }
+    if (password) {
+        std::strncpy(payload.password, password, sizeof(payload.password) - 1);
+    }
+    publish_pod(middleware::MsgType::UI_Wifi_Connect_Req,
+                middleware::ModuleId::APP_GLAVO, payload);
+}
+
+void UiMsgProxy::send_wifi_forget(const char* ssid)
+{
+    middleware::WifiForgetReqPayload payload{};
+    if (ssid) {
+        std::strncpy(payload.ssid, ssid, sizeof(payload.ssid) - 1);
+    }
+    publish_pod(middleware::MsgType::UI_Wifi_Forget_Req,
+                middleware::ModuleId::APP_GLAVO, payload);
+}
+
+void UiMsgProxy::send_wifi_disconnect(const char* ssid)
+{
+    middleware::WifiForgetReqPayload payload{};   /* 复用 ssid 载荷 */
+    if (ssid) {
+        std::strncpy(payload.ssid, ssid, sizeof(payload.ssid) - 1);
+    }
+    publish_pod(middleware::MsgType::UI_Wifi_Disconnect_Req,
+                middleware::ModuleId::APP_GLAVO, payload);
+}
+
+void UiMsgProxy::send_wifi_info()
+{
+    middleware::Message msg(middleware::MsgType::UI_Wifi_Info_Req,
+                            middleware::ModuleId::UI,
+                            middleware::ModuleId::APP_GLAVO);
+    middleware::MsgPort::instance().publish_async(msg);
+}
+
+void UiMsgProxy::send_wifi_saved_query()
+{
+    middleware::Message msg(middleware::MsgType::UI_Wifi_Saved_Req,
+                            middleware::ModuleId::UI,
+                            middleware::ModuleId::APP_GLAVO);
+    middleware::MsgPort::instance().publish_async(msg);
+}
+
+void UiMsgProxy::register_wifi_state(WifiStateCb cb)
+{
+    wifi_state_cb_ = std::move(cb);
+}
+
+void UiMsgProxy::register_wifi_scan(WifiListCb cb)
+{
+    wifi_scan_cb_ = std::move(cb);
+}
+
+void UiMsgProxy::register_wifi_saved(WifiListCb cb)
+{
+    wifi_saved_cb_ = std::move(cb);
+}
+
 
 void UiMsgProxy::send_pm25_check()
 {

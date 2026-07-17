@@ -240,6 +240,17 @@ bool GlavoService::init()
             publish_mcu_ota_status(st);
         });
     gcode_manifest_load(local_config_path(), local_manifest_);
+
+    /* WiFi：wpa_supplicant 控制接口；回调在 WifiManager 后台线程触发，仅做 publish。 */
+    WifiManager::instance().init(
+        [this](const WifiSnapshot& s) { publish_wifi_state(s); },
+        [this](WifiListKind kind, const std::vector<WifiEntry>& e) {
+            publish_wifi_list(kind, e);
+        },
+        [this](bool ok, const std::string& ssid) {
+            publish_wifi_connect_result(ok, ssid);
+        });
+
     state_ = ServiceState::Idle;
     return true;
 }
@@ -270,6 +281,16 @@ bool GlavoService::start()
         middleware::MsgType::UI_Purify_Req,
         middleware::MsgType::UI_Mcu_Ota_Start_Req,
         middleware::MsgType::UI_Mcu_Ota_Cancel_Ntf,
+
+        /* 网络 / WiFi（ConnMan） */
+        middleware::MsgType::UI_Wifi_Enable_Req,
+        middleware::MsgType::UI_Wifi_Scan_Req,
+        middleware::MsgType::UI_Wifi_Connect_Req,
+        middleware::MsgType::UI_Wifi_Forget_Req,
+        middleware::MsgType::UI_Wifi_Disconnect_Req,
+        middleware::MsgType::UI_Wifi_Info_Req,
+        middleware::MsgType::UI_Wifi_Saved_Req,
+
         /* 调试页手动控制（振镜/回粉电机预留，不订阅） */
         middleware::MsgType::UI_Debug_Axis_Jog_Req,
         middleware::MsgType::UI_Debug_Axis_Hold_Stop_Req,
@@ -325,6 +346,7 @@ bool GlavoService::stop()
 
     stop_print_job();
     clear_prepare_session();
+    WifiManager::instance().shutdown();
     subscriptions_.clear();
     state_ = ServiceState::Idle;
     return true;
@@ -479,6 +501,29 @@ void GlavoService::handle_message(const middleware::Message& msg)
         case middleware::MsgType::UI_Mcu_Ota_Cancel_Ntf:
             handle_mcu_ota_cancel(msg);
             break;
+
+        case middleware::MsgType::UI_Wifi_Enable_Req:
+            handle_wifi_enable(msg);
+            break;
+        case middleware::MsgType::UI_Wifi_Scan_Req:
+            handle_wifi_scan(msg);
+            break;
+        case middleware::MsgType::UI_Wifi_Connect_Req:
+            handle_wifi_connect(msg);
+            break;
+        case middleware::MsgType::UI_Wifi_Forget_Req:
+            handle_wifi_forget(msg);
+            break;
+        case middleware::MsgType::UI_Wifi_Disconnect_Req:
+            handle_wifi_disconnect(msg);
+            break;
+        case middleware::MsgType::UI_Wifi_Info_Req:
+            handle_wifi_info(msg);
+            break;
+        case middleware::MsgType::UI_Wifi_Saved_Req:
+            handle_wifi_saved(msg);
+            break;
+
         case middleware::MsgType::UI_Debug_Axis_Jog_Req:
             handle_debug_axis_jog(msg);
             break;
@@ -1014,8 +1059,8 @@ void GlavoService::reset_print_progress_state()
  */
 void GlavoService::send_print_progress(bool force_complete)
 {
+    auto& link = McuLink::instance();
     const auto job = PrintJobState::instance().snapshot();
-    McuLink& link = McuLink::instance();
 
     parser::IParserWorker* parser = active_parser();
     const bool parse_done = parser &&
@@ -1306,6 +1351,142 @@ void GlavoService::publish_mcu_ota_status(
         reinterpret_cast<const uint8_t*>(&st), sizeof(st));
     (void)publish_async(out);
 }
+
+/* ============================================================================
+ * 网络 / WiFi：UI_Wifi_* → WifiManager(ConnMan)，回推 State/Scan/Saved
+ * ============================================================================ */
+
+ void GlavoService::handle_wifi_enable(const middleware::Message& msg)
+ {
+     middleware::WifiEnableReqPayload p{};
+     if(!read_inline_pod(msg.payload, p)) {
+         return;
+     }
+     WifiManager::instance().set_enabled(p.enable != 0);
+ }
+ 
+ void GlavoService::handle_wifi_scan(const middleware::Message& /*msg*/)
+ {
+     WifiManager::instance().scan();
+ }
+ 
+ void GlavoService::handle_wifi_connect(const middleware::Message& msg)
+ {
+     middleware::WifiConnectReqPayload p{};
+     if(!read_inline_pod(msg.payload, p)) {
+         return;
+     }
+     p.ssid[sizeof(p.ssid) - 1]         = '\0';
+     p.password[sizeof(p.password) - 1] = '\0';
+     WifiManager::instance().connect(p.ssid, p.password);
+ }
+ 
+ void GlavoService::handle_wifi_forget(const middleware::Message& msg)
+ {
+     middleware::WifiForgetReqPayload p{};
+     if(!read_inline_pod(msg.payload, p)) {
+         return;
+     }
+     p.ssid[sizeof(p.ssid) - 1] = '\0';
+     WifiManager::instance().forget(p.ssid);
+ }
+ 
+ void GlavoService::handle_wifi_disconnect(const middleware::Message& msg)
+ {
+     middleware::WifiForgetReqPayload p{};   /* 复用 ssid 载荷 */
+     if(!read_inline_pod(msg.payload, p)) {
+         return;
+     }
+     p.ssid[sizeof(p.ssid) - 1] = '\0';
+     WifiManager::instance().disconnect(p.ssid);
+ }
+ 
+ void GlavoService::handle_wifi_info(const middleware::Message& /*msg*/)
+ {
+     WifiManager::instance().request_info();
+ }
+ 
+ void GlavoService::handle_wifi_saved(const middleware::Message& /*msg*/)
+ {
+     WifiManager::instance().request_saved();
+ }
+ 
+ /** @brief 向 UI 推送 GLAVO_Wifi_State_Ntf（首页图标 + 设置详情共用）。 */
+ void GlavoService::publish_wifi_state(const WifiSnapshot& snap)
+ {
+     middleware::WifiStatePayload p{};
+     p.enabled     = snap.enabled ? 1 : 0;
+     p.connected   = snap.connected ? 1 : 0;
+     p.signal_bars = snap.signal_bars;
+     std::snprintf(p.ssid, sizeof(p.ssid), "%s", snap.ssid.c_str());
+     std::snprintf(p.ip_addr, sizeof(p.ip_addr), "%s", snap.ip.c_str());
+ 
+     middleware::Message out(middleware::MsgType::GLAVO_Wifi_State_Ntf,
+         middleware::ModuleId::APP_GLAVO, middleware::ModuleId::UI);
+     out.payload = middleware::MsgPayload::from_bytes(
+         reinterpret_cast<const uint8_t*>(&p), sizeof(p));
+     (void)publish_async(out);
+ }
+ 
+ /** @brief 组 [WifiListHeader][WifiEntryPayload×N] 并经 BufferPool 推送 Scan/Saved 结果。 */
+ void GlavoService::publish_wifi_list(WifiListKind kind,
+                                      const std::vector<WifiEntry>& entries)
+ {
+     const middleware::MsgType type = (kind == WifiListKind::Scan)
+         ? middleware::MsgType::GLAVO_Wifi_Scan_Rsp
+         : middleware::MsgType::GLAVO_Wifi_Saved_Rsp;
+ 
+     const uint32_t count = static_cast<uint32_t>(entries.size());
+     const size_t header_size  = sizeof(middleware::WifiListHeader);
+     const size_t entries_size = static_cast<size_t>(count) *
+                                 sizeof(middleware::WifiEntryPayload);
+     const size_t total_size   = header_size + entries_size;
+ 
+     const uint32_t buf_id = middleware::BufferPool::instance().allocate(total_size);
+     if(buf_id == middleware::INVALID_BUFFER_ID) {
+         UPC_LOG_GLAVO_SERVICE(Warn, "wifi: list buffer alloc failed (count=%u)", count);
+         return;
+     }
+     uint8_t* base = middleware::BufferPool::instance().get_ptr(buf_id);
+     if(!base) {
+         middleware::BufferPool::instance().release(buf_id);
+         return;
+     }
+ 
+     auto* hdr = reinterpret_cast<middleware::WifiListHeader*>(base);
+     hdr->count = count;
+     auto* items = reinterpret_cast<middleware::WifiEntryPayload*>(base + header_size);
+     for(uint32_t i = 0; i < count; i++) {
+         const auto& e = entries[i];
+         std::snprintf(items[i].ssid, sizeof(items[i].ssid), "%s", e.ssid.c_str());
+         items[i].signal_bars = e.signal_bars;
+         items[i].security    = static_cast<uint32_t>(e.security);
+         items[i].saved       = e.saved ? 1 : 0;
+         items[i].connected   = e.connected ? 1 : 0;
+     }
+ 
+     middleware::Message out(type,
+         middleware::ModuleId::APP_GLAVO, middleware::ModuleId::UI);
+     out.payload = middleware::MsgPayload::from_buffer(
+         buf_id, 0, static_cast<uint32_t>(total_size));
+     if(!publish_async(out)) {
+         UPC_LOG_GLAVO_SERVICE(Warn, "wifi: list publish_async failed (count=%u)", count);
+     }
+ }
+ 
+ /** @brief 向 UI 推送 GLAVO_Wifi_Connect_Rsp（连接成功/失败；失败用于弹提示）。 */
+ void GlavoService::publish_wifi_connect_result(bool ok, const std::string& ssid)
+ {
+     middleware::WifiConnectRspPayload p{};
+     p.ok = ok ? 1 : 0;
+     std::snprintf(p.ssid, sizeof(p.ssid), "%s", ssid.c_str());
+ 
+     middleware::Message out(middleware::MsgType::GLAVO_Wifi_Connect_Rsp,
+         middleware::ModuleId::APP_GLAVO, middleware::ModuleId::UI);
+     out.payload = middleware::MsgPayload::from_bytes(
+         reinterpret_cast<const uint8_t*>(&p), sizeof(p));
+     (void)publish_async(out);
+ }
 
 /* ============================================================================
  * 调试页手动控制：UI_Debug_* → serial_debug 组帧 → McuLink 串口下发

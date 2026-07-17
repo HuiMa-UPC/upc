@@ -46,12 +46,15 @@ Glavo Snap IPC → PrintVideoRecorder worker
   → 通过 fd 回调 `mmap` 取 NV12（如 stride 有 padding 会按 active width 解压）
   → MPP encode → /tmp/print_vid/{session}/layers.h264
   → finish/abort → EOS flush
-  → ffmpeg remux（-c copy）→ /home/video/{job}.mp4
-  → ffmpeg 抽末帧 → /home/video/{job}.jpg
+  → ffmpeg remux（-c copy）→ /home/video/{job}_{YYYYMMDD_HHMMSS}.mp4
+  → ffmpeg 抽末帧 → /home/video/{job}_{YYYYMMDD_HHMMSS}.jpg
+  → upsert /home/video/manifest.json（status=complete|terminated）
   → 删除临时 .h264 / session 目录
 ```
 
-0 帧时不生成 `/home/video` 产物。remux 失败时保留临时 `.h264` 便于排查。
+0 帧时不生成 `/home/video` 产物、不写 manifest。remux 失败时保留临时 `.h264` 便于排查。
+
+`manifest.json` 由 Camera 独写；字段含 `job_name` / `start_unix` / `duration_sec` / `material_g`（读 Gcode config）/ `status` / `video` / `thumb`。UI 历史页直读该文件（解析见 `common/fs_manifest/print_history_manifest.*`）。
 
 Snap 依赖预览流已开（同一 SHM）；与 UI 解码线程共享 ring，偶发 `snap miss` 见日志。
 
@@ -66,8 +69,8 @@ Snap 依赖预览流已开（同一 SHM）；与 UI 解码线程共享 ring，�
 | `UI_Camera_Stream_Stop_Req` | 停流、关闭 dma fd 旁路、销毁 SHM |
 | `APP_Print_Video_Session_Start_Ntf` | 建录像会话、开 dma fd 元数据环 consumer |
 | `APP_Print_Layer_Snap_Ntf` | 入队 LayerSnap job |
-| `APP_Print_Video_Session_Finish_Ntf` | 入队 Finish，remux `.mp4` + 末帧 `.jpg` |
-| `APP_Print_Video_Session_Abort_Ntf` | 入队 Abort，有帧同样 remux |
+| `APP_Print_Video_Session_Finish_Ntf` | 入队 Finish，remux `.mp4` + 末帧 `.jpg` + upsert manifest（`complete`） |
+| `APP_Print_Video_Session_Abort_Ntf` | 入队 Abort，有帧同样 remux + upsert（`terminated`） |
 
 Glavo→Camera 经 UI Hub 转发；`sender_id` 仍为 `APP_GLAVO`（见 IPC.md）。
 
@@ -82,14 +85,17 @@ Glavo→Camera 经 UI Hub 转发；`sender_id` 仍为 `APP_GLAVO`（见 IPC.md�
 | 帧率 | 30 | `UPC_CAMERA_FPS` |
 | IQ | `/home/wpcam_NC_NC.json` | `UPC_CAMERA_IQ_DIR` / `UPC_CAMERA_IQ_FILE` |
 | V4L2 缓冲 | 4 | `CAMERA_V4L2_BUF_COUNT` |
-| SHM 槽位 | 3 | `CAMERA_SHM_SLOT_COUNT` |
+| SHM 槽位 | 6 | `CAMERA_SHM_SLOT_COUNT`（UI/Snap 双消费；过小易 `slot release timeout`） |
 | 录像临时 | `/tmp/print_vid/{session}/layers.h264` | `CAMERA_PRINT_VIDEO_TMP_DIR` |
-| 录像输出 | `/home/video/{job}.mp4` | `CAMERA_PRINT_VIDEO_OUT_DIR` / `_EXT` |
-| 缩略图 | `/home/video/{job}.jpg` | `CAMERA_PRINT_VIDEO_THUMB_EXT` |
+| 录像输出 | `/home/video/{job}_{YYYYMMDD_HHMMSS}.mp4` | `CAMERA_PRINT_VIDEO_OUT_DIR` / `_EXT` |
+| 缩略图 | `/home/video/{job}_{YYYYMMDD_HHMMSS}.jpg` | `CAMERA_PRINT_VIDEO_THUMB_EXT` |
+| 历史清单 | `/home/video/manifest.json` | `UPC_PRINT_VIDEO_MANIFEST` |
 | ffmpeg | `/usr/bin/ffmpeg` | `CAMERA_FFMPEG_BIN` |
 | 层编码 fps | 5 | `CAMERA_PRINT_VIDEO_LAYER_FPS` |
 
 SHM 元数据环：`stride_y` 为 V4L2 实际 Y stride（dma 模式），`buffer_idx` 指向 fd 表；像素走 dma fd。
+
+推流诊断（`UPC_MOD_CAMERA_PREVIEW`，与 UI `decode 1s` 对照）：`stream 1s: committed / last_seq / slot_fail / dequeue_fail / release_timeout`。`commit_slot` 返回真实 seq（失败为 0）。
 
 ## 库文件一览
 

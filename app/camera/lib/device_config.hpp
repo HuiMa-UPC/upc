@@ -80,7 +80,8 @@
 #endif
 
 #ifndef CAMERA_SHM_SLOT_COUNT
-#define CAMERA_SHM_SLOT_COUNT 3u
+/** 元数据环槽位数：打印 Snap 与 UI 预览双 Consumer 时 3 槽易饿死，提高到 6 缓解背压 */
+#define CAMERA_SHM_SLOT_COUNT 6u
 #endif
 
 /** NV12 Y 平面 stride 对齐要求（RGA 通常要求 16/64 字节对齐） */

@@ -4,6 +4,7 @@
 #include "ui_modal_dialog.hpp"
 #include "ui_keyboard.hpp"
 #include "ui_feedback.hpp"
+#include "ui_arc_spinner.hpp"
 #include "page_manager.hpp"
 #include "settings_icons.h"
 #include "ui_msg_proxy.hpp"
@@ -83,13 +84,86 @@ const char *const kAvailWifi[] = {
     "Lab_Internal",
 };
 
+/* 前端占位：当前 IP / 已保存网络（后端网络信息接口到位后替换） */
+const char *const kIpAddress = "192.168.1.100";
+const char *const kSavedWifi[] = {
+    "SnowX_WIFI_2.4G",
+    "Sweden_5G",
+    "Home_Net",
+};
+
+/* 后端网络状态缓存（GLAVO_Wifi_State_Ntf；未上线时回退占位）。待后端对齐。 */
+middleware::WifiStatePayload g_wifi_state = {};
+bool g_wifi_state_valid = false;
+const char *g_connect_ssid = nullptr;   /**< 连接密码框对应的 SSID */
+
+/* WiFi 开关意图状态：用户点开关即改；后端状态到达时同步。跨重建保持，
+* 避免整页重建把开关重置成默认"开"。 */
+bool g_wifi_on = true;
+
+/* 已保存网络列表缓存（GLAVO_Wifi_Saved_Rsp；未上线时回退占位 kSavedWifi）。 */
+enum NetSub { NET_MAIN = 0, NET_ADVANCED, NET_SAVED, NET_DETAIL, NET_EMPTY };
+int g_net_subpage = NET_MAIN;
+middleware::WifiEntryPayload g_saved_wifi[16] = {};
+uint32_t g_saved_count = 0;
+bool     g_saved_valid = false;
+
+/* 扫描结果缓存（GLAVO_Wifi_Scan_Rsp；未上线/未扫描时回退占位 kAvailWifi）。 */
+middleware::WifiEntryPayload g_scan_wifi[32] = {};
+uint32_t g_scan_count = 0;
+bool     g_scan_valid = false;
+
+/** 当前 IP：后端有效则用真实值，否则占位。 */
+const char *wifi_ip_text(void)
+{
+    return (g_wifi_state_valid && g_wifi_state.ip_addr[0]) ? g_wifi_state.ip_addr
+                                                           : kIpAddress;
+}
+
+/** 当前已连 SSID：后端有效则用真实值，否则占位。 */
+const char *wifi_current_ssid(void)
+{
+    return (g_wifi_state_valid && g_wifi_state.ssid[0]) ? g_wifi_state.ssid
+                                                        : kCurrentWifi;
+}
+
+/** 某 SSID 是否已保存（扫描项 saved 标记 或 已保存列表命中）→ 连接时免密。 */
+bool wifi_ssid_saved(const char *ssid)
+{
+    if(!ssid || !ssid[0]) {
+        return false;
+    }
+    for(uint32_t i = 0; i < g_scan_count; i++) {
+        if(g_scan_wifi[i].saved && std::strcmp(g_scan_wifi[i].ssid, ssid) == 0) {
+            return true;
+        }
+    }
+    if(g_saved_valid) {
+        for(uint32_t i = 0; i < g_saved_count; i++) {
+            if(std::strcmp(g_saved_wifi[i].ssid, ssid) == 0) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+
 lv_obj_t *g_nav_btns[NAV_COUNT]  = { nullptr };
 lv_obj_t *g_nav_icons[NAV_COUNT] = { nullptr };
 lv_obj_t *g_detail     = nullptr;   /**< 右侧详情容器（按选中重建） */
 lv_obj_t *g_wifi_list  = nullptr;   /**< 翻页按钮的滚动目标（网络详情=整个详情容器） */
 lv_obj_t *g_page       = nullptr;   /**< 设置页根：翻页按钮悬浮父级（整屏居中用） */
 lv_obj_t *g_scroll_btns= nullptr;   /**< Wi-Fi 翻页按钮悬浮层（仅网络详情存在） */
+lv_obj_t *g_wifi_list_box = nullptr;/**< 主网络页可隐藏的列表容器（WiFi 关时隐藏） */
 int       g_selected   = NAV_NETWORK;
+
+/* ---- 网络子页导航（页内子视图 + 返回箭头） ---- */
+void net_show_main(void);
+void net_show_advanced(void);
+void net_show_saved(void);
+void net_show_wifi_detail(void);
+void net_show_empty(void);
 
 /* ---- 弹窗（密码 / Wi-Fi 连接，复用同一句柄，互斥打开） ---- */
 ui_modal_dialog_t *g_dlg     = nullptr;
@@ -223,6 +297,42 @@ void dlg_close(void)
     }
 }
 
+/* ---- 连接中模态（spinner，持续到 GLAVO_Wifi_Connect_Rsp 返回才关闭） ---- */
+ui_modal_dialog_t *g_conn_dlg     = nullptr;
+ui_arc_spinner_t  *g_conn_spinner = nullptr;
+
+void close_connecting_dialog(void)
+{
+    if(g_conn_spinner) {
+        ui_arc_spinner_destroy(g_conn_spinner);
+        g_conn_spinner = nullptr;
+    }
+    if(g_conn_dlg) {
+        ui_modal_dialog_close(g_conn_dlg);
+        g_conn_dlg = nullptr;
+    }
+}
+
+void open_connecting_dialog(const char *ssid)
+{
+    close_connecting_dialog();   /* 互斥，避免叠加 */
+    ui_modal_dialog_cfg_t cfg = ui_modal_dialog_cfg_user("Connecting", 0, false);
+    g_conn_dlg = ui_modal_dialog_open(lv_screen_active(), &cfg);
+    if(!g_conn_dlg) {
+        return;
+    }
+    lv_obj_set_flex_flow(g_conn_dlg->body, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(g_conn_dlg->body, LV_FLEX_ALIGN_CENTER,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_row(g_conn_dlg->body, USER_PAD, 0);
+
+    g_conn_spinner = ui_arc_spinner_create(g_conn_dlg->body, 0);
+
+    char buf[96];
+    std::snprintf(buf, sizeof(buf), "Connecting to %s...", ssid ? ssid : "");
+    ui_user_make_body_label(g_conn_dlg->body, buf);
+}
+
 void on_dlg_cancel(lv_event_t *)
 {
     dlg_close();
@@ -305,11 +415,14 @@ void open_dev_password_dialog(void)
     lv_obj_center(ok_lbl);
 }
 
-/* ---- Wi-Fi 连接密码弹窗（stub） ---- */
+/* ---- Wi-Fi 连接密码弹窗 ---- */
 void on_wifi_connect_confirm(lv_event_t *)
 {
+    const char *pwd = g_pwd_ta ? lv_textarea_get_text(g_pwd_ta) : "";
+    const char *ssid = g_connect_ssid;
+    ui::UiMsgProxy::instance().send_wifi_connect(ssid, pwd);
     dlg_close();
-    ui_toast_show("Connecting...", user_color_accent, 1500);
+    open_connecting_dialog(ssid);   /* 持续显示直到连接结果返回 */
 }
 
 void open_wifi_connect_dialog(const char *ssid)
@@ -317,6 +430,7 @@ void open_wifi_connect_dialog(const char *ssid)
     if(g_dlg) {
         return;
     }
+    g_connect_ssid = ssid;
     ui_modal_dialog_cfg_t cfg = ui_modal_dialog_cfg_user(ssid ? ssid : "Wi-Fi", 0, true);
     g_dlg = ui_modal_dialog_open(lv_screen_active(), &cfg);
     if(!g_dlg) {
@@ -353,11 +467,32 @@ lv_obj_t *make_caption(lv_obj_t *parent, const char *text)
 void on_wifi_item_click(lv_event_t *e)
 {
     const char *ssid = static_cast<const char *>(lv_event_get_user_data(e));
-    open_wifi_connect_dialog(ssid);
+    if(wifi_ssid_saved(ssid)) {
+        /* 已保存网络：直接连接，无需再次输入密码（后端复用已存凭据） */
+        ui::UiMsgProxy::instance().send_wifi_connect(ssid, "");
+        open_connecting_dialog(ssid);   /* 持续显示直到连接结果返回 */
+    } else {
+        open_wifi_connect_dialog(ssid);
+    }
 }
 
-/** Wi-Fi 列表项卡片：图标 + SSID + 右箭头；点击弹连接框 */
-lv_obj_t *make_wifi_item(lv_obj_t *parent, const char *ssid)
+/* 已连接项：点右箭头 → WiFi 详情子页（忘记网络 / IP 地址） */
+void on_connected_wifi_click(lv_event_t *)
+{
+    net_show_wifi_detail();
+}
+
+/* 未连接项：点右箭头 → 空页面（占位） */
+void on_wifi_arrow_empty(lv_event_t *)
+{
+    net_show_empty();
+}
+
+
+/** Wi-Fi 列表项卡片：图标 + SSID + 右箭头。
+ *  未连接：点整条连接（已保存免密直连 / 否则弹密码框）。
+ *  已连接：整条不响应，断开/忘记/IP 走右箭头详情页。 */
+lv_obj_t *make_wifi_item(lv_obj_t *parent, const char *ssid, bool connected)
 {
     lv_obj_t *btn = lv_button_create(parent);
     lv_obj_remove_style_all(btn);
@@ -373,8 +508,12 @@ lv_obj_t *make_wifi_item(lv_obj_t *parent, const char *ssid)
     lv_obj_set_flex_align(btn, LV_FLEX_ALIGN_START,
                           LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_set_style_text_color(btn, user_color_text, 0);
-    lv_obj_add_event_cb(btn, on_wifi_item_click, LV_EVENT_CLICKED,
-                        const_cast<char *>(ssid));
+   /* 未连接=点整条连接（弹密码框/免密直连）；已连接项整条不响应，
+     * 断开请走右箭头详情页的 Disconnect。 */
+     if(!connected) {
+        lv_obj_add_event_cb(btn, on_wifi_item_click,
+                            LV_EVENT_CLICKED, const_cast<char *>(ssid));
+    }
 
     lv_obj_t *icon = lv_label_create(btn);
     lv_label_set_text(icon, LV_SYMBOL_WIFI);
@@ -386,6 +525,61 @@ lv_obj_t *make_wifi_item(lv_obj_t *parent, const char *ssid)
     lv_label_set_long_mode(lbl, LV_LABEL_LONG_MODE_DOTS);
     lv_obj_set_flex_grow(lbl, 1);
 
+    if(connected) {
+        lv_obj_t *tag = lv_label_create(btn);
+        lv_label_set_text(tag, "Connected");
+        lv_obj_set_style_text_font(tag, user_font_caption(), 0);
+        lv_obj_set_style_text_color(tag, user_color_status_ok, 0);
+    }
+
+    /* 右箭头独立按钮：已连接=详情子页；未连接=空页面。落在此区域的点击不触发整条行。
+     * 触发区放大：方形宽度取行高、整行高度，形成舒适的点按目标。 */
+    lv_obj_t *arrow_btn = lv_button_create(btn);
+    lv_obj_remove_style_all(arrow_btn);
+    lv_obj_set_size(arrow_btn, USER_NAV_ITEM_H, LV_PCT(100));
+    lv_obj_set_style_radius(arrow_btn, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_bg_color(arrow_btn, user_color_text, 0);
+    lv_obj_set_style_bg_opa(arrow_btn, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_bg_opa(arrow_btn, 28, LV_STATE_PRESSED);
+    lv_obj_add_event_cb(arrow_btn,
+                        connected ? on_connected_wifi_click : on_wifi_arrow_empty,
+                        LV_EVENT_CLICKED, const_cast<char *>(ssid));
+
+    lv_obj_t *arrow = lv_label_create(arrow_btn);
+    lv_label_set_text(arrow, LV_SYMBOL_RIGHT);
+    lv_obj_set_style_text_font(arrow, user_font_text(), 0);
+    lv_obj_set_style_text_color(arrow, user_color_text_dim, 0);
+    lv_obj_center(arrow);
+    return btn;
+}
+
+/** 通用条形链接行：整宽按钮 [标题 ... 右箭头]，点击回调 cb。 */
+lv_obj_t *make_link_row(lv_obj_t *parent, const char *label,
+                        lv_event_cb_t cb, void *ud)
+{
+    lv_obj_t *btn = lv_button_create(parent);
+    lv_obj_remove_style_all(btn);
+    lv_obj_set_width(btn, LV_PCT(100));
+    lv_obj_set_height(btn, USER_NAV_ITEM_H);
+    lv_obj_set_style_radius(btn, USER_RADIUS, 0);
+    lv_obj_set_style_bg_color(btn, user_color_text, 0);
+    lv_obj_set_style_bg_opa(btn, 10, 0);
+    lv_obj_set_style_bg_opa(btn, 28, LV_STATE_PRESSED);
+    lv_obj_set_style_pad_hor(btn, USER_PAD, 0);
+    lv_obj_set_style_pad_column(btn, USER_PAD_SM, 0);
+    lv_obj_set_flex_flow(btn, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(btn, LV_FLEX_ALIGN_START,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_text_color(btn, user_color_text, 0);
+    if(cb) {
+        lv_obj_add_event_cb(btn, cb, LV_EVENT_CLICKED, ud);
+    }
+
+    lv_obj_t *lbl = lv_label_create(btn);
+    lv_label_set_text(lbl, label);
+    lv_obj_set_style_text_font(lbl, user_font_text(), 0);
+    lv_obj_set_flex_grow(lbl, 1);
+
     lv_obj_t *arrow = lv_label_create(btn);
     lv_label_set_text(arrow, LV_SYMBOL_RIGHT);
     lv_obj_set_style_text_font(arrow, user_font_caption(), 0);
@@ -393,12 +587,96 @@ lv_obj_t *make_wifi_item(lv_obj_t *parent, const char *ssid)
     return btn;
 }
 
+
+/** 只读键值行：整宽 [标题 ... 值(dim)]，无箭头、不可点。 */
+lv_obj_t *make_value_row(lv_obj_t *parent, const char *label, const char *value)
+{
+    lv_obj_t *row = lv_obj_create(parent);
+    lv_obj_remove_style_all(row);
+    lv_obj_set_width(row, LV_PCT(100));
+    lv_obj_set_height(row, USER_NAV_ITEM_H);
+    lv_obj_set_style_radius(row, USER_RADIUS, 0);
+    lv_obj_set_style_bg_color(row, user_color_text, 0);
+    lv_obj_set_style_bg_opa(row, 10, 0);
+    lv_obj_set_style_pad_hor(row, USER_PAD, 0);
+    lv_obj_set_style_pad_column(row, USER_PAD_SM, 0);
+    lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(row, LV_FLEX_ALIGN_START,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *lbl = lv_label_create(row);
+    lv_label_set_text(lbl, label);
+    lv_obj_set_style_text_font(lbl, user_font_text(), 0);
+    lv_obj_set_style_text_color(lbl, user_color_text, 0);
+    lv_obj_set_flex_grow(lbl, 1);
+
+    lv_obj_t *val = lv_label_create(row);
+    lv_label_set_text(val, value);
+    lv_obj_set_style_text_font(val, user_font_text(), 0);
+    lv_obj_set_style_text_color(val, user_color_text_dim, 0);
+    return row;
+}
+
+/** 子页头部：返回圆钮 + 标题。 */
+lv_obj_t *make_subpage_header(lv_obj_t *parent, const char *title,
+                             lv_event_cb_t back_cb)
+{
+    lv_obj_t *row = lv_obj_create(parent);
+    lv_obj_remove_style_all(row);
+    lv_obj_set_width(row, LV_PCT(100));
+    lv_obj_set_height(row, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(row, LV_FLEX_ALIGN_START,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_column(row, USER_PAD_SM, 0);
+    lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, 0);
+    lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *back = lv_button_create(row);
+    lv_obj_remove_style_all(back);
+    lv_obj_set_size(back, USER_BACK_BTN_H, USER_BACK_BTN_H);
+    lv_obj_set_style_radius(back, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_bg_color(back, user_color_panel_alt, 0);
+    lv_obj_set_style_bg_opa(back, LV_OPA_60, 0);
+    lv_obj_set_style_bg_opa(back, LV_OPA_COVER, LV_STATE_PRESSED);
+    lv_obj_add_event_cb(back, back_cb, LV_EVENT_CLICKED, nullptr);
+    lv_obj_t *bi = lv_label_create(back);
+    lv_label_set_text(bi, LV_SYMBOL_LEFT);
+    lv_obj_set_style_text_color(bi, user_color_text, 0);
+    lv_obj_set_style_text_font(bi, user_font_text(), 0);
+    lv_obj_center(bi);
+
+    lv_obj_t *t = lv_label_create(row);
+    lv_label_set_text(t, title);
+    lv_obj_set_style_text_color(t, user_color_text, 0);
+    lv_obj_set_style_text_font(t, user_font_text(), 0);
+    return row;
+}
+
+
 /* ---- 详情面板 ---- */
 void on_wifi_switch_changed(lv_event_t *e)
 {
-    lv_obj_t *seg = lv_event_get_target_obj(e);
-    const uint8_t sel = ui_user_segmented_get_selected(seg);
-    ui_toast_show(sel == 0 ? "Wi-Fi On" : "Wi-Fi Off", user_color_accent, 1200);
+    lv_obj_t *sw = lv_event_get_target_obj(e);
+    const bool on = lv_obj_has_state(sw, LV_STATE_CHECKED);
+    g_wifi_on = on;                                    /* 记住开关意图，跨重建保持 */
+    ui::UiMsgProxy::instance().send_wifi_enable(on);   /* 预留端口：后端接后生效 */
+    ui_toast_show(on ? "Wi-Fi On" : "Wi-Fi Off", user_color_accent, 1200);
+    if(on) {
+        ui::UiMsgProxy::instance().send_wifi_scan();   /* 开启后请求扫描 */
+    } else {
+        g_scan_valid = false;                          /* 关闭后清空扫描缓存 */
+    }
+    /* 关闭时隐藏下方 WiFi 列表与翻页按钮 */
+    if(g_wifi_list_box) {
+        if(on) lv_obj_remove_flag(g_wifi_list_box, LV_OBJ_FLAG_HIDDEN);
+        else   lv_obj_add_flag(g_wifi_list_box, LV_OBJ_FLAG_HIDDEN);
+    }
+    if(g_scroll_btns) {
+        if(on) lv_obj_remove_flag(g_scroll_btns, LV_OBJ_FLAG_HIDDEN);
+        else   lv_obj_add_flag(g_scroll_btns, LV_OBJ_FLAG_HIDDEN);
+    }
 }
 
 void on_wifi_scroll_up(lv_event_t *)
@@ -437,11 +715,46 @@ lv_obj_t *make_scroll_btn(lv_obj_t *parent, const char *sym, lv_event_cb_t cb)
     return btn;
 }
 
+
+/* ---- 网络子页：回调 ---- */
+void on_advanced_click(lv_event_t *)        { net_show_advanced(); }
+void on_saved_networks_click(lv_event_t *)
+{
+    net_show_saved();
+    /* 预留端口：进页面时请求后端已保存列表（回来经 register_wifi_saved 刷新） */
+    ui::UiMsgProxy::instance().send_wifi_saved_query();
+}
+void on_net_back_main(lv_event_t *)         { net_show_main(); }
+void on_net_back_advanced(lv_event_t *)     { net_show_advanced(); }
+
+void on_forget_network(lv_event_t *)
+{
+    ui::UiMsgProxy::instance().send_wifi_forget(wifi_current_ssid()); /* 预留端口 */
+    ui_toast_show("Network forgotten", user_color_accent, 1500);
+    net_show_main();
+}
+
+void on_disconnect_network(lv_event_t *)
+{
+    ui::UiMsgProxy::instance().send_wifi_disconnect(wifi_current_ssid());
+    ui_toast_show("Disconnecting...", user_color_accent, 1500);
+    net_show_main();
+}
+
+void on_forget_saved(lv_event_t *e)
+{
+    const char *ssid = static_cast<const char *>(lv_event_get_user_data(e));
+    ui::UiMsgProxy::instance().send_wifi_forget(ssid);
+    ui::UiMsgProxy::instance().send_wifi_saved_query();  /* 请求后端回推最新已保存列表 */
+    ui_toast_show("Network forgotten", user_color_accent, 1500);
+    net_show_saved();   /* 先按当前缓存刷新，后端回推后再重建 */
+}
+
 void build_network_detail(lv_obj_t *parent)
 {
     /*
-     * 整块内容（Wi-Fi 开关 / 当前 Wi-Fi / 可选 Wi-Fi）作为一个纵向滚动区一起滚动；
-     * 翻页按钮另做成相对整屏垂直居中的悬浮层（见函数末尾），不随内容滚动。
+     * 主网络页：WiFi 开关行 +（可隐藏的）列表容器 + 底部 Advanced Settings。
+     * 列表整块纵向滚动；翻页按钮做成整屏右侧垂直居中的悬浮层，不随内容滚动。
      */
     lv_obj_add_flag(parent, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_scroll_dir(parent, LV_DIR_VER);
@@ -449,27 +762,80 @@ void build_network_detail(lv_obj_t *parent)
     lv_obj_set_style_pad_right(parent, USER_BACK_BTN_H * 5 / 4 + USER_PAD, 0); /* 给悬浮翻页按钮留位 */
     g_wifi_list = parent;   /* 翻页按钮滚动整个详情 */
 
-    make_caption(parent, "Wi-Fi");
+    /* WiFi 开关行：左 "WiFi" + 右胶囊开关 */
+    lv_obj_t *sw_row = lv_obj_create(parent);
+    lv_obj_remove_style_all(sw_row);
+    lv_obj_set_width(sw_row, LV_PCT(100));
+    lv_obj_set_height(sw_row, USER_NAV_ITEM_H);
+    lv_obj_set_style_radius(sw_row, USER_RADIUS, 0);
+    lv_obj_set_style_bg_color(sw_row, user_color_text, 0);
+    lv_obj_set_style_bg_opa(sw_row, 10, 0);
+    lv_obj_set_style_pad_hor(sw_row, USER_PAD, 0);
+    lv_obj_set_flex_flow(sw_row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(sw_row, LV_FLEX_ALIGN_START,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_clear_flag(sw_row, LV_OBJ_FLAG_SCROLLABLE);
 
-    const char *const sw_labels[] = { "On", "Off" };
-    lv_obj_t *sw = ui_user_make_segmented(parent, sw_labels, 2, 0);
+    lv_obj_t *sw_lbl = lv_label_create(sw_row);
+    lv_label_set_text(sw_lbl, "WiFi");
+    lv_obj_set_style_text_color(sw_lbl, user_color_text, 0);
+    lv_obj_set_style_text_font(sw_lbl, user_font_text(), 0);
+    lv_obj_set_flex_grow(sw_lbl, 1);
+
+    lv_obj_t *sw = lv_switch_create(sw_row);
+    if(g_wifi_on) {
+        lv_obj_add_state(sw, LV_STATE_CHECKED);   /* 反映当前开关状态 */
+    }
+    lv_obj_set_style_bg_color(sw, user_color_accent,
+                              LV_PART_INDICATOR | LV_STATE_CHECKED);
+
     lv_obj_add_event_cb(sw, on_wifi_switch_changed, LV_EVENT_VALUE_CHANGED, nullptr);
-    /*
-     * 分段控件的段默认 flex_grow=1，需父级定宽才撑得开；此处按内容宽度摆放（未定宽），
-     * grow 会把 On/Off 压成 0 宽导致开关不显示。关掉各段 grow，按文字宽度自适应。
-     */
-    for(uint32_t i = 0; i < lv_obj_get_child_count(sw); i++) {
-        lv_obj_set_flex_grow(lv_obj_get_child(sw, i), 0);
+
+    /* 可隐藏的列表容器（WiFi 关时隐藏） */
+    lv_obj_t *box = lv_obj_create(parent);
+    lv_obj_remove_style_all(box);
+    lv_obj_set_width(box, LV_PCT(100));
+    lv_obj_set_height(box, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(box, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_row(box, USER_PAD, 0);
+    lv_obj_set_style_bg_opa(box, LV_OPA_TRANSP, 0);
+    lv_obj_clear_flag(box, LV_OBJ_FLAG_SCROLLABLE);
+    g_wifi_list_box = box;
+
+    const char *cur_ssid = wifi_current_ssid();
+    const bool  cur_connected = !g_wifi_state_valid || g_wifi_state.connected;
+
+    if(cur_connected) {
+        make_caption(box, "Current Wi-Fi");
+        make_wifi_item(box, cur_ssid, true);
     }
 
-    make_caption(parent, "Current Wi-Fi");
-    make_wifi_item(parent, kCurrentWifi);
+    make_caption(box, "Available Wi-Fi");
 
-    make_caption(parent, "Available Wi-Fi");
-    const size_t n = sizeof(kAvailWifi) / sizeof(kAvailWifi[0]);
-    for(size_t i = 0; i < n; i++) {
-        make_wifi_item(parent, kAvailWifi[i]);
+    if(g_scan_valid) {
+        /* 后端扫描结果：跳过已连接项，避免与 Current 重复 */
+        for(uint32_t i = 0; i < g_scan_count; i++) {
+            const char *ssid = g_scan_wifi[i].ssid;
+            if(ssid[0] == '\0') {
+                continue;
+            }
+            if(cur_connected && std::strcmp(ssid, cur_ssid) == 0) {
+                continue;
+            }
+            make_wifi_item(box, ssid, false);
+        }
+    } else {
+        /* 后端未上线/未扫描：占位假数据 */
+        const size_t n = sizeof(kAvailWifi) / sizeof(kAvailWifi[0]);
+        for(size_t i = 0; i < n; i++) {
+            if(std::strcmp(kAvailWifi[i], kCurrentWifi) == 0) {
+                continue;   /* 已连接项已单列，避免重复 */
+            }
+            make_wifi_item(box, kAvailWifi[i], false);
+        }
     }
+
+    make_link_row(box, "Advanced Settings", on_advanced_click, nullptr);
 
     /*
      * 翻页按钮：悬浮在整屏右侧、垂直居中，不随内容滚动。
@@ -491,7 +857,134 @@ void build_network_detail(lv_obj_t *parent)
         make_scroll_btn(col, LV_SYMBOL_DOWN, on_wifi_scroll_down);
         g_scroll_btns = col;
     }
+    /* WiFi 关时：隐藏列表容器与翻页按钮（重建后也保持隐藏） */
+    if(!g_wifi_on) {
+        lv_obj_add_flag(g_wifi_list_box, LV_OBJ_FLAG_HIDDEN);
+        if(g_scroll_btns) {
+            lv_obj_add_flag(g_scroll_btns, LV_OBJ_FLAG_HIDDEN);
+        }
+    }
 }
+
+
+/* ---- 网络子页：高级设置 / 已保存网络 / WiFi 详情 ---- */
+void build_wifi_advanced(lv_obj_t *parent)
+{
+    make_subpage_header(parent, "Advanced Settings", on_net_back_main);
+
+    lv_obj_t *card = ui_user_make_frosted_card(parent, false);
+    lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_row(card, USER_PAD, 0);
+
+    make_link_row(card, "Saved Networks", on_saved_networks_click, nullptr);
+    make_value_row(card, "IP Address", wifi_ip_text());
+}
+
+void build_saved_networks(lv_obj_t *parent)
+{
+    lv_obj_add_flag(parent, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scroll_dir(parent, LV_DIR_VER);
+    lv_obj_set_scrollbar_mode(parent, LV_SCROLLBAR_MODE_OFF);
+
+    make_subpage_header(parent, "Saved Networks", on_net_back_advanced);
+
+    /* 后端一旦回过（g_saved_valid），就以真实数据为准——即使为空也显示空，
+     * 不再回退占位（否则忘记后仍显示假数据、看似"没反应"）。 */
+    const bool use_live = (g_saved_valid && g_saved_count > 0);
+    const uint32_t n = use_live
+        ? g_saved_count
+        : static_cast<uint32_t>(sizeof(kSavedWifi) / sizeof(kSavedWifi[0]));
+
+    for(uint32_t i = 0; i < n; i++) {
+        const char *ssid = use_live ? g_saved_wifi[i].ssid : kSavedWifi[i];
+
+        lv_obj_t *row = lv_obj_create(parent);
+        lv_obj_remove_style_all(row);
+        lv_obj_set_width(row, LV_PCT(100));
+        lv_obj_set_height(row, USER_NAV_ITEM_H);
+        lv_obj_set_style_radius(row, USER_RADIUS, 0);
+        lv_obj_set_style_bg_color(row, user_color_text, 0);
+        lv_obj_set_style_bg_opa(row, 10, 0);
+        lv_obj_set_style_pad_hor(row, USER_PAD, 0);
+        lv_obj_set_style_pad_column(row, USER_PAD_SM, 0);
+        lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+        lv_obj_set_flex_align(row, LV_FLEX_ALIGN_START,
+                              LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+        lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
+
+        lv_obj_t *icon = lv_label_create(row);
+        lv_label_set_text(icon, LV_SYMBOL_WIFI);
+        lv_obj_set_style_text_color(icon, user_color_text, 0);
+        lv_obj_set_style_text_font(icon, user_font_text(), 0);
+
+        lv_obj_t *lbl = lv_label_create(row);
+        lv_label_set_text(lbl, ssid);
+        lv_obj_set_style_text_color(lbl, user_color_text, 0);
+        lv_obj_set_style_text_font(lbl, user_font_text(), 0);
+        lv_label_set_long_mode(lbl, LV_LABEL_LONG_MODE_DOTS);
+        lv_obj_set_flex_grow(lbl, 1);
+
+        lv_obj_t *fb = lv_button_create(row);
+        lv_obj_remove_style_all(fb);
+        lv_obj_set_style_pad_hor(fb, USER_PAD_SM, 0);
+        lv_obj_set_style_pad_ver(fb, USER_PAD_SM / 2, 0);
+        lv_obj_set_style_radius(fb, USER_RADIUS, 0);
+        lv_obj_set_style_bg_opa(fb, LV_OPA_TRANSP, 0);
+        lv_obj_set_style_bg_opa(fb, 28, LV_STATE_PRESSED);
+        lv_obj_add_event_cb(fb, on_forget_saved, LV_EVENT_CLICKED,
+                            const_cast<char *>(ssid));
+        lv_obj_t *fl = lv_label_create(fb);
+        lv_label_set_text(fl, "Forget");
+        lv_obj_set_style_text_color(fl, user_color_accent, 0);
+        lv_obj_set_style_text_font(fl, user_font_caption(), 0);
+    }
+}
+
+/* 未连接项点箭头的空页面（占位，后续填内容） */
+void build_wifi_empty(lv_obj_t *parent)
+{
+    make_subpage_header(parent, "Wi-Fi", on_net_back_main);
+
+    lv_obj_t *l = lv_label_create(parent);
+    lv_label_set_text(l, "(coming soon)");
+    lv_obj_set_style_text_color(l, user_color_text_dim, 0);
+    lv_obj_set_style_text_font(l, user_font_text(), 0);
+    lv_obj_set_style_margin_top(l, USER_PAD_LG, 0);
+}
+
+void build_wifi_connected_detail(lv_obj_t *parent)
+{
+    make_subpage_header(parent, wifi_current_ssid(), on_net_back_main);
+
+    lv_obj_t *card = ui_user_make_frosted_card(parent, false);
+    lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_row(card, USER_PAD, 0);
+
+    make_link_row(card, "Disconnect", on_disconnect_network, nullptr);
+    make_link_row(card, "Forget Network", on_forget_network, nullptr);
+    make_value_row(card, "IP Address", wifi_ip_text());
+}
+
+/* ---- 网络子页切换（清空详情区后重建目标子视图） ---- */
+void net_reset(void)
+{
+    if(g_scroll_btns) {
+        lv_obj_del(g_scroll_btns);
+        g_scroll_btns = nullptr;
+    }
+    g_wifi_list = nullptr;
+    g_wifi_list_box = nullptr;
+    lv_obj_clean(g_detail);
+    lv_obj_clear_flag(g_detail, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_style_pad_right(g_detail, 0, 0);
+}
+
+void net_show_main(void)        { g_net_subpage = NET_MAIN;     net_reset(); build_network_detail(g_detail); }
+void net_show_advanced(void)    { g_net_subpage = NET_ADVANCED; net_reset(); build_wifi_advanced(g_detail); }
+void net_show_saved(void)       { g_net_subpage = NET_SAVED;    net_reset(); build_saved_networks(g_detail); }
+void net_show_wifi_detail(void) { g_net_subpage = NET_DETAIL;   net_reset(); build_wifi_connected_detail(g_detail); }
+void net_show_empty(void)       { g_net_subpage = NET_EMPTY;    net_reset(); build_wifi_empty(g_detail); }
+
 
 void build_about_detail(lv_obj_t *parent)
 {
@@ -541,16 +1034,23 @@ void show_detail(NavId id)
         g_scroll_btns = nullptr;
     }
     g_wifi_list = nullptr;
+    g_wifi_list_box = nullptr;
+    g_net_subpage = NET_MAIN;   /* 切换左侧导航时复位子页跟踪 */
     lv_obj_clean(g_detail);
     /* 复位详情容器：默认不滚动、无右内边距（网络详情会按需开启） */
     lv_obj_clear_flag(g_detail, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_style_pad_right(g_detail, 0, 0);
 
     switch(id) {
-    case NAV_NETWORK: build_network_detail(g_detail); break;
-    case NAV_DEVICE:  build_device_detail(g_detail);  break;
-    case NAV_ABOUT:   build_about_detail(g_detail);   break;
-    default:          build_placeholder_detail(g_detail, kNavDefs[id].label); break;
+        case NAV_NETWORK:
+            build_network_detail(g_detail);
+            /* 进入网络页：请求当前状态 + 触发一次扫描（结果经 register_wifi_scan 回填） */
+            ui::UiMsgProxy::instance().send_wifi_info();
+            ui::UiMsgProxy::instance().send_wifi_scan();
+            break;
+        case NAV_DEVICE:  build_device_detail(g_detail);  break;
+        case NAV_ABOUT:   build_about_detail(g_detail);   break;
+        default:          build_placeholder_detail(g_detail, kNavDefs[id].label); break;
     }
 }
 
@@ -708,18 +1208,72 @@ void page_user_settings_dismiss_dialog(void)
 {
     dlg_close();
     ota_close_dialog();
+    close_connecting_dialog();
 }
 
 lv_obj_t *page_user_settings_create(lv_obj_t *parent)
 {
     g_selected   = NAV_NETWORK;
     g_wifi_list  = nullptr;
+    g_wifi_list_box = nullptr;
     g_page       = nullptr;
     g_scroll_btns = nullptr;
     for(int i = 0; i < NAV_COUNT; i++) {
         g_nav_btns[i]  = nullptr;
         g_nav_icons[i] = nullptr;
     }
+
+     /* 缓存后端网络状态。仅同步开关状态，不整页重建（重建会打断用户操作、
+     * 把开关重置）。当前 SSID/列表刷新交给扫描回调 register_wifi_scan。 */
+     ui::UiMsgProxy::instance().register_wifi_state(
+        [](const middleware::WifiStatePayload &s) {
+            g_wifi_state = s;
+            g_wifi_state_valid = true;
+            g_wifi_on = (s.enabled != 0);
+        });
+
+    /* 缓存扫描结果；若正停在网络主页则用真实列表重建可用网络。 */
+    ui::UiMsgProxy::instance().register_wifi_scan(
+        [](const middleware::WifiEntryPayload *items, uint32_t count) {
+            const uint32_t cap = static_cast<uint32_t>(
+                sizeof(g_scan_wifi) / sizeof(g_scan_wifi[0]));
+            const uint32_t nn = count > cap ? cap : count;
+            for(uint32_t i = 0; i < nn; i++) {
+                g_scan_wifi[i] = items[i];
+            }
+            g_scan_count = nn;
+            g_scan_valid = true;
+            if(g_selected == NAV_NETWORK && g_net_subpage == NET_MAIN) {
+                net_show_main();   /* 用真实扫描列表重建 */
+            }
+        });
+
+    /* 预留端口：缓存后端已保存网络列表；若正停在 Saved Networks 页则刷新。 */
+    ui::UiMsgProxy::instance().register_wifi_saved(
+        [](const middleware::WifiEntryPayload *items, uint32_t count) {
+            const uint32_t cap = static_cast<uint32_t>(
+                sizeof(g_saved_wifi) / sizeof(g_saved_wifi[0]));
+            const uint32_t nn = count > cap ? cap : count;
+            for(uint32_t i = 0; i < nn; i++) {
+                g_saved_wifi[i] = items[i];
+            }
+            g_saved_count = nn;
+            g_saved_valid = true;
+            if(g_selected == NAV_NETWORK && g_net_subpage == NET_SAVED) {
+                net_show_saved();   /* 用真实列表重建（不再重发请求，避免回环） */
+            }
+        });
+
+    /* 连接结果：关闭"连接中"模态，成功轻提示；失败弹"连接失败"（如密码错/超时）。 */
+    ui::UiMsgProxy::instance().register_wifi_connect_result(
+        [](bool ok, const char * /*ssid*/) {
+            close_connecting_dialog();
+            if(ok) {
+                ui_toast_show("Connected", user_color_status_ok, 1500);
+            } else {
+                ui_toast_show("Connect failed", ui_color_danger, 2500);
+            }
+        });
 
     lv_obj_t *page = lv_obj_create(parent);
     lv_obj_remove_style_all(page);

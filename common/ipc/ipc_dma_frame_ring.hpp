@@ -71,7 +71,11 @@ public:
 
     std::optional<uint32_t> acquire_write_slot();
     void cancel_write_slot(uint32_t idx);
-    bool commit_slot(uint32_t idx, uint64_t timestamp_us, uint32_t buffer_idx);
+    /**
+     * @brief 提交 Writing→Ready。
+     * @return 该 slot 新 seq（从 1 起增）；失败返回 0。
+     */
+    uint32_t commit_slot(uint32_t idx, uint64_t timestamp_us, uint32_t buffer_idx);
 
     /**
      * @brief 等待某个 slot 被 Consumer 释放为 Empty（带超时）。

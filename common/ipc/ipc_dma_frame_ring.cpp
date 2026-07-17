@@ -146,16 +146,16 @@ void IpcDmaFrameRingProducer::cancel_write_slot(uint32_t idx)
                                               std::memory_order_relaxed);
 }
 
-bool IpcDmaFrameRingProducer::commit_slot(uint32_t idx, uint64_t timestamp_us,
-                                          uint32_t buffer_idx)
+uint32_t IpcDmaFrameRingProducer::commit_slot(uint32_t idx, uint64_t timestamp_us,
+                                              uint32_t buffer_idx)
 {
     if(!slots_ || idx >= global_->slot_count) {
-        return false;
+        return 0;
     }
     auto& slot = slots_[idx];
     const uint32_t cur = slot.state.load(std::memory_order_acquire);
     if(cur != kStateWriting) {
-        return false;
+        return 0;
     }
 
     slot.timestamp_us = timestamp_us;
@@ -163,7 +163,7 @@ bool IpcDmaFrameRingProducer::commit_slot(uint32_t idx, uint64_t timestamp_us,
     const uint32_t new_seq = slot.seq.load(std::memory_order_relaxed) + 1u;
     slot.seq.store(new_seq, std::memory_order_release);
     slot.state.store(kStateReady, std::memory_order_release);
-    return true;
+    return new_seq;
 }
 
 bool IpcDmaFrameRingProducer::wait_slot_empty(uint32_t idx,

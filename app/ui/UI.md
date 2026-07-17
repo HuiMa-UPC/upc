@@ -106,7 +106,8 @@ rongsu_camera 经主 IPC（/tmp/upc_camera.sock）SCM_RIGHTS 附带 dma_buf fd �
 
 `CameraStreamInfoPayload.dma_socket_path` 为 ABI 保留字段；fd 不经独立 socket 传递。
 
-- **开流**：`page_user_home` 打印模式 → `CameraPreviewPlayer::start()` → IPC Start → `apply_stream_start_ui` 开 SHM 元数据环 + `take_peer_dma_fds` + `setup_frame_buffers` + 解码线程。
+- **开流**：`page_user_home` 监控/打印 → `CameraPreviewPlayer::start(image, hint, scene)`（`scene`=`monitor`|`print`）→ IPC Start → `apply_stream_start_ui` 开 SHM 元数据环 + `take_peer_dma_fds` + `setup_frame_buffers` + 解码线程。
+- **诊断日志**（`UPC_MOD_CAMERA_PREVIEW`）：`start`/`decode ready` 带 scene+image 指针；每秒 `decode 1s` 含 `last_seq`、convert/loop 耗时（含 RGA）；Camera 侧同开关下打 `stream 1s`（真实 seq、`slot_fail`/`dequeue_fail`/`release_timeout`）。
 - **关流**：`stop()` → join 解码线程、`clear_frame_buffers()` 释放 DMA / 关闭 fd 表。
 - **RGA 路径**：`setup_frame_buffers` 时 `RgaDmaBuf` 分配成功则 `rga_path=1`；失败退化为 `std::vector` 软件转换。无进程级预热，首帧到达即转换。
 - **DMA 约束**：RK3568 RGA2 仅支持 4G 以下物理地址；源 fd 必须来自 V4L2 / dma-heap（dma32），UI 直接用 `importbuffer_fd`。

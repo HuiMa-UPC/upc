@@ -289,7 +289,8 @@ void CameraPreviewPlayer::init()
         });
 }
 
-void CameraPreviewPlayer::start(lv_obj_t* image_widget, lv_obj_t* hint_widget)
+void CameraPreviewPlayer::start(lv_obj_t* image_widget, lv_obj_t* hint_widget,
+                                 const char* scene)
 {
     if(active_.load()) {
         stop();
@@ -297,6 +298,12 @@ void CameraPreviewPlayer::start(lv_obj_t* image_widget, lv_obj_t* hint_widget)
 
     image_     = image_widget;
     hint_      = hint_widget;
+    if(scene && scene[0]) {
+        std::strncpy(scene_, scene, sizeof(scene_) - 1);
+        scene_[sizeof(scene_) - 1] = '\0';
+    } else {
+        scene_[0] = '\0';
+    }
     shown_buf_.store(-1, std::memory_order_relaxed);
     logged_first_ui_show_ = false;
     active_.store(true);
@@ -316,9 +323,11 @@ void CameraPreviewPlayer::start(lv_obj_t* image_widget, lv_obj_t* hint_widget)
 
     show_hint(LV_SYMBOL_VIDEO "  Connecting camera...");
     start_req_sent_ = true;
-    UPC_LOG_CAMERA_PREVIEW(Info, "start req image=%p hint=%p",
-                           static_cast<void*>(image_widget),
-                           static_cast<void*>(hint_widget));
+    UPC_LOG_CAMERA_PREVIEW(Info,
+        "start req scene=%s image=%p hint=%p",
+        scene_[0] ? scene_ : "(none)",
+        static_cast<void*>(image_widget),
+        static_cast<void*>(hint_widget));
     CameraMsgProxy::instance().send_stream_start(nullptr);
 }
 
@@ -548,8 +557,9 @@ void CameraPreviewPlayer::apply_stream_start_ui(
 
     logged_first_ui_show_ = false;
     UPC_LOG_CAMERA_PREVIEW(Info,
-        "decode ready %ux%u@%u fps frame_bytes=%zu "
+        "decode ready scene=%s image=%p %ux%u@%u fps frame_bytes=%zu "
         "rga_path=%d row_stride=%u px_stride=%u src_stride=%u ui_timer=%ums",
+        scene_[0] ? scene_ : "(none)", static_cast<void*>(image_),
         width_, height_, fps_, frame_bytes, rga_path_ready_ ? 1 : 0,
         row_stride_bytes, pixel_stride_px_, src_stride_y_, kUiRefreshPeriodMs);
 
@@ -580,10 +590,17 @@ void CameraPreviewPlayer::decode_thread_fn()
     uint32_t frames_ok = 0;
     uint32_t frames_fail = 0;
     uint32_t frames_no_slot = 0;
+    uint32_t last_seq = 0;
+    uint64_t convert_us_sum = 0;
+    uint64_t convert_us_max = 0;
+    uint64_t loop_us_sum = 0;
+    uint64_t loop_us_max = 0;
     auto stats_since = std::chrono::steady_clock::now();
 
     UPC_LOG_CAMERA_PREVIEW(Info,
-        "decode thread started target_fps=%u period_us=%lld rga_path=%d",
+        "decode thread started scene=%s image=%p target_fps=%u period_us=%lld "
+        "rga_path=%d",
+        scene_[0] ? scene_ : "(none)", static_cast<void*>(image_),
         fps_, static_cast<long long>(frame_period.count()),
         rga_path_ready_ ? 1 : 0);
 
@@ -598,16 +615,20 @@ void CameraPreviewPlayer::decode_thread_fn()
         } else {
             if(!logged_first_meta) {
                 UPC_LOG_CAMERA_PREVIEW(Info,
-                    "first meta frame slot=%u seq=%u buf_idx=%u %ux%u stride=%u",
+                    "first meta frame scene=%s slot=%u seq=%u buf_idx=%u "
+                    "%ux%u stride=%u",
+                    scene_[0] ? scene_ : "(none)",
                     frame->slot_index, frame->seq, frame->buffer_idx,
                     frame->width(), frame->height(), frame->stride_y());
                 logged_first_meta = true;
             }
+            last_seq = frame->seq;
 
             write_idx = pick_write_buf(write_idx,
                                        shown_buf_.load(std::memory_order_relaxed),
                                        display_buf_.load(std::memory_order_relaxed),
                                        kFrameSlots);
+            const auto cvt_start = std::chrono::steady_clock::now();
             if(convert_frame(*frame, write_idx)) {
                 ++frames_ok;
                 display_buf_.store(write_idx, std::memory_order_release);
@@ -620,16 +641,50 @@ void CameraPreviewPlayer::decode_thread_fn()
             } else {
                 ++frames_fail;
             }
+            const uint64_t cvt_us = static_cast<uint64_t>(
+                std::chrono::duration_cast<std::chrono::microseconds>(
+                    std::chrono::steady_clock::now() - cvt_start)
+                    .count());
+            convert_us_sum += cvt_us;
+            if(cvt_us > convert_us_max) {
+                convert_us_max = cvt_us;
+            }
             consumer_.release_slot(frame->slot_index);
         }
 
         const auto now = std::chrono::steady_clock::now();
+        const uint64_t loop_us = static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::microseconds>(now - tick_start)
+                .count());
+        loop_us_sum += loop_us;
+        if(loop_us > loop_us_max) {
+            loop_us_max = loop_us;
+        }
+
         if(now - stats_since >= std::chrono::seconds(1)) {
+            const uint32_t timed =
+                frames_ok + frames_fail; /* 有 convert 计时的帧数 */
+            const uint32_t loops = frames_ok + frames_fail + frames_no_slot;
+            const uint64_t cvt_avg =
+                timed > 0 ? (convert_us_sum / timed) : 0;
+            const uint64_t loop_avg =
+                loops > 0 ? (loop_us_sum / loops) : 0;
             UPC_LOG_CAMERA_PREVIEW(Debug,
-                "decode 1s: ok=%u fail=%u no_frame=%u display_buf=%d write_idx=%d",
-                frames_ok, frames_fail, frames_no_slot,
-                display_buf_.load(std::memory_order_relaxed), write_idx);
+                "decode 1s: scene=%s image=%p ok=%u fail=%u no_frame=%u "
+                "last_seq=%u display_buf=%d "
+                "cvt_avg_us=%llu cvt_max_us=%llu "
+                "loop_avg_us=%llu loop_max_us=%llu rga=%d",
+                scene_[0] ? scene_ : "(none)", static_cast<void*>(image_),
+                frames_ok, frames_fail, frames_no_slot, last_seq,
+                display_buf_.load(std::memory_order_relaxed),
+                static_cast<unsigned long long>(cvt_avg),
+                static_cast<unsigned long long>(convert_us_max),
+                static_cast<unsigned long long>(loop_avg),
+                static_cast<unsigned long long>(loop_us_max),
+                rga_path_ready_ ? 1 : 0);
             frames_ok = frames_no_slot = frames_fail = 0;
+            convert_us_sum = convert_us_max = 0;
+            loop_us_sum = loop_us_max = 0;
             stats_since = now;
         }
 
@@ -639,7 +694,8 @@ void CameraPreviewPlayer::decode_thread_fn()
         }
     }
 
-    UPC_LOG_CAMERA_PREVIEW(Info, "decode thread exiting");
+    UPC_LOG_CAMERA_PREVIEW(Info, "decode thread exiting scene=%s",
+                           scene_[0] ? scene_ : "(none)");
 }
 
 bool CameraPreviewPlayer::convert_frame(const upc_ipc::IpcDmaFrameView& frame,
