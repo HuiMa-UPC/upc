@@ -2,7 +2,6 @@
 #define PRINT_VIDEO_RECORDER_HPP
 
 #include "device_config.hpp"
-#include "ipc_dma_frame_ring.hpp"
 #include "msg_runtime.hpp"
 
 #include <atomic>
@@ -51,15 +50,13 @@ public:
     void on_session_abort(const middleware::PrintVideoSessionPayload& info);
 
     /**
-     * 设置 dma fd 查询回调。根据元数据环中的 buffer_idx 拿到 fd。
+     * 设置 NV12 快照回调。回调返回紧凑 NV12（stride==width）帧数据。
      */
-    void set_dma_fd_lookup(std::function<int(uint32_t buffer_idx)> fn);
+    void set_nv12_snapshot_provider(std::function<bool(std::vector<uint8_t>&)> fn);
 
 private:
     void worker_fn();
     void enqueue_job(PrintVideoJob job);
-    bool open_consumer();
-    void close_consumer();
     bool ensure_encoder();
     void close_encoder();
     bool drain_encoder_packets(FILE* fp);
@@ -90,10 +87,7 @@ private:
     std::thread             worker_;
     std::atomic<bool>       stop_{false};
 
-    std::function<int(uint32_t)> fd_lookup_;
-
-    upc_ipc::IpcDmaFrameRingConsumer consumer_;
-    bool consumer_open_ = false;
+    std::function<bool(std::vector<uint8_t>&)> snapshot_provider_;
 
     bool     session_active_ = false;
     uint32_t stream_width_   = CAMERA_WIDTH_DEFAULT;

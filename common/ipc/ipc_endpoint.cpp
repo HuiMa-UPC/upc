@@ -193,27 +193,83 @@ bool IpcEndpoint::connect_to(const char* socket_path) {
 #endif
 }
 
-bool IpcEndpoint::write_exact(const uint8_t* buf, size_t n) {
-#if defined(__linux__) || defined(__unix__)
-    size_t off = 0;
-    while (off < n) {
-        const ssize_t w = ::write(conn_fd_, buf + off, n - off);
-        if (w < 0) {
-            if (errno == EINTR) {
-                continue;
-            }
-            return false;
-        }
-        if (w == 0) {
-            return false;
-        }
-        off += static_cast<size_t>(w);
-    }
-    return true;
+bool IpcEndpoint::wait_writable_locked(int timeout_ms) const
+{
+#if !defined(__linux__) && !defined(__unix__)
+    (void)timeout_ms;
+    return false;
 #else
+    if(conn_fd_ < 0) {
+        return false;
+    }
+    pollfd pfd{};
+    pfd.fd = conn_fd_;
+    pfd.events = POLLOUT;
+    for(;;) {
+        const int pr = ::poll(&pfd, 1, timeout_ms);
+        if(pr > 0) {
+            if((pfd.revents & (POLLERR | POLLHUP | POLLNVAL)) != 0) {
+                return false;
+            }
+            return (pfd.revents & POLLOUT) != 0;
+        }
+        if(pr == 0) {
+            return false;
+        }
+        if(errno == EINTR) {
+            continue;
+        }
+        return false;
+    }
+#endif
+}
+
+void IpcEndpoint::close_conn_locked()
+{
+#if defined(__linux__) || defined(__unix__)
+    if(conn_fd_ >= 0) {
+        ::close(conn_fd_);
+        conn_fd_ = -1;
+    }
+#endif
+    rx_accum_.clear();
+}
+
+bool IpcEndpoint::send_stream_bytes_locked(const uint8_t* buf, size_t n)
+{
+#if !defined(__linux__) && !defined(__unix__)
     (void)buf;
     (void)n;
     return false;
+#else
+    if(conn_fd_ < 0 || !buf || n == 0) {
+        return false;
+    }
+    size_t off = 0;
+    while(off < n) {
+        const ssize_t w = ::send(conn_fd_, buf + off, n - off, MSG_NOSIGNAL);
+        if(w > 0) {
+            off += static_cast<size_t>(w);
+            continue;
+        }
+        if(w == 0) {
+            close_conn_locked();
+            return false;
+        }
+        if(errno == EINTR) {
+            continue;
+        }
+        if(errno == EAGAIN || errno == EWOULDBLOCK) {
+            if(wait_writable_locked(100) && conn_fd_ >= 0) {
+                continue;
+            }
+            close_conn_locked();
+            return false;
+        }
+        close_conn_locked();
+        return false;
+    }
+    return true;
 #endif
 }
 
@@ -223,10 +279,11 @@ bool IpcEndpoint::send_frame(const std::vector<uint8_t>& frame) {
         return false;
     }
     const uint32_t len = static_cast<uint32_t>(frame.size());
-    if (!write_exact(reinterpret_cast<const uint8_t*>(&len), sizeof(len))) {
+    if (!send_stream_bytes_locked(reinterpret_cast<const uint8_t*>(&len),
+                                  sizeof(len))) {
         return false;
     }
-    return write_exact(frame.data(), frame.size());
+    return send_stream_bytes_locked(frame.data(), frame.size());
 }
 
 bool IpcEndpoint::send_frame_with_fds(const std::vector<uint8_t>& frame,
@@ -273,9 +330,36 @@ bool IpcEndpoint::send_frame_with_fds(const std::vector<uint8_t>& frame,
         fd_ptr[i] = fds[i];
     }
 
-    const ssize_t w = ::sendmsg(conn_fd_, &msg, MSG_NOSIGNAL);
-    return w >= 0 &&
-           static_cast<size_t>(w) == sizeof(magic) + sizeof(len) + frame.size();
+    for(;;) {
+        const ssize_t w = ::sendmsg(conn_fd_, &msg, MSG_NOSIGNAL);
+        if(w > 0) {
+            const size_t total =
+                sizeof(magic) + sizeof(len) + frame.size();
+            if(static_cast<size_t>(w) != total) {
+                UPC_LOG_IPC(Error,
+                            "UPDF partial send bytes=%zd total=%zu, close conn",
+                            w, total);
+                close_conn_locked();
+                return false;
+            }
+            return true;
+        }
+        if(w == 0) {
+            close_conn_locked();
+            return false;
+        }
+        if(errno == EINTR) {
+            continue;
+        }
+        if(errno == EAGAIN || errno == EWOULDBLOCK) {
+            if(wait_writable_locked(100) && conn_fd_ >= 0) {
+                continue;
+            }
+            return false;
+        }
+        close_conn_locked();
+        return false;
+    }
 #endif
 }
 

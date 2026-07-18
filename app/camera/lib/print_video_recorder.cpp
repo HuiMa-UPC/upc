@@ -20,39 +20,12 @@
 #include <cstdlib>
 #include <cstring>
 #include <ctime>
-#include <sys/ioctl.h>
-#include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
-#include <linux/dma-buf.h>
 
 #include <vector>
 
 namespace upc::camera {
-
-namespace {
-
-void dma_buf_sync_start_read(int fd)
-{
-    if(fd < 0) {
-        return;
-    }
-    struct dma_buf_sync sync {};
-    sync.flags = DMA_BUF_SYNC_START | DMA_BUF_SYNC_READ;
-    (void)ioctl(fd, DMA_BUF_IOCTL_SYNC, &sync);
-}
-
-void dma_buf_sync_end_read(int fd)
-{
-    if(fd < 0) {
-        return;
-    }
-    struct dma_buf_sync sync {};
-    sync.flags = DMA_BUF_SYNC_END | DMA_BUF_SYNC_READ;
-    (void)ioctl(fd, DMA_BUF_IOCTL_SYNC, &sync);
-}
-
-} // namespace
 
 PrintVideoRecorder::~PrintVideoRecorder()
 {
@@ -65,7 +38,6 @@ PrintVideoRecorder::~PrintVideoRecorder()
         worker_.join();
     }
     close_encoder();
-    close_consumer();
 }
 
 void PrintVideoRecorder::set_stream_geometry(uint32_t width, uint32_t height)
@@ -131,7 +103,6 @@ void PrintVideoRecorder::on_session_start(
     }
 
     session_active_ = true;
-    open_consumer();
     UPC_LOG_CAMERA_SERVICE(Info,
         "print_video session start id=%s job=%s dir=%s %ux%u layer_fps=%u start_unix=%lld",
         session_id_.c_str(), job_name_.c_str(), session_dir_.c_str(),
@@ -185,9 +156,10 @@ void PrintVideoRecorder::on_session_abort(
     enqueue_job(PrintVideoJob{PrintVideoJobKind::AbortCleanup, 0, 0});
 }
 
-void PrintVideoRecorder::set_dma_fd_lookup(std::function<int(uint32_t buffer_idx)> fn)
+void PrintVideoRecorder::set_nv12_snapshot_provider(
+    std::function<bool(std::vector<uint8_t>&)> fn)
 {
-    fd_lookup_ = std::move(fn);
+    snapshot_provider_ = std::move(fn);
 }
 
 void PrintVideoRecorder::worker_fn()
@@ -220,28 +192,6 @@ void PrintVideoRecorder::worker_fn()
             finalize_session(true);
             break;
         }
-    }
-}
-
-bool PrintVideoRecorder::open_consumer()
-{
-    if(consumer_open_) {
-        return true;
-    }
-    if(consumer_.open(CAMERA_SHM_NAME_DEFAULT) != upc_ipc::IpcShmError::OK) {
-        UPC_LOG_CAMERA_SERVICE(Warn,
-            "print_video SHM consumer open failed (preview not running?)");
-        return false;
-    }
-    consumer_open_ = true;
-    return true;
-}
-
-void PrintVideoRecorder::close_consumer()
-{
-    if(consumer_open_) {
-        consumer_.close();
-        consumer_open_ = false;
     }
 }
 
@@ -416,68 +366,10 @@ bool PrintVideoRecorder::flush_encoder_eos()
 
 bool PrintVideoRecorder::grab_latest_nv12(std::vector<uint8_t>& out)
 {
-    if(!open_consumer()) {
+    if(!snapshot_provider_) {
         return false;
     }
-    std::optional<upc_ipc::IpcDmaFrameView> frame = consumer_.acquire_latest_frame();
-    if(!frame || frame->width() != stream_width_ ||
-       frame->height() != stream_height_) {
-        if(frame) {
-            consumer_.release_slot(frame->slot_index);
-        }
-        return false;
-    }
-
-    const size_t y_size = static_cast<size_t>(stream_width_) * stream_height_;
-    const size_t uv_size = y_size / 2u;
-    const size_t need = y_size + uv_size;
-    out.resize(need);
-
-    if(!fd_lookup_) {
-        consumer_.release_slot(frame->slot_index);
-        return false;
-    }
-
-    const int fd = fd_lookup_(frame->buffer_idx);
-    if(fd < 0) {
-        consumer_.release_slot(frame->slot_index);
-        return false;
-    }
-
-    const uint32_t src_stride = consumer_.stride_y();
-    const size_t src_size = static_cast<size_t>(src_stride) * stream_height_ * 3u / 2u;
-    dma_buf_sync_start_read(fd);
-    void* va = mmap(nullptr, src_size, PROT_READ, MAP_SHARED, fd, 0);
-    if(va == MAP_FAILED) {
-        dma_buf_sync_end_read(fd);
-        consumer_.release_slot(frame->slot_index);
-        return false;
-    }
-
-    const uint8_t* src_y  = static_cast<const uint8_t*>(va);
-    const uint8_t* src_uv = src_y + static_cast<size_t>(src_stride) * stream_height_;
-
-    if(src_stride == stream_width_) {
-        std::memcpy(out.data(), src_y, need);
-    } else {
-        uint8_t* dst_y  = out.data();
-        uint8_t* dst_uv = dst_y + y_size;
-        for(uint32_t row = 0; row < stream_height_; ++row) {
-            std::memcpy(dst_y + static_cast<size_t>(row) * stream_width_,
-                        src_y + static_cast<size_t>(row) * src_stride,
-                        stream_width_);
-        }
-        for(uint32_t row = 0; row < stream_height_ / 2u; ++row) {
-            std::memcpy(dst_uv + static_cast<size_t>(row) * stream_width_,
-                        src_uv + static_cast<size_t>(row) * src_stride,
-                        stream_width_);
-        }
-    }
-
-    munmap(va, src_size);
-    dma_buf_sync_end_read(fd);
-    consumer_.release_slot(frame->slot_index);
-    return true;
+    return snapshot_provider_(out);
 }
 
 bool PrintVideoRecorder::encode_nv12_frame(const uint8_t* nv12, size_t bytes,
@@ -612,7 +504,6 @@ bool PrintVideoRecorder::extract_last_frame_thumb(const char* mp4_path,
 
 void PrintVideoRecorder::finalize_session(bool aborted)
 {
-    close_consumer();
     if(encoder_open_) {
         (void)flush_encoder_eos();
     }

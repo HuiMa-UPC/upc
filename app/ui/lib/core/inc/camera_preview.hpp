@@ -75,6 +75,7 @@ private:
 
     static void ui_timer_cb(lv_timer_t* timer);
     static void async_apply_stream_start(void* user);
+    static void async_restart_stream(void* user);
     bool convert_frame(const upc_ipc::IpcDmaFrameView& frame, int slot_idx);
     bool convert_frame_dma(const upc_ipc::IpcDmaFrameView& frame, int slot_idx);
 
@@ -107,6 +108,10 @@ private:
     std::atomic<int>     display_buf_{-1};
     std::atomic<int>     shown_buf_{-1};
     bool                 logged_first_ui_show_ = false;
+    std::atomic<uint64_t> last_frame_ok_ms_{0};
+    std::atomic<uint64_t> last_restart_ms_{0};
+    std::atomic<bool>     restart_pending_{false};
+    std::atomic<bool>     stalled_{false};
 
     middleware::CameraStreamInfoPayload pending_start_rsp_{};
     bool pending_start_rsp_valid_ = false;

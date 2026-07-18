@@ -50,7 +50,9 @@ public:
     void recv_pending(std::vector<InboundWireUnit>& out_units);
 
 private:
-    bool write_exact(const uint8_t* buf, size_t n);
+    bool wait_writable_locked(int timeout_ms) const;
+    void close_conn_locked();
+    bool send_stream_bytes_locked(const uint8_t* buf, size_t n);
     bool peek_fd_frame_magic() const;
     bool recv_fd_frame_unit(InboundWireUnit& out);
     void parse_stream_frames(std::vector<InboundWireUnit>& out_units);

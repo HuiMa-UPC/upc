@@ -9,6 +9,7 @@
 #include "vi_capture.hpp"
 
 #include <atomic>
+#include <mutex>
 #include <string>
 #include <thread>
 #include <vector>
@@ -49,6 +50,10 @@ private:
     bool start_streaming();
     void stop_streaming();
     void stream_thread_fn();
+    void update_latest_nv12_snapshot(const uint8_t* src_y, const uint8_t* src_uv,
+                                     uint32_t src_stride_y, uint32_t width,
+                                     uint32_t height);
+    bool copy_latest_nv12_snapshot(std::vector<uint8_t>& out) const;
 
     void send_stream_start_rsp(const middleware::Message& req, bool ok);
     void send_stream_stop_done(const middleware::Message& req);
@@ -73,6 +78,10 @@ private:
     uint32_t stream_height_        = CAMERA_HEIGHT_DEFAULT;
     uint32_t stream_fps_           = CAMERA_FPS_DEFAULT;
     uint32_t stream_warmup_frames_ = CAMERA_WARMUP_FRAMES_DEFAULT;
+
+    mutable std::mutex latest_nv12_mtx_;
+    std::vector<uint8_t> latest_nv12_snapshot_;
+    bool latest_nv12_valid_ = false;
 };
 
 } // namespace upc::camera

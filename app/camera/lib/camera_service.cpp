@@ -30,6 +30,33 @@ const char* env_or_default(const char* name, const char* fallback)
     return (v && v[0]) ? v : fallback;
 }
 
+void copy_nv12_tight(uint8_t* dst, const uint8_t* src_y, const uint8_t* src_uv,
+                     uint32_t src_stride_y, uint32_t width, uint32_t height)
+{
+    if(!dst || !src_y || !src_uv || src_stride_y == 0 || width == 0 ||
+       height == 0) {
+        return;
+    }
+    const size_t y_size = static_cast<size_t>(width) * height;
+    uint8_t* dst_uv = dst + y_size;
+
+    if(src_stride_y == width) {
+        std::memcpy(dst, src_y, y_size + y_size / 2u);
+        return;
+    }
+
+    for(uint32_t row = 0; row < height; ++row) {
+        std::memcpy(dst + static_cast<size_t>(row) * width,
+                    src_y + static_cast<size_t>(row) * src_stride_y,
+                    width);
+    }
+    for(uint32_t row = 0; row < height / 2u; ++row) {
+        std::memcpy(dst_uv + static_cast<size_t>(row) * width,
+                    src_uv + static_cast<size_t>(row) * src_stride_y,
+                    width);
+    }
+}
+
 } // namespace
 
 CameraService::~CameraService()
@@ -48,6 +75,10 @@ bool CameraService::init()
     }
 
     subscribe_messages();
+    print_video_.set_nv12_snapshot_provider(
+        [this](std::vector<uint8_t>& out) {
+            return copy_latest_nv12_snapshot(out);
+        });
     UPC_LOG_CAMERA_SERVICE(Info,
         "init device=%s %ux%u@%u warmup_frames=%u iq=%s/%s shm=%s frame_ntf=%d",
         env_or_default(CAMERA_ENV_DEVICE, CAMERA_V4L2_DEVICE_DEFAULT),
@@ -210,8 +241,6 @@ void CameraService::handle_stream_start(const middleware::Message& msg)
     stop_stream_.store(false);
     stream_running_.store(true);
     print_video_.set_stream_geometry(stream_width_, stream_height_);
-    print_video_.set_dma_fd_lookup(
-        [this](uint32_t idx) { return dma_source_.fd_for_buffer_idx(idx); });
     stream_thread_ = std::thread(&CameraService::stream_thread_fn, this);
 
     UPC_LOG_CAMERA_SERVICE(Info,
@@ -292,6 +321,39 @@ void CameraService::stop_streaming()
     dma_source_.shutdown();
     producer_.destroy();
     capture_.close();
+    {
+        std::lock_guard<std::mutex> lock(latest_nv12_mtx_);
+        latest_nv12_snapshot_.clear();
+        latest_nv12_valid_ = false;
+    }
+}
+
+void CameraService::update_latest_nv12_snapshot(const uint8_t* src_y,
+                                                const uint8_t* src_uv,
+                                                uint32_t src_stride_y,
+                                                uint32_t width,
+                                                uint32_t height)
+{
+    if(!src_y || !src_uv || width == 0 || height == 0) {
+        return;
+    }
+    const size_t need =
+        static_cast<size_t>(width) * static_cast<size_t>(height) * 3u / 2u;
+    std::lock_guard<std::mutex> lock(latest_nv12_mtx_);
+    latest_nv12_snapshot_.resize(need);
+    copy_nv12_tight(latest_nv12_snapshot_.data(), src_y, src_uv, src_stride_y,
+                    width, height);
+    latest_nv12_valid_ = true;
+}
+
+bool CameraService::copy_latest_nv12_snapshot(std::vector<uint8_t>& out) const
+{
+    std::lock_guard<std::mutex> lock(latest_nv12_mtx_);
+    if(!latest_nv12_valid_ || latest_nv12_snapshot_.empty()) {
+        return false;
+    }
+    out = latest_nv12_snapshot_;
+    return true;
 }
 
 void CameraService::stream_thread_fn()
@@ -371,6 +433,12 @@ void CameraService::stream_thread_fn()
         }
 
         uint32_t slot_buf_idx = *buf_idx;
+        const uint8_t* src_y = capture_.buffer_y(*buf_idx);
+        const uint8_t* src_uv = capture_.buffer_uv(*buf_idx);
+        if(src_y && src_uv) {
+            update_latest_nv12_snapshot(src_y, src_uv, capture_.stride_y(),
+                                        stream_width_, stream_height_);
+        }
 
         if(!dma_source_.stride_aligned()) {
             const int padded_idx = dma_source_.acquire_padded();
