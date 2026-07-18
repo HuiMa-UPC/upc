@@ -8,7 +8,7 @@
  * 发布/订阅 API：subscribe / publish_async / process
  * 消息契约：common/upc_contract.hpp
  *
- * Broker 拓扑：业务进程 set_mode_ipc_client；Broker 进程 set_mode_ipc_broker。
+ * Broker 拓扑：业务进程 set_mode_ipc_client；Broker 进程直接使用 IpcMsgBus::init_broker。
  */
 #include "msg_bus.hpp"
 #include "upc_contract.hpp"
@@ -27,7 +27,6 @@ public:
     static MsgPort& instance();
 
     void set_mode_in_process();
-    bool set_mode_ipc_broker(const char* socket_path = UPC_BROKER_SOCKET_DEFAULT);
     bool set_mode_ipc_client(middleware::ModuleId local_id,
                              const char* broker_path = UPC_BROKER_SOCKET_DEFAULT);
 

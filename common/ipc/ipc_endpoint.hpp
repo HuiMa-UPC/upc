@@ -52,6 +52,7 @@ public:
 private:
     bool wait_writable_locked(int timeout_ms) const;
     void close_conn_locked();
+    void clear_fd_rx_state_locked();
     bool send_stream_bytes_locked(const uint8_t* buf, size_t n);
     bool peek_fd_frame_magic() const;
     bool recv_fd_frame_unit(InboundWireUnit& out);
@@ -62,6 +63,8 @@ private:
     int listen_fd_ = -1;
     int conn_fd_   = -1;
     std::vector<uint8_t> rx_accum_;
+    std::vector<uint8_t> fd_rx_accum_;
+    std::vector<int> fd_rx_fds_;
     mutable std::mutex io_mtx_;
 };
 

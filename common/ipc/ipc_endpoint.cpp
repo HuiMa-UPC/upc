@@ -16,6 +16,22 @@
 
 namespace upc_ipc {
 
+namespace {
+
+void close_fd_list(std::vector<int>& fds)
+{
+#if defined(__linux__) || defined(__unix__)
+    for(int fd : fds) {
+        if(fd >= 0) {
+            ::close(fd);
+        }
+    }
+#endif
+    fds.clear();
+}
+
+} // namespace
+
 IpcEndpoint::~IpcEndpoint() {
     close();
 }
@@ -55,6 +71,7 @@ void IpcEndpoint::close() {
     }
 #endif
     rx_accum_.clear();
+    clear_fd_rx_state_locked();
 }
 
 bool IpcEndpoint::listen_on(const char* socket_path) {
@@ -155,6 +172,7 @@ bool IpcEndpoint::attach_connected_fd(int fd) {
     }
     conn_fd_ = fd;
     rx_accum_.clear();
+    clear_fd_rx_state_locked();
     set_conn_nonblocking();
     return true;
 #endif
@@ -233,6 +251,13 @@ void IpcEndpoint::close_conn_locked()
     }
 #endif
     rx_accum_.clear();
+    clear_fd_rx_state_locked();
+}
+
+void IpcEndpoint::clear_fd_rx_state_locked()
+{
+    fd_rx_accum_.clear();
+    close_fd_list(fd_rx_fds_);
 }
 
 bool IpcEndpoint::send_stream_bytes_locked(const uint8_t* buf, size_t n)
@@ -355,6 +380,7 @@ bool IpcEndpoint::send_frame_with_fds(const std::vector<uint8_t>& frame,
             if(wait_writable_locked(100) && conn_fd_ >= 0) {
                 continue;
             }
+            close_conn_locked();
             return false;
         }
         close_conn_locked();
@@ -401,83 +427,124 @@ bool IpcEndpoint::recv_fd_frame_unit(InboundWireUnit& out)
     if (conn_fd_ < 0) {
         return false;
     }
+    const size_t max_wire_len = WIRE_MAX_PAYLOAD + 256u;
+    uint8_t chunk[4096];
+    std::vector<uint8_t> cmsg_buf(
+        CMSG_SPACE(sizeof(int) * IPC_FD_FRAME_MAX_FDS));
 
-    uint32_t magic     = 0;
-    uint32_t wire_len  = 0;
-    std::vector<uint8_t> body(WIRE_MAX_PAYLOAD + 256);
+    for(;;) {
+        if(fd_rx_accum_.size() >= sizeof(uint32_t)) {
+            uint32_t magic = 0;
+            std::memcpy(&magic, fd_rx_accum_.data(), sizeof(magic));
+            if(magic != IPC_FD_FRAME_MAGIC) {
+                if(!fd_rx_fds_.empty()) {
+                    UPC_LOG_IPC(Error, "UPDF non-magic with pending fds");
+                    clear_fd_rx_state_locked();
+                    return false;
+                }
+                rx_accum_.insert(rx_accum_.end(),
+                                 fd_rx_accum_.begin(),
+                                 fd_rx_accum_.end());
+                fd_rx_accum_.clear();
+                return false;
+            }
+        }
 
-    struct iovec iov[3] {};
-    iov[0].iov_base = &magic;
-    iov[0].iov_len  = sizeof(magic);
-    iov[1].iov_base = &wire_len;
-    iov[1].iov_len  = sizeof(wire_len);
-    iov[2].iov_base = body.data();
-    iov[2].iov_len  = body.size();
+        if(fd_rx_accum_.size() >= sizeof(uint32_t) * 2u) {
+            uint32_t magic = 0;
+            uint32_t wire_len = 0;
+            std::memcpy(&magic, fd_rx_accum_.data(), sizeof(magic));
+            std::memcpy(&wire_len, fd_rx_accum_.data() + sizeof(magic),
+                        sizeof(wire_len));
 
-    std::vector<uint8_t> cmsg_buf(CMSG_SPACE(sizeof(int) * IPC_FD_FRAME_MAX_FDS));
+            if(magic != IPC_FD_FRAME_MAGIC || wire_len == 0 ||
+               wire_len > max_wire_len) {
+                UPC_LOG_IPC(Error, "UPDF invalid header magic=0x%x len=%u",
+                            magic, wire_len);
+                clear_fd_rx_state_locked();
+                return false;
+            }
 
-    struct msghdr msg {};
-    msg.msg_iov        = iov;
-    msg.msg_iovlen     = 3;
-    msg.msg_control    = cmsg_buf.data();
-    msg.msg_controllen = cmsg_buf.size();
+            const size_t total_need = sizeof(uint32_t) * 2u + wire_len;
+            if(fd_rx_accum_.size() >= total_need) {
+                if(fd_rx_fds_.empty()) {
+                    UPC_LOG_IPC(Error, "UPDF missing SCM_RIGHTS");
+                    clear_fd_rx_state_locked();
+                    return false;
+                }
+                out.frame.assign(fd_rx_accum_.data() + sizeof(uint32_t) * 2u,
+                                 fd_rx_accum_.data() + total_need);
+                out.fds = std::move(fd_rx_fds_);
+                fd_rx_fds_.clear();
+                fd_rx_accum_.erase(fd_rx_accum_.begin(),
+                                   fd_rx_accum_.begin() +
+                                       static_cast<std::ptrdiff_t>(total_need));
+                return true;
+            }
+        }
 
-    const auto recv_once = [&]() -> ssize_t {
-        return ::recvmsg(conn_fd_, &msg, MSG_DONTWAIT);
-    };
+        struct iovec iov {};
+        iov.iov_base = chunk;
+        iov.iov_len  = sizeof(chunk);
 
-    ssize_t n = recv_once();
-    if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
-        pollfd pfd {};
-        pfd.fd     = conn_fd_;
-        pfd.events = POLLIN;
-        const int pr = ::poll(&pfd, 1, 100);
-        if (pr > 0) {
-            n = recv_once();
+        struct msghdr msg {};
+        msg.msg_iov        = &iov;
+        msg.msg_iovlen     = 1;
+        msg.msg_control    = cmsg_buf.data();
+        msg.msg_controllen = cmsg_buf.size();
+
+        const ssize_t n = ::recvmsg(conn_fd_, &msg, MSG_DONTWAIT);
+        if(n < 0) {
+            if(errno == EINTR) {
+                continue;
+            }
+            if(errno == EAGAIN || errno == EWOULDBLOCK) {
+                return false;
+            }
+            close_conn_locked();
+            return false;
+        }
+        if(n == 0) {
+            close_conn_locked();
+            return false;
+        }
+
+        fd_rx_accum_.insert(fd_rx_accum_.end(), chunk, chunk + n);
+        if(fd_rx_accum_.size() > max_wire_len + sizeof(uint32_t) * 2u) {
+            UPC_LOG_IPC(Error, "UPDF oversized stream bytes=%zu",
+                        fd_rx_accum_.size());
+            clear_fd_rx_state_locked();
+            return false;
+        }
+
+        for(struct cmsghdr* cmsg = CMSG_FIRSTHDR(&msg);
+            cmsg != nullptr;
+            cmsg = CMSG_NXTHDR(&msg, cmsg)) {
+            if(cmsg->cmsg_level != SOL_SOCKET || cmsg->cmsg_type != SCM_RIGHTS) {
+                continue;
+            }
+            if(cmsg->cmsg_len < CMSG_LEN(0)) {
+                continue;
+            }
+            const size_t fd_bytes = cmsg->cmsg_len - CMSG_LEN(0);
+            const size_t fd_count = fd_bytes / sizeof(int);
+            if(fd_count == 0 || fd_count > IPC_FD_FRAME_MAX_FDS) {
+                UPC_LOG_IPC(Error, "UPDF bad fd count=%zu", fd_count);
+                clear_fd_rx_state_locked();
+                return false;
+            }
+            if(fd_rx_fds_.size() + fd_count > IPC_FD_FRAME_MAX_FDS) {
+                UPC_LOG_IPC(Error, "UPDF fd overflow current=%zu add=%zu",
+                            fd_rx_fds_.size(), fd_count);
+                clear_fd_rx_state_locked();
+                return false;
+            }
+            const int* fd_ptr = reinterpret_cast<int*>(CMSG_DATA(cmsg));
+            for(size_t i = 0; i < fd_count; ++i) {
+                fd_rx_fds_.push_back(fd_ptr[i]);
+            }
         }
     }
-
-    if (n <= 0) {
-        if (n == 0) {
-            ::close(conn_fd_);
-            conn_fd_ = -1;
-            rx_accum_.clear();
-        }
-        return false;
-    }
-
-    if (magic != IPC_FD_FRAME_MAGIC || wire_len == 0 ||
-        wire_len > WIRE_MAX_PAYLOAD + 256 ||
-        static_cast<size_t>(n) < sizeof(magic) + sizeof(wire_len) + wire_len) {
-        UPC_LOG_IPC(Error, "UPDF recv invalid magic=0x%x len=%u bytes=%zd",
-                    magic, wire_len, n);
-        rx_accum_.clear();
-        return false;
-    }
-
-    out.frame.assign(body.data(), body.data() + wire_len);
-    out.fds.clear();
-
-    struct cmsghdr* cmsg = CMSG_FIRSTHDR(&msg);
-    if (!cmsg || cmsg->cmsg_level != SOL_SOCKET ||
-        cmsg->cmsg_type != SCM_RIGHTS) {
-        UPC_LOG_IPC(Error, "UPDF recv missing SCM_RIGHTS");
-        return false;
-    }
-
-    const size_t fd_bytes = cmsg->cmsg_len - CMSG_LEN(0);
-    const size_t fd_count = fd_bytes / sizeof(int);
-    if (fd_count == 0 || fd_count > IPC_FD_FRAME_MAX_FDS) {
-        UPC_LOG_IPC(Error, "UPDF recv bad fd count=%zu", fd_count);
-        return false;
-    }
-
-    const int* fd_ptr = reinterpret_cast<int*>(CMSG_DATA(cmsg));
-    out.fds.reserve(fd_count);
-    for (size_t i = 0; i < fd_count; ++i) {
-        out.fds.push_back(fd_ptr[i]);
-    }
-    return true;
 #endif
 }
 
@@ -530,7 +597,10 @@ void IpcEndpoint::recv_pending(std::vector<InboundWireUnit>& out_units)
     }
 
     for (;;) {
-        if (!peek_fd_frame_magic()) {
+        const bool expect_fd = !fd_rx_accum_.empty() ||
+                               !fd_rx_fds_.empty() ||
+                               peek_fd_frame_magic();
+        if (!expect_fd) {
             break;
         }
         InboundWireUnit unit;
@@ -550,9 +620,7 @@ void IpcEndpoint::recv_pending(std::vector<InboundWireUnit>& out_units)
             break;
         }
         if (n == 0) {
-            ::close(conn_fd_);
-            conn_fd_ = -1;
-            rx_accum_.clear();
+            close_conn_locked();
             return;
         }
         rx_accum_.insert(rx_accum_.end(), chunk, chunk + n);

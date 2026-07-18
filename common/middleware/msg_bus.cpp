@@ -1,4 +1,5 @@
 #include "msg_bus.hpp"
+#include "msg_dispatch_utils.hpp"
 #include "rs_msg_format.hpp"
 #include "rs_log.hpp"
 #include <algorithm>
@@ -232,14 +233,7 @@ bool MsgBus::deliver(const Message& msg) {
 
     {
         std::lock_guard<std::mutex> lock(subscribers_mutex_);
-        for (const auto& sub : subscribers_) {
-            const bool type_match = (sub.type == MsgType{0}) || (sub.type == msg.type);
-            const bool target_match = (msg.target_id == ModuleId{0}) ||
-                                      (sub.module_id == msg.target_id);
-            if (type_match && target_match) {
-                handlers.push_back(sub.handler);
-            }
-        }
+        detail::collect_matching_handlers(subscribers_, msg, handlers);
     }
 
     if (handlers.empty()) {

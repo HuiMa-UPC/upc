@@ -2,6 +2,7 @@
 
 #include "ipc_reg.hpp"
 #include "ipc_wire.hpp"
+#include "msg_dispatch_utils.hpp"
 #include "upc_contract.hpp"
 #include "buffer_pool.hpp"
 #include "mem_pool.hpp"
@@ -189,16 +190,8 @@ bool IpcMsgBus::deliver_local(const middleware::Message& msg)
     handlers.reserve(8);
     {
         std::lock_guard<std::mutex> lock(subs_mtx_);
-        for (const auto& sub : subscribers_) {
-            const bool type_match =
-                (sub.type == middleware::MsgType{0}) || (sub.type == msg.type);
-            const bool target_match =
-                (msg.target_id == middleware::ModuleId{0}) ||
-                (sub.module_id == msg.target_id);
-            if (type_match && target_match) {
-                handlers.push_back(sub.handler);
-            }
-        }
+        middleware::detail::collect_matching_handlers(subscribers_, msg,
+                                                      handlers);
     }
 
     if (handlers.empty()) {
@@ -211,9 +204,7 @@ bool IpcMsgBus::deliver_local(const middleware::Message& msg)
 
     upc_msg_log_message("IPC_DELIVER", msg, handlers.size());
     for (const auto& h : handlers) {
-        if (h) {
-            h(msg);
-        }
+        h(msg);
     }
     return true;
 }
@@ -526,6 +517,12 @@ bool IpcMsgBus::broker_route_wire(BrokerClientSlot& from,
                     unit.frame.size());
         return false;
     }
+    if (from.registered && sender_id != from.module_id) {
+        UPC_LOG_IPC(Error, "broker sender mismatch conn=%s frame=%s",
+                    upc_msg_module_name(from.module_id),
+                    upc_msg_module_name(sender_id));
+        return false;
+    }
 
     const auto forward_to = [&](BrokerClientSlot* dst) -> bool {
         if (!dst || !dst->endpoint || !dst->endpoint->connected()) {
@@ -538,13 +535,21 @@ bool IpcMsgBus::broker_route_wire(BrokerClientSlot& from,
     };
 
     if (target_id == middleware::ModuleId{0}) {
-        bool any = false;
-        std::lock_guard<std::mutex> lock(broker_clients_mtx_);
-        for (auto& client : broker_clients_) {
-            if (!client || !client->registered || client.get() == &from) {
-                continue;
+        std::vector<BrokerClientSlot*> targets;
+        {
+            std::lock_guard<std::mutex> lock(broker_clients_mtx_);
+            targets.reserve(broker_clients_.size());
+            for (auto& client : broker_clients_) {
+                if (!client || !client->registered || client.get() == &from) {
+                    continue;
+                }
+                targets.push_back(client.get());
             }
-            if (forward_to(client.get())) {
+        }
+
+        bool any = false;
+        for (BrokerClientSlot* dst : targets) {
+            if (forward_to(dst)) {
                 any = true;
             }
         }
@@ -564,7 +569,13 @@ bool IpcMsgBus::broker_route_wire(BrokerClientSlot& from,
             dst = it->second;
         }
     }
-    if (!dst || dst == &from || !forward_to(dst)) {
+    if (!dst || dst == &from) {
+        UPC_LOG_IPC(Warn, "broker route miss %s->%s",
+                    upc_msg_module_name(sender_id),
+                    upc_msg_module_name(target_id));
+        return false;
+    }
+    if (!forward_to(dst)) {
         UPC_LOG_IPC(Warn, "broker route miss %s->%s",
                     upc_msg_module_name(sender_id),
                     upc_msg_module_name(target_id));

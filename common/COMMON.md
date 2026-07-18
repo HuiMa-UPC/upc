@@ -228,7 +228,7 @@ rongsu_broker ──listen──► /tmp/upc_broker.sock ◄── UI / Glavo / 
 ```
 
 - 各进程：`set_mode_ipc_client(ModuleId, UPC_BROKER_SOCKET_DEFAULT)`
-- Broker：`set_mode_ipc_broker`（或 `IpcMsgBus::init_broker`），零业务 subscribe
+- Broker：`IpcMsgBus::init_broker`，零业务 subscribe
 - **后端互访**：Glavo `publish_async` 且 `target_id = APP_CAMERA` → Broker 转发 → Camera
 - **大流量**：预览 NV12 走 dma fd 旁路 + `/upc_camera_preview` 元数据环；控制仍走 MsgPort
 
@@ -301,7 +301,6 @@ rongsu_broker ──listen──► /tmp/upc_broker.sock ◄── rongsu_ui / r
 
 | API | 用途 |
 |-----|------|
-| `set_mode_ipc_broker` | Broker 进程 listen |
 | `set_mode_ipc_client(ModuleId)` | UI / Glavo / Camera 连 Broker |
 | `subscribe` / `publish_async` / `process` | 共用 |
 | `take_peer_dma_fds(ModuleId)` | UI 从指定 sender 取 SCM_RIGHTS 附带的 dma fd（预览开流） |

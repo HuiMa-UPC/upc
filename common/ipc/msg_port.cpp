@@ -16,12 +16,6 @@ void MsgPort::set_mode_in_process()
     mode_ = MsgPortMode::InProcess;
 }
 
-bool MsgPort::set_mode_ipc_broker(const char* socket_path)
-{
-    mode_ = MsgPortMode::Ipc;
-    return upc_ipc::IpcMsgBus::instance().init_broker(socket_path);
-}
-
 bool MsgPort::set_mode_ipc_client(ModuleId local_id, const char* broker_path)
 {
     mode_ = MsgPortMode::Ipc;
