@@ -493,12 +493,14 @@ bool PrintVideoRecorder::extract_last_frame_thumb(const char* mp4_path,
         return false;
     }
 
-    /* -sseof -1：从文件末尾往前，取最后一帧作为缩略图 */
+    /* -sseof -1：从文件末尾往前，取最后一帧作为缩略图。
+     * -vf scale=W:-1：按最大宽度等比缩小，降低历史页滚动时 JPEG 解码负担。 */
     char cmd[1024];
     std::snprintf(
         cmd, sizeof(cmd),
-        "%s -y -loglevel error -sseof -1 -i '%s' -frames:v 1 -q:v 5 '%s'",
-        CAMERA_FFMPEG_BIN, mp4_path, jpg_path);
+        "%s -y -loglevel error -sseof -1 -i '%s' -frames:v 1 "
+        "-vf scale=%d:-1 -q:v 5 '%s'",
+        CAMERA_FFMPEG_BIN, mp4_path, CAMERA_PRINT_VIDEO_THUMB_MAX_W, jpg_path);
     return run_shell_cmd(cmd, "ffmpeg thumb") == 0;
 }
 

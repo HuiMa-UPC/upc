@@ -32,10 +32,10 @@ scripts/rongsu.sh start   # glavo + rongsu_camera → ui
 
 | 进程 | 日志 | PID |
 |------|------|-----|
-| UI | `/data/rongsu_ui{1,2,3}.log` | `/var/run/rongsu_ui.pid` |
-| Glavo | `/data/rongsu_glavo{1,2,3}.log` | `/var/run/rongsu_glavo.pid` |
-| Camera | `/data/rongsu_camera{1,2,3}.log` | `/var/run/rongsu_camera.pid` |
-| Broker | `/data/rongsu_broker{1,2,3}.log` | `/var/run/rongsu_broker.pid` |
+| UI | `/var/log/rongsu_ui{1,2,3}.log` | `/var/run/rongsu_ui.pid` |
+| Glavo | `/var/log/rongsu_glavo{1,2,3}.log` | `/var/run/rongsu_glavo.pid` |
+| Camera | `/var/log/rongsu_camera{1,2,3}.log` | `/var/run/rongsu_camera.pid` |
+| Broker | `/var/log/rongsu_broker{1,2,3}.log` | `/var/run/rongsu_broker.pid` |
 
 各业务进程为 IPC **Client**，连中央 **Broker**（`rongsu_broker`）。
 
@@ -228,7 +228,7 @@ rongsu_broker ──listen──► /tmp/upc_broker.sock ◄── UI / Glavo / 
 ```
 
 - 各进程：`set_mode_ipc_client(ModuleId, UPC_BROKER_SOCKET_DEFAULT)`
-- Broker：`IpcMsgBus::init_broker`，零业务 subscribe
+- Broker：`set_mode_ipc_broker`（或 `IpcMsgBus::init_broker`），零业务 subscribe
 - **后端互访**：Glavo `publish_async` 且 `target_id = APP_CAMERA` → Broker 转发 → Camera
 - **大流量**：预览 NV12 走 dma fd 旁路 + `/upc_camera_preview` 元数据环；控制仍走 MsgPort
 
@@ -301,6 +301,7 @@ rongsu_broker ──listen──► /tmp/upc_broker.sock ◄── rongsu_ui / r
 
 | API | 用途 |
 |-----|------|
+| `set_mode_ipc_broker` | Broker 进程 listen |
 | `set_mode_ipc_client(ModuleId)` | UI / Glavo / Camera 连 Broker |
 | `subscribe` / `publish_async` / `process` | 共用 |
 | `take_peer_dma_fds(ModuleId)` | UI 从指定 sender 取 SCM_RIGHTS 附带的 dma fd（预览开流） |
@@ -454,9 +455,9 @@ ParserManager → RingBuffer → McuLink（TCP + 串口）
 
 | 函数 | 可执行文件 | PID 文件 | 日志（前缀，实际为 `N.log`，N=1..3） |
 |------|------------|----------|------|
-| `process_config_ui()` | `rongsu_ui` | `/var/run/rongsu_ui.pid` | `/data/rongsu_ui` |
-| `process_config_glavo()` | `rongsu_glavo` | `/var/run/rongsu_glavo.pid` | `/data/rongsu_glavo` |
-| `process_config_camera()` | `rongsu_camera` | `/var/run/rongsu_camera.pid` | `/data/rongsu_camera` |
+| `process_config_ui()` | `rongsu_ui` | `/var/run/rongsu_ui.pid` | `/var/log/rongsu_ui` |
+| `process_config_glavo()` | `rongsu_glavo` | `/var/run/rongsu_glavo.pid` | `/var/log/rongsu_glavo` |
+| `process_config_camera()` | `rongsu_camera` | `/var/run/rongsu_camera.pid` | `/var/log/rongsu_camera` |
 
 各进程 `main.cpp` 支持 `{start|stop|status|run}`；`start` 时 stderr/stdout 重定向到 `{log_base}N.log`（单文件上限 5MB，三文件循环；重启不清空已有文件）。
 

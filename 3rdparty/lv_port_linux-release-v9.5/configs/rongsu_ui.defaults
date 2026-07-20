@@ -54,6 +54,13 @@ LV_USE_MATRIX 1
 LV_USE_SYSMON 0
 LV_USE_PERF_MONITOR 0
 
+# TJPGD：打印历史缩略图 JPEG 解码（baseline JPEG）
+LV_USE_TJPGD 1
+
+# POSIX 文件系统驱动：按路径加载 /home/video 下缩略图（盘符 'A'，如 "A:/home/video/x.jpg"）
+LV_USE_FS_POSIX 1
+LV_FS_POSIX_LETTER 'A'
+
 LV_DRAW_LAYER_SIMPLE_BUF_SIZE (256 * 1024)
 LV_OBJ_STYLE_CACHE 1
 

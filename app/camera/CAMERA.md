@@ -85,17 +85,16 @@ Glavo→Camera 经 UI Hub 转发；`sender_id` 仍为 `APP_GLAVO`（见 IPC.md�
 | 帧率 | 30 | `UPC_CAMERA_FPS` |
 | IQ | `/home/wpcam_NC_NC.json` | `UPC_CAMERA_IQ_DIR` / `UPC_CAMERA_IQ_FILE` |
 | V4L2 缓冲 | 4 | `CAMERA_V4L2_BUF_COUNT` |
-| SHM 槽位 | 6 | `CAMERA_SHM_SLOT_COUNT`（UI/Snap 双消费；过小易 `slot release timeout`） |
+| SHM 槽位 | 3 | `CAMERA_SHM_SLOT_COUNT` |
 | 录像临时 | `/tmp/print_vid/{session}/layers.h264` | `CAMERA_PRINT_VIDEO_TMP_DIR` |
 | 录像输出 | `/home/video/{job}_{YYYYMMDD_HHMMSS}.mp4` | `CAMERA_PRINT_VIDEO_OUT_DIR` / `_EXT` |
-| 缩略图 | `/home/video/{job}_{YYYYMMDD_HHMMSS}.jpg` | `CAMERA_PRINT_VIDEO_THUMB_EXT` |
+| 缩略图 | `/home/video/{job}_{YYYYMMDD_HHMMSS}.jpg`（抽 MP4 末帧，`-vf scale` 按最大宽度等比缩小） | `CAMERA_PRINT_VIDEO_THUMB_EXT` |
+| 缩略图最大宽 | 360 | `CAMERA_PRINT_VIDEO_THUMB_MAX_W` |
 | 历史清单 | `/home/video/manifest.json` | `UPC_PRINT_VIDEO_MANIFEST` |
 | ffmpeg | `/usr/bin/ffmpeg` | `CAMERA_FFMPEG_BIN` |
 | 层编码 fps | 5 | `CAMERA_PRINT_VIDEO_LAYER_FPS` |
 
 SHM 元数据环：`stride_y` 为 V4L2 实际 Y stride（dma 模式），`buffer_idx` 指向 fd 表；像素走 dma fd。
-
-推流诊断（`UPC_MOD_CAMERA_PREVIEW`，与 UI `decode 1s` 对照）：`stream 1s: committed / last_seq / slot_fail / dequeue_fail / release_timeout`。`commit_slot` 返回真实 seq（失败为 0）。
 
 ## 库文件一览
 

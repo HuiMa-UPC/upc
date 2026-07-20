@@ -107,9 +107,12 @@ add_subdirectory(lvgl ${CMAKE_BINARY_DIR}/lvgl-core)
 # 6. 源码过滤：移除 GLTF 相关源文件（RK3588 不需要 3D 模型加载）
 # -----------------------------------------------------------------------------
 if(TARGET lvgl)
-    # 定义 POSIX 版本以启用 clock_gettime / timespec（lv_linux_drm.c 需要）
+    # 定义 POSIX 版本以启用 clock_gettime / timespec（lv_linux_drm.c 需要）；
+    # _DEFAULT_SOURCE 额外暴露 glibc BSD 扩展（fsdrv 的 dirent d_type/DT_DIR），
+    # 否则 LV_USE_FS_POSIX/STDIO 在纯 _POSIX_C_SOURCE 下编译报 DT_DIR 未声明。
     target_compile_definitions(lvgl PRIVATE
         _POSIX_C_SOURCE=200809L
+        _DEFAULT_SOURCE
         LV_USE_GLTF=0
         LV_USE_OPENGLES=1
         LV_USE_DEMO_GLTF=0

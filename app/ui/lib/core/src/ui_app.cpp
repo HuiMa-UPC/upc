@@ -13,6 +13,7 @@
 #include "page_user_settings.hpp"
 #include "page_user_message.hpp"
 #include "page_user_debug.hpp"
+#include "page_user_timelapse.hpp"
 
 #include "ui_theme.hpp"
 #include "ui_keyboard.hpp"
@@ -52,7 +53,8 @@ void app_init(lv_obj_t* screen) {
     PageManager::instance().register_page(
         std::make_unique<SimplePage>("user_history",
                                      page_user_history_create,
-                                     page_user_history_refresh),
+                                     page_user_history_refresh,
+                                     page_user_history_exit),
         &nav_icon_history);
     PageManager::instance().register_page(
         std::make_unique<SimplePage>("user_control",
@@ -87,6 +89,15 @@ void app_init(lv_obj_t* screen) {
                                      page_user_debug_refresh,
                                      page_user_debug_exit),
         "user_settings");
+
+    /* 延时摄影播放器：隐藏页（无侧边栏图标），归属历史页菜单按钮；
+     * 由历史页点击缩略图进入 */
+    PageManager::instance().register_hidden_page(
+        std::make_unique<SimplePage>("user_timelapse",
+                                     page_user_timelapse_create,
+                                     page_user_timelapse_refresh,
+                                     page_user_timelapse_exit),
+        "user_history");
 
     /* 首页图标点击 → 首页区当前视图（仪表盘 / 选择文件页），实现“回到上次视图” */
     PageManager::instance().set_menu_target_resolver(

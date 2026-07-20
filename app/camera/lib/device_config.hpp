@@ -117,6 +117,14 @@
 #define CAMERA_PRINT_VIDEO_THUMB_EXT  ".jpg"
 #endif
 
+/**
+ * 缩略图最大宽度（px）：抽帧时按此宽度等比缩小，避免 UI 加载原生大分辨率
+ * JPG（如 1536×1920 全解 ≈11.8MB/张）。高度由 ffmpeg -1 自动等比。
+ */
+#ifndef CAMERA_PRINT_VIDEO_THUMB_MAX_W
+#define CAMERA_PRINT_VIDEO_THUMB_MAX_W  240
+#endif
+
 /** 板端 ffmpeg 可执行文件（rootfs 需已部署） */
 #ifndef CAMERA_FFMPEG_BIN
 #define CAMERA_FFMPEG_BIN  "/usr/bin/ffmpeg"

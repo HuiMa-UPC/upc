@@ -6,9 +6,9 @@
 
 | 进程 | 可执行文件 | 入口 | 模块文档 | 日志 |
 |------|------------|------|----------|------|
-| UI | `rongsu_ui` | `app/ui/main.cpp` | [ui/UI.md](../app/ui/UI.md) | `/data/rongsu_ui{1,2,3}.log` |
-| Glavo | `rongsu_glavo` | `app/glavo/main.cpp` | [glavo/GLAVO.md](../app/glavo/GLAVO.md) | `/data/rongsu_glavo{1,2,3}.log` |
-| 相机 | `rongsu_camera` | `app/camera/main.cpp` | [camera/CAMERA.md](../app/camera/CAMERA.md) | `/data/rongsu_camera{1,2,3}.log` |
+| UI | `rongsu_ui` | `app/ui/main.cpp` | [ui/UI.md](../app/ui/UI.md) | `/var/log/rongsu_ui{1,2,3}.log` |
+| Glavo | `rongsu_glavo` | `app/glavo/main.cpp` | [glavo/GLAVO.md](../app/glavo/GLAVO.md) | `/var/log/rongsu_glavo{1,2,3}.log` |
+| 相机 | `rongsu_camera` | `app/camera/main.cpp` | [camera/CAMERA.md](../app/camera/CAMERA.md) | `/var/log/rongsu_camera{1,2,3}.log` |
 
 启动：`scripts/rongsu.sh start`（Glavo → `rongsu_camera` → UI）。  
 编译：`./build.sh`（Release + 工具链，产物在 `output/`；`clean` / `reconfigure` 见脚本头注释）。
@@ -65,18 +65,20 @@
 | `PageManager` / `SimplePage` | `page_manager.*` / `ui_simple_page.*` | 侧边栏 + 页面路由 |
 | `app_init()` | `ui_app.*` | 主题、Proxy、页面注册、control |
 | `control_*` | `control.*` | 打印状态机 + overlay UI |
+| `VideoPlayer` | `video_player.*` | 延时视频 libav* 软解 → BGRX → lv_image（play/pause/seek + 拖动预览独立解码线程） |
 
 ## UI 页面（`app/ui/lib/pages/`）
 
 | Page ID | 文件 | 状态 |
 |---------|------|------|
 | `user_home` | `page_user_home.*` | 首页：环境、打印模式、预览 |
-| `user_history` | `page_user_history.*` | skeleton 占位 |
+| `user_history` | `page_user_history.*` | 打印历史：读 manifest + 卡片 + 缩略图(TJPGD) + 左滑删除 |
 | `user_control` | `page_user_control.*` | skeleton 占位 |
 | `user_settings` | `page_user_settings.*` | 设置列表 + 开发者密码弹窗 |
 | `user_message` | `page_user_message.*` | skeleton 占位 |
+| `user_timelapse` | `page_user_timelapse.*` | 延时摄影播放器（隐藏页，历史缩略图进入；全屏 `lv_layer_top`） |
 
-注册入口：`ui_app.cpp`（不在 `main.cpp` include 各页面头）。
+注册入口：`ui_app.cpp`（不在 `main.cpp` include 各页面头）。隐藏页（`user_files`/`user_debug`/`user_timelapse`）经 `register_hidden_page` 注册、`switch_to` 进入。
 
 ## protocol/ 库（`app/protocol/` → `upc::protocol`）
 

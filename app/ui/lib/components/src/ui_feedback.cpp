@@ -60,7 +60,8 @@ void ui_toast_show(const char *msg, lv_color_t color, uint32_t duration_ms)
         s_toast_fade_timer = nullptr;
     }
 
-    lv_obj_t *scr = lv_screen_active();
+    /* 顶层图层：toast 始终显示在最上层（含全屏播放器等顶层覆盖之上） */
+    lv_obj_t *scr = lv_layer_top();
     if(!s_toast) {
         s_toast = lv_obj_create(scr);
         lv_obj_remove_style_all(s_toast);
