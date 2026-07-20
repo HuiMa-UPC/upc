@@ -3,7 +3,6 @@
 
 #include "ipc_endpoint.hpp"
 #include "ipc_poller.hpp"
-#include "msg_queue.hpp"
 #include "msg_runtime.hpp"
 
 #include <chrono>
@@ -46,8 +45,7 @@ public:
     [[nodiscard]] bool peer_connected() const noexcept;
     [[nodiscard]] bool peer_connected(middleware::ModuleId peer_id) const noexcept;
 
-    bool send_to_peer_with_fds(middleware::ModuleId peer_id,
-                               const middleware::Message& msg,
+    bool send_to_peer_with_fds(const middleware::Message& msg,
                                const std::vector<int>& fds);
     bool take_pending_dma_fds(middleware::ModuleId peer_id,
                               std::vector<int>& out_fds);
@@ -79,8 +77,6 @@ private:
     };
 
     bool deliver_local(const middleware::Message& msg);
-    bool enqueue_local(const middleware::Message& msg);
-    void process_local_queue();
     void deliver_client_frames(const std::vector<InboundWireUnit>& units);
     void handle_broker_client_io(BrokerClientSlot& slot);
     void broker_unregister_client(BrokerClientSlot& slot, bool notify_offline);
@@ -91,7 +87,6 @@ private:
     void apply_reg_notify(uint32_t event, middleware::ModuleId module_id);
     void try_reconnect_broker();
     void accept_broker_client();
-    [[nodiscard]] bool needs_local_handling(const middleware::Message& msg) const;
     bool send_outbound_from_local(const middleware::Message& msg, bool warn_on_fail);
     bool send_wire_frame(const std::vector<uint8_t>& frame);
     bool send_wire_frame_with_fds(const std::vector<uint8_t>& frame,
@@ -124,9 +119,6 @@ private:
     std::vector<LocalSub> subscribers_;
     std::mutex subs_mtx_;
     uint32_t next_sub_id_{1};
-
-    middleware::PriorityMsgQueue local_queue_;
-    std::mutex queue_mtx_;
     bool initialized_{false};
 
     std::unordered_map<uint32_t, std::vector<int>> pending_dma_fds_;

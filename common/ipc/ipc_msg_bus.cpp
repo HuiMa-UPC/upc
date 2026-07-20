@@ -111,12 +111,6 @@ void IpcMsgBus::shutdown()
         std::lock_guard<std::mutex> lock(subs_mtx_);
         subscribers_.clear();
     }
-    {
-        std::lock_guard<std::mutex> lock(queue_mtx_);
-        middleware::Message m;
-        while (local_queue_.pop(m)) {
-        }
-    }
 
     poll_clear();
     poller_.close();
@@ -232,11 +226,9 @@ bool IpcMsgBus::send_wire_frame_with_fds(const std::vector<uint8_t>& frame,
     return true;
 }
 
-bool IpcMsgBus::send_to_peer_with_fds(middleware::ModuleId peer_id,
-                                      const middleware::Message& msg,
+bool IpcMsgBus::send_to_peer_with_fds(const middleware::Message& msg,
                                       const std::vector<int>& fds)
 {
-    (void)peer_id;
     std::vector<uint8_t> frame;
     if (!wire_encode(msg, frame)) {
         UPC_LOG_IPC(Error, "wire_encode fail (with fds) %s",
@@ -289,15 +281,6 @@ bool IpcMsgBus::take_pending_dma_fds(middleware::ModuleId peer_id,
     return true;
 }
 
-bool IpcMsgBus::needs_local_handling(const middleware::Message& msg) const
-{
-    if (mode_ == IpcBusMode::Broker) {
-        return false;
-    }
-    return msg.target_id == middleware::ModuleId{0} ||
-           msg.target_id == local_id_;
-}
-
 bool IpcMsgBus::send_outbound_from_local(const middleware::Message& msg,
                                          bool warn_on_fail)
 {
@@ -329,35 +312,14 @@ bool IpcMsgBus::send_outbound_from_local(const middleware::Message& msg,
     return false;
 }
 
-bool IpcMsgBus::enqueue_local(const middleware::Message& msg)
-{
-    std::lock_guard<std::mutex> lock(queue_mtx_);
-    if (!local_queue_.push(msg)) {
-        UPC_LOG_MSG_BUS(Error, "IPC_ENQUEUE FAIL %s %s->%s (queue full)",
-                        upc_msg_type_name(msg.type),
-                        upc_msg_module_name(msg.sender_id),
-                        upc_msg_module_name(msg.target_id));
-        return false;
-    }
-    return true;
-}
-
 bool IpcMsgBus::publish_async(const middleware::Message& msg)
 {
-    bool ok = send_outbound_from_local(msg, true);
-    if (needs_local_handling(msg) && !enqueue_local(msg)) {
-        ok = false;
-    }
-    return ok;
+    return send_outbound_from_local(msg, true);
 }
 
 bool IpcMsgBus::publish_sync(const middleware::Message& msg)
 {
-    bool ok = send_outbound_from_local(msg, false);
-    if (needs_local_handling(msg) && !deliver_local(msg)) {
-        ok = false;
-    }
-    return ok;
+    return send_outbound_from_local(msg, false);
 }
 
 bool IpcMsgBus::client_send_reg()
@@ -414,7 +376,9 @@ void IpcMsgBus::deliver_client_frames(const std::vector<InboundWireUnit>& units)
                         upc_msg_module_name(msg.sender_id), unit.fds.size());
         }
         upc_msg_log_message("IPC_RX", msg);
-        if (needs_local_handling(msg)) {
+        if (mode_ != IpcBusMode::Broker &&
+            (msg.target_id == middleware::ModuleId{0} ||
+             msg.target_id == local_id_)) {
             deliver_local(msg);
         }
     }
@@ -884,29 +848,12 @@ void IpcMsgBus::pump_inbound_fallback(int timeout_ms)
     }
 }
 
-void IpcMsgBus::process_local_queue()
-{
-    middleware::PriorityMsgQueue local;
-    {
-        std::lock_guard<std::mutex> lock(queue_mtx_);
-        local.swap(local_queue_);
-    }
-
-    middleware::Message msg;
-    while (local.pop(msg)) {
-        deliver_local(msg);
-    }
-}
-
 void IpcMsgBus::process(int io_timeout_ms)
 {
     if (mode_ == IpcBusMode::Client) {
         try_reconnect_broker();
     }
     poll_io(io_timeout_ms);
-    if (mode_ != IpcBusMode::Broker) {
-        process_local_queue();
-    }
 }
 
 } // namespace upc_ipc

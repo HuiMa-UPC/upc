@@ -17,16 +17,10 @@
 
 namespace middleware {
 
-enum class MsgPortMode : uint8_t {
-    InProcess,
-    Ipc,
-};
-
 class MsgPort {
 public:
     static MsgPort& instance();
 
-    void set_mode_in_process();
     bool set_mode_ipc_client(middleware::ModuleId local_id,
                              const char* broker_path = UPC_BROKER_SOCKET_DEFAULT);
 
@@ -36,10 +30,8 @@ public:
     Subscription subscribe(MsgType type, ModuleId module_id, MsgHandler handler);
     bool publish(const Message& msg);
     bool publish_async(const Message& msg);
-    bool publish_async_broadcast(const Message& msg);
     void process(int io_timeout_ms = 0);
 
-    [[nodiscard]] MsgPortMode mode() const noexcept { return mode_; }
     [[nodiscard]] bool peer_connected() const noexcept;
     [[nodiscard]] bool peer_connected(ModuleId peer_id) const noexcept;
 
@@ -47,8 +39,6 @@ public:
                                   const std::vector<int>& fds);
     bool take_peer_dma_fds(ModuleId peer_id, std::vector<int>& out_fds);
 
-private:
-    MsgPortMode mode_{MsgPortMode::InProcess};
 };
 
 } // namespace middleware
