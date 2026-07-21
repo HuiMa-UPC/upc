@@ -3,6 +3,7 @@
 #include "ui_user_widgets.hpp"
 #include "ui_feedback.hpp"
 #include "ui_msg_proxy.hpp"
+#include "camera_msg_proxy.hpp"
 #include "camera_preview.hpp"
 #include "control.hpp"
 #include "home_assets.h"
@@ -71,6 +72,8 @@ void apply_env(const middleware::EnvSnapshotPayload &p)
 }
 
 void set_pause_ui(bool paused);   /* 定义见下方（打印中底条按钮区） */
+extern lv_obj_t *g_monitor_photo_btn;
+extern bool      g_monitor_photo_pending;
 
 void home_env_init(void)
 {
@@ -92,6 +95,19 @@ void home_env_init(void)
     /* 暂停/恢复回执：以后端状态为准同步按钮图标 */
     ui::UiMsgProxy::instance().register_print_pause_done(
         [](bool paused) { set_pause_ui(paused); });
+
+    ui::CameraMsgProxy::instance().register_snapshot_rsp(
+        [](const middleware::CameraSnapshotRspPayload &rsp) {
+            g_monitor_photo_pending = false;
+            if(g_monitor_photo_btn) {
+                lv_obj_clear_state(g_monitor_photo_btn, LV_STATE_DISABLED);
+            }
+            if(rsp.ok) {
+                ui_toast_show("Photo saved to /home/photo", user_color_accent, 1500);
+            } else {
+                ui_toast_show("Photo save failed", ui_color_danger, 1500);
+            }
+        });
 }
 
 void home_set_status(user_home_status_t s)
@@ -155,12 +171,14 @@ lv_obj_t *g_monitor_area           = nullptr; /**< 监控浮层（默认隐藏�
 lv_obj_t *g_monitor_camera_viewport= nullptr;
 lv_obj_t *g_monitor_camera_hint    = nullptr;
 lv_obj_t *g_monitor_camera_image   = nullptr; /**< 监控视频帧槽（复用同一 CameraPreviewPlayer） */
+lv_obj_t *g_monitor_photo_btn      = nullptr; /**< 监控区拍照按钮 */
 lv_obj_t *g_mon_env_pm_ext         = nullptr; /**< 右上环境面板：EXTERIOR PM2.5 数值 */
 lv_obj_t *g_mon_env_pm_int         = nullptr; /**< INTERIOR PM2.5 数值 */
 lv_obj_t *g_mon_env_o2             = nullptr; /**< O2 CONC. 数值 */
 lv_obj_t *g_mon_env_temp           = nullptr; /**< DEVICE TEMP 数值 */
 ui_slide_unlock_t *g_monitor_door  = nullptr; /**< 监控界面的滑动开门 */
 bool      g_monitor_active         = false;
+bool      g_monitor_photo_pending  = false;   /**< 拍照请求在途，防连按 */
 
 void apply_camera_preview_layout(uint32_t src_w, uint32_t src_h = 0);
 void on_camera_viewport_size_changed(lv_event_t *e);
@@ -1092,6 +1110,42 @@ void on_monitor_door_unlocked(void * /*u*/)
     lv_timer_set_repeat_count(t, 1);
 }
 
+void on_monitor_photo_click(lv_event_t * /*e*/)
+{
+    if(g_monitor_photo_pending) {
+        return;
+    }
+    g_monitor_photo_pending = true;
+    if(g_monitor_photo_btn) {
+        lv_obj_add_state(g_monitor_photo_btn, LV_STATE_DISABLED);
+    }
+    ui::CameraMsgProxy::instance().send_snapshot_req();
+    ui_toast_show("Capturing photo...", user_color_accent, 1200);
+}
+
+lv_obj_t *build_monitor_photo_button(lv_obj_t *parent)
+{
+    const int32_t sz = USER_BTN_PRIMARY_H * 5 / 4;
+    lv_obj_t *btn = lv_button_create(parent);
+    lv_obj_remove_style_all(btn);
+    lv_obj_set_size(btn, sz, sz);
+    lv_obj_set_style_bg_color(btn, lv_color_hex(0x757575), 0);
+    lv_obj_set_style_bg_opa(btn, LV_OPA_20, 0);
+    lv_obj_set_style_bg_opa(btn, LV_OPA_40, LV_STATE_PRESSED);
+    lv_obj_set_style_radius(btn, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_border_width(btn, 1, 0);
+    lv_obj_set_style_border_color(btn, lv_color_white(), 0);
+    lv_obj_set_style_border_opa(btn, LV_OPA_30, 0);
+    lv_obj_add_event_cb(btn, on_monitor_photo_click, LV_EVENT_CLICKED, nullptr);
+
+    lv_obj_t *icon = lv_label_create(btn);
+    lv_label_set_text(icon, LV_SYMBOL_IMAGE);
+    lv_obj_set_style_text_color(icon, lv_color_white(), 0);
+    lv_obj_set_style_text_font(icon, user_font_text(), 0);
+    lv_obj_center(icon);
+    return btn;
+}
+
 lv_obj_t *build_monitor_area(lv_obj_t *parent)
 {
     lv_obj_t *area = lv_obj_create(parent);
@@ -1150,6 +1204,11 @@ lv_obj_t *build_monitor_area(lv_obj_t *parent)
         lv_obj_align(door_root, LV_ALIGN_BOTTOM_RIGHT, -USER_PAD, -USER_PAD);
     }
 
+    g_monitor_photo_btn = build_monitor_photo_button(area);
+    lv_obj_add_flag(g_monitor_photo_btn, LV_OBJ_FLAG_FLOATING);
+    lv_obj_align(g_monitor_photo_btn, LV_ALIGN_BOTTOM_RIGHT,
+                 -(USER_PAD * 2 + cfg.track_w), -USER_PAD);
+
     return area;
 }
 
@@ -1165,6 +1224,10 @@ void enter_monitor_mode(void)
         return;
     }
     g_monitor_active = true;
+    g_monitor_photo_pending = false;
+    if(g_monitor_photo_btn) {
+        lv_obj_clear_state(g_monitor_photo_btn, LV_STATE_DISABLED);
+    }
 
     if(g_normal_area)  lv_obj_add_flag(g_normal_area, LV_OBJ_FLAG_HIDDEN);
     if(g_door_float)   lv_obj_add_flag(g_door_float,  LV_OBJ_FLAG_HIDDEN);

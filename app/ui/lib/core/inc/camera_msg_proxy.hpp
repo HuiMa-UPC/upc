@@ -11,6 +11,8 @@ namespace ui {
 using CameraStreamStartRspCb = std::function<void(
     const middleware::CameraStreamInfoPayload&)>;
 using CameraStreamStopDoneCb = std::function<void()>;
+using CameraSnapshotRspCb = std::function<void(
+    const middleware::CameraSnapshotRspPayload&)>;
 
 /**
  * @brief UI ↔ APP_CAMERA（`rongsu_camera`）控制面（像素走 SHM，不经 MsgBus）
@@ -26,9 +28,11 @@ public:
 
     void send_stream_start(const char* video_basename = nullptr);
     void send_stream_stop();
+    void send_snapshot_req();
 
     void register_stream_start_rsp(CameraStreamStartRspCb cb);
     void register_stream_stop_done(CameraStreamStopDoneCb cb);
+    void register_snapshot_rsp(CameraSnapshotRspCb cb);
 
 private:
     CameraMsgProxy() = default;
@@ -48,6 +52,7 @@ private:
 
     CameraStreamStartRspCb start_rsp_cb_;
     CameraStreamStopDoneCb stop_done_cb_;
+    CameraSnapshotRspCb snapshot_rsp_cb_;
 };
 
 } // namespace ui

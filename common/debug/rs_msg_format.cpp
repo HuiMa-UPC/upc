@@ -102,6 +102,8 @@ const char* upc_msg_type_name(MsgType type) {
         case MsgType::UI_Camera_Stream_Stop_Req: return "UI_Camera_Stream_Stop_Req";
         case MsgType::APP_Camera_Stream_Stop_Done: return "APP_Camera_Stream_Stop_Done";
         case MsgType::APP_Camera_Frame_Ntf: return "APP_Camera_Frame_Ntf";
+        case MsgType::UI_Camera_Snapshot_Req: return "UI_Camera_Snapshot_Req";
+        case MsgType::APP_Camera_Snapshot_Rsp: return "APP_Camera_Snapshot_Rsp";
         case MsgType::APP_Print_Video_Session_Start_Ntf:
             return "APP_Print_Video_Session_Start_Ntf";
         case MsgType::APP_Print_Layer_Snap_Ntf: return "APP_Print_Layer_Snap_Ntf";

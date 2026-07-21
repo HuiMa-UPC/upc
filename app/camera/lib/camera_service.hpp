@@ -34,6 +34,7 @@ private:
     void handle_message(const middleware::Message& msg);
     void handle_stream_start(const middleware::Message& msg);
     void handle_stream_stop(const middleware::Message& msg);
+    void handle_snapshot_req(const middleware::Message& msg);
     void handle_print_video(const middleware::Message& msg);
 
     template <typename T>
@@ -54,9 +55,12 @@ private:
                                      uint32_t src_stride_y, uint32_t width,
                                      uint32_t height);
     bool copy_latest_nv12_snapshot(std::vector<uint8_t>& out) const;
+    bool save_latest_nv12_snapshot(std::string& out_path) const;
 
     void send_stream_start_rsp(const middleware::Message& req, bool ok);
     void send_stream_stop_done(const middleware::Message& req);
+    void send_snapshot_rsp(const middleware::Message& req, bool ok,
+                           const char* path);
     void notify_frame(uint32_t seq);
 
     ViCaptureConfig build_capture_config();

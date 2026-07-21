@@ -7,13 +7,18 @@
 #include "rs_log.hpp"
 
 #include <chrono>
+#include <cerrno>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <ctime>
+#include <sys/stat.h>
 
 namespace upc::camera {
 
 namespace {
+
+constexpr const char* kPhotoOutDir = "/home/photo";
 
 uint64_t monotonic_us()
 {
@@ -28,6 +33,24 @@ const char* env_or_default(const char* name, const char* fallback)
 {
     const char* v = std::getenv(name);
     return (v && v[0]) ? v : fallback;
+}
+
+std::string format_stamp_local()
+{
+    const auto now = std::chrono::system_clock::now();
+    std::time_t t = std::chrono::system_clock::to_time_t(now);
+    std::tm tm_buf{};
+    if(localtime_r(&t, &tm_buf) == nullptr) {
+        return "19700101_000000_000";
+    }
+    const uint32_t ms = static_cast<uint32_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            now.time_since_epoch()).count() % 1000);
+    char buf[40];
+    std::snprintf(buf, sizeof(buf), "%04d%02d%02d_%02d%02d%02d_%03u",
+                  tm_buf.tm_year + 1900, tm_buf.tm_mon + 1, tm_buf.tm_mday,
+                  tm_buf.tm_hour, tm_buf.tm_min, tm_buf.tm_sec, ms);
+    return buf;
 }
 
 void copy_nv12_tight(uint8_t* dst, const uint8_t* src_y, const uint8_t* src_uv,
@@ -149,6 +172,11 @@ void CameraService::subscribe_messages()
         [this](const middleware::Message& msg) { handle_message(msg); }));
 
     subs_.push_back(port.subscribe(
+        middleware::MsgType::UI_Camera_Snapshot_Req,
+        middleware::ModuleId::APP_CAMERA,
+        [this](const middleware::Message& msg) { handle_message(msg); }));
+
+    subs_.push_back(port.subscribe(
         middleware::MsgType::APP_Print_Video_Session_Start_Ntf,
         middleware::ModuleId::APP_CAMERA,
         [this](const middleware::Message& msg) { handle_message(msg); }));
@@ -175,6 +203,9 @@ void CameraService::handle_message(const middleware::Message& msg)
     case middleware::MsgType::UI_Camera_Stream_Stop_Req:
         handle_stream_stop(msg);
         break;
+    case middleware::MsgType::UI_Camera_Snapshot_Req:
+        handle_snapshot_req(msg);
+        break;
     case middleware::MsgType::APP_Print_Video_Session_Start_Ntf:
     case middleware::MsgType::APP_Print_Layer_Snap_Ntf:
     case middleware::MsgType::APP_Print_Video_Session_Finish_Ntf:
@@ -184,6 +215,13 @@ void CameraService::handle_message(const middleware::Message& msg)
     default:
         break;
     }
+}
+
+void CameraService::handle_snapshot_req(const middleware::Message& msg)
+{
+    std::string out_path;
+    const bool ok = save_latest_nv12_snapshot(out_path);
+    send_snapshot_rsp(msg, ok, ok ? out_path.c_str() : "");
 }
 
 void CameraService::handle_print_video(const middleware::Message& msg)
@@ -353,6 +391,42 @@ bool CameraService::copy_latest_nv12_snapshot(std::vector<uint8_t>& out) const
         return false;
     }
     out = latest_nv12_snapshot_;
+    return true;
+}
+
+bool CameraService::save_latest_nv12_snapshot(std::string& out_path) const
+{
+    out_path.clear();
+    std::vector<uint8_t> nv12;
+    if(!copy_latest_nv12_snapshot(nv12) || nv12.empty()) {
+        return false;
+    }
+
+    if(mkdir(kPhotoOutDir, 0755) != 0 && errno != EEXIST) {
+        UPC_LOG_CAMERA_SERVICE(Error, "mkdir %s failed: %s",
+                               kPhotoOutDir, std::strerror(errno));
+        return false;
+    }
+
+    const std::string name = "photo_" + format_stamp_local() + "_" +
+                             std::to_string(stream_width_) + "x" +
+                             std::to_string(stream_height_) + ".nv12";
+    const std::string path = std::string(kPhotoOutDir) + "/" + name;
+    FILE* fp = std::fopen(path.c_str(), "wb");
+    if(!fp) {
+        UPC_LOG_CAMERA_SERVICE(Error, "open photo file failed %s: %s",
+                               path.c_str(), std::strerror(errno));
+        return false;
+    }
+    const bool ok = std::fwrite(nv12.data(), 1, nv12.size(), fp) == nv12.size();
+    if(std::fclose(fp) != 0 || !ok) {
+        UPC_LOG_CAMERA_SERVICE(Error, "write photo file failed %s", path.c_str());
+        return false;
+    }
+
+    out_path = path;
+    UPC_LOG_CAMERA_SERVICE(Info, "snapshot saved path=%s bytes=%zu",
+                           out_path.c_str(), nv12.size());
     return true;
 }
 
@@ -554,6 +628,23 @@ void CameraService::send_stream_stop_done(const middleware::Message& req)
         middleware::ModuleId::APP_CAMERA,
         req.sender_id);
     middleware::MsgPort::instance().publish_async(done);
+}
+
+void CameraService::send_snapshot_rsp(const middleware::Message& req, bool ok,
+                                      const char* path)
+{
+    middleware::CameraSnapshotRspPayload rsp{};
+    rsp.ok = ok ? 1 : 0;
+    if(path && path[0]) {
+        std::snprintf(rsp.path, sizeof(rsp.path), "%s", path);
+    }
+    middleware::Message msg(
+        middleware::MsgType::APP_Camera_Snapshot_Rsp,
+        middleware::ModuleId::APP_CAMERA,
+        req.sender_id);
+    msg.payload = middleware::MsgPayload::from_bytes(
+        reinterpret_cast<const uint8_t*>(&rsp), sizeof(rsp));
+    middleware::MsgPort::instance().publish_async(msg);
 }
 
 void CameraService::notify_frame(uint32_t seq)

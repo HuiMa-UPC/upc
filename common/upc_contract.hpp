@@ -265,6 +265,8 @@ enum class MsgType : uint32_t {
     UI_Camera_Stream_Stop_Req,           /**< Empty */
     APP_Camera_Stream_Stop_Done,         /**< Empty */
     APP_Camera_Frame_Ntf,                /**< CameraFrameNtfPayload（可选唤醒 UI） */
+    UI_Camera_Snapshot_Req,              /**< Empty：请求保存当前最新 NV12 帧到 /home/photo */
+    APP_Camera_Snapshot_Rsp,             /**< CameraSnapshotRspPayload */
 
     // ---- GLAVO → CAMERA：打印层拍照录像（控制面；像素仍走预览 SHM） ----
     APP_Print_Video_Session_Start_Ntf = 0x1080, /**< PrintVideoSessionPayload */
@@ -510,6 +512,13 @@ struct CameraStreamInfoPayload {
 /** APP_Camera_Frame_Ntf：新帧序号（Inline；像素在 SHM） */
 struct CameraFrameNtfPayload {
     uint32_t seq;
+};
+
+/** APP_Camera_Snapshot_Rsp：保存当前帧结果（Inline） */
+struct CameraSnapshotRspPayload {
+    int8_t ok;             /**< 1=成功，0=失败 */
+    uint8_t reserved[3];
+    char path[128];        /**< 成功时输出路径；失败为空串 */
 };
 
 /** GLAVO→CAMERA 打印录像会话（Start/Finish/Abort 共用） */
