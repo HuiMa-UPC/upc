@@ -3,6 +3,7 @@
 #include "device_config.hpp"
 #include "gcode_manifest.hpp"
 #include "print_history_manifest.hpp"
+#include "raw_thumb_format.hpp"
 #include "rs_log.hpp"
 
 #include <rockchip/mpp_err.h>
@@ -14,8 +15,15 @@
 #include <rockchip/rk_venc_cfg.h>
 #include <rockchip/rk_venc_rc.h>
 
+#if defined(UPC_CAMERA_HAS_RGA) && UPC_CAMERA_HAS_RGA
+#include <rga/im2d.hpp>
+#include <rga/rga.h>
+#endif
+
+#include <algorithm>
 #include <cctype>
 #include <cerrno>
+#include <climits>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -26,6 +34,73 @@
 #include <vector>
 
 namespace upc::camera {
+
+namespace {
+
+#if defined(UPC_CAMERA_HAS_RGA) && UPC_CAMERA_HAS_RGA
+constexpr int kThumbSrcFormat = RK_FORMAT_YCbCr_420_SP;
+constexpr int kThumbDstFormat = RK_FORMAT_RGB_565;
+
+bool rga_status_ok(IM_STATUS st)
+{
+    return st == IM_STATUS_SUCCESS || st == IM_STATUS_NOERROR;
+}
+#endif
+
+uint32_t clamp_thumb_width(uint32_t src_w)
+{
+    const uint32_t max_w = CAMERA_PRINT_VIDEO_THUMB_MAX_W > 0
+        ? static_cast<uint32_t>(CAMERA_PRINT_VIDEO_THUMB_MAX_W)
+        : src_w;
+    return std::max<uint32_t>(1u, std::min(src_w, max_w));
+}
+
+uint32_t thumb_height_from_width(uint32_t src_w, uint32_t src_h, uint32_t dst_w)
+{
+    if(src_w == 0 || src_h == 0 || dst_w == 0) {
+        return 1;
+    }
+    const uint64_t scaled = static_cast<uint64_t>(src_h) * dst_w;
+    return std::max<uint32_t>(1u, static_cast<uint32_t>(scaled / src_w));
+}
+
+bool write_raw_thumb(const char* out_path,
+                     uint32_t width,
+                     uint32_t height,
+                     uint32_t stride_bytes,
+                     const std::vector<uint8_t>& data)
+{
+    if(!out_path || !out_path[0] || width == 0 || height == 0 ||
+       stride_bytes == 0 || data.empty()) {
+        return false;
+    }
+
+    upc::RawThumbHeader h{};
+    std::memcpy(h.magic, upc::kRawThumbMagic, sizeof(h.magic));
+    h.version = upc::kRawThumbVersion;
+    h.width = width;
+    h.height = height;
+    h.stride_bytes = stride_bytes;
+    h.color_format = static_cast<uint32_t>(upc::RawThumbColorFormat::RGB565);
+    h.data_size = static_cast<uint32_t>(data.size());
+    if(!upc::raw_thumb_header_valid(h)) {
+        return false;
+    }
+
+    FILE* fp = std::fopen(out_path, "wb");
+    if(!fp) {
+        return false;
+    }
+
+    bool ok = std::fwrite(&h, 1, sizeof(h), fp) == sizeof(h) &&
+              std::fwrite(data.data(), 1, data.size(), fp) == data.size();
+    if(std::fclose(fp) != 0) {
+        ok = false;
+    }
+    return ok;
+}
+
+} // namespace
 
 PrintVideoRecorder::~PrintVideoRecorder()
 {
@@ -486,6 +561,86 @@ bool PrintVideoRecorder::remux_h264_to_mp4(const char* h264_path,
     return run_shell_cmd(cmd, "ffmpeg remux") == 0;
 }
 
+bool PrintVideoRecorder::create_raw_thumb_from_nv12(
+    const std::vector<uint8_t>& nv12, const char* out_path) const
+{
+#if defined(UPC_CAMERA_HAS_RGA) && UPC_CAMERA_HAS_RGA
+    const uint32_t src_w = stream_width_;
+    const uint32_t src_h = stream_height_;
+    if(src_w == 0 || src_h == 0 || nv12.empty() || !out_path || !out_path[0]) {
+        return false;
+    }
+    const size_t need = static_cast<size_t>(src_w) * src_h * 3u / 2u;
+    if(nv12.size() < need) {
+        UPC_LOG_CAMERA_SERVICE(Warn,
+            "raw thumb nv12 too small bytes=%zu need=%zu",
+            nv12.size(), need);
+        return false;
+    }
+    if(src_w > static_cast<uint32_t>(INT_MAX) ||
+       src_h > static_cast<uint32_t>(INT_MAX)) {
+        UPC_LOG_CAMERA_SERVICE(Warn,
+            "raw thumb geometry too large w=%u h=%u", src_w, src_h);
+        return false;
+    }
+    const int src_w_i = static_cast<int>(src_w);
+    const int src_h_i = static_cast<int>(src_h);
+
+    std::vector<uint8_t> rgb565_full(static_cast<size_t>(src_w) * src_h * 2u);
+    rga_buffer_t src_buf = wrapbuffer_virtualaddr(
+        const_cast<uint8_t*>(nv12.data()), src_w_i, src_h_i, kThumbSrcFormat, src_w_i, src_h_i);
+    rga_buffer_t full_buf = wrapbuffer_virtualaddr(
+        rgb565_full.data(), src_w_i, src_h_i, kThumbDstFormat, src_w_i, src_h_i);
+
+    IM_STATUS st = imcvtcolor_t(src_buf, full_buf, kThumbSrcFormat, kThumbDstFormat,
+                                IM_COLOR_SPACE_DEFAULT, 1);
+    if(!rga_status_ok(st)) {
+        UPC_LOG_CAMERA_SERVICE(Warn, "raw thumb rga cvt failed st=%d (%s)",
+                               st, imStrError(st));
+        return false;
+    }
+
+    const uint32_t dst_w = clamp_thumb_width(src_w);
+    const uint32_t dst_h = thumb_height_from_width(src_w, src_h, dst_w);
+    const uint32_t dst_stride_px = dst_w;
+    const uint32_t dst_stride_bytes = dst_stride_px * 2u;
+    if(dst_w > static_cast<uint32_t>(INT_MAX) ||
+       dst_h > static_cast<uint32_t>(INT_MAX) ||
+       dst_stride_px > static_cast<uint32_t>(INT_MAX)) {
+        UPC_LOG_CAMERA_SERVICE(Warn,
+            "raw thumb dst too large w=%u h=%u stride_px=%u",
+            dst_w, dst_h, dst_stride_px);
+        return false;
+    }
+    const int dst_w_i = static_cast<int>(dst_w);
+    const int dst_h_i = static_cast<int>(dst_h);
+    const int dst_stride_px_i = static_cast<int>(dst_stride_px);
+    std::vector<uint8_t> rgb565_thumb(
+        static_cast<size_t>(dst_stride_bytes) * dst_h);
+
+    rga_buffer_t in_buf = wrapbuffer_virtualaddr(
+        rgb565_full.data(), src_w_i, src_h_i, kThumbDstFormat, src_w_i, src_h_i);
+    rga_buffer_t out_buf = wrapbuffer_virtualaddr(
+        rgb565_thumb.data(), dst_w_i, dst_h_i, kThumbDstFormat, dst_stride_px_i, dst_h_i);
+    st = imresize(in_buf, out_buf);
+    if(!rga_status_ok(st)) {
+        UPC_LOG_CAMERA_SERVICE(Warn, "raw thumb rga resize failed st=%d (%s)",
+                               st, imStrError(st));
+        return false;
+    }
+
+    if(!write_raw_thumb(out_path, dst_w, dst_h, dst_stride_bytes, rgb565_thumb)) {
+        UPC_LOG_CAMERA_SERVICE(Warn, "raw thumb write failed path=%s", out_path);
+        return false;
+    }
+    return true;
+#else
+    (void)nv12;
+    (void)out_path;
+    return false;
+#endif
+}
+
 bool PrintVideoRecorder::extract_last_frame_thumb(const char* mp4_path,
                                                   const char* jpg_path) const
 {
@@ -528,21 +683,25 @@ void PrintVideoRecorder::finalize_session(bool aborted)
 
     mkdir_p(CAMERA_PRINT_VIDEO_OUT_DIR);
 
-    /* 命名：{job_name}_{YYYYMMDD_HHMMSS}.mp4 / .jpg（同名打印保留多份） */
+    /* 命名：{job_name}_{YYYYMMDD_HHMMSS}.mp4 / thumb（同名打印保留多份） */
     const int64_t stamp_unix =
         start_unix_ > 0 ? start_unix_ : static_cast<int64_t>(std::time(nullptr));
     const std::string stamp = format_stamp_local(stamp_unix);
     const std::string base =
         (job_name_.empty() ? std::string("print") : job_name_) + "_" + stamp;
     const std::string video_name = base + CAMERA_PRINT_VIDEO_OUT_EXT;
-    const std::string thumb_name = base + CAMERA_PRINT_VIDEO_THUMB_EXT;
+    const std::string raw_thumb_name = base + CAMERA_PRINT_VIDEO_THUMB_EXT;
+    const std::string jpg_thumb_name = base + CAMERA_PRINT_VIDEO_THUMB_FALLBACK_EXT;
     const std::string mp4_path =
         std::string(CAMERA_PRINT_VIDEO_OUT_DIR) + "/" + video_name;
-    const std::string jpg_path =
-        std::string(CAMERA_PRINT_VIDEO_OUT_DIR) + "/" + thumb_name;
+    const std::string raw_thumb_path =
+        std::string(CAMERA_PRINT_VIDEO_OUT_DIR) + "/" + raw_thumb_name;
+    const std::string jpg_thumb_path =
+        std::string(CAMERA_PRINT_VIDEO_OUT_DIR) + "/" + jpg_thumb_name;
 
     (void)std::remove(mp4_path.c_str());
-    (void)std::remove(jpg_path.c_str());
+    (void)std::remove(raw_thumb_path.c_str());
+    (void)std::remove(jpg_thumb_path.c_str());
 
     if(!remux_h264_to_mp4(h264_path_.c_str(), mp4_path.c_str())) {
         UPC_LOG_CAMERA_SERVICE(Error,
@@ -558,10 +717,23 @@ void PrintVideoRecorder::finalize_session(bool aborted)
         return;
     }
 
-    if(!extract_last_frame_thumb(mp4_path.c_str(), jpg_path.c_str())) {
+    bool thumb_ok = false;
+    std::string thumb_name = raw_thumb_name;
+    std::string thumb_path = raw_thumb_path;
+
+    std::vector<uint8_t> nv12;
+    if(grab_latest_nv12(nv12) && create_raw_thumb_from_nv12(nv12, raw_thumb_path.c_str())) {
+        thumb_ok = true;
+    } else if(extract_last_frame_thumb(mp4_path.c_str(), jpg_thumb_path.c_str())) {
+        thumb_ok = true;
+        thumb_name = jpg_thumb_name;
+        thumb_path = jpg_thumb_path;
+    } else {
+        thumb_name.clear();
+        thumb_path.clear();
         UPC_LOG_CAMERA_SERVICE(Warn,
-            "print_video thumb fail mp4=%s jpg=%s (mp4 kept)",
-            mp4_path.c_str(), jpg_path.c_str());
+            "print_video thumb fail raw=%s jpg=%s (mp4 kept)",
+            raw_thumb_path.c_str(), jpg_thumb_path.c_str());
     }
 
     upsert_print_history(aborted, video_name, thumb_name);
@@ -572,7 +744,9 @@ void PrintVideoRecorder::finalize_session(bool aborted)
 
     UPC_LOG_CAMERA_SERVICE(Info,
         "print_video saved -> %s (+%s)%s",
-        mp4_path.c_str(), jpg_path.c_str(), aborted ? " aborted" : "");
+        mp4_path.c_str(),
+        thumb_ok ? thumb_path.c_str() : "(none)",
+        aborted ? " aborted" : "");
 
     session_id_.clear();
     session_dir_.clear();

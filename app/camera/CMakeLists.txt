@@ -72,6 +72,24 @@ else()
     message(WARNING "camera: librockchip_mpp not found — print_video H264 disabled")
 endif()
 
+if(CMAKE_SYSROOT)
+    find_library(UPC_CAMERA_RGA_LIB NAMES rga
+        PATHS
+            ${CMAKE_SYSROOT}/usr/lib
+            ${CMAKE_SYSROOT}/lib
+        NO_DEFAULT_PATH)
+else()
+    find_library(UPC_CAMERA_RGA_LIB NAMES rga)
+endif()
+
+if(UPC_CAMERA_RGA_LIB)
+    message(STATUS "camera: linking librga ${UPC_CAMERA_RGA_LIB}")
+    target_link_libraries(rongsu_camera PRIVATE ${UPC_CAMERA_RGA_LIB})
+    target_compile_definitions(rongsu_camera PRIVATE UPC_CAMERA_HAS_RGA=1)
+else()
+    message(WARNING "camera: librga not found — raw thumbnail RGA path disabled")
+endif()
+
 target_compile_options(rongsu_camera
     PRIVATE
         -Wall -Wextra

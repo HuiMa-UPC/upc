@@ -33,7 +33,7 @@
  *   └──────────────────────────────────────────────────┴──────┘
  *
  * 数据源：/home/video/manifest.json（common/fs_manifest/print_history_manifest）。
- * 缩略图：/home/video/{thumb}.jpg，经 LVGL POSIX FS（盘符 'A'）+ TJPGD 解码，
+ * 缩略图：/home/video/{thumb}（优先 .rthm 原始 RGB565，自定义 decoder；失败回退 .jpg），
  *          cover 居中裁切（竖构图相机图铺满横槽）。
  * 视频播放（第二期）：点缩略图进入播放器隐藏子页，当前为占位。
  */
@@ -663,8 +663,8 @@ lv_obj_t *page_user_history_create(lv_obj_t *parent)
     lv_obj_set_style_bg_opa(list, LV_OPA_TRANSP, 0);
     lv_obj_set_scroll_dir(list, LV_DIR_VER);
     lv_obj_set_scrollbar_mode(list, LV_SCROLLBAR_MODE_OFF);
-    /* 第二档滚动优化：关闭边界弹性 + 惯性动量，降低回弹/拖尾体感卡顿。 */
-    lv_obj_remove_flag(list, LV_OBJ_FLAG_SCROLL_ELASTIC);
+    /* 恢复边界回弹，保留惯性关闭以控制滚动抖动。 */
+    lv_obj_add_flag(list, LV_OBJ_FLAG_SCROLL_ELASTIC);
     lv_obj_remove_flag(list, LV_OBJ_FLAG_SCROLL_MOMENTUM);
     g_list = list;
 

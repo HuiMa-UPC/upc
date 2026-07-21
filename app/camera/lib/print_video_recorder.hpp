@@ -31,7 +31,7 @@ struct PrintVideoJob {
 
 /**
  * 打印层拍照：dma 元数据环取帧 → MPP H.264；
- * Finish/Abort 时 EOS flush → ffmpeg remux 为 .mp4 + 抽最后一帧 .jpg，再删临时 .h264，
+ * Finish/Abort 时 EOS flush → ffmpeg remux 为 .mp4 + 生成最后一帧缩略图（优先 RTHM，失败回退 JPG），再删临时 .h264，
  * 并 upsert /home/video/manifest.json（含 complete/terminated 状态）。
  */
 class PrintVideoRecorder {
@@ -68,7 +68,10 @@ private:
     bool append_encoder_output_to_h264();
     /** ffmpeg：临时 Annex-B H.264 remux 为 MP4（-c copy） */
     bool remux_h264_to_mp4(const char* h264_path, const char* mp4_path) const;
-    /** ffmpeg：从 MP4 抽最后一帧为 JPEG 缩略图 */
+    /** RGA：把最后一帧 NV12 生成 RTHM（RGB565）缩略图 */
+    bool create_raw_thumb_from_nv12(const std::vector<uint8_t>& nv12,
+                                    const char* out_path) const;
+    /** ffmpeg：从 MP4 抽最后一帧为 JPEG（raw 失败时兜底） */
     bool extract_last_frame_thumb(const char* mp4_path, const char* jpg_path) const;
     /** remux 成功后 upsert /home/video/manifest.json */
     void upsert_print_history(bool aborted,

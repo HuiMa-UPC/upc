@@ -7,7 +7,7 @@
  * - Camera：Finish/Abort remux 成功后 upsert 一条
  * - UI：进入历史页时直接读取（不经列表 IPC）
  *
- * 媒体文件命名：{job_name}_{YYYYMMDD_HHMMSS}.mp4 / .jpg
+ * 媒体文件命名：{job_name}_{YYYYMMDD_HHMMSS}.mp4 / 缩略图(.rthm 或 .jpg)
  */
 
 #include <cstdint>
@@ -37,7 +37,7 @@ struct PrintHistoryEntry {
     float               material_g = 0.f;
     PrintHistoryStatus  status = PrintHistoryStatus::Complete;
     std::string         video;         /**< 相对文件名，如 benchy_20260526_221300.mp4 */
-    std::string         thumb;         /**< 相对文件名，如 benchy_20260526_221300.jpg */
+    std::string         thumb;         /**< 相对文件名，如 benchy_20260526_221300.rthm */
 };
 
 /** 从 path 读取 manifest；文件不存在返回空列表（仍返回 true） */

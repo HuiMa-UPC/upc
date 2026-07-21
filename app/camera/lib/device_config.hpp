@@ -112,9 +112,14 @@
 #define CAMERA_PRINT_VIDEO_OUT_EXT  ".mp4"
 #endif
 
-/** 延时摄影缩略图后缀（抽 MP4 最后一帧） */
+/** 延时摄影缩略图后缀（RTHM 原始 RGB565，UI 自定义 decoder 读取） */
 #ifndef CAMERA_PRINT_VIDEO_THUMB_EXT
-#define CAMERA_PRINT_VIDEO_THUMB_EXT  ".jpg"
+#define CAMERA_PRINT_VIDEO_THUMB_EXT  ".rthm"
+#endif
+
+/** 原始缩略图生成失败时的 JPG 兜底后缀 */
+#ifndef CAMERA_PRINT_VIDEO_THUMB_FALLBACK_EXT
+#define CAMERA_PRINT_VIDEO_THUMB_FALLBACK_EXT ".jpg"
 #endif
 
 /**

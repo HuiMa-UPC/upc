@@ -5,6 +5,7 @@
 #include "camera_msg_proxy.hpp"
 #include "debug_msg_proxy.hpp"
 #include "camera_preview.hpp"
+#include "raw_thumb_decoder.hpp"
 #include "ui_simple_page.hpp"
 
 #include "page_user_home.hpp"
@@ -34,6 +35,7 @@ void settings_page_exit(void)
 
 void app_init(lv_obj_t* screen) {
     ui_theme_init();
+    raw_thumb_decoder_init();
 
     lv_obj_set_style_bg_color(screen, user_color_bg, 0);
     lv_obj_set_style_bg_opa(screen, LV_OPA_COVER, 0);
