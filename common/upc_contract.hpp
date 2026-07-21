@@ -648,10 +648,13 @@ struct DebugLaserPowerPayload {
 
 /** GLAVO_Debug_Laser_Ntf：激光器状态上报（原始值，界面自行换算） */
 struct DebugLaserStatePayload {
-    uint16_t status;          /**< bit0 红光/bit1 激光输出/bit2 Ready/bit3 外部输出有效 */
-    uint16_t alarm;           /**< laser_alarm 打包报警位 */
-    uint16_t power_raw;       /**< 功率原始值 0..255 */
-    uint16_t pump_temp_raw;   /**< 泵浦温度原始值 */
+    uint16_t status;          /**< 状态 bitfield，bit 含义随 laser_type 变化（见激光协议文档 1.1/2.2） */
+    uint16_t alarm;           /**< laser_alarm 打包报警位，bit 含义随 laser_type 变化（见 1.2/2.3） */
+    uint16_t power_raw;       /**< 功率原始值（JFSC 0..255；AL 单位 0.1%） */
+    uint16_t pump_temp_raw;   /**< 温度原始值（JFSC 整数℃；AL 单位 0.1℃） */
+    uint16_t current_raw;     /**< 电流原始值（JFSC 单位 0.01A；AL 单位 0.1A；仅 3ST 上报，2ST 为 0） */
+    uint8_t  laser_type;      /**< 激光器型号：0=未知 1=JFSC 2=AL 200W（2ST 无型号，回退最近一次 3ST 值） */
+    uint8_t  reserved[3];
 };
 
 /** GLAVO_Debug_Sensor_Ntf：顶部 7 路传感器快照 */

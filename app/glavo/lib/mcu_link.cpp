@@ -563,13 +563,97 @@ void McuLink::on_motion_pos_report(const serial_motion_pos_t& pos)
         static_cast<double>(pos.s_pos_mm), static_cast<double>(pos.d_pos_deg));
 }
 
+
+namespace {
+
+/*
+    * 激光器 3ST 扩展上报（TLV 0x04，Len 11）：在 2ST 基础上带 laser_type 与电流。
+    * 预编译 protocol 静态库当前仅解析 2ST（TLV 0x03），故 3ST 在应用层就地解析。
+    * 帧：5A A5 BB | Port(0xA5) Cmd(0x9B) Seq | PayloadLen(0x0D) | TLV(0x04) TlvLen(0x0B) | Value(11) | Sum
+    * Value：[0]=laser_type [1..2]=status [3..4]=alarm [5..6]=power [7..8]=temperature [9..10]=current（均小端）。
+    */
+constexpr uint8_t kSdbgCmdSensorReport   = 0x9B;  /* CMD_SNESOR_VALUE_REPORT */
+constexpr uint8_t kSdbgTlvLaserReport3St = 0x04;  /* TLV_SENSOR_REPORT_3ST */
+
+struct LaserReport3 {
+    uint8_t  type;        /**< 1=JFSC 2=AL 200W */
+    uint16_t status;
+    uint16_t alarm;
+    uint16_t power_raw;
+    uint16_t temp_raw;
+    uint16_t current_raw;
+};
+
+inline uint16_t laser3_rd_le16(const uint8_t* p)
+{
+    return static_cast<uint16_t>(static_cast<uint16_t>(p[0]) |
+                                    (static_cast<uint16_t>(p[1]) << 8u));
+}
+
+/** 记住最近一次 3ST 上报的型号，供 2ST（无型号字段）回退使用。仅链路线程访问。 */
+uint8_t g_last_laser_type = 0;
+
+/** 解析 3ST 激光扩展上报；成功返回 0，非匹配/校验失败返回负值。 */
+int parse_laser_report3(const uint8_t* d, size_t len, LaserReport3* out)
+{
+    if(!d || !out || len < 9) {
+        return -1;
+    }
+    if(d[0] != SERIAL_SOF0 || d[1] != SERIAL_SOF1 || d[2] != SERIAL_FT_MCU_TO_SOC) {
+        return -2;
+    }
+    if(d[3] != SDBG_PORT_SENSORS || d[4] != kSdbgCmdSensorReport) {
+        return -3;
+    }
+    const uint8_t payload_len = d[6];
+    if(payload_len != 0x0D || d[7] != kSdbgTlvLaserReport3St || d[8] != 0x0B) {
+        return -4;
+    }
+    if(len < static_cast<size_t>(8 + payload_len)) {
+        return -5;
+    }
+    if(serial_frame_checksum_check(d, len, nullptr, nullptr) != 0) {
+        return -6;
+    }
+    const uint8_t* v = &d[9];
+    out->type        = v[0];
+    out->status      = laser3_rd_le16(v + 1);
+    out->alarm       = laser3_rd_le16(v + 3);
+    out->power_raw   = laser3_rd_le16(v + 5);
+    out->temp_raw    = laser3_rd_le16(v + 7);
+    out->current_raw = laser3_rd_le16(v + 9);
+    return 0;
+}
+
+/** 组装并异步下发 GLAVO_Debug_Laser_Ntf（含型号与电流）。 */
+void publish_laser_ntf(uint8_t type, uint16_t status, uint16_t alarm,
+                        uint16_t power_raw, uint16_t temp_raw, uint16_t current_raw)
+{
+    middleware::DebugLaserStatePayload p{};
+    p.status        = status;
+    p.alarm         = alarm;
+    p.power_raw     = power_raw;
+    p.pump_temp_raw = temp_raw;
+    p.current_raw   = current_raw;
+    p.laser_type    = type;
+
+    middleware::Message ntf(middleware::MsgType::GLAVO_Debug_Laser_Ntf,
+        middleware::ModuleId::APP_GLAVO, middleware::ModuleId::UI);
+    ntf.payload = middleware::MsgPayload::from_bytes(
+        reinterpret_cast<const uint8_t*>(&p), sizeof(p));
+    middleware::MsgPort::instance().publish_async(ntf);
+}
+
+} // namespace
+
 void McuLink::on_laser_report(const serial_laser_report_t& report)
 {
-    publish_debug_laser_ntf(report);    /* 调试页 Laser 标签状态回读 */
+    publish_debug_laser_ntf(report);    /* 调试页 Laser 标签状态回读（2ST：无型号，型号回退最近 3ST） */
 
     UPC_LOG_MCU_LINK(Info,
-        "laser: status=0x%04X alarm=0x%04X power=%u pump=%u",
-        report.status, report.alarm, report.power_raw, report.pump_temp_raw);
+        "laser(2ST): status=0x%04X alarm=0x%04X power=%u temp=%u type=%u",
+        report.status, report.alarm, report.power_raw, report.pump_temp_raw,
+        g_last_laser_type);
 }
 
 void McuLink::publish_env_update_ntf()
@@ -652,17 +736,9 @@ void McuLink::publish_debug_axis_ntf(const serial_motion_pos_t& pos)
 
 void McuLink::publish_debug_laser_ntf(const serial_laser_report_t& report)
 {
-    middleware::DebugLaserStatePayload p{};
-    p.status        = report.status;
-    p.alarm         = report.alarm;
-    p.power_raw     = report.power_raw;
-    p.pump_temp_raw = report.pump_temp_raw;
-
-    middleware::Message ntf(middleware::MsgType::GLAVO_Debug_Laser_Ntf,
-        middleware::ModuleId::APP_GLAVO, middleware::ModuleId::UI);
-    ntf.payload = middleware::MsgPayload::from_bytes(
-        reinterpret_cast<const uint8_t*>(&p), sizeof(p));
-    middleware::MsgPort::instance().publish_async(ntf);
+    /* 2ST 不含型号与电流：型号回退最近一次 3ST 值，电流置 0。 */
+    publish_laser_ntf(g_last_laser_type, report.status, report.alarm,
+        report.power_raw, report.pump_temp_raw, 0);
 }
 
 void McuLink::notify_serial_event(serial_event_t evt)
@@ -718,7 +794,20 @@ void McuLink::handle_serial_rx_frame(const uint8_t* frame, size_t len)
         return;
     }
 
-    /* 激光器状态上报（0x9B + TLV 0x03）：状态/报警/功率/泵浦温度 */
+/* 激光器扩展上报（0x9B + TLV 0x04）：型号/状态/报警/功率/温度/电流（3ST，应用层解析） */
+LaserReport3 laser3{};
+if(parse_laser_report3(frame, len, &laser3) == 0) {
+    g_last_laser_type = laser3.type;    /* 供后续 2ST 回退使用 */
+    publish_laser_ntf(laser3.type, laser3.status, laser3.alarm,
+                      laser3.power_raw, laser3.temp_raw, laser3.current_raw);
+    UPC_LOG_MCU_LINK(Info,
+        "laser(3ST): type=%u status=0x%04X alarm=0x%04X power=%u temp=%u cur=%u",
+        laser3.type, laser3.status, laser3.alarm, laser3.power_raw,
+        laser3.temp_raw, laser3.current_raw);
+    return;
+}
+
+/* 激光器状态上报（0x9B + TLV 0x03）：状态/报警/功率/泵浦温度（2ST，兼容旧固件） */
     serial_laser_report_t laser{};
     if(serial_parse_laser_report(frame, len, &laser) == 0) {
         on_laser_report(laser);

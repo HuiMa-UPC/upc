@@ -1,14 +1,16 @@
 #include "ui_keyboard.hpp"
 #include "ui_theme.hpp"
 
+#include <cstdio>
 #include <cstring>
 
 /*
  * 键盘组件：两套输入面板共用同一套 attach/hide 接口。
  *   - 文本模式（LV_KEYBOARD_MODE_TEXT_*）：沿用 LVGL 内置 lv_keyboard，底部弹出。
- *   - 数字模式（LV_KEYBOARD_MODE_NUMBER）：自绘右侧数字键盘面板（大号显示 + 圆形数字键
- *     7 8 9 / 4 5 6 / 1 2 3 / . 0 + 蓝色确认；右上角补一个删除键 ⌫）。
+ *   - 数字模式（LV_KEYBOARD_MODE_NUMBER）：自绘右侧数字键盘面板（大号读数 + 圆形键
+ *     首排 C 清零 / − 负号 / ⌫ 删除，随后 7 8 9 / 4 5 6 / 1 2 3 / . 0 + 蓝色确认）。
  *     圆形按键 + 大号读数无法用 buttonmatrix 实现，故单独自绘并直接读写 textarea。
+ *     负号键切换前导 '-'，全局对所有数字输入（含 debug 页各字段）生效。
  */
 
 static lv_obj_t *s_kb          = nullptr;  /**< 文本键盘（lv_keyboard） */
@@ -143,6 +145,41 @@ static void numpad_on_del(lv_event_t *)
     numpad_sync_display();
 }
 
+
+/** 清零键 C：清空当前输入框（读数回落 "0"） */
+static void numpad_on_clear(lv_event_t *)
+{
+    if(!s_current_ta) {
+        return;
+    }
+    s_replace_on_first_key = false;
+    lv_textarea_set_text(s_current_ta, "");
+    lv_textarea_set_cursor_pos(s_current_ta, 0);
+    numpad_sync_display();
+}
+
+/** 负号键 −：切换当前值正负（切换前导 '-'），在现值基础上编辑而非覆盖 */
+static void numpad_on_sign(lv_event_t *)
+{
+    if(!s_current_ta) {
+        return;
+    }
+    s_replace_on_first_key = false;
+    const char *cur = lv_textarea_get_text(s_current_ta);
+    char buf[kNumpadMaxLen + 2];
+    if(cur && cur[0] == '-') {
+        std::snprintf(buf, sizeof(buf), "%s", cur + 1);           /* 去负号 */
+    } else {
+        if(cur && std::strlen(cur) >= kNumpadMaxLen) {
+            return;                                               /* 加负号会超长则忽略 */
+        }
+        std::snprintf(buf, sizeof(buf), "-%s", cur ? cur : "");   /* 加负号 */
+    }
+    lv_textarea_set_text(s_current_ta, buf);
+    lv_textarea_set_cursor_pos(s_current_ta, LV_TEXTAREA_CURSOR_LAST);
+    numpad_sync_display();
+}
+
 /** 点击遮罩：当前值已实时写入 textarea，直接收起即可（不提交） */
 static void numpad_on_ok(lv_event_t *)
 {
@@ -227,10 +264,18 @@ static void build_numpad(lv_obj_t *parent)
         panel_w = 360;
     }
     const int32_t side = panel_w * 12 / 100;
-    const int32_t gap  = panel_w * 8 / 100;
-    int32_t btn = (panel_w - 2 * side - 2 * gap) / 3;
-    if(btn < 56) {
-        btn = 56;
+    const int32_t gap  = panel_w * 6 / 100;   /* 由 8% 收窄为 6%：为新增的 C/−/⌫ 一排腾出纵向空间 */
+
+    /*
+     * 键径同时受面板宽（每行 3 键）与屏高（读数行 + 5 排按键 + 6 段行距）约束，取较小者，
+     * 保证在 1024×600 矮屏也放得下加高后的 5 排键盘（面板列内子项：读数/5排/底部弹簧）。
+     */
+    const int32_t readout_h = lv_font_get_line_height(user_font_value());
+    const int32_t btn_w = (panel_w - 2 * side - 2 * gap) / 3;
+    const int32_t btn_h = (scr_h - 2 * side - readout_h - 6 * gap) / 5;
+    int32_t btn = btn_w < btn_h ? btn_w : btn_h;
+    if(btn < 44) {
+        btn = 44;
     }
 
     /* 遮罩根：占满全屏、半透明黑，点击空白处=确认收起 */
@@ -264,10 +309,10 @@ static void build_numpad(lv_obj_t *parent)
     lv_obj_set_flex_align(panel, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER,
                           LV_FLEX_ALIGN_CENTER);
 
-    /* 顶部读数行：大号 label（左/撑满）+ 右上角删除键 */
+    /* 顶部读数行：仅大号读数（删除键下移到首排功能键） */
     lv_obj_t *top = numpad_make_row(panel, gap);
-    lv_obj_set_flex_align(top, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER,
-                          LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_flex_align(top, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER,
+        LV_FLEX_ALIGN_CENTER);
 
     s_numpad_disp = lv_label_create(top);
     lv_obj_set_flex_grow(s_numpad_disp, 1);
@@ -277,10 +322,17 @@ static void build_numpad(lv_obj_t *parent)
     lv_obj_set_style_text_font(s_numpad_disp, user_font_value(), 0);
     lv_label_set_text(s_numpad_disp, "0");
 
-    numpad_make_key(top, btn, LV_SYMBOL_BACKSPACE, numpad_on_del, nullptr, false,
+    /* 首排功能键：C 清零 / − 负号 / ⌫ 删除 */
+    static const char *kClear = "C";
+    static const char *kMinus = "-";
+    lv_obj_t *row_fn = numpad_make_row(panel, gap);
+    numpad_make_key(row_fn, btn, kClear, numpad_on_clear, nullptr, false,
+                    user_font_value());
+    numpad_make_key(row_fn, btn, kMinus, numpad_on_sign, nullptr, false,
+                    user_font_value());
+    numpad_make_key(row_fn, btn, LV_SYMBOL_BACKSPACE, numpad_on_del, nullptr, false,
                     user_font_text());
 
-    numpad_make_spacer(panel);
 
     /* 数字键区：7 8 9 / 4 5 6 / 1 2 3 / . 0 [确认] */
     static const char *kRow1[3] = { "7", "8", "9" };

@@ -67,6 +67,9 @@ lv_obj_t *g_laser_alarm_box     = nullptr;      /**< 报警列表容器 */
 lv_obj_t *g_laser_temp_lbl      = nullptr;      /**< 泵浦温度读数 */
 lv_obj_t *g_laser_power_lbl     = nullptr;      /**< 功率读数 */
 lv_obj_t *g_laser_power_ta      = nullptr;      /**< 设置功率输入 */
+lv_obj_t *g_laser_type_lbl      = nullptr;      /**< 激光器类型显示区（JFSC / AL 200W / …） */
+lv_obj_t *g_laser_current_lbl   = nullptr;      /**< 电流读数 */
+uint8_t   g_laser_type_code     = 0;            /**< 最近一次上报的激光器型号（0=未知 1=JFSC 2=AL） */
 
 lv_obj_t *g_sensor_val[7] = { nullptr };
 lv_obj_t *g_axis_pos[3]   = { nullptr };
@@ -1335,14 +1338,47 @@ lv_obj_t *build_other_tab(lv_obj_t *body)
 
 /* ============================ Laser 激光器 ============================= */
 
-/* 状态位对应文字（bit0 红光 / bit1 激光输出 / bit2 Ready / bit3 外部输出有效） */
+/* JFSC 状态位文字（bit0 红光 / bit1 激光输出 / bit2 Ready / bit3 外部输出有效） */
 const char *const kLaserStatusOn[4]  = {
     "Red Light On", "Laser Emitting", "Ready", "Ext Output Valid" };
 const char *const kLaserStatusOff[4] = {
     "Red Light Off", "Laser Idle", "Not Ready", "Ext Output Invalid" };
 
-/* laser_alarm 位 → 名称（低字节 0x0067 / 高字节 0x0081） */
+/* AL 200W 状态位文字（bit0 红光 / bit1 激光使能 / bit2 内外控；bit3 未定义→隐藏该行） */
+const char *const kAlLaserStatusOn[4]  = {
+    "Red Light On", "Laser On", "Internal Ctrl", nullptr };
+const char *const kAlLaserStatusOff[4] = {
+    "Red Light Off", "Laser Off", "External Ctrl", nullptr };
+
+/* 激光器类型编码（后续新增机型只需在此枚举与 laser_type_name() 各追加一行） */
+enum : uint8_t {
+    kLaserTypeUnknown = 0,
+    kLaserTypeJFSC    = 1,
+    kLaserTypeAL200W  = 2,
+};
+
+/** 类型编码 → 显示名（未知编码回落到 "Unknown"） */
+const char *laser_type_name(uint8_t code)
+{
+    switch(code) {
+    case kLaserTypeJFSC:   return "JFSC";
+    case kLaserTypeAL200W: return "AL 200W";
+    default:               return "Unknown";
+    }
+}
+
+/** 刷新激光器类型显示区（由 register_laser 回调按上报的 laser_type 调用）。 */
+void set_laser_type_display(uint8_t code)
+{
+    if(g_laser_type_lbl) {
+        lv_label_set_text(g_laser_type_lbl, laser_type_name(code));
+    }
+}
+
+/* laser_alarm 位 → 名称 */
 struct LaserAlarmBit { uint8_t bit; const char *name; };
+
+/* JFSC：低字节来自寄存器 0x0067，高字节来自 0x0081 */
 const LaserAlarmBit kLaserAlarms[] = {
     { 0,  "PD1 Alarm" },   { 1,  "PD2 Alarm" },   { 2,  "Interlock" },
     { 3,  "DB25 E-Stop" }, { 4,  "QCW Pulse" },   { 5,  "QCW Duty" },
@@ -1351,17 +1387,32 @@ const LaserAlarmBit kLaserAlarms[] = {
     { 14, "Voltage" },
 };
 
-/** 依据 laser_alarm 位刷新报警列表；0 则清空 */
-void update_laser_alarms(uint16_t alarm)
+/* AL 200W：输入寄存器 000CH..0015H 打包（bit0 起含义与 JFSC 完全不同） */
+const LaserAlarmBit kAlLaserAlarms[] = {
+    { 0, "ALD Current" },     { 1, "ALD Voltage" },  { 2, "ALD Temp" },
+    { 3, "Fiber Tray Temp" }, { 4, "PCB Temp" },     { 5, "Condensation" },
+    { 6, "Cladding PD" },     { 7, "Fiber Break" },  { 8, "E-Stop" },
+    { 9, "Service Due" },
+};
+
+/** 依据 laser_alarm 位与型号刷新报警列表；alarm=0 则清空 */
+void update_laser_alarms(uint16_t alarm, uint8_t type)
 {
     if(!g_laser_alarm_box) {
         return;
     }
     lv_obj_clean(g_laser_alarm_box);
-    for(const LaserAlarmBit &a : kLaserAlarms) {
-        if(alarm & (1u << a.bit)) {
+
+    const LaserAlarmBit *tbl = kLaserAlarms;
+    size_t count = sizeof(kLaserAlarms) / sizeof(kLaserAlarms[0]);
+    if(type == kLaserTypeAL200W) {
+        tbl   = kAlLaserAlarms;
+        count = sizeof(kAlLaserAlarms) / sizeof(kAlLaserAlarms[0]);
+    }
+    for(size_t i = 0; i < count; i++) {
+        if(alarm & (1u << tbl[i].bit)) {
             lv_obj_t *l = lv_label_create(g_laser_alarm_box);
-            lv_label_set_text(l, a.name);
+            lv_label_set_text(l, tbl[i].name);
             lv_obj_set_style_text_color(l, ui_color_danger, 0);
             lv_obj_set_style_text_font(l, user_font_text(), 0);
         }
@@ -1386,7 +1437,7 @@ void on_laser_power_cancel(lv_event_t *)
 void on_laser_alarm_reset(lv_event_t *)
 {
     ui::DebugMsgProxy::instance().send_laser_alarm_reset();
-    update_laser_alarms(0);   /* 本地立即清空 Alarm 列表，后续以 MCU 上报为准 */
+    update_laser_alarms(0, g_laser_type_code);   /* 本地立即清空 Alarm 列表，后续以 MCU 上报为准 */
     ui_toast_show("Alarm reset sent", user_color_accent, 1200);
 }
 
@@ -1519,17 +1570,35 @@ lv_obj_t *build_laser_tab(lv_obj_t *body)
     lv_obj_set_scroll_dir(g_laser_alarm_box, LV_DIR_VER);
     lv_obj_set_scrollbar_mode(g_laser_alarm_box, LV_SCROLLBAR_MODE_OFF);
 
-    /* 中：Status */
-    lv_obj_t *status_card = ui_user_make_frosted_card(tab, false);
-    lv_obj_set_width(status_card, 1);
-    lv_obj_set_flex_grow(status_card, 3);
-    lv_obj_set_height(status_card, LV_PCT(100));
+    /* 中：竖排容器（Status 在上、Laser Type 在下） */
+    lv_obj_t *mid = lv_obj_create(tab);
+    lv_obj_remove_style_all(mid);
+    lv_obj_set_width(mid, 1);
+    lv_obj_set_flex_grow(mid, 3);
+    lv_obj_set_height(mid, LV_PCT(100));
+    lv_obj_set_flex_flow(mid, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_row(mid, USER_PAD_SM, 0);
+    lv_obj_set_style_bg_opa(mid, LV_OPA_TRANSP, 0);
+    lv_obj_clear_flag(mid, LV_OBJ_FLAG_SCROLLABLE);
+
+    /* Status：高度改为按内容收缩，下边界上移，给 Laser Type 让出空间 */
+    lv_obj_t *status_card = ui_user_make_frosted_card(mid, false);
+    lv_obj_set_width(status_card, LV_PCT(100));
+    lv_obj_set_height(status_card, LV_SIZE_CONTENT);
     lv_obj_set_flex_flow(status_card, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_style_pad_row(status_card, USER_PAD_SM, 0);
     add_card_title(status_card, "Status");
     for(int i = 0; i < 4; i++) {
         make_laser_status_row(status_card, i);
     }
+
+    /* Laser Type：新显示区卡*/
+    lv_obj_t *type_card = make_laser_card(mid, "Laser Type");
+    lv_obj_set_flex_grow(type_card, 1);
+    g_laser_type_lbl = lv_label_create(type_card);
+    lv_label_set_text(g_laser_type_lbl, "--");
+    lv_obj_set_style_text_color(g_laser_type_lbl, user_color_text, 0);
+    lv_obj_set_style_text_font(g_laser_type_lbl, user_font_value(), 0);
 
     /* 右：Laser Data + Power Control + Alarm Ops */
     lv_obj_t *right = lv_obj_create(tab);
@@ -1545,6 +1614,7 @@ lv_obj_t *build_laser_tab(lv_obj_t *body)
     lv_obj_t *data_card = make_laser_card(right, "Laser Data");
     make_value_row(data_card, "Temperature", &g_laser_temp_lbl);
     make_value_row(data_card, "Power", &g_laser_power_lbl);
+    make_value_row(data_card, "Current", &g_laser_current_lbl);
 
     lv_obj_t *pc_card = make_laser_card(right, "Power Control");
     lv_obj_t *setrow = lv_obj_create(pc_card);
@@ -1628,29 +1698,73 @@ void bind_debug_callbacks()
     });
 
     proxy.register_laser([](const middleware::DebugLaserStatePayload &p) {
+        /* 型号：优先用本次上报（3ST）；若为未知（2ST 无型号且从未收到 3ST），沿用上次已知型号。 */
+        if(p.laser_type != kLaserTypeUnknown) {
+            g_laser_type_code = p.laser_type;
+        }
+        const uint8_t type = g_laser_type_code;
+        const bool    is_al = (type == kLaserTypeAL200W);
+
+        set_laser_type_display(type);
+
+        /* 状态：按型号选表；某位未定义（AL bit3）则隐藏该行 */
+        const char *const *on_txt  = is_al ? kAlLaserStatusOn  : kLaserStatusOn;
+        const char *const *off_txt = is_al ? kAlLaserStatusOff : kLaserStatusOff;
         for(int i = 0; i < 4; i++) {
-            const bool on = (p.status & (1u << i)) != 0;
-            if(g_laser_status_lbl[i]) {
-                lv_label_set_text(g_laser_status_lbl[i],
-                                  on ? kLaserStatusOn[i] : kLaserStatusOff[i]);
-                lv_obj_set_style_text_color(g_laser_status_lbl[i],
-                    on ? user_color_accent : user_color_text_dim, 0);
+            lv_obj_t *lbl = g_laser_status_lbl[i];
+            if(!lbl) {
+                continue;
             }
+            lv_obj_t *row = lv_obj_get_parent(lbl);
+            if(on_txt[i] == nullptr) {          /* 该型号未定义此状态位 → 隐藏整行 */
+                if(row) lv_obj_add_flag(row, LV_OBJ_FLAG_HIDDEN);
+                continue;
+            }
+            if(row) lv_obj_clear_flag(row, LV_OBJ_FLAG_HIDDEN);
+            const bool on = (p.status & (1u << i)) != 0;
+            lv_label_set_text(lbl, on ? on_txt[i] : off_txt[i]);
+            lv_obj_set_style_text_color(lbl,
+                on ? user_color_accent : user_color_text_dim, 0);
             if(g_laser_status_dot[i]) {
                 lv_obj_set_style_bg_color(g_laser_status_dot[i],
                     on ? user_color_status_ok : user_color_icon_off, 0);
             }
         }
+
+        /* 温度：JFSC 原始整数℃；AL 单位 0.1℃ */
         if(g_laser_temp_lbl) {
-            lv_label_set_text_fmt(g_laser_temp_lbl, "%u \xC2\xB0""C",
-                                  static_cast<unsigned>(p.pump_temp_raw));
+            if(is_al) {
+                lv_label_set_text_fmt(g_laser_temp_lbl, "%u.%u \xC2\xB0""C",
+                    static_cast<unsigned>(p.pump_temp_raw / 10),
+                    static_cast<unsigned>(p.pump_temp_raw % 10));
+            } else {
+                lv_label_set_text_fmt(g_laser_temp_lbl, "%u \xC2\xB0""C",
+                    static_cast<unsigned>(p.pump_temp_raw));
+            }
         }
+
+        /* 功率：JFSC 原始 0..255→百分比；AL 单位 0.1% */
         if(g_laser_power_lbl) {
-            /* 原始 0..255 → 百分比 */
-            lv_label_set_text_fmt(g_laser_power_lbl, "%u%%",
-                static_cast<unsigned>(p.power_raw * 100u / 255u));
+            const unsigned pct = is_al
+                ? static_cast<unsigned>(p.power_raw / 10)
+                : static_cast<unsigned>(p.power_raw * 100u / 255u);
+            lv_label_set_text_fmt(g_laser_power_lbl, "%u%%", pct);
         }
-        update_laser_alarms(p.alarm);
+
+        /* 电流：JFSC 单位 0.01A；AL 单位 0.1A（2ST 无电流字段，显示 0.00A） */
+        if(g_laser_current_lbl) {
+            if(is_al) {
+                lv_label_set_text_fmt(g_laser_current_lbl, "%u.%u A",
+                    static_cast<unsigned>(p.current_raw / 10),
+                    static_cast<unsigned>(p.current_raw % 10));
+            } else {
+                lv_label_set_text_fmt(g_laser_current_lbl, "%u.%02u A",
+                    static_cast<unsigned>(p.current_raw / 100),
+                    static_cast<unsigned>(p.current_raw % 100));
+            }
+        }
+
+        update_laser_alarms(p.alarm, type);
     });
 }
 
@@ -1659,6 +1773,8 @@ void reset_globals()
     ui::debug_test_reset();
     g_tab1 = g_tab2 = g_tab3 = g_tab4 = nullptr;
     g_laser_alarm_box = g_laser_temp_lbl = g_laser_power_lbl = g_laser_power_ta = nullptr;
+    g_laser_type_lbl = g_laser_current_lbl = nullptr;
+    g_laser_type_code = 0;
     for(int i = 0; i < 4; i++) {
         g_laser_status_lbl[i] = nullptr;
         g_laser_status_dot[i] = nullptr;
