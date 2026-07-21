@@ -4,7 +4,8 @@
  *
  * 目标板由自定义脚本启动 wpa_supplicant（wpa_supplicant -B -i wlan0 -c /etc/wpa_supplicant.conf，
  * 其中 ctrl_interface=/var/run/wpa_supplicant、update_config=1），故本类直接连
- * /var/run/wpa_supplicant/<iface> 控制 socket 收发命令，DHCP 用 udhcpc。
+ * /var/run/wpa_supplicant/<iface> 控制 socket 收发命令。IP 获取默认交给系统
+ * DHCP 客户端（如 dhcpcd）；当系统未接管时回退到 udhcpc。
  *
  * 线程模型：一个后台线程，命令队列 + 周期轮询（默认 3s）。命令由公开接口投递，
  * 轮询里读 STATUS/SIGNAL_POLL/SCAN_RESULTS 并按需回调（state 变化才推、扫描列表变化才推）。
@@ -53,6 +54,27 @@
      std::string dir = (e && e[0]) ? e : "/var/run/wpa_supplicant";
      return dir + "/" + wifi_iface();
  }
+
+enum class DhcpMode {
+    Auto,
+    SystemManaged,
+    Udhcpc,
+};
+
+DhcpMode dhcp_mode()
+{
+    const char* e = std::getenv("UPC_WIFI_DHCP_MODE");
+    if(!e || !e[0]) return DhcpMode::Auto;
+    if(std::strcmp(e, "system") == 0) return DhcpMode::SystemManaged;
+    if(std::strcmp(e, "udhcpc") == 0) return DhcpMode::Udhcpc;
+    return DhcpMode::Auto;
+}
+
+bool dhcpcd_running()
+{
+    /* 仅用于判断是否存在系统级 DHCP 管理进程。 */
+    return std::system("pidof dhcpcd >/dev/null 2>&1") == 0;
+}
  
  /** RSSI(dBm) → 信号格数(0..4)。 */
  int dbm_to_bars(int dbm)
@@ -167,6 +189,8 @@
      bool        force_state_push = false;
      std::string last_scan_sig;
      std::string dhcp_done_ssid;
+    bool        logged_system_dhcp = false;
+    bool        logged_udhcpc_fallback = false;
  
      /* 连接结果监视：do_connect 后开始，poll 里判定成功/超时 */
      bool        connecting = false;
@@ -379,15 +403,43 @@
  /* ---------- 轮询 ---------- */
  void WifiManager::Impl::run_dhcp()
  {
-    /* 先清掉接口上残留的旧 IP（切换网络时旧租约不会自动释放，否则会一直显示旧 IP），
-     * 再向新网络请求动态地址。 */
-     const char* ifc = wifi_iface();
-     char cmd[256];
-     std::snprintf(cmd, sizeof(cmd),
+    /* 方案优先级：
+     * 1) UPC_WIFI_DHCP_MODE=system：始终由系统 DHCP 管理；
+     * 2) UPC_WIFI_DHCP_MODE=udhcpc：始终使用应用内 udhcpc；
+     * 3) Auto（默认）：检测到 dhcpcd 在运行时交给系统，否则回退 udhcpc。 */
+    const DhcpMode mode = dhcp_mode();
+    const bool use_system_dhcp =
+        (mode == DhcpMode::SystemManaged) ||
+        (mode == DhcpMode::Auto && dhcpcd_running());
+
+    if(use_system_dhcp) {
+        if(!logged_system_dhcp) {
+            UPC_LOG_GLAVO_SERVICE(Info,
+                "wifi: DHCP managed by system (mode=%s), skip udhcpc",
+                mode == DhcpMode::SystemManaged ? "system" : "auto");
+            logged_system_dhcp = true;
+        }
+        return;
+    }
+
+    if(!logged_udhcpc_fallback) {
+        UPC_LOG_GLAVO_SERVICE(Info,
+            "wifi: DHCP fallback to udhcpc (mode=%s)",
+            mode == DhcpMode::Udhcpc ? "udhcpc" : "auto");
+        logged_udhcpc_fallback = true;
+    }
+
+    /* 回退路径：先清旧 IP，再请求新租约。 */
+    const char* ifc = wifi_iface();
+    char cmd[256];
+    std::snprintf(cmd, sizeof(cmd),
                   "ip addr flush dev %s 2>/dev/null; "
                   "udhcpc -i %s -n -q -t %d >/dev/null 2>&1",
                   ifc, ifc, kDhcpTimeoutSec);
-     (void)std::system(cmd);
+    const int rc = std::system(cmd);
+    if(rc != 0) {
+        UPC_LOG_GLAVO_SERVICE(Warn, "wifi: udhcpc fallback failed rc=%d", rc);
+    }
  }
  
  void WifiManager::Impl::poll_once()

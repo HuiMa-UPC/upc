@@ -7,7 +7,8 @@
  *
  * 目标板由自定义脚本启动 wpa_supplicant（wpa_supplicant -B -i wlan0 -c /etc/wpa_supplicant.conf，
  * 其中 ctrl_interface=/var/run/wpa_supplicant、update_config=1）。本类连其控制 socket
- * 收发命令：扫描 / 连接 / 忘记 / 已保存列表 / 状态；DHCP 用 udhcpc。已保存网络由
+ * 收发命令：扫描 / 连接 / 忘记 / 已保存列表 / 状态；DHCP 默认交给系统（如 dhcpcd），
+ * 系统未接管时回退 udhcpc。已保存网络由
  * wpa_supplicant 在开启时自动重连（依赖 SAVE_CONFIG 持久化 + update_config=1）。
  * 可用环境变量 UPC_WIFI_IFACE（默认 wlan0）、UPC_WPA_CTRL_DIR（默认 /var/run/wpa_supplicant）覆盖。
  *
