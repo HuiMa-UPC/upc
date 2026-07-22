@@ -39,6 +39,8 @@ scripts/rongsu.sh start   # glavo + rongsu_camera → ui
 
 各业务进程为 IPC **Client**，连中央 **Broker**（`rongsu_broker`）。
 
+**时区**：`process_install_signals()` 内 `process_set_beijing_timezone()` 设置 `TZ=CST-8`（北京 / UTC+8）。WiFi 后 NTP 仍写 UTC 系统时钟；`localtime_r`、日志时间戳、历史页/录像文件名按北京时间显示。勿把系统时钟硬加 8 小时。
+
 ## 链接边界
 
 - **UI**：`upc::common`（或 `upc::ipc`）+ `ui::port`，**禁止** `app/glavo/lib`
@@ -164,12 +166,14 @@ scripts/rongsu.sh start   # glavo + rongsu_camera → ui
 | `UI_Camera_Stream_Start_Req` | — | UI→Camera | `CameraStreamStartReqPayload` | `CameraMsgProxy::send_stream_start` | 开预览 |
 | `APP_Camera_Stream_Start_Rsp` | — | Camera→UI | `CameraStreamInfoPayload` | `register_stream_start_rsp` | SHM 参数 / dma fd 旁路信息 |
 | `UI_Camera_Stream_Stop_Req` | — | UI→Camera | Empty | `send_stream_stop` | 关预览 |
+| `APP_Camera_Stream_Stop_Done` | — | Camera→UI | Empty | `register_stream_stop_done` | — |
 | `APP_Camera_Frame_Ntf` | — | Camera→UI | `CameraFrameNtfPayload` | （可选） | 帧序号；默认关 |
+| `UI_Camera_Snapshot_Req` | — | UI→Camera | Empty | `send_snapshot_req` | 存当前帧 PNG 到 `/home/photo` |
+| `APP_Camera_Snapshot_Rsp` | — | Camera→UI | `CameraSnapshotRspPayload` | `register_snapshot_rsp` | — |
 | `APP_Print_Video_Session_Start_Ntf` | — | Glavo→Camera（Hub FWD） | `PrintVideoSessionPayload` | — | `PrintVideoNotify` / `CameraService` |
 | `APP_Print_Layer_Snap_Ntf` | — | Glavo→Camera（Hub FWD） | `PrintVideoLayerSnapPayload` | — | 换层 Snap |
-| `APP_Print_Video_Session_Finish_Ntf` | — | Glavo→Camera（Hub FWD） | `PrintVideoSessionPayload` | — | remux MP4 + jpg + manifest `complete` |
-| `APP_Print_Video_Session_Abort_Ntf` | — | Glavo→Camera（Hub FWD） | `PrintVideoSessionPayload` | — | 有帧同样 remux + manifest `terminated` |
-| `APP_Print_Video_Session_Abort_Ntf` | — | Glavo→Camera（Hub FWD） | `PrintVideoSessionPayload` | — | 有帧同样 remux + manifest `terminated`；0 帧清临时 |
+| `APP_Print_Video_Session_Finish_Ntf` | — | Glavo→Camera（Hub FWD） | `PrintVideoSessionPayload` | — | 保存 `/home/video/{job_ts}/1.png...N.png` + `thumb.rthm` + manifest `complete` |
+| `APP_Print_Video_Session_Abort_Ntf` | — | Glavo→Camera（Hub FWD） | `PrintVideoSessionPayload` | — | 有帧同样落盘目录 + manifest `terminated`；0 帧清目录 |
 | `UI_Debug_Axis_Jog_Req` | — | UI→Glavo | `DebugAxisJogPayload` | `DebugMsgProxy::send_axis_jog` | **后端待实现** |
 | `UI_Debug_Axis_Hold_Stop_Req` | — | UI→Glavo | `DebugAxisPayload` | `send_axis_hold_stop` | 长按松手停 |
 | `UI_Debug_Axis_SetZero_Req` | — | UI→Glavo | `DebugAxisPayload` | `send_axis_set_zero` | Z 工作零点 |

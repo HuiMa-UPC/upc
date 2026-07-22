@@ -52,22 +52,6 @@ else()
     message(WARNING "ui: librga not found — camera preview RGA path disabled")
 endif()
 
-# FFmpeg：延时摄影播放器 video_player.cpp 直接软解 H.264（libav*）。
-# 依赖 toolchain sysroot 的 CMAKE_FIND_ROOT_PATH 解析。
-find_library(UPC_UI_AVFORMAT   avformat)
-find_library(UPC_UI_AVCODEC    avcodec)
-find_library(UPC_UI_AVUTIL     avutil)
-find_library(UPC_UI_SWSCALE    swscale)
-find_library(UPC_UI_SWRESAMPLE swresample)
-if(UPC_UI_AVFORMAT AND UPC_UI_AVCODEC AND UPC_UI_AVUTIL AND UPC_UI_SWSCALE)
-    message(STATUS "ui: linking ffmpeg (avformat/avcodec/avutil/swscale)")
-    target_link_libraries(${UI_TARGET} PRIVATE
-        ${UPC_UI_AVFORMAT} ${UPC_UI_AVCODEC} ${UPC_UI_SWSCALE}
-        ${UPC_UI_SWRESAMPLE} ${UPC_UI_AVUTIL})
-else()
-    message(WARNING "ui: ffmpeg libs not found — timelapse player will fail to link")
-endif()
-
 target_compile_options(${UI_TARGET}
     PRIVATE
         -Wall -Wextra

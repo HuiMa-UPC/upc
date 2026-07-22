@@ -114,6 +114,17 @@ const char* upc_msg_type_name(MsgType type) {
         case MsgType::UI_Mcu_Ota_Start_Req: return "UI_Mcu_Ota_Start_Req";
         case MsgType::UI_Mcu_Ota_Cancel_Ntf: return "UI_Mcu_Ota_Cancel_Ntf";
         case MsgType::APP_Mcu_Ota_Status_Ntf: return "APP_Mcu_Ota_Status_Ntf";
+        case MsgType::UI_Wifi_Enable_Req: return "UI_Wifi_Enable_Req";
+        case MsgType::UI_Wifi_Scan_Req: return "UI_Wifi_Scan_Req";
+        case MsgType::UI_Wifi_Connect_Req: return "UI_Wifi_Connect_Req";
+        case MsgType::UI_Wifi_Forget_Req: return "UI_Wifi_Forget_Req";
+        case MsgType::UI_Wifi_Info_Req: return "UI_Wifi_Info_Req";
+        case MsgType::GLAVO_Wifi_State_Ntf: return "GLAVO_Wifi_State_Ntf";
+        case MsgType::GLAVO_Wifi_Scan_Rsp: return "GLAVO_Wifi_Scan_Rsp";
+        case MsgType::GLAVO_Wifi_Saved_Rsp: return "GLAVO_Wifi_Saved_Rsp";
+        case MsgType::UI_Wifi_Saved_Req: return "UI_Wifi_Saved_Req";
+        case MsgType::UI_Wifi_Disconnect_Req: return "UI_Wifi_Disconnect_Req";
+        case MsgType::GLAVO_Wifi_Connect_Rsp: return "GLAVO_Wifi_Connect_Rsp";
         case MsgType::UI_Debug_Axis_Jog_Req: return "UI_Debug_Axis_Jog_Req";
         case MsgType::UI_Debug_Axis_Hold_Stop_Req: return "UI_Debug_Axis_Hold_Stop_Req";
         case MsgType::UI_Debug_Axis_SetZero_Req: return "UI_Debug_Axis_SetZero_Req";

@@ -40,6 +40,7 @@ void CameraMsgProxy::init()
                 snapshot_rsp_cb_(p);
             }
         }));
+
 }
 
 void CameraMsgProxy::send_stream_start(const char* video_basename)

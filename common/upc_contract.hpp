@@ -524,7 +524,7 @@ struct CameraSnapshotRspPayload {
 /** GLAVO→CAMERA 打印录像会话（Start/Finish/Abort 共用） */
 struct PrintVideoSessionPayload {
     char     session_id[32];
-    char     job_name[64];   /**< 用于输出 /home/video/{job}.mp4 文件名 */
+    char     job_name[64];   /**< 用于输出 /home/video/{job}_{stamp}/ 目录名 */
     uint32_t width;          /**< 0=Camera 默认 */
     uint32_t height;         /**< 0=Camera 默认 */
     uint32_t layer_fps;      /**< MP4 层帧率；0=默认 */

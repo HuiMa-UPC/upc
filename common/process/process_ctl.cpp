@@ -2,6 +2,7 @@
 #include "log_rotating.hpp"
 
 #include <cstdlib>
+#include <ctime>
 #include <unistd.h>
 #include <sys/stat.h>
 #include <signal.h>
@@ -13,7 +14,19 @@ static void signal_handler(int signum) {
     g_shutdown_requested = 1;
 }
 
+void process_set_beijing_timezone()
+{
+    /*
+     * POSIX TZ：std offset，offset 为「本地时间加多少得到 UTC」。
+     * CST-8 ⇒ 本地 = UTC+8（北京时间），不依赖 /usr/share/zoneinfo。
+     * 系统时钟仍由 NTP 写 UTC；localtime_r / 日志时间戳走本地时区。
+     */
+    setenv("TZ", "CST-8", 1);
+    tzset();
+}
+
 void process_install_signals() {
+    process_set_beijing_timezone();
     std::signal(SIGINT, signal_handler);
     std::signal(SIGTERM, signal_handler);
     std::signal(SIGPIPE, SIG_IGN);

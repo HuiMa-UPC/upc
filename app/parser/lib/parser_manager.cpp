@@ -23,6 +23,11 @@ void ParserManager::notify_sink()
 
 int ParserManager::open_file(const std::string& path)
 {
+    return open_file(path, -1);
+}
+
+int ParserManager::open_file(const std::string& path, int total_lines_hint)
+{
     IParserWorker* worker = ParserRegistry::instance().resolve(path);
     if(!worker) {
         return -1;
@@ -36,6 +41,9 @@ int ParserManager::open_file(const std::string& path)
         notify_sink();
     }
 
+    if(total_lines_hint > 0) {
+        worker->set_total_lines_hint(total_lines_hint);
+    }
     return worker->open_file(path);
 }
 

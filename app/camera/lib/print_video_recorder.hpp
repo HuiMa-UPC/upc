@@ -19,7 +19,7 @@ namespace upc::camera {
 
 enum class PrintVideoJobKind : uint8_t {
     LayerSnap = 1,
-    FinishMux = 2,
+    FinishSave = 2,
     AbortCleanup = 3,
 };
 
@@ -30,9 +30,8 @@ struct PrintVideoJob {
 };
 
 /**
- * 打印层拍照：dma 元数据环取帧 → MPP H.264；
- * Finish/Abort 时 EOS flush → ffmpeg remux 为 .mp4 + 生成最后一帧缩略图（优先 RTHM，失败回退 JPG），再删临时 .h264，
- * 并 upsert /home/video/manifest.json（含 complete/terminated 状态）。
+ * 打印层拍照：dma 元数据环取帧 → 软件编码 PNG（1.png,2.png,...）；
+ * Finish/Abort 时生成 thumb.rthm 并 upsert /home/video/manifest.json（含 complete/terminated 状态）。
  */
 class PrintVideoRecorder {
 public:
@@ -57,27 +56,20 @@ public:
 private:
     void worker_fn();
     void enqueue_job(PrintVideoJob job);
-    bool ensure_encoder();
-    void close_encoder();
-    bool drain_encoder_packets(FILE* fp);
-    bool flush_encoder_eos();
-    bool encode_nv12_frame(const uint8_t* nv12, size_t bytes, uint32_t layer_index);
     bool grab_latest_nv12(std::vector<uint8_t>& out);
+    /** NV12 → PNG（ffmpeg 软编）→ session_dir_/N.png（N 从 1 连续） */
+    bool encode_nv12_to_png(const uint8_t* nv12, size_t bytes, uint32_t frame_index);
     bool handle_layer_snap(const PrintVideoJob& job);
     void finalize_session(bool aborted);
-    bool append_encoder_output_to_h264();
-    /** ffmpeg：临时 Annex-B H.264 remux 为 MP4（-c copy） */
-    bool remux_h264_to_mp4(const char* h264_path, const char* mp4_path) const;
     /** RGA：把最后一帧 NV12 生成 RTHM（RGB565）缩略图 */
     bool create_raw_thumb_from_nv12(const std::vector<uint8_t>& nv12,
                                     const char* out_path) const;
-    /** ffmpeg：从 MP4 抽最后一帧为 JPEG（raw 失败时兜底） */
-    bool extract_last_frame_thumb(const char* mp4_path, const char* jpg_path) const;
-    /** remux 成功后 upsert /home/video/manifest.json */
+    /** 完成目录落盘后 upsert /home/video/manifest.json */
     void upsert_print_history(bool aborted,
-                              const std::string& video_name,
+                              const std::string& frames_dir_name,
                               const std::string& thumb_name) const;
     bool remove_session_dir();
+    std::string frame_png_path(uint32_t frame_index) const;
     static bool mkdir_p(const char* path);
     static std::string sanitize_filename(const char* name);
     /** 本地墙钟 → YYYYMMDD_HHMMSS */
@@ -96,18 +88,12 @@ private:
     uint32_t stream_width_   = CAMERA_WIDTH_DEFAULT;
     uint32_t stream_height_  = CAMERA_HEIGHT_DEFAULT;
     uint32_t layer_fps_      = CAMERA_PRINT_VIDEO_LAYER_FPS;
+    uint32_t frame_count_    = 0; /**< 成功写入的 PNG 帧数（连续 1..N） */
     std::string session_id_;
     std::string job_name_;
+    std::string session_name_;
     std::string session_dir_;
-    std::string h264_path_;
     int64_t     start_unix_ = 0; /**< Session_Start 墙钟秒，写入 manifest */
-
-    void*    mpp_ctx_      = nullptr;
-    void*    mpp_api_      = nullptr;
-    void*    mpp_buf_grp_  = nullptr;
-    int64_t  mpp_pts_      = 0;
-    bool     encoder_open_ = false;
-    bool     header_written_ = false;
 };
 
 } // namespace upc::camera

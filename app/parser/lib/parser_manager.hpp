@@ -18,6 +18,7 @@ public:
     IParserWorker* active() const { return active_; }
 
     int  open_file(const std::string& path);
+    int  open_file(const std::string& path, int total_lines_hint);
     void start_parse();
     void stop_parse();
 

@@ -13,6 +13,7 @@
 #include <cstring>
 #include <ctime>
 #include <sys/stat.h>
+#include <unistd.h>
 
 namespace upc::camera {
 
@@ -64,7 +65,9 @@ void copy_nv12_tight(uint8_t* dst, const uint8_t* src_y, const uint8_t* src_uv,
     uint8_t* dst_uv = dst + y_size;
 
     if(src_stride_y == width) {
-        std::memcpy(dst, src_y, y_size + y_size / 2u);
+        /* 注意：mplane 场景下 Y/UV 可能不是连续映射，不能从 src_y 一次性连拷。 */
+        std::memcpy(dst, src_y, y_size);
+        std::memcpy(dst_uv, src_uv, y_size / 2u);
         return;
     }
 
@@ -78,6 +81,21 @@ void copy_nv12_tight(uint8_t* dst, const uint8_t* src_y, const uint8_t* src_uv,
                     src_uv + static_cast<size_t>(row) * src_stride_y,
                     width);
     }
+}
+
+int run_shell_cmd(const char* cmd, const char* log_tag)
+{
+    if(!cmd || !cmd[0]) {
+        return -1;
+    }
+    UPC_LOG_CAMERA_SERVICE(Info, "snapshot %s: %s",
+                           log_tag ? log_tag : "cmd", cmd);
+    const int rc = std::system(cmd);
+    if(rc != 0) {
+        UPC_LOG_CAMERA_SERVICE(Error, "snapshot %s failed rc=%d",
+                               log_tag ? log_tag : "cmd", rc);
+    }
+    return rc;
 }
 
 } // namespace
@@ -220,7 +238,7 @@ void CameraService::handle_message(const middleware::Message& msg)
 void CameraService::handle_snapshot_req(const middleware::Message& msg)
 {
     std::string out_path;
-    const bool ok = save_latest_nv12_snapshot(out_path);
+    const bool ok = save_latest_png_snapshot(out_path);
     send_snapshot_rsp(msg, ok, ok ? out_path.c_str() : "");
 }
 
@@ -394,7 +412,7 @@ bool CameraService::copy_latest_nv12_snapshot(std::vector<uint8_t>& out) const
     return true;
 }
 
-bool CameraService::save_latest_nv12_snapshot(std::string& out_path) const
+bool CameraService::save_latest_png_snapshot(std::string& out_path) const
 {
     out_path.clear();
     std::vector<uint8_t> nv12;
@@ -408,24 +426,42 @@ bool CameraService::save_latest_nv12_snapshot(std::string& out_path) const
         return false;
     }
 
-    const std::string name = "photo_" + format_stamp_local() + "_" +
+    const std::string stamp = format_stamp_local();
+    const std::string name = "photo_" + stamp + "_" +
                              std::to_string(stream_width_) + "x" +
-                             std::to_string(stream_height_) + ".nv12";
-    const std::string path = std::string(kPhotoOutDir) + "/" + name;
-    FILE* fp = std::fopen(path.c_str(), "wb");
+                             std::to_string(stream_height_) + ".png";
+    const std::string out_png_path = std::string(kPhotoOutDir) + "/" + name;
+    const std::string tmp_nv12_path =
+        "/tmp/camera_snapshot_" + stamp + "_" + std::to_string(monotonic_us()) + ".nv12";
+
+    FILE* fp = std::fopen(tmp_nv12_path.c_str(), "wb");
     if(!fp) {
-        UPC_LOG_CAMERA_SERVICE(Error, "open photo file failed %s: %s",
-                               path.c_str(), std::strerror(errno));
+        UPC_LOG_CAMERA_SERVICE(Error, "open temp nv12 failed %s: %s",
+                               tmp_nv12_path.c_str(), std::strerror(errno));
         return false;
     }
     const bool ok = std::fwrite(nv12.data(), 1, nv12.size(), fp) == nv12.size();
     if(std::fclose(fp) != 0 || !ok) {
-        UPC_LOG_CAMERA_SERVICE(Error, "write photo file failed %s", path.c_str());
+        UPC_LOG_CAMERA_SERVICE(Error, "write temp nv12 failed %s", tmp_nv12_path.c_str());
+        (void)std::remove(tmp_nv12_path.c_str());
         return false;
     }
 
-    out_path = path;
-    UPC_LOG_CAMERA_SERVICE(Info, "snapshot saved path=%s bytes=%zu",
+    char cmd[1024];
+    std::snprintf(
+        cmd, sizeof(cmd),
+        "%s -y -loglevel error -f rawvideo -pix_fmt nv12 -s %ux%u -i '%s' "
+        "-frames:v 1 -c:v png '%s'",
+        CAMERA_FFMPEG_BIN, stream_width_, stream_height_,
+        tmp_nv12_path.c_str(), out_png_path.c_str());
+    const bool png_ok = (run_shell_cmd(cmd, "ffmpeg png") == 0);
+    (void)std::remove(tmp_nv12_path.c_str());
+    if(!png_ok) {
+        return false;
+    }
+
+    out_path = out_png_path;
+    UPC_LOG_CAMERA_SERVICE(Info, "snapshot saved path=%s src_nv12_bytes=%zu",
                            out_path.c_str(), nv12.size());
     return true;
 }
@@ -646,6 +682,7 @@ void CameraService::send_snapshot_rsp(const middleware::Message& req, bool ok,
         reinterpret_cast<const uint8_t*>(&rsp), sizeof(rsp));
     middleware::MsgPort::instance().publish_async(msg);
 }
+
 
 void CameraService::notify_frame(uint32_t seq)
 {

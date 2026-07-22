@@ -49,7 +49,7 @@
 | 符号 | 路径 | 一句话 |
 |------|------|--------|
 | `CameraService` | `camera_service.*` | IPC Server + SHM 推流 + 录像分派 |
-| `PrintVideoRecorder` | `print_video_recorder.*` | MPP H.264 → remux MP4/jpg + upsert `manifest.json` |
+| `PrintVideoRecorder` | `print_video_recorder.*` | 层 Snap→MPP MJPEG→封装 MP4/缩略图 + upsert `manifest.json` |
 | `ViCapture` | `vi_capture.*` | rkaiq + V4L2 NV12 |
 | `CameraDmaFrameSource` | `camera_dma_frame_source.*` | V4L2 dma fd 导出、stride padding |
 | `device_config.hpp` | 头文件 | 设备/分辨率/IQ/SHM/录像路径宏 |

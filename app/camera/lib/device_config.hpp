@@ -98,28 +98,13 @@
 #define CAMERA_ENV_FRAME_NTF "UPC_CAMERA_FRAME_NTF"
 #endif
 
-/** 打印录像：临时 H.264 目录与会话子目录前缀 */
-#ifndef CAMERA_PRINT_VIDEO_TMP_DIR
-#define CAMERA_PRINT_VIDEO_TMP_DIR  "/tmp/print_vid"
-#endif
-
 #ifndef CAMERA_PRINT_VIDEO_OUT_DIR
 #define CAMERA_PRINT_VIDEO_OUT_DIR  "/home/video"
-#endif
-
-/** 成品视频后缀：Finish/Abort 时由 ffmpeg 将临时 Annex-B H.264 remux 为 MP4 */
-#ifndef CAMERA_PRINT_VIDEO_OUT_EXT
-#define CAMERA_PRINT_VIDEO_OUT_EXT  ".mp4"
 #endif
 
 /** 延时摄影缩略图后缀（RTHM 原始 RGB565，UI 自定义 decoder 读取） */
 #ifndef CAMERA_PRINT_VIDEO_THUMB_EXT
 #define CAMERA_PRINT_VIDEO_THUMB_EXT  ".rthm"
-#endif
-
-/** 原始缩略图生成失败时的 JPG 兜底后缀 */
-#ifndef CAMERA_PRINT_VIDEO_THUMB_FALLBACK_EXT
-#define CAMERA_PRINT_VIDEO_THUMB_FALLBACK_EXT ".jpg"
 #endif
 
 /**
@@ -135,7 +120,7 @@
 #define CAMERA_FFMPEG_BIN  "/usr/bin/ffmpeg"
 #endif
 
-/** 层帧率：MPP 编码 fps，并作为 remux 时 -framerate（CFR） */
+/** 层帧率：UI 延时摄影序列播放默认帧率 */
 #ifndef CAMERA_PRINT_VIDEO_LAYER_FPS
 #define CAMERA_PRINT_VIDEO_LAYER_FPS  5u
 #endif

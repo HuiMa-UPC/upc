@@ -12,6 +12,12 @@ class IParserWorker {
 public:
     virtual ~IParserWorker() = default;
 
+    /**
+     * 为下一次 open_file 提供总行数提示。
+     * 默认实现为 no-op；不支持的解析器可忽略。
+     */
+    virtual void set_total_lines_hint(int total_lines) { (void)total_lines; }
+
     virtual int  open_file(const std::string& filepath) = 0;
     virtual void start_parse() = 0;
     virtual void stop_parse() = 0;

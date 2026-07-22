@@ -145,6 +145,7 @@ private:
     std::vector<std::string>             usb_entries_;
 
     std::string prepared_local_path_;
+    uint32_t    prepared_line_count_ = 0;
     bool        prepare_ready_ = false;
 
     std::string current_file_path_;

@@ -6,15 +6,6 @@
 #include "raw_thumb_format.hpp"
 #include "rs_log.hpp"
 
-#include <rockchip/mpp_err.h>
-#include <rockchip/mpp_buffer.h>
-#include <rockchip/mpp_frame.h>
-#include <rockchip/mpp_packet.h>
-#include <rockchip/rk_mpi.h>
-#include <rockchip/rk_type.h>
-#include <rockchip/rk_venc_cfg.h>
-#include <rockchip/rk_venc_rc.h>
-
 #if defined(UPC_CAMERA_HAS_RGA) && UPC_CAMERA_HAS_RGA
 #include <rga/im2d.hpp>
 #include <rga/rga.h>
@@ -28,6 +19,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <ctime>
+#include <filesystem>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -112,7 +104,6 @@ PrintVideoRecorder::~PrintVideoRecorder()
     if(worker_.joinable()) {
         worker_.join();
     }
-    close_encoder();
 }
 
 void PrintVideoRecorder::set_stream_geometry(uint32_t width, uint32_t height)
@@ -142,15 +133,16 @@ void PrintVideoRecorder::on_session_start(
         worker_ = std::thread(&PrintVideoRecorder::worker_fn, this);
     }
 
-    session_id_  = info.session_id;
+    session_id_ = info.session_id;
     for(char& c : session_id_) {
         const unsigned char uc = static_cast<unsigned char>(c);
         if(!std::isalnum(uc) && c != '-' && c != '_' && c != '.') {
             c = '_';
         }
     }
-    job_name_    = sanitize_filename(info.job_name);
-    start_unix_  = static_cast<int64_t>(std::time(nullptr));
+
+    job_name_   = sanitize_filename(info.job_name);
+    start_unix_ = static_cast<int64_t>(std::time(nullptr));
     if(info.width > 0) {
         stream_width_ = info.width;
     }
@@ -161,14 +153,14 @@ void PrintVideoRecorder::on_session_start(
         layer_fps_ = info.layer_fps;
     }
 
-    close_encoder();
-    header_written_ = false;
-    mpp_pts_        = 0;
+    frame_count_ = 0;
+    const int64_t stamp_unix = start_unix_ > 0 ? start_unix_
+                                                : static_cast<int64_t>(std::time(nullptr));
+    session_name_ = (job_name_.empty() ? std::string("print") : job_name_) + "_" +
+        format_stamp_local(stamp_unix);
+    session_dir_ = std::string(CAMERA_PRINT_VIDEO_OUT_DIR) + "/" + session_name_;
 
-    session_dir_ = std::string(CAMERA_PRINT_VIDEO_TMP_DIR) + "/" + session_id_;
-    h264_path_   = session_dir_ + "/layers.h264";
-
-    mkdir_p(CAMERA_PRINT_VIDEO_TMP_DIR);
+    mkdir_p(CAMERA_PRINT_VIDEO_OUT_DIR);
     remove_session_dir();
     if(mkdir(session_dir_.c_str(), 0755) != 0 && errno != EEXIST) {
         UPC_LOG_CAMERA_SERVICE(Error, "print_video mkdir fail %s: %s",
@@ -178,10 +170,15 @@ void PrintVideoRecorder::on_session_start(
     }
 
     session_active_ = true;
-    UPC_LOG_CAMERA_SERVICE(Info,
+    UPC_LOG_CAMERA_SERVICE(
+        Info,
         "print_video session start id=%s job=%s dir=%s %ux%u layer_fps=%u start_unix=%lld",
-        session_id_.c_str(), job_name_.c_str(), session_dir_.c_str(),
-        stream_width_, stream_height_, layer_fps_,
+        session_id_.c_str(),
+        job_name_.c_str(),
+        session_dir_.c_str(),
+        stream_width_,
+        stream_height_,
+        layer_fps_,
         static_cast<long long>(start_unix_));
 }
 
@@ -212,7 +209,7 @@ void PrintVideoRecorder::on_session_finish(
         job_name_ = sanitize_filename(info.job_name);
     }
     session_active_ = false;
-    enqueue_job(PrintVideoJob{PrintVideoJobKind::FinishMux, 0, 0});
+    enqueue_job(PrintVideoJob{PrintVideoJobKind::FinishSave, 0, 0});
 }
 
 void PrintVideoRecorder::on_session_abort(
@@ -260,7 +257,7 @@ void PrintVideoRecorder::worker_fn()
         case PrintVideoJobKind::LayerSnap:
             (void)handle_layer_snap(job);
             break;
-        case PrintVideoJobKind::FinishMux:
+        case PrintVideoJobKind::FinishSave:
             finalize_session(false);
             break;
         case PrintVideoJobKind::AbortCleanup:
@@ -270,258 +267,12 @@ void PrintVideoRecorder::worker_fn()
     }
 }
 
-bool PrintVideoRecorder::ensure_encoder()
-{
-    if(encoder_open_) {
-        return true;
-    }
-
-    MppCtx  ctx  = nullptr;
-    MppApi* mpi  = nullptr;
-    if(mpp_create(&ctx, &mpi) != MPP_OK || !ctx || !mpi) {
-        UPC_LOG_CAMERA_SERVICE(Error, "print_video mpp_create failed");
-        return false;
-    }
-
-    if(mpp_init(ctx, MPP_CTX_ENC, MPP_VIDEO_CodingAVC) != MPP_OK) {
-        UPC_LOG_CAMERA_SERVICE(Error, "print_video mpp_init ENC AVC failed");
-        mpp_destroy(ctx);
-        return false;
-    }
-
-    MppEncCfg enc_cfg = nullptr;
-    if(mpp_enc_cfg_init(&enc_cfg) != MPP_OK || !enc_cfg) {
-        mpp_destroy(ctx);
-        return false;
-    }
-
-    const RK_U32 w = stream_width_;
-    const RK_U32 h = stream_height_;
-    const RK_U32 fps = layer_fps_ > 0 ? layer_fps_ : CAMERA_PRINT_VIDEO_LAYER_FPS;
-    const RK_U32 bps = w * h * fps / 8;
-
-    mpp_enc_cfg_set_s32(enc_cfg, "prep:width", static_cast<RK_S32>(w));
-    mpp_enc_cfg_set_s32(enc_cfg, "prep:height", static_cast<RK_S32>(h));
-    mpp_enc_cfg_set_s32(enc_cfg, "prep:hor_stride", static_cast<RK_S32>(w));
-    mpp_enc_cfg_set_s32(enc_cfg, "prep:ver_stride", static_cast<RK_S32>(h));
-    mpp_enc_cfg_set_s32(enc_cfg, "prep:format", MPP_FMT_YUV420SP);
-    mpp_enc_cfg_set_s32(enc_cfg, "rc:mode", MPP_ENC_RC_MODE_CBR);
-    mpp_enc_cfg_set_s32(enc_cfg, "rc:bps_target", static_cast<RK_S32>(bps));
-    mpp_enc_cfg_set_s32(enc_cfg, "rc:bps_max", static_cast<RK_S32>(bps * 3 / 2));
-    mpp_enc_cfg_set_s32(enc_cfg, "rc:bps_min", static_cast<RK_S32>(bps / 2));
-    mpp_enc_cfg_set_s32(enc_cfg, "rc:fps_in_flex", 0);
-    mpp_enc_cfg_set_s32(enc_cfg, "rc:fps_in_num", static_cast<RK_S32>(fps));
-    mpp_enc_cfg_set_s32(enc_cfg, "rc:fps_in_denom", 1);
-    mpp_enc_cfg_set_s32(enc_cfg, "rc:fps_out_flex", 0);
-    mpp_enc_cfg_set_s32(enc_cfg, "rc:fps_out_num", static_cast<RK_S32>(fps));
-    mpp_enc_cfg_set_s32(enc_cfg, "rc:fps_out_denom", 1);
-    mpp_enc_cfg_set_s32(enc_cfg, "rc:gop", 1);
-
-    if(mpi->control(ctx, MPP_ENC_SET_CFG, enc_cfg) != MPP_OK) {
-        UPC_LOG_CAMERA_SERVICE(Error, "print_video MPP_ENC_SET_CFG failed");
-        mpp_enc_cfg_deinit(enc_cfg);
-        mpp_destroy(ctx);
-        return false;
-    }
-    mpp_enc_cfg_deinit(enc_cfg);
-
-    MppBufferGroup grp = nullptr;
-    if(mpp_buffer_group_get_internal(&grp, MPP_BUFFER_TYPE_ION) != MPP_OK ||
-       !grp) {
-        UPC_LOG_CAMERA_SERVICE(Error, "print_video mpp_buffer_group_get failed");
-        mpp_destroy(ctx);
-        return false;
-    }
-
-    mpp_ctx_     = ctx;
-    mpp_api_     = mpi;
-    mpp_buf_grp_ = grp;
-    encoder_open_ = true;
-    mpp_pts_      = 0;
-    header_written_ = false;
-    return true;
-}
-
-void PrintVideoRecorder::close_encoder()
-{
-    if(!encoder_open_) {
-        return;
-    }
-    if(mpp_ctx_) {
-        auto* ctx = static_cast<MppCtx>(mpp_ctx_);
-        mpp_destroy(ctx);
-    }
-    if(mpp_buf_grp_) {
-        mpp_buffer_group_put(static_cast<MppBufferGroup>(mpp_buf_grp_));
-    }
-    mpp_ctx_      = nullptr;
-    mpp_api_      = nullptr;
-    mpp_buf_grp_  = nullptr;
-    encoder_open_ = false;
-    /* 勿清 header_written_：finish 需据此判断 h264 是否已有数据 */
-}
-
-bool PrintVideoRecorder::drain_encoder_packets(FILE* fp)
-{
-    if(!encoder_open_ || !fp || !mpp_ctx_ || !mpp_api_) {
-        return false;
-    }
-
-    auto* mpi = static_cast<MppApi*>(mpp_api_);
-    auto* ctx = static_cast<MppCtx>(mpp_ctx_);
-
-    bool wrote = false;
-    for(;;) {
-        MppPacket packet = nullptr;
-        const MPP_RET ret = mpi->encode_get_packet(ctx, &packet);
-        if(ret != MPP_OK || !packet) {
-            break;
-        }
-
-        void*  data = mpp_packet_get_pos(packet);
-        size_t len  = mpp_packet_get_length(packet);
-        if(data && len > 0) {
-            if(std::fwrite(data, 1, len, fp) == len) {
-                wrote = true;
-            } else {
-                UPC_LOG_CAMERA_SERVICE(Error, "print_video h264 write fail");
-            }
-        }
-
-        const RK_U32 eos = mpp_packet_get_eos(packet);
-        mpp_packet_deinit(&packet);
-        if(eos) {
-            break;
-        }
-    }
-    return wrote;
-}
-
-bool PrintVideoRecorder::append_encoder_output_to_h264()
-{
-    FILE* fp = std::fopen(h264_path_.c_str(), header_written_ ? "ab" : "wb");
-    if(!fp) {
-        UPC_LOG_CAMERA_SERVICE(Error, "print_video open h264 fail %s",
-                               h264_path_.c_str());
-        return false;
-    }
-
-    const bool wrote = drain_encoder_packets(fp);
-    std::fclose(fp);
-    if(wrote) {
-        header_written_ = true;
-    }
-    return wrote;
-}
-
-bool PrintVideoRecorder::flush_encoder_eos()
-{
-    if(!encoder_open_ || !mpp_ctx_ || !mpp_api_) {
-        return false;
-    }
-
-    auto* mpi = static_cast<MppApi*>(mpp_api_);
-    auto* ctx = static_cast<MppCtx>(mpp_ctx_);
-
-    MppFrame frame = nullptr;
-    if(mpp_frame_init(&frame) != MPP_OK || !frame) {
-        return false;
-    }
-    mpp_frame_set_eos(frame, 1);
-
-    const MPP_RET put_ret = mpi->encode_put_frame(ctx, frame);
-    mpp_frame_deinit(&frame);
-    if(put_ret != MPP_OK) {
-        UPC_LOG_CAMERA_SERVICE(Warn, "print_video MPP EOS put_frame fail");
-        return false;
-    }
-
-    return append_encoder_output_to_h264();
-}
-
 bool PrintVideoRecorder::grab_latest_nv12(std::vector<uint8_t>& out)
 {
     if(!snapshot_provider_) {
         return false;
     }
     return snapshot_provider_(out);
-}
-
-bool PrintVideoRecorder::encode_nv12_frame(const uint8_t* nv12, size_t bytes,
-                                             uint32_t layer_index)
-{
-    if(!nv12 || !ensure_encoder()) {
-        return false;
-    }
-
-    const size_t need =
-        static_cast<size_t>(stream_width_) * stream_height_ * 3u / 2u;
-    if(bytes < need) {
-        return false;
-    }
-
-    auto* mpi = static_cast<MppApi*>(mpp_api_);
-    auto* ctx = static_cast<MppCtx>(mpp_ctx_);
-    auto* grp = static_cast<MppBufferGroup>(mpp_buf_grp_);
-
-    MppBuffer buf = nullptr;
-    if(mpp_buffer_get(grp, &buf, need) != MPP_OK || !buf) {
-        return false;
-    }
-
-    void* ptr = mpp_buffer_get_ptr(buf);
-    if(!ptr) {
-        mpp_buffer_put(buf);
-        return false;
-    }
-    std::memcpy(ptr, nv12, need);
-
-    MppFrame frame = nullptr;
-    if(mpp_frame_init(&frame) != MPP_OK || !frame) {
-        mpp_buffer_put(buf);
-        return false;
-    }
-
-    mpp_frame_set_width(frame, stream_width_);
-    mpp_frame_set_height(frame, stream_height_);
-    mpp_frame_set_hor_stride(frame, stream_width_);
-    mpp_frame_set_ver_stride(frame, stream_height_);
-    mpp_frame_set_fmt(frame, MPP_FMT_YUV420SP);
-    mpp_frame_set_buffer(frame, buf);
-    mpp_frame_set_pts(frame, mpp_pts_++);
-
-    MPP_RET ret = mpi->encode_put_frame(ctx, frame);
-    mpp_frame_deinit(&frame);
-    mpp_buffer_put(buf);
-    if(ret != MPP_OK) {
-        UPC_LOG_CAMERA_SERVICE(Warn, "print_video encode_put_frame fail layer=%u",
-                               layer_index);
-        return false;
-    }
-
-    return append_encoder_output_to_h264();
-}
-
-bool PrintVideoRecorder::handle_layer_snap(const PrintVideoJob& job)
-{
-    std::vector<uint8_t> nv12;
-    if(!grab_latest_nv12(nv12)) {
-        UPC_LOG_CAMERA_SERVICE(Warn,
-            "print_video snap miss SHM frame session=%s layer=%u",
-            session_id_.c_str(), job.layer_index);
-        return false;
-    }
-    if(!encode_nv12_frame(nv12.data(), nv12.size(), job.layer_index)) {
-        UPC_LOG_CAMERA_SERVICE(Warn,
-            "print_video encode fail session=%s layer=%u",
-            session_id_.c_str(), job.layer_index);
-        return false;
-    }
-    UPC_LOG_CAMERA_SERVICE(Info,
-        "print_video snap ok session=%s layer=%u height_um=%u bytes=%zu",
-        session_id_.c_str(), job.layer_index,
-        static_cast<unsigned>(job.layer_height_um), nv12.size());
-    return true;
 }
 
 int PrintVideoRecorder::run_shell_cmd(const char* cmd, const char* log_tag)
@@ -540,25 +291,87 @@ int PrintVideoRecorder::run_shell_cmd(const char* cmd, const char* log_tag)
     return rc;
 }
 
-bool PrintVideoRecorder::remux_h264_to_mp4(const char* h264_path,
-                                           const char* mp4_path) const
+std::string PrintVideoRecorder::frame_png_path(uint32_t frame_index) const
 {
-    if(!h264_path || !h264_path[0] || !mp4_path || !mp4_path[0]) {
+    char name[64];
+    std::snprintf(name, sizeof(name), "%u.png", frame_index);
+    return session_dir_ + "/" + name;
+}
+
+bool PrintVideoRecorder::encode_nv12_to_png(const uint8_t* nv12,
+                                            size_t bytes,
+                                            uint32_t frame_index)
+{
+    if(!nv12 || session_dir_.empty()) {
+        return false;
+    }
+    const size_t need =
+        static_cast<size_t>(stream_width_) * stream_height_ * 3u / 2u;
+    if(bytes < need) {
         return false;
     }
 
-    const uint32_t fps =
-        layer_fps_ > 0 ? layer_fps_ : CAMERA_PRINT_VIDEO_LAYER_FPS;
+    const std::string png_path = frame_png_path(frame_index);
+    const std::string tmp_nv12_path = session_dir_ + "/.tmp_" +
+        std::to_string(frame_index) + ".nv12";
 
-    /* 裸流无容器时间轴：须 -framerate；分辨率由 Annex-B 内 SPS/PPS 解析 */
-    char cmd[1024];
+    FILE* fp = std::fopen(tmp_nv12_path.c_str(), "wb");
+    if(!fp) {
+        UPC_LOG_CAMERA_SERVICE(Error, "print_video open temp nv12 fail %s: %s",
+                               tmp_nv12_path.c_str(), std::strerror(errno));
+        return false;
+    }
+    const bool write_ok = std::fwrite(nv12, 1, need, fp) == need;
+    if(std::fclose(fp) != 0 || !write_ok) {
+        UPC_LOG_CAMERA_SERVICE(Error, "print_video write temp nv12 fail %s",
+                               tmp_nv12_path.c_str());
+        (void)std::remove(tmp_nv12_path.c_str());
+        return false;
+    }
+
+    char cmd[1280];
     std::snprintf(
         cmd, sizeof(cmd),
-        "%s -y -loglevel error "
-        "-f h264 -framerate %u -i '%s' "
-        "-c copy -movflags +faststart '%s'",
-        CAMERA_FFMPEG_BIN, fps, h264_path, mp4_path);
-    return run_shell_cmd(cmd, "ffmpeg remux") == 0;
+        "%s -y -loglevel error -f rawvideo -pix_fmt nv12 -s %ux%u -i '%s' "
+        "-frames:v 1 -c:v png '%s'",
+        CAMERA_FFMPEG_BIN, stream_width_, stream_height_,
+        tmp_nv12_path.c_str(), png_path.c_str());
+    const bool ok = run_shell_cmd(cmd, "ffmpeg png") == 0;
+    (void)std::remove(tmp_nv12_path.c_str());
+    if(!ok) {
+        (void)std::remove(png_path.c_str());
+    }
+    return ok;
+}
+
+bool PrintVideoRecorder::handle_layer_snap(const PrintVideoJob& job)
+{
+    std::vector<uint8_t> nv12;
+    if(!grab_latest_nv12(nv12)) {
+        UPC_LOG_CAMERA_SERVICE(Warn,
+            "print_video snap miss SHM frame session=%s layer=%u",
+            session_id_.c_str(), job.layer_index);
+        return false;
+    }
+
+    const uint32_t frame_index = frame_count_ + 1u;
+    if(!encode_nv12_to_png(nv12.data(), nv12.size(), frame_index)) {
+        UPC_LOG_CAMERA_SERVICE(Warn,
+            "print_video png encode fail session=%s layer=%u frame=%u",
+            session_id_.c_str(), job.layer_index, frame_index);
+        return false;
+    }
+    ++frame_count_;
+    UPC_LOG_CAMERA_SERVICE(
+        Info,
+        "print_video snap ok session=%s layer=%u frame=%u height_um=%u nv12_bytes=%zu path=%s",
+        session_id_.c_str(),
+        job.layer_index,
+        frame_index,
+        static_cast<unsigned>(job.layer_height_um),
+        nv12.size(),
+        frame_png_path(frame_index).c_str());
+    return true;
 }
 
 bool PrintVideoRecorder::create_raw_thumb_from_nv12(
@@ -641,118 +454,52 @@ bool PrintVideoRecorder::create_raw_thumb_from_nv12(
 #endif
 }
 
-bool PrintVideoRecorder::extract_last_frame_thumb(const char* mp4_path,
-                                                  const char* jpg_path) const
-{
-    if(!mp4_path || !mp4_path[0] || !jpg_path || !jpg_path[0]) {
-        return false;
-    }
-
-    /* -sseof -1：从文件末尾往前，取最后一帧作为缩略图。
-     * -vf scale=W:-1：按最大宽度等比缩小，降低历史页滚动时 JPEG 解码负担。 */
-    char cmd[1024];
-    std::snprintf(
-        cmd, sizeof(cmd),
-        "%s -y -loglevel error -sseof -1 -i '%s' -frames:v 1 "
-        "-vf scale=%d:-1 -q:v 5 '%s'",
-        CAMERA_FFMPEG_BIN, mp4_path, CAMERA_PRINT_VIDEO_THUMB_MAX_W, jpg_path);
-    return run_shell_cmd(cmd, "ffmpeg thumb") == 0;
-}
-
 void PrintVideoRecorder::finalize_session(bool aborted)
 {
-    if(encoder_open_) {
-        (void)flush_encoder_eos();
-    }
-
-    const bool had_h264 = header_written_;
-    close_encoder();
-
-    if(!had_h264) {
-        UPC_LOG_CAMERA_SERVICE(Warn,
+    const uint32_t frames = frame_count_;
+    if(frames == 0) {
+        UPC_LOG_CAMERA_SERVICE(
+            Warn,
             "print_video %s with no frames session=%s (no manifest)",
-            aborted ? "abort" : "finish", session_id_.c_str());
+            aborted ? "abort" : "finish",
+            session_id_.c_str());
         remove_session_dir();
         session_id_.clear();
+        session_name_.clear();
         session_dir_.clear();
-        h264_path_.clear();
         start_unix_ = 0;
-        header_written_ = false;
+        frame_count_ = 0;
         return;
     }
 
-    mkdir_p(CAMERA_PRINT_VIDEO_OUT_DIR);
-
-    /* 命名：{job_name}_{YYYYMMDD_HHMMSS}.mp4 / thumb（同名打印保留多份） */
-    const int64_t stamp_unix =
-        start_unix_ > 0 ? start_unix_ : static_cast<int64_t>(std::time(nullptr));
-    const std::string stamp = format_stamp_local(stamp_unix);
-    const std::string base =
-        (job_name_.empty() ? std::string("print") : job_name_) + "_" + stamp;
-    const std::string video_name = base + CAMERA_PRINT_VIDEO_OUT_EXT;
-    const std::string raw_thumb_name = base + CAMERA_PRINT_VIDEO_THUMB_EXT;
-    const std::string jpg_thumb_name = base + CAMERA_PRINT_VIDEO_THUMB_FALLBACK_EXT;
-    const std::string mp4_path =
-        std::string(CAMERA_PRINT_VIDEO_OUT_DIR) + "/" + video_name;
-    const std::string raw_thumb_path =
-        std::string(CAMERA_PRINT_VIDEO_OUT_DIR) + "/" + raw_thumb_name;
-    const std::string jpg_thumb_path =
-        std::string(CAMERA_PRINT_VIDEO_OUT_DIR) + "/" + jpg_thumb_name;
-
-    (void)std::remove(mp4_path.c_str());
-    (void)std::remove(raw_thumb_path.c_str());
-    (void)std::remove(jpg_thumb_path.c_str());
-
-    if(!remux_h264_to_mp4(h264_path_.c_str(), mp4_path.c_str())) {
-        UPC_LOG_CAMERA_SERVICE(Error,
-            "print_video remux fail keep h264=%s dst=%s%s",
-            h264_path_.c_str(), mp4_path.c_str(),
-            aborted ? " (aborted)" : "");
-        /* remux 失败：保留 /tmp 下裸流便于排查，不清 session 目录、不写 manifest */
-        session_id_.clear();
-        session_dir_.clear();
-        h264_path_.clear();
-        start_unix_ = 0;
-        header_written_ = false;
-        return;
-    }
-
-    bool thumb_ok = false;
-    std::string thumb_name = raw_thumb_name;
-    std::string thumb_path = raw_thumb_path;
+    const std::string thumb_rel = session_name_ + "/thumb" + CAMERA_PRINT_VIDEO_THUMB_EXT;
+    const std::string thumb_path = session_dir_ + "/thumb" + CAMERA_PRINT_VIDEO_THUMB_EXT;
+    (void)std::remove(thumb_path.c_str());
 
     std::vector<uint8_t> nv12;
-    if(grab_latest_nv12(nv12) && create_raw_thumb_from_nv12(nv12, raw_thumb_path.c_str())) {
-        thumb_ok = true;
-    } else if(extract_last_frame_thumb(mp4_path.c_str(), jpg_thumb_path.c_str())) {
-        thumb_ok = true;
-        thumb_name = jpg_thumb_name;
-        thumb_path = jpg_thumb_path;
-    } else {
-        thumb_name.clear();
-        thumb_path.clear();
-        UPC_LOG_CAMERA_SERVICE(Warn,
-            "print_video thumb fail raw=%s jpg=%s (mp4 kept)",
-            raw_thumb_path.c_str(), jpg_thumb_path.c_str());
+    bool thumb_ok = false;
+    if(grab_latest_nv12(nv12)) {
+        thumb_ok = create_raw_thumb_from_nv12(nv12, thumb_path.c_str());
+    }
+    if(!thumb_ok) {
+        UPC_LOG_CAMERA_SERVICE(Warn, "print_video thumb generation failed path=%s",
+                               thumb_path.c_str());
     }
 
-    upsert_print_history(aborted, video_name, thumb_name);
-
-    /* remux 成功后删除临时裸流并清会话目录 */
-    (void)std::remove(h264_path_.c_str());
-    remove_session_dir();
-
-    UPC_LOG_CAMERA_SERVICE(Info,
-        "print_video saved -> %s (+%s)%s",
-        mp4_path.c_str(),
+    upsert_print_history(aborted, session_name_, thumb_ok ? thumb_rel : std::string{});
+    UPC_LOG_CAMERA_SERVICE(
+        Info,
+        "print_video saved -> %s frames=%u thumb=%s%s",
+        session_dir_.c_str(),
+        frames,
         thumb_ok ? thumb_path.c_str() : "(none)",
         aborted ? " aborted" : "");
 
     session_id_.clear();
+    session_name_.clear();
     session_dir_.clear();
-    h264_path_.clear();
     start_unix_ = 0;
-    header_written_ = false;
+    frame_count_ = 0;
 }
 
 bool PrintVideoRecorder::remove_session_dir()
@@ -760,9 +507,9 @@ bool PrintVideoRecorder::remove_session_dir()
     if(session_dir_.empty()) {
         return true;
     }
-    char cmd[512];
-    std::snprintf(cmd, sizeof(cmd), "rm -rf '%s'", session_dir_.c_str());
-    return std::system(cmd) == 0;
+    std::error_code ec;
+    (void)std::filesystem::remove_all(session_dir_, ec);
+    return !std::filesystem::exists(session_dir_, ec);
 }
 
 bool PrintVideoRecorder::mkdir_p(const char* path)
@@ -796,7 +543,8 @@ std::string PrintVideoRecorder::sanitize_filename(const char* name)
     }
     std::string s(name);
     for(char& c : s) {
-        if(c == '/' || c == '\\' || c == ' ' || c == ':' || c == ';') {
+        const unsigned char uc = static_cast<unsigned char>(c);
+        if(!std::isalnum(uc) && c != '-' && c != '_' && c != '.') {
             c = '_';
         }
     }
@@ -824,10 +572,10 @@ std::string PrintVideoRecorder::format_stamp_local(int64_t unix_sec)
 }
 
 void PrintVideoRecorder::upsert_print_history(
-    bool aborted, const std::string& video_name,
+    bool aborted, const std::string& frames_dir_name,
     const std::string& thumb_name) const
 {
-    if(video_name.empty()) {
+    if(frames_dir_name.empty()) {
         return;
     }
 
@@ -847,8 +595,8 @@ void PrintVideoRecorder::upsert_print_history(
         UPC_LOCAL_GCODE_CONFIG, entry.job_name);
     entry.status = aborted ? upc::PrintHistoryStatus::Terminated
                            : upc::PrintHistoryStatus::Complete;
-    entry.video  = video_name;
-    entry.thumb  = thumb_name;
+    entry.frames_dir = frames_dir_name;
+    entry.thumb      = thumb_name;
 
     std::vector<upc::PrintHistoryEntry> entries;
     if(!upc::print_history_manifest_load(UPC_PRINT_VIDEO_MANIFEST, entries)) {
@@ -859,7 +607,6 @@ void PrintVideoRecorder::upsert_print_history(
     }
     upc::print_history_manifest_upsert(entries, entry);
 
-    /* 写临时文件再 rename，避免 UI 读到半截 JSON */
     const std::string tmp_path =
         std::string(UPC_PRINT_VIDEO_MANIFEST) + ".tmp";
     if(!upc::print_history_manifest_save(tmp_path, entries)) {
@@ -876,10 +623,13 @@ void PrintVideoRecorder::upsert_print_history(
         return;
     }
 
-    UPC_LOG_CAMERA_SERVICE(Info,
-        "print_history upsert job=%s status=%s video=%s duration=%u material_g=%.2f",
-        entry.job_name.c_str(), upc::print_history_status_str(entry.status),
-        entry.video.c_str(), entry.duration_sec,
+    UPC_LOG_CAMERA_SERVICE(
+        Info,
+        "print_history upsert job=%s status=%s frames_dir=%s duration=%u material_g=%.2f",
+        entry.job_name.c_str(),
+        upc::print_history_status_str(entry.status),
+        entry.frames_dir.c_str(),
+        entry.duration_sec,
         static_cast<double>(entry.material_g));
 }
 

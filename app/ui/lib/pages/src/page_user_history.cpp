@@ -7,10 +7,12 @@
 #include "print_history_manifest.hpp"
 
 #include <algorithm>
+#include <cstdlib>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <ctime>
+#include <filesystem>
 #include <string>
 #include <vector>
 
@@ -33,7 +35,7 @@
  *   └──────────────────────────────────────────────────┴──────┘
  *
  * 数据源：/home/video/manifest.json（common/fs_manifest/print_history_manifest）。
- * 缩略图：/home/video/{thumb}（优先 .rthm 原始 RGB565，自定义 decoder；失败回退 .jpg），
+ * 缩略图：/home/video/{thumb}（.rthm 原始 RGB565，自定义 decoder），
  *          cover 居中裁切（竖构图相机图铺满横槽）。
  * 视频播放（第二期）：点缩略图进入播放器隐藏子页，当前为占位。
  */
@@ -50,8 +52,9 @@ lv_obj_t *g_empty       = nullptr;  /**< 空列表占位 */
 
 /** 每张卡片的运行时上下文（删除动作 + 左滑状态） */
 struct HistoryCard {
-    std::string video;              /**< manifest 相对文件名（删除主键） */
+    std::string frames_dir;         /**< manifest 相对目录名（删除主键） */
     std::string thumb;
+    std::string thumb_src;          /**< LVGL FS 路径，如 A:/home/video/x/thumb.rthm */
     std::string title;              /**< 播放器标题（作业名） */
     std::string subtitle;          /**< 播放器副标题（时间 日期） */
     lv_obj_t   *wrap    = nullptr;  /**< 整条容器（删除时删它） */
@@ -185,26 +188,22 @@ void delete_card_async(void *user)
 void del_click_cb(lv_event_t *e)
 {
     HistoryCard *c = static_cast<HistoryCard *>(lv_event_get_user_data(e));
-    if(!c || c->video.empty()) {
+    if(!c || c->frames_dir.empty()) {
         return;
     }
 
     const std::string dir = UPC_PRINT_VIDEO_DIR;
-    if(!c->video.empty()) {
-        (void)std::remove((dir + "/" + c->video).c_str());
-    }
-    if(!c->thumb.empty()) {
-        (void)std::remove((dir + "/" + c->thumb).c_str());
-    }
+    std::error_code ec;
+    (void)std::filesystem::remove_all(dir + "/" + c->frames_dir, ec);
 
     /* 从 manifest 摘除该条并原子重写（tmp + rename） */
     std::vector<upc::PrintHistoryEntry> entries;
     if(upc::print_history_manifest_load(UPC_PRINT_VIDEO_MANIFEST, entries)) {
-        const std::string target = c->video;
+        const std::string target = c->frames_dir;
         entries.erase(
             std::remove_if(entries.begin(), entries.end(),
                 [&](const upc::PrintHistoryEntry &en) {
-                    return en.video == target;
+                    return en.frames_dir == target;
                 }),
             entries.end());
         const std::string tmp = std::string(UPC_PRINT_VIDEO_MANIFEST) + ".tmp";
@@ -221,12 +220,12 @@ void del_click_cb(lv_event_t *e)
 void on_thumb_click(lv_event_t *e)
 {
     HistoryCard *c = static_cast<HistoryCard *>(lv_event_get_user_data(e));
-    if(!c || c->video.empty()) {
+    if(!c || c->frames_dir.empty()) {
         return;
     }
     char path[256];
     std::snprintf(path, sizeof(path), "%s/%s",
-                  UPC_PRINT_VIDEO_DIR, c->video.c_str());
+                  UPC_PRINT_VIDEO_DIR, c->frames_dir.c_str());
     page_user_timelapse_set_source(path, c->title.c_str(), c->subtitle.c_str());
     ui::PageManager::instance().switch_to("user_timelapse");
 }
@@ -358,11 +357,8 @@ void make_thumbnail(lv_obj_t *parent, const HistoryCard *c)
                         const_cast<HistoryCard *>(c));
 
     if(!c->thumb.empty()) {
-        static char path[256];
-        std::snprintf(path, sizeof(path), "%s%s/%s",
-                      kThumbDrive, UPC_PRINT_VIDEO_DIR, c->thumb.c_str());
         lv_obj_t *img = lv_image_create(slot);
-        lv_image_set_src(img, path);
+        lv_image_set_src(img, c->thumb_src.c_str());
         lv_obj_set_size(img, tw, th);
         lv_obj_align(img, LV_ALIGN_CENTER, 0, 0);
         /* cover：等比铺满槽，多出部分居中裁切（与相机预览同方案） */
@@ -402,8 +398,11 @@ void make_thumbnail(lv_obj_t *parent, const HistoryCard *c)
 void build_entry(lv_obj_t *parent, const upc::PrintHistoryEntry &e)
 {
     HistoryCard *ctx = new HistoryCard();
-    ctx->video = e.video;
+    ctx->frames_dir = e.frames_dir;
     ctx->thumb = e.thumb;
+    if(!e.thumb.empty()) {
+        ctx->thumb_src = std::string(kThumbDrive) + UPC_PRINT_VIDEO_DIR + "/" + e.thumb;
+    }
     g_cards.push_back(ctx);
 
     lv_obj_t *wrap = lv_obj_create(parent);

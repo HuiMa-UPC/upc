@@ -423,16 +423,17 @@ void GlavoService::worker_loop()
                 lock.lock();
             }
 
-            if (worker_queue_.empty()) {
-                continue;
+            if (!worker_queue_.empty()) {
+                msg = std::move(worker_queue_.front());
+                worker_queue_.pop();
+                has_msg = true;
             }
-
-            msg = std::move(worker_queue_.front());
-            worker_queue_.pop();
-            has_msg = true;
         }
 
-        if (has_msg && state() == ServiceState::Running) {
+        if(!has_msg) {
+            continue;
+        }
+        if (state() == ServiceState::Running) {
             handle_message(msg);
         }
     }
@@ -798,6 +799,7 @@ bool GlavoService::light_scan_line_count(const std::string& path, uint32_t& line
 void GlavoService::clear_prepare_session()
 {
     prepared_local_path_.clear();
+    prepared_line_count_ = 0;
     prepare_ready_ = false;
 }
 
@@ -842,15 +844,26 @@ bool GlavoService::run_print_prepare(middleware::PrintFileSource source, uint32_
         local_path_out = make_full_path(GLAVO_LOCAL_GCODE_DIR, basename);
     }
 
-    uint32_t line_count = 0;
-    if(!light_scan_line_count(local_path_out, line_count)) {
-        UPC_LOG_GLAVO_SERVICE(Warn, "prepare: light scan failed %s", local_path_out.c_str());
-        return false;
-    }
-
     struct stat st{};
     if(stat(local_path_out.c_str(), &st) != 0) {
         return false;
+    }
+
+    uint32_t line_count = 0;
+    if(source == middleware::PrintFileSource::Local) {
+        const auto& e = local_manifest_[index];
+        const bool same_mtime = e.mtime == static_cast<int64_t>(st.st_mtime);
+        const bool same_size =
+            e.file_size == static_cast<uint32_t>(st.st_size);
+        if(e.line_count > 0 && same_mtime && same_size) {
+            line_count = e.line_count;
+        }
+    }
+    if(line_count == 0) {
+        if(!light_scan_line_count(local_path_out, line_count)) {
+            UPC_LOG_GLAVO_SERVICE(Warn, "prepare: light scan failed %s", local_path_out.c_str());
+            return false;
+        }
     }
 
     GcodeManifestEntry entry;
@@ -871,6 +884,7 @@ bool GlavoService::run_print_prepare(middleware::PrintFileSource source, uint32_
     }
 
     prepared_local_path_ = local_path_out;
+    prepared_line_count_ = line_count;
     prepare_ready_ = true;
     return true;
 }
@@ -927,7 +941,10 @@ void GlavoService::handle_parser_exit(const middleware::Message& msg)
 
 void GlavoService::launch_print_from_prepared(const std::string& full_path)
 {
-    if(parser::ParserManager::instance().open_file(full_path) != 0) {
+    const int line_hint = prepared_line_count_ > 0
+        ? static_cast<int>(prepared_line_count_)
+        : -1;
+    if(parser::ParserManager::instance().open_file(full_path, line_hint) != 0) {
         UPC_LOG_GLAVO_SERVICE(Error, "print_start: open failed path=%s",
                               full_path.c_str());
         print_running_.store(false);

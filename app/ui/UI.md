@@ -82,7 +82,7 @@ while (!g_shutdown_requested) {
 
 | 组件 | 文件 | 职责 |
 |------|------|------|
-| `CameraMsgProxy` | `camera_msg_proxy.*` | `UI_Camera_Stream_*` IPC 封装 |
+| `CameraMsgProxy` | `camera_msg_proxy.*` | `UI_Camera_Stream_*` / Snapshot IPC 封装 |
 | `CameraPreviewPlayer` | `camera_preview.*` | dma fd 元数据环消费、NV12→BGRX、LVGL 显示 |
 | `RgaDmaBuf` | `rga_dma_buf.*` | 封装 `common/ipc/dma_heap_buffer` 的 dma32 heap 缓冲，供 RGA `importbuffer_fd` |
 
@@ -120,17 +120,15 @@ rongsu_camera 经主 IPC（/tmp/upc_camera.sock）SCM_RIGHTS 附带 dma_buf fd �
 
 | 组件 | 文件 | 职责 |
 |------|------|------|
-| `page_user_history` | `pages/page_user_history.*` | 读 `/home/video/manifest.json`（`common/fs_manifest/print_history_manifest`）→ 按 `start_unix` 倒序卡片列表；缩略图 `A:/home/video/{thumb}.jpg`（TJPGD + FS_POSIX，`LV_IMAGE_ALIGN_COVER`）；上下翻页；**左滑删除**（清除卡片默认 `GESTURE_BUBBLE` 使手势落到卡片）→ 删 mp4/jpg + 重写 manifest + 只删单卡 |
-| `VideoPlayer` | `core/video_player.*` | libav* 软解：`avformat/avcodec` → `sws_scale` BGRA 三缓冲 → `lv_image`(XRGB8888)；解码线程按 pts 节流、主线程 `lv_timer` 换帧；`open/close/play/pause/seek/position/duration`；**独立预览解码线程** `request_preview(sec)` 供拖动预览 |
-| `page_user_timelapse` | `pages/page_user_timelapse.*` | 全屏播放页（建于 `lv_layer_top()` 覆盖侧边栏）：视频 COVER、顶部标题/时间、右上下载(占位)/关闭、中央播放/暂停、底部进度条、点画面显隐控件、拖动进度条浮出预览小图 |
+| `page_user_history` | `pages/page_user_history.*` | 读 `/home/video/manifest.json`（`common/fs_manifest/print_history_manifest`）→ 按 `start_unix` 倒序卡片列表；缩略图 `A:/home/video/{thumb}`（RTHM 解码，`LV_IMAGE_ALIGN_COVER`）；上下翻页；**左滑删除**（清除卡片默认 `GESTURE_BUBBLE` 使手势落到卡片）→ 删目录 + 重写 manifest + 只删单卡 |
+| `page_user_timelapse` | `pages/page_user_timelapse.*` | 全屏播放页（建于 `lv_layer_top()` 覆盖侧边栏）：按序播放 `/home/video/{job_ts}/1.png...N.png`，顶部标题/时间、右上关闭、中央播放/暂停、底部进度条、点画面显隐控件 |
 
-- **进入/退出**：历史页缩略图点击 → `page_user_timelapse_set_source(路径,标题,时间)` + `switch_to("user_timelapse")`；关闭 → `switch_to("user_history")`，`on_exit` 内 `VideoPlayer::close()`。
-- **LVGL 线程规则**：解码/预览在独立线程，出帧/进度经主线程 `lv_timer` 更新 LVGL。
+- **进入/退出**：历史页缩略图点击 → `page_user_timelapse_set_source(目录,标题,时间)` + `switch_to("user_timelapse")`；关闭 → `switch_to("user_history")`。
+- **LVGL 线程规则**：序列播放由主线程 `lv_timer` 驱动换图。
 
 ### LVGL 配置依赖（`3rdparty/.../configs/rongsu_ui.defaults`）
 - `LV_USE_TJPGD=1`：历史缩略图 baseline JPEG 解码
-- `LV_USE_FS_POSIX=1` + `LV_FS_POSIX_LETTER='A'`：按路径加载 `/home/video` 图片（`"A:/home/video/x.jpg"`）
-- `LV_USE_FFMPEG=1`：播放器软解；UI `ui/CMakeLists.txt` 链接 `avformat/avcodec/avutil/swscale`
+- `LV_USE_FS_POSIX=1` + `LV_FS_POSIX_LETTER='A'`：按路径加载 `/home/video` 图片（`"A:/home/video/x.png"` / `"A:/home/video/x.rthm"`）
 - lvgl 目标加 `_DEFAULT_SOURCE`（`3rdparty/.../CMakeLists.txt`）：修 FS 驱动 `DT_DIR` 在 `_POSIX_C_SOURCE` 下不可见的编译错误
 - 缩略图 `toast` 与播放器同建于 `lv_layer_top()`，全屏时提示可见
 

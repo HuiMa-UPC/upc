@@ -195,6 +195,11 @@ GcodeWorker& GcodeWorker::instance()
     return inst;
 }
 
+void GcodeWorker::set_total_lines_hint(int total_lines)
+{
+    total_lines_hint_ = (total_lines > 0) ? total_lines : -1;
+}
+
 /** 析构时确保解析线程已停止且文件已关闭 */
 GcodeWorker::~GcodeWorker()
 {
@@ -525,11 +530,17 @@ int GcodeWorker::open_file(const std::string& filepath)
         return -1;
     }
 
-    const int cnt = count_file_newlines(fd);
-    if(cnt < 0) {
-        close(fd);
-        return -1;
+    int cnt = -1;
+    if(total_lines_hint_ > 0) {
+        cnt = total_lines_hint_;
+    } else {
+        cnt = count_file_newlines(fd);
+        if(cnt < 0) {
+            close(fd);
+            return -1;
+        }
     }
+    total_lines_hint_ = -1;
 
     if(lseek(fd, 0, SEEK_SET) < 0) {
         close(fd);
@@ -597,6 +608,7 @@ void GcodeWorker::close_file()
     total_motion_packets_.store(0);
     parsed_lines_.store(0);
     file_read_exhausted_.store(false);
+    total_lines_hint_ = -1;
 }
 
 /** @see get_total_motion_packets */

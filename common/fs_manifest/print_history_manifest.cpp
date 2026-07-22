@@ -124,7 +124,7 @@ PrintHistoryEntry parse_object(const std::string& obj)
     if(parse_string_field(obj, "status", status_s)) {
         (void)print_history_status_parse(status_s, e.status);
     }
-    parse_string_field(obj, "video", e.video);
+    parse_string_field(obj, "frames_dir", e.frames_dir);
     parse_string_field(obj, "thumb", e.thumb);
     return e;
 }
@@ -185,7 +185,7 @@ bool print_history_manifest_load(const std::string& path,
         }
         const std::string obj = text.substr(obj_start, obj_end - obj_start + 1);
         PrintHistoryEntry e = parse_object(obj);
-        if(!e.video.empty() || !e.job_name.empty()) {
+        if(!e.frames_dir.empty() || !e.job_name.empty()) {
             out.push_back(std::move(e));
         }
         i = obj_end + 1;
@@ -212,7 +212,7 @@ bool print_history_manifest_save(const std::string& path,
             << "\"duration_sec\":" << e.duration_sec << ','
             << "\"material_g\":" << e.material_g << ','
             << "\"status\":\"" << print_history_status_str(e.status) << "\","
-            << "\"video\":\"" << json_escape(e.video) << "\","
+            << "\"frames_dir\":\"" << json_escape(e.frames_dir) << "\","
             << "\"thumb\":\"" << json_escape(e.thumb) << "\""
             << '}';
     }
@@ -224,7 +224,7 @@ void print_history_manifest_upsert(std::vector<PrintHistoryEntry>& entries,
                                    const PrintHistoryEntry& item)
 {
     for(auto& e : entries) {
-        if(e.video == item.video && !item.video.empty()) {
+        if(e.frames_dir == item.frames_dir && !item.frames_dir.empty()) {
             e = item;
             return;
         }

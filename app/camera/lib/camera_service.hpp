@@ -55,7 +55,7 @@ private:
                                      uint32_t src_stride_y, uint32_t width,
                                      uint32_t height);
     bool copy_latest_nv12_snapshot(std::vector<uint8_t>& out) const;
-    bool save_latest_nv12_snapshot(std::string& out_path) const;
+    bool save_latest_png_snapshot(std::string& out_path) const;
 
     void send_stream_start_rsp(const middleware::Message& req, bool ok);
     void send_stream_stop_done(const middleware::Message& req);

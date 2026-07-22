@@ -24,6 +24,9 @@ public:
     /** @return 进程内唯一 GcodeWorker 实例（Meyers 单例） */
     static GcodeWorker& instance();
 
+    /** @brief 为下一次 open_file 提供已知总行数，跳过重复整文件统计。 */
+    void set_total_lines_hint(int total_lines) override;
+
     /**
      * 打开切片文件并预统计总行数。
      * @param filepath 绝对或相对路径
@@ -156,6 +159,7 @@ private:
     std::atomic<int> total_motion_packets_{0};
     std::atomic<int> parsed_lines_{0};
     std::atomic<bool> file_read_exhausted_{false};
+    int total_lines_hint_ = -1;
 
     float image_scale_gain_ = 1.0f; /**< 图像坐标缩放增益 */
     float image_rang_gain_  = 1.0f; /**< 坐标满量程（mm），用于编码偏移 */

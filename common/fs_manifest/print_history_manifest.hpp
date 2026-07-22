@@ -7,7 +7,7 @@
  * - Camera：Finish/Abort remux 成功后 upsert 一条
  * - UI：进入历史页时直接读取（不经列表 IPC）
  *
- * 媒体文件命名：{job_name}_{YYYYMMDD_HHMMSS}.mp4 / 缩略图(.rthm 或 .jpg)
+ * 媒体目录命名：{job_name}_{YYYYMMDD_HHMMSS}/（目录内 1.png,2.png,... 与 thumb.rthm）
  */
 
 #include <cstdint>
@@ -36,8 +36,8 @@ struct PrintHistoryEntry {
     uint32_t            duration_sec = 0;
     float               material_g = 0.f;
     PrintHistoryStatus  status = PrintHistoryStatus::Complete;
-    std::string         video;         /**< 相对文件名，如 benchy_20260526_221300.mp4 */
-    std::string         thumb;         /**< 相对文件名，如 benchy_20260526_221300.rthm */
+    std::string         frames_dir;    /**< 相对目录名，如 benchy_20260526_221300 */
+    std::string         thumb;         /**< 相对路径，如 benchy_20260526_221300/thumb.rthm */
 };
 
 /** 从 path 读取 manifest；文件不存在返回空列表（仍返回 true） */
@@ -49,8 +49,8 @@ bool print_history_manifest_save(const std::string& path,
                                  const std::vector<PrintHistoryEntry>& entries);
 
 /**
- * 按 video 文件名 upsert；不存在则追加。
- * 同一次打印不会改 job_name；主键是带时间戳的 video 名。
+ * 按 frames_dir upsert；不存在则追加。
+ * 同一次打印不会改 job_name；主键是带时间戳的目录名。
  */
 void print_history_manifest_upsert(std::vector<PrintHistoryEntry>& entries,
                                    const PrintHistoryEntry& item);
