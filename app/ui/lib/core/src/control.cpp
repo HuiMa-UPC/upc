@@ -515,6 +515,19 @@ void wire_msg_proxy()
         /* 自然完成也会发 Terminate_Done：须与 Progress 一致，双缓冲为 0 才退 */
         try_exit_print_preview(true);
     });
+
+    proxy.register_xfr_pair_pin([](const middleware::XfrPairPinPayload& p) {
+        char msg[96];
+        std::snprintf(msg, sizeof(msg), "Pair PIN: %s (expires %us)",
+                      p.pin, static_cast<unsigned>(p.expires_s));
+        ui_toast_show(msg, user_color_status_ok, 2800);
+    });
+
+    proxy.register_xfr_file_received([](const middleware::XfrFileReceivedPayload& p) {
+        char msg[180];
+        std::snprintf(msg, sizeof(msg), "File received: %s", p.file_name);
+        ui_toast_show(msg, user_color_status_ok, 2200);
+    });
 }
 
 void backend_reset_session()

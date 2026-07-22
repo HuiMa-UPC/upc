@@ -84,4 +84,7 @@ void log_write(Level level, const char* src, const char* module,
 #define UPC_LOG_CAMERA_PREVIEW(lvl, fmt, ...) \
     UPC_LOG_MOD_(UPC_MOD_CAMERA_PREVIEW, lvl, "UI", "CameraPreview", fmt, ##__VA_ARGS__)
 
+#define UPC_LOG_XFR_SERVICE(lvl, fmt, ...) \
+    UPC_LOG_MOD_(UPC_MOD_XFR_SERVICE, lvl, "SVC", "XfrService", fmt, ##__VA_ARGS__)
+
 #endif /* RS_LOG_HPP */

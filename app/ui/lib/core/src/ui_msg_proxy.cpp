@@ -184,6 +184,26 @@ void UiMsgProxy::init()
             }
         }));
 
+    subs_.push_back(bus.subscribe(
+        middleware::MsgType::XFR_Pair_Pin_Ntf, middleware::ModuleId::UI,
+        [this](const middleware::Message& msg) {
+            middleware::XfrPairPinPayload p{};
+            if (xfr_pair_pin_cb_ && read_inline_pod(msg, p)) {
+                p.pin[sizeof(p.pin) - 1] = '\0';
+                xfr_pair_pin_cb_(p);
+            }
+        }));
+
+    subs_.push_back(bus.subscribe(
+        middleware::MsgType::XFR_File_Received_Ntf, middleware::ModuleId::UI,
+        [this](const middleware::Message& msg) {
+            middleware::XfrFileReceivedPayload p{};
+            if (xfr_file_received_cb_ && read_inline_pod(msg, p)) {
+                p.file_name[sizeof(p.file_name) - 1] = '\0';
+                xfr_file_received_cb_(p);
+            }
+        }));
+
 }
 
 /* 解析 [WifiListHeader][WifiEntryPayload × count]（BufferRef/Inline 皆可），仿 Fs_DirOpen_Rsp。 */
@@ -308,6 +328,16 @@ void UiMsgProxy::register_wifi_scan(WifiListCb cb)
 void UiMsgProxy::register_wifi_saved(WifiListCb cb)
 {
     wifi_saved_cb_ = std::move(cb);
+}
+
+void UiMsgProxy::register_xfr_pair_pin(XfrPairPinCb cb)
+{
+    xfr_pair_pin_cb_ = std::move(cb);
+}
+
+void UiMsgProxy::register_xfr_file_received(XfrFileReceivedCb cb)
+{
+    xfr_file_received_cb_ = std::move(cb);
 }
 
 

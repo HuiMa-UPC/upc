@@ -1,5 +1,5 @@
 #!/bin/sh
-# 统一启动 / 停止 rongsu_broker + rongsu_glavo + rongsu_camera + rongsu_ui
+# 统一启动 / 停止 rongsu_broker + rongsu_glavo + rongsu_camera + rongsu_xfr + rongsu_ui
 # 用法: rongsu.sh {start|stop|status|run}
 # 环境:
 #   RONGSU_BIN                    可执行文件目录，默认 /home
@@ -13,6 +13,7 @@ BROKER="$BIN_DIR/rongsu_broker"
 GLAVO="$BIN_DIR/rongsu_glavo"
 UI="$BIN_DIR/rongsu_ui"
 CAMERA="$BIN_DIR/rongsu_camera"
+XFR="$BIN_DIR/rongsu_xfr"
 BROKER_SOCK="${UPC_BROKER_SOCKET:-/tmp/upc_broker.sock}"
 WAIT_MS="${UPC_IPC_PEER_STARTUP_WAIT_MS:-10000}"
 
@@ -35,7 +36,7 @@ wait_for_socket() {
 cmd="${1:-}"
 
 start_daemon() {
-    if [ ! -x "$BROKER" ] || [ ! -x "$GLAVO" ] || [ ! -x "$UI" ] || [ ! -x "$CAMERA" ]; then
+    if [ ! -x "$BROKER" ] || [ ! -x "$GLAVO" ] || [ ! -x "$UI" ] || [ ! -x "$CAMERA" ] || [ ! -x "$XFR" ]; then
         echo "Missing binaries under $BIN_DIR (set RONGSU_BIN)" >&2
         exit 1
     fi
@@ -44,17 +45,19 @@ start_daemon() {
     wait_for_socket "$BROKER_SOCK" "broker"
     "$GLAVO" start
     "$CAMERA" start
+    "$XFR" start
     "$UI" start
-    echo "Started broker + glavo + rongsu_camera + ui"
+    echo "Started broker + glavo + rongsu_camera + rongsu_xfr + ui"
 }
 
 stop_all() {
     "$UI" stop || true
+    "$XFR" stop || true
     "$CAMERA" stop || true
     "$GLAVO" stop || true
     "$BROKER" stop || true
     rm -f "$BROKER_SOCK"
-    echo "Stopped ui + rongsu_camera + glavo + broker"
+    echo "Stopped ui + rongsu_xfr + rongsu_camera + glavo + broker"
 }
 
 status_all() {
@@ -64,17 +67,19 @@ status_all() {
     "$GLAVO" status || true
     echo "=== rongsu_camera ==="
     "$CAMERA" status || true
+    echo "=== rongsu_xfr ==="
+    "$XFR" status || true
     echo "=== UI ==="
     "$UI" status || true
 }
 
 run_foreground() {
-    if [ ! -x "$BROKER" ] || [ ! -x "$GLAVO" ] || [ ! -x "$UI" ] || [ ! -x "$CAMERA" ]; then
+    if [ ! -x "$BROKER" ] || [ ! -x "$GLAVO" ] || [ ! -x "$UI" ] || [ ! -x "$CAMERA" ] || [ ! -x "$XFR" ]; then
         echo "Missing binaries under $BIN_DIR" >&2
         exit 1
     fi
     rm -f "$BROKER_SOCK"
-    trap 'kill $BPID $GPID $CPID $UPID 2>/dev/null; rm -f "$BROKER_SOCK"; exit' INT TERM
+    trap 'kill $BPID $GPID $CPID $XPID $UPID 2>/dev/null; rm -f "$BROKER_SOCK"; exit' INT TERM
 
     "$BROKER" run &
     BPID=$!
@@ -86,10 +91,13 @@ run_foreground() {
     "$CAMERA" run &
     CPID=$!
 
+    "$XFR" run &
+    XPID=$!
+
     "$UI" run &
     UPID=$!
 
-    wait $BPID $GPID $CPID $UPID
+    wait $BPID $GPID $CPID $XPID $UPID
 }
 
 case "$cmd" in

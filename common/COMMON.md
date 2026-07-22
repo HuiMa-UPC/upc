@@ -462,6 +462,7 @@ ParserManager → RingBuffer → McuLink（TCP + 串口）
 | `process_config_ui()` | `rongsu_ui` | `/var/run/rongsu_ui.pid` | `/var/log/rongsu_ui` |
 | `process_config_glavo()` | `rongsu_glavo` | `/var/run/rongsu_glavo.pid` | `/var/log/rongsu_glavo` |
 | `process_config_camera()` | `rongsu_camera` | `/var/run/rongsu_camera.pid` | `/var/log/rongsu_camera` |
+| `process_config_xfr()` | `rongsu_xfr` | `/var/run/rongsu_xfr.pid` | `/var/log/rongsu_xfr` |
 
 各进程 `main.cpp` 支持 `{start|stop|status|run}`；`start` 时 stderr/stdout 重定向到 `{log_base}N.log`（单文件上限 5MB，三文件循环；重启不清空已有文件）。
 

@@ -102,6 +102,9 @@
 #ifndef UPC_MOD_MCU_OTA
 #define UPC_MOD_MCU_OTA 1
 #endif
+#ifndef UPC_MOD_XFR_SERVICE
+#define UPC_MOD_XFR_SERVICE 1
+#endif
 
 #else /* !UPC_DEBUG */
 
@@ -120,6 +123,7 @@
 #define UPC_MOD_CAMERA_SERVICE 0
 #define UPC_MOD_CAMERA_PREVIEW 0
 #define UPC_MOD_MCU_OTA 0
+#define UPC_MOD_XFR_SERVICE 0
 
 #endif /* UPC_DEBUG */
 
@@ -167,6 +171,14 @@ inline ProcessConfig process_config_broker() {
     };
 }
 
+inline ProcessConfig process_config_xfr() {
+    return ProcessConfig{
+        "/var/run/rongsu_xfr.pid",
+        "/data/rongsu_xfr",
+        "rongsu_xfr",
+    };
+}
+
 // ============================================================================
 // §4 线协议 ABI 常量（帧格式实现见 ipc/ipc_wire.hpp）
 // ============================================================================
@@ -208,6 +220,7 @@ enum class ModuleId : uint32_t {
     UI         = 0x01,
     APP_GLAVO  = 0x02,  /**< 振镜/串口后端 rongsu_glavo */
     APP_CAMERA = 0x03,  /**< 相机 / test_camera 伪相机后端 */
+    APP_XFR    = 0x04,  /**< WiFi 传输后端 rongsu_xfr */
 };
 
 /**
@@ -327,6 +340,10 @@ enum class MsgType : uint32_t {
     UI_Wifi_Saved_Req,          /**< Empty：请求已保存网络列表 → GLAVO_Wifi_Saved_Rsp */
     UI_Wifi_Disconnect_Req,     /**< WifiForgetReqPayload(复用 ssid)：断开当前连接 */
     GLAVO_Wifi_Connect_Rsp,     /**< WifiConnectRspPayload：连接结果（成功/失败），失败用于弹提示 */
+
+    // ---- XFR → UI：WiFi 传输通知 ----
+    XFR_Pair_Pin_Ntf = 0x1400,   /**< XfrPairPinPayload：屏幕显示 PIN 配对码 */
+    XFR_File_Received_Ntf,       /**< XfrFileReceivedPayload：接收文件完成通知 */
 };
 
 enum class MsgPriority : uint8_t {
@@ -410,6 +427,18 @@ struct WifiEntryPayload {
 struct WifiConnectRspPayload {
     uint8_t ok;             /**< 1=成功 0=失败(如密码错/超时) */
     char    ssid[64];
+};
+
+/** XFR_Pair_Pin_Ntf：XFR 通知 UI 显示 PIN（Inline） */
+struct XfrPairPinPayload {
+    char     pin[8];       /**< 4 位数字 PIN，字符串表示 */
+    uint32_t expires_s;    /**< PIN 剩余有效期（秒） */
+};
+
+/** XFR_File_Received_Ntf：XFR 通知 UI 刷新/提示（Inline） */
+struct XfrFileReceivedPayload {
+    char     file_name[128];
+    uint64_t file_size;
 };
 
 /** APP_CLOSE_DOOR_Rsp / APP_OpenDoor_Rsp 载荷：动作结果（Inline） */

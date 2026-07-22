@@ -74,6 +74,7 @@ do_collect_outputs() {
         "app/ui/rongsu_ui"
         "app/glavo/rongsu_glavo"
         "app/camera/rongsu_camera"
+        "app/xfer/rongsu_xfr"
     )
 
     echo "==> 复制可执行文件到 $OUTPUT_DIR"

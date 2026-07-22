@@ -66,6 +66,7 @@ const char* upc_msg_module_name(ModuleId id) {
         case ModuleId::UI: return "UI";
         case ModuleId::APP_GLAVO: return "APP_GLAVO";
         case ModuleId::APP_CAMERA: return "APP_CAMERA";
+        case ModuleId::APP_XFR: return "APP_XFR";
         default: return "?";
     }
 }
@@ -125,6 +126,8 @@ const char* upc_msg_type_name(MsgType type) {
         case MsgType::UI_Wifi_Saved_Req: return "UI_Wifi_Saved_Req";
         case MsgType::UI_Wifi_Disconnect_Req: return "UI_Wifi_Disconnect_Req";
         case MsgType::GLAVO_Wifi_Connect_Rsp: return "GLAVO_Wifi_Connect_Rsp";
+        case MsgType::XFR_Pair_Pin_Ntf: return "XFR_Pair_Pin_Ntf";
+        case MsgType::XFR_File_Received_Ntf: return "XFR_File_Received_Ntf";
         case MsgType::UI_Debug_Axis_Jog_Req: return "UI_Debug_Axis_Jog_Req";
         case MsgType::UI_Debug_Axis_Hold_Stop_Req: return "UI_Debug_Axis_Hold_Stop_Req";
         case MsgType::UI_Debug_Axis_SetZero_Req: return "UI_Debug_Axis_SetZero_Req";
