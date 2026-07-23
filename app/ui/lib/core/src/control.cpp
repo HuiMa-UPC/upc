@@ -528,6 +528,9 @@ void wire_msg_proxy()
         char msg[180];
         std::snprintf(msg, sizeof(msg), "File received: %s", p.file_name);
         ui_toast_show(msg, user_color_status_ok, 2200);
+        if(g_files_page_active && g_file_tab == FileTab::Local) {
+            request_fs_dir_open(FileTab::Local);
+        }
     });
 
     proxy.register_usb_hotplug([](const middleware::UsbHotplugPayload& p) {
