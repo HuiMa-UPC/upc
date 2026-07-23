@@ -64,10 +64,16 @@ ICONS = {
 <path d="M7.5 16H9"/>
 <circle cx="16" cy="16" r="1.4" fill="white" stroke="none"/>
 ''',
+    # 信息「圆圈 i」（Figma 3238:14178，口罩徽标图标；原 20×20 ×1.6 映射到 32 空间）
+    "info": '''
+<circle cx="16" cy="16" r="11.2"/>
+<path d="M16 22.4L16 14.4"/>
+<path d="M16 12.8L16 9.6"/>
+''',
 }
 
 # 输出顺序（决定 .c/.h 中的排列）
-ORDER = ["home", "switch", "cabin", "aqi", "humidity", "pressure"]
+ORDER = ["home", "switch", "cabin", "aqi", "humidity", "pressure", "info"]
 
 
 def rasterize_alpha(inner: str):

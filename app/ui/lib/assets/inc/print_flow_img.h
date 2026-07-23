@@ -10,8 +10,10 @@ extern "C" {
 
 extern const lv_image_dsc_t img_plate_single;
 extern const lv_image_dsc_t img_plate_double;
-extern const lv_image_dsc_t img_device_unlock;
-extern const lv_image_dsc_t img_device_lock;
+extern const lv_image_dsc_t img_device_unlock;   /* 开门（496×321，门弹窗顶图） */
+extern const lv_image_dsc_t img_door_opened;     /* 门已开启（496×321，门弹窗顶图） */
+extern const lv_image_dsc_t img_device_lock;     /* 关门确认（496×321，门弹窗顶图） */
+
 
 #ifdef __cplusplus
 }

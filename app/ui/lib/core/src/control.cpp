@@ -9,12 +9,14 @@
 #include "ui_slide_unlock.hpp"
 #include "ui_arc_spinner.hpp"
 #include "print_flow_img.h"
+#include "home_metric_icons.h"
 
 #include "page_user_home.hpp"
 #include "page_manager.hpp"
 
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <deque>
 #include <vector>
@@ -422,8 +424,7 @@ void wire_msg_proxy()
         g_close_cb = nullptr;
         g_close_u = nullptr;
         if(!p.ok) {
-            ui_toast_show("Door check failed, please close the door",
-                          user_color_status_err, 2500);
+            /* 门未关：静默（由 DoorOpened 弹窗文案提示 + 轮询重试），不逐次弹 toast */
             return;
         }
         if(cb) {
@@ -663,35 +664,58 @@ void close_current_dialog(void)
 lv_obj_t *g_plate_content  = nullptr;   /**< 子视图内容容器（choose/inserted/notinserted 重建） */
 lv_obj_t *g_plate_back_btn = nullptr;   /**< 返回圆钮（choose 视图隐藏） */
 
-/* ---- 窄舱门弹窗：持久句柄 ---- */
-lv_obj_t         *g_door_body_parent = nullptr;  /**< 弹窗 body 容器（插画挂这里） */
-lv_obj_t         *g_door_img_box = nullptr;  /**< 插画缩放盒（切 variant 时重建） */
+/* ---- 舱门弹窗：持久句柄（对齐 Figma 2566:5240/5306/5430：顶部满宽大图 + 内容列） ---- */
+lv_obj_t         *g_door_img_box = nullptr;  /**< 顶部满宽图容器（切 variant 时换图） */
+lv_obj_t         *g_door_content = nullptr;  /**< 下方 padded 内容列（切 variant 时重建） */
 lv_obj_t         *g_door_title   = nullptr;
-lv_obj_t         *g_door_body    = nullptr;
-lv_obj_t         *g_door_action  = nullptr;  /**< spinner / label / 确认按钮容器（切 variant 时重建） */
+lv_obj_t         *g_door_body    = nullptr;  /**< [D] 状态副行（PM2.5 净化提示） */
 ui_arc_spinner_t *g_door_spinner = nullptr;
+/* 门流程节奏：让 Opening / DoorOpened 两个中间态"看得见"——避免后端即时应答导致一闪而过。
+ *   - Opening：最短停留后再前进；
+ *   - DoorOpened：最短停留后开始"关门检测"轮询，检测到门已关才进 DoorClosed。 */
+constexpr uint32_t DOOR_OPENING_MIN_MS = 1500u;   /**< "正在准备开门"最短显示 */
+constexpr uint32_t DOOR_OPENED_MIN_MS  = 1500u;   /**< "门已开启(置灰)"最短显示后才开始检测 */
+constexpr uint32_t DOOR_CLOSE_POLL_MS  = 800u;    /**< 关门检测轮询间隔 */
+lv_timer_t *g_door_advance_timer    = nullptr;    /**< Opening 最短停留到时→前进 */
+lv_timer_t *g_door_close_poll_timer = nullptr;    /**< DoorOpened 关门检测轮询 */
+uint32_t    g_door_opening_since     = 0;          /**< 进入 Opening 的 tick */
 
-/** 红色「Mask required」徽标（Figma：红字 + 红色半透明底胶囊）。 */
-lv_obj_t *make_mask_badge(lv_obj_t *parent)
+/** 口罩提示徽标（Figma：深色半透明胶囊 + 红色"圆圈 i"图标 + 红字）。 */
+lv_obj_t *make_mask_badge(lv_obj_t *parent, const char *text)
 {
     lv_obj_t *badge = lv_obj_create(parent);
     lv_obj_remove_style_all(badge);
     lv_obj_set_size(badge, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
-    lv_obj_set_style_bg_color(badge, user_color_status_err, 0);
-    lv_obj_set_style_bg_opa(badge, LV_OPA_20, 0);
+    lv_obj_set_style_bg_color(badge, lv_color_black(), 0);
+    lv_obj_set_style_bg_opa(badge, LV_OPA_50, 0);
     lv_obj_set_style_radius(badge, LV_RADIUS_CIRCLE, 0);
-    lv_obj_set_style_border_width(badge, 1, 0);
-    lv_obj_set_style_border_color(badge, user_color_status_err, 0);
-    lv_obj_set_style_border_opa(badge, LV_OPA_40, 0);
-    lv_obj_set_style_pad_hor(badge, USER_PAD, 0);
+    lv_obj_set_style_pad_left(badge, USER_PAD_SM, 0);
+    lv_obj_set_style_pad_right(badge, USER_PAD, 0);
     lv_obj_set_style_pad_ver(badge, USER_PAD_SM / 2, 0);
+    lv_obj_set_style_pad_column(badge, USER_PAD_SM, 0);
+    lv_obj_set_flex_flow(badge, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(badge, LV_FLEX_ALIGN_START,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_clear_flag(badge, LV_OBJ_FLAG_SCROLLABLE);
 
+    /* 红色"圆圈 i"图标（A8 源 40×40，缩到 20，recolor 红） */
+    lv_obj_t *ibox = lv_obj_create(badge);
+    lv_obj_remove_style_all(ibox);
+    lv_obj_set_size(ibox, 20, 20);
+    lv_obj_set_style_bg_opa(ibox, LV_OPA_TRANSP, 0);
+    lv_obj_clear_flag(ibox, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_t *icon = lv_image_create(ibox);
+    lv_image_set_src(icon, &ic_info);
+    lv_obj_set_style_image_recolor(icon, user_color_status_err, 0);
+    lv_obj_set_style_image_recolor_opa(icon, LV_OPA_COVER, 0);
+    lv_image_set_pivot(icon, 20, 20);
+    lv_image_set_scale(icon, 256 * 20 / 40);
+    lv_obj_center(icon);
+
     lv_obj_t *lbl = lv_label_create(badge);
-    lv_label_set_text(lbl, LV_SYMBOL_WARNING "  Mask required");
+    lv_label_set_text(lbl, text);
     lv_obj_set_style_text_color(lbl, user_color_status_err, 0);
     lv_obj_set_style_text_font(lbl, user_font_caption(), 0);
-    lv_obj_center(lbl);
     return badge;
 }
 
@@ -710,12 +734,15 @@ lv_obj_t *make_illustration(lv_obj_t *parent, const lv_image_dsc_t *dsc, int32_t
     lv_obj_set_style_bg_opa(box, LV_OPA_TRANSP, 0);
     lv_obj_set_style_clip_corner(box, false, 0);
     lv_obj_clear_flag(box, LV_OBJ_FLAG_SCROLLABLE);
+    /* 插图不拦截点击：使卡片(按钮)整块可点，而不是只有文字区域。 */
+    lv_obj_remove_flag(box, LV_OBJ_FLAG_CLICKABLE);
 
     lv_obj_t *im = lv_image_create(box);
     lv_image_set_src(im, dsc);
     lv_image_set_pivot(im, 0, 0);
     lv_image_set_scale(im, scale);
     lv_obj_set_pos(im, 0, 0);
+    lv_obj_remove_flag(im, LV_OBJ_FLAG_CLICKABLE);
     return box;
 }
 
@@ -783,7 +810,7 @@ lv_obj_t *plate_make_single_card(const lv_image_dsc_t *img, int32_t img_w)
     lv_obj_set_style_border_width(card, 1, 0);
     lv_obj_set_style_border_color(card, user_color_divider, 0);
     lv_obj_set_style_pad_all(card, USER_DLG_PAD, 0);
-    lv_obj_set_style_pad_column(card, USER_PAD_LG, 0);
+    lv_obj_set_style_pad_column(card, USER_PAD, 0);   /* 图↔文字间距收小，右列更宽 */
     lv_obj_set_flex_flow(card, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(card, LV_FLEX_ALIGN_CENTER,
                           LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
@@ -808,8 +835,9 @@ lv_obj_t *plate_make_choice_card(const lv_image_dsc_t *img, int32_t img_w,
     lv_obj_set_style_border_width(card, 1, 0);
     lv_obj_set_style_border_color(card, user_color_divider, 0);
     lv_obj_set_style_border_color(card, user_color_accent, LV_STATE_PRESSED);
-    lv_obj_set_style_pad_all(card, USER_DLG_PAD, 0);
-    lv_obj_set_style_pad_row(card, USER_PAD_LG, 0);
+    /* 压缩图片与边框空隙：内边距收到 SM，图↔文字用普通间距 */
+    lv_obj_set_style_pad_all(card, USER_PAD_SM, 0);
+    lv_obj_set_style_pad_row(card, USER_PAD, 0);
     lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(card, LV_FLEX_ALIGN_CENTER,
                           LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
@@ -825,6 +853,14 @@ lv_obj_t *plate_make_choice_card(const lv_image_dsc_t *img, int32_t img_w,
     return card;
 }
 
+/* 宽入口弹窗宽度：占屏 78%（需容下未放入分支右侧的滑动开门条）。
+ * show_plate_prompt 与 plate_show_choose 共用，保证卡片铺图计算一致。 */
+int32_t plate_dialog_width(void)
+{
+    const int32_t disp_w = lv_display_get_horizontal_resolution(nullptr);
+    return disp_w > 0 ? disp_w * 78 / 100 : USER_DLG_W * 2;
+}
+
 void plate_show_choose(void)
 {
     if(!g_plate_content) {
@@ -838,10 +874,17 @@ void plate_show_choose(void)
     lv_obj_set_style_pad_column(g_plate_content, USER_DLG_PAD, 0);
     lv_obj_set_style_pad_row(g_plate_content, 0, 0);
 
-    const int32_t img_w = USER_HOME_DEVICE_W * 85 / 100;
-    plate_make_choice_card(&img_plate_single, img_w, "Plate inserted",
+    /* 让插图铺满卡片内宽（仅留极小边距）：
+     * 每卡外宽 = (对话内宽 - 卡间距) / 2；插图宽 = 外宽 - 卡内边距×2 - 少量安全余量。 */
+    const int32_t wide_w = plate_dialog_width();
+    const int32_t card_outer = (wide_w - USER_DLG_PAD * 2 - USER_DLG_PAD) / 2;
+    int32_t img_w = card_outer - USER_PAD_SM * 2 - 4;
+    if(img_w < 120) {
+        img_w = 120;
+    }
+    plate_make_choice_card(&img_plate_single, img_w, "Plate Loaded",
                            on_plate_pick_inserted);
-    plate_make_choice_card(&img_plate_double, img_w, "Not inserted yet",
+    plate_make_choice_card(&img_plate_double, img_w, "Not Loaded Yet",
                            on_plate_pick_notinserted);
 }
 
@@ -877,7 +920,7 @@ void plate_show_inserted(void)
     lv_obj_t *col = plate_make_text_col(card);
 
     lv_obj_t *t = lv_label_create(col);
-    lv_label_set_text(t, "Plate inserted");
+    lv_label_set_text(t, "Plate Loaded");
     lv_obj_set_style_text_color(t, user_color_text, 0);
     lv_obj_set_style_text_font(t, user_font_value(), 0);
 
@@ -894,7 +937,7 @@ void plate_show_inserted(void)
     lv_obj_set_style_margin_top(btn, USER_PAD, 0);
     lv_obj_add_event_cb(btn, on_plate_select_task, LV_EVENT_CLICKED, nullptr);
     lv_obj_t *bl = lv_label_create(btn);
-    lv_label_set_text(bl, "Select Print Task");
+    lv_label_set_text(bl, "Select Print Job");
     lv_obj_set_style_text_color(bl, user_color_text, 0);
     lv_obj_set_style_text_font(bl, user_font_text(), 0);
     lv_obj_center(bl);
@@ -916,25 +959,34 @@ void plate_show_notinserted(void)
     lv_obj_t *col = plate_make_text_col(card);
 
     lv_obj_t *t = lv_label_create(col);
-    lv_label_set_text(t, "Not inserted yet");
+    lv_label_set_text(t, "Not Loaded Yet");
     lv_obj_set_style_text_color(t, user_color_text, 0);
     lv_obj_set_style_text_font(t, user_font_value(), 0);
 
     lv_obj_t *s = lv_label_create(col);
-    lv_label_set_text(s, "Swipe below to open the door and insert the plate. "
+    lv_label_set_text(s, "Slide to open the door and load the plate. "
                          "Please wear a mask.");
     lv_label_set_long_mode(s, LV_LABEL_LONG_MODE_WRAP);
     lv_obj_set_width(s, LV_PCT(100));
     lv_obj_set_style_text_color(s, user_color_text_dim, 0);
     lv_obj_set_style_text_font(s, user_font_caption(), 0);
 
-    make_mask_badge(col);
+    make_mask_badge(col, "Wear a mask before opening");
+
+    /* 滑块加长到贴合右侧文字列右边缘：
+     * 列宽 = 对话内宽 - 插图宽 - 卡内边距×4 - 图文间距（-2 防溢出）。 */
+    int32_t slide_w = plate_dialog_width()
+                      - USER_DLG_PAD * 4 - USER_HOME_DEVICE_W - USER_PAD - 2;
+    if(slide_w < USER_SLIDE_W) {
+        slide_w = USER_SLIDE_W;
+    }
 
     ui_slide_unlock_cfg_t slide_cfg = {};
     slide_cfg.hint_text     = "SWIPE TO OPEN";   /* 箭头由控件绘制 3 个 chevron */
     slide_cfg.on_unlocked   = on_plate_swipe_open;
     slide_cfg.user_data     = nullptr;
-    slide_cfg.track_w       = USER_SLIDE_W;
+    slide_cfg.track_w       = slide_w;                         /* 贴合容器右边缘 */
+    slide_cfg.track_h       = USER_BTN_DOOR_ICON_SZ * 4 / 3;   /* 加高，避免过扁（与首页开门滑块一致） */
     slide_cfg.custom_accent = true;
     slide_cfg.accent_color  = user_color_status_err;
     ui_slide_unlock_t *slide = ui_slide_unlock_create(col, &slide_cfg);
@@ -947,13 +999,19 @@ void plate_show_notinserted(void)
 /* 宽入口弹窗：backdrop + 宽卡片 + 常驻 header（返回/标题/副标题/关闭）+ content */
 ui_modal_dialog_t *show_plate_prompt(lv_obj_t *parent)
 {
-    const int32_t disp_w = lv_display_get_horizontal_resolution(nullptr);
-    const int32_t wide_w = disp_w > 0 ? disp_w * 70 / 100 : USER_DLG_W * 2;
+    const int32_t wide_w = plate_dialog_width();
 
     ui_modal_dialog_cfg_t cfg = ui_modal_dialog_cfg_user(nullptr, wide_w, false);
     ui_modal_dialog_t *dlg = ui_modal_dialog_open(parent, &cfg);
     if(!dlg) {
         return nullptr;
+    }
+    /* 收紧标题上下间距：缩小卡片顶内边距与 header↔content 间距 */
+    if(dlg->card) {
+        lv_obj_set_style_pad_top(dlg->card, USER_PAD_SM, 0);
+    }
+    if(dlg->body) {
+        lv_obj_set_style_pad_row(dlg->body, USER_PAD_SM, 0);
     }
 
     /* header 行：返回钮（choose 隐藏）+ 标题/副标题列（flex_grow）+ 关闭钮 */
@@ -981,14 +1039,9 @@ ui_modal_dialog_t *show_plate_prompt(lv_obj_t *parent)
     lv_obj_clear_flag(tcol, LV_OBJ_FLAG_SCROLLABLE);
 
     lv_obj_t *title = lv_label_create(tcol);
-    lv_label_set_text(title, "Is the build plate inserted?");
+    lv_label_set_text(title, "Is Print Plate Inserted?");
     lv_obj_set_style_text_color(title, user_color_text, 0);
     lv_obj_set_style_text_font(title, user_font_value(), 0);
-
-    lv_obj_t *sub = lv_label_create(tcol);
-    lv_label_set_text(sub, "Insert the build plate before printing, then close the door");
-    lv_obj_set_style_text_color(sub, user_color_text_dim, 0);
-    lv_obj_set_style_text_font(sub, user_font_caption(), 0);
 
     lv_obj_t *close = make_round_icon_btn(header, LV_SYMBOL_CLOSE, on_plate_close);
     (void)close;
@@ -1005,119 +1058,224 @@ ui_modal_dialog_t *show_plate_prompt(lv_obj_t *parent)
     return dlg;
 }
 
-/* -------------------------- 窄舱门弹窗 -------------------------- */
+/* -------------------------- 舱门弹窗（Figma 2566:5240/5306/5430） -------------------------- */
 
 enum class DoorVariant { Opening, DoorOpened, DoorClosed };
 
 void on_door_closed_confirm_btn(lv_event_t *e);
 void door_apply_variant(DoorVariant v);
 
-/* 舱门弹窗：backdrop + 卡片 + 插画 + Mask 徽标 + 标题 + 说明 + 操作区 */
+/* 满宽圆角矩形主按钮（门弹窗底部）。enabled=false → 透明度 30 且不可点。 */
+lv_obj_t *make_door_button(lv_obj_t *parent, const char *text, bool enabled,
+                           lv_event_cb_t cb)
+{
+    lv_obj_t *btn = lv_button_create(parent);
+    lv_obj_remove_style_all(btn);
+    lv_obj_set_width(btn, LV_PCT(100));
+    lv_obj_set_height(btn, USER_DLG_FOOTER_BTN_H);
+    lv_obj_set_style_radius(btn, USER_DLG_RADIUS, 0);
+    lv_obj_set_style_bg_color(btn, user_color_accent, 0);
+    lv_obj_set_style_bg_opa(btn, enabled ? LV_OPA_COVER : LV_OPA_30, 0);
+    lv_obj_set_style_bg_opa(btn, LV_OPA_80, LV_STATE_PRESSED);
+    lv_obj_clear_flag(btn, LV_OBJ_FLAG_SCROLLABLE);
+    if(enabled && cb) {
+        lv_obj_add_event_cb(btn, cb, LV_EVENT_CLICKED, nullptr);
+    } else {
+        lv_obj_add_state(btn, LV_STATE_DISABLED);
+        lv_obj_remove_flag(btn, LV_OBJ_FLAG_CLICKABLE);
+    }
+    lv_obj_t *bl = lv_label_create(btn);
+    lv_label_set_text(bl, text);
+    lv_obj_set_style_text_color(bl, user_color_text, 0);
+    lv_obj_set_style_text_font(bl, user_font_text(), 0);
+    lv_obj_center(bl);
+    return btn;
+}
+
+/* 顶图：把 496×321 源图等比铺满 g_door_img_box（宽 = 卡片宽）。 */
+void door_set_image(const lv_image_dsc_t *img)
+{
+    if(!g_door_img_box) {
+        return;
+    }
+    lv_obj_clean(g_door_img_box);
+    const int32_t bw = USER_DLG_W;
+    const int32_t nat_w = (int32_t)img->header.w;
+    const int32_t scale = nat_w > 0 ? 256 * bw / nat_w : 256;
+    lv_obj_t *im = lv_image_create(g_door_img_box);
+    lv_image_set_src(im, img);
+    lv_image_set_pivot(im, 0, 0);
+    lv_image_set_scale(im, scale);
+    lv_obj_set_pos(im, 0, 0);
+    lv_obj_remove_flag(im, LV_OBJ_FLAG_CLICKABLE);
+}
+
+/* 舱门弹窗：自建 backdrop + 卡片（顶部满宽大图 + 下方 padded 内容列）。
+ * 不用 ui_modal_dialog（其四周内边距做不出满宽顶图），仅复用 ui_modal_dialog_t
+ * 承载 root，以沿用现有关闭逻辑。 */
 ui_modal_dialog_t *show_door_dialog(lv_obj_t *parent, DoorVariant variant)
 {
-    ui_modal_dialog_cfg_t cfg = ui_modal_dialog_cfg_user(nullptr, USER_DLG_W, false);
-    ui_modal_dialog_t *dlg = ui_modal_dialog_open(parent, &cfg);
+    auto *dlg = static_cast<ui_modal_dialog_t *>(std::calloc(1, sizeof(ui_modal_dialog_t)));
     if(!dlg) {
         return nullptr;
     }
-
     g_door_img_box = nullptr;
+    g_door_content = nullptr;
+    g_door_title   = nullptr;
+    g_door_body    = nullptr;
     g_door_spinner = nullptr;
-    g_door_body_parent = dlg->body;
 
-    make_mask_badge(dlg->body);
+    /* 背景遮罩（吞点击，防穿透底层首页） */
+    lv_obj_t *backdrop = lv_obj_create(parent);
+    lv_obj_remove_style_all(backdrop);
+    lv_obj_set_size(backdrop, LV_PCT(100), LV_PCT(100));
+    lv_obj_set_style_bg_color(backdrop, lv_color_black(), 0);
+    lv_obj_set_style_bg_opa(backdrop, USER_DLG_BACKDROP_OPA, 0);
+    lv_obj_clear_flag(backdrop, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(backdrop, LV_OBJ_FLAG_CLICKABLE);
+    dlg->root = backdrop;
 
-    g_door_title = lv_label_create(dlg->body);
-    lv_obj_set_style_text_color(g_door_title, user_color_text, 0);
-    lv_obj_set_style_text_font(g_door_title, user_font_value(), 0);
-    lv_obj_set_style_text_align(g_door_title, LV_TEXT_ALIGN_CENTER, 0);
-
-    g_door_body = lv_label_create(dlg->body);
-    lv_label_set_long_mode(g_door_body, LV_LABEL_LONG_MODE_WRAP);
-    lv_obj_set_width(g_door_body, LV_PCT(100));
-    lv_obj_set_style_text_color(g_door_body, user_color_text_dim, 0);
-    lv_obj_set_style_text_font(g_door_body, user_font_caption(), 0);
-    lv_obj_set_style_text_align(g_door_body, LV_TEXT_ALIGN_CENTER, 0);
-
-    /* 操作区：spinner（Opening）/ 状态 label（DoorOpened）/ 确认按钮（DoorClosed） */
-    g_door_action = lv_obj_create(dlg->body);
-    lv_obj_remove_style_all(g_door_action);
-    lv_obj_set_width(g_door_action, LV_PCT(100));
-    lv_obj_set_height(g_door_action, LV_SIZE_CONTENT);
-    lv_obj_set_flex_flow(g_door_action, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_flex_align(g_door_action, LV_FLEX_ALIGN_CENTER,
+    /* 卡片：无内边距（顶图满宽），overflow 裁剪保证上圆角 */
+    const int32_t card_w = USER_DLG_W;
+    lv_obj_t *card = lv_obj_create(backdrop);
+    lv_obj_remove_style_all(card);
+    lv_obj_set_width(card, card_w);
+    lv_obj_set_height(card, LV_SIZE_CONTENT);
+    lv_obj_set_style_bg_color(card, user_color_panel, 0);
+    lv_obj_set_style_bg_opa(card, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(card, USER_DLG_RADIUS, 0);
+    lv_obj_set_style_border_width(card, 1, 0);
+    lv_obj_set_style_border_color(card, user_color_divider, 0);
+    lv_obj_set_style_clip_corner(card, true, 0);
+    lv_obj_set_style_shadow_width(card, 60, 0);
+    lv_obj_set_style_shadow_color(card, lv_color_black(), 0);
+    lv_obj_set_style_shadow_opa(card, LV_OPA_60, 0);
+    lv_obj_set_style_pad_all(card, 0, 0);
+    lv_obj_set_style_pad_row(card, 0, 0);
+    lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(card, LV_FLEX_ALIGN_START,
                           LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_bg_opa(g_door_action, LV_OPA_TRANSP, 0);
-    lv_obj_clear_flag(g_door_action, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_center(card);
+    dlg->card = card;
+
+    /* 顶部满宽图容器（高 = 宽 × 321/496，齐卡片左右上边缘，圆角随卡片裁剪） */
+    g_door_img_box = lv_obj_create(card);
+    lv_obj_remove_style_all(g_door_img_box);
+    lv_obj_set_size(g_door_img_box, card_w, card_w * 321 / 496);
+    lv_obj_set_style_bg_color(g_door_img_box, lv_color_black(), 0);
+    lv_obj_set_style_bg_opa(g_door_img_box, LV_OPA_20, 0);
+    lv_obj_clear_flag(g_door_img_box, LV_OBJ_FLAG_SCROLLABLE);
+
+    /* 下方 padded 内容列（标题/徽标/副标题/按钮由 variant 重建） */
+    g_door_content = lv_obj_create(card);
+    lv_obj_remove_style_all(g_door_content);
+    lv_obj_set_width(g_door_content, LV_PCT(100));
+    lv_obj_set_height(g_door_content, LV_SIZE_CONTENT);
+    lv_obj_set_style_pad_all(g_door_content, USER_DLG_PAD, 0);
+    lv_obj_set_style_pad_row(g_door_content, USER_DLG_PAD, 0);
+    lv_obj_set_style_bg_opa(g_door_content, LV_OPA_TRANSP, 0);
+    lv_obj_set_flex_flow(g_door_content, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(g_door_content, LV_FLEX_ALIGN_START,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_clear_flag(g_door_content, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_set_style_opa(backdrop, LV_OPA_TRANSP, 0);
+    lv_obj_fade_in(backdrop, 180, 0);
+    lv_obj_move_foreground(backdrop);
 
     door_apply_variant(variant);
     return dlg;
 }
 
-/* 切换舱门弹窗形态：更新插画 / 文案 / 操作区 */
+/* 标题 + 徽标同组（gap SM），用于 DoorOpened / DoorClosed。返回 title 句柄。 */
+lv_obj_t *door_make_title_group(lv_obj_t *parent)
+{
+    lv_obj_t *grp = lv_obj_create(parent);
+    lv_obj_remove_style_all(grp);
+    lv_obj_set_width(grp, LV_PCT(100));
+    lv_obj_set_height(grp, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(grp, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(grp, LV_FLEX_ALIGN_START,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_row(grp, USER_PAD_SM, 0);
+    lv_obj_set_style_bg_opa(grp, LV_OPA_TRANSP, 0);
+    lv_obj_clear_flag(grp, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *title = lv_label_create(grp);
+    lv_obj_set_style_text_color(title, user_color_text, 0);
+    lv_obj_set_style_text_font(title, user_font_value(), 0);
+    lv_obj_set_style_text_align(title, LV_TEXT_ALIGN_CENTER, 0);
+
+    make_mask_badge(grp, "Please wear a mask");
+    return title;
+}
+
+/* 切换舱门弹窗形态（Figma 三态）：换顶图 + 重建内容列（标题/徽标/副标题/操作）。 */
 void door_apply_variant(DoorVariant v)
 {
-    if(!g_door_title || !g_door_body || !g_door_action || !g_door_body_parent) {
+    if(!g_door_img_box || !g_door_content) {
         return;
     }
-
-    /* 插画：置于 body 顶部（Mask 徽标之前）。先删旧再建新。 */
-    if(g_door_img_box) {
-        lv_obj_delete(g_door_img_box);
-        g_door_img_box = nullptr;
-    }
-    const lv_image_dsc_t *img = &img_device_unlock;
-    if(v == DoorVariant::DoorOpened) {
-        img = &img_plate_double;
-    } else if(v == DoorVariant::DoorClosed) {
-        img = &img_device_lock;
-    }
-    g_door_img_box = make_illustration(g_door_body_parent, img, USER_DLG_W * 82 / 100);
-    lv_obj_move_to_index(g_door_img_box, 0);   /* 插画在最上方 */
-
-    /* 操作区重建 */
     if(g_door_spinner) {
         ui_arc_spinner_destroy(g_door_spinner);
         g_door_spinner = nullptr;
     }
-    lv_obj_clean(g_door_action);
+    lv_obj_clean(g_door_content);
+    g_door_title = nullptr;
+    g_door_body  = nullptr;
 
     if(v == DoorVariant::Opening) {
-        lv_label_set_text(g_door_title, "Opening the Door");
-        lv_label_set_text(g_door_body, "Please wear a mask");
-        g_door_spinner = ui_arc_spinner_create(g_door_action, USER_SPINNER_SZ);
+        door_set_image(&img_device_unlock);
+
+        g_door_title = lv_label_create(g_door_content);
+        lv_label_set_text(g_door_title, "Opening the door...");
+        lv_obj_set_style_text_color(g_door_title, user_color_text, 0);
+        lv_obj_set_style_text_font(g_door_title, user_font_value(), 0);
+        lv_obj_set_style_text_align(g_door_title, LV_TEXT_ALIGN_CENTER, 0);
+
+        make_mask_badge(g_door_content, "Please wear a mask");
+
+        lv_obj_t *sp_box = lv_obj_create(g_door_content);
+        lv_obj_remove_style_all(sp_box);
+        lv_obj_set_size(sp_box, USER_SPINNER_SZ, USER_SPINNER_SZ);
+        lv_obj_set_style_bg_opa(sp_box, LV_OPA_TRANSP, 0);
+        lv_obj_clear_flag(sp_box, LV_OBJ_FLAG_SCROLLABLE);
+        g_door_spinner = ui_arc_spinner_create(sp_box, USER_SPINNER_SZ);
         if(g_door_spinner && g_door_spinner->root) {
             lv_obj_center(g_door_spinner->root);
         }
+
+        /* 状态副行（PM2.5 净化提示；默认空） */
+        g_door_body = lv_label_create(g_door_content);
+        lv_label_set_text(g_door_body, "");
+        lv_obj_set_style_text_color(g_door_body, user_color_text_dim, 0);
+        lv_obj_set_style_text_font(g_door_body, user_font_caption(), 0);
+        lv_obj_set_style_text_align(g_door_body, LV_TEXT_ALIGN_CENTER, 0);
         return;
     }
+
+    /* DoorOpened / DoorClosed：标题+徽标成组 + 灰字副标题 + 满宽按钮 */
+    door_set_image(v == DoorVariant::DoorOpened ? &img_door_opened : &img_device_lock);
+
+    g_door_title = door_make_title_group(g_door_content);
+
+    lv_obj_t *sub = lv_label_create(g_door_content);
+    lv_label_set_long_mode(sub, LV_LABEL_LONG_MODE_WRAP);
+    lv_obj_set_width(sub, LV_PCT(100));
+    lv_obj_set_style_text_color(sub, user_color_text_dim, 0);
+    lv_obj_set_style_text_font(sub, user_font_caption(), 0);
+    lv_obj_set_style_text_align(sub, LV_TEXT_ALIGN_CENTER, 0);
 
     if(v == DoorVariant::DoorOpened) {
         lv_label_set_text(g_door_title, "Door Opened");
-        lv_label_set_text(g_door_body, "Please wear a mask and insert the plate");
-
-        lv_obj_t *hint = lv_label_create(g_door_action);
-        lv_label_set_text(hint, "Door Not Closed");
-        lv_obj_set_style_text_color(hint, user_color_text_dim, 0);
-        lv_obj_set_style_text_font(hint, user_font_caption(), 0);
-        lv_obj_set_style_text_align(hint, LV_TEXT_ALIGN_CENTER, 0);
-        lv_obj_set_width(hint, LV_PCT(100));
-        return;
+        lv_label_set_text(sub, "Wear a mask and load the print plate");
+        make_door_button(g_door_content, "Door Not Closed", false, nullptr);
+    } else {
+        lv_label_set_text(g_door_title, "Confirm the door is closed");
+        lv_label_set_text(sub, "Confirm to start selecting a job");
+        make_door_button(g_door_content, "Door Closed", true, on_door_closed_confirm_btn);
     }
-
-    lv_label_set_text(g_door_title, "Confirm Door Closed");
-    lv_label_set_text(g_door_body, "Confirm to start selecting a print task");
-
-    lv_obj_t *btn = lv_button_create(g_door_action);
-    lv_obj_add_style(btn, user_style_btn_primary(), 0);
-    lv_obj_set_height(btn, USER_DLG_FOOTER_BTN_H);
-    lv_obj_set_width(btn, USER_DLG_FOOTER_BTN_W + USER_PAD_LG);
-    lv_obj_add_event_cb(btn, on_door_closed_confirm_btn, LV_EVENT_CLICKED, nullptr);
-    lv_obj_t *bl = lv_label_create(btn);
-    lv_label_set_text(bl, "Door Closed");
-    lv_obj_set_style_text_color(bl, user_color_text, 0);
-    lv_obj_set_style_text_font(bl, user_font_text(), 0);
-    lv_obj_center(bl);
 }
 
 /* 文件大小（字节）→ 人类可读字符串 */
@@ -1904,13 +2062,42 @@ lv_obj_t *show_file_select(lv_obj_t *parent)
  *  后端回调 → 状态推进
  * ============================================================================ */
 
+/* 清理门流程节奏计时器（跨态时统一调用，防止回调在错误状态触发） */
+void stop_door_timers(void)
+{
+    if(g_door_advance_timer) {
+        lv_timer_delete(g_door_advance_timer);
+        g_door_advance_timer = nullptr;
+    }
+    if(g_door_close_poll_timer) {
+        lv_timer_delete(g_door_close_poll_timer);
+        g_door_close_poll_timer = nullptr;
+    }
+}
+
 /* 未放入分支：开门 → 门已开启等待页 → 关门监测 Rsp → 关门确认页 */
 void pf_on_close_door_done(void * /*u*/)
 {
     if(g_state != CONTROL_STATE_DOOR_CONFIRM) {
         return;
     }
+    /* 门已关：停轮询，切到"门已关好"可点确认态 */
+    if(g_door_close_poll_timer) {
+        lv_timer_delete(g_door_close_poll_timer);
+        g_door_close_poll_timer = nullptr;
+    }
     door_apply_variant(DoorVariant::DoorClosed);
+}
+
+/* DoorOpened 轮询：首次在最短停留后触发，之后每 DOOR_CLOSE_POLL_MS 发一次关门检测，
+ * 直到后端回"门已关"（pf_on_close_door_done 停轮询并前进）。 */
+void door_close_poll_cb(lv_timer_t *t)
+{
+    if(g_state != CONTROL_STATE_DOOR_CONFIRM) {
+        return;   /* 状态已变，计时器由 stop_door_timers 清理 */
+    }
+    lv_timer_set_period(t, DOOR_CLOSE_POLL_MS);   /* 首次后转为轮询节奏 */
+    backend_start_close_door(pf_on_close_door_done, nullptr);
 }
 
 void on_door_closed_confirm_btn(lv_event_t * /*e*/)
@@ -1921,15 +2108,37 @@ void on_door_closed_confirm_btn(lv_event_t * /*e*/)
     goto_file_selection();
 }
 
+/* Opening 最短停留到时 → 进入 DoorOpened 确认态 */
+void door_advance_to_confirm_cb(lv_timer_t * /*t*/)
+{
+    g_door_advance_timer = nullptr;   /* one-shot：LVGL 回调后自删，仅清空句柄 */
+    if(g_state == CONTROL_STATE_DOOR_OPENING) {
+        enter_state(CONTROL_STATE_DOOR_CONFIRM);
+    }
+}
+
+/* 开门应答：满足最短停留才前进（不足则延时补足），保证"正在准备开门"可见 */
+void pf_on_open_door_done(void * /*u*/)
+{
+    if(g_state != CONTROL_STATE_DOOR_OPENING) {
+        return;
+    }
+    const uint32_t elapsed = lv_tick_elaps(g_door_opening_since);
+    if(elapsed >= DOOR_OPENING_MIN_MS) {
+        enter_state(CONTROL_STATE_DOOR_CONFIRM);
+        return;
+    }
+    if(g_door_advance_timer) {
+        lv_timer_delete(g_door_advance_timer);
+    }
+    g_door_advance_timer = lv_timer_create(door_advance_to_confirm_cb,
+                                           DOOR_OPENING_MIN_MS - elapsed, nullptr);
+    lv_timer_set_repeat_count(g_door_advance_timer, 1);
+}
+
 void pf_start_open_door(void)
 {
-    backend_start_open_door([](void * /*u*/) {
-        if(g_state != CONTROL_STATE_DOOR_OPENING) {
-            return;
-        }
-        enter_state(CONTROL_STATE_DOOR_CONFIRM);
-        backend_start_close_door(pf_on_close_door_done, nullptr);
-    }, nullptr);
+    backend_start_open_door(pf_on_open_door_done, nullptr);
 }
 
 void pf_on_pm25_check_done(void * /*u*/)
@@ -1999,13 +2208,13 @@ void on_backend_action_fail(const char *message)
 void enter_state(control_state_t s)
 {
     close_current_dialog();
+    stop_door_timers();
     g_plate_content    = nullptr;
     g_plate_back_btn   = nullptr;
-    g_door_body_parent = nullptr;
     g_door_img_box     = nullptr;
+    g_door_content     = nullptr;
     g_door_title       = nullptr;
     g_door_body        = nullptr;
-    g_door_action      = nullptr;
     g_door_spinner     = nullptr;
 
     g_state = s;
@@ -2026,12 +2235,16 @@ void enter_state(control_state_t s)
     case CONTROL_STATE_DOOR_OPENING:
         overlay_show();
         g_current_dlg = show_door_dialog(g_overlay, DoorVariant::Opening);
+        g_door_opening_since = lv_tick_get();   /* 计"正在准备开门"最短停留 */
         backend_start_pm25(pf_on_pm25_check_done, nullptr);
         break;
 
     case CONTROL_STATE_DOOR_CONFIRM:
         overlay_show();
         g_current_dlg = show_door_dialog(g_overlay, DoorVariant::DoorOpened);
+        /* 最短停留后开始轮询关门检测（门真正关上才前进到"门已关好"） */
+        g_door_close_poll_timer = lv_timer_create(door_close_poll_cb,
+                                                  DOOR_OPENED_MIN_MS, nullptr);
         break;
 
     case CONTROL_STATE_PREPARE_WAIT:

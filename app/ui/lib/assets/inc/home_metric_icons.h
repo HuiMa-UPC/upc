@@ -14,6 +14,7 @@ extern const lv_image_dsc_t ic_cabin;
 extern const lv_image_dsc_t ic_aqi;
 extern const lv_image_dsc_t ic_humidity;
 extern const lv_image_dsc_t ic_pressure;
+extern const lv_image_dsc_t ic_info;
 
 #ifdef __cplusplus
 }
