@@ -33,6 +33,7 @@ using WifiListCb       = std::function<void(const middleware::WifiEntryPayload* 
 using WifiConnectResultCb = std::function<void(bool ok, const char* ssid)>;
 using XfrPairPinCb     = std::function<void(const middleware::XfrPairPinPayload&)>;
 using XfrFileReceivedCb = std::function<void(const middleware::XfrFileReceivedPayload&)>;
+using UsbHotplugCb     = std::function<void(const middleware::UsbHotplugPayload&)>;
 
                                             
 
@@ -104,6 +105,7 @@ public:
     void register_wifi_connect_result(WifiConnectResultCb cb); /**< GLAVO_Wifi_Connect_Rsp */
     void register_xfr_pair_pin(XfrPairPinCb cb);
     void register_xfr_file_received(XfrFileReceivedCb cb);
+    void register_usb_hotplug(UsbHotplugCb cb);
 
 private:
     UiMsgProxy() = default;
@@ -150,6 +152,7 @@ private:
     WifiConnectResultCb wifi_connect_result_cb_;
     XfrPairPinCb xfr_pair_pin_cb_;
     XfrFileReceivedCb xfr_file_received_cb_;
+    UsbHotplugCb usb_hotplug_cb_;
 };
 
 } // namespace ui

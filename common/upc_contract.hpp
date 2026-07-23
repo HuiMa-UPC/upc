@@ -344,6 +344,7 @@ enum class MsgType : uint32_t {
     // ---- XFR → UI：WiFi 传输通知 ----
     XFR_Pair_Pin_Ntf = 0x1400,   /**< XfrPairPinPayload：屏幕显示 PIN 配对码 */
     XFR_File_Received_Ntf,       /**< XfrFileReceivedPayload：接收文件完成通知 */
+    GLAVO_USB_Hotplug_Ntf,       /**< UsbHotplugPayload：USB 挂载状态变化通知 */
 };
 
 enum class MsgPriority : uint8_t {
@@ -444,6 +445,14 @@ struct XfrPairPinPayload {
 struct XfrFileReceivedPayload {
     char     file_name[128];
     uint64_t file_size;
+};
+
+/** GLAVO_USB_Hotplug_Ntf：USB 存储挂载状态变化（Inline） */
+struct UsbHotplugPayload {
+    uint8_t present;         /**< 1=检测到可用 USB 存储；0=未检测到 */
+    uint8_t mounted;         /**< 1=挂载可读；0=未挂载 */
+    uint8_t reserved[2];
+    char    mount_path[64];  /**< 约定挂载路径（如 /media/udisk0） */
 };
 
 /** APP_CLOSE_DOOR_Rsp / APP_OpenDoor_Rsp 载荷：动作结果（Inline） */

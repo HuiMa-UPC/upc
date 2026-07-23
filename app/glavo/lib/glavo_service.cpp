@@ -28,7 +28,9 @@
 #include <cstdio>
 #include <cstring>
 #include <cstdint>
+#include <filesystem>
 #include <fstream>
+#include <sstream>
 #include <string>
 
 namespace upc::glavo {
@@ -52,6 +54,7 @@ constexpr int kDrainProgressMinMs = 200;
 
 constexpr size_t kFsDirMaxEntries =
     (16384u - sizeof(middleware::FsDirHeader)) / sizeof(middleware::FileEntryPayload);
+constexpr auto kUsbHotplugPollInterval = std::chrono::milliseconds(300);
 
 /** @brief 本地 G-code 清单配置文件路径 */
 std::string local_config_path()
@@ -154,6 +157,43 @@ int16_t debug_round_i16(float f)
     return static_cast<int16_t>(f >= 0.0f ? f + 0.5f : f - 0.5f);
 }
 
+/** @brief 读取挂载点是否已挂载（按 /proc/mounts 的第二列严格匹配） */
+bool is_mountpoint_mounted(const std::string& mount_point)
+{
+    if(mount_point.empty()) {
+        return false;
+    }
+    std::ifstream mounts("/proc/mounts");
+    if(!mounts) {
+        return false;
+    }
+    std::string line;
+    while(std::getline(mounts, line)) {
+        std::istringstream iss(line);
+        std::string dev;
+        std::string mnt;
+        if(!(iss >> dev >> mnt)) {
+            continue;
+        }
+        if(mnt == mount_point) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/** @brief 解析 USB 入口路径真实挂载点（支持 /media/udisk0 -> /mnt/udisk 软链） */
+std::string usb_mount_point()
+{
+    std::error_code ec;
+    const std::filesystem::path resolved = std::filesystem::weakly_canonical(
+        std::filesystem::path(GLAVO_USB_MOUNT_DIR), ec);
+    if(!ec && !resolved.empty()) {
+        return resolved.string();
+    }
+    return GLAVO_USB_MOUNT_DIR;
+}
+
 } // namespace
 
 /* ============================================================================
@@ -190,6 +230,7 @@ GlavoService::GlavoService() = default;
 /** @brief 析构时停止打印、清空会话并 join worker 线程 */
 GlavoService::~GlavoService()
 {
+    stop_usb_hotplug_monitor();
     stop_print_job();
     clear_prepare_session();
     if (state() == ServiceState::Running) {
@@ -250,6 +291,8 @@ bool GlavoService::init()
         [this](bool ok, const std::string& ssid) {
             publish_wifi_connect_result(ok, ssid);
         });
+
+    last_usb_mounted_ = is_mountpoint_mounted(usb_mount_point());
 
     state_ = ServiceState::Idle;
     return true;
@@ -316,6 +359,7 @@ bool GlavoService::start()
 
     worker_running_.store(true);
     worker_thread_ = std::thread(&GlavoService::worker_loop, this);
+    start_usb_hotplug_monitor();
     return true;
 }
 
@@ -328,6 +372,7 @@ bool GlavoService::stop()
     if (state() != ServiceState::Running) return false;
 
     state_ = ServiceState::Stopping;
+    stop_usb_hotplug_monitor();
 
     if (worker_thread_.joinable()) {
         {
@@ -1504,6 +1549,52 @@ void GlavoService::publish_mcu_ota_status(
          reinterpret_cast<const uint8_t*>(&p), sizeof(p));
      (void)publish_async(out);
  }
+
+void GlavoService::publish_usb_hotplug(bool mounted)
+{
+    middleware::UsbHotplugPayload p{};
+    p.present = mounted ? 1 : 0;
+    p.mounted = mounted ? 1 : 0;
+    std::snprintf(p.mount_path, sizeof(p.mount_path), "%s", GLAVO_USB_MOUNT_DIR);
+
+    middleware::Message out(middleware::MsgType::GLAVO_USB_Hotplug_Ntf,
+        middleware::ModuleId::APP_GLAVO, middleware::ModuleId::UI);
+    out.payload = middleware::MsgPayload::from_bytes(
+        reinterpret_cast<const uint8_t*>(&p), sizeof(p));
+    (void)publish_async(out);
+}
+
+void GlavoService::start_usb_hotplug_monitor()
+{
+    if(usb_hotplug_running_.exchange(true)) {
+        return;
+    }
+    usb_hotplug_thread_ = std::thread(&GlavoService::usb_hotplug_loop, this);
+}
+
+void GlavoService::stop_usb_hotplug_monitor()
+{
+    if(!usb_hotplug_running_.exchange(false)) {
+        return;
+    }
+    if(usb_hotplug_thread_.joinable()) {
+        usb_hotplug_thread_.join();
+    }
+}
+
+void GlavoService::usb_hotplug_loop()
+{
+    publish_usb_hotplug(last_usb_mounted_);
+    while(usb_hotplug_running_.load()) {
+        std::this_thread::sleep_for(kUsbHotplugPollInterval);
+        const bool mounted = is_mountpoint_mounted(usb_mount_point());
+        if(mounted == last_usb_mounted_) {
+            continue;
+        }
+        last_usb_mounted_ = mounted;
+        publish_usb_hotplug(mounted);
+    }
+}
 
 /* ============================================================================
  * 调试页手动控制：UI_Debug_* → serial_debug 组帧 → McuLink 串口下发

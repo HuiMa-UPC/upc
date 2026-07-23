@@ -529,6 +529,19 @@ void wire_msg_proxy()
         std::snprintf(msg, sizeof(msg), "File received: %s", p.file_name);
         ui_toast_show(msg, user_color_status_ok, 2200);
     });
+
+    proxy.register_usb_hotplug([](const middleware::UsbHotplugPayload& p) {
+        if(!g_files_page_active || g_file_tab != FileTab::Usb) {
+            return;
+        }
+        g_dir_open_pending.clear();
+        if(p.mounted != 0) {
+            request_fs_dir_open(FileTab::Usb);
+            return;
+        }
+        apply_files_list({});
+        ui_toast_show("USB removed", user_color_status_err, 1800);
+    });
 }
 
 void backend_reset_session()

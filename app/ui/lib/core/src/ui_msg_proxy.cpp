@@ -204,6 +204,16 @@ void UiMsgProxy::init()
             }
         }));
 
+    subs_.push_back(bus.subscribe(
+        middleware::MsgType::GLAVO_USB_Hotplug_Ntf, middleware::ModuleId::UI,
+        [this](const middleware::Message& msg) {
+            middleware::UsbHotplugPayload p{};
+            if (usb_hotplug_cb_ && read_inline_pod(msg, p)) {
+                p.mount_path[sizeof(p.mount_path) - 1] = '\0';
+                usb_hotplug_cb_(p);
+            }
+        }));
+
 }
 
 /* 解析 [WifiListHeader][WifiEntryPayload × count]（BufferRef/Inline 皆可），仿 Fs_DirOpen_Rsp。 */
@@ -338,6 +348,11 @@ void UiMsgProxy::register_xfr_pair_pin(XfrPairPinCb cb)
 void UiMsgProxy::register_xfr_file_received(XfrFileReceivedCb cb)
 {
     xfr_file_received_cb_ = std::move(cb);
+}
+
+void UiMsgProxy::register_usb_hotplug(UsbHotplugCb cb)
+{
+    usb_hotplug_cb_ = std::move(cb);
 }
 
 

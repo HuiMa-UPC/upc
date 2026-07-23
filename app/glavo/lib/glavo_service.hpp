@@ -73,6 +73,10 @@ private:
     void publish_wifi_state(const WifiSnapshot& snap);
     void publish_wifi_list(WifiListKind kind, const std::vector<WifiEntry>& entries);
     void publish_wifi_connect_result(bool ok, const std::string& ssid);
+    void publish_usb_hotplug(bool mounted);
+    void start_usb_hotplug_monitor();
+    void stop_usb_hotplug_monitor();
+    void usb_hotplug_loop();
 
     /* ---- 调试页手动控制：UI_Debug_* → serial_debug 组帧 → McuLink 串口下发 ----
      * 振镜（以太网 TCP）、回粉电机 后端逻辑预留，故不订阅、不下发。 */
@@ -135,11 +139,13 @@ private:
     std::vector<middleware::Subscription> subscriptions_;
 
     std::thread worker_thread_;
+    std::thread usb_hotplug_thread_;
     std::queue<middleware::Message> worker_queue_;
     std::deque<McuLinkEvent> link_event_queue_;
     std::mutex worker_mutex_;
     std::condition_variable worker_cv_;
     std::atomic<bool> worker_running_{false};
+    std::atomic<bool> usb_hotplug_running_{false};
 
     std::vector<upc::GcodeManifestEntry> local_manifest_;
     std::vector<std::string>             usb_entries_;
@@ -162,6 +168,7 @@ private:
     uint16_t last_sent_cmd_rate_  = 0xffff;
     uint16_t last_sent_data_rate_ = 0xffff;
     std::chrono::steady_clock::time_point last_drain_progress_at_{};
+    bool last_usb_mounted_ = false;
 };
 
 } // namespace upc::glavo
