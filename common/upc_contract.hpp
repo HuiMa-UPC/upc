@@ -288,7 +288,7 @@ enum class MsgType : uint32_t {
     APP_Print_Video_Session_Abort_Ntf,          /**< PrintVideoSessionPayload */
 
     // ---- UI ↔ GLAVO：MCU OTA（测试） ----
-    UI_Mcu_Ota_Start_Req = 0x1090, /**< Empty：扫描 /home/image 最新 .bin 并下发 */
+    UI_Mcu_Ota_Start_Req = 0x1090, /**< Empty：扫描 /home/image/glavo 最新 .bin 并下发 */
     UI_Mcu_Ota_Cancel_Ntf,      /**< Empty：测试用，SOC 侧中止 OTA 会话 */
     APP_Mcu_Ota_Status_Ntf,     /**< McuOtaStatusPayload */
 
@@ -363,7 +363,9 @@ enum class UserHomeStatus : uint32_t {
     Error    = 3,
 };
 
-/** APP_Update_Ntf 载荷：首页环境/状态快照（Inline） */
+/** APP_Update_Ntf 载荷：首页环境/状态快照（Inline）
+ *  尾部三字段为待机首页新增指标；后端未采集到时填 <0（或 NaN）表示无效，
+ *  UI 首页据此显示 "--"（见 page_user_home 哨兵判空）。 */
 struct EnvSnapshotPayload {
     char     device_name[32];
     uint32_t status;            /**< UserHomeStatus */
@@ -373,6 +375,9 @@ struct EnvSnapshotPayload {
     float    pm25_cabin;
     float    temperature_c;
     float    oxygen_percent;
+    float    pm10_indoor;       /**< 室内 PM10 (μg/m³)；无效填 <0（HOME 卡切换指标用） */
+    float    humidity_percent;  /**< 舱内湿度 %；无效填 <0 */
+    float    pressure_kpa;      /**< 舱内气压 kPa；无效填 <0 */
 };
 
 /** APP_PM25_Rsp 载荷：PM2.5 检测结果（Inline） */

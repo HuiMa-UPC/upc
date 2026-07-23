@@ -539,6 +539,7 @@ void McuLink::on_sensor_report(const serial_sensor_report_t& report)
         env_cache_.temperature_c   = report.temperature_c;
         env_cache_.oxygen_percent  = report.oxygen_percent;
         env_cache_.humidity_percent = report.humidity_percent;
+        env_cache_.pressure_kpa    = static_cast<float>(report.pressure_mbar) / 10.0f; /* mbar→kPa */
         env_cache_.valid           = true;
     }
     publish_env_update_ntf();
@@ -688,6 +689,10 @@ void McuLink::publish_env_update_ntf()
     p.pm25_cabin     = snap.pm25_cabin;
     p.temperature_c  = snap.temperature_c;
     p.oxygen_percent = snap.oxygen_percent;
+    p.humidity_percent = snap.humidity_percent;
+    p.pressure_kpa   = snap.pressure_kpa;
+    /* PM10 目前 0x9B 无上报，置哨兵 <0 → UI 显示 "--"；后端接入 PM10 后填真实值。 */
+    p.pm10_indoor    = -1.0f;
 
     middleware::Message ntf(middleware::MsgType::APP_Update_Ntf,
         middleware::ModuleId::APP_GLAVO,

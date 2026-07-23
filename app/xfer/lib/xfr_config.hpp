@@ -13,7 +13,8 @@ struct XfrConfig {
     std::string token_file = "/home/transport/.xfr_tokens";
     std::string mdns_service_file = "/etc/avahi/services/snowpod.service";
     std::string snowslice_bin = "/home/snowslice_demo";
-    std::string device_sn = "SN-06";
+    std::string progress_file = "/home/progress.txt";
+    std::string device_sn = "SN-lalin";
     std::string device_model = "Snowpod";
     bool require_auth = true;
     uint32_t chunk_max_bytes = 4U * 1024U * 1024U;

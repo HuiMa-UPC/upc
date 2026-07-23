@@ -32,6 +32,8 @@ private:
     HttpResponse handle_upload_status(const HttpRequest& req, const std::string& upload_id);
     HttpResponse handle_build_start(const HttpRequest& req);
     HttpResponse handle_build_status(const HttpRequest& req);
+    HttpResponse handle_print_start(const HttpRequest& req);
+    HttpResponse handle_print_status(const HttpRequest& req);
 
     bool need_auth(const HttpRequest& req, std::string* token_out) const;
     static bool json_get_string(const std::string& body, const std::string& key, std::string* out);
@@ -73,11 +75,19 @@ private:
     HttpServer http_;
     mutable std::mutex build_mu_;
     mutable std::mutex build_state_mu_;
+    mutable std::mutex print_state_mu_;
     bool build_running_ = false;
     std::string build_state_ = "idle";
     std::string build_message_;
     std::string build_gcode_name_;
     int build_exit_code_ = 0;
+    std::string print_job_id_;
+    std::string print_state_ = "idle";
+    uint32_t print_layer_ = 0;
+    uint32_t print_layer_total_ = 200;
+    uint64_t upload_size_ = 0;
+    uint64_t upload_offset_ = 0;
+    uint32_t slice_progress_pct_ = 0;
 };
 
 } // namespace upc::xfr

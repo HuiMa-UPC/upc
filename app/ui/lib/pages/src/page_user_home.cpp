@@ -8,8 +8,10 @@
 #include "control.hpp"
 #include "home_assets.h"
 #include "home_btn_icons.h"
+#include "home_metric_icons.h"
 #include "ui_slide_unlock.hpp"
 
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 
@@ -49,7 +51,13 @@ typedef struct {
     float              pm25_cabin;
     float              temperature_c;
     float              oxygen_percent;
+    float              pm10_indoor;      /**< 室内 PM10（<0/NaN=无数据） */
+    float              humidity_percent; /**< 舱内湿度（<0/NaN=无数据） */
+    float              pressure_kpa;     /**< 舱内气压（<0/NaN=无数据） */
 } user_home_snapshot_t;
+
+/** 数值无效（后端未采集）：负值或 NaN → UI 显示 "--"。 */
+static inline bool metric_invalid(float v) { return std::isnan(v) || v < 0.0f; }
 
 user_home_snapshot_t g_snap;
 bool g_env_defaults_loaded = false;
@@ -68,6 +76,9 @@ void apply_env(const middleware::EnvSnapshotPayload &p)
     g_snap.pm25_cabin     = p.pm25_cabin;
     g_snap.temperature_c  = p.temperature_c;
     g_snap.oxygen_percent = p.oxygen_percent;
+    g_snap.pm10_indoor    = p.pm10_indoor;
+    g_snap.humidity_percent = p.humidity_percent;
+    g_snap.pressure_kpa   = p.pressure_kpa;
     page_user_home_refresh(false);
 }
 
@@ -87,6 +98,10 @@ void home_env_init(void)
         g_snap.pm25_cabin     = 25.0f;
         g_snap.temperature_c  = 23.6f;
         g_snap.oxygen_percent = 84.9f;
+        /* 新增指标默认无数据（<0）→ 首帧环境到达前显示 "--" */
+        g_snap.pm10_indoor    = -1.0f;
+        g_snap.humidity_percent = -1.0f;
+        g_snap.pressure_kpa   = -1.0f;
         g_env_defaults_loaded = true;
     }
     ui::UiMsgProxy::instance().register_env_update(
@@ -129,11 +144,24 @@ lv_obj_t *g_dot_status   = nullptr;
 lv_obj_t *g_lbl_status   = nullptr;
 lv_obj_t *g_btn_files    = nullptr;   /**< 右上角 "My Files" 磨砂按钮 */
 
-/* ---------- 数值（左/右 各 2 块） ---------- */
-lv_obj_t *g_lbl_pm_indoor = nullptr;
-lv_obj_t *g_lbl_pm_cabin  = nullptr;
-lv_obj_t *g_lbl_temp      = nullptr;
-lv_obj_t *g_lbl_oxygen    = nullptr;
+/* ---------- 首页左卡（HOME 空气质量·可切换 PM2.5/PM10） ---------- */
+lv_obj_t *g_home_card_title = nullptr;  /**< "HOME PM2.5" / "HOME PM10" */
+lv_obj_t *g_home_card_level = nullptr;  /**< 分级大字 Good/Fair/Poor/Very Poor */
+lv_obj_t *g_home_card_value = nullptr;  /**< 灰色小字 "(36.5 ug/m3)" */
+lv_obj_t *g_home_seg_track  = nullptr;  /**< 4 段色条容器（用于计算游标 x） */
+lv_obj_t *g_home_seg_dot    = nullptr;  /**< 分级游标圆点 */
+int       g_home_metric_idx = 0;        /**< 0=PM2.5 1=PM10（切换按钮，重启复位） */
+
+/* ---------- 首页右侧 CABIN CONDITION（5 行数值） ---------- */
+lv_obj_t *g_cab_aqi_val   = nullptr;    /**< AQI（占位 --） */
+lv_obj_t *g_cab_temp_val  = nullptr;
+lv_obj_t *g_cab_temp_unit = nullptr;
+lv_obj_t *g_cab_o2_val    = nullptr;
+lv_obj_t *g_cab_o2_unit   = nullptr;
+lv_obj_t *g_cab_hum_val   = nullptr;
+lv_obj_t *g_cab_hum_unit  = nullptr;
+lv_obj_t *g_cab_prs_val   = nullptr;
+lv_obj_t *g_cab_prs_unit  = nullptr;
 
 /* ---------- 页面容器：用于打印中模式切换 ---------- */
 lv_obj_t *g_page_root    = nullptr;
@@ -154,8 +182,6 @@ lv_obj_t *g_env_bar_indoor    = nullptr;   /**< EXTERIOR PM2.5 mini 进度条（
 lv_obj_t *g_env_bar_cabin     = nullptr;   /**< INTERIOR PM2.5 mini 进度条（打印面板） */
 lv_obj_t *g_env_status_indoor = nullptr;   /**< EXTERIOR 状态："● Good"/"● Too poor…" */
 lv_obj_t *g_env_status_cabin  = nullptr;   /**< INTERIOR 状态 */
-lv_obj_t *g_home_bar_indoor   = nullptr;   /**< 首页 EXTERIOR PM2.5 mini 进度条 */
-lv_obj_t *g_home_bar_cabin    = nullptr;   /**< 首页 INTERIOR PM2.5 mini 进度条 */
 lv_obj_t *g_prog_bar          = nullptr;
 lv_obj_t *g_prog_value        = nullptr; /**< "37%" */
 lv_obj_t *g_prog_remaining    = nullptr; /**< "剩余 45 min" */
@@ -448,45 +474,234 @@ lv_obj_t *build_topbar(lv_obj_t *parent)
     lv_obj_set_flex_grow(spacer, 1);
     lv_obj_set_style_bg_opa(spacer, LV_OPA_TRANSP, 0);
 
-    g_btn_camera = build_camera_button(bar);
+    /* 顺序对齐设计稿：开始打印在左（976），摄像头圆钮在最右（1184）。 */
     g_btn_files = build_files_button(bar);
+    g_btn_camera = build_camera_button(bar);
 
     return bar;
 }
 
-/* 首页环境数值块（对齐 Figma 1.1.1）：顶部细分隔线 + 图标+标题 + 大数值+小单位
- * +（PM 才有）mini 进度条。right=true 时整体右对齐（右列 温度/氧气）。 */
-lv_obj_t *home_make_metric(lv_obj_t *parent, const lv_image_dsc_t *icon,
-                           const char *caption, const char *unit,
-                           bool right, bool with_bar,
-                           lv_obj_t **out_val, lv_obj_t **out_bar)
+/* ============================================================================
+ *  首页 normal 视图（对齐 Figma 1.1.1 待机中）
+ *    左：HOME 空气质量磨砂卡（PM2.5/PM10 可切换 + 四档色条 + 游标）
+ *    右：CABIN CONDITION 悬浮 5 行（AQI/TEMP/O2/HUMIDITY/PRESSURE）
+ * ========================================================================== */
+
+/** 空气质量指标描述：标题 + 三档上界（Good/Fair/Poor 上限）+ Very Poor 插值伪上限。 */
+struct AirMetric {
+    const char *title;
+    float       b_good;     /**< ≤ b_good → Good */
+    float       b_fair;     /**< ≤ b_fair → Fair */
+    float       b_poor;     /**< ≤ b_poor → Poor；否则 Very Poor */
+    float       pseudo_max; /**< Very Poor 段游标插值用的伪上限 */
+};
+
+/* 阈值取自设计稿分级表：PM2.5 35/75/150，PM10 50/150/350（μg/m³）。 */
+const AirMetric kAirMetrics[2] = {
+    { "HOME PM2.5", 35.0f,  75.0f, 150.0f, 300.0f },
+    { "HOME PM10",  50.0f, 150.0f, 350.0f, 700.0f },
+};
+
+const char *const kLevelName[4] = { "Good", "Fair", "Poor", "Very Poor" };
+
+/** 四档色段颜色（绿/黄/橙/红，对齐 Figma AQI-优/良/轻度/中度）。 */
+lv_color_t air_level_color(int level)
 {
-    /* 外层竖列：顶部细线 +（图标+文本列）行 +（PM 才有）mini 进度条。
-     * right=true 时把"图标+文本"整组在块内靠右对齐（图标仍在左，仅整组贴右）。 */
-    const lv_flex_align_t group_align = right ? LV_FLEX_ALIGN_END : LV_FLEX_ALIGN_START;
+    switch(level) {
+    case 0:  return lv_color_hex(0x4cd276);
+    case 1:  return lv_color_hex(0xf2d33a);
+    case 2:  return lv_color_hex(0xf99635);
+    default: return lv_color_hex(0xec4848);
+    }
+}
 
-    lv_obj_t *col = lv_obj_create(parent);
-    lv_obj_remove_style_all(col);
-    lv_obj_set_width(col, USER_VALUE_LABEL_W + USER_PAD_LG);
-    lv_obj_set_height(col, LV_SIZE_CONTENT);
-    lv_obj_set_flex_flow(col, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_flex_align(col, LV_FLEX_ALIGN_START, group_align, group_align);
-    lv_obj_set_style_pad_row(col, USER_PAD_SM, 0);
-    lv_obj_set_style_bg_opa(col, LV_OPA_TRANSP, 0);
-    lv_obj_clear_flag(col, LV_OBJ_FLAG_SCROLLABLE);
+/** 由数值定档并给出色条全局比例（0..1）：档内按数值在区间内线性插值。 */
+int air_classify(const AirMetric &m, float v, float *frac_global)
+{
+    int   level;
+    float lo, hi;
+    if(v <= m.b_good)      { level = 0; lo = 0;        hi = m.b_good; }
+    else if(v <= m.b_fair) { level = 1; lo = m.b_good; hi = m.b_fair; }
+    else if(v <= m.b_poor) { level = 2; lo = m.b_fair; hi = m.b_poor; }
+    else                   { level = 3; lo = m.b_poor; hi = m.pseudo_max; }
+    float fin = (hi > lo) ? (v - lo) / (hi - lo) : 0.5f;
+    if(fin < 0.0f) fin = 0.0f;
+    if(fin > 1.0f) fin = 1.0f;
+    if(frac_global) *frac_global = (static_cast<float>(level) + fin) / 4.0f;
+    return level;
+}
 
-    /* 顶部细分隔线 */
-    lv_obj_t *div = lv_obj_create(col);
+/** dim 着色的指标图标（源 40×40 A8，等比缩放到 sz 方盒、居中）。 */
+lv_obj_t *make_dim_icon(lv_obj_t *parent, const lv_image_dsc_t *src, int32_t sz)
+{
+    lv_obj_t *box = lv_obj_create(parent);
+    lv_obj_remove_style_all(box);
+    lv_obj_set_size(box, sz, sz);
+    lv_obj_set_style_bg_opa(box, LV_OPA_TRANSP, 0);
+    lv_obj_remove_flag(box, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_remove_flag(box, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *img = lv_image_create(box);
+    lv_image_set_src(img, src);
+    lv_obj_set_style_image_recolor(img, user_color_text_dim, 0);
+    lv_obj_set_style_image_recolor_opa(img, LV_OPA_COVER, 0);
+    lv_image_set_pivot(img, 20, 20);                 /* 40×40 源图中心 */
+    lv_image_set_scale(img, (uint32_t)(256 * sz / 40));
+    lv_obj_center(img);
+    return box;
+}
+
+void home_card_update(void);   /* 定义见下方数据刷新区 */
+
+/** 左卡右上角切换按钮：PM2.5 ⇄ PM10 循环（重启复位到 PM2.5）。 */
+void on_home_metric_toggle(lv_event_t * /*e*/)
+{
+    g_home_metric_idx = (g_home_metric_idx + 1) % 2;
+    home_card_update();
+}
+
+/* 左卡：HOME 空气质量磨砂卡（对齐 Figma 3540:14581 / 3593:11006）。 */
+lv_obj_t *build_home_card(lv_obj_t *parent)
+{
+    lv_obj_t *card = lv_obj_create(parent);
+    lv_obj_remove_style_all(card);
+    lv_obj_add_flag(card, LV_OBJ_FLAG_FLOATING);
+    lv_obj_set_width(card, LV_PCT(30));
+    lv_obj_set_height(card, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(card, LV_FLEX_ALIGN_START,
+                          LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
+    lv_obj_set_style_pad_all(card, USER_PAD, 0);
+    lv_obj_set_style_pad_row(card, USER_PAD_LG, 0);
+    /* LVGL 无背景模糊：半透明深底 + 细白描边近似磨砂玻璃。 */
+    lv_obj_set_style_bg_color(card, lv_color_black(), 0);
+    lv_obj_set_style_bg_opa(card, LV_OPA_40, 0);
+    lv_obj_set_style_radius(card, USER_RADIUS, 0);
+    lv_obj_set_style_border_width(card, 1, 0);
+    lv_obj_set_style_border_color(card, lv_color_white(), 0);
+    lv_obj_set_style_border_opa(card, LV_OPA_10, 0);
+    lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_align(card, LV_ALIGN_LEFT_MID, USER_PAD_LG, 0);
+
+    /* 头部：[home 图标] 标题 ...(撑开)... [切换按钮] */
+    lv_obj_t *head = lv_obj_create(card);
+    lv_obj_remove_style_all(head);
+    lv_obj_set_width(head, LV_PCT(100));
+    lv_obj_set_height(head, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(head, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(head, LV_FLEX_ALIGN_START,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_column(head, USER_PAD_SM, 0);
+    lv_obj_set_style_bg_opa(head, LV_OPA_TRANSP, 0);
+    lv_obj_clear_flag(head, LV_OBJ_FLAG_SCROLLABLE);
+
+    make_dim_icon(head, &ic_home, 32);
+
+    g_home_card_title = lv_label_create(head);
+    lv_label_set_text(g_home_card_title, kAirMetrics[0].title);
+    lv_obj_set_style_text_color(g_home_card_title, user_color_text, 0);
+    lv_obj_set_style_text_opa(g_home_card_title, LV_OPA_50, 0);
+    lv_obj_set_style_text_font(g_home_card_title, user_font_text(), 0);
+
+    lv_obj_t *hspacer = lv_obj_create(head);
+    lv_obj_remove_style_all(hspacer);
+    lv_obj_set_height(hspacer, 1);
+    lv_obj_set_flex_grow(hspacer, 1);
+    lv_obj_set_style_bg_opa(hspacer, LV_OPA_TRANSP, 0);
+
+    lv_obj_t *toggle = lv_button_create(head);
+    lv_obj_remove_style_all(toggle);
+    lv_obj_set_size(toggle, 40, 40);
+    lv_obj_set_style_bg_opa(toggle, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_bg_color(toggle, lv_color_white(), LV_STATE_PRESSED);
+    lv_obj_set_style_bg_opa(toggle, LV_OPA_10, LV_STATE_PRESSED);
+    lv_obj_set_style_radius(toggle, LV_RADIUS_CIRCLE, 0);
+    lv_obj_add_event_cb(toggle, on_home_metric_toggle, LV_EVENT_CLICKED, nullptr);
+    lv_obj_t *tg_icon = make_dim_icon(toggle, &ic_switch, 32);
+    lv_obj_center(tg_icon);
+
+    /* 分隔线 */
+    lv_obj_t *div = lv_obj_create(card);
     lv_obj_remove_style_all(div);
     lv_obj_set_size(div, LV_PCT(100), 1);
     lv_obj_set_style_bg_color(div, user_color_text, 0);
-    lv_obj_set_style_bg_opa(div, LV_OPA_30, 0);
-    lv_obj_set_style_margin_bottom(div, USER_PAD_SM, 0);
+    lv_obj_set_style_bg_opa(div, LV_OPA_20, 0);
 
-    /* 行：[图标] [文本列]，图标相对 标题+数值 垂直居中（对齐 Figma 2824:3882）。 */
-    lv_obj_t *row = lv_obj_create(col);
+    /* 分级大字 + 灰色小字（底对齐） */
+    lv_obj_t *lrow = lv_obj_create(card);
+    lv_obj_remove_style_all(lrow);
+    lv_obj_set_size(lrow, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(lrow, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(lrow, LV_FLEX_ALIGN_START,
+                          LV_FLEX_ALIGN_END, LV_FLEX_ALIGN_END);
+    lv_obj_set_style_pad_column(lrow, USER_PAD_SM, 0);
+    lv_obj_set_style_bg_opa(lrow, LV_OPA_TRANSP, 0);
+    lv_obj_clear_flag(lrow, LV_OBJ_FLAG_SCROLLABLE);
+
+    g_home_card_level = lv_label_create(lrow);
+    lv_label_set_text(g_home_card_level, "--");
+    lv_obj_set_style_text_color(g_home_card_level, user_color_text, 0);
+    lv_obj_set_style_text_font(g_home_card_level, user_font_value(), 0);
+
+    g_home_card_value = lv_label_create(lrow);
+    lv_label_set_text(g_home_card_value, "");
+    lv_obj_set_style_text_color(g_home_card_value, user_color_text, 0);
+    lv_obj_set_style_text_opa(g_home_card_value, LV_OPA_50, 0);
+    lv_obj_set_style_text_font(g_home_card_value, user_font_caption(), 0);
+    lv_obj_set_style_margin_bottom(g_home_card_value, USER_PAD_SM, 0);
+
+    /* 四段色条 + 游标圆点（游标在 wrap 内按比例定位；track 宽度 100%） */
+    lv_obj_t *seg_wrap = lv_obj_create(card);
+    lv_obj_remove_style_all(seg_wrap);
+    lv_obj_set_width(seg_wrap, LV_PCT(100));
+    lv_obj_set_height(seg_wrap, 16);
+    lv_obj_set_style_bg_opa(seg_wrap, LV_OPA_TRANSP, 0);
+    lv_obj_clear_flag(seg_wrap, LV_OBJ_FLAG_SCROLLABLE);
+
+    g_home_seg_track = lv_obj_create(seg_wrap);
+    lv_obj_remove_style_all(g_home_seg_track);
+    lv_obj_set_width(g_home_seg_track, LV_PCT(100));
+    lv_obj_set_height(g_home_seg_track, 8);
+    lv_obj_align(g_home_seg_track, LV_ALIGN_LEFT_MID, 0, 0);
+    lv_obj_set_flex_flow(g_home_seg_track, LV_FLEX_FLOW_ROW);
+    lv_obj_set_style_pad_column(g_home_seg_track, 4, 0);
+    lv_obj_set_style_bg_opa(g_home_seg_track, LV_OPA_TRANSP, 0);
+    lv_obj_clear_flag(g_home_seg_track, LV_OBJ_FLAG_SCROLLABLE);
+    for(int i = 0; i < 4; ++i) {
+        lv_obj_t *seg = lv_obj_create(g_home_seg_track);
+        lv_obj_remove_style_all(seg);
+        lv_obj_set_flex_grow(seg, 1);
+        lv_obj_set_height(seg, 8);
+        lv_obj_set_style_radius(seg, 2, 0);
+        lv_obj_set_style_bg_color(seg, air_level_color(i), 0);
+        lv_obj_set_style_bg_opa(seg, LV_OPA_COVER, 0);
+        lv_obj_clear_flag(seg, LV_OBJ_FLAG_SCROLLABLE);
+    }
+
+    g_home_seg_dot = lv_obj_create(seg_wrap);
+    lv_obj_remove_style_all(g_home_seg_dot);
+    lv_obj_set_size(g_home_seg_dot, 14, 14);
+    lv_obj_set_style_radius(g_home_seg_dot, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_bg_color(g_home_seg_dot, lv_color_white(), 0);
+    lv_obj_set_style_bg_opa(g_home_seg_dot, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(g_home_seg_dot, 2, 0);
+    lv_obj_set_style_border_color(g_home_seg_dot, lv_color_black(), 0);
+    lv_obj_set_style_border_opa(g_home_seg_dot, LV_OPA_30, 0);
+    lv_obj_align(g_home_seg_dot, LV_ALIGN_LEFT_MID, 0, 0);
+    lv_obj_clear_flag(g_home_seg_dot, LV_OBJ_FLAG_SCROLLABLE);
+
+    return card;
+}
+
+/* CABIN 单行：[图标] 标签 ...(撑开)... 数值 + 单位。unit_text 为空 → 无单位（AQI）。 */
+lv_obj_t *make_cabin_row(lv_obj_t *parent, const lv_image_dsc_t *icon,
+                         const char *label, const char *unit_text,
+                         lv_obj_t **out_val, lv_obj_t **out_unit)
+{
+    lv_obj_t *row = lv_obj_create(parent);
     lv_obj_remove_style_all(row);
-    lv_obj_set_size(row, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_set_width(row, LV_PCT(100));
+    lv_obj_set_height(row, LV_SIZE_CONTENT);
     lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(row, LV_FLEX_ALIGN_START,
                           LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
@@ -494,32 +709,22 @@ lv_obj_t *home_make_metric(lv_obj_t *parent, const lv_image_dsc_t *icon,
     lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, 0);
     lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
 
-    if(icon) {
-        lv_obj_t *ic = lv_image_create(row);
-        lv_image_set_src(ic, icon);
-        lv_obj_set_style_image_recolor(ic, user_color_text_dim, 0);
-        lv_obj_set_style_image_recolor_opa(ic, LV_OPA_COVER, 0);
-    }
+    make_dim_icon(row, icon, 32);
 
-    /* 文本列：标题（上，字距近似 0.1em）+ 数值行（下） */
-    lv_obj_t *tcol = lv_obj_create(row);
-    lv_obj_remove_style_all(tcol);
-    lv_obj_set_size(tcol, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
-    lv_obj_set_flex_flow(tcol, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_flex_align(tcol, LV_FLEX_ALIGN_START,
-                          LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
-    lv_obj_set_style_pad_row(tcol, USER_PAD_SM, 0);
-    lv_obj_set_style_bg_opa(tcol, LV_OPA_TRANSP, 0);
-    lv_obj_clear_flag(tcol, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_t *cap = lv_label_create(row);
+    lv_label_set_text(cap, label);
+    lv_obj_set_style_text_color(cap, user_color_text, 0);
+    lv_obj_set_style_text_opa(cap, LV_OPA_50, 0);
+    lv_obj_set_style_text_font(cap, user_font_text(), 0);
 
-    lv_obj_t *cap = lv_label_create(tcol);
-    lv_label_set_text(cap, caption);
-    lv_obj_set_style_text_color(cap, user_color_text_dim, 0);
-    lv_obj_set_style_text_font(cap, user_font_caption(), 0);
-    lv_obj_set_style_text_letter_space(cap, 2, 0);
+    lv_obj_t *spacer = lv_obj_create(row);
+    lv_obj_remove_style_all(spacer);
+    lv_obj_set_height(spacer, 1);
+    lv_obj_set_flex_grow(spacer, 1);
+    lv_obj_set_style_bg_opa(spacer, LV_OPA_TRANSP, 0);
 
-    /* 大数值 + 小单位（底对齐） */
-    lv_obj_t *vrow = lv_obj_create(tcol);
+    /* 数值 + 单位（底对齐） */
+    lv_obj_t *vrow = lv_obj_create(row);
     lv_obj_remove_style_all(vrow);
     lv_obj_set_size(vrow, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
     lv_obj_set_flex_flow(vrow, LV_FLEX_FLOW_ROW);
@@ -535,30 +740,72 @@ lv_obj_t *home_make_metric(lv_obj_t *parent, const lv_image_dsc_t *icon,
     lv_obj_set_style_text_font(val, user_font_value(), 0);
     if(out_val) *out_val = val;
 
-    lv_obj_t *u = lv_label_create(vrow);
-    lv_label_set_text(u, unit);
-    lv_obj_set_style_text_color(u, user_color_text_dim, 0);
-    lv_obj_set_style_text_font(u, user_font_caption(), 0);
-    lv_obj_set_style_margin_bottom(u, USER_PAD_SM, 0);
-
-    if(with_bar) {
-        lv_obj_t *bar = lv_bar_create(col);
-        lv_obj_remove_style_all(bar);
-        lv_obj_set_size(bar, LV_PCT(100), USER_PROGRESS_H / 2 > 0 ? USER_PROGRESS_H / 2 : 6);
-        lv_obj_set_style_bg_color(bar, user_color_panel_alt, LV_PART_MAIN);
-        lv_obj_set_style_bg_opa(bar, LV_OPA_COVER, LV_PART_MAIN);
-        lv_obj_set_style_radius(bar, LV_RADIUS_CIRCLE, LV_PART_MAIN);
-        lv_obj_set_style_bg_color(bar, user_color_accent, LV_PART_INDICATOR);
-        lv_obj_set_style_bg_opa(bar, LV_OPA_COVER, LV_PART_INDICATOR);
-        lv_obj_set_style_radius(bar, LV_RADIUS_CIRCLE, LV_PART_INDICATOR);
-        lv_bar_set_range(bar, 0, 100);
-        lv_bar_set_value(bar, 0, LV_ANIM_OFF);
-        if(out_bar) *out_bar = bar;
+    if(unit_text) {
+        lv_obj_t *u = lv_label_create(vrow);
+        lv_label_set_text(u, unit_text);
+        lv_obj_set_style_text_color(u, user_color_text, 0);
+        lv_obj_set_style_text_opa(u, LV_OPA_50, 0);
+        lv_obj_set_style_text_font(u, user_font_caption(), 0);
+        lv_obj_set_style_margin_bottom(u, USER_PAD_SM, 0);
+        if(out_unit) *out_unit = u;
+    } else if(out_unit) {
+        *out_unit = nullptr;
     }
-    return col;
+    return row;
 }
 
-/** 中部主区：全屏整机背景（RGB565）+ 左右环境数值浮层。
+/* 右侧 CABIN CONDITION：头部 + 分隔线 + 5 行（悬浮文本，无卡片底）。 */
+lv_obj_t *build_cabin_panel(lv_obj_t *parent)
+{
+    lv_obj_t *panel = lv_obj_create(parent);
+    lv_obj_remove_style_all(panel);
+    lv_obj_add_flag(panel, LV_OBJ_FLAG_FLOATING);
+    /* 面板宽 28%（左缘 ~70%）；配合 gen_home_bg.py 把设备左移，使设备右缘退到
+     * ~63% 给面板腾出右侧暗区，两者不重叠。 */
+    lv_obj_set_width(panel, LV_PCT(28));
+    lv_obj_set_height(panel, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(panel, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(panel, LV_FLEX_ALIGN_START,
+                          LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
+    lv_obj_set_style_pad_row(panel, USER_PAD, 0);
+    lv_obj_set_style_bg_opa(panel, LV_OPA_TRANSP, 0);
+    lv_obj_clear_flag(panel, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_align(panel, LV_ALIGN_RIGHT_MID, -USER_PAD_LG, 0);
+
+    /* 头部：[cabin 图标] CABIN CONDITION */
+    lv_obj_t *head = lv_obj_create(panel);
+    lv_obj_remove_style_all(head);
+    lv_obj_set_size(head, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(head, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(head, LV_FLEX_ALIGN_START,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_column(head, USER_PAD_SM, 0);
+    lv_obj_set_style_bg_opa(head, LV_OPA_TRANSP, 0);
+    lv_obj_clear_flag(head, LV_OBJ_FLAG_SCROLLABLE);
+    make_dim_icon(head, &ic_cabin, 32);
+    lv_obj_t *htitle = lv_label_create(head);
+    lv_label_set_text(htitle, "CABIN CONDITION");
+    lv_obj_set_style_text_color(htitle, user_color_text, 0);
+    lv_obj_set_style_text_opa(htitle, LV_OPA_50, 0);
+    lv_obj_set_style_text_font(htitle, user_font_text(), 0);
+    lv_obj_set_style_text_letter_space(htitle, 1, 0);
+
+    /* 分隔线 */
+    lv_obj_t *div = lv_obj_create(panel);
+    lv_obj_remove_style_all(div);
+    lv_obj_set_size(div, LV_PCT(100), 1);
+    lv_obj_set_style_bg_color(div, user_color_text, 0);
+    lv_obj_set_style_bg_opa(div, LV_OPA_20, 0);
+
+    make_cabin_row(panel, &ic_aqi,      "AQI",      nullptr,       &g_cab_aqi_val,  nullptr);
+    make_cabin_row(panel, &ic_temp,     "TEMP",     "\xC2\xB0""C", &g_cab_temp_val, &g_cab_temp_unit);
+    make_cabin_row(panel, &ic_o2,       "O2 CONC.", "%",           &g_cab_o2_val,   &g_cab_o2_unit);
+    make_cabin_row(panel, &ic_humidity, "HUMIDITY", "%",           &g_cab_hum_val,  &g_cab_hum_unit);
+    make_cabin_row(panel, &ic_pressure, "PRESSURE", "kPa",         &g_cab_prs_val,  &g_cab_prs_unit);
+    return panel;
+}
+
+/** 中部主区：全屏整机背景（RGB565）+ 左卡（空气质量）+ 右侧 CABIN 面板。
  *  area 为覆盖整个内容区的浮层（含状态栏区域），整机背景一直顶到最上；
  *  状态栏在其后创建 → 浮于背景之上，顶部不再留黑边。 */
 lv_obj_t *build_main_area(lv_obj_t *parent)
@@ -578,38 +825,8 @@ lv_obj_t *build_main_area(lv_obj_t *parent)
     lv_image_set_inner_align(bg, LV_IMAGE_ALIGN_COVER);
     lv_obj_center(bg);
 
-    /* 左列环境浮层：EXTERIOR / INTERIOR PM2.5（图标 + 数值 + mini 进度条） */
-    lv_obj_t *col_left = lv_obj_create(area);
-    lv_obj_remove_style_all(col_left);
-    lv_obj_add_flag(col_left, LV_OBJ_FLAG_FLOATING);
-    lv_obj_set_size(col_left, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
-    lv_obj_set_flex_flow(col_left, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_style_pad_row(col_left, USER_PAD_LG, 0);
-    lv_obj_set_style_bg_opa(col_left, LV_OPA_TRANSP, 0);
-    lv_obj_clear_flag(col_left, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_align(col_left, LV_ALIGN_LEFT_MID, USER_PAD_LG, 0);
-    home_make_metric(col_left, &ic_pm, "EXTERIOR PM2.5", "ug/m3",
-                     false, true, &g_lbl_pm_indoor, &g_home_bar_indoor);
-    home_make_metric(col_left, &ic_pm, "INTERIOR PM2.5", "ug/m3",
-                     false, true, &g_lbl_pm_cabin, &g_home_bar_cabin);
-
-    /* 右列环境浮层：DEVICE TEMP / O2 CONC.（图标 + 数值，无进度条；
-     * 两块统一"图标在左、左对齐"，使温度与氧气浓度上下对齐） */
-    lv_obj_t *col_right = lv_obj_create(area);
-    lv_obj_remove_style_all(col_right);
-    lv_obj_add_flag(col_right, LV_OBJ_FLAG_FLOATING);
-    lv_obj_set_size(col_right, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
-    lv_obj_set_flex_flow(col_right, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_flex_align(col_right, LV_FLEX_ALIGN_START,
-                          LV_FLEX_ALIGN_END, LV_FLEX_ALIGN_END);
-    lv_obj_set_style_pad_row(col_right, USER_PAD_LG, 0);
-    lv_obj_set_style_bg_opa(col_right, LV_OPA_TRANSP, 0);
-    lv_obj_clear_flag(col_right, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_align(col_right, LV_ALIGN_RIGHT_MID, -USER_PAD_LG, 0);
-    home_make_metric(col_right, &ic_temp, "DEVICE TEMP", "\xC2\xB0""C",
-                     false, false, &g_lbl_temp, nullptr);
-    home_make_metric(col_right, &ic_o2, "O2 CONC.", "%",
-                     false, false, &g_lbl_oxygen, nullptr);
+    build_home_card(area);
+    build_cabin_panel(area);
 
     return area;
 }
@@ -1312,6 +1529,62 @@ void update_pm_block(lv_obj_t *val_lbl, lv_obj_t *bar, lv_obj_t *status_lbl, flo
     }
 }
 
+/** 刷新左卡（HOME 空气质量）：按当前切换指标填 标题/分级/数值/游标位置。 */
+void home_card_update(void)
+{
+    if(!g_home_card_title) {
+        return;
+    }
+    const AirMetric &m = kAirMetrics[g_home_metric_idx];
+    lv_label_set_text(g_home_card_title, m.title);
+
+    const float v = (g_home_metric_idx == 0) ? g_snap.pm25_indoor
+                                             : g_snap.pm10_indoor;
+    if(metric_invalid(v)) {
+        /* 无数据：分级显示 "--"，清空数值、隐藏游标 */
+        lv_label_set_text(g_home_card_level, "--");
+        lv_obj_set_style_text_color(g_home_card_level, user_color_text_dim, 0);
+        lv_label_set_text(g_home_card_value, "");
+        if(g_home_seg_dot) {
+            lv_obj_add_flag(g_home_seg_dot, LV_OBJ_FLAG_HIDDEN);
+        }
+        return;
+    }
+
+    float frac = 0.0f;
+    const int level = air_classify(m, v, &frac);
+    lv_label_set_text(g_home_card_level, kLevelName[level]);
+    lv_obj_set_style_text_color(g_home_card_level, user_color_text, 0);
+    lv_label_set_text_fmt(g_home_card_value, "(%.1f ug/m3)", v);
+
+    /* 游标：档内插值得到全局比例 frac，落在色条对应位置。 */
+    if(g_home_seg_dot && g_home_seg_track) {
+        lv_obj_remove_flag(g_home_seg_dot, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_update_layout(g_home_seg_track);
+        const int32_t tw = lv_obj_get_width(g_home_seg_track);
+        const int32_t dot_sz = lv_obj_get_width(g_home_seg_dot);
+        int32_t dx = static_cast<int32_t>(frac * static_cast<float>(tw)) - dot_sz / 2;
+        if(dx < 0) dx = 0;
+        if(dx > tw - dot_sz) dx = tw - dot_sz;
+        lv_obj_align(g_home_seg_dot, LV_ALIGN_LEFT_MID, dx, 0);
+    }
+}
+
+/** 刷新 CABIN 单行数值：无效（<0/NaN）显示 "--" 并隐藏单位，否则 "%.1f" + 单位。 */
+void update_cabin_metric(lv_obj_t *val, lv_obj_t *unit, float v)
+{
+    if(!val) {
+        return;
+    }
+    if(metric_invalid(v)) {
+        lv_label_set_text(val, "--");
+        if(unit) lv_obj_add_flag(unit, LV_OBJ_FLAG_HIDDEN);
+    } else {
+        lv_label_set_text_fmt(val, "%.1f", v);
+        if(unit) lv_obj_remove_flag(unit, LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
 } /* namespace */
 
 void page_user_home_update_camera_preview_layout(uint32_t src_w, uint32_t src_h)
@@ -1340,15 +1613,17 @@ void page_user_home_refresh(bool /*force*/)
         lv_obj_set_style_bg_color(g_dot_status, status_color(snap.status), 0);
     }
 
-    /* 首页环境（单位为独立静态标签，数值只填数字）；PM 块带 mini 进度条 + 阈值配色 */
-    update_pm_block(g_lbl_pm_indoor, g_home_bar_indoor, nullptr, snap.pm25_indoor);
-    update_pm_block(g_lbl_pm_cabin,  g_home_bar_cabin,  nullptr, snap.pm25_cabin);
-    if(g_lbl_temp) {
-        lv_label_set_text_fmt(g_lbl_temp, "%.1f", snap.temperature_c);
+    /* 首页左卡（HOME 空气质量·可切换 PM2.5/PM10：分级 + 四档色条 + 游标） */
+    home_card_update();
+
+    /* 首页右侧 CABIN CONDITION：AQI 占位 "--"（待接后端）；其余按哨兵判空 */
+    if(g_cab_aqi_val) {
+        lv_label_set_text(g_cab_aqi_val, "--");
     }
-    if(g_lbl_oxygen) {
-        lv_label_set_text_fmt(g_lbl_oxygen, "%.1f", snap.oxygen_percent);
-    }
+    update_cabin_metric(g_cab_temp_val, g_cab_temp_unit, snap.temperature_c);
+    update_cabin_metric(g_cab_o2_val,   g_cab_o2_unit,   snap.oxygen_percent);
+    update_cabin_metric(g_cab_hum_val,  g_cab_hum_unit,  snap.humidity_percent);
+    update_cabin_metric(g_cab_prs_val,  g_cab_prs_unit,  snap.pressure_kpa);
 
     /* 打印模式下的环境标签也由同一快照驱动（串口 0x9B → APP_Update_Ntf） */
     update_pm_block(g_env_lbl_pm_indoor, g_env_bar_indoor, g_env_status_indoor,

@@ -1040,7 +1040,7 @@ void build_about_detail(lv_obj_t *parent)
     struct AboutRow { const char *label; const char *value; };
     const AboutRow rows[] = {
         { "Software Version", UPC_SW_VERSION },
-        { "Device Model",     "SNOWPOD A1"   },
+        { "Device Model",     "SNOWPOD lalin"   },
     };
     for(const AboutRow &r : rows) {
         lv_obj_t *row = ui_user_make_setting_row(card, r.label, nullptr, nullptr);

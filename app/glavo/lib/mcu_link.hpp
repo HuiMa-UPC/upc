@@ -40,6 +40,7 @@ struct EnvSnapshotCache {
     float temperature_c   = 0.f;
     float oxygen_percent  = 0.f;
     float humidity_percent = 0.f;
+    float pressure_kpa    = -1.f;   /**< 舱内气压 kPa（0x9B pressure_mbar÷10）；无源时 <0 */
     bool  valid           = false;
 };
 

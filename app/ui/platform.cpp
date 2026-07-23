@@ -6,6 +6,11 @@
 #include <sys/time.h>
 #include <unistd.h>
 
+#include <dirent.h>
+#include <fcntl.h>
+#include <sys/ioctl.h>
+#include <linux/input.h>
+
 #include "platform.hpp"
 
 uint32_t platform_tick_get(void)
@@ -155,30 +160,150 @@ static lv_obj_t *make_ripple_cursor(void)
     return cursor;
 }
 
+/* 判断某个 evdev 节点是否为鼠标：能上报相对 X/Y 位移即视为鼠标。
+ * 这样与厂商/型号/命名无关，任何鼠标（Logitech、小米、有线/无线）都能识别。 */
+static bool evdev_is_mouse(const char *path)
+{
+    int fd = open(path, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
+    if(fd < 0) {
+        return false;
+    }
+
+    unsigned long ev_bits = 0;
+    unsigned long rel_bits = 0;
+    bool is_mouse = false;
+
+    /* REL_X / REL_Y / EV_REL 编号都 < 32，用单个 unsigned long 判断足够 */
+    if(ioctl(fd, EVIOCGBIT(0, sizeof(ev_bits)), &ev_bits) >= 0 &&
+       (ev_bits & (1UL << EV_REL))) {
+        if(ioctl(fd, EVIOCGBIT(EV_REL, sizeof(rel_bits)), &rel_bits) >= 0) {
+            if((rel_bits & (1UL << REL_X)) && (rel_bits & (1UL << REL_Y))) {
+                is_mouse = true;
+            }
+        }
+    }
+
+    close(fd);
+    return is_mouse;
+}
+
+/* 扫描 /dev/input/event* 找到第一个鼠标设备，写入 out。找到返回 true。 */
+static bool find_mouse_device(char *out, size_t out_sz)
+{
+    DIR *dir = opendir("/dev/input");
+    if(!dir) {
+        return false;
+    }
+
+    bool found = false;
+    struct dirent *ent;
+    while((ent = readdir(dir)) != NULL) {
+        if(strncmp(ent->d_name, "event", 5) != 0) {
+            continue;
+        }
+        char path[64];
+        int n = snprintf(path, sizeof(path), "/dev/input/%s", ent->d_name);
+        if(n < 0 || (size_t)n >= sizeof(path)) {
+            /* 名字过长导致路径被截断，跳过该设备 */
+            continue;
+        }
+        if(evdev_is_mouse(path)) {
+            snprintf(out, out_sz, "%s", path);
+            found = true;
+            break;
+        }
+    }
+
+    closedir(dir);
+    return found;
+}
+
+/* 给一个鼠标 indev 挂上水波纹光标，并在设备移除时自动删除光标。 */
+static void attach_ripple_cursor(lv_indev_t *mouse);
+
+/* 设备被移除（拔出鼠标）时删除对应光标对象。 */
+static void mouse_indev_deleted_cb(lv_event_t *e)
+{
+    lv_obj_t *cursor = (lv_obj_t *)lv_event_get_user_data(e);
+    if(cursor) {
+        lv_obj_delete(cursor);
+    }
+}
+
+static void attach_ripple_cursor(lv_indev_t *mouse)
+{
+    lv_obj_t *cursor = make_ripple_cursor();
+    lv_indev_set_cursor(mouse, cursor);
+    /* 拔出时随 indev 一起删除光标，避免残留 */
+    lv_indev_add_event_cb(mouse, mouse_indev_deleted_cb, LV_EVENT_DELETE, cursor);
+}
+
+/* 热插拔发现回调：LVGL 扫描到（或新插入）输入设备时调用。
+ * 只有相对指针设备（鼠标, LV_EVDEV_TYPE_REL）才挂光标；
+ * 已手动创建的触摸屏会被 LVGL 内置去重跳过，不会重复。 */
+static void mouse_discovery_cb(lv_indev_t *indev, lv_evdev_type_t type, void *user_data)
+{
+    lv_display_t *disp = (lv_display_t *)user_data;
+    lv_indev_set_display(indev, disp);
+
+    if(type == LV_EVDEV_TYPE_REL) {
+        attach_ripple_cursor(indev);
+        fprintf(stderr, "mouse discovered (hotplug), cursor attached\n");
+    }
+}
+
 /* 鼠标为可选设备：失败不影响触摸屏，仅打印告警。
  * 光标对象建在 top layer，保证跨页面切换常驻并置顶；仅挂到鼠标 indev，
- * 触摸 indev 不设光标，避免手指按下时光标瞬移。 */
+ * 触摸 indev 不设光标，避免手指按下时光标瞬移。
+ *
+ * 设备选择策略：
+ *   1) 环境变量 LV_LINUX_EVDEV_MOUSE_DEVICE 显式指定 -> 固定该设备（不启用热插拔）；
+ *      设为空串则禁用鼠标。
+ *   2) 未设置 -> 启用 LVGL 热插拔发现，任何插入的鼠标（任意厂商）都会被自动识别并挂光标，
+ *      拔出后自动移除；启动时已连接的鼠标也会被立即发现。
+ *   3) 发现机制启动失败时，回退为一次性能力扫描；扫描不到鼠标则不启用。 */
 static void init_mouse(lv_display_t *disp)
 {
     const char *dev = getenv("LV_LINUX_EVDEV_MOUSE_DEVICE");
-    if(!dev) {
-        dev = PLATFORM_MOUSE_DEVICE;
-    }
-    if(!dev[0]) {
-        fprintf(stderr, "mouse disabled\n");
+
+    /* 情况 1：显式指定设备（含设空串禁用） */
+    if(dev) {
+        if(!dev[0]) {
+            fprintf(stderr, "mouse disabled\n");
+            return;
+        }
+        lv_indev_t *mouse = lv_evdev_create(LV_INDEV_TYPE_POINTER, dev);
+        if(!mouse) {
+            fprintf(stderr, "mouse open failed: %s (continuing without mouse)\n", dev);
+            return;
+        }
+        lv_indev_set_display(mouse, disp);
+        attach_ripple_cursor(mouse);
+        fprintf(stderr, "mouse OK (%s, fixed)\n", dev);
         return;
     }
 
-    lv_indev_t *mouse = lv_evdev_create(LV_INDEV_TYPE_POINTER, dev);
+    /* 情况 2：启用热插拔发现（推荐，兼容任意鼠标、支持插拔） */
+    if(lv_evdev_discovery_start(mouse_discovery_cb, disp) == LV_RESULT_OK) {
+        fprintf(stderr, "mouse hotplug discovery started\n");
+        return;
+    }
+
+    /* 情况 3：发现机制启动失败，回退为一次性能力扫描 */
+    fprintf(stderr, "mouse discovery start failed, fallback to one-shot scan\n");
+    char auto_path[64];
+    if(!find_mouse_device(auto_path, sizeof(auto_path))) {
+        fprintf(stderr, "no mouse found (continuing without mouse)\n");
+        return;
+    }
+    lv_indev_t *mouse = lv_evdev_create(LV_INDEV_TYPE_POINTER, auto_path);
     if(!mouse) {
-        fprintf(stderr, "mouse open failed: %s (continuing without mouse)\n", dev);
+        fprintf(stderr, "mouse open failed: %s (continuing without mouse)\n", auto_path);
         return;
     }
     lv_indev_set_display(mouse, disp);
-
-    lv_indev_set_cursor(mouse, make_ripple_cursor());
-
-    fprintf(stderr, "mouse OK (%s)\n", dev);
+    attach_ripple_cursor(mouse);
+    fprintf(stderr, "mouse OK (%s)\n", auto_path);
 }
 
 int platform_init(void)

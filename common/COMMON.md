@@ -138,7 +138,7 @@ scripts/rongsu.sh start   # glavo + rongsu_camera → ui
 
 | MsgType（当前枚举） | 规范名（新消息参照） | 方向 | Payload | UI API | Glavo 处理 |
 |---------------------|----------------------|------|---------|--------|------------|
-| `APP_Update_Ntf` | `GLAVO_Env_Update_Ntf` | Glavo→UI | `EnvSnapshotPayload` | `register_env_update` | `McuLink` 推送 |
+| `APP_Update_Ntf` | `GLAVO_Env_Update_Ntf` | Glavo→UI | `EnvSnapshotPayload`（含 `pm10_indoor`/`humidity_percent`/`pressure_kpa`，无效填 <0→UI 显示 `--`） | `register_env_update` | `McuLink` 推送 |
 | `UI_PM25_Req` | — | UI→Glavo | Empty | `send_pm25_check` | `handle_pm25_req` |
 | `APP_PM25_Rsp` | `GLAVO_PM25_Check_Rsp` | Glavo→UI | `Pm25ResultPayload` | `register_pm25_result` | PM2.5 流程 |
 | `UI_CLOSE_DOOR_Req` | — | UI→Glavo | Empty | `send_close_door_check` | 关门检测 |
@@ -462,7 +462,6 @@ ParserManager → RingBuffer → McuLink（TCP + 串口）
 | `process_config_ui()` | `rongsu_ui` | `/var/run/rongsu_ui.pid` | `/var/log/rongsu_ui` |
 | `process_config_glavo()` | `rongsu_glavo` | `/var/run/rongsu_glavo.pid` | `/var/log/rongsu_glavo` |
 | `process_config_camera()` | `rongsu_camera` | `/var/run/rongsu_camera.pid` | `/var/log/rongsu_camera` |
-| `process_config_xfr()` | `rongsu_xfr` | `/var/run/rongsu_xfr.pid` | `/var/log/rongsu_xfr` |
 
 各进程 `main.cpp` 支持 `{start|stop|status|run}`；`start` 时 stderr/stdout 重定向到 `{log_base}N.log`（单文件上限 5MB，三文件循环；重启不清空已有文件）。
 
