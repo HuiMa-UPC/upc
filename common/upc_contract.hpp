@@ -288,9 +288,12 @@ enum class MsgType : uint32_t {
     APP_Print_Video_Session_Abort_Ntf,          /**< PrintVideoSessionPayload */
 
     // ---- UI ↔ GLAVO：MCU OTA（测试） ----
-    UI_Mcu_Ota_Start_Req = 0x1090, /**< Empty：扫描 /home/image/glavo 最新 .bin 并下发 */
-    UI_Mcu_Ota_Cancel_Ntf,      /**< Empty：测试用，SOC 侧中止 OTA 会话 */
-    APP_Mcu_Ota_Status_Ntf,     /**< McuOtaStatusPayload */
+    UI_Mcu_Ota_Start_Req = 0x1090, /**< Empty：启动 Glavo(以太网) OTA，扫描 /home/image/glavo */
+    UI_Mcu_Ota_Cancel_Ntf,         /**< Empty：中止 Glavo OTA 会话 */
+    APP_Mcu_Ota_Status_Ntf,        /**< McuOtaStatusPayload（Glavo OTA 状态） */
+    UI_Serial_Mcu_Ota_Start_Req,   /**< Empty：启动 MCU(串口) OTA，扫描 /home/image/mcu */
+    UI_Serial_Mcu_Ota_Cancel_Ntf,  /**< Empty：中止 MCU 串口 OTA 会话 */
+    APP_Serial_Mcu_Ota_Status_Ntf, /**< McuOtaStatusPayload（MCU 串口 OTA 状态） */
 
     // ---- UI → GLAVO：调试页手动控制（后端待实现，前端先发送） ----
     UI_Debug_Axis_Jog_Req = 0x1100, /**< DebugAxisJogPayload：点动/长按点动 */
@@ -581,7 +584,7 @@ struct PrintVideoLayerSnapPayload {
     uint16_t reserved;
 };
 
-/** APP_Mcu_Ota_Status_Ntf：MCU OTA 进度/状态（测试 UI） */
+/** APP_Mcu_Ota_Status_Ntf / APP_Serial_Mcu_Ota_Status_Ntf：OTA 进度/状态 */
 enum class McuOtaState : uint8_t {
     Idle         = 0,
     Preparing    = 1,

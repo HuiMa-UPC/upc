@@ -6,6 +6,7 @@
 #include "device_config.hpp"
 #include "protocol.hpp"
 #include "mcu_ota_session.hpp"
+#include "mcu_serial_ota_session.hpp"
 
 #include <atomic>
 #include <cstdint>
@@ -131,14 +132,18 @@ public:
 
     /** @brief 设置 MCU OTA 状态回调（测试） */
     void set_ota_status_callback(McuOtaStatusCb cb);
+    void set_serial_ota_status_callback(McuOtaStatusCb cb);
 
     /** @brief 开始 MCU OTA（扫描 image_dir 下最新 .bin） */
     bool start_mcu_ota(const char* image_dir = nullptr);
+    bool start_serial_mcu_ota(const char* image_dir = nullptr);
 
     /** @brief 测试用：中止 SOC 侧 OTA 会话 */
     void cancel_mcu_ota();
+    void cancel_serial_mcu_ota();
 
     [[nodiscard]] bool ota_active() const;
+    [[nodiscard]] bool serial_ota_active() const;
 
     /**
      * @brief 将串口发送帧入队，由 link_thread 统一发送（线程安全）
@@ -273,6 +278,7 @@ private:
     void emit_event(McuLinkEvent ev);
     void poll_mcu_drain_heartbeat();
     void ota_tick();
+    void serial_ota_tick();
     /** @brief OTA Success 后尝试 connect_tcp（含强制刷新已有 fd） */
     void link_try_ota_post_reconnect();
 
@@ -355,6 +361,7 @@ private:
     mutable std::mutex env_mtx_;
 
     McuOtaSession ota_session_;
+    McuSerialOtaSession serial_ota_session_;
     std::atomic<bool> ota_post_reconnect_{false};
 
     /* ---------- 常量 ---------- */

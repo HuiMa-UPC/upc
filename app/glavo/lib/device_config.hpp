@@ -94,6 +94,14 @@
 #define GLAVO_OTA_CHUNK_SIZE  1024
 #endif
 
+#ifndef MCU_OTA_IMAGE_DIR
+#define MCU_OTA_IMAGE_DIR  "/home/image/mcu"
+#endif
+
+#ifndef MCU_OTA_CHUNK_SIZE
+#define MCU_OTA_CHUNK_SIZE  128
+#endif
+
 /** OTA Success（0x13）后链路线程循环 connect_tcp 直至成功：0=关；1=开 */
 #ifndef GLAVO_OTA_POST_RECONNECT_ENABLE
 #define GLAVO_OTA_POST_RECONNECT_ENABLE  1

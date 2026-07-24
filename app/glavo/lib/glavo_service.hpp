@@ -61,6 +61,9 @@ private:
     void handle_mcu_ota_start(const middleware::Message& msg);
     void handle_mcu_ota_cancel(const middleware::Message& msg);
     void publish_mcu_ota_status(const middleware::McuOtaStatusPayload& st);
+    void handle_serial_mcu_ota_start(const middleware::Message& msg);
+    void handle_serial_mcu_ota_cancel(const middleware::Message& msg);
+    void publish_serial_mcu_ota_status(const middleware::McuOtaStatusPayload& st);
 
     /* ---- 网络 / WiFi：UI_Wifi_* → WifiManager(ConnMan)，回推 State/Scan/Saved ---- */
     void handle_wifi_enable(const middleware::Message& msg);

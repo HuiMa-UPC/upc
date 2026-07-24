@@ -90,6 +90,9 @@ public:
     void send_mcu_ota_start();
     void send_mcu_ota_cancel();
     void register_mcu_ota_status(McuOtaStatusCb cb);
+    void send_serial_mcu_ota_start();
+    void send_serial_mcu_ota_cancel();
+    void register_serial_mcu_ota_status(McuOtaStatusCb cb);
 
     /* ---- 网络 / WiFi（前端预留，后端接口到位后即可用；未上线时无人响应，不影响运行） ---- */
     void send_wifi_enable(bool enable);
@@ -146,6 +149,7 @@ private:
     SupplyStatusCb   supply_status_cb_;
     PrintPrepareDoneCb print_prepare_done_cb_;
     McuOtaStatusCb   mcu_ota_status_cb_;
+    McuOtaStatusCb   serial_mcu_ota_status_cb_;
     WifiStateCb      wifi_state_cb_;
     WifiListCb       wifi_scan_cb_;
     WifiListCb       wifi_saved_cb_;

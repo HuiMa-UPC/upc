@@ -151,6 +151,15 @@ void UiMsgProxy::init()
                 mcu_ota_status_cb_(p);
             }
         }));
+
+    subs_.push_back(bus.subscribe(
+        middleware::MsgType::APP_Serial_Mcu_Ota_Status_Ntf, middleware::ModuleId::UI,
+        [this](const middleware::Message& msg) {
+            middleware::McuOtaStatusPayload p{};
+            if (serial_mcu_ota_status_cb_ && read_inline_pod(msg, p)) {
+                serial_mcu_ota_status_cb_(p);
+            }
+        }));
     
     /* ---- 网络 / WiFi（前端预留，待后端对齐） ---- */
     subs_.push_back(bus.subscribe(
@@ -534,6 +543,27 @@ void UiMsgProxy::send_mcu_ota_cancel()
 void UiMsgProxy::register_mcu_ota_status(McuOtaStatusCb cb)
 {
     mcu_ota_status_cb_ = std::move(cb);
+}
+
+void UiMsgProxy::send_serial_mcu_ota_start()
+{
+    middleware::Message msg(middleware::MsgType::UI_Serial_Mcu_Ota_Start_Req,
+                            middleware::ModuleId::UI,
+                            middleware::ModuleId::APP_GLAVO);
+    middleware::MsgPort::instance().publish_async(msg);
+}
+
+void UiMsgProxy::send_serial_mcu_ota_cancel()
+{
+    middleware::Message msg(middleware::MsgType::UI_Serial_Mcu_Ota_Cancel_Ntf,
+                            middleware::ModuleId::UI,
+                            middleware::ModuleId::APP_GLAVO);
+    middleware::MsgPort::instance().publish_async(msg);
+}
+
+void UiMsgProxy::register_serial_mcu_ota_status(McuOtaStatusCb cb)
+{
+    serial_mcu_ota_status_cb_ = std::move(cb);
 }
 
 } // namespace ui

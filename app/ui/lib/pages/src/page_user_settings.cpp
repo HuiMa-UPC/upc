@@ -175,16 +175,32 @@ lv_obj_t          *g_pwd_err = nullptr;
  * 免密；进程(重启 App)后静态量复位，需重新输入。 */
 bool g_dev_unlocked = false;
 
-ui_modal_dialog_t *g_ota_dlg = nullptr;
-lv_obj_t *g_ota_status_lbl = nullptr;
-lv_obj_t *g_ota_bar = nullptr;
+struct OtaDialogState {
+    ui_modal_dialog_t *dlg = nullptr;
+    lv_obj_t *status_lbl = nullptr;
+    lv_obj_t *bar = nullptr;
+};
+
+enum class OtaTarget : uint8_t {
+    Glavo = 0,
+    McuSerial = 1,
+};
+
+OtaDialogState g_glavo_ota_ui{};
+OtaDialogState g_mcu_ota_ui{};
 bool g_ota_proxy_wired = false;
 
 struct OtaUiUpdate {
+    OtaTarget target;
     middleware::McuOtaStatusPayload status;
 };
 
-void ota_close_dialog(void);
+void ota_close_dialog(OtaTarget target);
+
+OtaDialogState *ota_state(OtaTarget target)
+{
+    return target == OtaTarget::Glavo ? &g_glavo_ota_ui : &g_mcu_ota_ui;
+}
 
 const char *ota_state_text(middleware::McuOtaState state)
 {
@@ -212,16 +228,17 @@ void ota_ui_apply_async(void *user)
     if(!upd) {
         return;
     }
-    if(g_ota_status_lbl) {
+    OtaDialogState *state = ota_state(upd->target);
+    if(state->status_lbl) {
         char buf[96];
         const int pct = (upd->status.progress * 100) / 255;
         std::snprintf(buf, sizeof(buf), "%s (%d%%)",
                       ota_state_text(upd->status.state), pct);
-        lv_label_set_text(g_ota_status_lbl, buf);
+        lv_label_set_text(state->status_lbl, buf);
     }
-    if(g_ota_bar) {
+    if(state->bar) {
         const int pct = (upd->status.progress * 100) / 255;
-        lv_bar_set_value(g_ota_bar, pct, LV_ANIM_OFF);
+        lv_bar_set_value(state->bar, pct, LV_ANIM_OFF);
     }
     delete upd;
 }
@@ -235,56 +252,79 @@ void wire_ota_proxy_once()
     ui::UiMsgProxy::instance().register_mcu_ota_status(
         [](const middleware::McuOtaStatusPayload &st) {
             auto *upd = new OtaUiUpdate{};
+            upd->target = OtaTarget::Glavo;
+            upd->status = st;
+            lv_async_call(ota_ui_apply_async, upd);
+        });
+    ui::UiMsgProxy::instance().register_serial_mcu_ota_status(
+        [](const middleware::McuOtaStatusPayload &st) {
+            auto *upd = new OtaUiUpdate{};
+            upd->target = OtaTarget::McuSerial;
             upd->status = st;
             lv_async_call(ota_ui_apply_async, upd);
         });
 }
 
-void on_ota_close(lv_event_t *)
+void on_glavo_ota_close(lv_event_t *)
 {
     ui::UiMsgProxy::instance().send_mcu_ota_cancel();
-    ota_close_dialog();
+    ota_close_dialog(OtaTarget::Glavo);
 }
 
-void open_ota_dialog(void)
+void on_mcu_ota_close(lv_event_t *)
 {
-    if(g_ota_dlg) {
+    ui::UiMsgProxy::instance().send_serial_mcu_ota_cancel();
+    ota_close_dialog(OtaTarget::McuSerial);
+}
+
+void open_ota_dialog(OtaTarget target, const char *title)
+{
+    OtaDialogState *state = ota_state(target);
+    if(state->dlg) {
         return;
     }
     wire_ota_proxy_once();
 
     ui_modal_dialog_cfg_t cfg =
-        ui_modal_dialog_cfg_user("MCU OTA (Test)", USER_DLG_W, false);
+        ui_modal_dialog_cfg_user(title, USER_DLG_W, false);
     cfg.with_close_btn = true;
-    g_ota_dlg = ui_modal_dialog_open(lv_screen_active(), &cfg);
-    if(!g_ota_dlg) {
+    state->dlg = ui_modal_dialog_open(lv_screen_active(), &cfg);
+    if(!state->dlg) {
         return;
     }
-    if(g_ota_dlg->close_btn) {
-        lv_obj_add_event_cb(g_ota_dlg->close_btn, on_ota_close,
+    if(state->dlg->close_btn) {
+        lv_obj_add_event_cb(state->dlg->close_btn,
+                            target == OtaTarget::Glavo ? on_glavo_ota_close : on_mcu_ota_close,
                             LV_EVENT_CLICKED, nullptr);
     }
 
-    g_ota_status_lbl = ui_user_make_body_label(g_ota_dlg->body, "Starting...");
-    g_ota_bar = ui_user_make_progress_bar(
-        g_ota_dlg->body, LV_PCT(100), USER_PROGRESS_H);
-    lv_bar_set_value(g_ota_bar, 0, LV_ANIM_OFF);
+    state->status_lbl = ui_user_make_body_label(state->dlg->body, "Starting...");
+    state->bar = ui_user_make_progress_bar(
+        state->dlg->body, LV_PCT(100), USER_PROGRESS_H);
+    lv_bar_set_value(state->bar, 0, LV_ANIM_OFF);
 }
 
-void ota_close_dialog(void)
+void ota_close_dialog(OtaTarget target)
 {
-    if(g_ota_dlg) {
-        ui_modal_dialog_close(g_ota_dlg);
-        g_ota_dlg         = nullptr;
-        g_ota_status_lbl  = nullptr;
-        g_ota_bar         = nullptr;
+    OtaDialogState *state = ota_state(target);
+    if(state->dlg) {
+        ui_modal_dialog_close(state->dlg);
+        state->dlg = nullptr;
+        state->status_lbl = nullptr;
+        state->bar = nullptr;
     }
 }
 
-void on_ota_entry_click(lv_event_t *)
+void on_glavo_ota_entry_click(lv_event_t *)
 {
-    open_ota_dialog();
+    open_ota_dialog(OtaTarget::Glavo, "Glavo OTA");
     ui::UiMsgProxy::instance().send_mcu_ota_start();
+}
+
+void on_mcu_ota_entry_click(lv_event_t *)
+{
+    open_ota_dialog(OtaTarget::McuSerial, "MCU Serial OTA");
+    ui::UiMsgProxy::instance().send_serial_mcu_ota_start();
 }
 
 void dlg_close(void)
@@ -1056,7 +1096,8 @@ void build_device_detail(lv_obj_t *parent)
     lv_obj_t *card = ui_user_make_frosted_card(parent, false);
     lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
 
-    ui_user_make_setting_row(card, "MCU OTA (Test)", "Start", on_ota_entry_click);
+    ui_user_make_setting_row(card, "Glavo OTA", "Start", on_glavo_ota_entry_click);
+    ui_user_make_setting_row(card, "MCU OTA", "Start", on_mcu_ota_entry_click);
 }
 
 void build_placeholder_detail(lv_obj_t *parent, const char *title)
@@ -1255,7 +1296,8 @@ void page_user_settings_refresh(bool /*force*/)
 void page_user_settings_dismiss_dialog(void)
 {
     dlg_close();
-    ota_close_dialog();
+    ota_close_dialog(OtaTarget::Glavo);
+    ota_close_dialog(OtaTarget::McuSerial);
     close_connecting_dialog();
 }
 

@@ -9,5 +9,6 @@
 #include "serial_print.hpp"
 #include "serial_env.hpp"
 #include "serial_debug.hpp"
+#include "serial_ota.hpp"
 
 #endif

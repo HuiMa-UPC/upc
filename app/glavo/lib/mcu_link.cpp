@@ -785,6 +785,10 @@ void McuLink::handle_serial_rx_frame(const uint8_t* frame, size_t len)
     send_soc_ack_for_bb(frame, len);
 #endif
 
+    if(serial_ota_session_.on_serial_rx_frame(frame, len)) {
+        return;
+    }
+
     serial_sensor_report_t sensor{};
     serial_sensor_err_t serr = SERIAL_SENSOR_ERR_NONE;
     if(serial_parse_sensor_report_detail(frame, len, &sensor, &serr) == 0) {
@@ -1922,7 +1926,7 @@ void McuLink::link_try_finish_sending()
 
 int McuLink::link_thread_sleep_ms() const
 {
-    if(ota_session_.is_active()) {
+    if(ota_session_.is_active() || serial_ota_session_.is_active()) {
         return TCP_SEND_INTERVAL_MS;
     }
     if(terminate_pending_.load()) {
@@ -1947,6 +1951,11 @@ void McuLink::set_ota_status_callback(McuOtaStatusCb cb)
     ota_session_.set_status_callback(std::move(cb));
 }
 
+void McuLink::set_serial_ota_status_callback(McuOtaStatusCb cb)
+{
+    serial_ota_session_.set_status_callback(std::move(cb));
+}
+
 bool McuLink::start_mcu_ota(const char* image_dir)
 {
     if(!is_tcp_connected()) {
@@ -1957,7 +1966,28 @@ bool McuLink::start_mcu_ota(const char* image_dir)
         UPC_LOG_MCU_OTA(Warn, "OTA start: print active");
         return false;
     }
+    if(serial_ota_session_.is_active()) {
+        UPC_LOG_MCU_OTA(Warn, "OTA start: serial ota active");
+        return false;
+    }
     return ota_session_.start(image_dir);
+}
+
+bool McuLink::start_serial_mcu_ota(const char* image_dir)
+{
+    if(serial_fd_ < 0) {
+        UPC_LOG_MCU_OTA(Error, "SERIAL_OTA start: serial not connected");
+        return false;
+    }
+    if(is_sending_.load()) {
+        UPC_LOG_MCU_OTA(Warn, "SERIAL_OTA start: print active");
+        return false;
+    }
+    if(ota_session_.is_active()) {
+        UPC_LOG_MCU_OTA(Warn, "SERIAL_OTA start: glavo ota active");
+        return false;
+    }
+    return serial_ota_session_.start(image_dir);
 }
 
 void McuLink::cancel_mcu_ota()
@@ -1965,9 +1995,19 @@ void McuLink::cancel_mcu_ota()
     ota_session_.cancel();
 }
 
+void McuLink::cancel_serial_mcu_ota()
+{
+    serial_ota_session_.cancel();
+}
+
 bool McuLink::ota_active() const
 {
     return ota_session_.is_active();
+}
+
+bool McuLink::serial_ota_active() const
+{
+    return serial_ota_session_.is_active();
 }
 
 void McuLink::on_tcp_status_response(const tcp_response_t& resp)
@@ -2004,6 +2044,15 @@ void McuLink::ota_tick()
         },
         +[]() { McuLink::instance().tcp_drain_rx(); },
         tcp_fd_ >= 0);
+}
+
+void McuLink::serial_ota_tick()
+{
+    serial_ota_session_.tick(
+        +[](const uint8_t* data, size_t len) -> int {
+            return McuLink::instance().serial_send_raw(data, len);
+        },
+        serial_fd_ >= 0);
 }
 
 void McuLink::link_try_ota_post_reconnect()
@@ -2051,13 +2100,15 @@ void McuLink::link_thread_fn()
         if(tcp_fd_ >= 0) {
             tcp_drain_rx();
         } else if(is_sending_.load() && !ota_session_.is_active() &&
+                   !serial_ota_session_.is_active() &&
                    !completing_cleanup_.load()) {
             // TCP 在发送过程中断开：标记错误并触发终止流程
             // （自然完成 cleanup 中的 Reset 断线忽略）
             PrintJobState::instance().set_job_error(true);
             is_sending_.store(false);
             terminate_pending_.store(true);
-        } else if(!terminate_pending_.load() && !ota_session_.is_active()) {
+        } else if(!terminate_pending_.load() && !ota_session_.is_active() &&
+                  !serial_ota_session_.is_active()) {
             // 空闲断线或 OTA 成功后：节流式 connect_tcp（固定 IP/PORT）
             if(tcp_fd_ < 0 || ota_post_reconnect_.load()) {
                 if(ota_post_reconnect_.load() || now >= next_tcp_retry) {
@@ -2070,6 +2121,8 @@ void McuLink::link_thread_fn()
 
         if(ota_session_.is_active()) {
             ota_tick();
+        } else if(serial_ota_session_.is_active()) {
+            serial_ota_tick();
         } else if(terminate_pending_.load()) {
             run_manual_terminate_cleanup();
             terminate_pending_.store(false);

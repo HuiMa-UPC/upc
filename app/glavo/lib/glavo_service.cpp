@@ -280,6 +280,10 @@ bool GlavoService::init()
         [this](const middleware::McuOtaStatusPayload& st) {
             publish_mcu_ota_status(st);
         });
+    McuLink::instance().set_serial_ota_status_callback(
+        [this](const middleware::McuOtaStatusPayload& st) {
+            publish_serial_mcu_ota_status(st);
+        });
     gcode_manifest_load(local_config_path(), local_manifest_);
 
     /* WiFi：wpa_supplicant 控制接口；回调在 WifiManager 后台线程触发，仅做 publish。 */
@@ -324,6 +328,8 @@ bool GlavoService::start()
         middleware::MsgType::UI_Purify_Req,
         middleware::MsgType::UI_Mcu_Ota_Start_Req,
         middleware::MsgType::UI_Mcu_Ota_Cancel_Ntf,
+        middleware::MsgType::UI_Serial_Mcu_Ota_Start_Req,
+        middleware::MsgType::UI_Serial_Mcu_Ota_Cancel_Ntf,
 
         /* 网络 / WiFi（ConnMan） */
         middleware::MsgType::UI_Wifi_Enable_Req,
@@ -546,6 +552,12 @@ void GlavoService::handle_message(const middleware::Message& msg)
             break;
         case middleware::MsgType::UI_Mcu_Ota_Cancel_Ntf:
             handle_mcu_ota_cancel(msg);
+            break;
+        case middleware::MsgType::UI_Serial_Mcu_Ota_Start_Req:
+            handle_serial_mcu_ota_start(msg);
+            break;
+        case middleware::MsgType::UI_Serial_Mcu_Ota_Cancel_Ntf:
+            handle_serial_mcu_ota_cancel(msg);
             break;
 
         case middleware::MsgType::UI_Wifi_Enable_Req:
@@ -1387,6 +1399,10 @@ void GlavoService::handle_mcu_ota_start(const middleware::Message& msg)
         UPC_LOG_MCU_OTA(Warn, "mcu_ota_start: already active");
         return;
     }
+    if(McuLink::instance().serial_ota_active()) {
+        UPC_LOG_MCU_OTA(Warn, "mcu_ota_start: serial ota active");
+        return;
+    }
     if(!McuLink::instance().start_mcu_ota(GLAVO_OTA_IMAGE_DIR)) {
         middleware::McuOtaStatusPayload st{};
         st.state    = middleware::McuOtaState::Failed;
@@ -1407,6 +1423,41 @@ void GlavoService::publish_mcu_ota_status(
     const middleware::McuOtaStatusPayload& st)
 {
     middleware::Message out(middleware::MsgType::APP_Mcu_Ota_Status_Ntf,
+                            middleware::ModuleId::APP_GLAVO,
+                            middleware::ModuleId::UI);
+    out.payload = middleware::MsgPayload::from_bytes(
+        reinterpret_cast<const uint8_t*>(&st), sizeof(st));
+    (void)publish_async(out);
+}
+
+/** @brief 处理 UI_Serial_Mcu_Ota_Start_Req，启动 McuLink 串口 OTA 会话 */
+void GlavoService::handle_serial_mcu_ota_start(const middleware::Message& msg)
+{
+    (void)msg;
+    if(McuLink::instance().serial_ota_active()) {
+        UPC_LOG_MCU_OTA(Warn, "serial_mcu_ota_start: already active");
+        return;
+    }
+    if(!McuLink::instance().start_serial_mcu_ota(MCU_OTA_IMAGE_DIR)) {
+        middleware::McuOtaStatusPayload st{};
+        st.state = middleware::McuOtaState::Failed;
+        st.progress = 0;
+        publish_serial_mcu_ota_status(st);
+    }
+}
+
+/** @brief 处理 UI_Serial_Mcu_Ota_Cancel_Ntf，取消 MCU 串口 OTA */
+void GlavoService::handle_serial_mcu_ota_cancel(const middleware::Message& msg)
+{
+    (void)msg;
+    McuLink::instance().cancel_serial_mcu_ota();
+}
+
+/** @brief 向 UI 推送 APP_Serial_Mcu_Ota_Status_Ntf */
+void GlavoService::publish_serial_mcu_ota_status(
+    const middleware::McuOtaStatusPayload& st)
+{
+    middleware::Message out(middleware::MsgType::APP_Serial_Mcu_Ota_Status_Ntf,
                             middleware::ModuleId::APP_GLAVO,
                             middleware::ModuleId::UI);
     out.payload = middleware::MsgPayload::from_bytes(

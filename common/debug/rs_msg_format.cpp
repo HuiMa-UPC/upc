@@ -115,6 +115,9 @@ const char* upc_msg_type_name(MsgType type) {
         case MsgType::UI_Mcu_Ota_Start_Req: return "UI_Mcu_Ota_Start_Req";
         case MsgType::UI_Mcu_Ota_Cancel_Ntf: return "UI_Mcu_Ota_Cancel_Ntf";
         case MsgType::APP_Mcu_Ota_Status_Ntf: return "APP_Mcu_Ota_Status_Ntf";
+        case MsgType::UI_Serial_Mcu_Ota_Start_Req: return "UI_Serial_Mcu_Ota_Start_Req";
+        case MsgType::UI_Serial_Mcu_Ota_Cancel_Ntf: return "UI_Serial_Mcu_Ota_Cancel_Ntf";
+        case MsgType::APP_Serial_Mcu_Ota_Status_Ntf: return "APP_Serial_Mcu_Ota_Status_Ntf";
         case MsgType::UI_Wifi_Enable_Req: return "UI_Wifi_Enable_Req";
         case MsgType::UI_Wifi_Scan_Req: return "UI_Wifi_Scan_Req";
         case MsgType::UI_Wifi_Connect_Req: return "UI_Wifi_Connect_Req";
