@@ -53,6 +53,10 @@ void control_start(void);
 void control_cancel(void);
 bool control_is_printing(void);
 
+/* 首页/监控「SWIPE TO OPEN」独立开门入口：走门弹窗流程（PM2.5/最短停留/关门轮询），
+* 确认关门后回首页。仅 IDLE 态生效。 */
+void control_open_door_request(void);
+
 lv_obj_t *page_user_files_create(lv_obj_t *parent);
 void      page_user_files_refresh(bool force);
 void      page_user_files_exit(void);

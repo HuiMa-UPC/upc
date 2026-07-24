@@ -146,8 +146,8 @@ const char* upc_msg_type_name(MsgType type) {
         case MsgType::UI_Debug_Recycle_Motor_Req: return "UI_Debug_Recycle_Motor_Req";
         case MsgType::UI_Debug_Fan_Req: return "UI_Debug_Fan_Req";
         case MsgType::UI_Debug_Switch_Req: return "UI_Debug_Switch_Req";
-        case MsgType::UI_Debug_CleanTest_Start_Req: return "UI_Debug_CleanTest_Start_Req";
-        case MsgType::UI_Debug_CleanTest_Close_Req: return "UI_Debug_CleanTest_Close_Req";
+        case MsgType::UI_Debug_CleanTest_Start_Ntf: return "UI_Debug_CleanTest_Start_Ntf";
+        case MsgType::UI_Debug_CleanTest_Close_Ntf: return "UI_Debug_CleanTest_Close_Ntf";
         case MsgType::UI_Debug_Fan_Duty_Req: return "UI_Debug_Fan_Duty_Req";
         case MsgType::UI_Debug_PrintParam_Set_Req: return "UI_Debug_PrintParam_Set_Req";
         case MsgType::UI_Debug_Laser_Power_Set_Req: return "UI_Debug_Laser_Power_Set_Req";

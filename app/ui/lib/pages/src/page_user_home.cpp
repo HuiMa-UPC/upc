@@ -133,7 +133,9 @@ void home_set_status(user_home_status_t s)
 
 void home_trigger_door_open(void)
 {
-    ui::UiMsgProxy::instance().send_open_door();
+     /* 走 control 的门弹窗流程（Opening→DoorOpened→DoorClosed，含 PM2.5 净化检查/
+     * 最短停留/关门轮询），确认关门后回首页。不再直接 send_open_door()。 */
+     control_open_door_request();
 }
 
 /* ---------- 顶部状态条 ---------- */
@@ -289,8 +291,8 @@ void door_slide_reset_cb(lv_timer_t *t)
 
 void on_door_slide_unlocked(void * /*user_data*/)
 {
+    /* 开门流程改由门弹窗承载，不再弹「Open Door」吐司（避免与弹窗重复） */
     home_trigger_door_open();
-    ui_toast_show("Open Door", user_color_accent, 1500);
     lv_timer_t *t = lv_timer_create(door_slide_reset_cb, 700, nullptr);
     lv_timer_set_repeat_count(t, 1);
 }
@@ -1321,8 +1323,8 @@ void monitor_door_reset_cb(lv_timer_t *t)
 
 void on_monitor_door_unlocked(void * /*u*/)
 {
+    /* 开门流程改由门弹窗承载，不再弹「Open Door」吐司（避免与弹窗重复） */
     home_trigger_door_open();
-    ui_toast_show("Open Door", user_color_accent, 1500);
     lv_timer_t *t = lv_timer_create(monitor_door_reset_cb, 700, nullptr);
     lv_timer_set_repeat_count(t, 1);
 }

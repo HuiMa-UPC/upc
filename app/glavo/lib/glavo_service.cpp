@@ -352,8 +352,8 @@ bool GlavoService::start()
         middleware::MsgType::UI_Debug_Fan_Req,
         middleware::MsgType::UI_Debug_Fan_Duty_Req,
         middleware::MsgType::UI_Debug_Switch_Req,
-        middleware::MsgType::UI_Debug_CleanTest_Start_Req,
-        middleware::MsgType::UI_Debug_CleanTest_Close_Req,
+        middleware::MsgType::UI_Debug_CleanTest_Start_Ntf,
+        middleware::MsgType::UI_Debug_CleanTest_Close_Ntf,
         middleware::MsgType::UI_Debug_PrintParam_Set_Req,
         middleware::MsgType::UI_Debug_Laser_Power_Set_Req,
         middleware::MsgType::UI_Debug_Laser_Power_Reset_Req,
@@ -547,6 +547,9 @@ void GlavoService::handle_message(const middleware::Message& msg)
         case middleware::MsgType::UI_Purify_Req:
             handle_purify_request(msg);
             break;
+        case middleware::MsgType::UI_Clean_Start_Req:
+            handle_clean_start_request(msg);
+            break;
         case middleware::MsgType::UI_Mcu_Ota_Start_Req:
             handle_mcu_ota_start(msg);
             break;
@@ -615,10 +618,10 @@ void GlavoService::handle_message(const middleware::Message& msg)
         case middleware::MsgType::UI_Debug_Switch_Req:
             handle_debug_switch(msg);
             break;
-        case middleware::MsgType::UI_Debug_CleanTest_Start_Req:
+        case middleware::MsgType::UI_Debug_CleanTest_Start_Ntf:
             handle_debug_clean_test_start(msg);
             break;
-        case middleware::MsgType::UI_Debug_CleanTest_Close_Req:
+        case middleware::MsgType::UI_Debug_CleanTest_Close_Ntf:
             handle_debug_clean_test_close(msg);
             break;
         case middleware::MsgType::UI_Debug_PrintParam_Set_Req:
@@ -1337,9 +1340,12 @@ void GlavoService::handle_supply_status_req(const middleware::Message& msg)
 /** @brief 回复舱内 PM2.5（来自 McuLink 环境快照） */
 void GlavoService::handle_pm25_request(const middleware::Message& msg)
 {
+    /* 阈值判定归后端：舱内 PM2.5 ≥ 50 判不合格（is_high=1）→ 触发开门前清粉。
+     * TODO：如需可配置，改为从配置读取该阈值。 */
+    constexpr float kPm25CleanThreshold = 50.0f;
     const auto env = McuLink::instance().env_snapshot();
     middleware::Pm25ResultPayload p{};
-    p.is_high   = (env.valid && env.pm25_cabin > 35.0f) ? 1 : 0;
+    p.is_high   = (env.valid && env.pm25_cabin >= kPm25CleanThreshold) ? 1 : 0;
     p.pm25_cabin = env.valid ? env.pm25_cabin : 0.f;
 
     middleware::Message rsp(middleware::MsgType::APP_PM25_Rsp,
@@ -1351,12 +1357,13 @@ void GlavoService::handle_pm25_request(const middleware::Message& msg)
     }
 }
 
-/** @brief 发送门控操作结果 Rsp（ok=1 占位） */
+/** @brief 发送门控操作结果 Rsp */
 void GlavoService::send_door_rsp(const middleware::Message& msg,
-                                 middleware::MsgType rsp_type)
+                                 middleware::MsgType rsp_type,
+                                 bool ok)
 {
     middleware::DoorResultPayload p{};
-    p.ok = 1;
+    p.ok = ok ? 1 : 0;
 
     middleware::Message rsp(rsp_type,
         static_cast<middleware::ModuleId>(module_id()), msg.sender_id);
@@ -1368,16 +1375,39 @@ void GlavoService::send_door_rsp(const middleware::Message& msg,
     }
 }
 
-/** @brief 处理 UI_CLOSE_DOOR_Req（关门传感器待接入，当前占位立即确认已关） */
+/** @brief 处理 UI_CLOSE_DOOR_Req */
 void GlavoService::handle_close_door_request(const middleware::Message& msg)
 {
-    send_door_rsp(msg, middleware::MsgType::APP_CLOSE_DOOR_Rsp);
+#if GLAVO_DOOR_REAL_CLOSE_CHECK_ENABLE
+    const auto env = McuLink::instance().env_snapshot();
+    const bool closed = env.valid && env.door_state_valid && !env.outer_door_open;
+    send_door_rsp(msg, middleware::MsgType::APP_CLOSE_DOOR_Rsp, closed);
+    UPC_LOG_GLAVO_SERVICE(Info,
+        "close_door_check real mode: valid=%d door_valid=%d door_open=%d -> closed=%d",
+        env.valid ? 1 : 0, env.door_state_valid ? 1 : 0,
+        env.outer_door_open ? 1 : 0, closed ? 1 : 0);
+#else
+    /* 兼容旧逻辑：占位立即确认已关 */
+    send_door_rsp(msg, middleware::MsgType::APP_CLOSE_DOOR_Rsp, true);
+#endif
 }
 
-/** @brief 处理 UI_OpenDoor_Req（MCU 开门待接入，当前占位立即确认已开） */
+/** @brief 处理 UI_OpenDoor_Req */
 void GlavoService::handle_open_door_request(const middleware::Message& msg)
 {
-    send_door_rsp(msg, middleware::MsgType::APP_OpenDoor_Rsp);
+#if GLAVO_DOOR_REAL_OPEN_ENABLE
+    bool opened = false;
+    const bool got = McuLink::instance().request_open_door_and_wait(
+        GLAVO_DOOR_OPEN_TIMEOUT_MS, &opened);
+    const bool ok = got && opened;
+    send_door_rsp(msg, middleware::MsgType::APP_OpenDoor_Rsp, ok);
+    UPC_LOG_GLAVO_SERVICE(Info,
+        "open_door real mode: got=%d opened=%d timeout_ms=%u",
+        got ? 1 : 0, opened ? 1 : 0, static_cast<unsigned>(GLAVO_DOOR_OPEN_TIMEOUT_MS));
+#else
+    /* 兼容旧逻辑：占位立即确认已开 */
+    send_door_rsp(msg, middleware::MsgType::APP_OpenDoor_Rsp, true);
+#endif
 }
 
 /** @brief 处理 UI_Purify_Req（尚未实现业务逻辑） */
@@ -1386,6 +1416,21 @@ void GlavoService::handle_purify_request(const middleware::Message& msg)
     (void)msg;
     UPC_LOG_GLAVO_SERVICE(Debug, "purify_req: not implemented");
 }
+
+
+/** @brief 处理 UI_Clean_Start_Req（临时桩：立即回 Rsp）。
+ *  TODO(后端)：真实逻辑应开启风机 → 循环检测 PM2.5 至合格 → 关闭风机后再回
+ *  APP_Clean_Start_Rsp。当前占位即时确认，"正在清粉中"弹窗可见时长由 UI 端
+ *  CLEAN_MIN_MS 最短停留保证。 */
+ void GlavoService::handle_clean_start_request(const middleware::Message& msg)
+ {
+     UPC_LOG_GLAVO_SERVICE(Debug, "clean_start_req: stub, reply done immediately");
+     middleware::Message rsp(middleware::MsgType::APP_Clean_Start_Rsp,
+         static_cast<middleware::ModuleId>(module_id()), msg.sender_id);
+     if(!publish_async(rsp)) {
+         UPC_LOG_GLAVO_SERVICE(Warn, "clean_start_rsp publish_async failed");
+     }
+ }
 
 /* ============================================================================
  * MCU OTA

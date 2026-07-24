@@ -67,6 +67,14 @@ void UiMsgProxy::init()
         }));
 
     subs_.push_back(bus.subscribe(
+        middleware::MsgType::APP_Clean_Start_Rsp, middleware::ModuleId::UI,
+        [this](const middleware::Message&) {
+            if (clean_done_cb_) {
+                clean_done_cb_();
+            }
+        }));
+
+    subs_.push_back(bus.subscribe(
         middleware::MsgType::Fs_DirOpen_Rsp, middleware::ModuleId::UI,
         [this](const middleware::Message& msg) {
             if (!fs_dir_cb_) {
@@ -420,6 +428,19 @@ void UiMsgProxy::register_purify_progress(PurifyProgressCb cb)
 void UiMsgProxy::register_purify_done(PurifyDoneCb cb)
 {
     purify_done_cb_ = std::move(cb);
+}
+
+void UiMsgProxy::send_clean_start()
+{
+    middleware::Message msg(middleware::MsgType::UI_Clean_Start_Req,
+                            middleware::ModuleId::UI,
+                            middleware::ModuleId::APP_GLAVO);
+    middleware::MsgPort::instance().publish_async(msg);
+}
+
+void UiMsgProxy::register_clean_start_result(CleanDoneCb cb)
+{
+    clean_done_cb_ = std::move(cb);
 }
 
 void UiMsgProxy::send_fs_dir_open(middleware::PrintFileSource source)

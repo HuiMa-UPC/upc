@@ -11,6 +11,7 @@
 #include <atomic>
 #include <cstdint>
 #include <chrono>
+#include <condition_variable>
 #include <deque>
 #include <functional>
 #include <mutex>
@@ -42,6 +43,8 @@ struct EnvSnapshotCache {
     float oxygen_percent  = 0.f;
     float humidity_percent = 0.f;
     float pressure_kpa    = -1.f;   /**< 舱内气压 kPa（0x9B pressure_mbar÷10）；无源时 <0 */
+    bool  outer_door_open = false;  /**< 外门锁状态：false=门关 true=门开（来源 0x9B value[10] bit7） */
+    bool  door_state_valid = false; /**< 是否已收到至少一帧可用门状态 */
     bool  valid           = false;
 };
 
@@ -156,6 +159,14 @@ public:
 
     /** @brief 读取最新环境传感器快照（线程安全） */
     [[nodiscard]] EnvSnapshotCache env_snapshot() const;
+
+    /**
+     * @brief 发送“打印前开门请求”并等待 MCU 结果（TLV_REQ_OPEN_DOOR / TLV_REQ_DOOR_OPEN_RESULT）
+     * @param timeout_ms 等待上限（毫秒）
+     * @param opened_out 可选输出：true=门已开（door_state=0），false=拒绝/失败
+     * @return true=收到结果；false=超时或发送失败
+     */
+    bool request_open_door_and_wait(uint32_t timeout_ms, bool* opened_out);
 
     /**
      * @brief 设置 TCP_NODELAY，禁用 Nagle 算法以降低发包延迟
@@ -359,6 +370,11 @@ private:
 
     EnvSnapshotCache env_cache_{};
     mutable std::mutex env_mtx_;
+
+    std::mutex door_open_rsp_mtx_;
+    std::condition_variable door_open_rsp_cv_;
+    bool door_open_rsp_pending_ = false;
+    bool door_open_rsp_opened_  = false;
 
     McuOtaSession ota_session_;
     McuSerialOtaSession serial_ota_session_;

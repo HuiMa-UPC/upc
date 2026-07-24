@@ -412,6 +412,11 @@ int McuLink::open_serial(const char* device, int baud)
 
     serial_fd_ = fd;
     serial_rx_accum_len_ = 0;
+    {
+        std::lock_guard<std::mutex> lock(env_mtx_);
+        env_cache_.valid = false;
+        env_cache_.door_state_valid = false;
+    }
 
     UPC_LOG_MCU_LINK(Info, "serial open %s @ %d", device, baud);
     return 0;
@@ -447,6 +452,15 @@ void McuLink::stop()
         serial_fd_ = -1;
     }
     serial_clear_reliable();
+    {
+        std::lock_guard<std::mutex> lock(env_mtx_);
+        env_cache_ = EnvSnapshotCache{};
+    }
+    {
+        std::lock_guard<std::mutex> lock(door_open_rsp_mtx_);
+        door_open_rsp_pending_ = false;
+        door_open_rsp_opened_  = false;
+    }
 }
 
 /* ---------- 状态查询 ---------- */
@@ -505,6 +519,52 @@ EnvSnapshotCache McuLink::env_snapshot() const
     return env_cache_;
 }
 
+bool McuLink::request_open_door_and_wait(uint32_t timeout_ms, bool* opened_out)
+{
+    if(serial_fd_ < 0) {
+        UPC_LOG_MCU_LINK(Warn, "request_open_door: serial offline");
+        return false;
+    }
+
+    uint8_t frame[32];
+    const int n = serial_build_door_open_request(frame, sizeof(frame));
+    if(n <= 0) {
+        UPC_LOG_MCU_LINK(Warn, "request_open_door: build frame failed");
+        return false;
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(door_open_rsp_mtx_);
+        door_open_rsp_pending_ = false;
+        door_open_rsp_opened_  = false;
+    }
+
+    enqueue_serial_tx(frame, static_cast<size_t>(n), true);
+
+    const uint32_t wait_ms = timeout_ms > 0 ? timeout_ms : 1u;
+    const auto deadline =
+        std::chrono::steady_clock::now() + std::chrono::milliseconds(wait_ms);
+
+    bool opened = false;
+    std::unique_lock<std::mutex> lk(door_open_rsp_mtx_);
+    const bool got = door_open_rsp_cv_.wait_until(lk, deadline, [this]() {
+        return door_open_rsp_pending_;
+    });
+    if(got) {
+        opened = door_open_rsp_opened_;
+        door_open_rsp_pending_ = false;
+    }
+    lk.unlock();
+
+    if(opened_out) {
+        *opened_out = opened;
+    }
+    if(!got) {
+        UPC_LOG_MCU_LINK(Warn, "request_open_door: timeout %u ms", wait_ms);
+    }
+    return got;
+}
+
 void McuLink::drain_serial_tx_queue()
 {
     if(serial_fd_ < 0) {
@@ -540,18 +600,21 @@ void McuLink::on_sensor_report(const serial_sensor_report_t& report)
         env_cache_.oxygen_percent  = report.oxygen_percent;
         env_cache_.humidity_percent = report.humidity_percent;
         env_cache_.pressure_kpa    = static_cast<float>(report.pressure_mbar) / 10.0f; /* mbar→kPa */
+        env_cache_.outer_door_open = (report.outer_door_open != 0);
+        env_cache_.door_state_valid = true;
         env_cache_.valid           = true;
     }
     publish_env_update_ntf();
     publish_debug_sensor_ntf(report);   /* 调试页顶部 7 路传感器回读 */
 
     UPC_LOG_MCU_LINK(Info,
-        "sensor: O2=%.1f%% P=%dmbar T=%.1fC RH=%.1f%% PM2.5=%.1f base=%.1fC powder=%d",
+        "sensor: O2=%.1f%% P=%dmbar T=%.1fC RH=%.1f%% PM2.5=%.1f base=%.1fC powder=%d door_open=%d",
         static_cast<double>(report.oxygen_percent), report.pressure_mbar,
         static_cast<double>(report.temperature_c),
         static_cast<double>(report.humidity_percent),
         static_cast<double>(report.pm25_ug_m3),
-        static_cast<double>(report.substrate_temp_c), report.powder_present);
+        static_cast<double>(report.substrate_temp_c), report.powder_present,
+        report.outer_door_open ? 1 : 0);
 }
 
 void McuLink::on_motion_pos_report(const serial_motion_pos_t& pos)
@@ -786,6 +849,20 @@ void McuLink::handle_serial_rx_frame(const uint8_t* frame, size_t len)
 #endif
 
     if(serial_ota_session_.on_serial_rx_frame(frame, len)) {
+        return;
+    }
+
+    uint8_t door_state = 0;
+    if(serial_parse_door_open_result(frame, len, &door_state) == 0) {
+        const bool opened = (door_state == 0x00);
+        {
+            std::lock_guard<std::mutex> lock(door_open_rsp_mtx_);
+            door_open_rsp_opened_  = opened;
+            door_open_rsp_pending_ = true;
+        }
+        door_open_rsp_cv_.notify_all();
+        UPC_LOG_MCU_LINK(Info, "door_open_result: state=0x%02X opened=%d",
+                         static_cast<unsigned>(door_state), opened ? 1 : 0);
         return;
     }
 

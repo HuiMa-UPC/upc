@@ -151,6 +151,8 @@ scripts/rongsu.sh start   # glavo + rongsu_camera → ui
 | `UI_Purify_Req` | — | UI→Glavo | Empty | `send_purify` | 净化（待实现） |
 | `APP_Purify_Progress` | `GLAVO_Purify_Progress_Ntf` | Glavo→UI | `Value`（百分比） | `register_purify_progress` | — |
 | `APP_Purify_Rsp` | `GLAVO_Purify_Done` | Glavo→UI | Empty | `register_purify_done` | — |
+| `UI_Clean_Start_Req` | — | UI→Glavo | Empty | `send_clean_start` | 开门前清粉（PM2.5≥50 触发；后端临时桩即时回） |
+| `APP_Clean_Start_Rsp` | `GLAVO_Clean_Start_Rsp` | Glavo→UI | Empty | `register_clean_start_result` | 清粉完成→前端自动开门 |
 | `UI_Print_Prepare_Req` | — | UI→Glavo | `PrintPrepareReqPayload` | `send_print_prepare` | USB 复制+轻量扫描+config |
 | `APP_Print_Prepare_Rsp` | — | Glavo→UI | `PrintPrepareRspPayload` | `register_print_prepare_done` | — |
 | `UI_Parser_Exit_Ntf` | — | UI→Glavo | Empty | `send_parser_exit` | 取消解析 |
@@ -191,7 +193,8 @@ scripts/rongsu.sh start   # glavo + rongsu_camera → ui
 | `UI_Debug_Recycle_Motor_Req` | — | UI→Glavo | `DebugMotorPayload` | `send_inner_door` | 内门（0=停止/1=开/2=关；原回粉电机块改为内门） |
 | `UI_Debug_Fan_Req` | — | UI→Glavo | `DebugFanPayload` | `send_fan` | 风扇开/关（占空比走 Fan_Duty_Req） |
 | `UI_Debug_Switch_Req` | — | UI→Glavo | `DebugSwitchPayload` | `send_switch` | 激光/洗气/底板加热 |
-| `UI_Debug_CleanTest_Start_Req` | — | UI→Glavo | Empty | `send_clean_test_start` | 清粉测试开启（关闭暂不使用） |
+| `UI_Debug_CleanTest_Start_Ntf` | — | UI→Glavo | Empty | `send_clean_test_start` | 清粉测试开启（关闭暂不使用） |
+| `UI_Debug_CleanTest_Close_Ntf` | — | UI→Glavo | Empty | `send_clean_test_close` | 清粉测试关闭/中止 |
 | `UI_Debug_Laser_Power_Set_Req` | — | UI→Glavo | `DebugLaserPowerPayload` | `send_laser_power_set` | 激光手动功率 0–100 |
 | `UI_Debug_Laser_Power_Reset_Req` | — | UI→Glavo | Empty | `send_laser_power_reset` | 取消手动功率、恢复外控 |
 | `UI_Debug_Laser_AlarmReset_Req` | — | UI→Glavo | Empty | `send_laser_alarm_reset` | 激光器报警复位（1301） |

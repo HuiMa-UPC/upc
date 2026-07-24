@@ -6,9 +6,10 @@
     img_plate_double  2672:4865  「未放入」打印版悬空 + 蓝色下箭头（DoorOpened 也复用）
     img_device_unlock 2566:5241  开门态：设备 + 蓝色箭头
     img_device_lock   3251:14574 关门确认态：设备 + 蓝色箭头
+    img_mask          3227:13843 首页开门弹窗顶图：口罩照片（深色底，三态共用）
 
 输入（需先用 download_assets 导出 PNG 到该目录）：
-    tools/_pf_tmp/{plate_single,plate_double,device_unlock,device_lock}.png
+    tools/_pf_tmp/{plate_single,plate_double,device_unlock,device_lock,mask}.png
 输出：
     app/ui/lib/assets/src/print_flow_img.c
 
@@ -30,6 +31,7 @@ ASSETS = [
     ("img_device_unlock", "device_unlock.png", 496, 321),
     ("img_door_opened",   "door_opened.png",   496, 321),
     ("img_device_lock",   "device_lock.png",   496, 321),
+    ("img_mask",          "mask.png",          496, 320),   # 首页开门弹窗顶图（口罩，三态共用）
 ]
 
 

@@ -58,6 +58,7 @@ private:
     void handle_close_door_request(const middleware::Message& msg);
     void handle_open_door_request(const middleware::Message& msg);
     void handle_purify_request(const middleware::Message& msg);
+    void handle_clean_start_request(const middleware::Message& msg);
     void handle_mcu_ota_start(const middleware::Message& msg);
     void handle_mcu_ota_cancel(const middleware::Message& msg);
     void publish_mcu_ota_status(const middleware::McuOtaStatusPayload& st);
@@ -102,7 +103,7 @@ private:
     void handle_debug_laser_alarm_reset(const middleware::Message& msg);
     void debug_tx(const uint8_t* frame, int n);
 
-    void send_door_rsp(const middleware::Message& msg, middleware::MsgType rsp_type);
+    void send_door_rsp(const middleware::Message& msg, middleware::MsgType rsp_type, bool ok);
     void send_dir_open_empty(const middleware::Message& req);
     void send_dir_open_usb(const middleware::Message& req, const std::string& usb_path);
     void stop_print_job();

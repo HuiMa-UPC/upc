@@ -14,7 +14,8 @@ typedef struct {
     float temperature_c;
     float humidity_percent;
     float pm25_ug_m3;
-    uint8_t powder_present;
+    uint8_t powder_present;  /**< value[10] bit0：0=粉已空 1=粉还有 */
+    uint8_t outer_door_open; /**< value[10] bit7：0=门关 1=门开 */
     float substrate_temp_c;
     uint16_t hall_bitmap;
 } serial_sensor_report_t;

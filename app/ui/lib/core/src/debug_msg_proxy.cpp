@@ -180,12 +180,12 @@ void DebugMsgProxy::send_switch(middleware::DebugSwitchTarget target, bool on)
 
 void DebugMsgProxy::send_clean_test_start()
 {
-    publish_empty(middleware::MsgType::UI_Debug_CleanTest_Start_Req);
+    publish_empty(middleware::MsgType::UI_Debug_CleanTest_Start_Ntf);
 }
 
 void DebugMsgProxy::send_clean_test_close()
 {
-    publish_empty(middleware::MsgType::UI_Debug_CleanTest_Close_Req);
+    publish_empty(middleware::MsgType::UI_Debug_CleanTest_Close_Ntf);
 }
 
 void DebugMsgProxy::send_print_layer_param(uint16_t layer_um, uint16_t balance_x1000)

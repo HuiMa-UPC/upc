@@ -45,6 +45,12 @@ control_state_t g_state = CONTROL_STATE_IDLE;
 ui_modal_dialog_t *g_current_dlg = nullptr;
 control_file_t g_active_file = {};
 
+/* 门流程来源：区分同一套门弹窗（DOOR_OPENING→DOOR_CONFIRM）的入口与终态。
+ *   PrintPrep      —— 打印前置流程，确认关门后进入选文件页；
+ *   HomeStandalone —— 首页独立开门，确认关门后返回首页。 */
+enum class DoorFlowOrigin { PrintPrep, HomeStandalone };
+DoorFlowOrigin g_door_origin = DoorFlowOrigin::PrintPrep;
+
 /* ---- 选择文件屏（设计稿 1.1.5）：底板 + 本机/USB 源 + 右侧详情面板 ---- */
 lv_obj_t *g_file_panel   = nullptr;   /**< 选择文件页根（PageManager 托管，常驻不销毁） */
 bool      g_files_page_active = false; /**< 选择文件页当前是否可见（PageManager on_enter/on_exit 维护） */
@@ -103,6 +109,8 @@ DoneCb g_close_cb = nullptr;
 void  *g_close_u = nullptr;
 DoneCb g_purify_cb = nullptr;
 void  *g_purify_u = nullptr;
+DoneCb g_clean_cb = nullptr;
+void  *g_clean_u = nullptr;
 
 using ProgressCb = void (*)(const control_progress_t *p, void *user_data);
 ProgressCb g_job_prog_cb = nullptr;
@@ -186,6 +194,7 @@ void enter_state(control_state_t s);
 void refresh_supply_bars(void);
 void highlight_file_rows(void);
 void close_confirm_dlg(void);
+void show_print_confirm_dialog(void);
 void close_prepare_dlg(void);
 void show_prepare_dlg(void);
 void goto_file_selection(void);
@@ -441,6 +450,10 @@ void wire_msg_proxy()
         invoke_done(g_purify_cb, g_purify_u);
     });
 
+    proxy.register_clean_start_result([]() {
+        invoke_done(g_clean_cb, g_clean_u);
+    });
+
     /* USB 列表经 Fs_DirOpen IPC；Local 由 load_local_files_from_config 直读盘 */
     proxy.register_fs_dir([](const middleware::FileEntryPayload *files, uint32_t count) {
         if(g_dir_open_pending.empty()) {
@@ -566,6 +579,8 @@ void backend_cancel_pending()
     g_close_u = nullptr;
     g_purify_cb = nullptr;
     g_purify_u = nullptr;
+    g_clean_cb = nullptr;
+    g_clean_u = nullptr;
     g_job_prog_cb = nullptr;
     g_job_done_cb = nullptr;
     g_job_u = nullptr;
@@ -578,12 +593,11 @@ void backend_start_pm25(DoneCb cb, void *u)
     ui::UiMsgProxy::instance().send_pm25_check();
 }
 
-void backend_start_purify(DoneCb cb, void *u)
+void backend_start_clean(DoneCb cb, void *u)
 {
-    g_purify_progress = 0;
-    g_purify_cb = cb;
-    g_purify_u = u;
-    ui::UiMsgProxy::instance().send_purify();
+    g_clean_cb = cb;
+    g_clean_u = u;
+    ui::UiMsgProxy::instance().send_clean_start();
 }
 
 void backend_start_open_door(DoneCb cb, void *u)
@@ -692,9 +706,11 @@ ui_arc_spinner_t *g_door_spinner = nullptr;
 constexpr uint32_t DOOR_OPENING_MIN_MS = 1500u;   /**< "正在准备开门"最短显示 */
 constexpr uint32_t DOOR_OPENED_MIN_MS  = 1500u;   /**< "门已开启(置灰)"最短显示后才开始检测 */
 constexpr uint32_t DOOR_CLOSE_POLL_MS  = 800u;    /**< 关门检测轮询间隔 */
-lv_timer_t *g_door_advance_timer    = nullptr;    /**< Opening 最短停留到时→前进 */
+constexpr uint32_t CLEAN_MIN_MS        = 1500u;   /**< "正在清粉中"最短显示 */
+lv_timer_t *g_door_advance_timer    = nullptr;    /**< Opening/Cleaning 最短停留到时→前进 */
 lv_timer_t *g_door_close_poll_timer = nullptr;    /**< DoorOpened 关门检测轮询 */
 uint32_t    g_door_opening_since     = 0;          /**< 进入 Opening 的 tick */
+uint32_t    g_clean_since            = 0;          /**< 进入 Cleaning 的 tick */
 
 /** 口罩提示徽标（Figma：深色半透明胶囊 + 红色"圆圈 i"图标 + 红字）。 */
 lv_obj_t *make_mask_badge(lv_obj_t *parent, const char *text)
@@ -809,6 +825,7 @@ void on_plate_select_task(lv_event_t * /*e*/)
 void on_plate_swipe_open(void * /*u*/)
 {
     if(g_state == CONTROL_STATE_PLATE_PROMPT) {
+        g_door_origin = DoorFlowOrigin::PrintPrep;
         enter_state(CONTROL_STATE_DOOR_OPENING);
     }
 }
@@ -1076,7 +1093,7 @@ ui_modal_dialog_t *show_plate_prompt(lv_obj_t *parent)
 
 /* -------------------------- 舱门弹窗（Figma 2566:5240/5306/5430） -------------------------- */
 
-enum class DoorVariant { Opening, DoorOpened, DoorClosed };
+enum class DoorVariant { Opening, Cleaning, DoorOpened, DoorClosed };
 
 void on_door_closed_confirm_btn(lv_event_t *e);
 void door_apply_variant(DoorVariant v);
@@ -1241,11 +1258,13 @@ void door_apply_variant(DoorVariant v)
     g_door_title = nullptr;
     g_door_body  = nullptr;
 
-    if(v == DoorVariant::Opening) {
+    if(v == DoorVariant::Opening || v == DoorVariant::Cleaning) {
         door_set_image(&img_device_unlock);
 
         g_door_title = lv_label_create(g_door_content);
-        lv_label_set_text(g_door_title, "Opening the door...");
+        lv_label_set_text(g_door_title,
+                          v == DoorVariant::Cleaning ? "Cleaning powder..."
+                                                     : "Opening the door...");
         lv_obj_set_style_text_color(g_door_title, user_color_text, 0);
         lv_obj_set_style_text_font(g_door_title, user_font_value(), 0);
         lv_obj_set_style_text_align(g_door_title, LV_TEXT_ALIGN_CENTER, 0);
@@ -1398,6 +1417,20 @@ void on_detail_start_print(lv_event_t * /*e*/)
     if(!g_files_page_active || g_sel_index < 0) {
         return;
     }
+    show_print_confirm_dialog();
+}
+
+void on_print_confirm_cancel(lv_event_t * /*e*/)
+{
+    close_confirm_dlg();
+}
+
+void on_print_confirm_ok(lv_event_t * /*e*/)
+{
+    close_confirm_dlg();
+    if(!g_files_page_active || g_sel_index < 0) {
+        return;
+    }
     enter_state(CONTROL_STATE_PREPARE_WAIT);
     ui::UiMsgProxy::instance().send_print_prepare(
         static_cast<uint32_t>(g_sel_index), file_tab_to_source(g_file_tab));
@@ -1495,6 +1528,141 @@ void show_delete_confirm(void)
     open_user_confirm_dialog(lv_layer_top(), "Delete this file?", msg,
                              "Cancel", "Delete", ui_color_danger,
                              on_delete_cancel, on_delete_confirm);
+}
+
+/* 确认弹窗页脚按钮：两枚等宽圆角，主按钮填充色、次按钮浅灰底。 */
+lv_obj_t *make_print_confirm_btn(lv_obj_t *parent, const char *text,
+                                 bool primary, lv_event_cb_t cb)
+{
+    lv_obj_t *btn = lv_button_create(parent);
+    lv_obj_remove_style_all(btn);
+    lv_obj_set_flex_grow(btn, 1);
+    lv_obj_set_height(btn, USER_DLG_FOOTER_BTN_H);
+    lv_obj_set_style_radius(btn, USER_RADIUS, 0);
+    if(primary) {
+        lv_obj_set_style_bg_color(btn, user_color_accent, 0);
+        lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, 0);
+        lv_obj_set_style_bg_opa(btn, LV_OPA_80, LV_STATE_PRESSED);
+    } else {
+        lv_obj_set_style_bg_color(btn, user_color_panel_alt, 0);
+        lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, 0);
+        lv_obj_set_style_bg_opa(btn, LV_OPA_70, LV_STATE_PRESSED);
+    }
+    lv_obj_clear_flag(btn, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_event_cb(btn, cb, LV_EVENT_CLICKED, nullptr);
+    lv_obj_t *bl = lv_label_create(btn);
+    lv_label_set_text(bl, text);
+    lv_obj_set_style_text_color(bl, user_color_text, 0);
+    lv_obj_set_style_text_font(bl, user_font_text(), 0);
+    lv_obj_center(bl);
+    return btn;
+}
+
+/* 「开始打印」二次确认弹窗：标题 + 副标题（耗时/耗材）+ 取消/开始打印。 */
+void show_print_confirm_dialog(void)
+{
+    if(g_confirm_dlg || g_sel_index < 0) {
+        return;
+    }
+    auto *dlg = static_cast<ui_modal_dialog_t *>(std::calloc(1, sizeof(ui_modal_dialog_t)));
+    if(!dlg) {
+        return;
+    }
+    const control_file_t *file = &g_active_file;
+
+    lv_obj_t *backdrop = lv_obj_create(lv_layer_top());
+    lv_obj_remove_style_all(backdrop);
+    lv_obj_set_size(backdrop, LV_PCT(100), LV_PCT(100));
+    lv_obj_set_style_bg_color(backdrop, lv_color_black(), 0);
+    lv_obj_set_style_bg_opa(backdrop, USER_DLG_BACKDROP_OPA, 0);
+    lv_obj_clear_flag(backdrop, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(backdrop, LV_OBJ_FLAG_CLICKABLE);
+    dlg->root = backdrop;
+
+    const int32_t card_w = USER_DLG_W;
+    lv_obj_t *card = lv_obj_create(backdrop);
+    lv_obj_remove_style_all(card);
+    lv_obj_set_width(card, card_w);
+    lv_obj_set_height(card, LV_SIZE_CONTENT);
+    lv_obj_set_style_bg_color(card, user_color_panel, 0);
+    lv_obj_set_style_bg_opa(card, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(card, USER_DLG_RADIUS, 0);
+    lv_obj_set_style_border_width(card, 1, 0);
+    lv_obj_set_style_border_color(card, user_color_divider, 0);
+    lv_obj_set_style_clip_corner(card, true, 0);
+    lv_obj_set_style_shadow_width(card, 60, 0);
+    lv_obj_set_style_shadow_color(card, lv_color_black(), 0);
+    lv_obj_set_style_shadow_opa(card, LV_OPA_60, 0);
+    lv_obj_set_style_pad_all(card, 0, 0);
+    lv_obj_set_style_pad_row(card, 0, 0);
+    lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(card, LV_FLEX_ALIGN_START,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_center(card);
+    dlg->card = card;
+
+    lv_obj_t *preview = lv_obj_create(card);
+    lv_obj_remove_style_all(preview);
+    lv_obj_set_size(preview, card_w, card_w * 9 / 16);
+    lv_obj_set_style_bg_color(preview, user_color_panel_alt, 0);
+    lv_obj_set_style_bg_opa(preview, LV_OPA_COVER, 0);
+    lv_obj_clear_flag(preview, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_t *picon = lv_label_create(preview);
+    lv_label_set_text(picon, LV_SYMBOL_IMAGE);
+    lv_obj_set_style_text_color(picon, user_color_text_dim, 0);
+    lv_obj_set_style_text_font(picon, user_font_value(), 0);
+    lv_obj_center(picon);
+
+    lv_obj_t *content = lv_obj_create(card);
+    lv_obj_remove_style_all(content);
+    lv_obj_set_width(content, LV_PCT(100));
+    lv_obj_set_height(content, LV_SIZE_CONTENT);
+    lv_obj_set_style_pad_all(content, USER_DLG_PAD, 0);
+    lv_obj_set_style_pad_row(content, USER_DLG_PAD, 0);
+    lv_obj_set_style_bg_opa(content, LV_OPA_TRANSP, 0);
+    lv_obj_set_flex_flow(content, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(content, LV_FLEX_ALIGN_START,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_clear_flag(content, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *title = lv_label_create(content);
+    lv_label_set_text(title, "Start printing this file?");
+    lv_obj_set_style_text_color(title, user_color_text, 0);
+    lv_obj_set_style_text_font(title, user_font_value(), 0);
+    lv_obj_set_style_text_align(title, LV_TEXT_ALIGN_CENTER, 0);
+
+    char sub[96];
+    char dur[32];
+    ui_user_format_duration_min(dur, sizeof(dur), file->duration_min);
+    std::snprintf(sub, sizeof(sub), "Est. time %s   Material %.1f g",
+                  dur, (double)file->material_g);
+    lv_obj_t *sublbl = lv_label_create(content);
+    lv_label_set_long_mode(sublbl, LV_LABEL_LONG_MODE_WRAP);
+    lv_obj_set_width(sublbl, LV_PCT(100));
+    lv_label_set_text(sublbl, sub);
+    lv_obj_set_style_text_color(sublbl, user_color_text_dim, 0);
+    lv_obj_set_style_text_font(sublbl, user_font_caption(), 0);
+    lv_obj_set_style_text_align(sublbl, LV_TEXT_ALIGN_CENTER, 0);
+
+    lv_obj_t *footer = lv_obj_create(content);
+    lv_obj_remove_style_all(footer);
+    lv_obj_set_width(footer, LV_PCT(100));
+    lv_obj_set_height(footer, LV_SIZE_CONTENT);
+    lv_obj_set_style_bg_opa(footer, LV_OPA_TRANSP, 0);
+    lv_obj_set_flex_flow(footer, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(footer, LV_FLEX_ALIGN_CENTER,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_column(footer, USER_PAD, 0);
+    lv_obj_clear_flag(footer, LV_OBJ_FLAG_SCROLLABLE);
+
+    make_print_confirm_btn(footer, "Cancel", false, on_print_confirm_cancel);
+    make_print_confirm_btn(footer, "Start Print", true, on_print_confirm_ok);
+
+    g_confirm_dlg = dlg;
+    lv_obj_set_style_opa(backdrop, LV_OPA_TRANSP, 0);
+    lv_obj_fade_in(backdrop, 180, 0);
+    lv_obj_move_foreground(backdrop);
 }
 
 void close_prepare_dlg(void)
@@ -2121,7 +2289,11 @@ void on_door_closed_confirm_btn(lv_event_t * /*e*/)
     if(g_state != CONTROL_STATE_DOOR_CONFIRM) {
         return;
     }
-    goto_file_selection();
+    if(g_door_origin == DoorFlowOrigin::HomeStandalone) {
+        enter_state(CONTROL_STATE_IDLE);
+    } else {
+        goto_file_selection();
+    }
 }
 
 /* Opening 最短停留到时 → 进入 DoorOpened 确认态 */
@@ -2157,24 +2329,43 @@ void pf_start_open_door(void)
     backend_start_open_door(pf_on_open_door_done, nullptr);
 }
 
+/* 清粉最短停留到时 → 发开门请求 */
+void clean_advance_to_open_cb(lv_timer_t * /*t*/)
+{
+    g_door_advance_timer = nullptr;
+    if(g_state == CONTROL_STATE_DOOR_OPENING) {
+        pf_start_open_door();
+    }
+}
+
+/* 清粉应答：满足最短停留才开门（不足则延时补足），保证"正在清粉中"可见 */
+void pf_on_clean_done(void * /*u*/)
+{
+    if(g_state != CONTROL_STATE_DOOR_OPENING) {
+        return;
+    }
+    const uint32_t elapsed = lv_tick_elaps(g_clean_since);
+    if(elapsed >= CLEAN_MIN_MS) {
+        pf_start_open_door();
+        return;
+    }
+    if(g_door_advance_timer) {
+        lv_timer_delete(g_door_advance_timer);
+    }
+    g_door_advance_timer = lv_timer_create(clean_advance_to_open_cb,
+                                           CLEAN_MIN_MS - elapsed, nullptr);
+    lv_timer_set_repeat_count(g_door_advance_timer, 1);
+}
+
 void pf_on_pm25_check_done(void * /*u*/)
 {
     if(g_state != CONTROL_STATE_DOOR_OPENING) {
         return;
     }
     if(g_pm25_high) {
-        /* PM2.5 偏高：先自动净化，loading 文案切到净化提示，完成后再开门 */
-        if(g_door_body) {
-            lv_label_set_text(g_door_body, "PM2.5 high, purifying air");
-        }
-        backend_start_purify([](void *) {
-            if(g_state == CONTROL_STATE_DOOR_OPENING) {
-                if(g_door_body) {
-                    lv_label_set_text(g_door_body, "Please wear a mask");
-                }
-                pf_start_open_door();
-            }
-        }, nullptr);
+        door_apply_variant(DoorVariant::Cleaning);
+        g_clean_since = lv_tick_get();
+        backend_start_clean(pf_on_clean_done, nullptr);
         return;
     }
     pf_start_open_door();
@@ -2327,7 +2518,17 @@ void control_start(void)
         return;
     }
     /* Figma 入口：先弹「是否已放入打印版」两卡片预确认，再进入文件选择 */
+    g_door_origin = DoorFlowOrigin::PrintPrep;
     enter_state(CONTROL_STATE_PLATE_PROMPT);
+}
+
+void control_open_door_request(void)
+{
+    if(g_state != CONTROL_STATE_IDLE) {
+        return;
+    }
+    g_door_origin = DoorFlowOrigin::HomeStandalone;
+    enter_state(CONTROL_STATE_DOOR_OPENING);
 }
 
 const char *control_home_section_target(void)

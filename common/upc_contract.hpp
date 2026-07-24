@@ -255,6 +255,8 @@ enum class MsgType : uint32_t {
     UI_Purify_Req,
     APP_Purify_Progress,      /**< [GLAVO_Purify_Progress_Ntf] Value */
     APP_Purify_Rsp,           /**< [GLAVO_Purify_Done] Empty */
+    UI_Clean_Start_Req,       /**< Empty：开启清粉（开门前 PM2.5≥50 时触发） */
+    APP_Clean_Start_Rsp,      /**< Empty：清粉完成（后端风机循环至 PM2.5 合格后回） */
 
     // ---- UI ↔ GLAVO：打印流程 ----
     UI_Print_Prepare_Req = 0x1040, /**< PrintPrepareReqPayload：轻量预处理 + USB 复制 */
@@ -311,8 +313,8 @@ enum class MsgType : uint32_t {
     UI_Debug_Recycle_Motor_Req,     /**< DebugMotorPayload：内门 停止/开/关（原回粉电机块改为内门） */
     UI_Debug_Fan_Req,               /**< DebugFanPayload：风扇 */
     UI_Debug_Switch_Req,            /**< DebugSwitchPayload：激光/洗气/底板加热 */
-    UI_Debug_CleanTest_Start_Req,   /**< Empty：清粉测试开启） */
-    UI_Debug_CleanTest_Close_Req,   /**< Empty：清粉测试关闭/中止 */
+    UI_Debug_CleanTest_Start_Ntf,   /**< Empty：清粉测试开启） */
+    UI_Debug_CleanTest_Close_Ntf,   /**< Empty：清粉测试关闭/中止 */
     UI_Debug_Fan_Duty_Req,          /**< DebugFanPayload：仅设风扇占空比（不开关） */
     UI_Debug_PrintParam_Set_Req,    /**< DebugPrintParamPayload：打印层参数 */
     UI_Debug_Laser_Power_Set_Req,   /**< DebugLaserPowerPayload：激光手动功率 */

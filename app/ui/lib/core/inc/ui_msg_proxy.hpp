@@ -18,6 +18,7 @@ using Pm25ResultCb     = std::function<void(const middleware::Pm25ResultPayload&
 using DoorResultCb     = std::function<void(const middleware::DoorResultPayload&)>;
 using PurifyProgressCb = std::function<void(int progress)>;
 using PurifyDoneCb     = std::function<void()>;
+using CleanDoneCb      = std::function<void()>;
 using FsDirCb          = std::function<void(const middleware::FileEntryPayload* files,
                                             uint32_t count)>;
 using PrintProgressCb  = std::function<void(const middleware::PrintProgressPayload&)>;
@@ -57,6 +58,10 @@ public:
     void send_purify();
     void register_purify_progress(PurifyProgressCb cb);
     void register_purify_done(PurifyDoneCb cb);
+
+    /** 开门前清粉（PM2.5≥50 触发）。完成回执经 register_clean_start_result。 */
+    void send_clean_start();
+    void register_clean_start_result(CleanDoneCb cb);
 
     /** 列目录：当前 UI 仅对 USB 调用；Local 由 control 直读 config.json */
     void send_fs_dir_open(middleware::PrintFileSource source);
@@ -142,6 +147,7 @@ private:
     DoorResultCb     close_door_cb_;
     PurifyProgressCb purify_progress_cb_;
     PurifyDoneCb     purify_done_cb_;
+    CleanDoneCb      clean_done_cb_;
     FsDirCb          fs_dir_cb_;
     PrintProgressCb  print_progress_cb_;
     PrintTerminateDoneCb print_terminate_done_cb_;

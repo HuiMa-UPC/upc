@@ -85,6 +85,21 @@
 #define GLAVO_SERIAL_ACK_MAX_RETRY  3
 #endif
 
+/** 门控：0=保持旧占位（直接通过）；1=走真实串口门控流程 */
+#ifndef GLAVO_DOOR_REAL_OPEN_ENABLE
+#define GLAVO_DOOR_REAL_OPEN_ENABLE  0
+#endif
+
+/** 关门检测：0=保持旧占位（直接判已关）；1=按传感器上报外门锁状态判定 */
+#ifndef GLAVO_DOOR_REAL_CLOSE_CHECK_ENABLE
+#define GLAVO_DOOR_REAL_CLOSE_CHECK_ENABLE  0
+#endif
+
+/** 真实开门请求等待 MCU 结果超时（毫秒） */
+#ifndef GLAVO_DOOR_OPEN_TIMEOUT_MS
+#define GLAVO_DOOR_OPEN_TIMEOUT_MS  5000
+#endif
+
 /** MCU OTA 测试：固件目录与块大小 */
 #ifndef GLAVO_OTA_IMAGE_DIR
 #define GLAVO_OTA_IMAGE_DIR  "/home/image/glavo"
