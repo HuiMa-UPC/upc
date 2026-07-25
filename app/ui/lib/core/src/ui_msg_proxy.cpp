@@ -75,6 +75,14 @@ void UiMsgProxy::init()
         }));
 
     subs_.push_back(bus.subscribe(
+        middleware::MsgType::APP_Clean_Stop_Rsp, middleware::ModuleId::UI,
+        [this](const middleware::Message&) {
+            if (clean_stop_done_cb_) {
+                clean_stop_done_cb_();
+            }
+        }));
+
+    subs_.push_back(bus.subscribe(
         middleware::MsgType::Fs_DirOpen_Rsp, middleware::ModuleId::UI,
         [this](const middleware::Message& msg) {
             if (!fs_dir_cb_) {
@@ -441,6 +449,19 @@ void UiMsgProxy::send_clean_start()
 void UiMsgProxy::register_clean_start_result(CleanDoneCb cb)
 {
     clean_done_cb_ = std::move(cb);
+}
+
+void UiMsgProxy::send_clean_stop()
+{
+    middleware::Message msg(middleware::MsgType::UI_Clean_Stop_Req,
+                            middleware::ModuleId::UI,
+                            middleware::ModuleId::APP_GLAVO);
+    middleware::MsgPort::instance().publish_async(msg);
+}
+
+void UiMsgProxy::register_clean_stop_result(CleanStopDoneCb cb)
+{
+    clean_stop_done_cb_ = std::move(cb);
 }
 
 void UiMsgProxy::send_fs_dir_open(middleware::PrintFileSource source)

@@ -232,6 +232,7 @@ GlavoService::GlavoService() = default;
 GlavoService::~GlavoService()
 {
     stop_usb_hotplug_monitor();
+    stop_clean_worker();
     stop_print_job();
     clear_prepare_session();
     if (state() == ServiceState::Running) {
@@ -355,6 +356,8 @@ bool GlavoService::start()
         middleware::MsgType::UI_CLOSE_DOOR_Req,
         middleware::MsgType::UI_OpenDoor_Req,
         middleware::MsgType::UI_Purify_Req,
+        middleware::MsgType::UI_Clean_Start_Req,
+        middleware::MsgType::UI_Clean_Stop_Req,
         middleware::MsgType::UI_Mcu_Ota_Start_Req,
         middleware::MsgType::UI_Mcu_Ota_Cancel_Ntf,
         middleware::MsgType::UI_Serial_Mcu_Ota_Start_Req,
@@ -425,6 +428,7 @@ bool GlavoService::stop()
     }
 
     stop_print_job();
+    stop_clean_worker();
     clear_prepare_session();
     WifiManager::instance().shutdown();
     subscriptions_.clear();
@@ -525,6 +529,28 @@ bool GlavoService::publish_async(const middleware::Message& msg)
     return middleware::MsgPort::instance().publish_async(msg);
 }
 
+void GlavoService::publish_clean_rsp(middleware::MsgType type, uint32_t target_id)
+{
+    middleware::Message rsp(type,
+        static_cast<middleware::ModuleId>(module_id()),
+        static_cast<middleware::ModuleId>(target_id));
+    if(!publish_async(rsp)) {
+        UPC_LOG_GLAVO_SERVICE(Warn, "clean_rsp publish_async failed type=%u",
+            static_cast<unsigned>(static_cast<uint32_t>(type)));
+    }
+}
+
+void GlavoService::stop_clean_worker()
+{
+    clean_cancel_requested_.store(true);
+    if(clean_worker_.joinable()) {
+        clean_worker_.join();
+    }
+    clean_running_.store(false);
+    clean_stop_rsp_pending_.store(false);
+    clean_stop_rsp_target_.store(0);
+}
+
 /** @brief 订阅指定 MsgType 并记录 Subscription 句柄，stop 时统一释放 */
 void GlavoService::subscribe(middleware::MsgType type, middleware::MsgHandler handler)
 {
@@ -578,6 +604,9 @@ void GlavoService::handle_message(const middleware::Message& msg)
             break;
         case middleware::MsgType::UI_Clean_Start_Req:
             handle_clean_start_request(msg);
+            break;
+        case middleware::MsgType::UI_Clean_Stop_Req:
+            handle_clean_stop_request(msg);
             break;
         case middleware::MsgType::UI_Mcu_Ota_Start_Req:
             handle_mcu_ota_start(msg);
@@ -1470,53 +1499,95 @@ void GlavoService::handle_purify_request(const middleware::Message& msg)
  *  直到舱内 PM2.5 < 阈值后关风机，再回 APP_Clean_Start_Rsp。 */
 void GlavoService::handle_clean_start_request(const middleware::Message& msg)
 {
+    if(clean_running_.load()) {
+        UPC_LOG_GLAVO_SERVICE(Warn, "clean_start_req: already running");
+        return;
+    }
+    if(clean_worker_.joinable()) {
+        clean_worker_.join();
+    }
+
     constexpr uint8_t kCleanFanDutyPercent = 60u;
     constexpr auto kCleanPollInterval = std::chrono::seconds(1);
+    const uint32_t reply_target = static_cast<uint32_t>(msg.sender_id);
+    clean_cancel_requested_.store(false);
+    clean_stop_rsp_pending_.store(false);
+    clean_stop_rsp_target_.store(0);
+    clean_running_.store(true);
 
-    uint8_t buf[SERIAL_DEBUG_MAX_FRAME];
-    int n = serial_debug_build_fan_duty(kCleanFanDutyPercent, buf, sizeof(buf));
-    if(n <= 0) {
-        UPC_LOG_GLAVO_SERVICE(Warn,
-            "clean_start_req: build fan duty failed duty=%u",
-            static_cast<unsigned>(kCleanFanDutyPercent));
-    } else {
-        debug_tx(buf, n);
-    }
-
-    n = serial_debug_build_fan_switch(true, buf, sizeof(buf));
-    if(n <= 0) {
-        UPC_LOG_GLAVO_SERVICE(Warn, "clean_start_req: build fan on failed");
-    } else {
-        debug_tx(buf, n);
-    }
-
-    UPC_LOG_GLAVO_SERVICE(Info,
-        "clean_start_req: fan on, waiting pm25 < %.1f",
-        static_cast<double>(pm25_clean_threshold_));
-    for(;;) {
-        const auto env = McuLink::instance().env_snapshot();
-        if(env.valid && env.pm25_cabin < pm25_clean_threshold_) {
-            UPC_LOG_GLAVO_SERVICE(Info,
-                "clean_start_req: pm25 reached %.1f < %.1f",
-                static_cast<double>(env.pm25_cabin),
-                static_cast<double>(pm25_clean_threshold_));
-            break;
+    clean_worker_ = std::thread([this, reply_target, kCleanFanDutyPercent, kCleanPollInterval]() {
+        bool cancelled = false;
+        uint8_t buf[SERIAL_DEBUG_MAX_FRAME];
+        int n = serial_debug_build_fan_duty(kCleanFanDutyPercent, buf, sizeof(buf));
+        if(n <= 0) {
+            UPC_LOG_GLAVO_SERVICE(Warn,
+                "clean_start_req: build fan duty failed duty=%u",
+                static_cast<unsigned>(kCleanFanDutyPercent));
+        } else {
+            debug_tx(buf, n);
         }
-        std::this_thread::sleep_for(kCleanPollInterval);
-    }
 
-    n = serial_debug_build_fan_switch(false, buf, sizeof(buf));
-    if(n <= 0) {
-        UPC_LOG_GLAVO_SERVICE(Warn, "clean_start_req: build fan off failed");
-    } else {
-        debug_tx(buf, n);
-    }
+        n = serial_debug_build_fan_switch(true, buf, sizeof(buf));
+        if(n <= 0) {
+            UPC_LOG_GLAVO_SERVICE(Warn, "clean_start_req: build fan on failed");
+        } else {
+            debug_tx(buf, n);
+        }
 
-    middleware::Message rsp(middleware::MsgType::APP_Clean_Start_Rsp,
-        static_cast<middleware::ModuleId>(module_id()), msg.sender_id);
-    if(!publish_async(rsp)) {
-        UPC_LOG_GLAVO_SERVICE(Warn, "clean_start_rsp publish_async failed");
+        UPC_LOG_GLAVO_SERVICE(Info,
+            "clean_start_req: fan on, waiting pm25 < %.1f",
+            static_cast<double>(pm25_clean_threshold_));
+        for(;;) {
+            if(clean_cancel_requested_.load()) {
+                cancelled = true;
+                UPC_LOG_GLAVO_SERVICE(Info, "clean_start_req: cancelled by stop request");
+                break;
+            }
+            const auto env = McuLink::instance().env_snapshot();
+            if(env.valid && env.pm25_cabin < pm25_clean_threshold_) {
+                UPC_LOG_GLAVO_SERVICE(Info,
+                    "clean_start_req: pm25 reached %.1f < %.1f",
+                    static_cast<double>(env.pm25_cabin),
+                    static_cast<double>(pm25_clean_threshold_));
+                break;
+            }
+            std::this_thread::sleep_for(kCleanPollInterval);
+        }
+
+        n = serial_debug_build_fan_switch(false, buf, sizeof(buf));
+        if(n <= 0) {
+            UPC_LOG_GLAVO_SERVICE(Warn, "clean_start_req: build fan off failed");
+        } else {
+            debug_tx(buf, n);
+        }
+
+        if(cancelled) {
+            const uint32_t stop_target = clean_stop_rsp_target_.load();
+            if(clean_stop_rsp_pending_.load() && stop_target != 0) {
+                publish_clean_rsp(middleware::MsgType::APP_Clean_Stop_Rsp, stop_target);
+            }
+        } else {
+            publish_clean_rsp(middleware::MsgType::APP_Clean_Start_Rsp, reply_target);
+        }
+
+        clean_running_.store(false);
+        clean_stop_rsp_pending_.store(false);
+        clean_stop_rsp_target_.store(0);
+        clean_cancel_requested_.store(false);
+    });
+}
+
+void GlavoService::handle_clean_stop_request(const middleware::Message& msg)
+{
+    if(!clean_running_.load()) {
+        publish_clean_rsp(middleware::MsgType::APP_Clean_Stop_Rsp,
+                          static_cast<uint32_t>(msg.sender_id));
+        return;
     }
+    clean_stop_rsp_pending_.store(true);
+    clean_stop_rsp_target_.store(static_cast<uint32_t>(msg.sender_id));
+    clean_cancel_requested_.store(true);
+    UPC_LOG_GLAVO_SERVICE(Info, "clean_stop_req: requested");
 }
 
 /* ============================================================================

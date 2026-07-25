@@ -59,6 +59,9 @@ private:
     void handle_open_door_request(const middleware::Message& msg);
     void handle_purify_request(const middleware::Message& msg);
     void handle_clean_start_request(const middleware::Message& msg);
+    void handle_clean_stop_request(const middleware::Message& msg);
+    void stop_clean_worker();
+    void publish_clean_rsp(middleware::MsgType type, uint32_t target_id);
     void handle_mcu_ota_start(const middleware::Message& msg);
     void handle_mcu_ota_cancel(const middleware::Message& msg);
     void publish_mcu_ota_status(const middleware::McuOtaStatusPayload& st);
@@ -176,6 +179,11 @@ private:
     bool door_real_open_enabled_ = (GLAVO_DOOR_REAL_OPEN_ENABLE != 0);
     bool door_real_close_check_enabled_ = (GLAVO_DOOR_REAL_CLOSE_CHECK_ENABLE != 0);
     float pm25_clean_threshold_ = 50.0f;
+    std::thread clean_worker_;
+    std::atomic<bool> clean_running_{false};
+    std::atomic<bool> clean_cancel_requested_{false};
+    std::atomic<bool> clean_stop_rsp_pending_{false};
+    std::atomic<uint32_t> clean_stop_rsp_target_{0};
 };
 
 } // namespace upc::glavo

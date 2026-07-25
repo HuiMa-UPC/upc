@@ -111,6 +111,10 @@ DoneCb g_purify_cb = nullptr;
 void  *g_purify_u = nullptr;
 DoneCb g_clean_cb = nullptr;
 void  *g_clean_u = nullptr;
+DoneCb g_clean_stop_cb = nullptr;
+void  *g_clean_stop_u = nullptr;
+bool   g_cleaning_active = false;
+bool   g_clean_stop_pending = false;
 
 using ProgressCb = void (*)(const control_progress_t *p, void *user_data);
 ProgressCb g_job_prog_cb = nullptr;
@@ -211,6 +215,7 @@ void on_print_drain_fallback(lv_timer_t *timer);
 void on_offline_exit(lv_timer_t *timer);
 void on_terminate_timeout(lv_timer_t *timer);
 void arm_door_open_retry_timer(void);
+void pf_on_clean_stop_done(void *u);
 
 void invoke_done(DoneCb &cb, void *&user)
 {
@@ -456,6 +461,10 @@ void wire_msg_proxy()
         invoke_done(g_clean_cb, g_clean_u);
     });
 
+    proxy.register_clean_stop_result([]() {
+        invoke_done(g_clean_stop_cb, g_clean_stop_u);
+    });
+
     /* USB 列表经 Fs_DirOpen IPC；Local 由 load_local_files_from_config 直读盘 */
     proxy.register_fs_dir([](const middleware::FileEntryPayload *files, uint32_t count) {
         if(g_dir_open_pending.empty()) {
@@ -583,6 +592,8 @@ void backend_cancel_pending()
     g_purify_u = nullptr;
     g_clean_cb = nullptr;
     g_clean_u = nullptr;
+    g_clean_stop_cb = nullptr;
+    g_clean_stop_u = nullptr;
     g_job_prog_cb = nullptr;
     g_job_done_cb = nullptr;
     g_job_u = nullptr;
@@ -600,6 +611,13 @@ void backend_start_clean(DoneCb cb, void *u)
     g_clean_cb = cb;
     g_clean_u = u;
     ui::UiMsgProxy::instance().send_clean_start();
+}
+
+void backend_start_clean_stop(DoneCb cb, void *u)
+{
+    g_clean_stop_cb = cb;
+    g_clean_stop_u = u;
+    ui::UiMsgProxy::instance().send_clean_stop();
 }
 
 void backend_start_open_door(DoneCb cb, void *u)
@@ -2289,8 +2307,31 @@ void stop_door_timers(void)
 void on_door_opening_cancel(lv_event_t * /*e*/)
 {
     if(g_state == CONTROL_STATE_DOOR_OPENING) {
+        if(g_cleaning_active) {
+            if(g_clean_stop_pending) {
+                return;
+            }
+            g_clean_stop_pending = true;
+            if(g_door_body) {
+                lv_label_set_text(g_door_body, "Stopping fan...");
+            }
+            backend_start_clean_stop(pf_on_clean_stop_done, nullptr);
+            return;
+        }
         enter_state(CONTROL_STATE_IDLE);
     }
+}
+
+void pf_on_clean_stop_done(void * /*u*/)
+{
+    g_clean_stop_pending = false;
+    g_cleaning_active = false;
+    if(g_state != CONTROL_STATE_DOOR_OPENING) {
+        return;
+    }
+    door_apply_variant(DoorVariant::Opening);
+    g_door_opening_since = lv_tick_get();
+    pf_start_open_door();
 }
 
 void door_open_retry_cb(lv_timer_t * /*t*/)
@@ -2390,6 +2431,8 @@ void clean_advance_to_open_cb(lv_timer_t * /*t*/)
 {
     g_door_advance_timer = nullptr;
     if(g_state == CONTROL_STATE_DOOR_OPENING) {
+        door_apply_variant(DoorVariant::Opening);
+        g_door_opening_since = lv_tick_get();
         pf_start_open_door();
     }
 }
@@ -2400,8 +2443,12 @@ void pf_on_clean_done(void * /*u*/)
     if(g_state != CONTROL_STATE_DOOR_OPENING) {
         return;
     }
+    g_cleaning_active = false;
+    g_clean_stop_pending = false;
     const uint32_t elapsed = lv_tick_elaps(g_clean_since);
     if(elapsed >= CLEAN_MIN_MS) {
+        door_apply_variant(DoorVariant::Opening);
+        g_door_opening_since = lv_tick_get();
         pf_start_open_door();
         return;
     }
@@ -2421,9 +2468,13 @@ void pf_on_pm25_check_done(void * /*u*/)
     if(g_pm25_high) {
         door_apply_variant(DoorVariant::Cleaning);
         g_clean_since = lv_tick_get();
+        g_cleaning_active = true;
+        g_clean_stop_pending = false;
         backend_start_clean(pf_on_clean_done, nullptr);
         return;
     }
+    g_cleaning_active = false;
+    g_clean_stop_pending = false;
     pf_start_open_door();
 }
 
@@ -2480,6 +2531,8 @@ void enter_state(control_state_t s)
     g_door_body        = nullptr;
     g_door_close_btn   = nullptr;
     g_door_spinner     = nullptr;
+    g_cleaning_active  = false;
+    g_clean_stop_pending = false;
 
     g_state = s;
 

@@ -350,6 +350,10 @@ enum class MsgType : uint32_t {
     XFR_Pair_Pin_Ntf = 0x1400,   /**< XfrPairPinPayload：屏幕显示 PIN 配对码 */
     XFR_File_Received_Ntf,       /**< XfrFileReceivedPayload：接收文件完成通知 */
     GLAVO_USB_Hotplug_Ntf,       /**< UsbHotplugPayload：USB 挂载状态变化通知 */
+
+    // ---- UI ↔ GLAVO：清粉中断（风机停机） ----
+    UI_Clean_Stop_Req = 0x1410,  /**< Empty：中断清粉并请求立即关风机 */
+    APP_Clean_Stop_Rsp,          /**< Empty：风机停机请求已受理 */
 };
 
 enum class MsgPriority : uint8_t {
