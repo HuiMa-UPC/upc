@@ -123,7 +123,7 @@ rongsu_camera 经主 IPC（/tmp/upc_camera.sock）SCM_RIGHTS 附带 dma_buf fd �
 | `page_user_history` | `pages/page_user_history.*` | 读 `/home/video/manifest.json`（`common/fs_manifest/print_history_manifest`）→ 按 `start_unix` 倒序卡片列表；缩略图 `A:/home/video/{thumb}`（RTHM 解码，`LV_IMAGE_ALIGN_COVER`）；上下翻页；**左滑删除**（清除卡片默认 `GESTURE_BUBBLE` 使手势落到卡片）→ 删目录 + 重写 manifest + 只删单卡 |
 | `page_user_timelapse` | `pages/page_user_timelapse.*` | 全屏播放页（建于 `lv_layer_top()` 覆盖侧边栏）：按序播放 `/home/video/{job_ts}/1.png...N.png`，顶部标题/时间、右上关闭、中央播放/暂停、底部进度条、点画面显隐控件 |
 
-- **进入/退出**：历史页缩略图点击 → `page_user_timelapse_set_source(目录,标题,时间)` + `switch_to("user_timelapse")`；关闭 → `switch_to("user_history")`。
+- **进入/退出**：历史页缩略图点击 → `page_user_timelapse_set_source(目录,mp4路径,标题,时间)` + `switch_to("user_timelapse")`；关闭 → `switch_to("user_history")`。
 - **LVGL 线程规则**：序列播放由主线程 `lv_timer` 驱动换图。
 
 ### LVGL 配置依赖（`3rdparty/.../configs/rongsu_ui.defaults`）

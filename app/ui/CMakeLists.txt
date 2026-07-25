@@ -52,6 +52,40 @@ else()
     message(WARNING "ui: librga not found — camera preview RGA path disabled")
 endif()
 
+# FFmpeg（Route B）：video_player.cpp 直接使用 libav* 软解 MP4
+if(CMAKE_SYSROOT)
+    find_library(UPC_UI_AVFORMAT NAMES avformat
+        PATHS ${CMAKE_SYSROOT}/usr/lib ${CMAKE_SYSROOT}/lib NO_DEFAULT_PATH)
+    find_library(UPC_UI_AVCODEC NAMES avcodec
+        PATHS ${CMAKE_SYSROOT}/usr/lib ${CMAKE_SYSROOT}/lib NO_DEFAULT_PATH)
+    find_library(UPC_UI_AVUTIL NAMES avutil
+        PATHS ${CMAKE_SYSROOT}/usr/lib ${CMAKE_SYSROOT}/lib NO_DEFAULT_PATH)
+    find_library(UPC_UI_SWSCALE NAMES swscale
+        PATHS ${CMAKE_SYSROOT}/usr/lib ${CMAKE_SYSROOT}/lib NO_DEFAULT_PATH)
+    find_library(UPC_UI_SWRESAMPLE NAMES swresample
+        PATHS ${CMAKE_SYSROOT}/usr/lib ${CMAKE_SYSROOT}/lib NO_DEFAULT_PATH)
+else()
+    find_library(UPC_UI_AVFORMAT NAMES avformat)
+    find_library(UPC_UI_AVCODEC NAMES avcodec)
+    find_library(UPC_UI_AVUTIL NAMES avutil)
+    find_library(UPC_UI_SWSCALE NAMES swscale)
+    find_library(UPC_UI_SWRESAMPLE NAMES swresample)
+endif()
+
+if(UPC_UI_AVFORMAT AND UPC_UI_AVCODEC AND UPC_UI_AVUTIL AND UPC_UI_SWSCALE)
+    message(STATUS "ui: linking ffmpeg libs for video_player")
+    target_link_libraries(${UI_TARGET} PRIVATE
+        ${UPC_UI_AVFORMAT}
+        ${UPC_UI_AVCODEC}
+        ${UPC_UI_AVUTIL}
+        ${UPC_UI_SWSCALE}
+        ${UPC_UI_SWRESAMPLE})
+    target_compile_definitions(${UI_TARGET} PRIVATE UPC_UI_HAS_LIBAV=1)
+else()
+    message(WARNING "ui: ffmpeg libs not found — mp4 playback fallback to PNG sequence")
+    target_compile_definitions(${UI_TARGET} PRIVATE UPC_UI_HAS_LIBAV=0)
+endif()
+
 target_compile_options(${UI_TARGET}
     PRIVATE
         -Wall -Wextra

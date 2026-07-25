@@ -54,6 +54,7 @@ lv_obj_t *g_empty       = nullptr;  /**< 空列表占位 */
 struct HistoryCard {
     std::string frames_dir;         /**< manifest 相对目录名（删除主键） */
     std::string thumb;
+    std::string video;
     std::string thumb_src;          /**< LVGL FS 路径，如 A:/home/video/x/thumb.rthm */
     std::string title;              /**< 播放器标题（作业名） */
     std::string subtitle;          /**< 播放器副标题（时间 日期） */
@@ -223,11 +224,40 @@ void on_thumb_click(lv_event_t *e)
     if(!c || c->frames_dir.empty()) {
         return;
     }
-    char path[256];
-    std::snprintf(path, sizeof(path), "%s/%s",
+    char seq_path[256];
+    std::snprintf(seq_path, sizeof(seq_path), "%s/%s",
                   UPC_PRINT_VIDEO_DIR, c->frames_dir.c_str());
-    page_user_timelapse_set_source(path, c->title.c_str(), c->subtitle.c_str());
+    char video_path[256];
+    video_path[0] = '\0';
+    if(!c->video.empty()) {
+        std::snprintf(video_path, sizeof(video_path), "%s/%s",
+                      UPC_PRINT_VIDEO_DIR, c->video.c_str());
+    }
+    page_user_timelapse_set_source(seq_path,
+                                   video_path[0] ? video_path : nullptr,
+                                   c->title.c_str(),
+                                   c->subtitle.c_str());
     ui::PageManager::instance().switch_to("user_timelapse");
+}
+
+std::string make_thumb_src_fallback(const upc::PrintHistoryEntry& e)
+{
+    const std::string base = std::string(UPC_PRINT_VIDEO_DIR) + "/";
+    if(!e.thumb.empty()) {
+        const std::string abs_thumb = base + e.thumb;
+        std::error_code ec;
+        if(std::filesystem::exists(abs_thumb, ec)) {
+            return std::string(kThumbDrive) + abs_thumb;
+        }
+    }
+    if(!e.frames_dir.empty()) {
+        const std::string abs_first_png = base + e.frames_dir + "/1.png";
+        std::error_code ec;
+        if(std::filesystem::exists(abs_first_png, ec)) {
+            return std::string(kThumbDrive) + abs_first_png;
+        }
+    }
+    return {};
 }
 
 /* ---- 小构件 ---- */
@@ -356,7 +386,7 @@ void make_thumbnail(lv_obj_t *parent, const HistoryCard *c)
     lv_obj_add_event_cb(slot, on_thumb_click, LV_EVENT_CLICKED,
                         const_cast<HistoryCard *>(c));
 
-    if(!c->thumb.empty()) {
+    if(!c->thumb_src.empty()) {
         lv_obj_t *img = lv_image_create(slot);
         lv_image_set_src(img, c->thumb_src.c_str());
         lv_obj_set_size(img, tw, th);
@@ -400,9 +430,8 @@ void build_entry(lv_obj_t *parent, const upc::PrintHistoryEntry &e)
     HistoryCard *ctx = new HistoryCard();
     ctx->frames_dir = e.frames_dir;
     ctx->thumb = e.thumb;
-    if(!e.thumb.empty()) {
-        ctx->thumb_src = std::string(kThumbDrive) + UPC_PRINT_VIDEO_DIR + "/" + e.thumb;
-    }
+    ctx->video = e.video;
+    ctx->thumb_src = make_thumb_src_fallback(e);
     g_cards.push_back(ctx);
 
     lv_obj_t *wrap = lv_obj_create(parent);
@@ -472,10 +501,6 @@ void build_entry(lv_obj_t *parent, const upc::PrintHistoryEntry &e)
      * 一路上抛越过卡片；清掉后手势遍历停在卡片，card_gesture_cb 才能收到左滑。 */
     lv_obj_remove_flag(card, LV_OBJ_FLAG_GESTURE_BUBBLE);
     lv_obj_add_event_cb(card, card_gesture_cb, LV_EVENT_GESTURE, ctx);
-    /* 清除卡片默认的 GESTURE_BUBBLE：LVGL 手势会沿带此标志的对象一路上抛，
-     * 基础对象默认都带（lv_obj.c 构造），不清除则手势越过卡片抛到列表，
-     * card_gesture_cb 收不到。清除后遍历停在卡片 → 左滑手势可达。 */
-    lv_obj_remove_flag(card, LV_OBJ_FLAG_GESTURE_BUBBLE);
 
     lv_obj_t *info = lv_obj_create(card);
     lv_obj_remove_style_all(info);

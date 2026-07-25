@@ -1,13 +1,16 @@
 #include "page_user_timelapse.hpp"
 
 #include "page_manager.hpp"
+#include "ui_feedback.hpp"
 #include "ui_theme.hpp"
+#include "video_player.hpp"
 
 #include <algorithm>
-#include <cstdlib>
 #include <cctype>
+#include <chrono>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <dirent.h>
 #include <string>
@@ -16,18 +19,31 @@
 
 namespace {
 
-constexpr uint32_t kPlayIntervalMs = 200u; /* 5fps */
+enum class PlaybackMode : uint8_t {
+    None = 0,
+    PngSequence,
+    Mp4,
+};
+
+constexpr uint32_t kPlayIntervalMs = 200u; /* PNG 回退模式 5fps */
 constexpr const char* kFsDrive = "A:";
 
 char g_seq_dir[256] = {0};
-char g_title[96]    = {0};
-char g_sub[64]      = {0};
+char g_mp4_path[256] = {0};
+char g_title[96] = {0};
+char g_sub[64] = {0};
 
 std::vector<std::string> g_frames;
 size_t g_cur_index = 0;
 bool g_playing = false;
 bool g_controls_visible = true;
 bool g_dragging = false;
+bool g_resume_after_drag = false;
+PlaybackMode g_mode = PlaybackMode::None;
+int64_t g_mp4_pos_ms = 0;
+int64_t g_mp4_dur_ms = 0;
+int64_t g_last_preview_req_ms = -1;
+uint64_t g_last_preview_req_tick_ms = 0;
 
 lv_obj_t* g_page = nullptr;
 lv_obj_t* g_video_img = nullptr;
@@ -37,7 +53,20 @@ lv_obj_t* g_slider = nullptr;
 lv_obj_t* g_time_lbl = nullptr;
 lv_obj_t* g_title_lbl = nullptr;
 lv_obj_t* g_sub_lbl = nullptr;
+lv_obj_t* g_preview_box = nullptr;
+lv_obj_t* g_preview_img = nullptr;
+lv_obj_t* g_preview_time = nullptr;
 lv_timer_t* g_play_timer = nullptr;
+
+constexpr uint64_t kPreviewReqMinIntervalMs = 80;
+
+uint64_t monotonic_ms()
+{
+    return static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now().time_since_epoch())
+            .count());
+}
 
 bool parse_png_index(const char* name, uint32_t& out)
 {
@@ -62,6 +91,18 @@ void set_play_icon(bool playing)
     }
 }
 
+void set_slider_enabled(bool enabled)
+{
+    if(!g_slider) {
+        return;
+    }
+    if(enabled) {
+        lv_obj_clear_state(g_slider, LV_STATE_DISABLED);
+    } else {
+        lv_obj_add_state(g_slider, LV_STATE_DISABLED);
+    }
+}
+
 void set_controls_visible(bool vis)
 {
     g_controls_visible = vis;
@@ -75,7 +116,58 @@ void set_controls_visible(bool vis)
     }
 }
 
-void update_progress_ui()
+void format_ms(int64_t ms, char* out, size_t n)
+{
+    if(!out || n == 0) {
+        return;
+    }
+    const uint32_t total = static_cast<uint32_t>(std::max<int64_t>(0, ms) / 1000);
+    const uint32_t h = total / 3600u;
+    const uint32_t m = (total % 3600u) / 60u;
+    const uint32_t s = total % 60u;
+    if(h > 0) {
+        std::snprintf(out, n, "%u:%02u:%02u", h, m, s);
+    } else {
+        std::snprintf(out, n, "%u:%02u", m, s);
+    }
+}
+
+void format_png_frame_time(uint32_t frame_index, char* out, size_t n)
+{
+    const uint32_t total_sec = static_cast<uint32_t>(
+        (static_cast<uint64_t>(frame_index) * kPlayIntervalMs) / 1000u);
+    format_ms(static_cast<int64_t>(total_sec) * 1000, out, n);
+}
+
+void position_preview_box(int32_t slider_value)
+{
+    if(!g_preview_box || !g_slider || !g_page) {
+        return;
+    }
+    lv_obj_update_layout(g_slider);
+    lv_area_t slider_area;
+    lv_obj_get_coords(g_slider, &slider_area);
+    const int32_t slider_w = lv_area_get_width(&slider_area);
+    const int32_t knob_x = slider_area.x1 + static_cast<int32_t>(
+        static_cast<int64_t>(slider_w) * slider_value / 1000);
+
+    lv_obj_update_layout(g_preview_box);
+    const int32_t box_w = lv_obj_get_width(g_preview_box);
+    const int32_t box_h = lv_obj_get_height(g_preview_box);
+
+    int32_t x = knob_x - box_w / 2;
+    const int32_t max_x = lv_obj_get_width(g_page) - box_w;
+    if(x < 0) {
+        x = 0;
+    }
+    if(x > max_x) {
+        x = max_x;
+    }
+    const int32_t y = slider_area.y1 - box_h - USER_PAD_SM;
+    lv_obj_set_pos(g_preview_box, x, y);
+}
+
+void update_progress_ui_png()
 {
     const size_t total = g_frames.size();
     if(total == 0) {
@@ -101,7 +193,78 @@ void update_progress_ui()
     }
 }
 
-void render_current_frame()
+void update_progress_ui_mp4(int64_t cur_ms, int64_t dur_ms)
+{
+    g_mp4_pos_ms = std::max<int64_t>(0, cur_ms);
+    g_mp4_dur_ms = std::max<int64_t>(0, dur_ms);
+    if(g_slider && !g_dragging && g_mp4_dur_ms > 0) {
+        const int32_t v = static_cast<int32_t>(
+            std::clamp<int64_t>(g_mp4_pos_ms * 1000 / g_mp4_dur_ms, 0, 1000));
+        lv_slider_set_value(g_slider, v, LV_ANIM_OFF);
+    }
+    if(g_time_lbl) {
+        char cur_buf[16];
+        char dur_buf[16];
+        format_ms(g_mp4_pos_ms, cur_buf, sizeof(cur_buf));
+        format_ms(g_mp4_dur_ms, dur_buf, sizeof(dur_buf));
+        char text[40];
+        std::snprintf(text, sizeof(text), "%s / %s", cur_buf, dur_buf);
+        lv_label_set_text(g_time_lbl, text);
+    }
+}
+
+void update_drag_preview_png(int32_t slider_value)
+{
+    if(!g_preview_box || !g_preview_img || !g_preview_time || g_frames.empty()) {
+        return;
+    }
+    const size_t max_idx = g_frames.size() - 1u;
+    const size_t idx = static_cast<size_t>(
+        (static_cast<int64_t>(slider_value) * static_cast<int64_t>(max_idx) + 500) / 1000);
+    lv_image_set_src(g_preview_img, g_frames[idx].c_str());
+    lv_obj_invalidate(g_preview_img);
+
+    char tbuf[16];
+    format_png_frame_time(static_cast<uint32_t>(idx), tbuf, sizeof(tbuf));
+    lv_label_set_text(g_preview_time, tbuf);
+
+    position_preview_box(slider_value);
+    lv_obj_remove_flag(g_preview_box, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_move_foreground(g_preview_box);
+}
+
+void request_drag_preview_mp4(int32_t slider_value, bool force_request = false)
+{
+    const int64_t dur_ms = g_mp4_dur_ms;
+    if(dur_ms <= 0) {
+        return;
+    }
+    const int64_t target_ms = std::clamp<int64_t>(
+        (static_cast<int64_t>(slider_value) * dur_ms) / 1000, 0, dur_ms);
+    char tbuf[16];
+    format_ms(target_ms, tbuf, sizeof(tbuf));
+    if(g_preview_time) {
+        lv_label_set_text(g_preview_time, tbuf);
+    }
+    position_preview_box(slider_value);
+    if(g_preview_box) {
+        lv_obj_remove_flag(g_preview_box, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_move_foreground(g_preview_box);
+    }
+
+    const uint64_t now_ms = monotonic_ms();
+    const bool first_req = g_last_preview_req_ms < 0;
+    const bool interval_ok = now_ms - g_last_preview_req_tick_ms >= kPreviewReqMinIntervalMs;
+    const bool target_jump = !first_req &&
+        std::llabs(target_ms - g_last_preview_req_ms) >= 300;
+    if(force_request || first_req || interval_ok || target_jump) {
+        ui::VideoPlayer::instance().request_preview(target_ms);
+        g_last_preview_req_ms = target_ms;
+        g_last_preview_req_tick_ms = now_ms;
+    }
+}
+
+void render_current_png_frame()
 {
     if(!g_video_img || g_frames.empty()) {
         return;
@@ -111,7 +274,7 @@ void render_current_frame()
     }
     lv_image_set_src(g_video_img, g_frames[g_cur_index].c_str());
     lv_obj_invalidate(g_video_img);
-    update_progress_ui();
+    update_progress_ui_png();
 }
 
 bool load_sequence_frames()
@@ -151,6 +314,61 @@ bool load_sequence_frames()
     return true;
 }
 
+void on_mp4_progress(int64_t current_ms, int64_t duration_ms)
+{
+    if(g_mode != PlaybackMode::Mp4) {
+        return;
+    }
+    update_progress_ui_mp4(current_ms, duration_ms);
+}
+
+void on_mp4_ended()
+{
+    if(g_mode != PlaybackMode::Mp4) {
+        return;
+    }
+    g_playing = false;
+    set_play_icon(false);
+    set_controls_visible(true);
+}
+
+void on_mp4_preview(const lv_image_dsc_t* image, int64_t position_ms)
+{
+    if(g_mode != PlaybackMode::Mp4 || !g_dragging || !image || !g_preview_img) {
+        return;
+    }
+    lv_image_set_src(g_preview_img, image);
+    lv_obj_invalidate(g_preview_img);
+    if(g_preview_time) {
+        char tbuf[16];
+        format_ms(position_ms, tbuf, sizeof(tbuf));
+        lv_label_set_text(g_preview_time, tbuf);
+    }
+}
+
+bool load_mp4_playback()
+{
+    if(g_mp4_path[0] == '\0' || !g_video_img) {
+        return false;
+    }
+    ui::VideoPlayer& player = ui::VideoPlayer::instance();
+    player.set_progress_cb(on_mp4_progress);
+    player.set_ended_cb(on_mp4_ended);
+    player.set_preview_cb(on_mp4_preview);
+    if(!player.open(g_video_img, g_mp4_path)) {
+        return false;
+    }
+    g_mode = PlaybackMode::Mp4;
+    g_mp4_dur_ms = player.duration_ms();
+    g_mp4_pos_ms = 0;
+    update_progress_ui_mp4(0, g_mp4_dur_ms);
+    const bool started = player.play();
+    g_playing = started;
+    set_play_icon(started);
+    set_slider_enabled(g_mp4_dur_ms > 0);
+    return started;
+}
+
 void on_video_click(lv_event_t*)
 {
     set_controls_visible(!g_controls_visible);
@@ -158,11 +376,31 @@ void on_video_click(lv_event_t*)
 
 void on_play_click(lv_event_t*)
 {
-    if(g_frames.empty()) {
+    if(g_mode == PlaybackMode::Mp4) {
+        auto& player = ui::VideoPlayer::instance();
+        if(!player.is_open()) {
+            return;
+        }
+        if(g_playing) {
+            player.pause();
+            g_playing = false;
+            set_play_icon(false);
+        } else {
+            const int64_t dur_ms = g_mp4_dur_ms > 0 ? g_mp4_dur_ms : player.duration_ms();
+            const int64_t pos_ms = player.position_ms();
+            if(dur_ms > 0 && pos_ms >= dur_ms) {
+                (void)player.seek(0);
+            }
+            g_playing = player.play();
+            set_play_icon(g_playing);
+        }
         return;
     }
-    g_playing = !g_playing;
-    set_play_icon(g_playing);
+
+    if(g_mode == PlaybackMode::PngSequence && !g_frames.empty()) {
+        g_playing = !g_playing;
+        set_play_icon(g_playing);
+    }
 }
 
 void on_close_click(lv_event_t*)
@@ -173,30 +411,67 @@ void on_close_click(lv_event_t*)
 void on_slider_pressed(lv_event_t*)
 {
     g_dragging = true;
+    g_resume_after_drag = g_playing;
     g_playing = false;
     set_play_icon(false);
+
+    if(g_mode == PlaybackMode::Mp4) {
+        ui::VideoPlayer::instance().pause();
+        g_last_preview_req_ms = -1;
+        g_last_preview_req_tick_ms = 0;
+        if(g_slider) {
+            request_drag_preview_mp4(lv_slider_get_value(g_slider), true);
+        }
+        return;
+    }
+
+    if(g_slider) {
+        update_drag_preview_png(lv_slider_get_value(g_slider));
+    }
 }
 
 void on_slider_value_changed(lv_event_t*)
 {
-    if(!g_dragging || !g_slider || g_frames.empty()) {
+    if(!g_dragging || !g_slider) {
         return;
     }
     const int32_t v = lv_slider_get_value(g_slider);
-    const size_t max_idx = g_frames.size() - 1u;
-    g_cur_index = static_cast<size_t>(
-        (static_cast<int64_t>(v) * static_cast<int64_t>(max_idx) + 500) / 1000);
-    render_current_frame();
+    if(g_mode == PlaybackMode::Mp4) {
+        request_drag_preview_mp4(v);
+        return;
+    }
+    if(g_mode == PlaybackMode::PngSequence && !g_frames.empty()) {
+        const size_t max_idx = g_frames.size() - 1u;
+        g_cur_index = static_cast<size_t>(
+            (static_cast<int64_t>(v) * static_cast<int64_t>(max_idx) + 500) / 1000);
+        update_drag_preview_png(v);
+        render_current_png_frame();
+    }
 }
 
 void on_slider_released(lv_event_t*)
 {
+    if(g_preview_box) {
+        lv_obj_add_flag(g_preview_box, LV_OBJ_FLAG_HIDDEN);
+    }
+    if(g_mode == PlaybackMode::Mp4 && g_slider) {
+        const int64_t dur_ms = g_mp4_dur_ms > 0 ? g_mp4_dur_ms : ui::VideoPlayer::instance().duration_ms();
+        const int32_t v = lv_slider_get_value(g_slider);
+        const int64_t target_ms = dur_ms > 0
+            ? std::clamp<int64_t>((static_cast<int64_t>(v) * dur_ms) / 1000, 0, dur_ms)
+            : 0;
+        (void)ui::VideoPlayer::instance().seek(target_ms);
+        if(g_resume_after_drag) {
+            g_playing = ui::VideoPlayer::instance().play();
+            set_play_icon(g_playing);
+        }
+    }
     g_dragging = false;
 }
 
 void play_timer_cb(lv_timer_t*)
 {
-    if(!g_playing || g_dragging || g_frames.empty()) {
+    if(g_mode != PlaybackMode::PngSequence || !g_playing || g_dragging || g_frames.empty()) {
         return;
     }
     if(g_cur_index + 1u >= g_frames.size()) {
@@ -206,7 +481,7 @@ void play_timer_cb(lv_timer_t*)
         return;
     }
     ++g_cur_index;
-    render_current_frame();
+    render_current_png_frame();
 }
 
 lv_obj_t* make_round_btn(lv_obj_t* parent, const char* sym, int32_t sz,
@@ -237,10 +512,12 @@ lv_obj_t* make_round_btn(lv_obj_t* parent, const char* sym, int32_t sz,
 } // namespace
 
 void page_user_timelapse_set_source(const char* sequence_dir_abs,
+                                    const char* mp4_abs_path,
                                     const char* title,
                                     const char* subtitle)
 {
     std::snprintf(g_seq_dir, sizeof(g_seq_dir), "%s", sequence_dir_abs ? sequence_dir_abs : "");
+    std::snprintf(g_mp4_path, sizeof(g_mp4_path), "%s", mp4_abs_path ? mp4_abs_path : "");
     std::snprintf(g_title, sizeof(g_title), "%s", title ? title : "Timelapse");
     std::snprintf(g_sub, sizeof(g_sub), "%s", subtitle ? subtitle : "");
 }
@@ -252,7 +529,19 @@ void page_user_timelapse_refresh(bool)
     }
     set_controls_visible(true);
     g_dragging = false;
+    g_resume_after_drag = false;
     g_playing = false;
+    g_mode = PlaybackMode::None;
+    g_mp4_pos_ms = 0;
+    g_mp4_dur_ms = 0;
+    g_last_preview_req_ms = -1;
+    g_last_preview_req_tick_ms = 0;
+    g_frames.clear();
+    g_cur_index = 0;
+
+    auto& player = ui::VideoPlayer::instance();
+    player.pause();
+    player.close();
 
     if(g_title_lbl) {
         lv_label_set_text(g_title_lbl, g_title[0] ? g_title : "Timelapse");
@@ -261,18 +550,33 @@ void page_user_timelapse_refresh(bool)
         lv_label_set_text(g_sub_lbl, g_sub);
     }
 
+    if(load_mp4_playback()) {
+        if(g_preview_box) {
+            lv_obj_add_flag(g_preview_box, LV_OBJ_FLAG_HIDDEN);
+        }
+        return;
+    } else if(g_mp4_path[0] != '\0') {
+        ui_toast_show("MP4 open failed, fallback PNG", user_color_accent, 1200);
+    }
+
     if(!load_sequence_frames()) {
         if(g_video_img) {
             lv_image_set_src(g_video_img, nullptr);
             lv_obj_invalidate(g_video_img);
         }
+        if(g_preview_box) {
+            lv_obj_add_flag(g_preview_box, LV_OBJ_FLAG_HIDDEN);
+        }
         if(g_time_lbl) {
             lv_label_set_text(g_time_lbl, "0 / 0");
         }
+        set_slider_enabled(false);
         set_play_icon(false);
         return;
     }
-    render_current_frame();
+    g_mode = PlaybackMode::PngSequence;
+    set_slider_enabled(g_frames.size() > 1u);
+    render_current_png_frame();
     g_playing = true;
     set_play_icon(true);
 }
@@ -280,8 +584,19 @@ void page_user_timelapse_refresh(bool)
 void page_user_timelapse_exit(void)
 {
     g_playing = false;
+    g_dragging = false;
+    g_mode = PlaybackMode::None;
+    if(g_preview_box) {
+        lv_obj_add_flag(g_preview_box, LV_OBJ_FLAG_HIDDEN);
+    }
+    ui::VideoPlayer::instance().pause();
+    ui::VideoPlayer::instance().close();
     g_frames.clear();
     g_cur_index = 0;
+    g_mp4_pos_ms = 0;
+    g_mp4_dur_ms = 0;
+    g_last_preview_req_ms = -1;
+    g_last_preview_req_tick_ms = 0;
 }
 
 lv_obj_t* page_user_timelapse_create(lv_obj_t* parent)
@@ -386,6 +701,40 @@ lv_obj_t* page_user_timelapse_create(lv_obj_t* parent)
     lv_obj_add_event_cb(slider, on_slider_released, LV_EVENT_RELEASED, nullptr);
     lv_obj_add_event_cb(slider, on_slider_released, LV_EVENT_PRESS_LOST, nullptr);
     g_slider = slider;
+
+    const int32_t pv_w = USER_SLIDE_W * 3 / 5;
+    const int32_t pv_h = pv_w * 4 / 5;
+    lv_obj_t* pv = lv_obj_create(ov);
+    lv_obj_remove_style_all(pv);
+    lv_obj_set_size(pv, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(pv, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(pv, LV_FLEX_ALIGN_CENTER,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_all(pv, USER_PAD_SM / 2, 0);
+    lv_obj_set_style_pad_row(pv, USER_PAD_SM / 2, 0);
+    lv_obj_set_style_bg_color(pv, lv_color_hex(0x000000), 0);
+    lv_obj_set_style_bg_opa(pv, LV_OPA_70, 0);
+    lv_obj_set_style_radius(pv, USER_RADIUS / 2, 0);
+    lv_obj_add_flag(pv, LV_OBJ_FLAG_FLOATING);
+    lv_obj_clear_flag(pv, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_clear_flag(pv, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_flag(pv, LV_OBJ_FLAG_HIDDEN);
+    g_preview_box = pv;
+
+    lv_obj_t* pimg = lv_image_create(pv);
+    lv_obj_set_size(pimg, pv_w, pv_h);
+    lv_obj_set_style_bg_color(pimg, user_color_panel_alt, 0);
+    lv_obj_set_style_bg_opa(pimg, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(pimg, USER_RADIUS / 2, 0);
+    lv_obj_set_style_clip_corner(pimg, true, 0);
+    lv_image_set_inner_align(pimg, LV_IMAGE_ALIGN_COVER);
+    g_preview_img = pimg;
+
+    lv_obj_t* ptime = lv_label_create(pv);
+    lv_label_set_text(ptime, "0:00");
+    lv_obj_set_style_text_color(ptime, user_color_text, 0);
+    lv_obj_set_style_text_font(ptime, user_font_caption(), 0);
+    g_preview_time = ptime;
 
     if(!g_play_timer) {
         g_play_timer = lv_timer_create(play_timer_cb, kPlayIntervalMs, nullptr);

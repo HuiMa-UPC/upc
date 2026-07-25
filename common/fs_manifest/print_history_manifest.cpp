@@ -126,6 +126,7 @@ PrintHistoryEntry parse_object(const std::string& obj)
     }
     parse_string_field(obj, "frames_dir", e.frames_dir);
     parse_string_field(obj, "thumb", e.thumb);
+    parse_string_field(obj, "video", e.video);
     return e;
 }
 
@@ -213,7 +214,8 @@ bool print_history_manifest_save(const std::string& path,
             << "\"material_g\":" << e.material_g << ','
             << "\"status\":\"" << print_history_status_str(e.status) << "\","
             << "\"frames_dir\":\"" << json_escape(e.frames_dir) << "\","
-            << "\"thumb\":\"" << json_escape(e.thumb) << "\""
+            << "\"thumb\":\"" << json_escape(e.thumb) << "\","
+            << "\"video\":\"" << json_escape(e.video) << "\""
             << '}';
     }
     out << "]}";

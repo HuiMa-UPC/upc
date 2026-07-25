@@ -155,10 +155,8 @@ void PrintVideoRecorder::on_session_start(
 
     frame_count_ = 0;
     last_layer_nv12_.clear();
-    const int64_t stamp_unix = start_unix_ > 0 ? start_unix_
-                                                : static_cast<int64_t>(std::time(nullptr));
-    session_name_ = (job_name_.empty() ? std::string("print") : job_name_) + "_" +
-        format_stamp_local(stamp_unix);
+    /* 同一 gcode 文件重复打印时覆盖同名目录 */
+    session_name_ = job_name_.empty() ? std::string("print") : job_name_;
     session_dir_ = std::string(CAMERA_PRINT_VIDEO_OUT_DIR) + "/" + session_name_;
 
     mkdir_p(CAMERA_PRINT_VIDEO_OUT_DIR);
@@ -377,6 +375,20 @@ bool PrintVideoRecorder::handle_layer_snap(const PrintVideoJob& job)
     return true;
 }
 
+bool PrintVideoRecorder::encode_png_sequence_to_mp4(const char* out_path) const
+{
+    if(!out_path || !out_path[0] || session_dir_.empty() || frame_count_ < 2u) {
+        return false;
+    }
+    const uint32_t fps = layer_fps_ > 0 ? layer_fps_ : 1u;
+    char cmd[1536];
+    std::snprintf(cmd, sizeof(cmd),
+                  "%s -y -loglevel error -framerate %u -i '%s/%%d.png' "
+                  "-c:v mpeg4 -q:v 5 -pix_fmt yuv420p -movflags +faststart '%s'",
+                  CAMERA_FFMPEG_BIN, fps, session_dir_.c_str(), out_path);
+    return run_shell_cmd(cmd, "ffmpeg mp4") == 0;
+}
+
 bool PrintVideoRecorder::create_raw_thumb_from_nv12(
     const std::vector<uint8_t>& nv12, const char* out_path) const
 {
@@ -488,13 +500,34 @@ void PrintVideoRecorder::finalize_session(bool aborted)
                                thumb_path.c_str());
     }
 
-    upsert_print_history(aborted, session_name_, thumb_ok ? thumb_rel : std::string{});
+    std::string video_rel;
+    std::string video_path;
+    bool video_ok = false;
+    if(frames >= 2u) {
+        video_rel = session_name_ + "/timelapse.mp4";
+        video_path = session_dir_ + "/timelapse.mp4";
+        (void)std::remove(video_path.c_str());
+        video_ok = encode_png_sequence_to_mp4(video_path.c_str());
+        if(!video_ok) {
+            UPC_LOG_CAMERA_SERVICE(Warn, "print_video mp4 generation failed path=%s",
+                                   video_path.c_str());
+        }
+    } else {
+        UPC_LOG_CAMERA_SERVICE(Info, "print_video skip mp4: frames=%u < 2 session=%s",
+                               frames, session_id_.c_str());
+    }
+
+    upsert_print_history(aborted,
+                         session_name_,
+                         thumb_ok ? thumb_rel : std::string{},
+                         video_ok ? video_rel : std::string{});
     UPC_LOG_CAMERA_SERVICE(
         Info,
-        "print_video saved -> %s frames=%u thumb=%s%s",
+        "print_video saved -> %s frames=%u thumb=%s video=%s%s",
         session_dir_.c_str(),
         frames,
         thumb_ok ? thumb_path.c_str() : "(none)",
+        video_ok ? video_path.c_str() : "(none)",
         aborted ? " aborted" : "");
 
     session_id_.clear();
@@ -557,26 +590,9 @@ std::string PrintVideoRecorder::sanitize_filename(const char* name)
     return s;
 }
 
-std::string PrintVideoRecorder::format_stamp_local(int64_t unix_sec)
-{
-    std::time_t t = static_cast<std::time_t>(unix_sec);
-    if(t <= 0) {
-        t = std::time(nullptr);
-    }
-    std::tm tm_buf{};
-    if(localtime_r(&t, &tm_buf) == nullptr) {
-        return "19700101_000000";
-    }
-    char buf[32];
-    std::snprintf(buf, sizeof(buf), "%04d%02d%02d_%02d%02d%02d",
-                  tm_buf.tm_year + 1900, tm_buf.tm_mon + 1, tm_buf.tm_mday,
-                  tm_buf.tm_hour, tm_buf.tm_min, tm_buf.tm_sec);
-    return buf;
-}
-
 void PrintVideoRecorder::upsert_print_history(
     bool aborted, const std::string& frames_dir_name,
-    const std::string& thumb_name) const
+    const std::string& thumb_name, const std::string& video_name) const
 {
     if(frames_dir_name.empty()) {
         return;
@@ -600,6 +616,7 @@ void PrintVideoRecorder::upsert_print_history(
                            : upc::PrintHistoryStatus::Complete;
     entry.frames_dir = frames_dir_name;
     entry.thumb      = thumb_name;
+    entry.video      = video_name;
 
     std::vector<upc::PrintHistoryEntry> entries;
     if(!upc::print_history_manifest_load(UPC_PRINT_VIDEO_MANIFEST, entries)) {

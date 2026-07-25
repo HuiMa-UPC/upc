@@ -60,6 +60,8 @@ private:
     bool grab_latest_nv12(std::vector<uint8_t>& out);
     /** NV12 → PNG（ffmpeg 软编）→ session_dir_/N.png（N 从 1 连续） */
     bool encode_nv12_to_png(const uint8_t* nv12, size_t bytes, uint32_t frame_index);
+    /** PNG 序列 -> MP4（timelapse.mp4），不足 2 帧不生成 */
+    bool encode_png_sequence_to_mp4(const char* out_path) const;
     bool handle_layer_snap(const PrintVideoJob& job);
     void finalize_session(bool aborted);
     /** RGA：把最后一帧 NV12 生成 RTHM（RGB565）缩略图 */
@@ -68,13 +70,12 @@ private:
     /** 完成目录落盘后 upsert /home/video/manifest.json */
     void upsert_print_history(bool aborted,
                               const std::string& frames_dir_name,
-                              const std::string& thumb_name) const;
+                              const std::string& thumb_name,
+                              const std::string& video_name) const;
     bool remove_session_dir();
     std::string frame_png_path(uint32_t frame_index) const;
     static bool mkdir_p(const char* path);
     static std::string sanitize_filename(const char* name);
-    /** 本地墙钟 → YYYYMMDD_HHMMSS */
-    static std::string format_stamp_local(int64_t unix_sec);
     static int run_shell_cmd(const char* cmd, const char* log_tag);
 
     std::mutex              mtx_;
