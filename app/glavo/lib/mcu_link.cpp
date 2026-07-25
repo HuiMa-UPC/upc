@@ -289,6 +289,19 @@ void McuLink::set_progress_callback(McuLinkProgressCb cb)
     progress_cb_ = std::move(cb);
 }
 
+void McuLink::set_serial_ack_enabled(bool enabled)
+{
+    serial_ack_enabled_.store(enabled);
+    if(!enabled) {
+        serial_clear_reliable();
+    }
+}
+
+bool McuLink::serial_ack_enabled() const noexcept
+{
+    return serial_ack_enabled_.load();
+}
+
 /* ---------- 静态工具 ---------- */
 
 bool McuLink::set_tcp_nodelay(int sockfd)
@@ -844,9 +857,9 @@ void McuLink::handle_serial_rx_frame(const uint8_t* frame, size_t len)
         return;
     }
 
-#if GLAVO_SERIAL_ACK_ENABLE
-    send_soc_ack_for_bb(frame, len);
-#endif
+    if(serial_ack_enabled()) {
+        send_soc_ack_for_bb(frame, len);
+    }
 
     if(serial_ota_session_.on_serial_rx_frame(frame, len)) {
         return;
@@ -1157,10 +1170,10 @@ void McuLink::serial_send_aa_reliable(const uint8_t* data, size_t len,
         return;
     }
 
-#if !GLAVO_SERIAL_ACK_ENABLE
-    serial_send_raw(data, len);
-    return;
-#endif
+    if(!serial_ack_enabled()) {
+        serial_send_raw(data, len);
+        return;
+    }
 
     if(!serial_is_soc_data(data, len)) {
         serial_send_raw(data, len);
@@ -1181,11 +1194,9 @@ void McuLink::serial_send_aa_reliable(const uint8_t* data, size_t len,
 
 void McuLink::on_serial_mcu_ack(const uint8_t* frame, size_t len)
 {
-#if !GLAVO_SERIAL_ACK_ENABLE
-    (void)frame;
-    (void)len;
-    return;
-#endif
+    if(!serial_ack_enabled()) {
+        return;
+    }
     if(!serial_reliable_pending_.active) {
         return;
     }
@@ -1206,11 +1217,9 @@ void McuLink::on_serial_mcu_ack(const uint8_t* frame, size_t len)
 
 void McuLink::send_soc_ack_for_bb(const uint8_t* frame, size_t len)
 {
-#if !GLAVO_SERIAL_ACK_ENABLE
-    (void)frame;
-    (void)len;
-    return;
-#endif
+    if(!serial_ack_enabled()) {
+        return;
+    }
     uint8_t ack[16];
     const int alen = serial_build_soc_ack(frame, len, ack, sizeof(ack));
     if(alen > 0) {
@@ -1220,9 +1229,9 @@ void McuLink::send_soc_ack_for_bb(const uint8_t* frame, size_t len)
 
 void McuLink::link_process_serial_reliable_tx()
 {
-#if !GLAVO_SERIAL_ACK_ENABLE
-    return;
-#endif
+    if(!serial_ack_enabled()) {
+        return;
+    }
     if(!serial_reliable_pending_.active) {
         return;
     }

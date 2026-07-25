@@ -92,13 +92,13 @@ void home_env_init(void)
         std::memset(&g_snap, 0, sizeof(g_snap));
         std::strcpy(g_snap.device_name, "SNOWPOD A1");
         g_snap.status         = USER_HOME_STATUS_READY;
-        g_snap.wifi_connected = true;
-        g_snap.signal_bars    = 3;
-        g_snap.pm25_indoor    = 25.0f;
-        g_snap.pm25_cabin     = 25.0f;
-        g_snap.temperature_c  = 23.6f;
-        g_snap.oxygen_percent = 84.9f;
-        /* 新增指标默认无数据（<0）→ 首帧环境到达前显示 "--" */
+        g_snap.wifi_connected = false;
+        g_snap.signal_bars    = 0;
+        /* 环境指标默认无数据（<0）→ 首帧环境到达前统一显示 "--" */
+        g_snap.pm25_indoor    = -1.0f;
+        g_snap.pm25_cabin     = -1.0f;
+        g_snap.temperature_c  = -1.0f;
+        g_snap.oxygen_percent = -1.0f;
         g_snap.pm10_indoor    = -1.0f;
         g_snap.humidity_percent = -1.0f;
         g_snap.pressure_kpa   = -1.0f;
@@ -1511,6 +1511,21 @@ constexpr float kPmBarFullScale  = 100.0f;
 /** 刷新单个 PM2.5 块：数值、进度条填充 + 颜色、状态文案（Good / Too poor…）。 */
 void update_pm_block(lv_obj_t *val_lbl, lv_obj_t *bar, lv_obj_t *status_lbl, float pm)
 {
+    if(metric_invalid(pm)) {
+        if(val_lbl) {
+            lv_label_set_text(val_lbl, "--");
+        }
+        if(bar) {
+            lv_bar_set_value(bar, 0, LV_ANIM_OFF);
+            lv_obj_set_style_bg_color(bar, user_color_divider, LV_PART_INDICATOR);
+        }
+        if(status_lbl) {
+            lv_label_set_text(status_lbl, "--");
+            lv_obj_set_style_text_color(status_lbl, user_color_text_dim, 0);
+        }
+        return;
+    }
+
     if(val_lbl) {
         lv_label_set_text_fmt(val_lbl, "%.1f", pm);
     }
@@ -1633,17 +1648,37 @@ void page_user_home_refresh(bool /*force*/)
     update_pm_block(g_env_lbl_pm_cabin, g_env_bar_cabin, g_env_status_cabin,
                     snap.pm25_cabin);
     if(g_env_lbl_temp) {
-        lv_label_set_text_fmt(g_env_lbl_temp, "%.1f °C", snap.temperature_c);
+        if(metric_invalid(snap.temperature_c)) {
+            lv_label_set_text(g_env_lbl_temp, "--");
+        } else {
+            lv_label_set_text_fmt(g_env_lbl_temp, "%.1f °C", snap.temperature_c);
+        }
     }
     if(g_env_lbl_oxygen) {
-        lv_label_set_text_fmt(g_env_lbl_oxygen, "%.1f %%", snap.oxygen_percent);
+        if(metric_invalid(snap.oxygen_percent)) {
+            lv_label_set_text(g_env_lbl_oxygen, "--");
+        } else {
+            lv_label_set_text_fmt(g_env_lbl_oxygen, "%.1f %%", snap.oxygen_percent);
+        }
     }
 
     /* 待机查看监控：右上环境小面板（单位为独立标签，数值只填数字） */
-    if(g_mon_env_pm_ext) lv_label_set_text_fmt(g_mon_env_pm_ext, "%.1f", snap.pm25_indoor);
-    if(g_mon_env_pm_int) lv_label_set_text_fmt(g_mon_env_pm_int, "%.1f", snap.pm25_cabin);
-    if(g_mon_env_o2)     lv_label_set_text_fmt(g_mon_env_o2,     "%.1f", snap.oxygen_percent);
-    if(g_mon_env_temp)   lv_label_set_text_fmt(g_mon_env_temp,   "%.1f", snap.temperature_c);
+    if(g_mon_env_pm_ext) {
+        if(metric_invalid(snap.pm25_indoor)) lv_label_set_text(g_mon_env_pm_ext, "--");
+        else lv_label_set_text_fmt(g_mon_env_pm_ext, "%.1f", snap.pm25_indoor);
+    }
+    if(g_mon_env_pm_int) {
+        if(metric_invalid(snap.pm25_cabin)) lv_label_set_text(g_mon_env_pm_int, "--");
+        else lv_label_set_text_fmt(g_mon_env_pm_int, "%.1f", snap.pm25_cabin);
+    }
+    if(g_mon_env_o2) {
+        if(metric_invalid(snap.oxygen_percent)) lv_label_set_text(g_mon_env_o2, "--");
+        else lv_label_set_text_fmt(g_mon_env_o2, "%.1f", snap.oxygen_percent);
+    }
+    if(g_mon_env_temp) {
+        if(metric_invalid(snap.temperature_c)) lv_label_set_text(g_mon_env_temp, "--");
+        else lv_label_set_text_fmt(g_mon_env_temp, "%.1f", snap.temperature_c);
+    }
 }
 
 lv_obj_t *page_user_home_create(lv_obj_t *parent)

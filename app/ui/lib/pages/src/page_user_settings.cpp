@@ -9,10 +9,12 @@
 #include "settings_icons.h"
 #include "ui_msg_proxy.hpp"
 #include "msg_runtime.hpp"
+#include "config/cal_config.hpp"
 
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <string>
 
 /**
  * @file page_user_settings.cpp
@@ -74,8 +76,8 @@ const NavDef kNavDefs[NAV_COUNT] = {
     { &settings_icon_debug,   "Debug"                  },
 };
 
-/* 可选 Wi-Fi 静态假数据（真实扫描由后端接） */
-const char *const kCurrentWifi = "SnowX_WIFI_2.4G";
+/* Wi-Fi 连接态占位（后端未上报时用于避免误导） */
+const char *const kCurrentWifi = "--";
 const char *const kAvailWifi[] = {
     "SnowX_WIFI_2.4G",
     "Sweden_2.4G",
@@ -85,12 +87,29 @@ const char *const kAvailWifi[] = {
 };
 
 /* 前端占位：当前 IP / 已保存网络（后端网络信息接口到位后替换） */
-const char *const kIpAddress = "192.168.1.100";
+const char *const kIpAddress = "--";
 const char *const kSavedWifi[] = {
     "SnowX_WIFI_2.4G",
     "Sweden_5G",
     "Home_Net",
 };
+
+const char *about_device_model_text()
+{
+    static bool loaded = false;
+    static std::string model = "SNOWPOD test03";
+    if(!loaded) {
+        loaded = true;
+        upc::config::CalConfigOptions cal_cfg{};
+        if(upc::config::load_cal_config_options(upc::config::kCalDefaultPath, &cal_cfg) &&
+           cal_cfg.has_config_section &&
+           cal_cfg.has_device_model &&
+           !cal_cfg.device_model.empty()) {
+            model = cal_cfg.device_model;
+        }
+    }
+    return model.c_str();
+}
 
 /* 后端网络状态缓存（GLAVO_Wifi_State_Ntf；未上线时回退占位）。待后端对齐。 */
 middleware::WifiStatePayload g_wifi_state = {};
@@ -1080,7 +1099,7 @@ void build_about_detail(lv_obj_t *parent)
     struct AboutRow { const char *label; const char *value; };
     const AboutRow rows[] = {
         { "Software Version", UPC_SW_VERSION },
-        { "Device Model",     "SNOWPOD lalin"   },
+        { "Device Model",     about_device_model_text() },
     };
     for(const AboutRow &r : rows) {
         lv_obj_t *row = ui_user_make_setting_row(card, r.label, nullptr, nullptr);

@@ -173,6 +173,8 @@ private:
     uint16_t last_sent_data_rate_ = 0xffff;
     std::chrono::steady_clock::time_point last_drain_progress_at_{};
     bool last_usb_mounted_ = false;
+    bool door_real_open_enabled_ = (GLAVO_DOOR_REAL_OPEN_ENABLE != 0);
+    bool door_real_close_check_enabled_ = (GLAVO_DOOR_REAL_CLOSE_CHECK_ENABLE != 0);
 };
 
 } // namespace upc::glavo

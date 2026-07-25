@@ -1,4 +1,5 @@
 #include "xfr_config.hpp"
+#include "config/cal_config.hpp"
 
 #include <cstdlib>
 
@@ -57,6 +58,17 @@ XfrConfig load_xfr_config()
     cfg.pair_pin_max_attempts = env_u32("UPC_XFR_PIN_MAX_ATTEMPTS",
                                         cfg.pair_pin_max_attempts);
     cfg.build_timeout_s = env_u32("UPC_XFR_BUILD_TIMEOUT_S", cfg.build_timeout_s);
+
+    upc::config::CalConfigOptions cal_cfg{};
+    if(upc::config::load_cal_config_options(upc::config::kCalDefaultPath, &cal_cfg) &&
+       cal_cfg.has_config_section) {
+        if(cal_cfg.has_device_cn && !cal_cfg.device_cn.empty()) {
+            cfg.device_sn = cal_cfg.device_cn;
+        }
+        if(cal_cfg.has_device_model && !cal_cfg.device_model.empty()) {
+            cfg.device_model = cal_cfg.device_model;
+        }
+    }
     return cfg;
 }
 

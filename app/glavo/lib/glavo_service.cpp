@@ -19,6 +19,7 @@
 #include "print_job_state.hpp"
 #include "msg_runtime.hpp"
 #include "buffer_pool.hpp"
+#include "config/cal_config.hpp"
 #include "rs_log.hpp"
 
 #include <dirent.h>
@@ -264,6 +265,30 @@ bool GlavoService::init()
     if (state() != ServiceState::Idle) return false;
 
     state_ = ServiceState::Initializing;
+
+    {
+        upc::config::CalConfigOptions cal_cfg{};
+        if(upc::config::load_cal_config_options(upc::config::kCalDefaultPath, &cal_cfg) &&
+           cal_cfg.has_config_section) {
+            if(cal_cfg.has_glavo_door_real_open_enable) {
+                door_real_open_enabled_ = cal_cfg.glavo_door_real_open_enable;
+            }
+            if(cal_cfg.has_glavo_door_real_close_check_enable) {
+                door_real_close_check_enabled_ =
+                    cal_cfg.glavo_door_real_close_check_enable;
+            }
+            if(cal_cfg.has_glavo_serial_ack_enable) {
+                McuLink::instance().set_serial_ack_enabled(
+                    cal_cfg.glavo_serial_ack_enable);
+            }
+        }
+        UPC_LOG_GLAVO_SERVICE(Info,
+            "runtime cfg: door_open=%d close_check=%d serial_ack=%d",
+            door_real_open_enabled_ ? 1 : 0,
+            door_real_close_check_enabled_ ? 1 : 0,
+            McuLink::instance().serial_ack_enabled() ? 1 : 0);
+    }
+
     parser::ParserContext::instance().load_calibration(CAL_DEFAULT_FILE_PATH);
     parser::ParserManager::instance().set_ring_buffer_sink(
         [](parser::RingBuffer* rb) {
@@ -1378,36 +1403,36 @@ void GlavoService::send_door_rsp(const middleware::Message& msg,
 /** @brief 处理 UI_CLOSE_DOOR_Req */
 void GlavoService::handle_close_door_request(const middleware::Message& msg)
 {
-#if GLAVO_DOOR_REAL_CLOSE_CHECK_ENABLE
-    const auto env = McuLink::instance().env_snapshot();
-    const bool closed = env.valid && env.door_state_valid && !env.outer_door_open;
-    send_door_rsp(msg, middleware::MsgType::APP_CLOSE_DOOR_Rsp, closed);
-    UPC_LOG_GLAVO_SERVICE(Info,
-        "close_door_check real mode: valid=%d door_valid=%d door_open=%d -> closed=%d",
-        env.valid ? 1 : 0, env.door_state_valid ? 1 : 0,
-        env.outer_door_open ? 1 : 0, closed ? 1 : 0);
-#else
+    if(door_real_close_check_enabled_) {
+        const auto env = McuLink::instance().env_snapshot();
+        const bool closed = env.valid && env.door_state_valid && !env.outer_door_open;
+        send_door_rsp(msg, middleware::MsgType::APP_CLOSE_DOOR_Rsp, closed);
+        UPC_LOG_GLAVO_SERVICE(Info,
+            "close_door_check real mode: valid=%d door_valid=%d door_open=%d -> closed=%d",
+            env.valid ? 1 : 0, env.door_state_valid ? 1 : 0,
+            env.outer_door_open ? 1 : 0, closed ? 1 : 0);
+        return;
+    }
     /* 兼容旧逻辑：占位立即确认已关 */
     send_door_rsp(msg, middleware::MsgType::APP_CLOSE_DOOR_Rsp, true);
-#endif
 }
 
 /** @brief 处理 UI_OpenDoor_Req */
 void GlavoService::handle_open_door_request(const middleware::Message& msg)
 {
-#if GLAVO_DOOR_REAL_OPEN_ENABLE
-    bool opened = false;
-    const bool got = McuLink::instance().request_open_door_and_wait(
-        GLAVO_DOOR_OPEN_TIMEOUT_MS, &opened);
-    const bool ok = got && opened;
-    send_door_rsp(msg, middleware::MsgType::APP_OpenDoor_Rsp, ok);
-    UPC_LOG_GLAVO_SERVICE(Info,
-        "open_door real mode: got=%d opened=%d timeout_ms=%u",
-        got ? 1 : 0, opened ? 1 : 0, static_cast<unsigned>(GLAVO_DOOR_OPEN_TIMEOUT_MS));
-#else
+    if(door_real_open_enabled_) {
+        bool opened = false;
+        const bool got = McuLink::instance().request_open_door_and_wait(
+            GLAVO_DOOR_OPEN_TIMEOUT_MS, &opened);
+        const bool ok = got && opened;
+        send_door_rsp(msg, middleware::MsgType::APP_OpenDoor_Rsp, ok);
+        UPC_LOG_GLAVO_SERVICE(Info,
+            "open_door real mode: got=%d opened=%d timeout_ms=%u",
+            got ? 1 : 0, opened ? 1 : 0, static_cast<unsigned>(GLAVO_DOOR_OPEN_TIMEOUT_MS));
+        return;
+    }
     /* 兼容旧逻辑：占位立即确认已开 */
     send_door_rsp(msg, middleware::MsgType::APP_OpenDoor_Rsp, true);
-#endif
 }
 
 /** @brief 处理 UI_Purify_Req（尚未实现业务逻辑） */

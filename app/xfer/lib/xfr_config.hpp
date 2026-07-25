@@ -14,7 +14,7 @@ struct XfrConfig {
     std::string mdns_service_file = "/etc/avahi/services/snowpod.service";
     std::string snowslice_bin = "/home/snowslice_demo";
     std::string progress_file = "/home/progress.txt";
-    std::string device_sn = "SN-lalin";
+    std::string device_sn = "SN-test03";
     std::string device_model = "Snowpod";
     bool require_auth = true;
     uint32_t chunk_max_bytes = 4U * 1024U * 1024U;

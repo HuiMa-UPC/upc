@@ -78,6 +78,10 @@ public:
      */
     void set_progress_callback(McuLinkProgressCb cb);
 
+    /** @brief 运行时设置串口 ACK 可靠发送开关（默认值来自编译宏）。 */
+    void set_serial_ack_enabled(bool enabled);
+    [[nodiscard]] bool serial_ack_enabled() const noexcept;
+
     /**
      * @brief 建立 TCP 连接（非阻塞 connect + poll 超时，地址见 GLAVO_TCP_DEFAULT_IP/PORT）
      * @return 0 成功；-1 socket 失败；-2 IP 非法；-3 connect 立即失败；
@@ -151,7 +155,7 @@ public:
     /**
      * @brief 将串口发送帧入队，由 link_thread 统一发送（线程安全）
      * @param reliable true 时经 serial_send_aa_reliable 走带 ACK 的可靠通道
-     *                 （需 GLAVO_SERIAL_ACK_ENABLE=1 才真正重传，否则等同裸发）；
+     *                 （需 serial_ack_enabled()=true 才真正重传，否则等同裸发）；
      *                 false 时裸发不等 ACK。
      * @note 队列满时丢弃最旧一条
      */
@@ -367,6 +371,7 @@ private:
     };
     SerialReliablePending serial_reliable_pending_{};
     std::deque<SerialReliableItem> serial_reliable_queue_;
+    std::atomic<bool> serial_ack_enabled_{GLAVO_SERIAL_ACK_ENABLE != 0};
 
     EnvSnapshotCache env_cache_{};
     mutable std::mutex env_mtx_;
