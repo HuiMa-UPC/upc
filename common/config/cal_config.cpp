@@ -47,6 +47,25 @@ bool parse_bool_like(const std::string& raw, bool* out)
     return false;
 }
 
+bool parse_float_like(const std::string& raw, float* out)
+{
+    if(!out) {
+        return false;
+    }
+    std::string v = raw;
+    trim_inplace(v);
+    if(v.empty()) {
+        return false;
+    }
+    char* end = nullptr;
+    const float f = std::strtof(v.c_str(), &end);
+    if(end == v.c_str() || (end && *end != '\0')) {
+        return false;
+    }
+    *out = f;
+    return true;
+}
+
 bool split_key_value(const char* line, std::string& key, std::string& value)
 {
     if(!line) {
@@ -134,6 +153,14 @@ bool load_cal_config_options(const char* path, CalConfigOptions* out)
             if(parse_bool_like(value, &v)) {
                 out->has_glavo_serial_ack_enable = true;
                 out->glavo_serial_ack_enable = v;
+            }
+            continue;
+        }
+        if(key_upper == "PM2.5CLEAN") {
+            float v = 0.0f;
+            if(parse_float_like(value, &v)) {
+                out->has_pm25_clean_threshold = true;
+                out->pm25_clean_threshold = v;
             }
             continue;
         }

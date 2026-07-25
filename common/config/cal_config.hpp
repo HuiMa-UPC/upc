@@ -17,6 +17,9 @@ struct CalConfigOptions {
     bool has_glavo_serial_ack_enable = false;
     bool glavo_serial_ack_enable = false;
 
+    bool has_pm25_clean_threshold = false;
+    float pm25_clean_threshold = 0.0f;
+
     bool has_device_cn = false;
     std::string device_cn;
 

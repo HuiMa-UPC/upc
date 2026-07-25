@@ -281,12 +281,16 @@ bool GlavoService::init()
                 McuLink::instance().set_serial_ack_enabled(
                     cal_cfg.glavo_serial_ack_enable);
             }
+            if(cal_cfg.has_pm25_clean_threshold) {
+                pm25_clean_threshold_ = cal_cfg.pm25_clean_threshold;
+            }
         }
         UPC_LOG_GLAVO_SERVICE(Info,
-            "runtime cfg: door_open=%d close_check=%d serial_ack=%d",
+            "runtime cfg: door_open=%d close_check=%d serial_ack=%d pm25_clean=%.1f",
             door_real_open_enabled_ ? 1 : 0,
             door_real_close_check_enabled_ ? 1 : 0,
-            McuLink::instance().serial_ack_enabled() ? 1 : 0);
+            McuLink::instance().serial_ack_enabled() ? 1 : 0,
+            static_cast<double>(pm25_clean_threshold_));
     }
 
     parser::ParserContext::instance().load_calibration(CAL_DEFAULT_FILE_PATH);
@@ -1365,12 +1369,11 @@ void GlavoService::handle_supply_status_req(const middleware::Message& msg)
 /** @brief 回复舱内 PM2.5（来自 McuLink 环境快照） */
 void GlavoService::handle_pm25_request(const middleware::Message& msg)
 {
-    /* 阈值判定归后端：舱内 PM2.5 ≥ 50 判不合格（is_high=1）→ 触发开门前清粉。
-     * TODO：如需可配置，改为从配置读取该阈值。 */
-    constexpr float kPm25CleanThreshold = 50.0f;
+    /* 阈值判定归后端：舱内 PM2.5 ≥ 阈值 判不合格（is_high=1）→ 触发开门前清粉。
+     * 阈值默认 50，可由 cal.csv Config 段 PM2.5Clean 覆盖。 */
     const auto env = McuLink::instance().env_snapshot();
     middleware::Pm25ResultPayload p{};
-    p.is_high   = (env.valid && env.pm25_cabin >= kPm25CleanThreshold) ? 1 : 0;
+    p.is_high   = (env.valid && env.pm25_cabin >= pm25_clean_threshold_) ? 1 : 0;
     p.pm25_cabin = env.valid ? env.pm25_cabin : 0.f;
 
     middleware::Message rsp(middleware::MsgType::APP_PM25_Rsp,
@@ -1421,14 +1424,33 @@ void GlavoService::handle_close_door_request(const middleware::Message& msg)
 void GlavoService::handle_open_door_request(const middleware::Message& msg)
 {
     if(door_real_open_enabled_) {
+        /* 按传感器协议判定开门成功：
+         * 先发送一次开门指令，再在超时窗内轮询 0x9B value[10] bit7（outer_door_open）。 */
+        const bool sent = McuLink::instance().request_open_door_once();
         bool opened = false;
-        const bool got = McuLink::instance().request_open_door_and_wait(
-            GLAVO_DOOR_OPEN_TIMEOUT_MS, &opened);
-        const bool ok = got && opened;
-        send_door_rsp(msg, middleware::MsgType::APP_OpenDoor_Rsp, ok);
+        bool valid_seen = false;
+        if(sent) {
+            const uint32_t wait_ms = GLAVO_DOOR_OPEN_TIMEOUT_MS > 0
+                                     ? GLAVO_DOOR_OPEN_TIMEOUT_MS : 1u;
+            const auto deadline = std::chrono::steady_clock::now() +
+                                  std::chrono::milliseconds(wait_ms);
+            do {
+                const auto env = McuLink::instance().env_snapshot();
+                if(env.valid && env.door_state_valid) {
+                    valid_seen = true;
+                    if(env.outer_door_open) {
+                        opened = true;
+                        break;
+                    }
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            } while(std::chrono::steady_clock::now() < deadline);
+        }
+        send_door_rsp(msg, middleware::MsgType::APP_OpenDoor_Rsp, sent && opened);
         UPC_LOG_GLAVO_SERVICE(Info,
-            "open_door real mode: got=%d opened=%d timeout_ms=%u",
-            got ? 1 : 0, opened ? 1 : 0, static_cast<unsigned>(GLAVO_DOOR_OPEN_TIMEOUT_MS));
+            "open_door real mode(sensor): sent=%d opened=%d valid_seen=%d timeout_ms=%u",
+            sent ? 1 : 0, opened ? 1 : 0, valid_seen ? 1 : 0,
+            static_cast<unsigned>(GLAVO_DOOR_OPEN_TIMEOUT_MS));
         return;
     }
     /* 兼容旧逻辑：占位立即确认已开 */
@@ -1443,19 +1465,59 @@ void GlavoService::handle_purify_request(const middleware::Message& msg)
 }
 
 
-/** @brief 处理 UI_Clean_Start_Req（临时桩：立即回 Rsp）。
- *  TODO(后端)：真实逻辑应开启风机 → 循环检测 PM2.5 至合格 → 关闭风机后再回
- *  APP_Clean_Start_Rsp。当前占位即时确认，"正在清粉中"弹窗可见时长由 UI 端
- *  CLEAN_MIN_MS 最短停留保证。 */
- void GlavoService::handle_clean_start_request(const middleware::Message& msg)
- {
-     UPC_LOG_GLAVO_SERVICE(Debug, "clean_start_req: stub, reply done immediately");
-     middleware::Message rsp(middleware::MsgType::APP_Clean_Start_Rsp,
-         static_cast<middleware::ModuleId>(module_id()), msg.sender_id);
-     if(!publish_async(rsp)) {
-         UPC_LOG_GLAVO_SERVICE(Warn, "clean_start_rsp publish_async failed");
-     }
- }
+/** @brief 处理 UI_Clean_Start_Req（开门前清粉）。
+ *  业务顺序：设置风机占空比 60% → 开风机 → 每 1s 读取 PM2.5，
+ *  直到舱内 PM2.5 < 阈值后关风机，再回 APP_Clean_Start_Rsp。 */
+void GlavoService::handle_clean_start_request(const middleware::Message& msg)
+{
+    constexpr uint8_t kCleanFanDutyPercent = 60u;
+    constexpr auto kCleanPollInterval = std::chrono::seconds(1);
+
+    uint8_t buf[SERIAL_DEBUG_MAX_FRAME];
+    int n = serial_debug_build_fan_duty(kCleanFanDutyPercent, buf, sizeof(buf));
+    if(n <= 0) {
+        UPC_LOG_GLAVO_SERVICE(Warn,
+            "clean_start_req: build fan duty failed duty=%u",
+            static_cast<unsigned>(kCleanFanDutyPercent));
+    } else {
+        debug_tx(buf, n);
+    }
+
+    n = serial_debug_build_fan_switch(true, buf, sizeof(buf));
+    if(n <= 0) {
+        UPC_LOG_GLAVO_SERVICE(Warn, "clean_start_req: build fan on failed");
+    } else {
+        debug_tx(buf, n);
+    }
+
+    UPC_LOG_GLAVO_SERVICE(Info,
+        "clean_start_req: fan on, waiting pm25 < %.1f",
+        static_cast<double>(pm25_clean_threshold_));
+    for(;;) {
+        const auto env = McuLink::instance().env_snapshot();
+        if(env.valid && env.pm25_cabin < pm25_clean_threshold_) {
+            UPC_LOG_GLAVO_SERVICE(Info,
+                "clean_start_req: pm25 reached %.1f < %.1f",
+                static_cast<double>(env.pm25_cabin),
+                static_cast<double>(pm25_clean_threshold_));
+            break;
+        }
+        std::this_thread::sleep_for(kCleanPollInterval);
+    }
+
+    n = serial_debug_build_fan_switch(false, buf, sizeof(buf));
+    if(n <= 0) {
+        UPC_LOG_GLAVO_SERVICE(Warn, "clean_start_req: build fan off failed");
+    } else {
+        debug_tx(buf, n);
+    }
+
+    middleware::Message rsp(middleware::MsgType::APP_Clean_Start_Rsp,
+        static_cast<middleware::ModuleId>(module_id()), msg.sender_id);
+    if(!publish_async(rsp)) {
+        UPC_LOG_GLAVO_SERVICE(Warn, "clean_start_rsp publish_async failed");
+    }
+}
 
 /* ============================================================================
  * MCU OTA

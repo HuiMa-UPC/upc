@@ -175,6 +175,7 @@ private:
     bool last_usb_mounted_ = false;
     bool door_real_open_enabled_ = (GLAVO_DOOR_REAL_OPEN_ENABLE != 0);
     bool door_real_close_check_enabled_ = (GLAVO_DOOR_REAL_CLOSE_CHECK_ENABLE != 0);
+    float pm25_clean_threshold_ = 50.0f;
 };
 
 } // namespace upc::glavo

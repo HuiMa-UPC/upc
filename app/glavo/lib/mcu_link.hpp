@@ -173,6 +173,12 @@ public:
     bool request_open_door_and_wait(uint32_t timeout_ms, bool* opened_out);
 
     /**
+     * @brief 仅发送一次开门指令（TLV_REQ_OPEN_DOOR），不等待 0x11 结果回包
+     * @return true=已成功入串口发送队列；false=串口未就绪或组帧失败
+     */
+    bool request_open_door_once();
+
+    /**
      * @brief 设置 TCP_NODELAY，禁用 Nagle 算法以降低发包延迟
      * @param sockfd 已连接的 socket 文件描述符
      */

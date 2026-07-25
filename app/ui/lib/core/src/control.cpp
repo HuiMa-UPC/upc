@@ -210,6 +210,7 @@ void on_print_peer_watch(lv_timer_t *timer);
 void on_print_drain_fallback(lv_timer_t *timer);
 void on_offline_exit(lv_timer_t *timer);
 void on_terminate_timeout(lv_timer_t *timer);
+void arm_door_open_retry_timer(void);
 
 void invoke_done(DoneCb &cb, void *&user)
 {
@@ -416,10 +417,11 @@ void wire_msg_proxy()
         void *u = g_open_u;
         g_open_cb = nullptr;
         g_open_u = nullptr;
+        if(g_state != CONTROL_STATE_DOOR_OPENING) {
+            return;
+        }
         if(!p.ok) {
-            if(g_on_action_fail) {
-                g_on_action_fail("Open door failed");
-            }
+            arm_door_open_retry_timer();
             return;
         }
         if(cb) {
@@ -699,6 +701,7 @@ lv_obj_t         *g_door_img_box = nullptr;  /**< 顶部满宽图容器（切 va
 lv_obj_t         *g_door_content = nullptr;  /**< 下方 padded 内容列（切 variant 时重建） */
 lv_obj_t         *g_door_title   = nullptr;
 lv_obj_t         *g_door_body    = nullptr;  /**< [D] 状态副行（PM2.5 净化提示） */
+lv_obj_t         *g_door_close_btn = nullptr;/**< Opening/Cleaning 右上角退出按钮 */
 ui_arc_spinner_t *g_door_spinner = nullptr;
 /* 门流程节奏：让 Opening / DoorOpened 两个中间态"看得见"——避免后端即时应答导致一闪而过。
  *   - Opening：最短停留后再前进；
@@ -707,8 +710,10 @@ constexpr uint32_t DOOR_OPENING_MIN_MS = 1500u;   /**< "正在准备开门"最�
 constexpr uint32_t DOOR_OPENED_MIN_MS  = 1500u;   /**< "门已开启(置灰)"最短显示后才开始检测 */
 constexpr uint32_t DOOR_CLOSE_POLL_MS  = 800u;    /**< 关门检测轮询间隔 */
 constexpr uint32_t CLEAN_MIN_MS        = 1500u;   /**< "正在清粉中"最短显示 */
+constexpr uint32_t DOOR_OPEN_RETRY_MS  = 800u;    /**< 开门失败重试间隔 */
 lv_timer_t *g_door_advance_timer    = nullptr;    /**< Opening/Cleaning 最短停留到时→前进 */
 lv_timer_t *g_door_close_poll_timer = nullptr;    /**< DoorOpened 关门检测轮询 */
+lv_timer_t *g_door_open_retry_timer = nullptr;    /**< Opening 开门失败重试定时器 */
 uint32_t    g_door_opening_since     = 0;          /**< 进入 Opening 的 tick */
 uint32_t    g_clean_since            = 0;          /**< 进入 Cleaning 的 tick */
 
@@ -1096,7 +1101,9 @@ ui_modal_dialog_t *show_plate_prompt(lv_obj_t *parent)
 enum class DoorVariant { Opening, Cleaning, DoorOpened, DoorClosed };
 
 void on_door_closed_confirm_btn(lv_event_t *e);
+void on_door_opening_cancel(lv_event_t *e);
 void door_apply_variant(DoorVariant v);
+void pf_start_open_door(void);
 
 /* 满宽圆角矩形主按钮（门弹窗底部）。enabled=false → 透明度 30 且不可点。 */
 lv_obj_t *make_door_button(lv_obj_t *parent, const char *text, bool enabled,
@@ -1156,6 +1163,7 @@ ui_modal_dialog_t *show_door_dialog(lv_obj_t *parent, DoorVariant variant)
     g_door_content = nullptr;
     g_door_title   = nullptr;
     g_door_body    = nullptr;
+    g_door_close_btn = nullptr;
     g_door_spinner = nullptr;
 
     /* 背景遮罩（吞点击，防穿透底层首页） */
@@ -1213,6 +1221,14 @@ ui_modal_dialog_t *show_door_dialog(lv_obj_t *parent, DoorVariant variant)
                           LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_clear_flag(g_door_content, LV_OBJ_FLAG_SCROLLABLE);
 
+    /* 关闭按钮后创建并提到最前，避免被顶部图片容器遮挡。 */
+    g_door_close_btn = make_round_icon_btn(card, LV_SYMBOL_CLOSE, on_door_opening_cancel);
+    if(g_door_close_btn) {
+        lv_obj_add_flag(g_door_close_btn, LV_OBJ_FLAG_FLOATING);
+        lv_obj_align(g_door_close_btn, LV_ALIGN_TOP_RIGHT, -USER_DLG_PAD, USER_DLG_PAD);
+        lv_obj_move_foreground(g_door_close_btn);
+    }
+
     lv_obj_set_style_opa(backdrop, LV_OPA_TRANSP, 0);
     lv_obj_fade_in(backdrop, 180, 0);
     lv_obj_move_foreground(backdrop);
@@ -1257,6 +1273,13 @@ void door_apply_variant(DoorVariant v)
     lv_obj_clean(g_door_content);
     g_door_title = nullptr;
     g_door_body  = nullptr;
+    if(g_door_close_btn) {
+        if(v == DoorVariant::Opening || v == DoorVariant::Cleaning) {
+            lv_obj_clear_flag(g_door_close_btn, LV_OBJ_FLAG_HIDDEN);
+        } else {
+            lv_obj_add_flag(g_door_close_btn, LV_OBJ_FLAG_HIDDEN);
+        }
+    }
 
     if(v == DoorVariant::Opening || v == DoorVariant::Cleaning) {
         door_set_image(&img_device_unlock);
@@ -2257,6 +2280,35 @@ void stop_door_timers(void)
         lv_timer_delete(g_door_close_poll_timer);
         g_door_close_poll_timer = nullptr;
     }
+    if(g_door_open_retry_timer) {
+        lv_timer_delete(g_door_open_retry_timer);
+        g_door_open_retry_timer = nullptr;
+    }
+}
+
+void on_door_opening_cancel(lv_event_t * /*e*/)
+{
+    if(g_state == CONTROL_STATE_DOOR_OPENING) {
+        enter_state(CONTROL_STATE_IDLE);
+    }
+}
+
+void door_open_retry_cb(lv_timer_t * /*t*/)
+{
+    g_door_open_retry_timer = nullptr;
+    if(g_state == CONTROL_STATE_DOOR_OPENING) {
+        pf_start_open_door();
+    }
+}
+
+void arm_door_open_retry_timer(void)
+{
+    if(g_door_open_retry_timer || g_state != CONTROL_STATE_DOOR_OPENING) {
+        return;
+    }
+    g_door_open_retry_timer = lv_timer_create(door_open_retry_cb,
+                                              DOOR_OPEN_RETRY_MS, nullptr);
+    lv_timer_set_repeat_count(g_door_open_retry_timer, 1);
 }
 
 /* 未放入分支：开门 → 门已开启等待页 → 关门监测 Rsp → 关门确认页 */
@@ -2326,6 +2378,10 @@ void pf_on_open_door_done(void * /*u*/)
 
 void pf_start_open_door(void)
 {
+    if(g_door_open_retry_timer) {
+        lv_timer_delete(g_door_open_retry_timer);
+        g_door_open_retry_timer = nullptr;
+    }
     backend_start_open_door(pf_on_open_door_done, nullptr);
 }
 
@@ -2422,6 +2478,7 @@ void enter_state(control_state_t s)
     g_door_content     = nullptr;
     g_door_title       = nullptr;
     g_door_body        = nullptr;
+    g_door_close_btn   = nullptr;
     g_door_spinner     = nullptr;
 
     g_state = s;
