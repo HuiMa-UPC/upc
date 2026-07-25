@@ -154,6 +154,7 @@ void PrintVideoRecorder::on_session_start(
     }
 
     frame_count_ = 0;
+    last_layer_nv12_.clear();
     const int64_t stamp_unix = start_unix_ > 0 ? start_unix_
                                                 : static_cast<int64_t>(std::time(nullptr));
     session_name_ = (job_name_.empty() ? std::string("print") : job_name_) + "_" +
@@ -361,7 +362,9 @@ bool PrintVideoRecorder::handle_layer_snap(const PrintVideoJob& job)
             session_id_.c_str(), job.layer_index, frame_index);
         return false;
     }
+    const size_t nv12_bytes = nv12.size();
     ++frame_count_;
+    last_layer_nv12_ = std::move(nv12);
     UPC_LOG_CAMERA_SERVICE(
         Info,
         "print_video snap ok session=%s layer=%u frame=%u height_um=%u nv12_bytes=%zu path=%s",
@@ -369,7 +372,7 @@ bool PrintVideoRecorder::handle_layer_snap(const PrintVideoJob& job)
         job.layer_index,
         frame_index,
         static_cast<unsigned>(job.layer_height_um),
-        nv12.size(),
+        nv12_bytes,
         frame_png_path(frame_index).c_str());
     return true;
 }
@@ -476,10 +479,9 @@ void PrintVideoRecorder::finalize_session(bool aborted)
     const std::string thumb_path = session_dir_ + "/thumb" + CAMERA_PRINT_VIDEO_THUMB_EXT;
     (void)std::remove(thumb_path.c_str());
 
-    std::vector<uint8_t> nv12;
     bool thumb_ok = false;
-    if(grab_latest_nv12(nv12)) {
-        thumb_ok = create_raw_thumb_from_nv12(nv12, thumb_path.c_str());
+    if(!last_layer_nv12_.empty()) {
+        thumb_ok = create_raw_thumb_from_nv12(last_layer_nv12_, thumb_path.c_str());
     }
     if(!thumb_ok) {
         UPC_LOG_CAMERA_SERVICE(Warn, "print_video thumb generation failed path=%s",
@@ -500,6 +502,7 @@ void PrintVideoRecorder::finalize_session(bool aborted)
     session_dir_.clear();
     start_unix_ = 0;
     frame_count_ = 0;
+    last_layer_nv12_.clear();
 }
 
 bool PrintVideoRecorder::remove_session_dir()

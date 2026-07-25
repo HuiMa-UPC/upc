@@ -31,7 +31,8 @@ struct PrintVideoJob {
 
 /**
  * 打印层拍照：dma 元数据环取帧 → 软件编码 PNG（1.png,2.png,...）；
- * Finish/Abort 时生成 thumb.rthm 并 upsert /home/video/manifest.json（含 complete/terminated 状态）。
+ * Finish/Abort 时使用“最后一次层拍成功帧”生成 thumb.rthm，
+ * 并 upsert /home/video/manifest.json（含 complete/terminated 状态）。
  */
 class PrintVideoRecorder {
 public:
@@ -89,6 +90,7 @@ private:
     uint32_t stream_height_  = CAMERA_HEIGHT_DEFAULT;
     uint32_t layer_fps_      = CAMERA_PRINT_VIDEO_LAYER_FPS;
     uint32_t frame_count_    = 0; /**< 成功写入的 PNG 帧数（连续 1..N） */
+    std::vector<uint8_t> last_layer_nv12_; /**< 最近一次层拍成功帧（用于生成 thumb） */
     std::string session_id_;
     std::string job_name_;
     std::string session_name_;
