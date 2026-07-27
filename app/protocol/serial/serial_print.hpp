@@ -24,6 +24,7 @@ int serial_build_door_open_request(uint8_t* out, size_t out_size);
 
 serial_event_t serial_parse_frame(const uint8_t* data, size_t len);
 int serial_parse_door_open_result(const uint8_t* data, size_t len, uint8_t* door_state_out);
+int serial_parse_clean_test_result(const uint8_t* data, size_t len, uint8_t* result_out);
 
 #ifdef __cplusplus
 }

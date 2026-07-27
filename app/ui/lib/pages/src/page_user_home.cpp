@@ -89,7 +89,51 @@ void apply_env(const middleware::EnvSnapshotPayload &p)
 void set_pause_ui(bool paused);   /* 定义见下方（打印中底条按钮区） */
 extern lv_obj_t *g_monitor_photo_btn;
 extern lv_obj_t *g_result_photo_btn;
+extern lv_obj_t *g_result_purify_btn;
+extern bool      g_result_cleaning;
 extern bool      g_monitor_photo_pending;
+extern char      g_result_job_name[96];
+
+struct CleanDoneToastCtx {
+    bool success;
+};
+
+void on_clean_start_reject_async(void * /*user*/)
+{
+    g_result_cleaning = false;
+    if(g_result_purify_btn) {
+        lv_obj_clear_state(g_result_purify_btn, LV_STATE_DISABLED);
+    }
+    ui_toast_show("Powder cleaning is busy", ui_color_danger, 1800);
+}
+
+void on_clean_done_async(void *user)
+{
+    CleanDoneToastCtx *ctx = static_cast<CleanDoneToastCtx*>(user);
+    const bool success = ctx ? ctx->success : false;
+    delete ctx;
+
+    g_result_cleaning = false;
+    if(g_result_purify_btn) {
+        lv_obj_clear_state(g_result_purify_btn, LV_STATE_DISABLED);
+    }
+    if(!control_is_printing()) {
+        return;
+    }
+    if(success) {
+        ui_toast_show("Powder cleaning finished", user_color_status_ok, 2200);
+    } else {
+        ui_toast_show("Powder cleaning failed, video retained", ui_color_danger, 2600);
+    }
+}
+
+void on_clean_close_rsp_async(void * /*user*/)
+{
+    g_result_cleaning = false;
+    if(g_result_purify_btn) {
+        lv_obj_clear_state(g_result_purify_btn, LV_STATE_DISABLED);
+    }
+}
 
 void home_env_init(void)
 {
@@ -131,6 +175,25 @@ void home_env_init(void)
                 ui_toast_show("Photo save failed", ui_color_danger, 1500);
             }
         });
+
+    ui::UiMsgProxy::instance().register_clean_test_start_rsp(
+        [](bool accepted) {
+            if(accepted) {
+                return;
+            }
+            lv_async_call(on_clean_start_reject_async, nullptr);
+        });
+
+    ui::UiMsgProxy::instance().register_clean_test_done(
+        [](const middleware::CleanTestDonePayload &rsp) {
+            CleanDoneToastCtx *ctx = new CleanDoneToastCtx{};
+            ctx->success = (rsp.result_code == 0);
+            lv_async_call(on_clean_done_async, ctx);
+        });
+
+    ui::UiMsgProxy::instance().register_clean_test_close_rsp([]() {
+        lv_async_call(on_clean_close_rsp_async, nullptr);
+    });
 }
 
 void home_set_status(user_home_status_t s)
@@ -214,7 +277,10 @@ lv_obj_t *g_result_time_val    = nullptr; /**< TIME COST 数值 "2:23:23" */
 lv_obj_t *g_result_material_val= nullptr; /**< CONSUMABLES 数值 "592.32" */
 lv_obj_t *g_result_material_unit=nullptr; /**< CONSUMABLES 单位 "G"（无数据时隐藏） */
 lv_obj_t *g_result_photo_btn   = nullptr; /**< 结果页拍照钮（与监控页共用在途标志） */
+lv_obj_t *g_result_purify_btn  = nullptr; /**< 结果页 Purify 按钮 */
 ui_slide_unlock_t *g_result_slide = nullptr; /**< "SWIPE TO COLLECT" */
+char      g_result_job_name[96] = {0}; /**< 清粉录像目录键（优先用 manifest.frames_dir） */
+bool      g_result_cleaning = false;
 /* 顶部左侧 HOME PM2.5 卡（稿 4045:18205）：点卡片本身切换 PM2.5/PM10，
  * 与首页左卡共用 g_home_metric_idx，两处显示始终同步。 */
 lv_obj_t *g_res_pm_title = nullptr;       /**< "HOME PM2.5" / "HOME PM10" */
@@ -1253,10 +1319,18 @@ void on_result_home_click(lv_event_t * /*e*/)
     control_print_result_dismiss();
 }
 
-/* Purify：本期只做 UI 占位，后端净化流程尚未实现。 */
+/* Purify：触发打印结果页清粉测试（后端走 clean_test_start/close + TLV 0x22）。 */
 void on_result_purify_click(lv_event_t * /*e*/)
 {
-    ui_toast_show("Purify is not available yet", user_color_text_dim, 1500);
+    if(g_result_cleaning) {
+        return;
+    }
+    g_result_cleaning = true;
+    if(g_result_purify_btn) {
+        lv_obj_add_state(g_result_purify_btn, LV_STATE_DISABLED);
+    }
+    ui::UiMsgProxy::instance().send_clean_test_start(g_result_job_name, 0, 0, 0);
+    ui_toast_show("Powder cleaning started", user_color_accent, 1500);
 }
 
 void on_result_photo_click(lv_event_t * /*e*/)
@@ -1569,7 +1643,7 @@ void build_camera_gradient_masks(lv_obj_t *parent)
     if(!s_mask_ready) {
         const lv_color_t cols[2] = { lv_color_black(), lv_color_black() };
         const uint8_t    frac[2] = { 0, 255 };
-        const lv_opa_t   opa_l[2] = { LV_OPA_COVER, LV_OPA_TRANSP };
+        const lv_opa_t   opa_l[2] = { LV_OPA_70, LV_OPA_TRANSP };
         const lv_opa_t   opa_r[2] = { LV_OPA_TRANSP, LV_OPA_60 };
         lv_grad_init_stops(&s_mask_l, cols, opa_l, frac, 2);
         lv_grad_init_stops(&s_mask_r, cols, opa_r, frac, 2);
@@ -1580,16 +1654,20 @@ void build_camera_gradient_masks(lv_obj_t *parent)
         s_mask_ready = true;
     }
 
-    struct { const lv_grad_dsc_t *grad; lv_align_t align; } kMasks[2] = {
-        { &s_mask_l, LV_ALIGN_LEFT_MID  },
-        { &s_mask_r, LV_ALIGN_RIGHT_MID },
+    struct {
+        const lv_grad_dsc_t *grad;
+        lv_align_t align;
+        int32_t width_pct;
+    } kMasks[2] = {
+        { &s_mask_l, LV_ALIGN_LEFT_MID, 14 },
+        { &s_mask_r, LV_ALIGN_RIGHT_MID, 20 },
     };
     for(const auto &m : kMasks) {
         lv_obj_t *mask = lv_obj_create(parent);
         lv_obj_remove_style_all(mask);
         lv_obj_add_flag(mask, LV_OBJ_FLAG_FLOATING);
-        /* 稿上 400/1152（内容区宽）≈ 35% */
-        lv_obj_set_size(mask, LV_PCT(35), LV_PCT(100));
+        /* 左侧给中心主体让位，右侧保持状态字可读性。 */
+        lv_obj_set_size(mask, LV_PCT(m.width_pct), LV_PCT(100));
         lv_obj_align(mask, m.align, 0, 0);
         lv_obj_set_style_bg_color(mask, lv_color_black(), 0);
         lv_obj_set_style_bg_grad(mask, m.grad, 0);
@@ -1621,7 +1699,8 @@ lv_obj_t *build_print_result_layer(lv_obj_t *parent)
     lv_obj_align(home_grp, LV_ALIGN_TOP_RIGHT, -USER_PAD, USER_PAD);
 
     lv_obj_t *purify_grp = make_result_round_btn(layer, &ic_purify, "Purify",
-                                                 on_result_purify_click, nullptr);
+                                                 on_result_purify_click,
+                                                 &g_result_purify_btn);
     lv_obj_add_flag(purify_grp, LV_OBJ_FLAG_FLOATING);
     lv_obj_align(purify_grp, LV_ALIGN_TOP_RIGHT, -USER_PAD,
                  USER_PAD * 2 + btn_sz);
@@ -2369,8 +2448,19 @@ void page_user_home_enter_print_result(const control_print_result_t *result)
     lv_obj_remove_flag(g_result_layer, LV_OBJ_FLAG_HIDDEN);
 
     g_monitor_photo_pending = false;
+    g_result_cleaning = false;
+    if(result->video_dir[0]) {
+        std::snprintf(g_result_job_name, sizeof(g_result_job_name), "%s",
+                      result->video_dir);
+    } else {
+        std::snprintf(g_result_job_name, sizeof(g_result_job_name), "%s",
+                      result->job_name);
+    }
     if(g_result_photo_btn) {
         lv_obj_clear_state(g_result_photo_btn, LV_STATE_DISABLED);
+    }
+    if(g_result_purify_btn) {
+        lv_obj_clear_state(g_result_purify_btn, LV_STATE_DISABLED);
     }
     if(g_result_slide) {
         ui_slide_unlock_reset(g_result_slide);
@@ -2434,6 +2524,7 @@ void page_user_home_exit_printing_mode(void)
 {
     ui::CameraPreviewPlayer::instance().stop();
     g_printing_active = false;
+    g_result_cleaning = false;
 
     /* 结果页浮层与打印中底条一起复位，下次进打印中从底条起步 */
     if(g_result_layer)  lv_obj_add_flag(g_result_layer, LV_OBJ_FLAG_HIDDEN);

@@ -1,5 +1,6 @@
 #include "ui_msg_proxy.hpp"
 #include "buffer_pool.hpp"
+#include <cstdio>
 
 namespace ui {
 
@@ -79,6 +80,32 @@ void UiMsgProxy::init()
         [this](const middleware::Message&) {
             if (clean_stop_done_cb_) {
                 clean_stop_done_cb_();
+            }
+        }));
+
+    subs_.push_back(bus.subscribe(
+        middleware::MsgType::APP_Clean_Test_Start_Rsp, middleware::ModuleId::UI,
+        [this](const middleware::Message& msg) {
+            middleware::CleanTestStartRspPayload p{};
+            if (clean_test_start_rsp_cb_ && read_inline_pod(msg, p)) {
+                clean_test_start_rsp_cb_(p.accepted != 0);
+            }
+        }));
+
+    subs_.push_back(bus.subscribe(
+        middleware::MsgType::APP_Clean_Test_Done_Ntf, middleware::ModuleId::UI,
+        [this](const middleware::Message& msg) {
+            middleware::CleanTestDonePayload p{};
+            if (clean_test_done_cb_ && read_inline_pod(msg, p)) {
+                clean_test_done_cb_(p);
+            }
+        }));
+
+    subs_.push_back(bus.subscribe(
+        middleware::MsgType::APP_Clean_Test_Close_Rsp, middleware::ModuleId::UI,
+        [this](const middleware::Message&) {
+            if (clean_test_close_rsp_cb_) {
+                clean_test_close_rsp_cb_();
             }
         }));
 
@@ -462,6 +489,43 @@ void UiMsgProxy::send_clean_stop()
 void UiMsgProxy::register_clean_stop_result(CleanStopDoneCb cb)
 {
     clean_stop_done_cb_ = std::move(cb);
+}
+
+void UiMsgProxy::send_clean_test_start(const char* job_name, uint32_t width,
+                                       uint32_t height, uint32_t fps)
+{
+    middleware::CleanTestStartReqPayload req{};
+    if(job_name && job_name[0]) {
+        std::snprintf(req.job_name, sizeof(req.job_name), "%s", job_name);
+    }
+    req.width = width;
+    req.height = height;
+    req.fps = fps;
+    publish_pod(middleware::MsgType::UI_Clean_Test_Start_Req,
+                middleware::ModuleId::APP_GLAVO, req);
+}
+
+void UiMsgProxy::register_clean_test_start_rsp(CleanTestStartRspCb cb)
+{
+    clean_test_start_rsp_cb_ = std::move(cb);
+}
+
+void UiMsgProxy::register_clean_test_done(CleanTestDoneCb cb)
+{
+    clean_test_done_cb_ = std::move(cb);
+}
+
+void UiMsgProxy::send_clean_test_close()
+{
+    middleware::Message msg(middleware::MsgType::UI_Clean_Test_Close_Req,
+                            middleware::ModuleId::UI,
+                            middleware::ModuleId::APP_GLAVO);
+    middleware::MsgPort::instance().publish_async(msg);
+}
+
+void UiMsgProxy::register_clean_test_close_rsp(CleanTestCloseRspCb cb)
+{
+    clean_test_close_rsp_cb_ = std::move(cb);
 }
 
 void UiMsgProxy::send_fs_dir_open(middleware::PrintFileSource source)

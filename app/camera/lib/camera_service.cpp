@@ -210,6 +210,14 @@ void CameraService::subscribe_messages()
         middleware::MsgType::APP_Print_Video_Session_Abort_Ntf,
         middleware::ModuleId::APP_CAMERA,
         [this](const middleware::Message& msg) { handle_message(msg); }));
+    subs_.push_back(port.subscribe(
+        middleware::MsgType::APP_Clean_Video_Session_Start_Ntf,
+        middleware::ModuleId::APP_CAMERA,
+        [this](const middleware::Message& msg) { handle_message(msg); }));
+    subs_.push_back(port.subscribe(
+        middleware::MsgType::APP_Clean_Video_Session_Stop_Ntf,
+        middleware::ModuleId::APP_CAMERA,
+        [this](const middleware::Message& msg) { handle_message(msg); }));
 }
 
 void CameraService::handle_message(const middleware::Message& msg)
@@ -229,6 +237,10 @@ void CameraService::handle_message(const middleware::Message& msg)
     case middleware::MsgType::APP_Print_Video_Session_Finish_Ntf:
     case middleware::MsgType::APP_Print_Video_Session_Abort_Ntf:
         handle_print_video(msg);
+        break;
+    case middleware::MsgType::APP_Clean_Video_Session_Start_Ntf:
+    case middleware::MsgType::APP_Clean_Video_Session_Stop_Ntf:
+        handle_clean_video(msg);
         break;
     default:
         break;
@@ -280,6 +292,26 @@ void CameraService::handle_print_video(const middleware::Message& msg)
     }
 }
 
+void CameraService::handle_clean_video(const middleware::Message& msg)
+{
+    if(msg.type == middleware::MsgType::APP_Clean_Video_Session_Start_Ntf) {
+        middleware::CleanVideoSessionStartPayload req{};
+        if(!read_inline_pod(msg.payload, req)) {
+            return;
+        }
+        clean_video_.set_stream_geometry(stream_width_, stream_height_, stream_fps_);
+        clean_video_.on_session_start(req);
+        return;
+    }
+    if(msg.type == middleware::MsgType::APP_Clean_Video_Session_Stop_Ntf) {
+        middleware::CleanVideoSessionStopPayload req{};
+        if(!read_inline_pod(msg.payload, req)) {
+            return;
+        }
+        clean_video_.on_session_stop(req);
+    }
+}
+
 void CameraService::handle_stream_start(const middleware::Message& msg)
 {
     if(stream_running_.load()) {
@@ -297,6 +329,7 @@ void CameraService::handle_stream_start(const middleware::Message& msg)
     stop_stream_.store(false);
     stream_running_.store(true);
     print_video_.set_stream_geometry(stream_width_, stream_height_);
+    clean_video_.set_stream_geometry(stream_width_, stream_height_, stream_fps_);
     stream_thread_ = std::thread(&CameraService::stream_thread_fn, this);
 
     UPC_LOG_CAMERA_SERVICE(Info,
@@ -548,6 +581,7 @@ void CameraService::stream_thread_fn()
         if(src_y && src_uv) {
             update_latest_nv12_snapshot(src_y, src_uv, capture_.stride_y(),
                                         stream_width_, stream_height_);
+            clean_video_.on_frame_nv12(src_y, src_uv, capture_.stride_y());
         }
 
         if(!dma_source_.stride_aligned()) {

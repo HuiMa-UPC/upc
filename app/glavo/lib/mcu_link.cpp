@@ -116,8 +116,15 @@ void serial_log_rx_frame(const uint8_t* frame, size_t len)
         return;
     }
 
+    uint8_t clean_result = 0;
+    if(serial_parse_clean_test_result(frame, len, &clean_result) == 0) {
+        UPC_LOG_MCU_LINK(Debug, "RX CLEAN_TEST_DONE result=%u",
+            static_cast<unsigned>(clean_result));
+        return;
+    }
+
     if(len >= 3 && frame[0] == 0x5A && frame[1] == 0xA5 && frame[2] == 0xBB) {
-        UPC_LOG_MCU_LINK(Warn,
+        UPC_LOG_MCU_LINK(Debug,
             "RX SERIAL UNKNOWN len=%zu port=%02X cmd=%02X seq=%u len_field=%u",
             len,
             len >= 4 ? frame[3] : 0,
@@ -287,6 +294,11 @@ void McuLink::set_job_event_callback(McuLinkEventCb cb)
 void McuLink::set_progress_callback(McuLinkProgressCb cb)
 {
     progress_cb_ = std::move(cb);
+}
+
+void McuLink::set_clean_test_done_callback(McuLinkCleanTestDoneCb cb)
+{
+    clean_test_done_cb_ = std::move(cb);
 }
 
 void McuLink::set_serial_ack_enabled(bool enabled)
@@ -894,6 +906,16 @@ void McuLink::handle_serial_rx_frame(const uint8_t* frame, size_t len)
         door_open_rsp_cv_.notify_all();
         UPC_LOG_MCU_LINK(Info, "door_open_result: state=0x%02X opened=%d",
                          static_cast<unsigned>(door_state), opened ? 1 : 0);
+        return;
+    }
+
+    uint8_t clean_result = 0;
+    if(serial_parse_clean_test_result(frame, len, &clean_result) == 0) {
+        UPC_LOG_MCU_LINK(Info, "clean_test_done result=%u",
+                         static_cast<unsigned>(clean_result));
+        if(clean_test_done_cb_) {
+            clean_test_done_cb_(clean_result);
+        }
         return;
     }
 

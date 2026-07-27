@@ -112,6 +112,14 @@ const char* upc_msg_type_name(MsgType type) {
             return "APP_Print_Video_Session_Finish_Ntf";
         case MsgType::APP_Print_Video_Session_Abort_Ntf:
             return "APP_Print_Video_Session_Abort_Ntf";
+        case MsgType::APP_Print_Video_Manifest_Ntf: return "APP_Print_Video_Manifest_Ntf";
+        case MsgType::UI_Clean_Test_Start_Req: return "UI_Clean_Test_Start_Req";
+        case MsgType::APP_Clean_Test_Start_Rsp: return "APP_Clean_Test_Start_Rsp";
+        case MsgType::APP_Clean_Test_Done_Ntf: return "APP_Clean_Test_Done_Ntf";
+        case MsgType::UI_Clean_Test_Close_Req: return "UI_Clean_Test_Close_Req";
+        case MsgType::APP_Clean_Test_Close_Rsp: return "APP_Clean_Test_Close_Rsp";
+        case MsgType::APP_Clean_Video_Session_Start_Ntf: return "APP_Clean_Video_Session_Start_Ntf";
+        case MsgType::APP_Clean_Video_Session_Stop_Ntf: return "APP_Clean_Video_Session_Stop_Ntf";
         case MsgType::UI_Mcu_Ota_Start_Req: return "UI_Mcu_Ota_Start_Req";
         case MsgType::UI_Mcu_Ota_Cancel_Ntf: return "UI_Mcu_Ota_Cancel_Ntf";
         case MsgType::APP_Mcu_Ota_Status_Ntf: return "APP_Mcu_Ota_Status_Ntf";

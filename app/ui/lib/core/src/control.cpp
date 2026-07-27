@@ -2407,6 +2407,10 @@ void on_door_closed_confirm_btn(lv_event_t * /*e*/)
     /* PrintCollect：件已取走、门也关好了，这时才真正退出打印状态回待机首页 */
     if(g_door_origin == DoorFlowOrigin::HomeStandalone ||
        g_door_origin == DoorFlowOrigin::PrintCollect) {
+        if(g_door_origin == DoorFlowOrigin::PrintCollect) {
+            /* 清粉/取件流程回首页前，强制发送 clean_test_close 收尾串口流程。 */
+            ui::UiMsgProxy::instance().send_clean_test_close();
+        }
         enter_state(CONTROL_STATE_IDLE);
     } else {
         goto_file_selection();
@@ -2535,8 +2539,10 @@ void on_print_video_manifest(const middleware::PrintVideoManifestPayload &p)
     r.has_stats  = false;
     r.material_g = -1.0f;
     std::snprintf(r.job_name, sizeof(r.job_name), "%s", g_active_file.name);
+    std::snprintf(r.video_dir, sizeof(r.video_dir), "%s", g_active_file.name);
 
     if(p.has_entry && p.frames_dir[0]) {
+        std::snprintf(r.video_dir, sizeof(r.video_dir), "%s", p.frames_dir);
         std::vector<upc::PrintHistoryEntry> entries;
         (void)upc::print_history_manifest_load(UPC_PRINT_VIDEO_MANIFEST, entries);
         for(const auto &e : entries) {
@@ -2776,6 +2782,8 @@ void control_print_result_dismiss(void)
     if(g_state != CONTROL_STATE_PRINT_DONE) {
         return;
     }
+    /* 结果页回首页：强制下发 clean_test_close，确保清粉测试流程被关闭。 */
+    ui::UiMsgProxy::instance().send_clean_test_close();
     /* 结果页浮层由 page_user_home_exit_printing_mode()（IDLE 分支）一并收起 */
     enter_state(CONTROL_STATE_IDLE);
 }

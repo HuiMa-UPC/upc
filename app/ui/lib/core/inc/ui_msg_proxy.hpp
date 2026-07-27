@@ -20,6 +20,9 @@ using PurifyProgressCb = std::function<void(int progress)>;
 using PurifyDoneCb     = std::function<void()>;
 using CleanDoneCb      = std::function<void()>;
 using CleanStopDoneCb  = std::function<void()>;
+using CleanTestStartRspCb = std::function<void(bool accepted)>;
+using CleanTestDoneCb = std::function<void(const middleware::CleanTestDonePayload&)>;
+using CleanTestCloseRspCb = std::function<void()>;
 using FsDirCb          = std::function<void(const middleware::FileEntryPayload* files,
                                             uint32_t count)>;
 using PrintProgressCb  = std::function<void(const middleware::PrintProgressPayload&)>;
@@ -66,6 +69,13 @@ public:
     /** 清粉中断（按清粉页 X）：请求后端停风机，回执经 register_clean_stop_result。 */
     void send_clean_stop();
     void register_clean_stop_result(CleanStopDoneCb cb);
+    /** 打印结果页 Purify：触发 clean_test_start（新增契约，不复用 debug 消息） */
+    void send_clean_test_start(const char* job_name, uint32_t width, uint32_t height, uint32_t fps);
+    void register_clean_test_start_rsp(CleanTestStartRspCb cb);
+    void register_clean_test_done(CleanTestDoneCb cb);
+    /** 返回首页时强制 clean_test_close。 */
+    void send_clean_test_close();
+    void register_clean_test_close_rsp(CleanTestCloseRspCb cb);
 
     /** 列目录：当前 UI 仅对 USB 调用；Local 由 control 直读 config.json */
     void send_fs_dir_open(middleware::PrintFileSource source);
@@ -153,6 +163,9 @@ private:
     PurifyDoneCb     purify_done_cb_;
     CleanDoneCb      clean_done_cb_;
     CleanStopDoneCb  clean_stop_done_cb_;
+    CleanTestStartRspCb clean_test_start_rsp_cb_;
+    CleanTestDoneCb clean_test_done_cb_;
+    CleanTestCloseRspCb clean_test_close_rsp_cb_;
     FsDirCb          fs_dir_cb_;
     PrintProgressCb  print_progress_cb_;
     PrintTerminateDoneCb print_terminate_done_cb_;

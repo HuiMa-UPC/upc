@@ -108,3 +108,29 @@ int serial_parse_door_open_result(const uint8_t* data, size_t len, uint8_t* door
     }
     return 0;
 }
+
+int serial_parse_clean_test_result(const uint8_t* data, size_t len, uint8_t* result_out)
+{
+    if(serial_print_verify_rx(data, len) != 0) {
+        return -1;
+    }
+
+    /* 清粉测试完成结果：
+     * PORT_PRINTING_TASK(0xA4) + CMD_PRINTING_CTRL(0x01) + TLV(0x22)
+     * Value: result_code，0=成功，非0=失败。 */
+    const uint8_t port = data[3];
+    const uint8_t cmd  = data[4];
+    const uint8_t payload_len = data[6];
+    const uint8_t type = data[7];
+    const uint8_t tlen = data[8];
+    if(port != 0xA4 || cmd != 0x01 || type != 0x22) {
+        return -2;
+    }
+    if(payload_len != 0x03 || tlen != 0x01) {
+        return -3;
+    }
+    if(result_out) {
+        *result_out = data[9];
+    }
+    return 0;
+}

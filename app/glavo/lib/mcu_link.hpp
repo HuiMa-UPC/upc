@@ -34,6 +34,8 @@ enum class McuLinkEvent : uint8_t {
 using McuLinkEventCb = std::function<void(McuLinkEvent)>;
 /** @brief 进度回调类型：每成功下发一批运动包后触发，用于更新进度条等 UI */
 using McuLinkProgressCb = std::function<void()>;
+/** @brief 清粉测试完成回调：参数为 TLV 0x22 result_code。 */
+using McuLinkCleanTestDoneCb = std::function<void(uint8_t)>;
 
 /** @brief 环境传感器缓存（串口 0x9B 上报解析结果，供 UI/打印进度读取） */
 struct EnvSnapshotCache {
@@ -77,6 +79,7 @@ public:
      * @note 每成功下发一批运动包后，在链路线程中调用。
      */
     void set_progress_callback(McuLinkProgressCb cb);
+    void set_clean_test_done_callback(McuLinkCleanTestDoneCb cb);
 
     /** @brief 运行时设置串口 ACK 可靠发送开关（默认值来自编译宏）。 */
     void set_serial_ack_enabled(bool enabled);
@@ -314,6 +317,7 @@ private:
     upc::parser::RingBuffer* rb_ = nullptr;          /**< 绑定的 RingBuffer，运动包来源 */
     McuLinkEventCb event_cb_;            /**< 链路事件回调 */
     McuLinkProgressCb progress_cb_;         /**< 进度更新回调 */
+    McuLinkCleanTestDoneCb clean_test_done_cb_; /**< 清粉测试完成回调 */
 
     /* ---------- 文件描述符 ---------- */
     int tcp_fd_    = -1; /**< TCP socket 文件描述符，-1 表示未连接 */

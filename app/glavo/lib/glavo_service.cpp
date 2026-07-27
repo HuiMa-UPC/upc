@@ -29,6 +29,7 @@
 #include <cstdio>
 #include <cstring>
 #include <cstdint>
+#include <cctype>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
@@ -195,6 +196,34 @@ std::string usb_mount_point()
     return GLAVO_USB_MOUNT_DIR;
 }
 
+std::string sanitize_job_name(const char* raw)
+{
+    if(!raw || !raw[0]) {
+        return "print";
+    }
+    std::string out(raw);
+    for(char& c : out) {
+        const unsigned char uc = static_cast<unsigned char>(c);
+        if(!std::isalnum(uc) && c != '-' && c != '_' && c != '.') {
+            c = '_';
+        }
+    }
+    if(out.empty()) {
+        out = "print";
+    }
+    return out;
+}
+
+void make_clean_test_session_id(char* out, size_t out_len)
+{
+    if(!out || out_len == 0) {
+        return;
+    }
+    const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    std::snprintf(out, out_len, "cln%lld", static_cast<long long>(ms));
+}
+
 } // namespace
 
 /* ============================================================================
@@ -306,6 +335,11 @@ bool GlavoService::init()
             send_print_progress(false);
         }
     });
+    McuLink::instance().set_clean_test_done_callback([this](uint8_t result_code) {
+        clean_test_result_code_.store(result_code);
+        clean_test_done_pending_.store(true);
+        worker_cv_.notify_one();
+    });
     McuLink::instance().set_ota_status_callback(
         [this](const middleware::McuOtaStatusPayload& st) {
             publish_mcu_ota_status(st);
@@ -358,6 +392,8 @@ bool GlavoService::start()
         middleware::MsgType::UI_Purify_Req,
         middleware::MsgType::UI_Clean_Start_Req,
         middleware::MsgType::UI_Clean_Stop_Req,
+        middleware::MsgType::UI_Clean_Test_Start_Req,
+        middleware::MsgType::UI_Clean_Test_Close_Req,
         middleware::MsgType::UI_Mcu_Ota_Start_Req,
         middleware::MsgType::UI_Mcu_Ota_Cancel_Ntf,
         middleware::MsgType::UI_Serial_Mcu_Ota_Start_Req,
@@ -488,6 +524,7 @@ void GlavoService::worker_loop()
             std::unique_lock<std::mutex> lock(worker_mutex_);
             worker_cv_.wait(lock, [this]() {
                 return !worker_running_.load() ||
+                       clean_test_done_pending_.load() ||
                        !worker_queue_.empty() ||
                        !link_event_queue_.empty();
             });
@@ -504,6 +541,15 @@ void GlavoService::worker_loop()
                 link_event_queue_.pop_front();
                 lock.unlock();
                 on_mcu_link_event(ev);
+                lock.lock();
+            }
+
+            if(clean_test_done_pending_.load() &&
+               state() == ServiceState::Running) {
+                const uint8_t result_code = clean_test_result_code_.load();
+                clean_test_done_pending_.store(false);
+                lock.unlock();
+                on_clean_test_done(result_code);
                 lock.lock();
             }
 
@@ -549,6 +595,10 @@ void GlavoService::stop_clean_worker()
     clean_running_.store(false);
     clean_stop_rsp_pending_.store(false);
     clean_stop_rsp_target_.store(0);
+    clean_test_done_pending_.store(false);
+    clean_test_active_ = false;
+    clean_test_session_id_[0] = '\0';
+    clean_test_job_name_[0] = '\0';
 }
 
 /** @brief 订阅指定 MsgType 并记录 Subscription 句柄，stop 时统一释放 */
@@ -607,6 +657,12 @@ void GlavoService::handle_message(const middleware::Message& msg)
             break;
         case middleware::MsgType::UI_Clean_Stop_Req:
             handle_clean_stop_request(msg);
+            break;
+        case middleware::MsgType::UI_Clean_Test_Start_Req:
+            handle_clean_test_start_request(msg);
+            break;
+        case middleware::MsgType::UI_Clean_Test_Close_Req:
+            handle_clean_test_close_request(msg);
             break;
         case middleware::MsgType::UI_Mcu_Ota_Start_Req:
             handle_mcu_ota_start(msg);
@@ -1588,6 +1644,139 @@ void GlavoService::handle_clean_stop_request(const middleware::Message& msg)
     clean_stop_rsp_target_.store(static_cast<uint32_t>(msg.sender_id));
     clean_cancel_requested_.store(true);
     UPC_LOG_GLAVO_SERVICE(Info, "clean_stop_req: requested");
+}
+
+void GlavoService::publish_clean_test_start_rsp(uint32_t target_id, bool accepted)
+{
+    middleware::CleanTestStartRspPayload rsp{};
+    rsp.accepted = accepted ? 1 : 0;
+    middleware::Message out(middleware::MsgType::APP_Clean_Test_Start_Rsp,
+        middleware::ModuleId::APP_GLAVO,
+        static_cast<middleware::ModuleId>(target_id));
+    out.payload = middleware::MsgPayload::from_bytes(
+        reinterpret_cast<const uint8_t*>(&rsp), sizeof(rsp));
+    (void)publish_async(out);
+}
+
+void GlavoService::publish_clean_test_done(uint8_t result_code, bool raw_retained,
+                                           const std::string& mp4_rel_path)
+{
+    middleware::CleanTestDonePayload ntf{};
+    ntf.result_code = result_code;
+    ntf.raw_retained = raw_retained ? 1 : 0;
+    ntf.has_mp4 = 1;
+    std::snprintf(ntf.mp4_rel_path, sizeof(ntf.mp4_rel_path), "%s",
+                  mp4_rel_path.c_str());
+    middleware::Message out(middleware::MsgType::APP_Clean_Test_Done_Ntf,
+        middleware::ModuleId::APP_GLAVO,
+        middleware::ModuleId::UI);
+    out.payload = middleware::MsgPayload::from_bytes(
+        reinterpret_cast<const uint8_t*>(&ntf), sizeof(ntf));
+    (void)publish_async(out);
+}
+
+void GlavoService::publish_clean_test_close_rsp(uint32_t target_id)
+{
+    middleware::Message rsp(middleware::MsgType::APP_Clean_Test_Close_Rsp,
+        middleware::ModuleId::APP_GLAVO,
+        static_cast<middleware::ModuleId>(target_id));
+    (void)publish_async(rsp);
+}
+
+void GlavoService::notify_clean_video_start(const middleware::CleanTestStartReqPayload& req)
+{
+    middleware::CleanVideoSessionStartPayload payload{};
+    std::snprintf(payload.session_id, sizeof(payload.session_id), "%s",
+                  clean_test_session_id_);
+    std::snprintf(payload.job_name, sizeof(payload.job_name), "%s",
+                  clean_test_job_name_);
+    payload.width = req.width;
+    payload.height = req.height;
+    payload.fps = req.fps;
+
+    middleware::Message msg(middleware::MsgType::APP_Clean_Video_Session_Start_Ntf,
+        middleware::ModuleId::APP_GLAVO,
+        middleware::ModuleId::APP_CAMERA);
+    msg.payload = middleware::MsgPayload::from_bytes(
+        reinterpret_cast<const uint8_t*>(&payload), sizeof(payload));
+    (void)publish_async(msg);
+}
+
+void GlavoService::notify_clean_video_stop(uint8_t result_code, bool keep_raw)
+{
+    middleware::CleanVideoSessionStopPayload payload{};
+    std::snprintf(payload.session_id, sizeof(payload.session_id), "%s",
+                  clean_test_session_id_);
+    payload.result_code = result_code;
+    payload.keep_raw = keep_raw ? 1 : 0;
+
+    middleware::Message msg(middleware::MsgType::APP_Clean_Video_Session_Stop_Ntf,
+        middleware::ModuleId::APP_GLAVO,
+        middleware::ModuleId::APP_CAMERA);
+    msg.payload = middleware::MsgPayload::from_bytes(
+        reinterpret_cast<const uint8_t*>(&payload), sizeof(payload));
+    (void)publish_async(msg);
+}
+
+void GlavoService::on_clean_test_done(uint8_t result_code)
+{
+    if(!clean_test_active_) {
+        return;
+    }
+    const bool keep_raw = result_code != 0;
+    notify_clean_video_stop(result_code, keep_raw);
+    clean_test_active_ = false;
+
+    std::string mp4_rel_path = sanitize_job_name(clean_test_job_name_);
+    if(!mp4_rel_path.empty()) {
+        mp4_rel_path += "/clean_timelapse.mp4";
+    }
+    publish_clean_test_done(result_code, keep_raw, mp4_rel_path);
+}
+
+void GlavoService::handle_clean_test_start_request(const middleware::Message& msg)
+{
+    middleware::CleanTestStartReqPayload req{};
+    if(!read_inline_pod(msg.payload, req)) {
+        publish_clean_test_start_rsp(static_cast<uint32_t>(msg.sender_id), false);
+        return;
+    }
+    if(clean_test_active_) {
+        publish_clean_test_start_rsp(static_cast<uint32_t>(msg.sender_id), false);
+        return;
+    }
+
+    const std::string job_name = sanitize_job_name(req.job_name);
+    std::snprintf(clean_test_job_name_, sizeof(clean_test_job_name_), "%s",
+                  job_name.c_str());
+    make_clean_test_session_id(clean_test_session_id_, sizeof(clean_test_session_id_));
+
+    uint8_t frame[SERIAL_DEBUG_MAX_FRAME];
+    const int n = serial_debug_build_clean_test_start(frame, sizeof(frame));
+    if(n <= 0) {
+        publish_clean_test_start_rsp(static_cast<uint32_t>(msg.sender_id), false);
+        return;
+    }
+
+    clean_test_active_ = true;
+    debug_tx(frame, n);
+    notify_clean_video_start(req);
+    publish_clean_test_start_rsp(static_cast<uint32_t>(msg.sender_id), true);
+}
+
+void GlavoService::handle_clean_test_close_request(const middleware::Message& msg)
+{
+    uint8_t frame[SERIAL_DEBUG_MAX_FRAME];
+    const int n = serial_debug_build_clean_test_close(frame, sizeof(frame));
+    if(n > 0) {
+        debug_tx(frame, n);
+    }
+
+    if(clean_test_active_) {
+        notify_clean_video_stop(0xfe, true);
+        clean_test_active_ = false;
+    }
+    publish_clean_test_close_rsp(static_cast<uint32_t>(msg.sender_id));
 }
 
 /* ============================================================================

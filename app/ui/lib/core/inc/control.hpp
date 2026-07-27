@@ -59,6 +59,7 @@ typedef struct {
     bool     terminated;    /**< true=PRINT TERMINATED，false=PRINT COMPLETE */
     bool     has_stats;     /**< manifest 无对应条目（0 帧）时为 false，耗时/耗材显示 "--" */
     char     job_name[64];
+    char     video_dir[96]; /**< 录像目录键（通常等于 manifest.frames_dir） */
     uint32_t duration_sec;
     float    material_g;    /**< <0 视为无数据 */
 } control_print_result_t;

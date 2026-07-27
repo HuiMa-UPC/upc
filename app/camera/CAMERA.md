@@ -11,6 +11,7 @@
 | `lib/camera_service.*` | 流控 IPC、dma fd 元数据环推流、录像消息分派 |
 | `lib/vi_capture.*` | rkaiq ISP + V4L2 NV12 采集 |
 | `lib/print_video_recorder.*` | 元数据环取帧 → ffmpeg 软编 PNG → `/home/video/{job_ts}/1.png...` + `.rthm` |
+| `lib/clean_video_recorder.*` | 清粉连续录像：预览 NV12 抽样写 `clean_raw.nv12`，收尾一次性封装 `clean_timelapse.mp4` |
 | `lib/device_config.hpp` | 设备、分辨率、IQ、SHM、录像路径宏 |
 
 ## 数据路径
@@ -73,6 +74,8 @@ Snap 依赖预览流已开（同一 SHM）；与 UI 解码线程共享 ring，�
 | `APP_Print_Layer_Snap_Ntf` | 入队 LayerSnap job |
 | `APP_Print_Video_Session_Finish_Ntf` | 入队 Finish，落盘 PNG 序列目录 + `.rthm` + upsert manifest（`complete`） |
 | `APP_Print_Video_Session_Abort_Ntf` | 入队 Abort，有帧同样落盘 + upsert（`terminated`） |
+| `APP_Clean_Video_Session_Start_Ntf` | 启动清粉连续录像会话（默认沿用当前预览 `1024x1280@30`） |
+| `APP_Clean_Video_Session_Stop_Ntf` | 停止清粉连续录像并封装 MP4；成功按策略删除 raw，失败可保留 raw 供排查 |
 | `APP_Print_Video_Manifest_Ntf` | **出向** Camera→UI：manifest `rename()` 成功后发（worker 线程直接 `publish_async`，发帧有 `io_mtx_` 保护） |
 
 Glavo→Camera 经 UI Hub 转发；`sender_id` 仍为 `APP_GLAVO`（见 IPC.md）。

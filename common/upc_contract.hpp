@@ -356,6 +356,17 @@ enum class MsgType : uint32_t {
     // ---- UI ↔ GLAVO：清粉中断（风机停机） ----
     UI_Clean_Stop_Req = 0x1410,  /**< Empty：中断清粉并请求立即关风机 */
     APP_Clean_Stop_Rsp,          /**< Empty：风机停机请求已受理 */
+
+    // ---- UI ↔ GLAVO：打印结果页清粉测试（按钮触发，串口 clean_test_*） ----
+    UI_Clean_Test_Start_Req,     /**< CleanTestStartReqPayload：开始清粉+录像 */
+    APP_Clean_Test_Start_Rsp,    /**< CleanTestStartRspPayload：是否受理 */
+    APP_Clean_Test_Done_Ntf,     /**< CleanTestDonePayload：TLV 0x22 结果 + 调试保留标记 */
+    UI_Clean_Test_Close_Req,     /**< Empty：返回首页时强制 clean_test_close */
+    APP_Clean_Test_Close_Rsp,    /**< Empty：close 已受理 */
+
+    // ---- GLAVO ↔ CAMERA：清粉连续录像会话（NV12@预览参数） ----
+    APP_Clean_Video_Session_Start_Ntf, /**< CleanVideoSessionStartPayload */
+    APP_Clean_Video_Session_Stop_Ntf,  /**< CleanVideoSessionStopPayload */
 };
 
 enum class MsgPriority : uint8_t {
@@ -613,6 +624,46 @@ struct PrintVideoManifestPayload {
     int8_t  aborted;         /**< 1=终止 0=完成；仅 has_entry=0 时作为判定依据 */
     int8_t  has_video;       /**< 1=timelapse.mp4 已生成 */
     uint8_t reserved;
+};
+
+/** UI_Clean_Test_Start_Req：打印结果页 Purify 按钮触发清粉测试 + 录像 */
+struct CleanTestStartReqPayload {
+    char job_name[64];   /**< 对应 /home/video/{job_name}/ */
+    uint32_t width;      /**< 0=跟随 Camera 当前预览宽 */
+    uint32_t height;     /**< 0=跟随 Camera 当前预览高 */
+    uint32_t fps;        /**< 0=跟随 Camera 当前预览 fps */
+};
+
+/** APP_Clean_Test_Start_Rsp：清粉测试请求是否被 Glavo 受理 */
+struct CleanTestStartRspPayload {
+    int8_t accepted;     /**< 1=已受理 0=拒绝（如已有进行中的清粉测试） */
+    uint8_t reserved[3];
+};
+
+/** APP_Clean_Test_Done_Ntf：串口 TLV 0x22 完成结果（0=成功，非0=失败） */
+struct CleanTestDonePayload {
+    uint8_t result_code;   /**< 0=成功；非0=失败 */
+    uint8_t raw_retained;  /**< 1=保留 clean_raw.nv12（失败/调试）；0=已删除 */
+    uint8_t has_mp4;       /**< 1=期望存在 clean_timelapse.mp4 */
+    uint8_t reserved;
+    char    mp4_rel_path[96]; /**< 相对 /home/video 的路径，如 job/clean_timelapse.mp4 */
+};
+
+/** GLAVO→CAMERA：清粉录像会话开始参数 */
+struct CleanVideoSessionStartPayload {
+    char     session_id[32];
+    char     job_name[64];
+    uint32_t width;      /**< 0=沿用 Camera 预览宽 */
+    uint32_t height;     /**< 0=沿用 Camera 预览高 */
+    uint32_t fps;        /**< 0=沿用 Camera 预览 fps */
+};
+
+/** GLAVO→CAMERA：清粉录像会话停止参数 */
+struct CleanVideoSessionStopPayload {
+    char    session_id[32];
+    uint8_t result_code;  /**< 0=成功；非0=失败 */
+    uint8_t keep_raw;     /**< 1=保留 clean_raw.nv12，0=成功后删除 */
+    uint8_t reserved[2];
 };
 
 /** APP_Mcu_Ota_Status_Ntf / APP_Serial_Mcu_Ota_Status_Ntf：OTA 进度/状态 */

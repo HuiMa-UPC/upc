@@ -155,6 +155,11 @@ scripts/rongsu.sh start   # glavo + rongsu_camera → ui
 | `APP_Clean_Start_Rsp` | `GLAVO_Clean_Start_Rsp` | Glavo→UI | Empty | `register_clean_start_result` | 清粉达标完成→前端自动开门 |
 | `UI_Clean_Stop_Req` | — | UI→Glavo | Empty | `send_clean_stop` | 清粉中断（按清粉页 X 触发），请求后端立即关风机 |
 | `APP_Clean_Stop_Rsp` | `GLAVO_Clean_Stop_Rsp` | Glavo→UI | Empty | `register_clean_stop_result` | 清粉中断受理完成→前端切回开门流程 |
+| `UI_Clean_Test_Start_Req` | — | UI→Glavo | `CleanTestStartReqPayload` | `send_clean_test_start` | 打印结果页 Purify：启动清粉测试并通知 Camera 开始连续录像 |
+| `APP_Clean_Test_Start_Rsp` | — | Glavo→UI | `CleanTestStartRspPayload` | `register_clean_test_start_rsp` | 请求受理状态（避免并发启动） |
+| `APP_Clean_Test_Done_Ntf` | — | Glavo→UI | `CleanTestDonePayload` | `register_clean_test_done` | MCU TLV `0x22` 完成结果 + 录像保留策略（失败保留 raw） |
+| `UI_Clean_Test_Close_Req` | — | UI→Glavo | Empty | `send_clean_test_close` | 返回首页时强制发送 `clean_test_close` 收尾 |
+| `APP_Clean_Test_Close_Rsp` | — | Glavo→UI | Empty | `register_clean_test_close_rsp` | close 指令已受理 |
 | `UI_Print_Prepare_Req` | — | UI→Glavo | `PrintPrepareReqPayload` | `send_print_prepare` | USB 复制+轻量扫描+config |
 | `APP_Print_Prepare_Rsp` | — | Glavo→UI | `PrintPrepareRspPayload` | `register_print_prepare_done` | — |
 | `UI_Parser_Exit_Ntf` | — | UI→Glavo | Empty | `send_parser_exit` | 取消解析 |
@@ -178,6 +183,8 @@ scripts/rongsu.sh start   # glavo + rongsu_camera → ui
 | `APP_Print_Layer_Snap_Ntf` | — | Glavo→Camera（Hub FWD） | `PrintVideoLayerSnapPayload` | — | 换层 Snap |
 | `APP_Print_Video_Session_Finish_Ntf` | — | Glavo→Camera（Hub FWD） | `PrintVideoSessionPayload` | — | 保存 `/home/video/{job_ts}/1.png...N.png` + `thumb.rthm` + manifest `complete` |
 | `APP_Print_Video_Session_Abort_Ntf` | — | Glavo→Camera（Hub FWD） | `PrintVideoSessionPayload` | — | 有帧同样落盘目录 + manifest `terminated`；0 帧清目录 |
+| `APP_Clean_Video_Session_Start_Ntf` | — | Glavo→Camera（Hub FWD） | `CleanVideoSessionStartPayload` | — | 连续录制开始：NV12 预览流抽样写入 `clean_raw.nv12` |
+| `APP_Clean_Video_Session_Stop_Ntf` | — | Glavo→Camera（Hub FWD） | `CleanVideoSessionStopPayload` | — | 连续录制收尾：一次性封装 `clean_timelapse.mp4`，按 `keep_raw` 策略决定是否保留 raw |
 | `APP_Print_Video_Manifest_Ntf` | — | Camera→UI | `PrintVideoManifestPayload` | `CameraMsgProxy::register_print_video_manifest` | manifest `rename()` 成功后发；**0 帧也必发**（`has_entry=0`），否则 UI 停在打印中界面下不来 |
 | `UI_Mcu_Ota_Start_Req` / `UI_Mcu_Ota_Cancel_Ntf` / `APP_Mcu_Ota_Status_Ntf` | — | UI↔Glavo | `McuOtaStatusPayload` | `send_mcu_ota_start` / `send_mcu_ota_cancel` / `register_mcu_ota_status` | Glavo 以太网 OTA（`/home/image/glavo`） |
 | `UI_Serial_Mcu_Ota_Start_Req` / `UI_Serial_Mcu_Ota_Cancel_Ntf` / `APP_Serial_Mcu_Ota_Status_Ntf` | — | UI↔Glavo | `McuOtaStatusPayload` | `send_serial_mcu_ota_start` / `send_serial_mcu_ota_cancel` / `register_serial_mcu_ota_status` | MCU 串口 OTA（`/home/image/mcu`） |

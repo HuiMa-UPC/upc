@@ -2,6 +2,7 @@
 #define CAMERA_SERVICE_HPP
 
 #include "camera_dma_frame_source.hpp"
+#include "clean_video_recorder.hpp"
 #include "device_config.hpp"
 #include "ipc_dma_frame_ring.hpp"
 #include "msg_port.hpp"
@@ -36,6 +37,7 @@ private:
     void handle_stream_stop(const middleware::Message& msg);
     void handle_snapshot_req(const middleware::Message& msg);
     void handle_print_video(const middleware::Message& msg);
+    void handle_clean_video(const middleware::Message& msg);
 
     template <typename T>
     static bool read_inline_pod(const middleware::MsgPayload& payload, T& out)
@@ -72,6 +74,7 @@ private:
     ViCapture capture_;
     CameraDmaFrameSource dma_source_;
     PrintVideoRecorder print_video_;
+    CleanVideoRecorder clean_video_;
 
     std::thread stream_thread_;
     std::atomic<bool> stream_running_{false};
