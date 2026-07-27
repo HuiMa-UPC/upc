@@ -67,11 +67,18 @@ private:
     /** RGA：把最后一帧 NV12 生成 RTHM（RGB565）缩略图 */
     bool create_raw_thumb_from_nv12(const std::vector<uint8_t>& nv12,
                                     const char* out_path) const;
-    /** 完成目录落盘后 upsert /home/video/manifest.json */
-    void upsert_print_history(bool aborted,
+    /** 完成目录落盘后 upsert /home/video/manifest.json；true=已原子替换成功 */
+    bool upsert_print_history(bool aborted,
                               const std::string& frames_dir_name,
                               const std::string& thumb_name,
                               const std::string& video_name) const;
+    /**
+     * APP_Print_Video_Manifest_Ntf → UI：结果数据已就绪，可切打印结果页。
+     * 必须在 manifest rename() 之后调用；0 帧（无 manifest 条目）也要发，
+     * 否则 UI 永远停在打印中界面。worker 线程调用，IPC 发帧内部有锁。
+     */
+    void notify_manifest_ready(const std::string& frames_dir_name,
+                               bool has_entry, bool aborted, bool has_video) const;
     bool remove_session_dir();
     std::string frame_png_path(uint32_t frame_index) const;
     static bool mkdir_p(const char* path);

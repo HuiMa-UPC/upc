@@ -51,7 +51,7 @@
 | 符号 | 路径 | 一句话 |
 |------|------|--------|
 | `CameraService` | `camera_service.*` | IPC Server + SHM 推流 + 录像分派 |
-| `PrintVideoRecorder` | `print_video_recorder.*` | 层 Snap→MPP MJPEG→封装 MP4/缩略图 + upsert `manifest.json` |
+| `PrintVideoRecorder` | `print_video_recorder.*` | 层 Snap→MPP MJPEG→封装 MP4/缩略图 + upsert `manifest.json` + 发 `APP_Print_Video_Manifest_Ntf` 给 UI |
 | `ViCapture` | `vi_capture.*` | rkaiq + V4L2 NV12 |
 | `CameraDmaFrameSource` | `camera_dma_frame_source.*` | V4L2 dma fd 导出、stride padding |
 | `device_config.hpp` | 头文件 | 设备/分辨率/IQ/SHM/录像路径宏 |
@@ -61,19 +61,19 @@
 | 符号 | 路径 | 一句话 |
 |------|------|--------|
 | `UiMsgProxy` | `ui_msg_proxy.*` | UI ↔ Glavo IPC 封装 |
-| `CameraMsgProxy` | `camera_msg_proxy.*` | 预览开停 IPC |
+| `CameraMsgProxy` | `camera_msg_proxy.*` | 预览开停 IPC + 打印录像 manifest 就绪通知 |
 | `CameraPreviewPlayer` | `camera_preview.*` | SHM 元数据环 + dma fd → RGA/SW BGRX → LVGL |
 | `RgaDmaBuf` | `rga_dma_buf.*` | dma32 heap 缓冲（RGA fd 导入） |
 | `PageManager` / `SimplePage` | `page_manager.*` / `ui_simple_page.*` | 侧边栏 + 页面路由 |
 | `app_init()` | `ui_app.*` | 主题、Proxy、页面注册、control |
-| `control_*` | `control.*` | 打印状态机 + overlay UI |
+| `control_*` | `control.*` | 打印状态机（含 `CONTROL_STATE_PRINT_DONE` 结果页）+ overlay UI |
 | `VideoPlayer` | `video_player.*` | 延时视频 libav* 软解 → BGRX → lv_image（play/pause/seek + 拖动预览独立解码线程） |
 
 ## UI 页面（`app/ui/lib/pages/`）
 
 | Page ID | 文件 | 状态 |
 |---------|------|------|
-| `user_home` | `page_user_home.*` | 首页：环境、打印模式、预览 |
+| `user_home` | `page_user_home.*` | 首页：环境、打印模式、预览、打印结果页（完成/终止浮层） |
 | `user_history` | `page_user_history.*` | 打印历史：读 manifest + 卡片 + 缩略图(TJPGD) + 左滑删除 |
 | `user_control` | `page_user_control.*` | skeleton 占位 |
 | `user_settings` | `page_user_settings.*` | 设置列表 + 开发者密码弹窗 |

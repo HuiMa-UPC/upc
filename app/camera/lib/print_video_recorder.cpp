@@ -2,6 +2,7 @@
 
 #include "device_config.hpp"
 #include "gcode_manifest.hpp"
+#include "msg_port.hpp"
 #include "print_history_manifest.hpp"
 #include "raw_thumb_format.hpp"
 #include "rs_log.hpp"
@@ -479,6 +480,7 @@ void PrintVideoRecorder::finalize_session(bool aborted)
             aborted ? "abort" : "finish",
             session_id_.c_str());
         remove_session_dir();
+        notify_manifest_ready(std::string{}, false, aborted, false);
         session_id_.clear();
         session_name_.clear();
         session_dir_.clear();
@@ -517,10 +519,12 @@ void PrintVideoRecorder::finalize_session(bool aborted)
                                frames, session_id_.c_str());
     }
 
-    upsert_print_history(aborted,
-                         session_name_,
-                         thumb_ok ? thumb_rel : std::string{},
-                         video_ok ? video_rel : std::string{});
+    const bool manifest_ok = upsert_print_history(
+        aborted,
+        session_name_,
+        thumb_ok ? thumb_rel : std::string{},
+        video_ok ? video_rel : std::string{});
+    notify_manifest_ready(session_name_, manifest_ok, aborted, video_ok);
     UPC_LOG_CAMERA_SERVICE(
         Info,
         "print_video saved -> %s frames=%u thumb=%s video=%s%s",
@@ -590,12 +594,12 @@ std::string PrintVideoRecorder::sanitize_filename(const char* name)
     return s;
 }
 
-void PrintVideoRecorder::upsert_print_history(
+bool PrintVideoRecorder::upsert_print_history(
     bool aborted, const std::string& frames_dir_name,
     const std::string& thumb_name, const std::string& video_name) const
 {
     if(frames_dir_name.empty()) {
-        return;
+        return false;
     }
 
     const int64_t start =
@@ -633,14 +637,14 @@ void PrintVideoRecorder::upsert_print_history(
         UPC_LOG_CAMERA_SERVICE(Error,
             "print_history save fail tmp=%s", tmp_path.c_str());
         (void)std::remove(tmp_path.c_str());
-        return;
+        return false;
     }
     if(std::rename(tmp_path.c_str(), UPC_PRINT_VIDEO_MANIFEST) != 0) {
         UPC_LOG_CAMERA_SERVICE(Error,
             "print_history rename fail %s -> %s: %s",
             tmp_path.c_str(), UPC_PRINT_VIDEO_MANIFEST, std::strerror(errno));
         (void)std::remove(tmp_path.c_str());
-        return;
+        return false;
     }
 
     UPC_LOG_CAMERA_SERVICE(
@@ -651,6 +655,35 @@ void PrintVideoRecorder::upsert_print_history(
         entry.frames_dir.c_str(),
         entry.duration_sec,
         static_cast<double>(entry.material_g));
+    return true;
+}
+
+void PrintVideoRecorder::notify_manifest_ready(const std::string& frames_dir_name,
+                                               bool has_entry, bool aborted,
+                                               bool has_video) const
+{
+    middleware::PrintVideoManifestPayload ntf{};
+    if(has_entry && !frames_dir_name.empty()) {
+        std::snprintf(ntf.frames_dir, sizeof(ntf.frames_dir), "%s",
+                      frames_dir_name.c_str());
+    }
+    ntf.has_entry = has_entry ? 1 : 0;
+    ntf.aborted   = aborted ? 1 : 0;
+    ntf.has_video = has_video ? 1 : 0;
+
+    middleware::Message msg(
+        middleware::MsgType::APP_Print_Video_Manifest_Ntf,
+        middleware::ModuleId::APP_CAMERA,
+        middleware::ModuleId::UI);
+    msg.payload = middleware::MsgPayload::from_bytes(
+        reinterpret_cast<const uint8_t*>(&ntf), sizeof(ntf));
+    middleware::MsgPort::instance().publish_async(msg);
+
+    UPC_LOG_CAMERA_SERVICE(
+        Info,
+        "print_video manifest ntf -> UI frames_dir=%s entry=%d aborted=%d video=%d",
+        ntf.frames_dir[0] ? ntf.frames_dir : "(none)",
+        ntf.has_entry, ntf.aborted, ntf.has_video);
 }
 
 } // namespace upc::camera

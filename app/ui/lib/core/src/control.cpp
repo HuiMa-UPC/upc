@@ -1,7 +1,9 @@
 #include "control.hpp"
 #include "ui_msg_proxy.hpp"
+#include "camera_msg_proxy.hpp"
 #include "msg_port.hpp"
 #include "gcode_manifest.hpp"
+#include "print_history_manifest.hpp"
 #include "ui_theme.hpp"
 #include "ui_feedback.hpp"
 #include "ui_modal_dialog.hpp"
@@ -45,10 +47,16 @@ control_state_t g_state = CONTROL_STATE_IDLE;
 ui_modal_dialog_t *g_current_dlg = nullptr;
 control_file_t g_active_file = {};
 
+/* Camera 的 manifest 通知早于本侧进入 PRINT_DONE 时的暂存位（见 on_print_video_manifest） */
+control_print_result_t g_print_result = {};
+bool g_print_result_pending = false;
+
 /* 门流程来源：区分同一套门弹窗（DOOR_OPENING→DOOR_CONFIRM）的入口与终态。
  *   PrintPrep      —— 打印前置流程，确认关门后进入选文件页；
  *   HomeStandalone —— 首页独立开门，确认关门后返回首页。 */
-enum class DoorFlowOrigin { PrintPrep, HomeStandalone };
+/* 开门流程的来源：决定关门确认后往哪走，以及取消时退回哪一屏。
+ * PrintCollect = 打印结果页滑动取件，取消要退回结果页而不是待机首页。 */
+enum class DoorFlowOrigin { PrintPrep, HomeStandalone, PrintCollect };
 DoorFlowOrigin g_door_origin = DoorFlowOrigin::PrintPrep;
 
 /* ---- 选择文件屏（设计稿 1.1.5）：底板 + 本机/USB 源 + 右侧详情面板 ---- */
@@ -216,6 +224,7 @@ void on_offline_exit(lv_timer_t *timer);
 void on_terminate_timeout(lv_timer_t *timer);
 void arm_door_open_retry_timer(void);
 void pf_on_clean_stop_done(void *u);
+void on_print_video_manifest(const middleware::PrintVideoManifestPayload &p);
 
 void invoke_done(DoneCb &cb, void *&user)
 {
@@ -347,7 +356,8 @@ void finish_printing(bool notify_complete)
     g_job_prog_cb = nullptr;
     g_job_done_cb = nullptr;
     g_job_u = nullptr;
-    enter_state(CONTROL_STATE_IDLE);
+    /* 不回 IDLE：先进 PRINT_DONE 保活摄像头预览，等 Camera 出片后切结果页 */
+    enter_state(CONTROL_STATE_PRINT_DONE);
 }
 
 void on_print_peer_watch(lv_timer_t * /*timer*/)
@@ -540,6 +550,12 @@ void wire_msg_proxy()
         /* 自然完成也会发 Terminate_Done：须与 Progress 一致，双缓冲为 0 才退 */
         try_exit_print_preview(true);
     });
+
+    /* Camera 出片 + manifest 落盘 → 打印结果页（契约见 common/COMMON.md 消息总表） */
+    ui::CameraMsgProxy::instance().register_print_video_manifest(
+        [](const middleware::PrintVideoManifestPayload &p) {
+            on_print_video_manifest(p);
+        });
 
     proxy.register_xfr_pair_pin([](const middleware::XfrPairPinPayload& p) {
         char msg[96];
@@ -2318,6 +2334,12 @@ void on_door_opening_cancel(lv_event_t * /*e*/)
             backend_start_clean_stop(pf_on_clean_stop_done, nullptr);
             return;
         }
+        if(g_door_origin == DoorFlowOrigin::PrintCollect) {
+            /* 取件取消：退回结果页（浮层一直没收起），并把滑块推回起点 */
+            enter_state(CONTROL_STATE_PRINT_DONE);
+            page_user_home_reset_result_slide();
+            return;
+        }
         enter_state(CONTROL_STATE_IDLE);
     }
 }
@@ -2382,7 +2404,9 @@ void on_door_closed_confirm_btn(lv_event_t * /*e*/)
     if(g_state != CONTROL_STATE_DOOR_CONFIRM) {
         return;
     }
-    if(g_door_origin == DoorFlowOrigin::HomeStandalone) {
+    /* PrintCollect：件已取走、门也关好了，这时才真正退出打印状态回待机首页 */
+    if(g_door_origin == DoorFlowOrigin::HomeStandalone ||
+       g_door_origin == DoorFlowOrigin::PrintCollect) {
         enter_state(CONTROL_STATE_IDLE);
     } else {
         goto_file_selection();
@@ -2491,7 +2515,53 @@ void pf_on_print_done(void * /*u*/)
         return;
     }
     ui_toast_show("Print complete", user_color_status_ok, 2000);
-    enter_state(CONTROL_STATE_IDLE);
+    /* 同 finish_printing：留在 PRINT_DONE 等 Camera 出片，不直接回 IDLE */
+    enter_state(CONTROL_STATE_PRINT_DONE);
+}
+
+/**
+ * Camera 写完 /home/video/manifest.json → 切打印结果页。
+ * has_entry=1 时以 manifest 条目为权威（status/耗时/耗材）；
+ * has_entry=0（0 帧未落盘）时退回用 payload.aborted 判定，统计值显示 "--"。
+ */
+void on_print_video_manifest(const middleware::PrintVideoManifestPayload &p)
+{
+    if(g_state != CONTROL_STATE_PRINTING && g_state != CONTROL_STATE_PRINT_DONE) {
+        return;
+    }
+
+    control_print_result_t r = {};
+    r.terminated = p.aborted != 0;
+    r.has_stats  = false;
+    r.material_g = -1.0f;
+    std::snprintf(r.job_name, sizeof(r.job_name), "%s", g_active_file.name);
+
+    if(p.has_entry && p.frames_dir[0]) {
+        std::vector<upc::PrintHistoryEntry> entries;
+        (void)upc::print_history_manifest_load(UPC_PRINT_VIDEO_MANIFEST, entries);
+        for(const auto &e : entries) {
+            if(e.frames_dir != p.frames_dir) {
+                continue;
+            }
+            r.terminated   = (e.status == upc::PrintHistoryStatus::Terminated);
+            r.duration_sec = e.duration_sec;
+            r.material_g   = e.material_g;
+            r.has_stats    = true;
+            if(!e.job_name.empty()) {
+                std::snprintf(r.job_name, sizeof(r.job_name), "%s", e.job_name.c_str());
+            }
+            break;
+        }
+    }
+
+    /* Camera 可能抢在 UI 走完收尾之前就发通知（0 帧时 finalize 几乎立即返回）。
+     * 这种情况下先攒着，等 enter_state(PRINT_DONE) 再套用，否则结果页会丢。 */
+    if(g_state != CONTROL_STATE_PRINT_DONE) {
+        g_print_result         = r;
+        g_print_result_pending = true;
+        return;
+    }
+    page_user_home_enter_print_result(&r);
 }
 
 void on_terminate_cancel(lv_event_t * /*e*/)
@@ -2510,7 +2580,8 @@ void on_backend_action_fail(const char *message)
     if(message && message[0]) {
         ui_toast_show(message, user_color_status_err, 2500);
     }
-    if(g_state != CONTROL_STATE_IDLE && g_state != CONTROL_STATE_PRINTING) {
+    if(g_state != CONTROL_STATE_IDLE && g_state != CONTROL_STATE_PRINTING &&
+       g_state != CONTROL_STATE_PRINT_DONE) {
         enter_state(CONTROL_STATE_IDLE);
     }
 }
@@ -2571,6 +2642,7 @@ void enter_state(control_state_t s)
 
     case CONTROL_STATE_PRINTING:
         overlay_hide();
+        g_print_result_pending = false;      /* 丢掉上一单可能残留的结果 */
         g_home_section_view = "user_home";   /* 打印中首页图标回仪表盘 */
         ui::PageManager::instance().switch_to("user_home");
         backend_start_job(&g_active_file,
@@ -2579,6 +2651,18 @@ void enter_state(control_state_t s)
                                      nullptr);
         page_user_home_enter_printing_mode(&g_active_file);
         start_print_peer_watch();
+        break;
+
+    case CONTROL_STATE_PRINT_DONE:
+        /* 刻意不动打印中浮层：page_user_home_exit_printing_mode() 会 stop 摄像头，
+         * 这里要让预览接着跑。界面维持打印中原样，等 Camera 的 manifest 通知到达，
+         * on_print_video_manifest() 再切结果页浮层。 */
+        stop_print_watchdogs();
+        overlay_hide();
+        if(g_print_result_pending) {
+            g_print_result_pending = false;
+            page_user_home_enter_print_result(&g_print_result);
+        }
         break;
     }
 }
@@ -2678,7 +2762,34 @@ void control_cancel(void)
 
 bool control_is_printing(void)
 {
-    return g_state == CONTROL_STATE_PRINTING;
+    /* 含 PRINT_DONE：结果页还没取件前不允许进文件页开新任务。
+     * 取件的开门流程同样算打印中——此时结果页浮层还在弹窗背后没收起。 */
+    return g_state == CONTROL_STATE_PRINTING ||
+           g_state == CONTROL_STATE_PRINT_DONE ||
+           (g_door_origin == DoorFlowOrigin::PrintCollect &&
+            (g_state == CONTROL_STATE_DOOR_OPENING ||
+             g_state == CONTROL_STATE_DOOR_CONFIRM));
+}
+
+void control_print_result_dismiss(void)
+{
+    if(g_state != CONTROL_STATE_PRINT_DONE) {
+        return;
+    }
+    /* 结果页浮层由 page_user_home_exit_printing_mode()（IDLE 分支）一并收起 */
+    enter_state(CONTROL_STATE_IDLE);
+}
+
+void control_print_result_collect(void)
+{
+    if(g_state != CONTROL_STATE_PRINT_DONE) {
+        return;
+    }
+    /* 取件 = 开门，但不能借道 IDLE：IDLE 分支会 page_user_home_exit_printing_mode()，
+     * 停掉摄像头并收起结果页浮层，弹窗就浮在待机首页上了。直接进开门态，
+     * 结果页与预览原样留在弹窗背后；关门确认后才由 PrintCollect 分支回 IDLE。 */
+    g_door_origin = DoorFlowOrigin::PrintCollect;
+    enter_state(CONTROL_STATE_DOOR_OPENING);
 }
 
 void control_terminate_request(void)

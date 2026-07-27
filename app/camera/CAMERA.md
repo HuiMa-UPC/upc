@@ -49,9 +49,11 @@ Glavo Snap IPC → PrintVideoRecorder worker
   → finish/abort
   → 缩略图：RGA 生成 thumb.rthm（失败则无缩略图）
   → upsert /home/video/manifest.json（status=complete|terminated）
+  → APP_Print_Video_Manifest_Ntf → UI（切打印结果页）
 ```
 
-0 帧时不生成 `/home/video` 产物、不写 manifest。
+0 帧时不生成 `/home/video` 产物、不写 manifest，但**仍会发** `APP_Print_Video_Manifest_Ntf`
+（`has_entry=0` + `aborted` 标志），否则 UI 会永远停在打印中界面下不来。
 
 `manifest.json` 由 Camera 独写；字段含 `job_name` / `start_unix` / `duration_sec` / `material_g` / `status` / `frames_dir` / `thumb`。UI 历史页直读该文件（解析见 `common/fs_manifest/print_history_manifest.*`）。
 
@@ -71,6 +73,7 @@ Snap 依赖预览流已开（同一 SHM）；与 UI 解码线程共享 ring，�
 | `APP_Print_Layer_Snap_Ntf` | 入队 LayerSnap job |
 | `APP_Print_Video_Session_Finish_Ntf` | 入队 Finish，落盘 PNG 序列目录 + `.rthm` + upsert manifest（`complete`） |
 | `APP_Print_Video_Session_Abort_Ntf` | 入队 Abort，有帧同样落盘 + upsert（`terminated`） |
+| `APP_Print_Video_Manifest_Ntf` | **出向** Camera→UI：manifest `rename()` 成功后发（worker 线程直接 `publish_async`，发帧有 `io_mtx_` 保护） |
 
 Glavo→Camera 经 UI Hub 转发；`sender_id` 仍为 `APP_GLAVO`（见 IPC.md）。
 

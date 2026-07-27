@@ -69,7 +69,7 @@ while (!g_shutdown_requested) {
 
 | Page ID | 文件 | 说明 |
 |---------|------|------|
-| `user_home` | `page_user_home.*` | 首页：环境、打印模式、预览 |
+| `user_home` | `page_user_home.*` | 首页：环境、打印模式、预览、打印结果页 |
 | `user_history` | `page_user_history.*` | 打印历史：读 manifest + 卡片 + 缩略图(TJPGD) + 左滑删除 |
 | `user_control` | `page_user_control.*` | skeleton 占位 |
 | `user_settings` | `page_user_settings.*` | 设置列表 + 开发者密码弹窗 |
@@ -77,6 +77,32 @@ while (!g_shutdown_requested) {
 | `user_timelapse` | `page_user_timelapse.*` | 延时摄影播放器（隐藏页，历史缩略图进入；全屏 `lv_layer_top`） |
 
 注册仅在 `ui_app.cpp`；打印流程走 `control_*`，pages 不直接订阅 MsgBus。详见 `lib/pages/README.md`。
+
+### 打印结果页（PRINT COMPLETE / PRINT TERMINATED）
+
+不是独立 Page，而是 `page_user_home` 打印中浮层 `g_print_area` **内部**的第三层
+（`g_result_layer`），与打印中底条 `g_print_bottom` 互斥。摄像头背景与
+`CameraPreviewPlayer` 完全沿用打印中那一套，中途不停流，避免黑屏闪烁。
+
+时序：
+
+```
+Glavo Print_Terminate_Done / 进度 100% → control.cpp finish_printing()
+  → enter_state(CONTROL_STATE_PRINT_DONE)   // 只停看门狗，预览保活，界面维持打印中原样
+  → （Camera 后台把 PNG 序列编成 timelapse.mp4 并 upsert manifest，可能数秒到数分钟）
+  → APP_Print_Video_Manifest_Ntf (Camera→UI)
+  → control.cpp on_print_video_manifest()：按 frames_dir 主键读 /home/video/manifest.json
+  → page_user_home_enter_print_result()     // 换成结果页浮层
+```
+
+- **数据源**：`has_entry=1` 时以 manifest 条目为权威（`status` / `duration_sec` / `material_g`）；
+  `has_entry=0`（0 帧未落盘）时用 payload 的 `aborted` 判完成/终止，耗时耗材显示 `--`。
+- **两个出口**：右上圆钮 `control_print_result_dismiss()` 直接回 IDLE；
+  右下 `SWIPE TO COLLECT` → `control_print_result_collect()` 回 IDLE 后走开门流程。
+  两者都经 IDLE 分支的 `page_user_home_exit_printing_mode()` 统一收浮层 + 停预览。
+- **PRINT_DONE 期间** `control_is_printing()` 返回 true → PageManager 挡住 `user_files`，
+  取件前不能开新任务。
+- 中间的 Purify 圆钮是 UI 占位，后端净化流程尚未实现。
 
 ## CameraMsgProxy / CameraPreviewPlayer（Camera）
 
@@ -90,6 +116,7 @@ while (!g_shutdown_requested) {
 |------|------|
 | `send_stream_start()` / `send_stream_stop()` | UI → `APP_CAMERA` |
 | `register_stream_start_rsp()` | Camera → UI（分辨率、SHM 元数据环名、`dma_mode`） |
+| `register_print_video_manifest()` | Camera → UI（manifest 已落盘，`control.cpp` 据此切打印结果页） |
 
 ### 预览数据路径
 

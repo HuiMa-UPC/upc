@@ -41,6 +41,15 @@ void CameraMsgProxy::init()
             }
         }));
 
+    subs_.push_back(bus.subscribe(
+        middleware::MsgType::APP_Print_Video_Manifest_Ntf,
+        middleware::ModuleId::UI,
+        [this](const middleware::Message& msg) {
+            middleware::PrintVideoManifestPayload p{};
+            if(print_video_manifest_cb_ && read_inline_pod(msg, p)) {
+                print_video_manifest_cb_(p);
+            }
+        }));
 }
 
 void CameraMsgProxy::send_stream_start(const char* video_basename)
@@ -92,6 +101,11 @@ void CameraMsgProxy::register_stream_stop_done(CameraStreamStopDoneCb cb)
 void CameraMsgProxy::register_snapshot_rsp(CameraSnapshotRspCb cb)
 {
     snapshot_rsp_cb_ = std::move(cb);
+}
+
+void CameraMsgProxy::register_print_video_manifest(PrintVideoManifestCb cb)
+{
+    print_video_manifest_cb_ = std::move(cb);
 }
 
 } // namespace ui

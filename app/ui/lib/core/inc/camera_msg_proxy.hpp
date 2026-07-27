@@ -13,6 +13,8 @@ using CameraStreamStartRspCb = std::function<void(
 using CameraStreamStopDoneCb = std::function<void()>;
 using CameraSnapshotRspCb = std::function<void(
     const middleware::CameraSnapshotRspPayload&)>;
+using PrintVideoManifestCb = std::function<void(
+    const middleware::PrintVideoManifestPayload&)>;
 
 /**
  * @brief UI ↔ APP_CAMERA（`rongsu_camera`）控制面（像素走 SHM，不经 MsgBus）
@@ -33,6 +35,8 @@ public:
     void register_stream_start_rsp(CameraStreamStartRspCb cb);
     void register_stream_stop_done(CameraStreamStopDoneCb cb);
     void register_snapshot_rsp(CameraSnapshotRspCb cb);
+    /** 打印录像 manifest 已落盘：control 据此切打印结果页 */
+    void register_print_video_manifest(PrintVideoManifestCb cb);
 
 private:
     CameraMsgProxy() = default;
@@ -53,6 +57,7 @@ private:
     CameraStreamStartRspCb start_rsp_cb_;
     CameraStreamStopDoneCb stop_done_cb_;
     CameraSnapshotRspCb snapshot_rsp_cb_;
+    PrintVideoManifestCb print_video_manifest_cb_;
 };
 
 } // namespace ui

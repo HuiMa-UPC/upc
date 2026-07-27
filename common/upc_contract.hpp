@@ -288,6 +288,8 @@ enum class MsgType : uint32_t {
     APP_Print_Layer_Snap_Ntf,                   /**< PrintVideoLayerSnapPayload */
     APP_Print_Video_Session_Finish_Ntf,         /**< PrintVideoSessionPayload */
     APP_Print_Video_Session_Abort_Ntf,          /**< PrintVideoSessionPayload */
+    /* 本条方向为 CAMERA → UI（与上面四条相反）：manifest.json 已原子落盘 */
+    APP_Print_Video_Manifest_Ntf,               /**< PrintVideoManifestPayload */
 
     // ---- UI ↔ GLAVO：MCU OTA（测试） ----
     UI_Mcu_Ota_Start_Req = 0x1090, /**< Empty：启动 Glavo(以太网) OTA，扫描 /home/image/glavo */
@@ -588,6 +590,29 @@ struct PrintVideoLayerSnapPayload {
     uint32_t layer_index;    /**< 1-based */
     uint16_t layer_height_um;
     uint16_t reserved;
+};
+
+/**
+ * APP_Print_Video_Manifest_Ntf：CAMERA→UI，延时视频与 manifest.json 已落盘（Inline）
+ *
+ * 发送时机：`PrintVideoRecorder::finalize_session()` 中 manifest 由 tmp `rename()`
+ * 原子替换成功之后。UI 收到时读文件必然看到新内容，无竞态。
+ *
+ * 0 帧场景（未触发换层 Snap / Camera 未采到帧）不会写 manifest，但**仍会发本消息**
+ * （`has_entry=0`），否则 UI 会永远停在打印中界面下不来。
+ *
+ * UI 用法：
+ *   - `has_entry=1` → 以 `frames_dir` 为主键在 `/home/video/manifest.json` 定位该条，
+ *     读 `status` / `duration_sec` / `material_g`（manifest 为权威数据源）
+ *   - `has_entry=0` → manifest 无此条，改用本 payload 的 `aborted` 判定完成/终止，
+ *     耗时与耗材显示占位
+ */
+struct PrintVideoManifestPayload {
+    char    frames_dir[64];  /**< manifest 主键（相对目录名）；has_entry=0 时为空串 */
+    int8_t  has_entry;       /**< 1=manifest 已写入该条；0=无帧未落盘 */
+    int8_t  aborted;         /**< 1=终止 0=完成；仅 has_entry=0 时作为判定依据 */
+    int8_t  has_video;       /**< 1=timelapse.mp4 已生成 */
+    uint8_t reserved;
 };
 
 /** APP_Mcu_Ota_Status_Ntf / APP_Serial_Mcu_Ota_Status_Ntf：OTA 进度/状态 */
