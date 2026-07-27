@@ -10,6 +10,7 @@
 #include "ui_user_widgets.hpp"
 #include "ui_slide_unlock.hpp"
 #include "ui_arc_spinner.hpp"
+#include "ui_xfr_dialog.hpp"
 #include "print_flow_img.h"
 #include "home_metric_icons.h"
 
@@ -414,6 +415,26 @@ void start_print_peer_watch(void)
     g_print_peer_watch_timer = lv_timer_create(on_print_peer_watch, PRINT_PEER_WATCH_MS, nullptr);
 }
 
+/* ---------- WiFi 传输：PIN 配对码弹窗 ----------
+ * 配对是网络事件，任何时刻都可能来，所以挂 lv_layer_top() 而不是 g_overlay
+ * （后者在 IDLE 态是隐藏的），打印中也照弹。
+ * 只能手动关：XfrPairPinPayload.expires_s 暂不使用，过期不会自动收窗。 */
+ui_xfr_pin_dialog_t *g_xfr_pin_dlg = nullptr;
+
+void close_xfr_pin_dlg(void)
+{
+    if(g_xfr_pin_dlg) {
+        ui_xfr_pin_dialog_close(g_xfr_pin_dlg);
+        g_xfr_pin_dlg = nullptr;
+    }
+}
+
+/* 只关 UI。取消配对目前没有契约，后端配对会话仍然存活，手机此时依然能配对成功。 */
+void on_xfr_pin_cancel(void * /*user*/)
+{
+    close_xfr_pin_dlg();
+}
+
 void wire_msg_proxy()
 {
     if(g_proxy_wired) {
@@ -558,10 +579,10 @@ void wire_msg_proxy()
         });
 
     proxy.register_xfr_pair_pin([](const middleware::XfrPairPinPayload& p) {
-        char msg[96];
-        std::snprintf(msg, sizeof(msg), "Pair PIN: %s (expires %us)",
-                      p.pin, static_cast<unsigned>(p.expires_s));
-        ui_toast_show(msg, user_color_status_ok, 2800);
+        /* 后端重发 PIN（续期或新会话）时先收掉旧窗，避免叠成两层 */
+        close_xfr_pin_dlg();
+        g_xfr_pin_dlg = ui_xfr_pin_dialog_open(lv_layer_top(), p.pin,
+                                               on_xfr_pin_cancel, nullptr);
     });
 
     proxy.register_xfr_file_received([](const middleware::XfrFileReceivedPayload& p) {

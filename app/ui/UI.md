@@ -104,6 +104,35 @@ Glavo Print_Terminate_Done / 进度 100% → control.cpp finish_printing()
   取件前不能开新任务。
 - 中间的 Purify 圆钮是 UI 占位，后端净化流程尚未实现。
 
+### WiFi 传输弹窗（PIN 配对 / 文件接收）
+
+`lib/components/ui_xfr_dialog.*`，对齐 Figma 3859:9545 与 3859:9810。两者共用
+`ui_modal_dialog` 外壳，只在建窗时就地覆盖两处（卡内行距 `USER_PAD_SM`、遮罩
+`LV_OPA_50`），不动 `USER_DLG_*` 宏以免连带改掉打印流程那批弹窗。
+
+挂 `lv_layer_top()` 而不是 `control` 的 `g_overlay`：配对/传输是网络事件，任何
+时刻都可能到，而 `g_overlay` 在 IDLE 态是隐藏的。按设计打印中也照弹。
+
+| 弹窗 | 触发 | 状态 |
+|------|------|------|
+| PIN 配对码 | `XFR_Pair_Pin_Ntf` → `control.cpp wire_msg_proxy()` | 已接线 |
+| 文件接收进度 | 待 XFR 进度契约 | **只建 UI，未接线** |
+
+接收弹窗未接线的原因：XFR 目前只在文件**落盘之后**发 `XFR_File_Received_Ntf`
+（`xfr_service.cpp`），没有"传输中"和进度的消息，接哪儿都是假的。契约补齐后由
+`control.cpp` 开窗并调 `ui_xfr_recv_dialog_set_progress()` 驱动；在那之前文件
+接收仍走原来的 toast。
+
+两处已知遗留（缺契约，非实现疏漏）：
+
+- **取消按钮只关 UI**。UI→XFR 方向目前一条消息都没有，点 `Cancel Pairing` 之后
+  后端配对会话仍然存活，手机那时候依然能配对成功。
+- **PIN 弹窗只能手动关**。`XfrPairPinPayload.expires_s` 没有使用，PIN 过期不会自动
+  收窗；弹窗遮罩会吞掉全屏点击，无人处理时会一直挡着（含打印中）。
+
+文案统一用英文：CJK 子集字库 `assets/src/lv_font_cjk_data.c` 只覆盖调试测试页用字
+（403 字），缺稿上的「备 / 码 / 消」，且只有单一 18px 字号。
+
 ## CameraMsgProxy / CameraPreviewPlayer（Camera）
 
 | 组件 | 文件 | 职责 |
