@@ -26,6 +26,7 @@
 namespace upc::xfr {
 
 namespace {
+constexpr auto kTransferProgressEmitMin = std::chrono::milliseconds(250);
 
 std::string body_to_string(const HttpRequest& req)
 {
@@ -118,6 +119,11 @@ void XfrService::shutdown()
 {
     http_.stop();
     mdns_.unpublish();
+}
+
+void XfrService::tick()
+{
+    publish_transfer_progress_if_needed();
 }
 
 HttpResponse XfrService::on_request(const HttpRequest& req)
@@ -269,6 +275,7 @@ HttpResponse XfrService::handle_upload_init(const HttpRequest& req)
         upload_offset_ = r.offset;
         slice_progress_pct_ = 0;
         print_state_ = "uploading";
+        transfer_name_ = filename;
     }
     std::ostringstream oss;
     oss << "{"
@@ -343,6 +350,7 @@ HttpResponse XfrService::handle_upload_complete(const HttpRequest& req, const st
         if (print_state_ != "finished" && print_state_ != "error") {
             print_state_ = "printing";
         }
+        transfer_name_ = r.file_name;
     }
     const bool started = trigger_auto_build_async();
     UPC_LOG_XFR_SERVICE(Info, "upload complete accepted file=%s auto_build_started=%d",
@@ -427,6 +435,119 @@ HttpResponse XfrService::handle_print_start(const HttpRequest& req)
     return rsp;
 }
 
+void XfrService::refresh_slice_progress_locked(std::string& state, uint32_t& slice_pct)
+{
+    if (state != "printing") {
+        return;
+    }
+    uint32_t latest_pct = 0;
+    if (!read_progress_percent_file(cfg_.progress_file, &latest_pct)) {
+        return;
+    }
+    if (latest_pct > slice_progress_pct_) {
+        slice_progress_pct_ = latest_pct;
+    }
+    slice_pct = slice_progress_pct_;
+    if (slice_progress_pct_ >= 100U) {
+        print_state_ = "finished";
+        state = "finished";
+        return;
+    }
+    state = print_state_;
+}
+
+uint32_t XfrService::calc_progress_percent(const std::string& state,
+                                           uint64_t upload_size,
+                                           uint64_t upload_offset,
+                                           uint32_t slice_pct) const
+{
+    if (state == "finished") {
+        return 100U;
+    }
+    const double upload_ratio = (upload_size == 0)
+        ? 0.0
+        : static_cast<double>(upload_offset) / static_cast<double>(upload_size);
+    const double bounded_upload_ratio = std::min(1.0, std::max(0.0, upload_ratio));
+    const double bounded_slice_ratio =
+        std::min(1.0, std::max(0.0, static_cast<double>(slice_pct) / 100.0));
+    double progress = 0.0;
+    if (state == "printing") {
+        progress = 0.05 + 0.95 * bounded_slice_ratio;
+    } else if (state == "uploading") {
+        progress = 0.05 * bounded_upload_ratio;
+    } else if (state == "error") {
+        progress = 0.05 + 0.95 * bounded_slice_ratio;
+    }
+    const int pct = static_cast<int>(progress * 100.0 + 0.5);
+    return static_cast<uint32_t>(std::min(100, std::max(0, pct)));
+}
+
+void XfrService::publish_transfer_progress_if_needed()
+{
+    const auto now = std::chrono::steady_clock::now();
+    if (last_progress_emit_at_.time_since_epoch().count() != 0 &&
+        now - last_progress_emit_at_ < kTransferProgressEmitMin) {
+        return;
+    }
+
+    std::string state;
+    uint64_t upload_size = 0;
+    uint64_t upload_offset = 0;
+    uint32_t slice_pct = 0;
+    std::string transfer_name;
+    {
+        std::lock_guard<std::mutex> lk(print_state_mu_);
+        state = print_state_;
+        upload_size = upload_size_;
+        upload_offset = upload_offset_;
+        slice_pct = slice_progress_pct_;
+        refresh_slice_progress_locked(state, slice_pct);
+        transfer_name = transfer_name_;
+    }
+
+    const uint32_t progress_percent = calc_progress_percent(state, upload_size, upload_offset, slice_pct);
+
+    uint8_t state_code = static_cast<uint8_t>(middleware::XfrTransferState::Idle);
+    if (state == "uploading") {
+        state_code = static_cast<uint8_t>(middleware::XfrTransferState::Uploading);
+    } else if (state == "printing") {
+        state_code = static_cast<uint8_t>(middleware::XfrTransferState::Slicing);
+    } else if (state == "finished") {
+        state_code = static_cast<uint8_t>(middleware::XfrTransferState::Finished);
+    } else if (state == "error") {
+        state_code = static_cast<uint8_t>(middleware::XfrTransferState::Error);
+    }
+
+    if (state_code == last_progress_state_ &&
+        progress_percent == last_progress_percent_ &&
+        upload_offset == last_progress_uploaded_ &&
+        upload_size == last_progress_total_ &&
+        transfer_name == last_progress_name_) {
+        return;
+    }
+
+    middleware::XfrTransferProgressPayload payload{};
+    std::strncpy(payload.file_name, transfer_name.c_str(), sizeof(payload.file_name) - 1);
+    payload.state = state_code;
+    payload.progress_percent = progress_percent;
+    payload.uploaded_bytes = upload_offset;
+    payload.total_bytes = upload_size;
+
+    middleware::Message msg(middleware::MsgType::XFR_Transfer_Progress_Ntf,
+                            middleware::ModuleId::APP_XFR,
+                            middleware::ModuleId::UI);
+    msg.payload = middleware::MsgPayload::from_bytes(
+        reinterpret_cast<const uint8_t*>(&payload), sizeof(payload));
+    (void)middleware::MsgPort::instance().publish_async(msg);
+
+    last_progress_emit_at_ = now;
+    last_progress_state_ = state_code;
+    last_progress_percent_ = progress_percent;
+    last_progress_uploaded_ = upload_offset;
+    last_progress_total_ = upload_size;
+    last_progress_name_ = transfer_name;
+}
+
 HttpResponse XfrService::handle_print_status(const HttpRequest& req)
 {
     std::string token;
@@ -441,7 +562,6 @@ HttpResponse XfrService::handle_print_status(const HttpRequest& req)
     uint64_t upload_size = 0;
     uint64_t upload_offset = 0;
     uint32_t slice_pct = 0;
-    bool should_read_slice_progress = false;
     {
         std::lock_guard<std::mutex> lk(print_state_mu_);
         if (print_job_id_.empty()) {
@@ -458,24 +578,7 @@ HttpResponse XfrService::handle_print_status(const HttpRequest& req)
         upload_size = upload_size_;
         upload_offset = upload_offset_;
         slice_pct = slice_progress_pct_;
-        should_read_slice_progress = (state == "printing");
-    }
-
-    if (should_read_slice_progress) {
-        uint32_t latest_pct = 0;
-        if (read_progress_percent_file(cfg_.progress_file, &latest_pct)) {
-            std::lock_guard<std::mutex> lk(print_state_mu_);
-            if (latest_pct > slice_progress_pct_) {
-                slice_progress_pct_ = latest_pct;
-            }
-            slice_pct = slice_progress_pct_;
-            if (slice_progress_pct_ >= 100U) {
-                print_state_ = "finished";
-                state = "finished";
-            } else {
-                state = print_state_;
-            }
-        }
+        refresh_slice_progress_locked(state, slice_pct);
     }
 
     if (state == "finished") {
@@ -484,22 +587,8 @@ HttpResponse XfrService::handle_print_status(const HttpRequest& req)
     if (upload_size > 0 && upload_offset > upload_size) {
         upload_offset = upload_size;
     }
-    const double upload_ratio = (upload_size == 0)
-        ? 0.0
-        : static_cast<double>(upload_offset) / static_cast<double>(upload_size);
-    const double bounded_upload_ratio = std::min(1.0, std::max(0.0, upload_ratio));
-    const double bounded_slice_ratio =
-        std::min(1.0, std::max(0.0, static_cast<double>(slice_pct) / 100.0));
-    double progress = 0.0;
-    if (state == "finished") {
-        progress = 1.0;
-    } else if (state == "printing") {
-        progress = 0.05 + 0.95 * bounded_slice_ratio;
-    } else if (state == "uploading") {
-        progress = 0.05 * bounded_upload_ratio;
-    } else if (state == "error") {
-        progress = 0.05 + 0.95 * bounded_slice_ratio;
-    }
+    const uint32_t progress_percent = calc_progress_percent(state, upload_size, upload_offset, slice_pct);
+    const double progress = static_cast<double>(progress_percent) / 100.0;
 
     std::ostringstream oss;
     oss << std::fixed << std::setprecision(3);
@@ -571,6 +660,7 @@ void XfrService::run_build_worker()
         std::lock_guard<std::mutex> lk(print_state_mu_);
         print_state_ = "printing";
         slice_progress_pct_ = 0;
+        transfer_name_ = gcode_name;
     }
     if (!run_snowslice_build(json_path, svg_path, gcode_path, &err_code, &err_msg)) {
         UPC_LOG_XFR_SERVICE(Error, "auto build exec failed code=%s msg=%s",
@@ -635,6 +725,7 @@ void XfrService::run_build_worker()
         std::lock_guard<std::mutex> lk(print_state_mu_);
         print_state_ = "finished";
         slice_progress_pct_ = 100;
+        transfer_name_ = gcode_name;
     }
 
     std::lock_guard<std::mutex> lk(build_mu_);

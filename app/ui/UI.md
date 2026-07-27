@@ -116,12 +116,11 @@ Glavo Print_Terminate_Done / 进度 100% → control.cpp finish_printing()
 | 弹窗 | 触发 | 状态 |
 |------|------|------|
 | PIN 配对码 | `XFR_Pair_Pin_Ntf` → `control.cpp wire_msg_proxy()` | 已接线 |
-| 文件接收进度 | 待 XFR 进度契约 | **只建 UI，未接线** |
+| 文件接收进度 | `XFR_Transfer_Progress_Ntf` → `control.cpp wire_msg_proxy()` | 已接线 |
 
-接收弹窗未接线的原因：XFR 目前只在文件**落盘之后**发 `XFR_File_Received_Ntf`
-（`xfr_service.cpp`），没有"传输中"和进度的消息，接哪儿都是假的。契约补齐后由
-`control.cpp` 开窗并调 `ui_xfr_recv_dialog_set_progress()` 驱动；在那之前文件
-接收仍走原来的 toast。
+接收弹窗由 XFR 进度推送驱动：`Uploading/Slicing` 状态自动开窗并更新进度条；
+`Finished/Error/Idle` 自动收窗。`XFR_File_Received_Ntf` 仍保留原有 toast 和
+本地文件列表刷新逻辑。
 
 两处已知遗留（缺契约，非实现疏漏）：
 

@@ -1285,7 +1285,7 @@ lv_obj_t *build_header(lv_obj_t *parent)
     lv_obj_set_style_text_font(wifi, user_font_text(), 0);
 
     lv_obj_t *name = lv_label_create(bar);
-    lv_label_set_text(name, "SNOWPOD A1");
+    lv_label_set_text(name, upc::config::kDeviceDisplayName);
     lv_obj_set_style_text_color(name, user_color_text, 0);
     lv_obj_set_style_text_font(name, user_font_text(), 0);
 

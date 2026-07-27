@@ -10,6 +10,7 @@
 #include "home_btn_icons.h"
 #include "home_metric_icons.h"
 #include "ui_slide_unlock.hpp"
+#include "config/cal_config.hpp"
 
 #include <cmath>
 #include <cstdio>
@@ -139,7 +140,7 @@ void home_env_init(void)
 {
     if(!g_env_defaults_loaded) {
         std::memset(&g_snap, 0, sizeof(g_snap));
-        std::strcpy(g_snap.device_name, "SNOWPOD A1");
+        std::strcpy(g_snap.device_name, upc::config::kDeviceDisplayName);
         g_snap.status         = USER_HOME_STATUS_READY;
         g_snap.wifi_connected = false;
         g_snap.signal_bars    = 0;
@@ -560,7 +561,7 @@ lv_obj_t *build_topbar(lv_obj_t *parent)
     g_lbl_wifi = lbl_wifi;
 
     g_lbl_dev_name = lv_label_create(bar);
-    lv_label_set_text(g_lbl_dev_name, "SNOWPOD A1");
+    lv_label_set_text(g_lbl_dev_name, upc::config::kDeviceDisplayName);
     lv_obj_set_style_text_color(g_lbl_dev_name, user_color_text, 0);
     lv_obj_set_style_text_font(g_lbl_dev_name, user_font_text(), 0);
 

@@ -8,6 +8,8 @@
 #include "upload_manager.hpp"
 #include "xfr_config.hpp"
 
+#include <chrono>
+#include <cstdint>
 #include <mutex>
 #include <string>
 
@@ -19,6 +21,7 @@ public:
 
     bool init();
     void shutdown();
+    void tick();
 
 private:
     HttpResponse on_request(const HttpRequest& req);
@@ -64,6 +67,12 @@ private:
                          int exit_code);
     bool trigger_auto_build_async();
     void run_build_worker();
+    void refresh_slice_progress_locked(std::string& state, uint32_t& slice_pct);
+    uint32_t calc_progress_percent(const std::string& state,
+                                   uint64_t upload_size,
+                                   uint64_t upload_offset,
+                                   uint32_t slice_pct) const;
+    void publish_transfer_progress_if_needed();
 
     void notify_pair_pin(const std::string& pin, uint32_t expires_s) const;
     void notify_file_received(const std::string& name, uint64_t size) const;
@@ -88,6 +97,13 @@ private:
     uint64_t upload_size_ = 0;
     uint64_t upload_offset_ = 0;
     uint32_t slice_progress_pct_ = 0;
+    std::string transfer_name_;
+    std::chrono::steady_clock::time_point last_progress_emit_at_{};
+    uint8_t  last_progress_state_ = 0xff;
+    uint32_t last_progress_percent_ = 0xffffffffu;
+    uint64_t last_progress_uploaded_ = UINT64_MAX;
+    uint64_t last_progress_total_ = UINT64_MAX;
+    std::string last_progress_name_;
 };
 
 } // namespace upc::xfr

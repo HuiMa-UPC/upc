@@ -9,6 +9,7 @@
 #include "msg_runtime.hpp"
 #include "rs_log.hpp"
 #include "msg_port.hpp"
+#include "config/cal_config.hpp"
 
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -783,7 +784,7 @@ void McuLink::publish_env_update_ntf()
     }
 
     middleware::EnvSnapshotPayload p{};
-    std::snprintf(p.device_name, sizeof(p.device_name), "%s", "Rongsu-3D");
+    std::snprintf(p.device_name, sizeof(p.device_name), "%s", upc::config::kDeviceDisplayName);
     p.status         = static_cast<uint32_t>(status);
 
     /* WiFi 图标状态取 ConnMan 真实值（首页与设置页共用同一数据源）。 */

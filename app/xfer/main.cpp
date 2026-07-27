@@ -74,6 +74,7 @@ int start_xfr(char daemon)
     }
 
     while (!g_shutdown_requested) {
+        service.tick();
         if (g_ipc_ready) {
             middleware::MsgPort::instance().process(2);
         }

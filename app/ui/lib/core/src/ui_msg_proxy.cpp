@@ -257,6 +257,16 @@ void UiMsgProxy::init()
         }));
 
     subs_.push_back(bus.subscribe(
+        middleware::MsgType::XFR_Transfer_Progress_Ntf, middleware::ModuleId::UI,
+        [this](const middleware::Message& msg) {
+            middleware::XfrTransferProgressPayload p{};
+            if (xfr_transfer_progress_cb_ && read_inline_pod(msg, p)) {
+                p.file_name[sizeof(p.file_name) - 1] = '\0';
+                xfr_transfer_progress_cb_(p);
+            }
+        }));
+
+    subs_.push_back(bus.subscribe(
         middleware::MsgType::GLAVO_USB_Hotplug_Ntf, middleware::ModuleId::UI,
         [this](const middleware::Message& msg) {
             middleware::UsbHotplugPayload p{};
@@ -400,6 +410,11 @@ void UiMsgProxy::register_xfr_pair_pin(XfrPairPinCb cb)
 void UiMsgProxy::register_xfr_file_received(XfrFileReceivedCb cb)
 {
     xfr_file_received_cb_ = std::move(cb);
+}
+
+void UiMsgProxy::register_xfr_transfer_progress(XfrTransferProgressCb cb)
+{
+    xfr_transfer_progress_cb_ = std::move(cb);
 }
 
 void UiMsgProxy::register_usb_hotplug(UsbHotplugCb cb)

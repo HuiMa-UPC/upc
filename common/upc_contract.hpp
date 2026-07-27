@@ -351,6 +351,7 @@ enum class MsgType : uint32_t {
     // ---- XFR → UI：WiFi 传输通知 ----
     XFR_Pair_Pin_Ntf = 0x1400,   /**< XfrPairPinPayload：屏幕显示 PIN 配对码 */
     XFR_File_Received_Ntf,       /**< XfrFileReceivedPayload：接收文件完成通知 */
+    XFR_Transfer_Progress_Ntf,   /**< XfrTransferProgressPayload：接收/切片进度通知 */
     GLAVO_USB_Hotplug_Ntf,       /**< UsbHotplugPayload：USB 挂载状态变化通知 */
 
     // ---- UI ↔ GLAVO：清粉中断（风机停机） ----
@@ -467,6 +468,24 @@ struct XfrPairPinPayload {
 struct XfrFileReceivedPayload {
     char     file_name[128];
     uint64_t file_size;
+};
+
+/** XFR_Transfer_Progress_Ntf：XFR 传输阶段进度（Inline） */
+enum class XfrTransferState : uint8_t {
+    Idle      = 0,  /**< 无活跃传输 */
+    Uploading = 1,  /**< HTTP 分块上传中 */
+    Slicing   = 2,  /**< 上传完成后切片中 */
+    Finished  = 3,  /**< 切片完成并落盘 */
+    Error     = 4,  /**< 传输或切片失败 */
+};
+
+struct XfrTransferProgressPayload {
+    char     file_name[128];      /**< 当前任务名（切片阶段优先展示目标 gcode） */
+    uint8_t  state;               /**< XfrTransferState */
+    uint8_t  reserved[3];
+    uint32_t progress_percent;    /**< 0..100 */
+    uint64_t uploaded_bytes;      /**< 上传阶段已接收字节 */
+    uint64_t total_bytes;         /**< 上传阶段总字节 */
 };
 
 /** GLAVO_USB_Hotplug_Ntf：USB 存储挂载状态变化（Inline） */

@@ -420,6 +420,14 @@ void start_print_peer_watch(void)
  * （后者在 IDLE 态是隐藏的），打印中也照弹。
  * 只能手动关：XfrPairPinPayload.expires_s 暂不使用，过期不会自动收窗。 */
 ui_xfr_pin_dialog_t *g_xfr_pin_dlg = nullptr;
+ui_xfr_recv_dialog_t *g_xfr_recv_dlg = nullptr;
+char g_xfr_recv_name[128] = {0};
+
+bool xfr_progress_state_active(uint8_t state)
+{
+    return state == static_cast<uint8_t>(middleware::XfrTransferState::Uploading) ||
+           state == static_cast<uint8_t>(middleware::XfrTransferState::Slicing);
+}
 
 void close_xfr_pin_dlg(void)
 {
@@ -429,10 +437,25 @@ void close_xfr_pin_dlg(void)
     }
 }
 
+void close_xfr_recv_dlg(void)
+{
+    if(g_xfr_recv_dlg) {
+        ui_xfr_recv_dialog_close(g_xfr_recv_dlg);
+        g_xfr_recv_dlg = nullptr;
+    }
+    g_xfr_recv_name[0] = '\0';
+}
+
 /* 只关 UI。取消配对目前没有契约，后端配对会话仍然存活，手机此时依然能配对成功。 */
 void on_xfr_pin_cancel(void * /*user*/)
 {
     close_xfr_pin_dlg();
+}
+
+/* 只关 UI。取消传输目前没有契约，后端上传/切片任务不受影响。 */
+void on_xfr_recv_cancel(void * /*user*/)
+{
+    close_xfr_recv_dlg();
 }
 
 void wire_msg_proxy()
@@ -586,11 +609,36 @@ void wire_msg_proxy()
     });
 
     proxy.register_xfr_file_received([](const middleware::XfrFileReceivedPayload& p) {
+        close_xfr_recv_dlg();
         char msg[180];
         std::snprintf(msg, sizeof(msg), "File received: %s", p.file_name);
         ui_toast_show(msg, user_color_status_ok, 2200);
         if(g_files_page_active && g_file_tab == FileTab::Local) {
             request_fs_dir_open(FileTab::Local);
+        }
+    });
+
+    proxy.register_xfr_transfer_progress([](const middleware::XfrTransferProgressPayload& p) {
+        const bool active = xfr_progress_state_active(p.state);
+        if(active) {
+            if(!g_xfr_recv_dlg || std::strcmp(g_xfr_recv_name, p.file_name) != 0) {
+                close_xfr_recv_dlg();
+                std::snprintf(g_xfr_recv_name, sizeof(g_xfr_recv_name), "%s", p.file_name);
+                g_xfr_recv_dlg = ui_xfr_recv_dialog_open(lv_layer_top(), g_xfr_recv_name,
+                                                         on_xfr_recv_cancel, nullptr);
+            }
+            ui_xfr_recv_dialog_set_progress(g_xfr_recv_dlg,
+                                            static_cast<int32_t>(p.progress_percent));
+            return;
+        }
+
+        if(g_xfr_recv_dlg) {
+            ui_xfr_recv_dialog_set_progress(g_xfr_recv_dlg,
+                                            static_cast<int32_t>(p.progress_percent));
+            close_xfr_recv_dlg();
+        }
+        if(p.state == static_cast<uint8_t>(middleware::XfrTransferState::Error)) {
+            ui_toast_show("Transfer failed", user_color_status_err, 2200);
         }
     });
 
@@ -614,6 +662,7 @@ void backend_reset_session()
     g_purify_progress = 0;
     g_file_tab = FileTab::Local;
     g_sel_index = -1;
+    close_xfr_recv_dlg();
     ui::UiMsgProxy::instance().send_supply_status();
 }
 
