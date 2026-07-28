@@ -10,9 +10,11 @@
 #include "vi_capture.hpp"
 
 #include <atomic>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 
 #include <cstring>
@@ -35,6 +37,8 @@ private:
     void handle_message(const middleware::Message& msg);
     void handle_stream_start(const middleware::Message& msg);
     void handle_stream_stop(const middleware::Message& msg);
+    void handle_visual_stream_start(const middleware::Message& msg);
+    void handle_visual_stream_stop(const middleware::Message& msg);
     void handle_snapshot_req(const middleware::Message& msg);
     void handle_print_video(const middleware::Message& msg);
     void handle_clean_video(const middleware::Message& msg);
@@ -52,6 +56,11 @@ private:
 
     bool start_streaming();
     void stop_streaming();
+    bool ensure_stream_peer(const middleware::Message& req,
+                            const char* shm_name,
+                            middleware::MsgType rsp_type);
+    void remove_stream_peer(middleware::ModuleId peer);
+    bool has_stream_peers() const;
     void stream_thread_fn();
     void update_latest_nv12_snapshot(const uint8_t* src_y, const uint8_t* src_uv,
                                      uint32_t src_stride_y, uint32_t width,
@@ -61,6 +70,11 @@ private:
 
     void send_stream_start_rsp(const middleware::Message& req, bool ok);
     void send_stream_stop_done(const middleware::Message& req);
+    void send_stream_start_rsp_with_type(const middleware::Message& req, bool ok,
+                                         middleware::MsgType rsp_type,
+                                         const char* shm_name);
+    void send_stream_stop_done_with_type(const middleware::Message& req,
+                                         middleware::MsgType done_type);
     void send_snapshot_rsp(const middleware::Message& req, bool ok,
                            const char* path);
     void notify_frame(uint32_t seq);
@@ -70,7 +84,15 @@ private:
     static uint32_t read_warmup_frames_from_env();
 
     std::vector<middleware::Subscription> subs_;
-    upc_ipc::IpcDmaFrameRingProducer producer_;
+    struct StreamPeerSession {
+        middleware::ModuleId peer_id{middleware::ModuleId{0}};
+        std::string shm_name;
+        upc_ipc::IpcDmaFrameRingProducer producer;
+    };
+
+    mutable std::mutex stream_peers_mtx_;
+    std::unordered_map<uint32_t, std::shared_ptr<StreamPeerSession>> stream_peers_;
+
     ViCapture capture_;
     CameraDmaFrameSource dma_source_;
     PrintVideoRecorder print_video_;

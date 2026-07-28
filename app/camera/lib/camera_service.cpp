@@ -20,6 +20,9 @@ namespace upc::camera {
 namespace {
 
 constexpr const char* kPhotoOutDir = "/home/photo";
+constexpr const char* kUiShmName = CAMERA_SHM_NAME_DEFAULT;
+constexpr const char* kVisualShmName = "/upc_camera_preview_visual";
+constexpr int kPeerWaitSlotEmptyMs = 1000;
 
 uint64_t monotonic_us()
 {
@@ -195,6 +198,16 @@ void CameraService::subscribe_messages()
         [this](const middleware::Message& msg) { handle_message(msg); }));
 
     subs_.push_back(port.subscribe(
+        middleware::MsgType::VISUAL_Camera_Stream_Start_Req,
+        middleware::ModuleId::APP_CAMERA,
+        [this](const middleware::Message& msg) { handle_message(msg); }));
+
+    subs_.push_back(port.subscribe(
+        middleware::MsgType::VISUAL_Camera_Stream_Stop_Req,
+        middleware::ModuleId::APP_CAMERA,
+        [this](const middleware::Message& msg) { handle_message(msg); }));
+
+    subs_.push_back(port.subscribe(
         middleware::MsgType::APP_Print_Video_Session_Start_Ntf,
         middleware::ModuleId::APP_CAMERA,
         [this](const middleware::Message& msg) { handle_message(msg); }));
@@ -228,6 +241,12 @@ void CameraService::handle_message(const middleware::Message& msg)
         break;
     case middleware::MsgType::UI_Camera_Stream_Stop_Req:
         handle_stream_stop(msg);
+        break;
+    case middleware::MsgType::VISUAL_Camera_Stream_Start_Req:
+        handle_visual_stream_start(msg);
+        break;
+    case middleware::MsgType::VISUAL_Camera_Stream_Stop_Req:
+        handle_visual_stream_stop(msg);
         break;
     case middleware::MsgType::UI_Camera_Snapshot_Req:
         handle_snapshot_req(msg);
@@ -314,36 +333,87 @@ void CameraService::handle_clean_video(const middleware::Message& msg)
 
 void CameraService::handle_stream_start(const middleware::Message& msg)
 {
-    if(stream_running_.load()) {
-        stop_streaming();
+    if(!stream_running_.load()) {
+        const bool ok = start_streaming();
+        if(!ok) {
+            send_stream_start_rsp(msg, false);
+            UPC_LOG_CAMERA_SERVICE(Error, "stream start failed");
+            return;
+        }
+        stop_stream_.store(false);
+        stream_running_.store(true);
+        print_video_.set_stream_geometry(stream_width_, stream_height_);
+        clean_video_.set_stream_geometry(stream_width_, stream_height_, stream_fps_);
+        stream_thread_ = std::thread(&CameraService::stream_thread_fn, this);
+
+        UPC_LOG_CAMERA_SERVICE(Info,
+            "streaming live %ux%u @ %u fps stride_y=%u aligned=%d",
+            stream_width_, stream_height_, stream_fps_,
+            dma_source_.dma_stride_y(),
+            dma_source_.stride_aligned() ? 1 : 0);
     }
 
-    const bool ok = start_streaming();
-    send_stream_start_rsp(msg, ok);
-
+    const bool ok = ensure_stream_peer(
+        msg, kUiShmName, middleware::MsgType::APP_Camera_Stream_Start_Rsp);
     if(!ok) {
-        UPC_LOG_CAMERA_SERVICE(Error, "stream start failed");
-        return;
+        send_stream_start_rsp(msg, false);
+    } else {
+        send_stream_start_rsp(msg, true);
+    }
+}
+
+void CameraService::handle_visual_stream_start(const middleware::Message& msg)
+{
+    if(!stream_running_.load()) {
+        const bool ok = start_streaming();
+        if(!ok) {
+            send_stream_start_rsp_with_type(
+                msg, false, middleware::MsgType::APP_Visual_Camera_Stream_Start_Rsp,
+                kVisualShmName);
+            UPC_LOG_CAMERA_SERVICE(Error, "visual stream start failed");
+            return;
+        }
+        stop_stream_.store(false);
+        stream_running_.store(true);
+        print_video_.set_stream_geometry(stream_width_, stream_height_);
+        clean_video_.set_stream_geometry(stream_width_, stream_height_, stream_fps_);
+        stream_thread_ = std::thread(&CameraService::stream_thread_fn, this);
+
+        UPC_LOG_CAMERA_SERVICE(Info,
+            "streaming live %ux%u @ %u fps stride_y=%u aligned=%d",
+            stream_width_, stream_height_, stream_fps_,
+            dma_source_.dma_stride_y(),
+            dma_source_.stride_aligned() ? 1 : 0);
     }
 
-    stop_stream_.store(false);
-    stream_running_.store(true);
-    print_video_.set_stream_geometry(stream_width_, stream_height_);
-    clean_video_.set_stream_geometry(stream_width_, stream_height_, stream_fps_);
-    stream_thread_ = std::thread(&CameraService::stream_thread_fn, this);
-
-    UPC_LOG_CAMERA_SERVICE(Info,
-        "streaming live %ux%u @ %u fps shm=%s stride_y=%u aligned=%d",
-        stream_width_, stream_height_, stream_fps_,
-        CAMERA_SHM_NAME_DEFAULT, dma_source_.dma_stride_y(),
-        dma_source_.stride_aligned() ? 1 : 0);
+    const bool ok = ensure_stream_peer(
+        msg, kVisualShmName, middleware::MsgType::APP_Visual_Camera_Stream_Start_Rsp);
+    send_stream_start_rsp_with_type(
+        msg, ok, middleware::MsgType::APP_Visual_Camera_Stream_Start_Rsp,
+        kVisualShmName);
 }
 
 void CameraService::handle_stream_stop(const middleware::Message& msg)
 {
-    stop_streaming();
+    remove_stream_peer(msg.sender_id);
+    if(!has_stream_peers()) {
+        stop_streaming();
+    }
     send_stream_stop_done(msg);
-    UPC_LOG_CAMERA_SERVICE(Info, "stream stopped");
+    UPC_LOG_CAMERA_SERVICE(Info, "stream stop ui sender=%u",
+                           static_cast<unsigned>(msg.sender_id));
+}
+
+void CameraService::handle_visual_stream_stop(const middleware::Message& msg)
+{
+    remove_stream_peer(msg.sender_id);
+    if(!has_stream_peers()) {
+        stop_streaming();
+    }
+    send_stream_stop_done_with_type(
+        msg, middleware::MsgType::APP_Visual_Camera_Stream_Stop_Done);
+    UPC_LOG_CAMERA_SERVICE(Info, "stream stop visual sender=%u",
+                           static_cast<unsigned>(msg.sender_id));
 }
 
 bool CameraService::start_streaming()
@@ -371,30 +441,10 @@ bool CameraService::start_streaming()
         return false;
     }
 
-    producer_.destroy();
-
-    const upc_ipc::IpcShmError err = producer_.create(
-        CAMERA_SHM_NAME_DEFAULT,
-        stream_width_,
-        stream_height_,
-        dma_source_.dma_stride_y(),
-        upc_ipc::kDmaFrameFormatNv12,
-        CAMERA_SHM_SLOT_COUNT);
-
-    if(err != upc_ipc::IpcShmError::OK) {
-        dma_source_.shutdown();
-        capture_.close();
-        UPC_LOG_CAMERA_SERVICE(Error, "dma frame ring create failed err=%d",
-                               static_cast<int>(err));
-        return false;
+    {
+        std::lock_guard<std::mutex> lock(stream_peers_mtx_);
+        stream_peers_.clear();
     }
-
-    UPC_LOG_CAMERA_SERVICE(Info,
-        "SHM created name=%s %ux%u stride_y=%u slots=%u dma_buf_count=%u aligned=%d",
-        CAMERA_SHM_NAME_DEFAULT, stream_width_, stream_height_,
-        dma_source_.dma_stride_y(), CAMERA_SHM_SLOT_COUNT,
-        dma_source_.buffer_count(),
-        dma_source_.stride_aligned() ? 1 : 0);
 
     return true;
 }
@@ -406,9 +456,16 @@ void CameraService::stop_streaming()
         stream_thread_.join();
     }
     stream_running_.store(false);
-
+    {
+        std::lock_guard<std::mutex> lock(stream_peers_mtx_);
+        for(auto& kv : stream_peers_) {
+            if(kv.second) {
+                kv.second->producer.destroy();
+            }
+        }
+        stream_peers_.clear();
+    }
     dma_source_.shutdown();
-    producer_.destroy();
     capture_.close();
     {
         std::lock_guard<std::mutex> lock(latest_nv12_mtx_);
@@ -499,6 +556,71 @@ bool CameraService::save_latest_png_snapshot(std::string& out_path) const
     return true;
 }
 
+bool CameraService::ensure_stream_peer(const middleware::Message& req,
+                                       const char* shm_name,
+                                       middleware::MsgType rsp_type)
+{
+    if(!shm_name || !shm_name[0]) {
+        return false;
+    }
+    const uint32_t key = static_cast<uint32_t>(req.sender_id);
+    std::lock_guard<std::mutex> lock(stream_peers_mtx_);
+    auto it = stream_peers_.find(key);
+    if(it != stream_peers_.end() && it->second) {
+        return true;
+    }
+
+    auto peer = std::make_shared<StreamPeerSession>();
+    peer->peer_id = req.sender_id;
+    peer->shm_name = shm_name;
+    const upc_ipc::IpcShmError err = peer->producer.create(
+        peer->shm_name.c_str(),
+        stream_width_,
+        stream_height_,
+        dma_source_.dma_stride_y(),
+        upc_ipc::kDmaFrameFormatNv12,
+        CAMERA_SHM_SLOT_COUNT);
+    if(err != upc_ipc::IpcShmError::OK) {
+        UPC_LOG_CAMERA_SERVICE(Error,
+            "peer shm create fail type=%u sender=%u name=%s err=%d",
+            static_cast<unsigned>(rsp_type),
+            key,
+            peer->shm_name.c_str(),
+            static_cast<int>(err));
+        return false;
+    }
+    stream_peers_[key] = peer;
+    UPC_LOG_CAMERA_SERVICE(Info,
+        "peer shm ready sender=%u name=%s %ux%u stride_y=%u slots=%u",
+        key, peer->shm_name.c_str(), stream_width_, stream_height_,
+        dma_source_.dma_stride_y(), CAMERA_SHM_SLOT_COUNT);
+    return true;
+}
+
+void CameraService::remove_stream_peer(middleware::ModuleId peer)
+{
+    bool removed = false;
+    {
+        std::lock_guard<std::mutex> lock(stream_peers_mtx_);
+        const uint32_t key = static_cast<uint32_t>(peer);
+        auto it = stream_peers_.find(key);
+        if(it != stream_peers_.end()) {
+            stream_peers_.erase(it);
+            removed = true;
+        }
+    }
+    if(removed) {
+        UPC_LOG_CAMERA_SERVICE(Info, "peer shm removed sender=%u",
+                               static_cast<unsigned>(peer));
+    }
+}
+
+bool CameraService::has_stream_peers() const
+{
+    std::lock_guard<std::mutex> lock(stream_peers_mtx_);
+    return !stream_peers_.empty();
+}
+
 void CameraService::stream_thread_fn()
 {
     const auto frame_period =
@@ -558,16 +680,8 @@ void CameraService::stream_thread_fn()
             continue;
         }
 
-        std::optional<uint32_t> slot = producer_.acquire_write_slot();
-        if(!slot) {
-            ++slot_fail_1s;
-            std::this_thread::sleep_for(std::chrono::milliseconds(2));
-            continue;
-        }
-
         std::optional<uint32_t> buf_idx = capture_.dequeue_frame(2000);
         if(!buf_idx) {
-            producer_.cancel_write_slot(*slot);
             ++dequeue_fail_1s;
             if(stop_stream_.load()) {
                 break;
@@ -588,7 +702,6 @@ void CameraService::stream_thread_fn()
             const int padded_idx = dma_source_.acquire_padded();
             if(padded_idx < 0) {
                 capture_.queue_frame(*buf_idx);
-                producer_.cancel_write_slot(*slot);
                 ++slot_fail_1s;
                 std::this_thread::sleep_for(std::chrono::milliseconds(2));
                 continue;
@@ -604,40 +717,72 @@ void CameraService::stream_thread_fn()
             slot_buf_idx = static_cast<uint32_t>(padded_idx);
         }
 
-        const uint32_t seq =
-            producer_.commit_slot(*slot, monotonic_us(), slot_buf_idx);
-        if(seq == 0) {
-            producer_.cancel_write_slot(*slot);
-            ++slot_fail_1s;
-            if(dma_source_.stride_aligned()) {
-                capture_.queue_frame(slot_buf_idx);
-            } else {
-                dma_source_.release_padded(slot_buf_idx);
+        struct PeerCommit {
+            std::shared_ptr<StreamPeerSession> peer;
+            uint32_t slot_idx;
+            uint32_t seq;
+        };
+        std::vector<PeerCommit> commits;
+        {
+            std::vector<std::shared_ptr<StreamPeerSession>> peers;
+            {
+                std::lock_guard<std::mutex> lock(stream_peers_mtx_);
+                peers.reserve(stream_peers_.size());
+                for(auto& kv : stream_peers_) {
+                    if(kv.second) {
+                        peers.push_back(kv.second);
+                    }
+                }
             }
-            continue;
+            if(peers.empty()) {
+                ++slot_fail_1s;
+            } else {
+                for(const auto& peer : peers) {
+                    std::optional<uint32_t> slot = peer->producer.acquire_write_slot();
+                    if(!slot) {
+                        ++slot_fail_1s;
+                        continue;
+                    }
+                    const uint32_t seq =
+                        peer->producer.commit_slot(*slot, monotonic_us(), slot_buf_idx);
+                    if(seq == 0) {
+                        peer->producer.cancel_write_slot(*slot);
+                        ++slot_fail_1s;
+                        continue;
+                    }
+                    commits.push_back(PeerCommit{peer, *slot, seq});
+                }
+            }
         }
 
-        if(!logged_first_commit) {
+        if(!logged_first_commit && !commits.empty()) {
             UPC_LOG_CAMERA_SERVICE(Info,
-                "first frame committed slot=%u seq=%u buf_idx=%u aligned=%d",
-                *slot, seq, slot_buf_idx,
+                "first frame committed peers=%zu seq=%u buf_idx=%u aligned=%d",
+                commits.size(), commits[0].seq, slot_buf_idx,
                 dma_source_.stride_aligned() ? 1 : 0);
             logged_first_commit = true;
         }
-        if(frame_ntf_enabled_) {
-            notify_frame(seq);
+        if(frame_ntf_enabled_ && !commits.empty()) {
+            notify_frame(commits[0].seq);
         }
-        frames_1s++;
-        last_seq  = seq;
-        last_slot = *slot;
+        if(!commits.empty()) {
+            frames_1s++;
+            last_seq  = commits[0].seq;
+            last_slot = commits[0].slot_idx;
+        }
 
-        const bool slot_released =
-            producer_.wait_slot_empty(*slot, 1000);
-        if(!slot_released) {
-            ++timeout_1s;
-            UPC_LOG_CAMERA_SERVICE(Warn,
-                "slot release timeout slot=%u seq=%u buf_idx=%u (backpressure)",
-                *slot, seq, slot_buf_idx);
+        bool all_released = true;
+        for(const auto& c : commits) {
+            const bool slot_released =
+                c.peer->producer.wait_slot_empty(c.slot_idx, kPeerWaitSlotEmptyMs);
+            if(!slot_released) {
+                all_released = false;
+                ++timeout_1s;
+                UPC_LOG_CAMERA_SERVICE(Warn,
+                    "slot release timeout sender=%u slot=%u seq=%u buf_idx=%u (backpressure)",
+                    static_cast<unsigned>(c.peer->peer_id),
+                    c.slot_idx, c.seq, slot_buf_idx);
+            }
         }
 
         // 即使 UI 释放超时，也要把底层 buffer 还回去，避免 V4L2 / padding pool 泄漏。
@@ -648,7 +793,7 @@ void CameraService::stream_thread_fn()
             dma_source_.release_padded(slot_buf_idx);
         }
 
-        if(!slot_released) {
+        if(!all_released) {
             continue;
         }
 
@@ -661,9 +806,17 @@ void CameraService::stream_thread_fn()
 
 void CameraService::send_stream_start_rsp(const middleware::Message& req, bool ok)
 {
+    send_stream_start_rsp_with_type(req, ok,
+        middleware::MsgType::APP_Camera_Stream_Start_Rsp, kUiShmName);
+}
+
+void CameraService::send_stream_start_rsp_with_type(
+    const middleware::Message& req, bool ok,
+    middleware::MsgType rsp_type, const char* shm_name)
+{
     middleware::CameraStreamInfoPayload info{};
     std::snprintf(info.shm_name, sizeof(info.shm_name), "%s",
-                  CAMERA_SHM_NAME_DEFAULT);
+                  shm_name ? shm_name : "");
     info.width         = stream_width_;
     info.height        = stream_height_;
     info.stride_y      = dma_source_.dma_stride_y();
@@ -674,7 +827,7 @@ void CameraService::send_stream_start_rsp(const middleware::Message& req, bool o
     info.ok            = ok ? 1 : 0;
 
     middleware::Message rsp(
-        middleware::MsgType::APP_Camera_Stream_Start_Rsp,
+        rsp_type,
         middleware::ModuleId::APP_CAMERA,
         req.sender_id);
     rsp.payload = middleware::MsgPayload::from_bytes(
@@ -693,8 +846,15 @@ void CameraService::send_stream_start_rsp(const middleware::Message& req, bool o
 
 void CameraService::send_stream_stop_done(const middleware::Message& req)
 {
+    send_stream_stop_done_with_type(
+        req, middleware::MsgType::APP_Camera_Stream_Stop_Done);
+}
+
+void CameraService::send_stream_stop_done_with_type(
+    const middleware::Message& req, middleware::MsgType done_type)
+{
     middleware::Message done(
-        middleware::MsgType::APP_Camera_Stream_Stop_Done,
+        done_type,
         middleware::ModuleId::APP_CAMERA,
         req.sender_id);
     middleware::MsgPort::instance().publish_async(done);

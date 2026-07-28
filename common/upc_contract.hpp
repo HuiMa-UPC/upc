@@ -105,6 +105,9 @@
 #ifndef UPC_MOD_XFR_SERVICE
 #define UPC_MOD_XFR_SERVICE 1
 #endif
+#ifndef UPC_MOD_VISUAL_SERVICE
+#define UPC_MOD_VISUAL_SERVICE 1
+#endif
 
 #else /* !UPC_DEBUG */
 
@@ -124,6 +127,7 @@
 #define UPC_MOD_CAMERA_PREVIEW 0
 #define UPC_MOD_MCU_OTA 0
 #define UPC_MOD_XFR_SERVICE 0
+#define UPC_MOD_VISUAL_SERVICE 0
 
 #endif /* UPC_DEBUG */
 
@@ -179,6 +183,14 @@ inline ProcessConfig process_config_xfr() {
     };
 }
 
+inline ProcessConfig process_config_visual() {
+    return ProcessConfig{
+        "/var/run/rongsu_visual.pid",
+        "/data/rongsu_visual",
+        "rongsu_visual",
+    };
+}
+
 // ============================================================================
 // §4 线协议 ABI 常量（帧格式实现见 ipc/ipc_wire.hpp）
 // ============================================================================
@@ -221,6 +233,7 @@ enum class ModuleId : uint32_t {
     APP_GLAVO  = 0x02,  /**< 振镜/串口后端 rongsu_glavo */
     APP_CAMERA = 0x03,  /**< 相机 / test_camera 伪相机后端 */
     APP_XFR    = 0x04,  /**< WiFi 传输后端 rongsu_xfr */
+    APP_VISUAL = 0x05,  /**< 视觉识别后端 rongsu_visual */
 };
 
 /**
@@ -368,6 +381,13 @@ enum class MsgType : uint32_t {
     // ---- GLAVO ↔ CAMERA：清粉连续录像会话（NV12@预览参数） ----
     APP_Clean_Video_Session_Start_Ntf, /**< CleanVideoSessionStartPayload */
     APP_Clean_Video_Session_Stop_Ntf,  /**< CleanVideoSessionStopPayload */
+
+    // ---- VISUAL ↔ CAMERA / VISUAL → UI：视觉识别 ----
+    VISUAL_Camera_Stream_Start_Req,     /**< CameraStreamStartReqPayload（视觉侧取流） */
+    APP_Visual_Camera_Stream_Start_Rsp, /**< CameraStreamInfoPayload */
+    VISUAL_Camera_Stream_Stop_Req,      /**< Empty */
+    APP_Visual_Camera_Stream_Stop_Done, /**< Empty */
+    APP_Visual_Rect_Ntf,                /**< VisualRectNtfPayload */
 };
 
 enum class MsgPriority : uint8_t {
@@ -603,6 +623,21 @@ struct CameraSnapshotRspPayload {
     int8_t ok;             /**< 1=成功，0=失败 */
     uint8_t reserved[3];
     char path[128];        /**< 成功时输出路径；失败为空串 */
+};
+
+struct VisualRectPoint {
+    int32_t x;
+    int32_t y;
+};
+
+/** APP_Visual_Rect_Ntf：视觉识别矩形四点（Inline） */
+struct VisualRectNtfPayload {
+    uint8_t valid;          /**< 1=检测到矩形；0=当前无矩形 */
+    uint8_t reserved[3];
+    uint32_t frame_width;   /**< 源图宽（像素） */
+    uint32_t frame_height;  /**< 源图高（像素） */
+    uint32_t frame_seq;     /**< 对应相机帧序号（若未知可填 0） */
+    VisualRectPoint pts[4]; /**< 顺时针四点坐标，单位=源图像素 */
 };
 
 /** GLAVO→CAMERA 打印录像会话（Start/Finish/Abort 共用） */

@@ -25,7 +25,8 @@ Sensor → rkaiq ISP → /dev/video0 (NV12)
   → ViCapture VIDIOC_EXPBUF 导出 dma_buf fd
   → CameraService 推流线程：
       · 经主 IPC（/tmp/upc_camera.sock）SCM_RIGHTS 一次性把所有 fd 发给 UI Hub
-      · SHM /upc_camera_preview 是 `IpcDmaFrameRing` 元数据环，只保留 slot 状态/seq/buffer_idx（不再存像素）
+      · SHM 元数据环按消费者拆分：UI `/upc_camera_preview`、Visual `/upc_camera_preview_visual`
+        （只保留 slot 状态/seq/buffer_idx，不再存像素）
   → UI CameraPreviewPlayer：
       · MsgPort::take_peer_dma_fds(APP_CAMERA) 接收 fd 表
       · 按 buffer_idx 找到 dma_buf fd
@@ -67,8 +68,10 @@ Snap 依赖预览流已开（同一 SHM）；与 UI 解码线程共享 ring，�
 
 | MsgType | `CameraService` 动作 |
 |---------|----------------------|
-| `UI_Camera_Stream_Start_Req` | 开采集 + 导出 dma fd + 建 SHM 状态环 + 启动 dma fd 旁路 + 推流线程 |
-| `UI_Camera_Stream_Stop_Req` | 停流、关闭 dma fd 旁路、销毁 SHM |
+| `UI_Camera_Stream_Start_Req` | UI 开采集 + 导出 dma fd + 建 UI SHM 状态环 + 启动推流线程 |
+| `UI_Camera_Stream_Stop_Req` | UI 停流（仅移除 UI 会话；无其他消费者时停相机） |
+| `VISUAL_Camera_Stream_Start_Req` | Visual 开并行会话 + 建 Visual SHM 状态环 |
+| `VISUAL_Camera_Stream_Stop_Req` | Visual 停流（仅移除 Visual 会话） |
 | `UI_Camera_Snapshot_Req` | 保存当前预览帧 PNG 到 `/home/photo` |
 | `APP_Print_Video_Session_Start_Ntf` | 建录像会话、开 dma fd 元数据环 consumer |
 | `APP_Print_Layer_Snap_Ntf` | 入队 LayerSnap job |

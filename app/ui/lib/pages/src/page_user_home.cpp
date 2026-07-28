@@ -251,6 +251,8 @@ lv_obj_t *g_print_area      = nullptr; /**< 摄像头 + 双底条容器（默认
 lv_obj_t *g_camera_viewport = nullptr; /**< 摄像头画面容器 */
 lv_obj_t *g_camera_hint     = nullptr; /**< 占位提示 */
 lv_obj_t *g_camera_image    = nullptr; /**< 真实视频帧图像槽（先隐藏） */
+lv_obj_t *g_camera_rect_line = nullptr; /**< 视觉矩形叠加线（打印直播） */
+lv_point_precise_t g_camera_rect_pts[5] = {};
 lv_obj_t *g_env_lbl_pm_indoor = nullptr;   /**< EXTERIOR PM2.5 数值 */
 lv_obj_t *g_env_lbl_pm_cabin  = nullptr;   /**< INTERIOR PM2.5 数值 */
 lv_obj_t *g_env_lbl_temp      = nullptr;
@@ -301,6 +303,8 @@ lv_obj_t *g_monitor_area           = nullptr; /**< 监控浮层（默认隐藏�
 lv_obj_t *g_monitor_camera_viewport= nullptr;
 lv_obj_t *g_monitor_camera_hint    = nullptr;
 lv_obj_t *g_monitor_camera_image   = nullptr; /**< 监控视频帧槽（复用同一 CameraPreviewPlayer） */
+lv_obj_t *g_monitor_rect_line      = nullptr; /**< 视觉矩形叠加线（监控预览） */
+lv_point_precise_t g_monitor_rect_pts[5] = {};
 lv_obj_t *g_monitor_photo_btn      = nullptr; /**< 监控区拍照按钮 */
 lv_obj_t *g_mon_env_pm_ext         = nullptr; /**< 右上环境面板：EXTERIOR PM2.5 数值 */
 lv_obj_t *g_mon_env_pm_int         = nullptr; /**< INTERIOR PM2.5 数值 */
@@ -309,6 +313,9 @@ lv_obj_t *g_mon_env_temp           = nullptr; /**< DEVICE TEMP 数值 */
 ui_slide_unlock_t *g_monitor_door  = nullptr; /**< 监控界面的滑动开门 */
 bool      g_monitor_active         = false;
 bool      g_monitor_photo_pending  = false;   /**< 拍照请求在途，防连按 */
+
+middleware::VisualRectNtfPayload g_visual_rect = {};
+bool g_visual_rect_ready = false;
 
 void apply_camera_preview_layout(uint32_t src_w, uint32_t src_h = 0);
 void on_camera_viewport_size_changed(lv_event_t *e);
@@ -346,6 +353,75 @@ static void cam_apply_layout(lv_obj_t *vp, lv_obj_t *img, uint32_t src_w, uint32
     lv_obj_invalidate(img);
 }
 
+static void hide_visual_rect_line(lv_obj_t* line)
+{
+    if(line) {
+        lv_obj_add_flag(line, LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
+static void draw_visual_rect_on_viewport(lv_obj_t* viewport,
+                                         lv_obj_t* line,
+                                         lv_point_precise_t pts_buf[5],
+                                         const middleware::VisualRectNtfPayload& rect)
+{
+    if(!viewport || !line || !pts_buf || rect.valid == 0 ||
+       rect.frame_width == 0 || rect.frame_height == 0) {
+        hide_visual_rect_line(line);
+        return;
+    }
+
+    lv_obj_update_layout(viewport);
+    const int32_t vp_w = lv_obj_get_width(viewport);
+    const int32_t vp_h = lv_obj_get_height(viewport);
+    if(vp_w <= 0 || vp_h <= 0) {
+        hide_visual_rect_line(line);
+        return;
+    }
+
+    const float scale_w = static_cast<float>(vp_w) /
+                          static_cast<float>(rect.frame_width);
+    const float scale_h = static_cast<float>(vp_h) /
+                          static_cast<float>(rect.frame_height);
+    const float scale = (scale_w > scale_h) ? scale_w : scale_h;
+    const float draw_w = static_cast<float>(rect.frame_width) * scale;
+    const float draw_h = static_cast<float>(rect.frame_height) * scale;
+    const float off_x = (static_cast<float>(vp_w) - draw_w) * 0.5f;
+    const float off_y = (static_cast<float>(vp_h) - draw_h) * 0.5f;
+
+    auto map_x = [&](int32_t x) -> lv_value_precise_t {
+        const float px = static_cast<float>(x) * scale + off_x;
+        return static_cast<lv_value_precise_t>(px);
+    };
+    auto map_y = [&](int32_t y) -> lv_value_precise_t {
+        const float py = static_cast<float>(y) * scale + off_y;
+        return static_cast<lv_value_precise_t>(py);
+    };
+
+    for(size_t i = 0; i < 4; ++i) {
+        pts_buf[i].x = map_x(rect.pts[i].x);
+        pts_buf[i].y = map_y(rect.pts[i].y);
+    }
+    pts_buf[4] = pts_buf[0];
+    lv_line_set_points(line, pts_buf, 5);
+    lv_obj_remove_flag(line, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_move_foreground(line);
+    lv_obj_invalidate(line);
+}
+
+static void refresh_visual_rect_overlay()
+{
+    if(!g_visual_rect_ready || g_visual_rect.valid == 0) {
+        hide_visual_rect_line(g_camera_rect_line);
+        hide_visual_rect_line(g_monitor_rect_line);
+        return;
+    }
+    draw_visual_rect_on_viewport(g_camera_viewport, g_camera_rect_line,
+                                 g_camera_rect_pts, g_visual_rect);
+    draw_visual_rect_on_viewport(g_monitor_camera_viewport, g_monitor_rect_line,
+                                 g_monitor_rect_pts, g_visual_rect);
+}
+
 void apply_camera_preview_layout(uint32_t src_w, uint32_t src_h)
 {
     cam_apply_layout(g_camera_viewport, g_camera_image, src_w, src_h);
@@ -361,6 +437,7 @@ void on_camera_viewport_size_changed(lv_event_t * /*e*/)
         }
     }
     apply_camera_preview_layout(src_w);
+    refresh_visual_rect_overlay();
 }
 
 void on_monitor_viewport_size_changed(lv_event_t * /*e*/)
@@ -373,6 +450,7 @@ void on_monitor_viewport_size_changed(lv_event_t * /*e*/)
         }
     }
     cam_apply_layout(g_monitor_camera_viewport, g_monitor_camera_image, src_w, 0);
+    refresh_visual_rect_overlay();
 }
 
 void on_files_click(lv_event_t *)
@@ -1788,6 +1866,13 @@ lv_obj_t *build_printing_area(lv_obj_t *parent)
     /* 真实视频帧 lv_image 占位（默认隐藏） */
     g_camera_image = lv_image_create(g_camera_viewport);
     lv_obj_add_flag(g_camera_image, LV_OBJ_FLAG_HIDDEN);
+    g_camera_rect_line = lv_line_create(g_camera_viewport);
+    lv_obj_remove_style_all(g_camera_rect_line);
+    lv_obj_set_style_line_width(g_camera_rect_line, 3, 0);
+    lv_obj_set_style_line_color(g_camera_rect_line, user_color_status_err, 0);
+    lv_obj_set_style_line_rounded(g_camera_rect_line, true, 0);
+    lv_obj_set_style_line_opa(g_camera_rect_line, LV_OPA_90, 0);
+    lv_obj_add_flag(g_camera_rect_line, LV_OBJ_FLAG_HIDDEN);
     apply_camera_preview_layout(1024u);
 
     /* 左右渐变遮罩：压在画面之上、底条与结果页浮层之下，保证压字处可读 */
@@ -2017,6 +2102,13 @@ lv_obj_t *build_monitor_area(lv_obj_t *parent)
 
     g_monitor_camera_image = lv_image_create(g_monitor_camera_viewport);
     lv_obj_add_flag(g_monitor_camera_image, LV_OBJ_FLAG_HIDDEN);
+    g_monitor_rect_line = lv_line_create(g_monitor_camera_viewport);
+    lv_obj_remove_style_all(g_monitor_rect_line);
+    lv_obj_set_style_line_width(g_monitor_rect_line, 3, 0);
+    lv_obj_set_style_line_color(g_monitor_rect_line, user_color_status_err, 0);
+    lv_obj_set_style_line_rounded(g_monitor_rect_line, true, 0);
+    lv_obj_set_style_line_opa(g_monitor_rect_line, LV_OPA_90, 0);
+    lv_obj_add_flag(g_monitor_rect_line, LV_OBJ_FLAG_HIDDEN);
 
     /* 左右渐变遮罩：压在画面之上、下方各控件之下 */
     build_camera_gradient_masks(area);
@@ -2258,6 +2350,21 @@ void update_cabin_metric(lv_obj_t *val, lv_obj_t *unit, float v)
 void page_user_home_update_camera_preview_layout(uint32_t src_w, uint32_t src_h)
 {
     apply_camera_preview_layout(src_w, src_h);
+    refresh_visual_rect_overlay();
+}
+
+void page_user_home_set_visual_rect(const middleware::VisualRectNtfPayload* rect)
+{
+    if(!rect) {
+        g_visual_rect = {};
+        g_visual_rect_ready = false;
+        hide_visual_rect_line(g_camera_rect_line);
+        hide_visual_rect_line(g_monitor_rect_line);
+        return;
+    }
+    g_visual_rect = *rect;
+    g_visual_rect_ready = true;
+    refresh_visual_rect_overlay();
 }
 
 void page_user_home_refresh(bool /*force*/)

@@ -179,6 +179,11 @@ scripts/rongsu.sh start   # glavo + rongsu_camera → ui
 | `APP_Camera_Frame_Ntf` | — | Camera→UI | `CameraFrameNtfPayload` | （可选） | 帧序号；默认关 |
 | `UI_Camera_Snapshot_Req` | — | UI→Camera | Empty | `send_snapshot_req` | 存当前帧 PNG 到 `/home/photo` |
 | `APP_Camera_Snapshot_Rsp` | — | Camera→UI | `CameraSnapshotRspPayload` | `register_snapshot_rsp` | — |
+| `VISUAL_Camera_Stream_Start_Req` | — | Visual→Camera | `CameraStreamStartReqPayload`/Empty | — | 视觉进程申请并行取流 |
+| `APP_Visual_Camera_Stream_Start_Rsp` | — | Camera→Visual | `CameraStreamInfoPayload` | — | 视觉侧 SHM 参数 / dma fd |
+| `VISUAL_Camera_Stream_Stop_Req` | — | Visual→Camera | Empty | — | 视觉进程停止取流 |
+| `APP_Visual_Camera_Stream_Stop_Done` | — | Camera→Visual | Empty | — | 视觉取流关闭确认 |
+| `APP_Visual_Rect_Ntf` | — | Visual→UI | `VisualRectNtfPayload` | `register_visual_rect` | 矩形四点坐标，UI 叠加画框 |
 | `APP_Print_Video_Session_Start_Ntf` | — | Glavo→Camera（Hub FWD） | `PrintVideoSessionPayload` | — | `PrintVideoNotify` / `CameraService` |
 | `APP_Print_Layer_Snap_Ntf` | — | Glavo→Camera（Hub FWD） | `PrintVideoLayerSnapPayload` | — | 换层 Snap |
 | `APP_Print_Video_Session_Finish_Ntf` | — | Glavo→Camera（Hub FWD） | `PrintVideoSessionPayload` | — | 保存 `/home/video/{job_ts}/1.png...N.png` + `thumb.rthm` + manifest `complete` |
@@ -245,7 +250,7 @@ Wire 协议版本：`WIRE_VERSION`（[`ipc_wire.hpp`](../ipc/ipc_wire.hpp)）。
 ### 5.1 现状（Broker 已落地）
 
 ```
-rongsu_broker ──listen──► /tmp/upc_broker.sock ◄── UI / Glavo / Camera (Client)
+rongsu_broker ──listen──► /tmp/upc_broker.sock ◄── UI / Glavo / Camera / Visual (Client)
 ```
 
 - 各进程：`set_mode_ipc_client(ModuleId, UPC_BROKER_SOCKET_DEFAULT)`
