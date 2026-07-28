@@ -197,11 +197,9 @@ public:
 
     void on_sensor_report(const serial_sensor_report_t& report);
     void on_motion_pos_report(const serial_motion_pos_t& pos);
-    void on_laser_report(const serial_laser_report_t& report);
     void publish_env_update_ntf();
     void publish_debug_sensor_ntf(const serial_sensor_report_t& report);
     void publish_debug_axis_ntf(const serial_motion_pos_t& pos);
-    void publish_debug_laser_ntf(const serial_laser_report_t& report);
     void drain_serial_tx_queue();
 
     /** TCP 常态应答（运动/OTA），供分帧回调使用 */

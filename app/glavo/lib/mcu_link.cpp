@@ -698,9 +698,6 @@ inline uint16_t laser3_rd_le16(const uint8_t* p)
                                     (static_cast<uint16_t>(p[1]) << 8u));
 }
 
-/** 记住最近一次 3ST 上报的型号，供 2ST（无型号字段）回退使用。仅链路线程访问。 */
-uint8_t g_last_laser_type = 0;
-
 /** 解析 3ST 激光扩展上报；成功返回 0，非匹配/校验失败返回负值。 */
 int parse_laser_report3(const uint8_t* d, size_t len, LaserReport3* out)
 {
@@ -753,16 +750,6 @@ void publish_laser_ntf(uint8_t type, uint16_t status, uint16_t alarm,
 }
 
 } // namespace
-
-void McuLink::on_laser_report(const serial_laser_report_t& report)
-{
-    publish_debug_laser_ntf(report);    /* 调试页 Laser 标签状态回读（2ST：无型号，型号回退最近 3ST） */
-
-    UPC_LOG_MCU_LINK(Info,
-        "laser(2ST): status=0x%04X alarm=0x%04X power=%u temp=%u type=%u",
-        report.status, report.alarm, report.power_raw, report.pump_temp_raw,
-        g_last_laser_type);
-}
 
 void McuLink::publish_env_update_ntf()
 {
@@ -846,13 +833,6 @@ void McuLink::publish_debug_axis_ntf(const serial_motion_pos_t& pos)
     middleware::MsgPort::instance().publish_async(ntf);
 }
 
-void McuLink::publish_debug_laser_ntf(const serial_laser_report_t& report)
-{
-    /* 2ST 不含型号与电流：型号回退最近一次 3ST 值，电流置 0。 */
-    publish_laser_ntf(g_last_laser_type, report.status, report.alarm,
-        report.power_raw, report.pump_temp_raw, 0);
-}
-
 void McuLink::notify_serial_event(serial_event_t evt)
 {
     const char* evt_name = "UNKNOWN";
@@ -934,10 +914,9 @@ void McuLink::handle_serial_rx_frame(const uint8_t* frame, size_t len)
         return;
     }
 
-/* 激光器扩展上报（0x9B + TLV 0x04）：型号/状态/报警/功率/温度/电流（3ST，应用层解析） */
+/* 激光器扩展上报（0x9B + TLV 0x04）：型号/状态/报警/功率/温度/电流（3ST；2ST 已由下位机停发，不再解析） */
 LaserReport3 laser3{};
 if(parse_laser_report3(frame, len, &laser3) == 0) {
-    g_last_laser_type = laser3.type;    /* 供后续 2ST 回退使用 */
     publish_laser_ntf(laser3.type, laser3.status, laser3.alarm,
                       laser3.power_raw, laser3.temp_raw, laser3.current_raw);
     UPC_LOG_MCU_LINK(Info,
@@ -946,13 +925,6 @@ if(parse_laser_report3(frame, len, &laser3) == 0) {
         laser3.temp_raw, laser3.current_raw);
     return;
 }
-
-/* 激光器状态上报（0x9B + TLV 0x03）：状态/报警/功率/泵浦温度（2ST，兼容旧固件） */
-    serial_laser_report_t laser{};
-    if(serial_parse_laser_report(frame, len, &laser) == 0) {
-        on_laser_report(laser);
-        return;
-    }
 
     const serial_event_t evt = serial_parse_frame(frame, len);
     if(evt != SERIAL_EVT_NONE) {

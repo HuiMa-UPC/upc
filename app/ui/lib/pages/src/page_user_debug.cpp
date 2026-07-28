@@ -1698,7 +1698,7 @@ void bind_debug_callbacks()
     });
 
     proxy.register_laser([](const middleware::DebugLaserStatePayload &p) {
-        /* 型号：优先用本次上报（3ST）；若为未知（2ST 无型号且从未收到 3ST），沿用上次已知型号。 */
+        /* 型号来自 3ST 上报；若偶发未知则沿用上次已知型号，避免界面抖动。 */
         if(p.laser_type != kLaserTypeUnknown) {
             g_laser_type_code = p.laser_type;
         }
@@ -1751,7 +1751,7 @@ void bind_debug_callbacks()
             lv_label_set_text_fmt(g_laser_power_lbl, "%u%%", pct);
         }
 
-        /* 电流：JFSC 单位 0.01A；AL 单位 0.1A（2ST 无电流字段，显示 0.00A） */
+        /* 电流：JFSC 单位 0.01A；AL 单位 0.1A（3ST 上报） */
         if(g_laser_current_lbl) {
             if(is_al) {
                 lv_label_set_text_fmt(g_laser_current_lbl, "%u.%u A",
