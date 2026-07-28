@@ -276,15 +276,6 @@ void UiMsgProxy::init()
             }
         }));
 
-    subs_.push_back(bus.subscribe(
-        middleware::MsgType::APP_Visual_Rect_Ntf, middleware::ModuleId::UI,
-        [this](const middleware::Message& msg) {
-            middleware::VisualRectNtfPayload p{};
-            if(visual_rect_cb_ && read_inline_pod(msg, p)) {
-                visual_rect_cb_(p);
-            }
-        }));
-
 }
 
 /* 解析 [WifiListHeader][WifiEntryPayload × count]（BufferRef/Inline 皆可），仿 Fs_DirOpen_Rsp。 */
@@ -429,11 +420,6 @@ void UiMsgProxy::register_xfr_transfer_progress(XfrTransferProgressCb cb)
 void UiMsgProxy::register_usb_hotplug(UsbHotplugCb cb)
 {
     usb_hotplug_cb_ = std::move(cb);
-}
-
-void UiMsgProxy::register_visual_rect(VisualRectCb cb)
-{
-    visual_rect_cb_ = std::move(cb);
 }
 
 

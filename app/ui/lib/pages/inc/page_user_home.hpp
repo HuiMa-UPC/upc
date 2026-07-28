@@ -32,7 +32,6 @@ void page_user_home_reset_result_slide(void);
 void page_user_home_request_camera_preview(void);
 /** 按 viewport 宽度等比缩放预览（宽贴满，高超出的居中裁剪）；src_h=0 时用流高或 1280 默认 */
 void page_user_home_update_camera_preview_layout(uint32_t src_w, uint32_t src_h);
-void page_user_home_set_visual_rect(const middleware::VisualRectNtfPayload* rect);
 
 #ifdef __cplusplus
 }

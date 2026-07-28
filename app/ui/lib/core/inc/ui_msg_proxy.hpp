@@ -40,9 +40,6 @@ using XfrPairPinCb     = std::function<void(const middleware::XfrPairPinPayload&
 using XfrFileReceivedCb = std::function<void(const middleware::XfrFileReceivedPayload&)>;
 using XfrTransferProgressCb = std::function<void(const middleware::XfrTransferProgressPayload&)>;
 using UsbHotplugCb     = std::function<void(const middleware::UsbHotplugPayload&)>;
-using VisualRectCb     = std::function<void(const middleware::VisualRectNtfPayload&)>;
-
-                                            
 
 class UiMsgProxy {
 public:
@@ -131,7 +128,6 @@ public:
     void register_xfr_file_received(XfrFileReceivedCb cb);
     void register_xfr_transfer_progress(XfrTransferProgressCb cb);
     void register_usb_hotplug(UsbHotplugCb cb);
-    void register_visual_rect(VisualRectCb cb);
 
 private:
     UiMsgProxy() = default;
@@ -186,7 +182,6 @@ private:
     XfrFileReceivedCb xfr_file_received_cb_;
     XfrTransferProgressCb xfr_transfer_progress_cb_;
     UsbHotplugCb usb_hotplug_cb_;
-    VisualRectCb visual_rect_cb_;
 };
 
 } // namespace ui

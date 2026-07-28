@@ -655,9 +655,6 @@ void wire_msg_proxy()
         ui_toast_show("USB removed", user_color_status_err, 1800);
     });
 
-    proxy.register_visual_rect([](const middleware::VisualRectNtfPayload& p) {
-        page_user_home_set_visual_rect(&p);
-    });
 }
 
 void backend_reset_session()
@@ -667,7 +664,6 @@ void backend_reset_session()
     g_file_tab = FileTab::Local;
     g_sel_index = -1;
     close_xfr_recv_dlg();
-    page_user_home_set_visual_rect(nullptr);
     ui::UiMsgProxy::instance().send_supply_status();
 }
 
