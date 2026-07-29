@@ -282,7 +282,9 @@ void CameraService::handle_print_video(const middleware::Message& msg)
             return;
         }
         print_video_.set_stream_geometry(stream_width_, stream_height_);
+        print_h264_.set_stream_geometry(stream_width_, stream_height_, stream_fps_);
         print_video_.on_session_start(info);
+        print_h264_.on_session_start(info);
         break;
     }
     case middleware::MsgType::APP_Print_Layer_Snap_Ntf: {
@@ -301,8 +303,10 @@ void CameraService::handle_print_video(const middleware::Message& msg)
         }
         if(msg.type == middleware::MsgType::APP_Print_Video_Session_Finish_Ntf) {
             print_video_.on_session_finish(info);
+            print_h264_.on_session_finish(info);
         } else {
             print_video_.on_session_abort(info);
+            print_h264_.on_session_abort(info);
         }
         break;
     }
@@ -343,6 +347,7 @@ void CameraService::handle_stream_start(const middleware::Message& msg)
         stop_stream_.store(false);
         stream_running_.store(true);
         print_video_.set_stream_geometry(stream_width_, stream_height_);
+        print_h264_.set_stream_geometry(stream_width_, stream_height_, stream_fps_);
         clean_video_.set_stream_geometry(stream_width_, stream_height_, stream_fps_);
         stream_thread_ = std::thread(&CameraService::stream_thread_fn, this);
 
@@ -376,6 +381,7 @@ void CameraService::handle_visual_stream_start(const middleware::Message& msg)
         stop_stream_.store(false);
         stream_running_.store(true);
         print_video_.set_stream_geometry(stream_width_, stream_height_);
+        print_h264_.set_stream_geometry(stream_width_, stream_height_, stream_fps_);
         clean_video_.set_stream_geometry(stream_width_, stream_height_, stream_fps_);
         stream_thread_ = std::thread(&CameraService::stream_thread_fn, this);
 
@@ -696,6 +702,7 @@ void CameraService::stream_thread_fn()
             update_latest_nv12_snapshot(src_y, src_uv, capture_.stride_y(),
                                         stream_width_, stream_height_);
             clean_video_.on_frame_nv12(src_y, src_uv, capture_.stride_y());
+            print_h264_.on_frame_nv12(src_y, src_uv, capture_.stride_y());
         }
 
         if(!dma_source_.stride_aligned()) {

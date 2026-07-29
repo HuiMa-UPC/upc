@@ -323,6 +323,14 @@ bool GlavoService::init()
             static_cast<double>(pm25_clean_threshold_));
     }
 
+    print_h264_continuous_on_ = false;
+    clean_video_record_on_ = false;
+    clean_video_session_started_ = false;
+    PrintVideoNotify::instance().set_print_h264_continuous(print_h264_continuous_on_);
+    UPC_LOG_GLAVO_SERVICE(Info, "print h264 continuous=%d clean record=%d",
+                          print_h264_continuous_on_ ? 1 : 0,
+                          clean_video_record_on_ ? 1 : 0);
+
     parser::ParserContext::instance().load_calibration(CAL_DEFAULT_FILE_PATH);
     parser::ParserManager::instance().set_ring_buffer_sink(
         [](parser::RingBuffer* rb) {
@@ -426,6 +434,10 @@ bool GlavoService::start()
         middleware::MsgType::UI_Debug_Laser_Power_Set_Req,
         middleware::MsgType::UI_Debug_Laser_Power_Reset_Req,
         middleware::MsgType::UI_Debug_Laser_AlarmReset_Req,
+        middleware::MsgType::UI_Debug_Print_H264_Record_Set_Req,
+        middleware::MsgType::UI_Debug_Print_H264_Record_Get_Req,
+        middleware::MsgType::UI_Debug_Clean_Record_Set_Req,
+        middleware::MsgType::UI_Debug_Clean_Record_Get_Req,
     };
     for(middleware::MsgType t : k_subs) {
         subscribe(t, [this](const middleware::Message& msg) { on_message(msg); });
@@ -434,6 +446,8 @@ bool GlavoService::start()
     worker_running_.store(true);
     worker_thread_ = std::thread(&GlavoService::worker_loop, this);
     start_usb_hotplug_monitor();
+    publish_debug_print_h264_record_state();
+    publish_debug_clean_record_state();
     return true;
 }
 
@@ -597,6 +611,7 @@ void GlavoService::stop_clean_worker()
     clean_stop_rsp_target_.store(0);
     clean_test_done_pending_.store(false);
     clean_test_active_ = false;
+    clean_video_session_started_ = false;
     clean_test_session_id_[0] = '\0';
     clean_test_job_name_[0] = '\0';
 }
@@ -749,6 +764,18 @@ void GlavoService::handle_message(const middleware::Message& msg)
             break;
         case middleware::MsgType::UI_Debug_Laser_AlarmReset_Req:
             handle_debug_laser_alarm_reset(msg);
+            break;
+        case middleware::MsgType::UI_Debug_Print_H264_Record_Set_Req:
+            handle_debug_print_h264_record_set(msg);
+            break;
+        case middleware::MsgType::UI_Debug_Print_H264_Record_Get_Req:
+            handle_debug_print_h264_record_get(msg);
+            break;
+        case middleware::MsgType::UI_Debug_Clean_Record_Set_Req:
+            handle_debug_clean_record_set(msg);
+            break;
+        case middleware::MsgType::UI_Debug_Clean_Record_Get_Req:
+            handle_debug_clean_record_get(msg);
             break;
         default:
             break;
@@ -1659,14 +1686,17 @@ void GlavoService::publish_clean_test_start_rsp(uint32_t target_id, bool accepte
 }
 
 void GlavoService::publish_clean_test_done(uint8_t result_code, bool raw_retained,
+                                           bool has_mp4,
                                            const std::string& mp4_rel_path)
 {
     middleware::CleanTestDonePayload ntf{};
     ntf.result_code = result_code;
     ntf.raw_retained = raw_retained ? 1 : 0;
-    ntf.has_mp4 = 1;
-    std::snprintf(ntf.mp4_rel_path, sizeof(ntf.mp4_rel_path), "%s",
-                  mp4_rel_path.c_str());
+    ntf.has_mp4 = has_mp4 ? 1 : 0;
+    if(has_mp4) {
+        std::snprintf(ntf.mp4_rel_path, sizeof(ntf.mp4_rel_path), "%s",
+                      mp4_rel_path.c_str());
+    }
     middleware::Message out(middleware::MsgType::APP_Clean_Test_Done_Ntf,
         middleware::ModuleId::APP_GLAVO,
         middleware::ModuleId::UI);
@@ -1723,15 +1753,22 @@ void GlavoService::on_clean_test_done(uint8_t result_code)
     if(!clean_test_active_) {
         return;
     }
-    const bool keep_raw = result_code != 0;
-    notify_clean_video_stop(result_code, keep_raw);
+    const bool has_mp4 = clean_video_session_started_;
+    const bool keep_raw = has_mp4 && (result_code != 0);
+    if(clean_video_session_started_) {
+        notify_clean_video_stop(result_code, keep_raw);
+        clean_video_session_started_ = false;
+    }
     clean_test_active_ = false;
 
-    std::string mp4_rel_path = sanitize_job_name(clean_test_job_name_);
-    if(!mp4_rel_path.empty()) {
-        mp4_rel_path += "/clean_timelapse.mp4";
+    std::string mp4_rel_path;
+    if(has_mp4) {
+        mp4_rel_path = sanitize_job_name(clean_test_job_name_);
+        if(!mp4_rel_path.empty()) {
+            mp4_rel_path += "/clean_timelapse.mp4";
+        }
     }
-    publish_clean_test_done(result_code, keep_raw, mp4_rel_path);
+    publish_clean_test_done(result_code, keep_raw, has_mp4, mp4_rel_path);
 }
 
 void GlavoService::handle_clean_test_start_request(const middleware::Message& msg)
@@ -1760,7 +1797,11 @@ void GlavoService::handle_clean_test_start_request(const middleware::Message& ms
 
     clean_test_active_ = true;
     debug_tx(frame, n);
-    notify_clean_video_start(req);
+    clean_video_session_started_ = false;
+    if(clean_video_record_on_) {
+        notify_clean_video_start(req);
+        clean_video_session_started_ = true;
+    }
     publish_clean_test_start_rsp(static_cast<uint32_t>(msg.sender_id), true);
 }
 
@@ -1773,7 +1814,10 @@ void GlavoService::handle_clean_test_close_request(const middleware::Message& ms
     }
 
     if(clean_test_active_) {
-        notify_clean_video_stop(0xfe, true);
+        if(clean_video_session_started_) {
+            notify_clean_video_stop(0xfe, true);
+            clean_video_session_started_ = false;
+        }
         clean_test_active_ = false;
     }
     publish_clean_test_close_rsp(static_cast<uint32_t>(msg.sender_id));
@@ -2271,6 +2315,69 @@ void GlavoService::handle_debug_laser_alarm_reset(const middleware::Message& msg
     (void)msg;
     uint8_t buf[SERIAL_DEBUG_MAX_FRAME];
     debug_tx(buf, serial_debug_build_laser_alarm_reset(buf, sizeof(buf)));
+}
+
+void GlavoService::publish_debug_print_h264_record_state()
+{
+    middleware::DebugOnOffPayload p{};
+    p.on = print_h264_continuous_on_ ? 1 : 0;
+    middleware::Message ntf(
+        middleware::MsgType::GLAVO_Debug_Print_H264_Record_Ntf,
+        middleware::ModuleId::APP_GLAVO,
+        middleware::ModuleId::UI);
+    ntf.payload = middleware::MsgPayload::from_bytes(
+        reinterpret_cast<const uint8_t*>(&p), sizeof(p));
+    (void)publish_async(ntf);
+}
+
+void GlavoService::handle_debug_print_h264_record_set(const middleware::Message& msg)
+{
+    middleware::DebugOnOffPayload p{};
+    if(!read_inline_pod(msg.payload, p)) {
+        return;
+    }
+    print_h264_continuous_on_ = (p.on != 0);
+    PrintVideoNotify::instance().set_print_h264_continuous(print_h264_continuous_on_);
+    UPC_LOG_GLAVO_SERVICE(Info, "debug print_h264_continuous=%d",
+                          print_h264_continuous_on_ ? 1 : 0);
+    publish_debug_print_h264_record_state();
+}
+
+void GlavoService::handle_debug_print_h264_record_get(const middleware::Message& msg)
+{
+    (void)msg;
+    publish_debug_print_h264_record_state();
+}
+
+void GlavoService::publish_debug_clean_record_state()
+{
+    middleware::DebugOnOffPayload p{};
+    p.on = clean_video_record_on_ ? 1 : 0;
+    middleware::Message ntf(
+        middleware::MsgType::GLAVO_Debug_Clean_Record_Ntf,
+        middleware::ModuleId::APP_GLAVO,
+        middleware::ModuleId::UI);
+    ntf.payload = middleware::MsgPayload::from_bytes(
+        reinterpret_cast<const uint8_t*>(&p), sizeof(p));
+    (void)publish_async(ntf);
+}
+
+void GlavoService::handle_debug_clean_record_set(const middleware::Message& msg)
+{
+    middleware::DebugOnOffPayload p{};
+    if(!read_inline_pod(msg.payload, p)) {
+        return;
+    }
+    clean_video_record_on_ = (p.on != 0);
+    UPC_LOG_GLAVO_SERVICE(Info, "debug clean_video_record=%d",
+                          clean_video_record_on_ ? 1 : 0);
+    publish_debug_clean_record_state();
+}
+
+void GlavoService::handle_debug_clean_record_get(const middleware::Message& msg)
+{
+    (void)msg;
+    publish_debug_clean_record_state();
 }
 
 } // namespace upc::glavo

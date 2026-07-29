@@ -348,6 +348,10 @@ enum class MsgType : uint32_t {
     UI_Debug_Laser_Power_Set_Req,   /**< DebugLaserPowerPayload：激光手动功率 */
     UI_Debug_Laser_Power_Reset_Req, /**< Empty：取消手动功率，恢复外控 */
     UI_Debug_Laser_AlarmReset_Req,  /**< Empty：激光器报警复位（固定 1301） */
+    UI_Debug_Print_H264_Record_Set_Req, /**< DebugOnOffPayload：打印期连续 H264 录像开关（仅本次运行） */
+    UI_Debug_Print_H264_Record_Get_Req, /**< Empty：查询当前打印期连续 H264 录像开关状态 */
+    UI_Debug_Clean_Record_Set_Req,      /**< DebugOnOffPayload：清粉录像开关（仅本次运行） */
+    UI_Debug_Clean_Record_Get_Req,      /**< Empty：查询当前清粉录像开关状态 */
 
     // ---- GLAVO → UI：调试页状态回读（按模块拆分） ----
     GLAVO_Debug_Sensor_Ntf = 0x1200, /**< DebugSensorPayload：顶部 7 路传感器 */
@@ -360,6 +364,8 @@ enum class MsgType : uint32_t {
     GLAVO_Debug_Fan_Ntf,            /**< DebugFanStatePayload */
     GLAVO_Debug_Switch_Ntf,         /**< DebugSwitchStatePayload */
     GLAVO_Debug_Laser_Ntf,          /**< DebugLaserStatePayload：激光器状态/报警/功率/温度 */
+    GLAVO_Debug_Print_H264_Record_Ntf, /**< DebugOnOffPayload：打印期连续 H264 录像开关状态 */
+    GLAVO_Debug_Clean_Record_Ntf,      /**< DebugOnOffPayload：清粉录像开关状态 */
 
     // ---- UI ↔ GLAVO：网络 / WiFi（ConnMan 后端） ----
     UI_Wifi_Enable_Req = 0x1300, /**< WifiEnableReqPayload：开/关 WiFi */
@@ -660,6 +666,8 @@ struct PrintVideoSessionPayload {
     uint32_t width;          /**< 0=Camera 默认 */
     uint32_t height;         /**< 0=Camera 默认 */
     uint32_t layer_fps;      /**< MP4 层帧率；0=默认 */
+    uint8_t  h264_continuous_on; /**< 1=本次打印会话启用连续 H264 录制 */
+    uint8_t  reserved[3];
 };
 
 /** GLAVO→CAMERA 单层拍照（换层排空后、LAYER_DONE 前） */

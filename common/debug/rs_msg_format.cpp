@@ -168,6 +168,10 @@ const char* upc_msg_type_name(MsgType type) {
         case MsgType::UI_Debug_Laser_Power_Set_Req: return "UI_Debug_Laser_Power_Set_Req";
         case MsgType::UI_Debug_Laser_Power_Reset_Req: return "UI_Debug_Laser_Power_Reset_Req";
         case MsgType::UI_Debug_Laser_AlarmReset_Req: return "UI_Debug_Laser_AlarmReset_Req";
+        case MsgType::UI_Debug_Print_H264_Record_Set_Req: return "UI_Debug_Print_H264_Record_Set_Req";
+        case MsgType::UI_Debug_Print_H264_Record_Get_Req: return "UI_Debug_Print_H264_Record_Get_Req";
+        case MsgType::UI_Debug_Clean_Record_Set_Req: return "UI_Debug_Clean_Record_Set_Req";
+        case MsgType::UI_Debug_Clean_Record_Get_Req: return "UI_Debug_Clean_Record_Get_Req";
         case MsgType::GLAVO_Debug_Sensor_Ntf: return "GLAVO_Debug_Sensor_Ntf";
         case MsgType::GLAVO_Debug_Axis_Ntf: return "GLAVO_Debug_Axis_Ntf";
         case MsgType::GLAVO_Debug_Device_Ntf: return "GLAVO_Debug_Device_Ntf";
@@ -178,6 +182,8 @@ const char* upc_msg_type_name(MsgType type) {
         case MsgType::GLAVO_Debug_Fan_Ntf: return "GLAVO_Debug_Fan_Ntf";
         case MsgType::GLAVO_Debug_Switch_Ntf: return "GLAVO_Debug_Switch_Ntf";
         case MsgType::GLAVO_Debug_Laser_Ntf: return "GLAVO_Debug_Laser_Ntf";
+        case MsgType::GLAVO_Debug_Print_H264_Record_Ntf: return "GLAVO_Debug_Print_H264_Record_Ntf";
+        case MsgType::GLAVO_Debug_Clean_Record_Ntf: return "GLAVO_Debug_Clean_Record_Ntf";
         default: return "Msg";
     }
 }

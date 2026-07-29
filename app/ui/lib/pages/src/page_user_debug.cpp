@@ -88,6 +88,10 @@ lv_obj_t *g_dev_state[4]   = { nullptr };   /**< 设备快捷行状态字（已�
 lv_obj_t *g_fan_duty_ta      = nullptr;     /**< 其他控制：风扇占空比输入 */
 lv_obj_t *g_print_layer_ta   = nullptr;     /**< 其他控制：打印层厚输入 */
 lv_obj_t *g_print_balance_ta = nullptr;     /**< 其他控制：打印平衡系数×1000 输入 */
+lv_obj_t *g_print_h264_btn   = nullptr;     /**< 其他控制：打印期 H264 开关按钮 */
+lv_obj_t *g_print_h264_state_lbl = nullptr; /**< 其他控制：打印期 H264 状态文本 */
+lv_obj_t *g_clean_record_btn = nullptr;     /**< 其他控制：清粉录像开关按钮 */
+lv_obj_t *g_clean_record_state_lbl = nullptr; /**< 其他控制：清粉录像状态文本 */
 
 /* 设备快捷行状态字（受 Montserrat 字库约束，沿用英文） */
 const char *const kDevOn[4]  = { "Awake", "Open", "Running", "On" };
@@ -898,7 +902,7 @@ struct DbgToggleCtx {
     lv_obj_t   *state_lbl;
     const char *on_txt;
     const char *off_txt;
-    uint8_t     kind;   /**< 0 粉桶 / 1 推粉 / 2 风扇 / 3 其他开关 / 4 清粉 */
+    uint8_t     kind;   /**< 0 粉桶 / 1 推粉 / 2 风扇 / 3 其他开关 / 4 清粉 / 5 打印H264 / 6 清粉录像 */
     uint8_t     arg;    /**< 粉桶号 / DebugSwitchTarget */
 };
 
@@ -925,6 +929,10 @@ void on_dbg_toggle(lv_event_t *e)
         case 4: if(on) proxy.send_clean_test_start();          /* 开：启动清粉测试 */
                 else   proxy.send_clean_test_close();          /* 关：中止清粉测试 (TLV 0x21) */
                 break;
+        case 5: proxy.send_print_h264_record_set(on);          /* 打印期连续 H264 录像总开关（仅本次运行） */
+                break;
+        case 6: proxy.send_clean_record_set(on);               /* 清粉录像总开关（仅本次运行） */
+                break;
         default: break;
     }
 }
@@ -935,7 +943,9 @@ lv_obj_t *make_dbg_toggle(lv_obj_t *parent, const char *name,
                           const char *on_txt, const char *off_txt,
                           const char *sym, bool initial_on,
                           uint8_t kind, uint8_t arg, bool vertical = true,
-                          int32_t btn_sz = 0)
+                          int32_t btn_sz = 0,
+                          lv_obj_t **out_btn = nullptr,
+                          lv_obj_t **out_state = nullptr)
 {
     const int32_t toggle_btn_sz = (btn_sz > 0) ? btn_sz : dbg_round_btn_sz();
     lv_obj_t *grp = lv_obj_create(parent);
@@ -1001,6 +1011,12 @@ lv_obj_t *make_dbg_toggle(lv_obj_t *parent, const char *name,
     auto *ctx = new DbgToggleCtx{ state, on_txt, off_txt, kind, arg };
     lv_obj_add_event_cb(btn, on_dbg_toggle, LV_EVENT_VALUE_CHANGED, ctx);
     lv_obj_add_event_cb(btn, on_dbg_toggle_delete, LV_EVENT_DELETE, ctx);
+    if(out_btn) {
+        *out_btn = btn;
+    }
+    if(out_state) {
+        *out_state = state;
+    }
 
     lv_obj_t *ic = lv_label_create(btn);
     lv_label_set_text(ic, sym);
@@ -1302,6 +1318,12 @@ void build_other_switches_card(lv_obj_t *parent)
     make_dbg_toggle(rowB, "Base Heat", "On", "Off", LV_SYMBOL_POWER, false, 3,
                     static_cast<uint8_t>(DebugSwitchTarget::BaseHeat));
     build_moment_motor_controls(rowB, "Inner Door", 1);
+
+    lv_obj_t *rowC = make_switch_grid_row(grid);
+    make_dbg_toggle(rowC, "Print H264 Rec", "On", "Off", LV_SYMBOL_PLAY, false,
+                    5, 0, true, 0, &g_print_h264_btn, &g_print_h264_state_lbl);
+    make_dbg_toggle(rowC, "Clean Video Rec", "On", "Off", LV_SYMBOL_PLAY, false,
+                    6, 0, true, 0, &g_clean_record_btn, &g_clean_record_state_lbl);
 }
 
 lv_obj_t *build_other_tab(lv_obj_t *body)
@@ -1766,6 +1788,36 @@ void bind_debug_callbacks()
 
         update_laser_alarms(p.alarm, type);
     });
+
+    proxy.register_print_h264_record([](bool on) {
+        if(g_print_h264_btn) {
+            if(on) {
+                lv_obj_add_state(g_print_h264_btn, LV_STATE_CHECKED);
+            } else {
+                lv_obj_clear_state(g_print_h264_btn, LV_STATE_CHECKED);
+            }
+        }
+        if(g_print_h264_state_lbl) {
+            lv_label_set_text(g_print_h264_state_lbl, on ? "On" : "Off");
+            lv_obj_set_style_text_color(g_print_h264_state_lbl,
+                                        on ? user_color_accent : user_color_text_dim, 0);
+        }
+    });
+
+    proxy.register_clean_record([](bool on) {
+        if(g_clean_record_btn) {
+            if(on) {
+                lv_obj_add_state(g_clean_record_btn, LV_STATE_CHECKED);
+            } else {
+                lv_obj_clear_state(g_clean_record_btn, LV_STATE_CHECKED);
+            }
+        }
+        if(g_clean_record_state_lbl) {
+            lv_label_set_text(g_clean_record_state_lbl, on ? "On" : "Off");
+            lv_obj_set_style_text_color(g_clean_record_state_lbl,
+                                        on ? user_color_accent : user_color_text_dim, 0);
+        }
+    });
 }
 
 void reset_globals()
@@ -1792,6 +1844,10 @@ void reset_globals()
     g_fan_duty_ta = nullptr;
     g_print_layer_ta = nullptr;
     g_print_balance_ta = nullptr;
+    g_print_h264_btn = nullptr;
+    g_print_h264_state_lbl = nullptr;
+    g_clean_record_btn = nullptr;
+    g_clean_record_state_lbl = nullptr;
 }
 
 } /* namespace */
@@ -1803,6 +1859,8 @@ void page_user_debug_refresh(bool /*force*/)
      * 重新挂载回调，否则「返回后再进入」将因回调为空而不再刷新读数。g_* 指针在缓存的
      * 页面对象上始终有效，可安全重挂。 */
     bind_debug_callbacks();
+    ui::DebugMsgProxy::instance().request_print_h264_record_state();
+    ui::DebugMsgProxy::instance().request_clean_record_state();
 }
 
 void page_user_debug_exit(void)
@@ -1815,6 +1873,8 @@ void page_user_debug_exit(void)
     proxy.register_galvo(nullptr);
     proxy.register_device(nullptr);
     proxy.register_laser(nullptr);
+    proxy.register_print_h264_record(nullptr);
+    proxy.register_clean_record(nullptr);
 }
 
 lv_obj_t *page_user_debug_create(lv_obj_t *parent)

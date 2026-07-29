@@ -441,4 +441,3 @@ void McuSerialOtaSession::tick(int (*serial_send)(const uint8_t*, size_t), bool 
 }
 
 } // namespace upc::glavo
-

@@ -6,6 +6,7 @@
 #include "device_config.hpp"
 #include "ipc_dma_frame_ring.hpp"
 #include "msg_port.hpp"
+#include "print_h264_recorder.hpp"
 #include "print_video_recorder.hpp"
 #include "vi_capture.hpp"
 
@@ -96,6 +97,7 @@ private:
     ViCapture capture_;
     CameraDmaFrameSource dma_source_;
     PrintVideoRecorder print_video_;
+    PrintH264Recorder print_h264_;
     CleanVideoRecorder clean_video_;
 
     std::thread stream_thread_;

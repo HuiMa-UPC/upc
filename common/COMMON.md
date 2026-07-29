@@ -192,8 +192,8 @@ scripts/rongsu.sh start   # glavo + rongsu_camera → ui
 | `APP_Print_Layer_Snap_Ntf` | — | Glavo→Camera（Hub FWD） | `PrintVideoLayerSnapPayload` | — | 换层 Snap |
 | `APP_Print_Video_Session_Finish_Ntf` | — | Glavo→Camera（Hub FWD） | `PrintVideoSessionPayload` | — | 保存 `/home/video/{job_ts}/1.png...N.png` + `thumb.rthm` + manifest `complete` |
 | `APP_Print_Video_Session_Abort_Ntf` | — | Glavo→Camera（Hub FWD） | `PrintVideoSessionPayload` | — | 有帧同样落盘目录 + manifest `terminated`；0 帧清目录 |
-| `APP_Clean_Video_Session_Start_Ntf` | — | Glavo→Camera（Hub FWD） | `CleanVideoSessionStartPayload` | — | 连续录制开始：NV12 预览流抽样写入 `clean_raw.nv12` |
-| `APP_Clean_Video_Session_Stop_Ntf` | — | Glavo→Camera（Hub FWD） | `CleanVideoSessionStopPayload` | — | 连续录制收尾：一次性封装 `clean_timelapse.mp4`，按 `keep_raw` 策略决定是否保留 raw |
+| `APP_Clean_Video_Session_Start_Ntf` | — | Glavo→Camera（Hub FWD） | `CleanVideoSessionStartPayload` | — | 连续录制开始：NV12 预览流全帧写入 `clean_raw.nv12`（30fps） |
+| `APP_Clean_Video_Session_Stop_Ntf` | — | Glavo→Camera（Hub FWD） | `CleanVideoSessionStopPayload` | — | 连续录制收尾：先转 `clean_timelapse.h264` 再封装 `clean_timelapse.mp4`，按 `keep_raw` 策略决定是否保留 raw |
 | `APP_Print_Video_Manifest_Ntf` | — | Camera→UI | `PrintVideoManifestPayload` | `CameraMsgProxy::register_print_video_manifest` | manifest `rename()` 成功后发；**0 帧也必发**（`has_entry=0`），否则 UI 停在打印中界面下不来 |
 | `XFR_Transfer_Progress_Ntf` | — | XFR→UI | `XfrTransferProgressPayload` | `register_xfr_transfer_progress` | WiFi 传输阶段进度（Uploading/Slicing/Finished/Error） |
 | `UI_Mcu_Ota_Start_Req` / `UI_Mcu_Ota_Cancel_Ntf` / `APP_Mcu_Ota_Status_Ntf` | — | UI↔Glavo | `McuOtaStatusPayload` | `send_mcu_ota_start` / `send_mcu_ota_cancel` / `register_mcu_ota_status` | Glavo 以太网 OTA（`/home/image/glavo`） |
@@ -218,7 +218,13 @@ scripts/rongsu.sh start   # glavo + rongsu_camera → ui
 | `UI_Debug_Laser_Power_Set_Req` | — | UI→Glavo | `DebugLaserPowerPayload` | `send_laser_power_set` | 激光手动功率 0–100 |
 | `UI_Debug_Laser_Power_Reset_Req` | — | UI→Glavo | Empty | `send_laser_power_reset` | 取消手动功率、恢复外控 |
 | `UI_Debug_Laser_AlarmReset_Req` | — | UI→Glavo | Empty | `send_laser_alarm_reset` | 激光器报警复位（1301） |
+| `UI_Debug_Print_H264_Record_Set_Req` | — | UI→Glavo | `DebugOnOffPayload` | `send_print_h264_record_set` | 调试页全局开关：打印期连续 H264 录像（仅本次运行） |
+| `UI_Debug_Print_H264_Record_Get_Req` | — | UI→Glavo | Empty | `request_print_h264_record_state` | 查询当前“打印期连续 H264 录像”开关状态 |
+| `UI_Debug_Clean_Record_Set_Req` | — | UI→Glavo | `DebugOnOffPayload` | `send_clean_record_set` | 调试页全局开关：清粉录像（仅本次运行） |
+| `UI_Debug_Clean_Record_Get_Req` | — | UI→Glavo | Empty | `request_clean_record_state` | 查询当前“清粉录像”开关状态 |
 | `GLAVO_Debug_Laser_Ntf` | — | Glavo→UI | `DebugLaserStatePayload` | `register_laser` | 激光器状态/报警/功率/温度 |
+| `GLAVO_Debug_Print_H264_Record_Ntf` | — | Glavo→UI | `DebugOnOffPayload` | `register_print_h264_record` | 回读当前“打印期连续 H264 录像”开关状态 |
+| `GLAVO_Debug_Clean_Record_Ntf` | — | Glavo→UI | `DebugOnOffPayload` | `register_clean_record` | 回读当前“清粉录像”开关状态 |
 | `UI_Debug_Fan_Duty_Req` | — | UI→Glavo | `DebugFanPayload` | `send_fan_duty` | 仅设风扇占空比（35–100） |
 | `UI_Debug_PrintParam_Set_Req` | — | UI→Glavo | `DebugPrintParamPayload` | `send_print_layer_param` | 打印层参数（层厚 + 平衡×1000） |
 | `GLAVO_Debug_Sensor_Ntf` | — | Glavo→UI | `DebugSensorPayload` | `register_sensor` | 7 路传感器 |

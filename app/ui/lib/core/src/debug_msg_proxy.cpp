@@ -56,6 +56,24 @@ void DebugMsgProxy::init()
                 laser_cb_(p);
             }
         }));
+
+    subs_.push_back(bus.subscribe(
+        middleware::MsgType::GLAVO_Debug_Print_H264_Record_Ntf, middleware::ModuleId::UI,
+        [this](const middleware::Message& msg) {
+            middleware::DebugOnOffPayload p{};
+            if (print_h264_record_cb_ && read_inline_pod(msg, p)) {
+                print_h264_record_cb_(p.on != 0);
+            }
+        }));
+
+    subs_.push_back(bus.subscribe(
+        middleware::MsgType::GLAVO_Debug_Clean_Record_Ntf, middleware::ModuleId::UI,
+        [this](const middleware::Message& msg) {
+            middleware::DebugOnOffPayload p{};
+            if (clean_record_cb_ && read_inline_pod(msg, p)) {
+                clean_record_cb_(p.on != 0);
+            }
+        }));
 }
 
 /* ---- Tab1 ---- */
@@ -213,11 +231,44 @@ void DebugMsgProxy::send_laser_alarm_reset()
     publish_empty(middleware::MsgType::UI_Debug_Laser_AlarmReset_Req);
 }
 
+void DebugMsgProxy::send_print_h264_record_set(bool on)
+{
+    middleware::DebugOnOffPayload p{};
+    p.on = on ? 1 : 0;
+    publish_pod(middleware::MsgType::UI_Debug_Print_H264_Record_Set_Req, p);
+}
+
+void DebugMsgProxy::request_print_h264_record_state()
+{
+    publish_empty(middleware::MsgType::UI_Debug_Print_H264_Record_Get_Req);
+}
+
+void DebugMsgProxy::send_clean_record_set(bool on)
+{
+    middleware::DebugOnOffPayload p{};
+    p.on = on ? 1 : 0;
+    publish_pod(middleware::MsgType::UI_Debug_Clean_Record_Set_Req, p);
+}
+
+void DebugMsgProxy::request_clean_record_state()
+{
+    publish_empty(middleware::MsgType::UI_Debug_Clean_Record_Get_Req);
+}
+
 /* ---- 回读注册 ---- */
 void DebugMsgProxy::register_sensor(DebugSensorCb cb) { sensor_cb_ = std::move(cb); }
 void DebugMsgProxy::register_axis(DebugAxisCb cb)     { axis_cb_   = std::move(cb); }
 void DebugMsgProxy::register_device(DebugDeviceCb cb) { device_cb_ = std::move(cb); }
 void DebugMsgProxy::register_galvo(DebugGalvoCb cb)   { galvo_cb_  = std::move(cb); }
 void DebugMsgProxy::register_laser(DebugLaserCb cb)   { laser_cb_  = std::move(cb); }
+void DebugMsgProxy::register_print_h264_record(DebugPrintH264RecordCb cb)
+{
+    print_h264_record_cb_ = std::move(cb);
+}
+
+void DebugMsgProxy::register_clean_record(DebugCleanRecordCb cb)
+{
+    clean_record_cb_ = std::move(cb);
+}
 
 } // namespace ui

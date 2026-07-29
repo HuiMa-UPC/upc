@@ -11,7 +11,8 @@
 | `lib/camera_service.*` | 流控 IPC、dma fd 元数据环推流、录像消息分派 |
 | `lib/vi_capture.*` | rkaiq ISP + V4L2 NV12 采集 |
 | `lib/print_video_recorder.*` | 元数据环取帧 → ffmpeg 软编 PNG → `/home/video/{job_ts}/1.png...` + `.rthm` |
-| `lib/clean_video_recorder.*` | 清粉连续录像：预览 NV12 抽样写 `clean_raw.nv12`，收尾一次性封装 `clean_timelapse.mp4` |
+| `lib/print_h264_recorder.*` | 预览 NV12 每帧写 raw，打印结束（含终止）转码 `print.h264`（同名覆盖） |
+| `lib/clean_video_recorder.*` | 清粉连续录像：预览 NV12 全帧写 `clean_raw.nv12`，收尾先转 `clean_timelapse.h264` 再封装 `clean_timelapse.mp4` |
 | `lib/device_config.hpp` | 设备、分辨率、IQ、SHM、录像路径宏 |
 
 ## 数据路径

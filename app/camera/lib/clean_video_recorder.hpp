@@ -16,9 +16,9 @@ namespace upc::camera {
 
 /**
  * 清粉连续录像：
- * - Start：按预览流抽样（目标 10fps）保存 NV12 原始帧流
- * - Stop：一次性将 raw NV12 封装为 clean_timelapse.mp4
- * - MP4 成功后删除 raw；失败时保留 raw 供排查
+ * - Start：按预览流每帧保存 NV12 原始帧流（目标 30fps）
+ * - Stop：先将 raw NV12 编成 clean_timelapse.h264，再封装 clean_timelapse.mp4
+ * - MP4 成功后默认删除中间文件；失败时保留中间文件供排查
  */
 class CleanVideoRecorder {
 public:
@@ -49,10 +49,13 @@ private:
     static bool ensure_dir(const std::string& dir);
     static int run_shell_cmd(const char* cmd, const char* tag);
     static bool append_nv12_frame(const CleanFrameJob& job);
-    static bool encode_raw_nv12_to_mp4(const std::string& raw_path,
-                                       const std::string& mp4_path,
-                                       uint32_t width, uint32_t height,
-                                       uint32_t fps);
+    static bool encode_raw_nv12_to_h264(const std::string& raw_path,
+                                        const std::string& h264_path,
+                                        uint32_t width, uint32_t height,
+                                        uint32_t fps, uint32_t frame_count);
+    static bool remux_h264_to_mp4(const std::string& h264_path,
+                                  const std::string& mp4_path,
+                                  uint32_t fps);
     void start_worker_if_needed_locked();
     void stop_worker();
     void worker_fn();
@@ -72,7 +75,6 @@ private:
     uint32_t width_  = CAMERA_WIDTH_DEFAULT;
     uint32_t height_ = CAMERA_HEIGHT_DEFAULT;
     uint32_t fps_    = CAMERA_FPS_DEFAULT;
-    uint32_t sample_step_ = 1u;
     uint32_t dropped_frames_ = 0;
     uint32_t input_frame_count_ = 0;
     uint64_t session_seq_ = 0;
@@ -81,6 +83,7 @@ private:
     std::string job_name_;
     std::string session_dir_;
     std::string raw_path_;
+    std::string h264_path_;
     std::string mp4_path_;
     uint32_t frame_count_ = 0;
 };

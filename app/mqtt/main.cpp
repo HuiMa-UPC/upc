@@ -27,6 +27,11 @@ int start_mqtt(char daemon)
     upc::log_set_process_name(kProc.name);
     process_install_signals();
 
+#if !UPC_MQTT_SERVICE_ENABLE
+    (void)daemon;
+    UPC_LOG_MQTT_SERVICE(Info, "service disabled by UPC_MQTT_SERVICE_ENABLE=0");
+    return 0;
+#else
     if(daemon) {
         const int running = process_check_running(kProc.pid_file);
         if(running > 0) {
@@ -79,6 +84,7 @@ int start_mqtt(char daemon)
         process_remove_pid(kProc.pid_file);
     }
     return 0;
+#endif
 }
 
 int stop_mqtt()

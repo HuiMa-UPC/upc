@@ -120,6 +120,16 @@
 #define CAMERA_FFMPEG_BIN  "/usr/bin/ffmpeg"
 #endif
 
+/** 板端 MPP 编码测试工具（用于 NV12 -> H264 裸流） */
+#ifndef CAMERA_MPI_ENC_BIN
+#define CAMERA_MPI_ENC_BIN  "/usr/bin/mpi_enc_test"
+#endif
+
+/** 打印期连续 H264 默认码率（bps） */
+#ifndef CAMERA_PRINT_H264_BITRATE
+#define CAMERA_PRINT_H264_BITRATE  4000000u
+#endif
+
 /** 层帧率：UI 延时摄影序列播放默认帧率 */
 #ifndef CAMERA_PRINT_VIDEO_LAYER_FPS
 #define CAMERA_PRINT_VIDEO_LAYER_FPS  5u

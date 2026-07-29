@@ -21,6 +21,8 @@ using DebugAxisCb    = std::function<void(const middleware::DebugAxisStatePayloa
 using DebugDeviceCb  = std::function<void(const middleware::DebugDeviceStatePayload&)>;
 using DebugGalvoCb   = std::function<void(const middleware::DebugGalvoStatePayload&)>;
 using DebugLaserCb   = std::function<void(const middleware::DebugLaserStatePayload&)>;
+using DebugPrintH264RecordCb = std::function<void(bool)>;
+using DebugCleanRecordCb = std::function<void(bool)>;
 
 class DebugMsgProxy {
 public:
@@ -56,6 +58,10 @@ public:
     void send_laser_power_set(uint8_t percent);
     void send_laser_power_reset();
     void send_laser_alarm_reset();
+    void send_print_h264_record_set(bool on);
+    void request_print_h264_record_state();
+    void send_clean_record_set(bool on);
+    void request_clean_record_state();
 
     /* ---- 状态回读 ---- */
     void register_sensor(DebugSensorCb cb);
@@ -63,6 +69,8 @@ public:
     void register_device(DebugDeviceCb cb);
     void register_galvo(DebugGalvoCb cb);
     void register_laser(DebugLaserCb cb);
+    void register_print_h264_record(DebugPrintH264RecordCb cb);
+    void register_clean_record(DebugCleanRecordCb cb);
 
 private:
     DebugMsgProxy() = default;
@@ -98,6 +106,8 @@ private:
     DebugDeviceCb device_cb_;
     DebugGalvoCb  galvo_cb_;
     DebugLaserCb  laser_cb_;
+    DebugPrintH264RecordCb print_h264_record_cb_;
+    DebugCleanRecordCb clean_record_cb_;
 };
 
 } // namespace ui

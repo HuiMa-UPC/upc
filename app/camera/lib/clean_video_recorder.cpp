@@ -16,8 +16,9 @@ namespace upc::camera {
 namespace {
 
 constexpr const char* kMp4Name = "clean_timelapse.mp4";
+constexpr const char* kH264Name = "clean_timelapse.h264";
 constexpr const char* kRawNv12Name = "clean_raw.nv12";
-constexpr uint32_t kCleanRawFps = 10u;
+constexpr uint32_t kCleanRecordFps = 30u;
 constexpr size_t kMaxPendingJobs = 2u;
 
 void copy_nv12_tight(uint8_t* dst, const uint8_t* src_y, const uint8_t* src_uv,
@@ -135,21 +136,41 @@ bool CleanVideoRecorder::append_nv12_frame(const CleanFrameJob& job)
     return true;
 }
 
-bool CleanVideoRecorder::encode_raw_nv12_to_mp4(const std::string& raw_path,
-                                                const std::string& mp4_path,
-                                                uint32_t width, uint32_t height,
-                                                uint32_t fps)
+bool CleanVideoRecorder::encode_raw_nv12_to_h264(const std::string& raw_path,
+                                                 const std::string& h264_path,
+                                                 uint32_t width, uint32_t height,
+                                                 uint32_t fps, uint32_t frame_count)
 {
-    if(raw_path.empty() || mp4_path.empty() || width == 0 || height == 0 || fps == 0) {
+    if(raw_path.empty() || h264_path.empty() || width == 0 || height == 0 ||
+       fps == 0 || frame_count == 0) {
         return false;
     }
     char cmd[1536];
     std::snprintf(cmd, sizeof(cmd),
-                  "%s -y -loglevel error -f rawvideo -pix_fmt nv12 -s %ux%u -r %u -i '%s' "
-                  "-c:v mpeg4 -q:v 5 -pix_fmt yuv420p -movflags +faststart '%s'",
-                  CAMERA_FFMPEG_BIN, width, height, fps, raw_path.c_str(),
-                  mp4_path.c_str());
-    return run_shell_cmd(cmd, "ffmpeg clean mp4") == 0;
+                  "%s -i '%s' -o '%s' -w %u -h %u -hstride %u "
+                  "-f 0 -t 7 -n %u -fps %u -bps %u -rc 1",
+                  CAMERA_MPI_ENC_BIN,
+                  raw_path.c_str(),
+                  h264_path.c_str(),
+                  width, height, width,
+                  frame_count,
+                  fps, CAMERA_PRINT_H264_BITRATE);
+    return run_shell_cmd(cmd, "mpi_enc clean h264") == 0;
+}
+
+bool CleanVideoRecorder::remux_h264_to_mp4(const std::string& h264_path,
+                                           const std::string& mp4_path,
+                                           uint32_t fps)
+{
+    if(h264_path.empty() || mp4_path.empty() || fps == 0) {
+        return false;
+    }
+    char cmd[1536];
+    std::snprintf(cmd, sizeof(cmd),
+                  "%s -y -loglevel error -f h264 -r %u -i '%s' "
+                  "-c:v copy -movflags +faststart '%s'",
+                  CAMERA_FFMPEG_BIN, fps, h264_path.c_str(), mp4_path.c_str());
+    return run_shell_cmd(cmd, "ffmpeg clean mp4 remux") == 0;
 }
 
 void CleanVideoRecorder::start_worker_if_needed_locked()
@@ -274,8 +295,8 @@ void CleanVideoRecorder::on_session_start(
     ++session_seq_;
     session_dir_ = std::string(CAMERA_PRINT_VIDEO_OUT_DIR) + "/" + job_name_;
     raw_path_ = session_dir_ + "/" + kRawNv12Name;
+    h264_path_ = session_dir_ + "/" + kH264Name;
     mp4_path_ = session_dir_ + "/" + kMp4Name;
-    sample_step_ = std::max<uint32_t>(1u, (fps_ + kCleanRawFps - 1u) / kCleanRawFps);
 
     if(!ensure_dir(CAMERA_PRINT_VIDEO_OUT_DIR) || !ensure_dir(session_dir_)) {
         UPC_LOG_CAMERA_SERVICE(Error, "clean_video mkdir failed dir=%s",
@@ -283,6 +304,7 @@ void CleanVideoRecorder::on_session_start(
         return;
     }
     (void)std::remove(raw_path_.c_str());
+    (void)std::remove(h264_path_.c_str());
     (void)std::remove(mp4_path_.c_str());
 
     dropped_frames_ = 0;
@@ -291,9 +313,9 @@ void CleanVideoRecorder::on_session_start(
     active_ = true;
     UPC_LOG_CAMERA_SERVICE(
         Info,
-        "clean_video start id=%s dir=%s %ux%u@%u sample_fps=%u sample_step=%u raw=%s",
+        "clean_video start id=%s dir=%s %ux%u@%u target_fps=%u raw=%s",
         session_id_.c_str(), session_dir_.c_str(),
-        width_, height_, fps_, kCleanRawFps, sample_step_, raw_path_.c_str());
+        width_, height_, fps_, kCleanRecordFps, raw_path_.c_str());
 }
 
 void CleanVideoRecorder::on_frame_nv12(const uint8_t* src_y, const uint8_t* src_uv,
@@ -313,10 +335,6 @@ void CleanVideoRecorder::on_frame_nv12(const uint8_t* src_y, const uint8_t* src_
 
         ++input_frame_count_;
         current_input_frame = input_frame_count_;
-        if((current_input_frame - 1u) % sample_step_ != 0u) {
-            return;
-        }
-
         if(jobs_.size() >= kMaxPendingJobs) {
             ++dropped_frames_;
             if((dropped_frames_ % 20u) == 1u) {
@@ -408,10 +426,11 @@ void CleanVideoRecorder::stop_locked(std::unique_lock<std::mutex>& lock,
 
     const std::string stop_session_id = session_id_;
     const std::string stop_raw_path   = raw_path_;
+    const std::string stop_h264_path  = h264_path_;
     const std::string stop_mp4_path   = mp4_path_;
     const uint32_t stop_width         = width_;
     const uint32_t stop_height        = height_;
-    const uint32_t stop_sample_fps    = kCleanRawFps;
+    const uint32_t stop_sample_fps    = kCleanRecordFps;
     const uint32_t stop_frame_count   = frame_count_;
     const uint32_t stop_input_frames  = input_frame_count_;
     const uint32_t stop_dropped       = dropped_frames_;
@@ -420,24 +439,36 @@ void CleanVideoRecorder::stop_locked(std::unique_lock<std::mutex>& lock,
 
     const bool closed_by_user = (result_code == 0xfeu);
     bool mp4_ok = false;
+    bool h264_ok = false;
     if(closed_by_user) {
         /* 返回首页触发 clean_test_close：临时 raw 直接丢弃，不合成 mp4。 */
         (void)std::remove(stop_raw_path.c_str());
+        (void)std::remove(stop_h264_path.c_str());
         (void)std::remove(stop_mp4_path.c_str());
     } else if(stop_frame_count >= 2u) {
-        mp4_ok = encode_raw_nv12_to_mp4(
-            stop_raw_path, stop_mp4_path, stop_width, stop_height, stop_sample_fps);
-        if(mp4_ok && !keep_raw) {
-            (void)std::remove(stop_raw_path.c_str());
+        h264_ok = encode_raw_nv12_to_h264(
+            stop_raw_path, stop_h264_path, stop_width, stop_height,
+            stop_sample_fps, stop_frame_count);
+        if(h264_ok) {
+            mp4_ok = remux_h264_to_mp4(stop_h264_path, stop_mp4_path, stop_sample_fps);
+            if(mp4_ok) {
+                (void)std::remove(stop_h264_path.c_str());
+                if(!keep_raw) {
+                    (void)std::remove(stop_raw_path.c_str());
+                }
+            }
         }
     } else if(stop_frame_count == 1u) {
         UPC_LOG_CAMERA_SERVICE(Warn,
-            "clean_video only one sampled frame, skip mp4 compose");
+            "clean_video only one sampled frame, skip h264/mp4 compose");
     }
 
     std::error_code ec;
     const bool raw_exists = !stop_raw_path.empty() &&
                             std::filesystem::exists(stop_raw_path, ec);
+    ec.clear();
+    const bool h264_exists = !stop_h264_path.empty() &&
+                             std::filesystem::exists(stop_h264_path, ec);
     ec.clear();
     const bool mp4_exists = !stop_mp4_path.empty() &&
                             std::filesystem::exists(stop_mp4_path, ec);
@@ -445,7 +476,7 @@ void CleanVideoRecorder::stop_locked(std::unique_lock<std::mutex>& lock,
 
     UPC_LOG_CAMERA_SERVICE(
         Info,
-        "clean_video stop id=%s result=%u sampled_frames=%u input_frames=%u dropped=%u keep_raw=%d closed_by_user=%d mp4_ok=%d raw_exists=%d mp4_exists=%d raw=%s mp4=%s",
+        "clean_video stop id=%s result=%u sampled_frames=%u input_frames=%u dropped=%u keep_raw=%d closed_by_user=%d h264_ok=%d mp4_ok=%d raw_exists=%d h264_exists=%d mp4_exists=%d raw=%s h264=%s mp4=%s",
         stop_session_id.c_str(),
         static_cast<unsigned>(result_code),
         stop_frame_count,
@@ -453,16 +484,22 @@ void CleanVideoRecorder::stop_locked(std::unique_lock<std::mutex>& lock,
         stop_dropped,
         keep_raw ? 1 : 0,
         closed_by_user ? 1 : 0,
+        h264_ok ? 1 : 0,
         mp4_ok ? 1 : 0,
         raw_exists ? 1 : 0,
+        h264_exists ? 1 : 0,
         mp4_exists ? 1 : 0,
         stop_raw_path.c_str(),
+        stop_h264_path.c_str(),
         stop_mp4_path.c_str());
 
     lock.lock();
 
     session_id_.clear();
+    session_dir_.clear();
     raw_path_.clear();
+    h264_path_.clear();
+    mp4_path_.clear();
     dropped_frames_ = 0;
     input_frame_count_ = 0;
     frame_count_ = 0;

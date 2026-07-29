@@ -22,9 +22,10 @@ namespace ui {
 namespace {
 
 constexpr uint32_t kUiRefreshPeriodMs = 33u;
-constexpr uint64_t kPreviewStallWarnMs = 500u;
-constexpr uint64_t kPreviewStallRestartMs = 2500u;
-constexpr uint64_t kPreviewRestartCooldownMs = 5000u;
+/* 录像收尾（尤其 print_h264）存在短时抖动，适当放宽重连阈值避免误判重启。 */
+constexpr uint64_t kPreviewStallWarnMs = 1200u;
+constexpr uint64_t kPreviewStallRestartMs = 7000u;
+constexpr uint64_t kPreviewRestartCooldownMs = 12000u;
 
 constexpr int kNv12RgaFormat = RK_FORMAT_YCbCr_420_SP;
 constexpr int kDstRgaFormat  = RK_FORMAT_BGRX_8888;

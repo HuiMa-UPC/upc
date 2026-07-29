@@ -66,7 +66,7 @@ private:
     void publish_clean_rsp(middleware::MsgType type, uint32_t target_id);
     void publish_clean_test_start_rsp(uint32_t target_id, bool accepted);
     void publish_clean_test_done(uint8_t result_code, bool raw_retained,
-                                 const std::string& mp4_rel_path);
+                                 bool has_mp4, const std::string& mp4_rel_path);
     void publish_clean_test_close_rsp(uint32_t target_id);
     void on_clean_test_done(uint8_t result_code);
     void notify_clean_video_start(const middleware::CleanTestStartReqPayload& req);
@@ -113,6 +113,12 @@ private:
     void handle_debug_laser_power_set(const middleware::Message& msg);
     void handle_debug_laser_power_reset(const middleware::Message& msg);
     void handle_debug_laser_alarm_reset(const middleware::Message& msg);
+    void handle_debug_print_h264_record_set(const middleware::Message& msg);
+    void handle_debug_print_h264_record_get(const middleware::Message& msg);
+    void handle_debug_clean_record_set(const middleware::Message& msg);
+    void handle_debug_clean_record_get(const middleware::Message& msg);
+    void publish_debug_print_h264_record_state();
+    void publish_debug_clean_record_state();
     void debug_tx(const uint8_t* frame, int n);
 
     void send_door_rsp(const middleware::Message& msg, middleware::MsgType rsp_type, bool ok);
@@ -196,8 +202,11 @@ private:
     std::atomic<bool> clean_test_done_pending_{false};
     std::atomic<uint8_t> clean_test_result_code_{0};
     bool clean_test_active_ = false;
+    bool clean_video_record_on_ = false;
+    bool clean_video_session_started_ = false;
     char clean_test_session_id_[32]{};
     char clean_test_job_name_[64]{};
+    bool print_h264_continuous_on_ = false;
 };
 
 } // namespace upc::glavo

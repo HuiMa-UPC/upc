@@ -5,6 +5,11 @@
 
 namespace upc::mqtt {
 
+/** MQTT 服务总开关：1=正常启动并运行；0=启动命令直接跳过服务逻辑 */
+#ifndef UPC_MQTT_SERVICE_ENABLE
+#define UPC_MQTT_SERVICE_ENABLE 0
+#endif
+
 struct MqttConfig {
     std::string region = "cn";
     std::string device_id = "SNOWPOD-00000000";
