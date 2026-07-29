@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 全量编译 rongsu_upc（UI / Glavo / Camera / Xfer / Visual / Broker 等全部目标）
+# 全量编译 rongsu_upc（UI / Glavo / Camera / Xfer / Visual / MQTT / Broker 等全部目标）
 #
 # 用法:
 #   ./build.sh              配置（若尚未配置）并编译
@@ -76,6 +76,7 @@ do_collect_outputs() {
         "app/camera/rongsu_camera"
         "app/xfer/rongsu_xfr"
         "app/visual/rongsu_visual"
+        "app/mqtt/rongsu_mqtt"
     )
 
     echo "==> 复制可执行文件到 $OUTPUT_DIR"

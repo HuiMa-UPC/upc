@@ -788,13 +788,22 @@ void McuLink::publish_env_update_ntf()
     /* PM10 目前 0x9B 无上报，置哨兵 <0 → UI 显示 "--"；后端接入 PM10 后填真实值。 */
     p.pm10_indoor    = -1.0f;
 
-    middleware::Message ntf(middleware::MsgType::APP_Update_Ntf,
+    middleware::Message ntf_ui(middleware::MsgType::APP_Update_Ntf,
         middleware::ModuleId::APP_GLAVO,
         middleware::ModuleId::UI);
-    ntf.payload = middleware::MsgPayload::from_bytes(
+    ntf_ui.payload = middleware::MsgPayload::from_bytes(
         reinterpret_cast<const uint8_t*>(&p), sizeof(p));
-    if(!middleware::MsgPort::instance().publish_async(ntf)) {
-        UPC_LOG_MCU_LINK(Warn, "APP_Update_Ntf publish_async failed");
+    if(!middleware::MsgPort::instance().publish_async(ntf_ui)) {
+        UPC_LOG_MCU_LINK(Warn, "APP_Update_Ntf publish_async failed target=UI");
+    }
+
+    middleware::Message ntf_mqtt(middleware::MsgType::APP_Update_Ntf,
+        middleware::ModuleId::APP_GLAVO,
+        middleware::ModuleId::APP_MQTT);
+    ntf_mqtt.payload = middleware::MsgPayload::from_bytes(
+        reinterpret_cast<const uint8_t*>(&p), sizeof(p));
+    if(!middleware::MsgPort::instance().publish_async(ntf_mqtt)) {
+        UPC_LOG_MCU_LINK(Warn, "APP_Update_Ntf publish_async failed target=APP_MQTT");
     }
 }
 

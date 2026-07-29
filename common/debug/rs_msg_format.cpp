@@ -68,6 +68,7 @@ const char* upc_msg_module_name(ModuleId id) {
         case ModuleId::APP_CAMERA: return "APP_CAMERA";
         case ModuleId::APP_XFR: return "APP_XFR";
         case ModuleId::APP_VISUAL: return "APP_VISUAL";
+        case ModuleId::APP_MQTT: return "APP_MQTT";
         default: return "?";
     }
 }

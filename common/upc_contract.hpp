@@ -108,6 +108,9 @@
 #ifndef UPC_MOD_VISUAL_SERVICE
 #define UPC_MOD_VISUAL_SERVICE 1
 #endif
+#ifndef UPC_MOD_MQTT_SERVICE
+#define UPC_MOD_MQTT_SERVICE 1
+#endif
 
 #else /* !UPC_DEBUG */
 
@@ -128,6 +131,7 @@
 #define UPC_MOD_MCU_OTA 0
 #define UPC_MOD_XFR_SERVICE 0
 #define UPC_MOD_VISUAL_SERVICE 0
+#define UPC_MOD_MQTT_SERVICE 0
 
 #endif /* UPC_DEBUG */
 
@@ -191,6 +195,14 @@ inline ProcessConfig process_config_visual() {
     };
 }
 
+inline ProcessConfig process_config_mqtt() {
+    return ProcessConfig{
+        "/var/run/rongsu_mqtt.pid",
+        "/data/rongsu_mqtt",
+        "rongsu_mqtt",
+    };
+}
+
 // ============================================================================
 // §4 线协议 ABI 常量（帧格式实现见 ipc/ipc_wire.hpp）
 // ============================================================================
@@ -234,6 +246,7 @@ enum class ModuleId : uint32_t {
     APP_CAMERA = 0x03,  /**< 相机 / test_camera 伪相机后端 */
     APP_XFR    = 0x04,  /**< WiFi 传输后端 rongsu_xfr */
     APP_VISUAL = 0x05,  /**< 视觉识别后端 rongsu_visual */
+    APP_MQTT   = 0x06,  /**< MQTT 网关后端 rongsu_mqtt */
 };
 
 /**

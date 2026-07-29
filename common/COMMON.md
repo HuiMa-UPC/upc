@@ -36,6 +36,7 @@ scripts/rongsu.sh start   # glavo + rongsu_camera → ui
 | Glavo | `/var/log/rongsu_glavo{1,2,3}.log` | `/var/run/rongsu_glavo.pid` |
 | Camera | `/var/log/rongsu_camera{1,2,3}.log` | `/var/run/rongsu_camera.pid` |
 | Broker | `/var/log/rongsu_broker{1,2,3}.log` | `/var/run/rongsu_broker.pid` |
+| MQTT | `/var/log/rongsu_mqtt{1,2,3}.log` | `/var/run/rongsu_mqtt.pid` |
 
 各业务进程为 IPC **Client**，连中央 **Broker**（`rongsu_broker`）。
 
@@ -91,6 +92,9 @@ scripts/rongsu.sh start   # glavo + rongsu_camera → ui
 | `UI` | 界面 / IPC Hub | `rongsu_ui` |
 | `APP_GLAVO` | 振镜/串口后端 | `rongsu_glavo` |
 | `APP_CAMERA` | 相机后端 | `rongsu_camera` |
+| `APP_XFR` | WiFi 传输后端 | `rongsu_xfr` |
+| `APP_VISUAL` | 视觉后端 | `rongsu_visual` |
+| `APP_MQTT` | MQTT 网关后端 | `rongsu_mqtt` |
 | `0` | 广播（`target_id` 专用） | — |
 
 新增后端进程时在此枚举追加（见 [§5 多后端拓扑](#5-多后端拓扑)）。
@@ -138,7 +142,7 @@ scripts/rongsu.sh start   # glavo + rongsu_camera → ui
 
 | MsgType（当前枚举） | 规范名（新消息参照） | 方向 | Payload | UI API | Glavo 处理 |
 |---------------------|----------------------|------|---------|--------|------------|
-| `APP_Update_Ntf` | `GLAVO_Env_Update_Ntf` | Glavo→UI | `EnvSnapshotPayload`（含 `pm10_indoor`/`humidity_percent`/`pressure_kpa`，无效填 <0→UI 显示 `--`） | `register_env_update` | `McuLink` 推送 |
+| `APP_Update_Ntf` | `GLAVO_Env_Update_Ntf` | Glavo→UI/MQTT | `EnvSnapshotPayload`（含 `pm10_indoor`/`humidity_percent`/`pressure_kpa`，无效填 <0→UI 显示 `--`） | `register_env_update` | `McuLink` 推送（UI 与 MQTT 双发） |
 | `UI_PM25_Req` | — | UI→Glavo | Empty | `send_pm25_check` | `handle_pm25_req` |
 | `APP_PM25_Rsp` | `GLAVO_PM25_Check_Rsp` | Glavo→UI | `Pm25ResultPayload` | `register_pm25_result` | PM2.5 流程 |
 | `UI_CLOSE_DOOR_Req` | — | UI→Glavo | Empty | `send_close_door_check` | 关门检测 |

@@ -11,8 +11,9 @@
 | 相机 | `rongsu_camera` | `app/camera/main.cpp` | [camera/CAMERA.md](../app/camera/CAMERA.md) | `/var/log/rongsu_camera{1,2,3}.log` |
 | Xfer | `rongsu_xfr` | `app/xfer/main.cpp` | [xfer/XFER.md](../app/xfer/XFER.md) | `/var/log/rongsu_xfr{1,2,3}.log` |
 | Visual | `rongsu_visual` | `app/visual/main.cpp` | [visual/VISUAL.md](../app/visual/VISUAL.md) | `/var/log/rongsu_visual{1,2,3}.log` |
+| MQTT | `rongsu_mqtt` | `app/mqtt/main.cpp` | — | `/var/log/rongsu_mqtt{1,2,3}.log` |
 
-启动：`scripts/rongsu.sh start`（Glavo → `rongsu_camera` → `rongsu_xfr` → `rongsu_visual` → UI）。  
+启动：`scripts/rongsu.sh start`（Glavo → `rongsu_camera` → `rongsu_xfr` → `rongsu_visual` → `rongsu_mqtt` → UI）。  
 编译：`./build.sh`（Release + 工具链，产物在 `output/`；`clean` / `reconfigure` 见脚本头注释）。
 
 ## 顶层目录
@@ -32,6 +33,7 @@
 | `app/camera/` | [CAMERA.md](../app/camera/CAMERA.md) | 相机采集、SHM 预览、IPC Server |
 | `app/xfer/` | [XFER.md](../app/xfer/XFER.md) | WiFi 发现、PIN 配对、HTTP 文件上传（仅收 `.json/.svg`） |
 | `app/visual/` | [VISUAL.md](../app/visual/VISUAL.md) | 视觉 demo：相机流取帧、OpenCV 矩形识别、坐标回传 UI |
+| `app/mqtt/` | — | MQTT 网关：环境遥测上报与云端控制指令接入（一期 `set_light`） |
 | `app/parser/` | [PARSER.md](../app/parser/PARSER.md) | G-code/OVF 解析库（Glavo 链接） |
 | `app/protocol/` | [PROTOCOL.md](../app/protocol/PROTOCOL.md) | MCU 线协议（TCP `BE EF` + 串口 `5A A5`） |
 
