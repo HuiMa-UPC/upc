@@ -21,6 +21,7 @@
 #include <termios.h>
 
 #include <cerrno>
+#include <cmath>
 #include <cstring>
 #include <cstdio>
 #include <thread>
@@ -313,6 +314,66 @@ void McuLink::set_serial_ack_enabled(bool enabled)
 bool McuLink::serial_ack_enabled() const noexcept
 {
     return serial_ack_enabled_.load();
+}
+
+void McuLink::set_env_sim_enabled(bool on)
+{
+    const bool was_on = env_sim_on_.exchange(on);
+    if(on && !was_on) {
+        env_sim_phase_ = 0.f;
+        next_env_sim_tick_ = std::chrono::steady_clock::now();
+        UPC_LOG_MCU_LINK(Info, "env_sim enabled");
+    } else if(!on && was_on) {
+        /* 关模拟：清缓存并推无效哨兵，UI 回 "--"；之后等真实 0x9B 再刷新。 */
+        clear_env_after_sim_disable();
+        UPC_LOG_MCU_LINK(Info, "env_sim disabled, env cache cleared");
+    }
+}
+
+void McuLink::clear_env_after_sim_disable()
+{
+    {
+        std::lock_guard<std::mutex> lock(env_mtx_);
+        env_cache_ = EnvSnapshotCache{};
+        env_cache_.pm25_indoor      = -1.0f;
+        env_cache_.pm25_cabin       = -1.0f;
+        env_cache_.temperature_c    = -1.0f;
+        env_cache_.oxygen_percent   = -1.0f;
+        env_cache_.humidity_percent = -1.0f;
+        env_cache_.pressure_kpa     = -1.0f;
+        env_cache_.outer_door_open  = false;
+        env_cache_.door_state_valid = false;
+        env_cache_.valid            = false;
+    }
+    env_sim_phase_ = 0.f;
+    next_env_sim_tick_ = {};
+    publish_env_invalid_ntf();
+    publish_debug_sensor_invalid_ntf();
+}
+
+bool McuLink::env_sim_enabled() const noexcept
+{
+    return env_sim_on_.load();
+}
+
+bool McuLink::should_publish_env_to_mqtt(bool force) noexcept
+{
+    const int64_t now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    if(force) {
+        last_env_mqtt_publish_ms_.store(now_ms);
+        return true;
+    }
+
+    int64_t last_ms = last_env_mqtt_publish_ms_.load();
+    for(;;) {
+        if(last_ms != 0 && now_ms - last_ms < kEnvMqttPublishIntervalMs) {
+            return false;
+        }
+        if(last_env_mqtt_publish_ms_.compare_exchange_weak(last_ms, now_ms)) {
+            return true;
+        }
+    }
 }
 
 /* ---------- 静态工具 ---------- */
@@ -636,6 +697,11 @@ void McuLink::drain_serial_tx_queue()
 
 void McuLink::on_sensor_report(const serial_sensor_report_t& report)
 {
+    /* 模拟开启时跳过真实串口写缓存/上报，避免覆盖测试数据。 */
+    if(env_sim_on_.load()) {
+        return;
+    }
+
     {
         std::lock_guard<std::mutex> lock(env_mtx_);
         env_cache_.pm25_cabin      = report.pm25_ug_m3;
@@ -797,13 +863,67 @@ void McuLink::publish_env_update_ntf()
         UPC_LOG_MCU_LINK(Warn, "APP_Update_Ntf publish_async failed target=UI");
     }
 
-    middleware::Message ntf_mqtt(middleware::MsgType::APP_Update_Ntf,
+    /* UI 每次采集实时刷新；Glavo→MQTT 环境 IPC 最多每 2 秒发送一次最新快照。 */
+    if(should_publish_env_to_mqtt()) {
+        middleware::Message ntf_mqtt(middleware::MsgType::APP_Update_Ntf,
+            middleware::ModuleId::APP_GLAVO,
+            middleware::ModuleId::APP_MQTT);
+        ntf_mqtt.payload = middleware::MsgPayload::from_bytes(
+            reinterpret_cast<const uint8_t*>(&p), sizeof(p));
+        if(!middleware::MsgPort::instance().publish_async(ntf_mqtt)) {
+            UPC_LOG_MCU_LINK(Warn, "APP_Update_Ntf publish_async failed target=APP_MQTT");
+        }
+    }
+}
+
+void McuLink::publish_env_invalid_ntf()
+{
+    const auto job = PrintJobState::instance().snapshot();
+    middleware::UserHomeStatus status = middleware::UserHomeStatus::Idle;
+    if(job.is_sending) {
+        status = middleware::UserHomeStatus::Printing;
+    } else if(job.job_error) {
+        status = middleware::UserHomeStatus::Error;
+    } else if(job.job_completed) {
+        status = middleware::UserHomeStatus::Ready;
+    } else if(is_tcp_connected()) {
+        status = middleware::UserHomeStatus::Ready;
+    }
+
+    middleware::EnvSnapshotPayload p{};
+    std::snprintf(p.device_name, sizeof(p.device_name), "%s", upc::config::kDeviceDisplayName);
+    p.status           = static_cast<uint32_t>(status);
+    const WifiSnapshot wifi = WifiManager::instance().snapshot();
+    p.wifi_connected   = wifi.connected ? 1 : 0;
+    p.signal_bars      = wifi.signal_bars;
+    /* 与上电默认一致：环境指标哨兵 <0 → UI "--"；MQTT 侧据此清 has_value。 */
+    p.pm25_indoor      = -1.0f;
+    p.pm25_cabin       = -1.0f;
+    p.temperature_c    = -1.0f;
+    p.oxygen_percent   = -1.0f;
+    p.pm10_indoor      = -1.0f;
+    p.humidity_percent = -1.0f;
+    p.pressure_kpa     = -1.0f;
+
+    middleware::Message ntf_ui(middleware::MsgType::APP_Update_Ntf,
         middleware::ModuleId::APP_GLAVO,
-        middleware::ModuleId::APP_MQTT);
-    ntf_mqtt.payload = middleware::MsgPayload::from_bytes(
+        middleware::ModuleId::UI);
+    ntf_ui.payload = middleware::MsgPayload::from_bytes(
         reinterpret_cast<const uint8_t*>(&p), sizeof(p));
-    if(!middleware::MsgPort::instance().publish_async(ntf_mqtt)) {
-        UPC_LOG_MCU_LINK(Warn, "APP_Update_Ntf publish_async failed target=APP_MQTT");
+    if(!middleware::MsgPort::instance().publish_async(ntf_ui)) {
+        UPC_LOG_MCU_LINK(Warn, "APP_Update_Ntf(invalid) publish_async failed target=UI");
+    }
+
+    /* 清空帧必须立即到达 MQTT，并以当前时刻重新开始 2 秒节流窗口。 */
+    if(should_publish_env_to_mqtt(true)) {
+        middleware::Message ntf_mqtt(middleware::MsgType::APP_Update_Ntf,
+            middleware::ModuleId::APP_GLAVO,
+            middleware::ModuleId::APP_MQTT);
+        ntf_mqtt.payload = middleware::MsgPayload::from_bytes(
+            reinterpret_cast<const uint8_t*>(&p), sizeof(p));
+        if(!middleware::MsgPort::instance().publish_async(ntf_mqtt)) {
+            UPC_LOG_MCU_LINK(Warn, "APP_Update_Ntf(invalid) publish_async failed target=APP_MQTT");
+        }
     }
 }
 
@@ -825,6 +945,82 @@ void McuLink::publish_debug_sensor_ntf(const serial_sensor_report_t& report)
     ntf.payload = middleware::MsgPayload::from_bytes(
         reinterpret_cast<const uint8_t*>(&p), sizeof(p));
     middleware::MsgPort::instance().publish_async(ntf);
+}
+
+void McuLink::publish_debug_sensor_invalid_ntf()
+{
+    middleware::DebugSensorPayload p{};
+    p.oxygen_percent   = -1.0f;
+    p.pressure_kpa     = -1.0f;
+    p.pm25             = -1.0f;
+    p.humidity_pct     = -1.0f;
+    p.cabin_temp_c     = -1.0f;
+    p.baseplate_temp_c = -1.0f;
+    /* 与数值哨兵配套：UI 对 powder_status==0xFF 显示 "--" */
+    p.powder_status    = 0xFF;
+
+    middleware::Message ntf(middleware::MsgType::GLAVO_Debug_Sensor_Ntf,
+        middleware::ModuleId::APP_GLAVO, middleware::ModuleId::UI);
+    ntf.payload = middleware::MsgPayload::from_bytes(
+        reinterpret_cast<const uint8_t*>(&p), sizeof(p));
+    middleware::MsgPort::instance().publish_async(ntf);
+}
+
+void McuLink::poll_env_sim_tick()
+{
+    if(!env_sim_on_.load()) {
+        return;
+    }
+
+    const auto now = std::chrono::steady_clock::now();
+    if(next_env_sim_tick_.time_since_epoch().count() != 0 && now < next_env_sim_tick_) {
+        return;
+    }
+    next_env_sim_tick_ = now + std::chrono::milliseconds(kEnvSimIntervalMs);
+
+    env_sim_phase_ += 0.35f;
+    if(env_sim_phase_ > 6.2831853f) {
+        env_sim_phase_ -= 6.2831853f;
+    }
+
+    const float s1 = static_cast<float>(std::sin(static_cast<double>(env_sim_phase_)));
+    const float s2 = static_cast<float>(
+        std::sin(static_cast<double>(env_sim_phase_ * 0.7f)));
+    const float s3 = static_cast<float>(
+        std::sin(static_cast<double>(env_sim_phase_ * 1.3f)));
+
+    serial_sensor_report_t fake{};
+    fake.oxygen_percent   = 20.5f + 1.5f * s1;
+    fake.temperature_c    = 25.0f + 5.0f * s2;
+    fake.humidity_percent = 45.0f + 15.0f * s3;
+    fake.pm25_ug_m3       = 10.0f + 40.0f * (0.5f + 0.5f * s3);
+    fake.pressure_mbar    = static_cast<int16_t>(1013 + static_cast<int>(20.0f * s1));
+    fake.substrate_temp_c = 30.0f + 8.0f * s2;
+    fake.powder_present   = (s1 > 0.0f) ? 1 : 0;
+    fake.outer_door_open  = 0;
+
+    {
+        std::lock_guard<std::mutex> lock(env_mtx_);
+        env_cache_.pm25_cabin       = fake.pm25_ug_m3;
+        env_cache_.pm25_indoor      = fake.pm25_ug_m3;
+        env_cache_.temperature_c    = fake.temperature_c;
+        env_cache_.oxygen_percent   = fake.oxygen_percent;
+        env_cache_.humidity_percent = fake.humidity_percent;
+        env_cache_.pressure_kpa     = static_cast<float>(fake.pressure_mbar) / 10.0f;
+        env_cache_.outer_door_open  = false;
+        env_cache_.door_state_valid = true;
+        env_cache_.valid            = true;
+    }
+
+    publish_env_update_ntf();
+    publish_debug_sensor_ntf(fake);
+
+    UPC_LOG_MCU_LINK(Info,
+        "env_sim: O2=%.1f%% P=%dmbar T=%.1fC RH=%.1f%% PM2.5=%.1f",
+        static_cast<double>(fake.oxygen_percent), fake.pressure_mbar,
+        static_cast<double>(fake.temperature_c),
+        static_cast<double>(fake.humidity_percent),
+        static_cast<double>(fake.pm25_ug_m3));
 }
 
 void McuLink::publish_debug_axis_ntf(const serial_motion_pos_t& pos)
@@ -2203,6 +2399,7 @@ void McuLink::link_thread_fn()
         drain_serial_tx_queue();
         serial_drain_rx();
         link_process_serial_reliable_tx();
+        poll_env_sim_tick();
 
         // ---------- TCP RX 排空与断线检测/重连（不阻塞串口） ----------
         if(tcp_fd_ >= 0) {

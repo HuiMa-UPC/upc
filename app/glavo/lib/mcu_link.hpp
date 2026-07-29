@@ -168,6 +168,13 @@ public:
     [[nodiscard]] EnvSnapshotCache env_snapshot() const;
 
     /**
+     * @brief 调试：环境上报模拟开关（仅本次运行，默认关）
+     * 开启后用变化的测试数据驱动 APP_Update_Ntf（供 MQTT 联调），并跳过串口真实传感器写缓存。
+     */
+    void set_env_sim_enabled(bool on);
+    [[nodiscard]] bool env_sim_enabled() const noexcept;
+
+    /**
      * @brief 发送“打印前开门请求”并等待 MCU 结果（TLV_REQ_OPEN_DOOR / TLV_REQ_DOOR_OPEN_RESULT）
      * @param timeout_ms 等待上限（毫秒）
      * @param opened_out 可选输出：true=门已开（door_state=0），false=拒绝/失败
@@ -198,9 +205,19 @@ public:
     void on_sensor_report(const serial_sensor_report_t& report);
     void on_motion_pos_report(const serial_motion_pos_t& pos);
     void publish_env_update_ntf();
+    /** @brief 强制推送环境无效哨兵（各 float <0），供 UI 显示 "--"；不要求 env_cache_.valid */
+    void publish_env_invalid_ntf();
     void publish_debug_sensor_ntf(const serial_sensor_report_t& report);
+    /** @brief 调试页传感器条推无效哨兵（<0 → UI "--"） */
+    void publish_debug_sensor_invalid_ntf();
     void publish_debug_axis_ntf(const serial_motion_pos_t& pos);
     void drain_serial_tx_queue();
+    /** @brief MQTT 环境 IPC 发送节流；force=true 用于关闭模拟时立即推清空帧 */
+    bool should_publish_env_to_mqtt(bool force = false) noexcept;
+    /** @brief 调试环境模拟：周期写假数据并 publish_env_update_ntf */
+    void poll_env_sim_tick();
+    /** @brief 关闭模拟后清缓存并推送无效哨兵，等待真实 0x9B 再恢复 */
+    void clear_env_after_sim_disable();
 
     /** TCP 常态应答（运动/OTA），供分帧回调使用 */
     void on_tcp_status_response(const tcp_response_t& resp);
@@ -384,6 +401,11 @@ private:
     EnvSnapshotCache env_cache_{};
     mutable std::mutex env_mtx_;
 
+    std::atomic<bool> env_sim_on_{false};  /**< 环境上报模拟（调试页开关，默认关） */
+    std::chrono::steady_clock::time_point next_env_sim_tick_{};
+    float env_sim_phase_ = 0.f;
+    std::atomic<int64_t> last_env_mqtt_publish_ms_{0}; /**< Glavo→MQTT 环境 IPC 最近发送时刻 */
+
     std::mutex door_open_rsp_mtx_;
     std::condition_variable door_open_rsp_cv_;
     bool door_open_rsp_pending_ = false;
@@ -396,6 +418,8 @@ private:
     /* ---------- 常量 ---------- */
     static constexpr size_t kSerialTxQueueMax = 32;
     static constexpr int kMaxMotionBatch = TCP_BATCH_SIZE; /**< 单次下发的最大运动包数量 */
+    static constexpr int kEnvSimIntervalMs = 1000; /**< 环境模拟刷新间隔 */
+    static constexpr int kEnvMqttPublishIntervalMs = 2000; /**< Glavo→MQTT 环境 IPC 间隔 */
 };
 
 } // namespace upc::glavo

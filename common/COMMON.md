@@ -222,9 +222,12 @@ scripts/rongsu.sh start   # glavo + rongsu_camera → ui
 | `UI_Debug_Print_H264_Record_Get_Req` | — | UI→Glavo | Empty | `request_print_h264_record_state` | 查询当前“打印期连续 H264 录像”开关状态 |
 | `UI_Debug_Clean_Record_Set_Req` | — | UI→Glavo | `DebugOnOffPayload` | `send_clean_record_set` | 调试页全局开关：清粉录像（仅本次运行） |
 | `UI_Debug_Clean_Record_Get_Req` | — | UI→Glavo | Empty | `request_clean_record_state` | 查询当前“清粉录像”开关状态 |
+| `UI_Debug_Env_Sim_Set_Req` | — | UI→Glavo | `DebugOnOffPayload` | `send_env_sim_set` | 调试页全局开关：环境上报模拟（仅本次运行，默认关；开则 `McuLink` 用变化测试数据驱动 `APP_Update_Ntf`，关则用串口真实数据） |
+| `UI_Debug_Env_Sim_Get_Req` | — | UI→Glavo | Empty | `request_env_sim_state` | 查询当前“环境上报模拟”开关状态 |
 | `GLAVO_Debug_Laser_Ntf` | — | Glavo→UI | `DebugLaserStatePayload` | `register_laser` | 激光器状态/报警/功率/温度 |
 | `GLAVO_Debug_Print_H264_Record_Ntf` | — | Glavo→UI | `DebugOnOffPayload` | `register_print_h264_record` | 回读当前“打印期连续 H264 录像”开关状态 |
 | `GLAVO_Debug_Clean_Record_Ntf` | — | Glavo→UI | `DebugOnOffPayload` | `register_clean_record` | 回读当前“清粉录像”开关状态 |
+| `GLAVO_Debug_Env_Sim_Ntf` | — | Glavo→UI | `DebugOnOffPayload` | `register_env_sim` | 回读当前“环境上报模拟”开关状态 |
 | `UI_Debug_Fan_Duty_Req` | — | UI→Glavo | `DebugFanPayload` | `send_fan_duty` | 仅设风扇占空比（35–100） |
 | `UI_Debug_PrintParam_Set_Req` | — | UI→Glavo | `DebugPrintParamPayload` | `send_print_layer_param` | 打印层参数（层厚 + 平衡×1000） |
 | `GLAVO_Debug_Sensor_Ntf` | — | Glavo→UI | `DebugSensorPayload` | `register_sensor` | 7 路传感器 |

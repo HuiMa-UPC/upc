@@ -22,6 +22,81 @@ constexpr uint64_t kTelemetryIdleIntervalMs = 30000;
 constexpr const char* kCmdSetLight = "set_light";
 constexpr const char* kCmdRejectReasonInvalidState = "invalid_state";
 
+#if UPC_DEBUG && UPC_MOD_MQTT_SERVICE
+/**
+ * @brief 打印 MQTT 收发原始帧。
+ *
+ * JSON 可打印字符保持原样，控制字符/二进制字节转义为 \xNN；分块限制单条日志长度，
+ * 避免超过 rs_log 的消息缓冲区。该函数完全受 UPC_MOD_MQTT_SERVICE 控制。
+ */
+void debug_log_mqtt_frame(const char* direction,
+                          const std::string& topic,
+                          const void* payload,
+                          size_t payload_len,
+                          int qos,
+                          int retained)
+{
+    const char* dir = direction ? direction : "?";
+    UPC_LOG_MQTT_SERVICE(Debug,
+        "MQTT %s frame topic=%s qos=%d retained=%d len=%zu",
+        dir, topic.c_str(), qos, retained, payload_len);
+
+    if(!payload || payload_len == 0) {
+        UPC_LOG_MQTT_SERVICE(Debug, "MQTT %s payload=<empty>", dir);
+        return;
+    }
+
+    constexpr size_t kMaxEncodedChunk = 1200;
+    const auto* bytes = static_cast<const unsigned char*>(payload);
+    size_t offset = 0;
+    while(offset < payload_len) {
+        const size_t begin = offset;
+        std::string encoded;
+        encoded.reserve(kMaxEncodedChunk);
+
+        while(offset < payload_len) {
+            const unsigned char c = bytes[offset];
+            char escaped[5]{};
+            const char* token = escaped;
+            size_t token_len = 0;
+
+            switch(c) {
+            case '\\': token = "\\\\"; token_len = 2; break;
+            case '"':  token = "\\\""; token_len = 2; break;
+            case '\n': token = "\\n";  token_len = 2; break;
+            case '\r': token = "\\r";  token_len = 2; break;
+            case '\t': token = "\\t";  token_len = 2; break;
+            default:
+                if(c >= 0x20 && c <= 0x7e) {
+                    escaped[0] = static_cast<char>(c);
+                    token_len = 1;
+                } else {
+                    std::snprintf(escaped, sizeof(escaped), "\\x%02X",
+                                  static_cast<unsigned>(c));
+                    token_len = 4;
+                }
+                break;
+            }
+
+            if(!encoded.empty() && encoded.size() + token_len > kMaxEncodedChunk) {
+                break;
+            }
+            encoded.append(token, token_len);
+            ++offset;
+        }
+
+        UPC_LOG_MQTT_SERVICE(Debug,
+            "MQTT %s payload[%zu..%zu]=\"%s\"",
+            dir, begin, offset, encoded.c_str());
+    }
+}
+#else
+inline void debug_log_mqtt_frame(const char*, const std::string&, const void*,
+                                 size_t, int, int)
+{
+}
+#endif
+
 } // namespace
 
 MqttService::MqttService() = default;
@@ -37,10 +112,11 @@ bool MqttService::init()
     subscribe_messages();
 
     UPC_LOG_MQTT_SERVICE(Info,
-        "cfg broker=%s prefix=%s client=%s qos(tele=%d ack=%d)",
+        "cfg broker=%s prefix=%s client=%s user=%s qos(tele=%d ack=%d)",
         cfg_.broker_uri.c_str(),
         cfg_.topic_prefix().c_str(),
         cfg_.client_id.c_str(),
+        cfg_.username.c_str(),
         cfg_.qos_telemetry,
         cfg_.qos_ack);
 
@@ -84,12 +160,31 @@ void MqttService::on_env_update(const middleware::Message& msg)
         UPC_LOG_MQTT_SERVICE(Warn, "invalid APP_Update_Ntf payload");
         return;
     }
+    UPC_LOG_MQTT_SERVICE(Debug,
+        "IPC RX APP_Update_Ntf status=%u pm25=%.3f o2=%.3f%% temp=%.3fC "
+        "humidity=%.3f%% pressure=%.3fkPa",
+        static_cast<unsigned>(p.status),
+        static_cast<double>(p.pm25_cabin),
+        static_cast<double>(p.oxygen_percent),
+        static_cast<double>(p.temperature_c),
+        static_cast<double>(p.humidity_percent),
+        static_cast<double>(p.pressure_kpa));
     cache_telemetry(p);
 }
 
 void MqttService::cache_telemetry(const middleware::EnvSnapshotPayload& p)
 {
     std::lock_guard<std::mutex> lock(data_mtx_);
+    /* 环境指标全为哨兵 <0（上电无数据 / Env Sim 关闭清缓存）→ 停遥测直到下一帧有效数据 */
+    const bool env_invalid =
+        (p.pm25_cabin < 0.0f) &&
+        (p.oxygen_percent < 0.0f) &&
+        (p.temperature_c < 0.0f);
+    if(env_invalid) {
+        latest_ = ChamberTelemetry{};
+        latest_.has_value = false;
+        return;
+    }
     latest_.pm25 = p.pm25_cabin;
     latest_.oxygen_percent = p.oxygen_percent;
     latest_.temperature_c = p.temperature_c;
@@ -151,6 +246,9 @@ bool MqttService::connect_mqtt()
     MQTTClient_connectOptions opts = MQTTClient_connectOptions_initializer;
     opts.keepAliveInterval = cfg_.keepalive_sec;
     opts.cleansession = cfg_.clean_session ? 1 : 0;
+// #ifdef MQTTVERSION_5
+//     opts.MQTTVersion = MQTTVERSION_5;
+// #endif
     if(!cfg_.username.empty()) {
         opts.username = cfg_.username.c_str();
     }
@@ -264,6 +362,10 @@ bool MqttService::publish_chamber_telemetry()
     msg.qos = cfg_.qos_telemetry;
     msg.retained = 0;
 
+    debug_log_mqtt_frame("TX", topic, msg.payload,
+                         static_cast<size_t>(msg.payloadlen),
+                         msg.qos, msg.retained);
+
     MQTTClient_deliveryToken token;
     const int rc = MQTTClient_publishMessage(client_, topic.c_str(), &msg, &token);
     if(rc != MQTTCLIENT_SUCCESS) {
@@ -273,6 +375,9 @@ bool MqttService::publish_chamber_telemetry()
         cmd_subscribed_ = false;
         return false;
     }
+    UPC_LOG_MQTT_SERVICE(Debug,
+        "MQTT TX telemetry queued topic=%s token=%d",
+        topic.c_str(), static_cast<int>(token));
     return true;
 }
 
@@ -330,6 +435,10 @@ bool MqttService::publish_cmd_ack(const std::string& req_id,
     msg.qos = cfg_.qos_ack;
     msg.retained = 0;
 
+    debug_log_mqtt_frame("TX", topic, msg.payload,
+                         static_cast<size_t>(msg.payloadlen),
+                         msg.qos, msg.retained);
+
     MQTTClient_deliveryToken token;
     const int rc = MQTTClient_publishMessage(client_, topic.c_str(), &msg, &token);
     if(rc != MQTTCLIENT_SUCCESS) {
@@ -339,6 +448,9 @@ bool MqttService::publish_cmd_ack(const std::string& req_id,
         cmd_subscribed_ = false;
         return false;
     }
+    UPC_LOG_MQTT_SERVICE(Debug,
+        "MQTT TX cmd/ack queued topic=%s token=%d req_id=%s result=%s",
+        topic.c_str(), static_cast<int>(token), req_id.c_str(), result.c_str());
     return true;
 }
 
@@ -348,10 +460,20 @@ void MqttService::handle_command_message(const std::string& payload)
     std::string reject_reason;
     std::string cmd_name;
     std::string req_id;
-    (void)json_extract_string(payload, "cmd", cmd_name);
-    (void)json_extract_string(payload, "req_id", req_id);
+    std::string data_json;
+    if(json_extract_object(payload, "data", data_json)) {
+        (void)json_extract_string(data_json, "cmd", cmd_name);
+    }
+    if(!json_extract_string(payload, "req_id", req_id)) {
+        (void)json_extract_string(payload, "cmdId", req_id);
+    }
 
     if(!parse_light_command(payload, light, reject_reason)) {
+        UPC_LOG_MQTT_SERVICE(Debug,
+            "MQTT RX command rejected req_id=%s cmd=%s reason=%s",
+            req_id.c_str(), cmd_name.c_str(),
+            reject_reason.empty() ? kCmdRejectReasonInvalidState
+                                  : reject_reason.c_str());
         if(!req_id.empty()) {
             const std::string ack_cmd = cmd_name.empty() ? kCmdSetLight : cmd_name;
             (void)publish_cmd_ack(req_id, ack_cmd, "rejected",
@@ -362,6 +484,9 @@ void MqttService::handle_command_message(const std::string& payload)
         return;
     }
 
+    UPC_LOG_MQTT_SERVICE(Debug,
+        "MQTT RX command parsed req_id=%s cmd=%s mode=%s brightness=%d",
+        light.req_id.c_str(), kCmdSetLight, light.mode.c_str(), light.brightness);
     if(dispatch_set_light_to_glavo(light)) {
         (void)publish_cmd_ack(light.req_id, kCmdSetLight, "accepted", nullptr);
     } else {
@@ -376,45 +501,55 @@ bool MqttService::parse_light_command(const std::string& payload,
     reject_reason.clear();
 
     std::string type;
-    if(!json_extract_string(payload, "type", type) || type != "command") {
+    if(json_extract_string(payload, "type", type) && type != "command") {
         reject_reason = kCmdRejectReasonInvalidState;
         return false;
     }
 
     std::string req_id;
-    if(!json_extract_string(payload, "req_id", req_id) || req_id.empty()) {
+    if(!json_extract_string(payload, "req_id", req_id)) {
+        (void)json_extract_string(payload, "cmdId", req_id);
+    }
+    if(req_id.empty()) {
         reject_reason = kCmdRejectReasonInvalidState;
         return false;
     }
 
     std::string device_id;
-    if(!json_extract_string(payload, "device_id", device_id) ||
+    if(json_extract_string(payload, "device_id", device_id) &&
        device_id != cfg_.device_id) {
         reject_reason = kCmdRejectReasonInvalidState;
         return false;
     }
 
+    /* 新协议固定将具体命令参数放在根节点 data 对象内。 */
+    std::string data_json;
+    if(!json_extract_object(payload, "data", data_json)) {
+        reject_reason = kCmdRejectReasonInvalidState;
+        return false;
+    }
+
     std::string cmd;
-    if(!json_extract_string(payload, "cmd", cmd) || cmd != kCmdSetLight) {
+    if(!json_extract_string(data_json, "cmd", cmd) || cmd != kCmdSetLight) {
         reject_reason = kCmdRejectReasonInvalidState;
         return false;
     }
 
     std::string zone;
-    if(!json_extract_string(payload, "zone", zone) || zone != "chamber") {
+    if(!json_extract_string(data_json, "zone", zone) || zone != "chamber") {
         reject_reason = kCmdRejectReasonInvalidState;
         return false;
     }
 
     std::string mode;
-    if(!json_extract_string(payload, "mode", mode) ||
+    if(!json_extract_string(data_json, "mode", mode) ||
        (mode != "on" && mode != "off")) {
         reject_reason = kCmdRejectReasonInvalidState;
         return false;
     }
 
     int brightness = -1;
-    if(json_extract_int(payload, "brightness", brightness)) {
+    if(json_extract_int(data_json, "brightness", brightness)) {
         if(brightness < 0 || brightness > 100) {
             reject_reason = kCmdRejectReasonInvalidState;
             return false;
@@ -447,26 +582,49 @@ bool MqttService::dispatch_set_light_to_glavo(const LightCommand& cmd)
 }
 
 int MqttService::on_message_arrived(void* context, char* topic_name,
-                                    int /*topic_len*/, MQTTClient_message* message)
+                                    int topic_len, MQTTClient_message* message)
 {
-    if(!context || !message || !message->payload) {
-        if(message) {
-            MQTTClient_freeMessage(&message);
-        }
+    if(!message) {
         if(topic_name) {
             MQTTClient_free(topic_name);
         }
         return 1;
     }
 
-    auto* self = static_cast<MqttService*>(context);
-    const std::string payload(
-        static_cast<const char*>(message->payload),
-        static_cast<size_t>(message->payloadlen));
-    self->handle_command_message(payload);
+    std::string topic;
+    if(topic_name) {
+        if(topic_len > 0) {
+            topic.assign(topic_name, static_cast<size_t>(topic_len));
+        } else {
+            topic.assign(topic_name);
+        }
+    }
+
+    /* 原始帧必须先于任何格式校验打印；空载荷/非法 JSON 同样可在日志中看到。 */
+    const size_t payload_len = message->payloadlen > 0
+        ? static_cast<size_t>(message->payloadlen)
+        : 0U;
+#if UPC_MQTT_RX_RAW_LOG_ENABLE
+    debug_log_mqtt_frame("RX", topic, message->payload,
+                         payload_len,
+                         message->qos, message->retained);
+#endif
+
+    if(context) {
+        auto* self = static_cast<MqttService*>(context);
+        const std::string payload = (message->payload && payload_len > 0)
+            ? std::string(static_cast<const char*>(message->payload), payload_len)
+            : std::string{};
+        self->handle_command_message(payload);
+    } else {
+        UPC_LOG_MQTT_SERVICE(Warn,
+            "MQTT RX frame dropped because callback context is null");
+    }
 
     MQTTClient_freeMessage(&message);
-    MQTTClient_free(topic_name);
+    if(topic_name) {
+        MQTTClient_free(topic_name);
+    }
     return 1;
 }
 
@@ -560,6 +718,67 @@ bool MqttService::json_extract_int(const std::string& json, const char* key, int
     }
     out = std::atoi(json.substr(pos, end - pos).c_str());
     return true;
+}
+
+bool MqttService::json_extract_object(const std::string& json, const char* key,
+                                      std::string& out)
+{
+    out.clear();
+    if(!key || !key[0]) {
+        return false;
+    }
+
+    const std::string token = std::string("\"") + key + "\"";
+    const size_t key_pos = json.find(token);
+    if(key_pos == std::string::npos) {
+        return false;
+    }
+
+    size_t pos = json.find(':', key_pos + token.size());
+    if(pos == std::string::npos) {
+        return false;
+    }
+    ++pos;
+    while(pos < json.size() && std::isspace(static_cast<unsigned char>(json[pos]))) {
+        ++pos;
+    }
+    if(pos >= json.size() || json[pos] != '{') {
+        return false;
+    }
+
+    const size_t object_begin = pos;
+    size_t depth = 0;
+    bool in_string = false;
+    bool escaped = false;
+    for(; pos < json.size(); ++pos) {
+        const char c = json[pos];
+        if(in_string) {
+            if(escaped) {
+                escaped = false;
+            } else if(c == '\\') {
+                escaped = true;
+            } else if(c == '"') {
+                in_string = false;
+            }
+            continue;
+        }
+
+        if(c == '"') {
+            in_string = true;
+        } else if(c == '{') {
+            ++depth;
+        } else if(c == '}') {
+            if(depth == 0) {
+                return false;
+            }
+            --depth;
+            if(depth == 0) {
+                out.assign(json, object_begin, pos - object_begin + 1);
+                return true;
+            }
+        }
+    }
+    return false;
 }
 
 std::string MqttService::json_escape(const std::string& text)

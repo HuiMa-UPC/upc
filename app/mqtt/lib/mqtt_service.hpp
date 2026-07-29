@@ -75,6 +75,9 @@ private:
     static bool json_extract_string(const std::string& json, const char* key,
                                     std::string& out);
     static bool json_extract_int(const std::string& json, const char* key, int& out);
+    /** 提取指定 JSON 对象（包含首尾花括号），用于严格解析命令根节点的 data。 */
+    static bool json_extract_object(const std::string& json, const char* key,
+                                    std::string& out);
     static std::string json_escape(const std::string& text);
 
     MqttConfig cfg_{};

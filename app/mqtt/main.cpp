@@ -16,7 +16,7 @@ namespace {
 
 const ProcessConfig kProc = process_config_mqtt();
 
-const char* broker_socket_path()
+[[maybe_unused]] const char* broker_socket_path()
 {
     const char* env = std::getenv("UPC_BROKER_SOCKET");
     return (env && env[0]) ? env : UPC_BROKER_SOCKET_DEFAULT;

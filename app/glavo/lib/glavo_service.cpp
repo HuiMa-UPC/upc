@@ -326,10 +326,13 @@ bool GlavoService::init()
     print_h264_continuous_on_ = false;
     clean_video_record_on_ = false;
     clean_video_session_started_ = false;
+    env_sim_on_ = false;
+    McuLink::instance().set_env_sim_enabled(false);
     PrintVideoNotify::instance().set_print_h264_continuous(print_h264_continuous_on_);
-    UPC_LOG_GLAVO_SERVICE(Info, "print h264 continuous=%d clean record=%d",
+    UPC_LOG_GLAVO_SERVICE(Info, "print h264 continuous=%d clean record=%d env_sim=%d",
                           print_h264_continuous_on_ ? 1 : 0,
-                          clean_video_record_on_ ? 1 : 0);
+                          clean_video_record_on_ ? 1 : 0,
+                          env_sim_on_ ? 1 : 0);
 
     parser::ParserContext::instance().load_calibration(CAL_DEFAULT_FILE_PATH);
     parser::ParserManager::instance().set_ring_buffer_sink(
@@ -438,6 +441,8 @@ bool GlavoService::start()
         middleware::MsgType::UI_Debug_Print_H264_Record_Get_Req,
         middleware::MsgType::UI_Debug_Clean_Record_Set_Req,
         middleware::MsgType::UI_Debug_Clean_Record_Get_Req,
+        middleware::MsgType::UI_Debug_Env_Sim_Set_Req,
+        middleware::MsgType::UI_Debug_Env_Sim_Get_Req,
     };
     for(middleware::MsgType t : k_subs) {
         subscribe(t, [this](const middleware::Message& msg) { on_message(msg); });
@@ -448,6 +453,7 @@ bool GlavoService::start()
     start_usb_hotplug_monitor();
     publish_debug_print_h264_record_state();
     publish_debug_clean_record_state();
+    publish_debug_env_sim_state();
     return true;
 }
 
@@ -776,6 +782,12 @@ void GlavoService::handle_message(const middleware::Message& msg)
             break;
         case middleware::MsgType::UI_Debug_Clean_Record_Get_Req:
             handle_debug_clean_record_get(msg);
+            break;
+        case middleware::MsgType::UI_Debug_Env_Sim_Set_Req:
+            handle_debug_env_sim_set(msg);
+            break;
+        case middleware::MsgType::UI_Debug_Env_Sim_Get_Req:
+            handle_debug_env_sim_get(msg);
             break;
         default:
             break;
@@ -2378,6 +2390,37 @@ void GlavoService::handle_debug_clean_record_get(const middleware::Message& msg)
 {
     (void)msg;
     publish_debug_clean_record_state();
+}
+
+void GlavoService::publish_debug_env_sim_state()
+{
+    middleware::DebugOnOffPayload p{};
+    p.on = env_sim_on_ ? 1 : 0;
+    middleware::Message ntf(
+        middleware::MsgType::GLAVO_Debug_Env_Sim_Ntf,
+        middleware::ModuleId::APP_GLAVO,
+        middleware::ModuleId::UI);
+    ntf.payload = middleware::MsgPayload::from_bytes(
+        reinterpret_cast<const uint8_t*>(&p), sizeof(p));
+    (void)publish_async(ntf);
+}
+
+void GlavoService::handle_debug_env_sim_set(const middleware::Message& msg)
+{
+    middleware::DebugOnOffPayload p{};
+    if(!read_inline_pod(msg.payload, p)) {
+        return;
+    }
+    env_sim_on_ = (p.on != 0);
+    McuLink::instance().set_env_sim_enabled(env_sim_on_);
+    UPC_LOG_GLAVO_SERVICE(Info, "debug env_sim=%d", env_sim_on_ ? 1 : 0);
+    publish_debug_env_sim_state();
+}
+
+void GlavoService::handle_debug_env_sim_get(const middleware::Message& msg)
+{
+    (void)msg;
+    publish_debug_env_sim_state();
 }
 
 } // namespace upc::glavo

@@ -144,11 +144,12 @@ endif()
 
 # -----------------------------------------------------------------------------
 # OVF 插件 upc_parser_ovf / upc::parser_ovf
-# 源：OvfWorker + protobuf 生成物（.pb.cc）
+# 源：OvfWorker + 官方 LVF! I/O + 静态注册 + 已生成的 protobuf（.pb.cc，不构建时 protoc）
 # -----------------------------------------------------------------------------
 if(UPC_PARSER_BUILD_OVF)
     add_library(${UPC_PARSER_OVF_TARGET} STATIC
         ${CMAKE_CURRENT_SOURCE_DIR}/ovf/ovf_worker.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/ovf/ovf_official_io.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/ovf/ovf_register.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/ovf/build_processor_strategy.pb.cc
         ${CMAKE_CURRENT_SOURCE_DIR}/ovf/open_vector_format.pb.cc

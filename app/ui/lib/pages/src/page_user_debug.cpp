@@ -11,6 +11,7 @@
 #include <cstdlib>
 #include <cstdio>
 #include <cstring>
+#include <cmath>
 
 /**
  * @file page_user_debug.cpp
@@ -92,6 +93,8 @@ lv_obj_t *g_print_h264_btn   = nullptr;     /**< 其他控制：打印期 H264 �
 lv_obj_t *g_print_h264_state_lbl = nullptr; /**< 其他控制：打印期 H264 状态文本 */
 lv_obj_t *g_clean_record_btn = nullptr;     /**< 其他控制：清粉录像开关按钮 */
 lv_obj_t *g_clean_record_state_lbl = nullptr; /**< 其他控制：清粉录像状态文本 */
+lv_obj_t *g_env_sim_btn = nullptr;          /**< 其他控制：环境上报模拟开关按钮 */
+lv_obj_t *g_env_sim_state_lbl = nullptr;    /**< 其他控制：环境上报模拟状态文本 */
 
 /* 设备快捷行状态字（受 Montserrat 字库约束，沿用英文） */
 const char *const kDevOn[4]  = { "Awake", "Open", "Running", "On" };
@@ -902,7 +905,7 @@ struct DbgToggleCtx {
     lv_obj_t   *state_lbl;
     const char *on_txt;
     const char *off_txt;
-    uint8_t     kind;   /**< 0 粉桶 / 1 推粉 / 2 风扇 / 3 其他开关 / 4 清粉 / 5 打印H264 / 6 清粉录像 */
+    uint8_t     kind;   /**< 0 粉桶 / 1 推粉 / 2 风扇 / 3 其他开关 / 4 清粉 / 5 打印H264 / 6 清粉录像 / 7 环境模拟 */
     uint8_t     arg;    /**< 粉桶号 / DebugSwitchTarget */
 };
 
@@ -932,6 +935,8 @@ void on_dbg_toggle(lv_event_t *e)
         case 5: proxy.send_print_h264_record_set(on);          /* 打印期连续 H264 录像总开关（仅本次运行） */
                 break;
         case 6: proxy.send_clean_record_set(on);               /* 清粉录像总开关（仅本次运行） */
+                break;
+        case 7: proxy.send_env_sim_set(on);                    /* 环境上报模拟（仅本次运行，供 MQTT 联调） */
                 break;
         default: break;
     }
@@ -1324,6 +1329,8 @@ void build_other_switches_card(lv_obj_t *parent)
                     5, 0, true, 0, &g_print_h264_btn, &g_print_h264_state_lbl);
     make_dbg_toggle(rowC, "Clean Video Rec", "On", "Off", LV_SYMBOL_PLAY, false,
                     6, 0, true, 0, &g_clean_record_btn, &g_clean_record_state_lbl);
+    make_dbg_toggle(rowC, "Env Sim", "On", "Off", LV_SYMBOL_REFRESH, false,
+                    7, 0, true, 0, &g_env_sim_btn, &g_env_sim_state_lbl);
 }
 
 lv_obj_t *build_other_tab(lv_obj_t *body)
@@ -1677,16 +1684,31 @@ void bind_debug_callbacks()
     auto &proxy = ui::DebugMsgProxy::instance();
 
     proxy.register_sensor([](const middleware::DebugSensorPayload &p) {
-        if(g_sensor_val[0]) lv_label_set_text_fmt(g_sensor_val[0], "%.1f%%", static_cast<double>(p.oxygen_percent));
-        if(g_sensor_val[1]) lv_label_set_text_fmt(g_sensor_val[1], "%.1f", static_cast<double>(p.pressure_kpa));
-        if(g_sensor_val[2]) lv_label_set_text_fmt(g_sensor_val[2], "%.1f", static_cast<double>(p.pm25));
-        if(g_sensor_val[3]) lv_label_set_text_fmt(g_sensor_val[3], "%.1f%%", static_cast<double>(p.humidity_pct));
-        if(g_sensor_val[4]) lv_label_set_text_fmt(g_sensor_val[4], "%.1f", static_cast<double>(p.cabin_temp_c));
-        if(g_sensor_val[5]) lv_label_set_text_fmt(g_sensor_val[5], "%.1f", static_cast<double>(p.baseplate_temp_c));
+        /* <0 / NaN 与首页一致视为无数据 → "--"（Env Sim 关闭清缓存时用） */
+        auto set_metric = [](lv_obj_t *lbl, float v, const char *fmt_with_unit) {
+            if(!lbl) {
+                return;
+            }
+            if(std::isnan(v) || v < 0.0f) {
+                lv_label_set_text(lbl, "--");
+                return;
+            }
+            lv_label_set_text_fmt(lbl, fmt_with_unit, static_cast<double>(v));
+        };
+        set_metric(g_sensor_val[0], p.oxygen_percent, "%.1f%%");
+        set_metric(g_sensor_val[1], p.pressure_kpa, "%.1f");
+        set_metric(g_sensor_val[2], p.pm25, "%.1f");
+        set_metric(g_sensor_val[3], p.humidity_pct, "%.1f%%");
+        set_metric(g_sensor_val[4], p.cabin_temp_c, "%.1f");
+        set_metric(g_sensor_val[5], p.baseplate_temp_c, "%.1f");
         if(g_sensor_val[6]) {
-            const char *txt = (p.powder_status == 0) ? "OK"
-                            : (p.powder_status == 1) ? "Busy" : "Fault";
-            lv_label_set_text(g_sensor_val[6], txt);
+            if(p.powder_status == 0xFF) {
+                lv_label_set_text(g_sensor_val[6], "--");
+            } else {
+                const char *txt = (p.powder_status == 0) ? "OK"
+                                : (p.powder_status == 1) ? "Busy" : "Fault";
+                lv_label_set_text(g_sensor_val[6], txt);
+            }
         }
     });
 
@@ -1818,6 +1840,21 @@ void bind_debug_callbacks()
                                         on ? user_color_accent : user_color_text_dim, 0);
         }
     });
+
+    proxy.register_env_sim([](bool on) {
+        if(g_env_sim_btn) {
+            if(on) {
+                lv_obj_add_state(g_env_sim_btn, LV_STATE_CHECKED);
+            } else {
+                lv_obj_clear_state(g_env_sim_btn, LV_STATE_CHECKED);
+            }
+        }
+        if(g_env_sim_state_lbl) {
+            lv_label_set_text(g_env_sim_state_lbl, on ? "On" : "Off");
+            lv_obj_set_style_text_color(g_env_sim_state_lbl,
+                                        on ? user_color_accent : user_color_text_dim, 0);
+        }
+    });
 }
 
 void reset_globals()
@@ -1848,6 +1885,8 @@ void reset_globals()
     g_print_h264_state_lbl = nullptr;
     g_clean_record_btn = nullptr;
     g_clean_record_state_lbl = nullptr;
+    g_env_sim_btn = nullptr;
+    g_env_sim_state_lbl = nullptr;
 }
 
 } /* namespace */
@@ -1861,6 +1900,7 @@ void page_user_debug_refresh(bool /*force*/)
     bind_debug_callbacks();
     ui::DebugMsgProxy::instance().request_print_h264_record_state();
     ui::DebugMsgProxy::instance().request_clean_record_state();
+    ui::DebugMsgProxy::instance().request_env_sim_state();
 }
 
 void page_user_debug_exit(void)
@@ -1875,6 +1915,7 @@ void page_user_debug_exit(void)
     proxy.register_laser(nullptr);
     proxy.register_print_h264_record(nullptr);
     proxy.register_clean_record(nullptr);
+    proxy.register_env_sim(nullptr);
 }
 
 lv_obj_t *page_user_debug_create(lv_obj_t *parent)

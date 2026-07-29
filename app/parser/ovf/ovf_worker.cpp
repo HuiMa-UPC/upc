@@ -1,12 +1,11 @@
 #include "ovf_worker.hpp"
-#include "ovf_config.hpp"
+#include "ovf_official_io.h"
 #include "parser_config.hpp"
 #include "rs_log.hpp"
 #include "parser_context.hpp"
 
 #include <chrono>
 #include <cstring>
-#include <fstream>
 #include <libgen.h>
 #include <thread>
 
@@ -50,6 +49,20 @@ uint16_t ovf_z_mm_to_layer_um(float z_mm)
         return 0;
     }
     return gcode_z_to_layer_um(z_mm * 1000.f);
+}
+
+/** 将 W 单位功率 (0-1000W) 映射为 16-bit DAC 值 (0-65535) */
+uint16_t power_w_to_dac(float power_w)
+{
+    if(power_w <= 0.0f) {
+        return 0;
+    }
+    // 65535 对应最大功率 1000W（可根据实际设备调整）
+    const float dac = power_w * 65535.0f / 1000.0f;
+    if(dac > 65535.0f) {
+        return 65535;
+    }
+    return static_cast<uint16_t>(dac + 0.5f);
 }
 
 } // namespace
@@ -109,6 +122,57 @@ void OvfWorker::parser_chunk_yield()
         std::chrono::milliseconds(OVF_PARSE_CHUNK_INTERVAL_MS));
 }
 
+const open_vector_format::MarkingParams* OvfWorker::lookup_marking_params(int32_t key) const
+{
+    if(key < 0) {
+        return nullptr;
+    }
+    const auto& mp_map = job_.marking_params_map();
+    auto it = mp_map.find(key);
+    if(it != mp_map.end()) {
+        return &it->second;
+    }
+    return nullptr;
+}
+
+void OvfWorker::ensure_marking_params(int32_t key, int* packets)
+{
+    if(key == current_mark_key_) {
+        return;  // 已应用
+    }
+
+    const auto* mp = lookup_marking_params(key);
+
+    // 更新功率
+    uint16_t new_power = 0;
+    float new_feed = OVF_DEFAULT_FEED_MM_MIN;
+
+    if(mp) {
+        new_power = power_w_to_dac(mp->laser_power_in_w());
+        // OVF 中 laser_speed_in_mm_per_s 转换为 mm/min
+        new_feed = mp->laser_speed_in_mm_per_s() * 60.0f;
+        if(new_feed < 1.0f) {
+            new_feed = OVF_DEFAULT_FEED_MM_MIN;
+        }
+    }
+
+    if(new_power != current_power_) {
+        if(!push_power_packet(new_power)) {
+            stop_req_.store(true);
+            return;
+        }
+        (*packets)++;
+        current_power_ = new_power;
+    }
+
+    current_feed_mm_min_ = new_feed;
+    current_mark_key_ = key;
+
+    UPC_LOG_OVF_WORKER(Debug,
+        "marking params changed: key=%d power=%u feed=%.1f",
+        key, new_power, new_feed);
+}
+
 int OvfWorker::count_motion_segments(const open_vector_format::Job& job)
 {
     int segments = 0;
@@ -119,12 +183,32 @@ int OvfWorker::count_motion_segments(const open_vector_format::Job& job)
             if(block.has_line_sequence()) {
                 const int pts = block.line_sequence().points_size();
                 if(pts >= 4) {
-                    segments += (pts / 2) - 1;
+                    segments += pts / 2;  // 每点一个运动包
                 }
             } else if(block.has_line_sequence_3d()) {
                 const int pts = block.line_sequence_3d().points_size();
                 if(pts >= 6) {
-                    segments += (pts / 3) - 1;
+                    segments += pts / 3;
+                }
+            } else if(block.has__hatches()) {
+                const int pts = block._hatches().points_size();
+                if(pts >= 4) {
+                    segments += pts / 2;  // 每条线 2 个包（jump+mark）
+                }
+            } else if(block.has_hatches_3d()) {
+                const int pts = block.hatches_3d().points_size();
+                if(pts >= 6) {
+                    segments += pts / 3;
+                }
+            } else if(block.has_point_sequence()) {
+                const int pts = block.point_sequence().points_size();
+                if(pts >= 2) {
+                    segments += pts / 2;
+                }
+            } else if(block.has_point_sequence_3d()) {
+                const int pts = block.point_sequence_3d().points_size();
+                if(pts >= 3) {
+                    segments += pts / 3;
                 }
             }
         }
@@ -141,12 +225,23 @@ bool OvfWorker::push_layer_mark(uint16_t layer_um)
     return rb_.put_wait(pkt, stop_req_);
 }
 
+bool OvfWorker::push_power_packet(uint16_t power)
+{
+    rb_packet_t pkt;
+    pkt.type = RB_PKT_MOTION;
+    std::memset(pkt.data, 0, sizeof(pkt.data));
+    pkt.data[0] = 0x02;  // 功率包标识
+    pkt.data[9]  = static_cast<uint8_t>(power & 0xFF);
+    pkt.data[10] = static_cast<uint8_t>(power >> 8);
+    return rb_.put_wait(pkt, stop_req_);
+}
+
 bool OvfWorker::build_and_push_packet(float x, float y, float feed_mm_min,
                                       int laser_on)
 {
     rb_packet_t pkt;
     pkt.type = RB_PKT_MOTION;
-    pkt.data[0] = 0x01;
+    pkt.data[0] = 0x01;  // 运动包标识
 
     float out_x = 0.0f;
     float out_y = 0.0f;
@@ -181,58 +276,267 @@ bool OvfWorker::build_and_push_packet(float x, float y, float feed_mm_min,
     return rb_.put_wait(pkt, stop_req_);
 }
 
+// ============================================================================
+// 矢量块处理
+// ============================================================================
+
+bool OvfWorker::process_line_sequence(const open_vector_format::VectorBlock& block,
+                                       int* segments, int* packets)
+{
+    const auto& seq = block.line_sequence();
+    const int pts = seq.points_size();
+    if(pts < 4) {
+        return true;
+    }
+
+    // 第一个点作为 jump（laser_on=0），后续点作为 mark（laser_on=1）
+    for(int i = 0; i + 1 < pts; i += 2) {
+        if(stop_req_.load()) {
+            return false;
+        }
+
+        const float x = seq.points(i);
+        const float y = seq.points(i + 1);
+        const int laser_on = (i == 0) ? 0 : 1;
+
+        if(!build_and_push_packet(x, y, current_feed_mm_min_, laser_on)) {
+            stop_req_.store(true);
+            return false;
+        }
+        (*segments)++;
+        (*packets)++;
+    }
+    return !stop_req_.load();
+}
+
+bool OvfWorker::process_line_sequence_3d(const open_vector_format::VectorBlock& block,
+                                          int* segments, int* packets)
+{
+    const auto& seq = block.line_sequence_3d();
+    const int pts = seq.points_size();
+    if(pts < 6) {
+        return true;
+    }
+
+    for(int i = 0; i + 2 < pts; i += 3) {
+        if(stop_req_.load()) {
+            return false;
+        }
+
+        const float x = seq.points(i);
+        const float y = seq.points(i + 1);
+        const int laser_on = (i == 0) ? 0 : 1;
+
+        if(!build_and_push_packet(x, y, current_feed_mm_min_, laser_on)) {
+            stop_req_.store(true);
+            return false;
+        }
+        (*segments)++;
+        (*packets)++;
+    }
+    return !stop_req_.load();
+}
+
+bool OvfWorker::process_hatches(const open_vector_format::VectorBlock& block,
+                                 int* segments, int* packets)
+{
+    const auto& hatches = block._hatches();
+    const int pts = hatches.points_size();
+    if(pts < 4) {
+        return true;
+    }
+
+    // 每 4 个点一组：(x0,y0) → (x1,y1)
+    for(int i = 0; i + 3 < pts; i += 4) {
+        if(stop_req_.load()) {
+            return false;
+        }
+
+        // 起点：jump（laser_on=0）
+        const float x0 = hatches.points(i);
+        const float y0 = hatches.points(i + 1);
+        if(!build_and_push_packet(x0, y0, current_feed_mm_min_, 0)) {
+            stop_req_.store(true);
+            return false;
+        }
+        (*segments)++;
+        (*packets)++;
+
+        // 终点：mark（laser_on=1）
+        const float x1 = hatches.points(i + 2);
+        const float y1 = hatches.points(i + 3);
+        if(!build_and_push_packet(x1, y1, current_feed_mm_min_, 1)) {
+            stop_req_.store(true);
+            return false;
+        }
+        (*segments)++;
+        (*packets)++;
+    }
+    return !stop_req_.load();
+}
+
+bool OvfWorker::process_hatches_3d(const open_vector_format::VectorBlock& block,
+                                    int* segments, int* packets)
+{
+    const auto& hatches = block.hatches_3d();
+    const int pts = hatches.points_size();
+    if(pts < 6) {
+        return true;
+    }
+
+    // 每 6 个点一组：(x0,y0,z0) → (x1,y1,z1)
+    for(int i = 0; i + 5 < pts; i += 6) {
+        if(stop_req_.load()) {
+            return false;
+        }
+
+        // 起点：jump（laser_on=0）
+        const float x0 = hatches.points(i);
+        const float y0 = hatches.points(i + 1);
+        if(!build_and_push_packet(x0, y0, current_feed_mm_min_, 0)) {
+            stop_req_.store(true);
+            return false;
+        }
+        (*segments)++;
+        (*packets)++;
+
+        // 终点：mark（laser_on=1）
+        const float x1 = hatches.points(i + 3);
+        const float y1 = hatches.points(i + 4);
+        if(!build_and_push_packet(x1, y1, current_feed_mm_min_, 1)) {
+            stop_req_.store(true);
+            return false;
+        }
+        (*segments)++;
+        (*packets)++;
+    }
+    return !stop_req_.load();
+}
+
+bool OvfWorker::process_point_sequence(const open_vector_format::VectorBlock& block,
+                                        int* segments, int* packets)
+{
+    const auto& seq = block.point_sequence();
+    const int pts = seq.points_size();
+    if(pts < 2) {
+        return true;
+    }
+
+    // 点序列：每个点直接标记（laser_on=1），前一个点作为 jump
+    float prev_x = 0.0f;
+    float prev_y = 0.0f;
+    bool has_prev = false;
+
+    for(int i = 0; i + 1 < pts; i += 2) {
+        if(stop_req_.load()) {
+            return false;
+        }
+
+        const float x = seq.points(i);
+        const float y = seq.points(i + 1);
+
+        if(has_prev) {
+            // 先 jump 到新位置
+            if(!build_and_push_packet(prev_x, prev_y, current_feed_mm_min_, 0)) {
+                stop_req_.store(true);
+                return false;
+            }
+            (*segments)++;
+            (*packets)++;
+        }
+
+        // mark 当前点
+        if(!build_and_push_packet(x, y, current_feed_mm_min_, 1)) {
+            stop_req_.store(true);
+            return false;
+        }
+        (*segments)++;
+        (*packets)++;
+
+        prev_x = x;
+        prev_y = y;
+        has_prev = true;
+    }
+    return !stop_req_.load();
+}
+
+bool OvfWorker::process_point_sequence_3d(const open_vector_format::VectorBlock& block,
+                                           int* segments, int* packets)
+{
+    const auto& seq = block.point_sequence_3d();
+    const int pts = seq.points_size();
+    if(pts < 3) {
+        return true;
+    }
+
+    float prev_x = 0.0f;
+    float prev_y = 0.0f;
+    bool has_prev = false;
+
+    for(int i = 0; i + 2 < pts; i += 3) {
+        if(stop_req_.load()) {
+            return false;
+        }
+
+        const float x = seq.points(i);
+        const float y = seq.points(i + 1);
+
+        if(has_prev) {
+            if(!build_and_push_packet(prev_x, prev_y, current_feed_mm_min_, 0)) {
+                stop_req_.store(true);
+                return false;
+            }
+            (*segments)++;
+            (*packets)++;
+        }
+
+        if(!build_and_push_packet(x, y, current_feed_mm_min_, 1)) {
+            stop_req_.store(true);
+            return false;
+        }
+        (*segments)++;
+        (*packets)++;
+
+        prev_x = x;
+        prev_y = y;
+        has_prev = true;
+    }
+    return !stop_req_.load();
+}
+
 bool OvfWorker::process_vector_block(const open_vector_format::VectorBlock& block,
                                      int* segments, int* packets)
 {
+    // 先确保 marking params 已应用
+    ensure_marking_params(block.marking_params_key(), packets);
+    if(stop_req_.load()) {
+        return false;
+    }
+
+    // 分派到具体类型处理器
     if(block.has_line_sequence()) {
-        const auto& seq = block.line_sequence();
-        const int pts = seq.points_size();
-        if(pts < 4) {
-            return true;
-        }
-
-        for(int i = 2; i + 1 < pts; i += 2) {
-            if(stop_req_.load()) {
-                return false;
-            }
-
-            const float x = seq.points(i);
-            const float y = seq.points(i + 1);
-            if(!build_and_push_packet(x, y, OVF_DEFAULT_FEED_MM_MIN, 1)) {
-                stop_req_.store(true);
-                return false;
-            }
-            (*segments)++;
-            (*packets)++;
-        }
-        return !stop_req_.load();
+        return process_line_sequence(block, segments, packets);
     }
-
     if(block.has_line_sequence_3d()) {
-        const auto& seq = block.line_sequence_3d();
-        const int pts = seq.points_size();
-        if(pts < 6) {
-            return true;
-        }
-
-        for(int i = 0; i + 5 < pts; i += 3) {
-            if(stop_req_.load()) {
-                return false;
-            }
-
-            const float x = seq.points(i);
-            const float y = seq.points(i + 1);
-            if(!build_and_push_packet(x, y, OVF_DEFAULT_FEED_MM_MIN, 1)) {
-                stop_req_.store(true);
-                return false;
-            }
-            (*segments)++;
-            (*packets)++;
-        }
-        return !stop_req_.load();
+        return process_line_sequence_3d(block, segments, packets);
+    }
+    if(block.has__hatches()) {
+        return process_hatches(block, segments, packets);
+    }
+    if(block.has_hatches_3d()) {
+        return process_hatches_3d(block, segments, packets);
+    }
+    if(block.has_point_sequence()) {
+        return process_point_sequence(block, segments, packets);
+    }
+    if(block.has_point_sequence_3d()) {
+        return process_point_sequence_3d(block, segments, packets);
     }
 
-    UPC_LOG_OVF_WORKER(Debug, "skip unsupported vector block type");
+    // 不支持的类型跳过
+    UPC_LOG_OVF_WORKER(Debug,
+        "skip unsupported vector block type (key=%d)",
+        block.marking_params_key());
     return true;
 }
 
@@ -245,6 +549,11 @@ bool OvfWorker::process_work_plane(int plane_index, int* segments, int* packets)
         layer_um = last_layer_height_um_;
     }
     last_layer_height_um_ = layer_um;
+
+    UPC_LOG_OVF_WORKER(Debug,
+        "processing work plane %d: z=%.3fmm (layer=%uum, blocks=%d)",
+        plane_index, plane.z_pos_in_mm(), layer_um,
+        plane.vector_blocks_size());
 
     if(!push_layer_mark(layer_um)) {
         stop_req_.store(true);
@@ -268,6 +577,11 @@ void OvfWorker::parser_thread_fn()
     int packets  = 0;
     int chunk_segments = 0;
     int since_sync = 0;
+
+    // 重置 marking params 状态
+    current_mark_key_ = -1;
+    current_power_ = 0;
+    current_feed_mm_min_ = OVF_DEFAULT_FEED_MM_MIN;
 
     for(int wp = 0;
         wp < job_.work_planes_size() &&
@@ -299,6 +613,9 @@ void OvfWorker::parser_thread_fn()
     sync_parse_progress(segments, packets);
     file_read_exhausted_.store(true);
     running_.store(false);
+
+    UPC_LOG_OVF_WORKER(Info,
+        "parse complete: segments=%d packets=%d", segments, packets);
 }
 
 int OvfWorker::open_file(const std::string& filepath)
@@ -306,14 +623,10 @@ int OvfWorker::open_file(const std::string& filepath)
     close_file();
     apply_calibration_from_context();
 
-    std::ifstream in(filepath, std::ios::binary);
-    if(!in) {
-        return -1;
-    }
-
     job_.Clear();
-    if(!job_.ParseFromIstream(&in)) {
-        UPC_LOG_OVF_WORKER(Error, "protobuf parse failed: %s", filepath.c_str());
+    std::string err;
+    if(!open_vector_format::readOfficialOvfFile(filepath, job_, &err)) {
+        UPC_LOG_OVF_WORKER(Error, "ovf read failed: %s - %s", filepath.c_str(), err.c_str());
         job_.Clear();
         return -1;
     }
@@ -325,6 +638,11 @@ int OvfWorker::open_file(const std::string& filepath)
     parsed_lines_.store(0);
     file_read_exhausted_.store(false);
     last_layer_height_um_ = OVF_DEFAULT_LAYER_UM;
+
+    // 重置 marking params 状态
+    current_mark_key_ = -1;
+    current_power_ = 0;
+    current_feed_mm_min_ = OVF_DEFAULT_FEED_MM_MIN;
 
     if(job_.work_planes_size() > 0) {
         const uint16_t um =
@@ -339,8 +657,9 @@ int OvfWorker::open_file(const std::string& filepath)
         std::snprintf(path_copy, sizeof(path_copy), "%s", filepath.c_str());
         const char* base = basename(path_copy);
         UPC_LOG_OVF_WORKER(Info,
-            "open file: %s (work_planes=%d segments=%d)",
-            base, job_.work_planes_size(), segments);
+            "open file: %s (work_planes=%d segments=%d marking_params=%d)",
+            base, job_.work_planes_size(), segments,
+            job_.marking_params_map_size());
     }
     return 0;
 }
@@ -380,6 +699,10 @@ void OvfWorker::close_file()
     total_motion_packets_.store(0);
     parsed_lines_.store(0);
     file_read_exhausted_.store(false);
+
+    current_mark_key_ = -1;
+    current_power_ = 0;
+    current_feed_mm_min_ = OVF_DEFAULT_FEED_MM_MIN;
 }
 
 int OvfWorker::get_total_motion_packets() const

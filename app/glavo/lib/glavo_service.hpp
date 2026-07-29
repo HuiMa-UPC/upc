@@ -117,8 +117,11 @@ private:
     void handle_debug_print_h264_record_get(const middleware::Message& msg);
     void handle_debug_clean_record_set(const middleware::Message& msg);
     void handle_debug_clean_record_get(const middleware::Message& msg);
+    void handle_debug_env_sim_set(const middleware::Message& msg);
+    void handle_debug_env_sim_get(const middleware::Message& msg);
     void publish_debug_print_h264_record_state();
     void publish_debug_clean_record_state();
+    void publish_debug_env_sim_state();
     void debug_tx(const uint8_t* frame, int n);
 
     void send_door_rsp(const middleware::Message& msg, middleware::MsgType rsp_type, bool ok);
@@ -207,6 +210,7 @@ private:
     char clean_test_session_id_[32]{};
     char clean_test_job_name_[64]{};
     bool print_h264_continuous_on_ = false;
+    bool env_sim_on_ = false;  /**< 环境上报模拟（仅本次运行，默认关） */
 };
 
 } // namespace upc::glavo

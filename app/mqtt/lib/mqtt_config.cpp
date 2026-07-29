@@ -29,7 +29,7 @@ int get_env_int_or_default(const char* key, int fallback)
 
 std::string MqttConfig::topic_prefix() const
 {
-    return "snowpod/" + region + "/" + device_id + "/";
+    return "snowpod/cn/" + device_id + "/";
 }
 
 std::string MqttConfig::topic_cmd() const
@@ -50,19 +50,21 @@ std::string MqttConfig::topic_telemetry_chamber() const
 MqttConfig load_mqtt_config()
 {
     MqttConfig cfg;
-    cfg.region = get_env_or_default("SNOWPOD_MQTT_REGION", "cn");
-    cfg.device_id = get_env_or_default("SNOWPOD_MQTT_DEVICE_ID", "SNOWPOD-00000000");
-    cfg.broker_uri = get_env_or_default("SNOWPOD_MQTT_BROKER_URI", "tcp://127.0.0.1:1883");
+    cfg.device_id = get_env_or_default("SNOWPOD_MQTT_DEVICE_ID", "SNOWPOD-TEST-001");
+    cfg.broker_uri = get_env_or_default("SNOWPOD_MQTT_BROKER_URI", "172.17.0.127:1883");
     cfg.client_id = get_env_or_default("SNOWPOD_MQTT_CLIENT_ID", "");
     cfg.username = get_env_or_default("SNOWPOD_MQTT_USERNAME", "");
-    cfg.password = get_env_or_default("SNOWPOD_MQTT_PASSWORD", "");
+    cfg.password = get_env_or_default("SNOWPOD_MQTT_PASSWORD", "Test@12345678");
     cfg.keepalive_sec = get_env_int_or_default("SNOWPOD_MQTT_KEEPALIVE_SEC", 60);
     cfg.qos_telemetry = get_env_int_or_default("SNOWPOD_MQTT_QOS_TELEMETRY", 1);
     cfg.qos_ack = get_env_int_or_default("SNOWPOD_MQTT_QOS_ACK", 1);
     cfg.clean_session = get_env_int_or_default("SNOWPOD_MQTT_CLEAN_SESSION", 1) != 0;
 
     if(cfg.client_id.empty()) {
-        cfg.client_id = "snowpod-" + cfg.device_id;
+        cfg.client_id = cfg.device_id;
+    }
+    if(cfg.username.empty()) {
+        cfg.username = cfg.device_id;
     }
     if(cfg.qos_telemetry < 0 || cfg.qos_telemetry > 1) {
         cfg.qos_telemetry = 1;
