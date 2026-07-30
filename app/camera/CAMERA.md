@@ -11,7 +11,7 @@
 | `lib/camera_service.*` | 流控 IPC、dma fd 元数据环推流、录像消息分派 |
 | `lib/vi_capture.*` | rkaiq ISP + V4L2 NV12 采集 |
 | `lib/print_video_recorder.*` | 元数据环取帧 → ffmpeg 软编 PNG → `/home/video/{job_ts}/1.png...` + `.rthm` |
-| `lib/print_h264_recorder.*` | 预览 NV12 每帧写 raw，打印结束（含终止）转码 `print.h264`（同名覆盖） |
+| `lib/print_h264_recorder.*` | 预览 NV12 异步入队写 raw（队列满丢帧保预览）；结束/终止后 worker 转码 `print.h264` |
 | `lib/clean_video_recorder.*` | 清粉连续录像：预览 NV12 全帧写 `clean_raw.nv12`，收尾先转 `clean_timelapse.h264` 再封装 `clean_timelapse.mp4` |
 | `lib/device_config.hpp` | 设备、分辨率、IQ、SHM、录像路径宏 |
 
@@ -55,8 +55,21 @@ Glavo Snap IPC → PrintVideoRecorder worker
   → APP_Print_Video_Manifest_Ntf → UI（切打印结果页）
 ```
 
-0 帧时不生成 `/home/video` 产物、不写 manifest，但**仍会发** `APP_Print_Video_Manifest_Ntf`
+0 帧时不生成层间产物、不写 manifest，但**仍会发** `APP_Print_Video_Manifest_Ntf`
 （`has_entry=0` + `aborted` 标志），否则 UI 会永远停在打印中界面下不来。
+此时**不** `remove_all` 会话目录，以免误删同目录下正在后台转码的 `print_raw.nv12` / `print.h264`。
+
+### 打印连续 H264（调试开关）
+
+```
+预览帧 → 推流线程：拷贝 NV12 入队（队列满丢帧，不 fwrite）
+  → worker：顺序 append print_raw.nv12
+  → Finish/Abort：active=0 + 入队 Encode（消息线程立刻返回）
+  → worker：排空写帧后 mpi_enc → print.h264，成功后删 raw
+```
+
+与层间 `PrintVideoRecorder` worker 并行；结果页仍只等层间 Manifest，不依赖 H264 编完。
+磁盘跟不上时录像可能丢帧（日志 `print_h264 queue full drop=...`），优先保证预览不卡死。
 
 `manifest.json` 由 Camera 独写；字段含 `job_name` / `start_unix` / `duration_sec` / `material_g` / `status` / `frames_dir` / `thumb`。UI 历史页直读该文件（解析见 `common/fs_manifest/print_history_manifest.*`）。
 

@@ -302,11 +302,12 @@ void CameraService::handle_print_video(const middleware::Message& msg)
             return;
         }
         if(msg.type == middleware::MsgType::APP_Print_Video_Session_Finish_Ntf) {
-            print_video_.on_session_finish(info);
+            /* H264 先关 raw 并入队转码（消息线程不阻塞）；层间再入队 finalize/manifest */
             print_h264_.on_session_finish(info);
+            print_video_.on_session_finish(info);
         } else {
-            print_video_.on_session_abort(info);
             print_h264_.on_session_abort(info);
+            print_video_.on_session_abort(info);
         }
         break;
     }

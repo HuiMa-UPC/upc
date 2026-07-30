@@ -479,7 +479,9 @@ void PrintVideoRecorder::finalize_session(bool aborted)
             "print_video %s with no frames session=%s (no manifest)",
             aborted ? "abort" : "finish",
             session_id_.c_str());
-        remove_session_dir();
+        /* 不 remove_all：与 PrintH264Recorder 共用 /home/video/{job}/，
+         * 0 帧 abort 时 H264 可能仍在后台转码 print_raw.nv12；整目录删除会吞掉产物。
+         * 同名作业下次 Session_Start 仍会 remove_session_dir 覆盖清理。 */
         notify_manifest_ready(std::string{}, false, aborted, false);
         session_id_.clear();
         session_name_.clear();
