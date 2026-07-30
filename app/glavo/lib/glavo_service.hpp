@@ -124,6 +124,9 @@ private:
     void publish_debug_env_sim_state();
     void debug_tx(const uint8_t* frame, int n);
 
+    /** @brief About 页版本查询：下发串口 TLV_GET_VERSION，应答由 McuLink 直接推 UI */
+    void handle_mcu_version_req(const middleware::Message& msg);
+
     void send_door_rsp(const middleware::Message& msg, middleware::MsgType rsp_type, bool ok);
     void send_dir_open_empty(const middleware::Message& req);
     void send_dir_open_usb(const middleware::Message& req, const std::string& usb_path);

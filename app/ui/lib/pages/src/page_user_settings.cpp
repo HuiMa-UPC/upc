@@ -111,6 +111,71 @@ const char *about_device_model_text()
     return model.c_str();
 }
 
+/* ---- About 页 MCU 固件版本（串口请求应答：UI_Mcu_Version_Req → GLAVO_Mcu_Version_Ntf） ----
+ * 串口默认关闭 ACK 重传（GLAVO_SERIAL_ACK_ENABLE=0），丢包不会由后端补发，故在此
+ * 做一次超时重发。显示格式 V<major>.<minor>.<patch>.<laser>.<z>（见协议 TLV_REPORT_VERSION）。 */
+constexpr uint32_t kMcuVerTimeoutMs = 2000;   /**< 单次查询等待上限 */
+constexpr uint8_t  kMcuVerMaxRetry  = 1;      /**< 超时后重发次数 */
+
+lv_obj_t   *g_mcu_ver_lbl   = nullptr;   /**< 值标签；仅 About 面板存活期间有效 */
+lv_timer_t *g_mcu_ver_timer = nullptr;   /**< 超时/重发定时器（一次性，自删后置空） */
+char        g_mcu_ver_text[32] = "--";   /**< 显示缓存，跨次进入 About 复用 */
+bool        g_mcu_ver_valid = false;     /**< 是否已成功取到过版本 */
+uint8_t     g_mcu_ver_retry = 0;         /**< 本轮已重发次数 */
+
+void mcu_ver_send_and_arm(void);
+
+void mcu_ver_stop_timer(void)
+{
+    if(g_mcu_ver_timer) {
+        lv_timer_delete(g_mcu_ver_timer);
+        g_mcu_ver_timer = nullptr;
+    }
+}
+
+void mcu_ver_timeout_cb(lv_timer_t * /*t*/)
+{
+    g_mcu_ver_timer = nullptr;   /* 一次性定时器已由 LVGL 自删 */
+    if(g_mcu_ver_retry < kMcuVerMaxRetry) {
+        g_mcu_ver_retry++;
+        mcu_ver_send_and_arm();
+        return;
+    }
+    /* 仅在从未取到过版本时才显示 Unknown：已有缓存值不被本次失败覆盖 */
+    if(!g_mcu_ver_valid && g_mcu_ver_lbl) {
+        lv_label_set_text(g_mcu_ver_lbl, "Unknown");
+    }
+}
+
+void mcu_ver_send_and_arm(void)
+{
+    ui::UiMsgProxy::instance().send_mcu_version_query();
+    mcu_ver_stop_timer();
+    g_mcu_ver_timer = lv_timer_create(mcu_ver_timeout_cb, kMcuVerTimeoutMs, nullptr);
+    lv_timer_set_repeat_count(g_mcu_ver_timer, 1);
+}
+
+/** 进入 About 子页：发起一次查询（标签先显示缓存值 / "--"） */
+void mcu_ver_query_on_enter(void)
+{
+    g_mcu_ver_retry = 0;
+    mcu_ver_send_and_arm();
+}
+
+/** GLAVO_Mcu_Version_Ntf 回调：写缓存并刷新标签（UI 线程，随 MsgPort::process 投递） */
+void mcu_ver_apply(const middleware::McuVersionPayload &p)
+{
+    mcu_ver_stop_timer();
+    std::snprintf(g_mcu_ver_text, sizeof(g_mcu_ver_text), "V%u.%u.%u.%u.%u",
+                  static_cast<unsigned>(p.major), static_cast<unsigned>(p.minor),
+                  static_cast<unsigned>(p.patch), static_cast<unsigned>(p.laser_type),
+                  static_cast<unsigned>(p.z_motor_type));
+    g_mcu_ver_valid = true;
+    if(g_mcu_ver_lbl) {
+        lv_label_set_text(g_mcu_ver_lbl, g_mcu_ver_text);
+    }
+}
+
 /* 后端网络状态缓存（GLAVO_Wifi_State_Ntf；未上线时回退占位）。待后端对齐。 */
 middleware::WifiStatePayload g_wifi_state = {};
 bool g_wifi_state_valid = false;
@@ -1091,23 +1156,26 @@ void net_show_saved(void)       { g_net_subpage = NET_SAVED;    net_reset(); bui
 void net_show_wifi_detail(void) { g_net_subpage = NET_DETAIL;   net_reset(); build_wifi_connected_detail(g_detail); }
 void net_show_empty(void)       { g_net_subpage = NET_EMPTY;    net_reset(); build_wifi_empty(g_detail); }
 
+/** About 只读行：[标题 ... 值(dim)]，返回值标签供异步刷新用 */
+lv_obj_t *about_add_row(lv_obj_t *card, const char *label, const char *value)
+{
+    lv_obj_t *row = ui_user_make_setting_row(card, label, nullptr, nullptr);
+    lv_obj_t *val = lv_label_create(row);
+    lv_label_set_text(val, value);
+    lv_obj_set_style_text_color(val, user_color_text_dim, 0);
+    lv_obj_set_style_text_font(val, user_font_text(), 0);
+    return val;
+}
+
 void build_about_detail(lv_obj_t *parent)
 {
     lv_obj_t *card = ui_user_make_frosted_card(parent, false);
     lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
 
-    struct AboutRow { const char *label; const char *value; };
-    const AboutRow rows[] = {
-        { "Software Version", UPC_SW_VERSION },
-        { "Device Model",     about_device_model_text() },
-    };
-    for(const AboutRow &r : rows) {
-        lv_obj_t *row = ui_user_make_setting_row(card, r.label, nullptr, nullptr);
-        lv_obj_t *val = lv_label_create(row);
-        lv_label_set_text(val, r.value);
-        lv_obj_set_style_text_color(val, user_color_text_dim, 0);
-        lv_obj_set_style_text_font(val, user_font_text(), 0);
-    }
+    about_add_row(card, "Software Version", UPC_SW_VERSION);
+    about_add_row(card, "Device Model",     about_device_model_text());
+    /* MCU 版本由串口异步返回：先填缓存（首次为 "--"），应答/超时后由 mcu_ver_* 刷新 */
+    g_mcu_ver_lbl = about_add_row(card, "MCU Version", g_mcu_ver_text);
 }
 
 void build_device_detail(lv_obj_t *parent)
@@ -1144,6 +1212,10 @@ void show_detail(NavId id)
     g_wifi_seg_on = nullptr;
     g_wifi_seg_off = nullptr;
     g_net_subpage = NET_MAIN;   /* 切换左侧导航时复位子页跟踪 */
+    /* About 面板即将销毁：先断开异步刷新用的标签指针并停掉版本查询定时器，
+     * 否则离开 About 后到达的应答/超时会写已释放的 label。 */
+    g_mcu_ver_lbl = nullptr;
+    mcu_ver_stop_timer();
     lv_obj_clean(g_detail);
     /* 复位详情容器：默认不滚动、无右内边距（网络详情会按需开启） */
     lv_obj_clear_flag(g_detail, LV_OBJ_FLAG_SCROLLABLE);
@@ -1157,7 +1229,11 @@ void show_detail(NavId id)
         ui::UiMsgProxy::instance().send_wifi_scan();
         break;
     case NAV_DEVICE:  build_device_detail(g_detail);  break;
-    case NAV_ABOUT:   build_about_detail(g_detail);   break;
+    case NAV_ABOUT:
+        build_about_detail(g_detail);
+        /* 进入 About：向 MCU 查询一次固件版本（应答经 register_mcu_version 回填） */
+        mcu_ver_query_on_enter();
+        break;
     default:          build_placeholder_detail(g_detail, kNavDefs[id].label); break;
     }
 }
@@ -1318,6 +1394,7 @@ void page_user_settings_dismiss_dialog(void)
     ota_close_dialog(OtaTarget::Glavo);
     ota_close_dialog(OtaTarget::McuSerial);
     close_connecting_dialog();
+    mcu_ver_stop_timer();   /* 离开设置页：不再重发版本查询 */
 }
 
 lv_obj_t *page_user_settings_create(lv_obj_t *parent)
@@ -1329,6 +1406,7 @@ lv_obj_t *page_user_settings_create(lv_obj_t *parent)
     g_wifi_seg_off = nullptr;
     g_page       = nullptr;
     g_scroll_btns = nullptr;
+    g_mcu_ver_lbl = nullptr;
     for(int i = 0; i < NAV_COUNT; i++) {
         g_nav_btns[i]  = nullptr;
         g_nav_icons[i] = nullptr;
@@ -1372,6 +1450,14 @@ lv_obj_t *page_user_settings_create(lv_obj_t *parent)
             g_saved_valid = true;
             if(g_selected == NAV_NETWORK && g_net_subpage == NET_SAVED) {
                 net_show_saved();   /* 用真实列表重建（不再重发请求，避免回环） */
+            }
+        });
+
+    /* MCU 固件版本应答：写缓存并刷新 About 页 MCU Version 行。 */
+    ui::UiMsgProxy::instance().register_mcu_version(
+        [](const middleware::McuVersionPayload &p) {
+            if(p.valid) {
+                mcu_ver_apply(p);
             }
         });
 

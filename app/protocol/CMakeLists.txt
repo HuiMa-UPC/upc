@@ -12,6 +12,7 @@ set(UPC_PROTOCOL_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/serial/serial_env.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/serial/serial_debug.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/serial/serial_ota.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/serial/serial_project_info.cpp
 )
 
 add_library(${UPC_PROTOCOL_TARGET} STATIC ${UPC_PROTOCOL_SOURCES})

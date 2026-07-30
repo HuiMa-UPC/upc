@@ -10,5 +10,6 @@
 #include "serial_env.hpp"
 #include "serial_debug.hpp"
 #include "serial_ota.hpp"
+#include "serial_project_info.hpp"
 
 #endif

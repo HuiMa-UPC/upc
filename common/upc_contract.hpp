@@ -410,6 +410,10 @@ enum class MsgType : uint32_t {
     VISUAL_Camera_Stream_Stop_Req,      /**< Empty */
     APP_Visual_Camera_Stream_Stop_Done, /**< Empty */
     APP_Visual_Rect_Ntf,                /**< VisualRectNtfPayload */
+
+    // ---- UI ↔ GLAVO：MCU 固件版本查询（串口 PORT_GENERAL_TASK 0xA2 / CMD_PROJECT_INFO 0x10） ----
+    UI_Mcu_Version_Req = 0x1500, /**< Empty：进入 Settings/About 页时查询一次 */
+    GLAVO_Mcu_Version_Ntf,       /**< McuVersionPayload：MCU 固件版本 + 板级配置 */
 };
 
 enum class MsgPriority : uint8_t {
@@ -759,6 +763,20 @@ struct McuOtaStatusPayload {
     McuOtaState state;
     uint8_t     progress;   /**< MCU byte[9] 0~255 */
     uint8_t     reserved[2];
+};
+
+/**
+ * GLAVO_Mcu_Version_Ntf：MCU 固件版本与编译期板级配置（串口 A2/0x10 TLV 0x02 上报）
+ * About 页按 V<major>.<minor>.<patch>.<laser_type>.<z_motor_type> 显示。
+ */
+struct McuVersionPayload {
+    uint8_t valid;        /**< 1=字段有效；0=未取到 */
+    uint8_t major;        /**< 大版本 0~255 */
+    uint8_t minor;        /**< 子版本 0~255 */
+    uint8_t patch;        /**< 修订号 0~255 */
+    uint8_t laser_type;   /**< 激光器类别：JFSC=1，AL=2 */
+    uint8_t z_motor_type; /**< Z 轴电机：闭环 BRIDGE=0，开环 OPEN_CONTROL=1 */
+    uint8_t reserved[2];
 };
 
 // 调试页（手动控制/标定）契约 —— 命名见 common/COMMON.md；枚举跨进程时按 uint8_t 传输

@@ -187,6 +187,8 @@ const char* upc_msg_type_name(MsgType type) {
         case MsgType::GLAVO_Debug_Print_H264_Record_Ntf: return "GLAVO_Debug_Print_H264_Record_Ntf";
         case MsgType::GLAVO_Debug_Clean_Record_Ntf: return "GLAVO_Debug_Clean_Record_Ntf";
         case MsgType::GLAVO_Debug_Env_Sim_Ntf: return "GLAVO_Debug_Env_Sim_Ntf";
+        case MsgType::UI_Mcu_Version_Req: return "UI_Mcu_Version_Req";
+        case MsgType::GLAVO_Mcu_Version_Ntf: return "GLAVO_Mcu_Version_Ntf";
         default: return "Msg";
     }
 }

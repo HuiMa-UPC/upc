@@ -276,6 +276,15 @@ void UiMsgProxy::init()
             }
         }));
 
+    subs_.push_back(bus.subscribe(
+        middleware::MsgType::GLAVO_Mcu_Version_Ntf, middleware::ModuleId::UI,
+        [this](const middleware::Message& msg) {
+            middleware::McuVersionPayload p{};
+            if (mcu_version_cb_ && read_inline_pod(msg, p)) {
+                mcu_version_cb_(p);
+            }
+        }));
+
 }
 
 /* 解析 [WifiListHeader][WifiEntryPayload × count]（BufferRef/Inline 皆可），仿 Fs_DirOpen_Rsp。 */
@@ -420,6 +429,19 @@ void UiMsgProxy::register_xfr_transfer_progress(XfrTransferProgressCb cb)
 void UiMsgProxy::register_usb_hotplug(UsbHotplugCb cb)
 {
     usb_hotplug_cb_ = std::move(cb);
+}
+
+void UiMsgProxy::send_mcu_version_query()
+{
+    middleware::Message msg(middleware::MsgType::UI_Mcu_Version_Req,
+                            middleware::ModuleId::UI,
+                            middleware::ModuleId::APP_GLAVO);
+    middleware::MsgPort::instance().publish_async(msg);
+}
+
+void UiMsgProxy::register_mcu_version(McuVersionCb cb)
+{
+    mcu_version_cb_ = std::move(cb);
 }
 
 

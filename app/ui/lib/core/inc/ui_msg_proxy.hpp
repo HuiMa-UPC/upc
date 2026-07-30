@@ -40,6 +40,7 @@ using XfrPairPinCb     = std::function<void(const middleware::XfrPairPinPayload&
 using XfrFileReceivedCb = std::function<void(const middleware::XfrFileReceivedPayload&)>;
 using XfrTransferProgressCb = std::function<void(const middleware::XfrTransferProgressPayload&)>;
 using UsbHotplugCb     = std::function<void(const middleware::UsbHotplugPayload&)>;
+using McuVersionCb     = std::function<void(const middleware::McuVersionPayload&)>;
 
 class UiMsgProxy {
 public:
@@ -112,6 +113,10 @@ public:
     void send_serial_mcu_ota_cancel();
     void register_serial_mcu_ota_status(McuOtaStatusCb cb);
 
+    /** MCU 固件版本查询（Settings/About 进页触发一次） */
+    void send_mcu_version_query();
+    void register_mcu_version(McuVersionCb cb);   /**< GLAVO_Mcu_Version_Ntf */
+
     /* ---- 网络 / WiFi（前端预留，后端接口到位后即可用；未上线时无人响应，不影响运行） ---- */
     void send_wifi_enable(bool enable);
     void send_wifi_scan();
@@ -182,6 +187,7 @@ private:
     XfrFileReceivedCb xfr_file_received_cb_;
     XfrTransferProgressCb xfr_transfer_progress_cb_;
     UsbHotplugCb usb_hotplug_cb_;
+    McuVersionCb mcu_version_cb_;
 };
 
 } // namespace ui

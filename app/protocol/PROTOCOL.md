@@ -22,6 +22,7 @@
 | `serial/serial_print.*` | 打印握手/换层（8 步命令表） |
 | `serial/serial_env.*` | 环境传感器上报（A5/9B，TLV 0x02） |
 | `serial/serial_debug.*` | 调试页手动控制：三轴/设备/粉桶/三通/风扇/开关/清粉 组帧 + 运动位置上报（A5/9B，TLV 0x05）解析 |
+| `serial/serial_project_info.*` | 工程版本查询/上报（A2/0x10，TLV 0x01 查询 / 0x02 上报）：MCU 固件版本 + 激光器/Z 电机板级配置 |
 
 ## 链接
 

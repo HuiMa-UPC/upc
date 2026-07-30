@@ -443,6 +443,9 @@ bool GlavoService::start()
         middleware::MsgType::UI_Debug_Clean_Record_Get_Req,
         middleware::MsgType::UI_Debug_Env_Sim_Set_Req,
         middleware::MsgType::UI_Debug_Env_Sim_Get_Req,
+
+        /* Settings/About：MCU 固件版本查询 */
+        middleware::MsgType::UI_Mcu_Version_Req,
     };
     for(middleware::MsgType t : k_subs) {
         subscribe(t, [this](const middleware::Message& msg) { on_message(msg); });
@@ -788,6 +791,8 @@ void GlavoService::handle_message(const middleware::Message& msg)
             break;
         case middleware::MsgType::UI_Debug_Env_Sim_Get_Req:
             handle_debug_env_sim_get(msg);
+        case middleware::MsgType::UI_Mcu_Version_Req:
+            handle_mcu_version_req(msg);
             break;
         default:
             break;
@@ -2392,6 +2397,7 @@ void GlavoService::handle_debug_clean_record_get(const middleware::Message& msg)
     publish_debug_clean_record_state();
 }
 
+<<<<<<< HEAD
 void GlavoService::publish_debug_env_sim_state()
 {
     middleware::DebugOnOffPayload p{};
@@ -2421,6 +2427,28 @@ void GlavoService::handle_debug_env_sim_get(const middleware::Message& msg)
 {
     (void)msg;
     publish_debug_env_sim_state();
+=======
+/* ============================================================================
+ * Settings/About：MCU 固件版本查询
+ * ============================================================================ */
+
+/**
+ * @brief 下发 TLV_GET_VERSION 查询帧
+ * @note MCU 的 TLV_REPORT_VERSION 应答由 McuLink::handle_serial_rx_frame 直接推
+ *       GLAVO_Mcu_Version_Ntf 给 UI，故此处只负责发请求，不等待回包。
+ */
+void GlavoService::handle_mcu_version_req(const middleware::Message& msg)
+{
+    (void)msg;
+    uint8_t frame[16];
+    const int n = serial_build_project_info_request(frame, sizeof(frame));
+    if(n <= 0) {
+        UPC_LOG_GLAVO_SERVICE(Warn, "mcu_version request build failed");
+        return;
+    }
+    UPC_LOG_GLAVO_SERVICE(Info, "mcu_version query TX");
+    debug_tx(frame, n);
+>>>>>>> V3.7.8 lhx 添加 mcu 版本显示点击 about 获取刷新一次
 }
 
 } // namespace upc::glavo

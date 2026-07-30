@@ -815,6 +815,24 @@ void publish_laser_ntf(uint8_t type, uint16_t status, uint16_t alarm,
     middleware::MsgPort::instance().publish_async(ntf);
 }
 
+/** 组装并异步下发 GLAVO_Mcu_Version_Ntf（About 页 MCU Version 显示）。 */
+void publish_mcu_version_ntf(const serial_project_info_t& info)
+{
+    middleware::McuVersionPayload p{};
+    p.valid        = 1;
+    p.major        = info.major;
+    p.minor        = info.minor;
+    p.patch        = info.patch;
+    p.laser_type   = info.laser_type;
+    p.z_motor_type = info.z_motor_type;
+
+    middleware::Message ntf(middleware::MsgType::GLAVO_Mcu_Version_Ntf,
+        middleware::ModuleId::APP_GLAVO, middleware::ModuleId::UI);
+    ntf.payload = middleware::MsgPayload::from_bytes(
+        reinterpret_cast<const uint8_t*>(&p), sizeof(p));
+    middleware::MsgPort::instance().publish_async(ntf);
+}
+
 } // namespace
 
 void McuLink::publish_env_update_ntf()
@@ -1102,6 +1120,20 @@ void McuLink::handle_serial_rx_frame(const uint8_t* frame, size_t len)
         if(clean_test_done_cb_) {
             clean_test_done_cb_(clean_result);
         }
+        return;
+    }
+
+    /* 工程版本上报（0xA2 + 0x10 + TLV 0x02）：About 页查询的应答 */
+    serial_project_info_t pinfo{};
+    if(serial_parse_project_info_report(frame, len, &pinfo) == 0) {
+        UPC_LOG_MCU_LINK(Info,
+            "mcu_version: %u.%u.%u laser=%u z_motor=%u",
+            static_cast<unsigned>(pinfo.major),
+            static_cast<unsigned>(pinfo.minor),
+            static_cast<unsigned>(pinfo.patch),
+            static_cast<unsigned>(pinfo.laser_type),
+            static_cast<unsigned>(pinfo.z_motor_type));
+        publish_mcu_version_ntf(pinfo);
         return;
     }
 
