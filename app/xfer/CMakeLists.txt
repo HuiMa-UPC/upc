@@ -25,6 +25,10 @@ target_link_libraries(rongsu_xfr
         upc::ipc
         upc::process
         upc::debug
+        -Wl,--whole-archive
+        upc::parser_ovf
+        -Wl,--no-whole-archive
+        upc::parser
         OpenSSL::Crypto
 )
 

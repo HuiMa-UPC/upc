@@ -791,6 +791,7 @@ void GlavoService::handle_message(const middleware::Message& msg)
             break;
         case middleware::MsgType::UI_Debug_Env_Sim_Get_Req:
             handle_debug_env_sim_get(msg);
+            break;
         case middleware::MsgType::UI_Mcu_Version_Req:
             handle_mcu_version_req(msg);
             break;
@@ -2397,7 +2398,6 @@ void GlavoService::handle_debug_clean_record_get(const middleware::Message& msg)
     publish_debug_clean_record_state();
 }
 
-<<<<<<< HEAD
 void GlavoService::publish_debug_env_sim_state()
 {
     middleware::DebugOnOffPayload p{};
@@ -2427,7 +2427,7 @@ void GlavoService::handle_debug_env_sim_get(const middleware::Message& msg)
 {
     (void)msg;
     publish_debug_env_sim_state();
-=======
+}
 /* ============================================================================
  * Settings/About：MCU 固件版本查询
  * ============================================================================ */
@@ -2448,7 +2448,6 @@ void GlavoService::handle_mcu_version_req(const middleware::Message& msg)
     }
     UPC_LOG_GLAVO_SERVICE(Info, "mcu_version query TX");
     debug_tx(frame, n);
->>>>>>> V3.7.8 lhx 添加 mcu 版本显示点击 about 获取刷新一次
 }
 
 } // namespace upc::glavo

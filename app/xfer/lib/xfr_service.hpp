@@ -33,8 +33,6 @@ private:
     HttpResponse handle_upload_put(const HttpRequest& req, const std::string& upload_id);
     HttpResponse handle_upload_complete(const HttpRequest& req, const std::string& upload_id);
     HttpResponse handle_upload_status(const HttpRequest& req, const std::string& upload_id);
-    HttpResponse handle_build_start(const HttpRequest& req);
-    HttpResponse handle_build_status(const HttpRequest& req);
     HttpResponse handle_print_start(const HttpRequest& req);
     HttpResponse handle_print_status(const HttpRequest& req);
 
@@ -43,35 +41,14 @@ private:
     static bool json_get_u64(const std::string& body, const std::string& key, uint64_t* out);
     static bool parse_content_range(const std::string& v, uint64_t* start, uint64_t* end, uint64_t* total);
     static std::string json_escape(const std::string& s);
-    static std::string shell_quote(const std::string& s);
     static HttpResponse err(int status, const std::string& code, const std::string& message);
 
-    bool find_single_transport_pair(std::string* json_path,
-                                    std::string* svg_path,
-                                    std::string* stem,
-                                    std::string* err_code,
-                                    std::string* err_msg) const;
-    bool run_snowslice_build(const std::string& json_path,
-                             const std::string& svg_path,
-                             const std::string& gcode_path,
-                             std::string* err_code,
-                             std::string* err_msg);
-    bool update_gcode_manifest(const std::string& gcode_path,
-                               const std::string& gcode_name,
+    bool preprocess_ovf_and_update_manifest(const std::string& ovf_path,
+                               const std::string& ovf_name,
                                std::string* err_msg) const;
-    static bool count_gcode_lines(const std::string& gcode_path, uint32_t* out_lines);
-    void set_build_state(bool running,
-                         const std::string& state,
-                         const std::string& message,
-                         const std::string& gcode_name,
-                         int exit_code);
-    bool trigger_auto_build_async();
-    void run_build_worker();
-    void refresh_slice_progress_locked(std::string& state, uint32_t& slice_pct);
     uint32_t calc_progress_percent(const std::string& state,
                                    uint64_t upload_size,
-                                   uint64_t upload_offset,
-                                   uint32_t slice_pct) const;
+                                   uint64_t upload_offset) const;
     void publish_transfer_progress_if_needed();
 
     void notify_pair_pin(const std::string& pin, uint32_t expires_s) const;
@@ -82,21 +59,13 @@ private:
     UploadManager upload_mgr_;
     MdnsPublisher mdns_;
     HttpServer http_;
-    mutable std::mutex build_mu_;
-    mutable std::mutex build_state_mu_;
     mutable std::mutex print_state_mu_;
-    bool build_running_ = false;
-    std::string build_state_ = "idle";
-    std::string build_message_;
-    std::string build_gcode_name_;
-    int build_exit_code_ = 0;
     std::string print_job_id_;
     std::string print_state_ = "idle";
     uint32_t print_layer_ = 0;
     uint32_t print_layer_total_ = 200;
     uint64_t upload_size_ = 0;
     uint64_t upload_offset_ = 0;
-    uint32_t slice_progress_pct_ = 0;
     std::string transfer_name_;
     std::chrono::steady_clock::time_point last_progress_emit_at_{};
     uint8_t  last_progress_state_ = 0xff;

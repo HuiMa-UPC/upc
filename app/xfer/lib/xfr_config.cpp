@@ -48,8 +48,6 @@ XfrConfig load_xfr_config()
     cfg.token_file = env_or_default("UPC_XFR_TOKEN_FILE", cfg.token_file.c_str());
     cfg.mdns_service_file = env_or_default("UPC_XFR_MDNS_SERVICE_FILE",
                                            cfg.mdns_service_file.c_str());
-    cfg.snowslice_bin = env_or_default("UPC_XFR_SNOWSLICE_BIN", cfg.snowslice_bin.c_str());
-    cfg.progress_file = env_or_default("UPC_XFR_PROGRESS_FILE", cfg.progress_file.c_str());
     cfg.device_sn = env_or_default("UPC_DEVICE_SN", cfg.device_sn.c_str());
     cfg.device_model = env_or_default("UPC_DEVICE_MODEL", cfg.device_model.c_str());
     cfg.require_auth = env_bool("UPC_XFR_REQUIRE_AUTH", cfg.require_auth);
@@ -57,7 +55,6 @@ XfrConfig load_xfr_config()
     cfg.pair_pin_ttl_s = env_u32("UPC_XFR_PIN_TTL_S", cfg.pair_pin_ttl_s);
     cfg.pair_pin_max_attempts = env_u32("UPC_XFR_PIN_MAX_ATTEMPTS",
                                         cfg.pair_pin_max_attempts);
-    cfg.build_timeout_s = env_u32("UPC_XFR_BUILD_TIMEOUT_S", cfg.build_timeout_s);
 
     upc::config::CalConfigOptions cal_cfg{};
     if(upc::config::load_cal_config_options(upc::config::kCalDefaultPath, &cal_cfg) &&

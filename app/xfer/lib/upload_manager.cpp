@@ -35,7 +35,7 @@ UploadInitResult UploadManager::init(const std::string& filename,
     const std::string base = basename_only(filename);
     if (base.empty() || !is_supported_filename(base)) {
         out.err_code = "UNSUPPORTED_FILE_TYPE";
-        out.err_msg = "only .json/.svg files are allowed";
+        out.err_msg = "only .ovf files are allowed";
         out.http_status = 422;
         return out;
     }
@@ -237,9 +237,8 @@ UploadCompleteResult UploadManager::complete(const std::string& upload_id,
 bool UploadManager::is_supported_filename(const std::string& filename)
 {
     const std::string lower = to_lower(filename);
-    const bool is_json = lower.size() > 5 && lower.rfind(".json") == lower.size() - 5;
-    const bool is_svg = lower.size() > 4 && lower.rfind(".svg") == lower.size() - 4;
-    return is_json || is_svg;
+    const bool is_ovf = lower.size() > 4 && lower.rfind(".ovf") == lower.size() - 4;
+    return is_ovf;
 }
 
 std::string UploadManager::basename_only(const std::string& path)

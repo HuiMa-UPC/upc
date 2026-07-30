@@ -1,6 +1,7 @@
 #include "xfr_service.hpp"
 
 #include "msg_port.hpp"
+#include "parser_manager.hpp"
 #include "rs_log.hpp"
 #include "upc_contract.hpp"
 
@@ -11,16 +12,12 @@
 #include <cstring>
 #include <cstdio>
 #include <filesystem>
-#include <fstream>
-#include <exception>
 #include <iomanip>
 #include <regex>
 #include <sstream>
 #include <signal.h>
 #include <sys/stat.h>
 #include <sys/types.h>
-#include <sys/wait.h>
-#include <thread>
 #include <unistd.h>
 
 namespace upc::xfr {
@@ -34,48 +31,6 @@ std::string body_to_string(const HttpRequest& req)
         return {};
     }
     return std::string(reinterpret_cast<const char*>(req.body.data()), req.body.size());
-}
-
-std::string lower_ext(const std::filesystem::path& p)
-{
-    std::string s = p.extension().string();
-    std::transform(s.begin(), s.end(), s.begin(),
-        [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-    return s;
-}
-
-bool read_progress_percent_file(const std::string& path, uint32_t* out_pct)
-{
-    if (!out_pct) {
-        return false;
-    }
-    std::ifstream in(path);
-    if (!in.good()) {
-        return false;
-    }
-    std::string line;
-    if (!std::getline(in, line)) {
-        return false;
-    }
-    std::size_t b = 0;
-    std::size_t e = line.size();
-    while (b < e && std::isspace(static_cast<unsigned char>(line[b])) != 0) {
-        ++b;
-    }
-    while (e > b && std::isspace(static_cast<unsigned char>(line[e - 1])) != 0) {
-        --e;
-    }
-    if (b >= e) {
-        return false;
-    }
-    const std::string num = line.substr(b, e - b);
-    char* end = nullptr;
-    const unsigned long v = std::strtoul(num.c_str(), &end, 10);
-    if (!end || *end != '\0') {
-        return false;
-    }
-    *out_pct = static_cast<uint32_t>(std::min<unsigned long>(100UL, v));
-    return true;
 }
 
 } // namespace
@@ -149,12 +104,6 @@ HttpResponse XfrService::on_request(const HttpRequest& req)
     }
     if (req.method == "GET" && path == "/api/v1/print/status") {
         return handle_print_status(req);
-    }
-    if (req.method == "POST" && path == "/api/v1/build/start") {
-        return handle_build_start(req);
-    }
-    if (req.method == "GET" && path == "/api/v1/build/status") {
-        return handle_build_status(req);
     }
 
     static const std::regex re_put("^/api/v1/upload/([0-9a-f]+)$");
@@ -273,7 +222,6 @@ HttpResponse XfrService::handle_upload_init(const HttpRequest& req)
         std::lock_guard<std::mutex> lk(print_state_mu_);
         upload_size_ = size;
         upload_offset_ = r.offset;
-        slice_progress_pct_ = 0;
         print_state_ = "uploading";
         transfer_name_ = filename;
     }
@@ -342,50 +290,54 @@ HttpResponse XfrService::handle_upload_complete(const HttpRequest& req, const st
     if (!r.ok) {
         return err(r.http_status, r.err_code, r.err_msg);
     }
+    const std::string src_path = cfg_.storage_dir + "/" + r.file_name;
+    const std::string dst_path = cfg_.gcode_dir + "/" + r.file_name;
+    std::error_code rm_ec;
+    std::filesystem::remove(dst_path, rm_ec);
+    std::error_code mv_ec;
+    std::filesystem::rename(src_path, dst_path, mv_ec);
+    if (mv_ec) {
+        UPC_LOG_XFR_SERVICE(Error, "upload complete move failed src=%s dst=%s ec=%d",
+                            src_path.c_str(), dst_path.c_str(), mv_ec.value());
+        {
+            std::lock_guard<std::mutex> lk(print_state_mu_);
+            print_state_ = "error";
+        }
+        return err(500, "IO_ERROR", "move ovf to gcode dir failed");
+    }
+
+    std::string preprocess_err;
+    if (!preprocess_ovf_and_update_manifest(dst_path, r.file_name, &preprocess_err)) {
+        UPC_LOG_XFR_SERVICE(Error, "upload complete preprocess failed file=%s msg=%s",
+                            dst_path.c_str(), preprocess_err.c_str());
+        {
+            std::lock_guard<std::mutex> lk(print_state_mu_);
+            print_state_ = "error";
+            transfer_name_ = r.file_name;
+        }
+        return err(500, "OVF_PREPROCESS_FAILED", preprocess_err);
+    }
+
+    struct stat st{};
+    uint64_t file_size = r.size;
+    if (stat(dst_path.c_str(), &st) == 0 && st.st_size >= 0) {
+        file_size = static_cast<uint64_t>(st.st_size);
+    }
     {
         std::lock_guard<std::mutex> lk(print_state_mu_);
-        upload_size_ = r.size;
-        upload_offset_ = r.size;
-        slice_progress_pct_ = 0;
-        if (print_state_ != "finished" && print_state_ != "error") {
-            print_state_ = "printing";
-        }
+        upload_size_ = file_size;
+        upload_offset_ = file_size;
+        print_state_ = "finished";
         transfer_name_ = r.file_name;
     }
-    const bool started = trigger_auto_build_async();
-    UPC_LOG_XFR_SERVICE(Info, "upload complete accepted file=%s auto_build_started=%d",
-                        r.file_name.c_str(), started ? 1 : 0);
+    notify_file_received(r.file_name, file_size);
+    UPC_LOG_XFR_SERVICE(Info, "upload complete accepted file=%s size=%llu",
+                        r.file_name.c_str(), static_cast<unsigned long long>(file_size));
     std::ostringstream oss;
     oss << "{"
         << "\"file_id\":\"" << json_escape(r.file_id) << "\","
-        << "\"size\":" << r.size << ","
-        << "\"verified\":" << (r.verified ? "true" : "false") << ","
-        << "\"auto_build_started\":" << (started ? "true" : "false")
-        << "}";
-    HttpResponse rsp;
-    rsp.status = 200;
-    rsp.body = oss.str();
-    return rsp;
-}
-
-HttpResponse XfrService::handle_build_start(const HttpRequest& req)
-{
-    UPC_LOG_XFR_SERVICE(Info, "build/start requested path=%s body_bytes=%zu",
-                        req.path.c_str(), req.body.size());
-    std::string token;
-    if (!need_auth(req, &token)) {
-        UPC_LOG_XFR_SERVICE(Warn, "build/start auth failed");
-        return err(401, "AUTH_INVALID", "missing or invalid token");
-    }
-    if (!trigger_auto_build_async()) {
-        UPC_LOG_XFR_SERVICE(Warn, "build/start rejected: build already running");
-        return err(409, "BUILD_BUSY", "build already running");
-    }
-
-    std::ostringstream oss;
-    oss << "{"
-        << "\"ok\":true,"
-        << "\"state\":\"running\""
+        << "\"size\":" << file_size << ","
+        << "\"verified\":" << (r.verified ? "true" : "false")
         << "}";
     HttpResponse rsp;
     rsp.status = 200;
@@ -435,31 +387,9 @@ HttpResponse XfrService::handle_print_start(const HttpRequest& req)
     return rsp;
 }
 
-void XfrService::refresh_slice_progress_locked(std::string& state, uint32_t& slice_pct)
-{
-    if (state != "printing") {
-        return;
-    }
-    uint32_t latest_pct = 0;
-    if (!read_progress_percent_file(cfg_.progress_file, &latest_pct)) {
-        return;
-    }
-    if (latest_pct > slice_progress_pct_) {
-        slice_progress_pct_ = latest_pct;
-    }
-    slice_pct = slice_progress_pct_;
-    if (slice_progress_pct_ >= 100U) {
-        print_state_ = "finished";
-        state = "finished";
-        return;
-    }
-    state = print_state_;
-}
-
 uint32_t XfrService::calc_progress_percent(const std::string& state,
                                            uint64_t upload_size,
-                                           uint64_t upload_offset,
-                                           uint32_t slice_pct) const
+                                           uint64_t upload_offset) const
 {
     if (state == "finished") {
         return 100U;
@@ -468,17 +398,10 @@ uint32_t XfrService::calc_progress_percent(const std::string& state,
         ? 0.0
         : static_cast<double>(upload_offset) / static_cast<double>(upload_size);
     const double bounded_upload_ratio = std::min(1.0, std::max(0.0, upload_ratio));
-    const double bounded_slice_ratio =
-        std::min(1.0, std::max(0.0, static_cast<double>(slice_pct) / 100.0));
-    double progress = 0.0;
-    if (state == "printing") {
-        progress = 0.05 + 0.95 * bounded_slice_ratio;
-    } else if (state == "uploading") {
-        progress = 0.05 * bounded_upload_ratio;
-    } else if (state == "error") {
-        progress = 0.05 + 0.95 * bounded_slice_ratio;
+    if (state != "uploading" && state != "error") {
+        return 0U;
     }
-    const int pct = static_cast<int>(progress * 100.0 + 0.5);
+    const int pct = static_cast<int>(bounded_upload_ratio * 100.0 + 0.5);
     return static_cast<uint32_t>(std::min(100, std::max(0, pct)));
 }
 
@@ -493,25 +416,20 @@ void XfrService::publish_transfer_progress_if_needed()
     std::string state;
     uint64_t upload_size = 0;
     uint64_t upload_offset = 0;
-    uint32_t slice_pct = 0;
     std::string transfer_name;
     {
         std::lock_guard<std::mutex> lk(print_state_mu_);
         state = print_state_;
         upload_size = upload_size_;
         upload_offset = upload_offset_;
-        slice_pct = slice_progress_pct_;
-        refresh_slice_progress_locked(state, slice_pct);
         transfer_name = transfer_name_;
     }
 
-    const uint32_t progress_percent = calc_progress_percent(state, upload_size, upload_offset, slice_pct);
+    const uint32_t progress_percent = calc_progress_percent(state, upload_size, upload_offset);
 
     uint8_t state_code = static_cast<uint8_t>(middleware::XfrTransferState::Idle);
     if (state == "uploading") {
         state_code = static_cast<uint8_t>(middleware::XfrTransferState::Uploading);
-    } else if (state == "printing") {
-        state_code = static_cast<uint8_t>(middleware::XfrTransferState::Slicing);
     } else if (state == "finished") {
         state_code = static_cast<uint8_t>(middleware::XfrTransferState::Finished);
     } else if (state == "error") {
@@ -561,7 +479,6 @@ HttpResponse XfrService::handle_print_status(const HttpRequest& req)
     uint32_t layer_total = 0;
     uint64_t upload_size = 0;
     uint64_t upload_offset = 0;
-    uint32_t slice_pct = 0;
     {
         std::lock_guard<std::mutex> lk(print_state_mu_);
         if (print_job_id_.empty()) {
@@ -577,17 +494,11 @@ HttpResponse XfrService::handle_print_status(const HttpRequest& req)
         layer_total = print_layer_total_;
         upload_size = upload_size_;
         upload_offset = upload_offset_;
-        slice_pct = slice_progress_pct_;
-        refresh_slice_progress_locked(state, slice_pct);
-    }
-
-    if (state == "finished") {
-        slice_pct = 100U;
     }
     if (upload_size > 0 && upload_offset > upload_size) {
         upload_offset = upload_size;
     }
-    const uint32_t progress_percent = calc_progress_percent(state, upload_size, upload_offset, slice_pct);
+    const uint32_t progress_percent = calc_progress_percent(state, upload_size, upload_offset);
     const double progress = static_cast<double>(progress_percent) / 100.0;
 
     std::ostringstream oss;
@@ -610,159 +521,56 @@ HttpResponse XfrService::handle_print_status(const HttpRequest& req)
     return rsp;
 }
 
-bool XfrService::trigger_auto_build_async()
+bool XfrService::preprocess_ovf_and_update_manifest(const std::string& ovf_path,
+                                                    const std::string& ovf_name,
+                                                    std::string* err_msg) const
 {
-    {
-        std::lock_guard<std::mutex> lk(build_mu_);
-        if (build_running_) {
-            return false;
-        }
-        build_running_ = true;
-    }
-    set_build_state(true, "running", "build running", "", 0);
-    std::thread([this]() { run_build_worker(); }).detach();
-    return true;
-}
-
-void XfrService::run_build_worker()
-{
-    std::string json_path;
-    std::string svg_path;
-    std::string stem;
-    std::string err_code;
-    std::string err_msg;
-
-    if (!find_single_transport_pair(&json_path, &svg_path, &stem, &err_code, &err_msg)) {
-        if (err_code == "BUILD_INPUT_MISSING") {
-            UPC_LOG_XFR_SERVICE(Info, "auto build waiting pair: %s", err_msg.c_str());
-            set_build_state(false, "idle", "waiting for json/svg pair", "", 0);
-        } else {
-            UPC_LOG_XFR_SERVICE(Warn, "auto build input check failed code=%s msg=%s",
-                                err_code.c_str(), err_msg.c_str());
-            set_build_state(false, "failed", err_msg, "", -1);
-        }
-        {
-            std::lock_guard<std::mutex> lk(print_state_mu_);
-            print_state_ = (err_code == "BUILD_INPUT_MISSING") ? "uploading" : "error";
-        }
-        std::lock_guard<std::mutex> lk(build_mu_);
-        build_running_ = false;
-        return;
-    }
-
-    UPC_LOG_XFR_SERVICE(Info, "auto build input pair json=%s svg=%s stem=%s",
-                        json_path.c_str(), svg_path.c_str(), stem.c_str());
-    const std::string gcode_name = stem + ".gcode";
-    const std::string gcode_path = cfg_.gcode_dir + "/" + gcode_name;
-    UPC_LOG_XFR_SERVICE(Info, "auto build output gcode=%s", gcode_path.c_str());
-
-    {
-        std::lock_guard<std::mutex> lk(print_state_mu_);
-        print_state_ = "printing";
-        slice_progress_pct_ = 0;
-        transfer_name_ = gcode_name;
-    }
-    if (!run_snowslice_build(json_path, svg_path, gcode_path, &err_code, &err_msg)) {
-        UPC_LOG_XFR_SERVICE(Error, "auto build exec failed code=%s msg=%s",
-                            err_code.c_str(), err_msg.c_str());
-        set_build_state(false, "failed", err_msg, gcode_name, -1);
-        {
-            std::lock_guard<std::mutex> lk(print_state_mu_);
-            print_state_ = "error";
-        }
-        std::lock_guard<std::mutex> lk(build_mu_);
-        build_running_ = false;
-        return;
-    }
-    {
-        std::error_code rm_progress_ec;
-        std::filesystem::remove(cfg_.progress_file, rm_progress_ec);
-        if (rm_progress_ec) {
-            UPC_LOG_XFR_SERVICE(Warn, "cleanup progress file failed path=%s ec=%d",
-                                cfg_.progress_file.c_str(), rm_progress_ec.value());
-        } else {
-            UPC_LOG_XFR_SERVICE(Info, "cleanup progress file ok path=%s",
-                                cfg_.progress_file.c_str());
-        }
-    }
-
-    if (!update_gcode_manifest(gcode_path, gcode_name, &err_msg)) {
-        UPC_LOG_XFR_SERVICE(Error, "auto build manifest update failed msg=%s",
-                            err_msg.c_str());
-        set_build_state(false, "failed", err_msg, gcode_name, -1);
-        {
-            std::lock_guard<std::mutex> lk(print_state_mu_);
-            print_state_ = "error";
-        }
-        std::lock_guard<std::mutex> lk(build_mu_);
-        build_running_ = false;
-        return;
-    }
-
-    std::error_code rm_ec1;
-    std::error_code rm_ec2;
-    std::filesystem::remove(json_path, rm_ec1);
-    std::filesystem::remove(svg_path, rm_ec2);
-    if (rm_ec1 || rm_ec2) {
-        UPC_LOG_XFR_SERVICE(Warn, "cleanup transport failed json_ec=%d svg_ec=%d",
-                            rm_ec1.value(), rm_ec2.value());
-    } else {
-        UPC_LOG_XFR_SERVICE(Info, "cleanup transport ok json=%s svg=%s",
-                            json_path.c_str(), svg_path.c_str());
-    }
-
     struct stat st{};
-    uint64_t fsize = 0;
-    if (stat(gcode_path.c_str(), &st) == 0) {
-        fsize = static_cast<uint64_t>(st.st_size);
-    }
-    UPC_LOG_XFR_SERVICE(Info, "auto build success gcode=%s size=%llu",
-                        gcode_path.c_str(),
-                        static_cast<unsigned long long>(fsize));
-    notify_file_received(gcode_name, fsize);
-    set_build_state(false, "success", "build complete", gcode_name, 0);
-    {
-        std::lock_guard<std::mutex> lk(print_state_mu_);
-        print_state_ = "finished";
-        slice_progress_pct_ = 100;
-        transfer_name_ = gcode_name;
+    if (stat(ovf_path.c_str(), &st) != 0) {
+        UPC_LOG_XFR_SERVICE(Error, "manifest stat ovf failed path=%s", ovf_path.c_str());
+        if (err_msg) { *err_msg = "stat ovf failed"; }
+        return false;
     }
 
-    std::lock_guard<std::mutex> lk(build_mu_);
-    build_running_ = false;
-}
+    parser::ParserManager& parser_mgr = parser::ParserManager::instance();
+    if (parser_mgr.open_file(ovf_path) != 0) {
+        UPC_LOG_XFR_SERVICE(Error, "ovf preprocess open failed path=%s", ovf_path.c_str());
+        if (err_msg) { *err_msg = "open ovf failed"; }
+        return false;
+    }
+    parser::IParserWorker* worker = parser_mgr.active();
+    if (!worker) {
+        UPC_LOG_XFR_SERVICE(Error, "ovf preprocess resolve worker failed path=%s", ovf_path.c_str());
+        if (err_msg) { *err_msg = "ovf worker unavailable"; }
+        return false;
+    }
+    const uint32_t line_count = static_cast<uint32_t>(std::max(0, worker->get_total_lines()));
+    worker->close_file();
 
-HttpResponse XfrService::handle_build_status(const HttpRequest& req)
-{
-    std::string token;
-    if (!need_auth(req, &token)) {
-        UPC_LOG_XFR_SERVICE(Warn, "build/status auth failed");
-        return err(401, "AUTH_INVALID", "missing or invalid token");
+    std::vector<GcodeManifestEntry> entries;
+    if (!gcode_manifest_load(UPC_LOCAL_GCODE_CONFIG, entries)) {
+        UPC_LOG_XFR_SERVICE(Error, "manifest load failed path=%s", UPC_LOCAL_GCODE_CONFIG);
+        if (err_msg) { *err_msg = "load gcode manifest failed"; }
+        return false;
     }
-    std::string state;
-    std::string msg;
-    std::string gcode;
-    int exit_code = 0;
-    {
-        std::lock_guard<std::mutex> lk(build_state_mu_);
-        state = build_state_;
-        msg = build_message_;
-        gcode = build_gcode_name_;
-        exit_code = build_exit_code_;
+
+    GcodeManifestEntry entry;
+    entry.name = ovf_name;
+    entry.file_size = static_cast<uint32_t>(st.st_size);
+    entry.line_count = line_count;
+    entry.duration_sec = 0;
+    entry.material_g = 0.f;
+    entry.mtime = static_cast<int64_t>(st.st_mtime);
+    gcode_manifest_upsert(entries, entry);
+    if (!gcode_manifest_save(UPC_LOCAL_GCODE_CONFIG, entries)) {
+        UPC_LOG_XFR_SERVICE(Error, "manifest save failed path=%s", UPC_LOCAL_GCODE_CONFIG);
+        if (err_msg) { *err_msg = "save gcode manifest failed"; }
+        return false;
     }
-    const bool running = (state == "running");
-    std::ostringstream oss;
-    oss << "{"
-        << "\"state\":\"" << json_escape(state) << "\","
-        << "\"running\":" << (running ? "true" : "false") << ","
-        << "\"message\":\"" << json_escape(msg) << "\","
-        << "\"gcode\":\"" << json_escape(gcode) << "\","
-        << "\"exit_code\":" << exit_code
-        << "}";
-    HttpResponse rsp;
-    rsp.status = 200;
-    rsp.body = oss.str();
-    return rsp;
+    UPC_LOG_XFR_SERVICE(Info, "manifest updated ovf=%s size=%u segments=%u mtime=%lld",
+                        ovf_name.c_str(), entry.file_size, entry.line_count,
+                        static_cast<long long>(entry.mtime));
+    return true;
 }
 
 HttpResponse XfrService::handle_upload_status(const HttpRequest& req, const std::string& upload_id)
@@ -875,20 +683,6 @@ std::string XfrService::json_escape(const std::string& s)
     return out;
 }
 
-std::string XfrService::shell_quote(const std::string& s)
-{
-    std::string out = "'";
-    for (char c : s) {
-        if (c == '\'') {
-            out += "'\\''";
-        } else {
-            out.push_back(c);
-        }
-    }
-    out.push_back('\'');
-    return out;
-}
-
 HttpResponse XfrService::err(int status, const std::string& code, const std::string& message)
 {
     HttpResponse rsp;
@@ -900,204 +694,6 @@ HttpResponse XfrService::err(int status, const std::string& code, const std::str
         << "}";
     rsp.body = oss.str();
     return rsp;
-}
-
-bool XfrService::find_single_transport_pair(std::string* json_path,
-                                            std::string* svg_path,
-                                            std::string* stem,
-                                            std::string* err_code,
-                                            std::string* err_msg) const
-{
-    if (!json_path || !svg_path || !stem || !err_code || !err_msg) {
-        return false;
-    }
-    *json_path = "";
-    *svg_path = "";
-    *stem = "";
-    try {
-        for (const auto& ent : std::filesystem::directory_iterator(cfg_.storage_dir)) {
-            if (!ent.is_regular_file()) {
-                continue;
-            }
-            const std::string ext = lower_ext(ent.path());
-            if (ext == ".json") {
-                if (!json_path->empty()) {
-                    *err_code = "BUILD_INPUT_NOT_UNIQUE";
-                    *err_msg = "multiple json files found in transport";
-                    UPC_LOG_XFR_SERVICE(Warn, "build input duplicated json: %s and %s",
-                                        json_path->c_str(), ent.path().string().c_str());
-                    return false;
-                }
-                *json_path = ent.path().string();
-            } else if (ext == ".svg") {
-                if (!svg_path->empty()) {
-                    *err_code = "BUILD_INPUT_NOT_UNIQUE";
-                    *err_msg = "multiple svg files found in transport";
-                    UPC_LOG_XFR_SERVICE(Warn, "build input duplicated svg: %s and %s",
-                                        svg_path->c_str(), ent.path().string().c_str());
-                    return false;
-                }
-                *svg_path = ent.path().string();
-            }
-        }
-    } catch (const std::exception& ex) {
-        *err_code = "BUILD_INPUT_ENUM_FAILED";
-        *err_msg = std::string("scan transport failed: ") + ex.what();
-        UPC_LOG_XFR_SERVICE(Error, "scan transport dir failed dir=%s err=%s",
-                            cfg_.storage_dir.c_str(), ex.what());
-        return false;
-    }
-    if (json_path->empty() || svg_path->empty()) {
-        *err_code = "BUILD_INPUT_MISSING";
-        *err_msg = "json/svg pair not found in transport";
-        return false;
-    }
-    *stem = std::filesystem::path(*json_path).stem().string();
-    UPC_LOG_XFR_SERVICE(Info, "build pair accepted with different names json=%s svg=%s",
-                        json_path->c_str(), svg_path->c_str());
-    return true;
-}
-
-bool XfrService::run_snowslice_build(const std::string& json_path,
-                                     const std::string& svg_path,
-                                     const std::string& gcode_path,
-                                     std::string* err_code,
-                                     std::string* err_msg)
-{
-    {
-        std::ofstream reset(cfg_.progress_file, std::ios::trunc);
-        if (reset.good()) {
-            reset << "0\n";
-        }
-    }
-    const std::string cmd = shell_quote(cfg_.snowslice_bin) +
-        " --config " + shell_quote(json_path) +
-        " --infill-svg " + shell_quote(svg_path) +
-        " --out " + shell_quote(gcode_path) +
-        " --outPro " + shell_quote(cfg_.progress_file);
-    UPC_LOG_XFR_SERVICE(Info, "run build cmd: %s", cmd.c_str());
-
-    pid_t pid = fork();
-    if (pid < 0) {
-        UPC_LOG_XFR_SERVICE(Error, "build fork failed");
-        if (err_code) { *err_code = "BUILD_EXEC_FAILED"; }
-        if (err_msg) { *err_msg = "fork failed"; }
-        return false;
-    }
-    if (pid == 0) {
-        execl("/bin/sh", "sh", "-c", cmd.c_str(), static_cast<char*>(nullptr));
-        _exit(127);
-    }
-    UPC_LOG_XFR_SERVICE(Info, "build process started pid=%d wait_mode=blocking",
-                        static_cast<int>(pid));
-
-    int status = 0;
-    const pid_t r = waitpid(pid, &status, 0);
-    if (r < 0) {
-        UPC_LOG_XFR_SERVICE(Error, "build waitpid failed pid=%d", static_cast<int>(pid));
-        if (err_code) { *err_code = "BUILD_EXEC_FAILED"; }
-        if (err_msg) { *err_msg = "waitpid failed"; }
-        return false;
-    }
-
-    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
-        UPC_LOG_XFR_SERVICE(Error, "build process exit abnormal exited=%d code=%d",
-                            WIFEXITED(status) ? 1 : 0,
-                            WIFEXITED(status) ? WEXITSTATUS(status) : -1);
-        if (err_code) { *err_code = "BUILD_EXEC_FAILED"; }
-        if (err_msg) {
-            std::ostringstream oss;
-            oss << "snowslice_demo exit code "
-                << (WIFEXITED(status) ? WEXITSTATUS(status) : -1);
-            *err_msg = oss.str();
-        }
-        return false;
-    }
-
-    struct stat st{};
-    if (stat(gcode_path.c_str(), &st) != 0 || st.st_size <= 0) {
-        UPC_LOG_XFR_SERVICE(Error, "build output missing/empty path=%s", gcode_path.c_str());
-        if (err_code) { *err_code = "BUILD_OUTPUT_MISSING"; }
-        if (err_msg) { *err_msg = "gcode output missing or empty"; }
-        return false;
-    }
-    UPC_LOG_XFR_SERVICE(Info, "build output ready path=%s size=%lld",
-                        gcode_path.c_str(), static_cast<long long>(st.st_size));
-    return true;
-}
-
-bool XfrService::count_gcode_lines(const std::string& gcode_path, uint32_t* out_lines)
-{
-    if (!out_lines) {
-        return false;
-    }
-    *out_lines = 0;
-    std::ifstream in(gcode_path);
-    if (!in.good()) {
-        return false;
-    }
-    std::string line;
-    while (std::getline(in, line)) {
-        ++(*out_lines);
-    }
-    return true;
-}
-
-bool XfrService::update_gcode_manifest(const std::string& gcode_path,
-                                       const std::string& gcode_name,
-                                       std::string* err_msg) const
-{
-    struct stat st{};
-    if (stat(gcode_path.c_str(), &st) != 0) {
-        UPC_LOG_XFR_SERVICE(Error, "manifest stat gcode failed path=%s", gcode_path.c_str());
-        if (err_msg) { *err_msg = "stat gcode failed"; }
-        return false;
-    }
-    uint32_t line_count = 0;
-    if (!count_gcode_lines(gcode_path, &line_count)) {
-        UPC_LOG_XFR_SERVICE(Error, "manifest count lines failed path=%s", gcode_path.c_str());
-        if (err_msg) { *err_msg = "count gcode lines failed"; }
-        return false;
-    }
-
-    std::vector<GcodeManifestEntry> entries;
-    if (!gcode_manifest_load(UPC_LOCAL_GCODE_CONFIG, entries)) {
-        UPC_LOG_XFR_SERVICE(Error, "manifest load failed path=%s", UPC_LOCAL_GCODE_CONFIG);
-        if (err_msg) { *err_msg = "load gcode manifest failed"; }
-        return false;
-    }
-
-    GcodeManifestEntry entry;
-    entry.name = gcode_name;
-    entry.file_size = static_cast<uint32_t>(st.st_size);
-    entry.line_count = line_count;
-    entry.duration_sec = 0;
-    entry.material_g = 0.f;
-    entry.mtime = static_cast<int64_t>(st.st_mtime);
-    gcode_manifest_upsert(entries, entry);
-    if (!gcode_manifest_save(UPC_LOCAL_GCODE_CONFIG, entries)) {
-        UPC_LOG_XFR_SERVICE(Error, "manifest save failed path=%s", UPC_LOCAL_GCODE_CONFIG);
-        if (err_msg) { *err_msg = "save gcode manifest failed"; }
-        return false;
-    }
-    UPC_LOG_XFR_SERVICE(Info, "manifest updated gcode=%s size=%u lines=%u mtime=%lld",
-                        gcode_name.c_str(), entry.file_size, entry.line_count,
-                        static_cast<long long>(entry.mtime));
-    return true;
-}
-
-void XfrService::set_build_state(bool running,
-                                 const std::string& state,
-                                 const std::string& message,
-                                 const std::string& gcode_name,
-                                 int exit_code)
-{
-    (void)running;
-    std::lock_guard<std::mutex> lk(build_state_mu_);
-    build_state_ = state;
-    build_message_ = message;
-    build_gcode_name_ = gcode_name;
-    build_exit_code_ = exit_code;
 }
 
 void XfrService::notify_pair_pin(const std::string& pin, uint32_t expires_s) const

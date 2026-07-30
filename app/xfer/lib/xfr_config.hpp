@@ -12,15 +12,12 @@ struct XfrConfig {
     std::string gcode_dir = "/home/Gcode";
     std::string token_file = "/home/transport/.xfr_tokens";
     std::string mdns_service_file = "/etc/avahi/services/snowpod.service";
-    std::string snowslice_bin = "/home/snowslice_demo";
-    std::string progress_file = "/home/progress.txt";
     std::string device_sn = "SN-test03";
     std::string device_model = "Snowpod";
     bool require_auth = true;
     uint32_t chunk_max_bytes = 4U * 1024U * 1024U;
     uint32_t pair_pin_ttl_s = 120U;
     uint32_t pair_pin_max_attempts = 5U;
-    uint32_t build_timeout_s = 120U;
 };
 
 XfrConfig load_xfr_config();
