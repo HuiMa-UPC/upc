@@ -4,9 +4,6 @@ add_executable(rongsu_camera
     main.cpp
     ${CAMERA_LIB_DIR}/camera_service.cpp
     ${CAMERA_LIB_DIR}/vi_capture.cpp
-    ${CAMERA_LIB_DIR}/print_video_recorder.cpp
-    ${CAMERA_LIB_DIR}/print_h264_recorder.cpp
-    ${CAMERA_LIB_DIR}/clean_video_recorder.cpp
     ${CAMERA_LIB_DIR}/camera_dma_frame_source.cpp
 )
 

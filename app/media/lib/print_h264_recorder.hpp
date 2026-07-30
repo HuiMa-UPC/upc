@@ -13,12 +13,12 @@
 #include <thread>
 #include <vector>
 
-namespace upc::camera {
+namespace upc::media {
 
 /**
  * 打印期连续录像：
- * - 推流线程只拷贝 NV12 入队；写 raw / mpi_enc 均在后台 worker（对齐清粉录像）
- * - 写盘队列满时丢帧保预览，不阻塞 Camera 推流
+ * - 媒体消费线程只拷贝 NV12 入队；写 raw / mpi_enc 均在后台 worker（对齐清粉录像）
+ * - 写盘队列满时丢帧保预览，不阻塞媒体流消费
  * - 会话结束（含终止）只入队 Encode；worker 先排空其前的写帧再转码 print.h264
  * - 输出目录：/home/video/{job_name}/print.h264
  */
@@ -95,6 +95,6 @@ private:
     std::string raw_fp_path_;
 };
 
-} // namespace upc::camera
+} // namespace upc::media
 
 #endif /* PRINT_H264_RECORDER_HPP */

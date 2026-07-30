@@ -69,6 +69,7 @@ const char* upc_msg_module_name(ModuleId id) {
         case ModuleId::APP_XFR: return "APP_XFR";
         case ModuleId::APP_VISUAL: return "APP_VISUAL";
         case ModuleId::APP_MQTT: return "APP_MQTT";
+        case ModuleId::APP_MEDIA: return "APP_MEDIA";
         default: return "?";
     }
 }
@@ -127,6 +128,10 @@ const char* upc_msg_type_name(MsgType type) {
         case MsgType::VISUAL_Camera_Stream_Stop_Req: return "VISUAL_Camera_Stream_Stop_Req";
         case MsgType::APP_Visual_Camera_Stream_Stop_Done: return "APP_Visual_Camera_Stream_Stop_Done";
         case MsgType::APP_Visual_Rect_Ntf: return "APP_Visual_Rect_Ntf";
+        case MsgType::MEDIA_Camera_Stream_Start_Req: return "MEDIA_Camera_Stream_Start_Req";
+        case MsgType::APP_Media_Camera_Stream_Start_Rsp: return "APP_Media_Camera_Stream_Start_Rsp";
+        case MsgType::MEDIA_Camera_Stream_Stop_Req: return "MEDIA_Camera_Stream_Stop_Req";
+        case MsgType::APP_Media_Camera_Stream_Stop_Done: return "APP_Media_Camera_Stream_Stop_Done";
         case MsgType::UI_Mcu_Ota_Start_Req: return "UI_Mcu_Ota_Start_Req";
         case MsgType::UI_Mcu_Ota_Cancel_Ntf: return "UI_Mcu_Ota_Cancel_Ntf";
         case MsgType::APP_Mcu_Ota_Status_Ntf: return "APP_Mcu_Ota_Status_Ntf";

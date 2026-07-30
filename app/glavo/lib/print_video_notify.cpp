@@ -69,7 +69,7 @@ bool PrintVideoNotify::publish_to_camera(middleware::MsgType type,
 {
     middleware::Message msg(type,
                             middleware::ModuleId::APP_GLAVO,
-                            middleware::ModuleId::APP_CAMERA);
+                            middleware::ModuleId::APP_MEDIA);
     msg.payload = middleware::MsgPayload::from_bytes(
         static_cast<const uint8_t*>(payload), len);
     if(!middleware::MsgPort::instance().publish_async(msg)) {

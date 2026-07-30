@@ -84,7 +84,7 @@ void CameraMsgProxy::send_snapshot_req()
     middleware::Message msg(
         middleware::MsgType::UI_Camera_Snapshot_Req,
         middleware::ModuleId::UI,
-        middleware::ModuleId::APP_CAMERA);
+        middleware::ModuleId::APP_MEDIA);
     middleware::MsgPort::instance().publish_async(msg);
 }
 

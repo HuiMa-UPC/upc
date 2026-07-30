@@ -1,4 +1,5 @@
 #include "ovf_worker.hpp"
+#include "parser_registry.hpp"
 #include "ovf_official_io.h"
 #include "parser_config.hpp"
 #include "rs_log.hpp"
@@ -289,7 +290,11 @@ bool OvfWorker::process_line_sequence(const open_vector_format::VectorBlock& blo
         return true;
     }
 
-    // 第一个点作为 jump（laser_on=0），后续点作为 mark（laser_on=1）
+    // Protocol (Snowpath / Layout): marking power 0 or travel key ⇒ jump only.
+    // Do NOT force laser_on=1 on vertices after the first — that re-opens the
+    // laser on layer-end zero-length Travel (key=4) and defeats laser-off.
+    const bool laser_off = current_marking_laser_off();
+
     for(int i = 0; i + 1 < pts; i += 2) {
         if(stop_req_.load()) {
             return false;
@@ -297,7 +302,9 @@ bool OvfWorker::process_line_sequence(const open_vector_format::VectorBlock& blo
 
         const float x = seq.points(i);
         const float y = seq.points(i + 1);
-        const int laser_on = (i == 0) ? 0 : 1;
+        // Contour/hatch polyline: first vertex approaches with laser off, then mark.
+        // Travel / power0: every vertex stays laser off.
+        const int laser_on = laser_off ? 0 : ((i == 0) ? 0 : 1);
 
         if(!build_and_push_packet(x, y, current_feed_mm_min_, laser_on)) {
             stop_req_.store(true);
@@ -318,6 +325,8 @@ bool OvfWorker::process_line_sequence_3d(const open_vector_format::VectorBlock& 
         return true;
     }
 
+    const bool laser_off = current_marking_laser_off();
+
     for(int i = 0; i + 2 < pts; i += 3) {
         if(stop_req_.load()) {
             return false;
@@ -325,7 +334,7 @@ bool OvfWorker::process_line_sequence_3d(const open_vector_format::VectorBlock& 
 
         const float x = seq.points(i);
         const float y = seq.points(i + 1);
-        const int laser_on = (i == 0) ? 0 : 1;
+        const int laser_on = laser_off ? 0 : ((i == 0) ? 0 : 1);
 
         if(!build_and_push_packet(x, y, current_feed_mm_min_, laser_on)) {
             stop_req_.store(true);
@@ -346,6 +355,9 @@ bool OvfWorker::process_hatches(const open_vector_format::VectorBlock& block,
         return true;
     }
 
+    const bool laser_off = current_marking_laser_off();
+    const int mark_laser = laser_off ? 0 : 1;
+
     // 每 4 个点一组：(x0,y0) → (x1,y1)
     for(int i = 0; i + 3 < pts; i += 4) {
         if(stop_req_.load()) {
@@ -362,10 +374,10 @@ bool OvfWorker::process_hatches(const open_vector_format::VectorBlock& block,
         (*segments)++;
         (*packets)++;
 
-        // 终点：mark（laser_on=1）
+        // 终点：功率>0 时 mark；travel/功率0 时保持关光
         const float x1 = hatches.points(i + 2);
         const float y1 = hatches.points(i + 3);
-        if(!build_and_push_packet(x1, y1, current_feed_mm_min_, 1)) {
+        if(!build_and_push_packet(x1, y1, current_feed_mm_min_, mark_laser)) {
             stop_req_.store(true);
             return false;
         }
@@ -384,6 +396,9 @@ bool OvfWorker::process_hatches_3d(const open_vector_format::VectorBlock& block,
         return true;
     }
 
+    const bool laser_off = current_marking_laser_off();
+    const int mark_laser = laser_off ? 0 : 1;
+
     // 每 6 个点一组：(x0,y0,z0) → (x1,y1,z1)
     for(int i = 0; i + 5 < pts; i += 6) {
         if(stop_req_.load()) {
@@ -400,10 +415,10 @@ bool OvfWorker::process_hatches_3d(const open_vector_format::VectorBlock& block,
         (*segments)++;
         (*packets)++;
 
-        // 终点：mark（laser_on=1）
+        // 终点：功率>0 时 mark；travel/功率0 时保持关光
         const float x1 = hatches.points(i + 3);
         const float y1 = hatches.points(i + 4);
-        if(!build_and_push_packet(x1, y1, current_feed_mm_min_, 1)) {
+        if(!build_and_push_packet(x1, y1, current_feed_mm_min_, mark_laser)) {
             stop_req_.store(true);
             return false;
         }
@@ -421,6 +436,9 @@ bool OvfWorker::process_point_sequence(const open_vector_format::VectorBlock& bl
     if(pts < 2) {
         return true;
     }
+
+    const bool laser_off = current_marking_laser_off();
+    const int mark_laser = laser_off ? 0 : 1;
 
     // 点序列：每个点直接标记（laser_on=1），前一个点作为 jump
     float prev_x = 0.0f;
@@ -445,8 +463,8 @@ bool OvfWorker::process_point_sequence(const open_vector_format::VectorBlock& bl
             (*packets)++;
         }
 
-        // mark 当前点
-        if(!build_and_push_packet(x, y, current_feed_mm_min_, 1)) {
+        // mark 当前点（功率0 时同样关光）
+        if(!build_and_push_packet(x, y, current_feed_mm_min_, mark_laser)) {
             stop_req_.store(true);
             return false;
         }
@@ -469,6 +487,9 @@ bool OvfWorker::process_point_sequence_3d(const open_vector_format::VectorBlock&
         return true;
     }
 
+    const bool laser_off = current_marking_laser_off();
+    const int mark_laser = laser_off ? 0 : 1;
+
     float prev_x = 0.0f;
     float prev_y = 0.0f;
     bool has_prev = false;
@@ -490,7 +511,7 @@ bool OvfWorker::process_point_sequence_3d(const open_vector_format::VectorBlock&
             (*packets)++;
         }
 
-        if(!build_and_push_packet(x, y, current_feed_mm_min_, 1)) {
+        if(!build_and_push_packet(x, y, current_feed_mm_min_, mark_laser)) {
             stop_req_.store(true);
             return false;
         }
@@ -746,3 +767,25 @@ uint16_t OvfWorker::get_layer_height_um() const
 }
 
 } // namespace upc::parser
+
+// ---------------------------------------------------------------------------
+// 静态注册 .ovf（原 ovf_register.cpp；需 --whole-archive 链入插件库）
+// ---------------------------------------------------------------------------
+namespace {
+
+struct OvfParserRegistrar {
+    OvfParserRegistrar()
+    {
+        upc::parser::ParserRegistry::instance().register_parser({
+            .id = "ovf",
+            .extensions = {".ovf"},
+            .factory = []() -> upc::parser::IParserWorker* {
+                return &upc::parser::OvfWorker::instance();
+            },
+        });
+    }
+};
+
+[[gnu::used]] static OvfParserRegistrar ovf_parser_registrar;
+
+} // namespace

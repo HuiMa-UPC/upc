@@ -121,6 +121,12 @@ private:
     uint16_t current_power_ = 0;
     /** 当前进给速度（mm/min） */
     float current_feed_mm_min_ = OVF_DEFAULT_FEED_MM_MIN;
+
+    /**
+     * 当前 marking 是否要求关光（功率 DAC=0，含 Snowpath travel key=4）。
+     * line_sequence 必须据此决定 laser_on，不能写死「第 2 点起开光」。
+     */
+    bool current_marking_laser_off() const { return current_power_ == 0; }
 };
 
 } // namespace upc::parser

@@ -8,7 +8,7 @@
 #include <cstring>
 #include <filesystem>
 
-namespace upc::camera {
+namespace upc::media {
 
 namespace {
 
@@ -155,14 +155,14 @@ void PrintH264Recorder::on_session_start(const middleware::PrintVideoSessionPayl
     std::error_code ec;
     std::filesystem::create_directories(session_dir_, ec);
     if(ec) {
-        UPC_LOG_CAMERA_SERVICE(Error, "print_h264 mkdir fail dir=%s err=%d",
+        UPC_LOG_MEDIA_SERVICE(Error, "print_h264 mkdir fail dir=%s err=%d",
                                session_dir_.c_str(), ec.value());
         return;
     }
     (void)std::remove(raw_path_.c_str());
     (void)std::remove(h264_path_.c_str());
     active_ = true;
-    UPC_LOG_CAMERA_SERVICE(Info,
+    UPC_LOG_MEDIA_SERVICE(Info,
         "print_h264 start id=%s dir=%s %ux%u@%u (async write)",
         session_id_.c_str(), session_dir_.c_str(), width_, height_, fps_);
 }
@@ -208,7 +208,7 @@ void PrintH264Recorder::on_frame_nv12(const uint8_t* src_y, const uint8_t* src_u
         if(count_pending_write_frames(jobs_) >= kMaxPendingFrameJobs) {
             ++dropped_frames_;
             if((dropped_frames_ % 30u) == 1u) {
-                UPC_LOG_CAMERA_SERVICE(Warn,
+                UPC_LOG_MEDIA_SERVICE(Warn,
                     "print_h264 queue full drop=%u pending=%zu (keep preview)",
                     dropped_frames_, count_pending_write_frames(jobs_));
             }
@@ -280,7 +280,7 @@ void PrintH264Recorder::enqueue_finalize_locked(bool aborted)
 
     jobs_.push_back(std::move(job));
     cv_.notify_one();
-    UPC_LOG_CAMERA_SERVICE(Info,
+    UPC_LOG_MEDIA_SERVICE(Info,
         "print_h264 encode queued aborted=%d dropped=%u (async write+encode)",
         aborted ? 1 : 0, dropped);
 }
@@ -343,7 +343,7 @@ void PrintH264Recorder::run_write_frame_job(const Job& job)
         raw_fp_ = std::fopen(job.raw_path.c_str(), "ab");
         if(!raw_fp_) {
             had_write_error_ = true;
-            UPC_LOG_CAMERA_SERVICE(Error, "print_h264 open raw fail %s: %s",
+            UPC_LOG_MEDIA_SERVICE(Error, "print_h264 open raw fail %s: %s",
                                    job.raw_path.c_str(), std::strerror(errno));
             return;
         }
@@ -358,7 +358,7 @@ void PrintH264Recorder::run_write_frame_job(const Job& job)
         if(job.session_seq == session_seq_) {
             had_write_error_ = true;
         }
-        UPC_LOG_CAMERA_SERVICE(Error, "print_h264 write raw fail path=%s",
+        UPC_LOG_MEDIA_SERVICE(Error, "print_h264 write raw fail path=%s",
                                job.raw_path.c_str());
         return;
     }
@@ -392,7 +392,7 @@ void PrintH264Recorder::run_encode_job(Job job)
 
     if(had_write_error || frame_count == 0) {
         (void)std::remove(job.raw_path.c_str());
-        UPC_LOG_CAMERA_SERVICE(Warn,
+        UPC_LOG_MEDIA_SERVICE(Warn,
             "print_h264 skip encode session=%s aborted=%d frames=%u "
             "write_err=%d dropped=%u",
             job.session_id.c_str(), job.aborted ? 1 : 0,
@@ -412,7 +412,7 @@ void PrintH264Recorder::run_encode_job(Job job)
         if(ok) {
             (void)std::remove(job.raw_path.c_str());
         }
-        UPC_LOG_CAMERA_SERVICE(Info,
+        UPC_LOG_MEDIA_SERVICE(Info,
             "print_h264 %s session=%s aborted=%d frames=%u dropped=%u out=%s",
             ok ? "done" : "failed",
             job.session_id.c_str(),
@@ -461,15 +461,15 @@ int PrintH264Recorder::run_shell_cmd(const char* cmd, const char* log_tag)
     if(!cmd || !cmd[0]) {
         return -1;
     }
-    UPC_LOG_CAMERA_SERVICE(Info, "print_h264 %s: %s",
+    UPC_LOG_MEDIA_SERVICE(Info, "print_h264 %s: %s",
                            log_tag ? log_tag : "cmd", cmd);
     const int rc = std::system(cmd);
     if(rc != 0) {
-        UPC_LOG_CAMERA_SERVICE(Error,
+        UPC_LOG_MEDIA_SERVICE(Error,
             "print_h264 %s failed rc=%d",
             log_tag ? log_tag : "cmd", rc);
     }
     return rc;
 }
 
-} // namespace upc::camera
+} // namespace upc::media

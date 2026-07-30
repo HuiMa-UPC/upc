@@ -1743,7 +1743,7 @@ void GlavoService::notify_clean_video_start(const middleware::CleanTestStartReqP
 
     middleware::Message msg(middleware::MsgType::APP_Clean_Video_Session_Start_Ntf,
         middleware::ModuleId::APP_GLAVO,
-        middleware::ModuleId::APP_CAMERA);
+        middleware::ModuleId::APP_MEDIA);
     msg.payload = middleware::MsgPayload::from_bytes(
         reinterpret_cast<const uint8_t*>(&payload), sizeof(payload));
     (void)publish_async(msg);
@@ -1759,7 +1759,7 @@ void GlavoService::notify_clean_video_stop(uint8_t result_code, bool keep_raw)
 
     middleware::Message msg(middleware::MsgType::APP_Clean_Video_Session_Stop_Ntf,
         middleware::ModuleId::APP_GLAVO,
-        middleware::ModuleId::APP_CAMERA);
+        middleware::ModuleId::APP_MEDIA);
     msg.payload = middleware::MsgPayload::from_bytes(
         reinterpret_cast<const uint8_t*>(&payload), sizeof(payload));
     (void)publish_async(msg);

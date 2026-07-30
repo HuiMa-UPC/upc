@@ -12,7 +12,7 @@
 #include <thread>
 #include <vector>
 
-namespace upc::camera {
+namespace upc::media {
 
 /**
  * 清粉连续录像：
@@ -88,6 +88,6 @@ private:
     uint32_t frame_count_ = 0;
 };
 
-} // namespace upc::camera
+} // namespace upc::media
 
 #endif /* CLEAN_VIDEO_RECORDER_HPP */

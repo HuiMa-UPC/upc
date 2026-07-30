@@ -11,7 +11,7 @@
 #include <filesystem>
 #include <cstdio>
 
-namespace upc::camera {
+namespace upc::media {
 
 namespace {
 
@@ -102,10 +102,10 @@ int CleanVideoRecorder::run_shell_cmd(const char* cmd, const char* tag)
     if(!cmd || !cmd[0]) {
         return -1;
     }
-    UPC_LOG_CAMERA_SERVICE(Info, "clean_video %s: %s", tag ? tag : "cmd", cmd);
+    UPC_LOG_MEDIA_SERVICE(Info, "clean_video %s: %s", tag ? tag : "cmd", cmd);
     const int rc = std::system(cmd);
     if(rc != 0) {
-        UPC_LOG_CAMERA_SERVICE(Warn, "clean_video %s rc=%d", tag ? tag : "cmd", rc);
+        UPC_LOG_MEDIA_SERVICE(Warn, "clean_video %s rc=%d", tag ? tag : "cmd", rc);
     }
     return rc;
 }
@@ -122,14 +122,14 @@ bool CleanVideoRecorder::append_nv12_frame(const CleanFrameJob& job)
 
     FILE* fp = std::fopen(job.raw_path.c_str(), "ab");
     if(!fp) {
-        UPC_LOG_CAMERA_SERVICE(Error, "clean_video open raw fail %s: %s",
+        UPC_LOG_MEDIA_SERVICE(Error, "clean_video open raw fail %s: %s",
                                job.raw_path.c_str(), std::strerror(errno));
         return false;
     }
     const size_t written = std::fwrite(job.nv12.data(), 1, need, fp);
     const bool write_ok = (written == need);
     if(std::fclose(fp) != 0 || !write_ok) {
-        UPC_LOG_CAMERA_SERVICE(Error, "clean_video write raw fail %s %zu/%zu",
+        UPC_LOG_MEDIA_SERVICE(Error, "clean_video write raw fail %s %zu/%zu",
                                job.raw_path.c_str(), written, need);
         return false;
     }
@@ -214,7 +214,7 @@ void CleanVideoRecorder::wait_session_jobs_drain_locked(
         if(idle_cv_.wait_for(lock, kDrainWarnInterval) == std::cv_status::timeout) {
             ++wait_warn_count;
             const size_t pending = pending_session_jobs(session_seq);
-            UPC_LOG_CAMERA_SERVICE(
+            UPC_LOG_MEDIA_SERVICE(
                 Warn,
                 "clean_video wait drain timeout seq=%llu pending=%zu worker_busy=%d worker_busy_session=%llu rounds=%u",
                 static_cast<unsigned long long>(session_seq),
@@ -262,7 +262,7 @@ void CleanVideoRecorder::worker_fn()
                frame_index == frame_count_ + 1u) {
                 ++frame_count_;
             } else if(frame_index > 0u && !ok) {
-                UPC_LOG_CAMERA_SERVICE(Warn,
+                UPC_LOG_MEDIA_SERVICE(Warn,
                     "clean_video raw append fail frame=%u input_frame=%u",
                     frame_index, job.input_frame);
             }
@@ -299,7 +299,7 @@ void CleanVideoRecorder::on_session_start(
     mp4_path_ = session_dir_ + "/" + kMp4Name;
 
     if(!ensure_dir(CAMERA_PRINT_VIDEO_OUT_DIR) || !ensure_dir(session_dir_)) {
-        UPC_LOG_CAMERA_SERVICE(Error, "clean_video mkdir failed dir=%s",
+        UPC_LOG_MEDIA_SERVICE(Error, "clean_video mkdir failed dir=%s",
                                session_dir_.c_str());
         return;
     }
@@ -311,7 +311,7 @@ void CleanVideoRecorder::on_session_start(
     input_frame_count_ = 0;
     frame_count_ = 0;
     active_ = true;
-    UPC_LOG_CAMERA_SERVICE(
+    UPC_LOG_MEDIA_SERVICE(
         Info,
         "clean_video start id=%s dir=%s %ux%u@%u target_fps=%u raw=%s",
         session_id_.c_str(), session_dir_.c_str(),
@@ -338,7 +338,7 @@ void CleanVideoRecorder::on_frame_nv12(const uint8_t* src_y, const uint8_t* src_
         if(jobs_.size() >= kMaxPendingJobs) {
             ++dropped_frames_;
             if((dropped_frames_ % 20u) == 1u) {
-                UPC_LOG_CAMERA_SERVICE(Warn,
+                UPC_LOG_MEDIA_SERVICE(Warn,
                     "clean_video queue full drop=%u pending=%zu",
                     dropped_frames_, jobs_.size());
             }
@@ -353,7 +353,7 @@ void CleanVideoRecorder::on_frame_nv12(const uint8_t* src_y, const uint8_t* src_
 
     if(!src_y || !src_uv || stride_y == 0u ||
        current_width == 0u || current_height == 0u || current_raw_path.empty()) {
-        UPC_LOG_CAMERA_SERVICE(
+        UPC_LOG_MEDIA_SERVICE(
             Warn,
             "clean_video invalid frame input_frame=%u src_y=%p src_uv=%p stride=%u %ux%u raw_empty=%d",
             current_input_frame,
@@ -366,7 +366,7 @@ void CleanVideoRecorder::on_frame_nv12(const uint8_t* src_y, const uint8_t* src_
         return;
     }
     if(stride_y < current_width) {
-        UPC_LOG_CAMERA_SERVICE(
+        UPC_LOG_MEDIA_SERVICE(
             Warn,
             "clean_video stride smaller than width input_frame=%u stride=%u width=%u",
             current_input_frame, stride_y, current_width);
@@ -391,7 +391,7 @@ void CleanVideoRecorder::on_frame_nv12(const uint8_t* src_y, const uint8_t* src_
         if(jobs_.size() >= kMaxPendingJobs) {
             ++dropped_frames_;
             if((dropped_frames_ % 20u) == 1u) {
-                UPC_LOG_CAMERA_SERVICE(Warn,
+                UPC_LOG_MEDIA_SERVICE(Warn,
                     "clean_video queue full after copy drop=%u pending=%zu",
                     dropped_frames_, jobs_.size());
             }
@@ -459,7 +459,7 @@ void CleanVideoRecorder::stop_locked(std::unique_lock<std::mutex>& lock,
             }
         }
     } else if(stop_frame_count == 1u) {
-        UPC_LOG_CAMERA_SERVICE(Warn,
+        UPC_LOG_MEDIA_SERVICE(Warn,
             "clean_video only one sampled frame, skip h264/mp4 compose");
     }
 
@@ -474,7 +474,7 @@ void CleanVideoRecorder::stop_locked(std::unique_lock<std::mutex>& lock,
                             std::filesystem::exists(stop_mp4_path, ec);
     ec.clear();
 
-    UPC_LOG_CAMERA_SERVICE(
+    UPC_LOG_MEDIA_SERVICE(
         Info,
         "clean_video stop id=%s result=%u sampled_frames=%u input_frames=%u dropped=%u keep_raw=%d closed_by_user=%d h264_ok=%d mp4_ok=%d raw_exists=%d h264_exists=%d mp4_exists=%d raw=%s h264=%s mp4=%s",
         stop_session_id.c_str(),
@@ -505,4 +505,4 @@ void CleanVideoRecorder::stop_locked(std::unique_lock<std::mutex>& lock,
     frame_count_ = 0;
 }
 
-} // namespace upc::camera
+} // namespace upc::media

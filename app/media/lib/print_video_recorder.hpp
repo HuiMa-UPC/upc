@@ -15,7 +15,7 @@
 #include <thread>
 #include <vector>
 
-namespace upc::camera {
+namespace upc::media {
 
 enum class PrintVideoJobKind : uint8_t {
     LayerSnap = 1,
@@ -48,6 +48,7 @@ public:
     void on_layer_snap(const middleware::PrintVideoLayerSnapPayload& snap);
     void on_session_finish(const middleware::PrintVideoSessionPayload& info);
     void on_session_abort(const middleware::PrintVideoSessionPayload& info);
+    void set_sender_module_id(middleware::ModuleId module_id);
 
     /**
      * 设置 NV12 快照回调。回调返回紧凑 NV12（stride==width）帧数据。
@@ -104,8 +105,9 @@ private:
     std::string session_name_;
     std::string session_dir_;
     int64_t     start_unix_ = 0; /**< Session_Start 墙钟秒，写入 manifest */
+    middleware::ModuleId sender_module_id_ = middleware::ModuleId::APP_MEDIA;
 };
 
-} // namespace upc::camera
+} // namespace upc::media
 
 #endif /* PRINT_VIDEO_RECORDER_HPP */

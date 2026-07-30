@@ -26,7 +26,7 @@
 
 #include <vector>
 
-namespace upc::camera {
+namespace upc::media {
 
 namespace {
 
@@ -163,14 +163,14 @@ void PrintVideoRecorder::on_session_start(
     mkdir_p(CAMERA_PRINT_VIDEO_OUT_DIR);
     remove_session_dir();
     if(mkdir(session_dir_.c_str(), 0755) != 0 && errno != EEXIST) {
-        UPC_LOG_CAMERA_SERVICE(Error, "print_video mkdir fail %s: %s",
+        UPC_LOG_MEDIA_SERVICE(Error, "print_video mkdir fail %s: %s",
                                session_dir_.c_str(), std::strerror(errno));
         session_active_ = false;
         return;
     }
 
     session_active_ = true;
-    UPC_LOG_CAMERA_SERVICE(
+    UPC_LOG_MEDIA_SERVICE(
         Info,
         "print_video session start id=%s job=%s dir=%s %ux%u layer_fps=%u start_unix=%lld",
         session_id_.c_str(),
@@ -228,6 +228,11 @@ void PrintVideoRecorder::on_session_abort(
     enqueue_job(PrintVideoJob{PrintVideoJobKind::AbortCleanup, 0, 0});
 }
 
+void PrintVideoRecorder::set_sender_module_id(middleware::ModuleId module_id)
+{
+    sender_module_id_ = module_id;
+}
+
 void PrintVideoRecorder::set_nv12_snapshot_provider(
     std::function<bool(std::vector<uint8_t>&)> fn)
 {
@@ -280,11 +285,11 @@ int PrintVideoRecorder::run_shell_cmd(const char* cmd, const char* log_tag)
     if(!cmd || !cmd[0]) {
         return -1;
     }
-    UPC_LOG_CAMERA_SERVICE(Info, "print_video %s: %s",
+    UPC_LOG_MEDIA_SERVICE(Info, "print_video %s: %s",
                            log_tag ? log_tag : "cmd", cmd);
     const int rc = std::system(cmd);
     if(rc != 0) {
-        UPC_LOG_CAMERA_SERVICE(Error,
+        UPC_LOG_MEDIA_SERVICE(Error,
             "print_video %s failed rc=%d",
             log_tag ? log_tag : "cmd", rc);
     }
@@ -317,13 +322,13 @@ bool PrintVideoRecorder::encode_nv12_to_png(const uint8_t* nv12,
 
     FILE* fp = std::fopen(tmp_nv12_path.c_str(), "wb");
     if(!fp) {
-        UPC_LOG_CAMERA_SERVICE(Error, "print_video open temp nv12 fail %s: %s",
+        UPC_LOG_MEDIA_SERVICE(Error, "print_video open temp nv12 fail %s: %s",
                                tmp_nv12_path.c_str(), std::strerror(errno));
         return false;
     }
     const bool write_ok = std::fwrite(nv12, 1, need, fp) == need;
     if(std::fclose(fp) != 0 || !write_ok) {
-        UPC_LOG_CAMERA_SERVICE(Error, "print_video write temp nv12 fail %s",
+        UPC_LOG_MEDIA_SERVICE(Error, "print_video write temp nv12 fail %s",
                                tmp_nv12_path.c_str());
         (void)std::remove(tmp_nv12_path.c_str());
         return false;
@@ -348,7 +353,7 @@ bool PrintVideoRecorder::handle_layer_snap(const PrintVideoJob& job)
 {
     std::vector<uint8_t> nv12;
     if(!grab_latest_nv12(nv12)) {
-        UPC_LOG_CAMERA_SERVICE(Warn,
+        UPC_LOG_MEDIA_SERVICE(Warn,
             "print_video snap miss SHM frame session=%s layer=%u",
             session_id_.c_str(), job.layer_index);
         return false;
@@ -356,7 +361,7 @@ bool PrintVideoRecorder::handle_layer_snap(const PrintVideoJob& job)
 
     const uint32_t frame_index = frame_count_ + 1u;
     if(!encode_nv12_to_png(nv12.data(), nv12.size(), frame_index)) {
-        UPC_LOG_CAMERA_SERVICE(Warn,
+        UPC_LOG_MEDIA_SERVICE(Warn,
             "print_video png encode fail session=%s layer=%u frame=%u",
             session_id_.c_str(), job.layer_index, frame_index);
         return false;
@@ -364,7 +369,7 @@ bool PrintVideoRecorder::handle_layer_snap(const PrintVideoJob& job)
     const size_t nv12_bytes = nv12.size();
     ++frame_count_;
     last_layer_nv12_ = std::move(nv12);
-    UPC_LOG_CAMERA_SERVICE(
+    UPC_LOG_MEDIA_SERVICE(
         Info,
         "print_video snap ok session=%s layer=%u frame=%u height_um=%u nv12_bytes=%zu path=%s",
         session_id_.c_str(),
@@ -401,14 +406,14 @@ bool PrintVideoRecorder::create_raw_thumb_from_nv12(
     }
     const size_t need = static_cast<size_t>(src_w) * src_h * 3u / 2u;
     if(nv12.size() < need) {
-        UPC_LOG_CAMERA_SERVICE(Warn,
+        UPC_LOG_MEDIA_SERVICE(Warn,
             "raw thumb nv12 too small bytes=%zu need=%zu",
             nv12.size(), need);
         return false;
     }
     if(src_w > static_cast<uint32_t>(INT_MAX) ||
        src_h > static_cast<uint32_t>(INT_MAX)) {
-        UPC_LOG_CAMERA_SERVICE(Warn,
+        UPC_LOG_MEDIA_SERVICE(Warn,
             "raw thumb geometry too large w=%u h=%u", src_w, src_h);
         return false;
     }
@@ -424,7 +429,7 @@ bool PrintVideoRecorder::create_raw_thumb_from_nv12(
     IM_STATUS st = imcvtcolor_t(src_buf, full_buf, kThumbSrcFormat, kThumbDstFormat,
                                 IM_COLOR_SPACE_DEFAULT, 1);
     if(!rga_status_ok(st)) {
-        UPC_LOG_CAMERA_SERVICE(Warn, "raw thumb rga cvt failed st=%d (%s)",
+        UPC_LOG_MEDIA_SERVICE(Warn, "raw thumb rga cvt failed st=%d (%s)",
                                st, imStrError(st));
         return false;
     }
@@ -436,7 +441,7 @@ bool PrintVideoRecorder::create_raw_thumb_from_nv12(
     if(dst_w > static_cast<uint32_t>(INT_MAX) ||
        dst_h > static_cast<uint32_t>(INT_MAX) ||
        dst_stride_px > static_cast<uint32_t>(INT_MAX)) {
-        UPC_LOG_CAMERA_SERVICE(Warn,
+        UPC_LOG_MEDIA_SERVICE(Warn,
             "raw thumb dst too large w=%u h=%u stride_px=%u",
             dst_w, dst_h, dst_stride_px);
         return false;
@@ -453,13 +458,13 @@ bool PrintVideoRecorder::create_raw_thumb_from_nv12(
         rgb565_thumb.data(), dst_w_i, dst_h_i, kThumbDstFormat, dst_stride_px_i, dst_h_i);
     st = imresize(in_buf, out_buf);
     if(!rga_status_ok(st)) {
-        UPC_LOG_CAMERA_SERVICE(Warn, "raw thumb rga resize failed st=%d (%s)",
+        UPC_LOG_MEDIA_SERVICE(Warn, "raw thumb rga resize failed st=%d (%s)",
                                st, imStrError(st));
         return false;
     }
 
     if(!write_raw_thumb(out_path, dst_w, dst_h, dst_stride_bytes, rgb565_thumb)) {
-        UPC_LOG_CAMERA_SERVICE(Warn, "raw thumb write failed path=%s", out_path);
+        UPC_LOG_MEDIA_SERVICE(Warn, "raw thumb write failed path=%s", out_path);
         return false;
     }
     return true;
@@ -474,7 +479,7 @@ void PrintVideoRecorder::finalize_session(bool aborted)
 {
     const uint32_t frames = frame_count_;
     if(frames == 0) {
-        UPC_LOG_CAMERA_SERVICE(
+        UPC_LOG_MEDIA_SERVICE(
             Warn,
             "print_video %s with no frames session=%s (no manifest)",
             aborted ? "abort" : "finish",
@@ -500,7 +505,7 @@ void PrintVideoRecorder::finalize_session(bool aborted)
         thumb_ok = create_raw_thumb_from_nv12(last_layer_nv12_, thumb_path.c_str());
     }
     if(!thumb_ok) {
-        UPC_LOG_CAMERA_SERVICE(Warn, "print_video thumb generation failed path=%s",
+        UPC_LOG_MEDIA_SERVICE(Warn, "print_video thumb generation failed path=%s",
                                thumb_path.c_str());
     }
 
@@ -513,11 +518,11 @@ void PrintVideoRecorder::finalize_session(bool aborted)
         (void)std::remove(video_path.c_str());
         video_ok = encode_png_sequence_to_mp4(video_path.c_str());
         if(!video_ok) {
-            UPC_LOG_CAMERA_SERVICE(Warn, "print_video mp4 generation failed path=%s",
+            UPC_LOG_MEDIA_SERVICE(Warn, "print_video mp4 generation failed path=%s",
                                    video_path.c_str());
         }
     } else {
-        UPC_LOG_CAMERA_SERVICE(Info, "print_video skip mp4: frames=%u < 2 session=%s",
+        UPC_LOG_MEDIA_SERVICE(Info, "print_video skip mp4: frames=%u < 2 session=%s",
                                frames, session_id_.c_str());
     }
 
@@ -527,7 +532,7 @@ void PrintVideoRecorder::finalize_session(bool aborted)
         thumb_ok ? thumb_rel : std::string{},
         video_ok ? video_rel : std::string{});
     notify_manifest_ready(session_name_, manifest_ok, aborted, video_ok);
-    UPC_LOG_CAMERA_SERVICE(
+    UPC_LOG_MEDIA_SERVICE(
         Info,
         "print_video saved -> %s frames=%u thumb=%s video=%s%s",
         session_dir_.c_str(),
@@ -626,7 +631,7 @@ bool PrintVideoRecorder::upsert_print_history(
 
     std::vector<upc::PrintHistoryEntry> entries;
     if(!upc::print_history_manifest_load(UPC_PRINT_VIDEO_MANIFEST, entries)) {
-        UPC_LOG_CAMERA_SERVICE(Warn,
+        UPC_LOG_MEDIA_SERVICE(Warn,
             "print_history load fail path=%s (rewrite)",
             UPC_PRINT_VIDEO_MANIFEST);
         entries.clear();
@@ -636,20 +641,20 @@ bool PrintVideoRecorder::upsert_print_history(
     const std::string tmp_path =
         std::string(UPC_PRINT_VIDEO_MANIFEST) + ".tmp";
     if(!upc::print_history_manifest_save(tmp_path, entries)) {
-        UPC_LOG_CAMERA_SERVICE(Error,
+        UPC_LOG_MEDIA_SERVICE(Error,
             "print_history save fail tmp=%s", tmp_path.c_str());
         (void)std::remove(tmp_path.c_str());
         return false;
     }
     if(std::rename(tmp_path.c_str(), UPC_PRINT_VIDEO_MANIFEST) != 0) {
-        UPC_LOG_CAMERA_SERVICE(Error,
+        UPC_LOG_MEDIA_SERVICE(Error,
             "print_history rename fail %s -> %s: %s",
             tmp_path.c_str(), UPC_PRINT_VIDEO_MANIFEST, std::strerror(errno));
         (void)std::remove(tmp_path.c_str());
         return false;
     }
 
-    UPC_LOG_CAMERA_SERVICE(
+    UPC_LOG_MEDIA_SERVICE(
         Info,
         "print_history upsert job=%s status=%s frames_dir=%s duration=%u material_g=%.2f",
         entry.job_name.c_str(),
@@ -675,17 +680,17 @@ void PrintVideoRecorder::notify_manifest_ready(const std::string& frames_dir_nam
 
     middleware::Message msg(
         middleware::MsgType::APP_Print_Video_Manifest_Ntf,
-        middleware::ModuleId::APP_CAMERA,
+        sender_module_id_,
         middleware::ModuleId::UI);
     msg.payload = middleware::MsgPayload::from_bytes(
         reinterpret_cast<const uint8_t*>(&ntf), sizeof(ntf));
     middleware::MsgPort::instance().publish_async(msg);
 
-    UPC_LOG_CAMERA_SERVICE(
+    UPC_LOG_MEDIA_SERVICE(
         Info,
         "print_video manifest ntf -> UI frames_dir=%s entry=%d aborted=%d video=%d",
         ntf.frames_dir[0] ? ntf.frames_dir : "(none)",
         ntf.has_entry, ntf.aborted, ntf.has_video);
 }
 
-} // namespace upc::camera
+} // namespace upc::media

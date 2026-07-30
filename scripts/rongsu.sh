@@ -1,5 +1,5 @@
 #!/bin/sh
-# 统一启动 / 停止 rongsu_broker + rongsu_glavo + rongsu_camera + rongsu_xfr + rongsu_visual + rongsu_mqtt + rongsu_ui
+# 统一启动 / 停止 rongsu_broker + rongsu_glavo + rongsu_camera + rongsu_media + rongsu_xfr + rongsu_visual + rongsu_mqtt + rongsu_ui
 # 用法: rongsu.sh {start|stop|status|run}
 # 环境:
 #   RONGSU_BIN                    可执行文件目录，默认 /home
@@ -13,6 +13,7 @@ BROKER="$BIN_DIR/rongsu_broker"
 GLAVO="$BIN_DIR/rongsu_glavo"
 UI="$BIN_DIR/rongsu_ui"
 CAMERA="$BIN_DIR/rongsu_camera"
+MEDIA="$BIN_DIR/rongsu_media"
 XFR="$BIN_DIR/rongsu_xfr"
 VISUAL="$BIN_DIR/rongsu_visual"
 MQTT="$BIN_DIR/rongsu_mqtt"
@@ -38,7 +39,7 @@ wait_for_socket() {
 cmd="${1:-}"
 
 start_daemon() {
-    if [ ! -x "$BROKER" ] || [ ! -x "$GLAVO" ] || [ ! -x "$UI" ] || [ ! -x "$CAMERA" ] || [ ! -x "$XFR" ] || [ ! -x "$VISUAL" ] || [ ! -x "$MQTT" ]; then
+    if [ ! -x "$BROKER" ] || [ ! -x "$GLAVO" ] || [ ! -x "$UI" ] || [ ! -x "$CAMERA" ] || [ ! -x "$MEDIA" ] || [ ! -x "$XFR" ] || [ ! -x "$VISUAL" ] || [ ! -x "$MQTT" ]; then
         echo "Missing binaries under $BIN_DIR (set RONGSU_BIN)" >&2
         exit 1
     fi
@@ -47,11 +48,12 @@ start_daemon() {
     wait_for_socket "$BROKER_SOCK" "broker"
     "$GLAVO" start
     "$CAMERA" start
+    "$MEDIA" start
     "$XFR" start
     "$VISUAL" start
     "$MQTT" start
     "$UI" start
-    echo "Started broker + glavo + rongsu_camera + rongsu_xfr + rongsu_visual + rongsu_mqtt + ui"
+    echo "Started broker + glavo + rongsu_camera + rongsu_media + rongsu_xfr + rongsu_visual + rongsu_mqtt + ui"
 }
 
 stop_all() {
@@ -59,11 +61,12 @@ stop_all() {
     "$MQTT" stop || true
     "$VISUAL" stop || true
     "$XFR" stop || true
+    "$MEDIA" stop || true
     "$CAMERA" stop || true
     "$GLAVO" stop || true
     "$BROKER" stop || true
     rm -f "$BROKER_SOCK"
-    echo "Stopped ui + rongsu_mqtt + rongsu_visual + rongsu_xfr + rongsu_camera + glavo + broker"
+    echo "Stopped ui + rongsu_mqtt + rongsu_visual + rongsu_xfr + rongsu_media + rongsu_camera + glavo + broker"
 }
 
 status_all() {
@@ -73,6 +76,8 @@ status_all() {
     "$GLAVO" status || true
     echo "=== rongsu_camera ==="
     "$CAMERA" status || true
+    echo "=== rongsu_media ==="
+    "$MEDIA" status || true
     echo "=== rongsu_xfr ==="
     "$XFR" status || true
     echo "=== rongsu_visual ==="
@@ -84,12 +89,12 @@ status_all() {
 }
 
 run_foreground() {
-    if [ ! -x "$BROKER" ] || [ ! -x "$GLAVO" ] || [ ! -x "$UI" ] || [ ! -x "$CAMERA" ] || [ ! -x "$XFR" ] || [ ! -x "$VISUAL" ] || [ ! -x "$MQTT" ]; then
+    if [ ! -x "$BROKER" ] || [ ! -x "$GLAVO" ] || [ ! -x "$UI" ] || [ ! -x "$CAMERA" ] || [ ! -x "$MEDIA" ] || [ ! -x "$XFR" ] || [ ! -x "$VISUAL" ] || [ ! -x "$MQTT" ]; then
         echo "Missing binaries under $BIN_DIR" >&2
         exit 1
     fi
     rm -f "$BROKER_SOCK"
-    trap 'kill $BPID $GPID $CPID $XPID $VPID $MPID $UPID 2>/dev/null; rm -f "$BROKER_SOCK"; exit' INT TERM
+    trap 'kill $BPID $GPID $CPID $MEPID $XPID $VPID $MPID $UPID 2>/dev/null; rm -f "$BROKER_SOCK"; exit' INT TERM
 
     "$BROKER" run &
     BPID=$!
@@ -100,6 +105,9 @@ run_foreground() {
 
     "$CAMERA" run &
     CPID=$!
+
+    "$MEDIA" run &
+    MEPID=$!
 
     "$XFR" run &
     XPID=$!
@@ -113,7 +121,7 @@ run_foreground() {
     "$UI" run &
     UPID=$!
 
-    wait $BPID $GPID $CPID $XPID $VPID $MPID $UPID
+    wait $BPID $GPID $CPID $MEPID $XPID $VPID $MPID $UPID
 }
 
 case "$cmd" in

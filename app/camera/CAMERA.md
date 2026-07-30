@@ -1,7 +1,8 @@
 # camera/ — 相机后端进程
 
 > 索引：[doc/ARCHITECTURE.md](../../doc/ARCHITECTURE.md)  
-> 可执行文件：**`rongsu_camera`** · 库源在 `lib/`，**无独立静态库**（源直接编入可执行文件）
+> 采集进程：**`rongsu_camera`**（仅采集/推流）  
+> 媒体进程：**`rongsu_media`**（拍照/录像/延时封装；复用本目录下 recorder 源）
 
 ## 文件职责
 
@@ -10,9 +11,9 @@
 | `main.cpp` | IPC Server、`CameraService` 生命周期、`process(2)` 循环 |
 | `lib/camera_service.*` | 流控 IPC、dma fd 元数据环推流、录像消息分派 |
 | `lib/vi_capture.*` | rkaiq ISP + V4L2 NV12 采集 |
-| `lib/print_video_recorder.*` | 元数据环取帧 → ffmpeg 软编 PNG → `/home/video/{job_ts}/1.png...` + `.rthm` |
-| `lib/print_h264_recorder.*` | 预览 NV12 异步入队写 raw（队列满丢帧保预览）；结束/终止后 worker 转码 `print.h264` |
-| `lib/clean_video_recorder.*` | 清粉连续录像：预览 NV12 全帧写 `clean_raw.nv12`，收尾先转 `clean_timelapse.h264` 再封装 `clean_timelapse.mp4` |
+| `../media/lib/print_video_recorder.*` | 元数据环取帧 → ffmpeg 软编 PNG → `/home/video/{job_ts}/1.png...` + `.rthm` |
+| `../media/lib/print_h264_recorder.*` | 预览 NV12 异步入队写 raw（队列满丢帧保预览）；结束/终止后 worker 转码 `print.h264` |
+| `../media/lib/clean_video_recorder.*` | 清粉连续录像：预览 NV12 全帧写 `clean_raw.nv12`，收尾先转 `clean_timelapse.h264` 再封装 `clean_timelapse.mp4` |
 | `lib/device_config.hpp` | 设备、分辨率、IQ、SHM、录像路径宏 |
 
 ## 数据路径
@@ -80,22 +81,20 @@ Snap 依赖预览流已开（同一 SHM）；与 UI 解码线程共享 ring，�
 - **Server**：`set_mode_ipc_server(APP_CAMERA)`，`/tmp/upc_camera.sock`
 - **预览**：`UI_Camera_Stream_*` / `APP_Camera_Stream_*`
 
-| MsgType | `CameraService` 动作 |
+| MsgType | 处理方动作 |
 |---------|----------------------|
 | `UI_Camera_Stream_Start_Req` | UI 开采集 + 导出 dma fd + 建 UI SHM 状态环 + 启动推流线程 |
 | `UI_Camera_Stream_Stop_Req` | UI 停流（仅移除 UI 会话；无其他消费者时停相机） |
 | `VISUAL_Camera_Stream_Start_Req` | Visual 开并行会话 + 建 Visual SHM 状态环 |
 | `VISUAL_Camera_Stream_Stop_Req` | Visual 停流（仅移除 Visual 会话） |
-| `UI_Camera_Snapshot_Req` | 保存当前预览帧 PNG 到 `/home/photo` |
-| `APP_Print_Video_Session_Start_Ntf` | 建录像会话、开 dma fd 元数据环 consumer |
-| `APP_Print_Layer_Snap_Ntf` | 入队 LayerSnap job |
-| `APP_Print_Video_Session_Finish_Ntf` | 入队 Finish，落盘 PNG 序列目录 + `.rthm` + upsert manifest（`complete`） |
-| `APP_Print_Video_Session_Abort_Ntf` | 入队 Abort，有帧同样落盘 + upsert（`terminated`） |
-| `APP_Clean_Video_Session_Start_Ntf` | 启动清粉连续录像会话（默认沿用当前预览 `1024x1280@30`） |
-| `APP_Clean_Video_Session_Stop_Ntf` | 停止清粉连续录像并封装 MP4；成功按策略删除 raw，失败可保留 raw 供排查 |
-| `APP_Print_Video_Manifest_Ntf` | **出向** Camera→UI：manifest `rename()` 成功后发（worker 线程直接 `publish_async`，发帧有 `io_mtx_` 保护） |
+| `MEDIA_Camera_Stream_Start_Req` | Media 并行取流（独立 SHM `/upc_camera_preview_media`） |
+| `MEDIA_Camera_Stream_Stop_Req` | Media 停流（仅移除 Media 会话） |
+| `UI_Camera_Snapshot_Req` | **Media** 保存当前预览帧 PNG 到 `/home/photo` |
+| `APP_Print_Video_Session_*` | **Media** 处理打印录像会话、生成缩略图/MP4/manifest |
+| `APP_Clean_Video_Session_*` | **Media** 处理清粉连续录像（raw→h264→mp4） |
+| `APP_Print_Video_Manifest_Ntf` | **Media→UI**：manifest `rename()` 成功后发（0 帧也必发） |
 
-Glavo→Camera 经 UI Hub 转发；`sender_id` 仍为 `APP_GLAVO`（见 IPC.md）。
+Glavo→Media 经 Broker 转发；`sender_id` 仍为 `APP_GLAVO`（见 IPC.md）。
 
 可选：`APP_Camera_Frame_Ntf`（`CAMERA_FRAME_NTF_DEFAULT`，UI 预览走元数据环轮询时通常可关）。
 

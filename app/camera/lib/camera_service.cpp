@@ -19,9 +19,9 @@ namespace upc::camera {
 
 namespace {
 
-constexpr const char* kPhotoOutDir = "/home/photo";
 constexpr const char* kUiShmName = CAMERA_SHM_NAME_DEFAULT;
 constexpr const char* kVisualShmName = "/upc_camera_preview_visual";
+constexpr const char* kMediaShmName = "/upc_camera_preview_media";
 constexpr int kPeerWaitSlotEmptyMs = 1000;
 
 uint64_t monotonic_us()
@@ -37,24 +37,6 @@ const char* env_or_default(const char* name, const char* fallback)
 {
     const char* v = std::getenv(name);
     return (v && v[0]) ? v : fallback;
-}
-
-std::string format_stamp_local()
-{
-    const auto now = std::chrono::system_clock::now();
-    std::time_t t = std::chrono::system_clock::to_time_t(now);
-    std::tm tm_buf{};
-    if(localtime_r(&t, &tm_buf) == nullptr) {
-        return "19700101_000000_000";
-    }
-    const uint32_t ms = static_cast<uint32_t>(
-        std::chrono::duration_cast<std::chrono::milliseconds>(
-            now.time_since_epoch()).count() % 1000);
-    char buf[40];
-    std::snprintf(buf, sizeof(buf), "%04d%02d%02d_%02d%02d%02d_%03u",
-                  tm_buf.tm_year + 1900, tm_buf.tm_mon + 1, tm_buf.tm_mday,
-                  tm_buf.tm_hour, tm_buf.tm_min, tm_buf.tm_sec, ms);
-    return buf;
 }
 
 void copy_nv12_tight(uint8_t* dst, const uint8_t* src_y, const uint8_t* src_uv,
@@ -86,21 +68,6 @@ void copy_nv12_tight(uint8_t* dst, const uint8_t* src_y, const uint8_t* src_uv,
     }
 }
 
-int run_shell_cmd(const char* cmd, const char* log_tag)
-{
-    if(!cmd || !cmd[0]) {
-        return -1;
-    }
-    UPC_LOG_CAMERA_SERVICE(Info, "snapshot %s: %s",
-                           log_tag ? log_tag : "cmd", cmd);
-    const int rc = std::system(cmd);
-    if(rc != 0) {
-        UPC_LOG_CAMERA_SERVICE(Error, "snapshot %s failed rc=%d",
-                               log_tag ? log_tag : "cmd", rc);
-    }
-    return rc;
-}
-
 } // namespace
 
 CameraService::~CameraService()
@@ -119,10 +86,6 @@ bool CameraService::init()
     }
 
     subscribe_messages();
-    print_video_.set_nv12_snapshot_provider(
-        [this](std::vector<uint8_t>& out) {
-            return copy_latest_nv12_snapshot(out);
-        });
     UPC_LOG_CAMERA_SERVICE(Info,
         "init device=%s %ux%u@%u warmup_frames=%u iq=%s/%s shm=%s frame_ntf=%d",
         env_or_default(CAMERA_ENV_DEVICE, CAMERA_V4L2_DEVICE_DEFAULT),
@@ -193,11 +156,6 @@ void CameraService::subscribe_messages()
         [this](const middleware::Message& msg) { handle_message(msg); }));
 
     subs_.push_back(port.subscribe(
-        middleware::MsgType::UI_Camera_Snapshot_Req,
-        middleware::ModuleId::APP_CAMERA,
-        [this](const middleware::Message& msg) { handle_message(msg); }));
-
-    subs_.push_back(port.subscribe(
         middleware::MsgType::VISUAL_Camera_Stream_Start_Req,
         middleware::ModuleId::APP_CAMERA,
         [this](const middleware::Message& msg) { handle_message(msg); }));
@@ -208,29 +166,14 @@ void CameraService::subscribe_messages()
         [this](const middleware::Message& msg) { handle_message(msg); }));
 
     subs_.push_back(port.subscribe(
-        middleware::MsgType::APP_Print_Video_Session_Start_Ntf,
+        middleware::MsgType::MEDIA_Camera_Stream_Start_Req,
         middleware::ModuleId::APP_CAMERA,
         [this](const middleware::Message& msg) { handle_message(msg); }));
     subs_.push_back(port.subscribe(
-        middleware::MsgType::APP_Print_Layer_Snap_Ntf,
+        middleware::MsgType::MEDIA_Camera_Stream_Stop_Req,
         middleware::ModuleId::APP_CAMERA,
         [this](const middleware::Message& msg) { handle_message(msg); }));
-    subs_.push_back(port.subscribe(
-        middleware::MsgType::APP_Print_Video_Session_Finish_Ntf,
-        middleware::ModuleId::APP_CAMERA,
-        [this](const middleware::Message& msg) { handle_message(msg); }));
-    subs_.push_back(port.subscribe(
-        middleware::MsgType::APP_Print_Video_Session_Abort_Ntf,
-        middleware::ModuleId::APP_CAMERA,
-        [this](const middleware::Message& msg) { handle_message(msg); }));
-    subs_.push_back(port.subscribe(
-        middleware::MsgType::APP_Clean_Video_Session_Start_Ntf,
-        middleware::ModuleId::APP_CAMERA,
-        [this](const middleware::Message& msg) { handle_message(msg); }));
-    subs_.push_back(port.subscribe(
-        middleware::MsgType::APP_Clean_Video_Session_Stop_Ntf,
-        middleware::ModuleId::APP_CAMERA,
-        [this](const middleware::Message& msg) { handle_message(msg); }));
+
 }
 
 void CameraService::handle_message(const middleware::Message& msg)
@@ -248,91 +191,14 @@ void CameraService::handle_message(const middleware::Message& msg)
     case middleware::MsgType::VISUAL_Camera_Stream_Stop_Req:
         handle_visual_stream_stop(msg);
         break;
-    case middleware::MsgType::UI_Camera_Snapshot_Req:
-        handle_snapshot_req(msg);
+    case middleware::MsgType::MEDIA_Camera_Stream_Start_Req:
+        handle_media_stream_start(msg);
         break;
-    case middleware::MsgType::APP_Print_Video_Session_Start_Ntf:
-    case middleware::MsgType::APP_Print_Layer_Snap_Ntf:
-    case middleware::MsgType::APP_Print_Video_Session_Finish_Ntf:
-    case middleware::MsgType::APP_Print_Video_Session_Abort_Ntf:
-        handle_print_video(msg);
-        break;
-    case middleware::MsgType::APP_Clean_Video_Session_Start_Ntf:
-    case middleware::MsgType::APP_Clean_Video_Session_Stop_Ntf:
-        handle_clean_video(msg);
+    case middleware::MsgType::MEDIA_Camera_Stream_Stop_Req:
+        handle_media_stream_stop(msg);
         break;
     default:
         break;
-    }
-}
-
-void CameraService::handle_snapshot_req(const middleware::Message& msg)
-{
-    std::string out_path;
-    const bool ok = save_latest_png_snapshot(out_path);
-    send_snapshot_rsp(msg, ok, ok ? out_path.c_str() : "");
-}
-
-void CameraService::handle_print_video(const middleware::Message& msg)
-{
-    switch(msg.type) {
-    case middleware::MsgType::APP_Print_Video_Session_Start_Ntf: {
-        middleware::PrintVideoSessionPayload info{};
-        if(!read_inline_pod(msg.payload, info)) {
-            return;
-        }
-        print_video_.set_stream_geometry(stream_width_, stream_height_);
-        print_h264_.set_stream_geometry(stream_width_, stream_height_, stream_fps_);
-        print_video_.on_session_start(info);
-        print_h264_.on_session_start(info);
-        break;
-    }
-    case middleware::MsgType::APP_Print_Layer_Snap_Ntf: {
-        middleware::PrintVideoLayerSnapPayload snap{};
-        if(!read_inline_pod(msg.payload, snap)) {
-            return;
-        }
-        print_video_.on_layer_snap(snap);
-        break;
-    }
-    case middleware::MsgType::APP_Print_Video_Session_Finish_Ntf:
-    case middleware::MsgType::APP_Print_Video_Session_Abort_Ntf: {
-        middleware::PrintVideoSessionPayload info{};
-        if(!read_inline_pod(msg.payload, info)) {
-            return;
-        }
-        if(msg.type == middleware::MsgType::APP_Print_Video_Session_Finish_Ntf) {
-            /* H264 先关 raw 并入队转码（消息线程不阻塞）；层间再入队 finalize/manifest */
-            print_h264_.on_session_finish(info);
-            print_video_.on_session_finish(info);
-        } else {
-            print_h264_.on_session_abort(info);
-            print_video_.on_session_abort(info);
-        }
-        break;
-    }
-    default:
-        break;
-    }
-}
-
-void CameraService::handle_clean_video(const middleware::Message& msg)
-{
-    if(msg.type == middleware::MsgType::APP_Clean_Video_Session_Start_Ntf) {
-        middleware::CleanVideoSessionStartPayload req{};
-        if(!read_inline_pod(msg.payload, req)) {
-            return;
-        }
-        clean_video_.set_stream_geometry(stream_width_, stream_height_, stream_fps_);
-        clean_video_.on_session_start(req);
-        return;
-    }
-    if(msg.type == middleware::MsgType::APP_Clean_Video_Session_Stop_Ntf) {
-        middleware::CleanVideoSessionStopPayload req{};
-        if(!read_inline_pod(msg.payload, req)) {
-            return;
-        }
-        clean_video_.on_session_stop(req);
     }
 }
 
@@ -347,9 +213,6 @@ void CameraService::handle_stream_start(const middleware::Message& msg)
         }
         stop_stream_.store(false);
         stream_running_.store(true);
-        print_video_.set_stream_geometry(stream_width_, stream_height_);
-        print_h264_.set_stream_geometry(stream_width_, stream_height_, stream_fps_);
-        clean_video_.set_stream_geometry(stream_width_, stream_height_, stream_fps_);
         stream_thread_ = std::thread(&CameraService::stream_thread_fn, this);
 
         UPC_LOG_CAMERA_SERVICE(Info,
@@ -381,9 +244,6 @@ void CameraService::handle_visual_stream_start(const middleware::Message& msg)
         }
         stop_stream_.store(false);
         stream_running_.store(true);
-        print_video_.set_stream_geometry(stream_width_, stream_height_);
-        print_h264_.set_stream_geometry(stream_width_, stream_height_, stream_fps_);
-        clean_video_.set_stream_geometry(stream_width_, stream_height_, stream_fps_);
         stream_thread_ = std::thread(&CameraService::stream_thread_fn, this);
 
         UPC_LOG_CAMERA_SERVICE(Info,
@@ -420,6 +280,47 @@ void CameraService::handle_visual_stream_stop(const middleware::Message& msg)
     send_stream_stop_done_with_type(
         msg, middleware::MsgType::APP_Visual_Camera_Stream_Stop_Done);
     UPC_LOG_CAMERA_SERVICE(Info, "stream stop visual sender=%u",
+                           static_cast<unsigned>(msg.sender_id));
+}
+
+void CameraService::handle_media_stream_start(const middleware::Message& msg)
+{
+    if(!stream_running_.load()) {
+        const bool ok = start_streaming();
+        if(!ok) {
+            send_stream_start_rsp_with_type(
+                msg, false, middleware::MsgType::APP_Media_Camera_Stream_Start_Rsp,
+                kMediaShmName);
+            UPC_LOG_CAMERA_SERVICE(Error, "media stream start failed");
+            return;
+        }
+        stop_stream_.store(false);
+        stream_running_.store(true);
+        stream_thread_ = std::thread(&CameraService::stream_thread_fn, this);
+
+        UPC_LOG_CAMERA_SERVICE(Info,
+            "streaming live %ux%u @ %u fps stride_y=%u aligned=%d",
+            stream_width_, stream_height_, stream_fps_,
+            dma_source_.dma_stride_y(),
+            dma_source_.stride_aligned() ? 1 : 0);
+    }
+
+    const bool ok = ensure_stream_peer(
+        msg, kMediaShmName, middleware::MsgType::APP_Media_Camera_Stream_Start_Rsp);
+    send_stream_start_rsp_with_type(
+        msg, ok, middleware::MsgType::APP_Media_Camera_Stream_Start_Rsp,
+        kMediaShmName);
+}
+
+void CameraService::handle_media_stream_stop(const middleware::Message& msg)
+{
+    remove_stream_peer(msg.sender_id);
+    if(!has_stream_peers()) {
+        stop_streaming();
+    }
+    send_stream_stop_done_with_type(
+        msg, middleware::MsgType::APP_Media_Camera_Stream_Stop_Done);
+    UPC_LOG_CAMERA_SERVICE(Info, "stream stop media sender=%u",
                            static_cast<unsigned>(msg.sender_id));
 }
 
@@ -506,60 +407,6 @@ bool CameraService::copy_latest_nv12_snapshot(std::vector<uint8_t>& out) const
         return false;
     }
     out = latest_nv12_snapshot_;
-    return true;
-}
-
-bool CameraService::save_latest_png_snapshot(std::string& out_path) const
-{
-    out_path.clear();
-    std::vector<uint8_t> nv12;
-    if(!copy_latest_nv12_snapshot(nv12) || nv12.empty()) {
-        return false;
-    }
-
-    if(mkdir(kPhotoOutDir, 0755) != 0 && errno != EEXIST) {
-        UPC_LOG_CAMERA_SERVICE(Error, "mkdir %s failed: %s",
-                               kPhotoOutDir, std::strerror(errno));
-        return false;
-    }
-
-    const std::string stamp = format_stamp_local();
-    const std::string name = "photo_" + stamp + "_" +
-                             std::to_string(stream_width_) + "x" +
-                             std::to_string(stream_height_) + ".png";
-    const std::string out_png_path = std::string(kPhotoOutDir) + "/" + name;
-    const std::string tmp_nv12_path =
-        "/tmp/camera_snapshot_" + stamp + "_" + std::to_string(monotonic_us()) + ".nv12";
-
-    FILE* fp = std::fopen(tmp_nv12_path.c_str(), "wb");
-    if(!fp) {
-        UPC_LOG_CAMERA_SERVICE(Error, "open temp nv12 failed %s: %s",
-                               tmp_nv12_path.c_str(), std::strerror(errno));
-        return false;
-    }
-    const bool ok = std::fwrite(nv12.data(), 1, nv12.size(), fp) == nv12.size();
-    if(std::fclose(fp) != 0 || !ok) {
-        UPC_LOG_CAMERA_SERVICE(Error, "write temp nv12 failed %s", tmp_nv12_path.c_str());
-        (void)std::remove(tmp_nv12_path.c_str());
-        return false;
-    }
-
-    char cmd[1024];
-    std::snprintf(
-        cmd, sizeof(cmd),
-        "%s -y -loglevel error -f rawvideo -pix_fmt nv12 -s %ux%u -i '%s' "
-        "-frames:v 1 -c:v png '%s'",
-        CAMERA_FFMPEG_BIN, stream_width_, stream_height_,
-        tmp_nv12_path.c_str(), out_png_path.c_str());
-    const bool png_ok = (run_shell_cmd(cmd, "ffmpeg png") == 0);
-    (void)std::remove(tmp_nv12_path.c_str());
-    if(!png_ok) {
-        return false;
-    }
-
-    out_path = out_png_path;
-    UPC_LOG_CAMERA_SERVICE(Info, "snapshot saved path=%s src_nv12_bytes=%zu",
-                           out_path.c_str(), nv12.size());
     return true;
 }
 
@@ -702,8 +549,6 @@ void CameraService::stream_thread_fn()
         if(src_y && src_uv) {
             update_latest_nv12_snapshot(src_y, src_uv, capture_.stride_y(),
                                         stream_width_, stream_height_);
-            clean_video_.on_frame_nv12(src_y, src_uv, capture_.stride_y());
-            print_h264_.on_frame_nv12(src_y, src_uv, capture_.stride_y());
         }
 
         if(!dma_source_.stride_aligned()) {
@@ -867,24 +712,6 @@ void CameraService::send_stream_stop_done_with_type(
         req.sender_id);
     middleware::MsgPort::instance().publish_async(done);
 }
-
-void CameraService::send_snapshot_rsp(const middleware::Message& req, bool ok,
-                                      const char* path)
-{
-    middleware::CameraSnapshotRspPayload rsp{};
-    rsp.ok = ok ? 1 : 0;
-    if(path && path[0]) {
-        std::snprintf(rsp.path, sizeof(rsp.path), "%s", path);
-    }
-    middleware::Message msg(
-        middleware::MsgType::APP_Camera_Snapshot_Rsp,
-        middleware::ModuleId::APP_CAMERA,
-        req.sender_id);
-    msg.payload = middleware::MsgPayload::from_bytes(
-        reinterpret_cast<const uint8_t*>(&rsp), sizeof(rsp));
-    middleware::MsgPort::instance().publish_async(msg);
-}
-
 
 void CameraService::notify_frame(uint32_t seq)
 {

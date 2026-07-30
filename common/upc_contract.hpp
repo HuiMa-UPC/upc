@@ -111,6 +111,9 @@
 #ifndef UPC_MOD_MQTT_SERVICE
 #define UPC_MOD_MQTT_SERVICE 1
 #endif
+#ifndef UPC_MOD_MEDIA_SERVICE
+#define UPC_MOD_MEDIA_SERVICE 1
+#endif
 
 #else /* !UPC_DEBUG */
 
@@ -132,6 +135,7 @@
 #define UPC_MOD_XFR_SERVICE 0
 #define UPC_MOD_VISUAL_SERVICE 0
 #define UPC_MOD_MQTT_SERVICE 0
+#define UPC_MOD_MEDIA_SERVICE 0
 
 #endif /* UPC_DEBUG */
 
@@ -203,6 +207,14 @@ inline ProcessConfig process_config_mqtt() {
     };
 }
 
+inline ProcessConfig process_config_media() {
+    return ProcessConfig{
+        "/var/run/rongsu_media.pid",
+        "/data/rongsu_media",
+        "rongsu_media",
+    };
+}
+
 // ============================================================================
 // §4 线协议 ABI 常量（帧格式实现见 ipc/ipc_wire.hpp）
 // ============================================================================
@@ -247,6 +259,7 @@ enum class ModuleId : uint32_t {
     APP_XFR    = 0x04,  /**< WiFi 传输后端 rongsu_xfr */
     APP_VISUAL = 0x05,  /**< 视觉识别后端 rongsu_visual */
     APP_MQTT   = 0x06,  /**< MQTT 网关后端 rongsu_mqtt */
+    APP_MEDIA  = 0x07,  /**< 媒体后端 rongsu_media（拍照/录像/延时封装） */
 };
 
 /**
@@ -309,12 +322,12 @@ enum class MsgType : uint32_t {
     UI_Camera_Snapshot_Req,              /**< Empty：请求保存当前最新 NV12 帧到 /home/photo */
     APP_Camera_Snapshot_Rsp,             /**< CameraSnapshotRspPayload */
 
-    // ---- GLAVO → CAMERA：打印层拍照录像（控制面；像素仍走预览 SHM） ----
+    // ---- GLAVO → MEDIA：打印层拍照录像（控制面；MEDIA 消费 CAMERA 预览 SHM） ----
     APP_Print_Video_Session_Start_Ntf = 0x1080, /**< PrintVideoSessionPayload */
     APP_Print_Layer_Snap_Ntf,                   /**< PrintVideoLayerSnapPayload */
     APP_Print_Video_Session_Finish_Ntf,         /**< PrintVideoSessionPayload */
     APP_Print_Video_Session_Abort_Ntf,          /**< PrintVideoSessionPayload */
-    /* 本条方向为 CAMERA → UI（与上面四条相反）：manifest.json 已原子落盘 */
+    /* 本条方向为 MEDIA → UI（与上面四条相反）：manifest.json 已原子落盘 */
     APP_Print_Video_Manifest_Ntf,               /**< PrintVideoManifestPayload */
 
     // ---- UI ↔ GLAVO：MCU OTA（测试） ----
@@ -410,10 +423,15 @@ enum class MsgType : uint32_t {
     VISUAL_Camera_Stream_Stop_Req,      /**< Empty */
     APP_Visual_Camera_Stream_Stop_Done, /**< Empty */
     APP_Visual_Rect_Ntf,                /**< VisualRectNtfPayload */
-
+    // ---- MEDIA ↔ CAMERA：媒体进程并行取流（拍照/录像） ----
+    MEDIA_Camera_Stream_Start_Req = 0x1450,  /**< CameraStreamStartReqPayload（媒体侧取流） */
+    APP_Media_Camera_Stream_Start_Rsp,       /**< CameraStreamInfoPayload */
+    MEDIA_Camera_Stream_Stop_Req,            /**< Empty */
+    APP_Media_Camera_Stream_Stop_Done,       /**< Empty */
     // ---- UI ↔ GLAVO：MCU 固件版本查询（串口 PORT_GENERAL_TASK 0xA2 / CMD_PROJECT_INFO 0x10） ----
     UI_Mcu_Version_Req = 0x1500, /**< Empty：进入 Settings/About 页时查询一次 */
     GLAVO_Mcu_Version_Ntf,       /**< McuVersionPayload：MCU 固件版本 + 板级配置 */
+
 };
 
 enum class MsgPriority : uint8_t {

@@ -2,12 +2,9 @@
 #define CAMERA_SERVICE_HPP
 
 #include "camera_dma_frame_source.hpp"
-#include "clean_video_recorder.hpp"
 #include "device_config.hpp"
 #include "ipc_dma_frame_ring.hpp"
 #include "msg_port.hpp"
-#include "print_h264_recorder.hpp"
-#include "print_video_recorder.hpp"
 #include "vi_capture.hpp"
 
 #include <atomic>
@@ -40,20 +37,8 @@ private:
     void handle_stream_stop(const middleware::Message& msg);
     void handle_visual_stream_start(const middleware::Message& msg);
     void handle_visual_stream_stop(const middleware::Message& msg);
-    void handle_snapshot_req(const middleware::Message& msg);
-    void handle_print_video(const middleware::Message& msg);
-    void handle_clean_video(const middleware::Message& msg);
-
-    template <typename T>
-    static bool read_inline_pod(const middleware::MsgPayload& payload, T& out)
-    {
-        if(payload.type != middleware::MsgPayload::Type::Inline ||
-           payload.length < sizeof(T)) {
-            return false;
-        }
-        std::memcpy(&out, payload.data.bytes.data(), sizeof(T));
-        return true;
-    }
+    void handle_media_stream_start(const middleware::Message& msg);
+    void handle_media_stream_stop(const middleware::Message& msg);
 
     bool start_streaming();
     void stop_streaming();
@@ -67,7 +52,6 @@ private:
                                      uint32_t src_stride_y, uint32_t width,
                                      uint32_t height);
     bool copy_latest_nv12_snapshot(std::vector<uint8_t>& out) const;
-    bool save_latest_png_snapshot(std::string& out_path) const;
 
     void send_stream_start_rsp(const middleware::Message& req, bool ok);
     void send_stream_stop_done(const middleware::Message& req);
@@ -76,8 +60,6 @@ private:
                                          const char* shm_name);
     void send_stream_stop_done_with_type(const middleware::Message& req,
                                          middleware::MsgType done_type);
-    void send_snapshot_rsp(const middleware::Message& req, bool ok,
-                           const char* path);
     void notify_frame(uint32_t seq);
 
     ViCaptureConfig build_capture_config();
@@ -96,10 +78,6 @@ private:
 
     ViCapture capture_;
     CameraDmaFrameSource dma_source_;
-    PrintVideoRecorder print_video_;
-    PrintH264Recorder print_h264_;
-    CleanVideoRecorder clean_video_;
-
     std::thread stream_thread_;
     std::atomic<bool> stream_running_{false};
     std::atomic<bool> stop_stream_{false};

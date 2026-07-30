@@ -9,11 +9,12 @@
 | UI | `rongsu_ui` | `app/ui/main.cpp` | [ui/UI.md](../app/ui/UI.md) | `/var/log/rongsu_ui{1,2,3}.log` |
 | Glavo | `rongsu_glavo` | `app/glavo/main.cpp` | [glavo/GLAVO.md](../app/glavo/GLAVO.md) | `/var/log/rongsu_glavo{1,2,3}.log` |
 | 相机 | `rongsu_camera` | `app/camera/main.cpp` | [camera/CAMERA.md](../app/camera/CAMERA.md) | `/var/log/rongsu_camera{1,2,3}.log` |
+| 媒体 | `rongsu_media` | `app/media/main.cpp` | [camera/CAMERA.md](../app/camera/CAMERA.md) | `/var/log/rongsu_media{1,2,3}.log` |
 | Xfer | `rongsu_xfr` | `app/xfer/main.cpp` | [xfer/XFER.md](../app/xfer/XFER.md) | `/var/log/rongsu_xfr{1,2,3}.log` |
 | Visual | `rongsu_visual` | `app/visual/main.cpp` | [visual/VISUAL.md](../app/visual/VISUAL.md) | `/var/log/rongsu_visual{1,2,3}.log` |
 | MQTT | `rongsu_mqtt` | `app/mqtt/main.cpp` | — | `/var/log/rongsu_mqtt{1,2,3}.log` |
 
-启动：`scripts/rongsu.sh start`（Glavo → `rongsu_camera` → `rongsu_xfr` → `rongsu_visual` → `rongsu_mqtt` → UI）。  
+启动：`scripts/rongsu.sh start`（Glavo → `rongsu_camera` → `rongsu_media` → `rongsu_xfr` → `rongsu_visual` → `rongsu_mqtt` → UI）。  
 编译：`./build.sh`（Release + 工具链，产物在 `output/`；`clean` / `reconfigure` 见脚本头注释）。
 
 ## 顶层目录
@@ -31,6 +32,7 @@
 | `app/ui/` | [UI.md](../app/ui/UI.md) | LVGL 界面、UiMsgProxy、IPC Hub 客户端 |
 | `app/glavo/` | [GLAVO.md](../app/glavo/GLAVO.md) | 打印编排、McuLink、IPC Server |
 | `app/camera/` | [CAMERA.md](../app/camera/CAMERA.md) | 相机采集、SHM 预览、IPC Server |
+| `app/media/` | [CAMERA.md](../app/camera/CAMERA.md) | 拍照/录像/延时封装（消费 Camera DMA 流） |
 | `app/xfer/` | [XFER.md](../app/xfer/XFER.md) | WiFi 发现、PIN 配对、HTTP 文件上传（仅收 `.json/.svg`） |
 | `app/visual/` | [VISUAL.md](../app/visual/VISUAL.md) | 视觉 demo：相机流取帧、OpenCV 矩形识别、坐标回传 UI |
 | `app/mqtt/` | — | MQTT 网关：环境遥测上报与云端控制指令接入（一期 `set_light`） |
