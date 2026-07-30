@@ -40,6 +40,10 @@ struct PrintHistoryEntry {
     std::string         frames_dir;    /**< 相对目录名，如 benchy */
     std::string         thumb;         /**< 相对路径，如 benchy/thumb.rthm */
     std::string         video;         /**< 相对路径，如 benchy/timelapse.mp4 */
+    bool                video_pending = false; /**< 1=后台仍在生成视频 */
+    bool                committed = true; /**< 1=历史页可见；0=结果页未退出前隐藏 */
+    uint32_t            clean_first_png = 0; /**< 清粉首帧序号（含）；0=无清粉追加 */
+    uint32_t            clean_last_png = 0;  /**< 清粉末帧序号（含）；0=无清粉追加 */
 };
 
 /** 从 path 读取 manifest；文件不存在返回空列表（仍返回 true） */

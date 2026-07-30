@@ -1,5 +1,6 @@
 #include "media_service.hpp"
 
+#include "config/cal_config.hpp"
 #include "device_config.hpp"
 #include "rs_log.hpp"
 
@@ -33,6 +34,18 @@ bool MediaService::init()
     print_video_.set_nv12_snapshot_provider([this](std::vector<uint8_t>& out) {
         return copy_latest_nv12_snapshot(out);
     });
+
+    uint32_t timelapse_fps = CAMERA_PRINT_VIDEO_LAYER_FPS;
+    upc::config::CalConfigOptions cal_cfg{};
+    if(upc::config::load_cal_config_options(upc::config::kCalDefaultPath, &cal_cfg) &&
+       cal_cfg.has_config_section && cal_cfg.has_timelapse_video_fps &&
+       cal_cfg.timelapse_video_fps > 0) {
+        timelapse_fps = cal_cfg.timelapse_video_fps;
+    }
+    print_video_.set_timelapse_fps(timelapse_fps);
+    clean_video_.set_timelapse_fps(timelapse_fps);
+    UPC_LOG_MEDIA_SERVICE(Info, "timelapse_video_fps=%u", timelapse_fps);
+
     send_stream_start_req();
     return true;
 }
@@ -103,6 +116,10 @@ void MediaService::subscribe_messages()
         middleware::MsgType::APP_Clean_Video_Session_Stop_Ntf,
         middleware::ModuleId::APP_MEDIA,
         [this](const middleware::Message& msg) { handle_message(msg); }));
+    subs_.push_back(bus.subscribe(
+        middleware::MsgType::UI_Print_Video_Finalize_Req,
+        middleware::ModuleId::APP_MEDIA,
+        [this](const middleware::Message& msg) { handle_message(msg); }));
 }
 
 void MediaService::handle_message(const middleware::Message& msg)
@@ -120,6 +137,9 @@ void MediaService::handle_message(const middleware::Message& msg)
     case middleware::MsgType::APP_Clean_Video_Session_Start_Ntf:
     case middleware::MsgType::APP_Clean_Video_Session_Stop_Ntf:
         handle_clean_video(msg);
+        break;
+    case middleware::MsgType::UI_Print_Video_Finalize_Req:
+        handle_print_video_finalize(msg);
         break;
     default:
         break;
@@ -518,6 +538,10 @@ void MediaService::handle_clean_video(const middleware::Message& msg)
         if(!read_inline_pod(msg.payload, req)) {
             return;
         }
+        {
+            std::lock_guard<std::mutex> lock(finalize_mtx_);
+            clean_video_active_ = true;
+        }
         clean_video_.set_stream_geometry(stream_width_, stream_height_, stream_fps_);
         clean_video_.on_session_start(req);
         return;
@@ -528,6 +552,47 @@ void MediaService::handle_clean_video(const middleware::Message& msg)
             return;
         }
         clean_video_.on_session_stop(req);
+
+        std::string finalize_frames_dir;
+        {
+            std::lock_guard<std::mutex> lock(finalize_mtx_);
+            clean_video_active_ = false;
+            if(finalize_pending_ && !pending_finalize_frames_dir_.empty()) {
+                finalize_frames_dir = pending_finalize_frames_dir_;
+                finalize_pending_ = false;
+                pending_finalize_frames_dir_.clear();
+            }
+        }
+        if(!finalize_frames_dir.empty()) {
+            print_video_.finalize_after_exit(finalize_frames_dir.c_str());
+        }
+    }
+}
+
+void MediaService::handle_print_video_finalize(const middleware::Message& msg)
+{
+    middleware::PrintVideoFinalizeReqPayload req{};
+    if(!read_inline_pod(msg.payload, req)) {
+        return;
+    }
+    req.frames_dir[sizeof(req.frames_dir) - 1] = '\0';
+    if(req.frames_dir[0] == '\0') {
+        return;
+    }
+
+    (void)print_video_.commit_after_exit(req.frames_dir);
+
+    bool defer = false;
+    {
+        std::lock_guard<std::mutex> lock(finalize_mtx_);
+        if(clean_video_active_) {
+            defer = true;
+            finalize_pending_ = true;
+            pending_finalize_frames_dir_ = req.frames_dir;
+        }
+    }
+    if(!defer) {
+        print_video_.finalize_after_exit(req.frames_dir);
     }
 }
 

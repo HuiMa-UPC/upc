@@ -75,6 +75,8 @@ public:
     void register_clean_test_done(CleanTestDoneCb cb);
     /** 返回首页时强制 clean_test_close。 */
     void send_clean_test_close();
+    /** 结果页退出后触发媒体统一合成 timelapse.mp4。 */
+    void send_print_video_finalize(const char* frames_dir);
     void register_clean_test_close_rsp(CleanTestCloseRspCb cb);
 
     /** 列目录：当前 UI 仅对 USB 调用；Local 由 control 直读 config.json */

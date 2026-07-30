@@ -66,6 +66,25 @@ bool parse_float_like(const std::string& raw, float* out)
     return true;
 }
 
+bool parse_uint_like(const std::string& raw, uint32_t* out)
+{
+    if(!out) {
+        return false;
+    }
+    std::string v = raw;
+    trim_inplace(v);
+    if(v.empty()) {
+        return false;
+    }
+    char* end = nullptr;
+    const unsigned long u = std::strtoul(v.c_str(), &end, 10);
+    if(end == v.c_str() || (end && *end != '\0') || u > 0xfffffffful) {
+        return false;
+    }
+    *out = static_cast<uint32_t>(u);
+    return true;
+}
+
 bool split_key_value(const char* line, std::string& key, std::string& value)
 {
     if(!line) {
@@ -172,6 +191,14 @@ bool load_cal_config_options(const char* path, CalConfigOptions* out)
         if(key_upper == "DEVICE MODEL") {
             out->has_device_model = true;
             out->device_model = value;
+            continue;
+        }
+        if(key_upper == "TIMELAPSE_VIDEO_FPS") {
+            uint32_t v = 0;
+            if(parse_uint_like(value, &v) && v >= 1u && v <= 30u) {
+                out->has_timelapse_video_fps = true;
+                out->timelapse_video_fps = v;
+            }
             continue;
         }
     }

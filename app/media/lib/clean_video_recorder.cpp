@@ -1,30 +1,121 @@
 #include "clean_video_recorder.hpp"
 
+#include "msg_port.hpp"
+#include "print_history_manifest.hpp"
 #include "rs_log.hpp"
+#include "timelapse_util.hpp"
 
 #include <algorithm>
-#include <cctype>
 #include <cerrno>
 #include <chrono>
-#include <cstdlib>
-#include <cstring>
-#include <filesystem>
 #include <cstdio>
+#include <cstring>
 
 namespace upc::media {
 
 namespace {
 
-constexpr const char* kMp4Name = "clean_timelapse.mp4";
-constexpr const char* kH264Name = "clean_timelapse.h264";
-constexpr const char* kRawNv12Name = "clean_raw.nv12";
-constexpr uint32_t kCleanRecordFps = 30u;
 constexpr size_t kMaxPendingJobs = 2u;
 
-void copy_nv12_tight(uint8_t* dst, const uint8_t* src_y, const uint8_t* src_uv,
-                     uint32_t src_stride_y, uint32_t width, uint32_t height)
+bool update_clean_history_metadata(const std::string& frames_dir,
+                                   const std::string& thumb_rel,
+                                   uint32_t clean_first_png,
+                                   uint32_t clean_last_png)
 {
-    if(!dst || !src_y || !src_uv || width == 0 || height == 0 || src_stride_y == 0) {
+    if(frames_dir.empty()) {
+        return false;
+    }
+    std::vector<upc::PrintHistoryEntry> entries;
+    if(!upc::print_history_manifest_load(UPC_PRINT_VIDEO_MANIFEST, entries)) {
+        UPC_LOG_MEDIA_SERVICE(Warn,
+            "clean_video history load fail path=%s", UPC_PRINT_VIDEO_MANIFEST);
+        return false;
+    }
+
+    bool found = false;
+    for(auto& e : entries) {
+        if(e.frames_dir == frames_dir) {
+            if(!thumb_rel.empty()) {
+                e.thumb = thumb_rel;
+            }
+            e.clean_first_png = clean_first_png;
+            e.clean_last_png = clean_last_png;
+            found = true;
+            break;
+        }
+    }
+    if(!found) {
+        UPC_LOG_MEDIA_SERVICE(Warn,
+            "clean_video history miss frames_dir=%s", frames_dir.c_str());
+        return false;
+    }
+
+    const std::string tmp_path = std::string(UPC_PRINT_VIDEO_MANIFEST) + ".tmp";
+    if(!upc::print_history_manifest_save(tmp_path, entries)) {
+        UPC_LOG_MEDIA_SERVICE(Error,
+            "clean_video history save fail tmp=%s", tmp_path.c_str());
+        (void)std::remove(tmp_path.c_str());
+        return false;
+    }
+    if(std::rename(tmp_path.c_str(), UPC_PRINT_VIDEO_MANIFEST) != 0) {
+        UPC_LOG_MEDIA_SERVICE(Error,
+            "clean_video history rename fail %s -> %s: %s",
+            tmp_path.c_str(), UPC_PRINT_VIDEO_MANIFEST, std::strerror(errno));
+        (void)std::remove(tmp_path.c_str());
+        return false;
+    }
+    return true;
+}
+
+} // namespace
+
+CleanVideoRecorder::~CleanVideoRecorder()
+{
+    {
+        std::unique_lock<std::mutex> lock(mtx_);
+        stop_locked(lock, 0xff);
+    }
+    stop_worker();
+}
+
+void CleanVideoRecorder::set_stream_geometry(uint32_t width, uint32_t height,
+                                             uint32_t fps)
+{
+    std::lock_guard<std::mutex> lock(mtx_);
+    if(width > 0) {
+        width_ = width;
+    }
+    if(height > 0) {
+        height_ = height;
+    }
+    if(fps > 0) {
+        stream_fps_ = fps;
+    }
+}
+
+void CleanVideoRecorder::set_timelapse_fps(uint32_t fps)
+{
+    std::lock_guard<std::mutex> lock(mtx_);
+    if(fps > 0) {
+        timelapse_fps_ = fps;
+        sample_interval_us_ = 1000000ull / static_cast<uint64_t>(fps);
+    }
+}
+
+uint64_t CleanVideoRecorder::monotonic_us()
+{
+    return static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count());
+}
+
+void CleanVideoRecorder::copy_nv12_tight(uint8_t* dst, const uint8_t* src_y,
+                                         const uint8_t* src_uv,
+                                         uint32_t src_stride_y,
+                                         uint32_t width, uint32_t height)
+{
+    if(!dst || !src_y || !src_uv || width == 0 || height == 0 ||
+       src_stride_y == 0) {
         return;
     }
     const size_t y_size = static_cast<size_t>(width) * height;
@@ -42,135 +133,6 @@ void copy_nv12_tight(uint8_t* dst, const uint8_t* src_y, const uint8_t* src_uv,
         std::memcpy(dst_uv + static_cast<size_t>(r) * width,
                     src_uv + static_cast<size_t>(r) * src_stride_y, width);
     }
-}
-
-} // namespace
-
-CleanVideoRecorder::~CleanVideoRecorder()
-{
-    {
-        std::unique_lock<std::mutex> lock(mtx_);
-        stop_locked(lock, 0xff, true);
-    }
-    stop_worker();
-}
-
-void CleanVideoRecorder::set_stream_geometry(uint32_t width, uint32_t height, uint32_t fps)
-{
-    std::lock_guard<std::mutex> lock(mtx_);
-    if(width > 0) {
-        width_ = width;
-    }
-    if(height > 0) {
-        height_ = height;
-    }
-    if(fps > 0) {
-        fps_ = fps;
-    }
-}
-
-std::string CleanVideoRecorder::sanitize_name(const char* raw)
-{
-    if(!raw || !raw[0]) {
-        return "print";
-    }
-    std::string out(raw);
-    for(char& c : out) {
-        const unsigned char uc = static_cast<unsigned char>(c);
-        if(!std::isalnum(uc) && c != '-' && c != '_' && c != '.') {
-            c = '_';
-        }
-    }
-    if(out.empty()) {
-        out = "print";
-    }
-    return out;
-}
-
-bool CleanVideoRecorder::ensure_dir(const std::string& dir)
-{
-    if(dir.empty()) {
-        return false;
-    }
-    std::error_code ec;
-    std::filesystem::create_directories(dir, ec);
-    return !ec;
-}
-
-int CleanVideoRecorder::run_shell_cmd(const char* cmd, const char* tag)
-{
-    if(!cmd || !cmd[0]) {
-        return -1;
-    }
-    UPC_LOG_MEDIA_SERVICE(Info, "clean_video %s: %s", tag ? tag : "cmd", cmd);
-    const int rc = std::system(cmd);
-    if(rc != 0) {
-        UPC_LOG_MEDIA_SERVICE(Warn, "clean_video %s rc=%d", tag ? tag : "cmd", rc);
-    }
-    return rc;
-}
-
-bool CleanVideoRecorder::append_nv12_frame(const CleanFrameJob& job)
-{
-    if(job.raw_path.empty() || job.nv12.empty() || job.width == 0 || job.height == 0) {
-        return false;
-    }
-    const size_t need = static_cast<size_t>(job.width) * job.height * 3u / 2u;
-    if(job.nv12.size() < need) {
-        return false;
-    }
-
-    FILE* fp = std::fopen(job.raw_path.c_str(), "ab");
-    if(!fp) {
-        UPC_LOG_MEDIA_SERVICE(Error, "clean_video open raw fail %s: %s",
-                               job.raw_path.c_str(), std::strerror(errno));
-        return false;
-    }
-    const size_t written = std::fwrite(job.nv12.data(), 1, need, fp);
-    const bool write_ok = (written == need);
-    if(std::fclose(fp) != 0 || !write_ok) {
-        UPC_LOG_MEDIA_SERVICE(Error, "clean_video write raw fail %s %zu/%zu",
-                               job.raw_path.c_str(), written, need);
-        return false;
-    }
-    return true;
-}
-
-bool CleanVideoRecorder::encode_raw_nv12_to_h264(const std::string& raw_path,
-                                                 const std::string& h264_path,
-                                                 uint32_t width, uint32_t height,
-                                                 uint32_t fps, uint32_t frame_count)
-{
-    if(raw_path.empty() || h264_path.empty() || width == 0 || height == 0 ||
-       fps == 0 || frame_count == 0) {
-        return false;
-    }
-    char cmd[1536];
-    std::snprintf(cmd, sizeof(cmd),
-                  "%s -i '%s' -o '%s' -w %u -h %u -hstride %u "
-                  "-f 0 -t 7 -n %u -fps %u -bps %u -rc 1",
-                  CAMERA_MPI_ENC_BIN,
-                  raw_path.c_str(),
-                  h264_path.c_str(),
-                  width, height, width,
-                  frame_count,
-                  fps, CAMERA_PRINT_H264_BITRATE);
-    return run_shell_cmd(cmd, "mpi_enc clean h264") == 0;
-}
-
-bool CleanVideoRecorder::remux_h264_to_mp4(const std::string& h264_path,
-                                           const std::string& mp4_path,
-                                           uint32_t fps)
-{
-    if(h264_path.empty() || mp4_path.empty() || fps == 0) {
-        return false;
-    }
-    char cmd[1536];
-    std::snprintf(cmd, sizeof(cmd),
-                  "%s -y -loglevel error -f h264 -r %u -i '%s' "
-                  "-c:v copy -movflags +faststart '%s'",
-                  CAMERA_FFMPEG_BIN, fps, h264_path.c_str(), mp4_path.c_str());
-    return run_shell_cmd(cmd, "ffmpeg clean mp4 remux") == 0;
 }
 
 void CleanVideoRecorder::start_worker_if_needed_locked()
@@ -216,11 +178,10 @@ void CleanVideoRecorder::wait_session_jobs_drain_locked(
             const size_t pending = pending_session_jobs(session_seq);
             UPC_LOG_MEDIA_SERVICE(
                 Warn,
-                "clean_video wait drain timeout seq=%llu pending=%zu worker_busy=%d worker_busy_session=%llu rounds=%u",
+                "clean_video wait drain timeout seq=%llu pending=%zu worker_busy=%d rounds=%u",
                 static_cast<unsigned long long>(session_seq),
                 pending,
                 worker_busy_ ? 1 : 0,
-                static_cast<unsigned long long>(worker_busy_session_),
                 wait_warn_count);
         }
     }
@@ -247,24 +208,26 @@ void CleanVideoRecorder::worker_fn()
             worker_busy_ = true;
             worker_busy_session_ = job.session_seq;
             if(job.session_seq == session_seq_) {
-                frame_index = frame_count_ + 1u;
+                frame_index = print_frame_count_ + clean_frame_count_ + 1u;
             }
         }
 
         bool ok = false;
         if(frame_index > 0u) {
-            ok = append_nv12_frame(job);
+            ok = timelapse_util::encode_nv12_to_png(
+                job.nv12.data(), job.nv12.size(),
+                job.width, job.height, job.session_dir, frame_index);
         }
 
         {
             std::lock_guard<std::mutex> lock(mtx_);
             if(ok && job.session_seq == session_seq_ &&
-               frame_index == frame_count_ + 1u) {
-                ++frame_count_;
+               frame_index == print_frame_count_ + clean_frame_count_ + 1u) {
+                ++clean_frame_count_;
+                last_clean_nv12_ = std::move(job.nv12);
             } else if(frame_index > 0u && !ok) {
                 UPC_LOG_MEDIA_SERVICE(Warn,
-                    "clean_video raw append fail frame=%u input_frame=%u",
-                    frame_index, job.input_frame);
+                    "clean_video png encode fail frame=%u", frame_index);
             }
             worker_busy_ = false;
             worker_busy_session_ = 0;
@@ -277,11 +240,11 @@ void CleanVideoRecorder::on_session_start(
     const middleware::CleanVideoSessionStartPayload& req)
 {
     std::unique_lock<std::mutex> lock(mtx_);
-    stop_locked(lock, 0xfe, true);
+    stop_locked(lock, 0xfe);
     start_worker_if_needed_locked();
 
     session_id_ = req.session_id;
-    job_name_ = sanitize_name(req.job_name);
+    job_name_ = timelapse_util::sanitize_filename(req.job_name);
     if(req.width > 0) {
         width_ = req.width;
     }
@@ -289,33 +252,37 @@ void CleanVideoRecorder::on_session_start(
         height_ = req.height;
     }
     if(req.fps > 0) {
-        fps_ = req.fps;
+        timelapse_fps_ = req.fps;
     }
+    if(timelapse_fps_ == 0) {
+        timelapse_fps_ = CAMERA_PRINT_VIDEO_LAYER_FPS;
+    }
+    sample_interval_us_ =
+        1000000ull / static_cast<uint64_t>(std::max(1u, timelapse_fps_));
 
     ++session_seq_;
     session_dir_ = std::string(CAMERA_PRINT_VIDEO_OUT_DIR) + "/" + job_name_;
-    raw_path_ = session_dir_ + "/" + kRawNv12Name;
-    h264_path_ = session_dir_ + "/" + kH264Name;
-    mp4_path_ = session_dir_ + "/" + kMp4Name;
 
-    if(!ensure_dir(CAMERA_PRINT_VIDEO_OUT_DIR) || !ensure_dir(session_dir_)) {
+    if(!timelapse_util::mkdir_p(CAMERA_PRINT_VIDEO_OUT_DIR) ||
+       !timelapse_util::mkdir_p(session_dir_.c_str())) {
         UPC_LOG_MEDIA_SERVICE(Error, "clean_video mkdir failed dir=%s",
                                session_dir_.c_str());
         return;
     }
-    (void)std::remove(raw_path_.c_str());
-    (void)std::remove(h264_path_.c_str());
-    (void)std::remove(mp4_path_.c_str());
 
+    print_frame_count_ = timelapse_util::scan_max_png_index(session_dir_);
+    clean_frame_count_ = 0;
+    last_clean_nv12_.clear();
     dropped_frames_ = 0;
     input_frame_count_ = 0;
-    frame_count_ = 0;
+    next_sample_us_ = 0;
     active_ = true;
+
     UPC_LOG_MEDIA_SERVICE(
         Info,
-        "clean_video start id=%s dir=%s %ux%u@%u target_fps=%u raw=%s",
+        "clean_video start id=%s dir=%s %ux%u stream_fps=%u timelapse_fps=%u print_png=%u",
         session_id_.c_str(), session_dir_.c_str(),
-        width_, height_, fps_, kCleanRecordFps, raw_path_.c_str());
+        width_, height_, stream_fps_, timelapse_fps_, print_frame_count_);
 }
 
 void CleanVideoRecorder::on_frame_nv12(const uint8_t* src_y, const uint8_t* src_uv,
@@ -324,8 +291,7 @@ void CleanVideoRecorder::on_frame_nv12(const uint8_t* src_y, const uint8_t* src_
     uint64_t current_session_seq = 0;
     uint32_t current_width = 0;
     uint32_t current_height = 0;
-    uint32_t current_input_frame = 0;
-    std::string current_raw_path;
+    std::string current_session_dir;
 
     {
         std::lock_guard<std::mutex> lock(mtx_);
@@ -334,10 +300,21 @@ void CleanVideoRecorder::on_frame_nv12(const uint8_t* src_y, const uint8_t* src_
         }
 
         ++input_frame_count_;
-        current_input_frame = input_frame_count_;
+        const uint64_t now_us = monotonic_us();
+        if(next_sample_us_ == 0) {
+            next_sample_us_ = now_us;
+        }
+        if(now_us < next_sample_us_) {
+            return;
+        }
+        /* 按目标间隔推进，落后时追赶，避免积压后连拍 */
+        do {
+            next_sample_us_ += sample_interval_us_;
+        } while(next_sample_us_ <= now_us);
+
         if(jobs_.size() >= kMaxPendingJobs) {
             ++dropped_frames_;
-            if((dropped_frames_ % 20u) == 1u) {
+            if((dropped_frames_ % 10u) == 1u) {
                 UPC_LOG_MEDIA_SERVICE(Warn,
                     "clean_video queue full drop=%u pending=%zu",
                     dropped_frames_, jobs_.size());
@@ -348,40 +325,32 @@ void CleanVideoRecorder::on_frame_nv12(const uint8_t* src_y, const uint8_t* src_
         current_session_seq = session_seq_;
         current_width = width_;
         current_height = height_;
-        current_raw_path = raw_path_;
+        current_session_dir = session_dir_;
     }
 
     if(!src_y || !src_uv || stride_y == 0u ||
-       current_width == 0u || current_height == 0u || current_raw_path.empty()) {
-        UPC_LOG_MEDIA_SERVICE(
-            Warn,
-            "clean_video invalid frame input_frame=%u src_y=%p src_uv=%p stride=%u %ux%u raw_empty=%d",
-            current_input_frame,
-            static_cast<const void*>(src_y),
-            static_cast<const void*>(src_uv),
-            stride_y,
-            current_width,
-            current_height,
-            current_raw_path.empty() ? 1 : 0);
+       current_width == 0u || current_height == 0u ||
+       current_session_dir.empty()) {
         return;
     }
     if(stride_y < current_width) {
         UPC_LOG_MEDIA_SERVICE(
             Warn,
-            "clean_video stride smaller than width input_frame=%u stride=%u width=%u",
-            current_input_frame, stride_y, current_width);
+            "clean_video stride smaller than width stride=%u width=%u",
+            stride_y, current_width);
         return;
     }
 
-    const size_t need = static_cast<size_t>(current_width) * current_height * 3u / 2u;
+    const size_t need =
+        static_cast<size_t>(current_width) * current_height * 3u / 2u;
     CleanFrameJob job{};
     job.session_seq = current_session_seq;
     job.width = current_width;
     job.height = current_height;
-    job.input_frame = current_input_frame;
-    job.raw_path = current_raw_path;
+    job.session_dir = current_session_dir;
     job.nv12.resize(need);
-    copy_nv12_tight(job.nv12.data(), src_y, src_uv, stride_y, current_width, current_height);
+    copy_nv12_tight(job.nv12.data(), src_y, src_uv, stride_y,
+                    current_width, current_height);
 
     {
         std::lock_guard<std::mutex> lock(mtx_);
@@ -390,16 +359,32 @@ void CleanVideoRecorder::on_frame_nv12(const uint8_t* src_y, const uint8_t* src_
         }
         if(jobs_.size() >= kMaxPendingJobs) {
             ++dropped_frames_;
-            if((dropped_frames_ % 20u) == 1u) {
-                UPC_LOG_MEDIA_SERVICE(Warn,
-                    "clean_video queue full after copy drop=%u pending=%zu",
-                    dropped_frames_, jobs_.size());
-            }
             return;
         }
         jobs_.push_back(std::move(job));
     }
     cv_.notify_one();
+}
+
+void CleanVideoRecorder::publish_clean_test_done(
+    uint8_t result_code, bool has_mp4, const std::string& mp4_rel_path) const
+{
+    middleware::CleanTestDonePayload ntf{};
+    ntf.result_code = result_code;
+    ntf.raw_retained = 0;
+    ntf.has_mp4 = has_mp4 ? 1 : 0;
+    if(!mp4_rel_path.empty()) {
+        std::snprintf(ntf.mp4_rel_path, sizeof(ntf.mp4_rel_path), "%s",
+                      mp4_rel_path.c_str());
+    }
+
+    middleware::Message msg(
+        middleware::MsgType::APP_Clean_Test_Done_Ntf,
+        middleware::ModuleId::APP_MEDIA,
+        middleware::ModuleId::UI);
+    msg.payload = middleware::MsgPayload::from_bytes(
+        reinterpret_cast<const uint8_t*>(&ntf), sizeof(ntf));
+    middleware::MsgPort::instance().publish_async(msg);
 }
 
 void CleanVideoRecorder::on_session_stop(
@@ -410,11 +395,11 @@ void CleanVideoRecorder::on_session_stop(
        session_id_ != req.session_id) {
         return;
     }
-    stop_locked(lock, req.result_code, req.keep_raw != 0);
+    stop_locked(lock, req.result_code);
 }
 
 void CleanVideoRecorder::stop_locked(std::unique_lock<std::mutex>& lock,
-                                     uint8_t result_code, bool keep_raw)
+                                     uint8_t result_code)
 {
     if(!active_) {
         return;
@@ -425,84 +410,84 @@ void CleanVideoRecorder::stop_locked(std::unique_lock<std::mutex>& lock,
     wait_session_jobs_drain_locked(lock, session_seq);
 
     const std::string stop_session_id = session_id_;
-    const std::string stop_raw_path   = raw_path_;
-    const std::string stop_h264_path  = h264_path_;
-    const std::string stop_mp4_path   = mp4_path_;
-    const uint32_t stop_width         = width_;
-    const uint32_t stop_height        = height_;
-    const uint32_t stop_sample_fps    = kCleanRecordFps;
-    const uint32_t stop_frame_count   = frame_count_;
-    const uint32_t stop_input_frames  = input_frame_count_;
-    const uint32_t stop_dropped       = dropped_frames_;
+    const std::string stop_job_name = job_name_;
+    const std::string stop_session_dir = session_dir_;
+    const uint32_t stop_width = width_;
+    const uint32_t stop_height = height_;
+    const uint32_t stop_print_frames = print_frame_count_;
+    const uint32_t stop_clean_frames = clean_frame_count_;
+    const uint32_t stop_input_frames = input_frame_count_;
+    const uint32_t stop_dropped = dropped_frames_;
+    std::vector<uint8_t> stop_last_nv12 = std::move(last_clean_nv12_);
 
     lock.unlock();
 
-    const bool closed_by_user = (result_code == 0xfeu);
-    bool mp4_ok = false;
-    bool h264_ok = false;
-    if(closed_by_user) {
-        /* 返回首页触发 clean_test_close：临时 raw 直接丢弃，不合成 mp4。 */
-        (void)std::remove(stop_raw_path.c_str());
-        (void)std::remove(stop_h264_path.c_str());
-        (void)std::remove(stop_mp4_path.c_str());
-    } else if(stop_frame_count >= 2u) {
-        h264_ok = encode_raw_nv12_to_h264(
-            stop_raw_path, stop_h264_path, stop_width, stop_height,
-            stop_sample_fps, stop_frame_count);
-        if(h264_ok) {
-            mp4_ok = remux_h264_to_mp4(stop_h264_path, stop_mp4_path, stop_sample_fps);
-            if(mp4_ok) {
-                (void)std::remove(stop_h264_path.c_str());
-                if(!keep_raw) {
-                    (void)std::remove(stop_raw_path.c_str());
-                }
-            }
-        }
-    } else if(stop_frame_count == 1u) {
-        UPC_LOG_MEDIA_SERVICE(Warn,
-            "clean_video only one sampled frame, skip h264/mp4 compose");
-    }
+    const bool closed_by_user = (result_code == 0xfe);
+    const bool success = (result_code == 0);
+    const uint32_t total_frames = stop_print_frames + stop_clean_frames;
+    const uint32_t clean_first =
+        stop_clean_frames > 0 ? stop_print_frames + 1u : 0u;
+    const uint32_t clean_last =
+        stop_clean_frames > 0 ? total_frames : 0u;
 
-    std::error_code ec;
-    const bool raw_exists = !stop_raw_path.empty() &&
-                            std::filesystem::exists(stop_raw_path, ec);
-    ec.clear();
-    const bool h264_exists = !stop_h264_path.empty() &&
-                             std::filesystem::exists(stop_h264_path, ec);
-    ec.clear();
-    const bool mp4_exists = !stop_mp4_path.empty() &&
-                            std::filesystem::exists(stop_mp4_path, ec);
-    ec.clear();
+    bool thumb_ok = false;
+    bool history_ok = false;
+
+    if(closed_by_user || !success) {
+        if(clean_first > 0) {
+            timelapse_util::remove_png_range(stop_session_dir, clean_first,
+                                             clean_last);
+        }
+        history_ok = update_clean_history_metadata(stop_job_name, std::string{}, 0u, 0u);
+    } else if(stop_clean_frames == 0) {
+        UPC_LOG_MEDIA_SERVICE(Info,
+            "clean_video success with 0 clean frames, keep print png only");
+        history_ok = update_clean_history_metadata(stop_job_name, std::string{}, 0u, 0u);
+    } else {
+        const std::string thumb_path =
+            stop_session_dir + "/thumb" + CAMERA_PRINT_VIDEO_THUMB_EXT;
+
+        if(!stop_last_nv12.empty()) {
+            (void)std::remove(thumb_path.c_str());
+            thumb_ok = timelapse_util::create_raw_thumb_from_nv12(
+                stop_last_nv12, stop_width, stop_height, thumb_path.c_str());
+        }
+
+        const std::string thumb_rel =
+            thumb_ok ? (stop_job_name + "/thumb" + CAMERA_PRINT_VIDEO_THUMB_EXT)
+                     : std::string{};
+        history_ok = update_clean_history_metadata(
+            stop_job_name, thumb_rel, clean_first, clean_last);
+    }
 
     UPC_LOG_MEDIA_SERVICE(
         Info,
-        "clean_video stop id=%s result=%u sampled_frames=%u input_frames=%u dropped=%u keep_raw=%d closed_by_user=%d h264_ok=%d mp4_ok=%d raw_exists=%d h264_exists=%d mp4_exists=%d raw=%s h264=%s mp4=%s",
+        "clean_video stop id=%s result=%u print_png=%u clean_png=%u input=%u dropped=%u closed_by_user=%d thumb_ok=%d history_ok=%d finalize_pending=1",
         stop_session_id.c_str(),
         static_cast<unsigned>(result_code),
-        stop_frame_count,
+        stop_print_frames,
+        stop_clean_frames,
         stop_input_frames,
         stop_dropped,
-        keep_raw ? 1 : 0,
         closed_by_user ? 1 : 0,
-        h264_ok ? 1 : 0,
-        mp4_ok ? 1 : 0,
-        raw_exists ? 1 : 0,
-        h264_exists ? 1 : 0,
-        mp4_exists ? 1 : 0,
-        stop_raw_path.c_str(),
-        stop_h264_path.c_str(),
-        stop_mp4_path.c_str());
+        thumb_ok ? 1 : 0,
+        history_ok ? 1 : 0);
+
+    /* 用户关闭走 Close_Rsp；MCU 完成/失败由 Media 发 Done，最终 MP4 在退出结果页后统一合成。 */
+    if(!closed_by_user && result_code != 0xff) {
+        publish_clean_test_done(result_code, false, std::string{});
+    }
 
     lock.lock();
-
     session_id_.clear();
+    job_name_.clear();
     session_dir_.clear();
-    raw_path_.clear();
-    h264_path_.clear();
-    mp4_path_.clear();
+    print_frame_count_ = 0;
+    clean_frame_count_ = 0;
     dropped_frames_ = 0;
     input_frame_count_ = 0;
-    frame_count_ = 0;
+    next_sample_us_ = 0;
+    last_clean_nv12_.clear();
 }
 
 } // namespace upc::media

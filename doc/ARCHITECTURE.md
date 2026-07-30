@@ -122,6 +122,7 @@ UI → IPC → GlavoService → ParserManager → RingBuffer
 |------|------|
 | 架构索引 | `doc/ARCHITECTURE.md`（本文件） |
 | 模块说明 | `app/{ui,glavo,camera,parser,protocol}/*.md`、`common/{ipc,middleware}/*.md` |
+| 专利参考 | [专利参考-系统架构与运行逻辑.md](专利参考-系统架构与运行逻辑.md)、[专利参考-振镜校准算法与增益设置.md](专利参考-振镜校准算法与增益设置.md) |
 | Cursor Rules | `.cursor/rules/*.mdc` |
 | 并发检查 MCP | `.cursor/mcp/cpp-concurrency-check.py` |
 | 日志 | [doc/LOG_GUIDE.md](LOG_GUIDE.md) |

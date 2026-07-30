@@ -92,6 +92,7 @@ extern lv_obj_t *g_monitor_photo_btn;
 extern lv_obj_t *g_result_photo_btn;
 extern lv_obj_t *g_result_purify_btn;
 extern bool      g_result_cleaning;
+extern bool      g_result_purify_done;
 extern bool      g_monitor_photo_pending;
 extern char      g_result_job_name[96];
 
@@ -102,7 +103,7 @@ struct CleanDoneToastCtx {
 void on_clean_start_reject_async(void * /*user*/)
 {
     g_result_cleaning = false;
-    if(g_result_purify_btn) {
+    if(g_result_purify_btn && !g_result_purify_done) {
         lv_obj_clear_state(g_result_purify_btn, LV_STATE_DISABLED);
     }
     ui_toast_show("Powder cleaning is busy", ui_color_danger, 1800);
@@ -115,15 +116,19 @@ void on_clean_done_async(void *user)
     delete ctx;
 
     g_result_cleaning = false;
-    if(g_result_purify_btn) {
-        lv_obj_clear_state(g_result_purify_btn, LV_STATE_DISABLED);
-    }
     if(!control_is_printing()) {
         return;
     }
     if(success) {
+        g_result_purify_done = true;
+        if(g_result_purify_btn) {
+            lv_obj_add_state(g_result_purify_btn, LV_STATE_DISABLED);
+        }
         ui_toast_show("Powder cleaning finished", user_color_status_ok, 2200);
     } else {
+        if(g_result_purify_btn && !g_result_purify_done) {
+            lv_obj_clear_state(g_result_purify_btn, LV_STATE_DISABLED);
+        }
         ui_toast_show("Powder cleaning failed, video retained", ui_color_danger, 2600);
     }
 }
@@ -131,7 +136,7 @@ void on_clean_done_async(void *user)
 void on_clean_close_rsp_async(void * /*user*/)
 {
     g_result_cleaning = false;
-    if(g_result_purify_btn) {
+    if(g_result_purify_btn && !g_result_purify_done) {
         lv_obj_clear_state(g_result_purify_btn, LV_STATE_DISABLED);
     }
 }
@@ -282,6 +287,7 @@ lv_obj_t *g_result_purify_btn  = nullptr; /**< 结果页 Purify 按钮 */
 ui_slide_unlock_t *g_result_slide = nullptr; /**< "SWIPE TO COLLECT" */
 char      g_result_job_name[96] = {0}; /**< 清粉录像目录键（优先用 manifest.frames_dir） */
 bool      g_result_cleaning = false;
+bool      g_result_purify_done = false; /**< 结果页已成功清粉，禁止再次 Purify */
 /* 顶部左侧 HOME PM2.5 卡（稿 4045:18205）：点卡片本身切换 PM2.5/PM10，
  * 与首页左卡共用 g_home_metric_idx，两处显示始终同步。 */
 lv_obj_t *g_res_pm_title = nullptr;       /**< "HOME PM2.5" / "HOME PM10" */
@@ -1320,10 +1326,11 @@ void on_result_home_click(lv_event_t * /*e*/)
     control_print_result_dismiss();
 }
 
-/* Purify：触发打印结果页清粉测试（后端走 clean_test_start/close + TLV 0x22）。 */
+/* Purify：触发打印结果页清粉测试（后端走 clean_test_start/close + TLV 0x22）。
+ * 一次打印结果仅允许成功清粉一次。 */
 void on_result_purify_click(lv_event_t * /*e*/)
 {
-    if(g_result_cleaning) {
+    if(g_result_cleaning || g_result_purify_done) {
         return;
     }
     g_result_cleaning = true;
@@ -2450,6 +2457,7 @@ void page_user_home_enter_print_result(const control_print_result_t *result)
 
     g_monitor_photo_pending = false;
     g_result_cleaning = false;
+    g_result_purify_done = false;
     if(result->video_dir[0]) {
         std::snprintf(g_result_job_name, sizeof(g_result_job_name), "%s",
                       result->video_dir);
@@ -2526,6 +2534,7 @@ void page_user_home_exit_printing_mode(void)
     ui::CameraPreviewPlayer::instance().stop();
     g_printing_active = false;
     g_result_cleaning = false;
+    g_result_purify_done = false;
 
     /* 结果页浮层与打印中底条一起复位，下次进打印中从底条起步 */
     if(g_result_layer)  lv_obj_add_flag(g_result_layer, LV_OBJ_FLAG_HIDDEN);

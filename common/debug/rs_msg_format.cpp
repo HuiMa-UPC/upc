@@ -120,6 +120,7 @@ const char* upc_msg_type_name(MsgType type) {
         case MsgType::APP_Clean_Test_Start_Rsp: return "APP_Clean_Test_Start_Rsp";
         case MsgType::APP_Clean_Test_Done_Ntf: return "APP_Clean_Test_Done_Ntf";
         case MsgType::UI_Clean_Test_Close_Req: return "UI_Clean_Test_Close_Req";
+        case MsgType::UI_Print_Video_Finalize_Req: return "UI_Print_Video_Finalize_Req";
         case MsgType::APP_Clean_Test_Close_Rsp: return "APP_Clean_Test_Close_Rsp";
         case MsgType::APP_Clean_Video_Session_Start_Ntf: return "APP_Clean_Video_Session_Start_Ntf";
         case MsgType::APP_Clean_Video_Session_Stop_Ntf: return "APP_Clean_Video_Session_Stop_Ntf";

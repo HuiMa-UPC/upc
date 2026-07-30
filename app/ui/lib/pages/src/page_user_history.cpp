@@ -5,6 +5,8 @@
 #include "ui_user_widgets.hpp"
 #include "ui_feedback.hpp"
 #include "print_history_manifest.hpp"
+#include "msg_port.hpp"
+#include "upc_contract.hpp"
 #include "config/cal_config.hpp"
 
 #include <algorithm>
@@ -50,6 +52,9 @@ lv_obj_t *g_page        = nullptr;  /**< 页根：翻页悬浮层挂此（整屏
 lv_obj_t *g_list        = nullptr;  /**< 历史卡片纵向滚动容器 */
 lv_obj_t *g_scroll_btns = nullptr;  /**< 右侧上下翻页悬浮层 */
 lv_obj_t *g_empty       = nullptr;  /**< 空列表占位 */
+bool g_history_active   = false;
+bool g_history_subscribed = false;
+std::vector<middleware::Subscription> g_history_subs;
 
 /** 每张卡片的运行时上下文（删除动作 + 左滑状态） */
 struct HistoryCard {
@@ -59,6 +64,8 @@ struct HistoryCard {
     std::string thumb_src;          /**< LVGL FS 路径，如 A:/home/video/x/thumb.rthm */
     std::string title;              /**< 播放器标题（作业名） */
     std::string subtitle;          /**< 播放器副标题（时间 日期） */
+    bool video_ready = false;
+    bool video_pending = false;
     lv_obj_t   *wrap    = nullptr;  /**< 整条容器（删除时删它） */
     lv_obj_t   *card    = nullptr;  /**< 磨砂卡片（左滑平移对象） */
     lv_obj_t   *del_btn = nullptr;  /**< 红色删除圆钮 */
@@ -190,7 +197,7 @@ void delete_card_async(void *user)
 void del_click_cb(lv_event_t *e)
 {
     HistoryCard *c = static_cast<HistoryCard *>(lv_event_get_user_data(e));
-    if(!c || c->frames_dir.empty()) {
+    if(!c || c->frames_dir.empty() || !c->video_ready) {
         return;
     }
 
@@ -222,7 +229,7 @@ void del_click_cb(lv_event_t *e)
 void on_thumb_click(lv_event_t *e)
 {
     HistoryCard *c = static_cast<HistoryCard *>(lv_event_get_user_data(e));
-    if(!c || c->frames_dir.empty()) {
+    if(!c || c->frames_dir.empty() || !c->video_ready) {
         return;
     }
     char seq_path[256];
@@ -383,9 +390,11 @@ void make_thumbnail(lv_obj_t *parent, const HistoryCard *c)
     lv_obj_set_style_bg_color(slot, user_color_panel_alt, 0);
     lv_obj_set_style_bg_opa(slot, LV_OPA_COVER, 0);
     lv_obj_clear_flag(slot, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_add_flag(slot, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_add_event_cb(slot, on_thumb_click, LV_EVENT_CLICKED,
-                        const_cast<HistoryCard *>(c));
+    if(c->video_ready) {
+        lv_obj_add_flag(slot, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_event_cb(slot, on_thumb_click, LV_EVENT_CLICKED,
+                            const_cast<HistoryCard *>(c));
+    }
 
     if(!c->thumb_src.empty()) {
         lv_obj_t *img = lv_image_create(slot);
@@ -394,6 +403,22 @@ void make_thumbnail(lv_obj_t *parent, const HistoryCard *c)
         lv_obj_align(img, LV_ALIGN_CENTER, 0, 0);
         /* cover：等比铺满槽，多出部分居中裁切（与相机预览同方案） */
         lv_image_set_inner_align(img, LV_IMAGE_ALIGN_COVER);
+    }
+
+    if(!c->video_ready) {
+        lv_obj_t *mask = lv_obj_create(slot);
+        lv_obj_remove_style_all(mask);
+        lv_obj_set_size(mask, tw, th);
+        lv_obj_set_style_bg_color(mask, lv_color_hex(0x000000), 0);
+        lv_obj_set_style_bg_opa(mask, LV_OPA_60, 0);
+        lv_obj_clear_flag(mask, LV_OBJ_FLAG_SCROLLABLE);
+
+        lv_obj_t *tips = lv_label_create(mask);
+        lv_label_set_text(tips, c->video_pending ? "Generating video..." : "Video unavailable");
+        lv_obj_set_style_text_color(tips, user_color_text, 0);
+        lv_obj_set_style_text_font(tips, user_font_caption(), 0);
+        lv_obj_center(tips);
+        return;
     }
 
     /* 中央半透明播放钮 */
@@ -433,6 +458,14 @@ void build_entry(lv_obj_t *parent, const upc::PrintHistoryEntry &e)
     ctx->thumb = e.thumb;
     ctx->video = e.video;
     ctx->thumb_src = make_thumb_src_fallback(e);
+    {
+        const std::string base = std::string(UPC_PRINT_VIDEO_DIR) + "/";
+        if(!e.video.empty()) {
+            std::error_code ec;
+            ctx->video_ready = std::filesystem::exists(base + e.video, ec);
+        }
+        ctx->video_pending = (!ctx->video_ready) && e.video_pending;
+    }
     g_cards.push_back(ctx);
 
     lv_obj_t *wrap = lv_obj_create(parent);
@@ -617,8 +650,71 @@ void clear_cards(void)
 
 } /* namespace */
 
+void refresh_history_async(void * /*user*/)
+{
+    if(g_history_active) {
+        page_user_history_refresh(false);
+    }
+}
+
+bool read_inline_manifest(const middleware::Message& msg,
+                          middleware::PrintVideoManifestPayload& out)
+{
+    if(msg.payload.type != middleware::MsgPayload::Type::Inline ||
+       msg.payload.length < sizeof(out)) {
+        return false;
+    }
+    std::memcpy(&out, msg.payload.data.bytes.data(), sizeof(out));
+    return true;
+}
+
+bool read_inline_clean_done(const middleware::Message& msg,
+                            middleware::CleanTestDonePayload& out)
+{
+    if(msg.payload.type != middleware::MsgPayload::Type::Inline ||
+       msg.payload.length < sizeof(out)) {
+        return false;
+    }
+    std::memcpy(&out, msg.payload.data.bytes.data(), sizeof(out));
+    return true;
+}
+
+void ensure_history_subscribed_once()
+{
+    if(g_history_subscribed) {
+        return;
+    }
+    g_history_subscribed = true;
+    auto& bus = middleware::MsgPort::instance();
+    g_history_subs.push_back(bus.subscribe(
+        middleware::MsgType::APP_Print_Video_Manifest_Ntf,
+        middleware::ModuleId::UI,
+        [](const middleware::Message& msg) {
+            middleware::PrintVideoManifestPayload p{};
+            if(!read_inline_manifest(msg, p)) {
+                return;
+            }
+            if(g_history_active) {
+                lv_async_call(refresh_history_async, nullptr);
+            }
+        }));
+    g_history_subs.push_back(bus.subscribe(
+        middleware::MsgType::APP_Clean_Test_Done_Ntf,
+        middleware::ModuleId::UI,
+        [](const middleware::Message& msg) {
+            middleware::CleanTestDonePayload p{};
+            if(!read_inline_clean_done(msg, p)) {
+                return;
+            }
+            if(g_history_active) {
+                lv_async_call(refresh_history_async, nullptr);
+            }
+        }));
+}
+
 void page_user_history_refresh(bool /*force*/)
 {
+    g_history_active = true;
     if(!g_list) {
         return;
     }
@@ -628,6 +724,11 @@ void page_user_history_refresh(bool /*force*/)
 
     std::vector<upc::PrintHistoryEntry> entries;
     (void)upc::print_history_manifest_load(UPC_PRINT_VIDEO_MANIFEST, entries);
+
+    entries.erase(
+        std::remove_if(entries.begin(), entries.end(),
+            [](const upc::PrintHistoryEntry& e) { return !e.committed; }),
+        entries.end());
 
     /* 时间倒序（最新在上） */
     std::sort(entries.begin(), entries.end(),
@@ -653,6 +754,7 @@ void page_user_history_refresh(bool /*force*/)
 
 void page_user_history_exit(void)
 {
+    g_history_active = false;
     reset_all_cards();
 }
 
@@ -671,6 +773,7 @@ lv_obj_t *page_user_history_create(lv_obj_t *parent)
     lv_obj_set_style_bg_opa(page, LV_OPA_TRANSP, 0);
     lv_obj_clear_flag(page, LV_OBJ_FLAG_SCROLLABLE);
     g_page = page;
+    ensure_history_subscribed_once();
 
     build_header(page);
 

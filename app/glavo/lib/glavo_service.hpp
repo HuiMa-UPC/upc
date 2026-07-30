@@ -200,6 +200,7 @@ private:
     bool door_real_open_enabled_ = (GLAVO_DOOR_REAL_OPEN_ENABLE != 0);
     bool door_real_close_check_enabled_ = (GLAVO_DOOR_REAL_CLOSE_CHECK_ENABLE != 0);
     float pm25_clean_threshold_ = 50.0f;
+    uint32_t timelapse_video_fps_ = 0; /**< 0=Media 默认；来自 cal.csv TIMELAPSE_VIDEO_FPS */
     std::thread clean_worker_;
     std::atomic<bool> clean_running_{false};
     std::atomic<bool> clean_cancel_requested_{false};
@@ -208,7 +209,7 @@ private:
     std::atomic<bool> clean_test_done_pending_{false};
     std::atomic<uint8_t> clean_test_result_code_{0};
     bool clean_test_active_ = false;
-    bool clean_video_record_on_ = false;
+    bool clean_video_record_on_ = true; /**< 仅调试页状态回读；Purify 录像不再受其门控 */
     bool clean_video_session_started_ = false;
     char clean_test_session_id_[32]{};
     char clean_test_job_name_[64]{};

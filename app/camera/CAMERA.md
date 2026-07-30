@@ -13,7 +13,7 @@
 | `lib/vi_capture.*` | rkaiq ISP + V4L2 NV12 采集 |
 | `../media/lib/print_video_recorder.*` | 元数据环取帧 → ffmpeg 软编 PNG → `/home/video/{job_ts}/1.png...` + `.rthm` |
 | `../media/lib/print_h264_recorder.*` | 预览 NV12 异步入队写 raw（队列满丢帧保预览）；结束/终止后 worker 转码 `print.h264` |
-| `../media/lib/clean_video_recorder.*` | 清粉连续录像：预览 NV12 全帧写 `clean_raw.nv12`，收尾先转 `clean_timelapse.h264` 再封装 `clean_timelapse.mp4` |
+| `../media/lib/clean_video_recorder.*` | 清粉延时抽帧：按 `TIMELAPSE_VIDEO_FPS` 写接续 PNG，成功后重建 `timelapse.mp4`+`thumb.rthm` 并删除清粉 PNG |
 | `lib/device_config.hpp` | 设备、分辨率、IQ、SHM、录像路径宏 |
 
 ## 数据路径
@@ -91,7 +91,7 @@ Snap 依赖预览流已开（同一 SHM）；与 UI 解码线程共享 ring，�
 | `MEDIA_Camera_Stream_Stop_Req` | Media 停流（仅移除 Media 会话） |
 | `UI_Camera_Snapshot_Req` | **Media** 保存当前预览帧 PNG 到 `/home/photo` |
 | `APP_Print_Video_Session_*` | **Media** 处理打印录像会话、生成缩略图/MP4/manifest |
-| `APP_Clean_Video_Session_*` | **Media** 处理清粉连续录像（raw→h264→mp4） |
+| `APP_Clean_Video_Session_*` | **Media** 处理清粉延时抽帧（接续 PNG → 合并 `timelapse.mp4`） |
 | `APP_Print_Video_Manifest_Ntf` | **Media→UI**：manifest `rename()` 成功后发（0 帧也必发） |
 
 Glavo→Media 经 Broker 转发；`sender_id` 仍为 `APP_GLAVO`（见 IPC.md）。

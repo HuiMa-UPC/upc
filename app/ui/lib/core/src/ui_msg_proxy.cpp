@@ -560,6 +560,16 @@ void UiMsgProxy::send_clean_test_close()
     middleware::MsgPort::instance().publish_async(msg);
 }
 
+void UiMsgProxy::send_print_video_finalize(const char* frames_dir)
+{
+    middleware::PrintVideoFinalizeReqPayload req{};
+    if(frames_dir && frames_dir[0]) {
+        std::snprintf(req.frames_dir, sizeof(req.frames_dir), "%s", frames_dir);
+    }
+    publish_pod(middleware::MsgType::UI_Print_Video_Finalize_Req,
+                middleware::ModuleId::APP_MEDIA, req);
+}
+
 void UiMsgProxy::register_clean_test_close_rsp(CleanTestCloseRspCb cb)
 {
     clean_test_close_rsp_cb_ = std::move(cb);

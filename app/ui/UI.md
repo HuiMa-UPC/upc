@@ -102,7 +102,7 @@ Glavo Print_Terminate_Done / 进度 100% → control.cpp finish_printing()
   两者都经 IDLE 分支的 `page_user_home_exit_printing_mode()` 统一收浮层 + 停预览。
 - **PRINT_DONE 期间** `control_is_printing()` 返回 true → PageManager 挡住 `user_files`，
   取件前不能开新任务。
-- 中间的 Purify 圆钮是 UI 占位，后端净化流程尚未实现。
+- 中间的 Purify 圆钮：触发清粉测试；Media 按 `TIMELAPSE_VIDEO_FPS` 抽帧接续 PNG，成功后合并进同一 `timelapse.mp4`（本次结果页仅允许成功一次）。
 
 ### WiFi 传输弹窗（PIN 配对 / 文件接收）
 

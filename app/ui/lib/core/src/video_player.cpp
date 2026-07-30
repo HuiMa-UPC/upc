@@ -61,12 +61,14 @@ struct VideoPlayer::Impl {
     };
 
     std::mutex mtx;
+    std::mutex decoder_mtx;
     std::condition_variable cv;
     std::thread decode_thread;
-    bool stop = false;
+    std::atomic<bool> stop{false};
     bool opened = false;
     bool playing = false;
-    bool eof = false;
+    std::atomic<bool> eof{false};
+    std::atomic<bool> interrupt_requested{false};
 
     lv_obj_t* image_target = nullptr;
 
@@ -138,12 +140,22 @@ struct VideoPlayer::Impl {
         self->pending_preview = false;
     }
 
-    void notify_frame_locked()
+
+    static int avio_interrupt_cb(void* opaque)
+    {
+        auto* self = static_cast<Impl*>(opaque);
+        if(!self) {
+            return 0;
+        }
+        return self->interrupt_requested.load(std::memory_order_relaxed) ? 1 : 0;
+    }
+
+    void notify_frame_locked(int64_t position, int64_t duration)
     {
         std::lock_guard<std::mutex> lk(ui_payload_mtx);
         pending_progress = true;
-        pending_progress_pos_ms = position_ms;
-        pending_progress_dur_ms = duration_ms;
+        pending_progress_pos_ms = position;
+        pending_progress_dur_ms = duration;
         lv_async_call(async_apply_main, this);
     }
 
@@ -234,7 +246,16 @@ struct VideoPlayer::Impl {
         }
         clear_decoder();
 
+        fmt = avformat_alloc_context();
+        if(!fmt) {
+            return false;
+        }
+        fmt->interrupt_callback.callback = &Impl::avio_interrupt_cb;
+        fmt->interrupt_callback.opaque = this;
+        interrupt_requested.store(false, std::memory_order_relaxed);
+
         if(avformat_open_input(&fmt, path, nullptr, nullptr) < 0) {
+            clear_decoder();
             return false;
         }
         if(avformat_find_stream_info(fmt, nullptr) < 0) {
@@ -290,7 +311,7 @@ struct VideoPlayer::Impl {
         }
         duration_ms = clamp_non_negative(duration_ms);
         position_ms = 0;
-        eof = false;
+        eof.store(false, std::memory_order_relaxed);
         return true;
     }
 
@@ -311,13 +332,13 @@ struct VideoPlayer::Impl {
         return true;
     }
 
-    bool decode_one_video_frame(bool for_preview, int64_t target_ms = -1)
+    bool decode_one_video_frame_locked(bool for_preview, int64_t target_ms = -1)
     {
-        while(!stop) {
+        while(!stop.load(std::memory_order_relaxed)) {
             const int rr = av_read_frame(fmt, packet);
             if(rr < 0) {
                 if(!for_preview) {
-                    eof = true;
+                    eof.store(true, std::memory_order_relaxed);
                 }
                 return false;
             }
@@ -331,14 +352,14 @@ struct VideoPlayer::Impl {
             }
             av_packet_unref(packet);
 
-            while(!stop) {
+            while(!stop.load(std::memory_order_relaxed)) {
                 const int gr = avcodec_receive_frame(codec, frame);
                 if(gr == AVERROR(EAGAIN)) {
                     break;
                 }
                 if(gr == AVERROR_EOF) {
                     if(!for_preview) {
-                        eof = true;
+                        eof.store(true, std::memory_order_relaxed);
                     }
                     return false;
                 }
@@ -366,20 +387,35 @@ struct VideoPlayer::Impl {
                     av_frame_unref(frame);
                     return false;
                 }
-                position_ms = frame_ms;
-                if(duration_ms > 0) {
-                    position_ms = std::min(position_ms, duration_ms);
+                int64_t emit_pos = frame_ms;
+                int64_t emit_dur = 0;
+                {
+                    std::lock_guard<std::mutex> state_lk(mtx);
+                    position_ms = frame_ms;
+                    if(duration_ms > 0) {
+                        position_ms = std::min(position_ms, duration_ms);
+                    }
+                    emit_pos = position_ms;
+                    emit_dur = duration_ms;
                 }
                 av_frame_unref(frame);
-                notify_frame_locked();
+                notify_frame_locked(emit_pos, emit_dur);
                 return true;
             }
         }
         return false;
     }
 
+    bool decode_one_video_frame(bool for_preview, int64_t target_ms = -1)
+    {
+        std::lock_guard<std::mutex> decoder_lk(decoder_mtx);
+        return decode_one_video_frame_locked(for_preview, target_ms);
+    }
+
     bool seek_to_ms(int64_t pos_ms, bool preview_only)
     {
+        std::lock_guard<std::mutex> decoder_lk(decoder_mtx);
+        interrupt_requested.store(false, std::memory_order_relaxed);
         if(!fmt || !codec || stream_index < 0) {
             return false;
         }
@@ -391,8 +427,8 @@ struct VideoPlayer::Impl {
             return false;
         }
         avcodec_flush_buffers(codec);
-        eof = false;
-        if(!decode_one_video_frame(preview_only, clamped_ms)) {
+        eof.store(false, std::memory_order_relaxed);
+        if(!decode_one_video_frame_locked(preview_only, clamped_ms)) {
             return false;
         }
         return true;
@@ -408,40 +444,51 @@ struct VideoPlayer::Impl {
                            commands.end());
         }
         commands.push_back(Command{type, ms});
+        if(type == CommandType::Seek || type == CommandType::Preview) {
+            interrupt_requested.store(true, std::memory_order_relaxed);
+        }
         cv.notify_all();
     }
 
     void decode_loop()
     {
         std::unique_lock<std::mutex> lk(mtx);
-        while(!stop) {
+        while(!stop.load(std::memory_order_relaxed)) {
             if(!opened) {
-                cv.wait(lk, [this] { return stop || opened; });
+                cv.wait(lk, [this] {
+                    return stop.load(std::memory_order_relaxed) || opened;
+                });
                 continue;
             }
 
             if(!commands.empty()) {
                 Command cmd = commands.front();
                 commands.pop_front();
+                lk.unlock();
                 if(cmd.type == CommandType::Seek) {
                     (void)seek_to_ms(cmd.ms, false);
                 } else if(cmd.type == CommandType::Preview) {
                     (void)seek_to_ms(cmd.ms, true);
                 }
+                lk.lock();
                 continue;
             }
 
             if(playing) {
-                if(!decode_one_video_frame(false)) {
+                lk.unlock();
+                const bool ok = decode_one_video_frame(false);
+                lk.lock();
+                if(!ok) {
                     playing = false;
-                    if(eof) {
+                    if(eof.load(std::memory_order_relaxed)) {
                         position_ms = duration_ms;
                         notify_ended();
                     }
                 }
             } else {
                 cv.wait(lk, [this] {
-                    return stop || !commands.empty() || playing;
+                    return stop.load(std::memory_order_relaxed) ||
+                           !commands.empty() || playing;
                 });
             }
         }
@@ -486,17 +533,20 @@ bool VideoPlayer::open(lv_obj_t* image_target, const char* path)
         return false;
     }
     close();
-    std::lock_guard<std::mutex> lk(impl_->mtx);
-    impl_->image_target = image_target;
-    if(!impl_->open_decoder(path)) {
-        impl_->opened = false;
-        return false;
+    {
+        std::lock_guard<std::mutex> lk(impl_->mtx);
+        impl_->image_target = image_target;
+        if(!impl_->open_decoder(path)) {
+            impl_->opened = false;
+            return false;
+        }
+        impl_->opened = true;
+        impl_->playing = false;
+        impl_->commands.clear();
+        impl_->cv.notify_all();
     }
-    impl_->opened = true;
-    impl_->playing = false;
-    impl_->commands.clear();
-    impl_->cv.notify_all();
     if(!impl_->seek_to_ms(0, false)) {
+        std::lock_guard<std::mutex> lk(impl_->mtx);
         impl_->opened = false;
         impl_->clear_decoder();
         return false;
@@ -509,14 +559,20 @@ void VideoPlayer::close()
     if(!impl_) {
         return;
     }
-    std::lock_guard<std::mutex> lk(impl_->mtx);
-    impl_->playing = false;
-    impl_->opened = false;
-    impl_->commands.clear();
-    impl_->position_ms = 0;
-    impl_->duration_ms = 0;
+    /* 锁顺序统一为 decoder_mtx -> mtx，避免与解码线程（decoder->mtx）反向死锁。 */
+    impl_->interrupt_requested.store(true, std::memory_order_relaxed);
+    std::lock_guard<std::mutex> dlk(impl_->decoder_mtx);
+    {
+        std::lock_guard<std::mutex> lk(impl_->mtx);
+        impl_->playing = false;
+        impl_->opened = false;
+        impl_->commands.clear();
+        impl_->position_ms = 0;
+        impl_->duration_ms = 0;
+        impl_->cv.notify_all();
+    }
     impl_->clear_decoder();
-    impl_->cv.notify_all();
+    impl_->interrupt_requested.store(false, std::memory_order_relaxed);
 }
 
 bool VideoPlayer::play()
@@ -540,6 +596,7 @@ void VideoPlayer::pause()
     }
     std::lock_guard<std::mutex> lk(impl_->mtx);
     impl_->playing = false;
+    impl_->interrupt_requested.store(true, std::memory_order_relaxed);
 }
 
 bool VideoPlayer::seek(int64_t position_ms)

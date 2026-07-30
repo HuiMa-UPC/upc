@@ -14,6 +14,7 @@ public:
     static PrintVideoNotify& instance();
 
     void set_print_h264_continuous(bool on);
+    void set_timelapse_fps(uint32_t fps);
     void on_print_start(const std::string& job_path);
     void on_layer_snap(uint16_t layer_height_um);
     void on_print_finish();
@@ -29,6 +30,7 @@ private:
 
     bool     active_      = false;
     bool     print_h264_continuous_on_ = false;
+    uint32_t layer_fps_   = 0; /**< 0=Media 侧默认 */
     uint32_t layer_index_ = 0;
     char     session_id_[32]{};
     char     job_name_[64]{};

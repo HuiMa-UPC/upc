@@ -15,10 +15,10 @@
 namespace upc::media {
 
 /**
- * 清粉连续录像：
- * - Start：按预览流每帧保存 NV12 原始帧流（目标 30fps）
- * - Stop：先将 raw NV12 编成 clean_timelapse.h264，再封装 clean_timelapse.mp4
- * - MP4 成功后默认删除中间文件；失败时保留中间文件供排查
+ * 清粉延时摄影（与打印层拍对齐）：
+ * - Start：接续打印目录已有 1..N.png，按 timelapse fps 定时抽帧写 (N+1).png...
+ * - Stop 成功：记录清粉帧范围并更新末帧 thumb.rthm；MP4 统一在结果页退出后合成
+ * - Stop 失败/用户关闭：删除清粉 PNG，仅保留打印段 PNG
  */
 class CleanVideoRecorder {
 public:
@@ -29,6 +29,7 @@ public:
     CleanVideoRecorder& operator=(const CleanVideoRecorder&) = delete;
 
     void set_stream_geometry(uint32_t width, uint32_t height, uint32_t fps);
+    void set_timelapse_fps(uint32_t fps);
     void on_session_start(const middleware::CleanVideoSessionStartPayload& req);
     void on_session_stop(const middleware::CleanVideoSessionStopPayload& req);
     void on_frame_nv12(const uint8_t* src_y, const uint8_t* src_uv, uint32_t stride_y);
@@ -38,29 +39,22 @@ private:
         uint64_t session_seq = 0;
         uint32_t width = 0;
         uint32_t height = 0;
-        uint32_t input_frame = 0;
-        std::string raw_path;
+        std::string session_dir;
         std::vector<uint8_t> nv12;
     };
 
-    void stop_locked(std::unique_lock<std::mutex>& lock,
-                     uint8_t result_code, bool keep_raw);
-    static std::string sanitize_name(const char* raw);
-    static bool ensure_dir(const std::string& dir);
-    static int run_shell_cmd(const char* cmd, const char* tag);
-    static bool append_nv12_frame(const CleanFrameJob& job);
-    static bool encode_raw_nv12_to_h264(const std::string& raw_path,
-                                        const std::string& h264_path,
-                                        uint32_t width, uint32_t height,
-                                        uint32_t fps, uint32_t frame_count);
-    static bool remux_h264_to_mp4(const std::string& h264_path,
-                                  const std::string& mp4_path,
-                                  uint32_t fps);
+    void stop_locked(std::unique_lock<std::mutex>& lock, uint8_t result_code);
+    void publish_clean_test_done(uint8_t result_code, bool has_mp4,
+                                 const std::string& mp4_rel_path) const;
     void start_worker_if_needed_locked();
     void stop_worker();
     void worker_fn();
     void wait_session_jobs_drain_locked(std::unique_lock<std::mutex>& lock,
                                         uint64_t session_seq);
+    static void copy_nv12_tight(uint8_t* dst, const uint8_t* src_y,
+                                const uint8_t* src_uv, uint32_t src_stride_y,
+                                uint32_t width, uint32_t height);
+    static uint64_t monotonic_us();
 
     std::mutex mtx_;
     std::condition_variable cv_;
@@ -74,18 +68,20 @@ private:
 
     uint32_t width_  = CAMERA_WIDTH_DEFAULT;
     uint32_t height_ = CAMERA_HEIGHT_DEFAULT;
-    uint32_t fps_    = CAMERA_FPS_DEFAULT;
+    uint32_t stream_fps_ = CAMERA_FPS_DEFAULT;
+    uint32_t timelapse_fps_ = CAMERA_PRINT_VIDEO_LAYER_FPS;
     uint32_t dropped_frames_ = 0;
     uint32_t input_frame_count_ = 0;
     uint64_t session_seq_ = 0;
+    uint64_t next_sample_us_ = 0;
+    uint64_t sample_interval_us_ = 200000; /**< 默认 5fps */
 
     std::string session_id_;
     std::string job_name_;
     std::string session_dir_;
-    std::string raw_path_;
-    std::string h264_path_;
-    std::string mp4_path_;
-    uint32_t frame_count_ = 0;
+    uint32_t print_frame_count_ = 0; /**< 启动时已有打印 PNG 数 */
+    uint32_t clean_frame_count_ = 0; /**< 本次清粉成功写入的 PNG 数 */
+    std::vector<uint8_t> last_clean_nv12_;
 };
 
 } // namespace upc::media

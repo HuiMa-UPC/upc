@@ -1327,7 +1327,7 @@ void build_other_switches_card(lv_obj_t *parent)
     lv_obj_t *rowC = make_switch_grid_row(grid);
     make_dbg_toggle(rowC, "Print H264 Rec", "On", "Off", LV_SYMBOL_PLAY, false,
                     5, 0, true, 0, &g_print_h264_btn, &g_print_h264_state_lbl);
-    make_dbg_toggle(rowC, "Clean Video Rec", "On", "Off", LV_SYMBOL_PLAY, false,
+    make_dbg_toggle(rowC, "Clean Video Rec", "On", "Off", LV_SYMBOL_PLAY, true,
                     6, 0, true, 0, &g_clean_record_btn, &g_clean_record_state_lbl);
     make_dbg_toggle(rowC, "Env Sim", "On", "Off", LV_SYMBOL_REFRESH, false,
                     7, 0, true, 0, &g_env_sim_btn, &g_env_sim_state_lbl);

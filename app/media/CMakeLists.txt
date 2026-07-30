@@ -6,6 +6,7 @@ add_executable(rongsu_media
     ${MEDIA_LIB_DIR}/print_video_recorder.cpp
     ${MEDIA_LIB_DIR}/print_h264_recorder.cpp
     ${MEDIA_LIB_DIR}/clean_video_recorder.cpp
+    ${MEDIA_LIB_DIR}/timelapse_util.cpp
 )
 
 target_compile_features(rongsu_media PRIVATE cxx_std_17)
@@ -13,7 +14,6 @@ target_compile_features(rongsu_media PRIVATE cxx_std_17)
 target_include_directories(rongsu_media
     PRIVATE
         ${MEDIA_LIB_DIR}
-        ${CMAKE_SOURCE_DIR}/app/camera/lib
         ${CMAKE_SOURCE_DIR}/common/process
 )
 

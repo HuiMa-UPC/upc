@@ -22,6 +22,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <deque>
+#include <memory>
 #include <vector>
 
 namespace {
@@ -51,6 +52,30 @@ control_file_t g_active_file = {};
 /* Camera 的 manifest 通知早于本侧进入 PRINT_DONE 时的暂存位（见 on_print_video_manifest） */
 control_print_result_t g_print_result = {};
 bool g_print_result_pending = false;
+bool g_print_result_shown = false;
+struct CommitHistoryCtx {
+    char frames_dir[96];
+};
+
+void commit_print_result_history_async(void *user)
+{
+    std::unique_ptr<CommitHistoryCtx> ctx(static_cast<CommitHistoryCtx*>(user));
+    if(!ctx || ctx->frames_dir[0] == '\0') {
+        return;
+    }
+    ui::UiMsgProxy::instance().send_print_video_finalize(ctx->frames_dir);
+}
+
+void schedule_commit_print_result_history()
+{
+    if(g_print_result.video_dir[0] == '\0') {
+        return;
+    }
+    auto *ctx = new CommitHistoryCtx{};
+    std::snprintf(ctx->frames_dir, sizeof(ctx->frames_dir), "%s", g_print_result.video_dir);
+    lv_async_call(commit_print_result_history_async, ctx);
+}
+
 
 /* 门流程来源：区分同一套门弹窗（DOOR_OPENING→DOOR_CONFIRM）的入口与终态。
  *   PrintPrep      —— 打印前置流程，确认关门后进入选文件页；
@@ -2478,11 +2503,16 @@ void on_door_closed_confirm_btn(lv_event_t * /*e*/)
     /* PrintCollect：件已取走、门也关好了，这时才真正退出打印状态回待机首页 */
     if(g_door_origin == DoorFlowOrigin::HomeStandalone ||
        g_door_origin == DoorFlowOrigin::PrintCollect) {
-        if(g_door_origin == DoorFlowOrigin::PrintCollect) {
+        const bool from_print_collect = (g_door_origin == DoorFlowOrigin::PrintCollect);
+        if(from_print_collect) {
             /* 清粉/取件流程回首页前，强制发送 clean_test_close 收尾串口流程。 */
             ui::UiMsgProxy::instance().send_clean_test_close();
         }
         enter_state(CONTROL_STATE_IDLE);
+        if(from_print_collect) {
+            /* 取件流程完成并回首页后，再后台提交历史可见状态。 */
+            schedule_commit_print_result_history();
+        }
     } else {
         goto_file_selection();
     }
@@ -2604,6 +2634,10 @@ void on_print_video_manifest(const middleware::PrintVideoManifestPayload &p)
     if(g_state != CONTROL_STATE_PRINTING && g_state != CONTROL_STATE_PRINT_DONE) {
         return;
     }
+    /* 第二条 has_video 通知只用于历史页刷新，结果页已显示则不重复套 UI。 */
+    if(g_state == CONTROL_STATE_PRINT_DONE && g_print_result_shown) {
+        return;
+    }
 
     control_print_result_t r = {};
     r.terminated = p.aborted != 0;
@@ -2631,14 +2665,17 @@ void on_print_video_manifest(const middleware::PrintVideoManifestPayload &p)
         }
     }
 
+    /* 无论通知到达时机如何，都先缓存当前结果，供结果页退出后的后台提交链路使用。 */
+    g_print_result = r;
+
     /* Camera 可能抢在 UI 走完收尾之前就发通知（0 帧时 finalize 几乎立即返回）。
      * 这种情况下先攒着，等 enter_state(PRINT_DONE) 再套用，否则结果页会丢。 */
     if(g_state != CONTROL_STATE_PRINT_DONE) {
-        g_print_result         = r;
         g_print_result_pending = true;
         return;
     }
     page_user_home_enter_print_result(&r);
+    g_print_result_shown = true;
 }
 
 void on_terminate_cancel(lv_event_t * /*e*/)
@@ -2687,6 +2724,7 @@ void enter_state(control_state_t s)
     switch(s) {
     case CONTROL_STATE_IDLE:
         stop_print_watchdogs();
+        g_print_result_shown = false;
         backend_cancel_pending();
         page_user_home_exit_printing_mode();
         overlay_hide();
@@ -2720,6 +2758,7 @@ void enter_state(control_state_t s)
     case CONTROL_STATE_PRINTING:
         overlay_hide();
         g_print_result_pending = false;      /* 丢掉上一单可能残留的结果 */
+        g_print_result_shown = false;
         g_home_section_view = "user_home";   /* 打印中首页图标回仪表盘 */
         ui::PageManager::instance().switch_to("user_home");
         backend_start_job(&g_active_file,
@@ -2739,6 +2778,7 @@ void enter_state(control_state_t s)
         if(g_print_result_pending) {
             g_print_result_pending = false;
             page_user_home_enter_print_result(&g_print_result);
+            g_print_result_shown = true;
         }
         break;
     }
@@ -2855,8 +2895,9 @@ void control_print_result_dismiss(void)
     }
     /* 结果页回首页：强制下发 clean_test_close，确保清粉测试流程被关闭。 */
     ui::UiMsgProxy::instance().send_clean_test_close();
-    /* 结果页浮层由 page_user_home_exit_printing_mode()（IDLE 分支）一并收起 */
+    /* 先回首页，再后台提交历史可见状态。 */
     enter_state(CONTROL_STATE_IDLE);
+    schedule_commit_print_result_history();
 }
 
 void control_print_result_collect(void)

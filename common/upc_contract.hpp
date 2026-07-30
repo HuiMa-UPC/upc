@@ -411,6 +411,7 @@ enum class MsgType : uint32_t {
     APP_Clean_Test_Start_Rsp,    /**< CleanTestStartRspPayload：是否受理 */
     APP_Clean_Test_Done_Ntf,     /**< CleanTestDonePayload：TLV 0x22 结果 + 调试保留标记 */
     UI_Clean_Test_Close_Req,     /**< Empty：返回首页时强制 clean_test_close */
+    UI_Print_Video_Finalize_Req, /**< PrintVideoFinalizeReqPayload：结果页退出后触发统一 MP4 合成 */
     APP_Clean_Test_Close_Rsp,    /**< Empty：close 已受理 */
 
     // ---- GLAVO ↔ CAMERA：清粉连续录像会话（NV12@预览参数） ----
@@ -704,10 +705,11 @@ struct PrintVideoLayerSnapPayload {
 };
 
 /**
- * APP_Print_Video_Manifest_Ntf：CAMERA→UI，延时视频与 manifest.json 已落盘（Inline）
+ * APP_Print_Video_Manifest_Ntf：Media→UI，打印历史 manifest 状态通知（Inline）
  *
- * 发送时机：`PrintVideoRecorder::finalize_session()` 中 manifest 由 tmp `rename()`
- * 原子替换成功之后。UI 收到时读文件必然看到新内容，无竞态。
+ * 发送时机：`PrintVideoRecorder::finalize_session()` 内至少发送一次。
+ * - 快路径：统计/缩略图已落盘时先发（`has_video=0`），UI 可立即切结果页
+ * - 慢路径：MP4 完成后再发（`has_video=1`）用于历史页刷新可播放状态
  *
  * 0 帧场景（未触发换层 Snap / Camera 未采到帧）不会写 manifest，但**仍会发本消息**
  * （`has_entry=0`），否则 UI 会永远停在打印中界面下不来。
@@ -740,29 +742,35 @@ struct CleanTestStartRspPayload {
     uint8_t reserved[3];
 };
 
-/** APP_Clean_Test_Done_Ntf：串口 TLV 0x22 完成结果（0=成功，非0=失败） */
+/** APP_Clean_Test_Done_Ntf：串口 TLV 0x22 完成结果（0=成功，非0=失败）。
+ * 有清粉录像时由 Media 在清粉抽帧停止后发送；最终 MP4 在结果页退出后统一合成。 */
 struct CleanTestDonePayload {
     uint8_t result_code;   /**< 0=成功；非0=失败 */
-    uint8_t raw_retained;  /**< 1=保留 clean_raw.nv12（失败/调试）；0=已删除 */
-    uint8_t has_mp4;       /**< 1=期望存在 clean_timelapse.mp4 */
+    uint8_t raw_retained;  /**< 兼容字段；PNG 路径下恒为 0 */
+    uint8_t has_mp4;       /**< 1=期望存在合并后的 timelapse.mp4 */
     uint8_t reserved;
-    char    mp4_rel_path[96]; /**< 相对 /home/video 的路径，如 job/clean_timelapse.mp4 */
+    char    mp4_rel_path[96]; /**< 相对 /home/video 的路径，如 job/timelapse.mp4 */
 };
 
-/** GLAVO→CAMERA：清粉录像会话开始参数 */
+/** UI→MEDIA：结果页退出后触发统一 MP4 合成（按 frames_dir 定位会话目录） */
+struct PrintVideoFinalizeReqPayload {
+    char frames_dir[96]; /**< 对应 /home/video/{frames_dir}/ */
+};
+
+/** GLAVO→MEDIA：清粉延时抽帧会话开始（接续打印 PNG，按 fps 定时采样） */
 struct CleanVideoSessionStartPayload {
     char     session_id[32];
     char     job_name[64];
     uint32_t width;      /**< 0=沿用 Camera 预览宽 */
     uint32_t height;     /**< 0=沿用 Camera 预览高 */
-    uint32_t fps;        /**< 0=沿用 Camera 预览 fps */
+    uint32_t fps;        /**< 抽帧/合成帧率；0=Media 默认（cal TIMELAPSE_VIDEO_FPS） */
 };
 
-/** GLAVO→CAMERA：清粉录像会话停止参数 */
+/** GLAVO→MEDIA：清粉延时抽帧会话停止 */
 struct CleanVideoSessionStopPayload {
     char    session_id[32];
-    uint8_t result_code;  /**< 0=成功；非0=失败 */
-    uint8_t keep_raw;     /**< 1=保留 clean_raw.nv12，0=成功后删除 */
+    uint8_t result_code;  /**< 0=成功；非0=失败；0xfe=用户关闭 */
+    uint8_t keep_raw;     /**< 兼容字段；PNG 路径下忽略 */
     uint8_t reserved[2];
 };
 

@@ -4,6 +4,7 @@
 
 #include <cstdlib>
 #include <cstdio>
+#include <cstring>
 #include <fstream>
 #include <sstream>
 
@@ -101,6 +102,31 @@ bool parse_float_field(const std::string& obj, const char* key, float& out)
     return true;
 }
 
+bool parse_bool_field(const std::string& obj, const char* key, bool& out)
+{
+    const std::string needle = std::string("\"") + key + "\":";
+    const size_t pos = obj.find(needle);
+    if(pos == std::string::npos) {
+        return false;
+    }
+    const char* start = obj.c_str() + pos + needle.size();
+    if(std::strncmp(start, "true", 4) == 0) {
+        out = true;
+        return true;
+    }
+    if(std::strncmp(start, "false", 5) == 0) {
+        out = false;
+        return true;
+    }
+    char* end = nullptr;
+    const unsigned long v = std::strtoul(start, &end, 10);
+    if(end == start) {
+        return false;
+    }
+    out = (v != 0);
+    return true;
+}
+
 /** 去掉路径与扩展名，得到可与 job_name 比对的基名 */
 std::string basename_no_ext(const std::string& name)
 {
@@ -127,6 +153,10 @@ PrintHistoryEntry parse_object(const std::string& obj)
     parse_string_field(obj, "frames_dir", e.frames_dir);
     parse_string_field(obj, "thumb", e.thumb);
     parse_string_field(obj, "video", e.video);
+    (void)parse_bool_field(obj, "video_pending", e.video_pending);
+    (void)parse_bool_field(obj, "committed", e.committed);
+    (void)parse_uint_field(obj, "clean_first_png", e.clean_first_png);
+    (void)parse_uint_field(obj, "clean_last_png", e.clean_last_png);
     return e;
 }
 
@@ -215,7 +245,11 @@ bool print_history_manifest_save(const std::string& path,
             << "\"status\":\"" << print_history_status_str(e.status) << "\","
             << "\"frames_dir\":\"" << json_escape(e.frames_dir) << "\","
             << "\"thumb\":\"" << json_escape(e.thumb) << "\","
-            << "\"video\":\"" << json_escape(e.video) << "\""
+            << "\"video\":\"" << json_escape(e.video) << "\","
+            << "\"video_pending\":" << (e.video_pending ? "true" : "false") << ","
+            << "\"committed\":" << (e.committed ? "true" : "false") << ","
+            << "\"clean_first_png\":" << e.clean_first_png << ','
+            << "\"clean_last_png\":" << e.clean_last_png
             << '}';
     }
     out << "]}";

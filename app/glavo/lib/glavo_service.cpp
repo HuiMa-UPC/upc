@@ -314,22 +314,27 @@ bool GlavoService::init()
             if(cal_cfg.has_pm25_clean_threshold) {
                 pm25_clean_threshold_ = cal_cfg.pm25_clean_threshold;
             }
+            if(cal_cfg.has_timelapse_video_fps) {
+                timelapse_video_fps_ = cal_cfg.timelapse_video_fps;
+            }
         }
         UPC_LOG_GLAVO_SERVICE(Info,
-            "runtime cfg: door_open=%d close_check=%d serial_ack=%d pm25_clean=%.1f",
+            "runtime cfg: door_open=%d close_check=%d serial_ack=%d pm25_clean=%.1f timelapse_fps=%u",
             door_real_open_enabled_ ? 1 : 0,
             door_real_close_check_enabled_ ? 1 : 0,
             McuLink::instance().serial_ack_enabled() ? 1 : 0,
-            static_cast<double>(pm25_clean_threshold_));
+            static_cast<double>(pm25_clean_threshold_),
+            timelapse_video_fps_);
     }
 
     print_h264_continuous_on_ = false;
-    clean_video_record_on_ = false;
+    clean_video_record_on_ = true;
     clean_video_session_started_ = false;
     env_sim_on_ = false;
     McuLink::instance().set_env_sim_enabled(false);
     PrintVideoNotify::instance().set_print_h264_continuous(print_h264_continuous_on_);
-    UPC_LOG_GLAVO_SERVICE(Info, "print h264 continuous=%d clean record=%d env_sim=%d",
+    PrintVideoNotify::instance().set_timelapse_fps(timelapse_video_fps_);
+    UPC_LOG_GLAVO_SERVICE(Info, "print h264 continuous=%d clean record(debug)=%d env_sim=%d",
                           print_h264_continuous_on_ ? 1 : 0,
                           clean_video_record_on_ ? 1 : 0,
                           env_sim_on_ ? 1 : 0);
@@ -1740,7 +1745,8 @@ void GlavoService::notify_clean_video_start(const middleware::CleanTestStartReqP
                   clean_test_job_name_);
     payload.width = req.width;
     payload.height = req.height;
-    payload.fps = req.fps;
+    /* 优先 UI 请求；否则用 cal.csv TIMELAPSE_VIDEO_FPS；0 则 Media 默认 */
+    payload.fps = req.fps > 0 ? req.fps : timelapse_video_fps_;
 
     middleware::Message msg(middleware::MsgType::APP_Clean_Video_Session_Start_Ntf,
         middleware::ModuleId::APP_GLAVO,
@@ -1771,22 +1777,18 @@ void GlavoService::on_clean_test_done(uint8_t result_code)
     if(!clean_test_active_) {
         return;
     }
-    const bool has_mp4 = clean_video_session_started_;
-    const bool keep_raw = has_mp4 && (result_code != 0);
+    const bool video_started = clean_video_session_started_;
     if(clean_video_session_started_) {
-        notify_clean_video_stop(result_code, keep_raw);
+        /* Media 合成完成后发 APP_Clean_Test_Done_Ntf；此处只停录 */
+        notify_clean_video_stop(result_code, false);
         clean_video_session_started_ = false;
     }
     clean_test_active_ = false;
 
-    std::string mp4_rel_path;
-    if(has_mp4) {
-        mp4_rel_path = sanitize_job_name(clean_test_job_name_);
-        if(!mp4_rel_path.empty()) {
-            mp4_rel_path += "/clean_timelapse.mp4";
-        }
+    if(!video_started) {
+        /* 未开录像时仍由 Glavo 直接回 Done */
+        publish_clean_test_done(result_code, false, false, std::string{});
     }
-    publish_clean_test_done(result_code, keep_raw, has_mp4, mp4_rel_path);
 }
 
 void GlavoService::handle_clean_test_start_request(const middleware::Message& msg)
@@ -1815,11 +1817,9 @@ void GlavoService::handle_clean_test_start_request(const middleware::Message& ms
 
     clean_test_active_ = true;
     debug_tx(frame, n);
-    clean_video_session_started_ = false;
-    if(clean_video_record_on_) {
-        notify_clean_video_start(req);
-        clean_video_session_started_ = true;
-    }
+    /* Purify 路径始终录像；调试开关仅保留状态回读，不再门控 */
+    notify_clean_video_start(req);
+    clean_video_session_started_ = true;
     publish_clean_test_start_rsp(static_cast<uint32_t>(msg.sender_id), true);
 }
 

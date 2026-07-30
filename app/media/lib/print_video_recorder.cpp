@@ -6,6 +6,7 @@
 #include "print_history_manifest.hpp"
 #include "raw_thumb_format.hpp"
 #include "rs_log.hpp"
+#include "timelapse_util.hpp"
 
 #if defined(UPC_CAMERA_HAS_RGA) && UPC_CAMERA_HAS_RGA
 #include <rga/im2d.hpp>
@@ -114,6 +115,13 @@ void PrintVideoRecorder::set_stream_geometry(uint32_t width, uint32_t height)
     }
     if(height > 0) {
         stream_height_ = height;
+    }
+}
+
+void PrintVideoRecorder::set_timelapse_fps(uint32_t fps)
+{
+    if(fps > 0) {
+        layer_fps_ = fps;
     }
 }
 
@@ -381,20 +389,6 @@ bool PrintVideoRecorder::handle_layer_snap(const PrintVideoJob& job)
     return true;
 }
 
-bool PrintVideoRecorder::encode_png_sequence_to_mp4(const char* out_path) const
-{
-    if(!out_path || !out_path[0] || session_dir_.empty() || frame_count_ < 2u) {
-        return false;
-    }
-    const uint32_t fps = layer_fps_ > 0 ? layer_fps_ : 1u;
-    char cmd[1536];
-    std::snprintf(cmd, sizeof(cmd),
-                  "%s -y -loglevel error -framerate %u -i '%s/%%d.png' "
-                  "-c:v mpeg4 -q:v 5 -pix_fmt yuv420p -movflags +faststart '%s'",
-                  CAMERA_FFMPEG_BIN, fps, session_dir_.c_str(), out_path);
-    return run_shell_cmd(cmd, "ffmpeg mp4") == 0;
-}
-
 bool PrintVideoRecorder::create_raw_thumb_from_nv12(
     const std::vector<uint8_t>& nv12, const char* out_path) const
 {
@@ -509,36 +503,28 @@ void PrintVideoRecorder::finalize_session(bool aborted)
                                thumb_path.c_str());
     }
 
-    std::string video_rel;
-    std::string video_path;
-    bool video_ok = false;
-    if(frames >= 2u) {
-        video_rel = session_name_ + "/timelapse.mp4";
-        video_path = session_dir_ + "/timelapse.mp4";
-        (void)std::remove(video_path.c_str());
-        video_ok = encode_png_sequence_to_mp4(video_path.c_str());
-        if(!video_ok) {
-            UPC_LOG_MEDIA_SERVICE(Warn, "print_video mp4 generation failed path=%s",
-                                   video_path.c_str());
-        }
-    } else {
+    const bool need_video = (frames >= 2u);
+
+    /* 快路径：先落盘 manifest（含统计与缩略图），UI 可立即切结果页。 */
+    const bool manifest_quick_ok = upsert_print_history(
+        aborted,
+        session_name_,
+        thumb_ok ? thumb_rel : std::string{},
+        std::string{},
+        need_video);
+    notify_manifest_ready(session_name_, manifest_quick_ok, aborted, false);
+    if(!need_video) {
         UPC_LOG_MEDIA_SERVICE(Info, "print_video skip mp4: frames=%u < 2 session=%s",
                                frames, session_id_.c_str());
     }
 
-    const bool manifest_ok = upsert_print_history(
-        aborted,
-        session_name_,
-        thumb_ok ? thumb_rel : std::string{},
-        video_ok ? video_rel : std::string{});
-    notify_manifest_ready(session_name_, manifest_ok, aborted, video_ok);
     UPC_LOG_MEDIA_SERVICE(
         Info,
-        "print_video saved -> %s frames=%u thumb=%s video=%s%s",
+        "print_video saved -> %s frames=%u thumb=%s video_pending=%d%s",
         session_dir_.c_str(),
         frames,
         thumb_ok ? thumb_path.c_str() : "(none)",
-        video_ok ? video_path.c_str() : "(none)",
+        need_video ? 1 : 0,
         aborted ? " aborted" : "");
 
     session_id_.clear();
@@ -547,6 +533,139 @@ void PrintVideoRecorder::finalize_session(bool aborted)
     start_unix_ = 0;
     frame_count_ = 0;
     last_layer_nv12_.clear();
+}
+
+bool PrintVideoRecorder::commit_after_exit(const char* frames_dir)
+{
+    if(!frames_dir || !frames_dir[0]) {
+        return false;
+    }
+    std::vector<upc::PrintHistoryEntry> entries;
+    if(!upc::print_history_manifest_load(UPC_PRINT_VIDEO_MANIFEST, entries)) {
+        UPC_LOG_MEDIA_SERVICE(Warn,
+            "print_video commit load fail path=%s", UPC_PRINT_VIDEO_MANIFEST);
+        return false;
+    }
+
+    upc::PrintHistoryEntry* hit = nullptr;
+    for(auto& e : entries) {
+        if(e.frames_dir == frames_dir) {
+            hit = &e;
+            break;
+        }
+    }
+    if(!hit) {
+        UPC_LOG_MEDIA_SERVICE(Warn,
+            "print_video commit miss frames_dir=%s", frames_dir);
+        return false;
+    }
+    hit->committed = true;
+
+    const std::string tmp_path = std::string(UPC_PRINT_VIDEO_MANIFEST) + ".tmp";
+    if(!upc::print_history_manifest_save(tmp_path, entries)) {
+        UPC_LOG_MEDIA_SERVICE(Error,
+            "print_video commit save fail tmp=%s", tmp_path.c_str());
+        (void)std::remove(tmp_path.c_str());
+        return false;
+    }
+    if(std::rename(tmp_path.c_str(), UPC_PRINT_VIDEO_MANIFEST) != 0) {
+        UPC_LOG_MEDIA_SERVICE(Error,
+            "print_video commit rename fail %s -> %s: %s",
+            tmp_path.c_str(), UPC_PRINT_VIDEO_MANIFEST, std::strerror(errno));
+        (void)std::remove(tmp_path.c_str());
+        return false;
+    }
+
+    const bool aborted = (hit->status == upc::PrintHistoryStatus::Terminated);
+    const bool has_video = !hit->video.empty();
+    notify_manifest_ready(hit->frames_dir, true, aborted, has_video);
+    return true;
+}
+
+void PrintVideoRecorder::finalize_after_exit(const char* frames_dir)
+{
+    if(!frames_dir || !frames_dir[0]) {
+        return;
+    }
+
+    std::vector<upc::PrintHistoryEntry> entries;
+    if(!upc::print_history_manifest_load(UPC_PRINT_VIDEO_MANIFEST, entries)) {
+        UPC_LOG_MEDIA_SERVICE(Warn,
+            "print_video finalize load fail path=%s",
+            UPC_PRINT_VIDEO_MANIFEST);
+        return;
+    }
+
+    upc::PrintHistoryEntry* hit = nullptr;
+    for(auto& e : entries) {
+        if(e.frames_dir == frames_dir) {
+            hit = &e;
+            break;
+        }
+    }
+    if(!hit) {
+        UPC_LOG_MEDIA_SERVICE(Warn,
+            "print_video finalize miss frames_dir=%s", frames_dir);
+        return;
+    }
+
+    const std::string session_dir =
+        std::string(CAMERA_PRINT_VIDEO_OUT_DIR) + "/" + hit->frames_dir;
+    const uint32_t frame_count = timelapse_util::scan_max_png_index(session_dir);
+    const uint32_t fps = layer_fps_ > 0 ? layer_fps_ : 1u;
+    const std::string mp4_path = session_dir + "/timelapse.mp4";
+    const std::string mp4_rel = hit->frames_dir + "/timelapse.mp4";
+
+    bool video_ok = false;
+    if(frame_count >= 2u) {
+        (void)std::remove(mp4_path.c_str());
+        video_ok = timelapse_util::encode_png_sequence_to_mp4(
+            session_dir, frame_count, fps, mp4_path.c_str());
+        if(!video_ok) {
+            UPC_LOG_MEDIA_SERVICE(Warn,
+                "print_video finalize mp4 generation failed dir=%s",
+                session_dir.c_str());
+        }
+    } else {
+        UPC_LOG_MEDIA_SERVICE(Info,
+            "print_video finalize skip mp4: frames=%u dir=%s",
+            frame_count, session_dir.c_str());
+    }
+
+    if(video_ok) {
+        hit->video = mp4_rel;
+        if(hit->clean_first_png > 0 &&
+           hit->clean_last_png >= hit->clean_first_png) {
+            timelapse_util::remove_png_range(
+                session_dir, hit->clean_first_png, hit->clean_last_png);
+        }
+    }
+    hit->video_pending = false;
+    hit->clean_first_png = 0;
+    hit->clean_last_png = 0;
+
+    const std::string tmp_path =
+        std::string(UPC_PRINT_VIDEO_MANIFEST) + ".tmp";
+    if(!upc::print_history_manifest_save(tmp_path, entries)) {
+        UPC_LOG_MEDIA_SERVICE(Error,
+            "print_video finalize save fail tmp=%s", tmp_path.c_str());
+        (void)std::remove(tmp_path.c_str());
+        return;
+    }
+    if(std::rename(tmp_path.c_str(), UPC_PRINT_VIDEO_MANIFEST) != 0) {
+        UPC_LOG_MEDIA_SERVICE(Error,
+            "print_video finalize rename fail %s -> %s: %s",
+            tmp_path.c_str(), UPC_PRINT_VIDEO_MANIFEST, std::strerror(errno));
+        (void)std::remove(tmp_path.c_str());
+        return;
+    }
+
+    const bool aborted = (hit->status == upc::PrintHistoryStatus::Terminated);
+    notify_manifest_ready(hit->frames_dir, true, aborted, video_ok);
+    UPC_LOG_MEDIA_SERVICE(
+        Info,
+        "print_video finalize done frames_dir=%s frames=%u video_ok=%d fps=%u",
+        hit->frames_dir.c_str(), frame_count, video_ok ? 1 : 0, fps);
 }
 
 bool PrintVideoRecorder::remove_session_dir()
@@ -603,7 +722,8 @@ std::string PrintVideoRecorder::sanitize_filename(const char* name)
 
 bool PrintVideoRecorder::upsert_print_history(
     bool aborted, const std::string& frames_dir_name,
-    const std::string& thumb_name, const std::string& video_name) const
+    const std::string& thumb_name, const std::string& video_name,
+    bool video_pending) const
 {
     if(frames_dir_name.empty()) {
         return false;
@@ -628,6 +748,10 @@ bool PrintVideoRecorder::upsert_print_history(
     entry.frames_dir = frames_dir_name;
     entry.thumb      = thumb_name;
     entry.video      = video_name;
+    entry.video_pending = video_pending;
+    entry.committed = false;
+    entry.clean_first_png = 0;
+    entry.clean_last_png = 0;
 
     std::vector<upc::PrintHistoryEntry> entries;
     if(!upc::print_history_manifest_load(UPC_PRINT_VIDEO_MANIFEST, entries)) {
@@ -635,6 +759,12 @@ bool PrintVideoRecorder::upsert_print_history(
             "print_history load fail path=%s (rewrite)",
             UPC_PRINT_VIDEO_MANIFEST);
         entries.clear();
+    }
+    for(const auto& e : entries) {
+        if(e.frames_dir == entry.frames_dir) {
+            entry.committed = e.committed;
+            break;
+        }
     }
     upc::print_history_manifest_upsert(entries, entry);
 

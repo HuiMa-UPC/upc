@@ -35,6 +35,7 @@ private:
     void handle_snapshot_req(const middleware::Message& msg);
     void handle_print_video(const middleware::Message& msg);
     void handle_clean_video(const middleware::Message& msg);
+    void handle_print_video_finalize(const middleware::Message& msg);
 
     void send_stream_start_req();
     void send_stream_stop_req();
@@ -95,6 +96,11 @@ private:
     uint32_t stream_height_ = 0;
     uint32_t stream_stride_y_ = 0;
     uint32_t stream_fps_ = 0;
+
+    mutable std::mutex finalize_mtx_;
+    bool clean_video_active_ = false;
+    bool finalize_pending_ = false;
+    std::string pending_finalize_frames_dir_;
 
     PrintVideoRecorder print_video_;
     PrintH264Recorder print_h264_;

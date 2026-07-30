@@ -31,8 +31,8 @@ struct PrintVideoJob {
 
 /**
  * 打印层拍照：dma 元数据环取帧 → 软件编码 PNG（1.png,2.png,...）；
- * Finish/Abort 时使用“最后一次层拍成功帧”生成 thumb.rthm，
- * 并 upsert /home/video/manifest.json（含 complete/terminated 状态）。
+ * Finish/Abort 时仅生成 thumb.rthm + manifest 快路径（video_pending），
+ * 结果页退出后再统一按 PNG 合成最终 timelapse.mp4。
  */
 class PrintVideoRecorder {
 public:
@@ -43,11 +43,17 @@ public:
     PrintVideoRecorder& operator=(const PrintVideoRecorder&) = delete;
 
     void set_stream_geometry(uint32_t width, uint32_t height);
+    /** 合成 MP4 帧率；0 忽略。也可由 SessionStart.layer_fps 覆盖。 */
+    void set_timelapse_fps(uint32_t fps);
 
     void on_session_start(const middleware::PrintVideoSessionPayload& info);
     void on_layer_snap(const middleware::PrintVideoLayerSnapPayload& snap);
     void on_session_finish(const middleware::PrintVideoSessionPayload& info);
     void on_session_abort(const middleware::PrintVideoSessionPayload& info);
+    /** 结果页退出后先把条目标记为可见。 */
+    bool commit_after_exit(const char* frames_dir);
+    /** 结果页退出后触发：按目录内 PNG 统一合成/更新最终 MP4。 */
+    void finalize_after_exit(const char* frames_dir);
     void set_sender_module_id(middleware::ModuleId module_id);
 
     /**
@@ -61,8 +67,6 @@ private:
     bool grab_latest_nv12(std::vector<uint8_t>& out);
     /** NV12 → PNG（ffmpeg 软编）→ session_dir_/N.png（N 从 1 连续） */
     bool encode_nv12_to_png(const uint8_t* nv12, size_t bytes, uint32_t frame_index);
-    /** PNG 序列 -> MP4（timelapse.mp4），不足 2 帧不生成 */
-    bool encode_png_sequence_to_mp4(const char* out_path) const;
     bool handle_layer_snap(const PrintVideoJob& job);
     void finalize_session(bool aborted);
     /** RGA：把最后一帧 NV12 生成 RTHM（RGB565）缩略图 */
@@ -72,7 +76,8 @@ private:
     bool upsert_print_history(bool aborted,
                               const std::string& frames_dir_name,
                               const std::string& thumb_name,
-                              const std::string& video_name) const;
+                              const std::string& video_name,
+                              bool video_pending) const;
     /**
      * APP_Print_Video_Manifest_Ntf → UI：结果数据已就绪，可切打印结果页。
      * 必须在 manifest rename() 之后调用；0 帧（无 manifest 条目）也要发，
