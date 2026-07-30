@@ -47,9 +47,10 @@ void PageManager::init(lv_obj_t* screen) {
     lv_obj_set_style_border_opa(menu_panel_, LV_OPA_50, 0);
     lv_obj_set_style_border_side(menu_panel_, LV_BORDER_SIDE_RIGHT, 0);
     lv_obj_set_style_radius(menu_panel_, 0, 0);
-    lv_obj_set_style_shadow_width(menu_panel_, 24, 0);
+    /* 侧栏保留轻微层次，避免与内容区之间出现明显黑色竖缝。 */
+    lv_obj_set_style_shadow_width(menu_panel_, 8, 0);
     lv_obj_set_style_shadow_color(menu_panel_, lv_color_black(), 0);
-    lv_obj_set_style_shadow_opa(menu_panel_, LV_OPA_30, 0);
+    lv_obj_set_style_shadow_opa(menu_panel_, LV_OPA_10, 0);
     lv_obj_set_scrollbar_mode(menu_panel_, LV_SCROLLBAR_MODE_OFF);
     lv_obj_clear_flag(menu_panel_, LV_OBJ_FLAG_SCROLLABLE);
 

@@ -103,7 +103,7 @@ Glavo→Media 经 Broker 转发；`sender_id` 仍为 `APP_GLAVO`（见 IPC.md）
 | 项 | 默认 | 环境变量 / 宏 |
 |----|------|---------------|
 | 设备 | `/dev/video0` | `UPC_CAMERA_DEVICE` |
-| 分辨率 | 1024×1280 | `CAMERA_WIDTH/HEIGHT_DEFAULT` |
+| 分辨率 | 1080×1280 | `CAMERA_WIDTH/HEIGHT_DEFAULT` |
 | 帧率 | 30 | `UPC_CAMERA_FPS` |
 | IQ | `/home/wpcam_NC_NC.json` | `UPC_CAMERA_IQ_DIR` / `UPC_CAMERA_IQ_FILE` |
 | V4L2 缓冲 | 4 | `CAMERA_V4L2_BUF_COUNT` |

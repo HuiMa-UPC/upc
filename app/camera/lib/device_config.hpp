@@ -1,6 +1,8 @@
 #ifndef CAMERA_DEVICE_CONFIG_HPP
 #define CAMERA_DEVICE_CONFIG_HPP
 
+#include "config/camera_resolution_profile.hpp"
+
 /** V4L2 主视频节点（环境变量 UPC_CAMERA_DEVICE 可覆盖） */
 #ifndef CAMERA_V4L2_DEVICE_DEFAULT
 #define CAMERA_V4L2_DEVICE_DEFAULT  "/dev/video0"
@@ -11,11 +13,11 @@
 #endif
 
 #ifndef CAMERA_WIDTH_DEFAULT
-#define CAMERA_WIDTH_DEFAULT  1024u
+#define CAMERA_WIDTH_DEFAULT  UPC_CAMERA_STREAM_WIDTH
 #endif
 
 #ifndef CAMERA_HEIGHT_DEFAULT
-#define CAMERA_HEIGHT_DEFAULT 1280u
+#define CAMERA_HEIGHT_DEFAULT UPC_CAMERA_STREAM_HEIGHT
 #endif
 
 #ifndef CAMERA_FPS_DEFAULT

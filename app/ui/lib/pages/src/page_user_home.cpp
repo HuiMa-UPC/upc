@@ -11,6 +11,7 @@
 #include "home_metric_icons.h"
 #include "ui_slide_unlock.hpp"
 #include "config/cal_config.hpp"
+#include "config/camera_resolution_profile.hpp"
 
 #include <cmath>
 #include <cstdio>
@@ -211,8 +212,12 @@ void home_set_status(user_home_status_t s)
                        s == USER_HOME_STATUS_PRINT_TERMINATED);
 }
 
+void exit_monitor_mode(void);
+
 void home_trigger_door_open(void)
 {
+     /* 从监控页滑动开门时先退出监控态，避免回首页后二次进入预览被早退拦截。 */
+     exit_monitor_mode();
      /* 走 control 的门弹窗流程（Opening→DoorOpened→DoorClosed，含 PM2.5 净化检查/
      * 最短停留/关门轮询），确认关门后回首页。不再直接 send_open_door()。 */
      control_open_door_request();
@@ -321,7 +326,7 @@ void on_camera_viewport_size_changed(lv_event_t *e);
 void enter_monitor_mode(void);
 void exit_monitor_mode(void);
 
-/** 预览布局（通用）：宽贴满 viewport，高等比缩放后居中裁剪（解码层仍输出全帧）。
+/** 预览布局（通用）：宽贴满 viewport；高度按等比缩放后做上下居中裁剪（解码层仍输出全帧）。
  *  打印区与监控区共用同一算法，只是作用于不同的 viewport/image。 */
 static void cam_apply_layout(lv_obj_t *vp, lv_obj_t *img, uint32_t src_w, uint32_t src_h)
 {
@@ -339,15 +344,13 @@ static void cam_apply_layout(lv_obj_t *vp, lv_obj_t *img, uint32_t src_w, uint32
     lv_obj_set_size(img, vp_w, vp_h);
     lv_obj_center(img);
     lv_image_set_inner_align(img, LV_IMAGE_ALIGN_CENTER);
-    /* cover 填充：取宽/高两方向缩放比的较大者，保证画面铺满 viewport（多出侧居中裁切）。 */
+    /* 固定按宽度适配：宽度刚好贴满 viewport，高度超出部分做上下居中裁剪。 */
     if(src_h == 0 && ui::CameraPreviewPlayer::instance().active()) {
         src_h = ui::CameraPreviewPlayer::instance().stream_height();
     }
     const int64_t zoom_w = static_cast<int64_t>(vp_w) * 256 / static_cast<int32_t>(src_w);
-    const int64_t zoom_h = src_h > 0
-                           ? static_cast<int64_t>(vp_h) * 256 / static_cast<int32_t>(src_h)
-                           : zoom_w;
-    const uint32_t zoom = static_cast<uint32_t>(zoom_w > zoom_h ? zoom_w : zoom_h);
+    (void)src_h;
+    const uint32_t zoom = static_cast<uint32_t>(zoom_w);
     lv_image_set_scale(img, zoom > 0 ? zoom : LV_SCALE_NONE);
     lv_obj_invalidate(img);
 }
@@ -359,11 +362,11 @@ void apply_camera_preview_layout(uint32_t src_w, uint32_t src_h)
 
 void on_camera_viewport_size_changed(lv_event_t * /*e*/)
 {
-    uint32_t src_w = 1024u;
+    uint32_t src_w = UPC_CAMERA_STREAM_WIDTH;
     if(ui::CameraPreviewPlayer::instance().active()) {
         src_w = ui::CameraPreviewPlayer::instance().stream_width();
         if(src_w == 0) {
-            src_w = 1024u;
+            src_w = UPC_CAMERA_STREAM_WIDTH;
         }
     }
     apply_camera_preview_layout(src_w);
@@ -371,11 +374,11 @@ void on_camera_viewport_size_changed(lv_event_t * /*e*/)
 
 void on_monitor_viewport_size_changed(lv_event_t * /*e*/)
 {
-    uint32_t src_w = 1024u;
+    uint32_t src_w = UPC_CAMERA_STREAM_WIDTH;
     if(ui::CameraPreviewPlayer::instance().active()) {
         src_w = ui::CameraPreviewPlayer::instance().stream_width();
         if(src_w == 0) {
-            src_w = 1024u;
+            src_w = UPC_CAMERA_STREAM_WIDTH;
         }
     }
     cam_apply_layout(g_monitor_camera_viewport, g_monitor_camera_image, src_w, 0);
@@ -1645,14 +1648,16 @@ lv_obj_t *build_result_stats_card(lv_obj_t *parent)
  *  稿上导出的角度两侧一致（都是右深左浅），左侧那条按可读性改成外深内浅。 */
 void build_camera_gradient_masks(lv_obj_t *parent)
 {
-    /* bg_grad 只存指针，两条遮罩共用一对函数内 static 描述符。 */
+    /* 保留左右渐变遮罩，但避免“硬黑条”观感：
+     * - 收窄遮罩宽度
+     * - 降低边缘不透明度，做柔和压暗 */
     static lv_grad_dsc_t s_mask_l, s_mask_r;
     static bool s_mask_ready = false;
     if(!s_mask_ready) {
         const lv_color_t cols[2] = { lv_color_black(), lv_color_black() };
         const uint8_t    frac[2] = { 0, 255 };
-        const lv_opa_t   opa_l[2] = { LV_OPA_70, LV_OPA_TRANSP };
-        const lv_opa_t   opa_r[2] = { LV_OPA_TRANSP, LV_OPA_60 };
+        const lv_opa_t   opa_l[2] = { LV_OPA_30, LV_OPA_TRANSP };
+        const lv_opa_t   opa_r[2] = { LV_OPA_TRANSP, LV_OPA_30 };
         lv_grad_init_stops(&s_mask_l, cols, opa_l, frac, 2);
         lv_grad_init_stops(&s_mask_r, cols, opa_r, frac, 2);
         lv_grad_linear_init(&s_mask_l, LV_GRAD_LEFT, LV_GRAD_TOP,
@@ -1667,14 +1672,13 @@ void build_camera_gradient_masks(lv_obj_t *parent)
         lv_align_t align;
         int32_t width_pct;
     } kMasks[2] = {
-        { &s_mask_l, LV_ALIGN_LEFT_MID, 14 },
-        { &s_mask_r, LV_ALIGN_RIGHT_MID, 20 },
+        { &s_mask_l, LV_ALIGN_LEFT_MID, 8 },
+        { &s_mask_r, LV_ALIGN_RIGHT_MID, 10 },
     };
     for(const auto &m : kMasks) {
         lv_obj_t *mask = lv_obj_create(parent);
         lv_obj_remove_style_all(mask);
         lv_obj_add_flag(mask, LV_OBJ_FLAG_FLOATING);
-        /* 左侧给中心主体让位，右侧保持状态字可读性。 */
         lv_obj_set_size(mask, LV_PCT(m.width_pct), LV_PCT(100));
         lv_obj_align(mask, m.align, 0, 0);
         lv_obj_set_style_bg_color(mask, lv_color_black(), 0);
@@ -1795,7 +1799,7 @@ lv_obj_t *build_printing_area(lv_obj_t *parent)
     /* 真实视频帧 lv_image 占位（默认隐藏） */
     g_camera_image = lv_image_create(g_camera_viewport);
     lv_obj_add_flag(g_camera_image, LV_OBJ_FLAG_HIDDEN);
-    apply_camera_preview_layout(1024u);
+    apply_camera_preview_layout(UPC_CAMERA_STREAM_WIDTH);
 
     /* 左右渐变遮罩：压在画面之上、底条与结果页浮层之下，保证压字处可读 */
     build_camera_gradient_masks(area);
@@ -2089,7 +2093,8 @@ void enter_monitor_mode(void)
     if(g_monitor_door) ui_slide_unlock_reset(g_monitor_door);
 
     page_user_home_refresh(true);
-    cam_apply_layout(g_monitor_camera_viewport, g_monitor_camera_image, 1024u, 0u);
+    cam_apply_layout(g_monitor_camera_viewport, g_monitor_camera_image,
+                     UPC_CAMERA_STREAM_WIDTH, 0u);
     lv_async_call(deferred_monitor_camera_start_cb, nullptr);
 }
 
@@ -2429,7 +2434,7 @@ void page_user_home_enter_printing_mode(const control_file_t *file)
     /* 状态条切到 "正在打印" */
     home_set_status(USER_HOME_STATUS_PRINTING);
     page_user_home_refresh(true);
-    page_user_home_update_camera_preview_layout(1024u, 0u);
+    page_user_home_update_camera_preview_layout(UPC_CAMERA_STREAM_WIDTH, 0u);
 
     if(file && g_prog_file_name) {
         lv_label_set_text(g_prog_file_name, file->name);

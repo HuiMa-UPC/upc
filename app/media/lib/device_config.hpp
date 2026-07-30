@@ -1,13 +1,15 @@
 #ifndef MEDIA_DEVICE_CONFIG_HPP
 #define MEDIA_DEVICE_CONFIG_HPP
 
+#include "config/camera_resolution_profile.hpp"
+
 /** 录像默认几何（运行时以 Camera 开流 IPC 为准；此处仅成员初值） */
 #ifndef CAMERA_WIDTH_DEFAULT
-#define CAMERA_WIDTH_DEFAULT  1024u
+#define CAMERA_WIDTH_DEFAULT  UPC_CAMERA_STREAM_WIDTH
 #endif
 
 #ifndef CAMERA_HEIGHT_DEFAULT
-#define CAMERA_HEIGHT_DEFAULT 1280u
+#define CAMERA_HEIGHT_DEFAULT UPC_CAMERA_STREAM_HEIGHT
 #endif
 
 #ifndef CAMERA_FPS_DEFAULT

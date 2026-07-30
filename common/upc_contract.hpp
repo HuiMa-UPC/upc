@@ -638,7 +638,7 @@ struct PrintProgressPayload {
     uint16_t data_cache_rate;  /**< MCU 数据缓存占用率（TCP 心跳，0=排空） */
 };
 
-/** UI_Camera_Stream_Start_Req：可选 basename；空串则用后端默认 demo_1024x600.nv12 */
+/** UI_Camera_Stream_Start_Req：可选 basename；空串则使用后端当前相机实时流 */
 struct CameraStreamStartReqPayload {
     char video_name[64];
 };
