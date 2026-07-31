@@ -37,7 +37,7 @@ ui_arc_spinner_t *ui_arc_spinner_create(lv_obj_t *parent, int32_t size)
     lv_obj_set_style_arc_width(sp, USER_SPINNER_STROKE, LV_PART_MAIN);
     lv_obj_set_style_arc_rounded(sp, true, LV_PART_MAIN);
 
-    /* 前景弧（橙色，扫描段） */
+    /* 前景弧（主色，扫描段） */
     lv_obj_set_style_arc_color(sp, user_color_accent, LV_PART_INDICATOR);
     lv_obj_set_style_arc_opa(sp, LV_OPA_COVER, LV_PART_INDICATOR);
     lv_obj_set_style_arc_width(sp, USER_SPINNER_STROKE, LV_PART_INDICATOR);

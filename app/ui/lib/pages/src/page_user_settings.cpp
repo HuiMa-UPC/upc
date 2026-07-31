@@ -20,10 +20,9 @@
  * @file page_user_settings.cpp
  * @brief 设置页（两栏：左侧子导航 + 右侧详情），对齐设计稿。
  *
- * 布局：
- *   ┌──────────────────────────────────────────────────────┐
- *   │ [WiFi] SNOWPOD A1 ● Ready                  (header)    │
- *   ├───────────────────────┬──────────────────────────────┤
+ * 布局（顶部那条设备信息由外壳的常驻条 ui_device_bar 画，本页不再自建 header；
+ * content_panel_ 的 pad_top 已为它让出位置）：
+ *   ┌───────────────────────┬──────────────────────────────┐
  *   │ Network & Connectivity│  Wi-Fi   [ On | Off ]         │
  *   │ Display & Sound       │  Current Wi-Fi                 │
  *   │ Advanced Print        │   [SSID]                  >    │
@@ -1341,46 +1340,6 @@ lv_obj_t *build_subnav(lv_obj_t *parent)
     return nav;
 }
 
-lv_obj_t *build_header(lv_obj_t *parent)
-{
-    lv_obj_t *bar = lv_obj_create(parent);
-    lv_obj_remove_style_all(bar);
-    lv_obj_set_width(bar, LV_PCT(100));
-    lv_obj_set_height(bar, USER_TOPBAR_H);
-    lv_obj_set_flex_flow(bar, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(bar, LV_FLEX_ALIGN_START,
-                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_hor(bar, USER_TOPBAR_PAD_HOR, 0);
-    lv_obj_set_style_pad_column(bar, USER_PAD_SM, 0);
-    lv_obj_set_style_bg_opa(bar, LV_OPA_TRANSP, 0);
-    lv_obj_clear_flag(bar, LV_OBJ_FLAG_SCROLLABLE);
-
-    lv_obj_t *wifi = lv_label_create(bar);
-    lv_label_set_text(wifi, LV_SYMBOL_WIFI);
-    lv_obj_set_style_text_color(wifi, user_color_text, 0);
-    lv_obj_set_style_text_font(wifi, user_font_text(), 0);
-
-    lv_obj_t *name = lv_label_create(bar);
-    lv_label_set_text(name, upc::config::kDeviceDisplayName);
-    lv_obj_set_style_text_color(name, user_color_text, 0);
-    lv_obj_set_style_text_font(name, user_font_text(), 0);
-
-    lv_obj_t *dot = lv_obj_create(bar);
-    lv_obj_remove_style_all(dot);
-    lv_obj_set_size(dot, USER_STATUS_DOT_SZ, USER_STATUS_DOT_SZ);
-    lv_obj_set_style_radius(dot, LV_RADIUS_CIRCLE, 0);
-    lv_obj_set_style_bg_color(dot, user_color_status_ok, 0);
-    lv_obj_set_style_bg_opa(dot, LV_OPA_COVER, 0);
-    lv_obj_set_style_margin_left(dot, USER_PAD_SM, 0);
-
-    lv_obj_t *status = lv_label_create(bar);
-    lv_label_set_text(status, "Ready");
-    lv_obj_set_style_text_color(status, user_color_status_ok, 0);
-    lv_obj_set_style_text_font(status, user_font_text(), 0);
-
-    return bar;
-}
-
 } /* namespace */
 
 void page_user_settings_refresh(bool /*force*/)
@@ -1480,9 +1439,7 @@ lv_obj_t *page_user_settings_create(lv_obj_t *parent)
     lv_obj_clear_flag(page, LV_OBJ_FLAG_SCROLLABLE);
     g_page = page;   /* 翻页按钮悬浮层挂这里，整屏居中 */
 
-    build_header(page);
-
-    /* 主体：左子导航 + 右详情 */
+    /* 主体：左子导航 + 右详情（顶部设备信息条由外壳常驻，见 page_manager） */
     lv_obj_t *body = lv_obj_create(page);
     lv_obj_remove_style_all(body);
     lv_obj_set_width(body, LV_PCT(100));

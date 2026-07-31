@@ -17,6 +17,7 @@ extern const lv_image_dsc_t ic_pressure;
 extern const lv_image_dsc_t ic_info;
 extern const lv_image_dsc_t ic_clock;
 extern const lv_image_dsc_t ic_cube;
+extern const lv_image_dsc_t ic_warning;
 extern const lv_image_dsc_t ic_purify;
 
 #ifdef __cplusplus

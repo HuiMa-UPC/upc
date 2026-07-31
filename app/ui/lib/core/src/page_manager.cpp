@@ -1,6 +1,7 @@
 #include "page_manager.hpp"
 #include "ui_theme.hpp"
 #include "ui_feedback.hpp"
+#include "ui_device_bar.hpp"
 #include "control.hpp"
 #include <algorithm>
 
@@ -30,7 +31,12 @@ void PageManager::init(lv_obj_t* screen) {
     lv_obj_set_style_bg_grad_dir(shell_, LV_GRAD_DIR_NONE, 0);
     lv_obj_set_style_bg_opa(shell_, LV_OPA_COVER, 0);
 
+    /* 侧栏是浮层而不是 flex 的第一格：首页的摄像头层要延伸到屏幕左边缘（整屏预览），
+     * 侧栏浮在画面之上。content_panel_ 用 pad_left 补回侧栏宽度，所以其余页面的
+     * 内容区几何与改动前逐像素一致，无需逐页调整。 */
     menu_panel_ = lv_obj_create(shell_);
+    lv_obj_add_flag(menu_panel_, LV_OBJ_FLAG_FLOATING);
+    lv_obj_set_pos(menu_panel_, 0, 0);
     lv_obj_set_width(menu_panel_, USER_SIDEBAR_W);
     lv_obj_set_height(menu_panel_, lv_pct(100));
     lv_obj_set_flex_flow(menu_panel_, LV_FLEX_FLOW_COLUMN);
@@ -41,7 +47,13 @@ void PageManager::init(lv_obj_t* screen) {
     lv_obj_set_style_pad_hor(menu_panel_, USER_PAD_SM, 0);
     lv_obj_set_style_pad_row(menu_panel_, 0, 0);
     lv_obj_set_style_bg_color(menu_panel_, user_color_panel, 0);
-    lv_obj_set_style_bg_opa(menu_panel_, LV_OPA_40, 0);
+    /* 摄像头整屏时侧栏背后是视频，图标底色由当前帧决定：亮帧下合成色会盖过
+     * user_color_icon_off（#555555），未选中图标糊掉。面板自己吃掉大部分不透明度，
+     * 暗色就只落在侧栏这 USER_SIDEBAR_W 内，不额外压暗画面。
+     * 其余页面背后是 user_color_bg（#0a0909，近纯黑），提高不透明度肉眼无差别。
+     * 取值依据：叠上摄像头层那条 LV_OPA_70 底衬后，全白帧下图标底色约 #212121，
+     * 与其余页面的 #131212 接近。想让画面多透一点可降到 LV_OPA_80（约 #262626）。 */
+    lv_obj_set_style_bg_opa(menu_panel_, LV_OPA_90, 0);
     lv_obj_set_style_border_width(menu_panel_, 1, 0);
     lv_obj_set_style_border_color(menu_panel_, user_color_divider, 0);
     lv_obj_set_style_border_opa(menu_panel_, LV_OPA_50, 0);
@@ -59,17 +71,33 @@ void PageManager::init(lv_obj_t* screen) {
     lv_obj_set_height(content_panel_, lv_pct(100));
     lv_obj_set_flex_grow(content_panel_, 1);
     lv_obj_set_style_pad_all(content_panel_, 0, 0);
+    /* 侧栏已改浮层，content_panel_ 会铺满整屏；用 pad_left 让出侧栏，
+     * 页面按 LV_PCT(100) 建出来的内容区因此与改动前一致。想做整屏出血的页面
+     * （目前只有首页的摄像头层）自行用负偏移跨过这段 padding。 */
+    lv_obj_set_style_pad_left(content_panel_, USER_SIDEBAR_W, 0);
+    /* 顶部同理让出常驻设备信息条；这一格由 apply_device_bar() 按页开关，
+     * 不显示该条的隐藏页会被收回 0，页面因此拿到整屏高度。 */
+    lv_obj_set_style_pad_top(content_panel_, USER_TOPBAR_H, 0);
     lv_obj_set_style_border_width(content_panel_, 0, 0);
     lv_obj_set_style_radius(content_panel_, 0, 0);
     lv_obj_set_style_bg_opa(content_panel_, LV_OPA_TRANSP, 0);
     lv_obj_clear_flag(content_panel_, LV_OBJ_FLAG_SCROLLABLE);
+
+    /* 常驻设备信息条建在 content_panel_ 之后，于是恒定压在所有页面之上——首页的
+     * 摄像头整屏层也在它下面。它仍在 shell_ 内，所以打印流程弹窗那层全屏遮罩
+     * （建在 screen_ 上的 g_overlay / lv_layer_top）会连它一起压暗，与页面表现一致。 */
+    device_bar_ = ui_device_bar_create(shell_);
+
+    /* 侧栏画在最后（浮于页面和设备信息条之上）。必须在 FLOATING 之后做——直接对
+     * flex 子节点 move_foreground 会改变布局顺序，把侧栏挪到屏幕右侧。 */
+    lv_obj_move_foreground(menu_panel_);
 }
 
-/* 创建左侧菜单按钮外壳（选中态橙色背景、按压反馈），返回按钮对象 */
+/* 创建左侧菜单按钮外壳（选中态主色背景、按压反馈），返回按钮对象 */
 static lv_obj_t* make_menu_button(lv_obj_t* parent, void* page_raw,
                                   lv_event_cb_t cb) {
     lv_obj_t* btn = lv_btn_create(parent);
-    /* 正方形按钮：白遮罩/橙高亮都是正方形（边长 = 侧栏可用宽度） */
+    /* 正方形按钮：白遮罩/主色高亮都是正方形（边长 = 侧栏可用宽度） */
     const int32_t nav_btn_sz = USER_SIDEBAR_W - 2 * USER_PAD_SM;
     lv_obj_set_size(btn, nav_btn_sz, nav_btn_sz);
     lv_obj_set_style_bg_opa(btn, LV_OPA_TRANSP, 0);
@@ -109,7 +137,7 @@ void PageManager::register_page(PagePtr page, const lv_image_dsc_t* menu_icon_im
     Page* raw = entry.page.get();
 
     lv_obj_t* btn = make_menu_button(menu_panel_, raw, menu_btn_event_cb);
-    /* 选中态橙高亮与按压态白遮罩均由按钮自身整块绘制（见 make_menu_button），
+    /* 选中态主色高亮与按压态白遮罩均由按钮自身整块绘制（见 make_menu_button），
      * 两者同形同位、大小一致。 */
 
     lv_obj_t* img = lv_image_create(btn);
@@ -183,6 +211,15 @@ void PageManager::update_menu_highlight(const std::string& active_name) {
     }
 }
 
+void PageManager::apply_device_bar(const PageEntry& entry) {
+    /* 有菜单按钮 = 侧栏那五个标签页 → 显示；隐藏页（选文件 / 调试 / 延时摄影）
+     * 不显示。用这条规则而不是写死页名：以后新增隐藏页默认就不显示。
+     * 延时摄影页另外还建在 lv_layer_top() 上整屏覆盖，本来也盖得住这条。 */
+    const bool show = entry.menu_btn != nullptr;
+    ui_device_bar_set_visible(show);
+    lv_obj_set_style_pad_top(content_panel_, show ? USER_TOPBAR_H : 0, 0);
+}
+
 PageManager::PageEntry* PageManager::find_entry(const std::string& name) {
     auto it = std::find_if(entries_.begin(), entries_.end(),
         [&name](const PageEntry& e) { return e.page->name() == name; });
@@ -210,6 +247,10 @@ void PageManager::switch_to(const std::string& name) {
     if (current_ && current_ != entry->page.get()) {
         current_->on_exit();
     }
+
+    /* 必须在 on_create 之前：页面首帧布局要看到最终的 pad_top，
+     * 首页更是按它算根节点的纵向负偏移。 */
+    apply_device_bar(*entry);
 
     if (!entry->created) {
         entry->page->on_create(content_panel_);

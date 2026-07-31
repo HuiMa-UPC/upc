@@ -7,7 +7,7 @@
 | 模块 | 用途 |
 |------|------|
 | `ui_theme` | 1920/1280 profile、颜色、字体、按钮/输入框样式宏 |
-| `ui_user_widgets` | 用户风通用块：磨砂卡片、数值块、耗材行、文件 meta 格式化等 |
+| `ui_user_widgets` | 用户风通用块：磨砂卡片、数值块、耗材行、分段控件、文件 meta 格式化等 |
 | `ui_user_skeleton` | Tab 占位页（标题 + 卡片 + 提示文案） |
 | `ui_modal_dialog` | 标准弹窗壳（标题、body、footer） |
 | `ui_slide_unlock` | 滑动解锁条 |
@@ -24,6 +24,9 @@
 
 lv_obj_t *card = ui_user_make_frosted_card(parent, true);
 ```
+
+分段控件（`ui_user_make_segmented`）支持「无选中」：初值/入参传 `UI_USER_SEG_NONE`
+则全段置灰，读回也是该哨兵。用于必须由用户显式选择的场景（如打印板厚度）。
 
 ## 原则
 

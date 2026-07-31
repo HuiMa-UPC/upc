@@ -7,7 +7,10 @@
 extern "C" {
 #endif
 
-/** 用户弹窗默认配置（橙色标题下划线） */
+/** 分段控件「无选中」哨兵：作为初值可建出全灰未选状态，读取时同样返回它 */
+#define UI_USER_SEG_NONE  0xFFu
+
+/** 用户弹窗默认配置（标题居中、无装饰下划线） */
 ui_modal_dialog_cfg_t ui_modal_dialog_cfg_user(const char *title,
                                                int32_t card_width,
                                                bool with_footer);
@@ -15,7 +18,7 @@ ui_modal_dialog_cfg_t ui_modal_dialog_cfg_user(const char *title,
 /** 弹窗正文说明 label */
 lv_obj_t *ui_user_make_body_label(lv_obj_t *parent, const char *text);
 
-/** 透明底橙色文字快捷链接按钮 */
+/** 透明底主色文字快捷链接按钮 */
 lv_obj_t *ui_user_make_ghost_link_btn(lv_obj_t *parent, const char *text,
                                       lv_event_cb_t cb);
 
@@ -26,7 +29,7 @@ void ui_user_format_duration_min(char *buf, size_t buf_size, uint32_t duration_m
 void ui_user_format_file_meta(char *buf, size_t buf_size,
                               uint32_t duration_min, float material_g);
 
-/** 橙色渐变预览块 */
+/** 主色渐变预览块 */
 lv_obj_t *ui_user_make_accent_preview(lv_obj_t *parent, int32_t w, int32_t h);
 
 /** 用户风格进度条（panel_alt 底 + accent 指示器） */
@@ -81,17 +84,17 @@ lv_obj_t *ui_user_make_setting_row(lv_obj_t *parent, const char *label,
  *   uint8_t idx = ui_user_segmented_get_selected(seg);
  * @param labels   段文字数组（count 个）
  * @param count    段数量（1..8）
- * @param selected 初始选中段索引
+ * @param selected 初始选中段索引；传 UI_USER_SEG_NONE 则不选中任何段
  * @return 容器对象（即事件源）
  */
 lv_obj_t *ui_user_make_segmented(lv_obj_t *parent,
                                  const char *const labels[], uint8_t count,
                                  uint8_t selected);
 
-/** 设置分段控件当前选中段（不触发回调） */
+/** 设置分段控件当前选中段（不触发回调）；UI_USER_SEG_NONE = 全部取消选中 */
 void ui_user_segmented_set_selected(lv_obj_t *seg, uint8_t index);
 
-/** 读取分段控件当前选中段索引 */
+/** 读取分段控件当前选中段索引；无选中时返回 UI_USER_SEG_NONE */
 uint8_t ui_user_segmented_get_selected(lv_obj_t *seg);
 
 #ifdef __cplusplus

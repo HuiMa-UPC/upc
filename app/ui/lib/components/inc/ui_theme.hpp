@@ -38,7 +38,7 @@ extern const lv_color_t ui_color_text_dim;
 extern const lv_color_t ui_color_border;
 extern const lv_color_t ui_color_danger;
 
-/* ---- 用户 UI（Snowpod 风格，深黑底 + 橙色高光） ---- */
+/* ---- 用户 UI（Snowpod 风格，深黑底 + 主色高光；user_color_accent 现为蓝 #4258ff） ---- */
 extern const lv_color_t user_color_bg;
 extern const lv_color_t user_color_panel;
 extern const lv_color_t user_color_panel_alt;
@@ -118,6 +118,9 @@ typedef struct {
     int32_t user_pad_sm;
     int32_t user_pad_lg;
     int32_t user_radius;
+    /** 稿里那套弹窗/详情面板按钮组件的圆角（8@1280，不是全圆胶囊）：
+     *  确认弹窗的取消/危险钮、选文件页详情面板的 Confirm Print / Delete File。 */
+    int32_t user_btn_radius;
     int32_t user_btn_primary_w;
     int32_t user_btn_primary_h;
     int32_t user_btn_door_sz;
@@ -128,6 +131,7 @@ typedef struct {
     int32_t user_home_device_h;
     int32_t user_back_btn_w;
     int32_t user_back_btn_h;
+    int32_t user_sensor_strip_h;   /**< 调试页传感器条高（原先借用 user_topbar_h） */
 
     /* ---- 打印流程：弹窗 / 滑动 / 旋转环 / 进度 / 打印中底条 ---- */
     int32_t user_dlg_w;
@@ -138,6 +142,8 @@ typedef struct {
     int32_t user_dlg_body_min_h;
     int32_t user_dlg_btn_ghost_h;
     int32_t user_dlg_footer_btn_w;
+    /** 弹窗页脚按钮 / 满宽主按钮高：按稿 64@1280 等比折算（1024=51、1920=96）。
+     *  共用方：确认弹窗页脚、门弹窗与放版弹窗的满宽钮、选文件页详情两枚按钮与厚度分段。 */
     int32_t user_dlg_footer_btn_h;
     int32_t user_file_dlg_w;
     int32_t user_file_dlg_preview_w;
@@ -238,6 +244,7 @@ extern const ui_theme_t *g_ui;
 #define USER_PAD_SM                 (g_ui->user_pad_sm)
 #define USER_PAD_LG                 (g_ui->user_pad_lg)
 #define USER_RADIUS                 (g_ui->user_radius)
+#define USER_BTN_RADIUS             (g_ui->user_btn_radius)
 #define USER_BTN_PRIMARY_W          (g_ui->user_btn_primary_w)
 #define USER_BTN_PRIMARY_H          (g_ui->user_btn_primary_h)
 #define USER_BTN_DOOR_SZ            (g_ui->user_btn_door_sz)
@@ -248,6 +255,7 @@ extern const ui_theme_t *g_ui;
 #define USER_HOME_DEVICE_H          (g_ui->user_home_device_h)
 #define USER_BACK_BTN_W             (g_ui->user_back_btn_w)
 #define USER_BACK_BTN_H             (g_ui->user_back_btn_h)
+#define USER_SENSOR_STRIP_H         (g_ui->user_sensor_strip_h)
 
 #define USER_DLG_W                  (g_ui->user_dlg_w)
 #define USER_DLG_PAD                (g_ui->user_dlg_pad)

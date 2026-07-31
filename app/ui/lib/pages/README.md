@@ -6,7 +6,7 @@
 
 | 文件 | 职责 |
 |------|------|
-| `page_user_home.*` | 首页：顶栏、设备区、环境数值、打印中模式 UI |
+| `page_user_home.*` | 首页：顶部按钮行、设备区、环境数值、打印中模式 UI |
 | `page_user_settings.*` | 设置列表、开发者密码弹窗 |
 | `page_user_history.*` | 历史 Tab（当前为 skeleton 占位） |
 | `page_user_control.*` | 控制 Tab（占位） |
@@ -16,7 +16,8 @@
 
 | 模块 | 位置 |
 |------|------|
-| 页面切换 / 侧边栏 | `core/page_manager` |
+| 页面切换 / 侧边栏 / 常驻设备信息条 | `core/page_manager` + `core/ui_device_bar` |
+| 设备名 / 联网 / 运行状态 / 环境快照 | `core/ui_device_state` |
 | 应用初始化、页面注册 | `core/ui_app` |
 | 打印流程 | `core/control` |
 | 后端消息 | `core/ui_msg_proxy` |
@@ -31,5 +32,9 @@
 
 ## 数据与后端
 
-- 首页环境数据：在 `page_user_home.cpp` 内通过 `UiMsgProxy::register_env_update` 绑定（页面级数据源，仍不直接碰 MsgBus）
+- 环境/状态快照：**不要**在页面里 `UiMsgProxy::register_env_update`（单槽，会顶掉常驻状态栏的数据源）。
+  改用 `ui_device_state_add_observer()` 读 `core/ui_device_state` 的共享快照；运行状态置位用
+  `ui_device_state_set_status()`
+- 页面不用自己画顶部设备信息条：外壳常驻，`content_panel_` 的 `pad_top` 已让位；
+  隐藏页（无侧栏图标）不显示该条，`pad_top` 收回 0
 - 打印相关：只调用 `control_start()`、`control_terminate_request()` 等 **core** API

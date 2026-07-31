@@ -70,8 +70,10 @@
 | `CameraMsgProxy` | `camera_msg_proxy.*` | 预览开停 IPC + 打印录像 manifest 就绪通知 |
 | `CameraPreviewPlayer` | `camera_preview.*` | SHM 元数据环 + dma fd → RGA/SW BGRX → LVGL |
 | `RgaDmaBuf` | `rga_dma_buf.*` | dma32 heap 缓冲（RGA fd 导入） |
-| `PageManager` / `SimplePage` | `page_manager.*` / `ui_simple_page.*` | 侧边栏 + 页面路由 |
-| `app_init()` | `ui_app.*` | 主题、Proxy、页面注册、control |
+| `PageManager` / `SimplePage` | `page_manager.*` / `ui_simple_page.*` | 侧边栏 + 页面路由 + 常驻设备信息条显隐 |
+| `ui_device_state_*` | `ui_device_state.*` | 设备名/联网/运行状态/环境快照的唯一来源（env 单槽订阅 + 观察者扇出） |
+| `ui_device_bar_*` | `ui_device_bar.*` | 常驻设备信息条（WiFi + 设备名 + 状态点/字），PageManager 持有 |
+| `app_init()` | `ui_app.*` | 主题、Proxy、`ui_device_state_init`、页面注册、control |
 | `control_*` | `control.*` | 打印状态机（含 `CONTROL_STATE_PRINT_DONE` 结果页）+ overlay UI |
 | `VideoPlayer` | `video_player.*` | 延时视频 libav* 软解 → BGRX → lv_image（play/pause/seek + 拖动预览独立解码线程） |
 

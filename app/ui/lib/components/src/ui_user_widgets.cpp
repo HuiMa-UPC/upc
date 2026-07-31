@@ -12,7 +12,8 @@ ui_modal_dialog_cfg_t ui_modal_dialog_cfg_user(const char *title,
     cfg.title_text = title;
     cfg.card_width = card_width > 0 ? card_width : USER_DLG_W;
     cfg.with_footer = with_footer;
-    cfg.accent_underline = true;
+    /* 稿 4014:16631 / 2567:5555 起弹窗标题下不再带主色装饰线，全用户层统一去掉 */
+    cfg.accent_underline = false;
     return cfg;
 }
 
@@ -329,6 +330,8 @@ lv_obj_t *ui_user_make_setting_row(lv_obj_t *parent, const char *label,
  *  分段选择控件
  *  选中态完全由各段按钮的 LV_STATE_CHECKED 样式驱动，切换时只改 state，
  *  并把当前选中索引缓存在容器的 user_data 上。
+ *  index 越界（含哨兵 UI_USER_SEG_NONE）= 不选中任何段，用于「必须由用户
+ *  显式选择」的场景（如打印板厚度）。
  * ------------------------------------------------------------------------- */
 static void segmented_apply_state(lv_obj_t *seg, uint8_t index)
 {
@@ -402,7 +405,7 @@ lv_obj_t *ui_user_make_segmented(lv_obj_t *parent,
         lv_obj_center(lbl);
     }
 
-    segmented_apply_state(seg, selected < count ? selected : 0);
+    segmented_apply_state(seg, selected < count ? selected : UI_USER_SEG_NONE);
     return seg;
 }
 
@@ -416,7 +419,7 @@ void ui_user_segmented_set_selected(lv_obj_t *seg, uint8_t index)
 uint8_t ui_user_segmented_get_selected(lv_obj_t *seg)
 {
     if(!seg) {
-        return 0;
+        return UI_USER_SEG_NONE;
     }
     return static_cast<uint8_t>(reinterpret_cast<intptr_t>(lv_obj_get_user_data(seg)));
 }

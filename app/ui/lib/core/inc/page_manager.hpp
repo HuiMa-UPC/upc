@@ -129,11 +129,19 @@ private:
     lv_obj_t* shell_ = nullptr;        /**< 根容器，包含菜单栏和内容区 */
     lv_obj_t* menu_panel_ = nullptr;   /**< 左侧菜单栏容器 */
     lv_obj_t* content_panel_ = nullptr;/**< 右侧内容区容器 */
+    lv_obj_t* device_bar_ = nullptr;   /**< 常驻设备信息条（浮于页面之上） */
     std::vector<PageEntry> entries_;   /**< 已注册页面列表 */
     Page* current_ = nullptr;          /**< 当前显示的页面 */
 
     /** 根据名称查找对应的页面条目 */
     PageEntry* find_entry(const std::string& name);
+
+    /**
+     * 按目标页显隐常驻设备信息条，并同步 content_panel_ 的顶部让位。
+     * 规则：侧栏有菜单按钮的页面显示，隐藏页（选文件 / 调试 / 延时摄影）不显示，
+     * 不显示时把 pad_top 收回 0，页面拿回整屏高度。
+     */
+    void apply_device_bar(const PageEntry& entry);
 
     /** 菜单按钮点击事件的静态回调函数 */
     static void menu_btn_event_cb(lv_event_t* e);

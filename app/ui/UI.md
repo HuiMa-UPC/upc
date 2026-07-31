@@ -7,7 +7,7 @@
 
 | 子目录 | 说明 |
 |--------|------|
-| `lib/core/` | PageManager、`UiMsgProxy`、`control`、摄像头预览 |
+| `lib/core/` | PageManager、`UiMsgProxy`、`control`、摄像头预览、常驻设备信息条 + 共享设备状态 |
 | `lib/pages/` | 各 Tab 布局（`page_user_*`） |
 | `lib/components/` | 公用 LVGL 控件 |
 | `lib/assets/` | 图片、字库 |
@@ -47,6 +47,77 @@ while (!g_shutdown_requested) {
 - `register_page` 只登记；`switch_to` 首次触发 `on_create`
 - 离页时在 `on_exit` 里 `register_*(nullptr)` 取消 Proxy 回调
 
+### 外壳布局：侧栏是浮层
+
+`shell_` 仍是横向 flex，但 `menu_panel_`（左侧导航栏）带 `LV_OBJ_FLAG_FLOATING`，
+不占 flex 格位，且在 `init()` 末尾 `move_foreground()` 画在最后——所以它**浮在页面之上**。
+`content_panel_` 因此铺满整屏，再用 `pad_left = USER_SIDEBAR_W` 让出侧栏，页面按
+`LV_PCT(100)` 建出来的内容区与改造前逐像素一致。
+
+两条约束：
+
+- **顺序不能反**。必须先 `FLOATING` 再改 z 序；直接对 flex 子节点
+  `move_foreground()` 会改变布局顺序，把侧栏挪到屏幕右侧。
+- **想整屏出血的页面自己跨过那段 padding**，用负偏移 + 宽度取 `LV_HOR_RES`
+  （`LV_PCT(100)` 算的是父内容区，不含 padding）。目前只有首页的摄像头层这么做，
+  见「摄像头整屏预览」。侧栏可点，压住的区域连触摸都收不到，所以左对齐的控件
+  要补 `USER_SIDEBAR_W`。
+
+`menu_panel_` 的 `bg_opa` 是 `LV_OPA_90` 而不是原来的 `LV_OPA_40`：整屏预览时侧栏
+背后是视频，未选中图标 `user_color_icon_off`（`#555555`）的底色由当前帧决定，亮帧
+下会被盖过去。其余页面背后是 `user_color_bg`（`#0a0909`，近纯黑），提高不透明度肉眼
+无差别。调色解决不了这个问题——背景不可控，任何固定灰度都会在某些帧上失效。
+
+### 常驻设备信息条（`ui_device_bar` + `ui_device_state`）
+
+顶部「WiFi + 设备名 + 状态点 + 状态字」那一组不属于任何页面，由 `PageManager::init()`
+建在 `shell_` 上（`content_panel_` 之后 → 恒定压在所有页面之上，含首页的整屏摄像头层；
+`menu_panel_` 仍在它之上）。它同样是 `FLOATING` + `pos(0,0)`，否则会占掉 `shell_`
+横向 flex 的一个格位把内容区挤走。条自身 `remove_flag(CLICKABLE)`，不然整屏宽的带子
+会吃掉底下控件的触摸——首页那两颗按钮正在它下面。
+
+- **让位**：`content_panel_` 的 `pad_top = USER_TOPBAR_H`，页面按 `LV_PCT(100)` 建出来
+  的内容区自然落在条下面。
+- **显隐规则**：`apply_device_bar()` 按「侧栏有菜单按钮 = 显示」判定，即五个标签页显示，
+  隐藏页（选文件 / 调试 / 延时摄影）不显示且 `pad_top` 收回 0。以后新增隐藏页默认不显示。
+- **弹窗**：条在 `shell_` 内，打印流程/传输弹窗的全屏遮罩建在 `screen_` / `lv_layer_top()`
+  上，会连它一起压暗，与页面表现一致。
+- **首页例外**：首页要整屏出血，根节点用 `pos(-USER_SIDEBAR_W, -USER_TOPBAR_H)` 跨过两个
+  方向的 padding，尺寸取 `LV_HOR_RES` × `LV_VER_RES`（`LV_PCT(100)` 算的是父内容区，会被
+  `pad_top` 扣掉一条）。首页自己那条 `USER_TOPBAR_H` 高的透明行只剩右侧两颗按钮，正好落在
+  常驻条下方，两者合成稿 3540:14473 里的一整条带子。
+- **`USER_TOPBAR_H` = 屏高 16%**（1024×600 档 96、1280×800 档 128）。调试页那条传感器卡
+  原先借用该字段，现在用 `USER_SENSOR_STRIP_H`（值即旧的 `USER_TOPBAR_H`），不随带子变高。
+
+数据侧：`ui_device_state` 是设备名/联网/运行状态/环境指标的唯一来源。
+**页面不要自己 `register_env_update`** ——它是单槽的（`env_update_cb_ = std::move(cb)`），
+第二个订阅者会静默顶掉第一个。订阅在 `ui_app.cpp` 的 `ui_device_state_init()` 做一次，
+再扇出给观察者（当前是常驻条 + 首页）。打印中/结果页的状态由前端用
+`ui_device_state_set_status()` 置位并**锁住**，不让环境推送覆盖。
+副产品：设置页/历史页原先各自画一条写死 "Ready" 的 header，现已删除，状态跟着后端走了。
+
+### 摄像头整屏预览
+
+`g_print_area`（打印直播）与 `g_monitor_area`（查看监控）都是 `lv_obj_set_pos(area,
+-USER_SIDEBAR_W, 0)` + 宽度 `LV_HOR_RES`，画面左边缘落在屏幕左边缘、侧栏浮于其上。
+首页根节点同样负偏移铺满整屏、再用自己的 `pad_left` 还原内容区，所以按钮行/仪表盘/
+开门滑块的几何不变（纵向的负偏移见「常驻设备信息条」，那一格不还原）。
+
+摄像头层必须留在首页根节点**内部**：切页是靠 `SimplePage::on_exit()` 隐藏根节点实现的，
+挂到 `content_panel_` 上会导致打印中切去设置页时画面仍留在底下（`switch_to` 允许
+打印中导航）。这也是不能靠 `LV_OBJ_FLAG_OVERFLOW_VISIBLE` 的原因——它只放开到
+`ext_draw_size`，给不到一整个侧栏宽度。
+
+侧栏可读性由两层叠出来：`menu_panel_` 自己的 `LV_OPA_90`，加上 `build_camera_gradient_masks()`
+里那条覆盖 `USER_SIDEBAR_W` 的实心底衬。底衬取 `LV_OPA_70`，与左渐变遮罩的起始值
+相同，两者在侧栏右边缘无缝衔接成「恒定段 + 淡出段」，不会出现硬边；左渐变同时补了
+`USER_SIDEBAR_W` 的 x 偏移，在画面里的位置与改造前一致。
+
+副作用：`cam_apply_layout()` 是 cover 填充（`zoom = max(zoom_w, zoom_h)`），viewport
+变宽后纵向裁得更多。1024×600 屏上纵向可见从 50.9% 降到 46.9%，但缩放系数正好变成
+1.000（屏宽 = 流宽 1024，见 `CAMERA_WIDTH_DEFAULT`），走 LVGL 无缩放快路径，省掉逐帧
+重采样——RGA 只做色彩转换不做缩放。
+
 ## UiMsgProxy（Glavo）
 
 | 方法 | 方向 |
@@ -64,6 +135,34 @@ while (!g_shutdown_requested) {
 | **USB** | `send_fs_dir_open(Usb)` → Glavo 扫盘 → `Fs_DirOpen_Rsp` |
 
 删除 Local / Prepare / Start 仍走 IPC。
+
+### 选文件页详情面板：打印板厚度（稿 4014:16631）
+
+右侧详情列自上而下：缩略图 → 文件名 → meta 行 → 分隔线 → `Plate Thickness` 标题 →
+`5mm / 10mm` 分段 → 未选提示 → 撑开 → `Confirm Print` → `Delete File`。
+
+- **必须显式选择**：`g_plate_thickness`（-1 未选 / 0=5mm / 1=10mm）。未选时分段全灰、
+  提示行「Select a plate thickness to continue」可见、`Confirm Print` 置灰。置灰要同时
+  `add_state(DISABLED)` **和** `remove_flag(CLICKABLE)`——`DISABLED` 只换样式，照样发
+  `LV_EVENT_CLICKED`。三处联动都在 `apply_plate_thickness_ui()` 里，别散着写。
+- **逐文件**：改选文件 / 切 Local↔USB / 删除后都 `reset_plate_thickness()`。
+  `apply_files_list()` 的目录刷新按文件名保住选中项，那里**不清**厚度。
+- **无选中态的分段控件**：`ui_user_make_segmented(..., UI_USER_SEG_NONE)`，读回同样是
+  这个哨兵。老调用方传的都是合法索引，行为不变。
+- **后端**：契约还没有厚度字段，值目前只停在 UI。接上之后在 `on_print_confirm_ok()` 随
+  `send_print_prepare()` 下发，改契约走 `common/COMMON.md` 四步。
+- **1024 档的高度预算**：详情列 `pad_row` 用 `USER_PAD_SM`（不是 `USER_PAD`），且耗时/耗材
+  由两行压成「图标 + caption + value」一行，腾出的空间刚够放厚度区。再往这一列加东西前
+  先算 600px 屏。
+- **按钮圆角**：稿里这套按钮组件是 8px@1280 的圆角矩形，不是全圆胶囊，用
+  `USER_BTN_RADIUS`（1024=6 / 1280=8 / 1920=12）。`Confirm Print` 借 `user_style_btn_primary()`
+  取主色与外发光，但要就地覆盖它的 `LV_RADIUS_CIRCLE`。
+
+`Confirm Print` 之后的「开始打印」二次确认弹窗保留。删除确认与终止打印确认共用
+`open_user_confirm_dialog()`：标题问句（`user_font_value`）+ 一句说明（`user_font_text`）+
+取消(4% 白底) / 危险(实心红)，两枚等分整行、`USER_BTN_RADIUS` 圆角。
+用户层弹窗标题下的主色装饰线已全局去掉
+（`ui_modal_dialog_cfg_user()` 里 `accent_underline = false`）。
 
 ## 页面（`lib/pages/`）
 

@@ -246,7 +246,8 @@ lv_obj_t *make_sensor_cell(lv_obj_t *parent, const char *caption, int idx)
 lv_obj_t *build_sensor_strip(lv_obj_t *parent)
 {
     lv_obj_t *strip = ui_user_make_frosted_card(parent, false);
-    lv_obj_set_height(strip, USER_TOPBAR_H);
+    /* 本页不显示常驻状态栏，卡高与 USER_TOPBAR_H 脱钩（后者已按稿抬到屏高 16%）。 */
+    lv_obj_set_height(strip, USER_SENSOR_STRIP_H);
     lv_obj_set_flex_flow(strip, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(strip, LV_FLEX_ALIGN_SPACE_BETWEEN,
                           LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);

@@ -16,7 +16,7 @@ extern "C" {
  *   │ 半透明遮罩（占满父容器，吃掉点击）       │
  *   │   ┌──────────────────────────────────┐ │
  *   │   │ 标题（user_font_value/title）    │ │
- *   │   │ ── 橙色分割线（可选） ──         │ │
+ *   │   │ ── 主色分割线（可选） ──         │ │
  *   │   │                                  │ │
  *   │   │ body slot：调用方往里加内容        │ │
  *   │   │                                  │ │
@@ -42,7 +42,7 @@ typedef struct {
     const char *title_text;     /**< 标题文字；NULL 则不创建标题 */
     int32_t     card_width;     /**< 0 = USER_DLG_W */
     bool        with_footer;    /**< true 时创建 footer 容器 */
-    bool        accent_underline; /**< true 时标题下加橙色分割线 */
+    bool        accent_underline; /**< true 时标题下加主色分割线（用户层已统一 false） */
     bool        with_close_btn; /**< true 时在卡片右上角加一个 "X" 关闭按钮 */
 } ui_modal_dialog_cfg_t;
 

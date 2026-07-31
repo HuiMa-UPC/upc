@@ -32,6 +32,12 @@ const lv_color_t user_color_status_err = LV_COLOR_MAKE(0xff, 0x4d, 0x4d);
 
 /* ============================================================================
  *  两套 profile 数据
+ *
+ *  user_topbar_h 取屏高的 16%：稿 3540:14473（1280×800）里状态栏那条带子等效高
+ *  128（设备信息行 y=48 高 32、两颗按钮 y=32 高 64，三者中心都落在 y=64）。
+ *  1024×600 档按 600/800 折算 96，1920 档按 1280 档 ×1.5 给 192。
+ *  调试页那条传感器卡原先借用本字段，band 抬高后改用 user_sensor_strip_h，
+ *  值即旧的 user_topbar_h，排版不受影响。
  * ============================================================================ */
 static const ui_theme_t s_theme_1920 = {
     /* 开发者 Shell */
@@ -83,13 +89,14 @@ static const ui_theme_t s_theme_1920 = {
     /* user_nav_item_h        */ 96,
     /* user_nav_icon_sz       */ 56,
     /* user_nav_icon_pad      */ 12,
-    /* user_topbar_h          */ 120,
+    /* user_topbar_h          */ 192,
     /* user_topbar_pad_hor    */ 40,
     /* user_topbar_pad_ver    */ 32,
     /* user_pad               */ 40,
     /* user_pad_sm            */ 20,
     /* user_pad_lg            */ 64,
     /* user_radius            */ 20,
+    /* user_btn_radius        */ 12,
     /* user_btn_primary_w     */ 220,
     /* user_btn_primary_h     */ 72,
     /* user_btn_door_sz       */ 360,
@@ -100,6 +107,7 @@ static const ui_theme_t s_theme_1920 = {
     /* user_home_device_h     */ 660,
     /* user_back_btn_w        */ 180,
     /* user_back_btn_h        */ 64,
+    /* user_sensor_strip_h    */ 120,
 
     /* 打印流程 */
     /* user_dlg_w                 */ 720,
@@ -110,7 +118,7 @@ static const ui_theme_t s_theme_1920 = {
     /* user_dlg_body_min_h        */ 260,
     /* user_dlg_btn_ghost_h       */ 56,
     /* user_dlg_footer_btn_w      */ 260,
-    /* user_dlg_footer_btn_h      */ 72,
+    /* user_dlg_footer_btn_h      */ 96,
     /* user_file_dlg_w            */ 1100,
     /* user_file_dlg_preview_w    */ 340,
     /* user_file_dlg_preview_h    */ 260,
@@ -197,13 +205,14 @@ static const ui_theme_t s_theme_1280 = {
     /* user_nav_item_h        */ 68,
     /* user_nav_icon_sz       */ 40,
     /* user_nav_icon_pad      */ 8,
-    /* user_topbar_h          */ 84,
+    /* user_topbar_h          */ 128,
     /* user_topbar_pad_hor    */ 28,
     /* user_topbar_pad_ver    */ 20,
     /* user_pad               */ 28,
     /* user_pad_sm            */ 14,
     /* user_pad_lg            */ 44,
     /* user_radius            */ 14,
+    /* user_btn_radius        */ 8,
     /* user_btn_primary_w     */ 152,
     /* user_btn_primary_h     */ 52,
     /* user_btn_door_sz       */ 248,
@@ -214,6 +223,7 @@ static const ui_theme_t s_theme_1280 = {
     /* user_home_device_h     */ 440,
     /* user_back_btn_w        */ 128,
     /* user_back_btn_h        */ 44,
+    /* user_sensor_strip_h    */ 84,
 
     /* 打印流程 */
     /* user_dlg_w                 */ 500,
@@ -224,7 +234,7 @@ static const ui_theme_t s_theme_1280 = {
     /* user_dlg_body_min_h        */ 180,
     /* user_dlg_btn_ghost_h       */ 40,
     /* user_dlg_footer_btn_w      */ 180,
-    /* user_dlg_footer_btn_h      */ 52,
+    /* user_dlg_footer_btn_h      */ 64,
     /* user_file_dlg_w            */ 760,
     /* user_file_dlg_preview_w    */ 240,
     /* user_file_dlg_preview_h    */ 180,
@@ -317,13 +327,14 @@ static const ui_theme_t s_theme_1024 = {
     /* user_nav_item_h        */ 72,
     /* user_nav_icon_sz       */ 54,
     /* user_nav_icon_pad      */ 8,
-    /* user_topbar_h          */ 68,
+    /* user_topbar_h          */ 96,
     /* user_topbar_pad_hor    */ 22,
     /* user_topbar_pad_ver    */ 16,
     /* user_pad               */ 22,
     /* user_pad_sm            */ 11,
     /* user_pad_lg            */ 36,
     /* user_radius            */ 11,
+    /* user_btn_radius        */ 6,
     /* user_btn_primary_w     */ 122,
     /* user_btn_primary_h     */ 44,
     /* user_btn_door_sz       */ 200,
@@ -334,6 +345,7 @@ static const ui_theme_t s_theme_1024 = {
     /* user_home_device_h     */ 352,
     /* user_back_btn_w        */ 102,
     /* user_back_btn_h        */ 40,
+    /* user_sensor_strip_h    */ 68,
 
     /* 打印流程 */
     /* user_dlg_w                 */ 400,
@@ -344,7 +356,7 @@ static const ui_theme_t s_theme_1024 = {
     /* user_dlg_body_min_h        */ 144,
     /* user_dlg_btn_ghost_h       */ 36,
     /* user_dlg_footer_btn_w      */ 144,
-    /* user_dlg_footer_btn_h      */ 44,
+    /* user_dlg_footer_btn_h      */ 51,
     /* user_file_dlg_w            */ 600,
     /* user_file_dlg_preview_w    */ 192,
     /* user_file_dlg_preview_h    */ 144,

@@ -9,9 +9,9 @@ extern "C" {
 
 /**
  * @file ui_arc_spinner.hpp
- * @brief 橙色未封闭旋转加载环（D2/D4 用）
+ * @brief 主色未封闭旋转加载环（D2/D4 用）
  *
- * 视觉：一段约 270° 的橙色圆弧 + 灰色底环，整体匀速旋转。
+ * 视觉：一段约 270° 的主色（user_color_accent）圆弧 + 灰色底环，整体匀速旋转。
  * 实现：基于 lv_arc + lv_anim 控制 rotation。
  */
 typedef struct ui_arc_spinner_t {

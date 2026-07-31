@@ -18,6 +18,7 @@
 
 #include "ui_theme.hpp"
 #include "ui_keyboard.hpp"
+#include "ui_device_state.hpp"
 #include "control.hpp"
 #include "nav_icons.h"
 
@@ -44,6 +45,10 @@ void app_init(lv_obj_t* screen) {
     CameraMsgProxy::instance().init();
     DebugMsgProxy::instance().init();
     CameraPreviewPlayer::instance().init();
+
+    /* 设备名/联网/运行状态/环境快照的唯一来源，须在 UiMsgProxy::init() 之后、
+     * 建常驻设备信息条（PageManager::init）与首页之前订阅上。 */
+    ui_device_state_init();
 
     PageManager::instance().init(screen);
 

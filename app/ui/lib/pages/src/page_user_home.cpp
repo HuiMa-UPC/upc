@@ -11,11 +11,12 @@
 #include "home_metric_icons.h"
 #include "ui_slide_unlock.hpp"
 #include "config/cal_config.hpp"
+#include "ui_device_state.hpp"
 #include "config/camera_resolution_profile.hpp"
+
 
 #include <cmath>
 #include <cstdio>
-#include <cstring>
 
 /**
  * @file page_user_home.cpp
@@ -23,7 +24,7 @@
  *
  * 视觉层次（与设计稿对齐）：
  *   ┌────────────────────────────────────────────────┐
- *   │ [WiFi] [Sig] SNOWPOD A1 ● 准备打印     [开始打印]│ ← topbar
+ *   │ (设备信息由外壳的常驻条画)     [监控] [开始打印]│ ← topbar
  *   ├────────────┬────────────────┬────────────────┤
  *   │ 室内 PM2.5 │                │   设备温度     │
  *   │   25.3     │   [Device]     │    23.6°C     │
@@ -32,59 +33,18 @@
  *   └────────────┴────────────────┴────────────────┘
  *                                  [滑动开门 >>>]   ← 浮动
  *
- * 环境快照通过 UiMsgProxy::register_env_update 订阅，数据保存在本文件内。
+ * 环境快照与运行状态在 `core/ui_device_state`，本页作为观察者读取；顶栏左半边的
+ * 设备名/状态由外壳的常驻条 `ui_device_bar` 画，本页那条只剩右侧两颗按钮。
  */
 
 namespace {
 
-/* 前四项与后端 EnvSnapshotPayload.status 数值对应（见 apply_env 的强转），
- * 后两项仅由前端在打印结果页本地置位，后端不会推送。 */
-typedef enum {
-    USER_HOME_STATUS_IDLE = 0,
-    USER_HOME_STATUS_READY,
-    USER_HOME_STATUS_PRINTING,
-    USER_HOME_STATUS_ERROR,
-    USER_HOME_STATUS_PRINT_DONE,       /**< 打印完成（结果页顶栏绿点） */
-    USER_HOME_STATUS_PRINT_TERMINATED, /**< 打印终止（结果页顶栏红点） */
-} user_home_status_t;
-
-typedef struct {
-    char               device_name[32];
-    user_home_status_t status;
-    bool               wifi_connected;
-    int                signal_bars;
-    float              pm25_indoor;
-    float              pm25_cabin;
-    float              temperature_c;
-    float              oxygen_percent;
-    float              pm10_indoor;      /**< 室内 PM10（<0/NaN=无数据） */
-    float              humidity_percent; /**< 舱内湿度（<0/NaN=无数据） */
-    float              pressure_kpa;     /**< 舱内气压（<0/NaN=无数据） */
-} user_home_snapshot_t;
-
 /** 数值无效（后端未采集）：负值或 NaN → UI 显示 "--"。 */
 static inline bool metric_invalid(float v) { return std::isnan(v) || v < 0.0f; }
 
-user_home_snapshot_t g_snap;
-bool g_env_defaults_loaded = false;
-bool g_status_locked = false;
-
-void apply_env(const middleware::EnvSnapshotPayload &p)
+/** 共享快照的观察者：`ui_device_state` 收到环境推送/状态置位后重绘本页。 */
+void on_device_state(const ui_device_snapshot_t * /*snap*/)
 {
-    std::strncpy(g_snap.device_name, p.device_name, sizeof(g_snap.device_name) - 1);
-    g_snap.device_name[sizeof(g_snap.device_name) - 1] = '\0';
-    if(!g_status_locked) {
-        g_snap.status = static_cast<user_home_status_t>(p.status);
-    }
-    g_snap.wifi_connected = p.wifi_connected != 0;
-    g_snap.signal_bars    = p.signal_bars;
-    g_snap.pm25_indoor    = p.pm25_indoor;
-    g_snap.pm25_cabin     = p.pm25_cabin;
-    g_snap.temperature_c  = p.temperature_c;
-    g_snap.oxygen_percent = p.oxygen_percent;
-    g_snap.pm10_indoor    = p.pm10_indoor;
-    g_snap.humidity_percent = p.humidity_percent;
-    g_snap.pressure_kpa   = p.pressure_kpa;
     page_user_home_refresh(false);
 }
 
@@ -144,24 +104,10 @@ void on_clean_close_rsp_async(void * /*user*/)
 
 void home_env_init(void)
 {
-    if(!g_env_defaults_loaded) {
-        std::memset(&g_snap, 0, sizeof(g_snap));
-        std::strcpy(g_snap.device_name, upc::config::kDeviceDisplayName);
-        g_snap.status         = USER_HOME_STATUS_READY;
-        g_snap.wifi_connected = false;
-        g_snap.signal_bars    = 0;
-        /* 环境指标默认无数据（<0）→ 首帧环境到达前统一显示 "--" */
-        g_snap.pm25_indoor    = -1.0f;
-        g_snap.pm25_cabin     = -1.0f;
-        g_snap.temperature_c  = -1.0f;
-        g_snap.oxygen_percent = -1.0f;
-        g_snap.pm10_indoor    = -1.0f;
-        g_snap.humidity_percent = -1.0f;
-        g_snap.pressure_kpa   = -1.0f;
-        g_env_defaults_loaded = true;
-    }
-    ui::UiMsgProxy::instance().register_env_update(
-        [](const middleware::EnvSnapshotPayload &p) { apply_env(p); });
+    /* 环境订阅与默认值都在 ui_device_state（由 ui_app.cpp 初始化一次），本页只
+     * 挂观察者——register_env_update 是单槽的，这里再订阅一次会把常驻状态栏的
+     * 数据源顶掉。 */
+    ui_device_state_add_observer(on_device_state);
 
     /* 暂停/恢复回执：以后端状态为准同步按钮图标 */
     ui::UiMsgProxy::instance().register_print_pause_done(
@@ -203,16 +149,17 @@ void home_env_init(void)
     });
 }
 
-void home_set_status(user_home_status_t s)
-{
-    g_snap.status = s;
-    /* 打印中/打印结果页的状态由前端说了算，锁住不让环境推送覆盖 */
-    g_status_locked = (s == USER_HOME_STATUS_PRINTING ||
-                       s == USER_HOME_STATUS_PRINT_DONE ||
-                       s == USER_HOME_STATUS_PRINT_TERMINATED);
-}
+// void home_set_status(user_home_status_t s)
+// {
+//     g_snap.status = s;
+//     /* 打印中/打印结果页的状态由前端说了算，锁住不让环境推送覆盖 */
+//     g_status_locked = (s == USER_HOME_STATUS_PRINTING ||
+//                        s == USER_HOME_STATUS_PRINT_DONE ||
+//                        s == USER_HOME_STATUS_PRINT_TERMINATED);
+// }
 
 void exit_monitor_mode(void);
+
 
 void home_trigger_door_open(void)
 {
@@ -223,13 +170,9 @@ void home_trigger_door_open(void)
      control_open_door_request();
 }
 
-/* ---------- 顶部状态条 ---------- */
-lv_obj_t *g_topbar       = nullptr;   /**< 顶部状态条根（打印中浮于摄像头之上） */
-lv_obj_t *g_lbl_wifi     = nullptr;   /**< 顶栏 WiFi 图标（按连接状态变色） */
-lv_obj_t *g_lbl_dev_name = nullptr;
-lv_obj_t *g_dot_status   = nullptr;
-lv_obj_t *g_lbl_status   = nullptr;
-lv_obj_t *g_btn_files    = nullptr;   /**< 右上角 "My Files" 磨砂按钮 */
+/* ---------- 顶部按钮行（与外壳常驻设备信息条同高、同一条带子） ---------- */
+lv_obj_t *g_topbar       = nullptr;   /**< 按钮行根（打印中浮于摄像头之上） */
+lv_obj_t *g_btn_files    = nullptr;   /**< 右上角 "Start Print" 渐变胶囊 */
 
 /* ---------- 首页左卡（HOME 空气质量·可切换 PM2.5/PM10） ---------- */
 lv_obj_t *g_home_card_title = nullptr;  /**< "HOME PM2.5" / "HOME PM10" */
@@ -240,7 +183,7 @@ lv_obj_t *g_home_seg_dot    = nullptr;  /**< 分级游标圆点 */
 int       g_home_metric_idx = 0;        /**< 0=PM2.5 1=PM10（切换按钮，重启复位） */
 
 /* ---------- 首页右侧 CABIN CONDITION（5 行数值） ---------- */
-lv_obj_t *g_cab_aqi_val   = nullptr;    /**< AQI（占位 --） */
+lv_obj_t *g_cab_pm25_val  = nullptr;    /**< 舱内 PM2.5 分级词 Good/Fair/Poor/Very Poor */
 lv_obj_t *g_cab_temp_val  = nullptr;
 lv_obj_t *g_cab_temp_unit = nullptr;
 lv_obj_t *g_cab_o2_val    = nullptr;
@@ -542,7 +485,10 @@ lv_obj_t *build_camera_button(lv_obj_t *parent)
     return btn;
 }
 
-/** 顶部状态条：左侧 设备名 + 状态点 + 状态文字；右侧 "查看监控"圆钮 + "Start Print" 按钮 */
+/** 顶部按钮行：右侧 "查看监控"圆钮 + "Start Print" 按钮。
+ *  左半边（设备名 + 状态点 + 状态文字）已交给外壳的常驻条 ui_device_bar，本行只
+ *  保留右侧两颗按钮；行高仍取 USER_TOPBAR_H，与常驻条同高、同起点，视觉上是稿
+ *  3540:14473 里那一条带子。 */
 lv_obj_t *build_topbar(lv_obj_t *parent)
 {
     lv_obj_t *bar = lv_obj_create(parent);
@@ -558,45 +504,23 @@ lv_obj_t *build_topbar(lv_obj_t *parent)
     lv_obj_set_style_bg_opa(bar, LV_OPA_TRANSP, 0);
     lv_obj_clear_flag(bar, LV_OBJ_FLAG_SCROLLABLE);
     /* 纯布局容器，去掉 lv_obj_create 默认带的 CLICKABLE：打印态下 print_area 被
-     * move_background() 压到状态栏之下（见 page_user_home_enter_printing_mode），
+     * move_background() 压到本行之下（见 page_user_home_enter_printing_mode），
      * 这条 100%×TOPBAR_H 的带子若可点，会把结果页贴顶那颗圆钮和 HOME PM2.5 卡的
-     * 触摸全部吃掉。栏内两个真按钮是 lv_button_create，各有独立命中区。 */
+     * 触摸全部吃掉。行内两个真按钮是 lv_button_create，各有独立命中区。 */
     lv_obj_remove_flag(bar, LV_OBJ_FLAG_CLICKABLE);
 
-    lv_obj_t *lbl_wifi = lv_label_create(bar);
-    lv_label_set_text(lbl_wifi, LV_SYMBOL_WIFI);
-    lv_obj_set_style_text_color(lbl_wifi, user_color_text, 0);
-    lv_obj_set_style_text_font(lbl_wifi, user_font_text(), 0);
-    g_lbl_wifi = lbl_wifi;
-
-    g_lbl_dev_name = lv_label_create(bar);
-    lv_label_set_text(g_lbl_dev_name, upc::config::kDeviceDisplayName);
-    lv_obj_set_style_text_color(g_lbl_dev_name, user_color_text, 0);
-    lv_obj_set_style_text_font(g_lbl_dev_name, user_font_text(), 0);
-
-    g_dot_status = lv_obj_create(bar);
-    lv_obj_remove_style_all(g_dot_status);
-    lv_obj_set_size(g_dot_status, USER_STATUS_DOT_SZ, USER_STATUS_DOT_SZ);
-    lv_obj_set_style_radius(g_dot_status, LV_RADIUS_CIRCLE, 0);
-    lv_obj_set_style_bg_color(g_dot_status, user_color_status_ok, 0);
-    lv_obj_set_style_bg_opa(g_dot_status, LV_OPA_COVER, 0);
-    lv_obj_set_style_margin_left(g_dot_status, USER_PAD_SM, 0);
-
-    g_lbl_status = lv_label_create(bar);
-    lv_label_set_text(g_lbl_status, "Ready");
-    lv_obj_set_style_text_color(g_lbl_status, user_color_status_ok, 0);
-    lv_obj_set_style_text_font(g_lbl_status, user_font_text(), 0);
-
-    /* 用一个 flex_grow 撑开把按钮顶到右边 */
+    /* 用一个 flex_grow 撑开把按钮顶到右边（左半边现在是空的，仍靠它定位） */
     lv_obj_t *spacer = lv_obj_create(bar);
     lv_obj_remove_style_all(spacer);
     lv_obj_set_height(spacer, 1);
     lv_obj_set_flex_grow(spacer, 1);
     lv_obj_set_style_bg_opa(spacer, LV_OPA_TRANSP, 0);
 
-    /* 顺序对齐设计稿：开始打印在左（976），摄像头圆钮在最右（1184）。 */
-    g_btn_files = build_files_button(bar);
+    /* 顺序对齐设计稿 3540:14473：摄像头圆钮在左，开始打印按钮贴最右边缘。
+     * 右端位置由上面 spacer 的 flex_grow 推出，两钮间隙由 bar 的 pad_column 决定，
+     * 都不要写死 x 坐标——否则换分辨率档或按钮文案变宽就要回来补数字。 */
     g_btn_camera = build_camera_button(bar);
+    g_btn_files  = build_files_button(bar);
 
     return bar;
 }
@@ -604,7 +528,7 @@ lv_obj_t *build_topbar(lv_obj_t *parent)
 /* ============================================================================
  *  首页 normal 视图（对齐 Figma 1.1.1 待机中）
  *    左：HOME 空气质量磨砂卡（PM2.5/PM10 可切换 + 四档色条 + 游标）
- *    右：CABIN CONDITION 悬浮 5 行（AQI/TEMP/O2/HUMIDITY/PRESSURE）
+ *    右：CABIN CONDITION 悬浮 5 行（PM2.5/TEMP/O2/HUMIDITY/PRESSURE）
  * ========================================================================== */
 
 /** 空气质量指标描述：标题 + 三档上界（Good/Fair/Poor 上限）+ Very Poor 插值伪上限。 */
@@ -813,7 +737,8 @@ lv_obj_t *build_home_card(lv_obj_t *parent)
     return card;
 }
 
-/* CABIN 单行：[图标] 标签 ...(撑开)... 数值 + 单位。unit_text 为空 → 无单位（AQI）。 */
+/* CABIN 单行：[图标] 标签 ...(撑开)... 数值 + 单位。
+ * unit_text 为空 → 无单位（PM2.5 行填的是分级词而非数值）。 */
 lv_obj_t *make_cabin_row(lv_obj_t *parent, const lv_image_dsc_t *icon,
                          const char *label, const char *unit_text,
                          lv_obj_t **out_val, lv_obj_t **out_unit)
@@ -917,7 +842,9 @@ lv_obj_t *build_cabin_panel(lv_obj_t *parent)
     lv_obj_set_style_bg_color(div, user_color_text, 0);
     lv_obj_set_style_bg_opa(div, LV_OPA_20, 0);
 
-    make_cabin_row(panel, &ic_aqi,      "AQI",      nullptr,       &g_cab_aqi_val,  nullptr);
+    /* 首行按稿 3540:14473 从 AQI 换成舱内 PM2.5；ic_aqi 本就是稿 3540:14510 的
+     * 空气/云字形，与新稿这行的图标一致，故图标资源不变。 */
+    make_cabin_row(panel, &ic_aqi,      "PM2.5",    nullptr,       &g_cab_pm25_val, nullptr);
     make_cabin_row(panel, &ic_temp,     "TEMP",     "\xC2\xB0""C", &g_cab_temp_val, &g_cab_temp_unit);
     make_cabin_row(panel, &ic_o2,       "O2 CONC.", "%",           &g_cab_o2_val,   &g_cab_o2_unit);
     make_cabin_row(panel, &ic_humidity, "HUMIDITY", "%",           &g_cab_hum_val,  &g_cab_hum_unit);
@@ -1667,20 +1594,37 @@ void build_camera_gradient_masks(lv_obj_t *parent)
         s_mask_ready = true;
     }
 
+    /* 侧栏底衬：画面整屏之后侧栏浮在视频上，未选中图标（user_color_icon_off
+     * #555555）的底色由当前帧决定，亮帧下会被盖过去。这里补一条实心暗条，
+     * 与 menu_panel_ 自身的 bg_opa 一起把图标底色固定下来。
+     * 不透明度取 LV_OPA_70——与左渐变的起始值相同，两者在侧栏右边缘无缝衔接，
+     * 合起来就是「恒定段 + 淡出段」，不会出现硬边。 */
+    lv_obj_t *rail = lv_obj_create(parent);
+    lv_obj_remove_style_all(rail);
+    lv_obj_add_flag(rail, LV_OBJ_FLAG_FLOATING);
+    lv_obj_set_size(rail, USER_SIDEBAR_W, LV_PCT(100));
+    lv_obj_align(rail, LV_ALIGN_LEFT_MID, 0, 0);
+    lv_obj_set_style_bg_color(rail, lv_color_black(), 0);
+    lv_obj_set_style_bg_opa(rail, LV_OPA_70, 0);
+    lv_obj_remove_flag(rail, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_remove_flag(rail, LV_OBJ_FLAG_SCROLLABLE);
+
     struct {
         const lv_grad_dsc_t *grad;
         lv_align_t align;
         int32_t width_pct;
+        int32_t x_ofs;
     } kMasks[2] = {
-        { &s_mask_l, LV_ALIGN_LEFT_MID, 8 },
-        { &s_mask_r, LV_ALIGN_RIGHT_MID, 10 },
+        /* 左遮罩让开侧栏起画：偏移量补上后它在画面里的位置与整屏改造前一致。 */
+        { &s_mask_l, LV_ALIGN_LEFT_MID, 14, USER_SIDEBAR_W },
+        { &s_mask_r, LV_ALIGN_RIGHT_MID, 20, 0 },
     };
     for(const auto &m : kMasks) {
         lv_obj_t *mask = lv_obj_create(parent);
         lv_obj_remove_style_all(mask);
         lv_obj_add_flag(mask, LV_OBJ_FLAG_FLOATING);
         lv_obj_set_size(mask, LV_PCT(m.width_pct), LV_PCT(100));
-        lv_obj_align(mask, m.align, 0, 0);
+        lv_obj_align(mask, m.align, m.x_ofs, 0);
         lv_obj_set_style_bg_color(mask, lv_color_black(), 0);
         lv_obj_set_style_bg_grad(mask, m.grad, 0);
         lv_obj_set_style_bg_opa(mask, LV_OPA_COVER, 0);
@@ -1740,10 +1684,11 @@ lv_obj_t *build_print_result_layer(lv_obj_t *parent)
     build_result_pm_card(env_wrap);
     build_result_env_bar(env_wrap);
 
-    /* 左下结果卡 */
+    /* 左下结果卡。layer 已随摄像头层铺到屏幕左边缘，左对齐的东西要补上侧栏宽度
+     * 才不会钻到侧栏底下（侧栏是浮层且可点，压住的部分连触摸都收不到）。 */
     lv_obj_t *card = build_result_stats_card(layer);
     lv_obj_add_flag(card, LV_OBJ_FLAG_FLOATING);
-    lv_obj_align(card, LV_ALIGN_BOTTOM_LEFT, USER_PAD, -USER_PAD);
+    lv_obj_align(card, LV_ALIGN_BOTTOM_LEFT, USER_PAD + USER_SIDEBAR_W, -USER_PAD);
 
     /* 右下滑动取件：红色 knob，同监控页尺寸 */
     ui_slide_unlock_cfg_t cfg = {};
@@ -1767,12 +1712,14 @@ lv_obj_t *build_print_result_layer(lv_obj_t *parent)
 lv_obj_t *build_printing_area(lv_obj_t *parent)
 {
     /* 打印中：整块内容区全屏铺满。area 为浮层（脱离首页纵向 flex），
-     * 覆盖包括状态栏在内的整个内容区；摄像头做背景，状态栏/底部面板浮于其上。 */
+     * 覆盖包括状态栏在内的整个内容区；摄像头做背景，状态栏/底部面板浮于其上。
+     * 负偏移跨回首页根节点的 pad_left，画面左边缘因此落在屏幕左边缘（侧栏之下）。
+     * 宽度取屏宽而非 LV_PCT(100)：后者算的是父内容区，不含那段 padding。 */
     lv_obj_t *area = lv_obj_create(parent);
     lv_obj_remove_style_all(area);
     lv_obj_add_flag(area, LV_OBJ_FLAG_FLOATING);
-    lv_obj_set_size(area, LV_PCT(100), LV_PCT(100));
-    lv_obj_set_pos(area, 0, 0);
+    lv_obj_set_size(area, LV_HOR_RES, LV_PCT(100));
+    lv_obj_set_pos(area, -USER_SIDEBAR_W, 0);
     lv_obj_set_style_pad_all(area, 0, 0);
     lv_obj_set_style_bg_opa(area, LV_OPA_TRANSP, 0);
     lv_obj_clear_flag(area, LV_OBJ_FLAG_SCROLLABLE);
@@ -1816,6 +1763,9 @@ lv_obj_t *build_printing_area(lv_obj_t *parent)
     lv_obj_set_flex_align(bottom, LV_FLEX_ALIGN_START,
                           LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_set_style_pad_hor(bottom, USER_PAD, 0);
+    /* flex 是 START 对齐，左内边距决定两块面板的起点：补上侧栏宽度让它们避开侧栏，
+     * 视觉位置与整屏改造前一致。 */
+    lv_obj_set_style_pad_left(bottom, USER_PAD + USER_SIDEBAR_W, 0);
     lv_obj_set_style_pad_column(bottom, USER_PAD, 0);
     lv_obj_set_style_bg_opa(bottom, LV_OPA_TRANSP, 0);
     lv_obj_clear_flag(bottom, LV_OBJ_FLAG_SCROLLABLE);
@@ -1999,11 +1949,12 @@ lv_obj_t *build_monitor_photo_button(lv_obj_t *parent)
 
 lv_obj_t *build_monitor_area(lv_obj_t *parent)
 {
+    /* 几何同 build_printing_area：负偏移跨回 pad_left，画面铺到屏幕左边缘。 */
     lv_obj_t *area = lv_obj_create(parent);
     lv_obj_remove_style_all(area);
     lv_obj_add_flag(area, LV_OBJ_FLAG_FLOATING);
-    lv_obj_set_size(area, LV_PCT(100), LV_PCT(100));
-    lv_obj_set_pos(area, 0, 0);
+    lv_obj_set_size(area, LV_HOR_RES, LV_PCT(100));
+    lv_obj_set_pos(area, -USER_SIDEBAR_W, 0);
     lv_obj_set_style_pad_all(area, 0, 0);
     lv_obj_set_style_bg_opa(area, LV_OPA_TRANSP, 0);
     lv_obj_clear_flag(area, LV_OBJ_FLAG_SCROLLABLE);
@@ -2037,10 +1988,10 @@ lv_obj_t *build_monitor_area(lv_obj_t *parent)
     lv_obj_add_flag(env, LV_OBJ_FLAG_FLOATING);
     lv_obj_align(env, LV_ALIGN_TOP_RIGHT, -USER_PAD, USER_PAD);
 
-    /* 左下：EXIT */
+    /* 左下：EXIT（补上侧栏宽度，避免被浮层侧栏压住而点不到） */
     lv_obj_t *exit_btn = build_monitor_exit_button(area);
     lv_obj_add_flag(exit_btn, LV_OBJ_FLAG_FLOATING);
-    lv_obj_align(exit_btn, LV_ALIGN_BOTTOM_LEFT, USER_PAD, -USER_PAD);
+    lv_obj_align(exit_btn, LV_ALIGN_BOTTOM_LEFT, USER_PAD + USER_SIDEBAR_W, -USER_PAD);
 
     /* 右下：滑动开门（与首页同尺寸/配色） */
     ui_slide_unlock_cfg_t cfg = {};
@@ -2088,7 +2039,8 @@ void enter_monitor_mode(void)
     if(g_btn_files)    lv_obj_add_flag(g_btn_files,   LV_OBJ_FLAG_HIDDEN);
     if(g_btn_camera)   lv_obj_add_flag(g_btn_camera,  LV_OBJ_FLAG_HIDDEN);
     if(g_monitor_area) lv_obj_clear_flag(g_monitor_area, LV_OBJ_FLAG_HIDDEN);
-    /* 监控层移到背景：顶部状态栏（保留设备状态）与左侧导航栏自然浮于其上。 */
+    /* 监控层移到背景：本页顶部按钮行浮于其上（外壳的常驻设备信息条与左侧导航栏
+     * 本就在整页之上，不受这里的 z 序影响，所以查看监控时设备状态照常可见）。 */
     if(g_monitor_area) lv_obj_move_background(g_monitor_area);
     if(g_monitor_door) ui_slide_unlock_reset(g_monitor_door);
 
@@ -2117,31 +2069,8 @@ void exit_monitor_mode(void)
 
 /* ---------- 数据刷新 ---------- */
 
-const char *status_text(user_home_status_t s)
-{
-    switch(s) {
-    case USER_HOME_STATUS_READY:    return "Ready";
-    case USER_HOME_STATUS_PRINTING: return "Printing";
-    case USER_HOME_STATUS_ERROR:    return "Error";
-    case USER_HOME_STATUS_PRINT_DONE:       return "Print Complete";
-    case USER_HOME_STATUS_PRINT_TERMINATED: return "Print Terminated";
-    case USER_HOME_STATUS_IDLE:
-    default:                        return "Idle";
-    }
-}
-
-lv_color_t status_color(user_home_status_t s)
-{
-    switch(s) {
-    case USER_HOME_STATUS_PRINTING: return user_color_accent;
-    case USER_HOME_STATUS_ERROR:    return ui_color_danger;
-    case USER_HOME_STATUS_READY:    return user_color_status_ok;
-    case USER_HOME_STATUS_PRINT_DONE:       return user_color_status_ok;
-    case USER_HOME_STATUS_PRINT_TERMINATED: return user_color_status_err;
-    case USER_HOME_STATUS_IDLE:
-    default:                        return user_color_text_dim;
-    }
-}
+/* 状态字与状态点配色已挪到 core/ui_device_state（ui_device_status_text/color），
+ * 由常驻设备信息条使用；本页不再画那一组。 */
 
 /* PM2.5 开门阈值（与 Glavo handle_pm25_request 的 pm25_cabin>35 一致） */
 constexpr float kPmGateThreshold = 35.0f;
@@ -2195,8 +2124,9 @@ void home_card_update(void)
     const AirMetric &m = kAirMetrics[g_home_metric_idx];
     lv_label_set_text(g_home_card_title, m.title);
 
-    const float v = (g_home_metric_idx == 0) ? g_snap.pm25_indoor
-                                             : g_snap.pm10_indoor;
+    const ui_device_snapshot_t &snap = *ui_device_state_get();
+    const float v = (g_home_metric_idx == 0) ? snap.pm25_indoor
+                                             : snap.pm10_indoor;
     if(metric_invalid(v)) {
         /* 无数据：分级显示 "--"，清空数值、隐藏游标 */
         lv_label_set_text(g_home_card_level, "--");
@@ -2236,8 +2166,9 @@ void result_pm_card_update(void)
     const AirMetric &m = kAirMetrics[g_home_metric_idx];
     lv_label_set_text(g_res_pm_title, m.title);
 
-    const float v = (g_home_metric_idx == 0) ? g_snap.pm25_indoor
-                                             : g_snap.pm10_indoor;
+    const ui_device_snapshot_t &snap = *ui_device_state_get();
+    const float v = (g_home_metric_idx == 0) ? snap.pm25_indoor
+                                             : snap.pm10_indoor;
     if(metric_invalid(v)) {
         lv_label_set_text(g_res_pm_level, "--");
         lv_obj_set_style_text_color(g_res_pm_level, user_color_text_dim, 0);
@@ -2274,31 +2205,24 @@ void page_user_home_update_camera_preview_layout(uint32_t src_w, uint32_t src_h)
 
 void page_user_home_refresh(bool /*force*/)
 {
-    const user_home_snapshot_t &snap = g_snap;
-
-    if(g_lbl_wifi) {
-        /* 连上=正常白，断开=灰暗，作为顶栏 WiFi 连接状态指示 */
-        lv_obj_set_style_text_color(g_lbl_wifi,
-            snap.wifi_connected ? user_color_text : user_color_text_dim, 0);
-    }
-
-    if(g_lbl_dev_name) {
-        lv_label_set_text(g_lbl_dev_name, snap.device_name);
-    }
-    if(g_lbl_status) {
-        lv_label_set_text(g_lbl_status, status_text(snap.status));
-        lv_obj_set_style_text_color(g_lbl_status, status_color(snap.status), 0);
-    }
-    if(g_dot_status) {
-        lv_obj_set_style_bg_color(g_dot_status, status_color(snap.status), 0);
-    }
+    /* 设备名/WiFi/状态点那一组不在本页——外壳的常驻条自己观察同一份快照。 */
+    const ui_device_snapshot_t &snap = *ui_device_state_get();
 
     /* 首页左卡（HOME 空气质量·可切换 PM2.5/PM10：分级 + 四档色条 + 游标） */
     home_card_update();
 
-    /* 首页右侧 CABIN CONDITION：AQI 占位 "--"（待接后端）；其余按哨兵判空 */
-    if(g_cab_aqi_val) {
-        lv_label_set_text(g_cab_aqi_val, "--");
+    /* 首页右侧 CABIN CONDITION：首行是舱内 PM2.5 的分级词，与结果页环境条首列同源
+     * （都用 kAirMetrics[0] 的 PM2.5 阈值表定档）；其余四行按哨兵判空。
+     * 这里只换文字不设颜色：五行的白字统一由 make_cabin_row 一次设定，无数据时的
+     * "--" 也保持白色，与下面四行的 update_cabin_metric 行为一致。按档位着色只用在
+     * 结果页那条小环境条上。 */
+    if(g_cab_pm25_val) {
+        if(metric_invalid(snap.pm25_cabin)) {
+            lv_label_set_text(g_cab_pm25_val, "--");
+        } else {
+            const int level = air_classify(kAirMetrics[0], snap.pm25_cabin, nullptr);
+            lv_label_set_text(g_cab_pm25_val, kLevelName[level]);
+        }
     }
     update_cabin_metric(g_cab_temp_val, g_cab_temp_unit, snap.temperature_c);
     update_cabin_metric(g_cab_o2_val,   g_cab_o2_unit,   snap.oxygen_percent);
@@ -2366,17 +2290,27 @@ lv_obj_t *page_user_home_create(lv_obj_t *parent)
 {
     home_env_init();
 
+    /* 首页根节点跨过 content_panel_ 的左/顶 padding 铺满整屏，再用自己的 pad_left
+     * 把内容区还原成侧栏右侧那块——顶栏按钮行/仪表盘/开门滑块的几何因此不变，只有
+     * 摄像头层会再用一次负偏移探进左侧 padding 区做整屏预览。
+     * 纵向不还原 pad_top：本页自己那条按钮行就占在那一格，正好落在外壳常驻设备
+     * 信息条的下面（两者同高同起点，合成稿 3540:14473 的一整条带子）。
+     * 尺寸不能用 LV_PCT(100)：那算的是父内容区，会被 pad_top 扣掉一条。
+     * 摄像头层必须留在本节点内：切页是靠 SimplePage::on_exit() 隐藏根节点实现的，
+     * 挂到 content_panel_ 上会导致打印中切去设置页时画面仍留在底下。 */
     lv_obj_t *page = lv_obj_create(parent);
     lv_obj_remove_style_all(page);
-    lv_obj_set_size(page, LV_PCT(100), LV_PCT(100));
+    lv_obj_set_size(page, LV_HOR_RES, LV_VER_RES);
+    lv_obj_set_pos(page, -USER_SIDEBAR_W, -USER_TOPBAR_H);
     lv_obj_set_flex_flow(page, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_style_pad_all(page, 0, 0);
+    lv_obj_set_style_pad_left(page, USER_SIDEBAR_W, 0);
     lv_obj_set_style_pad_row(page, 0, 0);
     lv_obj_set_style_bg_opa(page, LV_OPA_TRANSP, 0);
     lv_obj_clear_flag(page, LV_OBJ_FLAG_SCROLLABLE);
     g_page_root = page;
 
-    /* 先建首页主区（全屏整机背景浮层，置于最底），再建状态栏——状态栏遂浮于背景之上。 */
+    /* 先建首页主区（全屏整机背景浮层，置于最底），再建按钮行——按钮遂浮于背景之上。 */
     g_normal_area = build_main_area(page);
     g_topbar = build_topbar(page);
 
@@ -2431,8 +2365,8 @@ void page_user_home_enter_printing_mode(const control_file_t *file)
     /* 复位暂停按钮为"运行"态 */
     set_pause_ui(false);
 
-    /* 状态条切到 "正在打印" */
-    home_set_status(USER_HOME_STATUS_PRINTING);
+    /* 常驻状态条切到 "Printing"（并锁住，不让环境推送覆盖） */
+    ui_device_state_set_status(UI_DEVICE_STATUS_PRINTING);
     page_user_home_refresh(true);
     page_user_home_update_camera_preview_layout(UPC_CAMERA_STREAM_WIDTH, 0u);
 
@@ -2522,8 +2456,8 @@ void page_user_home_enter_print_result(const control_print_result_t *result)
         }
     }
 
-    home_set_status(result->terminated ? USER_HOME_STATUS_PRINT_TERMINATED
-                                       : USER_HOME_STATUS_PRINT_DONE);
+    ui_device_state_set_status(result->terminated ? UI_DEVICE_STATUS_PRINT_TERMINATED
+                                                  : UI_DEVICE_STATUS_PRINT_DONE);
     page_user_home_refresh(true);
 }
 
@@ -2552,7 +2486,7 @@ void page_user_home_exit_printing_mode(void)
     if(g_btn_camera)  lv_obj_clear_flag(g_btn_camera,  LV_OBJ_FLAG_HIDDEN);
     set_pause_ui(false);
 
-    home_set_status(USER_HOME_STATUS_READY);
+    ui_device_state_set_status(UI_DEVICE_STATUS_READY);
     page_user_home_refresh(true);
 }
 

@@ -6,7 +6,7 @@
 /* 示意几何：上方矩形（板）从 y=0 滑到 y=slot_y，停顿后回到 0，循环。 */
 struct ui_board_anim_t {
     lv_obj_t *root;     /**< 整体容器 */
-    lv_obj_t *board;    /**< 橙色矩形 = 打印板 */
+    lv_obj_t *board;    /**< 主色矩形 = 打印板 */
     lv_obj_t *slot;     /**< 灰色框 = 槽位 */
     lv_obj_t *caption;
     lv_obj_t *image;    /**< 真实资源占位，默认隐藏 */
@@ -69,7 +69,7 @@ ui_board_anim_t *ui_board_anim_create(lv_obj_t *parent,
     lv_obj_set_style_border_color(slot, user_color_divider, 0);
     self->slot = slot;
 
-    /* ---- 板（橙色实心圆角矩形，反复下滑） ---- */
+    /* ---- 板（主色实心圆角矩形，反复下滑） ---- */
     lv_obj_t *board = lv_obj_create(root);
     lv_obj_remove_style_all(board);
     lv_obj_set_size(board, board_w, board_h);
