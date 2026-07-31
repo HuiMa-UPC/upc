@@ -249,6 +249,8 @@ void goto_file_selection(void);
 lv_obj_t *make_round_icon_btn(lv_obj_t *parent, const char *symbol, lv_event_cb_t cb);
 lv_obj_t *make_dlg_wide_button(lv_obj_t *parent, const char *text, bool enabled,
                                lv_event_cb_t cb);
+void on_powder_low_async(void *user);
+void close_powder_dlg(void);
 void stop_print_watchdogs(void);
 void start_print_peer_watch(void);
 void finish_printing(bool notify_complete);
@@ -380,6 +382,8 @@ void finish_printing(bool notify_complete)
     g_last_print_progress = 0;
     g_last_cmd_cache_rate = 0;
     g_last_data_cache_rate = 0;
+    /* 缺粉窗可能还开着（用户既没补粉也没取消，作业已被终止/跑完） */
+    close_powder_dlg();
 
     if(notify_complete && g_job_done_cb) {
         DoneCb done_cb = g_job_done_cb;
@@ -616,6 +620,11 @@ void wire_msg_proxy()
             return;
         }
         try_exit_print_preview(p.progress_percent >= 100);
+    });
+
+    /* 缺粉：后端已自动暂停（另发 Pause_Rsp 让徽标翻到 PAUSE），这里只弹补粉窗 */
+    proxy.register_print_powder_low([]() {
+        lv_async_call(on_powder_low_async, nullptr);
     });
 
     proxy.register_print_terminate_done([]() {
@@ -1504,6 +1513,166 @@ void door_apply_variant(DoorVariant v)
     }
 }
 
+/* -------------------- 缺粉弹窗（Figma 4273:5892） -------------------- */
+
+/* 稿上是「顶部满宽示意图 + 标题 + 副标题 + 主按钮 + 副按钮」，几何与门弹窗同一套
+ * （496 宽卡片 + 496×321 顶图），所以复用 show_door_dialog 的骨架，只换内容列。
+ * 顶图在稿里也还是「粉舱安装示意」占位，等设计出图后按 door_set_image 那样接。 */
+ui_modal_dialog_t *g_powder_dlg = nullptr;
+
+void on_powder_refilled(lv_event_t *e);
+void on_powder_cancel(lv_event_t *e);
+
+/* 满宽圆角副按钮：与 make_dlg_wide_button 同尺寸，4% 白底（稿「主按钮」那档）。 */
+lv_obj_t *make_dlg_wide_ghost_button(lv_obj_t *parent, const char *text,
+                                     lv_event_cb_t cb)
+{
+    lv_obj_t *btn = lv_button_create(parent);
+    lv_obj_remove_style_all(btn);
+    lv_obj_set_width(btn, LV_PCT(100));
+    lv_obj_set_height(btn, USER_DLG_FOOTER_BTN_H);
+    lv_obj_set_style_radius(btn, USER_DLG_RADIUS, 0);
+    lv_obj_set_style_bg_color(btn, user_color_text, 0);
+    lv_obj_set_style_bg_opa(btn, 10, 0);          /* 稿 rgba(255,255,255,0.04) */
+    lv_obj_set_style_bg_opa(btn, 30, LV_STATE_PRESSED);
+    lv_obj_clear_flag(btn, LV_OBJ_FLAG_SCROLLABLE);
+    if(cb) {
+        lv_obj_add_event_cb(btn, cb, LV_EVENT_CLICKED, nullptr);
+    }
+    lv_obj_t *bl = lv_label_create(btn);
+    lv_label_set_text(bl, text);
+    lv_obj_set_style_text_color(bl, user_color_text, 0);
+    lv_obj_set_style_text_font(bl, user_font_text(), 0);
+    lv_obj_center(bl);
+    return btn;
+}
+
+void close_powder_dlg(void)
+{
+    if(g_powder_dlg) {
+        ui_modal_dialog_close(g_powder_dlg);
+        g_powder_dlg = nullptr;
+    }
+}
+
+/* 缺粉时后端已自行暂停，这里只负责提示与「补完了，继续」的入口。
+ * 挂 lv_layer_top()：缺粉随时可能来，而打印中用户可能正待在别的标签页，
+ * g_overlay 只覆盖首页那一屏。 */
+void show_powder_dialog(void)
+{
+    if(g_powder_dlg) {
+        return;
+    }
+    auto *dlg = static_cast<ui_modal_dialog_t *>(std::calloc(1, sizeof(ui_modal_dialog_t)));
+    if(!dlg) {
+        return;
+    }
+
+    lv_obj_t *backdrop = lv_obj_create(lv_layer_top());
+    lv_obj_remove_style_all(backdrop);
+    lv_obj_set_size(backdrop, LV_PCT(100), LV_PCT(100));
+    lv_obj_set_style_bg_color(backdrop, lv_color_black(), 0);
+    lv_obj_set_style_bg_opa(backdrop, USER_DLG_BACKDROP_OPA, 0);
+    lv_obj_clear_flag(backdrop, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(backdrop, LV_OBJ_FLAG_CLICKABLE);
+    dlg->root = backdrop;
+
+    const int32_t card_w = USER_DLG_W;
+    lv_obj_t *card = lv_obj_create(backdrop);
+    lv_obj_remove_style_all(card);
+    lv_obj_set_width(card, card_w);
+    lv_obj_set_height(card, LV_SIZE_CONTENT);
+    lv_obj_set_style_bg_color(card, user_color_panel, 0);
+    lv_obj_set_style_bg_opa(card, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(card, USER_DLG_RADIUS, 0);
+    lv_obj_set_style_border_width(card, 1, 0);
+    lv_obj_set_style_border_color(card, user_color_divider, 0);
+    lv_obj_set_style_clip_corner(card, true, 0);
+    lv_obj_set_style_shadow_width(card, 60, 0);
+    lv_obj_set_style_shadow_color(card, lv_color_black(), 0);
+    lv_obj_set_style_shadow_opa(card, LV_OPA_60, 0);
+    lv_obj_set_style_pad_all(card, 0, 0);
+    lv_obj_set_style_pad_row(card, 0, 0);
+    lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(card, LV_FLEX_ALIGN_START,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_center(card);
+    dlg->card = card;
+
+    /* 顶部满宽示意图位（高宽比同门弹窗的 321/496），暂用占位文案 */
+    lv_obj_t *img_box = lv_obj_create(card);
+    lv_obj_remove_style_all(img_box);
+    lv_obj_set_size(img_box, card_w, card_w * 321 / 496);
+    lv_obj_set_style_bg_color(img_box, lv_color_black(), 0);
+    lv_obj_set_style_bg_opa(img_box, LV_OPA_20, 0);
+    lv_obj_clear_flag(img_box, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_t *ph = lv_label_create(img_box);
+    lv_label_set_text(ph, "Powder bin refill guide");
+    lv_obj_set_style_text_color(ph, user_color_text, 0);
+    lv_obj_set_style_text_opa(ph, LV_OPA_30, 0);
+    lv_obj_set_style_text_font(ph, user_font_text(), 0);
+    lv_obj_center(ph);
+
+    lv_obj_t *content = lv_obj_create(card);
+    lv_obj_remove_style_all(content);
+    lv_obj_set_width(content, LV_PCT(100));
+    lv_obj_set_height(content, LV_SIZE_CONTENT);
+    lv_obj_set_style_pad_all(content, USER_DLG_PAD, 0);
+    lv_obj_set_style_pad_row(content, USER_PAD_SM, 0);
+    lv_obj_set_style_bg_opa(content, LV_OPA_TRANSP, 0);
+    lv_obj_set_flex_flow(content, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(content, LV_FLEX_ALIGN_START,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_clear_flag(content, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *title = lv_label_create(content);
+    lv_label_set_text(title, "Powder bin is empty");
+    lv_obj_set_style_text_color(title, user_color_text, 0);
+    lv_obj_set_style_text_font(title, user_font_value(), 0);
+    lv_obj_set_style_text_align(title, LV_TEXT_ALIGN_CENTER, 0);
+
+    lv_obj_t *sub = lv_label_create(content);
+    lv_label_set_long_mode(sub, LV_LABEL_LONG_MODE_WRAP);
+    lv_obj_set_width(sub, LV_PCT(100));
+    lv_label_set_text(sub, "Refill the powder bin to continue");
+    lv_obj_set_style_text_color(sub, user_color_text_dim, 0);
+    lv_obj_set_style_text_font(sub, user_font_caption(), 0);
+    lv_obj_set_style_text_align(sub, LV_TEXT_ALIGN_CENTER, 0);
+
+    make_dlg_wide_button(content, "Refilled, resume printing", true,
+                         on_powder_refilled);
+    make_dlg_wide_ghost_button(content, "Cancel", on_powder_cancel);
+
+    g_powder_dlg = dlg;
+    lv_obj_set_style_opa(backdrop, LV_OPA_TRANSP, 0);
+    lv_obj_fade_in(backdrop, 180, 0);
+    lv_obj_move_foreground(backdrop);
+}
+
+/* 「我已补粉，继续打印」：只发恢复请求。粉仓仍空的话后端会再暂停并再推一次
+ * Powder_Low，本弹窗随之重开——判空在后端，UI 不自己猜。 */
+void on_powder_refilled(lv_event_t * /*e*/)
+{
+    close_powder_dlg();
+    ui::UiMsgProxy::instance().send_print_resume();
+}
+
+/* 「取消」只关窗，保持暂停态。之后用户点底部播放钮恢复，缺粉则再弹一次。 */
+void on_powder_cancel(lv_event_t * /*e*/)
+{
+    close_powder_dlg();
+}
+
+/* Powder_Low 从总线线程来，建窗必须回到 LVGL 线程 */
+void on_powder_low_async(void * /*user*/)
+{
+    if(g_state != CONTROL_STATE_PRINTING) {
+        return;
+    }
+    show_powder_dialog();
+}
+
 /* 文件大小（字节）→ 人类可读字符串 */
 void format_file_size(char *buf, size_t n, uint32_t bytes)
 {
@@ -1704,40 +1873,9 @@ void on_delete_confirm(lv_event_t * /*e*/)
     request_fs_dir_open(FileTab::Local);
 }
 
-/* 通用二次确认弹窗页脚按钮（稿 2567:5555 的「弹窗副按钮 / 弹窗重点按钮」）：
- *   cancel  = 4% 白填充、无描边；confirm = 填充色（危险/强调）。
- * 两枚都是 USER_BTN_RADIUS 圆角矩形（不是全圆胶囊），并等分整行宽度——稿上
- * 两枚各 212、间距 24，正好铺满 496 卡片的内宽，所以用 flex_grow 而不是定宽。 */
-lv_obj_t *make_confirm_footer_btn(lv_obj_t *footer, const char *text,
-                                  bool filled, lv_color_t fill_color,
-                                  lv_event_cb_t cb)
-{
-    lv_obj_t *btn = lv_button_create(footer);
-    lv_obj_remove_style_all(btn);
-    lv_obj_set_flex_grow(btn, 1);
-    lv_obj_set_height(btn, USER_DLG_FOOTER_BTN_H);
-    lv_obj_set_style_radius(btn, USER_BTN_RADIUS, 0);
-    if(filled) {
-        lv_obj_set_style_bg_color(btn, fill_color, 0);
-        lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, 0);
-        lv_obj_set_style_bg_opa(btn, LV_OPA_80, LV_STATE_PRESSED);
-    } else {
-        /* 稿是 rgba(255,255,255,0.04)：白底压到 4%（LV_OPA 里约 10/255） */
-        lv_obj_set_style_bg_color(btn, user_color_text, 0);
-        lv_obj_set_style_bg_opa(btn, 10, 0);
-        lv_obj_set_style_bg_opa(btn, 30, LV_STATE_PRESSED);
-    }
-    lv_obj_add_event_cb(btn, cb, LV_EVENT_CLICKED, nullptr);
-    lv_obj_t *lbl = lv_label_create(btn);
-    lv_label_set_text(lbl, text);
-    lv_obj_set_style_text_color(lbl, user_color_text, 0);
-    lv_obj_set_style_text_font(lbl, user_font_text(), 0);
-    lv_obj_center(lbl);
-    return btn;
-}
-
 /* 通用二次确认弹窗（用户层 ui_modal_dialog 风格）：取消(4% 白底) + 确认(填充色)。
- * 删除文件 / 终止打印共用，保证两处风格一致。 */
+ * 删除文件 / 终止打印共用，保证两处风格一致；页脚两枚按钮的样式已提到
+ * ui_user_make_confirm_footer_btn()，与打印历史页的批量删除确认同源。 */
 void open_user_confirm_dialog(lv_obj_t *parent, const char *title, const char *body,
                               const char *cancel_text, const char *confirm_text,
                               lv_color_t confirm_color,
@@ -1757,10 +1895,10 @@ void open_user_confirm_dialog(lv_obj_t *parent, const char *title, const char *b
     lv_obj_set_width(body_lbl, LV_PCT(100));
     lv_obj_set_style_text_align(body_lbl, LV_TEXT_ALIGN_CENTER, 0);
 
-    make_confirm_footer_btn(g_confirm_dlg->footer, cancel_text, false,
-                            user_color_panel_alt, cancel_cb);
-    make_confirm_footer_btn(g_confirm_dlg->footer, confirm_text, true,
-                            confirm_color, confirm_cb);
+    ui_user_make_confirm_footer_btn(g_confirm_dlg->footer, cancel_text, false,
+                                    user_color_panel_alt, cancel_cb, nullptr);
+    ui_user_make_confirm_footer_btn(g_confirm_dlg->footer, confirm_text, true,
+                                    confirm_color, confirm_cb, nullptr);
 }
 
 /* 删除二次确认弹窗（稿 2567:5555）：标题问句 + 一句不可撤销说明 + 取消/删除 */

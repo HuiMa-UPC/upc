@@ -21,7 +21,7 @@ extern "C" {
 #endif
 
 /* 前四项与后端 EnvSnapshotPayload.status 数值对应（见 .cpp 里的强转），
- * 后两项仅由前端在打印结果页本地置位，后端不会推送。 */
+ * 其后各项仅由前端在打印态/结果态本地置位，后端不会推送。 */
 typedef enum {
     UI_DEVICE_STATUS_IDLE = 0,
     UI_DEVICE_STATUS_READY,
@@ -29,6 +29,9 @@ typedef enum {
     UI_DEVICE_STATUS_ERROR,
     UI_DEVICE_STATUS_PRINT_DONE,       /**< 打印完成（状态点绿） */
     UI_DEVICE_STATUS_PRINT_TERMINATED, /**< 打印终止（状态点红） */
+    UI_DEVICE_STATUS_PAUSED,           /**< 工作暂停（状态点主色蓝） */
+    UI_DEVICE_STATUS_PURIFYING,        /**< 吹粉中（状态点主色蓝） */
+    UI_DEVICE_STATUS_PURIFY_DONE,      /**< 吹粉完成（状态点主色蓝） */
 } ui_device_status_t;
 
 typedef struct {

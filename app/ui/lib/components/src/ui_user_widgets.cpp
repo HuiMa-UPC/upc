@@ -146,6 +146,131 @@ lv_obj_t *ui_user_make_divider_line(lv_obj_t *parent, lv_coord_t width)
     return line;
 }
 
+lv_obj_t *ui_user_make_divider_vline(lv_obj_t *parent, lv_coord_t height)
+{
+    lv_obj_t *line = lv_obj_create(parent);
+    lv_obj_remove_style_all(line);
+    lv_obj_set_size(line, 1, height);
+    lv_obj_set_style_bg_color(line, user_color_divider, 0);
+    lv_obj_set_style_bg_opa(line, LV_OPA_COVER, 0);
+    return line;
+}
+
+lv_obj_t *ui_user_make_icon_img(lv_obj_t *parent, const lv_image_dsc_t *src,
+                                int32_t target, lv_color_t color)
+{
+    lv_obj_t *box = lv_obj_create(parent);
+    lv_obj_remove_style_all(box);
+    lv_obj_set_size(box, target, target);
+    lv_obj_set_style_bg_opa(box, LV_OPA_TRANSP, 0);
+    lv_obj_remove_flag(box, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_remove_flag(box, LV_OBJ_FLAG_SCROLLABLE);
+    if(!src) {
+        return box;
+    }
+
+    const int32_t src_sz = static_cast<int32_t>(src->header.w);
+    lv_obj_t *img = lv_image_create(box);
+    lv_image_set_src(img, src);
+    lv_obj_set_style_image_recolor(img, color, 0);
+    lv_obj_set_style_image_recolor_opa(img, LV_OPA_COVER, 0);
+    lv_obj_remove_flag(img, LV_OBJ_FLAG_CLICKABLE);
+    /* 缩放绕中心：pivot 不挪到中心的话 lv_image_set_scale 会以左上角为基准，
+     * 图会偏出固定盒。 */
+    lv_image_set_pivot(img, src_sz / 2, src_sz / 2);
+    if(src_sz > 0 && target != src_sz) {
+        lv_image_set_scale(img, static_cast<uint32_t>(256 * target / src_sz));
+    }
+    lv_obj_center(img);
+    return box;
+}
+
+lv_obj_t *ui_user_make_primary_pill_btn(lv_obj_t *parent, const lv_image_dsc_t *icon,
+                                        const char *text, lv_event_cb_t cb)
+{
+    lv_obj_t *btn = lv_button_create(parent);
+    lv_obj_remove_style_all(btn);
+    /* 比通用主按钮再高一点（×5/4，贴近 Figma 64px 胶囊），避免过扁。 */
+    lv_obj_set_height(btn, USER_BTN_PRIMARY_H * 5 / 4);
+    lv_obj_set_width(btn, LV_SIZE_CONTENT);
+    /* 蓝色对角(45°)渐变（对齐 Figma #4054FD → #4D80EE），带少量半透明玻璃感，
+     * 与首页滑动解锁材质统一。bg_grad 只存指针，故渐变描述符用函数内 static。 */
+    static lv_grad_dsc_t s_grad;
+    static bool s_grad_ready = false;
+    if(!s_grad_ready) {
+        const lv_color_t cols[2] = { lv_color_hex(0x4054FD), lv_color_hex(0x4D80EE) };
+        const lv_opa_t   opa[2]  = { LV_OPA_COVER, LV_OPA_COVER };
+        const uint8_t    frac[2] = { 0, 255 };
+        lv_grad_init_stops(&s_grad, cols, opa, frac, 2);
+        lv_grad_linear_init(&s_grad, LV_GRAD_LEFT, LV_GRAD_TOP,
+                            LV_GRAD_RIGHT, LV_GRAD_BOTTOM, LV_GRAD_EXTEND_PAD);
+        s_grad_ready = true;
+    }
+    lv_obj_set_style_bg_color(btn, lv_color_hex(0x4054FD), 0);
+    lv_obj_set_style_bg_grad(btn, &s_grad, 0);
+    lv_obj_set_style_bg_opa(btn, LV_OPA_90, 0);              /* 保留一点通透 */
+    lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, LV_STATE_PRESSED);
+    lv_obj_set_style_radius(btn, LV_RADIUS_CIRCLE, 0);       /* 胶囊 */
+    /* 玻璃亮边（近似 Figma 白色渐变描边）+ 柔和蓝色投影 */
+    lv_obj_set_style_border_width(btn, 1, 0);
+    lv_obj_set_style_border_color(btn, lv_color_white(), 0);
+    lv_obj_set_style_border_opa(btn, LV_OPA_40, 0);
+    lv_obj_set_style_shadow_width(btn, 16, 0);
+    lv_obj_set_style_shadow_ofs_y(btn, 4, 0);
+    lv_obj_set_style_shadow_color(btn, lv_color_hex(0x4054FD), 0);
+    lv_obj_set_style_shadow_opa(btn, LV_OPA_40, 0);
+    lv_obj_set_style_pad_hor(btn, USER_PAD, 0);
+    lv_obj_set_style_pad_ver(btn, USER_PAD_SM, 0);
+    lv_obj_set_style_pad_column(btn, USER_PAD_SM, 0);
+    lv_obj_set_flex_flow(btn, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(btn, LV_FLEX_ALIGN_CENTER,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    if(cb) {
+        lv_obj_add_event_cb(btn, cb, LV_EVENT_CLICKED, nullptr);
+    }
+
+    if(icon) {
+        ui_user_make_icon_img(btn, icon, USER_BTN_PRIMARY_H * 5 / 8, lv_color_white());
+    }
+
+    lv_obj_t *lbl = lv_label_create(btn);
+    lv_label_set_text(lbl, text);
+    lv_obj_set_style_text_color(lbl, lv_color_white(), 0);
+    lv_obj_set_style_text_font(lbl, user_font_text(), 0);
+    return btn;
+}
+
+lv_obj_t *ui_user_make_confirm_footer_btn(lv_obj_t *footer, const char *text,
+                                          bool filled, lv_color_t fill_color,
+                                          lv_event_cb_t cb, void *user_data)
+{
+    lv_obj_t *btn = lv_button_create(footer);
+    lv_obj_remove_style_all(btn);
+    /* 稿上两枚各 212、间距 24，正好铺满 496 卡片的内宽，所以用 flex_grow 而不是定宽 */
+    lv_obj_set_flex_grow(btn, 1);
+    lv_obj_set_height(btn, USER_DLG_FOOTER_BTN_H);
+    lv_obj_set_style_radius(btn, USER_BTN_RADIUS, 0);
+    if(filled) {
+        lv_obj_set_style_bg_color(btn, fill_color, 0);
+        lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, 0);
+        lv_obj_set_style_bg_opa(btn, LV_OPA_80, LV_STATE_PRESSED);
+    } else {
+        /* 稿是 rgba(255,255,255,0.04)：白底压到 4%（LV_OPA 里约 10/255） */
+        lv_obj_set_style_bg_color(btn, user_color_text, 0);
+        lv_obj_set_style_bg_opa(btn, 10, 0);
+        lv_obj_set_style_bg_opa(btn, 30, LV_STATE_PRESSED);
+    }
+    if(cb) {
+        lv_obj_add_event_cb(btn, cb, LV_EVENT_CLICKED, user_data);
+    }
+    lv_obj_t *lbl = lv_label_create(btn);
+    lv_label_set_text(lbl, text);
+    lv_obj_set_style_text_color(lbl, user_color_text, 0);
+    lv_obj_set_style_text_font(lbl, user_font_text(), 0);
+    lv_obj_center(lbl);
+    return btn;
+}
+
 lv_obj_t *ui_user_make_metric_block(lv_obj_t *parent, const char *caption,
                                     lv_text_align_t text_align,
                                     lv_obj_t **out_value)

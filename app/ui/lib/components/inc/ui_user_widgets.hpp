@@ -48,6 +48,36 @@ lv_obj_t *ui_user_make_frosted_card(lv_obj_t *parent, bool flex_grow);
 /** 装饰横线（1px） */
 lv_obj_t *ui_user_make_divider_line(lv_obj_t *parent, lv_coord_t width);
 
+/** 装饰竖线（1px 宽 × height 高）：卡片指标之间的分隔（稿 4447:6189） */
+lv_obj_t *ui_user_make_divider_vline(lv_obj_t *parent, lv_coord_t height);
+
+/**
+ * A8 图标盒：外层固定 target×target 占位（避免大尺寸源图在 flex 里撑开父容器），
+ * 内层图片 recolor 成 color 并等比缩放到 target。
+ * 源图边长从图头取，24/32/40/72/96 各档通吃。
+ */
+lv_obj_t *ui_user_make_icon_img(lv_obj_t *parent, const lv_image_dsc_t *src,
+                                int32_t target, lv_color_t color);
+
+/**
+ * 主按钮胶囊：蓝色对角渐变 + 白色亮边 + 柔和蓝投影 + 可选图标（稿「Button / On Light」）。
+ * 首页 "Start Print" 与打印历史空态的 "Start Print" 共用，保证两处是同一枚按钮。
+ * @param icon 可为 NULL（纯文字按钮）
+ */
+lv_obj_t *ui_user_make_primary_pill_btn(lv_obj_t *parent, const lv_image_dsc_t *icon,
+                                        const char *text, lv_event_cb_t cb);
+
+/**
+ * 二次确认弹窗页脚按钮（稿 2567:5555 的「弹窗副按钮 / 弹窗重点按钮」）：
+ *   filled=true  → fill_color 填充的重点按钮；
+ *   filled=false → 4% 白填充、无描边的副按钮。
+ * 两种都是 USER_BTN_RADIUS 圆角矩形（不是全圆胶囊），并用 flex_grow 等分整行宽度。
+ * 共用方：选文件页删除确认、终止打印确认、打印历史批量删除确认。
+ */
+lv_obj_t *ui_user_make_confirm_footer_btn(lv_obj_t *footer, const char *text,
+                                          bool filled, lv_color_t fill_color,
+                                          lv_event_cb_t cb, void *user_data);
+
 /** 首页数值块：横线 + 标签 + 大数字；out_value 可接刷新指针 */
 lv_obj_t *ui_user_make_metric_block(lv_obj_t *parent, const char *caption,
                                     lv_text_align_t text_align,

@@ -28,6 +28,7 @@ using FsDirCb          = std::function<void(const middleware::FileEntryPayload* 
 using PrintProgressCb  = std::function<void(const middleware::PrintProgressPayload&)>;
 using PrintTerminateDoneCb = std::function<void()>;
 using PrintPauseDoneCb = std::function<void(bool paused)>;
+using PrintPowderLowCb = std::function<void()>;
 using SupplyStatusCb   = std::function<void(const middleware::SupplyStatusPayload&)>;
 using PrintPrepareDoneCb = std::function<void(bool ok)>;
 using McuOtaStatusCb   = std::function<void(const middleware::McuOtaStatusPayload&)>;
@@ -99,6 +100,12 @@ public:
     void send_print_pause();
     void send_print_resume();
     void register_print_pause_done(PrintPauseDoneCb cb);
+
+    /**
+     * 打印中缺粉（粉量位 bit0/bit1 同时为 0）。后端已自行暂停并另发一条
+     * APP_Print_Pause_Rsp(paused=1)，本回调只负责弹补粉弹窗。
+     */
+    void register_print_powder_low(PrintPowderLowCb cb);
 
     /** D1 X / 二次确认 Cancel：退出解析线程并清空 RingBuffer */
     void send_parser_exit();
@@ -178,6 +185,7 @@ private:
     PrintProgressCb  print_progress_cb_;
     PrintTerminateDoneCb print_terminate_done_cb_;
     PrintPauseDoneCb print_pause_done_cb_;
+    PrintPowderLowCb print_powder_low_cb_;
     SupplyStatusCb   supply_status_cb_;
     PrintPrepareDoneCb print_prepare_done_cb_;
     McuOtaStatusCb   mcu_ota_status_cb_;

@@ -32,6 +32,11 @@ typedef struct {
     int32_t               track_h;     /**< 轨道高，<=0 用 USER_SLIDE_H */
     bool                  custom_accent; /**< true 时用 accent_color 替代默认主色 */
     lv_color_t            accent_color;  /**< knob/解锁文字配色（custom_accent=true 生效） */
+    /** knob 中心图标（A8 掩膜），NULL = 默认的 ic_door_open。 */
+    const lv_image_dsc_t *knob_icon;
+    /** true = 不画玻璃轨道底（打印态复合控件里那条底衬由调用方统一画，
+     *  轨道自己再压一层半透明黑会让胶囊段比相邻的圆钮底衬明显更深）。 */
+    bool                  transparent_track;
 } ui_slide_unlock_cfg_t;
 
 /** 在 parent 上创建一个滑动解锁条；返回句柄供后续销毁/查询用 */
@@ -43,6 +48,12 @@ lv_obj_t *ui_slide_unlock_get_root(ui_slide_unlock_t *self);
 
 /** 复位：knob 弹回起点、重新可滑（用于可重复触发的场景，如首页开门） */
 void ui_slide_unlock_reset(ui_slide_unlock_t *self);
+
+/**
+ * 改静止态提示文字（打印态取件条要在「SWIPE TO COLLECT」和吹粉中文案之间切换）。
+ * text 必须是长期有效的字面量——控件只存指针不拷贝。当前正处于静止态时立即生效。
+ */
+void ui_slide_unlock_set_hint(ui_slide_unlock_t *self, const char *text);
 
 /** 销毁控件（root 会被 lv_obj_delete） */
 void ui_slide_unlock_destroy(ui_slide_unlock_t *self);

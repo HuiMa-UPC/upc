@@ -169,6 +169,14 @@ void UiMsgProxy::init()
         }));
 
     subs_.push_back(bus.subscribe(
+        middleware::MsgType::APP_Print_Powder_Low_Ntf, middleware::ModuleId::UI,
+        [this](const middleware::Message&) {
+            if (print_powder_low_cb_) {
+                print_powder_low_cb_();
+            }
+        }));
+
+    subs_.push_back(bus.subscribe(
         middleware::MsgType::APP_Supply_Status_Rsp, middleware::ModuleId::UI,
         [this](const middleware::Message& msg) {
             middleware::SupplyStatusPayload p{};
@@ -669,6 +677,11 @@ void UiMsgProxy::send_print_resume()
                             middleware::ModuleId::UI,
                             middleware::ModuleId::APP_GLAVO);
     middleware::MsgPort::instance().publish_async(msg);
+}
+
+void UiMsgProxy::register_print_powder_low(PrintPowderLowCb cb)
+{
+    print_powder_low_cb_ = std::move(cb);
 }
 
 void UiMsgProxy::send_parser_exit()

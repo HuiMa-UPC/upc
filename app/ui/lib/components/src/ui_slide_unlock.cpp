@@ -255,12 +255,14 @@ ui_slide_unlock_t *ui_slide_unlock_create(lv_obj_t *parent,
     lv_obj_t *track = lv_obj_create(parent);
     lv_obj_remove_style_all(track);
     lv_obj_set_size(track, track_w, track_h);
-    lv_obj_set_style_bg_color(track, lv_color_black(), 0);
-    lv_obj_set_style_bg_opa(track, LV_OPA_50, 0);
     lv_obj_set_style_radius(track, LV_RADIUS_CIRCLE, 0);
-    lv_obj_set_style_border_width(track, 1, 0);
-    lv_obj_set_style_border_color(track, lv_color_white(), 0);
-    lv_obj_set_style_border_opa(track, LV_OPA_10, 0);
+    if(!cfg->transparent_track) {
+        lv_obj_set_style_bg_color(track, lv_color_black(), 0);
+        lv_obj_set_style_bg_opa(track, LV_OPA_50, 0);
+        lv_obj_set_style_border_width(track, 1, 0);
+        lv_obj_set_style_border_color(track, lv_color_white(), 0);
+        lv_obj_set_style_border_opa(track, LV_OPA_10, 0);
+    }
     lv_obj_set_style_clip_corner(track, true, 0);
     lv_obj_remove_flag(track, LV_OBJ_FLAG_SCROLLABLE);
     self->root = track;
@@ -340,14 +342,16 @@ ui_slide_unlock_t *ui_slide_unlock_create(lv_obj_t *parent,
     }
 
     /* 圆头中心"开门"图标（A8 掩膜 recolor 白色，等比缩放到约 55% 直径）。 */
+    const lv_image_dsc_t *knob_src = cfg->knob_icon ? cfg->knob_icon : &ic_door_open;
+    const int32_t knob_src_sz = (int32_t)knob_src->header.w;
     lv_obj_t *icon = lv_image_create(head);
-    lv_image_set_src(icon, &ic_door_open);
+    lv_image_set_src(icon, knob_src);
     lv_obj_set_style_image_recolor(icon, lv_color_white(), 0);
     lv_obj_set_style_image_recolor_opa(icon, LV_OPA_COVER, 0);
     lv_obj_remove_flag(icon, LV_OBJ_FLAG_CLICKABLE);
     const int32_t icon_target = knob_sz * 11 / 20;   /* ~0.55 × 直径 */
-    lv_image_set_pivot(icon, 48, 48);                /* 96×96 源图中心 */
-    lv_image_set_scale(icon, (uint32_t)(256 * icon_target / 96));
+    lv_image_set_pivot(icon, knob_src_sz / 2, knob_src_sz / 2);
+    lv_image_set_scale(icon, (uint32_t)(256 * icon_target / knob_src_sz));
     lv_obj_center(icon);
 
     /* ---- 提示行（文字 + 箭头），置于最上层，末端可覆盖在红条上 ---- */
@@ -389,6 +393,18 @@ ui_slide_unlock_t *ui_slide_unlock_create(lv_obj_t *parent,
 lv_obj_t *ui_slide_unlock_get_root(ui_slide_unlock_t *self)
 {
     return self ? self->root : nullptr;
+}
+
+void ui_slide_unlock_set_hint(ui_slide_unlock_t *self, const char *text)
+{
+    if(!self || !text) {
+        return;
+    }
+    self->rest_text = text;
+    /* 只有静止态在显示这行字；拖动/到底两态的文案另有其人，等回弹时自然刷新。 */
+    if(self->vstate == VST_REST && self->hint) {
+        lv_label_set_text(self->hint, text);
+    }
 }
 
 void ui_slide_unlock_reset(ui_slide_unlock_t *self)

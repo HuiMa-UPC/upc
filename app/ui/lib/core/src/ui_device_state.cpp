@@ -75,10 +75,13 @@ const ui_device_snapshot_t *ui_device_state_get(void)
 void ui_device_state_set_status(ui_device_status_t s)
 {
     g_snap.status = s;
-    /* 打印中/打印结果页的状态由前端说了算，锁住不让环境推送覆盖 */
+    /* 打印中/暂停/结果态/吹粉的状态由前端说了算，锁住不让环境推送覆盖 */
     g_status_lock = (s == UI_DEVICE_STATUS_PRINTING ||
                      s == UI_DEVICE_STATUS_PRINT_DONE ||
-                     s == UI_DEVICE_STATUS_PRINT_TERMINATED);
+                     s == UI_DEVICE_STATUS_PRINT_TERMINATED ||
+                     s == UI_DEVICE_STATUS_PAUSED ||
+                     s == UI_DEVICE_STATUS_PURIFYING ||
+                     s == UI_DEVICE_STATUS_PURIFY_DONE);
     notify_observers();
 }
 
@@ -106,6 +109,9 @@ const char *ui_device_status_text(ui_device_status_t s)
     case UI_DEVICE_STATUS_ERROR:    return "Error";
     case UI_DEVICE_STATUS_PRINT_DONE:       return "Print Complete";
     case UI_DEVICE_STATUS_PRINT_TERMINATED: return "Print Terminated";
+    case UI_DEVICE_STATUS_PAUSED:           return "Paused";
+    case UI_DEVICE_STATUS_PURIFYING:        return "Air Purifying";
+    case UI_DEVICE_STATUS_PURIFY_DONE:      return "Purify Complete";
     case UI_DEVICE_STATUS_IDLE:
     default:                        return "Idle";
     }
@@ -119,6 +125,10 @@ lv_color_t ui_device_status_color(ui_device_status_t s)
     case UI_DEVICE_STATUS_READY:    return user_color_status_ok;
     case UI_DEVICE_STATUS_PRINT_DONE:       return user_color_status_ok;
     case UI_DEVICE_STATUS_PRINT_TERMINATED: return user_color_status_err;
+    /* 暂停与吹粉都属于"设备还在这单活儿里"，跟 Printing 同用主色蓝 */
+    case UI_DEVICE_STATUS_PAUSED:
+    case UI_DEVICE_STATUS_PURIFYING:
+    case UI_DEVICE_STATUS_PURIFY_DONE:      return user_color_accent;
     case UI_DEVICE_STATUS_IDLE:
     default:                        return user_color_text_dim;
     }

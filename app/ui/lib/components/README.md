@@ -10,7 +10,7 @@
 | `ui_user_widgets` | 用户风通用块：磨砂卡片、数值块、耗材行、分段控件、文件 meta 格式化等 |
 | `ui_user_skeleton` | Tab 占位页（标题 + 卡片 + 提示文案） |
 | `ui_modal_dialog` | 标准弹窗壳（标题、body、footer） |
-| `ui_slide_unlock` | 滑动解锁条 |
+| `ui_slide_unlock` | 滑动解锁条（可配 knob 图标 / 透明轨道；`ui_slide_unlock_set_hint()` 换提示文案） |
 | `ui_board_anim` | 打印板插入动画 |
 | `ui_arc_spinner` | 圆弧加载动画 |
 | `ui_keyboard` | 全局软键盘 |
@@ -27,6 +27,14 @@ lv_obj_t *card = ui_user_make_frosted_card(parent, true);
 
 分段控件（`ui_user_make_segmented`）支持「无选中」：初值/入参传 `UI_USER_SEG_NONE`
 则全段置灰，读回也是该哨兵。用于必须由用户显式选择的场景（如打印板厚度）。
+
+跨页共用的三枚（都因为「≥2 处使用」才从页面里提上来）：
+
+| 构件 | 稿 | 共用方 |
+|------|----|--------|
+| `ui_user_make_icon_img` | — | A8 图标盒：固定占位 + recolor + 等比缩放。首页按钮图标、历史页卡片指标/角标/空态插画 |
+| `ui_user_make_primary_pill_btn` | 「Button / On Light」 | 蓝色对角渐变胶囊：首页 `Start Print`、历史页空态 `Start Print` |
+| `ui_user_make_confirm_footer_btn` | `2567:5555` | 确认弹窗页脚按钮（`USER_BTN_RADIUS` 圆角矩形，非胶囊）：删除文件 / 终止打印 / 历史页批量删除 |
 
 ## 原则
 

@@ -167,6 +167,26 @@ typedef struct {
     int32_t user_print_terminate_w;
     int32_t user_print_terminate_h;
 
+    /* ---- 打印态浮层（稿 3588:8735 / 3589:9992 一套六态，按 1280 稿折算三档）----
+     * 六个态（打印中/暂停/中断/完成/吹粉中/吹粉完成）共用一张 stats-card、一条
+     * 提示条、一组底部复合控件，尺寸全部走这几个常量，不写死坐标。 */
+    int32_t user_print_card_w;    /**< stats-card 宽（稿 416） */
+    int32_t user_print_thumb_sz;  /**< stats-card 左侧缩略图边长（稿 100） */
+    int32_t user_print_notice_h;  /**< 卡片上方常驻提示条高（稿 78） */
+    int32_t user_print_ctl_btn;   /**< 底部复合控件里的圆钮直径（稿 64；玻璃底衬直径 = 此值 + PAD_SM） */
+    int32_t user_print_pill_w;    /**< 底部复合控件的胶囊宽（稿 400，即滑动取件轨道宽） */
+    int32_t user_print_badge_sz;  /**< 徽标行状态图标边长（稿 16） */
+    int32_t user_print_prog_h;    /**< 卡片内进度条高（稿 8） */
+
+    /* ---- 打印历史页（稿 4366:5400 一套，按 1280 稿等比折算三档）---- */
+    int32_t user_hist_tab_h;      /**< Tab 行高（同行右侧 Manage/多选按钮也用此高） */
+    int32_t user_hist_card_h;     /**< 历史卡片高；左侧缩略图与卡等高、宽为其 8/5 */
+    int32_t user_hist_banner_h;   /**< 存储告警横幅高 */
+    int32_t user_hist_bar_w;      /**< 顶部存储容量进度条轨道宽 */
+    int32_t user_hist_bar_h;      /**< 顶部存储容量进度条轨道高 */
+    int32_t user_hist_check_sz;   /**< 管理模式复选框边长 */
+    int32_t user_hist_btn_w;      /**< Tab 行右侧按钮宽（Manage/Delete/Select All/Cancel） */
+
     /* ---- 字体（开发者 Shell） ---- */
     const lv_font_t *font_body;
     const lv_font_t *font_form;
@@ -288,6 +308,22 @@ extern const ui_theme_t *g_ui;
 #define USER_PRINT_BAR_GAP          (g_ui->user_print_bar_gap)
 #define USER_PRINT_TERMINATE_W      (g_ui->user_print_terminate_w)
 #define USER_PRINT_TERMINATE_H      (g_ui->user_print_terminate_h)
+
+#define USER_PRINT_CARD_W           (g_ui->user_print_card_w)
+#define USER_PRINT_THUMB_SZ         (g_ui->user_print_thumb_sz)
+#define USER_PRINT_NOTICE_H         (g_ui->user_print_notice_h)
+#define USER_PRINT_CTL_BTN          (g_ui->user_print_ctl_btn)
+#define USER_PRINT_PILL_W           (g_ui->user_print_pill_w)
+#define USER_PRINT_BADGE_SZ         (g_ui->user_print_badge_sz)
+#define USER_PRINT_PROG_H           (g_ui->user_print_prog_h)
+
+#define USER_HIST_TAB_H             (g_ui->user_hist_tab_h)
+#define USER_HIST_CARD_H            (g_ui->user_hist_card_h)
+#define USER_HIST_BANNER_H          (g_ui->user_hist_banner_h)
+#define USER_HIST_BAR_W             (g_ui->user_hist_bar_w)
+#define USER_HIST_BAR_H             (g_ui->user_hist_bar_h)
+#define USER_HIST_CHECK_SZ          (g_ui->user_hist_check_sz)
+#define USER_HIST_BTN_W             (g_ui->user_hist_btn_w)
 
 /**
  * 初始化主题：根据当前 lv_display 实际分辨率挑选 profile，再初始化所有 lv_style。

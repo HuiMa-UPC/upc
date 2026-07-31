@@ -141,6 +141,24 @@ static const ui_theme_t s_theme_1920 = {
     /* user_print_terminate_w     */ 180,
     /* user_print_terminate_h     */ 64,
 
+    /* 打印态浮层（稿 1280 档 ×1.5） */
+    /* user_print_card_w          */ 624,
+    /* user_print_thumb_sz        */ 135,
+    /* user_print_notice_h        */ 105,
+    /* user_print_ctl_btn         */ 87,
+    /* user_print_pill_w          */ 600,
+    /* user_print_badge_sz        */ 24,
+    /* user_print_prog_h          */ 12,
+
+    /* 打印历史页（稿 1280 档 ×1.5） */
+    /* user_hist_tab_h            */ 60,
+    /* user_hist_card_h           */ 240,
+    /* user_hist_banner_h         */ 63,
+    /* user_hist_bar_w            */ 240,
+    /* user_hist_bar_h            */ 12,
+    /* user_hist_check_sz         */ 36,
+    /* user_hist_btn_w            */ 150,
+
     /* 字体（dev） */
     /* font_body          */ &lv_font_montserrat_32,
     /* font_form          */ &lv_font_montserrat_24,
@@ -256,6 +274,25 @@ static const ui_theme_t s_theme_1280 = {
     /* user_print_bar_gap         */ 22,
     /* user_print_terminate_w     */ 128,
     /* user_print_terminate_h     */ 44,
+
+    /* 打印态浮层（稿 3588:8735 原生 1280 稿；横向直接取稿值，
+     * 纵向按屏高 720/800 折 0.9） */
+    /* user_print_card_w          */ 416,
+    /* user_print_thumb_sz        */ 90,
+    /* user_print_notice_h        */ 70,
+    /* user_print_ctl_btn         */ 58,
+    /* user_print_pill_w          */ 400,
+    /* user_print_badge_sz        */ 16,
+    /* user_print_prog_h          */ 8,
+
+    /* 打印历史页（稿 4366:5400 原生 1280 档，直接取稿值） */
+    /* user_hist_tab_h            */ 40,
+    /* user_hist_card_h           */ 160,
+    /* user_hist_banner_h         */ 42,
+    /* user_hist_bar_w            */ 160,
+    /* user_hist_bar_h            */ 8,
+    /* user_hist_check_sz         */ 24,
+    /* user_hist_btn_w            */ 100,
 
     /* 字体（dev） */
     /* font_body          */ &lv_font_montserrat_24,
@@ -378,6 +415,24 @@ static const ui_theme_t s_theme_1024 = {
     /* user_print_bar_gap         */ 18,
     /* user_print_terminate_w     */ 102,
     /* user_print_terminate_h     */ 40,
+
+    /* 打印态浮层（稿 1280 档 ×0.8） */
+    /* user_print_card_w          */ 333,
+    /* user_print_thumb_sz        */ 76,
+    /* user_print_notice_h        */ 56,
+    /* user_print_ctl_btn         */ 46,
+    /* user_print_pill_w          */ 320,
+    /* user_print_badge_sz        */ 13,
+    /* user_print_prog_h          */ 6,
+
+    /* 打印历史页（稿 1280 档 ×0.8） */
+    /* user_hist_tab_h            */ 32,
+    /* user_hist_card_h           */ 128,
+    /* user_hist_banner_h         */ 34,
+    /* user_hist_bar_w            */ 128,
+    /* user_hist_bar_h            */ 6,
+    /* user_hist_check_sz         */ 20,
+    /* user_hist_btn_w            */ 80,
 
     /* 字体（dev） */
     /* font_body          */ &lv_font_montserrat_20,

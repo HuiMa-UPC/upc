@@ -6,9 +6,9 @@
 
 | 文件 | 职责 |
 |------|------|
-| `page_user_home.*` | 首页：顶部按钮行、设备区、环境数值、打印中模式 UI |
+| `page_user_home.*` | 首页：顶部按钮行、设备区、环境数值、打印态浮层（打印中/暂停/中断/完成/吹粉中/吹粉完成六态共用一层） |
 | `page_user_settings.*` | 设置列表、开发者密码弹窗 |
-| `page_user_history.*` | 历史 Tab（当前为 skeleton 占位） |
+| `page_user_history.*` | 历史 Tab：三 Tab（只有 Print History 有数据）+ Storage 容量条与告警横幅 + 日期分组卡片 + 管理态多选批量删除 + 左滑删除 + 空态 |
 | `page_user_control.*` | 控制 Tab（占位） |
 | `page_user_message.*` | 消息 Tab（占位） |
 

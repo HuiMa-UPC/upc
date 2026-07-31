@@ -96,6 +96,11 @@ while (!g_shutdown_requested) {
 `ui_device_state_set_status()` 置位并**锁住**，不让环境推送覆盖。
 副产品：设置页/历史页原先各自画一条写死 "Ready" 的 header，现已删除，状态跟着后端走了。
 
+被锁住（前端置位、环境推送不得覆盖）的状态：`Printing` / `Paused` /
+`Print Complete` / `Print Terminated` / `Air Purifying` / `Purify Complete`。
+后三个由打印态浮层的 `apply_print_phase()` 按 `g_print_phase` + `g_purify_stage`
+推过来，取件退出打印态时统一还原成 `Ready`。
+
 ### 摄像头整屏预览
 
 `g_print_area`（打印直播）与 `g_monitor_area`（查看监控）都是 `lv_obj_set_pos(area,
@@ -126,6 +131,10 @@ while (!g_shutdown_requested) {
 | `register_*()` | Glavo → UI 回调 |
 
 `Subscription` 必须保存在 `subs_` 等成员中。其它后端用独立 `XxxMsgProxy`，不要堆进 UiMsgProxy。
+
+`register_*` 回调在总线线程上跑，**要建/毁 LVGL 对象就得先 `lv_async_call` 回主线程**
+（例：`control.cpp` 的 `on_powder_low_async`、`page_user_home.cpp` 的 `on_clean_done_async`）。
+只改现成 label / 显隐的回调沿用直调。
 
 ### 选文件页目录数据
 
@@ -160,7 +169,8 @@ while (!g_shutdown_requested) {
 
 `Confirm Print` 之后的「开始打印」二次确认弹窗保留。删除确认与终止打印确认共用
 `open_user_confirm_dialog()`：标题问句（`user_font_value`）+ 一句说明（`user_font_text`）+
-取消(4% 白底) / 危险(实心红)，两枚等分整行、`USER_BTN_RADIUS` 圆角。
+取消(4% 白底) / 危险(实心红)，两枚等分整行、`USER_BTN_RADIUS` 圆角。页脚这两枚按钮的样式
+已提到 `ui_user_make_confirm_footer_btn()`，打印历史页的批量删除确认用的是同一枚。
 用户层弹窗标题下的主色装饰线已全局去掉
 （`ui_modal_dialog_cfg_user()` 里 `accent_underline = false`）。
 
@@ -169,7 +179,7 @@ while (!g_shutdown_requested) {
 | Page ID | 文件 | 说明 |
 |---------|------|------|
 | `user_home` | `page_user_home.*` | 首页：环境、打印模式、预览、打印结果页 |
-| `user_history` | `page_user_history.*` | 打印历史：读 manifest + 卡片 + 缩略图(TJPGD) + 左滑删除 |
+| `user_history` | `page_user_history.*` | 打印历史：三 Tab + Storage 条 + 日期分组卡片 + 管理态批量删除 + 左滑删除 |
 | `user_control` | `page_user_control.*` | skeleton 占位 |
 | `user_settings` | `page_user_settings.*` | 设置列表 + 开发者密码弹窗 |
 | `user_message` | `page_user_message.*` | skeleton 占位 |
@@ -177,11 +187,43 @@ while (!g_shutdown_requested) {
 
 注册仅在 `ui_app.cpp`；打印流程走 `control_*`，pages 不直接订阅 MsgBus。详见 `lib/pages/README.md`。
 
-### 打印结果页（PRINT COMPLETE / PRINT TERMINATED）
+### 打印态浮层（六态一套）
 
-不是独立 Page，而是 `page_user_home` 打印中浮层 `g_print_area` **内部**的第三层
-（`g_result_layer`），与打印中底条 `g_print_bottom` 互斥。摄像头背景与
-`CameraPreviewPlayer` 完全沿用打印中那一套，中途不停流，避免黑屏闪烁。
+打印中与打印结果不是两套界面，而是 `page_user_home` 打印浮层 `g_print_area`
+**内部**的同一层 `g_print_overlay`（稿 3588:8735 / 4045:17582 / 3589:9992 /
+3588:8907 / 4234:6385 / 4045:18253）。摄像头背景与 `CameraPreviewPlayer` 全程
+不断流，避免黑屏闪烁。
+
+浮层里的常驻控件：
+
+| 位置 | 控件 | 说明 |
+|------|------|------|
+| 左下 | stats-card | 缩略图 + 徽标行（图标/状态词/百分比）+ 进度条 + TIME/CONSUMABLES 两列 |
+| 左下（卡上方） | 提示条 `g_pn_root` | 仅结束态出现，两个变体：催吹粉（蓝）/ 提醒戴口罩（橙） |
+| 右下 | 运行组 `g_ctl_run` | 暂停·恢复钮 + 终止钮；与取件组互斥 |
+| 右下 | 取件组 `g_ctl_collect` | 吹粉钮 + `SWIPE TO COLLECT` 胶囊；与运行组互斥 |
+| 右中 | 拍照钮 `g_result_photo_btn` | 六态都有 |
+| 右上 | HOME PM2.5 卡 + 5 列环境条 | 六态都有 |
+
+两个状态量决定外观，改哪个都走 `apply_print_phase()` 一处刷新：
+
+- `g_print_phase`（徽标四档）：`PRINTING...` 蓝 / `PAUSE` 蓝 / `PRINT TERMINATED` 橙 /
+  `PRINT COMPLETE` 绿。徽标色同时是百分比色与进度条填充色。
+- `g_purify_stage`（结束态下的吹粉子阶段，走 `purify_stage_set()`）：`IDLE` / `RUNNING`
+  （吹粉钮图标 2s 一圈逆时针转、胶囊文案换 `AIR PURIFYING...`）/ `DONE`（提示条换口罩提醒）。
+  按稿 4234:6385，吹粉中**不改徽标**——吹粉态只靠状态栏与胶囊文案表达。
+
+两列语义分态（`TIME` 列的 caption 由 `apply_print_phase()` 改写）：
+
+| 态 | TIME | CONSUMABLES |
+|----|------|-------------|
+| 打印中 / 暂停 | `TIME LEFT`（进度推送的 `remaining_minutes`） | `--`（打印中拿不到用量） |
+| 中断 / 完成 / 吹粉 | `TIME COST`（manifest `duration_sec`，H:MM:SS） | manifest `material_g` |
+
+底部两组控件的玻璃底衬对应稿里的 Union 布尔形状，用「圆 blob + 细腰 + 胶囊」三块
+拼（`make_ctl_backdrop` / `add_backdrop_block`）。半透明块直接叠会在交叠处叠深，
+所以子块全填不透明黑、由容器统一压到 50%——LVGL 对 `opa < COVER` 的父节点会先把
+子树画进独立图层再整体混合，拼出来才是一整片均匀底衬。
 
 时序：
 
@@ -191,17 +233,42 @@ Glavo Print_Terminate_Done / 进度 100% → control.cpp finish_printing()
   → （Camera 后台把 PNG 序列编成 timelapse.mp4 并 upsert manifest，可能数秒到数分钟）
   → APP_Print_Video_Manifest_Ntf (Camera→UI)
   → control.cpp on_print_video_manifest()：按 frames_dir 主键读 /home/video/manifest.json
-  → page_user_home_enter_print_result()     // 换成结果页浮层
+  → page_user_home_enter_print_result()     // 徽标切结束档 + 底部换取件组
 ```
 
 - **数据源**：`has_entry=1` 时以 manifest 条目为权威（`status` / `duration_sec` / `material_g`）；
   `has_entry=0`（0 帧未落盘）时用 payload 的 `aborted` 判完成/终止，耗时耗材显示 `--`。
-- **两个出口**：右上圆钮 `control_print_result_dismiss()` 直接回 IDLE；
-  右下 `SWIPE TO COLLECT` → `control_print_result_collect()` 回 IDLE 后走开门流程。
-  两者都经 IDLE 分支的 `page_user_home_exit_printing_mode()` 统一收浮层 + 停预览。
+- **出口**：右下 `SWIPE TO COLLECT` → `control_print_result_collect()` 回 IDLE 后走开门流程，
+  经 IDLE 分支的 `page_user_home_exit_printing_mode()` 统一收浮层 + 停预览。
+  新稿去掉了右上那颗「回首页」圆钮——离开结果态改点左侧标签栏，页面被 PageManager
+  缓存住，再点首页仍回到结果态。`control_print_result_dismiss()` 因此暂时没有 UI 入口，
+  作为 API 保留。
 - **PRINT_DONE 期间** `control_is_printing()` 返回 true → PageManager 挡住 `user_files`，
   取件前不能开新任务。
-- 中间的 Purify 圆钮：触发清粉测试；Media 按 `TIMELAPSE_VIDEO_FPS` 抽帧接续 PNG，成功后合并进同一 `timelapse.mp4`（本次结果页仅允许成功一次）。
+- 吹粉钮：触发清粉测试；Media 按 `TIMELAPSE_VIDEO_FPS` 抽帧接续 PNG，成功后合并进同一
+  `timelapse.mp4`（一次打印结果仅允许成功一次）。稿上「吹粉完成前门钮/滑动取件置灰」
+  的门禁还没做，当前滑动取件从一开始就可用。
+
+### 缺粉弹窗（稿 4273:5892）
+
+打印中粉量位 bit0/bit1 同时为 0 时，Glavo 自己先暂停送料再推 `APP_Print_Powder_Low_Ntf`
+（同时另发一条 `APP_Print_Pause_Rsp(paused=1)`，徽标与状态栏因此自动翻到 PAUSE）。
+UI 侧只做提示：`control.cpp` 的 `show_powder_dialog()`，几何复用门弹窗那套
+（496 卡片 + 496×321 顶图 + 标题/副标题 + 满宽主副按钮）。顶图在稿里也还是占位。
+
+挂 `lv_layer_top()` 而不是 `g_overlay`：打印中用户可能正待在别的标签页，`g_overlay`
+只覆盖首页那一屏。
+
+**判空一律在后端**，UI 不自己猜粉量：
+
+| 操作 | UI 动作 | 之后 |
+|------|---------|------|
+| `Refilled, resume printing` | 关窗 + `send_print_resume()` | 仍缺粉 → 后端再暂停并再推一次 Ntf → 弹窗重开 |
+| `Cancel` | 只关窗 | 停在暂停态；点底部播放钮恢复，仍缺粉则同上 |
+
+作业跑完或被终止时 `finish_printing()` 会兜底关窗，避免残留。注意后端的
+`powder_low_latched_` 会把重复通知压掉一次，所以「补粉后仍缺粉要再弹」这条依赖 Glavo
+在收到 Resume 时重新判一次粉量——那是后端侧的事，前端按契约照收即可。
 
 ### WiFi 传输弹窗（PIN 配对 / 文件接收）
 
@@ -274,11 +341,60 @@ rongsu_camera 经主 IPC（/tmp/upc_camera.sock）SCM_RIGHTS 附带 dma_buf fd �
 
 | 组件 | 文件 | 职责 |
 |------|------|------|
-| `page_user_history` | `pages/page_user_history.*` | 读 `/home/video/manifest.json`（`common/fs_manifest/print_history_manifest`）→ 按 `start_unix` 倒序卡片列表；缩略图 `A:/home/video/{thumb}`（RTHM 解码，`LV_IMAGE_ALIGN_COVER`）；上下翻页；**左滑删除**（清除卡片默认 `GESTURE_BUBBLE` 使手势落到卡片）→ 删目录 + 重写 manifest + 只删单卡 |
+| `page_user_history` | `pages/page_user_history.*` | 读 `/home/video/manifest.json`（`common/fs_manifest/print_history_manifest`）→ 按 `start_unix` 倒序、按自然日分组的卡片列表；缩略图 `A:/home/video/{thumb}`（RTHM 解码，`LV_IMAGE_ALIGN_COVER`）；顶部三 Tab + Storage 容量条；管理（多选）模式批量删除；上下翻页；**左滑删除**（清除卡片默认 `GESTURE_BUBBLE` 使手势落到卡片）→ 删目录 + 重写 manifest + 只删单卡 |
 | `page_user_timelapse` | `pages/page_user_timelapse.*` | 全屏播放页（建于 `lv_layer_top()` 覆盖侧边栏）：按序播放 `/home/video/{job_ts}/1.png...N.png`，顶部标题/时间、右上关闭、中央播放/暂停、底部进度条、点画面显隐控件 |
 
 - **进入/退出**：历史页缩略图点击 → `page_user_timelapse_set_source(目录,mp4路径,标题,时间)` + `switch_to("user_timelapse")`；关闭 → `switch_to("user_history")`。
 - **LVGL 线程规则**：序列播放由主线程 `lv_timer` 驱动换图。
+
+### 打印历史页布局（稿 4366:5400 一套六态）
+
+对应稿：列表常态 `4366:5400`、管理态 `4470:6682`、左滑删除 `4470:6970`、空态 `4531:6938`、
+存储将满 `4536:7333`、存储已满 `4550:8303`。全页文案统一英文（CJK 字库只有调试页那点子集）。
+
+- **顶部 Tab 行**（高 `USER_HIST_TAB_H`）：`Print History` / `Timelapse` / `Album`，选中项白字 +
+  主色下划线（宽度取文字一半，与稿一致；Tab 项宽度是 `lv_obj_update_layout` 量出的文字实宽而
+  非 `LV_SIZE_CONTENT`，否则下划线的百分比宽与容器内容宽互相依赖）。右侧常态是 `Manage`，管理态换成
+  `N selected + Delete + Select All + Cancel`（都是 `USER_HIST_BTN_W × USER_HIST_TAB_H` 胶囊）。
+  两组按钮都上抬 `manage_btn_lift()`（`USER_PAD_SM / 2`）比 Tab 文字略高；按钮高度本就等于行高，
+  所以 Tab 行也要 `OVERFLOW_VISIBLE` + `tab_row_ext_draw_cb` 才不被裁掉顶部。
+  行下一条通栏分隔线。**Timelapse / Album 数据源未定义，当前只出空态。**
+- **右缘对齐**：Tab 行 / 告警横幅 / 卡片列表 / Storage 条统一用 `content_right_pad()`
+  （= 翻页钮直径 + `USER_PAD × 2`）内缩，四者右缘齐平；调翻页钮尺寸只需改这个函数。
+- **Storage 容量条**：稿里与设备名同排，而页面内容区从常驻条下沿才开始，所以做成 `FLOATING`
+  并用负 y 偏移（`-(USER_TOPBAR_H + h) / 2`）抬回那一行右侧。抬出页面范围要两件事配合：页根加
+  `LV_OBJ_FLAG_OVERFLOW_VISIBLE`，再在 `LV_EVENT_REFR_EXT_DRAW_SIZE` 里把额外绘制区撑开
+  `USER_TOPBAR_H`（`page_ext_draw_cb`），少一样就会被裁掉。常驻设备条本身透明且不可点，
+  所以既不遮挡也不抢触摸。轨道 `USER_HIST_BAR_W ×
+  USER_HIST_BAR_H`，填充色三态：<90% 主色蓝 / ≥90% 橙 `#FF7843` / =100% 危险红。
+- **存储告警横幅**：≥90% 出现（橙），=100% 转红，同色 10% 底 + 20% 描边 + `ic_alert`。
+  纯提示，不拦截任何操作。
+- **卡片**（高 `USER_HIST_CARD_H`，缩略图 `8/5 × 高`）：左缩略图（`Timelapse` 角标 + 右下
+  `ic_expand` 角标）+ 右信息区（上：时间段 `HH:MM:SS - HH:MM:SS`、文件名 + 状态胶囊
+  `Completed`/`Interrupted`；下：`Duration | Filament | Layers`，图标 `ic_clock` / `ic_cube` /
+  `ic_layers` 24px 1:1）。卡片底色用不透明 `user_color_panel` 代替稿里的 4% 白，且缩略图不裁
+  圆角——`clip_corner` 每帧建掩膜层是列表滚动卡顿主因，这里选性能。
+- **状态胶囊紧跟文件名**（不是右对齐到行尾）：文件名标签不设 `flex_grow`，改用
+  `max_width: LV_PCT(65)` 夹住过长的名字（否则胶囊被挤出卡片），并把高度锁成一行
+  ——v9 的 `LONG_MODE_DOTS` 是「先按宽度换行、再截末行」，不锁高度只会换行、出不来省略号。
+- **管理模式**：卡片左侧插入 `USER_HIST_CHECK_SZ` 复选框（隐藏时 flex 自动跳过，缩进天然
+  跟着走）；点卡片任意位置或缩略图切换勾选；期间禁用左滑；`Delete` 走
+  `ui_user_make_confirm_footer_btn` 那套二次确认弹窗，确认后一次性重写 manifest 再整表重建。
+  `video_pending`（Camera 还在 remux）的条目不可勾选、也挡住左滑删除，避免打断落盘。
+- **空态**：80px 圆底 + `ic_printer` + 双行文案 + `Start Print`。按钮直接调 `control_start()`——
+  放版预确认弹窗挂在整屏 overlay 上，与当前页面无关，所以不必先切首页；`control_is_printing()`
+  为真时只弹 toast。文案与 `Start Print` 显隐只由 `apply_empty_copy()` 维护（Timelapse / Album
+  空态不带按钮），所以**任何显示空态的路径都必须走 `show_empty(true)`**：左滑删到最后一条时
+  曾自己拼过一份只显示占位盒子的简化版，逛过另两个 Tab 后按钮的 `HIDDEN` 不会被清掉，
+  表现为删空后不出 `Start Print`、换 Tab 再回来才出现。
+
+**三处等后端补数据**（其余字段 manifest 已齐）：
+
+| 缺口 | 现状 | 补法 |
+|------|------|------|
+| `Layers` | 显示 `--` | manifest 加层数字段（Camera 可取换层 Snap 的最大 `layer_index`） |
+| Storage 容量 | `page_user_history.cpp` 顶部 `kStorageUsedMB/kStorageTotalMB` 常量占位 | 接上报后改 `storage_used_mb()/storage_total_mb()` 两个取数函数即可 |
+| Timelapse / Album | 只有空态 | 数据源定义后在 `rebuild_list()` 里按 Tab 分支 |
 
 ### LVGL 配置依赖（`3rdparty/.../configs/rongsu_ui.defaults`）
 - `LV_USE_TJPGD=1`：历史缩略图 baseline JPEG 解码

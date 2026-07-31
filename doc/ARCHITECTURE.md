@@ -45,8 +45,7 @@
 |------|------|--------|
 | `GlavoService` | `glavo_service.*` | IPC 业务编排 + 工作线程（打印/USB 目录/门控）；`init()` 绑定 RingBuffer → `McuLink` |
 | `gcode_manifest` | `common/fs_manifest/gcode_manifest.*` | Local `/home/Gcode/config.json`（UI 读列表，Glavo Prepare/Delete 写） |
-| `print_history_manifest` | `common/fs_manifest/print_history_manifest.*` | `/home/video/manifest.json`（Camera upsert，UI 历史页读） |
-| `print_history_manifest` | `common/fs_manifest/print_history_manifest.*` | `/home/video/manifest.json`（Camera 写，UI 历史页读） |
+| `print_history_manifest` | `common/fs_manifest/print_history_manifest.*` | `/home/video/manifest.json`（Camera upsert 写；UI 历史页读，删除后重写） |
 | `McuLink` | `mcu_link.*` | TCP 运动 + 串口握手/传感器 |
 | `PrintJobState` | `print_job_state.*` | 打印任务计数/状态 |
 | `PrintVideoNotify` | `print_video_notify.*` | 换层 Snap / 录像会话 IPC → Camera |
@@ -82,7 +81,7 @@
 | Page ID | 文件 | 状态 |
 |---------|------|------|
 | `user_home` | `page_user_home.*` | 首页：环境、打印模式、预览、打印结果页（完成/终止浮层） |
-| `user_history` | `page_user_history.*` | 打印历史：读 manifest + 卡片 + 缩略图(TJPGD) + 左滑删除 |
+| `user_history` | `page_user_history.*` | 打印历史：三 Tab + Storage 条 + 日期分组卡片 + 管理态批量删除 + 左滑删除 |
 | `user_control` | `page_user_control.*` | skeleton 占位 |
 | `user_settings` | `page_user_settings.*` | 设置列表 + 开发者密码弹窗 |
 | `user_message` | `page_user_message.*` | skeleton 占位 |
