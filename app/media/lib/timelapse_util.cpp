@@ -343,6 +343,21 @@ void remove_png_range(const std::string& session_dir,
     }
 }
 
+bool remove_empty_dir(const std::string& session_dir)
+{
+    if(session_dir.empty()) {
+        return false;
+    }
+    std::error_code ec;
+    if(!std::filesystem::is_directory(session_dir, ec)) {
+        return false;
+    }
+    if(!std::filesystem::is_empty(session_dir, ec)) {
+        return false;
+    }
+    return std::filesystem::remove(session_dir, ec);
+}
+
 bool update_history_media_paths(const std::string& frames_dir,
                                 const std::string& thumb_rel,
                                 const std::string& video_rel)

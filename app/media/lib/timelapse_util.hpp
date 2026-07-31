@@ -35,6 +35,9 @@ bool create_raw_thumb_from_nv12(const std::vector<uint8_t>& nv12,
 void remove_png_range(const std::string& session_dir,
                       uint32_t first_index, uint32_t last_index);
 
+/** 仅当目录为空时删除目录本身（非空不删）。 */
+bool remove_empty_dir(const std::string& session_dir);
+
 /**
  * 更新已有历史条目的 thumb/video（保留 duration/start/status/material）。
  * frames_dir 不存在时返回 false。

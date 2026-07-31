@@ -140,6 +140,7 @@ private:
     void enqueue_link_event(McuLinkEvent ev);
     void publish_terminate_done();
     void publish_print_pause_done(bool paused);
+    void publish_print_powder_low_ntf();
     void reset_print_progress_state();
     void send_print_progress(bool force_complete);
 

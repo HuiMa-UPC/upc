@@ -81,7 +81,8 @@ int serial_parse_sensor_report_detail(const uint8_t* data, size_t len,
     out->temperature_c      = (float)temp_raw / 10.0f;
     out->humidity_percent   = (float)hum_raw / 10.0f;
     out->pm25_ug_m3         = (float)pm_raw;
-    out->powder_present     = (uint8_t)((v[10] & 0x01u) ? 1u : 0u);
+    out->powder_bits        = static_cast<uint8_t>(v[10] & 0x03u);
+    out->powder_present     = (out->powder_bits == 0x03u) ? 1u : 0u;
     out->outer_door_open    = (uint8_t)((v[10] & 0x80u) ? 1u : 0u);
     out->substrate_temp_c   = (float)serial_read_le16(v + 11) / 10.0f;
     out->hall_bitmap        = 0;   /* 当前固件不上报 Hall（value 仅 13 字节） */

@@ -145,11 +145,13 @@ void serial_log_rx_frame(const uint8_t* frame, size_t len)
  *
  * 仅在 GLAVO_ENABLE_LAYER_CHANGE 开启时有效：
  * - NONE：无需握手或已完成
+ * - WAIT_PLATE_PREPARE：已发基板准备请求，等待 MCU 返回基板准备结果
  * - WAIT_CONDITION_OK：已发打印请求，等待 MCU 返回打印条件就绪
  * - WAIT_PRINT_READY：已发首层/换层参数，等待 MCU 返回准备就绪
  */
 enum SerialHandshakePhase : int {
     SERIAL_HS_NONE = 0,
+    SERIAL_HS_WAIT_PLATE_PREPARE,
     SERIAL_HS_WAIT_CONDITION_OK,
     SERIAL_HS_WAIT_PRINT_READY,
 };
@@ -717,13 +719,26 @@ void McuLink::on_sensor_report(const serial_sensor_report_t& report)
     publish_env_update_ntf();
     publish_debug_sensor_ntf(report);   /* 调试页顶部 7 路传感器回读 */
 
+    /* 粉量传感器：bit0/bit1 同时为 0 视为缺粉。
+     * 仅在“进入缺粉”边沿触发一次，避免持续低电平反复通知。 */
+    const bool powder_low = ((report.powder_bits & 0x03u) == 0x00u);
+    if(powder_low) {
+        if(!powder_low_latched_) {
+            powder_low_latched_ = true;
+            emit_event(McuLinkEvent::PowderLow);
+        }
+    } else {
+        powder_low_latched_ = false;
+    }
+
     UPC_LOG_MCU_LINK(Info,
-        "sensor: O2=%.1f%% P=%dmbar T=%.1fC RH=%.1f%% PM2.5=%.1f base=%.1fC powder=%d door_open=%d",
+        "sensor: O2=%.1f%% P=%dmbar T=%.1fC RH=%.1f%% PM2.5=%.1f base=%.1fC powder_bits=0x%02X powder_ok=%d door_open=%d",
         static_cast<double>(report.oxygen_percent), report.pressure_mbar,
         static_cast<double>(report.temperature_c),
         static_cast<double>(report.humidity_percent),
         static_cast<double>(report.pm25_ug_m3),
-        static_cast<double>(report.substrate_temp_c), report.powder_present,
+        static_cast<double>(report.substrate_temp_c),
+        static_cast<unsigned>(report.powder_bits), report.powder_present,
         report.outer_door_open ? 1 : 0);
 }
 
@@ -1014,7 +1029,8 @@ void McuLink::poll_env_sim_tick()
     fake.pm25_ug_m3       = 10.0f + 40.0f * (0.5f + 0.5f * s3);
     fake.pressure_mbar    = static_cast<int16_t>(1013 + static_cast<int>(20.0f * s1));
     fake.substrate_temp_c = 30.0f + 8.0f * s2;
-    fake.powder_present   = (s1 > 0.0f) ? 1 : 0;
+    fake.powder_bits      = (s1 > 0.0f) ? 0x03u : 0x00u;
+    fake.powder_present   = (fake.powder_bits == 0x03u) ? 1u : 0u;
     fake.outer_door_open  = 0;
 
     {
@@ -1110,6 +1126,20 @@ void McuLink::handle_serial_rx_frame(const uint8_t* frame, size_t len)
         door_open_rsp_cv_.notify_all();
         UPC_LOG_MCU_LINK(Info, "door_open_result: state=0x%02X opened=%d",
                          static_cast<unsigned>(door_state), opened ? 1 : 0);
+        return;
+    }
+
+    uint8_t plate_result = 0;
+    if(serial_parse_plate_prepare_result(frame, len, &plate_result) == 0) {
+        if(plate_result == 0x00) {
+            serial_evt_plate_ready_.store(true);
+            UPC_LOG_MCU_LINK(Info, "plate_prepare_result: success");
+        } else {
+            UPC_LOG_MCU_LINK(Warn,
+                "plate_prepare_result: fail=0x%02X, retry",
+                static_cast<unsigned>(plate_result));
+            send_serial_plate_prepare();
+        }
         return;
     }
 
@@ -1730,6 +1760,7 @@ void McuLink::reset_motion_state(bool clear_start_pending)
     natural_complete_since_ = {};
     mcu_rates_seen_nonempty_.store(false);
     serial_handshake_phase_.store(SERIAL_HS_NONE);
+    serial_evt_plate_ready_.store(false);
     serial_evt_condition_ok_.store(false);
     serial_evt_print_ready_.store(false);
     sent_at_layer_ready_ = 0;
@@ -1741,6 +1772,7 @@ void McuLink::reset_motion_state(bool clear_start_pending)
 
 void McuLink::begin_sending_internal()
 {
+    powder_low_latched_ = false;
     user_paused_.store(false);
     is_sending_.store(true);
     waiting_layer_.store(false);
@@ -1763,16 +1795,12 @@ void McuLink::begin_sending_internal()
     PrintJobState::instance().set_sent_packets(0);
 
 #if GLAVO_ENABLE_LAYER_CHANGE
-    // 若串口已打开，发送打印请求帧并进入握手等待
+    // 若串口已打开，先发送基板准备请求，成功后再进入原打印握手
     if(serial_fd_ >= 0) {
-        uint8_t sbuf[32];
-        const int slen = serial_build_print_request(sbuf, sizeof(sbuf));
-        if(slen > 0) {
-            UPC_LOG_MCU_LINK(Info, "serial TX cmd: PRINT_REQUEST");
-            serial_send_aa_reliable(sbuf, (size_t)slen, true);
-        }
+        send_serial_plate_prepare();
         waiting_layer_.store(true);
-        serial_handshake_phase_.store(SERIAL_HS_WAIT_CONDITION_OK);
+        serial_handshake_phase_.store(SERIAL_HS_WAIT_PLATE_PREPARE);
+        serial_evt_plate_ready_.store(false);
         serial_evt_condition_ok_.store(false);
         serial_evt_print_ready_.store(false);
     }
@@ -1841,6 +1869,16 @@ bool McuLink::is_user_dispatch_paused() const noexcept
     return user_paused_.load();
 }
 
+void McuLink::set_plate_thickness_um(uint16_t thickness_um)
+{
+    if(thickness_um == 0) {
+        thickness_um = 10000u;
+    }
+    plate_thickness_um_ = thickness_um;
+    UPC_LOG_MCU_LINK(Info, "plate thickness set to %u um",
+                     static_cast<unsigned>(plate_thickness_um_));
+}
+
 /* ---------- 清理辅助：协议帧发送 ---------- */
 
 void McuLink::send_tcp_reset()
@@ -1850,6 +1888,21 @@ void McuLink::send_tcp_reset()
     if(flen > 0) {
         tcp_send_raw(frame, (size_t)flen);
     }
+}
+
+void McuLink::send_serial_plate_prepare()
+{
+#if GLAVO_ENABLE_LAYER_CHANGE
+    if(serial_fd_ >= 0) {
+        uint8_t sbuf[32];
+        const int slen = serial_build_plate_prepare(plate_thickness_um_, sbuf, sizeof(sbuf));
+        if(slen > 0) {
+            UPC_LOG_MCU_LINK(Info, "serial TX cmd: PLATE_PREPARE (%u um)",
+                             static_cast<unsigned>(plate_thickness_um_));
+            serial_send_aa_reliable(sbuf, static_cast<size_t>(slen), true);
+        }
+    }
+#endif
 }
 
 void McuLink::send_serial_print_terminate()
@@ -1959,6 +2012,20 @@ void McuLink::link_process_serial_handshake()
     }
 
     const int phase = serial_handshake_phase_.load();
+
+    // 阶段零：收到基板准备成功后，发送打印请求并进入阶段一
+    if(phase == SERIAL_HS_WAIT_PLATE_PREPARE &&
+       serial_evt_plate_ready_.exchange(false)) {
+        uint8_t sbuf[32];
+        const int slen = serial_build_print_request(sbuf, sizeof(sbuf));
+        if(slen > 0) {
+            UPC_LOG_MCU_LINK(Info, "serial TX cmd: PRINT_REQUEST");
+            serial_send_aa_reliable(sbuf, static_cast<size_t>(slen), true);
+        }
+        serial_handshake_phase_.store(SERIAL_HS_WAIT_CONDITION_OK);
+        serial_evt_condition_ok_.store(false);
+        return;
+    }
 
     // 阶段一：收到 PRINT_CONDITION_OK 后，发送首层/换层高度并进入阶段二
     if(phase == SERIAL_HS_WAIT_CONDITION_OK &&

@@ -1207,6 +1207,7 @@ void GlavoService::handle_print_start(const middleware::Message& msg)
 
     stop_print_job();
     auto& link = McuLink::instance();
+    link.set_plate_thickness_um(req.plate_thickness_um);
     if(link.is_sending() || link.is_terminate_pending()) {
         /* 异步 terminate 完成前不得 open/begin，否则清理会清掉新作业 */
         link.request_terminate();
@@ -1436,6 +1437,16 @@ void GlavoService::publish_print_pause_done(bool paused)
     }
 }
 
+void GlavoService::publish_print_powder_low_ntf()
+{
+    middleware::Message ntf(middleware::MsgType::APP_Print_Powder_Low_Ntf,
+        static_cast<middleware::ModuleId>(module_id()),
+        middleware::ModuleId::UI);
+    if(!publish_async(ntf)) {
+        UPC_LOG_GLAVO_SERVICE(Warn, "powder_low_ntf publish failed");
+    }
+}
+
 /**
  * @brief McuLink 作业事件回调：完成/终止/错误时更新 UI 与本地状态
  *
@@ -1476,6 +1487,19 @@ void GlavoService::on_mcu_link_event(McuLinkEvent ev)
             publish_terminate_done();
             clear_prepare_session();
             break;
+        case McuLinkEvent::PowderLow: {
+            if(!print_running_.load()) {
+                break;
+            }
+            McuLink& link = McuLink::instance();
+            if(!link.is_user_dispatch_paused()) {
+                link.set_user_dispatch_paused(true);
+                publish_print_pause_done(true);
+                UPC_LOG_GLAVO_SERVICE(Warn, "auto pause due to powder low");
+            }
+            publish_print_powder_low_ntf();
+            break;
+        }
     }
 }
 

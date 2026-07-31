@@ -776,7 +776,14 @@ void backend_start_job(const control_file_t *file, ProgressCb prog_cb, DoneCb do
     g_job_u = u;
 
     const uint32_t file_index = file ? file->index : 0;
-    ui::UiMsgProxy::instance().send_print_start(file_index, file_tab_to_source(g_file_tab));
+    uint16_t plate_thickness_um = 10000u; /* 默认 10mm */
+    if(g_plate_thickness == 0) {
+        plate_thickness_um = 5000u;
+    } else if(g_plate_thickness == 1) {
+        plate_thickness_um = 10000u;
+    }
+    ui::UiMsgProxy::instance().send_print_start(
+        file_index, file_tab_to_source(g_file_tab), plate_thickness_um);
 }
 
 void backend_terminate_job()

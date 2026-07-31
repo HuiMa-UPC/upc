@@ -16,6 +16,7 @@ typedef enum {
 } serial_event_t;
 
 int serial_build_print_request(uint8_t* out, size_t out_size);
+int serial_build_plate_prepare(uint16_t thickness_um, uint8_t* out, size_t out_size);
 int serial_build_print_start(uint16_t layer_height_um, uint8_t* out, size_t out_size);
 int serial_build_layer_done(uint16_t next_layer_height_um, uint8_t* out, size_t out_size);
 int serial_build_print_finished(uint8_t* out, size_t out_size);
@@ -23,6 +24,7 @@ int serial_build_print_terminate(uint8_t* out, size_t out_size);
 int serial_build_door_open_request(uint8_t* out, size_t out_size);
 
 serial_event_t serial_parse_frame(const uint8_t* data, size_t len);
+int serial_parse_plate_prepare_result(const uint8_t* data, size_t len, uint8_t* result_out);
 int serial_parse_door_open_result(const uint8_t* data, size_t len, uint8_t* door_state_out);
 int serial_parse_clean_test_result(const uint8_t* data, size_t len, uint8_t* result_out);
 

@@ -283,6 +283,12 @@ void CleanVideoRecorder::on_session_start(
         "clean_video start id=%s dir=%s %ux%u stream_fps=%u timelapse_fps=%u print_png=%u",
         session_id_.c_str(), session_dir_.c_str(),
         width_, height_, stream_fps_, timelapse_fps_, print_frame_count_);
+    if(print_frame_count_ == 0u) {
+        UPC_LOG_MEDIA_SERVICE(
+            Warn,
+            "clean_video disabled for merge: no print png found dir=%s",
+            session_dir_.c_str());
+    }
 }
 
 void CleanVideoRecorder::on_frame_nv12(const uint8_t* src_y, const uint8_t* src_uv,
@@ -296,6 +302,10 @@ void CleanVideoRecorder::on_frame_nv12(const uint8_t* src_y, const uint8_t* src_
     {
         std::lock_guard<std::mutex> lock(mtx_);
         if(!active_) {
+            return;
+        }
+        /* 清粉 PNG 仅在存在打印段 PNG 时才允许参与后续合成。 */
+        if(print_frame_count_ == 0u) {
             return;
         }
 
@@ -433,11 +443,35 @@ void CleanVideoRecorder::stop_locked(std::unique_lock<std::mutex>& lock,
     bool thumb_ok = false;
     bool history_ok = false;
 
+    const bool allow_clean_merge = (stop_print_frames > 0u);
+
     if(closed_by_user || !success) {
         if(clean_first > 0) {
             timelapse_util::remove_png_range(stop_session_dir, clean_first,
                                              clean_last);
         }
+        const bool dir_removed = timelapse_util::remove_empty_dir(stop_session_dir);
+        if(dir_removed) {
+            UPC_LOG_MEDIA_SERVICE(Info,
+                "clean_video removed empty session dir=%s",
+                stop_session_dir.c_str());
+        }
+        history_ok = update_clean_history_metadata(stop_job_name, std::string{}, 0u, 0u);
+    } else if(!allow_clean_merge) {
+        /* 没有打印段 PNG 时，清粉段不允许参与合成：强制清理并清空清粉范围元数据。 */
+        if(clean_first > 0) {
+            timelapse_util::remove_png_range(stop_session_dir, clean_first,
+                                             clean_last);
+        }
+        const bool dir_removed = timelapse_util::remove_empty_dir(stop_session_dir);
+        if(dir_removed) {
+            UPC_LOG_MEDIA_SERVICE(Info,
+                "clean_video removed empty session dir=%s",
+                stop_session_dir.c_str());
+        }
+        UPC_LOG_MEDIA_SERVICE(
+            Info,
+            "clean_video skip merge: print_png=0, cleaned residual clean png");
         history_ok = update_clean_history_metadata(stop_job_name, std::string{}, 0u, 0u);
     } else if(stop_clean_frames == 0) {
         UPC_LOG_MEDIA_SERVICE(Info,

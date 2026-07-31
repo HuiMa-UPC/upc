@@ -154,7 +154,7 @@ struct ProcessConfig {
 inline ProcessConfig process_config_ui() {
     return ProcessConfig{
         "/var/run/rongsu_ui.pid",
-        "/data/rongsu_ui",
+        "/var/log/rongsu_ui",
         "rongsu_ui",
     };
 }
@@ -162,7 +162,7 @@ inline ProcessConfig process_config_ui() {
 inline ProcessConfig process_config_glavo() {
     return ProcessConfig{
         "/var/run/rongsu_glavo.pid",
-        "/data/rongsu_glavo",
+        "/var/log/rongsu_glavo",
         "rongsu_glavo",
     };
 }
@@ -170,7 +170,7 @@ inline ProcessConfig process_config_glavo() {
 inline ProcessConfig process_config_camera() {
     return ProcessConfig{
         "/var/run/rongsu_camera.pid",
-        "/data/rongsu_camera",
+        "/var/log/rongsu_camera",
         "rongsu_camera",
     };
 }
@@ -178,7 +178,7 @@ inline ProcessConfig process_config_camera() {
 inline ProcessConfig process_config_broker() {
     return ProcessConfig{
         "/var/run/rongsu_broker.pid",
-        "/data/rongsu_broker",
+        "/var/log/rongsu_broker",
         "rongsu_broker",
     };
 }
@@ -186,7 +186,7 @@ inline ProcessConfig process_config_broker() {
 inline ProcessConfig process_config_xfr() {
     return ProcessConfig{
         "/var/run/rongsu_xfr.pid",
-        "/data/rongsu_xfr",
+        "/var/log/rongsu_xfr",
         "rongsu_xfr",
     };
 }
@@ -194,7 +194,7 @@ inline ProcessConfig process_config_xfr() {
 inline ProcessConfig process_config_visual() {
     return ProcessConfig{
         "/var/run/rongsu_visual.pid",
-        "/data/rongsu_visual",
+        "/var/log/rongsu_visual",
         "rongsu_visual",
     };
 }
@@ -202,7 +202,7 @@ inline ProcessConfig process_config_visual() {
 inline ProcessConfig process_config_mqtt() {
     return ProcessConfig{
         "/var/run/rongsu_mqtt.pid",
-        "/data/rongsu_mqtt",
+        "/var/log/rongsu_mqtt",
         "rongsu_mqtt",
     };
 }
@@ -210,7 +210,7 @@ inline ProcessConfig process_config_mqtt() {
 inline ProcessConfig process_config_media() {
     return ProcessConfig{
         "/var/run/rongsu_media.pid",
-        "/data/rongsu_media",
+        "/var/log/rongsu_media",
         "rongsu_media",
     };
 }
@@ -301,13 +301,14 @@ enum class MsgType : uint32_t {
     UI_Print_Prepare_Req = 0x1040, /**< PrintPrepareReqPayload：轻量预处理 + USB 复制 */
     APP_Print_Prepare_Rsp,    /**< PrintPrepareRspPayload */
     UI_Parser_Exit_Ntf,       /**< Empty：取消解析（D1 X / 二次确认 Cancel） */
-    UI_Print_Start_Req,       /**< PrintStartReqPayload：正式解析 + 下发 */
+    UI_Print_Start_Req,       /**< PrintStartReqPayload：正式解析 + 下发（含基板厚度） */
     APP_Print_Progress_Ntf,   /**< [GLAVO_Print_Progress_Ntf] PrintProgressPayload */
     UI_Print_Terminate_Req,
     APP_Print_Terminate_Done, /**< [GLAVO_Print_Terminate_Done] Empty */
     UI_Print_Pause_Req,       /**< Empty：暂停打印（McuLink 停止 TCP 运动下发） */
     UI_Print_Resume_Req,      /**< Empty：恢复打印 */
     APP_Print_Pause_Rsp,      /**< [GLAVO_Print_Pause_Rsp] PrintPauseStatePayload：暂停/恢复响应（Pause/Resume Req 共用） */
+    APP_Print_Powder_Low_Ntf, /**< Empty：粉量传感器 bit0/bit1 同时为 0，触发一次缺粉通知 */
 
     // ---- UI ↔ GLAVO：耗材/滤芯 ----
     UI_Supply_Status_Req = 0x1060, /**< Empty */
@@ -602,7 +603,7 @@ struct SupplyStatusPayload {
     uint8_t filter_ok;      /**< 1=充足 0=不足 */
 };
 
-/** UI_Print_Prepare_Req / UI_Print_Start_Req 共用：按 Tab 来源 + 索引 */
+/** UI_Print_Prepare_Req：按 Tab 来源 + 索引 */
 struct PrintPrepareReqPayload {
     uint32_t        file_index;
     PrintFileSource file_source;
@@ -614,8 +615,14 @@ struct PrintPrepareRspPayload {
     uint8_t reserved[3];
 };
 
-/** UI_Print_Start_Req 载荷：与 Prepare 相同（来源 + 索引） */
-using PrintStartReqPayload = PrintPrepareReqPayload;
+/** UI_Print_Start_Req：来源 + 索引 + 基板厚度（um） */
+struct PrintStartReqPayload {
+    uint32_t        file_index;
+    PrintFileSource file_source;
+    uint8_t         reserved;
+    uint16_t        plate_thickness_um; /**< 例如 5mm=5000，10mm=10000 */
+    uint8_t         reserved2[2];
+};
 
 /** Fs_Delete_Ntf 载荷：文件来源 + 索引（Local 列表删除） */
 using FsDeleteNtfPayload = PrintPrepareReqPayload;

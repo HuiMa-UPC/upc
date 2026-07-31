@@ -499,10 +499,10 @@ void CameraService::stream_thread_fn()
 
     while(!stop_stream_.load(std::memory_order_relaxed)) {
         const auto now = clock::now();
-        if(now - stats_since >= std::chrono::seconds(1)) {
-            /* 流诊断受 UPC_MOD_CAMERA_PREVIEW 控制，便于与 UI decode 1s 对照 */
+        if(now - stats_since >= std::chrono::seconds(5)) {
+            /* 流诊断受 UPC_MOD_CAMERA_PREVIEW 控制，5s 聚合输出 */
             UPC_LOG_CAMERA_PREVIEW(Debug,
-                "stream 1s: committed=%u last_seq=%u last_slot=%u "
+                "stream 5s: committed=%u last_seq=%u last_slot=%u "
                 "slot_fail=%u dequeue_fail=%u release_timeout=%u",
                 frames_1s, last_seq, last_slot,
                 slot_fail_1s, dequeue_fail_1s, timeout_1s);

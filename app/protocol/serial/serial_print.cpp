@@ -6,6 +6,13 @@ int serial_build_print_request(uint8_t* out, size_t out_size)
     return serial_build_aa_frame(0xA2, 0x40, 0x01, 0, nullptr, out, out_size);
 }
 
+int serial_build_plate_prepare(uint16_t thickness_um, uint8_t* out, size_t out_size)
+{
+    uint8_t v[2] = { static_cast<uint8_t>(thickness_um & 0xFFu),
+                     static_cast<uint8_t>(thickness_um >> 8u) };
+    return serial_build_aa_frame(0xA2, 0x40, 0x12, 2, v, out, out_size);
+}
+
 int serial_build_print_start(uint16_t layer_height_um, uint8_t* out, size_t out_size)
 {
     uint8_t v[2] = { (uint8_t)(layer_height_um & 0xFF),
@@ -81,6 +88,32 @@ serial_event_t serial_parse_frame(const uint8_t* data, size_t len)
         return SERIAL_EVT_PRINT_READY;
     }
     return SERIAL_EVT_NONE;
+}
+
+int serial_parse_plate_prepare_result(const uint8_t* data, size_t len, uint8_t* result_out)
+{
+    if(serial_print_verify_rx(data, len) != 0) {
+        return -1;
+    }
+
+    /* UART2 基板准备结果：
+     * PORT_GENERAL_TASK(0xA2) + CMD_REQUEST_PRINTING(0x40) + TLV_REQ_PLATE_RESULT(0x13)
+     * Value: result 0x00=成功，0x01=失败。 */
+    const uint8_t port = data[3];
+    const uint8_t cmd  = data[4];
+    const uint8_t payload_len = data[6];
+    const uint8_t type = data[7];
+    const uint8_t tlen = data[8];
+    if(port != 0xA2 || cmd != 0x40 || type != 0x13) {
+        return -2;
+    }
+    if(payload_len != 0x03 || tlen != 0x01) {
+        return -3;
+    }
+    if(result_out) {
+        *result_out = data[9];
+    }
+    return 0;
 }
 
 int serial_parse_door_open_result(const uint8_t* data, size_t len, uint8_t* door_state_out)

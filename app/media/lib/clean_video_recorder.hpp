@@ -17,6 +17,7 @@ namespace upc::media {
 /**
  * 清粉延时摄影（与打印层拍对齐）：
  * - Start：接续打印目录已有 1..N.png，按 timelapse fps 定时抽帧写 (N+1).png...
+ *          若打印层拍 PNG 不存在（N=0），清粉段不参与录制/合成。
  * - Stop 成功：记录清粉帧范围并更新末帧 thumb.rthm；MP4 统一在结果页退出后合成
  * - Stop 失败/用户关闭：删除清粉 PNG，仅保留打印段 PNG
  */

@@ -623,9 +623,11 @@ void UiMsgProxy::register_print_prepare_done(PrintPrepareDoneCb cb)
     print_prepare_done_cb_ = std::move(cb);
 }
 
-void UiMsgProxy::send_print_start(uint32_t file_index, middleware::PrintFileSource source)
+void UiMsgProxy::send_print_start(uint32_t file_index, middleware::PrintFileSource source,
+                                  uint16_t plate_thickness_um)
 {
-    const middleware::PrintStartReqPayload req{file_index, source, {}};
+    const middleware::PrintStartReqPayload req{file_index, source, 0,
+                                               plate_thickness_um, {0, 0}};
     publish_pod(middleware::MsgType::UI_Print_Start_Req,
                 middleware::ModuleId::APP_GLAVO, req);
 }

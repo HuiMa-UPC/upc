@@ -683,7 +683,7 @@ void CameraPreviewPlayer::decode_thread_fn()
             loop_us_max = loop_us;
         }
 
-        if(now - stats_since >= std::chrono::seconds(1)) {
+        if(now - stats_since >= std::chrono::seconds(5)) {
             const uint32_t timed =
                 frames_ok + frames_fail; /* 有 convert 计时的帧数 */
             const uint32_t loops = frames_ok + frames_fail + frames_no_slot;
@@ -692,7 +692,7 @@ void CameraPreviewPlayer::decode_thread_fn()
             const uint64_t loop_avg =
                 loops > 0 ? (loop_us_sum / loops) : 0;
             UPC_LOG_CAMERA_PREVIEW(Debug,
-                "decode 1s: scene=%s image=%p ok=%u fail=%u no_frame=%u "
+                "decode 5s: scene=%s image=%p ok=%u fail=%u no_frame=%u "
                 "last_seq=%u display_buf=%d "
                 "cvt_avg_us=%llu cvt_max_us=%llu "
                 "loop_avg_us=%llu loop_max_us=%llu rga=%d",
