@@ -46,6 +46,7 @@ struct EnvSnapshotCache {
     float oxygen_percent  = 0.f;
     float humidity_percent = 0.f;
     float pressure_kpa    = -1.f;   /**< 舱内气压 kPa（0x9B pressure_mbar÷10）；无源时 <0 */
+    uint8_t powder_bits   = 0u;     /**< 粉量位 bit0/bit1（0=缺粉） */
     bool  outer_door_open = false;  /**< 外门锁状态：false=门关 true=门开（来源 0x9B value[10] bit7） */
     bool  door_state_valid = false; /**< 是否已收到至少一帧可用门状态 */
     bool  valid           = false;
@@ -175,6 +176,9 @@ public:
      */
     void set_env_sim_enabled(bool on);
     [[nodiscard]] bool env_sim_enabled() const noexcept;
+    /** @brief 调试：环境模拟粉量缺粉目标开关（延迟 5s 生效） */
+    void set_env_sim_powder_low(bool on);
+    [[nodiscard]] bool env_sim_powder_low() const noexcept;
 
     /**
      * @brief 发送“打印前开门请求”并等待 MCU 结果（TLV_REQ_OPEN_DOOR / TLV_REQ_DOOR_OPEN_RESULT）
@@ -408,6 +412,9 @@ private:
     uint16_t plate_thickness_um_ = 10000u; /**< 当前作业基板厚度（um），默认 10mm */
 
     std::atomic<bool> env_sim_on_{false};  /**< 环境上报模拟（调试页开关，默认关） */
+    std::atomic<bool> env_sim_powder_low_target_{false}; /**< 目标缺粉态（UI 开关值） */
+    bool env_sim_powder_low_effective_ = false;          /**< 已生效缺粉态（延迟后应用） */
+    std::chrono::steady_clock::time_point env_sim_powder_switch_at_{}; /**< 延迟切换时刻 */
     std::chrono::steady_clock::time_point next_env_sim_tick_{};
     float env_sim_phase_ = 0.f;
     std::atomic<int64_t> last_env_mqtt_publish_ms_{0}; /**< Glavo→MQTT 环境 IPC 最近发送时刻 */
@@ -425,6 +432,7 @@ private:
     static constexpr size_t kSerialTxQueueMax = 32;
     static constexpr int kMaxMotionBatch = TCP_BATCH_SIZE; /**< 单次下发的最大运动包数量 */
     static constexpr int kEnvSimIntervalMs = 1000; /**< 环境模拟刷新间隔 */
+    static constexpr int kEnvSimPowderDelayMs = 5000; /**< 粉量模拟切换延迟 */
     static constexpr int kEnvMqttPublishIntervalMs = 2000; /**< Glavo→MQTT 环境 IPC 间隔 */
 };
 

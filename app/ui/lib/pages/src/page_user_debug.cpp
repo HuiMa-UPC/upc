@@ -95,6 +95,9 @@ lv_obj_t *g_clean_record_btn = nullptr;     /**< 其他控制：清粉录像开�
 lv_obj_t *g_clean_record_state_lbl = nullptr; /**< 其他控制：清粉录像状态文本 */
 lv_obj_t *g_env_sim_btn = nullptr;          /**< 其他控制：环境上报模拟开关按钮 */
 lv_obj_t *g_env_sim_state_lbl = nullptr;    /**< 其他控制：环境上报模拟状态文本 */
+lv_obj_t *g_env_sim_powder_btn = nullptr;   /**< 其他控制：环境模拟缺粉按钮 */
+lv_obj_t *g_env_sim_powder_state_lbl = nullptr; /**< 其他控制：环境模拟缺粉状态文本 */
+bool g_env_sim_on = false;                  /**< 缓存 Env Sim 回读状态，用于门控 Powder Sim 按钮 */
 
 /* 设备快捷行状态字（受 Montserrat 字库约束，沿用英文） */
 const char *const kDevOn[4]  = { "Awake", "Open", "Running", "On" };
@@ -906,9 +909,23 @@ struct DbgToggleCtx {
     lv_obj_t   *state_lbl;
     const char *on_txt;
     const char *off_txt;
-    uint8_t     kind;   /**< 0 粉桶 / 1 推粉 / 2 风扇 / 3 其他开关 / 4 清粉 / 5 打印H264 / 6 清粉录像 / 7 环境模拟 */
+    uint8_t     kind;   /**< 0 粉桶 / 1 推粉 / 2 风扇 / 3 其他开关 / 4 清粉 / 5 打印H264 / 6 清粉录像 / 7 环境模拟 / 8 环境模拟缺粉 */
     uint8_t     arg;    /**< 粉桶号 / DebugSwitchTarget */
 };
+
+void set_dbg_toggle_enabled(lv_obj_t *btn, bool enabled)
+{
+    if(!btn) {
+        return;
+    }
+    if(enabled) {
+        lv_obj_add_flag(btn, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_clear_state(btn, LV_STATE_DISABLED);
+    } else {
+        lv_obj_clear_flag(btn, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_state(btn, LV_STATE_DISABLED);
+    }
+}
 
 void on_dbg_toggle_delete(lv_event_t *e)
 {
@@ -938,6 +955,8 @@ void on_dbg_toggle(lv_event_t *e)
         case 6: proxy.send_clean_record_set(on);               /* 清粉录像总开关（仅本次运行） */
                 break;
         case 7: proxy.send_env_sim_set(on);                    /* 环境上报模拟（仅本次运行，供 MQTT 联调） */
+                break;
+        case 8: proxy.send_env_sim_powder_set(on);             /* 环境模拟缺粉（延迟 5s 生效） */
                 break;
         default: break;
     }
@@ -1332,6 +1351,9 @@ void build_other_switches_card(lv_obj_t *parent)
                     6, 0, true, 0, &g_clean_record_btn, &g_clean_record_state_lbl);
     make_dbg_toggle(rowC, "Env Sim", "On", "Off", LV_SYMBOL_REFRESH, false,
                     7, 0, true, 0, &g_env_sim_btn, &g_env_sim_state_lbl);
+    make_dbg_toggle(rowC, "Powder Sim", "Low", "Full", LV_SYMBOL_WARNING, false,
+                    8, 0, true, 0, &g_env_sim_powder_btn, &g_env_sim_powder_state_lbl);
+    set_dbg_toggle_enabled(g_env_sim_powder_btn, false);
 }
 
 lv_obj_t *build_other_tab(lv_obj_t *body)
@@ -1843,6 +1865,7 @@ void bind_debug_callbacks()
     });
 
     proxy.register_env_sim([](bool on) {
+        g_env_sim_on = on;
         if(g_env_sim_btn) {
             if(on) {
                 lv_obj_add_state(g_env_sim_btn, LV_STATE_CHECKED);
@@ -1855,6 +1878,23 @@ void bind_debug_callbacks()
             lv_obj_set_style_text_color(g_env_sim_state_lbl,
                                         on ? user_color_accent : user_color_text_dim, 0);
         }
+        set_dbg_toggle_enabled(g_env_sim_powder_btn, on);
+    });
+
+    proxy.register_env_sim_powder([](bool on) {
+        if(g_env_sim_powder_btn) {
+            if(on) {
+                lv_obj_add_state(g_env_sim_powder_btn, LV_STATE_CHECKED);
+            } else {
+                lv_obj_clear_state(g_env_sim_powder_btn, LV_STATE_CHECKED);
+            }
+        }
+        if(g_env_sim_powder_state_lbl) {
+            lv_label_set_text(g_env_sim_powder_state_lbl, on ? "Low" : "Full");
+            lv_obj_set_style_text_color(g_env_sim_powder_state_lbl,
+                                        on ? user_color_accent : user_color_text_dim, 0);
+        }
+        set_dbg_toggle_enabled(g_env_sim_powder_btn, g_env_sim_on);
     });
 }
 
@@ -1888,6 +1928,9 @@ void reset_globals()
     g_clean_record_state_lbl = nullptr;
     g_env_sim_btn = nullptr;
     g_env_sim_state_lbl = nullptr;
+    g_env_sim_powder_btn = nullptr;
+    g_env_sim_powder_state_lbl = nullptr;
+    g_env_sim_on = false;
 }
 
 } /* namespace */
@@ -1902,6 +1945,7 @@ void page_user_debug_refresh(bool /*force*/)
     ui::DebugMsgProxy::instance().request_print_h264_record_state();
     ui::DebugMsgProxy::instance().request_clean_record_state();
     ui::DebugMsgProxy::instance().request_env_sim_state();
+    ui::DebugMsgProxy::instance().request_env_sim_powder_state();
 }
 
 void page_user_debug_exit(void)
@@ -1917,6 +1961,7 @@ void page_user_debug_exit(void)
     proxy.register_print_h264_record(nullptr);
     proxy.register_clean_record(nullptr);
     proxy.register_env_sim(nullptr);
+    proxy.register_env_sim_powder(nullptr);
 }
 
 lv_obj_t *page_user_debug_create(lv_obj_t *parent)

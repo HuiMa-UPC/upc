@@ -9,8 +9,10 @@
 #include <cstdlib>
 #include <cstring>
 #include <ctime>
+#include <cerrno>
 #include <sys/mman.h>
 #include <sys/stat.h>
+#include <sys/statvfs.h>
 #include <unistd.h>
 
 namespace upc::media {
@@ -107,6 +109,10 @@ void MediaService::subscribe_messages()
         middleware::MsgType::APP_Print_Video_Session_Abort_Ntf,
         middleware::ModuleId::APP_MEDIA,
         [this](const middleware::Message& msg) { handle_message(msg); }));
+    subs_.push_back(bus.subscribe(
+        middleware::MsgType::APP_Print_H264_Record_Pause_Ntf,
+        middleware::ModuleId::APP_MEDIA,
+        [this](const middleware::Message& msg) { handle_message(msg); }));
 
     subs_.push_back(bus.subscribe(
         middleware::MsgType::APP_Clean_Video_Session_Start_Ntf,
@@ -118,6 +124,10 @@ void MediaService::subscribe_messages()
         [this](const middleware::Message& msg) { handle_message(msg); }));
     subs_.push_back(bus.subscribe(
         middleware::MsgType::UI_Print_Video_Finalize_Req,
+        middleware::ModuleId::APP_MEDIA,
+        [this](const middleware::Message& msg) { handle_message(msg); }));
+    subs_.push_back(bus.subscribe(
+        middleware::MsgType::UI_Storage_Usage_Req,
         middleware::ModuleId::APP_MEDIA,
         [this](const middleware::Message& msg) { handle_message(msg); }));
 }
@@ -134,12 +144,22 @@ void MediaService::handle_message(const middleware::Message& msg)
     case middleware::MsgType::APP_Print_Video_Session_Abort_Ntf:
         handle_print_video(msg);
         break;
+    case middleware::MsgType::APP_Print_H264_Record_Pause_Ntf: {
+        middleware::PrintPauseStatePayload p{};
+        if(read_inline_pod(msg.payload, p)) {
+            print_h264_.set_paused(p.paused != 0);
+        }
+        break;
+    }
     case middleware::MsgType::APP_Clean_Video_Session_Start_Ntf:
     case middleware::MsgType::APP_Clean_Video_Session_Stop_Ntf:
         handle_clean_video(msg);
         break;
     case middleware::MsgType::UI_Print_Video_Finalize_Req:
         handle_print_video_finalize(msg);
+        break;
+    case middleware::MsgType::UI_Storage_Usage_Req:
+        handle_storage_usage_req(msg);
         break;
     default:
         break;
@@ -497,6 +517,10 @@ void MediaService::handle_print_video(const middleware::Message& msg)
         if(!read_inline_pod(msg.payload, info)) {
             return;
         }
+        {
+            std::lock_guard<std::mutex> lock(finalize_mtx_);
+            latest_print_session_closed_ = false;
+        }
         print_video_.set_stream_geometry(stream_width_, stream_height_);
         print_h264_.set_stream_geometry(stream_width_, stream_height_, stream_fps_);
         print_video_.on_session_start(info);
@@ -516,6 +540,14 @@ void MediaService::handle_print_video(const middleware::Message& msg)
         middleware::PrintVideoSessionPayload info{};
         if(!read_inline_pod(msg.payload, info)) {
             return;
+        }
+        info.session_id[sizeof(info.session_id) - 1] = '\0';
+        info.job_name[sizeof(info.job_name) - 1] = '\0';
+        {
+            std::lock_guard<std::mutex> lock(finalize_mtx_);
+            latest_print_session_id_ = info.session_id;
+            latest_print_job_name_ = info.job_name;
+            latest_print_session_closed_ = true;
         }
         if(msg.type == middleware::MsgType::APP_Print_Video_Session_Finish_Ntf) {
             print_h264_.on_session_finish(info);
@@ -577,6 +609,24 @@ void MediaService::handle_print_video_finalize(const middleware::Message& msg)
     }
     req.frames_dir[sizeof(req.frames_dir) - 1] = '\0';
     if(req.frames_dir[0] == '\0') {
+        std::string session_id;
+        std::string job_name;
+        bool can_cleanup = false;
+        {
+            std::lock_guard<std::mutex> lock(finalize_mtx_);
+            can_cleanup = latest_print_session_closed_;
+            if(can_cleanup) {
+                session_id = latest_print_session_id_;
+                job_name = latest_print_job_name_;
+                latest_print_session_closed_ = false;
+            }
+        }
+        if(can_cleanup && !session_id.empty() && !job_name.empty()) {
+            print_h264_.enqueue_cleanup_for_session(job_name.c_str(), session_id.c_str());
+        } else {
+            UPC_LOG_MEDIA_SERVICE(
+                Warn, "print_h264 cleanup skipped: stale or empty finalize request");
+        }
         return;
     }
 
@@ -594,6 +644,32 @@ void MediaService::handle_print_video_finalize(const middleware::Message& msg)
     if(!defer) {
         print_video_.finalize_after_exit(req.frames_dir);
     }
+}
+
+void MediaService::handle_storage_usage_req(const middleware::Message& msg) const
+{
+    struct statvfs vfs {};
+    middleware::StorageUsagePayload rsp{};
+    if(::statvfs(CAMERA_PRINT_VIDEO_OUT_DIR, &vfs) == 0) {
+        const uint64_t block_size = static_cast<uint64_t>(vfs.f_frsize);
+        const uint64_t total = static_cast<uint64_t>(vfs.f_blocks) * block_size;
+        const uint64_t free_bytes = static_cast<uint64_t>(vfs.f_bavail) * block_size;
+        rsp.total_bytes = total;
+        rsp.used_bytes = (total > free_bytes) ? (total - free_bytes) : 0u;
+    } else {
+        UPC_LOG_MEDIA_SERVICE(Warn, "storage statvfs failed path=%s err=%d",
+                              CAMERA_PRINT_VIDEO_OUT_DIR, errno);
+        rsp.total_bytes = 0;
+        rsp.used_bytes = 0;
+    }
+
+    middleware::Message ntf(
+        middleware::MsgType::APP_Storage_Usage_Rsp,
+        middleware::ModuleId::APP_MEDIA,
+        msg.sender_id);
+    ntf.payload = middleware::MsgPayload::from_bytes(
+        reinterpret_cast<const uint8_t*>(&rsp), sizeof(rsp));
+    middleware::MsgPort::instance().publish_async(ntf);
 }
 
 uint64_t MediaService::monotonic_ms()

@@ -40,6 +40,7 @@ void apply_env(const middleware::EnvSnapshotPayload &p)
     g_snap.pm10_indoor    = p.pm10_indoor;
     g_snap.humidity_percent = p.humidity_percent;
     g_snap.pressure_kpa   = p.pressure_kpa;
+    g_snap.powder_bits    = p.powder_bits;
     notify_observers();
 }
 
@@ -61,6 +62,7 @@ void ui_device_state_init(void)
         g_snap.pm10_indoor    = -1.0f;
         g_snap.humidity_percent = -1.0f;
         g_snap.pressure_kpa   = -1.0f;
+        g_snap.powder_bits    = 0u;
         g_inited = true;
     }
     ui::UiMsgProxy::instance().register_env_update(

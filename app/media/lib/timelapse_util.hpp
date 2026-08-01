@@ -27,6 +27,9 @@ bool encode_png_sequence_to_mp4(const std::string& session_dir,
                                 uint32_t frame_count, uint32_t fps,
                                 const char* out_path);
 
+/** 将 print.h264 裸流封装为 MP4（无音频）。 */
+bool remux_h264_to_mp4(const char* h264_path, uint32_t fps, const char* out_path);
+
 bool create_raw_thumb_from_nv12(const std::vector<uint8_t>& nv12,
                                 uint32_t width, uint32_t height,
                                 const char* out_path);

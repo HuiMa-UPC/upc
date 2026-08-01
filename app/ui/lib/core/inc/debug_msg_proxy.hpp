@@ -24,6 +24,7 @@ using DebugLaserCb   = std::function<void(const middleware::DebugLaserStatePaylo
 using DebugPrintH264RecordCb = std::function<void(bool)>;
 using DebugCleanRecordCb = std::function<void(bool)>;
 using DebugEnvSimCb = std::function<void(bool)>;
+using DebugEnvSimPowderCb = std::function<void(bool)>;
 
 class DebugMsgProxy {
 public:
@@ -65,6 +66,8 @@ public:
     void request_clean_record_state();
     void send_env_sim_set(bool on);
     void request_env_sim_state();
+    void send_env_sim_powder_set(bool on);
+    void request_env_sim_powder_state();
 
     /* ---- 状态回读 ---- */
     void register_sensor(DebugSensorCb cb);
@@ -75,6 +78,7 @@ public:
     void register_print_h264_record(DebugPrintH264RecordCb cb);
     void register_clean_record(DebugCleanRecordCb cb);
     void register_env_sim(DebugEnvSimCb cb);
+    void register_env_sim_powder(DebugEnvSimPowderCb cb);
 
 private:
     DebugMsgProxy() = default;
@@ -113,6 +117,7 @@ private:
     DebugPrintH264RecordCb print_h264_record_cb_;
     DebugCleanRecordCb clean_record_cb_;
     DebugEnvSimCb env_sim_cb_;
+    DebugEnvSimPowderCb env_sim_powder_cb_;
 };
 
 } // namespace ui

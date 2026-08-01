@@ -984,8 +984,8 @@ lv_obj_t *make_ctl_backdrop(lv_obj_t *parent, int32_t w, int32_t h)
     return bd;
 }
 
-/** 底衬里的一块：waist=false 走全圆角（blob / 胶囊），true 走直角细腰。
- *  细腰只画上下两条边，且左右各多探出 1px 压住相邻块的竖边，接缝才连得上。 */
+/** 底衬里的一块：waist=false 走全圆角（blob / 胶囊），true 走圆角细腰。
+ *  细腰保留上下边并做小圆角，让两端过渡更像水滴，不再是生硬矩形。 */
 void add_backdrop_block(lv_obj_t *bd, int32_t x, int32_t y,
                         int32_t w, int32_t h, bool waist)
 {
@@ -995,7 +995,7 @@ void add_backdrop_block(lv_obj_t *bd, int32_t x, int32_t y,
     lv_obj_set_pos(blk, x, y);
     lv_obj_set_style_bg_color(blk, lv_color_black(), 0);
     lv_obj_set_style_bg_opa(blk, LV_OPA_COVER, 0);
-    lv_obj_set_style_radius(blk, waist ? 0 : LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_radius(blk, waist ? (h / 2) : LV_RADIUS_CIRCLE, 0);
     lv_obj_set_style_border_width(blk, 1, 0);
     lv_obj_set_style_border_color(blk, lv_color_white(), 0);
     lv_obj_set_style_border_opa(blk, LV_OPA_20, 0);
@@ -1441,8 +1441,8 @@ lv_obj_t *build_print_controls_run(lv_obj_t *parent)
     lv_obj_t *bd = make_ctl_backdrop(grp, w, blob);
     add_backdrop_block(bd, 0, 0, blob, blob, false);
     add_backdrop_block(bd, blob + gap, 0, blob, blob, false);
-    add_backdrop_block(bd, blob - 1, (blob - blob * 2 / 5) / 2,
-                       gap + 2, blob * 2 / 5, true);
+    add_backdrop_block(bd, blob - 2, (blob - blob / 2) / 2,
+                       gap + 4, blob / 2, true);
 
     /* 暂停钮：运行态是两根竖条（稿 4231:5723/5724 的 4×16，间距 3），
      * 暂停态换成实心三角。两套图形都建好，靠显隐切换。 */
@@ -1511,8 +1511,8 @@ lv_obj_t *build_print_controls_collect(lv_obj_t *parent)
     lv_obj_t *bd = make_ctl_backdrop(grp, w, blob);
     add_backdrop_block(bd, 0, 0, blob, blob, false);
     add_backdrop_block(bd, blob + gap, 0, pill, blob, false);
-    add_backdrop_block(bd, blob - 1, (blob - blob * 2 / 5) / 2,
-                       gap + 2, blob * 2 / 5, true);
+    add_backdrop_block(bd, blob - 2, (blob - blob / 2) / 2,
+                       gap + 4, blob / 2, true);
 
     g_purify_btn = make_ctl_round_btn(grp, kCtlBlueA, kCtlBlueB,
                                      on_result_purify_click);

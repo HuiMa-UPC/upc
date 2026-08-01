@@ -83,6 +83,15 @@ void DebugMsgProxy::init()
                 env_sim_cb_(p.on != 0);
             }
         }));
+
+    subs_.push_back(bus.subscribe(
+        middleware::MsgType::GLAVO_Debug_Env_Sim_Powder_Ntf, middleware::ModuleId::UI,
+        [this](const middleware::Message& msg) {
+            middleware::DebugOnOffPayload p{};
+            if (env_sim_powder_cb_ && read_inline_pod(msg, p)) {
+                env_sim_powder_cb_(p.on != 0);
+            }
+        }));
 }
 
 /* ---- Tab1 ---- */
@@ -276,6 +285,18 @@ void DebugMsgProxy::request_env_sim_state()
     publish_empty(middleware::MsgType::UI_Debug_Env_Sim_Get_Req);
 }
 
+void DebugMsgProxy::send_env_sim_powder_set(bool on)
+{
+    middleware::DebugOnOffPayload p{};
+    p.on = on ? 1 : 0;
+    publish_pod(middleware::MsgType::UI_Debug_Env_Sim_Powder_Set_Req, p);
+}
+
+void DebugMsgProxy::request_env_sim_powder_state()
+{
+    publish_empty(middleware::MsgType::UI_Debug_Env_Sim_Powder_Get_Req);
+}
+
 /* ---- 回读注册 ---- */
 void DebugMsgProxy::register_sensor(DebugSensorCb cb) { sensor_cb_ = std::move(cb); }
 void DebugMsgProxy::register_axis(DebugAxisCb cb)     { axis_cb_   = std::move(cb); }
@@ -295,6 +316,11 @@ void DebugMsgProxy::register_clean_record(DebugCleanRecordCb cb)
 void DebugMsgProxy::register_env_sim(DebugEnvSimCb cb)
 {
     env_sim_cb_ = std::move(cb);
+}
+
+void DebugMsgProxy::register_env_sim_powder(DebugEnvSimPowderCb cb)
+{
+    env_sim_powder_cb_ = std::move(cb);
 }
 
 } // namespace ui

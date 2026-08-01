@@ -152,7 +152,9 @@ PrintHistoryEntry parse_object(const std::string& obj)
     }
     parse_string_field(obj, "frames_dir", e.frames_dir);
     parse_string_field(obj, "thumb", e.thumb);
+    parse_string_field(obj, "print_thumb", e.print_thumb);
     parse_string_field(obj, "video", e.video);
+    parse_string_field(obj, "print_video", e.print_video);
     (void)parse_bool_field(obj, "video_pending", e.video_pending);
     (void)parse_bool_field(obj, "committed", e.committed);
     (void)parse_uint_field(obj, "clean_first_png", e.clean_first_png);
@@ -245,7 +247,9 @@ bool print_history_manifest_save(const std::string& path,
             << "\"status\":\"" << print_history_status_str(e.status) << "\","
             << "\"frames_dir\":\"" << json_escape(e.frames_dir) << "\","
             << "\"thumb\":\"" << json_escape(e.thumb) << "\","
+            << "\"print_thumb\":\"" << json_escape(e.print_thumb) << "\","
             << "\"video\":\"" << json_escape(e.video) << "\","
+            << "\"print_video\":\"" << json_escape(e.print_video) << "\","
             << "\"video_pending\":" << (e.video_pending ? "true" : "false") << ","
             << "\"committed\":" << (e.committed ? "true" : "false") << ","
             << "\"clean_first_png\":" << e.clean_first_png << ','

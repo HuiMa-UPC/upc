@@ -62,13 +62,14 @@
  *                  最大 layer_index 落盘，见 PrintVideoLayerSnapPayload）。
  *   2. Storage  —— 无容量上报接口，用本文件顶部的 kStorageUsedMB/kStorageTotalMB
  *                  占位；接上后端后只需改 storage_used_mb()/storage_total_mb()。
- *   3. Timelapse / Album 两个 Tab —— 数据源未定义，先只做空态。
+ *   3. Storage 目前仍为占位常量，待后端容量上报接口接入。
  */
 
 namespace {
 
 /* LVGL POSIX FS 盘符（lv_conf: LV_FS_POSIX_LETTER 'A'） */
 constexpr const char *kThumbDrive = "A:";
+constexpr const char *kPhotoDir   = "/home/photo";
 
 /* ---- 设计稿里项目 token 没覆盖的两个色 ---- */
 /** Completed 胶囊字色（稿 4478:7265）；比 user_color_status_ok 稍暗，是稿里的绿 */
@@ -78,24 +79,30 @@ constexpr uint32_t kColorWarn      = 0xFF7843;
 /** 缩略图槽底色（稿 4435:6119 的 #202020），也是「视频正在生成」占位底 */
 constexpr uint32_t kColorThumbBg   = 0x202020;
 
-/* ---- 存储容量：后端接口未定，先用常量占位 ----
- * 改 kStorageUsedMB 就能过一遍三态：<90% 正常(蓝) / ≥90% 将满(橙+横幅) /
- * =100% 已满(红+横幅)。接上后端后把 storage_used_mb() 换成真实取数即可。 */
-constexpr float kStorageUsedMB   = 0.7f;
-constexpr float kStorageTotalMB  = 200.0f;
+/* ---- 存储容量：默认占位；进历史页后向 Media 请求真实值并刷新 ---- */
+constexpr float kStorageUsedMBFallback  = 0.7f;
+constexpr float kStorageTotalMBFallback = 200.0f;
 constexpr int   kStorageWarnPct  = 90;
 
-float storage_used_mb(void)  { return kStorageUsedMB; }
-float storage_total_mb(void) { return kStorageTotalMB; }
+float g_storage_used_mb = kStorageUsedMBFallback;
+float g_storage_total_mb = kStorageTotalMBFallback;
+
+float storage_used_mb(void)  { return g_storage_used_mb; }
+float storage_total_mb(void) { return g_storage_total_mb; }
 
 /* ---- Tab ---- */
 enum class HistTab : uint8_t {
-    History   = 0,   /**< 打印历史（本期唯一有数据的 Tab） */
-    Timelapse = 1,   /**< 延时摄影（数据源待定） */
-    Album     = 2,   /**< 相册（数据源待定） */
+    History   = 0,   /**< 打印录像 */
+    Timelapse = 1,   /**< 延时摄影 */
+    Album     = 2,   /**< 相册 */
 };
 constexpr int kTabCount = 3;
-constexpr const char *kTabTitles[kTabCount] = { "Print History", "Timelapse", "Album" };
+constexpr HistTab kTabOrder[kTabCount] = {
+    HistTab::Timelapse,
+    HistTab::History,
+    HistTab::Album,
+};
+constexpr const char *kTabTitles[kTabCount] = { "Timelapse", "Print History", "Album" };
 
 /** 一个 Tab 项：文字 + 下方主色下划线（未选中时下划线隐藏） */
 struct TabItem {
@@ -125,7 +132,7 @@ lv_obj_t *g_banner       = nullptr; /**< 存储告警横幅 */
 lv_obj_t *g_banner_lbl   = nullptr;
 lv_obj_t *g_banner_icon  = nullptr;
 
-HistTab g_tab           = HistTab::History;
+HistTab g_tab           = HistTab::Timelapse;
 bool    g_manage        = false;
 bool    g_history_active   = false;
 bool    g_history_subscribed = false;
@@ -134,8 +141,16 @@ ui_modal_dialog_t *g_del_dlg = nullptr;
 
 /** 每张卡片的运行时上下文（删除动作 + 左滑状态 + 多选状态） */
 struct HistoryCard {
+    enum class Kind : uint8_t {
+        PrintVideo = 0,
+        Timelapse  = 1,
+        AlbumPhoto = 2,
+    };
+    Kind        kind = Kind::Timelapse;
     std::string frames_dir;         /**< manifest 相对目录名（删除主键） */
+    std::string photo_abs_path;     /**< Album：绝对路径 */
     std::string thumb;
+    std::string print_thumb;
     std::string video;
     std::string thumb_src;          /**< LVGL FS 路径，如 A:/home/video/x/thumb.rthm */
     std::string title;              /**< 播放器标题（作业名） */
@@ -159,6 +174,25 @@ void apply_manage_ui(void);
 void rebuild_list(void);
 void show_empty(bool empty);
 void apply_empty_copy(void);
+
+bool card_has_delete_target(const HistoryCard* c)
+{
+    if(!c) {
+        return false;
+    }
+    if(c->kind == HistoryCard::Kind::AlbumPhoto) {
+        return !c->photo_abs_path.empty();
+    }
+    return !c->frames_dir.empty();
+}
+
+HistTab tab_from_index(int idx)
+{
+    if(idx < 0 || idx >= kTabCount) {
+        return HistTab::Timelapse;
+    }
+    return kTabOrder[idx];
+}
 
 /** 右侧悬浮翻页钮直径（与设置页同档） */
 int32_t scroll_btn_size(void)
@@ -373,33 +407,186 @@ void card_gesture_cb(lv_event_t *e)
  *  删除（单条左滑 / 管理模式批量共用同一套落盘逻辑）
  * ========================================================================= */
 
-/** 删媒体目录 + 从 manifest 摘除这些条目并原子重写（tmp + rename） */
-void remove_history_entries(const std::vector<std::string> &frames_dirs)
+bool remove_file_if_exists(const std::string& abs_path)
 {
-    if(frames_dirs.empty()) {
+    if(abs_path.empty()) {
+        return true;
+    }
+    std::error_code ec;
+    if(!std::filesystem::exists(abs_path, ec)) {
+        return true;
+    }
+    return std::filesystem::remove(abs_path, ec);
+}
+
+bool remove_png_and_thumb_in_dir(const std::string& abs_dir)
+{
+    if(abs_dir.empty()) {
+        return false;
+    }
+    std::error_code ec;
+    if(!std::filesystem::is_directory(abs_dir, ec)) {
+        return true;
+    }
+    for(const auto& de : std::filesystem::directory_iterator(abs_dir, ec)) {
+        if(ec) {
+            return false;
+        }
+        if(!de.is_regular_file(ec) || ec) {
+            continue;
+        }
+        const std::filesystem::path p = de.path();
+        const std::string ext = p.extension().string();
+        const std::string name = p.filename().string();
+        if(ext == ".png" || name == "thumb.rthm") {
+            if(!std::filesystem::remove(p, ec) || ec) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+bool remove_transient_media_in_dir(const std::string& abs_dir)
+{
+    if(abs_dir.empty()) {
+        return false;
+    }
+    const std::vector<std::string> names = {
+        "print.h264",
+        "print_raw.nv12",
+        "print_h264.mp4",
+        "timelapse.mp4",
+        "thumb.rthm",
+        "print_thumb.rthm",
+    };
+    for(const auto& name : names) {
+        if(!remove_file_if_exists(abs_dir + "/" + name)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+void cleanup_empty_video_dir(const std::string& frames_dir)
+{
+    if(frames_dir.empty()) {
         return;
     }
-    const std::string base = UPC_PRINT_VIDEO_DIR;
-    for(const std::string &dir : frames_dirs) {
-        std::error_code ec;
-        (void)std::filesystem::remove_all(base + "/" + dir, ec);
+    const std::string abs_dir = std::string(UPC_PRINT_VIDEO_DIR) + "/" + frames_dir;
+    std::error_code ec;
+    if(!std::filesystem::is_directory(abs_dir, ec)) {
+        return;
+    }
+    if(!std::filesystem::is_empty(abs_dir, ec)) {
+        return;
+    }
+    (void)std::filesystem::remove(abs_dir, ec);
+}
+
+bool remove_cards_with_rollback(const std::vector<HistoryCard*>& cards)
+{
+    if(cards.empty()) {
+        return true;
     }
 
     std::vector<upc::PrintHistoryEntry> entries;
     if(!upc::print_history_manifest_load(UPC_PRINT_VIDEO_MANIFEST, entries)) {
-        return;
+        return false;
     }
+
+    bool changed_manifest = false;
+    std::vector<std::string> cleanup_dirs;
+    for(const HistoryCard* c : cards) {
+        if(!c) {
+            continue;
+        }
+        if(c->kind == HistoryCard::Kind::AlbumPhoto) {
+            if(!remove_file_if_exists(c->photo_abs_path)) {
+                return false;
+            }
+            continue;
+        }
+        if(c->frames_dir.empty()) {
+            return false;
+        }
+        auto it = std::find_if(entries.begin(), entries.end(),
+                               [&](const upc::PrintHistoryEntry& e) {
+                                   return e.frames_dir == c->frames_dir;
+                               });
+        if(it == entries.end()) {
+            continue;
+        }
+
+        const std::string session_dir =
+            std::string(UPC_PRINT_VIDEO_DIR) + "/" + it->frames_dir;
+        cleanup_dirs.push_back(it->frames_dir);
+        if(c->kind == HistoryCard::Kind::PrintVideo) {
+            const std::string rel = !it->print_video.empty() ? it->print_video : c->video;
+            if(!rel.empty() &&
+               !remove_file_if_exists(std::string(UPC_PRINT_VIDEO_DIR) + "/" + rel)) {
+                return false;
+            }
+            const std::string thumb_rel =
+                !it->print_thumb.empty() ? it->print_thumb : c->print_thumb;
+            if(!thumb_rel.empty() &&
+               !remove_file_if_exists(std::string(UPC_PRINT_VIDEO_DIR) + "/" + thumb_rel)) {
+                return false;
+            }
+            it->print_video.clear();
+            it->print_thumb.clear();
+            changed_manifest = true;
+        } else {
+            if(!it->video.empty() &&
+               !remove_file_if_exists(std::string(UPC_PRINT_VIDEO_DIR) + "/" + it->video)) {
+                return false;
+            }
+            if(!remove_png_and_thumb_in_dir(session_dir)) {
+                return false;
+            }
+            it->video.clear();
+            it->thumb.clear();
+            it->video_pending = false;
+            changed_manifest = true;
+        }
+    }
+
+    for(const auto& e : entries) {
+        if(!e.frames_dir.empty() && e.video.empty() && e.print_video.empty()) {
+            const std::string abs_dir =
+                std::string(UPC_PRINT_VIDEO_DIR) + "/" + e.frames_dir;
+            if(!remove_transient_media_in_dir(abs_dir)) {
+                return false;
+            }
+        }
+    }
+
     entries.erase(
         std::remove_if(entries.begin(), entries.end(),
-            [&](const upc::PrintHistoryEntry &en) {
-                return std::find(frames_dirs.begin(), frames_dirs.end(),
-                                 en.frames_dir) != frames_dirs.end();
+            [](const upc::PrintHistoryEntry& e) {
+                return e.video.empty() && e.print_video.empty();
             }),
         entries.end());
-    const std::string tmp = std::string(UPC_PRINT_VIDEO_MANIFEST) + ".tmp";
-    if(upc::print_history_manifest_save(tmp, entries)) {
-        (void)std::rename(tmp.c_str(), UPC_PRINT_VIDEO_MANIFEST);
+
+    if(!changed_manifest) {
+        return true;
     }
+
+    const std::string tmp = std::string(UPC_PRINT_VIDEO_MANIFEST) + ".tmp";
+    if(!upc::print_history_manifest_save(tmp, entries)) {
+        (void)std::remove(tmp.c_str());
+        return false;
+    }
+    if(std::rename(tmp.c_str(), UPC_PRINT_VIDEO_MANIFEST) != 0) {
+        (void)std::remove(tmp.c_str());
+        return false;
+    }
+    std::sort(cleanup_dirs.begin(), cleanup_dirs.end());
+    cleanup_dirs.erase(std::unique(cleanup_dirs.begin(), cleanup_dirs.end()), cleanup_dirs.end());
+    for(const std::string& dir : cleanup_dirs) {
+        cleanup_empty_video_dir(dir);
+    }
+    return true;
 }
 
 /**
@@ -435,10 +622,13 @@ void del_click_cb(lv_event_t *e)
     HistoryCard *c = static_cast<HistoryCard *>(lv_event_get_user_data(e));
     /* 生成中的条目不让删：Camera 正在往这个目录里 remux，删了会打断落盘。
      * 「视频不可用」的条目允许删——否则坏条目会永远留在列表里。 */
-    if(!c || c->frames_dir.empty() || c->video_pending) {
+    if(!c || !card_has_delete_target(c) || c->video_pending) {
         return;
     }
-    remove_history_entries({ c->frames_dir });
+    if(!remove_cards_with_rollback({ c })) {
+        ui_toast_show("Delete failed, retry later", user_color_status_err, 1500);
+        return;
+    }
     ui_toast_show("Deleted", user_color_accent, 1200);
     lv_async_call(delete_card_async, c);
 }
@@ -465,16 +655,19 @@ void on_batch_del_confirm(lv_event_t * /*e*/)
 {
     close_del_dlg();
 
-    std::vector<std::string> dirs;
+    std::vector<HistoryCard*> selected_cards;
     for(HistoryCard *c : g_cards) {
-        if(c->selected && !c->frames_dir.empty()) {
-            dirs.push_back(c->frames_dir);
+        if(c->selected) {
+            selected_cards.push_back(c);
         }
     }
-    if(dirs.empty()) {
+    if(selected_cards.empty()) {
         return;
     }
-    remove_history_entries(dirs);
+    if(!remove_cards_with_rollback(selected_cards)) {
+        ui_toast_show("Delete failed, retry later", user_color_status_err, 1500);
+        return;
+    }
     ui_toast_show("Deleted", user_color_accent, 1200);
     /* 批量删完退出管理模式，列表整表重建（延后到事件之外，避免删中卡片时 UAF） */
     set_manage_mode(false);
@@ -571,7 +764,7 @@ void refresh_sel_count(void)
 void toggle_card_selection(HistoryCard *c)
 {
     /* 生成中的条目不参与多选：它删不掉（见 del_click_cb） */
-    if(!c || c->video_pending) {
+    if(!c || c->video_pending || !card_has_delete_target(c)) {
         return;
     }
     c->selected = !c->selected;
@@ -609,7 +802,7 @@ void apply_manage_ui(void)
         if(!c->check) {
             continue;
         }
-        if(g_manage) {
+        if(g_manage && !c->video_pending && card_has_delete_target(c)) {
             lv_obj_remove_flag(c->check, LV_OBJ_FLAG_HIDDEN);
         } else {
             lv_obj_add_flag(c->check, LV_OBJ_FLAG_HIDDEN);
@@ -648,7 +841,7 @@ void on_manage_select_all(lv_event_t * /*e*/)
     int selectable = 0;
     int selected   = 0;
     for(const HistoryCard *c : g_cards) {
-        if(c->video_pending) {
+        if(c->video_pending || !card_has_delete_target(c)) {
             continue;
         }
         ++selectable;
@@ -658,7 +851,7 @@ void on_manage_select_all(lv_event_t * /*e*/)
     }
     const bool select_all = (selected < selectable);
     for(HistoryCard *c : g_cards) {
-        if(c->video_pending) {
+        if(c->video_pending || !card_has_delete_target(c)) {
             continue;
         }
         c->selected = select_all;
@@ -690,6 +883,9 @@ void on_thumb_click(lv_event_t *e)
         toggle_card_selection(c);   /* 管理模式下缩略图也是勾选热区 */
         return;
     }
+    if(c->kind == HistoryCard::Kind::AlbumPhoto) {
+        return;
+    }
     if(c->frames_dir.empty() || !c->video_ready) {
         return;
     }
@@ -709,11 +905,16 @@ void on_thumb_click(lv_event_t *e)
     ui::PageManager::instance().switch_to("user_timelapse");
 }
 
-std::string make_thumb_src_fallback(const upc::PrintHistoryEntry& e)
+std::string make_thumb_src_fallback(const upc::PrintHistoryEntry& e,
+                                    HistoryCard::Kind kind)
 {
     const std::string base = std::string(UPC_PRINT_VIDEO_DIR) + "/";
-    if(!e.thumb.empty()) {
-        const std::string abs_thumb = base + e.thumb;
+    const std::string thumb_rel =
+        (kind == HistoryCard::Kind::PrintVideo && !e.print_thumb.empty())
+            ? e.print_thumb
+            : e.thumb;
+    if(!thumb_rel.empty()) {
+        const std::string abs_thumb = base + thumb_rel;
         std::error_code ec;
         if(std::filesystem::exists(abs_thumb, ec)) {
             return std::string(kThumbDrive) + abs_thumb;
@@ -817,7 +1018,7 @@ lv_obj_t *make_action_btn(lv_obj_t *parent, const char *text, bool danger,
 void apply_tab_style(void)
 {
     for(int i = 0; i < kTabCount; ++i) {
-        const bool on = (static_cast<int>(g_tab) == i);
+        const bool on = (g_tab == kTabOrder[i]);
         if(g_tabs[i].label) {
             lv_obj_set_style_text_color(g_tabs[i].label,
                 on ? user_color_text : user_color_text_dim, 0);
@@ -836,10 +1037,14 @@ void on_tab_click(lv_event_t *e)
 {
     const int idx = static_cast<int>(
         reinterpret_cast<intptr_t>(lv_event_get_user_data(e)));
-    if(idx < 0 || idx >= kTabCount || idx == static_cast<int>(g_tab)) {
+    if(idx < 0 || idx >= kTabCount) {
         return;
     }
-    g_tab = static_cast<HistTab>(idx);
+    const HistTab next = tab_from_index(idx);
+    if(next == g_tab) {
+        return;
+    }
+    g_tab = next;
     apply_tab_style();
     set_manage_mode(false);   /* 切 Tab 退出管理模式 */
     rebuild_list();
@@ -1116,9 +1321,15 @@ void make_thumbnail(lv_obj_t *parent, const HistoryCard *c)
         lv_obj_add_flag(img, LV_OBJ_FLAG_EVENT_BUBBLE);
     }
 
-    /* 左上角标 "Timelapse"（稿是中文「延时摄影」，本页统一英文） */
+    /* 左上角标（按分类显示） */
     lv_obj_t *tag = lv_label_create(slot);
-    lv_label_set_text(tag, "Timelapse");
+    const char* tag_text = "Timelapse";
+    if(c->kind == HistoryCard::Kind::PrintVideo) {
+        tag_text = "Print Video";
+    } else if(c->kind == HistoryCard::Kind::AlbumPhoto) {
+        tag_text = "Photo";
+    }
+    lv_label_set_text(tag, tag_text);
     lv_obj_set_style_text_color(tag, user_color_text, 0);
     lv_obj_set_style_text_font(tag, user_font_caption(), 0);
     lv_obj_set_style_bg_color(tag, lv_color_hex(0x000000), 0);
@@ -1129,7 +1340,7 @@ void make_thumbnail(lv_obj_t *parent, const HistoryCard *c)
     lv_obj_align(tag, LV_ALIGN_TOP_LEFT, USER_PAD_SM / 2, USER_PAD_SM / 2);
 
     /* 右下角全屏角标：仅提示可点开，点击热区仍是整块缩略图 */
-    if(c->video_ready) {
+    if(c->video_ready && c->kind != HistoryCard::Kind::AlbumPhoto) {
         lv_obj_t *badge = lv_obj_create(slot);
         lv_obj_remove_style_all(badge);
         lv_obj_set_size(badge, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
@@ -1148,16 +1359,20 @@ void make_thumbnail(lv_obj_t *parent, const HistoryCard *c)
 void build_entry(lv_obj_t *parent, const upc::PrintHistoryEntry &e)
 {
     HistoryCard *ctx = new HistoryCard();
+    ctx->kind = (g_tab == HistTab::History)
+        ? HistoryCard::Kind::PrintVideo
+        : HistoryCard::Kind::Timelapse;
     ctx->frames_dir = e.frames_dir;
     ctx->thumb = e.thumb;
-    ctx->video = e.video;
-    ctx->thumb_src = make_thumb_src_fallback(e);
+    ctx->print_thumb = e.print_thumb;
+    ctx->video = (ctx->kind == HistoryCard::Kind::PrintVideo) ? e.print_video : e.video;
+    ctx->thumb_src = make_thumb_src_fallback(e, ctx->kind);
     {
         const std::string base = std::string(UPC_PRINT_VIDEO_DIR) + "/";
         bool mp4_ready = false;
-        if(!e.video.empty()) {
+        if(!ctx->video.empty()) {
             std::error_code ec;
-            mp4_ready = std::filesystem::exists(base + e.video, ec);
+            mp4_ready = std::filesystem::exists(base + ctx->video, ec);
         }
         ctx->video_ready = mp4_ready;
         ctx->video_pending = (!mp4_ready) && e.video_pending;
@@ -1171,7 +1386,9 @@ void build_entry(lv_obj_t *parent, const upc::PrintHistoryEntry &e)
     format_material(e.material_g, mat_buf, sizeof(mat_buf));
 
     /* 播放器标题/副标题 */
-    ctx->title    = e.job_name.empty() ? "Timelapse" : e.job_name;
+    ctx->title    = e.job_name.empty()
+                  ? (ctx->kind == HistoryCard::Kind::PrintVideo ? "Print Video" : "Timelapse")
+                  : e.job_name;
     ctx->subtitle = std::string(range_buf) + "  " + date_buf;
 
     /* 整条：管理模式下第一格是复选框（隐藏时 flex 跳过，卡片自动顶到最左） */
@@ -1346,6 +1563,134 @@ void clear_cards(void)
     g_cards.clear();
 }
 
+bool is_photo_file(const std::filesystem::path& p)
+{
+    const std::string ext = p.extension().string();
+    return ext == ".png" || ext == ".jpg" || ext == ".jpeg" ||
+           ext == ".webp" || ext == ".bmp";
+}
+
+void build_album_entry(lv_obj_t* parent, const std::filesystem::path& path)
+{
+    HistoryCard* ctx = new HistoryCard();
+    ctx->kind = HistoryCard::Kind::AlbumPhoto;
+    ctx->photo_abs_path = path.string();
+    ctx->thumb_src = std::string(kThumbDrive) + ctx->photo_abs_path;
+    ctx->video_ready = true;
+    ctx->video_pending = false;
+    ctx->title = path.filename().string();
+    ctx->subtitle = "Photo";
+    g_cards.push_back(ctx);
+
+    lv_obj_t *wrap = lv_obj_create(parent);
+    lv_obj_remove_style_all(wrap);
+    lv_obj_set_width(wrap, LV_PCT(100));
+    lv_obj_set_height(wrap, USER_HIST_CARD_H);
+    lv_obj_set_flex_flow(wrap, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(wrap, LV_FLEX_ALIGN_START,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_column(wrap, USER_PAD, 0);
+    lv_obj_set_style_bg_opa(wrap, LV_OPA_TRANSP, 0);
+    lv_obj_clear_flag(wrap, LV_OBJ_FLAG_SCROLLABLE);
+    ctx->wrap = wrap;
+
+    lv_obj_t *check = lv_obj_create(wrap);
+    lv_obj_remove_style_all(check);
+    lv_obj_set_size(check, USER_HIST_CHECK_SZ, USER_HIST_CHECK_SZ);
+    lv_obj_set_style_radius(check, USER_BTN_RADIUS / 2, 0);
+    lv_obj_set_style_border_width(check, 1, 0);
+    lv_obj_set_style_border_color(check, user_color_text, 0);
+    lv_obj_set_style_border_opa(check, LV_OPA_40, 0);
+    lv_obj_set_style_bg_color(check, ui_color_danger, 0);
+    lv_obj_set_style_bg_opa(check, LV_OPA_TRANSP, 0);
+    lv_obj_clear_flag(check, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(check, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_flag(check, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_event_cb(check, card_click_cb, LV_EVENT_CLICKED, ctx);
+    ctx->check = check;
+
+    lv_obj_t *mark = lv_label_create(check);
+    lv_label_set_text(mark, LV_SYMBOL_OK);
+    lv_obj_set_style_text_color(mark, user_color_text, 0);
+    lv_obj_set_style_text_font(mark, user_font_caption(), 0);
+    lv_obj_center(mark);
+    lv_obj_add_flag(mark, LV_OBJ_FLAG_HIDDEN);
+    ctx->check_mark = mark;
+
+    lv_obj_t *holder = lv_obj_create(wrap);
+    lv_obj_remove_style_all(holder);
+    lv_obj_set_height(holder, LV_PCT(100));
+    lv_obj_set_flex_grow(holder, 1);
+    lv_obj_set_style_bg_opa(holder, LV_OPA_TRANSP, 0);
+    lv_obj_clear_flag(holder, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *del = lv_button_create(holder);
+    lv_obj_remove_style_all(del);
+    const int32_t del_sz = USER_BTN_PRIMARY_H;
+    lv_obj_set_size(del, del_sz, del_sz);
+    lv_obj_add_flag(del, LV_OBJ_FLAG_FLOATING);
+    lv_obj_set_style_radius(del, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_bg_color(del, ui_color_danger, 0);
+    lv_obj_set_style_bg_opa(del, LV_OPA_COVER, 0);
+    lv_obj_align(del, LV_ALIGN_RIGHT_MID, -USER_PAD, 0);
+    lv_obj_add_flag(del, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_event_cb(del, del_click_cb, LV_EVENT_CLICKED, ctx);
+    lv_obj_t *del_icon = lv_label_create(del);
+    lv_label_set_text(del_icon, LV_SYMBOL_TRASH);
+    lv_obj_set_style_text_color(del_icon, user_color_text, 0);
+    lv_obj_set_style_text_font(del_icon, user_font_text(), 0);
+    lv_obj_center(del_icon);
+    ctx->del_btn = del;
+
+    lv_obj_t *card = lv_obj_create(holder);
+    lv_obj_remove_style_all(card);
+    lv_obj_set_size(card, LV_PCT(100), LV_PCT(100));
+    lv_obj_set_style_radius(card, USER_BTN_RADIUS, 0);
+    lv_obj_set_style_bg_color(card, user_color_panel, 0);
+    lv_obj_set_style_bg_opa(card, LV_OPA_COVER, 0);
+    lv_obj_set_flex_flow(card, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(card, LV_FLEX_ALIGN_START,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_column(card, USER_PAD_SM, 0);
+    lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(card, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_remove_flag(card, LV_OBJ_FLAG_GESTURE_BUBBLE);
+    lv_obj_add_event_cb(card, card_gesture_cb, LV_EVENT_GESTURE, ctx);
+    lv_obj_add_event_cb(card, card_click_cb, LV_EVENT_CLICKED, ctx);
+    ctx->card = card;
+
+    make_thumbnail(card, ctx);
+
+    lv_obj_t *info = lv_obj_create(card);
+    lv_obj_remove_style_all(info);
+    lv_obj_set_height(info, LV_PCT(100));
+    lv_obj_set_flex_grow(info, 1);
+    lv_obj_set_flex_flow(info, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(info, LV_FLEX_ALIGN_CENTER,
+                          LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
+    lv_obj_set_style_pad_ver(info, USER_PAD_SM, 0);
+    lv_obj_set_style_pad_right(info, USER_PAD_SM, 0);
+    lv_obj_set_style_pad_row(info, USER_PAD_SM / 2, 0);
+    lv_obj_set_style_bg_opa(info, LV_OPA_TRANSP, 0);
+    lv_obj_clear_flag(info, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(info, LV_OBJ_FLAG_EVENT_BUBBLE);
+
+    lv_obj_t *name = lv_label_create(info);
+    lv_label_set_text(name, ctx->title.c_str());
+    lv_obj_set_style_text_color(name, user_color_text, 0);
+    lv_obj_set_style_text_font(name, user_font_text(), 0);
+    lv_label_set_long_mode(name, LV_LABEL_LONG_MODE_DOTS);
+    lv_obj_set_style_max_width(name, LV_PCT(90), 0);
+    lv_obj_set_height(name, lv_font_get_line_height(user_font_text()));
+
+    lv_obj_t *sub = lv_label_create(info);
+    lv_label_set_text(sub, ctx->subtitle.c_str());
+    lv_obj_set_style_text_color(sub, user_color_text_dim, 0);
+    lv_obj_set_style_text_font(sub, user_font_caption(), 0);
+
+    apply_card_selection(ctx);
+}
+
 /* ============================================================================
  *  空态
  * ========================================================================= */
@@ -1353,7 +1698,7 @@ void clear_cards(void)
 struct EmptyCopy {
     const char *title;
     const char *sub;
-    bool        with_btn;   /**< 只有「打印历史」空态带 Start Print（稿 4531:6938） */
+    bool        with_btn;   /**< 当前三类空态均不显示 Start Print，避免误触流程 */
 };
 
 EmptyCopy empty_copy_of(HistTab tab)
@@ -1366,8 +1711,8 @@ EmptyCopy empty_copy_of(HistTab tab)
         return { "No Photos", "Photos you capture will appear here.", false };
     case HistTab::History:
     default:
-        return { "No Print History",
-                 "Your completed and interrupted prints will appear here.", true };
+        return { "No Print Videos",
+                 "Print process videos from your prints will appear here.", false };
     }
 }
 
@@ -1503,13 +1848,6 @@ void rebuild_list(void)
     clear_cards();
     refresh_storage();
 
-    /* Timelapse / Album 两个 Tab 的数据源还没定义，先只出空态 */
-    if(g_tab != HistTab::History) {
-        show_empty(true);
-        apply_manage_ui();
-        return;
-    }
-
     std::vector<upc::PrintHistoryEntry> entries;
     (void)upc::print_history_manifest_load(UPC_PRINT_VIDEO_MANIFEST, entries);
 
@@ -1525,7 +1863,55 @@ void rebuild_list(void)
             return a.start_unix > b.start_unix;
         });
 
-    if(entries.empty()) {
+    std::vector<upc::PrintHistoryEntry> visible_entries;
+    visible_entries.reserve(entries.size());
+    for(const auto& e : entries) {
+        if(g_tab == HistTab::History || g_tab == HistTab::Timelapse) {
+            visible_entries.push_back(e);
+        }
+    }
+
+    if(g_tab == HistTab::Album) {
+        std::vector<std::filesystem::path> photos;
+        std::error_code ec;
+        if(std::filesystem::is_directory(kPhotoDir, ec)) {
+            for(const auto& de : std::filesystem::directory_iterator(kPhotoDir, ec)) {
+                if(ec) {
+                    break;
+                }
+                if(!de.is_regular_file(ec) || ec) {
+                    continue;
+                }
+                if(is_photo_file(de.path())) {
+                    photos.push_back(de.path());
+                }
+            }
+        }
+        std::sort(photos.begin(), photos.end(),
+            [](const std::filesystem::path& a, const std::filesystem::path& b) {
+                std::error_code ea;
+                std::error_code eb;
+                const auto ta = std::filesystem::last_write_time(a, ea);
+                const auto tb = std::filesystem::last_write_time(b, eb);
+                if(ea || eb) {
+                    return a.filename().string() > b.filename().string();
+                }
+                return ta > tb;
+            });
+        if(photos.empty()) {
+            show_empty(true);
+            apply_manage_ui();
+            return;
+        }
+        show_empty(false);
+        for(const auto& p : photos) {
+            build_album_entry(g_list, p);
+        }
+        apply_manage_ui();
+        return;
+    }
+
+    if(visible_entries.empty()) {
         show_empty(true);
         apply_manage_ui();
         return;
@@ -1534,7 +1920,7 @@ void rebuild_list(void)
 
     /* 按自然日分组：日期变了就先插一条分组标题 */
     std::string cur_date;
-    for(const upc::PrintHistoryEntry &e : entries) {
+    for(const upc::PrintHistoryEntry &e : visible_entries) {
         char date_buf[32];
         format_date(e.start_unix, date_buf, sizeof(date_buf));
         if(cur_date != date_buf) {
@@ -1555,6 +1941,15 @@ void refresh_history_async(void * /*user*/)
     }
 }
 
+void request_storage_usage_now()
+{
+    middleware::Message msg(
+        middleware::MsgType::UI_Storage_Usage_Req,
+        middleware::ModuleId::UI,
+        middleware::ModuleId::APP_MEDIA);
+    middleware::MsgPort::instance().publish_async(msg);
+}
+
 bool read_inline_manifest(const middleware::Message& msg,
                           middleware::PrintVideoManifestPayload& out)
 {
@@ -1568,6 +1963,17 @@ bool read_inline_manifest(const middleware::Message& msg,
 
 bool read_inline_clean_done(const middleware::Message& msg,
                             middleware::CleanTestDonePayload& out)
+{
+    if(msg.payload.type != middleware::MsgPayload::Type::Inline ||
+       msg.payload.length < sizeof(out)) {
+        return false;
+    }
+    std::memcpy(&out, msg.payload.data.bytes.data(), sizeof(out));
+    return true;
+}
+
+bool read_inline_storage_usage(const middleware::Message& msg,
+                               middleware::StorageUsagePayload& out)
 {
     if(msg.payload.type != middleware::MsgPayload::Type::Inline ||
        msg.payload.length < sizeof(out)) {
@@ -1608,11 +2014,34 @@ void ensure_history_subscribed_once()
                 lv_async_call(refresh_history_async, nullptr);
             }
         }));
+    g_history_subs.push_back(bus.subscribe(
+        middleware::MsgType::APP_Storage_Usage_Rsp,
+        middleware::ModuleId::UI,
+        [](const middleware::Message& msg) {
+            middleware::StorageUsagePayload p{};
+            if(!read_inline_storage_usage(msg, p)) {
+                return;
+            }
+            const double mb = 1024.0 * 1024.0;
+            g_storage_total_mb = p.total_bytes > 0
+                ? static_cast<float>(static_cast<double>(p.total_bytes) / mb)
+                : kStorageTotalMBFallback;
+            g_storage_used_mb = p.used_bytes > 0
+                ? static_cast<float>(static_cast<double>(p.used_bytes) / mb)
+                : 0.0f;
+            if(g_history_active) {
+                refresh_storage();
+            }
+        }));
 }
 
 void page_user_history_refresh(bool /*force*/)
 {
+    const bool entering = !g_history_active;
     g_history_active = true;
+    if(entering) {
+        request_storage_usage_now();
+    }
     if(!g_list) {
         return;
     }
@@ -1643,7 +2072,7 @@ lv_obj_t *page_user_history_create(lv_obj_t *parent)
     g_banner      = nullptr;
     g_storage_bar = nullptr;
     g_manage      = false;
-    g_tab         = HistTab::History;
+    g_tab         = HistTab::Timelapse;
     clear_cards();
 
     lv_obj_t *page = lv_obj_create(parent);

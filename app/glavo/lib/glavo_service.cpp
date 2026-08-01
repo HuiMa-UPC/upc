@@ -327,11 +327,13 @@ bool GlavoService::init()
             timelapse_video_fps_);
     }
 
-    print_h264_continuous_on_ = false;
+    print_h264_continuous_on_ = true;
     clean_video_record_on_ = true;
     clean_video_session_started_ = false;
     env_sim_on_ = false;
+    env_sim_powder_low_on_ = false;
     McuLink::instance().set_env_sim_enabled(false);
+    McuLink::instance().set_env_sim_powder_low(false);
     PrintVideoNotify::instance().set_print_h264_continuous(print_h264_continuous_on_);
     PrintVideoNotify::instance().set_timelapse_fps(timelapse_video_fps_);
     UPC_LOG_GLAVO_SERVICE(Info, "print h264 continuous=%d clean record(debug)=%d env_sim=%d",
@@ -401,6 +403,7 @@ bool GlavoService::start()
         middleware::MsgType::UI_Print_Terminate_Req,
         middleware::MsgType::UI_Print_Pause_Req,
         middleware::MsgType::UI_Print_Resume_Req,
+        middleware::MsgType::UI_Print_Powder_Low_Ignore_Req,
         middleware::MsgType::UI_Supply_Status_Req,
         middleware::MsgType::UI_PM25_Req,
         middleware::MsgType::UI_CLOSE_DOOR_Req,
@@ -448,6 +451,8 @@ bool GlavoService::start()
         middleware::MsgType::UI_Debug_Clean_Record_Get_Req,
         middleware::MsgType::UI_Debug_Env_Sim_Set_Req,
         middleware::MsgType::UI_Debug_Env_Sim_Get_Req,
+        middleware::MsgType::UI_Debug_Env_Sim_Powder_Set_Req,
+        middleware::MsgType::UI_Debug_Env_Sim_Powder_Get_Req,
 
         /* Settings/About：MCU 固件版本查询 */
         middleware::MsgType::UI_Mcu_Version_Req,
@@ -462,6 +467,7 @@ bool GlavoService::start()
     publish_debug_print_h264_record_state();
     publish_debug_clean_record_state();
     publish_debug_env_sim_state();
+    publish_debug_env_sim_powder_state();
     return true;
 }
 
@@ -666,6 +672,9 @@ void GlavoService::handle_message(const middleware::Message& msg)
         case middleware::MsgType::UI_Print_Resume_Req:
             handle_print_resume(msg);
             break;
+        case middleware::MsgType::UI_Print_Powder_Low_Ignore_Req:
+            handle_print_powder_low_ignore(msg);
+            break;
         case middleware::MsgType::UI_Supply_Status_Req:
             handle_supply_status_req(msg);
             break;
@@ -796,6 +805,12 @@ void GlavoService::handle_message(const middleware::Message& msg)
             break;
         case middleware::MsgType::UI_Debug_Env_Sim_Get_Req:
             handle_debug_env_sim_get(msg);
+            break;
+        case middleware::MsgType::UI_Debug_Env_Sim_Powder_Set_Req:
+            handle_debug_env_sim_powder_set(msg);
+            break;
+        case middleware::MsgType::UI_Debug_Env_Sim_Powder_Get_Req:
+            handle_debug_env_sim_powder_get(msg);
             break;
         case middleware::MsgType::UI_Mcu_Version_Req:
             handle_mcu_version_req(msg);
@@ -1179,6 +1194,7 @@ void GlavoService::launch_print_from_prepared(const std::string& full_path)
     reset_print_progress_state();
     parser::ParserManager::instance().start_parse();
 
+    ignore_powder_low_for_current_print_ = false;
     print_running_.store(true);
     PrintVideoNotify::instance().on_print_start(current_file_path_);
     McuLink::instance().begin_sending();
@@ -1277,6 +1293,17 @@ void GlavoService::handle_print_resume(const middleware::Message& msg)
     link.set_user_dispatch_paused(false);
     UPC_LOG_GLAVO_SERVICE(Info, "print_resume accepted");
     publish_print_pause_done(false);
+}
+
+void GlavoService::handle_print_powder_low_ignore(const middleware::Message& msg)
+{
+    (void)msg;
+    if(!print_running_.load()) {
+        UPC_LOG_GLAVO_SERVICE(Debug, "powder_low_ignore ignored: not running");
+        return;
+    }
+    ignore_powder_low_for_current_print_ = true;
+    UPC_LOG_GLAVO_SERVICE(Warn, "powder_low_ignore enabled for current print");
 }
 
 /** @brief 重置进度推送的去重状态（last_print_pct_ / last_parse_done_） */
@@ -1435,6 +1462,23 @@ void GlavoService::publish_print_pause_done(bool paused)
         UPC_LOG_GLAVO_SERVICE(Warn, "print_pause_done publish failed paused=%d",
                               paused ? 1 : 0);
     }
+    publish_print_h264_record_pause(paused);
+}
+
+void GlavoService::publish_print_h264_record_pause(bool paused)
+{
+    middleware::PrintPauseStatePayload p{};
+    p.paused = paused ? 1 : 0;
+    middleware::Message ntf(
+        middleware::MsgType::APP_Print_H264_Record_Pause_Ntf,
+        static_cast<middleware::ModuleId>(module_id()),
+        middleware::ModuleId::APP_MEDIA);
+    ntf.payload = middleware::MsgPayload::from_bytes(
+        reinterpret_cast<const uint8_t*>(&p), sizeof(p));
+    if(!publish_async(ntf)) {
+        UPC_LOG_GLAVO_SERVICE(Warn, "print_h264_pause publish failed paused=%d",
+                              paused ? 1 : 0);
+    }
 }
 
 void GlavoService::publish_print_powder_low_ntf()
@@ -1463,6 +1507,7 @@ void GlavoService::on_mcu_link_event(McuLinkEvent ev)
             send_print_progress(true);
             publish_terminate_done();
             print_running_.store(false);
+            ignore_powder_low_for_current_print_ = false;
             clear_prepare_session();
             break;
         case McuLinkEvent::TerminateDone:
@@ -1484,11 +1529,16 @@ void GlavoService::on_mcu_link_event(McuLinkEvent ev)
             }
             PrintVideoNotify::instance().on_print_abort();
             print_running_.store(false);
+            ignore_powder_low_for_current_print_ = false;
             publish_terminate_done();
             clear_prepare_session();
             break;
         case McuLinkEvent::PowderLow: {
             if(!print_running_.load()) {
+                break;
+            }
+            if(ignore_powder_low_for_current_print_) {
+                UPC_LOG_GLAVO_SERVICE(Warn, "powder low ignored for current print");
                 break;
             }
             McuLink& link = McuLink::instance();
@@ -2435,6 +2485,19 @@ void GlavoService::publish_debug_env_sim_state()
     (void)publish_async(ntf);
 }
 
+void GlavoService::publish_debug_env_sim_powder_state()
+{
+    middleware::DebugOnOffPayload p{};
+    p.on = env_sim_powder_low_on_ ? 1 : 0;
+    middleware::Message ntf(
+        middleware::MsgType::GLAVO_Debug_Env_Sim_Powder_Ntf,
+        middleware::ModuleId::APP_GLAVO,
+        middleware::ModuleId::UI);
+    ntf.payload = middleware::MsgPayload::from_bytes(
+        reinterpret_cast<const uint8_t*>(&p), sizeof(p));
+    (void)publish_async(ntf);
+}
+
 void GlavoService::handle_debug_env_sim_set(const middleware::Message& msg)
 {
     middleware::DebugOnOffPayload p{};
@@ -2443,14 +2506,45 @@ void GlavoService::handle_debug_env_sim_set(const middleware::Message& msg)
     }
     env_sim_on_ = (p.on != 0);
     McuLink::instance().set_env_sim_enabled(env_sim_on_);
+    if(!env_sim_on_) {
+        env_sim_powder_low_on_ = false;
+        McuLink::instance().set_env_sim_powder_low(false);
+    }
     UPC_LOG_GLAVO_SERVICE(Info, "debug env_sim=%d", env_sim_on_ ? 1 : 0);
     publish_debug_env_sim_state();
+    publish_debug_env_sim_powder_state();
 }
 
 void GlavoService::handle_debug_env_sim_get(const middleware::Message& msg)
 {
     (void)msg;
     publish_debug_env_sim_state();
+    publish_debug_env_sim_powder_state();
+}
+
+void GlavoService::handle_debug_env_sim_powder_set(const middleware::Message& msg)
+{
+    middleware::DebugOnOffPayload p{};
+    if(!read_inline_pod(msg.payload, p)) {
+        return;
+    }
+    if(!env_sim_on_) {
+        env_sim_powder_low_on_ = false;
+        McuLink::instance().set_env_sim_powder_low(false);
+        UPC_LOG_GLAVO_SERVICE(Info, "debug env_sim_powder ignored (env_sim off)");
+        publish_debug_env_sim_powder_state();
+        return;
+    }
+    env_sim_powder_low_on_ = (p.on != 0);
+    McuLink::instance().set_env_sim_powder_low(env_sim_powder_low_on_);
+    UPC_LOG_GLAVO_SERVICE(Info, "debug env_sim_powder_low=%d", env_sim_powder_low_on_ ? 1 : 0);
+    publish_debug_env_sim_powder_state();
+}
+
+void GlavoService::handle_debug_env_sim_powder_get(const middleware::Message& msg)
+{
+    (void)msg;
+    publish_debug_env_sim_powder_state();
 }
 /* ============================================================================
  * Settings/About：MCU 固件版本查询

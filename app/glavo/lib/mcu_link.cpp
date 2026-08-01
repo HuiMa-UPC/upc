@@ -324,9 +324,15 @@ void McuLink::set_env_sim_enabled(bool on)
     if(on && !was_on) {
         env_sim_phase_ = 0.f;
         next_env_sim_tick_ = std::chrono::steady_clock::now();
+        env_sim_powder_low_target_.store(false);
+        env_sim_powder_low_effective_ = false;
+        env_sim_powder_switch_at_ = {};
         UPC_LOG_MCU_LINK(Info, "env_sim enabled");
     } else if(!on && was_on) {
         /* 关模拟：清缓存并推无效哨兵，UI 回 "--"；之后等真实 0x9B 再刷新。 */
+        env_sim_powder_low_target_.store(false);
+        env_sim_powder_low_effective_ = false;
+        env_sim_powder_switch_at_ = {};
         clear_env_after_sim_disable();
         UPC_LOG_MCU_LINK(Info, "env_sim disabled, env cache cleared");
     }
@@ -343,6 +349,7 @@ void McuLink::clear_env_after_sim_disable()
         env_cache_.oxygen_percent   = -1.0f;
         env_cache_.humidity_percent = -1.0f;
         env_cache_.pressure_kpa     = -1.0f;
+        env_cache_.powder_bits      = 0u;
         env_cache_.outer_door_open  = false;
         env_cache_.door_state_valid = false;
         env_cache_.valid            = false;
@@ -356,6 +363,25 @@ void McuLink::clear_env_after_sim_disable()
 bool McuLink::env_sim_enabled() const noexcept
 {
     return env_sim_on_.load();
+}
+
+void McuLink::set_env_sim_powder_low(bool on)
+{
+    env_sim_powder_low_target_.store(on);
+    if(!env_sim_on_.load()) {
+        env_sim_powder_low_effective_ = false;
+        env_sim_powder_switch_at_ = {};
+        return;
+    }
+    env_sim_powder_switch_at_ = std::chrono::steady_clock::now() +
+        std::chrono::milliseconds(kEnvSimPowderDelayMs);
+    UPC_LOG_MCU_LINK(Info, "env_sim powder target=%d (apply in %dms)",
+        on ? 1 : 0, kEnvSimPowderDelayMs);
+}
+
+bool McuLink::env_sim_powder_low() const noexcept
+{
+    return env_sim_powder_low_target_.load();
 }
 
 bool McuLink::should_publish_env_to_mqtt(bool force) noexcept
@@ -712,6 +738,7 @@ void McuLink::on_sensor_report(const serial_sensor_report_t& report)
         env_cache_.oxygen_percent  = report.oxygen_percent;
         env_cache_.humidity_percent = report.humidity_percent;
         env_cache_.pressure_kpa    = static_cast<float>(report.pressure_mbar) / 10.0f; /* mbar→kPa */
+        env_cache_.powder_bits     = static_cast<uint8_t>(report.powder_bits & 0x03u);
         env_cache_.outer_door_open = (report.outer_door_open != 0);
         env_cache_.door_state_valid = true;
         env_cache_.valid           = true;
@@ -884,6 +911,7 @@ void McuLink::publish_env_update_ntf()
     p.oxygen_percent = snap.oxygen_percent;
     p.humidity_percent = snap.humidity_percent;
     p.pressure_kpa   = snap.pressure_kpa;
+    p.powder_bits    = static_cast<uint8_t>(snap.powder_bits & 0x03u);
     /* PM10 目前 0x9B 无上报，置哨兵 <0 → UI 显示 "--"；后端接入 PM10 后填真实值。 */
     p.pm10_indoor    = -1.0f;
 
@@ -937,6 +965,7 @@ void McuLink::publish_env_invalid_ntf()
     p.pm10_indoor      = -1.0f;
     p.humidity_percent = -1.0f;
     p.pressure_kpa     = -1.0f;
+    p.powder_bits      = 0u;
 
     middleware::Message ntf_ui(middleware::MsgType::APP_Update_Ntf,
         middleware::ModuleId::APP_GLAVO,
@@ -1011,6 +1040,16 @@ void McuLink::poll_env_sim_tick()
     }
     next_env_sim_tick_ = now + std::chrono::milliseconds(kEnvSimIntervalMs);
 
+    const bool powder_target = env_sim_powder_low_target_.load();
+    if(env_sim_powder_low_effective_ != powder_target &&
+       env_sim_powder_switch_at_.time_since_epoch().count() != 0 &&
+       now >= env_sim_powder_switch_at_) {
+        env_sim_powder_low_effective_ = powder_target;
+        env_sim_powder_switch_at_ = {};
+        UPC_LOG_MCU_LINK(Info, "env_sim powder effective=%d",
+            env_sim_powder_low_effective_ ? 1 : 0);
+    }
+
     env_sim_phase_ += 0.35f;
     if(env_sim_phase_ > 6.2831853f) {
         env_sim_phase_ -= 6.2831853f;
@@ -1029,7 +1068,7 @@ void McuLink::poll_env_sim_tick()
     fake.pm25_ug_m3       = 10.0f + 40.0f * (0.5f + 0.5f * s3);
     fake.pressure_mbar    = static_cast<int16_t>(1013 + static_cast<int>(20.0f * s1));
     fake.substrate_temp_c = 30.0f + 8.0f * s2;
-    fake.powder_bits      = (s1 > 0.0f) ? 0x03u : 0x00u;
+    fake.powder_bits      = env_sim_powder_low_effective_ ? 0x00u : 0x03u;
     fake.powder_present   = (fake.powder_bits == 0x03u) ? 1u : 0u;
     fake.outer_door_open  = 0;
 
@@ -1041,6 +1080,7 @@ void McuLink::poll_env_sim_tick()
         env_cache_.oxygen_percent   = fake.oxygen_percent;
         env_cache_.humidity_percent = fake.humidity_percent;
         env_cache_.pressure_kpa     = static_cast<float>(fake.pressure_mbar) / 10.0f;
+        env_cache_.powder_bits      = static_cast<uint8_t>(fake.powder_bits & 0x03u);
         env_cache_.outer_door_open  = false;
         env_cache_.door_state_valid = true;
         env_cache_.valid            = true;
@@ -1049,12 +1089,23 @@ void McuLink::poll_env_sim_tick()
     publish_env_update_ntf();
     publish_debug_sensor_ntf(fake);
 
+    const bool powder_low = ((fake.powder_bits & 0x03u) == 0x00u);
+    if(powder_low) {
+        if(!powder_low_latched_) {
+            powder_low_latched_ = true;
+            emit_event(McuLinkEvent::PowderLow);
+        }
+    } else {
+        powder_low_latched_ = false;
+    }
+
     UPC_LOG_MCU_LINK(Info,
-        "env_sim: O2=%.1f%% P=%dmbar T=%.1fC RH=%.1f%% PM2.5=%.1f",
+        "env_sim: O2=%.1f%% P=%dmbar T=%.1fC RH=%.1f%% PM2.5=%.1f powder_bits=0x%02X",
         static_cast<double>(fake.oxygen_percent), fake.pressure_mbar,
         static_cast<double>(fake.temperature_c),
         static_cast<double>(fake.humidity_percent),
-        static_cast<double>(fake.pm25_ug_m3));
+        static_cast<double>(fake.pm25_ug_m3),
+        static_cast<unsigned>(fake.powder_bits));
 }
 
 void McuLink::publish_debug_axis_ntf(const serial_motion_pos_t& pos)

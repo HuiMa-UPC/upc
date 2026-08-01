@@ -256,6 +256,20 @@ bool encode_png_sequence_to_mp4(const std::string& session_dir,
     return run_shell_cmd(cmd, "ffmpeg mp4") == 0;
 }
 
+bool remux_h264_to_mp4(const char* h264_path, uint32_t fps, const char* out_path)
+{
+    if(!h264_path || !h264_path[0] || !out_path || !out_path[0]) {
+        return false;
+    }
+    const uint32_t use_fps = fps > 0 ? fps : 1u;
+    char cmd[1536];
+    std::snprintf(cmd, sizeof(cmd),
+                  "%s -y -loglevel error -fflags +genpts -framerate %u "
+                  "-i '%s' -c:v copy -movflags +faststart '%s'",
+                  CAMERA_FFMPEG_BIN, use_fps, h264_path, out_path);
+    return run_shell_cmd(cmd, "ffmpeg h264->mp4") == 0;
+}
+
 bool create_raw_thumb_from_nv12(const std::vector<uint8_t>& nv12,
                                 uint32_t width, uint32_t height,
                                 const char* out_path)

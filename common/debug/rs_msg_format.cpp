@@ -98,6 +98,7 @@ const char* upc_msg_type_name(MsgType type) {
         case MsgType::APP_Print_Terminate_Done: return "APP_Print_Terminate_Done";
         case MsgType::UI_Print_Pause_Req: return "UI_Print_Pause_Req";
         case MsgType::UI_Print_Resume_Req: return "UI_Print_Resume_Req";
+        case MsgType::UI_Print_Powder_Low_Ignore_Req: return "UI_Print_Powder_Low_Ignore_Req";
         case MsgType::APP_Print_Pause_Rsp: return "APP_Print_Pause_Rsp";
         case MsgType::APP_Print_Powder_Low_Ntf: return "APP_Print_Powder_Low_Ntf";
         case MsgType::UI_Supply_Status_Req: return "UI_Supply_Status_Req";
@@ -116,6 +117,8 @@ const char* upc_msg_type_name(MsgType type) {
             return "APP_Print_Video_Session_Finish_Ntf";
         case MsgType::APP_Print_Video_Session_Abort_Ntf:
             return "APP_Print_Video_Session_Abort_Ntf";
+        case MsgType::APP_Print_H264_Record_Pause_Ntf:
+            return "APP_Print_H264_Record_Pause_Ntf";
         case MsgType::APP_Print_Video_Manifest_Ntf: return "APP_Print_Video_Manifest_Ntf";
         case MsgType::UI_Clean_Test_Start_Req: return "UI_Clean_Test_Start_Req";
         case MsgType::APP_Clean_Test_Start_Rsp: return "APP_Clean_Test_Start_Rsp";
@@ -123,6 +126,8 @@ const char* upc_msg_type_name(MsgType type) {
         case MsgType::UI_Clean_Test_Close_Req: return "UI_Clean_Test_Close_Req";
         case MsgType::UI_Print_Video_Finalize_Req: return "UI_Print_Video_Finalize_Req";
         case MsgType::APP_Clean_Test_Close_Rsp: return "APP_Clean_Test_Close_Rsp";
+        case MsgType::UI_Storage_Usage_Req: return "UI_Storage_Usage_Req";
+        case MsgType::APP_Storage_Usage_Rsp: return "APP_Storage_Usage_Rsp";
         case MsgType::APP_Clean_Video_Session_Start_Ntf: return "APP_Clean_Video_Session_Start_Ntf";
         case MsgType::APP_Clean_Video_Session_Stop_Ntf: return "APP_Clean_Video_Session_Stop_Ntf";
         case MsgType::VISUAL_Camera_Stream_Start_Req: return "VISUAL_Camera_Stream_Start_Req";
@@ -181,6 +186,8 @@ const char* upc_msg_type_name(MsgType type) {
         case MsgType::UI_Debug_Clean_Record_Get_Req: return "UI_Debug_Clean_Record_Get_Req";
         case MsgType::UI_Debug_Env_Sim_Set_Req: return "UI_Debug_Env_Sim_Set_Req";
         case MsgType::UI_Debug_Env_Sim_Get_Req: return "UI_Debug_Env_Sim_Get_Req";
+        case MsgType::UI_Debug_Env_Sim_Powder_Set_Req: return "UI_Debug_Env_Sim_Powder_Set_Req";
+        case MsgType::UI_Debug_Env_Sim_Powder_Get_Req: return "UI_Debug_Env_Sim_Powder_Get_Req";
         case MsgType::GLAVO_Debug_Sensor_Ntf: return "GLAVO_Debug_Sensor_Ntf";
         case MsgType::GLAVO_Debug_Axis_Ntf: return "GLAVO_Debug_Axis_Ntf";
         case MsgType::GLAVO_Debug_Device_Ntf: return "GLAVO_Debug_Device_Ntf";
@@ -194,6 +201,7 @@ const char* upc_msg_type_name(MsgType type) {
         case MsgType::GLAVO_Debug_Print_H264_Record_Ntf: return "GLAVO_Debug_Print_H264_Record_Ntf";
         case MsgType::GLAVO_Debug_Clean_Record_Ntf: return "GLAVO_Debug_Clean_Record_Ntf";
         case MsgType::GLAVO_Debug_Env_Sim_Ntf: return "GLAVO_Debug_Env_Sim_Ntf";
+        case MsgType::GLAVO_Debug_Env_Sim_Powder_Ntf: return "GLAVO_Debug_Env_Sim_Powder_Ntf";
         case MsgType::UI_Mcu_Version_Req: return "UI_Mcu_Version_Req";
         case MsgType::GLAVO_Mcu_Version_Ntf: return "GLAVO_Mcu_Version_Ntf";
         default: return "Msg";

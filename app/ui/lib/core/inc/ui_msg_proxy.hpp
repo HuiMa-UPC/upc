@@ -99,6 +99,7 @@ public:
     /** 暂停/恢复打印。回执经 register_print_pause_done（仅打印进行中有效）。 */
     void send_print_pause();
     void send_print_resume();
+    void send_print_powder_low_ignore();
     void register_print_pause_done(PrintPauseDoneCb cb);
 
     /**

@@ -11,6 +11,7 @@
 #include "ui_slide_unlock.hpp"
 #include "ui_arc_spinner.hpp"
 #include "ui_xfr_dialog.hpp"
+#include "ui_device_state.hpp"
 #include "print_flow_img.h"
 #include "home_metric_icons.h"
 
@@ -1519,9 +1520,45 @@ void door_apply_variant(DoorVariant v)
  * （496 宽卡片 + 496×321 顶图），所以复用 show_door_dialog 的骨架，只换内容列。
  * 顶图在稿里也还是「粉舱安装示意」占位，等设计出图后按 door_set_image 那样接。 */
 ui_modal_dialog_t *g_powder_dlg = nullptr;
+lv_obj_t *g_powder_resume_btn = nullptr;
 
 void on_powder_refilled(lv_event_t *e);
 void on_powder_cancel(lv_event_t *e);
+
+bool powder_resume_ready(uint8_t powder_bits)
+{
+    return (powder_bits & 0x03u) >= 0x01u;
+}
+
+void set_powder_resume_btn_enabled(bool enabled)
+{
+    if(!g_powder_resume_btn) {
+        return;
+    }
+    if(enabled) {
+        lv_obj_clear_state(g_powder_resume_btn, LV_STATE_DISABLED);
+        lv_obj_add_flag(g_powder_resume_btn, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_set_style_bg_opa(g_powder_resume_btn, LV_OPA_COVER, 0);
+    } else {
+        lv_obj_add_state(g_powder_resume_btn, LV_STATE_DISABLED);
+        lv_obj_remove_flag(g_powder_resume_btn, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_set_style_bg_opa(g_powder_resume_btn, LV_OPA_30, 0);
+    }
+}
+
+void refresh_powder_resume_btn_state(void)
+{
+    const ui_device_snapshot_t *snap = ui_device_state_get();
+    const bool ready = snap ? powder_resume_ready(snap->powder_bits) : false;
+    set_powder_resume_btn_enabled(ready);
+}
+
+void on_powder_state_update(const ui_device_snapshot_t * /*snap*/)
+{
+    if(g_powder_dlg) {
+        refresh_powder_resume_btn_state();
+    }
+}
 
 /* 满宽圆角副按钮：与 make_dlg_wide_button 同尺寸，4% 白底（稿「主按钮」那档）。 */
 lv_obj_t *make_dlg_wide_ghost_button(lv_obj_t *parent, const char *text,
@@ -1552,6 +1589,7 @@ void close_powder_dlg(void)
     if(g_powder_dlg) {
         ui_modal_dialog_close(g_powder_dlg);
         g_powder_dlg = nullptr;
+        g_powder_resume_btn = nullptr;
     }
 }
 
@@ -1640,9 +1678,10 @@ void show_powder_dialog(void)
     lv_obj_set_style_text_font(sub, user_font_caption(), 0);
     lv_obj_set_style_text_align(sub, LV_TEXT_ALIGN_CENTER, 0);
 
-    make_dlg_wide_button(content, "Refilled, resume printing", true,
-                         on_powder_refilled);
+    g_powder_resume_btn = make_dlg_wide_button(content, "Refilled, resume printing", true,
+                                               on_powder_refilled);
     make_dlg_wide_ghost_button(content, "Cancel", on_powder_cancel);
+    refresh_powder_resume_btn_state();
 
     g_powder_dlg = dlg;
     lv_obj_set_style_opa(backdrop, LV_OPA_TRANSP, 0);
@@ -1650,18 +1689,23 @@ void show_powder_dialog(void)
     lv_obj_move_foreground(backdrop);
 }
 
-/* 「我已补粉，继续打印」：只发恢复请求。粉仓仍空的话后端会再暂停并再推一次
- * Powder_Low，本弹窗随之重开——判空在后端，UI 不自己猜。 */
+/* 「我已补粉，继续打印」：仅当实时粉量达到阈值（powder_bits>=1）才允许恢复。 */
 void on_powder_refilled(lv_event_t * /*e*/)
 {
+    refresh_powder_resume_btn_state();
+    const ui_device_snapshot_t *snap = ui_device_state_get();
+    if(!snap || !powder_resume_ready(snap->powder_bits)) {
+        return;
+    }
     close_powder_dlg();
     ui::UiMsgProxy::instance().send_print_resume();
 }
 
-/* 「取消」只关窗，保持暂停态。之后用户点底部播放钮恢复，缺粉则再弹一次。 */
+/* 「取消」只关窗并通知后端：本次打印忽略后续缺粉检测，保持当前暂停态。 */
 void on_powder_cancel(lv_event_t * /*e*/)
 {
     close_powder_dlg();
+    ui::UiMsgProxy::instance().send_print_powder_low_ignore();
 }
 
 /* Powder_Low 从总线线程来，建窗必须回到 LVGL 线程 */
@@ -3122,6 +3166,7 @@ void control_init(lv_obj_t *parent)
         parent = lv_screen_active();
     }
     wire_msg_proxy();
+    ui_device_state_add_observer(on_powder_state_update);
     g_on_action_fail = on_backend_action_fail;
     backend_reset_session();
 

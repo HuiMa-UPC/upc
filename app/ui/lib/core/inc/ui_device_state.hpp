@@ -46,6 +46,7 @@ typedef struct {
     float              pm10_indoor;      /**< 室内 PM10（<0/NaN=无数据） */
     float              humidity_percent; /**< 舱内湿度（<0/NaN=无数据） */
     float              pressure_kpa;     /**< 舱内气压（<0/NaN=无数据） */
+    uint8_t            powder_bits;      /**< 粉量位 bit0/bit1（0=缺粉；>=1 允许继续） */
 } ui_device_snapshot_t;
 
 /** 观察者：快照变化后在 UI 线程被调用（env 推送已由 Proxy 切回 UI 线程）。 */

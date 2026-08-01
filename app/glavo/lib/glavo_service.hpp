@@ -53,6 +53,7 @@ private:
     void handle_print_terminate(const middleware::Message& msg);
     void handle_print_pause(const middleware::Message& msg);
     void handle_print_resume(const middleware::Message& msg);
+    void handle_print_powder_low_ignore(const middleware::Message& msg);
     void handle_supply_status_req(const middleware::Message& msg);
     void handle_pm25_request(const middleware::Message& msg);
     void handle_close_door_request(const middleware::Message& msg);
@@ -119,9 +120,12 @@ private:
     void handle_debug_clean_record_get(const middleware::Message& msg);
     void handle_debug_env_sim_set(const middleware::Message& msg);
     void handle_debug_env_sim_get(const middleware::Message& msg);
+    void handle_debug_env_sim_powder_set(const middleware::Message& msg);
+    void handle_debug_env_sim_powder_get(const middleware::Message& msg);
     void publish_debug_print_h264_record_state();
     void publish_debug_clean_record_state();
     void publish_debug_env_sim_state();
+    void publish_debug_env_sim_powder_state();
     void debug_tx(const uint8_t* frame, int n);
 
     /** @brief About 页版本查询：下发串口 TLV_GET_VERSION，应答由 McuLink 直接推 UI */
@@ -140,6 +144,7 @@ private:
     void enqueue_link_event(McuLinkEvent ev);
     void publish_terminate_done();
     void publish_print_pause_done(bool paused);
+    void publish_print_h264_record_pause(bool paused);
     void publish_print_powder_low_ntf();
     void reset_print_progress_state();
     void send_print_progress(bool force_complete);
@@ -216,6 +221,8 @@ private:
     char clean_test_job_name_[64]{};
     bool print_h264_continuous_on_ = false;
     bool env_sim_on_ = false;  /**< 环境上报模拟（仅本次运行，默认关） */
+    bool env_sim_powder_low_on_ = false; /**< 环境模拟粉量缺粉开关（目标状态，延迟生效由 McuLink 管） */
+    bool ignore_powder_low_for_current_print_ = false; /**< 本次打印是否忽略缺粉检测（Cancel 后置位） */
 };
 
 } // namespace upc::glavo

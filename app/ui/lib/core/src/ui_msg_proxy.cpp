@@ -679,6 +679,14 @@ void UiMsgProxy::send_print_resume()
     middleware::MsgPort::instance().publish_async(msg);
 }
 
+void UiMsgProxy::send_print_powder_low_ignore()
+{
+    middleware::Message msg(middleware::MsgType::UI_Print_Powder_Low_Ignore_Req,
+                            middleware::ModuleId::UI,
+                            middleware::ModuleId::APP_GLAVO);
+    middleware::MsgPort::instance().publish_async(msg);
+}
+
 void UiMsgProxy::register_print_powder_low(PrintPowderLowCb cb)
 {
     print_powder_low_cb_ = std::move(cb);

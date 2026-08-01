@@ -38,8 +38,10 @@ struct PrintHistoryEntry {
     float               material_g = 0.f;
     PrintHistoryStatus  status = PrintHistoryStatus::Complete;
     std::string         frames_dir;    /**< 相对目录名，如 benchy */
-    std::string         thumb;         /**< 相对路径，如 benchy/thumb.rthm */
-    std::string         video;         /**< 相对路径，如 benchy/timelapse.mp4 */
+    std::string         thumb;         /**< 延时摄影缩略图，相对路径，如 benchy/thumb.rthm */
+    std::string         print_thumb;   /**< 打印录像缩略图，相对路径，如 benchy/print_thumb.rthm */
+    std::string         video;         /**< 延时摄影视频，相对路径，如 benchy/timelapse.mp4 */
+    std::string         print_video;   /**< 相对路径，如 benchy/print_h264.mp4 */
     bool                video_pending = false; /**< 1=后台仍在生成视频 */
     bool                committed = true; /**< 1=历史页可见；0=结果页未退出前隐藏 */
     uint32_t            clean_first_png = 0; /**< 清粉首帧序号（含）；0=无清粉追加 */

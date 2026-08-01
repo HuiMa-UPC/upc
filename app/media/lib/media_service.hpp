@@ -36,6 +36,7 @@ private:
     void handle_print_video(const middleware::Message& msg);
     void handle_clean_video(const middleware::Message& msg);
     void handle_print_video_finalize(const middleware::Message& msg);
+    void handle_storage_usage_req(const middleware::Message& msg) const;
 
     void send_stream_start_req();
     void send_stream_stop_req();
@@ -101,6 +102,9 @@ private:
     bool clean_video_active_ = false;
     bool finalize_pending_ = false;
     std::string pending_finalize_frames_dir_;
+    std::string latest_print_session_id_;
+    std::string latest_print_job_name_;
+    bool latest_print_session_closed_ = false;
 
     PrintVideoRecorder print_video_;
     PrintH264Recorder print_h264_;

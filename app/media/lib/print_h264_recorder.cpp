@@ -1,6 +1,7 @@
 #include "print_h264_recorder.hpp"
 
 #include "rs_log.hpp"
+#include "timelapse_util.hpp"
 
 #include <algorithm>
 #include <cerrno>
@@ -34,6 +35,40 @@ std::string sanitize_session_token(const char* token)
         c = '_';
     }
     return out;
+}
+
+std::string sanitize_filename_local(const char* name)
+{
+    if(!name || !name[0]) {
+        return "print";
+    }
+    std::string out(name);
+    for(char& c : out) {
+        const unsigned char uc = static_cast<unsigned char>(c);
+        if((uc >= '0' && uc <= '9') ||
+           (uc >= 'A' && uc <= 'Z') ||
+           (uc >= 'a' && uc <= 'z') ||
+           c == '_' || c == '-' || c == '.') {
+            continue;
+        }
+        c = '_';
+    }
+    if(out.empty()) {
+        out = "print";
+    }
+    return out;
+}
+
+std::string make_session_work_dir(const char* job_name, const char* session_id)
+{
+    std::string session_name = sanitize_filename_local(job_name);
+    if(session_name.empty()) {
+        session_name = "print";
+    }
+    const std::string token = sanitize_session_token(session_id);
+    const std::string session_final_dir =
+        std::string(CAMERA_PRINT_VIDEO_OUT_DIR) + "/" + session_name;
+    return session_final_dir + ".__work_" + (token.empty() ? "session" : token);
 }
 
 bool remove_empty_dir_if_exists(const std::string& dir)
@@ -151,6 +186,7 @@ void PrintH264Recorder::on_session_start(const middleware::PrintVideoSessionPayl
     }
     close_raw_fp_locked();
     active_ = false;
+    paused_ = false;
     had_write_error_ = false;
     frame_count_ = 0;
     dropped_frames_ = 0;
@@ -206,6 +242,16 @@ void PrintH264Recorder::on_session_start(const middleware::PrintVideoSessionPayl
         session_id_.c_str(), session_dir_.c_str(), width_, height_, fps_);
 }
 
+void PrintH264Recorder::set_paused(bool paused)
+{
+    std::lock_guard<std::mutex> lock(mtx_);
+    if(paused_ == paused) {
+        return;
+    }
+    paused_ = paused;
+    UPC_LOG_MEDIA_SERVICE(Info, "print_h264 paused=%d", paused_ ? 1 : 0);
+}
+
 void PrintH264Recorder::on_session_finish(const middleware::PrintVideoSessionPayload& info)
 {
     std::lock_guard<std::mutex> lock(mtx_);
@@ -240,7 +286,7 @@ void PrintH264Recorder::on_frame_nv12(const uint8_t* src_y, const uint8_t* src_u
 
     {
         std::lock_guard<std::mutex> lock(mtx_);
-        if(!active_ || had_write_error_ || !src_y || !src_uv ||
+        if(!active_ || paused_ || had_write_error_ || !src_y || !src_uv ||
            width_ == 0 || height_ == 0 || raw_path_.empty()) {
             return;
         }
@@ -280,7 +326,7 @@ void PrintH264Recorder::on_frame_nv12(const uint8_t* src_y, const uint8_t* src_u
 
     {
         std::lock_guard<std::mutex> lock(mtx_);
-        if(!active_ || current_session_seq != session_seq_ || had_write_error_) {
+        if(!active_ || paused_ || current_session_seq != session_seq_ || had_write_error_) {
             return;
         }
         if(count_pending_write_frames(jobs_) >= kMaxPendingFrameJobs) {
@@ -290,6 +336,25 @@ void PrintH264Recorder::on_frame_nv12(const uint8_t* src_y, const uint8_t* src_u
         jobs_.push_back(std::move(job));
     }
     cv_.notify_one();
+}
+
+void PrintH264Recorder::enqueue_cleanup_for_session(
+    const char* job_name, const char* session_id)
+{
+    const std::string cleanup_dir = make_session_work_dir(job_name, session_id);
+    if(cleanup_dir.empty()) {
+        return;
+    }
+    {
+        std::lock_guard<std::mutex> lock(mtx_);
+        start_worker_if_needed_locked();
+        Job job{};
+        job.kind = JobKind::Cleanup;
+        job.cleanup_dir = cleanup_dir;
+        jobs_.push_back(std::move(job));
+    }
+    cv_.notify_one();
+    UPC_LOG_MEDIA_SERVICE(Info, "print_h264 cleanup queued dir=%s", cleanup_dir.c_str());
 }
 
 void PrintH264Recorder::enqueue_finalize_locked(bool aborted)
@@ -345,8 +410,10 @@ void PrintH264Recorder::worker_fn()
 
         if(job.kind == JobKind::WriteFrame) {
             run_write_frame_job(job);
-        } else {
+        } else if(job.kind == JobKind::Encode) {
             run_encode_job(std::move(job));
+        } else {
+            run_cleanup_job(job);
         }
     }
 
@@ -413,6 +480,8 @@ void PrintH264Recorder::run_encode_job(Job job)
     uint32_t frame_count = 0;
     bool had_write_error = false;
     uint32_t dropped = 0;
+    const std::string work_dir =
+        std::filesystem::path(job.raw_path).parent_path().string();
     {
         std::lock_guard<std::mutex> lock(mtx_);
         /* FIFO：此时本场 WriteFrame 均已处理完 */
@@ -429,20 +498,20 @@ void PrintH264Recorder::run_encode_job(Job job)
         close_raw_fp_locked();
     }
 
-    if(had_write_error || frame_count == 0) {
+    const uint32_t print_png_count = timelapse_util::scan_max_png_index(work_dir);
+    if(had_write_error || frame_count == 0 || print_png_count == 0) {
         (void)std::remove(job.raw_path.c_str());
         (void)std::remove(job.h264_path.c_str());
-        const std::string work_dir =
-            std::filesystem::path(job.raw_path).parent_path().string();
+        (void)std::remove((work_dir + "/print_h264.mp4").c_str());
         if(remove_empty_dir_if_exists(work_dir)) {
             UPC_LOG_MEDIA_SERVICE(
                 Info, "print_h264 removed empty work dir=%s", work_dir.c_str());
         }
         UPC_LOG_MEDIA_SERVICE(Warn,
             "print_h264 skip encode session=%s aborted=%d frames=%u "
-            "write_err=%d dropped=%u",
+            "print_png=%u write_err=%d dropped=%u",
             job.session_id.c_str(), job.aborted ? 1 : 0,
-            frame_count, had_write_error ? 1 : 0, dropped);
+            frame_count, print_png_count, had_write_error ? 1 : 0, dropped);
     } else {
         const uint32_t fps = job.fps > 0 ? job.fps : 1u;
         char cmd[2048];
@@ -477,6 +546,26 @@ void PrintH264Recorder::run_encode_job(Job job)
             finalize_in_progress_ = false;
             finalize_cv_.notify_all();
         }
+    }
+}
+
+void PrintH264Recorder::run_cleanup_job(const Job& job)
+{
+    if(job.cleanup_dir.empty()) {
+        return;
+    }
+    const std::string raw_path = job.cleanup_dir + "/" + kRawName;
+    const std::string h264_path = job.cleanup_dir + "/" + kH264Name;
+    const std::string h264_mp4_path = job.cleanup_dir + "/print_h264.mp4";
+    (void)std::remove(raw_path.c_str());
+    (void)std::remove(h264_path.c_str());
+    (void)std::remove(h264_mp4_path.c_str());
+    if(remove_empty_dir_if_exists(job.cleanup_dir)) {
+        UPC_LOG_MEDIA_SERVICE(
+            Info, "print_h264 cleanup removed empty dir=%s", job.cleanup_dir.c_str());
+    } else {
+        UPC_LOG_MEDIA_SERVICE(
+            Info, "print_h264 cleanup done dir=%s", job.cleanup_dir.c_str());
     }
 }
 

@@ -671,6 +671,9 @@ void PrintVideoRecorder::finalize_after_exit(const char* frames_dir)
             session_dir = final_session_dir;
             hit->frames_dir = final_frames_dir;
             hit->thumb = final_frames_dir + "/thumb" + CAMERA_PRINT_VIDEO_THUMB_EXT;
+            if(!hit->print_thumb.empty()) {
+                hit->print_thumb = final_frames_dir + "/print_thumb" + CAMERA_PRINT_VIDEO_THUMB_EXT;
+            }
         }
     }
     const uint32_t frame_count = timelapse_util::scan_max_png_index(session_dir);
@@ -702,6 +705,54 @@ void PrintVideoRecorder::finalize_after_exit(const char* frames_dir)
                 session_dir, hit->clean_first_png, hit->clean_last_png);
         }
     }
+
+    const std::string h264_path = session_dir + "/print.h264";
+    const std::string h264_mp4_path = session_dir + "/print_h264.mp4";
+    const std::string h264_mp4_rel = hit->frames_dir + "/print_h264.mp4";
+    const std::string print_thumb_path = session_dir + "/print_thumb" + CAMERA_PRINT_VIDEO_THUMB_EXT;
+    const std::string print_thumb_rel =
+        hit->frames_dir + "/print_thumb" + CAMERA_PRINT_VIDEO_THUMB_EXT;
+    hit->print_video.clear();
+    hit->print_thumb.clear();
+    (void)std::remove(h264_mp4_path.c_str());
+    std::error_code h264_ec;
+    if(std::filesystem::exists(h264_path, h264_ec) && !h264_ec) {
+        const bool h264_mp4_ok = timelapse_util::remux_h264_to_mp4(
+            h264_path.c_str(), fps, h264_mp4_path.c_str());
+        if(!h264_mp4_ok) {
+            UPC_LOG_MEDIA_SERVICE(
+                Warn, "print_video finalize h264 remux failed path=%s",
+                h264_path.c_str());
+        } else {
+            hit->print_video = h264_mp4_rel;
+            if(!hit->thumb.empty()) {
+                const std::string timelapse_thumb_path =
+                    std::string(CAMERA_PRINT_VIDEO_OUT_DIR) + "/" + hit->thumb;
+                std::error_code copy_ec;
+                (void)std::filesystem::remove(print_thumb_path, copy_ec);
+                copy_ec.clear();
+                std::filesystem::copy_file(
+                    timelapse_thumb_path, print_thumb_path,
+                    std::filesystem::copy_options::overwrite_existing, copy_ec);
+                if(copy_ec) {
+                    UPC_LOG_MEDIA_SERVICE(
+                        Warn,
+                        "print_video finalize copy print_thumb failed %s -> %s: %s",
+                        timelapse_thumb_path.c_str(),
+                        print_thumb_path.c_str(),
+                        copy_ec.message().c_str());
+                } else {
+                    hit->print_thumb = print_thumb_rel;
+                }
+            }
+        }
+    }
+    if(std::remove(h264_path.c_str()) != 0 && errno != ENOENT) {
+        UPC_LOG_MEDIA_SERVICE(
+            Warn, "print_video finalize remove h264 failed path=%s err=%s",
+            h264_path.c_str(), std::strerror(errno));
+    }
+
     hit->video_pending = false;
     hit->clean_first_png = 0;
     hit->clean_last_png = 0;

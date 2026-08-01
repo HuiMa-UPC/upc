@@ -307,6 +307,7 @@ enum class MsgType : uint32_t {
     APP_Print_Terminate_Done, /**< [GLAVO_Print_Terminate_Done] Empty */
     UI_Print_Pause_Req,       /**< Empty：暂停打印（McuLink 停止 TCP 运动下发） */
     UI_Print_Resume_Req,      /**< Empty：恢复打印 */
+    UI_Print_Powder_Low_Ignore_Req, /**< Empty：本次打印忽略缺粉自动暂停与缺粉通知 */
     APP_Print_Pause_Rsp,      /**< [GLAVO_Print_Pause_Rsp] PrintPauseStatePayload：暂停/恢复响应（Pause/Resume Req 共用） */
     APP_Print_Powder_Low_Ntf, /**< Empty：粉量传感器 bit0/bit1 同时为 0，触发一次缺粉通知 */
 
@@ -328,6 +329,7 @@ enum class MsgType : uint32_t {
     APP_Print_Layer_Snap_Ntf,                   /**< PrintVideoLayerSnapPayload */
     APP_Print_Video_Session_Finish_Ntf,         /**< PrintVideoSessionPayload */
     APP_Print_Video_Session_Abort_Ntf,          /**< PrintVideoSessionPayload */
+    APP_Print_H264_Record_Pause_Ntf,            /**< PrintPauseStatePayload：通知 Media 暂停/恢复连续 H264 录制 */
     /* 本条方向为 MEDIA → UI（与上面四条相反）：manifest.json 已原子落盘 */
     APP_Print_Video_Manifest_Ntf,               /**< PrintVideoManifestPayload */
 
@@ -368,6 +370,8 @@ enum class MsgType : uint32_t {
     UI_Debug_Clean_Record_Get_Req,      /**< Empty：查询当前清粉录像开关状态 */
     UI_Debug_Env_Sim_Set_Req,           /**< DebugOnOffPayload：环境上报模拟开关（仅本次运行，默认关） */
     UI_Debug_Env_Sim_Get_Req,           /**< Empty：查询当前环境上报模拟开关状态 */
+    UI_Debug_Env_Sim_Powder_Set_Req,    /**< DebugOnOffPayload：环境模拟粉量缺粉开关（延迟 5s 生效） */
+    UI_Debug_Env_Sim_Powder_Get_Req,    /**< Empty：查询当前环境模拟粉量缺粉开关状态 */
 
     // ---- GLAVO → UI：调试页状态回读（按模块拆分） ----
     GLAVO_Debug_Sensor_Ntf = 0x1200, /**< DebugSensorPayload：顶部 7 路传感器 */
@@ -383,6 +387,7 @@ enum class MsgType : uint32_t {
     GLAVO_Debug_Print_H264_Record_Ntf, /**< DebugOnOffPayload：打印期连续 H264 录像开关状态 */
     GLAVO_Debug_Clean_Record_Ntf,      /**< DebugOnOffPayload：清粉录像开关状态 */
     GLAVO_Debug_Env_Sim_Ntf,           /**< DebugOnOffPayload：环境上报模拟开关状态 */
+    GLAVO_Debug_Env_Sim_Powder_Ntf,    /**< DebugOnOffPayload：环境模拟粉量缺粉开关状态 */
 
     // ---- UI ↔ GLAVO：网络 / WiFi（ConnMan 后端） ----
     UI_Wifi_Enable_Req = 0x1300, /**< WifiEnableReqPayload：开/关 WiFi */
@@ -414,6 +419,8 @@ enum class MsgType : uint32_t {
     UI_Clean_Test_Close_Req,     /**< Empty：返回首页时强制 clean_test_close */
     UI_Print_Video_Finalize_Req, /**< PrintVideoFinalizeReqPayload：结果页退出后触发统一 MP4 合成 */
     APP_Clean_Test_Close_Rsp,    /**< Empty：close 已受理 */
+    UI_Storage_Usage_Req,        /**< Empty：请求历史页存储占用（used/total） */
+    APP_Storage_Usage_Rsp,       /**< StorageUsagePayload：存储占用回执 */
 
     // ---- GLAVO ↔ CAMERA：清粉连续录像会话（NV12@预览参数） ----
     APP_Clean_Video_Session_Start_Ntf, /**< CleanVideoSessionStartPayload */
@@ -468,6 +475,7 @@ struct EnvSnapshotPayload {
     float    pm10_indoor;       /**< 室内 PM10 (μg/m³)；无效填 <0（HOME 卡切换指标用） */
     float    humidity_percent;  /**< 舱内湿度 %；无效填 <0 */
     float    pressure_kpa;      /**< 舱内气压 kPa；无效填 <0 */
+    uint8_t  powder_bits;       /**< 粉量位：取 bit0/bit1（0=缺粉；>=1 允许继续打印） */
 };
 
 /** APP_PM25_Rsp 载荷：PM2.5 检测结果（Inline） */
@@ -762,6 +770,12 @@ struct CleanTestDonePayload {
 /** UI→MEDIA：结果页退出后触发统一 MP4 合成（按 frames_dir 定位会话目录） */
 struct PrintVideoFinalizeReqPayload {
     char frames_dir[96]; /**< 对应 /home/video/{frames_dir}/ */
+};
+
+/** APP_Storage_Usage_Rsp：历史页容量显示（bytes）。 */
+struct StorageUsagePayload {
+    uint64_t used_bytes;   /**< 已用字节数 */
+    uint64_t total_bytes;  /**< 总字节数 */
 };
 
 /** GLAVO→MEDIA：清粉延时抽帧会话开始（接续打印 PNG，按 fps 定时采样） */
