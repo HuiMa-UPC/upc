@@ -1594,11 +1594,14 @@ void close_powder_dlg(void)
 }
 
 /* 缺粉时后端已自行暂停，这里只负责提示与「补完了，继续」的入口。
- * 挂 lv_layer_top()：缺粉随时可能来，而打印中用户可能正待在别的标签页，
- * g_overlay 只覆盖首页那一屏。 */
+ * 弹窗仅挂在打印预览区域内，不占用全局顶层：这样切到其它页面仍可互动。 */
 void show_powder_dialog(void)
 {
     if(g_powder_dlg) {
+        return;
+    }
+    lv_obj_t *parent = page_user_home_print_preview_parent();
+    if(!parent) {
         return;
     }
     auto *dlg = static_cast<ui_modal_dialog_t *>(std::calloc(1, sizeof(ui_modal_dialog_t)));
@@ -1606,7 +1609,7 @@ void show_powder_dialog(void)
         return;
     }
 
-    lv_obj_t *backdrop = lv_obj_create(lv_layer_top());
+    lv_obj_t *backdrop = lv_obj_create(parent);
     lv_obj_remove_style_all(backdrop);
     lv_obj_set_size(backdrop, LV_PCT(100), LV_PCT(100));
     lv_obj_set_style_bg_color(backdrop, lv_color_black(), 0);

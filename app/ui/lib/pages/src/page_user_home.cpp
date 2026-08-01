@@ -2283,6 +2283,14 @@ void page_user_home_update_camera_preview_layout(uint32_t src_w, uint32_t src_h)
     apply_camera_preview_layout(src_w, src_h);
 }
 
+lv_obj_t *page_user_home_print_preview_parent(void)
+{
+    if(!g_print_area) {
+        return nullptr;
+    }
+    return g_print_area;
+}
+
 void page_user_home_refresh(bool /*force*/)
 {
     /* 设备名/WiFi/状态点那一组不在本页——外壳的常驻条自己观察同一份快照。 */
