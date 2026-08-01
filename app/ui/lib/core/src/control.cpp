@@ -2824,10 +2824,6 @@ void on_door_closed_confirm_btn(lv_event_t * /*e*/)
             ui::UiMsgProxy::instance().send_clean_test_close();
         }
         enter_state(CONTROL_STATE_IDLE);
-        if(from_print_collect) {
-            /* 取件流程完成并回首页后，再后台提交历史可见状态。 */
-            schedule_commit_print_result_history();
-        }
     } else {
         goto_file_selection();
     }
@@ -3220,6 +3216,8 @@ void control_print_result_collect(void)
     if(g_state != CONTROL_STATE_PRINT_DONE) {
         return;
     }
+    /* 改为滑动开门成功后即触发 finalize 链路，不再等门关闭确认。 */
+    schedule_commit_print_result_history();
     /* 取件 = 开门，但不能借道 IDLE：IDLE 分支会 page_user_home_exit_printing_mode()，
      * 停掉摄像头并收起结果页浮层，弹窗就浮在待机首页上了。直接进开门态，
      * 结果页与预览原样留在弹窗背后；关门确认后才由 PrintCollect 分支回 IDLE。 */

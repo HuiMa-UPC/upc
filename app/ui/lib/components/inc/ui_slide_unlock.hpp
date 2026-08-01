@@ -49,6 +49,9 @@ lv_obj_t *ui_slide_unlock_get_root(ui_slide_unlock_t *self);
 /** 复位：knob 弹回起点、重新可滑（用于可重复触发的场景，如首页开门） */
 void ui_slide_unlock_reset(ui_slide_unlock_t *self);
 
+/** 启用/禁用滑动交互（禁用时不响应拖动） */
+void ui_slide_unlock_set_enabled(ui_slide_unlock_t *self, bool enabled);
+
 /**
  * 改静止态提示文字（打印态取件条要在「SWIPE TO COLLECT」和吹粉中文案之间切换）。
  * text 必须是长期有效的字面量——控件只存指针不拷贝。当前正处于静止态时立即生效。

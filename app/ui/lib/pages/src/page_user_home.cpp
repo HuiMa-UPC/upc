@@ -1035,6 +1035,10 @@ void on_result_photo_click(lv_event_t * /*e*/)
 /* 滑动取件：退出打印状态并走开门流程（与首页「SWIPE TO OPEN」同一套弹窗）。 */
 void on_result_collect_unlocked(void * /*u*/)
 {
+    if(g_result_cleaning || g_purify_stage == PURIFY_STAGE_RUNNING) {
+        ui_toast_show("Air purifying, please wait", user_color_accent, 1200);
+        return;
+    }
     control_print_result_collect();
 }
 
@@ -1814,6 +1818,8 @@ void apply_print_phase(void)
         ui_slide_unlock_set_hint(g_result_slide,
             g_purify_stage == PURIFY_STAGE_RUNNING ? "AIR PURIFYING..."
                                                    : "SWIPE TO COLLECT");
+        ui_slide_unlock_set_enabled(g_result_slide,
+            g_purify_stage != PURIFY_STAGE_RUNNING);
     }
 
     /* 常驻状态栏：暂停与吹粉两个阶段都要在状态栏里体现。

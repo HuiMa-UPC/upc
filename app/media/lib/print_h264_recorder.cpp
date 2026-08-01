@@ -17,6 +17,40 @@ constexpr const char* kRawName = "print_raw.nv12";
 /** 待写帧上限：满则丢帧保预览（约 3 × ~1.9MB） */
 constexpr size_t kMaxPendingFrameJobs = 3u;
 
+std::string sanitize_session_token(const char* token)
+{
+    if(!token || !token[0]) {
+        return {};
+    }
+    std::string out(token);
+    for(char& c : out) {
+        const unsigned char uc = static_cast<unsigned char>(c);
+        if((uc >= '0' && uc <= '9') ||
+           (uc >= 'A' && uc <= 'Z') ||
+           (uc >= 'a' && uc <= 'z') ||
+           c == '_' || c == '-' || c == '.') {
+            continue;
+        }
+        c = '_';
+    }
+    return out;
+}
+
+bool remove_empty_dir_if_exists(const std::string& dir)
+{
+    if(dir.empty()) {
+        return false;
+    }
+    std::error_code ec;
+    if(!std::filesystem::is_directory(dir, ec)) {
+        return false;
+    }
+    if(!std::filesystem::is_empty(dir, ec)) {
+        return false;
+    }
+    return std::filesystem::remove(dir, ec);
+}
+
 void copy_nv12_tight(uint8_t* dst, const uint8_t* src_y, const uint8_t* src_uv,
                      uint32_t src_stride_y, uint32_t width, uint32_t height)
 {
@@ -138,7 +172,10 @@ void PrintH264Recorder::on_session_start(const middleware::PrintVideoSessionPayl
     if(session_name_.empty()) {
         session_name_ = "print";
     }
-    session_dir_ = std::string(CAMERA_PRINT_VIDEO_OUT_DIR) + "/" + session_name_;
+    const std::string session_final_dir =
+        std::string(CAMERA_PRINT_VIDEO_OUT_DIR) + "/" + session_name_;
+    const std::string token = sanitize_session_token(info.session_id);
+    session_dir_ = session_final_dir + ".__work_" + (token.empty() ? "session" : token);
     raw_path_ = session_dir_ + "/" + kRawName;
     h264_path_ = session_dir_ + "/" + kH264Name;
 
@@ -153,6 +190,8 @@ void PrintH264Recorder::on_session_start(const middleware::PrintVideoSessionPayl
     }
 
     std::error_code ec;
+    std::filesystem::remove_all(session_dir_, ec);
+    ec.clear();
     std::filesystem::create_directories(session_dir_, ec);
     if(ec) {
         UPC_LOG_MEDIA_SERVICE(Error, "print_h264 mkdir fail dir=%s err=%d",
@@ -392,6 +431,13 @@ void PrintH264Recorder::run_encode_job(Job job)
 
     if(had_write_error || frame_count == 0) {
         (void)std::remove(job.raw_path.c_str());
+        (void)std::remove(job.h264_path.c_str());
+        const std::string work_dir =
+            std::filesystem::path(job.raw_path).parent_path().string();
+        if(remove_empty_dir_if_exists(work_dir)) {
+            UPC_LOG_MEDIA_SERVICE(
+                Info, "print_h264 removed empty work dir=%s", work_dir.c_str());
+        }
         UPC_LOG_MEDIA_SERVICE(Warn,
             "print_h264 skip encode session=%s aborted=%d frames=%u "
             "write_err=%d dropped=%u",

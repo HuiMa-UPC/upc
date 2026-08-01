@@ -85,10 +85,12 @@ private:
      */
     void notify_manifest_ready(const std::string& frames_dir_name,
                                bool has_entry, bool aborted, bool has_video) const;
+    bool promote_session_dir();
     bool remove_session_dir();
     std::string frame_png_path(uint32_t frame_index) const;
     static bool mkdir_p(const char* path);
     static std::string sanitize_filename(const char* name);
+    static std::string sanitize_session_token(const char* token);
     static int run_shell_cmd(const char* cmd, const char* log_tag);
 
     std::mutex              mtx_;
@@ -108,6 +110,7 @@ private:
     std::string session_id_;
     std::string job_name_;
     std::string session_name_;
+    std::string session_final_dir_;
     std::string session_dir_;
     int64_t     start_unix_ = 0; /**< Session_Start 墙钟秒，写入 manifest */
     middleware::ModuleId sender_module_id_ = middleware::ModuleId::APP_MEDIA;

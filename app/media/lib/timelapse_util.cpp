@@ -236,15 +236,23 @@ bool encode_png_sequence_to_mp4(const std::string& session_dir,
                                 uint32_t frame_count, uint32_t fps,
                                 const char* out_path)
 {
-    if(!out_path || !out_path[0] || session_dir.empty() || frame_count < 2u) {
+    if(!out_path || !out_path[0] || session_dir.empty() || frame_count == 0u) {
         return false;
     }
     const uint32_t use_fps = fps > 0 ? fps : 1u;
     char cmd[1536];
-    std::snprintf(cmd, sizeof(cmd),
-                  "%s -y -loglevel error -framerate %u -i '%s/%%d.png' "
-                  "-c:v mpeg4 -q:v 5 -pix_fmt yuv420p -movflags +faststart '%s'",
-                  CAMERA_FFMPEG_BIN, use_fps, session_dir.c_str(), out_path);
+    if(frame_count == 1u) {
+        std::snprintf(cmd, sizeof(cmd),
+                      "%s -y -loglevel error -loop 1 -framerate %u -t 1 "
+                      "-i '%s/1.png' -c:v mpeg4 -q:v 5 -pix_fmt yuv420p "
+                      "-movflags +faststart '%s'",
+                      CAMERA_FFMPEG_BIN, use_fps, session_dir.c_str(), out_path);
+    } else {
+        std::snprintf(cmd, sizeof(cmd),
+                      "%s -y -loglevel error -framerate %u -i '%s/%%d.png' "
+                      "-c:v mpeg4 -q:v 5 -pix_fmt yuv420p -movflags +faststart '%s'",
+                      CAMERA_FFMPEG_BIN, use_fps, session_dir.c_str(), out_path);
+    }
     return run_shell_cmd(cmd, "ffmpeg mp4") == 0;
 }
 

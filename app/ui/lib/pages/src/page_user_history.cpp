@@ -1154,11 +1154,13 @@ void build_entry(lv_obj_t *parent, const upc::PrintHistoryEntry &e)
     ctx->thumb_src = make_thumb_src_fallback(e);
     {
         const std::string base = std::string(UPC_PRINT_VIDEO_DIR) + "/";
+        bool mp4_ready = false;
         if(!e.video.empty()) {
             std::error_code ec;
-            ctx->video_ready = std::filesystem::exists(base + e.video, ec);
+            mp4_ready = std::filesystem::exists(base + e.video, ec);
         }
-        ctx->video_pending = (!ctx->video_ready) && e.video_pending;
+        ctx->video_ready = mp4_ready;
+        ctx->video_pending = (!mp4_ready) && e.video_pending;
     }
     g_cards.push_back(ctx);
 

@@ -32,6 +32,7 @@ struct ui_slide_unlock_t {
     const char           *rest_text;     /**< 静止态提示文字（指向调用方字面量） */
     int                   vstate;
     bool                  unlocked;
+    bool                  enabled;
     bool                  dragging;
     bool                  at_end;
     int32_t               press_origin_x;
@@ -129,7 +130,7 @@ static void slide_unlock_delete_cb(lv_event_t *e)
 static void on_press(lv_event_t *e)
 {
     auto *self = static_cast<ui_slide_unlock_t *>(lv_event_get_user_data(e));
-    if(!self || self->unlocked) {
+    if(!self || self->unlocked || !self->enabled) {
         return;
     }
     lv_indev_t *indev = lv_indev_active();
@@ -148,7 +149,7 @@ static void on_press(lv_event_t *e)
 static void on_pressing(lv_event_t *e)
 {
     auto *self = static_cast<ui_slide_unlock_t *>(lv_event_get_user_data(e));
-    if(!self || self->unlocked || !self->dragging) {
+    if(!self || self->unlocked || !self->enabled || !self->dragging) {
         return;
     }
     lv_indev_t *indev = lv_indev_active();
@@ -166,7 +167,7 @@ static void on_pressing(lv_event_t *e)
 static void on_release(lv_event_t *e)
 {
     auto *self = static_cast<ui_slide_unlock_t *>(lv_event_get_user_data(e));
-    if(!self || self->unlocked || !self->dragging) {
+    if(!self || self->unlocked || !self->enabled || !self->dragging) {
         return;
     }
     self->dragging = false;
@@ -236,6 +237,7 @@ ui_slide_unlock_t *ui_slide_unlock_create(lv_obj_t *parent,
     self->accent = cfg->custom_accent ? cfg->accent_color : user_color_accent;
     self->rest_text = cfg->hint_text ? cfg->hint_text : "SWIPE TO OPEN";
     self->vstate = -1;
+    self->enabled = true;
 
     const int32_t track_w = cfg->track_w > 0 ? cfg->track_w : USER_SLIDE_W;
     const int32_t track_h = cfg->track_h > 0 ? cfg->track_h : USER_SLIDE_H;
@@ -413,6 +415,7 @@ void ui_slide_unlock_reset(ui_slide_unlock_t *self)
         return;
     }
     self->unlocked = false;
+    self->enabled = true;
     self->dragging = false;
     self->at_end = false;
     if(self->fill) {
@@ -420,6 +423,30 @@ void ui_slide_unlock_reset(ui_slide_unlock_t *self)
     }
     self->vstate = -1;         /* 强制重新应用可视状态 */
     return_fill(self);
+}
+
+void ui_slide_unlock_set_enabled(ui_slide_unlock_t *self, bool enabled)
+{
+    if(!self) {
+        return;
+    }
+    self->enabled = enabled;
+    if(self->fill) {
+        if(enabled && !self->unlocked) {
+            lv_obj_add_flag(self->fill, LV_OBJ_FLAG_CLICKABLE);
+        } else {
+            lv_obj_remove_flag(self->fill, LV_OBJ_FLAG_CLICKABLE);
+        }
+    }
+    if(enabled) {
+        lv_obj_set_style_opa(self->track, LV_OPA_COVER, 0);
+        return;
+    }
+    self->dragging = false;
+    self->at_end = false;
+    lv_anim_delete(self, anim_fill_w);
+    set_fill_w(self, self->min_w);
+    lv_obj_set_style_opa(self->track, LV_OPA_70, 0);
 }
 
 void ui_slide_unlock_destroy(ui_slide_unlock_t *self)

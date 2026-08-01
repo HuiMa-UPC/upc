@@ -94,6 +94,35 @@ bool write_raw_thumb(const char* out_path,
     return ok;
 }
 
+std::string basename_of_path(const std::string& path)
+{
+    if(path.empty()) {
+        return {};
+    }
+    std::error_code ec;
+    const std::string name = std::filesystem::path(path).filename().string();
+    if(!name.empty()) {
+        return name;
+    }
+    (void)ec;
+    return path;
+}
+
+bool remove_empty_dir_if_exists(const std::string& dir)
+{
+    if(dir.empty()) {
+        return false;
+    }
+    std::error_code ec;
+    if(!std::filesystem::is_directory(dir, ec)) {
+        return false;
+    }
+    if(!std::filesystem::is_empty(dir, ec)) {
+        return false;
+    }
+    return std::filesystem::remove(dir, ec);
+}
+
 } // namespace
 
 PrintVideoRecorder::~PrintVideoRecorder()
@@ -166,7 +195,9 @@ void PrintVideoRecorder::on_session_start(
     last_layer_nv12_.clear();
     /* 同一 gcode 文件重复打印时覆盖同名目录 */
     session_name_ = job_name_.empty() ? std::string("print") : job_name_;
-    session_dir_ = std::string(CAMERA_PRINT_VIDEO_OUT_DIR) + "/" + session_name_;
+    session_final_dir_ = std::string(CAMERA_PRINT_VIDEO_OUT_DIR) + "/" + session_name_;
+    const std::string token = sanitize_session_token(session_id_.c_str());
+    session_dir_ = session_final_dir_ + ".__work_" + (token.empty() ? "session" : token);
 
     mkdir_p(CAMERA_PRINT_VIDEO_OUT_DIR);
     remove_session_dir();
@@ -478,19 +509,22 @@ void PrintVideoRecorder::finalize_session(bool aborted)
             "print_video %s with no frames session=%s (no manifest)",
             aborted ? "abort" : "finish",
             session_id_.c_str());
-        /* 不 remove_all：与 PrintH264Recorder 共用 /home/video/{job}/，
-         * 0 帧 abort 时 H264 可能仍在后台转码 print_raw.nv12；整目录删除会吞掉产物。
-         * 同名作业下次 Session_Start 仍会 remove_session_dir 覆盖清理。 */
+        /* 仅在目录为空时做轻量清理：避免留下空 __work 目录；
+         * 非空目录（可能有 H264 后台产物）保持不动。 */
+        if(remove_empty_dir_if_exists(session_dir_)) {
+            UPC_LOG_MEDIA_SERVICE(
+                Info, "print_video removed empty work dir=%s", session_dir_.c_str());
+        }
         notify_manifest_ready(std::string{}, false, aborted, false);
         session_id_.clear();
         session_name_.clear();
+        session_final_dir_.clear();
         session_dir_.clear();
         start_unix_ = 0;
         frame_count_ = 0;
         return;
     }
 
-    const std::string thumb_rel = session_name_ + "/thumb" + CAMERA_PRINT_VIDEO_THUMB_EXT;
     const std::string thumb_path = session_dir_ + "/thumb" + CAMERA_PRINT_VIDEO_THUMB_EXT;
     (void)std::remove(thumb_path.c_str());
 
@@ -503,24 +537,30 @@ void PrintVideoRecorder::finalize_session(bool aborted)
                                thumb_path.c_str());
     }
 
-    const bool need_video = (frames >= 2u);
+    std::string frames_dir_name = basename_of_path(session_dir_);
+    if(frames_dir_name.empty()) {
+        frames_dir_name = session_name_.empty() ? std::string("print") : session_name_;
+    }
+    const std::string thumb_rel = frames_dir_name + "/thumb" + CAMERA_PRINT_VIDEO_THUMB_EXT;
+
+    const bool need_video = (frames >= 1u);
 
     /* 快路径：先落盘 manifest（含统计与缩略图），UI 可立即切结果页。 */
     const bool manifest_quick_ok = upsert_print_history(
         aborted,
-        session_name_,
+        frames_dir_name,
         thumb_ok ? thumb_rel : std::string{},
         std::string{},
         need_video);
-    notify_manifest_ready(session_name_, manifest_quick_ok, aborted, false);
+    notify_manifest_ready(frames_dir_name, manifest_quick_ok, aborted, false);
     if(!need_video) {
-        UPC_LOG_MEDIA_SERVICE(Info, "print_video skip mp4: frames=%u < 2 session=%s",
+        UPC_LOG_MEDIA_SERVICE(Info, "print_video skip mp4: frames=%u < 1 session=%s",
                                frames, session_id_.c_str());
     }
 
     UPC_LOG_MEDIA_SERVICE(
         Info,
-        "print_video saved -> %s frames=%u thumb=%s video_pending=%d%s",
+        "print_video saved work -> %s frames=%u thumb=%s video_pending=%d%s",
         session_dir_.c_str(),
         frames,
         thumb_ok ? thumb_path.c_str() : "(none)",
@@ -529,6 +569,7 @@ void PrintVideoRecorder::finalize_session(bool aborted)
 
     session_id_.clear();
     session_name_.clear();
+    session_final_dir_.clear();
     session_dir_.clear();
     start_unix_ = 0;
     frame_count_ = 0;
@@ -609,15 +650,36 @@ void PrintVideoRecorder::finalize_after_exit(const char* frames_dir)
         return;
     }
 
-    const std::string session_dir =
+    std::string session_dir =
         std::string(CAMERA_PRINT_VIDEO_OUT_DIR) + "/" + hit->frames_dir;
+    std::string final_frames_dir = sanitize_filename(hit->job_name.c_str());
+    if(final_frames_dir.empty()) {
+        final_frames_dir = hit->frames_dir;
+    }
+    const std::string final_session_dir =
+        std::string(CAMERA_PRINT_VIDEO_OUT_DIR) + "/" + final_frames_dir;
+    if(hit->frames_dir != final_frames_dir) {
+        std::error_code ec;
+        std::filesystem::remove_all(final_session_dir, ec);
+        ec.clear();
+        std::filesystem::rename(session_dir, final_session_dir, ec);
+        if(ec) {
+            UPC_LOG_MEDIA_SERVICE(Warn,
+                "print_video finalize promote fail %s -> %s: %s",
+                session_dir.c_str(), final_session_dir.c_str(), ec.message().c_str());
+        } else {
+            session_dir = final_session_dir;
+            hit->frames_dir = final_frames_dir;
+            hit->thumb = final_frames_dir + "/thumb" + CAMERA_PRINT_VIDEO_THUMB_EXT;
+        }
+    }
     const uint32_t frame_count = timelapse_util::scan_max_png_index(session_dir);
     const uint32_t fps = layer_fps_ > 0 ? layer_fps_ : 1u;
     const std::string mp4_path = session_dir + "/timelapse.mp4";
     const std::string mp4_rel = hit->frames_dir + "/timelapse.mp4";
 
     bool video_ok = false;
-    if(frame_count >= 2u) {
+    if(frame_count >= 1u) {
         (void)std::remove(mp4_path.c_str());
         video_ok = timelapse_util::encode_png_sequence_to_mp4(
             session_dir, frame_count, fps, mp4_path.c_str());
@@ -643,6 +705,20 @@ void PrintVideoRecorder::finalize_after_exit(const char* frames_dir)
     hit->video_pending = false;
     hit->clean_first_png = 0;
     hit->clean_last_png = 0;
+
+    /* 同名覆盖：把“旧正式条目 + 本次 __work 条目”合并为一条最终条目。 */
+    const upc::PrintHistoryEntry merged_entry = *hit;
+    const std::string work_frames_dir = frames_dir ? std::string(frames_dir) : std::string{};
+    entries.erase(
+        std::remove_if(entries.begin(), entries.end(),
+            [&](const upc::PrintHistoryEntry& e) {
+                return (!merged_entry.frames_dir.empty() &&
+                        e.frames_dir == merged_entry.frames_dir) ||
+                       (!work_frames_dir.empty() &&
+                        e.frames_dir == work_frames_dir);
+            }),
+        entries.end());
+    entries.push_back(merged_entry);
 
     const std::string tmp_path =
         std::string(UPC_PRINT_VIDEO_MANIFEST) + ".tmp";
@@ -676,6 +752,31 @@ bool PrintVideoRecorder::remove_session_dir()
     std::error_code ec;
     (void)std::filesystem::remove_all(session_dir_, ec);
     return !std::filesystem::exists(session_dir_, ec);
+}
+
+bool PrintVideoRecorder::promote_session_dir()
+{
+    if(session_dir_.empty() || session_final_dir_.empty()) {
+        return false;
+    }
+    if(session_dir_ == session_final_dir_) {
+        return true;
+    }
+    std::error_code ec;
+    std::filesystem::remove_all(session_final_dir_, ec);
+    ec.clear();
+    std::filesystem::rename(session_dir_, session_final_dir_, ec);
+    if(ec) {
+        UPC_LOG_MEDIA_SERVICE(
+            Error,
+            "print_video promote dir failed %s -> %s: %s",
+            session_dir_.c_str(),
+            session_final_dir_.c_str(),
+            ec.message().c_str());
+        return false;
+    }
+    session_dir_ = session_final_dir_;
+    return true;
 }
 
 bool PrintVideoRecorder::mkdir_p(const char* path)
@@ -716,6 +817,21 @@ std::string PrintVideoRecorder::sanitize_filename(const char* name)
     }
     if(s.empty()) {
         s = "print";
+    }
+    return s;
+}
+
+std::string PrintVideoRecorder::sanitize_session_token(const char* token)
+{
+    if(!token || !token[0]) {
+        return {};
+    }
+    std::string s(token);
+    for(char& c : s) {
+        const unsigned char uc = static_cast<unsigned char>(c);
+        if(!std::isalnum(uc) && c != '-' && c != '_' && c != '.') {
+            c = '_';
+        }
     }
     return s;
 }
