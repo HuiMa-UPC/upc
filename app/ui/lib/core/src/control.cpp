@@ -2992,8 +2992,31 @@ void on_print_video_manifest(const middleware::PrintVideoManifestPayload &p)
     if(g_state != CONTROL_STATE_PRINTING && g_state != CONTROL_STATE_PRINT_DONE) {
         return;
     }
-    /* 第二条 has_video 通知只用于历史页刷新，结果页已显示则不重复套 UI。 */
+    /* 结果页已显示后，仍要接收后续 manifest 更新：
+     * - 不能重复套结果页 UI；
+     * - 但要刷新 g_print_result.video_dir（finalize 主键），避免退出后用错目录键。 */
     if(g_state == CONTROL_STATE_PRINT_DONE && g_print_result_shown) {
+        if(p.has_entry && p.frames_dir[0]) {
+            std::snprintf(g_print_result.video_dir, sizeof(g_print_result.video_dir),
+                          "%s", p.frames_dir);
+
+            std::vector<upc::PrintHistoryEntry> entries;
+            (void)upc::print_history_manifest_load(UPC_PRINT_VIDEO_MANIFEST, entries);
+            for(const auto &e : entries) {
+                if(e.frames_dir != p.frames_dir) {
+                    continue;
+                }
+                g_print_result.terminated = (e.status == upc::PrintHistoryStatus::Terminated);
+                g_print_result.duration_sec = e.duration_sec;
+                g_print_result.material_g = e.material_g;
+                g_print_result.has_stats = true;
+                if(!e.job_name.empty()) {
+                    std::snprintf(g_print_result.job_name, sizeof(g_print_result.job_name),
+                                  "%s", e.job_name.c_str());
+                }
+                break;
+            }
+        }
         return;
     }
 
@@ -3245,18 +3268,6 @@ bool control_is_printing(void)
            (g_door_origin == DoorFlowOrigin::PrintCollect &&
             (g_state == CONTROL_STATE_DOOR_OPENING ||
              g_state == CONTROL_STATE_DOOR_CONFIRM));
-}
-
-void control_print_result_dismiss(void)
-{
-    if(g_state != CONTROL_STATE_PRINT_DONE) {
-        return;
-    }
-    /* 结果页回首页：强制下发 clean_test_close，确保清粉测试流程被关闭。 */
-    ui::UiMsgProxy::instance().send_clean_test_close();
-    /* 先回首页，再后台提交历史可见状态。 */
-    enter_state(CONTROL_STATE_IDLE);
-    schedule_commit_print_result_history();
 }
 
 void control_print_result_collect(void)

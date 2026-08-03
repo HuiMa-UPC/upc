@@ -4,94 +4,39 @@
 #include "timelapse_util.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <cerrno>
-#include <cstdlib>
+#include <chrono>
+#include <cstdio>
 #include <cstring>
 #include <filesystem>
+#include <thread>
+
+#if defined(UPC_MEDIA_HAS_MPP) && UPC_MEDIA_HAS_MPP
+#include <rk_mpi.h>
+#include <mpp_buffer.h>
+#include <mpp_frame.h>
+#include <mpp_packet.h>
+#endif
 
 namespace upc::media {
 
 namespace {
-
 constexpr const char* kH264Name = "print.h264";
-constexpr const char* kRawName = "print_raw.nv12";
-/** 待写帧上限：满则丢帧保预览（约 3 × ~1.9MB） */
 constexpr size_t kMaxPendingFrameJobs = 3u;
 
-std::string sanitize_session_token(const char* token)
-{
-    if(!token || !token[0]) {
-        return {};
-    }
+std::string sanitize_session_token(const char* token) {
+    if(!token || !token[0]) return {};
     std::string out(token);
     for(char& c : out) {
         const unsigned char uc = static_cast<unsigned char>(c);
-        if((uc >= '0' && uc <= '9') ||
-           (uc >= 'A' && uc <= 'Z') ||
-           (uc >= 'a' && uc <= 'z') ||
-           c == '_' || c == '-' || c == '.') {
-            continue;
-        }
-        c = '_';
+        if(!std::isalnum(uc) && c != '_' && c != '-' && c != '.') c = '_';
     }
     return out;
-}
-
-std::string sanitize_filename_local(const char* name)
-{
-    if(!name || !name[0]) {
-        return "print";
-    }
-    std::string out(name);
-    for(char& c : out) {
-        const unsigned char uc = static_cast<unsigned char>(c);
-        if((uc >= '0' && uc <= '9') ||
-           (uc >= 'A' && uc <= 'Z') ||
-           (uc >= 'a' && uc <= 'z') ||
-           c == '_' || c == '-' || c == '.') {
-            continue;
-        }
-        c = '_';
-    }
-    if(out.empty()) {
-        out = "print";
-    }
-    return out;
-}
-
-std::string make_session_work_dir(const char* job_name, const char* session_id)
-{
-    std::string session_name = sanitize_filename_local(job_name);
-    if(session_name.empty()) {
-        session_name = "print";
-    }
-    const std::string token = sanitize_session_token(session_id);
-    const std::string session_final_dir =
-        std::string(CAMERA_PRINT_VIDEO_OUT_DIR) + "/" + session_name;
-    return session_final_dir + ".__work_" + (token.empty() ? "session" : token);
-}
-
-bool remove_empty_dir_if_exists(const std::string& dir)
-{
-    if(dir.empty()) {
-        return false;
-    }
-    std::error_code ec;
-    if(!std::filesystem::is_directory(dir, ec)) {
-        return false;
-    }
-    if(!std::filesystem::is_empty(dir, ec)) {
-        return false;
-    }
-    return std::filesystem::remove(dir, ec);
 }
 
 void copy_nv12_tight(uint8_t* dst, const uint8_t* src_y, const uint8_t* src_uv,
-                     uint32_t src_stride_y, uint32_t width, uint32_t height)
-{
-    if(!dst || !src_y || !src_uv || width == 0 || height == 0 || src_stride_y == 0) {
-        return;
-    }
+                     uint32_t src_stride_y, uint32_t width, uint32_t height) {
     const size_t y_size = static_cast<size_t>(width) * height;
     uint8_t* dst_uv = dst + y_size;
     if(src_stride_y == width) {
@@ -100,511 +45,472 @@ void copy_nv12_tight(uint8_t* dst, const uint8_t* src_y, const uint8_t* src_uv,
         return;
     }
     for(uint32_t r = 0; r < height; ++r) {
-        std::memcpy(dst + static_cast<size_t>(r) * width,
-                    src_y + static_cast<size_t>(r) * src_stride_y, width);
+        std::memcpy(dst + static_cast<size_t>(r) * width, src_y + static_cast<size_t>(r) * src_stride_y, width);
     }
     for(uint32_t r = 0; r < height / 2u; ++r) {
-        std::memcpy(dst_uv + static_cast<size_t>(r) * width,
-                    src_uv + static_cast<size_t>(r) * src_stride_y, width);
+        std::memcpy(dst_uv + static_cast<size_t>(r) * width, src_uv + static_cast<size_t>(r) * src_stride_y, width);
     }
+}
+
+bool remove_empty_dir_if_exists(const std::string& dir) {
+    if(dir.empty()) return false;
+    std::error_code ec;
+    if(!std::filesystem::is_directory(dir, ec) || !std::filesystem::is_empty(dir, ec)) return false;
+    return std::filesystem::remove(dir, ec);
+}
+
+std::string build_session_work_dir(const std::string& session_name,
+                                   const char* session_id) {
+    const std::string token = sanitize_session_token(session_id);
+    return std::string(CAMERA_PRINT_VIDEO_OUT_DIR) + "/" + session_name +
+           ".__work_" + (token.empty() ? "session" : token);
 }
 
 } // namespace
 
-size_t PrintH264Recorder::count_pending_write_frames(const std::deque<Job>& jobs)
-{
+size_t PrintH264Recorder::count_pending_write_frames(const std::deque<Job>& jobs) {
     size_t n = 0;
-    for(const auto& job : jobs) {
-        if(job.kind == JobKind::WriteFrame) {
-            ++n;
-        }
-    }
+    for(const auto& j : jobs) if(j.kind == JobKind::WriteFrame) ++n;
     return n;
 }
 
-PrintH264Recorder::~PrintH264Recorder()
-{
+PrintH264Recorder::~PrintH264Recorder() {
     {
         std::lock_guard<std::mutex> lock(mtx_);
         active_ = false;
-        close_raw_fp_locked();
+        (void)close_encoder_locked();
     }
     stop_worker();
 }
 
-void PrintH264Recorder::set_stream_geometry(uint32_t width, uint32_t height, uint32_t fps)
-{
+void PrintH264Recorder::set_stream_geometry(uint32_t width, uint32_t height, uint32_t fps) {
     std::lock_guard<std::mutex> lock(mtx_);
-    if(width > 0) {
-        width_ = width;
-    }
-    if(height > 0) {
-        height_ = height;
-    }
-    if(fps > 0) {
-        fps_ = fps;
-    }
+    if(width > 0) width_ = width;
+    if(height > 0) height_ = height;
+    if(fps > 0) fps_ = fps;
 }
 
-void PrintH264Recorder::start_worker_if_needed_locked()
-{
-    if(worker_.joinable()) {
-        return;
-    }
-    worker_stop_ = false;
-    worker_ = std::thread(&PrintH264Recorder::worker_fn, this);
+void PrintH264Recorder::clear_session_paths_locked() {
+    session_id_.clear();
+    session_name_.clear();
+    session_dir_.clear();
+    h264_path_.clear();
 }
 
-void PrintH264Recorder::stop_worker()
-{
-    {
-        std::lock_guard<std::mutex> lock(mtx_);
-        worker_stop_ = true;
-    }
-    cv_.notify_all();
-    if(worker_.joinable()) {
-        worker_.join();
-    }
-}
-
-void PrintH264Recorder::close_raw_fp_locked()
-{
-    if(raw_fp_) {
-        std::fflush(raw_fp_);
-        std::fclose(raw_fp_);
-        raw_fp_ = nullptr;
-    }
-    raw_fp_path_.clear();
-}
-
-void PrintH264Recorder::on_session_start(const middleware::PrintVideoSessionPayload& info)
-{
-    std::unique_lock<std::mutex> lock(mtx_);
-    /* 上一场后台转码未完成时阻塞开新录，避免同路径 raw/h264 被覆盖 */
-    while(finalize_in_progress_) {
-        finalize_cv_.wait(lock);
-    }
-    close_raw_fp_locked();
+void PrintH264Recorder::reset_session_state_locked() {
     active_ = false;
     paused_ = false;
     had_write_error_ = false;
     frame_count_ = 0;
     dropped_frames_ = 0;
-    session_id_.clear();
-    session_name_.clear();
-    session_dir_.clear();
-    raw_path_.clear();
-    h264_path_.clear();
+    clear_session_paths_locked();
+}
 
-    if(info.h264_continuous_on == 0) {
-        return;
+void PrintH264Recorder::start_worker_if_needed_locked() {
+    if(worker_.joinable()) return;
+    worker_stop_ = false;
+    worker_ = std::thread(&PrintH264Recorder::worker_fn, this);
+}
+
+void PrintH264Recorder::stop_worker() {
+    {
+        std::lock_guard<std::mutex> lock(mtx_);
+        worker_stop_ = true;
+    }
+    cv_.notify_all();
+    if(worker_.joinable()) worker_.join();
+}
+
+bool PrintH264Recorder::open_encoder_locked() {
+#if !(defined(UPC_MEDIA_HAS_MPP) && UPC_MEDIA_HAS_MPP)
+    had_write_error_ = true;
+    UPC_LOG_MEDIA_SERVICE(Error, "print_h264 RKMPP disabled in this build");
+    return false;
+#else
+    if(mpp_ready_) return true;
+    (void)close_encoder_locked();
+    h264_fp_ = std::fopen(h264_path_.c_str(), "ab");
+    if(!h264_fp_) {
+        had_write_error_ = true;
+        UPC_LOG_MEDIA_SERVICE(Error, "print_h264 open h264 fail path=%s err=%s",
+                              h264_path_.c_str(), std::strerror(errno));
+        return false;
     }
 
-    start_worker_if_needed_locked();
+    MppCtx ctx = nullptr;
+    MppApi* mpi = nullptr;
+    MppEncCfg cfg = nullptr;
+    if(mpp_create(&ctx, &mpi) != MPP_OK || !ctx || !mpi) {
+        had_write_error_ = true;
+        UPC_LOG_MEDIA_SERVICE(Error, "print_h264 mpp_create fail");
+        if(h264_fp_) {
+            std::fclose(h264_fp_);
+            h264_fp_ = nullptr;
+        }
+        return false;
+    }
+    if(mpp_init(ctx, MPP_CTX_ENC, MPP_VIDEO_CodingAVC) != MPP_OK) {
+        had_write_error_ = true;
+        UPC_LOG_MEDIA_SERVICE(Error, "print_h264 mpp_init fail");
+        mpp_destroy(ctx);
+        if(h264_fp_) {
+            std::fclose(h264_fp_);
+            h264_fp_ = nullptr;
+        }
+        return false;
+    }
+    mpp_enc_cfg_init(&cfg);
+    if(!cfg) {
+        had_write_error_ = true;
+        UPC_LOG_MEDIA_SERVICE(Error, "print_h264 mpp_enc_cfg_init fail");
+        mpp_destroy(ctx);
+        if(h264_fp_) {
+            std::fclose(h264_fp_);
+            h264_fp_ = nullptr;
+        }
+        return false;
+    }
 
+    (void)mpi->control(ctx, MPP_ENC_GET_CFG, cfg);
+    const int fps = static_cast<int>(std::max(1u, fps_));
+    const int bps = static_cast<int>(CAMERA_PRINT_H264_BITRATE);
+    mpp_enc_cfg_set_s32(cfg, "prep:width", static_cast<int>(width_));
+    mpp_enc_cfg_set_s32(cfg, "prep:height", static_cast<int>(height_));
+    mpp_enc_cfg_set_s32(cfg, "prep:hor_stride", static_cast<int>(width_));
+    mpp_enc_cfg_set_s32(cfg, "prep:ver_stride", static_cast<int>(height_));
+    mpp_enc_cfg_set_s32(cfg, "prep:format", MPP_FMT_YUV420SP);
+    mpp_enc_cfg_set_s32(cfg, "rc:mode", MPP_ENC_RC_MODE_CBR);
+    mpp_enc_cfg_set_s32(cfg, "rc:bps_target", bps);
+    mpp_enc_cfg_set_s32(cfg, "rc:fps_in_num", fps);
+    mpp_enc_cfg_set_s32(cfg, "rc:fps_out_num", fps);
+    mpp_enc_cfg_set_s32(cfg, "rc:gop", fps * 2);
+    (void)mpi->control(ctx, MPP_ENC_SET_CFG, cfg);
+
+    mpp_ctx_ = ctx;
+    mpp_mpi_ = mpi;
+    mpp_cfg_ = cfg;
+    mpp_ready_ = true;
+    return true;
+#endif
+}
+
+int PrintH264Recorder::close_encoder_locked() {
+#if !(defined(UPC_MEDIA_HAS_MPP) && UPC_MEDIA_HAS_MPP)
+    return 0;
+#else
+    int rc = 0;
+    if(mpp_ready_) {
+        auto* mpi = reinterpret_cast<MppApi*>(mpp_mpi_);
+        auto ctx = reinterpret_cast<MppCtx>(mpp_ctx_);
+        MppFrame eos = nullptr;
+        if(mpp_frame_init(&eos) == MPP_OK && eos) {
+            mpp_frame_set_eos(eos, 1);
+            (void)mpi->encode_put_frame(ctx, eos);
+            mpp_frame_deinit(&eos);
+        }
+        for(int i = 0; i < 200; ++i) {
+            MppPacket pkt = nullptr;
+            if(mpi->encode_get_packet(ctx, &pkt) != MPP_OK || !pkt) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                continue;
+            }
+            const void* ptr = mpp_packet_get_pos(pkt);
+            const size_t len = static_cast<size_t>(mpp_packet_get_length(pkt));
+            if(ptr && len > 0 && h264_fp_ && std::fwrite(ptr, 1, len, h264_fp_) != len) rc = -1;
+            const bool eos_hit = (mpp_packet_get_eos(pkt) != 0);
+            mpp_packet_deinit(&pkt);
+            if(eos_hit) break;
+        }
+    }
+    if(h264_fp_) {
+        std::fflush(h264_fp_);
+        std::fclose(h264_fp_);
+        h264_fp_ = nullptr;
+    }
+    if(mpp_cfg_) {
+        mpp_enc_cfg_deinit(reinterpret_cast<MppEncCfg>(mpp_cfg_));
+        mpp_cfg_ = nullptr;
+    }
+    if(mpp_ctx_) {
+        mpp_destroy(reinterpret_cast<MppCtx>(mpp_ctx_));
+        mpp_ctx_ = nullptr;
+        mpp_mpi_ = nullptr;
+    }
+    mpp_ready_ = false;
+    return rc;
+#endif
+}
+
+void PrintH264Recorder::on_session_start(const middleware::PrintVideoSessionPayload& info) {
+    std::unique_lock<std::mutex> lock(mtx_);
+    while(finalize_in_progress_ || worker_busy_ || !jobs_.empty()) {
+        idle_cv_.wait(lock);
+    }
+
+    (void)close_encoder_locked();
+    reset_session_state_locked();
+
+    if(info.h264_continuous_on == 0) return;
+
+    start_worker_if_needed_locked();
     ++session_seq_;
     session_id_ = info.session_id;
     session_name_ = sanitize_filename(info.job_name);
-    if(session_name_.empty()) {
-        session_name_ = "print";
-    }
-    const std::string session_final_dir =
-        std::string(CAMERA_PRINT_VIDEO_OUT_DIR) + "/" + session_name_;
-    const std::string token = sanitize_session_token(info.session_id);
-    session_dir_ = session_final_dir + ".__work_" + (token.empty() ? "session" : token);
-    raw_path_ = session_dir_ + "/" + kRawName;
+    session_dir_ = build_session_work_dir(session_name_, info.session_id);
     h264_path_ = session_dir_ + "/" + kH264Name;
-
-    if(info.width > 0) {
-        width_ = info.width;
-    }
-    if(info.height > 0) {
-        height_ = info.height;
-    }
-    if(info.layer_fps > 0) {
-        fps_ = info.layer_fps;
-    }
+    if(info.width > 0) width_ = info.width;
+    if(info.height > 0) height_ = info.height;
+    if(info.layer_fps > 0) fps_ = info.layer_fps;
 
     std::error_code ec;
     std::filesystem::remove_all(session_dir_, ec);
     ec.clear();
     std::filesystem::create_directories(session_dir_, ec);
-    if(ec) {
-        UPC_LOG_MEDIA_SERVICE(Error, "print_h264 mkdir fail dir=%s err=%d",
-                               session_dir_.c_str(), ec.value());
-        return;
-    }
-    (void)std::remove(raw_path_.c_str());
-    (void)std::remove(h264_path_.c_str());
+    if(ec) return;
     active_ = true;
-    UPC_LOG_MEDIA_SERVICE(Info,
-        "print_h264 start id=%s dir=%s %ux%u@%u (async write)",
-        session_id_.c_str(), session_dir_.c_str(), width_, height_, fps_);
 }
 
-void PrintH264Recorder::set_paused(bool paused)
-{
+void PrintH264Recorder::set_paused(bool paused) {
     std::lock_guard<std::mutex> lock(mtx_);
-    if(paused_ == paused) {
-        return;
-    }
     paused_ = paused;
-    UPC_LOG_MEDIA_SERVICE(Info, "print_h264 paused=%d", paused_ ? 1 : 0);
 }
 
-void PrintH264Recorder::on_session_finish(const middleware::PrintVideoSessionPayload& info)
-{
+void PrintH264Recorder::on_session_finish(const middleware::PrintVideoSessionPayload& info) {
     std::lock_guard<std::mutex> lock(mtx_);
-    if(!active_) {
-        return;
+    if(active_ && (info.session_id[0] == 0 || session_id_ == info.session_id)) {
+        enqueue_finalize_locked(false);
     }
-    if(info.session_id[0] != '\0' && session_id_ != info.session_id) {
-        return;
-    }
-    enqueue_finalize_locked(false);
 }
 
-void PrintH264Recorder::on_session_abort(const middleware::PrintVideoSessionPayload& info)
-{
+void PrintH264Recorder::on_session_abort(const middleware::PrintVideoSessionPayload& info) {
     std::lock_guard<std::mutex> lock(mtx_);
-    if(!active_) {
-        return;
+    if(active_ && (info.session_id[0] == 0 || session_id_ == info.session_id)) {
+        enqueue_finalize_locked(true);
     }
-    if(info.session_id[0] != '\0' && session_id_ != info.session_id) {
-        return;
-    }
-    enqueue_finalize_locked(true);
 }
 
-void PrintH264Recorder::on_frame_nv12(const uint8_t* src_y, const uint8_t* src_uv,
-                                      uint32_t stride_y)
-{
-    uint64_t current_session_seq = 0;
-    uint32_t current_width = 0;
-    uint32_t current_height = 0;
-    std::string current_raw_path;
-
+void PrintH264Recorder::on_frame_nv12(const uint8_t* src_y, const uint8_t* src_uv, uint32_t stride_y) {
+    uint64_t seq = 0;
+    uint32_t w = 0;
+    uint32_t h = 0;
     {
         std::lock_guard<std::mutex> lock(mtx_);
-        if(!active_ || paused_ || had_write_error_ || !src_y || !src_uv ||
-           width_ == 0 || height_ == 0 || raw_path_.empty()) {
-            return;
-        }
+        if(!active_ || paused_ || had_write_error_ || !src_y || !src_uv || width_ == 0 || height_ == 0) return;
         if(count_pending_write_frames(jobs_) >= kMaxPendingFrameJobs) {
             ++dropped_frames_;
-            if((dropped_frames_ % 30u) == 1u) {
-                UPC_LOG_MEDIA_SERVICE(Warn,
-                    "print_h264 queue full drop=%u pending=%zu (keep preview)",
-                    dropped_frames_, count_pending_write_frames(jobs_));
-            }
             return;
         }
-        current_session_seq = session_seq_;
-        current_width = width_;
-        current_height = height_;
-        current_raw_path = raw_path_;
+        seq = session_seq_;
+        w = width_;
+        h = height_;
     }
 
-    if(stride_y == 0) {
-        stride_y = current_width;
-    }
-    if(stride_y < current_width) {
-        return;
-    }
+    if(stride_y == 0) stride_y = w;
+    if(stride_y < w) return;
 
-    const size_t need =
-        static_cast<size_t>(current_width) * current_height * 3u / 2u;
     Job job{};
     job.kind = JobKind::WriteFrame;
-    job.session_seq = current_session_seq;
-    job.width = current_width;
-    job.height = current_height;
-    job.raw_path = std::move(current_raw_path);
-    job.nv12.resize(need);
-    copy_nv12_tight(job.nv12.data(), src_y, src_uv, stride_y,
-                    current_width, current_height);
+    job.session_seq = seq;
+    job.width = w;
+    job.height = h;
+    job.nv12.resize(static_cast<size_t>(w) * h * 3u / 2u);
+    copy_nv12_tight(job.nv12.data(), src_y, src_uv, stride_y, w, h);
 
     {
         std::lock_guard<std::mutex> lock(mtx_);
-        if(!active_ || paused_ || current_session_seq != session_seq_ || had_write_error_) {
-            return;
-        }
-        if(count_pending_write_frames(jobs_) >= kMaxPendingFrameJobs) {
-            ++dropped_frames_;
-            return;
-        }
+        if(!active_ || paused_ || had_write_error_ || seq != session_seq_) return;
         jobs_.push_back(std::move(job));
     }
     cv_.notify_one();
 }
 
-void PrintH264Recorder::enqueue_cleanup_for_session(
-    const char* job_name, const char* session_id)
-{
-    const std::string cleanup_dir = make_session_work_dir(job_name, session_id);
-    if(cleanup_dir.empty()) {
-        return;
-    }
-    {
-        std::lock_guard<std::mutex> lock(mtx_);
-        start_worker_if_needed_locked();
-        Job job{};
-        job.kind = JobKind::Cleanup;
-        job.cleanup_dir = cleanup_dir;
-        jobs_.push_back(std::move(job));
-    }
-    cv_.notify_one();
-    UPC_LOG_MEDIA_SERVICE(Info, "print_h264 cleanup queued dir=%s", cleanup_dir.c_str());
-}
-
-void PrintH264Recorder::enqueue_finalize_locked(bool aborted)
-{
+void PrintH264Recorder::enqueue_cleanup_for_session(const char* job_name, const char* session_id) {
+    const std::string dir =
+        build_session_work_dir(sanitize_filename(job_name), session_id);
+    std::lock_guard<std::mutex> lock(mtx_);
     start_worker_if_needed_locked();
-
-    /* 停收新帧；队列中已有 WriteFrame 仍在 Encode 之前，由 worker FIFO 写完再转码 */
-    active_ = false;
-    finalize_in_progress_ = true;
-
     Job job{};
-    job.kind = JobKind::Encode;
-    job.session_seq = session_seq_;
-    job.aborted = aborted;
-    job.width = width_;
-    job.height = height_;
-    job.fps = fps_;
-    job.session_id = session_id_;
-    job.raw_path = raw_path_;
-    job.h264_path = h264_path_;
-
-    const uint32_t dropped = dropped_frames_;
-    session_id_.clear();
-    session_name_.clear();
-    session_dir_.clear();
-    /* raw_path_/计数留给 worker 写完残留帧后再清 */
-
+    job.kind = JobKind::Cleanup;
+    job.cleanup_dir = dir;
     jobs_.push_back(std::move(job));
     cv_.notify_one();
-    UPC_LOG_MEDIA_SERVICE(Info,
-        "print_h264 encode queued aborted=%d dropped=%u (async write+encode)",
-        aborted ? 1 : 0, dropped);
 }
 
-void PrintH264Recorder::worker_fn()
-{
+void PrintH264Recorder::enqueue_finalize_locked(bool aborted) {
+    start_worker_if_needed_locked();
+    active_ = false;
+    finalize_in_progress_ = true;
+    Job job{};
+    job.kind = JobKind::Finalize;
+    job.session_seq = session_seq_;
+    job.aborted = aborted;
+    job.session_id = session_id_;
+    jobs_.push_back(std::move(job));
+    cv_.notify_one();
+}
+
+void PrintH264Recorder::worker_fn() {
     for(;;) {
         Job job{};
         {
             std::unique_lock<std::mutex> lock(mtx_);
-            cv_.wait(lock, [this] {
-                return worker_stop_ || !jobs_.empty();
-            });
-            if(worker_stop_ && jobs_.empty()) {
-                break;
-            }
-            if(jobs_.empty()) {
-                continue;
-            }
+            cv_.wait(lock, [this] { return worker_stop_ || !jobs_.empty(); });
+            if(worker_stop_ && jobs_.empty()) break;
+            if(jobs_.empty()) continue;
             job = std::move(jobs_.front());
             jobs_.pop_front();
+            worker_busy_ = true;
+            worker_busy_session_ = job.session_seq;
         }
-
-        if(job.kind == JobKind::WriteFrame) {
-            run_write_frame_job(job);
-        } else if(job.kind == JobKind::Encode) {
-            run_encode_job(std::move(job));
-        } else {
-            run_cleanup_job(job);
+        if(job.kind == JobKind::WriteFrame) run_write_frame_job(job);
+        else if(job.kind == JobKind::Finalize) run_finalize_job(std::move(job));
+        else run_cleanup_job(job);
+        {
+            std::lock_guard<std::mutex> lock(mtx_);
+            worker_busy_ = false;
+            worker_busy_session_ = 0;
         }
+        idle_cv_.notify_all();
     }
-
-    std::lock_guard<std::mutex> lock(mtx_);
-    close_raw_fp_locked();
-    finalize_in_progress_ = false;
-    finalize_cv_.notify_all();
 }
 
-void PrintH264Recorder::run_write_frame_job(const Job& job)
-{
-    if(job.raw_path.empty() || job.nv12.empty() ||
-       job.width == 0 || job.height == 0) {
-        return;
-    }
-    const size_t need =
-        static_cast<size_t>(job.width) * job.height * 3u / 2u;
-    if(job.nv12.size() < need) {
-        return;
-    }
-
-    std::unique_lock<std::mutex> lock(mtx_);
-    /* 新会话已开始则丢弃旧场残留帧 */
-    if(job.session_seq != session_seq_) {
-        return;
-    }
-    if(had_write_error_) {
-        return;
+void PrintH264Recorder::run_write_frame_job(const Job& job) {
+    const size_t need = static_cast<size_t>(job.width) * job.height * 3u / 2u;
+    void* ctx = nullptr;
+    void* mpi = nullptr;
+    FILE* out_fp = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(mtx_);
+        if(job.session_seq != session_seq_ || had_write_error_ || job.nv12.size() < need) return;
+        if(!open_encoder_locked()) return;
+#if defined(UPC_MEDIA_HAS_MPP) && UPC_MEDIA_HAS_MPP
+        ctx = mpp_ctx_;
+        mpi = mpp_mpi_;
+#endif
+        out_fp = h264_fp_;
     }
 
-    if(!raw_fp_ || raw_fp_path_ != job.raw_path) {
-        close_raw_fp_locked();
-        raw_fp_ = std::fopen(job.raw_path.c_str(), "ab");
-        if(!raw_fp_) {
-            had_write_error_ = true;
-            UPC_LOG_MEDIA_SERVICE(Error, "print_h264 open raw fail %s: %s",
-                                   job.raw_path.c_str(), std::strerror(errno));
-            return;
-        }
-        raw_fp_path_ = job.raw_path;
-    }
-
-    FILE* fp = raw_fp_;
-    lock.unlock();
-
-    if(std::fwrite(job.nv12.data(), 1, need, fp) != need) {
-        std::lock_guard<std::mutex> err_lock(mtx_);
+#if defined(UPC_MEDIA_HAS_MPP) && UPC_MEDIA_HAS_MPP
+    auto mpp_ctx = reinterpret_cast<MppCtx>(ctx);
+    auto* mpp_mpi = reinterpret_cast<MppApi*>(mpi);
+    MppBuffer buf = nullptr;
+    if(mpp_buffer_get(nullptr, &buf, need) != MPP_OK || !buf) {
+        std::lock_guard<std::mutex> lock(mtx_);
         if(job.session_seq == session_seq_) {
             had_write_error_ = true;
         }
-        UPC_LOG_MEDIA_SERVICE(Error, "print_h264 write raw fail path=%s",
-                               job.raw_path.c_str());
         return;
     }
+    void* ptr = mpp_buffer_get_ptr(buf);
+    if(!ptr) {
+        mpp_buffer_put(buf);
+        std::lock_guard<std::mutex> lock(mtx_);
+        if(job.session_seq == session_seq_) {
+            had_write_error_ = true;
+        }
+        return;
+    }
+    std::memcpy(ptr, job.nv12.data(), need);
 
-    std::lock_guard<std::mutex> cnt_lock(mtx_);
-    if(job.session_seq == session_seq_) {
+    MppFrame frame = nullptr;
+    if(mpp_frame_init(&frame) != MPP_OK || !frame) {
+        mpp_buffer_put(buf);
+        std::lock_guard<std::mutex> lock(mtx_);
+        if(job.session_seq == session_seq_) {
+            had_write_error_ = true;
+        }
+        return;
+    }
+    mpp_frame_set_width(frame, job.width);
+    mpp_frame_set_height(frame, job.height);
+    mpp_frame_set_hor_stride(frame, job.width);
+    mpp_frame_set_ver_stride(frame, job.height);
+    mpp_frame_set_fmt(frame, MPP_FMT_YUV420SP);
+    mpp_frame_set_buffer(frame, buf);
+
+    bool write_error = (mpp_mpi->encode_put_frame(mpp_ctx, frame) != MPP_OK);
+    mpp_frame_deinit(&frame);
+    mpp_buffer_put(buf);
+
+    for(;;) {
+        MppPacket pkt = nullptr;
+        if(mpp_mpi->encode_get_packet(mpp_ctx, &pkt) != MPP_OK || !pkt) break;
+        const void* p = mpp_packet_get_pos(pkt);
+        const size_t n = static_cast<size_t>(mpp_packet_get_length(pkt));
+        if(p && n > 0 && out_fp && std::fwrite(p, 1, n, out_fp) != n) {
+            write_error = true;
+        }
+        mpp_packet_deinit(&pkt);
+    }
+    if(write_error) {
+        std::lock_guard<std::mutex> lock(mtx_);
+        if(job.session_seq == session_seq_) {
+            had_write_error_ = true;
+        }
+        return;
+    }
+#endif
+
+    std::lock_guard<std::mutex> lock(mtx_);
+    if(job.session_seq == session_seq_ && !had_write_error_) {
         ++frame_count_;
     }
 }
 
-void PrintH264Recorder::run_encode_job(Job job)
-{
-    uint32_t frame_count = 0;
-    bool had_write_error = false;
+void PrintH264Recorder::run_finalize_job(Job job) {
+    std::string h264;
+    std::string dir;
+    uint32_t frames = 0;
+    bool err = false;
     uint32_t dropped = 0;
-    const std::string work_dir =
-        std::filesystem::path(job.raw_path).parent_path().string();
     {
         std::lock_guard<std::mutex> lock(mtx_);
-        /* FIFO：此时本场 WriteFrame 均已处理完 */
+        h264 = h264_path_;
+        dir = session_dir_;
+        frames = frame_count_;
+        err = had_write_error_;
+        dropped = dropped_frames_;
         if(job.session_seq == session_seq_) {
-            frame_count = frame_count_;
-            had_write_error = had_write_error_;
-            dropped = dropped_frames_;
+            (void)close_encoder_locked();
+            clear_session_paths_locked();
             frame_count_ = 0;
-            had_write_error_ = false;
             dropped_frames_ = 0;
-            raw_path_.clear();
-            h264_path_.clear();
+            had_write_error_ = false;
+            paused_ = false;
         }
-        close_raw_fp_locked();
     }
 
-    const uint32_t print_png_count = timelapse_util::scan_max_png_index(work_dir);
-    if(had_write_error || frame_count == 0 || print_png_count == 0) {
-        (void)std::remove(job.raw_path.c_str());
-        (void)std::remove(job.h264_path.c_str());
-        (void)std::remove((work_dir + "/print_h264.mp4").c_str());
-        if(remove_empty_dir_if_exists(work_dir)) {
-            UPC_LOG_MEDIA_SERVICE(
-                Info, "print_h264 removed empty work dir=%s", work_dir.c_str());
-        }
-        UPC_LOG_MEDIA_SERVICE(Warn,
-            "print_h264 skip encode session=%s aborted=%d frames=%u "
-            "print_png=%u write_err=%d dropped=%u",
-            job.session_id.c_str(), job.aborted ? 1 : 0,
-            frame_count, print_png_count, had_write_error ? 1 : 0, dropped);
-    } else {
-        const uint32_t fps = job.fps > 0 ? job.fps : 1u;
-        char cmd[2048];
-        std::snprintf(cmd, sizeof(cmd),
-                      "%s -i '%s' -o '%s' -w %u -h %u -hstride %u "
-                      "-f 0 -t 7 -n %u -fps %u -bps %u -rc 1",
-                      CAMERA_MPI_ENC_BIN,
-                      job.raw_path.c_str(),
-                      job.h264_path.c_str(),
-                      job.width, job.height, job.width,
-                      frame_count, fps, CAMERA_PRINT_H264_BITRATE);
-        const bool ok = run_shell_cmd(cmd, "mpi_enc h264") == 0;
-        if(ok) {
-            (void)std::remove(job.raw_path.c_str());
-        }
-        UPC_LOG_MEDIA_SERVICE(Info,
-            "print_h264 %s session=%s aborted=%d frames=%u dropped=%u out=%s",
-            ok ? "done" : "failed",
-            job.session_id.c_str(),
-            job.aborted ? 1 : 0,
-            frame_count,
-            dropped,
-            job.h264_path.c_str());
+    /* 终止打印也保留连续录像裸流；仅当完全无帧时才清理。 */
+    if(frames == 0) {
+        (void)std::remove(h264.c_str());
+        (void)remove_empty_dir_if_exists(dir);
     }
 
-    {
-        std::lock_guard<std::mutex> lock(mtx_);
-        const bool more_encode = std::any_of(
-            jobs_.begin(), jobs_.end(),
-            [](const Job& j) { return j.kind == JobKind::Encode; });
-        if(!more_encode) {
-            finalize_in_progress_ = false;
-            finalize_cv_.notify_all();
-        }
-    }
+    UPC_LOG_MEDIA_SERVICE(Info,
+        "print_h264 finalize id=%s aborted=%d frames=%u dropped=%u err=%d",
+        job.session_id.c_str(), job.aborted ? 1 : 0, frames, dropped, err ? 1 : 0);
+
+    std::lock_guard<std::mutex> lock(mtx_);
+    finalize_in_progress_ = false;
+    finalize_cv_.notify_all();
+    idle_cv_.notify_all();
 }
 
-void PrintH264Recorder::run_cleanup_job(const Job& job)
-{
-    if(job.cleanup_dir.empty()) {
-        return;
-    }
-    const std::string raw_path = job.cleanup_dir + "/" + kRawName;
-    const std::string h264_path = job.cleanup_dir + "/" + kH264Name;
-    const std::string h264_mp4_path = job.cleanup_dir + "/print_h264.mp4";
-    (void)std::remove(raw_path.c_str());
-    (void)std::remove(h264_path.c_str());
-    (void)std::remove(h264_mp4_path.c_str());
-    if(remove_empty_dir_if_exists(job.cleanup_dir)) {
-        UPC_LOG_MEDIA_SERVICE(
-            Info, "print_h264 cleanup removed empty dir=%s", job.cleanup_dir.c_str());
-    } else {
-        UPC_LOG_MEDIA_SERVICE(
-            Info, "print_h264 cleanup done dir=%s", job.cleanup_dir.c_str());
-    }
+void PrintH264Recorder::run_cleanup_job(const Job& job) {
+    (void)std::remove((job.cleanup_dir + "/print.h264").c_str());
+    (void)std::remove((job.cleanup_dir + "/print_h264.mp4").c_str());
+    (void)remove_empty_dir_if_exists(job.cleanup_dir);
 }
 
-std::string PrintH264Recorder::sanitize_filename(const char* name)
-{
-    if(!name || !name[0]) {
-        return "print";
-    }
+std::string PrintH264Recorder::sanitize_filename(const char* name) {
+    if(!name || !name[0]) return "print";
     std::string out(name);
     for(char& c : out) {
         const unsigned char uc = static_cast<unsigned char>(c);
-        if((uc >= '0' && uc <= '9') ||
-           (uc >= 'A' && uc <= 'Z') ||
-           (uc >= 'a' && uc <= 'z') ||
-           c == '_' || c == '-' || c == '.') {
-            continue;
-        }
-        c = '_';
+        if(!std::isalnum(uc) && c != '_' && c != '-' && c != '.') c = '_';
     }
-    if(out.empty()) {
-        out = "print";
-    }
+    if(out.empty()) out = "print";
     return out;
-}
-
-int PrintH264Recorder::run_shell_cmd(const char* cmd, const char* log_tag)
-{
-    if(!cmd || !cmd[0]) {
-        return -1;
-    }
-    UPC_LOG_MEDIA_SERVICE(Info, "print_h264 %s: %s",
-                           log_tag ? log_tag : "cmd", cmd);
-    const int rc = std::system(cmd);
-    if(rc != 0) {
-        UPC_LOG_MEDIA_SERVICE(Error,
-            "print_h264 %s failed rc=%d",
-            log_tag ? log_tag : "cmd", rc);
-    }
-    return rc;
 }
 
 } // namespace upc::media

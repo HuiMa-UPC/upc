@@ -53,4 +53,9 @@
 #define CAMERA_PRINT_VIDEO_LAYER_FPS  5u
 #endif
 
+/** Media 启动时清理陈旧 __work 目录阈值（秒） */
+#ifndef MEDIA_STALE_WORK_TTL_SEC
+#define MEDIA_STALE_WORK_TTL_SEC  (12u * 60u * 60u)
+#endif
+
 #endif /* MEDIA_DEVICE_CONFIG_HPP */

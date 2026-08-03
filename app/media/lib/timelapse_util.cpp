@@ -200,33 +200,29 @@ bool encode_nv12_to_png(const uint8_t* nv12, size_t bytes,
     }
 
     const std::string png_path = frame_png_path(session_dir, frame_index);
-    const std::string tmp_nv12_path = session_dir + "/.tmp_" +
-        std::to_string(frame_index) + ".nv12";
-
-    FILE* fp = std::fopen(tmp_nv12_path.c_str(), "wb");
-    if(!fp) {
-        UPC_LOG_MEDIA_SERVICE(Error, "timelapse open temp nv12 fail %s: %s",
-                               tmp_nv12_path.c_str(), std::strerror(errno));
-        return false;
-    }
-    const bool write_ok = std::fwrite(nv12, 1, need, fp) == need;
-    if(std::fclose(fp) != 0 || !write_ok) {
-        UPC_LOG_MEDIA_SERVICE(Error, "timelapse write temp nv12 fail %s",
-                               tmp_nv12_path.c_str());
-        (void)std::remove(tmp_nv12_path.c_str());
-        return false;
-    }
-
     char cmd[1280];
     std::snprintf(
         cmd, sizeof(cmd),
-        "%s -y -loglevel error -f rawvideo -pix_fmt nv12 -s %ux%u -i '%s' "
+        "%s -y -loglevel error -f rawvideo -pix_fmt nv12 -s %ux%u -i - "
         "-frames:v 1 -c:v png '%s'",
-        CAMERA_FFMPEG_BIN, width, height,
-        tmp_nv12_path.c_str(), png_path.c_str());
-    const bool ok = run_shell_cmd(cmd, "ffmpeg png") == 0;
-    (void)std::remove(tmp_nv12_path.c_str());
+        CAMERA_FFMPEG_BIN, width, height, png_path.c_str());
+    FILE* ff = ::popen(cmd, "w");
+    if(!ff) {
+        UPC_LOG_MEDIA_SERVICE(Error, "timelapse open ffmpeg pipe fail frame=%u",
+                               frame_index);
+        return false;
+    }
+    const bool write_ok = (std::fwrite(nv12, 1, need, ff) == need);
+    const int rc = ::pclose(ff);
+    const bool ok = write_ok && (rc == 0);
     if(!ok) {
+        if(!write_ok) {
+            UPC_LOG_MEDIA_SERVICE(Error, "timelapse write frame to ffmpeg fail frame=%u",
+                                   frame_index);
+        } else {
+            UPC_LOG_MEDIA_SERVICE(Error, "timelapse ffmpeg png failed rc=%d frame=%u",
+                                   rc, frame_index);
+        }
         (void)std::remove(png_path.c_str());
     }
     return ok;

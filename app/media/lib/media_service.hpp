@@ -37,6 +37,9 @@ private:
     void handle_clean_video(const middleware::Message& msg);
     void handle_print_video_finalize(const middleware::Message& msg);
     void handle_storage_usage_req(const middleware::Message& msg) const;
+    void cleanup_stale_work_dirs_on_startup() const;
+    void cleanup_work_dirs_before_print_start(
+        const middleware::PrintVideoSessionPayload& info) const;
 
     void send_stream_start_req();
     void send_stream_stop_req();

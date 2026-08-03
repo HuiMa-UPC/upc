@@ -30,7 +30,7 @@ typedef enum {
     /**
      * 打印结束（完成或终止）后不直接回 IDLE：摄像头预览保活，界面先维持打印中不变，
      * 等 Camera 的 APP_Print_Video_Manifest_Ntf 到达后切结果页浮层。
-     * 两个出口：右上圆钮直接回 IDLE；滑动取件回 IDLE 并走开门流程。
+     * 当前出口：滑动取件回 IDLE 并走开门流程。
      */
     CONTROL_STATE_PRINT_DONE,
 } control_state_t;
@@ -71,9 +71,7 @@ void control_cancel(void);
 /** 打印占用中（PRINTING 或 PRINT_DONE）：期间禁止进文件页开新任务 */
 bool control_is_printing(void);
 
-/* ---- 打印结果页（CONTROL_STATE_PRINT_DONE）的两个出口 ---- */
-/** 右上圆钮：直接退出打印状态回待机首页（不开门） */
-void control_print_result_dismiss(void);
+/* ---- 打印结果页（CONTROL_STATE_PRINT_DONE）的出口 ---- */
 /** 滑动取件：退出打印状态后走开门流程（PM2.5/最短停留/关门轮询） */
 void control_print_result_collect(void);
 

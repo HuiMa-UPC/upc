@@ -42,6 +42,36 @@ else()
     message(WARNING "media: librga not found — raw thumbnail RGA path disabled")
 endif()
 
+if(CMAKE_SYSROOT)
+    find_path(UPC_MEDIA_MPP_INCLUDE_DIR NAMES rk_mpi.h
+        PATHS
+            ${CMAKE_SYSROOT}/usr/include
+            ${CMAKE_SYSROOT}/usr/include/rockchip
+            ${CMAKE_SYSROOT}/usr/include/mpp
+        NO_DEFAULT_PATH)
+    find_library(UPC_MEDIA_MPP_LIB NAMES rockchip_mpp mpp
+        PATHS
+            ${CMAKE_SYSROOT}/usr/lib
+            ${CMAKE_SYSROOT}/lib
+        NO_DEFAULT_PATH)
+else()
+    find_path(UPC_MEDIA_MPP_INCLUDE_DIR NAMES rk_mpi.h
+        PATHS
+            /usr/include
+            /usr/include/rockchip
+            /usr/include/mpp)
+    find_library(UPC_MEDIA_MPP_LIB NAMES rockchip_mpp mpp)
+endif()
+
+if(UPC_MEDIA_MPP_INCLUDE_DIR AND UPC_MEDIA_MPP_LIB)
+    message(STATUS "media: enabling RKMPP include=${UPC_MEDIA_MPP_INCLUDE_DIR} lib=${UPC_MEDIA_MPP_LIB}")
+    target_include_directories(rongsu_media PRIVATE ${UPC_MEDIA_MPP_INCLUDE_DIR})
+    target_link_libraries(rongsu_media PRIVATE ${UPC_MEDIA_MPP_LIB})
+    target_compile_definitions(rongsu_media PRIVATE UPC_MEDIA_HAS_MPP=1)
+else()
+    message(WARNING "media: RKMPP not found — print_h264 recorder disabled")
+endif()
+
 target_compile_options(rongsu_media
     PRIVATE
         -Wall -Wextra

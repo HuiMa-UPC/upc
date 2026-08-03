@@ -2,9 +2,11 @@
 
 #include "config/cal_config.hpp"
 #include "device_config.hpp"
+#include "print_history_manifest.hpp"
 #include "rs_log.hpp"
 
 #include <chrono>
+#include <cctype>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -14,6 +16,8 @@
 #include <sys/stat.h>
 #include <sys/statvfs.h>
 #include <unistd.h>
+#include <filesystem>
+#include <unordered_set>
 
 namespace upc::media {
 
@@ -21,6 +25,32 @@ namespace {
 
 constexpr const char* kPhotoOutDir = "/home/photo";
 constexpr uint64_t kStartRetryMs = 1000;
+
+std::string sanitize_token_for_dir(const char* s)
+{
+    if(!s || !s[0]) {
+        return {};
+    }
+    std::string out(s);
+    for(char& c : out) {
+        const unsigned char uc = static_cast<unsigned char>(c);
+        if(!std::isalnum(uc) && c != '_' && c != '-' && c != '.') {
+            c = '_';
+        }
+    }
+    return out;
+}
+
+std::string build_work_dir_name_for_session(const char* job_name,
+                                            const char* session_id)
+{
+    std::string session_name = sanitize_token_for_dir(job_name);
+    if(session_name.empty()) {
+        session_name = "print";
+    }
+    const std::string token = sanitize_token_for_dir(session_id);
+    return session_name + ".__work_" + (token.empty() ? "session" : token);
+}
 
 } // namespace
 
@@ -31,6 +61,7 @@ MediaService::~MediaService()
 
 bool MediaService::init()
 {
+    cleanup_stale_work_dirs_on_startup();
     subscribe_messages();
     print_video_.set_sender_module_id(middleware::ModuleId::APP_MEDIA);
     print_video_.set_nv12_snapshot_provider([this](std::vector<uint8_t>& out) {
@@ -517,6 +548,9 @@ void MediaService::handle_print_video(const middleware::Message& msg)
         if(!read_inline_pod(msg.payload, info)) {
             return;
         }
+        info.session_id[sizeof(info.session_id) - 1] = '\0';
+        info.job_name[sizeof(info.job_name) - 1] = '\0';
+        cleanup_work_dirs_before_print_start(info);
         {
             std::lock_guard<std::mutex> lock(finalize_mtx_);
             latest_print_session_closed_ = false;
@@ -716,6 +750,117 @@ int MediaService::run_shell_cmd(const char* cmd, const char* log_tag)
                               log_tag ? log_tag : "cmd", rc);
     }
     return rc;
+}
+
+void MediaService::cleanup_stale_work_dirs_on_startup() const
+{
+    std::vector<upc::PrintHistoryEntry> entries;
+    (void)upc::print_history_manifest_load(UPC_PRINT_VIDEO_MANIFEST, entries);
+
+    std::unordered_set<std::string> keep_frames_dirs;
+    for(const auto& e : entries) {
+        /* 仍在进行中的会话目录不清理：未提交或视频仍在后台生成。 */
+        if((!e.committed || e.video_pending) && !e.frames_dir.empty()) {
+            keep_frames_dirs.insert(e.frames_dir);
+        }
+    }
+
+    std::error_code ec;
+    if(!std::filesystem::is_directory(CAMERA_PRINT_VIDEO_OUT_DIR, ec)) {
+        return;
+    }
+
+    const auto now = std::filesystem::file_time_type::clock::now();
+    const auto ttl = std::chrono::seconds(MEDIA_STALE_WORK_TTL_SEC);
+
+    for(const auto& ent : std::filesystem::directory_iterator(CAMERA_PRINT_VIDEO_OUT_DIR, ec)) {
+        if(ec) {
+            break;
+        }
+        if(!ent.is_directory(ec) || ec) {
+            continue;
+        }
+        const std::string dir_name = ent.path().filename().string();
+        if(dir_name.find(".__work_") == std::string::npos) {
+            continue;
+        }
+        if(keep_frames_dirs.find(dir_name) != keep_frames_dirs.end()) {
+            continue;
+        }
+
+        std::error_code tm_ec;
+        const auto mt = std::filesystem::last_write_time(ent.path(), tm_ec);
+        if(tm_ec) {
+            continue;
+        }
+        if((now - mt) < ttl) {
+            continue;
+        }
+
+        std::error_code rm_ec;
+        const uintmax_t removed = std::filesystem::remove_all(ent.path(), rm_ec);
+        if(rm_ec) {
+            UPC_LOG_MEDIA_SERVICE(Warn,
+                "stale work cleanup fail dir=%s err=%s",
+                ent.path().c_str(), rm_ec.message().c_str());
+        } else {
+            UPC_LOG_MEDIA_SERVICE(Info,
+                "stale work cleanup removed dir=%s files=%llu",
+                ent.path().c_str(),
+                static_cast<unsigned long long>(removed));
+        }
+    }
+}
+
+void MediaService::cleanup_work_dirs_before_print_start(
+    const middleware::PrintVideoSessionPayload& info) const
+{
+    std::vector<upc::PrintHistoryEntry> entries;
+    (void)upc::print_history_manifest_load(UPC_PRINT_VIDEO_MANIFEST, entries);
+
+    std::unordered_set<std::string> keep_frames_dirs;
+    for(const auto& e : entries) {
+        if((!e.committed || e.video_pending) && !e.frames_dir.empty()) {
+            keep_frames_dirs.insert(e.frames_dir);
+        }
+    }
+
+    keep_frames_dirs.insert(
+        build_work_dir_name_for_session(info.job_name, info.session_id));
+
+    std::error_code ec;
+    if(!std::filesystem::is_directory(CAMERA_PRINT_VIDEO_OUT_DIR, ec)) {
+        return;
+    }
+
+    for(const auto& ent : std::filesystem::directory_iterator(CAMERA_PRINT_VIDEO_OUT_DIR, ec)) {
+        if(ec) {
+            break;
+        }
+        if(!ent.is_directory(ec) || ec) {
+            continue;
+        }
+        const std::string dir_name = ent.path().filename().string();
+        if(dir_name.find(".__work_pv") == std::string::npos) {
+            continue;
+        }
+        if(keep_frames_dirs.find(dir_name) != keep_frames_dirs.end()) {
+            continue;
+        }
+
+        std::error_code rm_ec;
+        const uintmax_t removed = std::filesystem::remove_all(ent.path(), rm_ec);
+        if(rm_ec) {
+            UPC_LOG_MEDIA_SERVICE(Warn,
+                "pre-print work cleanup fail dir=%s err=%s",
+                ent.path().c_str(), rm_ec.message().c_str());
+        } else {
+            UPC_LOG_MEDIA_SERVICE(Info,
+                "pre-print work cleanup removed dir=%s files=%llu",
+                ent.path().c_str(),
+                static_cast<unsigned long long>(removed));
+        }
+    }
 }
 
 } // namespace upc::media

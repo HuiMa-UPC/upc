@@ -356,33 +356,30 @@ bool PrintVideoRecorder::encode_nv12_to_png(const uint8_t* nv12,
     }
 
     const std::string png_path = frame_png_path(frame_index);
-    const std::string tmp_nv12_path = session_dir_ + "/.tmp_" +
-        std::to_string(frame_index) + ".nv12";
-
-    FILE* fp = std::fopen(tmp_nv12_path.c_str(), "wb");
-    if(!fp) {
-        UPC_LOG_MEDIA_SERVICE(Error, "print_video open temp nv12 fail %s: %s",
-                               tmp_nv12_path.c_str(), std::strerror(errno));
-        return false;
-    }
-    const bool write_ok = std::fwrite(nv12, 1, need, fp) == need;
-    if(std::fclose(fp) != 0 || !write_ok) {
-        UPC_LOG_MEDIA_SERVICE(Error, "print_video write temp nv12 fail %s",
-                               tmp_nv12_path.c_str());
-        (void)std::remove(tmp_nv12_path.c_str());
-        return false;
-    }
-
     char cmd[1280];
     std::snprintf(
         cmd, sizeof(cmd),
-        "%s -y -loglevel error -f rawvideo -pix_fmt nv12 -s %ux%u -i '%s' "
+        "%s -y -loglevel error -f rawvideo -pix_fmt nv12 -s %ux%u -i - "
         "-frames:v 1 -c:v png '%s'",
-        CAMERA_FFMPEG_BIN, stream_width_, stream_height_,
-        tmp_nv12_path.c_str(), png_path.c_str());
-    const bool ok = run_shell_cmd(cmd, "ffmpeg png") == 0;
-    (void)std::remove(tmp_nv12_path.c_str());
+        CAMERA_FFMPEG_BIN, stream_width_, stream_height_, png_path.c_str());
+
+    FILE* ff = ::popen(cmd, "w");
+    if(!ff) {
+        UPC_LOG_MEDIA_SERVICE(Error, "print_video open ffmpeg pipe fail frame=%u",
+                               frame_index);
+        return false;
+    }
+    const bool write_ok = (std::fwrite(nv12, 1, need, ff) == need);
+    const int rc = ::pclose(ff);
+    const bool ok = write_ok && (rc == 0);
     if(!ok) {
+        if(!write_ok) {
+            UPC_LOG_MEDIA_SERVICE(Error, "print_video write frame to ffmpeg fail frame=%u",
+                                   frame_index);
+        } else {
+            UPC_LOG_MEDIA_SERVICE(Error, "print_video ffmpeg png failed rc=%d frame=%u",
+                                   rc, frame_index);
+        }
         (void)std::remove(png_path.c_str());
     }
     return ok;
@@ -716,6 +713,7 @@ void PrintVideoRecorder::finalize_after_exit(const char* frames_dir)
     hit->print_thumb.clear();
     (void)std::remove(h264_mp4_path.c_str());
     std::error_code h264_ec;
+    bool h264_remux_ok = false;
     if(std::filesystem::exists(h264_path, h264_ec) && !h264_ec) {
         const bool h264_mp4_ok = timelapse_util::remux_h264_to_mp4(
             h264_path.c_str(), fps, h264_mp4_path.c_str());
@@ -724,6 +722,7 @@ void PrintVideoRecorder::finalize_after_exit(const char* frames_dir)
                 Warn, "print_video finalize h264 remux failed path=%s",
                 h264_path.c_str());
         } else {
+            h264_remux_ok = true;
             hit->print_video = h264_mp4_rel;
             if(!hit->thumb.empty()) {
                 const std::string timelapse_thumb_path =
@@ -747,10 +746,16 @@ void PrintVideoRecorder::finalize_after_exit(const char* frames_dir)
             }
         }
     }
-    if(std::remove(h264_path.c_str()) != 0 && errno != ENOENT) {
+    if(h264_remux_ok) {
+        if(std::remove(h264_path.c_str()) != 0 && errno != ENOENT) {
+            UPC_LOG_MEDIA_SERVICE(
+                Warn, "print_video finalize remove h264 failed path=%s err=%s",
+                h264_path.c_str(), std::strerror(errno));
+        }
+    } else if(std::filesystem::exists(h264_path, h264_ec) && !h264_ec) {
         UPC_LOG_MEDIA_SERVICE(
-            Warn, "print_video finalize remove h264 failed path=%s err=%s",
-            h264_path.c_str(), std::strerror(errno));
+            Warn, "print_video finalize keep h264 for retry path=%s",
+            h264_path.c_str());
     }
 
     hit->video_pending = false;
