@@ -23,6 +23,11 @@
 #define GLAVO_ENABLE_LAYER_CHANGE  1
 #endif
 
+/** 打印前基板准备（TLV 0x12/0x13）：0=跳过，直接发打印请求；1=发请求并等待 MCU 结果 */
+#ifndef GLAVO_ENABLE_PLATE_PREPARE
+#define GLAVO_ENABLE_PLATE_PREPARE  0
+#endif
+
 /** 运动下发：每轮 batch 包数与轮询间隔 */
 #ifndef TCP_BATCH_SIZE
 #define TCP_BATCH_SIZE  100

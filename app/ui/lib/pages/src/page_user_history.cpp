@@ -405,6 +405,11 @@ void card_gesture_cb(lv_event_t *e)
 
 /* ============================================================================
  *  删除（单条左滑 / 管理模式批量共用同一套落盘逻辑）
+ *
+ *  History / Timelapse：按 frames_dir 整条删除（会话目录内延时摄影 + 打印录像
+ *  + 缩略图 + PNG 一并清掉，并从 manifest 移除该条目）。任一 Tab 删除都会让
+ *  另一 Tab 同步消失，避免半删后 rebuild 又把卡片刷回来。
+ *  Album：只删对应照片文件。
  * ========================================================================= */
 
 bool remove_file_if_exists(const std::string& abs_path)
@@ -419,69 +424,19 @@ bool remove_file_if_exists(const std::string& abs_path)
     return std::filesystem::remove(abs_path, ec);
 }
 
-bool remove_png_and_thumb_in_dir(const std::string& abs_dir)
-{
-    if(abs_dir.empty()) {
-        return false;
-    }
-    std::error_code ec;
-    if(!std::filesystem::is_directory(abs_dir, ec)) {
-        return true;
-    }
-    for(const auto& de : std::filesystem::directory_iterator(abs_dir, ec)) {
-        if(ec) {
-            return false;
-        }
-        if(!de.is_regular_file(ec) || ec) {
-            continue;
-        }
-        const std::filesystem::path p = de.path();
-        const std::string ext = p.extension().string();
-        const std::string name = p.filename().string();
-        if(ext == ".png" || name == "thumb.rthm") {
-            if(!std::filesystem::remove(p, ec) || ec) {
-                return false;
-            }
-        }
-    }
-    return true;
-}
-
-bool remove_transient_media_in_dir(const std::string& abs_dir)
-{
-    if(abs_dir.empty()) {
-        return false;
-    }
-    const std::vector<std::string> names = {
-        "print.h264",
-        "print_raw.nv12",
-        "print_h264.mp4",
-        "timelapse.mp4",
-        "thumb.rthm",
-        "print_thumb.rthm",
-    };
-    for(const auto& name : names) {
-        if(!remove_file_if_exists(abs_dir + "/" + name)) {
-            return false;
-        }
-    }
-    return true;
-}
-
-void cleanup_empty_video_dir(const std::string& frames_dir)
+/** 删除 /home/video/{frames_dir}/ 整目录；目录本就不存在视为成功 */
+bool remove_session_dir_all(const std::string& frames_dir)
 {
     if(frames_dir.empty()) {
-        return;
+        return false;
     }
     const std::string abs_dir = std::string(UPC_PRINT_VIDEO_DIR) + "/" + frames_dir;
     std::error_code ec;
-    if(!std::filesystem::is_directory(abs_dir, ec)) {
-        return;
+    if(!std::filesystem::exists(abs_dir, ec)) {
+        return true;
     }
-    if(!std::filesystem::is_empty(abs_dir, ec)) {
-        return;
-    }
-    (void)std::filesystem::remove(abs_dir, ec);
+    (void)std::filesystem::remove_all(abs_dir, ec);
+    return !ec;
 }
 
 bool remove_cards_with_rollback(const std::vector<HistoryCard*>& cards)
@@ -495,8 +450,7 @@ bool remove_cards_with_rollback(const std::vector<HistoryCard*>& cards)
         return false;
     }
 
-    bool changed_manifest = false;
-    std::vector<std::string> cleanup_dirs;
+    std::vector<std::string> dirs_to_remove;
     for(const HistoryCard* c : cards) {
         if(!c) {
             continue;
@@ -510,65 +464,37 @@ bool remove_cards_with_rollback(const std::vector<HistoryCard*>& cards)
         if(c->frames_dir.empty()) {
             return false;
         }
-        auto it = std::find_if(entries.begin(), entries.end(),
-                               [&](const upc::PrintHistoryEntry& e) {
-                                   return e.frames_dir == c->frames_dir;
-                               });
-        if(it == entries.end()) {
-            continue;
-        }
+        dirs_to_remove.push_back(c->frames_dir);
+    }
 
-        const std::string session_dir =
-            std::string(UPC_PRINT_VIDEO_DIR) + "/" + it->frames_dir;
-        cleanup_dirs.push_back(it->frames_dir);
-        if(c->kind == HistoryCard::Kind::PrintVideo) {
-            const std::string rel = !it->print_video.empty() ? it->print_video : c->video;
-            if(!rel.empty() &&
-               !remove_file_if_exists(std::string(UPC_PRINT_VIDEO_DIR) + "/" + rel)) {
-                return false;
-            }
-            const std::string thumb_rel =
-                !it->print_thumb.empty() ? it->print_thumb : c->print_thumb;
-            if(!thumb_rel.empty() &&
-               !remove_file_if_exists(std::string(UPC_PRINT_VIDEO_DIR) + "/" + thumb_rel)) {
-                return false;
-            }
-            it->print_video.clear();
-            it->print_thumb.clear();
-            changed_manifest = true;
-        } else {
-            if(!it->video.empty() &&
-               !remove_file_if_exists(std::string(UPC_PRINT_VIDEO_DIR) + "/" + it->video)) {
-                return false;
-            }
-            if(!remove_png_and_thumb_in_dir(session_dir)) {
-                return false;
-            }
-            it->video.clear();
-            it->thumb.clear();
-            it->video_pending = false;
-            changed_manifest = true;
+    std::sort(dirs_to_remove.begin(), dirs_to_remove.end());
+    dirs_to_remove.erase(
+        std::unique(dirs_to_remove.begin(), dirs_to_remove.end()),
+        dirs_to_remove.end());
+
+    /* 先删磁盘，再改 manifest：失败时可重试，避免条目已没但文件残留且无法再删 */
+    for(const std::string& dir : dirs_to_remove) {
+        if(!remove_session_dir_all(dir)) {
+            return false;
         }
     }
 
-    for(const auto& e : entries) {
-        if(!e.frames_dir.empty() && e.video.empty() && e.print_video.empty()) {
-            const std::string abs_dir =
-                std::string(UPC_PRINT_VIDEO_DIR) + "/" + e.frames_dir;
-            if(!remove_transient_media_in_dir(abs_dir)) {
-                return false;
-            }
-        }
+    if(dirs_to_remove.empty()) {
+        return true; /* 仅 Album 照片删除，不涉及 manifest */
     }
 
+    const size_t before = entries.size();
     entries.erase(
         std::remove_if(entries.begin(), entries.end(),
-            [](const upc::PrintHistoryEntry& e) {
-                return e.video.empty() && e.print_video.empty();
+            [&](const upc::PrintHistoryEntry& e) {
+                return std::binary_search(dirs_to_remove.begin(),
+                                          dirs_to_remove.end(),
+                                          e.frames_dir);
             }),
         entries.end());
 
-    if(!changed_manifest) {
+    if(entries.size() == before) {
+        /* 目录已清，manifest 里本就没有对应条目 */
         return true;
     }
 
@@ -580,11 +506,6 @@ bool remove_cards_with_rollback(const std::vector<HistoryCard*>& cards)
     if(std::rename(tmp.c_str(), UPC_PRINT_VIDEO_MANIFEST) != 0) {
         (void)std::remove(tmp.c_str());
         return false;
-    }
-    std::sort(cleanup_dirs.begin(), cleanup_dirs.end());
-    cleanup_dirs.erase(std::unique(cleanup_dirs.begin(), cleanup_dirs.end()), cleanup_dirs.end());
-    for(const std::string& dir : cleanup_dirs) {
-        cleanup_empty_video_dir(dir);
     }
     return true;
 }

@@ -146,6 +146,7 @@ void serial_log_rx_frame(const uint8_t* frame, size_t len)
  * 仅在 GLAVO_ENABLE_LAYER_CHANGE 开启时有效：
  * - NONE：无需握手或已完成
  * - WAIT_PLATE_PREPARE：已发基板准备请求，等待 MCU 返回基板准备结果
+ *   （GLAVO_ENABLE_PLATE_PREPARE=0 时跳过，起印直接进入 WAIT_CONDITION_OK）
  * - WAIT_CONDITION_OK：已发打印请求，等待 MCU 返回打印条件就绪
  * - WAIT_PRINT_READY：已发首层/换层参数，等待 MCU 返回准备就绪
  */
@@ -1180,6 +1181,7 @@ void McuLink::handle_serial_rx_frame(const uint8_t* frame, size_t len)
         return;
     }
 
+#if GLAVO_ENABLE_PLATE_PREPARE
     uint8_t plate_result = 0;
     if(serial_parse_plate_prepare_result(frame, len, &plate_result) == 0) {
         if(plate_result == 0x00) {
@@ -1193,6 +1195,7 @@ void McuLink::handle_serial_rx_frame(const uint8_t* frame, size_t len)
         }
         return;
     }
+#endif
 
     uint8_t clean_result = 0;
     if(serial_parse_clean_test_result(frame, len, &clean_result) == 0) {
@@ -1846,14 +1849,26 @@ void McuLink::begin_sending_internal()
     PrintJobState::instance().set_sent_packets(0);
 
 #if GLAVO_ENABLE_LAYER_CHANGE
-    // 若串口已打开，先发送基板准备请求，成功后再进入原打印握手
+    // 若串口已打开：基板准备（可关）→ 打印请求 → CONDITION_OK → PRINT_READY
     if(serial_fd_ >= 0) {
-        send_serial_plate_prepare();
         waiting_layer_.store(true);
-        serial_handshake_phase_.store(SERIAL_HS_WAIT_PLATE_PREPARE);
         serial_evt_plate_ready_.store(false);
         serial_evt_condition_ok_.store(false);
         serial_evt_print_ready_.store(false);
+#if GLAVO_ENABLE_PLATE_PREPARE
+        // 发基板准备请求，等 MCU 0x13 成功后再发打印请求
+        send_serial_plate_prepare();
+        serial_handshake_phase_.store(SERIAL_HS_WAIT_PLATE_PREPARE);
+#else
+        // 跳过基板准备：视同成功，直接发打印请求进入阶段一（避免卡在等 0x13）
+        uint8_t sbuf[32];
+        const int slen = serial_build_print_request(sbuf, sizeof(sbuf));
+        if(slen > 0) {
+            UPC_LOG_MCU_LINK(Info, "serial TX cmd: PRINT_REQUEST (plate prepare skipped)");
+            serial_send_aa_reliable(sbuf, static_cast<size_t>(slen), true);
+        }
+        serial_handshake_phase_.store(SERIAL_HS_WAIT_CONDITION_OK);
+#endif
     }
 #endif
 
@@ -1943,7 +1958,7 @@ void McuLink::send_tcp_reset()
 
 void McuLink::send_serial_plate_prepare()
 {
-#if GLAVO_ENABLE_LAYER_CHANGE
+#if GLAVO_ENABLE_LAYER_CHANGE && GLAVO_ENABLE_PLATE_PREPARE
     if(serial_fd_ >= 0) {
         uint8_t sbuf[32];
         const int slen = serial_build_plate_prepare(plate_thickness_um_, sbuf, sizeof(sbuf));
@@ -2064,6 +2079,7 @@ void McuLink::link_process_serial_handshake()
 
     const int phase = serial_handshake_phase_.load();
 
+#if GLAVO_ENABLE_PLATE_PREPARE
     // 阶段零：收到基板准备成功后，发送打印请求并进入阶段一
     if(phase == SERIAL_HS_WAIT_PLATE_PREPARE &&
        serial_evt_plate_ready_.exchange(false)) {
@@ -2077,6 +2093,7 @@ void McuLink::link_process_serial_handshake()
         serial_evt_condition_ok_.store(false);
         return;
     }
+#endif
 
     // 阶段一：收到 PRINT_CONDITION_OK 后，发送首层/换层高度并进入阶段二
     if(phase == SERIAL_HS_WAIT_CONDITION_OK &&

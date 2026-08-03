@@ -341,7 +341,7 @@ rongsu_camera 经主 IPC（/tmp/upc_camera.sock）SCM_RIGHTS 附带 dma_buf fd �
 
 | 组件 | 文件 | 职责 |
 |------|------|------|
-| `page_user_history` | `pages/page_user_history.*` | 读 `/home/video/manifest.json`（`common/fs_manifest/print_history_manifest`）→ 按 `start_unix` 倒序、按自然日分组的卡片列表；缩略图 `A:/home/video/{thumb}`（RTHM 解码，`LV_IMAGE_ALIGN_COVER`）；顶部三 Tab + Storage 容量条；管理（多选）模式批量删除；上下翻页；**左滑删除**（清除卡片默认 `GESTURE_BUBBLE` 使手势落到卡片）→ 删目录 + 重写 manifest + 只删单卡 |
+| `page_user_history` | `pages/page_user_history.*` | 读 `/home/video/manifest.json`（`common/fs_manifest/print_history_manifest`）→ 按 `start_unix` 倒序、按自然日分组的卡片列表；缩略图 `A:/home/video/{thumb}`（RTHM 解码，`LV_IMAGE_ALIGN_COVER`）；顶部三 Tab + Storage 容量条；管理（多选）模式批量删除；上下翻页；**左滑删除**（清除卡片默认 `GESTURE_BUBBLE` 使手势落到卡片）→ 按 `frames_dir` 整条删目录 + 重写 manifest + 只删单卡 |
 | `page_user_timelapse` | `pages/page_user_timelapse.*` | 全屏播放页（建于 `lv_layer_top()` 覆盖侧边栏）：按序播放 `/home/video/{job_ts}/1.png...N.png`，顶部标题/时间、右上关闭、中央播放/暂停、底部进度条、点画面显隐控件 |
 
 - **进入/退出**：历史页缩略图点击 → `page_user_timelapse_set_source(目录,mp4路径,标题,时间)` + `switch_to("user_timelapse")`；关闭 → `switch_to("user_history")`。
@@ -379,8 +379,10 @@ rongsu_camera 经主 IPC（/tmp/upc_camera.sock）SCM_RIGHTS 附带 dma_buf fd �
   ——v9 的 `LONG_MODE_DOTS` 是「先按宽度换行、再截末行」，不锁高度只会换行、出不来省略号。
 - **管理模式**：卡片左侧插入 `USER_HIST_CHECK_SZ` 复选框（隐藏时 flex 自动跳过，缩进天然
   跟着走）；点卡片任意位置或缩略图切换勾选；期间禁用左滑；`Delete` 走
-  `ui_user_make_confirm_footer_btn` 那套二次确认弹窗，确认后一次性重写 manifest 再整表重建。
-  `video_pending`（Camera 还在 remux）的条目不可勾选、也挡住左滑删除，避免打断落盘。
+  `ui_user_make_confirm_footer_btn` 那套二次确认弹窗，确认后按 `frames_dir` **整条删除**
+  （会话目录内 Timelapse + Print Video + 缩略图/PNG 一并清掉，并从 manifest 移除），再整表重建。
+  任一 Tab 删除都会让另一 Tab 同步消失。`video_pending`（Camera 还在 remux）的条目不可勾选、
+  也挡住左滑删除，避免打断落盘。
 - **空态**：80px 圆底 + `ic_printer` + 双行文案 + `Start Print`。按钮直接调 `control_start()`——
   放版预确认弹窗挂在整屏 overlay 上，与当前页面无关，所以不必先切首页；`control_is_printing()`
   为真时只弹 toast。文案与 `Start Print` 显隐只由 `apply_empty_copy()` 维护（Timelapse / Album
