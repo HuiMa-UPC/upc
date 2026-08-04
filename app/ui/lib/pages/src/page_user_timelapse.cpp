@@ -1,6 +1,7 @@
 #include "page_user_timelapse.hpp"
 
 #include "page_manager.hpp"
+#include "png_scrub_preview.hpp"
 #include "ui_feedback.hpp"
 #include "ui_theme.hpp"
 #include "video_player.hpp"
@@ -27,13 +28,15 @@ enum class PlaybackMode : uint8_t {
 
 constexpr uint32_t kPlayIntervalMs = 200u; /* PNG 回退模式 5fps */
 constexpr const char* kFsDrive = "A:";
+constexpr uint64_t kPreviewReqMinIntervalMs = 80;
+constexpr int64_t kMp4PreviewJumpMs = 300;
 
 char g_seq_dir[256] = {0};
 char g_mp4_path[256] = {0};
 char g_title[96] = {0};
 char g_sub[64] = {0};
 
-std::vector<std::string> g_frames;
+std::vector<std::string> g_frames; /* LVGL 路径 A:/... */
 size_t g_cur_index = 0;
 bool g_playing = false;
 bool g_controls_visible = true;
@@ -43,6 +46,7 @@ PlaybackMode g_mode = PlaybackMode::None;
 int64_t g_mp4_pos_ms = 0;
 int64_t g_mp4_dur_ms = 0;
 int64_t g_last_preview_req_ms = -1;
+int64_t g_last_preview_req_idx = -1;
 uint64_t g_last_preview_req_tick_ms = 0;
 
 lv_obj_t* g_page = nullptr;
@@ -57,8 +61,8 @@ lv_obj_t* g_preview_box = nullptr;
 lv_obj_t* g_preview_img = nullptr;
 lv_obj_t* g_preview_time = nullptr;
 lv_timer_t* g_play_timer = nullptr;
-
-constexpr uint64_t kPreviewReqMinIntervalMs = 80;
+int32_t g_preview_box_w = 160;
+int32_t g_preview_box_h = 128;
 
 uint64_t monotonic_ms()
 {
@@ -66,6 +70,25 @@ uint64_t monotonic_ms()
         std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::steady_clock::now().time_since_epoch())
             .count());
+}
+
+std::string lvgl_to_abs_path(const std::string& src)
+{
+    if(src.size() >= 2 && src[0] == 'A' && src[1] == ':') {
+        return src.substr(2);
+    }
+    return src;
+}
+
+size_t slider_to_png_index(int32_t slider_value)
+{
+    if(g_frames.empty()) {
+        return 0;
+    }
+    const size_t max_idx = g_frames.size() - 1u;
+    return static_cast<size_t>(
+        (static_cast<int64_t>(slider_value) * static_cast<int64_t>(max_idx) + 500) /
+        1000);
 }
 
 bool parse_png_index(const char* name, uint32_t& out)
@@ -167,6 +190,25 @@ void position_preview_box(int32_t slider_value)
     lv_obj_set_pos(g_preview_box, x, y);
 }
 
+void show_preview_chrome(int32_t slider_value, const char* time_text)
+{
+    if(g_preview_time && time_text) {
+        lv_label_set_text(g_preview_time, time_text);
+    }
+    position_preview_box(slider_value);
+    if(g_preview_box) {
+        lv_obj_remove_flag(g_preview_box, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_move_foreground(g_preview_box);
+    }
+}
+
+void hide_preview_chrome()
+{
+    if(g_preview_box) {
+        lv_obj_add_flag(g_preview_box, LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
 void update_progress_ui_png()
 {
     const size_t total = g_frames.size();
@@ -181,7 +223,7 @@ void update_progress_ui_png()
     }
 
     const size_t cur = std::min(g_cur_index + 1u, total);
-    if(g_slider && total > 1) {
+    if(g_slider && !g_dragging && total > 1) {
         const int32_t v = static_cast<int32_t>(
             (static_cast<int64_t>(g_cur_index) * 1000) / static_cast<int64_t>(total - 1));
         lv_slider_set_value(g_slider, v, LV_ANIM_OFF);
@@ -202,7 +244,7 @@ void update_progress_ui_mp4(int64_t cur_ms, int64_t dur_ms)
             std::clamp<int64_t>(g_mp4_pos_ms * 1000 / g_mp4_dur_ms, 0, 1000));
         lv_slider_set_value(g_slider, v, LV_ANIM_OFF);
     }
-    if(g_time_lbl) {
+    if(g_time_lbl && !g_dragging) {
         char cur_buf[16];
         char dur_buf[16];
         format_ms(g_mp4_pos_ms, cur_buf, sizeof(cur_buf));
@@ -213,24 +255,75 @@ void update_progress_ui_mp4(int64_t cur_ms, int64_t dur_ms)
     }
 }
 
-void update_drag_preview_png(int32_t slider_value)
+void update_drag_time_png(int32_t slider_value, size_t idx)
 {
-    if(!g_preview_box || !g_preview_img || !g_preview_time || g_frames.empty()) {
-        return;
-    }
-    const size_t max_idx = g_frames.size() - 1u;
-    const size_t idx = static_cast<size_t>(
-        (static_cast<int64_t>(slider_value) * static_cast<int64_t>(max_idx) + 500) / 1000);
-    lv_image_set_src(g_preview_img, g_frames[idx].c_str());
-    lv_obj_invalidate(g_preview_img);
-
     char tbuf[16];
     format_png_frame_time(static_cast<uint32_t>(idx), tbuf, sizeof(tbuf));
-    lv_label_set_text(g_preview_time, tbuf);
+    show_preview_chrome(slider_value, tbuf);
+    if(g_time_lbl) {
+        char buf[40];
+        std::snprintf(buf, sizeof(buf), "%zu / %zu",
+                      idx + 1u, g_frames.size());
+        lv_label_set_text(g_time_lbl, buf);
+    }
+}
 
-    position_preview_box(slider_value);
-    lv_obj_remove_flag(g_preview_box, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_move_foreground(g_preview_box);
+void update_drag_time_mp4(int32_t slider_value, int64_t target_ms)
+{
+    char tbuf[16];
+    format_ms(target_ms, tbuf, sizeof(tbuf));
+    show_preview_chrome(slider_value, tbuf);
+    if(g_time_lbl) {
+        char dur_buf[16];
+        format_ms(g_mp4_dur_ms, dur_buf, sizeof(dur_buf));
+        char text[40];
+        std::snprintf(text, sizeof(text), "%s / %s", tbuf, dur_buf);
+        lv_label_set_text(g_time_lbl, text);
+    }
+}
+
+void on_png_scrub_preview(const lv_image_dsc_t* image, size_t /*frame_index*/)
+{
+    if(g_mode != PlaybackMode::PngSequence || !g_dragging || !image || !g_preview_img) {
+        return;
+    }
+    lv_image_set_src(g_preview_img, image);
+    lv_obj_invalidate(g_preview_img);
+}
+
+void request_drag_preview_png(int32_t slider_value, bool force_request = false)
+{
+    if(g_frames.empty()) {
+        return;
+    }
+    const size_t idx = slider_to_png_index(slider_value);
+    g_cur_index = idx;
+    update_drag_time_png(slider_value, idx);
+
+    const uint64_t now_ms = monotonic_ms();
+    const bool first_req = g_last_preview_req_idx < 0;
+    const bool interval_ok =
+        now_ms - g_last_preview_req_tick_ms >= kPreviewReqMinIntervalMs;
+    const bool index_changed =
+        first_req ||
+        static_cast<int64_t>(idx) != g_last_preview_req_idx;
+    if(!(force_request || (index_changed && (first_req || interval_ok)))) {
+        return;
+    }
+
+    g_last_preview_req_idx = static_cast<int64_t>(idx);
+    g_last_preview_req_tick_ms = now_ms;
+
+#if defined(UPC_UI_HAS_LIBPNG) && UPC_UI_HAS_LIBPNG
+    ui::PngScrubPreview::instance().request(
+        idx, lvgl_to_abs_path(g_frames[idx]));
+#else
+    /* 无 libpng 时回退：仅刷新小预览框，主画面仍等松手 settle。 */
+    if(g_preview_img) {
+        lv_image_set_src(g_preview_img, g_frames[idx].c_str());
+        lv_obj_invalidate(g_preview_img);
+    }
+#endif
 }
 
 void request_drag_preview_mp4(int32_t slider_value, bool force_request = false)
@@ -241,22 +334,14 @@ void request_drag_preview_mp4(int32_t slider_value, bool force_request = false)
     }
     const int64_t target_ms = std::clamp<int64_t>(
         (static_cast<int64_t>(slider_value) * dur_ms) / 1000, 0, dur_ms);
-    char tbuf[16];
-    format_ms(target_ms, tbuf, sizeof(tbuf));
-    if(g_preview_time) {
-        lv_label_set_text(g_preview_time, tbuf);
-    }
-    position_preview_box(slider_value);
-    if(g_preview_box) {
-        lv_obj_remove_flag(g_preview_box, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_move_foreground(g_preview_box);
-    }
+    update_drag_time_mp4(slider_value, target_ms);
 
     const uint64_t now_ms = monotonic_ms();
     const bool first_req = g_last_preview_req_ms < 0;
-    const bool interval_ok = now_ms - g_last_preview_req_tick_ms >= kPreviewReqMinIntervalMs;
+    const bool interval_ok =
+        now_ms - g_last_preview_req_tick_ms >= kPreviewReqMinIntervalMs;
     const bool target_jump = !first_req &&
-        std::llabs(target_ms - g_last_preview_req_ms) >= 300;
+        std::llabs(target_ms - g_last_preview_req_ms) >= kMp4PreviewJumpMs;
     if(force_request || first_req || interval_ok || target_jump) {
         ui::VideoPlayer::instance().request_preview(target_ms);
         g_last_preview_req_ms = target_ms;
@@ -316,7 +401,7 @@ bool load_sequence_frames()
 
 void on_mp4_progress(int64_t current_ms, int64_t duration_ms)
 {
-    if(g_mode != PlaybackMode::Mp4) {
+    if(g_mode != PlaybackMode::Mp4 || g_dragging) {
         return;
     }
     update_progress_ui_mp4(current_ms, duration_ms);
@@ -355,6 +440,7 @@ bool load_mp4_playback()
     player.set_progress_cb(on_mp4_progress);
     player.set_ended_cb(on_mp4_ended);
     player.set_preview_cb(on_mp4_preview);
+    player.set_scrubbing(false);
     if(!player.open(g_video_img, g_mp4_path)) {
         return false;
     }
@@ -414,19 +500,23 @@ void on_slider_pressed(lv_event_t*)
     g_resume_after_drag = g_playing;
     g_playing = false;
     set_play_icon(false);
+    g_last_preview_req_ms = -1;
+    g_last_preview_req_idx = -1;
+    g_last_preview_req_tick_ms = 0;
 
     if(g_mode == PlaybackMode::Mp4) {
-        ui::VideoPlayer::instance().pause();
-        g_last_preview_req_ms = -1;
-        g_last_preview_req_tick_ms = 0;
+        auto& player = ui::VideoPlayer::instance();
+        player.pause();
+        player.set_scrubbing(true);
         if(g_slider) {
             request_drag_preview_mp4(lv_slider_get_value(g_slider), true);
         }
         return;
     }
 
-    if(g_slider) {
-        update_drag_preview_png(lv_slider_get_value(g_slider));
+    if(g_mode == PlaybackMode::PngSequence && g_slider) {
+        ui::PngScrubPreview::instance().set_scrubbing(true);
+        request_drag_preview_png(lv_slider_get_value(g_slider), true);
     }
 }
 
@@ -441,32 +531,42 @@ void on_slider_value_changed(lv_event_t*)
         return;
     }
     if(g_mode == PlaybackMode::PngSequence && !g_frames.empty()) {
-        const size_t max_idx = g_frames.size() - 1u;
-        g_cur_index = static_cast<size_t>(
-            (static_cast<int64_t>(v) * static_cast<int64_t>(max_idx) + 500) / 1000);
-        update_drag_preview_png(v);
-        render_current_png_frame();
+        /* 拖动中只刷预览框，主画面等松手 settle。 */
+        request_drag_preview_png(v);
     }
 }
 
 void on_slider_released(lv_event_t*)
 {
-    if(g_preview_box) {
-        lv_obj_add_flag(g_preview_box, LV_OBJ_FLAG_HIDDEN);
-    }
+    hide_preview_chrome();
+
     if(g_mode == PlaybackMode::Mp4 && g_slider) {
-        const int64_t dur_ms = g_mp4_dur_ms > 0 ? g_mp4_dur_ms : ui::VideoPlayer::instance().duration_ms();
+        ui::VideoPlayer::instance().set_scrubbing(false);
+        const int64_t dur_ms = g_mp4_dur_ms > 0 ? g_mp4_dur_ms
+                                                : ui::VideoPlayer::instance().duration_ms();
         const int32_t v = lv_slider_get_value(g_slider);
         const int64_t target_ms = dur_ms > 0
             ? std::clamp<int64_t>((static_cast<int64_t>(v) * dur_ms) / 1000, 0, dur_ms)
             : 0;
+        g_mp4_pos_ms = target_ms;
+        update_progress_ui_mp4(target_ms, dur_ms);
         (void)ui::VideoPlayer::instance().seek(target_ms);
         if(g_resume_after_drag) {
             g_playing = ui::VideoPlayer::instance().play();
             set_play_icon(g_playing);
         }
+    } else if(g_mode == PlaybackMode::PngSequence && g_slider && !g_frames.empty()) {
+        ui::PngScrubPreview::instance().set_scrubbing(false);
+        g_cur_index = slider_to_png_index(lv_slider_get_value(g_slider));
+        render_current_png_frame();
+        if(g_resume_after_drag) {
+            g_playing = true;
+            set_play_icon(true);
+        }
     }
+
     g_dragging = false;
+    g_resume_after_drag = false;
 }
 
 void play_timer_cb(lv_timer_t*)
@@ -535,11 +635,14 @@ void page_user_timelapse_refresh(bool)
     g_mp4_pos_ms = 0;
     g_mp4_dur_ms = 0;
     g_last_preview_req_ms = -1;
+    g_last_preview_req_idx = -1;
     g_last_preview_req_tick_ms = 0;
     g_frames.clear();
     g_cur_index = 0;
 
+    ui::PngScrubPreview::instance().cancel();
     auto& player = ui::VideoPlayer::instance();
+    player.set_scrubbing(false);
     player.pause();
     player.close();
 
@@ -551,9 +654,7 @@ void page_user_timelapse_refresh(bool)
     }
 
     if(load_mp4_playback()) {
-        if(g_preview_box) {
-            lv_obj_add_flag(g_preview_box, LV_OBJ_FLAG_HIDDEN);
-        }
+        hide_preview_chrome();
         return;
     } else if(g_mp4_path[0] != '\0') {
         ui_toast_show("MP4 open failed, fallback PNG", user_color_accent, 1200);
@@ -564,9 +665,7 @@ void page_user_timelapse_refresh(bool)
             lv_image_set_src(g_video_img, nullptr);
             lv_obj_invalidate(g_video_img);
         }
-        if(g_preview_box) {
-            lv_obj_add_flag(g_preview_box, LV_OBJ_FLAG_HIDDEN);
-        }
+        hide_preview_chrome();
         if(g_time_lbl) {
             lv_label_set_text(g_time_lbl, "0 / 0");
         }
@@ -575,6 +674,8 @@ void page_user_timelapse_refresh(bool)
         return;
     }
     g_mode = PlaybackMode::PngSequence;
+    ui::PngScrubPreview::instance().set_target_size(g_preview_box_w, g_preview_box_h);
+    ui::PngScrubPreview::instance().set_preview_cb(on_png_scrub_preview);
     set_slider_enabled(g_frames.size() > 1u);
     render_current_png_frame();
     g_playing = true;
@@ -586,9 +687,9 @@ void page_user_timelapse_exit(void)
     g_playing = false;
     g_dragging = false;
     g_mode = PlaybackMode::None;
-    if(g_preview_box) {
-        lv_obj_add_flag(g_preview_box, LV_OBJ_FLAG_HIDDEN);
-    }
+    hide_preview_chrome();
+    ui::PngScrubPreview::instance().cancel();
+    ui::VideoPlayer::instance().set_scrubbing(false);
     ui::VideoPlayer::instance().pause();
     ui::VideoPlayer::instance().close();
     g_frames.clear();
@@ -596,6 +697,7 @@ void page_user_timelapse_exit(void)
     g_mp4_pos_ms = 0;
     g_mp4_dur_ms = 0;
     g_last_preview_req_ms = -1;
+    g_last_preview_req_idx = -1;
     g_last_preview_req_tick_ms = 0;
 }
 
@@ -702,8 +804,8 @@ lv_obj_t* page_user_timelapse_create(lv_obj_t* parent)
     lv_obj_add_event_cb(slider, on_slider_released, LV_EVENT_PRESS_LOST, nullptr);
     g_slider = slider;
 
-    const int32_t pv_w = USER_SLIDE_W * 3 / 5;
-    const int32_t pv_h = pv_w * 4 / 5;
+    g_preview_box_w = USER_SLIDE_W * 3 / 5;
+    g_preview_box_h = g_preview_box_w * 4 / 5;
     lv_obj_t* pv = lv_obj_create(ov);
     lv_obj_remove_style_all(pv);
     lv_obj_set_size(pv, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
@@ -722,7 +824,7 @@ lv_obj_t* page_user_timelapse_create(lv_obj_t* parent)
     g_preview_box = pv;
 
     lv_obj_t* pimg = lv_image_create(pv);
-    lv_obj_set_size(pimg, pv_w, pv_h);
+    lv_obj_set_size(pimg, g_preview_box_w, g_preview_box_h);
     lv_obj_set_style_bg_color(pimg, user_color_panel_alt, 0);
     lv_obj_set_style_bg_opa(pimg, LV_OPA_COVER, 0);
     lv_obj_set_style_radius(pimg, USER_RADIUS / 2, 0);
@@ -735,6 +837,9 @@ lv_obj_t* page_user_timelapse_create(lv_obj_t* parent)
     lv_obj_set_style_text_color(ptime, user_color_text, 0);
     lv_obj_set_style_text_font(ptime, user_font_caption(), 0);
     g_preview_time = ptime;
+
+    ui::PngScrubPreview::instance().set_target_size(g_preview_box_w, g_preview_box_h);
+    ui::PngScrubPreview::instance().set_preview_cb(on_png_scrub_preview);
 
     if(!g_play_timer) {
         g_play_timer = lv_timer_create(play_timer_cb, kPlayIntervalMs, nullptr);

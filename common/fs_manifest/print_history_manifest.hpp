@@ -2,28 +2,22 @@
 #define UPC_PRINT_HISTORY_MANIFEST_HPP
 
 /**
- * 打印历史（延时摄影）目录 manifest：/home/video/manifest.json
+ * 打印历史（延时摄影 + 可选打印录像）目录清单：/home/media/video/config.json
  * - 路径：common/fs_manifest/
- * - Camera：Finish/Abort remux 成功后 upsert 一条
+ * - Media：Finish/Abort remux 成功后 upsert 一条
  * - UI：进入历史页时直接读取（不经列表 IPC）
  *
  * 媒体目录命名：{job_name}/（目录内 1.png,2.png,... 与 thumb.rthm）
  * 同一 job_name 重复打印会覆盖目录与媒体文件。
  */
 
+#include "media_paths.hpp"
+
 #include <cstdint>
 #include <string>
 #include <vector>
 
 namespace upc {
-
-#ifndef UPC_PRINT_VIDEO_DIR
-#define UPC_PRINT_VIDEO_DIR  "/home/video"
-#endif
-
-#ifndef UPC_PRINT_VIDEO_MANIFEST
-#define UPC_PRINT_VIDEO_MANIFEST  UPC_PRINT_VIDEO_DIR "/manifest.json"
-#endif
 
 /** 与 UI 设计稿 PRINT COMPLETE / PRINT TERMINATED 对应 */
 enum class PrintHistoryStatus : uint8_t {
@@ -50,11 +44,11 @@ struct PrintHistoryEntry {
     uint32_t            clean_last_png = 0;  /**< 清粉末帧序号（含）；0=无清粉追加 */
 };
 
-/** 从 path 读取 manifest；文件不存在返回空列表（仍返回 true） */
+/** 从 path 读取清单；文件不存在返回空列表（仍返回 true） */
 bool print_history_manifest_load(const std::string& path,
                                  std::vector<PrintHistoryEntry>& out);
 
-/** 写入 manifest（覆盖）；建议调用方用临时文件 + rename 保证原子性 */
+/** 写入清单（覆盖）；建议调用方用临时文件 + rename 保证原子性 */
 bool print_history_manifest_save(const std::string& path,
                                  const std::vector<PrintHistoryEntry>& entries);
 

@@ -321,7 +321,7 @@ enum class MsgType : uint32_t {
     UI_Camera_Stream_Stop_Req,           /**< Empty */
     APP_Camera_Stream_Stop_Done,         /**< Empty */
     APP_Camera_Frame_Ntf,                /**< CameraFrameNtfPayload（可选唤醒 UI） */
-    UI_Camera_Snapshot_Req,              /**< Empty：请求保存当前最新 NV12 帧到 /home/photo */
+    UI_Camera_Snapshot_Req,              /**< Empty：请求保存当前最新 NV12 帧到 /home/media/photo */
     APP_Camera_Snapshot_Rsp,             /**< CameraSnapshotRspPayload */
 
     // ---- GLAVO → MEDIA：打印层拍照录像（控制面；MEDIA 消费 CAMERA 预览 SHM） ----
@@ -330,7 +330,7 @@ enum class MsgType : uint32_t {
     APP_Print_Video_Session_Finish_Ntf,         /**< PrintVideoSessionPayload */
     APP_Print_Video_Session_Abort_Ntf,          /**< PrintVideoSessionPayload */
     APP_Print_H264_Record_Pause_Ntf,            /**< PrintPauseStatePayload：通知 Media 暂停/恢复连续 H264 录制 */
-    /* 本条方向为 MEDIA → UI（与上面四条相反）：manifest.json 已原子落盘 */
+    /* 本条方向为 MEDIA → UI（与上面四条相反）：video/config.json 已原子落盘 */
     APP_Print_Video_Manifest_Ntf,               /**< PrintVideoManifestPayload */
 
     // ---- UI ↔ GLAVO：MCU OTA（测试） ----
@@ -703,7 +703,7 @@ struct VisualRectNtfPayload {
 /** GLAVO→CAMERA 打印录像会话（Start/Finish/Abort 共用） */
 struct PrintVideoSessionPayload {
     char     session_id[32];
-    char     job_name[64];   /**< 用于输出 /home/video/{job}_{stamp}/ 目录名 */
+    char     job_name[64];   /**< 用于输出 /home/media/video/{job}/ 目录名 */
     uint32_t width;          /**< 0=Camera 默认 */
     uint32_t height;         /**< 0=Camera 默认 */
     uint32_t layer_fps;      /**< MP4 层帧率；0=默认 */
@@ -720,24 +720,24 @@ struct PrintVideoLayerSnapPayload {
 };
 
 /**
- * APP_Print_Video_Manifest_Ntf：Media→UI，打印历史 manifest 状态通知（Inline）
+ * APP_Print_Video_Manifest_Ntf：Media→UI，打印历史清单状态通知（Inline）
  *
  * 发送时机：`PrintVideoRecorder::finalize_session()` 内至少发送一次。
  * - 快路径：统计/缩略图已落盘时先发（`has_video=0`），UI 可立即切结果页
  * - 慢路径：MP4 完成后再发（`has_video=1`）用于历史页刷新可播放状态
  *
- * 0 帧场景（未触发换层 Snap / Camera 未采到帧）不会写 manifest，但**仍会发本消息**
+ * 0 帧场景（未触发换层 Snap / Camera 未采到帧）不会写清单，但**仍会发本消息**
  * （`has_entry=0`），否则 UI 会永远停在打印中界面下不来。
  *
  * UI 用法：
- *   - `has_entry=1` → 以 `frames_dir` 为主键在 `/home/video/manifest.json` 定位该条，
- *     读 `status` / `duration_sec` / `material_g`（manifest 为权威数据源）
- *   - `has_entry=0` → manifest 无此条，改用本 payload 的 `aborted` 判定完成/终止，
+ *   - `has_entry=1` → 以 `frames_dir` 为主键在 `/home/media/video/config.json` 定位该条，
+ *     读 `status` / `duration_sec` / `material_g`（清单为权威数据源）
+ *   - `has_entry=0` → 清单无此条，改用本 payload 的 `aborted` 判定完成/终止，
  *     耗时与耗材显示占位
  */
 struct PrintVideoManifestPayload {
-    char    frames_dir[64];  /**< manifest 主键（相对目录名）；has_entry=0 时为空串 */
-    int8_t  has_entry;       /**< 1=manifest 已写入该条；0=无帧未落盘 */
+    char    frames_dir[64];  /**< 清单主键（相对目录名）；has_entry=0 时为空串 */
+    int8_t  has_entry;       /**< 1=config.json 已写入该条；0=无帧未落盘 */
     int8_t  aborted;         /**< 1=终止 0=完成；仅 has_entry=0 时作为判定依据 */
     int8_t  has_video;       /**< 1=timelapse.mp4 已生成 */
     uint8_t reserved;
@@ -745,7 +745,7 @@ struct PrintVideoManifestPayload {
 
 /** UI_Clean_Test_Start_Req：打印结果页 Purify 按钮触发清粉测试 + 录像 */
 struct CleanTestStartReqPayload {
-    char job_name[64];   /**< 对应 /home/video/{job_name}/ */
+    char job_name[64];   /**< 对应 /home/media/video/{job_name}/ */
     uint32_t width;      /**< 0=跟随 Camera 当前预览宽 */
     uint32_t height;     /**< 0=跟随 Camera 当前预览高 */
     uint32_t fps;        /**< 0=跟随 Camera 当前预览 fps */
@@ -764,12 +764,12 @@ struct CleanTestDonePayload {
     uint8_t raw_retained;  /**< 兼容字段；PNG 路径下恒为 0 */
     uint8_t has_mp4;       /**< 1=期望存在合并后的 timelapse.mp4 */
     uint8_t reserved;
-    char    mp4_rel_path[96]; /**< 相对 /home/video 的路径，如 job/timelapse.mp4 */
+    char    mp4_rel_path[96]; /**< 相对 /home/media/video 的路径，如 job/timelapse.mp4 */
 };
 
 /** UI→MEDIA：结果页退出后触发统一 MP4 合成（按 frames_dir 定位会话目录） */
 struct PrintVideoFinalizeReqPayload {
-    char frames_dir[96]; /**< 对应 /home/video/{frames_dir}/ */
+    char frames_dir[96]; /**< 对应 /home/media/video/{frames_dir}/ */
 };
 
 /** APP_Storage_Usage_Rsp：历史页容量显示（bytes）。 */

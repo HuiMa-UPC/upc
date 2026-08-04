@@ -1,0 +1,57 @@
+#ifndef UPC_MEDIA_PATHS_HPP
+#define UPC_MEDIA_PATHS_HPP
+
+/**
+ * 本机媒体落盘根路径（拍照 / 延时摄影 / 打印录像）。
+ *
+ *   /home/media/
+ *     photo/                 相册 PNG + 配对 .rthm
+ *     video/
+ *       config.json          打印历史清单
+ *       tmp/                 唯一打印中临时目录（开打前/开机可清空）
+ *       {job}/               正式会话产物
+ *
+ * Media / UI / 清单解析共用此头，避免各进程硬编码分叉。
+ */
+
+#ifndef UPC_MEDIA_ROOT
+#define UPC_MEDIA_ROOT  "/home/media"
+#endif
+
+#ifndef UPC_PHOTO_DIR
+#define UPC_PHOTO_DIR  UPC_MEDIA_ROOT "/photo"
+#endif
+
+#ifndef UPC_VIDEO_DIR
+#define UPC_VIDEO_DIR  UPC_MEDIA_ROOT "/video"
+#endif
+
+/** 打印中唯一临时目录名（相对 UPC_VIDEO_DIR；亦作清单 frames_dir 快路径主键） */
+#ifndef UPC_VIDEO_TMP_NAME
+#define UPC_VIDEO_TMP_NAME  "tmp"
+#endif
+
+#ifndef UPC_VIDEO_TMP
+#define UPC_VIDEO_TMP  UPC_VIDEO_DIR "/" UPC_VIDEO_TMP_NAME
+#endif
+
+/** 打印历史（延时 + 可选打印录像）清单；相对路径均相对 UPC_VIDEO_DIR */
+#ifndef UPC_VIDEO_CONFIG
+#define UPC_VIDEO_CONFIG  UPC_VIDEO_DIR "/config.json"
+#endif
+
+/** 相册清单（可选；当前 Album 仍可扫目录，路径预留给后续） */
+#ifndef UPC_PHOTO_CONFIG
+#define UPC_PHOTO_CONFIG  UPC_PHOTO_DIR "/config.json"
+#endif
+
+/* ---- 兼容旧宏名（逐步迁移调用方） ---- */
+#ifndef UPC_PRINT_VIDEO_DIR
+#define UPC_PRINT_VIDEO_DIR  UPC_VIDEO_DIR
+#endif
+
+#ifndef UPC_PRINT_VIDEO_MANIFEST
+#define UPC_PRINT_VIDEO_MANIFEST  UPC_VIDEO_CONFIG
+#endif
+
+#endif /* UPC_MEDIA_PATHS_HPP */

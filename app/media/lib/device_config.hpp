@@ -16,8 +16,10 @@
 #define CAMERA_FPS_DEFAULT  30u
 #endif
 
+#include "media_paths.hpp"
+
 #ifndef CAMERA_PRINT_VIDEO_OUT_DIR
-#define CAMERA_PRINT_VIDEO_OUT_DIR  "/home/video"
+#define CAMERA_PRINT_VIDEO_OUT_DIR  UPC_VIDEO_DIR
 #endif
 
 /** 延时摄影缩略图后缀（RTHM 原始 RGB565，UI 自定义 decoder 读取） */
@@ -53,9 +55,14 @@
 #define CAMERA_PRINT_VIDEO_LAYER_FPS  5u
 #endif
 
-/** Media 启动时清理陈旧 __work 目录阈值（秒） */
-#ifndef MEDIA_STALE_WORK_TTL_SEC
-#define MEDIA_STALE_WORK_TTL_SEC  (12u * 60u * 60u)
+/** 存储已用 >= 此百分比：本会话停 H264、跳过层间拍照 */
+#ifndef MEDIA_STORAGE_WARN_PCT
+#define MEDIA_STORAGE_WARN_PCT  90u
+#endif
+
+/** 存储已用 >= 此百分比：强制 GC 临时区与失败半成品 */
+#ifndef MEDIA_STORAGE_CRITICAL_PCT
+#define MEDIA_STORAGE_CRITICAL_PCT  95u
 #endif
 
 #endif /* MEDIA_DEVICE_CONFIG_HPP */

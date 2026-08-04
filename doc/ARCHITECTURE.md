@@ -45,7 +45,8 @@
 |------|------|--------|
 | `GlavoService` | `glavo_service.*` | IPC 业务编排 + 工作线程（打印/USB 目录/门控）；`init()` 绑定 RingBuffer → `McuLink` |
 | `gcode_manifest` | `common/fs_manifest/gcode_manifest.*` | Local `/home/Gcode/config.json`（UI 读列表，Glavo Prepare/Delete 写） |
-| `print_history_manifest` | `common/fs_manifest/print_history_manifest.*` | `/home/video/manifest.json`（Camera upsert 写；UI 历史页读，删除后重写） |
+| `print_history_manifest` | `common/fs_manifest/print_history_manifest.*` | `/home/media/video/config.json`（Media upsert 写；UI 历史页读，删除后重写） |
+| `media_paths` | `common/fs_manifest/media_paths.hpp` | `/home/media/{photo,video,video/tmp}` 路径宏（各进程共用） |
 | `McuLink` | `mcu_link.*` | TCP 运动 + 串口握手/传感器 |
 | `PrintJobState` | `print_job_state.*` | 打印任务计数/状态 |
 | `PrintVideoNotify` | `print_video_notify.*` | 换层 Snap / 录像会话 IPC → Camera |
@@ -56,7 +57,7 @@
 | 符号 | 路径 | 一句话 |
 |------|------|--------|
 | `CameraService` | `camera_service.*` | IPC Server + SHM 推流 + 录像分派 |
-| `PrintVideoRecorder` | `print_video_recorder.*` | 层 Snap→MPP MJPEG→封装 MP4/缩略图 + upsert `manifest.json` + 发 `APP_Print_Video_Manifest_Ntf` 给 UI |
+| `PrintVideoRecorder` | `print_video_recorder.*` | 层 Snap→PNG→封装 MP4/缩略图 + upsert `config.json` + 发 `APP_Print_Video_Manifest_Ntf` 给 UI |
 | `ViCapture` | `vi_capture.*` | rkaiq + V4L2 NV12 |
 | `CameraDmaFrameSource` | `camera_dma_frame_source.*` | V4L2 dma fd 导出、stride padding |
 | `device_config.hpp` | 头文件 | 设备/分辨率/IQ/SHM/录像路径宏 |
@@ -74,7 +75,8 @@
 | `ui_device_bar_*` | `ui_device_bar.*` | 常驻设备信息条（WiFi + 设备名 + 状态点/字），PageManager 持有 |
 | `app_init()` | `ui_app.*` | 主题、Proxy、`ui_device_state_init`、页面注册、control |
 | `control_*` | `control.*` | 打印状态机（含 `CONTROL_STATE_PRINT_DONE` 结果页、`CONTROL_STATE_TRANSFER_BOX` 取件转运盒）+ overlay UI |
-| `VideoPlayer` | `video_player.*` | 延时视频 libav* 软解 → BGRX → lv_image（play/pause/seek + 拖动预览独立解码线程） |
+| `VideoPlayer` | `video_player.*` | 延时视频 libav* 软解 → BGRX/RGB565 → lv_image（play/pause/seek；拖动预览缩小帧 + latest-wins） |
+| `PngScrubPreview` | `png_scrub_preview.*` | PNG 序列拖动预览：后台 libpng 解码缩放到小图 RGB565 |
 
 ## UI 页面（`app/ui/lib/pages/`）
 

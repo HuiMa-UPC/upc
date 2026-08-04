@@ -37,9 +37,14 @@ private:
     void handle_clean_video(const middleware::Message& msg);
     void handle_print_video_finalize(const middleware::Message& msg);
     void handle_storage_usage_req(const middleware::Message& msg) const;
-    void cleanup_stale_work_dirs_on_startup() const;
-    void cleanup_work_dirs_before_print_start(
-        const middleware::PrintVideoSessionPayload& info) const;
+    /** 开机/开打前：尽力收尾 pending，再清空 tmp 与遗留 __work_* */
+    void recover_pending_and_reset_tmp();
+    void remove_legacy_work_dirs() const;
+    void clear_video_tmp_dir() const;
+    void drop_orphan_pending_flags() const;
+    /** 0~100；失败返回 -1 */
+    int query_storage_used_pct() const;
+    void apply_storage_watermark(middleware::PrintVideoSessionPayload& info);
 
     void send_stream_start_req();
     void send_stream_stop_req();
@@ -105,8 +110,6 @@ private:
     bool clean_video_active_ = false;
     bool finalize_pending_ = false;
     std::string pending_finalize_frames_dir_;
-    std::string latest_print_session_id_;
-    std::string latest_print_job_name_;
     bool latest_print_session_closed_ = false;
 
     PrintVideoRecorder print_video_;

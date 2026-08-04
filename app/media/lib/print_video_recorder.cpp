@@ -23,20 +23,6 @@ namespace upc::media {
 
 namespace {
 
-std::string basename_of_path(const std::string& path)
-{
-    if(path.empty()) {
-        return {};
-    }
-    std::error_code ec;
-    const std::string name = std::filesystem::path(path).filename().string();
-    if(!name.empty()) {
-        return name;
-    }
-    (void)ec;
-    return path;
-}
-
 bool remove_empty_dir_if_exists(const std::string& dir)
 {
     if(dir.empty()) {
@@ -83,6 +69,11 @@ void PrintVideoRecorder::set_timelapse_fps(uint32_t fps)
     }
 }
 
+void PrintVideoRecorder::set_layer_snap_enabled(bool enabled)
+{
+    layer_snap_enabled_ = enabled;
+}
+
 void PrintVideoRecorder::enqueue_job(PrintVideoJob job)
 {
     {
@@ -123,11 +114,14 @@ void PrintVideoRecorder::on_session_start(
     frame_count_ = 0;
     last_layer_nv12_.clear();
     h264_continuous_on_ = (info.h264_continuous_on != 0);
-    /* 同一 gcode 文件重复打印时覆盖同名目录 */
+    /* 同一 gcode 重复打印时 finalize 会覆盖同名正式目录；打印中统一写 tmp/ */
     session_name_ = job_name_.empty() ? std::string("print") : job_name_;
+    if(session_name_ == UPC_VIDEO_TMP_NAME) {
+        session_name_ = "print_tmp";
+        job_name_ = session_name_;
+    }
     session_final_dir_ = std::string(CAMERA_PRINT_VIDEO_OUT_DIR) + "/" + session_name_;
-    const std::string token = sanitize_session_token(session_id_.c_str());
-    session_dir_ = session_final_dir_ + ".__work_" + (token.empty() ? "session" : token);
+    session_dir_ = UPC_VIDEO_TMP;
 
     mkdir_p(CAMERA_PRINT_VIDEO_OUT_DIR);
     remove_session_dir();
@@ -141,7 +135,7 @@ void PrintVideoRecorder::on_session_start(
     session_active_ = true;
     UPC_LOG_MEDIA_SERVICE(
         Info,
-        "print_video session start id=%s job=%s dir=%s %ux%u layer_fps=%u h264=%d start_unix=%lld",
+        "print_video session start id=%s job=%s dir=%s %ux%u layer_fps=%u h264=%d snap=%d start_unix=%lld",
         session_id_.c_str(),
         job_name_.c_str(),
         session_dir_.c_str(),
@@ -149,13 +143,14 @@ void PrintVideoRecorder::on_session_start(
         stream_height_,
         layer_fps_,
         h264_continuous_on_ ? 1 : 0,
+        layer_snap_enabled_ ? 1 : 0,
         static_cast<long long>(start_unix_));
 }
 
 void PrintVideoRecorder::on_layer_snap(
     const middleware::PrintVideoLayerSnapPayload& snap)
 {
-    if(!session_active_ || snap.session_id[0] == '\0' ||
+    if(!session_active_ || !layer_snap_enabled_ || snap.session_id[0] == '\0' ||
        session_id_ != snap.session_id) {
         return;
     }
@@ -394,11 +389,9 @@ void PrintVideoRecorder::finalize_session(bool aborted)
                                thumb_path.c_str());
     }
 
-    std::string frames_dir_name = basename_of_path(session_dir_);
-    if(frames_dir_name.empty()) {
-        frames_dir_name = session_name_.empty() ? std::string("print") : session_name_;
-    }
-    const std::string thumb_rel = frames_dir_name + "/thumb" + CAMERA_PRINT_VIDEO_THUMB_EXT;
+    std::string frames_dir_name = UPC_VIDEO_TMP_NAME;
+    const std::string thumb_rel = std::string(UPC_VIDEO_TMP_NAME) +
+                                  "/thumb" + CAMERA_PRINT_VIDEO_THUMB_EXT;
 
     const bool need_video = (frames >= 1u);
     /* 仅当本次会话开了连续 H264 时，Print History 才进入「生成中」；关则不落 print 视频项。 */
@@ -739,21 +732,6 @@ std::string PrintVideoRecorder::sanitize_filename(const char* name)
     }
     if(s.empty()) {
         s = "print";
-    }
-    return s;
-}
-
-std::string PrintVideoRecorder::sanitize_session_token(const char* token)
-{
-    if(!token || !token[0]) {
-        return {};
-    }
-    std::string s(token);
-    for(char& c : s) {
-        const unsigned char uc = static_cast<unsigned char>(c);
-        if(!std::isalnum(uc) && c != '-' && c != '_' && c != '.') {
-            c = '_';
-        }
     }
     return s;
 }

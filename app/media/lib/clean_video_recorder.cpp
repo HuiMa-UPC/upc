@@ -10,6 +10,7 @@
 #include <chrono>
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
 
 namespace upc::media {
 
@@ -261,7 +262,16 @@ void CleanVideoRecorder::on_session_start(
         1000000ull / static_cast<uint64_t>(std::max(1u, timelapse_fps_));
 
     ++session_seq_;
-    session_dir_ = std::string(CAMERA_PRINT_VIDEO_OUT_DIR) + "/" + job_name_;
+    /* 结果页未 finalize 前 PNG 在 video/tmp；已 promote 则在 {job}/ */
+    const std::string tmp_dir = UPC_VIDEO_TMP;
+    const std::string job_dir =
+        std::string(CAMERA_PRINT_VIDEO_OUT_DIR) + "/" + job_name_;
+    const uint32_t tmp_png = timelapse_util::scan_max_png_index(tmp_dir);
+    if(tmp_png > 0u) {
+        session_dir_ = tmp_dir;
+    } else {
+        session_dir_ = job_dir;
+    }
 
     if(!timelapse_util::mkdir_p(CAMERA_PRINT_VIDEO_OUT_DIR) ||
        !timelapse_util::mkdir_p(session_dir_.c_str())) {
@@ -420,7 +430,6 @@ void CleanVideoRecorder::stop_locked(std::unique_lock<std::mutex>& lock,
     wait_session_jobs_drain_locked(lock, session_seq);
 
     const std::string stop_session_id = session_id_;
-    const std::string stop_job_name = job_name_;
     const std::string stop_session_dir = session_dir_;
     const uint32_t stop_width = width_;
     const uint32_t stop_height = height_;
@@ -444,6 +453,9 @@ void CleanVideoRecorder::stop_locked(std::unique_lock<std::mutex>& lock,
     bool history_ok = false;
 
     const bool allow_clean_merge = (stop_print_frames > 0u);
+    /* 清单主键与会话目录一致：未 finalize 时为 tmp，否则为 job 名 */
+    const std::string frames_dir_key =
+        std::filesystem::path(stop_session_dir).filename().string();
 
     if(closed_by_user || !success) {
         if(clean_first > 0) {
@@ -456,7 +468,7 @@ void CleanVideoRecorder::stop_locked(std::unique_lock<std::mutex>& lock,
                 "clean_video removed empty session dir=%s",
                 stop_session_dir.c_str());
         }
-        history_ok = update_clean_history_metadata(stop_job_name, std::string{}, 0u, 0u);
+        history_ok = update_clean_history_metadata(frames_dir_key, std::string{}, 0u, 0u);
     } else if(!allow_clean_merge) {
         /* 没有打印段 PNG 时，清粉段不允许参与合成：强制清理并清空清粉范围元数据。 */
         if(clean_first > 0) {
@@ -472,11 +484,11 @@ void CleanVideoRecorder::stop_locked(std::unique_lock<std::mutex>& lock,
         UPC_LOG_MEDIA_SERVICE(
             Info,
             "clean_video skip merge: print_png=0, cleaned residual clean png");
-        history_ok = update_clean_history_metadata(stop_job_name, std::string{}, 0u, 0u);
+        history_ok = update_clean_history_metadata(frames_dir_key, std::string{}, 0u, 0u);
     } else if(stop_clean_frames == 0) {
         UPC_LOG_MEDIA_SERVICE(Info,
             "clean_video success with 0 clean frames, keep print png only");
-        history_ok = update_clean_history_metadata(stop_job_name, std::string{}, 0u, 0u);
+        history_ok = update_clean_history_metadata(frames_dir_key, std::string{}, 0u, 0u);
     } else {
         const std::string thumb_path =
             stop_session_dir + "/thumb" + CAMERA_PRINT_VIDEO_THUMB_EXT;
@@ -488,10 +500,10 @@ void CleanVideoRecorder::stop_locked(std::unique_lock<std::mutex>& lock,
         }
 
         const std::string thumb_rel =
-            thumb_ok ? (stop_job_name + "/thumb" + CAMERA_PRINT_VIDEO_THUMB_EXT)
+            thumb_ok ? (frames_dir_key + "/thumb" + CAMERA_PRINT_VIDEO_THUMB_EXT)
                      : std::string{};
         history_ok = update_clean_history_metadata(
-            stop_job_name, thumb_rel, clean_first, clean_last);
+            frames_dir_key, thumb_rel, clean_first, clean_last);
     }
 
     UPC_LOG_MEDIA_SERVICE(

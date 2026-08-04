@@ -140,7 +140,7 @@ void home_env_init(void)
                 lv_obj_clear_state(g_result_photo_btn, LV_STATE_DISABLED);
             }
             if(rsp.ok) {
-                ui_toast_show("Photo saved to /home/photo", user_color_accent, 1500);
+                ui_toast_show("Photo saved to /home/media/photo", user_color_accent, 1500);
             } else {
                 ui_toast_show("Photo save failed", ui_color_danger, 1500);
             }

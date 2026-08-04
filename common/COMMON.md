@@ -26,7 +26,7 @@ scripts/rongsu.sh start   # glavo + rongsu_camera → ui
 | `ipc/` | Unix socket、`MsgPort`、SHM/dma 帧环 |
 | `debug/` | `UPC_LOG_*`、`upc_sys_monitor` |
 | `process/` | PID、daemon、`log_rotating` |
-| `fs_manifest/` | 本地清单 JSON（G-code `config.json`、打印历史 `manifest.json`） |
+| `fs_manifest/` | 本地清单 JSON（G-code / 打印历史 `config.json`；根路径见 `media_paths.hpp`） |
 
 ## 进程与日志
 
@@ -185,10 +185,10 @@ scripts/rongsu.sh start   # glavo + rongsu_camera → ui
 | `UI_Camera_Stream_Stop_Req` | — | UI→Camera | Empty | `send_stream_stop` | 关预览 |
 | `APP_Camera_Stream_Stop_Done` | — | Camera→UI | Empty | `register_stream_stop_done` | — |
 | `APP_Camera_Frame_Ntf` | — | Camera→UI | `CameraFrameNtfPayload` | （可选） | 帧序号；默认关 |
-| `UI_Camera_Snapshot_Req` | — | UI→Media | Empty | `send_snapshot_req` | 存当前帧 PNG + 配对 `.rthm` 缩略图到 `/home/photo` |
+| `UI_Camera_Snapshot_Req` | — | UI→Media | Empty | `send_snapshot_req` | 存当前帧 PNG + 配对 `.rthm` 缩略图到 `/home/media/photo` |
 | `APP_Camera_Snapshot_Rsp` | — | Media→UI | `CameraSnapshotRspPayload` | `register_snapshot_rsp` | — |
 | `UI_Storage_Usage_Req` | — | UI→Media | Empty | （历史页直接发总线） | 历史页进入时请求一次容量统计（used/total） |
-| `APP_Storage_Usage_Rsp` | — | Media→UI | `StorageUsagePayload` | （历史页直接订阅总线） | 返回 `/home/video` 所在分区已用/总容量，刷新右上角 Storage |
+| `APP_Storage_Usage_Rsp` | — | Media→UI | `StorageUsagePayload` | （历史页直接订阅总线） | 返回 `/home/media` 所在分区已用/总容量，刷新右上角 Storage |
 | `VISUAL_Camera_Stream_Start_Req` | — | Visual→Camera | `CameraStreamStartReqPayload`/Empty | — | 视觉进程申请并行取流 |
 | `APP_Visual_Camera_Stream_Start_Rsp` | — | Camera→Visual | `CameraStreamInfoPayload` | — | 视觉侧 SHM 参数 / dma fd |
 | `VISUAL_Camera_Stream_Stop_Req` | — | Visual→Camera | Empty | — | 视觉进程停止取流 |
@@ -196,7 +196,7 @@ scripts/rongsu.sh start   # glavo + rongsu_camera → ui
 | `APP_Visual_Rect_Ntf` | — | Visual→UI | `VisualRectNtfPayload` | `register_visual_rect` | 矩形四点坐标，UI 叠加画框 |
 | `APP_Print_Video_Session_Start_Ntf` | — | Glavo→Media（Hub FWD） | `PrintVideoSessionPayload` | — | `PrintVideoNotify` / `MediaService` |
 | `APP_Print_Layer_Snap_Ntf` | — | Glavo→Media（Hub FWD） | `PrintVideoLayerSnapPayload` | — | 换层 Snap |
-| `APP_Print_Video_Session_Finish_Ntf` | — | Glavo→Media（Hub FWD） | `PrintVideoSessionPayload` | — | 保存 `/home/video/{job_ts}/1.png...N.png` + `thumb.rthm` + manifest 快路径（`video_pending`） |
+| `APP_Print_Video_Session_Finish_Ntf` | — | Glavo→Media（Hub FWD） | `PrintVideoSessionPayload` | — | 保存 `/home/media/video/{job}/1.png...N.png` + `thumb.rthm` + config 快路径（`video_pending`） |
 | `APP_Print_Video_Session_Abort_Ntf` | — | Glavo→Media（Hub FWD） | `PrintVideoSessionPayload` | — | 有帧同样落盘目录 + manifest 快路径（`terminated` + `video_pending`）；0 帧不清整目录 |
 | `APP_Print_H264_Record_Pause_Ntf` | — | Glavo→Media（Hub FWD） | `PrintPauseStatePayload` | — | 打印暂停/恢复时同步连续 H264 录制状态（paused=1 暂停采帧，0 恢复） |
 | `APP_Clean_Video_Session_Start_Ntf` | — | Glavo→Media（Hub FWD） | `CleanVideoSessionStartPayload` | — | 清粉延时抽帧开始：接续打印 `N.png`，按 `fps`/`TIMELAPSE_VIDEO_FPS` 定时写 `(N+1).png…` |
@@ -302,8 +302,8 @@ rongsu_broker ──listen──► /tmp/upc_broker.sock ◄── UI / Glavo / 
 | `common/middleware/message_bus/msg_runtime.hpp` | 进程内 `Message` / `MsgPayload`（依赖 BufferPool） | 平台组 |
 | `common/CMakeLists.txt` | 统一静态库 `upc::common`（兼容别名 `upc::ipc` 等） | 平台组 |
 | `common/fs_manifest/gcode_manifest.*` | Local `/home/Gcode/config.json` 读写（UI 读列表 + Glavo 写） | 平台 / UI / Glavo |
-| `common/fs_manifest/print_history_manifest.*` | `/home/video/manifest.json`（Camera 写，UI 历史页读） | 平台 / Camera / UI |
-| `common/fs_manifest/print_history_manifest.*` | `/home/video/manifest.json`（Camera remux 后写；UI 历史页读） | 平台 / Camera / UI |
+| `common/fs_manifest/print_history_manifest.*` | `/home/media/video/config.json`（Media 写，UI 历史页读） | 平台 / Media / UI |
+| `common/fs_manifest/media_paths.hpp` | `/home/media/{photo,video}` 路径宏 | 平台 / Media / UI |
 | `common/ipc/msg_port.hpp` | 业务唯一 IPC 入口 | 平台组 |
 | `common/ipc/ipc_wire.*` | 线协议 | 平台组 |
 | `common/ipc/ipc_endpoint.*` | Socket 传输 | 平台组 |

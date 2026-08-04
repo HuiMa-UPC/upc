@@ -252,7 +252,7 @@ Glavo Print_Terminate_Done / 进度 100% → control.cpp finish_printing()
   → enter_state(CONTROL_STATE_PRINT_DONE)   // 只停看门狗，预览保活，界面维持打印中原样
   → （Camera 后台把 PNG 序列编成 timelapse.mp4 并 upsert manifest，可能数秒到数分钟）
   → APP_Print_Video_Manifest_Ntf (Camera→UI)
-  → control.cpp on_print_video_manifest()：按 frames_dir 主键读 /home/video/manifest.json
+  → control.cpp on_print_video_manifest()：按 frames_dir 主键读 /home/media/video/config.json
   → page_user_home_enter_print_result()     // 徽标切结束档 + 底部换取件组
 ```
 
@@ -391,11 +391,11 @@ rongsu_camera 经主 IPC（/tmp/upc_camera.sock）SCM_RIGHTS 附带 dma_buf fd �
 
 | 组件 | 文件 | 职责 |
 |------|------|------|
-| `page_user_history` | `pages/page_user_history.*` | 读 `/home/video/manifest.json`（`common/fs_manifest/print_history_manifest`）→ 按 `start_unix` 倒序、按自然日分组的卡片列表；缩略图 `A:/home/video/{thumb}`（RTHM 解码，`LV_IMAGE_ALIGN_COVER`）；**Album** 扫 `/home/photo/*.png`，缩略图优先同名 `.rthm`；顶部三 Tab + Storage 容量条；管理（多选）模式批量删除；上下翻页；**左滑删除**（清除卡片默认 `GESTURE_BUBBLE` 使手势落到卡片）→ History/Timelapse 按 `frames_dir` 整条删目录 + 重写 manifest；Album 删 PNG + 配对 `.rthm` |
-| `page_user_timelapse` | `pages/page_user_timelapse.*` | 全屏播放页（建于 `lv_layer_top()` 覆盖侧边栏）：按序播放 `/home/video/{job_ts}/1.png...N.png`，顶部标题/时间、右上关闭、中央播放/暂停、底部进度条、点画面显隐控件 |
+| `page_user_history` | `pages/page_user_history.*` | 读 `/home/media/video/config.json`（`common/fs_manifest/print_history_manifest`）→ 按 `start_unix` 倒序、按自然日分组的卡片列表；缩略图 `A:/home/media/video/{thumb}`（RTHM 解码，`LV_IMAGE_ALIGN_COVER`）；**Album** 扫 `/home/media/photo/*.png`，缩略图优先同名 `.rthm`；顶部三 Tab + Storage 容量条；管理（多选）模式批量删除；上下翻页；**左滑删除**（清除卡片默认 `GESTURE_BUBBLE` 使手势落到卡片）→ History/Timelapse **按类型独立删除**后重写 config.json；Album 删 PNG + 配对 `.rthm` |
+| `page_user_timelapse` | `pages/page_user_timelapse.*` | 全屏播放页（建于 `lv_layer_top()`）：优先 `timelapse.mp4`（`VideoPlayer`），失败回退 PNG 序列；拖动预览为后台小图 scrub（MP4 缩解放 / PNG `PngScrubPreview`），松手后再 settle 主画面 |
 
 - **进入/退出**：历史页缩略图点击 → `page_user_timelapse_set_source(目录,mp4路径,标题,时间)` + `switch_to("user_timelapse")`；关闭 → `switch_to("user_history")`。
-- **LVGL 线程规则**：序列播放由主线程 `lv_timer` 驱动换图。
+- **LVGL 线程规则**：PNG 序列播放由主线程 `lv_timer` 换主画面；拖动预览解码在后台线程，经 `lv_async_call` 贴预览框。
 
 ### 打印历史页布局（稿 4366:5400 一套六态）
 
@@ -408,7 +408,7 @@ rongsu_camera 经主 IPC（/tmp/upc_camera.sock）SCM_RIGHTS 附带 dma_buf fd �
   `N selected + Delete + Select All + Cancel`（都是 `USER_HIST_BTN_W × USER_HIST_TAB_H` 胶囊）。
   两组按钮都上抬 `manage_btn_lift()`（`USER_PAD_SM / 2`）比 Tab 文字略高；按钮高度本就等于行高，
   所以 Tab 行也要 `OVERFLOW_VISIBLE` + `tab_row_ext_draw_cb` 才不被裁掉顶部。
-  行下一条通栏分隔线。**Album** 数据源为 `/home/photo`（PNG 原图 + 可选同名 `.rthm` 缩略图）。
+  行下一条通栏分隔线。**Album** 数据源为 `/home/media/photo`（PNG 原图 + 可选同名 `.rthm` 缩略图）。
 - **右缘对齐**：Tab 行 / 告警横幅 / 卡片列表 / Storage 条统一用 `content_right_pad()`
   （= 翻页钮直径 + `USER_PAD × 2`）内缩，四者右缘齐平；调翻页钮尺寸只需改这个函数。
 - **Storage 容量条**：稿里与设备名同排，而页面内容区从常驻条下沿才开始，所以做成 `FLOATING`
@@ -429,9 +429,10 @@ rongsu_camera 经主 IPC（/tmp/upc_camera.sock）SCM_RIGHTS 附带 dma_buf fd �
   ——v9 的 `LONG_MODE_DOTS` 是「先按宽度换行、再截末行」，不锁高度只会换行、出不来省略号。
 - **管理模式**：卡片左侧插入 `USER_HIST_CHECK_SZ` 复选框（隐藏时 flex 自动跳过，缩进天然
   跟着走）；点卡片任意位置或缩略图切换勾选；期间禁用左滑；`Delete` 走
-  `ui_user_make_confirm_footer_btn` 那套二次确认弹窗，确认后按 `frames_dir` **整条删除**
-  （会话目录内 Timelapse + Print Video + 缩略图/PNG 一并清掉，并从 manifest 移除），再整表重建。
-  任一 Tab 删除都会让另一 Tab 同步消失。`video_pending`（延时摄影仍在合成）/
+  `ui_user_make_confirm_footer_btn` 那套二次确认弹窗，确认后按当前 Tab **独立删除**：
+  Timelapse 只清延时资产（`*.png` / `thumb.rthm` / `timelapse.mp4`）；Print History 只清
+  打印录像（`print_h264.mp4` / `print_thumb` / `print.h264`）。另一侧仍保留；两侧都空
+  才移除清单条目并删会话目录。`video_pending`（延时摄影仍在合成）/
   `print_video_pending`（连续 H264 仍在 remux）的条目不可勾选、也挡住左滑删除，
   避免打断落盘。关「Print H264 Rec」时不写 `print_video_pending`，Print History
   不展示对应项，也不会卡在 Generating。
@@ -448,11 +449,11 @@ rongsu_camera 经主 IPC（/tmp/upc_camera.sock）SCM_RIGHTS 附带 dma_buf fd �
 |------|------|------|
 | `Layers` | 显示 `--` | manifest 加层数字段（Camera 可取换层 Snap 的最大 `layer_index`） |
 | Storage 容量 | `page_user_history.cpp` 顶部 `kStorageUsedMB/kStorageTotalMB` 常量占位 | 接上报后改 `storage_used_mb()/storage_total_mb()` 两个取数函数即可 |
-| Timelapse / Album | 已按 Tab 分支：Timelapse 读 manifest；Album 扫 `/home/photo/*.png`（缩略图优先 `.rthm`） | — |
+| Timelapse / Album | 已按 Tab 分支：Timelapse 读 manifest；Album 扫 `/home/media/photo/*.png`（缩略图优先 `.rthm`） | — |
 
 ### LVGL 配置依赖（`3rdparty/.../configs/rongsu_ui.defaults`）
 - `LV_USE_TJPGD=1`：历史缩略图 baseline JPEG 解码
-- `LV_USE_FS_POSIX=1` + `LV_FS_POSIX_LETTER='A'`：按路径加载 `/home/video`、`/home/photo` 图片（`"A:/home/video/x.rthm"` / `"A:/home/photo/x.rthm"`）
+- `LV_USE_FS_POSIX=1` + `LV_FS_POSIX_LETTER='A'`：按路径加载 `/home/media/video`、`/home/media/photo` 图片（`"A:/home/media/video/x.rthm"` / `"A:/home/media/photo/x.rthm"`）
 - lvgl 目标加 `_DEFAULT_SOURCE`（`3rdparty/.../CMakeLists.txt`）：修 FS 驱动 `DT_DIR` 在 `_POSIX_C_SOURCE` 下不可见的编译错误
 - 缩略图 `toast` 与播放器同建于 `lv_layer_top()`，全屏时提示可见
 

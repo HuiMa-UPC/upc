@@ -2,6 +2,7 @@
 
 #include "config/cal_config.hpp"
 #include "device_config.hpp"
+#include "media_paths.hpp"
 #include "print_history_manifest.hpp"
 #include "rs_log.hpp"
 #include "timelapse_util.hpp"
@@ -13,44 +14,93 @@
 #include <cstring>
 #include <ctime>
 #include <cerrno>
+#include <algorithm>
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <sys/statvfs.h>
 #include <unistd.h>
 #include <filesystem>
-#include <unordered_set>
 
 namespace upc::media {
 
 namespace {
 
-constexpr const char* kPhotoOutDir = "/home/photo";
 constexpr uint64_t kStartRetryMs = 1000;
 
-std::string sanitize_token_for_dir(const char* s)
+/** 旧布局兼容：/home/video、/home/photo、manifest.json → /home/media/... */
+void migrate_legacy_media_layout()
 {
-    if(!s || !s[0]) {
-        return {};
-    }
-    std::string out(s);
-    for(char& c : out) {
-        const unsigned char uc = static_cast<unsigned char>(c);
-        if(!std::isalnum(uc) && c != '_' && c != '-' && c != '.') {
-            c = '_';
+    namespace fs = std::filesystem;
+    std::error_code ec;
+
+    fs::create_directories(UPC_MEDIA_ROOT, ec);
+    ec.clear();
+
+    const fs::path new_video = UPC_VIDEO_DIR;
+    const fs::path old_video = "/home/video";
+    if(!fs::exists(new_video, ec) && fs::is_directory(old_video, ec)) {
+        ec.clear();
+        fs::rename(old_video, new_video, ec);
+        if(ec) {
+            UPC_LOG_MEDIA_SERVICE(Warn,
+                "media migrate video fail %s -> %s: %s",
+                old_video.c_str(), new_video.c_str(), ec.message().c_str());
+        } else {
+            UPC_LOG_MEDIA_SERVICE(Info,
+                "media migrate video %s -> %s",
+                old_video.c_str(), new_video.c_str());
         }
     }
-    return out;
+    ec.clear();
+    fs::create_directories(new_video, ec);
+
+    const fs::path new_photo = UPC_PHOTO_DIR;
+    const fs::path old_photo = "/home/photo";
+    if(!fs::exists(new_photo, ec) && fs::is_directory(old_photo, ec)) {
+        ec.clear();
+        fs::rename(old_photo, new_photo, ec);
+        if(ec) {
+            UPC_LOG_MEDIA_SERVICE(Warn,
+                "media migrate photo fail %s -> %s: %s",
+                old_photo.c_str(), new_photo.c_str(), ec.message().c_str());
+        } else {
+            UPC_LOG_MEDIA_SERVICE(Info,
+                "media migrate photo %s -> %s",
+                old_photo.c_str(), new_photo.c_str());
+        }
+    }
+    ec.clear();
+    fs::create_directories(new_photo, ec);
+
+    /* video 清单：manifest.json → config.json（仅当新名不存在） */
+    const fs::path new_cfg = UPC_VIDEO_CONFIG;
+    const fs::path old_cfg = fs::path(UPC_VIDEO_DIR) / "manifest.json";
+    const fs::path legacy_cfg = "/home/video/manifest.json";
+    if(!fs::exists(new_cfg, ec)) {
+        ec.clear();
+        if(fs::is_regular_file(old_cfg, ec)) {
+            ec.clear();
+            fs::rename(old_cfg, new_cfg, ec);
+            if(!ec) {
+                UPC_LOG_MEDIA_SERVICE(Info,
+                    "media migrate video config %s -> %s",
+                    old_cfg.c_str(), new_cfg.c_str());
+            }
+        } else if(fs::is_regular_file(legacy_cfg, ec)) {
+            ec.clear();
+            fs::rename(legacy_cfg, new_cfg, ec);
+            if(!ec) {
+                UPC_LOG_MEDIA_SERVICE(Info,
+                    "media migrate video config %s -> %s",
+                    legacy_cfg.c_str(), new_cfg.c_str());
+            }
+        }
+    }
 }
 
-std::string build_work_dir_name_for_session(const char* job_name,
-                                            const char* session_id)
+bool path_is_legacy_work_dir(const std::string& dir_name)
 {
-    std::string session_name = sanitize_token_for_dir(job_name);
-    if(session_name.empty()) {
-        session_name = "print";
-    }
-    const std::string token = sanitize_token_for_dir(session_id);
-    return session_name + ".__work_" + (token.empty() ? "session" : token);
+    return dir_name.find(".__work_") != std::string::npos;
 }
 
 } // namespace
@@ -62,7 +112,8 @@ MediaService::~MediaService()
 
 bool MediaService::init()
 {
-    cleanup_stale_work_dirs_on_startup();
+    migrate_legacy_media_layout();
+    recover_pending_and_reset_tmp();
     subscribe_messages();
     print_video_.set_sender_module_id(middleware::ModuleId::APP_MEDIA);
     print_video_.set_nv12_snapshot_provider([this](std::vector<uint8_t>& out) {
@@ -482,9 +533,9 @@ bool MediaService::save_latest_png_snapshot(std::string& out_path) const
         return false;
     }
 
-    if(mkdir(kPhotoOutDir, 0755) != 0 && errno != EEXIST) {
+    if(mkdir(UPC_PHOTO_DIR, 0755) != 0 && errno != EEXIST) {
         UPC_LOG_MEDIA_SERVICE(Error, "mkdir %s failed: %s",
-                              kPhotoOutDir, std::strerror(errno));
+                              UPC_PHOTO_DIR, std::strerror(errno));
         return false;
     }
 
@@ -493,9 +544,9 @@ bool MediaService::save_latest_png_snapshot(std::string& out_path) const
                              std::to_string(stream_width_) + "x" +
                              std::to_string(stream_height_);
     const std::string out_png_path =
-        std::string(kPhotoOutDir) + "/" + stem + ".png";
+        std::string(UPC_PHOTO_DIR) + "/" + stem + ".png";
     const std::string out_rthm_path =
-        std::string(kPhotoOutDir) + "/" + stem + CAMERA_PRINT_VIDEO_THUMB_EXT;
+        std::string(UPC_PHOTO_DIR) + "/" + stem + CAMERA_PRINT_VIDEO_THUMB_EXT;
     const std::string tmp_nv12_path =
         "/tmp/media_snapshot_" + stamp + "_" + std::to_string(monotonic_us()) + ".nv12";
 
@@ -563,7 +614,9 @@ void MediaService::handle_print_video(const middleware::Message& msg)
         }
         info.session_id[sizeof(info.session_id) - 1] = '\0';
         info.job_name[sizeof(info.job_name) - 1] = '\0';
-        cleanup_work_dirs_before_print_start(info);
+        /* 开打前先收尾上一单残留，再清 tmp；避免 pending 永久占盘 */
+        recover_pending_and_reset_tmp();
+        apply_storage_watermark(info);
         {
             std::lock_guard<std::mutex> lock(finalize_mtx_);
             latest_print_session_closed_ = false;
@@ -592,8 +645,6 @@ void MediaService::handle_print_video(const middleware::Message& msg)
         info.job_name[sizeof(info.job_name) - 1] = '\0';
         {
             std::lock_guard<std::mutex> lock(finalize_mtx_);
-            latest_print_session_id_ = info.session_id;
-            latest_print_job_name_ = info.job_name;
             latest_print_session_closed_ = true;
         }
         if(msg.type == middleware::MsgType::APP_Print_Video_Session_Finish_Ntf) {
@@ -656,20 +707,16 @@ void MediaService::handle_print_video_finalize(const middleware::Message& msg)
     }
     req.frames_dir[sizeof(req.frames_dir) - 1] = '\0';
     if(req.frames_dir[0] == '\0') {
-        std::string session_id;
-        std::string job_name;
         bool can_cleanup = false;
         {
             std::lock_guard<std::mutex> lock(finalize_mtx_);
             can_cleanup = latest_print_session_closed_;
             if(can_cleanup) {
-                session_id = latest_print_session_id_;
-                job_name = latest_print_job_name_;
                 latest_print_session_closed_ = false;
             }
         }
-        if(can_cleanup && !session_id.empty() && !job_name.empty()) {
-            print_h264_.enqueue_cleanup_for_session(job_name.c_str(), session_id.c_str());
+        if(can_cleanup) {
+            print_h264_.enqueue_cleanup_tmp();
         } else {
             UPC_LOG_MEDIA_SERVICE(
                 Warn, "print_h264 cleanup skipped: stale or empty finalize request");
@@ -697,7 +744,7 @@ void MediaService::handle_storage_usage_req(const middleware::Message& msg) cons
 {
     struct statvfs vfs {};
     middleware::StorageUsagePayload rsp{};
-    if(::statvfs(CAMERA_PRINT_VIDEO_OUT_DIR, &vfs) == 0) {
+    if(::statvfs(UPC_MEDIA_ROOT, &vfs) == 0) {
         const uint64_t block_size = static_cast<uint64_t>(vfs.f_frsize);
         const uint64_t total = static_cast<uint64_t>(vfs.f_blocks) * block_size;
         const uint64_t free_bytes = static_cast<uint64_t>(vfs.f_bavail) * block_size;
@@ -705,7 +752,7 @@ void MediaService::handle_storage_usage_req(const middleware::Message& msg) cons
         rsp.used_bytes = (total > free_bytes) ? (total - free_bytes) : 0u;
     } else {
         UPC_LOG_MEDIA_SERVICE(Warn, "storage statvfs failed path=%s err=%d",
-                              CAMERA_PRINT_VIDEO_OUT_DIR, errno);
+                              UPC_MEDIA_ROOT, errno);
         rsp.total_bytes = 0;
         rsp.used_bytes = 0;
     }
@@ -765,29 +812,31 @@ int MediaService::run_shell_cmd(const char* cmd, const char* log_tag)
     return rc;
 }
 
-void MediaService::cleanup_stale_work_dirs_on_startup() const
+void MediaService::clear_video_tmp_dir() const
 {
-    std::vector<upc::PrintHistoryEntry> entries;
-    (void)upc::print_history_manifest_load(UPC_PRINT_VIDEO_MANIFEST, entries);
-
-    std::unordered_set<std::string> keep_frames_dirs;
-    for(const auto& e : entries) {
-        /* 仍在进行中的会话目录不清理：未提交或视频仍在后台生成。 */
-        if((!e.committed || e.video_pending || e.print_video_pending) &&
-           !e.frames_dir.empty()) {
-            keep_frames_dirs.insert(e.frames_dir);
-        }
+    std::error_code ec;
+    if(!std::filesystem::exists(UPC_VIDEO_TMP, ec)) {
+        return;
     }
+    const uintmax_t removed = std::filesystem::remove_all(UPC_VIDEO_TMP, ec);
+    if(ec) {
+        UPC_LOG_MEDIA_SERVICE(Warn, "clear tmp fail path=%s err=%s",
+                              UPC_VIDEO_TMP, ec.message().c_str());
+    } else if(removed > 0) {
+        UPC_LOG_MEDIA_SERVICE(Info, "cleared video tmp path=%s entries=%llu",
+                              UPC_VIDEO_TMP,
+                              static_cast<unsigned long long>(removed));
+    }
+}
 
+void MediaService::remove_legacy_work_dirs() const
+{
     std::error_code ec;
     if(!std::filesystem::is_directory(CAMERA_PRINT_VIDEO_OUT_DIR, ec)) {
         return;
     }
-
-    const auto now = std::filesystem::file_time_type::clock::now();
-    const auto ttl = std::chrono::seconds(MEDIA_STALE_WORK_TTL_SEC);
-
-    for(const auto& ent : std::filesystem::directory_iterator(CAMERA_PRINT_VIDEO_OUT_DIR, ec)) {
+    for(const auto& ent :
+        std::filesystem::directory_iterator(CAMERA_PRINT_VIDEO_OUT_DIR, ec)) {
         if(ec) {
             break;
         }
@@ -795,86 +844,158 @@ void MediaService::cleanup_stale_work_dirs_on_startup() const
             continue;
         }
         const std::string dir_name = ent.path().filename().string();
-        if(dir_name.find(".__work_") == std::string::npos) {
+        if(!path_is_legacy_work_dir(dir_name)) {
             continue;
         }
-        if(keep_frames_dirs.find(dir_name) != keep_frames_dirs.end()) {
-            continue;
-        }
-
-        std::error_code tm_ec;
-        const auto mt = std::filesystem::last_write_time(ent.path(), tm_ec);
-        if(tm_ec) {
-            continue;
-        }
-        if((now - mt) < ttl) {
-            continue;
-        }
-
         std::error_code rm_ec;
         const uintmax_t removed = std::filesystem::remove_all(ent.path(), rm_ec);
         if(rm_ec) {
             UPC_LOG_MEDIA_SERVICE(Warn,
-                "stale work cleanup fail dir=%s err=%s",
+                "legacy work cleanup fail dir=%s err=%s",
                 ent.path().c_str(), rm_ec.message().c_str());
         } else {
             UPC_LOG_MEDIA_SERVICE(Info,
-                "stale work cleanup removed dir=%s files=%llu",
+                "legacy work cleanup removed dir=%s files=%llu",
                 ent.path().c_str(),
                 static_cast<unsigned long long>(removed));
         }
     }
 }
 
-void MediaService::cleanup_work_dirs_before_print_start(
-    const middleware::PrintVideoSessionPayload& info) const
+void MediaService::drop_orphan_pending_flags() const
+{
+    std::vector<upc::PrintHistoryEntry> entries;
+    if(!upc::print_history_manifest_load(UPC_PRINT_VIDEO_MANIFEST, entries)) {
+        return;
+    }
+
+    bool changed = false;
+    std::error_code ec;
+    for(auto& e : entries) {
+        if(e.frames_dir.empty()) {
+            continue;
+        }
+        const bool pending =
+            !e.committed || e.video_pending || e.print_video_pending;
+        if(!pending) {
+            continue;
+        }
+        const std::string abs =
+            std::string(CAMERA_PRINT_VIDEO_OUT_DIR) + "/" + e.frames_dir;
+        const bool exists = std::filesystem::exists(abs, ec);
+        if(exists) {
+            continue;
+        }
+        /* 目录已不在：清掉锁死的 pending，避免永远占 keep 语义 */
+        e.committed = true;
+        e.video_pending = false;
+        e.print_video_pending = false;
+        if(e.frames_dir == UPC_VIDEO_TMP_NAME) {
+            e.frames_dir.clear();
+        }
+        changed = true;
+        UPC_LOG_MEDIA_SERVICE(Info,
+            "dropped orphan pending job=%s frames_dir=%s",
+            e.job_name.c_str(), abs.c_str());
+    }
+
+    if(!changed) {
+        return;
+    }
+    entries.erase(
+        std::remove_if(entries.begin(), entries.end(),
+            [](const upc::PrintHistoryEntry& e) {
+                return e.frames_dir.empty();
+            }),
+        entries.end());
+
+    const std::string tmp_path = std::string(UPC_PRINT_VIDEO_MANIFEST) + ".tmp";
+    if(!upc::print_history_manifest_save(tmp_path, entries) ||
+       std::rename(tmp_path.c_str(), UPC_PRINT_VIDEO_MANIFEST) != 0) {
+        (void)std::remove(tmp_path.c_str());
+        UPC_LOG_MEDIA_SERVICE(Warn, "drop orphan pending save fail");
+    }
+}
+
+void MediaService::recover_pending_and_reset_tmp()
 {
     std::vector<upc::PrintHistoryEntry> entries;
     (void)upc::print_history_manifest_load(UPC_PRINT_VIDEO_MANIFEST, entries);
 
-    std::unordered_set<std::string> keep_frames_dirs;
+    /* 先尽力 finalize：tmp 或遗留 __work_* 上的 pending 条目 */
     for(const auto& e : entries) {
-        if((!e.committed || e.video_pending || e.print_video_pending) &&
-           !e.frames_dir.empty()) {
-            keep_frames_dirs.insert(e.frames_dir);
+        if(e.frames_dir.empty()) {
+            continue;
+        }
+        const bool needs =
+            !e.committed || e.video_pending || e.print_video_pending;
+        if(!needs) {
+            continue;
+        }
+        const bool is_tmp = (e.frames_dir == UPC_VIDEO_TMP_NAME);
+        const bool is_work = path_is_legacy_work_dir(e.frames_dir);
+        if(!is_tmp && !is_work) {
+            /* 正式目录上卡住的 pending：只尝试 finalize，不删正式资产 */
+            print_video_.finalize_after_exit(e.frames_dir.c_str());
+            continue;
+        }
+        std::error_code ec;
+        const std::string abs =
+            std::string(CAMERA_PRINT_VIDEO_OUT_DIR) + "/" + e.frames_dir;
+        if(std::filesystem::exists(abs, ec)) {
+            UPC_LOG_MEDIA_SERVICE(Info,
+                "recover pending finalize frames_dir=%s", e.frames_dir.c_str());
+            print_video_.commit_after_exit(e.frames_dir.c_str());
+            print_video_.finalize_after_exit(e.frames_dir.c_str());
         }
     }
 
-    keep_frames_dirs.insert(
-        build_work_dir_name_for_session(info.job_name, info.session_id));
+    drop_orphan_pending_flags();
+    clear_video_tmp_dir();
+    remove_legacy_work_dirs();
+}
 
-    std::error_code ec;
-    if(!std::filesystem::is_directory(CAMERA_PRINT_VIDEO_OUT_DIR, ec)) {
+int MediaService::query_storage_used_pct() const
+{
+    struct statvfs vfs {};
+    if(::statvfs(UPC_MEDIA_ROOT, &vfs) != 0) {
+        return -1;
+    }
+    const uint64_t total = static_cast<uint64_t>(vfs.f_blocks) *
+                           static_cast<uint64_t>(vfs.f_frsize);
+    if(total == 0) {
+        return -1;
+    }
+    const uint64_t free_bytes = static_cast<uint64_t>(vfs.f_bavail) *
+                                static_cast<uint64_t>(vfs.f_frsize);
+    const uint64_t used = (total > free_bytes) ? (total - free_bytes) : 0u;
+    return static_cast<int>((used * 100ull) / total);
+}
+
+void MediaService::apply_storage_watermark(middleware::PrintVideoSessionPayload& info)
+{
+    const int pct = query_storage_used_pct();
+    if(pct < 0) {
+        print_video_.set_layer_snap_enabled(true);
         return;
     }
 
-    for(const auto& ent : std::filesystem::directory_iterator(CAMERA_PRINT_VIDEO_OUT_DIR, ec)) {
-        if(ec) {
-            break;
-        }
-        if(!ent.is_directory(ec) || ec) {
-            continue;
-        }
-        const std::string dir_name = ent.path().filename().string();
-        if(dir_name.find(".__work_pv") == std::string::npos) {
-            continue;
-        }
-        if(keep_frames_dirs.find(dir_name) != keep_frames_dirs.end()) {
-            continue;
-        }
+    if(pct >= static_cast<int>(MEDIA_STORAGE_CRITICAL_PCT)) {
+        UPC_LOG_MEDIA_SERVICE(Warn,
+            "storage critical used=%d%%: force clear tmp/legacy", pct);
+        clear_video_tmp_dir();
+        remove_legacy_work_dirs();
+        drop_orphan_pending_flags();
+    }
 
-        std::error_code rm_ec;
-        const uintmax_t removed = std::filesystem::remove_all(ent.path(), rm_ec);
-        if(rm_ec) {
-            UPC_LOG_MEDIA_SERVICE(Warn,
-                "pre-print work cleanup fail dir=%s err=%s",
-                ent.path().c_str(), rm_ec.message().c_str());
-        } else {
-            UPC_LOG_MEDIA_SERVICE(Info,
-                "pre-print work cleanup removed dir=%s files=%llu",
-                ent.path().c_str(),
-                static_cast<unsigned long long>(removed));
-        }
+    if(pct >= static_cast<int>(MEDIA_STORAGE_WARN_PCT)) {
+        UPC_LOG_MEDIA_SERVICE(Warn,
+            "storage warn used=%d%%: disable h264 + layer snap this session",
+            pct);
+        info.h264_continuous_on = 0;
+        print_video_.set_layer_snap_enabled(false);
+    } else {
+        print_video_.set_layer_snap_enabled(true);
     }
 }
 

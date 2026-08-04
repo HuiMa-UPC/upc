@@ -20,7 +20,7 @@ namespace upc::media {
  * - 媒体消费线程只拷贝 NV12 入队；后台 worker 实时喂给 RKMPP 编码器
  * - 直接输出 print.h264（H264 裸流）
  * - 写盘队列满时丢帧保预览，不阻塞媒体流消费
- * - 输出目录：/home/video/{job_name}.__work_{session}/print.h264
+ * - 输出目录：/home/media/video/tmp/print.h264
  */
 class PrintH264Recorder {
 public:
@@ -36,7 +36,8 @@ public:
     void on_session_abort(const middleware::PrintVideoSessionPayload& info);
     void set_paused(bool paused);
     void on_frame_nv12(const uint8_t* src_y, const uint8_t* src_uv, uint32_t stride_y);
-    void enqueue_cleanup_for_session(const char* job_name, const char* session_id);
+    /** 清理固定临时目录内残留的 print.h264 / print_h264.mp4 */
+    void enqueue_cleanup_tmp();
 
 private:
     enum class JobKind : uint8_t {

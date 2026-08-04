@@ -55,6 +55,8 @@ public:
     bool commit_after_exit(const char* frames_dir);
     /** 结果页退出后触发：按目录内 PNG 统一合成/更新最终 MP4。 */
     void finalize_after_exit(const char* frames_dir);
+    /** 磁盘紧张时跳过本会话层间拍照（仍允许会话结束发 manifest）。 */
+    void set_layer_snap_enabled(bool enabled);
     void set_sender_module_id(middleware::ModuleId module_id);
 
     /**
@@ -73,7 +75,7 @@ private:
     /** 委托 timelapse_util：dma32 + importbuffer_fd 生成 RTHM 缩略图 */
     bool create_raw_thumb_from_nv12(const std::vector<uint8_t>& nv12,
                                     const char* out_path) const;
-    /** 完成目录落盘后 upsert /home/video/manifest.json；true=已原子替换成功 */
+    /** 完成目录落盘后 upsert /home/media/video/config.json；true=已原子替换成功 */
     bool upsert_print_history(bool aborted,
                               const std::string& frames_dir_name,
                               const std::string& thumb_name,
@@ -92,7 +94,6 @@ private:
     std::string frame_png_path(uint32_t frame_index) const;
     static bool mkdir_p(const char* path);
     static std::string sanitize_filename(const char* name);
-    static std::string sanitize_session_token(const char* token);
     static int run_shell_cmd(const char* cmd, const char* log_tag);
 
     std::mutex              mtx_;
@@ -104,6 +105,7 @@ private:
     std::function<bool(std::vector<uint8_t>&)> snapshot_provider_;
 
     bool     session_active_ = false;
+    bool     layer_snap_enabled_ = true; /**< false=磁盘水位告警，跳过层拍 */
     bool     h264_continuous_on_ = false; /**< Session_Start 时的打印期 H264 开关快照 */
     uint32_t stream_width_   = CAMERA_WIDTH_DEFAULT;
     uint32_t stream_height_  = CAMERA_HEIGHT_DEFAULT;

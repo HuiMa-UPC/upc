@@ -25,16 +25,6 @@ namespace {
 constexpr const char* kH264Name = "print.h264";
 constexpr size_t kMaxPendingFrameJobs = 3u;
 
-std::string sanitize_session_token(const char* token) {
-    if(!token || !token[0]) return {};
-    std::string out(token);
-    for(char& c : out) {
-        const unsigned char uc = static_cast<unsigned char>(c);
-        if(!std::isalnum(uc) && c != '_' && c != '-' && c != '.') c = '_';
-    }
-    return out;
-}
-
 void copy_nv12_tight(uint8_t* dst, const uint8_t* src_y, const uint8_t* src_uv,
                      uint32_t src_stride_y, uint32_t width, uint32_t height) {
     const size_t y_size = static_cast<size_t>(width) * height;
@@ -59,11 +49,8 @@ bool remove_empty_dir_if_exists(const std::string& dir) {
     return std::filesystem::remove(dir, ec);
 }
 
-std::string build_session_work_dir(const std::string& session_name,
-                                   const char* session_id) {
-    const std::string token = sanitize_session_token(session_id);
-    return std::string(CAMERA_PRINT_VIDEO_OUT_DIR) + "/" + session_name +
-           ".__work_" + (token.empty() ? "session" : token);
+std::string build_video_tmp_dir() {
+    return UPC_VIDEO_TMP;
 }
 
 } // namespace
@@ -256,15 +243,15 @@ void PrintH264Recorder::on_session_start(const middleware::PrintVideoSessionPayl
     ++session_seq_;
     session_id_ = info.session_id;
     session_name_ = sanitize_filename(info.job_name);
-    session_dir_ = build_session_work_dir(session_name_, info.session_id);
+    session_dir_ = build_video_tmp_dir();
     h264_path_ = session_dir_ + "/" + kH264Name;
     if(info.width > 0) width_ = info.width;
     if(info.height > 0) height_ = info.height;
     if(info.layer_fps > 0) fps_ = info.layer_fps;
 
+    /* 与 PrintVideoRecorder 共用 tmp/：不在此 remove_all，避免清掉层间 PNG。
+     * Media 在 Session Start 前已 recover+清空 tmp。 */
     std::error_code ec;
-    std::filesystem::remove_all(session_dir_, ec);
-    ec.clear();
     std::filesystem::create_directories(session_dir_, ec);
     if(ec) return;
     active_ = true;
@@ -324,14 +311,12 @@ void PrintH264Recorder::on_frame_nv12(const uint8_t* src_y, const uint8_t* src_u
     cv_.notify_one();
 }
 
-void PrintH264Recorder::enqueue_cleanup_for_session(const char* job_name, const char* session_id) {
-    const std::string dir =
-        build_session_work_dir(sanitize_filename(job_name), session_id);
+void PrintH264Recorder::enqueue_cleanup_tmp() {
     std::lock_guard<std::mutex> lock(mtx_);
     start_worker_if_needed_locked();
     Job job{};
     job.kind = JobKind::Cleanup;
-    job.cleanup_dir = dir;
+    job.cleanup_dir = build_video_tmp_dir();
     jobs_.push_back(std::move(job));
     cv_.notify_one();
 }

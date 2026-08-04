@@ -12,6 +12,8 @@
 | `ui_msg_proxy` | UI ↔ Glavo MsgBus 封装（send / register） |
 | `camera_msg_proxy` | UI ↔ Camera 预览开停 IPC |
 | `camera_preview` | SHM 消费、RGA/SW NV12→BGRX、三缓冲 + lv_image 显示 |
+| `video_player` | MP4 软解播放；拖动预览缩小帧 + scrub 世代丢弃 |
+| `png_scrub_preview` | PNG 拖动预览异步解码（libpng → 小图 RGB565） |
 | `rga_dma_buf` | Linux dma heap（优先 dma32）RAII，供 RGA fd 导入 |
 | `control` | 打印流程：状态机、步骤 overlay、后端异步适配（`control.cpp`） |
 | `lvgl_wrap.hpp` | LVGL 统一 include |

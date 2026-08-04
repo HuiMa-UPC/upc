@@ -11,7 +11,7 @@
 | `main.cpp` | IPC Server、`CameraService` 生命周期、`process(2)` 循环 |
 | `lib/camera_service.*` | 流控 IPC、dma fd 元数据环推流、录像消息分派 |
 | `lib/vi_capture.*` | rkaiq ISP + V4L2 NV12 采集 |
-| `../media/lib/print_video_recorder.*` | 元数据环取帧 → ffmpeg 软编 PNG → `/home/video/{job_ts}/1.png...` + `.rthm` |
+| `../media/lib/print_video_recorder.*` | 元数据环取帧 → ffmpeg 软编 PNG → `/home/media/video/tmp/` + `.rthm` |
 | `../media/lib/print_h264_recorder.*` | 预览 NV12 异步入队写 raw（队列满丢帧保预览）；结束/终止后 worker 转码 `print.h264` |
 | `../media/lib/clean_video_recorder.*` | 清粉延时抽帧：按 `TIMELAPSE_VIDEO_FPS` 写接续 PNG，成功后重建 `timelapse.mp4`+`thumb.rthm` 并删除清粉 PNG |
 | `lib/device_config.hpp` | 设备、分辨率、IQ、SHM、录像路径宏 |
@@ -42,6 +42,24 @@ Sensor → rkaiq ISP → /dev/video0 (NV12)
 - `PrintVideoRecorder` 也改为通过 fd + mmap 读取最新帧。
 - 参考 `doc/rv1106` ISP 初始化；当前无 Rockit VENC，不经 MPI 预览。
 
+### 媒体落盘根目录
+
+```
+/home/media/
+  photo/          相册 PNG + .rthm
+  video/
+    config.json   打印历史清单（延时 + 可选打印录像）
+    tmp/          唯一打印中临时目录（开打前/开机清空）
+    {job}/        正式会话产物
+```
+
+旧路径 `/home/photo`、`/home/video`（及 `manifest.json`）在 Media 启动时自动迁入（若新路径尚不存在）。
+遗留 `{job}.__work_*` 也会在开机/开打前清理。
+
+存储水位（`statvfs(/home/media)`）：
+- ≥90%：本会话停 H264、跳过层间拍照
+- ≥95%：强制清空 `tmp/` 与遗留 `__work_*`
+
 ### 打印录像
 
 ```
@@ -49,16 +67,17 @@ Glavo Snap IPC → PrintVideoRecorder worker
   → `IpcDmaFrameRingConsumer::acquire_latest_frame` 拿到 `buffer_idx`
   → 通过 fd 回调 `mmap` 取 NV12（如 stride 有 padding 会按 active width 解压）
   → ffmpeg 软编 PNG（连续编号 1.png,2.png,...）
-      → /home/video/{job}_{YYYYMMDD_HHMMSS}/
+      → /home/media/video/tmp/
   → finish/abort
   → 缩略图：dma32 + RGA importbuffer_fd 生成 thumb.rthm（失败则无缩略图）
-  → upsert /home/video/manifest.json（status=complete|terminated）
+  → upsert /home/media/video/config.json（frames_dir=tmp，status=complete|terminated）
   → APP_Print_Video_Manifest_Ntf → UI（切打印结果页）
+  → 结果页退出 finalize：tmp → {job}/，合成 timelapse.mp4 / print_h264.mp4
 ```
 
-0 帧时不生成层间产物、不写 manifest，但**仍会发** `APP_Print_Video_Manifest_Ntf`
+0 帧时不生成层间产物、不写清单，但**仍会发** `APP_Print_Video_Manifest_Ntf`
 （`has_entry=0` + `aborted` 标志），否则 UI 会永远停在打印中界面下不来。
-此时**不** `remove_all` 会话目录，以免误删同目录下正在后台转码的 `print_raw.nv12` / `print.h264`。
+此时仅删除**空**的 `tmp/`，以免误删同目录下正在写入的 `print.h264`。
 
 ### 打印连续 H264（调试开关）
 
@@ -72,7 +91,7 @@ Glavo Snap IPC → PrintVideoRecorder worker
 与层间 `PrintVideoRecorder` worker 并行；结果页仍只等层间 Manifest，不依赖 H264 编完。
 磁盘跟不上时录像可能丢帧（日志 `print_h264 queue full drop=...`），优先保证预览不卡死。
 
-`manifest.json` 由 Camera 独写；字段含 `job_name` / `start_unix` / `duration_sec` / `material_g` / `status` / `frames_dir` / `thumb`。UI 历史页直读该文件（解析见 `common/fs_manifest/print_history_manifest.*`）。
+`config.json` 由 Media 独写；字段含 `job_name` / `start_unix` / `duration_sec` / `material_g` / `status` / `frames_dir` / `thumb`。UI 历史页直读该文件（解析见 `common/fs_manifest/print_history_manifest.*`）。
 
 Snap 依赖预览流已开（同一 SHM）；与 UI 解码线程共享 ring，偶发 `snap miss` 见日志。
 
@@ -89,7 +108,7 @@ Snap 依赖预览流已开（同一 SHM）；与 UI 解码线程共享 ring，�
 | `VISUAL_Camera_Stream_Stop_Req` | Visual 停流（仅移除 Visual 会话） |
 | `MEDIA_Camera_Stream_Start_Req` | Media 并行取流（独立 SHM `/upc_camera_preview_media`） |
 | `MEDIA_Camera_Stream_Stop_Req` | Media 停流（仅移除 Media 会话） |
-| `UI_Camera_Snapshot_Req` | **Media** 保存当前预览帧 PNG + 配对 `.rthm` 缩略图到 `/home/photo` |
+| `UI_Camera_Snapshot_Req` | **Media** 保存当前预览帧 PNG + 配对 `.rthm` 缩略图到 `/home/media/photo` |
 | `APP_Print_Video_Session_*` | **Media** 处理打印录像会话、生成缩略图/MP4/manifest |
 | `APP_Clean_Video_Session_*` | **Media** 处理清粉延时抽帧（接续 PNG → 合并 `timelapse.mp4`） |
 | `APP_Print_Video_Manifest_Ntf` | **Media→UI**：manifest `rename()` 成功后发（0 帧也必发） |
@@ -108,12 +127,12 @@ Glavo→Media 经 Broker 转发；`sender_id` 仍为 `APP_GLAVO`（见 IPC.md）
 | IQ | `/home/wpcam_NC_NC.json` | `UPC_CAMERA_IQ_DIR` / `UPC_CAMERA_IQ_FILE` |
 | V4L2 缓冲 | 4 | `CAMERA_V4L2_BUF_COUNT` |
 | SHM 槽位 | 6 | `CAMERA_SHM_SLOT_COUNT`（UI/Snap 双消费；过小易 `slot release timeout`） |
-| 录像输出 | `/home/video/{job}_{YYYYMMDD_HHMMSS}/{1..N}.png` | `CAMERA_PRINT_VIDEO_OUT_DIR` |
-| 缩略图 | `/home/video/{job}_{YYYYMMDD_HHMMSS}/thumb.rthm` | `CAMERA_PRINT_VIDEO_THUMB_EXT` |
+| 录像输出 | `/home/media/video/tmp/`（打印中）→ finalize 后 `/home/media/video/{job}/` | `UPC_VIDEO_TMP` / `CAMERA_PRINT_VIDEO_OUT_DIR` |
+| 缩略图 | `{dir}/thumb.rthm` | `CAMERA_PRINT_VIDEO_THUMB_EXT` |
 | 缩略图最大宽 | 240 | `CAMERA_PRINT_VIDEO_THUMB_MAX_W` |
-| 拍照原图 | `/home/photo/photo_{stamp}_{WxH}.png` | Media `save_latest_png_snapshot` |
-| 拍照缩略图 | `/home/photo/photo_{stamp}_{WxH}.rthm`（同帧 NV12→dma32+RGA） | 同上；失败不影响 PNG |
-| 历史清单 | `/home/video/manifest.json` | `UPC_PRINT_VIDEO_MANIFEST` |
+| 拍照原图 | `/home/media/photo/photo_{stamp}_{WxH}.png` | Media `save_latest_png_snapshot` |
+| 拍照缩略图 | `/home/media/photo/photo_{stamp}_{WxH}.rthm`（同帧 NV12→dma32+RGA） | 同上；失败不影响 PNG |
+| 历史清单 | `/home/media/video/config.json` | `UPC_VIDEO_CONFIG` |
 | ffmpeg | `/usr/bin/ffmpeg` | `CAMERA_FFMPEG_BIN` |
 
 SHM 元数据环：`stride_y` 为 V4L2 实际 Y stride（dma 模式），`buffer_idx` 指向 fd 表；像素走 dma fd。

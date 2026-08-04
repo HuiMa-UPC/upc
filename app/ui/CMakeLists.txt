@@ -86,6 +86,22 @@ else()
     target_compile_definitions(${UI_TARGET} PRIVATE UPC_UI_HAS_LIBAV=0)
 endif()
 
+# PNG 拖动预览异步解码（png_scrub_preview）
+if(CMAKE_SYSROOT)
+    find_library(UPC_UI_PNG NAMES png
+        PATHS ${CMAKE_SYSROOT}/usr/lib ${CMAKE_SYSROOT}/lib NO_DEFAULT_PATH)
+else()
+    find_library(UPC_UI_PNG NAMES png)
+endif()
+if(UPC_UI_PNG)
+    message(STATUS "ui: linking libpng for png scrub preview ${UPC_UI_PNG}")
+    target_link_libraries(${UI_TARGET} PRIVATE ${UPC_UI_PNG})
+    target_compile_definitions(${UI_TARGET} PRIVATE UPC_UI_HAS_LIBPNG=1)
+else()
+    message(WARNING "ui: libpng not found — PNG scrub falls back to throttled sync decode")
+    target_compile_definitions(${UI_TARGET} PRIVATE UPC_UI_HAS_LIBPNG=0)
+endif()
+
 target_compile_options(${UI_TARGET}
     PRIVATE
         -Wall -Wextra

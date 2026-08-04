@@ -876,10 +876,10 @@ ui_arc_spinner_t *g_door_spinner = nullptr;
 /* 门流程节奏：让 Opening / DoorOpened 两个中间态"看得见"——避免后端即时应答导致一闪而过。
  *   - Opening：最短停留后再前进；
  *   - DoorOpened：最短停留后开始"关门检测"轮询，检测到门已关才进 DoorClosed。 */
-constexpr uint32_t DOOR_OPENING_MIN_MS = 1500u;   /**< "正在准备开门"最短显示 */
-constexpr uint32_t DOOR_OPENED_MIN_MS  = 1500u;   /**< "门已开启(置灰)"最短显示后才开始检测 */
+constexpr uint32_t DOOR_OPENING_MIN_MS = 300u;    /**< "正在准备开门"最短显示 */
+constexpr uint32_t DOOR_OPENED_MIN_MS  = 300u;    /**< "门已开启(置灰)"最短显示后才开始检测 */
 constexpr uint32_t DOOR_CLOSE_POLL_MS  = 800u;    /**< 关门检测轮询间隔 */
-constexpr uint32_t CLEAN_MIN_MS        = 1500u;   /**< "正在清粉中"最短显示 */
+constexpr uint32_t CLEAN_MIN_MS        = 300u;    /**< "正在清粉中"最短显示 */
 constexpr uint32_t DOOR_OPEN_RETRY_MS  = 800u;    /**< 开门失败重试间隔 */
 /* 转运盒三步的占位节奏。后端目前没有「盒到位 / 转移完成」信号（契约里一个都没有），
  * 先用定时器把两处等待假出来；信号就位后 BOX_READY_MS 换成到位轮询，BOX_MOVE_MS 换成
@@ -3145,7 +3145,7 @@ void pf_on_print_done(void * /*u*/)
 }
 
 /**
- * Camera 写完 /home/video/manifest.json → 切打印结果页。
+ * Media 写完 /home/media/video/config.json → 切打印结果页。
  * has_entry=1 时以 manifest 条目为权威（status/耗时/耗材）；
  * has_entry=0（0 帧未落盘）时退回用 payload.aborted 判定，统计值显示 "--"。
  */
