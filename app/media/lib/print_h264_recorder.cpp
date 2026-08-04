@@ -90,6 +90,7 @@ void PrintH264Recorder::reset_session_state_locked() {
     had_write_error_ = false;
     frame_count_ = 0;
     dropped_frames_ = 0;
+    bitrate_bps_ = CAMERA_PRINT_H264_BITRATE;
     clear_session_paths_locked();
 }
 
@@ -160,7 +161,9 @@ bool PrintH264Recorder::open_encoder_locked() {
 
     (void)mpi->control(ctx, MPP_ENC_GET_CFG, cfg);
     const int fps = static_cast<int>(std::max(1u, fps_));
-    const int bps = static_cast<int>(CAMERA_PRINT_H264_BITRATE);
+    const uint32_t use_bps =
+        bitrate_bps_ > 0 ? bitrate_bps_ : CAMERA_PRINT_H264_BITRATE;
+    const int bps = static_cast<int>(use_bps);
     mpp_enc_cfg_set_s32(cfg, "prep:width", static_cast<int>(width_));
     mpp_enc_cfg_set_s32(cfg, "prep:height", static_cast<int>(height_));
     mpp_enc_cfg_set_s32(cfg, "prep:hor_stride", static_cast<int>(width_));
@@ -177,6 +180,9 @@ bool PrintH264Recorder::open_encoder_locked() {
     mpp_mpi_ = mpi;
     mpp_cfg_ = cfg;
     mpp_ready_ = true;
+    UPC_LOG_MEDIA_SERVICE(Info,
+        "print_h264 encoder open %ux%u@%d bps=%d",
+        width_, height_, fps, bps);
     return true;
 #endif
 }
@@ -247,7 +253,9 @@ void PrintH264Recorder::on_session_start(const middleware::PrintVideoSessionPayl
     h264_path_ = session_dir_ + "/" + kH264Name;
     if(info.width > 0) width_ = info.width;
     if(info.height > 0) height_ = info.height;
-    if(info.layer_fps > 0) fps_ = info.layer_fps;
+    /* 编码帧率以相机开流为准（set_stream_geometry），勿用 layer_fps（延时摄影）覆盖 */
+    bitrate_bps_ = info.h264_bitrate > 0 ? info.h264_bitrate
+                                         : CAMERA_PRINT_H264_BITRATE;
 
     /* 与 PrintVideoRecorder 共用 tmp/：不在此 remove_all，避免清掉层间 PNG。
      * Media 在 Session Start 前已 recover+清空 tmp。 */
@@ -255,6 +263,9 @@ void PrintH264Recorder::on_session_start(const middleware::PrintVideoSessionPayl
     std::filesystem::create_directories(session_dir_, ec);
     if(ec) return;
     active_ = true;
+    UPC_LOG_MEDIA_SERVICE(Info,
+        "print_h264 session start id=%s bps=%u %ux%u@%u",
+        session_id_.c_str(), bitrate_bps_, width_, height_, fps_);
 }
 
 void PrintH264Recorder::set_paused(bool paused) {

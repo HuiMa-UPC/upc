@@ -45,9 +45,9 @@
 #define CAMERA_MPI_ENC_BIN  "/usr/bin/mpi_enc_test"
 #endif
 
-/** 打印期连续 H264 默认码率（bps）：在“极限小”和“中等画质”间折中 */
+/** 打印期连续 H264 默认码率（bps）：中等画质；可被 cal.csv PRINT_H264_BITRATE 覆盖 */
 #ifndef CAMERA_PRINT_H264_BITRATE
-#define CAMERA_PRINT_H264_BITRATE  1800000u
+#define CAMERA_PRINT_H264_BITRATE  2500000u
 #endif
 
 /** 层帧率：UI 延时摄影序列播放默认帧率；合成默认亦为此值（可被 cal.csv TIMELAPSE_VIDEO_FPS 覆盖） */

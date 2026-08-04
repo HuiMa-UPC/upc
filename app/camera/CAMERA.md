@@ -90,6 +90,7 @@ Glavo Snap IPC → PrintVideoRecorder worker
 
 与层间 `PrintVideoRecorder` worker 并行；结果页仍只等层间 Manifest，不依赖 H264 编完。
 磁盘跟不上时录像可能丢帧（日志 `print_h264 queue full drop=...`），优先保证预览不卡死。
+CBR 码率默认中等（`CAMERA_PRINT_H264_BITRATE`=2.5Mbps）；可由 `cal.csv` Config 段 `PRINT_H264_BITRATE`（500000–8000000）覆盖，经 `PrintVideoSessionPayload.h264_bitrate` 下发。
 
 `config.json` 由 Media 独写；字段含 `job_name` / `start_unix` / `duration_sec` / `material_g` / `status` / `frames_dir` / `thumb`。UI 历史页直读该文件（解析见 `common/fs_manifest/print_history_manifest.*`）。
 

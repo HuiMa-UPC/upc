@@ -713,6 +713,7 @@ struct PrintVideoSessionPayload {
     uint32_t layer_fps;      /**< MP4 层帧率；0=默认 */
     uint8_t  h264_continuous_on; /**< 1=本次打印会话启用连续 H264 录制 */
     uint8_t  reserved[3];
+    uint32_t h264_bitrate;   /**< 连续 H264 CBR 码率（bps）；0=Media 默认（cal PRINT_H264_BITRATE / 中等） */
 };
 
 /** GLAVO→CAMERA 单层拍照（换层排空后、LAYER_DONE 前） */

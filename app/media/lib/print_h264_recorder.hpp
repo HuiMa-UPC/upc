@@ -92,6 +92,7 @@ private:
     uint32_t width_ = CAMERA_WIDTH_DEFAULT;
     uint32_t height_ = CAMERA_HEIGHT_DEFAULT;
     uint32_t fps_ = CAMERA_FPS_DEFAULT;
+    uint32_t bitrate_bps_ = CAMERA_PRINT_H264_BITRATE;
     uint32_t frame_count_ = 0;
     uint32_t dropped_frames_ = 0;
 

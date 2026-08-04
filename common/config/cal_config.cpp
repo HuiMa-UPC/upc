@@ -201,6 +201,14 @@ bool load_cal_config_options(const char* path, CalConfigOptions* out)
             }
             continue;
         }
+        if(key_upper == "PRINT_H264_BITRATE") {
+            uint32_t v = 0;
+            if(parse_uint_like(value, &v) && v >= 500000u && v <= 8000000u) {
+                out->has_print_h264_bitrate = true;
+                out->print_h264_bitrate = v;
+            }
+            continue;
+        }
     }
 
     std::fclose(fp);

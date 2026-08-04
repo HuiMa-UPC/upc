@@ -30,6 +30,10 @@ struct CalConfigOptions {
     /** 延时摄影 / 清粉抽帧与 MP4 合成帧率（fps）；1–30，缺省由业务侧回退 */
     bool has_timelapse_video_fps = false;
     uint32_t timelapse_video_fps = 0;
+
+    /** 打印期连续 H264 目标码率（bps）；500000–8000000，缺省由业务侧回退中等画质 */
+    bool has_print_h264_bitrate = false;
+    uint32_t print_h264_bitrate = 0;
 };
 
 /** 默认校准文件路径（部署路径） */

@@ -61,6 +61,11 @@ void PrintVideoNotify::set_timelapse_fps(uint32_t fps)
     layer_fps_ = fps;
 }
 
+void PrintVideoNotify::set_print_h264_bitrate(uint32_t bitrate_bps)
+{
+    h264_bitrate_ = bitrate_bps;
+}
+
 void PrintVideoNotify::reset_session_state()
 {
     active_        = false;
@@ -102,12 +107,14 @@ void PrintVideoNotify::on_print_start(const std::string& job_path)
     std::snprintf(p.job_name, sizeof(p.job_name), "%s", job_name_);
     p.layer_fps = layer_fps_;
     p.h264_continuous_on = print_h264_continuous_on_ ? 1 : 0;
+    p.h264_bitrate = h264_bitrate_;
 
     publish_to_camera(middleware::MsgType::APP_Print_Video_Session_Start_Ntf,
                       &p, sizeof(p));
-    UPC_LOG_GLAVO_SERVICE(Info, "print_video session start id=%s job=%s h264=%d layer_fps=%u",
-                          session_id_, job_name_,
-                          print_h264_continuous_on_ ? 1 : 0, layer_fps_);
+    UPC_LOG_GLAVO_SERVICE(Info,
+        "print_video session start id=%s job=%s h264=%d layer_fps=%u h264_bps=%u",
+        session_id_, job_name_,
+        print_h264_continuous_on_ ? 1 : 0, layer_fps_, h264_bitrate_);
 }
 
 void PrintVideoNotify::on_layer_snap(uint16_t layer_height_um)

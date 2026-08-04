@@ -210,6 +210,7 @@ private:
     bool door_real_close_check_enabled_ = (GLAVO_DOOR_REAL_CLOSE_CHECK_ENABLE != 0);
     float pm25_clean_threshold_ = 50.0f;
     uint32_t timelapse_video_fps_ = 0; /**< 0=Media 默认；来自 cal.csv TIMELAPSE_VIDEO_FPS */
+    uint32_t print_h264_bitrate_ = 0; /**< 0=Media 默认中等；来自 cal.csv PRINT_H264_BITRATE */
     std::thread clean_worker_;
     std::atomic<bool> clean_running_{false};
     std::atomic<bool> clean_cancel_requested_{false};

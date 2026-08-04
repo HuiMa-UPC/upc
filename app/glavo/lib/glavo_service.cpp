@@ -317,14 +317,18 @@ bool GlavoService::init()
             if(cal_cfg.has_timelapse_video_fps) {
                 timelapse_video_fps_ = cal_cfg.timelapse_video_fps;
             }
+            if(cal_cfg.has_print_h264_bitrate) {
+                print_h264_bitrate_ = cal_cfg.print_h264_bitrate;
+            }
         }
         UPC_LOG_GLAVO_SERVICE(Info,
-            "runtime cfg: door_open=%d close_check=%d serial_ack=%d pm25_clean=%.1f timelapse_fps=%u",
+            "runtime cfg: door_open=%d close_check=%d serial_ack=%d pm25_clean=%.1f timelapse_fps=%u h264_bps=%u",
             door_real_open_enabled_ ? 1 : 0,
             door_real_close_check_enabled_ ? 1 : 0,
             McuLink::instance().serial_ack_enabled() ? 1 : 0,
             static_cast<double>(pm25_clean_threshold_),
-            timelapse_video_fps_);
+            timelapse_video_fps_,
+            print_h264_bitrate_);
     }
 
     print_h264_continuous_on_ = false; /* 上电默认关：调试页 Other → Print H264 Rec */
@@ -336,6 +340,7 @@ bool GlavoService::init()
     McuLink::instance().set_env_sim_powder_low(false);
     PrintVideoNotify::instance().set_print_h264_continuous(print_h264_continuous_on_);
     PrintVideoNotify::instance().set_timelapse_fps(timelapse_video_fps_);
+    PrintVideoNotify::instance().set_print_h264_bitrate(print_h264_bitrate_);
     UPC_LOG_GLAVO_SERVICE(Info, "print h264 continuous=%d clean record(debug)=%d env_sim=%d",
                           print_h264_continuous_on_ ? 1 : 0,
                           clean_video_record_on_ ? 1 : 0,
