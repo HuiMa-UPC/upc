@@ -391,7 +391,7 @@ rongsu_camera 经主 IPC（/tmp/upc_camera.sock）SCM_RIGHTS 附带 dma_buf fd �
 
 | 组件 | 文件 | 职责 |
 |------|------|------|
-| `page_user_history` | `pages/page_user_history.*` | 读 `/home/video/manifest.json`（`common/fs_manifest/print_history_manifest`）→ 按 `start_unix` 倒序、按自然日分组的卡片列表；缩略图 `A:/home/video/{thumb}`（RTHM 解码，`LV_IMAGE_ALIGN_COVER`）；顶部三 Tab + Storage 容量条；管理（多选）模式批量删除；上下翻页；**左滑删除**（清除卡片默认 `GESTURE_BUBBLE` 使手势落到卡片）→ 按 `frames_dir` 整条删目录 + 重写 manifest + 只删单卡 |
+| `page_user_history` | `pages/page_user_history.*` | 读 `/home/video/manifest.json`（`common/fs_manifest/print_history_manifest`）→ 按 `start_unix` 倒序、按自然日分组的卡片列表；缩略图 `A:/home/video/{thumb}`（RTHM 解码，`LV_IMAGE_ALIGN_COVER`）；**Album** 扫 `/home/photo/*.png`，缩略图优先同名 `.rthm`；顶部三 Tab + Storage 容量条；管理（多选）模式批量删除；上下翻页；**左滑删除**（清除卡片默认 `GESTURE_BUBBLE` 使手势落到卡片）→ History/Timelapse 按 `frames_dir` 整条删目录 + 重写 manifest；Album 删 PNG + 配对 `.rthm` |
 | `page_user_timelapse` | `pages/page_user_timelapse.*` | 全屏播放页（建于 `lv_layer_top()` 覆盖侧边栏）：按序播放 `/home/video/{job_ts}/1.png...N.png`，顶部标题/时间、右上关闭、中央播放/暂停、底部进度条、点画面显隐控件 |
 
 - **进入/退出**：历史页缩略图点击 → `page_user_timelapse_set_source(目录,mp4路径,标题,时间)` + `switch_to("user_timelapse")`；关闭 → `switch_to("user_history")`。
@@ -408,7 +408,7 @@ rongsu_camera 经主 IPC（/tmp/upc_camera.sock）SCM_RIGHTS 附带 dma_buf fd �
   `N selected + Delete + Select All + Cancel`（都是 `USER_HIST_BTN_W × USER_HIST_TAB_H` 胶囊）。
   两组按钮都上抬 `manage_btn_lift()`（`USER_PAD_SM / 2`）比 Tab 文字略高；按钮高度本就等于行高，
   所以 Tab 行也要 `OVERFLOW_VISIBLE` + `tab_row_ext_draw_cb` 才不被裁掉顶部。
-  行下一条通栏分隔线。**Timelapse / Album 数据源未定义，当前只出空态。**
+  行下一条通栏分隔线。**Album** 数据源为 `/home/photo`（PNG 原图 + 可选同名 `.rthm` 缩略图）。
 - **右缘对齐**：Tab 行 / 告警横幅 / 卡片列表 / Storage 条统一用 `content_right_pad()`
   （= 翻页钮直径 + `USER_PAD × 2`）内缩，四者右缘齐平；调翻页钮尺寸只需改这个函数。
 - **Storage 容量条**：稿里与设备名同排，而页面内容区从常驻条下沿才开始，所以做成 `FLOATING`
@@ -446,11 +446,11 @@ rongsu_camera 经主 IPC（/tmp/upc_camera.sock）SCM_RIGHTS 附带 dma_buf fd �
 |------|------|------|
 | `Layers` | 显示 `--` | manifest 加层数字段（Camera 可取换层 Snap 的最大 `layer_index`） |
 | Storage 容量 | `page_user_history.cpp` 顶部 `kStorageUsedMB/kStorageTotalMB` 常量占位 | 接上报后改 `storage_used_mb()/storage_total_mb()` 两个取数函数即可 |
-| Timelapse / Album | 只有空态 | 数据源定义后在 `rebuild_list()` 里按 Tab 分支 |
+| Timelapse / Album | 已按 Tab 分支：Timelapse 读 manifest；Album 扫 `/home/photo/*.png`（缩略图优先 `.rthm`） | — |
 
 ### LVGL 配置依赖（`3rdparty/.../configs/rongsu_ui.defaults`）
 - `LV_USE_TJPGD=1`：历史缩略图 baseline JPEG 解码
-- `LV_USE_FS_POSIX=1` + `LV_FS_POSIX_LETTER='A'`：按路径加载 `/home/video` 图片（`"A:/home/video/x.png"` / `"A:/home/video/x.rthm"`）
+- `LV_USE_FS_POSIX=1` + `LV_FS_POSIX_LETTER='A'`：按路径加载 `/home/video`、`/home/photo` 图片（`"A:/home/video/x.rthm"` / `"A:/home/photo/x.rthm"`）
 - lvgl 目标加 `_DEFAULT_SOURCE`（`3rdparty/.../CMakeLists.txt`）：修 FS 驱动 `DT_DIR` 在 `_POSIX_C_SOURCE` 下不可见的编译错误
 - 缩略图 `toast` 与播放器同建于 `lv_layer_top()`，全屏时提示可见
 

@@ -7,7 +7,7 @@
 
 namespace upc::media {
 
-/** 延时摄影 / 清粉共用：NV12→PNG、PNG→MP4、RTHM 缩略图、PNG 序号扫描与清理。 */
+/** 延时摄影 / 清粉共用：NV12→PNG、PNG→MP4、RTHM 缩略图（dma32+RGA）、PNG 序号扫描与清理。 */
 namespace timelapse_util {
 
 std::string sanitize_filename(const char* name);
@@ -30,6 +30,9 @@ bool encode_png_sequence_to_mp4(const std::string& session_dir,
 /** 将 print.h264 裸流封装为 MP4（无音频）。 */
 bool remux_h264_to_mp4(const char* h264_path, uint32_t fps, const char* out_path);
 
+/**
+ * NV12→RTHM：dma-heap(dma32) + importbuffer_fd，与 UI 预览同路径；禁止堆 VA。
+ */
 bool create_raw_thumb_from_nv12(const std::vector<uint8_t>& nv12,
                                 uint32_t width, uint32_t height,
                                 const char* out_path);

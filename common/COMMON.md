@@ -185,7 +185,7 @@ scripts/rongsu.sh start   # glavo + rongsu_camera → ui
 | `UI_Camera_Stream_Stop_Req` | — | UI→Camera | Empty | `send_stream_stop` | 关预览 |
 | `APP_Camera_Stream_Stop_Done` | — | Camera→UI | Empty | `register_stream_stop_done` | — |
 | `APP_Camera_Frame_Ntf` | — | Camera→UI | `CameraFrameNtfPayload` | （可选） | 帧序号；默认关 |
-| `UI_Camera_Snapshot_Req` | — | UI→Media | Empty | `send_snapshot_req` | 存当前帧 PNG 到 `/home/photo` |
+| `UI_Camera_Snapshot_Req` | — | UI→Media | Empty | `send_snapshot_req` | 存当前帧 PNG + 配对 `.rthm` 缩略图到 `/home/photo` |
 | `APP_Camera_Snapshot_Rsp` | — | Media→UI | `CameraSnapshotRspPayload` | `register_snapshot_rsp` | — |
 | `UI_Storage_Usage_Req` | — | UI→Media | Empty | （历史页直接发总线） | 历史页进入时请求一次容量统计（used/total） |
 | `APP_Storage_Usage_Rsp` | — | Media→UI | `StorageUsagePayload` | （历史页直接订阅总线） | 返回 `/home/video` 所在分区已用/总容量，刷新右上角 Storage |
@@ -333,7 +333,8 @@ rongsu_broker ──listen──► /tmp/upc_broker.sock ◄── UI / Glavo / 
 | `ipc_reg.*` | connect 后 reg 帧与上下线 notify |
 | `dma_heap_buffer.*` | dma-heap 单个缓冲区分配 |
 
-`dma_heap_buffer.*` 同时被 UI `RgaDmaBuf` 与 camera `CameraDmaFrameSource` 复用，避免各自维护 dma-heap 候选列表。
+`dma_heap_buffer.*` 同时被 UI `RgaDmaBuf`、camera `CameraDmaFrameSource` 与 Media
+`timelapse_util::create_raw_thumb_from_nv12`（RTHM 缩略图）复用，避免各自维护 dma-heap 候选列表。
 
 **契约勿随意改**：`upc_contract.hpp`、本文档消息总表
 

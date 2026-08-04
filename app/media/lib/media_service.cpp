@@ -4,6 +4,7 @@
 #include "device_config.hpp"
 #include "print_history_manifest.hpp"
 #include "rs_log.hpp"
+#include "timelapse_util.hpp"
 
 #include <chrono>
 #include <cctype>
@@ -488,10 +489,13 @@ bool MediaService::save_latest_png_snapshot(std::string& out_path) const
     }
 
     const std::string stamp = format_stamp_local();
-    const std::string name = "photo_" + stamp + "_" +
+    const std::string stem = "photo_" + stamp + "_" +
                              std::to_string(stream_width_) + "x" +
-                             std::to_string(stream_height_) + ".png";
-    const std::string out_png_path = std::string(kPhotoOutDir) + "/" + name;
+                             std::to_string(stream_height_);
+    const std::string out_png_path =
+        std::string(kPhotoOutDir) + "/" + stem + ".png";
+    const std::string out_rthm_path =
+        std::string(kPhotoOutDir) + "/" + stem + CAMERA_PRINT_VIDEO_THUMB_EXT;
     const std::string tmp_nv12_path =
         "/tmp/media_snapshot_" + stamp + "_" + std::to_string(monotonic_us()) + ".nv12";
 
@@ -517,6 +521,15 @@ bool MediaService::save_latest_png_snapshot(std::string& out_path) const
     if(!png_ok) {
         return false;
     }
+
+    /* 与延时/打印录像一致：同帧 NV12→RTHM 缩略图；失败不影响拍照成功 */
+    (void)std::remove(out_rthm_path.c_str());
+    if(!timelapse_util::create_raw_thumb_from_nv12(
+           nv12, stream_width_, stream_height_, out_rthm_path.c_str())) {
+        UPC_LOG_MEDIA_SERVICE(Warn, "snapshot thumb failed path=%s",
+                              out_rthm_path.c_str());
+    }
+
     out_path = out_png_path;
     UPC_LOG_MEDIA_SERVICE(Info, "snapshot saved path=%s", out_path.c_str());
     return true;

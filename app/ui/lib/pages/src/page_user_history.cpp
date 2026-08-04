@@ -409,7 +409,7 @@ void card_gesture_cb(lv_event_t *e)
  *  History / Timelapse：按 frames_dir 整条删除（会话目录内延时摄影 + 打印录像
  *  + 缩略图 + PNG 一并清掉，并从 manifest 移除该条目）。任一 Tab 删除都会让
  *  另一 Tab 同步消失，避免半删后 rebuild 又把卡片刷回来。
- *  Album：只删对应照片文件。
+ *  Album：删 PNG 原图及其配对 `.rthm` 缩略图。
  * ========================================================================= */
 
 bool remove_file_if_exists(const std::string& abs_path)
@@ -422,6 +422,20 @@ bool remove_file_if_exists(const std::string& abs_path)
         return true;
     }
     return std::filesystem::remove(abs_path, ec);
+}
+
+/** PNG 旁路 RTHM：/home/photo/foo.png → /home/photo/foo.rthm */
+std::string album_companion_rthm(const std::string& photo_abs_path)
+{
+    if(photo_abs_path.empty()) {
+        return {};
+    }
+    const std::filesystem::path p(photo_abs_path);
+    const std::string ext = p.extension().string();
+    if(ext != ".png" && ext != ".PNG") {
+        return {};
+    }
+    return p.parent_path().string() + "/" + p.stem().string() + ".rthm";
 }
 
 /** 删除 /home/video/{frames_dir}/ 整目录；目录本就不存在视为成功 */
@@ -459,6 +473,8 @@ bool remove_cards_with_rollback(const std::vector<HistoryCard*>& cards)
             if(!remove_file_if_exists(c->photo_abs_path)) {
                 return false;
             }
+            /* 配对缩略图可缺省；存在则一并删，避免孤儿 .rthm */
+            (void)remove_file_if_exists(album_companion_rthm(c->photo_abs_path));
             continue;
         }
         if(c->frames_dir.empty()) {
@@ -1496,7 +1512,16 @@ void build_album_entry(lv_obj_t* parent, const std::filesystem::path& path)
     HistoryCard* ctx = new HistoryCard();
     ctx->kind = HistoryCard::Kind::AlbumPhoto;
     ctx->photo_abs_path = path.string();
-    ctx->thumb_src = std::string(kThumbDrive) + ctx->photo_abs_path;
+    /* 优先同名 .rthm（Media 拍照时从 NV12 生成），无则回退原图 */
+    {
+        const std::string rthm = album_companion_rthm(ctx->photo_abs_path);
+        std::error_code ec;
+        if(!rthm.empty() && std::filesystem::exists(rthm, ec) && !ec) {
+            ctx->thumb_src = std::string(kThumbDrive) + rthm;
+        } else {
+            ctx->thumb_src = std::string(kThumbDrive) + ctx->photo_abs_path;
+        }
+    }
     ctx->video_ready = true;
     ctx->video_pending = false;
     ctx->title = path.filename().string();

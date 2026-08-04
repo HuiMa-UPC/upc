@@ -1,6 +1,7 @@
 #include "timelapse_util.hpp"
 
 #include "device_config.hpp"
+#include "dma_heap_buffer.hpp"
 #include "print_history_manifest.hpp"
 #include "raw_thumb_format.hpp"
 #include "rs_log.hpp"
@@ -18,7 +19,12 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <sys/ioctl.h>
 #include <sys/stat.h>
+
+#if defined(UPC_CAMERA_HAS_RGA) && UPC_CAMERA_HAS_RGA
+#include <linux/dma-buf.h>
+#endif
 
 namespace upc::media {
 namespace timelapse_util {
@@ -32,6 +38,27 @@ constexpr int kThumbDstFormat = RK_FORMAT_RGB_565;
 bool rga_status_ok(IM_STATUS st)
 {
     return st == IM_STATUS_SUCCESS || st == IM_STATUS_NOERROR;
+}
+
+void dma_buf_sync(int fd, uint64_t flags)
+{
+    if(fd < 0) {
+        return;
+    }
+    struct dma_buf_sync sync {};
+    sync.flags = flags;
+    (void)ioctl(fd, DMA_BUF_IOCTL_SYNC, &sync);
+}
+
+void log_dma_heap_once(const char* heap_path)
+{
+    static bool logged = false;
+    if(logged) {
+        return;
+    }
+    logged = true;
+    UPC_LOG_MEDIA_SERVICE(Info, "raw thumb RGA dma heap using %s",
+                          heap_path ? heap_path : "?");
 }
 #endif
 
@@ -271,6 +298,10 @@ bool create_raw_thumb_from_nv12(const std::vector<uint8_t>& nv12,
                                 const char* out_path)
 {
 #if defined(UPC_CAMERA_HAS_RGA) && UPC_CAMERA_HAS_RGA
+    /*
+     * 与 UI 预览一致：dma32 heap + importbuffer_fd。
+     * 禁止 wrapbuffer_virtualaddr(std::vector)：RGA2 无法映射 >4G 普通堆。
+     */
     if(width == 0 || height == 0 || nv12.empty() || !out_path || !out_path[0]) {
         return false;
     }
@@ -287,23 +318,6 @@ bool create_raw_thumb_from_nv12(const std::vector<uint8_t>& nv12,
             "raw thumb geometry too large w=%u h=%u", width, height);
         return false;
     }
-    const int src_w_i = static_cast<int>(width);
-    const int src_h_i = static_cast<int>(height);
-
-    std::vector<uint8_t> rgb565_full(static_cast<size_t>(width) * height * 2u);
-    rga_buffer_t src_buf = wrapbuffer_virtualaddr(
-        const_cast<uint8_t*>(nv12.data()), src_w_i, src_h_i, kThumbSrcFormat,
-        src_w_i, src_h_i);
-    rga_buffer_t full_buf = wrapbuffer_virtualaddr(
-        rgb565_full.data(), src_w_i, src_h_i, kThumbDstFormat, src_w_i, src_h_i);
-
-    IM_STATUS st = imcvtcolor_t(src_buf, full_buf, kThumbSrcFormat, kThumbDstFormat,
-                                IM_COLOR_SPACE_DEFAULT, 1);
-    if(!rga_status_ok(st)) {
-        UPC_LOG_MEDIA_SERVICE(Warn, "raw thumb rga cvt failed st=%d (%s)",
-                               st, imStrError(st));
-        return false;
-    }
 
     const uint32_t dst_w = clamp_thumb_width(width);
     const uint32_t dst_h = thumb_height_from_width(width, height, dst_w);
@@ -317,23 +331,114 @@ bool create_raw_thumb_from_nv12(const std::vector<uint8_t>& nv12,
             dst_w, dst_h, dst_stride_px);
         return false;
     }
+
+    const size_t full_bytes = static_cast<size_t>(width) * height * 2u;
+    const size_t thumb_bytes = static_cast<size_t>(dst_stride_bytes) * dst_h;
+    const int src_w_i = static_cast<int>(width);
+    const int src_h_i = static_cast<int>(height);
     const int dst_w_i = static_cast<int>(dst_w);
     const int dst_h_i = static_cast<int>(dst_h);
     const int dst_stride_px_i = static_cast<int>(dst_stride_px);
-    std::vector<uint8_t> rgb565_thumb(
-        static_cast<size_t>(dst_stride_bytes) * dst_h);
 
-    rga_buffer_t in_buf = wrapbuffer_virtualaddr(
-        rgb565_full.data(), src_w_i, src_h_i, kThumbDstFormat, src_w_i, src_h_i);
-    rga_buffer_t out_buf = wrapbuffer_virtualaddr(
-        rgb565_thumb.data(), dst_w_i, dst_h_i, kThumbDstFormat,
-        dst_stride_px_i, dst_h_i);
-    st = imresize(in_buf, out_buf);
-    if(!rga_status_ok(st)) {
-        UPC_LOG_MEDIA_SERVICE(Warn, "raw thumb rga resize failed st=%d (%s)",
-                               st, imStrError(st));
+    upc_ipc::DmaHeapBuffer src_dma{};
+    upc_ipc::DmaHeapBuffer full_dma{};
+    upc_ipc::DmaHeapBuffer thumb_dma{};
+    auto free_dmas = [&]() {
+        upc_ipc::dma_heap_free(src_dma);
+        upc_ipc::dma_heap_free(full_dma);
+        upc_ipc::dma_heap_free(thumb_dma);
+    };
+
+    if(!upc_ipc::dma_heap_alloc(need, src_dma) ||
+       !upc_ipc::dma_heap_alloc(full_bytes, full_dma) ||
+       !upc_ipc::dma_heap_alloc(thumb_bytes, thumb_dma)) {
+        UPC_LOG_MEDIA_SERVICE(Warn,
+            "raw thumb dma_heap alloc failed nv12=%zu full=%zu thumb=%zu",
+            need, full_bytes, thumb_bytes);
+        free_dmas();
         return false;
     }
+    log_dma_heap_once(src_dma.heap_path);
+
+    dma_buf_sync(src_dma.fd, DMA_BUF_SYNC_START | DMA_BUF_SYNC_WRITE);
+    std::memcpy(src_dma.va, nv12.data(), need);
+    dma_buf_sync(src_dma.fd, DMA_BUF_SYNC_END | DMA_BUF_SYNC_WRITE);
+
+    rga_buffer_handle_t src_h = importbuffer_fd(src_dma.fd, static_cast<int>(need));
+    rga_buffer_handle_t full_h =
+        importbuffer_fd(full_dma.fd, static_cast<int>(full_bytes));
+    rga_buffer_handle_t thumb_h =
+        importbuffer_fd(thumb_dma.fd, static_cast<int>(thumb_bytes));
+    if(src_h == 0 || full_h == 0 || thumb_h == 0) {
+        UPC_LOG_MEDIA_SERVICE(Warn,
+            "raw thumb importbuffer_fd failed src=%llu full=%llu thumb=%llu",
+            static_cast<unsigned long long>(src_h),
+            static_cast<unsigned long long>(full_h),
+            static_cast<unsigned long long>(thumb_h));
+        if(src_h) {
+            releasebuffer_handle(src_h);
+        }
+        if(full_h) {
+            releasebuffer_handle(full_h);
+        }
+        if(thumb_h) {
+            releasebuffer_handle(thumb_h);
+        }
+        free_dmas();
+        return false;
+    }
+
+    rga_buffer_t src_buf = wrapbuffer_handle(
+        src_h, src_w_i, src_h_i, kThumbSrcFormat, src_w_i, src_h_i);
+    rga_buffer_t full_buf = wrapbuffer_handle(
+        full_h, src_w_i, src_h_i, kThumbDstFormat, src_w_i, src_h_i);
+    rga_buffer_t thumb_buf = wrapbuffer_handle(
+        thumb_h, dst_w_i, dst_h_i, kThumbDstFormat, dst_stride_px_i, dst_h_i);
+
+    const im_rect full_rect{0, 0, src_w_i, src_h_i};
+    IM_STATUS st = imcheck(src_buf, full_buf, full_rect, full_rect);
+    if(!rga_status_ok(st)) {
+        UPC_LOG_MEDIA_SERVICE(Warn, "raw thumb rga cvt imcheck failed st=%d (%s)",
+                              st, imStrError(st));
+        releasebuffer_handle(src_h);
+        releasebuffer_handle(full_h);
+        releasebuffer_handle(thumb_h);
+        free_dmas();
+        return false;
+    }
+
+    st = imcvtcolor_t(src_buf, full_buf, kThumbSrcFormat, kThumbDstFormat,
+                      IM_COLOR_SPACE_DEFAULT, 1);
+    if(!rga_status_ok(st)) {
+        UPC_LOG_MEDIA_SERVICE(Warn, "raw thumb rga cvt failed st=%d (%s)",
+                              st, imStrError(st));
+        releasebuffer_handle(src_h);
+        releasebuffer_handle(full_h);
+        releasebuffer_handle(thumb_h);
+        free_dmas();
+        return false;
+    }
+
+    st = imresize(full_buf, thumb_buf);
+    if(!rga_status_ok(st)) {
+        UPC_LOG_MEDIA_SERVICE(Warn, "raw thumb rga resize failed st=%d (%s)",
+                              st, imStrError(st));
+        releasebuffer_handle(src_h);
+        releasebuffer_handle(full_h);
+        releasebuffer_handle(thumb_h);
+        free_dmas();
+        return false;
+    }
+
+    releasebuffer_handle(src_h);
+    releasebuffer_handle(full_h);
+    releasebuffer_handle(thumb_h);
+
+    dma_buf_sync(thumb_dma.fd, DMA_BUF_SYNC_START | DMA_BUF_SYNC_READ);
+    std::vector<uint8_t> rgb565_thumb(thumb_bytes);
+    std::memcpy(rgb565_thumb.data(), thumb_dma.va, thumb_bytes);
+    dma_buf_sync(thumb_dma.fd, DMA_BUF_SYNC_END | DMA_BUF_SYNC_READ);
+    free_dmas();
 
     if(!write_raw_thumb(out_path, dst_w, dst_h, dst_stride_bytes, rgb565_thumb)) {
         UPC_LOG_MEDIA_SERVICE(Warn, "raw thumb write failed path=%s", out_path);

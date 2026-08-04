@@ -51,7 +51,7 @@ Glavo Snap IPC → PrintVideoRecorder worker
   → ffmpeg 软编 PNG（连续编号 1.png,2.png,...）
       → /home/video/{job}_{YYYYMMDD_HHMMSS}/
   → finish/abort
-  → 缩略图：RGA 生成 thumb.rthm（失败则无缩略图）
+  → 缩略图：dma32 + RGA importbuffer_fd 生成 thumb.rthm（失败则无缩略图）
   → upsert /home/video/manifest.json（status=complete|terminated）
   → APP_Print_Video_Manifest_Ntf → UI（切打印结果页）
 ```
@@ -89,7 +89,7 @@ Snap 依赖预览流已开（同一 SHM）；与 UI 解码线程共享 ring，�
 | `VISUAL_Camera_Stream_Stop_Req` | Visual 停流（仅移除 Visual 会话） |
 | `MEDIA_Camera_Stream_Start_Req` | Media 并行取流（独立 SHM `/upc_camera_preview_media`） |
 | `MEDIA_Camera_Stream_Stop_Req` | Media 停流（仅移除 Media 会话） |
-| `UI_Camera_Snapshot_Req` | **Media** 保存当前预览帧 PNG 到 `/home/photo` |
+| `UI_Camera_Snapshot_Req` | **Media** 保存当前预览帧 PNG + 配对 `.rthm` 缩略图到 `/home/photo` |
 | `APP_Print_Video_Session_*` | **Media** 处理打印录像会话、生成缩略图/MP4/manifest |
 | `APP_Clean_Video_Session_*` | **Media** 处理清粉延时抽帧（接续 PNG → 合并 `timelapse.mp4`） |
 | `APP_Print_Video_Manifest_Ntf` | **Media→UI**：manifest `rename()` 成功后发（0 帧也必发） |
@@ -111,6 +111,8 @@ Glavo→Media 经 Broker 转发；`sender_id` 仍为 `APP_GLAVO`（见 IPC.md）
 | 录像输出 | `/home/video/{job}_{YYYYMMDD_HHMMSS}/{1..N}.png` | `CAMERA_PRINT_VIDEO_OUT_DIR` |
 | 缩略图 | `/home/video/{job}_{YYYYMMDD_HHMMSS}/thumb.rthm` | `CAMERA_PRINT_VIDEO_THUMB_EXT` |
 | 缩略图最大宽 | 240 | `CAMERA_PRINT_VIDEO_THUMB_MAX_W` |
+| 拍照原图 | `/home/photo/photo_{stamp}_{WxH}.png` | Media `save_latest_png_snapshot` |
+| 拍照缩略图 | `/home/photo/photo_{stamp}_{WxH}.rthm`（同帧 NV12→dma32+RGA） | 同上；失败不影响 PNG |
 | 历史清单 | `/home/video/manifest.json` | `UPC_PRINT_VIDEO_MANIFEST` |
 | ffmpeg | `/usr/bin/ffmpeg` | `CAMERA_FFMPEG_BIN` |
 

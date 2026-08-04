@@ -4,19 +4,11 @@
 #include "gcode_manifest.hpp"
 #include "msg_port.hpp"
 #include "print_history_manifest.hpp"
-#include "raw_thumb_format.hpp"
 #include "rs_log.hpp"
 #include "timelapse_util.hpp"
 
-#if defined(UPC_CAMERA_HAS_RGA) && UPC_CAMERA_HAS_RGA
-#include <rga/im2d.hpp>
-#include <rga/rga.h>
-#endif
-
-#include <algorithm>
 #include <cctype>
 #include <cerrno>
-#include <climits>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -30,69 +22,6 @@
 namespace upc::media {
 
 namespace {
-
-#if defined(UPC_CAMERA_HAS_RGA) && UPC_CAMERA_HAS_RGA
-constexpr int kThumbSrcFormat = RK_FORMAT_YCbCr_420_SP;
-constexpr int kThumbDstFormat = RK_FORMAT_RGB_565;
-
-bool rga_status_ok(IM_STATUS st)
-{
-    return st == IM_STATUS_SUCCESS || st == IM_STATUS_NOERROR;
-}
-#endif
-
-uint32_t clamp_thumb_width(uint32_t src_w)
-{
-    const uint32_t max_w = CAMERA_PRINT_VIDEO_THUMB_MAX_W > 0
-        ? static_cast<uint32_t>(CAMERA_PRINT_VIDEO_THUMB_MAX_W)
-        : src_w;
-    return std::max<uint32_t>(1u, std::min(src_w, max_w));
-}
-
-uint32_t thumb_height_from_width(uint32_t src_w, uint32_t src_h, uint32_t dst_w)
-{
-    if(src_w == 0 || src_h == 0 || dst_w == 0) {
-        return 1;
-    }
-    const uint64_t scaled = static_cast<uint64_t>(src_h) * dst_w;
-    return std::max<uint32_t>(1u, static_cast<uint32_t>(scaled / src_w));
-}
-
-bool write_raw_thumb(const char* out_path,
-                     uint32_t width,
-                     uint32_t height,
-                     uint32_t stride_bytes,
-                     const std::vector<uint8_t>& data)
-{
-    if(!out_path || !out_path[0] || width == 0 || height == 0 ||
-       stride_bytes == 0 || data.empty()) {
-        return false;
-    }
-
-    upc::RawThumbHeader h{};
-    std::memcpy(h.magic, upc::kRawThumbMagic, sizeof(h.magic));
-    h.version = upc::kRawThumbVersion;
-    h.width = width;
-    h.height = height;
-    h.stride_bytes = stride_bytes;
-    h.color_format = static_cast<uint32_t>(upc::RawThumbColorFormat::RGB565);
-    h.data_size = static_cast<uint32_t>(data.size());
-    if(!upc::raw_thumb_header_valid(h)) {
-        return false;
-    }
-
-    FILE* fp = std::fopen(out_path, "wb");
-    if(!fp) {
-        return false;
-    }
-
-    bool ok = std::fwrite(&h, 1, sizeof(h), fp) == sizeof(h) &&
-              std::fwrite(data.data(), 1, data.size(), fp) == data.size();
-    if(std::fclose(fp) != 0) {
-        ok = false;
-    }
-    return ok;
-}
 
 std::string basename_of_path(const std::string& path)
 {
@@ -420,81 +349,9 @@ bool PrintVideoRecorder::handle_layer_snap(const PrintVideoJob& job)
 bool PrintVideoRecorder::create_raw_thumb_from_nv12(
     const std::vector<uint8_t>& nv12, const char* out_path) const
 {
-#if defined(UPC_CAMERA_HAS_RGA) && UPC_CAMERA_HAS_RGA
-    const uint32_t src_w = stream_width_;
-    const uint32_t src_h = stream_height_;
-    if(src_w == 0 || src_h == 0 || nv12.empty() || !out_path || !out_path[0]) {
-        return false;
-    }
-    const size_t need = static_cast<size_t>(src_w) * src_h * 3u / 2u;
-    if(nv12.size() < need) {
-        UPC_LOG_MEDIA_SERVICE(Warn,
-            "raw thumb nv12 too small bytes=%zu need=%zu",
-            nv12.size(), need);
-        return false;
-    }
-    if(src_w > static_cast<uint32_t>(INT_MAX) ||
-       src_h > static_cast<uint32_t>(INT_MAX)) {
-        UPC_LOG_MEDIA_SERVICE(Warn,
-            "raw thumb geometry too large w=%u h=%u", src_w, src_h);
-        return false;
-    }
-    const int src_w_i = static_cast<int>(src_w);
-    const int src_h_i = static_cast<int>(src_h);
-
-    std::vector<uint8_t> rgb565_full(static_cast<size_t>(src_w) * src_h * 2u);
-    rga_buffer_t src_buf = wrapbuffer_virtualaddr(
-        const_cast<uint8_t*>(nv12.data()), src_w_i, src_h_i, kThumbSrcFormat, src_w_i, src_h_i);
-    rga_buffer_t full_buf = wrapbuffer_virtualaddr(
-        rgb565_full.data(), src_w_i, src_h_i, kThumbDstFormat, src_w_i, src_h_i);
-
-    IM_STATUS st = imcvtcolor_t(src_buf, full_buf, kThumbSrcFormat, kThumbDstFormat,
-                                IM_COLOR_SPACE_DEFAULT, 1);
-    if(!rga_status_ok(st)) {
-        UPC_LOG_MEDIA_SERVICE(Warn, "raw thumb rga cvt failed st=%d (%s)",
-                               st, imStrError(st));
-        return false;
-    }
-
-    const uint32_t dst_w = clamp_thumb_width(src_w);
-    const uint32_t dst_h = thumb_height_from_width(src_w, src_h, dst_w);
-    const uint32_t dst_stride_px = dst_w;
-    const uint32_t dst_stride_bytes = dst_stride_px * 2u;
-    if(dst_w > static_cast<uint32_t>(INT_MAX) ||
-       dst_h > static_cast<uint32_t>(INT_MAX) ||
-       dst_stride_px > static_cast<uint32_t>(INT_MAX)) {
-        UPC_LOG_MEDIA_SERVICE(Warn,
-            "raw thumb dst too large w=%u h=%u stride_px=%u",
-            dst_w, dst_h, dst_stride_px);
-        return false;
-    }
-    const int dst_w_i = static_cast<int>(dst_w);
-    const int dst_h_i = static_cast<int>(dst_h);
-    const int dst_stride_px_i = static_cast<int>(dst_stride_px);
-    std::vector<uint8_t> rgb565_thumb(
-        static_cast<size_t>(dst_stride_bytes) * dst_h);
-
-    rga_buffer_t in_buf = wrapbuffer_virtualaddr(
-        rgb565_full.data(), src_w_i, src_h_i, kThumbDstFormat, src_w_i, src_h_i);
-    rga_buffer_t out_buf = wrapbuffer_virtualaddr(
-        rgb565_thumb.data(), dst_w_i, dst_h_i, kThumbDstFormat, dst_stride_px_i, dst_h_i);
-    st = imresize(in_buf, out_buf);
-    if(!rga_status_ok(st)) {
-        UPC_LOG_MEDIA_SERVICE(Warn, "raw thumb rga resize failed st=%d (%s)",
-                               st, imStrError(st));
-        return false;
-    }
-
-    if(!write_raw_thumb(out_path, dst_w, dst_h, dst_stride_bytes, rgb565_thumb)) {
-        UPC_LOG_MEDIA_SERVICE(Warn, "raw thumb write failed path=%s", out_path);
-        return false;
-    }
-    return true;
-#else
-    (void)nv12;
-    (void)out_path;
-    return false;
-#endif
+    /* 统一走 timelapse_util（dma32 + importbuffer_fd），避免堆 VA 触发 RGA >4G 失败 */
+    return timelapse_util::create_raw_thumb_from_nv12(
+        nv12, stream_width_, stream_height_, out_path);
 }
 
 void PrintVideoRecorder::finalize_session(bool aborted)

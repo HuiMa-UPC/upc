@@ -69,7 +69,7 @@ private:
     bool encode_nv12_to_png(const uint8_t* nv12, size_t bytes, uint32_t frame_index);
     bool handle_layer_snap(const PrintVideoJob& job);
     void finalize_session(bool aborted);
-    /** RGA：把最后一帧 NV12 生成 RTHM（RGB565）缩略图 */
+    /** 委托 timelapse_util：dma32 + importbuffer_fd 生成 RTHM 缩略图 */
     bool create_raw_thumb_from_nv12(const std::vector<uint8_t>& nv12,
                                     const char* out_path) const;
     /** 完成目录落盘后 upsert /home/video/manifest.json；true=已原子替换成功 */
