@@ -35,7 +35,7 @@
 | `app/media/` | [CAMERA.md](../app/camera/CAMERA.md) | 拍照/录像/延时封装（消费 Camera DMA 流） |
 | `app/xfer/` | [XFER.md](../app/xfer/XFER.md) | WiFi 发现、PIN 配对、HTTP 文件上传（仅收 `.json/.svg`） |
 | `app/visual/` | [VISUAL.md](../app/visual/VISUAL.md) | 视觉 demo：相机流取帧、OpenCV 矩形识别、坐标回传 UI |
-| `app/mqtt/` | — | MQTT 网关：环境遥测上报与云端控制指令接入（一期 `set_light`） |
+| `app/mqtt/` | — | MQTT 网关：环境遥测、`set_light`、云端 `start/stop_rtsp_push`→Media |
 | `app/parser/` | [PARSER.md](../app/parser/PARSER.md) | G-code/OVF 解析库（Glavo 链接） |
 | `app/protocol/` | [PROTOCOL.md](../app/protocol/PROTOCOL.md) | MCU 线协议（TCP `BE EF` + 串口 `5A A5`） |
 

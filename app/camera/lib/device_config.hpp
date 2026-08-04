@@ -100,4 +100,17 @@
 #define CAMERA_ENV_FRAME_NTF "UPC_CAMERA_FRAME_NTF"
 #endif
 
+/**
+ * 采集看门狗：成功出帧后超过该毫秒仍连续 dequeue 失败，则原地重启 ISP/V4L2，
+ * 并给现有 peers 重推 Start Rsp（新 dma fd）。0=关闭。
+ */
+#ifndef CAMERA_STREAM_WATCHDOG_STALL_MS
+#define CAMERA_STREAM_WATCHDOG_STALL_MS  3000u
+#endif
+
+/** 两次看门狗重启之间的最小间隔（毫秒），避免抖振狂重启 */
+#ifndef CAMERA_STREAM_WATCHDOG_COOLDOWN_MS
+#define CAMERA_STREAM_WATCHDOG_COOLDOWN_MS  8000u
+#endif
+
 #endif /* CAMERA_DEVICE_CONFIG_HPP */

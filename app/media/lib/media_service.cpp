@@ -137,6 +137,11 @@ bool MediaService::init()
 
 void MediaService::shutdown()
 {
+    middleware::RtspPushStopReqPayload stop_req{};
+    std::snprintf(stop_req.req_id, sizeof(stop_req.req_id), "shutdown");
+    std::snprintf(stop_req.stream_type, sizeof(stop_req.stream_type), "live");
+    (void)live_rtsp_.stop(stop_req);
+
     send_stream_stop_req();
     stop_worker();
     consumer_.close();
@@ -213,6 +218,14 @@ void MediaService::subscribe_messages()
         middleware::MsgType::UI_Storage_Usage_Req,
         middleware::ModuleId::APP_MEDIA,
         [this](const middleware::Message& msg) { handle_message(msg); }));
+    subs_.push_back(bus.subscribe(
+        middleware::MsgType::MQTT_Media_Rtsp_Start_Req,
+        middleware::ModuleId::APP_MEDIA,
+        [this](const middleware::Message& msg) { handle_message(msg); }));
+    subs_.push_back(bus.subscribe(
+        middleware::MsgType::MQTT_Media_Rtsp_Stop_Req,
+        middleware::ModuleId::APP_MEDIA,
+        [this](const middleware::Message& msg) { handle_message(msg); }));
 }
 
 void MediaService::handle_message(const middleware::Message& msg)
@@ -243,6 +256,12 @@ void MediaService::handle_message(const middleware::Message& msg)
         break;
     case middleware::MsgType::UI_Storage_Usage_Req:
         handle_storage_usage_req(msg);
+        break;
+    case middleware::MsgType::MQTT_Media_Rtsp_Start_Req:
+        handle_rtsp_start_req(msg);
+        break;
+    case middleware::MsgType::MQTT_Media_Rtsp_Stop_Req:
+        handle_rtsp_stop_req(msg);
         break;
     default:
         break;
@@ -346,6 +365,7 @@ void MediaService::on_stream_start_rsp(const middleware::Message& msg)
     print_video_.set_stream_geometry(stream_width_, stream_height_);
     print_h264_.set_stream_geometry(stream_width_, stream_height_, stream_fps_);
     clean_video_.set_stream_geometry(stream_width_, stream_height_, stream_fps_);
+    live_rtsp_.set_stream_geometry(stream_width_, stream_height_, stream_fps_);
 
     {
         std::lock_guard<std::mutex> lock(state_mtx_);
@@ -446,6 +466,7 @@ void MediaService::worker_thread_fn()
                     /* 连续录像/清粉录像逐帧入口：已迁移到 media 进程。 */
                     clean_video_.on_frame_nv12(src_y, src_uv, stride);
                     print_h264_.on_frame_nv12(src_y, src_uv, stride);
+                    live_rtsp_.on_frame_nv12(src_y, src_uv, stride);
                 }
             }
             update_latest_nv12_snapshot(*frame);
@@ -764,6 +785,71 @@ void MediaService::handle_storage_usage_req(const middleware::Message& msg) cons
     ntf.payload = middleware::MsgPayload::from_bytes(
         reinterpret_cast<const uint8_t*>(&rsp), sizeof(rsp));
     middleware::MsgPort::instance().publish_async(ntf);
+}
+
+void MediaService::send_rtsp_rsp(middleware::MsgType type,
+                                 const middleware::RtspPushRspPayload& rsp) const
+{
+    middleware::Message msg(
+        type,
+        middleware::ModuleId::APP_MEDIA,
+        middleware::ModuleId::APP_MQTT);
+    msg.payload = middleware::MsgPayload::from_bytes(
+        reinterpret_cast<const uint8_t*>(&rsp), sizeof(rsp));
+    if(!middleware::MsgPort::instance().publish_async(msg)) {
+        UPC_LOG_MEDIA_SERVICE(Warn, "live_rtsp rsp publish fail type=%u",
+                              static_cast<unsigned>(type));
+    }
+}
+
+void MediaService::handle_rtsp_start_req(const middleware::Message& msg)
+{
+    middleware::RtspPushStartReqPayload req{};
+    if(!read_inline_pod(msg.payload, req)) {
+        UPC_LOG_MEDIA_SERVICE(
+            Error,
+            "live_rtsp start: bad payload type=%u len=%u need=%zu",
+            static_cast<unsigned>(msg.payload.type),
+            static_cast<unsigned>(msg.payload.length),
+            sizeof(req));
+        middleware::RtspPushRspPayload rsp{};
+        rsp.result = static_cast<uint8_t>(middleware::RtspPushResult::Error);
+        std::snprintf(rsp.reason, sizeof(rsp.reason), "encoder_error");
+        std::snprintf(rsp.stream_type, sizeof(rsp.stream_type), "live");
+        send_rtsp_rsp(middleware::MsgType::APP_Mqtt_Rtsp_Start_Rsp, rsp);
+        return;
+    }
+    req.req_id[sizeof(req.req_id) - 1] = '\0';
+    req.push_url[sizeof(req.push_url) - 1] = '\0';
+    req.stream_type[sizeof(req.stream_type) - 1] = '\0';
+
+    {
+        std::lock_guard<std::mutex> lock(state_mtx_);
+        if(stream_up_) {
+            live_rtsp_.set_stream_geometry(
+                stream_width_, stream_height_, stream_fps_);
+        }
+    }
+
+    const auto rsp = live_rtsp_.start(req);
+    send_rtsp_rsp(middleware::MsgType::APP_Mqtt_Rtsp_Start_Rsp, rsp);
+}
+
+void MediaService::handle_rtsp_stop_req(const middleware::Message& msg)
+{
+    middleware::RtspPushStopReqPayload req{};
+    if(!read_inline_pod(msg.payload, req)) {
+        middleware::RtspPushRspPayload rsp{};
+        rsp.result = static_cast<uint8_t>(middleware::RtspPushResult::Error);
+        std::snprintf(rsp.reason, sizeof(rsp.reason), "encoder_error");
+        std::snprintf(rsp.stream_type, sizeof(rsp.stream_type), "live");
+        send_rtsp_rsp(middleware::MsgType::APP_Mqtt_Rtsp_Stop_Rsp, rsp);
+        return;
+    }
+    req.req_id[sizeof(req.req_id) - 1] = '\0';
+    req.stream_type[sizeof(req.stream_type) - 1] = '\0';
+    const auto rsp = live_rtsp_.stop(req);
+    send_rtsp_rsp(middleware::MsgType::APP_Mqtt_Rtsp_Stop_Rsp, rsp);
 }
 
 uint64_t MediaService::monotonic_ms()

@@ -50,11 +50,11 @@ std::string MqttConfig::topic_telemetry_chamber() const
 MqttConfig load_mqtt_config()
 {
     MqttConfig cfg;
-    cfg.device_id = get_env_or_default("SNOWPOD_MQTT_DEVICE_ID", "SNOWPOD-TEST-001");
-    cfg.broker_uri = get_env_or_default("SNOWPOD_MQTT_BROKER_URI", "172.17.0.127:1883");
+    cfg.device_id = get_env_or_default("SNOWPOD_MQTT_DEVICE_ID", "SNOWPOD-E97F6EA8");
+    cfg.broker_uri = get_env_or_default("SNOWPOD_MQTT_BROKER_URI", "172.17.0.72:1883");
     cfg.client_id = get_env_or_default("SNOWPOD_MQTT_CLIENT_ID", "");
     cfg.username = get_env_or_default("SNOWPOD_MQTT_USERNAME", "");
-    cfg.password = get_env_or_default("SNOWPOD_MQTT_PASSWORD", "Test@12345678");
+    cfg.password = get_env_or_default("SNOWPOD_MQTT_PASSWORD", "oborQ-Zt-cXPBp1NEArsAPaxdATncA2LzYaoAf6l68E");
     cfg.keepalive_sec = get_env_int_or_default("SNOWPOD_MQTT_KEEPALIVE_SEC", 60);
     cfg.qos_telemetry = get_env_int_or_default("SNOWPOD_MQTT_QOS_TELEMETRY", 1);
     cfg.qos_ack = get_env_int_or_default("SNOWPOD_MQTT_QOS_ACK", 1);

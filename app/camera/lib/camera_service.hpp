@@ -42,6 +42,15 @@ private:
 
     bool start_streaming();
     void stop_streaming();
+    /**
+     * 采集线程内看门狗：关闭并重开 ISP/V4L2（不 join 本线程、不清 peer 表），
+     * 重建各 peer SHM 并 publish Start Rsp + 新 dma fd。
+     */
+    bool restart_capture_keep_peers();
+    void publish_stream_start_to_peer(middleware::ModuleId peer_id,
+                                      middleware::MsgType rsp_type,
+                                      const char* shm_name,
+                                      bool ok);
     bool ensure_stream_peer(const middleware::Message& req,
                             const char* shm_name,
                             middleware::MsgType rsp_type);
@@ -65,10 +74,12 @@ private:
     ViCaptureConfig build_capture_config();
     static uint32_t read_fps_from_env();
     static uint32_t read_warmup_frames_from_env();
+    static uint64_t monotonic_ms();
 
     std::vector<middleware::Subscription> subs_;
     struct StreamPeerSession {
         middleware::ModuleId peer_id{middleware::ModuleId{0}};
+        middleware::MsgType rsp_type{middleware::MsgType::APP_Camera_Stream_Start_Rsp};
         std::string shm_name;
         upc_ipc::IpcDmaFrameRingProducer producer;
     };

@@ -426,6 +426,7 @@ bool CameraService::ensure_stream_peer(const middleware::Message& req,
 
     auto peer = std::make_shared<StreamPeerSession>();
     peer->peer_id = req.sender_id;
+    peer->rsp_type = rsp_type;
     peer->shm_name = shm_name;
     const upc_ipc::IpcShmError err = peer->producer.create(
         peer->shm_name.c_str(),
@@ -490,6 +491,8 @@ void CameraService::stream_thread_fn()
     uint32_t timeout_1s      = 0;
     bool logged_first_commit = false;
     uint32_t warmup_left = stream_warmup_frames_;
+    uint64_t last_frame_ok_ms = monotonic_ms();
+    uint64_t last_watchdog_restart_ms = 0;
 
     if(warmup_left > 0) {
         UPC_LOG_CAMERA_SERVICE(Info,
@@ -512,15 +515,53 @@ void CameraService::stream_thread_fn()
 
         const auto tick_start = clock::now();
 
+        auto try_watchdog_restart = [&](const char* why) -> bool {
+#if CAMERA_STREAM_WATCHDOG_STALL_MS == 0
+            (void)why;
+            return false;
+#else
+            const uint64_t now_ms = monotonic_ms();
+            if(now_ms - last_frame_ok_ms < CAMERA_STREAM_WATCHDOG_STALL_MS) {
+                return false;
+            }
+            if(last_watchdog_restart_ms != 0 &&
+               now_ms - last_watchdog_restart_ms <
+                   CAMERA_STREAM_WATCHDOG_COOLDOWN_MS) {
+                return false;
+            }
+            UPC_LOG_CAMERA_SERVICE(Warn,
+                "stream watchdog trigger why=%s stall_ms=%llu",
+                why ? why : "?",
+                static_cast<unsigned long long>(now_ms - last_frame_ok_ms));
+            last_watchdog_restart_ms = now_ms;
+            if(!restart_capture_keep_peers()) {
+                last_frame_ok_ms = monotonic_ms();
+                return false;
+            }
+            warmup_left = stream_warmup_frames_;
+            logged_first_commit = false;
+            last_frame_ok_ms = monotonic_ms();
+            if(warmup_left > 0) {
+                UPC_LOG_CAMERA_SERVICE(Info,
+                    "stream watchdog: AE warmup %u frames after restart",
+                    warmup_left);
+            }
+            return true;
+#endif
+        };
+
         /* AE 预热：只 dequeue/queue 喂 ISP，不占 SHM slot、不 commit。 */
         if(warmup_left > 0) {
             std::optional<uint32_t> buf_idx = capture_.dequeue_frame(2000);
             if(!buf_idx) {
+                ++dequeue_fail_1s;
                 if(stop_stream_.load()) {
                     break;
                 }
+                (void)try_watchdog_restart("warmup_dequeue");
                 continue;
             }
+            last_frame_ok_ms = monotonic_ms();
             capture_.queue_frame(*buf_idx);
             --warmup_left;
             if(warmup_left == 0) {
@@ -540,8 +581,10 @@ void CameraService::stream_thread_fn()
             if(stop_stream_.load()) {
                 break;
             }
+            (void)try_watchdog_restart("dequeue");
             continue;
         }
+        last_frame_ok_ms = monotonic_ms();
 
         uint32_t slot_buf_idx = *buf_idx;
         const uint8_t* src_y = capture_.buffer_y(*buf_idx);
@@ -663,9 +706,10 @@ void CameraService::send_stream_start_rsp(const middleware::Message& req, bool o
         middleware::MsgType::APP_Camera_Stream_Start_Rsp, kUiShmName);
 }
 
-void CameraService::send_stream_start_rsp_with_type(
-    const middleware::Message& req, bool ok,
-    middleware::MsgType rsp_type, const char* shm_name)
+void CameraService::publish_stream_start_to_peer(middleware::ModuleId peer_id,
+                                                  middleware::MsgType rsp_type,
+                                                  const char* shm_name,
+                                                  bool ok)
 {
     middleware::CameraStreamInfoPayload info{};
     std::snprintf(info.shm_name, sizeof(info.shm_name), "%s",
@@ -682,7 +726,7 @@ void CameraService::send_stream_start_rsp_with_type(
     middleware::Message rsp(
         rsp_type,
         middleware::ModuleId::APP_CAMERA,
-        req.sender_id);
+        peer_id);
     rsp.payload = middleware::MsgPayload::from_bytes(
         reinterpret_cast<const uint8_t*>(&info), sizeof(info));
 
@@ -690,11 +734,111 @@ void CameraService::send_stream_start_rsp_with_type(
     if(ok && !dma_source_.ipc_fds().empty()) {
         if(!port.publish_to_peer_with_fds(rsp, dma_source_.ipc_fds())) {
             UPC_LOG_CAMERA_SERVICE(Error,
-                "stream start rsp with fds failed (IPC SCM_RIGHTS)");
+                "stream start rsp with fds failed peer=%u type=%u",
+                static_cast<unsigned>(peer_id),
+                static_cast<unsigned>(rsp_type));
         }
     } else {
         port.publish_async(rsp);
     }
+}
+
+void CameraService::send_stream_start_rsp_with_type(
+    const middleware::Message& req, bool ok,
+    middleware::MsgType rsp_type, const char* shm_name)
+{
+    publish_stream_start_to_peer(req.sender_id, rsp_type, shm_name, ok);
+}
+
+bool CameraService::restart_capture_keep_peers()
+{
+    UPC_LOG_CAMERA_SERVICE(Warn,
+        "stream watchdog: restarting ISP/V4L2 (keep peers)");
+
+    dma_source_.shutdown();
+    capture_.close();
+    {
+        std::lock_guard<std::mutex> lock(latest_nv12_mtx_);
+        latest_nv12_snapshot_.clear();
+        latest_nv12_valid_ = false;
+    }
+
+    if(stop_stream_.load(std::memory_order_relaxed)) {
+        return false;
+    }
+
+    const ViCaptureConfig cfg = build_capture_config();
+    if(!capture_.open(cfg)) {
+        UPC_LOG_CAMERA_SERVICE(Error, "stream watchdog: ViCapture reopen failed");
+        return false;
+    }
+    stream_width_  = capture_.width();
+    stream_height_ = capture_.height();
+
+    const std::vector<int>& capture_fds = capture_.dma_fds();
+    if(capture_fds.empty()) {
+        capture_.close();
+        UPC_LOG_CAMERA_SERVICE(Error, "stream watchdog: no dma fds after reopen");
+        return false;
+    }
+    if(!dma_source_.prepare(stream_width_, stream_height_, capture_.stride_y(),
+                            capture_fds)) {
+        capture_.close();
+        UPC_LOG_CAMERA_SERVICE(Error, "stream watchdog: dma prepare failed");
+        return false;
+    }
+
+    struct PeerResync {
+        middleware::ModuleId peer_id;
+        middleware::MsgType rsp_type;
+        std::string shm_name;
+    };
+    std::vector<PeerResync> peers;
+    {
+        std::lock_guard<std::mutex> lock(stream_peers_mtx_);
+        for(auto& kv : stream_peers_) {
+            if(!kv.second) {
+                continue;
+            }
+            auto& peer = *kv.second;
+            peer.producer.destroy();
+            const upc_ipc::IpcShmError err = peer.producer.create(
+                peer.shm_name.c_str(),
+                stream_width_,
+                stream_height_,
+                dma_source_.dma_stride_y(),
+                upc_ipc::kDmaFrameFormatNv12,
+                CAMERA_SHM_SLOT_COUNT);
+            if(err != upc_ipc::IpcShmError::OK) {
+                UPC_LOG_CAMERA_SERVICE(Error,
+                    "stream watchdog: peer shm recreate fail sender=%u name=%s err=%d",
+                    kv.first, peer.shm_name.c_str(), static_cast<int>(err));
+                continue;
+            }
+            peers.push_back(PeerResync{
+                peer.peer_id, peer.rsp_type, peer.shm_name});
+        }
+    }
+
+    for(const auto& p : peers) {
+        publish_stream_start_to_peer(p.peer_id, p.rsp_type, p.shm_name.c_str(),
+                                     true);
+    }
+
+    UPC_LOG_CAMERA_SERVICE(Info,
+        "stream watchdog: capture restarted peers=%zu %ux%u stride_y=%u",
+        peers.size(), stream_width_, stream_height_,
+        dma_source_.dma_stride_y());
+    return true;
+}
+
+uint64_t CameraService::monotonic_ms()
+{
+    using clock = std::chrono::steady_clock;
+    return static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            clock::now().time_since_epoch())
+            .count());
 }
 
 void CameraService::send_stream_stop_done(const middleware::Message& req)

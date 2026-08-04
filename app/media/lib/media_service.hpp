@@ -3,6 +3,7 @@
 
 #include "clean_video_recorder.hpp"
 #include "ipc_dma_frame_ring.hpp"
+#include "live_rtsp_pusher.hpp"
 #include "msg_port.hpp"
 #include "print_h264_recorder.hpp"
 #include "print_video_recorder.hpp"
@@ -37,6 +38,10 @@ private:
     void handle_clean_video(const middleware::Message& msg);
     void handle_print_video_finalize(const middleware::Message& msg);
     void handle_storage_usage_req(const middleware::Message& msg) const;
+    void handle_rtsp_start_req(const middleware::Message& msg);
+    void handle_rtsp_stop_req(const middleware::Message& msg);
+    void send_rtsp_rsp(middleware::MsgType type,
+                       const middleware::RtspPushRspPayload& rsp) const;
     /** 开机/开打前：尽力收尾 pending，再清空 tmp 与遗留 __work_* */
     void recover_pending_and_reset_tmp();
     void remove_legacy_work_dirs() const;
@@ -64,14 +69,30 @@ private:
 
     static bool read_inline_start_rsp(const middleware::Message& msg,
                                       middleware::CameraStreamInfoPayload& out);
+    /** Inline 或 BufferRef（>INLINE_SIZE 走 BufferPool）均可 memcpy 为 POD。 */
     template <typename T>
     static bool read_inline_pod(const middleware::MsgPayload& payload, T& out)
     {
-        if(payload.type != middleware::MsgPayload::Type::Inline ||
-           payload.length < sizeof(T)) {
+        const uint8_t* base = nullptr;
+        size_t data_len = 0;
+        if(payload.type == middleware::MsgPayload::Type::Inline) {
+            base = payload.data.bytes.data();
+            data_len = payload.length;
+        } else if(payload.type == middleware::MsgPayload::Type::BufferRef) {
+            const auto& ref = payload.data.buffer_ref;
+            uint8_t* ptr = middleware::BufferPool::instance().get_ptr(ref.buf_id);
+            if(!ptr) {
+                return false;
+            }
+            base = ptr + ref.offset;
+            data_len = ref.length;
+        } else {
             return false;
         }
-        std::memcpy(&out, payload.data.bytes.data(), sizeof(T));
+        if(!base || data_len < sizeof(T)) {
+            return false;
+        }
+        std::memcpy(&out, base, sizeof(T));
         return true;
     }
 
@@ -115,6 +136,7 @@ private:
     PrintVideoRecorder print_video_;
     PrintH264Recorder print_h264_;
     CleanVideoRecorder clean_video_;
+    LiveRtspPusher live_rtsp_;
 };
 
 } // namespace upc::media

@@ -139,6 +139,10 @@ const char* upc_msg_type_name(MsgType type) {
         case MsgType::APP_Media_Camera_Stream_Start_Rsp: return "APP_Media_Camera_Stream_Start_Rsp";
         case MsgType::MEDIA_Camera_Stream_Stop_Req: return "MEDIA_Camera_Stream_Stop_Req";
         case MsgType::APP_Media_Camera_Stream_Stop_Done: return "APP_Media_Camera_Stream_Stop_Done";
+        case MsgType::MQTT_Media_Rtsp_Start_Req: return "MQTT_Media_Rtsp_Start_Req";
+        case MsgType::APP_Mqtt_Rtsp_Start_Rsp: return "APP_Mqtt_Rtsp_Start_Rsp";
+        case MsgType::MQTT_Media_Rtsp_Stop_Req: return "MQTT_Media_Rtsp_Stop_Req";
+        case MsgType::APP_Mqtt_Rtsp_Stop_Rsp: return "APP_Mqtt_Rtsp_Stop_Rsp";
         case MsgType::UI_Mcu_Ota_Start_Req: return "UI_Mcu_Ota_Start_Req";
         case MsgType::UI_Mcu_Ota_Cancel_Ntf: return "UI_Mcu_Ota_Cancel_Ntf";
         case MsgType::APP_Mcu_Ota_Status_Ntf: return "APP_Mcu_Ota_Status_Ntf";

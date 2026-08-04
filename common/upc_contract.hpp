@@ -441,6 +441,13 @@ enum class MsgType : uint32_t {
     APP_Media_Camera_Stream_Start_Rsp,       /**< CameraStreamInfoPayload */
     MEDIA_Camera_Stream_Stop_Req,            /**< Empty */
     APP_Media_Camera_Stream_Stop_Done,       /**< Empty */
+
+    // ---- MQTT ↔ MEDIA：云端 RTSP 推流（live；recording 一期可拒） ----
+    MQTT_Media_Rtsp_Start_Req,              /**< RtspPushStartReqPayload */
+    APP_Mqtt_Rtsp_Start_Rsp,                /**< RtspPushRspPayload */
+    MQTT_Media_Rtsp_Stop_Req,               /**< RtspPushStopReqPayload */
+    APP_Mqtt_Rtsp_Stop_Rsp,                 /**< RtspPushRspPayload */
+
     // ---- UI ↔ GLAVO：MCU 固件版本查询（串口 PORT_GENERAL_TASK 0xA2 / CMD_PROJECT_INFO 0x10） ----
     UI_Mcu_Version_Req = 0x1500, /**< Empty：进入 Settings/About 页时查询一次 */
     GLAVO_Mcu_Version_Ntf,       /**< McuVersionPayload：MCU 固件版本 + 板级配置 */
@@ -804,6 +811,44 @@ struct CleanVideoSessionStopPayload {
     uint8_t result_code;  /**< 0=成功；非0=失败；0xfe=用户关闭 */
     uint8_t keep_raw;     /**< 兼容字段；PNG 路径下忽略 */
     uint8_t reserved[2];
+};
+
+/**
+ * MQTT→MEDIA：开始 RTSP 推流（对接说明：push_url 已含 ?token=，设备原样使用）。
+ * result 回执见 RtspPushRspPayload。
+ */
+struct RtspPushStartReqPayload {
+    char     req_id[64];
+    char     push_url[512];       /**< 完整 ANNOUNCE URL（可含 token query） */
+    char     push_token[256];     /**< 冗余字段；一期忽略，以 push_url 为准 */
+    char     stream_type[16];     /**< "live" / "recording" */
+    char     recording_id[64];    /**< recording 时用；一期可不填 */
+    uint32_t seek_s;              /**< recording seek；live 忽略 */
+    uint32_t max_bitrate_kbps;    /**< 0=Media 默认 */
+    uint8_t  transport;           /**< 0=tcp（协议固定） */
+    uint8_t  reserved[3];
+};
+
+/** MQTT→MEDIA：停止 RTSP 推流（按 stream_type 停对应会话） */
+struct RtspPushStopReqPayload {
+    char req_id[64];
+    char stream_type[16]; /**< "live" / "recording" */
+};
+
+/** MEDIA→MQTT：开/停推流结果（映射 MQTT command_ack） */
+enum class RtspPushResult : uint8_t {
+    Accepted = 0,
+    Rejected = 1,
+    Error    = 2,
+};
+
+struct RtspPushRspPayload {
+    char     req_id[64];
+    char     stream_type[16];
+    char     reason[32];          /**< rejected/error 时：push_already_active / encoder_error / … */
+    uint8_t  result;              /**< RtspPushResult */
+    uint8_t  reserved[3];
+    uint64_t push_started_at;     /**< 毫秒；accepted 时填写，否则 0 */
 };
 
 /** APP_Mcu_Ota_Status_Ntf / APP_Serial_Mcu_Ota_Status_Ntf：OTA 进度/状态 */

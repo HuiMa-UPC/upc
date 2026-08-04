@@ -6,6 +6,7 @@ add_executable(rongsu_media
     ${MEDIA_LIB_DIR}/print_video_recorder.cpp
     ${MEDIA_LIB_DIR}/print_h264_recorder.cpp
     ${MEDIA_LIB_DIR}/clean_video_recorder.cpp
+    ${MEDIA_LIB_DIR}/live_rtsp_pusher.cpp
     ${MEDIA_LIB_DIR}/timelapse_util.cpp
 )
 

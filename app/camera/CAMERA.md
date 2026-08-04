@@ -12,8 +12,9 @@
 | `lib/camera_service.*` | 流控 IPC、dma fd 元数据环推流、录像消息分派 |
 | `lib/vi_capture.*` | rkaiq ISP + V4L2 NV12 采集 |
 | `../media/lib/print_video_recorder.*` | 元数据环取帧 → ffmpeg 软编 PNG → `/home/media/video/tmp/` + `.rthm` |
-| `../media/lib/print_h264_recorder.*` | 预览 NV12 异步入队写 raw（队列满丢帧保预览）；结束/终止后 worker 转码 `print.h264` |
+| `../media/lib/print_h264_recorder.*` | 预览 NV12 异步入队；worker RKMPP 实时编 `print.h264`（队列满丢帧） |
 | `../media/lib/clean_video_recorder.*` | 清粉延时抽帧：按 `TIMELAPSE_VIDEO_FPS` 写接续 PNG，成功后重建 `timelapse.mp4`+`thumb.rthm` 并删除清粉 PNG |
+| `../media/lib/live_rtsp_pusher.*` | 云端 live：NV12 → RKMPP → ffmpeg `-c copy -f rtsp`（`push_url` 原样；不摘 Camera peer） |
 | `lib/device_config.hpp` | 设备、分辨率、IQ、SHM、录像路径宏 |
 
 ## 数据路径
@@ -39,6 +40,7 @@ Sensor → rkaiq ISP → /dev/video0 (NV12)
 - 若 V4L2 输出 stride 不满足 RGA 对齐要求，后端把数据拷贝到 `CameraDmaFrameSource` 内部的对齐 dma_buf，再交给 UI。
 - UI 不再分配中间 NV12 staging；源 fd 直接来自 V4L2 或后端 padding buffer。
 - 状态机：后端 `DQBUF` 后把 `buffer_idx` 写入 `EMPTY` slot 并 `commit` 为 `READY`；UI `acquire_latest_frame` 取到 `buffer_idx` 后查 fd 表，RGA/SW 完成后 `release_slot` 置 `EMPTY`；后端 `wait_slot_empty` 等到 `EMPTY` 才把对应 V4L2 buffer `QBUF` 回去。
+- **采集看门狗**：`stream_thread` 若超过 `CAMERA_STREAM_WATCHDOG_STALL_MS`（默认 3s）无成功 dequeue，则原地重启 ISP/V4L2（不清 peer 表），重建各 peer SHM 并重推 `*_Stream_Start_Rsp` + 新 dma fd；两次重启间隔至少 `CAMERA_STREAM_WATCHDOG_COOLDOWN_MS`（默认 8s）。
 - `PrintVideoRecorder` 也改为通过 fd + mmap 读取最新帧。
 - 参考 `doc/rv1106` ISP 初始化；当前无 Rockit VENC，不经 MPI 预览。
 
@@ -128,6 +130,8 @@ Glavo→Media 经 Broker 转发；`sender_id` 仍为 `APP_GLAVO`（见 IPC.md）
 | IQ | `/home/wpcam_NC_NC.json` | `UPC_CAMERA_IQ_DIR` / `UPC_CAMERA_IQ_FILE` |
 | V4L2 缓冲 | 4 | `CAMERA_V4L2_BUF_COUNT` |
 | SHM 槽位 | 6 | `CAMERA_SHM_SLOT_COUNT`（UI/Snap 双消费；过小易 `slot release timeout`） |
+| 看门狗无帧阈值 | 3000 ms | `CAMERA_STREAM_WATCHDOG_STALL_MS`（0=关） |
+| 看门狗重启冷却 | 8000 ms | `CAMERA_STREAM_WATCHDOG_COOLDOWN_MS` |
 | 录像输出 | `/home/media/video/tmp/`（打印中）→ finalize 后 `/home/media/video/{job}/` | `UPC_VIDEO_TMP` / `CAMERA_PRINT_VIDEO_OUT_DIR` |
 | 缩略图 | `{dir}/thumb.rthm` | `CAMERA_PRINT_VIDEO_THUMB_EXT` |
 | 缩略图最大宽 | 240 | `CAMERA_PRINT_VIDEO_THUMB_MAX_W` |
