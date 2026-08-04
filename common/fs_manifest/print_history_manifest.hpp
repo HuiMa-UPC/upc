@@ -34,7 +34,7 @@ struct PrintHistoryEntry {
     std::string         frames_dir;    /**< 相对目录名，如 benchy */
     std::string         thumb;         /**< 延时摄影缩略图，相对路径，如 benchy/thumb.rthm */
     std::string         print_thumb;   /**< 打印录像缩略图，相对路径，如 benchy/print_thumb.rthm */
-    std::string         video;         /**< 延时摄影视频，相对路径，如 benchy/timelapse.mp4 */
+    std::string         video;         /**< 延时摄影视频，相对路径，如 benchy/timelapse.mp4；PNG 播放模式下可空 */
     std::string         print_video;   /**< 相对路径，如 benchy/print_h264.mp4 */
     bool                video_pending = false; /**< 1=后台仍在生成延时摄影视频 */
     /** 1=本次会话开了连续 H264，且 print_h264.mp4 尚未落盘（Print History 用） */

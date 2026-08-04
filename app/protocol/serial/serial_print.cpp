@@ -44,6 +44,13 @@ int serial_build_door_open_request(uint8_t* out, size_t out_size)
     return serial_build_aa_frame(0xA2, 0x40, 0x10, 0, nullptr, out, out_size);
 }
 
+int serial_build_transport_request(uint8_t* out, size_t out_size)
+{
+    /* 自动转运流程请求：PORT_GENERAL_TASK(0xA2) + CMD_REQUEST_TRANSPORT(0x41)
+     * + TLV_REQ_TRANSPORT(0x02)，无 Value。示例帧 5A A5 AA A2 41 01 02 02 00 … */
+    return serial_build_aa_frame(0xA2, 0x41, 0x02, 0, nullptr, out, out_size);
+}
+
 static int serial_print_verify_rx(const uint8_t* data, size_t len)
 {
     if(!data || len < 10) {
@@ -157,6 +164,32 @@ int serial_parse_clean_test_result(const uint8_t* data, size_t len, uint8_t* res
     const uint8_t type = data[7];
     const uint8_t tlen = data[8];
     if(port != 0xA4 || cmd != 0x01 || type != 0x22) {
+        return -2;
+    }
+    if(payload_len != 0x03 || tlen != 0x01) {
+        return -3;
+    }
+    if(result_out) {
+        *result_out = data[9];
+    }
+    return 0;
+}
+
+int serial_parse_transport_result(const uint8_t* data, size_t len, uint8_t* result_out)
+{
+    if(serial_print_verify_rx(data, len) != 0) {
+        return -1;
+    }
+
+    /* 自动转运流程结果：
+     * PORT_GENERAL_TASK(0xA2) + CMD_REQUEST_TRANSPORT(0x41) + TLV_REQ_TRANSPORT_RESULT(0x04)
+     * Value: 0=完成，1=拒绝或失败，2=已中止。 */
+    const uint8_t port = data[3];
+    const uint8_t cmd  = data[4];
+    const uint8_t payload_len = data[6];
+    const uint8_t type = data[7];
+    const uint8_t tlen = data[8];
+    if(port != 0xA2 || cmd != 0x41 || type != 0x04) {
         return -2;
     }
     if(payload_len != 0x03 || tlen != 0x01) {

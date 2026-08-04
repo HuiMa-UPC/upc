@@ -422,6 +422,10 @@ enum class MsgType : uint32_t {
     UI_Storage_Usage_Req,        /**< Empty：请求历史页存储占用（used/total） */
     APP_Storage_Usage_Rsp,       /**< StorageUsagePayload：存储占用回执 */
 
+    // ---- UI ↔ GLAVO：转运盒自动转运（串口 A2/0x41） ----
+    UI_Transport_Req,            /**< Empty：装盒 Ready → 发 TLV_REQ_TRANSPORT(0x02) */
+    APP_Transport_Result_Ntf,    /**< TransportResultPayload：MCU TLV 0x04 结果 */
+
     // ---- GLAVO ↔ CAMERA：清粉连续录像会话（NV12@预览参数） ----
     APP_Clean_Video_Session_Start_Ntf, /**< CleanVideoSessionStartPayload */
     APP_Clean_Video_Session_Stop_Ntf,  /**< CleanVideoSessionStopPayload */
@@ -776,6 +780,12 @@ struct PrintVideoFinalizeReqPayload {
 struct StorageUsagePayload {
     uint64_t used_bytes;   /**< 已用字节数 */
     uint64_t total_bytes;  /**< 总字节数 */
+};
+
+/** APP_Transport_Result_Ntf：自动转运流程结果（串口 TLV 0x04）。 */
+struct TransportResultPayload {
+    uint8_t result;      /**< 0=完成；1=拒绝或失败；2=已中止 */
+    uint8_t reserved[3];
 };
 
 /** GLAVO→MEDIA：清粉延时抽帧会话开始（接续打印 PNG，按 fps 定时采样） */

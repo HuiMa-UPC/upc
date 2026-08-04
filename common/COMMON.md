@@ -164,8 +164,10 @@ scripts/rongsu.sh start   # glavo + rongsu_camera → ui
 | `APP_Clean_Test_Start_Rsp` | — | Glavo→UI | `CleanTestStartRspPayload` | `register_clean_test_start_rsp` | 请求受理状态（避免并发启动） |
 | `APP_Clean_Test_Done_Ntf` | — | Media→UI（有录像）/ Glavo→UI（无录像） | `CleanTestDonePayload` | `register_clean_test_done` | MCU TLV `0x22` 完成后：Media 停止清粉抽帧并回执；最终 MP4 在结果页退出后统一合成 |
 | `UI_Clean_Test_Close_Req` | — | UI→Glavo | Empty | `send_clean_test_close` | 返回首页时强制发送 `clean_test_close` 收尾 |
-| `UI_Print_Video_Finalize_Req` | — | UI→Media | `PrintVideoFinalizeReqPayload` | `send_print_video_finalize` | 结果页退出后触发：标记历史可见 + 按目录 PNG 统一合成最终 `timelapse.mp4` |
+| `UI_Print_Video_Finalize_Req` | — | UI→Media | `PrintVideoFinalizeReqPayload` | `send_print_video_finalize` | 开门取件后触发：promote 目录 + 清 pending；延时成片受 `UPC_TIMELAPSE_PLAYBACK_PNG` 控制（默认跳过 `timelapse.mp4`），打印录像仍可 remux `print_h264.mp4` |
 | `APP_Clean_Test_Close_Rsp` | — | Glavo→UI | Empty | `register_clean_test_close_rsp` | close 指令已受理 |
+| `UI_Transport_Req` | — | UI→Glavo | Empty | `send_transport_request` | 转运盒 Ready：发串口自动转运请求（A2/0x41 TLV 0x02） |
+| `APP_Transport_Result_Ntf` | — | Glavo→UI | `TransportResultPayload` | `register_transport_result` | MCU TLV 0x04：`0`=完成→BoxShutter；`1/2` 失败/中止→停留转圈页（无超时） |
 | `UI_Print_Prepare_Req` | — | UI→Glavo | `PrintPrepareReqPayload` | `send_print_prepare` | USB 复制+轻量扫描+config |
 | `APP_Print_Prepare_Rsp` | — | Glavo→UI | `PrintPrepareRspPayload` | `register_print_prepare_done` | — |
 | `UI_Parser_Exit_Ntf` | — | UI→Glavo | Empty | `send_parser_exit` | 取消解析 |
@@ -303,7 +305,7 @@ rongsu_broker ──listen──► /tmp/upc_broker.sock ◄── UI / Glavo / 
 | `common/CMakeLists.txt` | 统一静态库 `upc::common`（兼容别名 `upc::ipc` 等） | 平台组 |
 | `common/fs_manifest/gcode_manifest.*` | Local `/home/Gcode/config.json` 读写（UI 读列表 + Glavo 写） | 平台 / UI / Glavo |
 | `common/fs_manifest/print_history_manifest.*` | `/home/media/video/config.json`（Media 写，UI 历史页读） | 平台 / Media / UI |
-| `common/fs_manifest/media_paths.hpp` | `/home/media/{photo,video}` 路径宏 | 平台 / Media / UI |
+| `common/fs_manifest/media_paths.hpp` | `/home/media/{photo,video}` 路径宏；`UPC_TIMELAPSE_PLAYBACK_PNG`（默认 1=PNG 播延时） | 平台 / Media / UI |
 | `common/ipc/msg_port.hpp` | 业务唯一 IPC 入口 | 平台组 |
 | `common/ipc/ipc_wire.*` | 线协议 | 平台组 |
 | `common/ipc/ipc_endpoint.*` | Socket 传输 | 平台组 |

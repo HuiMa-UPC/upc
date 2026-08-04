@@ -250,7 +250,7 @@ ARGB8888 图，`make_ctl_backdrop()` 直接贴，按 profile 三档挑（`ctl_ba
 ```
 Glavo Print_Terminate_Done / 进度 100% → control.cpp finish_printing()
   → enter_state(CONTROL_STATE_PRINT_DONE)   // 只停看门狗，预览保活，界面维持打印中原样
-  → （Camera 后台把 PNG 序列编成 timelapse.mp4 并 upsert manifest，可能数秒到数分钟）
+  → （开门 finalize：promote 目录；`UPC_TIMELAPSE_PLAYBACK_PNG=1` 时不编 timelapse.mp4，保留 PNG 即可播；`=0` 时后台编 mp4）
   → APP_Print_Video_Manifest_Ntf (Camera→UI)
   → control.cpp on_print_video_manifest()：按 frames_dir 主键读 /home/media/video/config.json
   → page_user_home_enter_print_result()     // 徽标切结束档 + 底部换取件组
@@ -294,10 +294,10 @@ SWIPE TO COLLECT → DOOR_OPENING（PM2.5/清粉 → 开门）
   没有灰字说明行，只有顶图（置灰态 `img_mask` / 可点态 `img_door_close_hint`）和按钮随门是否
   关好切换。开关关闭或另两个开门入口（打印前置、首页独立开门）仍是原来的两态两标题。
 - **`control_is_printing()`** 把 `TRANSFER_BOX` 也算进打印占用，转运期间同样挡住 `user_files`。
-- **占位定时器**：契约里没有「转运盒到位 / 转移完成 / 闸门到位 / 解锁」任何一条信号，所以
-  ① 的到位靠 `BOX_READY_MS` 定时器翻 `g_box_ready`，② 的完成靠 `BOX_MOVE_MS`，③ 稿上本就没有
-  到位检测。信号就位后把这两处换成轮询/应答即可，UI 结构不用动。三步都复用
-  `g_door_advance_timer`（互斥使用，`enter_state → stop_door_timers` 统一清理）。
+- **装盒到位占位**：① 仍靠 `BOX_READY_MS` 定时器翻 `g_box_ready`（复用 `g_door_advance_timer`）。
+- **自动转运**：Ready 确认 → `send_transport_request()`（串口 A2/0x41 TLV 0x02）并进
+  BoxMoving；等 `APP_Transport_Result_Ntf`：`result=0` → BoxShutter；`1/2` 失败/中止 →
+  **停留转圈页**，无超时重试。③ 闸门稿上本就没有到位检测，用户点完成。
 
 ### 缺粉弹窗（稿 4273:5892）
 
@@ -392,7 +392,7 @@ rongsu_camera 经主 IPC（/tmp/upc_camera.sock）SCM_RIGHTS 附带 dma_buf fd �
 | 组件 | 文件 | 职责 |
 |------|------|------|
 | `page_user_history` | `pages/page_user_history.*` | 读 `/home/media/video/config.json`（`common/fs_manifest/print_history_manifest`）→ 按 `start_unix` 倒序、按自然日分组的卡片列表；缩略图 `A:/home/media/video/{thumb}`（RTHM 解码，`LV_IMAGE_ALIGN_COVER`）；**Album** 扫 `/home/media/photo/*.png`，缩略图优先同名 `.rthm`；顶部三 Tab + Storage 容量条；管理（多选）模式批量删除；上下翻页；**左滑删除**（清除卡片默认 `GESTURE_BUBBLE` 使手势落到卡片）→ History/Timelapse **按类型独立删除**后重写 config.json；Album 删 PNG + 配对 `.rthm` |
-| `page_user_timelapse` | `pages/page_user_timelapse.*` | 全屏播放页（建于 `lv_layer_top()`）：优先 `timelapse.mp4`（`VideoPlayer`），失败回退 PNG 序列；拖动预览为后台小图 scrub（MP4 缩解放 / PNG `PngScrubPreview`），松手后再 settle 主画面 |
+| `page_user_timelapse` | `pages/page_user_timelapse.*` | 全屏播放页（建于 `lv_layer_top()`）：受 `UPC_TIMELAPSE_PLAYBACK_PNG` 控制——默认 PNG 序列；`=0` 时优先 `timelapse.mp4`（失败回退 PNG）；拖动预览为后台小图 scrub，松手后再 settle 主画面 |
 
 - **进入/退出**：历史页缩略图点击 → `page_user_timelapse_set_source(目录,mp4路径,标题,时间)` + `switch_to("user_timelapse")`；关闭 → `switch_to("user_history")`。
 - **LVGL 线程规则**：PNG 序列播放由主线程 `lv_timer` 换主画面；拖动预览解码在后台线程，经 `lv_async_call` 贴预览框。

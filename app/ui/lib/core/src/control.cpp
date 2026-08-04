@@ -511,6 +511,8 @@ void on_xfr_recv_cancel(void * /*user*/)
     close_xfr_recv_dlg();
 }
 
+void on_transport_result(uint8_t result);
+
 void wire_msg_proxy()
 {
     if(g_proxy_wired) {
@@ -571,6 +573,9 @@ void wire_msg_proxy()
     proxy.register_clean_stop_result([]() {
         invoke_done(g_clean_stop_cb, g_clean_stop_u);
     });
+
+    /* 自动转运：result=0 → BoxShutter；非 0 停留 BoxMoving（无超时） */
+    proxy.register_transport_result(on_transport_result);
 
     /* USB 列表经 Fs_DirOpen IPC；Local 由 load_local_files_from_config 直读盘 */
     proxy.register_fs_dir([](const middleware::FileEntryPayload *files, uint32_t count) {
@@ -881,11 +886,9 @@ constexpr uint32_t DOOR_OPENED_MIN_MS  = 300u;    /**< "门已开启(置灰)"最
 constexpr uint32_t DOOR_CLOSE_POLL_MS  = 800u;    /**< 关门检测轮询间隔 */
 constexpr uint32_t CLEAN_MIN_MS        = 300u;    /**< "正在清粉中"最短显示 */
 constexpr uint32_t DOOR_OPEN_RETRY_MS  = 800u;    /**< 开门失败重试间隔 */
-/* 转运盒三步的占位节奏。后端目前没有「盒到位 / 转移完成」信号（契约里一个都没有），
- * 先用定时器把两处等待假出来；信号就位后 BOX_READY_MS 换成到位轮询，BOX_MOVE_MS 换成
- * 转移完成应答。闸门那步稿上本就没有到位检测，一直是用户自己点。 */
+/* 转运盒：装盒到位仍用 BOX_READY_MS 占位；转移完成等 APP_Transport_Result_Ntf（result=0），
+ * 失败(1/2)停留转圈页、无超时。闸门那步稿上本就没有到位检测，一直是用户自己点。 */
 constexpr uint32_t BOX_READY_MS        = 1500u;   /**< 「转运盒未到位」翻可点的占位时长 */
-constexpr uint32_t BOX_MOVE_MS         = 3000u;   /**< 「正在转移工件」spinner 的占位时长 */
 /* 门弹窗顶图的设计尺寸：卡片宽定比例，图容器高按此比算 */
 constexpr int32_t DOOR_IMG_W = 496;
 constexpr int32_t DOOR_IMG_H = 321;
@@ -1304,6 +1307,7 @@ void on_door_opening_cancel(lv_event_t *e);
 void on_box_install_confirm(lv_event_t *e);
 void on_box_shutter_done(lv_event_t *e);
 void door_apply_variant(DoorVariant v);
+void on_transport_result(uint8_t result);
 void pf_start_open_door(void);
 
 /* 满宽圆角矩形主按钮（宽弹窗底部：门弹窗的确认钮、放版弹窗"已放入"的选择任务钮）。
@@ -1567,7 +1571,7 @@ void door_apply_variant(DoorVariant v)
             lv_label_set_text(g_door_title, "Transferring the part to the box");
             door_make_sub_label(g_door_content,
                                 "Keep the transfer box attached until it finishes");
-            /* 稿上这步无按钮也无关闭钮：转移完成才前进（现由 BOX_MOVE_MS 占位） */
+            /* 稿上这步无按钮也无关闭钮：等 MCU 转运结果 result=0 才前进 */
             door_make_spinner(g_door_content);
         } else {
             door_set_image(&img_box_shutter);
@@ -2954,17 +2958,7 @@ void box_ready_cb(lv_timer_t * /*t*/)
     door_apply_variant(DoorVariant::BoxInstall);
 }
 
-/* 占位「工件转移完成」：转圈结束 → 推入闸门 */
-void box_move_done_cb(lv_timer_t * /*t*/)
-{
-    g_door_advance_timer = nullptr;
-    if(g_state != CONTROL_STATE_TRANSFER_BOX) {
-        return;
-    }
-    door_apply_variant(DoorVariant::BoxShutter);
-}
-
-/* 复用 g_door_advance_timer：转运盒三步与门流程的最短停留不会同时在跑，
+/* 复用 g_door_advance_timer：装盒到位占位与门流程的最短停留不会同时在跑，
  * 且 enter_state → stop_door_timers 会统一清掉。 */
 void arm_box_timer(lv_timer_cb_t cb, uint32_t period_ms)
 {
@@ -2980,8 +2974,18 @@ void on_box_install_confirm(lv_event_t * /*e*/)
     if(g_state != CONTROL_STATE_TRANSFER_BOX) {
         return;
     }
+    ui::UiMsgProxy::instance().send_transport_request();
     door_apply_variant(DoorVariant::BoxMoving);
-    arm_box_timer(box_move_done_cb, BOX_MOVE_MS);
+}
+
+void on_transport_result(uint8_t result)
+{
+    if(g_state != CONTROL_STATE_TRANSFER_BOX) {
+        return;
+    }
+    if(result == 0) {
+        door_apply_variant(DoorVariant::BoxShutter);
+    }
 }
 
 void on_box_shutter_done(lv_event_t * /*e*/)

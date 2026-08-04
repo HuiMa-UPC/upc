@@ -32,8 +32,10 @@ struct PrintVideoJob {
 /**
  * 打印层拍照：dma 元数据环取帧 → 软件编码 PNG（1.png,2.png,...）；
  * Finish/Abort 时仅生成 thumb.rthm + manifest 快路径（video_pending /
- * print_video_pending），结果页退出后再统一按 PNG 合成最终 timelapse.mp4；
- * 若 Session_Start 开了连续 H264，再 remux print_h264.mp4。
+ * print_video_pending）。开门 finalize：
+ *   - `UPC_TIMELAPSE_PLAYBACK_PNG=1`（默认）：不编 timelapse.mp4，保留 PNG；
+ *   - `=0`：PNG→timelapse.mp4，成功后可删清粉段 PNG。
+ * 若 Session_Start 开了连续 H264，再 remux print_h264.mp4（与延时开关无关）。
  */
 class PrintVideoRecorder {
 public:

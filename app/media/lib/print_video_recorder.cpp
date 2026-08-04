@@ -473,7 +473,14 @@ bool PrintVideoRecorder::commit_after_exit(const char* frames_dir)
     }
 
     const bool aborted = (hit->status == upc::PrintHistoryStatus::Terminated);
+#if UPC_TIMELAPSE_PLAYBACK_PNG
+    /* PNG 模式无 video 字段；以目录内是否有层间帧为准。 */
+    const std::string session_dir =
+        std::string(CAMERA_PRINT_VIDEO_OUT_DIR) + "/" + hit->frames_dir;
+    const bool has_video = timelapse_util::scan_max_png_index(session_dir) >= 1u;
+#else
     const bool has_video = !hit->video.empty();
+#endif
     notify_manifest_ready(hit->frames_dir, true, aborted, has_video);
     return true;
 }
@@ -533,10 +540,21 @@ void PrintVideoRecorder::finalize_after_exit(const char* frames_dir)
     }
     const uint32_t frame_count = timelapse_util::scan_max_png_index(session_dir);
     const uint32_t fps = layer_fps_ > 0 ? layer_fps_ : 1u;
+
+    /* 延时摄影成片：PNG 模式只认帧在、不编 mp4、不删 PNG；MP4 模式才 encode。
+     * 打印录像 remux 不受此开关影响（见下方 h264 分支）。 */
+    bool video_ok = false;
+#if UPC_TIMELAPSE_PLAYBACK_PNG
+    video_ok = (frame_count >= 1u);
+    hit->video.clear();
+    (void)std::remove((session_dir + "/timelapse.mp4").c_str()); /* 避免残留旧 mp4 误导 UI */
+    UPC_LOG_MEDIA_SERVICE(
+        Info,
+        "print_video finalize PNG mode: skip timelapse mp4 frames=%u dir=%s",
+        frame_count, session_dir.c_str());
+#else
     const std::string mp4_path = session_dir + "/timelapse.mp4";
     const std::string mp4_rel = hit->frames_dir + "/timelapse.mp4";
-
-    bool video_ok = false;
     if(frame_count >= 1u) {
         (void)std::remove(mp4_path.c_str());
         video_ok = timelapse_util::encode_png_sequence_to_mp4(
@@ -560,6 +578,7 @@ void PrintVideoRecorder::finalize_after_exit(const char* frames_dir)
                 session_dir, hit->clean_first_png, hit->clean_last_png);
         }
     }
+#endif
 
     const std::string h264_path = session_dir + "/print.h264";
     const std::string h264_mp4_path = session_dir + "/print_h264.mp4";

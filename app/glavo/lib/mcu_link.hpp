@@ -37,6 +37,7 @@ using McuLinkEventCb = std::function<void(McuLinkEvent)>;
 using McuLinkProgressCb = std::function<void()>;
 /** @brief 清粉测试完成回调：参数为 TLV 0x22 result_code。 */
 using McuLinkCleanTestDoneCb = std::function<void(uint8_t)>;
+using McuLinkTransportResultCb = std::function<void(uint8_t)>;
 
 /** @brief 环境传感器缓存（串口 0x9B 上报解析结果，供 UI/打印进度读取） */
 struct EnvSnapshotCache {
@@ -82,6 +83,7 @@ public:
      */
     void set_progress_callback(McuLinkProgressCb cb);
     void set_clean_test_done_callback(McuLinkCleanTestDoneCb cb);
+    void set_transport_result_callback(McuLinkTransportResultCb cb);
 
     /** @brief 运行时设置串口 ACK 可靠发送开关（默认值来自编译宏）。 */
     void set_serial_ack_enabled(bool enabled);
@@ -193,6 +195,12 @@ public:
      * @return true=已成功入串口发送队列；false=串口未就绪或组帧失败
      */
     bool request_open_door_once();
+
+    /**
+     * @brief 仅发送一次自动转运请求（TLV_REQ_TRANSPORT 0x02），不等待结果
+     * @return true=已入串口发送队列；false=串口未就绪或组帧失败
+     */
+    bool request_transport_once();
 
     /**
      * @brief 设置 TCP_NODELAY，禁用 Nagle 算法以降低发包延迟
@@ -340,6 +348,7 @@ private:
     McuLinkEventCb event_cb_;            /**< 链路事件回调 */
     McuLinkProgressCb progress_cb_;         /**< 进度更新回调 */
     McuLinkCleanTestDoneCb clean_test_done_cb_; /**< 清粉测试完成回调 */
+    McuLinkTransportResultCb transport_result_cb_; /**< 自动转运结果回调 */
 
     /* ---------- 文件描述符 ---------- */
     int tcp_fd_    = -1; /**< TCP socket 文件描述符，-1 表示未连接 */

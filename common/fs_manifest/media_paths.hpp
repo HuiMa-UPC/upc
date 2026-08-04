@@ -45,6 +45,17 @@
 #define UPC_PHOTO_CONFIG  UPC_PHOTO_DIR "/config.json"
 #endif
 
+/**
+ * 延时摄影播放形态（Media + UI 共用编译开关）：
+ *   1 = PNG 序列播放（默认）：开门 finalize 不编 timelapse.mp4，保留层间 PNG；
+ *       打印录像（print_h264.mp4）仍可按开关 remux。
+ *   0 = MP4 播放：开门后后台 PNG→timelapse.mp4，成功后可删清粉段 PNG。
+ * 可用 -DUPC_TIMELAPSE_PLAYBACK_PNG=0 覆盖。
+ */
+#ifndef UPC_TIMELAPSE_PLAYBACK_PNG
+#define UPC_TIMELAPSE_PLAYBACK_PNG  1
+#endif
+
 /* ---- 兼容旧宏名（逐步迁移调用方） ---- */
 #ifndef UPC_PRINT_VIDEO_DIR
 #define UPC_PRINT_VIDEO_DIR  UPC_VIDEO_DIR

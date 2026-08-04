@@ -23,6 +23,7 @@ using CleanStopDoneCb  = std::function<void()>;
 using CleanTestStartRspCb = std::function<void(bool accepted)>;
 using CleanTestDoneCb = std::function<void(const middleware::CleanTestDonePayload&)>;
 using CleanTestCloseRspCb = std::function<void()>;
+using TransportResultCb = std::function<void(uint8_t result)>;
 using FsDirCb          = std::function<void(const middleware::FileEntryPayload* files,
                                             uint32_t count)>;
 using PrintProgressCb  = std::function<void(const middleware::PrintProgressPayload&)>;
@@ -79,6 +80,10 @@ public:
     /** 结果页退出后触发媒体统一合成 timelapse.mp4。 */
     void send_print_video_finalize(const char* frames_dir);
     void register_clean_test_close_rsp(CleanTestCloseRspCb cb);
+
+    /** 转运盒 Ready：发自动转运请求；MCU TLV 0x04 结果经 register_transport_result。 */
+    void send_transport_request();
+    void register_transport_result(TransportResultCb cb);
 
     /** 列目录：当前 UI 仅对 USB 调用；Local 由 control 直读 config.json */
     void send_fs_dir_open(middleware::PrintFileSource source);
@@ -182,6 +187,7 @@ private:
     CleanTestStartRspCb clean_test_start_rsp_cb_;
     CleanTestDoneCb clean_test_done_cb_;
     CleanTestCloseRspCb clean_test_close_rsp_cb_;
+    TransportResultCb transport_result_cb_;
     FsDirCb          fs_dir_cb_;
     PrintProgressCb  print_progress_cb_;
     PrintTerminateDoneCb print_terminate_done_cb_;

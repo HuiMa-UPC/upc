@@ -358,6 +358,11 @@ bool GlavoService::init()
         clean_test_done_pending_.store(true);
         worker_cv_.notify_one();
     });
+    McuLink::instance().set_transport_result_callback([this](uint8_t result_code) {
+        transport_result_code_.store(result_code);
+        transport_result_pending_.store(true);
+        worker_cv_.notify_one();
+    });
     McuLink::instance().set_ota_status_callback(
         [this](const middleware::McuOtaStatusPayload& st) {
             publish_mcu_ota_status(st);
@@ -413,6 +418,7 @@ bool GlavoService::start()
         middleware::MsgType::UI_Clean_Stop_Req,
         middleware::MsgType::UI_Clean_Test_Start_Req,
         middleware::MsgType::UI_Clean_Test_Close_Req,
+        middleware::MsgType::UI_Transport_Req,
         middleware::MsgType::UI_Mcu_Ota_Start_Req,
         middleware::MsgType::UI_Mcu_Ota_Cancel_Ntf,
         middleware::MsgType::UI_Serial_Mcu_Ota_Start_Req,
@@ -559,6 +565,7 @@ void GlavoService::worker_loop()
             worker_cv_.wait(lock, [this]() {
                 return !worker_running_.load() ||
                        clean_test_done_pending_.load() ||
+                       transport_result_pending_.load() ||
                        !worker_queue_.empty() ||
                        !link_event_queue_.empty();
             });
@@ -584,6 +591,15 @@ void GlavoService::worker_loop()
                 clean_test_done_pending_.store(false);
                 lock.unlock();
                 on_clean_test_done(result_code);
+                lock.lock();
+            }
+
+            if(transport_result_pending_.load() &&
+               state() == ServiceState::Running) {
+                const uint8_t result_code = transport_result_code_.load();
+                transport_result_pending_.store(false);
+                lock.unlock();
+                on_transport_result(result_code);
                 lock.lock();
             }
 
@@ -701,6 +717,9 @@ void GlavoService::handle_message(const middleware::Message& msg)
             break;
         case middleware::MsgType::UI_Clean_Test_Close_Req:
             handle_clean_test_close_request(msg);
+            break;
+        case middleware::MsgType::UI_Transport_Req:
+            handle_transport_request(msg);
             break;
         case middleware::MsgType::UI_Mcu_Ota_Start_Req:
             handle_mcu_ota_start(msg);
@@ -1913,6 +1932,32 @@ void GlavoService::handle_clean_test_close_request(const middleware::Message& ms
         clean_test_active_ = false;
     }
     publish_clean_test_close_rsp(static_cast<uint32_t>(msg.sender_id));
+}
+
+void GlavoService::handle_transport_request(const middleware::Message& /*msg*/)
+{
+    if(!McuLink::instance().request_transport_once()) {
+        UPC_LOG_GLAVO_SERVICE(Warn, "transport request send failed");
+    }
+}
+
+void GlavoService::publish_transport_result(uint8_t result)
+{
+    middleware::TransportResultPayload ntf{};
+    ntf.result = result;
+    middleware::Message out(middleware::MsgType::APP_Transport_Result_Ntf,
+        middleware::ModuleId::APP_GLAVO,
+        middleware::ModuleId::UI);
+    out.payload = middleware::MsgPayload::from_bytes(
+        reinterpret_cast<const uint8_t*>(&ntf), sizeof(ntf));
+    (void)publish_async(out);
+}
+
+void GlavoService::on_transport_result(uint8_t result)
+{
+    UPC_LOG_GLAVO_SERVICE(Info, "transport_result ntf result=%u",
+                          static_cast<unsigned>(result));
+    publish_transport_result(result);
 }
 
 /* ============================================================================

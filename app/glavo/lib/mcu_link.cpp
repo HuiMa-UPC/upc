@@ -306,6 +306,11 @@ void McuLink::set_clean_test_done_callback(McuLinkCleanTestDoneCb cb)
     clean_test_done_cb_ = std::move(cb);
 }
 
+void McuLink::set_transport_result_callback(McuLinkTransportResultCb cb)
+{
+    transport_result_cb_ = std::move(cb);
+}
+
 void McuLink::set_serial_ack_enabled(bool enabled)
 {
     serial_ack_enabled_.store(enabled);
@@ -696,6 +701,25 @@ bool McuLink::request_open_door_once()
     }
 
     enqueue_serial_tx(frame, static_cast<size_t>(n), true);
+    return true;
+}
+
+bool McuLink::request_transport_once()
+{
+    if(serial_fd_ < 0) {
+        UPC_LOG_MCU_LINK(Warn, "request_transport_once: serial offline");
+        return false;
+    }
+
+    uint8_t frame[32];
+    const int n = serial_build_transport_request(frame, sizeof(frame));
+    if(n <= 0) {
+        UPC_LOG_MCU_LINK(Warn, "request_transport_once: build frame failed");
+        return false;
+    }
+
+    enqueue_serial_tx(frame, static_cast<size_t>(n), true);
+    UPC_LOG_MCU_LINK(Info, "transport request sent");
     return true;
 }
 
@@ -1203,6 +1227,16 @@ void McuLink::handle_serial_rx_frame(const uint8_t* frame, size_t len)
                          static_cast<unsigned>(clean_result));
         if(clean_test_done_cb_) {
             clean_test_done_cb_(clean_result);
+        }
+        return;
+    }
+
+    uint8_t transport_result = 0;
+    if(serial_parse_transport_result(frame, len, &transport_result) == 0) {
+        UPC_LOG_MCU_LINK(Info, "transport_result=%u",
+                         static_cast<unsigned>(transport_result));
+        if(transport_result_cb_) {
+            transport_result_cb_(transport_result);
         }
         return;
     }

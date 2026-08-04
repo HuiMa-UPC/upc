@@ -507,9 +507,64 @@ bool remove_print_video_assets(const std::string& frames_dir)
     return true;
 }
 
+/** 会话目录是否至少有一张编号层间 PNG（1.png…） */
+bool session_has_png_frames(const std::string& frames_dir)
+{
+    if(frames_dir.empty()) {
+        return false;
+    }
+    const std::string abs_dir = session_abs_dir(frames_dir);
+    std::error_code ec;
+    if(!std::filesystem::is_directory(abs_dir, ec) || ec) {
+        return false;
+    }
+    for(const auto& de : std::filesystem::directory_iterator(abs_dir, ec)) {
+        if(ec) {
+            break;
+        }
+        if(!de.is_regular_file(ec) || ec) {
+            continue;
+        }
+        const std::string name = de.path().filename().string();
+        if(name.size() < 5) {
+            continue;
+        }
+        /* 要求「纯数字 + .png」，与播放器 parse_png_index 一致 */
+        size_t i = 0;
+        while(i < name.size() && name[i] >= '0' && name[i] <= '9') {
+            ++i;
+        }
+        if(i == 0) {
+            continue;
+        }
+        if(name.compare(i, std::string::npos, ".png") == 0 ||
+           name.compare(i, std::string::npos, ".PNG") == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool session_has_timelapse_thumb(const upc::PrintHistoryEntry& e)
+{
+    if(e.thumb.empty()) {
+        return false;
+    }
+    std::error_code ec;
+    return std::filesystem::exists(
+        std::string(UPC_PRINT_VIDEO_DIR) + "/" + e.thumb, ec);
+}
+
 bool entry_has_timelapse(const upc::PrintHistoryEntry& e)
 {
-    return !e.video.empty() || e.video_pending || !e.thumb.empty();
+    if(e.video_pending || !e.video.empty() || !e.thumb.empty()) {
+        return true;
+    }
+#if UPC_TIMELAPSE_PLAYBACK_PNG
+    return session_has_png_frames(e.frames_dir);
+#else
+    return false;
+#endif
 }
 
 bool entry_has_print_video(const upc::PrintHistoryEntry& e)
@@ -931,7 +986,14 @@ void on_thumb_click(lv_event_t *e)
                   UPC_PRINT_VIDEO_DIR, c->frames_dir.c_str());
     char video_path[256];
     video_path[0] = '\0';
-    if(!c->video.empty()) {
+    /* Print History 始终走 print_h264.mp4；延时在 PNG 宏下不传 mp4。 */
+    const bool pass_mp4 =
+        (c->kind == HistoryCard::Kind::PrintVideo)
+#if !UPC_TIMELAPSE_PLAYBACK_PNG
+        || (c->kind == HistoryCard::Kind::Timelapse)
+#endif
+        ;
+    if(pass_mp4 && !c->video.empty()) {
         std::snprintf(video_path, sizeof(video_path), "%s/%s",
                       UPC_PRINT_VIDEO_DIR, c->video.c_str());
     }
@@ -1343,7 +1405,12 @@ void make_thumbnail(lv_obj_t *parent, const HistoryCard *c)
     /* 视频还没生成好：稿里是纯色底 + 一句提示，不铺缩略图 */
     if(!c->video_ready) {
         lv_obj_t *tips = lv_label_create(slot);
-        lv_label_set_text(tips, c->video_pending ? "Generating video..."
+        lv_label_set_text(tips, c->video_pending
+#if UPC_TIMELAPSE_PLAYBACK_PNG
+                                              ? "Preparing..."
+#else
+                                              ? "Generating video..."
+#endif
                                                 : "Video unavailable");
         lv_obj_set_style_text_color(tips, user_color_text_dim, 0);
         lv_obj_set_style_text_font(tips, user_font_caption(), 0);
@@ -1406,18 +1473,32 @@ void build_entry(lv_obj_t *parent, const upc::PrintHistoryEntry &e)
     ctx->thumb_src = make_thumb_src_fallback(e, ctx->kind);
     {
         const std::string base = std::string(UPC_PRINT_VIDEO_DIR) + "/";
-        bool mp4_ready = false;
-        if(!ctx->video.empty()) {
-            std::error_code ec;
-            mp4_ready = std::filesystem::exists(base + ctx->video, ec);
+        bool media_ready = false;
+        if(ctx->kind == HistoryCard::Kind::PrintVideo) {
+            if(!ctx->video.empty()) {
+                std::error_code ec;
+                media_ready = std::filesystem::exists(base + ctx->video, ec);
+            }
+        } else {
+#if UPC_TIMELAPSE_PLAYBACK_PNG
+            /* 可播必须有层间 PNG（仅有 thumb 点进去是空序列）。
+             * thumb 用于列表展示；「两个都要」里的 thumb 条件作增强：有图才算完整可播。 */
+            media_ready = session_has_png_frames(e.frames_dir) &&
+                          session_has_timelapse_thumb(e);
+#else
+            if(!ctx->video.empty()) {
+                std::error_code ec;
+                media_ready = std::filesystem::exists(base + ctx->video, ec);
+            }
+#endif
         }
-        ctx->video_ready = mp4_ready;
         /* Print History 只跟 print_video_pending；Timelapse 跟 video_pending。
-         * 关 H264 时不会置 print_video_pending，避免「生成中」卡住。 */
+         * pending 期间一律显示 Generating，不可点；过完开门 finalize 后再认 ready。 */
         const bool pending = (ctx->kind == HistoryCard::Kind::PrintVideo)
             ? e.print_video_pending
             : e.video_pending;
-        ctx->video_pending = (!mp4_ready) && pending;
+        ctx->video_pending = pending;
+        ctx->video_ready = media_ready && !pending;
     }
     g_cards.push_back(ctx);
 

@@ -110,6 +110,15 @@ void UiMsgProxy::init()
         }));
 
     subs_.push_back(bus.subscribe(
+        middleware::MsgType::APP_Transport_Result_Ntf, middleware::ModuleId::UI,
+        [this](const middleware::Message& msg) {
+            middleware::TransportResultPayload p{};
+            if (transport_result_cb_ && read_inline_pod(msg, p)) {
+                transport_result_cb_(p.result);
+            }
+        }));
+
+    subs_.push_back(bus.subscribe(
         middleware::MsgType::Fs_DirOpen_Rsp, middleware::ModuleId::UI,
         [this](const middleware::Message& msg) {
             if (!fs_dir_cb_) {
@@ -581,6 +590,19 @@ void UiMsgProxy::send_print_video_finalize(const char* frames_dir)
 void UiMsgProxy::register_clean_test_close_rsp(CleanTestCloseRspCb cb)
 {
     clean_test_close_rsp_cb_ = std::move(cb);
+}
+
+void UiMsgProxy::send_transport_request()
+{
+    middleware::Message msg(middleware::MsgType::UI_Transport_Req,
+                            middleware::ModuleId::UI,
+                            middleware::ModuleId::APP_GLAVO);
+    middleware::MsgPort::instance().publish_async(msg);
+}
+
+void UiMsgProxy::register_transport_result(TransportResultCb cb)
+{
+    transport_result_cb_ = std::move(cb);
 }
 
 void UiMsgProxy::send_fs_dir_open(middleware::PrintFileSource source)

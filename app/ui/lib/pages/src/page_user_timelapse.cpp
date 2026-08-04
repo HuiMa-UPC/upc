@@ -653,6 +653,7 @@ void page_user_timelapse_refresh(bool)
         lv_label_set_text(g_sub_lbl, g_sub);
     }
 
+    /* 历史页在 UPC_TIMELAPSE_PLAYBACK_PNG 下对延时不传 mp4；打印录像仍传 print_h264.mp4。 */
     if(load_mp4_playback()) {
         hide_preview_chrome();
         return;

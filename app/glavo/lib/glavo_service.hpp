@@ -63,6 +63,9 @@ private:
     void handle_clean_stop_request(const middleware::Message& msg);
     void handle_clean_test_start_request(const middleware::Message& msg);
     void handle_clean_test_close_request(const middleware::Message& msg);
+    void handle_transport_request(const middleware::Message& msg);
+    void publish_transport_result(uint8_t result);
+    void on_transport_result(uint8_t result);
     void stop_clean_worker();
     void publish_clean_rsp(middleware::MsgType type, uint32_t target_id);
     void publish_clean_test_start_rsp(uint32_t target_id, bool accepted);
@@ -214,6 +217,8 @@ private:
     std::atomic<uint32_t> clean_stop_rsp_target_{0};
     std::atomic<bool> clean_test_done_pending_{false};
     std::atomic<uint8_t> clean_test_result_code_{0};
+    std::atomic<bool> transport_result_pending_{false};
+    std::atomic<uint8_t> transport_result_code_{0};
     bool clean_test_active_ = false;
     bool clean_video_record_on_ = true; /**< 仅调试页状态回读；Purify 录像不再受其门控 */
     bool clean_video_session_started_ = false;
