@@ -773,7 +773,8 @@ void MediaService::cleanup_stale_work_dirs_on_startup() const
     std::unordered_set<std::string> keep_frames_dirs;
     for(const auto& e : entries) {
         /* 仍在进行中的会话目录不清理：未提交或视频仍在后台生成。 */
-        if((!e.committed || e.video_pending) && !e.frames_dir.empty()) {
+        if((!e.committed || e.video_pending || e.print_video_pending) &&
+           !e.frames_dir.empty()) {
             keep_frames_dirs.insert(e.frames_dir);
         }
     }
@@ -833,7 +834,8 @@ void MediaService::cleanup_work_dirs_before_print_start(
 
     std::unordered_set<std::string> keep_frames_dirs;
     for(const auto& e : entries) {
-        if((!e.committed || e.video_pending) && !e.frames_dir.empty()) {
+        if((!e.committed || e.video_pending || e.print_video_pending) &&
+           !e.frames_dir.empty()) {
             keep_frames_dirs.insert(e.frames_dir);
         }
     }

@@ -31,8 +31,9 @@ struct PrintVideoJob {
 
 /**
  * 打印层拍照：dma 元数据环取帧 → 软件编码 PNG（1.png,2.png,...）；
- * Finish/Abort 时仅生成 thumb.rthm + manifest 快路径（video_pending），
- * 结果页退出后再统一按 PNG 合成最终 timelapse.mp4。
+ * Finish/Abort 时仅生成 thumb.rthm + manifest 快路径（video_pending /
+ * print_video_pending），结果页退出后再统一按 PNG 合成最终 timelapse.mp4；
+ * 若 Session_Start 开了连续 H264，再 remux print_h264.mp4。
  */
 class PrintVideoRecorder {
 public:
@@ -77,7 +78,8 @@ private:
                               const std::string& frames_dir_name,
                               const std::string& thumb_name,
                               const std::string& video_name,
-                              bool video_pending) const;
+                              bool video_pending,
+                              bool print_video_pending) const;
     /**
      * APP_Print_Video_Manifest_Ntf → UI：结果数据已就绪，可切打印结果页。
      * 必须在 manifest rename() 之后调用；0 帧（无 manifest 条目）也要发，
@@ -102,6 +104,7 @@ private:
     std::function<bool(std::vector<uint8_t>&)> snapshot_provider_;
 
     bool     session_active_ = false;
+    bool     h264_continuous_on_ = false; /**< Session_Start 时的打印期 H264 开关快照 */
     uint32_t stream_width_   = CAMERA_WIDTH_DEFAULT;
     uint32_t stream_height_  = CAMERA_HEIGHT_DEFAULT;
     uint32_t layer_fps_      = CAMERA_PRINT_VIDEO_LAYER_FPS;

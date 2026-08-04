@@ -122,6 +122,7 @@ void PrintVideoRecorder::on_session_start(
 
     frame_count_ = 0;
     last_layer_nv12_.clear();
+    h264_continuous_on_ = (info.h264_continuous_on != 0);
     /* 同一 gcode 文件重复打印时覆盖同名目录 */
     session_name_ = job_name_.empty() ? std::string("print") : job_name_;
     session_final_dir_ = std::string(CAMERA_PRINT_VIDEO_OUT_DIR) + "/" + session_name_;
@@ -140,13 +141,14 @@ void PrintVideoRecorder::on_session_start(
     session_active_ = true;
     UPC_LOG_MEDIA_SERVICE(
         Info,
-        "print_video session start id=%s job=%s dir=%s %ux%u layer_fps=%u start_unix=%lld",
+        "print_video session start id=%s job=%s dir=%s %ux%u layer_fps=%u h264=%d start_unix=%lld",
         session_id_.c_str(),
         job_name_.c_str(),
         session_dir_.c_str(),
         stream_width_,
         stream_height_,
         layer_fps_,
+        h264_continuous_on_ ? 1 : 0,
         static_cast<long long>(start_unix_));
 }
 
@@ -376,6 +378,7 @@ void PrintVideoRecorder::finalize_session(bool aborted)
         session_dir_.clear();
         start_unix_ = 0;
         frame_count_ = 0;
+        h264_continuous_on_ = false;
         return;
     }
 
@@ -398,6 +401,8 @@ void PrintVideoRecorder::finalize_session(bool aborted)
     const std::string thumb_rel = frames_dir_name + "/thumb" + CAMERA_PRINT_VIDEO_THUMB_EXT;
 
     const bool need_video = (frames >= 1u);
+    /* 仅当本次会话开了连续 H264 时，Print History 才进入「生成中」；关则不落 print 视频项。 */
+    const bool need_print_video = need_video && h264_continuous_on_;
 
     /* 快路径：先落盘 manifest（含统计与缩略图），UI 可立即切结果页。 */
     const bool manifest_quick_ok = upsert_print_history(
@@ -405,7 +410,8 @@ void PrintVideoRecorder::finalize_session(bool aborted)
         frames_dir_name,
         thumb_ok ? thumb_rel : std::string{},
         std::string{},
-        need_video);
+        need_video,
+        need_print_video);
     notify_manifest_ready(frames_dir_name, manifest_quick_ok, aborted, false);
     if(!need_video) {
         UPC_LOG_MEDIA_SERVICE(Info, "print_video skip mp4: frames=%u < 1 session=%s",
@@ -414,11 +420,12 @@ void PrintVideoRecorder::finalize_session(bool aborted)
 
     UPC_LOG_MEDIA_SERVICE(
         Info,
-        "print_video saved work -> %s frames=%u thumb=%s video_pending=%d%s",
+        "print_video saved work -> %s frames=%u thumb=%s video_pending=%d print_video_pending=%d%s",
         session_dir_.c_str(),
         frames,
         thumb_ok ? thumb_path.c_str() : "(none)",
         need_video ? 1 : 0,
+        need_print_video ? 1 : 0,
         aborted ? " aborted" : "");
 
     session_id_.clear();
@@ -427,6 +434,7 @@ void PrintVideoRecorder::finalize_session(bool aborted)
     session_dir_.clear();
     start_unix_ = 0;
     frame_count_ = 0;
+    h264_continuous_on_ = false;
     last_layer_nv12_.clear();
 }
 
@@ -616,6 +624,7 @@ void PrintVideoRecorder::finalize_after_exit(const char* frames_dir)
     }
 
     hit->video_pending = false;
+    hit->print_video_pending = false;
     hit->clean_first_png = 0;
     hit->clean_last_png = 0;
 
@@ -752,7 +761,7 @@ std::string PrintVideoRecorder::sanitize_session_token(const char* token)
 bool PrintVideoRecorder::upsert_print_history(
     bool aborted, const std::string& frames_dir_name,
     const std::string& thumb_name, const std::string& video_name,
-    bool video_pending) const
+    bool video_pending, bool print_video_pending) const
 {
     if(frames_dir_name.empty()) {
         return false;
@@ -778,6 +787,7 @@ bool PrintVideoRecorder::upsert_print_history(
     entry.thumb      = thumb_name;
     entry.video      = video_name;
     entry.video_pending = video_pending;
+    entry.print_video_pending = print_video_pending;
     entry.committed = false;
     entry.clean_first_png = 0;
     entry.clean_last_png = 0;

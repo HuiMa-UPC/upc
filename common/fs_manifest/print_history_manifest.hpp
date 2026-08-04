@@ -42,7 +42,9 @@ struct PrintHistoryEntry {
     std::string         print_thumb;   /**< 打印录像缩略图，相对路径，如 benchy/print_thumb.rthm */
     std::string         video;         /**< 延时摄影视频，相对路径，如 benchy/timelapse.mp4 */
     std::string         print_video;   /**< 相对路径，如 benchy/print_h264.mp4 */
-    bool                video_pending = false; /**< 1=后台仍在生成视频 */
+    bool                video_pending = false; /**< 1=后台仍在生成延时摄影视频 */
+    /** 1=本次会话开了连续 H264，且 print_h264.mp4 尚未落盘（Print History 用） */
+    bool                print_video_pending = false;
     bool                committed = true; /**< 1=历史页可见；0=结果页未退出前隐藏 */
     uint32_t            clean_first_png = 0; /**< 清粉首帧序号（含）；0=无清粉追加 */
     uint32_t            clean_last_png = 0;  /**< 清粉末帧序号（含）；0=无清粉追加 */

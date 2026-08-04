@@ -431,8 +431,10 @@ rongsu_camera 经主 IPC（/tmp/upc_camera.sock）SCM_RIGHTS 附带 dma_buf fd �
   跟着走）；点卡片任意位置或缩略图切换勾选；期间禁用左滑；`Delete` 走
   `ui_user_make_confirm_footer_btn` 那套二次确认弹窗，确认后按 `frames_dir` **整条删除**
   （会话目录内 Timelapse + Print Video + 缩略图/PNG 一并清掉，并从 manifest 移除），再整表重建。
-  任一 Tab 删除都会让另一 Tab 同步消失。`video_pending`（Camera 还在 remux）的条目不可勾选、
-  也挡住左滑删除，避免打断落盘。
+  任一 Tab 删除都会让另一 Tab 同步消失。`video_pending`（延时摄影仍在合成）/
+  `print_video_pending`（连续 H264 仍在 remux）的条目不可勾选、也挡住左滑删除，
+  避免打断落盘。关「Print H264 Rec」时不写 `print_video_pending`，Print History
+  不展示对应项，也不会卡在 Generating。
 - **空态**：80px 圆底 + `ic_printer` + 双行文案 + `Start Print`。按钮直接调 `control_start()`——
   放版预确认弹窗挂在整屏 overlay 上，与当前页面无关，所以不必先切首页；`control_is_printing()`
   为真时只弹 toast。文案与 `Start Print` 显隐只由 `apply_empty_copy()` 维护（Timelapse / Album

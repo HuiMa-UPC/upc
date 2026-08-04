@@ -327,7 +327,7 @@ bool GlavoService::init()
             timelapse_video_fps_);
     }
 
-    print_h264_continuous_on_ = true;
+    print_h264_continuous_on_ = false; /* 上电默认关：调试页 Other → Print H264 Rec */
     clean_video_record_on_ = true;
     clean_video_session_started_ = false;
     env_sim_on_ = false;

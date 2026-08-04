@@ -1312,7 +1312,12 @@ void build_entry(lv_obj_t *parent, const upc::PrintHistoryEntry &e)
             mp4_ready = std::filesystem::exists(base + ctx->video, ec);
         }
         ctx->video_ready = mp4_ready;
-        ctx->video_pending = (!mp4_ready) && e.video_pending;
+        /* Print History 只跟 print_video_pending；Timelapse 跟 video_pending。
+         * 关 H264 时不会置 print_video_pending，避免「生成中」卡住。 */
+        const bool pending = (ctx->kind == HistoryCard::Kind::PrintVideo)
+            ? e.print_video_pending
+            : e.video_pending;
+        ctx->video_pending = (!mp4_ready) && pending;
     }
     g_cards.push_back(ctx);
 
@@ -1812,8 +1817,13 @@ void rebuild_list(void)
     std::vector<upc::PrintHistoryEntry> visible_entries;
     visible_entries.reserve(entries.size());
     for(const auto& e : entries) {
-        if(g_tab == HistTab::History || g_tab == HistTab::Timelapse) {
+        if(g_tab == HistTab::Timelapse) {
             visible_entries.push_back(e);
+        } else if(g_tab == HistTab::History) {
+            /* 关打印录像时不生成 print_h264，也不在 Print History 占位「生成中」 */
+            if(!e.print_video.empty() || e.print_video_pending) {
+                visible_entries.push_back(e);
+            }
         }
     }
 
