@@ -86,6 +86,17 @@ void schedule_commit_print_result_history()
 enum class DoorFlowOrigin { PrintPrep, HomeStandalone, PrintCollect };
 DoorFlowOrigin g_door_origin = DoorFlowOrigin::PrintPrep;
 
+/* 转运盒流程总开关（调试页 Other Switches → Transfer Box）。默认关：取件仍是
+ * 「开门 → 确认关门」两步。打开后取件分支才插入 TRANSFER_BOX 三步，并把关门确认
+ * 换成新稿样式。纯 UI 本地标志，不发消息也不落盘。 */
+bool g_transfer_box_flow = false;
+
+/** 转运盒流程是否对当前这趟门流程生效（只认取件分支） */
+bool transfer_box_flow_active(void)
+{
+    return g_transfer_box_flow && g_door_origin == DoorFlowOrigin::PrintCollect;
+}
+
 /* ---- 选择文件屏（设计稿 1.1.5）：底板 + 本机/USB 源 + 右侧详情面板 ---- */
 lv_obj_t *g_file_panel   = nullptr;   /**< 选择文件页根（PageManager 托管，常驻不销毁） */
 bool      g_files_page_active = false; /**< 选择文件页当前是否可见（PageManager on_enter/on_exit 维护） */
@@ -870,11 +881,20 @@ constexpr uint32_t DOOR_OPENED_MIN_MS  = 1500u;   /**< "门已开启(置灰)"最
 constexpr uint32_t DOOR_CLOSE_POLL_MS  = 800u;    /**< 关门检测轮询间隔 */
 constexpr uint32_t CLEAN_MIN_MS        = 1500u;   /**< "正在清粉中"最短显示 */
 constexpr uint32_t DOOR_OPEN_RETRY_MS  = 800u;    /**< 开门失败重试间隔 */
+/* 转运盒三步的占位节奏。后端目前没有「盒到位 / 转移完成」信号（契约里一个都没有），
+ * 先用定时器把两处等待假出来；信号就位后 BOX_READY_MS 换成到位轮询，BOX_MOVE_MS 换成
+ * 转移完成应答。闸门那步稿上本就没有到位检测，一直是用户自己点。 */
+constexpr uint32_t BOX_READY_MS        = 1500u;   /**< 「转运盒未到位」翻可点的占位时长 */
+constexpr uint32_t BOX_MOVE_MS         = 3000u;   /**< 「正在转移工件」spinner 的占位时长 */
+/* 门弹窗顶图的设计尺寸：卡片宽定比例，图容器高按此比算 */
+constexpr int32_t DOOR_IMG_W = 496;
+constexpr int32_t DOOR_IMG_H = 321;
 lv_timer_t *g_door_advance_timer    = nullptr;    /**< Opening/Cleaning 最短停留到时→前进 */
 lv_timer_t *g_door_close_poll_timer = nullptr;    /**< DoorOpened 关门检测轮询 */
 lv_timer_t *g_door_open_retry_timer = nullptr;    /**< Opening 开门失败重试定时器 */
 uint32_t    g_door_opening_since     = 0;          /**< 进入 Opening 的 tick */
 uint32_t    g_clean_since            = 0;          /**< 进入 Cleaning 的 tick */
+bool        g_box_ready              = false;      /**< BoxInstall 的按钮是否已翻成可点 */
 
 /** 口罩提示徽标（Figma：深色半透明胶囊 + 红色"圆圈 i"图标 + 红字）。 */
 lv_obj_t *make_mask_badge(lv_obj_t *parent, const char *text)
@@ -1274,10 +1294,15 @@ ui_modal_dialog_t *show_plate_prompt(lv_obj_t *parent)
 
 /* -------------------------- 舱门弹窗（Figma 2566:5240/5306/5430） -------------------------- */
 
-enum class DoorVariant { Opening, Cleaning, DoorOpened, DoorClosed };
+/* Opening/Cleaning/DoorOpened/DoorClosed 为原有门三态；Box* 是取件分支插入的转运盒三步
+ * （稿 3171:7305 / 3225:10476 / 3225:13586），共用同一个门弹窗骨架，只换顶图与内容列。 */
+enum class DoorVariant { Opening, Cleaning, DoorOpened, DoorClosed,
+                         BoxInstall, BoxMoving, BoxShutter };
 
 void on_door_closed_confirm_btn(lv_event_t *e);
 void on_door_opening_cancel(lv_event_t *e);
+void on_box_install_confirm(lv_event_t *e);
+void on_box_shutter_done(lv_event_t *e);
 void door_apply_variant(DoorVariant v);
 void pf_start_open_door(void);
 
@@ -1310,7 +1335,10 @@ lv_obj_t *make_dlg_wide_button(lv_obj_t *parent, const char *text, bool enabled,
     return btn;
 }
 
-/* 顶图：把 496×321 源图等比铺满 g_door_img_box（宽 = 卡片宽）。 */
+/* 顶图：把源图等比铺满 g_door_img_box（宽 = 卡片宽）。
+ * 取两轴放大倍数的较大者并向上取整：绝大多数顶图就是 DOOR_IMG_W×DOOR_IMG_H，两轴同倍数；
+ * 唯有 img_mask 是 496×320（矮 1px），按宽定倍会在底边漏出一条容器底色，故按高补齐，
+ * 多出的横向零点几像素由父容器裁掉。 */
 void door_set_image(const lv_image_dsc_t *img)
 {
     if(!g_door_img_box) {
@@ -1318,8 +1346,12 @@ void door_set_image(const lv_image_dsc_t *img)
     }
     lv_obj_clean(g_door_img_box);
     const int32_t bw = USER_DLG_W;
+    const int32_t bh = bw * DOOR_IMG_H / DOOR_IMG_W;
     const int32_t nat_w = (int32_t)img->header.w;
-    const int32_t scale = nat_w > 0 ? 256 * bw / nat_w : 256;
+    const int32_t nat_h = (int32_t)img->header.h;
+    const int32_t sx = nat_w > 0 ? (256 * bw + nat_w - 1) / nat_w : 256;
+    const int32_t sy = nat_h > 0 ? (256 * bh + nat_h - 1) / nat_h : 256;
+    const int32_t scale = sx > sy ? sx : sy;
     lv_obj_t *im = lv_image_create(g_door_img_box);
     lv_image_set_src(im, img);
     lv_image_set_pivot(im, 0, 0);
@@ -1381,7 +1413,7 @@ ui_modal_dialog_t *show_door_dialog(lv_obj_t *parent, DoorVariant variant)
     /* 顶部满宽图容器（高 = 宽 × 321/496，齐卡片左右上边缘，圆角随卡片裁剪） */
     g_door_img_box = lv_obj_create(card);
     lv_obj_remove_style_all(g_door_img_box);
-    lv_obj_set_size(g_door_img_box, card_w, card_w * 321 / 496);
+    lv_obj_set_size(g_door_img_box, card_w, card_w * DOOR_IMG_H / DOOR_IMG_W);
     lv_obj_set_style_bg_color(g_door_img_box, lv_color_black(), 0);
     lv_obj_set_style_bg_opa(g_door_img_box, LV_OPA_20, 0);
     lv_obj_clear_flag(g_door_img_box, LV_OBJ_FLAG_SCROLLABLE);
@@ -1415,8 +1447,10 @@ ui_modal_dialog_t *show_door_dialog(lv_obj_t *parent, DoorVariant variant)
     return dlg;
 }
 
-/* 标题 + 徽标同组（gap SM），用于 DoorOpened / DoorClosed。返回 title 句柄。 */
-lv_obj_t *door_make_title_group(lv_obj_t *parent)
+/* 标题 + 徽标同组（gap SM），用于 DoorOpened / DoorClosed / Box*。返回 title 句柄。
+ * 徽标文案分态：门三态是「Please wear a mask」，转运盒三步是「全程佩戴」，取件分支的
+ * 关门确认是「开门期间持续佩戴」，故由调用方传入。 */
+lv_obj_t *door_make_title_group(lv_obj_t *parent, const char *badge_text)
 {
     lv_obj_t *grp = lv_obj_create(parent);
     lv_obj_remove_style_all(grp);
@@ -1434,11 +1468,38 @@ lv_obj_t *door_make_title_group(lv_obj_t *parent)
     lv_obj_set_style_text_font(title, user_font_value(), 0);
     lv_obj_set_style_text_align(title, LV_TEXT_ALIGN_CENTER, 0);
 
-    make_mask_badge(grp, "Please wear a mask");
+    make_mask_badge(grp, badge_text);
     return title;
 }
 
-/* 切换舱门弹窗形态（Figma 三态）：换顶图 + 重建内容列（标题/徽标/副标题/操作）。 */
+/* 内容列末行的转圈：Opening/Cleaning 与转运盒「正在转移工件」共用。 */
+void door_make_spinner(lv_obj_t *parent)
+{
+    lv_obj_t *sp_box = lv_obj_create(parent);
+    lv_obj_remove_style_all(sp_box);
+    lv_obj_set_size(sp_box, USER_SPINNER_SZ, USER_SPINNER_SZ);
+    lv_obj_set_style_bg_opa(sp_box, LV_OPA_TRANSP, 0);
+    lv_obj_clear_flag(sp_box, LV_OBJ_FLAG_SCROLLABLE);
+    g_door_spinner = ui_arc_spinner_create(sp_box, USER_SPINNER_SZ);
+    if(g_door_spinner && g_door_spinner->root) {
+        lv_obj_center(g_door_spinner->root);
+    }
+}
+
+/* 标题下方的灰字说明行（居中换行）。 */
+lv_obj_t *door_make_sub_label(lv_obj_t *parent, const char *text)
+{
+    lv_obj_t *sub = lv_label_create(parent);
+    lv_label_set_long_mode(sub, LV_LABEL_LONG_MODE_WRAP);
+    lv_obj_set_width(sub, LV_PCT(100));
+    lv_obj_set_style_text_color(sub, user_color_text_dim, 0);
+    lv_obj_set_style_text_font(sub, user_font_caption(), 0);
+    lv_obj_set_style_text_align(sub, LV_TEXT_ALIGN_CENTER, 0);
+    lv_label_set_text(sub, text);
+    return sub;
+}
+
+/* 切换舱门弹窗形态（Figma 三态 + 转运盒三步）：换顶图 + 重建内容列。 */
 void door_apply_variant(DoorVariant v)
 {
     if(!g_door_img_box || !g_door_content) {
@@ -1472,15 +1533,7 @@ void door_apply_variant(DoorVariant v)
 
         make_mask_badge(g_door_content, "Please wear a mask");
 
-        lv_obj_t *sp_box = lv_obj_create(g_door_content);
-        lv_obj_remove_style_all(sp_box);
-        lv_obj_set_size(sp_box, USER_SPINNER_SZ, USER_SPINNER_SZ);
-        lv_obj_set_style_bg_opa(sp_box, LV_OPA_TRANSP, 0);
-        lv_obj_clear_flag(sp_box, LV_OBJ_FLAG_SCROLLABLE);
-        g_door_spinner = ui_arc_spinner_create(sp_box, USER_SPINNER_SZ);
-        if(g_door_spinner && g_door_spinner->root) {
-            lv_obj_center(g_door_spinner->root);
-        }
+        door_make_spinner(g_door_content);
 
         /* 状态副行（PM2.5 净化提示；默认空） */
         g_door_body = lv_label_create(g_door_content);
@@ -1491,25 +1544,72 @@ void door_apply_variant(DoorVariant v)
         return;
     }
 
+    /* 转运盒三步（稿 3171:7305 / 3225:10476 / 3225:13586）：与门确认态同骨架——
+     * 标题+徽标成组、灰字说明，末行是满宽按钮或转圈。 */
+    if(v == DoorVariant::BoxInstall || v == DoorVariant::BoxMoving ||
+       v == DoorVariant::BoxShutter) {
+        const char *kBoxBadge = "Wear a mask at all times";
+        if(v == DoorVariant::BoxInstall) {
+            door_set_image(&img_box_install);
+            g_door_title = door_make_title_group(g_door_content, kBoxBadge);
+            lv_label_set_text(g_door_title, "Install the transfer box");
+            door_make_sub_label(g_door_content,
+                                "Tap the button below once the box is in place");
+            /* 到位与否只改按钮：未到位置灰不可点。g_box_ready 由 BOX_READY_MS 占位定时器
+             * 翻起（后端出到位信号后改由轮询翻）。 */
+            make_dlg_wide_button(g_door_content,
+                                 g_box_ready ? "Transfer Box Ready"
+                                             : "Transfer Box Not Ready",
+                                 g_box_ready, on_box_install_confirm);
+        } else if(v == DoorVariant::BoxMoving) {
+            door_set_image(&img_box_moving);
+            g_door_title = door_make_title_group(g_door_content, kBoxBadge);
+            lv_label_set_text(g_door_title, "Transferring the part to the box");
+            door_make_sub_label(g_door_content,
+                                "Keep the transfer box attached until it finishes");
+            /* 稿上这步无按钮也无关闭钮：转移完成才前进（现由 BOX_MOVE_MS 占位） */
+            door_make_spinner(g_door_content);
+        } else {
+            door_set_image(&img_box_shutter);
+            g_door_title = door_make_title_group(g_door_content, kBoxBadge);
+            lv_label_set_text(g_door_title, "Push the shutter in by hand");
+            door_make_sub_label(g_door_content,
+                                "Tap done once the shutter is pushed in");
+            /* 闸门到位无检测（稿上两版插图按钮都是可点的），用户自己点 */
+            make_dlg_wide_button(g_door_content, "Unlock and Remove the Box",
+                                 true, on_box_shutter_done);
+        }
+        return;
+    }
+
+    /* 取件分支（转运盒流程打开时）按新稿 4811:6178/6191 走：两态同标题、口罩文案强调
+     * 「开门期间持续佩戴」、没有灰字说明行，只有顶图和按钮随门是否关好切换。 */
+    if(transfer_box_flow_active()) {
+        door_set_image(v == DoorVariant::DoorOpened ? &img_mask : &img_door_close_hint);
+        g_door_title = door_make_title_group(g_door_content,
+                                             "Keep the mask on while the door is open");
+        lv_label_set_text(g_door_title, "Confirm the door is closed");
+        if(v == DoorVariant::DoorOpened) {
+            make_dlg_wide_button(g_door_content, "Door Not Closed", false, nullptr);
+        } else {
+            make_dlg_wide_button(g_door_content, "Door Closed", true,
+                                 on_door_closed_confirm_btn);
+        }
+        return;
+    }
+
     /* DoorOpened / DoorClosed：标题+徽标成组 + 灰字副标题 + 满宽按钮 */
     door_set_image(v == DoorVariant::DoorOpened ? &img_door_opened : &img_device_lock);
 
-    g_door_title = door_make_title_group(g_door_content);
-
-    lv_obj_t *sub = lv_label_create(g_door_content);
-    lv_label_set_long_mode(sub, LV_LABEL_LONG_MODE_WRAP);
-    lv_obj_set_width(sub, LV_PCT(100));
-    lv_obj_set_style_text_color(sub, user_color_text_dim, 0);
-    lv_obj_set_style_text_font(sub, user_font_caption(), 0);
-    lv_obj_set_style_text_align(sub, LV_TEXT_ALIGN_CENTER, 0);
+    g_door_title = door_make_title_group(g_door_content, "Please wear a mask");
 
     if(v == DoorVariant::DoorOpened) {
         lv_label_set_text(g_door_title, "Door Opened");
-        lv_label_set_text(sub, "Wear a mask and load the print plate");
+        door_make_sub_label(g_door_content, "Wear a mask and load the print plate");
         make_dlg_wide_button(g_door_content, "Door Not Closed", false, nullptr);
     } else {
         lv_label_set_text(g_door_title, "Confirm the door is closed");
-        lv_label_set_text(sub, "Confirm to start selecting a job");
+        door_make_sub_label(g_door_content, "Confirm to start selecting a job");
         make_dlg_wide_button(g_door_content, "Door Closed", true, on_door_closed_confirm_btn);
     }
 }
@@ -2832,6 +2932,68 @@ void arm_door_open_retry_timer(void)
     lv_timer_set_repeat_count(g_door_open_retry_timer, 1);
 }
 
+/* ---- 转运盒三步（取件分支，稿 3171:7305 / 3225:10476 / 3225:13586）----
+ * 装盒 →（转运盒到位）→ 转移工件 →（转移完成）→ 推入闸门 → 解锁取下 → 关门确认。
+ * 后端还没有这三处信号，两处等待用 BOX_* 定时器占位，闸门那步稿上本就靠用户点。 */
+
+/** 门开之后往哪走：取件且开了转运盒流程先走三步，否则直接关门确认。 */
+control_state_t state_after_door_open(void)
+{
+    return transfer_box_flow_active() ? CONTROL_STATE_TRANSFER_BOX
+                                      : CONTROL_STATE_DOOR_CONFIRM;
+}
+
+/* 占位「转运盒已到位」：把置灰按钮翻成可点（重建同一形态即可，见 g_box_ready） */
+void box_ready_cb(lv_timer_t * /*t*/)
+{
+    g_door_advance_timer = nullptr;
+    if(g_state != CONTROL_STATE_TRANSFER_BOX) {
+        return;
+    }
+    g_box_ready = true;
+    door_apply_variant(DoorVariant::BoxInstall);
+}
+
+/* 占位「工件转移完成」：转圈结束 → 推入闸门 */
+void box_move_done_cb(lv_timer_t * /*t*/)
+{
+    g_door_advance_timer = nullptr;
+    if(g_state != CONTROL_STATE_TRANSFER_BOX) {
+        return;
+    }
+    door_apply_variant(DoorVariant::BoxShutter);
+}
+
+/* 复用 g_door_advance_timer：转运盒三步与门流程的最短停留不会同时在跑，
+ * 且 enter_state → stop_door_timers 会统一清掉。 */
+void arm_box_timer(lv_timer_cb_t cb, uint32_t period_ms)
+{
+    if(g_door_advance_timer) {
+        lv_timer_delete(g_door_advance_timer);
+    }
+    g_door_advance_timer = lv_timer_create(cb, period_ms, nullptr);
+    lv_timer_set_repeat_count(g_door_advance_timer, 1);
+}
+
+void on_box_install_confirm(lv_event_t * /*e*/)
+{
+    if(g_state != CONTROL_STATE_TRANSFER_BOX) {
+        return;
+    }
+    door_apply_variant(DoorVariant::BoxMoving);
+    arm_box_timer(box_move_done_cb, BOX_MOVE_MS);
+}
+
+void on_box_shutter_done(lv_event_t * /*e*/)
+{
+    if(g_state != CONTROL_STATE_TRANSFER_BOX) {
+        return;
+    }
+    ui_toast_show_icon("Transfer complete. Remove the box",
+                       user_color_status_ok, 3000, &ic_badge_check);
+    enter_state(CONTROL_STATE_DOOR_CONFIRM);
+}
+
 /* 未放入分支：开门 → 门已开启等待页 → 关门监测 Rsp → 关门确认页 */
 void pf_on_close_door_done(void * /*u*/)
 {
@@ -2881,7 +3043,7 @@ void door_advance_to_confirm_cb(lv_timer_t * /*t*/)
 {
     g_door_advance_timer = nullptr;   /* one-shot：LVGL 回调后自删，仅清空句柄 */
     if(g_state == CONTROL_STATE_DOOR_OPENING) {
-        enter_state(CONTROL_STATE_DOOR_CONFIRM);
+        enter_state(state_after_door_open());
     }
 }
 
@@ -2893,7 +3055,7 @@ void pf_on_open_door_done(void * /*u*/)
     }
     const uint32_t elapsed = lv_tick_elaps(g_door_opening_since);
     if(elapsed >= DOOR_OPENING_MIN_MS) {
-        enter_state(CONTROL_STATE_DOOR_CONFIRM);
+        enter_state(state_after_door_open());
         return;
     }
     if(g_door_advance_timer) {
@@ -3099,6 +3261,7 @@ void enter_state(control_state_t s)
     g_door_spinner     = nullptr;
     g_cleaning_active  = false;
     g_clean_stop_pending = false;
+    g_box_ready        = false;
 
     g_state = s;
 
@@ -3121,6 +3284,13 @@ void enter_state(control_state_t s)
         g_current_dlg = show_door_dialog(g_overlay, DoorVariant::Opening);
         g_door_opening_since = lv_tick_get();   /* 计"正在准备开门"最短停留 */
         backend_start_pm25(pf_on_pm25_check_done, nullptr);
+        break;
+
+    case CONTROL_STATE_TRANSFER_BOX:
+        overlay_show();
+        g_current_dlg = show_door_dialog(g_overlay, DoorVariant::BoxInstall);
+        /* 「转运盒到位」占位：到时把按钮翻成可点。后端出信号后换成轮询检测。 */
+        arm_box_timer(box_ready_cb, BOX_READY_MS);
         break;
 
     case CONTROL_STATE_DOOR_CONFIRM:
@@ -3267,6 +3437,7 @@ bool control_is_printing(void)
            g_state == CONTROL_STATE_PRINT_DONE ||
            (g_door_origin == DoorFlowOrigin::PrintCollect &&
             (g_state == CONTROL_STATE_DOOR_OPENING ||
+             g_state == CONTROL_STATE_TRANSFER_BOX ||
              g_state == CONTROL_STATE_DOOR_CONFIRM));
 }
 
@@ -3282,6 +3453,16 @@ void control_print_result_collect(void)
      * 结果页与预览原样留在弹窗背后；关门确认后才由 PrintCollect 分支回 IDLE。 */
     g_door_origin = DoorFlowOrigin::PrintCollect;
     enter_state(CONTROL_STATE_DOOR_OPENING);
+}
+
+void control_set_transfer_box_flow(bool on)
+{
+    g_transfer_box_flow = on;
+}
+
+bool control_transfer_box_flow_enabled(void)
+{
+    return g_transfer_box_flow;
 }
 
 void control_terminate_request(void)

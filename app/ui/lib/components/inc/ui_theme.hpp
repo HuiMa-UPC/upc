@@ -173,7 +173,10 @@ typedef struct {
     int32_t user_print_card_w;    /**< stats-card 宽（稿 416） */
     int32_t user_print_thumb_sz;  /**< stats-card 左侧缩略图边长（稿 100） */
     int32_t user_print_notice_h;  /**< 卡片上方常驻提示条高（稿 78） */
-    int32_t user_print_ctl_btn;   /**< 底部复合控件里的圆钮直径（稿 64；玻璃底衬直径 = 此值 + PAD_SM） */
+    /* 下面两个尺寸与预生成的玻璃底衬图强耦合：底衬按 tools/gen_ctl_backdrop.py 的
+     * PROFILES 三档出图、运行时不缩放，改了必须同步改脚本并重跑，否则会和按钮错位。
+     * 底衬上那颗圆的直径 = ctl_btn×5/4、两块之间的缝 = ctl_btn/8（均取自稿）。 */
+    int32_t user_print_ctl_btn;   /**< 底部复合控件里的圆钮直径（稿 64；右侧中部的拍照钮同尺寸） */
     int32_t user_print_pill_w;    /**< 底部复合控件的胶囊宽（稿 400，即滑动取件轨道宽） */
     int32_t user_print_badge_sz;  /**< 徽标行状态图标边长（稿 16） */
     int32_t user_print_prog_h;    /**< 卡片内进度条高（稿 8） */

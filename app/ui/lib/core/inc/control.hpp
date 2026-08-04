@@ -18,12 +18,19 @@ extern "C" {
  *     └─ 未放入 → 滑动开门 → DOOR_OPENING（PM2.5/开门 loading）
  *                 → DOOR_CONFIRM（门已开启等待 → 关门 Rsp → 用户确认关门）→ 选文件页
  *   选文件页 → Start Print → PREPARE → PRINTING（预览 + Print Start）
- *              → PRINT_DONE（打印结束，预览保活等 Camera 出片）→ 结果页 → IDLE
+ *              → PRINT_DONE（打印结束，预览保活等 Camera 出片）→ 结果页
+ *                → 滑动取件 → DOOR_OPENING →〔TRANSFER_BOX 转运盒三步〕→ DOOR_CONFIRM → IDLE
+ *                （转运盒三步默认不插入，由调试页开关打开）
  */
 typedef enum {
     CONTROL_STATE_IDLE = 0,
     CONTROL_STATE_PLATE_PROMPT,     /**< 入口：是否已放入打印版（两卡片 + 已放入/未放入子视图） */
     CONTROL_STATE_DOOR_OPENING,     /**< 未放入分支：PM2.5 检测 + 开门 loading */
+    /**
+     * 取件分支专用：门开之后的转运盒三步（装盒 → 转移工件 → 推入闸门），走完才进
+     * DOOR_CONFIRM 关门。仅在调试开关打开时插入，见 control_set_transfer_box_flow()。
+     */
+    CONTROL_STATE_TRANSFER_BOX,
     CONTROL_STATE_DOOR_CONFIRM,     /**< 舱门：DoorOpened 等待关门监测 → DoorClosed 用户确认 */
     CONTROL_STATE_PREPARE_WAIT,     /**< 选文件后：预处理 loading */
     CONTROL_STATE_PRINTING,         /**< 打印中（预览 + 进度） */
@@ -86,6 +93,12 @@ void      page_user_files_exit(void);
 const char *control_home_section_target(void);
 
 void control_terminate_request(void);
+
+/* ---- 转运盒流程开关（调试页 Other Switches） ----
+ * 打开后，取件分支在门开之后插入转运盒三步，且关门确认改用新稿样式；关闭则完全回到
+ * 「开门 → 确认关门」两步。纯 UI 本地标志（不发消息、不落盘），重启回到关闭。 */
+void control_set_transfer_box_flow(bool on);
+bool control_transfer_box_flow_enabled(void);
 
 #ifdef __cplusplus
 }

@@ -15,6 +15,12 @@ extern const lv_image_dsc_t img_door_opened;     /* 门已开启（496×321，�
 extern const lv_image_dsc_t img_device_lock;     /* 关门确认（496×321，门弹窗顶图） */
 extern const lv_image_dsc_t img_mask;            /* 首页开门弹窗顶图：口罩照片（496×320，三态共用） */
 
+/* 转运盒流程（取件分支专用，均为 496×321 门弹窗顶图） */
+extern const lv_image_dsc_t img_box_install;     /* 请装上转运盒：转运盒对位 + 四枚蓝箭头 */
+extern const lv_image_dsc_t img_box_moving;      /* 正在转移工件：工件滑入盒内 */
+extern const lv_image_dsc_t img_box_shutter;     /* 请手动推入闸门：单枚左向蓝箭头 */
+extern const lv_image_dsc_t img_door_close_hint; /* 取件分支关门确认（可点态）：整机 + 三枚蓝箭头 */
+
 #ifdef __cplusplus
 }
 #endif

@@ -73,7 +73,7 @@
 | `ui_device_state_*` | `ui_device_state.*` | 设备名/联网/运行状态/环境快照的唯一来源（env 单槽订阅 + 观察者扇出） |
 | `ui_device_bar_*` | `ui_device_bar.*` | 常驻设备信息条（WiFi + 设备名 + 状态点/字），PageManager 持有 |
 | `app_init()` | `ui_app.*` | 主题、Proxy、`ui_device_state_init`、页面注册、control |
-| `control_*` | `control.*` | 打印状态机（含 `CONTROL_STATE_PRINT_DONE` 结果页）+ overlay UI |
+| `control_*` | `control.*` | 打印状态机（含 `CONTROL_STATE_PRINT_DONE` 结果页、`CONTROL_STATE_TRANSFER_BOX` 取件转运盒）+ overlay UI |
 | `VideoPlayer` | `video_player.*` | 延时视频 libav* 软解 → BGRX → lv_image（play/pause/seek + 拖动预览独立解码线程） |
 
 ## UI 页面（`app/ui/lib/pages/`）

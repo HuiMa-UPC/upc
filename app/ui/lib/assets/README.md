@@ -12,7 +12,8 @@
 | `home_btn_icons.h` / `.c` | 首页按钮图标 `ic_camera` / `ic_folder` | Figma SVG→A8（node 3122:13207 / 2513:19774） |
 | `nav_icons.h` / `.c` | 左侧标签栏五个图标 `nav_icon_*` | `tools/png_to_lvgl_icon.py`（脚本已不在 `tools/`） |
 | `settings_icons.h` / `.c` | 设置页分组图标 `settings_icon_*` | `tools/gen_settings_icons.py` |
-| `print_flow_img.h` / `.c` | 打印流程弹窗顶图：打印板 `img_plate_single` / `img_plate_double`、门态三图、`img_mask` | `tools/gen_print_flow_assets.py` |
+| `print_flow_img.h` / `.c` | 打印流程弹窗顶图：打印板 `img_plate_single` / `img_plate_double`、门态三图、`img_mask`；转运盒那批 `img_box_install` `img_box_moving` `img_box_shutter` `img_door_close_hint` | `tools/gen_print_flow_assets.py` |
+| `ctl_backdrop_img.h` / `.c` | 打印态底部复合控件的玻璃底衬 `img_ctl_bd_{run,collect}_{1920,1280,1024}`（ARGB8888，稿里的 Union 形状，含 1px 白 10% 内描边） | `tools/gen_ctl_backdrop.py` |
 | `slide_icons.h` / `.c` | 开门滑块图标 `ic_door_open` | Figma SVG→A8（node 2513:19808） |
 | `lv_font_cjk_data.c` | 思源黑体子集 TTF 字节数组（`lv_font_cjk_ttf`，`ui_theme.cpp` 的 `user_font_cjk()` 用 `lv_tiny_ttf_create_data` 运行时渲染）；新增中文需重跑脚本扩子集 | `tools/gen_cjk_font.py`（脚本已不在 `tools/`），源字体 `fonts/SourceHanSansCN-Regular.ttf` |
 
@@ -20,7 +21,14 @@
 # 示例（以脚本内实际参数为准，均从仓库根执行）
 python tools/gen_home_metric_icons.py
 python tools/gen_print_flow_assets.py
+python tools/gen_ctl_backdrop.py
 ```
+
+`ctl_backdrop_img` 与主题常量强耦合：图按 `USER_PRINT_CTL_BTN` / `USER_PRINT_PILL_W`
+三档预生成，尺寸与按钮坐标严格对齐、运行时不缩放。改了这两个常量必须同步改
+`gen_ctl_backdrop.py` 的 `PROFILES` 并重跑，否则底衬会和按钮错位。脚本里的
+`blob_of()` / `gap_of()` 也要与 `page_user_home.cpp` 的 `ctl_blob()` / `ctl_gap()`
+保持一致。
 
 ## A8 图标的上色约定
 

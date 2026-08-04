@@ -220,10 +220,30 @@ while (!g_shutdown_requested) {
 | 打印中 / 暂停 | `TIME LEFT`（进度推送的 `remaining_minutes`） | `--`（打印中拿不到用量） |
 | 中断 / 完成 / 吹粉 | `TIME COST`（manifest `duration_sec`，H:MM:SS） | manifest `material_g` |
 
-底部两组控件的玻璃底衬对应稿里的 Union 布尔形状，用「圆 blob + 细腰 + 胶囊」三块
-拼（`make_ctl_backdrop` / `add_backdrop_block`）。半透明块直接叠会在交叠处叠深，
-所以子块全填不透明黑、由容器统一压到 50%——LVGL 对 `opa < COVER` 的父节点会先把
-子树画进独立图层再整体混合，拼出来才是一整片均匀底衬。
+底部两组控件的玻璃底衬（稿 4796:6172 运行组 / 4231:6034 取件组）是一张预生成的
+ARGB8888 图，`make_ctl_backdrop()` 直接贴，按 profile 三档挑（`ctl_backdrop_dsc()`）。
+
+之所以不用 LVGL 图元拼，是踩过两个坑：
+
+- 稿上那条 Union 是「圆 blob + 细腰 + 圆/胶囊」并集后又给结果路径加了圆角平滑，
+  腰部是**内凹**圆滑过渡；圆角矩形只能凸，拼出来是尖角。稿上还有一圈 1px 白 10% 的
+  内描边，各块自描会把藏在并集内部的圆弧也画出来。
+- 半透明块相互重叠时交叠处会叠深。注意 `lv_obj_set_style_opa()` 是**逐控件继承**的，
+  每个子块各自混合一次；触发整棵子树先合成再整体混合的是 `opa_layered`
+  （见 `lv_obj_style.c` 的 `lv_obj_get_layer_type()`）。
+
+出图脚本 `tools/gen_ctl_backdrop.py` 从设计稿 SVG 栅格化，填充色（黑 50%）和描边都
+烤进像素，运行时一张图一次混合。取件组的胶囊长度不随 blob 等比变化，所以先按稿比例
+等比渲染、再只在胶囊直段（稿上 x∈[128,448]，每列相同）按列增删到目标宽，圆头和细腰
+保持原样。
+
+几何全部由 `USER_PRINT_CTL_BTN` 一个常量推出：blob（底衬上那颗圆的直径）=
+`ctl_blob()` = btn×5/4，两块之间的缝 = `ctl_gap()` = btn/8，均取自稿的 64→80→8。
+三档 btn 为 96 / 64 / 51，是稿（1280×800，btn 64）按屏宽等比折算，故 1280 档得到的
+168×80 与 488×80 正是稿的原尺寸、零重采样。**改 `USER_PRINT_CTL_BTN` 或
+`USER_PRINT_PILL_W` 必须同步改脚本的 `PROFILES` 并重跑**，否则底衬与按钮对不齐。
+注意 btn 同时还是右侧中部拍照钮的直径（稿上两者同尺寸），以及右上环境条为让开它
+所留的右边距。
 
 时序：
 
@@ -238,8 +258,10 @@ Glavo Print_Terminate_Done / 进度 100% → control.cpp finish_printing()
 
 - **数据源**：`has_entry=1` 时以 manifest 条目为权威（`status` / `duration_sec` / `material_g`）；
   `has_entry=0`（0 帧未落盘）时用 payload 的 `aborted` 判完成/终止，耗时耗材显示 `--`。
-- **出口**：右下 `SWIPE TO COLLECT` → `control_print_result_collect()` 回 IDLE 后走开门流程，
-  经 IDLE 分支的 `page_user_home_exit_printing_mode()` 统一收浮层 + 停预览。
+- **出口**：右下 `SWIPE TO COLLECT` → `control_print_result_collect()` 直接进 `DOOR_OPENING`
+  走开门流程，**刻意不借道 IDLE**（IDLE 分支的 `page_user_home_exit_printing_mode()` 会停预览
+  并收掉浮层，弹窗就浮在待机首页上了）。结果页与预览原样留在弹窗背后，等关门确认后才由
+  `PrintCollect` 分支统一回 IDLE 收尾。
   新稿去掉了右上那颗「回首页」圆钮——离开结果态改点左侧标签栏，页面被 PageManager
   缓存住，再点首页仍回到结果态。`control_print_result_dismiss()` 因此暂时没有 UI 入口，
   作为 API 保留。
@@ -248,6 +270,34 @@ Glavo Print_Terminate_Done / 进度 100% → control.cpp finish_printing()
 - 吹粉钮：触发清粉测试；Media 按 `TIMELAPSE_VIDEO_FPS` 抽帧接续 PNG，成功后合并进同一
   `timelapse.mp4`（一次打印结果仅允许成功一次）。稿上「吹粉完成前门钮/滑动取件置灰」
   的门禁还没做，当前滑动取件从一开始就可用。
+
+### 转运盒流程（稿 3171:7305 / 3225:10476 / 3225:13586 / 4811:6178+6191）
+
+滑动取件开门之后、关门确认之前的一段：把工件转移进转运盒再取下。默认**不启用**，由调试页
+`Other` → `Other Switches` → `Transfer Box` 打开（`control_set_transfer_box_flow()`，纯 UI
+本地标志，不发消息也不落盘，重启回到关闭）。
+
+```
+SWIPE TO COLLECT → DOOR_OPENING（PM2.5/清粉 → 开门）
+  → TRANSFER_BOX  ① BoxInstall  装盒：满宽按钮由「Transfer Box Not Ready」置灰翻可点
+                  ② BoxMoving   转移：只有转圈，无按钮无关闭钮
+                  ③ BoxShutter  推闸门：「Unlock and Remove the Box」直接可点
+                  → 绿勾 toast「Transfer complete...」
+  → DOOR_CONFIRM  关门确认（取件分支专用样式）→ clean_test_close → IDLE
+```
+
+- **共用门弹窗骨架**：`DoorVariant` 扩了 `BoxInstall/BoxMoving/BoxShutter` 三档，`show_door_dialog()`
+  一个不变，只由 `door_apply_variant()` 换顶图与内容列。右上关闭钮只在 `Opening/Cleaning`
+  显示，转运盒三步一律隐藏——门已经开了，必须走完才能关门。
+- **关门确认分态**：`transfer_box_flow_active()`（开关打开 **且** `g_door_origin == PrintCollect`）
+  为真时走新稿——两态同标题 `Confirm the door is closed`、口罩徽标改成「开门期间持续佩戴」、
+  没有灰字说明行，只有顶图（置灰态 `img_mask` / 可点态 `img_door_close_hint`）和按钮随门是否
+  关好切换。开关关闭或另两个开门入口（打印前置、首页独立开门）仍是原来的两态两标题。
+- **`control_is_printing()`** 把 `TRANSFER_BOX` 也算进打印占用，转运期间同样挡住 `user_files`。
+- **占位定时器**：契约里没有「转运盒到位 / 转移完成 / 闸门到位 / 解锁」任何一条信号，所以
+  ① 的到位靠 `BOX_READY_MS` 定时器翻 `g_box_ready`，② 的完成靠 `BOX_MOVE_MS`，③ 稿上本就没有
+  到位检测。信号就位后把这两处换成轮询/应答即可，UI 结构不用动。三步都复用
+  `g_door_advance_timer`（互斥使用，`enter_state → stop_door_timers` 统一清理）。
 
 ### 缺粉弹窗（稿 4273:5892）
 

@@ -9,6 +9,7 @@
 #include "home_assets.h"
 #include "home_btn_icons.h"
 #include "home_metric_icons.h"
+#include "ctl_backdrop_img.h"
 #include "ui_slide_unlock.hpp"
 #include "config/cal_config.hpp"
 #include "ui_device_state.hpp"
@@ -966,45 +967,41 @@ lv_obj_t *make_ctl_round_btn(lv_obj_t *parent, uint32_t grad_a, uint32_t grad_b,
     return btn;
 }
 
-/** 控件组的玻璃底衬容器（稿里的 Union 布尔形状）。
+/** 控件组的玻璃底衬（稿 4796:6172 运行组 / 4231:6034 取件组的 Union 布尔形状）。
  *
- *  稿上那条底衬是「圆 blob + 细腰 + 胶囊」并集后统一填黑 50%，而半透明色块直接
- *  相互重叠会在交叠处叠出更深的一块。LVGL 对 opa < COVER 的父节点会先把子树画进
- *  独立图层、再整体混合，所以这里让子块全用不透明黑、由容器统一压到 50%，拼出来
- *  才是一整片均匀的底衬。子块描边同理要按 20% 给（净化后≈稿上的白 10%）。 */
-lv_obj_t *make_ctl_backdrop(lv_obj_t *parent, int32_t w, int32_t h)
+ *  稿上这条形状是「圆 blob + 细腰 + 圆/胶囊」并集后又给结果路径加了圆角平滑，腰部
+ *  是一段内凹圆滑过渡；填黑 50%，上面还叠一条 1px 白 10% 的内描边。这两样 LVGL 都
+ *  画不出来：圆角矩形只能凸，且半透明块相互重叠时——注意 lv_obj_set_style_opa() 是
+ *  逐控件继承的，触发整棵子树合成一次的是 opa_layered——交叠处会叠深，看着不像一个
+ *  整体。所以底衬改由 tools/gen_ctl_backdrop.py 从设计稿 SVG 出图，运行时一张
+ *  ARGB8888 一次混合，填充色和描边都已烤进像素，不用再调不透明度。
+ *
+ *  图按 profile 分三档预生成，尺寸与 blob/gap/pill 严格对齐，故不缩放。 */
+lv_obj_t *make_ctl_backdrop(lv_obj_t *parent, const lv_image_dsc_t *dsc)
 {
-    lv_obj_t *bd = lv_obj_create(parent);
-    lv_obj_remove_style_all(bd);
-    lv_obj_set_size(bd, w, h);
-    lv_obj_set_style_bg_opa(bd, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_opa(bd, LV_OPA_50, 0);
+    lv_obj_t *bd = lv_image_create(parent);
+    lv_image_set_src(bd, dsc);
+    lv_obj_set_pos(bd, 0, 0);
     lv_obj_remove_flag(bd, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_remove_flag(bd, LV_OBJ_FLAG_SCROLLABLE);
     return bd;
 }
 
-/** 底衬里的一块：waist=false 走全圆角（blob / 胶囊），true 走圆角细腰。
- *  细腰保留上下边并做小圆角，让两端过渡更像水滴，不再是生硬矩形。 */
-void add_backdrop_block(lv_obj_t *bd, int32_t x, int32_t y,
-                        int32_t w, int32_t h, bool waist)
+/* 底衬几何：稿 4231:5716 里圆钮 64 坐在直径 80 的 blob 上、两块之间留 8 的缝，
+ * 即 blob = btn×5/4、gap = btn/8。blob 的 +2 是四舍五入——直接整除的话 1024 档
+ * （btn=51）会截成 63，比稿少 1px，底衬图就对不齐了。
+ * 这两个算法必须与 gen_ctl_backdrop.py 里的同名换算保持一致。 */
+int32_t ctl_blob(int32_t btn) { return (btn * 5 + 2) / 4; }
+int32_t ctl_gap(int32_t btn)  { return btn / 8; }
+
+/** 取当前 profile 的底衬图。run=true 要运行组那张（两端都是圆），否则取件组。 */
+const lv_image_dsc_t *ctl_backdrop_dsc(bool run)
 {
-    lv_obj_t *blk = lv_obj_create(bd);
-    lv_obj_remove_style_all(blk);
-    lv_obj_set_size(blk, w, h);
-    lv_obj_set_pos(blk, x, y);
-    lv_obj_set_style_bg_color(blk, lv_color_black(), 0);
-    lv_obj_set_style_bg_opa(blk, LV_OPA_COVER, 0);
-    lv_obj_set_style_radius(blk, waist ? (h / 2) : LV_RADIUS_CIRCLE, 0);
-    lv_obj_set_style_border_width(blk, 1, 0);
-    lv_obj_set_style_border_color(blk, lv_color_white(), 0);
-    lv_obj_set_style_border_opa(blk, LV_OPA_20, 0);
-    if(waist) {
-        lv_obj_set_style_border_side(
-            blk, static_cast<lv_border_side_t>(LV_BORDER_SIDE_TOP | LV_BORDER_SIDE_BOTTOM), 0);
+    switch(g_ui->profile_id) {
+        case UI_RES_1920: return run ? &img_ctl_bd_run_1920 : &img_ctl_bd_collect_1920;
+        case UI_RES_1280: return run ? &img_ctl_bd_run_1280 : &img_ctl_bd_collect_1280;
+        default:          return run ? &img_ctl_bd_run_1024 : &img_ctl_bd_collect_1024;
     }
-    lv_obj_remove_flag(blk, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_remove_flag(blk, LV_OBJ_FLAG_SCROLLABLE);
 }
 
 /* Purify：触发打印结果页清粉测试（后端走 clean_test_start/close + TLV 0x22）。
@@ -1423,12 +1420,13 @@ lv_obj_t *build_print_notice(lv_obj_t *parent)
 }
 
 /** 运行组（稿 4231:5716）：暂停/恢复钮 + 终止钮，各坐在一颗玻璃 blob 上，
- *  中间一段细腰把两颗连成 Union 那条形状。 */
+ *  底衬是稿 4796:6172 那条把两颗连起来的 Union 形状，出图见 make_ctl_backdrop。
+ *  这里的 blob/gap 必须和 gen_ctl_backdrop.py 的 PROFILES 算法一致，否则对不齐。 */
 lv_obj_t *build_print_controls_run(lv_obj_t *parent)
 {
     const int32_t btn  = USER_PRINT_CTL_BTN;
-    const int32_t blob = btn + USER_PAD_SM;          /* 稿 64 → 80 */
-    const int32_t gap  = USER_PAD_SM / 2;            /* 稿 8 */
+    const int32_t blob = ctl_blob(btn);
+    const int32_t gap  = ctl_gap(btn);
     const int32_t pad  = (blob - btn) / 2;
     const int32_t w    = blob * 2 + gap;
 
@@ -1438,11 +1436,7 @@ lv_obj_t *build_print_controls_run(lv_obj_t *parent)
     lv_obj_set_style_bg_opa(grp, LV_OPA_TRANSP, 0);
     lv_obj_clear_flag(grp, LV_OBJ_FLAG_SCROLLABLE);
 
-    lv_obj_t *bd = make_ctl_backdrop(grp, w, blob);
-    add_backdrop_block(bd, 0, 0, blob, blob, false);
-    add_backdrop_block(bd, blob + gap, 0, blob, blob, false);
-    add_backdrop_block(bd, blob - 2, (blob - blob / 2) / 2,
-                       gap + 4, blob / 2, true);
+    make_ctl_backdrop(grp, ctl_backdrop_dsc(true));
 
     /* 暂停钮：运行态是两根竖条（稿 4231:5723/5724 的 4×16，间距 3），
      * 暂停态换成实心三角。两套图形都建好，靠显隐切换。 */
@@ -1491,13 +1485,14 @@ lv_obj_t *build_print_controls_run(lv_obj_t *parent)
 }
 
 /** 取件组（稿 4231:6034）：吹粉钮坐在左侧 blob 上，右边是滑动取件胶囊，
- *  底衬同样用「blob + 细腰 + 胶囊」三块拼。胶囊本体交给 ui_slide_unlock——
- *  它的红 knob + 提示文字 + 三箭头正是稿上那半条，只是轨道底改由底衬来画。 */
+ *  底衬同样出自设计稿的 Union 形状（见 make_ctl_backdrop）。胶囊本体交给
+ *  ui_slide_unlock——它的红 knob + 提示文字 + 三箭头正是稿上那半条，只是轨道底
+ *  改由底衬来画。blob/gap/pill 必须和 gen_ctl_backdrop.py 的 PROFILES 一致。 */
 lv_obj_t *build_print_controls_collect(lv_obj_t *parent)
 {
     const int32_t btn  = USER_PRINT_CTL_BTN;
-    const int32_t blob = btn + USER_PAD_SM;
-    const int32_t gap  = USER_PAD_SM / 2;
+    const int32_t blob = ctl_blob(btn);
+    const int32_t gap  = ctl_gap(btn);
     const int32_t pad  = (blob - btn) / 2;
     const int32_t pill = USER_PRINT_PILL_W;
     const int32_t w    = blob + gap + pill;
@@ -1508,11 +1503,7 @@ lv_obj_t *build_print_controls_collect(lv_obj_t *parent)
     lv_obj_set_style_bg_opa(grp, LV_OPA_TRANSP, 0);
     lv_obj_clear_flag(grp, LV_OBJ_FLAG_SCROLLABLE);
 
-    lv_obj_t *bd = make_ctl_backdrop(grp, w, blob);
-    add_backdrop_block(bd, 0, 0, blob, blob, false);
-    add_backdrop_block(bd, blob + gap, 0, pill, blob, false);
-    add_backdrop_block(bd, blob - 2, (blob - blob / 2) / 2,
-                       gap + 4, blob / 2, true);
+    make_ctl_backdrop(grp, ctl_backdrop_dsc(false));
 
     g_purify_btn = make_ctl_round_btn(grp, kCtlBlueA, kCtlBlueB,
                                      on_result_purify_click);

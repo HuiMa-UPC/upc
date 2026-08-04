@@ -1,5 +1,6 @@
 #include "ui_feedback.hpp"
 #include "ui_theme.hpp"
+#include "ui_user_widgets.hpp"
 
 #include <cstdint>
 
@@ -47,6 +48,12 @@ static void toast_dismiss_cb(lv_timer_t *t)
 
 void ui_toast_show(const char *msg, lv_color_t color, uint32_t duration_ms)
 {
+    ui_toast_show_icon(msg, color, duration_ms, nullptr);
+}
+
+void ui_toast_show_icon(const char *msg, lv_color_t color, uint32_t duration_ms,
+                        const lv_image_dsc_t *icon)
+{
     if(!msg || !msg[0]) {
         return;
     }
@@ -73,20 +80,33 @@ void ui_toast_show(const char *msg, lv_color_t color, uint32_t duration_ms)
         lv_obj_set_style_radius(s_toast, UI_RADIUS, 0);
         lv_obj_set_style_pad_hor(s_toast, UI_PAD, 0);
         lv_obj_set_style_pad_ver(s_toast, UI_PAD_SM, 0);
+        lv_obj_set_style_pad_column(s_toast, UI_PAD_SM, 0);
         lv_obj_set_style_shadow_width(s_toast, 12, 0);
         lv_obj_set_style_shadow_color(s_toast, lv_color_black(), 0);
         lv_obj_set_style_shadow_opa(s_toast, LV_OPA_40, 0);
         lv_obj_clear_flag(s_toast, LV_OBJ_FLAG_SCROLLABLE);
         lv_obj_add_flag(s_toast, LV_OBJ_FLAG_FLOATING);
-
-        lv_obj_t *lbl = lv_label_create(s_toast);
-        lv_label_set_long_mode(lbl, LV_LABEL_LONG_MODE_WRAP);
-        lv_obj_set_width(lbl, 480);
-        lv_obj_set_style_text_font(lbl, ui_font_body(), 0);
-        lv_obj_set_user_data(s_toast, lbl);
+        /* 行布局承载「可选图标 + 文字」；图标有无因调用而异，故每次重建子节点。 */
+        lv_obj_set_flex_flow(s_toast, LV_FLEX_FLOW_ROW);
+        lv_obj_set_flex_align(s_toast, LV_FLEX_ALIGN_START,
+                              LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     }
 
-    lv_obj_t *lbl = (lv_obj_t *)lv_obj_get_user_data(s_toast);
+    lv_obj_clean(s_toast);
+    if(icon) {
+        ui_user_make_icon_img(s_toast, icon,
+                              lv_font_get_line_height(ui_font_body()), color);
+    }
+    lv_obj_t *lbl = lv_label_create(s_toast);
+    lv_label_set_long_mode(lbl, LV_LABEL_LONG_MODE_WRAP);
+    if(icon) {
+        /* 带图标时按内容收窄（图标+文字要居中成一条），长文案仍在 480 处折行 */
+        lv_obj_set_width(lbl, LV_SIZE_CONTENT);
+        lv_obj_set_style_max_width(lbl, 480, 0);
+    } else {
+        lv_obj_set_width(lbl, 480);
+    }
+    lv_obj_set_style_text_font(lbl, ui_font_body(), 0);
     lv_label_set_text(lbl, msg);
     lv_obj_set_style_text_color(lbl, color, 0);
     lv_obj_update_layout(s_toast);

@@ -6,6 +6,7 @@
 #include "ui_feedback.hpp"
 #include "page_manager.hpp"
 #include "debug_msg_proxy.hpp"
+#include "control.hpp"
 
 #include <cstdint>
 #include <cstdlib>
@@ -909,7 +910,7 @@ struct DbgToggleCtx {
     lv_obj_t   *state_lbl;
     const char *on_txt;
     const char *off_txt;
-    uint8_t     kind;   /**< 0 粉桶 / 1 推粉 / 2 风扇 / 3 其他开关 / 4 清粉 / 5 打印H264 / 6 清粉录像 / 7 环境模拟 / 8 环境模拟缺粉 */
+    uint8_t     kind;   /**< 0 粉桶 / 1 推粉 / 2 风扇 / 3 其他开关 / 4 清粉 / 5 打印H264 / 6 清粉录像 / 7 环境模拟 / 8 环境模拟缺粉 / 9 转运盒流程 */
     uint8_t     arg;    /**< 粉桶号 / DebugSwitchTarget */
 };
 
@@ -957,6 +958,9 @@ void on_dbg_toggle(lv_event_t *e)
         case 7: proxy.send_env_sim_set(on);                    /* 环境上报模拟（仅本次运行，供 MQTT 联调） */
                 break;
         case 8: proxy.send_env_sim_powder_set(on);             /* 环境模拟缺粉（延迟 5s 生效） */
+                break;
+        /* 取件流程是否插入转运盒三步。纯 UI 本地标志，不下发任何命令（仅本次运行）。 */
+        case 9: control_set_transfer_box_flow(on);
                 break;
         default: break;
     }
@@ -1306,7 +1310,8 @@ lv_obj_t *make_switch_grid_row(lv_obj_t *parent)
     return r;
 }
 
-/* 合并后的大“其他开关”卡：2 行网格容纳粉桶/三通/清粉/激光/洗气/基板加热/回粉电机 */
+/* 合并后的大“其他开关”卡：多行网格容纳粉桶/三通/清粉/激光/洗气/基板加热/回粉电机，
+ * 外加只影响本机 UI 的模拟/流程开关（录像、环境模拟、转运盒流程）。行数超出卡高时纵向滚动。 */
 void build_other_switches_card(lv_obj_t *parent)
 {
     lv_obj_t *card = ui_user_make_frosted_card(parent, false);
@@ -1354,6 +1359,11 @@ void build_other_switches_card(lv_obj_t *parent)
     make_dbg_toggle(rowC, "Powder Sim", "Low", "Full", LV_SYMBOL_WARNING, false,
                     8, 0, true, 0, &g_env_sim_powder_btn, &g_env_sim_powder_state_lbl);
     set_dbg_toggle_enabled(g_env_sim_powder_btn, false);
+
+    lv_obj_t *rowD = make_switch_grid_row(grid);
+    /* 打开后，打印结果页滑动取件在门开之后插入转运盒三步，且关门确认改用新稿样式 */
+    make_dbg_toggle(rowD, "Transfer Box", "On", "Off", LV_SYMBOL_DOWNLOAD,
+                    control_transfer_box_flow_enabled(), 9, 0);
 }
 
 lv_obj_t *build_other_tab(lv_obj_t *body)

@@ -14,7 +14,7 @@
 | `ui_board_anim` | 打印板插入动画 |
 | `ui_arc_spinner` | 圆弧加载动画 |
 | `ui_keyboard` | 全局软键盘 |
-| `ui_feedback` | Toast、二次确认框 |
+| `ui_feedback` | Toast（`ui_toast_show_icon()` 可带前置图标）、二次确认框 |
 
 ## 使用方式
 
