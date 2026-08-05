@@ -25,6 +25,7 @@ extern const lv_image_dsc_t ic_printer;
 extern const lv_image_dsc_t ic_purify;
 extern const lv_image_dsc_t ic_play;
 extern const lv_image_dsc_t ic_door_solid;
+extern const lv_image_dsc_t ic_photo;
 extern const lv_image_dsc_t ic_badge_spin;
 extern const lv_image_dsc_t ic_badge_play;
 extern const lv_image_dsc_t ic_badge_check;

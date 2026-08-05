@@ -19,6 +19,7 @@
 #include "ui_theme.hpp"
 #include "ui_keyboard.hpp"
 #include "ui_device_state.hpp"
+#include "ui_message_store.hpp"
 #include "control.hpp"
 #include "nav_icons.h"
 
@@ -30,6 +31,13 @@ void settings_page_exit(void)
 {
     page_user_settings_dismiss_dialog();
     ui_keyboard_hide();
+}
+
+/** 未读数变了就同步侧栏消息图标上的红点。 */
+void sync_message_badge(void)
+{
+    PageManager::instance().set_menu_badge("user_message",
+                                           ui_message_unread_count() > 0);
 }
 
 } // namespace
@@ -49,6 +57,10 @@ void app_init(lv_obj_t* screen) {
     /* 设备名/联网/运行状态/环境快照的唯一来源，须在 UiMsgProxy::init() 之后、
      * 建常驻设备信息条（PageManager::init）与首页之前订阅上。 */
     ui_device_state_init();
+
+    /* 消息中心也要赶在 PageManager::init() 之前——左下通知浮层就是在那里建的，
+     * 建的时候要能读到当前消息集合。 */
+    ui_message_store_init();
 
     PageManager::instance().init(screen);
 
@@ -105,6 +117,10 @@ void app_init(lv_obj_t* screen) {
                                      page_user_timelapse_refresh,
                                      page_user_timelapse_exit),
         "user_history");
+
+    /* 红点要等消息页注册完才挂得上（set_menu_badge 认页名） */
+    ui_message_add_observer(sync_message_badge);
+    sync_message_badge();
 
     /* 首页图标点击 → 首页区当前视图（仪表盘 / 选择文件页），实现“回到上次视图” */
     PageManager::instance().set_menu_target_resolver(

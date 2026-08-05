@@ -7,6 +7,7 @@
 #include "page_manager.hpp"
 #include "debug_msg_proxy.hpp"
 #include "control.hpp"
+#include "ui_message_store.hpp"
 
 #include <cstdint>
 #include <cstdlib>
@@ -910,8 +911,16 @@ struct DbgToggleCtx {
     lv_obj_t   *state_lbl;
     const char *on_txt;
     const char *off_txt;
-    uint8_t     kind;   /**< 0 粉桶 / 1 推粉 / 2 风扇 / 3 其他开关 / 4 清粉 / 5 打印H264 / 6 清粉录像 / 7 环境模拟 / 8 环境模拟缺粉 / 9 转运盒流程 */
+    uint8_t     kind;   /**< 0 粉桶 / 1 推粉 / 2 风扇 / 3 其他开关 / 4 清粉 / 5 打印H264 / 6 清粉录像 / 7 环境模拟 / 8 环境模拟缺粉 / 9 转运盒流程 / 10 消息注入 */
     uint8_t     arg;    /**< 粉桶号 / DebugSwitchTarget */
+};
+
+/** 消息注入按钮造的那几条：一条 critical + 两条 info + 一条本地调试码。 */
+const uint16_t kDbgInjectCodes[] = {
+    (uint16_t)middleware::DeviceEventCode::O2High,
+    (uint16_t)middleware::DeviceEventCode::PowderLow,
+    (uint16_t)middleware::DeviceEventCode::FilterDue,
+    (uint16_t)middleware::DeviceEventCode::UiDebugSample,
 };
 
 void set_dbg_toggle_enabled(lv_obj_t *btn, bool enabled)
@@ -962,6 +971,14 @@ void on_dbg_toggle(lv_event_t *e)
         /* 取件流程是否插入转运盒三步。纯 UI 本地标志，不下发任何命令（仅本次运行）。 */
         case 9: control_set_transfer_box_flow(on);
                 break;
+        /* 造几条假消息喂通知浮层。Glavo 侧还没实现 GLAVO_Device_Event_Ntf，
+         * 没有这个入口就只有打印流程那两条能看，「查看剩余 N 条」那条路径根本走不到。
+         * 四条 = 两张卡 + 一颗「剩余 2 条」按钮，顺带把红/蓝两种卡和排序都覆盖上。 */
+        case 10: for(uint16_t code : kDbgInjectCodes) {
+                     if(on) ui_message_push(code, 0);
+                     else   ui_message_retract(code);
+                 }
+                 break;
         default: break;
     }
 }
@@ -1364,6 +1381,8 @@ void build_other_switches_card(lv_obj_t *parent)
     /* 打开后，打印结果页滑动取件在门开之后插入转运盒三步，且关门确认改用新稿样式 */
     make_dbg_toggle(rowD, "Transfer Box", "On", "Off", LV_SYMBOL_DOWNLOAD,
                     control_transfer_box_flow_enabled(), 9, 0);
+    /* 往消息中心塞 4 条假消息，验左下通知浮层与侧栏红点（后端还没发真消息） */
+    make_dbg_toggle(rowD, "Msg Inject", "On", "Off", LV_SYMBOL_BELL, false, 10, 0);
 }
 
 lv_obj_t *build_other_tab(lv_obj_t *body)

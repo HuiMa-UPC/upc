@@ -10,6 +10,10 @@
 | `page_manager` | 侧边栏图标菜单、内容区、页面切换 |
 | `ui_simple_page` | 将 `page_*_create` / `_refresh` 接到 `Page` 生命周期 |
 | `ui_msg_proxy` | UI ↔ Glavo MsgBus 封装（send / register） |
+| `ui_device_state` | 设备名/联网/运行状态/环境快照的唯一来源（订阅一次，扇出给观察者） |
+| `ui_device_bar` | 顶部常驻设备信息条（建在 `shell_` 上，按页显隐） |
+| `ui_message_store` | 消息中心数据源：事件去重排序、未读计数、码→文案表 |
+| `ui_notice_stack` | 左下通知浮层：最多两张卡 + 「查看剩余 N 条」 |
 | `camera_msg_proxy` | UI ↔ Camera 预览开停 IPC |
 | `camera_preview` | SHM 消费、RGA/SW NV12→BGRX、三缓冲 + lv_image 显示 |
 | `video_player` | MP4 软解播放；拖动预览缩小帧 + scrub 世代丢弃 |

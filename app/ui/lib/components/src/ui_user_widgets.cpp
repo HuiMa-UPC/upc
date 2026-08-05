@@ -26,29 +26,6 @@ lv_obj_t *ui_user_make_body_label(lv_obj_t *parent, const char *text)
     return lbl;
 }
 
-lv_obj_t *ui_user_make_ghost_link_btn(lv_obj_t *parent, const char *text,
-                                      lv_event_cb_t cb)
-{
-    lv_obj_t *btn = lv_button_create(parent);
-    lv_obj_remove_style_all(btn);
-    lv_obj_set_size(btn, LV_PCT(80), USER_DLG_BTN_GHOST_H);
-    lv_obj_set_style_bg_opa(btn, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_bg_color(btn, user_color_panel_alt, LV_STATE_PRESSED);
-    lv_obj_set_style_bg_opa(btn, LV_OPA_30, LV_STATE_PRESSED);
-    lv_obj_set_style_radius(btn, USER_RADIUS, 0);
-    lv_obj_set_style_border_width(btn, 0, 0);
-    if(cb) {
-        lv_obj_add_event_cb(btn, cb, LV_EVENT_CLICKED, nullptr);
-    }
-
-    lv_obj_t *lbl = lv_label_create(btn);
-    lv_label_set_text(lbl, text ? text : "");
-    lv_obj_set_style_text_color(lbl, user_color_accent, 0);
-    lv_obj_set_style_text_font(lbl, user_font_text(), 0);
-    lv_obj_center(lbl);
-    return btn;
-}
-
 void ui_user_format_duration_min(char *buf, size_t buf_size, uint32_t duration_min)
 {
     if(!buf || buf_size == 0) {
@@ -553,8 +530,16 @@ lv_obj_t *ui_user_make_footer_ghost_btn(lv_obj_t *footer, const char *text,
                                         lv_event_cb_t cb)
 {
     lv_obj_t *btn = lv_button_create(footer);
-    lv_obj_add_style(btn, user_style_btn_ghost(), 0);
+    lv_obj_remove_style_all(btn);
     lv_obj_set_size(btn, USER_DLG_FOOTER_BTN_W, USER_DLG_FOOTER_BTN_H);
+    /* 与 ui_user_make_confirm_footer_btn(filled=false) 同一档副按钮观感：
+     * USER_BTN_RADIUS 圆角 + 4% 白底、无描边。原先套的 user_style_btn_ghost()
+     * 是 panel 实心 + 1px 描边 + USER_RADIUS，跟其余弹窗对不上。 */
+    lv_obj_set_style_radius(btn, USER_BTN_RADIUS, 0);
+    lv_obj_set_style_bg_color(btn, user_color_text, 0);
+    lv_obj_set_style_bg_opa(btn, 10, 0);
+    lv_obj_set_style_bg_opa(btn, 30, LV_STATE_PRESSED);
+    lv_obj_clear_flag(btn, LV_OBJ_FLAG_SCROLLABLE);
     if(cb) {
         lv_obj_add_event_cb(btn, cb, LV_EVENT_CLICKED, nullptr);
     }

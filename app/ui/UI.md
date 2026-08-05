@@ -101,6 +101,62 @@ while (!g_shutdown_requested) {
 后三个由打印态浮层的 `apply_print_phase()` 按 `g_print_phase` + `g_purify_stage`
 推过来，取件退出打印态时统一还原成 `Ready`。
 
+### 消息中心与通知浮层（`ui_message_store` + `ui_notice_stack`）
+
+设备事件/告警只有一套显示通道：屏幕左下角那摞通知卡。它和 toast 分工不同——
+**toast 是操作反馈，看完就走；通知是待处理的事，撤回之前一直在**。
+两者互不替代，不要把 toast 改成通知或反过来。
+
+数据在 `core/ui_message_store`（同 `ui_device_state` 的形态：单例 + 观察者），
+两个来源：
+
+1. 后端 `GLAVO_Device_Event_Ntf`（`DeviceEventPayload`：码 + 等级 + active + 触发时刻），
+   码表与 [`doc/设备通信协议-数据结构定义（v0.9）.md`](../../doc/设备通信协议-数据结构定义（v0.9）.md)
+   第五节那张表一一对应。`active=false` 走 `ui_message_retract()`；
+2. 前端本地消息，码段从 `DeviceEventCode::UiWearMask`(512) 起，后端不发这一段。
+   目前是打印结束那两条（催吹粉 / 提醒戴口罩），由 `apply_print_phase()` 推和撤。
+
+**文案不进线协议**：总线上只跑数值码，人话由 `ui_message_store.cpp` 的 `kCatalog` 出。
+等级也由码表定，不用 payload 里那个 `severity` 字段——那个是留给云端的，同一个码在
+UI 上必须恒定同一种观感，否则后端改个字段卡片就换色了。当前文案是按稿意写的英文占位。
+
+后端那条回调跑在总线线程上，而每一次变更都会让浮层重建 LVGL 对象，所以
+`on_device_event` 先 `lv_async_call` 切回 UI 线程再落库（payload 里有个 64 位时间戳，
+塞不进 `lv_async_call` 那个指针，只能堆上过一手）。浮层里的 × 和「查看剩余」按钮
+同理要异步：它们的动作都会 `lv_obj_clean` 整栈，把正在派发事件的自己一起删掉。
+
+`ui_message_push()` 是**幂等**的：同一个码已经挂在浮层上就什么也不做。
+`apply_print_phase()` 每次态刷新都无脑 push 那两条，不在 store 里吸收掉的话卡片会不停
+重建、已读也会被顶回未读。排序用内部 `seq` 而不是 `ts_ms`：后端给的是 Unix 时间、本地消息
+压根没有时间，两种纪元混着比大小会把本地消息全排到最旧。
+
+浮层（`core/ui_notice_stack`）：
+
+| 项 | 取值 |
+|---|---|
+| 位置 | `shell_` 上的 `FLOATING`，与常驻设备信息条同级 → 压在页面之上、弹窗层之下 |
+| 宽度 | `USER_PRINT_CARD_W`（跟 stats-card 同宽，打印态下左右边缘齐平） |
+| 条数 | 最多两张卡，多出来的收进「View remaining N messages」，点进消息页 |
+| 排序 | 口罩提醒钉第一格；其余先按等级降序、同级比新 |
+| 告警卡 | 红 `#FF4242` + `ic_alert`，**不可关** |
+| 信息卡 | 蓝 `#485DFF` + `ic_toast_info`，右上一颗 ×，点了只从浮层撤下、消息在列表里还留着 |
+| 显隐 | 同常驻设备信息条那条规则（侧栏五个标签页显示、隐藏页不显示），另外排除消息页自己 |
+
+首页有两个态的左下角本来就占着东西，整栈得让开：打印态是 stats-card，待机监控态是那颗
+返回圆钮。靠 `ui_notice_stack_set_bottom_offset()` 抬，抬高量在
+`page_user_home.cpp` 的 `sync_notice_offset()` 里一处算完。它是首页专属的，
+`apply_device_bar()` 换页时一律清零，首页在 `on_enter`（即 `page_user_home_refresh`，
+进出打印态/监控态也都会走到）里按当前态再抬回去。
+
+侧栏红点：`PageManager::set_menu_badge(page, on)`，未读数 >0 时亮，进过一次消息页
+（`page_user_message_refresh` → `ui_message_mark_all_read()`）就全部标已读、红点灭。
+红点是叠在菜单按钮上的一个小圆 `lv_obj`，不是重出一版图标资源——稿里是把红点烤进
+SVG 的，那样没法按未读数开关。
+
+**后端还没实现 `GLAVO_Device_Event_Ntf` 的发布**，接好的回调目前收不到任何消息。
+要验「超过两条 + 查看剩余 N 条」这条路径，用调试页 Other → Other Switches → `Msg Inject`
+（造 4 条假消息：1 条 critical + 3 条 info）。
+
 ### 摄像头整屏预览
 
 `g_print_area`（打印直播）与 `g_monitor_area`（查看监控）都是 `lv_obj_set_pos(area,
@@ -174,6 +230,25 @@ while (!g_shutdown_requested) {
 用户层弹窗标题下的主色装饰线已全局去掉
 （`ui_modal_dialog_cfg_user()` 里 `accent_underline = false`）。
 
+### 按钮样式基线
+
+选文件页详情列那两枚按钮是全工程的样式基准，其余弹窗按钮都按它对齐过一轮：
+
+- **几何**：高 `USER_DLG_FOOTER_BTN_H`（1024=51 / 1280=64 / 1920=96），圆角
+  `USER_BTN_RADIUS`（6 / 8 / 12）。**弹窗里的按钮一律不用 `USER_DLG_RADIUS`**——那是卡片
+  圆角（1024 档 16），压在 51px 高的按钮上会明显比选文件页更圆。
+- **主按钮**：`user_color_accent` 实心 + 24px accent 阴影 `LV_OPA_30`。满宽的主按钮
+  （门弹窗、放版弹窗、缺粉弹窗）左右两侧的光会被弹窗内容区裁平，只剩上下能看见，这是
+  接受的取舍；置灰态（`enabled=false`）连阴影一起去掉。
+- **副按钮**：`user_color_text` 压到 opa 10（稿 `rgba(255,255,255,0.04)`）、无描边，按下
+  态 opa 30。四处副按钮工厂（`make_dlg_wide_ghost_button`、`ui_user_make_confirm_footer_btn`
+  的 `filled=false`、`ui_user_make_footer_ghost_btn`、`ui_xfr_dialog` 的 `make_secondary_btn`）
+  现在是同一套色值，区别只在满宽 / 等分 / 定宽。
+- **`user_style_btn_primary()` 是胶囊，不要改它**：调试页那几颗按钮还在原样用它的全圆
+  形状。用户层三处（选文件页 `Confirm Print`、设置页两个密码弹窗的 `Enter`/`Connect`）
+  只是借它的主色和外发光，都在调用点就地覆盖掉 `LV_RADIUS_CIRCLE`。首页与历史页空态的
+  `Start Print` 走的是另一条路：`ui_user_make_primary_pill_btn()`，那枚按稿就是渐变胶囊。
+
 ## 页面（`lib/pages/`）
 
 | Page ID | 文件 | 说明 |
@@ -198,20 +273,24 @@ while (!g_shutdown_requested) {
 
 | 位置 | 控件 | 说明 |
 |------|------|------|
-| 左下 | stats-card | 缩略图 + 徽标行（图标/状态词/百分比）+ 进度条 + TIME/CONSUMABLES 两列 |
-| 左下（卡上方） | 提示条 `g_pn_root` | 仅结束态出现，两个变体：催吹粉（蓝）/ 提醒戴口罩（橙） |
+| 左下 | stats-card `g_pc_card` | 缩略图 + 徽标行（图标/状态词/百分比）+ 进度条 + TIME/CONSUMABLES 两列 |
+| 左下（卡上方） | 通知浮层 | **不在本层**，是全局的 `ui_notice_stack`；进出打印态时按卡高把它抬起来 |
 | 右下 | 运行组 `g_ctl_run` | 暂停·恢复钮 + 终止钮；与取件组互斥 |
 | 右下 | 取件组 `g_ctl_collect` | 吹粉钮 + `SWIPE TO COLLECT` 胶囊；与运行组互斥 |
-| 右中 | 拍照钮 `g_result_photo_btn` | 六态都有 |
-| 右上 | HOME PM2.5 卡 + 5 列环境条 | 六态都有 |
+| 右中 | 拍照钮 `g_result_photo_btn` | 六态都有；`make_glass_round_btn()` + `ic_photo` |
+| 右上 | HOME PM2.5 卡 + 5 列环境条 | 六态都有；`build_env_wrap()`，右边缘与拍照钮同齐 |
 
 两个状态量决定外观，改哪个都走 `apply_print_phase()` 一处刷新：
 
 - `g_print_phase`（徽标四档）：`PRINTING...` 蓝 / `PAUSE` 蓝 / `PRINT TERMINATED` 橙 /
   `PRINT COMPLETE` 绿。徽标色同时是百分比色与进度条填充色。
 - `g_purify_stage`（结束态下的吹粉子阶段，走 `purify_stage_set()`）：`IDLE` / `RUNNING`
-  （吹粉钮图标 2s 一圈逆时针转、胶囊文案换 `AIR PURIFYING...`）/ `DONE`（提示条换口罩提醒）。
+  （吹粉钮图标 2s 一圈逆时针转、胶囊文案换 `AIR PURIFYING...`）/ `DONE`（通知换口罩提醒）。
   按稿 4234:6385，吹粉中**不改徽标**——吹粉态只靠状态栏与胶囊文案表达。
+
+稿上卡片上方那条提示（结束态两个变体：催吹粉 / 提醒戴口罩）不由本层画：
+`apply_print_phase()` 把它们推进消息中心，态一变就撤回，见「消息中心与通知浮层」。
+这样离开首页也看得到，且与后端上报的告警排在同一摞里。
 
 两列语义分态（`TIME` 列的 caption 由 `apply_print_phase()` 改写）：
 
@@ -242,8 +321,26 @@ ARGB8888 图，`make_ctl_backdrop()` 直接贴，按 profile 三档挑（`ctl_ba
 三档 btn 为 96 / 64 / 51，是稿（1280×800，btn 64）按屏宽等比折算，故 1280 档得到的
 168×80 与 488×80 正是稿的原尺寸、零重采样。**改 `USER_PRINT_CTL_BTN` 或
 `USER_PRINT_PILL_W` 必须同步改脚本的 `PROFILES` 并重跑**，否则底衬与按钮对不齐。
-注意 btn 同时还是右侧中部拍照钮的直径（稿上两者同尺寸），以及右上环境条为让开它
-所留的右边距。
+注意 btn 同时还是右侧中部拍照钮的直径（稿上两者同尺寸）。
+
+### 右上环境区（打印态 / 待机监控共用）
+
+`build_env_wrap()` = HOME PM2.5 卡（稿 4231:5740）+ 5 列环境条（稿 4231:5749）。
+五列 caption 全是文字（`Pm 2.5` / `Temp.` / `O2` / `Humidity` / `Pressure`），不是图标。
+整体贴右上、退 `USER_PAD`，与右侧中部的拍照钮右边缘齐。
+
+打印态浮层与待机监控层是**同时建、靠显隐切**的两层，所以这一块的 label 句柄不能是
+单例——后建的会覆盖先建的，先建那层从此收不到刷新。八个句柄收进 `env_block_t`，
+`g_env_print` / `g_env_monitor` 各一份，都登记在 `kEnvBlocks[]` 里；
+`result_pm_card_update()` 和快照回调遍历这个数组，两份一起写。
+
+### 待机「查看监控」（稿 3122:13224）
+
+右上环境区、右侧中部拍照钮都与打印态共用上面那套构造函数，几何配色天然一致。
+左下角是同款玻璃圆钮（图标换 `ic_home`）退出监控，右下角保留 `SWIPE TO OPEN` 滑块。
+
+拍照钮的图标是 `ic_photo`（照相机，稿 3847:9440），不是首页顶栏「查看监控」入口那枚
+`ic_camera`（摄像机）——两处语义不同，别图省事复用。
 
 时序：
 

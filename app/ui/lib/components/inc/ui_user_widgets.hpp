@@ -18,10 +18,6 @@ ui_modal_dialog_cfg_t ui_modal_dialog_cfg_user(const char *title,
 /** 弹窗正文说明 label */
 lv_obj_t *ui_user_make_body_label(lv_obj_t *parent, const char *text);
 
-/** 透明底主色文字快捷链接按钮 */
-lv_obj_t *ui_user_make_ghost_link_btn(lv_obj_t *parent, const char *text,
-                                      lv_event_cb_t cb);
-
 /** 格式化时长：>=60 分钟输出 "Xh Ymin"，否则 "Ymin" */
 void ui_user_format_duration_min(char *buf, size_t buf_size, uint32_t duration_min);
 
@@ -38,7 +34,10 @@ lv_obj_t *ui_user_make_progress_bar(lv_obj_t *parent, int32_t w, int32_t h);
 /** spinner 透明容器 */
 lv_obj_t *ui_user_make_spinner_container(lv_obj_t *parent, int32_t inner_size);
 
-/** footer 区 ghost 按钮 */
+/**
+ * footer 区定宽副按钮（USER_DLG_FOOTER_BTN_W × _H）：4% 白底 + USER_BTN_RADIUS 圆角。
+ * 与 ui_user_make_confirm_footer_btn(filled=false) 同一观感，区别只是定宽而非等分。
+ */
 lv_obj_t *ui_user_make_footer_ghost_btn(lv_obj_t *footer, const char *text,
                                         lv_event_cb_t cb);
 

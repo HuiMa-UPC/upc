@@ -50,8 +50,9 @@ static ui_modal_dialog_t *open_shell(lv_obj_t *parent, const char *title)
 }
 
 /**
- * 稿上的「弹窗副按钮」：满宽、极淡的白底、白字居中。
- * ui_user_make_footer_ghost_btn 是固定宽 + 描边样式，对不上，这里另写一个。
+ * 稿上的「弹窗副按钮」：满宽、极淡的白底、白字居中，圆角与其余弹窗按钮统一取
+ * USER_BTN_RADIUS。ui_user_make_footer_ghost_btn 是固定宽的，对不上满宽需求，
+ * 所以这里另写一个。
  */
 static lv_obj_t *make_secondary_btn(lv_obj_t *parent, const char *text,
                                     lv_event_cb_t cb, void *user_data)
@@ -60,7 +61,7 @@ static lv_obj_t *make_secondary_btn(lv_obj_t *parent, const char *text,
     lv_obj_remove_style_all(btn);
     lv_obj_set_width(btn, LV_PCT(100));
     lv_obj_set_height(btn, USER_DLG_FOOTER_BTN_H);
-    lv_obj_set_style_radius(btn, USER_RADIUS, 0);
+    lv_obj_set_style_radius(btn, USER_BTN_RADIUS, 0);
     lv_obj_set_style_bg_color(btn, lv_color_white(), 0);
     lv_obj_set_style_bg_opa(btn, kFaintFillOpa, 0);
     lv_obj_set_style_bg_opa(btn, LV_OPA_20, LV_STATE_PRESSED);
