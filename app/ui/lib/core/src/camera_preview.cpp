@@ -57,6 +57,16 @@ uint64_t monotonic_ms()
             .count());
 }
 
+void close_fd_vector(std::vector<int>& fds)
+{
+    for(int fd : fds) {
+        if(fd >= 0) {
+            ::close(fd);
+        }
+    }
+    fds.clear();
+}
+
 inline uint8_t clamp_u8(int v)
 {
     return static_cast<uint8_t>(v < 0 ? 0 : (v > 255 ? 255 : v));
@@ -272,17 +282,19 @@ CameraPreviewPlayer& CameraPreviewPlayer::instance()
 
 void CameraPreviewPlayer::close_dma_fds()
 {
-    auto close_vec = [](std::vector<int>& fds) {
-        for(int fd : fds) {
-            if(fd >= 0) {
-                ::close(fd);
-            }
-        }
-        fds.clear();
-    };
-    close_vec(dma_fds_);
+    close_active_dma_fds();
+    close_pending_dma_fds();
+}
+
+void CameraPreviewPlayer::close_active_dma_fds()
+{
+    close_fd_vector(dma_fds_);
     dma_nv12_bytes_ = 0;
-    close_vec(pending_dma_fds_);
+}
+
+void CameraPreviewPlayer::close_pending_dma_fds()
+{
+    close_fd_vector(pending_dma_fds_);
 }
 
 int CameraPreviewPlayer::dma_fd(uint32_t idx) const noexcept
@@ -414,7 +426,12 @@ void CameraPreviewPlayer::on_stream_start_rsp(
         return;
     }
 
-    close_dma_fds();
+    /*
+     * Camera watchdog can push a replacement response while the decode thread
+     * still owns the active dma fds.  Only replace the staged response here;
+     * async_apply_stream_start() stops that thread before releasing old fds.
+     */
+    close_pending_dma_fds();
     if(info.ok && info.dma_mode) {
         if(!middleware::MsgPort::instance().take_peer_dma_fds(
                middleware::ModuleId::APP_CAMERA, pending_dma_fds_)) {
@@ -431,6 +448,10 @@ void CameraPreviewPlayer::async_apply_stream_start(void* user)
 {
     auto* self = static_cast<CameraPreviewPlayer*>(user);
     if(!self || !self->pending_start_rsp_valid_ || !self->active_.load()) {
+        if(self) {
+            self->close_pending_dma_fds();
+            self->pending_start_rsp_valid_ = false;
+        }
         return;
     }
     self->pending_start_rsp_valid_ = false;
@@ -494,7 +515,25 @@ void CameraPreviewPlayer::apply_stream_start_ui(
         return;
     }
 
+    /*
+     * A successful Camera stream response may be the normal reply to Start
+     * or a watchdog resync.  In either case the prior decode thread can still
+     * access its SHM mapping and dma fds, so stop it before replacing them.
+     */
+    stop_decode_.store(true);
+    if(decode_thread_.joinable()) {
+        decode_thread_.join();
+    }
+    stream_up_.store(false);
+    consumer_.close();
+    display_buf_.store(-1, std::memory_order_relaxed);
+    shown_buf_.store(-1, std::memory_order_relaxed);
+    show_hint(LV_SYMBOL_VIDEO "  Reconnecting camera...");
+    close_active_dma_fds();
+    clear_frame_buffers();
+
     if(!info.ok) {
+        close_pending_dma_fds();
         show_hint(LV_SYMBOL_WARNING "  Camera start failed");
         active_.store(false);
         return;
@@ -505,14 +544,15 @@ void CameraPreviewPlayer::apply_stream_start_ui(
     fps_    = info.fps > 0 ? info.fps : 25;
 
     if(width_ == 0 || height_ == 0) {
+        close_pending_dma_fds();
         show_hint(LV_SYMBOL_WARNING "  Invalid stream size");
         active_.store(false);
         return;
     }
 
-    consumer_.close();
     if(consumer_.open(info.shm_name) != upc_ipc::IpcShmError::OK) {
         UPC_LOG_CAMERA_PREVIEW(Error, "dma frame ring open failed name=%s", info.shm_name);
+        close_pending_dma_fds();
         show_hint(LV_SYMBOL_WARNING "  SHM open failed");
         active_.store(false);
         return;
@@ -530,6 +570,7 @@ void CameraPreviewPlayer::apply_stream_start_ui(
     const size_t src_size = static_cast<size_t>(src_stride_y_) * height_ * 3u / 2u;
     if(pending_dma_fds_.empty()) {
         UPC_LOG_CAMERA_PREVIEW(Error, "IPC dma fds not available");
+        consumer_.close();
         show_hint(LV_SYMBOL_WARNING "  DMA fd missing");
         active_.store(false);
         return;
@@ -538,7 +579,7 @@ void CameraPreviewPlayer::apply_stream_start_ui(
         UPC_LOG_CAMERA_PREVIEW(Error,
             "IPC dma fd count mismatch got=%zu expected=%u",
             pending_dma_fds_.size(), info.dma_buf_count);
-        close_dma_fds();
+        close_pending_dma_fds();
         show_hint(LV_SYMBOL_WARNING "  DMA fd mismatch");
         active_.store(false);
         return;
@@ -546,7 +587,7 @@ void CameraPreviewPlayer::apply_stream_start_ui(
     for(int fd : pending_dma_fds_) {
         if(fd < 0) {
             UPC_LOG_CAMERA_PREVIEW(Error, "IPC dma fd invalid");
-            close_dma_fds();
+            close_pending_dma_fds();
             show_hint(LV_SYMBOL_WARNING "  DMA fd invalid");
             active_.store(false);
             return;
@@ -564,6 +605,8 @@ void CameraPreviewPlayer::apply_stream_start_ui(
     const uint32_t row_stride_bytes = pixel_stride_px_ * 4u;
 
     if(!setup_frame_buffers(frame_bytes, row_stride_bytes)) {
+        consumer_.close();
+        close_active_dma_fds();
         show_hint(LV_SYMBOL_WARNING "  Preview buffer alloc failed");
         active_.store(false);
         return;
@@ -587,18 +630,29 @@ void CameraPreviewPlayer::apply_stream_start_ui(
     stalled_.store(false, std::memory_order_relaxed);
     restart_pending_.store(false, std::memory_order_relaxed);
     stream_up_.store(true);
-    begin_decode_thread();
+    if(!begin_decode_thread()) {
+        consumer_.close();
+        close_active_dma_fds();
+        clear_frame_buffers();
+        show_hint(LV_SYMBOL_WARNING "  Preview decoder unavailable");
+        active_.store(false);
+        return;
+    }
     schedule_ui_timer();
     show_hint(LV_SYMBOL_VIDEO "  Loading preview...");
 }
 
-void CameraPreviewPlayer::begin_decode_thread()
+bool CameraPreviewPlayer::begin_decode_thread()
 {
-    stop_decode_.store(false);
     if(decode_thread_.joinable()) {
-        decode_thread_.join();
+        UPC_LOG_CAMERA_PREVIEW(Error,
+            "decode thread still joinable before start; refusing unsafe replacement");
+        stream_up_.store(false);
+        return false;
     }
+    stop_decode_.store(false);
     decode_thread_ = std::thread(&CameraPreviewPlayer::decode_thread_fn, this);
+    return true;
 }
 
 void CameraPreviewPlayer::decode_thread_fn()

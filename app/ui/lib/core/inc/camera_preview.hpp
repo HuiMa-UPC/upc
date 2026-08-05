@@ -62,11 +62,13 @@ private:
 
     void on_stream_start_rsp(const middleware::CameraStreamInfoPayload& info);
     void apply_stream_start_ui(const middleware::CameraStreamInfoPayload& info);
-    void begin_decode_thread();
+    bool begin_decode_thread();
     void decode_thread_fn();
     void reset_ui();
     void show_hint(const char* text);
     void close_dma_fds();
+    void close_active_dma_fds();
+    void close_pending_dma_fds();
     [[nodiscard]] int dma_fd(uint32_t idx) const noexcept;
     void schedule_ui_timer();
     void delete_ui_timer();
