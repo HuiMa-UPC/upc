@@ -74,7 +74,7 @@ Glavo Snap IPC → PrintVideoRecorder worker
   → 缩略图：dma32 + RGA importbuffer_fd 生成 thumb.rthm（失败则无缩略图）
   → upsert /home/media/video/config.json（frames_dir=tmp，status=complete|terminated）
   → APP_Print_Video_Manifest_Ntf → UI（切打印结果页）
-  → 结果页退出 finalize：tmp → {job}/；延时默认 PNG 播放（`UPC_TIMELAPSE_PLAYBACK_PNG=1` 不编 timelapse.mp4）；开启打印录像时仍 remux print_h264.mp4
+  → 结果页退出 finalize：tmp → {job}/；延时默认 PNG 播放（`UPC_TIMELAPSE_PLAYBACK_PNG=1` 不编 timelapse.mp4）；开启打印录像时仍 remux print_h264.mp4（PTS 用相机流帧率，默认 30fps，勿用 layer_fps）
 ```
 
 0 帧时不生成层间产物、不写清单，但**仍会发** `APP_Print_Video_Manifest_Ntf`

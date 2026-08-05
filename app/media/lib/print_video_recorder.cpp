@@ -52,13 +52,17 @@ PrintVideoRecorder::~PrintVideoRecorder()
     }
 }
 
-void PrintVideoRecorder::set_stream_geometry(uint32_t width, uint32_t height)
+void PrintVideoRecorder::set_stream_geometry(uint32_t width, uint32_t height,
+                                             uint32_t fps)
 {
     if(width > 0) {
         stream_width_ = width;
     }
     if(height > 0) {
         stream_height_ = height;
+    }
+    if(fps > 0) {
+        stream_fps_ = fps;
     }
 }
 
@@ -135,12 +139,13 @@ void PrintVideoRecorder::on_session_start(
     session_active_ = true;
     UPC_LOG_MEDIA_SERVICE(
         Info,
-        "print_video session start id=%s job=%s dir=%s %ux%u layer_fps=%u h264=%d snap=%d start_unix=%lld",
+        "print_video session start id=%s job=%s dir=%s %ux%u@%u layer_fps=%u h264=%d snap=%d start_unix=%lld",
         session_id_.c_str(),
         job_name_.c_str(),
         session_dir_.c_str(),
         stream_width_,
         stream_height_,
+        stream_fps_,
         layer_fps_,
         h264_continuous_on_ ? 1 : 0,
         layer_snap_enabled_ ? 1 : 0,
@@ -539,7 +544,10 @@ void PrintVideoRecorder::finalize_after_exit(const char* frames_dir)
         }
     }
     const uint32_t frame_count = timelapse_util::scan_max_png_index(session_dir);
-    const uint32_t fps = layer_fps_ > 0 ? layer_fps_ : 1u;
+    /* 延时成片用 layer_fps；打印录像 remux 必须与 H264 编码帧率（相机流）一致。 */
+    const uint32_t timelapse_fps = layer_fps_ > 0 ? layer_fps_ : 1u;
+    const uint32_t print_fps =
+        stream_fps_ > 0 ? stream_fps_ : CAMERA_FPS_DEFAULT;
 
     /* 延时摄影成片：PNG 模式只认帧在、不编 mp4、不删 PNG；MP4 模式才 encode。
      * 打印录像 remux 不受此开关影响（见下方 h264 分支）。 */
@@ -558,7 +566,7 @@ void PrintVideoRecorder::finalize_after_exit(const char* frames_dir)
     if(frame_count >= 1u) {
         (void)std::remove(mp4_path.c_str());
         video_ok = timelapse_util::encode_png_sequence_to_mp4(
-            session_dir, frame_count, fps, mp4_path.c_str());
+            session_dir, frame_count, timelapse_fps, mp4_path.c_str());
         if(!video_ok) {
             UPC_LOG_MEDIA_SERVICE(Warn,
                 "print_video finalize mp4 generation failed dir=%s",
@@ -593,7 +601,7 @@ void PrintVideoRecorder::finalize_after_exit(const char* frames_dir)
     bool h264_remux_ok = false;
     if(std::filesystem::exists(h264_path, h264_ec) && !h264_ec) {
         const bool h264_mp4_ok = timelapse_util::remux_h264_to_mp4(
-            h264_path.c_str(), fps, h264_mp4_path.c_str());
+            h264_path.c_str(), print_fps, h264_mp4_path.c_str());
         if(!h264_mp4_ok) {
             UPC_LOG_MEDIA_SERVICE(
                 Warn, "print_video finalize h264 remux failed path=%s",
@@ -674,8 +682,10 @@ void PrintVideoRecorder::finalize_after_exit(const char* frames_dir)
     notify_manifest_ready(hit->frames_dir, true, aborted, video_ok);
     UPC_LOG_MEDIA_SERVICE(
         Info,
-        "print_video finalize done frames_dir=%s frames=%u video_ok=%d fps=%u",
-        hit->frames_dir.c_str(), frame_count, video_ok ? 1 : 0, fps);
+        "print_video finalize done frames_dir=%s frames=%u video_ok=%d "
+        "timelapse_fps=%u print_fps=%u h264_remux=%d",
+        hit->frames_dir.c_str(), frame_count, video_ok ? 1 : 0,
+        timelapse_fps, print_fps, h264_remux_ok ? 1 : 0);
 }
 
 bool PrintVideoRecorder::remove_session_dir()

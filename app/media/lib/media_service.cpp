@@ -362,7 +362,7 @@ void MediaService::on_stream_start_rsp(const middleware::Message& msg)
     stream_stride_y_ = info.stride_y;
     stream_fps_ = info.fps;
 
-    print_video_.set_stream_geometry(stream_width_, stream_height_);
+    print_video_.set_stream_geometry(stream_width_, stream_height_, stream_fps_);
     print_h264_.set_stream_geometry(stream_width_, stream_height_, stream_fps_);
     clean_video_.set_stream_geometry(stream_width_, stream_height_, stream_fps_);
     live_rtsp_.set_stream_geometry(stream_width_, stream_height_, stream_fps_);
@@ -642,7 +642,7 @@ void MediaService::handle_print_video(const middleware::Message& msg)
             std::lock_guard<std::mutex> lock(finalize_mtx_);
             latest_print_session_closed_ = false;
         }
-        print_video_.set_stream_geometry(stream_width_, stream_height_);
+        print_video_.set_stream_geometry(stream_width_, stream_height_, stream_fps_);
         print_h264_.set_stream_geometry(stream_width_, stream_height_, stream_fps_);
         print_video_.on_session_start(info);
         print_h264_.on_session_start(info);

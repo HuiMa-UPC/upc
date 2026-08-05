@@ -35,7 +35,8 @@ struct PrintVideoJob {
  * print_video_pending）。开门 finalize：
  *   - `UPC_TIMELAPSE_PLAYBACK_PNG=1`（默认）：不编 timelapse.mp4，保留 PNG；
  *   - `=0`：PNG→timelapse.mp4，成功后可删清粉段 PNG。
- * 若 Session_Start 开了连续 H264，再 remux print_h264.mp4（与延时开关无关）。
+ * 若 Session_Start 开了连续 H264，再 remux print_h264.mp4（与延时开关无关；
+ * remux 帧率用相机流 fps，与 PrintH264Recorder 编码一致）。
  */
 class PrintVideoRecorder {
 public:
@@ -45,8 +46,9 @@ public:
     PrintVideoRecorder(const PrintVideoRecorder&) = delete;
     PrintVideoRecorder& operator=(const PrintVideoRecorder&) = delete;
 
-    void set_stream_geometry(uint32_t width, uint32_t height);
-    /** 合成 MP4 帧率；0 忽略。也可由 SessionStart.layer_fps 覆盖。 */
+    /** 预览几何 + 相机流帧率（打印录像 remux 用；勿与 layer_fps 混淆）。 */
+    void set_stream_geometry(uint32_t width, uint32_t height, uint32_t fps = 0);
+    /** 延时摄影成片帧率；0 忽略。也可由 SessionStart.layer_fps 覆盖。 */
     void set_timelapse_fps(uint32_t fps);
 
     void on_session_start(const middleware::PrintVideoSessionPayload& info);
@@ -111,6 +113,7 @@ private:
     bool     h264_continuous_on_ = false; /**< Session_Start 时的打印期 H264 开关快照 */
     uint32_t stream_width_   = CAMERA_WIDTH_DEFAULT;
     uint32_t stream_height_  = CAMERA_HEIGHT_DEFAULT;
+    uint32_t stream_fps_     = CAMERA_FPS_DEFAULT; /**< 与 PrintH264 编码帧率一致 */
     uint32_t layer_fps_      = CAMERA_PRINT_VIDEO_LAYER_FPS;
     uint32_t frame_count_    = 0; /**< 成功写入的 PNG 帧数（连续 1..N） */
     std::vector<uint8_t> last_layer_nv12_; /**< 最近一次层拍成功帧（用于生成 thumb） */
