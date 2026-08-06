@@ -314,13 +314,29 @@ void CameraPreviewPlayer::init()
 void CameraPreviewPlayer::start(lv_obj_t* image_widget, lv_obj_t* hint_widget,
                                  const char* scene)
 {
+    auto defer_start = [this, image_widget, hint_widget, scene]() {
+        pending_image_ = image_widget;
+        pending_hint_  = hint_widget;
+        std::strncpy(pending_scene_, scene ? scene : "",
+                     sizeof(pending_scene_) - 1);
+        pending_scene_[sizeof(pending_scene_) - 1] = '\0';
+        pending_start_ = true;
+    };
+
     if(decode_retiring_.load(std::memory_order_acquire)) {
         UPC_LOG_CAMERA_PREVIEW(Warn,
             "start deferred: previous decode session is still retiring");
+        defer_start();
         return;
     }
     if(active_.load()) {
         stop();
+        if(decode_retiring_.load(std::memory_order_acquire)) {
+            UPC_LOG_CAMERA_PREVIEW(Info,
+                "start deferred: active decode session is retiring");
+            defer_start();
+            return;
+        }
     }
 
     image_     = image_widget;
@@ -367,6 +383,7 @@ void CameraPreviewPlayer::stop()
 
     active_.store(false);
     stop_decode_.store(true);
+    pending_start_ = false;
     UPC_LOG_CAMERA_PREVIEW(Info, "stop (had_session=%d stream_up=%d)",
                            had_session ? 1 : 0, stream_up_.load() ? 1 : 0);
 
@@ -390,6 +407,9 @@ void CameraPreviewPlayer::stop()
         lv_obj_clear_flag(hint_, LV_OBJ_FLAG_HIDDEN);
     }
 
+    if(decode_retiring_.load(std::memory_order_acquire)) {
+        return;
+    }
     if(decode_thread_.joinable()) {
         request_decode_retire_ui();
     } else {
@@ -656,15 +676,17 @@ void CameraPreviewPlayer::request_decode_retire_ui()
 
     stop_decode_.store(true, std::memory_order_release);
     stream_up_.store(false, std::memory_order_release);
-    decode_retired_.store(false, std::memory_order_release);
     display_buf_.store(-1, std::memory_order_relaxed);
     shown_buf_.store(-1, std::memory_order_relaxed);
     show_hint(LV_SYMBOL_VIDEO "  Reconnecting camera...");
 
+    auto retire_state = std::make_shared<RetireState>();
+    retire_state_ = retire_state;
     std::thread retiring_thread = std::move(decode_thread_);
-    std::thread([thread = std::move(retiring_thread), this]() mutable {
+    std::thread([thread = std::move(retiring_thread),
+                 retire_state = std::move(retire_state)]() mutable {
         thread.join();
-        decode_retired_.store(true, std::memory_order_release);
+        retire_state->done.store(true, std::memory_order_release);
     }).detach();
 
     if(!retire_poll_timer_) {
@@ -675,7 +697,8 @@ void CameraPreviewPlayer::request_decode_retire_ui()
 void CameraPreviewPlayer::retire_poll_timer_cb(lv_timer_t* timer)
 {
     auto* self = static_cast<CameraPreviewPlayer*>(lv_timer_get_user_data(timer));
-    if(!self || !self->decode_retired_.load(std::memory_order_acquire)) {
+    if(!self || !self->retire_state_ ||
+       !self->retire_state_->done.load(std::memory_order_acquire)) {
         return;
     }
     self->finish_decode_retire_ui();
@@ -683,7 +706,8 @@ void CameraPreviewPlayer::retire_poll_timer_cb(lv_timer_t* timer)
 
 void CameraPreviewPlayer::finish_decode_retire_ui()
 {
-    if(!decode_retired_.load(std::memory_order_acquire)) {
+    if(!retire_state_ ||
+       !retire_state_->done.load(std::memory_order_acquire)) {
         return;
     }
     if(retire_poll_timer_) {
@@ -691,8 +715,8 @@ void CameraPreviewPlayer::finish_decode_retire_ui()
         retire_poll_timer_ = nullptr;
     }
 
-    decode_retired_.store(false, std::memory_order_release);
     decode_retiring_.store(false, std::memory_order_release);
+    retire_state_.reset();
     consumer_.close();
     display_buf_.store(-1, std::memory_order_relaxed);
     shown_buf_.store(-1, std::memory_order_relaxed);
@@ -700,6 +724,18 @@ void CameraPreviewPlayer::finish_decode_retire_ui()
     clear_frame_buffers();
 
     if(!active_.load()) {
+        if(pending_start_) {
+            lv_obj_t* pending_image = pending_image_;
+            lv_obj_t* pending_hint  = pending_hint_;
+            char pending_scene[sizeof(pending_scene_)]{};
+            std::memcpy(pending_scene, pending_scene_, sizeof(pending_scene));
+            pending_start_ = false;
+            pending_image_ = nullptr;
+            pending_hint_  = nullptr;
+            pending_scene_[0] = '\0';
+            start(pending_image, pending_hint, pending_scene);
+            return;
+        }
         reset_ui();
         return;
     }
@@ -1028,12 +1064,16 @@ void CameraPreviewPlayer::reset_ui()
     height_ = 0;
     pixel_stride_px_ = 0;
     src_stride_y_    = 0;
+    pending_image_   = nullptr;
+    pending_hint_    = nullptr;
+    pending_scene_[0] = '\0';
+    pending_start_   = false;
     logged_first_ui_show_ = false;
     last_frame_ok_ms_.store(0, std::memory_order_relaxed);
     stalled_.store(false, std::memory_order_relaxed);
     pending_start_rsp_valid_ = false;
     decode_retiring_.store(false, std::memory_order_relaxed);
-    decode_retired_.store(false, std::memory_order_relaxed);
+    retire_state_.reset();
     close_dma_fds();
     clear_frame_buffers();
 }

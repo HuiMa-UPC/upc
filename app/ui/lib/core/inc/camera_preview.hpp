@@ -9,6 +9,7 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <thread>
 #include <vector>
 
@@ -58,6 +59,11 @@ private:
         [[nodiscard]] bool is_dma() const noexcept { return dma.valid(); }
     };
 
+    /** 后台等待旧解码线程退出的独立状态，不引用 Player 生命周期。 */
+    struct RetireState {
+        std::atomic<bool> done{false};
+    };
+
     CameraPreviewPlayer() = default;
 
     void on_stream_start_rsp(const middleware::CameraStreamInfoPayload& info);
@@ -88,6 +94,10 @@ private:
     lv_timer_t* ui_timer_ = nullptr;
     lv_timer_t* retire_poll_timer_ = nullptr;
     char scene_[32] = {}; /**< start() 传入的场景标签，供诊断日志 */
+    lv_obj_t* pending_image_ = nullptr;
+    lv_obj_t* pending_hint_  = nullptr;
+    char pending_scene_[32] = {};
+    bool pending_start_ = false;
 
     upc_ipc::IpcDmaFrameRingConsumer consumer_;
 
@@ -100,7 +110,7 @@ private:
     std::atomic<bool> stop_decode_{false};
     std::atomic<bool> stream_up_{false};
     std::atomic<bool> decode_retiring_{false};
-    std::atomic<bool> decode_retired_{false};
+    std::shared_ptr<RetireState> retire_state_;
     bool start_req_sent_ = false;
 
     uint32_t width_  = 0;
