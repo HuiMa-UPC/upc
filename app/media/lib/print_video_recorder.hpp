@@ -55,6 +55,8 @@ public:
     void on_layer_snap(const middleware::PrintVideoLayerSnapPayload& snap);
     void on_session_finish(const middleware::PrintVideoSessionPayload& info);
     void on_session_abort(const middleware::PrintVideoSessionPayload& info);
+    /** 丢弃当前会话的临时媒体；用于存储预算无法满足时，打印本身继续执行。 */
+    void discard_current_session();
     /** 结果页退出后先把条目标记为可见。 */
     bool commit_after_exit(const char* frames_dir);
     /** 结果页退出后触发：按目录内 PNG 统一合成/更新最终 MP4。 */
@@ -67,6 +69,8 @@ public:
      * 设置 NV12 快照回调。回调返回紧凑 NV12（stride==width）帧数据。
      */
     void set_nv12_snapshot_provider(std::function<bool(std::vector<uint8_t>&)> fn);
+    /** 连续打印录像的最后帧缩略图提供方；与延时摄影封面保持独立。 */
+    void set_print_thumb_provider(std::function<bool(const char*)> fn);
 
 private:
     void worker_fn();
@@ -93,7 +97,9 @@ private:
      */
     void notify_manifest_ready(const std::string& frames_dir_name,
                                bool has_entry, bool aborted, bool has_video) const;
-    bool promote_session_dir();
+    /** 生成“作业名 + 本地开始时间毫秒”的唯一正式目录名。 */
+    static std::string make_session_name(const std::string& job_name,
+                                         int64_t start_unix = 0);
     bool remove_session_dir();
     std::string frame_png_path(uint32_t frame_index) const;
     static bool mkdir_p(const char* path);
@@ -107,6 +113,7 @@ private:
     std::atomic<bool>       stop_{false};
 
     std::function<bool(std::vector<uint8_t>&)> snapshot_provider_;
+    std::function<bool(const char*)> print_thumb_provider_;
 
     bool     session_active_ = false;
     bool     layer_snap_enabled_ = true; /**< false=磁盘水位告警，跳过层拍 */
@@ -120,8 +127,8 @@ private:
     std::string session_id_;
     std::string job_name_;
     std::string session_name_;
-    std::string session_final_dir_;
     std::string session_dir_;
+    bool        discarded_ = false;
     int64_t     start_unix_ = 0; /**< Session_Start 墙钟秒，写入 manifest */
     middleware::ModuleId sender_module_id_ = middleware::ModuleId::APP_MEDIA;
 };

@@ -56,6 +56,19 @@
 #define UPC_TIMELAPSE_PLAYBACK_PNG  1
 #endif
 
+/**
+ * 录像区环形存储预算：
+ * - 总预算按录像所在分区容量的百分比动态计算，避免写死设备标称容量；
+ * - 余量用于系统、日志与封装期间 H264/MP4 双份文件并存。
+ */
+#ifndef UPC_VIDEO_STORAGE_QUOTA_PCT
+#define UPC_VIDEO_STORAGE_QUOTA_PCT  80u
+#endif
+
+#ifndef UPC_VIDEO_STORAGE_MIN_FREE_PCT
+#define UPC_VIDEO_STORAGE_MIN_FREE_PCT  5u
+#endif
+
 /* ---- 兼容旧宏名（逐步迁移调用方） ---- */
 #ifndef UPC_PRINT_VIDEO_DIR
 #define UPC_PRINT_VIDEO_DIR  UPC_VIDEO_DIR

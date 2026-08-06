@@ -8,6 +8,7 @@
 #include <condition_variable>
 #include <cstdio>
 #include <deque>
+#include <functional>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -34,6 +35,10 @@ public:
     void on_session_start(const middleware::PrintVideoSessionPayload& info);
     void on_session_finish(const middleware::PrintVideoSessionPayload& info);
     void on_session_abort(const middleware::PrintVideoSessionPayload& info);
+    /** 编码器已排空并关闭输出文件时调用；回调在线程 worker 上执行。 */
+    void set_finalize_done_callback(std::function<void()> cb);
+    /** 从最后一个成功编码的打印期帧生成独立的打印录像缩略图。 */
+    bool create_final_thumb(const char* out_path) const;
     void set_paused(bool paused);
     void on_frame_nv12(const uint8_t* src_y, const uint8_t* src_uv, uint32_t stride_y);
     /** 清理固定临时目录内残留的 print.h264 / print_h264.mp4 */
@@ -74,7 +79,7 @@ private:
     static std::string sanitize_filename(const char* name);
     static size_t count_pending_write_frames(const std::deque<Job>& jobs);
 
-    std::mutex mtx_;
+    mutable std::mutex mtx_;
     std::condition_variable cv_;
     std::condition_variable finalize_cv_;
     std::condition_variable idle_cv_;
@@ -95,6 +100,7 @@ private:
     uint32_t bitrate_bps_ = CAMERA_PRINT_H264_BITRATE;
     uint32_t frame_count_ = 0;
     uint32_t dropped_frames_ = 0;
+    std::vector<uint8_t> last_nv12_;
 
     std::string session_id_;
     std::string session_name_;
@@ -107,6 +113,7 @@ private:
     void* mpp_mpi_ = nullptr;
     void* mpp_cfg_ = nullptr;
     bool mpp_ready_ = false;
+    std::function<void()> finalize_done_cb_;
 };
 
 } // namespace upc::media

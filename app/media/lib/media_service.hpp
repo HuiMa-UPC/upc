@@ -37,6 +37,10 @@ private:
     void handle_print_video(const middleware::Message& msg);
     void handle_clean_video(const middleware::Message& msg);
     void handle_print_video_finalize(const middleware::Message& msg);
+    /** H264 worker 关闭裸流后触发，解开开门最终化栅栏。 */
+    void on_print_h264_finalize_done();
+    /** 在 finalize_mtx_ 保护下取出满足全部条件的最终化目录。 */
+    std::string take_ready_finalize_locked();
     void handle_storage_usage_req(const middleware::Message& msg) const;
     void handle_rtsp_start_req(const middleware::Message& msg);
     void handle_rtsp_stop_req(const middleware::Message& msg);
@@ -47,6 +51,10 @@ private:
     void remove_legacy_work_dirs() const;
     void clear_video_tmp_dir() const;
     void drop_orphan_pending_flags() const;
+    /** 环形录像区回收：删除最旧的已提交完整会话直至满足 80% 配额与系统余量。 */
+    bool ensure_video_storage_budget() const;
+    static uint64_t query_directory_bytes(const char* path);
+    bool evict_oldest_committed_video() const;
     /** 0~100；失败返回 -1 */
     int query_storage_used_pct() const;
     void apply_storage_watermark(middleware::PrintVideoSessionPayload& info);
@@ -131,6 +139,7 @@ private:
     bool clean_video_active_ = false;
     bool finalize_pending_ = false;
     std::string pending_finalize_frames_dir_;
+    bool h264_finalize_pending_ = false;
     bool latest_print_session_closed_ = false;
 
     PrintVideoRecorder print_video_;

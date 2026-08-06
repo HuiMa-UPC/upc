@@ -77,6 +77,25 @@ void PrintH264Recorder::set_stream_geometry(uint32_t width, uint32_t height, uin
     if(fps > 0) fps_ = fps;
 }
 
+void PrintH264Recorder::set_finalize_done_callback(std::function<void()> cb) {
+    std::lock_guard<std::mutex> lock(mtx_);
+    finalize_done_cb_ = std::move(cb);
+}
+
+bool PrintH264Recorder::create_final_thumb(const char* out_path) const {
+    std::vector<uint8_t> nv12;
+    uint32_t width = 0;
+    uint32_t height = 0;
+    {
+        std::lock_guard<std::mutex> lock(mtx_);
+        nv12 = last_nv12_;
+        width = width_;
+        height = height_;
+    }
+    return timelapse_util::create_raw_thumb_from_nv12(
+        nv12, width, height, out_path);
+}
+
 void PrintH264Recorder::clear_session_paths_locked() {
     session_id_.clear();
     session_name_.clear();
@@ -90,6 +109,7 @@ void PrintH264Recorder::reset_session_state_locked() {
     had_write_error_ = false;
     frame_count_ = 0;
     dropped_frames_ = 0;
+    last_nv12_.clear();
     bitrate_bps_ = CAMERA_PRINT_H264_BITRATE;
     clear_session_paths_locked();
 }
@@ -450,6 +470,7 @@ void PrintH264Recorder::run_write_frame_job(const Job& job) {
     std::lock_guard<std::mutex> lock(mtx_);
     if(job.session_seq == session_seq_ && !had_write_error_) {
         ++frame_count_;
+        last_nv12_ = job.nv12;
     }
 }
 
@@ -486,10 +507,17 @@ void PrintH264Recorder::run_finalize_job(Job job) {
         "print_h264 finalize id=%s aborted=%d frames=%u dropped=%u err=%d",
         job.session_id.c_str(), job.aborted ? 1 : 0, frames, dropped, err ? 1 : 0);
 
-    std::lock_guard<std::mutex> lock(mtx_);
-    finalize_in_progress_ = false;
-    finalize_cv_.notify_all();
-    idle_cv_.notify_all();
+    std::function<void()> done_cb;
+    {
+        std::lock_guard<std::mutex> lock(mtx_);
+        finalize_in_progress_ = false;
+        done_cb = finalize_done_cb_;
+        finalize_cv_.notify_all();
+        idle_cv_.notify_all();
+    }
+    if(done_cb) {
+        done_cb();
+    }
 }
 
 void PrintH264Recorder::run_cleanup_job(const Job& job) {

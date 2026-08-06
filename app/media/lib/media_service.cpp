@@ -119,6 +119,12 @@ bool MediaService::init()
     print_video_.set_nv12_snapshot_provider([this](std::vector<uint8_t>& out) {
         return copy_latest_nv12_snapshot(out);
     });
+    print_video_.set_print_thumb_provider([this](const char* out_path) {
+        return print_h264_.create_final_thumb(out_path);
+    });
+    print_h264_.set_finalize_done_callback([this] {
+        on_print_h264_finalize_done();
+    });
 
     uint32_t timelapse_fps = CAMERA_PRINT_VIDEO_LAYER_FPS;
     upc::config::CalConfigOptions cal_cfg{};
@@ -641,6 +647,7 @@ void MediaService::handle_print_video(const middleware::Message& msg)
         {
             std::lock_guard<std::mutex> lock(finalize_mtx_);
             latest_print_session_closed_ = false;
+            h264_finalize_pending_ = (info.h264_continuous_on != 0);
         }
         print_video_.set_stream_geometry(stream_width_, stream_height_, stream_fps_);
         print_h264_.set_stream_geometry(stream_width_, stream_height_, stream_fps_);
@@ -708,11 +715,7 @@ void MediaService::handle_clean_video(const middleware::Message& msg)
         {
             std::lock_guard<std::mutex> lock(finalize_mtx_);
             clean_video_active_ = false;
-            if(finalize_pending_ && !pending_finalize_frames_dir_.empty()) {
-                finalize_frames_dir = pending_finalize_frames_dir_;
-                finalize_pending_ = false;
-                pending_finalize_frames_dir_.clear();
-            }
+            finalize_frames_dir = take_ready_finalize_locked();
         }
         if(!finalize_frames_dir.empty()) {
             print_video_.finalize_after_exit(finalize_frames_dir.c_str());
@@ -747,17 +750,39 @@ void MediaService::handle_print_video_finalize(const middleware::Message& msg)
 
     (void)print_video_.commit_after_exit(req.frames_dir);
 
-    bool defer = false;
+    std::string finalize_frames_dir;
     {
         std::lock_guard<std::mutex> lock(finalize_mtx_);
-        if(clean_video_active_) {
-            defer = true;
-            finalize_pending_ = true;
-            pending_finalize_frames_dir_ = req.frames_dir;
-        }
+        finalize_pending_ = true;
+        pending_finalize_frames_dir_ = req.frames_dir;
+        finalize_frames_dir = take_ready_finalize_locked();
     }
-    if(!defer) {
-        print_video_.finalize_after_exit(req.frames_dir);
+    if(!finalize_frames_dir.empty()) {
+        print_video_.finalize_after_exit(finalize_frames_dir.c_str());
+    }
+}
+
+std::string MediaService::take_ready_finalize_locked()
+{
+    if(!finalize_pending_ || pending_finalize_frames_dir_.empty() ||
+       clean_video_active_ || h264_finalize_pending_) {
+        return {};
+    }
+    std::string frames_dir = std::move(pending_finalize_frames_dir_);
+    finalize_pending_ = false;
+    return frames_dir;
+}
+
+void MediaService::on_print_h264_finalize_done()
+{
+    std::string finalize_frames_dir;
+    {
+        std::lock_guard<std::mutex> lock(finalize_mtx_);
+        h264_finalize_pending_ = false;
+        finalize_frames_dir = take_ready_finalize_locked();
+    }
+    if(!finalize_frames_dir.empty()) {
+        print_video_.finalize_after_exit(finalize_frames_dir.c_str());
     }
 }
 
@@ -1031,6 +1056,16 @@ void MediaService::recover_pending_and_reset_tmp()
         if(std::filesystem::exists(abs, ec)) {
             UPC_LOG_MEDIA_SERVICE(Info,
                 "recover pending finalize frames_dir=%s", e.frames_dir.c_str());
+            if(is_tmp) {
+                /*
+                 * 断电前尚未滑动开门的 tmp 不补做打印录像 remux：保留已落盘
+                 * 的延时 PNG，并以 terminated 状态转正；H264 原始数据直接丢弃。
+                 */
+                (void)std::remove((abs + "/print.h264").c_str());
+                (void)std::remove((abs + "/print_h264.mp4").c_str());
+                (void)std::remove((abs + "/print_thumb" +
+                                   CAMERA_PRINT_VIDEO_THUMB_EXT).c_str());
+            }
             print_video_.commit_after_exit(e.frames_dir.c_str());
             print_video_.finalize_after_exit(e.frames_dir.c_str());
         }
@@ -1058,31 +1093,120 @@ int MediaService::query_storage_used_pct() const
     return static_cast<int>((used * 100ull) / total);
 }
 
+uint64_t MediaService::query_directory_bytes(const char* path)
+{
+    if(!path || !path[0]) {
+        return 0;
+    }
+    std::error_code ec;
+    uint64_t total = 0;
+    for(const auto& ent : std::filesystem::recursive_directory_iterator(path, ec)) {
+        if(ec) {
+            break;
+        }
+        if(!ent.is_regular_file(ec) || ec) {
+            continue;
+        }
+        total += static_cast<uint64_t>(ent.file_size(ec));
+        if(ec) {
+            ec.clear();
+        }
+    }
+    return total;
+}
+
+bool MediaService::evict_oldest_committed_video() const
+{
+    std::vector<upc::PrintHistoryEntry> entries;
+    if(!upc::print_history_manifest_load(UPC_PRINT_VIDEO_MANIFEST, entries)) {
+        return false;
+    }
+    std::sort(entries.begin(), entries.end(),
+        [](const upc::PrintHistoryEntry& a, const upc::PrintHistoryEntry& b) {
+            return a.start_unix < b.start_unix;
+        });
+
+    auto victim = std::find_if(entries.begin(), entries.end(),
+        [](const upc::PrintHistoryEntry& e) {
+            return e.committed && !e.video_pending && !e.print_video_pending &&
+                   !e.frames_dir.empty() && e.frames_dir != UPC_VIDEO_TMP_NAME;
+        });
+    if(victim == entries.end()) {
+        return false;
+    }
+
+    const std::string frames_dir = victim->frames_dir;
+    const std::string path =
+        std::string(CAMERA_PRINT_VIDEO_OUT_DIR) + "/" + frames_dir;
+    std::error_code ec;
+    std::filesystem::remove_all(path, ec);
+    if(ec) {
+        UPC_LOG_MEDIA_SERVICE(
+            Warn, "video quota eviction failed dir=%s err=%s",
+            path.c_str(), ec.message().c_str());
+        return false;
+    }
+    entries.erase(std::remove_if(entries.begin(), entries.end(),
+        [&frames_dir](const upc::PrintHistoryEntry& e) {
+            return e.frames_dir == frames_dir;
+        }), entries.end());
+    const std::string tmp_path =
+        std::string(UPC_PRINT_VIDEO_MANIFEST) + ".tmp";
+    if(!upc::print_history_manifest_save(tmp_path, entries) ||
+       std::rename(tmp_path.c_str(), UPC_PRINT_VIDEO_MANIFEST) != 0) {
+        (void)std::remove(tmp_path.c_str());
+        UPC_LOG_MEDIA_SERVICE(
+            Warn, "video quota eviction manifest update failed dir=%s", path.c_str());
+        return false;
+    }
+    UPC_LOG_MEDIA_SERVICE(Info, "video quota evicted oldest dir=%s", path.c_str());
+    return true;
+}
+
+bool MediaService::ensure_video_storage_budget() const
+{
+    struct statvfs vfs {};
+    if(::statvfs(UPC_MEDIA_ROOT, &vfs) != 0 || vfs.f_frsize == 0) {
+        return false;
+    }
+    const uint64_t unit = static_cast<uint64_t>(vfs.f_frsize);
+    const uint64_t total_bytes = static_cast<uint64_t>(vfs.f_blocks) * unit;
+    const uint64_t min_free =
+        total_bytes * static_cast<uint64_t>(UPC_VIDEO_STORAGE_MIN_FREE_PCT) / 100u;
+    const uint64_t quota =
+        total_bytes * static_cast<uint64_t>(UPC_VIDEO_STORAGE_QUOTA_PCT) / 100u;
+
+    for(;;) {
+        const uint64_t video_bytes = query_directory_bytes(UPC_VIDEO_DIR);
+        const uint64_t free_bytes = static_cast<uint64_t>(vfs.f_bavail) * unit;
+        if(video_bytes <= quota && free_bytes >= min_free) {
+            return true;
+        }
+        if(!evict_oldest_committed_video()) {
+            UPC_LOG_MEDIA_SERVICE(
+                Warn, "video quota exhausted video=%llu quota=%llu free=%llu min_free=%llu",
+                static_cast<unsigned long long>(video_bytes),
+                static_cast<unsigned long long>(quota),
+                static_cast<unsigned long long>(free_bytes),
+                static_cast<unsigned long long>(min_free));
+            return false;
+        }
+        if(::statvfs(UPC_MEDIA_ROOT, &vfs) != 0) {
+            return false;
+        }
+    }
+}
+
 void MediaService::apply_storage_watermark(middleware::PrintVideoSessionPayload& info)
 {
-    const int pct = query_storage_used_pct();
-    if(pct < 0) {
-        print_video_.set_layer_snap_enabled(true);
-        return;
-    }
-
-    if(pct >= static_cast<int>(MEDIA_STORAGE_CRITICAL_PCT)) {
+    if(!ensure_video_storage_budget()) {
         UPC_LOG_MEDIA_SERVICE(Warn,
-            "storage critical used=%d%%: force clear tmp/legacy", pct);
-        clear_video_tmp_dir();
-        remove_legacy_work_dirs();
-        drop_orphan_pending_flags();
-    }
-
-    if(pct >= static_cast<int>(MEDIA_STORAGE_WARN_PCT)) {
-        UPC_LOG_MEDIA_SERVICE(Warn,
-            "storage warn used=%d%%: disable h264 + layer snap this session",
-            pct);
+            "video budget unavailable: disable H264 and layer snapshots this session");
         info.h264_continuous_on = 0;
         print_video_.set_layer_snap_enabled(false);
-    } else {
-        print_video_.set_layer_snap_enabled(true);
+        return;
     }
+    print_video_.set_layer_snap_enabled(true);
 }
 
 } // namespace upc::media
