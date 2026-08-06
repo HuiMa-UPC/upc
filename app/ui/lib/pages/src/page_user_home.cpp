@@ -13,9 +13,6 @@
 #include "ui_slide_unlock.hpp"
 #include "config/cal_config.hpp"
 #include "ui_device_state.hpp"
-#include "ui_message_store.hpp"
-#include "ui_notice_stack.hpp"
-#include "upc_contract.hpp"
 #include "config/camera_resolution_profile.hpp"
 
 
@@ -232,7 +229,6 @@ bool      g_printing_active   = false;
  * 浮层在退出打印态时只隐藏不销毁：结果态下从侧栏切走再切回首页要能原样恢复。 */
 lv_obj_t *g_print_overlay      = nullptr; /**< 浮层根（默认隐藏） */
 /* stats-card（前缀 pc_ = print card） */
-lv_obj_t *g_pc_card            = nullptr; /**< 卡片根（通知浮层要按它的高度抬起来） */
 lv_obj_t *g_pc_badge_icon      = nullptr; /**< 徽标图标盒（转圈/三角/圆圈感叹/勾） */
 lv_obj_t *g_pc_badge_text      = nullptr; /**< "PRINTING..." / "PRINT COMPLETE" … */
 lv_obj_t *g_pc_percent         = nullptr; /**< 徽标行右端百分比 */
@@ -241,6 +237,12 @@ lv_obj_t *g_pc_time_cap        = nullptr; /**< "TIME LEFT" ↔ "TIME COST" */
 lv_obj_t *g_pc_time_val        = nullptr;
 lv_obj_t *g_pc_material_val    = nullptr;
 lv_obj_t *g_pc_material_unit   = nullptr; /**< CONSUMABLES 单位 "G"（无数据时隐藏） */
+/* 提示条（前缀 pn_ = print notice） */
+lv_obj_t *g_pn_root            = nullptr;
+lv_obj_t *g_pn_icon_box        = nullptr; /**< 图标底色块（信息蓝 / 告警红） */
+lv_obj_t *g_pn_icon            = nullptr;
+lv_obj_t *g_pn_title           = nullptr;
+lv_obj_t *g_pn_sub             = nullptr;
 /* 底部两组控件（互斥显示） */
 lv_obj_t *g_ctl_run            = nullptr; /**< 运行组：暂停/恢复 + 终止 */
 lv_obj_t *g_ctl_collect        = nullptr; /**< 取件组：吹粉 + 滑动取件 */
@@ -254,24 +256,18 @@ ui_slide_unlock_t *g_result_slide = nullptr; /**< "SWIPE TO COLLECT" */
 char      g_result_job_name[96] = {0}; /**< 清粉录像目录键（优先用 manifest.frames_dir） */
 bool      g_result_cleaning = false;
 bool      g_result_purify_done = false; /**< 已成功清粉一次，禁止再次触发 */
-/* 右上环境区（稿 4231:5739）：左边一张 HOME PM2.5 卡 + 右边一条 5 列环境条。
- *
- * 打印态浮层和待机监控层各挂一份，两层在建页时一起创建、靠显隐切换（见
- * page_user_home_create），所以句柄不能是单例——否则后建的那份会把先建的覆盖掉，
- * 先建的那层从此收不到刷新。两份都登记在 kEnvBlocks 里，刷新时一起写。 */
-struct env_block_t {
-    lv_obj_t *pm_title;   /**< "HOME PM2.5" / "HOME PM10" */
-    lv_obj_t *pm_level;   /**< 分级词 Good/Fair/Poor/Very Poor */
-    lv_obj_t *pm_value;   /**< 灰色小字 "(25.0 ug/m3)" */
-    lv_obj_t *cabin_val;  /**< 5 列条首列：舱内 PM2.5 分级词 */
-    lv_obj_t *temp_val;
-    lv_obj_t *o2_val;
-    lv_obj_t *hum_val;
-    lv_obj_t *prs_val;
-};
-env_block_t g_env_print   = {};   /**< 打印态浮层那份 */
-env_block_t g_env_monitor = {};   /**< 待机监控层那份 */
-env_block_t *const kEnvBlocks[] = { &g_env_print, &g_env_monitor };
+/* 顶部左侧 HOME PM2.5 卡（稿 4045:18205）：点卡片本身切换 PM2.5/PM10，
+ * 与首页左卡共用 g_home_metric_idx，两处显示始终同步。 */
+lv_obj_t *g_res_pm_title = nullptr;       /**< "HOME PM2.5" / "HOME PM10" */
+lv_obj_t *g_res_pm_level = nullptr;       /**< 分级词 Good/Fair/Poor/Very Poor */
+lv_obj_t *g_res_pm_value = nullptr;       /**< 灰色小字 "(25.0 ug/m3)" */
+/* 顶部环境条 5 列（稿 4045:18156）：舱内 PM2.5 分级 + TEMP/O2/HUM/PRESSURE。
+ * 稿中首列是文字 caption（无图标），后四列是 32×32 图标 + 数值。 */
+lv_obj_t *g_res_env_cabin_val = nullptr;  /**< 舱内 PM2.5 分级词 */
+lv_obj_t *g_res_env_temp_val = nullptr;
+lv_obj_t *g_res_env_o2_val   = nullptr;
+lv_obj_t *g_res_env_hum_val  = nullptr;
+lv_obj_t *g_res_env_prs_val  = nullptr;
 
 /* ---------- 顶栏"查看监控"入口 + 待机监控（摄像头全屏）视图 ---------- */
 lv_obj_t *g_btn_camera             = nullptr; /**< 顶栏圆形"查看监控"按钮 */
@@ -280,6 +276,10 @@ lv_obj_t *g_monitor_camera_viewport= nullptr;
 lv_obj_t *g_monitor_camera_hint    = nullptr;
 lv_obj_t *g_monitor_camera_image   = nullptr; /**< 监控视频帧槽（复用同一 CameraPreviewPlayer） */
 lv_obj_t *g_monitor_photo_btn      = nullptr; /**< 监控区拍照按钮 */
+lv_obj_t *g_mon_env_pm_ext         = nullptr; /**< 右上环境面板：EXTERIOR PM2.5 数值 */
+lv_obj_t *g_mon_env_pm_int         = nullptr; /**< INTERIOR PM2.5 数值 */
+lv_obj_t *g_mon_env_o2             = nullptr; /**< O2 CONC. 数值 */
+lv_obj_t *g_mon_env_temp           = nullptr; /**< DEVICE TEMP 数值 */
 ui_slide_unlock_t *g_monitor_door  = nullptr; /**< 监控界面的滑动开门 */
 bool      g_monitor_active         = false;
 bool      g_monitor_photo_pending  = false;   /**< 拍照请求在途，防连按 */
@@ -917,9 +917,8 @@ int            g_print_percent = 0;   /**< 最后一次进度百分比（结束�
 void apply_print_phase(void);
 void purify_stage_set(purify_stage_t stage);
 
-/** 圆形玻璃钮（稿 3847:9438 那档灰玻璃）：打印态/监控态右侧中部的拍照钮、
- *  监控态左下的返回钮都用它。out_btn 回传钮本体用于置灰。
- *  稿上还有一圈 inset 阴影，LVGL 没有内阴影，略去。 */
+/** 圆形玻璃钮（稿 3896:14303 那档灰玻璃）：右侧中部的拍照钮用它。
+ *  out_btn 回传钮本体用于置灰。 */
 lv_obj_t *make_glass_round_btn(lv_obj_t *parent, const lv_image_dsc_t *icon,
                                lv_event_cb_t cb, lv_obj_t **out_btn)
 {
@@ -934,7 +933,7 @@ lv_obj_t *make_glass_round_btn(lv_obj_t *parent, const lv_image_dsc_t *icon,
     lv_obj_set_style_radius(btn, LV_RADIUS_CIRCLE, 0);
     lv_obj_set_style_border_width(btn, 1, 0);
     lv_obj_set_style_border_color(btn, lv_color_white(), 0);
-    lv_obj_set_style_border_opa(btn, LV_OPA_50, 0);
+    lv_obj_set_style_border_opa(btn, LV_OPA_30, 0);
     if(cb) {
         lv_obj_add_event_cb(btn, cb, LV_EVENT_CLICKED, nullptr);
     }
@@ -1040,6 +1039,10 @@ void on_result_collect_unlocked(void * /*u*/)
     control_print_result_collect();
 }
 
+/* 环境条图标边长：稿上 32（1280×800）→ 1024 档 25、1280 档 29。
+ * 主题宏展开成 g_ui->xxx，运行期才可用，所以只能是内联函数不能是 constexpr。 */
+inline int32_t result_env_icon_sz(void) { return USER_BTN_PRIMARY_H * 4 / 7; }
+
 /** 环境条数值行：数值 + 可选单位（底对齐，稿 EL-23615d6d）。 */
 lv_obj_t *result_env_value_row(lv_obj_t *col, const char *unit, lv_obj_t **out_val)
 {
@@ -1084,10 +1087,19 @@ lv_obj_t *result_env_col_base(lv_obj_t *parent)
     return col;
 }
 
-/** 文字列（稿 4231:5749 五列都是这种）：一行文字 caption + 一行数值。
- *  unit 为 nullptr 时数值行不带单位（首列舱内 PM2.5 显示的是分级词）。 */
-lv_obj_t *result_env_text_col(lv_obj_t *parent, const char *caption,
+/** 图标列（稿中第 2~5 列）：一行图标 + 一行数值。 */
+lv_obj_t *result_env_icon_col(lv_obj_t *parent, const lv_image_dsc_t *icon,
                               const char *unit, lv_obj_t **out_val)
+{
+    lv_obj_t *col = result_env_col_base(parent);
+    make_dim_icon(col, icon, result_env_icon_sz());
+    result_env_value_row(col, unit, out_val);
+    return col;
+}
+
+/** 文字列（稿中第 1 列，舱内 PM2.5）：稿上这列用的是文字 caption，不是图标。 */
+lv_obj_t *result_env_text_col(lv_obj_t *parent, const char *caption,
+                              lv_obj_t **out_val)
 {
     lv_obj_t *col = result_env_col_base(parent);
     lv_obj_t *cap = lv_label_create(col);
@@ -1095,7 +1107,7 @@ lv_obj_t *result_env_text_col(lv_obj_t *parent, const char *caption,
     lv_obj_set_style_text_color(cap, user_color_text, 0);
     lv_obj_set_style_text_opa(cap, LV_OPA_50, 0);
     lv_obj_set_style_text_font(cap, user_font_caption(), 0);
-    result_env_value_row(col, unit, out_val);
+    result_env_value_row(col, nullptr, out_val);
     return col;
 }
 
@@ -1110,10 +1122,9 @@ void on_result_pm_card_click(lv_event_t * /*e*/)
     result_pm_card_update();
 }
 
-/** 顶部左侧 HOME PM2.5 卡（稿 4231:5740）：标题 + 分级词 + 括号数值。
- *  稿上宽 157，但最坏文案 "Very Poor (150.0 ug/m3)" 放不下，故用内容自适应宽。
- *  eb 收本卡的三个 label 句柄——打印态与监控态各建一份，不能写同一组全局。 */
-lv_obj_t *build_result_pm_card(lv_obj_t *parent, env_block_t *eb)
+/** 顶部左侧 HOME PM2.5 卡（稿 4045:18205）：标题 + 分级词 + 括号数值。
+ *  稿上宽 157，但最坏文案 "Very Poor (150.0 ug/m3)" 放不下，故用内容自适应宽。 */
+lv_obj_t *build_result_pm_card(lv_obj_t *parent)
 {
     lv_obj_t *card = lv_obj_create(parent);
     lv_obj_remove_style_all(card);
@@ -1132,11 +1143,11 @@ lv_obj_t *build_result_pm_card(lv_obj_t *parent, env_block_t *eb)
     lv_obj_add_flag(card, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_event_cb(card, on_result_pm_card_click, LV_EVENT_CLICKED, nullptr);
 
-    eb->pm_title = lv_label_create(card);
-    lv_label_set_text(eb->pm_title, kAirMetrics[0].title);
-    lv_obj_set_style_text_color(eb->pm_title, user_color_text, 0);
-    lv_obj_set_style_text_opa(eb->pm_title, LV_OPA_50, 0);
-    lv_obj_set_style_text_font(eb->pm_title, user_font_caption(), 0);
+    g_res_pm_title = lv_label_create(card);
+    lv_label_set_text(g_res_pm_title, kAirMetrics[0].title);
+    lv_obj_set_style_text_color(g_res_pm_title, user_color_text, 0);
+    lv_obj_set_style_text_opa(g_res_pm_title, LV_OPA_50, 0);
+    lv_obj_set_style_text_font(g_res_pm_title, user_font_caption(), 0);
 
     lv_obj_t *lrow = lv_obj_create(card);
     lv_obj_remove_style_all(lrow);
@@ -1149,22 +1160,22 @@ lv_obj_t *build_result_pm_card(lv_obj_t *parent, env_block_t *eb)
     lv_obj_clear_flag(lrow, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_remove_flag(lrow, LV_OBJ_FLAG_CLICKABLE);
 
-    eb->pm_level = lv_label_create(lrow);
-    lv_label_set_text(eb->pm_level, "--");
-    lv_obj_set_style_text_color(eb->pm_level, user_color_text, 0);
-    lv_obj_set_style_text_font(eb->pm_level, user_font_text(), 0);
+    g_res_pm_level = lv_label_create(lrow);
+    lv_label_set_text(g_res_pm_level, "--");
+    lv_obj_set_style_text_color(g_res_pm_level, user_color_text, 0);
+    lv_obj_set_style_text_font(g_res_pm_level, user_font_text(), 0);
 
-    eb->pm_value = lv_label_create(lrow);
-    lv_label_set_text(eb->pm_value, "");
-    lv_obj_set_style_text_color(eb->pm_value, user_color_text, 0);
-    lv_obj_set_style_text_opa(eb->pm_value, LV_OPA_50, 0);
-    lv_obj_set_style_text_font(eb->pm_value, user_font_caption(), 0);
+    g_res_pm_value = lv_label_create(lrow);
+    lv_label_set_text(g_res_pm_value, "");
+    lv_obj_set_style_text_color(g_res_pm_value, user_color_text, 0);
+    lv_obj_set_style_text_opa(g_res_pm_value, LV_OPA_50, 0);
+    lv_obj_set_style_text_font(g_res_pm_value, user_font_caption(), 0);
     return card;
 }
 
-/** 顶部环境条（稿 4231:5749）：舱内 PM2.5 + Temp./O2/Humidity/Pressure 五列。
- *  稿上没有 AQI，第一列是舱内 PM2.5 的分级词；五列的 caption 都是文字。 */
-lv_obj_t *build_result_env_bar(lv_obj_t *parent, env_block_t *eb)
+/** 顶部环境条（稿 4045:18156）：舱内 PM2.5 + TEMP/O2/HUMIDITY/PRESSURE 五列。
+ *  稿上没有 AQI，第一列是舱内 PM2.5 的分级词。 */
+lv_obj_t *build_result_env_bar(lv_obj_t *parent)
 {
     lv_obj_t *panel = lv_obj_create(parent);
     lv_obj_remove_style_all(panel);
@@ -1179,34 +1190,12 @@ lv_obj_t *build_result_env_bar(lv_obj_t *parent, env_block_t *eb)
     lv_obj_set_style_radius(panel, USER_RADIUS / 2, 0);
     lv_obj_clear_flag(panel, LV_OBJ_FLAG_SCROLLABLE);
 
-    result_env_text_col(panel, "Pm 2.5",   nullptr,       &eb->cabin_val);
-    result_env_text_col(panel, "Temp.",    "\xC2\xB0""C", &eb->temp_val);
-    result_env_text_col(panel, "O2",       "%",           &eb->o2_val);
-    result_env_text_col(panel, "Humidity", "%",           &eb->hum_val);
-    result_env_text_col(panel, "Pressure", "kpa",         &eb->prs_val);
+    result_env_text_col(panel, "PM2.5", &g_res_env_cabin_val);
+    result_env_icon_col(panel, &ic_temp,     "\xC2\xB0""C", &g_res_env_temp_val);
+    result_env_icon_col(panel, &ic_o2,       "%",           &g_res_env_o2_val);
+    result_env_icon_col(panel, &ic_humidity, "%",           &g_res_env_hum_val);
+    result_env_icon_col(panel, &ic_pressure, "kpa",         &g_res_env_prs_val);
     return panel;
-}
-
-/** 右上环境区整体（PM2.5 卡 + 5 列条），贴 parent 右上角。
- *  打印态浮层与待机监控层各调一次，各传自己那份 env_block_t。 */
-lv_obj_t *build_env_wrap(lv_obj_t *parent, env_block_t *eb)
-{
-    lv_obj_t *wrap = lv_obj_create(parent);
-    lv_obj_remove_style_all(wrap);
-    lv_obj_add_flag(wrap, LV_OBJ_FLAG_FLOATING);
-    lv_obj_set_size(wrap, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
-    lv_obj_set_flex_flow(wrap, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(wrap, LV_FLEX_ALIGN_END,
-                          LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
-    lv_obj_set_style_pad_column(wrap, USER_PAD_SM / 2, 0);
-    lv_obj_set_style_bg_opa(wrap, LV_OPA_TRANSP, 0);
-    lv_obj_clear_flag(wrap, LV_OBJ_FLAG_SCROLLABLE);
-    /* 右边缘与右侧中部的拍照钮对齐（两者都退 USER_PAD） */
-    lv_obj_align(wrap, LV_ALIGN_TOP_RIGHT, -USER_PAD, USER_PAD);
-
-    build_result_pm_card(wrap, eb);
-    build_result_env_bar(wrap, eb);
-    return wrap;
 }
 
 /** stats card 内一列（稿 3589:10035）：caption 在上、数值在下，两列并排各占一半。
@@ -1228,12 +1217,10 @@ lv_obj_t *result_stat_col(lv_obj_t *parent, const char *caption,
     lv_obj_set_style_bg_opa(col, LV_OPA_TRANSP, 0);
     lv_obj_clear_flag(col, LV_OBJ_FLAG_SCROLLABLE);
 
-    /* caption 用比 caption 再小一档的字号：CONSUMABLES 有 11 个字母，卡片内两列
-     * 均分后按 user_font_caption() 排会溢出被裁（1024 档尤其明显）。 */
     lv_obj_t *cap = lv_label_create(col);
     lv_label_set_text(cap, caption);
     lv_obj_set_style_text_color(cap, user_color_text_dim, 0);
-    lv_obj_set_style_text_font(cap, user_font_caption_sm(), 0);
+    lv_obj_set_style_text_font(cap, user_font_caption(), 0);
     lv_obj_set_style_text_letter_space(cap, 1, 0);
 
     lv_obj_t *vrow = lv_obj_create(col);
@@ -1377,6 +1364,59 @@ lv_obj_t *build_print_stats_card(lv_obj_t *parent)
     result_stat_col(body, "CONSUMABLES", "G", &g_pc_material_val,
                     &g_pc_material_unit);
     return card;
+}
+
+/** 卡片上方的常驻提示条（稿 4234:6375 / 4045:18227）：色块图标 + 标题 + 副标题。
+ *  两个变体（信息蓝 / 告警红）只换图标底色与两行文案，由 apply_print_phase() 定。 */
+lv_obj_t *build_print_notice(lv_obj_t *parent)
+{
+    lv_obj_t *bar = lv_obj_create(parent);
+    lv_obj_remove_style_all(bar);
+    lv_obj_set_width(bar, USER_PRINT_CARD_W);
+    lv_obj_set_height(bar, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(bar, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(bar, LV_FLEX_ALIGN_START,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_all(bar, USER_PAD_SM, 0);
+    lv_obj_set_style_pad_column(bar, USER_PAD_SM, 0);
+    lv_obj_set_style_bg_color(bar, lv_color_black(), 0);
+    lv_obj_set_style_bg_opa(bar, LV_OPA_50, 0);
+    lv_obj_set_style_radius(bar, USER_RADIUS / 2, 0);
+    lv_obj_clear_flag(bar, LV_OBJ_FLAG_SCROLLABLE);
+
+    /* 图标盒：稿上是 32 见方的实色圆角块，里面一枚 18 的白图标 */
+    const int32_t box_sz = USER_PRINT_BADGE_SZ * 2;
+    g_pn_icon_box = lv_obj_create(bar);
+    lv_obj_remove_style_all(g_pn_icon_box);
+    lv_obj_set_size(g_pn_icon_box, box_sz, box_sz);
+    lv_obj_set_style_bg_opa(g_pn_icon_box, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(g_pn_icon_box, USER_RADIUS / 2, 0);
+    lv_obj_clear_flag(g_pn_icon_box, LV_OBJ_FLAG_SCROLLABLE);
+
+    g_pn_icon = ui_user_make_icon_img(g_pn_icon_box, &ic_toast_info,
+                                      box_sz * 9 / 16, lv_color_white());
+    lv_obj_center(g_pn_icon);
+
+    lv_obj_t *texts = lv_obj_create(bar);
+    lv_obj_remove_style_all(texts);
+    lv_obj_set_flex_grow(texts, 1);
+    lv_obj_set_height(texts, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(texts, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_row(texts, USER_PAD_SM / 2, 0);
+    lv_obj_set_style_bg_opa(texts, LV_OPA_TRANSP, 0);
+    lv_obj_clear_flag(texts, LV_OBJ_FLAG_SCROLLABLE);
+
+    g_pn_title = lv_label_create(texts);
+    lv_label_set_text(g_pn_title, "");
+    lv_obj_set_style_text_color(g_pn_title, lv_color_white(), 0);
+    lv_obj_set_style_text_font(g_pn_title, user_font_text(), 0);
+
+    g_pn_sub = lv_label_create(texts);
+    lv_label_set_text(g_pn_sub, "");
+    lv_obj_set_style_text_color(g_pn_sub, lv_color_white(), 0);
+    lv_obj_set_style_text_opa(g_pn_sub, LV_OPA_60, 0);
+    lv_obj_set_style_text_font(g_pn_sub, user_font_caption(), 0);
+    return bar;
 }
 
 /** 运行组（稿 4231:5716）：暂停/恢复钮 + 终止钮，各坐在一颗玻璃 blob 上，
@@ -1597,22 +1637,39 @@ lv_obj_t *build_print_overlay(lv_obj_t *parent)
     g_print_overlay = layer;
 
     /* 右侧中部拍照钮（六态都有，稿上位置 RIGHT_MID） */
-    make_glass_round_btn(layer, &ic_photo, on_result_photo_click,
+    make_glass_round_btn(layer, &ic_camera, on_result_photo_click,
                          &g_result_photo_btn);
     lv_obj_add_flag(g_result_photo_btn, LV_OBJ_FLAG_FLOATING);
     lv_obj_align(g_result_photo_btn, LV_ALIGN_RIGHT_MID, -USER_PAD, 0);
 
-    /* 右上环境区（六态都有） */
-    build_env_wrap(layer, &g_env_print);
+    /* 右上环境区：HOME PM2.5 卡 + 5 列环境条两个独立容器，整体右对齐并让开拍照钮列。 */
+    lv_obj_t *env_wrap = lv_obj_create(layer);
+    lv_obj_remove_style_all(env_wrap);
+    lv_obj_add_flag(env_wrap, LV_OBJ_FLAG_FLOATING);
+    lv_obj_set_size(env_wrap, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(env_wrap, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(env_wrap, LV_FLEX_ALIGN_END,
+                          LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
+    lv_obj_set_style_pad_column(env_wrap, USER_PAD_SM / 2, 0);
+    lv_obj_set_style_bg_opa(env_wrap, LV_OPA_TRANSP, 0);
+    lv_obj_clear_flag(env_wrap, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_align(env_wrap, LV_ALIGN_TOP_RIGHT,
+                 -(USER_PAD + USER_PRINT_CTL_BTN + USER_PAD_SM), USER_PAD);
 
-    /* 左下：stats-card 贴底。它上方那摞通知卡不在本层——那是全局的
-     * ui_notice_stack，进出打印态时按本卡高度把它抬起来（见 sync_notice_offset）。
+    build_result_pm_card(env_wrap);
+    build_result_env_bar(env_wrap);
+
+    /* 左下：stats-card 贴底，提示条压在它上方（稿上两者左边缘对齐、间距 8）。
      * layer 已随摄像头层铺到屏幕左边缘，左对齐的东西要补上侧栏宽度才不会钻到
      * 侧栏底下（侧栏是浮层且可点，压住的部分连触摸都收不到）。 */
     const int32_t left_ofs = USER_PAD + USER_SIDEBAR_W;
-    g_pc_card = build_print_stats_card(layer);
-    lv_obj_add_flag(g_pc_card, LV_OBJ_FLAG_FLOATING);
-    lv_obj_align(g_pc_card, LV_ALIGN_BOTTOM_LEFT, left_ofs, -USER_PAD);
+    lv_obj_t *card = build_print_stats_card(layer);
+    lv_obj_add_flag(card, LV_OBJ_FLAG_FLOATING);
+    lv_obj_align(card, LV_ALIGN_BOTTOM_LEFT, left_ofs, -USER_PAD);
+
+    g_pn_root = build_print_notice(layer);
+    lv_obj_add_flag(g_pn_root, LV_OBJ_FLAG_FLOATING);
+    lv_obj_align_to(g_pn_root, card, LV_ALIGN_OUT_TOP_LEFT, 0, -USER_PAD_SM / 2);
 
     /* 右下：两组控件同一位置互斥显示 */
     g_ctl_run = build_print_controls_run(layer);
@@ -1717,21 +1774,34 @@ void apply_print_phase(void)
         else         lv_obj_add_flag(g_ctl_collect, LV_OBJ_FLAG_HIDDEN);
     }
 
-    /* 两条提示只在结束态出现（稿上打印中/暂停两张都没有）：吹粉前催吹粉，
-     * 吹粉完成后无论 PM 高低都提醒戴口罩。它们走的是全局消息中心而不是本层
-     * 自己的一条 bar——这样离开首页也看得到，且与后端上报的告警排在同一摞里。
-     * push 是幂等的，本函数被反复调用不会把卡片刷来刷去。 */
-    const bool masked = finished && (g_purify_stage == PURIFY_STAGE_DONE);
-    const bool nag_purify = finished && !masked;
-    if(g_printing_active && masked) {
-        ui_message_push((uint16_t)middleware::DeviceEventCode::UiWearMask, 0);
-    } else {
-        ui_message_retract((uint16_t)middleware::DeviceEventCode::UiWearMask);
-    }
-    if(g_printing_active && nag_purify) {
-        ui_message_push((uint16_t)middleware::DeviceEventCode::UiPurifyBeforeOpen, 0);
-    } else {
-        ui_message_retract((uint16_t)middleware::DeviceEventCode::UiPurifyBeforeOpen);
+    /* 提示条只在结束态出现（稿上打印中/暂停两张都没有这条）。
+     * 文案先按稿占位：吹粉前催吹粉，吹粉完成后无论 PM 高低都提醒戴口罩。 */
+    if(g_pn_root) {
+        if(!finished) {
+            lv_obj_add_flag(g_pn_root, LV_OBJ_FLAG_HIDDEN);
+        } else {
+            lv_obj_remove_flag(g_pn_root, LV_OBJ_FLAG_HIDDEN);
+            const bool masked = (g_purify_stage == PURIFY_STAGE_DONE);
+            if(g_pn_icon_box) {
+                lv_obj_set_style_bg_color(g_pn_icon_box,
+                    masked ? lv_color_hex(kPhaseOrange) : user_color_accent, 0);
+            }
+            if(g_pn_icon) {
+                lv_obj_t *img = lv_obj_get_child(g_pn_icon, 0);
+                if(img) lv_image_set_src(img, masked ? &ic_alert : &ic_toast_info);
+            }
+            if(g_pn_title) {
+                lv_label_set_text(g_pn_title,
+                    masked ? "Wear a mask before opening"
+                           : (g_print_phase == PRINT_PHASE_DONE ? "Print finished"
+                                                                : "Print stopped"));
+            }
+            if(g_pn_sub) {
+                lv_label_set_text(g_pn_sub,
+                    masked ? "Cabin powder may become airborne"
+                           : "Purify the cabin before opening the door");
+            }
+        }
     }
 
     /* 取件胶囊文案：吹粉中改成吹粉提示，其余时候是滑动取件 */
@@ -1771,21 +1841,6 @@ void purify_stage_set(purify_stage_t stage)
     g_purify_stage = stage;
     purify_spin_set(stage == PURIFY_STAGE_RUNNING);
     apply_print_phase();
-}
-
-/** 通知浮层默认贴屏底，首页这两个态下左下角另有常驻控件，得把它抬上去让开。 */
-void sync_notice_offset(void)
-{
-    int32_t ofs = 0;
-    if(g_printing_active && g_pc_card) {
-        /* 卡高是 LV_SIZE_CONTENT 算出来的，取值前先逼一次布局，
-         * 否则首次进打印态拿到 0，整栈会压在卡片上。 */
-        lv_obj_update_layout(g_pc_card);
-        ofs = lv_obj_get_height(g_pc_card) + USER_PAD_SM / 2;
-    } else if(g_monitor_active) {
-        ofs = USER_PRINT_CTL_BTN + USER_PAD_SM / 2;   /* 左下那颗返回圆钮 */
-    }
-    ui_notice_stack_set_bottom_offset(ofs);
 }
 
 lv_obj_t *build_printing_area(lv_obj_t *parent)
@@ -1838,24 +1893,115 @@ lv_obj_t *build_printing_area(lv_obj_t *parent)
 }
 
 /* ============================================================================
- *  待机"查看监控"（稿 3122:13224）：全屏摄像头 + 右上环境区 + 左下返回钮
- *  + 右下滑动开门 + 右侧中部拍照钮
- *
- *  右上那两块与右侧拍照钮都与打印态浮层共用同一份构造函数，几何和配色因此天然
- *  一致；两层同时存在于对象树里，所以环境区的句柄各存一份 env_block_t。
+ *  待机"查看监控"：全屏摄像头 + 右上环境面板 + 左下 EXIT + 右下滑动开门
  * ============================================================================ */
+
+/* 环境面板单列：标题(上) + 数值+单位(下)；value 输出到 *out_val。 */
+lv_obj_t *monitor_env_col(lv_obj_t *parent, const char *caption,
+                          const char *unit, lv_obj_t **out_val)
+{
+    lv_obj_t *col = lv_obj_create(parent);
+    lv_obj_remove_style_all(col);
+    lv_obj_set_size(col, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(col, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(col, LV_FLEX_ALIGN_CENTER,
+                          LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
+    lv_obj_set_style_pad_row(col, USER_PAD_SM, 0);
+    lv_obj_set_style_bg_opa(col, LV_OPA_TRANSP, 0);
+    lv_obj_clear_flag(col, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *cap = lv_label_create(col);
+    lv_label_set_text(cap, caption);
+    lv_obj_set_style_text_color(cap, user_color_text_dim, 0);
+    lv_obj_set_style_text_font(cap, user_font_caption(), 0);
+    lv_obj_set_style_text_letter_space(cap, 1, 0);
+
+    lv_obj_t *vrow = lv_obj_create(col);
+    lv_obj_remove_style_all(vrow);
+    lv_obj_set_size(vrow, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(vrow, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(vrow, LV_FLEX_ALIGN_START,
+                          LV_FLEX_ALIGN_END, LV_FLEX_ALIGN_END);
+    lv_obj_set_style_pad_column(vrow, USER_PAD_SM / 2, 0);
+    lv_obj_set_style_bg_opa(vrow, LV_OPA_TRANSP, 0);
+    lv_obj_clear_flag(vrow, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *val = lv_label_create(vrow);
+    lv_label_set_text(val, "--");
+    lv_obj_set_style_text_color(val, user_color_text, 0);
+    lv_obj_set_style_text_font(val, user_font_text(), 0);
+    if(out_val) *out_val = val;
+
+    if(unit) {
+        lv_obj_t *u = lv_label_create(vrow);
+        lv_label_set_text(u, unit);
+        lv_obj_set_style_text_color(u, user_color_text_dim, 0);
+        lv_obj_set_style_text_font(u, user_font_caption(), 0);
+    }
+    return col;
+}
+
+/* 右上环境玻璃面板（4 列）。LVGL 无背景模糊 → 半透明深底 + 细白描边近似玻璃。 */
+lv_obj_t *build_env_panel(lv_obj_t *parent)
+{
+    lv_obj_t *panel = lv_obj_create(parent);
+    lv_obj_remove_style_all(panel);
+    lv_obj_set_size(panel, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(panel, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(panel, LV_FLEX_ALIGN_START,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_all(panel, USER_PAD, 0);
+    lv_obj_set_style_pad_column(panel, USER_PAD_LG, 0);
+    lv_obj_set_style_bg_color(panel, lv_color_black(), 0);
+    lv_obj_set_style_bg_opa(panel, LV_OPA_40, 0);
+    lv_obj_set_style_radius(panel, USER_RADIUS, 0);
+    lv_obj_set_style_border_width(panel, 1, 0);
+    lv_obj_set_style_border_color(panel, lv_color_white(), 0);
+    lv_obj_set_style_border_opa(panel, LV_OPA_10, 0);
+    lv_obj_clear_flag(panel, LV_OBJ_FLAG_SCROLLABLE);
+
+    monitor_env_col(panel, "EXTERIOR PM2.5", "ug/m3", &g_mon_env_pm_ext);
+    monitor_env_col(panel, "INTERIOR PM2.5", "ug/m3", &g_mon_env_pm_int);
+    monitor_env_col(panel, "O2 CONC.", "%", &g_mon_env_o2);
+    monitor_env_col(panel, "DEVICE TEMP", "\xC2\xB0""C", &g_mon_env_temp);
+    return panel;
+}
 
 void on_monitor_exit_click(lv_event_t * /*e*/)
 {
     exit_monitor_mode();
 }
 
-/* 左下返回钮（稿 4232:6233）：与拍照钮同一枚玻璃圆钮，图标换成 home。
- * 旧版是「< EXIT」文字胶囊，功能不变，只是外观按稿改成圆钮。 */
+/* EXIT 灰玻璃按钮（图标 + 文字），左下角 */
 lv_obj_t *build_monitor_exit_button(lv_obj_t *parent)
 {
-    lv_obj_t *btn = nullptr;
-    make_glass_round_btn(parent, &ic_home, on_monitor_exit_click, &btn);
+    lv_obj_t *btn = lv_button_create(parent);
+    lv_obj_remove_style_all(btn);
+    lv_obj_set_height(btn, USER_BTN_PRIMARY_H * 5 / 4);
+    lv_obj_set_width(btn, LV_SIZE_CONTENT);
+    lv_obj_set_style_bg_color(btn, lv_color_hex(0x757575), 0);
+    lv_obj_set_style_bg_opa(btn, LV_OPA_20, 0);
+    lv_obj_set_style_bg_opa(btn, LV_OPA_40, LV_STATE_PRESSED);
+    lv_obj_set_style_radius(btn, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_border_width(btn, 1, 0);
+    lv_obj_set_style_border_color(btn, lv_color_white(), 0);
+    lv_obj_set_style_border_opa(btn, LV_OPA_30, 0);
+    lv_obj_set_style_pad_hor(btn, USER_PAD, 0);
+    lv_obj_set_style_pad_column(btn, USER_PAD_SM, 0);
+    lv_obj_set_flex_flow(btn, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(btn, LV_FLEX_ALIGN_CENTER,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_add_event_cb(btn, on_monitor_exit_click, LV_EVENT_CLICKED, nullptr);
+
+    lv_obj_t *icon = lv_label_create(btn);
+    lv_label_set_text(icon, LV_SYMBOL_LEFT);
+    lv_obj_set_style_text_color(icon, lv_color_white(), 0);
+    lv_obj_set_style_text_font(icon, user_font_text(), 0);
+
+    lv_obj_t *txt = lv_label_create(btn);
+    lv_label_set_text(txt, "EXIT");
+    lv_obj_set_style_text_color(txt, lv_color_white(), 0);
+    lv_obj_set_style_text_font(txt, user_font_text(), 0);
     return btn;
 }
 
@@ -1889,6 +2035,28 @@ void on_monitor_photo_click(lv_event_t * /*e*/)
     ui_toast_show("Capturing photo...", user_color_accent, 1200);
 }
 
+lv_obj_t *build_monitor_photo_button(lv_obj_t *parent)
+{
+    const int32_t sz = USER_BTN_PRIMARY_H * 5 / 4;
+    lv_obj_t *btn = lv_button_create(parent);
+    lv_obj_remove_style_all(btn);
+    lv_obj_set_size(btn, sz, sz);
+    lv_obj_set_style_bg_color(btn, lv_color_hex(0x757575), 0);
+    lv_obj_set_style_bg_opa(btn, LV_OPA_20, 0);
+    lv_obj_set_style_bg_opa(btn, LV_OPA_40, LV_STATE_PRESSED);
+    lv_obj_set_style_radius(btn, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_border_width(btn, 1, 0);
+    lv_obj_set_style_border_color(btn, lv_color_white(), 0);
+    lv_obj_set_style_border_opa(btn, LV_OPA_30, 0);
+    lv_obj_add_event_cb(btn, on_monitor_photo_click, LV_EVENT_CLICKED, nullptr);
+
+    lv_obj_t *icon = lv_label_create(btn);
+    lv_label_set_text(icon, LV_SYMBOL_IMAGE);
+    lv_obj_set_style_text_color(icon, lv_color_white(), 0);
+    lv_obj_set_style_text_font(icon, user_font_text(), 0);
+    lv_obj_center(icon);
+    return btn;
+}
 
 lv_obj_t *build_monitor_area(lv_obj_t *parent)
 {
@@ -1926,10 +2094,12 @@ lv_obj_t *build_monitor_area(lv_obj_t *parent)
     /* 左右渐变遮罩：压在画面之上、下方各控件之下 */
     build_camera_gradient_masks(area);
 
-    /* 右上：环境区（与打印态同一套构造） */
-    build_env_wrap(area, &g_env_monitor);
+    /* 右上：环境小面板 */
+    lv_obj_t *env = build_env_panel(area);
+    lv_obj_add_flag(env, LV_OBJ_FLAG_FLOATING);
+    lv_obj_align(env, LV_ALIGN_TOP_RIGHT, -USER_PAD, USER_PAD);
 
-    /* 左下：返回钮（补上侧栏宽度，避免被浮层侧栏压住而点不到） */
+    /* 左下：EXIT（补上侧栏宽度，避免被浮层侧栏压住而点不到） */
     lv_obj_t *exit_btn = build_monitor_exit_button(area);
     lv_obj_add_flag(exit_btn, LV_OBJ_FLAG_FLOATING);
     lv_obj_align(exit_btn, LV_ALIGN_BOTTOM_LEFT, USER_PAD + USER_SIDEBAR_W, -USER_PAD);
@@ -1950,11 +2120,10 @@ lv_obj_t *build_monitor_area(lv_obj_t *parent)
         lv_obj_align(door_root, LV_ALIGN_BOTTOM_RIGHT, -USER_PAD, -USER_PAD);
     }
 
-    /* 右侧中部拍照钮：与打印态同位同款（稿 3847:9438） */
-    make_glass_round_btn(area, &ic_photo, on_monitor_photo_click,
-                         &g_monitor_photo_btn);
+    g_monitor_photo_btn = build_monitor_photo_button(area);
     lv_obj_add_flag(g_monitor_photo_btn, LV_OBJ_FLAG_FLOATING);
-    lv_obj_align(g_monitor_photo_btn, LV_ALIGN_RIGHT_MID, -USER_PAD, 0);
+    lv_obj_align(g_monitor_photo_btn, LV_ALIGN_BOTTOM_RIGHT,
+                 -(USER_PAD * 2 + cfg.track_w), -USER_PAD);
 
     return area;
 }
@@ -2060,32 +2229,27 @@ void home_card_update(void)
 }
 
 /** 刷新结果页 HOME PM2.5 卡：与首页左卡同源同档位，只是不画色条与游标。 */
-/* 刷新一份 HOME PM2.5 卡。打印态与监控态各有一份，两份内容始终一致
- * （共用 g_home_metric_idx），所以只是把同样的文案写两遍。 */
 void result_pm_card_update(void)
 {
+    if(!g_res_pm_title) {
+        return;
+    }
     const AirMetric &m = kAirMetrics[g_home_metric_idx];
+    lv_label_set_text(g_res_pm_title, m.title);
+
     const ui_device_snapshot_t &snap = *ui_device_state_get();
     const float v = (g_home_metric_idx == 0) ? snap.pm25_indoor
                                              : snap.pm10_indoor;
-    const bool  bad   = metric_invalid(v);
-    const int   level = bad ? 0 : air_classify(m, v, nullptr);
-
-    for(env_block_t *eb : kEnvBlocks) {
-        if(!eb->pm_title) {
-            continue;   /* 该层还没建起来 */
-        }
-        lv_label_set_text(eb->pm_title, m.title);
-        if(bad) {
-            lv_label_set_text(eb->pm_level, "--");
-            lv_obj_set_style_text_color(eb->pm_level, user_color_text_dim, 0);
-            lv_label_set_text(eb->pm_value, "");
-        } else {
-            lv_label_set_text(eb->pm_level, kLevelName[level]);
-            lv_obj_set_style_text_color(eb->pm_level, user_color_text, 0);
-            lv_label_set_text_fmt(eb->pm_value, "(%.1f ug/m3)", v);
-        }
+    if(metric_invalid(v)) {
+        lv_label_set_text(g_res_pm_level, "--");
+        lv_obj_set_style_text_color(g_res_pm_level, user_color_text_dim, 0);
+        lv_label_set_text(g_res_pm_value, "");
+        return;
     }
+    const int level = air_classify(m, v, nullptr);
+    lv_label_set_text(g_res_pm_level, kLevelName[level]);
+    lv_obj_set_style_text_color(g_res_pm_level, user_color_text, 0);
+    lv_label_set_text_fmt(g_res_pm_value, "(%.1f ug/m3)", v);
 }
 
 /** 刷新 CABIN 单行数值：无效（<0/NaN）显示 "--" 并隐藏单位，否则 "%.1f" + 单位。 */
@@ -2123,10 +2287,6 @@ void page_user_home_refresh(bool /*force*/)
     /* 设备名/WiFi/状态点那一组不在本页——外壳的常驻条自己观察同一份快照。 */
     const ui_device_snapshot_t &snap = *ui_device_state_get();
 
-    /* 换页时 PageManager 会把通知栈的抬高量清零，回到本页要按当前态再抬一次。
-     * 本函数就是首页的 on_enter，进出打印态/监控态也都会走到这儿。 */
-    sync_notice_offset();
-
     /* 首页左卡（HOME 空气质量·可切换 PM2.5/PM10：分级 + 四档色条 + 游标） */
     home_card_update();
 
@@ -2148,25 +2308,41 @@ void page_user_home_refresh(bool /*force*/)
     update_cabin_metric(g_cab_hum_val,  g_cab_hum_unit,  snap.humidity_percent);
     update_cabin_metric(g_cab_prs_val,  g_cab_prs_unit,  snap.pressure_kpa);
 
-    /* 右上环境区：打印态浮层与待机监控层各一份，两份内容相同，一起刷。 */
-    result_pm_card_update();
-    for(env_block_t *eb : kEnvBlocks) {
-        /* 首列是舱内 PM2.5，按档位取分级词并着色（稿上这列显示 "Good"） */
-        if(eb->cabin_val) {
-            if(metric_invalid(snap.pm25_cabin)) {
-                lv_label_set_text(eb->cabin_val, "--");
-                lv_obj_set_style_text_color(eb->cabin_val, user_color_text_dim, 0);
-            } else {
-                const int level = air_classify(kAirMetrics[0], snap.pm25_cabin, nullptr);
-                lv_label_set_text(eb->cabin_val, kLevelName[level]);
-                lv_obj_set_style_text_color(eb->cabin_val, air_level_color(level), 0);
-            }
-        }
-        update_cabin_metric(eb->temp_val, nullptr, snap.temperature_c);
-        update_cabin_metric(eb->o2_val,   nullptr, snap.oxygen_percent);
-        update_cabin_metric(eb->hum_val,  nullptr, snap.humidity_percent);
-        update_cabin_metric(eb->prs_val,  nullptr, snap.pressure_kpa);
+    /* 待机查看监控：右上环境小面板（单位为独立标签，数值只填数字） */
+    if(g_mon_env_pm_ext) {
+        if(metric_invalid(snap.pm25_indoor)) lv_label_set_text(g_mon_env_pm_ext, "--");
+        else lv_label_set_text_fmt(g_mon_env_pm_ext, "%.1f", snap.pm25_indoor);
     }
+    if(g_mon_env_pm_int) {
+        if(metric_invalid(snap.pm25_cabin)) lv_label_set_text(g_mon_env_pm_int, "--");
+        else lv_label_set_text_fmt(g_mon_env_pm_int, "%.1f", snap.pm25_cabin);
+    }
+    if(g_mon_env_o2) {
+        if(metric_invalid(snap.oxygen_percent)) lv_label_set_text(g_mon_env_o2, "--");
+        else lv_label_set_text_fmt(g_mon_env_o2, "%.1f", snap.oxygen_percent);
+    }
+    if(g_mon_env_temp) {
+        if(metric_invalid(snap.temperature_c)) lv_label_set_text(g_mon_env_temp, "--");
+        else lv_label_set_text_fmt(g_mon_env_temp, "%.1f", snap.temperature_c);
+    }
+
+    /* 打印结果页顶部：左侧 HOME PM2.5 卡 + 右侧 5 列环境条 */
+    result_pm_card_update();
+    /* 环境条首列是舱内 PM2.5，按档位取分级词并着色（稿上这列显示 "Good"） */
+    if(g_res_env_cabin_val) {
+        if(metric_invalid(snap.pm25_cabin)) {
+            lv_label_set_text(g_res_env_cabin_val, "--");
+            lv_obj_set_style_text_color(g_res_env_cabin_val, user_color_text_dim, 0);
+        } else {
+            const int level = air_classify(kAirMetrics[0], snap.pm25_cabin, nullptr);
+            lv_label_set_text(g_res_env_cabin_val, kLevelName[level]);
+            lv_obj_set_style_text_color(g_res_env_cabin_val, air_level_color(level), 0);
+        }
+    }
+    update_cabin_metric(g_res_env_temp_val, nullptr, snap.temperature_c);
+    update_cabin_metric(g_res_env_o2_val,   nullptr, snap.oxygen_percent);
+    update_cabin_metric(g_res_env_hum_val,  nullptr, snap.humidity_percent);
+    update_cabin_metric(g_res_env_prs_val,  nullptr, snap.pressure_kpa);
 }
 
 lv_obj_t *page_user_home_create(lv_obj_t *parent)

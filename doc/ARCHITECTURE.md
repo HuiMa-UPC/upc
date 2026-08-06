@@ -70,12 +70,10 @@
 | `CameraMsgProxy` | `camera_msg_proxy.*` | 预览开停 IPC + 打印录像 manifest 就绪通知 |
 | `CameraPreviewPlayer` | `camera_preview.*` | SHM 元数据环 + dma fd → RGA/SW BGRX → LVGL |
 | `RgaDmaBuf` | `rga_dma_buf.*` | dma32 heap 缓冲（RGA fd 导入） |
-| `PageManager` / `SimplePage` | `page_manager.*` / `ui_simple_page.*` | 侧边栏 + 页面路由 + 常驻设备信息条/通知浮层显隐 + 侧栏红点 |
+| `PageManager` / `SimplePage` | `page_manager.*` / `ui_simple_page.*` | 侧边栏 + 页面路由 + 常驻设备信息条显隐 |
 | `ui_device_state_*` | `ui_device_state.*` | 设备名/联网/运行状态/环境快照的唯一来源（env 单槽订阅 + 观察者扇出） |
 | `ui_device_bar_*` | `ui_device_bar.*` | 常驻设备信息条（WiFi + 设备名 + 状态点/字），PageManager 持有 |
-| `ui_message_*` | `ui_message_store.*` | 消息中心：设备事件去重/排序/未读计数 + 码→文案表（`GLAVO_Device_Event_Ntf`） |
-| `ui_notice_stack_*` | `ui_notice_stack.*` | 左下通知浮层（最多两张卡 + 「查看剩余 N 条」），PageManager 持有 |
-| `app_init()` | `ui_app.*` | 主题、Proxy、`ui_device_state_init`、`ui_message_store_init`、页面注册、control |
+| `app_init()` | `ui_app.*` | 主题、Proxy、`ui_device_state_init`、页面注册、control |
 | `control_*` | `control.*` | 打印状态机（含 `CONTROL_STATE_PRINT_DONE` 结果页、`CONTROL_STATE_TRANSFER_BOX` 取件转运盒）+ overlay UI |
 | `VideoPlayer` | `video_player.*` | 延时视频 libav* 软解 → BGRX/RGB565 → lv_image（play/pause/seek；拖动预览缩小帧 + latest-wins） |
 | `PngScrubPreview` | `png_scrub_preview.*` | PNG 序列拖动预览：后台 libpng 解码缩放到小图 RGB565 |

@@ -452,9 +452,6 @@ enum class MsgType : uint32_t {
     UI_Mcu_Version_Req = 0x1500, /**< Empty：进入 Settings/About 页时查询一次 */
     GLAVO_Mcu_Version_Ntf,       /**< McuVersionPayload：MCU 固件版本 + 板级配置 */
 
-    // ---- GLAVO → UI：设备事件/告警（消息中心） ----
-    GLAVO_Device_Event_Ntf = 0x1600, /**< DeviceEventPayload：一条设备事件的触发或恢复 */
-
 };
 
 enum class MsgPriority : uint8_t {
@@ -1050,74 +1047,6 @@ struct DebugSwitchStatePayload {
     uint8_t gas_wash_on;
     uint8_t base_heat_on;
     uint8_t reserved;
-};
-
-/* ============================================================================
- *  设备事件 / 告警（消息中心）
- *
- *  码表与 doc/设备通信协议-数据结构定义（v0.9）.md「五、事件与告警消息」那张表
- *  一一对应，云端用字符串 code，这里换成数值以便走 Inline POD。
- *  文案不进线协议：后端只发码，UI 侧持一张码→文案表（见 ui_message_store）。
- * ========================================================================== */
-
-/** 事件码。数值跨进程传输，**只准往末尾追加**，不得插入或复用。 */
-enum class DeviceEventCode : uint16_t {
-    None                = 0,
-    /* severity=info */
-    PowderLow           = 1,   /**< 低粉位传感器触发 */
-    FilterDue           = 2,   /**< 滤芯使用时长/压差达阈值 */
-    PrintPaused         = 3,   /**< 用户主动暂停 */
-    PrintComplete       = 4,   /**< 所有层打印完成（one_shot） */
-    PurgeComplete       = 5,   /**< O2 降至阈值，洗气完成（one_shot） */
-    /* severity=error */
-    WeightSensorErr     = 6,   /**< HX711 读数异常 */
-    GalvoCalFail        = 7,   /**< 振镜校准失败 */
-    MotionStallguard    = 8,   /**< TMC5160 StallGuard 触发，运动轴失步 */
-    TempSensorErr       = 9,   /**< NTC/IR 传感器读数无效 */
-    NtpSyncFail         = 10,  /**< NTP 对时失败超阈值 */
-    DoorSensorConflict  = 11,  /**< D2F 与霍尔读数不一致 */
-    JobFileErr          = 12,  /**< 作业文件下载失败或校验不通过（one_shot） */
-    PowderInsufficient  = 13,  /**< 粉料估算不足以完成当前作业（one_shot） */
-    GalvoNotCalibrated  = 14,  /**< 振镜未校准或校准过期 */
-    PrintError          = 15,  /**< 打印过程不可恢复错误（one_shot） */
-    /* severity=critical */
-    DoorOpen            = 16,  /**< 打印/洗气中外门未关 */
-    O2High              = 17,  /**< 氧含量超阈值 */
-    Pm25High            = 18,  /**< PM2.5 超阈值 */
-    Overtemp            = 19,  /**< 仓内温度超阈值 */
-    LaserInterlock      = 20,  /**< 激光安全联锁触发 */
-    FilterOvertemp      = 21,  /**< 滤芯 NTC 超温 */
-    FilterRequired      = 22,  /**< 滤芯严重超限，强制阻断打印 */
-    /* severity=emergency */
-    Smoke               = 23,  /**< 烟感触发 */
-    Estop               = 24,  /**< 急停双触点触发 */
-    FireSuppress        = 25,  /**< 灭火阀动作 */
-    Esd                 = 26,  /**< 静电保护触发 */
-
-    /* ---- 以下为 UI 本地事件：不走总线，由前端自己 push，占同一码空间以便
-     *      消息中心统一排序去重。后端不应发送这些码。 ---- */
-    UiWearMask          = 512, /**< 吹粉完成，开门前提醒戴口罩 */
-    UiPurifyBeforeOpen  = 513, /**< 打印结束，开门前先吹粉 */
-    UiDebugSample       = 514, /**< 调试页注入的假消息 */
-};
-
-/** 事件等级。UI 只分两种观感：Info 走蓝色可关卡片，其余走红色告警卡片。 */
-enum class DeviceEventSeverity : uint8_t {
-    Info      = 0,
-    Error     = 1,
-    Critical  = 2,
-    Emergency = 3,
-};
-
-/** GLAVO_Device_Event_Ntf 载荷：一条事件的触发或恢复（Inline）。
- *
- *  event_ts_ms 是告警**实际触发/恢复**时刻，不是消息发出时刻——断网补发或
- *  NTP 失步恢复后两者会差很多，消息中心的时间线以本字段为准（见协议文档同节说明）。 */
-struct DeviceEventPayload {
-    uint16_t code;         /**< DeviceEventCode */
-    uint8_t  severity;     /**< DeviceEventSeverity */
-    uint8_t  active;       /**< stateful：1=触发 0=恢复；one_shot 恒为 1 */
-    int64_t  event_ts_ms;  /**< 触发/恢复时刻（Unix 毫秒），0=未知 */
 };
 
 } // namespace middleware

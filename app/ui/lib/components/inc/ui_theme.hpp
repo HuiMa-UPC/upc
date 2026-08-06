@@ -140,6 +140,7 @@ typedef struct {
     int32_t user_dlg_title_pad_bottom;
     int32_t user_dlg_radius;
     int32_t user_dlg_body_min_h;
+    int32_t user_dlg_btn_ghost_h;
     int32_t user_dlg_footer_btn_w;
     /** 弹窗页脚按钮 / 满宽主按钮高：按稿 64@1280 等比折算（1024=51、1920=96）。
      *  共用方：确认弹窗页脚、门弹窗与放版弹窗的满宽钮、选文件页详情两枚按钮与厚度分段。 */
@@ -155,8 +156,6 @@ typedef struct {
     int32_t user_slide_w;
     int32_t user_slide_h;
     int32_t user_slide_knob_sz;
-    /** 圆环加载圈直径与线宽。全部四个 ui_arc_spinner（门弹窗、准备弹窗、转运盒两步）
-     *  都只从这两个值取尺寸，没有别处写死，改这里即全局生效。 */
     int32_t user_spinner_sz;
     int32_t user_spinner_stroke;
     int32_t user_progress_w;
@@ -171,10 +170,9 @@ typedef struct {
     /* ---- 打印态浮层（稿 3588:8735 / 3589:9992 一套六态，按 1280 稿折算三档）----
      * 六个态（打印中/暂停/中断/完成/吹粉中/吹粉完成）共用一张 stats-card、一条
      * 提示条、一组底部复合控件，尺寸全部走这几个常量，不写死坐标。 */
-    /** stats-card 宽。稿上是 416@1280，实机比稿宽 10%：Montserrat 比稿里的 Futura
-     *  更占地方，按稿宽会把 CONSUMABLES 那一列的 caption 截掉。 */
-    int32_t user_print_card_w;
+    int32_t user_print_card_w;    /**< stats-card 宽（稿 416） */
     int32_t user_print_thumb_sz;  /**< stats-card 左侧缩略图边长（稿 100） */
+    int32_t user_print_notice_h;  /**< 卡片上方常驻提示条高（稿 78） */
     /* 下面两个尺寸与预生成的玻璃底衬图强耦合：底衬按 tools/gen_ctl_backdrop.py 的
      * PROFILES 三档出图、运行时不缩放，改了必须同步改脚本并重跑，否则会和按钮错位。
      * 底衬上那颗圆的直径 = ctl_btn×5/4、两块之间的缝 = ctl_btn/8（均取自稿）。 */
@@ -202,9 +200,6 @@ typedef struct {
     const lv_font_t *font_user_value;
     const lv_font_t *font_user_text;
     const lv_font_t *font_user_caption;
-    /** 比 caption 再小一档，给窄容器里的说明字用（打印统计卡的 TIME/CONSUMABLES 两列）。
-     *  1024/1280 两档落到 12 号——这个字号是为它才在 rongsu_ui.defaults 里打开的。 */
-    const lv_font_t *font_user_caption_sm;
     const lv_font_t *font_user_icon;
 
     /* 标识本 profile 是哪一个（UI_RES_1920 / UI_RES_1280），便于运行时分支 */
@@ -292,6 +287,7 @@ extern const ui_theme_t *g_ui;
 #define USER_DLG_RADIUS             (g_ui->user_dlg_radius)
 #define USER_DLG_BACKDROP_OPA       LV_OPA_70   /* 跟分辨率无关，固定 */
 #define USER_DLG_BODY_MIN_H         (g_ui->user_dlg_body_min_h)
+#define USER_DLG_BTN_GHOST_H        (g_ui->user_dlg_btn_ghost_h)
 #define USER_DLG_FOOTER_BTN_W       (g_ui->user_dlg_footer_btn_w)
 #define USER_DLG_FOOTER_BTN_H       (g_ui->user_dlg_footer_btn_h)
 #define USER_FILE_DLG_W             (g_ui->user_file_dlg_w)
@@ -318,6 +314,7 @@ extern const ui_theme_t *g_ui;
 
 #define USER_PRINT_CARD_W           (g_ui->user_print_card_w)
 #define USER_PRINT_THUMB_SZ         (g_ui->user_print_thumb_sz)
+#define USER_PRINT_NOTICE_H         (g_ui->user_print_notice_h)
 #define USER_PRINT_CTL_BTN          (g_ui->user_print_ctl_btn)
 #define USER_PRINT_PILL_W           (g_ui->user_print_pill_w)
 #define USER_PRINT_BADGE_SZ         (g_ui->user_print_badge_sz)
@@ -353,8 +350,6 @@ const lv_font_t *ui_font_title(void);
 const lv_font_t *user_font_value(void);
 const lv_font_t *user_font_text(void);
 const lv_font_t *user_font_caption(void);
-/** 比 caption 小一档，给窄容器里塞不下的说明字用。 */
-const lv_font_t *user_font_caption_sm(void);
 const lv_font_t *user_font_icon(void);
 /** 中文字体（子集，编译进固件）。用于需要中文标签的页面，如调试测试页。 */
 const lv_font_t *user_font_cjk(void);

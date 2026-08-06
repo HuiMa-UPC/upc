@@ -66,18 +66,6 @@ UI → GlavoService（工作线程）→ ParserManager → RingBuffer → McuLin
 
 `PrintVideoNotify::publish_to_camera`：`publish_async`，`target_id = APP_CAMERA`，经 [common/COMMON.md](../../common/COMMON.md) Hub 转发。
 
-## 待实现：设备事件上报（`GLAVO_Device_Event_Ntf`）
-
-UI 侧的消息中心（左下通知浮层 + 侧栏红点）已经接好订阅，等 Glavo 发布。契约见
-[common/COMMON.md](../../common/COMMON.md) 消息总表 + `DeviceEventPayload`：
-只发数值码 + 等级 + `active` + 触发时刻，**不发文案**（人话在 UI 侧码表）。
-码表与 [doc/设备通信协议-数据结构定义（v0.9）.md](../../doc/设备通信协议-数据结构定义（v0.9）.md)
-第五节那张告警码表逐行对应，`DeviceEventCode` 的枚举名即该表 code 的驼峰写法。
-
-- `stateful` 事件触发发 `active=1`、恢复发 `active=0`，两条边沿都要发；
-- `one_shot` 只发 `active=1`；
-- `event_ts_ms` 填**实际触发/恢复**时刻而不是发出时刻（断网补发时两者会差很多）。
-
 ## 红线
 
 - 禁止 `GcodeWorker::instance()` 等具体解析器；用 `ParserManager::active()`

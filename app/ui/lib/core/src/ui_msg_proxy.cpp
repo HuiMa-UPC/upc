@@ -302,15 +302,6 @@ void UiMsgProxy::init()
             }
         }));
 
-    subs_.push_back(bus.subscribe(
-        middleware::MsgType::GLAVO_Device_Event_Ntf, middleware::ModuleId::UI,
-        [this](const middleware::Message& msg) {
-            middleware::DeviceEventPayload p{};
-            if (device_event_cb_ && read_inline_pod(msg, p)) {
-                device_event_cb_(p);
-            }
-        }));
-
 }
 
 /* 解析 [WifiListHeader][WifiEntryPayload × count]（BufferRef/Inline 皆可），仿 Fs_DirOpen_Rsp。 */
@@ -468,11 +459,6 @@ void UiMsgProxy::send_mcu_version_query()
 void UiMsgProxy::register_mcu_version(McuVersionCb cb)
 {
     mcu_version_cb_ = std::move(cb);
-}
-
-void UiMsgProxy::register_device_event(DeviceEventCb cb)
-{
-    device_event_cb_ = std::move(cb);
 }
 
 

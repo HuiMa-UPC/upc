@@ -112,16 +112,6 @@ public:
      */
     void switch_to(const std::string& name);
 
-    /**
-     * @brief 在某菜单按钮的图标右上角开/关一颗红点角标。
-     * @param page_name 目标页名；无菜单按钮的隐藏页忽略
-     * @param on        true=亮起，false=熄灭（对象保留，只切显隐）
-     *
-     * 目前只有消息页在用（未读数 >0 时亮）。首次 on 时才建对象，
-     * 从没亮过的页面不会平白多一个子节点。
-     */
-    void set_menu_badge(const std::string& page_name, bool on);
-
 private:
     PageManager() = default;
 
@@ -130,7 +120,6 @@ private:
         PagePtr page;           /**< 页面实例 */
         lv_obj_t* menu_btn = nullptr; /**< 左侧菜单按钮对象 */
         lv_obj_t* menu_icon_img = nullptr; /**< 图片图标对象（图片图标时非空，用于选中态 recolor） */
-        lv_obj_t* menu_badge = nullptr;    /**< 未读红点（懒建，见 set_menu_badge） */
         std::string owner_menu;  /**< 隐藏页：激活时用此页的菜单按钮高亮（空=无映射） */
         std::function<std::string()> target_resolver; /**< 菜单按钮点击的动态目标（空=切到本页） */
         bool created = false;   /**< 标记页面是否已执行过 on_create */
@@ -141,7 +130,6 @@ private:
     lv_obj_t* menu_panel_ = nullptr;   /**< 左侧菜单栏容器 */
     lv_obj_t* content_panel_ = nullptr;/**< 右侧内容区容器 */
     lv_obj_t* device_bar_ = nullptr;   /**< 常驻设备信息条（浮于页面之上） */
-    lv_obj_t* notice_stack_ = nullptr; /**< 左下通知浮层（浮于页面之上） */
     std::vector<PageEntry> entries_;   /**< 已注册页面列表 */
     Page* current_ = nullptr;          /**< 当前显示的页面 */
 
@@ -149,10 +137,9 @@ private:
     PageEntry* find_entry(const std::string& name);
 
     /**
-     * 按目标页显隐常驻设备信息条与左下通知浮层，并同步 content_panel_ 的顶部让位。
+     * 按目标页显隐常驻设备信息条，并同步 content_panel_ 的顶部让位。
      * 规则：侧栏有菜单按钮的页面显示，隐藏页（选文件 / 调试 / 延时摄影）不显示，
      * 不显示时把 pad_top 收回 0，页面拿回整屏高度。
-     * 通知浮层额外排除消息页自己。
      */
     void apply_device_bar(const PageEntry& entry);
 

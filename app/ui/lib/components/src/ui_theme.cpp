@@ -116,6 +116,7 @@ static const ui_theme_t s_theme_1920 = {
     /* user_dlg_title_pad_bottom  */ 24,
     /* user_dlg_radius            */ 28,
     /* user_dlg_body_min_h        */ 260,
+    /* user_dlg_btn_ghost_h       */ 56,
     /* user_dlg_footer_btn_w      */ 260,
     /* user_dlg_footer_btn_h      */ 96,
     /* user_file_dlg_w            */ 1100,
@@ -129,8 +130,8 @@ static const ui_theme_t s_theme_1920 = {
     /* user_slide_w               */ 520,
     /* user_slide_h               */ 80,
     /* user_slide_knob_sz         */ 68,
-    /* user_spinner_sz            */ 104,
-    /* user_spinner_stroke        */ 8,
+    /* user_spinner_sz            */ 160,
+    /* user_spinner_stroke        */ 12,
     /* user_progress_w            */ 520,
     /* user_progress_h            */ 20,
     /* user_print_bar_h           */ 140,
@@ -141,8 +142,9 @@ static const ui_theme_t s_theme_1920 = {
     /* user_print_terminate_h     */ 64,
 
     /* 打印态浮层（稿 1280 档 ×1.5） */
-    /* user_print_card_w          */ 686,
+    /* user_print_card_w          */ 624,
     /* user_print_thumb_sz        */ 135,
+    /* user_print_notice_h        */ 105,
     /* user_print_ctl_btn         */ 96,
     /* user_print_pill_w          */ 600,
     /* user_print_badge_sz        */ 24,
@@ -166,7 +168,6 @@ static const ui_theme_t s_theme_1920 = {
     /* font_user_value    */ &lv_font_montserrat_48,
     /* font_user_text     */ &lv_font_montserrat_24,
     /* font_user_caption  */ &lv_font_montserrat_18,
-    /* font_user_caption_sm */ &lv_font_montserrat_16,
     /* font_user_icon     */ &lv_font_montserrat_32,
 
     /* profile_id */ UI_RES_1920,
@@ -249,6 +250,7 @@ static const ui_theme_t s_theme_1280 = {
     /* user_dlg_title_pad_bottom  */ 16,
     /* user_dlg_radius            */ 20,
     /* user_dlg_body_min_h        */ 180,
+    /* user_dlg_btn_ghost_h       */ 40,
     /* user_dlg_footer_btn_w      */ 180,
     /* user_dlg_footer_btn_h      */ 64,
     /* user_file_dlg_w            */ 760,
@@ -262,8 +264,8 @@ static const ui_theme_t s_theme_1280 = {
     /* user_slide_w               */ 360,
     /* user_slide_h               */ 56,
     /* user_slide_knob_sz         */ 48,
-    /* user_spinner_sz            */ 70,
-    /* user_spinner_stroke        */ 6,
+    /* user_spinner_sz            */ 108,
+    /* user_spinner_stroke        */ 8,
     /* user_progress_w            */ 360,
     /* user_progress_h            */ 14,
     /* user_print_bar_h           */ 96,
@@ -275,8 +277,9 @@ static const ui_theme_t s_theme_1280 = {
 
     /* 打印态浮层（稿 3588:8735 原生 1280 稿；横向直接取稿值，
      * 纵向按屏高 720/800 折 0.9） */
-    /* user_print_card_w          */ 458,
+    /* user_print_card_w          */ 416,
     /* user_print_thumb_sz        */ 90,
+    /* user_print_notice_h        */ 70,
     /* user_print_ctl_btn         */ 64,
     /* user_print_pill_w          */ 400,
     /* user_print_badge_sz        */ 16,
@@ -300,7 +303,6 @@ static const ui_theme_t s_theme_1280 = {
     /* font_user_value    */ &lv_font_montserrat_32,
     /* font_user_text     */ &lv_font_montserrat_18,
     /* font_user_caption  */ &lv_font_montserrat_14,
-    /* font_user_caption_sm */ &lv_font_montserrat_12,
     /* font_user_icon     */ &lv_font_montserrat_24,
 
     /* profile_id */ UI_RES_1280,
@@ -389,6 +391,7 @@ static const ui_theme_t s_theme_1024 = {
     /* user_dlg_title_pad_bottom  */ 12,
     /* user_dlg_radius            */ 16,
     /* user_dlg_body_min_h        */ 144,
+    /* user_dlg_btn_ghost_h       */ 36,
     /* user_dlg_footer_btn_w      */ 144,
     /* user_dlg_footer_btn_h      */ 51,
     /* user_file_dlg_w            */ 600,
@@ -402,8 +405,8 @@ static const ui_theme_t s_theme_1024 = {
     /* user_slide_w               */ 288,
     /* user_slide_h               */ 48,
     /* user_slide_knob_sz         */ 40,
-    /* user_spinner_sz            */ 57,
-    /* user_spinner_stroke        */ 5,
+    /* user_spinner_sz            */ 88,
+    /* user_spinner_stroke        */ 6,
     /* user_progress_w            */ 288,
     /* user_progress_h            */ 12,
     /* user_print_bar_h           */ 76,
@@ -414,8 +417,9 @@ static const ui_theme_t s_theme_1024 = {
     /* user_print_terminate_h     */ 40,
 
     /* 打印态浮层（稿 1280 档 ×0.8） */
-    /* user_print_card_w          */ 366,
+    /* user_print_card_w          */ 333,
     /* user_print_thumb_sz        */ 76,
+    /* user_print_notice_h        */ 56,
     /* user_print_ctl_btn         */ 51,
     /* user_print_pill_w          */ 320,
     /* user_print_badge_sz        */ 13,
@@ -439,7 +443,6 @@ static const ui_theme_t s_theme_1024 = {
     /* font_user_value    */ &lv_font_montserrat_24,
     /* font_user_text     */ &lv_font_montserrat_16,
     /* font_user_caption  */ &lv_font_montserrat_14,
-    /* font_user_caption_sm */ &lv_font_montserrat_12,
     /* font_user_icon     */ &lv_font_montserrat_20,
 
     /* profile_id */ UI_RES_1024,
@@ -559,7 +562,6 @@ const lv_font_t *ui_font_title(void)       { return g_ui->font_title; }
 const lv_font_t *user_font_value(void)     { return g_ui->font_user_value; }
 const lv_font_t *user_font_text(void)      { return g_ui->font_user_text; }
 const lv_font_t *user_font_caption(void)   { return g_ui->font_user_caption; }
-const lv_font_t *user_font_caption_sm(void){ return g_ui->font_user_caption_sm; }
 const lv_font_t *user_font_icon(void)      { return g_ui->font_user_icon; }
 
 /* 中文字体：思源黑体子集 TTF，经 LVGL TinyTTF 运行时渲染（字号 16）。

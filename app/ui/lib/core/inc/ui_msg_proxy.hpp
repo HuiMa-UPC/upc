@@ -43,7 +43,6 @@ using XfrFileReceivedCb = std::function<void(const middleware::XfrFileReceivedPa
 using XfrTransferProgressCb = std::function<void(const middleware::XfrTransferProgressPayload&)>;
 using UsbHotplugCb     = std::function<void(const middleware::UsbHotplugPayload&)>;
 using McuVersionCb     = std::function<void(const middleware::McuVersionPayload&)>;
-using DeviceEventCb    = std::function<void(const middleware::DeviceEventPayload&)>;
 
 class UiMsgProxy {
 public:
@@ -133,9 +132,6 @@ public:
     /** MCU 固件版本查询（Settings/About 进页触发一次） */
     void send_mcu_version_query();
     void register_mcu_version(McuVersionCb cb);   /**< GLAVO_Mcu_Version_Ntf */
-    /** GLAVO_Device_Event_Ntf：设备事件/告警，喂消息中心。
-     *  Glavo 侧还没实现发布，接好放着——后端上线后 UI 不用改。 */
-    void register_device_event(DeviceEventCb cb);
 
     /* ---- 网络 / WiFi（前端预留，后端接口到位后即可用；未上线时无人响应，不影响运行） ---- */
     void send_wifi_enable(bool enable);
@@ -210,7 +206,6 @@ private:
     XfrTransferProgressCb xfr_transfer_progress_cb_;
     UsbHotplugCb usb_hotplug_cb_;
     McuVersionCb mcu_version_cb_;
-    DeviceEventCb device_event_cb_;
 };
 
 } // namespace ui

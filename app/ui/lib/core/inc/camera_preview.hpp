@@ -72,18 +72,21 @@ private:
     [[nodiscard]] int dma_fd(uint32_t idx) const noexcept;
     void schedule_ui_timer();
     void delete_ui_timer();
+    void request_decode_retire_ui();
+    void finish_decode_retire_ui();
     void clear_frame_buffers();
     bool setup_frame_buffers(size_t frame_bytes, uint32_t row_stride_bytes);
 
     static void ui_timer_cb(lv_timer_t* timer);
+    static void retire_poll_timer_cb(lv_timer_t* timer);
     static void async_apply_stream_start(void* user);
-    static void async_restart_stream(void* user);
     bool convert_frame(const upc_ipc::IpcDmaFrameView& frame, int slot_idx);
     bool convert_frame_dma(const upc_ipc::IpcDmaFrameView& frame, int slot_idx);
 
     lv_obj_t* image_ = nullptr;
     lv_obj_t* hint_  = nullptr;
     lv_timer_t* ui_timer_ = nullptr;
+    lv_timer_t* retire_poll_timer_ = nullptr;
     char scene_[32] = {}; /**< start() 传入的场景标签，供诊断日志 */
 
     upc_ipc::IpcDmaFrameRingConsumer consumer_;
@@ -96,6 +99,8 @@ private:
     std::atomic<bool> active_{false};
     std::atomic<bool> stop_decode_{false};
     std::atomic<bool> stream_up_{false};
+    std::atomic<bool> decode_retiring_{false};
+    std::atomic<bool> decode_retired_{false};
     bool start_req_sent_ = false;
 
     uint32_t width_  = 0;
@@ -111,8 +116,6 @@ private:
     std::atomic<int>     shown_buf_{-1};
     bool                 logged_first_ui_show_ = false;
     std::atomic<uint64_t> last_frame_ok_ms_{0};
-    std::atomic<uint64_t> last_restart_ms_{0};
-    std::atomic<bool>     restart_pending_{false};
     std::atomic<bool>     stalled_{false};
 
     middleware::CameraStreamInfoPayload pending_start_rsp_{};

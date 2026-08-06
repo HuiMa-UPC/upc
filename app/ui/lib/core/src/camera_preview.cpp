@@ -22,10 +22,8 @@ namespace ui {
 namespace {
 
 constexpr uint32_t kUiRefreshPeriodMs = 33u;
-/* 录像收尾（尤其 print_h264）存在短时抖动，适当放宽重连阈值避免误判重启。 */
+/* 录像收尾（尤其 print_h264）存在短时抖动，适当放宽卡帧告警阈值。 */
 constexpr uint64_t kPreviewStallWarnMs = 1200u;
-constexpr uint64_t kPreviewStallRestartMs = 7000u;
-constexpr uint64_t kPreviewRestartCooldownMs = 12000u;
 
 constexpr int kNv12RgaFormat = RK_FORMAT_YCbCr_420_SP;
 constexpr int kDstRgaFormat  = RK_FORMAT_BGRX_8888;
@@ -316,6 +314,11 @@ void CameraPreviewPlayer::init()
 void CameraPreviewPlayer::start(lv_obj_t* image_widget, lv_obj_t* hint_widget,
                                  const char* scene)
 {
+    if(decode_retiring_.load(std::memory_order_acquire)) {
+        UPC_LOG_CAMERA_PREVIEW(Warn,
+            "start deferred: previous decode session is still retiring");
+        return;
+    }
     if(active_.load()) {
         stop();
     }
@@ -334,9 +337,7 @@ void CameraPreviewPlayer::start(lv_obj_t* image_widget, lv_obj_t* hint_widget,
     stream_up_.store(false);
     display_buf_.store(-1);
     last_frame_ok_ms_.store(monotonic_ms(), std::memory_order_relaxed);
-    last_restart_ms_.store(0, std::memory_order_relaxed);
     stalled_.store(false, std::memory_order_relaxed);
-    restart_pending_.store(false, std::memory_order_relaxed);
 
     if(image_) {
         lv_obj_add_flag(image_, LV_OBJ_FLAG_HIDDEN);
@@ -375,14 +376,7 @@ void CameraPreviewPlayer::stop()
         CameraMsgProxy::instance().send_stream_stop();
     }
     start_req_sent_ = false;
-    restart_pending_.store(false, std::memory_order_relaxed);
     stalled_.store(false, std::memory_order_relaxed);
-
-    if(decode_thread_.joinable()) {
-        decode_thread_.join();
-    }
-
-    consumer_.close();
     stream_up_.store(false);
     delete_ui_timer();
 
@@ -396,7 +390,11 @@ void CameraPreviewPlayer::stop()
         lv_obj_clear_flag(hint_, LV_OBJ_FLAG_HIDDEN);
     }
 
-    reset_ui();
+    if(decode_thread_.joinable()) {
+        request_decode_retire_ui();
+    } else {
+        reset_ui();
+    }
 }
 
 void CameraPreviewPlayer::on_stream_start_rsp(
@@ -452,6 +450,13 @@ void CameraPreviewPlayer::async_apply_stream_start(void* user)
             self->close_pending_dma_fds();
             self->pending_start_rsp_valid_ = false;
         }
+        return;
+    }
+    if(self->decode_retiring_.load(std::memory_order_acquire)) {
+        return;
+    }
+    if(self->decode_thread_.joinable()) {
+        self->request_decode_retire_ui();
         return;
     }
     self->pending_start_rsp_valid_ = false;
@@ -520,9 +525,11 @@ void CameraPreviewPlayer::apply_stream_start_ui(
      * or a watchdog resync.  In either case the prior decode thread can still
      * access its SHM mapping and dma fds, so stop it before replacing them.
      */
-    stop_decode_.store(true);
     if(decode_thread_.joinable()) {
-        decode_thread_.join();
+        pending_start_rsp_       = info;
+        pending_start_rsp_valid_ = true;
+        request_decode_retire_ui();
+        return;
     }
     stream_up_.store(false);
     consumer_.close();
@@ -628,7 +635,6 @@ void CameraPreviewPlayer::apply_stream_start_ui(
     shown_buf_ = -1;
     last_frame_ok_ms_.store(monotonic_ms(), std::memory_order_relaxed);
     stalled_.store(false, std::memory_order_relaxed);
-    restart_pending_.store(false, std::memory_order_relaxed);
     stream_up_.store(true);
     if(!begin_decode_thread()) {
         consumer_.close();
@@ -640,6 +646,70 @@ void CameraPreviewPlayer::apply_stream_start_ui(
     }
     schedule_ui_timer();
     show_hint(LV_SYMBOL_VIDEO "  Loading preview...");
+}
+
+void CameraPreviewPlayer::request_decode_retire_ui()
+{
+    if(decode_retiring_.exchange(true, std::memory_order_acq_rel)) {
+        return;
+    }
+
+    stop_decode_.store(true, std::memory_order_release);
+    stream_up_.store(false, std::memory_order_release);
+    decode_retired_.store(false, std::memory_order_release);
+    display_buf_.store(-1, std::memory_order_relaxed);
+    shown_buf_.store(-1, std::memory_order_relaxed);
+    show_hint(LV_SYMBOL_VIDEO "  Reconnecting camera...");
+
+    std::thread retiring_thread = std::move(decode_thread_);
+    std::thread([thread = std::move(retiring_thread), this]() mutable {
+        thread.join();
+        decode_retired_.store(true, std::memory_order_release);
+    }).detach();
+
+    if(!retire_poll_timer_) {
+        retire_poll_timer_ = lv_timer_create(retire_poll_timer_cb, 20u, this);
+    }
+}
+
+void CameraPreviewPlayer::retire_poll_timer_cb(lv_timer_t* timer)
+{
+    auto* self = static_cast<CameraPreviewPlayer*>(lv_timer_get_user_data(timer));
+    if(!self || !self->decode_retired_.load(std::memory_order_acquire)) {
+        return;
+    }
+    self->finish_decode_retire_ui();
+}
+
+void CameraPreviewPlayer::finish_decode_retire_ui()
+{
+    if(!decode_retired_.load(std::memory_order_acquire)) {
+        return;
+    }
+    if(retire_poll_timer_) {
+        lv_timer_delete(retire_poll_timer_);
+        retire_poll_timer_ = nullptr;
+    }
+
+    decode_retired_.store(false, std::memory_order_release);
+    decode_retiring_.store(false, std::memory_order_release);
+    consumer_.close();
+    display_buf_.store(-1, std::memory_order_relaxed);
+    shown_buf_.store(-1, std::memory_order_relaxed);
+    close_active_dma_fds();
+    clear_frame_buffers();
+
+    if(!active_.load()) {
+        reset_ui();
+        return;
+    }
+    if(!pending_start_rsp_valid_) {
+        return;
+    }
+
+    const middleware::CameraStreamInfoPayload info = pending_start_rsp_;
+    pending_start_rsp_valid_ = false;
+    apply_stream_start_ui(info);
 }
 
 bool CameraPreviewPlayer::begin_decode_thread()
@@ -915,20 +985,6 @@ void CameraPreviewPlayer::ui_timer_cb(lv_timer_t* timer)
             if(age_ms <= kPreviewStallWarnMs) {
                 self->stalled_.store(false, std::memory_order_relaxed);
             }
-
-            if(age_ms > kPreviewStallRestartMs) {
-                const uint64_t last_restart_ms =
-                    self->last_restart_ms_.load(std::memory_order_relaxed);
-                const bool cooldown_ok =
-                    (last_restart_ms == 0) ||
-                    (now_ms - last_restart_ms >= kPreviewRestartCooldownMs);
-                if(cooldown_ok &&
-                   !self->restart_pending_.exchange(true,
-                                                    std::memory_order_acq_rel)) {
-                    self->last_restart_ms_.store(now_ms, std::memory_order_relaxed);
-                    lv_async_call(async_restart_stream, self);
-                }
-            }
         }
     }
 
@@ -962,54 +1018,6 @@ void CameraPreviewPlayer::ui_timer_cb(lv_timer_t* timer)
     lv_obj_invalidate(self->image_);
 }
 
-void CameraPreviewPlayer::async_restart_stream(void* user)
-{
-    auto* self = static_cast<CameraPreviewPlayer*>(user);
-    if(!self) {
-        return;
-    }
-    auto clear_pending = [self]() {
-        self->restart_pending_.store(false, std::memory_order_release);
-    };
-
-    if(!self->active_.load()) {
-        clear_pending();
-        return;
-    }
-    if(!middleware::MsgPort::instance().peer_connected(
-           middleware::ModuleId::APP_CAMERA)) {
-        UPC_LOG_CAMERA_PREVIEW(Warn, "preview restart skipped: camera offline");
-        clear_pending();
-        return;
-    }
-
-    UPC_LOG_CAMERA_PREVIEW(Warn,
-        "preview restart stream scene=%s image=%p",
-        self->scene_[0] ? self->scene_ : "(none)",
-        static_cast<void*>(self->image_));
-
-    self->stop_decode_.store(true);
-    if(self->decode_thread_.joinable()) {
-        self->decode_thread_.join();
-    }
-    self->stream_up_.store(false);
-    self->consumer_.close();
-    self->pending_start_rsp_valid_ = false;
-    self->display_buf_.store(-1, std::memory_order_relaxed);
-    self->shown_buf_.store(-1, std::memory_order_relaxed);
-    self->close_dma_fds();
-    self->clear_frame_buffers();
-    self->logged_first_ui_show_ = false;
-    self->stalled_.store(false, std::memory_order_relaxed);
-    self->start_req_sent_ = true;
-    self->last_frame_ok_ms_.store(monotonic_ms(), std::memory_order_relaxed);
-    self->show_hint(LV_SYMBOL_VIDEO "  Reconnecting camera...");
-
-    CameraMsgProxy::instance().send_stream_stop();
-    CameraMsgProxy::instance().send_stream_start(nullptr);
-    clear_pending();
-}
-
 void CameraPreviewPlayer::reset_ui()
 {
     image_     = nullptr;
@@ -1022,10 +1030,10 @@ void CameraPreviewPlayer::reset_ui()
     src_stride_y_    = 0;
     logged_first_ui_show_ = false;
     last_frame_ok_ms_.store(0, std::memory_order_relaxed);
-    last_restart_ms_.store(0, std::memory_order_relaxed);
     stalled_.store(false, std::memory_order_relaxed);
-    restart_pending_.store(false, std::memory_order_relaxed);
     pending_start_rsp_valid_ = false;
+    decode_retiring_.store(false, std::memory_order_relaxed);
+    decode_retired_.store(false, std::memory_order_relaxed);
     close_dma_fds();
     clear_frame_buffers();
 }
