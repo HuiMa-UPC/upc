@@ -12,7 +12,7 @@
  * wpa_supplicant 在开启时自动重连（依赖 SAVE_CONFIG 持久化 + update_config=1）。
  * 可用环境变量 UPC_WIFI_IFACE（默认 wlan0）、UPC_WPA_CTRL_DIR（默认 /var/run/wpa_supplicant）覆盖。
  *
- * 线程模型：一个后台线程，命令队列 + 周期轮询（默认 3s）。state/list 回调在该线程
+ * 线程模型：一个后台线程，命令队列 + 周期轮询（空闲 3s；扫描/连接/等 IP 期间 400ms）。state/list 回调在该线程
  * 触发，内部只做 publish（MsgPort::publish_async 线程安全）。
  */
 
@@ -31,7 +31,7 @@ struct WifiSnapshot {
     bool        initialized = false;  /**< wpa_supplicant 控制接口是否就绪 */
     bool        enabled     = false;  /**< WiFi 开关是否开 */
     bool        connected   = false;  /**< wpa_state==COMPLETED */
-    int         signal_bars = 0;      /**< 0..4 */
+    int         signal_bars = 0;      /**< 0..3（图标三格） */
     std::string ssid;                 /**< 当前连接 SSID，未连为空 */
     std::string ip;                   /**< 当前 IPv4，未连为空 */
 };
@@ -39,7 +39,7 @@ struct WifiSnapshot {
 /** 单个网络条目（扫描 / 已保存共用）。 */
 struct WifiEntry {
     std::string  ssid;
-    int          signal_bars = 0;                 /**< 0..4 */
+    int          signal_bars = 0;                 /**< 0..3（图标三格） */
     WifiSecurity security     = WifiSecurity::Open;
     bool         saved        = false;
     bool         connected    = false;

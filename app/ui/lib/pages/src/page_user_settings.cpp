@@ -33,7 +33,7 @@
  *   └───────────────────────┴──────────────────────────────┘
  *
  * 前端阶段说明（后端由同事接）：
- *   - Wi-Fi 列表为静态假数据；连接动作仅弹密码框 + toast（stub）。
+ *   - Wi-Fi 列表来自后端扫描推送（GLAVO_Wifi_Scan_Rsp），首次结果到达前显示 Searching。
  *   - Debug 行点击 → 开发者密码框（"888"）→ switch_to("user_debug")。
  *   - 软件版本号迁至 About 子页。
  *   - 子导航图标暂用 LV_SYMBOL 占位，待 SVG 资源到位再替换。
@@ -77,13 +77,6 @@ const NavDef kNavDefs[NAV_COUNT] = {
 
 /* Wi-Fi 连接态占位（后端未上报时用于避免误导） */
 const char *const kCurrentWifi = "--";
-const char *const kAvailWifi[] = {
-    "SnowX_WIFI_2.4G",
-    "Sweden_2.4G",
-    "Sweden_5G",
-    "Guest_2.4G",
-    "Lab_Internal",
-};
 
 /* 前端占位：当前 IP / 已保存网络（后端网络信息接口到位后替换） */
 const char *const kIpAddress = "--";
@@ -191,10 +184,22 @@ middleware::WifiEntryPayload g_saved_wifi[16] = {};
 uint32_t g_saved_count = 0;
 bool     g_saved_valid = false;
 
-/* 扫描结果缓存（GLAVO_Wifi_Scan_Rsp；未上线/未扫描时回退占位 kAvailWifi）。 */
+/* 扫描结果缓存（GLAVO_Wifi_Scan_Rsp；首次结果到达前列表显示 Searching）。 */
 middleware::WifiEntryPayload g_scan_wifi[32] = {};
 uint32_t g_scan_count = 0;
 bool     g_scan_valid = false;
+
+/* 上次用于建列表的 SSID/连接态签名：后端每次轮询都会因信号浮动重推，只有条目
+ * 真变了才重建，否则整页重建会把用户正在看的滚动位置顶回顶部。 */
+std::string g_scan_list_sig;
+
+/* Advanced / Wi-Fi 详情页的 IP 值标签：状态推送到达时就地改文字（这两个子页
+ * 是静态构建的，不重建就永远显示进页那一刻的 IP）。离开子页时置空。 */
+lv_obj_t *g_ip_val_lbl = nullptr;
+
+/* 停在网络页时的周期重扫（进页只扫一次的话，附近网络变化要等用户来回切页才可见）。 */
+lv_timer_t *g_wifi_rescan_timer = nullptr;
+constexpr uint32_t kWifiRescanMs = 8000;
 
 /** 当前 IP：后端有效则用真实值，否则占位。 */
 const char *wifi_ip_text(void)
@@ -229,6 +234,39 @@ bool wifi_ssid_saved(const char *ssid)
         }
     }
     return false;
+}
+
+/** 扫描缓存的 SSID + 连接态签名（列表只显示这两样，信号强弱不参与）。 */
+std::string scan_list_signature(void)
+{
+    std::string sig;
+    for(uint32_t i = 0; i < g_scan_count; i++) {
+        sig += g_scan_wifi[i].ssid;
+        sig += g_scan_wifi[i].connected ? ":C;" : ":.;";
+    }
+    return sig;
+}
+
+void wifi_rescan_timer_cb(lv_timer_t * /*t*/)
+{
+    if(g_wifi_on) {
+        ui::UiMsgProxy::instance().send_wifi_scan();
+    }
+}
+
+void wifi_rescan_start(void)
+{
+    if(!g_wifi_rescan_timer) {
+        g_wifi_rescan_timer = lv_timer_create(wifi_rescan_timer_cb, kWifiRescanMs, nullptr);
+    }
+}
+
+void wifi_rescan_stop(void)
+{
+    if(g_wifi_rescan_timer) {
+        lv_timer_delete(g_wifi_rescan_timer);
+        g_wifi_rescan_timer = nullptr;
+    }
 }
 
 lv_obj_t *g_nav_btns[NAV_COUNT]  = { nullptr };
@@ -710,8 +748,10 @@ lv_obj_t *make_link_row(lv_obj_t *parent, const char *label,
     return btn;
 }
 
-/** 只读键值行：整宽 [标题 ... 值(dim)]，无箭头、不可点。 */
-lv_obj_t *make_value_row(lv_obj_t *parent, const char *label, const char *value)
+/** 只读键值行：整宽 [标题 ... 值(dim)]，无箭头、不可点。
+ *  out_val 非空时回传值标签，供异步刷新就地改文字。 */
+lv_obj_t *make_value_row(lv_obj_t *parent, const char *label, const char *value,
+                         lv_obj_t **out_val = nullptr)
 {
     lv_obj_t *row = lv_obj_create(parent);
     lv_obj_remove_style_all(row);
@@ -737,6 +777,9 @@ lv_obj_t *make_value_row(lv_obj_t *parent, const char *label, const char *value)
     lv_label_set_text(val, value);
     lv_obj_set_style_text_font(val, user_font_text(), 0);
     lv_obj_set_style_text_color(val, user_color_text_dim, 0);
+    if(out_val) {
+        *out_val = val;
+    }
     return row;
 }
 
@@ -972,7 +1015,7 @@ void build_network_detail(lv_obj_t *parent)
     g_wifi_list_box = box;
 
     const char *cur_ssid = wifi_current_ssid();
-    const bool  cur_connected = !g_wifi_state_valid || g_wifi_state.connected;
+    const bool  cur_connected = g_wifi_state_valid && g_wifi_state.connected;
 
     if(cur_connected) {
         make_caption(box, "Current Wi-Fi");
@@ -982,6 +1025,7 @@ void build_network_detail(lv_obj_t *parent)
     make_caption(box, "Available Wi-Fi");
     if(g_scan_valid) {
         /* 后端扫描结果：跳过已连接项，避免与 Current 重复 */
+        uint32_t shown = 0;
         for(uint32_t i = 0; i < g_scan_count; i++) {
             const char *ssid = g_scan_wifi[i].ssid;
             if(ssid[0] == '\0') {
@@ -991,16 +1035,14 @@ void build_network_detail(lv_obj_t *parent)
                 continue;
             }
             make_wifi_item(box, ssid, false);
+            shown++;
+        }
+        if(shown == 0) {
+            make_caption(box, "No networks found");
         }
     } else {
-        /* 后端未上线/未扫描：占位假数据 */
-        const size_t n = sizeof(kAvailWifi) / sizeof(kAvailWifi[0]);
-        for(size_t i = 0; i < n; i++) {
-            if(std::strcmp(kAvailWifi[i], kCurrentWifi) == 0) {
-                continue;   /* 已连接项已单列，避免重复 */
-            }
-            make_wifi_item(box, kAvailWifi[i], false);
-        }
+        /* 首个扫描结果还没到：给等待提示，别拿假 SSID 充数 */
+        make_caption(box, "Searching for networks...");
     }
 
     make_link_row(box, "Advanced Settings", on_advanced_click, nullptr);
@@ -1045,7 +1087,7 @@ void build_wifi_advanced(lv_obj_t *parent)
     lv_obj_set_style_pad_row(card, USER_PAD, 0);
 
     make_link_row(card, "Saved Networks", on_saved_networks_click, nullptr);
-    make_value_row(card, "IP Address", wifi_ip_text());
+    make_value_row(card, "IP Address", wifi_ip_text(), &g_ip_val_lbl);
 }
 
 void build_saved_networks(lv_obj_t *parent)
@@ -1130,7 +1172,7 @@ void build_wifi_connected_detail(lv_obj_t *parent)
 
     make_link_row(card, "Disconnect", on_disconnect_network, nullptr);
     make_link_row(card, "Forget Network", on_forget_network, nullptr);
-    make_value_row(card, "IP Address", wifi_ip_text());
+    make_value_row(card, "IP Address", wifi_ip_text(), &g_ip_val_lbl);
 }
 
 /* ---- 网络子页切换（清空详情区后重建目标子视图） ---- */
@@ -1144,6 +1186,7 @@ void net_reset(void)
     g_wifi_list_box = nullptr;
     g_wifi_seg_on = nullptr;
     g_wifi_seg_off = nullptr;
+    g_ip_val_lbl = nullptr;
     lv_obj_clean(g_detail);
     lv_obj_clear_flag(g_detail, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_style_pad_right(g_detail, 0, 0);
@@ -1210,6 +1253,7 @@ void show_detail(NavId id)
     g_wifi_list_box = nullptr;
     g_wifi_seg_on = nullptr;
     g_wifi_seg_off = nullptr;
+    g_ip_val_lbl = nullptr;
     g_net_subpage = NET_MAIN;   /* 切换左侧导航时复位子页跟踪 */
     /* About 面板即将销毁：先断开异步刷新用的标签指针并停掉版本查询定时器，
      * 否则离开 About 后到达的应答/超时会写已释放的 label。 */
@@ -1220,12 +1264,18 @@ void show_detail(NavId id)
     lv_obj_clear_flag(g_detail, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_style_pad_right(g_detail, 0, 0);
 
+    if(id != NAV_NETWORK) {
+        wifi_rescan_stop();
+    }
+
     switch(id) {
     case NAV_NETWORK:
         build_network_detail(g_detail);
-        /* 进入网络页：请求当前状态 + 触发一次扫描（结果经 register_wifi_scan 回填） */
+        /* 进入网络页：请求当前状态 + 触发一次扫描（结果经 register_wifi_scan 回填），
+         * 之后由 wifi_rescan_timer 周期重扫，停在本页也能跟上附近网络变化。 */
         ui::UiMsgProxy::instance().send_wifi_info();
         ui::UiMsgProxy::instance().send_wifi_scan();
+        wifi_rescan_start();
         break;
     case NAV_DEVICE:  build_device_detail(g_detail);  break;
     case NAV_ABOUT:
@@ -1344,11 +1394,18 @@ lv_obj_t *build_subnav(lv_obj_t *parent)
 
 void page_user_settings_refresh(bool /*force*/)
 {
-    /* 静态内容，无需周期刷新 */
+    /* 进页（含从其它页切回）：网络页要重新拉一遍状态并重启周期重扫，
+     * 否则缓存里可能是上次离开时的旧状态。其余子导航为静态内容。 */
+    if(g_selected == NAV_NETWORK) {
+        ui::UiMsgProxy::instance().send_wifi_info();
+        ui::UiMsgProxy::instance().send_wifi_scan();
+        wifi_rescan_start();
+    }
 }
 
 void page_user_settings_dismiss_dialog(void)
 {
+    wifi_rescan_stop();   /* 离开设置页：停掉周期重扫 */
     dlg_close();
     ota_close_dialog(OtaTarget::Glavo);
     ota_close_dialog(OtaTarget::McuSerial);
@@ -1371,16 +1428,35 @@ lv_obj_t *page_user_settings_create(lv_obj_t *parent)
         g_nav_icons[i] = nullptr;
     }
 
-    /* 缓存后端网络状态。仅同步开关状态，不整页重建（重建会打断用户操作、
-     * 把开关重置）。当前 SSID/列表刷新交给扫描回调 register_wifi_scan。 */
-    ui::UiMsgProxy::instance().register_wifi_state(
+    /* 缓存后端网络状态：IP 就地改标签，连接态/SSID 变了才重建列表页——整页重建
+     * 会打断用户操作，所以不能每条推送都建。 */
+    ui::UiMsgProxy::instance().add_wifi_state_listener(
         [](const middleware::WifiStatePayload &s) {
+            const bool was_valid = g_wifi_state_valid;
+            const bool conn_changed =
+                !was_valid ||
+                (g_wifi_state.connected != s.connected) ||
+                (std::strcmp(g_wifi_state.ssid, s.ssid) != 0);
+
             g_wifi_state = s;
             g_wifi_state_valid = true;
             g_wifi_on = (s.enabled != 0);
+            wifi_seg_refresh();
+
+            if(g_ip_val_lbl) {
+                lv_label_set_text(g_ip_val_lbl, wifi_ip_text());
+            }
+            if(!conn_changed || g_selected != NAV_NETWORK) {
+                return;
+            }
+            if(g_net_subpage == NET_MAIN) {
+                net_show_main();          /* Current Wi-Fi 段随连接态变化 */
+            } else if(g_net_subpage == NET_DETAIL && !s.connected) {
+                net_show_main();          /* 已断开，详情页无内容可看 */
+            }
         });
 
-    /* 缓存扫描结果；若正停在网络主页则用真实列表重建可用网络。 */
+    /* 缓存扫描结果；若正停在网络主页且条目有变化则用真实列表重建可用网络。 */
     ui::UiMsgProxy::instance().register_wifi_scan(
         [](const middleware::WifiEntryPayload *items, uint32_t count) {
             const uint32_t cap = static_cast<uint32_t>(
@@ -1390,8 +1466,14 @@ lv_obj_t *page_user_settings_create(lv_obj_t *parent)
                 g_scan_wifi[i] = items[i];
             }
             g_scan_count = nn;
+            const bool first = !g_scan_valid;
             g_scan_valid = true;
-            if(g_selected == NAV_NETWORK && g_net_subpage == NET_MAIN) {
+
+            std::string sig = scan_list_signature();
+            const bool list_changed = first || (sig != g_scan_list_sig);
+            g_scan_list_sig = std::move(sig);
+            if(list_changed &&
+               g_selected == NAV_NETWORK && g_net_subpage == NET_MAIN) {
                 net_show_main();   /* 用真实扫描列表重建 */
             }
         });

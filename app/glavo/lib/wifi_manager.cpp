@@ -7,7 +7,7 @@
  * /var/run/wpa_supplicant/<iface> 控制 socket 收发命令。IP 获取默认交给系统
  * DHCP 客户端（如 dhcpcd）；当系统未接管时回退到 udhcpc。
  *
- * 线程模型：一个后台线程，命令队列 + 周期轮询（默认 3s）。命令由公开接口投递，
+ * 线程模型：一个后台线程，命令队列 + 周期轮询（空闲 3s，扫描/连接/等 IP 期间 400ms）。命令由公开接口投递，
  * 轮询里读 STATUS/SIGNAL_POLL/SCAN_RESULTS 并按需回调（state 变化才推、扫描列表变化才推）。
  * 回调在该线程触发，内部只做 publish（MsgPort::publish_async 线程安全）。
  */
@@ -39,7 +39,12 @@
  
  namespace {
  
- constexpr int kPollIntervalMs = 3000;
+ /* 轮询节奏：空闲用慢轮询省 CPU；扫描未出结果 / 连接中 / 已连上但还没拿到 IP 时
+  * 切快轮询，否则这些"正在变化"的状态最坏要等一整个慢周期才到 UI。 */
+ constexpr int kPollIdleMs     = 3000;
+ constexpr int kPollBusyMs     = 400;
+ constexpr int kScanWaitMs     = 8000;    /**< 等 wpa_supplicant 出扫描结果的上限 */
+ constexpr int kStateRepushMs  = 15000;   /**< 状态心跳：无变化也重推一次，兜住丢包 */
  constexpr int kDhcpTimeoutSec = 8;
  
  const char* wifi_iface()
@@ -76,13 +81,12 @@ bool dhcpcd_running()
     return std::system("pidof dhcpcd >/dev/null 2>&1") == 0;
 }
  
- /** RSSI(dBm) → 信号格数(0..4)。 */
+ /** RSSI(dBm) → 信号格数(0..3)。图标只画三格，0 表示连上但信号弱到无格可点。 */
  int dbm_to_bars(int dbm)
  {
-     if(dbm >= -50) return 4;
      if(dbm >= -60) return 3;
-     if(dbm >= -70) return 2;
-     if(dbm >= -80) return 1;
+     if(dbm >= -72) return 2;
+     if(dbm >= -82) return 1;
      return 0;
  }
  
@@ -189,6 +193,11 @@ bool dhcpcd_running()
      bool        force_state_push = false;
      std::string last_scan_sig;
      std::string dhcp_done_ssid;
+     bool        ctrl_fresh     = false;   /**< 控制连接刚建立，需补一次扫描 */
+     bool        scan_pending   = false;   /**< SCAN 已下发，结果还没出来 */
+     bool        waiting_for_ip = false;   /**< 已连上但 IPv4 还没到 */
+     std::chrono::steady_clock::time_point scan_deadline{};
+     std::chrono::steady_clock::time_point last_state_push{};
     bool        logged_system_dhcp = false;
     bool        logged_udhcpc_fallback = false;
  
@@ -212,6 +221,8 @@ bool dhcpcd_running()
      bool request_ok(const char* cmd);
  
      void poll_once();
+     int  poll_interval_ms() const;
+     void start_scan();
      void handle_cmd(const Command& c);
      void do_connect(const std::string& ssid, const std::string& pw);
      int  find_network_id(const std::string& ssid);
@@ -230,6 +241,23 @@ bool dhcpcd_running()
      }
  };
  
+ /* 有事在办（扫描/连接/等 IP）时用快轮询，其余时间慢轮询。 */
+ int WifiManager::Impl::poll_interval_ms() const
+ {
+     const bool busy = scan_pending || connecting || waiting_for_ip;
+     return busy ? kPollBusyMs : kPollIdleMs;
+ }
+ 
+ /** 下发 SCAN 并进入"等结果"状态（结果由后续 poll 里的 push_scan 推给 UI）。 */
+ void WifiManager::Impl::start_scan()
+ {
+     request_ok("SCAN");
+     want_scan_push = true;
+     scan_pending   = true;
+     scan_deadline  = std::chrono::steady_clock::now() +
+                      std::chrono::milliseconds(kScanWaitMs);
+ }
+ 
  /* ---------- 线程主循环 ---------- */
  void WifiManager::Impl::run()
  {
@@ -237,7 +265,7 @@ bool dhcpcd_running()
          std::deque<Command> local;
          {
              std::unique_lock<std::mutex> lk(mtx);
-             cv.wait_for(lk, std::chrono::milliseconds(kPollIntervalMs),
+             cv.wait_for(lk, std::chrono::milliseconds(poll_interval_ms()),
                          [this]() { return !running.load() || !cmds.empty(); });
              if(!running.load()) break;
              local.swap(cmds);
@@ -266,6 +294,7 @@ bool dhcpcd_running()
          return false;
      }
      ctrl_was_open = true;
+     ctrl_fresh    = true;
      UPC_LOG_GLAVO_SERVICE(Info, "wifi: wpa_ctrl connected (%s)",
                            wpa_ctrl_socket_path().c_str());
      return true;
@@ -304,16 +333,15 @@ bool dhcpcd_running()
          if(enabled) {
              request_ok("ENABLE_NETWORK all");
              request_ok("RECONNECT");
-             request_ok("SCAN");
-             want_scan_push = true;
+             start_scan();
          } else {
              request_ok("DISCONNECT");
+             scan_pending = false;   /* 关 WiFi 后不再等扫描结果 */
          }
          force_state_push = true;
          break;
      case CmdType::Scan:
-         request_ok("SCAN");
-         want_scan_push = true;
+         start_scan();
          break;
      case CmdType::Connect:
          do_connect(c.ssid, c.pw);
@@ -448,11 +476,22 @@ bool dhcpcd_running()
      s.enabled = enabled;
  
      if(!ensure_ctrl()) {
-         s.initialized = false;
+         s.initialized  = false;
+         scan_pending   = false;   /* 控制接口没就绪，无从等结果，回到慢轮询 */
+         waiting_for_ip = false;
          maybe_push_state(s);
          return;
      }
      s.initialized = true;
+ 
+     /* 控制连接刚建立（开机首次或掉线重连）：立刻扫一次，别等用户进设置页才发起，
+      * 否则第一次打开 WiFi 界面要干等一整轮扫描才有列表。 */
+     if(ctrl_fresh) {
+         ctrl_fresh = false;
+         if(enabled) {
+             start_scan();
+         }
+     }
  
      std::string status;
      std::string wpa_state, ssid;
@@ -483,6 +522,10 @@ bool dhcpcd_running()
      } else {
          dhcp_done_ssid.clear();
      }
+ 
+     /* 拿到 IP 之前保持快轮询：DHCP（尤其系统 dhcpcd 接管时）要几秒才出地址，
+      * 慢轮询会让设置页的 IP Address 迟迟不刷新。 */
+     waiting_for_ip = s.connected && s.ip.empty();
  
      maybe_push_state(s);
  
@@ -535,7 +578,13 @@ bool dhcpcd_running()
                    (snap.ip          != s.ip);
          snap = s;
      }
-     if((changed || force_state_push) && state_cb) {
+     /* 心跳重推：UI 侧的顶栏图标/设置页只在收到 Ntf 时才更新，若首帧那条恰好
+      * 早于 UI 订阅（或跨进程丢了），无变化就再也不推 → 状态永远停在初值。 */
+     const auto now = std::chrono::steady_clock::now();
+     const bool heartbeat = (now - last_state_push) >=
+                            std::chrono::milliseconds(kStateRepushMs);
+     if((changed || force_state_push || heartbeat) && state_cb) {
+         last_state_push = now;
          state_cb(s);
      }
      force_state_push = false;
@@ -589,6 +638,16 @@ bool dhcpcd_running()
          e.saved       = is_saved(ssid);
          e.connected   = (!cur_ssid.empty() && ssid == cur_ssid);
          entries.push_back(std::move(e));
+     }
+ 
+     /* SCAN 是异步的：刚下发时 SCAN_RESULTS 往往还是空的。此时先不推空列表
+      * （否则 UI 会先闪一次"无网络"再等下一轮），保持 pending 由快轮询接着取。 */
+     if(scan_pending) {
+         if(entries.empty() &&
+            std::chrono::steady_clock::now() < scan_deadline) {
+             return;
+         }
+         scan_pending = false;
      }
  
      /* 仅在结果集变化或被显式请求时才推，避免频繁重建 UI */

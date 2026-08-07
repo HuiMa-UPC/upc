@@ -141,7 +141,8 @@ public:
     void send_wifi_disconnect(const char* ssid);   /**< 断开当前连接 */
     void send_wifi_info();
     void send_wifi_saved_query();   /**< 请求已保存网络列表 → GLAVO_Wifi_Saved_Rsp */
-    void register_wifi_state(WifiStateCb cb);   /**< GLAVO_Wifi_State_Ntf */
+    /** GLAVO_Wifi_State_Ntf：多路监听（顶栏图标、设置页各注册一次，互不覆盖）。 */
+    void add_wifi_state_listener(WifiStateCb cb);
     void register_wifi_scan(WifiListCb cb);     /**< GLAVO_Wifi_Scan_Rsp */
     void register_wifi_saved(WifiListCb cb);    /**< GLAVO_Wifi_Saved_Rsp */
     void register_wifi_connect_result(WifiConnectResultCb cb); /**< GLAVO_Wifi_Connect_Rsp */
@@ -197,7 +198,7 @@ private:
     PrintPrepareDoneCb print_prepare_done_cb_;
     McuOtaStatusCb   mcu_ota_status_cb_;
     McuOtaStatusCb   serial_mcu_ota_status_cb_;
-    WifiStateCb      wifi_state_cb_;
+    std::vector<WifiStateCb> wifi_state_cbs_;
     WifiListCb       wifi_scan_cb_;
     WifiListCb       wifi_saved_cb_;
     WifiConnectResultCb wifi_connect_result_cb_;

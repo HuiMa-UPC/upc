@@ -44,6 +44,20 @@ void apply_env(const middleware::EnvSnapshotPayload &p)
     notify_observers();
 }
 
+/* WiFi 连接态直接跟 GLAVO_Wifi_State_Ntf 走。EnvSnapshotPayload 里虽然也带
+ * wifi_connected，但那条只在 MCU 上报传感器时才发（没接 MCU 时根本不发），
+ * 顶栏图标会一直停在初值。 */
+void apply_wifi_state(const middleware::WifiStatePayload &p)
+{
+    const bool connected = (p.connected != 0);
+    if(g_snap.wifi_connected == connected && g_snap.signal_bars == p.signal_bars) {
+        return;
+    }
+    g_snap.wifi_connected = connected;
+    g_snap.signal_bars    = p.signal_bars;
+    notify_observers();
+}
+
 } /* namespace */
 
 void ui_device_state_init(void)
@@ -67,6 +81,10 @@ void ui_device_state_init(void)
     }
     ui::UiMsgProxy::instance().register_env_update(
         [](const middleware::EnvSnapshotPayload &p) { apply_env(p); });
+    ui::UiMsgProxy::instance().add_wifi_state_listener(
+        [](const middleware::WifiStatePayload &p) { apply_wifi_state(p); });
+    /* 讨一次当前状态：后端只在变化时推，订阅晚于首帧就得靠这条把图标点亮。 */
+    ui::UiMsgProxy::instance().send_wifi_info();
 }
 
 const ui_device_snapshot_t *ui_device_state_get(void)

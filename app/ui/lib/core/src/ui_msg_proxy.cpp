@@ -226,8 +226,13 @@ void UiMsgProxy::init()
         middleware::MsgType::GLAVO_Wifi_State_Ntf, middleware::ModuleId::UI,
         [this](const middleware::Message& msg) {
             middleware::WifiStatePayload p{};
-            if (wifi_state_cb_ && read_inline_pod(msg, p)) {
-                wifi_state_cb_(p);
+            if (wifi_state_cbs_.empty() || !read_inline_pod(msg, p)) {
+                return;
+            }
+            p.ssid[sizeof(p.ssid) - 1] = '\0';
+            p.ip_addr[sizeof(p.ip_addr) - 1] = '\0';
+            for (const auto& cb : wifi_state_cbs_) {
+                cb(p);
             }
         }));
 
@@ -413,9 +418,11 @@ void UiMsgProxy::send_wifi_saved_query()
     middleware::MsgPort::instance().publish_async(msg);
 }
 
-void UiMsgProxy::register_wifi_state(WifiStateCb cb)
+void UiMsgProxy::add_wifi_state_listener(WifiStateCb cb)
 {
-    wifi_state_cb_ = std::move(cb);
+    if (cb) {
+        wifi_state_cbs_.push_back(std::move(cb));
+    }
 }
 
 void UiMsgProxy::register_wifi_scan(WifiListCb cb)

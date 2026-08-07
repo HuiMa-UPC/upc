@@ -478,7 +478,7 @@ struct EnvSnapshotPayload {
     char     device_name[32];
     uint32_t status;            /**< UserHomeStatus */
     uint8_t  wifi_connected;
-    int32_t  signal_bars;
+    int32_t  signal_bars;       /**< 信号格数 0..3（图标三格） */
     float    pm25_indoor;
     float    pm25_cabin;
     float    temperature_c;
@@ -518,7 +518,7 @@ struct WifiForgetReqPayload {
 struct WifiStatePayload {
     uint8_t  enabled;       /**< WiFi 开关是否开 */
     uint8_t  connected;     /**< 是否已连接 */
-    int32_t  signal_bars;   /**< 信号格数 0..4 */
+    int32_t  signal_bars;   /**< 信号格数 0..3（图标三格） */
     char     ssid[64];      /**< 当前 SSID，未连为空 */
     char     ip_addr[46];   /**< 当前 IP 文本，未连为空 */
 };
@@ -531,7 +531,7 @@ struct WifiListHeader {
 /** 单个 WiFi 条目（扫描 / 已保存共用） */
 struct WifiEntryPayload {
     char     ssid[64];
-    int32_t  signal_bars;   /**< 0..4 */
+    int32_t  signal_bars;   /**< 0..3（图标三格） */
     uint32_t security;      /**< WifiSecurity */
     uint8_t  saved;         /**< 是否已保存 */
     uint8_t  connected;     /**< 是否当前连接 */
