@@ -29,6 +29,7 @@ int start_mqtt(char daemon)
 
 #if !UPC_MQTT_SERVICE_ENABLE
     (void)daemon;
+    process_log_boot_banner(kProc.name);
     UPC_LOG_MQTT_SERVICE(Info, "service disabled by UPC_MQTT_SERVICE_ENABLE=0");
     return 0;
 #else
@@ -49,6 +50,8 @@ int start_mqtt(char daemon)
         }
         std::printf("Starting %s (PID: %d)...\n", kProc.name, getpid());
     }
+
+    process_log_boot_banner(kProc.name);
 
     auto& port = middleware::MsgPort::instance();
     if(!port.set_mode_ipc_client(middleware::ModuleId::APP_MQTT,

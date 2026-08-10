@@ -72,6 +72,8 @@ int start_ui(char daemon) {
         std::printf("Starting %s (PID: %d)...\n", kProc.name, getpid());
     }
 
+    process_log_boot_banner(kProc.name);
+
     if (!connect_ipc_with_retry()) {
         std::fprintf(stderr,
             "%s IPC connect failed (%s) — start rongsu_broker + rongsu_glavo first\n",

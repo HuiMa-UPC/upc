@@ -16,11 +16,19 @@ namespace upc::mqtt {
 #endif
 
 struct MqttConfig {
-    std::string device_id = "SNOWPOD-TEST-001";
-    std::string broker_uri = "tcp://172.17.0.72:1883";
+    /** 出厂烧录的设备 SN；MQTT clientId 与 username 均使用该值。 */
+    std::string device_id;
+    /** 出厂烧录的设备根密钥；仅用于激活 HMAC，绝不能记录到日志。 */
+    std::string device_secret;
+    /** 由激活服务 mqttEndpoint 下发并持久化，禁止在设备侧静态配置。 */
+    std::string broker_uri;
     std::string client_id;
     std::string username;
     std::string password;
+    /** 设备初始化服务 HTTP(S) 地址。 */
+    std::string activation_base_url;
+    /** 激活后 MQTT 凭据的本地持久化位置。生产环境应位于加密存储区。 */
+    std::string credential_file;
     int keepalive_sec = 60;
     int qos_telemetry = 1;
     int qos_ack = 1;

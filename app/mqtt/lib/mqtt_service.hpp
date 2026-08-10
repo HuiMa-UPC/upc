@@ -2,6 +2,7 @@
 #define UPC_MQTT_SERVICE_HPP
 
 #include "mqtt_config.hpp"
+#include "device_activation.hpp"
 #include "upc_contract.hpp"
 #include "msg_port.hpp"
 
@@ -12,6 +13,7 @@
 #include <cstring>
 #include <mutex>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <vector>
 
@@ -73,6 +75,9 @@ private:
     void disconnect_mqtt();
     void try_reconnect();
     bool subscribe_cmd_topic();
+    void start_activation();
+    void poll_activation();
+    void join_activation_thread();
 
     bool publish_chamber_telemetry();
     bool publish_cmd_ack(const std::string& req_id,
@@ -130,6 +135,16 @@ private:
 
     MqttConfig cfg_{};
     std::vector<middleware::Subscription> subs_;
+    MqttCredentialStore credential_store_{""};
+    bool credentials_ready_ = false;
+    uint64_t next_activation_ms_ = 0;
+    std::thread activation_thread_;
+    std::mutex activation_mtx_;
+    bool activation_running_ = false;
+    bool activation_result_ready_ = false;
+    bool activation_succeeded_ = false;
+    ActivatedMqttCredential activated_credential_{};
+    std::string activation_error_;
 
     MQTTClient client_{nullptr};
     bool mqtt_created_ = false;

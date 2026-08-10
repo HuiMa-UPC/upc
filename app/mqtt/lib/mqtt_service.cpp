@@ -16,6 +16,7 @@ namespace upc::mqtt {
 namespace {
 
 constexpr uint64_t kReconnectIntervalMs = 3000;
+constexpr uint64_t kActivationRetryIntervalMs = 5000;
 constexpr uint64_t kTelemetryPrintingIntervalMs = 2000;
 constexpr uint64_t kTelemetryIdleIntervalMs = 30000;
 
@@ -113,22 +114,38 @@ MqttService::~MqttService()
 bool MqttService::init()
 {
     cfg_ = load_mqtt_config();
+    credential_store_ = MqttCredentialStore(cfg_.credential_file);
+
+    ActivatedMqttCredential saved_credential;
+    std::string credential_error;
+    if(credential_store_.load(saved_credential, credential_error)) {
+        cfg_.password = saved_credential.mqtt_password;
+        cfg_.broker_uri = normalise_broker_uri(saved_credential.mqtt_endpoint);
+        credentials_ready_ = true;
+        UPC_LOG_MQTT_SERVICE(Info, "loaded locally activated MQTT credential");
+    } else if(!credential_error.empty()) {
+        UPC_LOG_MQTT_SERVICE(Warn, "cannot load local MQTT credential: %s",
+                             credential_error.c_str());
+    }
+
     subscribe_messages();
 
     UPC_LOG_MQTT_SERVICE(Info,
-        "cfg broker=%s prefix=%s client=%s user=%s qos(tele=%d ack=%d)",
+        "cfg broker=%s prefix=%s client=%s user=%s qos(tele=%d ack=%d) credential=%s",
         cfg_.broker_uri.c_str(),
         cfg_.topic_prefix().c_str(),
         cfg_.client_id.c_str(),
         cfg_.username.c_str(),
         cfg_.qos_telemetry,
-        cfg_.qos_ack);
+        cfg_.qos_ack,
+        credentials_ready_ ? "ready" : "activation-required");
 
     return true;
 }
 
 void MqttService::shutdown()
 {
+    join_activation_thread();
     {
         std::lock_guard<std::mutex> lock(pending_mtx_);
         pending_acks_.clear();
@@ -144,6 +161,10 @@ void MqttService::shutdown()
 
 void MqttService::tick()
 {
+    if(!credentials_ready_) {
+        poll_activation();
+        return;
+    }
     if(!ensure_mqtt_connected()) {
         return;
     }
@@ -241,6 +262,91 @@ void MqttService::try_reconnect()
     }
     last_reconnect_ms_ = now;
     (void)connect_mqtt();
+}
+
+void MqttService::start_activation()
+{
+    {
+        std::lock_guard<std::mutex> lock(activation_mtx_);
+        if(activation_running_) {
+            return;
+        }
+        activation_running_ = true;
+        activation_result_ready_ = false;
+        activation_succeeded_ = false;
+        activation_error_.clear();
+        activated_credential_ = ActivatedMqttCredential{};
+    }
+
+    join_activation_thread();
+    const MqttConfig activation_config = cfg_;
+    activation_thread_ = std::thread([this, activation_config]() {
+        DeviceActivationClient client(activation_config);
+        ActivatedMqttCredential credential;
+        std::string error;
+        const bool succeeded = client.activate(credential, error);
+        std::lock_guard<std::mutex> lock(activation_mtx_);
+        activation_succeeded_ = succeeded;
+        activated_credential_ = std::move(credential);
+        activation_error_ = std::move(error);
+        activation_running_ = false;
+        activation_result_ready_ = true;
+    });
+}
+
+void MqttService::poll_activation()
+{
+    bool result_ready = false;
+    bool succeeded = false;
+    ActivatedMqttCredential credential;
+    std::string error;
+    {
+        std::lock_guard<std::mutex> lock(activation_mtx_);
+        result_ready = activation_result_ready_;
+        if(result_ready) {
+            succeeded = activation_succeeded_;
+            credential = activated_credential_;
+            error = activation_error_;
+            activation_result_ready_ = false;
+        }
+    }
+
+    if(result_ready) {
+        join_activation_thread();
+        if(succeeded) {
+            std::string save_error;
+            if(credential_store_.save(credential, save_error)) {
+                cfg_.password = credential.mqtt_password;
+                cfg_.broker_uri = normalise_broker_uri(credential.mqtt_endpoint);
+                credentials_ready_ = true;
+                UPC_LOG_MQTT_SERVICE(Info, "device activation succeeded; MQTT credential saved");
+                return;
+            }
+            error = "激活成功但保存 MQTT 凭据失败: " + save_error;
+        }
+        next_activation_ms_ = monotonic_ms() + kActivationRetryIntervalMs;
+        UPC_LOG_MQTT_SERVICE(Warn, "device activation failed: %s; retry in %llums",
+                             error.c_str(),
+                             static_cast<unsigned long long>(kActivationRetryIntervalMs));
+        return;
+    }
+
+    bool activation_running = false;
+    {
+        std::lock_guard<std::mutex> lock(activation_mtx_);
+        activation_running = activation_running_;
+    }
+    if(!activation_running && monotonic_ms() >= next_activation_ms_) {
+        UPC_LOG_MQTT_SERVICE(Info, "starting device activation");
+        start_activation();
+    }
+}
+
+void MqttService::join_activation_thread()
+{
+    if(activation_thread_.joinable()) {
+        activation_thread_.join();
+    }
 }
 
 bool MqttService::connect_mqtt()

@@ -40,6 +40,8 @@ scripts/rongsu.sh start   # glavo + rongsu_camera → ui
 
 各业务进程为 IPC **Client**，连中央 **Broker**（`rongsu_broker`）。
 
+**上电标记**：各进程在 `daemonize`（或 `run`）后调用 `process_log_boot_banner()`，日志中打印一行 `PROCESS_BOOT proc=... pid=...`（前后空行），可用 `grep PROCESS_BOOT /var/log/rongsu_*.log` 确认是否重新拉起。
+
 **时区**：`process_install_signals()` 内 `process_set_beijing_timezone()` 设置 `TZ=CST-8`（北京 / UTC+8）。WiFi 后 NTP 仍写 UTC 系统时钟；`localtime_r`、日志时间戳、历史页/录像文件名按北京时间显示。勿把系统时钟硬加 8 小时。
 
 ## 链接边界
@@ -505,7 +507,7 @@ ParserManager → RingBuffer → McuLink（TCP + 串口）
 
 | 文件 | 职责 |
 |------|------|
-| `process_ctl.cpp` | daemonize、PID 文件、信号处理 |
+| `process_ctl.cpp` | daemonize、PID 文件、信号处理、`process_log_boot_banner` |
 | `log_rotating.cpp` | 三文件 5MB 循环日志（1→2→3→1，断电 append 恢复） |
 | `upc_contract.hpp` §3 | 各进程 PID / 日志路径 |
 

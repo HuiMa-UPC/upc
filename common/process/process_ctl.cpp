@@ -96,3 +96,25 @@ int process_daemonize(const char* log_base) {
     umask(0);
     return 0;
 }
+
+void process_log_boot_banner(const char* proc_name)
+{
+    const char* name = (proc_name && proc_name[0]) ? proc_name : "?";
+    const int pid = static_cast<int>(getpid());
+
+    char line[256];
+    const int n = std::snprintf(
+        line, sizeof(line),
+        "########## PROCESS_BOOT proc=%s pid=%d ##########\n", name, pid);
+    if(n <= 0) {
+        return;
+    }
+    const std::size_t len = static_cast<std::size_t>(n);
+    /* 空行 + banner + 空行；不依赖 UPC_LOG_*，daemon 后 stderr 已指向滚动日志 */
+    log_rotating_before_write(len + 2U);
+    std::fputc('\n', stderr);
+    std::fwrite(line, 1, len, stderr);
+    std::fputc('\n', stderr);
+    std::fflush(stderr);
+    log_rotating_after_write();
+}

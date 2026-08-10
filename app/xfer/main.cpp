@@ -62,6 +62,8 @@ int start_xfr(char daemon)
         std::printf("Starting %s (PID: %d)...\n", kProc.name, getpid());
     }
 
+    process_log_boot_banner(kProc.name);
+
     try_init_ipc();
 
     const upc::xfr::XfrConfig cfg = upc::xfr::load_xfr_config();

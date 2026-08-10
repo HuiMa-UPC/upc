@@ -40,6 +40,8 @@ int start_broker(char daemon)
         std::printf("Starting %s (PID: %d)...\n", kProc.name, getpid());
     }
 
+    process_log_boot_banner(kProc.name);
+
     auto& bus = upc_ipc::IpcMsgBus::instance();
     if (!bus.init_broker(broker_socket_path())) {
         std::fprintf(stderr, "%s listen failed on %s\n",

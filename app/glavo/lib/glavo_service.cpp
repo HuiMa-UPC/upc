@@ -1,9 +1,50 @@
 /**
  * @file glavo_service.cpp
- * @brief Glavo 侧 IPC 服务实现：订阅 UI 请求、驱动解析/打印/McuLink，并推送 Rsp/Ntf。
+ * @brief Glavo 侧 IPC 业务编排：订阅 UI 请求，驱动解析/打印/门控/WiFi，并向 UI/Media 推送 Rsp/Ntf。
  *
- * 消息在 worker 线程中串行处理，避免与解析器/McuLink 产生竞态。
- * 契约见 common/contract/README.md。
+ * =============================================================================
+ * 在系统中的位置
+ * =============================================================================
+ *   UI ──IPC(Broker)──► GlavoService（本文件）
+ *                         ├─ worker 线程：串行处理 UI 消息 + McuLink 作业事件
+ *                         ├─ ParserManager：G-code/OVF → RingBuffer
+ *                         ├─ McuLink（独立 link 线程）：TCP 振镜 + 串口握手/传感器
+ *                         ├─ PrintVideoNotify：换层 Snap / 录像会话 → Media
+ *                         ├─ WifiManager（独立线程）：wpa_supplicant
+ *                         └─ usb_hotplug / clean_worker：按需辅助线程
+ *
+ * 跨进程回复 UI **必须** publish_async()（worker 内禁止同步 publish，以免死锁/卡 IPC）。
+ * 消息契约：common/COMMON.md + upc_contract.hpp；模块说明：app/glavo/GLAVO.md。
+ *
+ * =============================================================================
+ * 线程模型（本类相关）
+ * =============================================================================
+ * - MsgPort 回调线程（IPC 收包）：只做 on_message() 入队，绝不跑业务。
+ * - worker_thread_：唯一业务串行点。处理顺序固定为：
+ *     1) McuLink 作业事件（完成/终止/缺粉…）
+ *     2) 清粉测试完成 / 转运结果（来自 link 回调置位的 pending）
+ *     3) 一条 UI IPC 消息 → handle_message()
+ * - usb_hotplug_thread_：轮询 /proc/mounts，变化时发 GLAVO_USB_Hotplug_Ntf。
+ * - clean_worker_：开门前清粉（风机 + 轮询 PM2.5）；完成后经 publish 回 UI。
+ * - WifiManager / McuLink / Parser 线程不在本文件创建，但通过回调/队列与 worker 汇合。
+ *
+ * =============================================================================
+ * 打印主状态机（读代码时按此顺序跟）
+ * =============================================================================
+ *   Prepare  UI_Print_Prepare_Req
+ *            → USB 复制到本地（若需要）+ 轻量扫行数 + 写 config.json
+ *            → prepare_ready_ / prepared_local_path_
+ *   Start    UI_Print_Start_Req（必须先 Prepare 成功）
+ *            → 若上一作业仍在 terminate：deferred_print_start_，等 TerminateDone 再 launch
+ *            → launch_print_from_prepared：
+ *                 open_file → start_parse → PrintVideoNotify::on_print_start
+ *                 → McuLink::begin_sending
+ *   Progress McuLink progress_callback → send_print_progress（0–95 下发 / 95–99 排空 / 100 完成）
+ *   Pause    仅停 TCP 运动下发（解析可继续；RingBuffer 满则自然阻塞）
+ *   Abort    UI_Print_Terminate_Req → stop_parse + request_terminate + 录像 abort
+ *   Done     McuLinkEvent::PrintCompleted / TerminateDone / PrintError → 清会话、通知 UI
+ *
+ * Local 文件列表：UI 直读 /home/Gcode/config.json；本服务只处理 USB 扫盘与 Prepare/Delete 写清单。
  */
 
 #include "glavo_service.hpp"
@@ -47,15 +88,24 @@ using ::upc::gcode_manifest_remove_at;
 
 /* ============================================================================
  * 文件内辅助常量与工具函数
+ *
+ * 进度映射约定（与 send_print_progress 配套）：
+ *   - 下发段：sent/denom → 0–95（留给 MCU 排空 95–99，避免短文件瞬间跳满）
+ *   - 排空段：用 MCU cmd/data cache rate 估空闲度 → 95–99
+ *   - 100%：只允许 force_complete / job_completed
  * ============================================================================ */
 
 namespace {
 
+/** worker IPC 队列与 link 事件队列深度；满则丢弃并打 Warn（保护内存，不阻塞 IPC 回调） */
 constexpr size_t kWorkerQueueDepth = 64;
+/** 排空段进度节流：rate 变化时至少间隔这么久才再推一帧（ms） */
 constexpr int kDrainProgressMinMs = 200;
 
+/** Fs_DirOpen_Rsp 最大条目数（受 BufferPool inline/缓冲上限约束） */
 constexpr size_t kFsDirMaxEntries =
     (16384u - sizeof(middleware::FsDirHeader)) / sizeof(middleware::FileEntryPayload);
+/** USB 挂载轮询周期 */
 constexpr auto kUsbHotplugPollInterval = std::chrono::milliseconds(300);
 
 /** @brief 本地 G-code 清单配置文件路径 */
@@ -252,7 +302,11 @@ std::string GlavoService::make_full_path(const std::string& dir, const std::stri
 }
 
 /* ============================================================================
- * 生命周期
+ * 生命周期：Idle → init() → Idle → start() → Running → stop() → Idle
+ *
+ * main.cpp 典型顺序：GlavoService::init →（串口打开）→ start → 主循环 port.process
+ * stop/析构会 join worker、停 USB/清粉、停解析、关 WifiManager。
+ * 注意：McuLink::link 线程由 main/McuLink 自己管理，不在本类 stop 里 join。
  * ============================================================================ */
 
 GlavoService::GlavoService() = default;
@@ -287,7 +341,14 @@ uint32_t GlavoService::module_id() noexcept
 }
 
 /**
- * @brief 初始化解析器、McuLink 回调与本地 G-code 清单
+ * @brief 初始化：装配置、挂回调、起 WiFi 管理器；**不起** worker（需再调 start）
+ *
+ * 顺序要点：
+ * 1) cal.csv 覆盖门控/ACK/PM2.5/延时帧率/H264 码率等运行时开关
+ * 2) Parser → RingBuffer sink 绑定到 McuLink（解析产物才能下发）
+ * 3) McuLink 各类回调只「入队/置 pending」，真正业务进 worker_loop
+ * 4) WifiManager::init 会拉起其后台线程（生命周期到 stop）
+ *
  * @return 仅 Idle 状态下可调用，成功返回 true
  */
 bool GlavoService::init()
@@ -395,7 +456,11 @@ bool GlavoService::init()
 }
 
 /**
- * @brief 订阅 IPC 消息并启动 worker 线程
+ * @brief 订阅全部 UI→Glavo MsgType，启动 worker + USB 热插拔监视
+ *
+ * IPC 订阅回调统一落到 on_message（入队），保证业务只在 worker 串行执行。
+ * 启动末尾主动推一次调试开关状态，让 UI 调试页与后端一致。
+ *
  * @return 仅 Idle 状态下可调用，成功返回 true
  */
 bool GlavoService::start()
@@ -484,6 +549,8 @@ bool GlavoService::start()
 
 /**
  * @brief 停止 worker、清空队列与订阅，并终止进行中的打印/准备会话
+ *
+ * 顺序：先停 USB 监视 → join worker（此后不再处理新消息）→ 停打印/清粉 → Wifi shutdown。
  * @return 仅 Running 状态下可调用，成功返回 true
  */
 bool GlavoService::stop()
@@ -519,9 +586,16 @@ bool GlavoService::stop()
 
 /* ============================================================================
  * 消息队列与分发
+ *
+ * 路径：MsgPort 回调 → on_message / enqueue_link_event → worker_cv_ 唤醒
+ *      → worker_loop 按优先级排空 → handle_message / on_mcu_link_event
  * ============================================================================ */
 
-/** @brief IPC 回调入口：将消息入队，队列满则丢弃并打日志 */
+/**
+ * @brief IPC 回调入口（**非** worker 线程）：消息入队，队列满则丢弃并打日志
+ *
+ * 禁止在此做磁盘/串口/解析等重活；只 push + notify。
+ */
 void GlavoService::on_message(const middleware::Message& msg)
 {
     if (state() != ServiceState::Running) return;
@@ -540,6 +614,11 @@ void GlavoService::on_message(const middleware::Message& msg)
     worker_cv_.notify_one();
 }
 
+/**
+ * @brief McuLink 作业事件入队（通常从 link 线程回调进来）
+ *
+ * 与 on_message 共用 worker_mutex_/worker_cv_；满则丢事件（极少见，需查日志）。
+ */
 void GlavoService::enqueue_link_event(McuLinkEvent ev)
 {
     if(state() != ServiceState::Running) {
@@ -558,7 +637,18 @@ void GlavoService::enqueue_link_event(McuLinkEvent ev)
     worker_cv_.notify_one();
 }
 
-/** @brief worker 线程主循环：出队并在 Running 状态下分派 handle_message */
+/**
+ * @brief worker 线程主循环：本类唯一允许跑完整业务逻辑的地方
+ *
+ * 每次被唤醒后的处理优先级（高→低）：
+ *   1. link_event_queue_ —— 打印完成/终止/错误/缺粉（先于 UI 请求，避免状态机竞态）
+ *   2. clean_test_done_pending_ —— MCU 清粉测试结束（串口回调只置位）
+ *   3. transport_result_pending_ —— 转运结果
+ *   4. worker_queue_ 一条 IPC —— handle_message()
+ *
+ * 注意：部分 handler（如真实开门轮询）会阻塞本线程数十～数百 ms；
+ * 期间 UI 请求仍可入队，但要等本轮处理完才会执行。
+ */
 void GlavoService::worker_loop()
 {
     while (worker_running_.load()) {
@@ -624,7 +714,7 @@ void GlavoService::worker_loop()
     }
 }
 
-/** @brief 异步发布 IPC 消息 */
+/** @brief 异步发布 IPC；worker 内发往 UI/Media 的统一出口（禁止改成同步 publish） */
 bool GlavoService::publish_async(const middleware::Message& msg)
 {
     return middleware::MsgPort::instance().publish_async(msg);
@@ -665,7 +755,7 @@ void GlavoService::subscribe(middleware::MsgType type, middleware::MsgHandler ha
     subscriptions_.push_back(std::move(sub));
 }
 
-/** @brief 按消息类型分派到具体 handler */
+/** @brief 按 MsgType 分派到具体 handler（仅应在 worker_loop 内调用） */
 void GlavoService::handle_message(const middleware::Message& msg)
 {
     switch (msg.type) {
@@ -846,6 +936,9 @@ void GlavoService::handle_message(const middleware::Message& msg)
 
 /* ============================================================================
  * 文件系统：目录浏览与删除
+ *
+ * Fs_DirOpen_Req：仅扫 USB（Local 列表 UI 直读 config.json，不经本路径）。
+ * Fs_Delete_Ntf：只删 Local；打印中忽略；若删的是当前 prepare/打开文件则清会话。
  * ============================================================================ */
 
 /** @brief 回复空的 Fs_DirOpen_Rsp（无条目或出错时） */
@@ -1056,6 +1149,17 @@ bool GlavoService::light_scan_line_count(const std::string& path, uint32_t& line
 
 /* ============================================================================
  * 打印流程：准备、启动、终止与进度
+ *
+ * Prepare / Start 拆开的原因：
+ *   - Prepare 可能做 USB 拷贝 + 扫行数 + 写 manifest（偏慢、可失败）
+ *   - Start 才真正开解析线程并让 McuLink 开始吃 RingBuffer
+ *   - UI 可在 Prepare 成功后再走门控/清粉，再发 Start
+ *
+ * 关键成员：
+ *   prepare_ready_ / prepared_local_path_ / prepared_line_count_
+ *   print_running_          —— 业务层“正在印”（与 McuLink::is_sending 不完全等同）
+ *   deferred_print_start_   —— 上一作业 terminate 未完又收到 Start，延后到 TerminateDone
+ *   ignore_powder_low_...   —— 用户点“忽略缺粉”后，本作业不再自动暂停
  * ============================================================================ */
 
 /** @brief 清除 print prepare 会话状态（prepared_local_path_ / prepare_ready_） */
@@ -1202,6 +1306,13 @@ void GlavoService::handle_parser_exit(const middleware::Message& msg)
     clear_prepare_session();
 }
 
+/**
+ * @brief 在已 Prepare 的路径上真正启动一次打印作业
+ *
+ * 调用前须保证：prepare_ready_、路径有效，且 McuLink 不在 terminate 清理中。
+ * 步骤：open_file(带行数 hint) → 重置计数/进度 → start_parse → 通知 Media 录像会话
+ *      → begin_sending（link 线程开始从 RingBuffer 抽运动包）。
+ */
 void GlavoService::launch_print_from_prepared(const std::string& full_path)
 {
     const int line_hint = prepared_line_count_ > 0
@@ -1226,7 +1337,13 @@ void GlavoService::launch_print_from_prepared(const std::string& full_path)
     UPC_LOG_GLAVO_SERVICE(Info, "print_start: path=%s", full_path.c_str());
 }
 
-/** @brief 处理 UI_Print_Start_Req：在已 prepare 的文件上启动解析与 McuLink 发送 */
+/**
+ * @brief 处理 UI_Print_Start_Req：在已 prepare 的文件上启动解析与 McuLink 发送
+ *
+ * 若 link 仍在发送或 terminate 清理中：只 request_terminate + 置 deferred_print_start_，
+ * 真正 launch 推迟到 on_mcu_link_event(TerminateDone/PrintError)。
+ * 基板厚度 plate_thickness_um 写入 McuLink，供串口握手/基板准备使用。
+ */
 void GlavoService::handle_print_start(const middleware::Message& msg)
 {
     middleware::PrintStartReqPayload req{};
@@ -1319,6 +1436,11 @@ void GlavoService::handle_print_resume(const middleware::Message& msg)
     publish_print_pause_done(false);
 }
 
+/**
+ * @brief 用户忽略缺粉告警：本作业内不再因 PowderLow 自动暂停
+ *
+ * 仅影响当前 print_running_ 会话；新作业在 launch 时会清零该标志。
+ */
 void GlavoService::handle_print_powder_low_ignore(const middleware::Message& msg)
 {
     (void)msg;
@@ -1489,6 +1611,7 @@ void GlavoService::publish_print_pause_done(bool paused)
     publish_print_h264_record_pause(paused);
 }
 
+/** @brief 通知 Media 暂停/恢复打印 H264 连续录像（与 UI 暂停态同步） */
 void GlavoService::publish_print_h264_record_pause(bool paused)
 {
     middleware::PrintPauseStatePayload p{};
@@ -1505,6 +1628,7 @@ void GlavoService::publish_print_h264_record_pause(bool paused)
     }
 }
 
+/** @brief 向 UI 推送缺粉告警（通常已先自动 pause） */
 void GlavoService::publish_print_powder_low_ntf()
 {
     middleware::Message ntf(middleware::MsgType::APP_Print_Powder_Low_Ntf,
@@ -1516,10 +1640,13 @@ void GlavoService::publish_print_powder_low_ntf()
 }
 
 /**
- * @brief McuLink 作业事件回调：完成/终止/错误时更新 UI 与本地状态
+ * @brief McuLink 作业事件（已在 worker 线程）：完成/终止/错误/缺粉
  *
- * PrintCompleted → 100% 进度 + Terminate_Done（双通道通知 UI 退出）+ 清会话；
- * TerminateDone/PrintError → 终止完成 Ntf + 清会话。
+ * PrintCompleted → 录像 finish、进度 100%、Terminate_Done（UI 用其退出打印态）、清会话。
+ * TerminateDone / PrintError：
+ *   - 若 deferred_print_start_：立刻 launch 新作业（不再发 abort/清 prepare）
+ *   - 否则：录像 abort、Terminate_Done、清会话。
+ * PowderLow：自动暂停 TCP 下发 + 通知 UI（除非用户已 ignore）。
  */
 void GlavoService::on_mcu_link_event(McuLinkEvent ev)
 {
@@ -1578,7 +1705,11 @@ void GlavoService::on_mcu_link_event(McuLinkEvent ev)
 }
 
 /* ============================================================================
- * UI 设备状态与控制（耗材 / 环境 / 门 / 净化）
+ * UI 设备状态与控制（耗材 / 环境 / 门 / 净化 / 清粉 / 转运）
+ *
+ * 门控：cal.csv 可开「真实传感器」模式；关闭时走占位立即成功（便于无 MCU 联调）。
+ * 开门前清粉（UI_Clean_Start）：独立 clean_worker_，避免堵死 worker 数秒～数分钟。
+ * 清粉测试（Clean_Test）：串口指令 + 同步通知 Media 延时录像；完成由 MCU 回调回灌。
  * ============================================================================ */
 
 /** @brief 回复耗材余量（当前为占位数据） */
@@ -1653,7 +1784,12 @@ void GlavoService::handle_close_door_request(const middleware::Message& msg)
     send_door_rsp(msg, middleware::MsgType::APP_CLOSE_DOOR_Rsp, true);
 }
 
-/** @brief 处理 UI_OpenDoor_Req */
+/**
+ * @brief 处理 UI_OpenDoor_Req
+ *
+ * 真实模式会在 **worker 线程内** sleep 轮询门传感器（最长 GLAVO_DOOR_OPEN_TIMEOUT_MS），
+ * 期间其它 UI 请求只入队不处理——属有意简化，超时宜保持较短。
+ */
 void GlavoService::handle_open_door_request(const middleware::Message& msg)
 {
     if(door_real_open_enabled_) {
@@ -1698,9 +1834,15 @@ void GlavoService::handle_purify_request(const middleware::Message& msg)
 }
 
 
-/** @brief 处理 UI_Clean_Start_Req（开门前清粉）。
- *  业务顺序：设置风机占空比 60% → 开风机 → 每 1s 读取 PM2.5，
- *  直到舱内 PM2.5 < 阈值后关风机，再回 APP_Clean_Start_Rsp。 */
+/**
+ * @brief 处理 UI_Clean_Start_Req（开门前清粉）
+ *
+ * 业务顺序（在 clean_worker_ 中执行，不阻塞 worker 主循环）：
+ *   风机占空比 60% → 开风机 → 每 1s 读舱内 PM2.5
+ *   → 低于阈值（或用户 Stop）→ 关风机 → APP_Clean_Start_Rsp / Stop_Rsp
+ *
+ * Stop：只置 cancel 标志；真正 Rsp 仍由 clean_worker_ 退出路径发出。
+ */
 void GlavoService::handle_clean_start_request(const middleware::Message& msg)
 {
     if(clean_running_.load()) {
@@ -1781,6 +1923,7 @@ void GlavoService::handle_clean_start_request(const middleware::Message& msg)
     });
 }
 
+/** @brief 取消进行中的开门前清粉；未在跑则立即回 Stop_Rsp */
 void GlavoService::handle_clean_stop_request(const middleware::Message& msg)
 {
     if(!clean_running_.load()) {
@@ -1870,6 +2013,11 @@ void GlavoService::notify_clean_video_stop(uint8_t result_code, bool keep_raw)
     (void)publish_async(msg);
 }
 
+/**
+ * @brief MCU 清粉测试完成（worker 内）：停 Media 录像会话，必要时由 Glavo 直接发 Done
+ *
+ * 已开录像时：Done 改由 Media 合成后通知 UI；此处只发 Session_Stop。
+ */
 void GlavoService::on_clean_test_done(uint8_t result_code)
 {
     if(!clean_test_active_) {
@@ -1889,6 +2037,11 @@ void GlavoService::on_clean_test_done(uint8_t result_code)
     }
 }
 
+/**
+ * @brief 启动清粉测试：串口下发 + 通知 Media 开始延时抽帧
+ *
+ * clean_video_record_on_ 仅供调试页状态回读，不再门控是否录像。
+ */
 void GlavoService::handle_clean_test_start_request(const middleware::Message& msg)
 {
     middleware::CleanTestStartReqPayload req{};
@@ -1939,6 +2092,7 @@ void GlavoService::handle_clean_test_close_request(const middleware::Message& ms
     publish_clean_test_close_rsp(static_cast<uint32_t>(msg.sender_id));
 }
 
+/** @brief 处理 UI_Transport_Req：经 McuLink 发一次转运指令，结果异步经 on_transport_result 回 UI */
 void GlavoService::handle_transport_request(const middleware::Message& /*msg*/)
 {
     if(!McuLink::instance().request_transport_once()) {
@@ -1967,6 +2121,9 @@ void GlavoService::on_transport_result(uint8_t result)
 
 /* ============================================================================
  * MCU OTA
+ *
+ * 两路互斥：TCP 振镜 OTA（GLAVO_OTA_IMAGE_DIR）与串口 MCU OTA（MCU_OTA_IMAGE_DIR）。
+ * 状态进度由 McuLink 回调直接 publish_*_ota_status → UI，不经 worker 队列。
  * ============================================================================ */
 
 /** @brief 处理 UI_Mcu_Ota_Start_Req，启动 McuLink OTA 会话 */
@@ -2044,9 +2201,14 @@ void GlavoService::publish_serial_mcu_ota_status(
 }
 
 /* ============================================================================
- * 网络 / WiFi：UI_Wifi_* → WifiManager(ConnMan)，回推 State/Scan/Saved
+ * 网络 / WiFi / USB 热插拔
+ *
+ * UI_Wifi_*：worker 内只把命令丢给 WifiManager（其后台线程跑 wpa_ctrl）。
+ * 状态/列表/连接结果回调在 Wifi 线程触发 → 此处 publish_* 回 UI（异步）。
+ * USB：独立线程轮询挂载点，变化发 GLAVO_USB_Hotplug_Ntf。
  * ============================================================================ */
 
+/** @brief 开关 WiFi（enable=0/1） */
  void GlavoService::handle_wifi_enable(const middleware::Message& msg)
  {
      middleware::WifiEnableReqPayload p{};
@@ -2211,6 +2373,7 @@ void GlavoService::stop_usb_hotplug_monitor()
     }
 }
 
+/** @brief 轮询 USB 挂载点；状态变化则 publish_usb_hotplug（本线程只读 mounts，不跑业务） */
 void GlavoService::usb_hotplug_loop()
 {
     publish_usb_hotplug(last_usb_mounted_);
@@ -2227,6 +2390,10 @@ void GlavoService::usb_hotplug_loop()
 
 /* ============================================================================
  * 调试页手动控制：UI_Debug_* → serial_debug 组帧 → McuLink 串口下发
+ *
+ * 模式统一：读 Inline POD → serial_debug_build_* → debug_tx（可靠串口队列）。
+ * 另有一组“软件开关”不经串口：Print H264 连续录、清粉录像状态回读、环境模拟；
+ * 它们改成员变量 / McuLink / PrintVideoNotify，并 publish 状态给 UI。
  * 振镜（以太网 TCP）、回粉电机后端逻辑预留，故不订阅、不下发。
  * ============================================================================ */
 
