@@ -82,6 +82,24 @@ void PrintH264Recorder::set_finalize_done_callback(std::function<void()> cb) {
     finalize_done_cb_ = std::move(cb);
 }
 
+void PrintH264Recorder::set_storage_budget_guard(std::function<bool()> cb) {
+    std::lock_guard<std::mutex> lock(mtx_);
+    storage_budget_guard_ = std::move(cb);
+}
+
+std::string PrintH264Recorder::current_session_dir() const {
+    std::lock_guard<std::mutex> lock(mtx_);
+    if(!active_) {
+        return {};
+    }
+    return session_dir_;
+}
+
+bool PrintH264Recorder::session_active() const {
+    std::lock_guard<std::mutex> lock(mtx_);
+    return active_;
+}
+
 bool PrintH264Recorder::create_final_thumb(const char* out_path) const {
     std::vector<uint8_t> nv12;
     uint32_t width = 0;
@@ -395,6 +413,18 @@ void PrintH264Recorder::run_write_frame_job(const Job& job) {
     void* ctx = nullptr;
     void* mpi = nullptr;
     FILE* out_fp = nullptr;
+    std::function<bool()> guard;
+    {
+        std::lock_guard<std::mutex> lock(mtx_);
+        if(job.session_seq != session_seq_ || had_write_error_ || job.nv12.size() < need) return;
+        guard = storage_budget_guard_;
+    }
+    if(guard && !guard()) {
+        UPC_LOG_MEDIA_SERVICE(
+            Warn, "STORCHK_SKIP_WRITE kind=print_h264 reason=budget_unavailable session=%s",
+            job.session_id.c_str());
+        return;
+    }
     {
         std::lock_guard<std::mutex> lock(mtx_);
         if(job.session_seq != session_seq_ || had_write_error_ || job.nv12.size() < need) return;

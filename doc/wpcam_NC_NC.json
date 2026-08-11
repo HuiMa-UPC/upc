@@ -23,11 +23,11 @@
 			},
 			"CISDgainRange": {
 				"Min": 1,
-				"Max": 1
+				"Max": 2
 			},
 			"CISIspDgainRange": {
 				"Min": 1,
-				"Max": 1
+				"Max": 2
 			},
 			"CISHdrGainIndSetEn": 0
 		},
@@ -135,7 +135,7 @@
 							"CommCtrl": {
 								"Enable": 1,
 								"AecRunInterval": 0,
-								"AecOpType": "RK_AIQ_OP_MODE_MANUAL",
+								"AecOpType": "RK_AIQ_OP_MODE_AUTO",
 								"HistStatsMode": "CAM_HISTV2_MODE_Y",
 								"RawStatsMode": "CAM_RAWSTATSV2_MODE_Y",
 								"YRangeMode": "CAM_YRANGEV2_MODE_FULL",
@@ -173,10 +173,10 @@
 								"AecManualCtrl": {
 									"LinearAE": {
 										"ManualTimeEn": 1,
-										"ManualGainEn": 0,
-										"ManualIspDgainEn": 0,
-										"TimeValue": 0.05,
-										"GainValue": 1,
+										"ManualGainEn": 1,
+										"ManualIspDgainEn": 1,
+										"TimeValue": 0.001,
+										"GainValue": 32,
 										"IspDGainValue": 1
 									},
 									"HdrAE": {
@@ -626,7 +626,7 @@
 						"wb_v21": {
 							"control": {
 								"byPass": 0,
-								"mode": "CALIB_WB_MODE_AUTO"
+								"mode": "CALIB_WB_MODE_MANUAL"
 							},
 							"manualPara": {
 								"mode": "CALIB_MWB_MODE_SCENE",
@@ -634,7 +634,7 @@
 									"mwbGain": [1.32703, 1, 1, 3.31432],
 									"scene": "CALIB_WB_SCENE_CLOUDY_DAYLIGHT",
 									"cct": {
-										"CCT": 5000,
+										"CCT": 2800,
 										"CCRI": 0
 									}
 								}
@@ -1419,7 +1419,7 @@
 									"sensorWbGain": [1, 1, 1, 1]
 								},
 								"wbGainOffset": {
-									"enable": 0,
+									"enable": 1,
 									"offset": [0, 0, 0, 0]
 								}
 							}
@@ -1430,12 +1430,12 @@
 								"Gamma_out_segnum": "GAMMATYPE_LOG",
 								"Gamma_out_offset": 0,
 								"Gamma_curve": [
-									0, 5, 9, 14, 18, 23, 27, 32,
-									36, 45, 54, 63, 72, 90, 108, 126,
-									144, 180, 216, 252, 288, 358, 428, 497,
-									565, 696, 820, 937, 1044, 1228, 1381, 1513,
-									1634, 1870, 2082, 2251, 2390, 2633, 2847, 3045,
-									3220, 3543, 3796, 3991, 4095
+									0, 22, 35, 49, 59, 72, 82, 93,
+									102, 121, 140, 158, 175, 208, 240, 271,
+									301, 358, 413, 465, 516, 612, 703, 790,
+									874, 1028, 1168, 1296, 1410, 1601, 1754, 1884,
+									2000, 2222, 2416, 2568, 2691, 2902, 3084, 3250,
+									3395, 3658, 3860, 4014, 4095
 								]
 							}
 						},

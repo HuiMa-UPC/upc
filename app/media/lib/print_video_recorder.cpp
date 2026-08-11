@@ -228,6 +228,27 @@ void PrintVideoRecorder::set_print_thumb_provider(
     print_thumb_provider_ = std::move(fn);
 }
 
+void PrintVideoRecorder::set_storage_budget_guard(std::function<bool()> fn)
+{
+    std::lock_guard<std::mutex> lock(mtx_);
+    storage_budget_guard_ = std::move(fn);
+}
+
+std::string PrintVideoRecorder::current_session_dir() const
+{
+    std::lock_guard<std::mutex> lock(mtx_);
+    if(!session_active_) {
+        return {};
+    }
+    return session_dir_;
+}
+
+bool PrintVideoRecorder::session_active() const
+{
+    std::lock_guard<std::mutex> lock(mtx_);
+    return session_active_;
+}
+
 void PrintVideoRecorder::worker_fn()
 {
     while(!stop_.load()) {
@@ -337,6 +358,19 @@ bool PrintVideoRecorder::encode_nv12_to_png(const uint8_t* nv12,
 
 bool PrintVideoRecorder::handle_layer_snap(const PrintVideoJob& job)
 {
+    std::function<bool()> guard;
+    {
+        std::lock_guard<std::mutex> lock(mtx_);
+        guard = storage_budget_guard_;
+    }
+    if(guard && !guard()) {
+        UPC_LOG_MEDIA_SERVICE(
+            Warn,
+            "STORCHK_SKIP_WRITE kind=timelapse_png reason=budget_unavailable session=%s layer=%u",
+            session_id_.c_str(), job.layer_index);
+        return false;
+    }
+
     std::vector<uint8_t> nv12;
     if(!grab_latest_nv12(nv12)) {
         UPC_LOG_MEDIA_SERVICE(Warn,
@@ -383,18 +417,41 @@ void PrintVideoRecorder::finalize_session(bool aborted)
     }
     const uint32_t frames = frame_count_;
     if(frames == 0) {
+        const std::string h264_path = session_dir_ + "/print.h264";
+        std::error_code h264_ec;
+        const bool h264_exists = std::filesystem::exists(h264_path, h264_ec) && !h264_ec;
+        const uintmax_t h264_size =
+            h264_exists ? std::filesystem::file_size(h264_path, h264_ec) : 0u;
+        const bool h264_non_empty = h264_exists && !h264_ec && h264_size > 0u;
         UPC_LOG_MEDIA_SERVICE(
             Warn,
             "print_video %s with no frames session=%s (no manifest)",
             aborted ? "abort" : "finish",
             session_id_.c_str());
+        if(h264_non_empty && h264_continuous_on_) {
+            /* 仅有打印录像时也要保留一条可 finalize 的记录，避免空请求触发 cleanup 丢片。 */
+            const bool manifest_quick_ok = upsert_print_history(
+                aborted,
+                UPC_VIDEO_TMP_NAME,
+                std::string{},
+                std::string{},
+                false,
+                true);
+            notify_manifest_ready(UPC_VIDEO_TMP_NAME, manifest_quick_ok, aborted, false);
+            UPC_LOG_MEDIA_SERVICE(
+                Info,
+                "print_video h264-only entry kept session=%s h264_bytes=%llu",
+                session_id_.c_str(),
+                static_cast<unsigned long long>(h264_size));
+        } else {
         /* 仅在目录为空时做轻量清理：避免留下空 __work 目录；
          * 非空目录（可能有 H264 后台产物）保持不动。 */
-        if(remove_empty_dir_if_exists(session_dir_)) {
-            UPC_LOG_MEDIA_SERVICE(
-                Info, "print_video removed empty work dir=%s", session_dir_.c_str());
+            if(remove_empty_dir_if_exists(session_dir_)) {
+                UPC_LOG_MEDIA_SERVICE(
+                    Info, "print_video removed empty work dir=%s", session_dir_.c_str());
+            }
+            notify_manifest_ready(std::string{}, false, aborted, false);
         }
-        notify_manifest_ready(std::string{}, false, aborted, false);
         session_id_.clear();
         session_name_.clear();
         session_dir_.clear();
@@ -663,6 +720,8 @@ void PrintVideoRecorder::finalize_after_exit(const char* frames_dir)
     hit->print_video_pending = false;
     hit->clean_first_png = 0;
     hit->clean_last_png = 0;
+    /* 结果页已退出才进 finalize；即便先前 commit 因盘满失败，这里也标可见。 */
+    hit->committed = true;
 
     /* 同名覆盖：把“旧正式条目 + 本次 __work 条目”合并为一条最终条目。 */
     const upc::PrintHistoryEntry merged_entry = *hit;

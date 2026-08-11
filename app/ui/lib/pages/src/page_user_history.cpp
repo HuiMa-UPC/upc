@@ -1983,10 +1983,17 @@ void rebuild_list(void)
     std::vector<upc::PrintHistoryEntry> entries;
     (void)upc::print_history_manifest_load(UPC_PRINT_VIDEO_MANIFEST, entries);
 
-    /* 未 commit 的条目（结果页还没退出）先不进历史页 */
+    /* 未 commit：结果页未退出前通常隐藏。
+     * 盘满时 commit 写不出 config.json，会永久卡在 committed=false；
+     * 若条目已有可展示/可删媒体，仍进列表，否则用户无法腾空间。 */
     entries.erase(
         std::remove_if(entries.begin(), entries.end(),
-            [](const upc::PrintHistoryEntry& e) { return !e.committed; }),
+            [](const upc::PrintHistoryEntry& e) {
+                if(e.committed) {
+                    return false;
+                }
+                return entry_media_empty(e);
+            }),
         entries.end());
 
     /* 时间倒序（最新在上） */

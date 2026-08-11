@@ -49,12 +49,16 @@ private:
     /** 开机/开打前：尽力收尾 pending，再清空 tmp 与遗留 __work_* */
     void recover_pending_and_reset_tmp();
     void remove_legacy_work_dirs() const;
-    void clear_video_tmp_dir() const;
+    bool clear_video_tmp_dir() const;
     void drop_orphan_pending_flags() const;
+    bool reclaim_orphan_or_stale_pending_for_budget() const;
+    bool is_protected_frames_dir(const std::string& frames_dir) const;
     /** 环形录像区回收：删除最旧的已提交完整会话直至满足 80% 配额与系统余量。 */
     bool ensure_video_storage_budget() const;
     static uint64_t query_directory_bytes(const char* path);
     bool evict_oldest_committed_video() const;
+    /** 结果页退出：先腾空间再 commit；失败则逐个删最旧已提交会话后重试。 */
+    bool commit_history_with_space(const char* frames_dir);
     /** 0~100；失败返回 -1 */
     int query_storage_used_pct() const;
     void apply_storage_watermark(middleware::PrintVideoSessionPayload& info);
@@ -136,6 +140,7 @@ private:
     uint32_t stream_fps_ = 0;
 
     mutable std::mutex finalize_mtx_;
+    mutable std::mutex storage_mtx_;
     bool clean_video_active_ = false;
     bool finalize_pending_ = false;
     std::string pending_finalize_frames_dir_;

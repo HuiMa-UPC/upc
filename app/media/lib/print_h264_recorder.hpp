@@ -43,6 +43,10 @@ public:
     void on_frame_nv12(const uint8_t* src_y, const uint8_t* src_uv, uint32_t stride_y);
     /** 清理固定临时目录内残留的 print.h264 / print_h264.mp4 */
     void enqueue_cleanup_tmp();
+    /** 关键写盘前预算检查；返回 false 时本帧写入跳过。 */
+    void set_storage_budget_guard(std::function<bool()> cb);
+    std::string current_session_dir() const;
+    bool session_active() const;
 
 private:
     enum class JobKind : uint8_t {
@@ -114,6 +118,7 @@ private:
     void* mpp_cfg_ = nullptr;
     bool mpp_ready_ = false;
     std::function<void()> finalize_done_cb_;
+    std::function<bool()> storage_budget_guard_;
 };
 
 } // namespace upc::media

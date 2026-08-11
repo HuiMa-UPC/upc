@@ -64,6 +64,11 @@ public:
     /** 磁盘紧张时跳过本会话层间拍照（仍允许会话结束发 manifest）。 */
     void set_layer_snap_enabled(bool enabled);
     void set_sender_module_id(middleware::ModuleId module_id);
+    /** 关键写盘前预算检查；返回 false 时本次写盘跳过。 */
+    void set_storage_budget_guard(std::function<bool()> fn);
+    /** 当前会话目录（空=无活跃会话）。 */
+    std::string current_session_dir() const;
+    bool session_active() const;
 
     /**
      * 设置 NV12 快照回调。回调返回紧凑 NV12（stride==width）帧数据。
@@ -106,7 +111,7 @@ private:
     static std::string sanitize_filename(const char* name);
     static int run_shell_cmd(const char* cmd, const char* log_tag);
 
-    std::mutex              mtx_;
+    mutable std::mutex      mtx_;
     std::condition_variable cv_;
     std::queue<PrintVideoJob> jobs_;
     std::thread             worker_;
@@ -114,6 +119,7 @@ private:
 
     std::function<bool(std::vector<uint8_t>&)> snapshot_provider_;
     std::function<bool(const char*)> print_thumb_provider_;
+    std::function<bool()> storage_budget_guard_;
 
     bool     session_active_ = false;
     bool     layer_snap_enabled_ = true; /**< false=磁盘水位告警，跳过层拍 */

@@ -58,7 +58,7 @@
 #if UPC_DEBUG
 
 #ifndef UPC_MOD_MSG_BUS
-#define UPC_MOD_MSG_BUS 1
+#define UPC_MOD_MSG_BUS 0
 #endif
 #ifndef UPC_MOD_IPC
 #define UPC_MOD_IPC 1

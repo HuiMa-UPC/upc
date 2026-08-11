@@ -39,7 +39,9 @@ struct PrintHistoryEntry {
     bool                video_pending = false; /**< 1=后台仍在生成延时摄影视频 */
     /** 1=本次会话开了连续 H264，且 print_h264.mp4 尚未落盘（Print History 用） */
     bool                print_video_pending = false;
-    bool                committed = true; /**< 1=历史页可见；0=结果页未退出前隐藏 */
+    /** 1=历史页应可见；0=结果页未退出前隐藏。
+     * UI 兜底：若为 0 但已有可删媒体（盘满导致 commit 失败），仍显示。 */
+    bool                committed = true;
     uint32_t            clean_first_png = 0; /**< 清粉首帧序号（含）；0=无清粉追加 */
     uint32_t            clean_last_png = 0;  /**< 清粉末帧序号（含）；0=无清粉追加 */
 };
