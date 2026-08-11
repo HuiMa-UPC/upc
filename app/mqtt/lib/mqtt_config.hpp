@@ -7,7 +7,7 @@ namespace upc::mqtt {
 
 /** MQTT 服务总开关：1=正常启动并运行；0=启动命令直接跳过服务逻辑 */
 #ifndef UPC_MQTT_SERVICE_ENABLE
-#define UPC_MQTT_SERVICE_ENABLE 0
+#define UPC_MQTT_SERVICE_ENABLE 1
 #endif
 
 /** MQTT 接收原始帧日志：1=打印 topic/payload，0=关闭；仍受 UPC_DEBUG/UPC_MOD_MQTT_SERVICE 总开关控制 */
@@ -31,13 +31,16 @@ struct MqttConfig {
     std::string credential_file;
     int keepalive_sec = 60;
     int qos_telemetry = 1;
+    int qos_heartbeat = 1;
     int qos_ack = 1;
+    int heartbeat_interval_sec = 30;
     bool clean_session = true;
 
     [[nodiscard]] std::string topic_prefix() const;
     [[nodiscard]] std::string topic_cmd() const;
     [[nodiscard]] std::string topic_cmd_ack() const;
     [[nodiscard]] std::string topic_telemetry_chamber() const;
+    [[nodiscard]] std::string topic_heartbeat() const;
 };
 
 MqttConfig load_mqtt_config();

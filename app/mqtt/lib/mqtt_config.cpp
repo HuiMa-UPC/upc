@@ -47,6 +47,11 @@ std::string MqttConfig::topic_telemetry_chamber() const
     return topic_prefix() + "telemetry/chamber";
 }
 
+std::string MqttConfig::topic_heartbeat() const
+{
+    return topic_prefix() + "heartbeat";
+}
+
 MqttConfig load_mqtt_config()
 {
     MqttConfig cfg;
@@ -60,7 +65,9 @@ MqttConfig load_mqtt_config()
         "SNOWPOD_MQTT_CREDENTIAL_FILE", "/data/snowpod/mqtt-credential");
     cfg.keepalive_sec = get_env_int_or_default("SNOWPOD_MQTT_KEEPALIVE_SEC", 60);
     cfg.qos_telemetry = get_env_int_or_default("SNOWPOD_MQTT_QOS_TELEMETRY", 1);
+    cfg.qos_heartbeat = get_env_int_or_default("SNOWPOD_MQTT_QOS_HEARTBEAT", 1);
     cfg.qos_ack = get_env_int_or_default("SNOWPOD_MQTT_QOS_ACK", 1);
+    cfg.heartbeat_interval_sec = get_env_int_or_default("SNOWPOD_MQTT_HEARTBEAT_INTERVAL_SEC", 30);
     cfg.clean_session = get_env_int_or_default("SNOWPOD_MQTT_CLEAN_SESSION", 1) != 0;
 
     if(cfg.client_id.empty()) {
@@ -72,8 +79,14 @@ MqttConfig load_mqtt_config()
     if(cfg.qos_telemetry < 0 || cfg.qos_telemetry > 1) {
         cfg.qos_telemetry = 1;
     }
+    if(cfg.qos_heartbeat < 0 || cfg.qos_heartbeat > 1) {
+        cfg.qos_heartbeat = 1;
+    }
     if(cfg.qos_ack < 0 || cfg.qos_ack > 1) {
         cfg.qos_ack = 1;
+    }
+    if(cfg.heartbeat_interval_sec <= 0) {
+        cfg.heartbeat_interval_sec = 30;
     }
     return cfg;
 }

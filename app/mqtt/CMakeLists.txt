@@ -34,3 +34,8 @@ target_compile_options(rongsu_mqtt
         $<$<CONFIG:Debug>:-O0>
         $<$<CONFIG:Release>:-O2>
 )
+
+target_compile_definitions(rongsu_mqtt
+    PRIVATE
+        "UPC_SW_VERSION=\"${UPC_PRODUCT_VERSION}\""
+)

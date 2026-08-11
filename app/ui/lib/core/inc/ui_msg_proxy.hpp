@@ -24,6 +24,7 @@ using CleanTestStartRspCb = std::function<void(bool accepted)>;
 using CleanTestDoneCb = std::function<void(const middleware::CleanTestDonePayload&)>;
 using CleanTestCloseRspCb = std::function<void()>;
 using TransportResultCb = std::function<void(uint8_t result)>;
+using FsDeleteRspCb     = std::function<void(const middleware::FsDeleteRspPayload&)>;
 using FsDirCb          = std::function<void(const middleware::FileEntryPayload* files,
                                             uint32_t count)>;
 using PrintProgressCb  = std::function<void(const middleware::PrintProgressPayload&)>;
@@ -118,6 +119,7 @@ public:
 
     /** Local 详情页删除确认：通知 Glavo 删文件 + 更新 config.json */
     void send_fs_delete_ntf(uint32_t file_index, middleware::PrintFileSource source);
+    void register_fs_delete_rsp(FsDeleteRspCb cb);
 
     void register_fs_dir(FsDirCb cb);
 
@@ -189,6 +191,7 @@ private:
     CleanTestDoneCb clean_test_done_cb_;
     CleanTestCloseRspCb clean_test_close_rsp_cb_;
     TransportResultCb transport_result_cb_;
+    FsDeleteRspCb     fs_delete_rsp_cb_;
     FsDirCb          fs_dir_cb_;
     PrintProgressCb  print_progress_cb_;
     PrintTerminateDoneCb print_terminate_done_cb_;

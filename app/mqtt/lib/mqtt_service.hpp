@@ -37,6 +37,8 @@ private:
         float oxygen_percent = 0.0f;
         float temperature_c = 0.0f;
         uint32_t status = 0;
+        bool wifi_connected = false;
+        int signal_bars = -1;
         bool has_value = false;
     };
 
@@ -80,6 +82,7 @@ private:
     void join_activation_thread();
 
     bool publish_chamber_telemetry();
+    bool publish_heartbeat();
     bool publish_cmd_ack(const std::string& req_id,
                          const std::string& cmd,
                          const std::string& result,
@@ -114,6 +117,9 @@ private:
                                   int topic_len, MQTTClient_message* message);
     static uint64_t monotonic_ms();
     static int64_t unix_ms();
+    static std::string read_boot_id();
+    static int64_t read_uptime_s();
+    static int bars_to_rssi_dbm(int bars, bool connected);
 
     static bool json_extract_string(const std::string& json, const char* key,
                                     std::string& out);
@@ -155,6 +161,8 @@ private:
     std::mutex data_mtx_;
     ChamberTelemetry latest_{};
     uint64_t last_telemetry_pub_ms_ = 0;
+    uint64_t last_heartbeat_pub_ms_ = 0;
+    std::string boot_id_;
 
     std::mutex pending_mtx_;
     std::unordered_map<std::string, PendingAck> pending_acks_;

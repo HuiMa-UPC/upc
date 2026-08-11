@@ -119,6 +119,15 @@ void UiMsgProxy::init()
         }));
 
     subs_.push_back(bus.subscribe(
+        middleware::MsgType::APP_Fs_Delete_Rsp, middleware::ModuleId::UI,
+        [this](const middleware::Message& msg) {
+            middleware::FsDeleteRspPayload p{};
+            if (fs_delete_rsp_cb_ && read_inline_pod(msg, p)) {
+                fs_delete_rsp_cb_(p);
+            }
+        }));
+
+    subs_.push_back(bus.subscribe(
         middleware::MsgType::Fs_DirOpen_Rsp, middleware::ModuleId::UI,
         [this](const middleware::Message& msg) {
             if (!fs_dir_cb_) {
@@ -628,6 +637,11 @@ void UiMsgProxy::send_fs_delete_ntf(uint32_t file_index, middleware::PrintFileSo
     const middleware::FsDeleteNtfPayload payload{file_index, source, {}};
     publish_pod(middleware::MsgType::Fs_Delete_Ntf,
                 middleware::ModuleId::APP_GLAVO, payload);
+}
+
+void UiMsgProxy::register_fs_delete_rsp(FsDeleteRspCb cb)
+{
+    fs_delete_rsp_cb_ = std::move(cb);
 }
 
 void UiMsgProxy::register_fs_dir(FsDirCb cb)

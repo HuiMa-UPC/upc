@@ -758,35 +758,39 @@ void MediaService::finalize_print_video_by_stage(const std::string& frames_dir)
     if(frames_dir.empty()) {
         return;
     }
-
     bool h264_pending = false;
     {
         std::lock_guard<std::mutex> lock(finalize_mtx_);
         h264_pending = h264_finalize_pending_;
     }
-
-    (void)ensure_video_storage_budget();
-    print_video_.finalize_after_exit(frames_dir.c_str(), !h264_pending);
-
+    /* H264 已收尾：直接进第二阶段，避免重复 finalize/重复通知。 */
     if(!h264_pending) {
+        finalize_print_video_stage2(frames_dir);
         return;
     }
 
-    bool need_immediate_h264_finalize = false;
+    /* H264 仍在收尾：先释放 Timelapse（清 video_pending），打印录像留到第二阶段。 */
+    (void)ensure_video_storage_budget();
+    print_video_.finalize_after_exit(frames_dir.c_str(), false);
+
     {
         std::lock_guard<std::mutex> lock(finalize_mtx_);
         if(h264_finalize_pending_) {
             finalize_pending_ = true;
             pending_finalize_frames_dir_ = frames_dir;
-        } else {
-            need_immediate_h264_finalize = true;
+            return;
         }
     }
+    finalize_print_video_stage2(frames_dir);
+}
 
-    if(need_immediate_h264_finalize) {
-        (void)ensure_video_storage_budget();
-        print_video_.finalize_after_exit(frames_dir.c_str(), true);
+void MediaService::finalize_print_video_stage2(const std::string& frames_dir)
+{
+    if(frames_dir.empty()) {
+        return;
     }
+    (void)ensure_video_storage_budget();
+    print_video_.finalize_after_exit(frames_dir.c_str(), true);
 }
 
 void MediaService::on_print_h264_finalize_done()
@@ -798,7 +802,7 @@ void MediaService::on_print_h264_finalize_done()
         finalize_frames_dir = take_ready_finalize_locked();
     }
     if(!finalize_frames_dir.empty()) {
-        finalize_print_video_by_stage(finalize_frames_dir);
+        finalize_print_video_stage2(finalize_frames_dir);
     }
 }
 

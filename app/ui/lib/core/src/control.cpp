@@ -604,6 +604,25 @@ void wire_msg_proxy()
         apply_files_list(next);
     });
 
+    proxy.register_fs_delete_rsp([](const middleware::FsDeleteRspPayload &p) {
+        if(static_cast<middleware::PrintFileSource>(p.file_source) !=
+           middleware::PrintFileSource::Local) {
+            return;
+        }
+        if(p.ok) {
+            if(g_file_tab == FileTab::Local) {
+                request_fs_dir_open(FileTab::Local);
+            }
+            return;
+        }
+        const auto reason = static_cast<middleware::FsDeleteResult>(p.reason);
+        if(reason == middleware::FsDeleteResult::BusyPrinting) {
+            ui_toast_show("Cannot delete while printing", user_color_status_err, 2200);
+        } else {
+            ui_toast_show("Delete failed", user_color_status_err, 2200);
+        }
+    });
+
     proxy.register_supply_status([](const middleware::SupplyStatusPayload &p) {
         g_supply = p;
         refresh_supply_bars();
@@ -2026,7 +2045,6 @@ void on_delete_confirm(lv_event_t * /*e*/)
     g_active_file = {};
     reset_plate_thickness();
     update_detail_panel(nullptr);
-    request_fs_dir_open(FileTab::Local);
 }
 
 /* 通用二次确认弹窗（用户层 ui_modal_dialog 风格）：取消(4% 白底) + 确认(填充色)。

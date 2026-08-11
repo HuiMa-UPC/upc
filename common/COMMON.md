@@ -153,6 +153,7 @@ scripts/rongsu.sh start   # glavo + rongsu_camera → ui
 | `Fs_DirOpen_Req` | `FS_Dir_Open_Req` | UI→Glavo | `PrintFileSource`（仅 USB） | `send_fs_dir_open` | Local 不走 IPC，UI 直读 `/home/Gcode/config.json` |
 | `Fs_DirOpen_Rsp` | `FS_Dir_Open_Rsp` | Glavo→UI | `FsDirHeader` + `FileEntryPayload[]` | `register_fs_dir` | **仅 USB** 扫盘应答 |
 | `Fs_Delete_Ntf` | `FS_Delete_Ntf` | UI→Glavo | `FsDeleteNtfPayload` | `send_fs_delete_ntf` | 删 Local 文件 + 更新 config.json |
+| `APP_Fs_Delete_Rsp` | — | Glavo→UI | `FsDeleteRspPayload` | `register_fs_delete_rsp` | Local 删除完成/失败回执；UI 收到 `ok=1` 后刷新本地目录 |
 | `UI_OpenDoor_Req` | — | UI→Glavo | Empty | `send_open_door` | 开门 |
 | `APP_OpenDoor_Rsp` | `GLAVO_Door_Open_Rsp` | Glavo→UI | `DoorResultPayload` | `register_open_door_result` | — |
 | `UI_Purify_Req` | — | UI→Glavo | Empty | `send_purify` | 净化（待实现） |

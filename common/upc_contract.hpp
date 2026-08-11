@@ -451,6 +451,7 @@ enum class MsgType : uint32_t {
     // ---- UI ↔ GLAVO：MCU 固件版本查询（串口 PORT_GENERAL_TASK 0xA2 / CMD_PROJECT_INFO 0x10） ----
     UI_Mcu_Version_Req = 0x1500, /**< Empty：进入 Settings/About 页时查询一次 */
     GLAVO_Mcu_Version_Ntf,       /**< McuVersionPayload：MCU 固件版本 + 板级配置 */
+    APP_Fs_Delete_Rsp,           /**< FsDeleteRspPayload：本地文件删除回执 */
 
 };
 
@@ -645,6 +646,24 @@ struct PrintStartReqPayload {
 
 /** Fs_Delete_Ntf 载荷：文件来源 + 索引（Local 列表删除） */
 using FsDeleteNtfPayload = PrintPrepareReqPayload;
+
+/** APP_Fs_Delete_Rsp：本地删除结果（UI 收到 ok=1 后再刷新 Local 目录）。 */
+enum class FsDeleteResult : uint8_t {
+    Ok = 0,
+    InvalidPayload = 1,
+    OnlyLocalSupported = 2,
+    BusyPrinting = 3,
+    IndexOutOfRange = 4,
+    ManifestUpdateFailed = 5,
+};
+
+struct FsDeleteRspPayload {
+    uint32_t file_index;        /**< 回显请求索引 */
+    uint8_t  file_source;       /**< PrintFileSource */
+    uint8_t  ok;                /**< 1=删除并落盘成功 0=失败 */
+    uint8_t  reason;            /**< FsDeleteResult */
+    uint8_t  reserved;
+};
 
 /** APP_Print_Pause_Rsp 载荷：暂停/恢复状态响应（Inline；Pause/Resume Req 共用） */
 struct PrintPauseStatePayload {

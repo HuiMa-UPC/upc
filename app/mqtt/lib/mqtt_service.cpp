@@ -9,6 +9,7 @@
 #include <cstdlib>
 #include <cstdio>
 #include <cstring>
+#include <fstream>
 #include <string>
 
 namespace upc::mqtt {
@@ -26,6 +27,10 @@ constexpr const char* kCmdStopRtspPush = "stop_rtsp_push";
 constexpr const char* kCmdRejectReasonInvalidState = "invalid_state";
 constexpr const char* kCmdRejectReasonEncoderError = "encoder_error";
 constexpr uint64_t kRtspAckTimeoutMs = 8000;
+
+#ifndef UPC_SW_VERSION
+#define UPC_SW_VERSION "unknown"
+#endif
 
 #if UPC_DEBUG && UPC_MOD_MQTT_SERVICE
 /**
@@ -114,6 +119,7 @@ MqttService::~MqttService()
 bool MqttService::init()
 {
     cfg_ = load_mqtt_config();
+    boot_id_ = read_boot_id();
     credential_store_ = MqttCredentialStore(cfg_.credential_file);
 
     ActivatedMqttCredential saved_credential;
@@ -131,13 +137,15 @@ bool MqttService::init()
     subscribe_messages();
 
     UPC_LOG_MQTT_SERVICE(Info,
-        "cfg broker=%s prefix=%s client=%s user=%s qos(tele=%d ack=%d) credential=%s",
+        "cfg broker=%s prefix=%s client=%s user=%s qos(tele=%d hb=%d ack=%d) hb=%ds credential=%s",
         cfg_.broker_uri.c_str(),
         cfg_.topic_prefix().c_str(),
         cfg_.client_id.c_str(),
         cfg_.username.c_str(),
         cfg_.qos_telemetry,
+        cfg_.qos_heartbeat,
         cfg_.qos_ack,
+        cfg_.heartbeat_interval_sec,
         credentials_ready_ ? "ready" : "activation-required");
 
     return true;
@@ -171,6 +179,7 @@ void MqttService::tick()
 
     MQTTClient_yield();
     (void)publish_chamber_telemetry();
+    (void)publish_heartbeat();
     expire_pending_acks();
 }
 
@@ -219,7 +228,8 @@ void MqttService::cache_telemetry(const middleware::EnvSnapshotPayload& p)
         (p.oxygen_percent < 0.0f) &&
         (p.temperature_c < 0.0f);
     if(env_invalid) {
-        latest_ = ChamberTelemetry{};
+        latest_.wifi_connected = p.wifi_connected != 0;
+        latest_.signal_bars = p.signal_bars;
         latest_.has_value = false;
         return;
     }
@@ -227,6 +237,8 @@ void MqttService::cache_telemetry(const middleware::EnvSnapshotPayload& p)
     latest_.oxygen_percent = p.oxygen_percent;
     latest_.temperature_c = p.temperature_c;
     latest_.status = p.status;
+    latest_.wifi_connected = p.wifi_connected != 0;
+    latest_.signal_bars = p.signal_bars;
     latest_.has_value = true;
 }
 
@@ -388,6 +400,7 @@ bool MqttService::connect_mqtt()
     }
 
     mqtt_connected_ = true;
+    last_heartbeat_pub_ms_ = 0;
     if(!subscribe_cmd_topic()) {
         disconnect_mqtt();
         return false;
@@ -500,6 +513,86 @@ bool MqttService::publish_chamber_telemetry()
     }
     UPC_LOG_MQTT_SERVICE(Debug,
         "MQTT TX telemetry queued topic=%s token=%d",
+        topic.c_str(), static_cast<int>(token));
+    return true;
+}
+
+bool MqttService::publish_heartbeat()
+{
+    const uint64_t now = monotonic_ms();
+    const uint64_t interval_ms =
+        static_cast<uint64_t>(cfg_.heartbeat_interval_sec) * 1000ULL;
+    if(last_heartbeat_pub_ms_ != 0 &&
+       now - last_heartbeat_pub_ms_ < interval_ms) {
+        return false;
+    }
+
+    bool wifi_connected = false;
+    int signal_bars = -1;
+    {
+        std::lock_guard<std::mutex> lock(data_mtx_);
+        wifi_connected = latest_.wifi_connected;
+        signal_bars = latest_.signal_bars;
+    }
+
+    const uint32_t seq = ++seq_;
+    const long long ts = static_cast<long long>(unix_ms());
+    const long long uptime_s = read_uptime_s();
+    const int rssi = bars_to_rssi_dbm(signal_bars, wifi_connected);
+    const char* network_type = wifi_connected ? "wifi" : "none";
+    const std::string escaped_device = json_escape(cfg_.device_id);
+    const std::string escaped_boot = json_escape(boot_id_);
+    const std::string escaped_fw = json_escape(UPC_SW_VERSION);
+
+    char payload[1024];
+    std::snprintf(payload, sizeof(payload),
+        "{"
+        "\"v\":1,"
+        "\"type\":\"heartbeat\","
+        "\"device_id\":\"%s\","
+        "\"ts\":%lld,"
+        "\"seq\":%u,"
+        "\"data\":{"
+            "\"boot_id\":\"%s\","
+            "\"uptime_s\":%lld,"
+            "\"firmwares\":[{\"firmware_type\":\"soc\",\"version\":\"%s\"}],"
+            "\"battery\":null,"
+            "\"network\":{\"type\":\"%s\",\"rssi\":%d}"
+        "}"
+        "}",
+        escaped_device.c_str(),
+        ts,
+        seq,
+        escaped_boot.c_str(),
+        uptime_s,
+        escaped_fw.c_str(),
+        network_type,
+        rssi);
+
+    const std::string topic = cfg_.topic_heartbeat();
+    MQTTClient_message msg = MQTTClient_message_initializer;
+    msg.payload = payload;
+    msg.payloadlen = static_cast<int>(std::strlen(payload));
+    msg.qos = cfg_.qos_heartbeat;
+    msg.retained = 0;
+
+    debug_log_mqtt_frame("TX", topic, msg.payload,
+                         static_cast<size_t>(msg.payloadlen),
+                         msg.qos, msg.retained);
+
+    MQTTClient_deliveryToken token;
+    const int rc = MQTTClient_publishMessage(client_, topic.c_str(), &msg, &token);
+    if(rc != MQTTCLIENT_SUCCESS) {
+        UPC_LOG_MQTT_SERVICE(Warn, "publish heartbeat fail rc=%d topic=%s",
+                             rc, topic.c_str());
+        mqtt_connected_ = false;
+        cmd_subscribed_ = false;
+        return false;
+    }
+
+    last_heartbeat_pub_ms_ = now;
+    UPC_LOG_MQTT_SERVICE(Debug,
+        "MQTT TX heartbeat queued topic=%s token=%d",
         topic.c_str(), static_cast<int>(token));
     return true;
 }
@@ -1046,6 +1139,44 @@ int64_t MqttService::unix_ms()
     return static_cast<int64_t>(
         std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::system_clock::now().time_since_epoch()).count());
+}
+
+std::string MqttService::read_boot_id()
+{
+    std::ifstream in("/proc/sys/kernel/random/boot_id");
+    std::string boot_id;
+    if(std::getline(in, boot_id) && !boot_id.empty()) {
+        return boot_id;
+    }
+    const long long now = static_cast<long long>(unix_ms());
+    return std::string("boot-") + std::to_string(now);
+}
+
+int64_t MqttService::read_uptime_s()
+{
+    std::ifstream in("/proc/uptime");
+    double uptime = 0.0;
+    if(in >> uptime && uptime >= 0.0) {
+        return static_cast<int64_t>(uptime);
+    }
+    return 0;
+}
+
+int MqttService::bars_to_rssi_dbm(int bars, bool connected)
+{
+    if(!connected) {
+        return -127;
+    }
+    if(bars >= 3) {
+        return -55;
+    }
+    if(bars == 2) {
+        return -67;
+    }
+    if(bars == 1) {
+        return -78;
+    }
+    return -90;
 }
 
 bool MqttService::json_extract_string(const std::string& json, const char* key,

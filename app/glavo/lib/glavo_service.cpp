@@ -1061,17 +1061,36 @@ void GlavoService::handle_dir_open(const middleware::Message& msg)
  */
 void GlavoService::handle_fs_delete_ntf(const middleware::Message& msg)
 {
+    auto send_delete_rsp = [&](const middleware::FsDeleteNtfPayload& req,
+                               middleware::FsDeleteResult reason,
+                               bool ok) {
+        middleware::FsDeleteRspPayload rsp{};
+        rsp.file_index = req.file_index;
+        rsp.file_source = static_cast<uint8_t>(req.file_source);
+        rsp.ok = ok ? 1 : 0;
+        rsp.reason = static_cast<uint8_t>(reason);
+        middleware::Message out(middleware::MsgType::APP_Fs_Delete_Rsp,
+                                middleware::ModuleId::APP_GLAVO,
+                                msg.sender_id);
+        out.payload = middleware::MsgPayload::from_bytes(
+            reinterpret_cast<const uint8_t*>(&rsp), sizeof(rsp));
+        (void)publish_async(out);
+    };
+
     middleware::FsDeleteNtfPayload req{};
     if(!read_inline_pod(msg.payload, req)) {
         UPC_LOG_GLAVO_SERVICE(Warn, "fs_delete_ntf: invalid payload");
+        send_delete_rsp(req, middleware::FsDeleteResult::InvalidPayload, false);
         return;
     }
     if(req.file_source != middleware::PrintFileSource::Local) {
         UPC_LOG_GLAVO_SERVICE(Warn, "fs_delete_ntf: only Local supported");
+        send_delete_rsp(req, middleware::FsDeleteResult::OnlyLocalSupported, false);
         return;
     }
     if(print_running_.load()) {
         UPC_LOG_GLAVO_SERVICE(Warn, "fs_delete_ntf: ignored while printing");
+        send_delete_rsp(req, middleware::FsDeleteResult::BusyPrinting, false);
         return;
     }
 
@@ -1079,6 +1098,7 @@ void GlavoService::handle_fs_delete_ntf(const middleware::Message& msg)
     const size_t idx = static_cast<size_t>(req.file_index);
     if(idx >= local_manifest_.size()) {
         UPC_LOG_GLAVO_SERVICE(Warn, "fs_delete_ntf: index out of range %u", req.file_index);
+        send_delete_rsp(req, middleware::FsDeleteResult::IndexOutOfRange, false);
         return;
     }
 
@@ -1090,11 +1110,13 @@ void GlavoService::handle_fs_delete_ntf(const middleware::Message& msg)
 
     if(!gcode_manifest_remove_at(local_manifest_, idx)) {
         UPC_LOG_GLAVO_SERVICE(Warn, "fs_delete_ntf: manifest remove failed");
+        send_delete_rsp(req, middleware::FsDeleteResult::ManifestUpdateFailed, false);
         return;
     }
     if(!gcode_manifest_save(local_config_path(), local_manifest_)) {
         UPC_LOG_GLAVO_SERVICE(Warn, "fs_delete_ntf: config save failed");
         gcode_manifest_load(local_config_path(), local_manifest_);
+        send_delete_rsp(req, middleware::FsDeleteResult::ManifestUpdateFailed, false);
         return;
     }
 
@@ -1111,6 +1133,7 @@ void GlavoService::handle_fs_delete_ntf(const middleware::Message& msg)
     }
 
     UPC_LOG_GLAVO_SERVICE(Info, "fs_delete_ntf: removed %s", name.c_str());
+    send_delete_rsp(req, middleware::FsDeleteResult::Ok, true);
 }
 
 /** @brief 将 USB 源文件二进制复制到本地目标路径 */

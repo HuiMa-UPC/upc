@@ -208,6 +208,7 @@ const char* upc_msg_type_name(MsgType type) {
         case MsgType::GLAVO_Debug_Env_Sim_Powder_Ntf: return "GLAVO_Debug_Env_Sim_Powder_Ntf";
         case MsgType::UI_Mcu_Version_Req: return "UI_Mcu_Version_Req";
         case MsgType::GLAVO_Mcu_Version_Ntf: return "GLAVO_Mcu_Version_Ntf";
+        case MsgType::APP_Fs_Delete_Rsp: return "APP_Fs_Delete_Rsp";
         default: return "Msg";
     }
 }
