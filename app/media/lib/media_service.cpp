@@ -28,75 +28,17 @@ namespace {
 constexpr uint64_t kStartRetryMs = 1000;
 constexpr int64_t kPendingReclaimTimeoutSec = 30 * 60;
 
-/** 旧布局兼容：/home/video、/home/photo、manifest.json → /home/media/... */
-void migrate_legacy_media_layout()
+/** 初始化当前目录布局（不再兼容旧路径迁移）。 */
+void ensure_media_layout_dirs()
 {
     namespace fs = std::filesystem;
     std::error_code ec;
 
     fs::create_directories(UPC_MEDIA_ROOT, ec);
     ec.clear();
-
-    const fs::path new_video = UPC_VIDEO_DIR;
-    const fs::path old_video = "/home/video";
-    if(!fs::exists(new_video, ec) && fs::is_directory(old_video, ec)) {
-        ec.clear();
-        fs::rename(old_video, new_video, ec);
-        if(ec) {
-            UPC_LOG_MEDIA_SERVICE(Warn,
-                "media migrate video fail %s -> %s: %s",
-                old_video.c_str(), new_video.c_str(), ec.message().c_str());
-        } else {
-            UPC_LOG_MEDIA_SERVICE(Info,
-                "media migrate video %s -> %s",
-                old_video.c_str(), new_video.c_str());
-        }
-    }
+    fs::create_directories(UPC_VIDEO_DIR, ec);
     ec.clear();
-    fs::create_directories(new_video, ec);
-
-    const fs::path new_photo = UPC_PHOTO_DIR;
-    const fs::path old_photo = "/home/photo";
-    if(!fs::exists(new_photo, ec) && fs::is_directory(old_photo, ec)) {
-        ec.clear();
-        fs::rename(old_photo, new_photo, ec);
-        if(ec) {
-            UPC_LOG_MEDIA_SERVICE(Warn,
-                "media migrate photo fail %s -> %s: %s",
-                old_photo.c_str(), new_photo.c_str(), ec.message().c_str());
-        } else {
-            UPC_LOG_MEDIA_SERVICE(Info,
-                "media migrate photo %s -> %s",
-                old_photo.c_str(), new_photo.c_str());
-        }
-    }
-    ec.clear();
-    fs::create_directories(new_photo, ec);
-
-    /* video 清单：manifest.json → config.json（仅当新名不存在） */
-    const fs::path new_cfg = UPC_VIDEO_CONFIG;
-    const fs::path old_cfg = fs::path(UPC_VIDEO_DIR) / "manifest.json";
-    const fs::path legacy_cfg = "/home/video/manifest.json";
-    if(!fs::exists(new_cfg, ec)) {
-        ec.clear();
-        if(fs::is_regular_file(old_cfg, ec)) {
-            ec.clear();
-            fs::rename(old_cfg, new_cfg, ec);
-            if(!ec) {
-                UPC_LOG_MEDIA_SERVICE(Info,
-                    "media migrate video config %s -> %s",
-                    old_cfg.c_str(), new_cfg.c_str());
-            }
-        } else if(fs::is_regular_file(legacy_cfg, ec)) {
-            ec.clear();
-            fs::rename(legacy_cfg, new_cfg, ec);
-            if(!ec) {
-                UPC_LOG_MEDIA_SERVICE(Info,
-                    "media migrate video config %s -> %s",
-                    legacy_cfg.c_str(), new_cfg.c_str());
-            }
-        }
-    }
+    fs::create_directories(UPC_PHOTO_DIR, ec);
 }
 
 bool path_is_legacy_work_dir(const std::string& dir_name)
@@ -113,7 +55,7 @@ MediaService::~MediaService()
 
 bool MediaService::init()
 {
-    migrate_legacy_media_layout();
+    ensure_media_layout_dirs();
     recover_pending_and_reset_tmp();
     subscribe_messages();
     print_video_.set_sender_module_id(middleware::ModuleId::APP_MEDIA);
@@ -726,8 +668,7 @@ void MediaService::handle_clean_video(const middleware::Message& msg)
             finalize_frames_dir = take_ready_finalize_locked();
         }
         if(!finalize_frames_dir.empty()) {
-            (void)ensure_video_storage_budget();
-            print_video_.finalize_after_exit(finalize_frames_dir.c_str());
+            finalize_print_video_by_stage(finalize_frames_dir);
         }
     }
 }
@@ -771,8 +712,7 @@ void MediaService::handle_print_video_finalize(const middleware::Message& msg)
                     finalize_frames_dir = take_ready_finalize_locked();
                 }
                 if(!finalize_frames_dir.empty()) {
-                    (void)ensure_video_storage_budget();
-                    print_video_.finalize_after_exit(finalize_frames_dir.c_str());
+                    finalize_print_video_by_stage(finalize_frames_dir);
                 }
                 return;
             }
@@ -798,21 +738,55 @@ void MediaService::handle_print_video_finalize(const middleware::Message& msg)
         finalize_frames_dir = take_ready_finalize_locked();
     }
     if(!finalize_frames_dir.empty()) {
-        /* remux 可能需要额外空间；先按配额腾挪，再 finalize（内部会标 committed）。 */
-        (void)ensure_video_storage_budget();
-        print_video_.finalize_after_exit(finalize_frames_dir.c_str());
+        finalize_print_video_by_stage(finalize_frames_dir);
     }
 }
 
 std::string MediaService::take_ready_finalize_locked()
 {
     if(!finalize_pending_ || pending_finalize_frames_dir_.empty() ||
-       clean_video_active_ || h264_finalize_pending_) {
+       clean_video_active_) {
         return {};
     }
     std::string frames_dir = std::move(pending_finalize_frames_dir_);
     finalize_pending_ = false;
     return frames_dir;
+}
+
+void MediaService::finalize_print_video_by_stage(const std::string& frames_dir)
+{
+    if(frames_dir.empty()) {
+        return;
+    }
+
+    bool h264_pending = false;
+    {
+        std::lock_guard<std::mutex> lock(finalize_mtx_);
+        h264_pending = h264_finalize_pending_;
+    }
+
+    (void)ensure_video_storage_budget();
+    print_video_.finalize_after_exit(frames_dir.c_str(), !h264_pending);
+
+    if(!h264_pending) {
+        return;
+    }
+
+    bool need_immediate_h264_finalize = false;
+    {
+        std::lock_guard<std::mutex> lock(finalize_mtx_);
+        if(h264_finalize_pending_) {
+            finalize_pending_ = true;
+            pending_finalize_frames_dir_ = frames_dir;
+        } else {
+            need_immediate_h264_finalize = true;
+        }
+    }
+
+    if(need_immediate_h264_finalize) {
+        (void)ensure_video_storage_budget();
+        print_video_.finalize_after_exit(frames_dir.c_str(), true);
+    }
 }
 
 void MediaService::on_print_h264_finalize_done()
@@ -824,8 +798,7 @@ void MediaService::on_print_h264_finalize_done()
         finalize_frames_dir = take_ready_finalize_locked();
     }
     if(!finalize_frames_dir.empty()) {
-        (void)ensure_video_storage_budget();
-        print_video_.finalize_after_exit(finalize_frames_dir.c_str());
+        finalize_print_video_by_stage(finalize_frames_dir);
     }
 }
 
@@ -1258,19 +1231,21 @@ bool MediaService::commit_history_with_space(const char* frames_dir)
     if(!frames_dir || !frames_dir[0]) {
         return false;
     }
+    /* 仅允许合法目录键。误传 gcode 文件名时直接拒绝，避免触发回收误删历史。 */
+    if(std::strchr(frames_dir, '.') != nullptr) {
+        UPC_LOG_MEDIA_SERVICE(
+            Warn, "print_video commit invalid frames_dir=%s (skip eviction)",
+            frames_dir);
+        return false;
+    }
     /* 写 config.json.tmp 只需极少空间；盘将满时先按环形预算腾挪。 */
     (void)ensure_video_storage_budget();
     if(print_video_.commit_after_exit(frames_dir)) {
         return true;
     }
-    for(int i = 0; i < 32; ++i) {
-        if(!evict_oldest_committed_video()) {
-            break;
-        }
-        if(print_video_.commit_after_exit(frames_dir)) {
-            return true;
-        }
-    }
+    UPC_LOG_MEDIA_SERVICE(
+        Warn, "print_video commit miss frames_dir=%s (skip eviction)",
+        frames_dir);
     return false;
 }
 

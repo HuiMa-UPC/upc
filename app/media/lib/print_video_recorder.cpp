@@ -568,7 +568,8 @@ bool PrintVideoRecorder::commit_after_exit(const char* frames_dir)
     return true;
 }
 
-void PrintVideoRecorder::finalize_after_exit(const char* frames_dir)
+void PrintVideoRecorder::finalize_after_exit(const char* frames_dir,
+                                             bool finalize_print_video)
 {
     if(!frames_dir || !frames_dir[0]) {
         return;
@@ -597,33 +598,35 @@ void PrintVideoRecorder::finalize_after_exit(const char* frames_dir)
 
     std::string session_dir =
         std::string(CAMERA_PRINT_VIDEO_OUT_DIR) + "/" + hit->frames_dir;
-    std::string final_frames_dir = hit->frames_dir;
-    if(final_frames_dir == UPC_VIDEO_TMP_NAME) {
-        final_frames_dir = make_session_name(hit->job_name, hit->start_unix);
-    }
-    std::string final_session_dir =
-        std::string(CAMERA_PRINT_VIDEO_OUT_DIR) + "/" + final_frames_dir;
-    for(uint32_t duplicate = 1u;
-        std::filesystem::exists(final_session_dir) && session_dir != final_session_dir;
-        ++duplicate) {
-        final_frames_dir = make_session_name(hit->job_name, hit->start_unix) +
-                           "_" + std::to_string(duplicate);
-        final_session_dir =
+    if(finalize_print_video) {
+        std::string final_frames_dir = hit->frames_dir;
+        if(final_frames_dir == UPC_VIDEO_TMP_NAME) {
+            final_frames_dir = make_session_name(hit->job_name, hit->start_unix);
+        }
+        std::string final_session_dir =
             std::string(CAMERA_PRINT_VIDEO_OUT_DIR) + "/" + final_frames_dir;
-    }
-    if(hit->frames_dir != final_frames_dir) {
-        std::error_code ec;
-        std::filesystem::rename(session_dir, final_session_dir, ec);
-        if(ec) {
-            UPC_LOG_MEDIA_SERVICE(Warn,
-                "print_video finalize promote fail %s -> %s: %s",
-                session_dir.c_str(), final_session_dir.c_str(), ec.message().c_str());
-        } else {
-            session_dir = final_session_dir;
-            hit->frames_dir = final_frames_dir;
-            hit->thumb = final_frames_dir + "/thumb" + CAMERA_PRINT_VIDEO_THUMB_EXT;
-            if(!hit->print_thumb.empty()) {
-                hit->print_thumb = final_frames_dir + "/print_thumb" + CAMERA_PRINT_VIDEO_THUMB_EXT;
+        for(uint32_t duplicate = 1u;
+            std::filesystem::exists(final_session_dir) && session_dir != final_session_dir;
+            ++duplicate) {
+            final_frames_dir = make_session_name(hit->job_name, hit->start_unix) +
+                               "_" + std::to_string(duplicate);
+            final_session_dir =
+                std::string(CAMERA_PRINT_VIDEO_OUT_DIR) + "/" + final_frames_dir;
+        }
+        if(hit->frames_dir != final_frames_dir) {
+            std::error_code ec;
+            std::filesystem::rename(session_dir, final_session_dir, ec);
+            if(ec) {
+                UPC_LOG_MEDIA_SERVICE(Warn,
+                    "print_video finalize promote fail %s -> %s: %s",
+                    session_dir.c_str(), final_session_dir.c_str(), ec.message().c_str());
+            } else {
+                session_dir = final_session_dir;
+                hit->frames_dir = final_frames_dir;
+                hit->thumb = final_frames_dir + "/thumb" + CAMERA_PRINT_VIDEO_THUMB_EXT;
+                if(!hit->print_thumb.empty()) {
+                    hit->print_thumb = final_frames_dir + "/print_thumb" + CAMERA_PRINT_VIDEO_THUMB_EXT;
+                }
             }
         }
     }
@@ -672,52 +675,57 @@ void PrintVideoRecorder::finalize_after_exit(const char* frames_dir)
     }
 #endif
 
-    const std::string h264_path = session_dir + "/print.h264";
-    const std::string h264_mp4_path = session_dir + "/print_h264.mp4";
-    const std::string h264_mp4_rel = hit->frames_dir + "/print_h264.mp4";
-    const std::string print_thumb_path = session_dir + "/print_thumb" + CAMERA_PRINT_VIDEO_THUMB_EXT;
-    const std::string print_thumb_rel =
-        hit->frames_dir + "/print_thumb" + CAMERA_PRINT_VIDEO_THUMB_EXT;
-    hit->print_video.clear();
-    hit->print_thumb.clear();
-    (void)std::remove(h264_mp4_path.c_str());
-    std::error_code h264_ec;
     bool h264_remux_ok = false;
-    if(std::filesystem::exists(h264_path, h264_ec) && !h264_ec) {
-        const bool h264_mp4_ok = timelapse_util::remux_h264_to_mp4(
-            h264_path.c_str(), print_fps, h264_mp4_path.c_str());
-        if(!h264_mp4_ok) {
-            UPC_LOG_MEDIA_SERVICE(
-                Warn, "print_video finalize h264 remux failed path=%s",
-                h264_path.c_str());
-        } else {
-            h264_remux_ok = true;
-            hit->print_video = h264_mp4_rel;
-            (void)std::remove(print_thumb_path.c_str());
-            if(print_thumb_provider_ &&
-               print_thumb_provider_(print_thumb_path.c_str())) {
-                hit->print_thumb = print_thumb_rel;
-            } else {
+    if(finalize_print_video) {
+        const std::string h264_path = session_dir + "/print.h264";
+        const std::string h264_mp4_path = session_dir + "/print_h264.mp4";
+        const std::string h264_mp4_rel = hit->frames_dir + "/print_h264.mp4";
+        const std::string print_thumb_path =
+            session_dir + "/print_thumb" + CAMERA_PRINT_VIDEO_THUMB_EXT;
+        const std::string print_thumb_rel =
+            hit->frames_dir + "/print_thumb" + CAMERA_PRINT_VIDEO_THUMB_EXT;
+        hit->print_video.clear();
+        hit->print_thumb.clear();
+        (void)std::remove(h264_mp4_path.c_str());
+        std::error_code h264_ec;
+        if(std::filesystem::exists(h264_path, h264_ec) && !h264_ec) {
+            const bool h264_mp4_ok = timelapse_util::remux_h264_to_mp4(
+                h264_path.c_str(), print_fps, h264_mp4_path.c_str());
+            if(!h264_mp4_ok) {
                 UPC_LOG_MEDIA_SERVICE(
-                    Warn, "print_video finalize print thumb generation failed path=%s",
-                    print_thumb_path.c_str());
+                    Warn, "print_video finalize h264 remux failed path=%s",
+                    h264_path.c_str());
+            } else {
+                h264_remux_ok = true;
+                hit->print_video = h264_mp4_rel;
+                (void)std::remove(print_thumb_path.c_str());
+                if(print_thumb_provider_ &&
+                   print_thumb_provider_(print_thumb_path.c_str())) {
+                    hit->print_thumb = print_thumb_rel;
+                } else {
+                    UPC_LOG_MEDIA_SERVICE(
+                        Warn, "print_video finalize print thumb generation failed path=%s",
+                        print_thumb_path.c_str());
+                }
             }
         }
-    }
-    if(h264_remux_ok) {
-        if(std::remove(h264_path.c_str()) != 0 && errno != ENOENT) {
+        if(h264_remux_ok) {
+            if(std::remove(h264_path.c_str()) != 0 && errno != ENOENT) {
+                UPC_LOG_MEDIA_SERVICE(
+                    Warn, "print_video finalize remove h264 failed path=%s err=%s",
+                    h264_path.c_str(), std::strerror(errno));
+            }
+        } else if(std::filesystem::exists(h264_path, h264_ec) && !h264_ec) {
             UPC_LOG_MEDIA_SERVICE(
-                Warn, "print_video finalize remove h264 failed path=%s err=%s",
-                h264_path.c_str(), std::strerror(errno));
+                Warn, "print_video finalize keep h264 for retry path=%s",
+                h264_path.c_str());
         }
-    } else if(std::filesystem::exists(h264_path, h264_ec) && !h264_ec) {
-        UPC_LOG_MEDIA_SERVICE(
-            Warn, "print_video finalize keep h264 for retry path=%s",
-            h264_path.c_str());
     }
 
     hit->video_pending = false;
-    hit->print_video_pending = false;
+    if(finalize_print_video) {
+        hit->print_video_pending = false;
+    }
     hit->clean_first_png = 0;
     hit->clean_last_png = 0;
     /* 结果页已退出才进 finalize；即便先前 commit 因盘满失败，这里也标可见。 */
@@ -758,9 +766,10 @@ void PrintVideoRecorder::finalize_after_exit(const char* frames_dir)
     UPC_LOG_MEDIA_SERVICE(
         Info,
         "print_video finalize done frames_dir=%s frames=%u video_ok=%d "
-        "timelapse_fps=%u print_fps=%u h264_remux=%d",
+        "timelapse_fps=%u print_fps=%u h264_remux=%d finalize_print_video=%d",
         hit->frames_dir.c_str(), frame_count, video_ok ? 1 : 0,
-        timelapse_fps, print_fps, h264_remux_ok ? 1 : 0);
+        timelapse_fps, print_fps, h264_remux_ok ? 1 : 0,
+        finalize_print_video ? 1 : 0);
 }
 
 bool PrintVideoRecorder::remove_session_dir()

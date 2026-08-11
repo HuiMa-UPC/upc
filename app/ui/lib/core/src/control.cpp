@@ -72,6 +72,11 @@ void schedule_commit_print_result_history()
     if(g_print_result.video_dir[0] == '\0') {
         return;
     }
+    /* 无有效 manifest 条目（如 0 层终止）时，video_dir 可能仍是 gcode 文件名；
+     * 这不是 frames_dir，不能发 finalize 请求。 */
+    if(std::strchr(g_print_result.video_dir, '.') != nullptr) {
+        return;
+    }
     auto *ctx = new CommitHistoryCtx{};
     std::snprintf(ctx->frames_dir, sizeof(ctx->frames_dir), "%s", g_print_result.video_dir);
     lv_async_call(commit_print_result_history_async, ctx);

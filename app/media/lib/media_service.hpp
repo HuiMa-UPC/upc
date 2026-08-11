@@ -39,6 +39,8 @@ private:
     void handle_print_video_finalize(const middleware::Message& msg);
     /** H264 worker 关闭裸流后触发，解开开门最终化栅栏。 */
     void on_print_h264_finalize_done();
+    /** Timelapse 优先 finalize；若 H264 仍在收尾则延后 print_h264 remux。 */
+    void finalize_print_video_by_stage(const std::string& frames_dir);
     /** 在 finalize_mtx_ 保护下取出满足全部条件的最终化目录。 */
     std::string take_ready_finalize_locked();
     void handle_storage_usage_req(const middleware::Message& msg) const;

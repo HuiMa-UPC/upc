@@ -1,6 +1,7 @@
 #include "video_player.hpp"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <condition_variable>
 #include <cstdint>
@@ -87,6 +88,7 @@ struct VideoPlayer::Impl {
     AVRational time_base{1, 1000};
     int64_t duration_ms = 0;
     int64_t position_ms = 0;
+    int64_t frame_interval_ms = 33;
 
     SwsContext* sws = nullptr;
     SwsContext* preview_sws = nullptr;
@@ -95,9 +97,11 @@ struct VideoPlayer::Impl {
     int preview_w = 0;
     int preview_h = 0;
 
-    std::vector<uint8_t> main_rgb565;
+    std::array<std::vector<uint8_t>, 2> main_rgb565;
+    int main_front_idx = 0;
     lv_image_dsc_t main_dsc{};
-    std::vector<uint8_t> preview_rgb565;
+    std::array<std::vector<uint8_t>, 2> preview_rgb565;
+    int preview_front_idx = 0;
     lv_image_dsc_t preview_dsc{};
 
     ProgressCb progress_cb;
@@ -112,6 +116,8 @@ struct VideoPlayer::Impl {
     uint64_t pending_preview_gen = 0;
     bool pending_preview = false;
     bool pending_ended = false;
+    bool main_async_scheduled = false;
+    bool preview_async_scheduled = false;
 
     AVPacket* packet = nullptr;
     AVFrame* frame = nullptr;
@@ -122,19 +128,43 @@ struct VideoPlayer::Impl {
         if(!self) {
             return;
         }
-        std::lock_guard<std::mutex> lk(self->ui_payload_mtx);
-        if(self->image_target && self->main_dsc.data) {
-            lv_image_set_src(self->image_target, &self->main_dsc);
-            lv_obj_invalidate(self->image_target);
+        lv_obj_t* image = nullptr;
+        bool has_image = false;
+        bool has_progress = false;
+        int64_t progress_pos = 0;
+        int64_t progress_dur = 0;
+        bool has_ended = false;
+        ProgressCb progress_cb;
+        EndedCb ended_cb;
+        {
+            std::lock_guard<std::mutex> lk(self->ui_payload_mtx);
+            image = self->image_target;
+            has_image = (self->main_dsc.data != nullptr);
+            has_progress = self->pending_progress;
+            progress_pos = self->pending_progress_pos_ms;
+            progress_dur = self->pending_progress_dur_ms;
+            has_ended = self->pending_ended;
+            /* 必须使用成员 main_dsc 的稳定地址，不能传栈上副本给 LVGL。 */
+            if(image && has_image) {
+                lv_image_set_src(image, &self->main_dsc);
+                lv_obj_invalidate(image);
+            }
+            self->pending_progress = false;
+            self->pending_ended = false;
+            self->main_async_scheduled = false;
         }
-        if(self->pending_progress && self->progress_cb) {
-            self->progress_cb(self->pending_progress_pos_ms, self->pending_progress_dur_ms);
+        {
+            std::lock_guard<std::mutex> state_lk(self->mtx);
+            progress_cb = self->progress_cb;
+            ended_cb = self->ended_cb;
         }
-        if(self->pending_ended && self->ended_cb) {
-            self->ended_cb();
+
+        if(has_progress && progress_cb) {
+            progress_cb(progress_pos, progress_dur);
         }
-        self->pending_progress = false;
-        self->pending_ended = false;
+        if(has_ended && ended_cb) {
+            ended_cb();
+        }
     }
 
     static void async_apply_preview(void* user)
@@ -144,12 +174,13 @@ struct VideoPlayer::Impl {
             return;
         }
         PreviewCb cb;
-        const lv_image_dsc_t* dsc = nullptr;
+        bool has_preview = false;
         int64_t preview_ms = 0;
         {
             std::lock_guard<std::mutex> lk(self->ui_payload_mtx);
             if(!self->pending_preview || !self->preview_dsc.data) {
                 self->pending_preview = false;
+                self->preview_async_scheduled = false;
                 return;
             }
             /* 只投递仍是「最新请求」且仍在 scrub 中的帧，避免过期闪屏。 */
@@ -157,15 +188,21 @@ struct VideoPlayer::Impl {
             if(self->pending_preview_gen != latest ||
                !self->scrubbing.load(std::memory_order_relaxed)) {
                 self->pending_preview = false;
+                self->preview_async_scheduled = false;
                 return;
             }
-            cb = self->preview_cb;
-            dsc = &self->preview_dsc;
             preview_ms = self->pending_preview_ms;
             self->pending_preview = false;
+            self->preview_async_scheduled = false;
+            has_preview = true;
         }
-        if(cb && dsc) {
-            cb(dsc, preview_ms);
+        {
+            std::lock_guard<std::mutex> state_lk(self->mtx);
+            cb = self->preview_cb;
+        }
+        if(cb && has_preview && self->preview_dsc.data) {
+            /* 预览回调同样必须拿成员 preview_dsc 的稳定地址。 */
+            cb(&self->preview_dsc, preview_ms);
         }
     }
 
@@ -185,7 +222,10 @@ struct VideoPlayer::Impl {
         pending_progress = true;
         pending_progress_pos_ms = position;
         pending_progress_dur_ms = duration;
-        lv_async_call(async_apply_main, this);
+        if(!main_async_scheduled) {
+            main_async_scheduled = true;
+            lv_async_call(async_apply_main, this);
+        }
     }
 
     void notify_preview(int64_t preview_ms, uint64_t gen)
@@ -198,7 +238,10 @@ struct VideoPlayer::Impl {
         pending_preview = true;
         pending_preview_ms = preview_ms;
         pending_preview_gen = gen;
-        lv_async_call(async_apply_preview, this);
+        if(!preview_async_scheduled) {
+            preview_async_scheduled = true;
+            lv_async_call(async_apply_preview, this);
+        }
     }
 
     void notify_ended()
@@ -208,7 +251,10 @@ struct VideoPlayer::Impl {
         pending_progress = true;
         pending_progress_pos_ms = duration_ms;
         pending_progress_dur_ms = duration_ms;
-        lv_async_call(async_apply_main, this);
+        if(!main_async_scheduled) {
+            main_async_scheduled = true;
+            lv_async_call(async_apply_main, this);
+        }
     }
 
     void clear_decoder()
@@ -236,14 +282,29 @@ struct VideoPlayer::Impl {
         stream = nullptr;
         stream_index = -1;
         time_base = AVRational{1, 1000};
+        frame_interval_ms = 33;
         frame_w = 0;
         frame_h = 0;
         preview_w = 0;
         preview_h = 0;
-        main_rgb565.clear();
-        preview_rgb565.clear();
+        for(auto& b : main_rgb565) {
+            b.clear();
+        }
+        for(auto& b : preview_rgb565) {
+            b.clear();
+        }
+        main_front_idx = 0;
+        preview_front_idx = 0;
         std::memset(&main_dsc, 0, sizeof(main_dsc));
         std::memset(&preview_dsc, 0, sizeof(preview_dsc));
+        {
+            std::lock_guard<std::mutex> lk(ui_payload_mtx);
+            pending_progress = false;
+            pending_preview = false;
+            pending_ended = false;
+            main_async_scheduled = false;
+            preview_async_scheduled = false;
+        }
     }
 
     static void calc_preview_size(int src_w, int src_h, int& out_w, int& out_h)
@@ -270,28 +331,34 @@ struct VideoPlayer::Impl {
         const size_t main_bytes = static_cast<size_t>(frame_w) * frame_h * 2u;
         const size_t preview_bytes =
             static_cast<size_t>(preview_w) * preview_h * 2u;
-        if(main_rgb565.size() != main_bytes) {
-            main_rgb565.assign(main_bytes, 0);
+        for(auto& b : main_rgb565) {
+            if(b.size() != main_bytes) {
+                b.assign(main_bytes, 0);
+            }
         }
-        if(preview_rgb565.size() != preview_bytes) {
-            preview_rgb565.assign(preview_bytes, 0);
+        for(auto& b : preview_rgb565) {
+            if(b.size() != preview_bytes) {
+                b.assign(preview_bytes, 0);
+            }
         }
 
+        main_front_idx = 0;
         main_dsc.header.magic = LV_IMAGE_HEADER_MAGIC;
         main_dsc.header.cf = LV_COLOR_FORMAT_RGB565;
         main_dsc.header.w = frame_w;
         main_dsc.header.h = frame_h;
         main_dsc.header.stride = static_cast<uint32_t>(frame_w * 2);
-        main_dsc.data = main_rgb565.data();
-        main_dsc.data_size = main_rgb565.size();
+        main_dsc.data = main_rgb565[main_front_idx].data();
+        main_dsc.data_size = main_rgb565[main_front_idx].size();
 
+        preview_front_idx = 0;
         preview_dsc.header.magic = LV_IMAGE_HEADER_MAGIC;
         preview_dsc.header.cf = LV_COLOR_FORMAT_RGB565;
         preview_dsc.header.w = preview_w;
         preview_dsc.header.h = preview_h;
         preview_dsc.header.stride = static_cast<uint32_t>(preview_w * 2);
-        preview_dsc.data = preview_rgb565.data();
-        preview_dsc.data_size = preview_rgb565.size();
+        preview_dsc.data = preview_rgb565[preview_front_idx].data();
+        preview_dsc.data_size = preview_rgb565[preview_front_idx].size();
         return true;
     }
 
@@ -323,6 +390,16 @@ struct VideoPlayer::Impl {
         }
         stream = fmt->streams[stream_index];
         time_base = stream->time_base;
+        AVRational fr = stream->avg_frame_rate;
+        if(fr.num <= 0 || fr.den <= 0) {
+            fr = stream->r_frame_rate;
+        }
+        if(fr.num > 0 && fr.den > 0) {
+            const int64_t ms = av_rescale_q(1, av_inv_q(fr), AVRational{1, 1000});
+            frame_interval_ms = std::clamp<int64_t>(ms, 8, 100);
+        } else {
+            frame_interval_ms = 33;
+        }
 
         const AVCodec* codec_def = avcodec_find_decoder(stream->codecpar->codec_id);
         if(!codec_def) {
@@ -379,35 +456,45 @@ struct VideoPlayer::Impl {
 
     bool convert_frame_main(AVFrame* src)
     {
-        if(!src || !sws || main_rgb565.empty()) {
+        if(!src || !sws || main_rgb565[0].empty() || main_rgb565[1].empty()) {
             return false;
         }
-        uint8_t* dst_data[4] = { main_rgb565.data(), nullptr, nullptr, nullptr };
+        const int back_idx = main_front_idx ^ 1;
+        uint8_t* dst_data[4] = { main_rgb565[back_idx].data(), nullptr, nullptr, nullptr };
         int dst_linesize[4] = { frame_w * 2, 0, 0, 0 };
         const int out_h = sws_scale(sws, src->data, src->linesize, 0, frame_h,
                                     dst_data, dst_linesize);
         if(out_h != frame_h) {
             return false;
         }
-        main_dsc.data = main_rgb565.data();
-        main_dsc.data_size = main_rgb565.size();
+        {
+            std::lock_guard<std::mutex> lk(ui_payload_mtx);
+            main_front_idx = back_idx;
+            main_dsc.data = main_rgb565[main_front_idx].data();
+            main_dsc.data_size = main_rgb565[main_front_idx].size();
+        }
         return true;
     }
 
     bool convert_frame_preview(AVFrame* src)
     {
-        if(!src || !preview_sws || preview_rgb565.empty()) {
+        if(!src || !preview_sws || preview_rgb565[0].empty() || preview_rgb565[1].empty()) {
             return false;
         }
-        uint8_t* dst_data[4] = { preview_rgb565.data(), nullptr, nullptr, nullptr };
+        const int back_idx = preview_front_idx ^ 1;
+        uint8_t* dst_data[4] = { preview_rgb565[back_idx].data(), nullptr, nullptr, nullptr };
         int dst_linesize[4] = { preview_w * 2, 0, 0, 0 };
         const int out_h = sws_scale(preview_sws, src->data, src->linesize, 0, frame_h,
                                     dst_data, dst_linesize);
         if(out_h != preview_h) {
             return false;
         }
-        preview_dsc.data = preview_rgb565.data();
-        preview_dsc.data_size = preview_rgb565.size();
+        {
+            std::lock_guard<std::mutex> lk(ui_payload_mtx);
+            preview_front_idx = back_idx;
+            preview_dsc.data = preview_rgb565[preview_front_idx].data();
+            preview_dsc.data_size = preview_rgb565[preview_front_idx].size();
+        }
         return true;
     }
 
@@ -577,6 +664,13 @@ struct VideoPlayer::Impl {
                         position_ms = duration_ms;
                         notify_ended();
                     }
+                } else {
+                    const auto delay = std::chrono::milliseconds(
+                        std::clamp<int64_t>(frame_interval_ms, 8, 100));
+                    cv.wait_for(lk, delay, [this] {
+                        return stop.load(std::memory_order_relaxed) ||
+                               !commands.empty() || !playing;
+                    });
                 }
             } else {
                 cv.wait(lk, [this] {
@@ -661,6 +755,7 @@ void VideoPlayer::close()
         std::lock_guard<std::mutex> lk(impl_->mtx);
         impl_->playing = false;
         impl_->opened = false;
+        impl_->image_target = nullptr;
         impl_->scrubbing.store(false, std::memory_order_relaxed);
         impl_->preview_req_gen.fetch_add(1, std::memory_order_relaxed);
         impl_->commands.clear();
@@ -673,7 +768,11 @@ void VideoPlayer::close()
         impl_->pending_preview = false;
         impl_->pending_progress = false;
         impl_->pending_ended = false;
+        impl_->main_async_scheduled = false;
+        impl_->preview_async_scheduled = false;
     }
+    (void)lv_async_call_cancel(Impl::async_apply_main, impl_);
+    (void)lv_async_call_cancel(Impl::async_apply_preview, impl_);
     impl_->clear_decoder();
     impl_->interrupt_requested.store(false, std::memory_order_relaxed);
 }

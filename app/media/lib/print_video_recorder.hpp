@@ -59,8 +59,12 @@ public:
     void discard_current_session();
     /** 结果页退出后先把条目标记为可见。 */
     bool commit_after_exit(const char* frames_dir);
-    /** 结果页退出后触发：按目录内 PNG 统一合成/更新最终 MP4。 */
-    void finalize_after_exit(const char* frames_dir);
+    /**
+     * 结果页退出后触发：按目录内 PNG 统一合成/更新最终 MP4。
+     * finalize_print_video=false 时仅完成 Timelapse，保留 print_video_pending
+     * 给 H264 finalize done 后的二次收尾。
+     */
+    void finalize_after_exit(const char* frames_dir, bool finalize_print_video = true);
     /** 磁盘紧张时跳过本会话层间拍照（仍允许会话结束发 manifest）。 */
     void set_layer_snap_enabled(bool enabled);
     void set_sender_module_id(middleware::ModuleId module_id);
