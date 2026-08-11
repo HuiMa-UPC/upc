@@ -48,6 +48,8 @@ XfrConfig load_xfr_config()
     cfg.token_file = env_or_default("UPC_XFR_TOKEN_FILE", cfg.token_file.c_str());
     cfg.mdns_service_file = env_or_default("UPC_XFR_MDNS_SERVICE_FILE",
                                            cfg.mdns_service_file.c_str());
+    cfg.snowslice_bin = env_or_default("UPC_XFR_SNOWSLICE_BIN", cfg.snowslice_bin.c_str());
+    cfg.progress_file = env_or_default("UPC_XFR_PROGRESS_FILE", cfg.progress_file.c_str());
     cfg.device_sn = env_or_default("UPC_DEVICE_SN", cfg.device_sn.c_str());
     cfg.device_model = env_or_default("UPC_DEVICE_MODEL", cfg.device_model.c_str());
     cfg.require_auth = env_bool("UPC_XFR_REQUIRE_AUTH", cfg.require_auth);

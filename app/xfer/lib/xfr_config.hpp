@@ -12,6 +12,8 @@ struct XfrConfig {
     std::string gcode_dir = "/home/Gcode";
     std::string token_file = "/home/transport/.xfr_tokens";
     std::string mdns_service_file = "/etc/avahi/services/snowpod.service";
+    std::string snowslice_bin = "/home/snowslice";
+    std::string progress_file = "/tmp/progress.txt";
     std::string device_sn = "SN-test03";
     std::string device_model = "Snowpod";
     bool require_auth = true;
