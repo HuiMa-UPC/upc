@@ -758,18 +758,7 @@ void MediaService::finalize_print_video_by_stage(const std::string& frames_dir)
     if(frames_dir.empty()) {
         return;
     }
-    bool h264_pending = false;
-    {
-        std::lock_guard<std::mutex> lock(finalize_mtx_);
-        h264_pending = h264_finalize_pending_;
-    }
-    /* H264 已收尾：直接进第二阶段，避免重复 finalize/重复通知。 */
-    if(!h264_pending) {
-        finalize_print_video_stage2(frames_dir);
-        return;
-    }
-
-    /* H264 仍在收尾：先释放 Timelapse（清 video_pending），打印录像留到第二阶段。 */
+    /* 固定先释放 Timelapse（清 video_pending），再决定是否等待 H264 第二阶段。 */
     (void)ensure_video_storage_budget();
     print_video_.finalize_after_exit(frames_dir.c_str(), false);
 

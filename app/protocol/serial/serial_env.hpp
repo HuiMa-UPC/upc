@@ -10,10 +10,14 @@ extern "C" {
 
 typedef struct {
     float oxygen_percent;
-    int16_t pressure_mbar;
+    int16_t pressure1_x10_kpa;   /**< 舱内1气压，单位 0.1kPa */
     float temperature_c;
     float humidity_percent;
     float pm25_ug_m3;
+    float pm1_ug_m3;
+    float pm10_ug_m3;
+    int16_t filter_pressure_x10_kpa; /**< 滤芯气压，单位 0.1kPa */
+    int16_t pressure2_x10_kpa;       /**< 舱内2气压，单位 0.1kPa */
     uint8_t powder_present;  /**< value[10] bit0/bit1：11=粉充足(1) 其它=非充足(0) */
     uint8_t powder_bits;     /**< value[10] 低 2 位原始值（bit0=下限，bit1=上限） */
     uint8_t outer_door_open; /**< value[10] bit7：0=门关 1=门开 */

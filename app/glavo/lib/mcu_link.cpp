@@ -75,16 +75,7 @@ void serial_log_rx_frame(const uint8_t* frame, size_t len)
     serial_sensor_report_t sensor{};
     serial_sensor_err_t serr = SERIAL_SENSOR_ERR_NONE;
     if(serial_parse_sensor_report_detail(frame, len, &sensor, &serr) == 0) {
-        UPC_LOG_MCU_LINK(Debug,
-            "RX SENSOR OK O2=%.1f%% press=%d mbar temp=%.1fC hum=%.1f%% "
-            "PM2.5=%.0f powder=%u seq=%u",
-            sensor.oxygen_percent,
-            static_cast<int>(sensor.pressure_mbar),
-            sensor.temperature_c,
-            sensor.humidity_percent,
-            sensor.pm25_ug_m3,
-            static_cast<unsigned>(sensor.powder_present),
-            len >= 6 ? static_cast<unsigned>(frame[5]) : 0u);
+        /* 传感器数值统一由 on_sensor_report 的 Info 日志输出，避免重复打印。 */
         return;
     }
 
@@ -759,10 +750,11 @@ void McuLink::on_sensor_report(const serial_sensor_report_t& report)
         std::lock_guard<std::mutex> lock(env_mtx_);
         env_cache_.pm25_cabin      = report.pm25_ug_m3;
         env_cache_.pm25_indoor     = report.pm25_ug_m3;
+        env_cache_.pm10_indoor     = report.pm10_ug_m3;
         env_cache_.temperature_c   = report.temperature_c;
         env_cache_.oxygen_percent  = report.oxygen_percent;
         env_cache_.humidity_percent = report.humidity_percent;
-        env_cache_.pressure_kpa    = static_cast<float>(report.pressure_mbar) / 10.0f; /* mbar→kPa */
+        env_cache_.pressure_kpa    = static_cast<float>(report.pressure1_x10_kpa) / 10.0f;
         env_cache_.powder_bits     = static_cast<uint8_t>(report.powder_bits & 0x03u);
         env_cache_.outer_door_open = (report.outer_door_open != 0);
         env_cache_.door_state_valid = true;
@@ -784,11 +776,17 @@ void McuLink::on_sensor_report(const serial_sensor_report_t& report)
     }
 
     UPC_LOG_MCU_LINK(Info,
-        "sensor: O2=%.1f%% P=%dmbar T=%.1fC RH=%.1f%% PM2.5=%.1f base=%.1fC powder_bits=0x%02X powder_ok=%d door_open=%d",
-        static_cast<double>(report.oxygen_percent), report.pressure_mbar,
+        "sensor: O2=%.1f%% P1=%.1fkPa T=%.1fC RH=%.1f%% PM1.0=%.1f PM2.5=%.1f PM10=%.1f "
+        "Pfilter=%.1fkPa P2=%.1fkPa base=%.1fC powder_bits=0x%02X powder_ok=%d door_open=%d",
+        static_cast<double>(report.oxygen_percent),
+        static_cast<double>(report.pressure1_x10_kpa) / 10.0,
         static_cast<double>(report.temperature_c),
         static_cast<double>(report.humidity_percent),
+        static_cast<double>(report.pm1_ug_m3),
         static_cast<double>(report.pm25_ug_m3),
+        static_cast<double>(report.pm10_ug_m3),
+        static_cast<double>(report.filter_pressure_x10_kpa) / 10.0,
+        static_cast<double>(report.pressure2_x10_kpa) / 10.0,
         static_cast<double>(report.substrate_temp_c),
         static_cast<unsigned>(report.powder_bits), report.powder_present,
         report.outer_door_open ? 1 : 0);
@@ -937,8 +935,7 @@ void McuLink::publish_env_update_ntf()
     p.humidity_percent = snap.humidity_percent;
     p.pressure_kpa   = snap.pressure_kpa;
     p.powder_bits    = static_cast<uint8_t>(snap.powder_bits & 0x03u);
-    /* PM10 目前 0x9B 无上报，置哨兵 <0 → UI 显示 "--"；后端接入 PM10 后填真实值。 */
-    p.pm10_indoor    = -1.0f;
+    p.pm10_indoor    = snap.pm10_indoor;
 
     middleware::Message ntf_ui(middleware::MsgType::APP_Update_Ntf,
         middleware::ModuleId::APP_GLAVO,
@@ -1018,7 +1015,7 @@ void McuLink::publish_debug_sensor_ntf(const serial_sensor_report_t& report)
 {
     middleware::DebugSensorPayload p{};
     p.oxygen_percent   = report.oxygen_percent;
-    p.pressure_kpa     = static_cast<float>(report.pressure_mbar) / 10.0f; /* mbar→kPa */
+    p.pressure_kpa     = static_cast<float>(report.pressure1_x10_kpa) / 10.0f;
     p.pm25             = report.pm25_ug_m3;
     p.humidity_pct     = report.humidity_percent;
     p.cabin_temp_c     = report.temperature_c;
@@ -1091,7 +1088,11 @@ void McuLink::poll_env_sim_tick()
     fake.temperature_c    = 25.0f + 5.0f * s2;
     fake.humidity_percent = 45.0f + 15.0f * s3;
     fake.pm25_ug_m3       = 10.0f + 40.0f * (0.5f + 0.5f * s3);
-    fake.pressure_mbar    = static_cast<int16_t>(1013 + static_cast<int>(20.0f * s1));
+    fake.pm1_ug_m3        = fake.pm25_ug_m3 * 0.6f;
+    fake.pm10_ug_m3       = fake.pm25_ug_m3 * 1.8f;
+    fake.pressure1_x10_kpa = static_cast<int16_t>(1013 + static_cast<int>(20.0f * s1));
+    fake.filter_pressure_x10_kpa = static_cast<int16_t>(1005 + static_cast<int>(15.0f * s2));
+    fake.pressure2_x10_kpa = static_cast<int16_t>(1011 + static_cast<int>(15.0f * s1));
     fake.substrate_temp_c = 30.0f + 8.0f * s2;
     fake.powder_bits      = env_sim_powder_low_effective_ ? 0x00u : 0x03u;
     fake.powder_present   = (fake.powder_bits == 0x03u) ? 1u : 0u;
@@ -1101,10 +1102,11 @@ void McuLink::poll_env_sim_tick()
         std::lock_guard<std::mutex> lock(env_mtx_);
         env_cache_.pm25_cabin       = fake.pm25_ug_m3;
         env_cache_.pm25_indoor      = fake.pm25_ug_m3;
+        env_cache_.pm10_indoor      = fake.pm10_ug_m3;
         env_cache_.temperature_c    = fake.temperature_c;
         env_cache_.oxygen_percent   = fake.oxygen_percent;
         env_cache_.humidity_percent = fake.humidity_percent;
-        env_cache_.pressure_kpa     = static_cast<float>(fake.pressure_mbar) / 10.0f;
+        env_cache_.pressure_kpa     = static_cast<float>(fake.pressure1_x10_kpa) / 10.0f;
         env_cache_.powder_bits      = static_cast<uint8_t>(fake.powder_bits & 0x03u);
         env_cache_.outer_door_open  = false;
         env_cache_.door_state_valid = true;
@@ -1125,11 +1127,14 @@ void McuLink::poll_env_sim_tick()
     }
 
     UPC_LOG_MCU_LINK(Info,
-        "env_sim: O2=%.1f%% P=%dmbar T=%.1fC RH=%.1f%% PM2.5=%.1f powder_bits=0x%02X",
-        static_cast<double>(fake.oxygen_percent), fake.pressure_mbar,
+        "env_sim: O2=%.1f%% P1=%.1fkPa T=%.1fC RH=%.1f%% PM1.0=%.1f PM2.5=%.1f PM10=%.1f powder_bits=0x%02X",
+        static_cast<double>(fake.oxygen_percent),
+        static_cast<double>(fake.pressure1_x10_kpa) / 10.0,
         static_cast<double>(fake.temperature_c),
         static_cast<double>(fake.humidity_percent),
+        static_cast<double>(fake.pm1_ug_m3),
         static_cast<double>(fake.pm25_ug_m3),
+        static_cast<double>(fake.pm10_ug_m3),
         static_cast<unsigned>(fake.powder_bits));
 }
 
