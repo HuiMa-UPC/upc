@@ -522,6 +522,8 @@ void GcodeWorker::parser_thread_fn()
 /** open → 统计行数 → fdopen；成功时重置运动状态与进度计数 */
 int GcodeWorker::open_file(const std::string& filepath)
 {
+    const int hinted_total_lines = total_lines_hint_;
+    total_lines_hint_ = -1;
     close_file();
     apply_calibration_from_context();
 
@@ -531,8 +533,8 @@ int GcodeWorker::open_file(const std::string& filepath)
     }
 
     int cnt = -1;
-    if(total_lines_hint_ > 0) {
-        cnt = total_lines_hint_;
+    if(hinted_total_lines > 0) {
+        cnt = hinted_total_lines;
     } else {
         cnt = count_file_newlines(fd);
         if(cnt < 0) {
@@ -540,7 +542,6 @@ int GcodeWorker::open_file(const std::string& filepath)
             return -1;
         }
     }
-    total_lines_hint_ = -1;
 
     if(lseek(fd, 0, SEEK_SET) < 0) {
         close(fd);

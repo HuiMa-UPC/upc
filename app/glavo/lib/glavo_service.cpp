@@ -1188,6 +1188,14 @@ bool GlavoService::light_scan_line_count(const std::string& path, uint32_t& line
 /** @brief 清除 print prepare 会话状态（prepared_local_path_ / prepare_ready_） */
 void GlavoService::clear_prepare_session()
 {
+    if(prepared_parser_open_) {
+        if(parser::IParserWorker* worker = active_parser()) {
+            if(worker->is_file_open()) {
+                worker->close_file();
+            }
+        }
+    }
+    prepared_parser_open_ = false;
     prepared_local_path_.clear();
     prepared_line_count_ = 0;
     prepare_ready_ = false;
@@ -1201,6 +1209,7 @@ bool GlavoService::run_print_prepare(middleware::PrintFileSource source, uint32_
                                      std::string& local_path_out)
 {
     local_path_out.clear();
+    prepared_parser_open_ = false;
     stop_print_job();
     if(parser::IParserWorker* worker = active_parser()) {
         if(worker->is_file_open()) {
@@ -1249,12 +1258,24 @@ bool GlavoService::run_print_prepare(middleware::PrintFileSource source, uint32_
             line_count = e.line_count;
         }
     }
-    if(line_count == 0) {
-        if(!light_scan_line_count(local_path_out, line_count)) {
-            UPC_LOG_GLAVO_SERVICE(Warn, "prepare: light scan failed %s", local_path_out.c_str());
+    const int line_hint = line_count > 0 ? static_cast<int>(line_count) : -1;
+    if(parser::ParserManager::instance().open_file(local_path_out, line_hint) != 0) {
+        UPC_LOG_GLAVO_SERVICE(Warn, "prepare: open failed %s", local_path_out.c_str());
+        return false;
+    }
+    if(parser::IParserWorker* worker = active_parser()) {
+        if(!worker->is_file_open()) {
+            UPC_LOG_GLAVO_SERVICE(Warn, "prepare: worker not open %s", local_path_out.c_str());
             return false;
         }
+        if(line_count == 0) {
+            line_count = static_cast<uint32_t>(std::max(worker->get_total_lines(), 0));
+        }
+    } else {
+        UPC_LOG_GLAVO_SERVICE(Warn, "prepare: no active parser %s", local_path_out.c_str());
+        return false;
     }
+    prepared_parser_open_ = true;
 
     GcodeManifestEntry entry;
     entry.name        = basename;
@@ -1338,15 +1359,26 @@ void GlavoService::handle_parser_exit(const middleware::Message& msg)
  */
 void GlavoService::launch_print_from_prepared(const std::string& full_path)
 {
-    const int line_hint = prepared_line_count_ > 0
-        ? static_cast<int>(prepared_line_count_)
-        : -1;
-    if(parser::ParserManager::instance().open_file(full_path, line_hint) != 0) {
-        UPC_LOG_GLAVO_SERVICE(Error, "print_start: open failed path=%s",
-                              full_path.c_str());
-        print_running_.store(false);
-        return;
+    bool parser_ready = false;
+    if(prepared_parser_open_) {
+        if(parser::IParserWorker* worker = active_parser()) {
+            parser_ready = worker->is_file_open();
+        }
     }
+
+    if(!parser_ready) {
+        const int line_hint = prepared_line_count_ > 0
+            ? static_cast<int>(prepared_line_count_)
+            : -1;
+        if(parser::ParserManager::instance().open_file(full_path, line_hint) != 0) {
+            UPC_LOG_GLAVO_SERVICE(Error, "print_start: open failed path=%s",
+                                  full_path.c_str());
+            print_running_.store(false);
+            prepared_parser_open_ = false;
+            return;
+        }
+    }
+    prepared_parser_open_ = false;
     current_file_path_ = full_path;
     PrintJobState::instance().reset_job_counters();
     reset_print_progress_state();

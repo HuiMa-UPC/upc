@@ -38,6 +38,7 @@ class OvfWorker : public IParserWorker {
 public:
     static OvfWorker& instance();
 
+    void set_total_lines_hint(int total_lines) override;
     int  open_file(const std::string& filepath) override;
     void start_parse() override;
     void stop_parse() override;
@@ -106,6 +107,8 @@ private:
     std::atomic<int> total_motion_packets_{0};
     std::atomic<int> parsed_lines_{0};
     std::atomic<bool> file_read_exhausted_{false};
+    /** 下一次 open_file 可复用的总段数提示（>0 生效，使用后清空）。 */
+    int total_lines_hint_ = -1;
 
     float image_scale_gain_ = 1.0f;
     float image_rang_gain_  = 1.0f;

@@ -190,6 +190,7 @@ private:
     std::string prepared_local_path_;
     uint32_t    prepared_line_count_ = 0;
     bool        prepare_ready_ = false;
+    bool        prepared_parser_open_ = false; /**< Prepare 阶段已打开 parser 文件，可在 Start 复用。 */
 
     std::string current_file_path_;
 

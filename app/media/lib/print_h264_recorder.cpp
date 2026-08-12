@@ -22,18 +22,32 @@
 namespace upc::media {
 
 namespace {
+/** 输出文件名：固定为 print.h264（H.264 裸流）。 */
 constexpr const char* kH264Name = "print.h264";
+/** 允许最多积压的未编码帧数；超过后丢帧，防止编码跟不上导致内存膨胀。 */
 constexpr size_t kMaxPendingFrameJobs = 3u;
 
+/**
+ * 将带有 stride 的 NV12 平面数据拷贝为紧凑 NV12 格式。
+ *
+ * @param dst           目标缓冲区，大小应为 width * height * 3 / 2。
+ * @param src_y         源 Y 平面指针。
+ * @param src_uv        源 UV 平面指针。
+ * @param src_stride_y  源 Y 平面 stride（允许 >= width）。
+ * @param width         图像宽度。
+ * @param height        图像高度。
+ */
 void copy_nv12_tight(uint8_t* dst, const uint8_t* src_y, const uint8_t* src_uv,
                      uint32_t src_stride_y, uint32_t width, uint32_t height) {
     const size_t y_size = static_cast<size_t>(width) * height;
     uint8_t* dst_uv = dst + y_size;
     if(src_stride_y == width) {
+        // stride 与宽度一致，可一次整块拷贝。
         std::memcpy(dst, src_y, y_size);
         std::memcpy(dst_uv, src_uv, y_size / 2u);
         return;
     }
+    // stride 大于宽度，需要逐行拷贝，丢弃每行末尾的填充字节。
     for(uint32_t r = 0; r < height; ++r) {
         std::memcpy(dst + static_cast<size_t>(r) * width, src_y + static_cast<size_t>(r) * src_stride_y, width);
     }
@@ -42,6 +56,12 @@ void copy_nv12_tight(uint8_t* dst, const uint8_t* src_y, const uint8_t* src_uv,
     }
 }
 
+/**
+ * 若目录存在且为空，则删除该目录。
+ *
+ * @param dir 待检查目录。
+ * @return 是否成功删除（或本来就不需要删除）。
+ */
 bool remove_empty_dir_if_exists(const std::string& dir) {
     if(dir.empty()) return false;
     std::error_code ec;
@@ -49,18 +69,27 @@ bool remove_empty_dir_if_exists(const std::string& dir) {
     return std::filesystem::remove(dir, ec);
 }
 
+/**
+ * 构建视频临时目录路径。
+ *
+ * @return 临时目录路径，由 UPC_VIDEO_TMP 宏定义。
+ */
 std::string build_video_tmp_dir() {
     return UPC_VIDEO_TMP;
 }
 
 } // namespace
 
+/**
+ * 统计任务队列中尚未处理的 WriteFrame 任务数量。
+ */
 size_t PrintH264Recorder::count_pending_write_frames(const std::deque<Job>& jobs) {
     size_t n = 0;
     for(const auto& j : jobs) if(j.kind == JobKind::WriteFrame) ++n;
     return n;
 }
 
+/** 析构时停止 worker 并关闭编码器。 */
 PrintH264Recorder::~PrintH264Recorder() {
     {
         std::lock_guard<std::mutex> lock(mtx_);
@@ -70,6 +99,9 @@ PrintH264Recorder::~PrintH264Recorder() {
     stop_worker();
 }
 
+/**
+ * 设置编码流参数。仅接受非零值，避免把相机未初始化时的 0 覆盖默认值。
+ */
 void PrintH264Recorder::set_stream_geometry(uint32_t width, uint32_t height, uint32_t fps) {
     std::lock_guard<std::mutex> lock(mtx_);
     if(width > 0) width_ = width;
@@ -77,16 +109,19 @@ void PrintH264Recorder::set_stream_geometry(uint32_t width, uint32_t height, uin
     if(fps > 0) fps_ = fps;
 }
 
+/** 设置编码完成回调。 */
 void PrintH264Recorder::set_finalize_done_callback(std::function<void()> cb) {
     std::lock_guard<std::mutex> lock(mtx_);
     finalize_done_cb_ = std::move(cb);
 }
 
+/** 设置存储预算检查回调。 */
 void PrintH264Recorder::set_storage_budget_guard(std::function<bool()> cb) {
     std::lock_guard<std::mutex> lock(mtx_);
     storage_budget_guard_ = std::move(cb);
 }
 
+/** 返回当前活跃会话目录。 */
 std::string PrintH264Recorder::current_session_dir() const {
     std::lock_guard<std::mutex> lock(mtx_);
     if(!active_) {
@@ -95,11 +130,20 @@ std::string PrintH264Recorder::current_session_dir() const {
     return session_dir_;
 }
 
+/** 返回是否处于活跃会话。 */
 bool PrintH264Recorder::session_active() const {
     std::lock_guard<std::mutex> lock(mtx_);
     return active_;
 }
 
+/**
+ * 生成打印录像缩略图。
+ *
+ * 取本对象最后一次成功编码的 NV12 帧，交给 timelapse_util 生成缩略图。
+ *
+ * @param out_path 输出缩略图路径。
+ * @return 是否成功生成。
+ */
 bool PrintH264Recorder::create_final_thumb(const char* out_path) const {
     std::vector<uint8_t> nv12;
     uint32_t width = 0;
@@ -114,6 +158,10 @@ bool PrintH264Recorder::create_final_thumb(const char* out_path) const {
         nv12, width, height, out_path);
 }
 
+/**
+ * 清空会话路径字符串。
+ * 调用前必须持有 mtx_。
+ */
 void PrintH264Recorder::clear_session_paths_locked() {
     session_id_.clear();
     session_name_.clear();
@@ -121,6 +169,10 @@ void PrintH264Recorder::clear_session_paths_locked() {
     h264_path_.clear();
 }
 
+/**
+ * 重置一次会话的运行时状态。
+ * 调用前必须持有 mtx_。
+ */
 void PrintH264Recorder::reset_session_state_locked() {
     active_ = false;
     paused_ = false;
@@ -132,12 +184,20 @@ void PrintH264Recorder::reset_session_state_locked() {
     clear_session_paths_locked();
 }
 
+/**
+ * 如果后台线程未启动，则创建新线程。
+ * 调用前必须持有 mtx_。
+ */
 void PrintH264Recorder::start_worker_if_needed_locked() {
     if(worker_.joinable()) return;
     worker_stop_ = false;
     worker_ = std::thread(&PrintH264Recorder::worker_fn, this);
 }
 
+/**
+ * 通知 worker 停止并等待其结束。
+ * 会先置停止标志，再唤醒条件变量，最后 join 线程。
+ */
 void PrintH264Recorder::stop_worker() {
     {
         std::lock_guard<std::mutex> lock(mtx_);
@@ -147,6 +207,16 @@ void PrintH264Recorder::stop_worker() {
     if(worker_.joinable()) worker_.join();
 }
 
+/**
+ * 打开 RKMPP 编码器。
+ *
+ * 如果编码器已经打开则直接返回 true。否则创建新的 MPP 上下文，初始化为 H.264
+ * 编码器，并配置分辨率、码率、帧率、GOP 等参数。
+ *
+ * 调用前必须持有 mtx_。
+ *
+ * @return 是否成功打开。
+ */
 bool PrintH264Recorder::open_encoder_locked() {
 #if !(defined(UPC_MEDIA_HAS_MPP) && UPC_MEDIA_HAS_MPP)
     had_write_error_ = true;
@@ -155,6 +225,7 @@ bool PrintH264Recorder::open_encoder_locked() {
 #else
     if(mpp_ready_) return true;
     (void)close_encoder_locked();
+    // 以追加模式打开 H.264 文件；编码器初始化前文件可能为空。
     h264_fp_ = std::fopen(h264_path_.c_str(), "ab");
     if(!h264_fp_) {
         had_write_error_ = true;
@@ -197,16 +268,19 @@ bool PrintH264Recorder::open_encoder_locked() {
         return false;
     }
 
+    // 读取默认配置，然后按需修改。
     (void)mpi->control(ctx, MPP_ENC_GET_CFG, cfg);
     const int fps = static_cast<int>(std::max(1u, fps_));
     const uint32_t use_bps =
         bitrate_bps_ > 0 ? bitrate_bps_ : CAMERA_PRINT_H264_BITRATE;
     const int bps = static_cast<int>(use_bps);
+    // 设置图像参数：分辨率、stride、格式（NV12/YUV420SP）。
     mpp_enc_cfg_set_s32(cfg, "prep:width", static_cast<int>(width_));
     mpp_enc_cfg_set_s32(cfg, "prep:height", static_cast<int>(height_));
     mpp_enc_cfg_set_s32(cfg, "prep:hor_stride", static_cast<int>(width_));
     mpp_enc_cfg_set_s32(cfg, "prep:ver_stride", static_cast<int>(height_));
     mpp_enc_cfg_set_s32(cfg, "prep:format", MPP_FMT_YUV420SP);
+    // 设置码率控制：CBR 模式，目标码率，输入/输出帧率，GOP 2 秒。
     mpp_enc_cfg_set_s32(cfg, "rc:mode", MPP_ENC_RC_MODE_CBR);
     mpp_enc_cfg_set_s32(cfg, "rc:bps_target", bps);
     mpp_enc_cfg_set_s32(cfg, "rc:fps_in_num", fps);
@@ -225,6 +299,16 @@ bool PrintH264Recorder::open_encoder_locked() {
 #endif
 }
 
+/**
+ * 关闭 RKMPP 编码器并冲刷残码流到文件。
+ *
+ * 先发送 EOS 帧，循环拉取编码器剩余 packet 写入文件，然后关闭文件、释放
+ * MPP 资源。无论成败都会将 mpp_ready_ 置 false。
+ *
+ * 调用前必须持有 mtx_。
+ *
+ * @return 非 0 表示写盘过程中发生错误。
+ */
 int PrintH264Recorder::close_encoder_locked() {
 #if !(defined(UPC_MEDIA_HAS_MPP) && UPC_MEDIA_HAS_MPP)
     return 0;
@@ -239,6 +323,7 @@ int PrintH264Recorder::close_encoder_locked() {
             (void)mpi->encode_put_frame(ctx, eos);
             mpp_frame_deinit(&eos);
         }
+        // 最多等待 200ms，拉取编码器剩余的 packet。
         for(int i = 0; i < 200; ++i) {
             MppPacket pkt = nullptr;
             if(mpi->encode_get_packet(ctx, &pkt) != MPP_OK || !pkt) {
@@ -253,15 +338,18 @@ int PrintH264Recorder::close_encoder_locked() {
             if(eos_hit) break;
         }
     }
+    // 关闭文件句柄。
     if(h264_fp_) {
         std::fflush(h264_fp_);
         std::fclose(h264_fp_);
         h264_fp_ = nullptr;
     }
+    // 释放编码配置。
     if(mpp_cfg_) {
         mpp_enc_cfg_deinit(reinterpret_cast<MppEncCfg>(mpp_cfg_));
         mpp_cfg_ = nullptr;
     }
+    // 销毁编码器上下文。
     if(mpp_ctx_) {
         mpp_destroy(reinterpret_cast<MppCtx>(mpp_ctx_));
         mpp_ctx_ = nullptr;
@@ -272,6 +360,14 @@ int PrintH264Recorder::close_encoder_locked() {
 #endif
 }
 
+/**
+ * 处理一次打印期会话开始。
+ *
+ * 1. 等待 worker 处理完上一个会话的任务，避免 session 重叠。
+ * 2. 关闭上一次编码器，清空状态。
+ * 3. 若 h264_continuous_on 为 0 则直接返回，不启用连续录像。
+ * 4. 创建临时目录，准备输出文件路径。
+ */
 void PrintH264Recorder::on_session_start(const middleware::PrintVideoSessionPayload& info) {
     std::unique_lock<std::mutex> lock(mtx_);
     while(finalize_in_progress_ || worker_busy_ || !jobs_.empty()) {
@@ -291,12 +387,12 @@ void PrintH264Recorder::on_session_start(const middleware::PrintVideoSessionPayl
     h264_path_ = session_dir_ + "/" + kH264Name;
     if(info.width > 0) width_ = info.width;
     if(info.height > 0) height_ = info.height;
-    /* 编码帧率以相机开流为准（set_stream_geometry），勿用 layer_fps（延时摄影）覆盖 */
+    // 编码帧率以相机开流时 set_stream_geometry 为准，不使用 layer_fps（延时摄影）。
     bitrate_bps_ = info.h264_bitrate > 0 ? info.h264_bitrate
                                          : CAMERA_PRINT_H264_BITRATE;
 
-    /* 与 PrintVideoRecorder 共用 tmp/：不在此 remove_all，避免清掉层间 PNG。
-     * Media 在 Session Start 前已 recover+清空 tmp。 */
+    // 与 PrintVideoRecorder 共用 tmp/ 目录：这里不做 remove_all，避免误删层间 PNG。
+    // Media 模块已在 Session Start 前完成 recover 和清空 tmp。
     std::error_code ec;
     std::filesystem::create_directories(session_dir_, ec);
     if(ec) return;
@@ -306,11 +402,16 @@ void PrintH264Recorder::on_session_start(const middleware::PrintVideoSessionPayl
         session_id_.c_str(), bitrate_bps_, width_, height_, fps_);
 }
 
+/** 设置暂停状态。暂停期间到达的帧会被直接丢弃。 */
 void PrintH264Recorder::set_paused(bool paused) {
     std::lock_guard<std::mutex> lock(mtx_);
     paused_ = paused;
 }
 
+/**
+ * 正常结束打印期会话。
+ * 仅当会话处于活跃状态且 session_id 匹配时入队 Finalize 任务。
+ */
 void PrintH264Recorder::on_session_finish(const middleware::PrintVideoSessionPayload& info) {
     std::lock_guard<std::mutex> lock(mtx_);
     if(active_ && (info.session_id[0] == 0 || session_id_ == info.session_id)) {
@@ -318,6 +419,10 @@ void PrintH264Recorder::on_session_finish(const middleware::PrintVideoSessionPay
     }
 }
 
+/**
+ * 异常中止打印期会话。
+ * 仅当会话处于活跃状态且 session_id 匹配时入队 Finalize 任务。
+ */
 void PrintH264Recorder::on_session_abort(const middleware::PrintVideoSessionPayload& info) {
     std::lock_guard<std::mutex> lock(mtx_);
     if(active_ && (info.session_id[0] == 0 || session_id_ == info.session_id)) {
@@ -325,6 +430,15 @@ void PrintH264Recorder::on_session_abort(const middleware::PrintVideoSessionPayl
     }
 }
 
+/**
+ * 每帧 NV12 回调入口。
+ *
+ * 设计要点：
+ * - 仅做最小限度的检查：会话活跃、未暂停、无错误、数据有效。
+ * - 若写队列已满，直接丢弃本帧，不阻塞上游。
+ * - 在锁外完成 NV12 数据拷贝，减少锁持有时间。
+ * - 入队前会再次校验会话状态，避免把旧会话的帧写入新会话。
+ */
 void PrintH264Recorder::on_frame_nv12(const uint8_t* src_y, const uint8_t* src_uv, uint32_t stride_y) {
     uint64_t seq = 0;
     uint32_t w = 0;
@@ -344,6 +458,7 @@ void PrintH264Recorder::on_frame_nv12(const uint8_t* src_y, const uint8_t* src_u
     if(stride_y == 0) stride_y = w;
     if(stride_y < w) return;
 
+    // 构造 WriteFrame 任务，并在锁外拷贝数据。
     Job job{};
     job.kind = JobKind::WriteFrame;
     job.session_seq = seq;
@@ -354,12 +469,17 @@ void PrintH264Recorder::on_frame_nv12(const uint8_t* src_y, const uint8_t* src_u
 
     {
         std::lock_guard<std::mutex> lock(mtx_);
+        // 再次检查会话是否已切换或已停止，若已切换则丢弃本帧。
         if(!active_ || paused_ || had_write_error_ || seq != session_seq_) return;
         jobs_.push_back(std::move(job));
     }
     cv_.notify_one();
 }
 
+/**
+ * 入队清理临时目录任务。
+ * 删除 print.h264 和 print_h264.mp4 残留文件，并尝试删除空目录。
+ */
 void PrintH264Recorder::enqueue_cleanup_tmp() {
     std::lock_guard<std::mutex> lock(mtx_);
     start_worker_if_needed_locked();
@@ -370,6 +490,12 @@ void PrintH264Recorder::enqueue_cleanup_tmp() {
     cv_.notify_one();
 }
 
+/**
+ * 入队 Finalize 任务。
+ * 调用前必须持有 mtx_。
+ *
+ * @param aborted true 表示异常中止，false 表示正常结束。
+ */
 void PrintH264Recorder::enqueue_finalize_locked(bool aborted) {
     start_worker_if_needed_locked();
     active_ = false;
@@ -383,6 +509,12 @@ void PrintH264Recorder::enqueue_finalize_locked(bool aborted) {
     cv_.notify_one();
 }
 
+/**
+ * 后台 worker 主循环。
+ *
+ * 从任务队列中弹出任务，标记当前忙碌状态，然后分发给对应的处理器。
+ * 处理完成后通知 idle_cv_，让等待的 on_session_start 可以继续。
+ */
 void PrintH264Recorder::worker_fn() {
     for(;;) {
         Job job{};
@@ -408,6 +540,17 @@ void PrintH264Recorder::worker_fn() {
     }
 }
 
+/**
+ * 处理 WriteFrame 任务：编码并写入一帧。
+ *
+ * 流程：
+ * 1. 检查会话序号和错误状态是否仍然有效。
+ * 2. 调用存储预算检查函数，若空间不足则跳过。
+ * 3. 打开 RKMPP 编码器。
+ * 4. 将 NV12 数据拷贝到 MPP buffer，构造 MPP frame 送入编码器。
+ * 5. 循环从编码器拉取 H.264 packet 写入文件。
+ * 6. 若成功，更新帧计数和 last_nv12_ 用于缩略图。
+ */
 void PrintH264Recorder::run_write_frame_job(const Job& job) {
     const size_t need = static_cast<size_t>(job.width) * job.height * 3u / 2u;
     void* ctx = nullptr;
@@ -478,6 +621,7 @@ void PrintH264Recorder::run_write_frame_job(const Job& job) {
     mpp_frame_deinit(&frame);
     mpp_buffer_put(buf);
 
+    // 从编码器取出所有 packet 并写入文件。
     for(;;) {
         MppPacket pkt = nullptr;
         if(mpp_mpi->encode_get_packet(mpp_ctx, &pkt) != MPP_OK || !pkt) break;
@@ -497,6 +641,7 @@ void PrintH264Recorder::run_write_frame_job(const Job& job) {
     }
 #endif
 
+    // 编码写盘成功，更新统计和最后一帧缓存。
     std::lock_guard<std::mutex> lock(mtx_);
     if(job.session_seq == session_seq_ && !had_write_error_) {
         ++frame_count_;
@@ -504,6 +649,15 @@ void PrintH264Recorder::run_write_frame_job(const Job& job) {
     }
 }
 
+/**
+ * 处理 Finalize 任务：结束会话收尾。
+ *
+ * 流程：
+ * 1. 在锁内记录统计信息并关闭编码器。
+ * 2. 若本次会话没有任何成功帧，删除生成的空文件和空目录。
+ * 3. 输出日志。
+ * 4. 触发 finalize 完成回调。
+ */
 void PrintH264Recorder::run_finalize_job(Job job) {
     std::string h264;
     std::string dir;
@@ -527,7 +681,7 @@ void PrintH264Recorder::run_finalize_job(Job job) {
         }
     }
 
-    /* 终止打印也保留连续录像裸流；仅当完全无帧时才清理。 */
+    // 即使中止也保留已编码的连续录像裸流；仅当完全没有帧时才清理文件。
     if(frames == 0) {
         (void)std::remove(h264.c_str());
         (void)remove_empty_dir_if_exists(dir);
@@ -550,12 +704,21 @@ void PrintH264Recorder::run_finalize_job(Job job) {
     }
 }
 
+/**
+ * 处理 Cleanup 任务：删除临时目录下的 print.h264 和 print_h264.mp4。
+ */
 void PrintH264Recorder::run_cleanup_job(const Job& job) {
     (void)std::remove((job.cleanup_dir + "/print.h264").c_str());
     (void)std::remove((job.cleanup_dir + "/print_h264.mp4").c_str());
     (void)remove_empty_dir_if_exists(job.cleanup_dir);
 }
 
+/**
+ * 将字符串转换为可用作文件名的安全字符串。
+ *
+ * 仅保留字母、数字、下划线、连字符和点号，其它字符替换为下划线。
+ * 若输入为空，返回默认字符串 "print"。
+ */
 std::string PrintH264Recorder::sanitize_filename(const char* name) {
     if(!name || !name[0]) return "print";
     std::string out(name);

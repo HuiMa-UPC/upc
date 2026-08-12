@@ -81,6 +81,11 @@ OvfWorker::~OvfWorker()
     close_file();
 }
 
+void OvfWorker::set_total_lines_hint(int total_lines)
+{
+    total_lines_hint_ = (total_lines > 0) ? total_lines : -1;
+}
+
 void OvfWorker::apply_gain_defaults()
 {
     if(image_rang_gain_ < 1e-6f) {
@@ -641,6 +646,8 @@ void OvfWorker::parser_thread_fn()
 
 int OvfWorker::open_file(const std::string& filepath)
 {
+    const int hinted_total_lines = total_lines_hint_;
+    total_lines_hint_ = -1;
     close_file();
     apply_calibration_from_context();
 
@@ -653,7 +660,10 @@ int OvfWorker::open_file(const std::string& filepath)
     }
 
     filepath_ = filepath;
-    const int segments = count_motion_segments(job_);
+    int segments = hinted_total_lines;
+    if(segments <= 0) {
+        segments = count_motion_segments(job_);
+    }
     total_lines_.store(segments);
     total_motion_packets_.store(0);
     parsed_lines_.store(0);
@@ -716,6 +726,7 @@ void OvfWorker::close_file()
     stop_parse();
     job_.Clear();
     filepath_.clear();
+    total_lines_hint_ = -1;
     total_lines_.store(0);
     total_motion_packets_.store(0);
     parsed_lines_.store(0);
