@@ -345,6 +345,8 @@ private:
     bool mcu_rates_drained() const;
     /** @brief 当前是否处于“应持续发运动包”的活跃流状态 */
     bool motion_stream_active() const;
+    /** @brief 当前是否因 MCU 指令缓存达到阈值而暂停运动包下发 */
+    bool motion_stream_backpressured() const;
     /** @brief 根据当前状态决定链路线程每次循环的休眠间隔（ms） */
     int link_thread_sleep_ms() const;
     /** @brief 获取当前生效的每轮 TCP 运动包发送上限 */

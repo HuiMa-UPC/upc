@@ -21,6 +21,10 @@ namespace ui {
 
 namespace {
 
+/* =========================
+ * 基础常量与工具函数（匿名命名空间）
+ * ========================= */
+
 constexpr uint32_t kUiRefreshPeriodMs = 33u;
 /* 录像收尾（尤其 print_h264）存在短时抖动，适当放宽卡帧告警阈值。 */
 constexpr uint64_t kPreviewStallWarnMs = 1200u;
@@ -238,6 +242,10 @@ void log_bgrx_probe(const char* tag, const uint8_t* dst, uint32_t w, uint32_t h,
 
 } // namespace
 
+/* =========================
+ * FrameSlot 与基础资源管理
+ * ========================= */
+
 void CameraPreviewPlayer::FrameSlot::clear()
 {
     dma.free();
@@ -278,6 +286,7 @@ CameraPreviewPlayer& CameraPreviewPlayer::instance()
     return inst;
 }
 
+/* 关闭当前/暂存 DMA FD。当前 FD 被解码线程持有，暂存 FD 等待切流时接管。 */
 void CameraPreviewPlayer::close_dma_fds()
 {
     close_active_dma_fds();
@@ -303,6 +312,10 @@ int CameraPreviewPlayer::dma_fd(uint32_t idx) const noexcept
     return dma_fds_[idx];
 }
 
+/* =========================
+ * 预览生命周期：init/start/stop
+ * ========================= */
+
 void CameraPreviewPlayer::init()
 {
     CameraMsgProxy::instance().register_stream_start_rsp(
@@ -314,6 +327,7 @@ void CameraPreviewPlayer::init()
 void CameraPreviewPlayer::start(lv_obj_t* image_widget, lv_obj_t* hint_widget,
                                  const char* scene)
 {
+    // 退役期间不抢占旧线程/旧资源：仅记录参数，待退役完成后自动重启。
     auto defer_start = [this, image_widget, hint_widget, scene]() {
         pending_image_ = image_widget;
         pending_hint_  = hint_widget;
@@ -378,6 +392,7 @@ void CameraPreviewPlayer::start(lv_obj_t* image_widget, lv_obj_t* hint_widget,
 
 void CameraPreviewPlayer::stop()
 {
+    // had_session 决定是否需要向 Camera 发送 stop，避免无效 IPC。
     const bool had_session =
         active_.load() || stream_up_.load() || start_req_sent_;
 
@@ -417,6 +432,10 @@ void CameraPreviewPlayer::stop()
     }
 }
 
+/* =========================
+ * Start_Rsp 接入与 UI 线程落地
+ * ========================= */
+
 void CameraPreviewPlayer::on_stream_start_rsp(
     const middleware::CameraStreamInfoPayload& info)
 {
@@ -426,6 +445,7 @@ void CameraPreviewPlayer::on_stream_start_rsp(
         active_.load() ? 1 : 0);
 
     if(!active_.load()) {
+        // UI 已停止时丢弃响应，同时清理这次响应附带的 fd，避免泄漏。
         if(info.ok) {
             std::vector<int> drain;
             if(middleware::MsgPort::instance().take_peer_dma_fds(
@@ -482,6 +502,10 @@ void CameraPreviewPlayer::async_apply_stream_start(void* user)
     self->pending_start_rsp_valid_ = false;
     self->apply_stream_start_ui(self->pending_start_rsp_);
 }
+
+/* =========================
+ * 显示缓冲准备与切流接管
+ * ========================= */
 
 void CameraPreviewPlayer::clear_frame_buffers()
 {
@@ -556,6 +580,7 @@ void CameraPreviewPlayer::apply_stream_start_ui(
     display_buf_.store(-1, std::memory_order_relaxed);
     shown_buf_.store(-1, std::memory_order_relaxed);
     show_hint(LV_SYMBOL_VIDEO "  Reconnecting camera...");
+    // 旧会话资源在此处统一释放，再进入新会话准备。
     close_active_dma_fds();
     clear_frame_buffers();
 
@@ -591,6 +616,7 @@ void CameraPreviewPlayer::apply_stream_start_ui(
         consumer_.stride_y(), consumer_.slot_count(), consumer_.format());
 
     const uint32_t ring_stride = consumer_.stride_y();
+    // stride 优先采用 SHM 元数据环，回退到 rsp 字段，最后兜底 width。
     src_stride_y_ = ring_stride > 0 ? ring_stride
                     : (info.stride_y > 0 ? info.stride_y : width_);
 
@@ -627,6 +653,7 @@ void CameraPreviewPlayer::apply_stream_start_ui(
                            dma_fds_.size(), dma_nv12_bytes_);
 
     pixel_stride_px_ = (width_ + 3u) & ~3u;
+    // LVGL XRGB8888 每行按 4 字节像素对齐，像素 stride 向上 4 对齐。
     const size_t frame_bytes =
         static_cast<size_t>(pixel_stride_px_) * height_ * 4u;
     const uint32_t row_stride_bytes = pixel_stride_px_ * 4u;
@@ -668,6 +695,10 @@ void CameraPreviewPlayer::apply_stream_start_ui(
     show_hint(LV_SYMBOL_VIDEO "  Loading preview...");
 }
 
+/* =========================
+ * 解码线程退役（非阻塞 UI）
+ * ========================= */
+
 void CameraPreviewPlayer::request_decode_retire_ui()
 {
     if(decode_retiring_.exchange(true, std::memory_order_acq_rel)) {
@@ -683,6 +714,7 @@ void CameraPreviewPlayer::request_decode_retire_ui()
     auto retire_state = std::make_shared<RetireState>();
     retire_state_ = retire_state;
     std::thread retiring_thread = std::move(decode_thread_);
+    // 不在 UI 线程 join：后台 join 后仅写 done 标志，UI 通过 timer 轮询收尾。
     std::thread([thread = std::move(retiring_thread),
                  retire_state = std::move(retire_state)]() mutable {
         thread.join();
@@ -724,6 +756,7 @@ void CameraPreviewPlayer::finish_decode_retire_ui()
     clear_frame_buffers();
 
     if(!active_.load()) {
+        // stop() 期间若收到新的 start 请求，这里接续启动，避免 UI 主线程阻塞等待。
         if(pending_start_) {
             lv_obj_t* pending_image = pending_image_;
             lv_obj_t* pending_hint  = pending_hint_;
@@ -747,6 +780,10 @@ void CameraPreviewPlayer::finish_decode_retire_ui()
     pending_start_rsp_valid_ = false;
     apply_stream_start_ui(info);
 }
+
+/* =========================
+ * 解码主循环与 NV12 -> BGRX
+ * ========================= */
 
 bool CameraPreviewPlayer::begin_decode_thread()
 {
@@ -788,6 +825,7 @@ void CameraPreviewPlayer::decode_thread_fn()
     while(!stop_decode_.load(std::memory_order_relaxed)) {
         const auto tick_start = std::chrono::steady_clock::now();
 
+        // 总是取 ring 中最新帧：牺牲逐帧完整性，换取预览低延迟。
         std::optional<upc_ipc::IpcDmaFrameView> frame =
             consumer_.acquire_latest_frame();
         if(!frame) {
@@ -809,6 +847,7 @@ void CameraPreviewPlayer::decode_thread_fn()
                                        shown_buf_.load(std::memory_order_relaxed),
                                        display_buf_.load(std::memory_order_relaxed),
                                        kFrameSlots);
+            // 解码写入时避开“当前显示”和“待显示”槽，减少 UI 读写竞争。
             const auto cvt_start = std::chrono::steady_clock::now();
             if(convert_frame(*frame, write_idx)) {
                 ++frames_ok;
@@ -922,6 +961,7 @@ bool CameraPreviewPlayer::convert_frame_dma(const upc_ipc::IpcDmaFrameView& fram
         return false;
     }
 
+    // 快路径：RGA 直接做 NV12 -> BGRX，失败后再回退软件转换。
     if(rga_path_ready_ && slot.is_dma()) {
         dma_buf_sync_start_read(src_fd);
         for(int attempt = 0; attempt < kRgaRetryCount; ++attempt) {
@@ -956,10 +996,10 @@ bool CameraPreviewPlayer::convert_frame_dma(const upc_ipc::IpcDmaFrameView& fram
         }
     }
 
-    // RGA 失败或目的缓冲非 dma：结束 src 的 read sync，再 mmap 软件回退
+    // RGA 失败或目的缓冲非 dma：结束 src 的 read sync，再 mmap 软件回退。
     dma_buf_sync_end_read(src_fd);
 
-    // SW 回退：mmap 源 fd
+    // SW 回退：mmap 源 fd，CPU 转换后写入目标槽。
     const size_t src_size = dma_nv12_bytes_;
     dma_buf_sync_start_read(src_fd);
     void* src_va = mmap(nullptr, src_size, PROT_READ, MAP_SHARED, src_fd, 0);
@@ -983,6 +1023,10 @@ bool CameraPreviewPlayer::convert_frame_dma(const upc_ipc::IpcDmaFrameView& fram
     }
     return true;
 }
+
+/* =========================
+ * UI 刷新与状态重置
+ * ========================= */
 
 void CameraPreviewPlayer::schedule_ui_timer()
 {
@@ -1032,6 +1076,7 @@ void CameraPreviewPlayer::ui_timer_cb(lv_timer_t* timer)
     if(idx == self->shown_buf_.load(std::memory_order_relaxed)) {
         return;
     }
+    // UI 定时器只做“指针切换”，不参与像素转换，保持主线程轻量。
     self->shown_buf_.store(idx, std::memory_order_relaxed);
 
     const bool first_show = !self->logged_first_ui_show_;
@@ -1056,6 +1101,7 @@ void CameraPreviewPlayer::ui_timer_cb(lv_timer_t* timer)
 
 void CameraPreviewPlayer::reset_ui()
 {
+    // reset_ui 只清本地状态，不触发 IPC；调用方负责 stop/start 时序。
     image_     = nullptr;
     hint_      = nullptr;
     shown_buf_ = -1;

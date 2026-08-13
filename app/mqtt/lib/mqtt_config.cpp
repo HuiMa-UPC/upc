@@ -55,8 +55,8 @@ std::string MqttConfig::topic_heartbeat() const
 MqttConfig load_mqtt_config()
 {
     MqttConfig cfg;
-    cfg.device_id = get_env_or_default("SNOWPOD_MQTT_DEVICE_ID", "SNOWPOD-6939D0F3");
-    cfg.device_secret = get_env_or_default("SNOWPOD_DEVICE_SECRET", "fc94abbee2df54557788fef0b18e9782917b27f46ff4acf25a6a1d1888495bae");
+    cfg.device_id = get_env_or_default("SNOWPOD_MQTT_DEVICE_ID", "SNOWPOD-050986D9E7001000");
+    cfg.device_secret = get_env_or_default("SNOWPOD_DEVICE_SECRET", "14c8f551e5d38928bcd7240adf635ecdc3770cb21d8675ec3d146d49aa192fe4");
     cfg.client_id = get_env_or_default("SNOWPOD_MQTT_CLIENT_ID", "");
     cfg.username = get_env_or_default("SNOWPOD_MQTT_USERNAME", "");
     cfg.activation_base_url = get_env_or_default(

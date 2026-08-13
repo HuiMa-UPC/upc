@@ -1869,6 +1869,17 @@ bool McuLink::motion_stream_active() const
            !terminate_pending_.load() && !natural_complete_pending_.load();
 }
 
+bool McuLink::motion_stream_backpressured() const
+{
+    if(!motion_stream_active()) {
+        return false;
+    }
+    const auto snap = PrintJobState::instance().snapshot();
+    const uint32_t threshold =
+        (65535u * current_cmd_backpressure_pct()) / 100u;
+    return snap.cmd_cache_rate >= threshold;
+}
+
 void McuLink::poll_mcu_drain_heartbeat()
 {
     if(tcp_fd_ < 0) {
@@ -2440,11 +2451,8 @@ void McuLink::link_drain_motion_queue()
         return;
     }
 
-    // 4. 背压检查：若 MCU 指令缓存占用率超过阈值，暂停下发
-    const auto snap = PrintJobState::instance().snapshot();
-    const uint32_t threshold =
-        (65535u * current_cmd_backpressure_pct()) / 100u;
-    if(snap.cmd_cache_rate >= threshold) {
+    // 4. 背压检查：若 MCU 指令缓存占用率超过阈值，暂停运动包下发
+    if(motion_stream_backpressured()) {
         return;
     }
 
@@ -2878,10 +2886,12 @@ void McuLink::link_thread_fn()
             terminate_pending_.store(false);
         } else {
             try_apply_pending_tcp_profile();
-            // ---------- 心跳（空闲；用户暂停时也要刷 MCU rate） ----------
+            // ---------- 心跳（空闲/用户暂停/背压时都要刷 MCU rate） ----------
             const bool stream = motion_stream_active();
+            const bool backpressured = motion_stream_backpressured();
             const bool need_hb =
-                (!stream || (is_sending_.load() && user_paused_.load())) &&
+                (!stream || (is_sending_.load() && user_paused_.load()) ||
+                 backpressured) &&
                 !ota_session_.suppress_idle_heartbeat() &&
                 tcp_fd_ >= 0 && now >= next_hb;
             if(need_hb) {
