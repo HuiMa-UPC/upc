@@ -55,12 +55,12 @@ std::string MqttConfig::topic_heartbeat() const
 MqttConfig load_mqtt_config()
 {
     MqttConfig cfg;
-    cfg.device_id = get_env_or_default("SNOWPOD_MQTT_DEVICE_ID", "SNOWPOD-050986D9E7001000");
-    cfg.device_secret = get_env_or_default("SNOWPOD_DEVICE_SECRET", "14c8f551e5d38928bcd7240adf635ecdc3770cb21d8675ec3d146d49aa192fe4");
+    cfg.device_id = get_env_or_default("SNOWPOD_MQTT_DEVICE_ID", "SNOWPOD-050986DC98001000");
+    cfg.device_secret = get_env_or_default("SNOWPOD_DEVICE_SECRET", "bacff0d7cc54115f6c268e4eabc5538670346c2a084037079796f50abd52e985");
     cfg.client_id = get_env_or_default("SNOWPOD_MQTT_CLIENT_ID", "");
     cfg.username = get_env_or_default("SNOWPOD_MQTT_USERNAME", "");
     cfg.activation_base_url = get_env_or_default(
-        "SNOWPOD_DEVICE_INIT_BASE_URL", "http://172.17.0.233:8082");
+        "SNOWPOD_DEVICE_INIT_BASE_URL", "http://172.17.31.31:8081");
     cfg.credential_file = get_env_or_default(
         "SNOWPOD_MQTT_CREDENTIAL_FILE", "/data/snowpod/mqtt-credential");
     cfg.keepalive_sec = get_env_int_or_default("SNOWPOD_MQTT_KEEPALIVE_SEC", 60);

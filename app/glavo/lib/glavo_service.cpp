@@ -395,6 +395,7 @@ bool GlavoService::init()
     print_h264_continuous_on_ = false; /* 上电默认关：调试页 Other → Print H264 Rec */
     clean_video_record_on_ = true;
     clean_video_session_started_ = false;
+    first_layer_visual_check_on_ = false;
     env_sim_on_ = false;
     env_sim_powder_low_on_ = false;
     McuLink::instance().set_env_sim_enabled(false);
@@ -428,6 +429,9 @@ bool GlavoService::init()
         transport_result_code_.store(result_code);
         transport_result_pending_.store(true);
         worker_cv_.notify_one();
+    });
+    McuLink::instance().set_first_layer_check_callback([this](uint16_t layer_height_um) {
+        return request_first_layer_visual_check(layer_height_um);
     });
     McuLink::instance().set_ota_status_callback(
         [this](const middleware::McuOtaStatusPayload& st) {
@@ -529,6 +533,9 @@ bool GlavoService::start()
         middleware::MsgType::UI_Debug_Env_Sim_Get_Req,
         middleware::MsgType::UI_Debug_Env_Sim_Powder_Set_Req,
         middleware::MsgType::UI_Debug_Env_Sim_Powder_Get_Req,
+        middleware::MsgType::UI_Debug_FirstLayer_Visual_Check_Set_Req,
+        middleware::MsgType::UI_Debug_FirstLayer_Visual_Check_Get_Req,
+        middleware::MsgType::APP_Visual_FirstLayer_Check_Rsp,
 
         /* Settings/About：MCU 固件版本查询 */
         middleware::MsgType::UI_Mcu_Version_Req,
@@ -544,6 +551,7 @@ bool GlavoService::start()
     publish_debug_clean_record_state();
     publish_debug_env_sim_state();
     publish_debug_env_sim_powder_state();
+    publish_debug_first_layer_visual_check_state();
     return true;
 }
 
@@ -558,6 +566,11 @@ bool GlavoService::stop()
     if (state() != ServiceState::Running) return false;
 
     state_ = ServiceState::Stopping;
+    {
+        std::lock_guard<std::mutex> lock(first_layer_visual_mtx_);
+        first_layer_visual_waiting_ = false;
+    }
+    first_layer_visual_cv_.notify_all();
     stop_usb_hotplug_monitor();
 
     if (worker_thread_.joinable()) {
@@ -925,6 +938,15 @@ void GlavoService::handle_message(const middleware::Message& msg)
             break;
         case middleware::MsgType::UI_Debug_Env_Sim_Powder_Get_Req:
             handle_debug_env_sim_powder_get(msg);
+            break;
+        case middleware::MsgType::UI_Debug_FirstLayer_Visual_Check_Set_Req:
+            handle_debug_first_layer_visual_check_set(msg);
+            break;
+        case middleware::MsgType::UI_Debug_FirstLayer_Visual_Check_Get_Req:
+            handle_debug_first_layer_visual_check_get(msg);
+            break;
+        case middleware::MsgType::APP_Visual_FirstLayer_Check_Rsp:
+            handle_visual_first_layer_check_rsp(msg);
             break;
         case middleware::MsgType::UI_Mcu_Version_Req:
             handle_mcu_version_req(msg);
@@ -1692,6 +1714,68 @@ void GlavoService::publish_print_powder_low_ntf()
     if(!publish_async(ntf)) {
         UPC_LOG_GLAVO_SERVICE(Warn, "powder_low_ntf publish failed");
     }
+}
+
+bool GlavoService::request_first_layer_visual_check(uint16_t layer_height_um)
+{
+    if(!first_layer_visual_check_on_) {
+        return true;
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(first_layer_visual_mtx_);
+        first_layer_visual_waiting_ = true;
+        first_layer_visual_result_ = 0;
+    }
+
+    middleware::VisualFirstLayerCheckReqPayload req{};
+    req.layer_height_um = layer_height_um;
+    middleware::Message msg(
+        middleware::MsgType::GLAVO_Visual_FirstLayer_Check_Req,
+        middleware::ModuleId::APP_GLAVO,
+        middleware::ModuleId::APP_VISUAL);
+    msg.payload = middleware::MsgPayload::from_bytes(
+        reinterpret_cast<const uint8_t*>(&req), sizeof(req));
+    if(!publish_async(msg)) {
+        UPC_LOG_GLAVO_SERVICE(Warn, "first layer visual check req publish failed");
+        std::lock_guard<std::mutex> lock(first_layer_visual_mtx_);
+        first_layer_visual_waiting_ = false;
+        return false;
+    }
+
+    UPC_LOG_GLAVO_SERVICE(Info, "first layer visual check requested layer=%u",
+                          static_cast<unsigned>(layer_height_um));
+
+    std::unique_lock<std::mutex> lk(first_layer_visual_mtx_);
+    first_layer_visual_cv_.wait(lk, [this]() { return !first_layer_visual_waiting_; });
+    const bool pass = (first_layer_visual_result_ != 0);
+    UPC_LOG_GLAVO_SERVICE(Info, "first layer visual check result=%u",
+                          static_cast<unsigned>(first_layer_visual_result_));
+    return pass;
+}
+
+void GlavoService::handle_visual_first_layer_check_rsp(const middleware::Message& msg)
+{
+    middleware::VisualFirstLayerCheckRspPayload rsp{};
+    if(!read_inline_pod(msg.payload, rsp)) {
+        UPC_LOG_GLAVO_SERVICE(Warn, "first layer visual check rsp invalid payload");
+        std::lock_guard<std::mutex> lock(first_layer_visual_mtx_);
+        if(first_layer_visual_waiting_) {
+            first_layer_visual_result_ = 0;
+            first_layer_visual_waiting_ = false;
+            first_layer_visual_cv_.notify_all();
+        }
+        return;
+    }
+
+    std::lock_guard<std::mutex> lock(first_layer_visual_mtx_);
+    if(!first_layer_visual_waiting_) {
+        UPC_LOG_GLAVO_SERVICE(Warn, "first layer visual check rsp without pending request");
+        return;
+    }
+    first_layer_visual_result_ = rsp.result ? 1 : 0;
+    first_layer_visual_waiting_ = false;
+    first_layer_visual_cv_.notify_all();
 }
 
 /**
@@ -2817,6 +2901,37 @@ void GlavoService::handle_debug_env_sim_powder_get(const middleware::Message& ms
 {
     (void)msg;
     publish_debug_env_sim_powder_state();
+}
+
+void GlavoService::publish_debug_first_layer_visual_check_state()
+{
+    middleware::DebugOnOffPayload p{};
+    p.on = first_layer_visual_check_on_ ? 1 : 0;
+    middleware::Message ntf(
+        middleware::MsgType::GLAVO_Debug_FirstLayer_Visual_Check_Ntf,
+        middleware::ModuleId::APP_GLAVO,
+        middleware::ModuleId::UI);
+    ntf.payload = middleware::MsgPayload::from_bytes(
+        reinterpret_cast<const uint8_t*>(&p), sizeof(p));
+    (void)publish_async(ntf);
+}
+
+void GlavoService::handle_debug_first_layer_visual_check_set(const middleware::Message& msg)
+{
+    middleware::DebugOnOffPayload p{};
+    if(!read_inline_pod(msg.payload, p)) {
+        return;
+    }
+    first_layer_visual_check_on_ = (p.on != 0);
+    UPC_LOG_GLAVO_SERVICE(Info, "debug first_layer_visual_check=%d",
+                          first_layer_visual_check_on_ ? 1 : 0);
+    publish_debug_first_layer_visual_check_state();
+}
+
+void GlavoService::handle_debug_first_layer_visual_check_get(const middleware::Message& msg)
+{
+    (void)msg;
+    publish_debug_first_layer_visual_check_state();
 }
 /* ============================================================================
  * Settings/About：MCU 固件版本查询

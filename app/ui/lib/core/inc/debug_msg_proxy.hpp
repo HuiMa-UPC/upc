@@ -25,6 +25,7 @@ using DebugPrintH264RecordCb = std::function<void(bool)>;
 using DebugCleanRecordCb = std::function<void(bool)>;
 using DebugEnvSimCb = std::function<void(bool)>;
 using DebugEnvSimPowderCb = std::function<void(bool)>;
+using DebugFirstLayerVisualCheckCb = std::function<void(bool)>;
 
 class DebugMsgProxy {
 public:
@@ -68,6 +69,8 @@ public:
     void request_env_sim_state();
     void send_env_sim_powder_set(bool on);
     void request_env_sim_powder_state();
+    void send_first_layer_visual_check_set(bool on);
+    void request_first_layer_visual_check_state();
 
     /* ---- 状态回读 ---- */
     void register_sensor(DebugSensorCb cb);
@@ -79,6 +82,7 @@ public:
     void register_clean_record(DebugCleanRecordCb cb);
     void register_env_sim(DebugEnvSimCb cb);
     void register_env_sim_powder(DebugEnvSimPowderCb cb);
+    void register_first_layer_visual_check(DebugFirstLayerVisualCheckCb cb);
 
 private:
     DebugMsgProxy() = default;
@@ -118,6 +122,7 @@ private:
     DebugCleanRecordCb clean_record_cb_;
     DebugEnvSimCb env_sim_cb_;
     DebugEnvSimPowderCb env_sim_powder_cb_;
+    DebugFirstLayerVisualCheckCb first_layer_visual_check_cb_;
 };
 
 } // namespace ui

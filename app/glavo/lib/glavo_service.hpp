@@ -125,10 +125,15 @@ private:
     void handle_debug_env_sim_get(const middleware::Message& msg);
     void handle_debug_env_sim_powder_set(const middleware::Message& msg);
     void handle_debug_env_sim_powder_get(const middleware::Message& msg);
+    void handle_debug_first_layer_visual_check_set(const middleware::Message& msg);
+    void handle_debug_first_layer_visual_check_get(const middleware::Message& msg);
     void publish_debug_print_h264_record_state();
     void publish_debug_clean_record_state();
     void publish_debug_env_sim_state();
     void publish_debug_env_sim_powder_state();
+    void publish_debug_first_layer_visual_check_state();
+    bool request_first_layer_visual_check(uint16_t layer_height_um);
+    void handle_visual_first_layer_check_rsp(const middleware::Message& msg);
     void debug_tx(const uint8_t* frame, int n);
 
     /** @brief About 页版本查询：下发串口 TLV_GET_VERSION，应答由 McuLink 直接推 UI */
@@ -227,9 +232,14 @@ private:
     char clean_test_session_id_[32]{};
     char clean_test_job_name_[64]{};
     bool print_h264_continuous_on_ = false;
+    bool first_layer_visual_check_on_ = false; /**< 首层视觉检测开关（仅本次运行） */
     bool env_sim_on_ = false;  /**< 环境上报模拟（仅本次运行，默认关） */
     bool env_sim_powder_low_on_ = false; /**< 环境模拟粉量缺粉开关（目标状态，延迟生效由 McuLink 管） */
     bool ignore_powder_low_for_current_print_ = false; /**< 本次打印是否忽略缺粉检测（Cancel 后置位） */
+    std::mutex first_layer_visual_mtx_;
+    std::condition_variable first_layer_visual_cv_;
+    bool first_layer_visual_waiting_ = false;
+    uint8_t first_layer_visual_result_ = 0;
 };
 
 } // namespace upc::glavo

@@ -6,6 +6,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <condition_variable>
 #include <mutex>
 #include <thread>
 #include <vector>
@@ -18,7 +19,8 @@ namespace upc::visual {
  * 数据链路：
  * 1) 通过 IPC 请求 Camera 建立 visual 专用流会话
  * 2) 从 SHM 元数据环获取最新帧索引（buffer_idx）
- * 3) 占位线程消费并释放帧槽（不做识别运算、不向 UI 上报）
+ * 3) 占位线程消费并释放帧槽，并缓存最新 NV12 原图
+ * 4) 收到 Glavo 首层检测请求时，调用占位处理接口并回传 0/1 结果
  */
 class VisualService {
 public:
@@ -42,10 +44,23 @@ private:
     void send_stream_stop_req();
     /** 处理 APP_Visual_Camera_Stream_Start_Rsp，并拉起 worker。 */
     void on_stream_start_rsp(const middleware::Message& msg);
+    /** 处理 GLAVO_Visual_FirstLayer_Check_Req，回传检测结果。 */
+    void on_first_layer_check_req(const middleware::Message& msg);
     /** 停止后台线程并重置流状态。 */
     void stop_worker();
-    /** 占位线程主循环：取最新帧并释放槽位。 */
+    /** 占位线程主循环：取最新帧、做 NV12 拷贝并释放槽位。 */
     void worker_thread_fn();
+    bool map_dma_views_if_needed();
+    void unmap_dma_views();
+    void update_latest_snapshot(const upc_ipc::IpcDmaFrameView& frame);
+    bool copy_latest_snapshot(std::vector<uint8_t>& out, uint32_t& width,
+                              uint32_t& height, uint32_t& frame_seq);
+    bool process_first_layer_image_placeholder(const std::vector<uint8_t>& nv12,
+                                               uint32_t width, uint32_t height,
+                                               uint32_t frame_seq);
+    static void copy_nv12_tight(uint8_t* dst, const uint8_t* src_y,
+                                const uint8_t* src_uv, uint32_t src_stride_y,
+                                uint32_t width, uint32_t height);
 
     static bool read_inline_start_rsp(const middleware::Message& msg,
                                       middleware::CameraStreamInfoPayload& out);
@@ -54,6 +69,8 @@ private:
     std::vector<middleware::Subscription> subs_;
     upc_ipc::IpcDmaFrameRingConsumer consumer_;
     std::vector<int> dma_fds_;
+    std::vector<uint8_t*> dma_maps_;
+    size_t dma_map_size_ = 0;
 
     /** 保护 start/stream 状态，避免 tick 与消息回调竞争。 */
     std::mutex state_mtx_;
@@ -61,6 +78,12 @@ private:
     bool stream_up_ = false;
     bool pending_start_rsp_valid_ = false;
     middleware::CameraStreamInfoPayload pending_start_rsp_{};
+    std::mutex frame_mtx_;
+    std::vector<uint8_t> latest_nv12_snapshot_;
+    uint32_t latest_width_ = 0;
+    uint32_t latest_height_ = 0;
+    uint32_t latest_frame_seq_ = 0;
+    bool latest_nv12_valid_ = false;
 
     /** 后台占位线程。 */
     std::thread worker_;

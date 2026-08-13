@@ -394,6 +394,11 @@ void McuLink::set_transport_result_callback(McuLinkTransportResultCb cb)
     transport_result_cb_ = std::move(cb);
 }
 
+void McuLink::set_first_layer_check_callback(McuLinkFirstLayerCheckCb cb)
+{
+    first_layer_check_cb_ = std::move(cb);
+}
+
 void McuLink::set_serial_ack_enabled(bool enabled)
 {
     serial_ack_enabled_.store(enabled);
@@ -1961,6 +1966,7 @@ void McuLink::reset_motion_state(bool clear_start_pending)
     serial_evt_print_ready_.store(false);
     sent_at_layer_ready_ = 0;
     current_layer_snapped_ = false;
+    first_layer_check_passed_ = false;
     tcp_stage_clear();
     serial_clear_reliable();
     PrintJobState::instance().set_sending(false);
@@ -1983,6 +1989,7 @@ void McuLink::begin_sending_internal()
     active_layer_height_um_ =
         parser ? parser->get_layer_height_um() : GCODE_DEFAULT_LAYER_UM;
     current_layer_snapped_  = false;
+    first_layer_check_passed_ = false;
 
     // 重置 PrintJobState 中的发送相关计数与标志
     PrintJobState::instance().set_sending(true);
@@ -2110,6 +2117,24 @@ void McuLink::send_serial_plate_prepare()
             serial_send_aa_reliable(sbuf, static_cast<size_t>(slen), true);
         }
     }
+#endif
+}
+
+void McuLink::send_serial_layer_done(uint16_t next_layer_um)
+{
+#if GLAVO_ENABLE_LAYER_CHANGE
+    if(serial_fd_ < 0) {
+        return;
+    }
+    uint8_t sbuf[32];
+    const int slen = serial_build_layer_done(next_layer_um, sbuf, sizeof(sbuf));
+    if(slen > 0) {
+        UPC_LOG_MCU_LINK(Info, "serial TX cmd: LAYER_DONE (next_layer=%u um)",
+            static_cast<unsigned>(next_layer_um));
+        serial_send_aa_reliable(sbuf, static_cast<size_t>(slen), true);
+    }
+#else
+    (void)next_layer_um;
 #endif
 }
 
@@ -2255,6 +2280,21 @@ void McuLink::link_process_serial_handshake()
     // 阶段二：收到 PRINT_READY 后，解除等待，开始下发本层运动包
     if(phase == SERIAL_HS_WAIT_PRINT_READY &&
        serial_evt_print_ready_.exchange(false)) {
+        if(!first_layer_check_passed_ && first_layer_check_cb_) {
+            UPC_LOG_MCU_LINK(Info, "first layer visual check request layer=%u",
+                static_cast<unsigned>(active_layer_height_um_));
+            const bool pass = first_layer_check_cb_(active_layer_height_um_);
+            if(!pass) {
+                /* 首层检测失败：不上光，通知 MCU 继续铺粉（层高=0，不降基板）。 */
+                UPC_LOG_MCU_LINK(Warn, "first layer visual check failed, request recoat");
+                send_serial_layer_done(0);
+                serial_handshake_phase_.store(SERIAL_HS_WAIT_PRINT_READY);
+                serial_evt_print_ready_.store(false);
+                return;
+            }
+            first_layer_check_passed_ = true;
+            UPC_LOG_MCU_LINK(Info, "first layer visual check passed");
+        }
         sent_at_layer_ready_ = PrintJobState::instance().snapshot().sent_packets;
         current_layer_snapped_ = false;
         waiting_layer_.store(false);
@@ -2331,13 +2371,7 @@ void McuLink::link_try_layer_serial_dispatch()
 #endif
 
     // 发送 layer_done 帧，通知 MCU 当前层已结束
-    uint8_t sbuf[32];
-    const int slen = serial_build_layer_done(active_layer_height_um_, sbuf, sizeof(sbuf));
-    if(slen > 0) {
-        UPC_LOG_MCU_LINK(Info, "serial TX cmd: LAYER_DONE (next_layer=%u um)",
-            static_cast<unsigned>(active_layer_height_um_));
-        serial_send_aa_reliable(sbuf, (size_t)slen, true);
-    }
+    send_serial_layer_done(active_layer_height_um_);
     layer_drain_pending_.store(false);
     // 转入等待 PRINT_READY 状态
     serial_handshake_phase_.store(SERIAL_HS_WAIT_PRINT_READY);

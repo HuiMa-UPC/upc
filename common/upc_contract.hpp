@@ -415,6 +415,8 @@ enum class MsgType : uint32_t {
     UI_Debug_Env_Sim_Get_Req,           /**< Empty：查询当前环境上报模拟开关状态 */
     UI_Debug_Env_Sim_Powder_Set_Req,    /**< DebugOnOffPayload：环境模拟粉量缺粉开关（延迟 5s 生效） */
     UI_Debug_Env_Sim_Powder_Get_Req,    /**< Empty：查询当前环境模拟粉量缺粉开关状态 */
+    UI_Debug_FirstLayer_Visual_Check_Set_Req, /**< DebugOnOffPayload：首层视觉检测开关（仅本次运行，默认关） */
+    UI_Debug_FirstLayer_Visual_Check_Get_Req, /**< Empty：查询当前首层视觉检测开关状态 */
 
     // ---- GLAVO → UI：调试页状态回读（按模块拆分） ----
     GLAVO_Debug_Sensor_Ntf = 0x1200, /**< DebugSensorPayload：顶部 7 路传感器 */
@@ -431,6 +433,7 @@ enum class MsgType : uint32_t {
     GLAVO_Debug_Clean_Record_Ntf,      /**< DebugOnOffPayload：清粉录像开关状态 */
     GLAVO_Debug_Env_Sim_Ntf,           /**< DebugOnOffPayload：环境上报模拟开关状态 */
     GLAVO_Debug_Env_Sim_Powder_Ntf,    /**< DebugOnOffPayload：环境模拟粉量缺粉开关状态 */
+    GLAVO_Debug_FirstLayer_Visual_Check_Ntf, /**< DebugOnOffPayload：首层视觉检测开关状态 */
 
     // ---- UI ↔ GLAVO：网络 / WiFi（ConnMan 后端） ----
     UI_Wifi_Enable_Req = 0x1300, /**< WifiEnableReqPayload：开/关 WiFi */
@@ -479,6 +482,8 @@ enum class MsgType : uint32_t {
     VISUAL_Camera_Stream_Stop_Req,      /**< Empty */
     APP_Visual_Camera_Stream_Stop_Done, /**< Empty */
     APP_Visual_Rect_Ntf,                /**< VisualRectNtfPayload */
+    GLAVO_Visual_FirstLayer_Check_Req,  /**< VisualFirstLayerCheckReqPayload */
+    APP_Visual_FirstLayer_Check_Rsp,    /**< VisualFirstLayerCheckRspPayload */
     // ---- MEDIA ↔ CAMERA：媒体进程并行取流（拍照/录像） ----
     MEDIA_Camera_Stream_Start_Req = 0x1450,  /**< CameraStreamStartReqPayload（媒体侧取流） */
     APP_Media_Camera_Stream_Start_Rsp,       /**< CameraStreamInfoPayload */
@@ -771,6 +776,18 @@ struct VisualRectNtfPayload {
     uint32_t frame_height;  /**< 源图高（像素） */
     uint32_t frame_seq;     /**< 对应相机帧序号（若未知可填 0） */
     VisualRectPoint pts[4]; /**< 顺时针四点坐标，单位=源图像素 */
+};
+
+/** GLAVO_Visual_FirstLayer_Check_Req：触发首层视觉检测（Inline） */
+struct VisualFirstLayerCheckReqPayload {
+    uint16_t layer_height_um; /**< 当前首层高度（um） */
+    uint8_t reserved[2];
+};
+
+/** APP_Visual_FirstLayer_Check_Rsp：首层视觉检测结果（Inline） */
+struct VisualFirstLayerCheckRspPayload {
+    uint8_t result;      /**< 1=通过（可出光），0=不通过（继续铺粉） */
+    uint8_t reserved[3];
 };
 
 /** GLAVO→CAMERA 打印录像会话（Start/Finish/Abort 共用） */

@@ -98,6 +98,8 @@ lv_obj_t *g_env_sim_btn = nullptr;          /**< 其他控制：环境上报模�
 lv_obj_t *g_env_sim_state_lbl = nullptr;    /**< 其他控制：环境上报模拟状态文本 */
 lv_obj_t *g_env_sim_powder_btn = nullptr;   /**< 其他控制：环境模拟缺粉按钮 */
 lv_obj_t *g_env_sim_powder_state_lbl = nullptr; /**< 其他控制：环境模拟缺粉状态文本 */
+lv_obj_t *g_first_layer_visual_btn = nullptr; /**< 其他控制：首层视觉检测开关按钮 */
+lv_obj_t *g_first_layer_visual_state_lbl = nullptr; /**< 其他控制：首层视觉检测状态文本 */
 bool g_env_sim_on = false;                  /**< 缓存 Env Sim 回读状态，用于门控 Powder Sim 按钮 */
 
 /* 设备快捷行状态字（受 Montserrat 字库约束，沿用英文） */
@@ -910,7 +912,7 @@ struct DbgToggleCtx {
     lv_obj_t   *state_lbl;
     const char *on_txt;
     const char *off_txt;
-    uint8_t     kind;   /**< 0 粉桶 / 1 推粉 / 2 风扇 / 3 其他开关 / 4 清粉 / 5 打印H264 / 6 清粉录像 / 7 环境模拟 / 8 环境模拟缺粉 / 9 转运盒流程 */
+    uint8_t     kind;   /**< 0 粉桶 / 1 推粉 / 2 风扇 / 3 其他开关 / 4 清粉 / 5 打印H264 / 6 清粉录像 / 7 环境模拟 / 8 环境模拟缺粉 / 9 转运盒流程 / 10 首层视觉检测 */
     uint8_t     arg;    /**< 粉桶号 / DebugSwitchTarget */
 };
 
@@ -962,6 +964,8 @@ void on_dbg_toggle(lv_event_t *e)
         /* 取件流程是否插入转运盒三步。纯 UI 本地标志，不下发任何命令（仅本次运行）。 */
         case 9: control_set_transfer_box_flow(on);
                 break;
+        case 10: proxy.send_first_layer_visual_check_set(on);  /* 首层视觉检测（仅本次运行） */
+                 break;
         default: break;
     }
 }
@@ -1364,6 +1368,8 @@ void build_other_switches_card(lv_obj_t *parent)
     /* 打开后，打印结果页滑动取件在门开之后插入转运盒三步，且关门确认改用新稿样式 */
     make_dbg_toggle(rowD, "Transfer Box", "On", "Off", LV_SYMBOL_DOWNLOAD,
                     control_transfer_box_flow_enabled(), 9, 0);
+    make_dbg_toggle(rowD, "1st Layer Visual", "On", "Off", LV_SYMBOL_PLAY, false,
+                    10, 0, true, 0, &g_first_layer_visual_btn, &g_first_layer_visual_state_lbl);
 }
 
 lv_obj_t *build_other_tab(lv_obj_t *body)
@@ -1906,6 +1912,21 @@ void bind_debug_callbacks()
         }
         set_dbg_toggle_enabled(g_env_sim_powder_btn, g_env_sim_on);
     });
+
+    proxy.register_first_layer_visual_check([](bool on) {
+        if(g_first_layer_visual_btn) {
+            if(on) {
+                lv_obj_add_state(g_first_layer_visual_btn, LV_STATE_CHECKED);
+            } else {
+                lv_obj_clear_state(g_first_layer_visual_btn, LV_STATE_CHECKED);
+            }
+        }
+        if(g_first_layer_visual_state_lbl) {
+            lv_label_set_text(g_first_layer_visual_state_lbl, on ? "On" : "Off");
+            lv_obj_set_style_text_color(g_first_layer_visual_state_lbl,
+                                        on ? user_color_accent : user_color_text_dim, 0);
+        }
+    });
 }
 
 void reset_globals()
@@ -1940,6 +1961,8 @@ void reset_globals()
     g_env_sim_state_lbl = nullptr;
     g_env_sim_powder_btn = nullptr;
     g_env_sim_powder_state_lbl = nullptr;
+    g_first_layer_visual_btn = nullptr;
+    g_first_layer_visual_state_lbl = nullptr;
     g_env_sim_on = false;
 }
 
@@ -1956,6 +1979,7 @@ void page_user_debug_refresh(bool /*force*/)
     ui::DebugMsgProxy::instance().request_clean_record_state();
     ui::DebugMsgProxy::instance().request_env_sim_state();
     ui::DebugMsgProxy::instance().request_env_sim_powder_state();
+    ui::DebugMsgProxy::instance().request_first_layer_visual_check_state();
 }
 
 void page_user_debug_exit(void)
@@ -1972,6 +1996,7 @@ void page_user_debug_exit(void)
     proxy.register_clean_record(nullptr);
     proxy.register_env_sim(nullptr);
     proxy.register_env_sim_powder(nullptr);
+    proxy.register_first_layer_visual_check(nullptr);
 }
 
 lv_obj_t *page_user_debug_create(lv_obj_t *parent)

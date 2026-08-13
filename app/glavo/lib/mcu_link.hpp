@@ -38,6 +38,8 @@ using McuLinkProgressCb = std::function<void()>;
 /** @brief 清粉测试完成回调：参数为 TLV 0x22 result_code。 */
 using McuLinkCleanTestDoneCb = std::function<void(uint8_t)>;
 using McuLinkTransportResultCb = std::function<void(uint8_t)>;
+/** @brief 首层视觉检测回调：true=通过，false=不通过（继续铺粉）。 */
+using McuLinkFirstLayerCheckCb = std::function<bool(uint16_t)>;
 
 /** @brief 环境传感器缓存（串口 0x9B 上报解析结果，供 UI/打印进度读取） */
 struct EnvSnapshotCache {
@@ -85,6 +87,7 @@ public:
     void set_progress_callback(McuLinkProgressCb cb);
     void set_clean_test_done_callback(McuLinkCleanTestDoneCb cb);
     void set_transport_result_callback(McuLinkTransportResultCb cb);
+    void set_first_layer_check_callback(McuLinkFirstLayerCheckCb cb);
 
     /** @brief 运行时设置串口 ACK 可靠发送开关（默认值来自编译宏）。 */
     void set_serial_ack_enabled(bool enabled);
@@ -326,6 +329,7 @@ private:
     /** @brief 向振镜发送 Reset 帧 */
     void send_tcp_reset();
     void send_serial_plate_prepare();
+    void send_serial_layer_done(uint16_t next_layer_um);
     /** @brief 向 MCU 串口发送打印终止帧 */
     void send_serial_print_terminate();
     /** @brief 向 MCU 串口发送打印完成帧 */
@@ -369,6 +373,7 @@ private:
     McuLinkProgressCb progress_cb_;         /**< 进度更新回调 */
     McuLinkCleanTestDoneCb clean_test_done_cb_; /**< 清粉测试完成回调 */
     McuLinkTransportResultCb transport_result_cb_; /**< 自动转运结果回调 */
+    McuLinkFirstLayerCheckCb first_layer_check_cb_; /**< 首层视觉检测回调 */
 
     /* ---------- 文件描述符 ---------- */
     int tcp_fd_    = -1; /**< TCP socket 文件描述符，-1 表示未连接 */
@@ -408,6 +413,7 @@ private:
     int sent_at_layer_ready_ = 0;
     /** 当前层是否已在换层排空路径拍过照（避免完成时重复 Snap） */
     bool current_layer_snapped_ = false;
+    bool first_layer_check_passed_ = false;
 
     /* ---------- 预取队列 ---------- */
     std::deque<upc::parser::rb_packet_t> tcp_stage_;      /**< 从 RingBuffer 预取出来的包暂存队列 */
