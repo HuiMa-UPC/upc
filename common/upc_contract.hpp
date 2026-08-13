@@ -114,6 +114,10 @@
 #ifndef UPC_MOD_MEDIA_SERVICE
 #define UPC_MOD_MEDIA_SERVICE 1
 #endif
+/** Glavo: TCP 心跳/状态应答日志默认开关（环境变量可覆盖） */
+#ifndef UPC_GLAVO_LOG_TCP_HEARTBEAT_RSP_DEFAULT
+#define UPC_GLAVO_LOG_TCP_HEARTBEAT_RSP_DEFAULT 0
+#endif
 
 #else /* !UPC_DEBUG */
 
@@ -136,8 +140,47 @@
 #define UPC_MOD_VISUAL_SERVICE 0
 #define UPC_MOD_MQTT_SERVICE 0
 #define UPC_MOD_MEDIA_SERVICE 0
+#define UPC_GLAVO_LOG_TCP_HEARTBEAT_RSP_DEFAULT 0
 
 #endif /* UPC_DEBUG */
+
+// ============================================================================
+// §2.5 进程日志开关（默认值；可被环境变量 UPC_LOG_PROC_* 覆盖）
+// ============================================================================
+/**
+ * 说明：
+ * - UPC_LOG_PROC_DEFAULT：未单独指定进程时的默认开关
+ * - UPC_LOG_PROC_<PROC>：按进程名细分，1=开，0=关
+ * - 进程名与 ProcessConfig::name 对齐（如 rongsu_glavo -> RONGSU_GLAVO）
+ */
+#ifndef UPC_LOG_PROC_DEFAULT
+#define UPC_LOG_PROC_DEFAULT 1
+#endif
+
+#ifndef UPC_LOG_PROC_RONGSU_UI
+#define UPC_LOG_PROC_RONGSU_UI UPC_LOG_PROC_DEFAULT
+#endif
+#ifndef UPC_LOG_PROC_RONGSU_GLAVO
+#define UPC_LOG_PROC_RONGSU_GLAVO UPC_LOG_PROC_DEFAULT
+#endif
+#ifndef UPC_LOG_PROC_RONGSU_CAMERA
+#define UPC_LOG_PROC_RONGSU_CAMERA UPC_LOG_PROC_DEFAULT
+#endif
+#ifndef UPC_LOG_PROC_RONGSU_BROKER
+#define UPC_LOG_PROC_RONGSU_BROKER UPC_LOG_PROC_DEFAULT
+#endif
+#ifndef UPC_LOG_PROC_RONGSU_XFR
+#define UPC_LOG_PROC_RONGSU_XFR UPC_LOG_PROC_DEFAULT
+#endif
+#ifndef UPC_LOG_PROC_RONGSU_VISUAL
+#define UPC_LOG_PROC_RONGSU_VISUAL UPC_LOG_PROC_DEFAULT
+#endif
+#ifndef UPC_LOG_PROC_RONGSU_MQTT
+#define UPC_LOG_PROC_RONGSU_MQTT UPC_LOG_PROC_DEFAULT
+#endif
+#ifndef UPC_LOG_PROC_RONGSU_MEDIA
+#define UPC_LOG_PROC_RONGSU_MEDIA UPC_LOG_PROC_DEFAULT
+#endif
 
 // ============================================================================
 // §3 进程注册表（PID / 日志路径；daemon 实现见 process/process_ctl.hpp）

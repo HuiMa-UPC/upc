@@ -236,6 +236,10 @@ public:
 
     /** TCP 常态应答（运动/OTA），供分帧回调使用 */
     void on_tcp_status_response(const tcp_response_t& resp);
+    /** TCP 初始化上报（ID=0x0F）：用于版本识别与发送参数档位切换 */
+    void on_tcp_init_report(bool has_version, uint32_t fw_version_le,
+                            uint8_t firmware_id, uint8_t ota_state,
+                            uint8_t selfcheck_boot_count);
 
 private:
     struct SerialReliableItem {
@@ -343,6 +347,19 @@ private:
     bool motion_stream_active() const;
     /** @brief 根据当前状态决定链路线程每次循环的休眠间隔（ms） */
     int link_thread_sleep_ms() const;
+    /** @brief 获取当前生效的每轮 TCP 运动包发送上限 */
+    int current_tcp_batch_size() const noexcept;
+    /** @brief 获取当前生效的活跃下发轮询间隔（ms） */
+    int current_tcp_send_interval_ms() const noexcept;
+    /** @brief 获取当前生效的空闲心跳间隔（ms） */
+    int current_tcp_heartbeat_interval_ms() const noexcept;
+    /** @brief 获取当前生效的 MCU 指令缓存背压阈值（0-100） */
+    uint32_t current_cmd_backpressure_pct() const noexcept;
+    /** @brief 在打印空闲时应用挂起的 TCP 档位切换 */
+    void try_apply_pending_tcp_profile();
+    /** @brief 立即应用 TCP 档位参数（legacy / small-mem） */
+    void apply_tcp_profile(bool small_mem, const char* reason,
+                           uint32_t fw_version_le);
 
     /* ---------- 核心依赖 ---------- */
     upc::parser::RingBuffer* rb_ = nullptr;          /**< 绑定的 RingBuffer，运动包来源 */
@@ -368,6 +385,12 @@ private:
     std::chrono::steady_clock::time_point natural_complete_since_{};
     std::atomic<bool> completing_cleanup_{false};      /**< 自然完成清理中：忽略 TCP 断线误判终止 */
     std::atomic<bool> mcu_rates_seen_nonempty_{false}; /**< 本作业曾观测到 MCU 缓存非空（防短 G-code 初值 0 误判排空） */
+    std::atomic<bool> tcp_small_mem_profile_{false};   /**< 当前是否启用小内存 TCP 参数档 */
+    std::atomic<int>  tcp_pending_profile_{-1};        /**< -1=无挂起，0=legacy，1=small-mem */
+    std::atomic<uint16_t> tcp_batch_size_{TCP_BATCH_SIZE}; /**< 运行时 batch 大小 */
+    std::atomic<uint16_t> tcp_send_interval_ms_{TCP_SEND_INTERVAL_MS}; /**< 运行时发送轮询间隔 */
+    std::atomic<uint16_t> tcp_heartbeat_interval_ms_{TCP_HEARTBEAT_INTERVAL_MS}; /**< 运行时心跳间隔 */
+    std::atomic<uint8_t>  tcp_cmd_backpressure_pct_{MCU_CMD_BACKPRESSURE_PCT}; /**< 运行时背压阈值 */
 
     /* ---------- 换层/串口握手状态 ---------- */
     std::atomic<bool> waiting_layer_{false};           /**< 当前是否处于换层等待状态 */

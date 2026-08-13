@@ -22,6 +22,7 @@
 
 #include <cerrno>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <cstdio>
 #include <thread>
@@ -31,6 +32,41 @@ namespace upc::glavo {
 namespace parser = upc::parser;
 
 namespace {
+
+bool parse_env_switch(const char* value, bool default_value)
+{
+    if(!value || !value[0]) {
+        return default_value;
+    }
+    if(std::strcmp(value, "1") == 0 ||
+       std::strcmp(value, "true") == 0 ||
+       std::strcmp(value, "TRUE") == 0 ||
+       std::strcmp(value, "on") == 0 ||
+       std::strcmp(value, "ON") == 0 ||
+       std::strcmp(value, "yes") == 0 ||
+       std::strcmp(value, "YES") == 0) {
+        return true;
+    }
+    if(std::strcmp(value, "0") == 0 ||
+       std::strcmp(value, "false") == 0 ||
+       std::strcmp(value, "FALSE") == 0 ||
+       std::strcmp(value, "off") == 0 ||
+       std::strcmp(value, "OFF") == 0 ||
+       std::strcmp(value, "no") == 0 ||
+       std::strcmp(value, "NO") == 0) {
+        return false;
+    }
+    return default_value;
+}
+
+bool tcp_hb_rsp_log_enabled()
+{
+    static const bool k_enabled =
+        parse_env_switch(
+            std::getenv("UPC_GLAVO_LOG_TCP_HEARTBEAT_RSP"),
+            UPC_GLAVO_LOG_TCP_HEARTBEAT_RSP_DEFAULT != 0);
+    return k_enabled;
+}
 
 parser::IParserWorker* active_parser()
 {
@@ -153,19 +189,75 @@ using frame_guess_fn  = size_t (*)(const uint8_t*, size_t);
 /** @brief 帧处理函数类型：对解析出的完整帧进行业务处理 */
 using frame_handle_fn = void (*)(const uint8_t*, size_t);
 
+struct TcpInit0fReport {
+    bool has_version = false;
+    uint8_t firmware_id = 0;
+    uint8_t ota_state = 0;
+    uint32_t fw_version_le = 0;
+    uint8_t selfcheck_boot_count = 0;
+};
+
+bool parse_tcp_init_0f_report(const uint8_t* frame, size_t len,
+                              TcpInit0fReport* out)
+{
+    if(!frame || !out || len < 4) {
+        return false;
+    }
+    if(frame[0] != TCP_SOF0 || frame[1] != TCP_SOF1 || frame[3] != 0x0F) {
+        return false;
+    }
+
+    const uint8_t payload_len = frame[2];
+    if(payload_len == 0x01 && len >= 4) {
+        // 旧版：仅初始化就绪信号，无版本信息。
+        *out = TcpInit0fReport{};
+        return true;
+    }
+
+    if(payload_len < 0x08 || len < 11) {
+        return false;
+    }
+
+    out->has_version = true;
+    out->firmware_id = frame[4];
+    out->ota_state = frame[5];
+    out->fw_version_le =
+        static_cast<uint32_t>(frame[6]) |
+        (static_cast<uint32_t>(frame[7]) << 8u) |
+        (static_cast<uint32_t>(frame[8]) << 16u) |
+        (static_cast<uint32_t>(frame[9]) << 24u);
+    out->selfcheck_boot_count = frame[10];
+    return true;
+}
+
 /**
  * @brief TCP 帧处理函数（MCU→SOC，Length+ID 格式）
  */
 void tcp_handle_frame(const uint8_t* frame, size_t len)
 {
+    TcpInit0fReport init{};
+    if(parse_tcp_init_0f_report(frame, len, &init)) {
+        McuLink::instance().on_tcp_init_report(
+            init.has_version,
+            init.fw_version_le,
+            init.firmware_id,
+            init.ota_state,
+            init.selfcheck_boot_count);
 #if UPC_DEBUG && UPC_MOD_MCU_LINK
-    /* 下位机 TCP 初始化完成主动上报：BE EF 01 0F（见 doc/SOC-_MCU TCP报文.xlsx） */
-    if(len == 4 && frame[0] == TCP_SOF0 && frame[1] == TCP_SOF1 &&
-       frame[2] == 0x01 && frame[3] == 0x0F) {
-        UPC_LOG_MCU_LINK(Info, "RX TCP link ready (BE EF 01 0F)");
+        if(init.has_version) {
+            UPC_LOG_MCU_LINK(Info,
+                "RX TCP link ready ext len=%zu fw_id=%u ota=0x%02X fw=0x%08X selfchk=%u",
+                len,
+                static_cast<unsigned>(init.firmware_id),
+                static_cast<unsigned>(init.ota_state),
+                static_cast<unsigned>(init.fw_version_le),
+                static_cast<unsigned>(init.selfcheck_boot_count));
+        } else {
+            UPC_LOG_MCU_LINK(Info, "RX TCP link ready legacy len=%zu", len);
+        }
+#endif
         return;
     }
-#endif
 
     if(len >= 19 && frame[0] == 0xBE && frame[1] == 0xEF &&
        frame[2] == 0x10 && frame[3] == 0x01) {
@@ -1797,7 +1889,7 @@ void McuLink::poll_mcu_drain_heartbeat()
  * @return true 表示可以立即启动发送
  *
  * 判定逻辑：
- * 1. 若 RingBuffer 中已缓存 >= TCP_BATCH_SIZE 个包，直接满足；
+ * 1. 若 RingBuffer 中已缓存 >= 当前生效 batch 包数，直接满足；
  * 2. 若解析器仍在解析中：
  *    - 若总运动包数 >= batch 且当前有包，则满足；
  *    - 若处于 start_pending 挂起状态，且文件已读完、总包数 < batch 但 > 0，
@@ -1816,7 +1908,7 @@ bool McuLink::ring_meets_start_threshold() const
     }
 
     const size_t count = rb_->count();
-    const int batch = TCP_BATCH_SIZE;
+    const int batch = current_tcp_batch_size();
     const int total = parser->get_total_motion_packets();
 
     if(count >= static_cast<size_t>(batch)) {
@@ -2256,7 +2348,8 @@ int McuLink::link_send_one_motion_batch()
     int n = 0;
 
     // 从 tcp_stage_ 头部连续取出运动包，遇到 LayerMark 或非运动包则停止
-    for(int i = 0; i < kMaxMotionBatch; i++) {
+    const int batch_limit = current_tcp_batch_size();
+    for(int i = 0; i < batch_limit; i++) {
         parser::rb_pkt_type_t ptype;
         if(!tcp_stage_peek_type(&ptype)) {
             break; // 队列为空
@@ -2350,7 +2443,7 @@ void McuLink::link_drain_motion_queue()
     // 4. 背压检查：若 MCU 指令缓存占用率超过阈值，暂停下发
     const auto snap = PrintJobState::instance().snapshot();
     const uint32_t threshold =
-        (65535u * (uint32_t)MCU_CMD_BACKPRESSURE_PCT) / 100u;
+        (65535u * current_cmd_backpressure_pct()) / 100u;
     if(snap.cmd_cache_rate >= threshold) {
         return;
     }
@@ -2437,19 +2530,19 @@ void McuLink::link_try_finish_sending()
 int McuLink::link_thread_sleep_ms() const
 {
     if(ota_session_.is_active() || serial_ota_session_.is_active()) {
-        return TCP_SEND_INTERVAL_MS;
+        return current_tcp_send_interval_ms();
     }
     if(terminate_pending_.load()) {
         return 5; // 终止请求需快速响应
     }
     if(is_sending_.load() && !waiting_layer_.load()) {
-        return TCP_SEND_INTERVAL_MS; // 活跃下发期间按固定间隔轮询
+        return current_tcp_send_interval_ms(); // 活跃下发期间按固定间隔轮询
     }
     if(waiting_layer_.load() || natural_complete_pending_.load()) {
         return 10; // 换层等待或完成等待，稍快轮询
     }
     if(tcp_fd_ >= 0) {
-        return TCP_HEARTBEAT_INTERVAL_MS; // 空闲但有连接，按心跳间隔休眠
+        return current_tcp_heartbeat_interval_ms(); // 空闲但有连接，按心跳间隔休眠
     }
     return 50; // 无连接时的默认轮询间隔
 }
@@ -2536,6 +2629,14 @@ void McuLink::on_tcp_status_response(const tcp_response_t& resp)
             mcu_rates_seen_nonempty_.store(true);
         }
         PrintJobState::instance().set_mcu_rates(resp.cmd_rate, resp.data_rate);
+        if(tcp_hb_rsp_log_enabled()) {
+            UPC_LOG_MCU_LINK(Debug,
+                "tcp hb rsp cmd_rate=%u data_rate=%u event=0x%02X ota=%u",
+                static_cast<unsigned>(resp.cmd_rate),
+                static_cast<unsigned>(resp.data_rate),
+                static_cast<unsigned>(resp.event_flag),
+                static_cast<unsigned>(resp.ota_progress));
+        }
 
         const bool rates_changed =
             prev.cmd_cache_rate != resp.cmd_rate ||
@@ -2544,6 +2645,144 @@ void McuLink::on_tcp_status_response(const tcp_response_t& resp)
             progress_cb_();
         }
     }
+}
+
+void McuLink::on_tcp_init_report(bool has_version, uint32_t fw_version_le,
+                                 uint8_t firmware_id, uint8_t ota_state,
+                                 uint8_t selfcheck_boot_count)
+{
+    const bool use_small_mem =
+        has_version && (fw_version_le >= GLAVO_SMALL_MEM_FW_VER_MIN);
+    const int desired_profile = use_small_mem ? 1 : 0;
+    const bool current_small = tcp_small_mem_profile_.load();
+    const int current_profile = current_small ? 1 : 0;
+
+    UPC_LOG_MCU_LINK(Info,
+        "tcp init report: has_ver=%d fw=0x%08X fw_id=%u ota=0x%02X selfchk=%u target=%s",
+        has_version ? 1 : 0,
+        static_cast<unsigned>(fw_version_le),
+        static_cast<unsigned>(firmware_id),
+        static_cast<unsigned>(ota_state),
+        static_cast<unsigned>(selfcheck_boot_count),
+        use_small_mem ? "small-mem" : "legacy");
+
+    if(desired_profile == current_profile) {
+        return;
+    }
+
+    const bool busy =
+        is_sending_.load() || start_pending_.load() || waiting_layer_.load() ||
+        natural_complete_pending_.load() || terminate_pending_.load() ||
+        completing_cleanup_.load();
+    if(busy) {
+        tcp_pending_profile_.store(desired_profile);
+        UPC_LOG_MCU_LINK(Info,
+            "tcp profile defer: busy=1 current=%s pending=%s fw=0x%08X",
+            current_small ? "small-mem" : "legacy",
+            use_small_mem ? "small-mem" : "legacy",
+            static_cast<unsigned>(fw_version_le));
+        return;
+    }
+
+    apply_tcp_profile(use_small_mem, "tcp_init", fw_version_le);
+}
+
+int McuLink::current_tcp_batch_size() const noexcept
+{
+    int v = static_cast<int>(tcp_batch_size_.load());
+    if(v < 1) {
+        v = 1;
+    }
+    if(v > kMaxMotionBatch) {
+        v = kMaxMotionBatch;
+    }
+    return v;
+}
+
+int McuLink::current_tcp_send_interval_ms() const noexcept
+{
+    int v = static_cast<int>(tcp_send_interval_ms_.load());
+    if(v < 1) {
+        v = 1;
+    }
+    return v;
+}
+
+int McuLink::current_tcp_heartbeat_interval_ms() const noexcept
+{
+    int v = static_cast<int>(tcp_heartbeat_interval_ms_.load());
+    if(v < 1) {
+        v = 1;
+    }
+    return v;
+}
+
+uint32_t McuLink::current_cmd_backpressure_pct() const noexcept
+{
+    uint32_t v = static_cast<uint32_t>(tcp_cmd_backpressure_pct_.load());
+    if(v > 100u) {
+        v = 100u;
+    }
+    return v;
+}
+
+void McuLink::try_apply_pending_tcp_profile()
+{
+    const int pending = tcp_pending_profile_.load();
+    if(pending < 0) {
+        return;
+    }
+    const bool busy =
+        is_sending_.load() || start_pending_.load() || waiting_layer_.load() ||
+        natural_complete_pending_.load() || terminate_pending_.load() ||
+        completing_cleanup_.load();
+    if(busy) {
+        return;
+    }
+
+    tcp_pending_profile_.store(-1);
+    apply_tcp_profile(pending == 1, "deferred", 0u);
+}
+
+void McuLink::apply_tcp_profile(bool small_mem, const char* reason,
+                                uint32_t fw_version_le)
+{
+    const uint16_t batch_cfg = static_cast<uint16_t>(small_mem
+        ? GLAVO_SMALL_MEM_TCP_BATCH_SIZE
+        : TCP_BATCH_SIZE);
+    const uint16_t send_cfg = static_cast<uint16_t>(small_mem
+        ? GLAVO_SMALL_MEM_TCP_SEND_INTERVAL_MS
+        : TCP_SEND_INTERVAL_MS);
+    const uint16_t hb_cfg = static_cast<uint16_t>(small_mem
+        ? GLAVO_SMALL_MEM_TCP_HEARTBEAT_INTERVAL_MS
+        : TCP_HEARTBEAT_INTERVAL_MS);
+    const uint8_t bp_cfg = static_cast<uint8_t>(small_mem
+        ? GLAVO_SMALL_MEM_MCU_CMD_BACKPRESSURE_PCT
+        : MCU_CMD_BACKPRESSURE_PCT);
+
+    uint16_t batch = batch_cfg < 1 ? 1 : batch_cfg;
+    if(batch > static_cast<uint16_t>(kMaxMotionBatch)) {
+        batch = static_cast<uint16_t>(kMaxMotionBatch);
+    }
+    const uint16_t send_ms = send_cfg < 1 ? 1 : send_cfg;
+    const uint16_t hb_ms = hb_cfg < 1 ? 1 : hb_cfg;
+    uint8_t bp_pct = bp_cfg > 100 ? 100 : bp_cfg;
+
+    tcp_batch_size_.store(batch);
+    tcp_send_interval_ms_.store(send_ms);
+    tcp_heartbeat_interval_ms_.store(hb_ms);
+    tcp_cmd_backpressure_pct_.store(bp_pct);
+    tcp_small_mem_profile_.store(small_mem);
+
+    UPC_LOG_MCU_LINK(Info,
+        "tcp profile apply(%s): mode=%s fw=0x%08X batch=%u send_ms=%u hb_ms=%u bp=%u%%",
+        reason ? reason : "n/a",
+        small_mem ? "small-mem" : "legacy",
+        static_cast<unsigned>(fw_version_le),
+        static_cast<unsigned>(batch),
+        static_cast<unsigned>(send_ms),
+        static_cast<unsigned>(hb_ms),
+        static_cast<unsigned>(bp_pct));
 }
 
 void McuLink::ota_tick()
@@ -2638,6 +2877,7 @@ void McuLink::link_thread_fn()
             run_manual_terminate_cleanup();
             terminate_pending_.store(false);
         } else {
+            try_apply_pending_tcp_profile();
             // ---------- 心跳（空闲；用户暂停时也要刷 MCU rate） ----------
             const bool stream = motion_stream_active();
             const bool need_hb =
@@ -2650,7 +2890,8 @@ void McuLink::link_thread_fn()
                 if(hblen > 0) {
                     tcp_send_raw(hb, (size_t)hblen);
                 }
-                next_hb = now + std::chrono::milliseconds(TCP_HEARTBEAT_INTERVAL_MS);
+                next_hb = now + std::chrono::milliseconds(
+                    current_tcp_heartbeat_interval_ms());
                 tcp_drain_rx(); // 心跳发送后再排空一次 RX
             }
 
