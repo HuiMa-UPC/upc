@@ -23,11 +23,18 @@
 namespace upc::media {
 
 namespace {
+/** 云端 ack reason：已有推流会话，拒绝并发 start。 */
 constexpr const char* kReasonPushAlreadyActive = "push_already_active";
+/** 云端 ack reason：编码器/ffmpeg/几何等启动失败。 */
 constexpr const char* kReasonEncoderError = "encoder_error";
+/** 云端 ack reason：stream_type 非 live 等非法状态。 */
 constexpr const char* kReasonInvalidState = "invalid_state";
 } // namespace
 
+/**
+ * 析构：停会话、关 ffmpeg/编码器，再 join worker。
+ * 顺序：锁内停资源 → notify → join，避免 worker 卡在 wait 上。
+ */
 LiveRtspPusher::~LiveRtspPusher()
 {
     {
@@ -41,6 +48,10 @@ LiveRtspPusher::~LiveRtspPusher()
     stop_worker();
 }
 
+/**
+ * 更新推流几何参数。
+ * 仅接受非零值，避免开流前的 0 覆盖默认分辨率/帧率。
+ */
 void LiveRtspPusher::set_stream_geometry(uint32_t width, uint32_t height, uint32_t fps)
 {
     std::lock_guard<std::mutex> lock(mtx_);
@@ -49,12 +60,14 @@ void LiveRtspPusher::set_stream_geometry(uint32_t width, uint32_t height, uint32
     if(fps > 0) fps_ = fps;
 }
 
+/** 返回当前是否处于推流会话。 */
 bool LiveRtspPusher::active() const
 {
     std::lock_guard<std::mutex> lock(mtx_);
     return active_;
 }
 
+/** 墙钟毫秒时间戳，填入 RtspPushRspPayload::push_started_at。 */
 uint64_t LiveRtspPusher::unix_ms()
 {
     return static_cast<uint64_t>(
@@ -62,6 +75,10 @@ uint64_t LiveRtspPusher::unix_ms()
             std::chrono::system_clock::now().time_since_epoch()).count());
 }
 
+/**
+ * 将带 stride 的 NV12 平面拷贝为紧凑 NV12（Y 后接 UV，stride==width）。
+ * stride==width 时整块 memcpy；否则逐行拷贝去掉行尾 padding。
+ */
 void LiveRtspPusher::copy_nv12_tight(uint8_t* dst, const uint8_t* src_y,
                                      const uint8_t* src_uv, uint32_t src_stride_y,
                                      uint32_t width, uint32_t height)
@@ -88,6 +105,13 @@ void LiveRtspPusher::copy_nv12_tight(uint8_t* dst, const uint8_t* src_y,
     }
 }
 
+/**
+ * 启动 live 推流会话。
+ *
+ * 校验顺序：stream_type → push_url → 未在推 → 几何已知 → RKMPP 可用。
+ * 成功路径：开编码器 → fork ffmpeg → 按需启动 worker → active_=true。
+ * ffmpeg 启动失败会回滚已打开的编码器。
+ */
 middleware::RtspPushRspPayload LiveRtspPusher::start(
     const middleware::RtspPushStartReqPayload& req)
 {
@@ -98,6 +122,7 @@ middleware::RtspPushRspPayload LiveRtspPusher::start(
 
     const std::string stream_type =
         req.stream_type[0] ? std::string(req.stream_type) : "live";
+    /* 一期仅 live；其它类型直接 Rejected，避免误开推流。 */
     if(stream_type != "live") {
         rsp.result = static_cast<uint8_t>(middleware::RtspPushResult::Rejected);
         std::snprintf(rsp.reason, sizeof(rsp.reason), "%s", kReasonInvalidState);
@@ -128,6 +153,7 @@ middleware::RtspPushRspPayload LiveRtspPusher::start(
     UPC_LOG_MEDIA_SERVICE(Error, "live_rtsp RKMPP disabled in this build");
     return rsp;
 #else
+    /* 云端 max_bitrate_kbps→bps；0 表示使用板端默认中等码率。 */
     bitrate_bps_ = req.max_bitrate_kbps > 0
         ? req.max_bitrate_kbps * 1000u
         : CAMERA_PRINT_H264_BITRATE;
@@ -150,6 +176,7 @@ middleware::RtspPushRspPayload LiveRtspPusher::start(
         return rsp;
     }
 
+    /* worker 进程生命周期内只建一次，stop 不销毁线程，便于反复 start/stop。 */
     if(!worker_started_) {
         worker_stop_ = false;
         worker_ = std::thread(&LiveRtspPusher::worker_fn, this);
@@ -166,6 +193,11 @@ middleware::RtspPushRspPayload LiveRtspPusher::start(
 #endif
 }
 
+/**
+ * 停止 live 推流。
+ * 清 pending、关 ffmpeg、关编码器；worker 线程保留，仅不再取帧。
+ * 未在推流时仍返回 Accepted（幂等）。
+ */
 middleware::RtspPushRspPayload LiveRtspPusher::stop(
     const middleware::RtspPushStopReqPayload& req)
 {
@@ -190,6 +222,7 @@ middleware::RtspPushRspPayload LiveRtspPusher::stop(
         stop_ffmpeg_locked();
         close_encoder_locked();
     }
+    /* 唤醒可能卡在 wait 上的 worker，使其跳过已停会话。 */
     cv_.notify_all();
 
     rsp.result = static_cast<uint8_t>(middleware::RtspPushResult::Accepted);
@@ -198,6 +231,12 @@ middleware::RtspPushRspPayload LiveRtspPusher::stop(
     return rsp;
 }
 
+/**
+ * DMA 消费线程帧回调：活跃时把最新 NV12 写入单槽 pending。
+ *
+ * latest-wins：若 worker 尚未取走上帧，覆盖并计入 dropped_，
+ * 保证推流延迟优先于完整帧率（实时预览/直播场景）。
+ */
 void LiveRtspPusher::on_frame_nv12(const uint8_t* src_y, const uint8_t* src_uv,
                                    uint32_t stride_y)
 {
@@ -225,6 +264,7 @@ void LiveRtspPusher::on_frame_nv12(const uint8_t* src_y, const uint8_t* src_uv,
     cv_.notify_one();
 }
 
+/** join worker 并清除 started 标志；仅析构路径调用。 */
 void LiveRtspPusher::stop_worker()
 {
     if(worker_.joinable()) {
@@ -233,6 +273,11 @@ void LiveRtspPusher::stop_worker()
     worker_started_ = false;
 }
 
+/**
+ * worker 主循环：等待 pending 或停止信号。
+ * 取帧后在锁外 encode_and_write；失败则自停会话（关 ffmpeg/编码器），
+ * 避免持续向已断管道写入。
+ */
 void LiveRtspPusher::worker_fn()
 {
     for(;;) {
@@ -269,6 +314,11 @@ void LiveRtspPusher::worker_fn()
     }
 }
 
+/**
+ * 打开 RKMPP H.264 编码器（CBR，NV12/YUV420SP）。
+ * GOP≈1s（gop=fps），便于 App 中途 PLAY 快速等到 IDR。
+ * 调用前必须持有 mtx_。
+ */
 bool LiveRtspPusher::open_encoder_locked()
 {
 #if !(defined(UPC_MEDIA_HAS_MPP) && UPC_MEDIA_HAS_MPP)
@@ -321,6 +371,10 @@ bool LiveRtspPusher::open_encoder_locked()
 #endif
 }
 
+/**
+ * 关闭 RKMPP：发 EOS 帧、短暂排空 packet（直播侧丢弃，不写文件），
+ * 再 deinit cfg / destroy ctx。调用前必须持有 mtx_。
+ */
 void LiveRtspPusher::close_encoder_locked()
 {
 #if defined(UPC_MEDIA_HAS_MPP) && UPC_MEDIA_HAS_MPP
@@ -332,6 +386,7 @@ void LiveRtspPusher::close_encoder_locked()
             mpp_frame_set_eos(eos, 1);
             (void)mpi->encode_put_frame(ctx, eos);
             mpp_frame_deinit(&eos);
+            /* 直播停止不落盘，仅排空内部队列，最多约 50 次 get。 */
             for(int i = 0; i < 50; ++i) {
                 MppPacket pkt = nullptr;
                 if(mpi->encode_get_packet(ctx, &pkt) != MPP_OK || !pkt) {
@@ -361,6 +416,14 @@ void LiveRtspPusher::close_encoder_locked()
 #endif
 }
 
+/**
+ * 启动 ffmpeg 子进程做 RTSP 复用推流。
+ *
+ * 管道：父写 Annex-B → 子 stdin；子进程：
+ *   -f h264 -i pipe:0 -c copy -f rtsp -rtsp_transport tcp <push_url>
+ * stdout/stderr 重定向到 /dev/null，避免刷屏占满父进程无关 fd。
+ * 调用前必须持有 mtx_。
+ */
 bool LiveRtspPusher::start_ffmpeg_locked(const char* push_url)
 {
     if(!push_url || !push_url[0]) {
@@ -416,6 +479,10 @@ bool LiveRtspPusher::start_ffmpeg_locked(const char* push_url)
     return true;
 }
 
+/**
+ * 停止 ffmpeg：先关 stdin（促使子进程读 EOF），再 SIGTERM 等待，
+ * 超时 SIGKILL。调用前必须持有 mtx_。
+ */
 void LiveRtspPusher::stop_ffmpeg_locked()
 {
     if(ffmpeg_stdin_fd_ >= 0) {
@@ -440,6 +507,13 @@ void LiveRtspPusher::stop_ffmpeg_locked()
     }
 }
 
+/**
+ * 编码一帧并写入 ffmpeg stdin。
+ *
+ * 流程：锁内校验会话并拷贝句柄 → 锁外申请 MPP buffer、put_frame、
+ * 循环 get_packet 并 write_all 到 stdin。
+ * write 失败（管道断开等）返回 false，由 worker 自停会话。
+ */
 bool LiveRtspPusher::encode_and_write(const std::vector<uint8_t>& nv12,
                                       uint32_t w, uint32_t h)
 {
@@ -499,6 +573,7 @@ bool LiveRtspPusher::encode_and_write(const std::vector<uint8_t>& nv12,
         return false;
     }
 
+    /* 取出本帧产生的全部 packet（可能含多 NALU），写入 ffmpeg stdin。 */
     for(;;) {
         MppPacket pkt = nullptr;
         if(mpp_mpi->encode_get_packet(mpp_ctx, &pkt) != MPP_OK || !pkt) {

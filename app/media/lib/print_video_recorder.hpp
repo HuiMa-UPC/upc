@@ -35,8 +35,8 @@ struct PrintVideoJob {
  * print_video_pending）。开门 finalize：
  *   - `UPC_TIMELAPSE_PLAYBACK_PNG=1`（默认）：不编 timelapse.mp4，保留 PNG；
  *   - `=0`：PNG→timelapse.mp4，成功后可删清粉段 PNG。
- * 若 Session_Start 开了连续 H264，再 remux print_h264.mp4（与延时开关无关；
- * remux 帧率用相机流 fps，与 PrintH264Recorder 编码一致）。
+ * 若 Session_Start 开了连续 H264，直接使用边录边封装的 print_h264.mp4
+ * （与延时开关无关；封装帧率用相机流 fps）。
  */
 class PrintVideoRecorder {
 public:

@@ -690,16 +690,18 @@ void MediaService::handle_print_video_finalize(const middleware::Message& msg)
             }
         }
         if(can_cleanup) {
-            const std::string tmp_h264 = std::string(UPC_VIDEO_TMP) + "/print.h264";
+            const std::string tmp_h264_mp4 =
+                std::string(UPC_VIDEO_TMP) + "/print_h264.mp4";
             std::error_code ec;
-            const bool h264_exists = std::filesystem::exists(tmp_h264, ec) && !ec;
-            const uintmax_t h264_size =
-                h264_exists ? std::filesystem::file_size(tmp_h264, ec) : 0u;
-            const bool h264_non_empty = h264_exists && !ec && h264_size > 0u;
-            if(h264_non_empty) {
+            const bool mp4_exists = std::filesystem::exists(tmp_h264_mp4, ec) && !ec;
+            const uintmax_t mp4_size =
+                mp4_exists ? std::filesystem::file_size(tmp_h264_mp4, ec) : 0u;
+            const bool mp4_non_empty = mp4_exists && !ec && mp4_size > 0u;
+            if(mp4_non_empty) {
                 UPC_LOG_MEDIA_SERVICE(
-                    Info, "print_video finalize empty req but h264 exists, promote tmp flow size=%llu",
-                    static_cast<unsigned long long>(h264_size));
+                    Info,
+                    "print_video finalize empty req but mp4 exists, promote tmp flow size=%llu",
+                    static_cast<unsigned long long>(mp4_size));
                 if(!commit_history_with_space(UPC_VIDEO_TMP_NAME)) {
                     UPC_LOG_MEDIA_SERVICE(
                         Warn, "print_video commit tmp still failing after eviction");

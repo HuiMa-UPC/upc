@@ -6,10 +6,10 @@
 
 #include <cstdint>
 #include <condition_variable>
-#include <cstdio>
 #include <deque>
 #include <functional>
 #include <mutex>
+#include <sys/types.h>
 #include <string>
 #include <thread>
 #include <vector>
@@ -22,7 +22,7 @@ namespace upc::media {
  * 职责：
  * - 媒体消费线程只负责把 NV12 帧拷贝后入队，不做重编码等耗时操作，避免阻塞上游。
  * - 后台 worker 线程异步将 NV12 帧喂给 RKMPP 编码器，输出 H.264 裸流。
- * - 直接输出到 /home/media/video/tmp/print.h264（H.264 裸流，无封装）。
+ * - 边录边封装为 /home/media/video/tmp/print_h264.mp4。
  * - 当写盘队列满时主动丢帧，保预览实时性，不阻塞媒体流消费。
  *
  * 生命周期：
@@ -54,7 +54,7 @@ public:
     void set_paused(bool paused);
     /** 每帧 NV12 回调入口；会拷贝数据并入队到 worker 线程做编码。 */
     void on_frame_nv12(const uint8_t* src_y, const uint8_t* src_uv, uint32_t stride_y);
-    /** 清理固定临时目录内残留的 print.h264 / print_h264.mp4。 */
+    /** 清理固定临时目录内残留的 print_h264.mp4。 */
     void enqueue_cleanup_tmp();
     /** 设置写盘前的存储空间预算检查函数；返回 false 时跳过本帧写入。 */
     void set_storage_budget_guard(std::function<bool()> cb);
@@ -100,9 +100,13 @@ private:
     void worker_fn();
     /** 打开 RKMPP 编码器并配置参数；调用前必须持有 mtx_。 */
     bool open_encoder_locked();
-    /** 关闭 RKMPP 编码器并冲刷残码流到文件；调用前必须持有 mtx_。 */
+    /** 关闭 RKMPP 编码器并冲刷残码流到封装器；调用前必须持有 mtx_。 */
     int close_encoder_locked();
-    /** 处理 WriteFrame 任务：编码一帧并写入 H.264 文件。 */
+    /** 启动边录边封装进程：stdin H264 → print_h264.mp4。调用前必须持有 mtx_。 */
+    bool start_muxer_locked();
+    /** 关闭封装进程并等待退出。调用前必须持有 mtx_。 */
+    bool stop_muxer_locked();
+    /** 处理 WriteFrame 任务：编码一帧并写入 MP4 封装器。 */
     void run_write_frame_job(const Job& job);
     /** 处理 Finalize 任务：关闭编码器、落盘、日志并触发回调。 */
     void run_finalize_job(Job job);
@@ -139,8 +143,9 @@ private:
     std::string session_id_;            /**< 当前会话 ID。 */
     std::string session_name_;          /**< 当前会话名称（已安全化）。 */
     std::string session_dir_;           /**< 当前会话输出目录。 */
-    std::string h264_path_;             /**< 当前 H.264 输出文件完整路径。 */
-    FILE* h264_fp_ = nullptr;           /**< 当前 H.264 输出文件句柄。 */
+    std::string h264_mp4_path_;         /**< 当前边录边封装 MP4 输出完整路径。 */
+    int muxer_stdin_fd_ = -1;           /**< ffmpeg stdin 写端；<0 表示未启用。 */
+    pid_t muxer_pid_ = -1;              /**< ffmpeg 子进程 pid。 */
 
     /* RKMPP 对象（避免在头文件引入 RK 头文件，使用 void* 封装）。 */
     void* mpp_ctx_ = nullptr;           /**< RKMPP 编码器上下文。 */

@@ -10,7 +10,12 @@
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
+#include <fcntl.h>
+#include <signal.h>
+#include <sys/types.h>
+#include <sys/wait.h>
 #include <thread>
+#include <unistd.h>
 
 #if defined(UPC_MEDIA_HAS_MPP) && UPC_MEDIA_HAS_MPP
 #include <rk_mpi.h>
@@ -22,10 +27,24 @@
 namespace upc::media {
 
 namespace {
-/** 输出文件名：固定为 print.h264（H.264 裸流）。 */
-constexpr const char* kH264Name = "print.h264";
+/** 边录边封装输出文件名：固定为 print_h264.mp4。 */
+constexpr const char* kH264Mp4Name = "print_h264.mp4";
 /** 允许最多积压的未编码帧数；超过后丢帧，防止编码跟不上导致内存膨胀。 */
 constexpr size_t kMaxPendingFrameJobs = 3u;
+
+bool write_all(int fd, const uint8_t* data, size_t len) {
+    if(fd < 0 || !data) return false;
+    size_t off = 0;
+    while(off < len) {
+        const ssize_t wr = ::write(fd, data + off, len - off);
+        if(wr < 0) {
+            if(errno == EINTR) continue;
+            return false;
+        }
+        off += static_cast<size_t>(wr);
+    }
+    return true;
+}
 
 /**
  * 将带有 stride 的 NV12 平面数据拷贝为紧凑 NV12 格式。
@@ -166,7 +185,7 @@ void PrintH264Recorder::clear_session_paths_locked() {
     session_id_.clear();
     session_name_.clear();
     session_dir_.clear();
-    h264_path_.clear();
+    h264_mp4_path_.clear();
 }
 
 /**
@@ -225,35 +244,18 @@ bool PrintH264Recorder::open_encoder_locked() {
 #else
     if(mpp_ready_) return true;
     (void)close_encoder_locked();
-    // 以追加模式打开 H.264 文件；编码器初始化前文件可能为空。
-    h264_fp_ = std::fopen(h264_path_.c_str(), "ab");
-    if(!h264_fp_) {
-        had_write_error_ = true;
-        UPC_LOG_MEDIA_SERVICE(Error, "print_h264 open h264 fail path=%s err=%s",
-                              h264_path_.c_str(), std::strerror(errno));
-        return false;
-    }
-
     MppCtx ctx = nullptr;
     MppApi* mpi = nullptr;
     MppEncCfg cfg = nullptr;
     if(mpp_create(&ctx, &mpi) != MPP_OK || !ctx || !mpi) {
         had_write_error_ = true;
         UPC_LOG_MEDIA_SERVICE(Error, "print_h264 mpp_create fail");
-        if(h264_fp_) {
-            std::fclose(h264_fp_);
-            h264_fp_ = nullptr;
-        }
         return false;
     }
     if(mpp_init(ctx, MPP_CTX_ENC, MPP_VIDEO_CodingAVC) != MPP_OK) {
         had_write_error_ = true;
         UPC_LOG_MEDIA_SERVICE(Error, "print_h264 mpp_init fail");
         mpp_destroy(ctx);
-        if(h264_fp_) {
-            std::fclose(h264_fp_);
-            h264_fp_ = nullptr;
-        }
         return false;
     }
     mpp_enc_cfg_init(&cfg);
@@ -261,10 +263,6 @@ bool PrintH264Recorder::open_encoder_locked() {
         had_write_error_ = true;
         UPC_LOG_MEDIA_SERVICE(Error, "print_h264 mpp_enc_cfg_init fail");
         mpp_destroy(ctx);
-        if(h264_fp_) {
-            std::fclose(h264_fp_);
-            h264_fp_ = nullptr;
-        }
         return false;
     }
 
@@ -292,11 +290,100 @@ bool PrintH264Recorder::open_encoder_locked() {
     mpp_mpi_ = mpi;
     mpp_cfg_ = cfg;
     mpp_ready_ = true;
+    if(!start_muxer_locked()) {
+        had_write_error_ = true;
+        UPC_LOG_MEDIA_SERVICE(Error, "print_h264 edge mux start failed");
+        return false;
+    }
     UPC_LOG_MEDIA_SERVICE(Info,
         "print_h264 encoder open %ux%u@%d bps=%d",
         width_, height_, fps, bps);
     return true;
 #endif
+}
+
+bool PrintH264Recorder::start_muxer_locked() {
+    if(muxer_stdin_fd_ >= 0 || muxer_pid_ > 0) return true;
+    if(h264_mp4_path_.empty()) return false;
+
+    int pipefd[2] = {-1, -1};
+    if(::pipe(pipefd) != 0) {
+        return false;
+    }
+    const pid_t pid = ::fork();
+    if(pid < 0) {
+        ::close(pipefd[0]);
+        ::close(pipefd[1]);
+        return false;
+    }
+    if(pid == 0) {
+        ::close(pipefd[1]);
+        if(::dup2(pipefd[0], STDIN_FILENO) < 0) _exit(127);
+        ::close(pipefd[0]);
+        int null_fd = ::open("/dev/null", O_WRONLY);
+        if(null_fd >= 0) {
+            (void)::dup2(null_fd, STDOUT_FILENO);
+            (void)::dup2(null_fd, STDERR_FILENO);
+            ::close(null_fd);
+        }
+        const uint32_t use_fps = fps_ > 0 ? fps_ : 1u;
+        char fps_str[16] = {};
+        std::snprintf(fps_str, sizeof(fps_str), "%u", use_fps);
+        ::execl(CAMERA_FFMPEG_BIN, CAMERA_FFMPEG_BIN,
+                "-y",
+                "-loglevel", "error",
+                "-fflags", "+genpts",
+                "-framerate", fps_str,
+                "-f", "h264",
+                "-i", "pipe:0",
+                "-c:v", "copy",
+                h264_mp4_path_.c_str(),
+                static_cast<char*>(nullptr));
+        _exit(127);
+    }
+    ::close(pipefd[0]);
+    muxer_stdin_fd_ = pipefd[1];
+    muxer_pid_ = pid;
+    return true;
+}
+
+bool PrintH264Recorder::stop_muxer_locked() {
+    bool ok = true;
+    if(muxer_stdin_fd_ >= 0) {
+        ::close(muxer_stdin_fd_);
+        muxer_stdin_fd_ = -1;
+    }
+    if(muxer_pid_ > 0) {
+        int status = 0;
+        bool exited = false;
+        for(int i = 0; i < 50; ++i) {
+            const pid_t w = ::waitpid(muxer_pid_, &status, WNOHANG);
+            if(w == muxer_pid_) {
+                exited = true;
+                break;
+            }
+            if(w < 0 && errno == ECHILD) {
+                exited = true;
+                status = 0;
+                break;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+        if(!exited && ::waitpid(muxer_pid_, &status, WNOHANG) == 0) {
+            (void)::kill(muxer_pid_, SIGTERM);
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            if(::waitpid(muxer_pid_, &status, WNOHANG) == 0) {
+                (void)::kill(muxer_pid_, SIGKILL);
+                (void)::waitpid(muxer_pid_, &status, 0);
+            }
+            exited = true;
+        }
+        if(exited && status != 0 && !(WIFEXITED(status) && WEXITSTATUS(status) == 0)) {
+            ok = false;
+        }
+        muxer_pid_ = -1;
+    }
+    return ok;
 }
 
 /**
@@ -314,6 +401,7 @@ int PrintH264Recorder::close_encoder_locked() {
     return 0;
 #else
     int rc = 0;
+    bool mux_write_error = false;
     if(mpp_ready_) {
         auto* mpi = reinterpret_cast<MppApi*>(mpp_mpi_);
         auto ctx = reinterpret_cast<MppCtx>(mpp_ctx_);
@@ -332,17 +420,19 @@ int PrintH264Recorder::close_encoder_locked() {
             }
             const void* ptr = mpp_packet_get_pos(pkt);
             const size_t len = static_cast<size_t>(mpp_packet_get_length(pkt));
-            if(ptr && len > 0 && h264_fp_ && std::fwrite(ptr, 1, len, h264_fp_) != len) rc = -1;
+            if(ptr && len > 0) {
+                if(muxer_stdin_fd_ >= 0 &&
+                   !write_all(muxer_stdin_fd_, static_cast<const uint8_t*>(ptr), len)) {
+                    mux_write_error = true;
+                }
+            }
             const bool eos_hit = (mpp_packet_get_eos(pkt) != 0);
             mpp_packet_deinit(&pkt);
             if(eos_hit) break;
         }
     }
-    // 关闭文件句柄。
-    if(h264_fp_) {
-        std::fflush(h264_fp_);
-        std::fclose(h264_fp_);
-        h264_fp_ = nullptr;
+    if(mux_write_error || !stop_muxer_locked()) {
+        rc = -1;
     }
     // 释放编码配置。
     if(mpp_cfg_) {
@@ -384,7 +474,7 @@ void PrintH264Recorder::on_session_start(const middleware::PrintVideoSessionPayl
     session_id_ = info.session_id;
     session_name_ = sanitize_filename(info.job_name);
     session_dir_ = build_video_tmp_dir();
-    h264_path_ = session_dir_ + "/" + kH264Name;
+    h264_mp4_path_ = session_dir_ + "/" + kH264Mp4Name;
     if(info.width > 0) width_ = info.width;
     if(info.height > 0) height_ = info.height;
     // 编码帧率以相机开流时 set_stream_geometry 为准，不使用 layer_fps（延时摄影）。
@@ -396,6 +486,7 @@ void PrintH264Recorder::on_session_start(const middleware::PrintVideoSessionPayl
     std::error_code ec;
     std::filesystem::create_directories(session_dir_, ec);
     if(ec) return;
+    (void)std::remove(h264_mp4_path_.c_str());
     active_ = true;
     UPC_LOG_MEDIA_SERVICE(Info,
         "print_h264 session start id=%s bps=%u %ux%u@%u",
@@ -478,7 +569,7 @@ void PrintH264Recorder::on_frame_nv12(const uint8_t* src_y, const uint8_t* src_u
 
 /**
  * 入队清理临时目录任务。
- * 删除 print.h264 和 print_h264.mp4 残留文件，并尝试删除空目录。
+ * 删除 print_h264.mp4 残留文件，并尝试删除空目录。
  */
 void PrintH264Recorder::enqueue_cleanup_tmp() {
     std::lock_guard<std::mutex> lock(mtx_);
@@ -555,7 +646,7 @@ void PrintH264Recorder::run_write_frame_job(const Job& job) {
     const size_t need = static_cast<size_t>(job.width) * job.height * 3u / 2u;
     void* ctx = nullptr;
     void* mpi = nullptr;
-    FILE* out_fp = nullptr;
+    int mux_fd = -1;
     std::function<bool()> guard;
     {
         std::lock_guard<std::mutex> lock(mtx_);
@@ -576,7 +667,7 @@ void PrintH264Recorder::run_write_frame_job(const Job& job) {
         ctx = mpp_ctx_;
         mpi = mpp_mpi_;
 #endif
-        out_fp = h264_fp_;
+        mux_fd = muxer_stdin_fd_;
     }
 
 #if defined(UPC_MEDIA_HAS_MPP) && UPC_MEDIA_HAS_MPP
@@ -627,8 +718,11 @@ void PrintH264Recorder::run_write_frame_job(const Job& job) {
         if(mpp_mpi->encode_get_packet(mpp_ctx, &pkt) != MPP_OK || !pkt) break;
         const void* p = mpp_packet_get_pos(pkt);
         const size_t n = static_cast<size_t>(mpp_packet_get_length(pkt));
-        if(p && n > 0 && out_fp && std::fwrite(p, 1, n, out_fp) != n) {
-            write_error = true;
+        if(p && n > 0) {
+            if(mux_fd >= 0 &&
+               !write_all(mux_fd, static_cast<const uint8_t*>(p), n)) {
+                write_error = true;
+            }
         }
         mpp_packet_deinit(&pkt);
     }
@@ -659,20 +753,22 @@ void PrintH264Recorder::run_write_frame_job(const Job& job) {
  * 4. 触发 finalize 完成回调。
  */
 void PrintH264Recorder::run_finalize_job(Job job) {
-    std::string h264;
+    std::string h264_mp4;
     std::string dir;
     uint32_t frames = 0;
     bool err = false;
     uint32_t dropped = 0;
     {
         std::lock_guard<std::mutex> lock(mtx_);
-        h264 = h264_path_;
+        h264_mp4 = h264_mp4_path_;
         dir = session_dir_;
         frames = frame_count_;
         err = had_write_error_;
         dropped = dropped_frames_;
         if(job.session_seq == session_seq_) {
-            (void)close_encoder_locked();
+            if(close_encoder_locked() != 0) {
+                err = true;
+            }
             clear_session_paths_locked();
             frame_count_ = 0;
             dropped_frames_ = 0;
@@ -681,9 +777,9 @@ void PrintH264Recorder::run_finalize_job(Job job) {
         }
     }
 
-    // 即使中止也保留已编码的连续录像裸流；仅当完全没有帧时才清理文件。
+    // 仅当完全没有帧时清理封装文件，避免空壳 mp4。
     if(frames == 0) {
-        (void)std::remove(h264.c_str());
+        (void)std::remove(h264_mp4.c_str());
         (void)remove_empty_dir_if_exists(dir);
     }
 
@@ -705,10 +801,9 @@ void PrintH264Recorder::run_finalize_job(Job job) {
 }
 
 /**
- * 处理 Cleanup 任务：删除临时目录下的 print.h264 和 print_h264.mp4。
+ * 处理 Cleanup 任务：删除临时目录下的 print_h264.mp4。
  */
 void PrintH264Recorder::run_cleanup_job(const Job& job) {
-    (void)std::remove((job.cleanup_dir + "/print.h264").c_str());
     (void)std::remove((job.cleanup_dir + "/print_h264.mp4").c_str());
     (void)remove_empty_dir_if_exists(job.cleanup_dir);
 }

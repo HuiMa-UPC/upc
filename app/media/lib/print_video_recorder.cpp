@@ -417,18 +417,20 @@ void PrintVideoRecorder::finalize_session(bool aborted)
     }
     const uint32_t frames = frame_count_;
     if(frames == 0) {
-        const std::string h264_path = session_dir_ + "/print.h264";
-        std::error_code h264_ec;
-        const bool h264_exists = std::filesystem::exists(h264_path, h264_ec) && !h264_ec;
-        const uintmax_t h264_size =
-            h264_exists ? std::filesystem::file_size(h264_path, h264_ec) : 0u;
-        const bool h264_non_empty = h264_exists && !h264_ec && h264_size > 0u;
+        const std::string h264_mp4_path = session_dir_ + "/print_h264.mp4";
+        std::error_code h264_mp4_ec;
+        const bool h264_mp4_exists =
+            std::filesystem::exists(h264_mp4_path, h264_mp4_ec) && !h264_mp4_ec;
+        const uintmax_t h264_mp4_size =
+            h264_mp4_exists ? std::filesystem::file_size(h264_mp4_path, h264_mp4_ec) : 0u;
+        const bool h264_mp4_non_empty =
+            h264_mp4_exists && !h264_mp4_ec && h264_mp4_size > 0u;
         UPC_LOG_MEDIA_SERVICE(
             Warn,
             "print_video %s with no frames session=%s (no manifest)",
             aborted ? "abort" : "finish",
             session_id_.c_str());
-        if(h264_non_empty && h264_continuous_on_) {
+        if(h264_mp4_non_empty && h264_continuous_on_) {
             /* 仅有打印录像时也要保留一条可 finalize 的记录，避免空请求触发 cleanup 丢片。 */
             const bool manifest_quick_ok = upsert_print_history(
                 aborted,
@@ -440,9 +442,9 @@ void PrintVideoRecorder::finalize_session(bool aborted)
             notify_manifest_ready(UPC_VIDEO_TMP_NAME, manifest_quick_ok, aborted, false);
             UPC_LOG_MEDIA_SERVICE(
                 Info,
-                "print_video h264-only entry kept session=%s h264_bytes=%llu",
+                "print_video mp4-only entry kept session=%s mp4_bytes=%llu",
                 session_id_.c_str(),
-                static_cast<unsigned long long>(h264_size));
+                static_cast<unsigned long long>(h264_mp4_size));
         } else {
         /* 仅在目录为空时做轻量清理：避免留下空 __work 目录；
          * 非空目录（可能有 H264 后台产物）保持不动。 */
@@ -631,13 +633,13 @@ void PrintVideoRecorder::finalize_after_exit(const char* frames_dir,
         }
     }
     const uint32_t frame_count = timelapse_util::scan_max_png_index(session_dir);
-    /* 延时成片用 layer_fps；打印录像 remux 必须与 H264 编码帧率（相机流）一致。 */
+    /* 延时成片用 layer_fps；打印录像 MP4 按相机流帧率（编码一致）处理。 */
     const uint32_t timelapse_fps = layer_fps_ > 0 ? layer_fps_ : 1u;
     const uint32_t print_fps =
         stream_fps_ > 0 ? stream_fps_ : CAMERA_FPS_DEFAULT;
 
     /* 延时摄影成片：PNG 模式只认帧在、不编 mp4、不删 PNG；MP4 模式才 encode。
-     * 打印录像 remux 不受此开关影响（见下方 h264 分支）。 */
+     * 打印录像 MP4 不受此开关影响（见下方 h264 分支）。 */
     bool video_ok = false;
 #if UPC_TIMELAPSE_PLAYBACK_PNG
     video_ok = (frame_count >= 1u);
@@ -675,9 +677,9 @@ void PrintVideoRecorder::finalize_after_exit(const char* frames_dir,
     }
 #endif
 
-    bool h264_remux_ok = false;
+    bool h264_mp4_ok = false;
+    const bool print_video_expected = hit->print_video_pending || !hit->print_video.empty();
     if(finalize_print_video) {
-        const std::string h264_path = session_dir + "/print.h264";
         const std::string h264_mp4_path = session_dir + "/print_h264.mp4";
         const std::string h264_mp4_rel = hit->frames_dir + "/print_h264.mp4";
         const std::string print_thumb_path =
@@ -686,45 +688,44 @@ void PrintVideoRecorder::finalize_after_exit(const char* frames_dir,
             hit->frames_dir + "/print_thumb" + CAMERA_PRINT_VIDEO_THUMB_EXT;
         hit->print_video.clear();
         hit->print_thumb.clear();
-        (void)std::remove(h264_mp4_path.c_str());
         std::error_code h264_ec;
-        if(std::filesystem::exists(h264_path, h264_ec) && !h264_ec) {
-            const bool h264_mp4_ok = timelapse_util::remux_h264_to_mp4(
-                h264_path.c_str(), print_fps, h264_mp4_path.c_str());
-            if(!h264_mp4_ok) {
+        bool h264_mp4_file_ok = false;
+        if(std::filesystem::exists(h264_mp4_path, h264_ec) && !h264_ec) {
+            const uintmax_t h264_mp4_size =
+                std::filesystem::file_size(h264_mp4_path, h264_ec);
+            if(!h264_ec && h264_mp4_size > 0u) {
+                h264_mp4_file_ok = true;
                 UPC_LOG_MEDIA_SERVICE(
-                    Warn, "print_video finalize h264 remux failed path=%s",
-                    h264_path.c_str());
-            } else {
-                h264_remux_ok = true;
-                hit->print_video = h264_mp4_rel;
-                (void)std::remove(print_thumb_path.c_str());
-                if(print_thumb_provider_ &&
-                   print_thumb_provider_(print_thumb_path.c_str())) {
-                    hit->print_thumb = print_thumb_rel;
-                } else {
-                    UPC_LOG_MEDIA_SERVICE(
-                        Warn, "print_video finalize print thumb generation failed path=%s",
-                        print_thumb_path.c_str());
-                }
+                    Info, "print_video finalize use edge-muxed mp4 path=%s",
+                    h264_mp4_path.c_str());
             }
-        }
-        if(h264_remux_ok) {
-            if(std::remove(h264_path.c_str()) != 0 && errno != ENOENT) {
-                UPC_LOG_MEDIA_SERVICE(
-                    Warn, "print_video finalize remove h264 failed path=%s err=%s",
-                    h264_path.c_str(), std::strerror(errno));
-            }
-        } else if(std::filesystem::exists(h264_path, h264_ec) && !h264_ec) {
+        } else {
             UPC_LOG_MEDIA_SERVICE(
-                Warn, "print_video finalize keep h264 for retry path=%s",
-                h264_path.c_str());
+                Warn, "print_video finalize missing edge-muxed mp4 path=%s",
+                h264_mp4_path.c_str());
+        }
+        if(h264_mp4_file_ok) {
+            h264_mp4_ok = true;
+            hit->print_video = h264_mp4_rel;
+            (void)std::remove(print_thumb_path.c_str());
+            if(print_thumb_provider_ &&
+               print_thumb_provider_(print_thumb_path.c_str())) {
+                hit->print_thumb = print_thumb_rel;
+            } else {
+                UPC_LOG_MEDIA_SERVICE(
+                    Warn, "print_video finalize print thumb generation failed path=%s",
+                    print_thumb_path.c_str());
+            }
         }
     }
 
     hit->video_pending = false;
     if(finalize_print_video) {
-        hit->print_video_pending = false;
+        if(print_video_expected) {
+            hit->print_video_pending = !h264_mp4_ok;
+        } else {
+            hit->print_video_pending = false;
+        }
     }
     hit->clean_first_png = 0;
     hit->clean_last_png = 0;
@@ -766,9 +767,9 @@ void PrintVideoRecorder::finalize_after_exit(const char* frames_dir,
     UPC_LOG_MEDIA_SERVICE(
         Info,
         "print_video finalize done frames_dir=%s frames=%u video_ok=%d "
-        "timelapse_fps=%u print_fps=%u h264_remux=%d finalize_print_video=%d",
+        "timelapse_fps=%u print_fps=%u h264_mp4_ok=%d finalize_print_video=%d",
         hit->frames_dir.c_str(), frame_count, video_ok ? 1 : 0,
-        timelapse_fps, print_fps, h264_remux_ok ? 1 : 0,
+        timelapse_fps, print_fps, h264_mp4_ok ? 1 : 0,
         finalize_print_video ? 1 : 0);
 }
 
