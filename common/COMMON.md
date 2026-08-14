@@ -525,7 +525,7 @@ ParserManager → RingBuffer → McuLink（TCP + 串口）
 | `process_config_glavo()` | `rongsu_glavo` | `/var/run/rongsu_glavo.pid` | `/var/log/rongsu_glavo` |
 | `process_config_camera()` | `rongsu_camera` | `/var/run/rongsu_camera.pid` | `/var/log/rongsu_camera` |
 
-各进程 `main.cpp` 支持 `{start|stop|status|run}`；`start` 时 stderr/stdout 重定向到 `{log_base}N.log`（单文件上限 5MB，三文件循环；重启不清空已有文件）。
+各进程 `main.cpp` 支持 `{start|stop|status|run}`；`start` 时 stderr/stdout 重定向到 `{log_base}N.log`（单文件上限 20MB，三文件循环；重启不清空已有文件）。
 
 - 启动脚本：[scripts/rongsu.sh](../scripts/rongsu.sh)
 

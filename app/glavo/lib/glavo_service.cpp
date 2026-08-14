@@ -1408,6 +1408,7 @@ void GlavoService::launch_print_from_prepared(const std::string& full_path)
 
     ignore_powder_low_for_current_print_ = false;
     print_running_.store(true);
+    McuLink::instance().set_print_task_flow_active(true);
     PrintVideoNotify::instance().on_print_start(current_file_path_);
     McuLink::instance().begin_sending();
 
@@ -1955,6 +1956,9 @@ void GlavoService::handle_open_door_request(const middleware::Message& msg)
             } while(std::chrono::steady_clock::now() < deadline);
         }
         send_door_rsp(msg, middleware::MsgType::APP_OpenDoor_Rsp, sent && opened);
+        if(sent && opened) {
+            McuLink::instance().set_print_task_flow_active(false);
+        }
         UPC_LOG_GLAVO_SERVICE(Info,
             "open_door real mode(sensor): sent=%d opened=%d valid_seen=%d timeout_ms=%u",
             sent ? 1 : 0, opened ? 1 : 0, valid_seen ? 1 : 0,
@@ -1963,6 +1967,7 @@ void GlavoService::handle_open_door_request(const middleware::Message& msg)
     }
     /* 兼容旧逻辑：占位立即确认已开 */
     send_door_rsp(msg, middleware::MsgType::APP_OpenDoor_Rsp, true);
+    McuLink::instance().set_print_task_flow_active(false);
 }
 
 /** @brief 处理 UI_Purify_Req（尚未实现业务逻辑） */

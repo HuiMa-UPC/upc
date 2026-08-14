@@ -61,7 +61,7 @@
 #define UPC_MOD_MSG_BUS 0
 #endif
 #ifndef UPC_MOD_IPC
-#define UPC_MOD_IPC 1
+#define UPC_MOD_IPC 0
 #endif
 #ifndef UPC_MOD_MEM_POOL
 #define UPC_MOD_MEM_POOL 1
@@ -188,7 +188,7 @@
 
 struct ProcessConfig {
     const char* pid_file;
-    /** 日志路径前缀，实际文件为 {log_base}1.log ~ {log_base}3.log（5MB 轮转） */
+    /** 日志路径前缀，实际文件为 {log_base}1.log ~ {log_base}3.log（20MB 轮转） */
     const char* log_base;
     const char* name;
 };

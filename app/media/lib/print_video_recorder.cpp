@@ -839,10 +839,13 @@ std::string PrintVideoRecorder::make_session_name(const std::string& job_name,
     if(localtime_r(&t, &tm_buf) == nullptr) {
         return base + "_19700101_000000";
     }
-    char stamp[24];
-    std::snprintf(stamp, sizeof(stamp), "%04d%02d%02d_%02d%02d%02d",
-                  tm_buf.tm_year + 1900, tm_buf.tm_mon + 1, tm_buf.tm_mday,
-                  tm_buf.tm_hour, tm_buf.tm_min, tm_buf.tm_sec);
+    char stamp[80] = {};
+    const int n = std::snprintf(stamp, sizeof(stamp), "%04d%02d%02d_%02d%02d%02d",
+                                tm_buf.tm_year + 1900, tm_buf.tm_mon + 1, tm_buf.tm_mday,
+                                tm_buf.tm_hour, tm_buf.tm_min, tm_buf.tm_sec);
+    if(n <= 0 || static_cast<size_t>(n) >= sizeof(stamp)) {
+        return base + "_19700101_000000";
+    }
     return base + "_" + stamp;
 }
 

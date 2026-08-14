@@ -140,6 +140,12 @@ public:
      */
     void set_user_dispatch_paused(bool paused);
     [[nodiscard]] bool is_user_dispatch_paused() const noexcept;
+    /**
+     * @brief 标记“打印任务流程”是否激活（用于门控高频心跳回包日志）
+     * @note 业务约定：从进入打印到用户滑动开门解锁成功，均视为同一流程。
+     */
+    void set_print_task_flow_active(bool active) noexcept;
+    [[nodiscard]] bool is_print_task_flow_active() const noexcept;
     void set_plate_thickness_um(uint16_t thickness_um);
 
     /** @brief 运动已发完、正在等 MCU 双缓冲排空（自然完成尾段） */
@@ -386,6 +392,7 @@ private:
     /* ---------- 发送状态机 ---------- */
     std::atomic<bool> is_sending_{false};              /**< 是否正在下发运动包 */
     std::atomic<bool> user_paused_{false};             /**< 用户暂停：停止 TCP 运动下发，解析与换层逻辑继续 */
+    std::atomic<bool> print_task_flow_active_{false};  /**< 打印任务流程窗口（开始打印→开门解锁） */
     std::atomic<bool> start_pending_{false};           /**< begin_sending 已调用但 RingBuffer 未达阈值，等待中 */
     std::atomic<bool> terminate_pending_{false};       /**< 收到终止请求，待链路线程执行清理 */
     std::atomic<bool> natural_complete_pending_{false};/**< 运动包已发完，等待 MCU 缓存排空以触发自然完成 */

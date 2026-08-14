@@ -10,7 +10,7 @@
 
 namespace {
 
-constexpr std::size_t kMaxBytes = 5U * 1024U * 1024U;
+constexpr std::size_t kMaxBytes = 20U * 1024U * 1024U;
 constexpr int kMaxFiles = 3;
 constexpr int kPathMax = 256;
 

@@ -2084,6 +2084,16 @@ bool McuLink::is_user_dispatch_paused() const noexcept
     return user_paused_.load();
 }
 
+void McuLink::set_print_task_flow_active(bool active) noexcept
+{
+    print_task_flow_active_.store(active);
+}
+
+bool McuLink::is_print_task_flow_active() const noexcept
+{
+    return print_task_flow_active_.load();
+}
+
 void McuLink::set_plate_thickness_um(uint16_t thickness_um)
 {
     if(thickness_um == 0) {
@@ -2671,7 +2681,7 @@ void McuLink::on_tcp_status_response(const tcp_response_t& resp)
             mcu_rates_seen_nonempty_.store(true);
         }
         PrintJobState::instance().set_mcu_rates(resp.cmd_rate, resp.data_rate);
-        if(tcp_hb_rsp_log_enabled()) {
+        if(tcp_hb_rsp_log_enabled() && print_task_flow_active_.load()) {
             UPC_LOG_MCU_LINK(Debug,
                 "tcp hb rsp cmd_rate=%u data_rate=%u event=0x%02X ota=%u",
                 static_cast<unsigned>(resp.cmd_rate),
