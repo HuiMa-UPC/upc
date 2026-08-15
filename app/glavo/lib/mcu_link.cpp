@@ -2466,10 +2466,19 @@ int McuLink::link_send_one_motion_batch()
 
     parser::rb_packet_t staged[kMaxMotionBatch];
     int n = 0;
+    enum class BatchKind : uint8_t {
+        None = 0,
+        Motion,
+        Power,
+    };
+    BatchKind batch_kind = BatchKind::None;
 
-    // 从 tcp_stage_ 头部连续取出运动包，遇到 LayerMark 或非运动包则停止
+    // 从 tcp_stage_ 头部连续取包：LayerMark 留给外层；未知类型丢弃。
+    // 规则：
+    // 1) 普通运动包：最多取 current_tcp_batch_size()；
+    // 2) 功率包(0x02)：连续功率包合并为同一批（方案 B）。
     const int batch_limit = current_tcp_batch_size();
-    for(int i = 0; i < batch_limit; i++) {
+    while(n < kMaxMotionBatch) {
         parser::rb_pkt_type_t ptype;
         if(!tcp_stage_peek_type(&ptype)) {
             break; // 队列为空
@@ -2483,6 +2492,26 @@ int McuLink::link_send_one_motion_batch()
             tcp_stage_pop_front(&discard);
             break;
         }
+
+        bool front_is_power = false;
+        {
+            std::lock_guard<std::mutex> lock(tcp_stage_mtx_);
+            if(tcp_stage_.empty()) {
+                break;
+            }
+            front_is_power = (tcp_stage_.front().data[0] == 0x02u);
+        }
+        if(batch_kind == BatchKind::None) {
+            batch_kind = front_is_power ? BatchKind::Power : BatchKind::Motion;
+        }
+        if((batch_kind == BatchKind::Power && !front_is_power) ||
+           (batch_kind == BatchKind::Motion && front_is_power)) {
+            break; // 分批边界：功率包与普通运动包不混发
+        }
+        if(batch_kind == BatchKind::Motion && n >= batch_limit) {
+            break;
+        }
+
         parser::rb_packet_t rp;
         if(!tcp_stage_pop_front(&rp)) {
             break;
@@ -2494,41 +2523,90 @@ int McuLink::link_send_one_motion_batch()
         return 0;
     }
 
-    // 将 n 个运动包的数据拼接到连续 payload 中（每包 11 字节）
-    uint8_t payload[kMaxMotionBatch * 11];
-    for(int i = 0; i < n; i++) {
-        std::memcpy(&payload[i * 11], staged[i].data, 11);
-    }
-
-    // 构建完整的 TCP 运动帧并发送
-    uint8_t frame[3 + kMaxMotionBatch * 11];
-    const int flen = build_motion_frame(payload, n, frame, sizeof(frame));
-    if(flen <= 0) {
+    auto requeue_staged = [&]() {
         std::lock_guard<std::mutex> lock(tcp_stage_mtx_);
         for(int i = n - 1; i >= 0; i--) {
             tcp_stage_.push_front(staged[i]);
         }
-        return 0;
-    }
-    const int send_rc = tcp_send_raw(frame, static_cast<size_t>(flen));
-    if(send_rc != 0) {
-        /* -1：未发出任何字节，可整批回退重试；
-         * -2：半帧已出 / hangup，禁止重发，依赖 terminate 清队列重同步。 */
-        if(send_rc == -1 && tcp_fd_ >= 0) {
-            std::lock_guard<std::mutex> lock(tcp_stage_mtx_);
-            for(int i = n - 1; i >= 0; i--) {
-                tcp_stage_.push_front(staged[i]);
+    };
+    auto terminate_on_fail = [&](const char* reason) {
+        UPC_LOG_MCU_LINK(Error, "%s", reason);
+        if(!terminate_pending_.load()) {
+            PrintJobState::instance().set_job_error(true);
+            request_terminate();
+        }
+    };
+    auto send_staged_as_motion_frame = [&]() -> int {
+        uint8_t payload[kMaxMotionBatch * 11];
+        for(int i = 0; i < n; i++) {
+            std::memcpy(&payload[i * 11], staged[i].data, 11);
+        }
+        uint8_t frame[3 + kMaxMotionBatch * 11];
+        const int flen = build_motion_frame(payload, n, frame, sizeof(frame));
+        if(flen <= 0) {
+            return -3;
+        }
+        return tcp_send_raw(frame, static_cast<size_t>(flen));
+    };
+
+    if(batch_kind == BatchKind::Power) {
+        // 功率变更窗口：
+        // 临时暂停(0x0A pause=1) -> 连续功率包(0x02) -> 等 10ms -> 条件恢复(0x0A pause=0)
+        if(terminate_pending_.load()) {
+            return 0;
+        }
+        if(!send_tcp_emergency_ctrl(false, true)) {
+            terminate_on_fail("power batch: send pause ctrl failed");
+            return 0;
+        }
+        if(terminate_pending_.load()) {
+            return 0;
+        }
+        const int send_rc = send_staged_as_motion_frame();
+        if(send_rc != 0) {
+            terminate_on_fail("power batch: send power frame failed");
+            return 0;
+        }
+
+        constexpr int kPowerResumeDelayMs = 10;
+        const auto deadline = std::chrono::steady_clock::now() +
+                              std::chrono::milliseconds(kPowerResumeDelayMs);
+        while(std::chrono::steady_clock::now() < deadline) {
+            if(terminate_pending_.load()) {
+                return 0;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        if(terminate_pending_.load()) {
+            return 0;
+        }
+        if(!user_paused_.load()) {
+            if(!send_tcp_emergency_ctrl(false, false)) {
+                terminate_on_fail("power batch: send resume ctrl failed");
+                return 0;
             }
         } else {
-            UPC_LOG_MCU_LINK(Error,
-                "motion batch drop (no rebatch) n=%d rc=%d connected=%d",
-                n, send_rc, tcp_fd_ >= 0 ? 1 : 0);
-            if(!terminate_pending_.load()) {
-                PrintJobState::instance().set_job_error(true);
-                request_terminate();
-            }
+            UPC_LOG_MCU_LINK(Info,
+                             "power batch: keep paused after delay (user paused=1)");
         }
-        return 0;
+    } else {
+        const int send_rc = send_staged_as_motion_frame();
+        if(send_rc != 0) {
+            /* -1：未发出任何字节，可整批回退重试；
+             * -2：半帧已出 / hangup，禁止重发，依赖 terminate 清队列重同步。 */
+            if(send_rc == -1 && tcp_fd_ >= 0) {
+                requeue_staged();
+            } else {
+                UPC_LOG_MCU_LINK(Error,
+                    "motion batch drop (no rebatch) n=%d rc=%d connected=%d",
+                    n, send_rc, tcp_fd_ >= 0 ? 1 : 0);
+                if(!terminate_pending_.load()) {
+                    PrintJobState::instance().set_job_error(true);
+                    request_terminate();
+                }
+            }
+            return 0;
+        }
     }
 
     // 更新已发送包计数
