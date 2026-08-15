@@ -25,6 +25,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <cstdio>
+#include <string>
 #include <thread>
 
 namespace upc::glavo {
@@ -66,6 +67,48 @@ bool tcp_hb_rsp_log_enabled()
             std::getenv("UPC_GLAVO_LOG_TCP_HEARTBEAT_RSP"),
             UPC_GLAVO_LOG_TCP_HEARTBEAT_RSP_DEFAULT != 0);
     return k_enabled;
+}
+
+bool tcp_tx_log_enabled()
+{
+    static const bool k_enabled =
+        parse_env_switch(
+            std::getenv("UPC_GLAVO_LOG_TCP_TX"),
+            UPC_GLAVO_LOG_TCP_TX_DEFAULT != 0);
+    return k_enabled;
+}
+
+void tcp_log_tx_frame(const uint8_t* data, size_t len)
+{
+    if(!tcp_tx_log_enabled() || !data || len == 0) {
+        return;
+    }
+    const bool is_tcp_frame =
+        (len >= 4 && data[0] == TCP_SOF0 && data[1] == TCP_SOF1);
+    const uint8_t pkg_num = (len >= 3) ? data[2] : 0u;
+    const uint8_t cmd = (len >= 4) ? data[3] : 0u;
+    if(is_tcp_frame && pkg_num == 0x01 && cmd == 0x0B) {
+        return; // 过滤心跳帧，仅保留下发指令包日志
+    }
+
+    const unsigned frame_id =
+        is_tcp_frame ? static_cast<unsigned>(cmd) : 0xFFu;
+    const unsigned payload_len =
+        (len >= 3) ? static_cast<unsigned>(data[2]) : 0u;
+    std::string hex;
+    hex.reserve(len * 3);
+    for(size_t i = 0; i < len; i++) {
+        char part[4];
+        const int n = std::snprintf(part, sizeof(part), "%02X", data[i]);
+        if(n > 0) {
+            hex.append(part, static_cast<size_t>(n));
+        }
+        if(i + 1 < len) {
+            hex.push_back(' ');
+        }
+    }
+    UPC_LOG_MCU_LINK(Info, "TCP_TX frame[%zu] id=0x%02X payload=%u %s",
+        len, frame_id, payload_len, hex.c_str());
 }
 
 parser::IParserWorker* active_parser()
@@ -1401,6 +1444,7 @@ int McuLink::tcp_send_raw(const uint8_t* data, size_t len)
         return -1;
     }
     std::lock_guard<std::mutex> lock(tcp_send_mtx_);
+    tcp_log_tx_frame(data, len);
 
     constexpr int kPollSliceMs = 50;
     constexpr int kMaxWaitMs   = 2000;
