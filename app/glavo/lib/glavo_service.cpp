@@ -1492,6 +1492,9 @@ void GlavoService::handle_print_pause(const middleware::Message& msg)
         return;
     }
     link.set_user_dispatch_paused(true);
+    if(!link.send_tcp_emergency_ctrl(false, true)) {
+        UPC_LOG_GLAVO_SERVICE(Warn, "print_pause: tcp 0x0A pause send failed");
+    }
     UPC_LOG_GLAVO_SERVICE(Info, "print_pause accepted");
     publish_print_pause_done(true);
 }
@@ -1508,6 +1511,9 @@ void GlavoService::handle_print_resume(const middleware::Message& msg)
     if(!link.is_user_dispatch_paused()) {
         publish_print_pause_done(false);
         return;
+    }
+    if(!link.send_tcp_emergency_ctrl(false, false)) {
+        UPC_LOG_GLAVO_SERVICE(Warn, "print_resume: tcp 0x0A resume send failed");
     }
     link.set_user_dispatch_paused(false);
     UPC_LOG_GLAVO_SERVICE(Info, "print_resume accepted");

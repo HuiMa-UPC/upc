@@ -14,6 +14,17 @@ int tcp_build_motion_frame(const uint8_t* subpkts11, int n,
 
 int tcp_build_heartbeat_frame(uint8_t* out, size_t out_size);
 
+/**
+ * SOC→MCU：FRAME CMD=0x0A 通用紧急指令（11B 子包，pkg_num=1）
+ * DATA[0]=CMD(0x0A)（由框架写入）
+ * DATA[1]=Stop（1=急停/终止，0=无）
+ * DATA[2]=Pause（1=暂停，0=继续/无）
+ * 其余字节保留 0。
+ */
+int tcp_build_emergency_frame(uint8_t stop, uint8_t pause,
+                              uint8_t* out, size_t out_size);
+
+/** 兼容旧名：历史 reset 语义映射为 Stop=1, Pause=0。 */
 int tcp_build_reset_frame(uint8_t* out, size_t out_size);
 
 /** OTA FRAME 子包 Mode（CMD=0x03 时 byte[1]） */

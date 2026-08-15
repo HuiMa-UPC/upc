@@ -141,6 +141,13 @@ public:
     void set_user_dispatch_paused(bool paused);
     [[nodiscard]] bool is_user_dispatch_paused() const noexcept;
     /**
+     * @brief 下发 TCP CMD=0x0A 通用紧急指令（Stop/Pause）
+     * @param stop  true=急停/终止（最高优先级）
+     * @param pause true=暂停，false=继续/不暂停
+     * @return true=组帧并发送成功，false=TCP 未就绪或发送失败
+     */
+    bool send_tcp_emergency_ctrl(bool stop, bool pause);
+    /**
      * @brief 标记“打印任务流程”是否激活（用于门控高频心跳回包日志）
      * @note 业务约定：从进入打印到用户滑动开门解锁成功，均视为同一流程。
      */
@@ -332,7 +339,7 @@ private:
     /** @brief 处理串口打印前的握手状态机（CONDITION_OK -> PRINT_READY） */
     void link_process_serial_handshake();
 
-    /** @brief 向振镜发送 Reset 帧 */
+    /** @brief 向振镜发送终止指令（TCP CMD=0x0A，Stop=1，Pause=0） */
     void send_tcp_reset();
     void send_serial_plate_prepare();
     void send_serial_layer_done(uint16_t next_layer_um);

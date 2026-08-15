@@ -2128,6 +2128,31 @@ bool McuLink::is_user_dispatch_paused() const noexcept
     return user_paused_.load();
 }
 
+bool McuLink::send_tcp_emergency_ctrl(bool stop, bool pause)
+{
+    uint8_t frame[64];
+    const uint8_t stop_u8 = stop ? 1u : 0u;
+    const uint8_t pause_u8 = pause ? 1u : 0u;
+    const int flen = tcp_build_emergency_frame(stop_u8, pause_u8, frame, sizeof(frame));
+    if(flen <= 0) {
+        UPC_LOG_MCU_LINK(Warn,
+            "build tcp emergency frame failed stop=%u pause=%u",
+            static_cast<unsigned>(stop_u8), static_cast<unsigned>(pause_u8));
+        return false;
+    }
+    const int rc = tcp_send_raw(frame, static_cast<size_t>(flen));
+    if(rc != 0) {
+        UPC_LOG_MCU_LINK(Warn,
+            "tcp emergency send failed rc=%d stop=%u pause=%u",
+            rc, static_cast<unsigned>(stop_u8), static_cast<unsigned>(pause_u8));
+        return false;
+    }
+    UPC_LOG_MCU_LINK(Info, "tcp emergency sent stop=%u pause=%u",
+                     static_cast<unsigned>(stop_u8),
+                     static_cast<unsigned>(pause_u8));
+    return true;
+}
+
 void McuLink::set_print_task_flow_active(bool active) noexcept
 {
     print_task_flow_active_.store(active);
@@ -2152,11 +2177,7 @@ void McuLink::set_plate_thickness_um(uint16_t thickness_um)
 
 void McuLink::send_tcp_reset()
 {
-    uint8_t frame[64];
-    const int flen = build_reset_frame(frame, sizeof(frame));
-    if(flen > 0) {
-        tcp_send_raw(frame, (size_t)flen);
-    }
+    (void)send_tcp_emergency_ctrl(true, false);
 }
 
 void McuLink::send_serial_plate_prepare()
@@ -2229,7 +2250,7 @@ void McuLink::run_manual_terminate_cleanup()
         return;
     }
 
-    // 1. 向振镜发 Reset，向 MCU 发终止通知
+    // 1. 向振镜发 0x0A(Stop=1) 终止指令，向 MCU 发终止通知
     send_tcp_reset();
     send_serial_print_terminate();
 
@@ -2276,7 +2297,7 @@ void McuLink::run_natural_complete_cleanup()
     link_try_final_layer_snap();
     send_serial_print_finished();
 
-    // 2. 先清发送态，再发 TCP Reset（避免 is_sending 时断线误触发 terminate）
+    // 2. 先清发送态，再发 TCP 0x0A(Stop=1)（避免 is_sending 时断线误触发 terminate）
     reset_motion_state(true);
     PrintJobState::instance().set_job_completed(true);
     PrintJobState::instance().set_sending(false);

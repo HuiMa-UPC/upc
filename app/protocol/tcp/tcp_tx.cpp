@@ -44,9 +44,18 @@ int tcp_build_heartbeat_frame(uint8_t* out, size_t out_size)
     return tcp_build_frame11(0x0B, nullptr, out, out_size);
 }
 
+int tcp_build_emergency_frame(uint8_t stop, uint8_t pause,
+                              uint8_t* out, size_t out_size)
+{
+    uint8_t payload[10]{};
+    payload[0] = stop ? 1u : 0u;
+    payload[1] = pause ? 1u : 0u;
+    return tcp_build_frame11(0x0A, payload, out, out_size);
+}
+
 int tcp_build_reset_frame(uint8_t* out, size_t out_size)
 {
-    return tcp_build_frame11(0x0A, nullptr, out, out_size);
+    return tcp_build_emergency_frame(1u, 0u, out, out_size);
 }
 
 int tcp_build_ota_ctrl_frame(uint8_t mode, uint8_t* out, size_t out_size)
