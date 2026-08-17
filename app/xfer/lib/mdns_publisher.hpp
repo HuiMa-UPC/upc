@@ -1,6 +1,7 @@
 #ifndef UPC_XFR_MDNS_PUBLISHER_HPP
 #define UPC_XFR_MDNS_PUBLISHER_HPP
 
+#include <cstdint>
 #include <string>
 
 namespace upc::xfr {

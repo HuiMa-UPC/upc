@@ -2,6 +2,7 @@
 
 #include "rs_log.hpp"
 
+#include <openssl/evp.h>
 #include <openssl/sha.h>
 
 #include <algorithm>
@@ -282,6 +283,29 @@ bool UploadManager::compute_file_sha256(const std::string& path, std::string* ou
     if (!ifs.good()) {
         return false;
     }
+#if defined(OPENSSL_VERSION_MAJOR) && OPENSSL_VERSION_MAJOR >= 3
+    EVP_MD_CTX* mdctx = EVP_MD_CTX_new();
+    if (!mdctx) {
+        return false;
+    }
+    bool ok = EVP_DigestInit_ex(mdctx, EVP_sha256(), nullptr) == 1;
+    char buf[8192];
+    while (ok && ifs.good()) {
+        ifs.read(buf, sizeof(buf));
+        const std::streamsize n = ifs.gcount();
+        if (n > 0) {
+            ok = EVP_DigestUpdate(mdctx, buf, static_cast<std::size_t>(n)) == 1;
+        }
+    }
+    unsigned char digest[SHA256_DIGEST_LENGTH];
+    unsigned int digest_len = 0;
+    ok = ok && EVP_DigestFinal_ex(mdctx, digest, &digest_len) == 1 &&
+         digest_len == SHA256_DIGEST_LENGTH;
+    EVP_MD_CTX_free(mdctx);
+    if (!ok) {
+        return false;
+    }
+#else
     SHA256_CTX ctx;
     SHA256_Init(&ctx);
     char buf[8192];
@@ -294,6 +318,7 @@ bool UploadManager::compute_file_sha256(const std::string& path, std::string* ou
     }
     unsigned char digest[SHA256_DIGEST_LENGTH];
     SHA256_Final(digest, &ctx);
+#endif
     char hex[SHA256_DIGEST_LENGTH * 2 + 1];
     for (int i = 0; i < SHA256_DIGEST_LENGTH; ++i) {
         std::snprintf(hex + i * 2, 3, "%02x", digest[i]);

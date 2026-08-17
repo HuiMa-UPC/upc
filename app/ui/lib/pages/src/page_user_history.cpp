@@ -617,52 +617,15 @@ bool remove_print_video_assets(const std::string& frames_dir)
     return true;
 }
 
-/** 会话目录是否至少有一张编号层间 PNG（1.png…） */
+/** 会话目录是否至少有首帧 PNG（1.png）。 */
 bool session_has_png_frames(const std::string& frames_dir)
 {
     if(frames_dir.empty()) {
         return false;
     }
-    const std::string abs_dir = session_abs_dir(frames_dir);
+    const std::string abs_first_png = session_abs_dir(frames_dir) + "/1.png";
     std::error_code ec;
-    if(!std::filesystem::is_directory(abs_dir, ec) || ec) {
-        return false;
-    }
-    for(const auto& de : std::filesystem::directory_iterator(abs_dir, ec)) {
-        if(ec) {
-            break;
-        }
-        if(!de.is_regular_file(ec) || ec) {
-            continue;
-        }
-        const std::string name = de.path().filename().string();
-        if(name.size() < 5) {
-            continue;
-        }
-        /* 要求「纯数字 + .png」，与播放器 parse_png_index 一致 */
-        size_t i = 0;
-        while(i < name.size() && name[i] >= '0' && name[i] <= '9') {
-            ++i;
-        }
-        if(i == 0) {
-            continue;
-        }
-        if(name.compare(i, std::string::npos, ".png") == 0 ||
-           name.compare(i, std::string::npos, ".PNG") == 0) {
-            return true;
-        }
-    }
-    return false;
-}
-
-bool session_has_timelapse_thumb(const upc::PrintHistoryEntry& e)
-{
-    if(e.thumb.empty()) {
-        return false;
-    }
-    std::error_code ec;
-    return std::filesystem::exists(
-        std::string(UPC_PRINT_VIDEO_DIR) + "/" + e.thumb, ec);
+    return std::filesystem::exists(abs_first_png, ec);
 }
 
 bool entry_has_timelapse(const upc::PrintHistoryEntry& e)
@@ -1600,10 +1563,9 @@ void build_entry(lv_obj_t *parent, const upc::PrintHistoryEntry &e)
             }
         } else {
 #if UPC_TIMELAPSE_PLAYBACK_PNG
-            /* 可播必须有层间 PNG（仅有 thumb 点进去是空序列）。
-             * thumb 用于列表展示；「两个都要」里的 thumb 条件作增强：有图才算完整可播。 */
-            media_ready = session_has_png_frames(e.frames_dir) &&
-                          session_has_timelapse_thumb(e);
+            /* 列表里已提前算好 thumb_src（thumb.rthm 或 1.png 回退），
+             * 这里直接复用，避免为每个会话遍历整目录扫描 PNG。 */
+            media_ready = !ctx->thumb_src.empty();
 #else
             if(!ctx->video.empty()) {
                 std::error_code ec;
@@ -1612,12 +1574,17 @@ void build_entry(lv_obj_t *parent, const upc::PrintHistoryEntry &e)
 #endif
         }
         /* Print History 只跟 print_video_pending；Timelapse 跟 video_pending。
-         * pending 期间一律显示 Generating，不可点；过完开门 finalize 后再认 ready。 */
+         * 体验策略：Timelapse 只要有可播内容就允许点开，video_pending 仅作状态提示；
+         * Print History 仍保持 pending 禁播，避免点击到尚未完成的 print_h264。 */
         const bool pending = (ctx->kind == HistoryCard::Kind::PrintVideo)
             ? e.print_video_pending
             : e.video_pending;
         ctx->video_pending = pending;
-        ctx->video_ready = media_ready && !pending;
+        if(ctx->kind == HistoryCard::Kind::Timelapse) {
+            ctx->video_ready = media_ready;
+        } else {
+            ctx->video_ready = media_ready && !pending;
+        }
     }
     g_cards.push_back(ctx);
 
@@ -2316,8 +2283,9 @@ void ensure_history_subscribed_once()
         }));
 }
 
-void page_user_history_refresh(bool /*force*/)
+void page_user_history_refresh(bool force)
 {
+    (void)force;
     const bool entering = !g_history_active;
     g_history_active = true;
     if(entering) {
@@ -2419,6 +2387,6 @@ lv_obj_t *page_user_history_create(lv_obj_t *parent)
     g_storage_bar = build_storage_bar(page);
 
     apply_tab_style();
-    page_user_history_refresh(true);
+    /* 首次展示由 SimplePage::on_enter 触发 refresh；这里不再提前刷，避免首进双重建。 */
     return page;
 }

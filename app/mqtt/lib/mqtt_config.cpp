@@ -60,7 +60,7 @@ MqttConfig load_mqtt_config()
     cfg.client_id = get_env_or_default("SNOWPOD_MQTT_CLIENT_ID", "");
     cfg.username = get_env_or_default("SNOWPOD_MQTT_USERNAME", "");
     cfg.activation_base_url = get_env_or_default(
-        "SNOWPOD_DEVICE_INIT_BASE_URL", "http://172.17.31.31:8081");
+        "SNOWPOD_DEVICE_INIT_BASE_URL", "http://172.17.13.31:8081");
     cfg.credential_file = get_env_or_default(
         "SNOWPOD_MQTT_CREDENTIAL_FILE", "/data/snowpod/mqtt-credential");
     cfg.keepalive_sec = get_env_int_or_default("SNOWPOD_MQTT_KEEPALIVE_SEC", 60);

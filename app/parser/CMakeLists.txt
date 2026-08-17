@@ -76,6 +76,68 @@ if(UPC_PARSER_BUILD_OVF)
     else()
         set(UPC_PARSER_PROTOBUF_LIB protobuf)
     endif()
+
+    # OVF protobuf 代码版本选择：
+    # - AUTO：根据 protobuf 头版本自动判定（支持多交叉工具链共存）
+    # - 手动：可显式指定 V3.18 / V3.21.12
+    set(UPC_PARSER_OVF_PB_VARIANT "AUTO" CACHE STRING
+        "OVF protobuf source variant: AUTO|V3.18|V3.21.12")
+    set_property(CACHE UPC_PARSER_OVF_PB_VARIANT PROPERTY STRINGS
+        AUTO V3.18 V3.21.12)
+
+    set(_upc_ovf_pb_variant "${UPC_PARSER_OVF_PB_VARIANT}")
+    set(_upc_pb_header_ver "")
+    if(_upc_ovf_pb_variant STREQUAL "AUTO")
+        # 交叉构建优先从 sysroot 读取 protobuf 头版本
+        if(DEFINED CMAKE_SYSROOT AND CMAKE_SYSROOT)
+            set(_upc_pb_common_h
+                "${CMAKE_SYSROOT}/usr/include/google/protobuf/stubs/common.h")
+            if(EXISTS "${_upc_pb_common_h}")
+                file(STRINGS "${_upc_pb_common_h}" _upc_pb_ver_line
+                    REGEX "^#define[ \t]+GOOGLE_PROTOBUF_VERSION[ \t]+[0-9]+")
+                if(_upc_pb_ver_line)
+                    string(REGEX REPLACE
+                        "^#define[ \t]+GOOGLE_PROTOBUF_VERSION[ \t]+([0-9]+).*"
+                        "\\1"
+                        _upc_pb_header_ver
+                        "${_upc_pb_ver_line}")
+                endif()
+            endif()
+        endif()
+
+        # protobuf >= 3.21.x 选 V3.21.12；否则回落 V3.18
+        if(_upc_pb_header_ver AND _upc_pb_header_ver GREATER_EQUAL 3021000)
+            set(_upc_ovf_pb_variant "V3.21.12")
+        else()
+            set(_upc_ovf_pb_variant "V3.18")
+        endif()
+    endif()
+
+    if(NOT _upc_ovf_pb_variant STREQUAL "V3.18" AND
+       NOT _upc_ovf_pb_variant STREQUAL "V3.21.12")
+        message(FATAL_ERROR
+            "Invalid UPC_PARSER_OVF_PB_VARIANT=${UPC_PARSER_OVF_PB_VARIANT}, "
+            "expected AUTO|V3.18|V3.21.12")
+    endif()
+
+    set(UPC_PARSER_OVF_PB_DIR
+        "${CMAKE_CURRENT_SOURCE_DIR}/ovf/${_upc_ovf_pb_variant}")
+    foreach(_pb_file
+        build_processor_strategy.pb.cc
+        open_vector_format.pb.cc
+        ovf_lut.pb.cc
+        build_processor_strategy.pb.h
+        open_vector_format.pb.h
+        ovf_lut.pb.h)
+        if(NOT EXISTS "${UPC_PARSER_OVF_PB_DIR}/${_pb_file}")
+            message(FATAL_ERROR
+                "OVF protobuf source missing: ${UPC_PARSER_OVF_PB_DIR}/${_pb_file}")
+        endif()
+    endforeach()
+
+    message(STATUS
+        "upc_parser_ovf: pb variant=${_upc_ovf_pb_variant}"
+        " (GOOGLE_PROTOBUF_VERSION=${_upc_pb_header_ver})")
 endif()
 
 # -----------------------------------------------------------------------------
@@ -151,13 +213,15 @@ if(UPC_PARSER_BUILD_OVF)
         ${CMAKE_CURRENT_SOURCE_DIR}/ovf/ovf_worker.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/ovf/ovf_official_io.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/ovf/ovf_register.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/ovf/build_processor_strategy.pb.cc
-        ${CMAKE_CURRENT_SOURCE_DIR}/ovf/open_vector_format.pb.cc
-        ${CMAKE_CURRENT_SOURCE_DIR}/ovf/ovf_lut.pb.cc
+        ${UPC_PARSER_OVF_PB_DIR}/build_processor_strategy.pb.cc
+        ${UPC_PARSER_OVF_PB_DIR}/open_vector_format.pb.cc
+        ${UPC_PARSER_OVF_PB_DIR}/ovf_lut.pb.cc
     )
     add_library(upc::parser_ovf ALIAS ${UPC_PARSER_OVF_TARGET})
 
     target_compile_features(${UPC_PARSER_OVF_TARGET} PUBLIC cxx_std_17)
+    target_include_directories(${UPC_PARSER_OVF_TARGET}
+        PRIVATE ${UPC_PARSER_OVF_PB_DIR})
     target_link_libraries(${UPC_PARSER_OVF_TARGET}
         PUBLIC upc::parser ${UPC_PARSER_PROTOBUF_LIB})
     target_compile_options(${UPC_PARSER_OVF_TARGET} PRIVATE -Wall -Wextra)

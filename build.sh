@@ -10,7 +10,7 @@
 #   BUILD_TYPE    Release | Debug | RelWithDebInfo | MinSizeRel，默认 Release
 #   JOBS          并行数，默认 nproc
 #   UPC_DEBUG     ON|OFF，默认 ON
-#   TOOLCHAIN     k1mini-buildroot-toolchain | atk-dlrk356x-toolchain
+#   TOOLCHAIN     覆盖根 CMakeLists.txt 中 set(TOOLCHAIN ...)；未设则跟 CMakeLists
 
 set -euo pipefail
 
@@ -21,14 +21,43 @@ INSTALL_DIR="${OUTPUT_DIR}/install"
 BUILD_TYPE="${BUILD_TYPE:-Release}"
 JOBS="${JOBS:-$(nproc 2>/dev/null || echo 4)}"
 UPC_DEBUG="${UPC_DEBUG:-ON}"
-TOOLCHAIN="${TOOLCHAIN:-k1mini-buildroot-toolchain}"
+
+# 从根 CMakeLists.txt 读取未注释的 set(TOOLCHAIN xxx)
+read_cmake_toolchain() {
+    local line name
+    line="$(grep -E '^[[:space:]]*set\(TOOLCHAIN[[:space:]]+' \
+        "$ROOT/CMakeLists.txt" | head -n1 || true)"
+    if [[ -z "$line" ]]; then
+        echo "错误: 根 CMakeLists.txt 中未找到 set(TOOLCHAIN ...)" >&2
+        exit 1
+    fi
+    name="${line#*set(TOOLCHAIN }"
+    name="${name%%)*}"
+    name="${name%%[[:space:]]*}"
+    name="${name//[[:space:]]/}"
+    if [[ -z "$name" ]]; then
+        echo "错误: 无法解析 CMakeLists.txt 中的 TOOLCHAIN" >&2
+        exit 1
+    fi
+    printf '%s' "$name"
+}
+
+TOOLCHAIN="${TOOLCHAIN:-$(read_cmake_toolchain)}"
 TOOLCHAIN_FILE="$ROOT/cmake/${TOOLCHAIN}.cmake"
 
 cmd="${1:-build}"
 
+list_toolchains() {
+    local f
+    for f in "$ROOT"/cmake/*-toolchain.cmake; do
+        [[ -f "$f" ]] || continue
+        basename "$f" .cmake
+    done | paste -sd ', ' -
+}
+
 if [[ ! -f "$TOOLCHAIN_FILE" ]]; then
     echo "错误: 找不到工具链文件 $TOOLCHAIN_FILE" >&2
-    echo "可用: k1mini-buildroot-toolchain, atk-dlrk356x-toolchain" >&2
+    echo "可用: $(list_toolchains)" >&2
     exit 1
 fi
 
@@ -142,9 +171,28 @@ do_collect_sdk() {
     install_sdk_headers protocol "$ROOT/app/protocol"
 }
 
+# 工具链变更时必须清缓存再配置（编译器路径已写入 CMakeCache）
+need_reconfigure() {
+    local cache="$BUILD_DIR/CMakeCache.txt"
+    local cached
+    if [[ ! -f "$cache" ]]; then
+        return 0
+    fi
+    cached="$(grep -E '^CMAKE_TOOLCHAIN_FILE:FILEPATH=' "$cache" | head -n1 || true)"
+    cached="${cached#CMAKE_TOOLCHAIN_FILE:FILEPATH=}"
+    if [[ -z "$cached" || "$cached" != "$TOOLCHAIN_FILE" ]]; then
+        return 0
+    fi
+    return 1
+}
+
 case "$cmd" in
     build)
-        if [[ ! -f "$BUILD_DIR/CMakeCache.txt" ]]; then
+        if need_reconfigure; then
+            if [[ -f "$BUILD_DIR/CMakeCache.txt" ]]; then
+                echo "==> 工具链与 build 缓存不一致，清除 $BUILD_DIR 后重新配置"
+                rm -rf "$BUILD_DIR"
+            fi
             do_configure
         fi
         do_build
