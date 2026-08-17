@@ -6,7 +6,7 @@
 #include <cstring>
 
 /* 可视状态（对齐 Figma「滑动控件示意」的 4 帧：
- *   REST     = Default / pressing（红条收拢成左侧圆头，显示 "SWIPE TO OPEN" + 箭头）
+ *   REST     = Default / pressing（红条收拢成左侧圆头，显示 "SLIDE TO OPEN" + 箭头）
  *   SLIDING  = sliding（红条随拖动向右生长，隐藏提示）
  *   END      = sliding end（红条几乎占满，提示变 "RELEASE TO OPEN"，叠红色氛围）
  * 交互：滑到底不自动触发，需在末端「松手」才解锁；中途松手回弹。 */
@@ -235,7 +235,7 @@ ui_slide_unlock_t *ui_slide_unlock_create(lv_obj_t *parent,
     self->on_unlocked = cfg->on_unlocked;
     self->user_data = cfg->user_data;
     self->accent = cfg->custom_accent ? cfg->accent_color : user_color_accent;
-    self->rest_text = cfg->hint_text ? cfg->hint_text : "SWIPE TO OPEN";
+    self->rest_text = cfg->hint_text ? cfg->hint_text : "SLIDE TO OPEN";
     self->vstate = -1;
     self->enabled = true;
 

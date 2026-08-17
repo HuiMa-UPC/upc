@@ -114,6 +114,9 @@
 #ifndef UPC_MOD_MEDIA_SERVICE
 #define UPC_MOD_MEDIA_SERVICE 1
 #endif
+#ifndef UPC_MOD_ALARM_STATE
+#define UPC_MOD_ALARM_STATE 1
+#endif
 /** Glavo: TCP 心跳/状态应答日志默认开关（环境变量可覆盖） */
 #ifndef UPC_GLAVO_LOG_TCP_HEARTBEAT_RSP_DEFAULT
 #define UPC_GLAVO_LOG_TCP_HEARTBEAT_RSP_DEFAULT 0
@@ -144,6 +147,7 @@
 #define UPC_MOD_VISUAL_SERVICE 0
 #define UPC_MOD_MQTT_SERVICE 0
 #define UPC_MOD_MEDIA_SERVICE 0
+#define UPC_MOD_ALARM_STATE 0
 #define UPC_GLAVO_LOG_TCP_HEARTBEAT_RSP_DEFAULT 0
 #define UPC_GLAVO_LOG_TCP_TX_DEFAULT 0
 
@@ -505,6 +509,14 @@ enum class MsgType : uint32_t {
     UI_Mcu_Version_Req = 0x1500, /**< Empty：进入 Settings/About 页时查询一次 */
     GLAVO_Mcu_Version_Ntf,       /**< McuVersionPayload：MCU 固件版本 + 板级配置 */
     APP_Fs_Delete_Rsp,           /**< FsDeleteRspPayload：本地文件删除回执 */
+
+    // ---- GLAVO → UI：设备事件/告警（消息中心） ----
+    GLAVO_Device_Event_Ntf = 0x1600, /**< DeviceEventPayload：一条设备事件的触发或恢复 */
+
+    // ---- UI ↔ GLAVO：MCU 报警（串口 PORT_ALARM_TASK 0xA3；字典见 doc/主控板串口通信协议 - 报警&事件表.csv） ----
+    GLAVO_Alarm_Report_Ntf = 0x1610, /**< AlarmReportPayload：MCU 单条报警/EVENT 上报（Cmd 0x20 TLV 0x01 原样透传） */
+    UI_Alarm_Reset_Req,              /**< AlarmResetReqPayload：请求复位某条 CONDITION 报警（Cmd 0x82 TLV 0x01） */
+    GLAVO_Alarm_Snapshot_Ntf,        /**< AlarmSnapshotPayload：报警快照的一帧（Cmd 0x81 TLV 0x04 原样透传） */
 
 };
 
@@ -1131,6 +1143,129 @@ struct DebugSwitchStatePayload {
     uint8_t gas_wash_on;
     uint8_t base_heat_on;
     uint8_t reserved;
+};
+
+/* ============================================================================
+ *  设备事件 / 告警（消息中心）
+ *
+ *  码表与 doc/设备通信协议-数据结构定义（v0.9）.md「五、事件与告警消息」那张表
+ *  一一对应，云端用字符串 code，这里换成数值以便走 Inline POD。
+ *  文案不进线协议：后端只发码，UI 侧持一张码→文案表（见 ui_message_store）。
+ * ========================================================================== */
+
+/** 事件码。数值跨进程传输，**只准往末尾追加**，不得插入或复用。 */
+enum class DeviceEventCode : uint16_t {
+    None                = 0,
+    /* severity=info */
+    PowderLow           = 1,   /**< 低粉位传感器触发 */
+    FilterDue           = 2,   /**< 滤芯使用时长/压差达阈值 */
+    PrintPaused         = 3,   /**< 用户主动暂停 */
+    PrintComplete       = 4,   /**< 所有层打印完成（one_shot） */
+    PurgeComplete       = 5,   /**< O2 降至阈值，洗气完成（one_shot） */
+    /* severity=error */
+    WeightSensorErr     = 6,   /**< HX711 读数异常 */
+    GalvoCalFail        = 7,   /**< 振镜校准失败 */
+    MotionStallguard    = 8,   /**< TMC5160 StallGuard 触发，运动轴失步 */
+    TempSensorErr       = 9,   /**< NTC/IR 传感器读数无效 */
+    NtpSyncFail         = 10,  /**< NTP 对时失败超阈值 */
+    DoorSensorConflict  = 11,  /**< D2F 与霍尔读数不一致 */
+    JobFileErr          = 12,  /**< 作业文件下载失败或校验不通过（one_shot） */
+    PowderInsufficient  = 13,  /**< 粉料估算不足以完成当前作业（one_shot） */
+    GalvoNotCalibrated  = 14,  /**< 振镜未校准或校准过期 */
+    PrintError          = 15,  /**< 打印过程不可恢复错误（one_shot） */
+    /* severity=critical */
+    DoorOpen            = 16,  /**< 打印/洗气中外门未关 */
+    O2High              = 17,  /**< 氧含量超阈值 */
+    Pm25High            = 18,  /**< PM2.5 超阈值 */
+    Overtemp            = 19,  /**< 仓内温度超阈值 */
+    LaserInterlock      = 20,  /**< 激光安全联锁触发 */
+    FilterOvertemp      = 21,  /**< 滤芯 NTC 超温 */
+    FilterRequired      = 22,  /**< 滤芯严重超限，强制阻断打印 */
+    /* severity=emergency */
+    Smoke               = 23,  /**< 烟感触发 */
+    Estop               = 24,  /**< 急停双触点触发 */
+    FireSuppress        = 25,  /**< 灭火阀动作 */
+    Esd                 = 26,  /**< 静电保护触发 */
+
+    /* ---- 以下为 UI 本地事件：不走总线，由前端自己 push，占同一码空间以便
+     *      消息中心统一排序去重。后端不应发送这些码。 ---- */
+    UiWearMask          = 512, /**< 吹粉完成，开门前提醒戴口罩 */
+    UiPurifyBeforeOpen  = 513, /**< 打印结束，开门前先吹粉 */
+    UiDebugSample       = 514, /**< 调试页注入的假消息 */
+};
+
+/** 事件等级。UI 只分两种观感：Info 走蓝色可关卡片，其余走红色告警卡片。 */
+enum class DeviceEventSeverity : uint8_t {
+    Info      = 0,
+    Error     = 1,
+    Critical  = 2,
+    Emergency = 3,
+};
+
+/** GLAVO_Device_Event_Ntf 载荷：一条事件的触发或恢复（Inline）。
+ *
+ *  event_ts_ms 是告警**实际触发/恢复**时刻，不是消息发出时刻——断网补发或
+ *  NTP 失步恢复后两者会差很多，消息中心的时间线以本字段为准（见协议文档同节说明）。 */
+struct DeviceEventPayload {
+    uint16_t code;         /**< DeviceEventCode */
+    uint8_t  severity;     /**< DeviceEventSeverity */
+    uint8_t  active;       /**< stateful：1=触发 0=恢复；one_shot 恒为 1 */
+    int64_t  event_ts_ms;  /**< 触发/恢复时刻（Unix 毫秒），0=未知 */
+};
+
+/** AlarmReportPayload.state_mask 位定义（bit3..7 保留，解析时忽略）。 */
+constexpr uint8_t kAlarmStateActive  = 0x01; /**< 故障条件当前存在 */
+constexpr uint8_t kAlarmStateLatched = 0x02; /**< 已锁存，等待清除 */
+constexpr uint8_t kAlarmStateEvent   = 0x04; /**< 一次性 EVENT，无生命周期 */
+
+/** AlarmReportPayload.clear_mode 枚举。 */
+enum class AlarmClearMode : uint8_t {
+    Auto       = 0,  /**< 条件消失即自动恢复 NORMAL */
+    Reset      = 1,  /**< 需 UI 复位请求（UI_Alarm_Reset_Req） */
+    PowerCycle = 2,  /**< 断电重启才能清除 */
+    None       = 3,  /**< 不可清除（本次上电周期内一直存在） */
+};
+
+/** GLAVO_Alarm_Report_Ntf 载荷：MCU 单条报警上报（串口 0xA3/0x20 TLV 0x01，len=9）。
+ *
+ *  五个字段与 TLV Value 一一对应、Glavo 侧不加工不查表：severity/clear_mode
+ *  一律以本报文为准（报警字典可能落后于 MCU 固件，见
+ *  doc/SOC_TLV_ALARM_SINGLE_REPORT报警显示开发指导.md §1）。生命周期由 UI 侧
+ *  按 state_mask 推导：bit2=EVENT（一次性消息）；否则 active/latched 组合出
+ *  ACTIVE / RTN_LATCHED / NORMAL 三态。 */
+struct AlarmReportPayload {
+    uint16_t alarm_code;   /**< 稳定报警号（字典主键，RESET 也用它） */
+    uint8_t  severity;     /**< 1=information 2=warning 3=error 4=critical；未知值按不低于 warning 显示 */
+    uint8_t  state_mask;   /**< bit0=active bit1=latched bit2=EVENT，bit3..7 保留 */
+    uint8_t  clear_mode;   /**< 0=AUTO 1=RESET 2=POWER_CYCLE 3=NONE；未知值按不可软件复位处理 */
+    uint8_t  reserved[3];
+    uint32_t detail;       /**< 详情号/原因值，原样保留；0=无详情 */
+};
+
+/** GLAVO_Alarm_Snapshot_Ntf 载荷：报警快照的**一帧**（串口 0xA3/0x81 TLV 0x04，len=11）。
+ *
+ *  快照按 32 条一组分片，`word_count` 帧才是完整一批。Glavo 侧同样不加工，
+ *  攒帧与对齐都在 UI（`ui_alarm_state`）做——那边才有当前报警表。
+ *
+ *  只含 CONDITION，EVENT 不占 bit；位图槽位→报警号的映射由
+ *  `doc/主控板串口通信协议 - 报警快照Map.csv` 生成（见 ui_alarm_catalog）。
+ *  **word_count 不能写死**：报警表会随固件增长，当前 66 条 CONDITION 就要 3 帧，
+ *  而文档注释里还写着 2。 */
+struct AlarmSnapshotPayload {
+    uint8_t  word_count;       /**< 本批总帧数 */
+    uint8_t  word_index;       /**< 本帧序号（0 基） */
+    uint8_t  highest_severity; /**< 当前最高等级（提示用，非必需） */
+    uint8_t  reserved;
+    uint32_t active_mask;      /**< 本组 32 条的 active 位 */
+    uint32_t latched_mask;     /**< 本组 32 条的 latched 位 */
+};
+
+/** UI_Alarm_Reset_Req 载荷：请求复位某条报警（串口 0xA3/0x82 TLV 0x01）。
+ *  仅对 clear_mode=RESET 且 latched 的 CONDITION 有意义；通信 ACK 不代表复位
+ *  成功，最终状态以后续 GLAVO_Alarm_Report_Ntf 为准。 */
+struct AlarmResetReqPayload {
+    uint16_t alarm_code;
+    uint8_t  reserved[2];
 };
 
 } // namespace middleware

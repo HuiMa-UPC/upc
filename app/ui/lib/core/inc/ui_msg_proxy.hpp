@@ -44,6 +44,9 @@ using XfrFileReceivedCb = std::function<void(const middleware::XfrFileReceivedPa
 using XfrTransferProgressCb = std::function<void(const middleware::XfrTransferProgressPayload&)>;
 using UsbHotplugCb     = std::function<void(const middleware::UsbHotplugPayload&)>;
 using McuVersionCb     = std::function<void(const middleware::McuVersionPayload&)>;
+using DeviceEventCb    = std::function<void(const middleware::DeviceEventPayload&)>;
+using AlarmReportCb    = std::function<void(const middleware::AlarmReportPayload&)>;
+using AlarmSnapshotCb  = std::function<void(const middleware::AlarmSnapshotPayload&)>;
 
 class UiMsgProxy {
 public:
@@ -134,6 +137,19 @@ public:
     /** MCU 固件版本查询（Settings/About 进页触发一次） */
     void send_mcu_version_query();
     void register_mcu_version(McuVersionCb cb);   /**< GLAVO_Mcu_Version_Ntf */
+    /** GLAVO_Device_Event_Ntf：设备事件/告警，喂消息中心。
+     *  Glavo 侧还没实现发布，接好放着——后端上线后 UI 不用改。 */
+    void register_device_event(DeviceEventCb cb);
+
+    /** GLAVO_Alarm_Report_Ntf：MCU 单条报警/EVENT 上报（0xA3/0x20 原样透传），
+     *  由 ui_alarm_state 消费。 */
+    void register_alarm_report(AlarmReportCb cb);
+    /** GLAVO_Alarm_Snapshot_Ntf：报警快照的一帧（0xA3/0x81 原样透传）。
+     *  分片到达，攒帧与全量对齐由 ui_alarm_state 负责。 */
+    void register_alarm_snapshot(AlarmSnapshotCb cb);
+    /** UI_Alarm_Reset_Req：请求复位某条 CONDITION 报警。ACK 不代表成功，
+     *  最终状态以后续 GLAVO_Alarm_Report_Ntf 为准。 */
+    void send_alarm_reset(uint16_t alarm_code);
 
     /* ---- 网络 / WiFi（前端预留，后端接口到位后即可用；未上线时无人响应，不影响运行） ---- */
     void send_wifi_enable(bool enable);
@@ -210,6 +226,9 @@ private:
     XfrTransferProgressCb xfr_transfer_progress_cb_;
     UsbHotplugCb usb_hotplug_cb_;
     McuVersionCb mcu_version_cb_;
+    DeviceEventCb device_event_cb_;
+    AlarmReportCb alarm_report_cb_;
+    AlarmSnapshotCb alarm_snapshot_cb_;
 };
 
 } // namespace ui

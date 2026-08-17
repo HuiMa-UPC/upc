@@ -23,6 +23,7 @@
 | `serial/serial_env.*` | 环境传感器上报（A5/9B，TLV 0x02） |
 | `serial/serial_debug.*` | 调试页手动控制：三轴/设备/粉桶/三通/风扇/开关/清粉 组帧 + 运动位置上报（A5/9B，TLV 0x05）解析 |
 | `serial/serial_project_info.*` | 工程版本查询/上报（A2/0x10，TLV 0x01 查询 / 0x02 上报）：MCU 固件版本 + 激光器/Z 电机板级配置 |
+| `serial/serial_alarm.*` | 报警：单条上报解析（A3/0x20，TLV 0x01 len=9）+ 快照分片解析（A3/0x81，TLV 0x04 len=11）+ 复位请求组帧（A3/0x82，TLV 0x01 len=2）；协议见 [doc/SOC_TLV_ALARM_SINGLE_REPORT报警显示开发指导.md](../../doc/SOC_TLV_ALARM_SINGLE_REPORT报警显示开发指导.md)。快照只解一帧，攒帧与对齐在 UI 侧 |
 
 ## 链接
 

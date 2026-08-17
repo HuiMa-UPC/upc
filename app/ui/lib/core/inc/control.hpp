@@ -82,7 +82,7 @@ bool control_is_printing(void);
 /** 滑动取件：退出打印状态后走开门流程（PM2.5/最短停留/关门轮询） */
 void control_print_result_collect(void);
 
-/* 首页/监控「SWIPE TO OPEN」独立开门入口：走门弹窗流程（PM2.5/最短停留/关门轮询），
+/* 首页/监控「SLIDE TO OPEN」独立开门入口：走门弹窗流程（PM2.5/最短停留/关门轮询），
 * 确认关门后回首页。仅 IDLE 态生效。 */
 void control_open_door_request(void);
 

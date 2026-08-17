@@ -2,6 +2,7 @@
 #include "ui_theme.hpp"
 #include "ui_feedback.hpp"
 #include "ui_device_bar.hpp"
+#include "ui_notice_stack.hpp"
 #include "control.hpp"
 #include <algorithm>
 
@@ -87,6 +88,10 @@ void PageManager::init(lv_obj_t* screen) {
      * 摄像头整屏层也在它下面。它仍在 shell_ 内，所以打印流程弹窗那层全屏遮罩
      * （建在 screen_ 上的 g_overlay / lv_layer_top）会连它一起压暗，与页面表现一致。 */
     device_bar_ = ui_device_bar_create(shell_);
+
+    /* 左下通知浮层，与设备信息条同级：压在所有页面之上，又在弹窗那层
+     * （lv_layer_top）之下。显隐规则见 apply_device_bar()。 */
+    notice_stack_ = ui_notice_stack_create(shell_);
 
     /* 侧栏画在最后（浮于页面和设备信息条之上）。必须在 FLOATING 之后做——直接对
      * flex 子节点 move_foreground 会改变布局顺序，把侧栏挪到屏幕右侧。 */
@@ -218,6 +223,49 @@ void PageManager::apply_device_bar(const PageEntry& entry) {
     const bool show = entry.menu_btn != nullptr;
     ui_device_bar_set_visible(show);
     lv_obj_set_style_pad_top(content_panel_, show ? USER_TOPBAR_H : 0, 0);
+    /* 通知浮层同一条规则，另外排除三页：
+     *   - 消息页自己：消息都摊在页面上了，再在右上角浮两张重复的没意义；
+     *   - 历史页 / 设置页：这两页的右上角已经有常驻内容（Storage 容量条、Wi-Fi 的
+     *     On/Off 开关），浮层压上去会挡住它们——开关还可点，连触摸一起吃掉。这两页的
+     *     新消息只靠侧栏消息图标的红点提示。
+     * 试过降级成单行细条，但细条底是半透明的，与 Storage 条叠印两层字都读不清；往下
+     * 移又会压到 Manage 按钮和那个开关，所以直接不显示。 */
+    const std::string& page = entry.page->name();
+    ui_notice_stack_set_visible(show && page != "user_message"
+                                     && page != "user_history"
+                                     && page != "user_settings");
+    /* 让位量是打印态/监控态首页专属的（要让开右上角那块环境区），换页一律清零；
+     * 首页自己会在 on_enter 里按当前状态再让一次。 */
+    ui_notice_stack_set_top_offset(0);
+}
+
+void PageManager::set_menu_badge(const std::string& page_name, bool on) {
+    PageEntry* entry = find_entry(page_name);
+    if (!entry || !entry->menu_btn) {
+        return;
+    }
+    if (on && !entry->menu_badge) {
+        /* 稿里红点是烤进图标 SVG 的，那样没法按未读数开关，所以另叠一个小圆。
+         * FLOATING：菜单按钮里图标是 center 摆的，红点不能占布局。 */
+        const int32_t sz = USER_STATUS_DOT_SZ;
+        lv_obj_t* dot = lv_obj_create(entry->menu_btn);
+        lv_obj_remove_style_all(dot);
+        lv_obj_add_flag(dot, LV_OBJ_FLAG_FLOATING);
+        lv_obj_set_size(dot, sz, sz);
+        lv_obj_set_style_radius(dot, LV_RADIUS_CIRCLE, 0);
+        lv_obj_set_style_bg_color(dot, ui_color_danger, 0);
+        lv_obj_set_style_bg_opa(dot, LV_OPA_COVER, 0);
+        lv_obj_remove_flag(dot, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_align(dot, LV_ALIGN_TOP_RIGHT, 0, 0);
+        entry->menu_badge = dot;
+    }
+    if (entry->menu_badge) {
+        if (on) {
+            lv_obj_remove_flag(entry->menu_badge, LV_OBJ_FLAG_HIDDEN);
+        } else {
+            lv_obj_add_flag(entry->menu_badge, LV_OBJ_FLAG_HIDDEN);
+        }
+    }
 }
 
 PageManager::PageEntry* PageManager::find_entry(const std::string& name) {

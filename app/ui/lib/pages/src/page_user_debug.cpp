@@ -7,6 +7,8 @@
 #include "page_manager.hpp"
 #include "debug_msg_proxy.hpp"
 #include "control.hpp"
+#include "ui_message_store.hpp"
+#include "ui_alarm_state.hpp"
 
 #include <cstdint>
 #include <cstdlib>
@@ -912,8 +914,43 @@ struct DbgToggleCtx {
     lv_obj_t   *state_lbl;
     const char *on_txt;
     const char *off_txt;
-    uint8_t     kind;   /**< 0 粉桶 / 1 推粉 / 2 风扇 / 3 其他开关 / 4 清粉 / 5 打印H264 / 6 清粉录像 / 7 环境模拟 / 8 环境模拟缺粉 / 9 转运盒流程 / 10 首层视觉检测 */
+    uint8_t     kind;   /**< 0 粉桶 / 1 推粉 / 2 风扇 / 3 其他开关 / 4 清粉 / 5 打印H264 / 6 清粉录像 / 7 环境模拟 / 8 环境模拟缺粉 / 9 转运盒流程 / 10 首层视觉检测 / 11 消息注入 / 12 报警注入 */
     uint8_t     arg;    /**< 粉桶号 / DebugSwitchTarget */
+};
+
+/** 消息注入按钮造的那几条：一条 critical + 两条 info + 一条本地调试码。 */
+const uint16_t kDbgInjectCodes[] = {
+    (uint16_t)middleware::DeviceEventCode::O2High,
+    (uint16_t)middleware::DeviceEventCode::PowderLow,
+    (uint16_t)middleware::DeviceEventCode::FilterDue,
+    (uint16_t)middleware::DeviceEventCode::UiDebugSample,
+};
+
+/** 报警注入按钮造的那几条 MCU 报警，覆盖四条显示路径：
+ *  1124 阻断 CONDITION（error/ACTIVE/RESET）→ 打印入口拦截 + 结果页失败条 + Reset 三态；
+ *  1104 RTN_LATCHED（warning/RESET）→ 消息页 RESOLVED 药丸 + 可复位；
+ *  1101 自动清除 CONDITION（warning/ACTIVE/AUTO）→ 无 Reset 钮的红卡；
+ *  2000 EVENT（info）→ 蓝卡 5s 自动从浮层撤下、历史留档。
+ *  1111 critical CONDITION（ACTIVE/AUTO）→ 只为把四档等级配色凑齐（深红那档）。
+ *  等级不进字典、以报文为准，所以四色能不能看全全看造什么数据。
+ *  关掉开关注入 NORMAL 帧模拟解除（EVENT 无需解除）。 */
+struct DbgAlarmInject {
+    uint16_t code;
+    uint8_t  severity;
+    uint8_t  state_mask;
+    uint8_t  clear_mode;
+};
+const DbgAlarmInject kDbgInjectAlarms[] = {
+    { 1124, 3, middleware::kAlarmStateActive | middleware::kAlarmStateLatched,
+      (uint8_t)middleware::AlarmClearMode::Reset },
+    { 1104, 2, middleware::kAlarmStateLatched,
+      (uint8_t)middleware::AlarmClearMode::Reset },
+    { 1101, 2, middleware::kAlarmStateActive,
+      (uint8_t)middleware::AlarmClearMode::Auto },
+    { 2000, 1, middleware::kAlarmStateEvent,
+      (uint8_t)middleware::AlarmClearMode::Auto },
+    { 1111, 4, middleware::kAlarmStateActive,
+      (uint8_t)middleware::AlarmClearMode::Auto },
 };
 
 void set_dbg_toggle_enabled(lv_obj_t *btn, bool enabled)
@@ -965,6 +1002,28 @@ void on_dbg_toggle(lv_event_t *e)
         case 9: control_set_transfer_box_flow(on);
                 break;
         case 10: proxy.send_first_layer_visual_check_set(on);  /* 首层视觉检测（仅本次运行） */
+                 break;
+        /* 造几条假消息喂通知浮层。Glavo 侧还没实现 GLAVO_Device_Event_Ntf，
+         * 没有这个入口就只有打印流程那两条能看，「查看剩余 N 条」那条路径根本走不到。
+         * 四条 = 两张卡 + 一颗「剩余 2 条」按钮，顺带把红/蓝两种卡和排序都覆盖上。 */
+        case 11: for(uint16_t code : kDbgInjectCodes) {
+                     /* 走 debug_push：文案取自码表但带 [SIM] 前缀，与真事件区分 */
+                     if(on) ui_message_debug_push(code);
+                     else   ui_message_retract(code);
+                 }
+                 break;
+        /* 造几条假 MCU 报警走真实上报路径（ui_alarm_state），MCU 不发真报警时
+         * 验消息页/浮层/打印拦截整条链路。关掉注入 NORMAL 帧模拟解除。 */
+        case 12: for(const auto &a : kDbgInjectAlarms) {
+                     if(a.state_mask & middleware::kAlarmStateEvent) {
+                         if(on) ui_alarm_debug_inject(a.code, a.severity,
+                                                      a.state_mask, a.clear_mode, 0);
+                     } else {
+                         ui_alarm_debug_inject(a.code, a.severity,
+                                               on ? a.state_mask : 0,
+                                               a.clear_mode, 0);
+                     }
+                 }
                  break;
         default: break;
     }
@@ -1370,6 +1429,11 @@ void build_other_switches_card(lv_obj_t *parent)
                     control_transfer_box_flow_enabled(), 9, 0);
     make_dbg_toggle(rowD, "1st Layer Visual", "On", "Off", LV_SYMBOL_PLAY, false,
                     10, 0, true, 0, &g_first_layer_visual_btn, &g_first_layer_visual_state_lbl);
+    /* 往消息中心塞 4 条假消息，验左下通知浮层与侧栏红点（后端还没发真消息） */
+    make_dbg_toggle(rowD, "Msg Inject", "On", "Off", LV_SYMBOL_BELL, false, 11, 0);
+    /* 造 5 条假 MCU 报警（阻断/RTN/自动清除/EVENT 各一 + 一条 critical 凑齐四色），
+     * 验报警整条 UI 链路 */
+    make_dbg_toggle(rowD, "Alarm Inject", "On", "Off", LV_SYMBOL_WARNING, false, 12, 0);
 }
 
 lv_obj_t *build_other_tab(lv_obj_t *body)

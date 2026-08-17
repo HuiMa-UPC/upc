@@ -19,6 +19,8 @@
 #include "ui_theme.hpp"
 #include "ui_keyboard.hpp"
 #include "ui_device_state.hpp"
+#include "ui_message_store.hpp"
+#include "ui_alarm_state.hpp"
 #include "control.hpp"
 #include "nav_icons.h"
 
@@ -30,6 +32,15 @@ void settings_page_exit(void)
 {
     page_user_settings_dismiss_dialog();
     ui_keyboard_hide();
+}
+
+/** 同步侧栏消息图标上的红点：有未读，或还有未解除/未复位的 MCU 报警
+ *  （当前报警表非空）就亮——进一次消息页只消未读，报警要处理完才灭。 */
+void sync_message_badge(void)
+{
+    PageManager::instance().set_menu_badge(
+        "user_message",
+        ui_message_unread_count() > 0 || ui_alarm_current_count() > 0);
 }
 
 } // namespace
@@ -49,6 +60,13 @@ void app_init(lv_obj_t* screen) {
     /* 设备名/联网/运行状态/环境快照的唯一来源，须在 UiMsgProxy::init() 之后、
      * 建常驻设备信息条（PageManager::init）与首页之前订阅上。 */
     ui_device_state_init();
+
+    /* 消息中心也要赶在 PageManager::init() 之前——左下通知浮层就是在那里建的，
+     * 建的时候要能读到当前消息集合。 */
+    ui_message_store_init();
+
+    /* MCU 报警：生命周期缓存 + 历史加载，喂消息中心（须在 store 之后） */
+    ui_alarm_state_init();
 
     PageManager::instance().init(screen);
 
@@ -77,7 +95,8 @@ void app_init(lv_obj_t* screen) {
     PageManager::instance().register_page(
         std::make_unique<SimplePage>("user_message",
                                      page_user_message_create,
-                                     page_user_message_refresh),
+                                     page_user_message_refresh,
+                                     page_user_message_exit),
         &nav_icon_message);
 
     /* 选择文件页：隐藏页（无侧边栏图标），归属首页菜单按钮，由「My Files」进入 */
@@ -105,6 +124,13 @@ void app_init(lv_obj_t* screen) {
                                      page_user_timelapse_refresh,
                                      page_user_timelapse_exit),
         "user_history");
+
+    /* 红点要等消息页注册完才挂得上（set_menu_badge 认页名）。
+     * 报警观察者也要挂：报警解除/复位不走消息 store 的未读计数，
+     * 只靠 ui_message 观察者的话红点不会跟着灭。 */
+    ui_message_add_observer(sync_message_badge);
+    ui_alarm_add_observer(sync_message_badge);
+    sync_message_badge();
 
     /* 首页图标点击 → 首页区当前视图（仪表盘 / 选择文件页），实现“回到上次视图” */
     PageManager::instance().set_menu_target_resolver(

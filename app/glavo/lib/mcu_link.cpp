@@ -195,6 +195,29 @@ void serial_log_rx_frame(const uint8_t* frame, size_t len)
         return;
     }
 
+    serial_alarm_report_t alarm_dbg{};
+    if(serial_parse_alarm_single_report(frame, len, &alarm_dbg) == 0) {
+        UPC_LOG_MCU_LINK(Debug,
+            "RX ALARM code=%u sev=%u state=0x%02X clear=%u detail=%u",
+            static_cast<unsigned>(alarm_dbg.alarm_code),
+            static_cast<unsigned>(alarm_dbg.severity),
+            static_cast<unsigned>(alarm_dbg.state_mask),
+            static_cast<unsigned>(alarm_dbg.clear_mode),
+            static_cast<unsigned>(alarm_dbg.detail));
+        return;
+    }
+
+    serial_alarm_snapshot_t snap_dbg{};
+    if(serial_parse_alarm_snapshot(frame, len, &snap_dbg) == 0) {
+        UPC_LOG_MCU_LINK(Debug,
+            "RX ALARM SNAPSHOT word %u/%u active=0x%08X latched=0x%08X",
+            static_cast<unsigned>(snap_dbg.word_index),
+            static_cast<unsigned>(snap_dbg.word_count),
+            static_cast<unsigned>(snap_dbg.active_mask),
+            static_cast<unsigned>(snap_dbg.latched_mask));
+        return;
+    }
+
     if(len >= 3 && frame[0] == 0x5A && frame[1] == 0xA5 && frame[2] == 0xBB) {
         UPC_LOG_MCU_LINK(Debug,
             "RX SERIAL UNKNOWN len=%zu port=%02X cmd=%02X seq=%u len_field=%u",
@@ -1020,6 +1043,42 @@ void publish_laser_ntf(uint8_t type, uint16_t status, uint16_t alarm,
     middleware::MsgPort::instance().publish_async(ntf);
 }
 
+/** 组装并异步下发 GLAVO_Alarm_Report_Ntf：TLV 字段原样透传，不查字典不加工
+ *  （severity/clear_mode 以报文为准，生命周期由 UI 侧按 state_mask 推导）。 */
+void publish_alarm_report_ntf(const serial_alarm_report_t& report)
+{
+    middleware::AlarmReportPayload p{};
+    p.alarm_code = report.alarm_code;
+    p.severity   = report.severity;
+    p.state_mask = report.state_mask;
+    p.clear_mode = report.clear_mode;
+    p.detail     = report.detail;
+
+    middleware::Message ntf(middleware::MsgType::GLAVO_Alarm_Report_Ntf,
+        middleware::ModuleId::APP_GLAVO, middleware::ModuleId::UI);
+    ntf.payload = middleware::MsgPayload::from_bytes(
+        reinterpret_cast<const uint8_t*>(&p), sizeof(p));
+    middleware::MsgPort::instance().publish_async(ntf);
+}
+
+/** 组装并异步下发 GLAVO_Alarm_Snapshot_Ntf：快照的一帧，同样原样透传。
+ *  攒帧（word_count 帧才算一批）与全量对齐都在 UI 侧做——当前报警表在那边。 */
+void publish_alarm_snapshot_ntf(const serial_alarm_snapshot_t& snap)
+{
+    middleware::AlarmSnapshotPayload p{};
+    p.word_count       = snap.word_count;
+    p.word_index       = snap.word_index;
+    p.highest_severity = snap.highest_severity;
+    p.active_mask      = snap.active_mask;
+    p.latched_mask     = snap.latched_mask;
+
+    middleware::Message ntf(middleware::MsgType::GLAVO_Alarm_Snapshot_Ntf,
+        middleware::ModuleId::APP_GLAVO, middleware::ModuleId::UI);
+    ntf.payload = middleware::MsgPayload::from_bytes(
+        reinterpret_cast<const uint8_t*>(&p), sizeof(p));
+    middleware::MsgPort::instance().publish_async(ntf);
+}
+
 /** 组装并异步下发 GLAVO_Mcu_Version_Ntf（About 页 MCU Version 显示）。 */
 void publish_mcu_version_ntf(const serial_project_info_t& info)
 {
@@ -1383,6 +1442,34 @@ void McuLink::handle_serial_rx_frame(const uint8_t* frame, size_t len)
         if(transport_result_cb_) {
             transport_result_cb_(transport_result);
         }
+        return;
+    }
+
+    /* 单条报警/EVENT 上报（0xA3 + 0x20 + TLV 0x01）：原样透传给 UI 消息中心 */
+    serial_alarm_report_t alarm{};
+    if(serial_parse_alarm_single_report(frame, len, &alarm) == 0) {
+        UPC_LOG_MCU_LINK(Info,
+            "alarm_report: code=%u sev=%u state=0x%02X clear=%u detail=%u",
+            static_cast<unsigned>(alarm.alarm_code),
+            static_cast<unsigned>(alarm.severity),
+            static_cast<unsigned>(alarm.state_mask),
+            static_cast<unsigned>(alarm.clear_mode),
+            static_cast<unsigned>(alarm.detail));
+        publish_alarm_report_ntf(alarm);
+        return;
+    }
+
+    /* 报警快照分片（0xA3 + 0x81 + TLV 0x04）：重启/重连后补齐当前报警 */
+    serial_alarm_snapshot_t snap{};
+    if(serial_parse_alarm_snapshot(frame, len, &snap) == 0) {
+        UPC_LOG_MCU_LINK(Info,
+            "alarm_snapshot: word %u/%u active=0x%08X latched=0x%08X highest=%u",
+            static_cast<unsigned>(snap.word_index),
+            static_cast<unsigned>(snap.word_count),
+            static_cast<unsigned>(snap.active_mask),
+            static_cast<unsigned>(snap.latched_mask),
+            static_cast<unsigned>(snap.highest_severity));
+        publish_alarm_snapshot_ntf(snap);
         return;
     }
 

@@ -70,10 +70,14 @@
 | `CameraMsgProxy` | `camera_msg_proxy.*` | 预览开停 IPC + 打印录像 manifest 就绪通知 |
 | `CameraPreviewPlayer` | `camera_preview.*` | SHM 元数据环 + dma fd → RGA/SW BGRX → LVGL |
 | `RgaDmaBuf` | `rga_dma_buf.*` | dma32 heap 缓冲（RGA fd 导入） |
-| `PageManager` / `SimplePage` | `page_manager.*` / `ui_simple_page.*` | 侧边栏 + 页面路由 + 常驻设备信息条显隐 |
+| `PageManager` / `SimplePage` | `page_manager.*` / `ui_simple_page.*` | 侧边栏 + 页面路由 + 常驻设备信息条/通知浮层显隐 + 侧栏红点 |
 | `ui_device_state_*` | `ui_device_state.*` | 设备名/联网/运行状态/环境快照的唯一来源（env 单槽订阅 + 观察者扇出） |
 | `ui_device_bar_*` | `ui_device_bar.*` | 常驻设备信息条（WiFi + 设备名 + 状态点/字），PageManager 持有 |
-| `app_init()` | `ui_app.*` | 主题、Proxy、`ui_device_state_init`、页面注册、control |
+| `ui_message_*` | `ui_message_store.*` | 消息中心：设备事件去重/排序/未读计数 + 码→文案表（`GLAVO_Device_Event_Ntf`）；`push_ex` 供报警等外部文案接入 |
+| `ui_alarm_*` | `ui_alarm_state.*` | MCU 报警唯一数据源：生命周期缓存 + 复位在途 + 历史落盘 + 打印阻断/会话抑制（`GLAVO_Alarm_Report_Ntf`） |
+| `ui_alarm_catalog_*` | `ui_alarm_catalog.hpp` / `ui_alarm_catalog_gen.cpp` | 报警字典（生成物，改 `tools/gen_alarm_catalog.py` + `doc/alarm_catalog_en.csv`） |
+| `ui_notice_stack_*` | `ui_notice_stack.*` | 右上通知浮层（最多两张卡 + 「查看剩余 N 条」；消息页/历史页/设置页不显示），PageManager 持有 |
+| `app_init()` | `ui_app.*` | 主题、Proxy、`ui_device_state_init`、`ui_message_store_init`、`ui_alarm_state_init`、页面注册、control |
 | `control_*` | `control.*` | 打印状态机（含 `CONTROL_STATE_PRINT_DONE` 结果页、`CONTROL_STATE_TRANSFER_BOX` 取件转运盒）+ overlay UI |
 | `VideoPlayer` | `video_player.*` | 延时视频 libav* 软解 → BGRX/RGB565 → lv_image（play/pause/seek；拖动预览缩小帧 + latest-wins） |
 | `PngScrubPreview` | `png_scrub_preview.*` | PNG 序列拖动预览：后台 libpng 解码缩放到小图 RGB565 |
@@ -86,7 +90,7 @@
 | `user_history` | `page_user_history.*` | 打印历史：三 Tab + Storage 条 + 日期分组卡片 + 管理态批量删除 + 左滑删除 |
 | `user_control` | `page_user_control.*` | skeleton 占位 |
 | `user_settings` | `page_user_settings.*` | 设置列表 + 开发者密码弹窗 |
-| `user_message` | `page_user_message.*` | skeleton 占位 |
+| `user_message` | `page_user_message.*` | 消息中心：日期分组混排列表（MCU 报警 + 设备事件）+ 左滑删除历史 + 详情抽屉（Reset 三态） |
 | `user_timelapse` | `page_user_timelapse.*` | 延时摄影播放器（隐藏页，历史缩略图进入；全屏 `lv_layer_top`） |
 
 注册入口：`ui_app.cpp`（不在 `main.cpp` include 各页面头）。隐藏页（`user_files`/`user_debug`/`user_timelapse`）经 `register_hidden_page` 注册、`switch_to` 进入。
@@ -96,7 +100,7 @@
 | 子目录 | 协议表 | 说明 |
 |--------|--------|------|
 | `app/protocol/tcp/` | `doc/SOC-_MCU TCP报文.xlsx` | 运动/心跳/复位组包，RX 背压解析 |
-| `app/protocol/serial/` | `doc/SOC_-_MCU串口通信协议.xlsx` | 打印握手 + 环境上报 |
+| `app/protocol/serial/` | `doc/SOC_-_MCU串口通信协议.xlsx` | 打印握手 + 环境上报 + 报警上报/复位（`serial_alarm.*`） |
 
 ## 数据流（打印）
 

@@ -12,6 +12,7 @@
 #include "ui_arc_spinner.hpp"
 #include "ui_xfr_dialog.hpp"
 #include "ui_device_state.hpp"
+#include "ui_alarm_state.hpp"
 #include "print_flow_img.h"
 #include "home_metric_icons.h"
 
@@ -260,6 +261,10 @@ void refresh_supply_bars(void);
 void highlight_file_rows(void);
 void close_confirm_dlg(void);
 void show_print_confirm_dialog(void);
+void open_user_confirm_dialog(lv_obj_t *parent, const char *title, const char *body,
+                              const char *cancel_text, const char *confirm_text,
+                              lv_color_t confirm_color,
+                              lv_event_cb_t cancel_cb, lv_event_cb_t confirm_cb);
 void close_prepare_dlg(void);
 void show_prepare_dlg(void);
 void goto_file_selection(void);
@@ -1243,7 +1248,7 @@ void plate_show_notinserted(void)
     }
 
     ui_slide_unlock_cfg_t slide_cfg = {};
-    slide_cfg.hint_text     = "SWIPE TO OPEN";   /* 箭头由控件绘制 3 个 chevron */
+    slide_cfg.hint_text     = "SLIDE TO OPEN";   /* 箭头由控件绘制 3 个 chevron */
     slide_cfg.on_unlocked   = on_plate_swipe_open;
     slide_cfg.user_data     = nullptr;
     slide_cfg.track_w       = slide_w;                         /* 贴合容器右边缘 */
@@ -1335,8 +1340,10 @@ void on_transport_result(uint8_t result);
 void pf_start_open_door(void);
 
 /* 满宽圆角矩形主按钮（宽弹窗底部：门弹窗的确认钮、放版弹窗"已放入"的选择任务钮）。
- * 稿上这类按钮是满列宽 + USER_DLG_RADIUS 圆角，不是 user_style_btn_primary 的全圆胶囊。
- * enabled=false → 透明度 30 且不可点。 */
+ * 视觉与选文件页详情面板的 Confirm Print 对齐：满列宽、高 USER_DLG_FOOTER_BTN_H、
+ * 圆角 USER_BTN_RADIUS、accent 实心 + 24px accent 外发光。原先用的是更圆的
+ * USER_DLG_RADIUS（1024 档 16 对 6），在 51px 高的按钮上跟选文件页差得很明显。
+ * enabled=false → 透明度 30、去掉外发光且不可点。 */
 lv_obj_t *make_dlg_wide_button(lv_obj_t *parent, const char *text, bool enabled,
                                lv_event_cb_t cb)
 {
@@ -1344,10 +1351,15 @@ lv_obj_t *make_dlg_wide_button(lv_obj_t *parent, const char *text, bool enabled,
     lv_obj_remove_style_all(btn);
     lv_obj_set_width(btn, LV_PCT(100));
     lv_obj_set_height(btn, USER_DLG_FOOTER_BTN_H);
-    lv_obj_set_style_radius(btn, USER_DLG_RADIUS, 0);
+    lv_obj_set_style_radius(btn, USER_BTN_RADIUS, 0);
     lv_obj_set_style_bg_color(btn, user_color_accent, 0);
     lv_obj_set_style_bg_opa(btn, enabled ? LV_OPA_COVER : LV_OPA_30, 0);
     lv_obj_set_style_bg_opa(btn, LV_OPA_80, LV_STATE_PRESSED);
+    /* 主按钮的 accent 外发光。按钮是满宽的，左右两侧的光会被弹窗内容区裁平，
+     * 只有上下能看见——与选文件页 Confirm Print 现在的观感一致。 */
+    lv_obj_set_style_shadow_width(btn, 24, 0);
+    lv_obj_set_style_shadow_color(btn, user_color_accent, 0);
+    lv_obj_set_style_shadow_opa(btn, enabled ? LV_OPA_30 : LV_OPA_TRANSP, 0);
     lv_obj_clear_flag(btn, LV_OBJ_FLAG_SCROLLABLE);
     if(enabled && cb) {
         lv_obj_add_event_cb(btn, cb, LV_EVENT_CLICKED, nullptr);
@@ -1688,7 +1700,8 @@ void on_powder_state_update(const ui_device_snapshot_t * /*snap*/)
     }
 }
 
-/* 满宽圆角副按钮：与 make_dlg_wide_button 同尺寸，4% 白底（稿「主按钮」那档）。 */
+/* 满宽圆角副按钮：与 make_dlg_wide_button 同尺寸同圆角，4% 白底（稿「主按钮」那档）。
+ * 4% 白是全工程次按钮的统一底色，与 ui_user_make_confirm_footer_btn(filled=false) 一致。 */
 lv_obj_t *make_dlg_wide_ghost_button(lv_obj_t *parent, const char *text,
                                      lv_event_cb_t cb)
 {
@@ -1696,7 +1709,7 @@ lv_obj_t *make_dlg_wide_ghost_button(lv_obj_t *parent, const char *text,
     lv_obj_remove_style_all(btn);
     lv_obj_set_width(btn, LV_PCT(100));
     lv_obj_set_height(btn, USER_DLG_FOOTER_BTN_H);
-    lv_obj_set_style_radius(btn, USER_DLG_RADIUS, 0);
+    lv_obj_set_style_radius(btn, USER_BTN_RADIUS, 0);
     lv_obj_set_style_bg_color(btn, user_color_text, 0);
     lv_obj_set_style_bg_opa(btn, 10, 0);          /* 稿 rgba(255,255,255,0.04) */
     lv_obj_set_style_bg_opa(btn, 30, LV_STATE_PRESSED);
@@ -1991,6 +2004,23 @@ void on_file_select_cancel(lv_event_t * /*e*/)
     ui::PageManager::instance().switch_to("user_home");
 }
 
+/* ---- 打印入口拦截：1124/1125 未复位时 MCU 会拒绝新打印请求 ---- */
+
+void on_print_blocked_dismiss(lv_event_t * /*e*/)
+{
+    close_confirm_dlg();
+}
+
+/** 弹窗内直接下发复位；成败/在途由消息中心与结果页的三态钮体现 */
+void on_print_blocked_reset(lv_event_t * /*e*/)
+{
+    close_confirm_dlg();
+    const ui_alarm_entry_t *blk = ui_alarm_print_blocker();
+    if(blk) {
+        ui_alarm_request_reset(blk->code);
+    }
+}
+
 /* 详情面板「Start Print」→ Prepare → D1… */
 void on_detail_start_print(lv_event_t * /*e*/)
 {
@@ -1999,6 +2029,22 @@ void on_detail_start_print(lv_event_t * /*e*/)
     }
     /* 未选打印板厚度时按钮已置灰不可点，这里只是兜底 */
     if(g_plate_thickness == PLATE_THICKNESS_NONE) {
+        return;
+    }
+    /* 阻断报警预检：与其等 MCU 拒绝，进确认弹窗前就把原因亮出来。
+     * clear_mode=RESET 给「Reset」直达；其余（如断电重启）只能知会。 */
+    if(const ui_alarm_entry_t *blk = ui_alarm_print_blocker()) {
+        char body[256];
+        std::snprintf(body, sizeof(body), "%s\n%s", blk->title, blk->body);
+        const bool resettable =
+            blk->clear_mode == (uint8_t)middleware::AlarmClearMode::Reset &&
+            !blk->reset_pending;
+        open_user_confirm_dialog(lv_layer_top(), "Unable to start print", body,
+                                 "Cancel", resettable ? "Reset" : "OK",
+                                 ui_color_danger,
+                                 on_print_blocked_dismiss,
+                                 resettable ? on_print_blocked_reset
+                                            : on_print_blocked_dismiss);
         return;
     }
     show_print_confirm_dialog();
@@ -2085,31 +2131,21 @@ void show_delete_confirm(void)
                              on_delete_cancel, on_delete_confirm);
 }
 
-/* 确认弹窗页脚按钮：两枚等宽圆角，主按钮填充色、次按钮浅灰底。 */
+/* 开始打印确认弹窗的页脚按钮。
+ *
+ * 原先是本地手搓的一套（圆角 USER_RADIUS、次按钮 panel_alt 实心），与其余确认弹窗
+ * 不一致；现在直接复用共享工厂，只额外给主按钮补上 accent 外发光——删除/终止那几个
+ * 确认弹窗的主按钮是红色危险色，不该发蓝光，所以发光留在这里而不是塞进共享工厂。 */
 lv_obj_t *make_print_confirm_btn(lv_obj_t *parent, const char *text,
                                  bool primary, lv_event_cb_t cb)
 {
-    lv_obj_t *btn = lv_button_create(parent);
-    lv_obj_remove_style_all(btn);
-    lv_obj_set_flex_grow(btn, 1);
-    lv_obj_set_height(btn, USER_DLG_FOOTER_BTN_H);
-    lv_obj_set_style_radius(btn, USER_RADIUS, 0);
+    lv_obj_t *btn = ui_user_make_confirm_footer_btn(parent, text, primary,
+                                                    user_color_accent, cb, nullptr);
     if(primary) {
-        lv_obj_set_style_bg_color(btn, user_color_accent, 0);
-        lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, 0);
-        lv_obj_set_style_bg_opa(btn, LV_OPA_80, LV_STATE_PRESSED);
-    } else {
-        lv_obj_set_style_bg_color(btn, user_color_panel_alt, 0);
-        lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, 0);
-        lv_obj_set_style_bg_opa(btn, LV_OPA_70, LV_STATE_PRESSED);
+        lv_obj_set_style_shadow_width(btn, 24, 0);
+        lv_obj_set_style_shadow_color(btn, user_color_accent, 0);
+        lv_obj_set_style_shadow_opa(btn, LV_OPA_30, 0);
     }
-    lv_obj_clear_flag(btn, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_add_event_cb(btn, cb, LV_EVENT_CLICKED, nullptr);
-    lv_obj_t *bl = lv_label_create(btn);
-    lv_label_set_text(bl, text);
-    lv_obj_set_style_text_color(bl, user_color_text, 0);
-    lv_obj_set_style_text_font(bl, user_font_text(), 0);
-    lv_obj_center(bl);
     return btn;
 }
 

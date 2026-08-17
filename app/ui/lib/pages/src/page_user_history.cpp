@@ -162,8 +162,15 @@ struct HistoryCard {
     lv_obj_t   *check_mark = nullptr; /**< 复选框内的对勾（未选中时隐藏） */
     lv_obj_t   *card    = nullptr;  /**< 卡片（左滑平移对象） */
     lv_obj_t   *del_btn = nullptr;  /**< 红色删除圆钮 */
-    bool        open      = false;  /**< 左滑展开态 */
+    bool        open      = false;  /**< 左滑展开态（松手吸附后的稳定态） */
     bool        selected  = false;  /**< 管理模式勾选态 */
+    /* 跟手拖动的按压期状态，每次 PRESSED 重置 */
+    int32_t     press_x = 0;        /**< 按下点（屏幕坐标） */
+    int32_t     press_y = 0;
+    int32_t     base_x  = 0;        /**< 按下时的位移基准：0 或 -reveal */
+    bool        dragging     = false; /**< 已判定为横向拖动 */
+    bool        drag_locked  = false; /**< 本次按压判给竖向滚动/管理态，不再拖 */
+    bool        just_dragged = false; /**< 刚拖过：吃掉紧随其后的 CLICKED */
 };
 
 std::vector<HistoryCard *> g_cards;
@@ -345,12 +352,39 @@ void refresh_storage(void)
 }
 
 /* ============================================================================
- *  左滑删除
+ *  左滑删除：跟手拖动 + 松手吸附（与消息页同一套，见 app/ui/UI.md）
+ *
+ *  不用 LVGL 的 LV_EVENT_GESTURE：它要求"每帧位移 ≥3px 且累计 >50px"，慢慢拖时
+ *  累加器每帧被清零，触屏基本划不出来（只有快速甩才触发）；而且手势不吞掉释放时
+ *  的 CLICKED，卡片上再挂点击就会一松手被关回去。这里自己按 PRESSED/PRESSING/
+ *  RELEASED 算位移，并用 just_dragged 挡住随后那次点击。
+ *
+ *  缩略图是独立的播放入口（自带 CLICKED），所以三个拖动回调在卡片和缩略图上都挂
+ *  一份：从缩略图起手也能拖动整张卡，而点击照旧只由各自的 CLICKED 处理。
  * ========================================================================= */
 
 int32_t swipe_reveal_px(void)
 {
     return USER_BTN_PRIMARY_H + USER_PAD * 2;
+}
+
+/** 起拖阈值：小于它仍算点击，避免手抖把点击吃掉。 */
+constexpr int32_t kDragStartPx = 8;
+
+/** 落位移 + 按位移决定删除钮显隐（拖动中/吸附后共用）。 */
+void set_card_shift(HistoryCard *c, int32_t x)
+{
+    if(c->card) {
+        lv_obj_set_style_translate_x(c->card, x, 0);
+    }
+    if(!c->del_btn) {
+        return;
+    }
+    if(x < 0) {
+        lv_obj_remove_flag(c->del_btn, LV_OBJ_FLAG_HIDDEN);
+    } else {
+        lv_obj_add_flag(c->del_btn, LV_OBJ_FLAG_HIDDEN);
+    }
 }
 
 void close_card(HistoryCard *c)
@@ -359,12 +393,7 @@ void close_card(HistoryCard *c)
         return;
     }
     c->open = false;
-    if(c->card) {
-        lv_obj_set_style_translate_x(c->card, 0, 0);
-    }
-    if(c->del_btn) {
-        lv_obj_add_flag(c->del_btn, LV_OBJ_FLAG_HIDDEN);
-    }
+    set_card_shift(c, 0);
 }
 
 void reset_all_cards(void)
@@ -374,33 +403,114 @@ void reset_all_cards(void)
     }
 }
 
-void open_card(HistoryCard *c)
+void card_press_cb(lv_event_t *e)
 {
-    if(!c || c->open) {
+    HistoryCard *c = static_cast<HistoryCard *>(lv_event_get_user_data(e));
+    lv_indev_t *indev = lv_indev_active();
+    /* 每次新按压都清干净：上一次若以 PRESS_LOST 收场（没有 CLICKED 来消费），
+     * just_dragged 会残留下来把下一次点击吃掉。 */
+    c->dragging     = false;
+    c->drag_locked  = false;
+    c->just_dragged = false;
+    /* 兜底解除上一次的轴向排他（正常由 release 恢复，这里防万一漏掉） */
+    if(c->card) {
+        lv_obj_add_flag(c->card, LV_OBJ_FLAG_SCROLL_CHAIN_VER);
+    }
+    /* 管理模式下删除走顶部 Delete，左滑让位给勾选 */
+    if(g_manage || !c->del_btn || !indev) {
+        c->drag_locked = true;
         return;
     }
-    reset_all_cards(); /* 仅允许一张展开 */
-    c->open = true;
-    if(c->card) {
-        lv_obj_set_style_translate_x(c->card, -swipe_reveal_px(), 0);
-    }
-    if(c->del_btn) {
-        lv_obj_remove_flag(c->del_btn, LV_OBJ_FLAG_HIDDEN);
-    }
+    lv_point_t p;
+    lv_indev_get_point(indev, &p);
+    c->press_x = p.x;
+    c->press_y = p.y;
+    c->base_x  = c->open ? -swipe_reveal_px() : 0;
 }
 
-void card_gesture_cb(lv_event_t *e)
+void card_pressing_cb(lv_event_t *e)
 {
-    if(g_manage) {
-        return; /* 管理模式下删除走顶部 Delete，左滑让位给勾选 */
-    }
     HistoryCard *c = static_cast<HistoryCard *>(lv_event_get_user_data(e));
-    const lv_dir_t dir = lv_indev_get_gesture_dir(lv_indev_active());
-    if(dir == LV_DIR_LEFT) {
-        open_card(c);
-    } else if(dir == LV_DIR_RIGHT) {
-        close_card(c);
+    if(c->drag_locked) {
+        return;
     }
+    lv_indev_t *indev = lv_indev_active();
+    if(!indev) {
+        return;
+    }
+
+    /* 列表一旦真的滚起来，这次按压整个让给滚动，卡片弹回原位 */
+    if(lv_indev_get_scroll_obj(indev)) {
+        if(c->dragging) {
+            set_card_shift(c, c->base_x);
+            c->dragging = false;
+        }
+        c->drag_locked = true;
+        return;
+    }
+
+    lv_point_t p;
+    lv_indev_get_point(indev, &p);
+    const int32_t dx = p.x - c->press_x;
+    const int32_t dy = p.y - c->press_y;
+
+    if(!c->dragging) {
+        if(LV_ABS(dx) < kDragStartPx) {
+            return;                     /* 还没够起拖，先当点击 */
+        }
+        if(LV_ABS(dy) > LV_ABS(dx)) {   /* 方向锁定：竖向归列表滚动 */
+            c->drag_locked = true;
+            return;
+        }
+        c->dragging = true;
+        /* 轴向排他：起拖后不许列表再抢走这次按压。LVGL 每帧按整次按压的累计位移
+         * 重新判方向（lv_indev_scroll.c find_scroll_obj），斜着拉一下竖向累计
+         * 超过横向就会切成滚动、把卡片弹回。卡片自身不可滚，清掉 SCROLL_CHAIN_VER
+         * 后滚动搜索断在卡片这层，够不到列表；松手再加回来。 */
+        if(c->card) {
+            lv_obj_remove_flag(c->card, LV_OBJ_FLAG_SCROLL_CHAIN_VER);
+        }
+        if(!c->open) {
+            reset_all_cards();          /* 同时只允许一张展开 */
+        }
+    }
+
+    const int32_t reveal = swipe_reveal_px();
+    int32_t x = c->base_x + dx;
+    if(x > 0)       x = 0;
+    if(x < -reveal) x = -reveal;
+    set_card_shift(c, x);
+}
+
+/** 松手（或按压被抢走）：过半吸附到展开，否则弹回。 */
+void card_release_cb(lv_event_t *e)
+{
+    HistoryCard *c = static_cast<HistoryCard *>(lv_event_get_user_data(e));
+    /* 无条件解除轴向排他：不能只在拖过的分支恢复，否则一次异常收场就永久失效 */
+    if(c->card) {
+        lv_obj_add_flag(c->card, LV_OBJ_FLAG_SCROLL_CHAIN_VER);
+    }
+    if(!c->dragging) {
+        return;
+    }
+    c->dragging     = false;
+    c->just_dragged = true;
+
+    const int32_t reveal = swipe_reveal_px();
+    const int32_t x      = c->card
+                               ? lv_obj_get_style_translate_x(c->card, LV_PART_MAIN)
+                               : 0;
+    c->open = (-x) > reveal / 2;
+    set_card_shift(c, c->open ? -reveal : 0);
+}
+
+/** 把跟手拖动的三个回调挂到一个对象上（卡片本体与缩略图各挂一份）。 */
+void attach_card_drag(lv_obj_t *obj, HistoryCard *c)
+{
+    lv_obj_add_event_cb(obj, card_press_cb,    LV_EVENT_PRESSED,    c);
+    lv_obj_add_event_cb(obj, card_pressing_cb, LV_EVENT_PRESSING,   c);
+    lv_obj_add_event_cb(obj, card_release_cb,  LV_EVENT_RELEASED,   c);
+    lv_obj_add_event_cb(obj, card_release_cb,  LV_EVENT_PRESS_LOST, c);
 }
 
 /* ============================================================================
@@ -869,7 +979,11 @@ void card_click_cb(lv_event_t *e)
     if(!g_manage) {
         return; /* 常态下卡片信息区不响应，播放入口只在缩略图上 */
     }
-    toggle_card_selection(static_cast<HistoryCard *>(lv_event_get_user_data(e)));
+    HistoryCard *c = static_cast<HistoryCard *>(lv_event_get_user_data(e));
+    if(c && c->just_dragged) {
+        return; /* 刚拖完，LVGL 照发的这次 CLICKED 不算数 */
+    }
+    toggle_card_selection(c);
 }
 
 /** Tab 行右侧按钮组切换：常态只有 Manage，管理态是计数 + 三颗按钮 */
@@ -970,6 +1084,9 @@ void on_thumb_click(lv_event_t *e)
     HistoryCard *c = static_cast<HistoryCard *>(lv_event_get_user_data(e));
     if(!c) {
         return;
+    }
+    if(c->just_dragged) {
+        return; /* 从缩略图起手左滑，松手这下不该进播放器 */
     }
     if(g_manage) {
         toggle_card_selection(c);   /* 管理模式下缩略图也是勾选热区 */
@@ -1401,6 +1518,8 @@ void make_thumbnail(lv_obj_t *parent, const HistoryCard *c)
     lv_obj_add_flag(slot, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_event_cb(slot, on_thumb_click, LV_EVENT_CLICKED,
                         const_cast<HistoryCard *>(c));
+    /* 缩略图占了卡片左半边，从这里起手也要能左滑整张卡 */
+    attach_card_drag(slot, const_cast<HistoryCard *>(c));
 
     /* 视频还没生成好：稿里是纯色底 + 一句提示，不铺缩略图 */
     if(!c->video_ready) {
@@ -1592,10 +1711,9 @@ void build_entry(lv_obj_t *parent, const upc::PrintHistoryEntry &e)
     lv_obj_set_style_pad_column(card, USER_PAD_SM, 0);
     lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_flag(card, LV_OBJ_FLAG_CLICKABLE);
-    /* 清除卡片默认的 GESTURE_BUBBLE：LVGL 基础对象默认带此标志，会把手势事件
-     * 一路上抛越过卡片；清掉后手势遍历停在卡片，card_gesture_cb 才能收到左滑。 */
-    lv_obj_remove_flag(card, LV_OBJ_FLAG_GESTURE_BUBBLE);
-    lv_obj_add_event_cb(card, card_gesture_cb, LV_EVENT_GESTURE, ctx);
+    /* 跟手左滑：自己按 PRESSED/PRESSING/RELEASED 算位移（不用 LV_EVENT_GESTURE，
+     * 原因见「左滑删除」一节） */
+    attach_card_drag(card, ctx);
     lv_obj_add_event_cb(card, card_click_cb, LV_EVENT_CLICKED, ctx);
     ctx->card = card;
 
@@ -1786,8 +1904,7 @@ void build_album_entry(lv_obj_t* parent, const std::filesystem::path& path)
     lv_obj_set_style_pad_column(card, USER_PAD_SM, 0);
     lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_flag(card, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_remove_flag(card, LV_OBJ_FLAG_GESTURE_BUBBLE);
-    lv_obj_add_event_cb(card, card_gesture_cb, LV_EVENT_GESTURE, ctx);
+    attach_card_drag(card, ctx);
     lv_obj_add_event_cb(card, card_click_cb, LV_EVENT_CLICKED, ctx);
     ctx->card = card;
 
@@ -1970,11 +2087,20 @@ void show_empty(bool empty)
     }
 }
 
+/**
+ * 重建整张列表。
+ *
+ * `lv_obj_clean` 会把滚动位置一起清零，删一条之后视线会被弹回顶部——这里重建前
+ * 记下滚动量、重建后放回去。必须先 `lv_obj_update_layout()` 让新内容高度算出来，
+ * 再按 `lv_obj_get_scroll_bottom()` 夹一下：删掉末尾几条后列表变矮，旧滚动量
+ * 会越界，直接 scroll_to 会把列表停在空白处。
+ */
 void rebuild_list(void)
 {
     if(!g_list) {
         return;
     }
+    const int32_t keep_scroll = lv_obj_get_scroll_y(g_list);
 
     lv_obj_clean(g_list);
     clear_cards();
@@ -2075,6 +2201,16 @@ void rebuild_list(void)
         build_entry(g_list, e);
     }
     apply_manage_ui();
+
+    if(keep_scroll > 0) {
+        lv_obj_update_layout(g_list);
+        /* 此刻列表停在顶部，scroll_bottom 就是最大可滚量 */
+        const int32_t max_scroll = lv_obj_get_scroll_bottom(g_list);
+        const int32_t y = (keep_scroll < max_scroll) ? keep_scroll : max_scroll;
+        if(y > 0) {
+            lv_obj_scroll_to_y(g_list, y, LV_ANIM_OFF);
+        }
+    }
 }
 
 } /* namespace */

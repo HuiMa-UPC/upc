@@ -540,6 +540,23 @@ void on_dev_confirm(lv_event_t *)
     }
 }
 
+/* 两个密码弹窗共用的确认钮（Enter / Connect）。
+ * 底子是 user_style_btn_primary()（accent 实心 + accent 外发光），但那套样式的圆角是
+ * 全圆胶囊，与其余弹窗页脚的圆角矩形不一致，所以在调用点把 radius 压回 USER_BTN_RADIUS。
+ * 不直接改 user_style_btn_primary()：调试页那几颗按钮还在原样用它的胶囊形。 */
+lv_obj_t *make_pwd_dlg_ok_btn(lv_obj_t *footer, const char *text, lv_event_cb_t cb)
+{
+    lv_obj_t *btn = lv_button_create(footer);
+    lv_obj_add_style(btn, user_style_btn_primary(), 0);
+    lv_obj_set_size(btn, USER_DLG_FOOTER_BTN_W, USER_DLG_FOOTER_BTN_H);
+    lv_obj_set_style_radius(btn, USER_BTN_RADIUS, 0);
+    lv_obj_add_event_cb(btn, cb, LV_EVENT_CLICKED, nullptr);
+    lv_obj_t *lbl = lv_label_create(btn);
+    lv_label_set_text(lbl, text);
+    lv_obj_center(lbl);
+    return btn;
+}
+
 void open_dev_password_dialog(void)
 {
     if(g_dlg) {
@@ -568,13 +585,7 @@ void open_dev_password_dialog(void)
 
     ui_user_make_footer_ghost_btn(g_dlg->footer, "Cancel", on_dlg_cancel);
 
-    lv_obj_t *btn_ok = lv_button_create(g_dlg->footer);
-    lv_obj_add_style(btn_ok, user_style_btn_primary(), 0);
-    lv_obj_set_size(btn_ok, USER_DLG_FOOTER_BTN_W, USER_DLG_FOOTER_BTN_H);
-    lv_obj_add_event_cb(btn_ok, on_dev_confirm, LV_EVENT_CLICKED, nullptr);
-    lv_obj_t *ok_lbl = lv_label_create(btn_ok);
-    lv_label_set_text(ok_lbl, "Enter");
-    lv_obj_center(ok_lbl);
+    make_pwd_dlg_ok_btn(g_dlg->footer, "Enter", on_dev_confirm);
 }
 
 /* ---- Wi-Fi 连接密码弹窗 ---- */
@@ -607,13 +618,7 @@ void open_wifi_connect_dialog(const char *ssid)
 
     ui_user_make_footer_ghost_btn(g_dlg->footer, "Cancel", on_dlg_cancel);
 
-    lv_obj_t *btn_ok = lv_button_create(g_dlg->footer);
-    lv_obj_add_style(btn_ok, user_style_btn_primary(), 0);
-    lv_obj_set_size(btn_ok, USER_DLG_FOOTER_BTN_W, USER_DLG_FOOTER_BTN_H);
-    lv_obj_add_event_cb(btn_ok, on_wifi_connect_confirm, LV_EVENT_CLICKED, nullptr);
-    lv_obj_t *ok_lbl = lv_label_create(btn_ok);
-    lv_label_set_text(ok_lbl, "Connect");
-    lv_obj_center(ok_lbl);
+    make_pwd_dlg_ok_btn(g_dlg->footer, "Connect", on_wifi_connect_confirm);
 }
 
 /* ---- 小构件 ---- */

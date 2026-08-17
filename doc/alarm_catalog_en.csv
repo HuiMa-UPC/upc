@@ -1,0 +1,81 @@
+kind,code,title_en,desc_en
+alarm,1000,Self-test failed,Power-on self-test failed. Check the issue and restart the device.
+alarm,1001,Printing conditions not met,One or more printing conditions are not satisfied.
+alarm,1002,Axis initialization failed,Axis initialization failed. A power cycle may be required.
+alarm,1101,Waste bucket full,Empty the waste powder bucket.
+alarm,1102,Waste bucket not installed,Reinstall the waste powder bucket. Clears automatically once seated.
+alarm,1103,Powder reservoir full,The powder reservoir is full. Clears automatically.
+alarm,1104,Front filter not seated,Reseat filter A. Printing is blocked until seated.
+alarm,1105,Rear filter not seated,Reseat filter B. Printing is blocked until seated.
+alarm,1106,Sieve mesh not seated,Reinstall the powder sieve mesh.
+alarm,1107,Powder bucket cover not seated,Close the powder bucket cover.
+alarm,1108,Left powder type mismatch,The left powder bucket type does not match the job.
+alarm,1109,Right powder type mismatch,The right powder bucket type does not match the job.
+alarm,1110,Waste powder type mismatch,The waste bucket type does not match.
+alarm,1111,Door opened while printing,The door was opened during printing. Laser output stopped immediately.
+alarm,1120,Chamber oxygen too high,Oxygen level is too high while printing. Printing is paused.
+alarm,1121,Chamber pressure too high,Chamber pressure is above the limit.
+alarm,1122,Chamber pressure too low,Chamber pressure is below the limit.
+alarm,1124,Print step timeout,A print step timed out and the job was aborted. Reset required.
+alarm,1125,Print aborted by motion failure,A motion failure aborted the job. Reset required.
+alarm,1202,Z axis initialization error,Z axis failed to initialize. Power cycle required.
+alarm,1203,Z axis communication error,Communication with the Z axis failed.
+alarm,1204,Z axis motion error,The Z axis reported a motion error.
+alarm,1205,S axis initialization error,S axis failed to initialize. Power cycle required.
+alarm,1206,S axis communication error,Communication with the S axis failed.
+alarm,1207,S axis motion error,The S axis reported a motion error.
+alarm,1208,D axis initialization error,D axis failed to initialize. Power cycle required.
+alarm,1209,D axis communication error,Communication with the D axis failed.
+alarm,1210,D axis motion error,The D axis reported a motion error.
+alarm,1211,Z axis homing error,The Z axis failed to home.
+alarm,1212,S axis homing error,The S axis failed to home.
+alarm,1213,Z axis homing config error,Z axis homing configuration is invalid.
+alarm,1214,S axis homing config error,S axis homing configuration is invalid.
+alarm,1300,Laser disconnected,Laser communication lost. Reconnects automatically.
+alarm,1301,Laser alarm,The laser reported an alarm.
+alarm,1302,Oxygen sensor error,Oxygen sensor data unavailable.
+alarm,1303,Outer PM2.5 sensor error,Outer PM2.5 sensor data unavailable.
+alarm,1304,Inner PM2.5 sensor error,Inner PM2.5 sensor data unavailable.
+alarm,1305,Temperature/humidity sensor error,Temperature and humidity data unavailable.
+alarm,1306,Chamber pressure sensor error,Chamber pressure sensor data unavailable.
+alarm,1307,Filter pressure sensor error,Filter pressure sensor data unavailable.
+alarm,1308,Left bucket NFC error,Cannot read the left powder bucket tag.
+alarm,1309,Right bucket NFC error,Cannot read the right powder bucket tag.
+alarm,1310,Waste bucket NFC error,Cannot read the waste bucket tag.
+alarm,2000,Door open request denied,Safety conditions are not met. The door stays locked.
+alarm,2001,Laser enable denied,Safety interlock conditions are not met.
+alarm,2002,Fan start denied,Safety interlock conditions are not met.
+alarm,2003,Print start denied,Print safety conditions are not met.
+alarm,2004,Print paused,Layer progress paused due to an abnormal condition.
+alarm,2005,Print resumed,The pause condition cleared and printing resumed.
+alarm,2008,Powder cleaning test denied,The cleaning test request was rejected.
+alarm,2009,Sieve reverse dump started,Sieving finished. The sieve motor is dumping residue (normal step).
+detail,0,No additional detail,
+detail,256,Door is open,
+detail,257,Door lock sensor unavailable,
+detail,258,Laser is still active,
+detail,259,Fan is still active,
+detail,260,PM2.5 sensor unavailable,
+detail,261,PM2.5 above the safe door-open threshold,
+detail,262,Filter A not seated,
+detail,263,Filter B not seated,
+detail,264,Proximity sensor unavailable,
+detail,265,Sieve mesh not seated,
+detail,266,Hall sensor unavailable,
+detail,267,Powder bucket cover not seated,
+detail,268,Fan duty out of range,
+detail,269,Door unlock already in progress,
+detail,512,Powder reservoir full — layer progress paused,
+detail,513,Motion command load failed,
+detail,514,Axis motion execution failed,
+detail,515,Drive fault or emergency stop,
+detail,516,Motion command dispatch failed,
+detail,517,Motion execution timeout,
+detail,518,Motion failed for an unknown reason,
+detail,519,Timed out waiting for powder dosing (D axis),
+detail,520,Timed out waiting for the scraper (S axis),
+detail,521,Timed out waiting for layer feed (Z axis),
+detail,522,Timed out waiting for layer scan,
+detail,523,Pre-print purge timed out,
+detail,524,Printer busy — cleaning test rejected,
+detail,525,Cleaning test could not start,

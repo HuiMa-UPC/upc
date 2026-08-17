@@ -8,7 +8,17 @@
 |------|------|------|
 | `home_assets.h` + `home_assets.c` | 首页环境指标图标 `ic_pm` / `ic_temp` / `ic_o2`，并声明 `home_bg` | `tools/gen_home_assets.py`（脚本已不在 `tools/`） |
 | `home_bg.c` | 首页背景图（1024×640 RGB565，符号 `home_bg`，声明在 `home_assets.h`） | `tools/gen_home_bg.py` |
-| `home_metric_icons.h` / `.c` | A8 单色图标：`ic_home` `ic_switch` `ic_cabin` `ic_aqi` `ic_humidity` `ic_pressure` `ic_purify` `ic_info` `ic_clock` `ic_cube` `ic_warning` `ic_layers` `ic_expand` `ic_alert` `ic_printer`；打印态那批 `ic_play` `ic_door_solid` `ic_badge_spin` `ic_badge_play` `ic_badge_check` `ic_badge_alert` `ic_toast_info` | `tools/gen_home_metric_icons.py` |
+| `home_metric_icons.h` / `.c` | A8 单色图标：`ic_home` `ic_switch` `ic_cabin` `ic_aqi` `ic_humidity` `ic_pressure` `ic_purify` `ic_info` `ic_clock` `ic_cube` `ic_warning` `ic_layers` `ic_expand` `ic_alert` `ic_printer`；打印态那批 `ic_play` `ic_door_solid` `ic_photo` `ic_badge_spin` `ic_badge_play` `ic_badge_check` `ic_badge_alert` `ic_toast_info` | `tools/gen_home_metric_icons.py`（**只覆盖前 9 枚**，见下方警告） |
+| `notice_badge_icons.h` / `.c` | 通知等级徽标图标，每档屏一版：`ic_notice_alert_{14,18,27}` `ic_notice_info_{14,18,27}` | `tools/gen_notice_badge_icons.py` |
+
+> **`home_metric_icons.c` 的雷**：文件头写着 AUTO-GENERATED，但
+> `gen_home_metric_icons.py` 的 `ORDER` 只有 `home/switch/cabin/aqi/humidity/
+> pressure/info/clock/cube` 9 枚，其余 14 枚（`ic_warning` `ic_layers` `ic_expand`
+> `ic_alert` `ic_printer` `ic_purify` `ic_play` `ic_door_solid` `ic_photo`
+> `ic_badge_*` `ic_toast_info`）**没有任何脚本能重新生成**——源矢量已丢失。
+> 重跑该脚本会把这 14 枚全部抹掉、编译直接断。要动之前先备份 `.c/.h`。
+> 通知徽标那两枚已经摘出来放进 `notice_badge_icons`（源 SVG 在 `tools/_badge_svg/`，
+> 可重跑）；其余 12 枚的处置方式待定。
 | `home_btn_icons.h` / `.c` | 首页按钮图标 `ic_camera` / `ic_folder` | Figma SVG→A8（node 3122:13207 / 2513:19774） |
 | `nav_icons.h` / `.c` | 左侧标签栏五个图标 `nav_icon_*` | `tools/png_to_lvgl_icon.py`（脚本已不在 `tools/`） |
 | `settings_icons.h` / `.c` | 设置页分组图标 `settings_icon_*` | `tools/gen_settings_icons.py` |
@@ -23,6 +33,10 @@ python tools/gen_home_metric_icons.py
 python tools/gen_print_flow_assets.py
 python tools/gen_ctl_backdrop.py
 ```
+
+`ic_camera` 与 `ic_photo` 是两枚不同的图标，别混用：前者是**摄像机**造型，用于首页
+顶栏的「查看监控」入口；后者是**照相机**，用于打印态/监控态右侧中部的拍照钮（稿
+3847:9440）。
 
 `ctl_backdrop_img` 与主题常量强耦合：图按 `USER_PRINT_CTL_BTN` / `USER_PRINT_PILL_W`
 三档预生成，尺寸与按钮坐标严格对齐、运行时不缩放。改了这两个常量必须同步改

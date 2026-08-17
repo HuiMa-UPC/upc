@@ -139,6 +139,9 @@ private:
     /** @brief About 页版本查询：下发串口 TLV_GET_VERSION，应答由 McuLink 直接推 UI */
     void handle_mcu_version_req(const middleware::Message& msg);
 
+    /** @brief 报警复位请求：组 0xA3/0x82 帧下发串口；结果以后续单条上报为准 */
+    void handle_alarm_reset(const middleware::Message& msg);
+
     void send_door_rsp(const middleware::Message& msg, middleware::MsgType rsp_type, bool ok);
     void send_dir_open_empty(const middleware::Message& req);
     void send_dir_open_usb(const middleware::Message& req, const std::string& usb_path);

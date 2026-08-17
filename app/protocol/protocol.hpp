@@ -11,5 +11,6 @@
 #include "serial_debug.hpp"
 #include "serial_ota.hpp"
 #include "serial_project_info.hpp"
+#include "serial_alarm.hpp"
 
 #endif

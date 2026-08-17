@@ -74,7 +74,7 @@ while (!g_shutdown_requested) {
 建在 `shell_` 上（`content_panel_` 之后 → 恒定压在所有页面之上，含首页的整屏摄像头层；
 `menu_panel_` 仍在它之上）。它同样是 `FLOATING` + `pos(0,0)`，否则会占掉 `shell_`
 横向 flex 的一个格位把内容区挤走。条自身 `remove_flag(CLICKABLE)`，不然整屏宽的带子
-会吃掉底下控件的触摸——首页那两颗按钮正在它下面。
+会吃掉底下控件的触摸。
 
 - **让位**：`content_panel_` 的 `pad_top = USER_TOPBAR_H`，页面按 `LV_PCT(100)` 建出来
   的内容区自然落在条下面。
@@ -84,8 +84,9 @@ while (!g_shutdown_requested) {
   上，会连它一起压暗，与页面表现一致。
 - **首页例外**：首页要整屏出血，根节点用 `pos(-USER_SIDEBAR_W, -USER_TOPBAR_H)` 跨过两个
   方向的 padding，尺寸取 `LV_HOR_RES` × `LV_VER_RES`（`LV_PCT(100)` 算的是父内容区，会被
-  `pad_top` 扣掉一条）。首页自己那条 `USER_TOPBAR_H` 高的透明行只剩右侧两颗按钮，正好落在
-  常驻条下方，两者合成稿 3540:14473 里的一整条带子。
+  `pad_top` 扣掉一条）。首页自己那条 `USER_TOPBAR_H` 高的透明行现在是**空占位**（稿
+  5277:11571 起右侧那两颗按钮已移到左下的方块上），但不能删——首页根节点是纵向 flex，
+  其余几层都是 `FLOATING` 不占格位，它是唯一撑起那一格的子节点。
 - **`USER_TOPBAR_H` = 屏高 16%**（1024×600 档 96、1280×800 档 128）。调试页那条传感器卡
   原先借用该字段，现在用 `USER_SENSOR_STRIP_H`（值即旧的 `USER_TOPBAR_H`），不随带子变高。
 
@@ -100,6 +101,260 @@ while (!g_shutdown_requested) {
 `Print Complete` / `Print Terminated` / `Air Purifying` / `Purify Complete`。
 后三个由打印态浮层的 `apply_print_phase()` 按 `g_print_phase` + `g_purify_stage`
 推过来，取件退出打印态时统一还原成 `Ready`。
+
+### 消息中心与通知浮层（`ui_message_store` + `ui_notice_stack`）
+
+设备事件/告警只有一套显示通道：屏幕左下角那摞通知卡。它和 toast 分工不同——
+**toast 是操作反馈，看完就走；通知是待处理的事，撤回之前一直在**。
+两者互不替代，不要把 toast 改成通知或反过来。
+
+数据在 `core/ui_message_store`（同 `ui_device_state` 的形态：单例 + 观察者），
+两个来源：
+
+1. 后端 `GLAVO_Device_Event_Ntf`（`DeviceEventPayload`：码 + 等级 + active + 触发时刻），
+   码表与 [`doc/设备通信协议-数据结构定义（v0.9）.md`](../../doc/设备通信协议-数据结构定义（v0.9）.md)
+   第五节那张表一一对应。`active=false` 走 `ui_message_retract()`；
+2. 前端本地消息，码段从 `DeviceEventCode::UiWearMask`(512) 起，后端不发这一段。
+   目前是打印结束那两条（催吹粉 / 提醒戴口罩），由 `apply_print_phase()` 推和撤。
+3. MCU 报警（`core/ui_alarm_state`，见下节「MCU 报警」）：文案在 UI 侧由字典生成，
+   走 `ui_message_push_ex()`（外部文案/等级版本的 push，文本指针须指向调用方的
+   稳定存储，`ui_alarm_state` 用自有定长缓冲保证这一点）。
+
+**文案不进线协议**：总线上只跑数值码，人话由 `ui_message_store.cpp` 的 `kCatalog` 出。
+等级也由码表定，不用 payload 里那个 `severity` 字段——那个是留给云端的，同一个码在
+UI 上必须恒定同一种观感，否则后端改个字段卡片就换色了。当前文案是按稿意写的英文占位。
+
+后端那条回调跑在总线线程上，而每一次变更都会让浮层重建 LVGL 对象，所以
+`on_device_event` 先 `lv_async_call` 切回 UI 线程再落库（payload 里有个 64 位时间戳，
+塞不进 `lv_async_call` 那个指针，只能堆上过一手）。浮层里的 × 和「查看剩余」按钮
+同理要异步：它们的动作都会 `lv_obj_clean` 整栈，把正在派发事件的自己一起删掉。
+
+`ui_message_push()` 是**幂等**的：同一个码已经挂在浮层上就什么也不做。
+`apply_print_phase()` 每次态刷新都无脑 push 那两条，不在 store 里吸收掉的话卡片会不停
+重建、已读也会被顶回未读。排序用内部 `seq` 而不是 `ts_ms`：后端给的是 Unix 时间、本地消息
+压根没有时间，两种纪元混着比大小会把本地消息全排到最旧。
+
+浮层（`core/ui_notice_stack`）：
+
+| 项 | 取值 |
+|---|---|
+| 位置 | `shell_` 上的 `FLOATING`，与常驻设备信息条同级 → 压在页面之上、弹窗层之下 |
+| 对齐 | 贴右上角（稿 5277:11778），右缘退一个 `USER_PAD`，与首页右上环境区同一个退让量 |
+| 宽度 | `USER_PRINT_CARD_W`（稿上 416@1280，与该常量的 458 同一量级；已不再与 stats-card 对齐） |
+| 条数 | 最多两张卡，多出来的收进「View remaining N messages」，点进消息页 |
+| 排序 | 口罩提醒钉第一格；其余先按等级降序、同级比新 |
+| 徽标 | 四档等级配色 + 图标，见下「通知徽标配色」；与消息页列表共用一份映射 |
+| 告警卡 | 非 INFO 级，**不可关** |
+| 信息卡 | INFO 级（蓝 + `ic_toast_info`），右上一颗 ×，点了只从浮层撤下、消息在列表里还留着 |
+| 显隐 | 同常驻设备信息条那条规则（侧栏五个标签页显示、隐藏页不显示），另外排除消息页自己、历史页与设置页 |
+
+**右上角是有人抢的**，两类页面两种处理：
+
+- **首页打印态 / 待机监控态**：那个位置是环境区（`build_env_wrap()`），整栈用
+  `ui_notice_stack_set_top_offset()` 压到它下面去。让位量在 `page_user_home.cpp` 的
+  `sync_notice_offset()` 里一处算完（取 `env_block_t::root` 的高度，`LV_SIZE_CONTENT`
+  算出来的，取值前必须先 `lv_obj_update_layout()`，否则首次进打印态拿到 0 会压在环境区
+  上）。它是首页专属的，`apply_device_bar()` 换页时一律清零，首页在 `on_enter`
+  （即 `page_user_home_refresh`，进出打印态/监控态也都会走到）里按当前态再让一次。
+- **历史页 / 设置页**：那个位置是 Storage 容量条和 Wi-Fi 的 On/Off 开关，**开关可点，
+  被浮层压住连触摸一起吃掉**，所以整栈直接不显示，与排除消息页那句写在一起。这两页的新
+  消息只靠侧栏消息图标的红点提示。曾试过降级成单行细条，但细条底是半透明的，与 Storage
+  条叠印两层字都读不清；往下移又会压到 `Manage` 按钮和那个开关，故放弃折叠这条路。
+
+稿上这摞卡是紧贴屏幕右边缘的，圆角写成 `8/0/0/8`（右侧两角是直的）。这里整栈退了一个
+`USER_PAD` 与环境区对齐、没有贴边，所以四角一律圆。
+
+侧栏红点：`PageManager::set_menu_badge(page, on)`，未读数 >0 时亮，进过一次消息页
+（`page_user_message_refresh` → `ui_message_mark_all_read()`）就全部标已读、红点灭。
+红点是叠在菜单按钮上的一个小圆 `lv_obj`，不是重出一版图标资源——稿里是把红点烤进
+SVG 的，那样没法按未读数开关。
+
+**后端还没实现 `GLAVO_Device_Event_Ntf` 的发布**，接好的回调目前收不到任何消息。
+要验「超过两条 + 查看剩余 N 条」这条路径，用调试页 Other → Other Switches → `Msg Inject`
+（造 4 条假消息：1 条 critical + 3 条 info）。
+
+### 通知徽标配色（消息页列表 + 左下浮层共用）
+
+唯一来源是 `ui_message_severity_color()` / `ui_message_severity_icon()`
+（`core/ui_message_store`）。**两处必须共用**：同一条消息在浮层和消息页列表里
+不能是两种颜色。报文 severity（1..4）先经 `ui_alarm_severity_to_msg()` 换成
+`ui_msg_severity_t` 再取色，报警与设备事件因此落在同一套阶梯上。
+
+| 等级 | 语义（协议第 7 节） | 色 | 图标 |
+|---|---|---|---|
+| `UI_MSG_SEV_INFO` | 1 information 信息提示 | 蓝 `#485DFF` | 对话气泡 |
+| `UI_MSG_SEV_ERROR` | 2 warning 警告 | 黄 `#FFD426` | 警告三角 |
+| `UI_MSG_SEV_CRITICAL` | 3 fault 故障 | 橙 `#FF8A3D` | 警告三角 |
+| `UI_MSG_SEV_EMERGENCY` | 4 trip **安全停机** | 红 `#FF4242` | 警告三角 |
+
+图标资产是 `notice_badge_icons`（源 SVG 从稿 3058:7234 / 3058:7059 导出，存在
+`tools/_badge_svg/`，`tools/gen_notice_badge_icons.py` 可重跑）。**每档屏各出一版**
+（14 / 18 / 27 px，对应徽标边长 26 / 32 / 48 的 9/16），`ui_message_severity_icon()`
+按 `g_ui->profile_id` 选。这样 `ui_user_make_icon_img()` 里 `target == src_sz`、
+缩放整段被跳过——原先共用一张 36px 位图，1024 档要缩到 0.39 倍，细描边糊成一团。
+**改尺寸表要两边同步**（生成脚本的 `SIZES` 与那个 switch）。
+
+两条不要改回去的理由：
+
+- **相邻两档不能同色相靠明度区分**。原先 3/4 是红 `#FF4242` + 深红 `#D32029`，
+  实机上分不出来——暗背景下暗色视觉后退，最严重那档反而最不显眼。现在是蓝→黄→
+  橙→红的色相阶梯，两两拉开；稿只定义了两端（3058:7058 info 蓝 / 3058:7233
+  alert 红），中间两档本就是自由发挥的空间。
+- **trip 不是"更严重的 fault"**，是保护动作已经发生、设备已自动停机（如打印中
+  开门 → 激光立即断电）。排序上 `ui_alarm_state::rebuild_order()` 也按 severity
+  降序，trip 永远排在当前报警最上面。若日后觉得颜色仍不够，加文字胶囊比再调色
+  有效，但标签要写结果（"STOPPED"）而不是协议术语（"TRIP"）。
+
+生命周期胶囊（Active / Recovered - awaiting reset / Event / Resolved）是**另一套
+语义**，配色在 `page_user_message.cpp` 的 `kPill*`，不要和等级配色混用。
+
+### MCU 报警（`ui_alarm_state` + `ui_alarm_catalog`）
+
+MCU 经串口上报的报警（`GLAVO_Alarm_Report_Ntf`，0xA3/0x20 原样透传）在 UI 侧有唯一
+数据源 `core/ui_alarm_state`，按 `state_mask` 推导生命周期（协议见
+[`doc/SOC_TLV_ALARM_SINGLE_REPORT报警显示开发指导.md`](../../doc/SOC_TLV_ALARM_SINGLE_REPORT报警显示开发指导.md)）：
+
+- **EVENT**（一次性）：记历史 + 上浮层蓝卡（5s 自动从浮层撤下，列表里还在）；
+- **CONDITION**（状态型）：ACTIVE / RTN_LATCHED 期间挂「当前报警」表并同步红卡到
+  `ui_message_store`；回 NORMAL 撤卡、转历史。
+
+文案由 `ui_alarm_catalog`（`tools/gen_alarm_catalog.py` 从 doc/ 下三份 CSV 生成
+`ui_alarm_catalog_gen.cpp`，英文翻译表 `doc/alarm_catalog_en.csv` 可覆写，未翻译的
+用 macro 名转写兜底）+ 报文 detail 组合；查不到的 code/detail 降级显示原始编号
+**绝不丢弃**（固件可能比字典新）。历史落盘 `/home/messages/alarm_history.jsonl`
+（上限 200 条，只存原始字段，文案加载时按当前字典重新生成）。**目录由
+`ui_alarm_state_init()` 自己 `create_directories`**——UI 可能比 Media 先起，不能
+指望别的进程建；不建的话 `fopen` 失败会把历史整段静默丢掉（现已补 `UPC_LOG_ALARM_STATE`
+错误日志）。这里刻意**不放在 `/home/media` 下**：报警历史不是媒体，早先挂在那儿只是
+为了借 `UPC_MEDIA_ROOT` 那个宏，现已解除对 `media_paths.hpp` 的依赖。
+
+复位：`ui_alarm_request_reset(code)` → `UI_Alarm_Reset_Req` → Glavo 组 0x82 帧下发。
+仅 `clear_mode=RESET` 受理；受理后置 `reset_pending`，等 MCU 下一帧上报翻转，10s
+无回报自动解除 pending（按钮恢复可点）。
+
+**快照对齐（`GLAVO_Alarm_Snapshot_Ntf`，0xA3/0x81）**：单条上报只在状态变化时发，
+所以 UI 重启 / 串口重连 / SOC 比 MCU 后启动这几种情况下，之前就亮着的报警**再也收不到**，
+本地表会和 MCU 真实状态脱节。快照给的是此刻的全量位图，收齐后把本地这份副本刷一遍：
+
+- **攒帧**：快照按 32 条一组分片，`word_count` 帧才算一批。`word_count` **不能写死**
+  ——报警表随固件增长，当前 66 条 CONDITION 要 3 帧，而
+  `doc/主控板串口通信协议 - 信息报警命令详表.csv` 的注释还停在 2，所以一律读帧里的值。
+  按 `word_index` 填槽、bitmask 记已收，不依赖到达顺序；重复 index、`word_count` 变了、
+  或攒超 2s，任一命中就整批作废重来——**半套位图会把没收到那几组的报警误判成已解除**；
+- **对齐**：快照亮着而本地没有的补进来，本地有而快照说不亮的转历史。补进来的那条只有
+  code 可用，`severity` / `clear_mode` 走字典兜底（`报警&事件表.csv` 生成的
+  `severity_fallback` / `clear_mode_fallback`），`detail` 记 0、时刻记补齐时刻——
+  这几样快照里根本没有。字典查不到就按最保守的一档：warning 且不给复位钮；
+- 反向清理**只认受快照管辖的 code**（`ui_alarm_snapshot_slot_of()` 查得到位图槽位）。
+  EVENT 不占 bit、字典比固件旧时新码也没有槽位，这些"快照里没提"是信息缺失不是状态变化，
+  照清会把真报警抹掉；
+- 已在表里的条目只校正生命周期（ACTIVE ↔ RTN_LATCHED），
+  `severity` / `clear_mode` / `detail` 保持单条上报给的值——那才是权威数据。
+
+⚠ 协议里**没有 SOC→MCU 的快照查询命令**（`信息报警命令详表.csv` 只写了「MCU 主动上报
+快照后 SOC/HMI 应以最新快照刷新显示」），所以 UI 这边纯被动收。补齐能不能真的发生，
+取决于 MCU 重连后会不会主动推一轮——这条待 MCU 组确认；若确认不推，得请他们加一条
+查询命令，UI 侧再在 `ui_alarm_state_init()` 和串口重连回调里各发一次。
+
+打印融合三处（1124/1125 未复位时 MCU 拒绝新打印）：
+
+- **入口拦截**：`control.cpp` 的 `on_detail_start_print()` 先查
+  `ui_alarm_print_blocker()`，有阻断报警弹「Unable to start print」，可复位的给
+  Reset 直达键；
+- **结果页失败原因条**：终止态浮层顶部横条（`page_user_home.cpp` 的
+  `build_result_alarm_bar()` / `sync_result_alarm_bar()`），Reset 钮三态随
+  `ui_alarm_add_observer()` 回调刷新；
+- **会话期抑制**：进/出打印态调 `ui_alarm_set_print_session()`，会话内 1124/1125
+  不上浮层卡（结果页已给原因 + Reset），退出时仍未解除的补回浮层。
+
+消息页视觉基线是稿 3033:5247（列表）/ 3063:7338（左滑删除）/ 3201:9570（详情抽屉），
+几处稿→工程的换算与取舍记在这里，改版前先看：
+
+- 卡片填充稿上是白 4%，实现用**等效的不透明底**（`user_color_panel`，同历史页）：
+  半透明会让垫在卡片下层的删除圆钮直接透出来（它靠卡片挡着，左滑才该露），
+  且每帧与背景混合、滚动时开销大。1px 白 10% 描边保留，玻璃边的观感还在。
+  按下态改**底色**抬一档（`user_color_panel_alt`）而不是调 `bg_opa`——调透明度
+  同样会透出删除钮。内边距与列间距取 `USER_PAD`（稿 24），圆角 `USER_BTN_RADIUS`（稿 8）；
+- 左侧徽标是**实色圆角方块 + 白图标**（稿 32 见方 / 18 图标），与左下通知卡
+  `ui_notice_stack::build_card()` 同款，两处观感必须一致；
+- 右缘留 `content_right_pad()` 给悬浮翻页钮，取值与历史页同源，两页卡片右缘对齐；
+- 左滑删除钮是红色渐变（`#FC3D3E→#FF6667`）圆钮，右缘与卡片右缘齐平，
+  卡片左移 `swipe_reveal_px()` = 钮直径 + `USER_PAD`；
+- 左滑机制见下方「左滑删除：跟手拖动」——消息页与历史页共用同一套写法；
+- **删除后不跳回顶部**：`rebuild_list()` 重建前记 `lv_obj_get_scroll_y()`、重建后
+  `lv_obj_update_layout()` 再按 `lv_obj_get_scroll_bottom()` 夹着滚回去。
+  `lv_obj_clean` 会把滚动位置清零，不接这一手删一条就弹回顶部；夹取也不能省——
+  删掉末尾几条后列表变矮，旧滚动量越界会停在空白上。两页都是这么做的；
+- **三 Tab + Manage 行**（稿 3033:5247 新版，结构与打印历史页同构）：`All` / `Device` /
+  `System`，选中项白字 + 文字半宽的主色下划线，行下一条通栏分隔线。分档判据是**码段**：
+  `DeviceEventCode::UiWearMask`(512) 以上是「UI 本地事件，后端不应发送」，正好是天然
+  分界——**Device** = MCU 报警（码 ≥1000）+ 后端设备事件（码 <512），**System** = 前端
+  本地提示（512..999）。稿上 System 那栏画的是 OTA 升级、账号共享，**本工程还没有这类
+  数据源**，所以该 Tab 目前只有打印结束那两条本地提示，多数时候是空的；也因为只有报警
+  历史可删、而报警属于 Device，**System Tab 下不会出现 Manage 按钮**。
+  切 Tab 会退出管理态并回到列表顶部。稿上 Manage 摆在 x=1068，既不对齐卡片右缘也不对齐
+  翻页钮，这里按工程惯例用 `content_right_pad()` 对齐卡片右缘；
+- **管理（多选）模式**：入口是 Tab 行右侧的 Manage。
+  只有历史条目可删，所以不可删的卡片不出复选框、点了没反应（判据 `MsgItem::deletable`），
+  管理态期间左滑让位给勾选。批量删除按下标**从大到小**执行——
+  `ui_alarm_history_delete_at()` 会把后面的条目前移，正序删第二条就删错人了。
+  注意：管理态下若有新消息到达会触发列表重建，勾选状态随之丢失（同历史页）；
+- 详情抽屉建在 **`lv_layer_top()`** 上、宽 49%（稿 632/1280，整屏为基准）：稿上抽屉
+  是满高的，它自带的顶栏顶替右半屏那段状态栏。**不能挂在页面根节点上**——那样上边会
+  被 `content_panel_` 的 `pad_top` 顶下来，且常驻设备条画在页面之上会压住抽屉头。
+  代价是遮罩连侧栏一起盖住，开着抽屉点侧栏是先关抽屉（标准模态，已确认）。
+  layer_top 不随页面隐藏销毁，靠 `page_user_message_exit()` 里的 `drawer_close()` 收尾；
+  抽屉顶栏高度取 `USER_TOPBAR_H`，标题才与左半屏设备条上的设备名同一基线；
+- 稿是中文的，工程 UI 统一英文（Montserrat 字库），文案不照抄（"通知详情" →
+  "Notification Details"，"确认解障" → Reset 三态）；
+- 稿上抽屉里 448×280 那块是处理步骤图，**暂无图片资源故不画**；正文字号维持比标题
+  小一档（稿是同号 20，1024 屏上同号一屏只放得下一条半）。
+
+**模拟数据一律带 `[SIM] ` 前缀**：调试页两个注入开关造出来的 9 条假消息，标题前面
+都加 `[SIM] `，真消息一个字不改，联调时一眼分得清。报警侧在 `compose_text()` 里加
+（浮层卡 / 消息页列表 / 详情抽屉 / 历史读的都是这一份文案，一处加完四处都有）；
+设备事件侧走 `ui_message_debug_push()`（文案仍取自码表，只是套上前缀）。
+**假报警还不落盘**：`history_save()` 跳过 `simulated` 条目，重启即净，不用再手删
+`/home/messages/alarm_history.jsonl`。同一个码后来收到真报文会自动摘掉 `[SIM]`。
+
+联调：MCU 不发真报警时用调试页 Other → Other Switches → `Alarm Inject`
+（`ui_alarm_debug_inject()` 绕过总线直走上报路径，造 5 条假报警：覆盖阻断 /
+RTN_LATCHED / 自动清除 / EVENT 四条显示路径，外加一条 critical 把 information/
+warning/error/critical 四档等级配色凑齐——等级不进字典、以报文为准，不造就看不到；
+关掉开关注入 NORMAL 帧模拟解除）。
+注意注入条目按 Reset 会真发 `UI_Alarm_Reset_Req` 到串口，MCU 不回帧时 10s 后
+pending 自动解除——正好顺带验超时路径。
+
+### 左滑删除：跟手拖动（消息页 + 历史页共用）
+
+两页各有一份实现（`page_user_message.cpp` / `page_user_history.cpp` 的「左滑删除」
+一节），写法必须保持一致——**都不要改回 `LV_EVENT_GESTURE`**，那条路踩过两个坑：
+
+1. **门槛太高，触屏基本划不出来**。`indev_gesture()` 要求「每帧位移 ≥
+   `gesture_min_velocity`(3px) 且累计 > `gesture_min_distance`(50px)」，慢一帧累加器
+   就被清零，手指慢慢拖永远触发不了，只有快速甩才算数；
+2. **手势不吞掉释放时的 `LV_EVENT_CLICKED`**（`lv_indev.c` 释放分支只看有没有发生
+   滚动），卡片上再挂点击就会一松手把刚划开的卡片当点击关回去。
+
+现在的写法：
+
+- `PRESSED` 记起点与位移基准并清状态，`PRESSING` 算 dx/dy，横向超过 8px 才起拖，
+  起拖瞬间做方向锁定（`|dy| > |dx|` 判给列表滚动，本次按压不再拖）；
+- 拖动中 `translate_x` 夹在 `[-swipe_reveal_px(), 0]`，`RELEASED` / `PRESS_LOST`
+  过半吸附、否则弹回；
+- 拖完置 `just_dragged` 挡掉紧随其后的那次 `CLICKED`，**在下次 `PRESSED` 清掉**而不是
+  在 `CLICKED` 里清——`PRESS_LOST` 收场那次没有 CLICKED 来消费，不然会吃掉下一次点击；
+- **轴向排他**：起拖后清掉卡片的 `LV_OBJ_FLAG_SCROLL_CHAIN_VER`，松手（含 `PRESS_LOST`）
+  无条件加回来。不这么做的话，`find_scroll_obj()` 每帧会拿**整次按压的累计位移**重新判
+  方向，斜着拉一下（竖向累计超过横向且 >`scroll_limit`）列表就开始滚、卡片被弹回原位。
+  卡片自身不可滚，清掉这个标志后滚动搜索会断在卡片这层（`lv_indev_scroll.c:330`），
+  够不到列表。代价：划开一半不能直接改滚列表，得先抬手（同 iOS 列表）；
+- 起拖之前仍每帧查 `lv_indev_get_scroll_obj()`，列表真滚起来就取消拖动并弹回；
+- 靠卡片自带的 `LV_OBJ_FLAG_PRESS_LOCK`（`lv_obj_create` 默认带）保证卡片滑出手指
+  下方也不丢按压——**别在卡片上清这个标志**；
+- 命中目标要唯一：消息页把卡内子容器的 `CLICKABLE` 全清掉；历史页的缩略图是独立播放
+  入口不能清，改为把三个拖动回调在卡片和缩略图上各挂一份（`attach_card_drag()`），
+  且 `on_thumb_click()` 同样要判 `just_dragged`。
 
 ### 摄像头整屏预览
 
@@ -174,6 +429,26 @@ while (!g_shutdown_requested) {
 用户层弹窗标题下的主色装饰线已全局去掉
 （`ui_modal_dialog_cfg_user()` 里 `accent_underline = false`）。
 
+### 按钮样式基线
+
+选文件页详情列那两枚按钮是全工程的样式基准，其余弹窗按钮都按它对齐过一轮：
+
+- **几何**：高 `USER_DLG_FOOTER_BTN_H`（1024=51 / 1280=64 / 1920=96），圆角
+  `USER_BTN_RADIUS`（6 / 8 / 12）。**弹窗里的按钮一律不用 `USER_DLG_RADIUS`**——那是卡片
+  圆角（1024 档 16），压在 51px 高的按钮上会明显比选文件页更圆。
+- **主按钮**：`user_color_accent` 实心 + 24px accent 阴影 `LV_OPA_30`。满宽的主按钮
+  （门弹窗、放版弹窗、缺粉弹窗）左右两侧的光会被弹窗内容区裁平，只剩上下能看见，这是
+  接受的取舍；置灰态（`enabled=false`）连阴影一起去掉。
+- **副按钮**：`user_color_text` 压到 opa 10（稿 `rgba(255,255,255,0.04)`）、无描边，按下
+  态 opa 30。四处副按钮工厂（`make_dlg_wide_ghost_button`、`ui_user_make_confirm_footer_btn`
+  的 `filled=false`、`ui_user_make_footer_ghost_btn`、`ui_xfr_dialog` 的 `make_secondary_btn`）
+  现在是同一套色值，区别只在满宽 / 等分 / 定宽。
+- **`user_style_btn_primary()` 是胶囊，不要改它**：调试页那几颗按钮还在原样用它的全圆
+  形状。用户层三处（选文件页 `Confirm Print`、设置页两个密码弹窗的 `Enter`/`Connect`）
+  只是借它的主色和外发光，都在调用点就地覆盖掉 `LV_RADIUS_CIRCLE`。历史页空态的
+  `Start Print` 走的是另一条路：`ui_user_make_primary_pill_btn()`，那枚按稿就是渐变胶囊
+  （首页那枚同款胶囊已随稿 5277:11571 换成左下的入口方块，见「首页待机布局」）。
+
 ## 页面（`lib/pages/`）
 
 | Page ID | 文件 | 说明 |
@@ -182,10 +457,45 @@ while (!g_shutdown_requested) {
 | `user_history` | `page_user_history.*` | 打印历史：三 Tab + Storage 条 + 日期分组卡片 + 管理态批量删除 + 左滑删除 |
 | `user_control` | `page_user_control.*` | skeleton 占位 |
 | `user_settings` | `page_user_settings.*` | 设置列表 + 开发者密码弹窗 |
-| `user_message` | `page_user_message.*` | skeleton 占位 |
+| `user_message` | `page_user_message.*` | 消息中心：日期分组混排列表（MCU 报警 + 设备事件）+ 左滑删除历史 + 管理态批量删除 + 详情抽屉（Reset 三态）。按稿 3033:5247 / 3063:7338 / 3201:9570 实现 |
 | `user_timelapse` | `page_user_timelapse.*` | 延时摄影播放器（隐藏页，历史缩略图进入；全屏 `lv_layer_top`） |
 
 注册仅在 `ui_app.cpp`；打印流程走 `control_*`，pages 不直接订阅 MsgBus。详见 `lib/pages/README.md`。
+
+### 首页待机布局（稿 5277:11571）
+
+`g_normal_area` 一层浮在整机背景大图之上，四角各摆一块，全是 `FLOATING`：
+
+| 位置 | 控件 | 说明 |
+|------|------|------|
+| 左上 | HOME 空气质量卡 `build_home_card()` | PM2.5/PM10 可切换 + 四档色条 + 游标。顶距 `USER_TOPBAR_H + USER_PAD_LG*2`（三档 320/216/168，对应稿上等比折算的 312/208/166），不再垂直居中——左下要给入口方块腾位 |
+| 右侧 | Cabin condition `build_cabin_panel()` | 温度/氧浓度/湿度/气压**四行**（稿上舱内 PM2.5 那行已删，它只在打印态那条 5 列环境小条里保留一列） |
+| 左下 | 入口方块 `build_action_tiles()` | `Monitor` + `Start Print`，见下 |
+| 右下 | 开门滑块 `build_door_floating()` | `SLIDE TO OPEN`（三处开门滑块统一这个文案：首页、监控页、放版弹窗；取件那条仍是 `SWIPE TO COLLECT`） |
+
+**右侧面板的引线**：稿上分隔线比标题和数据行的左缘再往左探出一截（三档 104/72/58 =
+`USER_PAD_LG + USER_PAD`），左端坐一颗空心圆环（`USER_STATUS_DOT_SZ * 4/3`，白 30% 描边、
+无填充，与线同色）。做法是面板整体加宽到 31%（文字区仍是原来的 28%），分隔线独占全宽，
+标题靠 `margin_left` 缩回去、四行数据套一层 `pad_left` 容器缩回去——数据行是 `LV_PCT(100)`
+宽的，直接加左边距会连宽度一起推出右边缘。环与线在一条 flex 行里紧挨着排，线用 `flex_grow`
+吃掉剩余宽度；**别改用「`PCT(100)` + `pad_left`」**，`lv_obj_align()` 和百分比都是相对内容区
+算的，加了 padding 连圆环一起被推走。
+
+**左下两块入口方块**（稿 5277:11454，接走原顶栏那颗「查看监控」圆钮与「Start Print」胶囊）：
+
+| 项 | 取值 |
+|---|---|
+| 尺寸 | 窄块 `USER_HOME_TILE_SZ` 见方（192/128/102），宽块两倍宽；高度必须写死，稿上是 `space-between`（图标贴顶、文字贴底、中间留富余），`SIZE_CONTENT` 出不来 |
+| 圆角 | `USER_BTN_RADIUS`（稿上 8@1280 正是这一档） |
+| 图标 | `ic_camera` / `ic_folder`，边长取块的 1/4（稿上 32@1280） |
+| 窄块底色 | `0x757575` + `LV_OPA_20`，与它替代的那颗顶栏圆钮同一个值——换了形状但材质不变 |
+| 宽块底色 | `kCtlBlueA → kCtlBlueB` 水平渐变，与打印态底部圆钮共用同一对停靠点（稿上都是 139°） |
+| 描边 | 稿上是渐变描边，LVGL 画不了，各取中间值当单色：窄块白 20%、宽块白 30%。窄块那圈 inset 阴影同样画不出来，略去 |
+| 文字 | 窄块单行居中；宽块两行**右对齐**——提示行 `caption_sm` + 白 50%，主标题 `text` 档。图标左上、文字右下是对角排布，不是常见的左对齐 |
+
+宽块提示语 `Place the build plate first` 是**静态**文案，不跟打印板状态联动。1024 档这行卡得
+紧：块内可用宽 `2×102 − 2×USER_PAD = 160`，该串按 `caption_sm`(12) 实测 153，只剩 7px 余量。
+改文案或 `USER_PAD` 之前先量一遍，否则会被裁（`USER_HOME_TILE_SZ` 的注释里也记了这条）。
 
 ### 打印态浮层（六态一套）
 
@@ -198,20 +508,24 @@ while (!g_shutdown_requested) {
 
 | 位置 | 控件 | 说明 |
 |------|------|------|
-| 左下 | stats-card | 缩略图 + 徽标行（图标/状态词/百分比）+ 进度条 + TIME/CONSUMABLES 两列 |
-| 左下（卡上方） | 提示条 `g_pn_root` | 仅结束态出现，两个变体：催吹粉（蓝）/ 提醒戴口罩（橙） |
+| 左下 | stats-card `g_pc_card` | 缩略图 + 徽标行（图标/状态词/百分比）+ 进度条 + TIME/CONSUMABLES 两列 |
+| 右上（环境区下方） | 通知浮层 | **不在本层**，是全局的 `ui_notice_stack`；进出打印态时按环境区高度把它往下压 |
 | 右下 | 运行组 `g_ctl_run` | 暂停·恢复钮 + 终止钮；与取件组互斥 |
 | 右下 | 取件组 `g_ctl_collect` | 吹粉钮 + `SWIPE TO COLLECT` 胶囊；与运行组互斥 |
-| 右中 | 拍照钮 `g_result_photo_btn` | 六态都有 |
-| 右上 | HOME PM2.5 卡 + 5 列环境条 | 六态都有 |
+| 右中 | 拍照钮 `g_result_photo_btn` | 六态都有；`make_glass_round_btn()` + `ic_photo` |
+| 右上 | HOME PM2.5 卡 + 5 列环境条 | 六态都有；`build_env_wrap()`，右边缘与拍照钮同齐 |
 
 两个状态量决定外观，改哪个都走 `apply_print_phase()` 一处刷新：
 
 - `g_print_phase`（徽标四档）：`PRINTING...` 蓝 / `PAUSE` 蓝 / `PRINT TERMINATED` 橙 /
   `PRINT COMPLETE` 绿。徽标色同时是百分比色与进度条填充色。
 - `g_purify_stage`（结束态下的吹粉子阶段，走 `purify_stage_set()`）：`IDLE` / `RUNNING`
-  （吹粉钮图标 2s 一圈逆时针转、胶囊文案换 `AIR PURIFYING...`）/ `DONE`（提示条换口罩提醒）。
+  （吹粉钮图标 2s 一圈逆时针转、胶囊文案换 `AIR PURIFYING...`）/ `DONE`（通知换口罩提醒）。
   按稿 4234:6385，吹粉中**不改徽标**——吹粉态只靠状态栏与胶囊文案表达。
+
+稿上卡片上方那条提示（结束态两个变体：催吹粉 / 提醒戴口罩）不由本层画：
+`apply_print_phase()` 把它们推进消息中心，态一变就撤回，见「消息中心与通知浮层」。
+这样离开首页也看得到，且与后端上报的告警排在同一摞里。
 
 两列语义分态（`TIME` 列的 caption 由 `apply_print_phase()` 改写）：
 
@@ -242,8 +556,26 @@ ARGB8888 图，`make_ctl_backdrop()` 直接贴，按 profile 三档挑（`ctl_ba
 三档 btn 为 96 / 64 / 51，是稿（1280×800，btn 64）按屏宽等比折算，故 1280 档得到的
 168×80 与 488×80 正是稿的原尺寸、零重采样。**改 `USER_PRINT_CTL_BTN` 或
 `USER_PRINT_PILL_W` 必须同步改脚本的 `PROFILES` 并重跑**，否则底衬与按钮对不齐。
-注意 btn 同时还是右侧中部拍照钮的直径（稿上两者同尺寸），以及右上环境条为让开它
-所留的右边距。
+注意 btn 同时还是右侧中部拍照钮的直径（稿上两者同尺寸）。
+
+### 右上环境区（打印态 / 待机监控共用）
+
+`build_env_wrap()` = HOME PM2.5 卡（稿 4231:5740）+ 5 列环境条（稿 4231:5749）。
+五列 caption 全是文字（`Pm 2.5` / `Temp.` / `O2` / `Humidity` / `Pressure`），不是图标。
+整体贴右上、退 `USER_PAD`，与右侧中部的拍照钮右边缘齐。
+
+打印态浮层与待机监控层是**同时建、靠显隐切**的两层，所以这一块的 label 句柄不能是
+单例——后建的会覆盖先建的，先建那层从此收不到刷新。八个句柄收进 `env_block_t`，
+`g_env_print` / `g_env_monitor` 各一份，都登记在 `kEnvBlocks[]` 里；
+`result_pm_card_update()` 和快照回调遍历这个数组，两份一起写。
+
+### 待机「查看监控」（稿 3122:13224）
+
+右上环境区、右侧中部拍照钮都与打印态共用上面那套构造函数，几何配色天然一致。
+左下角是同款玻璃圆钮（图标换 `ic_home`）退出监控，右下角保留 `SLIDE TO OPEN` 滑块。
+
+拍照钮的图标是 `ic_photo`（照相机，稿 3847:9440），不是首页顶栏「查看监控」入口那枚
+`ic_camera`（摄像机）——两处语义不同，别图省事复用。
 
 时序：
 
@@ -392,7 +724,7 @@ rongsu_camera 经主 IPC（/tmp/upc_camera.sock）SCM_RIGHTS 附带 dma_buf fd �
 
 | 组件 | 文件 | 职责 |
 |------|------|------|
-| `page_user_history` | `pages/page_user_history.*` | 读 `/home/media/video/config.json`（`common/fs_manifest/print_history_manifest`）→ 按 `start_unix` 倒序、按自然日分组的卡片列表；缩略图 `A:/home/media/video/{thumb}`（RTHM 解码，`LV_IMAGE_ALIGN_COVER`）；**Album** 扫 `/home/media/photo/*.png`，缩略图优先同名 `.rthm`；顶部三 Tab + Storage 容量条；管理（多选）模式批量删除；上下翻页；**左滑删除**（清除卡片默认 `GESTURE_BUBBLE` 使手势落到卡片）→ History/Timelapse **按类型独立删除**后重写 config.json；Album 删 PNG + 配对 `.rthm` |
+| `page_user_history` | `pages/page_user_history.*` | 读 `/home/media/video/config.json`（`common/fs_manifest/print_history_manifest`）→ 按 `start_unix` 倒序、按自然日分组的卡片列表；缩略图 `A:/home/media/video/{thumb}`（RTHM 解码，`LV_IMAGE_ALIGN_COVER`）；**Album** 扫 `/home/media/photo/*.png`，缩略图优先同名 `.rthm`；顶部三 Tab + Storage 容量条；管理（多选）模式批量删除；上下翻页；**左滑删除**（跟手拖动，见「左滑删除：跟手拖动」一节）→ History/Timelapse **按类型独立删除**后重写 config.json；Album 删 PNG + 配对 `.rthm` |
 | `page_user_timelapse` | `pages/page_user_timelapse.*` | 全屏播放页（建于 `lv_layer_top()`）：受 `UPC_TIMELAPSE_PLAYBACK_PNG` 控制——默认 PNG 序列；`=0` 时优先 `timelapse.mp4`（失败回退 PNG）；拖动预览为后台小图 scrub，松手后再 settle 主画面 |
 
 - **进入/退出**：历史页缩略图点击 → `page_user_timelapse_set_source(目录,mp4路径,标题,时间)` + `switch_to("user_timelapse")`；关闭 → `switch_to("user_history")`。

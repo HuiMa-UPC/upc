@@ -7,10 +7,13 @@
 extern "C" {
 #endif
 
-/** 用户信息（消息/通知）页：当前为骨架，后续接报警上报 */
+/** 消息中心页：设备事件 + MCU 报警混排列表 + 详情抽屉（Reset） */
 lv_obj_t *page_user_message_create(lv_obj_t *parent);
 
 void page_user_message_refresh(bool force);
+
+/** 离页：关抽屉、收起左滑、停止观察者驱动的重建 */
+void page_user_message_exit(void);
 
 #ifdef __cplusplus
 }
