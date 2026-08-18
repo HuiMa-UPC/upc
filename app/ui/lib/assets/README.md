@@ -7,7 +7,7 @@
 | 文件 | 说明 | 出处 |
 |------|------|------|
 | `home_assets.h` + `home_assets.c` | 首页环境指标图标 `ic_pm` / `ic_temp` / `ic_o2`，并声明 `home_bg` | `tools/gen_home_assets.py`（脚本已不在 `tools/`） |
-| `home_bg.c` | 首页背景图（1024×640 RGB565，符号 `home_bg`，声明在 `home_assets.h`） | `tools/gen_home_bg.py` |
+| `home_bg.c` | 首页背景图（1024×640 RGB565，符号 `home_bg`，声明在 `home_assets.h`）。源节点 3752:9081「背景图2」；脚本里 20px 左移与右侧镜像补边的来由见 `app/ui/UI.md`「首页待机布局」 | `tools/gen_home_bg.py`（输入 `tools/_bg_tmp/home_bg_src.png`） |
 | `home_metric_icons.h` / `.c` | A8 单色图标：`ic_home` `ic_switch` `ic_cabin` `ic_aqi` `ic_humidity` `ic_pressure` `ic_purify` `ic_info` `ic_clock` `ic_cube` `ic_warning` `ic_layers` `ic_expand` `ic_alert` `ic_printer`；打印态那批 `ic_play` `ic_door_solid` `ic_photo` `ic_badge_spin` `ic_badge_play` `ic_badge_check` `ic_badge_alert` `ic_toast_info` | `tools/gen_home_metric_icons.py`（**只覆盖前 9 枚**，见下方警告） |
 | `notice_badge_icons.h` / `.c` | 通知等级徽标图标，每档屏一版：`ic_notice_alert_{14,18,27}` `ic_notice_info_{14,18,27}` | `tools/gen_notice_badge_icons.py` |
 

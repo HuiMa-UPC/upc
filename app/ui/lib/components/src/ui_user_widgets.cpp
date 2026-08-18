@@ -163,13 +163,14 @@ lv_obj_t *ui_user_make_icon_img(lv_obj_t *parent, const lv_image_dsc_t *src,
 }
 
 lv_obj_t *ui_user_make_primary_pill_btn(lv_obj_t *parent, const lv_image_dsc_t *icon,
-                                        const char *text, lv_event_cb_t cb)
+                                        const char *text, lv_event_cb_t cb,
+                                        int32_t width, bool spread)
 {
     lv_obj_t *btn = lv_button_create(parent);
     lv_obj_remove_style_all(btn);
     /* 比通用主按钮再高一点（×5/4，贴近 Figma 64px 胶囊），避免过扁。 */
     lv_obj_set_height(btn, USER_BTN_PRIMARY_H * 5 / 4);
-    lv_obj_set_width(btn, LV_SIZE_CONTENT);
+    lv_obj_set_width(btn, width > 0 ? width : LV_SIZE_CONTENT);
     /* 蓝色对角(45°)渐变（对齐 Figma #4054FD → #4D80EE），带少量半透明玻璃感，
      * 与首页滑动解锁材质统一。bg_grad 只存指针，故渐变描述符用函数内 static。 */
     static lv_grad_dsc_t s_grad;
@@ -200,7 +201,8 @@ lv_obj_t *ui_user_make_primary_pill_btn(lv_obj_t *parent, const lv_image_dsc_t *
     lv_obj_set_style_pad_ver(btn, USER_PAD_SM, 0);
     lv_obj_set_style_pad_column(btn, USER_PAD_SM, 0);
     lv_obj_set_flex_flow(btn, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(btn, LV_FLEX_ALIGN_CENTER,
+    lv_obj_set_flex_align(btn,
+                          spread ? LV_FLEX_ALIGN_SPACE_BETWEEN : LV_FLEX_ALIGN_CENTER,
                           LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     if(cb) {
         lv_obj_add_event_cb(btn, cb, LV_EVENT_CLICKED, nullptr);

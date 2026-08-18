@@ -219,7 +219,7 @@ lv_obj_t *g_cab_prs_unit  = nullptr;
 lv_obj_t *g_page_root    = nullptr;
 lv_obj_t *g_normal_area  = nullptr;   /**< 中央设备 + 左右数值（打印中隐藏） */
 lv_obj_t *g_door_float   = nullptr;   /**< 浮动开门滑块（打印中隐藏） */
-lv_obj_t *g_action_tiles = nullptr;   /**< 左下两块入口方块（打印中/监控中隐藏） */
+lv_obj_t *g_action_tiles = nullptr;   /**< 左下两枚入口胶囊那一行（打印中/监控中隐藏） */
 ui_slide_unlock_t *g_door_slide = nullptr; /**< 首页"滑动开门"控件 */
 
 /* ---------- 打印态：摄像头整屏 + 六态浮层 ---------- */
@@ -433,10 +433,10 @@ void on_camera_btn_click(lv_event_t * /*e*/)
 
 /** 顶部占位带：左半边（设备名 + 状态点 + 状态文字）由外壳的常驻条 ui_device_bar
  *  画，右半边原有的"查看监控"圆钮与"Start Print"胶囊在稿 5277:11571 里已经取消，
- *  改成左下两块入口方块（见 build_action_tiles）。
+ *  改成左下两枚入口胶囊（见 build_action_tiles）。
  *
  *  这条带子现在没有任何内容，但**不能删**：本页根节点是纵向 flex，其余几层
- *  （normal / print / monitor / 开门滑块 / 入口方块）全是 FLOATING 不占格位，
+ *  （normal / print / monitor / 开门滑块 / 入口胶囊）全是 FLOATING 不占格位，
  *  它是唯一撑起那一格的子节点，删掉整页纵向布局要重新验证。行高仍取
  *  USER_TOPBAR_H，与常驻条同高、同起点。 */
 lv_obj_t *build_topbar(lv_obj_t *parent)
@@ -458,10 +458,10 @@ lv_obj_t *build_topbar(lv_obj_t *parent)
     return bar;
 }
 
-/* 蓝/红对角渐变（稿 4231:5721 / 4232:6251 的底部圆钮，139.4° 两停靠点；稿
- * 5277:11463 的首页"Start Print"方块用的是同一对蓝停靠点，故提到这里共用）。
- * LVGL 的简易渐变只有水平/垂直两向，斜向用水平近似——圆钮只有 64px 看不出角度差，
- * 方块 256×128 会略有差别，仍按同一近似走以免两处观感分叉。 */
+/* 蓝/红对角渐变（稿 4231:5721 / 4232:6251 的底部圆钮，139.4° 两停靠点）。
+ * LVGL 的简易渐变只有水平/垂直两向，斜向用水平近似——圆钮只有 64px 看不出角度差。
+ * 首页左下那枚"Start Print"胶囊是同一对蓝停靠点，但它走公共组件
+ * ui_user_make_primary_pill_btn（那里另有一份真斜向 lv_grad_dsc_t），不吃这两个值。 */
 constexpr uint32_t kCtlBlueA = 0x4054fd;
 constexpr uint32_t kCtlBlueB = 0x4d80ee;
 constexpr uint32_t kCtlRedA  = 0xfd4242;
@@ -471,7 +471,7 @@ constexpr uint32_t kCtlRedB  = 0xfe6868;
  *  首页 normal 视图（对齐 Figma 5277:11571 待机中）
  *    左上：HOME 空气质量磨砂卡（PM2.5/PM10 可切换 + 四档色条 + 游标）
  *    右侧：Cabin condition 悬浮 4 行（TEMPERATURE/O2/HUMIDITY/PRESSURE）
- *    左下：两块入口方块（Monitor / Start Print）
+ *    左下：两枚入口胶囊（Monitor / Start Print，稿 5339:27275）
  *    右下：滑动开门
  * ========================================================================== */
 
@@ -570,7 +570,7 @@ lv_obj_t *build_home_card(lv_obj_t *parent)
     lv_obj_set_style_border_color(card, lv_color_white(), 0);
     lv_obj_set_style_border_opa(card, LV_OPA_10, 0);
     lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
-    /* 稿 5277:11664 把这张卡摆在上半区（左下让给两块入口方块），不再垂直居中。
+    /* 稿 5277:11664 把这张卡摆在上半区（左下让给两枚入口胶囊），不再垂直居中。
      * 顶距 USER_TOPBAR_H + USER_PAD_LG*2 在三档分别是 320/216/168，对应稿上等比
      * 折算的 312/208/166——不写死 208，换档位不用回来补数字。 */
     lv_obj_align(card, LV_ALIGN_TOP_LEFT, USER_PAD_LG,
@@ -813,7 +813,11 @@ lv_obj_t *build_main_area(lv_obj_t *parent)
     lv_obj_set_style_bg_opa(area, LV_OPA_TRANSP, 0);
     lv_obj_clear_flag(area, LV_OBJ_FLAG_SCROLLABLE);
 
-    /* 整机背景大图：铺满 area、等比 cover、居中（源 1120x700） */
+    /* 整机背景大图：铺满 area、等比 cover、居中（源 1024×640，见 tools/gen_home_bg.py）。
+     * 注意 area 只覆盖内容区（本页根节点的 pad_left 让开了侧栏），而稿里这张图是铺满
+     * 整屏、侧栏作 20% 黑浮层压在它上面的——差异导致设备被相对推右，靠资源里那 20px
+     * 左移补偿，详见 app/ui/UI.md「首页待机布局」。1024 档 COVER 落到 0.9375：图缩成
+     * 960×600 后左右各裁 8px。 */
     lv_obj_t *bg = lv_image_create(area);
     lv_image_set_src(bg, &home_bg);
     lv_obj_set_size(bg, LV_PCT(100), LV_PCT(100));
@@ -826,11 +830,11 @@ lv_obj_t *build_main_area(lv_obj_t *parent)
     return area;
 }
 
-/** 右下角浮动 "Slide to Open" 滑动解锁条（真正可拖动；滑到底触发开门） */
+/** 右下角浮动 "Slide to Unlock" 滑动解锁条（真正可拖动；滑到底触发开门） */
 lv_obj_t *build_door_floating(lv_obj_t *parent)
 {
     ui_slide_unlock_cfg_t cfg = {};
-    cfg.hint_text  = "SLIDE TO OPEN";   /* 箭头由控件绘制 3 个 chevron */
+    cfg.hint_text  = "SLIDE TO UNLOCK";   /* 箭头由控件绘制 3 个 chevron */
     cfg.on_unlocked = on_door_slide_unlocked;
     cfg.user_data  = nullptr;
     /* 首页开门滑块放大 ~1.33×（更贴设计稿 432×96 的大胶囊，且更好按）。
@@ -850,61 +854,61 @@ lv_obj_t *build_door_floating(lv_obj_t *parent)
 }
 
 /* ---------------------------------------------------------------------------
- *  左下两块入口方块（稿 5277:11454）。稿 5277:11571 起顶栏右侧那颗"查看监控"圆钮
- *  与"Start Print"胶囊取消，两个入口都搬到这里：
- *    ┌──────────┐ ┌──────────────────────┐
- *    │ [摄像机]   │ │ [文件夹]               │
- *    │           │ │   Place the build...  │
- *    │  Monitor  │ │           Start Print │
- *    └──────────┘ └──────────────────────┘
- *  窄块是灰玻璃、宽块是蓝色对角渐变，宽块正好两倍宽。两块都按稿走 space-between：
- *  图标贴顶、文字贴底，中间的富余由布局分配，所以高度必须写死（USER_HOME_TILE_SZ）
- *  而不能用 SIZE_CONTENT。
+ *  左下两枚入口胶囊（稿 5339:27275）。稿 5277:11571 起顶栏右侧那颗"查看监控"圆钮
+ *  与"Start Print"胶囊取消、两个入口搬到左下；稿 5339:27275 又把它们从方块改成
+ *  一行等高胶囊：
+ *    ┌───────────────────┐ ┌──────────────────────────┐
+ *    │ [摄像机] Monitor    │ │ [文件夹]      Start Print  │
+ *    └───────────────────┘ └──────────────────────────┘
+ *  左边灰玻璃钮按内容撑宽，右边蓝钮 flex_grow 吃掉整行剩余宽（稿上蓝钮是 flex-1），
+ *  整行总宽走 USER_HOME_ACTION_ROW_W。两枚都是全圆胶囊、等高 USER_BTN_PRIMARY_H×5/4
+ *  （90/65/55，即 ui_user_make_primary_pill_btn 逼近稿上 64@1280 用的那个算法）。
+ *  旧方块上那行静态提示语 "Place the build plate first" 在新稿里已删除。
  *
- *  稿上的描边是渐变（灰玻璃白 20%→10%→10%→20%，蓝块白 40%→0%→40%），LVGL 画不了
- *  渐变边框，各取一个中间值当单色；灰玻璃那圈 inset 阴影同样画不出来，略去（同
- *  make_glass_round_btn）。
+ *  稿上的描边是渐变（灰玻璃白 20%→10%→10%→20%，蓝钮白 40%→0%→40%），LVGL 画不了
+ *  渐变边框，各取一个中间值当单色；灰玻璃那圈 inset 阴影与背景模糊同样画不出来，
+ *  略去（同 make_glass_round_btn）。
  * ------------------------------------------------------------------------- */
 
-/** 一块入口方块的骨架：定宽定高 + 图标贴顶，返回块本体供调用方往里塞文字。 */
-lv_obj_t *make_home_tile(lv_obj_t *parent, int32_t w, const lv_image_dsc_t *icon,
-                         lv_event_cb_t cb)
+/** 灰玻璃胶囊（稿 5339:27276「Button / On Light」的玻璃档）：图标 + 单行文字水平居中。
+ *  材质与 make_glass_round_btn 同一份（0x757575 @ 20% + 白 20% 描边），只是形状从
+ *  圆钮变胶囊。只有首页这一处在用，故不进 ui_user_widgets。 */
+lv_obj_t *make_glass_pill_btn(lv_obj_t *parent, const lv_image_dsc_t *icon,
+                              const char *text, lv_event_cb_t cb)
 {
-    lv_obj_t *tile = lv_button_create(parent);
-    lv_obj_remove_style_all(tile);
-    lv_obj_set_size(tile, w, USER_HOME_TILE_SZ);
-    lv_obj_set_style_radius(tile, USER_BTN_RADIUS, 0);
-    lv_obj_set_style_border_width(tile, 1, 0);
-    lv_obj_set_style_border_color(tile, lv_color_white(), 0);
-    /* 稿上是 ver 16 / hor 24@1280，横向那档实测放不下文字：1024 档窄块只剩
-     * 102 - 2*USER_PAD = 58 可用，而 "Monitor" 按 user_font_text(16) 要 64，label 默认
-     * LONG_WRAP 就折成了两行。统一压到 USER_PAD_SM 后窄块有 80 可用、余 16，宽块那行
-     * 提示语的余量也从 7 涨到 29。代价是文字比稿更贴边一点，方块小，看不出来。 */
-    lv_obj_set_style_pad_all(tile, USER_PAD_SM, 0);
-    lv_obj_set_flex_flow(tile, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_flex_align(tile, LV_FLEX_ALIGN_SPACE_BETWEEN,
-                          LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
-    lv_obj_clear_flag(tile, LV_OBJ_FLAG_SCROLLABLE);
-    if(cb) {
-        lv_obj_add_event_cb(tile, cb, LV_EVENT_CLICKED, nullptr);
-    }
-    /* 稿上图标 32@1280 = 块边长的 1/4，按这个比例取就不用逐档写死 */
-    make_btn_icon(tile, icon, USER_HOME_TILE_SZ / 4);
-    return tile;
-}
+    /* 高度与图标边长都照抄 ui_user_make_primary_pill_btn 的算法（不是随手取的比例）：
+     * 同一行里两枚胶囊必须严格等高，换成别的常量哪怕只差几像素也会看出来。 */
+    const int32_t h = USER_BTN_PRIMARY_H * 5 / 4;
 
-/** 方块内的一行文字：宽度撑满内容区，靠 align 决定居中还是右对齐。 */
-lv_obj_t *tile_label(lv_obj_t *parent, const char *text, const lv_font_t *font,
-                     lv_opa_t opa, lv_text_align_t align)
-{
-    lv_obj_t *lbl = lv_label_create(parent);
+    lv_obj_t *btn = lv_button_create(parent);
+    lv_obj_remove_style_all(btn);
+    lv_obj_set_size(btn, LV_SIZE_CONTENT, h);
+    lv_obj_set_style_radius(btn, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_bg_color(btn, lv_color_hex(0x757575), 0);
+    lv_obj_set_style_bg_opa(btn, LV_OPA_20, 0);
+    lv_obj_set_style_bg_opa(btn, LV_OPA_40, LV_STATE_PRESSED);
+    lv_obj_set_style_border_width(btn, 1, 0);
+    lv_obj_set_style_border_color(btn, lv_color_white(), 0);
+    lv_obj_set_style_border_opa(btn, LV_OPA_20, 0);
+    /* 稿上是左 24 / 右 32@1280 的不对称内边距，这里两侧统一取 USER_PAD（28/22）：
+     * 差值不到 4px，换来的是三档不用各写一组。 */
+    lv_obj_set_style_pad_hor(btn, USER_PAD, 0);
+    lv_obj_set_style_pad_column(btn, USER_PAD_SM, 0);
+    lv_obj_set_flex_flow(btn, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(btn, LV_FLEX_ALIGN_CENTER,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_clear_flag(btn, LV_OBJ_FLAG_SCROLLABLE);
+    if(cb) {
+        lv_obj_add_event_cb(btn, cb, LV_EVENT_CLICKED, nullptr);
+    }
+
+    make_btn_icon(btn, icon, USER_BTN_PRIMARY_H * 5 / 8);   /* 稿上 32@1280 = 胶囊高的一半 */
+
+    lv_obj_t *lbl = lv_label_create(btn);
     lv_label_set_text(lbl, text);
-    lv_obj_set_width(lbl, LV_PCT(100));
     lv_obj_set_style_text_color(lbl, lv_color_white(), 0);
-    lv_obj_set_style_text_opa(lbl, opa, 0);
-    lv_obj_set_style_text_font(lbl, font, 0);
-    lv_obj_set_style_text_align(lbl, align, 0);
-    return lbl;
+    lv_obj_set_style_text_font(lbl, user_font_text(), 0);
+    return btn;
 }
 
 lv_obj_t *build_action_tiles(lv_obj_t *parent)
@@ -912,53 +916,25 @@ lv_obj_t *build_action_tiles(lv_obj_t *parent)
     lv_obj_t *row = lv_obj_create(parent);
     lv_obj_remove_style_all(row);
     lv_obj_add_flag(row, LV_OBJ_FLAG_FLOATING);
-    lv_obj_set_size(row, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    /* 整行定宽（稿上外层容器就是定宽，灰钮 hug、蓝钮吃剩余），高度由胶囊撑。 */
+    lv_obj_set_size(row, USER_HOME_ACTION_ROW_W, LV_SIZE_CONTENT);
     lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(row, LV_FLEX_ALIGN_START,
                           LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_column(row, USER_PAD_SM / 2, 0);
+    lv_obj_set_style_pad_column(row, USER_PAD_SM, 0);
     lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, 0);
     lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
     /* 底缘与右下开门滑块同高（两者都退 USER_PAD），横向只退 USER_PAD——本页根节点
      * 的 pad_left 已经让开侧栏，不用再补侧栏宽度（同 build_door_floating）。 */
     lv_obj_align(row, LV_ALIGN_BOTTOM_LEFT, USER_PAD, -USER_PAD);
 
-    /* 窄块：灰玻璃 + 摄像机图标 + 居中文字。底色与旧的顶栏圆钮同一个值，换了形状
-     * 但材质不变。 */
-    lv_obj_t *monitor = make_home_tile(row, USER_HOME_TILE_SZ, &ic_camera,
-                                      on_camera_btn_click);
-    lv_obj_set_style_bg_color(monitor, lv_color_hex(0x757575), 0);
-    lv_obj_set_style_bg_opa(monitor, LV_OPA_20, 0);
-    lv_obj_set_style_bg_opa(monitor, LV_OPA_40, LV_STATE_PRESSED);
-    lv_obj_set_style_border_opa(monitor, LV_OPA_20, 0);
-    tile_label(monitor, "Monitor", user_font_text(), LV_OPA_COVER,
-               LV_TEXT_ALIGN_CENTER);
+    make_glass_pill_btn(row, &ic_camera, "Monitor", on_camera_btn_click);
 
-    /* 宽块：蓝色渐变 + 文件夹图标 + 右对齐的两行（提示在上、主标题在下）。
-     * 提示行用 caption_sm 而不是 caption：1024 档这块内可用宽只有 160，
-     * "Place the build plate first" 按 12 号实测 153，再大一档就会被裁。 */
-    lv_obj_t *print = make_home_tile(row, USER_HOME_TILE_SZ * 2, &ic_folder,
-                                     on_files_click);
-    lv_obj_set_style_bg_color(print, lv_color_hex(kCtlBlueA), 0);
-    lv_obj_set_style_bg_grad_color(print, lv_color_hex(kCtlBlueB), 0);
-    lv_obj_set_style_bg_grad_dir(print, LV_GRAD_DIR_HOR, 0);
-    lv_obj_set_style_bg_opa(print, LV_OPA_COVER, 0);
-    lv_obj_set_style_bg_opa(print, LV_OPA_80, LV_STATE_PRESSED);
-    lv_obj_set_style_border_opa(print, LV_OPA_30, 0);
-
-    lv_obj_t *texts = lv_obj_create(print);
-    lv_obj_remove_style_all(texts);
-    lv_obj_set_width(texts, LV_PCT(100));
-    lv_obj_set_height(texts, LV_SIZE_CONTENT);
-    lv_obj_set_flex_flow(texts, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_style_pad_row(texts, USER_PAD_SM / 4, 0);
-    lv_obj_set_style_bg_opa(texts, LV_OPA_TRANSP, 0);
-    lv_obj_clear_flag(texts, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_remove_flag(texts, LV_OBJ_FLAG_CLICKABLE);
-    tile_label(texts, "Place the build plate first", user_font_caption_sm(),
-               LV_OPA_50, LV_TEXT_ALIGN_RIGHT);
-    tile_label(texts, "Start Print", user_font_text(), LV_OPA_COVER,
-               LV_TEXT_ALIGN_RIGHT);
+    /* 蓝钮与打印历史空态那枚 Start Print 共用组件，保证两处是同一枚按钮；本处按稿
+     * 定宽 + 图标贴左、文字贴右（spread），宽度交给 flex_grow 吃掉行内剩余。 */
+    lv_obj_t *print = ui_user_make_primary_pill_btn(row, &ic_folder, "Start Print",
+                                                    on_files_click, 0, true);
+    lv_obj_set_flex_grow(print, 1);
 
     return row;
 }
@@ -1115,7 +1091,7 @@ void on_result_photo_click(lv_event_t * /*e*/)
     ui_toast_show("Capturing photo...", user_color_accent, 1200);
 }
 
-/* 滑动取件：退出打印状态并走开门流程（与首页「SLIDE TO OPEN」同一套弹窗）。 */
+/* 滑动取件：退出打印状态并走开门流程（与首页「SLIDE TO UNLOCK」同一套弹窗）。 */
 void on_result_collect_unlocked(void * /*u*/)
 {
     if(g_result_cleaning || g_purify_stage == PURIFY_STAGE_RUNNING) {
@@ -2163,7 +2139,7 @@ lv_obj_t *build_monitor_area(lv_obj_t *parent)
 
     /* 右下：滑动开门（与首页同尺寸/配色） */
     ui_slide_unlock_cfg_t cfg = {};
-    cfg.hint_text     = "SLIDE TO OPEN";
+    cfg.hint_text     = "SLIDE TO UNLOCK";
     cfg.on_unlocked   = on_monitor_door_unlocked;
     cfg.user_data     = nullptr;
     cfg.track_w       = USER_SLIDE_W * 4 / 3;
@@ -2420,7 +2396,7 @@ lv_obj_t *page_user_home_create(lv_obj_t *parent)
     g_monitor_area = build_monitor_area(page);
     lv_obj_add_flag(g_monitor_area, LV_OBJ_FLAG_HIDDEN);
 
-    /* 底部两组浮动控件：相对于 page 绝对定位，左下入口方块 + 右下开门滑块。
+    /* 底部两组浮动控件：相对于 page 绝对定位，左下入口胶囊行 + 右下开门滑块。
      * 建在 print/monitor 两层之后，待机态才压得住它们（那两层默认隐藏，
      * 进态时还会 move_background 再压一次）。 */
     g_door_float   = build_door_floating(page);

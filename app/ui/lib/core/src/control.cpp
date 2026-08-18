@@ -1248,7 +1248,7 @@ void plate_show_notinserted(void)
     }
 
     ui_slide_unlock_cfg_t slide_cfg = {};
-    slide_cfg.hint_text     = "SLIDE TO OPEN";   /* 箭头由控件绘制 3 个 chevron */
+    slide_cfg.hint_text     = "SLIDE TO UNLOCK";   /* 箭头由控件绘制 3 个 chevron */
     slide_cfg.on_unlocked   = on_plate_swipe_open;
     slide_cfg.user_data     = nullptr;
     slide_cfg.track_w       = slide_w;                         /* 贴合容器右边缘 */

@@ -1994,7 +1994,7 @@ lv_obj_t *build_empty(lv_obj_t *parent)
     lv_obj_set_style_text_font(g_empty_sub, user_font_caption(), 0);
 
     g_empty_btn = ui_user_make_primary_pill_btn(box, &ic_folder, "Start Print",
-                                                on_empty_start_print);
+                                                on_empty_start_print, 0, false);
     apply_empty_copy();   /* 先按当前 Tab 落一次文案：标签不设文本时 LVGL 会显示 "Text" */
     return box;
 }

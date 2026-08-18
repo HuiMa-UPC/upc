@@ -33,7 +33,7 @@ lv_obj_t *card = ui_user_make_frosted_card(parent, true);
 | 构件 | 稿 | 共用方 |
 |------|----|--------|
 | `ui_user_make_icon_img` | — | A8 图标盒：固定占位 + recolor + 等比缩放。首页按钮图标、历史页卡片指标/角标/空态插画 |
-| `ui_user_make_primary_pill_btn` | 「Button / On Light」 | 蓝色对角渐变胶囊：历史页空态 `Start Print`（首页那枚已随稿 5277:11571 换成左下的入口方块） |
+| `ui_user_make_primary_pill_btn` | 「Button / On Light」 | 蓝色对角渐变胶囊：历史页空态 `Start Print`（内容撑宽、内容居中）+ 首页左下 `Start Print`（稿 5339:27284，传 `width`/`spread` 换成定宽 + 图标贴左文字贴右） |
 | `ui_user_make_confirm_footer_btn` | `2567:5555` | 确认弹窗页脚按钮（`USER_BTN_RADIUS` 圆角矩形，非胶囊）：删除文件 / 终止打印 / 历史页批量删除 / 开始打印确认 |
 
 按钮样式基线（几何、主/副色值、哪些地方仍保留胶囊形）见 `app/ui/UI.md`「按钮样式基线」。

@@ -129,12 +129,14 @@ typedef struct {
     int32_t user_status_dot_sz;
     int32_t user_home_device_w;
     int32_t user_home_device_h;
-    /** 首页左下两块入口方块的边长（稿 5277:11454 窄块 128@1280，宽块是它的两倍）。
-     *  高度不是内容撑出来的——稿上图标顶对齐、文字底对齐，中间留富余，故须写死。
-     *  1024 档是文字最紧的一档（块内可用宽 = 边长 − 2×USER_PAD_SM）：窄块 80 装
-     *  "Monitor"(64)、宽块 182 装 "Place the build plate first"(153)。改这两处文案或
-     *  USER_PAD_SM 之前先量一遍，label 是 LONG_WRAP，超了会折行而不是截断。 */
-    int32_t user_home_tile_sz;
+    /** 首页左下入口胶囊那一行的定宽（稿 5339:27275 是 386@1280）。行内灰玻璃钮按内容
+     *  撑宽、蓝钮 flex_grow 吃掉剩余，所以只需定这一个总宽。
+     *  实取比稿宽 10%（424@1280）：稿排 Poppins、工程用 Montserrat，同字号更宽——按稿
+     *  值折到 1024 档只有 309，此时蓝钮内可用宽 140，装不下图标(25)+"Start Print"(约 85)
+     *  还留出间距。放到 424 后 1024 档是 339、蓝钮内余量约 30px。同一套「按稿宽补 10%」
+     *  的处理见 user_print_card_w。改两枚按钮文案前先量一遍：label 是 LONG_WRAP，
+     *  超了会折成两行把胶囊撑变形，而不是截断。 */
+    int32_t user_home_action_row_w;
     int32_t user_back_btn_w;
     int32_t user_back_btn_h;
     int32_t user_sensor_strip_h;   /**< 调试页传感器条高（原先借用 user_topbar_h） */
@@ -287,7 +289,7 @@ extern const ui_theme_t *g_ui;
 #define USER_STATUS_DOT_SZ          (g_ui->user_status_dot_sz)
 #define USER_HOME_DEVICE_W          (g_ui->user_home_device_w)
 #define USER_HOME_DEVICE_H          (g_ui->user_home_device_h)
-#define USER_HOME_TILE_SZ           (g_ui->user_home_tile_sz)
+#define USER_HOME_ACTION_ROW_W      (g_ui->user_home_action_row_w)
 #define USER_BACK_BTN_W             (g_ui->user_back_btn_w)
 #define USER_BACK_BTN_H             (g_ui->user_back_btn_h)
 #define USER_SENSOR_STRIP_H         (g_ui->user_sensor_strip_h)

@@ -25,7 +25,7 @@ typedef void (*ui_slide_unlock_cb_t)(void *user_data);
 typedef struct ui_slide_unlock_t ui_slide_unlock_t;
 
 typedef struct {
-    const char           *hint_text;   /**< 静止态提示文字，NULL = "SLIDE TO OPEN" */
+    const char           *hint_text;   /**< 静止态提示文字，NULL = "SLIDE TO UNLOCK" */
     ui_slide_unlock_cb_t  on_unlocked; /**< 解锁回调（在 LVGL 主线程） */
     void                 *user_data;
     int32_t               track_w;     /**< 轨道宽，<=0 用 USER_SLIDE_W */

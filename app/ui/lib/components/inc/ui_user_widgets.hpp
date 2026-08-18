@@ -61,10 +61,15 @@ lv_obj_t *ui_user_make_icon_img(lv_obj_t *parent, const lv_image_dsc_t *src,
 /**
  * 主按钮胶囊：蓝色对角渐变 + 白色亮边 + 柔和蓝投影 + 可选图标（稿「Button / On Light」）。
  * 首页 "Start Print" 与打印历史空态的 "Start Print" 共用，保证两处是同一枚按钮。
- * @param icon 可为 NULL（纯文字按钮）
+ * 两处的排布不同，靠后两个参数区分：历史页空态是内容撑宽、图标文字挤在中间；
+ * 首页那枚按稿 5339:27284 定宽、图标贴左缘文字贴右缘。
+ * @param icon   可为 NULL（纯文字按钮）
+ * @param width  <=0 = LV_SIZE_CONTENT（内容撑宽）；>0 = 定宽（像素）
+ * @param spread true = 图标贴左、文字贴右（space-between）；false = 整组水平居中
  */
 lv_obj_t *ui_user_make_primary_pill_btn(lv_obj_t *parent, const lv_image_dsc_t *icon,
-                                        const char *text, lv_event_cb_t cb);
+                                        const char *text, lv_event_cb_t cb,
+                                        int32_t width, bool spread);
 
 /**
  * 二次确认弹窗页脚按钮（稿 2567:5555 的「弹窗副按钮 / 弹窗重点按钮」）：
