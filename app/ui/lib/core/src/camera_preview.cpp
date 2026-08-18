@@ -485,6 +485,7 @@ void CameraPreviewPlayer::on_stream_start_rsp(
 void CameraPreviewPlayer::async_apply_stream_start(void* user)
 {
     auto* self = static_cast<CameraPreviewPlayer*>(user);
+    //self空指针检查、响应已被消费/作废、用户已stop()这次start作废
     if(!self || !self->pending_start_rsp_valid_ || !self->active_.load()) {
         if(self) {
             self->close_pending_dma_fds();

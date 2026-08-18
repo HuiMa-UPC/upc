@@ -168,6 +168,39 @@ void mcu_ver_apply(const middleware::McuVersionPayload &p)
     }
 }
 
+/* ---- About 页振镜控制板固件版本（TCP 0x0F 首包缓存：UI_Galvo_Version_Req → GLAVO_Galvo_Version_Ntf）
+ * 版本只在 TCP 连上后由下位机主动上报，进 About 时向 Glavo 读缓存，无串口式超时重发。
+ * 显示格式 V<(v>>16)>.<(v>>8)&0xff>.<(v&0xff)>（如 0x00030004 → V3.0.4）。 */
+lv_obj_t *g_galvo_ver_lbl = nullptr;           /**< 值标签；仅 About 面板存活期间有效 */
+char      g_galvo_ver_text[32] = "--";         /**< 显示缓存，跨次进入 About 复用 */
+bool      g_galvo_ver_valid = false;           /**< 是否已成功取到过版本 */
+
+/** 进入 About 子页：请求一次缓存版本（标签先显示缓存值 / "--"） */
+void galvo_ver_query_on_enter(void)
+{
+    ui::UiMsgProxy::instance().send_galvo_version_query();
+}
+
+/** GLAVO_Galvo_Version_Ntf 回调：写缓存并刷新标签 */
+void galvo_ver_apply(const middleware::GalvoVersionPayload &p)
+{
+    if(!p.valid) {
+        if(!g_galvo_ver_valid && g_galvo_ver_lbl) {
+            lv_label_set_text(g_galvo_ver_lbl, "Unknown");
+        }
+        return;
+    }
+    const uint32_t v = p.fw_version_le;
+    std::snprintf(g_galvo_ver_text, sizeof(g_galvo_ver_text), "V%u.%u.%u",
+                  static_cast<unsigned>((v >> 16) & 0xFFu),
+                  static_cast<unsigned>((v >> 8) & 0xFFu),
+                  static_cast<unsigned>(v & 0xFFu));
+    g_galvo_ver_valid = true;
+    if(g_galvo_ver_lbl) {
+        lv_label_set_text(g_galvo_ver_lbl, g_galvo_ver_text);
+    }
+}
+
 /* 后端网络状态缓存（GLAVO_Wifi_State_Ntf；未上线时回退占位）。待后端对齐。 */
 middleware::WifiStatePayload g_wifi_state = {};
 bool g_wifi_state_valid = false;
@@ -438,7 +471,7 @@ void ota_close_dialog(OtaTarget target)
 
 void on_glavo_ota_entry_click(lv_event_t *)
 {
-    open_ota_dialog(OtaTarget::Glavo, "Glavo OTA");
+    open_ota_dialog(OtaTarget::Glavo, "Galvo OTA");
     ui::UiMsgProxy::instance().send_mcu_ota_start();
 }
 
@@ -1223,6 +1256,8 @@ void build_about_detail(lv_obj_t *parent)
     about_add_row(card, "Device Model",     about_device_model_text());
     /* MCU 版本由串口异步返回：先填缓存（首次为 "--"），应答/超时后由 mcu_ver_* 刷新 */
     g_mcu_ver_lbl = about_add_row(card, "MCU Version", g_mcu_ver_text);
+    /* 振镜板版本来自 TCP 0x0F 首包缓存：先填缓存，进页 Req 后由 galvo_ver_* 刷新 */
+    g_galvo_ver_lbl = about_add_row(card, "Galvo Version", g_galvo_ver_text);
 }
 
 void build_device_detail(lv_obj_t *parent)
@@ -1263,6 +1298,7 @@ void show_detail(NavId id)
     /* About 面板即将销毁：先断开异步刷新用的标签指针并停掉版本查询定时器，
      * 否则离开 About 后到达的应答/超时会写已释放的 label。 */
     g_mcu_ver_lbl = nullptr;
+    g_galvo_ver_lbl = nullptr;
     mcu_ver_stop_timer();
     lv_obj_clean(g_detail);
     /* 复位详情容器：默认不滚动、无右内边距（网络详情会按需开启） */
@@ -1285,8 +1321,9 @@ void show_detail(NavId id)
     case NAV_DEVICE:  build_device_detail(g_detail);  break;
     case NAV_ABOUT:
         build_about_detail(g_detail);
-        /* 进入 About：向 MCU 查询一次固件版本（应答经 register_mcu_version 回填） */
+        /* 进入 About：向 MCU 查询一次固件版本；向 Glavo 读振镜板 TCP 首包缓存 */
         mcu_ver_query_on_enter();
+        galvo_ver_query_on_enter();
         break;
     default:          build_placeholder_detail(g_detail, kNavDefs[id].label); break;
     }
@@ -1505,6 +1542,12 @@ lv_obj_t *page_user_settings_create(lv_obj_t *parent)
             if(p.valid) {
                 mcu_ver_apply(p);
             }
+        });
+
+    /* 振镜控制板固件版本：TCP 0x0F 首包缓存，刷新 About 页 Galvo Version 行。 */
+    ui::UiMsgProxy::instance().register_galvo_version(
+        [](const middleware::GalvoVersionPayload &p) {
+            galvo_ver_apply(p);
         });
 
     /* 连接结果：关闭"连接中"模态，成功轻提示；失败弹"连接失败"（如密码错/超时）。 */

@@ -537,8 +537,9 @@ bool GlavoService::start()
         middleware::MsgType::UI_Debug_FirstLayer_Visual_Check_Get_Req,
         middleware::MsgType::APP_Visual_FirstLayer_Check_Rsp,
 
-        /* Settings/About：MCU 固件版本查询 */
+        /* Settings/About：MCU / 振镜控制板固件版本查询 */
         middleware::MsgType::UI_Mcu_Version_Req,
+        middleware::MsgType::UI_Galvo_Version_Req,
 
         /* 消息中心：MCU 报警复位 */
         middleware::MsgType::UI_Alarm_Reset_Req,
@@ -953,6 +954,9 @@ void GlavoService::handle_message(const middleware::Message& msg)
             break;
         case middleware::MsgType::UI_Mcu_Version_Req:
             handle_mcu_version_req(msg);
+            break;
+        case middleware::MsgType::UI_Galvo_Version_Req:
+            handle_galvo_version_req(msg);
             break;
         case middleware::MsgType::UI_Alarm_Reset_Req:
             handle_alarm_reset(msg);
@@ -2970,6 +2974,17 @@ void GlavoService::handle_mcu_version_req(const middleware::Message& msg)
     }
     UPC_LOG_GLAVO_SERVICE(Info, "mcu_version query TX");
     debug_tx(frame, n);
+}
+
+/**
+ * @brief 回读 TCP 0x0F 首包缓存并推 GLAVO_Galvo_Version_Ntf
+ * @note 振镜板版本只在 TCP 连上后主动上报，此处不能再向下位机查询。
+ */
+void GlavoService::handle_galvo_version_req(const middleware::Message& msg)
+{
+    (void)msg;
+    UPC_LOG_GLAVO_SERVICE(Info, "galvo_version query (cached)");
+    McuLink::instance().publish_galvo_version_ntf();
 }
 
 void GlavoService::handle_alarm_reset(const middleware::Message& msg)

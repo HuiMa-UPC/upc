@@ -257,6 +257,13 @@ public:
                             uint8_t firmware_id, uint8_t ota_state,
                             uint8_t selfcheck_boot_count);
 
+    /**
+     * @brief 将缓存的振镜控制板固件版本推给 UI（GLAVO_Galvo_Version_Ntf）
+     * @note TCP 0x0F 扩展包到达时会主动推一次；About 进页 Req 再调一次读缓存。
+     *       尚未收到带版本的首包时 valid=0。
+     */
+    void publish_galvo_version_ntf();
+
 private:
     struct SerialReliableItem {
         uint8_t data[64]{};
@@ -412,6 +419,11 @@ private:
     std::atomic<uint16_t> tcp_send_interval_ms_{TCP_SEND_INTERVAL_MS}; /**< 运行时发送轮询间隔 */
     std::atomic<uint16_t> tcp_heartbeat_interval_ms_{TCP_HEARTBEAT_INTERVAL_MS}; /**< 运行时心跳间隔 */
     std::atomic<uint8_t>  tcp_cmd_backpressure_pct_{MCU_CMD_BACKPRESSURE_PCT}; /**< 运行时背压阈值 */
+
+    /* ---------- TCP 0x0F 首包固件版本缓存（About 页 Galvo Version） ---------- */
+    std::atomic<bool>     tcp_fw_valid_{false};       /**< 是否已收到带版本的扩展包 */
+    std::atomic<uint32_t> tcp_fw_version_le_{0};      /**< 小端固件版本号 */
+    std::atomic<uint8_t>  tcp_firmware_id_{0};        /**< 1=APPA，2=APPB */
 
     /* ---------- 换层/串口握手状态 ---------- */
     std::atomic<bool> waiting_layer_{false};           /**< 当前是否处于换层等待状态 */

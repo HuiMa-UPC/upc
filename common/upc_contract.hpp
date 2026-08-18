@@ -510,6 +510,10 @@ enum class MsgType : uint32_t {
     GLAVO_Mcu_Version_Ntf,       /**< McuVersionPayload：MCU 固件版本 + 板级配置 */
     APP_Fs_Delete_Rsp,           /**< FsDeleteRspPayload：本地文件删除回执 */
 
+    // ---- UI ↔ GLAVO：振镜控制板固件版本（以太网 TCP 连接后首包 ID=0x0F） ----
+    UI_Galvo_Version_Req,        /**< Empty：进入 Settings/About 页时读取 Glavo 侧缓存 */
+    GLAVO_Galvo_Version_Ntf,     /**< GalvoVersionPayload：TCP 0x0F 扩展包中的固件版本 */
+
     // ---- GLAVO → UI：设备事件/告警（消息中心） ----
     GLAVO_Device_Event_Ntf = 0x1600, /**< DeviceEventPayload：一条设备事件的触发或恢复 */
 
@@ -976,6 +980,18 @@ struct McuVersionPayload {
     uint8_t laser_type;   /**< 激光器类别：JFSC=1，AL=2 */
     uint8_t z_motor_type; /**< Z 轴电机：闭环 BRIDGE=0，开环 OPEN_CONTROL=1 */
     uint8_t reserved[2];
+};
+
+/**
+ * GLAVO_Galvo_Version_Ntf：振镜控制板固件版本（TCP 连接后首包 ID=0x0F，Length≥0x08）
+ * 版本字为小端 uint32；About 页按 V<(v>>16)&0xff>.<(v>>8)&0xff>.<(v&0xff)> 显示
+ *（如 0x00030004 → V3.0.4）。旧固件仅发 Length=0x01 就绪包时 valid=0。
+ */
+struct GalvoVersionPayload {
+    uint8_t  valid;          /**< 1=已收到过带版本的 TCP 0x0F 扩展包 */
+    uint8_t  firmware_id;    /**< 1=APPA，2=APPB（协议表） */
+    uint8_t  reserved[2];
+    uint32_t fw_version_le;  /**< 小端固件版本号（与 TCP 帧 byte[6..9] 一致） */
 };
 
 // 调试页（手动控制/标定）契约 —— 命名见 common/COMMON.md；枚举跨进程时按 uint8_t 传输

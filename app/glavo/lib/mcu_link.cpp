@@ -2948,6 +2948,14 @@ void McuLink::on_tcp_init_report(bool has_version, uint32_t fw_version_le,
         static_cast<unsigned>(selfcheck_boot_count),
         use_small_mem ? "small-mem" : "legacy");
 
+    /* About 页 Galvo Version：缓存并主动推 UI（旧 Length=0x01 包无版本则不覆盖已有缓存） */
+    if(has_version) {
+        tcp_fw_version_le_.store(fw_version_le);
+        tcp_firmware_id_.store(firmware_id);
+        tcp_fw_valid_.store(true);
+        publish_galvo_version_ntf();
+    }
+
     if(desired_profile == current_profile) {
         return;
     }
@@ -2967,6 +2975,20 @@ void McuLink::on_tcp_init_report(bool has_version, uint32_t fw_version_le,
     }
 
     apply_tcp_profile(use_small_mem, "tcp_init", fw_version_le);
+}
+
+void McuLink::publish_galvo_version_ntf()
+{
+    middleware::GalvoVersionPayload p{};
+    p.valid         = tcp_fw_valid_.load() ? 1 : 0;
+    p.firmware_id   = tcp_firmware_id_.load();
+    p.fw_version_le = tcp_fw_version_le_.load();
+
+    middleware::Message ntf(middleware::MsgType::GLAVO_Galvo_Version_Ntf,
+        middleware::ModuleId::APP_GLAVO, middleware::ModuleId::UI);
+    ntf.payload = middleware::MsgPayload::from_bytes(
+        reinterpret_cast<const uint8_t*>(&p), sizeof(p));
+    middleware::MsgPort::instance().publish_async(ntf);
 }
 
 int McuLink::current_tcp_batch_size() const noexcept

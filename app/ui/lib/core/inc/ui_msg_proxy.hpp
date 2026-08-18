@@ -44,6 +44,7 @@ using XfrFileReceivedCb = std::function<void(const middleware::XfrFileReceivedPa
 using XfrTransferProgressCb = std::function<void(const middleware::XfrTransferProgressPayload&)>;
 using UsbHotplugCb     = std::function<void(const middleware::UsbHotplugPayload&)>;
 using McuVersionCb     = std::function<void(const middleware::McuVersionPayload&)>;
+using GalvoVersionCb   = std::function<void(const middleware::GalvoVersionPayload&)>;
 using DeviceEventCb    = std::function<void(const middleware::DeviceEventPayload&)>;
 using AlarmReportCb    = std::function<void(const middleware::AlarmReportPayload&)>;
 using AlarmSnapshotCb  = std::function<void(const middleware::AlarmSnapshotPayload&)>;
@@ -137,6 +138,11 @@ public:
     /** MCU 固件版本查询（Settings/About 进页触发一次） */
     void send_mcu_version_query();
     void register_mcu_version(McuVersionCb cb);   /**< GLAVO_Mcu_Version_Ntf */
+
+    /** 振镜控制板固件版本（Settings/About：读 Glavo 侧 TCP 0x0F 首包缓存） */
+    void send_galvo_version_query();
+    void register_galvo_version(GalvoVersionCb cb); /**< GLAVO_Galvo_Version_Ntf */
+
     /** GLAVO_Device_Event_Ntf：设备事件/告警，喂消息中心。
      *  Glavo 侧还没实现发布，接好放着——后端上线后 UI 不用改。 */
     void register_device_event(DeviceEventCb cb);
@@ -226,6 +232,7 @@ private:
     XfrTransferProgressCb xfr_transfer_progress_cb_;
     UsbHotplugCb usb_hotplug_cb_;
     McuVersionCb mcu_version_cb_;
+    GalvoVersionCb galvo_version_cb_;
     DeviceEventCb device_event_cb_;
     AlarmReportCb alarm_report_cb_;
     AlarmSnapshotCb alarm_snapshot_cb_;

@@ -317,6 +317,15 @@ void UiMsgProxy::init()
         }));
 
     subs_.push_back(bus.subscribe(
+        middleware::MsgType::GLAVO_Galvo_Version_Ntf, middleware::ModuleId::UI,
+        [this](const middleware::Message& msg) {
+            middleware::GalvoVersionPayload p{};
+            if (galvo_version_cb_ && read_inline_pod(msg, p)) {
+                galvo_version_cb_(p);
+            }
+        }));
+
+    subs_.push_back(bus.subscribe(
         middleware::MsgType::GLAVO_Device_Event_Ntf, middleware::ModuleId::UI,
         [this](const middleware::Message& msg) {
             middleware::DeviceEventPayload p{};
@@ -502,6 +511,19 @@ void UiMsgProxy::send_mcu_version_query()
 void UiMsgProxy::register_mcu_version(McuVersionCb cb)
 {
     mcu_version_cb_ = std::move(cb);
+}
+
+void UiMsgProxy::send_galvo_version_query()
+{
+    middleware::Message msg(middleware::MsgType::UI_Galvo_Version_Req,
+                            middleware::ModuleId::UI,
+                            middleware::ModuleId::APP_GLAVO);
+    middleware::MsgPort::instance().publish_async(msg);
+}
+
+void UiMsgProxy::register_galvo_version(GalvoVersionCb cb)
+{
+    galvo_version_cb_ = std::move(cb);
 }
 
 void UiMsgProxy::register_device_event(DeviceEventCb cb)
