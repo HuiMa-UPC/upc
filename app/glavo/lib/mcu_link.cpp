@@ -210,11 +210,19 @@ void serial_log_rx_frame(const uint8_t* frame, size_t len)
     serial_alarm_snapshot_t snap_dbg{};
     if(serial_parse_alarm_snapshot(frame, len, &snap_dbg) == 0) {
         UPC_LOG_MCU_LINK(Debug,
-            "RX ALARM SNAPSHOT word %u/%u active=0x%08X latched=0x%08X",
-            static_cast<unsigned>(snap_dbg.word_index),
-            static_cast<unsigned>(snap_dbg.word_count),
+            "RX ALARM SNAPSHOT slot %u (count=%u) active=0x%08X latched=0x%08X",
+            static_cast<unsigned>(snap_dbg.slot_id),
+            static_cast<unsigned>(snap_dbg.nonzero_slot_count),
             static_cast<unsigned>(snap_dbg.active_mask),
             static_cast<unsigned>(snap_dbg.latched_mask));
+        return;
+    }
+
+    serial_alarm_reset_result_t reset_dbg{};
+    if(serial_parse_alarm_reset_result(frame, len, &reset_dbg) == 0) {
+        UPC_LOG_MCU_LINK(Debug, "RX ALARM RESET_RESULT code=%u result=%u",
+            static_cast<unsigned>(reset_dbg.alarm_code),
+            static_cast<unsigned>(reset_dbg.result));
         return;
     }
 
@@ -694,7 +702,24 @@ int McuLink::open_serial(const char* device, int baud)
     }
 
     UPC_LOG_MCU_LINK(Info, "serial open %s @ %d", device, baud);
+
+    /* 串口刚通就补一次报警快照：单条上报只在状态变化时发，断连期间发生的变化
+     * 我们全错过了，不主动问就再也拿不到。UI 侧也会在启动/进消息页等时机请求，
+     * 那边有节流，重复请求不会叠加。 */
+    request_alarm_snapshot();
     return 0;
+}
+
+void McuLink::request_alarm_snapshot()
+{
+    uint8_t frame[16];
+    const int n = serial_build_alarm_snapshot_request(frame, sizeof(frame));
+    if(n <= 0) {
+        UPC_LOG_MCU_LINK(Warn, "alarm_snapshot request build failed");
+        return;
+    }
+    UPC_LOG_MCU_LINK(Info, "alarm_snapshot request TX (serial up)");
+    enqueue_serial_tx(frame, static_cast<size_t>(n), true);
 }
 
 /* ---------- 链路线程控制 ---------- */
@@ -1061,18 +1086,34 @@ void publish_alarm_report_ntf(const serial_alarm_report_t& report)
     middleware::MsgPort::instance().publish_async(ntf);
 }
 
-/** 组装并异步下发 GLAVO_Alarm_Snapshot_Ntf：快照的一帧，同样原样透传。
- *  攒帧（word_count 帧才算一批）与全量对齐都在 UI 侧做——当前报警表在那边。 */
+/** 组装并异步下发 GLAVO_Alarm_Snapshot_Ntf：快照的一个 slot，同样原样透传。
+ *  攒帧（收齐 nonzero_slot_count 个不同 slot）与原子对齐都在 UI 侧做——
+ *  当前报警表在那边。 */
 void publish_alarm_snapshot_ntf(const serial_alarm_snapshot_t& snap)
 {
     middleware::AlarmSnapshotPayload p{};
-    p.word_count       = snap.word_count;
-    p.word_index       = snap.word_index;
-    p.highest_severity = snap.highest_severity;
-    p.active_mask      = snap.active_mask;
-    p.latched_mask     = snap.latched_mask;
+    p.nonzero_slot_count = snap.nonzero_slot_count;
+    p.slot_id            = snap.slot_id;
+    p.highest_severity   = snap.highest_severity;
+    p.active_mask        = snap.active_mask;
+    p.latched_mask       = snap.latched_mask;
 
     middleware::Message ntf(middleware::MsgType::GLAVO_Alarm_Snapshot_Ntf,
+        middleware::ModuleId::APP_GLAVO, middleware::ModuleId::UI);
+    ntf.payload = middleware::MsgPayload::from_bytes(
+        reinterpret_cast<const uint8_t*>(&p), sizeof(p));
+    middleware::MsgPort::instance().publish_async(ntf);
+}
+
+/** 组装并异步下发 GLAVO_Alarm_Reset_Result_Ntf：复位失败回执。
+ *  MCU 只在失败时发，成功以后续 NORMAL 单报为准；UI 收到即解 reset_pending。 */
+void publish_alarm_reset_result_ntf(const serial_alarm_reset_result_t& res)
+{
+    middleware::AlarmResetResultPayload p{};
+    p.alarm_code = res.alarm_code;
+    p.result     = res.result;
+
+    middleware::Message ntf(middleware::MsgType::GLAVO_Alarm_Reset_Result_Ntf,
         middleware::ModuleId::APP_GLAVO, middleware::ModuleId::UI);
     ntf.payload = middleware::MsgPayload::from_bytes(
         reinterpret_cast<const uint8_t*>(&p), sizeof(p));
@@ -1488,17 +1529,29 @@ void McuLink::handle_serial_rx_frame(const uint8_t* frame, size_t len)
         return;
     }
 
-    /* 报警快照分片（0xA3 + 0x81 + TLV 0x04）：重启/重连后补齐当前报警 */
+    /* 报警快照的一个 slot（0xA3 + 0x81 + TLV 0x04）：应答 UI 的快照请求，
+     * 用于重启/重连后补齐当前报警。稀疏响应，攒帧在 UI 侧。 */
     serial_alarm_snapshot_t snap{};
     if(serial_parse_alarm_snapshot(frame, len, &snap) == 0) {
         UPC_LOG_MCU_LINK(Info,
-            "alarm_snapshot: word %u/%u active=0x%08X latched=0x%08X highest=%u",
-            static_cast<unsigned>(snap.word_index),
-            static_cast<unsigned>(snap.word_count),
+            "alarm_snapshot: slot %u (count=%u) active=0x%08X latched=0x%08X highest=%u",
+            static_cast<unsigned>(snap.slot_id),
+            static_cast<unsigned>(snap.nonzero_slot_count),
             static_cast<unsigned>(snap.active_mask),
             static_cast<unsigned>(snap.latched_mask),
             static_cast<unsigned>(snap.highest_severity));
         publish_alarm_snapshot_ntf(snap);
+        return;
+    }
+
+    /* 报警复位失败回执（0xA3 + 0x82 + TLV 0x04）：与快照共用 TLV 号，靠 Cmd 区分，
+     * 所以必须排在快照之后（快照那支已校验 Cmd==0x81，不会误吃）。 */
+    serial_alarm_reset_result_t reset_res{};
+    if(serial_parse_alarm_reset_result(frame, len, &reset_res) == 0) {
+        UPC_LOG_MCU_LINK(Warn, "alarm_reset_result: code=%u result=%u (failed)",
+                         static_cast<unsigned>(reset_res.alarm_code),
+                         static_cast<unsigned>(reset_res.result));
+        publish_alarm_reset_result_ntf(reset_res);
         return;
     }
 

@@ -98,10 +98,36 @@ const ui_alarm_entry_t *ui_alarm_current_find(uint16_t code);
 /**
  * 下发复位请求（UI_Alarm_Reset_Req）。仅 clear_mode=RESET 且不在
  * reset_pending 的条目受理；受理后置 reset_pending，等 MCU 下一帧上报翻转
- * 状态；10s 无回报自动清 pending（按钮恢复可点）。
+ * 状态。解除 pending 的三条路径：该 code 的新上报、复位失败回执、10s 超时兜底。
  * @return 是否已下发
  */
 bool ui_alarm_request_reset(uint16_t code);
+
+/**
+ * 这条报警此刻能不能点 Reset —— **三个复位入口共用同一判据**（消息页详情抽屉、
+ * 首页终止结果条、打印入口拦截弹窗），别各写各的。
+ *
+ * 规则（依据 doc/主控板串口通信协议 - 信息报警命令详表.csv 与 报警map.csv 的
+ * reset_policy 列；旧版 SOC_TLV_ALARM_SINGLE_REPORT…§5 那条
+ * `show_reset = latched && clear_mode==RESET` 伪代码已作废）：
+ *  - 非 RESET 清除方式 / 复位在途 → 不可点；
+ *  - RTN_LATCHED → 可点；
+ *  - ACTIVE 时看 reset_policy：OWNER_TASK 可点（MCU 转给业务任务做硬件恢复，
+ *    激光器 1301、各轴故障都属此类，不点它们永远好不了）；LOCAL 不可点
+ *    （条件仍在时 MCU 直接拒绝，如 1124/1125）。
+ *  - 字典查不到该 code（固件比字典新）→ 按 LOCAL 处理，避免误发 RESET。
+ */
+bool ui_alarm_reset_allowed(const ui_alarm_entry_t *e);
+
+/**
+ * 请求一轮报警快照（UI_Alarm_Snapshot_Req）。MCU **不会主动推**，不请求就补不齐
+ * 重启/重连前就亮着的报警。内部带节流（上一轮在途、或距上次请求不足 2s 则跳过），
+ * 调用方不必自己防抖。`reason` 只进日志，便于排查是哪个触发点发的。
+ *
+ * 已有的触发点：init（本模块）、串口重连（Glavo 侧自行发）、30s 轮询（本模块）、
+ * 进消息中心、开始打印前。
+ */
+void ui_alarm_request_snapshot(const char *reason);
 
 /**
  * 是否存在阻断新打印的未复位报警（1124/1125，MCU 会拒绝新打印请求）。

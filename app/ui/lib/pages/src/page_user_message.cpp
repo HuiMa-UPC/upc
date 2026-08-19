@@ -841,14 +841,18 @@ void build_drawer_footer(lv_obj_t *parent, const ui_alarm_entry_t *cur)
         return;
     }
 
-    /* RESET：ACTIVE 置灰（条件还在，MCU 会拒绝）；pending 置灰显示 Resetting… */
+    /* RESET：能不能点由 ui_alarm_reset_allowed() 统一裁决（三个复位入口共用），
+     * 它按 reset_policy 区分 ACTIVE 下该放行还是该拦——别在这里另加判据。 */
     const bool pending = cur->reset_pending;
-    const bool enabled = !pending && cur->stage == UI_ALARM_STAGE_RTN_LATCHED;
+    const bool enabled = ui_alarm_reset_allowed(cur);
 
-    if(cur->stage == UI_ALARM_STAGE_ACTIVE) {
+    if(cur->stage == UI_ALARM_STAGE_ACTIVE && !pending) {
+        /* 同是 ACTIVE，放行与拦截要说不同的话：OWNER_TASK 类点了才会好转，
+         * 让用户以为"得先修好"反而把人劝退了。 */
         lv_obj_t *lbl = lv_label_create(parent);
-        lv_label_set_text(lbl,
-            "Resolve the condition first, then reset the alarm.");
+        lv_label_set_text(lbl, enabled
+            ? "The condition is still present. Reset asks the machine to recover."
+            : "Resolve the condition first, then reset the alarm.");
         lv_obj_set_style_text_color(lbl, user_color_text_dim, 0);
         lv_obj_set_style_text_font(lbl, user_font_caption(), 0);
         lv_obj_set_width(lbl, LV_PCT(100));
@@ -1625,6 +1629,10 @@ void on_alarm_change(void)
 void page_user_message_refresh(bool /*force*/)
 {
     g_active = true;
+    /* 用户特地来看消息，先跟 MCU 对一次账：单条上报错过就不再补发，本地这份
+     * 可能已经过期。请求侧自带节流，和 30s 轮询撞上也不会重复发；快照回来时
+     * 观察者会把列表重建一遍。 */
+    ui_alarm_request_snapshot("message page");
     /* 进过一次这页就算全看过了：清未读、熄侧栏红点 */
     ui_message_mark_all_read();
     g_visible_limit = kRowsPerPage;   /* 每次进页都从最近 10 条重新看 */

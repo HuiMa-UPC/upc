@@ -16,16 +16,29 @@
 
 namespace {
 
-constexpr int      kCurrentCap      = 80;   /* CONDITION 全集 66 条，留余量 */
+constexpr int      kCurrentCap      = 96;   /* CONDITION 全集 79 条，留余量 */
 constexpr int      kMaxObservers    = 4;
 constexpr uint32_t kResetTimeoutMs  = 10000; /* 复位无回报自动解锁按钮 */
 constexpr uint32_t kEventDismissMs  = 5000;  /* EVENT 蓝卡自动从浮层撤下 */
 
 /* ---- 快照攒帧 ----
- * 快照按 32 条一组分片，收齐 word_count 帧才能对齐；用半套去覆盖当前表会把没
- * 收到那几组的报警误判成已解除。8 组 = 256 条，远超可预见规模。 */
-constexpr int      kSnapMaxWords    = 8;
+ * 快照是请求-响应的，MCU 只回 (active|latched)!=0 的 slot，没回的一律按全零算。
+ * 必须收齐 nonzero_slot_count 个不同 slot 才能原子提交——用半套去覆盖当前表会
+ * 把没收到那些 slot 的报警误判成已解除。
+ *
+ * 轮次边界用「本地发出请求的时刻」界定，不做 Seq 匹配：串口组帧把 Seq 写死成
+ * 0x01（serial_frame.cpp），收发两侧都没有 Seq 通路，而快照本来就是我们主动请求
+ * 的、同时只维护一个，所以请求时刻是比 Seq 更可靠且零协议成本的分界。 */
+constexpr int      kSnapSlots       = middleware::kAlarmSnapshotSlotCount;
 constexpr uint32_t kSnapAssembleMs  = 2000; /* 攒帧超时：宁可丢一批也不用半套 */
+/* 请求节流：进消息页 / 30s 轮询 / 打印前几个触发点会撞在一起，两次请求至少隔这么久 */
+constexpr uint32_t kSnapRequestGapMs = 2000;
+/* 兜底轮询：串口丢一帧单报是无声的，本地会一直缺那条，只能定期重新对齐 */
+constexpr uint32_t kSnapPollMs       = 30000;
+
+/* 快照在途时暂存的单条上报条数上限（开发指导 §11：收齐快照后按序重放）。
+ * 攒帧窗口只有 2s，正常撑死几条；溢出就退回直接应用，宁可有回退风险也别丢报警。 */
+constexpr int      kPendingReportCap = 16;
 
 /* 消息中心自己的落盘目录，独立于 /home/media——报警历史不是媒体，早先挂在
  * media 下只是为了借那边的路径宏。目录由 ui_alarm_state_init() 负责创建：UI 起得
@@ -70,16 +83,28 @@ bool session_suppressed(uint16_t code)
 int g_order[kCurrentCap];
 int g_order_count = 0;
 
-/* 正在攒的这一批快照 */
+/* 正在攒的这一轮快照 */
 struct SnapAssembly {
-    bool     busy;                    /**< 已收到至少一帧、尚未收齐 */
-    uint8_t  word_count;              /**< 本批总帧数（首帧确定） */
-    uint32_t got_mask;                /**< 已收到哪些 word_index（按位） */
-    uint32_t active[kSnapMaxWords];
-    uint32_t latched[kSnapMaxWords];
-    int64_t  started_ms;              /**< 首帧时刻，用于超时作废 */
+    bool     busy;              /**< 请求已发出、这一轮尚未收齐或作废 */
+    bool     meta_known;        /**< 已收到首帧，count/severity 已锁定 */
+    uint8_t  count;             /**< 本轮非零 slot 总数（首帧锁定） */
+    uint8_t  severity;          /**< 本轮 highest_severity（首帧锁定） */
+    uint16_t got_mask;          /**< 已收到哪些 slot_id（12 bit） */
+    int      got_count;
+    uint32_t active[kSnapSlots];
+    uint32_t latched[kSnapSlots];
+    /** 请求发出时刻 = 轮次起点，兼作超时基准。用 LVGL tick 而非 wall_ms()：
+     *  wall_ms() 只有秒级精度，且 WiFi 连上后 NTP 会把系统时钟往前跳——跳成负差
+     *  的话这一轮永远不超时，busy 卡死，后续所有快照请求都被节流挡在门外。 */
+    uint32_t started_tick;
 };
 SnapAssembly g_snap{};
+uint32_t g_snap_last_req_tick = 0;  /* 上次发请求的 tick，用于节流；0=从未发过 */
+
+/* 快照在途期间暂存的 CONDITION 单报，收齐后按序重放（EVENT 不进这里，
+ * 它不改 CONDITION 状态，直接落历史即可）。 */
+middleware::AlarmReportPayload g_pending[kPendingReportCap];
+int g_pending_count = 0;
 
 int64_t wall_ms(void)
 {
@@ -443,42 +468,40 @@ void snapshot_upsert(uint16_t code, bool active, bool latched, int64_t now)
     }
 }
 
-/** 收齐一批后做全量对齐。 */
-void snapshot_apply(void)
+/** 收齐一轮后做全量对齐（原子提交）。未收到的 slot 已在缓存里保持全零。 */
+void snapshot_commit(void)
 {
     const int64_t now = wall_ms();
 
-    /* 一、快照里亮着、本地没有的 → 补进来 */
-    for(int w = 0; w < g_snap.word_count; w++) {
-        const uint32_t live = g_snap.active[w] | g_snap.latched[w];
-        for(int b = 0; b < 32; b++) {
+    /* 一、快照里亮着、本地没有的 → 补进来。槽位→报警号用固定公式，字典比固件
+     * 旧也能算出号来（算得出就不会丢，文案那边自会降级成 "Unknown alarm #"）。 */
+    for(uint8_t s = 0; s < kSnapSlots; s++) {
+        const uint32_t live = g_snap.active[s] | g_snap.latched[s];
+        for(uint8_t b = 0; b < 32; b++) {
             if(!(live & (1u << b))) {
                 continue;
             }
-            const uint16_t code =
-                ui_alarm_snapshot_code(static_cast<uint8_t>(w),
-                                       static_cast<uint8_t>(b));
-            if(code == 0) {
-                continue;   /* 该槽位字典里没有（字典比固件旧），跳过 */
-            }
-            snapshot_upsert(code, (g_snap.active[w] >> b) & 1u,
-                            (g_snap.latched[w] >> b) & 1u, now);
+            snapshot_upsert(middleware::alarm_snapshot_code_of(s, b),
+                            (g_snap.active[s] >> b) & 1u,
+                            (g_snap.latched[s] >> b) & 1u, now);
         }
     }
 
     /* 二、本地有、快照说不亮了 → 当作已解除转历史。
-     * 只处理受快照管辖的 code：EVENT 和字典里没有槽位的不能因为"快照里没有"
-     * 就清掉，那是信息缺失不是状态变化。 */
+     * 只处理受快照管辖的 code：EVENT 与保留号段（xx96..xx99）不占 bit，
+     * 它们"快照里没提"是信息缺失不是状态变化，照清会把真报警抹掉。 */
     for(int i = 0; i < kCurrentCap; i++) {
         if(!g_current[i].used) {
             continue;
         }
         ui_alarm_entry_t &e = g_current[i].e;
-        uint8_t w = 0, b = 0;
-        if(!ui_alarm_snapshot_slot_of(e.code, &w, &b) || w >= g_snap.word_count) {
+        if(!middleware::alarm_snapshot_covers(e.code)) {
             continue;
         }
-        if(((g_snap.active[w] | g_snap.latched[w]) >> b) & 1u) {
+        const int rel  = e.code - 1000;
+        const int slot = rel / 100 * 3 + rel % 100 / 32;
+        const int bit  = rel % 100 % 32;
+        if(((g_snap.active[slot] | g_snap.latched[slot]) >> bit) & 1u) {
             continue;   /* 还亮着 */
         }
         ui_message_retract(e.code);
@@ -490,38 +513,125 @@ void snapshot_apply(void)
     notify_observers();
 }
 
+/** 结束当前这一轮（提交与否由调用方决定），并按序重放暂存的单条上报。 */
+void snapshot_round_end(bool commit)
+{
+    if(commit) {
+        snapshot_commit();
+    }
+    g_snap = SnapAssembly{};
+
+    /* 快照是「请求那一刻」的状态，暂存的单报都比它新，必须压在快照之上重放，
+     * 否则较旧的快照会把较新的状态盖回去，界面出现回退（开发指导 §11）。 */
+    const int n = g_pending_count;
+    g_pending_count = 0;   /* 先清零：重放路径不会再往这儿塞 */
+    for(int i = 0; i < n; i++) {
+        on_alarm_condition(g_pending[i]);
+    }
+    if(n > 0) {
+        UPC_LOG_ALARM_STATE(Info, "snapshot: replayed %d buffered report(s)", n);
+    }
+}
+
+/** 整轮作废：半套位图会把没收到那些 slot 的报警误判成已解除，宁可不更新。 */
+void snapshot_reject(const char *why)
+{
+    UPC_LOG_ALARM_STATE(Warn, "snapshot round rejected: %s", why);
+    snapshot_round_end(false);
+}
+
 void on_alarm_snapshot(const middleware::AlarmSnapshotPayload &p)
 {
-    if(p.word_count == 0 || p.word_count > kSnapMaxWords ||
-       p.word_index >= p.word_count) {
-        UPC_LOG_ALARM_STATE(Warn, "snapshot bad frame: index=%u count=%u",
-                            static_cast<unsigned>(p.word_index),
-                            static_cast<unsigned>(p.word_count));
+    /* 没请求过却来了响应：可能是上一轮超时作废后的迟到帧。无从判断它属于哪一轮，
+     * 更不知道同轮还有几个 slot 没到，收下就有提交半套的风险，直接丢。
+     * 真需要最新状态时下一个触发点（最迟 30s 轮询）会重新请求。 */
+    if(!g_snap.busy) {
+        UPC_LOG_ALARM_STATE(Warn, "snapshot slot %u arrived without a request",
+                            static_cast<unsigned>(p.slot_id));
+        return;
+    }
+    if(lv_tick_elaps(g_snap.started_tick) > kSnapAssembleMs) {
+        snapshot_reject("assemble timeout");
+        return;
+    }
+    if(p.slot_id >= kSnapSlots || p.nonzero_slot_count > kSnapSlots) {
+        snapshot_reject("slot_id / count out of range");
         return;
     }
 
-    const int64_t now = wall_ms();
-    /* 重开一批的三种情形：还没开始攒 / 上一批攒到超时 / 这一帧不属于上一批
-     * （总帧数变了，或这个 index 已经收过——多半是 MCU 重发）。 */
-    const bool timeout = g_snap.busy && (now - g_snap.started_ms > kSnapAssembleMs);
-    if(!g_snap.busy || timeout || g_snap.word_count != p.word_count ||
-       (g_snap.got_mask & (1u << p.word_index))) {
-        g_snap = SnapAssembly{};
-        g_snap.busy       = true;
-        g_snap.word_count = p.word_count;
-        g_snap.started_ms = now;
+    /* 同一轮所有分片的 count 与 highest_severity 必须一致，对不上说明混进了
+     * 别轮的帧（无 Seq 可辨，这两个字段就是仅有的一致性线索）。 */
+    if(!g_snap.meta_known) {
+        g_snap.meta_known = true;
+        g_snap.count      = p.nonzero_slot_count;
+        g_snap.severity   = p.highest_severity;
+    } else if(g_snap.count != p.nonzero_slot_count ||
+              g_snap.severity != p.highest_severity) {
+        snapshot_reject("round metadata mismatch");
+        return;
     }
 
-    g_snap.active[p.word_index]  = p.active_mask;
-    g_snap.latched[p.word_index] = p.latched_mask;
-    g_snap.got_mask |= (1u << p.word_index);
-
-    /* word_count ≤ kSnapMaxWords(8)，移位安全 */
-    const uint32_t full = (1u << p.word_count) - 1u;
-    if((g_snap.got_mask & full) == full) {
-        snapshot_apply();
-        g_snap = SnapAssembly{};
+    /* count=0 是「当前无报警」的清空响应，只有一帧且必须全零 */
+    if(g_snap.count == 0) {
+        if(p.slot_id != 0 || p.highest_severity != 0 ||
+           p.active_mask != 0 || p.latched_mask != 0) {
+            snapshot_reject("count=0 frame not all-zero");
+            return;
+        }
+        UPC_LOG_ALARM_STATE(Info, "snapshot: all clear");
+        snapshot_round_end(true);   /* 缓存本就全零，直接提交即全清 */
+        return;
     }
+
+    if((p.active_mask | p.latched_mask) == 0) {
+        snapshot_reject("nonzero slot carries empty masks");
+        return;
+    }
+    if(g_snap.got_mask & (1u << p.slot_id)) {
+        snapshot_reject("duplicate slot_id");
+        return;
+    }
+
+    g_snap.active[p.slot_id]  = p.active_mask;
+    g_snap.latched[p.slot_id] = p.latched_mask;
+    g_snap.got_mask |= static_cast<uint16_t>(1u << p.slot_id);
+    g_snap.got_count++;
+
+    if(g_snap.got_count >= g_snap.count) {
+        UPC_LOG_ALARM_STATE(Info, "snapshot: committed %d slot(s), highest_sev=%u",
+                            g_snap.got_count,
+                            static_cast<unsigned>(g_snap.severity));
+        snapshot_round_end(true);
+    }
+}
+
+/**
+ * 发一次快照请求，并以「此刻」作为新一轮的起点。
+ *
+ * MCU 不会主动推快照，不请求就永远补不齐重启/重连前就亮着的报警。触发点有五处
+ * （启动、串口重连、进消息中心、30s 轮询、开始打印前），会撞在一起，所以这里
+ * 兜住两种重复：上一轮还没收齐就不再发，两次请求也至少隔 kSnapRequestGapMs。
+ */
+void snapshot_request(const char *reason)
+{
+    const uint32_t now = lv_tick_get();
+    if(g_snap.busy && lv_tick_elaps(g_snap.started_tick) <= kSnapAssembleMs) {
+        return;   /* 上一轮在途，等它收齐或超时 */
+    }
+    if(g_snap_last_req_tick != 0 &&
+       lv_tick_elaps(g_snap_last_req_tick) < kSnapRequestGapMs) {
+        return;
+    }
+    if(g_snap.busy) {
+        snapshot_reject("superseded by a new request");
+    }
+
+    g_snap = SnapAssembly{};
+    g_snap.busy         = true;
+    g_snap.started_tick = now;
+    g_snap_last_req_tick = now ? now : 1u;   /* 0 是"从未发过"的哨兵，避开它 */
+    UPC_LOG_ALARM_STATE(Info, "snapshot request (%s)", reason ? reason : "-");
+    ui::UiMsgProxy::instance().send_alarm_snapshot_req();
 }
 
 /** 总线线程送来的一帧，堆上暂存等切回 UI 线程（同 ui_message_store）。 */
@@ -529,8 +639,22 @@ void apply_report_async(void *raw)
 {
     auto *p = static_cast<middleware::AlarmReportPayload *>(raw);
     if(p->state_mask & middleware::kAlarmStateEvent) {
+        /* EVENT 不改 CONDITION 状态，快照在途也能直接落历史（开发指导 §11.4）。
+         * 顺带记一笔异常 clear_mode：按表 EVENT 恒为 NONE(3)，而
+         * 信息报警命令详表的示例帧里写的是 0，两者矛盾且示例已确认作废。
+         * 真收到非 3 的话说明固件行为与表不符，得回头找 MCU 组。 */
+        if(p->clear_mode != static_cast<uint8_t>(middleware::AlarmClearMode::None)) {
+            UPC_LOG_ALARM_STATE(Warn, "EVENT %u clear_mode=%u (expected NONE=3)",
+                                static_cast<unsigned>(p->alarm_code),
+                                static_cast<unsigned>(p->clear_mode));
+        }
         on_alarm_event(p->alarm_code, p->severity, p->detail);
+    } else if(g_snap.busy && g_pending_count < kPendingReportCap) {
+        /* 快照在途：这条比快照新，先攒着，等快照原子提交后再压上去重放，
+         * 免得较旧的快照把它盖回去（开发指导 §11）。 */
+        g_pending[g_pending_count++] = *p;
     } else {
+        /* 暂存溢出就直接应用：回退风险远小于把报警丢掉 */
         on_alarm_condition(*p);
     }
     delete p;
@@ -541,6 +665,27 @@ void apply_snapshot_async(void *raw)
     auto *p = static_cast<middleware::AlarmSnapshotPayload *>(raw);
     on_alarm_snapshot(*p);
     delete p;
+}
+
+/** 复位失败回执：MCU 明确拒了，立刻解锁按钮，不用干等 10s 超时。 */
+void apply_reset_result_async(void *raw)
+{
+    auto *p = static_cast<middleware::AlarmResetResultPayload *>(raw);
+    const int i = slot_find(p->alarm_code);
+    if(i >= 0 && g_current[i].e.reset_pending) {
+        g_current[i].e.reset_pending = false;
+        UPC_LOG_ALARM_STATE(Warn, "reset failed for %u (result=%u)",
+                            static_cast<unsigned>(p->alarm_code),
+                            static_cast<unsigned>(p->result));
+        notify_observers();
+    }
+    delete p;
+}
+
+/** 30s 兜底轮询：串口丢帧这种无声异常检测不到，只能靠定期重新对齐。 */
+void snapshot_poll_cb(lv_timer_t * /*t*/)
+{
+    snapshot_request("poll");
 }
 
 } /* namespace */
@@ -581,6 +726,21 @@ void ui_alarm_state_init(void)
             lv_async_call(apply_snapshot_async,
                           new middleware::AlarmSnapshotPayload(p));
         });
+    ui::UiMsgProxy::instance().register_alarm_reset_result(
+        [](const middleware::AlarmResetResultPayload &p) {
+            lv_async_call(apply_reset_result_async,
+                          new middleware::AlarmResetResultPayload(p));
+        });
+
+    /* 启动补齐 + 30s 兜底轮询。UI 可能比 Glavo 先起，这一发未必有人接；轮询
+     * 会把它捞回来，Glavo 侧串口一通也会自己请求一次。 */
+    snapshot_request("init");
+    lv_timer_create(snapshot_poll_cb, kSnapPollMs, nullptr);
+}
+
+void ui_alarm_request_snapshot(const char *reason)
+{
+    snapshot_request(reason);
 }
 
 int ui_alarm_current_count(void)
@@ -602,6 +762,22 @@ const ui_alarm_entry_t *ui_alarm_current_find(uint16_t code)
     return (i >= 0) ? &g_current[i].e : nullptr;
 }
 
+bool ui_alarm_reset_allowed(const ui_alarm_entry_t *e)
+{
+    if(!e || e->reset_pending ||
+       e->clear_mode != static_cast<uint8_t>(middleware::AlarmClearMode::Reset)) {
+        return false;
+    }
+    if(e->stage == UI_ALARM_STAGE_RTN_LATCHED) {
+        return true;
+    }
+    /* ACTIVE：只有 OWNER_TASK 类值得下发——MCU 会把请求转给业务任务做硬件恢复。
+     * LOCAL 类（1124/1125）条件仍在时必被拒，让按钮亮着只会白等一轮 pending。
+     * reset_policy 不在报文里，只能查字典；查不到按 LOCAL 这一保守档处理。 */
+    const ui_alarm_catalog_entry_t *cat = ui_alarm_catalog_find(e->code);
+    return cat && cat->reset_owner_task;
+}
+
 bool ui_alarm_request_reset(uint16_t code)
 {
     const int i = slot_find(code);
@@ -609,8 +785,7 @@ bool ui_alarm_request_reset(uint16_t code)
         return false;
     }
     ui_alarm_entry_t &e = g_current[i].e;
-    if(e.clear_mode != static_cast<uint8_t>(middleware::AlarmClearMode::Reset) ||
-       e.reset_pending) {
+    if(!ui_alarm_reset_allowed(&e)) {
         return false;
     }
     e.reset_pending = true;

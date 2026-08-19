@@ -1,7 +1,8 @@
 kind,code,title_en,desc_en
 alarm,1000,Self-test failed,Power-on self-test failed. Check the issue and restart the device.
-alarm,1001,Printing conditions not met,One or more printing conditions are not satisfied.
+alarm,1001,Emergency stop,Emergency stop is engaged. The machine entered a safe state. Release the button and reset.
 alarm,1002,Axis initialization failed,Axis initialization failed. A power cycle may be required.
+alarm,1003,Door opened while printing,The door was opened during printing. Laser output stopped immediately.
 alarm,1101,Waste bucket full,Empty the waste powder bucket.
 alarm,1102,Waste bucket not installed,Reinstall the waste powder bucket. Clears automatically once seated.
 alarm,1103,Powder reservoir full,The powder reservoir is full. Clears automatically.
@@ -12,7 +13,6 @@ alarm,1107,Powder bucket cover not seated,Close the powder bucket cover.
 alarm,1108,Left powder type mismatch,The left powder bucket type does not match the job.
 alarm,1109,Right powder type mismatch,The right powder bucket type does not match the job.
 alarm,1110,Waste powder type mismatch,The waste bucket type does not match.
-alarm,1111,Door opened while printing,The door was opened during printing. Laser output stopped immediately.
 alarm,1120,Chamber oxygen too high,Oxygen level is too high while printing. Printing is paused.
 alarm,1121,Chamber pressure too high,Chamber pressure is above the limit.
 alarm,1122,Chamber pressure too low,Chamber pressure is below the limit.
@@ -31,6 +31,19 @@ alarm,1211,Z axis homing error,The Z axis failed to home.
 alarm,1212,S axis homing error,The S axis failed to home.
 alarm,1213,Z axis homing config error,Z axis homing configuration is invalid.
 alarm,1214,S axis homing config error,S axis homing configuration is invalid.
+alarm,1215,Z axis driver overtemperature,The Z axis driver is overheating. Let it cool down and reset.
+alarm,1216,S axis driver overtemperature,The S axis driver is overheating. Let it cool down and reset.
+alarm,1217,D axis driver overtemperature,The D axis driver is overheating. Let it cool down and reset.
+alarm,1218,Z axis driver short circuit,Z axis driver phase A/B shorted to supply or ground. Check the motor wiring.
+alarm,1219,S axis driver short circuit,S axis driver phase A/B shorted to supply or ground. Check the motor wiring.
+alarm,1220,D axis driver short circuit,D axis driver phase A/B shorted to supply or ground. Check the motor wiring.
+alarm,1224,Z axis communication unstable,Intermittent Z axis communication. Motion is not affected yet.
+alarm,1225,S axis communication unstable,Intermittent S axis communication. Motion is not affected yet.
+alarm,1226,D axis communication unstable,Intermittent D axis communication. Motion is not affected yet.
+alarm,1227,S axis stalled,The S axis stalled. Clear any obstruction and reset.
+alarm,1228,Z axis motion config error,Invalid Z axis motion parameters or the timer failed to start.
+alarm,1229,S axis motion config error,Invalid S axis motion parameters or the timer failed to start.
+alarm,1230,D axis motion config error,Invalid D axis motion parameters or the timer failed to start.
 alarm,1300,Laser disconnected,Laser communication lost. Reconnects automatically.
 alarm,1301,Laser alarm,The laser reported an alarm.
 alarm,1302,Oxygen sensor error,Oxygen sensor data unavailable.
@@ -65,6 +78,7 @@ detail,266,Hall sensor unavailable,
 detail,267,Powder bucket cover not seated,
 detail,268,Fan duty out of range,
 detail,269,Door unlock already in progress,
+detail,270,Door lock coil drive failed,
 detail,512,Powder reservoir full — layer progress paused,
 detail,513,Motion command load failed,
 detail,514,Axis motion execution failed,

@@ -1752,7 +1752,9 @@ void sync_result_alarm_bar(void)
     lv_label_set_text(g_result_alarm_title, blk->title);
     lv_label_set_text(g_result_alarm_body, blk->body);
 
-    /* Reset 三态：可点 / 在途禁点 / 非 RESET 清除方式则整钮隐藏 */
+    /* Reset 三态：可点 / 在途禁点 / 非 RESET 清除方式则整钮隐藏。
+     * 「此刻能不能点」交给 ui_alarm_reset_allowed()——与消息页抽屉、打印入口
+     * 拦截弹窗同一判据，免得同一条报警在两个界面上表现相反。 */
     const bool resettable =
         blk->clear_mode == (uint8_t)middleware::AlarmClearMode::Reset;
     if(!resettable) {
@@ -1763,8 +1765,12 @@ void sync_result_alarm_bar(void)
     if(blk->reset_pending) {
         lv_obj_add_state(g_result_alarm_btn, LV_STATE_DISABLED);
         lv_label_set_text(g_result_alarm_btn_lbl, "RESETTING...");
-    } else {
+    } else if(ui_alarm_reset_allowed(blk)) {
         lv_obj_remove_state(g_result_alarm_btn, LV_STATE_DISABLED);
+        lv_label_set_text(g_result_alarm_btn_lbl, "RESET");
+    } else {
+        /* 条件仍在的 LOCAL 类（1124/1125 就是）MCU 必拒，点了只是白等一轮 */
+        lv_obj_add_state(g_result_alarm_btn, LV_STATE_DISABLED);
         lv_label_set_text(g_result_alarm_btn_lbl, "RESET");
     }
 }

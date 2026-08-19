@@ -524,7 +524,9 @@ enum class MsgType : uint32_t {
     // ---- UI ↔ GLAVO：MCU 报警（串口 PORT_ALARM_TASK 0xA3；字典见 doc/主控板串口通信协议 - 报警&事件表.csv） ----
     GLAVO_Alarm_Report_Ntf = 0x1610, /**< AlarmReportPayload：MCU 单条报警/EVENT 上报（Cmd 0x20 TLV 0x01 原样透传） */
     UI_Alarm_Reset_Req,              /**< AlarmResetReqPayload：请求复位某条 CONDITION 报警（Cmd 0x82 TLV 0x01） */
-    GLAVO_Alarm_Snapshot_Ntf,        /**< AlarmSnapshotPayload：报警快照的一帧（Cmd 0x81 TLV 0x04 原样透传） */
+    GLAVO_Alarm_Snapshot_Ntf,        /**< AlarmSnapshotPayload：报警快照的一个 slot（Cmd 0x81 TLV 0x04 原样透传） */
+    UI_Alarm_Snapshot_Req,           /**< Empty：请求 MCU 回一轮报警快照（Cmd 0x81 TLV 0x05 len=0） */
+    GLAVO_Alarm_Reset_Result_Ntf,    /**< AlarmResetResultPayload：复位失败回执（Cmd 0x82 TLV 0x04） */
 
 };
 
@@ -1304,30 +1306,66 @@ struct AlarmReportPayload {
     uint32_t detail;       /**< 详情号/原因值，原样保留；0=无详情 */
 };
 
-/** GLAVO_Alarm_Snapshot_Ntf 载荷：报警快照的**一帧**（串口 0xA3/0x81 TLV 0x04，len=11）。
+/** 快照 slot 总数：4 个报警组 × 每组 3 个 mask 字。`slot_id` 合法范围 0..11。 */
+constexpr uint8_t kAlarmSnapshotSlotCount = 12;
+
+/**
+ * 快照槽位 → 报警号的固定公式（`doc/SOC_TLV_ALARM_EVT_SNAPSHOT报警快照开发指导.md` §6）。
  *
- *  快照按 32 条一组分片，`word_count` 帧才是完整一批。Glavo 侧同样不加工，
- *  攒帧与对齐都在 UI（`ui_alarm_state`）做——那边才有当前报警表。
+ * 报警码按百位分 4 组，每组预留 100 个号但只有前 96 个进快照（`xx96..xx99`
+ * 永久保留）。组内 96 个号拆成 3 个 32 bit 的 mask 字，`slot_id = group*3 + word`。
  *
- *  只含 CONDITION，EVENT 不占 bit；位图槽位→报警号的映射由
- *  `doc/主控板串口通信协议 - 报警快照Map.csv` 生成（见 ui_alarm_catalog）。
- *  **word_count 不能写死**：报警表会随固件增长，当前 66 条 CONDITION 就要 3 帧，
- *  而文档注释里还写着 2。 */
+ * 这是**纯计算**，不查表：CSV 里的 slot/bit 列只是显示元数据，字典比固件旧时
+ * 也必须能算出报警号（该文档 §6.5 明令禁止改用内部 index 推算）。
+ */
+constexpr uint16_t alarm_snapshot_code_of(uint8_t slot_id, uint8_t bit)
+{
+    return static_cast<uint16_t>(1000 + (slot_id / 3) * 100 + (slot_id % 3) * 32 + bit);
+}
+
+/** 报警号是否落在快照管辖范围内（1000..1395，且组内偏移 < 96）。 */
+constexpr bool alarm_snapshot_covers(uint16_t code)
+{
+    return code >= 1000 && code <= 1395 && ((code - 1000) % 100) < 96;
+}
+
+/** GLAVO_Alarm_Snapshot_Ntf 载荷：报警快照的**一个 slot**（串口 0xA3/0x81 TLV 0x04，len=11）。
+ *
+ *  快照是**请求-响应**的：MCU 不会主动推，UI 得先发 UI_Alarm_Snapshot_Req。
+ *  响应**稀疏**——只回 (active|latched) 非零的 slot，没回的 slot 一律按全零处理，
+ *  不能保留上一轮旧值。`nonzero_slot_count=0` 是合法的「当前无报警」响应。
+ *  Glavo 侧不加工，攒帧与原子对齐都在 UI（`ui_alarm_state`）做。
+ *
+ *  只含 CONDITION，EVENT 不占 bit。槽位→报警号用 alarm_snapshot_code_of()。 */
 struct AlarmSnapshotPayload {
-    uint8_t  word_count;       /**< 本批总帧数 */
-    uint8_t  word_index;       /**< 本帧序号（0 基） */
-    uint8_t  highest_severity; /**< 当前最高等级（提示用，非必需） */
+    uint8_t  nonzero_slot_count; /**< 本轮非零 slot 总数（0..12）；0=全清 */
+    uint8_t  slot_id;            /**< 本帧的 slot（0..11），非连续、不保证顺序 */
+    uint8_t  highest_severity;   /**< 快照时刻最高等级；0=无有效 CONDITION */
     uint8_t  reserved;
-    uint32_t active_mask;      /**< 本组 32 条的 active 位 */
-    uint32_t latched_mask;     /**< 本组 32 条的 latched 位 */
+    uint32_t active_mask;        /**< 本 slot 32 条的 active 位 */
+    uint32_t latched_mask;       /**< 本 slot 32 条的 latched 位 */
 };
 
 /** UI_Alarm_Reset_Req 载荷：请求复位某条报警（串口 0xA3/0x82 TLV 0x01）。
- *  仅对 clear_mode=RESET 且 latched 的 CONDITION 有意义；通信 ACK 不代表复位
- *  成功，最终状态以后续 GLAVO_Alarm_Report_Ntf 为准。 */
+ *  仅对 clear_mode=RESET 的 CONDITION 有意义；通信 ACK 不代表复位成功，最终
+ *  状态以后续 GLAVO_Alarm_Report_Ntf 为准（失败会另有 Reset_Result 回执）。 */
 struct AlarmResetReqPayload {
     uint16_t alarm_code;
     uint8_t  reserved[2];
+};
+
+/** AlarmResetResultPayload.result 取值（MCU 只在失败时回执）。 */
+constexpr uint8_t kAlarmResetResultFailed = 0x01;
+
+/** GLAVO_Alarm_Reset_Result_Ntf 载荷：复位**失败**回执（串口 0xA3/0x82 TLV 0x04，len=3）。
+ *
+ *  只在失败时发，成功仍以后续 NORMAL 单报为准。串口 Seq 固定 0，所以按
+ *  alarm_code 关联在途请求、不按 Seq。UI 收到即解除该条的 reset_pending，
+ *  不用干等 10s 超时。 */
+struct AlarmResetResultPayload {
+    uint16_t alarm_code;  /**< 关联正在复位的报警 */
+    uint8_t  result;      /**< kAlarmResetResultFailed */
+    uint8_t  reserved;
 };
 
 } // namespace middleware

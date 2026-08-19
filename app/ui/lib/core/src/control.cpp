@@ -2031,14 +2031,18 @@ void on_detail_start_print(lv_event_t * /*e*/)
     if(g_plate_thickness == PLATE_THICKNESS_NONE) {
         return;
     }
+    /* 顺手请求一次快照：本地阻断状态可能已经过期（单条上报错过不补发），
+     * 拿旧状态拦下一次本可以开始的打印比较冤。请求是异步的，这次预检仍用当前
+     * 缓存判断——真有偏差，下次点击就纠正过来了。 */
+    ui_alarm_request_snapshot("print start");
+
     /* 阻断报警预检：与其等 MCU 拒绝，进确认弹窗前就把原因亮出来。
      * clear_mode=RESET 给「Reset」直达；其余（如断电重启）只能知会。 */
     if(const ui_alarm_entry_t *blk = ui_alarm_print_blocker()) {
         char body[256];
         std::snprintf(body, sizeof(body), "%s\n%s", blk->title, blk->body);
-        const bool resettable =
-            blk->clear_mode == (uint8_t)middleware::AlarmClearMode::Reset &&
-            !blk->reset_pending;
+        /* 与消息页抽屉、结果页失败条同一判据（见 ui_alarm_reset_allowed） */
+        const bool resettable = ui_alarm_reset_allowed(blk);
         open_user_confirm_dialog(lv_layer_top(), "Unable to start print", body,
                                  "Cancel", resettable ? "Reset" : "OK",
                                  ui_color_danger,

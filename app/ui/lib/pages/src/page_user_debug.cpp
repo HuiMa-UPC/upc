@@ -931,7 +931,8 @@ const uint16_t kDbgInjectCodes[] = {
  *  1104 RTN_LATCHED（warning/RESET）→ 消息页 RESOLVED 药丸 + 可复位；
  *  1101 自动清除 CONDITION（warning/ACTIVE/AUTO）→ 无 Reset 钮的红卡；
  *  2000 EVENT（info）→ 蓝卡 5s 自动从浮层撤下、历史留档。
- *  1111 critical CONDITION（ACTIVE/AUTO）→ 只为把四档等级配色凑齐（深红那档）。
+ *  1003 critical CONDITION（ACTIVE/RESET）→ 凑齐四档等级配色（深红那档），
+ *       同时验 ACTIVE + reset_policy=OWNER_TASK 的报警在抽屉里可点 Reset。
  *  等级不进字典、以报文为准，所以四色能不能看全全看造什么数据。
  *  关掉开关注入 NORMAL 帧模拟解除（EVENT 无需解除）。 */
 struct DbgAlarmInject {
@@ -949,8 +950,8 @@ const DbgAlarmInject kDbgInjectAlarms[] = {
       (uint8_t)middleware::AlarmClearMode::Auto },
     { 2000, 1, middleware::kAlarmStateEvent,
       (uint8_t)middleware::AlarmClearMode::Auto },
-    { 1111, 4, middleware::kAlarmStateActive,
-      (uint8_t)middleware::AlarmClearMode::Auto },
+    { 1003, 4, middleware::kAlarmStateActive,
+      (uint8_t)middleware::AlarmClearMode::Reset },
 };
 
 void set_dbg_toggle_enabled(lv_obj_t *btn, bool enabled)

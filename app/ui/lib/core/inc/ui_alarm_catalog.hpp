@@ -21,6 +21,13 @@
  * latched 两个位图，给不出等级和清除方式，而快照又恰恰用在"本地表里没有这条"的
  * 场景（重启/重连后补齐）。这时只能查字典凑出一张卡片。收到该报警的单条上报后
  * 必须立刻改用报文值覆盖，不得让兜底值长期生效。
+ *
+ * `reset_owner_task` 是"以报文为准"的**唯一例外**——报文里根本没有这个字段，
+ * 只有 `报警map.csv` 的 reset_policy 列有。查不到就按最保守的一档（LOCAL）处理。
+ *
+ * 快照槽位映射**不在本文件**：报警号 ↔ (slot_id,bit) 是固定公式，见
+ * `middleware::alarm_snapshot_code_of()` / `alarm_snapshot_covers()`
+ * （`common/upc_contract.hpp`）。生成脚本只负责校验 CSV 与公式一致。
  */
 
 #ifdef __cplusplus
@@ -39,17 +46,12 @@ typedef struct {
     /** 0 AUTO / 1 RESET / 2 POWER_CYCLE / 3 NONE。**仅快照场景兜底**。 */
     uint8_t     clear_mode_fallback;
     uint8_t     is_event;  /**< 1=EVENT（一次性，不占快照 bit）；0=CONDITION */
+    /** 1=reset_policy 为 OWNER_TASK：复位请求会被 MCU 转给业务任务做硬件恢复，
+     *  故障条件仍在（ACTIVE）时也该允许下发——激光器 1301、各轴故障都属此类，
+     *  不点复位它们永远好不了。0=LOCAL：条件仍在时 MCU 直接拒绝，按钮该置灰。
+     *  **不在报文里**，只能查字典；查不到按 0 处理（见文件头）。 */
+    uint8_t     reset_owner_task;
 } ui_alarm_catalog_entry_t;
-
-/**
- * 快照位图槽位 → 报警号。快照帧按 word（32 bit）分片，(word_index, bit_index)
- * 唯一定位一条 CONDITION；EVENT 不分配 bit（见信息报警命令详表 §报警快照上报）。
- */
-typedef struct {
-    uint8_t  word_index;
-    uint8_t  bit_index;
-    uint16_t code;
-} ui_alarm_snapshot_entry_t;
 
 typedef struct {
     uint32_t    code;   /**< 详情号（报文 detail 字段） */
@@ -67,22 +69,6 @@ const ui_alarm_detail_entry_t *ui_alarm_detail_find(uint32_t detail);
 
 /** 字典条数（启动日志用）。 */
 int ui_alarm_catalog_count(void);
-
-/**
- * 快照槽位 → 报警号；该槽位未定义返回 0。
- * 用于把 active/latched 位图展开成报警号集合。
- */
-uint16_t ui_alarm_snapshot_code(uint8_t word_index, uint8_t bit_index);
-
-/**
- * 报警号 → 快照槽位；该报警不在快照表里（EVENT，或字典比固件旧）返回 false。
- * 对齐时用它判断"这条报警是否受快照管辖"——不受管辖的不能因为快照里没有就清掉。
- */
-bool ui_alarm_snapshot_slot_of(uint16_t code, uint8_t *word_index,
-                               uint8_t *bit_index);
-
-/** 快照表条数（= CONDITION 总数，启动日志用）。 */
-int ui_alarm_snapshot_count(void);
 
 #ifdef __cplusplus
 }

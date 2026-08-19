@@ -50,6 +50,7 @@ using OtaProgressCb    = std::function<void(const middleware::OtaProgressPayload
 using DeviceEventCb    = std::function<void(const middleware::DeviceEventPayload&)>;
 using AlarmReportCb    = std::function<void(const middleware::AlarmReportPayload&)>;
 using AlarmSnapshotCb  = std::function<void(const middleware::AlarmSnapshotPayload&)>;
+using AlarmResetResultCb = std::function<void(const middleware::AlarmResetResultPayload&)>;
 
 class UiMsgProxy {
 public:
@@ -156,12 +157,18 @@ public:
     /** GLAVO_Alarm_Report_Ntf：MCU 单条报警/EVENT 上报（0xA3/0x20 原样透传），
      *  由 ui_alarm_state 消费。 */
     void register_alarm_report(AlarmReportCb cb);
-    /** GLAVO_Alarm_Snapshot_Ntf：报警快照的一帧（0xA3/0x81 原样透传）。
-     *  分片到达，攒帧与全量对齐由 ui_alarm_state 负责。 */
+    /** GLAVO_Alarm_Snapshot_Ntf：报警快照的一个 slot（0xA3/0x81 原样透传）。
+     *  稀疏到达，攒帧与原子对齐由 ui_alarm_state 负责。 */
     void register_alarm_snapshot(AlarmSnapshotCb cb);
+    /** GLAVO_Alarm_Reset_Result_Ntf：复位失败回执（0xA3/0x82 TLV 0x04）。
+     *  只在失败时来；成功仍以后续 NORMAL 单报为准。 */
+    void register_alarm_reset_result(AlarmResetResultCb cb);
     /** UI_Alarm_Reset_Req：请求复位某条 CONDITION 报警。ACK 不代表成功，
-     *  最终状态以后续 GLAVO_Alarm_Report_Ntf 为准。 */
+     *  最终状态以后续 GLAVO_Alarm_Report_Ntf 或失败回执为准。 */
     void send_alarm_reset(uint16_t alarm_code);
+    /** UI_Alarm_Snapshot_Req：请求 MCU 回一轮报警快照。
+     *  MCU 不会主动推，不发这条就补不齐重启/重连前就亮着的报警。 */
+    void send_alarm_snapshot_req();
 
     /* ---- 网络 / WiFi（前端预留，后端接口到位后即可用；未上线时无人响应，不影响运行） ---- */
     void send_wifi_enable(bool enable);
@@ -244,6 +251,7 @@ private:
     DeviceEventCb device_event_cb_;
     AlarmReportCb alarm_report_cb_;
     AlarmSnapshotCb alarm_snapshot_cb_;
+    AlarmResetResultCb alarm_reset_result_cb_;
 };
 
 } // namespace ui

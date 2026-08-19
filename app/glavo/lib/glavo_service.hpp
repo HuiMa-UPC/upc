@@ -145,6 +145,9 @@ private:
     /** @brief 报警复位请求：组 0xA3/0x82 帧下发串口；结果以后续单条上报为准 */
     void handle_alarm_reset(const middleware::Message& msg);
 
+    /** @brief 报警快照请求：组 0xA3/0x81 TLV 0x05 帧下发；MCU 不主动推快照 */
+    void handle_alarm_snapshot_req(const middleware::Message& msg);
+
     void send_door_rsp(const middleware::Message& msg, middleware::MsgType rsp_type, bool ok);
     void send_dir_open_empty(const middleware::Message& req);
     void send_dir_open_usb(const middleware::Message& req, const std::string& usb_path);

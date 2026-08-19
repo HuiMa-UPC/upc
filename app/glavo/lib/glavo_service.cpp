@@ -541,8 +541,9 @@ bool GlavoService::start()
         middleware::MsgType::UI_Mcu_Version_Req,
         middleware::MsgType::UI_Galvo_Version_Req,
 
-        /* 消息中心：MCU 报警复位 */
+        /* 消息中心：MCU 报警复位 + 快照请求 */
         middleware::MsgType::UI_Alarm_Reset_Req,
+        middleware::MsgType::UI_Alarm_Snapshot_Req,
     };
     for(middleware::MsgType t : k_subs) {
         subscribe(t, [this](const middleware::Message& msg) { on_message(msg); });
@@ -960,6 +961,9 @@ void GlavoService::handle_message(const middleware::Message& msg)
             break;
         case middleware::MsgType::UI_Alarm_Reset_Req:
             handle_alarm_reset(msg);
+            break;
+        case middleware::MsgType::UI_Alarm_Snapshot_Req:
+            handle_alarm_snapshot_req(msg);
             break;
         default:
             break;
@@ -3012,7 +3016,25 @@ void GlavoService::handle_alarm_reset(const middleware::Message& msg)
     UPC_LOG_GLAVO_SERVICE(Info, "alarm_reset TX code=%u",
                           static_cast<unsigned>(p.alarm_code));
     /* 通信 ACK 只表示 MCU 收到帧；复位是否成功以后续单条上报为准，
-     * UI 侧在收到该 code 的下一帧前保持"复位处理中"。 */
+     * UI 侧在收到该 code 的下一帧或 Reset_Result 失败回执前保持"复位处理中"。 */
+    debug_tx(frame, n);
+}
+
+/**
+ * @brief 转发 UI 的报警快照请求（0xA3/0x81 TLV 0x05 len=0）
+ * @note MCU 不会主动推快照，不发这条 UI 就永远补不齐重启/重连前就亮着的报警。
+ *       攒帧、轮次判定与原子提交都在 UI 侧，这里只负责把请求发出去。
+ */
+void GlavoService::handle_alarm_snapshot_req(const middleware::Message& msg)
+{
+    (void)msg;
+    uint8_t frame[16];
+    const int n = serial_build_alarm_snapshot_request(frame, sizeof(frame));
+    if(n <= 0) {
+        UPC_LOG_GLAVO_SERVICE(Warn, "alarm_snapshot request build failed");
+        return;
+    }
+    UPC_LOG_GLAVO_SERVICE(Info, "alarm_snapshot request TX");
     debug_tx(frame, n);
 }
 

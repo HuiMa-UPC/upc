@@ -375,6 +375,15 @@ void UiMsgProxy::init()
             }
         }));
 
+    subs_.push_back(bus.subscribe(
+        middleware::MsgType::GLAVO_Alarm_Reset_Result_Ntf, middleware::ModuleId::UI,
+        [this](const middleware::Message& msg) {
+            middleware::AlarmResetResultPayload p{};
+            if (alarm_reset_result_cb_ && read_inline_pod(msg, p)) {
+                alarm_reset_result_cb_(p);
+            }
+        }));
+
 }
 
 /* 解析 [WifiListHeader][WifiEntryPayload × count]（BufferRef/Inline 皆可），仿 Fs_DirOpen_Rsp。 */
@@ -585,12 +594,25 @@ void UiMsgProxy::register_alarm_snapshot(AlarmSnapshotCb cb)
     alarm_snapshot_cb_ = std::move(cb);
 }
 
+void UiMsgProxy::register_alarm_reset_result(AlarmResetResultCb cb)
+{
+    alarm_reset_result_cb_ = std::move(cb);
+}
+
 void UiMsgProxy::send_alarm_reset(uint16_t alarm_code)
 {
     middleware::AlarmResetReqPayload payload{};
     payload.alarm_code = alarm_code;
     publish_pod(middleware::MsgType::UI_Alarm_Reset_Req,
                 middleware::ModuleId::APP_GLAVO, payload);
+}
+
+void UiMsgProxy::send_alarm_snapshot_req()
+{
+    middleware::Message msg(middleware::MsgType::UI_Alarm_Snapshot_Req,
+                            middleware::ModuleId::UI,
+                            middleware::ModuleId::APP_GLAVO);
+    middleware::MsgPort::instance().publish_async(msg);
 }
 
 

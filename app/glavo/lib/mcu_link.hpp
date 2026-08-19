@@ -270,6 +270,13 @@ public:
      */
     void publish_simulated_versions_if_unknown();
 
+    /**
+     * @brief 向 MCU 请求一轮报警快照（0xA3/0x81 TLV 0x05）
+     * @note MCU **不会主动推**快照。串口打开成功后自动调一次，补齐断连期间
+     *       错过的状态变化；UI 侧另有启动/进页/轮询等触发点（那边带节流）。
+     */
+    void request_alarm_snapshot();
+
 private:
     struct SerialReliableItem {
         uint8_t data[64]{};

@@ -241,8 +241,8 @@ SVG 的，那样没法按未读数开关。
 |---|---|---|---|
 | `UI_MSG_SEV_INFO` | 1 information 信息提示 | 蓝 `#485DFF` | 对话气泡 |
 | `UI_MSG_SEV_ERROR` | 2 warning 警告 | 黄 `#FFD426` | 警告三角 |
-| `UI_MSG_SEV_CRITICAL` | 3 fault 故障 | 橙 `#FF8A3D` | 警告三角 |
-| `UI_MSG_SEV_EMERGENCY` | 4 trip **安全停机** | 红 `#FF4242` | 警告三角 |
+| `UI_MSG_SEV_CRITICAL` | 3 error 故障 | 橙 `#FF8A3D` | 警告三角 |
+| `UI_MSG_SEV_EMERGENCY` | 4 critical **安全停机** | 红 `#FF4242` | 警告三角 |
 
 图标资产是 `notice_badge_icons`（源 SVG 从稿 3058:7234 / 3058:7059 导出，存在
 `tools/_badge_svg/`，`tools/gen_notice_badge_icons.py` 可重跑）。**每档屏各出一版**
@@ -257,10 +257,11 @@ SVG 的，那样没法按未读数开关。
   实机上分不出来——暗背景下暗色视觉后退，最严重那档反而最不显眼。现在是蓝→黄→
   橙→红的色相阶梯，两两拉开；稿只定义了两端（3058:7058 info 蓝 / 3058:7233
   alert 红），中间两档本就是自由发挥的空间。
-- **trip 不是"更严重的 fault"**，是保护动作已经发生、设备已自动停机（如打印中
-  开门 → 激光立即断电）。排序上 `ui_alarm_state::rebuild_order()` 也按 severity
-  降序，trip 永远排在当前报警最上面。若日后觉得颜色仍不够，加文字胶囊比再调色
-  有效，但标签要写结果（"STOPPED"）而不是协议术语（"TRIP"）。
+- **critical 不是"更严重的 error"**，是保护动作已经发生、设备已进入安全态（现表里
+  只有 1001 急停和 1003 打印中开门两条，都是激光立即断电）。排序上
+  `ui_alarm_state::rebuild_order()` 也按 severity 降序，critical 永远排在当前报警
+  最上面。若日后觉得颜色仍不够，加文字胶囊比再调色有效，但标签要写结果
+  （"STOPPED"）而不是协议术语。（旧文档把 3/4 叫 fault/trip，只是改名，语义同此。）
 
 生命周期胶囊（Active / Recovered - awaiting reset / Event / Resolved）是**另一套
 语义**，配色在 `page_user_message.cpp` 的 `kPill*`，不要和等级配色混用。
@@ -268,16 +269,24 @@ SVG 的，那样没法按未读数开关。
 ### MCU 报警（`ui_alarm_state` + `ui_alarm_catalog`）
 
 MCU 经串口上报的报警（`GLAVO_Alarm_Report_Ntf`，0xA3/0x20 原样透传）在 UI 侧有唯一
-数据源 `core/ui_alarm_state`，按 `state_mask` 推导生命周期（协议见
-[`doc/SOC_TLV_ALARM_SINGLE_REPORT报警显示开发指导.md`](../../doc/SOC_TLV_ALARM_SINGLE_REPORT报警显示开发指导.md)）：
+数据源 `core/ui_alarm_state`，按 `state_mask` 推导生命周期：
 
 - **EVENT**（一次性）：记历史 + 上浮层蓝卡（5s 自动从浮层撤下，列表里还在）；
 - **CONDITION**（状态型）：ACTIVE / RTN_LATCHED 期间挂「当前报警」表并同步红卡到
   `ui_message_store`；回 NORMAL 撤卡、转历史。
 
+**文档权威顺序**（几份文件描述同一套协议，冲突时按此取舍）：`doc/主控板串口通信协议
+- *.csv` 四份 → [`快照开发指导`](../../doc/SOC_TLV_ALARM_EVT_SNAPSHOT报警快照开发指导.md)
+→ [`单条上报开发指导`](../../doc/SOC_TLV_ALARM_SINGLE_REPORT报警显示开发指导.md)。
+最后那份**没随 CSV 更新**，它 §7 还把 severity 3/4 叫 fault/trip（现为 error/critical，
+只是改名，语义没变——CRITICAL 仍是「保护已动作、已进入安全态」，现表里只有 1001 急停和
+1003 打印中开门两条），§5 那条 `show_reset = latched && clear_mode==RESET` 伪代码也已
+作废（见下「复位」）。别照那份改代码。
+
 文案由 `ui_alarm_catalog`（`tools/gen_alarm_catalog.py` 从 doc/ 下三份 CSV 生成
-`ui_alarm_catalog_gen.cpp`，英文翻译表 `doc/alarm_catalog_en.csv` 可覆写，未翻译的
-用 macro 名转写兜底）+ 报文 detail 组合；查不到的 code/detail 降级显示原始编号
+`ui_alarm_catalog_gen.cpp`，当前 87 条报警 = 79 CONDITION + 8 EVENT、59 条 detail；
+英文翻译表 `doc/alarm_catalog_en.csv` 可覆写，未翻译的用 macro 名转写兜底）+ 报文
+detail 组合；查不到的 code/detail 降级显示原始编号
 **绝不丢弃**（固件可能比字典新）。历史落盘 `/home/messages/alarm_history.jsonl`
 （上限 200 条，只存原始字段，文案加载时按当前字典重新生成）。**目录由
 `ui_alarm_state_init()` 自己 `create_directories`**——UI 可能比 Media 先起，不能
@@ -286,32 +295,58 @@ MCU 经串口上报的报警（`GLAVO_Alarm_Report_Ntf`，0xA3/0x20 原样透传
 为了借 `UPC_MEDIA_ROOT` 那个宏，现已解除对 `media_paths.hpp` 的依赖。
 
 复位：`ui_alarm_request_reset(code)` → `UI_Alarm_Reset_Req` → Glavo 组 0x82 帧下发。
-仅 `clear_mode=RESET` 受理；受理后置 `reset_pending`，等 MCU 下一帧上报翻转，10s
-无回报自动解除 pending（按钮恢复可点）。
+受理后置 `reset_pending`，解除它有三条路径：该 code 的新上报、`GLAVO_Alarm_Reset_Result_Ntf`
+失败回执（0xA3/0x82 TLV 0x04，MCU 只在失败时发）、10s 超时兜底。
 
-**快照对齐（`GLAVO_Alarm_Snapshot_Ntf`，0xA3/0x81）**：单条上报只在状态变化时发，
-所以 UI 重启 / 串口重连 / SOC 比 MCU 后启动这几种情况下，之前就亮着的报警**再也收不到**，
-本地表会和 MCU 真实状态脱节。快照给的是此刻的全量位图，收齐后把本地这份副本刷一遍：
+**「此刻能不能点 Reset」只有一个判据 `ui_alarm_reset_allowed()`**，三个复位入口
+（消息页详情抽屉 / 首页终止结果条 / 打印入口拦截弹窗）共用，别各写各的——早先抽屉自己
+加了 `stage == RTN_LATCHED` 而另两处没加，同一条报警在两个界面表现相反。规则：
 
-- **攒帧**：快照按 32 条一组分片，`word_count` 帧才算一批。`word_count` **不能写死**
-  ——报警表随固件增长，当前 66 条 CONDITION 要 3 帧，而
-  `doc/主控板串口通信协议 - 信息报警命令详表.csv` 的注释还停在 2，所以一律读帧里的值。
-  按 `word_index` 填槽、bitmask 记已收，不依赖到达顺序；重复 index、`word_count` 变了、
-  或攒超 2s，任一命中就整批作废重来——**半套位图会把没收到那几组的报警误判成已解除**；
+| 状态 | `reset_policy` | 能否点 |
+|---|---|---|
+| RTN_LATCHED | 任意 | 能 |
+| ACTIVE | `OWNER_TASK` | **能**——MCU 转给业务任务做硬件恢复 |
+| ACTIVE | `LOCAL` | 不能，条件仍在时 MCU 直接拒绝 |
+| 任意 | 字典查不到 | 不能（保守，避免对未知码误发 RESET） |
+
+ACTIVE + OWNER_TASK 这一档最容易漏：激光器 1301、各轴 1203~1230 都是这类，**不点复位
+它们永远好不了**（激光器要等 MCU 下发清除命令才恢复），锁住等于死锁，只能断电。
+现表里 25 条 `clear_mode=RESET` 中 23 条是 OWNER_TASK，只有 1124/1125 是 LOCAL。
+`reset_policy` 是「运行时一律以报文为准」的**唯一例外**——报文里没这个字段，只有
+`报警map.csv` 有，所以只能查字典。
+
+**快照对齐（`UI_Alarm_Snapshot_Req` / `GLAVO_Alarm_Snapshot_Ntf`，0xA3/0x81）**：
+单条上报只在状态变化时发，所以 UI 重启 / 串口重连 / SOC 比 MCU 后启动这几种情况下，
+之前就亮着的报警**再也收不到**，本地表会和 MCU 真实状态脱节。快照是补这个洞的：
+
+- **请求-响应**：MCU **不会主动推**，不发 `UI_Alarm_Snapshot_Req`（TLV 0x05 len=0）
+  就一帧都收不到。触发点五处：`ui_alarm_state_init()`、串口打开成功（Glavo 侧
+  `McuLink::request_alarm_snapshot()` 自己发）、进消息中心页、30s 兜底轮询、开始打印前。
+  `ui_alarm_request_snapshot()` 内部带节流（上一轮在途或距上次不足 2s 就跳过），
+  调用方不必自己防抖；
+- **稀疏攒帧**：只回 `(active|latched)!=0` 的 slot，**没回的一律按全零算**。收齐
+  `nonzero_slot_count` 个不同 slot 才原子提交——半套位图会把没收到那些 slot 的报警误判成
+  已解除。`nonzero_slot_count=0` 是合法的「当前无报警」响应，收到即全清 CONDITION；
+- **轮次边界用「发出请求的时刻」界定，不做 Seq 匹配**：串口组帧把 Seq 写死成 0x01
+  （`serial_frame.cpp`），收发两侧都没有 Seq 通路。而快照本来就是我们主动请求、同时只维护
+  一个，请求时刻比 Seq 更可靠且零协议成本。作废整轮的条件：攒超 2s、同轮 `count` 或
+  `highest_severity` 不一致、`slot_id` 重复或越界、`count>0` 却送来空 mask；
+- **槽位→报警号是固定公式** `1000 + group*100 + word*32 + bit`（`slot_id = group*3+word`，
+  见 `middleware::alarm_snapshot_code_of()`），**不查表**。`报警map.csv` 已降级为显示
+  元数据，生成脚本只拿它校验公式一致性和读 `reset_policy`——快照指导 §6.5 明令禁止改用
+  内部 index 推算。好处是字典比固件新旧都能算出号来；
 - **对齐**：快照亮着而本地没有的补进来，本地有而快照说不亮的转历史。补进来的那条只有
-  code 可用，`severity` / `clear_mode` 走字典兜底（`报警&事件表.csv` 生成的
-  `severity_fallback` / `clear_mode_fallback`），`detail` 记 0、时刻记补齐时刻——
-  这几样快照里根本没有。字典查不到就按最保守的一档：warning 且不给复位钮；
-- 反向清理**只认受快照管辖的 code**（`ui_alarm_snapshot_slot_of()` 查得到位图槽位）。
-  EVENT 不占 bit、字典比固件旧时新码也没有槽位，这些"快照里没提"是信息缺失不是状态变化，
-  照清会把真报警抹掉；
+  code 可用，`severity` / `clear_mode` 走字典兜底（`severity_fallback` /
+  `clear_mode_fallback`），`detail` 记 0、时刻记补齐时刻——这几样快照里根本没有。
+  字典查不到就按最保守的一档：warning 且不给复位钮；
+- 反向清理**只认受快照管辖的 code**（`alarm_snapshot_covers()`：1000..1395 且组内偏移
+  < 96）。EVENT 不占 bit、每组末尾 `xx96..xx99` 是保留号，这些"快照里没提"是信息缺失
+  不是状态变化，照清会把真报警抹掉；
 - 已在表里的条目只校正生命周期（ACTIVE ↔ RTN_LATCHED），
-  `severity` / `clear_mode` / `detail` 保持单条上报给的值——那才是权威数据。
-
-⚠ 协议里**没有 SOC→MCU 的快照查询命令**（`信息报警命令详表.csv` 只写了「MCU 主动上报
-快照后 SOC/HMI 应以最新快照刷新显示」），所以 UI 这边纯被动收。补齐能不能真的发生，
-取决于 MCU 重连后会不会主动推一轮——这条待 MCU 组确认；若确认不推，得请他们加一条
-查询命令，UI 侧再在 `ui_alarm_state_init()` 和串口重连回调里各发一次。
+  `severity` / `clear_mode` / `detail` 保持单条上报给的值——那才是权威数据；
+- **快照在途时到达的 CONDITION 单报先攒着**（`g_pending`，上限 16 条），等快照原子提交后
+  按序重放。快照是「请求那一刻」的状态，暂存的单报都比它新，不压在快照之上就会被盖回去，
+  界面出现状态回退（快照指导 §11）。EVENT 不进这个队列，它不改 CONDITION 状态。
 
 打印融合三处（1124/1125 未复位时 MCU 拒绝新打印）：
 
@@ -414,10 +449,12 @@ MCU 经串口上报的报警（`GLAVO_Alarm_Report_Ntf`，0xA3/0x20 原样透传
 `/home/messages/alarm_history.jsonl`。同一个码后来收到真报文会自动摘掉 `[SIM]`。
 
 联调：MCU 不发真报警时用调试页 Other → Other Switches → `Alarm Inject`
-（`ui_alarm_debug_inject()` 绕过总线直走上报路径，造 5 条假报警：覆盖阻断 /
-RTN_LATCHED / 自动清除 / EVENT 四条显示路径，外加一条 critical 把 information/
-warning/error/critical 四档等级配色凑齐——等级不进字典、以报文为准，不造就看不到；
-关掉开关注入 NORMAL 帧模拟解除）。
+（`ui_alarm_debug_inject()` 绕过总线直走上报路径，造 5 条假报警：1124 阻断 /
+1104 RTN_LATCHED / 1101 自动清除 / 2000 EVENT 四条显示路径，外加 1003 一条
+critical 把 information/warning/error/critical 四档等级配色凑齐——等级不进字典、
+以报文为准，不造就看不到；关掉开关注入 NORMAL 帧模拟解除）。
+1003 同时是 **ACTIVE + `reset_policy=OWNER_TASK`** 的样本，用来验那档在抽屉里
+可点 Reset；1124 是 LOCAL，ACTIVE 时该置灰——两条对照着看。
 注意注入条目按 Reset 会真发 `UI_Alarm_Reset_Req` 到串口，MCU 不回帧时 10s 后
 pending 自动解除——正好顺带验超时路径。
 
