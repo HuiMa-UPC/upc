@@ -686,6 +686,10 @@ bool CameraService::restart_capture_keep_peers()
     UPC_LOG_CAMERA_SERVICE(Warn,
         "stream watchdog: restarting ISP/V4L2 (keep peers)");
 
+    const uint32_t old_width    = stream_width_;
+    const uint32_t old_height   = stream_height_;
+    const uint32_t old_stride_y = dma_source_.dma_stride_y();
+
     dma_source_.shutdown();
     capture_.close();
 
@@ -713,6 +717,11 @@ bool CameraService::restart_capture_keep_peers()
         UPC_LOG_CAMERA_SERVICE(Error, "stream watchdog: dma prepare failed");
         return false;
     }
+    const uint32_t new_stride_y = dma_source_.dma_stride_y();
+    const bool peer_shm_layout_changed =
+        (old_width != stream_width_) ||
+        (old_height != stream_height_) ||
+        (old_stride_y != new_stride_y);
 
     struct PeerResync {
         middleware::ModuleId peer_id;
@@ -727,19 +736,21 @@ bool CameraService::restart_capture_keep_peers()
                 continue;
             }
             auto& peer = *kv.second;
-            peer.producer.destroy();
-            const upc_ipc::IpcShmError err = peer.producer.create(
-                peer.shm_name.c_str(),
-                stream_width_,
-                stream_height_,
-                dma_source_.dma_stride_y(),
-                upc_ipc::kDmaFrameFormatNv12,
-                CAMERA_SHM_SLOT_COUNT);
-            if(err != upc_ipc::IpcShmError::OK) {
-                UPC_LOG_CAMERA_SERVICE(Error,
-                    "stream watchdog: peer shm recreate fail sender=%u name=%s err=%d",
-                    kv.first, peer.shm_name.c_str(), static_cast<int>(err));
-                continue;
+            if(peer_shm_layout_changed) {
+                peer.producer.destroy();
+                const upc_ipc::IpcShmError err = peer.producer.create(
+                    peer.shm_name.c_str(),
+                    stream_width_,
+                    stream_height_,
+                    new_stride_y,
+                    upc_ipc::kDmaFrameFormatNv12,
+                    CAMERA_SHM_SLOT_COUNT);
+                if(err != upc_ipc::IpcShmError::OK) {
+                    UPC_LOG_CAMERA_SERVICE(Error,
+                        "stream watchdog: peer shm recreate fail sender=%u name=%s err=%d",
+                        kv.first, peer.shm_name.c_str(), static_cast<int>(err));
+                    continue;
+                }
             }
             peers.push_back(PeerResync{
                 peer.peer_id, peer.rsp_type, peer.shm_name});
@@ -752,9 +763,10 @@ bool CameraService::restart_capture_keep_peers()
     }
 
     UPC_LOG_CAMERA_SERVICE(Info,
-        "stream watchdog: capture restarted peers=%zu %ux%u stride_y=%u",
+        "stream watchdog: capture restarted peers=%zu %ux%u stride_y=%u "
+        "peer_shm_recreate=%d",
         peers.size(), stream_width_, stream_height_,
-        dma_source_.dma_stride_y());
+        new_stride_y, peer_shm_layout_changed ? 1 : 0);
     return true;
 }
 

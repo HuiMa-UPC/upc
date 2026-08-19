@@ -123,6 +123,14 @@ if(DEFINED _upc_toolchain_lc AND _upc_toolchain_lc MATCHES "phx")
     set(UPC_UI_PLATFORM_VARIANT "2.0")
 endif()
 
+set(UPC_UI_RGA_STREAMING 0)
+if(DEFINED _upc_toolchain_lc AND _upc_toolchain_lc MATCHES "phx")
+    set(UPC_UI_RGA_STREAMING 1)
+endif()
+target_compile_definitions(${UI_TARGET} PRIVATE
+    UPC_UI_RGA_STREAMING=${UPC_UI_RGA_STREAMING}
+)
+
 set(UPC_UI_PLATFORM_DIR "${CMAKE_CURRENT_SOURCE_DIR}/${UPC_UI_PLATFORM_VARIANT}")
 set(UPC_UI_PLATFORM_CPP "${UPC_UI_PLATFORM_DIR}/platform.cpp")
 
@@ -130,7 +138,9 @@ if(NOT EXISTS "${UPC_UI_PLATFORM_CPP}")
     message(FATAL_ERROR "ui: platform source not found: ${UPC_UI_PLATFORM_CPP}")
 endif()
 
-message(STATUS "ui: platform variant=${UPC_UI_PLATFORM_VARIANT} (toolchain=${_upc_toolchain_lc})")
+message(STATUS
+    "ui: platform variant=${UPC_UI_PLATFORM_VARIANT} (toolchain=${_upc_toolchain_lc}) "
+    "rga_streaming=${UPC_UI_RGA_STREAMING}")
 
 add_executable(rongsu_ui
     main.cpp

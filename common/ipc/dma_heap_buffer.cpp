@@ -24,6 +24,7 @@ constexpr const char* kDmaHeapCandidates[] = {
     "/dev/dma_heap/system",
 };
 
+
 } // namespace
 
 bool dma_heap_alloc(size_t size, DmaHeapBuffer& out)
@@ -61,7 +62,7 @@ bool dma_heap_alloc(size_t size, DmaHeapBuffer& out)
         out.size      = size;
         out.heap_path = path;
         return true;
-    }
+    } 
 
     return false;
 }

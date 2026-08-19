@@ -88,6 +88,9 @@ private:
     static void async_apply_stream_start(void* user);
     bool convert_frame(const upc_ipc::IpcDmaFrameView& frame, int slot_idx);
     bool convert_frame_dma(const upc_ipc::IpcDmaFrameView& frame, int slot_idx);
+    bool convert_frame_rga_streaming(int src_fd, uint8_t* dst,
+                                     int w, int h, int src_stride_y,
+                                     int dst_stride_px);
 
     lv_obj_t* image_ = nullptr;
     lv_obj_t* hint_  = nullptr;
@@ -127,6 +130,12 @@ private:
     bool                 logged_first_ui_show_ = false;
     std::atomic<uint64_t> last_frame_ok_ms_{0};
     std::atomic<bool>     stalled_{false};
+
+#if defined(UPC_UI_RGA_STREAMING) && UPC_UI_RGA_STREAMING
+    RgaDmaBuf rga_stream_src_;
+    RgaDmaBuf rga_stream_dst_;
+    uint32_t  rga_stream_lines_ = 128;
+#endif
 
     middleware::CameraStreamInfoPayload pending_start_rsp_{};
     bool pending_start_rsp_valid_ = false;

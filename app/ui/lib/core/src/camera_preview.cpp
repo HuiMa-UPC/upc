@@ -34,6 +34,9 @@ constexpr int kDstRgaFormat  = RK_FORMAT_BGRX_8888;
 
 constexpr int kRgaRetryCount   = 3;
 constexpr int kRgaRetryDelayMs = 10;
+#if defined(UPC_UI_RGA_STREAMING) && UPC_UI_RGA_STREAMING
+constexpr uint32_t kRgaStreamLines = 128u;
+#endif
 
 const char* rga_status_str(IM_STATUS st)
 {
@@ -48,8 +51,10 @@ bool rga_status_ok(IM_STATUS st)
 
 bool rga_cvtcolor_checked(rga_buffer_t src, rga_buffer_t dst_buf, const im_rect& rect,
                           IM_STATUS* out_st);
+#if !defined(UPC_UI_RGA_STREAMING) || !UPC_UI_RGA_STREAMING
 bool rga_nv12_to_bgrx_fd(int src_fd, int dst_fd, int w, int h, int src_stride_y,
                          int dst_stride_px, IM_STATUS* out_st);
+#endif
 
 uint64_t monotonic_ms()
 {
@@ -132,6 +137,7 @@ bool rga_cvtcolor_checked(rga_buffer_t src, rga_buffer_t dst_buf, const im_rect&
     return rga_status_ok(st);
 }
 
+#if !defined(UPC_UI_RGA_STREAMING) || !UPC_UI_RGA_STREAMING
 bool rga_nv12_to_bgrx_fd(int src_fd, int dst_fd, int w, int h, int src_stride_y,
                          int dst_stride_px, IM_STATUS* out_st)
 {
@@ -169,6 +175,7 @@ bool rga_nv12_to_bgrx_fd(int src_fd, int dst_fd, int w, int h, int src_stride_y,
     releasebuffer_handle(dst_h);
     return ok;
 }
+#endif
 
 void dma_buf_sync_start_read(int fd)
 {
@@ -514,6 +521,10 @@ void CameraPreviewPlayer::clear_frame_buffers()
         slots_[i].clear();
         img_dsc_[i] = {};
     }
+#if defined(UPC_UI_RGA_STREAMING) && UPC_UI_RGA_STREAMING
+    rga_stream_src_.free();
+    rga_stream_dst_.free();
+#endif
     rga_path_ready_ = false;
 }
 
@@ -523,6 +534,14 @@ bool CameraPreviewPlayer::setup_frame_buffers(size_t frame_bytes,
     clear_frame_buffers();
 
     rga_path_ready_ = true;
+#if defined(UPC_UI_RGA_STREAMING) && UPC_UI_RGA_STREAMING
+    // streaming 模式下显示槽固定使用普通内存，避免整帧 DMA 申请压力。
+    for(int i = 0; i < kFrameSlots; ++i) {
+        if(!slots_[i].alloc(frame_bytes, false)) {
+            return false;
+        }
+    }
+#else
     for(int i = 0; i < kFrameSlots; ++i) {
         if(!slots_[i].alloc(frame_bytes, true)) {
             rga_path_ready_ = false;
@@ -540,6 +559,28 @@ bool CameraPreviewPlayer::setup_frame_buffers(size_t frame_bytes,
             }
         }
     }
+#endif
+#if defined(UPC_UI_RGA_STREAMING) && UPC_UI_RGA_STREAMING
+    if(rga_path_ready_) {
+        rga_stream_lines_ = kRgaStreamLines;
+        const size_t src_chunk_bytes = static_cast<size_t>(src_stride_y_) *
+                                       static_cast<size_t>(rga_stream_lines_) *
+                                       3u / 2u;
+        const size_t dst_chunk_bytes = static_cast<size_t>(pixel_stride_px_) *
+                                       static_cast<size_t>(rga_stream_lines_) * 4u;
+        if(src_chunk_bytes == 0u || dst_chunk_bytes == 0u ||
+           !rga_stream_src_.alloc(src_chunk_bytes) ||
+           !rga_stream_dst_.alloc(dst_chunk_bytes)) {
+            UPC_LOG_CAMERA_PREVIEW(Warn,
+                "RGA streaming scratch alloc failed src=%zu dst=%zu; "
+                "fallback to software convert",
+                src_chunk_bytes, dst_chunk_bytes);
+            rga_stream_src_.free();
+            rga_stream_dst_.free();
+            rga_path_ready_ = false;
+        }
+    }
+#endif
 
     for(int i = 0; i < kFrameSlots; ++i) {
         uint8_t* data = slots_[i].data();
@@ -991,6 +1032,115 @@ bool CameraPreviewPlayer::convert_frame(const upc_ipc::IpcDmaFrameView& frame,
     return convert_frame_dma(frame, slot_idx);
 }
 
+bool CameraPreviewPlayer::convert_frame_rga_streaming(int src_fd, uint8_t* dst,
+                                                      int w, int h,
+                                                      int src_stride_y,
+                                                      int dst_stride_px)
+{
+#if !defined(UPC_UI_RGA_STREAMING) || !UPC_UI_RGA_STREAMING
+    (void)src_fd;
+    (void)dst;
+    (void)w;
+    (void)h;
+    (void)src_stride_y;
+    (void)dst_stride_px;
+    return false;
+#else
+    if(src_fd < 0 || !dst || w <= 0 || h <= 0 || src_stride_y <= 0 ||
+       dst_stride_px <= 0 || !rga_stream_src_.valid() || !rga_stream_dst_.valid()) {
+        return false;
+    }
+
+    const size_t src_size = static_cast<size_t>(src_stride_y) *
+                            static_cast<size_t>(h) * 3u / 2u;
+    void* src_va = mmap(nullptr, src_size, PROT_READ, MAP_SHARED, src_fd, 0);
+    if(src_va == MAP_FAILED) {
+        UPC_LOG_CAMERA_PREVIEW(Warn, "streaming mmap src fd %d failed", src_fd);
+        return false;
+    }
+
+    rga_buffer_handle_t src_h = importbuffer_fd(
+        rga_stream_src_.fd(), static_cast<int>(rga_stream_src_.size()));
+    rga_buffer_handle_t dst_h = importbuffer_fd(
+        rga_stream_dst_.fd(), static_cast<int>(rga_stream_dst_.size()));
+    if(src_h == 0 || dst_h == 0) {
+        if(src_h) {
+            releasebuffer_handle(src_h);
+        }
+        if(dst_h) {
+            releasebuffer_handle(dst_h);
+        }
+        munmap(src_va, src_size);
+        return false;
+    }
+
+    const uint8_t* src_y_full = static_cast<const uint8_t*>(src_va);
+    const uint8_t* src_uv_full = src_y_full +
+                                 static_cast<size_t>(src_stride_y) * static_cast<size_t>(h);
+    const uint32_t chunk_lines = (rga_stream_lines_ >= 2u)
+                                     ? (rga_stream_lines_ & ~1u)
+                                     : 2u;
+
+    dma_buf_sync_start_read(src_fd);
+    bool ok = true;
+    for(int y = 0; y < h; y += static_cast<int>(chunk_lines)) {
+        const int remain = h - y;
+        int strip_h = remain;
+        if(strip_h > static_cast<int>(chunk_lines)) {
+            strip_h = static_cast<int>(chunk_lines);
+        }
+        if((strip_h & 1) != 0) {
+            --strip_h;
+        }
+        if(strip_h <= 0) {
+            break;
+        }
+
+        const size_t strip_src_bytes = static_cast<size_t>(src_stride_y) *
+                                       static_cast<size_t>(strip_h) * 3u / 2u;
+        const size_t strip_dst_bytes = static_cast<size_t>(dst_stride_px) *
+                                       static_cast<size_t>(strip_h) * 4u;
+        if(strip_src_bytes > rga_stream_src_.size() ||
+           strip_dst_bytes > rga_stream_dst_.size()) {
+            ok = false;
+            break;
+        }
+
+        const uint8_t* src_y = src_y_full + static_cast<size_t>(y) * src_stride_y;
+        const uint8_t* src_uv = src_uv_full + static_cast<size_t>(y / 2) * src_stride_y;
+        uint8_t* chunk_src = static_cast<uint8_t*>(rga_stream_src_.va());
+        uint8_t* chunk_uv = chunk_src + static_cast<size_t>(src_stride_y) * strip_h;
+
+        dma_buf_sync_start_write(rga_stream_src_.fd());
+        std::memcpy(chunk_src, src_y, static_cast<size_t>(src_stride_y) * strip_h);
+        std::memcpy(chunk_uv, src_uv, static_cast<size_t>(src_stride_y) * (strip_h / 2));
+        dma_buf_sync_end_write(rga_stream_src_.fd());
+
+        rga_buffer_t src_buf = wrapbuffer_handle(src_h, w, strip_h, kNv12RgaFormat,
+                                                 src_stride_y, strip_h);
+        rga_buffer_t dst_buf = wrapbuffer_handle(dst_h, w, strip_h, kDstRgaFormat,
+                                                 dst_stride_px, strip_h);
+        const im_rect rect{0, 0, w, strip_h};
+        IM_STATUS st = IM_STATUS_FAILED;
+        if(!rga_cvtcolor_checked(src_buf, dst_buf, rect, &st)) {
+            ok = false;
+            break;
+        }
+
+        dma_buf_sync_start_read(rga_stream_dst_.fd());
+        std::memcpy(dst + static_cast<size_t>(y) * static_cast<size_t>(dst_stride_px) * 4u,
+                    rga_stream_dst_.va(), strip_dst_bytes);
+        dma_buf_sync_end_read(rga_stream_dst_.fd());
+    }
+    dma_buf_sync_end_read(src_fd);
+
+    releasebuffer_handle(src_h);
+    releasebuffer_handle(dst_h);
+    munmap(src_va, src_size);
+    return ok;
+#endif
+}
+
 bool CameraPreviewPlayer::convert_frame_dma(const upc_ipc::IpcDmaFrameView& frame,
                                             int slot_idx)
 {
@@ -1028,15 +1178,32 @@ bool CameraPreviewPlayer::convert_frame_dma(const upc_ipc::IpcDmaFrameView& fram
     }
 
     // 快路径：RGA 直接做 NV12 -> BGRX，失败后再回退软件转换。
-    if(rga_path_ready_ && slot.is_dma()) {
+    bool rga_src_sync_started = false;
+    const bool can_use_rga =
+#if defined(UPC_UI_RGA_STREAMING) && UPC_UI_RGA_STREAMING
+        rga_path_ready_;
+#else
+        (rga_path_ready_ && slot.is_dma());
+#endif
+    if(can_use_rga) {
+#if !defined(UPC_UI_RGA_STREAMING) || !UPC_UI_RGA_STREAMING
         dma_buf_sync_start_read(src_fd);
+        rga_src_sync_started = true;
+#endif
         for(int attempt = 0; attempt < kRgaRetryCount; ++attempt) {
             IM_STATUS st = IM_STATUS_FAILED;
-            if(rga_nv12_to_bgrx_fd(src_fd, slot.fd(), w, h,
-                                   src_stride_y,
-                                   dst_stride_px, &st)) {
+#if defined(UPC_UI_RGA_STREAMING) && UPC_UI_RGA_STREAMING
+            const bool rga_ok = convert_frame_rga_streaming(
+                src_fd, dst, w, h, src_stride_y, dst_stride_px);
+#else
+            const bool rga_ok = rga_nv12_to_bgrx_fd(src_fd, slot.fd(), w, h,
+                                                    src_stride_y, dst_stride_px, &st);
+#endif
+            if(rga_ok) {
+#if !defined(UPC_UI_RGA_STREAMING) || !UPC_UI_RGA_STREAMING
                 dma_buf_sync_end_read(src_fd);
                 dma_buf_sync_end_write(slot.fd());
+#endif
                 return true;
             }
             if(attempt + 1 >= kRgaRetryCount) {
@@ -1063,7 +1230,9 @@ bool CameraPreviewPlayer::convert_frame_dma(const upc_ipc::IpcDmaFrameView& fram
     }
 
     // RGA 失败或目的缓冲非 dma：结束 src 的 read sync，再 mmap 软件回退。
-    dma_buf_sync_end_read(src_fd);
+    if(rga_src_sync_started) {
+        dma_buf_sync_end_read(src_fd);
+    }
 
     // SW 回退：mmap 源 fd，CPU 转换后写入目标槽。
     const size_t src_size = dma_nv12_bytes_;
