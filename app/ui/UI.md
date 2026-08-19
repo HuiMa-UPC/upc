@@ -351,11 +351,50 @@ MCU 经串口上报的报警（`GLAVO_Alarm_Report_Ntf`，0xA3/0x20 原样透传
   历史可删、而报警属于 Device，**System Tab 下不会出现 Manage 按钮**。
   切 Tab 会退出管理态并回到列表顶部。稿上 Manage 摆在 x=1068，既不对齐卡片右缘也不对齐
   翻页钮，这里按工程惯例用 `content_right_pad()` 对齐卡片右缘；
+- **分页：初始只建最近 10 条 + 底部「Load More」**（稿 5380:28971 的 `查看更多`，节点
+  5380:29045）。`collect_items()` 已按 `sort_ts` 降序，所以取前 `g_visible_limit` 条就是
+  最近的那些；每点一次 Load More 加 `kRowsPerPage`(10) 后原地重建，放完了就不建这一行、
+  等于自动隐藏。截断可能落在某个日期组中间，但分组标题是"组名变了才插"，最后一组不完整
+  也不会漏标题；重建末尾那段 `keep_scroll` 恢复让展开时视口不跳、新内容出现在下方。
+
+  **`g_visible_limit` 的重置只放在切 Tab 与进页，绝不能放进 `rebuild_list()`**：
+  observer 的 `rebuild_async()` 也走 `rebuild_list()`，放进去的话用户展开到第 50 条时
+  来一条新消息，列表会当场折回 10 条。
+
+  Load More 那行的文字样式挂在**按钮**上而不是 label 上：LVGL 的状态不向子节点传播，
+  写在 label 上的 `LV_STATE_PRESSED` 永远命中不了；`text_*` 可继承，挂在按钮上 label
+  就会沿父链跟着按压态变。稿上它是 64×24 的纯文字，触摸屏上太小，所以外面包了一层整行宽、
+  `USER_BTN_PRIMARY_H` 高的透明热区。
+
+  稿 5389:29103 那个**加载圈有意未实现**：消息数据全在内存（三路 store 合并 + 排序，
+  无 IO、无异步），点开就是同步多建几张卡；而 LVGL 单线程，同步重建期间画面根本不刷新，
+  转圈一帧都不会转。将来消息真接了云端，把展开改成回调式再启用它。
+
+  分页之前进页有肉眼可见的卡顿：`switch_to()` → `refresh()` → `rebuild_list()` 全程同步，
+  页面要等整张列表建完 + 首帧渲染才显示。列表长度当时没有上限，三路上限相加约 300 条
+  （当前报警 `kCurrentCap` 80 + store `kCapacity` 24 + 历史 `UI_ALARM_HISTORY_CAP` 200，
+  历史还落盘跨重启累积），而一条可删的历史卡约 19 个对象 + 9 个事件回调——200 条就是
+  近 4000 个 LVGL 对象，加上 `flex_grow` 与 `LONG_WRAP` 互相依赖导致的多趟文本测量。
+- **进页只重建一次**：`refresh()` 里的 `ui_message_mark_all_read()` 在有未读时会
+  `notify_observers()`（侧栏红点靠这个通知才灭，不能省），一路转到 `on_store_change()`
+  → `queue_rebuild()`，于是排下一次异步重建。而 `refresh()` 紧接着又同步 `rebuild_list()`
+  一次，等于**每次进页建两遍**——偏偏"有未读"正是点进这个页面的常见前提。
+  第二遍还是纯浪费：本页从不读 `unread`（未读只驱动侧栏红点，见 `ui_app.cpp` 的
+  `sync_message_badge()`），两遍产出逐像素相同。
+  处理办法是同步建完后 `lv_async_call_cancel(rebuild_async, nullptr)` 把那次排队撤掉
+  并清 `g_rebuild_queued`。**不要靠调换 `mark_all_read()` 与 `rebuild_list()` 的顺序**：
+  `queue_rebuild()` 只看 `g_active`、不看列表刚建过没有，换顺序照样排得上。也别改成用
+  「条数 + 最新 seq」当指纹去跳过重建——`title/body` 指向调用方缓冲、内容会原位变化
+  （这正是 `ui_message_update()` 非 renew 时也要通知的原因），那样会漏刷成旧文案。
+  切 Tab 那条路（`on_tab_click` 同样是同步 `rebuild_list()`）理论上也可能撞上一次待跑的
+  异步重建，但要先有消息在你停留期间到达，概率低且结果一致，暂未处理；
 - **管理（多选）模式**：入口是 Tab 行右侧的 Manage。
   只有历史条目可删，所以不可删的卡片不出复选框、点了没反应（判据 `MsgItem::deletable`），
   管理态期间左滑让位给勾选。批量删除按下标**从大到小**执行——
   `ui_alarm_history_delete_at()` 会把后面的条目前移，正序删第二条就删错人了。
   注意：管理态下若有新消息到达会触发列表重建，勾选状态随之丢失（同历史页）；
+  另外**全选/批量删除只覆盖已展开的卡片**——两者都遍历 `g_cards`，而折叠状态下
+  `g_cards` 里只有可见的那 10 条。排查「全选怎么没选全」先看这条；
 - 详情抽屉建在 **`lv_layer_top()`** 上、宽 49%（稿 632/1280，整屏为基准）：稿上抽屉
   是满高的，它自带的顶栏顶替右半屏那段状态栏。**不能挂在页面根节点上**——那样上边会
   被 `content_panel_` 的 `pad_top` 顶下来，且常驻设备条画在页面之上会压住抽屉头。
@@ -515,7 +554,7 @@ pending 自动解除——正好顺带验超时路径。
 | `user_history` | `page_user_history.*` | 打印历史：三 Tab + Storage 条 + 日期分组卡片 + 管理态批量删除 + 左滑删除 |
 | `user_control` | `page_user_control.*` | skeleton 占位 |
 | `user_settings` | `page_user_settings.*` | 设置列表 + 开发者密码弹窗 |
-| `user_message` | `page_user_message.*` | 消息中心：日期分组混排列表（MCU 报警 + 设备事件）+ 左滑删除历史 + 管理态批量删除 + 详情抽屉（Reset 三态）。按稿 3033:5247 / 3063:7338 / 3201:9570 实现 |
+| `user_message` | `page_user_message.*` | 消息中心：日期分组混排列表（MCU 报警 + 设备事件）+ 初始 10 条与底部 Load More + 左滑删除历史 + 管理态批量删除 + 详情抽屉（Reset 三态）。按稿 3033:5247 / 3063:7338 / 3201:9570 / 5380:28971 实现 |
 | `user_timelapse` | `page_user_timelapse.*` | 延时摄影播放器（隐藏页，历史缩略图进入；全屏 `lv_layer_top`） |
 
 注册仅在 `ui_app.cpp`；打印流程走 `control_*`，pages 不直接订阅 MsgBus。详见 `lib/pages/README.md`。

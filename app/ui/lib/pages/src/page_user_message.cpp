@@ -151,6 +151,14 @@ bool      g_rebuild_queued = false;
 TabItem   g_tabs[kTabCount];
 MsgTab    g_tab        = MsgTab::All;
 
+/* ---- 分页：初始只建最近 kRowsPerPage 条，其余靠底部「查看更多」逐批放出 ----
+ * collect_items() 已按 sort_ts 降序，所以"最近的"就是前 g_visible_limit 条。
+ * 重置只发生在切 Tab 与进页（见 on_tab_click / page_user_message_refresh），
+ * **不能放进 rebuild_list()**：observer 的 rebuild_async() 也走那条路，
+ * 放进去的话用户展开到第 50 条时来一条新消息，列表会当场折回 10 条。 */
+constexpr size_t kRowsPerPage = 10;
+size_t    g_visible_limit = kRowsPerPage;
+
 /* ---- 管理（多选）模式：结构照搬历史页，判据换成 MsgItem::deletable ---- */
 bool      g_manage     = false;
 lv_obj_t *g_btn_manage = nullptr;  /**< 常态右上「Manage」 */
@@ -1149,6 +1157,7 @@ void on_tab_click(lv_event_t *e)
     apply_tab_style();
     drawer_close();
     set_manage_mode(false);   /* 切 Tab 退出管理模式（同历史页） */
+    g_visible_limit = kRowsPerPage;   /* 换了一批内容，展开进度不该带过去 */
     /* 换了一批内容，滚动位置没有沿用的意义，回到顶部 */
     lv_obj_scroll_to_y(g_list, 0, LV_ANIM_OFF);
     rebuild_list();
@@ -1260,6 +1269,41 @@ void build_group_title(lv_obj_t *parent, const char *text)
     /* 组间距比卡间距大一档，两组才分得开（列表自身 pad_row 就是卡间距）。
      * 标题到组内首卡不额外留白，靠 pad_row 那一档即可——稿上两者同为 16。 */
     lv_obj_set_style_margin_top(lbl, USER_PAD_SM, 0);
+}
+
+/** 点「查看更多」：再放出一批，列表原地重建。
+ *  rebuild_list() 末尾会沿用当前滚动位置，所以新内容出现在下方、视口不跳。 */
+void on_load_more(lv_event_t *)
+{
+    g_visible_limit += kRowsPerPage;
+    rebuild_list();
+}
+
+/** 底部「查看更多」（稿 5380:29045）。
+ *  稿上只是一段 16px 白 50% 的纯文字，没有底色/描边。但 64×24 的文字在触摸屏上太小，
+ *  这里外面包一层整行宽、USER_BTN_PRIMARY_H 高的透明按钮当热区，按压时把文字提到不透明
+ *  当反馈——视觉与稿一致，可点范围放大。
+ *  稿 5389:29103 那个加载圈**有意未实现**，理由见 app/ui/UI.md 本页那节。 */
+void build_load_more(lv_obj_t *parent)
+{
+    lv_obj_t *btn = lv_button_create(parent);
+    lv_obj_remove_style_all(btn);
+    lv_obj_set_width(btn, LV_PCT(100));
+    lv_obj_set_height(btn, USER_BTN_PRIMARY_H);
+    lv_obj_set_style_bg_opa(btn, LV_OPA_TRANSP, 0);
+    lv_obj_clear_flag(btn, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_event_cb(btn, on_load_more, LV_EVENT_CLICKED, nullptr);
+    /* 文字样式挂在**按钮**上而不是 label 上：LVGL 的状态不向子节点传播，写在 label 上
+     * 的 LV_STATE_PRESSED 永远不会命中（label 自己不会被按）。text_* 是可继承属性，
+     * 挂在按钮上时 label 会沿父链取值，于是跟着按钮的按压态一起变。 */
+    lv_obj_set_style_text_color(btn, lv_color_white(), 0);
+    lv_obj_set_style_text_opa(btn, LV_OPA_50, 0);
+    lv_obj_set_style_text_opa(btn, LV_OPA_COVER, LV_STATE_PRESSED);
+    lv_obj_set_style_text_font(btn, user_font_text(), 0);
+
+    lv_obj_t *lbl = lv_label_create(btn);
+    lv_label_set_text(lbl, "Load More");
+    lv_obj_center(lbl);
 }
 
 /** 一条消息卡：[sev 图标] 标题+描述 | 时间 (Resolved) › ，可删的带左滑删除钮。 */
@@ -1509,8 +1553,13 @@ void rebuild_list(void)
         lv_obj_remove_flag(g_scroll_btns, LV_OBJ_FLAG_HIDDEN);
     }
 
+    /* 只建前 g_visible_limit 条（items 已按时间降序，即最近的那些）。截断可能落在
+     * 某个日期组中间，但分组标题是"组名变了才插"，所以最后一组不完整也不会漏标题。 */
+    const size_t shown = (items.size() < g_visible_limit) ? items.size()
+                                                          : g_visible_limit;
     char cur_group[32] = "";
-    for(const MsgItem &it : items) {
+    for(size_t i = 0; i < shown; i++) {
+        const MsgItem &it = items[i];
         char grp[32];
         format_group(it.sort_ts, grp, sizeof(grp));
         if(std::strcmp(cur_group, grp) != 0) {
@@ -1518,6 +1567,11 @@ void rebuild_list(void)
             build_group_title(g_list, grp);
         }
         build_entry(g_list, it);
+    }
+    /* 还有没放出来的就在末尾挂一行「查看更多」；放完了自然不建，等于自动隐藏。
+     * 它不进 g_cards，所以管理模式的复选框与批量删除天然碰不到它。 */
+    if(items.size() > shown) {
+        build_load_more(g_list);
     }
     apply_manage_ui();   /* 重建后复选框/按钮组按当前模式重新落位 */
 
@@ -1573,7 +1627,17 @@ void page_user_message_refresh(bool /*force*/)
     g_active = true;
     /* 进过一次这页就算全看过了：清未读、熄侧栏红点 */
     ui_message_mark_all_read();
+    g_visible_limit = kRowsPerPage;   /* 每次进页都从最近 10 条重新看 */
     rebuild_list();
+
+    /* 撤掉 mark_all_read() 顺手排下的那次异步重建。
+     * 它有未读时会 notify_observers()（红点要靠这个通知才灭，不能省），一路转到
+     * on_store_change() → queue_rebuild()。而上面刚亲手建过最新列表，且本页从不读
+     * unread（未读只驱动侧栏红点，见 ui_app.cpp 的 sync_message_badge），那一遍产出
+     * 逐像素相同、纯属浪费——进页正是列表最长的时刻，白建一遍代价不小。
+     * 只撤这一次排队，异步机制对其它真实变更照旧生效。 */
+    lv_async_call_cancel(rebuild_async, nullptr);
+    g_rebuild_queued = false;
 }
 
 void page_user_message_exit(void)
