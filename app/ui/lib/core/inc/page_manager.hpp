@@ -77,9 +77,11 @@ public:
     /**
      * @brief 注册页面（使用图片图标，推荐：可还原设计稿自定义图标）
      * @param page         页面智能指针
-     * @param menu_icon_img A8/ARGB 图标资源（lv_image_dsc_t）；运行时按选中态 recolor
+     * @param menu_icon_img A8 图标资源（lv_image_dsc_t）；同时当选中态的位图蒙版用
      *
-     * 图标用 lv_image 显示并随选中态着色（未选 user_color_icon_off / 选中 user_color_accent）。
+     * 每个按钮里建两层互斥的图标：未选中露 A8 图标 recolor 成 user_color_icon_off，
+     * 选中露一块蓝渐变（稿 2235:8699 的 #4054FD → #4D80EE）经同一份 A8 蒙版裁出的字形。
+     * 分两层是因为 image_recolor 只能上单色，画不出稿里的渐变。
      */
     void register_page(PagePtr page, const lv_image_dsc_t* menu_icon_img);
 
@@ -129,7 +131,8 @@ private:
     struct PageEntry {
         PagePtr page;           /**< 页面实例 */
         lv_obj_t* menu_btn = nullptr; /**< 左侧菜单按钮对象 */
-        lv_obj_t* menu_icon_img = nullptr; /**< 图片图标对象（图片图标时非空，用于选中态 recolor） */
+        lv_obj_t* menu_icon_img = nullptr; /**< 未选中态：A8 图标 recolor 成灰（图片图标时非空） */
+        lv_obj_t* menu_icon_grad = nullptr;/**< 选中态：蓝渐变 + 位图蒙版裁出的字形，与 menu_icon_img 互斥显示 */
         lv_obj_t* menu_badge = nullptr;    /**< 未读红点（懒建，见 set_menu_badge） */
         std::string owner_menu;  /**< 隐藏页：激活时用此页的菜单按钮高亮（空=无映射） */
         std::function<std::string()> target_resolver; /**< 菜单按钮点击的动态目标（空=切到本页） */

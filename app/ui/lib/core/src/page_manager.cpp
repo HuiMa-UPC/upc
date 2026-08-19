@@ -98,22 +98,42 @@ void PageManager::init(lv_obj_t* screen) {
     lv_obj_move_foreground(menu_panel_);
 }
 
-/* 创建左侧菜单按钮外壳（选中态主色背景、按压反馈），返回按钮对象 */
+/* 创建左侧菜单按钮外壳（仅按压反馈，无常显底板），返回按钮对象。
+ *
+ * 背景分四档，靠 LVGL 的状态选择器叠出来：
+ *   默认                          → 透明（稿 2235:8697 的选中态只有字形，没有底板）
+ *   CHECKED                       → 透明，见下
+ *   PRESSED                       → 白 20%，按的是未选中的标签
+ *   CHECKED | PRESSED             → 主色蓝 20%，按的是已选中的标签
+ * 组合态一定压过单态：候选样式要求状态位是对象当前状态的子集，再取状态值最大的那条，
+ * 而 LV_STATE_CHECKED(1<<2) | LV_STATE_PRESSED(1<<7) = 132 > PRESSED 的 128。
+ *
+ * **CHECKED 那档必须显式写成 LV_OPA_TRANSP，不能只是「不设」**：lv_btn_create 会带上
+ * 默认主题，而主题给每个普通按钮的 checked 态都挂了 bg_color_secondary（副色 +
+ * LV_OPA_COVER，见 lv_theme_default.c 的 apply 分支），副色由 lv_display.c 自动初始化
+ * 主题时传的 LV_PALETTE_RED——不压住的话选中态会是一块不透明红底（已实机踩过）。
+ * 局部样式优先于主题样式，所以只要局部把 bg_opa 设成透明就盖住了；bg_color 不用管，
+ * 底不画出来颜色无所谓。反过来也别给它设可见的背景色，那就成了稿上没有的常显底板。 */
 static lv_obj_t* make_menu_button(lv_obj_t* parent, void* page_raw,
                                   lv_event_cb_t cb) {
     lv_obj_t* btn = lv_btn_create(parent);
-    /* 正方形按钮：白遮罩/主色高亮都是正方形（边长 = 侧栏可用宽度） */
+    /* 正方形按钮：按压遮罩是正方形（边长 = 侧栏可用宽度） */
     const int32_t nav_btn_sz = USER_SIDEBAR_W - 2 * USER_PAD_SM;
     lv_obj_set_size(btn, nav_btn_sz, nav_btn_sz);
     lv_obj_set_style_bg_opa(btn, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_bg_color(btn, user_color_accent, LV_STATE_CHECKED);
-    lv_obj_set_style_bg_opa(btn, LV_OPA_20, LV_STATE_CHECKED);
+    lv_obj_set_style_bg_opa(btn, LV_OPA_TRANSP, LV_STATE_CHECKED);
     lv_obj_set_style_bg_color(btn, user_color_text, LV_STATE_PRESSED);
     lv_obj_set_style_bg_opa(btn, LV_OPA_20, LV_STATE_PRESSED);
+    lv_obj_set_style_bg_color(btn, user_color_accent,
+                              LV_STATE_CHECKED | LV_STATE_PRESSED);
+    lv_obj_set_style_bg_opa(btn, LV_OPA_20, LV_STATE_CHECKED | LV_STATE_PRESSED);
     lv_obj_set_style_border_width(btn, 0, 0);
     lv_obj_set_style_shadow_width(btn, 0, 0);
     lv_obj_set_style_radius(btn, USER_RADIUS, 0);
     lv_obj_set_style_pad_all(btn, USER_NAV_ICON_PAD, 0);
+    /* 选中态那层渐变按蒙版原尺寸（64×64）建，比按钮大（1024 档 58、1280 档 52），
+     * 不放开溢出会先被裁掉再缩放，字形四角就缺了。见 register_page 的说明。 */
+    lv_obj_add_flag(btn, LV_OBJ_FLAG_OVERFLOW_VISIBLE);
     lv_obj_add_event_cb(btn, cb, LV_EVENT_CLICKED, page_raw);
     return btn;
 }
@@ -136,14 +156,40 @@ void PageManager::register_page(PagePtr page, const char* menu_icon) {
     entries_.push_back(std::move(entry));
 }
 
+/* 选中态字形的蓝色对角渐变。方向取左上→右下，与 ui_user_make_primary_pill_btn /
+ * ui_slide_unlock 近似稿上 139° 的做法一致。
+ * bg_grad 只存指针，故渐变描述符必须持久——五个图标共用这一份。
+ *
+ * **色值比稿宽**：稿 2235:8699 是 #4054FD → #4D80EE，两色只差绿通道 44（红 +13、蓝 −15），
+ * 亮度差约 28/255，在 54px 的字形上肉眼就是一片纯蓝、看不出深浅，所以起点压暗、终点提亮
+ * 到 #3348E8 → #6699F5（亮度差约 64）。同一处理见 ui_slide_unlock 的红条：注释里的稿值
+ * 是 #FF2424 → #FF4B4B，实取 #D00A0A → #FF8484。**别照稿值改回去**，那等于关掉渐变。
+ *
+ * 停靠点 {45, 198} 而不是 {0, 255}：渐变铺满整个 64×64 方块，而字形只占 x/y 的 6..57，
+ * 沿对角线是整条色带的 9%~89%，用 {0,255} 会把两端各浪费掉一截。稿上的 11%/86% 本就是
+ * 相对字形自身算的（渐变挂在字形节点上，不是带留白的外框），换算到本方块即这两个值。 */
+static const lv_grad_dsc_t& nav_active_grad() {
+    static lv_grad_dsc_t s_grad;
+    static bool s_ready = false;
+    if (!s_ready) {
+        const lv_color_t cols[2] = { lv_color_hex(0x3348E8), lv_color_hex(0x6699F5) };
+        const lv_opa_t   opa[2]  = { LV_OPA_COVER, LV_OPA_COVER };
+        const uint8_t    frac[2] = { 45, 198 };
+        lv_grad_init_stops(&s_grad, cols, opa, frac, 2);
+        lv_grad_linear_init(&s_grad, LV_GRAD_LEFT, LV_GRAD_TOP,
+                            LV_GRAD_RIGHT, LV_GRAD_BOTTOM, LV_GRAD_EXTEND_PAD);
+        s_ready = true;
+    }
+    return s_grad;
+}
+
 void PageManager::register_page(PagePtr page, const lv_image_dsc_t* menu_icon_img) {
     PageEntry entry;
     entry.page = std::move(page);
     Page* raw = entry.page.get();
 
     lv_obj_t* btn = make_menu_button(menu_panel_, raw, menu_btn_event_cb);
-    /* 选中态主色高亮与按压态白遮罩均由按钮自身整块绘制（见 make_menu_button），
-     * 两者同形同位、大小一致。 */
+    /* 按压反馈（未选中白 20% / 已选中主色 20%）由按钮自身整块绘制，见 make_menu_button。 */
 
     lv_obj_t* img = lv_image_create(btn);
     lv_image_set_src(img, menu_icon_img);
@@ -153,12 +199,40 @@ void PageManager::register_page(PagePtr page, const lv_image_dsc_t* menu_icon_im
         const int32_t zoom = 256 * USER_NAV_ICON_SZ / (int32_t)menu_icon_img->header.w;
         lv_image_set_scale(img, zoom);
     }
-    /* A8 图标用 recolor 着色，默认未选灰 */
+    /* A8 图标用 recolor 着色，恒为未选灰——选中态改由下面那层渐变负责，
+     * 因为 recolor 只能上单色，画不出稿里的渐变。 */
     lv_obj_set_style_image_recolor(img, user_color_icon_off, 0);
     lv_obj_set_style_image_recolor_opa(img, LV_OPA_COVER, 0);
 
+    /* 选中态：一块铺了蓝渐变的方块，再用同一份 A8 图标当位图蒙版裁成字形。
+     * 两个尺寸约束都来自 LVGL 的实现（lv_draw_sw_img.c 的 apply_mask）：
+     *   - 蒙版按原尺寸居中贴、**不缩放**，所以方块必须与图头等大（这里 64×64），
+     *     否则字形会被裁或四周留空；
+     *   - 于是缩到 USER_NAV_ICON_SZ 只能靠 transform_scale，且 pivot 默认在左上角，
+     *     必须挪到中心，不然会朝左上角缩。
+     * 与 img 互斥显示，切换见 update_menu_highlight。 */
+    lv_obj_t* grad = nullptr;
+    if (menu_icon_img && menu_icon_img->header.w > 0) {
+        const int32_t mask_sz = (int32_t)menu_icon_img->header.w;
+        grad = lv_obj_create(btn);
+        lv_obj_remove_style_all(grad);
+        lv_obj_set_size(grad, mask_sz, (int32_t)menu_icon_img->header.h);
+        lv_obj_center(grad);
+        lv_obj_set_style_bg_color(grad, lv_color_hex(0x3348E8), 0);   /* 渐变起点，兜底用 */
+        lv_obj_set_style_bg_grad(grad, &nav_active_grad(), 0);
+        lv_obj_set_style_bg_opa(grad, LV_OPA_COVER, 0);
+        lv_obj_set_style_bitmap_mask_src(grad, menu_icon_img, 0);
+        lv_obj_set_style_transform_pivot_x(grad, mask_sz / 2, 0);
+        lv_obj_set_style_transform_pivot_y(grad, mask_sz / 2, 0);
+        lv_obj_set_style_transform_scale(grad, 256 * USER_NAV_ICON_SZ / mask_sz, 0);
+        lv_obj_remove_flag(grad, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_remove_flag(grad, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_add_flag(grad, LV_OBJ_FLAG_HIDDEN);
+    }
+
     entry.menu_btn = btn;
     entry.menu_icon_img = img;
+    entry.menu_icon_grad = grad;
     entries_.push_back(std::move(entry));
 }
 
@@ -208,10 +282,16 @@ void PageManager::update_menu_highlight(const std::string& active_name) {
         } else {
             lv_obj_clear_state(entry.menu_btn, LV_STATE_CHECKED);
         }
-        /* 图片图标按选中态着色（符号图标已由按钮 text_color 处理） */
-        if (entry.menu_icon_img) {
-            lv_obj_set_style_image_recolor(entry.menu_icon_img,
-                active ? user_color_accent : user_color_icon_off, 0);
+        /* 图片图标：未选中露 A8 灰图标，选中露渐变层，两者互斥。
+         * （符号图标那条路仍由按钮的 text_color 处理，见另一个 register_page 重载） */
+        if (entry.menu_icon_grad) {
+            if (active) {
+                lv_obj_remove_flag(entry.menu_icon_grad, LV_OBJ_FLAG_HIDDEN);
+                if (entry.menu_icon_img) lv_obj_add_flag(entry.menu_icon_img, LV_OBJ_FLAG_HIDDEN);
+            } else {
+                lv_obj_add_flag(entry.menu_icon_grad, LV_OBJ_FLAG_HIDDEN);
+                if (entry.menu_icon_img) lv_obj_remove_flag(entry.menu_icon_img, LV_OBJ_FLAG_HIDDEN);
+            }
         }
     }
 }
