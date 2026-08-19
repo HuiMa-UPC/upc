@@ -504,6 +504,10 @@ enum class MsgType : uint32_t {
     APP_Mqtt_Rtsp_Start_Rsp,                /**< RtspPushRspPayload */
     MQTT_Media_Rtsp_Stop_Req,               /**< RtspPushStopReqPayload */
     APP_Mqtt_Rtsp_Stop_Rsp,                 /**< RtspPushRspPayload */
+    // ---- MQTT OTA v1.1：通知/确认/进度（下载落盘阶段） ----
+    MQTT_Ota_Notify_Ntf,                    /**< OtaNotifyPayload：MQTT 侧收到 ota/notify 后转发 UI */
+    UI_Ota_User_Decision_Req,               /**< OtaDecisionReqPayload：UI 确认/取消 OTA 通知 */
+    APP_Mqtt_Ota_Progress_Ntf,              /**< OtaProgressPayload：下载+校验进度（OTA 应用阶段可直拉满） */
 
     // ---- UI ↔ GLAVO：MCU 固件版本查询（串口 PORT_GENERAL_TASK 0xA2 / CMD_PROJECT_INFO 0x10） ----
     UI_Mcu_Version_Req = 0x1500, /**< Empty：进入 Settings/About 页时查询一次 */
@@ -966,6 +970,48 @@ struct McuOtaStatusPayload {
     McuOtaState state;
     uint8_t     progress;   /**< MCU byte[9] 0~255 */
     uint8_t     reserved[2];
+};
+
+/** MQTT_Ota_Notify_Ntf：云端 ota_notify 下发后的 UI 提醒载荷 */
+enum class OtaApprovalStatus : uint8_t {
+    PendingApproval = 0,  /**< PENDING_APPROVAL */
+    Approved        = 1,  /**< APPROVED */
+    Ready           = 2,  /**< READY（required=true） */
+    Unknown         = 255
+};
+
+struct OtaNotifyPayload {
+    char    task_id[64];
+    char    release_version[32];
+    uint8_t required;           /**< 1=true（强制） 0=false */
+    uint8_t approval_status;    /**< OtaApprovalStatus */
+    uint8_t reserved[2];
+};
+
+/** UI_Ota_User_Decision_Req：用户对 ota_notify 的确认/取消 */
+struct OtaDecisionReqPayload {
+    char    task_id[64];
+    uint8_t approve;            /**< 1=确认并继续 manifest 请求；0=取消 */
+    uint8_t reserved[3];
+};
+
+/** APP_Mqtt_Ota_Progress_Ntf：下载+校验阶段进度（百分比制） */
+enum class OtaProgressState : uint8_t {
+    Downloading = 0,
+    Verifying   = 1,
+    Applying    = 2,  /**< 当前阶段可跳过真实 OTA，直接拉满 */
+    Completed   = 3,
+    Failed      = 4,
+    RolledBack  = 5
+};
+
+struct OtaProgressPayload {
+    char    task_id[64];
+    char    component[16];      /**< soc / mcu / glavo */
+    uint8_t state;              /**< OtaProgressState */
+    uint8_t progress_pct;       /**< 0..100 */
+    uint8_t reserved[2];
+    char    error_code[64];     /**< 失败原因码；成功/进行中为空串 */
 };
 
 /**

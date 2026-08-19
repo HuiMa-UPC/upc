@@ -2853,13 +2853,17 @@ void GlavoService::publish_debug_env_sim_state()
 {
     middleware::DebugOnOffPayload p{};
     p.on = env_sim_on_ ? 1 : 0;
-    middleware::Message ntf(
-        middleware::MsgType::GLAVO_Debug_Env_Sim_Ntf,
-        middleware::ModuleId::APP_GLAVO,
-        middleware::ModuleId::UI);
-    ntf.payload = middleware::MsgPayload::from_bytes(
-        reinterpret_cast<const uint8_t*>(&p), sizeof(p));
-    (void)publish_async(ntf);
+    auto send_to = [&](middleware::ModuleId target) {
+        middleware::Message ntf(
+            middleware::MsgType::GLAVO_Debug_Env_Sim_Ntf,
+            middleware::ModuleId::APP_GLAVO,
+            target);
+        ntf.payload = middleware::MsgPayload::from_bytes(
+            reinterpret_cast<const uint8_t*>(&p), sizeof(p));
+        (void)publish_async(ntf);
+    };
+    send_to(middleware::ModuleId::UI);
+    send_to(middleware::ModuleId::APP_MQTT);
 }
 
 void GlavoService::publish_debug_env_sim_powder_state()
@@ -2883,6 +2887,10 @@ void GlavoService::handle_debug_env_sim_set(const middleware::Message& msg)
     }
     env_sim_on_ = (p.on != 0);
     McuLink::instance().set_env_sim_enabled(env_sim_on_);
+    if(env_sim_on_) {
+        /* 仅在 unknown 时补模拟版本，便于 About/MQTT 联调。 */
+        McuLink::instance().publish_simulated_versions_if_unknown();
+    }
     if(!env_sim_on_) {
         env_sim_powder_low_on_ = false;
         McuLink::instance().set_env_sim_powder_low(false);

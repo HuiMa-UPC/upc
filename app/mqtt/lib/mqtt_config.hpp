@@ -41,6 +41,10 @@ struct MqttConfig {
     [[nodiscard]] std::string topic_cmd_ack() const;
     [[nodiscard]] std::string topic_telemetry_chamber() const;
     [[nodiscard]] std::string topic_heartbeat() const;
+    [[nodiscard]] std::string topic_ota_notify() const;
+    [[nodiscard]] std::string topic_ota_manifest_req() const;
+    [[nodiscard]] std::string topic_ota_manifest_resp() const;
+    [[nodiscard]] std::string topic_ota_progress() const;
 };
 
 MqttConfig load_mqtt_config();

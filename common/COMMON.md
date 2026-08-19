@@ -213,6 +213,9 @@ scripts/rongsu.sh start   # glavo + rongsu_camera → ui
 | `APP_Mqtt_Rtsp_Start_Rsp` | — | Media→MQTT | `RtspPushRspPayload` | — | 映射 `cmd/ack`（accepted/rejected/error + reason/detail） |
 | `MQTT_Media_Rtsp_Stop_Req` | — | MQTT→Media | `RtspPushStopReqPayload` | — | 云端 `stop_rtsp_push`；不摘 Camera peer |
 | `APP_Mqtt_Rtsp_Stop_Rsp` | — | Media→MQTT | `RtspPushRspPayload` | — | 停流结果 → `cmd/ack` |
+| `MQTT_Ota_Notify_Ntf` | — | MQTT→UI | `OtaNotifyPayload` | `register_ota_notify` | 收到云端 OTA 通知后弹确认框（用户确认后再请求 manifest） |
+| `UI_Ota_User_Decision_Req` | — | UI→MQTT | `OtaDecisionReqPayload` | `send_ota_user_decision` | 用户确认/取消 OTA 通知（取消仅关弹窗，不上报云端） |
+| `APP_Mqtt_Ota_Progress_Ntf` | — | MQTT→UI | `OtaProgressPayload` | `register_ota_progress` | 下载与校验进度；OTA 应用阶段可直接 100%（本期跳过真实刷写） |
 | `XFR_Transfer_Progress_Ntf` | — | XFR→UI | `XfrTransferProgressPayload` | `register_xfr_transfer_progress` | WiFi 传输阶段进度（Uploading/Slicing/Finished/Error） |
 | `UI_Mcu_Ota_Start_Req` / `UI_Mcu_Ota_Cancel_Ntf` / `APP_Mcu_Ota_Status_Ntf` | — | UI↔Glavo | `McuOtaStatusPayload` | `send_mcu_ota_start` / `send_mcu_ota_cancel` / `register_mcu_ota_status` | Glavo 以太网 OTA（`/home/image/glavo`） |
 | `UI_Serial_Mcu_Ota_Start_Req` / `UI_Serial_Mcu_Ota_Cancel_Ntf` / `APP_Serial_Mcu_Ota_Status_Ntf` | — | UI↔Glavo | `McuOtaStatusPayload` | `send_serial_mcu_ota_start` / `send_serial_mcu_ota_cancel` / `register_serial_mcu_ota_status` | MCU 串口 OTA（`/home/image/mcu`） |

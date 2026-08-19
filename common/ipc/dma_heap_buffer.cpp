@@ -17,6 +17,7 @@ namespace {
 constexpr const char* kDmaHeapCandidates[] = {
     "/dev/dma_heap/system-dma32",
     "/dev/dma_heap/system-uncached-dma32",
+    "/dev/dma_heap/reserved",
     "/dev/rk_dma_heap/rk-dma-heap-cma",
     "/dev/dma_heap/cma-uncached",
     "/dev/dma_heap/system-uncached",

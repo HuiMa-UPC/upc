@@ -799,21 +799,42 @@ bool CameraPreviewPlayer::begin_decode_thread()
     return true;
 }
 
+/**
+ * @brief 预览解码线程主循环（独立线程，禁止调用 LVGL API）。
+ *
+ * 职责一句话：
+ *   Camera 推来的 NV12（dma fd + SHM 元数据）→ 转成 BGRX 写入 slots_[]
+ *   → 把槽下标写进 display_buf_ → UI 主线程的 ui_timer_cb 再去 lv_image_set_src。
+ *
+ * 与 UI 的协作（无锁，靠原子变量）：
+ *   - shown_buf_  ：UI 当前正在显示的槽
+ *   - display_buf_：本线程刚转好、等待 UI 切换的槽
+ *   - 本线程只写 display_buf_；UI 只读它并更新 shown_buf_
+ *
+ * 退出：stop()/退役路径把 stop_decode_ 置 true，循环结束。
+ */
 void CameraPreviewPlayer::decode_thread_fn()
 {
+    /* 目标帧周期：例如 25fps → 每圈理想耗时约 40000us，用于末尾限速 sleep。 */
     const auto frame_period = std::chrono::microseconds(
         1000000u / (fps_ > 0 ? fps_ : 1u));
+
+    /* 下一轮倾向写入的显示槽下标（0..kFrameSlots-1），实际写入前还会 pick_write_buf 避让。 */
     int write_idx = 0;
-    bool logged_first_meta = false;
-    bool logged_first_out = false;
-    uint32_t frames_ok = 0;
-    uint32_t frames_fail = 0;
-    uint32_t frames_no_slot = 0;
-    uint32_t last_seq = 0;
-    uint64_t convert_us_sum = 0;
-    uint64_t convert_us_max = 0;
-    uint64_t loop_us_sum = 0;
-    uint64_t loop_us_max = 0;
+
+    /* 首帧诊断：各打一次日志，避免刷屏。 */
+    bool logged_first_meta = false; /* 是否已打印「第一次从 ring 取到元数据」 */
+    bool logged_first_out  = false; /* 是否已打印「第一次转换出的 BGRX 像素探针」 */
+
+    /* ---- 下面这一组只用于每 5 秒汇总一次 Debug 日志，不影响功能 ---- */
+    uint32_t frames_ok     = 0; /* 转换成功次数 */
+    uint32_t frames_fail   = 0; /* 转换失败次数 */
+    uint32_t frames_no_slot = 0; /* ring 里暂时没有可取帧的次数 */
+    uint32_t last_seq      = 0; /* 最近一帧的 seq，便于对照 Camera 侧 */
+    uint64_t convert_us_sum = 0; /* 转换耗时累计（微秒） */
+    uint64_t convert_us_max = 0; /* 单次转换最大耗时 */
+    uint64_t loop_us_sum    = 0; /* 整圈循环耗时累计 */
+    uint64_t loop_us_max    = 0; /* 单圈最大耗时 */
     auto stats_since = std::chrono::steady_clock::now();
 
     UPC_LOG_CAMERA_PREVIEW(Info,
@@ -823,16 +844,27 @@ void CameraPreviewPlayer::decode_thread_fn()
         fps_, static_cast<long long>(frame_period.count()),
         rga_path_ready_ ? 1 : 0);
 
+    /* ========== 主循环：直到 stop_decode_ 被置位 ========== */
     while(!stop_decode_.load(std::memory_order_relaxed)) {
         const auto tick_start = std::chrono::steady_clock::now();
 
-        // 总是取 ring 中最新帧：牺牲逐帧完整性，换取预览低延迟。
+        /*
+         * [步骤 1] 从 SHM 元数据环取「最新」一帧。
+         * acquire_latest_frame：有多帧就绪时只拿最新，中间帧直接丢弃。
+         * 预览要低延迟，不要求像录像那样逐帧不丢。
+         * 返回的 frame 里主要有：slot_index（环槽）、buffer_idx（对应哪路 dma fd）、
+         * seq / 宽高 / stride_y 等；像素本身不在 SHM 里，在 dma fd 里。
+         */
         std::optional<upc_ipc::IpcDmaFrameView> frame =
             consumer_.acquire_latest_frame();
         if(!frame) {
+            /* ring 暂时没有 READY 槽：稍等再试，避免空转打满 CPU。 */
             ++frames_no_slot;
             std::this_thread::sleep_for(std::chrono::milliseconds(5));
         } else {
+            /* ---- 有帧：做 NV12→BGRX 并交给 UI ---- */
+
+            /* 首帧元数据日志：确认 IPC/SHM/尺寸/stride 是否符合预期。 */
             if(!logged_first_meta) {
                 UPC_LOG_CAMERA_PREVIEW(Info,
                     "first meta frame scene=%s slot=%u seq=%u buf_idx=%u "
@@ -844,17 +876,34 @@ void CameraPreviewPlayer::decode_thread_fn()
             }
             last_seq = frame->seq;
 
+            /*
+             * [步骤 2] 挑选本帧要写入的显示槽。
+             * slots_ 共 kFrameSlots(3) 块 BGRX 缓冲：
+             *   shown_buf_  —— UI 当前正在显示，写它会花屏/撕裂
+             *   display_buf_—— 已转好、UI 下一拍可能切过去，也不要写
+             * pick_write_buf 从 write_idx 起找一个「既不是 shown 也不是 display」的槽。
+             */
             write_idx = pick_write_buf(write_idx,
                                        shown_buf_.load(std::memory_order_relaxed),
                                        display_buf_.load(std::memory_order_relaxed),
                                        kFrameSlots);
-            // 解码写入时避开“当前显示”和“待显示”槽，减少 UI 读写竞争。
+            /* 解码写入时避开“当前显示”和“待显示”槽，减少 UI 读写竞争。 */
+
+            /*
+             * [步骤 3] 色彩转换：NV12(dma fd) → BGRX(slots_[write_idx])。
+             * convert_frame → convert_frame_dma：优先 RGA 硬件，失败再 SW。
+             * 成功后：
+             *   - 更新 last_frame_ok_ms_（UI 用来判断是否卡帧）
+             *   - display_buf_ = write_idx（发布给 UI；release 保证 UI acquire 能看见）
+             *   - write_idx 前进，下一圈换槽
+             */
             const auto cvt_start = std::chrono::steady_clock::now();
             if(convert_frame(*frame, write_idx)) {
                 ++frames_ok;
                 last_frame_ok_ms_.store(monotonic_ms(), std::memory_order_relaxed);
                 display_buf_.store(write_idx, std::memory_order_release);
                 if(!logged_first_out) {
+                    /* 抽查输出缓冲角点/中心像素，确认不是全黑或格式错乱。 */
                     log_bgrx_probe("first_convert_out", slots_[write_idx].data(),
                                    width_, height_, pixel_stride_px_);
                     logged_first_out = true;
@@ -863,6 +912,8 @@ void CameraPreviewPlayer::decode_thread_fn()
             } else {
                 ++frames_fail;
             }
+
+            /* 统计本次转换耗时（微秒）。 */
             const uint64_t cvt_us = static_cast<uint64_t>(
                 std::chrono::duration_cast<std::chrono::microseconds>(
                     std::chrono::steady_clock::now() - cvt_start)
@@ -871,9 +922,16 @@ void CameraPreviewPlayer::decode_thread_fn()
             if(cvt_us > convert_us_max) {
                 convert_us_max = cvt_us;
             }
+
+            /*
+             * [步骤 4] 必须归还 ring 槽给 Camera。
+             * 无论转换成功与否都要 release：否则该 slot 一直占着，
+             * Camera 侧等不到 EMPTY，V4L2 buffer 无法 QBUF，预览会卡死。
+             */
             consumer_.release_slot(frame->slot_index);
         }
 
+        /* ---- 本圈总耗时（含取帧/转换/无帧等待）---- */
         const auto now = std::chrono::steady_clock::now();
         const uint64_t loop_us = static_cast<uint64_t>(
             std::chrono::duration_cast<std::chrono::microseconds>(now - tick_start)
@@ -883,6 +941,7 @@ void CameraPreviewPlayer::decode_thread_fn()
             loop_us_max = loop_us;
         }
 
+        /* 每 5 秒打一条汇总，方便看 RGA 是否慢、是否经常无帧。 */
         if(now - stats_since >= std::chrono::seconds(5)) {
             const uint32_t timed =
                 frames_ok + frames_fail; /* 有 convert 计时的帧数 */
@@ -904,12 +963,18 @@ void CameraPreviewPlayer::decode_thread_fn()
                 static_cast<unsigned long long>(loop_avg),
                 static_cast<unsigned long long>(loop_us_max),
                 rga_path_ready_ ? 1 : 0);
+            /* 清零窗口统计，开始下一个 5 秒。 */
             frames_ok = frames_no_slot = frames_fail = 0;
             convert_us_sum = convert_us_max = 0;
             loop_us_sum = loop_us_max = 0;
             stats_since = now;
         }
 
+        /*
+         * [步骤 5] 帧率限速。
+         * 若本圈比目标周期还快，睡到接近 frame_period，避免空转占满 CPU；
+         * 若已经超时（转换慢），则不再睡，直接进入下一圈。
+         */
         const auto elapsed = now - tick_start;
         if(elapsed < frame_period) {
             std::this_thread::sleep_for(frame_period - elapsed);

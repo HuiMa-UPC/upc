@@ -21,8 +21,15 @@
 #include "ui_device_state.hpp"
 #include "ui_message_store.hpp"
 #include "ui_alarm_state.hpp"
+#include "ui_modal_dialog.hpp"
+#include "ui_user_widgets.hpp"
+#include "ui_feedback.hpp"
 #include "control.hpp"
 #include "nav_icons.h"
+
+#include <cstdint>
+#include <cstdio>
+#include <string>
 
 namespace ui {
 
@@ -43,6 +50,143 @@ void sync_message_badge(void)
         ui_message_unread_count() > 0 || ui_alarm_current_count() > 0);
 }
 
+lv_obj_t* g_ota_screen = nullptr;
+ui_modal_dialog_t* g_ota_prompt_dlg = nullptr;
+ui_modal_dialog_t* g_ota_progress_dlg = nullptr;
+lv_obj_t* g_ota_progress_bar = nullptr;
+lv_obj_t* g_ota_progress_label = nullptr;
+std::string g_ota_task_id;
+bool g_ota_required = false;
+
+void close_ota_prompt()
+{
+    if(g_ota_prompt_dlg) {
+        ui_modal_dialog_close(g_ota_prompt_dlg);
+        g_ota_prompt_dlg = nullptr;
+    }
+}
+
+void close_ota_progress()
+{
+    if(g_ota_progress_dlg) {
+        ui_modal_dialog_close(g_ota_progress_dlg);
+        g_ota_progress_dlg = nullptr;
+        g_ota_progress_bar = nullptr;
+        g_ota_progress_label = nullptr;
+    }
+}
+
+void ota_decision_cb(lv_event_t* e)
+{
+    const bool approve = reinterpret_cast<intptr_t>(lv_event_get_user_data(e)) != 0;
+    if(!approve && g_ota_required) {
+        return;
+    }
+    if(!g_ota_task_id.empty()) {
+        UiMsgProxy::instance().send_ota_user_decision(g_ota_task_id.c_str(), approve);
+    }
+    close_ota_prompt();
+}
+
+void open_ota_prompt(const middleware::OtaNotifyPayload& p)
+{
+    if(!g_ota_screen) {
+        return;
+    }
+    close_ota_prompt();
+    ui_modal_dialog_cfg_t cfg = ui_modal_dialog_cfg_user("OTA Update Available", USER_DLG_W, true);
+    g_ota_prompt_dlg = ui_modal_dialog_open(g_ota_screen, &cfg);
+    if(!g_ota_prompt_dlg) {
+        return;
+    }
+    char body[192];
+    std::snprintf(body, sizeof(body),
+                  "Version: %s\nTask: %s\nMode: %s",
+                  p.release_version[0] ? p.release_version : "unknown",
+                  p.task_id,
+                  p.required ? "required" : "optional");
+    lv_obj_t* lbl = ui_user_make_body_label(g_ota_prompt_dlg->body, body);
+    lv_label_set_long_mode(lbl, LV_LABEL_LONG_MODE_WRAP);
+    lv_obj_set_width(lbl, LV_PCT(100));
+    lv_obj_set_style_text_align(lbl, LV_TEXT_ALIGN_CENTER, 0);
+    if(!g_ota_required) {
+        ui_user_make_confirm_footer_btn(g_ota_prompt_dlg->footer, "Cancel", false,
+                                        user_color_text_dim, ota_decision_cb,
+                                        reinterpret_cast<void*>(0));
+    }
+    ui_user_make_confirm_footer_btn(g_ota_prompt_dlg->footer, "Confirm", true,
+                                    user_color_accent, ota_decision_cb,
+                                    reinterpret_cast<void*>(1));
+}
+
+void ensure_ota_progress_dialog()
+{
+    if(g_ota_progress_dlg || !g_ota_screen) {
+        return;
+    }
+    ui_modal_dialog_cfg_t cfg = ui_modal_dialog_cfg_user("OTA Download Progress", USER_DLG_W, false);
+    g_ota_progress_dlg = ui_modal_dialog_open(g_ota_screen, &cfg);
+    if(!g_ota_progress_dlg) {
+        return;
+    }
+    g_ota_progress_label = ui_user_make_body_label(g_ota_progress_dlg->body, "Starting...");
+    lv_obj_set_width(g_ota_progress_label, LV_PCT(100));
+    lv_obj_set_style_text_align(g_ota_progress_label, LV_TEXT_ALIGN_CENTER, 0);
+    g_ota_progress_bar = ui_user_make_progress_bar(g_ota_progress_dlg->body, LV_PCT(100), USER_PROGRESS_H);
+    lv_bar_set_range(g_ota_progress_bar, 0, 100);
+    lv_bar_set_value(g_ota_progress_bar, 0, LV_ANIM_OFF);
+}
+
+void on_ota_notify(const middleware::OtaNotifyPayload& p)
+{
+    g_ota_task_id = p.task_id;
+    g_ota_required = (p.required != 0);
+    open_ota_prompt(p);
+}
+
+void on_ota_progress(const middleware::OtaProgressPayload& p)
+{
+    if(p.task_id[0] != '\0') {
+        g_ota_task_id = p.task_id;
+    }
+    ensure_ota_progress_dialog();
+    if(!g_ota_progress_dlg || !g_ota_progress_bar || !g_ota_progress_label) {
+        return;
+    }
+    const middleware::OtaProgressState state =
+        static_cast<middleware::OtaProgressState>(p.state);
+    const char* state_text = "Downloading";
+    switch(state) {
+    case middleware::OtaProgressState::Verifying: state_text = "Verifying"; break;
+    case middleware::OtaProgressState::Applying: state_text = "Applying"; break;
+    case middleware::OtaProgressState::Completed: state_text = "Completed"; break;
+    case middleware::OtaProgressState::Failed: state_text = "Failed"; break;
+    case middleware::OtaProgressState::RolledBack: state_text = "Rolled Back"; break;
+    case middleware::OtaProgressState::Downloading:
+    default: break;
+    }
+    char text[256];
+    std::snprintf(text, sizeof(text), "%s [%s] %u%%",
+                  state_text,
+                  p.component[0] ? p.component : "unknown",
+                  static_cast<unsigned>(p.progress_pct));
+    lv_label_set_text(g_ota_progress_label, text);
+    lv_bar_set_value(g_ota_progress_bar, static_cast<int32_t>(p.progress_pct), LV_ANIM_OFF);
+
+    if(state == middleware::OtaProgressState::Completed) {
+        close_ota_prompt();
+        ui_toast_show("OTA files ready", user_color_status_ok, 1800);
+        close_ota_progress();
+    } else if(state == middleware::OtaProgressState::Failed) {
+        close_ota_prompt();
+        char err[128];
+        std::snprintf(err, sizeof(err), "OTA failed: %s",
+                      p.error_code[0] ? p.error_code : "unknown");
+        ui_toast_show(err, user_color_status_err, 2200);
+        close_ota_progress();
+    }
+}
+
 } // namespace
 
 void app_init(lv_obj_t* screen) {
@@ -53,6 +197,8 @@ void app_init(lv_obj_t* screen) {
     lv_obj_set_style_bg_opa(screen, LV_OPA_COVER, 0);
 
     UiMsgProxy::instance().init();
+    UiMsgProxy::instance().register_ota_notify(on_ota_notify);
+    UiMsgProxy::instance().register_ota_progress(on_ota_progress);
     CameraMsgProxy::instance().init();
     DebugMsgProxy::instance().init();
     CameraPreviewPlayer::instance().init();
@@ -139,6 +285,7 @@ void app_init(lv_obj_t* screen) {
 
     ui_keyboard_init(screen);
     control_init(screen);
+    g_ota_screen = screen;
 
     PageManager::instance().switch_to("user_home");
 }

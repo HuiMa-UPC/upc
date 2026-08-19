@@ -63,13 +63,42 @@ private:
         uint64_t deadline_ms = 0;
     };
 
+    struct FirmwareCache {
+        bool mcu_valid = false;
+        bool galvo_valid = false;
+        middleware::McuVersionPayload mcu{};
+        middleware::GalvoVersionPayload galvo{};
+    };
+
+    struct OtaNotify {
+        std::string task_id;
+        std::string release_version;
+        bool required = false;
+        middleware::OtaApprovalStatus approval_status =
+            middleware::OtaApprovalStatus::Unknown;
+    };
+
+    struct OtaComponent {
+        std::string component;      /**< soc / mcu / glavo */
+        std::string version;
+        std::string url;
+        std::string sha256;
+        uint64_t size_bytes = 0;
+        std::string file_name;
+    };
+
     void subscribe_messages();
     void on_env_update(const middleware::Message& msg);
+    void on_mcu_version(const middleware::Message& msg);
+    void on_galvo_version(const middleware::Message& msg);
+    void on_env_sim_state(const middleware::Message& msg);
+    void on_ota_user_decision(const middleware::Message& msg);
     void on_rtsp_start_rsp(const middleware::Message& msg);
     void on_rtsp_stop_rsp(const middleware::Message& msg);
     void cache_telemetry(const middleware::EnvSnapshotPayload& p);
     bool read_env_payload(const middleware::Message& msg,
                           middleware::EnvSnapshotPayload& out) const;
+    void request_firmware_versions_if_needed();
     void expire_pending_acks();
 
     bool ensure_mqtt_connected();
@@ -112,6 +141,31 @@ private:
     bool dispatch_rtsp_stop_to_media(const RtspCommand& cmd);
     void handle_rtsp_rsp(const middleware::Message& msg, const char* expect_cmd);
     bool track_pending_ack(const std::string& req_id, const std::string& cmd);
+    bool subscribe_ota_topics();
+    void handle_ota_notify(const std::string& payload);
+    void handle_ota_manifest_response(const std::string& payload);
+    bool parse_ota_notify(const std::string& payload, OtaNotify& out) const;
+    bool parse_manifest_response(const std::string& payload,
+                                 std::string& task_id,
+                                 std::vector<OtaComponent>& components,
+                                 std::string& err_code) const;
+    bool publish_manifest_request(const std::string& task_id);
+    bool publish_ota_progress_cloud(const middleware::OtaProgressPayload& progress);
+    void publish_ota_progress_ui(const middleware::OtaProgressPayload& progress);
+    void run_manifest_download_task(std::string task_id, std::vector<OtaComponent> components);
+    void start_manifest_download(std::string task_id, std::vector<OtaComponent> components);
+    void request_firmware_versions_force(bool need_mcu, bool need_galvo);
+    void poll_ota_heartbeat_wait();
+    static bool parse_mcu_version_text(const std::string& text,
+                                       middleware::McuVersionPayload& out);
+    static bool parse_galvo_version_text(const std::string& text,
+                                         middleware::GalvoVersionPayload& out);
+    static bool json_extract_bool(const std::string& json, const char* key, bool& out);
+    static bool json_extract_array_objects(const std::string& json, const char* key,
+                                           std::vector<std::string>& out);
+    static std::string topic_from_incoming(const char* topic_name, int topic_len);
+    static bool map_approval_status(const std::string& text,
+                                    middleware::OtaApprovalStatus& out);
 
     static int on_message_arrived(void* context, char* topic_name,
                                   int topic_len, MQTTClient_message* message);
@@ -120,6 +174,8 @@ private:
     static std::string read_boot_id();
     static int64_t read_uptime_s();
     static int bars_to_rssi_dbm(int bars, bool connected);
+    static std::string format_mcu_version(const middleware::McuVersionPayload& p);
+    static std::string format_galvo_version(uint32_t fw_version_le);
 
     static bool json_extract_string(const std::string& json, const char* key,
                                     std::string& out);
@@ -156,16 +212,34 @@ private:
     bool mqtt_created_ = false;
     bool mqtt_connected_ = false;
     bool cmd_subscribed_ = false;
+    bool ota_subscribed_ = false;
     uint64_t last_reconnect_ms_ = 0;
 
     std::mutex data_mtx_;
     ChamberTelemetry latest_{};
+    FirmwareCache fw_cache_{};
+    bool env_sim_on_ = false;
+    std::string soc_fw_override_;
+    struct OtaHeartbeatWait {
+        bool active = false;
+        bool need_mcu = false;
+        bool need_galvo = false;
+        bool got_mcu = false;
+        bool got_galvo = false;
+        uint64_t deadline_ms = 0;
+    } ota_hb_wait_{};
     uint64_t last_telemetry_pub_ms_ = 0;
     uint64_t last_heartbeat_pub_ms_ = 0;
+    uint64_t last_fw_query_ms_ = 0;
     std::string boot_id_;
 
     std::mutex pending_mtx_;
     std::unordered_map<std::string, PendingAck> pending_acks_;
+
+    std::mutex ota_mtx_;
+    OtaNotify pending_ota_notify_{};
+    std::thread ota_download_thread_;
+    bool ota_download_running_ = false;
 
     std::atomic<uint32_t> seq_{0};
 };

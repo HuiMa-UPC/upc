@@ -1079,24 +1079,6 @@ void publish_alarm_snapshot_ntf(const serial_alarm_snapshot_t& snap)
     middleware::MsgPort::instance().publish_async(ntf);
 }
 
-/** 组装并异步下发 GLAVO_Mcu_Version_Ntf（About 页 MCU Version 显示）。 */
-void publish_mcu_version_ntf(const serial_project_info_t& info)
-{
-    middleware::McuVersionPayload p{};
-    p.valid        = 1;
-    p.major        = info.major;
-    p.minor        = info.minor;
-    p.patch        = info.patch;
-    p.laser_type   = info.laser_type;
-    p.z_motor_type = info.z_motor_type;
-
-    middleware::Message ntf(middleware::MsgType::GLAVO_Mcu_Version_Ntf,
-        middleware::ModuleId::APP_GLAVO, middleware::ModuleId::UI);
-    ntf.payload = middleware::MsgPayload::from_bytes(
-        reinterpret_cast<const uint8_t*>(&p), sizeof(p));
-    middleware::MsgPort::instance().publish_async(ntf);
-}
-
 } // namespace
 
 void McuLink::publish_env_update_ntf()
@@ -1295,7 +1277,11 @@ void McuLink::poll_env_sim_tick()
     fake.substrate_temp_c = 30.0f + 8.0f * s2;
     fake.powder_bits      = env_sim_powder_low_effective_ ? 0x00u : 0x03u;
     fake.powder_present   = (fake.powder_bits == 0x03u) ? 1u : 0u;
-    fake.outer_door_open  = 0;
+    fake.outer_door_open  = (s2 > 0.75f) ? 1u : 0u;
+    fake.hall_bitmap      = static_cast<uint16_t>(
+        ((s1 > 0.4f) ? 0x0001u : 0u) |
+        ((s2 > 0.4f) ? 0x0002u : 0u) |
+        ((s3 > 0.4f) ? 0x0004u : 0u));
 
     {
         std::lock_guard<std::mutex> lock(env_mtx_);
@@ -1307,7 +1293,7 @@ void McuLink::poll_env_sim_tick()
         env_cache_.humidity_percent = fake.humidity_percent;
         env_cache_.pressure_kpa     = static_cast<float>(fake.pressure1_x10_kpa) / 10.0f;
         env_cache_.powder_bits      = static_cast<uint8_t>(fake.powder_bits & 0x03u);
-        env_cache_.outer_door_open  = false;
+        env_cache_.outer_door_open  = (fake.outer_door_open != 0);
         env_cache_.door_state_valid = true;
         env_cache_.valid            = true;
     }
@@ -1326,15 +1312,20 @@ void McuLink::poll_env_sim_tick()
     }
 
     UPC_LOG_MCU_LINK(Info,
-        "env_sim: O2=%.1f%% P1=%.1fkPa T=%.1fC RH=%.1f%% PM1.0=%.1f PM2.5=%.1f PM10=%.1f powder_bits=0x%02X",
+        "env_sim: O2=%.1f%% P1=%.1fkPa P2=%.1fkPa PF=%.1fkPa T=%.1fC RH=%.1f%% PM1.0=%.1f PM2.5=%.1f PM10=%.1f base=%.1fC powder_bits=0x%02X door=%u hall=0x%04X",
         static_cast<double>(fake.oxygen_percent),
         static_cast<double>(fake.pressure1_x10_kpa) / 10.0,
+        static_cast<double>(fake.pressure2_x10_kpa) / 10.0,
+        static_cast<double>(fake.filter_pressure_x10_kpa) / 10.0,
         static_cast<double>(fake.temperature_c),
         static_cast<double>(fake.humidity_percent),
         static_cast<double>(fake.pm1_ug_m3),
         static_cast<double>(fake.pm25_ug_m3),
         static_cast<double>(fake.pm10_ug_m3),
-        static_cast<unsigned>(fake.powder_bits));
+        static_cast<double>(fake.substrate_temp_c),
+        static_cast<unsigned>(fake.powder_bits),
+        static_cast<unsigned>(fake.outer_door_open),
+        static_cast<unsigned>(fake.hall_bitmap));
 }
 
 void McuLink::publish_debug_axis_ntf(const serial_motion_pos_t& pos)
@@ -1350,6 +1341,44 @@ void McuLink::publish_debug_axis_ntf(const serial_motion_pos_t& pos)
     ntf.payload = middleware::MsgPayload::from_bytes(
         reinterpret_cast<const uint8_t*>(&p), sizeof(p));
     middleware::MsgPort::instance().publish_async(ntf);
+}
+
+void McuLink::on_mcu_version_report(const serial_project_info_t& info)
+{
+    middleware::McuVersionPayload p{};
+    p.valid        = 1;
+    p.major        = info.major;
+    p.minor        = info.minor;
+    p.patch        = info.patch;
+    p.laser_type   = info.laser_type;
+    p.z_motor_type = info.z_motor_type;
+    {
+        std::lock_guard<std::mutex> lock(mcu_fw_mtx_);
+        mcu_fw_cache_ = p;
+    }
+    mcu_fw_valid_.store(true);
+    publish_mcu_version_ntf();
+}
+
+void McuLink::publish_mcu_version_ntf()
+{
+    middleware::McuVersionPayload p{};
+    if(mcu_fw_valid_.load()) {
+        std::lock_guard<std::mutex> lock(mcu_fw_mtx_);
+        p = mcu_fw_cache_;
+    } else {
+        p.valid = 0;
+    }
+
+    auto send_to = [&](middleware::ModuleId target) {
+        middleware::Message ntf(middleware::MsgType::GLAVO_Mcu_Version_Ntf,
+            middleware::ModuleId::APP_GLAVO, target);
+        ntf.payload = middleware::MsgPayload::from_bytes(
+            reinterpret_cast<const uint8_t*>(&p), sizeof(p));
+        middleware::MsgPort::instance().publish_async(ntf);
+    };
+    send_to(middleware::ModuleId::UI);
+    send_to(middleware::ModuleId::APP_MQTT);
 }
 
 void McuLink::notify_serial_event(serial_event_t evt)
@@ -1483,7 +1512,7 @@ void McuLink::handle_serial_rx_frame(const uint8_t* frame, size_t len)
             static_cast<unsigned>(pinfo.patch),
             static_cast<unsigned>(pinfo.laser_type),
             static_cast<unsigned>(pinfo.z_motor_type));
-        publish_mcu_version_ntf(pinfo);
+        on_mcu_version_report(pinfo);
         return;
     }
 
@@ -2984,11 +3013,46 @@ void McuLink::publish_galvo_version_ntf()
     p.firmware_id   = tcp_firmware_id_.load();
     p.fw_version_le = tcp_fw_version_le_.load();
 
-    middleware::Message ntf(middleware::MsgType::GLAVO_Galvo_Version_Ntf,
-        middleware::ModuleId::APP_GLAVO, middleware::ModuleId::UI);
-    ntf.payload = middleware::MsgPayload::from_bytes(
-        reinterpret_cast<const uint8_t*>(&p), sizeof(p));
-    middleware::MsgPort::instance().publish_async(ntf);
+    auto send_to = [&](middleware::ModuleId target) {
+        middleware::Message ntf(middleware::MsgType::GLAVO_Galvo_Version_Ntf,
+            middleware::ModuleId::APP_GLAVO, target);
+        ntf.payload = middleware::MsgPayload::from_bytes(
+            reinterpret_cast<const uint8_t*>(&p), sizeof(p));
+        middleware::MsgPort::instance().publish_async(ntf);
+    };
+    send_to(middleware::ModuleId::UI);
+    send_to(middleware::ModuleId::APP_MQTT);
+}
+
+void McuLink::publish_simulated_versions_if_unknown()
+{
+    /* 仅在未知时补值：真实上报到达后会覆盖，不影响真实链路。 */
+    if(!mcu_fw_valid_.load()) {
+        middleware::McuVersionPayload p{};
+        p.valid = 1;
+        p.major = 1;
+        p.minor = 0;
+        p.patch = 0;
+        p.laser_type = 0;
+        p.z_motor_type = 0;
+        {
+            std::lock_guard<std::mutex> lock(mcu_fw_mtx_);
+            mcu_fw_cache_ = p;
+        }
+        mcu_fw_valid_.store(true);
+        publish_mcu_version_ntf();
+        UPC_LOG_MCU_LINK(Info, "env_sim version fallback: MCU=1.0.0.0.0");
+    }
+
+    if(!tcp_fw_valid_.load()) {
+        constexpr uint32_t kSimGalvoFwLe = 0x00030004u; /* -> 3.0.4 */
+        tcp_fw_version_le_.store(kSimGalvoFwLe);
+        tcp_firmware_id_.store(1u);
+        tcp_fw_valid_.store(true);
+        publish_galvo_version_ntf();
+        UPC_LOG_MCU_LINK(Info, "env_sim version fallback: Galvo=0x%08X",
+                         static_cast<unsigned>(kSimGalvoFwLe));
+    }
 }
 
 int McuLink::current_tcp_batch_size() const noexcept

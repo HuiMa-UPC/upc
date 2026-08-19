@@ -242,6 +242,8 @@ public:
     /** @brief 调试页传感器条推无效哨兵（<0 → UI "--"） */
     void publish_debug_sensor_invalid_ntf();
     void publish_debug_axis_ntf(const serial_motion_pos_t& pos);
+    void on_mcu_version_report(const serial_project_info_t& info);
+    void publish_mcu_version_ntf();
     void drain_serial_tx_queue();
     /** @brief MQTT 环境 IPC 发送节流；force=true 用于关闭模拟时立即推清空帧 */
     bool should_publish_env_to_mqtt(bool force = false) noexcept;
@@ -263,6 +265,10 @@ public:
      *       尚未收到带版本的首包时 valid=0。
      */
     void publish_galvo_version_ntf();
+    /**
+     * @brief Env Sim 打开时补发模拟版本号（仅 unknown 时生效，不覆盖真实版本）
+     */
+    void publish_simulated_versions_if_unknown();
 
 private:
     struct SerialReliableItem {
@@ -424,6 +430,9 @@ private:
     std::atomic<bool>     tcp_fw_valid_{false};       /**< 是否已收到带版本的扩展包 */
     std::atomic<uint32_t> tcp_fw_version_le_{0};      /**< 小端固件版本号 */
     std::atomic<uint8_t>  tcp_firmware_id_{0};        /**< 1=APPA，2=APPB */
+    std::atomic<bool>     mcu_fw_valid_{false};       /**< 是否已收到串口版本上报 */
+    middleware::McuVersionPayload mcu_fw_cache_{};    /**< MCU 版本缓存（由 mcu_fw_mtx_ 保护） */
+    mutable std::mutex mcu_fw_mtx_;
 
     /* ---------- 换层/串口握手状态 ---------- */
     std::atomic<bool> waiting_layer_{false};           /**< 当前是否处于换层等待状态 */

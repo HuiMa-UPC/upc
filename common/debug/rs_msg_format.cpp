@@ -211,6 +211,9 @@ const char* upc_msg_type_name(MsgType type) {
         case MsgType::APP_Fs_Delete_Rsp: return "APP_Fs_Delete_Rsp";
         case MsgType::UI_Galvo_Version_Req: return "UI_Galvo_Version_Req";
         case MsgType::GLAVO_Galvo_Version_Ntf: return "GLAVO_Galvo_Version_Ntf";
+        case MsgType::MQTT_Ota_Notify_Ntf: return "MQTT_Ota_Notify_Ntf";
+        case MsgType::UI_Ota_User_Decision_Req: return "UI_Ota_User_Decision_Req";
+        case MsgType::APP_Mqtt_Ota_Progress_Ntf: return "APP_Mqtt_Ota_Progress_Ntf";
         default: return "Msg";
     }
 }

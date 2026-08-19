@@ -326,6 +326,29 @@ void UiMsgProxy::init()
         }));
 
     subs_.push_back(bus.subscribe(
+        middleware::MsgType::MQTT_Ota_Notify_Ntf, middleware::ModuleId::UI,
+        [this](const middleware::Message& msg) {
+            middleware::OtaNotifyPayload p{};
+            if (ota_notify_cb_ && read_inline_pod(msg, p)) {
+                p.task_id[sizeof(p.task_id) - 1] = '\0';
+                p.release_version[sizeof(p.release_version) - 1] = '\0';
+                ota_notify_cb_(p);
+            }
+        }));
+
+    subs_.push_back(bus.subscribe(
+        middleware::MsgType::APP_Mqtt_Ota_Progress_Ntf, middleware::ModuleId::UI,
+        [this](const middleware::Message& msg) {
+            middleware::OtaProgressPayload p{};
+            if (ota_progress_cb_ && read_inline_pod(msg, p)) {
+                p.task_id[sizeof(p.task_id) - 1] = '\0';
+                p.component[sizeof(p.component) - 1] = '\0';
+                p.error_code[sizeof(p.error_code) - 1] = '\0';
+                ota_progress_cb_(p);
+            }
+        }));
+
+    subs_.push_back(bus.subscribe(
         middleware::MsgType::GLAVO_Device_Event_Ntf, middleware::ModuleId::UI,
         [this](const middleware::Message& msg) {
             middleware::DeviceEventPayload p{};
@@ -524,6 +547,27 @@ void UiMsgProxy::send_galvo_version_query()
 void UiMsgProxy::register_galvo_version(GalvoVersionCb cb)
 {
     galvo_version_cb_ = std::move(cb);
+}
+
+void UiMsgProxy::send_ota_user_decision(const char* task_id, bool approve)
+{
+    middleware::OtaDecisionReqPayload payload{};
+    if(task_id && task_id[0]) {
+        std::snprintf(payload.task_id, sizeof(payload.task_id), "%s", task_id);
+    }
+    payload.approve = approve ? uint8_t(1) : uint8_t(0);
+    publish_pod(middleware::MsgType::UI_Ota_User_Decision_Req,
+                middleware::ModuleId::APP_MQTT, payload);
+}
+
+void UiMsgProxy::register_ota_notify(OtaNotifyCb cb)
+{
+    ota_notify_cb_ = std::move(cb);
+}
+
+void UiMsgProxy::register_ota_progress(OtaProgressCb cb)
+{
+    ota_progress_cb_ = std::move(cb);
 }
 
 void UiMsgProxy::register_device_event(DeviceEventCb cb)

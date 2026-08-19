@@ -110,9 +110,31 @@ target_compile_options(${UI_TARGET}
 )
 
 # ---------- UI 进程可执行文件 ----------
+set(UPC_UI_PLATFORM_VARIANT "1.0")
+
+if(DEFINED TOOLCHAIN)
+    string(TOLOWER "${TOOLCHAIN}" _upc_toolchain_lc)
+elseif(DEFINED CMAKE_TOOLCHAIN_FILE)
+    get_filename_component(_upc_toolchain_name "${CMAKE_TOOLCHAIN_FILE}" NAME_WE)
+    string(TOLOWER "${_upc_toolchain_name}" _upc_toolchain_lc)
+endif()
+
+if(DEFINED _upc_toolchain_lc AND _upc_toolchain_lc MATCHES "phx")
+    set(UPC_UI_PLATFORM_VARIANT "2.0")
+endif()
+
+set(UPC_UI_PLATFORM_DIR "${CMAKE_CURRENT_SOURCE_DIR}/${UPC_UI_PLATFORM_VARIANT}")
+set(UPC_UI_PLATFORM_CPP "${UPC_UI_PLATFORM_DIR}/platform.cpp")
+
+if(NOT EXISTS "${UPC_UI_PLATFORM_CPP}")
+    message(FATAL_ERROR "ui: platform source not found: ${UPC_UI_PLATFORM_CPP}")
+endif()
+
+message(STATUS "ui: platform variant=${UPC_UI_PLATFORM_VARIANT} (toolchain=${_upc_toolchain_lc})")
+
 add_executable(rongsu_ui
     main.cpp
-    platform.cpp
+    ${UPC_UI_PLATFORM_CPP}
 )
 
 target_compile_features(rongsu_ui PRIVATE cxx_std_17)
@@ -120,6 +142,7 @@ target_compile_features(rongsu_ui PRIVATE cxx_std_17)
 target_include_directories(rongsu_ui
     PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}
+        ${UPC_UI_PLATFORM_DIR}
         ${CMAKE_CURRENT_SOURCE_DIR}/lib/core/inc
         ${CMAKE_SOURCE_DIR}/common/process
 )
