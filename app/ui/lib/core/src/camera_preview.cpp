@@ -35,7 +35,7 @@ constexpr int kDstRgaFormat  = RK_FORMAT_BGRX_8888;
 constexpr int kRgaRetryCount   = 3;
 constexpr int kRgaRetryDelayMs = 10;
 #if defined(UPC_UI_RGA_STREAMING) && UPC_UI_RGA_STREAMING
-constexpr uint32_t kRgaStreamLines = 128u;
+constexpr uint32_t kRgaStreamLines = 512u;
 #endif
 
 const char* rga_status_str(IM_STATUS st)
@@ -49,12 +49,15 @@ bool rga_status_ok(IM_STATUS st)
     return st == IM_STATUS_SUCCESS || st == IM_STATUS_NOERROR;
 }
 
+#if !defined(UPC_UI_RGA_STREAMING) || !UPC_UI_RGA_STREAMING
 bool rga_cvtcolor_checked(rga_buffer_t src, rga_buffer_t dst_buf, const im_rect& rect,
                           IM_STATUS* out_st);
-#if !defined(UPC_UI_RGA_STREAMING) || !UPC_UI_RGA_STREAMING
 bool rga_nv12_to_bgrx_fd(int src_fd, int dst_fd, int w, int h, int src_stride_y,
                          int dst_stride_px, IM_STATUS* out_st);
 #endif
+bool rga_cvtcolor_rect_checked(rga_buffer_t src, rga_buffer_t dst_buf,
+                               const im_rect& src_rect, const im_rect& dst_rect,
+                               IM_STATUS* out_st);
 
 uint64_t monotonic_ms()
 {
@@ -114,6 +117,7 @@ void nv12_to_bgrx_sw(const uint8_t* y_plane, const uint8_t* uv_plane,
     }
 }
 
+#if !defined(UPC_UI_RGA_STREAMING) || !UPC_UI_RGA_STREAMING
 bool rga_cvtcolor_checked(rga_buffer_t src, rga_buffer_t dst_buf, const im_rect& rect,
                           IM_STATUS* out_st)
 {
@@ -130,6 +134,33 @@ bool rga_cvtcolor_checked(rga_buffer_t src, rga_buffer_t dst_buf, const im_rect&
     if(!rga_status_ok(st)) {
         st = imcvtcolor_t(src, dst_buf, kNv12RgaFormat, kDstRgaFormat,
                           IM_COLOR_SPACE_DEFAULT, 1);
+    }
+    if(out_st) {
+        *out_st = st;
+    }
+    return rga_status_ok(st);
+}
+#endif
+
+bool rga_cvtcolor_rect_checked(rga_buffer_t src, rga_buffer_t dst_buf,
+                               const im_rect& src_rect, const im_rect& dst_rect,
+                               IM_STATUS* out_st)
+{
+    const IM_STATUS chk = imcheck(src, dst_buf, src_rect, dst_rect);
+    if(!rga_status_ok(chk)) {
+        if(out_st) {
+            *out_st = chk;
+        }
+        return false;
+    }
+
+    imsetColorSpace(&src, IM_YUV_TO_RGB_BT601_LIMIT);
+    rga_buffer_t pat{};
+    const im_rect prect{};
+    IM_STATUS st = improcess(src, dst_buf, pat, src_rect, dst_rect, prect, IM_SYNC);
+    if(!rga_status_ok(st)) {
+        imsetColorSpace(&src, IM_COLOR_SPACE_DEFAULT);
+        st = improcess(src, dst_buf, pat, src_rect, dst_rect, prect, IM_SYNC);
     }
     if(out_st) {
         *out_st = st;
@@ -302,6 +333,9 @@ void CameraPreviewPlayer::close_dma_fds()
 
 void CameraPreviewPlayer::close_active_dma_fds()
 {
+#if defined(UPC_UI_RGA_STREAMING) && UPC_UI_RGA_STREAMING
+    release_rga_streaming_cache();
+#endif
     close_fd_vector(dma_fds_);
     dma_nv12_bytes_ = 0;
 }
@@ -515,8 +549,91 @@ void CameraPreviewPlayer::async_apply_stream_start(void* user)
  * 显示缓冲准备与切流接管
  * ========================= */
 
+bool CameraPreviewPlayer::prepare_rga_streaming_cache()
+{
+#if !defined(UPC_UI_RGA_STREAMING) || !UPC_UI_RGA_STREAMING
+    return true;
+#else
+    release_rga_streaming_cache();
+    rga_src_direct_ = true;
+
+    if(!rga_path_ready_ || !rga_stream_src_.valid() || !rga_stream_dst_.valid()) {
+        return false;
+    }
+    if(dma_fds_.empty() || dma_nv12_bytes_ == 0u) {
+        return false;
+    }
+
+    const rga_buffer_handle_t src_scratch_h =
+        importbuffer_fd(rga_stream_src_.fd(), static_cast<int>(rga_stream_src_.size()));
+    const rga_buffer_handle_t dst_scratch_h =
+        importbuffer_fd(rga_stream_dst_.fd(), static_cast<int>(rga_stream_dst_.size()));
+    if(src_scratch_h == 0 || dst_scratch_h == 0) {
+        if(src_scratch_h) {
+            releasebuffer_handle(src_scratch_h);
+        }
+        if(dst_scratch_h) {
+            releasebuffer_handle(dst_scratch_h);
+        }
+        return false;
+    }
+    rga_stream_src_handle_ = static_cast<uint32_t>(src_scratch_h);
+    rga_stream_dst_handle_ = static_cast<uint32_t>(dst_scratch_h);
+
+    rga_src_maps_.reserve(dma_fds_.size());
+    for(int fd : dma_fds_) {
+        if(fd < 0) {
+            return false;
+        }
+        void* va = mmap(nullptr, dma_nv12_bytes_, PROT_READ, MAP_SHARED, fd, 0);
+        if(va == MAP_FAILED) {
+            return false;
+        }
+        const rga_buffer_handle_t h = importbuffer_fd(fd, static_cast<int>(dma_nv12_bytes_));
+        if(h == 0) {
+            munmap(va, dma_nv12_bytes_);
+            return false;
+        }
+        rga_src_maps_.push_back(
+            RgaSrcMap{fd, va, dma_nv12_bytes_, static_cast<uint32_t>(h)});
+    }
+
+    return true;
+#endif
+}
+
+void CameraPreviewPlayer::release_rga_streaming_cache()
+{
+#if defined(UPC_UI_RGA_STREAMING) && UPC_UI_RGA_STREAMING
+    if(rga_stream_src_handle_ != 0u) {
+        releasebuffer_handle(static_cast<rga_buffer_handle_t>(rga_stream_src_handle_));
+        rga_stream_src_handle_ = 0u;
+    }
+    if(rga_stream_dst_handle_ != 0u) {
+        releasebuffer_handle(static_cast<rga_buffer_handle_t>(rga_stream_dst_handle_));
+        rga_stream_dst_handle_ = 0u;
+    }
+    for(RgaSrcMap& m : rga_src_maps_) {
+        if(m.handle != 0u) {
+            releasebuffer_handle(static_cast<rga_buffer_handle_t>(m.handle));
+            m.handle = 0u;
+        }
+        if(m.va && m.va != MAP_FAILED) {
+            munmap(m.va, m.size);
+        }
+        m.va = nullptr;
+        m.size = 0;
+        m.fd = -1;
+    }
+    rga_src_maps_.clear();
+#endif
+}
+
 void CameraPreviewPlayer::clear_frame_buffers()
 {
+#if defined(UPC_UI_RGA_STREAMING) && UPC_UI_RGA_STREAMING
+    release_rga_streaming_cache();
+#endif
     for(int i = 0; i < kFrameSlots; ++i) {
         slots_[i].clear();
         img_dsc_[i] = {};
@@ -534,6 +651,9 @@ bool CameraPreviewPlayer::setup_frame_buffers(size_t frame_bytes,
     clear_frame_buffers();
 
     rga_path_ready_ = true;
+#if defined(UPC_UI_RGA_STREAMING) && UPC_UI_RGA_STREAMING
+    rga_src_direct_ = true;
+#endif
 #if defined(UPC_UI_RGA_STREAMING) && UPC_UI_RGA_STREAMING
     // streaming 模式下显示槽固定使用普通内存，避免整帧 DMA 申请压力。
     for(int i = 0; i < kFrameSlots; ++i) {
@@ -707,6 +827,14 @@ void CameraPreviewPlayer::apply_stream_start_ui(
         active_.store(false);
         return;
     }
+#if defined(UPC_UI_RGA_STREAMING) && UPC_UI_RGA_STREAMING
+    if(rga_path_ready_ && !prepare_rga_streaming_cache()) {
+        UPC_LOG_CAMERA_PREVIEW(Warn,
+            "RGA streaming cache prepare failed; fallback to software convert");
+        release_rga_streaming_cache();
+        rga_path_ready_ = false;
+    }
+#endif
 
     if(src_stride_y_ == 0) {
         src_stride_y_ = width_;
@@ -1032,13 +1160,15 @@ bool CameraPreviewPlayer::convert_frame(const upc_ipc::IpcDmaFrameView& frame,
     return convert_frame_dma(frame, slot_idx);
 }
 
-bool CameraPreviewPlayer::convert_frame_rga_streaming(int src_fd, uint8_t* dst,
-                                                      int w, int h,
-                                                      int src_stride_y,
+bool CameraPreviewPlayer::convert_frame_rga_streaming(uint32_t src_buf_idx, int src_fd,
+                                                      int slot_idx, uint8_t* dst,
+                                                      int w, int h, int src_stride_y,
                                                       int dst_stride_px)
 {
 #if !defined(UPC_UI_RGA_STREAMING) || !UPC_UI_RGA_STREAMING
+    (void)src_buf_idx;
     (void)src_fd;
+    (void)slot_idx;
     (void)dst;
     (void)w;
     (void)h;
@@ -1046,43 +1176,35 @@ bool CameraPreviewPlayer::convert_frame_rga_streaming(int src_fd, uint8_t* dst,
     (void)dst_stride_px;
     return false;
 #else
-    if(src_fd < 0 || !dst || w <= 0 || h <= 0 || src_stride_y <= 0 ||
-       dst_stride_px <= 0 || !rga_stream_src_.valid() || !rga_stream_dst_.valid()) {
+    (void)slot_idx;
+    if(src_fd < 0 ||
+       src_buf_idx >= rga_src_maps_.size() || !dst || w <= 0 || h <= 0 ||
+       src_stride_y <= 0 || dst_stride_px <= 0 ||
+       !rga_stream_src_.valid() || !rga_stream_dst_.valid() ||
+       rga_stream_src_handle_ == 0u || rga_stream_dst_handle_ == 0u) {
         return false;
     }
-
-    const size_t src_size = static_cast<size_t>(src_stride_y) *
-                            static_cast<size_t>(h) * 3u / 2u;
-    void* src_va = mmap(nullptr, src_size, PROT_READ, MAP_SHARED, src_fd, 0);
-    if(src_va == MAP_FAILED) {
-        UPC_LOG_CAMERA_PREVIEW(Warn, "streaming mmap src fd %d failed", src_fd);
+    const RgaSrcMap& src_map = rga_src_maps_[src_buf_idx];
+    if(src_map.fd != src_fd || src_map.handle == 0u || !src_map.va) {
         return false;
     }
+    const rga_buffer_handle_t src_h =
+        static_cast<rga_buffer_handle_t>(src_map.handle);
+    const rga_buffer_handle_t src_scratch_h =
+        static_cast<rga_buffer_handle_t>(rga_stream_src_handle_);
+    const rga_buffer_handle_t dst_scratch_h =
+        static_cast<rga_buffer_handle_t>(rga_stream_dst_handle_);
+    const uint8_t* src_y_full = static_cast<const uint8_t*>(src_map.va);
+    const uint8_t* src_uv_full =
+        src_y_full + static_cast<size_t>(src_stride_y) * static_cast<size_t>(h);
 
-    rga_buffer_handle_t src_h = importbuffer_fd(
-        rga_stream_src_.fd(), static_cast<int>(rga_stream_src_.size()));
-    rga_buffer_handle_t dst_h = importbuffer_fd(
-        rga_stream_dst_.fd(), static_cast<int>(rga_stream_dst_.size()));
-    if(src_h == 0 || dst_h == 0) {
-        if(src_h) {
-            releasebuffer_handle(src_h);
-        }
-        if(dst_h) {
-            releasebuffer_handle(dst_h);
-        }
-        munmap(src_va, src_size);
-        return false;
-    }
-
-    const uint8_t* src_y_full = static_cast<const uint8_t*>(src_va);
-    const uint8_t* src_uv_full = src_y_full +
-                                 static_cast<size_t>(src_stride_y) * static_cast<size_t>(h);
     const uint32_t chunk_lines = (rga_stream_lines_ >= 2u)
                                      ? (rga_stream_lines_ & ~1u)
                                      : 2u;
 
-    dma_buf_sync_start_read(src_fd);
     bool ok = true;
+    bool src_direct_ok = rga_src_direct_;
+    rga_buffer_t src_full = wrapbuffer_handle(src_h, w, h, kNv12RgaFormat, src_stride_y, h);
     for(int y = 0; y < h; y += static_cast<int>(chunk_lines)) {
         const int remain = h - y;
         int strip_h = remain;
@@ -1106,6 +1228,36 @@ bool CameraPreviewPlayer::convert_frame_rga_streaming(int src_fd, uint8_t* dst,
             break;
         }
 
+        rga_buffer_t dst_strip = wrapbuffer_handle(dst_scratch_h, w, strip_h, kDstRgaFormat,
+                                                   dst_stride_px, strip_h);
+        IM_STATUS st = IM_STATUS_FAILED;
+
+        bool converted = false;
+        if(src_direct_ok) {
+            const im_rect src_rect{0, y, w, strip_h};
+            const im_rect dst_rect{0, 0, w, strip_h};
+            converted = rga_cvtcolor_rect_checked(
+                src_full, dst_strip, src_rect, dst_rect, &st);
+            if(!converted) {
+                static std::atomic<bool> logged{false};
+                if(!logged.exchange(true)) {
+                    UPC_LOG_CAMERA_PREVIEW(Warn,
+                        "RGA src direct crop failed st=%d (%s), fallback to memcpy strip",
+                        static_cast<int>(st), rga_status_str(st));
+                }
+                src_direct_ok = false;
+                rga_src_direct_ = false;
+            }
+        }
+
+        if(converted) {
+            dma_buf_sync_start_read(rga_stream_dst_.fd());
+            std::memcpy(dst + static_cast<size_t>(y) * static_cast<size_t>(dst_stride_px) * 4u,
+                        rga_stream_dst_.va(), strip_dst_bytes);
+            dma_buf_sync_end_read(rga_stream_dst_.fd());
+            continue;
+        }
+
         const uint8_t* src_y = src_y_full + static_cast<size_t>(y) * src_stride_y;
         const uint8_t* src_uv = src_uv_full + static_cast<size_t>(y / 2) * src_stride_y;
         uint8_t* chunk_src = static_cast<uint8_t*>(rga_stream_src_.va());
@@ -1116,13 +1268,13 @@ bool CameraPreviewPlayer::convert_frame_rga_streaming(int src_fd, uint8_t* dst,
         std::memcpy(chunk_uv, src_uv, static_cast<size_t>(src_stride_y) * (strip_h / 2));
         dma_buf_sync_end_write(rga_stream_src_.fd());
 
-        rga_buffer_t src_buf = wrapbuffer_handle(src_h, w, strip_h, kNv12RgaFormat,
-                                                 src_stride_y, strip_h);
-        rga_buffer_t dst_buf = wrapbuffer_handle(dst_h, w, strip_h, kDstRgaFormat,
-                                                 dst_stride_px, strip_h);
-        const im_rect rect{0, 0, w, strip_h};
-        IM_STATUS st = IM_STATUS_FAILED;
-        if(!rga_cvtcolor_checked(src_buf, dst_buf, rect, &st)) {
+        rga_buffer_t src_strip = wrapbuffer_handle(src_scratch_h, w, strip_h, kNv12RgaFormat,
+                                                   src_stride_y, strip_h);
+        const im_rect src_rect{0, 0, w, strip_h};
+        const im_rect dst_rect{0, 0, w, strip_h};
+        st = IM_STATUS_FAILED;
+        if(!rga_cvtcolor_rect_checked(
+                src_strip, dst_strip, src_rect, dst_rect, &st)) {
             ok = false;
             break;
         }
@@ -1132,11 +1284,6 @@ bool CameraPreviewPlayer::convert_frame_rga_streaming(int src_fd, uint8_t* dst,
                     rga_stream_dst_.va(), strip_dst_bytes);
         dma_buf_sync_end_read(rga_stream_dst_.fd());
     }
-    dma_buf_sync_end_read(src_fd);
-
-    releasebuffer_handle(src_h);
-    releasebuffer_handle(dst_h);
-    munmap(src_va, src_size);
     return ok;
 #endif
 }
@@ -1194,7 +1341,8 @@ bool CameraPreviewPlayer::convert_frame_dma(const upc_ipc::IpcDmaFrameView& fram
             IM_STATUS st = IM_STATUS_FAILED;
 #if defined(UPC_UI_RGA_STREAMING) && UPC_UI_RGA_STREAMING
             const bool rga_ok = convert_frame_rga_streaming(
-                src_fd, dst, w, h, src_stride_y, dst_stride_px);
+                frame.buffer_idx, src_fd, slot_idx, dst, w, h, src_stride_y,
+                dst_stride_px);
 #else
             const bool rga_ok = rga_nv12_to_bgrx_fd(src_fd, slot.fd(), w, h,
                                                     src_stride_y, dst_stride_px, &st);

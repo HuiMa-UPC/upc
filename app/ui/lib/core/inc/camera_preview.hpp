@@ -82,15 +82,17 @@ private:
     void finish_decode_retire_ui();
     void clear_frame_buffers();
     bool setup_frame_buffers(size_t frame_bytes, uint32_t row_stride_bytes);
+    bool prepare_rga_streaming_cache();
+    void release_rga_streaming_cache();
 
     static void ui_timer_cb(lv_timer_t* timer);
     static void retire_poll_timer_cb(lv_timer_t* timer);
     static void async_apply_stream_start(void* user);
     bool convert_frame(const upc_ipc::IpcDmaFrameView& frame, int slot_idx);
     bool convert_frame_dma(const upc_ipc::IpcDmaFrameView& frame, int slot_idx);
-    bool convert_frame_rga_streaming(int src_fd, uint8_t* dst,
-                                     int w, int h, int src_stride_y,
-                                     int dst_stride_px);
+    bool convert_frame_rga_streaming(uint32_t src_buf_idx, int src_fd, int slot_idx,
+                                     uint8_t* dst, int w, int h,
+                                     int src_stride_y, int dst_stride_px);
 
     lv_obj_t* image_ = nullptr;
     lv_obj_t* hint_  = nullptr;
@@ -132,9 +134,20 @@ private:
     std::atomic<bool>     stalled_{false};
 
 #if defined(UPC_UI_RGA_STREAMING) && UPC_UI_RGA_STREAMING
+    struct RgaSrcMap {
+        int      fd = -1;
+        void*    va = nullptr;
+        size_t   size = 0;
+        uint32_t handle = 0; /**< rga_buffer_handle_t */
+    };
+
     RgaDmaBuf rga_stream_src_;
     RgaDmaBuf rga_stream_dst_;
-    uint32_t  rga_stream_lines_ = 128;
+    uint32_t  rga_stream_lines_ = 512;
+    uint32_t  rga_stream_src_handle_ = 0; /**< rga_buffer_handle_t */
+    uint32_t  rga_stream_dst_handle_ = 0; /**< rga_buffer_handle_t */
+    std::vector<RgaSrcMap> rga_src_maps_;
+    bool                   rga_src_direct_ = true; /**< 源优先直裁，失败退 memcpy */
 #endif
 
     middleware::CameraStreamInfoPayload pending_start_rsp_{};
