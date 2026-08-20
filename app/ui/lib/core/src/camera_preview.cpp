@@ -55,9 +55,11 @@ bool rga_cvtcolor_checked(rga_buffer_t src, rga_buffer_t dst_buf, const im_rect&
 bool rga_nv12_to_bgrx_fd(int src_fd, int dst_fd, int w, int h, int src_stride_y,
                          int dst_stride_px, IM_STATUS* out_st);
 #endif
+#if defined(UPC_UI_RGA_STREAMING) && UPC_UI_RGA_STREAMING
 bool rga_cvtcolor_rect_checked(rga_buffer_t src, rga_buffer_t dst_buf,
                                const im_rect& src_rect, const im_rect& dst_rect,
                                IM_STATUS* out_st);
+#endif
 
 uint64_t monotonic_ms()
 {
@@ -142,6 +144,7 @@ bool rga_cvtcolor_checked(rga_buffer_t src, rga_buffer_t dst_buf, const im_rect&
 }
 #endif
 
+#if defined(UPC_UI_RGA_STREAMING) && UPC_UI_RGA_STREAMING
 bool rga_cvtcolor_rect_checked(rga_buffer_t src, rga_buffer_t dst_buf,
                                const im_rect& src_rect, const im_rect& dst_rect,
                                IM_STATUS* out_st)
@@ -167,6 +170,7 @@ bool rga_cvtcolor_rect_checked(rga_buffer_t src, rga_buffer_t dst_buf,
     }
     return rga_status_ok(st);
 }
+#endif
 
 #if !defined(UPC_UI_RGA_STREAMING) || !UPC_UI_RGA_STREAMING
 bool rga_nv12_to_bgrx_fd(int src_fd, int dst_fd, int w, int h, int src_stride_y,
