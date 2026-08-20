@@ -294,7 +294,7 @@ detail 组合；查不到的 code/detail 降级显示原始编号
 错误日志）。这里刻意**不放在 `/home/media` 下**：报警历史不是媒体，早先挂在那儿只是
 为了借 `UPC_MEDIA_ROOT` 那个宏，现已解除对 `media_paths.hpp` 的依赖。
 
-复位：`ui_alarm_request_reset(code)` → `UI_Alarm_Reset_Req` → Glavo 组 0x82 帧下发。
+复位：`ui_alarm_request_reset(code)` → `UI_Alarm_Reset_Ntf` → Glavo 组 0x82 帧下发。
 受理后置 `reset_pending`，解除它有三条路径：该 code 的新上报、`GLAVO_Alarm_Reset_Result_Ntf`
 失败回执（0xA3/0x82 TLV 0x04，MCU 只在失败时发）、10s 超时兜底。
 
@@ -315,11 +315,11 @@ ACTIVE + OWNER_TASK 这一档最容易漏：激光器 1301、各轴 1203~1230 �
 `reset_policy` 是「运行时一律以报文为准」的**唯一例外**——报文里没这个字段，只有
 `报警map.csv` 有，所以只能查字典。
 
-**快照对齐（`UI_Alarm_Snapshot_Req` / `GLAVO_Alarm_Snapshot_Ntf`，0xA3/0x81）**：
+**快照对齐（`UI_Alarm_Snapshot_Ntf` / `GLAVO_Alarm_Snapshot_Ntf`，0xA3/0x81）**：
 单条上报只在状态变化时发，所以 UI 重启 / 串口重连 / SOC 比 MCU 后启动这几种情况下，
 之前就亮着的报警**再也收不到**，本地表会和 MCU 真实状态脱节。快照是补这个洞的：
 
-- **请求-响应**：MCU **不会主动推**，不发 `UI_Alarm_Snapshot_Req`（TLV 0x05 len=0）
+- **请求-响应**：MCU **不会主动推**，不发 `UI_Alarm_Snapshot_Ntf`（TLV 0x05 len=0）
   就一帧都收不到。触发点五处：`ui_alarm_state_init()`、串口打开成功（Glavo 侧
   `McuLink::request_alarm_snapshot()` 自己发）、进消息中心页、30s 兜底轮询、开始打印前。
   `ui_alarm_request_snapshot()` 内部带节流（上一轮在途或距上次不足 2s 就跳过），
@@ -455,7 +455,7 @@ critical 把 information/warning/error/critical 四档等级配色凑齐——�
 以报文为准，不造就看不到；关掉开关注入 NORMAL 帧模拟解除）。
 1003 同时是 **ACTIVE + `reset_policy=OWNER_TASK`** 的样本，用来验那档在抽屉里
 可点 Reset；1124 是 LOCAL，ACTIVE 时该置灰——两条对照着看。
-注意注入条目按 Reset 会真发 `UI_Alarm_Reset_Req` 到串口，MCU 不回帧时 10s 后
+注意注入条目按 Reset 会真发 `UI_Alarm_Reset_Ntf` 到串口，MCU 不回帧时 10s 后
 pending 自动解除——正好顺带验超时路径。
 
 ### 左滑删除：跟手拖动（消息页 + 历史页共用）
@@ -754,7 +754,7 @@ ARGB8888 图，`make_ctl_backdrop()` 直接贴，按 profile 三档挑（`ctl_ba
 时序：
 
 ```
-Glavo Print_Terminate_Done / 进度 100% → control.cpp finish_printing()
+Glavo Print_Terminate_Rsp / 进度 100% → control.cpp finish_printing()
   → enter_state(CONTROL_STATE_PRINT_DONE)   // 只停看门狗，预览保活，界面维持打印中原样
   → （开门 finalize：promote 目录；`UPC_TIMELAPSE_PLAYBACK_PNG=1` 时不编 timelapse.mp4，保留 PNG 即可播；`=0` 时后台编 mp4）
   → APP_Print_Video_Manifest_Ntf (Camera→UI)

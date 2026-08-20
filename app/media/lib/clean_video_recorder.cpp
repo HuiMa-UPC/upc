@@ -399,7 +399,7 @@ void CleanVideoRecorder::publish_clean_test_done(
     }
 
     middleware::Message msg(
-        middleware::MsgType::APP_Clean_Test_Done_Ntf,
+        middleware::MsgType::APP_Clean_Test_Result_Ntf,
         middleware::ModuleId::APP_MEDIA,
         middleware::ModuleId::UI);
     msg.payload = middleware::MsgPayload::from_bytes(

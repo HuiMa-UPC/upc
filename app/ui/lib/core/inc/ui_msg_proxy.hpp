@@ -163,10 +163,10 @@ public:
     /** GLAVO_Alarm_Reset_Result_Ntf：复位失败回执（0xA3/0x82 TLV 0x04）。
      *  只在失败时来；成功仍以后续 NORMAL 单报为准。 */
     void register_alarm_reset_result(AlarmResetResultCb cb);
-    /** UI_Alarm_Reset_Req：请求复位某条 CONDITION 报警。ACK 不代表成功，
+    /** UI_Alarm_Reset_Ntf：请求复位某条 CONDITION 报警。ACK 不代表成功，
      *  最终状态以后续 GLAVO_Alarm_Report_Ntf 或失败回执为准。 */
     void send_alarm_reset(uint16_t alarm_code);
-    /** UI_Alarm_Snapshot_Req：请求 MCU 回一轮报警快照。
+    /** UI_Alarm_Snapshot_Ntf：请求 MCU 回一轮报警快照。
      *  MCU 不会主动推，不发这条就补不齐重启/重连前就亮着的报警。 */
     void send_alarm_snapshot_req();
 

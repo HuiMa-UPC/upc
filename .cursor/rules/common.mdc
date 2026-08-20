@@ -8,3 +8,9 @@ globs: common/**
 读 [common/COMMON.md](../../common/COMMON.md)（契约、IPC、Middleware、Debug、Process 合一文档）。
 
 勿在业务进程重复实现线协议；MsgType 变更走 contract 四步 + `upc_contract.hpp`。
+
+IPC 命名与语义强约束（必须同时满足）：
+
+- `*_Req` 必须有且仅有对应 `*_Rsp` 作为请求应答；禁止用 `*_Done` 或 `*_Ntf` 充当 `Req` 的主应答。
+- `*_Ntf` 仅允许单向事件通知，且不需要应答；禁止用 `*_Ntf` 承载“请求-应答”语义。
+- `*_Ntf` 用于单向通知（事件、阶段、进度、状态更新均可）；不得承载“请求-应答”语义。

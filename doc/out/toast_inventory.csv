@@ -1,5 +1,5 @@
 ﻿文件,行号,所属模块,文案,语言,颜色常量,时长(ms),触发场景,带图标,动态拼接,备注
-app/ui/lib/core/src/control.cpp,613,打印流程 / 放版准备,Prepare failed,en,user_color_status_err,2500,APP_Print_Prepare_Done 回 ok=false，关准备弹窗后退回 IDLE,否,否,
+app/ui/lib/core/src/control.cpp,613,打印流程 / 放版准备,Prepare failed,en,user_color_status_err,2500,APP_Print_Prepare_Rsp 回 ok=false，关准备弹窗后退回 IDLE,否,否,
 app/ui/lib/core/src/control.cpp,678,选文件页 / 无线传输,File received: <文件名>,en,user_color_status_ok,2200,XfrFileReceived 推送，手机端传完一个文件,否,是,snprintf 拼 p.file_name，缓冲 180 字节
 app/ui/lib/core/src/control.cpp,704,选文件页 / 无线传输,Transfer failed,en,user_color_status_err,2200,XfrTransferProgress 的 state=Error,否,否,
 app/ui/lib/core/src/control.cpp,718,选文件页 / USB,USB removed,en,user_color_status_err,1800,USB 热插拔上报 mounted=0 且当前正停在 USB 分页,否,否,

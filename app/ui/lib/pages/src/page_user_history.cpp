@@ -2251,7 +2251,7 @@ void ensure_history_subscribed_once()
             }
         }));
     g_history_subs.push_back(bus.subscribe(
-        middleware::MsgType::APP_Clean_Test_Done_Ntf,
+        middleware::MsgType::APP_Clean_Test_Result_Ntf,
         middleware::ModuleId::UI,
         [](const middleware::Message& msg) {
             middleware::CleanTestDonePayload p{};

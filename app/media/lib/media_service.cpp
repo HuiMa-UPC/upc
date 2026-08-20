@@ -127,7 +127,7 @@ void MediaService::subscribe_messages()
         middleware::ModuleId::APP_MEDIA,
         [this](const middleware::Message& msg) { on_stream_start_rsp(msg); }));
     subs_.push_back(bus.subscribe(
-        middleware::MsgType::APP_Media_Camera_Stream_Stop_Done,
+        middleware::MsgType::APP_Media_Camera_Stream_Stop_Rsp,
         middleware::ModuleId::APP_MEDIA,
         [this](const middleware::Message& msg) { on_stream_stop_done(msg); }));
 

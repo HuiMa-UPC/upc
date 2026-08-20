@@ -116,8 +116,11 @@ scripts/rongsu.sh start   # glavo + rongsu_camera → ui
 | `_Req` | 请求，通常有对应 `_Rsp` |
 | `_Rsp` | 响应 |
 | `_Ntf` | 单向推送，无响应 |
-| `_Done` | 流程结束通知 |
-| `_Progress` | 进度推送 |
+
+**强约束（必须遵守）**：
+- `*_Req`：必须有且仅有对应 `*_Rsp` 作为请求应答；禁止使用 `*_Done` 或 `*_Ntf` 代替请求应答。
+- `*_Ntf`：只能用于单向事件通知，不得承载“期待对端执行并回执”的命令语义。
+- `*_Ntf`：用于单向通知（包括事件、阶段、进度、状态更新）；不得承载“期待对端执行并回执”的命令语义。
 
 ### 2.3 `Payload` 结构体
 
@@ -153,15 +156,15 @@ scripts/rongsu.sh start   # glavo + rongsu_camera → ui
 | `UI_OpenDoor_Req` | — | UI→Glavo | Empty | `send_open_door` | 开门 |
 | `APP_OpenDoor_Rsp` | `GLAVO_Door_Open_Rsp` | Glavo→UI | `DoorResultPayload` | `register_open_door_result` | — |
 | `UI_Purify_Req` | — | UI→Glavo | Empty | `send_purify` | 净化（待实现） |
-| `APP_Purify_Progress` | `GLAVO_Purify_Progress_Ntf` | Glavo→UI | `Value`（百分比） | `register_purify_progress` | — |
-| `APP_Purify_Rsp` | `GLAVO_Purify_Done` | Glavo→UI | Empty | `register_purify_done` | — |
+| `APP_Purify_Ntf` | `GLAVO_Purify_Ntf` | Glavo→UI | `Value`（百分比） | `register_purify_progress` | — |
+| `APP_Purify_Rsp` | `GLAVO_Purify_Rsp` | Glavo→UI | Empty | `register_purify_done` | — |
 | `UI_Clean_Start_Req` | — | UI→Glavo | Empty | `send_clean_start` | 开门前清粉（PM2.5≥阈值触发：设风机占空比→开风机→达标后关风机） |
 | `APP_Clean_Start_Rsp` | `GLAVO_Clean_Start_Rsp` | Glavo→UI | Empty | `register_clean_start_result` | 清粉达标完成→前端自动开门 |
 | `UI_Clean_Stop_Req` | — | UI→Glavo | Empty | `send_clean_stop` | 清粉中断（按清粉页 X 触发），请求后端立即关风机 |
 | `APP_Clean_Stop_Rsp` | `GLAVO_Clean_Stop_Rsp` | Glavo→UI | Empty | `register_clean_stop_result` | 清粉中断受理完成→前端切回开门流程 |
 | `UI_Clean_Test_Start_Req` | — | UI→Glavo | `CleanTestStartReqPayload` | `send_clean_test_start` | 打印结果页 Purify：启动清粉测试并通知 Media 按延时帧率抽帧 |
 | `APP_Clean_Test_Start_Rsp` | — | Glavo→UI | `CleanTestStartRspPayload` | `register_clean_test_start_rsp` | 请求受理状态（避免并发启动） |
-| `APP_Clean_Test_Done_Ntf` | — | Media→UI（有录像）/ Glavo→UI（无录像） | `CleanTestDonePayload` | `register_clean_test_done` | MCU TLV `0x22` 完成后：Media 停止清粉抽帧并回执；最终 MP4 在结果页退出后统一合成 |
+| `APP_Clean_Test_Result_Ntf` | — | Media→UI（有录像）/ Glavo→UI（无录像） | `CleanTestDonePayload` | `register_clean_test_done` | MCU TLV `0x22` 完成后：Media 停止清粉抽帧并回执；最终 MP4 在结果页退出后统一合成 |
 | `UI_Clean_Test_Close_Req` | — | UI→Glavo | Empty | `send_clean_test_close` | 返回首页时强制发送 `clean_test_close` 收尾 |
 | `UI_Print_Video_Finalize_Req` | — | UI→Media | `PrintVideoFinalizeReqPayload` | `send_print_video_finalize` | 开门取件后触发：promote 目录 + 清 pending；延时成片受 `UPC_TIMELAPSE_PLAYBACK_PNG` 控制（默认跳过 `timelapse.mp4`），打印录像仍可 remux `print_h264.mp4` |
 | `APP_Clean_Test_Close_Rsp` | — | Glavo→UI | Empty | `register_clean_test_close_rsp` | close 指令已受理 |
@@ -178,13 +181,13 @@ scripts/rongsu.sh start   # glavo + rongsu_camera → ui
 | `UI_Print_Powder_Low_Ignore_Req` | — | UI→Glavo | Empty | `send_print_powder_low_ignore` | 当前打印会话忽略后续缺粉检测：不再自动暂停、不再推缺粉通知 |
 | `APP_Print_Pause_Rsp` | `GLAVO_Print_Pause_Rsp` | Glavo→UI | `PrintPauseStatePayload` | `register_print_pause_done` | 暂停/恢复响应（paused=1/0；Pause/Resume Req 共用） |
 | `APP_Print_Powder_Low_Ntf` | — | Glavo→UI | Empty | `register_print_powder_low` | 打印中粉量位 bit0/bit1 同时为 0 时仅通知一次；UI 弹补粉弹窗 |
-| `APP_Print_Terminate_Done` | `GLAVO_Print_Terminate_Done` | Glavo→UI | Empty | `register_print_terminate_done` | — |
+| `APP_Print_Terminate_Rsp` | `GLAVO_Print_Terminate_Rsp` | Glavo→UI | Empty | `register_print_terminate_done` | — |
 | `UI_Supply_Status_Req` | — | UI→Glavo | Empty | `send_supply_status` | stub |
 | `APP_Supply_Status_Rsp` | `GLAVO_Supply_Status_Rsp` | Glavo→UI | `SupplyStatusPayload` | `register_supply_status` | — |
 | `UI_Camera_Stream_Start_Req` | — | UI→Camera | `CameraStreamStartReqPayload` | `CameraMsgProxy::send_stream_start` | 开预览 |
 | `APP_Camera_Stream_Start_Rsp` | — | Camera→UI | `CameraStreamInfoPayload` | `register_stream_start_rsp` | SHM 参数 / dma fd 旁路信息 |
 | `UI_Camera_Stream_Stop_Req` | — | UI→Camera | Empty | `send_stream_stop` | 关预览 |
-| `APP_Camera_Stream_Stop_Done` | — | Camera→UI | Empty | `register_stream_stop_done` | — |
+| `APP_Camera_Stream_Stop_Rsp` | — | Camera→UI | Empty | `register_stream_stop_done` | — |
 | `APP_Camera_Frame_Ntf` | — | Camera→UI | `CameraFrameNtfPayload` | （可选） | 帧序号；默认关 |
 | `UI_Camera_Snapshot_Req` | — | UI→Media | Empty | `send_snapshot_req` | 存当前帧 PNG + 配对 `.rthm` 缩略图到 `/home/media/photo` |
 | `APP_Camera_Snapshot_Rsp` | — | Media→UI | `CameraSnapshotRspPayload` | `register_snapshot_rsp` | — |
@@ -193,8 +196,7 @@ scripts/rongsu.sh start   # glavo + rongsu_camera → ui
 | `VISUAL_Camera_Stream_Start_Req` | — | Visual→Camera | `CameraStreamStartReqPayload`/Empty | — | 视觉进程申请并行取流 |
 | `APP_Visual_Camera_Stream_Start_Rsp` | — | Camera→Visual | `CameraStreamInfoPayload` | — | 视觉侧 SHM 参数 / dma fd |
 | `VISUAL_Camera_Stream_Stop_Req` | — | Visual→Camera | Empty | — | 视觉进程停止取流 |
-| `APP_Visual_Camera_Stream_Stop_Done` | — | Camera→Visual | Empty | — | 视觉取流关闭确认 |
-| `APP_Visual_Rect_Ntf` | — | Visual→UI | `VisualRectNtfPayload` | `register_visual_rect` | 矩形四点坐标，UI 叠加画框 |
+| `APP_Visual_Camera_Stream_Stop_Rsp` | — | Camera→Visual | Empty | — | 视觉取流关闭确认 |
 | `GLAVO_Visual_FirstLayer_Check_Req` | — | Glavo→Visual | `VisualFirstLayerCheckReqPayload` | — | 触发首层视觉检测（检测前允许从 Camera 最新帧做拷贝/处理） |
 | `APP_Visual_FirstLayer_Check_Rsp` | — | Visual→Glavo | `VisualFirstLayerCheckRspPayload` | — | 首层检测结果：`result=1` 继续打印，`result=0` 继续铺粉 |
 | `APP_Print_Video_Session_Start_Ntf` | — | Glavo→Media（Hub FWD） | `PrintVideoSessionPayload`（含 `h264_bitrate`，0=Media 默认中等码率 / cal `PRINT_H264_BITRATE`） | — | `PrintVideoNotify` / `MediaService` |
@@ -215,62 +217,57 @@ scripts/rongsu.sh start   # glavo + rongsu_camera → ui
 | `XFR_Transfer_Progress_Ntf` | — | XFR→UI | `XfrTransferProgressPayload` | `register_xfr_transfer_progress` | WiFi 传输阶段进度（Uploading/Slicing/Finished/Error） |
 | `UI_Mcu_Ota_Start_Req` / `UI_Mcu_Ota_Cancel_Ntf` / `APP_Mcu_Ota_Status_Ntf` | — | UI↔Glavo | `McuOtaStatusPayload` | `send_mcu_ota_start` / `send_mcu_ota_cancel` / `register_mcu_ota_status` | Glavo 以太网 OTA（`/home/image/glavo`） |
 | `UI_Serial_Mcu_Ota_Start_Req` / `UI_Serial_Mcu_Ota_Cancel_Ntf` / `APP_Serial_Mcu_Ota_Status_Ntf` | — | UI↔Glavo | `McuOtaStatusPayload` | `send_serial_mcu_ota_start` / `send_serial_mcu_ota_cancel` / `register_serial_mcu_ota_status` | MCU 串口 OTA（`/home/image/mcu`） |
-| `UI_Debug_Axis_Jog_Req` | — | UI→Glavo | `DebugAxisJogPayload` | `DebugMsgProxy::send_axis_jog` | **后端待实现** |
-| `UI_Debug_Axis_Hold_Stop_Req` | — | UI→Glavo | `DebugAxisPayload` | `send_axis_hold_stop` | 长按松手停 |
-| `UI_Debug_Axis_SetZero_Req` | — | UI→Glavo | `DebugAxisPayload` | `send_axis_set_zero` | Z 工作零点 |
-| `UI_Debug_Axis_Home_Req` | — | UI→Glavo | `DebugAxisPayload` | `send_axis_home` | 轴回 Home（Z 0x11 / S 0x10） |
-| `UI_Debug_Galvo_Move_Req` | — | UI→Glavo | `DebugGalvoMovePayload` | `send_galvo_move` | 振镜步进（预留 TCP） |
-| `UI_Debug_Galvo_Home_Req` | — | UI→Glavo | Empty | `send_galvo_home` | 振镜回中 |
-| `UI_Debug_Galvo_RedLight_Req` | — | UI→Glavo | `DebugOnOffPayload` | `send_galvo_red_light` | 红光 |
-| `UI_Debug_Galvo_Param_Save_Req` | — | UI→Glavo | `DebugGalvoParamPayload` | `send_galvo_param_save` | Scale/步长 |
-| `UI_Debug_Galvo_Calib_Req` | — | UI→Glavo | Empty | `send_galvo_calib` | 开始标定 |
-| `UI_Debug_Device_Req` | — | UI→Glavo | `DebugDevicePayload` | `send_device` | 设备/门/电机/照明 |
-| `UI_Debug_Powder_Bucket_Req` | — | UI→Glavo | `DebugBucketPayload` | `send_powder_bucket` | 粉桶 |
-| `UI_Debug_Pusher_Req` | — | UI→Glavo | `DebugMotorPayload` | `send_sieve` | 筛粉电机（0=停止/1=筛粉运行/2=反转倒渣） |
-| `UI_Debug_Recycle_Motor_Req` | — | UI→Glavo | `DebugMotorPayload` | `send_inner_door` | 内门（0=停止/1=开/2=关；原回粉电机块改为内门） |
-| `UI_Debug_Fan_Req` | — | UI→Glavo | `DebugFanPayload` | `send_fan` | 风扇开/关（占空比走 Fan_Duty_Req） |
-| `UI_Debug_Switch_Req` | — | UI→Glavo | `DebugSwitchPayload` | `send_switch` | 激光/洗气/底板加热 |
+| `UI_Debug_Axis_Jog_Ntf` | — | UI→Glavo | `DebugAxisJogPayload` | `DebugMsgProxy::send_axis_jog` | **后端待实现** |
+| `UI_Debug_Axis_Hold_Stop_Ntf` | — | UI→Glavo | `DebugAxisPayload` | `send_axis_hold_stop` | 长按松手停 |
+| `UI_Debug_Axis_SetZero_Ntf` | — | UI→Glavo | `DebugAxisPayload` | `send_axis_set_zero` | Z 工作零点 |
+| `UI_Debug_Axis_Home_Ntf` | — | UI→Glavo | `DebugAxisPayload` | `send_axis_home` | 轴回 Home（Z 0x11 / S 0x10） |
+| `UI_Debug_Galvo_Move_Ntf` | — | UI→Glavo | `DebugGalvoMovePayload` | `send_galvo_move` | 振镜步进（预留 TCP） |
+| `UI_Debug_Galvo_Home_Ntf` | — | UI→Glavo | Empty | `send_galvo_home` | 振镜回中 |
+| `UI_Debug_Galvo_RedLight_Ntf` | — | UI→Glavo | `DebugOnOffPayload` | `send_galvo_red_light` | 红光 |
+| `UI_Debug_Galvo_Param_Save_Ntf` | — | UI→Glavo | `DebugGalvoParamPayload` | `send_galvo_param_save` | Scale/步长 |
+| `UI_Debug_Galvo_Calib_Ntf` | — | UI→Glavo | Empty | `send_galvo_calib` | 开始标定 |
+| `UI_Debug_Device_Ntf` | — | UI→Glavo | `DebugDevicePayload` | `send_device` | 设备/门/电机/照明 |
+| `UI_Debug_Powder_Bucket_Ntf` | — | UI→Glavo | `DebugBucketPayload` | `send_powder_bucket` | 粉桶 |
+| `UI_Debug_Pusher_Ntf` | — | UI→Glavo | `DebugMotorPayload` | `send_sieve` | 筛粉电机（0=停止/1=筛粉运行/2=反转倒渣） |
+| `UI_Debug_Recycle_Motor_Ntf` | — | UI→Glavo | `DebugMotorPayload` | `send_inner_door` | 内门（0=停止/1=开/2=关；原回粉电机块改为内门） |
+| `UI_Debug_Fan_Ntf` | — | UI→Glavo | `DebugFanPayload` | `send_fan` | 风扇开/关（占空比走 Fan_Duty_Ntf） |
+| `UI_Debug_Switch_Ntf` | — | UI→Glavo | `DebugSwitchPayload` | `send_switch` | 激光/洗气/底板加热 |
 | `UI_Debug_CleanTest_Start_Ntf` | — | UI→Glavo | Empty | `send_clean_test_start` | 清粉测试开启（关闭暂不使用） |
 | `UI_Debug_CleanTest_Close_Ntf` | — | UI→Glavo | Empty | `send_clean_test_close` | 清粉测试关闭/中止 |
-| `UI_Debug_Laser_Power_Set_Req` | — | UI→Glavo | `DebugLaserPowerPayload` | `send_laser_power_set` | 激光手动功率 0–100 |
-| `UI_Debug_Laser_Power_Reset_Req` | — | UI→Glavo | Empty | `send_laser_power_reset` | 取消手动功率、恢复外控 |
-| `UI_Debug_Laser_AlarmReset_Req` | — | UI→Glavo | Empty | `send_laser_alarm_reset` | 激光器报警复位（1301） |
-| `UI_Debug_Print_H264_Record_Set_Req` | — | UI→Glavo | `DebugOnOffPayload` | `send_print_h264_record_set` | 调试页全局开关：打印期连续 H264 录像（仅本次运行） |
-| `UI_Debug_Print_H264_Record_Get_Req` | — | UI→Glavo | Empty | `request_print_h264_record_state` | 查询当前“打印期连续 H264 录像”开关状态 |
-| `UI_Debug_Clean_Record_Set_Req` | — | UI→Glavo | `DebugOnOffPayload` | `send_clean_record_set` | 调试页全局开关：清粉录像（仅本次运行） |
-| `UI_Debug_Clean_Record_Get_Req` | — | UI→Glavo | Empty | `request_clean_record_state` | 查询当前“清粉录像”开关状态 |
-| `UI_Debug_Env_Sim_Set_Req` | — | UI→Glavo | `DebugOnOffPayload` | `send_env_sim_set` | 调试页全局开关：环境上报模拟（仅本次运行，默认关；开则 `McuLink` 用变化测试数据驱动 `APP_Update_Ntf`，关则用串口真实数据） |
-| `UI_Debug_Env_Sim_Get_Req` | — | UI→Glavo | Empty | `request_env_sim_state` | 查询当前“环境上报模拟”开关状态 |
-| `UI_Debug_Env_Sim_Powder_Set_Req` | — | UI→Glavo | `DebugOnOffPayload` | `send_env_sim_powder_set` | 环境模拟粉量缺粉开关（仅 Env Sim=On 可设；切换后延迟 5 秒生效） |
-| `UI_Debug_Env_Sim_Powder_Get_Req` | — | UI→Glavo | Empty | `request_env_sim_powder_state` | 查询当前“环境模拟粉量缺粉”开关状态 |
-| `UI_Debug_FirstLayer_Visual_Check_Set_Req` | — | UI→Glavo | `DebugOnOffPayload` | `send_first_layer_visual_check_set` | 调试页开关：首层视觉检测（仅本次运行，默认关） |
-| `UI_Debug_FirstLayer_Visual_Check_Get_Req` | — | UI→Glavo | Empty | `request_first_layer_visual_check_state` | 查询当前“首层视觉检测”开关状态 |
+| `UI_Debug_Laser_Power_Set_Ntf` | — | UI→Glavo | `DebugLaserPowerPayload` | `send_laser_power_set` | 激光手动功率 0–100 |
+| `UI_Debug_Laser_Power_Reset_Ntf` | — | UI→Glavo | Empty | `send_laser_power_reset` | 取消手动功率、恢复外控 |
+| `UI_Debug_Laser_AlarmReset_Ntf` | — | UI→Glavo | Empty | `send_laser_alarm_reset` | 激光器报警复位（1301） |
+| `UI_Debug_Print_H264_Record_Set_Ntf` | — | UI→Glavo | `DebugOnOffPayload` | `send_print_h264_record_set` | 调试页全局开关：打印期连续 H264 录像（仅本次运行） |
+| `UI_Debug_Print_H264_Record_Get_Ntf` | — | UI→Glavo | Empty | `request_print_h264_record_state` | 查询当前“打印期连续 H264 录像”开关状态 |
+| `UI_Debug_Clean_Record_Set_Ntf` | — | UI→Glavo | `DebugOnOffPayload` | `send_clean_record_set` | 调试页全局开关：清粉录像（仅本次运行） |
+| `UI_Debug_Clean_Record_Get_Ntf` | — | UI→Glavo | Empty | `request_clean_record_state` | 查询当前“清粉录像”开关状态 |
+| `UI_Debug_Env_Sim_Set_Ntf` | — | UI→Glavo | `DebugOnOffPayload` | `send_env_sim_set` | 调试页全局开关：环境上报模拟（仅本次运行，默认关；开则 `McuLink` 用变化测试数据驱动 `APP_Update_Ntf`，关则用串口真实数据） |
+| `UI_Debug_Env_Sim_Get_Ntf` | — | UI→Glavo | Empty | `request_env_sim_state` | 查询当前“环境上报模拟”开关状态 |
+| `UI_Debug_Env_Sim_Powder_Set_Ntf` | — | UI→Glavo | `DebugOnOffPayload` | `send_env_sim_powder_set` | 环境模拟粉量缺粉开关（仅 Env Sim=On 可设；切换后延迟 5 秒生效） |
+| `UI_Debug_Env_Sim_Powder_Get_Ntf` | — | UI→Glavo | Empty | `request_env_sim_powder_state` | 查询当前“环境模拟粉量缺粉”开关状态 |
+| `UI_Debug_FirstLayer_Visual_Check_Set_Ntf` | — | UI→Glavo | `DebugOnOffPayload` | `send_first_layer_visual_check_set` | 调试页开关：首层视觉检测（仅本次运行，默认关） |
+| `UI_Debug_FirstLayer_Visual_Check_Get_Ntf` | — | UI→Glavo | Empty | `request_first_layer_visual_check_state` | 查询当前“首层视觉检测”开关状态 |
 | `GLAVO_Debug_Laser_Ntf` | — | Glavo→UI | `DebugLaserStatePayload` | `register_laser` | 激光器状态/报警/功率/温度 |
 | `GLAVO_Debug_Print_H264_Record_Ntf` | — | Glavo→UI | `DebugOnOffPayload` | `register_print_h264_record` | 回读当前“打印期连续 H264 录像”开关状态 |
 | `GLAVO_Debug_Clean_Record_Ntf` | — | Glavo→UI | `DebugOnOffPayload` | `register_clean_record` | 回读当前“清粉录像”开关状态 |
 | `GLAVO_Debug_Env_Sim_Ntf` | — | Glavo→UI | `DebugOnOffPayload` | `register_env_sim` | 回读当前“环境上报模拟”开关状态 |
 | `GLAVO_Debug_Env_Sim_Powder_Ntf` | — | Glavo→UI | `DebugOnOffPayload` | `register_env_sim_powder` | 回读当前“环境模拟粉量缺粉”开关状态 |
 | `GLAVO_Debug_FirstLayer_Visual_Check_Ntf` | — | Glavo→UI | `DebugOnOffPayload` | `register_first_layer_visual_check` | 回读当前“首层视觉检测”开关状态 |
-| `UI_Debug_Fan_Duty_Req` | — | UI→Glavo | `DebugFanPayload` | `send_fan_duty` | 仅设风扇占空比（35–100） |
-| `UI_Debug_PrintParam_Set_Req` | — | UI→Glavo | `DebugPrintParamPayload` | `send_print_layer_param` | 打印层参数（层厚 + 平衡×1000） |
+| `UI_Debug_Fan_Duty_Ntf` | — | UI→Glavo | `DebugFanPayload` | `send_fan_duty` | 仅设风扇占空比（35–100） |
+| `UI_Debug_PrintParam_Set_Ntf` | — | UI→Glavo | `DebugPrintParamPayload` | `send_print_layer_param` | 打印层参数（层厚 + 平衡×1000） |
 | `GLAVO_Debug_Sensor_Ntf` | — | Glavo→UI | `DebugSensorPayload` | `register_sensor` | 7 路传感器 |
 | `GLAVO_Debug_Axis_Ntf` | — | Glavo→UI | `DebugAxisStatePayload` | `register_axis` | Z/S/D + Z 工作坐标 |
 | `GLAVO_Debug_Device_Ntf` | — | Glavo→UI | `DebugDeviceStatePayload` | `register_device` | 设备行状态 |
 | `GLAVO_Debug_Galvo_Ntf` | — | Glavo→UI | `DebugGalvoStatePayload` | `register_galvo` | 振镜 X/Y + 红光 |
-| `GLAVO_Debug_PowderBucket_Ntf` | — | Glavo→UI | `DebugPowderBucketStatePayload` | （Tab2 待接） | 粉桶状态 |
-| `GLAVO_Debug_Pusher_Ntf` | — | Glavo→UI | `DebugPusherStatePayload` | （Tab2 待接） | 推粉状态 |
-| `GLAVO_Debug_RecycleMotor_Ntf` | — | Glavo→UI | `DebugRecycleMotorStatePayload` | （Tab2 待接） | 回粉电机状态 |
-| `GLAVO_Debug_Fan_Ntf` | — | Glavo→UI | `DebugFanStatePayload` | （Tab2 待接） | 风扇状态 |
-| `GLAVO_Debug_Switch_Ntf` | — | Glavo→UI | `DebugSwitchStatePayload` | （Tab2 待接） | 开关状态 |
 | `GLAVO_USB_Hotplug_Ntf` | — | Glavo→UI | `UsbHotplugPayload` | `register_usb_hotplug` | USB 挂载状态变化通知（文件页 USB Tab 自动刷新） |
-| `UI_Mcu_Version_Req` | — | UI→Glavo | Empty | `send_mcu_version_query` | 进入 Settings/About 页查询一次 MCU 固件版本（串口 A2/0x10 TLV 0x01） |
+| `UI_Mcu_Version_Ntf` | — | UI→Glavo | Empty | `send_mcu_version_query` | 进入 Settings/About 页查询一次 MCU 固件版本（串口 A2/0x10 TLV 0x01） |
 | `GLAVO_Mcu_Version_Ntf` | — | Glavo→UI | `McuVersionPayload` | `register_mcu_version` | MCU 版本上报（TLV 0x02）：About 页显示 `V<major>.<minor>.<patch>.<laser>.<z>` |
-| `UI_Galvo_Version_Req` | — | UI→Glavo | Empty | `send_galvo_version_query` | 进入 Settings/About 页读取振镜控制板版本缓存（TCP 0x0F 首包，非实时查询下位机） |
+| `UI_Galvo_Version_Ntf` | — | UI→Glavo | Empty | `send_galvo_version_query` | 进入 Settings/About 页读取振镜控制板版本缓存（TCP 0x0F 首包，非实时查询下位机） |
 | `GLAVO_Galvo_Version_Ntf` | — | Glavo→UI | `GalvoVersionPayload` | `register_galvo_version` | 振镜板版本：TCP 连上后首包主动推一次；About 进页 Req 再回缓存。显示 `V<(v>>16)>.<(v>>8)&0xff>.<(v&0xff)>` |
 | `GLAVO_Device_Event_Ntf` | — | Glavo→UI | `DeviceEventPayload` | `register_device_event` | 设备事件/告警上报，喂消息中心。只发数值码 + 等级 + 触发时刻，文案在 UI 侧码表（`ui_message_store`）。码表见 [`doc/设备通信协议-数据结构定义（v0.9）.md`](../doc/设备通信协议-数据结构定义（v0.9）.md) 第五节。**Glavo 侧尚未实现**，当前只有 UI 侧接好了订阅 |
 | `GLAVO_Alarm_Report_Ntf` | — | Glavo→UI | `AlarmReportPayload` | `register_alarm_report` | MCU 单条报警/EVENT 上报（串口 0xA3/0x20 TLV 0x01 原样透传，McuLink 不查字典）。UI 侧 `ui_alarm_state` 按 state_mask 推导生命周期并喂消息中心；字典与开发指导见 `doc/主控板串口通信协议 - 报警&事件表.csv`、`doc/SOC_TLV_ALARM_SINGLE_REPORT报警显示开发指导.md` |
-| `UI_Alarm_Reset_Req` | — | UI→Glavo | `AlarmResetReqPayload` | `send_alarm_reset` | 请求复位某条 CONDITION 报警（串口 0xA3/0x82 TLV 0x01，alarm_code 小端）。ACK 不代表复位成功，最终状态以后续 `GLAVO_Alarm_Report_Ntf` 为准 |
-| `UI_Alarm_Snapshot_Req` | — | UI→Glavo | Empty | `send_alarm_snapshot_req` | 请求 MCU 回一轮报警快照（串口 0xA3/0x81 TLV 0x05 len=0）。MCU **不会主动推**快照，不发这条就永远收不到；触发点：UI 启动、串口重连、进消息中心、30s 轮询、开始打印前 |
+| `UI_Alarm_Reset_Ntf` | — | UI→Glavo | `AlarmResetReqPayload` | `send_alarm_reset` | 请求复位某条 CONDITION 报警（串口 0xA3/0x82 TLV 0x01，alarm_code 小端）。ACK 不代表复位成功，最终状态以后续 `GLAVO_Alarm_Report_Ntf` 为准 |
+| `UI_Alarm_Snapshot_Ntf` | — | UI→Glavo | Empty | `send_alarm_snapshot_req` | 请求 MCU 回一轮报警快照（串口 0xA3/0x81 TLV 0x05 len=0）。MCU **不会主动推**快照，不发这条就永远收不到；触发点：UI 启动、串口重连、进消息中心、30s 轮询、开始打印前 |
 | `GLAVO_Alarm_Snapshot_Ntf` | — | Glavo→UI | `AlarmSnapshotPayload` | `register_alarm_snapshot` | 报警快照的**一个 slot**（串口 0xA3/0x81 TLV 0x04 原样透传）。响应**稀疏**：只回 `(active｜latched)!=0` 的 slot，没回的按全零处理；`nonzero_slot_count=0` 表示当前无报警。槽位→报警号用固定公式 `alarm_snapshot_code_of()` 不查表。攒帧与原子对齐在 UI 侧 `ui_alarm_state` 做。用于重启/重连后补齐——单条上报只在状态变化时发，错过就再也收不到 |
 | `GLAVO_Alarm_Reset_Result_Ntf` | — | Glavo→UI | `AlarmResetResultPayload` | `register_alarm_reset_result` | 复位**失败**回执（串口 0xA3/0x82 TLV 0x04）。只在失败时发，成功仍以后续 NORMAL 单报为准；Seq 固定 0，按 alarm_code 关联。UI 收到即解除 `reset_pending`，不用干等 10s 超时 |
 

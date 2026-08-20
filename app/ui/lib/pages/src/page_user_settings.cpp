@@ -103,7 +103,7 @@ const char *about_device_model_text()
     return model.c_str();
 }
 
-/* ---- About 页 MCU 固件版本（串口请求应答：UI_Mcu_Version_Req → GLAVO_Mcu_Version_Ntf） ----
+/* ---- About 页 MCU 固件版本（串口请求应答：UI_Mcu_Version_Ntf → GLAVO_Mcu_Version_Ntf） ----
  * 串口默认关闭 ACK 重传（GLAVO_SERIAL_ACK_ENABLE=0），丢包不会由后端补发，故在此
  * 做一次超时重发。显示格式 V<major>.<minor>.<patch>.<laser>.<z>（见协议 TLV_REPORT_VERSION）。 */
 constexpr uint32_t kMcuVerTimeoutMs = 2000;   /**< 单次查询等待上限 */
@@ -168,7 +168,7 @@ void mcu_ver_apply(const middleware::McuVersionPayload &p)
     }
 }
 
-/* ---- About 页振镜控制板固件版本（TCP 0x0F 首包缓存：UI_Galvo_Version_Req → GLAVO_Galvo_Version_Ntf）
+/* ---- About 页振镜控制板固件版本（TCP 0x0F 首包缓存：UI_Galvo_Version_Ntf → GLAVO_Galvo_Version_Ntf）
  * 版本只在 TCP 连上后由下位机主动上报，进 About 时向 Glavo 读缓存，无串口式超时重发。
  * 显示格式 V<(v>>16)>.<(v>>8)&0xff>.<(v&0xff)>（如 0x00030004 → V3.0.4）。 */
 lv_obj_t *g_galvo_ver_lbl = nullptr;           /**< 值标签；仅 About 面板存活期间有效 */

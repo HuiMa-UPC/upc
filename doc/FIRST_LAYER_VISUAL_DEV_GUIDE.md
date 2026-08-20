@@ -16,8 +16,8 @@
 - 位置：Debug 页面 `Other` 页签中的 `1st Layer Visual` 开关。
 - 默认值：关闭。
 - 消息契约：
-  - `UI_Debug_FirstLayer_Visual_Check_Set_Req`
-  - `UI_Debug_FirstLayer_Visual_Check_Get_Req`
+  - `UI_Debug_FirstLayer_Visual_Check_Set_Ntf`
+  - `UI_Debug_FirstLayer_Visual_Check_Get_Ntf`
   - `GLAVO_Debug_FirstLayer_Visual_Check_Ntf`
 
 关闭时：打印流程与历史逻辑一致，完全跳过首层视觉检测。

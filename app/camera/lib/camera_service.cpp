@@ -249,7 +249,7 @@ void CameraService::handle_visual_stream_stop(const middleware::Message& msg)
         stop_streaming();
     }
     send_stream_stop_done_with_type(
-        msg, middleware::MsgType::APP_Visual_Camera_Stream_Stop_Done);
+        msg, middleware::MsgType::APP_Visual_Camera_Stream_Stop_Rsp);
     UPC_LOG_CAMERA_SERVICE(Info, "stream stop visual sender=%u",
                            static_cast<unsigned>(msg.sender_id));
 }
@@ -290,7 +290,7 @@ void CameraService::handle_media_stream_stop(const middleware::Message& msg)
         stop_streaming();
     }
     send_stream_stop_done_with_type(
-        msg, middleware::MsgType::APP_Media_Camera_Stream_Stop_Done);
+        msg, middleware::MsgType::APP_Media_Camera_Stream_Stop_Rsp);
     UPC_LOG_CAMERA_SERVICE(Info, "stream stop media sender=%u",
                            static_cast<unsigned>(msg.sender_id));
 }
@@ -782,7 +782,7 @@ uint64_t CameraService::monotonic_ms()
 void CameraService::send_stream_stop_done(const middleware::Message& req)
 {
     send_stream_stop_done_with_type(
-        req, middleware::MsgType::APP_Camera_Stream_Stop_Done);
+        req, middleware::MsgType::APP_Camera_Stream_Stop_Rsp);
 }
 
 void CameraService::send_stream_stop_done_with_type(

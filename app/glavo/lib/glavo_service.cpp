@@ -98,7 +98,7 @@ using ::upc::gcode_manifest_remove_at;
 namespace {
 
 /** worker IPC 队列与 link 事件队列深度；满则丢弃并打 Warn（保护内存，不阻塞 IPC 回调） */
-constexpr size_t kWorkerQueueDepth = 64;
+constexpr size_t kWorkerQueueDepth = 256;
 /** 排空段进度节流：rate 变化时至少间隔这么久才再推一帧（ms） */
 constexpr int kDrainProgressMinMs = 200;
 
@@ -508,42 +508,42 @@ bool GlavoService::start()
         middleware::MsgType::UI_Wifi_Saved_Req,
 
         /* 调试页手动控制（振镜/回粉电机预留，不订阅） */
-        middleware::MsgType::UI_Debug_Axis_Jog_Req,
-        middleware::MsgType::UI_Debug_Axis_Hold_Stop_Req,
-        middleware::MsgType::UI_Debug_Axis_SetZero_Req,
-        middleware::MsgType::UI_Debug_Axis_Home_Req,
-        middleware::MsgType::UI_Debug_Device_Req,
-        middleware::MsgType::UI_Debug_Powder_Bucket_Req,
-        middleware::MsgType::UI_Debug_Pusher_Req,
-        middleware::MsgType::UI_Debug_Recycle_Motor_Req,   /* 内门（原回粉电机块） */
-        middleware::MsgType::UI_Debug_Fan_Req,
-        middleware::MsgType::UI_Debug_Fan_Duty_Req,
-        middleware::MsgType::UI_Debug_Switch_Req,
+        middleware::MsgType::UI_Debug_Axis_Jog_Ntf,
+        middleware::MsgType::UI_Debug_Axis_Hold_Stop_Ntf,
+        middleware::MsgType::UI_Debug_Axis_SetZero_Ntf,
+        middleware::MsgType::UI_Debug_Axis_Home_Ntf,
+        middleware::MsgType::UI_Debug_Device_Ntf,
+        middleware::MsgType::UI_Debug_Powder_Bucket_Ntf,
+        middleware::MsgType::UI_Debug_Pusher_Ntf,
+        middleware::MsgType::UI_Debug_Recycle_Motor_Ntf,   /* 内门（原回粉电机块） */
+        middleware::MsgType::UI_Debug_Fan_Ntf,
+        middleware::MsgType::UI_Debug_Fan_Duty_Ntf,
+        middleware::MsgType::UI_Debug_Switch_Ntf,
         middleware::MsgType::UI_Debug_CleanTest_Start_Ntf,
         middleware::MsgType::UI_Debug_CleanTest_Close_Ntf,
-        middleware::MsgType::UI_Debug_PrintParam_Set_Req,
-        middleware::MsgType::UI_Debug_Laser_Power_Set_Req,
-        middleware::MsgType::UI_Debug_Laser_Power_Reset_Req,
-        middleware::MsgType::UI_Debug_Laser_AlarmReset_Req,
-        middleware::MsgType::UI_Debug_Print_H264_Record_Set_Req,
-        middleware::MsgType::UI_Debug_Print_H264_Record_Get_Req,
-        middleware::MsgType::UI_Debug_Clean_Record_Set_Req,
-        middleware::MsgType::UI_Debug_Clean_Record_Get_Req,
-        middleware::MsgType::UI_Debug_Env_Sim_Set_Req,
-        middleware::MsgType::UI_Debug_Env_Sim_Get_Req,
-        middleware::MsgType::UI_Debug_Env_Sim_Powder_Set_Req,
-        middleware::MsgType::UI_Debug_Env_Sim_Powder_Get_Req,
-        middleware::MsgType::UI_Debug_FirstLayer_Visual_Check_Set_Req,
-        middleware::MsgType::UI_Debug_FirstLayer_Visual_Check_Get_Req,
+        middleware::MsgType::UI_Debug_PrintParam_Set_Ntf,
+        middleware::MsgType::UI_Debug_Laser_Power_Set_Ntf,
+        middleware::MsgType::UI_Debug_Laser_Power_Reset_Ntf,
+        middleware::MsgType::UI_Debug_Laser_AlarmReset_Ntf,
+        middleware::MsgType::UI_Debug_Print_H264_Record_Set_Ntf,
+        middleware::MsgType::UI_Debug_Print_H264_Record_Get_Ntf,
+        middleware::MsgType::UI_Debug_Clean_Record_Set_Ntf,
+        middleware::MsgType::UI_Debug_Clean_Record_Get_Ntf,
+        middleware::MsgType::UI_Debug_Env_Sim_Set_Ntf,
+        middleware::MsgType::UI_Debug_Env_Sim_Get_Ntf,
+        middleware::MsgType::UI_Debug_Env_Sim_Powder_Set_Ntf,
+        middleware::MsgType::UI_Debug_Env_Sim_Powder_Get_Ntf,
+        middleware::MsgType::UI_Debug_FirstLayer_Visual_Check_Set_Ntf,
+        middleware::MsgType::UI_Debug_FirstLayer_Visual_Check_Get_Ntf,
         middleware::MsgType::APP_Visual_FirstLayer_Check_Rsp,
 
         /* Settings/About：MCU / 振镜控制板固件版本查询 */
-        middleware::MsgType::UI_Mcu_Version_Req,
-        middleware::MsgType::UI_Galvo_Version_Req,
+        middleware::MsgType::UI_Mcu_Version_Ntf,
+        middleware::MsgType::UI_Galvo_Version_Ntf,
 
         /* 消息中心：MCU 报警复位 + 快照请求 */
-        middleware::MsgType::UI_Alarm_Reset_Req,
-        middleware::MsgType::UI_Alarm_Snapshot_Req,
+        middleware::MsgType::UI_Alarm_Reset_Ntf,
+        middleware::MsgType::UI_Alarm_Snapshot_Ntf,
     };
     for(middleware::MsgType t : k_subs) {
         subscribe(t, [this](const middleware::Message& msg) { on_message(msg); });
@@ -869,37 +869,37 @@ void GlavoService::handle_message(const middleware::Message& msg)
             handle_wifi_saved(msg);
             break;
 
-        case middleware::MsgType::UI_Debug_Axis_Jog_Req:
+        case middleware::MsgType::UI_Debug_Axis_Jog_Ntf:
             handle_debug_axis_jog(msg);
             break;
-        case middleware::MsgType::UI_Debug_Axis_Hold_Stop_Req:
+        case middleware::MsgType::UI_Debug_Axis_Hold_Stop_Ntf:
             handle_debug_axis_hold_stop(msg);
             break;
-        case middleware::MsgType::UI_Debug_Axis_SetZero_Req:
+        case middleware::MsgType::UI_Debug_Axis_SetZero_Ntf:
             handle_debug_axis_set_zero(msg);
             break;
-        case middleware::MsgType::UI_Debug_Axis_Home_Req:
+        case middleware::MsgType::UI_Debug_Axis_Home_Ntf:
             handle_debug_axis_home(msg);
             break;
-        case middleware::MsgType::UI_Debug_Device_Req:
+        case middleware::MsgType::UI_Debug_Device_Ntf:
             handle_debug_device(msg);
             break;
-        case middleware::MsgType::UI_Debug_Powder_Bucket_Req:
+        case middleware::MsgType::UI_Debug_Powder_Bucket_Ntf:
             handle_debug_powder_bucket(msg);
             break;
-        case middleware::MsgType::UI_Debug_Pusher_Req:
+        case middleware::MsgType::UI_Debug_Pusher_Ntf:
             handle_debug_pusher(msg);
             break;
-        case middleware::MsgType::UI_Debug_Recycle_Motor_Req:
+        case middleware::MsgType::UI_Debug_Recycle_Motor_Ntf:
             handle_debug_inner_door(msg);
             break;
-        case middleware::MsgType::UI_Debug_Fan_Req:
+        case middleware::MsgType::UI_Debug_Fan_Ntf:
             handle_debug_fan(msg);
             break;
-        case middleware::MsgType::UI_Debug_Fan_Duty_Req:
+        case middleware::MsgType::UI_Debug_Fan_Duty_Ntf:
             handle_debug_fan_duty(msg);
             break;
-        case middleware::MsgType::UI_Debug_Switch_Req:
+        case middleware::MsgType::UI_Debug_Switch_Ntf:
             handle_debug_switch(msg);
             break;
         case middleware::MsgType::UI_Debug_CleanTest_Start_Ntf:
@@ -908,61 +908,61 @@ void GlavoService::handle_message(const middleware::Message& msg)
         case middleware::MsgType::UI_Debug_CleanTest_Close_Ntf:
             handle_debug_clean_test_close(msg);
             break;
-        case middleware::MsgType::UI_Debug_PrintParam_Set_Req:
+        case middleware::MsgType::UI_Debug_PrintParam_Set_Ntf:
             handle_debug_print_param(msg);
             break;
-        case middleware::MsgType::UI_Debug_Laser_Power_Set_Req:
+        case middleware::MsgType::UI_Debug_Laser_Power_Set_Ntf:
             handle_debug_laser_power_set(msg);
             break;
-        case middleware::MsgType::UI_Debug_Laser_Power_Reset_Req:
+        case middleware::MsgType::UI_Debug_Laser_Power_Reset_Ntf:
             handle_debug_laser_power_reset(msg);
             break;
-        case middleware::MsgType::UI_Debug_Laser_AlarmReset_Req:
+        case middleware::MsgType::UI_Debug_Laser_AlarmReset_Ntf:
             handle_debug_laser_alarm_reset(msg);
             break;
-        case middleware::MsgType::UI_Debug_Print_H264_Record_Set_Req:
+        case middleware::MsgType::UI_Debug_Print_H264_Record_Set_Ntf:
             handle_debug_print_h264_record_set(msg);
             break;
-        case middleware::MsgType::UI_Debug_Print_H264_Record_Get_Req:
+        case middleware::MsgType::UI_Debug_Print_H264_Record_Get_Ntf:
             handle_debug_print_h264_record_get(msg);
             break;
-        case middleware::MsgType::UI_Debug_Clean_Record_Set_Req:
+        case middleware::MsgType::UI_Debug_Clean_Record_Set_Ntf:
             handle_debug_clean_record_set(msg);
             break;
-        case middleware::MsgType::UI_Debug_Clean_Record_Get_Req:
+        case middleware::MsgType::UI_Debug_Clean_Record_Get_Ntf:
             handle_debug_clean_record_get(msg);
             break;
-        case middleware::MsgType::UI_Debug_Env_Sim_Set_Req:
+        case middleware::MsgType::UI_Debug_Env_Sim_Set_Ntf:
             handle_debug_env_sim_set(msg);
             break;
-        case middleware::MsgType::UI_Debug_Env_Sim_Get_Req:
+        case middleware::MsgType::UI_Debug_Env_Sim_Get_Ntf:
             handle_debug_env_sim_get(msg);
             break;
-        case middleware::MsgType::UI_Debug_Env_Sim_Powder_Set_Req:
+        case middleware::MsgType::UI_Debug_Env_Sim_Powder_Set_Ntf:
             handle_debug_env_sim_powder_set(msg);
             break;
-        case middleware::MsgType::UI_Debug_Env_Sim_Powder_Get_Req:
+        case middleware::MsgType::UI_Debug_Env_Sim_Powder_Get_Ntf:
             handle_debug_env_sim_powder_get(msg);
             break;
-        case middleware::MsgType::UI_Debug_FirstLayer_Visual_Check_Set_Req:
+        case middleware::MsgType::UI_Debug_FirstLayer_Visual_Check_Set_Ntf:
             handle_debug_first_layer_visual_check_set(msg);
             break;
-        case middleware::MsgType::UI_Debug_FirstLayer_Visual_Check_Get_Req:
+        case middleware::MsgType::UI_Debug_FirstLayer_Visual_Check_Get_Ntf:
             handle_debug_first_layer_visual_check_get(msg);
             break;
         case middleware::MsgType::APP_Visual_FirstLayer_Check_Rsp:
             handle_visual_first_layer_check_rsp(msg);
             break;
-        case middleware::MsgType::UI_Mcu_Version_Req:
+        case middleware::MsgType::UI_Mcu_Version_Ntf:
             handle_mcu_version_req(msg);
             break;
-        case middleware::MsgType::UI_Galvo_Version_Req:
+        case middleware::MsgType::UI_Galvo_Version_Ntf:
             handle_galvo_version_req(msg);
             break;
-        case middleware::MsgType::UI_Alarm_Reset_Req:
+        case middleware::MsgType::UI_Alarm_Reset_Ntf:
             handle_alarm_reset(msg);
             break;
-        case middleware::MsgType::UI_Alarm_Snapshot_Req:
+        case middleware::MsgType::UI_Alarm_Snapshot_Ntf:
             handle_alarm_snapshot_req(msg);
             break;
         default:
@@ -1483,6 +1483,11 @@ void GlavoService::handle_print_terminate(const middleware::Message& msg)
 {
     (void)msg;
     UPC_LOG_GLAVO_SERVICE(Info, "print_terminate requested");
+    if(!print_running_.load()) {
+        UPC_LOG_GLAVO_SERVICE(Debug, "print_terminate ignored: not running");
+        publish_terminate_done();
+        return;
+    }
     deferred_print_start_ = false;
     print_running_.store(false);
     McuLink::instance().set_user_dispatch_paused(false);
@@ -1498,6 +1503,7 @@ void GlavoService::handle_print_pause(const middleware::Message& msg)
     (void)msg;
     if(!print_running_.load()) {
         UPC_LOG_GLAVO_SERVICE(Debug, "print_pause ignored: not running");
+        publish_print_pause_done(false);
         return;
     }
     McuLink& link = McuLink::instance();
@@ -1519,6 +1525,7 @@ void GlavoService::handle_print_resume(const middleware::Message& msg)
     (void)msg;
     if(!print_running_.load()) {
         UPC_LOG_GLAVO_SERVICE(Debug, "print_resume ignored: not running");
+        publish_print_pause_done(false);
         return;
     }
     McuLink& link = McuLink::instance();
@@ -1680,10 +1687,10 @@ void GlavoService::send_print_progress(bool force_complete)
     }
 }
 
-/** @brief 向 UI 推送 APP_Print_Terminate_Done */
+/** @brief 向 UI 推送 APP_Print_Terminate_Rsp */
 void GlavoService::publish_terminate_done()
 {
-    middleware::Message ntf(middleware::MsgType::APP_Print_Terminate_Done,
+    middleware::Message ntf(middleware::MsgType::APP_Print_Terminate_Rsp,
         static_cast<middleware::ModuleId>(module_id()),
         middleware::ModuleId::UI);
     if (!publish_async(ntf)) {
@@ -1802,10 +1809,10 @@ void GlavoService::handle_visual_first_layer_check_rsp(const middleware::Message
 /**
  * @brief McuLink 作业事件（已在 worker 线程）：完成/终止/错误/缺粉
  *
- * PrintCompleted → 录像 finish、进度 100%、Terminate_Done（UI 用其退出打印态）、清会话。
+ * PrintCompleted → 录像 finish、进度 100%、Terminate_Rsp（UI 用其退出打印态）、清会话。
  * TerminateDone / PrintError：
  *   - 若 deferred_print_start_：立刻 launch 新作业（不再发 abort/清 prepare）
- *   - 否则：录像 abort、Terminate_Done、清会话。
+ *   - 否则：录像 abort、Terminate_Rsp、清会话。
  * PowderLow：自动暂停 TCP 下发 + 通知 UI（除非用户已 ignore）。
  */
 void GlavoService::on_mcu_link_event(McuLinkEvent ev)
@@ -2125,7 +2132,7 @@ void GlavoService::publish_clean_test_done(uint8_t result_code, bool raw_retaine
         std::snprintf(ntf.mp4_rel_path, sizeof(ntf.mp4_rel_path), "%s",
                       mp4_rel_path.c_str());
     }
-    middleware::Message out(middleware::MsgType::APP_Clean_Test_Done_Ntf,
+    middleware::Message out(middleware::MsgType::APP_Clean_Test_Result_Ntf,
         middleware::ModuleId::APP_GLAVO,
         middleware::ModuleId::UI);
     out.payload = middleware::MsgPayload::from_bytes(
@@ -2189,7 +2196,7 @@ void GlavoService::on_clean_test_done(uint8_t result_code)
     }
     const bool video_started = clean_video_session_started_;
     if(clean_video_session_started_) {
-        /* Media 合成完成后发 APP_Clean_Test_Done_Ntf；此处只停录 */
+        /* Media 合成完成后发 APP_Clean_Test_Result_Ntf；此处只停录 */
         notify_clean_video_stop(result_code, false);
         clean_video_session_started_ = false;
     }

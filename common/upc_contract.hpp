@@ -334,8 +334,8 @@ enum class MsgType : uint32_t {
     UI_OpenDoor_Req = 0x1030,
     APP_OpenDoor_Rsp,         /**< [GLAVO_Door_Open_Rsp] DoorResultPayload */
     UI_Purify_Req,
-    APP_Purify_Progress,      /**< [GLAVO_Purify_Progress_Ntf] Value */
-    APP_Purify_Rsp,           /**< [GLAVO_Purify_Done] Empty */
+    APP_Purify_Ntf,           /**< [GLAVO_Purify_Ntf] Value */
+    APP_Purify_Rsp,           /**< [GLAVO_Purify_Rsp] Empty */
     UI_Clean_Start_Req,       /**< Empty：开启清粉（开门前 PM2.5≥50 时触发） */
     APP_Clean_Start_Rsp,      /**< Empty：清粉完成（后端风机循环至 PM2.5 合格后回） */
 
@@ -346,7 +346,7 @@ enum class MsgType : uint32_t {
     UI_Print_Start_Req,       /**< PrintStartReqPayload：正式解析 + 下发（含基板厚度） */
     APP_Print_Progress_Ntf,   /**< [GLAVO_Print_Progress_Ntf] PrintProgressPayload */
     UI_Print_Terminate_Req,
-    APP_Print_Terminate_Done, /**< [GLAVO_Print_Terminate_Done] Empty */
+    APP_Print_Terminate_Rsp,  /**< [GLAVO_Print_Terminate_Rsp] Empty */
     UI_Print_Pause_Req,       /**< Empty：暂停打印（McuLink 停止 TCP 运动下发） */
     UI_Print_Resume_Req,      /**< Empty：恢复打印 */
     UI_Print_Powder_Low_Ignore_Req, /**< Empty：本次打印忽略缺粉自动暂停与缺粉通知 */
@@ -361,7 +361,7 @@ enum class MsgType : uint32_t {
     UI_Camera_Stream_Start_Req = 0x1070, /**< Empty 或 CameraStreamStartReqPayload */
     APP_Camera_Stream_Start_Rsp,         /**< CameraStreamInfoPayload */
     UI_Camera_Stream_Stop_Req,           /**< Empty */
-    APP_Camera_Stream_Stop_Done,         /**< Empty */
+    APP_Camera_Stream_Stop_Rsp,          /**< Empty */
     APP_Camera_Frame_Ntf,                /**< CameraFrameNtfPayload（可选唤醒 UI） */
     UI_Camera_Snapshot_Req,              /**< Empty：请求保存当前最新 NV12 帧到 /home/media/photo */
     APP_Camera_Snapshot_Rsp,             /**< CameraSnapshotRspPayload */
@@ -384,49 +384,44 @@ enum class MsgType : uint32_t {
     APP_Serial_Mcu_Ota_Status_Ntf, /**< McuOtaStatusPayload（MCU 串口 OTA 状态） */
 
     // ---- UI → GLAVO：调试页手动控制（后端待实现，前端先发送） ----
-    UI_Debug_Axis_Jog_Req = 0x1100, /**< DebugAxisJogPayload：点动/长按点动 */
-    UI_Debug_Axis_Hold_Stop_Req,    /**< DebugAxisPayload：长按松手停 */
-    UI_Debug_Axis_SetZero_Req,      /**< DebugAxisPayload：设工作零点（Z 轴） */
-    UI_Debug_Axis_Home_Req,         /**< DebugAxisPayload：轴回 Home/归零（Z/S） */
-    UI_Debug_Galvo_Move_Req,        /**< DebugGalvoMovePayload：振镜方向步进 */
-    UI_Debug_Galvo_Home_Req,        /**< Empty：振镜回中/复位 */
-    UI_Debug_Galvo_RedLight_Req,    /**< DebugOnOffPayload：红光开关 */
-    UI_Debug_Galvo_Param_Save_Req,  /**< DebugGalvoParamPayload：保存 Scale/步长 */
-    UI_Debug_Galvo_Calib_Req,       /**< Empty：开始标定测试 */
-    UI_Debug_Device_Req,            /**< DebugDevicePayload：设备/门/电机/照明 */
-    UI_Debug_Powder_Bucket_Req,     /**< DebugBucketPayload：粉桶开关 */
-    UI_Debug_Pusher_Req,            /**< DebugMotorPayload：筛粉电机 停止/运行/反转倒渣 */
-    UI_Debug_Recycle_Motor_Req,     /**< DebugMotorPayload：内门 停止/开/关（原回粉电机块改为内门） */
-    UI_Debug_Fan_Req,               /**< DebugFanPayload：风扇 */
-    UI_Debug_Switch_Req,            /**< DebugSwitchPayload：激光/洗气/底板加热 */
+    UI_Debug_Axis_Jog_Ntf = 0x1100, /**< DebugAxisJogPayload：点动/长按点动 */
+    UI_Debug_Axis_Hold_Stop_Ntf,    /**< DebugAxisPayload：长按松手停 */
+    UI_Debug_Axis_SetZero_Ntf,      /**< DebugAxisPayload：设工作零点（Z 轴） */
+    UI_Debug_Axis_Home_Ntf,         /**< DebugAxisPayload：轴回 Home/归零（Z/S） */
+    UI_Debug_Galvo_Move_Ntf,        /**< DebugGalvoMovePayload：振镜方向步进 */
+    UI_Debug_Galvo_Home_Ntf,        /**< Empty：振镜回中/复位 */
+    UI_Debug_Galvo_RedLight_Ntf,    /**< DebugOnOffPayload：红光开关 */
+    UI_Debug_Galvo_Param_Save_Ntf,  /**< DebugGalvoParamPayload：保存 Scale/步长 */
+    UI_Debug_Galvo_Calib_Ntf,       /**< Empty：开始标定测试 */
+    UI_Debug_Device_Ntf,            /**< DebugDevicePayload：设备/门/电机/照明 */
+    UI_Debug_Powder_Bucket_Ntf,     /**< DebugBucketPayload：粉桶开关 */
+    UI_Debug_Pusher_Ntf,            /**< DebugMotorPayload：筛粉电机 停止/运行/反转倒渣 */
+    UI_Debug_Recycle_Motor_Ntf,     /**< DebugMotorPayload：内门 停止/开/关（原回粉电机块改为内门） */
+    UI_Debug_Fan_Ntf,               /**< DebugFanPayload：风扇 */
+    UI_Debug_Switch_Ntf,            /**< DebugSwitchPayload：激光/洗气/底板加热 */
     UI_Debug_CleanTest_Start_Ntf,   /**< Empty：清粉测试开启） */
     UI_Debug_CleanTest_Close_Ntf,   /**< Empty：清粉测试关闭/中止 */
-    UI_Debug_Fan_Duty_Req,          /**< DebugFanPayload：仅设风扇占空比（不开关） */
-    UI_Debug_PrintParam_Set_Req,    /**< DebugPrintParamPayload：打印层参数 */
-    UI_Debug_Laser_Power_Set_Req,   /**< DebugLaserPowerPayload：激光手动功率 */
-    UI_Debug_Laser_Power_Reset_Req, /**< Empty：取消手动功率，恢复外控 */
-    UI_Debug_Laser_AlarmReset_Req,  /**< Empty：激光器报警复位（固定 1301） */
-    UI_Debug_Print_H264_Record_Set_Req, /**< DebugOnOffPayload：打印期连续 H264 录像开关（仅本次运行） */
-    UI_Debug_Print_H264_Record_Get_Req, /**< Empty：查询当前打印期连续 H264 录像开关状态 */
-    UI_Debug_Clean_Record_Set_Req,      /**< DebugOnOffPayload：清粉录像开关（仅本次运行） */
-    UI_Debug_Clean_Record_Get_Req,      /**< Empty：查询当前清粉录像开关状态 */
-    UI_Debug_Env_Sim_Set_Req,           /**< DebugOnOffPayload：环境上报模拟开关（仅本次运行，默认关） */
-    UI_Debug_Env_Sim_Get_Req,           /**< Empty：查询当前环境上报模拟开关状态 */
-    UI_Debug_Env_Sim_Powder_Set_Req,    /**< DebugOnOffPayload：环境模拟粉量缺粉开关（延迟 5s 生效） */
-    UI_Debug_Env_Sim_Powder_Get_Req,    /**< Empty：查询当前环境模拟粉量缺粉开关状态 */
-    UI_Debug_FirstLayer_Visual_Check_Set_Req, /**< DebugOnOffPayload：首层视觉检测开关（仅本次运行，默认关） */
-    UI_Debug_FirstLayer_Visual_Check_Get_Req, /**< Empty：查询当前首层视觉检测开关状态 */
+    UI_Debug_Fan_Duty_Ntf,          /**< DebugFanPayload：仅设风扇占空比（不开关） */
+    UI_Debug_PrintParam_Set_Ntf,    /**< DebugPrintParamPayload：打印层参数 */
+    UI_Debug_Laser_Power_Set_Ntf,   /**< DebugLaserPowerPayload：激光手动功率 */
+    UI_Debug_Laser_Power_Reset_Ntf, /**< Empty：取消手动功率，恢复外控 */
+    UI_Debug_Laser_AlarmReset_Ntf,  /**< Empty：激光器报警复位（固定 1301） */
+    UI_Debug_Print_H264_Record_Set_Ntf, /**< DebugOnOffPayload：打印期连续 H264 录像开关（仅本次运行） */
+    UI_Debug_Print_H264_Record_Get_Ntf, /**< Empty：查询当前打印期连续 H264 录像开关状态 */
+    UI_Debug_Clean_Record_Set_Ntf,      /**< DebugOnOffPayload：清粉录像开关（仅本次运行） */
+    UI_Debug_Clean_Record_Get_Ntf,      /**< Empty：查询当前清粉录像开关状态 */
+    UI_Debug_Env_Sim_Set_Ntf,           /**< DebugOnOffPayload：环境上报模拟开关（仅本次运行，默认关） */
+    UI_Debug_Env_Sim_Get_Ntf,           /**< Empty：查询当前环境上报模拟开关状态 */
+    UI_Debug_Env_Sim_Powder_Set_Ntf,    /**< DebugOnOffPayload：环境模拟粉量缺粉开关（延迟 5s 生效） */
+    UI_Debug_Env_Sim_Powder_Get_Ntf,    /**< Empty：查询当前环境模拟粉量缺粉开关状态 */
+    UI_Debug_FirstLayer_Visual_Check_Set_Ntf, /**< DebugOnOffPayload：首层视觉检测开关（仅本次运行，默认关） */
+    UI_Debug_FirstLayer_Visual_Check_Get_Ntf, /**< Empty：查询当前首层视觉检测开关状态 */
 
     // ---- GLAVO → UI：调试页状态回读（按模块拆分） ----
     GLAVO_Debug_Sensor_Ntf = 0x1200, /**< DebugSensorPayload：顶部 7 路传感器 */
     GLAVO_Debug_Axis_Ntf,           /**< DebugAxisStatePayload：Z/S/D 位置 + Z 工作坐标 */
     GLAVO_Debug_Device_Ntf,         /**< DebugDeviceStatePayload：设备/门/电机/照明 */
     GLAVO_Debug_Galvo_Ntf,          /**< DebugGalvoStatePayload：振镜 X/Y + 红光 */
-    GLAVO_Debug_PowderBucket_Ntf,   /**< DebugPowderBucketStatePayload */
-    GLAVO_Debug_Pusher_Ntf,         /**< DebugPusherStatePayload */
-    GLAVO_Debug_RecycleMotor_Ntf,   /**< DebugRecycleMotorStatePayload */
-    GLAVO_Debug_Fan_Ntf,            /**< DebugFanStatePayload */
-    GLAVO_Debug_Switch_Ntf,         /**< DebugSwitchStatePayload */
     GLAVO_Debug_Laser_Ntf,          /**< DebugLaserStatePayload：激光器状态/报警/功率/温度 */
     GLAVO_Debug_Print_H264_Record_Ntf, /**< DebugOnOffPayload：打印期连续 H264 录像开关状态 */
     GLAVO_Debug_Clean_Record_Ntf,      /**< DebugOnOffPayload：清粉录像开关状态 */
@@ -460,7 +455,7 @@ enum class MsgType : uint32_t {
     // ---- UI ↔ GLAVO：打印结果页清粉测试（按钮触发，串口 clean_test_*） ----
     UI_Clean_Test_Start_Req,     /**< CleanTestStartReqPayload：开始清粉+录像 */
     APP_Clean_Test_Start_Rsp,    /**< CleanTestStartRspPayload：是否受理 */
-    APP_Clean_Test_Done_Ntf,     /**< CleanTestDonePayload：TLV 0x22 结果 + 调试保留标记 */
+    APP_Clean_Test_Result_Ntf,   /**< CleanTestDonePayload：TLV 0x22 结果 + 调试保留标记 */
     UI_Clean_Test_Close_Req,     /**< Empty：返回首页时强制 clean_test_close */
     UI_Print_Video_Finalize_Req, /**< PrintVideoFinalizeReqPayload：结果页退出后触发统一 MP4 合成 */
     APP_Clean_Test_Close_Rsp,    /**< Empty：close 已受理 */
@@ -479,15 +474,14 @@ enum class MsgType : uint32_t {
     VISUAL_Camera_Stream_Start_Req,     /**< CameraStreamStartReqPayload（视觉侧取流） */
     APP_Visual_Camera_Stream_Start_Rsp, /**< CameraStreamInfoPayload */
     VISUAL_Camera_Stream_Stop_Req,      /**< Empty */
-    APP_Visual_Camera_Stream_Stop_Done, /**< Empty */
-    APP_Visual_Rect_Ntf,                /**< VisualRectNtfPayload */
+    APP_Visual_Camera_Stream_Stop_Rsp,  /**< Empty */
     GLAVO_Visual_FirstLayer_Check_Req,  /**< VisualFirstLayerCheckReqPayload */
     APP_Visual_FirstLayer_Check_Rsp,    /**< VisualFirstLayerCheckRspPayload */
     // ---- MEDIA ↔ CAMERA：媒体进程并行取流（拍照/录像） ----
     MEDIA_Camera_Stream_Start_Req = 0x1450,  /**< CameraStreamStartReqPayload（媒体侧取流） */
     APP_Media_Camera_Stream_Start_Rsp,       /**< CameraStreamInfoPayload */
     MEDIA_Camera_Stream_Stop_Req,            /**< Empty */
-    APP_Media_Camera_Stream_Stop_Done,       /**< Empty */
+    APP_Media_Camera_Stream_Stop_Rsp,        /**< Empty */
 
     // ---- MQTT ↔ MEDIA：云端 RTSP 推流（live；recording 一期可拒） ----
     MQTT_Media_Rtsp_Start_Req,              /**< RtspPushStartReqPayload */
@@ -500,12 +494,12 @@ enum class MsgType : uint32_t {
     APP_Mqtt_Ota_Progress_Ntf,              /**< OtaProgressPayload：下载+校验进度（OTA 应用阶段可直拉满） */
 
     // ---- UI ↔ GLAVO：MCU 固件版本查询（串口 PORT_GENERAL_TASK 0xA2 / CMD_PROJECT_INFO 0x10） ----
-    UI_Mcu_Version_Req = 0x1500, /**< Empty：进入 Settings/About 页时查询一次 */
+    UI_Mcu_Version_Ntf = 0x1500, /**< Empty：进入 Settings/About 页时查询一次 */
     GLAVO_Mcu_Version_Ntf,       /**< McuVersionPayload：MCU 固件版本 + 板级配置 */
     APP_Fs_Delete_Rsp,           /**< FsDeleteRspPayload：本地文件删除回执 */
 
     // ---- UI ↔ GLAVO：振镜控制板固件版本（以太网 TCP 连接后首包 ID=0x0F） ----
-    UI_Galvo_Version_Req,        /**< Empty：进入 Settings/About 页时读取 Glavo 侧缓存 */
+    UI_Galvo_Version_Ntf,        /**< Empty：进入 Settings/About 页时读取 Glavo 侧缓存 */
     GLAVO_Galvo_Version_Ntf,     /**< GalvoVersionPayload：TCP 0x0F 扩展包中的固件版本 */
 
     // ---- GLAVO → UI：设备事件/告警（消息中心） ----
@@ -513,9 +507,9 @@ enum class MsgType : uint32_t {
 
     // ---- UI ↔ GLAVO：MCU 报警（串口 PORT_ALARM_TASK 0xA3；字典见 doc/主控板串口通信协议 - 报警&事件表.csv） ----
     GLAVO_Alarm_Report_Ntf = 0x1610, /**< AlarmReportPayload：MCU 单条报警/EVENT 上报（Cmd 0x20 TLV 0x01 原样透传） */
-    UI_Alarm_Reset_Req,              /**< AlarmResetReqPayload：请求复位某条 CONDITION 报警（Cmd 0x82 TLV 0x01） */
+    UI_Alarm_Reset_Ntf,              /**< AlarmResetReqPayload：请求复位某条 CONDITION 报警（Cmd 0x82 TLV 0x01） */
     GLAVO_Alarm_Snapshot_Ntf,        /**< AlarmSnapshotPayload：报警快照的一个 slot（Cmd 0x81 TLV 0x04 原样透传） */
-    UI_Alarm_Snapshot_Req,           /**< Empty：请求 MCU 回一轮报警快照（Cmd 0x81 TLV 0x05 len=0） */
+    UI_Alarm_Snapshot_Ntf,           /**< Empty：请求 MCU 回一轮报警快照（Cmd 0x81 TLV 0x05 len=0） */
     GLAVO_Alarm_Reset_Result_Ntf,    /**< AlarmResetResultPayload：复位失败回执（Cmd 0x82 TLV 0x04） */
 
 };
@@ -780,21 +774,6 @@ struct CameraSnapshotRspPayload {
     char path[128];        /**< 成功时输出路径；失败为空串 */
 };
 
-struct VisualRectPoint {
-    int32_t x;
-    int32_t y;
-};
-
-/** APP_Visual_Rect_Ntf：视觉识别矩形四点（Inline） */
-struct VisualRectNtfPayload {
-    uint8_t valid;          /**< 1=检测到矩形；0=当前无矩形 */
-    uint8_t reserved[3];
-    uint32_t frame_width;   /**< 源图宽（像素） */
-    uint32_t frame_height;  /**< 源图高（像素） */
-    uint32_t frame_seq;     /**< 对应相机帧序号（若未知可填 0） */
-    VisualRectPoint pts[4]; /**< 顺时针四点坐标，单位=源图像素 */
-};
-
 /** GLAVO_Visual_FirstLayer_Check_Req：触发首层视觉检测（Inline） */
 struct VisualFirstLayerCheckReqPayload {
     uint16_t layer_height_um; /**< 当前首层高度（um） */
@@ -865,7 +844,7 @@ struct CleanTestStartRspPayload {
     uint8_t reserved[3];
 };
 
-/** APP_Clean_Test_Done_Ntf：串口 TLV 0x22 完成结果（0=成功，非0=失败）。
+/** APP_Clean_Test_Result_Ntf：串口 TLV 0x22 完成结果（0=成功，非0=失败）。
  * 有清粉录像时由 Media 在清粉抽帧停止后发送；最终 MP4 在结果页退出后统一合成。 */
 struct CleanTestDonePayload {
     uint8_t result_code;   /**< 0=成功；非0=失败 */
@@ -1042,7 +1021,7 @@ enum class DebugMotorAction : uint8_t { Stop = 0, Forward = 1, Reverse = 2 };
 enum class DebugSwitchTarget: uint8_t { Laser = 0, GasWash = 1, BaseHeat = 2 };
 enum class DebugPowderStatus: uint8_t { Available = 0, Busy = 1, Fault = 2 };
 
-/** UI_Debug_Axis_Jog_Req：轴点动 / 长按点动 */
+/** UI_Debug_Axis_Jog_Ntf：轴点动 / 长按点动 */
 struct DebugAxisJogPayload {
     uint8_t axis;       /**< DebugAxis */
     uint8_t mode;       /**< DebugJogMode：Click=单步，Hold=持续 */
@@ -1051,13 +1030,13 @@ struct DebugAxisJogPayload {
     float   value;      /**< Click=步距(mm/°)，Hold=速度(mm·°/s) */
 };
 
-/** UI_Debug_Axis_Hold_Stop_Req / UI_Debug_Axis_SetZero_Req */
+/** UI_Debug_Axis_Hold_Stop_Ntf / UI_Debug_Axis_SetZero_Ntf */
 struct DebugAxisPayload {
     uint8_t axis;       /**< DebugAxis */
     uint8_t reserved[3];
 };
 
-/** UI_Debug_Galvo_Move_Req：振镜方向步进 */
+/** UI_Debug_Galvo_Move_Ntf：振镜方向步进 */
 struct DebugGalvoMovePayload {
     uint8_t axis;       /**< DebugGalvoAxis */
     int8_t  dir;        /**< +1 / -1 */
@@ -1065,59 +1044,59 @@ struct DebugGalvoMovePayload {
     float   step_mm;
 };
 
-/** 通用开关：UI_Debug_Galvo_RedLight_Req / UI_Debug_Pusher_Req */
+/** 通用开关：UI_Debug_Galvo_RedLight_Ntf / UI_Debug_Pusher_Ntf */
 struct DebugOnOffPayload {
     uint8_t on;
     uint8_t reserved[3];
 };
 
-/** UI_Debug_Galvo_Param_Save_Req：保存 Scale / 步长 */
+/** UI_Debug_Galvo_Param_Save_Ntf：保存 Scale / 步长 */
 struct DebugGalvoParamPayload {
     float scale;
     float step_mm;
 };
 
-/** UI_Debug_Device_Req：设备/门/电机/照明 */
+/** UI_Debug_Device_Ntf：设备/门/电机/照明 */
 struct DebugDevicePayload {
     uint8_t target;     /**< DebugDeviceTarget */
     uint8_t on;
     uint8_t reserved[2];
 };
 
-/** UI_Debug_Powder_Bucket_Req：粉桶开关 */
+/** UI_Debug_Powder_Bucket_Ntf：粉桶开关 */
 struct DebugBucketPayload {
     uint8_t bucket_id;  /**< 1 / 2 */
     uint8_t on;
     uint8_t reserved[2];
 };
 
-/** UI_Debug_Recycle_Motor_Req：回粉电机 */
+/** UI_Debug_Recycle_Motor_Ntf：回粉电机 */
 struct DebugMotorPayload {
     uint8_t action;     /**< DebugMotorAction */
     uint8_t reserved[3];
 };
 
-/** UI_Debug_Fan_Req：风扇开关 + 占空比 */
+/** UI_Debug_Fan_Ntf：风扇开关 + 占空比 */
 struct DebugFanPayload {
     uint8_t on;
     uint8_t reserved[3];
     float   duty;       /**< 0..100 (%) */
 };
 
-/** UI_Debug_Switch_Req：激光/洗气/底板加热 */
+/** UI_Debug_Switch_Ntf：激光/洗气/底板加热 */
 struct DebugSwitchPayload {
     uint8_t target;     /**< DebugSwitchTarget */
     uint8_t on;
     uint8_t reserved[2];
 };
 
-/** UI_Debug_PrintParam_Set_Req：打印层参数（层厚 + 平衡系数×1000） */
+/** UI_Debug_PrintParam_Set_Ntf：打印层参数（层厚 + 平衡系数×1000） */
 struct DebugPrintParamPayload {
     uint16_t layer_um;        /**< 层厚 um */
     uint16_t balance_x1000;   /**< 平衡系数 × 1000 */
 };
 
-/** UI_Debug_Laser_Power_Set_Req：激光手动功率百分比 */
+/** UI_Debug_Laser_Power_Set_Ntf：激光手动功率百分比 */
 struct DebugLaserPowerPayload {
     uint8_t percent;          /**< 0..100 */
     uint8_t reserved[3];
@@ -1275,7 +1254,7 @@ constexpr uint8_t kAlarmStateEvent   = 0x04; /**< 一次性 EVENT，无生命周
 /** AlarmReportPayload.clear_mode 枚举。 */
 enum class AlarmClearMode : uint8_t {
     Auto       = 0,  /**< 条件消失即自动恢复 NORMAL */
-    Reset      = 1,  /**< 需 UI 复位请求（UI_Alarm_Reset_Req） */
+    Reset      = 1,  /**< 需 UI 复位请求（UI_Alarm_Reset_Ntf） */
     PowerCycle = 2,  /**< 断电重启才能清除 */
     None       = 3,  /**< 不可清除（本次上电周期内一直存在） */
 };
@@ -1321,7 +1300,7 @@ constexpr bool alarm_snapshot_covers(uint16_t code)
 
 /** GLAVO_Alarm_Snapshot_Ntf 载荷：报警快照的**一个 slot**（串口 0xA3/0x81 TLV 0x04，len=11）。
  *
- *  快照是**请求-响应**的：MCU 不会主动推，UI 得先发 UI_Alarm_Snapshot_Req。
+ *  快照是**请求-响应**的：MCU 不会主动推，UI 得先发 UI_Alarm_Snapshot_Ntf。
  *  响应**稀疏**——只回 (active|latched) 非零的 slot，没回的 slot 一律按全零处理，
  *  不能保留上一轮旧值。`nonzero_slot_count=0` 是合法的「当前无报警」响应。
  *  Glavo 侧不加工，攒帧与原子对齐都在 UI（`ui_alarm_state`）做。
@@ -1336,7 +1315,7 @@ struct AlarmSnapshotPayload {
     uint32_t latched_mask;       /**< 本 slot 32 条的 latched 位 */
 };
 
-/** UI_Alarm_Reset_Req 载荷：请求复位某条报警（串口 0xA3/0x82 TLV 0x01）。
+/** UI_Alarm_Reset_Ntf 载荷：请求复位某条报警（串口 0xA3/0x82 TLV 0x01）。
  *  仅对 clear_mode=RESET 的 CONDITION 有意义；通信 ACK 不代表复位成功，最终
  *  状态以后续 GLAVO_Alarm_Report_Ntf 为准（失败会另有 Reset_Result 回执）。 */
 struct AlarmResetReqPayload {

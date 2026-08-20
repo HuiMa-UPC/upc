@@ -683,7 +683,7 @@ void wire_msg_proxy()
         if(g_state != CONTROL_STATE_PRINTING) {
             return;
         }
-        /* 自然完成也会发 Terminate_Done：须与 Progress 一致，双缓冲为 0 才退 */
+        /* 自然完成也会发 Terminate_Rsp：须与 Progress 一致，双缓冲为 0 才退 */
         try_exit_print_preview(true);
     });
 

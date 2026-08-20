@@ -23,7 +23,7 @@ void CameraMsgProxy::init()
         }));
 
     subs_.push_back(bus.subscribe(
-        middleware::MsgType::APP_Camera_Stream_Stop_Done,
+        middleware::MsgType::APP_Camera_Stream_Stop_Rsp,
         middleware::ModuleId::UI,
         [this](const middleware::Message&) {
             if(stop_done_cb_) {

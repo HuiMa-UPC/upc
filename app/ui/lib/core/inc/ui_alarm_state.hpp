@@ -96,7 +96,7 @@ const ui_alarm_entry_t *ui_alarm_current_at(int idx);
 const ui_alarm_entry_t *ui_alarm_current_find(uint16_t code);
 
 /**
- * 下发复位请求（UI_Alarm_Reset_Req）。仅 clear_mode=RESET 且不在
+ * 下发复位请求（UI_Alarm_Reset_Ntf）。仅 clear_mode=RESET 且不在
  * reset_pending 的条目受理；受理后置 reset_pending，等 MCU 下一帧上报翻转
  * 状态。解除 pending 的三条路径：该 code 的新上报、复位失败回执、10s 超时兜底。
  * @return 是否已下发
@@ -120,7 +120,7 @@ bool ui_alarm_request_reset(uint16_t code);
 bool ui_alarm_reset_allowed(const ui_alarm_entry_t *e);
 
 /**
- * 请求一轮报警快照（UI_Alarm_Snapshot_Req）。MCU **不会主动推**，不请求就补不齐
+ * 请求一轮报警快照（UI_Alarm_Snapshot_Ntf）。MCU **不会主动推**，不请求就补不齐
  * 重启/重连前就亮着的报警。内部带节流（上一轮在途、或距上次请求不足 2s 则跳过），
  * 调用方不必自己防抖。`reason` 只进日志，便于排查是哪个触发点发的。
  *

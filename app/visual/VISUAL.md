@@ -7,14 +7,13 @@
 
 - 通过 Camera 的 dma fd + SHM 元数据环跨进程取最新预览帧
 - 使用 OpenCV 做 `NV12 -> RGB`，并运行轻量矩形检测 demo
-- 将检测到的四点坐标通过 `APP_Visual_Rect_Ntf` 推送给 UI
+- 保留首层检测请求/应答链路（`GLAVO_Visual_FirstLayer_Check_Req` / `APP_Visual_FirstLayer_Check_Rsp`）
 
 ## IPC
 
 - `VISUAL_Camera_Stream_Start_Req`：向 Camera 申请视觉流
 - `APP_Visual_Camera_Stream_Start_Rsp`：返回视觉专用 SHM 名称及流参数（并附带 dma fd）
-- `VISUAL_Camera_Stream_Stop_Req` / `APP_Visual_Camera_Stream_Stop_Done`
-- `APP_Visual_Rect_Ntf`：视觉识别结果（四点坐标）
+- `VISUAL_Camera_Stream_Stop_Req` / `APP_Visual_Camera_Stream_Stop_Rsp`
 
 ## 数据链路
 
@@ -27,7 +26,7 @@ rongsu_visual
   ├─ take_peer_dma_fds(APP_CAMERA)
   ├─ consumer.acquire_latest_frame() 拿 buffer_idx
   ├─ mmap(fd) + OpenCV cvtColor(NV12->RGB)
-  └─ 矩形检测 -> APP_Visual_Rect_Ntf -> UI 叠加画框
+  └─ 矩形检测（当前不再发布独立四点坐标消息）
 ```
 
 ## 说明

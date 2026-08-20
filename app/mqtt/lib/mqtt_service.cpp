@@ -836,13 +836,13 @@ void MqttService::request_firmware_versions_if_needed()
 
     auto& port = middleware::MsgPort::instance();
     if(need_mcu) {
-        middleware::Message req(middleware::MsgType::UI_Mcu_Version_Req,
+        middleware::Message req(middleware::MsgType::UI_Mcu_Version_Ntf,
                                 middleware::ModuleId::APP_MQTT,
                                 middleware::ModuleId::APP_GLAVO);
         (void)port.publish_async(req);
     }
     if(need_galvo) {
-        middleware::Message req(middleware::MsgType::UI_Galvo_Version_Req,
+        middleware::Message req(middleware::MsgType::UI_Galvo_Version_Ntf,
                                 middleware::ModuleId::APP_MQTT,
                                 middleware::ModuleId::APP_GLAVO);
         (void)port.publish_async(req);
@@ -853,13 +853,13 @@ void MqttService::request_firmware_versions_force(bool need_mcu, bool need_galvo
 {
     auto& port = middleware::MsgPort::instance();
     if(need_mcu) {
-        middleware::Message req(middleware::MsgType::UI_Mcu_Version_Req,
+        middleware::Message req(middleware::MsgType::UI_Mcu_Version_Ntf,
                                 middleware::ModuleId::APP_MQTT,
                                 middleware::ModuleId::APP_GLAVO);
         (void)port.publish_async(req);
     }
     if(need_galvo) {
-        middleware::Message req(middleware::MsgType::UI_Galvo_Version_Req,
+        middleware::Message req(middleware::MsgType::UI_Galvo_Version_Ntf,
                                 middleware::ModuleId::APP_MQTT,
                                 middleware::ModuleId::APP_GLAVO);
         (void)port.publish_async(req);
@@ -1589,7 +1589,7 @@ bool MqttService::dispatch_set_light_to_glavo(const LightCommand& cmd)
     p.target = static_cast<uint8_t>(middleware::DebugDeviceTarget::Light);
     p.on = cmd.mode == "on" ? 1 : 0;
 
-    middleware::Message msg(middleware::MsgType::UI_Debug_Device_Req,
+    middleware::Message msg(middleware::MsgType::UI_Debug_Device_Ntf,
         middleware::ModuleId::APP_MQTT,
         middleware::ModuleId::APP_GLAVO);
     msg.payload = middleware::MsgPayload::from_bytes(

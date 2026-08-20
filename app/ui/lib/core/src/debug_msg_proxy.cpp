@@ -113,28 +113,28 @@ void DebugMsgProxy::send_axis_jog(middleware::DebugAxis axis,
     p.mode  = static_cast<uint8_t>(mode);
     p.dir   = static_cast<int8_t>(dir < 0 ? -1 : 1);
     p.value = value;
-    publish_pod(middleware::MsgType::UI_Debug_Axis_Jog_Req, p);
+    publish_pod(middleware::MsgType::UI_Debug_Axis_Jog_Ntf, p);
 }
 
 void DebugMsgProxy::send_axis_hold_stop(middleware::DebugAxis axis)
 {
     middleware::DebugAxisPayload p{};
     p.axis = static_cast<uint8_t>(axis);
-    publish_pod(middleware::MsgType::UI_Debug_Axis_Hold_Stop_Req, p);
+    publish_pod(middleware::MsgType::UI_Debug_Axis_Hold_Stop_Ntf, p);
 }
 
 void DebugMsgProxy::send_axis_set_zero(middleware::DebugAxis axis)
 {
     middleware::DebugAxisPayload p{};
     p.axis = static_cast<uint8_t>(axis);
-    publish_pod(middleware::MsgType::UI_Debug_Axis_SetZero_Req, p);
+    publish_pod(middleware::MsgType::UI_Debug_Axis_SetZero_Ntf, p);
 }
 
 void DebugMsgProxy::send_axis_home(middleware::DebugAxis axis)
 {
     middleware::DebugAxisPayload p{};
     p.axis = static_cast<uint8_t>(axis);
-    publish_pod(middleware::MsgType::UI_Debug_Axis_Home_Req, p);
+    publish_pod(middleware::MsgType::UI_Debug_Axis_Home_Ntf, p);
 }
 
 void DebugMsgProxy::send_galvo_move(middleware::DebugGalvoAxis axis,
@@ -144,30 +144,30 @@ void DebugMsgProxy::send_galvo_move(middleware::DebugGalvoAxis axis,
     p.axis    = static_cast<uint8_t>(axis);
     p.dir     = static_cast<int8_t>(dir < 0 ? -1 : 1);
     p.step_mm = step_mm;
-    publish_pod(middleware::MsgType::UI_Debug_Galvo_Move_Req, p);
+    publish_pod(middleware::MsgType::UI_Debug_Galvo_Move_Ntf, p);
 }
 
 void DebugMsgProxy::send_galvo_home()
 {
-    publish_empty(middleware::MsgType::UI_Debug_Galvo_Home_Req);
+    publish_empty(middleware::MsgType::UI_Debug_Galvo_Home_Ntf);
 }
 
 void DebugMsgProxy::send_galvo_red_light(bool on)
 {
     middleware::DebugOnOffPayload p{};
     p.on = on ? 1 : 0;
-    publish_pod(middleware::MsgType::UI_Debug_Galvo_RedLight_Req, p);
+    publish_pod(middleware::MsgType::UI_Debug_Galvo_RedLight_Ntf, p);
 }
 
 void DebugMsgProxy::send_galvo_param_save(float scale, float step_mm)
 {
     middleware::DebugGalvoParamPayload p{scale, step_mm};
-    publish_pod(middleware::MsgType::UI_Debug_Galvo_Param_Save_Req, p);
+    publish_pod(middleware::MsgType::UI_Debug_Galvo_Param_Save_Ntf, p);
 }
 
 void DebugMsgProxy::send_galvo_calib()
 {
-    publish_empty(middleware::MsgType::UI_Debug_Galvo_Calib_Req);
+    publish_empty(middleware::MsgType::UI_Debug_Galvo_Calib_Ntf);
 }
 
 void DebugMsgProxy::send_device(middleware::DebugDeviceTarget target, bool on)
@@ -175,7 +175,7 @@ void DebugMsgProxy::send_device(middleware::DebugDeviceTarget target, bool on)
     middleware::DebugDevicePayload p{};
     p.target = static_cast<uint8_t>(target);
     p.on     = on ? 1 : 0;
-    publish_pod(middleware::MsgType::UI_Debug_Device_Req, p);
+    publish_pod(middleware::MsgType::UI_Debug_Device_Ntf, p);
 }
 
 /* ---- Tab2 ---- */
@@ -184,35 +184,35 @@ void DebugMsgProxy::send_powder_bucket(uint8_t bucket_id, bool on)
     middleware::DebugBucketPayload p{};
     p.bucket_id = bucket_id;
     p.on        = on ? 1 : 0;
-    publish_pod(middleware::MsgType::UI_Debug_Powder_Bucket_Req, p);
+    publish_pod(middleware::MsgType::UI_Debug_Powder_Bucket_Ntf, p);
 }
 
 void DebugMsgProxy::send_sieve(middleware::DebugMotorAction action)
 {
     middleware::DebugMotorPayload p{};
     p.action = static_cast<uint8_t>(action);
-    publish_pod(middleware::MsgType::UI_Debug_Pusher_Req, p);
+    publish_pod(middleware::MsgType::UI_Debug_Pusher_Ntf, p);
 }
 
 void DebugMsgProxy::send_inner_door(middleware::DebugMotorAction action)
 {
     middleware::DebugMotorPayload p{};
     p.action = static_cast<uint8_t>(action);
-    publish_pod(middleware::MsgType::UI_Debug_Recycle_Motor_Req, p);
+    publish_pod(middleware::MsgType::UI_Debug_Recycle_Motor_Ntf, p);
 }
 
 void DebugMsgProxy::send_fan(bool on)
 {
     middleware::DebugFanPayload p{};
     p.on = on ? 1 : 0;
-    publish_pod(middleware::MsgType::UI_Debug_Fan_Req, p);
+    publish_pod(middleware::MsgType::UI_Debug_Fan_Ntf, p);
 }
 
 void DebugMsgProxy::send_fan_duty(float duty)
 {
     middleware::DebugFanPayload p{};
     p.duty = duty;
-    publish_pod(middleware::MsgType::UI_Debug_Fan_Duty_Req, p);
+    publish_pod(middleware::MsgType::UI_Debug_Fan_Duty_Ntf, p);
 }
 
 void DebugMsgProxy::send_switch(middleware::DebugSwitchTarget target, bool on)
@@ -220,7 +220,7 @@ void DebugMsgProxy::send_switch(middleware::DebugSwitchTarget target, bool on)
     middleware::DebugSwitchPayload p{};
     p.target = static_cast<uint8_t>(target);
     p.on     = on ? 1 : 0;
-    publish_pod(middleware::MsgType::UI_Debug_Switch_Req, p);
+    publish_pod(middleware::MsgType::UI_Debug_Switch_Ntf, p);
 }
 
 void DebugMsgProxy::send_clean_test_start()
@@ -238,84 +238,84 @@ void DebugMsgProxy::send_print_layer_param(uint16_t layer_um, uint16_t balance_x
     middleware::DebugPrintParamPayload p{};
     p.layer_um      = layer_um;
     p.balance_x1000 = balance_x1000;
-    publish_pod(middleware::MsgType::UI_Debug_PrintParam_Set_Req, p);
+    publish_pod(middleware::MsgType::UI_Debug_PrintParam_Set_Ntf, p);
 }
 
 void DebugMsgProxy::send_laser_power_set(uint8_t percent)
 {
     middleware::DebugLaserPowerPayload p{};
     p.percent = percent > 100 ? 100 : percent;
-    publish_pod(middleware::MsgType::UI_Debug_Laser_Power_Set_Req, p);
+    publish_pod(middleware::MsgType::UI_Debug_Laser_Power_Set_Ntf, p);
 }
 
 void DebugMsgProxy::send_laser_power_reset()
 {
-    publish_empty(middleware::MsgType::UI_Debug_Laser_Power_Reset_Req);
+    publish_empty(middleware::MsgType::UI_Debug_Laser_Power_Reset_Ntf);
 }
 
 void DebugMsgProxy::send_laser_alarm_reset()
 {
-    publish_empty(middleware::MsgType::UI_Debug_Laser_AlarmReset_Req);
+    publish_empty(middleware::MsgType::UI_Debug_Laser_AlarmReset_Ntf);
 }
 
 void DebugMsgProxy::send_print_h264_record_set(bool on)
 {
     middleware::DebugOnOffPayload p{};
     p.on = on ? 1 : 0;
-    publish_pod(middleware::MsgType::UI_Debug_Print_H264_Record_Set_Req, p);
+    publish_pod(middleware::MsgType::UI_Debug_Print_H264_Record_Set_Ntf, p);
 }
 
 void DebugMsgProxy::request_print_h264_record_state()
 {
-    publish_empty(middleware::MsgType::UI_Debug_Print_H264_Record_Get_Req);
+    publish_empty(middleware::MsgType::UI_Debug_Print_H264_Record_Get_Ntf);
 }
 
 void DebugMsgProxy::send_clean_record_set(bool on)
 {
     middleware::DebugOnOffPayload p{};
     p.on = on ? 1 : 0;
-    publish_pod(middleware::MsgType::UI_Debug_Clean_Record_Set_Req, p);
+    publish_pod(middleware::MsgType::UI_Debug_Clean_Record_Set_Ntf, p);
 }
 
 void DebugMsgProxy::request_clean_record_state()
 {
-    publish_empty(middleware::MsgType::UI_Debug_Clean_Record_Get_Req);
+    publish_empty(middleware::MsgType::UI_Debug_Clean_Record_Get_Ntf);
 }
 
 void DebugMsgProxy::send_env_sim_set(bool on)
 {
     middleware::DebugOnOffPayload p{};
     p.on = on ? 1 : 0;
-    publish_pod(middleware::MsgType::UI_Debug_Env_Sim_Set_Req, p);
+    publish_pod(middleware::MsgType::UI_Debug_Env_Sim_Set_Ntf, p);
 }
 
 void DebugMsgProxy::request_env_sim_state()
 {
-    publish_empty(middleware::MsgType::UI_Debug_Env_Sim_Get_Req);
+    publish_empty(middleware::MsgType::UI_Debug_Env_Sim_Get_Ntf);
 }
 
 void DebugMsgProxy::send_env_sim_powder_set(bool on)
 {
     middleware::DebugOnOffPayload p{};
     p.on = on ? 1 : 0;
-    publish_pod(middleware::MsgType::UI_Debug_Env_Sim_Powder_Set_Req, p);
+    publish_pod(middleware::MsgType::UI_Debug_Env_Sim_Powder_Set_Ntf, p);
 }
 
 void DebugMsgProxy::request_env_sim_powder_state()
 {
-    publish_empty(middleware::MsgType::UI_Debug_Env_Sim_Powder_Get_Req);
+    publish_empty(middleware::MsgType::UI_Debug_Env_Sim_Powder_Get_Ntf);
 }
 
 void DebugMsgProxy::send_first_layer_visual_check_set(bool on)
 {
     middleware::DebugOnOffPayload p{};
     p.on = on ? 1 : 0;
-    publish_pod(middleware::MsgType::UI_Debug_FirstLayer_Visual_Check_Set_Req, p);
+    publish_pod(middleware::MsgType::UI_Debug_FirstLayer_Visual_Check_Set_Ntf, p);
 }
 
 void DebugMsgProxy::request_first_layer_visual_check_state()
 {
-    publish_empty(middleware::MsgType::UI_Debug_FirstLayer_Visual_Check_Get_Req);
+    publish_empty(middleware::MsgType::UI_Debug_FirstLayer_Visual_Check_Get_Ntf);
 }
 
 /* ---- 回读注册 ---- */

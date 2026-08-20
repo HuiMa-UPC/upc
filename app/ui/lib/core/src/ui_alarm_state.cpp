@@ -822,7 +822,7 @@ void ui_alarm_debug_inject(uint16_t code, uint8_t severity, uint8_t state_mask,
                            uint8_t clear_mode, uint32_t detail)
 {
     /* 与 apply_report_async 同一分发；调试页本就在 UI 线程，无需 async 中转。
-     * 注意注入 clear_mode=RESET 的条目按 Reset 会真发 UI_Alarm_Reset_Req 到
+     * 注意注入 clear_mode=RESET 的条目按 Reset 会真发 UI_Alarm_Reset_Ntf 到
      * 串口，MCU 对未知报警不会回帧，10s 后 pending 自动解除——正好验超时路径。
      * 分发期间置 g_inject_simulated：条目因此带 [SIM] 前缀且不落盘。 */
     middleware::AlarmReportPayload p{};

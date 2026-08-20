@@ -51,7 +51,7 @@ void UiMsgProxy::init()
         }));
 
     subs_.push_back(bus.subscribe(
-        middleware::MsgType::APP_Purify_Progress, middleware::ModuleId::UI,
+        middleware::MsgType::APP_Purify_Ntf, middleware::ModuleId::UI,
         [this](const middleware::Message& msg) {
             if (purify_progress_cb_ &&
                 msg.payload.type == middleware::MsgPayload::Type::Value) {
@@ -93,7 +93,7 @@ void UiMsgProxy::init()
         }));
 
     subs_.push_back(bus.subscribe(
-        middleware::MsgType::APP_Clean_Test_Done_Ntf, middleware::ModuleId::UI,
+        middleware::MsgType::APP_Clean_Test_Result_Ntf, middleware::ModuleId::UI,
         [this](const middleware::Message& msg) {
             middleware::CleanTestDonePayload p{};
             if (clean_test_done_cb_ && read_inline_pod(msg, p)) {
@@ -170,7 +170,7 @@ void UiMsgProxy::init()
         }));
 
     subs_.push_back(bus.subscribe(
-        middleware::MsgType::APP_Print_Terminate_Done, middleware::ModuleId::UI,
+        middleware::MsgType::APP_Print_Terminate_Rsp, middleware::ModuleId::UI,
         [this](const middleware::Message&) {
             if (print_terminate_done_cb_) {
                 print_terminate_done_cb_();
@@ -534,7 +534,7 @@ void UiMsgProxy::register_usb_hotplug(UsbHotplugCb cb)
 
 void UiMsgProxy::send_mcu_version_query()
 {
-    middleware::Message msg(middleware::MsgType::UI_Mcu_Version_Req,
+    middleware::Message msg(middleware::MsgType::UI_Mcu_Version_Ntf,
                             middleware::ModuleId::UI,
                             middleware::ModuleId::APP_GLAVO);
     middleware::MsgPort::instance().publish_async(msg);
@@ -547,7 +547,7 @@ void UiMsgProxy::register_mcu_version(McuVersionCb cb)
 
 void UiMsgProxy::send_galvo_version_query()
 {
-    middleware::Message msg(middleware::MsgType::UI_Galvo_Version_Req,
+    middleware::Message msg(middleware::MsgType::UI_Galvo_Version_Ntf,
                             middleware::ModuleId::UI,
                             middleware::ModuleId::APP_GLAVO);
     middleware::MsgPort::instance().publish_async(msg);
@@ -603,13 +603,13 @@ void UiMsgProxy::send_alarm_reset(uint16_t alarm_code)
 {
     middleware::AlarmResetReqPayload payload{};
     payload.alarm_code = alarm_code;
-    publish_pod(middleware::MsgType::UI_Alarm_Reset_Req,
+    publish_pod(middleware::MsgType::UI_Alarm_Reset_Ntf,
                 middleware::ModuleId::APP_GLAVO, payload);
 }
 
 void UiMsgProxy::send_alarm_snapshot_req()
 {
-    middleware::Message msg(middleware::MsgType::UI_Alarm_Snapshot_Req,
+    middleware::Message msg(middleware::MsgType::UI_Alarm_Snapshot_Ntf,
                             middleware::ModuleId::UI,
                             middleware::ModuleId::APP_GLAVO);
     middleware::MsgPort::instance().publish_async(msg);
