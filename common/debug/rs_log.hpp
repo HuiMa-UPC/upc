@@ -24,7 +24,7 @@ enum class Level : int {
 
 const char* level_name(Level level);
 
-/** 进程入口调用一次，后续 UPC_LOG_* 行首带 proc= 便于 run 模式区分多进程输出 */
+/** 进程入口调用一次，后续 UPC_LOG_* 行首带 proc=；日志按专题写入 /var/log/topic/ 下的 *.log 文件 */
 void log_set_process_name(const char* name);
 
 void log_write(Level level, const char* src, const char* module,

@@ -40,7 +40,7 @@ int start_mqtt(char daemon)
                          kProc.name, running);
             return 1;
         }
-        if(process_daemonize(kProc.log_base) < 0) {
+        if(process_daemonize() < 0) {
             std::fprintf(stderr, "%s daemonize failed\n", kProc.name);
             return 2;
         }

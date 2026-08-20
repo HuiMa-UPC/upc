@@ -42,7 +42,7 @@
 | 文件 | 准备有效 `.gcode`、有效 `.ovf`、损坏/不支持格式文件；准备 USB 存储介质 |
 | 存储 | 确保 `/home/Gcode`、`/home/media/photo`、`/home/media/video` 可写；容量测试需能构造 90% 与 100% 水位 |
 | 相机 | 相机可正常出流；录像、拍照和视觉用例需有可观察画面 |
-| 可观测性 | UI 日志 `/var/log/rongsu_ui*.log`；Glavo `/var/log/rongsu_glavo*.log`；Camera `/var/log/rongsu_camera*.log`；MQTT `/var/log/rongsu_mqtt*.log` |
+| 可观测性 | 统一专题日志目录 `/var/log/topic/*.log`（按串口、TCP、IPC、MQTT、相机、UI、存储、系统监控等专题拆分） |
 
 通用判定原则：
 

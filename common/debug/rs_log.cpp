@@ -1,5 +1,4 @@
 #include "rs_log.hpp"
-#include "log_rotating.hpp"
 
 #include <cctype>
 #include <cstdarg>
@@ -7,6 +6,9 @@
 #include <cstdio>
 #include <cstring>
 #include <ctime>
+#include <mutex>
+#include <sys/stat.h>
+#include <sys/types.h>
 
 #if defined(_POSIX_C_SOURCE) && _POSIX_C_SOURCE >= 199309L
 #include <time.h>
@@ -18,6 +20,145 @@ namespace {
 
 char g_process_name[32] = "?";
 bool g_process_log_enabled = true;
+std::mutex g_log_mtx;
+
+constexpr const char* kTopicLogDir = "/var/log/topic";
+constexpr const char* kTopicDefault = "topic_misc.log";
+
+bool starts_with(const char* s, const char* prefix) {
+    if (!s || !prefix) {
+        return false;
+    }
+    const size_t n = std::strlen(prefix);
+    return std::strncmp(s, prefix, n) == 0;
+}
+
+bool contains_text(const char* s, const char* token) {
+    return s && token && std::strstr(s, token) != nullptr;
+}
+
+void ensure_topic_log_dir() {
+    char path[256];
+    std::snprintf(path, sizeof(path), "%s", kTopicLogDir);
+    const size_t len = std::strlen(path);
+    if (len == 0) {
+        return;
+    }
+    for (size_t i = 1; i < len; ++i) {
+        if (path[i] != '/') {
+            continue;
+        }
+        path[i] = '\0';
+        (void)mkdir(path, 0755);
+        path[i] = '/';
+    }
+    (void)mkdir(path, 0755);
+}
+
+const char* select_topic_file(const char* module, const char* msg) {
+    if (module == nullptr) {
+        return kTopicDefault;
+    }
+
+    if (std::strcmp(module, "BOOT") == 0) {
+        return "topic_boot_lifecycle.log";
+    }
+
+    if (std::strcmp(module, "IPC") == 0) {
+        return "topic_ipc_wire.log";
+    }
+    if (std::strcmp(module, "MSGBUS") == 0) {
+        if (starts_with(msg, "IPC_")) {
+            return "topic_ipc_message.log";
+        }
+        return "topic_msgbus_local.log";
+    }
+    if (std::strcmp(module, "MemPool") == 0 ||
+        std::strcmp(module, "BufferPool") == 0) {
+        return "topic_msgbus_local.log";
+    }
+
+    if (std::strcmp(module, "MqttService") == 0) {
+        if (contains_text(msg, "ota")) {
+            return "topic_mqtt_ota.log";
+        }
+        if (contains_text(msg, "telemetry") || contains_text(msg, "heartbeat")) {
+            return "topic_mqtt_telemetry.log";
+        }
+        if (contains_text(msg, "MQTT RX frame") || contains_text(msg, "MQTT TX frame") ||
+            contains_text(msg, "payload[")) {
+            return "topic_mqtt_wire.log";
+        }
+        return "topic_mqtt_command.log";
+    }
+
+    if (std::strcmp(module, "McuLink") == 0) {
+        if (starts_with(msg, "sensor:") || starts_with(msg, "env_sim:")) {
+            return "topic_serial_sensor.log";
+        }
+        if (contains_text(msg, "alarm_") || contains_text(msg, "RX ALARM") ||
+            contains_text(msg, "EVENT ")) {
+            return "topic_serial_alarm.log";
+        }
+        if (contains_text(msg, "TCP_TX frame") || contains_text(msg, "tcp emergency")) {
+            return "topic_tcp_motion_tx.log";
+        }
+        if (contains_text(msg, "tcp hb rsp") || contains_text(msg, "cmd_rate=") ||
+            contains_text(msg, "data_rate=")) {
+            return "topic_tcp_heartbeat.log";
+        }
+        if (contains_text(msg, "serial TX cmd:") || contains_text(msg, "RX LAYER") ||
+            contains_text(msg, "notify_serial_event")) {
+            return "topic_serial_layer.log";
+        }
+        return "topic_print_flow.log";
+    }
+
+    if (std::strcmp(module, "McuOta") == 0) {
+        return "topic_device_ota.log";
+    }
+
+    if (std::strcmp(module, "GlavoService") == 0 ||
+        std::strcmp(module, "CalParser") == 0 ||
+        std::strcmp(module, "ParserContext") == 0 ||
+        std::strcmp(module, "GcodeWorker") == 0 ||
+        std::strcmp(module, "OvfWorker") == 0 ||
+        std::strcmp(module, "ServiceBase") == 0) {
+        return "topic_print_flow.log";
+    }
+
+    if (std::strcmp(module, "HostMonitor") == 0) {
+        return "topic_system_resource.log";
+    }
+
+    if (std::strcmp(module, "CameraService") == 0) {
+        return "topic_camera_capture.log";
+    }
+    if (std::strcmp(module, "CameraPreview") == 0) {
+        return "topic_ui_preview.log";
+    }
+    if (std::strcmp(module, "VisualService") == 0) {
+        return "topic_visual_firstlayer.log";
+    }
+    if (std::strcmp(module, "XfrService") == 0) {
+        return "topic_xfr_upload.log";
+    }
+    if (std::strcmp(module, "AlarmState") == 0) {
+        return "topic_ui_alarm_state.log";
+    }
+
+    if (std::strcmp(module, "MediaService") == 0) {
+        if (contains_text(msg, "storage") || contains_text(msg, "STORRCLM")) {
+            return "topic_storage_usage.log";
+        }
+        if (contains_text(msg, "live_rtsp")) {
+            return "topic_media_rtsp.log";
+        }
+        return "topic_media_record.log";
+    }
+
+    return kTopicDefault;
+}
 
 bool parse_env_switch(const char* value, bool default_value) {
     if (!value || !value[0]) {
@@ -157,21 +298,31 @@ void log_write(Level level, const char* src, const char* module,
     const int msg_len = std::vsnprintf(msg_buf, sizeof(msg_buf), fmt, args);
     va_end(args);
 
-    const std::size_t est = 96U
-        + (msg_len > 0 ? static_cast<std::size_t>(msg_len) : 0U) + 1U;
-    log_rotating_before_write(est);
+    std::lock_guard<std::mutex> lock(g_log_mtx);
+    ensure_topic_log_dir();
 
-    std::fprintf(stderr, "%s level=%s proc=%s src=%s module=%s ",
-        ts, level_name(level), log_process_name(),
-        src ? src : "?", module ? module : "?");
+    const char* topic_file = select_topic_file(module, msg_buf);
+    char path[320];
+    std::snprintf(path, sizeof(path), "%s/%s", kTopicLogDir, topic_file);
 
-    if (msg_len > 0) {
-        std::fwrite(msg_buf, 1, static_cast<std::size_t>(msg_len), stderr);
+    FILE* fp = std::fopen(path, "a");
+    if (!fp) {
+        fp = stderr;
     }
 
-    std::fputc('\n', stderr);
-    std::fflush(stderr);
-    log_rotating_after_write();
+    std::fprintf(fp, "%s level=%s proc=%s src=%s module=%s ",
+                 ts, level_name(level), log_process_name(),
+                 src ? src : "?", module ? module : "?");
+
+    if (msg_len > 0) {
+        std::fwrite(msg_buf, 1, static_cast<std::size_t>(msg_len), fp);
+    }
+
+    std::fputc('\n', fp);
+    std::fflush(fp);
+    if (fp != stderr) {
+        std::fclose(fp);
+    }
 #else
     (void)level;
     (void)src;

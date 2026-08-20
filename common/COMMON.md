@@ -25,22 +25,18 @@ scripts/rongsu.sh start   # glavo + rongsu_camera → ui
 | `middleware/` | MsgBus、内存池、`msg_runtime.hpp` |
 | `ipc/` | Unix socket、`MsgPort`、SHM/dma 帧环 |
 | `debug/` | `UPC_LOG_*`、`upc_sys_monitor` |
-| `process/` | PID、daemon、`log_rotating` |
+| `process/` | PID、daemon、专题日志重定向 |
 | `fs_manifest/` | 本地清单 JSON（G-code / 打印历史 `config.json`；根路径见 `media_paths.hpp`） |
 
 ## 进程与日志
 
-| 进程 | 日志 | PID |
-|------|------|-----|
-| UI | `/var/log/rongsu_ui{1,2,3}.log` | `/var/run/rongsu_ui.pid` |
-| Glavo | `/var/log/rongsu_glavo{1,2,3}.log` | `/var/run/rongsu_glavo.pid` |
-| Camera | `/var/log/rongsu_camera{1,2,3}.log` | `/var/run/rongsu_camera.pid` |
-| Broker | `/var/log/rongsu_broker{1,2,3}.log` | `/var/run/rongsu_broker.pid` |
-| MQTT | `/var/log/rongsu_mqtt{1,2,3}.log` | `/var/run/rongsu_mqtt.pid` |
+| 进程 | 日志目录 | PID |
+|------|---------|-----|
+| 全进程统一 | `/var/log/topic/*.log`（按专题拆分） | 各自 `/var/run/rongsu_*.pid` |
 
 各业务进程为 IPC **Client**，连中央 **Broker**（`rongsu_broker`）。
 
-**上电标记**：各进程在 `daemonize`（或 `run`）后调用 `process_log_boot_banner()`，日志中打印一行 `PROCESS_BOOT proc=... pid=...`（前后空行），可用 `grep PROCESS_BOOT /var/log/rongsu_*.log` 确认是否重新拉起。
+**上电标记**：各进程在 `daemonize`（或 `run`）后调用 `process_log_boot_banner()`，日志写入 `topic_boot_lifecycle.log`，可用 `grep PROCESS_BOOT /var/log/topic/topic_boot_lifecycle.log` 确认是否重新拉起。
 
 **时区**：`process_install_signals()` 内 `process_set_beijing_timezone()` 设置 `TZ=CST-8`（北京 / UTC+8）。WiFi 后 NTP 仍写 UTC 系统时钟；`localtime_r`、日志时间戳、历史页/录像文件名按北京时间显示。勿把系统时钟硬加 8 小时。
 
@@ -525,18 +521,18 @@ ParserManager → RingBuffer → McuLink（TCP + 串口）
 | 文件 | 职责 |
 |------|------|
 | `process_ctl.cpp` | daemonize、PID 文件、信号处理、`process_log_boot_banner` |
-| `log_rotating.cpp` | 三文件 5MB 循环日志（1→2→3→1，断电 append 恢复） |
+| （已移除）`log_rotating.cpp` | 旧的按进程三文件轮转方案，已由 `/var/log/topic` 专题日志替代 |
 | `upc_contract.hpp` §3 | 各进程 PID / 日志路径 |
 
 ## 进程配置速查
 
-| 函数 | 可执行文件 | PID 文件 | 日志（前缀，实际为 `N.log`，N=1..3） |
+| 函数 | 可执行文件 | PID 文件 | 日志 |
 |------|------------|----------|------|
-| `process_config_ui()` | `rongsu_ui` | `/var/run/rongsu_ui.pid` | `/var/log/rongsu_ui` |
-| `process_config_glavo()` | `rongsu_glavo` | `/var/run/rongsu_glavo.pid` | `/var/log/rongsu_glavo` |
-| `process_config_camera()` | `rongsu_camera` | `/var/run/rongsu_camera.pid` | `/var/log/rongsu_camera` |
+| `process_config_ui()` | `rongsu_ui` | `/var/run/rongsu_ui.pid` | `/var/log/topic/*.log` |
+| `process_config_glavo()` | `rongsu_glavo` | `/var/run/rongsu_glavo.pid` | `/var/log/topic/*.log` |
+| `process_config_camera()` | `rongsu_camera` | `/var/run/rongsu_camera.pid` | `/var/log/topic/*.log` |
 
-各进程 `main.cpp` 支持 `{start|stop|status|run}`；`start` 时 stderr/stdout 重定向到 `{log_base}N.log`（单文件上限 20MB，三文件循环；重启不清空已有文件）。
+各进程 `main.cpp` 支持 `{start|stop|status|run}`；`start` 时 stderr/stdout 重定向到 `/var/log/topic/topic_boot_lifecycle.log`，业务日志由 `rs_log` 按专题写入 `/var/log/topic/*.log`。
 
 - 启动脚本：[scripts/rongsu.sh](../scripts/rongsu.sh)
 

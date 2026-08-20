@@ -1,11 +1,13 @@
 #include "process_ctl.hpp"
-#include "log_rotating.hpp"
+#include "rs_log.hpp"
 
 #include <cstdlib>
 #include <ctime>
 #include <unistd.h>
 #include <sys/stat.h>
 #include <signal.h>
+#include <fcntl.h>
+#include <cstring>
 
 volatile sig_atomic_t g_shutdown_requested = 0;
 
@@ -69,7 +71,44 @@ void process_remove_pid(const char* pid_file) {
     unlink(pid_file);
 }
 
-int process_daemonize(const char* log_base) {
+namespace {
+
+constexpr const char* kTopicLogDir = "/var/log/topic";
+constexpr const char* kBootLogPath = "/var/log/topic/topic_boot_lifecycle.log";
+
+void ensure_topic_log_dir()
+{
+    char path[256];
+    std::snprintf(path, sizeof(path), "%s", kTopicLogDir);
+    const size_t len = std::strlen(path);
+    for(size_t i = 1; i < len; ++i) {
+        if(path[i] != '/') {
+            continue;
+        }
+        path[i] = '\0';
+        (void)mkdir(path, 0755);
+        path[i] = '/';
+    }
+    (void)mkdir(path, 0755);
+}
+
+void redirect_stdio_to_boot_log()
+{
+    ensure_topic_log_dir();
+    int fd = open(kBootLogPath, O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0644);
+    if(fd < 0) {
+        fd = open("/dev/null", O_WRONLY | O_CLOEXEC);
+    }
+    if(fd >= 0) {
+        (void)dup2(fd, STDOUT_FILENO);
+        (void)dup2(fd, STDERR_FILENO);
+        close(fd);
+    }
+}
+
+} // namespace
+
+int process_daemonize() {
     pid_t pid = fork();
     if (pid < 0) {
         return -1;
@@ -90,7 +129,7 @@ int process_daemonize(const char* log_base) {
         exit(0);
     }
 
-    log_rotating_init(log_base);
+    redirect_stdio_to_boot_log();
 
     chdir("/");
     umask(0);
@@ -102,19 +141,6 @@ void process_log_boot_banner(const char* proc_name)
     const char* name = (proc_name && proc_name[0]) ? proc_name : "?";
     const int pid = static_cast<int>(getpid());
 
-    char line[256];
-    const int n = std::snprintf(
-        line, sizeof(line),
-        "########## PROCESS_BOOT proc=%s pid=%d ##########\n", name, pid);
-    if(n <= 0) {
-        return;
-    }
-    const std::size_t len = static_cast<std::size_t>(n);
-    /* 空行 + banner + 空行；不依赖 UPC_LOG_*，daemon 后 stderr 已指向滚动日志 */
-    log_rotating_before_write(len + 2U);
-    std::fputc('\n', stderr);
-    std::fwrite(line, 1, len, stderr);
-    std::fputc('\n', stderr);
-    std::fflush(stderr);
-    log_rotating_after_write();
+    upc::log_write(upc::Level::Info, "SYS", "BOOT",
+                   "PROCESS_BOOT proc=%s pid=%d", name, pid);
 }

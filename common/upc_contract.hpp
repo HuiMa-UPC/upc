@@ -197,16 +197,13 @@
 
 struct ProcessConfig {
     const char* pid_file;
-    /** 日志路径前缀，实际文件为 {log_base}1.log ~ {log_base}3.log（20MB 轮转） */
-    const char* log_base;
     const char* name;
 };
 
-/** 每进程独立 PID 与三文件循环日志（守护进程 start 时 stderr/stdout 重定向到 log_baseN.log） */
+/** 每进程独立 PID；守护进程日志统一写入 /var/log/topic 专题文件。 */
 inline ProcessConfig process_config_ui() {
     return ProcessConfig{
         "/var/run/rongsu_ui.pid",
-        "/var/log/rongsu_ui",
         "rongsu_ui",
     };
 }
@@ -214,7 +211,6 @@ inline ProcessConfig process_config_ui() {
 inline ProcessConfig process_config_glavo() {
     return ProcessConfig{
         "/var/run/rongsu_glavo.pid",
-        "/var/log/rongsu_glavo",
         "rongsu_glavo",
     };
 }
@@ -222,7 +218,6 @@ inline ProcessConfig process_config_glavo() {
 inline ProcessConfig process_config_camera() {
     return ProcessConfig{
         "/var/run/rongsu_camera.pid",
-        "/var/log/rongsu_camera",
         "rongsu_camera",
     };
 }
@@ -230,7 +225,6 @@ inline ProcessConfig process_config_camera() {
 inline ProcessConfig process_config_broker() {
     return ProcessConfig{
         "/var/run/rongsu_broker.pid",
-        "/var/log/rongsu_broker",
         "rongsu_broker",
     };
 }
@@ -238,7 +232,6 @@ inline ProcessConfig process_config_broker() {
 inline ProcessConfig process_config_xfr() {
     return ProcessConfig{
         "/var/run/rongsu_xfr.pid",
-        "/var/log/rongsu_xfr",
         "rongsu_xfr",
     };
 }
@@ -246,7 +239,6 @@ inline ProcessConfig process_config_xfr() {
 inline ProcessConfig process_config_visual() {
     return ProcessConfig{
         "/var/run/rongsu_visual.pid",
-        "/var/log/rongsu_visual",
         "rongsu_visual",
     };
 }
@@ -254,7 +246,6 @@ inline ProcessConfig process_config_visual() {
 inline ProcessConfig process_config_mqtt() {
     return ProcessConfig{
         "/var/run/rongsu_mqtt.pid",
-        "/var/log/rongsu_mqtt",
         "rongsu_mqtt",
     };
 }
@@ -262,7 +253,6 @@ inline ProcessConfig process_config_mqtt() {
 inline ProcessConfig process_config_media() {
     return ProcessConfig{
         "/var/run/rongsu_media.pid",
-        "/var/log/rongsu_media",
         "rongsu_media",
     };
 }

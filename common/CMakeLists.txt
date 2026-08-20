@@ -12,7 +12,6 @@ set(UPC_COMMON_TARGET upc_common)
 set(UPC_COMMON_SOURCES
     # process
     ${CMAKE_CURRENT_SOURCE_DIR}/process/process_ctl.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/process/log_rotating.cpp
     # debug
     ${CMAKE_CURRENT_SOURCE_DIR}/debug/rs_log.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/debug/upc_sys_monitor.cpp
@@ -86,7 +85,7 @@ endif()
 
 if(UPC_DEBUG)
     target_compile_definitions(${UPC_COMMON_TARGET} PUBLIC UPC_DEBUG=1)
-    message(STATUS "upc_common: logging ENABLED (wall-clock stderr)")
+    message(STATUS "upc_common: logging ENABLED (/var/log/topic)")
 else()
     target_compile_definitions(${UPC_COMMON_TARGET} PUBLIC UPC_DEBUG=0)
     message(STATUS "upc_common: logging DISABLED")
