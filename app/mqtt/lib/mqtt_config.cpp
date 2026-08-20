@@ -131,7 +131,9 @@ std::string MqttConfig::topic_ota_progress() const
 //9
  // "SNOWPOD-050A8F80DD001000"
  // "d384efe6bd259bc4b5d471641b0611486a16fae05404dddb68c78428dbe8f009"
-
+//Guobin
+//"SNOWPOD-050A8F7EFF001000"
+//"7cf74dfbe68ac0941afba3a89c60b2476f6e20b8815070ccd9f158a28608d370"
 
 
 

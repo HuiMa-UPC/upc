@@ -310,7 +310,7 @@ bool DeviceActivationClient::activate(ActivatedMqttCredential& out, std::string&
 
     int status = 0;
     std::string init_response;
-    if(!post_json(config_.activation_base_url, "/internal/device/activate/init",
+    if(!post_json(config_.activation_base_url, "/api/v1/devices/activate/init",
                   init_body, init_timestamp, init_nonce, status, init_response, error)) {
         return false;
     }
@@ -353,7 +353,7 @@ bool DeviceActivationClient::activate(ActivatedMqttCredential& out, std::string&
         "\",\"signature\":\"" + hex_encode(signature, signature_size) + "\"}";
 
     std::string complete_response;
-    if(!post_json(config_.activation_base_url, "/internal/device/activate",
+    if(!post_json(config_.activation_base_url, "/api/v1/devices/activate",
                   complete_body, complete_timestamp, complete_nonce,
                   status, complete_response, error)) {
         return false;

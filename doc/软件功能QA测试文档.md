@@ -1,11 +1,11 @@
 # Snowpod 软件功能 QA 测试文档
 
-> 文档版本：v1.2  
+> 文档版本：v1.3  
 > 适用对象：设备端软件 `rongsu_ui`、`rongsu_glavo`、`rongsu_camera`、`rongsu_media`、`rongsu_xfr`、`rongsu_visual`、`rongsu_mqtt`  
 > 测试类型：功能测试、基础异常测试、跨进程联调  
-> 更新日期：2026-08-12
+> 更新日期：2026-08-20
 
-## 本次更新说明（v1.2）
+## 本次更新说明（v1.3）
 
 本次版本主要更新以下内容，请在回归时优先关注：
 
@@ -17,6 +17,10 @@
 6. **打印启动链路优化（OVF）**：Prepare 阶段复用解析器会话，减少 Start 阶段重复 `open_file` 开销，重点回归“大 OVF 点击开始后首条串口起印指令时延”。
 7. **环境传感器协议升级**：`0xA5/0x9B/TLV 0x02` 支持新旧长度兼容（旧版 13 字节、新版 21 字节），新增 `PM1.0 / PM10 / 滤芯气压 / 舱内2气压` 解析。
 8. **传感器日志去重与口径统一**：移除重复的 `RX SENSOR OK` 详细日志，统一以 `sensor:` Info 日志输出；气压按协议口径 `0.1kPa` 解析并展示。
+9. **相机预览（PHX）RGA streaming 优化**：预览分块默认 512 行，新增 `import/mmap` 缓存与源直裁优先（失败回落 memcpy 分块），验证 `rga_path=1` 下转换耗时与稳定性。
+10. **跨工具链条件编译边界修复**：`improcess/imsetColorSpace` 等仅在 `UPC_UI_RGA_STREAMING=1` 编译，需回归 `k1mini` 与 `phx` 两套工具链构建结果。
+11. **预览日志口径增强**：新增/保留 `decode 5s` 统计（`ok/fail/no_frame/cvt_avg_us/rga`），用于对比优化前后性能。
+12. **预览与 UI 动画并发场景**：监控页存在实时大图刷新与滑动解锁/弹窗动画竞争，需补充流畅度与掉帧观测。
 
 ## 1. 测试范围与结论口径
 
@@ -37,6 +41,7 @@
 | 项目 | 要求 |
 | --- | --- |
 | 设备 | 已连接显示屏、MCU、相机；涉及运动/激光的用例必须在安全工装和授权环境执行 |
+| 工具链 | 至少准备 `k1mini-buildroot-toolchain` 与 `phx-buildroot-toolchain` 两套构建环境，用于跨工具链编译回归 |
 | 系统服务 | 使用 `scripts/rongsu.sh start` 启动；启动顺序为 Glavo、Camera、Media、Xfer、Visual、MQTT、UI |
 | 网络 | Wi-Fi 用例准备一个正确密码热点和一个错误密码场景；Xfer/MQTT 用例要求测试机与设备处于可达网络 |
 | 文件 | 准备有效 `.gcode`、有效 `.ovf`、损坏/不支持格式文件；准备 USB 存储介质 |
@@ -116,6 +121,9 @@
 | F-CAM-03 | 层间录像完成 | 正常完成含多层作业。 | 生成 PNG 序列、缩略图和历史清单；Media 发 manifest 通知后 UI 进入结果页。 |
 | F-CAM-04 | 层间录像终止/零帧 | 分别在有帧和刚开始未产生帧时终止。 | 有帧作业保留终止历史；零帧也必须退出打印界面，不能永久停在打印中。 |
 | F-CAM-05 | 分阶段 finalize 联动 | 开启 Print H264 Record，执行“有帧后终止”并进入取件流程；观察 timelapse 与 print_h264 状态变化。 | Timelapse 可先完成并可播放；H264 完成后再清 `print_video_pending`，最终 print_h264.mp4 与 print_thumb 正常落盘。 |
+| F-CAM-06 | PHX 预览 RGA streaming 稳定性 | 使用 `phx` 构建并进入监控预览，持续运行 ≥ 2 分钟；检查 `topic_ui_preview.log`。 | `decode ready` 显示 `rga_path=1`；`decode 5s` 持续 `ok≈150/5s`、`fail=0`、`no_frame=0`、`rga=1`；`cvt_avg_us` 稳定（建议基线约 6~8ms）。 |
+| F-CAM-07 | 预览并发动画流畅度 | 监控预览运行中反复触发滑动解锁、弹窗切换、页面进出动画；同时观察 `decode 5s` 与主观流畅度。 | 预览不中断且 `fail=0`；动画无持续性卡顿（允许偶发轻微抖动）；若出现明显掉帧需记录时段并关联 `cvt_max_us/loop_max_us` 峰值。 |
+| F-CAM-08 | 跨工具链编译边界 | 分别使用 `k1mini` 与 `phx` 工具链执行全量构建。 | 两套构建均成功；`k1mini` 不应出现 `improcess/imsetColorSpace/IM_SYNC` 相关编译或链接错误；`phx` 保持预览 streaming 路径可用。 |
 | F-HIST-01 | 历史分组与状态 | 打开 Print History，准备完成和中断的多条记录。 | 按开始时间倒序、按自然日分组；状态、时长、耗材和缩略图与清单一致。 |
 | F-HIST-02 | 延时摄影播放 | 在 Timelapse 点击缩略图，执行播放、暂停、拖动、关闭。 | 打开全屏播放器；拖动时显示预览，松手后定位主画面；关闭后回到 History。 |
 | F-HIST-02A | 长视频 MP4 稳定性 | 选择长时 MP4（建议 >= 10 分钟），连续执行播放/暂停、快速拖动、来回切页（History <-> Timelapse）各 10 次。 | 不应出现黑屏、明显抖动积累或进程崩溃；返回页面后播放器可继续打开与操作。 |
@@ -175,7 +183,7 @@
 
 | 优先级 | 必测范围 | 触发条件 |
 | --- | --- | --- |
-| P0 | F-BOOT、F-FILE、F-PRINT、F-CAM、F-HIST、F-SET-01~05 | 任意 UI、IPC、Glavo、Camera、Media、文件清单改动 |
+| P0 | F-BOOT、F-FILE、F-PRINT、F-CAM、F-HIST、F-SET-01~05 | 任意 UI、IPC、Glavo、Camera、Media、文件清单改动；涉及 `camera_preview` 时需加测 F-CAM-06/07/08 |
 | P1 | F-XFR、F-MQTT、F-SET-06~07 | 网络、传输、云端、OTA、认证相关改动 |
 | P2 | F-DBG、视觉识别、视觉效果/布局 | 调试、协议、OpenCV、UI 样式改动 |
 
