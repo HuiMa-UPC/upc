@@ -1252,7 +1252,8 @@ void plate_show_notinserted(void)
     slide_cfg.on_unlocked   = on_plate_swipe_open;
     slide_cfg.user_data     = nullptr;
     slide_cfg.track_w       = slide_w;                         /* 贴合容器右边缘 */
-    slide_cfg.track_h       = USER_BTN_DOOR_ICON_SZ * 4 / 3;   /* 加高，避免过扁（与首页开门滑块一致） */
+    slide_cfg.track_h       = USER_DOOR_SLIDE_H;               /* 与首页开门滑块一致（1280 档 80，圆头 64 内缩 8） */
+    slide_cfg.knob_sz       = USER_DOOR_SLIDE_KNOB;
     slide_cfg.custom_accent = true;
     slide_cfg.accent_color  = user_color_status_err;
     ui_slide_unlock_t *slide = ui_slide_unlock_create(col, &slide_cfg);

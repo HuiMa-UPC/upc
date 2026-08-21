@@ -30,6 +30,10 @@ typedef struct {
     void                 *user_data;
     int32_t               track_w;     /**< 轨道宽，<=0 用 USER_SLIDE_W */
     int32_t               track_h;     /**< 轨道高，<=0 用 USER_SLIDE_H */
+    /** 圆头直径，<=0 时沿用「按 track_h 推导」的老规则（见 .cpp）。显式给值即同时
+     *  定下内缩量 = (track_h - knob_sz)/2——稿上开门滑块与打印态取件胶囊都是内缩 8，
+     *  而老规则在 1280 档只能推出 4。 */
+    int32_t               knob_sz;
     bool                  custom_accent; /**< true 时用 accent_color 替代默认主色 */
     lv_color_t            accent_color;  /**< knob/解锁文字配色（custom_accent=true 生效） */
     /** knob 中心图标（A8 掩膜），NULL = 默认的 ic_door_open。 */

@@ -241,9 +241,12 @@ ui_slide_unlock_t *ui_slide_unlock_create(lv_obj_t *parent,
 
     const int32_t track_w = cfg->track_w > 0 ? cfg->track_w : USER_SLIDE_W;
     const int32_t track_h = cfg->track_h > 0 ? cfg->track_h : USER_SLIDE_H;
-    const int32_t knob_sz = (cfg->track_h > 0)
-        ? (track_h - (USER_SLIDE_H - USER_SLIDE_KNOB_SZ))
-        : USER_SLIDE_KNOB_SZ;
+    /* 圆头直径：调用方显式给值优先（同时也就定下了内缩量）；否则沿用老规则——
+     * 按 track_h 与 USER_SLIDE_H/USER_SLIDE_KNOB_SZ 的差推导。 */
+    const int32_t knob_sz = (cfg->knob_sz > 0)
+        ? cfg->knob_sz
+        : ((cfg->track_h > 0) ? (track_h - (USER_SLIDE_H - USER_SLIDE_KNOB_SZ))
+                              : USER_SLIDE_KNOB_SZ);
     self->knob_sz = knob_sz;
 
     const int32_t inset = (track_h - knob_sz) / 2;

@@ -86,6 +86,8 @@ static const ui_theme_t s_theme_1920 = {
 
     /* 用户 Shell */
     /* user_sidebar_w         */ 120,
+    /* user_nav_item_sz       */ 80,   /* == 旧的 sidebar_w - 2*pad_sm，观感不变 */
+    /* user_nav_gap           */ 100,  /* 复现旧 SPACE_EVENLY 在 1080 高下的项距 180 */
     /* user_nav_item_h        */ 96,
     /* user_nav_icon_sz       */ 56,
     /* user_nav_icon_pad      */ 12,
@@ -106,6 +108,11 @@ static const ui_theme_t s_theme_1920 = {
     /* user_home_device_w     */ 560,
     /* user_home_device_h     */ 660,
     /* user_home_action_row_w */ 636,
+    /* user_home_card_w       */ 540,  /* == 旧的 LV_PCT(30) × 内容区 1800，观感不变 */
+    /* user_home_card_top     */ 320,  /* == 旧的 USER_TOPBAR_H + USER_PAD_LG*2 */
+    /* user_home_cabin_w      */ 504,  /* == 旧的 LV_PCT(28) × 内容区 1800 */
+    /* user_home_cabin_lead_w */ 270,  /* 稿 180@1280 × 1.5 */
+    /* user_home_cabin_pad_right */ 64,   /* == 旧的 USER_PAD_LG */
     /* user_back_btn_w        */ 180,
     /* user_back_btn_h        */ 64,
     /* user_sensor_strip_h    */ 120,
@@ -130,6 +137,9 @@ static const ui_theme_t s_theme_1920 = {
     /* user_slide_w               */ 520,
     /* user_slide_h               */ 80,
     /* user_slide_knob_sz         */ 68,
+    /* user_door_slide_w          */ 693,  /* == 旧的 user_slide_w*4/3，观感不变 */
+    /* user_door_slide_h          */ 133,  /* == 旧的 user_btn_door_icon_sz*4/3 */
+    /* user_door_slide_knob       */ 121,  /* == 旧的派生结果（内缩 6） */
     /* user_spinner_sz            */ 104,
     /* user_spinner_stroke        */ 8,
     /* user_progress_w            */ 520,
@@ -143,11 +153,13 @@ static const ui_theme_t s_theme_1920 = {
 
     /* 打印态浮层（稿 1280 档 ×1.5） */
     /* user_print_card_w          */ 686,
+    /* user_notice_card_w         */ 686,  /* == 拆分前的共用值，观感不变 */
     /* user_print_thumb_sz        */ 135,
     /* user_print_ctl_btn         */ 96,
     /* user_print_pill_w          */ 600,
     /* user_print_badge_sz        */ 24,
     /* user_print_prog_h          */ 12,
+    /* user_env_col_w             */ 0,    /* 0 = 自适应：本档装不下稿的等比列宽 */
 
     /* 打印历史页（稿 1280 档 ×1.5） */
     /* user_hist_tab_h            */ 60,
@@ -166,6 +178,7 @@ static const ui_theme_t s_theme_1920 = {
     /* 字体（user） */
     /* font_user_value    */ &lv_font_montserrat_48,
     /* font_user_text     */ &lv_font_montserrat_24,
+    /* font_user_text_sm  */ &lv_font_montserrat_24,  /* == font_user_text，本档观感不变 */
     /* font_user_caption  */ &lv_font_montserrat_18,
     /* font_user_caption_sm */ &lv_font_montserrat_16,
     /* font_user_icon     */ &lv_font_montserrat_32,
@@ -219,16 +232,21 @@ static const ui_theme_t s_theme_1280 = {
     /* ui_nav_active_border   */ 6,
 
     /* 用户 Shell */
-    /* user_sidebar_w         */ 80,
+    /* user_sidebar_w         */ 128,  /* 稿 5339:27264：16 + 96 + 16 */
+    /* user_nav_item_sz       */ 96,   /* 稿值 */
+    /* user_nav_gap           */ 16,   /* 稿值 */
     /* user_nav_item_h        */ 68,
-    /* user_nav_icon_sz       */ 40,
+    /* user_nav_icon_sz       */ 59,   /* 令字形上屏 48（稿值）：48 ÷ (52/64) */
     /* user_nav_icon_pad      */ 8,
     /* user_topbar_h          */ 128,
     /* user_topbar_pad_hor    */ 28,
     /* user_topbar_pad_ver    */ 20,
-    /* user_pad               */ 28,
-    /* user_pad_sm            */ 14,
-    /* user_pad_lg            */ 44,
+    /* 间距梯度取稿上的 16/24/32（多点交叉验证：16 = 侧栏项距/胶囊间距/CABIN 行距/
+     * 卡片内 gap；24 = HOME 卡行距/CABIN 标题→线→数据/消息卡内边距；32 = 首页左边距/
+     * 历史页 Tab 间距/各浮层的屏幕右下边距）。1024/1920 两档保持原值不动。 */
+    /* user_pad               */ 24,
+    /* user_pad_sm            */ 16,
+    /* user_pad_lg            */ 32,
     /* user_radius            */ 14,
     /* user_btn_radius        */ 8,
     /* user_btn_primary_w     */ 152,
@@ -239,7 +257,12 @@ static const ui_theme_t s_theme_1280 = {
     /* user_status_dot_sz     */ 12,
     /* user_home_device_w     */ 380,
     /* user_home_device_h     */ 440,
-    /* user_home_action_row_w */ 424,
+    /* user_home_action_row_w */ 386,  /* 稿值，不再补 10% */
+    /* user_home_card_w       */ 354,  /* 稿值 */
+    /* user_home_card_top     */ 241,  /* 稿值 */
+    /* user_home_cabin_w      */ 294,  /* 稿值 */
+    /* user_home_cabin_lead_w */ 180,  /* 稿值 */
+    /* user_home_cabin_pad_right */ 40,   /* 稿值 */
     /* user_back_btn_w        */ 128,
     /* user_back_btn_h        */ 44,
     /* user_sensor_strip_h    */ 84,
@@ -264,6 +287,9 @@ static const ui_theme_t s_theme_1280 = {
     /* user_slide_w               */ 360,
     /* user_slide_h               */ 56,
     /* user_slide_knob_sz         */ 48,
+    /* user_door_slide_w          */ 400,  /* 稿值 */
+    /* user_door_slide_h          */ 80,   /* 稿值 */
+    /* user_door_slide_knob       */ 64,   /* 稿值（内缩 8） */
     /* user_spinner_sz            */ 70,
     /* user_spinner_stroke        */ 6,
     /* user_progress_w            */ 360,
@@ -277,12 +303,14 @@ static const ui_theme_t s_theme_1280 = {
 
     /* 打印态浮层（稿 3588:8735 原生 1280 稿；横向直接取稿值，
      * 纵向按屏高 720/800 折 0.9） */
-    /* user_print_card_w          */ 458,
-    /* user_print_thumb_sz        */ 90,
+    /* user_print_card_w          */ 416,  /* 稿值，不再补 10% */
+    /* user_notice_card_w         */ 400,  /* 稿值（与 stats-card 的 416 不同） */
+    /* user_print_thumb_sz        */ 100,  /* 稿值（原 90 是 720/800 折算的残留） */
     /* user_print_ctl_btn         */ 64,
     /* user_print_pill_w          */ 400,
     /* user_print_badge_sz        */ 16,
     /* user_print_prog_h          */ 8,
+    /* user_env_col_w             */ 64,   /* 稿值（caption 降到 caption_sm 后四列都进） */
 
     /* 打印历史页（稿 4366:5400 原生 1280 档，直接取稿值） */
     /* user_hist_tab_h            */ 40,
@@ -301,6 +329,7 @@ static const ui_theme_t s_theme_1280 = {
     /* 字体（user） */
     /* font_user_value    */ &lv_font_montserrat_32,
     /* font_user_text     */ &lv_font_montserrat_18,
+    /* font_user_text_sm  */ &lv_font_montserrat_16,  /* 稿值 */
     /* font_user_caption  */ &lv_font_montserrat_14,
     /* font_user_caption_sm */ &lv_font_montserrat_12,
     /* font_user_icon     */ &lv_font_montserrat_24,
@@ -361,6 +390,8 @@ static const ui_theme_t s_theme_1024 = {
 
     /* 用户 Shell */
     /* user_sidebar_w         */ 80,
+    /* user_nav_item_sz       */ 58,   /* == 旧的 sidebar_w - 2*pad_sm，观感不变 */
+    /* user_nav_gap           */ 44,   /* 复现旧 SPACE_EVENLY 在 600 高下的项距 102 */
     /* user_nav_item_h        */ 72,
     /* user_nav_icon_sz       */ 54,
     /* user_nav_icon_pad      */ 8,
@@ -381,6 +412,11 @@ static const ui_theme_t s_theme_1024 = {
     /* user_home_device_w     */ 304,
     /* user_home_device_h     */ 352,
     /* user_home_action_row_w */ 339,
+    /* user_home_card_w       */ 283,  /* == 旧的 LV_PCT(30) × 内容区 944，观感不变 */
+    /* user_home_card_top     */ 168,  /* == 旧的 USER_TOPBAR_H + USER_PAD_LG*2 */
+    /* user_home_cabin_w      */ 264,  /* == 旧的 LV_PCT(28) × 内容区 944 */
+    /* user_home_cabin_lead_w */ 144,  /* 稿 180@1280 × 0.8 */
+    /* user_home_cabin_pad_right */ 36,   /* == 旧的 USER_PAD_LG */
     /* user_back_btn_w        */ 102,
     /* user_back_btn_h        */ 40,
     /* user_sensor_strip_h    */ 68,
@@ -405,6 +441,9 @@ static const ui_theme_t s_theme_1024 = {
     /* user_slide_w               */ 288,
     /* user_slide_h               */ 48,
     /* user_slide_knob_sz         */ 40,
+    /* user_door_slide_w          */ 384,  /* == 旧的 user_slide_w*4/3，观感不变 */
+    /* user_door_slide_h          */ 72,   /* == 旧的 user_btn_door_icon_sz*4/3 */
+    /* user_door_slide_knob       */ 64,   /* == 旧的派生结果（内缩 4） */
     /* user_spinner_sz            */ 57,
     /* user_spinner_stroke        */ 5,
     /* user_progress_w            */ 288,
@@ -418,11 +457,13 @@ static const ui_theme_t s_theme_1024 = {
 
     /* 打印态浮层（稿 1280 档 ×0.8） */
     /* user_print_card_w          */ 366,
+    /* user_notice_card_w         */ 366,  /* == 拆分前的共用值，观感不变 */
     /* user_print_thumb_sz        */ 76,
     /* user_print_ctl_btn         */ 51,
     /* user_print_pill_w          */ 320,
     /* user_print_badge_sz        */ 13,
     /* user_print_prog_h          */ 6,
+    /* user_env_col_w             */ 0,    /* 0 = 自适应：本档 51 装不下 Humidity/101.3 kpa */
 
     /* 打印历史页（稿 1280 档 ×0.8） */
     /* user_hist_tab_h            */ 32,
@@ -441,6 +482,7 @@ static const ui_theme_t s_theme_1024 = {
     /* 字体（user） */
     /* font_user_value    */ &lv_font_montserrat_24,
     /* font_user_text     */ &lv_font_montserrat_16,
+    /* font_user_text_sm  */ &lv_font_montserrat_16,  /* == font_user_text，本档观感不变 */
     /* font_user_caption  */ &lv_font_montserrat_14,
     /* font_user_caption_sm */ &lv_font_montserrat_12,
     /* font_user_icon     */ &lv_font_montserrat_20,
@@ -561,6 +603,7 @@ const lv_font_t *ui_font_body(void)        { return g_ui->font_body; }
 const lv_font_t *ui_font_title(void)       { return g_ui->font_title; }
 const lv_font_t *user_font_value(void)     { return g_ui->font_user_value; }
 const lv_font_t *user_font_text(void)      { return g_ui->font_user_text; }
+const lv_font_t *user_font_text_sm(void)   { return g_ui->font_user_text_sm; }
 const lv_font_t *user_font_caption(void)   { return g_ui->font_user_caption; }
 const lv_font_t *user_font_caption_sm(void){ return g_ui->font_user_caption_sm; }
 const lv_font_t *user_font_icon(void)      { return g_ui->font_user_icon; }

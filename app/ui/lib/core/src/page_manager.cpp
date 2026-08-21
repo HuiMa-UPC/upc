@@ -41,12 +41,16 @@ void PageManager::init(lv_obj_t* screen) {
     lv_obj_set_width(menu_panel_, USER_SIDEBAR_W);
     lv_obj_set_height(menu_panel_, lv_pct(100));
     lv_obj_set_flex_flow(menu_panel_, LV_FLEX_FLOW_COLUMN);
-    /* 5 个图标沿竖轴均匀分布；首尾再加内边距，使最上/最下留白略多于图标间距 */
-    lv_obj_set_flex_align(menu_panel_, LV_FLEX_ALIGN_SPACE_EVENLY, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    /* 稿 5339:27264 的 Home bar 是「竖向居中 + 固定 USER_NAV_GAP 间距」，不是按屏高
+     * 均分：1280 档 5 枚 96 的项加 4 道 16 的缝共 544，居中落在 800 高的屏上。
+     * pad_top 与 pad_bottom 取同一个值，所以 CENTER 在内容区里居中等价于在整条侧栏里
+     * 居中，这两个 padding 只作最小留白（项撑不满侧栏时不起作用）。 */
+    lv_obj_set_flex_align(menu_panel_, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_set_style_pad_top(menu_panel_, USER_PAD, 0);
     lv_obj_set_style_pad_bottom(menu_panel_, USER_PAD, 0);
-    lv_obj_set_style_pad_hor(menu_panel_, USER_PAD_SM, 0);
-    lv_obj_set_style_pad_row(menu_panel_, 0, 0);
+    /* 左右内边距由「侧栏宽 − 项边长」反推：稿上这段是 16@1280（128 = 16+96+16）。 */
+    lv_obj_set_style_pad_hor(menu_panel_, (USER_SIDEBAR_W - USER_NAV_ITEM_SZ) / 2, 0);
+    lv_obj_set_style_pad_row(menu_panel_, USER_NAV_GAP, 0);
     lv_obj_set_style_bg_color(menu_panel_, user_color_panel, 0);
     /* 摄像头整屏时侧栏背后是视频，图标底色由当前帧决定：亮帧下合成色会盖过
      * user_color_icon_off（#555555），未选中图标糊掉。面板自己吃掉大部分不透明度，
@@ -117,8 +121,9 @@ void PageManager::init(lv_obj_t* screen) {
 static lv_obj_t* make_menu_button(lv_obj_t* parent, void* page_raw,
                                   lv_event_cb_t cb) {
     lv_obj_t* btn = lv_btn_create(parent);
-    /* 正方形按钮：按压遮罩是正方形（边长 = 侧栏可用宽度） */
-    const int32_t nav_btn_sz = USER_SIDEBAR_W - 2 * USER_PAD_SM;
+    /* 正方形按钮：按压遮罩是正方形，边长直接取稿上导航项的边长（96@1280）；
+     * 侧栏两侧那段内边距反过来由 USER_SIDEBAR_W 与它的差算出，见 PageManager::init。 */
+    const int32_t nav_btn_sz = USER_NAV_ITEM_SZ;
     lv_obj_set_size(btn, nav_btn_sz, nav_btn_sz);
     lv_obj_set_style_bg_opa(btn, LV_OPA_TRANSP, 0);
     lv_obj_set_style_bg_opa(btn, LV_OPA_TRANSP, LV_STATE_CHECKED);
@@ -131,8 +136,9 @@ static lv_obj_t* make_menu_button(lv_obj_t* parent, void* page_raw,
     lv_obj_set_style_shadow_width(btn, 0, 0);
     lv_obj_set_style_radius(btn, USER_RADIUS, 0);
     lv_obj_set_style_pad_all(btn, USER_NAV_ICON_PAD, 0);
-    /* 选中态那层渐变按蒙版原尺寸（64×64）建，比按钮大（1024 档 58、1280 档 52），
-     * 不放开溢出会先被裁掉再缩放，字形四角就缺了。见 register_page 的说明。 */
+    /* 选中态那层渐变按蒙版原尺寸（64×64）建，在窄侧栏的档位上比按钮还大（1024 档
+     * 按钮 58），不放开溢出会先被裁掉再缩放，字形四角就缺了。1280 档按钮已加到 96、
+     * 不再溢出，但这个标志要留着给其余档位。见 register_page 的说明。 */
     lv_obj_add_flag(btn, LV_OBJ_FLAG_OVERFLOW_VISIBLE);
     lv_obj_add_event_cb(btn, cb, LV_EVENT_CLICKED, page_raw);
     return btn;
