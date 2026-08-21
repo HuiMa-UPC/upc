@@ -200,6 +200,7 @@ private:
     MqttCredentialStore credential_store_{""};
     bool credentials_ready_ = false;
     uint64_t next_activation_ms_ = 0;
+    uint32_t activation_fail_count_ = 0;
     std::thread activation_thread_;
     std::mutex activation_mtx_;
     bool activation_running_ = false;

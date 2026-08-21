@@ -30,7 +30,6 @@ namespace upc::mqtt {
 namespace {
 
 constexpr uint64_t kReconnectIntervalMs = 3000;
-constexpr uint64_t kActivationRetryIntervalMs = 5000;
 constexpr uint64_t kTelemetryPrintingIntervalMs = 2000;
 constexpr uint64_t kTelemetryIdleIntervalMs = 30000;
 constexpr uint64_t kFirmwareQueryIntervalMs = 10000;
@@ -550,6 +549,20 @@ bool is_bin_name(const std::string& name)
     return upper.rfind(".BIN") == upper.size() - 4;
 }
 
+uint64_t activation_retry_interval_ms(uint32_t fail_count)
+{
+    if(fail_count <= 1) {
+        return 5000;   // 第一次失败后：5s
+    }
+    if(fail_count == 2) {
+        return 10000;  // 第二次失败后：10s
+    }
+    if(fail_count == 3) {
+        return 30000;  // 第三次失败后：30s
+    }
+    return 60000;      // 第四次及以后：60s
+}
+
 } // namespace
 
 MqttService::MqttService() = default;
@@ -960,15 +973,19 @@ void MqttService::poll_activation()
                 cfg_.password = credential.mqtt_password;
                 cfg_.broker_uri = normalise_broker_uri(credential.mqtt_endpoint);
                 credentials_ready_ = true;
+                activation_fail_count_ = 0;
                 UPC_LOG_MQTT_SERVICE(Info, "device activation succeeded; MQTT credential saved");
                 return;
             }
             error = "激活成功但保存 MQTT 凭据失败: " + save_error;
         }
-        next_activation_ms_ = monotonic_ms() + kActivationRetryIntervalMs;
-        UPC_LOG_MQTT_SERVICE(Warn, "device activation failed: %s; retry in %llums",
+        ++activation_fail_count_;
+        const uint64_t retry_ms = activation_retry_interval_ms(activation_fail_count_);
+        next_activation_ms_ = monotonic_ms() + retry_ms;
+        UPC_LOG_MQTT_SERVICE(Warn, "device activation failed: %s; retry #%u in %llums",
                              error.c_str(),
-                             static_cast<unsigned long long>(kActivationRetryIntervalMs));
+                             activation_fail_count_,
+                             static_cast<unsigned long long>(retry_ms));
         return;
     }
 
