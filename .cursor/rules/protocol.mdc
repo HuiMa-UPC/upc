@@ -12,3 +12,15 @@ alwaysApply: false
 - 串口（`5A A5`）：`doc/SOC_-_MCU串口通信协议.xlsx`；ACK 开关 `GLAVO_SERIAL_ACK_ENABLE`（`device_config.hpp`）
 - **禁止**依赖 glavo/parser/ui/lvgl/ipc
 - I/O 与状态机留在 `app/glavo/McuLink`
+
+## CMD=0x0A（紧急指令）防误判规则
+
+- `DATA[1] Stop`：`1=急停，0=不修改`
+- `DATA[2] Pause`：`2=暂停，1=继续，0=不修改`
+- `DATA[3] Red`：`2=激光，1=红光，0=不修改`
+
+实现要求（强制）：
+
+1. `app/protocol/tcp/tcp_tx.*` 中 `0x0A` 组帧必须按原值透传（`payload[i] = code`）。
+2. 严禁把 `Pause/Red` 当 bool 处理，禁止 `payload[i] = code ? 1u : 0u;`。
+3. 若上层需要 bool 语义（如 UI 的 on/off），必须在 `glavo` 层显式映射到协议枚举值后再下发。

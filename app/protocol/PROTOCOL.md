@@ -37,6 +37,21 @@ target_link_libraries(my_target PRIVATE upc::protocol)
 - **无 I/O**：不含 socket/串口 fd 操作
 - 业务状态机留在 `glavo/McuLink`
 
+## TCP CMD=0x0A 编码口径（重点）
+
+`tcp/tcp_tx.*` 里 `CMD=0x0A` 的 `payload[0..2]` 必须按协议枚举值原样写入，不得 bool 化：
+
+- `payload[0]`（Stop）：`1=急停，0=不修改`
+- `payload[1]`（Pause）：`2=暂停，1=继续，0=不修改`
+- `payload[2]`（Red）：`2=激光，1=红光，0=不修改`
+
+注意：
+
+- 禁止写法：`payload[i] = code ? 1u : 0u;`
+- 正确写法：`payload[i] = code;`
+
+否则会把 `2` 误压为 `1`，导致“激光/暂停”语义失真。
+
 ## 相关
 
 - [glavo/GLAVO.md](../glavo/GLAVO.md) · [parser/PARSER.md](../parser/PARSER.md)

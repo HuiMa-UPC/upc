@@ -73,6 +73,7 @@ lv_obj_t *g_laser_power_lbl     = nullptr;      /**< 功率读数 */
 lv_obj_t *g_laser_power_ta      = nullptr;      /**< 设置功率输入 */
 lv_obj_t *g_laser_type_lbl      = nullptr;      /**< 激光器类型显示区（JFSC / AL 200W / …） */
 lv_obj_t *g_laser_current_lbl   = nullptr;      /**< 电流读数 */
+lv_obj_t *g_laser_redlight_seg  = nullptr;      /**< 红光模式开关（On/Off） */
 uint8_t   g_laser_type_code     = 0;            /**< 最近一次上报的激光器型号（0=未知 1=JFSC 2=AL） */
 
 lv_obj_t *g_sensor_val[7] = { nullptr };
@@ -653,7 +654,7 @@ void on_galvo_home(lv_event_t *)
     ui::DebugMsgProxy::instance().send_galvo_home();
 }
 
-void on_redlight_changed(lv_event_t *e)
+void on_red_laser_changed(lv_event_t *e)
 {
     lv_obj_t *seg = lv_event_get_target_obj(e);
     ui::DebugMsgProxy::instance().send_galvo_red_light(
@@ -803,7 +804,7 @@ lv_obj_t *build_galvo_card(lv_obj_t *parent)
     lv_obj_set_style_text_font(rlcap, user_font_caption(), 0);
     const char *onoff[2] = { "On", "Off" };
     lv_obj_t *rl_seg = ui_user_make_segmented(rl_row, onoff, 2, 1);
-    lv_obj_add_event_cb(rl_seg, on_redlight_changed, LV_EVENT_VALUE_CHANGED, nullptr);
+    lv_obj_add_event_cb(rl_seg, on_red_laser_changed, LV_EVENT_VALUE_CHANGED, nullptr);
     seg_fit_content(rl_seg);
     style_debug_seg(rl_seg);
 
@@ -1770,6 +1771,13 @@ lv_obj_t *build_laser_tab(lv_obj_t *body)
     lv_obj_t *cancelrow = make_action_row(pc_card, "Cancel Power");
     make_ghost_button(cancelrow, "Cancel", on_laser_power_cancel);
 
+    lv_obj_t *redrow = make_action_row(pc_card, "Red Laser Mode");
+    const char *onoff[2] = { "On", "Off" };
+    g_laser_redlight_seg = ui_user_make_segmented(redrow, onoff, 2, 1);
+    lv_obj_add_event_cb(g_laser_redlight_seg, on_red_laser_changed, LV_EVENT_VALUE_CHANGED, nullptr);
+    seg_fit_content(g_laser_redlight_seg);
+    style_debug_seg(g_laser_redlight_seg);
+
     lv_obj_t *ops_card = make_laser_card(right, "Alarm Ops");
     lv_obj_t *opsrow = make_action_row(ops_card, "Laser Alarm Reset");
     lv_obj_t *rst = lv_button_create(opsrow);
@@ -1877,6 +1885,10 @@ void bind_debug_callbacks()
                 lv_obj_set_style_bg_color(g_laser_status_dot[i],
                     on ? user_color_status_ok : user_color_icon_off, 0);
             }
+        }
+        if(g_laser_redlight_seg) {
+            const bool red_on = (p.status & 0x1u) != 0;
+            ui_user_segmented_set_selected(g_laser_redlight_seg, red_on ? 0 : 1);
         }
 
         /* 温度：JFSC 原始整数℃；AL 单位 0.1℃ */
@@ -1999,7 +2011,7 @@ void reset_globals()
     ui::debug_test_reset();
     g_tab1 = g_tab2 = g_tab3 = g_tab4 = nullptr;
     g_laser_alarm_box = g_laser_temp_lbl = g_laser_power_lbl = g_laser_power_ta = nullptr;
-    g_laser_type_lbl = g_laser_current_lbl = nullptr;
+    g_laser_type_lbl = g_laser_current_lbl = g_laser_redlight_seg = nullptr;
     g_laser_type_code = 0;
     for(int i = 0; i < 4; i++) {
         g_laser_status_lbl[i] = nullptr;

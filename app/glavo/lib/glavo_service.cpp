@@ -519,6 +519,7 @@ bool GlavoService::start()
         middleware::MsgType::UI_Debug_Fan_Ntf,
         middleware::MsgType::UI_Debug_Fan_Duty_Ntf,
         middleware::MsgType::UI_Debug_Switch_Ntf,
+        middleware::MsgType::UI_Debug_Galvo_RedLight_Ntf,
         middleware::MsgType::UI_Debug_CleanTest_Start_Ntf,
         middleware::MsgType::UI_Debug_CleanTest_Close_Ntf,
         middleware::MsgType::UI_Debug_PrintParam_Set_Ntf,
@@ -901,6 +902,9 @@ void GlavoService::handle_message(const middleware::Message& msg)
             break;
         case middleware::MsgType::UI_Debug_Switch_Ntf:
             handle_debug_switch(msg);
+            break;
+        case middleware::MsgType::UI_Debug_Galvo_RedLight_Ntf:
+            handle_debug_galvo_red_light(msg);
             break;
         case middleware::MsgType::UI_Debug_CleanTest_Start_Ntf:
             handle_debug_clean_test_start(msg);
@@ -2740,6 +2744,27 @@ void GlavoService::handle_debug_switch(const middleware::Message& msg)
     uint8_t buf[SERIAL_DEBUG_MAX_FRAME];
     debug_tx(buf, serial_debug_build_switch(p.target, p.on != 0,
                                             buf, sizeof(buf)));
+}
+
+/** @brief 调试红光开关：下发 TCP CMD=0x0A（Stop=0, Pause=0, RedLaser=on/off） */
+void GlavoService::handle_debug_galvo_red_light(const middleware::Message& msg)
+{
+    middleware::DebugOnOffPayload p{};
+    if(!read_inline_pod(msg.payload, p)) {
+        return;
+    }
+    const bool on = (p.on != 0);
+    if(red_laser_cmd_cached_valid_ && red_laser_cmd_cached_ == on) {
+        UPC_LOG_GLAVO_SERVICE(Debug, "debug red light dedup ignored on=%d", on ? 1 : 0);
+        return;
+    }
+    const uint8_t red_code = on ? 1u : 2u;
+    if(!McuLink::instance().send_tcp_emergency_ctrl_ex(0u, 0u, red_code)) {
+        UPC_LOG_GLAVO_SERVICE(Warn, "debug red light send failed on=%d", on ? 1 : 0);
+        return;
+    }
+    red_laser_cmd_cached_ = on;
+    red_laser_cmd_cached_valid_ = true;
 }
 
 /** @brief 启动清洁测试流程 */

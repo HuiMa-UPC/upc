@@ -2297,29 +2297,40 @@ bool McuLink::is_user_dispatch_paused() const noexcept
     return user_paused_.load();
 }
 
-bool McuLink::send_tcp_emergency_ctrl(bool stop, bool pause)
+bool McuLink::send_tcp_emergency_ctrl_ex(uint8_t stop_code, uint8_t pause_code, uint8_t red_code)
 {
     uint8_t frame[64];
-    const uint8_t stop_u8 = stop ? 1u : 0u;
-    const uint8_t pause_u8 = pause ? 1u : 0u;
-    const int flen = tcp_build_emergency_frame(stop_u8, pause_u8, frame, sizeof(frame));
+    const int flen = tcp_build_emergency_frame_ex(stop_code, pause_code, red_code, frame, sizeof(frame));
     if(flen <= 0) {
         UPC_LOG_MCU_LINK(Warn,
-            "build tcp emergency frame failed stop=%u pause=%u",
-            static_cast<unsigned>(stop_u8), static_cast<unsigned>(pause_u8));
+            "build tcp emergency frame failed stop=%u pause=%u red=%u",
+            static_cast<unsigned>(stop_code),
+            static_cast<unsigned>(pause_code),
+            static_cast<unsigned>(red_code));
         return false;
     }
     const int rc = tcp_send_raw(frame, static_cast<size_t>(flen));
     if(rc != 0) {
         UPC_LOG_MCU_LINK(Warn,
-            "tcp emergency send failed rc=%d stop=%u pause=%u",
-            rc, static_cast<unsigned>(stop_u8), static_cast<unsigned>(pause_u8));
+            "tcp emergency send failed rc=%d stop=%u pause=%u red=%u",
+            rc,
+            static_cast<unsigned>(stop_code),
+            static_cast<unsigned>(pause_code),
+            static_cast<unsigned>(red_code));
         return false;
     }
-    UPC_LOG_MCU_LINK(Info, "tcp emergency sent stop=%u pause=%u",
-                     static_cast<unsigned>(stop_u8),
-                     static_cast<unsigned>(pause_u8));
+    UPC_LOG_MCU_LINK(Info, "tcp emergency sent stop=%u pause=%u red=%u",
+                     static_cast<unsigned>(stop_code),
+                     static_cast<unsigned>(pause_code),
+                     static_cast<unsigned>(red_code));
     return true;
+}
+
+bool McuLink::send_tcp_emergency_ctrl(bool stop, bool pause)
+{
+    const uint8_t stop_code = stop ? 1u : 0u;
+    const uint8_t pause_code = pause ? 2u : 1u;
+    return send_tcp_emergency_ctrl_ex(stop_code, pause_code, 0u);
 }
 
 void McuLink::set_print_task_flow_active(bool active) noexcept
@@ -2346,7 +2357,7 @@ void McuLink::set_plate_thickness_um(uint16_t thickness_um)
 
 void McuLink::send_tcp_reset()
 {
-    (void)send_tcp_emergency_ctrl(true, false);
+    (void)send_tcp_emergency_ctrl_ex(1u, 0u, 0u);
 }
 
 void McuLink::send_serial_plate_prepare()
