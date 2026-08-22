@@ -116,8 +116,22 @@ typedef struct {
     /** 侧栏内相邻两枚导航项的间距（稿 16@1280）。稿上整组是「padding 16 + gap 16
      *  + 竖向居中」，不是按屏高均分，故 menu_panel_ 用 FLEX_ALIGN_CENTER + pad_row。 */
     int32_t user_nav_gap;
-    /** 注意：本字段与侧栏无关，是设置页那些列表行的行高（page_user_settings 用了 6 处）。 */
+    /** 注意：本字段与侧栏无关，是设置页那些列表行的行高（page_user_settings 用了 6 处）。
+     *  稿 3361:18467（左栏项）与 3361:18548（右栏 Wi-Fi 行）结构相同、高度都是
+     *  24(padding) + 32(图标) + 24 = 80，所以两边共用这一个值。 */
     int32_t user_nav_item_h;
+    /* ---- 设置页两栏布局（稿 3238:14296）----
+     * 内容区 1152 正好闭合：左内距 36 + 左栏 300 + 列间距 36 + 右栏 604 + 右留白 176。
+     * 右栏走 flex_grow 自动得到 604，所以只需定死左栏宽、间距和右留白三个数。
+     * 右留白不是白放的——翻页圆钮落在那一段里（稿 x=1184，距屏右 32）。
+     * **0 = 沿用改动前的旧式**（左栏 LV_PCT(34)、内距 USER_PAD、列间距 USER_PAD_LG、
+     * 右内距 USER_PAD），1024/1920 两档填 0 以保持渲染不变。 */
+    int32_t user_settings_nav_w;
+    int32_t user_settings_gap;       /**< 兼作左内距与两栏列间距（稿都是 36） */
+    int32_t user_settings_gutter_r;  /**< 右侧留给翻页钮的那一段（稿 176） */
+    /** Wi-Fi 开关分段控件的高（稿 3361:18541 是 72）。宽度不用另给：行高改成 80 后
+     *  旧式的 USER_NAV_ITEM_H*16/5 正好算出稿上的 256。0 = 沿用旧式 *4/5。 */
+    int32_t user_settings_seg_h;
     int32_t user_nav_icon_sz;
     int32_t user_nav_icon_pad;
     int32_t user_topbar_h;
@@ -270,6 +284,10 @@ typedef struct {
      *  1024/1920 两档填的就是各自 font_user_text 的字号，所以「标题」「环境条数值」这两
      *  处换用本字段后那两档渲染不变，只有 1280 档降到稿值。 */
     const lv_font_t *font_user_text_sm;
+    /** 比 text 大一档（1280 档 20）。稿的「一级标题」样式：设置页左栏项标题、右栏
+     *  Wi-Fi 行标题、右栏分组标题都是 20。1024/1920 两档填各自 font_user_text 的字号，
+     *  换用本字段后那两档渲染不变。 */
+    const lv_font_t *font_user_title;
     const lv_font_t *font_user_caption;
     /** 比 caption 再小一档，给窄容器里的说明字用（打印统计卡的 TIME/CONSUMABLES 两列）。
      *  1024/1280 两档落到 12 号——这个字号是为它才在 rongsu_ui.defaults 里打开的。 */
@@ -334,6 +352,10 @@ extern const ui_theme_t *g_ui;
 #define USER_NAV_ITEM_SZ            (g_ui->user_nav_item_sz)
 #define USER_NAV_GAP                (g_ui->user_nav_gap)
 #define USER_NAV_ITEM_H             (g_ui->user_nav_item_h)
+#define USER_SETTINGS_NAV_W         (g_ui->user_settings_nav_w)
+#define USER_SETTINGS_GAP           (g_ui->user_settings_gap)
+#define USER_SETTINGS_GUTTER_R      (g_ui->user_settings_gutter_r)
+#define USER_SETTINGS_SEG_H         (g_ui->user_settings_seg_h)
 #define USER_NAV_ICON_SZ            (g_ui->user_nav_icon_sz)
 #define USER_NAV_ICON_PAD           (g_ui->user_nav_icon_pad)
 #define USER_TOPBAR_H               (g_ui->user_topbar_h)
@@ -436,6 +458,8 @@ const lv_font_t *user_font_value(void);
 const lv_font_t *user_font_text(void);
 /** 比 text 小一档（1280 档 16）：通知卡标题/副标题、右上环境条数值。 */
 const lv_font_t *user_font_text_sm(void);
+/** 比 text 大一档（1280 档 20）：稿的「一级标题」——设置页各处标题。 */
+const lv_font_t *user_font_title(void);
 const lv_font_t *user_font_caption(void);
 /** 比 caption 小一档，给窄容器里塞不下的说明字用。 */
 const lv_font_t *user_font_caption_sm(void);

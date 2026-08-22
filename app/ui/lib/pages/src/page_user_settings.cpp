@@ -655,12 +655,15 @@ void open_wifi_connect_dialog(const char *ssid)
 }
 
 /* ---- 小构件 ---- */
+/** 右栏分组标题（`Current Wi-Fi` / `Available Wi-Fi` 这类）。
+ *  稿 3361:18547/18558 是「一级标题」20、纯白；这里字号跟稿，颜色仍用 dim 保持
+ *  与下方行内容的层次（稿靠字重区分，Montserrat 只有一个字重，做不出来）。 */
 lv_obj_t *make_caption(lv_obj_t *parent, const char *text)
 {
     lv_obj_t *l = lv_label_create(parent);
     lv_label_set_text(l, text);
     lv_obj_set_style_text_color(l, user_color_text_dim, 0);
-    lv_obj_set_style_text_font(l, user_font_caption(), 0);
+    lv_obj_set_style_text_font(l, user_font_title(), 0);
     return l;
 }
 
@@ -697,12 +700,13 @@ lv_obj_t *make_wifi_item(lv_obj_t *parent, const char *ssid, bool connected)
     lv_obj_remove_style_all(btn);
     lv_obj_set_width(btn, LV_PCT(100));
     lv_obj_set_height(btn, USER_NAV_ITEM_H);
-    lv_obj_set_style_radius(btn, USER_RADIUS, 0);
+    /* 稿 3361:18548 与左栏项同结构：圆角 8、内距 24、图标↔文字 24。 */
+    lv_obj_set_style_radius(btn, USER_BTN_RADIUS, 0);
     lv_obj_set_style_bg_color(btn, user_color_text, 0);
     lv_obj_set_style_bg_opa(btn, 10, 0);             /* ≈4% 白底（对齐设计稿） */
     lv_obj_set_style_bg_opa(btn, 28, LV_STATE_PRESSED);
     lv_obj_set_style_pad_hor(btn, USER_PAD, 0);
-    lv_obj_set_style_pad_column(btn, USER_PAD_SM, 0);
+    lv_obj_set_style_pad_column(btn, USER_PAD, 0);
     lv_obj_set_flex_flow(btn, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(btn, LV_FLEX_ALIGN_START,
                           LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
@@ -720,7 +724,7 @@ lv_obj_t *make_wifi_item(lv_obj_t *parent, const char *ssid, bool connected)
 
     lv_obj_t *lbl = lv_label_create(btn);
     lv_label_set_text(lbl, ssid);
-    lv_obj_set_style_text_font(lbl, user_font_text(), 0);
+    lv_obj_set_style_text_font(lbl, user_font_title(), 0);   /* 稿「一级标题」20 */
     lv_label_set_long_mode(lbl, LV_LABEL_LONG_MODE_DOTS);
     lv_obj_set_flex_grow(lbl, 1);
 
@@ -760,12 +764,12 @@ lv_obj_t *make_link_row(lv_obj_t *parent, const char *label,
     lv_obj_remove_style_all(btn);
     lv_obj_set_width(btn, LV_PCT(100));
     lv_obj_set_height(btn, USER_NAV_ITEM_H);
-    lv_obj_set_style_radius(btn, USER_RADIUS, 0);
+    lv_obj_set_style_radius(btn, USER_BTN_RADIUS, 0);   /* 稿 8 */
     lv_obj_set_style_bg_color(btn, user_color_text, 0);
     lv_obj_set_style_bg_opa(btn, 10, 0);
     lv_obj_set_style_bg_opa(btn, 28, LV_STATE_PRESSED);
     lv_obj_set_style_pad_hor(btn, USER_PAD, 0);
-    lv_obj_set_style_pad_column(btn, USER_PAD_SM, 0);
+    lv_obj_set_style_pad_column(btn, USER_PAD, 0);
     lv_obj_set_flex_flow(btn, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(btn, LV_FLEX_ALIGN_START,
                           LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
@@ -776,7 +780,7 @@ lv_obj_t *make_link_row(lv_obj_t *parent, const char *label,
 
     lv_obj_t *lbl = lv_label_create(btn);
     lv_label_set_text(lbl, label);
-    lv_obj_set_style_text_font(lbl, user_font_text(), 0);
+    lv_obj_set_style_text_font(lbl, user_font_title(), 0);   /* 稿「一级标题」20 */
     lv_obj_set_flex_grow(lbl, 1);
 
     lv_obj_t *arrow = lv_label_create(btn);
@@ -795,11 +799,11 @@ lv_obj_t *make_value_row(lv_obj_t *parent, const char *label, const char *value,
     lv_obj_remove_style_all(row);
     lv_obj_set_width(row, LV_PCT(100));
     lv_obj_set_height(row, USER_NAV_ITEM_H);
-    lv_obj_set_style_radius(row, USER_RADIUS, 0);
+    lv_obj_set_style_radius(row, USER_BTN_RADIUS, 0);   /* 稿 8 */
     lv_obj_set_style_bg_color(row, user_color_text, 0);
     lv_obj_set_style_bg_opa(row, 10, 0);
     lv_obj_set_style_pad_hor(row, USER_PAD, 0);
-    lv_obj_set_style_pad_column(row, USER_PAD_SM, 0);
+    lv_obj_set_style_pad_column(row, USER_PAD, 0);
     lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(row, LV_FLEX_ALIGN_START,
                           LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
@@ -807,7 +811,7 @@ lv_obj_t *make_value_row(lv_obj_t *parent, const char *label, const char *value,
 
     lv_obj_t *lbl = lv_label_create(row);
     lv_label_set_text(lbl, label);
-    lv_obj_set_style_text_font(lbl, user_font_text(), 0);
+    lv_obj_set_style_text_font(lbl, user_font_title(), 0);   /* 稿「一级标题」20 */
     lv_obj_set_style_text_color(lbl, user_color_text, 0);
     lv_obj_set_flex_grow(lbl, 1);
 
@@ -926,7 +930,11 @@ void make_wifi_seg_toggle(lv_obj_t *parent)
 {
     lv_obj_t *seg = lv_obj_create(parent);
     lv_obj_remove_style_all(seg);
-    lv_obj_set_size(seg, USER_NAV_ITEM_H * 16 / 5, USER_NAV_ITEM_H * 4 / 5);
+    /* 稿 3361:18541 是 256×72、圆角 16。行高改成稿的 80 之后旧式的 *16/5 正好算出
+     * 256，宽度不用另给；高度那项 *4/5 只有 64，所以 1280 档单独走 USER_SETTINGS_SEG_H。 */
+    lv_obj_set_size(seg, USER_NAV_ITEM_H * 16 / 5,
+                    USER_SETTINGS_SEG_H > 0 ? USER_SETTINGS_SEG_H
+                                            : USER_NAV_ITEM_H * 4 / 5);
     lv_obj_set_style_radius(seg, USER_RADIUS, 0);
     lv_obj_set_style_bg_color(seg, user_color_text, 0);
     lv_obj_set_style_bg_opa(seg, 10, 0);
@@ -1037,7 +1045,8 @@ void build_network_detail(lv_obj_t *parent)
     lv_obj_t *sw_lbl = lv_label_create(sw_sec);
     lv_label_set_text(sw_lbl, "WiFi");
     lv_obj_set_style_text_color(sw_lbl, user_color_text, 0);
-    lv_obj_set_style_text_font(sw_lbl, user_font_text(), 0);
+    /* 分组标题：稿 3361:18540 是「一级标题」20。 */
+    lv_obj_set_style_text_font(sw_lbl, user_font_title(), 0);
 
     make_wifi_seg_toggle(sw_sec);
 
@@ -1100,7 +1109,10 @@ void build_network_detail(lv_obj_t *parent)
         lv_obj_set_style_pad_row(col, USER_PAD_LG, 0);   /* 上下钮间距放大 */
         lv_obj_set_style_bg_opa(col, LV_OPA_TRANSP, 0);
         lv_obj_clear_flag(col, LV_OBJ_FLAG_SCROLLABLE);
-        lv_obj_align(col, LV_ALIGN_RIGHT_MID, -USER_PAD, 0);
+        /* 稿 3238:14371/14374 在 x=1184、64 见方 → 距屏右 32（USER_PAD_LG）。
+         * 两栏那边给右侧留了 USER_SETTINGS_GUTTER_R 的空，这两颗钮正落在那一段里，
+         * 不再压住右栏内容。 */
+        lv_obj_align(col, LV_ALIGN_RIGHT_MID, -USER_PAD_LG, 0);
         make_scroll_btn(col, LV_SYMBOL_UP, on_wifi_scroll_up);
         make_scroll_btn(col, LV_SYMBOL_DOWN, on_wifi_scroll_down);
         g_scroll_btns = col;
@@ -1150,11 +1162,11 @@ void build_saved_networks(lv_obj_t *parent)
         lv_obj_remove_style_all(row);
         lv_obj_set_width(row, LV_PCT(100));
         lv_obj_set_height(row, USER_NAV_ITEM_H);
-        lv_obj_set_style_radius(row, USER_RADIUS, 0);
+        lv_obj_set_style_radius(row, USER_BTN_RADIUS, 0);   /* 稿 8 */
         lv_obj_set_style_bg_color(row, user_color_text, 0);
         lv_obj_set_style_bg_opa(row, 10, 0);
         lv_obj_set_style_pad_hor(row, USER_PAD, 0);
-        lv_obj_set_style_pad_column(row, USER_PAD_SM, 0);
+        lv_obj_set_style_pad_column(row, USER_PAD, 0);
         lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
         lv_obj_set_flex_align(row, LV_FLEX_ALIGN_START,
                               LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
@@ -1168,7 +1180,7 @@ void build_saved_networks(lv_obj_t *parent)
         lv_obj_t *lbl = lv_label_create(row);
         lv_label_set_text(lbl, ssid);
         lv_obj_set_style_text_color(lbl, user_color_text, 0);
-        lv_obj_set_style_text_font(lbl, user_font_text(), 0);
+        lv_obj_set_style_text_font(lbl, user_font_title(), 0);   /* 稿「一级标题」20 */
         lv_label_set_long_mode(lbl, LV_LABEL_LONG_MODE_DOTS);
         lv_obj_set_flex_grow(lbl, 1);
 
@@ -1373,13 +1385,14 @@ lv_obj_t *make_nav_item(lv_obj_t *parent, NavId id)
     lv_obj_remove_style_all(btn);
     lv_obj_set_width(btn, LV_PCT(100));
     lv_obj_set_height(btn, USER_NAV_ITEM_H);
-    lv_obj_set_style_radius(btn, USER_RADIUS, 0);
+    /* 稿 3361:18467：圆角 8、内距 24、图标↔文字 24。 */
+    lv_obj_set_style_radius(btn, USER_BTN_RADIUS, 0);
     lv_obj_set_style_bg_color(btn, user_color_text, 0);
     lv_obj_set_style_bg_opa(btn, LV_OPA_TRANSP, 0);
     lv_obj_set_style_bg_opa(btn, 14, LV_STATE_CHECKED);
     lv_obj_set_style_bg_opa(btn, 14, LV_STATE_PRESSED);
     lv_obj_set_style_pad_hor(btn, USER_PAD, 0);
-    lv_obj_set_style_pad_column(btn, USER_PAD_SM, 0);
+    lv_obj_set_style_pad_column(btn, USER_PAD, 0);
     lv_obj_set_flex_flow(btn, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(btn, LV_FLEX_ALIGN_START,
                           LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
@@ -1388,9 +1401,11 @@ lv_obj_t *make_nav_item(lv_obj_t *parent, NavId id)
     lv_obj_add_event_cb(btn, on_nav_click, LV_EVENT_CLICKED,
                         reinterpret_cast<void *>(static_cast<intptr_t>(id)));
 
-    /* 图标尺寸取导航行高的 ~55%（A8 图形本身只占位图约 75%，故不宜再用文字行高，
-     * 否则视觉过小）。行高足够（1024档 72 / 1280档 68），不会裁切。 */
-    const int32_t icon_sz = USER_NAV_ITEM_H * 5 / 9;
+    /* 稿 3361:18469 是 32 见方。旧式取行高的 ~5/9（A8 图形本身只占位图约 75%，
+     * 不宜直接用文字行高，否则视觉过小）——行高改成稿的 80 之后那个比例给出 44、
+     * 比稿大一圈，所以 1280 档直接用稿值，其余档位仍走旧式。 */
+    const int32_t icon_sz = (USER_SETTINGS_NAV_W > 0) ? 32
+                                                      : USER_NAV_ITEM_H * 5 / 9;
     lv_obj_t *icon = lv_image_create(btn);
     lv_image_set_src(icon, d.icon);
     lv_obj_set_size(icon, icon_sz, icon_sz);
@@ -1401,7 +1416,7 @@ lv_obj_t *make_nav_item(lv_obj_t *parent, NavId id)
 
     lv_obj_t *lbl = lv_label_create(btn);
     lv_label_set_text(lbl, d.label);
-    lv_obj_set_style_text_font(lbl, user_font_text(), 0);
+    lv_obj_set_style_text_font(lbl, user_font_title(), 0);   /* 稿「一级标题」20 */
     lv_label_set_long_mode(lbl, LV_LABEL_LONG_MODE_DOTS);
     lv_obj_set_flex_grow(lbl, 1);
 
@@ -1418,7 +1433,9 @@ lv_obj_t *build_subnav(lv_obj_t *parent)
 {
     lv_obj_t *nav = lv_obj_create(parent);
     lv_obj_remove_style_all(nav);
-    lv_obj_set_width(nav, LV_PCT(34));
+    /* 稿 300 定宽；该字段为 0 的档位沿用旧式百分比。 */
+    if(USER_SETTINGS_NAV_W > 0) lv_obj_set_width(nav, USER_SETTINGS_NAV_W);
+    else                        lv_obj_set_width(nav, LV_PCT(34));
     lv_obj_set_height(nav, LV_PCT(100));
     lv_obj_set_flex_flow(nav, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_style_pad_row(nav, USER_PAD_SM, 0);
@@ -1577,9 +1594,20 @@ lv_obj_t *page_user_settings_create(lv_obj_t *parent)
     lv_obj_set_flex_flow(body, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(body, LV_FLEX_ALIGN_START,
                           LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
-    lv_obj_set_style_pad_hor(body, USER_PAD, 0);
+    /* 稿 3238:14296 的两栏在内容区 1152 里正好闭合：
+     *   左内距 36 + 左栏 300 + 列间距 36 + 右栏 604 + 右留白 176
+     * 右栏是 flex_grow，604 自动得到；右留白不是白放的，翻页圆钮就浮在那一段里
+     * （稿 x=1184，距屏右 32，见 build_scroll_buttons 的对齐）。
+     * USER_SETTINGS_* 为 0 的档位沿用旧式内距，渲染不变。 */
+    if(USER_SETTINGS_GAP > 0) {
+        lv_obj_set_style_pad_left(body, USER_SETTINGS_GAP, 0);
+        lv_obj_set_style_pad_right(body, USER_SETTINGS_GUTTER_R, 0);
+        lv_obj_set_style_pad_column(body, USER_SETTINGS_GAP, 0);
+    } else {
+        lv_obj_set_style_pad_hor(body, USER_PAD, 0);
+        lv_obj_set_style_pad_column(body, USER_PAD_LG, 0);
+    }
     lv_obj_set_style_pad_bottom(body, USER_PAD, 0);
-    lv_obj_set_style_pad_column(body, USER_PAD_LG, 0);
     lv_obj_set_style_bg_opa(body, LV_OPA_TRANSP, 0);
     lv_obj_clear_flag(body, LV_OBJ_FLAG_SCROLLABLE);
 
@@ -1590,7 +1618,9 @@ lv_obj_t *page_user_settings_create(lv_obj_t *parent)
     lv_obj_set_height(g_detail, LV_PCT(100));
     lv_obj_set_flex_grow(g_detail, 1);
     lv_obj_set_flex_flow(g_detail, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_style_pad_row(g_detail, USER_PAD, 0);
+    /* 稿 3361:18538 的分组之间是 48（组内标题↔内容才是 16）。 */
+    lv_obj_set_style_pad_row(g_detail,
+                             USER_SETTINGS_GAP > 0 ? USER_PAD * 2 : USER_PAD, 0);
     lv_obj_set_style_bg_opa(g_detail, LV_OPA_TRANSP, 0);
     lv_obj_clear_flag(g_detail, LV_OBJ_FLAG_SCROLLABLE);
 

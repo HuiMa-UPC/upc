@@ -89,6 +89,10 @@ static const ui_theme_t s_theme_1920 = {
     /* user_nav_item_sz       */ 80,   /* == 旧的 sidebar_w - 2*pad_sm，观感不变 */
     /* user_nav_gap           */ 100,  /* 复现旧 SPACE_EVENLY 在 1080 高下的项距 180 */
     /* user_nav_item_h        */ 96,
+    /* user_settings_nav_w    */ 0,    /* 0 = 沿用旧式，本档观感不变 */
+    /* user_settings_gap      */ 0,
+    /* user_settings_gutter_r */ 0,
+    /* user_settings_seg_h    */ 0,
     /* user_nav_icon_sz       */ 56,
     /* user_nav_icon_pad      */ 12,
     /* user_topbar_h          */ 192,
@@ -179,6 +183,7 @@ static const ui_theme_t s_theme_1920 = {
     /* font_user_value    */ &lv_font_montserrat_48,
     /* font_user_text     */ &lv_font_montserrat_24,
     /* font_user_text_sm  */ &lv_font_montserrat_24,  /* == font_user_text，本档观感不变 */
+    /* font_user_title    */ &lv_font_montserrat_24,  /* == font_user_text，本档观感不变 */
     /* font_user_caption  */ &lv_font_montserrat_18,
     /* font_user_caption_sm */ &lv_font_montserrat_16,
     /* font_user_icon     */ &lv_font_montserrat_32,
@@ -235,7 +240,11 @@ static const ui_theme_t s_theme_1280 = {
     /* user_sidebar_w         */ 128,  /* 稿 5339:27264：16 + 96 + 16 */
     /* user_nav_item_sz       */ 96,   /* 稿值 */
     /* user_nav_gap           */ 16,   /* 稿值 */
-    /* user_nav_item_h        */ 68,
+    /* user_nav_item_h        */ 80,   /* 稿 24(padding) + 32(图标) + 24 */
+    /* user_settings_nav_w    */ 300,  /* 稿值 */
+    /* user_settings_gap      */ 36,   /* 稿值（左内距与列间距同值） */
+    /* user_settings_gutter_r */ 176,  /* 稿值（翻页钮落在这一段） */
+    /* user_settings_seg_h    */ 72,   /* 稿值 */
     /* user_nav_icon_sz       */ 59,   /* 令字形上屏 48（稿值）：48 ÷ (52/64) */
     /* user_nav_icon_pad      */ 8,
     /* user_topbar_h          */ 128,
@@ -330,6 +339,7 @@ static const ui_theme_t s_theme_1280 = {
     /* font_user_value    */ &lv_font_montserrat_32,
     /* font_user_text     */ &lv_font_montserrat_18,
     /* font_user_text_sm  */ &lv_font_montserrat_16,  /* 稿值 */
+    /* font_user_title    */ &lv_font_montserrat_20,  /* 稿「一级标题」 */
     /* font_user_caption  */ &lv_font_montserrat_14,
     /* font_user_caption_sm */ &lv_font_montserrat_12,
     /* font_user_icon     */ &lv_font_montserrat_24,
@@ -393,6 +403,10 @@ static const ui_theme_t s_theme_1024 = {
     /* user_nav_item_sz       */ 58,   /* == 旧的 sidebar_w - 2*pad_sm，观感不变 */
     /* user_nav_gap           */ 44,   /* 复现旧 SPACE_EVENLY 在 600 高下的项距 102 */
     /* user_nav_item_h        */ 72,
+    /* user_settings_nav_w    */ 0,    /* 0 = 沿用旧式，本档观感不变 */
+    /* user_settings_gap      */ 0,
+    /* user_settings_gutter_r */ 0,
+    /* user_settings_seg_h    */ 0,
     /* user_nav_icon_sz       */ 54,
     /* user_nav_icon_pad      */ 8,
     /* user_topbar_h          */ 96,
@@ -483,6 +497,7 @@ static const ui_theme_t s_theme_1024 = {
     /* font_user_value    */ &lv_font_montserrat_24,
     /* font_user_text     */ &lv_font_montserrat_16,
     /* font_user_text_sm  */ &lv_font_montserrat_16,  /* == font_user_text，本档观感不变 */
+    /* font_user_title    */ &lv_font_montserrat_16,  /* == font_user_text，本档观感不变 */
     /* font_user_caption  */ &lv_font_montserrat_14,
     /* font_user_caption_sm */ &lv_font_montserrat_12,
     /* font_user_icon     */ &lv_font_montserrat_20,
@@ -604,6 +619,7 @@ const lv_font_t *ui_font_title(void)       { return g_ui->font_title; }
 const lv_font_t *user_font_value(void)     { return g_ui->font_user_value; }
 const lv_font_t *user_font_text(void)      { return g_ui->font_user_text; }
 const lv_font_t *user_font_text_sm(void)   { return g_ui->font_user_text_sm; }
+const lv_font_t *user_font_title(void)     { return g_ui->font_user_title; }
 const lv_font_t *user_font_caption(void)   { return g_ui->font_user_caption; }
 const lv_font_t *user_font_caption_sm(void){ return g_ui->font_user_caption_sm; }
 const lv_font_t *user_font_icon(void)      { return g_ui->font_user_icon; }
