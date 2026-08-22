@@ -117,6 +117,7 @@ OVF_MARKING_POWER_RE = re.compile(
     r"marking params changed: key=(?P<key>-?\d+) power=(?P<power>\d+) feed=(?P<feed>[0-9.]+)"
 )
 SERIAL_TX_FRAME_RE = re.compile(r"SERIAL_TX frame\[(?P<len>\d+)\] (?P<body>[0-9A-Fa-f ]+)")
+LASER_POWER_SET_RE = re.compile(r"laser_power_set raw=(?P<raw>\d+)")
 
 # serial_debug 协议关键字段（激光手动功率）
 SDBG_PORT_LASER = 0xAA
@@ -410,8 +411,9 @@ def build_html_report(
       <p>setpoint_samples: <b>{html_escape(laser_info.get("setpoint_samples", 0))}</b></p>
       <p>compare_samples: <b>{html_escape(laser_info.get("compare_samples", 0))}</b></p>
       <p>alarm_events: <b>{html_escape(laser_info.get("alarm_events", 0))}</b></p>
-      <p>power_pct_est_avg: <b>{html_escape(laser_info.get("power_pct_est_avg", None))}</b></p>
-      <p>power_pct_abs_err_avg: <b>{html_escape(laser_info.get("power_pct_abs_err_avg", None))}</b></p>
+      <p>setpoint_raw_avg: <b>{html_escape(laser_info.get("setpoint_raw_avg", None))}</b></p>
+      <p>report_power_raw_avg: <b>{html_escape(laser_info.get("report_power_raw_avg", None))}</b></p>
+      <p>power_raw_abs_err_avg: <b>{html_escape(laser_info.get("power_raw_abs_err_avg", None))}</b></p>
     </div>
   </div>
 
@@ -597,17 +599,39 @@ def extract_from_logs(
                 )
             continue
 
+        # 统一功率包下发日志（McuLink 实际发送链路，已做“仅变化打印”）
+        pm = LASER_POWER_SET_RE.search(msg)
+        if r.module == "McuLink" and pm:
+            set_raw = int(pm.group("raw"))
+            row = {
+                "ts": ts_str,
+                "proc": r.proc,
+                "source": "power_packet",
+                "setpoint_raw": set_raw,
+                "feed_mm_min": None,
+                "key": None,
+                "file": r.file,
+                "line_no": r.line_no,
+            }
+            data["metrics_laser_setpoint"].append(row)
+            laser_set_events.append(
+                {
+                    "ts": r.ts,
+                    "source": row["source"],
+                    "setpoint_raw": set_raw,
+                }
+            )
+            continue
+
         # OVF 过程中的功率设定（推入 TCP 功率包前的设定值）
         om = OVF_MARKING_POWER_RE.search(msg)
         if om:
             set_raw = int(om.group("power"))
-            set_pct = (set_raw * 100.0 / 255.0) if 0 <= set_raw <= 255 else None
             row = {
                 "ts": ts_str,
                 "proc": r.proc,
                 "source": "ovf_marking_params",
                 "setpoint_raw": set_raw,
-                "setpoint_pct_est": set_pct,
                 "feed_mm_min": float(om.group("feed")),
                 "key": int(om.group("key")),
                 "file": r.file,
@@ -619,7 +643,6 @@ def extract_from_logs(
                     "ts": r.ts,
                     "source": row["source"],
                     "setpoint_raw": set_raw,
-                    "setpoint_pct_est": set_pct,
                 }
             )
             continue
@@ -649,7 +672,6 @@ def extract_from_logs(
                             "proc": r.proc,
                             "source": "serial_debug_laser_power_set",
                             "setpoint_raw": set_raw,
-                            "setpoint_pct_est": float(percent),
                             "feed_mm_min": None,
                             "key": None,
                             "file": r.file,
@@ -661,7 +683,6 @@ def extract_from_logs(
                                 "ts": r.ts,
                                 "source": row["source"],
                                 "setpoint_raw": set_raw,
-                                "setpoint_pct_est": float(percent),
                             }
                         )
                         continue
@@ -675,7 +696,6 @@ def extract_from_logs(
                             "proc": r.proc,
                             "source": "serial_debug_laser_power_reset",
                             "setpoint_raw": None,
-                            "setpoint_pct_est": None,
                             "feed_mm_min": None,
                             "key": None,
                             "file": r.file,
@@ -687,7 +707,6 @@ def extract_from_logs(
                                 "ts": r.ts,
                                 "source": row["source"],
                                 "setpoint_raw": None,
-                                "setpoint_pct_est": None,
                             }
                         )
                         continue
@@ -959,7 +978,6 @@ def extract_from_logs(
     )
     set_idx = 0
     latest_set_raw = None
-    latest_set_pct = None
     latest_set_src = ""
     for lr in laser_reports_sorted:
         t = parse_ts_text(str(lr.get("ts", "")))
@@ -967,15 +985,14 @@ def extract_from_logs(
             continue
         while set_idx < len(laser_set_events) and laser_set_events[set_idx]["ts"] <= t:
             latest_set_raw = laser_set_events[set_idx].get("setpoint_raw")
-            latest_set_pct = laser_set_events[set_idx].get("setpoint_pct_est")
             latest_set_src = str(laser_set_events[set_idx].get("source", ""))
             set_idx += 1
-        report_pct = lr.get("power_pct_est")
-        delta_pct = None
-        abs_err_pct = None
-        if latest_set_pct is not None and report_pct is not None:
-            delta_pct = float(report_pct) - float(latest_set_pct)
-            abs_err_pct = abs(delta_pct)
+        report_raw = lr.get("power_raw")
+        delta_raw = None
+        abs_err_raw = None
+        if latest_set_raw is not None and report_raw is not None:
+            delta_raw = int(report_raw) - int(latest_set_raw)
+            abs_err_raw = abs(delta_raw)
         data["metrics_laser_power_compare"].append(
             {
                 "ts": lr.get("ts"),
@@ -983,11 +1000,9 @@ def extract_from_logs(
                 "laser_type": lr.get("laser_type"),
                 "setpoint_source": latest_set_src if latest_set_src else None,
                 "setpoint_raw": latest_set_raw,
-                "setpoint_pct_est": latest_set_pct,
                 "report_power_raw": lr.get("power_raw"),
-                "report_power_pct_est": report_pct,
-                "delta_pct": delta_pct,
-                "abs_err_pct": abs_err_pct,
+                "delta_raw": delta_raw,
+                "abs_err_raw": abs_err_raw,
                 "report_status": lr.get("status"),
                 "report_alarm": lr.get("alarm"),
                 "file": lr.get("file"),
@@ -1031,6 +1046,14 @@ def extract_from_logs(
             "compare_samples": len(compare_rows),
             "alarm_events": sum(1 for r in laser_rows if int(r.get("alarm", 0)) != 0),
             "type_counts": dict(laser_type_counts),
+            "setpoint_raw_avg": safe_mean([
+                float(r["setpoint_raw"]) for r in setpoint_rows
+                if r.get("setpoint_raw") is not None
+            ]),
+            "report_power_raw_avg": safe_mean([
+                float(r["power_raw"]) for r in laser_rows
+                if r.get("power_raw") is not None
+            ]),
             "power_raw_max": safe_max([float(r["power_raw"]) for r in laser_rows]),
             "temp_raw_max": safe_max([float(r["temp_raw"]) for r in laser_rows]),
             "current_raw_max": safe_max([float(r["current_raw"]) for r in laser_rows]),
@@ -1046,13 +1069,13 @@ def extract_from_logs(
                 float(r["current_a_est"]) for r in laser_rows
                 if r.get("current_a_est") is not None
             ]),
-            "power_pct_abs_err_avg": safe_mean([
-                float(r["abs_err_pct"]) for r in compare_rows
-                if r.get("abs_err_pct") is not None
+            "power_raw_abs_err_avg": safe_mean([
+                float(r["abs_err_raw"]) for r in compare_rows
+                if r.get("abs_err_raw") is not None
             ]),
-            "power_pct_abs_err_max": safe_max([
-                float(r["abs_err_pct"]) for r in compare_rows
-                if r.get("abs_err_pct") is not None
+            "power_raw_abs_err_max": safe_max([
+                float(r["abs_err_raw"]) for r in compare_rows
+                if r.get("abs_err_raw") is not None
             ]),
         },
         "mqtt": {
@@ -1196,7 +1219,7 @@ def generate_plots(output_dir: str, data: Dict[str, List[Dict[str, Any]]]) -> Li
     )
     draw_series(
         data.get("metrics_laser_power_compare", []),
-        ["setpoint_pct_est", "report_power_pct_est", "abs_err_pct"],
+        ["setpoint_raw", "report_power_raw", "abs_err_raw"],
         "Laser Power Setpoint vs Report",
         "laser_power_compare.png",
     )
@@ -1455,7 +1478,6 @@ def main() -> int:
             "proc",
             "source",
             "setpoint_raw",
-            "setpoint_pct_est",
             "feed_mm_min",
             "key",
             "file",
@@ -1471,11 +1493,9 @@ def main() -> int:
             "laser_type",
             "setpoint_source",
             "setpoint_raw",
-            "setpoint_pct_est",
             "report_power_raw",
-            "report_power_pct_est",
-            "delta_pct",
-            "abs_err_pct",
+            "delta_raw",
+            "abs_err_raw",
             "report_status",
             "report_alarm",
             "file",

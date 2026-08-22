@@ -96,6 +96,9 @@ const char* select_topic_file(const char* module, const char* msg) {
         if (starts_with(msg, "sensor:") || starts_with(msg, "env_sim:")) {
             return "topic_serial_sensor.log";
         }
+        if (starts_with(msg, "laser_power_set raw=")) {
+            return "topic_laser_power.log";
+        }
         if (contains_text(msg, "alarm_") || contains_text(msg, "RX ALARM") ||
             contains_text(msg, "EVENT ")) {
             return "topic_serial_alarm.log";

@@ -508,6 +508,8 @@ private:
     std::chrono::steady_clock::time_point next_env_sim_tick_{};
     float env_sim_phase_ = 0.f;
     std::atomic<int64_t> last_env_mqtt_publish_ms_{0}; /**< Glavo→MQTT 环境 IPC 最近发送时刻 */
+    bool laser_power_log_valid_ = false; /**< 功率包日志去重：最近一次已打印的功率值是否有效 */
+    uint16_t last_laser_power_raw_ = 0;  /**< 功率包日志去重：最近一次已打印的功率原始值 */
 
     std::mutex door_open_rsp_mtx_;
     std::condition_variable door_open_rsp_cv_;

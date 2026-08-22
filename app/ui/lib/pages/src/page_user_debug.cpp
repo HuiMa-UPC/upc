@@ -1735,15 +1735,9 @@ lv_obj_t *build_laser_tab(lv_obj_t *body)
     lv_obj_set_style_text_font(g_laser_type_lbl, user_font_value(), 0);
 
     /* 右：Laser Data + Power Control + Alarm Ops */
-    lv_obj_t *right = lv_obj_create(tab);
-    lv_obj_remove_style_all(right);
+    lv_obj_t *right = make_scroll_col(tab);
     lv_obj_set_width(right, 1);
     lv_obj_set_flex_grow(right, 4);
-    lv_obj_set_height(right, LV_PCT(100));
-    lv_obj_set_flex_flow(right, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_style_pad_row(right, USER_PAD_SM, 0);
-    lv_obj_set_style_bg_opa(right, LV_OPA_TRANSP, 0);
-    lv_obj_clear_flag(right, LV_OBJ_FLAG_SCROLLABLE);
 
     lv_obj_t *data_card = make_laser_card(right, "Laser Data");
     make_value_row(data_card, "Temperature", &g_laser_temp_lbl);
@@ -1886,10 +1880,7 @@ void bind_debug_callbacks()
                     on ? user_color_status_ok : user_color_icon_off, 0);
             }
         }
-        if(g_laser_redlight_seg) {
-            const bool red_on = (p.status & 0x1u) != 0;
-            ui_user_segmented_set_selected(g_laser_redlight_seg, red_on ? 0 : 1);
-        }
+        /* 调试开关保持“用户点击即生效”的本地显示，不再被状态上报强制覆盖。 */
 
         /* 温度：JFSC 原始整数℃；AL 单位 0.1℃ */
         if(g_laser_temp_lbl) {
