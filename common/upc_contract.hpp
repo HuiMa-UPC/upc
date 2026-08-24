@@ -1226,6 +1226,8 @@ enum class DeviceEventCode : uint16_t {
     Estop               = 24,  /**< 急停双触点触发 */
     FireSuppress        = 25,  /**< 灭火阀动作 */
     Esd                 = 26,  /**< 静电保护触发 */
+    FirstLayerVisualRecoat = 27, /**< 首层检测未通过，继续铺粉重检（one_shot） */
+    FirstLayerVisualPassed = 28, /**< 首层检测通过，进入正常打印（one_shot） */
 
     /* ---- 以下为 UI 本地事件：不走总线，由前端自己 push，占同一码空间以便
      *      消息中心统一排序去重。后端不应发送这些码。 ---- */

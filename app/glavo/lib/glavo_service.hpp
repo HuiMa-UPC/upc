@@ -165,6 +165,9 @@ private:
     void publish_print_pause_done(bool paused);
     void publish_print_h264_record_pause(bool paused);
     void publish_print_powder_low_ntf();
+    void publish_device_event(middleware::DeviceEventCode code,
+                              middleware::DeviceEventSeverity severity,
+                              bool active);
     void reset_print_progress_state();
     void send_print_progress(bool force_complete);
 

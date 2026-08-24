@@ -3,6 +3,7 @@
 #include "ui_msg_proxy.hpp"
 #include "upc_contract.hpp"
 #include "ui_theme.hpp"
+#include "ui_feedback.hpp"
 #include "notice_badge_icons.h"
 
 #include <cstdio>
@@ -81,6 +82,10 @@ const CatalogEntry kCatalog[] = {
       "Fire suppression triggered", "Do not open the machine" },
     { (uint16_t)DeviceEventCode::Esd, UI_MSG_SEV_EMERGENCY,
       "ESD protection triggered", "Check grounding before restarting" },
+    { (uint16_t)DeviceEventCode::FirstLayerVisualRecoat, UI_MSG_SEV_ERROR,
+      "First layer not passed", "Recoating and retrying first-layer check" },
+    { (uint16_t)DeviceEventCode::FirstLayerVisualPassed, UI_MSG_SEV_INFO,
+      "First layer passed", "Continuing normal printing" },
     /* ---- UI 本地 ---- */
     { (uint16_t)DeviceEventCode::UiWearMask, UI_MSG_SEV_CRITICAL,
       "Wear a mask before opening", "Cabin powder may become airborne" },
@@ -203,6 +208,15 @@ struct PendingEvent {
 void apply_event_async(void *raw)
 {
     PendingEvent *p = static_cast<PendingEvent *>(raw);
+    if(p->active) {
+        if(p->code == static_cast<uint16_t>(DeviceEventCode::FirstLayerVisualRecoat)) {
+            ui_toast_show("First layer check failed, recoating...",
+                          user_color_status_err, 1800);
+        } else if(p->code == static_cast<uint16_t>(DeviceEventCode::FirstLayerVisualPassed)) {
+            ui_toast_show("First layer check passed",
+                          user_color_status_ok, 1800);
+        }
+    }
     if(p->active) {
         ui_message_push(p->code, p->ts_ms);
     } else {

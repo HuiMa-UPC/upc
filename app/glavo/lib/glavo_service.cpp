@@ -1753,6 +1753,31 @@ void GlavoService::publish_print_powder_low_ntf()
     }
 }
 
+void GlavoService::publish_device_event(middleware::DeviceEventCode code,
+                                        middleware::DeviceEventSeverity severity,
+                                        bool active)
+{
+    middleware::DeviceEventPayload p{};
+    p.code = static_cast<uint16_t>(code);
+    p.severity = static_cast<uint8_t>(severity);
+    p.active = active ? 1u : 0u;
+    p.event_ts_ms = static_cast<int64_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count());
+
+    middleware::Message ntf(middleware::MsgType::GLAVO_Device_Event_Ntf,
+        static_cast<middleware::ModuleId>(module_id()),
+        middleware::ModuleId::UI);
+    ntf.payload = middleware::MsgPayload::from_bytes(
+        reinterpret_cast<const uint8_t*>(&p), sizeof(p));
+    if(!publish_async(ntf)) {
+        UPC_LOG_GLAVO_SERVICE(Warn,
+            "device_event publish failed code=%u active=%u",
+            static_cast<unsigned>(p.code),
+            static_cast<unsigned>(p.active));
+    }
+}
+
 bool GlavoService::request_first_layer_visual_check(uint16_t layer_height_um)
 {
     if(!first_layer_visual_check_on_) {
@@ -1798,6 +1823,13 @@ bool GlavoService::request_first_layer_visual_check(uint16_t layer_height_um)
     const bool pass = (first_layer_visual_result_ != 0);
     UPC_LOG_GLAVO_SERVICE(Info, "first layer visual check result=%u",
                           static_cast<unsigned>(first_layer_visual_result_));
+    if(pass) {
+        publish_device_event(middleware::DeviceEventCode::FirstLayerVisualPassed,
+            middleware::DeviceEventSeverity::Info, true);
+    } else {
+        publish_device_event(middleware::DeviceEventCode::FirstLayerVisualRecoat,
+            middleware::DeviceEventSeverity::Error, true);
+    }
     return pass;
 }
 
