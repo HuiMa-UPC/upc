@@ -2763,6 +2763,14 @@ void GlavoService::handle_debug_galvo_red_light(const middleware::Message& msg)
         UPC_LOG_GLAVO_SERVICE(Warn, "debug red light send failed on=%d", on ? 1 : 0);
         return;
     }
+    /* 红光与激光使能联动：
+     * red_on=1（红光） -> 激光使能关（TLV 0x12）
+     * red_on=0（激光） -> 激光使能开（TLV 0x11） */
+    {
+        uint8_t buf[SERIAL_DEBUG_MAX_FRAME];
+        const bool laser_enable = !on;
+        debug_tx(buf, serial_debug_build_switch(0u, laser_enable, buf, sizeof(buf)));
+    }
     red_laser_cmd_cached_ = on;
     red_laser_cmd_cached_valid_ = true;
 }
