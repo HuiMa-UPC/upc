@@ -8,7 +8,11 @@
 extern "C" {
 #endif
 
-extern const lv_image_dsc_t home_bg;
+/* 首页背景层，按屏分辨率两份（定义在 home_bg.c，由 tools/gen_home_bg.py 生成）。
+ * 别直接引用某一份——用 page_user_home.cpp 的 home_bg_dsc() 按当前 profile 挑。
+ * 1280 档来自「背景图1」、1024 档来自「背景图2」，两个节点的取舍见那个脚本的注释。 */
+extern const lv_image_dsc_t home_bg_1280;
+extern const lv_image_dsc_t home_bg_1024;
 extern const lv_image_dsc_t ic_pm;
 extern const lv_image_dsc_t ic_temp;
 extern const lv_image_dsc_t ic_o2;

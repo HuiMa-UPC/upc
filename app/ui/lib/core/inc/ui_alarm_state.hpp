@@ -135,13 +135,6 @@ void ui_alarm_request_snapshot(const char *reason);
  */
 const ui_alarm_entry_t *ui_alarm_print_blocker(void);
 
-/**
- * 打印会话期抑制：会话内 1124/1125 不上浮层卡（结果页已给失败原因 + Reset，
- * 再叠一张卡是双份冗余）。进打印态置 true、取件退出置 false；退出时仍未
- * 解除的会补回浮层卡。状态缓存与消息页列表不受影响。
- */
-void ui_alarm_set_print_session(bool active);
-
 /* ---- 历史（已解除 CONDITION + EVENT，新→旧） ---- */
 
 int ui_alarm_history_count(void);

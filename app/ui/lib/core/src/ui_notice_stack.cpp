@@ -24,10 +24,11 @@ void reposition(void)
     if(!g_root) {
         return;
     }
-    /* 整栈建在铺满屏的 shell_ 上，贴右上角。右缘退一个 USER_PAD——与首页打印态/
+    /* 整栈建在铺满屏的 shell_ 上，贴右上角。退一个 USER_PAD_LG（稿 32）——与首页打印态/
      * 监控态右上角那块环境区（build_env_wrap）同一个退让量，两块上下相接看着是一栏；
-     * 这个量对所有页面所有状态都一样，不按页特例。纵向的让位量才是按态给的。 */
-    lv_obj_align(g_root, LV_ALIGN_TOP_RIGHT, -USER_PAD, USER_PAD + g_top_offset);
+     * 这个量对所有页面所有状态都一样，不按页特例。纵向的让位量才是按态给的：稿
+     * 4972:27560 里这栈在 y=104，而 32(环境区顶) + 64(环境区高) + 8(间距) 正是 104。 */
+    lv_obj_align(g_root, LV_ALIGN_TOP_RIGHT, -USER_PAD_LG, USER_PAD_LG + g_top_offset);
 }
 
 void dismiss_async(void *code_raw)
@@ -103,17 +104,21 @@ void build_card(lv_obj_t *parent, const ui_message_t *m)
         lv_obj_set_style_pad_right(texts, USER_PAD_SM * 3 / 2, 0);
     }
 
+    /* 稿 4972:27560 里标题与副标题**同为 16**，只靠字重（SemiBold / Regular）和 60%
+     * 透明度区分。Montserrat 只有一个字重，字重那半做不出来，所以只落地「同号 + 透明度」
+     * ——两处都取 user_font_text_sm()。原先是标题 18 / 副标题 14，字号差反而盖过了
+     * 稿想要的那种「同号、靠深浅分层」的观感。 */
     lv_obj_t *title = lv_label_create(texts);
     lv_label_set_text(title, m->title);
     lv_obj_set_style_text_color(title, lv_color_white(), 0);
-    lv_obj_set_style_text_font(title, user_font_text(), 0);
+    lv_obj_set_style_text_font(title, user_font_text_sm(), 0);
 
     if(m->body && m->body[0]) {
         lv_obj_t *sub = lv_label_create(texts);
         lv_label_set_text(sub, m->body);
         lv_obj_set_style_text_color(sub, lv_color_white(), 0);
         lv_obj_set_style_text_opa(sub, LV_OPA_60, 0);
-        lv_obj_set_style_text_font(sub, user_font_caption(), 0);
+        lv_obj_set_style_text_font(sub, user_font_text_sm(), 0);
     }
 
     if(closable) {
@@ -157,7 +162,8 @@ void build_summary_row(lv_obj_t *parent, const char *text)
     lv_obj_t *lbl = lv_label_create(btn);
     lv_label_set_text(lbl, text);
     lv_obj_set_style_text_color(lbl, lv_color_white(), 0);
-    lv_obj_set_style_text_font(lbl, user_font_text(), 0);
+    /* 与卡片标题同号（稿 4972:27560 的 5281:11817 也是 16）。 */
+    lv_obj_set_style_text_font(lbl, user_font_text_sm(), 0);
 
     lv_obj_t *chevron = lv_label_create(btn);
     lv_label_set_text(chevron, LV_SYMBOL_RIGHT);
@@ -206,10 +212,13 @@ lv_obj_t *ui_notice_stack_create(lv_obj_t *parent)
     lv_obj_remove_style_all(g_root);
     /* FLOATING：shell_ 是横向 flex，本栈不能占格位（同 menu_panel_ / 设备信息条） */
     lv_obj_add_flag(g_root, LV_OBJ_FLAG_FLOATING);
-    /* 宽度沿用 USER_PRINT_CARD_W（稿上这栈 416@1280，与该常量的 458 同一量级）。
-     * 注意别再拿"与 stats-card 左右边缘齐平"当理由——整栈已经从左下角挪到右上角，
-     * 跟那张卡不再有对齐关系。 */
-    lv_obj_set_width(g_root, USER_PRINT_CARD_W);
+    /* 宽度走本栈自己的 USER_NOTICE_CARD_W = 400@1280。
+     * **稿自己在两个 frame 里给了不同的值**：首页待机 5339:27299/27310 是 400，而新版
+     * 打印态 4972:27560 的 5281:11797 是 416（与 stats-card 同宽）。通知栈是建在 shell_
+     * 上的全局对象、两个态共用一个实例，只能取一个值——这里以待机 frame 为准取 400。
+     * 早先与 stats-card 共用 USER_PRINT_CARD_W，是因为那时整栈还摆在左下、要与那张卡
+     * 左右对齐；挪到右上之后这层对齐关系已经不存在了。 */
+    lv_obj_set_width(g_root, USER_NOTICE_CARD_W);
     lv_obj_set_height(g_root, LV_SIZE_CONTENT);
     lv_obj_set_flex_flow(g_root, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_style_pad_row(g_root, USER_PAD_SM / 2, 0);

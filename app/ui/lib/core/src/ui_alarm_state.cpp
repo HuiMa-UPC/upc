@@ -71,13 +71,6 @@ int g_history_count = 0;   /* g_history[0] 最新 */
 
 ui_alarm_observer_t g_observers[kMaxObservers] = { nullptr };
 bool g_inited        = false;
-bool g_print_session = false;
-
-/** 会话期抑制浮层卡的两个打印阻断码（结果页已展示失败原因 + Reset）。 */
-bool session_suppressed(uint16_t code)
-{
-    return g_print_session && (code == 1124 || code == 1125);
-}
 
 /* 显示序（severity 降序、同级新在前）的槽位下标表 */
 int g_order[kCurrentCap];
@@ -410,11 +403,11 @@ void on_alarm_condition(const middleware::AlarmReportPayload &p)
     compose_text(e.code, e.detail, e.simulated, e.title, sizeof(e.title),
                  e.body, sizeof(e.body));
 
-    /* CONDITION 状态迁移原位更新（renew=false），不打扰已读/排序 */
-    if(!session_suppressed(e.code)) {
-        ui_message_push_ex(e.code, ui_alarm_severity_to_msg(e.severity),
-                           e.title, e.body, e.ts_ms, false);
-    }
+    /* CONDITION 状态迁移原位更新（renew=false），不打扰已读/排序。
+     * 1124/1125 以前在打印会话期被抑制（那时终止结果页自带失败原因条 + Reset），
+     * 那个条已删，抑制也一并去掉——否则打印中断时哪儿都看不到停机原因。 */
+    ui_message_push_ex(e.code, ui_alarm_severity_to_msg(e.severity),
+                       e.title, e.body, e.ts_ms, false);
     notify_observers();
 }
 
@@ -462,10 +455,8 @@ void snapshot_upsert(uint16_t code, bool active, bool latched, int64_t now)
     compose_text(e.code, e.detail, false, e.title, sizeof(e.title),
                  e.body, sizeof(e.body));
 
-    if(!session_suppressed(e.code)) {
-        ui_message_push_ex(e.code, ui_alarm_severity_to_msg(e.severity),
-                           e.title, e.body, e.ts_ms, false);
-    }
+    ui_message_push_ex(e.code, ui_alarm_severity_to_msg(e.severity),
+                       e.title, e.body, e.ts_ms, false);
 }
 
 /** 收齐一轮后做全量对齐（原子提交）。未收到的 slot 已在缓存里保持全零。 */
@@ -793,29 +784,6 @@ bool ui_alarm_request_reset(uint16_t code)
     arm_oneshot(reset_timeout_cb, kResetTimeoutMs, code);
     notify_observers();
     return true;
-}
-
-void ui_alarm_set_print_session(bool active)
-{
-    if(g_print_session == active) {
-        return;
-    }
-    g_print_session = active;
-    for(int i = 0; i < kCurrentCap; i++) {
-        if(!g_current[i].used) {
-            continue;
-        }
-        ui_alarm_entry_t &e = g_current[i].e;
-        if(e.code != 1124 && e.code != 1125) {
-            continue;
-        }
-        if(active) {
-            ui_message_retract(e.code);
-        } else {
-            ui_message_push_ex(e.code, ui_alarm_severity_to_msg(e.severity),
-                               e.title, e.body, e.ts_ms, true);
-        }
-    }
 }
 
 void ui_alarm_debug_inject(uint16_t code, uint8_t severity, uint8_t state_mask,
