@@ -1,5 +1,7 @@
 #include "page_user_history.hpp"
 #include "page_user_timelapse.hpp"
+#include "page_user_photo.hpp"
+#include "album_index.hpp"
 #include "page_manager.hpp"
 #include "control.hpp"
 #include "ui_theme.hpp"
@@ -69,7 +71,6 @@ namespace {
 
 /* LVGL POSIX FS 盘符（lv_conf: LV_FS_POSIX_LETTER 'A'） */
 constexpr const char *kThumbDrive = "A:";
-constexpr const char *kPhotoDir   = UPC_PHOTO_DIR;
 
 /* ---- 设计稿里项目 token 没覆盖的两个色 ---- */
 /** Completed 胶囊字色（稿 4478:7265）；比 user_color_status_ok 稍暗，是稿里的绿 */
@@ -567,20 +568,6 @@ bool remove_file_if_exists(const std::string& abs_path)
     return std::filesystem::remove(abs_path, ec);
 }
 
-/** PNG 旁路 RTHM：/home/media/photo/foo.png → …/foo.rthm */
-std::string album_companion_rthm(const std::string& photo_abs_path)
-{
-    if(photo_abs_path.empty()) {
-        return {};
-    }
-    const std::filesystem::path p(photo_abs_path);
-    const std::string ext = p.extension().string();
-    if(ext != ".png" && ext != ".PNG") {
-        return {};
-    }
-    return p.parent_path().string() + "/" + p.stem().string() + ".rthm";
-}
-
 std::string session_abs_dir(const std::string& frames_dir)
 {
     return std::string(UPC_PRINT_VIDEO_DIR) + "/" + frames_dir;
@@ -714,7 +701,8 @@ bool remove_cards_with_rollback(const std::vector<HistoryCard*>& cards)
             if(!remove_file_if_exists(c->photo_abs_path)) {
                 return false;
             }
-            (void)remove_file_if_exists(album_companion_rthm(c->photo_abs_path));
+            (void)remove_file_if_exists(
+                ui::album::companion_rthm(c->photo_abs_path));
             continue;
         }
         if(c->frames_dir.empty()) {
@@ -1089,6 +1077,11 @@ void on_thumb_click(lv_event_t *e)
         return;
     }
     if(c->kind == HistoryCard::Kind::AlbumPhoto) {
+        if(c->photo_abs_path.empty()) {
+            return;
+        }
+        page_user_photo_set_source(c->photo_abs_path.c_str());
+        ui::PageManager::instance().switch_to("user_photo");
         return;
     }
     if(c->frames_dir.empty() || !c->video_ready) {
@@ -1573,8 +1566,9 @@ void make_thumbnail(lv_obj_t *parent, const HistoryCard *c)
     lv_obj_set_style_radius(tag, USER_BTN_RADIUS / 2, 0);
     lv_obj_align(tag, LV_ALIGN_TOP_LEFT, USER_PAD_SM / 2, USER_PAD_SM / 2);
 
-    /* 右下角全屏角标：仅提示可点开，点击热区仍是整块缩略图 */
-    if(c->video_ready && c->kind != HistoryCard::Kind::AlbumPhoto) {
+    /* 右下角全屏角标：仅提示可点开，点击热区仍是整块缩略图。
+     * 相册照片同样可点开（进 user_photo 全屏浏览器），所以三类都给角标。 */
+    if(c->video_ready) {
         lv_obj_t *badge = lv_obj_create(slot);
         lv_obj_remove_style_all(badge);
         lv_obj_set_size(badge, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
@@ -1840,31 +1834,18 @@ void clear_cards(void)
     g_cards.clear();
 }
 
-bool is_photo_file(const std::filesystem::path& p)
-{
-    const std::string ext = p.extension().string();
-    return ext == ".png" || ext == ".jpg" || ext == ".jpeg" ||
-           ext == ".webp" || ext == ".bmp";
-}
-
-void build_album_entry(lv_obj_t* parent, const std::filesystem::path& path)
+void build_album_entry(lv_obj_t* parent, const ui::album::PhotoEntry& e)
 {
     HistoryCard* ctx = new HistoryCard();
     ctx->kind = HistoryCard::Kind::AlbumPhoto;
-    ctx->photo_abs_path = path.string();
-    /* 优先同名 .rthm（Media 拍照时从 NV12 生成），无则回退原图 */
-    {
-        const std::string rthm = album_companion_rthm(ctx->photo_abs_path);
-        std::error_code ec;
-        if(!rthm.empty() && std::filesystem::exists(rthm, ec) && !ec) {
-            ctx->thumb_src = std::string(kThumbDrive) + rthm;
-        } else {
-            ctx->thumb_src = std::string(kThumbDrive) + ctx->photo_abs_path;
-        }
-    }
+    ctx->photo_abs_path = e.path;
+    /* 缩略图优先配对 .rthm（Media 拍照时从 NV12 生成，扫目录时已确认存在），
+     * 没有就回退原图交给 LVGL 内置解码器 */
+    ctx->thumb_src = std::string(kThumbDrive) +
+                     (e.thumb.empty() ? e.path : e.thumb);
     ctx->video_ready = true;
     ctx->video_pending = false;
-    ctx->title = path.filename().string();
+    ctx->title = std::filesystem::path(e.path).filename().string();
     ctx->subtitle = "Photo";
     g_cards.push_back(ctx);
 
@@ -2108,32 +2089,9 @@ void rebuild_list(void)
     }
 
     if(g_tab == HistTab::Album) {
-        std::vector<std::filesystem::path> photos;
-        std::error_code ec;
-        if(std::filesystem::is_directory(kPhotoDir, ec)) {
-            for(const auto& de : std::filesystem::directory_iterator(kPhotoDir, ec)) {
-                if(ec) {
-                    break;
-                }
-                if(!de.is_regular_file(ec) || ec) {
-                    continue;
-                }
-                if(is_photo_file(de.path())) {
-                    photos.push_back(de.path());
-                }
-            }
-        }
-        std::sort(photos.begin(), photos.end(),
-            [](const std::filesystem::path& a, const std::filesystem::path& b) {
-                std::error_code ea;
-                std::error_code eb;
-                const auto ta = std::filesystem::last_write_time(a, ea);
-                const auto tb = std::filesystem::last_write_time(b, eb);
-                if(ea || eb) {
-                    return a.filename().string() > b.filename().string();
-                }
-                return ta > tb;
-            });
+        /* 枚举与排序走共享的 ui::album::scan()：全屏浏览器用的是同一份顺序，
+         * 两处若各自扫目录，「下一张」就会和这里看到的排序错位。 */
+        const std::vector<ui::album::PhotoEntry> photos = ui::album::scan();
         if(photos.empty()) {
             show_empty(true);
             apply_manage_ui();

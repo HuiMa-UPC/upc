@@ -81,6 +81,9 @@
 | `control_*` | `control.*` | 打印状态机（含 `CONTROL_STATE_PRINT_DONE` 结果页、`CONTROL_STATE_TRANSFER_BOX` 取件转运盒）+ overlay UI |
 | `VideoPlayer` | `video_player.*` | 延时视频 libav* 软解 → BGRX/RGB565 → lv_image（play/pause/seek；拖动预览缩小帧 + latest-wins） |
 | `PngScrubPreview` | `png_scrub_preview.*` | PNG 序列拖动预览：后台 libpng 解码缩放到小图 RGB565 |
+| `PhotoDecoder` | `photo_decoder.*` | 相册大图后台解码：等比贴合屏幕 → RGB565 → lv_image（latest-wins；几何由主线程发布） |
+| `png_util` | `png_decode_util.*` | PNG→RGBA 解码 + RGB565 缩放（点采样/box）+ CONTAIN 贴合算尺寸；上面两者共用 |
+| `ui::album` | `album_index.*` | 相册目录枚举/mtime 倒序/配对 `.rthm`（历史页列表与全屏浏览器必须同序） |
 
 ## UI 页面（`app/ui/lib/pages/`）
 
@@ -92,8 +95,9 @@
 | `user_settings` | `page_user_settings.*` | 设置列表 + 开发者密码弹窗 |
 | `user_message` | `page_user_message.*` | 消息中心：日期分组混排列表（MCU 报警 + 设备事件）+ 左滑删除历史 + 详情抽屉（Reset 三态） |
 | `user_timelapse` | `page_user_timelapse.*` | 延时摄影播放器（隐藏页，历史缩略图进入；全屏 `lv_layer_top`） |
+| `user_photo` | `page_user_photo.*` | 相册全屏浏览器（隐藏页，历史页 Album 缩略图进入；滑动/箭头翻页 + 首末回绕） |
 
-注册入口：`ui_app.cpp`（不在 `main.cpp` include 各页面头）。隐藏页（`user_files`/`user_debug`/`user_timelapse`）经 `register_hidden_page` 注册、`switch_to` 进入。
+注册入口：`ui_app.cpp`（不在 `main.cpp` include 各页面头）。隐藏页（`user_files`/`user_debug`/`user_timelapse`/`user_photo`）经 `register_hidden_page` 注册、`switch_to` 进入。
 
 ## protocol/ 库（`app/protocol/` → `upc::protocol`）
 

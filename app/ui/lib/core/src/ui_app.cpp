@@ -15,6 +15,7 @@
 #include "page_user_message.hpp"
 #include "page_user_debug.hpp"
 #include "page_user_timelapse.hpp"
+#include "page_user_photo.hpp"
 
 #include "ui_theme.hpp"
 #include "ui_keyboard.hpp"
@@ -269,6 +270,15 @@ void app_init(lv_obj_t* screen) {
                                      page_user_timelapse_create,
                                      page_user_timelapse_refresh,
                                      page_user_timelapse_exit),
+        "user_history");
+
+    /* 相册全屏浏览器：隐藏页（无侧边栏图标），归属历史页菜单按钮；
+     * 由历史页 Album 点击缩略图进入 */
+    PageManager::instance().register_hidden_page(
+        std::make_unique<SimplePage>("user_photo",
+                                     page_user_photo_create,
+                                     page_user_photo_refresh,
+                                     page_user_photo_exit),
         "user_history");
 
     /* 红点要等消息页注册完才挂得上（set_menu_badge 认页名）。

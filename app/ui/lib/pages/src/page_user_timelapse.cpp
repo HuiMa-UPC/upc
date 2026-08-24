@@ -4,6 +4,7 @@
 #include "png_scrub_preview.hpp"
 #include "ui_feedback.hpp"
 #include "ui_theme.hpp"
+#include "ui_user_widgets.hpp"
 #include "video_player.hpp"
 
 #include <algorithm>
@@ -584,31 +585,6 @@ void play_timer_cb(lv_timer_t*)
     render_current_png_frame();
 }
 
-lv_obj_t* make_round_btn(lv_obj_t* parent, const char* sym, int32_t sz,
-                         lv_event_cb_t cb, lv_obj_t** out_icon)
-{
-    lv_obj_t* btn = lv_button_create(parent);
-    lv_obj_remove_style_all(btn);
-    lv_obj_set_size(btn, sz, sz);
-    lv_obj_set_style_radius(btn, LV_RADIUS_CIRCLE, 0);
-    lv_obj_set_style_bg_color(btn, lv_color_hex(0x000000), 0);
-    lv_obj_set_style_bg_opa(btn, LV_OPA_40, 0);
-    lv_obj_set_style_bg_opa(btn, LV_OPA_60, LV_STATE_PRESSED);
-    lv_obj_add_flag(btn, LV_OBJ_FLAG_FLOATING);
-    if(cb) {
-        lv_obj_add_event_cb(btn, cb, LV_EVENT_CLICKED, nullptr);
-    }
-    lv_obj_t* icon = lv_label_create(btn);
-    lv_label_set_text(icon, sym);
-    lv_obj_set_style_text_color(icon, user_color_text, 0);
-    lv_obj_set_style_text_font(icon, user_font_text(), 0);
-    lv_obj_center(icon);
-    if(out_icon) {
-        *out_icon = icon;
-    }
-    return btn;
-}
-
 } // namespace
 
 void page_user_timelapse_set_source(const char* sequence_dir_abs,
@@ -755,11 +731,13 @@ lv_obj_t* page_user_timelapse_create(lv_obj_t* parent)
     g_sub_lbl = sub;
 
     const int32_t btn_sz = USER_BACK_BTN_H;
-    lv_obj_t* close = make_round_btn(ov, LV_SYMBOL_CLOSE, btn_sz, on_close_click, nullptr);
+    lv_obj_t* close = ui_user_make_overlay_round_btn(ov, LV_SYMBOL_CLOSE, btn_sz,
+                                                    on_close_click, nullptr);
     lv_obj_align(close, LV_ALIGN_TOP_RIGHT, -USER_PAD, USER_PAD);
 
     const int32_t play_sz = USER_BACK_BTN_H * 2;
-    lv_obj_t* play = make_round_btn(ov, LV_SYMBOL_PAUSE, play_sz, on_play_click, &g_play_icon);
+    lv_obj_t* play = ui_user_make_overlay_round_btn(ov, LV_SYMBOL_PAUSE, play_sz,
+                                                   on_play_click, &g_play_icon);
     lv_obj_set_style_text_font(g_play_icon, user_font_value(), 0);
     lv_obj_align(play, LV_ALIGN_CENTER, 0, 0);
 

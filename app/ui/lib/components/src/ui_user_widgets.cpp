@@ -133,6 +133,32 @@ lv_obj_t *ui_user_make_divider_vline(lv_obj_t *parent, lv_coord_t height)
     return line;
 }
 
+lv_obj_t *ui_user_make_overlay_round_btn(lv_obj_t *parent, const char *sym,
+                                         int32_t size, lv_event_cb_t cb,
+                                         lv_obj_t **out_icon)
+{
+    lv_obj_t *btn = lv_button_create(parent);
+    lv_obj_remove_style_all(btn);
+    lv_obj_set_size(btn, size, size);
+    lv_obj_set_style_radius(btn, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_bg_color(btn, lv_color_hex(0x000000), 0);
+    lv_obj_set_style_bg_opa(btn, LV_OPA_40, 0);
+    lv_obj_set_style_bg_opa(btn, LV_OPA_60, LV_STATE_PRESSED);
+    lv_obj_add_flag(btn, LV_OBJ_FLAG_FLOATING);
+    if(cb) {
+        lv_obj_add_event_cb(btn, cb, LV_EVENT_CLICKED, nullptr);
+    }
+    lv_obj_t *icon = lv_label_create(btn);
+    lv_label_set_text(icon, sym);
+    lv_obj_set_style_text_color(icon, user_color_text, 0);
+    lv_obj_set_style_text_font(icon, user_font_text(), 0);
+    lv_obj_center(icon);
+    if(out_icon) {
+        *out_icon = icon;
+    }
+    return btn;
+}
+
 lv_obj_t *ui_user_make_icon_img(lv_obj_t *parent, const lv_image_dsc_t *src,
                                 int32_t target, lv_color_t color)
 {

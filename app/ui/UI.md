@@ -1058,11 +1058,23 @@ rongsu_camera 经主 IPC（/tmp/upc_camera.sock）SCM_RIGHTS 附带 dma_buf fd �
 
 | 组件 | 文件 | 职责 |
 |------|------|------|
-| `page_user_history` | `pages/page_user_history.*` | 读 `/home/media/video/config.json`（`common/fs_manifest/print_history_manifest`）→ 按 `start_unix` 倒序、按自然日分组的卡片列表；缩略图 `A:/home/media/video/{thumb}`（RTHM 解码，`LV_IMAGE_ALIGN_COVER`）；**Album** 扫 `/home/media/photo/*.png`，缩略图优先同名 `.rthm`；顶部三 Tab + Storage 容量条；管理（多选）模式批量删除；上下翻页；**左滑删除**（跟手拖动，见「左滑删除：跟手拖动」一节）→ History/Timelapse **按类型独立删除**后重写 config.json；Album 删 PNG + 配对 `.rthm` |
+| `page_user_history` | `pages/page_user_history.*` | 读 `/home/media/video/config.json`（`common/fs_manifest/print_history_manifest`）→ 按 `start_unix` 倒序、按自然日分组的卡片列表；缩略图 `A:/home/media/video/{thumb}`（RTHM 解码，`LV_IMAGE_ALIGN_COVER`）；**Album** 走 `ui::album::scan()` 扫 `/home/media/photo`，缩略图优先同名 `.rthm`；顶部三 Tab + Storage 容量条；管理（多选）模式批量删除；上下翻页；**左滑删除**（跟手拖动，见「左滑删除：跟手拖动」一节）→ History/Timelapse **按类型独立删除**后重写 config.json；Album 删 PNG + 配对 `.rthm` |
 | `page_user_timelapse` | `pages/page_user_timelapse.*` | 全屏播放页（建于 `lv_layer_top()`）：受 `UPC_TIMELAPSE_PLAYBACK_PNG` 控制——默认 PNG 序列；`=0` 时优先 `timelapse.mp4`（失败回退 PNG）；拖动预览为后台小图 scrub，松手后再 settle 主画面 |
+| `page_user_photo` | `pages/page_user_photo.*` | 相册全屏浏览器（同建于 `lv_layer_top()`，与播放器同一套 chrome）：主图 `LV_IMAGE_ALIGN_CONTAIN`，左右滑动 / 两侧箭头翻页、首末循环回绕，单击主图切控件层 |
 
-- **进入/退出**：历史页缩略图点击 → `page_user_timelapse_set_source(目录,mp4路径,标题,时间)` + `switch_to("user_timelapse")`；关闭 → `switch_to("user_history")`。
+- **进入/退出**：历史页缩略图点击 → `page_user_timelapse_set_source(目录,mp4路径,标题,时间)` + `switch_to("user_timelapse")`；Album 照片 → `page_user_photo_set_source(照片绝对路径)` + `switch_to("user_photo")`；两者关闭均 → `switch_to("user_history")`。
 - **LVGL 线程规则**：PNG 序列播放由主线程 `lv_timer` 换主画面；拖动预览解码在后台线程，经 `lv_async_call` 贴预览框。
+
+### 相册全屏浏览器（`user_photo`）
+
+- **为什么不能直接 `lv_image_set_src(原图)`**：照片是 `1080×1280` PNG（`camera_resolution_profile.hpp`），`LV_COLOR_DEPTH=32` 下 lodepng 会在 LVGL 线程内同步解出约 5.5MB ARGB8888；而 `LV_CACHE_DEF_SIZE=0`（图片缓存关闭）意味着**每次重绘都重解一遍**。故大图交给 `ui::PhotoDecoder` 后台解，缩到「CONTAIN 贴合屏幕」的尺寸出 RGB565，绘制变成 1:1 blit。
+- **画面分两拍上**：先贴配对 `.rthm` 缩略图顶住（自定义 decoder 只是读文件 + memcpy，几乎零成本），后台解完再换清晰图；无 `.rthm` 时显示 `Loading...` 而不是在主线程抢着解原图。
+- **解码目标尺寸只能运行时算**：主题分 1920/1280/1024 三档且按实际 display 最长边挑（`ui_theme.cpp` 的 `pick_profile()`），所以 box 取 `lv_display_get_*_resolution()`，不能写成编译期常量。竖构图照片贴合横屏后左右各留约 1/4 屏宽黑边，**两侧箭头正落在黑边上**，这是设计选择。
+- **线程与生命周期**：`PhotoDecoder` 后台线程解码、latest-wins（世代号对不上就丢），经 `lv_async_call` 投递且合并成一次；与 `VideoPlayer` 的双缓冲翻页不同——相册每张照片几何可能不同，`dsc` 的 w/h/stride 必须由**主线程**在 `async_apply` 里发布（LVGL 是在绘制时刻读 dsc 的）。页面对象由 `PageManager` 惰性建出后**永不销毁**，故 `page_user_photo_exit()` 必须先 `lv_image_set_src(img, nullptr)` 再 `PhotoDecoder::release()`（顺序反了下一帧会读到已释放内存）。
+- **滑动手势不用 `LV_EVENT_GESTURE`**：与历史页左滑删除同一套理由（见「左滑删除：跟手拖动」），手写 `PRESSED/PRESSING/RELEASED/PRESS_LOST` 四件套 + 起拖阈值 + 方向锁定，并靠 `just_dragged` 吃掉松手时那一下 `CLICKED`，否则每滑一次会顺带闪一下控件层。横向位移过屏宽 1/4 才翻页，否则弹回。
+- **非 PNG 的兜底**：后台解码只吃 PNG（libpng）。`ui::album::is_photo_file()` 还收 `.jpg/.jpeg/.bmp/.webp`，前三者由 `PhotoDecoder` 回一个空 image、页面转交 LVGL 内置 TJPGD / BMP 同步解；`.webp` 当前无解码器，先用 `lv_image_decoder_get_info()` 问一遍，认不出来就显示 `Cannot display this photo`，不留黑屏。
+- **列表与浏览器必须同序**：枚举/排序/配对 `.rthm` 统一在 `ui::album::scan()`（`core/album_index.*`），历史页 `rebuild_list()` 与本页 `refresh()` 都调它。两处各自扫目录的话，「下一张」会和列表看到的顺序错位。落点照片若在此期间被删（`index_of` 返回 `kInvalidIndex`），退到最新一张。
+- **共用 chrome**：半透明黑底圆形浮层按钮抽成 `ui_user_make_overlay_round_btn()`（`components/ui_user_widgets.*`），播放器与浏览器共用；原先只存在于播放器的匿名 namespace 里。
 
 ### 设置页布局（稿 3238:14296）
 
@@ -1185,7 +1197,7 @@ padding 24、圆角 8、图标 32、图标↔文字 24、标题 20、右箭头 2
   文件名↔状态胶囊 12、三组指标之间 24、每组内「图标↔标签」4 而「标签↔数值」16
   （后者用 `margin_left` 在 `pad_column` 之上补差）。
 - **卡片**（高 `USER_HIST_CARD_H`，缩略图 `8/5 × 高`）：左缩略图（`Timelapse` 角标 + 右下
-  `ic_expand` 角标）+ 右信息区（上：时间段 `HH:MM:SS - HH:MM:SS`、文件名 + 状态胶囊
+  `ic_expand` 角标，三个 Tab 都有——相册照片同样可点开）+ 右信息区（上：时间段 `HH:MM:SS - HH:MM:SS`、文件名 + 状态胶囊
   `Completed`/`Interrupted`；下：`Duration | Filament | Layers`，图标 `ic_clock` / `ic_cube` /
   `ic_layers` 24px 1:1）。卡片底色用不透明 `user_color_panel` 代替稿里的 4% 白，且缩略图不裁
   圆角——`clip_corner` 每帧建掩膜层是列表滚动卡顿主因，这里选性能。
@@ -1220,13 +1232,15 @@ padding 24、圆角 8、图标 32、图标↔文字 24、标题 20、右箭头 2
 |------|------|------|
 | `Layers` | 显示 `--` | manifest 加层数字段（Camera 可取换层 Snap 的最大 `layer_index`） |
 | Storage 容量 | `page_user_history.cpp` 顶部 `kStorageUsedMB/kStorageTotalMB` 常量占位 | 接上报后改 `storage_used_mb()/storage_total_mb()` 两个取数函数即可 |
-| Timelapse / Album | 已按 Tab 分支：Timelapse 读 manifest；Album 扫 `/home/media/photo/*.png`（缩略图优先 `.rthm`） | — |
+| Timelapse / Album | 已按 Tab 分支：Timelapse 读 manifest；Album 走 `ui::album::scan()` 扫 `/home/media/photo`（缩略图优先 `.rthm`），点开进 `user_photo` 全屏浏览器 | — |
+| 相册 filmstrip | 未做：`user_photo` 目前靠滑动/箭头 + 副标题的「第几 / 共几」导航 | 底部横向缩略图条；**必须窗口化**（只建当前索引 ±N 格并回收）——`/home/media/photo` 无上限也无清理，单张 `.rthm` 约 136KB（240 宽封顶，见 `CAMERA_PRINT_VIDEO_THUMB_MAX_W`），且缓存关闭时每帧重绘都要重读文件 |
 
 ### LVGL 配置依赖（`3rdparty/.../configs/rongsu_ui.defaults`）
 - `LV_USE_TJPGD=1`：历史缩略图 baseline JPEG 解码
 - `LV_USE_FS_POSIX=1` + `LV_FS_POSIX_LETTER='A'`：按路径加载 `/home/media/video`、`/home/media/photo` 图片（`"A:/home/media/video/x.rthm"` / `"A:/home/media/photo/x.rthm"`）
 - lvgl 目标加 `_DEFAULT_SOURCE`（`3rdparty/.../CMakeLists.txt`）：修 FS 驱动 `DT_DIR` 在 `_POSIX_C_SOURCE` 下不可见的编译错误
 - 缩略图 `toast` 与播放器同建于 `lv_layer_top()`，全屏时提示可见
+- **libpng 不走 lv_conf，是 CMake 探测的**（`app/ui/CMakeLists.txt` → `UPC_UI_HAS_LIBPNG`）：拖动预览与相册大图都在后台线程用它（`core/png_decode_util.*`）。探不到时两处解码恒失败——拖动预览退回只刷小框，相册浏览器则转交 LVGL 内置 lodepng 同步解（会卡顿，但不至于打不开）
 
 ## 多后端 IPC
 

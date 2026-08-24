@@ -51,6 +51,16 @@ lv_obj_t *ui_user_make_divider_line(lv_obj_t *parent, lv_coord_t width);
 lv_obj_t *ui_user_make_divider_vline(lv_obj_t *parent, lv_coord_t height);
 
 /**
+ * 全屏媒体浮层上的圆形按钮：半透明黑底 + 白色符号，FLOATING（不参与父 flex 排布）。
+ * 延时摄影播放器与相册浏览器的关闭/播放/翻页钮共用一套观感。
+ * @param sym      LV_SYMBOL_* 文本
+ * @param out_icon 非 NULL 时回传内部 label，供调用方改字号或后续换符号
+ */
+lv_obj_t *ui_user_make_overlay_round_btn(lv_obj_t *parent, const char *sym,
+                                         int32_t size, lv_event_cb_t cb,
+                                         lv_obj_t **out_icon);
+
+/**
  * A8 图标盒：外层固定 target×target 占位（避免大尺寸源图在 flex 里撑开父容器），
  * 内层图片 recolor 成 color 并等比缩放到 target。
  * 源图边长从图头取，24/32/40/72/96 各档通吃。
