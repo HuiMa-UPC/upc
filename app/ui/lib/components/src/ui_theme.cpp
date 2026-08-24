@@ -124,6 +124,7 @@ static const ui_theme_t s_theme_1920 = {
     /* user_home_cabin_w      */ 504,  /* == 旧的 LV_PCT(28) × 内容区 1800 */
     /* user_home_cabin_lead_w */ 270,  /* 稿 180@1280 × 1.5 */
     /* user_home_cabin_pad_right */ 64,   /* == 旧的 USER_PAD_LG */
+    /* user_metric_icon_sz    */ 48,   /* 稿 32@1280 × 1.5 */
     /* user_back_btn_w        */ 180,
     /* user_back_btn_h        */ 64,
     /* user_sensor_strip_h    */ 120,
@@ -285,6 +286,7 @@ static const ui_theme_t s_theme_1280 = {
     /* user_home_cabin_w      */ 294,  /* 稿值 */
     /* user_home_cabin_lead_w */ 180,  /* 稿值 */
     /* user_home_cabin_pad_right */ 40,   /* 稿值 */
+    /* user_metric_icon_sz    */ 32,   /* 稿值 */
     /* user_back_btn_w        */ 128,
     /* user_back_btn_h        */ 44,
     /* user_sensor_strip_h    */ 84,
@@ -450,6 +452,9 @@ static const ui_theme_t s_theme_1024 = {
     /* user_home_cabin_w      */ 264,  /* == 旧的 LV_PCT(28) × 内容区 944 */
     /* user_home_cabin_lead_w */ 144,  /* 稿 180@1280 × 0.8 */
     /* user_home_cabin_pad_right */ 36,   /* == 旧的 USER_PAD_LG */
+    /* user_metric_icon_sz    */ 26,   /* 稿 32@1280 × 0.8 = 25.6，进位；本档横杠只剩
+                                        * 约 1.6px 偏软，但放大到 28 会比周围 0.8 折算
+                                        * 的字号显大，仍按折算值 */
     /* user_back_btn_w        */ 102,
     /* user_back_btn_h        */ 40,
     /* user_sensor_strip_h    */ 68,

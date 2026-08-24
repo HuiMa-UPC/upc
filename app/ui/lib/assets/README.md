@@ -6,18 +6,27 @@
 
 | 文件 | 说明 | 出处 |
 |------|------|------|
-| `home_assets.h` + `home_assets.c` | 首页环境指标图标 `ic_pm` / `ic_temp` / `ic_o2`，并声明两份 `home_bg_*` | `tools/gen_home_assets.py`（脚本已不在 `tools/`，该 `.h` 现为手维护） |
+| `home_assets.h` | 只剩两份 `home_bg_*` 的声明。原先那三枚图标已退场：`ic_temp` / `ic_o2` 重新描稿后收进 `gen_home_metric_icons.py`（现按档位出多份原生尺寸），`ic_pm` 随舱内 PM2.5 那行删除后已无调用点，`home_assets.c` 随之整个删掉 | 手维护（`tools/gen_home_assets.py` 早已不在 `tools/`） |
 | `home_bg.c` | 首页背景图，**按屏分辨率两份**（RGB565，声明在 `home_assets.h`，挑图走 `page_user_home.cpp` 的 `home_bg_dsc()`）：`home_bg_1280` 1280×800 源节点 3752:8895「背景图1」、`home_bg_1024` 1024×640 源节点 3752:9081「背景图2」（1920 档也复用后者）。合计约 3.36MB。哪档配哪个节点、以及右侧镜像补边的来由见 `app/ui/UI.md`「首页待机布局」 | `tools/gen_home_bg.py`（输入 `tools/_bg_tmp/home_bg_1280_src.png` 与 `home_bg_src.png`） |
-| `home_metric_icons.h` / `.c` | A8 单色图标：`ic_home` `ic_switch` `ic_cabin` `ic_aqi` `ic_humidity` `ic_pressure` `ic_purify` `ic_info` `ic_clock` `ic_cube` `ic_warning` `ic_layers` `ic_expand` `ic_alert` `ic_printer`；打印态那批 `ic_play` `ic_door_solid` `ic_photo` `ic_badge_spin` `ic_badge_play` `ic_badge_check` `ic_badge_alert` `ic_toast_info` | `tools/gen_home_metric_icons.py`（**只覆盖前 9 枚**，见下方警告） |
+| `home_metric_icons.h` / `.c` | A8 单色图标。走 `make_dim_icon` 的那批**每档屏一份原生尺寸**（48/32/26，`switch` 另加 36/24/19），每枚附一张 `ic_<name>_set[]`：`ic_home_*` `ic_switch_*` `ic_cabin_*` `ic_temp_*` `ic_o2_*` `ic_humidity_*` `ic_pressure_*`；单档的 `ic_info`（40）`ic_clock` `ic_cube`（24）；手维护那批 `ic_warning` `ic_layers` `ic_expand` `ic_alert` `ic_printer` `ic_purify` `ic_play` `ic_door_solid` `ic_photo` `ic_badge_spin` `ic_badge_play` `ic_badge_check` `ic_badge_alert` `ic_toast_info` | `tools/gen_home_metric_icons.py`（保留式重写，见下方说明） |
 | `notice_badge_icons.h` / `.c` | 通知等级徽标图标，每档屏一版：`ic_notice_alert_{14,18,27}` `ic_notice_info_{14,18,27}` | `tools/gen_notice_badge_icons.py` |
 
-> **`home_metric_icons.c` 的雷**：文件头写着 AUTO-GENERATED，但
-> `gen_home_metric_icons.py` 的 `ORDER` 只有 `home/switch/cabin/aqi/humidity/
-> pressure/info/clock/cube` 9 枚，其余 14 枚（`ic_warning` `ic_layers` `ic_expand`
-> `ic_alert` `ic_printer` `ic_purify` `ic_play` `ic_door_solid` `ic_photo`
-> `ic_badge_*` `ic_toast_info`）**没有任何脚本能重新生成**——源矢量已丢失。
-> 重跑该脚本会把这 14 枚全部抹掉、编译直接断。要动之前先备份 `.c/.h`。
-> 通知徽标那两枚已经摘出来放进 `notice_badge_icons`（源 SVG 在 `tools/_badge_svg/`，
+> **为什么要每档一份**：LVGL 的 `lv_draw_sw_transform` 是 2 抽头点采样、不做面积
+> 平均，缩小时步长大于一个源像素就会整行整列跳过源数据。原先一张 40×40 喂三档，
+> 实测横杠 alpha 在 32 档 225..251、26 档 188..220 之间起伏且峰值到不了实心，屏上
+> 就是毛刺加断续。改成原生尺寸 1:1 之后横杠是平的 255。挑图在
+> `page_user_home.cpp` 的 `pick_icon()`，尺寸源头是 `USER_METRIC_ICON_SZ`。
+> **改主题那个值就要同步改脚本的 `METRIC_SIZES`**，否则又会退回缩放。
+> 同一套做法见 `notice_badge_icons` 与 `ui_message_store.cpp`
+> 的 `ui_message_severity_icon()`。
+>
+> **`home_metric_icons.c` 里那 14 枚手维护图标**（`ic_warning` `ic_layers`
+> `ic_expand` `ic_alert` `ic_printer` `ic_purify` `ic_play` `ic_door_solid`
+> `ic_photo` `ic_badge_*` `ic_toast_info`）**没有任何脚本能重新生成**——源矢量已
+> 丢失。以前整跑 `gen_home_metric_icons.py` 会把它们连根抹掉、编译当场断；现在脚本
+> 改成**保留式重写**（`read_foreign_blocks()` 把不归自己管的块原样读出再写回），
+> 整跑已经安全。要改那 14 枚仍只能手改 `.c`。
+> 通知徽标那两枚早先已摘出去放进 `notice_badge_icons`（源 SVG 在 `tools/_badge_svg/`，
 > 可重跑）；其余 12 枚的处置方式待定。
 | `home_btn_icons.h` / `.c` | 首页按钮图标 `ic_camera` / `ic_folder` | Figma SVG→A8（node 3122:13207 / 2513:19774） |
 | `nav_icons.h` / `.c` | 左侧标签栏五个图标 `nav_icon_*` | `tools/png_to_lvgl_icon.py`（脚本已不在 `tools/`） |
@@ -50,18 +59,33 @@ python tools/gen_ctl_backdrop.py
 显示时用 `lv_obj_set_style_image_recolor()` 上色，因此同一份资源可复用于亮态/灰态。
 新增图标在 `gen_home_metric_icons.py` 的三处登记后重跑脚本即可：
 
-- `ICONS`：SVG path（从 Figma 抠出）
+- `ICONS`：SVG 片段（从 Figma 抠出）。也可以写成 `f(边长)` 的函数，用于需要随输出
+  尺寸现算几何的图标，见 `switch_glyph()`（把横杠吸到像素网格）与 `temp_glyph()`
+  （给刻度点一个「不小于 1 设备像素」的下限）
 - `ORDER`：输出顺序
-- `ICON_CFG`：栅格化尺寸 / viewBox / 描边宽度（小图标按 2× 栅格化，缩放后更清晰）
-- `ICON_LINECAP`（可选）：默认圆头；`ic_badge_*` 那批按稿用 `butt`，否则短笔画会在
-  拐角互相盖出更粗的一块
+- `ICON_SIZES`：该枚要出哪几档边长。列进 `METRIC_ICONS` 的会额外生成一张
+  `ic_<name>_set[]` 供 `pick_icon()` 挑
+- `ICON_CFG`：viewBox / 描边宽度。viewBox 可直接给稿的原生画布，不必把坐标折算到
+  默认的 32——写成函数的 glyph 自己返回这两项，不用在这里登记
+- `ICON_LINECAP` / `ICON_LINEJOIN`（可选）：默认都是圆的；`ic_switch` 按稿用
+  `butt` + `bevel`，圆头会让线两端各多伸出半个描边宽、箭头尖发钝
+- 单个元素可以用自己的 `fill` / `stroke` 属性覆盖外层 `<g>`，混合填充与描边就靠
+  这个（见 `pressure` 的指针轴心、`temp` 的八颗刻度点）
+- 从 Figma 拷来的 `stroke-opacity` / `fill-opacity` **必须剥掉**：A8 只存 alpha，
+  变淡是运行时 `image_recolor` 上灰色做的，留着会二次变暗
+
+只改其中一枚而不想重跑整个脚本时，import 该模块复用 `render()` + `emit_map()`
+单独栅格化，再把结果替换进 `.c` 里对应的 `ic_<symbol>_map` 块。
 
 ## 使用
+
+单档图标直接引用；多档的走 `page_user_home.cpp` 的 `pick_icon()` 按目标边长挑：
 
 ```cpp
 #include "home_metric_icons.h"
 
-lv_image_set_src(img, &ic_layers);
+lv_image_set_src(img, &ic_layers);                       /* 单档 */
+make_dim_icon(parent, ic_home_set, USER_METRIC_ICON_SZ); /* 多档，1:1 不缩放 */
 ```
 
 ## 原则

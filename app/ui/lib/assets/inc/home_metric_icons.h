@@ -8,15 +8,48 @@
 extern "C" {
 #endif
 
-extern const lv_image_dsc_t ic_home;
-extern const lv_image_dsc_t ic_switch;
-extern const lv_image_dsc_t ic_cabin;
-extern const lv_image_dsc_t ic_aqi;
-extern const lv_image_dsc_t ic_humidity;
-extern const lv_image_dsc_t ic_pressure;
+extern const lv_image_dsc_t ic_home_48;
+extern const lv_image_dsc_t ic_home_32;
+extern const lv_image_dsc_t ic_home_26;
+extern const lv_image_dsc_t *const ic_home_set[];
+
+extern const lv_image_dsc_t ic_switch_48;
+extern const lv_image_dsc_t ic_switch_36;
+extern const lv_image_dsc_t ic_switch_32;
+extern const lv_image_dsc_t ic_switch_26;
+extern const lv_image_dsc_t ic_switch_24;
+extern const lv_image_dsc_t ic_switch_19;
+extern const lv_image_dsc_t *const ic_switch_set[];
+
+extern const lv_image_dsc_t ic_cabin_48;
+extern const lv_image_dsc_t ic_cabin_32;
+extern const lv_image_dsc_t ic_cabin_26;
+extern const lv_image_dsc_t *const ic_cabin_set[];
+
+extern const lv_image_dsc_t ic_temp_48;
+extern const lv_image_dsc_t ic_temp_32;
+extern const lv_image_dsc_t ic_temp_26;
+extern const lv_image_dsc_t *const ic_temp_set[];
+
+extern const lv_image_dsc_t ic_o2_48;
+extern const lv_image_dsc_t ic_o2_32;
+extern const lv_image_dsc_t ic_o2_26;
+extern const lv_image_dsc_t *const ic_o2_set[];
+
+extern const lv_image_dsc_t ic_humidity_48;
+extern const lv_image_dsc_t ic_humidity_32;
+extern const lv_image_dsc_t ic_humidity_26;
+extern const lv_image_dsc_t *const ic_humidity_set[];
+
+extern const lv_image_dsc_t ic_pressure_48;
+extern const lv_image_dsc_t ic_pressure_32;
+extern const lv_image_dsc_t ic_pressure_26;
+extern const lv_image_dsc_t *const ic_pressure_set[];
+
 extern const lv_image_dsc_t ic_info;
 extern const lv_image_dsc_t ic_clock;
 extern const lv_image_dsc_t ic_cube;
+/* 手维护图标（源矢量已丢失） */
 extern const lv_image_dsc_t ic_warning;
 extern const lv_image_dsc_t ic_layers;
 extern const lv_image_dsc_t ic_expand;

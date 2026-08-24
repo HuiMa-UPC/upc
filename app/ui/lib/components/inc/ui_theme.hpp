@@ -187,6 +187,13 @@ typedef struct {
     int32_t user_home_cabin_lead_w;
     /** CABIN 面板右边距（稿 40）。稿上其余浮层退的都是 32，只有这块退 40。 */
     int32_t user_home_cabin_pad_right;
+    /** 首页那批 A8 指标图标的显示边长（稿 32@1280）：HOME 卡头的房子与切换钮、
+     *  CABIN 每行的行首图标。打印态/监控态右上环境区 PM 卡那颗稿上是 24，
+     *  按本值 *3/4 折算——三档正好整除成 36 / 24 / 19，不必再开一个字段。
+     *  切换钮的可点方框取 *5/4（1280 档仍是原来的 40）。
+     *  源资源恒为 40×40（见 make_dim_icon），本值只管显示尺寸；1920 档取 48 意味着
+     *  要把 40 上采样 1.2 倍，边缘会略软，彻底解决需抬高生成脚本的 SIZE。 */
+    int32_t user_metric_icon_sz;
     int32_t user_back_btn_w;
     int32_t user_back_btn_h;
     int32_t user_sensor_strip_h;   /**< 调试页传感器条高（原先借用 user_topbar_h） */
@@ -406,6 +413,7 @@ extern const ui_theme_t *g_ui;
 #define USER_HOME_CABIN_W           (g_ui->user_home_cabin_w)
 #define USER_HOME_CABIN_LEAD_W      (g_ui->user_home_cabin_lead_w)
 #define USER_HOME_CABIN_PAD_RIGHT   (g_ui->user_home_cabin_pad_right)
+#define USER_METRIC_ICON_SZ         (g_ui->user_metric_icon_sz)
 #define USER_BACK_BTN_W             (g_ui->user_back_btn_w)
 #define USER_BACK_BTN_H             (g_ui->user_back_btn_h)
 #define USER_SENSOR_STRIP_H         (g_ui->user_sensor_strip_h)

@@ -512,9 +512,36 @@ int air_classify(const AirMetric &m, float v, float *frac_global)
     return level;
 }
 
-/** dim 着色的指标图标（源 40×40 A8，等比缩放到 sz 方盒、居中）。 */
-lv_obj_t *make_dim_icon(lv_obj_t *parent, const lv_image_dsc_t *src, int32_t sz)
+/** 从 NULL 结尾的候选表里挑出边长最接近 sz 的那份原生位图。
+ *
+ *  **图标按档位出多份原生尺寸、运行时不缩放，是刻意的**。LVGL 的
+ *  `lv_draw_sw_transform` 是 2 抽头点采样、不做面积平均，缩小时步长大于一个源
+ *  像素就会整行整列跳过源数据：原先一张 40×40 喂三档，32 档实测横杠 alpha 在
+ *  225..251 之间起伏、26 档 188..220 且峰值到不了实心，屏上就是毛刺加断续。
+ *  资源现在按三档屏各出一份（生成脚本的 `METRIC_SIZES`），尺寸走
+ *  `USER_METRIC_ICON_SZ`，正常都能精确命中、走不到缩放。
+ *  同一套做法见 `ui_message_store.cpp` 的 `ui_message_severity_icon()`。
+ *
+ *  取最接近而不是只认精确相等，是为了监控态那枚返回钮——它的图标边长跟的是
+ *  `USER_PRINT_CTL_BTN / 2`（48/32/25），1024 档的 25 与本表的 26 差 1px。
+ */
+const lv_image_dsc_t *pick_icon(const lv_image_dsc_t *const *set, int32_t sz)
 {
+    const lv_image_dsc_t *best = set[0];
+    int32_t best_d = INT32_MAX;
+    for(const lv_image_dsc_t *const *p = set; *p != nullptr; ++p) {
+        const int32_t d = LV_ABS((int32_t)(*p)->header.w - sz);
+        if(d < best_d) { best_d = d; best = *p; }
+    }
+    return best;
+}
+
+/** dim 着色的指标图标：取 set 里与 sz 等宽的那份，1:1 画进 sz 方盒、居中。
+ *  尺寸对不上（改了主题却没同步生成脚本）才退回缩放，保证形不崩、只是糊。 */
+lv_obj_t *make_dim_icon(lv_obj_t *parent, const lv_image_dsc_t *const *set, int32_t sz)
+{
+    const lv_image_dsc_t *src = pick_icon(set, sz);
+
     lv_obj_t *box = lv_obj_create(parent);
     lv_obj_remove_style_all(box);
     lv_obj_set_size(box, sz, sz);
@@ -526,8 +553,11 @@ lv_obj_t *make_dim_icon(lv_obj_t *parent, const lv_image_dsc_t *src, int32_t sz)
     lv_image_set_src(img, src);
     lv_obj_set_style_image_recolor(img, user_color_text_dim, 0);
     lv_obj_set_style_image_recolor_opa(img, LV_OPA_COVER, 0);
-    lv_image_set_pivot(img, 20, 20);                 /* 40×40 源图中心 */
-    lv_image_set_scale(img, (uint32_t)(256 * sz / 40));
+    const int32_t sw = (int32_t)src->header.w;
+    if(sw != sz) {
+        lv_image_set_pivot(img, sw / 2, sw / 2);
+        lv_image_set_scale(img, (uint32_t)(256 * sz / sw));
+    }
     lv_obj_center(img);
     return box;
 }
@@ -586,7 +616,7 @@ lv_obj_t *build_home_card(lv_obj_t *parent)
     lv_obj_set_style_bg_opa(head, LV_OPA_TRANSP, 0);
     lv_obj_clear_flag(head, LV_OBJ_FLAG_SCROLLABLE);
 
-    make_dim_icon(head, &ic_home, 32);
+    make_dim_icon(head, ic_home_set, USER_METRIC_ICON_SZ);
 
     g_home_card_title = lv_label_create(head);
     lv_label_set_text(g_home_card_title, kAirMetrics[0].title);
@@ -602,13 +632,14 @@ lv_obj_t *build_home_card(lv_obj_t *parent)
 
     lv_obj_t *toggle = lv_button_create(head);
     lv_obj_remove_style_all(toggle);
-    lv_obj_set_size(toggle, 40, 40);
+    /* 可点方框比图标本身大一圈（1280 档 32→40），给指尖留余量 */
+    lv_obj_set_size(toggle, USER_METRIC_ICON_SZ * 5 / 4, USER_METRIC_ICON_SZ * 5 / 4);
     lv_obj_set_style_bg_opa(toggle, LV_OPA_TRANSP, 0);
     lv_obj_set_style_bg_color(toggle, lv_color_white(), LV_STATE_PRESSED);
     lv_obj_set_style_bg_opa(toggle, LV_OPA_10, LV_STATE_PRESSED);
     lv_obj_set_style_radius(toggle, LV_RADIUS_CIRCLE, 0);
     lv_obj_add_event_cb(toggle, on_home_metric_toggle, LV_EVENT_CLICKED, nullptr);
-    lv_obj_t *tg_icon = make_dim_icon(toggle, &ic_switch, 32);
+    lv_obj_t *tg_icon = make_dim_icon(toggle, ic_switch_set, USER_METRIC_ICON_SZ);
     lv_obj_center(tg_icon);
 
     /* 分隔线（稿 5277:11674 是白 30%，比旧稿那条亮一档） */
@@ -686,7 +717,7 @@ lv_obj_t *build_home_card(lv_obj_t *parent)
 }
 
 /* Cabin 单行：[图标] 标签 ...(撑开)... 数值 + 单位（稿 5277:11591 起四行都带单位）。 */
-lv_obj_t *make_cabin_row(lv_obj_t *parent, const lv_image_dsc_t *icon,
+lv_obj_t *make_cabin_row(lv_obj_t *parent, const lv_image_dsc_t *const *icon,
                          const char *label, const char *unit_text,
                          lv_obj_t **out_val, lv_obj_t **out_unit)
 {
@@ -701,7 +732,7 @@ lv_obj_t *make_cabin_row(lv_obj_t *parent, const lv_image_dsc_t *icon,
     lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, 0);
     lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
 
-    make_dim_icon(row, icon, 32);
+    make_dim_icon(row, icon, USER_METRIC_ICON_SZ);
 
     lv_obj_t *cap = lv_label_create(row);
     lv_label_set_text(cap, label);
@@ -791,7 +822,7 @@ lv_obj_t *build_cabin_panel(lv_obj_t *parent)
     lv_obj_set_style_margin_left(head, indent, 0);
     lv_obj_set_style_bg_opa(head, LV_OPA_TRANSP, 0);
     lv_obj_clear_flag(head, LV_OBJ_FLAG_SCROLLABLE);
-    make_dim_icon(head, &ic_cabin, 32);
+    make_dim_icon(head, ic_cabin_set, USER_METRIC_ICON_SZ);
     lv_obj_t *htitle = lv_label_create(head);
     lv_label_set_text(htitle, "CABIN CONDITION");
     lv_obj_set_style_text_color(htitle, user_color_text, 0);
@@ -842,10 +873,10 @@ lv_obj_t *build_cabin_panel(lv_obj_t *parent)
     lv_obj_set_style_bg_opa(rows, LV_OPA_TRANSP, 0);
     lv_obj_clear_flag(rows, LV_OBJ_FLAG_SCROLLABLE);
 
-    make_cabin_row(rows, &ic_temp,     "TEMP",     "\xC2\xB0""C", &g_cab_temp_val, &g_cab_temp_unit);
-    make_cabin_row(rows, &ic_o2,       "O2 CONC.", "%",           &g_cab_o2_val,   &g_cab_o2_unit);
-    make_cabin_row(rows, &ic_humidity, "HUMIDITY", "%",           &g_cab_hum_val,  &g_cab_hum_unit);
-    make_cabin_row(rows, &ic_pressure, "PRESSURE", "kPa",         &g_cab_prs_val,  &g_cab_prs_unit);
+    make_cabin_row(rows, ic_temp_set,     "TEMP",     "\xC2\xB0""C", &g_cab_temp_val, &g_cab_temp_unit);
+    make_cabin_row(rows, ic_o2_set,       "O2 CONC.", "%",           &g_cab_o2_val,   &g_cab_o2_unit);
+    make_cabin_row(rows, ic_humidity_set, "HUMIDITY", "%",           &g_cab_hum_val,  &g_cab_hum_unit);
+    make_cabin_row(rows, ic_pressure_set, "PRESSURE", "kPa",         &g_cab_prs_val,  &g_cab_prs_unit);
     return panel;
 }
 
@@ -853,6 +884,11 @@ lv_obj_t *build_cabin_panel(lv_obj_t *parent)
  *  它的构图，设备右缘上屏落在 910、与 CABIN 文字左缘 946 之间正好是稿上的 36px 间隙。
  *  1024 与 1920 档用「背景图2」：它自带一段左移，配合那两档尚未折算到稿值的 CABIN 宽度
  *  才不会让设备压进文字（换成背景图1 的话 1024 档要压 3px、1920 档压 11px）。
+ *
+ *  背景图2 那段左移**在生成时又被右移 23px 抵掉一部分**：当初只校对了右侧那条间隙，
+ *  没量左侧——机身左缘落在 394，而 HOME 卡右缘是 399，实机上压进卡里 5px。右移后
+ *  1024 档两侧变成 18 / 19px。推导与 1920 档的连带影响见 tools/gen_home_bg.py 的 PROFILES。
+ *
  *  两个节点怎么选的、哪档换图要连带改什么，见 tools/gen_home_bg.py 的注释。 */
 const lv_image_dsc_t *home_bg_dsc()
 {
@@ -1300,7 +1336,9 @@ lv_obj_t *build_result_pm_card(lv_obj_t *parent, env_block_t *eb)
     lv_obj_set_style_text_opa(eb->pm_title, LV_OPA_50, 0);
     lv_obj_set_style_text_font(eb->pm_title, user_font_caption(), 0);
 
-    make_dim_icon(head, &ic_switch, 24);   /* 稿 5275:10873 是 24 见方 */
+    /* 稿 4972:27108 这颗是 24 见方，正好是首页那颗（32）的 3/4，三档整除；
+     * 这三档（36/24/19）在 ic_switch_set 里也各有一份原生位图 */
+    make_dim_icon(head, ic_switch_set, USER_METRIC_ICON_SZ * 3 / 4);
 
     lv_obj_t *lrow = lv_obj_create(card);
     lv_obj_remove_style_all(lrow);
@@ -2040,7 +2078,10 @@ void on_monitor_exit_click(lv_event_t * /*e*/)
 lv_obj_t *build_monitor_exit_button(lv_obj_t *parent)
 {
     lv_obj_t *btn = nullptr;
-    make_glass_round_btn(parent, &ic_home, on_monitor_exit_click, &btn);
+    /* 钮内图标边长是 USER_PRINT_CTL_BTN/2（48/32/25），从 home 的多档表里取最近的
+     * 那份——1920/1280 精确命中，1024 档是 26 缩到 25。 */
+    make_glass_round_btn(parent, pick_icon(ic_home_set, USER_PRINT_CTL_BTN / 2),
+                         on_monitor_exit_click, &btn);
     return btn;
 }
 
