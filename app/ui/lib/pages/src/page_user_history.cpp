@@ -1952,7 +1952,10 @@ lv_obj_t *build_empty(lv_obj_t *parent)
     lv_obj_align(box, LV_ALIGN_CENTER, 0, 0);
     lv_obj_add_flag(box, LV_OBJ_FLAG_HIDDEN);
 
-    const int32_t ring = USER_BTN_PRIMARY_H * 10 / 9;   /* 稿 80（图标 36 的 2.2 倍） */
+    /* 稿 4531:7206 是 80，内含 36 的打印机图标。旧式 USER_BTN_PRIMARY_H*10/9 是照
+     * 1920 档写的（72×10/9 正好 80），1280 档只算得 57，差了 23，故本档改为直接给值。 */
+    const int32_t ring = USER_EMPTY_RING_SZ > 0 ? USER_EMPTY_RING_SZ
+                                                : USER_BTN_PRIMARY_H * 10 / 9;
     lv_obj_t *icon_box = lv_obj_create(box);
     lv_obj_remove_style_all(icon_box);
     lv_obj_set_size(icon_box, ring, ring);
@@ -1963,8 +1966,8 @@ lv_obj_t *build_empty(lv_obj_t *parent)
     lv_obj_set_style_border_color(icon_box, user_color_text, 0);
     lv_obj_set_style_border_opa(icon_box, LV_OPA_20, 0);
     lv_obj_clear_flag(icon_box, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_t *ic = ui_user_make_icon_img(icon_box, &ic_printer,
-                                         USER_BTN_PRIMARY_H * 5 / 8,
+    /* 图标由圆底导出：稿是 36 / 80 = 9/20，跟着圆底一起缩放才不会脱节 */
+    lv_obj_t *ic = ui_user_make_icon_img(icon_box, &ic_printer, ring * 9 / 20,
                                          user_color_text_dim);
     lv_obj_center(ic);
 
@@ -1978,13 +1981,14 @@ lv_obj_t *build_empty(lv_obj_t *parent)
     lv_obj_set_style_bg_opa(texts, LV_OPA_TRANSP, 0);
     lv_obj_clear_flag(texts, LV_OBJ_FLAG_SCROLLABLE);
 
+    /* 稿 4531:7210/7211：标题与说明**同为 16**，只靠字重和颜色分层 */
     g_empty_title = lv_label_create(texts);
     lv_obj_set_style_text_color(g_empty_title, user_color_text, 0);
-    lv_obj_set_style_text_font(g_empty_title, user_font_text(), 0);
+    lv_obj_set_style_text_font(g_empty_title, user_font_text_sm(), 0);
 
     g_empty_sub = lv_label_create(texts);
     lv_obj_set_style_text_color(g_empty_sub, user_color_text_dim, 0);
-    lv_obj_set_style_text_font(g_empty_sub, user_font_caption(), 0);
+    lv_obj_set_style_text_font(g_empty_sub, user_font_text_sm(), 0);
 
     g_empty_btn = ui_user_make_primary_pill_btn(box, &ic_folder, "Start Print",
                                                 on_empty_start_print, 0, false);

@@ -198,6 +198,10 @@ typedef struct {
      *  3033:5253/5256 都是 160；**设置页那张稿是 192**，未统一，故该页仍用旧值。
      *  0 = 沿用旧式 USER_PAD_LG。 */
     int32_t user_scroll_btn_gap;
+    /** 空态那枚图标圆底的直径（稿 4531:7206 是 80，内含 36 的图标）。
+     *  0 = 沿用旧式 user_btn_primary_h * 10/9——那个式子是照 1920 档（72×10/9 = 80）
+     *  写的，1280 档只算得 57，与稿差 23，故本档改为直接给值。 */
+    int32_t user_empty_ring_sz;
 
     /* ---- 打印流程：弹窗 / 滑动 / 旋转环 / 进度 / 打印中底条 ---- */
     int32_t user_dlg_w;
@@ -460,6 +464,7 @@ extern const ui_theme_t *g_ui;
 #define USER_HIST_LIST_PAD_L        (g_ui->user_hist_list_pad_l)
 #define USER_SCROLL_BTN_SZ          (g_ui->user_scroll_btn_sz)
 #define USER_SCROLL_BTN_GAP         (g_ui->user_scroll_btn_gap)
+#define USER_EMPTY_RING_SZ          (g_ui->user_empty_ring_sz)
 
 /**
  * 初始化主题：根据当前 lv_display 实际分辨率挑选 profile，再初始化所有 lv_style。

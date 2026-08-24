@@ -925,7 +925,8 @@ void build_drawer_footer(lv_obj_t *parent, const ui_alarm_entry_t *cur)
     lv_obj_t *lbl = lv_label_create(btn);
     lv_label_set_text(lbl, pending ? "Resetting..." : "Reset");
     lv_obj_set_style_text_color(lbl, user_color_text, 0);
-    lv_obj_set_style_text_font(lbl, user_font_text(), 0);
+    /* 稿 I3209:9880 的「按钮文本EN」是 20 */
+    lv_obj_set_style_text_font(lbl, user_font_title(), 0);
     lv_obj_center(lbl);
 }
 
@@ -1025,7 +1026,8 @@ void drawer_sync(void)
     lv_obj_t *head_title = lv_label_create(head);
     lv_label_set_text(head_title, "Notification Details");
     lv_obj_set_style_text_color(head_title, user_color_text, 0);
-    lv_obj_set_style_text_font(head_title, user_font_text(), 0);
+    /* 稿 3206:9831 是「一级标题」20 */
+    lv_obj_set_style_text_font(head_title, user_font_title(), 0);
 
     /* 正文区（稿 3204:9818）：标题 → 时刻 → 描述 → …… → 页脚按钮 */
     lv_obj_t *body_col = lv_obj_create(panel);
@@ -1043,7 +1045,8 @@ void drawer_sync(void)
     lv_obj_t *t = lv_label_create(body_col);
     lv_label_set_text(t, title);
     lv_obj_set_style_text_color(t, user_color_text, 0);
-    lv_obj_set_style_text_font(t, user_font_text(), 0);
+    /* 稿 3207:9849 是 22，字库只到 20 / 24（见 rongsu_ui.defaults 启用的档），取更近的 20。 */
+    lv_obj_set_style_text_font(t, user_font_title(), 0);
     lv_obj_set_width(t, LV_PCT(100));
     lv_label_set_long_mode(t, LV_LABEL_LONG_WRAP);
 
@@ -1067,7 +1070,7 @@ void drawer_sync(void)
     lv_label_set_text(when, buf);
     lv_obj_set_style_text_color(when, lv_color_white(), 0);
     lv_obj_set_style_text_opa(when, LV_OPA_30, 0);
-    lv_obj_set_style_text_font(when, user_font_caption(), 0);
+    lv_obj_set_style_text_font(when, user_font_text_sm(), 0);   /* 稿 3207:9850 是 16 */
 
     /* 完整描述 */
     if(body && body[0]) {
@@ -1075,7 +1078,7 @@ void drawer_sync(void)
         lv_label_set_text(b, body);
         lv_obj_set_style_text_color(b, lv_color_white(), 0);
         lv_obj_set_style_text_opa(b, LV_OPA_50, 0);
-        lv_obj_set_style_text_font(b, user_font_caption(), 0);
+        lv_obj_set_style_text_font(b, user_font_text_sm(), 0);   /* 稿 3204:9820 是 16 */
         lv_obj_set_width(b, LV_PCT(100));
         lv_label_set_long_mode(b, LV_LABEL_LONG_WRAP);
     }
@@ -1174,7 +1177,7 @@ lv_obj_t *make_action_btn(lv_obj_t *parent, const char *text, bool danger,
     lv_obj_t *lbl = lv_label_create(btn);
     lv_label_set_text(lbl, text);
     lv_obj_set_style_text_color(lbl, user_color_text, 0);
-    lv_obj_set_style_text_font(lbl, user_font_caption(), 0);
+    lv_obj_set_style_text_font(lbl, user_font_text_sm(), 0);   /* 稿 5258:10393 是 16 */
     lv_obj_center(lbl);
     return btn;
 }
@@ -1228,7 +1231,8 @@ void make_tab_item(lv_obj_t *parent, int idx)
 
     lv_obj_t *lbl = lv_label_create(item);
     lv_label_set_text(lbl, kTabTitles[idx]);
-    lv_obj_set_style_text_font(lbl, user_font_text(), 0);
+    /* 稿 5258:10390 是 16；user_font_text 在 1280 档是 18，故取 text_sm（该档稿值 16）。 */
+    lv_obj_set_style_text_font(lbl, user_font_text_sm(), 0);
     lv_obj_align(lbl, LV_ALIGN_TOP_MID, 0, 0);
 
     /* 量出文字宽再把项宽写死：SIZE_CONTENT 容器里放百分比宽的子对象会互相依赖
@@ -1300,7 +1304,7 @@ lv_obj_t *build_tab_row(lv_obj_t *parent)
     g_lbl_sel = lv_label_create(g_manage_bar);
     lv_label_set_text(g_lbl_sel, "0 selected");
     lv_obj_set_style_text_color(g_lbl_sel, user_color_text_dim, 0);
-    lv_obj_set_style_text_font(g_lbl_sel, user_font_caption(), 0);
+    lv_obj_set_style_text_font(g_lbl_sel, user_font_text_sm(), 0);   /* 同历史页，稿 16 */
     lv_obj_set_style_margin_right(g_lbl_sel, USER_PAD_SM, 0);
 
     g_btn_del = make_action_btn(g_manage_bar, "Delete", true, on_manage_delete);
@@ -1316,7 +1320,9 @@ void build_group_title(lv_obj_t *parent, const char *text)
     lv_label_set_text(lbl, text);
     lv_obj_set_style_text_color(lbl, lv_color_white(), 0);
     lv_obj_set_style_text_opa(lbl, LV_OPA_50, 0);
-    lv_obj_set_style_text_font(lbl, user_font_caption(), 0);
+    /* 日期分组标题：稿 3033:5261 是 16（白 50%）。另一帧 3201:9581 画的是 20，
+     * 但那帧没有 Tab 行、列表从 y=128 起，是更早的简化版式，以带 Tab 的新版为准。 */
+    lv_obj_set_style_text_font(lbl, user_font_text_sm(), 0);
     /* 组间距比卡间距大一档，两组才分得开（列表自身 pad_row 就是卡间距）。
      * 标题到组内首卡不额外留白，靠 pad_row 那一档即可——稿上两者同为 16。 */
     lv_obj_set_style_margin_top(lbl, USER_PAD_SM, 0);
@@ -1350,7 +1356,7 @@ void build_load_more(lv_obj_t *parent)
     lv_obj_set_style_text_color(btn, lv_color_white(), 0);
     lv_obj_set_style_text_opa(btn, LV_OPA_50, 0);
     lv_obj_set_style_text_opa(btn, LV_OPA_COVER, LV_STATE_PRESSED);
-    lv_obj_set_style_text_font(btn, user_font_text(), 0);
+    lv_obj_set_style_text_font(btn, user_font_text_sm(), 0);   /* 稿 16，见上面说明 */
 
     lv_obj_t *lbl = lv_label_create(btn);
     lv_label_set_text(lbl, "Load More");
@@ -1500,10 +1506,14 @@ void build_entry(lv_obj_t *parent, const MsgItem &it)
     lv_obj_clear_flag(mid, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_remove_flag(mid, LV_OBJ_FLAG_CLICKABLE);
 
+    /* 标题与正文稿上**同为 20**（3058:7065/7068 的命名样式「一级标题」/「一级正文」），
+     * 只靠字重（SemiBold / Regular）和 50% 透明度分层；Montserrat 单字重，字重那半做
+     * 不出来，只落地「同号 + 透明度」。与左下通知栈同一处理，见该节。
+     * 注意本页这套 20 与历史页卡片那套 16 不是一个尺度，稿上就不同，别互相看齐。 */
     lv_obj_t *title = lv_label_create(mid);
     lv_label_set_text(title, it.title);
     lv_obj_set_style_text_color(title, user_color_text, 0);
-    lv_obj_set_style_text_font(title, user_font_text(), 0);
+    lv_obj_set_style_text_font(title, user_font_title(), 0);
     lv_obj_set_width(title, LV_PCT(100));
     lv_label_set_long_mode(title, LV_LABEL_LONG_DOT);
 
@@ -1511,11 +1521,12 @@ void build_entry(lv_obj_t *parent, const MsgItem &it)
         lv_obj_t *body = lv_label_create(mid);
         lv_label_set_text(body, it.body);
         lv_obj_set_style_text_color(body, user_color_text_dim, 0);
-        lv_obj_set_style_text_font(body, user_font_caption(), 0);
+        lv_obj_set_style_text_font(body, user_font_title(), 0);
         lv_obj_set_width(body, LV_PCT(100));
         lv_label_set_long_mode(body, LV_LABEL_LONG_WRAP);
-        /* 长文最多两行：按字体行高箍住，再长的进抽屉看全文 */
-        const int32_t lh = lv_font_get_line_height(user_font_caption());
+        /* 长文最多两行：按字体行高箍住，再长的进抽屉看全文。
+         * 行高基准必须与上面的字体一致，否则会截在半行上。 */
+        const int32_t lh = lv_font_get_line_height(user_font_title());
         lv_obj_set_style_max_height(body, lh * 2 + USER_PAD_SM / 2, 0);
         lv_obj_add_flag(body, LV_OBJ_FLAG_EVENT_BUBBLE);
     }
@@ -1545,7 +1556,7 @@ void build_entry(lv_obj_t *parent, const MsgItem &it)
     lv_label_set_text(time_lbl, clk);
     lv_obj_set_style_text_color(time_lbl, lv_color_white(), 0);
     lv_obj_set_style_text_opa(time_lbl, LV_OPA_50, 0);
-    lv_obj_set_style_text_font(time_lbl, user_font_caption(), 0);
+    lv_obj_set_style_text_font(time_lbl, user_font_title(), 0);   /* 稿 3058:7096 是 20 */
     lv_obj_add_flag(time_lbl, LV_OBJ_FLAG_EVENT_BUBBLE);
 
     /* 稿上的 › 是一枚半透明圆钮而不是裸符号；点击仍由整张卡片受理 */

@@ -129,6 +129,7 @@ static const ui_theme_t s_theme_1920 = {
     /* user_sensor_strip_h    */ 120,
     /* user_scroll_btn_sz     */ 0,    /* 无稿，沿用旧式 64*5/4 = 80 */
     /* user_scroll_btn_gap    */ 0,    /* 无稿，沿用旧式 USER_PAD_LG */
+    /* user_empty_ring_sz     */ 0,    /* 无稿，沿用旧式 72*10/9 = 80 */
 
     /* 打印流程 */
     /* user_dlg_w                 */ 720,
@@ -289,6 +290,7 @@ static const ui_theme_t s_theme_1280 = {
     /* user_sensor_strip_h    */ 84,
     /* user_scroll_btn_sz     */ 64,   /* 稿值（三页一致） */
     /* user_scroll_btn_gap    */ 160,  /* 稿值（历史页 / 消息页） */
+    /* user_empty_ring_sz     */ 80,   /* 稿值；旧式在本档只算得 57 */
 
     /* 打印流程 */
     /* user_dlg_w                 */ 500,
@@ -453,6 +455,7 @@ static const ui_theme_t s_theme_1024 = {
     /* user_sensor_strip_h    */ 68,
     /* user_scroll_btn_sz     */ 0,    /* 无稿，沿用旧式 40*5/4 = 50 */
     /* user_scroll_btn_gap    */ 0,    /* 无稿，沿用旧式 USER_PAD_LG */
+    /* user_empty_ring_sz     */ 0,    /* 无稿，沿用旧式 44*10/9 = 48 */
 
     /* 打印流程 */
     /* user_dlg_w                 */ 400,
