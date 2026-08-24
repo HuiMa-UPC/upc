@@ -41,11 +41,13 @@ struct FirstLayerGeometryObservation {
 };
 
 /**
- * Cached PP-LiteSeg geometry and four-channel distilled EfficientNet detector.
+ * Cached PP-LiteSeg geometry and five-channel reference-aware EfficientNet V3.
  *
  * The input is a tight NV12 frame. PP-LiteSeg runs only while establishing or
  * auditing the cached homography. Classification uses the NV12 Y plane after
  * perspective rectification and illumination-robust texture preprocessing.
+ * The fifth channel is built from a bare reference captured in the same print
+ * session before motion begins.  A missing reference always fails closed.
  * Any missing cache, model/runtime error, scene-quality rejection, low
  * confidence, or OOD embedding produces passed=false.
  */
@@ -64,6 +66,20 @@ public:
     FirstLayerGeometryObservation observe_nv12(
         const uint8_t* nv12, std::size_t bytes,
         uint32_t width, uint32_t height, uint32_t frame_seq);
+
+    /**
+     * Capture the current tight NV12 frame as this print session's bare B0.
+     * Geometry and scene quality must already be usable.  The raw Y plane is
+     * retained so it can be warped with the same current homography as A.
+     */
+    bool capture_bare_reference_nv12(
+        const uint8_t* nv12, std::size_t bytes,
+        uint32_t width, uint32_t height, uint32_t frame_seq,
+        std::string& reason);
+
+    /** Clear B0 at print-session boundaries. */
+    void clear_bare_reference();
+    bool has_bare_reference() const;
 
     /** Run the complete cached-geometry + fusion classification pipeline. */
     FirstLayerDetection predict_nv12(const uint8_t* nv12, std::size_t bytes,

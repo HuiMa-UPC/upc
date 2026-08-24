@@ -176,7 +176,22 @@ public:
         check(api_.query(context_, RKNN_QUERY_INPUT_ATTR, &input_attr_,
                          sizeof(input_attr_)), "RKNN_QUERY_INPUT_ATTR");
         if(input_attr_.n_elems != expected_input_elements) {
-            throw std::runtime_error("unexpected RKNN physical input size");
+            std::ostringstream detail;
+            detail << "unexpected RKNN physical input size path=" << path
+                   << " expected=" << expected_input_elements
+                   << " actual=" << input_attr_.n_elems
+                   << " n_dims=" << input_attr_.n_dims << " dims=";
+            for(uint32_t index = 0; index < input_attr_.n_dims; ++index) {
+                if(index != 0) {
+                    detail << 'x';
+                }
+                detail << input_attr_.dims[index];
+            }
+            detail << " fmt=" << static_cast<int>(input_attr_.fmt)
+                   << " type=" << static_cast<int>(input_attr_.type)
+                   << " size=" << input_attr_.size
+                   << " size_with_stride=" << input_attr_.size_with_stride;
+            throw std::runtime_error(detail.str());
         }
         output_attrs_.resize(io.n_output);
         for(uint32_t index = 0; index < io.n_output; ++index) {
@@ -437,37 +452,82 @@ cv::Mat fixed_unsigned_u8(const cv::Mat& values, float limit)
     return output;
 }
 
-cv::Mat build_fusion_input(const cv::Mat& canonical_gray)
+cv::Mat fixed_centered_u8(const cv::Mat& values, float limit)
 {
+    cv::Mat output(values.size(), CV_8UC1);
+    for(int row = 0; row < values.rows; ++row) {
+        const float* input = values.ptr<float>(row);
+        uint8_t* target = output.ptr<uint8_t>(row);
+        for(int column = 0; column < values.cols; ++column) {
+            const float normalized = std::max(-1.0f, std::min(1.0f, input[column] / limit));
+            target[column] = cv::saturate_cast<uint8_t>(
+                std::round(128.0f + normalized * 127.0f));
+        }
+    }
+    return output;
+}
+
+cv::Mat build_fusion_input(const cv::Mat& canonical_gray,
+                           const cv::Mat& canonical_bare)
+{
+    if(canonical_gray.empty() || canonical_bare.empty() ||
+       canonical_gray.type() != CV_8UC1 || canonical_bare.type() != CV_8UC1 ||
+       canonical_gray.size() != canonical_bare.size()) {
+        throw std::runtime_error("invalid canonical bare-reference pair");
+    }
+    cv::Mat gray_float;
+    canonical_gray.convertTo(gray_float, CV_32F);
     cv::Mat log_values;
-    canonical_gray.convertTo(log_values, CV_32F);
-    log_values += 4.0f;
+    gray_float.copyTo(log_values);
+    log_values += fusion_model::kLogFloor;
     cv::log(log_values, log_values);
     cv::Mat fine_illumination;
-    cv::Mat coarse_illumination;
     cv::GaussianBlur(log_values, fine_illumination, cv::Size(), 2.0, 2.0,
                      cv::BORDER_REFLECT_101);
-    cv::GaussianBlur(log_values, coarse_illumination, cv::Size(), 11.0, 11.0,
+
+    cv::Mat low_frequency;
+    const double low_sigma = std::max(
+        static_cast<double>(canonical_gray.cols) /
+            fusion_model::kLowFrequencySigmaDivisor,
+        1.0);
+    cv::GaussianBlur(gray_float, low_frequency, cv::Size(), low_sigma, low_sigma,
                      cv::BORDER_REFLECT_101);
+    low_frequency += fusion_model::kLogFloor;
+    cv::log(low_frequency, low_frequency);
+
     cv::Mat gradient_x;
     cv::Mat gradient_y;
     cv::Mat gradient;
     cv::Sobel(log_values, gradient_x, CV_32F, 1, 0, 3);
     cv::Sobel(log_values, gradient_y, CV_32F, 0, 1, 3);
     cv::magnitude(gradient_x, gradient_y, gradient);
+
+    cv::Mat bare_log;
+    canonical_bare.convertTo(bare_log, CV_32F);
+    bare_log += fusion_model::kLogFloor;
+    cv::log(bare_log, bare_log);
+
     std::vector<cv::Mat> channels{
         canonical_gray,
         fixed_signed_u8(log_values - fine_illumination, 0.12f),
-        fixed_signed_u8(log_values - coarse_illumination, 0.30f),
+        fixed_centered_u8(log_values - low_frequency,
+                          fusion_model::kLowFrequencyLogLimit),
         fixed_unsigned_u8(gradient, 0.90f),
+        fixed_signed_u8(log_values - bare_log,
+                        fusion_model::kReferenceChangeLogLimit),
     };
+    std::vector<cv::Mat> resized_channels;
+    resized_channels.reserve(channels.size());
+    for(const cv::Mat& channel : channels) {
+        cv::Mat resized;
+        cv::resize(channel, resized,
+                   cv::Size(fusion_model::kInputSize, fusion_model::kInputSize),
+                   0.0, 0.0, cv::INTER_AREA);
+        resized_channels.push_back(std::move(resized));
+    }
     cv::Mat merged;
-    cv::merge(channels, merged);
-    cv::Mat resized;
-    cv::resize(merged, resized,
-               cv::Size(fusion_model::kInputSize, fusion_model::kInputSize),
-               0.0, 0.0, cv::INTER_AREA);
-    return resized.isContinuous() ? resized : resized.clone();
+    cv::merge(resized_channels, merged);
+    return merged.isContinuous() ? merged : merged.clone();
 }
 
 } // namespace
@@ -518,6 +578,62 @@ public:
         return output;
     }
 
+    bool capture_bare_reference(const uint8_t* nv12, std::size_t bytes,
+                                uint32_t width, uint32_t height,
+                                uint32_t frame_seq, std::string& reason)
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        try {
+            make_nv12_view(nv12, bytes, width, height);
+            ensure_runtime();
+            ensure_cache_loaded(width, height, frame_seq);
+            const ObserveResult observation = observe_locked(
+                nv12, bytes, width, height, frame_seq);
+            last_cache_event_ = observation.event;
+            last_segmentation_reason_ = observation.reason;
+            if(!cache_available_) {
+                reason = "geometry_cache_unavailable:" + last_segmentation_reason_;
+                return false;
+            }
+            cv::Mat canonical;
+            cv::warpPerspective(make_gray_view(nv12, width, height), canonical,
+                                cache_.homography,
+                                cv::Size(contract::kCanonicalSize,
+                                         contract::kCanonicalSize),
+                                cv::INTER_LINEAR, cv::BORDER_REFLECT_101);
+            const SceneQuality quality = check_scene_quality(canonical);
+            if(!quality.passed) {
+                reason = "bare_reference_scene_quality:" +
+                    join_reasons(quality.reasons);
+                return false;
+            }
+            bare_reference_gray_ = make_gray_view(nv12, width, height).clone();
+            bare_reference_width_ = width;
+            bare_reference_height_ = height;
+            bare_reference_frame_seq_ = frame_seq;
+            reason = "ok";
+            return true;
+        } catch(const std::exception& error) {
+            reason = error.what();
+            return false;
+        }
+    }
+
+    void clear_bare_reference()
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        bare_reference_gray_.release();
+        bare_reference_width_ = 0;
+        bare_reference_height_ = 0;
+        bare_reference_frame_seq_ = 0;
+    }
+
+    bool has_bare_reference() const
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return !bare_reference_gray_.empty();
+    }
+
     FirstLayerDetection predict(const uint8_t* nv12, std::size_t bytes,
                                 uint32_t width, uint32_t height,
                                 uint32_t frame_seq)
@@ -549,14 +665,26 @@ public:
                                 cv::Size(contract::kCanonicalSize,
                                          contract::kCanonicalSize),
                                 cv::INTER_LINEAR, cv::BORDER_REFLECT_101);
+            if(bare_reference_gray_.empty() ||
+               bare_reference_width_ != width ||
+               bare_reference_height_ != height) {
+                throw std::runtime_error("bare_reference_unavailable");
+            }
+            cv::Mat canonical_bare;
+            cv::warpPerspective(bare_reference_gray_, canonical_bare,
+                                cache_.homography,
+                                cv::Size(contract::kCanonicalSize,
+                                         contract::kCanonicalSize),
+                                cv::INTER_LINEAR, cv::BORDER_REFLECT_101);
             SceneQuality quality = check_scene_quality(canonical);
-            cv::Mat fusion_input = build_fusion_input(canonical);
+            cv::Mat fusion_input = build_fusion_input(canonical, canonical_bare);
             result.preprocessing_ms = elapsed_ms(preprocessing_begin);
 
             std::vector<std::vector<float>> outputs;
             std::string inference_error;
             if(!fusion_model_instance().run_uint8_nhwc(
-                   fusion_input.ptr<uint8_t>(), fusion_input.total() * 4u,
+                   fusion_input.ptr<uint8_t>(),
+                   fusion_input.total() * fusion_model::kInputChannels,
                    outputs, result.fusion_ms, inference_error)) {
                 throw std::runtime_error(inference_error);
             }
@@ -1088,6 +1216,11 @@ private:
     std::string last_cache_event_ = "not_run";
     std::string last_segmentation_reason_ = "not_run";
 
+    cv::Mat bare_reference_gray_;
+    uint32_t bare_reference_width_ = 0;
+    uint32_t bare_reference_height_ = 0;
+    uint32_t bare_reference_frame_seq_ = 0;
+
 };
 
 FirstLayerDetector::FirstLayerDetector() : impl_(std::make_unique<Impl>()) {}
@@ -1103,6 +1236,24 @@ FirstLayerGeometryObservation FirstLayerDetector::observe_nv12(
     uint32_t frame_seq)
 {
     return impl_->observe(nv12, bytes, width, height, frame_seq);
+}
+
+bool FirstLayerDetector::capture_bare_reference_nv12(
+    const uint8_t* nv12, std::size_t bytes, uint32_t width, uint32_t height,
+    uint32_t frame_seq, std::string& reason)
+{
+    return impl_->capture_bare_reference(
+        nv12, bytes, width, height, frame_seq, reason);
+}
+
+void FirstLayerDetector::clear_bare_reference()
+{
+    impl_->clear_bare_reference();
+}
+
+bool FirstLayerDetector::has_bare_reference() const
+{
+    return impl_->has_bare_reference();
 }
 
 FirstLayerDetection FirstLayerDetector::predict_nv12(

@@ -539,6 +539,7 @@ bool GlavoService::start()
         middleware::MsgType::UI_Debug_FirstLayer_Visual_Check_Set_Ntf,
         middleware::MsgType::UI_Debug_FirstLayer_Visual_Check_Get_Ntf,
         middleware::MsgType::APP_Visual_FirstLayer_Check_Rsp,
+        middleware::MsgType::APP_Visual_FirstLayer_Reference_Ready_Rsp,
 
         /* Settings/About：MCU / 振镜控制板固件版本查询 */
         middleware::MsgType::UI_Mcu_Version_Ntf,
@@ -578,6 +579,7 @@ bool GlavoService::stop()
         std::lock_guard<std::mutex> lock(first_layer_visual_mtx_);
         first_layer_visual_waiting_ = false;
     }
+    first_layer_reference_waiting_ = false;
     first_layer_visual_cv_.notify_all();
     stop_usb_hotplug_monitor();
 
@@ -675,16 +677,23 @@ void GlavoService::worker_loop()
     while (worker_running_.load()) {
         middleware::Message msg;
         bool has_msg = false;
+        bool reference_timeout = false;
 
         {
             std::unique_lock<std::mutex> lock(worker_mutex_);
-            worker_cv_.wait(lock, [this]() {
+            const auto wake_predicate = [this]() {
                 return !worker_running_.load() ||
                        clean_test_done_pending_.load() ||
                        transport_result_pending_.load() ||
                        !worker_queue_.empty() ||
                        !link_event_queue_.empty();
-            });
+            };
+            if(first_layer_reference_waiting_) {
+                worker_cv_.wait_until(
+                    lock, first_layer_reference_deadline_, wake_predicate);
+            } else {
+                worker_cv_.wait(lock, wake_predicate);
+            }
 
             if (!worker_running_.load() &&
                 worker_queue_.empty() &&
@@ -723,9 +732,18 @@ void GlavoService::worker_loop()
                 msg = std::move(worker_queue_.front());
                 worker_queue_.pop();
                 has_msg = true;
+            } else if(first_layer_reference_waiting_ &&
+                      std::chrono::steady_clock::now() >=
+                          first_layer_reference_deadline_) {
+                first_layer_reference_waiting_ = false;
+                reference_timeout = true;
             }
         }
 
+        if(reference_timeout) {
+            abort_print_start_for_reference("bare_reference_timeout");
+            continue;
+        }
         if(!has_msg) {
             continue;
         }
@@ -958,6 +976,9 @@ void GlavoService::handle_message(const middleware::Message& msg)
             break;
         case middleware::MsgType::APP_Visual_FirstLayer_Check_Rsp:
             handle_visual_first_layer_check_rsp(msg);
+            break;
+        case middleware::MsgType::APP_Visual_FirstLayer_Reference_Ready_Rsp:
+            handle_visual_first_layer_reference_ready_rsp(msg);
             break;
         case middleware::MsgType::UI_Mcu_Version_Ntf:
             handle_mcu_version_req(msg);
@@ -1429,11 +1450,54 @@ void GlavoService::launch_print_from_prepared(const std::string& full_path)
     ignore_powder_low_for_current_print_ = false;
     print_running_.store(true);
     McuLink::instance().set_print_task_flow_active(true);
-    publish_first_layer_visual_session(true, "print_start");
-    PrintVideoNotify::instance().on_print_start(current_file_path_);
-    McuLink::instance().begin_sending();
+    if(first_layer_visual_check_on_) {
+        first_layer_reference_waiting_ = true;
+        first_layer_reference_deadline_ =
+            std::chrono::steady_clock::now() + std::chrono::seconds(10);
+        if(!publish_first_layer_visual_session(true, "print_start")) {
+            first_layer_reference_waiting_ = false;
+            abort_print_start_for_reference("reference_start_publish_failed");
+            return;
+        }
+        UPC_LOG_GLAVO_SERVICE(Info,
+            "print_start waiting for same-session bare reference timeout_ms=10000 path=%s",
+            full_path.c_str());
+        worker_cv_.notify_all();
+        return;
+    }
+
+    begin_print_motion_after_reference_ready();
 
     UPC_LOG_GLAVO_SERVICE(Info, "print_start: path=%s", full_path.c_str());
+}
+
+void GlavoService::begin_print_motion_after_reference_ready()
+{
+    if(!print_running_.load()) {
+        UPC_LOG_GLAVO_SERVICE(Warn,
+            "print motion start ignored: print is no longer active");
+        return;
+    }
+    first_layer_reference_waiting_ = false;
+    PrintVideoNotify::instance().on_print_start(current_file_path_);
+    McuLink::instance().begin_sending();
+    UPC_LOG_GLAVO_SERVICE(Info,
+        "print motion started reference_ready=%d path=%s",
+        first_layer_visual_check_on_ ? 1 : 0, current_file_path_.c_str());
+}
+
+void GlavoService::abort_print_start_for_reference(const char* reason)
+{
+    first_layer_reference_waiting_ = false;
+    UPC_LOG_GLAVO_SERVICE(Error,
+        "print start blocked: same-session bare reference unavailable reason=%s",
+        reason ? reason : "unknown");
+    print_running_.store(false);
+    McuLink::instance().set_print_task_flow_active(false);
+    (void)publish_first_layer_visual_session(false, "reference_failed");
+    parser::ParserManager::instance().stop_parse();
+    clear_prepare_session();
+    publish_terminate_done();
 }
 
 /**
@@ -1481,6 +1545,7 @@ void GlavoService::handle_print_start(const middleware::Message& msg)
 /** @brief 停止解析线程并将 print_running_ 置 false（不请求 Mcu 终止） */
 void GlavoService::stop_print_job()
 {
+    first_layer_reference_waiting_ = false;
     print_running_.store(false);
     publish_first_layer_visual_session(false, "print_stop");
     parser::ParserManager::instance().stop_parse();
@@ -1497,6 +1562,7 @@ void GlavoService::handle_print_terminate(const middleware::Message& msg)
         return;
     }
     deferred_print_start_ = false;
+    first_layer_reference_waiting_ = false;
     print_running_.store(false);
     publish_first_layer_visual_session(false, "user_terminate");
     McuLink::instance().set_user_dispatch_paused(false);
@@ -1831,6 +1897,35 @@ bool GlavoService::request_first_layer_visual_check(uint16_t layer_height_um)
             middleware::DeviceEventSeverity::Error, true);
     }
     return pass;
+}
+
+void GlavoService::handle_visual_first_layer_reference_ready_rsp(
+    const middleware::Message& msg)
+{
+    middleware::VisualFirstLayerReferenceReadyPayload rsp{};
+    if(!read_inline_pod(msg.payload, rsp)) {
+        if(first_layer_reference_waiting_) {
+            first_layer_reference_waiting_ = false;
+            abort_print_start_for_reference("invalid_reference_response");
+        }
+        return;
+    }
+    if(!first_layer_reference_waiting_) {
+        UPC_LOG_GLAVO_SERVICE(Warn,
+            "bare reference response without pending print result=%u frame=%u",
+            static_cast<unsigned>(rsp.result),
+            static_cast<unsigned>(rsp.frame_seq));
+        return;
+    }
+    first_layer_reference_waiting_ = false;
+    if(rsp.result == 0) {
+        abort_print_start_for_reference("visual_reference_capture_failed");
+        return;
+    }
+    UPC_LOG_GLAVO_SERVICE(Info,
+        "same-session bare reference ready frame=%u; allowing print motion",
+        static_cast<unsigned>(rsp.frame_seq));
+    begin_print_motion_after_reference_ready();
 }
 
 void GlavoService::handle_visual_first_layer_check_rsp(const middleware::Message& msg)
@@ -3042,14 +3137,14 @@ void GlavoService::publish_debug_first_layer_visual_check_state()
     (void)publish_async(ntf);
 }
 
-void GlavoService::publish_first_layer_visual_session(bool active,
+bool GlavoService::publish_first_layer_visual_session(bool active,
                                                        const char* reason)
 {
     if(active && !first_layer_visual_check_on_) {
-        return;
+        return false;
     }
     if(first_layer_visual_session_active_ == active) {
-        return;
+        return true;
     }
 
     const middleware::MsgType type = active
@@ -3062,12 +3157,13 @@ void GlavoService::publish_first_layer_visual_session(bool active,
         UPC_LOG_GLAVO_SERVICE(Warn,
             "first layer visual session publish failed active=%d reason=%s",
             active ? 1 : 0, reason);
-        return;
+        return false;
     }
     first_layer_visual_session_active_ = active;
     UPC_LOG_GLAVO_SERVICE(Info,
         "first layer visual session active=%d reason=%s",
         active ? 1 : 0, reason);
+    return true;
 }
 
 void GlavoService::handle_debug_first_layer_visual_check_set(const middleware::Message& msg)
@@ -3082,7 +3178,9 @@ void GlavoService::handle_debug_first_layer_visual_check_set(const middleware::M
     if(!first_layer_visual_check_on_) {
         publish_first_layer_visual_session(false, "feature_disabled");
     } else if(print_running_.load()) {
-        publish_first_layer_visual_session(true, "feature_enabled_during_print");
+        UPC_LOG_GLAVO_SERVICE(Warn,
+            "first-layer visual enabled during an active print; "
+            "same-session B0 cannot be guaranteed, so it takes effect next print");
     }
     publish_debug_first_layer_visual_check_state();
 }

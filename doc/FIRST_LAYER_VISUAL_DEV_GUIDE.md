@@ -29,6 +29,9 @@
 
 - 会话开始：`GLAVO_Visual_FirstLayer_Session_Start_Ntf`（`0x1425`，Empty）
 - 会话停止：`GLAVO_Visual_FirstLayer_Session_Stop_Ntf`（`0x1426`，Empty）
+- 裸板回执：`APP_Visual_FirstLayer_Reference_Ready_Rsp`（`0x1427`）
+  - 载荷：`VisualFirstLayerReferenceReadyPayload`
+  - Visual 成功锁定本次打印 B0 前，Glavo 不得开始运动；失败/超时必须终止起印
 - 请求：`GLAVO_Visual_FirstLayer_Check_Req`（`0x1423`）
   - 载荷：`VisualFirstLayerCheckReqPayload`
   - 字段：`layer_height_um`

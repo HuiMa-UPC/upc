@@ -30,6 +30,21 @@ namespace {
 
 /* 起流重试间隔（ms）：避免 Camera 未就绪时高频打消息。 */
 constexpr uint64_t kStartRetryMs = 1000;
+constexpr std::size_t kTemporalFrameCount = 5;
+constexpr uint32_t kTemporalFrameStride = 3;
+constexpr double kTemporalDirectRejectProbability = 0.45;
+constexpr double kTemporalDirectAcceptProbability = 0.70;
+
+bool temporal_detection_usable(const FirstLayerDetection& detection)
+{
+    if(!detection.error.empty() || !detection.alignment_passed ||
+       !detection.cache_available || detection.is_ood ||
+       detection.confidence < fusion_model::kConfidenceThreshold) {
+        return false;
+    }
+    return detection.rejection_reasons.empty() ||
+        detection.rejection_reasons == "ready_probability_below_threshold";
+}
 
 struct DiagnosticImageSaveResult {
     bool saved = false;
@@ -369,15 +384,25 @@ void VisualService::start_first_layer_session(const char* reason)
                 std::chrono::duration_cast<std::chrono::milliseconds>(
                     std::chrono::system_clock::now().time_since_epoch()).count());
             first_layer_session_passed_ = false;
+            reference_capture_pending_ = true;
+            reference_capture_started_ms_ = monotonic_ms();
             newly_active = true;
         }
         session_id = first_layer_session_id_;
     }
     if(newly_active) {
-        std::lock_guard<std::mutex> lock(rejected_diagnostic_mtx_);
-        latest_rejected_diagnostic_ = RejectedDiagnosticCandidate{};
+        {
+            std::lock_guard<std::mutex> lock(rejected_diagnostic_mtx_);
+            latest_rejected_diagnostic_ = RejectedDiagnosticCandidate{};
+        }
+        {
+            std::lock_guard<std::mutex> detector_lock(detector_mtx_);
+            first_layer_detector_.clear_bare_reference();
+        }
+        clear_latest_snapshot();
         UPC_LOG_VISUAL_SERVICE(Info,
-            "first layer session start session_id=%llu reason=%s",
+            "first layer session start session_id=%llu reason=%s "
+            "reference_capture=pending",
             static_cast<unsigned long long>(session_id), reason);
     }
     send_stream_start_req();
@@ -394,6 +419,8 @@ void VisualService::stop_first_layer_session(const char* reason)
         passed = first_layer_session_passed_;
         session_id = first_layer_session_id_;
         first_layer_session_active_ = false;
+        reference_capture_pending_ = false;
+        reference_capture_started_ms_ = 0;
         start_req_sent_ = false;
     }
 
@@ -404,6 +431,10 @@ void VisualService::stop_first_layer_session(const char* reason)
     unmap_dma_views();
     consumer_.close();
     close_dma_fds(dma_fds_);
+    {
+        std::lock_guard<std::mutex> detector_lock(detector_mtx_);
+        first_layer_detector_.clear_bare_reference();
+    }
     clear_latest_snapshot();
 
     if(had_activity) {
@@ -444,6 +475,85 @@ void VisualService::cache_final_rejected_diagnostic(
     latest_rejected_diagnostic_.height = height;
     latest_rejected_diagnostic_.frame_seq = frame_seq;
     latest_rejected_diagnostic_.detection = detection;
+}
+
+void VisualService::send_reference_ready_rsp(bool ready, uint32_t frame_seq,
+                                             const std::string& reason)
+{
+    middleware::VisualFirstLayerReferenceReadyPayload payload{};
+    payload.result = ready ? 1 : 0;
+    payload.frame_seq = ready ? frame_seq : 0;
+    middleware::Message response(
+        middleware::MsgType::APP_Visual_FirstLayer_Reference_Ready_Rsp,
+        middleware::ModuleId::APP_VISUAL,
+        middleware::ModuleId::APP_GLAVO);
+    response.payload = middleware::MsgPayload::from_bytes(
+        reinterpret_cast<const uint8_t*>(&payload), sizeof(payload));
+    middleware::MsgPort::instance().publish_async(response);
+    if(ready) {
+        UPC_LOG_VISUAL_SERVICE(Info,
+            "first layer bare reference result=%u frame=%u reason=%s",
+            static_cast<unsigned>(payload.result),
+            static_cast<unsigned>(payload.frame_seq), reason.c_str());
+    } else {
+        UPC_LOG_VISUAL_SERVICE(Error,
+            "first layer bare reference result=%u frame=%u reason=%s",
+            static_cast<unsigned>(payload.result),
+            static_cast<unsigned>(payload.frame_seq), reason.c_str());
+    }
+}
+
+void VisualService::try_capture_bare_reference(const FrameSnapshot& frame)
+{
+    bool pending = false;
+    uint64_t started_ms = 0;
+    {
+        std::lock_guard<std::mutex> lock(state_mtx_);
+        pending = first_layer_session_active_ && reference_capture_pending_;
+        started_ms = reference_capture_started_ms_;
+    }
+    if(!pending) {
+        return;
+    }
+
+    std::string reason;
+    bool captured = false;
+    {
+        std::lock_guard<std::mutex> detector_lock(detector_mtx_);
+        captured = first_layer_detector_.capture_bare_reference_nv12(
+            frame.nv12.data(), frame.nv12.size(), frame.width, frame.height,
+            frame.frame_seq, reason);
+    }
+    if(captured) {
+        bool notify = false;
+        {
+            std::lock_guard<std::mutex> lock(state_mtx_);
+            if(reference_capture_pending_) {
+                reference_capture_pending_ = false;
+                notify = true;
+            }
+        }
+        if(notify) {
+            send_reference_ready_rsp(true, frame.frame_seq, reason);
+        }
+        return;
+    }
+
+    constexpr uint64_t kReferenceCaptureTimeoutMs = 7000;
+    if(started_ms != 0 && monotonic_ms() - started_ms >= kReferenceCaptureTimeoutMs) {
+        bool notify = false;
+        {
+            std::lock_guard<std::mutex> lock(state_mtx_);
+            if(reference_capture_pending_) {
+                reference_capture_pending_ = false;
+                notify = true;
+            }
+        }
+        if(notify) {
+            send_reference_ready_rsp(false, 0,
+                reason.empty() ? "reference_capture_timeout" : reason);
+        }
+    }
 }
 
 bool VisualService::read_inline_start_rsp(const middleware::Message& msg,
@@ -567,16 +677,24 @@ void VisualService::worker_thread_fn()
         consumer_.release_slot(frame->slot_index);
 
         /* 分割只在缓存初始化/周期审计到期时运行，且必须先释放 Camera 槽位。 */
-        if(first_layer_detector_.geometry_observation_due(frame_seq)) {
+        bool geometry_due = false;
+        {
+            std::lock_guard<std::mutex> detector_lock(detector_mtx_);
+            geometry_due = first_layer_detector_.geometry_observation_due(frame_seq);
+        }
+        if(geometry_due) {
             std::vector<uint8_t> snapshot;
             uint32_t width = 0;
             uint32_t height = 0;
             uint32_t snapshot_seq = 0;
             if(copy_latest_snapshot(snapshot, width, height, snapshot_seq) &&
                snapshot_seq == frame_seq) {
-                const FirstLayerGeometryObservation observation =
-                    first_layer_detector_.observe_nv12(
-                    snapshot.data(), snapshot.size(), width, height, snapshot_seq);
+                FirstLayerGeometryObservation observation;
+                {
+                    std::lock_guard<std::mutex> detector_lock(detector_mtx_);
+                    observation = first_layer_detector_.observe_nv12(
+                        snapshot.data(), snapshot.size(), width, height, snapshot_seq);
+                }
                 const bool geometry_changed =
                     observation.event != last_geometry_log_event_ ||
                     observation.reason != last_geometry_log_reason_;
@@ -602,6 +720,18 @@ void VisualService::worker_thread_fn()
                     last_geometry_log_event_ = observation.event;
                     last_geometry_log_reason_ = observation.reason;
                 }
+            }
+        }
+
+        bool capture_pending = false;
+        {
+            std::lock_guard<std::mutex> lock(state_mtx_);
+            capture_pending = reference_capture_pending_;
+        }
+        if(capture_pending) {
+            std::vector<FrameSnapshot> frames;
+            if(copy_recent_snapshots(frames) && !frames.empty()) {
+                try_capture_bare_reference(frames.back());
             }
         }
     }
@@ -697,6 +827,20 @@ void VisualService::update_latest_snapshot(const upc_ipc::IpcDmaFrameView& frame
     latest_height_ = height;
     latest_frame_seq_ = frame.seq;
     latest_nv12_valid_ = true;
+    if(recent_snapshots_.empty() ||
+       static_cast<uint32_t>(frame.seq - last_temporal_frame_seq_) >=
+           kTemporalFrameStride) {
+        FrameSnapshot snapshot;
+        snapshot.nv12 = latest_nv12_snapshot_;
+        snapshot.width = width;
+        snapshot.height = height;
+        snapshot.frame_seq = frame.seq;
+        recent_snapshots_.push_back(std::move(snapshot));
+        while(recent_snapshots_.size() > kTemporalFrameCount) {
+            recent_snapshots_.pop_front();
+        }
+        last_temporal_frame_seq_ = frame.seq;
+    }
 }
 
 void VisualService::clear_latest_snapshot()
@@ -707,6 +851,8 @@ void VisualService::clear_latest_snapshot()
     latest_height_ = 0;
     latest_frame_seq_ = 0;
     latest_nv12_valid_ = false;
+    recent_snapshots_.clear();
+    last_temporal_frame_seq_ = 0;
 }
 
 bool VisualService::copy_latest_snapshot(std::vector<uint8_t>& out, uint32_t& width,
@@ -723,83 +869,208 @@ bool VisualService::copy_latest_snapshot(std::vector<uint8_t>& out, uint32_t& wi
     return true;
 }
 
-bool VisualService::process_first_layer_image(const std::vector<uint8_t>& nv12,
-                                              uint32_t width, uint32_t height,
-                                              uint32_t frame_seq)
+bool VisualService::copy_recent_snapshots(std::vector<FrameSnapshot>& out)
+{
+    std::lock_guard<std::mutex> lock(frame_mtx_);
+    if(!latest_nv12_valid_ || latest_nv12_snapshot_.empty()) {
+        return false;
+    }
+    out.assign(recent_snapshots_.begin(), recent_snapshots_.end());
+    if(out.empty() || out.back().frame_seq != latest_frame_seq_) {
+        FrameSnapshot latest;
+        latest.nv12 = latest_nv12_snapshot_;
+        latest.width = latest_width_;
+        latest.height = latest_height_;
+        latest.frame_seq = latest_frame_seq_;
+        out.push_back(std::move(latest));
+    }
+    if(out.size() > kTemporalFrameCount) {
+        out.erase(out.begin(), out.end() - kTemporalFrameCount);
+    }
+    return true;
+}
+
+bool VisualService::process_first_layer_frames(
+    const std::vector<FrameSnapshot>& frames)
 {
     uint64_t session_id = 0;
     {
         std::lock_guard<std::mutex> lock(state_mtx_);
         session_id = first_layer_session_id_;
     }
+
+    if(frames.empty()) {
+        UPC_LOG_VISUAL_SERVICE(Warn,
+            "first layer inference report_v=2 session_id=%llu status=no_snapshot "
+            "frame=0 width=0 height=0 result=0 rejection=no_snapshot",
+            static_cast<unsigned long long>(session_id));
+        return false;
+    }
+
+    const FrameSnapshot& latest = frames.back();
+    const std::vector<uint8_t>& nv12 = latest.nv12;
+    const uint32_t width = latest.width;
+    const uint32_t height = latest.height;
+    const uint32_t frame_seq = latest.frame_seq;
     const size_t y_bytes = static_cast<size_t>(width) * static_cast<size_t>(height);
     const size_t expected_nv12_bytes = y_bytes * 3u / 2u;
     if(width == 0 || height == 0 || nv12.size() != expected_nv12_bytes) {
         UPC_LOG_VISUAL_SERVICE(Error,
-            "first layer inference report_v=1 session_id=%llu status=invalid_frame frame=%u "
-            "width=%u height=%u size=%zu expected=%zu result=0 "
+            "first layer inference report_v=2 session_id=%llu status=invalid_frame "
+            "frame=%u width=%u height=%u size=%zu expected=%zu result=0 "
             "rejection=invalid_nv12",
-            static_cast<unsigned long long>(session_id), static_cast<unsigned>(frame_seq), static_cast<unsigned>(width),
+            static_cast<unsigned long long>(session_id),
+            static_cast<unsigned>(frame_seq), static_cast<unsigned>(width),
             static_cast<unsigned>(height), nv12.size(), expected_nv12_bytes);
         return false;
     }
 
-    const FirstLayerDetection detection = first_layer_detector_.predict_nv12(
+    std::unique_lock<std::mutex> detector_lock(detector_mtx_);
+    const FirstLayerDetection latest_detection = first_layer_detector_.predict_nv12(
         nv12.data(), nv12.size(), width, height, frame_seq);
-    if(!detection.error.empty()) {
+    if(!latest_detection.error.empty()) {
         UPC_LOG_VISUAL_SERVICE(Error,
-            "first layer inference report_v=1 session_id=%llu status=inference_error frame=%u "
-            "width=%u height=%u total_ms=%.3f result=0 "
+            "first layer inference report_v=2 session_id=%llu status=inference_error "
+            "frame=%u width=%u height=%u total_ms=%.3f result=0 "
             "rejection=inference_error error=%s",
-            static_cast<unsigned long long>(session_id), static_cast<unsigned>(frame_seq), static_cast<unsigned>(width),
-            static_cast<unsigned>(height), detection.total_ms,
-            detection.error.c_str());
+            static_cast<unsigned long long>(session_id),
+            static_cast<unsigned>(frame_seq), static_cast<unsigned>(width),
+            static_cast<unsigned>(height), latest_detection.total_ms,
+            latest_detection.error.c_str());
         return false;
     }
-    DiagnosticImageSaveResult qualified_image;
-    if(detection.passed) {
-        {
-            std::lock_guard<std::mutex> lock(state_mtx_);
-            first_layer_session_passed_ = true;
+
+    std::string decision_mode = "direct_reject";
+    std::string final_rejection;
+    bool final_pass = false;
+    double decision_probability = latest_detection.ready_probability;
+    std::size_t temporal_usable =
+        temporal_detection_usable(latest_detection) ? 1u : 0u;
+    std::vector<FirstLayerDetection> detections;
+    detections.reserve(frames.size());
+
+    if(latest_detection.ready_probability >= kTemporalDirectAcceptProbability) {
+        decision_mode = "direct_accept";
+        final_pass = latest_detection.passed;
+        if(!final_pass) {
+            final_rejection = latest_detection.rejection_reasons.empty()
+                ? "latest_frame_rejected" : latest_detection.rejection_reasons;
         }
-        qualified_image = save_diagnostic(
-            nv12, width, height, frame_seq, detection, qualified_image_dir(), "qualified");
+    } else if(latest_detection.ready_probability < kTemporalDirectRejectProbability) {
+        decision_mode = "direct_reject";
+        final_rejection = latest_detection.rejection_reasons.empty()
+            ? "direct_low_probability" : latest_detection.rejection_reasons;
     } else {
-        cache_final_rejected_diagnostic(nv12, width, height, frame_seq, detection);
+        decision_mode = "temporal_median";
+        if(frames.size() != kTemporalFrameCount ||
+           !temporal_detection_usable(latest_detection)) {
+            final_rejection = frames.size() != kTemporalFrameCount
+                ? "temporal_frames_unavailable" : "latest_frame_rejected";
+        } else {
+            detections.resize(frames.size());
+            detections.back() = latest_detection;
+            std::vector<double> probabilities;
+            probabilities.reserve(frames.size());
+            probabilities.push_back(latest_detection.ready_probability);
+            temporal_usable = 1;
+            bool temporal_error = false;
+            for(std::size_t index = 0; index + 1 < frames.size(); ++index) {
+                const FrameSnapshot& frame = frames[index];
+                const std::size_t frame_y_bytes =
+                    static_cast<std::size_t>(frame.width) * frame.height;
+                const std::size_t expected = frame_y_bytes * 3u / 2u;
+                if(frame.width == 0 || frame.height == 0 ||
+                   frame.nv12.size() != expected) {
+                    temporal_error = true;
+                    break;
+                }
+                detections[index] = first_layer_detector_.predict_nv12(
+                    frame.nv12.data(), frame.nv12.size(), frame.width,
+                    frame.height, frame.frame_seq);
+                if(!temporal_detection_usable(detections[index])) {
+                    temporal_error = true;
+                    break;
+                }
+                ++temporal_usable;
+                probabilities.push_back(detections[index].ready_probability);
+            }
+            if(temporal_error || temporal_usable != kTemporalFrameCount) {
+                final_rejection = "temporal_frame_rejected";
+            } else {
+                std::sort(probabilities.begin(), probabilities.end());
+                decision_probability = probabilities[probabilities.size() / 2u];
+                final_pass = decision_probability >= fusion_model::kReadyThreshold;
+                if(!final_pass) {
+                    final_rejection = "temporal_median_below_threshold";
+                }
+            }
+        }
     }
+
+    detector_lock.unlock();
+
+    DiagnosticImageSaveResult qualified_image;
+    if(final_pass && latest_detection.passed) {
+        qualified_image = save_diagnostic(
+            nv12, width, height, frame_seq, latest_detection,
+            qualified_image_dir(), "qualified");
+    } else if(final_pass && !detections.empty()) {
+        for(std::size_t index = detections.size(); index-- > 0;) {
+            if(detections[index].passed) {
+                const FrameSnapshot& frame = frames[index];
+                qualified_image = save_diagnostic(
+                    frame.nv12, frame.width, frame.height, frame.frame_seq,
+                    detections[index], qualified_image_dir(), "qualified");
+                break;
+            }
+        }
+    }
+
+    if(final_pass) {
+        std::lock_guard<std::mutex> lock(state_mtx_);
+        first_layer_session_passed_ = true;
+    } else {
+        cache_final_rejected_diagnostic(
+            nv12, width, height, frame_seq, latest_detection);
+    }
+
     UPC_LOG_VISUAL_SERVICE(Info,
-        "first layer inference report_v=1 session_id=%llu status=ok frame=%u width=%u height=%u "
-        "raw_class=%s output_class=%s ready_probability=%.6f "
+        "first layer inference report_v=2 session_id=%llu status=ok frame=%u "
+        "width=%u height=%u raw_class=%s output_class=%s "
+        "ready_probability=%.6f latest_ready_probability=%.6f "
+        "decision_mode=%s temporal_frames=%zu temporal_usable=%zu "
         "ready_threshold=%.6f confidence=%.6f confidence_threshold=%.6f "
         "ood=%d ood_distance=%.6f ood_threshold=%.6f alignment=%d cache=%d "
         "cache_event=%s segmentation_ran=%d segmentation_ms=%.3f "
         "preprocessing_ms=%.3f fusion_ms=%.3f total_ms=%.3f "
         "rejection=%s result=%d qualified_image_saved=%d "
         "qualified_image_path=%s image_save_ms=%.3f image_error=%s",
-        static_cast<unsigned long long>(session_id), static_cast<unsigned>(frame_seq),
-        static_cast<unsigned>(width),
-        static_cast<unsigned>(height), detection.raw_class.c_str(),
-        detection.output_class.c_str(), detection.ready_probability,
-        static_cast<double>(fusion_model::kReadyThreshold),
-        detection.confidence,
+        static_cast<unsigned long long>(session_id),
+        static_cast<unsigned>(frame_seq), static_cast<unsigned>(width),
+        static_cast<unsigned>(height), latest_detection.raw_class.c_str(),
+        latest_detection.output_class.c_str(), decision_probability,
+        latest_detection.ready_probability, decision_mode.c_str(), frames.size(),
+        temporal_usable, static_cast<double>(fusion_model::kReadyThreshold),
+        latest_detection.confidence,
         static_cast<double>(fusion_model::kConfidenceThreshold),
-        detection.is_ood ? 1 : 0, detection.ood_distance,
+        latest_detection.is_ood ? 1 : 0, latest_detection.ood_distance,
         static_cast<double>(fusion_model::kOodThreshold),
-        detection.alignment_passed ? 1 : 0,
-        detection.cache_available ? 1 : 0, detection.cache_event.c_str(),
-        detection.segmentation_ran ? 1 : 0, detection.segmentation_ms,
-        detection.preprocessing_ms, detection.fusion_ms, detection.total_ms,
-        detection.rejection_reasons.c_str(), detection.passed ? 1 : 0,
+        latest_detection.alignment_passed ? 1 : 0,
+        latest_detection.cache_available ? 1 : 0,
+        latest_detection.cache_event.c_str(),
+        latest_detection.segmentation_ran ? 1 : 0,
+        latest_detection.segmentation_ms,
+        latest_detection.preprocessing_ms, latest_detection.fusion_ms,
+        latest_detection.total_ms, final_rejection.c_str(), final_pass ? 1 : 0,
         qualified_image.saved ? 1 : 0, qualified_image.path.c_str(),
         qualified_image.elapsed_ms, qualified_image.error.c_str());
-    if(detection.passed && !qualified_image.saved) {
+    if(final_pass && !qualified_image.saved) {
         UPC_LOG_VISUAL_SERVICE(Warn,
             "first layer qualified image save failed frame=%u error=%s",
             static_cast<unsigned>(frame_seq), qualified_image.error.c_str());
     }
-    return detection.passed;
+    return final_pass;
 }
-
 void VisualService::on_first_layer_check_req(const middleware::Message& msg)
 {
     middleware::VisualFirstLayerCheckReqPayload req{};
@@ -826,23 +1097,20 @@ void VisualService::on_first_layer_check_req(const middleware::Message& msg)
         }
     }
 
-    std::vector<uint8_t> nv12;
-    uint32_t width = 0;
-    uint32_t height = 0;
-    uint32_t frame_seq = 0;
+    std::vector<FrameSnapshot> frames;
     bool pass = false;
     if(!has_req) {
         UPC_LOG_VISUAL_SERVICE(Warn, "first layer check invalid request payload");
         UPC_LOG_VISUAL_SERVICE(Warn,
-            "first layer inference report_v=1 session_id=%llu status=invalid_request frame=0 "
+            "first layer inference report_v=2 session_id=%llu status=invalid_request frame=0 "
             "width=0 height=0 result=0 rejection=invalid_request",
             static_cast<unsigned long long>(session_id));
-    } else if(copy_latest_snapshot(nv12, width, height, frame_seq)) {
-        pass = process_first_layer_image(nv12, width, height, frame_seq);
+    } else if(copy_recent_snapshots(frames)) {
+        pass = process_first_layer_frames(frames);
     } else {
         UPC_LOG_VISUAL_SERVICE(Warn, "first layer check no snapshot available");
         UPC_LOG_VISUAL_SERVICE(Warn,
-            "first layer inference report_v=1 session_id=%llu status=no_snapshot frame=0 "
+            "first layer inference report_v=2 session_id=%llu status=no_snapshot frame=0 "
             "width=0 height=0 result=0 rejection=no_snapshot",
             static_cast<unsigned long long>(session_id));
     }

@@ -199,6 +199,7 @@ scripts/rongsu.sh start   # glavo + rongsu_camera → ui
 | `APP_Visual_Camera_Stream_Stop_Rsp` | — | Camera→Visual | Empty | — | 视觉取流关闭确认 |
 | `GLAVO_Visual_FirstLayer_Session_Start_Ntf` | `0x1425` | Glavo→Visual | Empty | — | 打印开始且首层视觉开启时，启动 Camera 取流并预热定位缓存 |
 | `GLAVO_Visual_FirstLayer_Session_Stop_Ntf` | `0x1426` | Glavo→Visual | Empty | — | 首层通过、打印结束/终止/错误或功能关闭时停止取流，保留 RKNN 上下文 |
+| `APP_Visual_FirstLayer_Reference_Ready_Rsp` | `0x1427` | Visual→Glavo | `VisualFirstLayerReferenceReadyPayload` | — | 同会话裸板 B0 采集回执；成功前禁止开始打印运动，失败则保守终止起印 |
 | `GLAVO_Visual_FirstLayer_Check_Req` | `0x1423` | Glavo→Visual | `VisualFirstLayerCheckReqPayload` | — | 触发首层视觉检测（检测前允许从 Camera 最新帧做拷贝/处理） |
 | `APP_Visual_FirstLayer_Check_Rsp` | `0x1424` | Visual→Glavo | `VisualFirstLayerCheckRspPayload` | — | 首层检测结果：`result=1` 继续打印，`result=0` 继续铺粉 |
 | `APP_Print_Video_Session_Start_Ntf` | — | Glavo→Media（Hub FWD） | `PrintVideoSessionPayload`（含 `h264_bitrate`，0=Media 默认中等码率 / cal `PRINT_H264_BITRATE`） | — | `PrintVideoNotify` / `MediaService` |
