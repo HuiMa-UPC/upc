@@ -34,7 +34,8 @@
  *
  * 卡片按稿是玻璃拟态（等效不透明底 + 1px 白 10% 描边），左侧一枚实色圆角徽标
  * （等级配色 + 白图标，与左下通知卡同款），右侧时间 + 半透明圆形 ›。
- * 右缘留出 content_right_pad() 给悬浮翻页钮，与历史页对齐。
+ * 横向内距与历史页同源（Tab 行 48/112、卡片列表 64/160，两组不齐是稿上就有的），
+ * 见本文件「几何」一节的 chrome_* / list_* 四个函数。
  *
  * 数据三路混排（时间倒序，按自然日分组）：
  *   1. `ui_alarm_state` 当前 CONDITION（ACTIVE/RTN_LATCHED）——不可删，带 › 进抽屉；
@@ -186,16 +187,53 @@ void refresh_sel_count(void);
  *  几何：稿是 1280×800，这里一律换算成 theme token，三档屏共用
  * ========================================================================= */
 
-/** 右侧翻页圆钮直径（与历史页同款同尺寸，两页右缘才对得齐）。 */
+/* 下面五个与历史页同名同义（稿 3033:5247 与 4366:5400 逐项一致），改一页要同步另一页。 */
+
+/** 右侧悬浮翻页钮直径（稿 3033:5253 是 64）。 */
 int32_t scroll_btn_size(void)
 {
-    return USER_BACK_BTN_H * 5 / 4;
+    return USER_SCROLL_BTN_SZ > 0 ? USER_SCROLL_BTN_SZ : USER_BACK_BTN_H * 5 / 4;
 }
 
-/** 列表右侧内缩：让开悬浮翻页钮，卡片右缘落在稿上的位置。 */
-int32_t content_right_pad(void)
+/** 上下两枚翻页钮的间距（稿 160，见 user_scroll_btn_gap 的说明）。 */
+int32_t scroll_btn_gap(void)
+{
+    return USER_SCROLL_BTN_GAP > 0 ? USER_SCROLL_BTN_GAP : USER_PAD_LG;
+}
+
+/** Tab 行左内距（稿 3033:5247 的 Tab 文字 x=176，侧栏占 128，故 48）。 */
+int32_t chrome_pad_l(void)
+{
+    return USER_HIST_PAD_L > 0 ? USER_HIST_PAD_L : USER_PAD;
+}
+
+/** 卡片列表 / 日期标题的左内距（稿上卡片 x=192，比 Tab 行再内缩 16）。 */
+int32_t list_pad_l(void)
+{
+    return USER_HIST_LIST_PAD_L > 0 ? USER_HIST_LIST_PAD_L : USER_PAD;
+}
+
+/**
+ * Tab 行右内缩 = 翻页钮直径 + 左右各一个边距（稿 112 = 64 + 24×2）。
+ * 与卡片列表**右缘不齐**，这是稿上就有的：Manage 按钮右缘在 1168、卡片右缘在 1120。
+ * 差的 48 是留给翻页钮的横向净距——卡片要避开钮，而 Manage 在 y=96、与钮（y=300 起）
+ * 竖直方向不碰面，所以能往右多伸一截。
+ */
+int32_t chrome_right_pad(void)
 {
     return scroll_btn_size() + USER_PAD * 2;
+}
+
+/**
+ * 卡片列表右内缩（稿 160 = 钮距屏右 32 + 钮径 64 + 与卡片的净距 64）。
+ * 无稿的档位退回与 Tab 行同值，即旧的「两者右缘齐平」，渲染不变。
+ */
+int32_t list_right_pad(void)
+{
+    if(USER_HIST_LIST_PAD_L <= 0) {
+        return chrome_right_pad();
+    }
+    return USER_PAD_LG + scroll_btn_size() * 2;
 }
 
 /** 卡片左侧实色徽标方块边长（稿 32 见方，同左下通知卡）。 */
@@ -354,10 +392,19 @@ std::vector<MsgItem> collect_items(void)
  *  顺带用 just_dragged 挡住随后那次点击。
  * ========================================================================= */
 
-/** 卡片左移量：露出删除钮 + 稿上钮与卡片之间那道间隙。 */
+/**
+ * 卡片左移量：露出删除钮 + 钮与卡片之间那道间隙。
+ *
+ * 基准是删除钮本身（USER_BTN_PRIMARY_H），**不是翻页钮**：两者本无关系，原先共用
+ * scroll_btn_size() 只是碰巧同一个数，导致调翻页钮尺寸会连带改变左滑手感。
+ *
+ * 这里只加一个 USER_PAD，而历史页那份加的是两个：本页删除钮 `RIGHT_MID, 0` 贴齐
+ * 卡片右缘，只需在钮左侧让出一格；历史页那颗退了 USER_PAD，左右各要一格。
+ * 按各自的对齐方式给，两页「钮与卡片之间留一格」的观感才一致。
+ */
 int32_t swipe_reveal_px(void)
 {
-    return scroll_btn_size() + USER_PAD;
+    return USER_BTN_PRIMARY_H + USER_PAD;
 }
 
 /** 起拖阈值：小于它仍算点击，避免手抖把点击吃掉。 */
@@ -1205,9 +1252,8 @@ void make_tab_item(lv_obj_t *parent, int idx)
 /**
  * 顶部 Tab 行：左侧 All / Device / System + 右侧 Manage / 多选操作组。
  *
- * 结构与历史页 `build_tab_row()` 同构（稿 3033:5247 新版本身就是照那页画的）。
- * 右缘用 content_right_pad() 与列表让位量对齐，Manage 才和卡片右缘齐平——稿上
- * 那颗按钮摆在 x=1068，既不对齐卡片右缘也不对齐翻页钮，这里按工程惯例对齐卡片。
+ * 结构与历史页 `build_tab_row()` 同构（稿 3033:5247 新版本身就是照那页画的），
+ * 横向内距也同源：左 48、右 112，都比卡片列表少内缩一截，见 chrome_right_pad()。
  */
 lv_obj_t *build_tab_row(lv_obj_t *parent)
 {
@@ -1218,9 +1264,10 @@ lv_obj_t *build_tab_row(lv_obj_t *parent)
     lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(row, LV_FLEX_ALIGN_START,
                           LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_left(row, USER_PAD, 0);
-    lv_obj_set_style_pad_right(row, content_right_pad(), 0);
-    lv_obj_set_style_pad_column(row, USER_PAD, 0);
+    lv_obj_set_style_pad_left(row, chrome_pad_l(), 0);
+    lv_obj_set_style_pad_right(row, chrome_right_pad(), 0);
+    /* Tab 项间距：稿上三段文字 x=176/272/368、各宽 64，故间距 32 */
+    lv_obj_set_style_pad_column(row, USER_PAD_LG, 0);
     lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, 0);
     lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
 
@@ -1374,7 +1421,8 @@ void build_entry(lv_obj_t *parent, const MsgItem &it)
     if(it.deletable) {
         lv_obj_t *del = lv_button_create(holder);
         lv_obj_remove_style_all(del);
-        lv_obj_set_size(del, scroll_btn_size(), scroll_btn_size());
+        /* 尺寸取 USER_BTN_PRIMARY_H（与历史页那颗同源），不再借翻页钮的直径 */
+        lv_obj_set_size(del, USER_BTN_PRIMARY_H, USER_BTN_PRIMARY_H);
         lv_obj_add_flag(del, LV_OBJ_FLAG_FLOATING);
         lv_obj_set_style_radius(del, LV_RADIUS_CIRCLE, 0);
         lv_obj_set_style_bg_color(del, lv_color_hex(kDelGradA), 0);
@@ -1678,11 +1726,11 @@ lv_obj_t *page_user_message_create(lv_obj_t *parent)
     lv_obj_set_width(g_list, LV_PCT(100));
     lv_obj_set_flex_grow(g_list, 1);
     lv_obj_set_flex_flow(g_list, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_style_pad_hor(g_list, USER_PAD, 0);
+    lv_obj_set_style_pad_left(g_list, list_pad_l(), 0);
     lv_obj_set_style_pad_bottom(g_list, USER_PAD, 0);
     lv_obj_set_style_pad_row(g_list, USER_PAD_SM, 0);
-    /* 给右侧悬浮翻页钮让位（同历史页，两页卡片右缘因此对齐） */
-    lv_obj_set_style_pad_right(g_list, content_right_pad(), 0);
+    /* 给右侧悬浮翻页钮让位（稿上卡片右缘要与钮隔开一个钮径，同历史页） */
+    lv_obj_set_style_pad_right(g_list, list_right_pad(), 0);
     lv_obj_set_style_bg_opa(g_list, LV_OPA_TRANSP, 0);
     lv_obj_set_scroll_dir(g_list, LV_DIR_VER);
     lv_obj_set_scrollbar_mode(g_list, LV_SCROLLBAR_MODE_OFF);
@@ -1704,10 +1752,14 @@ lv_obj_t *page_user_message_create(lv_obj_t *parent)
     lv_obj_set_flex_flow(col, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(col, LV_FLEX_ALIGN_CENTER,
                           LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_row(col, USER_PAD_LG, 0);
+    lv_obj_set_style_pad_row(col, scroll_btn_gap(), 0);
     lv_obj_set_style_bg_opa(col, LV_OPA_TRANSP, 0);
     lv_obj_clear_flag(col, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_align(col, LV_ALIGN_RIGHT_MID, -USER_PAD, 0);
+    /* 稿 3033:5253/5256 在 x=1184、64 见方 → 距屏右 32（USER_PAD_LG）。
+     * 竖向与历史页同一条规则：按「所滚动的列表区」居中，故从页心再下移半个 Tab 行高。
+     * 不逐帧跟稿——三张稿的组心互不相同（本页 444 / 历史 478 / 设置 400），
+     * 是目测摆的，跟了会让同一个控件在页面间跳。详见 UI.md。 */
+    lv_obj_align(col, LV_ALIGN_RIGHT_MID, -USER_PAD_LG, USER_HIST_TAB_H / 2);
     make_scroll_btn(col, LV_SYMBOL_UP, on_scroll_up);
     make_scroll_btn(col, LV_SYMBOL_DOWN, on_scroll_down);
     lv_obj_add_flag(col, LV_OBJ_FLAG_HIDDEN);
