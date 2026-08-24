@@ -677,7 +677,6 @@ void GlavoService::worker_loop()
     while (worker_running_.load()) {
         middleware::Message msg;
         bool has_msg = false;
-        bool reference_timeout = false;
 
         {
             std::unique_lock<std::mutex> lock(worker_mutex_);
@@ -688,12 +687,7 @@ void GlavoService::worker_loop()
                        !worker_queue_.empty() ||
                        !link_event_queue_.empty();
             };
-            if(first_layer_reference_waiting_) {
-                worker_cv_.wait_until(
-                    lock, first_layer_reference_deadline_, wake_predicate);
-            } else {
-                worker_cv_.wait(lock, wake_predicate);
-            }
+            worker_cv_.wait(lock, wake_predicate);
 
             if (!worker_running_.load() &&
                 worker_queue_.empty() &&
@@ -732,18 +726,9 @@ void GlavoService::worker_loop()
                 msg = std::move(worker_queue_.front());
                 worker_queue_.pop();
                 has_msg = true;
-            } else if(first_layer_reference_waiting_ &&
-                      std::chrono::steady_clock::now() >=
-                          first_layer_reference_deadline_) {
-                first_layer_reference_waiting_ = false;
-                reference_timeout = true;
             }
         }
 
-        if(reference_timeout) {
-            abort_print_start_for_reference("bare_reference_timeout");
-            continue;
-        }
         if(!has_msg) {
             continue;
         }
@@ -1452,15 +1437,16 @@ void GlavoService::launch_print_from_prepared(const std::string& full_path)
     McuLink::instance().set_print_task_flow_active(true);
     if(first_layer_visual_check_on_) {
         first_layer_reference_waiting_ = true;
-        first_layer_reference_deadline_ =
-            std::chrono::steady_clock::now() + std::chrono::seconds(10);
         if(!publish_first_layer_visual_session(true, "print_start")) {
             first_layer_reference_waiting_ = false;
-            abort_print_start_for_reference("reference_start_publish_failed");
+            UPC_LOG_GLAVO_SERVICE(Warn,
+                "reference session start publish failed; continue print without reference");
+            begin_print_motion_after_reference_ready();
+            UPC_LOG_GLAVO_SERVICE(Info, "print_start: path=%s", full_path.c_str());
             return;
         }
         UPC_LOG_GLAVO_SERVICE(Info,
-            "print_start waiting for same-session bare reference timeout_ms=10000 path=%s",
+            "print_start waiting for same-session bare reference path=%s",
             full_path.c_str());
         worker_cv_.notify_all();
         return;
@@ -1484,20 +1470,6 @@ void GlavoService::begin_print_motion_after_reference_ready()
     UPC_LOG_GLAVO_SERVICE(Info,
         "print motion started reference_ready=%d path=%s",
         first_layer_visual_check_on_ ? 1 : 0, current_file_path_.c_str());
-}
-
-void GlavoService::abort_print_start_for_reference(const char* reason)
-{
-    first_layer_reference_waiting_ = false;
-    UPC_LOG_GLAVO_SERVICE(Error,
-        "print start blocked: same-session bare reference unavailable reason=%s",
-        reason ? reason : "unknown");
-    print_running_.store(false);
-    McuLink::instance().set_print_task_flow_active(false);
-    (void)publish_first_layer_visual_session(false, "reference_failed");
-    parser::ParserManager::instance().stop_parse();
-    clear_prepare_session();
-    publish_terminate_done();
 }
 
 /**
@@ -1564,6 +1536,12 @@ void GlavoService::handle_print_terminate(const middleware::Message& msg)
     deferred_print_start_ = false;
     first_layer_reference_waiting_ = false;
     print_running_.store(false);
+    {
+        std::lock_guard<std::mutex> lock(first_layer_visual_mtx_);
+        first_layer_visual_waiting_ = false;
+        first_layer_visual_result_ = 0;
+    }
+    first_layer_visual_cv_.notify_all();
     publish_first_layer_visual_session(false, "user_terminate");
     McuLink::instance().set_user_dispatch_paused(false);
     PrintVideoNotify::instance().on_print_abort();
@@ -1849,6 +1827,11 @@ bool GlavoService::request_first_layer_visual_check(uint16_t layer_height_um)
     if(!first_layer_visual_check_on_) {
         return true;
     }
+    if(!print_running_.load()) {
+        UPC_LOG_GLAVO_SERVICE(Warn,
+            "first layer visual check skipped: print already stopped");
+        return false;
+    }
 
     {
         std::lock_guard<std::mutex> lock(first_layer_visual_mtx_);
@@ -1905,8 +1888,11 @@ void GlavoService::handle_visual_first_layer_reference_ready_rsp(
     middleware::VisualFirstLayerReferenceReadyPayload rsp{};
     if(!read_inline_pod(msg.payload, rsp)) {
         if(first_layer_reference_waiting_) {
-            first_layer_reference_waiting_ = false;
-            abort_print_start_for_reference("invalid_reference_response");
+            publish_device_event(
+                middleware::DeviceEventCode::FirstLayerReferenceRetrying,
+                middleware::DeviceEventSeverity::Error, true);
+            UPC_LOG_GLAVO_SERVICE(Warn,
+                "invalid bare reference response; keep waiting for retry");
         }
         return;
     }
@@ -1917,11 +1903,18 @@ void GlavoService::handle_visual_first_layer_reference_ready_rsp(
             static_cast<unsigned>(rsp.frame_seq));
         return;
     }
-    first_layer_reference_waiting_ = false;
     if(rsp.result == 0) {
-        abort_print_start_for_reference("visual_reference_capture_failed");
+        publish_device_event(
+            middleware::DeviceEventCode::FirstLayerReferenceRetrying,
+            middleware::DeviceEventSeverity::Error, true);
+        UPC_LOG_GLAVO_SERVICE(Warn,
+            "same-session bare reference capture failed; keep waiting for retry");
         return;
     }
+    first_layer_reference_waiting_ = false;
+    publish_device_event(
+        middleware::DeviceEventCode::FirstLayerReferenceReady,
+        middleware::DeviceEventSeverity::Info, true);
     UPC_LOG_GLAVO_SERVICE(Info,
         "same-session bare reference ready frame=%u; allowing print motion",
         static_cast<unsigned>(rsp.frame_seq));

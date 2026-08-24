@@ -2550,6 +2550,11 @@ void McuLink::link_process_serial_handshake()
                 static_cast<unsigned>(active_layer_height_um_));
             const bool pass = first_layer_check_cb_(active_layer_height_um_);
             if(!pass) {
+                if(terminate_pending_.load()) {
+                    UPC_LOG_MCU_LINK(Info,
+                        "first layer visual check aborted by terminate");
+                    return;
+                }
                 /* 首层检测失败：不上光，通知 MCU 继续铺粉（层高=0，不降基板）。 */
                 UPC_LOG_MCU_LINK(Warn, "first layer visual check failed, request recoat");
                 send_serial_layer_done(0);

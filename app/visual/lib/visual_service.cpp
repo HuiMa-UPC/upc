@@ -385,7 +385,9 @@ void VisualService::start_first_layer_session(const char* reason)
                     std::chrono::system_clock::now().time_since_epoch()).count());
             first_layer_session_passed_ = false;
             reference_capture_pending_ = true;
-            reference_capture_started_ms_ = monotonic_ms();
+            last_reference_capture_attempt_ms_ = 0;
+            last_reference_failure_report_ms_ = 0;
+            last_reference_failure_reason_.clear();
             newly_active = true;
         }
         session_id = first_layer_session_id_;
@@ -420,7 +422,9 @@ void VisualService::stop_first_layer_session(const char* reason)
         session_id = first_layer_session_id_;
         first_layer_session_active_ = false;
         reference_capture_pending_ = false;
-        reference_capture_started_ms_ = 0;
+        last_reference_capture_attempt_ms_ = 0;
+        last_reference_failure_report_ms_ = 0;
+        last_reference_failure_reason_.clear();
         start_req_sent_ = false;
     }
 
@@ -505,14 +509,22 @@ void VisualService::send_reference_ready_rsp(bool ready, uint32_t frame_seq,
 
 void VisualService::try_capture_bare_reference(const FrameSnapshot& frame)
 {
+    constexpr uint64_t kReferenceRetryAttemptMs = 500;
     bool pending = false;
-    uint64_t started_ms = 0;
+    bool should_attempt = false;
+    const uint64_t now_ms = monotonic_ms();
     {
         std::lock_guard<std::mutex> lock(state_mtx_);
         pending = first_layer_session_active_ && reference_capture_pending_;
-        started_ms = reference_capture_started_ms_;
+        if(pending) {
+            if(last_reference_capture_attempt_ms_ == 0 ||
+               (now_ms - last_reference_capture_attempt_ms_) >= kReferenceRetryAttemptMs) {
+                last_reference_capture_attempt_ms_ = now_ms;
+                should_attempt = true;
+            }
+        }
     }
-    if(!pending) {
+    if(!pending || !should_attempt) {
         return;
     }
 
@@ -530,6 +542,9 @@ void VisualService::try_capture_bare_reference(const FrameSnapshot& frame)
             std::lock_guard<std::mutex> lock(state_mtx_);
             if(reference_capture_pending_) {
                 reference_capture_pending_ = false;
+                last_reference_capture_attempt_ms_ = 0;
+                last_reference_failure_report_ms_ = 0;
+                last_reference_failure_reason_.clear();
                 notify = true;
             }
         }
@@ -539,20 +554,25 @@ void VisualService::try_capture_bare_reference(const FrameSnapshot& frame)
         return;
     }
 
-    constexpr uint64_t kReferenceCaptureTimeoutMs = 7000;
-    if(started_ms != 0 && monotonic_ms() - started_ms >= kReferenceCaptureTimeoutMs) {
-        bool notify = false;
-        {
-            std::lock_guard<std::mutex> lock(state_mtx_);
-            if(reference_capture_pending_) {
-                reference_capture_pending_ = false;
-                notify = true;
+    constexpr uint64_t kReferenceRetryNotifyMs = 1200;
+    bool notify_retry = false;
+    std::string notify_reason = reason.empty() ? "reference_capture_retrying" : reason;
+    {
+        std::lock_guard<std::mutex> lock(state_mtx_);
+        if(reference_capture_pending_) {
+            const bool reason_changed = notify_reason != last_reference_failure_reason_;
+            const bool interval_due =
+                (last_reference_failure_report_ms_ == 0) ||
+                (now_ms - last_reference_failure_report_ms_ >= kReferenceRetryNotifyMs);
+            if(reason_changed || interval_due) {
+                last_reference_failure_report_ms_ = now_ms;
+                last_reference_failure_reason_ = notify_reason;
+                notify_retry = true;
             }
         }
-        if(notify) {
-            send_reference_ready_rsp(false, 0,
-                reason.empty() ? "reference_capture_timeout" : reason);
-        }
+    }
+    if(notify_retry) {
+        send_reference_ready_rsp(false, 0, notify_reason);
     }
 }
 

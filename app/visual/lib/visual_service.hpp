@@ -101,7 +101,9 @@ private:
     uint64_t first_layer_session_id_ = 0;
     bool first_layer_session_passed_ = false;
     bool reference_capture_pending_ = false;
-    uint64_t reference_capture_started_ms_ = 0;
+    uint64_t last_reference_capture_attempt_ms_ = 0;
+    uint64_t last_reference_failure_report_ms_ = 0;
+    std::string last_reference_failure_reason_;
     bool start_req_sent_ = false;
     bool stream_up_ = false;
     bool pending_start_rsp_valid_ = false;

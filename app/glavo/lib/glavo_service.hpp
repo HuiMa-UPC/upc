@@ -51,7 +51,6 @@ private:
     /** @brief 在已 prepare 的路径上真正 open/parse/begin（供起印与延迟起印共用） */
     void launch_print_from_prepared(const std::string& full_path);
     void begin_print_motion_after_reference_ready();
-    void abort_print_start_for_reference(const char* reason);
     void handle_visual_first_layer_reference_ready_rsp(
         const middleware::Message& msg);
     void handle_print_terminate(const middleware::Message& msg);
@@ -253,7 +252,6 @@ private:
     bool first_layer_visual_check_on_ = false; /**< 首层视觉检测开关（仅本次运行） */
     bool first_layer_visual_session_active_ = false; /**< Visual Camera/定位预热会话状态 */
     bool first_layer_reference_waiting_ = false; /**< 等待Visual锁定本次打印裸板B0 */
-    std::chrono::steady_clock::time_point first_layer_reference_deadline_{};
     bool env_sim_on_ = false;  /**< 环境上报模拟（仅本次运行，默认关） */
     bool env_sim_powder_low_on_ = false; /**< 环境模拟粉量缺粉开关（目标状态，延迟生效由 McuLink 管） */
     bool ignore_powder_low_for_current_print_ = false; /**< 本次打印是否忽略缺粉检测（Cancel 后置位） */

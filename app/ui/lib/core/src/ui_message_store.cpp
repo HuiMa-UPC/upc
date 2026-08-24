@@ -82,6 +82,10 @@ const CatalogEntry kCatalog[] = {
       "Fire suppression triggered", "Do not open the machine" },
     { (uint16_t)DeviceEventCode::Esd, UI_MSG_SEV_EMERGENCY,
       "ESD protection triggered", "Check grounding before restarting" },
+    { (uint16_t)DeviceEventCode::FirstLayerReferenceRetrying, UI_MSG_SEV_ERROR,
+      "Reference capture failed", "Retrying bare reference capture" },
+    { (uint16_t)DeviceEventCode::FirstLayerReferenceReady, UI_MSG_SEV_INFO,
+      "Reference captured", "Starting first-layer check" },
     { (uint16_t)DeviceEventCode::FirstLayerVisualRecoat, UI_MSG_SEV_ERROR,
       "First layer not passed", "Recoating and retrying first-layer check" },
     { (uint16_t)DeviceEventCode::FirstLayerVisualPassed, UI_MSG_SEV_INFO,
@@ -209,7 +213,13 @@ void apply_event_async(void *raw)
 {
     PendingEvent *p = static_cast<PendingEvent *>(raw);
     if(p->active) {
-        if(p->code == static_cast<uint16_t>(DeviceEventCode::FirstLayerVisualRecoat)) {
+        if(p->code == static_cast<uint16_t>(DeviceEventCode::FirstLayerReferenceRetrying)) {
+            ui_toast_show("Reference capture failed, retrying...",
+                          user_color_status_err, 1800);
+        } else if(p->code == static_cast<uint16_t>(DeviceEventCode::FirstLayerReferenceReady)) {
+            ui_toast_show("Reference captured, starting first-layer check",
+                          user_color_status_ok, 1800);
+        } else if(p->code == static_cast<uint16_t>(DeviceEventCode::FirstLayerVisualRecoat)) {
             ui_toast_show("First layer check failed, recoating...",
                           user_color_status_err, 1800);
         } else if(p->code == static_cast<uint16_t>(DeviceEventCode::FirstLayerVisualPassed)) {
