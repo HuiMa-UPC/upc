@@ -1,6 +1,16 @@
 set(VISUAL_LIB_DIR ${CMAKE_CURRENT_SOURCE_DIR}/lib)
 
-find_package(OpenCV 4.5.4 EXACT REQUIRED COMPONENTS core imgproc imgcodecs)
+if(TOOLCHAIN STREQUAL "phx-buildroot-toolchain")
+    # phx sysroot currently provides OpenCV 4.9.x; keep a minimum floor for ABI safety.
+    find_package(OpenCV REQUIRED COMPONENTS core imgproc imgcodecs)
+    if(OpenCV_VERSION VERSION_LESS "4.5.4")
+        message(FATAL_ERROR
+            "OpenCV >= 4.5.4 required for visual module on phx (found ${OpenCV_VERSION})")
+    endif()
+else()
+    # Keep existing strict requirement for non-phx toolchains (including k1mini).
+    find_package(OpenCV 4.5.4 EXACT REQUIRED COMPONENTS core imgproc imgcodecs)
+endif()
 
 add_executable(rongsu_visual
     main.cpp
