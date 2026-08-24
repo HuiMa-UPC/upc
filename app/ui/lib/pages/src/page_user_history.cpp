@@ -204,16 +204,49 @@ HistTab tab_from_index(int idx)
 /** 右侧悬浮翻页钮直径（与设置页同档） */
 int32_t scroll_btn_size(void)
 {
-    return USER_BACK_BTN_H * 5 / 4;
+    /* 稿 4366:5406 是 64 见方；无稿的档位沿用旧式「比返回钮大一圈」。 */
+    return USER_SCROLL_BTN_SZ > 0 ? USER_SCROLL_BTN_SZ : USER_BACK_BTN_H * 5 / 4;
+}
+
+/** 上下两枚翻页钮的间距（稿 160，见 user_scroll_btn_gap 的说明）。 */
+int32_t scroll_btn_gap(void)
+{
+    return USER_SCROLL_BTN_GAP > 0 ? USER_SCROLL_BTN_GAP : USER_PAD_LG;
+}
+
+/** Tab 行左内距（稿 48）。 */
+int32_t chrome_pad_l(void)
+{
+    return USER_HIST_PAD_L > 0 ? USER_HIST_PAD_L : USER_PAD;
+}
+
+/** 卡片列表 / 日期标题 / 告警横幅的左内距（稿 64，比 Tab 行再内缩 16）。 */
+int32_t list_pad_l(void)
+{
+    return USER_HIST_LIST_PAD_L > 0 ? USER_HIST_LIST_PAD_L : USER_PAD;
 }
 
 /**
- * 内容区右侧内缩 = 翻页钮直径 + 左右各一个边距。Tab 行、告警横幅、卡片列表、
- * Storage 条四处共用同一个值，右缘才对得齐（改翻页钮尺寸时只需动这里）。
+ * Tab 行与 Storage 条的右内缩 = 翻页钮直径 + 左右各一个边距（稿 112 = 64 + 24×2）。
+ * 这两者与卡片列表**右缘不齐**，是稿上就有的：稿里 Manage 按钮右缘在 1168、卡片右缘
+ * 在 1120。差的 48 是留给翻页钮的横向净距——卡片要避开钮，而 Manage 按钮在 y=96、
+ * 与钮（y=334 起）竖直方向不碰面，所以能往右多伸一截。
  */
-int32_t content_right_pad(void)
+int32_t chrome_right_pad(void)
 {
     return scroll_btn_size() + USER_PAD * 2;
+}
+
+/**
+ * 卡片列表 / 告警横幅的右内缩（稿 160 = 钮距屏右 32 + 钮径 64 + 与卡片的净距 64）。
+ * 无稿的档位退回与 Tab 行同值，即旧的「四者右缘齐平」，渲染不变。
+ */
+int32_t list_right_pad(void)
+{
+    if(USER_HIST_LIST_PAD_L <= 0) {
+        return chrome_right_pad();
+    }
+    return USER_PAD_LG + scroll_btn_size() * 2;
 }
 
 /** Tab 行右侧按钮组的上抬量（稿上按钮比 Tab 文字略高一点） */
@@ -1120,7 +1153,8 @@ std::string make_thumb_src_fallback(const upc::PrintHistoryEntry& e,
  */
 void page_ext_draw_cb(lv_event_t *e)
 {
-    lv_event_set_ext_draw_size(e, USER_TOPBAR_H);
+    /* Storage 条要抬出页面顶沿，撑开量取页顶到屏顶的距离（= 内容区上偏移）。 */
+    lv_event_set_ext_draw_size(e, USER_CONTENT_TOP);
 }
 
 /** 同上，但只需给 Tab 行右侧按钮组的上抬量留出绘制余量 */
@@ -1189,7 +1223,7 @@ lv_obj_t *make_action_btn(lv_obj_t *parent, const char *text, bool danger,
     lv_obj_t *lbl = lv_label_create(btn);
     lv_label_set_text(lbl, text);
     lv_obj_set_style_text_color(lbl, user_color_text, 0);
-    lv_obj_set_style_text_font(lbl, user_font_caption(), 0);
+    lv_obj_set_style_text_font(lbl, user_font_text_sm(), 0);   /* 稿 4430:6109 是 16 */
     lv_obj_center(lbl);
     return btn;
 }
@@ -1243,7 +1277,9 @@ void make_tab_item(lv_obj_t *parent, int idx)
 
     lv_obj_t *lbl = lv_label_create(item);
     lv_label_set_text(lbl, kTabTitles[idx]);
-    lv_obj_set_style_text_font(lbl, user_font_text(), 0);
+    /* 稿 4366:5418 是 16；user_font_text 在 1280 档是 18，故取 text_sm（该档稿值 16）。
+     * 其余档位 text_sm == text，观感不变。 */
+    lv_obj_set_style_text_font(lbl, user_font_text_sm(), 0);
     lv_obj_align(lbl, LV_ALIGN_TOP_MID, 0, 0);
 
     /* 量出文字宽度后把项宽写死：SIZE_CONTENT 的容器里放百分比宽的子对象会互相
@@ -1274,10 +1310,11 @@ lv_obj_t *build_tab_row(lv_obj_t *parent)
     lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(row, LV_FLEX_ALIGN_START,
                           LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_left(row, USER_PAD, 0);
-    /* 右侧留出与列表一致的边距（列表要给悬浮翻页钮让位），按钮才跟卡片右缘对齐 */
-    lv_obj_set_style_pad_right(row, content_right_pad(), 0);
-    lv_obj_set_style_pad_column(row, USER_PAD, 0);
+    lv_obj_set_style_pad_left(row, chrome_pad_l(), 0);
+    /* 右缘按稿退 112（= 钮 64 + USER_PAD×2），比卡片列表少退 48，见 chrome_right_pad */
+    lv_obj_set_style_pad_right(row, chrome_right_pad(), 0);
+    /* Tab 项间距：稿上三段文字 x=176/272/368、各宽 64，故间距 32 */
+    lv_obj_set_style_pad_column(row, USER_PAD_LG, 0);
     lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, 0);
     lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
     /* 右侧按钮组要上抬，而按钮高度本就等于行高，不放开裁剪会被切掉顶部一条。
@@ -1316,7 +1353,7 @@ lv_obj_t *build_tab_row(lv_obj_t *parent)
     g_lbl_sel = lv_label_create(g_manage_bar);
     lv_label_set_text(g_lbl_sel, "0 selected");
     lv_obj_set_style_text_color(g_lbl_sel, user_color_text_dim, 0);
-    lv_obj_set_style_text_font(g_lbl_sel, user_font_caption(), 0);
+    lv_obj_set_style_text_font(g_lbl_sel, user_font_text_sm(), 0);  /* 稿 4470:6956 是 16 */
     lv_obj_set_style_margin_right(g_lbl_sel, USER_PAD_SM, 0);
 
     g_btn_del = make_action_btn(g_manage_bar, "Delete", true, on_manage_delete);
@@ -1348,7 +1385,7 @@ lv_obj_t *build_storage_bar(lv_obj_t *parent)
     lv_obj_t *cap = lv_label_create(row);
     lv_label_set_text(cap, "Storage");
     lv_obj_set_style_text_color(cap, user_color_text_dim, 0);
-    lv_obj_set_style_text_font(cap, user_font_caption(), 0);
+    lv_obj_set_style_text_font(cap, user_font_text_sm(), 0);   /* 稿 4547:7973 是 16 */
 
     lv_obj_t *track = lv_obj_create(row);
     lv_obj_remove_style_all(track);
@@ -1367,14 +1404,16 @@ lv_obj_t *build_storage_bar(lv_obj_t *parent)
 
     g_storage_lbl = lv_label_create(row);
     lv_obj_set_style_text_color(g_storage_lbl, user_color_text, 0);
-    lv_obj_set_style_text_font(g_storage_lbl, user_font_caption(), 0);
+    lv_obj_set_style_text_font(g_storage_lbl, user_font_text_sm(), 0);  /* 稿 4547:7976 是 16 */
 
-    /* 行心对齐到常驻条行心：页顶在屏幕 USER_TOPBAR_H 处，故上抬半条 + 半行。
+    /* 行心对齐到常驻条行心。设备条内容竖直居中，故其行心在 USER_TOPBAR_H/2；
+     * 本行的原点是页顶，位于屏幕 USER_CONTENT_TOP 处（两个字段已拆开，不再相等）。
+     * 于是偏移 = 目标行心 − 页顶 − 半行高。
      * 右缘用内容区的内缩量而非常驻条的边距，才能与 Manage 按钮、卡片右缘三者齐平。 */
     lv_obj_update_layout(row);
     const int32_t h = lv_obj_get_height(row);
-    lv_obj_align(row, LV_ALIGN_TOP_RIGHT, -content_right_pad(),
-                 -(USER_TOPBAR_H + h) / 2);
+    lv_obj_align(row, LV_ALIGN_TOP_RIGHT, -chrome_right_pad(),
+                 USER_TOPBAR_H / 2 - USER_CONTENT_TOP - h / 2);
     return row;
 }
 
@@ -1388,8 +1427,10 @@ lv_obj_t *build_banner(lv_obj_t *parent)
     lv_obj_set_flex_flow(bar, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(bar, LV_FLEX_ALIGN_START,
                           LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_hor(bar, USER_PAD_SM, 0);
-    lv_obj_set_style_pad_column(bar, USER_PAD_SM, 0);
+    /* 稿 4550:8296：内距 12、图标↔文字 12；高 42 = 12 + 图标 18 + 12，
+     * 与 USER_HIST_BANNER_H 正好对上。 */
+    lv_obj_set_style_pad_hor(bar, USER_PAD_SM * 3 / 4, 0);
+    lv_obj_set_style_pad_column(bar, USER_PAD_SM * 3 / 4, 0);
     lv_obj_set_style_radius(bar, USER_BTN_RADIUS, 0);
     lv_obj_set_style_bg_opa(bar, LV_OPA_10, 0);   /* 稿 5%，LVGL 最近一档 */
     lv_obj_set_style_border_width(bar, 1, 0);
@@ -1398,12 +1439,12 @@ lv_obj_t *build_banner(lv_obj_t *parent)
     lv_obj_remove_flag(bar, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_flag(bar, LV_OBJ_FLAG_HIDDEN);
 
-    lv_obj_t *box = ui_user_make_icon_img(bar, &ic_alert, USER_PAD_SM * 5 / 4,
+    lv_obj_t *box = ui_user_make_icon_img(bar, &ic_alert, USER_PAD_SM * 9 / 8,
                                           lv_color_hex(kColorWarn));
     g_banner_icon = lv_obj_get_child(box, 0);
 
     g_banner_lbl = lv_label_create(bar);
-    lv_obj_set_style_text_font(g_banner_lbl, user_font_caption(), 0);
+    lv_obj_set_style_text_font(g_banner_lbl, user_font_text_sm(), 0);  /* 稿 4550:8299 是 16 */
     lv_obj_set_flex_grow(g_banner_lbl, 1);
     return bar;
 }
@@ -1427,7 +1468,8 @@ void make_status_pill(lv_obj_t *parent, bool complete)
     lv_obj_t *lbl = lv_label_create(pill);
     lv_label_set_text(lbl, complete ? "Completed" : "Interrupted");
     lv_obj_set_style_text_color(lbl, col, 0);
-    lv_obj_set_style_text_font(lbl, user_font_caption(), 0);
+    /* 稿 4478:7265 是 12，比正文小一档，故用 caption_sm 而非 caption（1280 档 14）。 */
+    lv_obj_set_style_text_font(lbl, user_font_caption_sm(), 0);
 }
 
 /** 卡片底部一个指标：图标 + 标签 + 数值（稿 4443:6154 一组） */
@@ -1440,7 +1482,8 @@ void make_metric(lv_obj_t *parent, const lv_image_dsc_t *icon,
     lv_obj_set_flex_flow(group, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(group, LV_FLEX_ALIGN_START,
                           LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_column(group, USER_PAD_SM / 2, 0);
+    /* 稿 4443:6154：图标↔标签 4。标签↔数值另有 margin_left 补到稿上的 16。 */
+    lv_obj_set_style_pad_column(group, USER_PAD_SM / 4, 0);
     lv_obj_set_style_bg_opa(group, LV_OPA_TRANSP, 0);
     lv_obj_clear_flag(group, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_flag(group, LV_OBJ_FLAG_EVENT_BUBBLE);
@@ -1451,16 +1494,20 @@ void make_metric(lv_obj_t *parent, const lv_image_dsc_t *icon,
                               user_color_text_dim);
     }
 
+    /* 标签与数值稿上都是 16（4438:6135 / 4443:6155），故用 text_sm 而非 caption。
+     * 这一行是卡内最宽的：三组指标 + 两条分隔线要挤在约 640 的信息区里，字号从 14
+     * 抬到 16 后余量只剩几十像素，改「Layers」等数值的取数口径时要重新核一遍。 */
     lv_obj_t *cap = lv_label_create(group);
     lv_label_set_text(cap, caption);
     lv_obj_set_style_text_color(cap, user_color_text_dim, 0);
-    lv_obj_set_style_text_font(cap, user_font_caption(), 0);
+    lv_obj_set_style_text_font(cap, user_font_text_sm(), 0);
 
     lv_obj_t *val = lv_label_create(group);
     lv_label_set_text(val, value);
     lv_obj_set_style_text_color(val, user_color_text, 0);
-    lv_obj_set_style_text_font(val, user_font_caption(), 0);
-    lv_obj_set_style_margin_left(val, USER_PAD_SM / 2, 0);
+    lv_obj_set_style_text_font(val, user_font_text_sm(), 0);
+    /* 稿 4438:6141 里「图标+标签」与数值之间是 16；上面 pad_column 已给 4，这里补差。 */
+    lv_obj_set_style_margin_left(val, USER_PAD_SM - USER_PAD_SM / 4, 0);
 }
 
 /** 缩略图槽：图片（cover 裁切）+ "Timelapse" 角标 + 右下角全屏角标 */
@@ -1517,7 +1564,8 @@ void make_thumbnail(lv_obj_t *parent, const HistoryCard *c)
     }
     lv_label_set_text(tag, tag_text);
     lv_obj_set_style_text_color(tag, user_color_text, 0);
-    lv_obj_set_style_text_font(tag, user_font_caption(), 0);
+    /* 稿 4464:6246 的角标是 12 */
+    lv_obj_set_style_text_font(tag, user_font_caption_sm(), 0);
     lv_obj_set_style_bg_color(tag, lv_color_hex(0x000000), 0);
     lv_obj_set_style_bg_opa(tag, LV_OPA_50, 0);
     lv_obj_set_style_pad_hor(tag, USER_PAD_SM / 2, 0);
@@ -1539,6 +1587,109 @@ void make_thumbnail(lv_obj_t *parent, const HistoryCard *c)
         lv_obj_align(badge, LV_ALIGN_BOTTOM_RIGHT, -USER_PAD_SM / 2, -USER_PAD_SM / 2);
         ui_user_make_icon_img(badge, &ic_expand, USER_PAD_SM, user_color_text);
     }
+}
+
+/**
+ * 卡片外壳：整条容器 + 管理态复选框 + 卡片架 + 左滑删除钮 + 卡片本体 + 缩略图。
+ *
+ * 三个 Tab 的条目共用同一套几何（稿 4366:5400 的打印历史卡；延时摄影稿上虽是大图
+ * 版式，实机仍走条状列表，与相册一并按本卡对齐），只有卡内信息区各不相同，所以
+ * 这里只建到卡片本体就返回它，调用方往里塞自己的信息区。
+ *
+ * 抽出来是因为原先打印历史与相册各写了一份**字面重复**的外壳，改一处几何要同步
+ * 改两遍，漏一处两边就会飘。写入 ctx 的 wrap / check / check_mark / card / del_btn。
+ *
+ * @return 卡片本体（调用方在其上追加信息区）
+ */
+lv_obj_t *build_card_shell(lv_obj_t *parent, HistoryCard *ctx)
+{
+    /* 整条：管理模式下第一格是复选框（隐藏时 flex 跳过，卡片自动顶到最左） */
+    lv_obj_t *wrap = lv_obj_create(parent);
+    lv_obj_remove_style_all(wrap);
+    lv_obj_set_width(wrap, LV_PCT(100));
+    lv_obj_set_height(wrap, USER_HIST_CARD_H);
+    lv_obj_set_flex_flow(wrap, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(wrap, LV_FLEX_ALIGN_START,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_column(wrap, USER_PAD, 0);
+    lv_obj_set_style_bg_opa(wrap, LV_OPA_TRANSP, 0);
+    lv_obj_clear_flag(wrap, LV_OBJ_FLAG_SCROLLABLE);
+    ctx->wrap = wrap;
+
+    /* 复选框（稿 4470:6958）：空框 / 红底白勾，常态隐藏。
+     * 稿上是 padding 4 + 16 见方图标 = 24，圆角 4，与 USER_HIST_CHECK_SZ 一致。 */
+    lv_obj_t *check = lv_obj_create(wrap);
+    lv_obj_remove_style_all(check);
+    lv_obj_set_size(check, USER_HIST_CHECK_SZ, USER_HIST_CHECK_SZ);
+    lv_obj_set_style_radius(check, USER_BTN_RADIUS / 2, 0);
+    lv_obj_set_style_border_width(check, 1, 0);
+    lv_obj_set_style_border_color(check, user_color_text, 0);
+    lv_obj_set_style_border_opa(check, LV_OPA_40, 0);
+    lv_obj_set_style_bg_color(check, ui_color_danger, 0);
+    lv_obj_set_style_bg_opa(check, LV_OPA_TRANSP, 0);
+    lv_obj_clear_flag(check, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(check, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_flag(check, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_event_cb(check, card_click_cb, LV_EVENT_CLICKED, ctx);
+    ctx->check = check;
+
+    lv_obj_t *mark = lv_label_create(check);
+    lv_label_set_text(mark, LV_SYMBOL_OK);
+    lv_obj_set_style_text_color(mark, user_color_text, 0);
+    lv_obj_set_style_text_font(mark, user_font_caption(), 0);
+    lv_obj_center(mark);
+    lv_obj_add_flag(mark, LV_OBJ_FLAG_HIDDEN);
+    ctx->check_mark = mark;
+
+    /* 卡片架：删除圆钮浮在卡片下层，卡片左滑平移后露出 */
+    lv_obj_t *holder = lv_obj_create(wrap);
+    lv_obj_remove_style_all(holder);
+    lv_obj_set_height(holder, LV_PCT(100));
+    lv_obj_set_flex_grow(holder, 1);
+    lv_obj_set_style_bg_opa(holder, LV_OPA_TRANSP, 0);
+    lv_obj_clear_flag(holder, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *del = lv_button_create(holder);
+    lv_obj_remove_style_all(del);
+    const int32_t del_sz = USER_BTN_PRIMARY_H;
+    lv_obj_set_size(del, del_sz, del_sz);
+    lv_obj_add_flag(del, LV_OBJ_FLAG_FLOATING);
+    lv_obj_set_style_radius(del, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_bg_color(del, ui_color_danger, 0);
+    lv_obj_set_style_bg_opa(del, LV_OPA_COVER, 0);
+    lv_obj_align(del, LV_ALIGN_RIGHT_MID, -USER_PAD, 0);
+    lv_obj_add_flag(del, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_event_cb(del, del_click_cb, LV_EVENT_CLICKED, ctx);
+    lv_obj_t *del_icon = lv_label_create(del);
+    lv_label_set_text(del_icon, LV_SYMBOL_TRASH);
+    lv_obj_set_style_text_color(del_icon, user_color_text, 0);
+    lv_obj_set_style_text_font(del_icon, user_font_text(), 0);
+    lv_obj_center(del_icon);
+    ctx->del_btn = del;
+
+    /* 卡片本体：左缩略图 + 右信息区（稿 4448:6193，圆角 8、缩略图↔信息 16） */
+    lv_obj_t *card = lv_obj_create(holder);
+    lv_obj_remove_style_all(card);
+    lv_obj_set_size(card, LV_PCT(100), LV_PCT(100));
+    lv_obj_set_style_radius(card, USER_BTN_RADIUS, 0);
+    /* 稿是 4% 白，这里用等效的不透明底：半透明每帧要与背景混合，滚动时开销大。
+     * 仅本页如此，共享的磨砂卡片组件不动（设置页等仍用半透明）。 */
+    lv_obj_set_style_bg_color(card, user_color_panel, 0);
+    lv_obj_set_style_bg_opa(card, LV_OPA_COVER, 0);
+    lv_obj_set_flex_flow(card, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(card, LV_FLEX_ALIGN_START,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_column(card, USER_PAD_SM, 0);
+    lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(card, LV_OBJ_FLAG_CLICKABLE);
+    /* 跟手左滑：自己按 PRESSED/PRESSING/RELEASED 算位移（不用 LV_EVENT_GESTURE，
+     * 原因见「左滑删除」一节） */
+    attach_card_drag(card, ctx);
+    lv_obj_add_event_cb(card, card_click_cb, LV_EVENT_CLICKED, ctx);
+    ctx->card = card;
+
+    make_thumbnail(card, ctx);
+    return card;
 }
 
 /** 一条历史记录：[复选框] + 卡片（左缩略图 + 右信息区）+ 左滑删除钮 */
@@ -1600,91 +1751,7 @@ void build_entry(lv_obj_t *parent, const upc::PrintHistoryEntry &e)
                   : e.job_name;
     ctx->subtitle = std::string(range_buf) + "  " + date_buf;
 
-    /* 整条：管理模式下第一格是复选框（隐藏时 flex 跳过，卡片自动顶到最左） */
-    lv_obj_t *wrap = lv_obj_create(parent);
-    lv_obj_remove_style_all(wrap);
-    lv_obj_set_width(wrap, LV_PCT(100));
-    lv_obj_set_height(wrap, USER_HIST_CARD_H);
-    lv_obj_set_flex_flow(wrap, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(wrap, LV_FLEX_ALIGN_START,
-                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_column(wrap, USER_PAD, 0);
-    lv_obj_set_style_bg_opa(wrap, LV_OPA_TRANSP, 0);
-    lv_obj_clear_flag(wrap, LV_OBJ_FLAG_SCROLLABLE);
-    ctx->wrap = wrap;
-
-    /* 复选框（稿 4470:6958）：空框 / 红底白勾，常态隐藏 */
-    lv_obj_t *check = lv_obj_create(wrap);
-    lv_obj_remove_style_all(check);
-    lv_obj_set_size(check, USER_HIST_CHECK_SZ, USER_HIST_CHECK_SZ);
-    lv_obj_set_style_radius(check, USER_BTN_RADIUS / 2, 0);
-    lv_obj_set_style_border_width(check, 1, 0);
-    lv_obj_set_style_border_color(check, user_color_text, 0);
-    lv_obj_set_style_border_opa(check, LV_OPA_40, 0);
-    lv_obj_set_style_bg_color(check, ui_color_danger, 0);
-    lv_obj_set_style_bg_opa(check, LV_OPA_TRANSP, 0);
-    lv_obj_clear_flag(check, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_add_flag(check, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_add_flag(check, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_add_event_cb(check, card_click_cb, LV_EVENT_CLICKED, ctx);
-    ctx->check = check;
-
-    lv_obj_t *mark = lv_label_create(check);
-    lv_label_set_text(mark, LV_SYMBOL_OK);
-    lv_obj_set_style_text_color(mark, user_color_text, 0);
-    lv_obj_set_style_text_font(mark, user_font_caption(), 0);
-    lv_obj_center(mark);
-    lv_obj_add_flag(mark, LV_OBJ_FLAG_HIDDEN);
-    ctx->check_mark = mark;
-
-    /* 卡片架：删除圆钮浮在卡片下层，卡片左滑平移后露出 */
-    lv_obj_t *holder = lv_obj_create(wrap);
-    lv_obj_remove_style_all(holder);
-    lv_obj_set_height(holder, LV_PCT(100));
-    lv_obj_set_flex_grow(holder, 1);
-    lv_obj_set_style_bg_opa(holder, LV_OPA_TRANSP, 0);
-    lv_obj_clear_flag(holder, LV_OBJ_FLAG_SCROLLABLE);
-
-    lv_obj_t *del = lv_button_create(holder);
-    lv_obj_remove_style_all(del);
-    const int32_t del_sz = USER_BTN_PRIMARY_H;
-    lv_obj_set_size(del, del_sz, del_sz);
-    lv_obj_add_flag(del, LV_OBJ_FLAG_FLOATING);
-    lv_obj_set_style_radius(del, LV_RADIUS_CIRCLE, 0);
-    lv_obj_set_style_bg_color(del, ui_color_danger, 0);
-    lv_obj_set_style_bg_opa(del, LV_OPA_COVER, 0);
-    lv_obj_align(del, LV_ALIGN_RIGHT_MID, -USER_PAD, 0);
-    lv_obj_add_flag(del, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_add_event_cb(del, del_click_cb, LV_EVENT_CLICKED, ctx);
-    lv_obj_t *del_icon = lv_label_create(del);
-    lv_label_set_text(del_icon, LV_SYMBOL_TRASH);
-    lv_obj_set_style_text_color(del_icon, user_color_text, 0);
-    lv_obj_set_style_text_font(del_icon, user_font_text(), 0);
-    lv_obj_center(del_icon);
-    ctx->del_btn = del;
-
-    /* 卡片本体：左缩略图 + 右信息区（稿 4448:6193） */
-    lv_obj_t *card = lv_obj_create(holder);
-    lv_obj_remove_style_all(card);
-    lv_obj_set_size(card, LV_PCT(100), LV_PCT(100));
-    lv_obj_set_style_radius(card, USER_BTN_RADIUS, 0);
-    /* 稿是 4% 白，这里用等效的不透明底：半透明每帧要与背景混合，滚动时开销大。
-     * 仅本页如此，共享的磨砂卡片组件不动（设置页等仍用半透明）。 */
-    lv_obj_set_style_bg_color(card, user_color_panel, 0);
-    lv_obj_set_style_bg_opa(card, LV_OPA_COVER, 0);
-    lv_obj_set_flex_flow(card, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(card, LV_FLEX_ALIGN_START,
-                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_column(card, USER_PAD_SM, 0);
-    lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_add_flag(card, LV_OBJ_FLAG_CLICKABLE);
-    /* 跟手左滑：自己按 PRESSED/PRESSING/RELEASED 算位移（不用 LV_EVENT_GESTURE，
-     * 原因见「左滑删除」一节） */
-    attach_card_drag(card, ctx);
-    lv_obj_add_event_cb(card, card_click_cb, LV_EVENT_CLICKED, ctx);
-    ctx->card = card;
-
-    make_thumbnail(card, ctx);
+    lv_obj_t *card = build_card_shell(parent, ctx);
 
     lv_obj_t *info = lv_obj_create(card);
     lv_obj_remove_style_all(info);
@@ -1722,7 +1789,8 @@ void build_entry(lv_obj_t *parent, const upc::PrintHistoryEntry &e)
     lv_obj_set_flex_flow(title_row, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(title_row, LV_FLEX_ALIGN_START,
                           LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_column(title_row, USER_PAD_SM, 0);
+    /* 稿 4438:6121：文件名↔状态胶囊 12 */
+    lv_obj_set_style_pad_column(title_row, USER_PAD_SM * 3 / 4, 0);
     lv_obj_set_style_bg_opa(title_row, LV_OPA_TRANSP, 0);
     lv_obj_clear_flag(title_row, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_flag(title_row, LV_OBJ_FLAG_EVENT_BUBBLE);
@@ -1730,13 +1798,13 @@ void build_entry(lv_obj_t *parent, const upc::PrintHistoryEntry &e)
     lv_obj_t *name = lv_label_create(title_row);
     lv_label_set_text(name, e.job_name.empty() ? "print" : e.job_name.c_str());
     lv_obj_set_style_text_color(name, user_color_text, 0);
-    lv_obj_set_style_text_font(name, user_font_text(), 0);
+    lv_obj_set_style_text_font(name, user_font_text_sm(), 0);   /* 稿 4438:6122 是 16 */
     lv_label_set_long_mode(name, LV_LABEL_LONG_MODE_DOTS);
     /* 不用 flex_grow：状态胶囊要紧跟文件名，不是右对齐到行尾。名字过长时靠 max_width
      * 夹住（否则胶囊会被挤出卡片），并把高度锁成一行——v9 的 DOTS 是「先按宽度换行、
      * 再截末行」，不锁高度只会换行、出不来省略号。 */
     lv_obj_set_style_max_width(name, LV_PCT(65), 0);
-    lv_obj_set_height(name, lv_font_get_line_height(user_font_text()));
+    lv_obj_set_height(name, lv_font_get_line_height(user_font_text_sm()));
 
     make_status_pill(title_row, e.status == upc::PrintHistoryStatus::Complete);
 
@@ -1748,7 +1816,8 @@ void build_entry(lv_obj_t *parent, const upc::PrintHistoryEntry &e)
     lv_obj_set_flex_flow(metrics, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(metrics, LV_FLEX_ALIGN_START,
                           LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_column(metrics, USER_PAD_SM, 0);
+    /* 稿 4443:6165：三组指标之间 24（含中间那两条竖分隔线的左右间距） */
+    lv_obj_set_style_pad_column(metrics, USER_PAD, 0);
     lv_obj_set_style_bg_opa(metrics, LV_OPA_TRANSP, 0);
     lv_obj_clear_flag(metrics, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_flag(metrics, LV_OBJ_FLAG_EVENT_BUBBLE);
@@ -1799,83 +1868,7 @@ void build_album_entry(lv_obj_t* parent, const std::filesystem::path& path)
     ctx->subtitle = "Photo";
     g_cards.push_back(ctx);
 
-    lv_obj_t *wrap = lv_obj_create(parent);
-    lv_obj_remove_style_all(wrap);
-    lv_obj_set_width(wrap, LV_PCT(100));
-    lv_obj_set_height(wrap, USER_HIST_CARD_H);
-    lv_obj_set_flex_flow(wrap, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(wrap, LV_FLEX_ALIGN_START,
-                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_column(wrap, USER_PAD, 0);
-    lv_obj_set_style_bg_opa(wrap, LV_OPA_TRANSP, 0);
-    lv_obj_clear_flag(wrap, LV_OBJ_FLAG_SCROLLABLE);
-    ctx->wrap = wrap;
-
-    lv_obj_t *check = lv_obj_create(wrap);
-    lv_obj_remove_style_all(check);
-    lv_obj_set_size(check, USER_HIST_CHECK_SZ, USER_HIST_CHECK_SZ);
-    lv_obj_set_style_radius(check, USER_BTN_RADIUS / 2, 0);
-    lv_obj_set_style_border_width(check, 1, 0);
-    lv_obj_set_style_border_color(check, user_color_text, 0);
-    lv_obj_set_style_border_opa(check, LV_OPA_40, 0);
-    lv_obj_set_style_bg_color(check, ui_color_danger, 0);
-    lv_obj_set_style_bg_opa(check, LV_OPA_TRANSP, 0);
-    lv_obj_clear_flag(check, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_add_flag(check, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_add_flag(check, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_add_event_cb(check, card_click_cb, LV_EVENT_CLICKED, ctx);
-    ctx->check = check;
-
-    lv_obj_t *mark = lv_label_create(check);
-    lv_label_set_text(mark, LV_SYMBOL_OK);
-    lv_obj_set_style_text_color(mark, user_color_text, 0);
-    lv_obj_set_style_text_font(mark, user_font_caption(), 0);
-    lv_obj_center(mark);
-    lv_obj_add_flag(mark, LV_OBJ_FLAG_HIDDEN);
-    ctx->check_mark = mark;
-
-    lv_obj_t *holder = lv_obj_create(wrap);
-    lv_obj_remove_style_all(holder);
-    lv_obj_set_height(holder, LV_PCT(100));
-    lv_obj_set_flex_grow(holder, 1);
-    lv_obj_set_style_bg_opa(holder, LV_OPA_TRANSP, 0);
-    lv_obj_clear_flag(holder, LV_OBJ_FLAG_SCROLLABLE);
-
-    lv_obj_t *del = lv_button_create(holder);
-    lv_obj_remove_style_all(del);
-    const int32_t del_sz = USER_BTN_PRIMARY_H;
-    lv_obj_set_size(del, del_sz, del_sz);
-    lv_obj_add_flag(del, LV_OBJ_FLAG_FLOATING);
-    lv_obj_set_style_radius(del, LV_RADIUS_CIRCLE, 0);
-    lv_obj_set_style_bg_color(del, ui_color_danger, 0);
-    lv_obj_set_style_bg_opa(del, LV_OPA_COVER, 0);
-    lv_obj_align(del, LV_ALIGN_RIGHT_MID, -USER_PAD, 0);
-    lv_obj_add_flag(del, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_add_event_cb(del, del_click_cb, LV_EVENT_CLICKED, ctx);
-    lv_obj_t *del_icon = lv_label_create(del);
-    lv_label_set_text(del_icon, LV_SYMBOL_TRASH);
-    lv_obj_set_style_text_color(del_icon, user_color_text, 0);
-    lv_obj_set_style_text_font(del_icon, user_font_text(), 0);
-    lv_obj_center(del_icon);
-    ctx->del_btn = del;
-
-    lv_obj_t *card = lv_obj_create(holder);
-    lv_obj_remove_style_all(card);
-    lv_obj_set_size(card, LV_PCT(100), LV_PCT(100));
-    lv_obj_set_style_radius(card, USER_BTN_RADIUS, 0);
-    lv_obj_set_style_bg_color(card, user_color_panel, 0);
-    lv_obj_set_style_bg_opa(card, LV_OPA_COVER, 0);
-    lv_obj_set_flex_flow(card, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(card, LV_FLEX_ALIGN_START,
-                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_column(card, USER_PAD_SM, 0);
-    lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_add_flag(card, LV_OBJ_FLAG_CLICKABLE);
-    attach_card_drag(card, ctx);
-    lv_obj_add_event_cb(card, card_click_cb, LV_EVENT_CLICKED, ctx);
-    ctx->card = card;
-
-    make_thumbnail(card, ctx);
+    lv_obj_t *card = build_card_shell(parent, ctx);
 
     lv_obj_t *info = lv_obj_create(card);
     lv_obj_remove_style_all(info);
@@ -1894,10 +1887,10 @@ void build_album_entry(lv_obj_t* parent, const std::filesystem::path& path)
     lv_obj_t *name = lv_label_create(info);
     lv_label_set_text(name, ctx->title.c_str());
     lv_obj_set_style_text_color(name, user_color_text, 0);
-    lv_obj_set_style_text_font(name, user_font_text(), 0);
+    lv_obj_set_style_text_font(name, user_font_text_sm(), 0);   /* 与打印历史卡同档 */
     lv_label_set_long_mode(name, LV_LABEL_LONG_MODE_DOTS);
     lv_obj_set_style_max_width(name, LV_PCT(90), 0);
-    lv_obj_set_height(name, lv_font_get_line_height(user_font_text()));
+    lv_obj_set_height(name, lv_font_get_line_height(user_font_text_sm()));
 
     lv_obj_t *sub = lv_label_create(info);
     lv_label_set_text(sub, ctx->subtitle.c_str());
@@ -2024,7 +2017,8 @@ void build_date_title(lv_obj_t *parent, const char *date_text)
     lv_obj_t *lbl = lv_label_create(parent);
     lv_label_set_text(lbl, date_text);
     lv_obj_set_style_text_color(lbl, user_color_text_dim, 0);
-    lv_obj_set_style_text_font(lbl, user_font_text(), 0);
+    /* 稿 4366:5427 是 16（白 50%，这里用 text_dim 等效） */
+    lv_obj_set_style_text_font(lbl, user_font_text_sm(), 0);
     lv_obj_set_style_margin_top(lbl, USER_PAD_SM, 0);
 }
 
@@ -2340,10 +2334,10 @@ lv_obj_t *page_user_history_create(lv_obj_t *parent)
     lv_obj_t *sep = ui_user_make_divider_line(page, LV_PCT(100));
     lv_obj_set_style_margin_bottom(sep, USER_PAD, 0);
 
-    /* 存储告警横幅：横向边距与列表一致，视觉上与卡片同宽 */
+    /* 存储告警横幅：横向边距与列表一致，视觉上与卡片同宽（稿 4550:8296 也是 928 宽） */
     g_banner = build_banner(page);
-    lv_obj_set_style_margin_left(g_banner, USER_PAD, 0);
-    lv_obj_set_style_margin_right(g_banner, content_right_pad(), 0);
+    lv_obj_set_style_margin_left(g_banner, list_pad_l(), 0);
+    lv_obj_set_style_margin_right(g_banner, list_right_pad(), 0);
     lv_obj_set_style_margin_bottom(g_banner, USER_PAD_SM, 0);
 
     /* 列表容器（纵向滚动）。顶部设备信息条由外壳常驻，见 page_manager。 */
@@ -2352,11 +2346,11 @@ lv_obj_t *page_user_history_create(lv_obj_t *parent)
     lv_obj_set_width(list, LV_PCT(100));
     lv_obj_set_flex_grow(list, 1);
     lv_obj_set_flex_flow(list, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_style_pad_hor(list, USER_PAD, 0);
+    lv_obj_set_style_pad_left(list, list_pad_l(), 0);
     lv_obj_set_style_pad_bottom(list, USER_PAD, 0);
     lv_obj_set_style_pad_row(list, USER_PAD_SM, 0);
-    /* 给右侧悬浮翻页钮留位 */
-    lv_obj_set_style_pad_right(list, content_right_pad(), 0);
+    /* 给右侧悬浮翻页钮留位（稿上卡片右缘要与钮隔开一个钮径） */
+    lv_obj_set_style_pad_right(list, list_right_pad(), 0);
     lv_obj_set_style_bg_opa(list, LV_OPA_TRANSP, 0);
     lv_obj_set_scroll_dir(list, LV_DIR_VER);
     lv_obj_set_scrollbar_mode(list, LV_SCROLLBAR_MODE_OFF);
@@ -2375,10 +2369,19 @@ lv_obj_t *page_user_history_create(lv_obj_t *parent)
     lv_obj_set_flex_flow(col, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(col, LV_FLEX_ALIGN_CENTER,
                           LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_row(col, USER_PAD_LG, 0);
+    lv_obj_set_style_pad_row(col, scroll_btn_gap(), 0);
     lv_obj_set_style_bg_opa(col, LV_OPA_TRANSP, 0);
     lv_obj_clear_flag(col, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_align(col, LV_ALIGN_RIGHT_MID, -USER_PAD, 0);
+    /* 稿 4366:5406/5409 在 x=1184、64 见方 → 距屏右 32（USER_PAD_LG）。
+     *
+     * 竖向按「所滚动的列表区」居中，而不是整个页面：RIGHT_MID 是以页内容区
+     * （屏幕 USER_CONTENT_TOP..底，心 456）为准，但列表是从分隔线（心 476）往下才开始，
+     * 两者差的正好是 Tab 行高的一半，故补这一段。补后组心 476，稿是 478。
+     *
+     * 三张稿的组心其实互不相同（历史 478 / 消息 444 / 设置 400），套不上统一规则，
+     * 是逐帧目测摆的；间距 160 才是三取其二的一致值。故这里只跟间距，位置改用上面
+     * 这条统一规则，免得同一个控件在页面间跳来跳去。详见 UI.md。 */
+    lv_obj_align(col, LV_ALIGN_RIGHT_MID, -USER_PAD_LG, USER_HIST_TAB_H / 2);
     make_scroll_btn(col, LV_SYMBOL_UP, on_scroll_up);
     make_scroll_btn(col, LV_SYMBOL_DOWN, on_scroll_down);
     g_scroll_btns = col;

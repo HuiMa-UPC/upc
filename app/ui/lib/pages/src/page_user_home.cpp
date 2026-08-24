@@ -2351,7 +2351,9 @@ lv_obj_t *page_user_home_create(lv_obj_t *parent)
     lv_obj_t *page = lv_obj_create(parent);
     lv_obj_remove_style_all(page);
     lv_obj_set_size(page, LV_HOR_RES, LV_VER_RES);
-    lv_obj_set_pos(page, -USER_SIDEBAR_W, -USER_TOPBAR_H);
+    /* 纵向抵消的是 content_panel_ 的 pad_top，那一格现在是 USER_CONTENT_TOP
+     * 而非设备条高（两者已拆开给值），用错会让整页竖直错开二者之差。 */
+    lv_obj_set_pos(page, -USER_SIDEBAR_W, -USER_CONTENT_TOP);
     lv_obj_set_flex_flow(page, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_style_pad_all(page, 0, 0);
     lv_obj_set_style_pad_left(page, USER_SIDEBAR_W, 0);

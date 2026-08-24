@@ -38,6 +38,12 @@ const lv_color_t user_color_status_err = LV_COLOR_MAKE(0xff, 0x4d, 0x4d);
  *  1024×600 档按 600/800 折算 96，1920 档按 1280 档 ×1.5 给 192。
  *  调试页那条传感器卡原先借用本字段，band 抬高后改用 user_sensor_strip_h，
  *  值即旧的 user_topbar_h，排版不受影响。
+ *
+ *  user_content_top 是页面内容区的上偏移，与 user_topbar_h 拆开给值：稿
+ *  4366:5400 里设备行是 48..80（心 64，对应条高 128），而 Tab 文字顶在 112，
+ *  两者只隔 32。原先共用 user_topbar_h，页面内容被压到 128 起、比稿低 16；
+ *  单把该字段改成 112 又会让设备名那行跟着上移 8。故 128 留给设备条，
+ *  112 独立成本字段。1920 档 ×1.5 给 168，1024 档按 600/800 折算 84。
  * ============================================================================ */
 static const ui_theme_t s_theme_1920 = {
     /* 开发者 Shell */
@@ -96,6 +102,7 @@ static const ui_theme_t s_theme_1920 = {
     /* user_nav_icon_sz       */ 56,
     /* user_nav_icon_pad      */ 12,
     /* user_topbar_h          */ 192,
+    /* user_content_top       */ 168,  /* 稿 112@1280 × 1.5 */
     /* user_topbar_pad_hor    */ 40,
     /* user_topbar_pad_ver    */ 32,
     /* user_pad               */ 40,
@@ -120,6 +127,8 @@ static const ui_theme_t s_theme_1920 = {
     /* user_back_btn_w        */ 180,
     /* user_back_btn_h        */ 64,
     /* user_sensor_strip_h    */ 120,
+    /* user_scroll_btn_sz     */ 0,    /* 无稿，沿用旧式 64*5/4 = 80 */
+    /* user_scroll_btn_gap    */ 0,    /* 无稿，沿用旧式 USER_PAD_LG */
 
     /* 打印流程 */
     /* user_dlg_w                 */ 720,
@@ -173,6 +182,8 @@ static const ui_theme_t s_theme_1920 = {
     /* user_hist_bar_h            */ 12,
     /* user_hist_check_sz         */ 36,
     /* user_hist_btn_w            */ 150,
+    /* user_hist_pad_l            */ 0,    /* 无稿，沿用旧式 USER_PAD */
+    /* user_hist_list_pad_l       */ 0,    /* 无稿，沿用旧式 USER_PAD */
 
     /* 字体（dev） */
     /* font_body          */ &lv_font_montserrat_32,
@@ -248,6 +259,7 @@ static const ui_theme_t s_theme_1280 = {
     /* user_nav_icon_sz       */ 59,   /* 令字形上屏 48（稿值）：48 ÷ (52/64) */
     /* user_nav_icon_pad      */ 8,
     /* user_topbar_h          */ 128,
+    /* user_content_top       */ 112,  /* 稿值：Tab 文字顶 y=112 */
     /* user_topbar_pad_hor    */ 28,
     /* user_topbar_pad_ver    */ 20,
     /* 间距梯度取稿上的 16/24/32（多点交叉验证：16 = 侧栏项距/胶囊间距/CABIN 行距/
@@ -275,6 +287,8 @@ static const ui_theme_t s_theme_1280 = {
     /* user_back_btn_w        */ 128,
     /* user_back_btn_h        */ 44,
     /* user_sensor_strip_h    */ 84,
+    /* user_scroll_btn_sz     */ 64,   /* 稿值（三页一致） */
+    /* user_scroll_btn_gap    */ 160,  /* 稿值（历史页 / 消息页） */
 
     /* 打印流程 */
     /* user_dlg_w                 */ 500,
@@ -329,6 +343,8 @@ static const ui_theme_t s_theme_1280 = {
     /* user_hist_bar_h            */ 8,
     /* user_hist_check_sz         */ 24,
     /* user_hist_btn_w            */ 100,
+    /* user_hist_pad_l            */ 48,   /* 稿：Tab 文字 x=176 − 侧栏 128 */
+    /* user_hist_list_pad_l       */ 64,   /* 稿：卡片 x=192 − 侧栏 128 */
 
     /* 字体（dev） */
     /* font_body          */ &lv_font_montserrat_24,
@@ -410,6 +426,7 @@ static const ui_theme_t s_theme_1024 = {
     /* user_nav_icon_sz       */ 54,
     /* user_nav_icon_pad      */ 8,
     /* user_topbar_h          */ 96,
+    /* user_content_top       */ 84,   /* 稿 112@1280 × 600/800 */
     /* user_topbar_pad_hor    */ 22,
     /* user_topbar_pad_ver    */ 16,
     /* user_pad               */ 22,
@@ -434,6 +451,8 @@ static const ui_theme_t s_theme_1024 = {
     /* user_back_btn_w        */ 102,
     /* user_back_btn_h        */ 40,
     /* user_sensor_strip_h    */ 68,
+    /* user_scroll_btn_sz     */ 0,    /* 无稿，沿用旧式 40*5/4 = 50 */
+    /* user_scroll_btn_gap    */ 0,    /* 无稿，沿用旧式 USER_PAD_LG */
 
     /* 打印流程 */
     /* user_dlg_w                 */ 400,
@@ -487,6 +506,8 @@ static const ui_theme_t s_theme_1024 = {
     /* user_hist_bar_h            */ 6,
     /* user_hist_check_sz         */ 20,
     /* user_hist_btn_w            */ 80,
+    /* user_hist_pad_l            */ 0,    /* 无稿，沿用旧式 USER_PAD */
+    /* user_hist_list_pad_l       */ 0,    /* 无稿，沿用旧式 USER_PAD */
 
     /* 字体（dev） */
     /* font_body          */ &lv_font_montserrat_20,

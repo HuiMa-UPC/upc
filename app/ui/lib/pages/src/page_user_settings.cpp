@@ -970,7 +970,10 @@ lv_obj_t *make_scroll_btn(lv_obj_t *parent, const char *sym, lv_event_cb_t cb)
 {
     lv_obj_t *btn = lv_button_create(parent);
     lv_obj_remove_style_all(btn);
-    const int32_t sz = USER_BACK_BTN_H * 5 / 4;   /* 比返回钮略大一圈 */
+    /* 稿 3238:14371 是 64 见方，与历史页/消息页同值，故取公共字段；
+     * 无稿的档位由该字段的 0 退回旧式「比返回钮略大一圈」。 */
+    const int32_t sz = USER_SCROLL_BTN_SZ > 0 ? USER_SCROLL_BTN_SZ
+                                              : USER_BACK_BTN_H * 5 / 4;
     lv_obj_set_size(btn, sz, sz);
     lv_obj_set_style_radius(btn, LV_RADIUS_CIRCLE, 0);
     lv_obj_set_style_bg_color(btn, user_color_panel_alt, 0);
@@ -1106,7 +1109,10 @@ void build_network_detail(lv_obj_t *parent)
         lv_obj_set_flex_flow(col, LV_FLEX_FLOW_COLUMN);
         lv_obj_set_flex_align(col, LV_FLEX_ALIGN_CENTER,
                               LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-        lv_obj_set_style_pad_row(col, USER_PAD_LG, 0);   /* 上下钮间距放大 */
+        /* 上下钮间距取公共字段（稿 160）。本页那张稿 3238:14371/14374 量出来是 192，
+         * 与历史页/消息页的 160 不一致；三取其二后统一到 160，不为孤例单开字段。 */
+        lv_obj_set_style_pad_row(col, USER_SCROLL_BTN_GAP > 0 ? USER_SCROLL_BTN_GAP
+                                                              : USER_PAD_LG, 0);
         lv_obj_set_style_bg_opa(col, LV_OPA_TRANSP, 0);
         lv_obj_clear_flag(col, LV_OBJ_FLAG_SCROLLABLE);
         /* 稿 3238:14371/14374 在 x=1184、64 见方 → 距屏右 32（USER_PAD_LG）。
@@ -1603,6 +1609,11 @@ lv_obj_t *page_user_settings_create(lv_obj_t *parent)
         lv_obj_set_style_pad_left(body, USER_SETTINGS_GAP, 0);
         lv_obj_set_style_pad_right(body, USER_SETTINGS_GUTTER_R, 0);
         lv_obj_set_style_pad_column(body, USER_SETTINGS_GAP, 0);
+        /* 稿 3238:14296 的左栏顶在 y=124，比外壳给的内容顶低 12。
+         * USER_CONTENT_TOP（112）取的是历史页/消息页 Tab 行的稿值，那两页一致；
+         * 本页是两栏导航、没有 Tab 行，稿上本就是另一个数，故在此补差，
+         * 不去动全局字段（动了会把那两页推偏）。 */
+        lv_obj_set_style_pad_top(body, USER_PAD / 2, 0);
     } else {
         lv_obj_set_style_pad_hor(body, USER_PAD, 0);
         lv_obj_set_style_pad_column(body, USER_PAD_LG, 0);

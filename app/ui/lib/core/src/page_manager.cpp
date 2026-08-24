@@ -81,8 +81,10 @@ void PageManager::init(lv_obj_t* screen) {
      * （目前只有首页的摄像头层）自行用负偏移跨过这段 padding。 */
     lv_obj_set_style_pad_left(content_panel_, USER_SIDEBAR_W, 0);
     /* 顶部同理让出常驻设备信息条；这一格由 apply_device_bar() 按页开关，
-     * 不显示该条的隐藏页会被收回 0，页面因此拿到整屏高度。 */
-    lv_obj_set_style_pad_top(content_panel_, USER_TOPBAR_H, 0);
+     * 不显示该条的隐藏页会被收回 0，页面因此拿到整屏高度。
+     * 用 USER_CONTENT_TOP 而不是设备条高：稿上内容顶比条高小一截（112 对 128），
+     * 两者已拆成独立字段，见 ui_theme.cpp 头部说明。 */
+    lv_obj_set_style_pad_top(content_panel_, USER_CONTENT_TOP, 0);
     lv_obj_set_style_border_width(content_panel_, 0, 0);
     lv_obj_set_style_radius(content_panel_, 0, 0);
     lv_obj_set_style_bg_opa(content_panel_, LV_OPA_TRANSP, 0);
@@ -308,7 +310,7 @@ void PageManager::apply_device_bar(const PageEntry& entry) {
      * 延时摄影页另外还建在 lv_layer_top() 上整屏覆盖，本来也盖得住这条。 */
     const bool show = entry.menu_btn != nullptr;
     ui_device_bar_set_visible(show);
-    lv_obj_set_style_pad_top(content_panel_, show ? USER_TOPBAR_H : 0, 0);
+    lv_obj_set_style_pad_top(content_panel_, show ? USER_CONTENT_TOP : 0, 0);
     /* 通知浮层同一条规则，另外排除三页：
      *   - 消息页自己：消息都摊在页面上了，再在右上角浮两张重复的没意义；
      *   - 历史页 / 设置页：这两页的右上角已经有常驻内容（Storage 容量条、Wi-Fi 的

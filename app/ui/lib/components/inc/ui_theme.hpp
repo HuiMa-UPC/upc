@@ -135,6 +135,12 @@ typedef struct {
     int32_t user_nav_icon_sz;
     int32_t user_nav_icon_pad;
     int32_t user_topbar_h;
+    /** 页面内容区的上偏移（`content_panel_` 的 `pad_top`，稿 112@1280）。
+     *  **不等于 user_topbar_h**：那个管设备条自身的高，决定设备名那行竖直居中到
+     *  哪（稿上行心 y=64，故条高 128）；本字段管页面内容从哪开始（稿上 Tab 文字
+     *  顶在 y=112）。稿里设备行底 80 到内容顶只隔 32，两者本就不是同一个数，
+     *  共用一个字段会顾此失彼，故拆开。 */
+    int32_t user_content_top;
     int32_t user_topbar_pad_hor;
     int32_t user_topbar_pad_ver;
     int32_t user_pad;
@@ -184,6 +190,14 @@ typedef struct {
     int32_t user_back_btn_w;
     int32_t user_back_btn_h;
     int32_t user_sensor_strip_h;   /**< 调试页传感器条高（原先借用 user_topbar_h） */
+    /** 右侧悬浮翻页钮的直径（稿 64@1280）。历史页 4366:5406、消息页 3033:5253、
+     *  设置页 3238:14371 三张稿都是 64×64，故做成公共字段而非各页自算。
+     *  0 = 沿用旧式 user_back_btn_h * 5/4（无稿的档位据此保持原渲染）。 */
+    int32_t user_scroll_btn_sz;
+    /** 上下两枚翻页钮的间距（稿 160@1280）。历史页 4366:5406/5409 与消息页
+     *  3033:5253/5256 都是 160；**设置页那张稿是 192**，未统一，故该页仍用旧值。
+     *  0 = 沿用旧式 USER_PAD_LG。 */
+    int32_t user_scroll_btn_gap;
 
     /* ---- 打印流程：弹窗 / 滑动 / 旋转环 / 进度 / 打印中底条 ---- */
     int32_t user_dlg_w;
@@ -268,6 +282,13 @@ typedef struct {
     int32_t user_hist_bar_h;      /**< 顶部存储容量进度条轨道高 */
     int32_t user_hist_check_sz;   /**< 管理模式复选框边长 */
     int32_t user_hist_btn_w;      /**< Tab 行右侧按钮宽（Manage/Delete/Select All/Cancel） */
+    /** Tab 行左内距（稿 48@1280：Tab 文字 x=176，侧栏占 128）。
+     *  0 = 沿用旧式 USER_PAD。 */
+    int32_t user_hist_pad_l;
+    /** 卡片列表 / 日期标题 / 告警横幅的左内距（稿 64@1280：卡片 x=192）。
+     *  **比 Tab 行再内缩 16**，稿上这两者本就不对齐，故分成两个字段。
+     *  0 = 沿用旧式 USER_PAD。 */
+    int32_t user_hist_list_pad_l;
 
     /* ---- 字体（开发者 Shell） ---- */
     const lv_font_t *font_body;
@@ -359,6 +380,7 @@ extern const ui_theme_t *g_ui;
 #define USER_NAV_ICON_SZ            (g_ui->user_nav_icon_sz)
 #define USER_NAV_ICON_PAD           (g_ui->user_nav_icon_pad)
 #define USER_TOPBAR_H               (g_ui->user_topbar_h)
+#define USER_CONTENT_TOP            (g_ui->user_content_top)
 #define USER_TOPBAR_PAD_HOR         (g_ui->user_topbar_pad_hor)
 #define USER_TOPBAR_PAD_VER         (g_ui->user_topbar_pad_ver)
 #define USER_PAD                    (g_ui->user_pad)
@@ -434,6 +456,10 @@ extern const ui_theme_t *g_ui;
 #define USER_HIST_BAR_H             (g_ui->user_hist_bar_h)
 #define USER_HIST_CHECK_SZ          (g_ui->user_hist_check_sz)
 #define USER_HIST_BTN_W             (g_ui->user_hist_btn_w)
+#define USER_HIST_PAD_L             (g_ui->user_hist_pad_l)
+#define USER_HIST_LIST_PAD_L        (g_ui->user_hist_list_pad_l)
+#define USER_SCROLL_BTN_SZ          (g_ui->user_scroll_btn_sz)
+#define USER_SCROLL_BTN_GAP         (g_ui->user_scroll_btn_gap)
 
 /**
  * 初始化主题：根据当前 lv_display 实际分辨率挑选 profile，再初始化所有 lv_style。
