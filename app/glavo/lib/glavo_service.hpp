@@ -133,6 +133,7 @@ private:
     void publish_debug_env_sim_state();
     void publish_debug_env_sim_powder_state();
     void publish_debug_first_layer_visual_check_state();
+    void publish_first_layer_visual_session(bool active, const char* reason);
     bool request_first_layer_visual_check(uint16_t layer_height_um);
     void handle_visual_first_layer_check_rsp(const middleware::Message& msg);
     void debug_tx(const uint8_t* frame, int n);
@@ -243,6 +244,7 @@ private:
     char clean_test_job_name_[64]{};
     bool print_h264_continuous_on_ = false;
     bool first_layer_visual_check_on_ = false; /**< 首层视觉检测开关（仅本次运行） */
+    bool first_layer_visual_session_active_ = false; /**< Visual Camera/定位预热会话状态 */
     bool env_sim_on_ = false;  /**< 环境上报模拟（仅本次运行，默认关） */
     bool env_sim_powder_low_on_ = false; /**< 环境模拟粉量缺粉开关（目标状态，延迟生效由 McuLink 管） */
     bool ignore_powder_low_for_current_print_ = false; /**< 本次打印是否忽略缺粉检测（Cancel 后置位） */
