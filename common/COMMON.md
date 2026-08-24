@@ -275,6 +275,23 @@ scripts/rongsu.sh start   # glavo + rongsu_camera → ui
 - 预览统一走 **dma fd 旁路**：后端经主 IPC（`/tmp/upc_camera.sock`）`SCM_RIGHTS` 附带 dma_buf fd；UI 侧 `MsgPort::take_peer_dma_fds(APP_CAMERA)` 接收。SHM `/upc_camera_preview` 仅保留 slot 状态元数据，像素不再走 SHM payload。
 - `dma_socket_path` 字段为 ABI 保留，当前未使用独立 socket。
 
+### TCP CMD=0x0A（通用紧急指令）字段口径
+
+`app/protocol/tcp/tcp_tx.*` 组帧时，`DATA[1..3]` 按 **协议枚举值原样透传**，不得按 bool 压缩：
+
+- `DATA[1] Stop`：`1=急停`，`0=不修改`
+- `DATA[2] Pause`：`2=暂停`，`1=继续`，`0=不修改`
+- `DATA[3] Red`：`2=激光`，`1=红光`，`0=不修改`
+
+实现注意：
+
+- 禁止写法：`payload[x] = v ? 1u : 0u;`（会把 `2` 误压成 `1`）
+- 正确写法：`payload[x] = v;`
+- 典型场景：
+  - 调试红光开关：`stop=0 pause=0 red=1/2`
+  - 打印暂停/恢复：`stop=0 pause=2/1 red=0`
+  - 急停：`stop=1 pause=0 red=0`
+
 ---
 
 ## 消息契约 · 新增消息（固定四步）

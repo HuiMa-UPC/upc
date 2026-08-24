@@ -78,6 +78,15 @@ bool tcp_tx_log_enabled()
     return k_enabled;
 }
 
+bool laser_power_log_enabled()
+{
+    static const bool k_enabled =
+        parse_env_switch(
+            std::getenv("UPC_GLAVO_LOG_LASER_POWER"),
+            UPC_GLAVO_LOG_LASER_POWER_DEFAULT != 0);
+    return k_enabled;
+}
+
 void tcp_log_tx_frame(const uint8_t* data, size_t len)
 {
     if(!tcp_tx_log_enabled() || !data || len == 0) {
@@ -2180,6 +2189,7 @@ void McuLink::reset_motion_state(bool clear_start_pending)
     sent_at_layer_ready_ = 0;
     current_layer_snapped_ = false;
     first_layer_check_passed_ = false;
+    laser_power_log_valid_ = false;
     tcp_stage_clear();
     serial_clear_reliable();
     PrintJobState::instance().set_sending(false);
@@ -2297,29 +2307,40 @@ bool McuLink::is_user_dispatch_paused() const noexcept
     return user_paused_.load();
 }
 
-bool McuLink::send_tcp_emergency_ctrl(bool stop, bool pause)
+bool McuLink::send_tcp_emergency_ctrl_ex(uint8_t stop_code, uint8_t pause_code, uint8_t red_code)
 {
     uint8_t frame[64];
-    const uint8_t stop_u8 = stop ? 1u : 0u;
-    const uint8_t pause_u8 = pause ? 1u : 0u;
-    const int flen = tcp_build_emergency_frame(stop_u8, pause_u8, frame, sizeof(frame));
+    const int flen = tcp_build_emergency_frame_ex(stop_code, pause_code, red_code, frame, sizeof(frame));
     if(flen <= 0) {
         UPC_LOG_MCU_LINK(Warn,
-            "build tcp emergency frame failed stop=%u pause=%u",
-            static_cast<unsigned>(stop_u8), static_cast<unsigned>(pause_u8));
+            "build tcp emergency frame failed stop=%u pause=%u red=%u",
+            static_cast<unsigned>(stop_code),
+            static_cast<unsigned>(pause_code),
+            static_cast<unsigned>(red_code));
         return false;
     }
     const int rc = tcp_send_raw(frame, static_cast<size_t>(flen));
     if(rc != 0) {
         UPC_LOG_MCU_LINK(Warn,
-            "tcp emergency send failed rc=%d stop=%u pause=%u",
-            rc, static_cast<unsigned>(stop_u8), static_cast<unsigned>(pause_u8));
+            "tcp emergency send failed rc=%d stop=%u pause=%u red=%u",
+            rc,
+            static_cast<unsigned>(stop_code),
+            static_cast<unsigned>(pause_code),
+            static_cast<unsigned>(red_code));
         return false;
     }
-    UPC_LOG_MCU_LINK(Info, "tcp emergency sent stop=%u pause=%u",
-                     static_cast<unsigned>(stop_u8),
-                     static_cast<unsigned>(pause_u8));
+    UPC_LOG_MCU_LINK(Info, "tcp emergency sent stop=%u pause=%u red=%u",
+                     static_cast<unsigned>(stop_code),
+                     static_cast<unsigned>(pause_code),
+                     static_cast<unsigned>(red_code));
     return true;
+}
+
+bool McuLink::send_tcp_emergency_ctrl(bool stop, bool pause)
+{
+    const uint8_t stop_code = stop ? 1u : 0u;
+    const uint8_t pause_code = pause ? 2u : 1u;
+    return send_tcp_emergency_ctrl_ex(stop_code, pause_code, 0u);
 }
 
 void McuLink::set_print_task_flow_active(bool active) noexcept
@@ -2346,7 +2367,7 @@ void McuLink::set_plate_thickness_um(uint16_t thickness_um)
 
 void McuLink::send_tcp_reset()
 {
-    (void)send_tcp_emergency_ctrl(true, false);
+    (void)send_tcp_emergency_ctrl_ex(1u, 0u, 0u);
 }
 
 void McuLink::send_serial_plate_prepare()
@@ -2717,6 +2738,26 @@ int McuLink::link_send_one_motion_batch()
         }
         return tcp_send_raw(frame, static_cast<size_t>(flen));
     };
+    auto log_power_packets_if_changed = [&]() {
+        if(!laser_power_log_enabled()) {
+            return;
+        }
+        for(int i = 0; i < n; i++) {
+            if(staged[i].data[0] != 0x02u) {
+                continue;
+            }
+            const uint16_t raw = static_cast<uint16_t>(
+                static_cast<uint16_t>(staged[i].data[9]) |
+                (static_cast<uint16_t>(staged[i].data[10]) << 8u));
+            if(laser_power_log_valid_ && last_laser_power_raw_ == raw) {
+                continue;
+            }
+            UPC_LOG_MCU_LINK(Info, "laser_power_set raw=%u",
+                             static_cast<unsigned>(raw));
+            last_laser_power_raw_ = raw;
+            laser_power_log_valid_ = true;
+        }
+    };
 
     if(batch_kind == BatchKind::Power) {
         // 功率变更窗口：
@@ -2736,6 +2777,7 @@ int McuLink::link_send_one_motion_batch()
             terminate_on_fail("power batch: send power frame failed");
             return 0;
         }
+        log_power_packets_if_changed();
 
         constexpr int kPowerResumeDelayMs = 10;
         const auto deadline = std::chrono::steady_clock::now() +

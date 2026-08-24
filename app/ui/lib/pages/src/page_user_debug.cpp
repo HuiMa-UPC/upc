@@ -73,6 +73,7 @@ lv_obj_t *g_laser_power_lbl     = nullptr;      /**< 功率读数 */
 lv_obj_t *g_laser_power_ta      = nullptr;      /**< 设置功率输入 */
 lv_obj_t *g_laser_type_lbl      = nullptr;      /**< 激光器类型显示区（JFSC / AL 200W / …） */
 lv_obj_t *g_laser_current_lbl   = nullptr;      /**< 电流读数 */
+lv_obj_t *g_laser_redlight_seg  = nullptr;      /**< 红光模式开关（On/Off） */
 uint8_t   g_laser_type_code     = 0;            /**< 最近一次上报的激光器型号（0=未知 1=JFSC 2=AL） */
 
 lv_obj_t *g_sensor_val[7] = { nullptr };
@@ -653,7 +654,7 @@ void on_galvo_home(lv_event_t *)
     ui::DebugMsgProxy::instance().send_galvo_home();
 }
 
-void on_redlight_changed(lv_event_t *e)
+void on_red_laser_changed(lv_event_t *e)
 {
     lv_obj_t *seg = lv_event_get_target_obj(e);
     ui::DebugMsgProxy::instance().send_galvo_red_light(
@@ -803,7 +804,7 @@ lv_obj_t *build_galvo_card(lv_obj_t *parent)
     lv_obj_set_style_text_font(rlcap, user_font_caption(), 0);
     const char *onoff[2] = { "On", "Off" };
     lv_obj_t *rl_seg = ui_user_make_segmented(rl_row, onoff, 2, 1);
-    lv_obj_add_event_cb(rl_seg, on_redlight_changed, LV_EVENT_VALUE_CHANGED, nullptr);
+    lv_obj_add_event_cb(rl_seg, on_red_laser_changed, LV_EVENT_VALUE_CHANGED, nullptr);
     seg_fit_content(rl_seg);
     style_debug_seg(rl_seg);
 
@@ -1734,15 +1735,9 @@ lv_obj_t *build_laser_tab(lv_obj_t *body)
     lv_obj_set_style_text_font(g_laser_type_lbl, user_font_value(), 0);
 
     /* 右：Laser Data + Power Control + Alarm Ops */
-    lv_obj_t *right = lv_obj_create(tab);
-    lv_obj_remove_style_all(right);
+    lv_obj_t *right = make_scroll_col(tab);
     lv_obj_set_width(right, 1);
     lv_obj_set_flex_grow(right, 4);
-    lv_obj_set_height(right, LV_PCT(100));
-    lv_obj_set_flex_flow(right, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_style_pad_row(right, USER_PAD_SM, 0);
-    lv_obj_set_style_bg_opa(right, LV_OPA_TRANSP, 0);
-    lv_obj_clear_flag(right, LV_OBJ_FLAG_SCROLLABLE);
 
     lv_obj_t *data_card = make_laser_card(right, "Laser Data");
     make_value_row(data_card, "Temperature", &g_laser_temp_lbl);
@@ -1769,6 +1764,13 @@ lv_obj_t *build_laser_tab(lv_obj_t *body)
 
     lv_obj_t *cancelrow = make_action_row(pc_card, "Cancel Power");
     make_ghost_button(cancelrow, "Cancel", on_laser_power_cancel);
+
+    lv_obj_t *redrow = make_action_row(pc_card, "Red Laser Mode");
+    const char *onoff[2] = { "On", "Off" };
+    g_laser_redlight_seg = ui_user_make_segmented(redrow, onoff, 2, 1);
+    lv_obj_add_event_cb(g_laser_redlight_seg, on_red_laser_changed, LV_EVENT_VALUE_CHANGED, nullptr);
+    seg_fit_content(g_laser_redlight_seg);
+    style_debug_seg(g_laser_redlight_seg);
 
     lv_obj_t *ops_card = make_laser_card(right, "Alarm Ops");
     lv_obj_t *opsrow = make_action_row(ops_card, "Laser Alarm Reset");
@@ -1878,6 +1880,7 @@ void bind_debug_callbacks()
                     on ? user_color_status_ok : user_color_icon_off, 0);
             }
         }
+        /* 调试开关保持“用户点击即生效”的本地显示，不再被状态上报强制覆盖。 */
 
         /* 温度：JFSC 原始整数℃；AL 单位 0.1℃ */
         if(g_laser_temp_lbl) {
@@ -1999,7 +2002,7 @@ void reset_globals()
     ui::debug_test_reset();
     g_tab1 = g_tab2 = g_tab3 = g_tab4 = nullptr;
     g_laser_alarm_box = g_laser_temp_lbl = g_laser_power_lbl = g_laser_power_ta = nullptr;
-    g_laser_type_lbl = g_laser_current_lbl = nullptr;
+    g_laser_type_lbl = g_laser_current_lbl = g_laser_redlight_seg = nullptr;
     g_laser_type_code = 0;
     for(int i = 0; i < 4; i++) {
         g_laser_status_lbl[i] = nullptr;

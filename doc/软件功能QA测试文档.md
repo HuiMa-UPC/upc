@@ -1,11 +1,11 @@
 # Snowpod 软件功能 QA 测试文档
 
-> 文档版本：v1.3  
+> 文档版本：v1.4  
 > 适用对象：设备端软件 `rongsu_ui`、`rongsu_glavo`、`rongsu_camera`、`rongsu_media`、`rongsu_xfr`、`rongsu_visual`、`rongsu_mqtt`  
 > 测试类型：功能测试、基础异常测试、跨进程联调  
-> 更新日期：2026-08-20
+> 更新日期：2026-08-22
 
-## 本次更新说明（v1.3）
+## 本次更新说明（v1.4）
 
 本次版本主要更新以下内容，请在回归时优先关注：
 
@@ -21,6 +21,8 @@
 10. **跨工具链条件编译边界修复**：`improcess/imsetColorSpace` 等仅在 `UPC_UI_RGA_STREAMING=1` 编译，需回归 `k1mini` 与 `phx` 两套工具链构建结果。
 11. **预览日志口径增强**：新增/保留 `decode 5s` 统计（`ok/fail/no_frame/cvt_avg_us/rga`），用于对比优化前后性能。
 12. **预览与 UI 动画并发场景**：监控页存在实时大图刷新与滑动解锁/弹窗动画竞争，需补充流畅度与掉帧观测。
+13. **MQTT 激活失败重试策略优化**：激活失败重试间隔由固定 5s 调整为分级退避（5s/10s/30s/60s）；激活成功后失败计数清零。
+14. **日志分析工具新增**：新增 `tools/analyze_topic_logs.py`，支持批量解析 `topic*.log`，输出 `summary.json`、多类 `metrics_*.csv`、`report.html`、静态图和可交互环境曲线。
 
 ## 1. 测试范围与结论口径
 
@@ -47,6 +49,7 @@
 | 文件 | 准备有效 `.gcode`、有效 `.ovf`、损坏/不支持格式文件；准备 USB 存储介质 |
 | 存储 | 确保 `/home/Gcode`、`/home/media/photo`、`/home/media/video` 可写；容量测试需能构造 90% 与 100% 水位 |
 | 相机 | 相机可正常出流；录像、拍照和视觉用例需有可观察画面 |
+| 日志分析（V4.0.4） | 准备可在 Windows 或 Linux 运行 Python3 的主机；基础解析仅需标准库，静态图需 `matplotlib`，交互图需 `plotly` |
 | 可观测性 | 统一专题日志目录 `/var/log/topic/*.log`（按串口、TCP、IPC、MQTT、相机、UI、存储、系统监控等专题拆分） |
 
 通用判定原则：
@@ -161,6 +164,8 @@
 | ID | 测试项 | 步骤 | 预期结果 |
 | --- | --- | --- | --- |
 | F-MQTT-01 | 设备激活与重试 | 删除或置为无效 MQTT 凭据，启动 MQTT；先使激活服务不可达，再恢复。 | 无凭据时发起激活；失败按周期重试；成功后保存凭据并连接/订阅命令主题。 |
+| F-MQTT-01A | 激活失败退避间隔 | 删除 MQTT 凭据并持续阻断激活服务，观察 `topic_mqtt_telemetry.log` 中 `device activation failed ... retry #N in Xms`；至少连续观察 4 次失败。 | 日志重试间隔符合：第 1 次失败后 5s、第 2 次后 10s、第 3 次后 30s、第 4 次及以后 60s。 |
+| F-MQTT-01B | 激活成功后失败计数清零 | 先制造连续激活失败（计数 >=2），随后恢复激活服务直至成功，再次阻断并观察下一次失败日志。 | 成功后应重置失败计数；再次失败应从 `retry #1 in 5000ms` 重新开始，而非延续之前的大间隔。 |
 | F-MQTT-02 | 环境遥测 | 分别在 Idle 和 Printing 注入环境快照，订阅 `telemetry/chamber`。 | 发布 JSON 含 device_id、ts、seq、pm25、o2_ppm、ntc_c；打印中发布频率高于待机；无快照时不发伪数据。 |
 | F-MQTT-02A | PM10 透传一致性 | 注入新版环境帧（含 PM10），同时观察 UI 首页与 MQTT 遥测。 | UI 的 `pm10_indoor` 显示与上报 PM10 一致；无 PM10 的旧版帧保持兼容，不导致 UI/MQTT 异常。 |
 | F-MQTT-03 | 远程灯光控制 | 向命令主题发送有效 `set_light` 开/关与亮度命令。 | Glavo 收到对应设备控制；`cmd/ack` 返回 accepted 或 error，req_id 与 cmd 一致。 |
@@ -179,12 +184,21 @@
 | F-DBG-04 | 环境模拟 | 开启 Env Sim，验证环境值变化；切换模拟缺粉，等待 5 秒；关闭 Env Sim。 | 开启后 UI/MQTT 使用模拟环境数据；缺粉延迟生效；关闭后恢复真实串口环境数据。 |
 | F-DBG-05 | 录像调试开关 | 打开/关闭 Print H264 Record、Clean Record，执行一次对应流程。 | 状态回读与设置一致；开启时产生对应媒体资产，关闭时不产生不应有的录像条目。 |
 
+### 4.9 日志分析工具（V4.0.4）
+
+| ID | 测试项 | 步骤 | 预期结果 |
+| --- | --- | --- | --- |
+| F-LOG-01 | 目录输入与批量解析 | 在测试机执行：`python tools/analyze_topic_logs.py --input <topic日志目录> --output <输出目录>`，其中输入目录包含多个 `topic*.log`（可嵌套子目录）。 | 脚本成功结束并输出 `[OK] parsed files/lines`；输出目录生成 `summary.json`、`key_events.csv`、`metrics_env.csv`、`metrics_camera_capture.csv`、`metrics_ui_preview.csv`、`metrics_system_resource.csv`、`metrics_mqtt.csv`、`report.html`。 |
+| F-LOG-02 | 环境全字段与交互曲线 | 日志包含 O2、P1、T、RH、PM1.0、PM2.5、PM10、Pfilter、P2、base、powder_bits、door 等字段，执行脚本并打开 `env_interactive.html`。 | 交互页面可缩放/拖动/滚轮放大；多子图展示全量环境字段；`metrics_env.csv` 中字段完整且时间戳单调。 |
+| F-LOG-03 | 可选依赖退化行为 | 分别在未安装 `matplotlib`、未安装 `plotly`、两者都安装三种环境执行脚本。 | 未安装依赖时脚本不中断，并给出安装提示；安装后分别生成静态图（`plots/*.png`）和交互图（`env_interactive.html`）。 |
+| F-LOG-04 | 关键异常归并正确性 | 构造包含 `PROCESS_BOOT prev_clean=0`、`RGA fallback`、`capture release_timeout>0`、`MQTT connect failed` 的样例日志并执行脚本。 | `summary.json` 的 `alerts` 和 `report.html` 的 Top Alerts 能归并对应告警域（BOOT/UI_PREVIEW/CAMERA_CAPTURE/MQTT），且时间和原日志一致。 |
+
 ## 5. 回归优先级
 
 | 优先级 | 必测范围 | 触发条件 |
 | --- | --- | --- |
 | P0 | F-BOOT、F-FILE、F-PRINT、F-CAM、F-HIST、F-SET-01~05 | 任意 UI、IPC、Glavo、Camera、Media、文件清单改动；涉及 `camera_preview` 时需加测 F-CAM-06/07/08 |
-| P1 | F-XFR、F-MQTT、F-SET-06~07 | 网络、传输、云端、OTA、认证相关改动 |
+| P1 | F-XFR、F-MQTT、F-SET-06~07、F-LOG | 网络、传输、云端、OTA、认证与日志分析相关改动 |
 | P2 | F-DBG、视觉识别、视觉效果/布局 | 调试、协议、OpenCV、UI 样式改动 |
 
 ## 6. 缺陷记录要求
@@ -205,4 +219,5 @@
 - 相机、拍照、录像、媒体落盘：`app/camera/CAMERA.md`
 - Xfer 服务接口与上传约束：`app/xfer/XFER.md`
 - MQTT 遥测和命令：`app/mqtt/lib/mqtt_service.cpp`
+- 日志分析工具：`tools/analyze_topic_logs.py`
 - IPC 消息、OTA、调试能力：`common/COMMON.md`

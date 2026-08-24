@@ -148,6 +148,13 @@ public:
      */
     bool send_tcp_emergency_ctrl(bool stop, bool pause);
     /**
+     * @brief 下发 TCP CMD=0x0A 扩展紧急指令（Stop/Pause/RedLaser）
+     * @param stop_code DATA[1]：1=急停，0=不修改
+     * @param pause_code DATA[2]：2=暂停，1=继续，0=不修改
+     * @param red_code DATA[3]：2=激光，1=红光，0=不修改
+     */
+    bool send_tcp_emergency_ctrl_ex(uint8_t stop_code, uint8_t pause_code, uint8_t red_code);
+    /**
      * @brief 标记“打印任务流程”是否激活（用于门控高频心跳回包日志）
      * @note 业务约定：从进入打印到用户滑动开门解锁成功，均视为同一流程。
      */
@@ -501,6 +508,8 @@ private:
     std::chrono::steady_clock::time_point next_env_sim_tick_{};
     float env_sim_phase_ = 0.f;
     std::atomic<int64_t> last_env_mqtt_publish_ms_{0}; /**< Glavo→MQTT 环境 IPC 最近发送时刻 */
+    bool laser_power_log_valid_ = false; /**< 功率包日志去重：最近一次已打印的功率值是否有效 */
+    uint16_t last_laser_power_raw_ = 0;  /**< 功率包日志去重：最近一次已打印的功率原始值 */
 
     std::mutex door_open_rsp_mtx_;
     std::condition_variable door_open_rsp_cv_;

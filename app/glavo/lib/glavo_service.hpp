@@ -111,6 +111,7 @@ private:
     void handle_debug_fan(const middleware::Message& msg);
     void handle_debug_fan_duty(const middleware::Message& msg);
     void handle_debug_switch(const middleware::Message& msg);
+    void handle_debug_galvo_red_light(const middleware::Message& msg);
     void handle_debug_clean_test_start(const middleware::Message& msg);
     void handle_debug_clean_test_close(const middleware::Message& msg);
     void handle_debug_print_param(const middleware::Message& msg);
@@ -245,6 +246,8 @@ private:
     bool env_sim_on_ = false;  /**< 环境上报模拟（仅本次运行，默认关） */
     bool env_sim_powder_low_on_ = false; /**< 环境模拟粉量缺粉开关（目标状态，延迟生效由 McuLink 管） */
     bool ignore_powder_low_for_current_print_ = false; /**< 本次打印是否忽略缺粉检测（Cancel 后置位） */
+    bool red_laser_cmd_cached_ = false;       /**< 最近一次已下发红光状态 */
+    bool red_laser_cmd_cached_valid_ = false; /**< 最近一次红光状态是否有效 */
     std::mutex first_layer_visual_mtx_;
     std::condition_variable first_layer_visual_cv_;
     bool first_layer_visual_waiting_ = false;

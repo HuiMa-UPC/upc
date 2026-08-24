@@ -17,10 +17,15 @@ int tcp_build_heartbeat_frame(uint8_t* out, size_t out_size);
 /**
  * SOC→MCU：FRAME CMD=0x0A 通用紧急指令（11B 子包，pkg_num=1）
  * DATA[0]=CMD(0x0A)（由框架写入）
- * DATA[1]=Stop（1=急停/终止，0=无）
- * DATA[2]=Pause（1=暂停，0=继续/无）
- * 其余字节保留 0。
+ * DATA[1]=Stop（1=急停，0=不修改）
+ * DATA[2]=Pause（2=暂停，1=继续，0=不修改）
+ * DATA[3]=Red（2=激光，1=红光，0=不修改）
+ * DATA[4..10] 保留 0。
  */
+int tcp_build_emergency_frame_ex(uint8_t stop, uint8_t pause, uint8_t red_laser,
+                                 uint8_t* out, size_t out_size);
+
+/** 兼容旧接口：等价于 red_laser=0。 */
 int tcp_build_emergency_frame(uint8_t stop, uint8_t pause,
                               uint8_t* out, size_t out_size);
 

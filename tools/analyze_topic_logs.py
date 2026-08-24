@@ -22,6 +22,9 @@ Output:
       summary.json
       key_events.csv
       metrics_env.csv
+      metrics_laser.csv
+      metrics_laser_setpoint.csv
+      metrics_laser_power_compare.csv
       metrics_camera_capture.csv
       metrics_ui_preview.csv
       metrics_system_resource.csv
@@ -105,6 +108,26 @@ SYS_RESOURCE_RE = re.compile(
 MQTT_FRAME_RE = re.compile(
     r"MQTT (?P<dir>TX|RX) frame topic=(?P<topic>\S+) qos=(?P<qos>-?\d+) retained=(?P<retained>-?\d+) len=(?P<len>\d+)"
 )
+
+LASER_3ST_RE = re.compile(
+    r"laser\(3ST\): type=(?P<type>\d+) status=0x(?P<status>[0-9A-Fa-f]+) "
+    r"alarm=0x(?P<alarm>[0-9A-Fa-f]+) power=(?P<power>\d+) temp=(?P<temp>\d+) cur=(?P<cur>\d+)"
+)
+OVF_MARKING_POWER_RE = re.compile(
+    r"marking params changed: key=(?P<key>-?\d+) power=(?P<power>\d+) feed=(?P<feed>[0-9.]+)"
+)
+SERIAL_TX_FRAME_RE = re.compile(r"SERIAL_TX frame\[(?P<len>\d+)\] (?P<body>[0-9A-Fa-f ]+)")
+LASER_POWER_SET_RE = re.compile(r"laser_power_set raw=(?P<raw>\d+)")
+
+# serial_debug 协议关键字段（激光手动功率）
+SDBG_PORT_LASER = 0xAA
+SDBG_CMD_LASER_MANUAL = 0x87
+SDBG_TLV_LASER_PWR_SET = 0x01
+SDBG_TLV_LASER_PWR_RESET = 0x02
+
+
+def parse_hex_bytes(text: str) -> List[int]:
+    return [int(h, 16) for h in re.findall(r"\b[0-9A-Fa-f]{2}\b", text)]
 
 
 @dataclass
@@ -337,6 +360,7 @@ def build_html_report(
     mqtt_info = summary.get("mqtt", {})
     camera_info = summary.get("camera", {})
     env_info = summary.get("environment", {})
+    laser_info = summary.get("laser", {})
 
     html = f"""<!doctype html>
 <html>
@@ -381,6 +405,16 @@ def build_html_report(
       <p>publish_fail: <b>{html_escape(mqtt_info.get("publish_fail", 0))}</b></p>
       <p>tx_frames: <b>{html_escape(mqtt_info.get("tx_frames", 0))}</b></p>
     </div>
+    <div class="card">
+      <h2>Laser (3ST)</h2>
+      <p>samples: <b>{html_escape(laser_info.get("samples", 0))}</b></p>
+      <p>setpoint_samples: <b>{html_escape(laser_info.get("setpoint_samples", 0))}</b></p>
+      <p>compare_samples: <b>{html_escape(laser_info.get("compare_samples", 0))}</b></p>
+      <p>alarm_events: <b>{html_escape(laser_info.get("alarm_events", 0))}</b></p>
+      <p>setpoint_raw_avg: <b>{html_escape(laser_info.get("setpoint_raw_avg", None))}</b></p>
+      <p>report_power_raw_avg: <b>{html_escape(laser_info.get("report_power_raw_avg", None))}</b></p>
+      <p>power_raw_abs_err_avg: <b>{html_escape(laser_info.get("power_raw_abs_err_avg", None))}</b></p>
+    </div>
   </div>
 
   <h2>Top Alerts</h2>
@@ -398,6 +432,9 @@ def build_html_report(
     <li><code>{html_escape(generated_files.get("summary_json", ""))}</code></li>
     <li><code>{html_escape(generated_files.get("key_events_csv", ""))}</code></li>
     <li><code>{html_escape(generated_files.get("metrics_env_csv", ""))}</code></li>
+    <li><code>{html_escape(generated_files.get("metrics_laser_csv", ""))}</code></li>
+    <li><code>{html_escape(generated_files.get("metrics_laser_setpoint_csv", ""))}</code></li>
+    <li><code>{html_escape(generated_files.get("metrics_laser_power_compare_csv", ""))}</code></li>
     <li><code>{html_escape(generated_files.get("metrics_camera_capture_csv", ""))}</code></li>
     <li><code>{html_escape(generated_files.get("metrics_ui_preview_csv", ""))}</code></li>
     <li><code>{html_escape(generated_files.get("metrics_system_resource_csv", ""))}</code></li>
@@ -421,6 +458,9 @@ def extract_from_logs(
         "boot_events": [],
         "key_events": [],
         "metrics_env": [],
+        "metrics_laser": [],
+        "metrics_laser_setpoint": [],
+        "metrics_laser_power_compare": [],
         "metrics_camera_capture": [],
         "metrics_ui_preview": [],
         "metrics_system_resource": [],
@@ -429,6 +469,7 @@ def extract_from_logs(
 
     mqtt_stats = Counter()
     layer_cmd_stats = Counter()
+    laser_set_events: List[Dict[str, Any]] = []
 
     for r in records:
         msg = r.msg
@@ -504,6 +545,171 @@ def extract_from_logs(
                     }
                 )
             continue
+
+        # Laser 3ST report
+        lm = LASER_3ST_RE.search(msg)
+        if lm:
+            laser_type = int(lm.group("type"))
+            status = int(lm.group("status"), 16)
+            alarm = int(lm.group("alarm"), 16)
+            power_raw = int(lm.group("power"))
+            temp_raw = int(lm.group("temp"))
+            current_raw = int(lm.group("cur"))
+
+            # 估算展示值（与 UI 口径一致，便于排查）
+            if laser_type == 2:  # AL 200W
+                power_pct_est = power_raw / 10.0
+                temp_c_est = temp_raw / 10.0
+                current_a_est = current_raw / 10.0
+            else:  # JFSC 或未知默认按 JFSC 口径
+                power_pct_est = (power_raw * 100.0 / 255.0) if power_raw <= 255 else None
+                temp_c_est = float(temp_raw)
+                current_a_est = current_raw / 100.0
+
+            row = {
+                "ts": ts_str,
+                "proc": r.proc,
+                "laser_type": laser_type,
+                "status": status,
+                "alarm": alarm,
+                "power_raw": power_raw,
+                "temp_raw": temp_raw,
+                "current_raw": current_raw,
+                "power_pct_est": power_pct_est,
+                "temp_c_est": temp_c_est,
+                "current_a_est": current_a_est,
+                "file": r.file,
+                "line_no": r.line_no,
+            }
+            data["metrics_laser"].append(row)
+
+            if alarm != 0:
+                data["key_events"].append(
+                    {
+                        "severity": "WARN",
+                        "domain": "LASER",
+                        "ts": ts_str,
+                        "msg": (
+                            f"laser alarm active type={laser_type} "
+                            f"status=0x{status:04X} alarm=0x{alarm:04X}"
+                        ),
+                        "file": r.file,
+                        "line_no": r.line_no,
+                    }
+                )
+            continue
+
+        # 统一功率包下发日志（McuLink 实际发送链路，已做“仅变化打印”）
+        pm = LASER_POWER_SET_RE.search(msg)
+        if r.module == "McuLink" and pm:
+            set_raw = int(pm.group("raw"))
+            row = {
+                "ts": ts_str,
+                "proc": r.proc,
+                "source": "power_packet",
+                "setpoint_raw": set_raw,
+                "feed_mm_min": None,
+                "key": None,
+                "file": r.file,
+                "line_no": r.line_no,
+            }
+            data["metrics_laser_setpoint"].append(row)
+            laser_set_events.append(
+                {
+                    "ts": r.ts,
+                    "source": row["source"],
+                    "setpoint_raw": set_raw,
+                }
+            )
+            continue
+
+        # OVF 过程中的功率设定（推入 TCP 功率包前的设定值）
+        om = OVF_MARKING_POWER_RE.search(msg)
+        if om:
+            set_raw = int(om.group("power"))
+            row = {
+                "ts": ts_str,
+                "proc": r.proc,
+                "source": "ovf_marking_params",
+                "setpoint_raw": set_raw,
+                "feed_mm_min": float(om.group("feed")),
+                "key": int(om.group("key")),
+                "file": r.file,
+                "line_no": r.line_no,
+            }
+            data["metrics_laser_setpoint"].append(row)
+            laser_set_events.append(
+                {
+                    "ts": r.ts,
+                    "source": row["source"],
+                    "setpoint_raw": set_raw,
+                }
+            )
+            continue
+
+        # 调试页激光手动功率设定（从串口 TX 十六进制帧反解）
+        if r.module == "McuLink":
+            sm = SERIAL_TX_FRAME_RE.search(msg)
+            if sm:
+                frame = parse_hex_bytes(sm.group("body"))
+                if len(frame) >= 10 and frame[0] == 0x5A and frame[1] == 0xA5 and frame[2] == 0xAA:
+                    port = frame[3]
+                    cmd = frame[4]
+                    payload_len = frame[6]
+                    tlv_type = frame[7]
+                    tlv_len = frame[8]
+                    if (
+                        port == SDBG_PORT_LASER
+                        and cmd == SDBG_CMD_LASER_MANUAL
+                        and tlv_type == SDBG_TLV_LASER_PWR_SET
+                        and tlv_len == 1
+                        and len(frame) >= 10
+                    ):
+                        percent = int(frame[9])
+                        set_raw = int(round(percent * 255.0 / 100.0))
+                        row = {
+                            "ts": ts_str,
+                            "proc": r.proc,
+                            "source": "serial_debug_laser_power_set",
+                            "setpoint_raw": set_raw,
+                            "feed_mm_min": None,
+                            "key": None,
+                            "file": r.file,
+                            "line_no": r.line_no,
+                        }
+                        data["metrics_laser_setpoint"].append(row)
+                        laser_set_events.append(
+                            {
+                                "ts": r.ts,
+                                "source": row["source"],
+                                "setpoint_raw": set_raw,
+                            }
+                        )
+                        continue
+                    if (
+                        port == SDBG_PORT_LASER
+                        and cmd == SDBG_CMD_LASER_MANUAL
+                        and tlv_type == SDBG_TLV_LASER_PWR_RESET
+                    ):
+                        row = {
+                            "ts": ts_str,
+                            "proc": r.proc,
+                            "source": "serial_debug_laser_power_reset",
+                            "setpoint_raw": None,
+                            "feed_mm_min": None,
+                            "key": None,
+                            "file": r.file,
+                            "line_no": r.line_no,
+                        }
+                        data["metrics_laser_setpoint"].append(row)
+                        laser_set_events.append(
+                            {
+                                "ts": r.ts,
+                                "source": row["source"],
+                                "setpoint_raw": None,
+                            }
+                        )
+                        continue
 
         # Layer / print-flow logic
         if "serial TX cmd:" in msg:
@@ -760,6 +966,50 @@ def extract_from_logs(
     cap_rows = data["metrics_camera_capture"]
     ui_rows = data["metrics_ui_preview"]
     sys_rows = data["metrics_system_resource"]
+    laser_rows = data["metrics_laser"]
+    setpoint_rows = data["metrics_laser_setpoint"]
+    laser_type_counts = Counter(str(r.get("laser_type", 0)) for r in laser_rows)
+
+    # 将“设定功率”对齐到每条激光上报，方便时序比较（取最近一次设定）
+    laser_set_events.sort(key=lambda x: x["ts"])
+    laser_reports_sorted = sorted(
+        laser_rows,
+        key=lambda x: parse_ts_text(str(x.get("ts", ""))) or dt.datetime.min
+    )
+    set_idx = 0
+    latest_set_raw = None
+    latest_set_src = ""
+    for lr in laser_reports_sorted:
+        t = parse_ts_text(str(lr.get("ts", "")))
+        if not t:
+            continue
+        while set_idx < len(laser_set_events) and laser_set_events[set_idx]["ts"] <= t:
+            latest_set_raw = laser_set_events[set_idx].get("setpoint_raw")
+            latest_set_src = str(laser_set_events[set_idx].get("source", ""))
+            set_idx += 1
+        report_raw = lr.get("power_raw")
+        delta_raw = None
+        abs_err_raw = None
+        if latest_set_raw is not None and report_raw is not None:
+            delta_raw = int(report_raw) - int(latest_set_raw)
+            abs_err_raw = abs(delta_raw)
+        data["metrics_laser_power_compare"].append(
+            {
+                "ts": lr.get("ts"),
+                "proc": lr.get("proc"),
+                "laser_type": lr.get("laser_type"),
+                "setpoint_source": latest_set_src if latest_set_src else None,
+                "setpoint_raw": latest_set_raw,
+                "report_power_raw": lr.get("power_raw"),
+                "delta_raw": delta_raw,
+                "abs_err_raw": abs_err_raw,
+                "report_status": lr.get("status"),
+                "report_alarm": lr.get("alarm"),
+                "file": lr.get("file"),
+                "line_no": lr.get("line_no"),
+            }
+        )
+    compare_rows = data["metrics_laser_power_compare"]
 
     rga_soft_fallback_events = sum(
         1
@@ -789,6 +1039,44 @@ def extract_from_logs(
             "preview_cvt_avg_us_mean": safe_mean([float(r["cvt_avg_us"]) for r in ui_rows]),
             "preview_cvt_max_us_max": safe_max([float(r["cvt_max_us"]) for r in ui_rows]),
             "rga_soft_fallback_events": rga_soft_fallback_events,
+        },
+        "laser": {
+            "samples": len(laser_rows),
+            "setpoint_samples": len(setpoint_rows),
+            "compare_samples": len(compare_rows),
+            "alarm_events": sum(1 for r in laser_rows if int(r.get("alarm", 0)) != 0),
+            "type_counts": dict(laser_type_counts),
+            "setpoint_raw_avg": safe_mean([
+                float(r["setpoint_raw"]) for r in setpoint_rows
+                if r.get("setpoint_raw") is not None
+            ]),
+            "report_power_raw_avg": safe_mean([
+                float(r["power_raw"]) for r in laser_rows
+                if r.get("power_raw") is not None
+            ]),
+            "power_raw_max": safe_max([float(r["power_raw"]) for r in laser_rows]),
+            "temp_raw_max": safe_max([float(r["temp_raw"]) for r in laser_rows]),
+            "current_raw_max": safe_max([float(r["current_raw"]) for r in laser_rows]),
+            "power_pct_est_avg": safe_mean([
+                float(r["power_pct_est"]) for r in laser_rows
+                if r.get("power_pct_est") is not None
+            ]),
+            "temp_c_est_max": safe_max([
+                float(r["temp_c_est"]) for r in laser_rows
+                if r.get("temp_c_est") is not None
+            ]),
+            "current_a_est_max": safe_max([
+                float(r["current_a_est"]) for r in laser_rows
+                if r.get("current_a_est") is not None
+            ]),
+            "power_raw_abs_err_avg": safe_mean([
+                float(r["abs_err_raw"]) for r in compare_rows
+                if r.get("abs_err_raw") is not None
+            ]),
+            "power_raw_abs_err_max": safe_max([
+                float(r["abs_err_raw"]) for r in compare_rows
+                if r.get("abs_err_raw") is not None
+            ]),
         },
         "mqtt": {
             "connect_ok": int(mqtt_stats["connect_ok"]),
@@ -922,6 +1210,18 @@ def generate_plots(output_dir: str, data: Dict[str, List[Dict[str, Any]]]) -> Li
         ["cpu_sys_pct", "cpu_proc_pct", "temp_c", "mem_avail_mb", "rss_mb"],
         "System Resource",
         "system_resource.png",
+    )
+    draw_series(
+        data.get("metrics_laser", []),
+        ["power_pct_est", "temp_c_est", "current_a_est"],
+        "Laser 3ST Trends",
+        "laser_3st.png",
+    )
+    draw_series(
+        data.get("metrics_laser_power_compare", []),
+        ["setpoint_raw", "report_power_raw", "abs_err_raw"],
+        "Laser Power Setpoint vs Report",
+        "laser_power_compare.png",
     )
 
     # MQTT event count per minute
@@ -1109,6 +1409,9 @@ def main() -> int:
     # Write CSV files
     key_events_csv = os.path.join(output_dir, "key_events.csv")
     metrics_env_csv = os.path.join(output_dir, "metrics_env.csv")
+    metrics_laser_csv = os.path.join(output_dir, "metrics_laser.csv")
+    metrics_laser_setpoint_csv = os.path.join(output_dir, "metrics_laser_setpoint.csv")
+    metrics_laser_power_compare_csv = os.path.join(output_dir, "metrics_laser_power_compare.csv")
     metrics_camera_capture_csv = os.path.join(output_dir, "metrics_camera_capture.csv")
     metrics_ui_preview_csv = os.path.join(output_dir, "metrics_ui_preview.csv")
     metrics_system_resource_csv = os.path.join(output_dir, "metrics_system_resource.csv")
@@ -1144,6 +1447,57 @@ def main() -> int:
             "powder_bits",
             "powder_ok",
             "door_open",
+            "file",
+            "line_no",
+        ],
+    )
+    write_csv(
+        metrics_laser_csv,
+        data["metrics_laser"],
+        [
+            "ts",
+            "proc",
+            "laser_type",
+            "status",
+            "alarm",
+            "power_raw",
+            "temp_raw",
+            "current_raw",
+            "power_pct_est",
+            "temp_c_est",
+            "current_a_est",
+            "file",
+            "line_no",
+        ],
+    )
+    write_csv(
+        metrics_laser_setpoint_csv,
+        data["metrics_laser_setpoint"],
+        [
+            "ts",
+            "proc",
+            "source",
+            "setpoint_raw",
+            "feed_mm_min",
+            "key",
+            "file",
+            "line_no",
+        ],
+    )
+    write_csv(
+        metrics_laser_power_compare_csv,
+        data["metrics_laser_power_compare"],
+        [
+            "ts",
+            "proc",
+            "laser_type",
+            "setpoint_source",
+            "setpoint_raw",
+            "report_power_raw",
+            "delta_raw",
+            "abs_err_raw",
+            "report_status",
+            "report_alarm",
             "file",
             "line_no",
         ],
@@ -1229,6 +1583,9 @@ def main() -> int:
         "summary_json": os.path.basename(summary_json),
         "key_events_csv": os.path.basename(key_events_csv),
         "metrics_env_csv": os.path.basename(metrics_env_csv),
+        "metrics_laser_csv": os.path.basename(metrics_laser_csv),
+        "metrics_laser_setpoint_csv": os.path.basename(metrics_laser_setpoint_csv),
+        "metrics_laser_power_compare_csv": os.path.basename(metrics_laser_power_compare_csv),
         "metrics_camera_capture_csv": os.path.basename(metrics_camera_capture_csv),
         "metrics_ui_preview_csv": os.path.basename(metrics_ui_preview_csv),
         "metrics_system_resource_csv": os.path.basename(metrics_system_resource_csv),

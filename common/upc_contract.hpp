@@ -125,6 +125,10 @@
 #ifndef UPC_GLAVO_LOG_TCP_TX_DEFAULT
 #define UPC_GLAVO_LOG_TCP_TX_DEFAULT 0
 #endif
+/** Glavo: 激光功率包下发日志默认开关（环境变量可覆盖） */
+#ifndef UPC_GLAVO_LOG_LASER_POWER_DEFAULT
+#define UPC_GLAVO_LOG_LASER_POWER_DEFAULT 1
+#endif
 
 #else /* !UPC_DEBUG */
 
@@ -150,6 +154,7 @@
 #define UPC_MOD_ALARM_STATE 0
 #define UPC_GLAVO_LOG_TCP_HEARTBEAT_RSP_DEFAULT 0
 #define UPC_GLAVO_LOG_TCP_TX_DEFAULT 0
+#define UPC_GLAVO_LOG_LASER_POWER_DEFAULT 0
 
 #endif /* UPC_DEBUG */
 
