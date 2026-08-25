@@ -103,12 +103,31 @@ constexpr size_t kWorkerQueueDepth = 256;
 constexpr int kDrainProgressMinMs = 200;
 /** Visual 无响应时必须解除打印工作线程等待，按不通过保守处理。 */
 constexpr auto kFirstLayerVisualReplyTimeout = std::chrono::seconds(3);
+constexpr uint64_t kDemoPrintDurationMs = 90000;
+constexpr auto kDemoRuntimeTick = std::chrono::milliseconds(200);
+constexpr auto kDemoEnvPublishInterval = std::chrono::seconds(1);
 
 /** Fs_DirOpen_Rsp 最大条目数（受 BufferPool inline/缓冲上限约束） */
 constexpr size_t kFsDirMaxEntries =
     (16384u - sizeof(middleware::FsDirHeader)) / sizeof(middleware::FileEntryPayload);
 /** USB 挂载轮询周期 */
 constexpr auto kUsbHotplugPollInterval = std::chrono::milliseconds(300);
+
+std::vector<WifiEntry> demo_wifi_entries(const std::string& connected_ssid)
+{
+    std::vector<WifiEntry> entries{
+        {"RONGSU_DEMO_5G", 3, WifiSecurity::Wpa2, true, false},
+        {"RONGSU_DEMO_2.4G", 2, WifiSecurity::Wpa2, true, false},
+        {"Customer_Guest", 3, WifiSecurity::Open, false, false},
+        {"Office_WLAN", 2, WifiSecurity::Wpa2, false, false},
+        {"Factory_AP", 1, WifiSecurity::Wpa2, false, false},
+        {"Hotspot_One", 2, WifiSecurity::Wpa3, false, false},
+    };
+    for(auto& entry : entries) {
+        entry.connected = (entry.ssid == connected_ssid);
+    }
+    return entries;
+}
 
 /** @brief 本地 G-code 清单配置文件路径 */
 std::string local_config_path()
@@ -307,7 +326,7 @@ std::string GlavoService::make_full_path(const std::string& dir, const std::stri
  * 生命周期：Idle → init() → Idle → start() → Running → stop() → Idle
  *
  * main.cpp 典型顺序：GlavoService::init →（串口打开）→ start → 主循环 port.process
- * stop/析构会 join worker、停 USB/清粉、停解析、关 WifiManager。
+ * stop/析构会 join worker、停 USB/清粉、停解析、关 demo runtime。
  * 注意：McuLink::link 线程由 main/McuLink 自己管理，不在本类 stop 里 join。
  * ============================================================================ */
 
@@ -316,6 +335,7 @@ GlavoService::GlavoService() = default;
 /** @brief 析构时停止打印、清空会话并 join worker 线程 */
 GlavoService::~GlavoService()
 {
+    stop_demo_runtime();
     stop_usb_hotplug_monitor();
     stop_clean_worker();
     stop_print_job();
@@ -445,15 +465,8 @@ bool GlavoService::init()
         });
     gcode_manifest_load(local_config_path(), local_manifest_);
 
-    /* WiFi：wpa_supplicant 控制接口；回调在 WifiManager 后台线程触发，仅做 publish。 */
-    WifiManager::instance().init(
-        [this](const WifiSnapshot& s) { publish_wifi_state(s); },
-        [this](WifiListKind kind, const std::vector<WifiEntry>& e) {
-            publish_wifi_list(kind, e);
-        },
-        [this](bool ok, const std::string& ssid) {
-            publish_wifi_connect_result(ok, ssid);
-        });
+    /* 演示固件不接管系统 WiFi：状态与列表均由本进程模拟推送。 */
+    UPC_LOG_GLAVO_SERVICE(Info, "demo firmware mode: wifi manager disabled");
 
     last_usb_mounted_ = is_mountpoint_mounted(usb_mount_point());
 
@@ -556,6 +569,7 @@ bool GlavoService::start()
     worker_running_.store(true);
     worker_thread_ = std::thread(&GlavoService::worker_loop, this);
     start_usb_hotplug_monitor();
+    start_demo_runtime();
     publish_debug_print_h264_record_state();
     publish_debug_clean_record_state();
     publish_debug_env_sim_state();
@@ -567,7 +581,7 @@ bool GlavoService::start()
 /**
  * @brief 停止 worker、清空队列与订阅，并终止进行中的打印/准备会话
  *
- * 顺序：先停 USB 监视 → join worker（此后不再处理新消息）→ 停打印/清粉 → Wifi shutdown。
+ * 顺序：先停 demo runtime/USB 监视 → join worker（此后不再处理新消息）→ 停打印/清粉。
  * @return 仅 Running 状态下可调用，成功返回 true
  */
 bool GlavoService::stop()
@@ -581,6 +595,7 @@ bool GlavoService::stop()
     }
     first_layer_reference_waiting_ = false;
     first_layer_visual_cv_.notify_all();
+    stop_demo_runtime();
     stop_usb_hotplug_monitor();
 
     if (worker_thread_.joinable()) {
@@ -601,7 +616,6 @@ bool GlavoService::stop()
     stop_print_job();
     stop_clean_worker();
     clear_prepare_session();
-    WifiManager::instance().shutdown();
     subscriptions_.clear();
     state_ = ServiceState::Idle;
     return true;
@@ -1353,21 +1367,18 @@ void GlavoService::handle_print_prepare(const middleware::Message& msg)
 {
     middleware::PrintPrepareReqPayload req{};
     middleware::PrintPrepareRspPayload rsp{};
-    rsp.ok = 0;
-
-    if (!read_inline_pod(msg.payload, req)) {
+    if(!read_inline_pod(msg.payload, req)) {
         UPC_LOG_GLAVO_SERVICE(Warn, "print_prepare: invalid payload");
+        rsp.ok = 0;
     } else {
-        std::string local_path;
-        if(run_print_prepare(req.file_source, req.file_index, local_path)) {
-            rsp.ok = 1;
-            UPC_LOG_GLAVO_SERVICE(Info, "print_prepare ok src=%u idx=%u path=%s",
-                static_cast<unsigned>(req.file_source), req.file_index, local_path.c_str());
-        } else {
-            clear_prepare_session();
-            UPC_LOG_GLAVO_SERVICE(Warn, "print_prepare failed src=%u idx=%u",
-                static_cast<unsigned>(req.file_source), req.file_index);
-        }
+        prepared_local_path_ = "demo_virtual.gcode";
+        prepared_line_count_ = 0;
+        prepare_ready_ = true;
+        prepared_parser_open_ = false;
+        rsp.ok = 1;
+        UPC_LOG_GLAVO_SERVICE(Info,
+            "print_prepare demo accepted src=%u idx=%u",
+            static_cast<unsigned>(req.file_source), req.file_index);
     }
 
     middleware::Message out(middleware::MsgType::APP_Print_Prepare_Rsp,
@@ -1494,24 +1505,23 @@ void GlavoService::handle_print_start(const middleware::Message& msg)
 
     (void)req.file_index;
     (void)req.file_source;
-
-    const std::string& full_path = prepared_local_path_;
-
+    (void)req.plate_thickness_um;
     stop_print_job();
-    auto& link = McuLink::instance();
-    link.set_plate_thickness_um(req.plate_thickness_um);
-    if(link.is_sending() || link.is_terminate_pending()) {
-        /* 异步 terminate 完成前不得 open/begin，否则清理会清掉新作业 */
-        link.request_terminate();
-        deferred_print_start_ = true;
-        UPC_LOG_GLAVO_SERVICE(Info,
-            "print_start deferred until terminate done path=%s",
-            full_path.c_str());
-        return;
-    }
-
     deferred_print_start_ = false;
-    launch_print_from_prepared(full_path);
+    current_file_path_ = prepared_local_path_;
+    print_running_.store(true);
+    ignore_powder_low_for_current_print_ = false;
+    {
+        std::lock_guard<std::mutex> lock(demo_state_mtx_);
+        demo_print_active_ = true;
+        demo_print_paused_ = false;
+        demo_print_elapsed_ms_ = 0;
+        demo_last_print_progress_ = 0;
+        demo_print_last_tick_ = std::chrono::steady_clock::now();
+    }
+    publish_print_pause_done(false);
+    publish_demo_print_progress(0);
+    UPC_LOG_GLAVO_SERVICE(Info, "print_start demo accepted");
 }
 
 /** @brief 停止解析线程并将 print_running_ 置 false（不请求 Mcu 终止） */
@@ -1520,7 +1530,14 @@ void GlavoService::stop_print_job()
     first_layer_reference_waiting_ = false;
     print_running_.store(false);
     publish_first_layer_visual_session(false, "print_stop");
-    parser::ParserManager::instance().stop_parse();
+    {
+        std::lock_guard<std::mutex> lock(demo_state_mtx_);
+        demo_print_active_ = false;
+        demo_print_paused_ = false;
+        demo_print_elapsed_ms_ = 0;
+        demo_last_print_progress_ = 0;
+        demo_print_last_tick_ = std::chrono::steady_clock::time_point{};
+    }
 }
 
 /** @brief 处理 UI_Print_Terminate_Req：停止解析并请求 McuLink 终止作业 */
@@ -1533,21 +1550,7 @@ void GlavoService::handle_print_terminate(const middleware::Message& msg)
         publish_terminate_done();
         return;
     }
-    deferred_print_start_ = false;
-    first_layer_reference_waiting_ = false;
-    print_running_.store(false);
-    {
-        std::lock_guard<std::mutex> lock(first_layer_visual_mtx_);
-        first_layer_visual_waiting_ = false;
-        first_layer_visual_result_ = 0;
-    }
-    first_layer_visual_cv_.notify_all();
-    publish_first_layer_visual_session(false, "user_terminate");
-    McuLink::instance().set_user_dispatch_paused(false);
-    PrintVideoNotify::instance().on_print_abort();
-    parser::ParserManager::instance().stop_parse();
-    McuLink::instance().request_terminate();
-    clear_prepare_session();
+    finish_demo_print("user_terminate", false);
 }
 
 /** @brief 处理 UI_Print_Pause_Req：暂停 TCP 运动下发（解析继续，RingBuffer 满则自然阻塞） */
@@ -1559,14 +1562,16 @@ void GlavoService::handle_print_pause(const middleware::Message& msg)
         publish_print_pause_done(false);
         return;
     }
-    McuLink& link = McuLink::instance();
-    if(link.is_user_dispatch_paused()) {
+    bool already_paused = false;
+    {
+        std::lock_guard<std::mutex> lock(demo_state_mtx_);
+        already_paused = demo_print_paused_;
+        demo_print_paused_ = true;
+        demo_print_last_tick_ = std::chrono::steady_clock::now();
+    }
+    if(already_paused) {
         publish_print_pause_done(true);
         return;
-    }
-    link.set_user_dispatch_paused(true);
-    if(!link.send_tcp_emergency_ctrl(false, true)) {
-        UPC_LOG_GLAVO_SERVICE(Warn, "print_pause: tcp 0x0A pause send failed");
     }
     UPC_LOG_GLAVO_SERVICE(Info, "print_pause accepted");
     publish_print_pause_done(true);
@@ -1581,15 +1586,17 @@ void GlavoService::handle_print_resume(const middleware::Message& msg)
         publish_print_pause_done(false);
         return;
     }
-    McuLink& link = McuLink::instance();
-    if(!link.is_user_dispatch_paused()) {
+    bool already_resumed = false;
+    {
+        std::lock_guard<std::mutex> lock(demo_state_mtx_);
+        already_resumed = !demo_print_paused_;
+        demo_print_paused_ = false;
+        demo_print_last_tick_ = std::chrono::steady_clock::now();
+    }
+    if(already_resumed) {
         publish_print_pause_done(false);
         return;
     }
-    if(!link.send_tcp_emergency_ctrl(false, false)) {
-        UPC_LOG_GLAVO_SERVICE(Warn, "print_resume: tcp 0x0A resume send failed");
-    }
-    link.set_user_dispatch_paused(false);
     UPC_LOG_GLAVO_SERVICE(Info, "print_resume accepted");
     publish_print_pause_done(false);
 }
@@ -1795,6 +1802,232 @@ void GlavoService::publish_print_powder_low_ntf()
     if(!publish_async(ntf)) {
         UPC_LOG_GLAVO_SERVICE(Warn, "powder_low_ntf publish failed");
     }
+}
+
+void GlavoService::start_demo_runtime()
+{
+    if(demo_runtime_running_.exchange(true)) {
+        return;
+    }
+    demo_thread_ = std::thread(&GlavoService::demo_runtime_loop, this);
+    publish_demo_env_snapshot();
+    publish_demo_wifi_state();
+}
+
+void GlavoService::stop_demo_runtime()
+{
+    if(!demo_runtime_running_.exchange(false)) {
+        return;
+    }
+    if(demo_thread_.joinable()) {
+        demo_thread_.join();
+    }
+}
+
+void GlavoService::demo_runtime_loop()
+{
+    auto next_env_push = std::chrono::steady_clock::now();
+    while(demo_runtime_running_.load()) {
+        bool publish_progress = false;
+        uint8_t progress_percent = 0;
+        bool should_finish = false;
+        {
+            std::lock_guard<std::mutex> lock(demo_state_mtx_);
+            if(demo_print_active_) {
+                const auto now = std::chrono::steady_clock::now();
+                if(demo_print_last_tick_.time_since_epoch().count() == 0) {
+                    demo_print_last_tick_ = now;
+                }
+                const uint64_t delta_ms = static_cast<uint64_t>(
+                    std::chrono::duration_cast<std::chrono::milliseconds>(
+                        now - demo_print_last_tick_).count());
+                if(!demo_print_paused_) {
+                    demo_print_elapsed_ms_ += delta_ms;
+                }
+                demo_print_last_tick_ = now;
+                if(demo_print_elapsed_ms_ > kDemoPrintDurationMs) {
+                    demo_print_elapsed_ms_ = kDemoPrintDurationMs;
+                }
+                progress_percent = static_cast<uint8_t>(
+                    (demo_print_elapsed_ms_ * 100u) / kDemoPrintDurationMs);
+                if(progress_percent != demo_last_print_progress_) {
+                    demo_last_print_progress_ = progress_percent;
+                    publish_progress = true;
+                }
+                if(demo_print_elapsed_ms_ >= kDemoPrintDurationMs) {
+                    should_finish = true;
+                }
+            }
+        }
+        if(publish_progress) {
+            publish_demo_print_progress(progress_percent);
+        }
+        if(should_finish) {
+            finish_demo_print("demo_complete", false);
+        }
+
+        const auto now = std::chrono::steady_clock::now();
+        if(now >= next_env_push) {
+            publish_demo_env_snapshot();
+            publish_demo_wifi_state();
+            next_env_push = now + kDemoEnvPublishInterval;
+        }
+        std::this_thread::sleep_for(kDemoRuntimeTick);
+    }
+}
+
+void GlavoService::publish_demo_env_snapshot()
+{
+    static uint32_t tick = 0;
+    ++tick;
+    middleware::EnvSnapshotPayload p{};
+    std::snprintf(p.device_name, sizeof(p.device_name), "%s", upc::config::kDeviceDisplayName);
+    p.status = static_cast<uint32_t>(middleware::UserHomeStatus::Ready);
+    p.wifi_connected = 1;
+    p.signal_bars = 3;
+    p.pm25_indoor = 16.0f + static_cast<float>((tick / 2) % 8);
+    p.pm25_cabin = 12.0f + static_cast<float>((tick / 3) % 6);
+    p.temperature_c = 24.5f + static_cast<float>(tick % 5) * 0.2f;
+    p.oxygen_percent = 20.8f + static_cast<float>(tick % 4) * 0.1f;
+    p.pm10_indoor = 22.0f + static_cast<float>((tick / 4) % 8);
+    p.humidity_percent = 46.0f + static_cast<float>((tick / 5) % 7);
+    p.pressure_kpa = 101.2f + static_cast<float>((tick / 6) % 4) * 0.1f;
+    p.powder_bits = 0x03u;
+
+    middleware::Message ntf(middleware::MsgType::APP_Update_Ntf,
+        middleware::ModuleId::APP_GLAVO,
+        middleware::ModuleId::UI);
+    ntf.payload = middleware::MsgPayload::from_bytes(
+        reinterpret_cast<const uint8_t*>(&p), sizeof(p));
+    (void)publish_async(ntf);
+}
+
+void GlavoService::publish_demo_wifi_state()
+{
+    std::string ssid;
+    {
+        std::lock_guard<std::mutex> lock(demo_state_mtx_);
+        ssid = demo_wifi_connected_ssid_;
+    }
+    middleware::WifiStatePayload p{};
+    p.enabled = 1;
+    p.connected = 1;
+    p.signal_bars = 3;
+    std::snprintf(p.ssid, sizeof(p.ssid), "%s", ssid.c_str());
+    std::snprintf(p.ip_addr, sizeof(p.ip_addr), "%s", "192.168.31.88");
+
+    middleware::Message out(middleware::MsgType::GLAVO_Wifi_State_Ntf,
+        middleware::ModuleId::APP_GLAVO, middleware::ModuleId::UI);
+    out.payload = middleware::MsgPayload::from_bytes(
+        reinterpret_cast<const uint8_t*>(&p), sizeof(p));
+    (void)publish_async(out);
+}
+
+void GlavoService::publish_demo_wifi_scan_list()
+{
+    std::string ssid;
+    {
+        std::lock_guard<std::mutex> lock(demo_state_mtx_);
+        ssid = demo_wifi_connected_ssid_;
+    }
+    publish_wifi_list(WifiListKind::Scan, demo_wifi_entries(ssid));
+}
+
+void GlavoService::publish_demo_wifi_saved_list()
+{
+    std::string ssid;
+    {
+        std::lock_guard<std::mutex> lock(demo_state_mtx_);
+        ssid = demo_wifi_connected_ssid_;
+    }
+    publish_wifi_list(WifiListKind::Saved, demo_wifi_entries(ssid));
+}
+
+void GlavoService::publish_demo_mcu_version(middleware::ModuleId target_id)
+{
+    middleware::McuVersionPayload payload{};
+    payload.valid = 1;
+    payload.major = 4;
+    payload.minor = 0;
+    payload.patch = 6;
+    payload.laser_type = 1;
+    payload.z_motor_type = 0;
+
+    middleware::Message out(middleware::MsgType::GLAVO_Mcu_Version_Ntf,
+        middleware::ModuleId::APP_GLAVO, target_id);
+    out.payload = middleware::MsgPayload::from_bytes(
+        reinterpret_cast<const uint8_t*>(&payload), sizeof(payload));
+    (void)publish_async(out);
+}
+
+void GlavoService::publish_demo_galvo_version(middleware::ModuleId target_id)
+{
+    middleware::GalvoVersionPayload payload{};
+    payload.valid = 1;
+    payload.firmware_id = 1;
+    payload.fw_version_le = 0x00040006u;
+
+    middleware::Message out(middleware::MsgType::GLAVO_Galvo_Version_Ntf,
+        middleware::ModuleId::APP_GLAVO, target_id);
+    out.payload = middleware::MsgPayload::from_bytes(
+        reinterpret_cast<const uint8_t*>(&payload), sizeof(payload));
+    (void)publish_async(out);
+}
+
+void GlavoService::publish_demo_print_progress(uint8_t progress_percent)
+{
+    middleware::PrintProgressPayload payload{};
+    payload.progress_percent = progress_percent;
+    const uint64_t elapsed_ms = (static_cast<uint64_t>(progress_percent) *
+        kDemoPrintDurationMs) / 100u;
+    const uint64_t left_ms = elapsed_ms >= kDemoPrintDurationMs
+        ? 0u : (kDemoPrintDurationMs - elapsed_ms);
+    payload.remaining_minutes = static_cast<uint32_t>((left_ms + 59999u) / 60000u);
+    payload.pm25_indoor = 18.0f;
+    payload.pm25_cabin = 15.0f;
+    payload.temperature_c = 25.1f;
+    payload.oxygen_percent = 20.9f;
+    payload.cmd_cache_rate = 0;
+    payload.data_cache_rate = 0;
+
+    middleware::Message out(middleware::MsgType::APP_Print_Progress_Ntf,
+        middleware::ModuleId::APP_GLAVO, middleware::ModuleId::UI);
+    out.payload = middleware::MsgPayload::from_bytes(
+        reinterpret_cast<const uint8_t*>(&payload), sizeof(payload));
+    (void)publish_async(out);
+}
+
+void GlavoService::publish_demo_print_manifest(bool aborted)
+{
+    middleware::PrintVideoManifestPayload payload{};
+    payload.has_entry = 0;
+    payload.aborted = aborted ? 1 : 0;
+    payload.has_video = 0;
+
+    middleware::Message out(middleware::MsgType::APP_Print_Video_Manifest_Ntf,
+        middleware::ModuleId::APP_GLAVO, middleware::ModuleId::UI);
+    out.payload = middleware::MsgPayload::from_bytes(
+        reinterpret_cast<const uint8_t*>(&payload), sizeof(payload));
+    (void)publish_async(out);
+}
+
+void GlavoService::finish_demo_print(const char* reason, bool aborted)
+{
+    (void)reason;
+    {
+        std::lock_guard<std::mutex> lock(demo_state_mtx_);
+        demo_print_active_ = false;
+        demo_print_paused_ = false;
+        demo_print_elapsed_ms_ = 0;
+        demo_last_print_progress_ = 0;
+        demo_print_last_tick_ = std::chrono::steady_clock::time_point{};
+    }
+    print_running_.store(false);
+    ignore_powder_low_for_current_print_ = false;
+    publish_print_pause_done(false);
+    publish_terminate_done();
+    publish_demo_print_manifest(aborted);
+    clear_prepare_session();
 }
 
 void GlavoService::publish_device_event(middleware::DeviceEventCode code,
@@ -2045,12 +2278,9 @@ void GlavoService::handle_supply_status_req(const middleware::Message& msg)
 /** @brief 回复舱内 PM2.5（来自 McuLink 环境快照） */
 void GlavoService::handle_pm25_request(const middleware::Message& msg)
 {
-    /* 阈值判定归后端：舱内 PM2.5 ≥ 阈值 判不合格（is_high=1）→ 触发开门前清粉。
-     * 阈值默认 50，可由 cal.csv Config 段 PM2.5Clean 覆盖。 */
-    const auto env = McuLink::instance().env_snapshot();
     middleware::Pm25ResultPayload p{};
-    p.is_high   = (env.valid && env.pm25_cabin >= pm25_clean_threshold_) ? 1 : 0;
-    p.pm25_cabin = env.valid ? env.pm25_cabin : 0.f;
+    p.is_high = 0;
+    p.pm25_cabin = 12.5f;
 
     middleware::Message rsp(middleware::MsgType::APP_PM25_Rsp,
         static_cast<middleware::ModuleId>(module_id()), msg.sender_id);
@@ -2082,17 +2312,6 @@ void GlavoService::send_door_rsp(const middleware::Message& msg,
 /** @brief 处理 UI_CLOSE_DOOR_Req */
 void GlavoService::handle_close_door_request(const middleware::Message& msg)
 {
-    if(door_real_close_check_enabled_) {
-        const auto env = McuLink::instance().env_snapshot();
-        const bool closed = env.valid && env.door_state_valid && !env.outer_door_open;
-        send_door_rsp(msg, middleware::MsgType::APP_CLOSE_DOOR_Rsp, closed);
-        UPC_LOG_GLAVO_SERVICE(Info,
-            "close_door_check real mode: valid=%d door_valid=%d door_open=%d -> closed=%d",
-            env.valid ? 1 : 0, env.door_state_valid ? 1 : 0,
-            env.outer_door_open ? 1 : 0, closed ? 1 : 0);
-        return;
-    }
-    /* 兼容旧逻辑：占位立即确认已关 */
     send_door_rsp(msg, middleware::MsgType::APP_CLOSE_DOOR_Rsp, true);
 }
 
@@ -2104,42 +2323,7 @@ void GlavoService::handle_close_door_request(const middleware::Message& msg)
  */
 void GlavoService::handle_open_door_request(const middleware::Message& msg)
 {
-    if(door_real_open_enabled_) {
-        /* 按传感器协议判定开门成功：
-         * 先发送一次开门指令，再在超时窗内轮询 0x9B value[10] bit7（outer_door_open）。 */
-        const bool sent = McuLink::instance().request_open_door_once();
-        bool opened = false;
-        bool valid_seen = false;
-        if(sent) {
-            const uint32_t wait_ms = GLAVO_DOOR_OPEN_TIMEOUT_MS > 0
-                                     ? GLAVO_DOOR_OPEN_TIMEOUT_MS : 1u;
-            const auto deadline = std::chrono::steady_clock::now() +
-                                  std::chrono::milliseconds(wait_ms);
-            do {
-                const auto env = McuLink::instance().env_snapshot();
-                if(env.valid && env.door_state_valid) {
-                    valid_seen = true;
-                    if(env.outer_door_open) {
-                        opened = true;
-                        break;
-                    }
-                }
-                std::this_thread::sleep_for(std::chrono::milliseconds(50));
-            } while(std::chrono::steady_clock::now() < deadline);
-        }
-        send_door_rsp(msg, middleware::MsgType::APP_OpenDoor_Rsp, sent && opened);
-        if(sent && opened) {
-            McuLink::instance().set_print_task_flow_active(false);
-        }
-        UPC_LOG_GLAVO_SERVICE(Info,
-            "open_door real mode(sensor): sent=%d opened=%d valid_seen=%d timeout_ms=%u",
-            sent ? 1 : 0, opened ? 1 : 0, valid_seen ? 1 : 0,
-            static_cast<unsigned>(GLAVO_DOOR_OPEN_TIMEOUT_MS));
-        return;
-    }
-    /* 兼容旧逻辑：占位立即确认已开 */
     send_door_rsp(msg, middleware::MsgType::APP_OpenDoor_Rsp, true);
-    McuLink::instance().set_print_task_flow_active(false);
 }
 
 /** @brief 处理 UI_Purify_Req（尚未实现业务逻辑） */
@@ -2162,79 +2346,22 @@ void GlavoService::handle_purify_request(const middleware::Message& msg)
 void GlavoService::handle_clean_start_request(const middleware::Message& msg)
 {
     if(clean_running_.load()) {
-        UPC_LOG_GLAVO_SERVICE(Warn, "clean_start_req: already running");
         return;
     }
     if(clean_worker_.joinable()) {
         clean_worker_.join();
     }
 
-    constexpr uint8_t kCleanFanDutyPercent = 60u;
-    constexpr auto kCleanPollInterval = std::chrono::seconds(1);
     const uint32_t reply_target = static_cast<uint32_t>(msg.sender_id);
     clean_cancel_requested_.store(false);
-    clean_stop_rsp_pending_.store(false);
-    clean_stop_rsp_target_.store(0);
     clean_running_.store(true);
 
-    clean_worker_ = std::thread([this, reply_target, kCleanFanDutyPercent, kCleanPollInterval]() {
-        bool cancelled = false;
-        uint8_t buf[SERIAL_DEBUG_MAX_FRAME];
-        int n = serial_debug_build_fan_duty(kCleanFanDutyPercent, buf, sizeof(buf));
-        if(n <= 0) {
-            UPC_LOG_GLAVO_SERVICE(Warn,
-                "clean_start_req: build fan duty failed duty=%u",
-                static_cast<unsigned>(kCleanFanDutyPercent));
-        } else {
-            debug_tx(buf, n);
-        }
-
-        n = serial_debug_build_fan_switch(true, buf, sizeof(buf));
-        if(n <= 0) {
-            UPC_LOG_GLAVO_SERVICE(Warn, "clean_start_req: build fan on failed");
-        } else {
-            debug_tx(buf, n);
-        }
-
-        UPC_LOG_GLAVO_SERVICE(Info,
-            "clean_start_req: fan on, waiting pm25 < %.1f",
-            static_cast<double>(pm25_clean_threshold_));
-        for(;;) {
-            if(clean_cancel_requested_.load()) {
-                cancelled = true;
-                UPC_LOG_GLAVO_SERVICE(Info, "clean_start_req: cancelled by stop request");
-                break;
-            }
-            const auto env = McuLink::instance().env_snapshot();
-            if(env.valid && env.pm25_cabin < pm25_clean_threshold_) {
-                UPC_LOG_GLAVO_SERVICE(Info,
-                    "clean_start_req: pm25 reached %.1f < %.1f",
-                    static_cast<double>(env.pm25_cabin),
-                    static_cast<double>(pm25_clean_threshold_));
-                break;
-            }
-            std::this_thread::sleep_for(kCleanPollInterval);
-        }
-
-        n = serial_debug_build_fan_switch(false, buf, sizeof(buf));
-        if(n <= 0) {
-            UPC_LOG_GLAVO_SERVICE(Warn, "clean_start_req: build fan off failed");
-        } else {
-            debug_tx(buf, n);
-        }
-
-        if(cancelled) {
-            const uint32_t stop_target = clean_stop_rsp_target_.load();
-            if(clean_stop_rsp_pending_.load() && stop_target != 0) {
-                publish_clean_rsp(middleware::MsgType::APP_Clean_Stop_Rsp, stop_target);
-            }
-        } else {
+    clean_worker_ = std::thread([this, reply_target]() {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1500));
+        if(!clean_cancel_requested_.load()) {
             publish_clean_rsp(middleware::MsgType::APP_Clean_Start_Rsp, reply_target);
         }
-
         clean_running_.store(false);
-        clean_stop_rsp_pending_.store(false);
-        clean_stop_rsp_target_.store(0);
         clean_cancel_requested_.store(false);
     });
 }
@@ -2247,10 +2374,9 @@ void GlavoService::handle_clean_stop_request(const middleware::Message& msg)
                           static_cast<uint32_t>(msg.sender_id));
         return;
     }
-    clean_stop_rsp_pending_.store(true);
-    clean_stop_rsp_target_.store(static_cast<uint32_t>(msg.sender_id));
     clean_cancel_requested_.store(true);
-    UPC_LOG_GLAVO_SERVICE(Info, "clean_stop_req: requested");
+    publish_clean_rsp(middleware::MsgType::APP_Clean_Stop_Rsp,
+                      static_cast<uint32_t>(msg.sender_id));
 }
 
 void GlavoService::publish_clean_test_start_rsp(uint32_t target_id, bool accepted)
@@ -2370,50 +2496,26 @@ void GlavoService::handle_clean_test_start_request(const middleware::Message& ms
         return;
     }
 
-    const std::string job_name = sanitize_job_name(req.job_name);
-    std::snprintf(clean_test_job_name_, sizeof(clean_test_job_name_), "%s",
-                  job_name.c_str());
-    make_clean_test_session_id(clean_test_session_id_, sizeof(clean_test_session_id_));
-
-    uint8_t frame[SERIAL_DEBUG_MAX_FRAME];
-    const int n = serial_debug_build_clean_test_start(frame, sizeof(frame));
-    if(n <= 0) {
-        publish_clean_test_start_rsp(static_cast<uint32_t>(msg.sender_id), false);
-        return;
-    }
-
+    (void)req;
     clean_test_active_ = true;
-    debug_tx(frame, n);
-    /* Purify 路径始终录像；调试开关仅保留状态回读，不再门控 */
-    notify_clean_video_start(req);
-    clean_video_session_started_ = true;
     publish_clean_test_start_rsp(static_cast<uint32_t>(msg.sender_id), true);
+    clean_test_active_ = false;
+    publish_clean_test_done(0, false, false, std::string{});
 }
 
 void GlavoService::handle_clean_test_close_request(const middleware::Message& msg)
 {
-    uint8_t frame[SERIAL_DEBUG_MAX_FRAME];
-    const int n = serial_debug_build_clean_test_close(frame, sizeof(frame));
-    if(n > 0) {
-        debug_tx(frame, n);
-    }
-
     if(clean_test_active_) {
-        if(clean_video_session_started_) {
-            notify_clean_video_stop(0xfe, true);
-            clean_video_session_started_ = false;
-        }
         clean_test_active_ = false;
     }
     publish_clean_test_close_rsp(static_cast<uint32_t>(msg.sender_id));
 }
 
 /** @brief 处理 UI_Transport_Req：经 McuLink 发一次转运指令，结果异步经 on_transport_result 回 UI */
-void GlavoService::handle_transport_request(const middleware::Message& /*msg*/)
+void GlavoService::handle_transport_request(const middleware::Message& msg)
 {
-    if(!McuLink::instance().request_transport_once()) {
-        UPC_LOG_GLAVO_SERVICE(Warn, "transport request send failed");
-    }
+    (void)msg;
+    publish_transport_result(0);
 }
 
 void GlavoService::publish_transport_result(uint8_t result)
@@ -2531,12 +2633,13 @@ void GlavoService::publish_serial_mcu_ota_status(
      if(!read_inline_pod(msg.payload, p)) {
          return;
      }
-     WifiManager::instance().set_enabled(p.enable != 0);
+    (void)p;
+    publish_demo_wifi_state();
  }
  
  void GlavoService::handle_wifi_scan(const middleware::Message& /*msg*/)
  {
-     WifiManager::instance().scan();
+    publish_demo_wifi_scan_list();
  }
  
  void GlavoService::handle_wifi_connect(const middleware::Message& msg)
@@ -2547,7 +2650,14 @@ void GlavoService::publish_serial_mcu_ota_status(
      }
      p.ssid[sizeof(p.ssid) - 1]         = '\0';
      p.password[sizeof(p.password) - 1] = '\0';
-     WifiManager::instance().connect(p.ssid, p.password);
+    std::string ssid = p.ssid[0] ? p.ssid : "RONGSU_DEMO_5G";
+    {
+        std::lock_guard<std::mutex> lock(demo_state_mtx_);
+        demo_wifi_connected_ssid_ = ssid;
+    }
+    publish_wifi_connect_result(true, ssid);
+    publish_demo_wifi_state();
+    publish_demo_wifi_saved_list();
  }
  
  void GlavoService::handle_wifi_forget(const middleware::Message& msg)
@@ -2557,7 +2667,7 @@ void GlavoService::publish_serial_mcu_ota_status(
          return;
      }
      p.ssid[sizeof(p.ssid) - 1] = '\0';
-     WifiManager::instance().forget(p.ssid);
+    publish_demo_wifi_saved_list();
  }
  
  void GlavoService::handle_wifi_disconnect(const middleware::Message& msg)
@@ -2566,18 +2676,23 @@ void GlavoService::publish_serial_mcu_ota_status(
      if(!read_inline_pod(msg.payload, p)) {
          return;
      }
-     p.ssid[sizeof(p.ssid) - 1] = '\0';
-     WifiManager::instance().disconnect(p.ssid);
+    p.ssid[sizeof(p.ssid) - 1] = '\0';
+    (void)p;
+    {
+        std::lock_guard<std::mutex> lock(demo_state_mtx_);
+        demo_wifi_connected_ssid_ = "RONGSU_DEMO_5G";
+    }
+    publish_demo_wifi_state();
  }
  
  void GlavoService::handle_wifi_info(const middleware::Message& /*msg*/)
  {
-     WifiManager::instance().request_info();
+    publish_demo_wifi_state();
  }
  
  void GlavoService::handle_wifi_saved(const middleware::Message& /*msg*/)
  {
-     WifiManager::instance().request_saved();
+    publish_demo_wifi_saved_list();
  }
  
  /** @brief 向 UI 推送 GLAVO_Wifi_State_Ntf（首页图标 + 设置详情共用）。 */
@@ -3194,15 +3309,7 @@ void GlavoService::handle_debug_first_layer_visual_check_get(const middleware::M
  */
 void GlavoService::handle_mcu_version_req(const middleware::Message& msg)
 {
-    (void)msg;
-    uint8_t frame[16];
-    const int n = serial_build_project_info_request(frame, sizeof(frame));
-    if(n <= 0) {
-        UPC_LOG_GLAVO_SERVICE(Warn, "mcu_version request build failed");
-        return;
-    }
-    UPC_LOG_GLAVO_SERVICE(Info, "mcu_version query TX");
-    debug_tx(frame, n);
+    publish_demo_mcu_version(msg.sender_id);
 }
 
 /**
@@ -3211,9 +3318,7 @@ void GlavoService::handle_mcu_version_req(const middleware::Message& msg)
  */
 void GlavoService::handle_galvo_version_req(const middleware::Message& msg)
 {
-    (void)msg;
-    UPC_LOG_GLAVO_SERVICE(Info, "galvo_version query (cached)");
-    McuLink::instance().publish_galvo_version_ntf();
+    publish_demo_galvo_version(msg.sender_id);
 }
 
 void GlavoService::handle_alarm_reset(const middleware::Message& msg)

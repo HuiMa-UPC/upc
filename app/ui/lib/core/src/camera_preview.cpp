@@ -373,15 +373,18 @@ void CameraPreviewPlayer::init()
 }
 
 void CameraPreviewPlayer::start(lv_obj_t* image_widget, lv_obj_t* hint_widget,
-                                 const char* scene)
+                                 const char* scene, const char* video_basename)
 {
     // 退役期间不抢占旧线程/旧资源：仅记录参数，待退役完成后自动重启。
-    auto defer_start = [this, image_widget, hint_widget, scene]() {
+    auto defer_start = [this, image_widget, hint_widget, scene, video_basename]() {
         pending_image_ = image_widget;
         pending_hint_  = hint_widget;
         std::strncpy(pending_scene_, scene ? scene : "",
                      sizeof(pending_scene_) - 1);
         pending_scene_[sizeof(pending_scene_) - 1] = '\0';
+        std::strncpy(pending_video_basename_, video_basename ? video_basename : "",
+                     sizeof(pending_video_basename_) - 1);
+        pending_video_basename_[sizeof(pending_video_basename_) - 1] = '\0';
         pending_start_ = true;
     };
 
@@ -409,6 +412,9 @@ void CameraPreviewPlayer::start(lv_obj_t* image_widget, lv_obj_t* hint_widget,
     } else {
         scene_[0] = '\0';
     }
+    std::strncpy(video_basename_, video_basename ? video_basename : "",
+                 sizeof(video_basename_) - 1);
+    video_basename_[sizeof(video_basename_) - 1] = '\0';
     shown_buf_.store(-1, std::memory_order_relaxed);
     logged_first_ui_show_ = false;
     active_.store(true);
@@ -436,11 +442,13 @@ void CameraPreviewPlayer::start(lv_obj_t* image_widget, lv_obj_t* hint_widget,
     show_hint(LV_SYMBOL_VIDEO "  Connecting camera...");
     start_req_sent_ = true;
     UPC_LOG_CAMERA_PREVIEW(Info,
-        "start req scene=%s image=%p hint=%p",
+        "start req scene=%s video=%s image=%p hint=%p",
         scene_[0] ? scene_ : "(none)",
+        video_basename_[0] ? video_basename_ : "(live)",
         static_cast<void*>(image_widget),
         static_cast<void*>(hint_widget));
-    CameraMsgProxy::instance().send_stream_start(nullptr);
+    CameraMsgProxy::instance().send_stream_start(
+        video_basename_[0] ? video_basename_ : nullptr);
 }
 
 void CameraPreviewPlayer::stop()
@@ -947,12 +955,15 @@ void CameraPreviewPlayer::finish_decode_retire_ui()
             lv_obj_t* pending_image = pending_image_;
             lv_obj_t* pending_hint  = pending_hint_;
             char pending_scene[sizeof(pending_scene_)]{};
+            char pending_video[sizeof(pending_video_basename_)]{};
             std::memcpy(pending_scene, pending_scene_, sizeof(pending_scene));
+            std::memcpy(pending_video, pending_video_basename_, sizeof(pending_video));
             pending_start_ = false;
             pending_image_ = nullptr;
             pending_hint_  = nullptr;
             pending_scene_[0] = '\0';
-            start(pending_image, pending_hint, pending_scene);
+            pending_video_basename_[0] = '\0';
+            start(pending_image, pending_hint, pending_scene, pending_video);
             return;
         }
         reset_ui();
@@ -1555,6 +1566,8 @@ void CameraPreviewPlayer::reset_ui()
     pending_image_   = nullptr;
     pending_hint_    = nullptr;
     pending_scene_[0] = '\0';
+    pending_video_basename_[0] = '\0';
+    video_basename_[0] = '\0';
     pending_start_   = false;
     logged_first_ui_show_ = false;
     last_frame_ok_ms_.store(0, std::memory_order_relaxed);

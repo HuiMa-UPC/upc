@@ -68,6 +68,35 @@ else()
     message(WARNING "camera: librga not found — raw thumbnail RGA path disabled")
 endif()
 
+if(CMAKE_SYSROOT)
+    find_library(UPC_CAMERA_AVFORMAT NAMES avformat
+        PATHS ${CMAKE_SYSROOT}/usr/lib ${CMAKE_SYSROOT}/lib NO_DEFAULT_PATH)
+    find_library(UPC_CAMERA_AVCODEC NAMES avcodec
+        PATHS ${CMAKE_SYSROOT}/usr/lib ${CMAKE_SYSROOT}/lib NO_DEFAULT_PATH)
+    find_library(UPC_CAMERA_AVUTIL NAMES avutil
+        PATHS ${CMAKE_SYSROOT}/usr/lib ${CMAKE_SYSROOT}/lib NO_DEFAULT_PATH)
+    find_library(UPC_CAMERA_SWSCALE NAMES swscale
+        PATHS ${CMAKE_SYSROOT}/usr/lib ${CMAKE_SYSROOT}/lib NO_DEFAULT_PATH)
+else()
+    find_library(UPC_CAMERA_AVFORMAT NAMES avformat)
+    find_library(UPC_CAMERA_AVCODEC NAMES avcodec)
+    find_library(UPC_CAMERA_AVUTIL NAMES avutil)
+    find_library(UPC_CAMERA_SWSCALE NAMES swscale)
+endif()
+
+if(UPC_CAMERA_AVFORMAT AND UPC_CAMERA_AVCODEC AND UPC_CAMERA_AVUTIL AND UPC_CAMERA_SWSCALE)
+    message(STATUS "camera: linking ffmpeg libs for demo video source")
+    target_link_libraries(rongsu_camera PRIVATE
+        ${UPC_CAMERA_AVFORMAT}
+        ${UPC_CAMERA_AVCODEC}
+        ${UPC_CAMERA_AVUTIL}
+        ${UPC_CAMERA_SWSCALE})
+    target_compile_definitions(rongsu_camera PRIVATE UPC_CAMERA_HAS_LIBAV=1)
+else()
+    message(WARNING "camera: ffmpeg libs not found — demo video stream source disabled")
+    target_compile_definitions(rongsu_camera PRIVATE UPC_CAMERA_HAS_LIBAV=0)
+endif()
+
 target_compile_options(rongsu_camera
     PRIVATE
         -Wall -Wextra

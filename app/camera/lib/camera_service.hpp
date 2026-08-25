@@ -10,6 +10,7 @@
 #include <atomic>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <thread>
 #include <unordered_map>
@@ -42,6 +43,9 @@ private:
 
     bool start_streaming();
     void stop_streaming();
+    bool start_live_streaming();
+    bool start_demo_video_streaming(const std::string& video_path);
+    void stop_demo_video_streaming();
     /**
      * 采集线程内看门狗：关闭并重开 ISP/V4L2（不 join 本线程、不清 peer 表），
      * 重建各 peer SHM 并 publish Start Rsp + 新 dma fd。
@@ -57,6 +61,7 @@ private:
     void remove_stream_peer(middleware::ModuleId peer);
     bool has_stream_peers() const;
     void stream_thread_fn();
+    void stream_thread_demo_video_fn();
 
     void send_stream_start_rsp(const middleware::Message& req, bool ok);
     void send_stream_stop_done(const middleware::Message& req);
@@ -89,6 +94,19 @@ private:
     std::atomic<bool> stream_running_{false};
     std::atomic<bool> stop_stream_{false};
     bool frame_ntf_enabled_ = (CAMERA_FRAME_NTF_DEFAULT != 0);
+    enum class StreamSourceMode : uint8_t {
+        Live = 0,
+        DemoVideo = 1,
+    };
+    StreamSourceMode stream_mode_{StreamSourceMode::Live};
+    std::string requested_video_basename_;
+    std::string active_video_path_;
+    struct DemoVideoBuffer {
+        int fd = -1;
+        void* va = nullptr;
+        size_t size = 0;
+    };
+    std::vector<DemoVideoBuffer> demo_video_bufs_;
 
     uint32_t stream_width_         = CAMERA_WIDTH_DEFAULT;
     uint32_t stream_height_        = CAMERA_HEIGHT_DEFAULT;

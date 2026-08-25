@@ -64,6 +64,8 @@ struct VideoPlayer::Impl {
 
     /* 拖动预览最大边长：远小于主画面，软解 + sws 成本明显下降。 */
     static constexpr int kPreviewMaxEdge = 320;
+    /* 主播放最大边长：限制软解后主画面输出尺寸，降低 UI 线程刷新压力。 */
+    static constexpr int kMainMaxEdge = 960;
 
     std::mutex mtx;
     std::mutex decoder_mtx;
@@ -92,6 +94,8 @@ struct VideoPlayer::Impl {
 
     SwsContext* sws = nullptr;
     SwsContext* preview_sws = nullptr;
+    int src_w = 0;
+    int src_h = 0;
     int frame_w = 0;
     int frame_h = 0;
     int preview_w = 0;
@@ -283,6 +287,8 @@ struct VideoPlayer::Impl {
         stream_index = -1;
         time_base = AVRational{1, 1000};
         frame_interval_ms = 33;
+        src_w = 0;
+        src_h = 0;
         frame_w = 0;
         frame_h = 0;
         preview_w = 0;
@@ -320,6 +326,21 @@ struct VideoPlayer::Impl {
         }
         out_w = std::max(1, src_w * kPreviewMaxEdge / max_edge);
         out_h = std::max(1, src_h * kPreviewMaxEdge / max_edge);
+    }
+
+    static void calc_main_size(int src_w, int src_h, int& out_w, int& out_h)
+    {
+        out_w = src_w;
+        out_h = src_h;
+        if(src_w <= 0 || src_h <= 0) {
+            return;
+        }
+        const int max_edge = std::max(src_w, src_h);
+        if(max_edge <= kMainMaxEdge) {
+            return;
+        }
+        out_w = std::max(1, src_w * kMainMaxEdge / max_edge);
+        out_h = std::max(1, src_h * kMainMaxEdge / max_edge);
     }
 
     bool ensure_buffers()
@@ -415,12 +436,13 @@ struct VideoPlayer::Impl {
         if(avcodec_open2(codec, codec_def, nullptr) < 0) {
             return false;
         }
-        frame_w = codec->width;
-        frame_h = codec->height;
-        if(frame_w <= 0 || frame_h <= 0) {
+        src_w = codec->width;
+        src_h = codec->height;
+        if(src_w <= 0 || src_h <= 0) {
             return false;
         }
-        sws = sws_getContext(frame_w, frame_h, codec->pix_fmt,
+        calc_main_size(src_w, src_h, frame_w, frame_h);
+        sws = sws_getContext(src_w, src_h, codec->pix_fmt,
                              frame_w, frame_h, AV_PIX_FMT_RGB565LE,
                              SWS_BILINEAR, nullptr, nullptr, nullptr);
         if(!sws) {
@@ -429,7 +451,7 @@ struct VideoPlayer::Impl {
         if(!ensure_buffers()) {
             return false;
         }
-        preview_sws = sws_getContext(frame_w, frame_h, codec->pix_fmt,
+        preview_sws = sws_getContext(src_w, src_h, codec->pix_fmt,
                                      preview_w, preview_h, AV_PIX_FMT_RGB565LE,
                                      SWS_FAST_BILINEAR, nullptr, nullptr, nullptr);
         if(!preview_sws) {
@@ -462,7 +484,7 @@ struct VideoPlayer::Impl {
         const int back_idx = main_front_idx ^ 1;
         uint8_t* dst_data[4] = { main_rgb565[back_idx].data(), nullptr, nullptr, nullptr };
         int dst_linesize[4] = { frame_w * 2, 0, 0, 0 };
-        const int out_h = sws_scale(sws, src->data, src->linesize, 0, frame_h,
+        const int out_h = sws_scale(sws, src->data, src->linesize, 0, src_h,
                                     dst_data, dst_linesize);
         if(out_h != frame_h) {
             return false;
@@ -484,7 +506,7 @@ struct VideoPlayer::Impl {
         const int back_idx = preview_front_idx ^ 1;
         uint8_t* dst_data[4] = { preview_rgb565[back_idx].data(), nullptr, nullptr, nullptr };
         int dst_linesize[4] = { preview_w * 2, 0, 0, 0 };
-        const int out_h = sws_scale(preview_sws, src->data, src->linesize, 0, frame_h,
+        const int out_h = sws_scale(preview_sws, src->data, src->linesize, 0, src_h,
                                     dst_data, dst_linesize);
         if(out_h != preview_h) {
             return false;
@@ -655,6 +677,7 @@ struct VideoPlayer::Impl {
             }
 
             if(playing) {
+                const auto decode_start = std::chrono::steady_clock::now();
                 lk.unlock();
                 const bool ok = decode_one_video_frame(false);
                 lk.lock();
@@ -665,9 +688,14 @@ struct VideoPlayer::Impl {
                         notify_ended();
                     }
                 } else {
-                    const auto delay = std::chrono::milliseconds(
+                    const auto target_interval = std::chrono::milliseconds(
                         std::clamp<int64_t>(frame_interval_ms, 8, 100));
-                    cv.wait_for(lk, delay, [this] {
+                    const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::steady_clock::now() - decode_start);
+                    const auto wait_remain = (elapsed >= target_interval)
+                        ? std::chrono::milliseconds(0)
+                        : (target_interval - elapsed);
+                    cv.wait_for(lk, wait_remain, [this] {
                         return stop.load(std::memory_order_relaxed) ||
                                !commands.empty() || !playing;
                     });
@@ -733,12 +761,6 @@ bool VideoPlayer::open(lv_obj_t* image_target, const char* path)
         impl_->preview_req_gen.store(0, std::memory_order_relaxed);
         impl_->commands.clear();
         impl_->cv.notify_all();
-    }
-    if(!impl_->seek_to_ms(0, false, 0)) {
-        std::lock_guard<std::mutex> lk(impl_->mtx);
-        impl_->opened = false;
-        impl_->clear_decoder();
-        return false;
     }
     return true;
 }

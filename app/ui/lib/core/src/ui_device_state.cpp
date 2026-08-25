@@ -28,9 +28,8 @@ void apply_env(const middleware::EnvSnapshotPayload &p)
 {
     std::strncpy(g_snap.device_name, p.device_name, sizeof(g_snap.device_name) - 1);
     g_snap.device_name[sizeof(g_snap.device_name) - 1] = '\0';
-    if(!g_status_lock) {
-        g_snap.status = static_cast<ui_device_status_t>(p.status);
-    }
+    (void)p.status;
+    g_snap.status = UI_DEVICE_STATUS_READY;
     g_snap.wifi_connected = p.wifi_connected != 0;
     g_snap.signal_bars    = p.signal_bars;
     g_snap.pm25_indoor    = p.pm25_indoor;
@@ -66,8 +65,8 @@ void ui_device_state_init(void)
         std::memset(&g_snap, 0, sizeof(g_snap));
         std::strcpy(g_snap.device_name, upc::config::kDeviceDisplayName);
         g_snap.status         = UI_DEVICE_STATUS_READY;
-        g_snap.wifi_connected = false;
-        g_snap.signal_bars    = 0;
+        g_snap.wifi_connected = true;
+        g_snap.signal_bars    = 3;
         /* 环境指标默认无数据（<0）→ 首帧环境到达前统一显示 "--" */
         g_snap.pm25_indoor    = -1.0f;
         g_snap.pm25_cabin     = -1.0f;
@@ -94,14 +93,9 @@ const ui_device_snapshot_t *ui_device_state_get(void)
 
 void ui_device_state_set_status(ui_device_status_t s)
 {
-    g_snap.status = s;
-    /* 打印中/暂停/结果态/吹粉的状态由前端说了算，锁住不让环境推送覆盖 */
-    g_status_lock = (s == UI_DEVICE_STATUS_PRINTING ||
-                     s == UI_DEVICE_STATUS_PRINT_DONE ||
-                     s == UI_DEVICE_STATUS_PRINT_TERMINATED ||
-                     s == UI_DEVICE_STATUS_PAUSED ||
-                     s == UI_DEVICE_STATUS_PURIFYING ||
-                     s == UI_DEVICE_STATUS_PURIFY_DONE);
+    (void)s;
+    g_snap.status = UI_DEVICE_STATUS_READY;
+    g_status_lock = false;
     notify_observers();
 }
 

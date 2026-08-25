@@ -5,6 +5,7 @@
 #include "ui_msg_proxy.hpp"
 #include "camera_msg_proxy.hpp"
 #include "camera_preview.hpp"
+#include "video_player.hpp"
 #include "control.hpp"
 #include "home_assets.h"
 #include "home_btn_icons.h"
@@ -22,6 +23,10 @@
 
 #include <cmath>
 #include <cstdio>
+#include <cstring>
+#include <dirent.h>
+#include <string>
+#include <unistd.h>
 
 /**
  * @file page_user_home.cpp
@@ -290,6 +295,31 @@ void apply_camera_preview_layout(uint32_t src_w, uint32_t src_h = 0);
 void on_camera_viewport_size_changed(lv_event_t *e);
 void enter_monitor_mode(void);
 void exit_monitor_mode(void);
+
+bool show_monitor_static_image()
+{
+    constexpr const char* kMonitorPng = "A:/home/test/1.png";
+    constexpr const char* kMonitorPngRaw = "/home/test/1.png";
+    if(!g_monitor_camera_image) {
+        return false;
+    }
+    if(::access(kMonitorPngRaw, R_OK) != 0) {
+        if(g_monitor_camera_hint) {
+            lv_label_set_text(g_monitor_camera_hint,
+                LV_SYMBOL_WARNING "  Missing /home/test/1.png");
+            lv_obj_clear_flag(g_monitor_camera_hint, LV_OBJ_FLAG_HIDDEN);
+        }
+        lv_obj_add_flag(g_monitor_camera_image, LV_OBJ_FLAG_HIDDEN);
+        return false;
+    }
+    ui::VideoPlayer::instance().close();
+    lv_image_set_src(g_monitor_camera_image, kMonitorPng);
+    lv_obj_clear_flag(g_monitor_camera_image, LV_OBJ_FLAG_HIDDEN);
+    if(g_monitor_camera_hint) {
+        lv_obj_add_flag(g_monitor_camera_hint, LV_OBJ_FLAG_HIDDEN);
+    }
+    return true;
+}
 
 /** 预览布局（通用）：宽贴满 viewport；高度按等比缩放后做上下居中裁剪（解码层仍输出全帧）。
  *  打印区与监控区共用同一算法，只是作用于不同的 viewport/image。 */
@@ -2189,8 +2219,7 @@ lv_obj_t *build_monitor_area(lv_obj_t *parent)
 
 static void deferred_monitor_camera_start_cb(void * /*user*/)
 {
-    ui::CameraPreviewPlayer::instance().start(
-        g_monitor_camera_image, g_monitor_camera_hint, "monitor");
+    (void)show_monitor_static_image();
 }
 
 void enter_monitor_mode(void)
@@ -2221,6 +2250,7 @@ void enter_monitor_mode(void)
 
 void exit_monitor_mode(void)
 {
+    ui::VideoPlayer::instance().close();
     ui::CameraPreviewPlayer::instance().stop();
     if(!g_monitor_active) {
         return;
@@ -2428,7 +2458,7 @@ lv_obj_t *page_user_home_create(lv_obj_t *parent)
 static void deferred_camera_start_cb(void* /*user*/)
 {
     ui::CameraPreviewPlayer::instance().start(
-        g_camera_image, g_camera_hint, "print");
+        g_camera_image, g_camera_hint, "print", "demo.mp4");
 }
 
 void page_user_home_request_camera_preview(void)
@@ -2560,6 +2590,7 @@ void page_user_home_reset_result_slide(void)
 
 void page_user_home_exit_printing_mode(void)
 {
+    ui::VideoPlayer::instance().close();
     ui::CameraPreviewPlayer::instance().stop();
     g_printing_active = false;
     g_result_cleaning = false;

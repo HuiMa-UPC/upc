@@ -99,6 +99,13 @@ void PageManager::init(lv_obj_t* screen) {
      * （lv_layer_top）之下。显隐规则见 apply_device_bar()。 */
     notice_stack_ = ui_notice_stack_create(shell_);
 
+    lv_obj_t* demo_tag = lv_label_create(shell_);
+    lv_label_set_text(demo_tag, "DEMO");
+    lv_obj_set_style_text_color(demo_tag, lv_color_hex(0xFF4D4F), 0);
+    lv_obj_set_style_text_font(demo_tag, user_font_title(), 0);
+    lv_obj_add_flag(demo_tag, LV_OBJ_FLAG_FLOATING);
+    lv_obj_align(demo_tag, LV_ALIGN_TOP_RIGHT, -USER_PAD_LG, USER_PAD_SM);
+
     /* 侧栏画在最后（浮于页面和设备信息条之上）。必须在 FLOATING 之后做——直接对
      * flex 子节点 move_foreground 会改变布局顺序，把侧栏挪到屏幕右侧。 */
     lv_obj_move_foreground(menu_panel_);

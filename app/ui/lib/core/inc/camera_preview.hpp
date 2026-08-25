@@ -32,9 +32,11 @@ public:
     /**
      * @brief 进入预览：发 Start_Req，成功后开 dma 元数据环 + 解码线程
      * @param scene 场景标签（如 "monitor"/"print"），仅用于诊断日志；可为 nullptr
+     * @param video_basename 可选视频文件名（由 Camera 侧解析），空则使用实时相机
      */
     void start(lv_obj_t* image_widget, lv_obj_t* hint_widget,
-               const char* scene = nullptr);
+               const char* scene = nullptr,
+               const char* video_basename = nullptr);
 
     /** 退出打印 / 终止任务：停线程、关资源、发 Stop_Req */
     void stop();
@@ -99,9 +101,11 @@ private:
     lv_timer_t* ui_timer_ = nullptr;
     lv_timer_t* retire_poll_timer_ = nullptr;
     char scene_[32] = {}; /**< start() 传入的场景标签，供诊断日志 */
+    char video_basename_[64] = {};
     lv_obj_t* pending_image_ = nullptr;
     lv_obj_t* pending_hint_  = nullptr;
     char pending_scene_[32] = {};
+    char pending_video_basename_[64] = {};
     bool pending_start_ = false;
 
     upc_ipc::IpcDmaFrameRingConsumer consumer_;

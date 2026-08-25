@@ -192,7 +192,6 @@ std::deque<FileTab> g_dir_open_pending;
 
 void rebuild_file_grid(void);
 void update_detail_panel(const control_file_t *file);
-void show_terminated_result_without_manifest(void);
 
 void apply_files_list(const std::vector<control_file_t>& files)
 {
@@ -400,7 +399,6 @@ void finish_printing(bool notify_complete)
         return;
     }
 
-    const bool user_terminate = g_terminate_pending;
     stop_print_watchdogs();
     g_terminate_pending = false;
     g_last_print_progress = 0;
@@ -424,9 +422,6 @@ void finish_printing(bool notify_complete)
     g_job_u = nullptr;
     /* 不回 IDLE：先进 PRINT_DONE 保活摄像头预览，等 Camera 出片后切结果页 */
     enter_state(CONTROL_STATE_PRINT_DONE);
-    if(user_terminate) {
-        show_terminated_result_without_manifest();
-    }
 }
 
 void on_print_peer_watch(lv_timer_t * /*timer*/)
@@ -3215,23 +3210,6 @@ void pf_on_print_done(void * /*u*/)
     ui_toast_show("Print complete", user_color_status_ok, 2000);
     /* 同 finish_printing：留在 PRINT_DONE 等 Camera 出片，不直接回 IDLE */
     enter_state(CONTROL_STATE_PRINT_DONE);
-}
-
-void show_terminated_result_without_manifest(void)
-{
-    if(g_state != CONTROL_STATE_PRINT_DONE || g_print_result_shown) {
-        return;
-    }
-    control_print_result_t r = {};
-    r.terminated = true;
-    r.has_stats = false;
-    if(g_active_file.name[0] != '\0') {
-        std::snprintf(r.job_name, sizeof(r.job_name), "%s", g_active_file.name);
-    }
-    g_print_result = r;
-    g_print_result_pending = false;
-    page_user_home_enter_print_result(&g_print_result);
-    g_print_result_shown = true;
 }
 
 /**

@@ -173,6 +173,18 @@ private:
                               bool active);
     void reset_print_progress_state();
     void send_print_progress(bool force_complete);
+    void start_demo_runtime();
+    void stop_demo_runtime();
+    void demo_runtime_loop();
+    void publish_demo_env_snapshot();
+    void publish_demo_wifi_state();
+    void publish_demo_wifi_scan_list();
+    void publish_demo_wifi_saved_list();
+    void publish_demo_mcu_version(middleware::ModuleId target_id);
+    void publish_demo_galvo_version(middleware::ModuleId target_id);
+    void publish_demo_print_progress(uint8_t progress_percent);
+    void publish_demo_print_manifest(bool aborted);
+    void finish_demo_print(const char* reason, bool aborted);
 
     void on_message(const middleware::Message& msg);
     void worker_loop();
@@ -261,6 +273,15 @@ private:
     std::condition_variable first_layer_visual_cv_;
     bool first_layer_visual_waiting_ = false;
     uint8_t first_layer_visual_result_ = 0;
+    std::thread demo_thread_;
+    std::atomic<bool> demo_runtime_running_{false};
+    std::mutex demo_state_mtx_;
+    bool demo_print_active_ = false;
+    bool demo_print_paused_ = false;
+    uint64_t demo_print_elapsed_ms_ = 0;
+    uint8_t demo_last_print_progress_ = 0;
+    std::chrono::steady_clock::time_point demo_print_last_tick_{};
+    std::string demo_wifi_connected_ssid_ = "RONGSU_DEMO_5G";
 };
 
 } // namespace upc::glavo
