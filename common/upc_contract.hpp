@@ -480,8 +480,10 @@ enum class MsgType : uint32_t {
     APP_Visual_Camera_Stream_Start_Rsp, /**< CameraStreamInfoPayload */
     VISUAL_Camera_Stream_Stop_Req,      /**< Empty */
     APP_Visual_Camera_Stream_Stop_Rsp,  /**< Empty */
-    GLAVO_Visual_FirstLayer_Check_Req,  /**< VisualFirstLayerCheckReqPayload */
-    APP_Visual_FirstLayer_Check_Rsp,    /**< VisualFirstLayerCheckRspPayload */
+    GLAVO_Visual_FirstLayer_Check_Req = 0x1423, /**< VisualFirstLayerCheckReqPayload；保持旧协议编号 */
+    APP_Visual_FirstLayer_Check_Rsp = 0x1424,   /**< VisualFirstLayerCheckRspPayload；保持旧协议编号 */
+    GLAVO_Visual_FirstLayer_Session_Start_Ntf = 0x1425, /**< Empty：打印开始，Visual 起流并预热定位缓存 */
+    GLAVO_Visual_FirstLayer_Session_Stop_Ntf = 0x1426,  /**< Empty：首层通过/打印结束，Visual 停流休眠 */
     // ---- MEDIA ↔ CAMERA：媒体进程并行取流（拍照/录像） ----
     MEDIA_Camera_Stream_Start_Req = 0x1450,  /**< CameraStreamStartReqPayload（媒体侧取流） */
     APP_Media_Camera_Stream_Start_Rsp,       /**< CameraStreamInfoPayload */
@@ -1224,6 +1226,8 @@ enum class DeviceEventCode : uint16_t {
     Estop               = 24,  /**< 急停双触点触发 */
     FireSuppress        = 25,  /**< 灭火阀动作 */
     Esd                 = 26,  /**< 静电保护触发 */
+    FirstLayerVisualRecoat = 27, /**< 首层检测未通过，继续铺粉重检（one_shot） */
+    FirstLayerVisualPassed = 28, /**< 首层检测通过，进入正常打印（one_shot） */
 
     /* ---- 以下为 UI 本地事件：不走总线，由前端自己 push，占同一码空间以便
      *      消息中心统一排序去重。后端不应发送这些码。 ---- */

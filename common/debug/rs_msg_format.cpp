@@ -134,6 +134,10 @@ const char* upc_msg_type_name(MsgType type) {
         case MsgType::APP_Visual_Camera_Stream_Start_Rsp: return "APP_Visual_Camera_Stream_Start_Rsp";
         case MsgType::VISUAL_Camera_Stream_Stop_Req: return "VISUAL_Camera_Stream_Stop_Req";
         case MsgType::APP_Visual_Camera_Stream_Stop_Rsp: return "APP_Visual_Camera_Stream_Stop_Rsp";
+        case MsgType::GLAVO_Visual_FirstLayer_Check_Req: return "GLAVO_Visual_FirstLayer_Check_Req";
+        case MsgType::APP_Visual_FirstLayer_Check_Rsp: return "APP_Visual_FirstLayer_Check_Rsp";
+        case MsgType::GLAVO_Visual_FirstLayer_Session_Start_Ntf: return "GLAVO_Visual_FirstLayer_Session_Start_Ntf";
+        case MsgType::GLAVO_Visual_FirstLayer_Session_Stop_Ntf: return "GLAVO_Visual_FirstLayer_Session_Stop_Ntf";
         case MsgType::MEDIA_Camera_Stream_Start_Req: return "MEDIA_Camera_Stream_Start_Req";
         case MsgType::APP_Media_Camera_Stream_Start_Rsp: return "APP_Media_Camera_Stream_Start_Rsp";
         case MsgType::MEDIA_Camera_Stream_Stop_Req: return "MEDIA_Camera_Stream_Stop_Req";

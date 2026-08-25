@@ -1,12 +1,27 @@
 #include "visual_service.hpp"
 
+#include "generated_fusion_model.hpp"
+#include "generated_rknn_contract.hpp"
 #include "rs_log.hpp"
 #include "upc_contract.hpp"
 
-#include <chrono>
-#include <cstring>
+#include <opencv2/core.hpp>
+#include <opencv2/imgcodecs.hpp>
+#include <opencv2/imgproc.hpp>
 
+#include <algorithm>
+#include <cerrno>
+#include <chrono>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <ctime>
+#include <string>
+#include <utility>
+
+#include <dirent.h>
 #include <sys/mman.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 namespace upc::visual {
@@ -15,6 +30,13 @@ namespace {
 
 /* 起流重试间隔（ms）：避免 Camera 未就绪时高频打消息。 */
 constexpr uint64_t kStartRetryMs = 1000;
+
+struct DiagnosticImageSaveResult {
+    bool saved = false;
+    std::string path = "none";
+    std::string error = "none";
+    double elapsed_ms = 0.0;
+};
 
 void close_dma_fds(std::vector<int>& fds)
 {
@@ -26,6 +48,198 @@ void close_dma_fds(std::vector<int>& fds)
     fds.clear();
 }
 
+std::string diagnostic_image_dir(const char* environment_name, const char* default_path)
+{
+    const char* value = std::getenv(environment_name);
+    return value && value[0] != '\0' ? value : default_path;
+}
+
+std::string qualified_image_dir()
+{
+    return diagnostic_image_dir("FIRST_LAYER_QUALIFIED_IMAGE_DIR",
+                                rknn_first_layer_contract::kQualifiedImageDir);
+}
+
+std::string rejected_image_dir()
+{
+    return diagnostic_image_dir("FIRST_LAYER_REJECTED_IMAGE_DIR",
+                                "/home/media/first_layer_visual/rejected");
+}
+
+bool ensure_directory_tree(const std::string& path, std::string& error)
+{
+    if(path.empty() || path.front() != '/') {
+        error = "diagnostic_image_dir_must_be_absolute";
+        return false;
+    }
+    std::string current;
+    std::size_t begin = 1;
+    while(begin <= path.size()) {
+        const std::size_t end = path.find('/', begin);
+        const std::string component = path.substr(
+            begin, end == std::string::npos ? std::string::npos : end - begin);
+        if(!component.empty()) {
+            current += "/" + component;
+            if(::mkdir(current.c_str(), 0755) != 0 && errno != EEXIST) {
+                error = "mkdir_errno_" + std::to_string(errno);
+                return false;
+            }
+        }
+        if(end == std::string::npos) {
+            break;
+        }
+        begin = end + 1;
+    }
+    return true;
+}
+
+bool has_diagnostic_image_name(const std::string& name, const char* prefix)
+{
+    constexpr const char* suffix = ".jpg";
+    return name.rfind(prefix, 0) == 0 && name.size() > std::strlen(suffix) &&
+        name.compare(name.size() - std::strlen(suffix), std::strlen(suffix), suffix) == 0;
+}
+
+void prune_diagnostic_images(const std::string& directory, const char* prefix)
+{
+    DIR* handle = ::opendir(directory.c_str());
+    if(!handle) {
+        return;
+    }
+    std::vector<std::string> names;
+    while(dirent* entry = ::readdir(handle)) {
+        const std::string name(entry->d_name);
+        if(has_diagnostic_image_name(name, prefix)) {
+            names.push_back(name);
+        }
+    }
+    ::closedir(handle);
+    std::sort(names.begin(), names.end());
+    const std::size_t limit = rknn_first_layer_contract::kMaxQualifiedImages;
+    if(names.size() <= limit) {
+        return;
+    }
+    for(std::size_t index = 0; index < names.size() - limit; ++index) {
+        const std::string path = directory + "/" + names[index];
+        (void)::unlink(path.c_str());
+    }
+}
+
+std::string diagnostic_image_filename(const char* prefix, uint32_t frame_seq,
+                                      double ready_probability)
+{
+    const auto now = std::chrono::system_clock::now();
+    const auto milliseconds = std::chrono::duration_cast<std::chrono::milliseconds>(
+        now.time_since_epoch()).count() % 1000;
+    const std::time_t timestamp = std::chrono::system_clock::to_time_t(now);
+    std::tm local{};
+    (void)::localtime_r(&timestamp, &local);
+    char buffer[160]{};
+    std::snprintf(buffer, sizeof(buffer),
+        "%s_%04d%02d%02d_%02d%02d%02d_%03lld_frame_%u_p%.4f.jpg", prefix,
+        local.tm_year + 1900, local.tm_mon + 1, local.tm_mday,
+        local.tm_hour, local.tm_min, local.tm_sec,
+        static_cast<long long>(milliseconds), static_cast<unsigned>(frame_seq),
+        ready_probability);
+    return buffer;
+}
+
+DiagnosticImageSaveResult save_diagnostic(
+    const std::vector<uint8_t>& nv12, uint32_t width, uint32_t height,
+    uint32_t frame_seq, const FirstLayerDetection& detection,
+    const std::string& directory, const char* prefix)
+{
+    DiagnosticImageSaveResult result;
+    const auto begin = std::chrono::steady_clock::now();
+    try {
+        const std::size_t canonical_bytes =
+            static_cast<std::size_t>(detection.canonical_width) *
+            static_cast<std::size_t>(detection.canonical_height);
+        if(detection.canonical_width == 0 || detection.canonical_height == 0 ||
+           detection.canonical_gray.size() != canonical_bytes) {
+            result.error = "canonical_image_unavailable";
+            return result;
+        }
+
+        std::string directory_error;
+        if(!ensure_directory_tree(directory, directory_error)) {
+            result.error = directory_error;
+            return result;
+        }
+
+        cv::Mat nv12_view(static_cast<int>(height * 3u / 2u),
+                          static_cast<int>(width), CV_8UC1,
+                          const_cast<uint8_t*>(nv12.data()));
+        cv::Mat camera_bgr;
+        cv::cvtColor(nv12_view, camera_bgr, cv::COLOR_YUV2BGR_NV12);
+        const double camera_scale = std::min(1.0, 720.0 / camera_bgr.rows);
+        cv::Mat camera_panel;
+        cv::resize(camera_bgr, camera_panel, cv::Size(), camera_scale,
+                   camera_scale, cv::INTER_AREA);
+
+        cv::Mat canonical_gray(
+            static_cast<int>(detection.canonical_height),
+            static_cast<int>(detection.canonical_width), CV_8UC1,
+            const_cast<uint8_t*>(detection.canonical_gray.data()));
+        cv::Mat canonical_bgr;
+        cv::cvtColor(canonical_gray, canonical_bgr, cv::COLOR_GRAY2BGR);
+        cv::Mat canonical_panel;
+        cv::resize(canonical_bgr, canonical_panel, cv::Size(560, 560),
+                   0.0, 0.0, cv::INTER_NEAREST);
+
+        constexpr int kHeader = 52;
+        constexpr int kGap = 16;
+        constexpr int kFooter = 88;
+        const int panel_height = std::max(camera_panel.rows, canonical_panel.rows);
+        cv::Mat canvas(panel_height + kHeader + kFooter,
+                       camera_panel.cols + kGap + canonical_panel.cols,
+                       CV_8UC3, cv::Scalar(24, 24, 24));
+        camera_panel.copyTo(canvas(cv::Rect(0, kHeader,
+            camera_panel.cols, camera_panel.rows)));
+        canonical_panel.copyTo(canvas(cv::Rect(camera_panel.cols + kGap, kHeader,
+            canonical_panel.cols, canonical_panel.rows)));
+        cv::putText(canvas, "Camera frame used for detection", cv::Point(12, 34),
+                    cv::FONT_HERSHEY_SIMPLEX, 0.75, cv::Scalar(240, 240, 240), 2);
+        cv::putText(canvas, "Perspective-corrected model ROI",
+                    cv::Point(camera_panel.cols + kGap + 12, 34),
+                    cv::FONT_HERSHEY_SIMPLEX, 0.75, cv::Scalar(240, 240, 240), 2);
+        char metrics[256]{};
+        std::snprintf(metrics, sizeof(metrics),
+            "frame=%u ready=%.4f threshold=%.2f confidence=%.4f total=%.1fms",
+            static_cast<unsigned>(frame_seq), detection.ready_probability,
+            static_cast<double>(fusion_model::kReadyThreshold),
+            detection.confidence, detection.total_ms);
+        cv::putText(canvas, metrics,
+                    cv::Point(12, panel_height + kHeader + 34),
+                    cv::FONT_HERSHEY_SIMPLEX, 0.72, cv::Scalar(255, 255, 255), 2);
+        const std::string geometry = "cache=" + detection.cache_event +
+            " alignment=" + (detection.alignment_passed ? "1" : "0") +
+            " segmentation=" + (detection.segmentation_ran ? "1" : "0");
+        cv::putText(canvas, geometry,
+                    cv::Point(12, panel_height + kHeader + 70),
+                    cv::FONT_HERSHEY_SIMPLEX, 0.67, cv::Scalar(220, 220, 220), 2);
+
+        result.path = directory + "/" +
+            diagnostic_image_filename(prefix, frame_seq, detection.ready_probability);
+        const std::vector<int> parameters{cv::IMWRITE_JPEG_QUALITY, 92};
+        result.saved = cv::imwrite(result.path, canvas, parameters);
+        if(!result.saved) {
+            result.error = "opencv_imwrite_returned_false";
+            result.path = "none";
+        } else {
+            result.error = "none";
+            prune_diagnostic_images(directory, prefix);
+        }
+    } catch(const std::exception& error) {
+        result.saved = false;
+        result.path = "none";
+        result.error = error.what();
+    }
+    result.elapsed_ms = std::chrono::duration<double, std::milli>(
+        std::chrono::steady_clock::now() - begin).count();
+    return result;
+}
+
 } // namespace
 
 VisualService::~VisualService()
@@ -35,34 +249,38 @@ VisualService::~VisualService()
 
 bool VisualService::init()
 {
-    /* 先订阅响应，再发起起流请求，避免首包竞态丢失。 */
+    /* 进程常驻但默认休眠；打印开始通知到达后才向 Camera 起流。 */
     subscribe_messages();
-    send_stream_start_req();
+    UPC_LOG_VISUAL_SERVICE(Info,
+        "first layer session idle camera_stream=0 segmentation=0 inference=0");
+    UPC_LOG_VISUAL_SERVICE(Info,
+        "first layer model report_v=1 rknn_contract=%s segmentation_sha256=%s "
+        "fusion_sha256=%s ready_threshold=%.6f confidence_threshold=%.6f "
+        "ood_threshold=%.6f inset_scale=%.6f audit_interval_frames=%u "
+        "qualified_image_dir=%s rejected_image_dir=%s max_diagnostic_images=%u",
+        rknn_first_layer_contract::kContractVersion,
+        rknn_first_layer_contract::kSegmentationSha256,
+        rknn_first_layer_contract::kFusionSha256,
+        static_cast<double>(fusion_model::kReadyThreshold),
+        static_cast<double>(fusion_model::kConfidenceThreshold),
+        static_cast<double>(fusion_model::kOodThreshold),
+        static_cast<double>(rknn_first_layer_contract::kInsetScale),
+        static_cast<unsigned>(rknn_first_layer_contract::kAuditIntervalFrames),
+        qualified_image_dir().c_str(),
+        rejected_image_dir().c_str(),
+        static_cast<unsigned>(rknn_first_layer_contract::kMaxQualifiedImages));
     return true;
 }
 
 void VisualService::shutdown()
 {
-    /* 关闭顺序：先通知对端停流，再停本地线程并回收资源。 */
-    send_stream_stop_req();
-    stop_worker();
-    unmap_dma_views();
-    consumer_.close();
-    close_dma_fds(dma_fds_);
+    stop_first_layer_session("shutdown");
     subs_.clear();
 }
 
 void VisualService::tick()
 {
-    const uint64_t now = monotonic_ms();
-    std::lock_guard<std::mutex> lock(state_mtx_);
-    if(stream_up_) {
-        return;
-    }
-    if(start_req_sent_ && now - last_start_req_ms_ < kStartRetryMs) {
-        return;
-    }
-    /* 未起流成功时，按节流周期重试。 */
+    /* 空闲时此函数不会发起任何 Camera 请求。 */
     send_stream_start_req();
 }
 
@@ -74,6 +292,18 @@ void VisualService::subscribe_messages()
         middleware::ModuleId::APP_VISUAL,
         [this](const middleware::Message& msg) { on_stream_start_rsp(msg); }));
     subs_.push_back(bus.subscribe(
+        middleware::MsgType::GLAVO_Visual_FirstLayer_Session_Start_Ntf,
+        middleware::ModuleId::APP_VISUAL,
+        [this](const middleware::Message& msg) {
+            on_first_layer_session_start(msg);
+        }));
+    subs_.push_back(bus.subscribe(
+        middleware::MsgType::GLAVO_Visual_FirstLayer_Session_Stop_Ntf,
+        middleware::ModuleId::APP_VISUAL,
+        [this](const middleware::Message& msg) {
+            on_first_layer_session_stop(msg);
+        }));
+    subs_.push_back(bus.subscribe(
         middleware::MsgType::GLAVO_Visual_FirstLayer_Check_Req,
         middleware::ModuleId::APP_VISUAL,
         [this](const middleware::Message& msg) { on_first_layer_check_req(msg); }));
@@ -81,13 +311,29 @@ void VisualService::subscribe_messages()
 
 void VisualService::send_stream_start_req()
 {
+    const uint64_t now = monotonic_ms();
+    {
+        std::lock_guard<std::mutex> lock(state_mtx_);
+        if(!first_layer_session_active_ || stream_up_) {
+            return;
+        }
+        if(start_req_sent_ && now - last_start_req_ms_ < kStartRetryMs) {
+            return;
+        }
+        start_req_sent_ = true;
+        last_start_req_ms_ = now;
+    }
+
     middleware::Message msg(
         middleware::MsgType::VISUAL_Camera_Stream_Start_Req,
         middleware::ModuleId::APP_VISUAL,
         middleware::ModuleId::APP_CAMERA);
-    middleware::MsgPort::instance().publish_async(msg);
-    start_req_sent_ = true;
-    last_start_req_ms_ = monotonic_ms();
+    if(!middleware::MsgPort::instance().publish_async(msg)) {
+        std::lock_guard<std::mutex> lock(state_mtx_);
+        start_req_sent_ = false;
+        UPC_LOG_VISUAL_SERVICE(Warn,
+            "first layer camera stream start publish failed");
+    }
 }
 
 void VisualService::send_stream_stop_req()
@@ -97,6 +343,107 @@ void VisualService::send_stream_stop_req()
         middleware::ModuleId::APP_VISUAL,
         middleware::ModuleId::APP_CAMERA);
     middleware::MsgPort::instance().publish_async(msg);
+}
+
+void VisualService::on_first_layer_session_start(const middleware::Message& msg)
+{
+    (void)msg;
+    start_first_layer_session("print_start");
+}
+
+void VisualService::on_first_layer_session_stop(const middleware::Message& msg)
+{
+    (void)msg;
+    stop_first_layer_session("glavo_stop");
+}
+
+void VisualService::start_first_layer_session(const char* reason)
+{
+    bool newly_active = false;
+    uint64_t session_id = 0;
+    {
+        std::lock_guard<std::mutex> lock(state_mtx_);
+        if(!first_layer_session_active_) {
+            first_layer_session_active_ = true;
+            first_layer_session_id_ = static_cast<uint64_t>(
+                std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::system_clock::now().time_since_epoch()).count());
+            first_layer_session_passed_ = false;
+            newly_active = true;
+        }
+        session_id = first_layer_session_id_;
+    }
+    if(newly_active) {
+        std::lock_guard<std::mutex> lock(rejected_diagnostic_mtx_);
+        latest_rejected_diagnostic_ = RejectedDiagnosticCandidate{};
+        UPC_LOG_VISUAL_SERVICE(Info,
+            "first layer session start session_id=%llu reason=%s",
+            static_cast<unsigned long long>(session_id), reason);
+    }
+    send_stream_start_req();
+}
+
+void VisualService::stop_first_layer_session(const char* reason)
+{
+    bool had_activity = false;
+    bool passed = false;
+    uint64_t session_id = 0;
+    {
+        std::lock_guard<std::mutex> lock(state_mtx_);
+        had_activity = first_layer_session_active_ || stream_up_ || start_req_sent_;
+        passed = first_layer_session_passed_;
+        session_id = first_layer_session_id_;
+        first_layer_session_active_ = false;
+        start_req_sent_ = false;
+    }
+
+    if(had_activity) {
+        send_stream_stop_req();
+    }
+    stop_worker();
+    unmap_dma_views();
+    consumer_.close();
+    close_dma_fds(dma_fds_);
+    clear_latest_snapshot();
+
+    if(had_activity) {
+        DiagnosticImageSaveResult rejected_image;
+        if(!passed) {
+            RejectedDiagnosticCandidate candidate;
+            {
+                std::lock_guard<std::mutex> lock(rejected_diagnostic_mtx_);
+                candidate = std::move(latest_rejected_diagnostic_);
+                latest_rejected_diagnostic_ = RejectedDiagnosticCandidate{};
+            }
+            if(candidate.valid) {
+                rejected_image = save_diagnostic(
+                    candidate.nv12, candidate.width, candidate.height,
+                    candidate.frame_seq, candidate.detection, rejected_image_dir(), "rejected");
+            } else {
+                rejected_image.error = "no_valid_result0_snapshot";
+            }
+        }
+        UPC_LOG_VISUAL_SERVICE(Info,
+            "first layer session stop session_id=%llu reason=%s final_result=%d "
+            "camera_stream=0 rejected_image_saved=%d rejected_image_path=%s "
+            "rejected_image_save_ms=%.3f rejected_image_error=%s",
+            static_cast<unsigned long long>(session_id), reason, passed ? 1 : 0,
+            rejected_image.saved ? 1 : 0, rejected_image.path.c_str(),
+            rejected_image.elapsed_ms, rejected_image.error.c_str());
+    }
+}
+
+void VisualService::cache_final_rejected_diagnostic(
+    const std::vector<uint8_t>& nv12, uint32_t width, uint32_t height,
+    uint32_t frame_seq, const FirstLayerDetection& detection)
+{
+    std::lock_guard<std::mutex> lock(rejected_diagnostic_mtx_);
+    latest_rejected_diagnostic_.valid = true;
+    latest_rejected_diagnostic_.nv12 = nv12;
+    latest_rejected_diagnostic_.width = width;
+    latest_rejected_diagnostic_.height = height;
+    latest_rejected_diagnostic_.frame_seq = frame_seq;
+    latest_rejected_diagnostic_.detection = detection;
 }
 
 bool VisualService::read_inline_start_rsp(const middleware::Message& msg,
@@ -117,6 +464,26 @@ void VisualService::on_stream_start_rsp(const middleware::Message& msg)
         return;
     }
     info.shm_name[sizeof(info.shm_name) - 1] = '\0';
+
+    bool session_active = false;
+    {
+        std::lock_guard<std::mutex> lock(state_mtx_);
+        session_active = first_layer_session_active_;
+        if(!session_active) {
+            start_req_sent_ = false;
+        }
+    }
+    if(!session_active) {
+        std::vector<int> stale_fds;
+        if(middleware::MsgPort::instance().take_peer_dma_fds(
+               middleware::ModuleId::APP_CAMERA, stale_fds)) {
+            close_dma_fds(stale_fds);
+        }
+        send_stream_stop_req();
+        UPC_LOG_VISUAL_SERVICE(Info,
+            "ignore camera stream response outside first layer session");
+        return;
+    }
 
     /* 收到新起流响应时，先清理旧会话，保证 fd/ring 一致。 */
     stop_worker();
@@ -167,7 +534,7 @@ void VisualService::on_stream_start_rsp(const middleware::Message& msg)
         pending_start_rsp_ = info;
         pending_start_rsp_valid_ = true;
     }
-    /* 起流成功后拉起后台占位线程。 */
+    /* 起流成功后拉起后台取帧线程。 */
     stop_worker_.store(false);
     worker_ = std::thread(&VisualService::worker_thread_fn, this);
 }
@@ -186,17 +553,57 @@ void VisualService::stop_worker()
 void VisualService::worker_thread_fn()
 {
     while(!stop_worker_.load(std::memory_order_relaxed)) {
-        /* 占位进程：仅消费最新帧，维持拉流通路健康。 */
+        /* 持续消费最新帧，缓存一份不带 stride padding 的 NV12。 */
         auto frame = consumer_.acquire_latest_frame();
         if(!frame) {
             std::this_thread::sleep_for(std::chrono::milliseconds(5));
             continue;
         }
 
+        const uint32_t frame_seq = frame->seq;
         if(frame->buffer_idx < dma_fds_.size() && map_dma_views_if_needed()) {
             update_latest_snapshot(*frame);
         }
         consumer_.release_slot(frame->slot_index);
+
+        /* 分割只在缓存初始化/周期审计到期时运行，且必须先释放 Camera 槽位。 */
+        if(first_layer_detector_.geometry_observation_due(frame_seq)) {
+            std::vector<uint8_t> snapshot;
+            uint32_t width = 0;
+            uint32_t height = 0;
+            uint32_t snapshot_seq = 0;
+            if(copy_latest_snapshot(snapshot, width, height, snapshot_seq) &&
+               snapshot_seq == frame_seq) {
+                const FirstLayerGeometryObservation observation =
+                    first_layer_detector_.observe_nv12(
+                    snapshot.data(), snapshot.size(), width, height, snapshot_seq);
+                const bool geometry_changed =
+                    observation.event != last_geometry_log_event_ ||
+                    observation.reason != last_geometry_log_reason_;
+                const bool geometry_log_due = geometry_changed ||
+                    static_cast<uint32_t>(snapshot_seq - last_geometry_log_frame_) >= 300u;
+                if(observation.segmentation_ran && geometry_log_due) {
+                    if(observation.cache_available) {
+                        UPC_LOG_VISUAL_SERVICE(Info,
+                            "first layer geometry frame=%u event=%s reason=%s "
+                            "cache=1 segmentation_ms=%.3f",
+                            static_cast<unsigned>(snapshot_seq),
+                            observation.event.c_str(), observation.reason.c_str(),
+                            observation.segmentation_ms);
+                    } else {
+                        UPC_LOG_VISUAL_SERVICE(Warn,
+                            "first layer geometry frame=%u event=%s reason=%s "
+                            "cache=0 segmentation_ms=%.3f",
+                            static_cast<unsigned>(snapshot_seq),
+                            observation.event.c_str(), observation.reason.c_str(),
+                            observation.segmentation_ms);
+                    }
+                    last_geometry_log_frame_ = snapshot_seq;
+                    last_geometry_log_event_ = observation.event;
+                    last_geometry_log_reason_ = observation.reason;
+                }
+            }
+        }
     }
 }
 
@@ -292,6 +699,16 @@ void VisualService::update_latest_snapshot(const upc_ipc::IpcDmaFrameView& frame
     latest_nv12_valid_ = true;
 }
 
+void VisualService::clear_latest_snapshot()
+{
+    std::lock_guard<std::mutex> lock(frame_mtx_);
+    latest_nv12_snapshot_.clear();
+    latest_width_ = 0;
+    latest_height_ = 0;
+    latest_frame_seq_ = 0;
+    latest_nv12_valid_ = false;
+}
+
 bool VisualService::copy_latest_snapshot(std::vector<uint8_t>& out, uint32_t& width,
                                          uint32_t& height, uint32_t& frame_seq)
 {
@@ -306,18 +723,81 @@ bool VisualService::copy_latest_snapshot(std::vector<uint8_t>& out, uint32_t& wi
     return true;
 }
 
-bool VisualService::process_first_layer_image_placeholder(const std::vector<uint8_t>& nv12,
-                                                          uint32_t width, uint32_t height,
-                                                          uint32_t frame_seq)
+bool VisualService::process_first_layer_image(const std::vector<uint8_t>& nv12,
+                                              uint32_t width, uint32_t height,
+                                              uint32_t frame_seq)
 {
-    /* 预留给视觉算法同学：此处可接 OpenCV/模型推理等真实检测逻辑。 */
-    (void)nv12;
+    uint64_t session_id = 0;
+    {
+        std::lock_guard<std::mutex> lock(state_mtx_);
+        session_id = first_layer_session_id_;
+    }
+    const size_t y_bytes = static_cast<size_t>(width) * static_cast<size_t>(height);
+    const size_t expected_nv12_bytes = y_bytes * 3u / 2u;
+    if(width == 0 || height == 0 || nv12.size() != expected_nv12_bytes) {
+        UPC_LOG_VISUAL_SERVICE(Error,
+            "first layer inference report_v=1 session_id=%llu status=invalid_frame frame=%u "
+            "width=%u height=%u size=%zu expected=%zu result=0 "
+            "rejection=invalid_nv12",
+            static_cast<unsigned long long>(session_id), static_cast<unsigned>(frame_seq), static_cast<unsigned>(width),
+            static_cast<unsigned>(height), nv12.size(), expected_nv12_bytes);
+        return false;
+    }
+
+    const FirstLayerDetection detection = first_layer_detector_.predict_nv12(
+        nv12.data(), nv12.size(), width, height, frame_seq);
+    if(!detection.error.empty()) {
+        UPC_LOG_VISUAL_SERVICE(Error,
+            "first layer inference report_v=1 session_id=%llu status=inference_error frame=%u "
+            "width=%u height=%u total_ms=%.3f result=0 "
+            "rejection=inference_error error=%s",
+            static_cast<unsigned long long>(session_id), static_cast<unsigned>(frame_seq), static_cast<unsigned>(width),
+            static_cast<unsigned>(height), detection.total_ms,
+            detection.error.c_str());
+        return false;
+    }
+    DiagnosticImageSaveResult qualified_image;
+    if(detection.passed) {
+        {
+            std::lock_guard<std::mutex> lock(state_mtx_);
+            first_layer_session_passed_ = true;
+        }
+        qualified_image = save_diagnostic(
+            nv12, width, height, frame_seq, detection, qualified_image_dir(), "qualified");
+    } else {
+        cache_final_rejected_diagnostic(nv12, width, height, frame_seq, detection);
+    }
     UPC_LOG_VISUAL_SERVICE(Info,
-        "first layer placeholder invoked frame=%u %ux%u",
-        static_cast<unsigned>(frame_seq),
+        "first layer inference report_v=1 session_id=%llu status=ok frame=%u width=%u height=%u "
+        "raw_class=%s output_class=%s ready_probability=%.6f "
+        "ready_threshold=%.6f confidence=%.6f confidence_threshold=%.6f "
+        "ood=%d ood_distance=%.6f ood_threshold=%.6f alignment=%d cache=%d "
+        "cache_event=%s segmentation_ran=%d segmentation_ms=%.3f "
+        "preprocessing_ms=%.3f fusion_ms=%.3f total_ms=%.3f "
+        "rejection=%s result=%d qualified_image_saved=%d "
+        "qualified_image_path=%s image_save_ms=%.3f image_error=%s",
+        static_cast<unsigned long long>(session_id), static_cast<unsigned>(frame_seq),
         static_cast<unsigned>(width),
-        static_cast<unsigned>(height));
-    return true;
+        static_cast<unsigned>(height), detection.raw_class.c_str(),
+        detection.output_class.c_str(), detection.ready_probability,
+        static_cast<double>(fusion_model::kReadyThreshold),
+        detection.confidence,
+        static_cast<double>(fusion_model::kConfidenceThreshold),
+        detection.is_ood ? 1 : 0, detection.ood_distance,
+        static_cast<double>(fusion_model::kOodThreshold),
+        detection.alignment_passed ? 1 : 0,
+        detection.cache_available ? 1 : 0, detection.cache_event.c_str(),
+        detection.segmentation_ran ? 1 : 0, detection.segmentation_ms,
+        detection.preprocessing_ms, detection.fusion_ms, detection.total_ms,
+        detection.rejection_reasons.c_str(), detection.passed ? 1 : 0,
+        qualified_image.saved ? 1 : 0, qualified_image.path.c_str(),
+        qualified_image.elapsed_ms, qualified_image.error.c_str());
+    if(detection.passed && !qualified_image.saved) {
+        UPC_LOG_VISUAL_SERVICE(Warn,
+            "first layer qualified image save failed frame=%u error=%s",
+            static_cast<unsigned>(frame_seq), qualified_image.error.c_str());
+    }
+    return detection.passed;
 }
 
 void VisualService::on_first_layer_check_req(const middleware::Message& msg)
@@ -330,15 +810,41 @@ void VisualService::on_first_layer_check_req(const middleware::Message& msg)
         has_req = true;
     }
 
+    uint64_t session_id = 0;
+    if(has_req) {
+        bool session_active = false;
+        {
+            std::lock_guard<std::mutex> lock(state_mtx_);
+            session_active = first_layer_session_active_;
+            session_id = first_layer_session_id_;
+        }
+        if(!session_active) {
+            /* 启动通知丢失时先起流；本次无帧仍按保守策略返回 0。 */
+            start_first_layer_session("check_without_start");
+            std::lock_guard<std::mutex> lock(state_mtx_);
+            session_id = first_layer_session_id_;
+        }
+    }
+
     std::vector<uint8_t> nv12;
     uint32_t width = 0;
     uint32_t height = 0;
     uint32_t frame_seq = 0;
     bool pass = false;
-    if(copy_latest_snapshot(nv12, width, height, frame_seq)) {
-        pass = process_first_layer_image_placeholder(nv12, width, height, frame_seq);
+    if(!has_req) {
+        UPC_LOG_VISUAL_SERVICE(Warn, "first layer check invalid request payload");
+        UPC_LOG_VISUAL_SERVICE(Warn,
+            "first layer inference report_v=1 session_id=%llu status=invalid_request frame=0 "
+            "width=0 height=0 result=0 rejection=invalid_request",
+            static_cast<unsigned long long>(session_id));
+    } else if(copy_latest_snapshot(nv12, width, height, frame_seq)) {
+        pass = process_first_layer_image(nv12, width, height, frame_seq);
     } else {
         UPC_LOG_VISUAL_SERVICE(Warn, "first layer check no snapshot available");
+        UPC_LOG_VISUAL_SERVICE(Warn,
+            "first layer inference report_v=1 session_id=%llu status=no_snapshot frame=0 "
+            "width=0 height=0 result=0 rejection=no_snapshot",
+            static_cast<unsigned long long>(session_id));
     }
 
     middleware::VisualFirstLayerCheckRspPayload rsp{};
@@ -356,6 +862,10 @@ void VisualService::on_first_layer_check_req(const middleware::Message& msg)
         has_req ? 1 : 0,
         has_req ? static_cast<unsigned>(req.layer_height_um) : 0u,
         static_cast<unsigned>(rsp.result));
+
+    if(rsp.result != 0) {
+        stop_first_layer_session("first_layer_passed");
+    }
 }
 
 uint64_t VisualService::monotonic_ms()

@@ -1,6 +1,7 @@
 #ifndef UPC_VISUAL_SERVICE_HPP
 #define UPC_VISUAL_SERVICE_HPP
 
+#include "first_layer_detector.hpp"
 #include "ipc_dma_frame_ring.hpp"
 #include "msg_port.hpp"
 
@@ -8,19 +9,20 @@
 #include <cstdint>
 #include <condition_variable>
 #include <mutex>
+#include <string>
 #include <thread>
 #include <vector>
 
 namespace upc::visual {
 
 /**
- * @brief 视觉占位服务：并行订阅相机预览流并持续消费最新帧。
+ * @brief 视觉服务：并行订阅相机预览流并执行首层就绪检测。
  *
  * 数据链路：
  * 1) 通过 IPC 请求 Camera 建立 visual 专用流会话
  * 2) 从 SHM 元数据环获取最新帧索引（buffer_idx）
- * 3) 占位线程消费并释放帧槽，并缓存最新 NV12 原图
- * 4) 收到 Glavo 首层检测请求时，调用占位处理接口并回传 0/1 结果
+ * 3) 后台线程消费并释放帧槽，并缓存最新紧凑 NV12 原图
+ * 4) 收到 Glavo 首层检测请求时，使用 Y 平面运行模型并回传 0/1 结果
  */
 class VisualService {
 public:
@@ -32,7 +34,7 @@ public:
 
     bool init();
     void shutdown();
-    /** 周期驱动：流未就绪时按节流策略重发 start 请求。 */
+    /** 周期驱动：仅在首层打印会话激活且流未就绪时重发 start 请求。 */
     void tick();
 
 private:
@@ -44,20 +46,31 @@ private:
     void send_stream_stop_req();
     /** 处理 APP_Visual_Camera_Stream_Start_Rsp，并拉起 worker。 */
     void on_stream_start_rsp(const middleware::Message& msg);
+    /** 打印开始：起流并预热定位缓存；重复通知保持幂等。 */
+    void on_first_layer_session_start(const middleware::Message& msg);
+    /** 首层通过/打印结束：停流并释放 Camera 资源，保留 RKNN 上下文。 */
+    void on_first_layer_session_stop(const middleware::Message& msg);
+    void start_first_layer_session(const char* reason);
+    void stop_first_layer_session(const char* reason);
+    void clear_latest_snapshot();
     /** 处理 GLAVO_Visual_FirstLayer_Check_Req，回传检测结果。 */
     void on_first_layer_check_req(const middleware::Message& msg);
     /** 停止后台线程并重置流状态。 */
     void stop_worker();
-    /** 占位线程主循环：取最新帧、做 NV12 拷贝并释放槽位。 */
+    /** 后台线程主循环：取最新帧、做 NV12 拷贝并释放槽位。 */
     void worker_thread_fn();
     bool map_dma_views_if_needed();
     void unmap_dma_views();
     void update_latest_snapshot(const upc_ipc::IpcDmaFrameView& frame);
     bool copy_latest_snapshot(std::vector<uint8_t>& out, uint32_t& width,
                               uint32_t& height, uint32_t& frame_seq);
-    bool process_first_layer_image_placeholder(const std::vector<uint8_t>& nv12,
-                                               uint32_t width, uint32_t height,
-                                               uint32_t frame_seq);
+    bool process_first_layer_image(const std::vector<uint8_t>& nv12,
+                                   uint32_t width, uint32_t height,
+                                   uint32_t frame_seq);
+    void cache_final_rejected_diagnostic(const std::vector<uint8_t>& nv12,
+                                         uint32_t width, uint32_t height,
+                                         uint32_t frame_seq,
+                                         const FirstLayerDetection& detection);
     static void copy_nv12_tight(uint8_t* dst, const uint8_t* src_y,
                                 const uint8_t* src_uv, uint32_t src_stride_y,
                                 uint32_t width, uint32_t height);
@@ -74,6 +87,9 @@ private:
 
     /** 保护 start/stream 状态，避免 tick 与消息回调竞争。 */
     std::mutex state_mtx_;
+    bool first_layer_session_active_ = false;
+    uint64_t first_layer_session_id_ = 0;
+    bool first_layer_session_passed_ = false;
     bool start_req_sent_ = false;
     bool stream_up_ = false;
     bool pending_start_rsp_valid_ = false;
@@ -84,8 +100,24 @@ private:
     uint32_t latest_height_ = 0;
     uint32_t latest_frame_seq_ = 0;
     bool latest_nv12_valid_ = false;
+    FirstLayerDetector first_layer_detector_;
+    uint32_t last_geometry_log_frame_ = 0;
+    std::string last_geometry_log_event_;
+    std::string last_geometry_log_reason_;
 
-    /** 后台占位线程。 */
+    /** 本会话最近一次有效 result=0；会话结束仍未通过时只保存这一张诊断图。 */
+    struct RejectedDiagnosticCandidate {
+        bool valid = false;
+        std::vector<uint8_t> nv12;
+        uint32_t width = 0;
+        uint32_t height = 0;
+        uint32_t frame_seq = 0;
+        FirstLayerDetection detection;
+    };
+    std::mutex rejected_diagnostic_mtx_;
+    RejectedDiagnosticCandidate latest_rejected_diagnostic_;
+
+    /** 后台取帧线程。 */
     std::thread worker_;
     std::atomic<bool> stop_worker_{false};
 

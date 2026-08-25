@@ -1,0 +1,24 @@
+{
+  "version": "v3",
+  "target": "rk3568",
+  "ready_threshold": 0.616201,
+  "install_directory": "/opt/first_layer_rknn",
+  "models": [
+    {
+      "name": "segmentation",
+      "file": "seg.rknn",
+      "bytes": 9214745,
+      "sha256": "3222c50d46f76c8594b0355ebe3f4baacb65ae6de0e32e5895d719afc10525bf"
+    },
+    {
+      "name": "fusion",
+      "file": "fusion.rknn",
+      "bytes": 10366814,
+      "sha256": "a3f7295573288fde0976098ffe1228120025c6f54d081a45152d0a918844c358"
+    }
+  ],
+  "validation": {
+    "board_npu_self_test": "passed",
+    "real_print_acceptance": "pending"
+  }
+}
