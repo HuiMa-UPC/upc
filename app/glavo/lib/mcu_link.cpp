@@ -1138,17 +1138,9 @@ void McuLink::publish_env_update_ntf()
         return;
     }
 
-    const auto job = PrintJobState::instance().snapshot();
-    middleware::UserHomeStatus status = middleware::UserHomeStatus::Idle;
-    if(job.is_sending) {
-        status = middleware::UserHomeStatus::Printing;
-    } else if(job.job_error) {
-        status = middleware::UserHomeStatus::Error;
-    } else if(job.job_completed) {
-        status = middleware::UserHomeStatus::Ready;
-    } else if(is_tcp_connected()) {
-        status = middleware::UserHomeStatus::Ready;
-    }
+    const middleware::UserHomeStatus status = is_tcp_connected()
+        ? middleware::UserHomeStatus::Ready
+        : middleware::UserHomeStatus::Idle;
 
     middleware::EnvSnapshotPayload p{};
     std::snprintf(p.device_name, sizeof(p.device_name), "%s", upc::config::kDeviceDisplayName);
@@ -1192,17 +1184,9 @@ void McuLink::publish_env_update_ntf()
 
 void McuLink::publish_env_invalid_ntf()
 {
-    const auto job = PrintJobState::instance().snapshot();
-    middleware::UserHomeStatus status = middleware::UserHomeStatus::Idle;
-    if(job.is_sending) {
-        status = middleware::UserHomeStatus::Printing;
-    } else if(job.job_error) {
-        status = middleware::UserHomeStatus::Error;
-    } else if(job.job_completed) {
-        status = middleware::UserHomeStatus::Ready;
-    } else if(is_tcp_connected()) {
-        status = middleware::UserHomeStatus::Ready;
-    }
+    const middleware::UserHomeStatus status = is_tcp_connected()
+        ? middleware::UserHomeStatus::Ready
+        : middleware::UserHomeStatus::Idle;
 
     middleware::EnvSnapshotPayload p{};
     std::snprintf(p.device_name, sizeof(p.device_name), "%s", upc::config::kDeviceDisplayName);

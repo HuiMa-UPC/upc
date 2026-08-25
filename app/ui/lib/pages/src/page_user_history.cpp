@@ -176,12 +176,34 @@ struct HistoryCard {
 
 std::vector<HistoryCard *> g_cards;
 
+constexpr uint32_t kListBuildChunkSize = 8u;
+constexpr uint32_t kListBuildTimerMs = 12u;
+
+enum class ListBuildKind : uint8_t {
+    None = 0,
+    HistoryLike = 1,
+    Album = 2,
+};
+
+ListBuildKind g_list_build_kind = ListBuildKind::None;
+std::vector<upc::PrintHistoryEntry> g_pending_entries;
+std::vector<ui::album::PhotoEntry> g_pending_photos;
+size_t g_pending_index = 0;
+std::string g_pending_date;
+int32_t g_pending_keep_scroll = 0;
+bool g_list_building = false;
+lv_timer_t* g_list_build_timer = nullptr;
+
 /* 前向声明（定义顺序晚于调用点） */
 void set_manage_mode(bool on);
 void apply_manage_ui(void);
 void rebuild_list(void);
 void show_empty(bool empty);
 void apply_empty_copy(void);
+void stop_list_build_timer(void);
+void finish_list_build(void);
+bool append_list_build_chunk(uint32_t budget);
+void list_build_timer_cb(lv_timer_t* timer);
 
 bool card_has_delete_target(const HistoryCard* c)
 {
@@ -974,8 +996,9 @@ void card_click_cb(lv_event_t *e)
 void apply_manage_ui(void)
 {
     const bool has_cards = !g_cards.empty();
+    const bool can_manage = has_cards && !g_list_building;
     if(g_btn_manage) {
-        if(!g_manage && has_cards) {
+        if(!g_manage && can_manage) {
             lv_obj_remove_flag(g_btn_manage, LV_OBJ_FLAG_HIDDEN);
         } else {
             lv_obj_add_flag(g_btn_manage, LV_OBJ_FLAG_HIDDEN);
@@ -2005,6 +2028,91 @@ void show_empty(bool empty)
     }
 }
 
+void stop_list_build_timer(void)
+{
+    if(g_list_build_timer) {
+        lv_timer_del(g_list_build_timer);
+        g_list_build_timer = nullptr;
+    }
+    g_list_building = false;
+    g_list_build_kind = ListBuildKind::None;
+    g_pending_entries.clear();
+    g_pending_photos.clear();
+    g_pending_index = 0;
+    g_pending_date.clear();
+    g_pending_keep_scroll = 0;
+}
+
+void finish_list_build(void)
+{
+    if(g_list_build_timer) {
+        lv_timer_del(g_list_build_timer);
+        g_list_build_timer = nullptr;
+    }
+    g_list_building = false;
+    apply_manage_ui();
+    if(g_list && g_pending_keep_scroll > 0) {
+        lv_obj_update_layout(g_list);
+        const int32_t max_scroll = lv_obj_get_scroll_bottom(g_list);
+        const int32_t y = (g_pending_keep_scroll < max_scroll)
+            ? g_pending_keep_scroll
+            : max_scroll;
+        if(y > 0) {
+            lv_obj_scroll_to_y(g_list, y, LV_ANIM_OFF);
+        }
+    }
+    g_list_build_kind = ListBuildKind::None;
+    g_pending_entries.clear();
+    g_pending_photos.clear();
+    g_pending_index = 0;
+    g_pending_date.clear();
+    g_pending_keep_scroll = 0;
+}
+
+bool append_list_build_chunk(uint32_t budget)
+{
+    if(!g_list || budget == 0u) {
+        return true;
+    }
+    uint32_t built = 0u;
+    if(g_list_build_kind == ListBuildKind::Album) {
+        while(g_pending_index < g_pending_photos.size() && built < budget) {
+            build_album_entry(g_list, g_pending_photos[g_pending_index]);
+            ++g_pending_index;
+            ++built;
+        }
+        return g_pending_index >= g_pending_photos.size();
+    }
+    if(g_list_build_kind == ListBuildKind::HistoryLike) {
+        while(g_pending_index < g_pending_entries.size() && built < budget) {
+            const auto& e = g_pending_entries[g_pending_index];
+            char date_buf[32];
+            format_date(e.start_unix, date_buf, sizeof(date_buf));
+            if(g_pending_date != date_buf) {
+                g_pending_date = date_buf;
+                build_date_title(g_list, date_buf);
+            }
+            build_entry(g_list, e);
+            ++g_pending_index;
+            ++built;
+        }
+        return g_pending_index >= g_pending_entries.size();
+    }
+    return true;
+}
+
+void list_build_timer_cb(lv_timer_t* timer)
+{
+    (void)timer;
+    if(!g_history_active || !g_list || !g_list_building) {
+        stop_list_build_timer();
+        return;
+    }
+    if(append_list_build_chunk(kListBuildChunkSize)) {
+        finish_list_build();
+    }
+}
+
 /**
  * 重建整张列表。
  *
@@ -2018,6 +2126,7 @@ void rebuild_list(void)
     if(!g_list) {
         return;
     }
+    stop_list_build_timer();
     const int32_t keep_scroll = lv_obj_get_scroll_y(g_list);
 
     lv_obj_clean(g_list);
@@ -2070,10 +2179,18 @@ void rebuild_list(void)
             return;
         }
         show_empty(false);
-        for(const auto& p : photos) {
-            build_album_entry(g_list, p);
-        }
+        g_pending_keep_scroll = keep_scroll;
+        g_list_build_kind = ListBuildKind::Album;
+        g_pending_photos = photos;
+        g_pending_index = 0;
+        g_list_building = true;
         apply_manage_ui();
+        if(append_list_build_chunk(kListBuildChunkSize * 2u)) {
+            finish_list_build();
+        } else {
+            g_list_build_timer = lv_timer_create(
+                list_build_timer_cb, kListBuildTimerMs, nullptr);
+        }
         return;
     }
 
@@ -2083,28 +2200,18 @@ void rebuild_list(void)
         return;
     }
     show_empty(false);
-
-    /* 按自然日分组：日期变了就先插一条分组标题 */
-    std::string cur_date;
-    for(const upc::PrintHistoryEntry &e : visible_entries) {
-        char date_buf[32];
-        format_date(e.start_unix, date_buf, sizeof(date_buf));
-        if(cur_date != date_buf) {
-            cur_date = date_buf;
-            build_date_title(g_list, date_buf);
-        }
-        build_entry(g_list, e);
-    }
+    g_pending_keep_scroll = keep_scroll;
+    g_list_build_kind = ListBuildKind::HistoryLike;
+    g_pending_entries = std::move(visible_entries);
+    g_pending_index = 0;
+    g_pending_date.clear();
+    g_list_building = true;
     apply_manage_ui();
-
-    if(keep_scroll > 0) {
-        lv_obj_update_layout(g_list);
-        /* 此刻列表停在顶部，scroll_bottom 就是最大可滚量 */
-        const int32_t max_scroll = lv_obj_get_scroll_bottom(g_list);
-        const int32_t y = (keep_scroll < max_scroll) ? keep_scroll : max_scroll;
-        if(y > 0) {
-            lv_obj_scroll_to_y(g_list, y, LV_ANIM_OFF);
-        }
+    if(append_list_build_chunk(kListBuildChunkSize * 2u)) {
+        finish_list_build();
+    } else {
+        g_list_build_timer = lv_timer_create(
+            list_build_timer_cb, kListBuildTimerMs, nullptr);
     }
 }
 
@@ -2232,6 +2339,7 @@ void page_user_history_refresh(bool force)
 
 void page_user_history_exit(void)
 {
+    stop_list_build_timer();
     g_history_active = false;
     close_del_dlg();
     set_manage_mode(false);
@@ -2240,6 +2348,7 @@ void page_user_history_exit(void)
 
 lv_obj_t *page_user_history_create(lv_obj_t *parent)
 {
+    stop_list_build_timer();
     g_page        = nullptr;
     g_list        = nullptr;
     g_scroll_btns = nullptr;
