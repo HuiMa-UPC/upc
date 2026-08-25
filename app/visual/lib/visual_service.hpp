@@ -8,6 +8,7 @@
 #include <atomic>
 #include <cstdint>
 #include <condition_variable>
+#include <deque>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -38,6 +39,13 @@ public:
     void tick();
 
 private:
+    struct FrameSnapshot {
+        std::vector<uint8_t> nv12;
+        uint32_t width = 0;
+        uint32_t height = 0;
+        uint32_t frame_seq = 0;
+    };
+
     /** 注册视觉流起流响应回调。 */
     void subscribe_messages();
     /** 请求 Camera 开启 visual 并行流。 */
@@ -52,6 +60,9 @@ private:
     void on_first_layer_session_stop(const middleware::Message& msg);
     void start_first_layer_session(const char* reason);
     void stop_first_layer_session(const char* reason);
+    void send_reference_ready_rsp(bool ready, uint32_t frame_seq,
+                                  const std::string& reason);
+    void try_capture_bare_reference(const FrameSnapshot& frame);
     void clear_latest_snapshot();
     /** 处理 GLAVO_Visual_FirstLayer_Check_Req，回传检测结果。 */
     void on_first_layer_check_req(const middleware::Message& msg);
@@ -64,9 +75,8 @@ private:
     void update_latest_snapshot(const upc_ipc::IpcDmaFrameView& frame);
     bool copy_latest_snapshot(std::vector<uint8_t>& out, uint32_t& width,
                               uint32_t& height, uint32_t& frame_seq);
-    bool process_first_layer_image(const std::vector<uint8_t>& nv12,
-                                   uint32_t width, uint32_t height,
-                                   uint32_t frame_seq);
+    bool copy_recent_snapshots(std::vector<FrameSnapshot>& out);
+    bool process_first_layer_frames(const std::vector<FrameSnapshot>& frames);
     void cache_final_rejected_diagnostic(const std::vector<uint8_t>& nv12,
                                          uint32_t width, uint32_t height,
                                          uint32_t frame_seq,
@@ -90,6 +100,10 @@ private:
     bool first_layer_session_active_ = false;
     uint64_t first_layer_session_id_ = 0;
     bool first_layer_session_passed_ = false;
+    bool reference_capture_pending_ = false;
+    uint64_t last_reference_capture_attempt_ms_ = 0;
+    uint64_t last_reference_failure_report_ms_ = 0;
+    std::string last_reference_failure_reason_;
     bool start_req_sent_ = false;
     bool stream_up_ = false;
     bool pending_start_rsp_valid_ = false;
@@ -100,6 +114,10 @@ private:
     uint32_t latest_height_ = 0;
     uint32_t latest_frame_seq_ = 0;
     bool latest_nv12_valid_ = false;
+    std::deque<FrameSnapshot> recent_snapshots_;
+    uint32_t last_temporal_frame_seq_ = 0;
+    /** 串行化后台定位审计与检测请求，RKNN/定位缓存不是并发接口。 */
+    std::mutex detector_mtx_;
     FirstLayerDetector first_layer_detector_;
     uint32_t last_geometry_log_frame_ = 0;
     std::string last_geometry_log_event_;
