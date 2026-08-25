@@ -187,7 +187,6 @@ void ui_user_make_tab_item(lv_obj_t *parent, const char *text,
     /* 稿上 Tab 文字是 16；user_font_text 在 1280 档是 18，故取 text_sm（该档稿值 16）。
      * 其余档位 text_sm == text，观感不变。 */
     lv_obj_set_style_text_font(lbl, user_font_text_sm(), 0);
-    lv_obj_align(lbl, LV_ALIGN_TOP_MID, 0, 0);
 
     /* 量出文字宽度后把项宽写死：SIZE_CONTENT 的容器里放百分比宽的子对象会互相
      * 依赖（下划线要按文字宽算，文字宽又决定容器宽），量一次直接给定值最省心。 */
@@ -195,12 +194,26 @@ void ui_user_make_tab_item(lv_obj_t *parent, const char *text,
     const int32_t txt_w = lv_obj_get_width(lbl);
     lv_obj_set_width(item, txt_w);
 
+    /*
+     * 「文字居中 + 下划线紧跟其下」的相对关系，而不是稿上那套「文字贴行顶 + 下划线
+     * 贴行底」的绝对定位。
+     *
+     * 绝对定位只在行高恰为稿值（1280 档 40）时成立：行高一改，多出来的空档全落在文字
+     * 与下划线之间——文字看着偏上、下划线掉到行底，命中区中心还会被拖到文字中心下方
+     * 一截（而 ext_click_area 是四边等量的，治不了这种不对称偏差）。改成相对关系后，
+     * 整组随行高居中，三个档位与任何行高都不散架。
+     */
+    const int32_t mark_h = 2;
+    const int32_t mark_gap = USER_PAD_SM / 2;
+    lv_obj_align(lbl, LV_ALIGN_CENTER, 0, -(mark_h + mark_gap) / 2);
+
     lv_obj_t *mark = lv_obj_create(item);
     lv_obj_remove_style_all(mark);
-    lv_obj_set_size(mark, txt_w / 2, 2);   /* 稿里下划线是文字宽的一半、居中 */
+    lv_obj_set_size(mark, txt_w / 2, mark_h);   /* 稿里下划线是文字宽的一半、居中 */
     lv_obj_set_style_bg_color(mark, user_color_accent, 0);
     lv_obj_set_style_bg_opa(mark, LV_OPA_COVER, 0);
-    lv_obj_align(mark, LV_ALIGN_BOTTOM_MID, 0, 0);
+    /* align_to 自己会先 update_layout，故不必在此额外补一次 */
+    lv_obj_align_to(mark, lbl, LV_ALIGN_OUT_BOTTOM_MID, 0, mark_gap);
 
     if(out_root) {
         *out_root = item;

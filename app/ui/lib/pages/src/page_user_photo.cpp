@@ -787,7 +787,7 @@ lv_obj_t* page_user_photo_create(lv_obj_t* parent)
     lv_obj_set_style_text_font(sub, user_font_caption(), 0);
     g_sub_lbl = sub;
 
-    const int32_t btn_sz = USER_BACK_BTN_H;
+    const int32_t btn_sz = user_media_btn_size();
     lv_obj_t* close = ui_user_make_overlay_round_btn(ov, LV_SYMBOL_CLOSE, btn_sz,
                                                      on_close_click, nullptr);
     lv_obj_align(close, LV_ALIGN_TOP_RIGHT, -USER_PAD, USER_PAD);

@@ -44,6 +44,18 @@ const lv_color_t user_color_status_err = LV_COLOR_MAKE(0xff, 0x4d, 0x4d);
  *  两者只隔 32。原先共用 user_topbar_h，页面内容被压到 128 起、比稿低 16；
  *  单把该字段改成 112 又会让设备名那行跟着上移 8。故 128 留给设备条，
  *  112 独立成本字段。1920 档 ×1.5 给 168，1024 档按 600/800 折算 84。
+ *
+ *  ---- 触摸尺寸的刻意偏稿（只在 1280 档） ----
+ *  下面三个值为触摸可用性上调，**已不再是稿值**，别按稿又调回去：
+ *    user_hist_tab_h  40 → 52   Tab 行高 = Tab 项命中高 = Manage 系列按钮高
+ *    user_hist_btn_w 100 → 128  Manage 系列按钮宽
+ *    user_media_btn_h  新 = 56  全屏媒体页浮层圆钮（稿上无此项，原先取 44）
+ *  实测 40/100 在 1280×800 上偏小：Tab 项宽被写死成文字实宽、左右零内距，且文字
+ *  ALIGN_TOP_MID 贴顶使命中区中心比文字视觉中心偏下；浮层圆钮又都贴屏幕边缘。
+ *  横向放得下：Tab 行可用宽 1120（= 1280 − 48 − 112），管理态占用约 775 + 84
+ *  （三个按钮各 +28），仍余约 260。
+ *  **1920 / 1024 两档未动**（user_media_btn_h 给 0 即沿用 user_back_btn_h），
+ *  换档前需要按那一档的实屏重新评估。
  * ============================================================================ */
 static const ui_theme_t s_theme_1920 = {
     /* 开发者 Shell */
@@ -127,6 +139,7 @@ static const ui_theme_t s_theme_1920 = {
     /* user_metric_icon_sz    */ 48,   /* 稿 32@1280 × 1.5 */
     /* user_back_btn_w        */ 180,
     /* user_back_btn_h        */ 64,
+    /* user_media_btn_h       */ 0,    /* 本档未单独调，沿用 user_back_btn_h */
     /* user_sensor_strip_h    */ 120,
     /* user_scroll_btn_sz     */ 0,    /* 无稿，沿用旧式 64*5/4 = 80 */
     /* user_scroll_btn_gap    */ 0,    /* 无稿，沿用旧式 USER_PAD_LG */
@@ -289,6 +302,7 @@ static const ui_theme_t s_theme_1280 = {
     /* user_metric_icon_sz    */ 32,   /* 稿值 */
     /* user_back_btn_w        */ 128,
     /* user_back_btn_h        */ 44,
+    /* user_media_btn_h       */ 56,   /* 触摸可用性上调（稿无此项）：44 偏小且都贴屏幕边缘 */
     /* user_sensor_strip_h    */ 84,
     /* user_scroll_btn_sz     */ 64,   /* 稿值（三页一致） */
     /* user_scroll_btn_gap    */ 160,  /* 稿值（历史页 / 消息页） */
@@ -340,13 +354,13 @@ static const ui_theme_t s_theme_1280 = {
     /* user_env_col_w             */ 64,   /* 稿值（caption 降到 caption_sm 后四列都进） */
 
     /* 打印历史页（稿 4366:5400 原生 1280 档，直接取稿值） */
-    /* user_hist_tab_h            */ 40,
+    /* user_hist_tab_h            */ 52,   /* 触摸可用性上调，原稿值 40（见文件头说明） */
     /* user_hist_card_h           */ 160,
     /* user_hist_banner_h         */ 42,
     /* user_hist_bar_w            */ 160,
     /* user_hist_bar_h            */ 8,
     /* user_hist_check_sz         */ 24,
-    /* user_hist_btn_w            */ 100,
+    /* user_hist_btn_w            */ 128,  /* 触摸可用性上调，原稿值 100（见文件头说明） */
     /* user_hist_pad_l            */ 48,   /* 稿：Tab 文字 x=176 − 侧栏 128 */
     /* user_hist_list_pad_l       */ 64,   /* 稿：卡片 x=192 − 侧栏 128 */
 
@@ -457,6 +471,7 @@ static const ui_theme_t s_theme_1024 = {
                                         * 的字号显大，仍按折算值 */
     /* user_back_btn_w        */ 102,
     /* user_back_btn_h        */ 40,
+    /* user_media_btn_h       */ 0,    /* 本档未单独调，沿用 user_back_btn_h */
     /* user_sensor_strip_h    */ 68,
     /* user_scroll_btn_sz     */ 0,    /* 无稿，沿用旧式 40*5/4 = 50 */
     /* user_scroll_btn_gap    */ 0,    /* 无稿，沿用旧式 USER_PAD_LG */
@@ -641,6 +656,12 @@ void ui_theme_init(void)
     lv_style_set_shadow_width(&s_user_btn_ghost, 0);
     lv_style_set_pad_hor(&s_user_btn_ghost, USER_PAD);
     lv_style_set_pad_ver(&s_user_btn_ghost, USER_PAD_SM);
+}
+
+int32_t user_media_btn_size(void)
+{
+    return g_ui->user_media_btn_h > 0 ? g_ui->user_media_btn_h
+                                      : g_ui->user_back_btn_h;
 }
 
 const lv_font_t *ui_font_body(void)        { return g_ui->font_body; }

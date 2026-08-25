@@ -74,12 +74,15 @@ lv_obj_t *ui_user_make_overlay_round_btn(lv_obj_t *parent, const char *sym,
 #define UI_USER_MIN_TOUCH  48
 
 /**
- * 顶部 Tab 项：文字贴顶 + 主色下划线贴底（下划线宽度取文字的一半，与稿一致）。
+ * 顶部 Tab 项：文字居中 + 主色下划线紧跟其下（下划线宽度取文字的一半，与稿一致）。
  *
  * 历史页与消息页共用；原先两页各写一份**字面重复**的实现，改一处要同步改两遍。
  *
- * 命中区外扩 USER_PAD_SM：项宽被写死成文字实宽（左右零内距）、行高仅
- * USER_HIST_TAB_H，且文字贴顶使命中区竖直中心比文字视觉中心偏下，不外扩很难点中。
+ * 竖直排布是「整组居中」的相对关系而非稿上的绝对定位——原因见实现里的注释，
+ * 一句话：绝对定位只在行高恰为稿值时成立，行高一改文字就偏上、命中区就偏下。
+ *
+ * 命中区另外外扩 USER_PAD_SM：项宽被写死成文字实宽（左右零内距），Tab 之间那段
+ * 间距全是死区，不外扩横向很难点中。
  *
  * @param user_data 随 LV_EVENT_CLICKED 回传给 cb（两页都传 Tab 下标）
  * @param out_root / out_label / out_mark 均可为 NULL；下划线建出来是显示态，
