@@ -95,7 +95,7 @@
 | `user_settings` | `page_user_settings.*` | 设置列表 + 开发者密码弹窗 |
 | `user_message` | `page_user_message.*` | 消息中心：日期分组混排列表（MCU 报警 + 设备事件）+ 左滑删除历史 + 详情抽屉（Reset 三态） |
 | `user_timelapse` | `page_user_timelapse.*` | 延时摄影播放器（隐藏页，历史缩略图进入；全屏 `lv_layer_top`） |
-| `user_photo` | `page_user_photo.*` | 相册全屏浏览器（隐藏页，历史页 Album 缩略图进入；滑动/箭头翻页 + 首末回绕） |
+| `user_photo` | `page_user_photo.*` | 相册全屏浏览器（隐藏页，历史页 Album 缩略图进入；滑动/箭头翻页 + 首末回绕 + 窗口化 filmstrip；翻页判据「距离 or 轻扫」+ 滑入动画） |
 
 注册入口：`ui_app.cpp`（不在 `main.cpp` include 各页面头）。隐藏页（`user_files`/`user_debug`/`user_timelapse`/`user_photo`）经 `register_hidden_page` 注册、`switch_to` 进入。
 

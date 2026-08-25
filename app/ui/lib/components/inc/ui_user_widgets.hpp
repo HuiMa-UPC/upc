@@ -53,12 +53,42 @@ lv_obj_t *ui_user_make_divider_vline(lv_obj_t *parent, lv_coord_t height);
 /**
  * 全屏媒体浮层上的圆形按钮：半透明黑底 + 白色符号，FLOATING（不参与父 flex 排布）。
  * 延时摄影播放器与相册浏览器的关闭/播放/翻页钮共用一套观感。
+ *
+ * 尺寸小于 UI_USER_MIN_TOUCH 时自动外扩命中区补足差额，视觉尺寸不变——见该宏的注释。
+ *
  * @param sym      LV_SYMBOL_* 文本
  * @param out_icon 非 NULL 时回传内部 label，供调用方改字号或后续换符号
  */
 lv_obj_t *ui_user_make_overlay_round_btn(lv_obj_t *parent, const char *sym,
                                          int32_t size, lv_event_cb_t cb,
                                          lv_obj_t **out_icon);
+
+/**
+ * 最小舒适触摸目标（px）。
+ *
+ * 视觉尺寸是设计稿的事，命中区是可用性的事，两者不必绑在一起：1024 档
+ * USER_BACK_BTN_H 只有 40，低于这个值，而那些圆钮又都贴在屏幕边缘。外扩命中区还
+ * 顺带放宽了「手指仍算在对象内」的判定——LVGL 手指移出对象会发 PRESS_LOST 取消点击，
+ * 小按钮上轻微的手指漂移就够触发，表现就是「点了没反应」。
+ */
+#define UI_USER_MIN_TOUCH  48
+
+/**
+ * 顶部 Tab 项：文字贴顶 + 主色下划线贴底（下划线宽度取文字的一半，与稿一致）。
+ *
+ * 历史页与消息页共用；原先两页各写一份**字面重复**的实现，改一处要同步改两遍。
+ *
+ * 命中区外扩 USER_PAD_SM：项宽被写死成文字实宽（左右零内距）、行高仅
+ * USER_HIST_TAB_H，且文字贴顶使命中区竖直中心比文字视觉中心偏下，不外扩很难点中。
+ *
+ * @param user_data 随 LV_EVENT_CLICKED 回传给 cb（两页都传 Tab 下标）
+ * @param out_root / out_label / out_mark 均可为 NULL；下划线建出来是显示态，
+ *        选中样式由调用方的 apply_tab_style() 维护
+ */
+void ui_user_make_tab_item(lv_obj_t *parent, const char *text,
+                           lv_event_cb_t cb, void *user_data,
+                           lv_obj_t **out_root, lv_obj_t **out_label,
+                           lv_obj_t **out_mark);
 
 /**
  * A8 图标盒：外层固定 target×target 占位（避免大尺寸源图在 flex 里撑开父容器），

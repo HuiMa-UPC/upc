@@ -145,6 +145,10 @@ lv_obj_t *ui_user_make_overlay_round_btn(lv_obj_t *parent, const char *sym,
     lv_obj_set_style_bg_opa(btn, LV_OPA_40, 0);
     lv_obj_set_style_bg_opa(btn, LV_OPA_60, LV_STATE_PRESSED);
     lv_obj_add_flag(btn, LV_OBJ_FLAG_FLOATING);
+    /* 只补到 UI_USER_MIN_TOUCH 为止：外扩是四边等量的，给多了会和相邻控件的命中区打架 */
+    if(size < UI_USER_MIN_TOUCH) {
+        lv_obj_set_ext_click_area(btn, (UI_USER_MIN_TOUCH - size + 1) / 2);
+    }
     if(cb) {
         lv_obj_add_event_cb(btn, cb, LV_EVENT_CLICKED, nullptr);
     }
@@ -157,6 +161,56 @@ lv_obj_t *ui_user_make_overlay_round_btn(lv_obj_t *parent, const char *sym,
         *out_icon = icon;
     }
     return btn;
+}
+
+void ui_user_make_tab_item(lv_obj_t *parent, const char *text,
+                           lv_event_cb_t cb, void *user_data,
+                           lv_obj_t **out_root, lv_obj_t **out_label,
+                           lv_obj_t **out_mark)
+{
+    lv_obj_t *item = lv_obj_create(parent);
+    lv_obj_remove_style_all(item);
+    lv_obj_set_size(item, LV_SIZE_CONTENT, LV_PCT(100));
+    lv_obj_set_style_bg_opa(item, LV_OPA_TRANSP, 0);
+    lv_obj_clear_flag(item, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(item, LV_OBJ_FLAG_CLICKABLE);
+    /* 命中区外扩（不改布局与视觉）：横向把 Tab 之间那段死区覆盖上，竖向把文字上方
+     * 也纳进来。外扩量取 USER_PAD_SM，小于 Tab 间距 USER_PAD_LG 的一半，故相邻两项
+     * 的命中区不会重叠。 */
+    lv_obj_set_ext_click_area(item, USER_PAD_SM);
+    if(cb) {
+        lv_obj_add_event_cb(item, cb, LV_EVENT_CLICKED, user_data);
+    }
+
+    lv_obj_t *lbl = lv_label_create(item);
+    lv_label_set_text(lbl, text);
+    /* 稿上 Tab 文字是 16；user_font_text 在 1280 档是 18，故取 text_sm（该档稿值 16）。
+     * 其余档位 text_sm == text，观感不变。 */
+    lv_obj_set_style_text_font(lbl, user_font_text_sm(), 0);
+    lv_obj_align(lbl, LV_ALIGN_TOP_MID, 0, 0);
+
+    /* 量出文字宽度后把项宽写死：SIZE_CONTENT 的容器里放百分比宽的子对象会互相
+     * 依赖（下划线要按文字宽算，文字宽又决定容器宽），量一次直接给定值最省心。 */
+    lv_obj_update_layout(item);
+    const int32_t txt_w = lv_obj_get_width(lbl);
+    lv_obj_set_width(item, txt_w);
+
+    lv_obj_t *mark = lv_obj_create(item);
+    lv_obj_remove_style_all(mark);
+    lv_obj_set_size(mark, txt_w / 2, 2);   /* 稿里下划线是文字宽的一半、居中 */
+    lv_obj_set_style_bg_color(mark, user_color_accent, 0);
+    lv_obj_set_style_bg_opa(mark, LV_OPA_COVER, 0);
+    lv_obj_align(mark, LV_ALIGN_BOTTOM_MID, 0, 0);
+
+    if(out_root) {
+        *out_root = item;
+    }
+    if(out_label) {
+        *out_label = lbl;
+    }
+    if(out_mark) {
+        *out_mark = mark;
+    }
 }
 
 lv_obj_t *ui_user_make_icon_img(lv_obj_t *parent, const lv_image_dsc_t *src,

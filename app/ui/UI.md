@@ -1060,7 +1060,7 @@ rongsu_camera 经主 IPC（/tmp/upc_camera.sock）SCM_RIGHTS 附带 dma_buf fd �
 |------|------|------|
 | `page_user_history` | `pages/page_user_history.*` | 读 `/home/media/video/config.json`（`common/fs_manifest/print_history_manifest`）→ 按 `start_unix` 倒序、按自然日分组的卡片列表；缩略图 `A:/home/media/video/{thumb}`（RTHM 解码，`LV_IMAGE_ALIGN_COVER`）；**Album** 走 `ui::album::scan()` 扫 `/home/media/photo`，缩略图优先同名 `.rthm`；顶部三 Tab + Storage 容量条；管理（多选）模式批量删除；上下翻页；**左滑删除**（跟手拖动，见「左滑删除：跟手拖动」一节）→ History/Timelapse **按类型独立删除**后重写 config.json；Album 删 PNG + 配对 `.rthm` |
 | `page_user_timelapse` | `pages/page_user_timelapse.*` | 全屏播放页（建于 `lv_layer_top()`）：受 `UPC_TIMELAPSE_PLAYBACK_PNG` 控制——默认 PNG 序列；`=0` 时优先 `timelapse.mp4`（失败回退 PNG）；拖动预览为后台小图 scrub，松手后再 settle 主画面 |
-| `page_user_photo` | `pages/page_user_photo.*` | 相册全屏浏览器（同建于 `lv_layer_top()`，与播放器同一套 chrome）：主图 `LV_IMAGE_ALIGN_CONTAIN`，左右滑动 / 两侧箭头翻页、首末循环回绕，单击主图切控件层 |
+| `page_user_photo` | `pages/page_user_photo.*` | 相册全屏浏览器（同建于 `lv_layer_top()`，与播放器同一套 chrome）：主图 `LV_IMAGE_ALIGN_CONTAIN`，左右滑动 / 两侧箭头翻页、首末循环回绕，底部 filmstrip 点格跳转，单击主图切控件层 |
 
 - **进入/退出**：历史页缩略图点击 → `page_user_timelapse_set_source(目录,mp4路径,标题,时间)` + `switch_to("user_timelapse")`；Album 照片 → `page_user_photo_set_source(照片绝对路径)` + `switch_to("user_photo")`；两者关闭均 → `switch_to("user_history")`。
 - **LVGL 线程规则**：PNG 序列播放由主线程 `lv_timer` 换主画面；拖动预览解码在后台线程，经 `lv_async_call` 贴预览框。
@@ -1071,10 +1071,20 @@ rongsu_camera 经主 IPC（/tmp/upc_camera.sock）SCM_RIGHTS 附带 dma_buf fd �
 - **画面分两拍上**：先贴配对 `.rthm` 缩略图顶住（自定义 decoder 只是读文件 + memcpy，几乎零成本），后台解完再换清晰图；无 `.rthm` 时显示 `Loading...` 而不是在主线程抢着解原图。
 - **解码目标尺寸只能运行时算**：主题分 1920/1280/1024 三档且按实际 display 最长边挑（`ui_theme.cpp` 的 `pick_profile()`），所以 box 取 `lv_display_get_*_resolution()`，不能写成编译期常量。竖构图照片贴合横屏后左右各留约 1/4 屏宽黑边，**两侧箭头正落在黑边上**，这是设计选择。
 - **线程与生命周期**：`PhotoDecoder` 后台线程解码、latest-wins（世代号对不上就丢），经 `lv_async_call` 投递且合并成一次；与 `VideoPlayer` 的双缓冲翻页不同——相册每张照片几何可能不同，`dsc` 的 w/h/stride 必须由**主线程**在 `async_apply` 里发布（LVGL 是在绘制时刻读 dsc 的）。页面对象由 `PageManager` 惰性建出后**永不销毁**，故 `page_user_photo_exit()` 必须先 `lv_image_set_src(img, nullptr)` 再 `PhotoDecoder::release()`（顺序反了下一帧会读到已释放内存）。
-- **滑动手势不用 `LV_EVENT_GESTURE`**：与历史页左滑删除同一套理由（见「左滑删除：跟手拖动」），手写 `PRESSED/PRESSING/RELEASED/PRESS_LOST` 四件套 + 起拖阈值 + 方向锁定，并靠 `just_dragged` 吃掉松手时那一下 `CLICKED`，否则每滑一次会顺带闪一下控件层。横向位移过屏宽 1/4 才翻页，否则弹回。
+- **滑动手势不用 `LV_EVENT_GESTURE`**：与历史页左滑删除同一套理由（见「左滑删除：跟手拖动」），手写 `PRESSED/PRESSING/RELEASED/PRESS_LOST` 四件套 + 起拖阈值 + 方向锁定，并靠 `just_dragged` 吃掉松手时那一下 `CLICKED`，否则每滑一次会顺带闪一下控件层。
+- **翻页判据是「距离 or 轻扫」两条**，缺一不可：只看距离（屏宽 1/5）的话快速短扫会被判成没动、手感发滞；只看速度的话慢慢拖过半屏反而翻不了页。轻扫阈值 600px/s 且至少 24px 位移（挡住原地手抖）。速度取按下到松手的**平均值**而非瞬时值——轻扫本就是一气呵成的短手势，两者接近，做瞬时速度得留位置历史，不值当。
+- **两处手感细节**：跟手位移要**扣掉起拖阈值**（`shift = dx ∓ kSwipeStartPx`），否则判定成立那一帧画面会突然跳 12px；翻页与弹回都走 `lv_anim` ease-out（`kSlideMs`）而不是瞬间归位。因为只有一个 `lv_image`，做不出「旧图滑出 + 新图滑入」的双图轮播，退一步只做**滑入**，方向跟手——观感已经连贯，且不必多养一份解码缓冲。跟手拖动前要 `stop_shift_anim()` 掐掉上一次的滑入动画，离页同理。
 - **非 PNG 的兜底**：后台解码只吃 PNG（libpng）。`ui::album::is_photo_file()` 还收 `.jpg/.jpeg/.bmp/.webp`，前三者由 `PhotoDecoder` 回一个空 image、页面转交 LVGL 内置 TJPGD / BMP 同步解；`.webp` 当前无解码器，先用 `lv_image_decoder_get_info()` 问一遍，认不出来就显示 `Cannot display this photo`，不留黑屏。
 - **列表与浏览器必须同序**：枚举/排序/配对 `.rthm` 统一在 `ui::album::scan()`（`core/album_index.*`），历史页 `rebuild_list()` 与本页 `refresh()` 都调它。两处各自扫目录的话，「下一张」会和列表看到的顺序错位。落点照片若在此期间被删（`index_of` 返回 `kInvalidIndex`），退到最新一张。
-- **共用 chrome**：半透明黑底圆形浮层按钮抽成 `ui_user_make_overlay_round_btn()`（`components/ui_user_widgets.*`），播放器与浏览器共用；原先只存在于播放器的匿名 namespace 里。
+- **共用 chrome**：半透明黑底圆形浮层按钮抽成 `ui_user_make_overlay_round_btn()`（`components/ui_user_widgets.*`），播放器与浏览器共用；原先只存在于播放器的匿名 namespace 里。尺寸不足 `UI_USER_MIN_TOUCH` 时该函数自动外扩命中区，见下面「触摸命中区」一节。
+- **filmstrip（底部横向缩略图条）**：
+  - **格子固定数量、只换绑定**：格数按屏宽算（`(屏宽×4/5) / (格宽+间距)`，强制奇数好让当前格居中，夹在 3..15），`create()` 里建一次，之后 `update_strip()` 只改各格绑定的照片下标——绑定没变就不重读。格几何无设计稿，沿用历史页缩略图的 8:5、高取卡高的 2/5。
+  - **`.rthm` 像素常驻内存，不给 lv_image 指文件路径**：缓存关闭下指路径会让每帧重绘都重新「读 136KB + `lv_draw_buf_create`」，一排格子同时重绘就是几十 MB/s 的无谓 IO。读进内存后滚动零 IO，只剩 LVGL 那点缩放（输出才几千像素，可忽略）。常驻量 = 格数 × 约 136KB，有界。
+  - **`std::vector<std::unique_ptr<StripCell>>` 不是随手写的**：`lv_image` 持有 `&dsc` 裸地址，vector 扩容搬家会让它悬空，所以格子地址必须稳定。
+  - **窗口在两端夹住而不回绕**（尽管翻页本身回绕）：在列表头把末尾几张拼到左边会看着像跳接，而此刻用户并不知道自己已经在头上。照片数少于格数时多余格子 `HIDDEN`，flex 自动跳过、整条变短。
+  - **不做用户横向滚动**：窗口始终跟着当前索引走，滑主图时整条自动平移。这样既不必虚拟化一个可滚容器，也没有「条的横向滚动」与「主图横向滑动」的轴向之争。
+  - **格子自己消费点击**：格子 `CLICKABLE` + 自带回调，格内图片加 `EVENT_BUBBLE` 让点击落到格子上（注意别照抄历史页缩略图那句 bubble 的用意——那里是要冒到卡片）。条本身与 overlay 都不可点，缝隙处的点击穿透到主图去切控件层。主图是 overlay 的**兄弟**而非父级，所以格子的点击不可能误伤主图。
+  - 只有一张（或没有）照片时整条藏掉；离页 `release_strip()` 把各格像素还掉。
 
 ### 设置页布局（稿 3238:14296）
 
@@ -1233,7 +1243,31 @@ padding 24、圆角 8、图标 32、图标↔文字 24、标题 20、右箭头 2
 | `Layers` | 显示 `--` | manifest 加层数字段（Camera 可取换层 Snap 的最大 `layer_index`） |
 | Storage 容量 | `page_user_history.cpp` 顶部 `kStorageUsedMB/kStorageTotalMB` 常量占位 | 接上报后改 `storage_used_mb()/storage_total_mb()` 两个取数函数即可 |
 | Timelapse / Album | 已按 Tab 分支：Timelapse 读 manifest；Album 走 `ui::album::scan()` 扫 `/home/media/photo`（缩略图优先 `.rthm`），点开进 `user_photo` 全屏浏览器 | — |
-| 相册 filmstrip | 未做：`user_photo` 目前靠滑动/箭头 + 副标题的「第几 / 共几」导航 | 底部横向缩略图条；**必须窗口化**（只建当前索引 ±N 格并回收）——`/home/media/photo` 无上限也无清理，单张 `.rthm` 约 136KB（240 宽封顶，见 `CAMERA_PRINT_VIDEO_THUMB_MAX_W`），且缓存关闭时每帧重绘都要重读文件 |
+| 相册 filmstrip | 已做：窗口化的底部缩略图条（格数按屏宽算，`.rthm` 常驻内存），见上一节 | — |
+| 相册容量 | `/home/media/photo` **无上限也无清理**（全工程只有 Media 建目录/写文件、UI 扫目录三处碰它），照片只会堆到用户手动删或盘满；`media_paths.hpp` 预留的 `UPC_PHOTO_CONFIG` 至今未用 | 需要配额/轮转的话在 Media 侧做，UI 这边 filmstrip 已窗口化不受条数影响，但历史页列表仍是无分页地每张一卡 |
+
+### 触摸命中区（`lv_obj_set_ext_click_area`）
+
+**视觉尺寸是设计稿的事，命中区是可用性的事，两者不必绑在一起。** LVGL 提供的
+`lv_obj_set_ext_click_area(obj, n)` 把命中矩形四边各外扩 n，**不改布局也不改绘制**：
+`lv_obj_hit_test()` → `lv_obj_get_click_area()` 会把 `ext_click_pad` 加进去
+（`lvgl/src/core/lv_obj_pos.c` 的 `lv_obj_get_click_area`）。所以对稿的还原度不受影响。
+
+它还顺带解决另一半问题：LVGL 在手指**移出对象**时发 `PRESS_LOST` 取消点击，小按钮上
+轻微的手指漂移就够触发，表现是「点了没反应」；外扩后「仍算在对象内」的范围一起变大。
+
+已落地两处（都是 1024 档暴露出来的，该档 `USER_BACK_BTN_H` 只有 40、`USER_HIST_TAB_H` 只有 32）：
+
+| 控件 | 原命中区 | 外扩量 | 原因 |
+|---|---|---|---|
+| 全屏浮层圆钮（播放器关闭/播放、相册关闭/左右箭头） | `USER_BACK_BTN_H` 见方 | 补足到 `UI_USER_MIN_TOUCH`(48) | 40 低于常见最小触摸目标，且这些钮都贴屏幕边缘 |
+| 历史页 / 消息页顶部 Tab 项 | 文字实宽 × `USER_HIST_TAB_H` | `USER_PAD_SM` | 项宽被写死成文字实宽（左右零内距），Tab 之间 `USER_PAD_LG` 全是死区；且文字 `ALIGN_TOP_MID` 贴顶使命中区竖直中心比文字视觉中心偏下 |
+
+外扩量**只补到够用为止**：`ext_click_area` 是四边等量的，给多了会和相邻控件的命中区打架。
+Tab 取 `USER_PAD_SM`（小于 Tab 间距 `USER_PAD_LG` 的一半），故相邻两项不重叠。
+
+**Tab 项的构造已抽成 `ui_user_make_tab_item()`**（`components/ui_user_widgets.*`），历史页与
+消息页共用——原先两页各写一份**字面重复**的实现（连注释都一样），命中区这类修改要同步改两遍。
 
 ### LVGL 配置依赖（`3rdparty/.../configs/rongsu_ui.defaults`）
 - `LV_USE_TJPGD=1`：历史缩略图 baseline JPEG 解码

@@ -1256,41 +1256,13 @@ void on_tab_click(lv_event_t *e)
     rebuild_list();
 }
 
-/** 一个 Tab 项：文字贴顶 + 主色下划线贴底（下划线宽度取文字的一半，与稿一致） */
+/** 一个 Tab 项（稿 4366:5418）：构造与命中区在 ui_user_make_tab_item，与消息页共用 */
 void make_tab_item(lv_obj_t *parent, int idx)
 {
-    lv_obj_t *item = lv_obj_create(parent);
-    lv_obj_remove_style_all(item);
-    lv_obj_set_size(item, LV_SIZE_CONTENT, LV_PCT(100));
-    lv_obj_set_style_bg_opa(item, LV_OPA_TRANSP, 0);
-    lv_obj_clear_flag(item, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_add_flag(item, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_add_event_cb(item, on_tab_click, LV_EVENT_CLICKED,
-                        reinterpret_cast<void *>(static_cast<intptr_t>(idx)));
-
-    lv_obj_t *lbl = lv_label_create(item);
-    lv_label_set_text(lbl, kTabTitles[idx]);
-    /* 稿 4366:5418 是 16；user_font_text 在 1280 档是 18，故取 text_sm（该档稿值 16）。
-     * 其余档位 text_sm == text，观感不变。 */
-    lv_obj_set_style_text_font(lbl, user_font_text_sm(), 0);
-    lv_obj_align(lbl, LV_ALIGN_TOP_MID, 0, 0);
-
-    /* 量出文字宽度后把项宽写死：SIZE_CONTENT 的容器里放百分比宽的子对象会互相
-     * 依赖（下划线要按文字宽算，文字宽又决定容器宽），量一次直接给定值最省心。 */
-    lv_obj_update_layout(item);
-    const int32_t txt_w = lv_obj_get_width(lbl);
-    lv_obj_set_width(item, txt_w);
-
-    lv_obj_t *mark = lv_obj_create(item);
-    lv_obj_remove_style_all(mark);
-    lv_obj_set_size(mark, txt_w / 2, 2);   /* 稿里下划线是文字宽的一半、居中 */
-    lv_obj_set_style_bg_color(mark, user_color_accent, 0);
-    lv_obj_set_style_bg_opa(mark, LV_OPA_COVER, 0);
-    lv_obj_align(mark, LV_ALIGN_BOTTOM_MID, 0, 0);
-
-    g_tabs[idx].root  = item;
-    g_tabs[idx].label = lbl;
-    g_tabs[idx].mark  = mark;
+    ui_user_make_tab_item(parent, kTabTitles[idx], on_tab_click,
+                          reinterpret_cast<void *>(static_cast<intptr_t>(idx)),
+                          &g_tabs[idx].root, &g_tabs[idx].label,
+                          &g_tabs[idx].mark);
 }
 
 /** 顶部 Tab 行：左侧三个 Tab + 右侧 Manage / 多选操作组 */
