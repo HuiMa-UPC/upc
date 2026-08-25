@@ -26,6 +26,9 @@ namespace {
  * ========================= */
 
 constexpr uint32_t kUiRefreshPeriodMs = 33u;
+constexpr uint32_t kUiRefreshInteractPeriodMs = 66u;
+constexpr uint32_t kInteractiveDecodeFps = 12u;
+constexpr uint64_t kInteractionHoldMs = 320u;
 /* 录像收尾（尤其 print_h264）存在短时抖动，适当放宽卡帧告警阈值。 */
 constexpr uint64_t kPreviewStallWarnMs = 1200u;
 
@@ -413,6 +416,11 @@ void CameraPreviewPlayer::start(lv_obj_t* image_widget, lv_obj_t* hint_widget,
     display_buf_.store(-1);
     last_frame_ok_ms_.store(monotonic_ms(), std::memory_order_relaxed);
     stalled_.store(false, std::memory_order_relaxed);
+    interaction_busy_.store(false, std::memory_order_relaxed);
+    interaction_hold_until_ms_.store(0, std::memory_order_relaxed);
+    decode_target_fps_override_.store(0, std::memory_order_relaxed);
+    ui_refresh_period_ms_ = kUiRefreshPeriodMs;
+    last_anim_count_ = 0;
 
     if(image_) {
         lv_obj_add_flag(image_, LV_OBJ_FLAG_HIDDEN);
@@ -455,6 +463,10 @@ void CameraPreviewPlayer::stop()
     start_req_sent_ = false;
     stalled_.store(false, std::memory_order_relaxed);
     stream_up_.store(false);
+    interaction_busy_.store(false, std::memory_order_relaxed);
+    interaction_hold_until_ms_.store(0, std::memory_order_relaxed);
+    decode_target_fps_override_.store(0, std::memory_order_relaxed);
+    last_anim_count_ = 0;
     delete_ui_timer();
 
     if(image_) {
@@ -988,9 +1000,7 @@ bool CameraPreviewPlayer::begin_decode_thread()
  */
 void CameraPreviewPlayer::decode_thread_fn()
 {
-    /* 目标帧周期：例如 25fps → 每圈理想耗时约 40000us，用于末尾限速 sleep。 */
-    const auto frame_period = std::chrono::microseconds(
-        1000000u / (fps_ > 0 ? fps_ : 1u));
+    const uint32_t base_fps = fps_ > 0 ? fps_ : 1u;
 
     /* 下一轮倾向写入的显示槽下标（0..kFrameSlots-1），实际写入前还会 pick_write_buf 避让。 */
     int write_idx = 0;
@@ -1011,10 +1021,10 @@ void CameraPreviewPlayer::decode_thread_fn()
     auto stats_since = std::chrono::steady_clock::now();
 
     UPC_LOG_CAMERA_PREVIEW(Info,
-        "decode thread started scene=%s image=%p target_fps=%u period_us=%lld "
+        "decode thread started scene=%s image=%p target_fps=%u period_us=%u "
         "rga_path=%d",
         scene_[0] ? scene_ : "(none)", static_cast<void*>(image_),
-        fps_, static_cast<long long>(frame_period.count()),
+        base_fps, 1000000u / base_fps,
         rga_path_ready_ ? 1 : 0);
 
     /* ========== 主循环：直到 stop_decode_ 被置位 ========== */
@@ -1149,6 +1159,13 @@ void CameraPreviewPlayer::decode_thread_fn()
          * 若已经超时（转换慢），则不再睡，直接进入下一圈。
          */
         const auto elapsed = now - tick_start;
+        uint32_t target_fps =
+            decode_target_fps_override_.load(std::memory_order_relaxed);
+        if(target_fps == 0u || target_fps > base_fps) {
+            target_fps = base_fps;
+        }
+        const auto frame_period = std::chrono::microseconds(
+            1000000u / (target_fps > 0 ? target_fps : 1u));
         if(elapsed < frame_period) {
             std::this_thread::sleep_for(frame_period - elapsed);
         }
@@ -1418,7 +1435,8 @@ bool CameraPreviewPlayer::convert_frame_dma(const upc_ipc::IpcDmaFrameView& fram
 void CameraPreviewPlayer::schedule_ui_timer()
 {
     delete_ui_timer();
-    ui_timer_ = lv_timer_create(ui_timer_cb, kUiRefreshPeriodMs, this);
+    ui_refresh_period_ms_ = kUiRefreshPeriodMs;
+    ui_timer_ = lv_timer_create(ui_timer_cb, ui_refresh_period_ms_, this);
 }
 
 void CameraPreviewPlayer::delete_ui_timer()
@@ -1438,6 +1456,43 @@ void CameraPreviewPlayer::ui_timer_cb(lv_timer_t* timer)
 
     if(self->stream_up_.load(std::memory_order_relaxed)) {
         const uint64_t now_ms = monotonic_ms();
+        bool pressing = false;
+        for(lv_indev_t* indev = lv_indev_get_next(nullptr); indev;
+            indev = lv_indev_get_next(indev)) {
+            if(lv_indev_get_state(indev) == LV_INDEV_STATE_PRESSED) {
+                pressing = true;
+                break;
+            }
+        }
+        const uint16_t anim_count = lv_anim_count_running();
+        const bool anim_started = anim_count > self->last_anim_count_;
+        self->last_anim_count_ = anim_count;
+        if(pressing || anim_started) {
+            self->interaction_hold_until_ms_.store(
+                now_ms + kInteractionHoldMs, std::memory_order_relaxed);
+        }
+        const uint64_t hold_until =
+            self->interaction_hold_until_ms_.load(std::memory_order_relaxed);
+        const bool interaction_busy = pressing || (now_ms < hold_until);
+        const bool prev_busy =
+            self->interaction_busy_.exchange(interaction_busy, std::memory_order_relaxed);
+        if(prev_busy != interaction_busy) {
+            UPC_LOG_CAMERA_PREVIEW(Debug,
+                "interactive mode %s scene=%s anim_count=%u pressing=%u",
+                interaction_busy ? "on" : "off",
+                self->scene_[0] ? self->scene_ : "(none)",
+                static_cast<unsigned>(anim_count), pressing ? 1u : 0u);
+        }
+        self->decode_target_fps_override_.store(
+            interaction_busy ? kInteractiveDecodeFps : 0u,
+            std::memory_order_relaxed);
+        const uint32_t desired_period =
+            interaction_busy ? kUiRefreshInteractPeriodMs : kUiRefreshPeriodMs;
+        if(self->ui_timer_ && desired_period != self->ui_refresh_period_ms_) {
+            lv_timer_set_period(self->ui_timer_, desired_period);
+            self->ui_refresh_period_ms_ = desired_period;
+        }
+
         const uint64_t last_ok_ms =
             self->last_frame_ok_ms_.load(std::memory_order_relaxed);
         if(last_ok_ms > 0 && now_ms > last_ok_ms) {
@@ -1504,6 +1559,11 @@ void CameraPreviewPlayer::reset_ui()
     logged_first_ui_show_ = false;
     last_frame_ok_ms_.store(0, std::memory_order_relaxed);
     stalled_.store(false, std::memory_order_relaxed);
+    interaction_busy_.store(false, std::memory_order_relaxed);
+    interaction_hold_until_ms_.store(0, std::memory_order_relaxed);
+    decode_target_fps_override_.store(0, std::memory_order_relaxed);
+    ui_refresh_period_ms_ = kUiRefreshPeriodMs;
+    last_anim_count_ = 0;
     pending_start_rsp_valid_ = false;
     decode_retiring_.store(false, std::memory_order_relaxed);
     retire_state_.reset();

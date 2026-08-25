@@ -132,6 +132,11 @@ private:
     bool                 logged_first_ui_show_ = false;
     std::atomic<uint64_t> last_frame_ok_ms_{0};
     std::atomic<bool>     stalled_{false};
+    std::atomic<bool>     interaction_busy_{false};
+    std::atomic<uint64_t> interaction_hold_until_ms_{0};
+    std::atomic<uint32_t> decode_target_fps_override_{0};
+    uint32_t              ui_refresh_period_ms_ = 33;
+    uint16_t              last_anim_count_ = 0;
 
 #if defined(UPC_UI_RGA_STREAMING) && UPC_UI_RGA_STREAMING
     struct RgaSrcMap {
