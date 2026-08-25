@@ -33,7 +33,8 @@ namespace {
 
 #if defined(UPC_CAMERA_HAS_RGA) && UPC_CAMERA_HAS_RGA
 constexpr int kThumbSrcFormat = RK_FORMAT_YCbCr_420_SP;
-constexpr int kThumbDstFormat = RK_FORMAT_RGB_565;
+/* 实测多工具链下此口径可与 UI 侧 RGB565 解码显示颜色一致。 */
+constexpr int kThumbDstFormat = RK_FORMAT_BGR_565;
 
 bool rga_status_ok(IM_STATUS st)
 {
@@ -332,6 +333,208 @@ bool create_raw_thumb_from_nv12(const std::vector<uint8_t>& nv12,
         return false;
     }
 
+#if defined(UPC_MEDIA_PHX_RTHM_STREAMING) && UPC_MEDIA_PHX_RTHM_STREAMING
+    /*
+     * PHX 专用：避免整帧 RGB565 中间缓冲（width*height*2）。
+     * 按目标缩略图分块，每块只申请“小块 NV12 + 小块 RGB565”DMA，降低 import 失败概率。
+     */
+    constexpr uint32_t kDstTileRows = 64u;
+    auto align_down_even = [](uint32_t v) { return v & ~1u; };
+    auto align_up_even = [](uint32_t v) { return (v + 1u) & ~1u; };
+
+    const uint32_t dst_tile_rows = std::min<uint32_t>(kDstTileRows, dst_h);
+    uint32_t max_src_tile_rows = static_cast<uint32_t>(
+        (static_cast<uint64_t>(height) * dst_tile_rows + dst_h - 1u) / dst_h);
+    max_src_tile_rows = align_up_even(max_src_tile_rows + 2u); // 留一点边界余量
+    const uint32_t max_even_height = align_down_even(height);
+    if(max_even_height < 2u) {
+        UPC_LOG_MEDIA_SERVICE(Warn, "raw thumb invalid even source height=%u", height);
+        return false;
+    }
+    if(max_src_tile_rows > max_even_height) {
+        max_src_tile_rows = max_even_height;
+    }
+    if(max_src_tile_rows < 2u) {
+        max_src_tile_rows = 2u;
+    }
+
+    const size_t src_tile_bytes =
+        static_cast<size_t>(width) * max_src_tile_rows * 3u / 2u;
+    const size_t rgb_tile_bytes =
+        static_cast<size_t>(width) * max_src_tile_rows * 2u;
+    const size_t dst_tile_bytes =
+        static_cast<size_t>(dst_stride_bytes) * dst_tile_rows;
+    const int src_w_i = static_cast<int>(width);
+    const int dst_w_i = static_cast<int>(dst_w);
+    const int dst_stride_px_i = static_cast<int>(dst_stride_px);
+
+    upc_ipc::DmaHeapBuffer src_tile_dma{};
+    upc_ipc::DmaHeapBuffer rgb_tile_dma{};
+    upc_ipc::DmaHeapBuffer dst_tile_dma{};
+    auto free_dmas = [&]() {
+        upc_ipc::dma_heap_free(src_tile_dma);
+        upc_ipc::dma_heap_free(rgb_tile_dma);
+        upc_ipc::dma_heap_free(dst_tile_dma);
+    };
+
+    if(!upc_ipc::dma_heap_alloc(src_tile_bytes, src_tile_dma) ||
+       !upc_ipc::dma_heap_alloc(rgb_tile_bytes, rgb_tile_dma) ||
+       !upc_ipc::dma_heap_alloc(dst_tile_bytes, dst_tile_dma)) {
+        UPC_LOG_MEDIA_SERVICE(Warn,
+            "raw thumb tile dma_heap alloc failed src_tile=%zu rgb_tile=%zu dst_tile=%zu",
+            src_tile_bytes, rgb_tile_bytes, dst_tile_bytes);
+        free_dmas();
+        return false;
+    }
+    log_dma_heap_once(src_tile_dma.heap_path);
+
+    rga_buffer_handle_t src_h =
+        importbuffer_fd(src_tile_dma.fd, static_cast<int>(src_tile_bytes));
+    rga_buffer_handle_t rgb_hnd =
+        importbuffer_fd(rgb_tile_dma.fd, static_cast<int>(rgb_tile_bytes));
+    rga_buffer_handle_t dst_hnd =
+        importbuffer_fd(dst_tile_dma.fd, static_cast<int>(dst_tile_bytes));
+    if(src_h == 0 || rgb_hnd == 0 || dst_hnd == 0) {
+        UPC_LOG_MEDIA_SERVICE(Warn,
+            "raw thumb importbuffer_fd failed src=%llu rgb=%llu dst=%llu",
+            static_cast<unsigned long long>(src_h),
+            static_cast<unsigned long long>(rgb_hnd),
+            static_cast<unsigned long long>(dst_hnd));
+        if(src_h) {
+            releasebuffer_handle(src_h);
+        }
+        if(rgb_hnd) {
+            releasebuffer_handle(rgb_hnd);
+        }
+        if(dst_hnd) {
+            releasebuffer_handle(dst_hnd);
+        }
+        free_dmas();
+        return false;
+    }
+
+    std::vector<uint8_t> rgb565_thumb(
+        static_cast<size_t>(dst_stride_bytes) * dst_h, 0u);
+    const uint8_t* src_y_base = nv12.data();
+    const uint8_t* src_uv_base = src_y_base + static_cast<size_t>(width) * height;
+
+    for(uint32_t dy = 0; dy < dst_h; dy += dst_tile_rows) {
+        const uint32_t cur_dst_rows = std::min<uint32_t>(dst_tile_rows, dst_h - dy);
+        uint32_t src_y0 = static_cast<uint32_t>(
+            (static_cast<uint64_t>(dy) * height) / dst_h);
+        uint32_t src_y1 = static_cast<uint32_t>(
+            (static_cast<uint64_t>(dy + cur_dst_rows) * height + dst_h - 1u) / dst_h);
+        src_y0 = align_down_even(src_y0);
+        src_y1 = align_up_even(src_y1);
+        if(src_y1 > max_even_height) {
+            src_y1 = max_even_height;
+        }
+        if(src_y1 <= src_y0) {
+            src_y1 = std::min<uint32_t>(max_even_height, src_y0 + 2u);
+        }
+        uint32_t cur_src_rows = src_y1 - src_y0;
+        if((cur_src_rows & 1u) != 0u) {
+            ++cur_src_rows;
+        }
+        if(cur_src_rows > max_src_tile_rows) {
+            cur_src_rows = max_src_tile_rows;
+        }
+        if(cur_src_rows < 2u) {
+            cur_src_rows = 2u;
+        }
+
+        dma_buf_sync(src_tile_dma.fd, DMA_BUF_SYNC_START | DMA_BUF_SYNC_WRITE);
+        uint8_t* tile_y = static_cast<uint8_t*>(src_tile_dma.va);
+        uint8_t* tile_uv = tile_y + static_cast<size_t>(width) * cur_src_rows;
+        for(uint32_t r = 0; r < cur_src_rows; ++r) {
+            const uint8_t* src_row =
+                src_y_base + static_cast<size_t>(src_y0 + r) * width;
+            std::memcpy(tile_y + static_cast<size_t>(r) * width, src_row, width);
+        }
+        const uint32_t src_uv_row0 = src_y0 / 2u;
+        for(uint32_t r = 0; r < cur_src_rows / 2u; ++r) {
+            const uint8_t* src_uv_row =
+                src_uv_base + static_cast<size_t>(src_uv_row0 + r) * width;
+            std::memcpy(tile_uv + static_cast<size_t>(r) * width, src_uv_row, width);
+        }
+        dma_buf_sync(src_tile_dma.fd, DMA_BUF_SYNC_END | DMA_BUF_SYNC_WRITE);
+
+        rga_buffer_t src_buf = wrapbuffer_handle(
+            src_h, src_w_i, static_cast<int>(cur_src_rows),
+            kThumbSrcFormat, src_w_i, static_cast<int>(cur_src_rows));
+        rga_buffer_t rgb_buf = wrapbuffer_handle(
+            rgb_hnd, src_w_i, static_cast<int>(cur_src_rows),
+            kThumbDstFormat, src_w_i, static_cast<int>(cur_src_rows));
+        rga_buffer_t dst_buf = wrapbuffer_handle(
+            dst_hnd, dst_w_i, static_cast<int>(cur_dst_rows),
+            kThumbDstFormat, dst_stride_px_i, static_cast<int>(cur_dst_rows));
+
+        IM_STATUS st = imcvtcolor_t(
+            src_buf, rgb_buf, kThumbSrcFormat, kThumbDstFormat,
+            IM_COLOR_SPACE_DEFAULT, 1);
+        if(!rga_status_ok(st)) {
+            st = imcvtcolor_t(
+                src_buf, rgb_buf, kThumbSrcFormat, kThumbDstFormat,
+                IM_YUV_TO_RGB_BT601_LIMIT, 1);
+        }
+        if(!rga_status_ok(st)) {
+            UPC_LOG_MEDIA_SERVICE(Warn,
+                "raw thumb rga tile csc failed st=%d (%s) dy=%u dst_rows=%u src_rows=%u",
+                st, imStrError(st),
+                static_cast<unsigned>(dy),
+                static_cast<unsigned>(cur_dst_rows),
+                static_cast<unsigned>(cur_src_rows));
+            releasebuffer_handle(src_h);
+            releasebuffer_handle(rgb_hnd);
+            releasebuffer_handle(dst_hnd);
+            free_dmas();
+            return false;
+        }
+
+        st = imresize(rgb_buf, dst_buf);
+        if(!rga_status_ok(st)) {
+            UPC_LOG_MEDIA_SERVICE(Warn,
+                "raw thumb rga tile resize failed st=%d (%s) dy=%u dst_rows=%u src_rows=%u",
+                st, imStrError(st),
+                static_cast<unsigned>(dy),
+                static_cast<unsigned>(cur_dst_rows),
+                static_cast<unsigned>(cur_src_rows));
+            releasebuffer_handle(src_h);
+            releasebuffer_handle(rgb_hnd);
+            releasebuffer_handle(dst_hnd);
+            free_dmas();
+            return false;
+        }
+
+        static bool s_logged_tile_two_step = false;
+        if(!s_logged_tile_two_step) {
+            s_logged_tile_two_step = true;
+            UPC_LOG_MEDIA_SERVICE(Info,
+                "raw thumb PHX tile pipeline=TWO_STEP_CSC_RESIZE csc=DEFAULT_THEN_BT601_LIMIT");
+        }
+
+        dma_buf_sync(dst_tile_dma.fd, DMA_BUF_SYNC_START | DMA_BUF_SYNC_READ);
+        const uint8_t* dst_tile_ptr = static_cast<const uint8_t*>(dst_tile_dma.va);
+        for(uint32_t r = 0; r < cur_dst_rows; ++r) {
+            uint8_t* out_row =
+                rgb565_thumb.data() + static_cast<size_t>(dy + r) * dst_stride_bytes;
+            const uint8_t* tile_row = dst_tile_ptr + static_cast<size_t>(r) * dst_stride_bytes;
+            std::memcpy(out_row, tile_row, dst_stride_bytes);
+        }
+        dma_buf_sync(dst_tile_dma.fd, DMA_BUF_SYNC_END | DMA_BUF_SYNC_READ);
+    }
+
+    releasebuffer_handle(src_h);
+    releasebuffer_handle(rgb_hnd);
+    releasebuffer_handle(dst_hnd);
+    free_dmas();
+
+    if(!write_raw_thumb(out_path, dst_w, dst_h, dst_stride_bytes, rgb565_thumb)) {
+        UPC_LOG_MEDIA_SERVICE(Warn, "raw thumb write failed path=%s", out_path);
+        return false;
+    }
+    return true;
+#else
     const size_t full_bytes = static_cast<size_t>(width) * height * 2u;
     const size_t thumb_bytes = static_cast<size_t>(dst_stride_bytes) * dst_h;
     const int src_w_i = static_cast<int>(width);
@@ -445,6 +648,7 @@ bool create_raw_thumb_from_nv12(const std::vector<uint8_t>& nv12,
         return false;
     }
     return true;
+#endif
 #else
     (void)nv12;
     (void)width;

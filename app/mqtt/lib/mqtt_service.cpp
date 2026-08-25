@@ -1880,6 +1880,11 @@ bool MqttService::publish_manifest_request(const std::string& task_id)
     msg.payloadlen = static_cast<int>(std::strlen(payload));
     msg.qos = cfg_.qos_ack;
     msg.retained = 0;
+
+    debug_log_mqtt_frame("TX", topic, msg.payload,
+                         static_cast<size_t>(msg.payloadlen),
+                         msg.qos, msg.retained);
+
     MQTTClient_deliveryToken token{};
     const int rc = MQTTClient_publishMessage(client_, topic.c_str(), &msg, &token);
     if(rc != MQTTCLIENT_SUCCESS) {

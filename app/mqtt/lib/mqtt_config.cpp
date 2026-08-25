@@ -114,7 +114,7 @@ std::string MqttConfig::topic_ota_manifest_req() const
 
 std::string MqttConfig::topic_ota_manifest_resp() const
 {
-    return topic_prefix() + "ota/manifest/response";
+    return topic_prefix() + "ota/manifest";
 }
 
 std::string MqttConfig::topic_ota_progress() const

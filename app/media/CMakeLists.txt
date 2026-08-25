@@ -43,6 +43,11 @@ else()
     message(WARNING "media: librga not found — raw thumbnail RGA path disabled")
 endif()
 
+if(TOOLCHAIN STREQUAL "phx-buildroot-toolchain")
+    message(STATUS "media: enable PHX streaming raw-thumb path")
+    target_compile_definitions(rongsu_media PRIVATE UPC_MEDIA_PHX_RTHM_STREAMING=1)
+endif()
+
 if(CMAKE_SYSROOT)
     find_path(UPC_MEDIA_MPP_INCLUDE_DIR NAMES rk_mpi.h
         PATHS
