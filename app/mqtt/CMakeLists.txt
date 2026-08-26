@@ -3,6 +3,9 @@ set(MQTT_LIB_DIR ${CMAKE_CURRENT_SOURCE_DIR}/lib)
 add_executable(rongsu_mqtt
     main.cpp
     ${MQTT_LIB_DIR}/mqtt_service.cpp
+    ${MQTT_LIB_DIR}/mqtt_service_telemetry.cpp
+    ${MQTT_LIB_DIR}/mqtt_service_command.cpp
+    ${MQTT_LIB_DIR}/mqtt_service_ota.cpp
     ${MQTT_LIB_DIR}/mqtt_config.cpp
     ${MQTT_LIB_DIR}/device_activation.cpp
 )
