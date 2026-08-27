@@ -11,6 +11,11 @@
 
 namespace upc::mqtt {
 
+/**
+ * OTA 入口：处理 UI 的确认/取消指令。
+ * - 取消时会校验是否为 required 任务，required 任务不允许取消。
+ * - 确认后进入 manifest 请求阶段。
+ */
 void MqttService::on_ota_user_decision(const middleware::Message& msg)
 {
     middleware::OtaDecisionReqPayload p{};
@@ -48,6 +53,7 @@ void MqttService::handle_ota_notify(const std::string& payload)
         return;
     }
     {
+        // 缓存最近一次 OTA 通知，供后续 UI 决策校验（如 required 任务不可取消）。
         std::lock_guard<std::mutex> lock(ota_mtx_);
         pending_ota_notify_ = notify;
     }
@@ -78,6 +84,7 @@ void MqttService::handle_ota_manifest_response(const std::string& payload)
         UPC_LOG_MQTT_SERVICE(Warn, "ota manifest response without task_id");
         return;
     }
+    // 云端显式返回错误码，直接上报失败并终止当前 OTA 流。
     if(!err_code.empty()) {
         middleware::OtaProgressPayload p{};
         std::snprintf(p.task_id, sizeof(p.task_id), "%s", task_id.c_str());
@@ -98,6 +105,7 @@ bool MqttService::publish_manifest_request(const std::string& task_id)
     bool mcu_valid = false;
     bool galvo_valid = false;
     {
+        // 使用当前缓存版本填充 manifest 请求，帮助云端做差分或目标包决策。
         std::lock_guard<std::mutex> lock(data_mtx_);
         mcu = fw_cache_.mcu;
         galvo = fw_cache_.galvo;
@@ -124,7 +132,7 @@ bool MqttService::publish_manifest_request(const std::string& task_id)
             "\"versions\":{"
                 "\"soc\":\"%s\","
                 "\"mcu\":\"%s\","
-                "\"glavo\":\"%s\""
+                "\"galvo\":\"%s\""
             "}"
         "}"
         "}",
@@ -163,6 +171,7 @@ bool MqttService::publish_manifest_request(const std::string& task_id)
 
 bool MqttService::publish_ota_progress_cloud(const middleware::OtaProgressPayload& progress)
 {
+    // IPC 枚举状态映射到云端协议字符串。
     const char* state = "downloading";
     switch(static_cast<middleware::OtaProgressState>(progress.state)) {
     case middleware::OtaProgressState::Verifying: state = "verifying"; break;
@@ -217,6 +226,7 @@ bool MqttService::publish_ota_progress_cloud(const middleware::OtaProgressPayloa
 
 void MqttService::publish_ota_progress_ui(const middleware::OtaProgressPayload& progress)
 {
+    // 统一走异步消息发给 UI，避免阻塞 MQTT 主循环。
     middleware::Message msg(middleware::MsgType::APP_Mqtt_Ota_Progress_Ntf,
                             middleware::ModuleId::APP_MQTT,
                             middleware::ModuleId::UI);
@@ -240,6 +250,7 @@ void MqttService::start_manifest_download(std::string task_id,
     if(ota_download_thread_.joinable()) {
         ota_download_thread_.join();
     }
+    // 下载流程较长，独立线程执行；结束后恢复 running 状态。
     ota_download_thread_ = std::thread(
         [this, task_id = std::move(task_id), components = std::move(components)]() mutable {
             run_manifest_download_task(std::move(task_id), std::move(components));
@@ -251,6 +262,7 @@ void MqttService::start_manifest_download(std::string task_id,
 void MqttService::run_manifest_download_task(std::string task_id,
                                              std::vector<OtaComponent> components)
 {
+    // 失败出口统一收敛：同时通知 UI 与云端，保证两侧状态一致。
     auto publish_failed = [this, &task_id](const char* component, const char* code) {
         middleware::OtaProgressPayload p{};
         std::snprintf(p.task_id, sizeof(p.task_id), "%s", task_id.c_str());
@@ -289,6 +301,7 @@ void MqttService::run_manifest_download_task(std::string task_id,
         publish_ota_progress_ui(progress);
         (void)publish_ota_progress_cloud(progress);
 
+        // 云端未提供 filename 时，从 URL 路径推断文件名。
         const std::string base_name = comp.file_name.empty()
             ? basename_from_url_path(comp.url)
             : comp.file_name;
@@ -322,6 +335,7 @@ void MqttService::run_manifest_download_task(std::string task_id,
         const bool dl_ok = download_file_with_progress(
             comp.url, tmp_part,
             [this, &progress](size_t recv, size_t total) {
+                // 下载阶段仅使用 0~80，后续 90/100 预留给校验与应用。
                 if(total > 0) {
                     const int pct = static_cast<int>((recv * 100) / total);
                     progress.progress_pct = static_cast<uint8_t>(std::clamp(pct, 0, 80));
@@ -351,6 +365,7 @@ void MqttService::run_manifest_download_task(std::string task_id,
         publish_ota_progress_ui(progress);
         (void)publish_ota_progress_cloud(progress);
 
+        // SHA256 校验，避免损坏包/篡改包进入应用阶段。
         const std::string local_sha = hex_sha256_file(tmp_final);
         std::string expected_sha = comp.sha256;
         std::transform(expected_sha.begin(), expected_sha.end(), expected_sha.begin(),
@@ -376,8 +391,6 @@ void MqttService::run_manifest_download_task(std::string task_id,
             publish_failed(comp.component.c_str(), "tar_list_failed");
             return;
         }
-        bool has_app1 = false;
-        bool has_app2 = false;
         for(const std::string& entry_raw : tar_entries) {
             const std::string entry = trim_line(entry_raw);
             if(entry.empty()) {
@@ -389,19 +402,6 @@ void MqttService::run_manifest_download_task(std::string task_id,
                 publish_failed(comp.component.c_str(), "tar_entry_invalid");
                 return;
             }
-            const std::string upper = to_upper_ascii(entry);
-            if(upper.find("APP1") != std::string::npos) {
-                has_app1 = true;
-            }
-            if(upper.find("APP2") != std::string::npos) {
-                has_app2 = true;
-            }
-        }
-        if(!has_app1 || !has_app2) {
-            std::filesystem::remove_all(extract_dir, ec);
-            std::filesystem::remove(tmp_final, ec);
-            publish_failed(comp.component.c_str(), "tar_missing_ab");
-            return;
         }
 
         const std::string extract_cmd =
@@ -414,8 +414,6 @@ void MqttService::run_manifest_download_task(std::string task_id,
             return;
         }
 
-        bool extracted_app1 = false;
-        bool extracted_app2 = false;
         std::vector<std::filesystem::path> extracted_files;
         for(const auto& ent : std::filesystem::directory_iterator(extract_dir, ec)) {
             if(ec || !ent.is_regular_file()) {
@@ -426,15 +424,9 @@ void MqttService::run_manifest_download_task(std::string task_id,
                 continue;
             }
             extracted_files.push_back(ent.path());
-            const std::string upper = to_upper_ascii(name);
-            if(upper.find("APP1") != std::string::npos) {
-                extracted_app1 = true;
-            }
-            if(upper.find("APP2") != std::string::npos) {
-                extracted_app2 = true;
-            }
         }
-        if(!extracted_app1 || !extracted_app2 || extracted_files.size() != 2) {
+        // 解包后要求仅包含两份 bin 文件，避免目录噪声或异常条目。
+        if(extracted_files.size() != 2) {
             std::filesystem::remove_all(extract_dir, ec);
             std::filesystem::remove(tmp_final, ec);
             publish_failed(comp.component.c_str(), "extract_ab_invalid");
@@ -464,6 +456,7 @@ void MqttService::run_manifest_download_task(std::string task_id,
             return;
         }
 
+        // 先备份老文件，再迁移新文件；迁移失败则尝试回滚。
         std::vector<std::filesystem::path> backup_paths;
         for(const auto& ent : std::filesystem::directory_iterator(target_dir, ec)) {
             if(ec || !ent.is_regular_file()) {
@@ -516,6 +509,7 @@ void MqttService::run_manifest_download_task(std::string task_id,
         publish_ota_progress_ui(progress);
         (void)publish_ota_progress_cloud(progress);
 
+        // 在 Env Sim 下可直接更新缓存版本，便于心跳立即反映升级结果。
         if(!comp.version.empty()) {
             std::lock_guard<std::mutex> lock(data_mtx_);
             if(comp.component == "soc" && env_sim_on_) {
@@ -526,7 +520,7 @@ void MqttService::run_manifest_download_task(std::string task_id,
                     fw_cache_.mcu = parsed;
                     fw_cache_.mcu_valid = true;
                 }
-            } else if(comp.component == "glavo" && env_sim_on_) {
+            } else if(comp.component == "galvo" && env_sim_on_) {
                 middleware::GalvoVersionPayload parsed{};
                 if(parse_galvo_version_text(comp.version, parsed)) {
                     fw_cache_.galvo = parsed;
@@ -551,22 +545,24 @@ void MqttService::run_manifest_download_task(std::string task_id,
     for(const OtaComponent& comp : components) {
         if(comp.component == "mcu") {
             need_mcu_refresh = true;
-        } else if(comp.component == "glavo") {
+        } else if(comp.component == "galvo") {
             need_galvo_refresh = true;
         }
     }
 
+    // Env Sim 且 manifest 带 version 时，不强制再向下游模块拉取真实版本。
     if(env_sim_on) {
         for(const OtaComponent& comp : components) {
             if(comp.component == "mcu" && !comp.version.empty()) {
                 need_mcu_refresh = false;
-            } else if(comp.component == "glavo" && !comp.version.empty()) {
+            } else if(comp.component == "galvo" && !comp.version.empty()) {
                 need_galvo_refresh = false;
             }
         }
     }
 
     {
+        // 等待窗口：给 MCU/Galvo 异步上报版本一个缓冲时间，再触发心跳发布。
         std::lock_guard<std::mutex> lock(data_mtx_);
         ota_hb_wait_.active = (need_mcu_refresh || need_galvo_refresh);
         ota_hb_wait_.need_mcu = need_mcu_refresh;
@@ -588,6 +584,7 @@ void MqttService::run_manifest_download_task(std::string task_id,
 
 bool MqttService::parse_ota_notify(const std::string& payload, OtaNotify& out) const
 {
+    // 兼容 snake_case / camelCase 字段命名。
     out = OtaNotify{};
     std::string data;
     if(!json_extract_object(payload, "data", data)) {

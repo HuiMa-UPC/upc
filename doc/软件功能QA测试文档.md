@@ -68,7 +68,7 @@
 | D04 | 不支持扩展名，例如 `.txt` | 上传格式拦截 |
 | D05 | 正确与错误 Wi-Fi 密码 | Wi-Fi 连接正反用例 |
 | D06 | 可访问 MQTT Broker、激活服务和 RTSP 接收端 | MQTT/云端直播 |
-| D07 | MCU OTA 文件 `/home/image/glavo`、串口 OTA 文件 `/home/image/mcu` | OTA 用例 |
+| D07 | MCU OTA 文件 `/home/image/galvo`、串口 OTA 文件 `/home/image/mcu` | OTA 用例 |
 
 ## 4. 功能测试用例
 

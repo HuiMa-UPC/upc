@@ -381,7 +381,7 @@ enum class MsgType : uint32_t {
     APP_Print_Video_Manifest_Ntf,               /**< PrintVideoManifestPayload */
 
     // ---- UI ↔ GLAVO：MCU OTA（测试） ----
-    UI_Mcu_Ota_Start_Req = 0x1090, /**< Empty：启动 Glavo(以太网) OTA，扫描 /home/image/glavo */
+    UI_Mcu_Ota_Start_Req = 0x1090, /**< Empty：启动 Galvo(以太网) OTA，扫描 /home/image/galvo */
     UI_Mcu_Ota_Cancel_Ntf,         /**< Empty：中止 Glavo OTA 会话 */
     APP_Mcu_Ota_Status_Ntf,        /**< McuOtaStatusPayload（Glavo OTA 状态） */
     UI_Serial_Mcu_Ota_Start_Req,   /**< Empty：启动 MCU(串口) OTA，扫描 /home/image/mcu */
@@ -993,7 +993,7 @@ enum class OtaProgressState : uint8_t {
 
 struct OtaProgressPayload {
     char    task_id[64];
-    char    component[16];      /**< soc / mcu / glavo */
+    char    component[16];      /**< soc / mcu / galvo */
     uint8_t state;              /**< OtaProgressState */
     uint8_t progress_pct;       /**< 0..100 */
     uint8_t reserved[2];

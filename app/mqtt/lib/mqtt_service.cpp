@@ -56,10 +56,13 @@ void debug_log_mqtt_frame(const char* direction,
         return;
     }
 
-    constexpr size_t kMaxEncodedChunk = 1200;
+    // 单条日志过长可能被后端日志链路截断；保守缩短每块长度，确保每块都能完整落盘。
+    constexpr size_t kMaxEncodedChunk = 512;
     const auto* bytes = static_cast<const unsigned char*>(payload);
     size_t offset = 0;
+    size_t chunk_idx = 0;
     while(offset < payload_len) {
+        ++chunk_idx;
         const size_t begin = offset;
         std::string encoded;
         encoded.reserve(kMaxEncodedChunk);
@@ -96,8 +99,8 @@ void debug_log_mqtt_frame(const char* direction,
         }
 
         UPC_LOG_MQTT_SERVICE(Debug,
-            "MQTT %s payload[%zu..%zu]=\"%s\"",
-            dir, begin, offset, encoded.c_str());
+            "MQTT %s payload chunk=%zu range[%zu..%zu/%zu]=\"%s\"",
+            dir, chunk_idx, begin, offset, payload_len, encoded.c_str());
     }
 }
 #else
@@ -168,6 +171,74 @@ int connect_tcp_socket(const std::string& host, uint16_t port)
         ::close(fd);
     }
     return -1;
+}
+
+bool is_default_port_for_scheme(const std::string& scheme, uint16_t port)
+{
+    return (scheme == "http" && port == 80) ||
+           (scheme == "https" && port == 443);
+}
+
+std::string make_host_header_value(const ParsedUrl& parsed)
+{
+    if(is_default_port_for_scheme(parsed.scheme, parsed.port)) {
+        return parsed.host;
+    }
+    return parsed.host + ":" + std::to_string(parsed.port);
+}
+
+std::string trim_ascii_space(std::string s)
+{
+    size_t begin = 0;
+    while(begin < s.size() &&
+          (s[begin] == ' ' || s[begin] == '\t' || s[begin] == '\r' || s[begin] == '\n')) {
+        ++begin;
+    }
+    size_t end = s.size();
+    while(end > begin &&
+          (s[end - 1] == ' ' || s[end - 1] == '\t' || s[end - 1] == '\r' || s[end - 1] == '\n')) {
+        --end;
+    }
+    return s.substr(begin, end - begin);
+}
+
+std::string resolve_redirect_url(const ParsedUrl& base, const std::string& location_raw)
+{
+    const std::string location = trim_ascii_space(location_raw);
+    if(location.empty()) {
+        return {};
+    }
+    if(location.find("://") != std::string::npos) {
+        return location;
+    }
+
+    const std::string authority = make_host_header_value(base);
+    if(location[0] == '/') {
+        return base.scheme + "://" + authority + location;
+    }
+    if(location[0] == '?') {
+        std::string base_path = base.path;
+        const size_t q = base_path.find('?');
+        if(q != std::string::npos) {
+            base_path = base_path.substr(0, q);
+        }
+        if(base_path.empty()) {
+            base_path = "/";
+        }
+        return base.scheme + "://" + authority + base_path + location;
+    }
+
+    std::string base_path = base.path;
+    const size_t q = base_path.find('?');
+    if(q != std::string::npos) {
+        base_path = base_path.substr(0, q);
+    }
+    const size_t slash = base_path.rfind('/');
+    std::string dir = (slash == std::string::npos) ? "/" : base_path.substr(0, slash + 1);
+    if(dir.empty()) {
+        dir = "/";
+    }
+    return base.scheme + "://" + authority + dir + location;
 }
 
 std::string basename_from_url_path(const std::string& path)
@@ -260,164 +331,213 @@ bool download_file_with_progress(const std::string& url,
                                  std::string& err)
 {
     err.clear();
-    ParsedUrl parsed{};
-    if(!parse_url(url, parsed)) {
-        err = "invalid_url";
-        return false;
-    }
-    const int fd = connect_tcp_socket(parsed.host, parsed.port);
-    if(fd < 0) {
-        err = "connect_failed";
-        return false;
-    }
+    constexpr int kMaxRedirects = 3;
+    std::string current_url = url;
 
-    SSL_CTX* ssl_ctx = nullptr;
-    SSL* ssl = nullptr;
-    if(parsed.scheme == "https") {
-        ssl_ctx = SSL_CTX_new(TLS_client_method());
-        if(!ssl_ctx) {
-            ::close(fd);
-            err = "ssl_ctx_failed";
+    for(int redirect_count = 0; redirect_count <= kMaxRedirects; ++redirect_count) {
+        ParsedUrl parsed{};
+        if(!parse_url(current_url, parsed)) {
+            err = "invalid_url";
             return false;
         }
-        ssl = SSL_new(ssl_ctx);
-        if(!ssl || SSL_set_fd(ssl, fd) != 1 || SSL_connect(ssl) != 1) {
-            if(ssl) {
-                SSL_free(ssl);
-            }
-            SSL_CTX_free(ssl_ctx);
-            ::close(fd);
-            err = "ssl_connect_failed";
+        const int fd = connect_tcp_socket(parsed.host, parsed.port);
+        if(fd < 0) {
+            err = "connect_failed";
             return false;
         }
-    }
 
-    auto write_all = [&](const char* data, size_t len) -> bool {
-        size_t sent = 0;
-        while(sent < len) {
-            int n = 0;
-            if(ssl) {
-                n = SSL_write(ssl, data + sent, static_cast<int>(len - sent));
-            } else {
-                n = static_cast<int>(::send(fd, data + sent, len - sent, 0));
-            }
-            if(n <= 0) {
+        SSL_CTX* ssl_ctx = nullptr;
+        SSL* ssl = nullptr;
+        if(parsed.scheme == "https") {
+            ssl_ctx = SSL_CTX_new(TLS_client_method());
+            if(!ssl_ctx) {
+                ::close(fd);
+                err = "ssl_ctx_failed";
                 return false;
             }
-            sent += static_cast<size_t>(n);
+            ssl = SSL_new(ssl_ctx);
+            if(!ssl || SSL_set_fd(ssl, fd) != 1 || SSL_connect(ssl) != 1) {
+                if(ssl) {
+                    SSL_free(ssl);
+                }
+                SSL_CTX_free(ssl_ctx);
+                ::close(fd);
+                err = "ssl_connect_failed";
+                return false;
+            }
         }
-        return true;
-    };
-    auto read_some = [&](char* data, size_t len) -> int {
-        if(ssl) {
-            return SSL_read(ssl, data, static_cast<int>(len));
-        }
-        return static_cast<int>(::recv(fd, data, len, 0));
-    };
 
-    const std::string request =
-        "GET " + parsed.path + " HTTP/1.1\r\n"
-        "Host: " + parsed.host + "\r\n"
-        "Connection: close\r\n"
-        "User-Agent: snowpod-mqtt-ota/1.0\r\n\r\n";
-    if(!write_all(request.data(), request.size())) {
-        err = "http_send_failed";
-        if(ssl) {
-            SSL_shutdown(ssl);
-            SSL_free(ssl);
-            SSL_CTX_free(ssl_ctx);
-        }
-        ::close(fd);
-        return false;
-    }
+        auto cleanup = [&]() {
+            if(ssl) {
+                SSL_shutdown(ssl);
+                SSL_free(ssl);
+                SSL_CTX_free(ssl_ctx);
+            }
+            ::close(fd);
+        };
 
-    std::ofstream out(out_file, std::ios::binary | std::ios::trunc);
-    if(!out) {
-        err = "open_tmp_failed";
-        if(ssl) {
-            SSL_shutdown(ssl);
-            SSL_free(ssl);
-            SSL_CTX_free(ssl_ctx);
-        }
-        ::close(fd);
-        return false;
-    }
+        auto write_all = [&](const char* data, size_t len) -> bool {
+            size_t sent = 0;
+            while(sent < len) {
+                int n = 0;
+                if(ssl) {
+                    n = SSL_write(ssl, data + sent, static_cast<int>(len - sent));
+                } else {
+                    n = static_cast<int>(::send(fd, data + sent, len - sent, 0));
+                }
+                if(n <= 0) {
+                    return false;
+                }
+                sent += static_cast<size_t>(n);
+            }
+            return true;
+        };
+        auto read_some = [&](char* data, size_t len) -> int {
+            if(ssl) {
+                return SSL_read(ssl, data, static_cast<int>(len));
+            }
+            return static_cast<int>(::recv(fd, data, len, 0));
+        };
 
-    std::string header;
-    std::array<char, 4096> buf{};
-    bool header_done = false;
-    size_t content_length = 0;
-    size_t received = 0;
-
-    for(;;) {
-        const int n = read_some(buf.data(), buf.size());
-        if(n <= 0) {
-            break;
+        const std::string request =
+            "GET " + parsed.path + " HTTP/1.1\r\n"
+            "Host: " + make_host_header_value(parsed) + "\r\n"
+            "Connection: close\r\n"
+            "User-Agent: snowpod-mqtt-ota/1.0\r\n\r\n";
+        if(!write_all(request.data(), request.size())) {
+            err = "http_send_failed";
+            cleanup();
+            return false;
         }
-        if(!header_done) {
-            header.append(buf.data(), static_cast<size_t>(n));
-            const size_t split = header.find("\r\n\r\n");
-            if(split == std::string::npos) {
+
+        std::string header;
+        std::array<char, 4096> buf{};
+        bool header_done = false;
+        bool redirect_hit = false;
+        bool out_opened = false;
+        int status_code = 0;
+        std::string redirect_location;
+        size_t content_length = 0;
+        size_t received = 0;
+        std::ofstream out;
+
+        for(;;) {
+            const int n = read_some(buf.data(), buf.size());
+            if(n <= 0) {
+                break;
+            }
+            if(!header_done) {
+                header.append(buf.data(), static_cast<size_t>(n));
+                const size_t split = header.find("\r\n\r\n");
+                if(split == std::string::npos) {
+                    continue;
+                }
+                std::string header_text = header.substr(0, split + 4);
+                std::string body = header.substr(split + 4);
+                header_done = true;
+
+                std::istringstream iss(header_text);
+                std::string status_line;
+                if(!std::getline(iss, status_line)) {
+                    err = "bad_http_status";
+                    break;
+                }
+                if(!status_line.empty() && status_line.back() == '\r') {
+                    status_line.pop_back();
+                }
+                std::istringstream sl(status_line);
+                std::string http_ver;
+                if(!(sl >> http_ver >> status_code)) {
+                    err = "bad_http_status";
+                    break;
+                }
+
+                std::string line;
+                while(std::getline(iss, line)) {
+                    if(!line.empty() && line.back() == '\r') {
+                        line.pop_back();
+                    }
+                    const std::string lower = [&line]() {
+                        std::string t = line;
+                        std::transform(t.begin(), t.end(), t.begin(),
+                                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+                        return t;
+                    }();
+                    if(lower.rfind("content-length:", 0) == 0) {
+                        content_length = static_cast<size_t>(std::strtoull(line.c_str() + 15, nullptr, 10));
+                    } else if(lower.rfind("location:", 0) == 0) {
+                        redirect_location = trim_ascii_space(line.substr(9));
+                    }
+                }
+
+                if(status_code >= 300 && status_code < 400) {
+                    if(!redirect_location.empty()) {
+                        redirect_hit = true;
+                        break;
+                    }
+                    err = "http_redirect_missing_location";
+                    break;
+                }
+                if(status_code < 200 || status_code >= 300) {
+                    err = "http_status_" + std::to_string(status_code);
+                    break;
+                }
+
+                out.open(out_file, std::ios::binary | std::ios::trunc);
+                if(!out) {
+                    err = "open_tmp_failed";
+                    break;
+                }
+                out_opened = true;
+                if(!body.empty()) {
+                    out.write(body.data(), static_cast<std::streamsize>(body.size()));
+                    received += body.size();
+                    if(on_progress) {
+                        on_progress(received, content_length);
+                    }
+                }
                 continue;
             }
-            std::string header_text = header.substr(0, split + 4);
-            std::string body = header.substr(split + 4);
-            header_done = true;
+            if(!out_opened) {
+                continue;
+            }
+            out.write(buf.data(), n);
+            received += static_cast<size_t>(n);
+            if(on_progress) {
+                on_progress(received, content_length);
+            }
+        }
 
-            std::istringstream iss(header_text);
-            std::string status_line;
-            if(!std::getline(iss, status_line)) {
-                err = "bad_http_status";
-                break;
+        if(out_opened) {
+            out.flush();
+            out.close();
+        }
+        cleanup();
+
+        if(redirect_hit) {
+            if(redirect_count >= kMaxRedirects) {
+                err = "http_redirect_too_many";
+                return false;
             }
-            if(status_line.find("200") == std::string::npos) {
-                err = "http_status_not_200";
-                break;
+            const std::string next_url = resolve_redirect_url(parsed, redirect_location);
+            if(next_url.empty()) {
+                err = "http_redirect_bad_location";
+                return false;
             }
-            std::string line;
-            while(std::getline(iss, line)) {
-                if(!line.empty() && line.back() == '\r') {
-                    line.pop_back();
-                }
-                const std::string lower = [&line]() {
-                    std::string t = line;
-                    std::transform(t.begin(), t.end(), t.begin(),
-                                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-                    return t;
-                }();
-                if(lower.rfind("content-length:", 0) == 0) {
-                    content_length = static_cast<size_t>(std::strtoull(line.c_str() + 15, nullptr, 10));
-                }
-            }
-            if(!body.empty()) {
-                out.write(body.data(), static_cast<std::streamsize>(body.size()));
-                received += body.size();
-                if(on_progress) {
-                    on_progress(received, content_length);
-                }
-            }
+            current_url = next_url;
             continue;
         }
-        out.write(buf.data(), n);
-        received += static_cast<size_t>(n);
-        if(on_progress) {
-            on_progress(received, content_length);
+        if(!header_done && err.empty()) {
+            err = "http_recv_failed";
         }
+        if(!err.empty()) {
+            return false;
+        }
+        return true;
     }
 
-    out.flush();
-    out.close();
-
-    if(ssl) {
-        SSL_shutdown(ssl);
-        SSL_free(ssl);
-        SSL_CTX_free(ssl_ctx);
-    }
-    ::close(fd);
-    if(!err.empty()) {
-        return false;
-    }
-    return true;
+    err = "http_redirect_too_many";
+    return false;
 }
 
 const char* component_target_dir(const std::string& component)
@@ -428,8 +548,8 @@ const char* component_target_dir(const std::string& component)
     if(component == "mcu") {
         return kImageMcuDir;
     }
-    if(component == "glavo") {
-        return kImageGlavoDir;
+    if(component == "galvo") {
+        return kImageGalvoDir;
     }
     return nullptr;
 }
@@ -462,15 +582,24 @@ std::string trim_line(std::string s)
     return s.substr(i);
 }
 
+std::string strip_archive_leading_current_dir(std::string name)
+{
+    while(name.size() >= 2 && name[0] == '.' && name[1] == '/') {
+        name.erase(0, 2);
+    }
+    return name;
+}
+
 bool archive_entry_safe_flat(const std::string& entry)
 {
-    if(entry.empty()) {
+    const std::string normalized = strip_archive_leading_current_dir(entry);
+    if(normalized.empty()) {
         return false;
     }
-    if(entry.find('/') != std::string::npos || entry.find('\\') != std::string::npos) {
+    if(normalized.find('/') != std::string::npos || normalized.find('\\') != std::string::npos) {
         return false;
     }
-    if(entry.find("..") != std::string::npos) {
+    if(normalized.find("..") != std::string::npos) {
         return false;
     }
     return true;
@@ -518,10 +647,11 @@ std::string to_upper_ascii(std::string s)
 
 bool is_bin_name(const std::string& name)
 {
-    if(name.size() < 5) {
+    const std::string normalized = strip_archive_leading_current_dir(name);
+    if(normalized.size() < 5) {
         return false;
     }
-    const std::string upper = to_upper_ascii(name);
+    const std::string upper = to_upper_ascii(normalized);
     return upper.rfind(".BIN") == upper.size() - 4;
 }
 

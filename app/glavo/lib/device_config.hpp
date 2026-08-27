@@ -153,8 +153,8 @@
 /* OTA                                                                          */
 /* -------------------------------------------------------------------------- */
 /** MCU OTA 测试：固件目录与块大小 */
-#ifndef GLAVO_OTA_IMAGE_DIR
-#define GLAVO_OTA_IMAGE_DIR  "/home/image/glavo"
+#ifndef GALVO_OTA_IMAGE_DIR
+#define GALVO_OTA_IMAGE_DIR  "/home/image/galvo"
 #endif
 
 #ifndef GLAVO_OTA_CHUNK_SIZE

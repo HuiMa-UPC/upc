@@ -9,22 +9,27 @@
 
 namespace upc::mqtt {
 
+/** MQTT 连接/遥测轮询相关常量。 */
 inline constexpr uint64_t kReconnectIntervalMs = 3000;
 inline constexpr uint64_t kTelemetryPrintingIntervalMs = 2000;
 inline constexpr uint64_t kTelemetryIdleIntervalMs = 30000;
 inline constexpr uint64_t kFirmwareQueryIntervalMs = 10000;
 
+/** 云控命令协议关键字与超时配置。 */
 inline constexpr const char* kCmdSetLight = "set_light";
 inline constexpr const char* kCmdStartRtspPush = "start_rtsp_push";
 inline constexpr const char* kCmdStopRtspPush = "stop_rtsp_push";
 inline constexpr const char* kCmdRejectReasonInvalidState = "invalid_state";
 inline constexpr const char* kCmdRejectReasonEncoderError = "encoder_error";
 inline constexpr uint64_t kRtspAckTimeoutMs = 8000;
+
+/** OTA 包下载/落盘目录约定。 */
 inline constexpr const char* kImageTmpDir = "/home/image/tmp";
 inline constexpr const char* kImageSocDir = "/home/image/soc";
 inline constexpr const char* kImageMcuDir = "/home/image/mcu";
-inline constexpr const char* kImageGlavoDir = "/home/image/glavo";
+inline constexpr const char* kImageGalvoDir = "/home/image/galvo";
 
+/** 最小 URL 结构，供 OTA 下载链路使用。 */
 struct ParsedUrl {
     std::string scheme;
     std::string host;
@@ -32,28 +37,43 @@ struct ParsedUrl {
     uint16_t port = 0;
 };
 
+/** MQTT 原始帧调试输出（受编译开关控制）。 */
 void debug_log_mqtt_frame(const char* direction,
                           const std::string& topic,
                           const void* payload,
                           size_t payload_len,
                           int qos,
                           int retained);
+/** 解析 http/https URL。 */
 bool parse_url(const std::string& raw, ParsedUrl& out);
+/** 从 URL path 提取下载文件名。 */
 std::string basename_from_url_path(const std::string& path);
+/** 目录不存在则创建。 */
 bool ensure_dir(const std::filesystem::path& p);
+/** 计算文件 sha256（十六进制小写）。 */
 std::string hex_sha256_file(const std::filesystem::path& p);
+/** 下载文件并在接收时回调进度。 */
 bool download_file_with_progress(const std::string& url,
                                  const std::filesystem::path& out_file,
                                  const std::function<void(size_t, size_t)>& on_progress,
                                  std::string& err);
+/** OTA 组件名映射到目标目录。 */
 const char* component_target_dir(const std::string& component);
+/** shell 安全单引号转义。 */
 std::string sh_single_quote(const std::string& v);
+/** 去掉行首尾空白和换行。 */
 std::string trim_line(std::string s);
+/** tar 条目安全校验（平铺、无路径穿越）。 */
 bool archive_entry_safe_flat(const std::string& entry);
+/** 执行命令并按行采集输出。 */
 bool run_capture_lines(const std::string& cmd, std::vector<std::string>& lines);
+/** 执行命令并返回是否成功。 */
 bool run_shell_ok(const std::string& cmd);
+/** ASCII 大写转换。 */
 std::string to_upper_ascii(std::string s);
+/** 是否为 .bin 文件名。 */
 bool is_bin_name(const std::string& name);
+/** 设备激活失败重试退避。 */
 uint64_t activation_retry_interval_ms(uint32_t fail_count);
 
 } // namespace upc::mqtt

@@ -2438,7 +2438,7 @@ void GlavoService::on_transport_result(uint8_t result)
 /* ============================================================================
  * MCU OTA
  *
- * 两路互斥：TCP 振镜 OTA（GLAVO_OTA_IMAGE_DIR）与串口 MCU OTA（MCU_OTA_IMAGE_DIR）。
+ * 两路互斥：TCP 振镜 OTA（GALVO_OTA_IMAGE_DIR）与串口 MCU OTA（MCU_OTA_IMAGE_DIR）。
  * 状态进度由 McuLink 回调直接 publish_*_ota_status → UI，不经 worker 队列。
  * ============================================================================ */
 
@@ -2454,7 +2454,7 @@ void GlavoService::handle_mcu_ota_start(const middleware::Message& msg)
         UPC_LOG_MCU_OTA(Warn, "mcu_ota_start: serial ota active");
         return;
     }
-    if(!McuLink::instance().start_mcu_ota(GLAVO_OTA_IMAGE_DIR)) {
+    if(!McuLink::instance().start_mcu_ota(GALVO_OTA_IMAGE_DIR)) {
         middleware::McuOtaStatusPayload st{};
         st.state    = middleware::McuOtaState::Failed;
         st.progress = 0;

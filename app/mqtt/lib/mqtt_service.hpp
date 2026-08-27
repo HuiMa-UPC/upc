@@ -79,7 +79,7 @@ private:
     };
 
     struct OtaComponent {
-        std::string component;      /**< soc / mcu / glavo */
+        std::string component;      /**< soc / mcu / galvo */
         std::string version;
         std::string url;
         std::string sha256;

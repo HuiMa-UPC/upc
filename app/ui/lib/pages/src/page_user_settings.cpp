@@ -1283,7 +1283,7 @@ void build_device_detail(lv_obj_t *parent)
     lv_obj_t *card = ui_user_make_frosted_card(parent, false);
     lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
 
-    ui_user_make_setting_row(card, "Glavo OTA", "Start", on_glavo_ota_entry_click);
+    ui_user_make_setting_row(card, "Galvo OTA", "Start", on_glavo_ota_entry_click);
     ui_user_make_setting_row(card, "MCU OTA", "Start", on_mcu_ota_entry_click);
 }
 

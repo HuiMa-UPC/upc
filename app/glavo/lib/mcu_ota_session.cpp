@@ -193,7 +193,7 @@ bool McuOtaSession::start(const char* image_dir)
         return false;
     }
 
-    const char* dir = (image_dir && image_dir[0]) ? image_dir : GLAVO_OTA_IMAGE_DIR;
+    const char* dir = (image_dir && image_dir[0]) ? image_dir : GALVO_OTA_IMAGE_DIR;
     if(!scan_bin_candidates(dir)) {
         return false;
     }
