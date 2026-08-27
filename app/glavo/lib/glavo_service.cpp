@@ -2518,6 +2518,8 @@ void GlavoService::publish_mcu_ota_status(
     middleware::Message out_ui(middleware::MsgType::APP_Mcu_Ota_Status_Ntf,
                                middleware::ModuleId::APP_GLAVO,
                                middleware::ModuleId::UI);
+    out_ui.priority = terminal ? middleware::MsgPriority::Realtime
+                               : middleware::MsgPriority::High;
     out_ui.payload = middleware::MsgPayload::from_bytes(
         reinterpret_cast<const uint8_t*>(&st), sizeof(st));
     (void)publish_async(out_ui);
@@ -2525,6 +2527,7 @@ void GlavoService::publish_mcu_ota_status(
     middleware::Message out_mqtt(middleware::MsgType::APP_Mcu_Ota_Status_Ntf,
                                  middleware::ModuleId::APP_GLAVO,
                                  middleware::ModuleId::APP_MQTT);
+    out_mqtt.priority = out_ui.priority;
     out_mqtt.payload = middleware::MsgPayload::from_bytes(
         reinterpret_cast<const uint8_t*>(&st), sizeof(st));
     (void)publish_async(out_mqtt);

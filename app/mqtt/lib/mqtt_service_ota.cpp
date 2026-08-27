@@ -230,6 +230,14 @@ void MqttService::publish_ota_progress_ui(const middleware::OtaProgressPayload& 
     middleware::Message msg(middleware::MsgType::APP_Mqtt_Ota_Progress_Ntf,
                             middleware::ModuleId::APP_MQTT,
                             middleware::ModuleId::UI);
+    const auto state = static_cast<middleware::OtaProgressState>(progress.state);
+    if(state == middleware::OtaProgressState::Completed ||
+       state == middleware::OtaProgressState::Failed ||
+       state == middleware::OtaProgressState::RolledBack) {
+        msg.priority = middleware::MsgPriority::High;
+    } else {
+        msg.priority = middleware::MsgPriority::Normal;
+    }
     msg.payload = middleware::MsgPayload::from_bytes(
         reinterpret_cast<const uint8_t*>(&progress), sizeof(progress));
     (void)middleware::MsgPort::instance().publish_async(msg);

@@ -10,6 +10,7 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <deque>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -87,7 +88,11 @@ private:
     void apply_reg_notify(uint32_t event, middleware::ModuleId module_id);
     void try_reconnect_broker();
     void accept_broker_client();
-    bool send_outbound_from_local(const middleware::Message& msg, bool warn_on_fail);
+    bool send_outbound_from_local(const middleware::Message& msg, bool warn_on_fail,
+                                  bool allow_buffer = true);
+    bool should_buffer_outbound(const middleware::Message& msg) const;
+    void enqueue_pending_outbound(const middleware::Message& msg, const char* reason);
+    void flush_pending_outbound();
     bool send_wire_frame(const std::vector<uint8_t>& frame);
     bool send_wire_frame_with_fds(const std::vector<uint8_t>& frame,
                                   const middleware::Message& msg,
@@ -123,6 +128,14 @@ private:
 
     std::unordered_map<uint32_t, std::vector<int>> pending_dma_fds_;
     mutable std::mutex pending_dma_fds_mtx_;
+
+    struct PendingOutbound {
+        middleware::Message msg;
+        uint8_t attempts{0};
+        std::chrono::steady_clock::time_point first_enqueue{};
+    };
+    std::deque<PendingOutbound> pending_outbound_;
+    mutable std::mutex pending_outbound_mtx_;
 };
 
 } // namespace upc_ipc

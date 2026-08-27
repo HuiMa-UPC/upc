@@ -78,7 +78,8 @@ int start_mqtt(char daemon)
         port.process(2);
         service.tick();
         upc_sys_monitor_tick();
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        // 减小空转睡眠，降低 IPC 高峰期的消息处理抖动。
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
     }
 
     service.shutdown();

@@ -1074,7 +1074,9 @@ void publish_laser_ntf(uint8_t type, uint16_t status, uint16_t alarm,
         middleware::ModuleId::APP_GLAVO, middleware::ModuleId::UI);
     ntf.payload = middleware::MsgPayload::from_bytes(
         reinterpret_cast<const uint8_t*>(&p), sizeof(p));
-    middleware::MsgPort::instance().publish_async(ntf);
+    if(!middleware::MsgPort::instance().publish_async(ntf)) {
+        UPC_LOG_MCU_LINK(Warn, "GLAVO_Debug_Laser_Ntf publish_async failed");
+    }
 }
 
 /** 组装并异步下发 GLAVO_Alarm_Report_Ntf：TLV 字段原样透传，不查字典不加工
@@ -1090,9 +1092,12 @@ void publish_alarm_report_ntf(const serial_alarm_report_t& report)
 
     middleware::Message ntf(middleware::MsgType::GLAVO_Alarm_Report_Ntf,
         middleware::ModuleId::APP_GLAVO, middleware::ModuleId::UI);
+    ntf.priority = middleware::MsgPriority::High;
     ntf.payload = middleware::MsgPayload::from_bytes(
         reinterpret_cast<const uint8_t*>(&p), sizeof(p));
-    middleware::MsgPort::instance().publish_async(ntf);
+    if(!middleware::MsgPort::instance().publish_async(ntf)) {
+        UPC_LOG_MCU_LINK(Warn, "GLAVO_Alarm_Report_Ntf publish_async failed");
+    }
 }
 
 /** 组装并异步下发 GLAVO_Alarm_Snapshot_Ntf：快照的一个 slot，同样原样透传。
@@ -1111,7 +1116,9 @@ void publish_alarm_snapshot_ntf(const serial_alarm_snapshot_t& snap)
         middleware::ModuleId::APP_GLAVO, middleware::ModuleId::UI);
     ntf.payload = middleware::MsgPayload::from_bytes(
         reinterpret_cast<const uint8_t*>(&p), sizeof(p));
-    middleware::MsgPort::instance().publish_async(ntf);
+    if(!middleware::MsgPort::instance().publish_async(ntf)) {
+        UPC_LOG_MCU_LINK(Warn, "GLAVO_Alarm_Snapshot_Ntf publish_async failed");
+    }
 }
 
 /** 组装并异步下发 GLAVO_Alarm_Reset_Result_Ntf：复位失败回执。
@@ -1124,9 +1131,12 @@ void publish_alarm_reset_result_ntf(const serial_alarm_reset_result_t& res)
 
     middleware::Message ntf(middleware::MsgType::GLAVO_Alarm_Reset_Result_Ntf,
         middleware::ModuleId::APP_GLAVO, middleware::ModuleId::UI);
+    ntf.priority = middleware::MsgPriority::High;
     ntf.payload = middleware::MsgPayload::from_bytes(
         reinterpret_cast<const uint8_t*>(&p), sizeof(p));
-    middleware::MsgPort::instance().publish_async(ntf);
+    if(!middleware::MsgPort::instance().publish_async(ntf)) {
+        UPC_LOG_MCU_LINK(Warn, "GLAVO_Alarm_Reset_Result_Ntf publish_async failed");
+    }
 }
 
 } // namespace
@@ -1243,7 +1253,9 @@ void McuLink::publish_debug_sensor_ntf(const serial_sensor_report_t& report)
         middleware::ModuleId::APP_GLAVO, middleware::ModuleId::UI);
     ntf.payload = middleware::MsgPayload::from_bytes(
         reinterpret_cast<const uint8_t*>(&p), sizeof(p));
-    middleware::MsgPort::instance().publish_async(ntf);
+    if(!middleware::MsgPort::instance().publish_async(ntf)) {
+        UPC_LOG_MCU_LINK(Warn, "GLAVO_Debug_Sensor_Ntf publish_async failed");
+    }
 }
 
 void McuLink::publish_debug_sensor_invalid_ntf()
@@ -1262,7 +1274,9 @@ void McuLink::publish_debug_sensor_invalid_ntf()
         middleware::ModuleId::APP_GLAVO, middleware::ModuleId::UI);
     ntf.payload = middleware::MsgPayload::from_bytes(
         reinterpret_cast<const uint8_t*>(&p), sizeof(p));
-    middleware::MsgPort::instance().publish_async(ntf);
+    if(!middleware::MsgPort::instance().publish_async(ntf)) {
+        UPC_LOG_MCU_LINK(Warn, "GLAVO_Debug_Sensor_Ntf(invalid) publish_async failed");
+    }
 }
 
 void McuLink::poll_env_sim_tick()
@@ -1374,7 +1388,9 @@ void McuLink::publish_debug_axis_ntf(const serial_motion_pos_t& pos)
         middleware::ModuleId::APP_GLAVO, middleware::ModuleId::UI);
     ntf.payload = middleware::MsgPayload::from_bytes(
         reinterpret_cast<const uint8_t*>(&p), sizeof(p));
-    middleware::MsgPort::instance().publish_async(ntf);
+    if(!middleware::MsgPort::instance().publish_async(ntf)) {
+        UPC_LOG_MCU_LINK(Warn, "GLAVO_Debug_Axis_Ntf publish_async failed");
+    }
 }
 
 void McuLink::on_mcu_version_report(const serial_project_info_t& info)
@@ -1409,7 +1425,10 @@ void McuLink::publish_mcu_version_ntf()
             middleware::ModuleId::APP_GLAVO, target);
         ntf.payload = middleware::MsgPayload::from_bytes(
             reinterpret_cast<const uint8_t*>(&p), sizeof(p));
-        middleware::MsgPort::instance().publish_async(ntf);
+        if(!middleware::MsgPort::instance().publish_async(ntf)) {
+            UPC_LOG_MCU_LINK(Warn, "GLAVO_Mcu_Version_Ntf publish_async failed target=%u",
+                static_cast<unsigned>(target));
+        }
     };
     send_to(middleware::ModuleId::UI);
     send_to(middleware::ModuleId::APP_MQTT);
@@ -3100,9 +3119,13 @@ void McuLink::publish_galvo_version_ntf()
     auto send_to = [&](middleware::ModuleId target) {
         middleware::Message ntf(middleware::MsgType::GLAVO_Galvo_Version_Ntf,
             middleware::ModuleId::APP_GLAVO, target);
+        ntf.priority = middleware::MsgPriority::High;
         ntf.payload = middleware::MsgPayload::from_bytes(
             reinterpret_cast<const uint8_t*>(&p), sizeof(p));
-        middleware::MsgPort::instance().publish_async(ntf);
+        if(!middleware::MsgPort::instance().publish_async(ntf)) {
+            UPC_LOG_MCU_LINK(Warn, "GLAVO_Galvo_Version_Ntf publish_async failed target=%u",
+                static_cast<unsigned>(target));
+        }
     };
     send_to(middleware::ModuleId::UI);
     send_to(middleware::ModuleId::APP_MQTT);

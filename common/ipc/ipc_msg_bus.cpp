@@ -26,6 +26,11 @@ using Clock = std::chrono::steady_clock;
 constexpr uint32_t kPollInEvents     = EPOLLIN | EPOLLRDHUP;
 constexpr uint32_t kPollListenEvents = EPOLLIN;
 #endif
+constexpr int kImmediateRetryCount = 3;
+constexpr auto kImmediateRetrySleep = std::chrono::milliseconds(2);
+constexpr size_t kPendingOutboundMax = 256;
+constexpr uint8_t kPendingOutboundMaxAttempts = 8;
+constexpr auto kPendingOutboundMaxAge = std::chrono::seconds(15);
 
 void ensure_poller_open(IpcPoller& poller)
 {
@@ -130,6 +135,10 @@ void IpcMsgBus::shutdown()
     {
         std::lock_guard<std::mutex> lock(pending_dma_fds_mtx_);
         pending_dma_fds_.clear();
+    }
+    {
+        std::lock_guard<std::mutex> lock(pending_outbound_mtx_);
+        pending_outbound_.clear();
     }
 
     initialized_ = false;
@@ -281,8 +290,106 @@ bool IpcMsgBus::take_pending_dma_fds(middleware::ModuleId peer_id,
     return true;
 }
 
+bool IpcMsgBus::should_buffer_outbound(const middleware::Message& msg) const
+{
+    if (msg.priority >= middleware::MsgPriority::High) {
+        return true;
+    }
+    return middleware::is_ipc_reliable_msg_type(msg.type);
+}
+
+void IpcMsgBus::enqueue_pending_outbound(const middleware::Message& msg,
+                                         const char* reason)
+{
+    if (!should_buffer_outbound(msg)) {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(pending_outbound_mtx_);
+    if (middleware::is_ipc_latest_only_msg_type(msg.type)) {
+        for (auto it = pending_outbound_.rbegin(); it != pending_outbound_.rend(); ++it) {
+            if (it->msg.type == msg.type &&
+                it->msg.sender_id == msg.sender_id &&
+                it->msg.target_id == msg.target_id) {
+                it->msg = msg;
+                it->attempts = 0;
+                it->first_enqueue = Clock::now();
+                UPC_LOG_IPC(Debug, "pending outbound replaced latest %s %s->%s",
+                            upc_msg_type_name(msg.type),
+                            upc_msg_module_name(msg.sender_id),
+                            upc_msg_module_name(msg.target_id));
+                return;
+            }
+        }
+    }
+    if (pending_outbound_.size() >= kPendingOutboundMax) {
+        pending_outbound_.pop_front();
+        UPC_LOG_IPC(Warn, "pending outbound overflow drop oldest size=%zu",
+                    pending_outbound_.size());
+    }
+    PendingOutbound entry{};
+    entry.msg = msg;
+    entry.first_enqueue = Clock::now();
+    pending_outbound_.push_back(std::move(entry));
+    UPC_LOG_IPC(Warn, "pending outbound queued %s %s->%s reason=%s depth=%zu",
+                upc_msg_type_name(msg.type),
+                upc_msg_module_name(msg.sender_id),
+                upc_msg_module_name(msg.target_id),
+                reason ? reason : "unknown",
+                pending_outbound_.size());
+}
+
+void IpcMsgBus::flush_pending_outbound()
+{
+    if (mode_ != IpcBusMode::Client || !client_endpoint_.connected()) {
+        return;
+    }
+
+    std::deque<PendingOutbound> pending;
+    {
+        std::lock_guard<std::mutex> lock(pending_outbound_mtx_);
+        if (pending_outbound_.empty()) {
+            return;
+        }
+        pending.swap(pending_outbound_);
+    }
+
+    std::deque<PendingOutbound> keep;
+    const auto now = Clock::now();
+    for (auto& entry : pending) {
+        if (send_outbound_from_local(entry.msg, false, false)) {
+            continue;
+        }
+        const auto age = now - entry.first_enqueue;
+        ++entry.attempts;
+        if (entry.attempts >= kPendingOutboundMaxAttempts ||
+            age >= kPendingOutboundMaxAge) {
+            UPC_LOG_IPC(Warn, "pending outbound drop %s %s->%s attempts=%u age_ms=%lld",
+                        upc_msg_type_name(entry.msg.type),
+                        upc_msg_module_name(entry.msg.sender_id),
+                        upc_msg_module_name(entry.msg.target_id),
+                        static_cast<unsigned>(entry.attempts),
+                        static_cast<long long>(
+                            std::chrono::duration_cast<std::chrono::milliseconds>(age).count()));
+            continue;
+        }
+        keep.push_back(std::move(entry));
+    }
+
+    if (!keep.empty()) {
+        std::lock_guard<std::mutex> lock(pending_outbound_mtx_);
+        while (!keep.empty()) {
+            pending_outbound_.push_back(std::move(keep.front()));
+            keep.pop_front();
+            if (pending_outbound_.size() > kPendingOutboundMax) {
+                pending_outbound_.pop_front();
+            }
+        }
+    }
+}
+
 bool IpcMsgBus::send_outbound_from_local(const middleware::Message& msg,
-                                         bool warn_on_fail)
+                                         bool warn_on_fail,
+                                         bool allow_buffer)
 {
     if (msg.sender_id != local_id_ || mode_ != IpcBusMode::Client) {
         return true;
@@ -299,15 +406,34 @@ bool IpcMsgBus::send_outbound_from_local(const middleware::Message& msg,
                     upc_msg_module_name(msg.target_id));
         return false;
     }
-    if (send_wire_frame(frame)) {
-        upc_msg_log_message("IPC_TX", msg);
-        return true;
+
+    if (msg.target_id != middleware::ModuleId{0} &&
+        !peer_connected(msg.target_id)) {
+        if (allow_buffer) {
+            enqueue_pending_outbound(msg, "peer_offline");
+        }
+        return false;
     }
+
+    for (int i = 0; i < kImmediateRetryCount; ++i) {
+        if (send_wire_frame(frame)) {
+            upc_msg_log_message("IPC_TX", msg);
+            return true;
+        }
+        try_reconnect_broker();
+        if (i + 1 < kImmediateRetryCount) {
+            std::this_thread::sleep_for(kImmediateRetrySleep);
+        }
+    }
+
     if (warn_on_fail) {
         UPC_LOG_IPC(Warn, "IPC_TX fail %s %s->%s (broker not ready)",
                     upc_msg_type_name(msg.type),
                     upc_msg_module_name(msg.sender_id),
                     upc_msg_module_name(msg.target_id));
+    }
+    if (allow_buffer) {
+        enqueue_pending_outbound(msg, "tx_fail");
     }
     return false;
 }
@@ -319,7 +445,8 @@ bool IpcMsgBus::publish_async(const middleware::Message& msg)
 
 bool IpcMsgBus::publish_sync(const middleware::Message& msg)
 {
-    return send_outbound_from_local(msg, false);
+    // 同步发送保持“即时成功/失败”语义，不进入本地补发队列。
+    return send_outbound_from_local(msg, false, false);
 }
 
 bool IpcMsgBus::client_send_reg()
@@ -852,8 +979,12 @@ void IpcMsgBus::process(int io_timeout_ms)
 {
     if (mode_ == IpcBusMode::Client) {
         try_reconnect_broker();
+        flush_pending_outbound();
     }
     poll_io(io_timeout_ms);
+    if (mode_ == IpcBusMode::Client) {
+        flush_pending_outbound();
+    }
 }
 
 } // namespace upc_ipc

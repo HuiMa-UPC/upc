@@ -529,6 +529,70 @@ enum class MsgPriority : uint8_t {
     Realtime  = 3
 };
 
+/**
+ * IPC 关键消息白名单：发送失败时允许进入本地暂存并在重连后补发。
+ *
+ * 说明：
+ * 1) 仅放“状态终值/关键事件”与打印链路关键里程碑，避免把高频实时流量全量缓存。
+ * 2) 高频进度仍建议业务侧做“只认最新状态”去旧保护。
+ */
+inline constexpr bool is_ipc_reliable_msg_type(MsgType type) noexcept
+{
+    switch(type) {
+    // OTA / 告警：终态与关键事件
+    case MsgType::APP_Mcu_Ota_Status_Ntf:
+    case MsgType::APP_Mqtt_Ota_Progress_Ntf:
+    case MsgType::GLAVO_Alarm_Report_Ntf:
+    case MsgType::GLAVO_Alarm_Reset_Result_Ntf:
+        return true;
+
+    // 打印主流程：关键状态与异常通知
+    case MsgType::APP_Print_Progress_Ntf:
+    case MsgType::APP_Print_Terminate_Rsp:
+    case MsgType::APP_Print_Pause_Rsp:
+    case MsgType::APP_Print_Powder_Low_Ntf:
+        return true;
+
+    // 换层/录像链路：层抓拍与会话闭环
+    case MsgType::APP_Print_Video_Session_Start_Ntf:
+    case MsgType::APP_Print_Layer_Snap_Ntf:
+    case MsgType::APP_Print_Video_Session_Finish_Ntf:
+    case MsgType::APP_Print_Video_Session_Abort_Ntf:
+    case MsgType::APP_Print_Video_Manifest_Ntf:
+        return true;
+
+    // 首层视觉关键里程碑
+    case MsgType::APP_Visual_FirstLayer_Check_Rsp:
+    case MsgType::APP_Visual_FirstLayer_Reference_Ready_Rsp:
+    case MsgType::GLAVO_Visual_FirstLayer_Session_Start_Ntf:
+    case MsgType::GLAVO_Visual_FirstLayer_Session_Stop_Ntf:
+        return true;
+
+    default:
+        return false;
+    }
+}
+
+/**
+ * IPC 状态流消息：在本地补发队列中仅保留“最新一条”。
+ *
+ * 用于避免断连期间高频状态堆积（旧状态补发导致回跳/队列膨胀）。
+ */
+inline constexpr bool is_ipc_latest_only_msg_type(MsgType type) noexcept
+{
+    switch(type) {
+    case MsgType::APP_Mqtt_Ota_Progress_Ntf:
+    case MsgType::APP_Mcu_Ota_Status_Ntf:
+    case MsgType::APP_Print_Progress_Ntf:
+    case MsgType::APP_Print_Pause_Rsp:
+    case MsgType::APP_Print_Video_Manifest_Ntf:
+    case MsgType::APP_Visual_FirstLayer_Reference_Ready_Rsp:
+        return true;
+    default:
+        return false;
+    }
+}
+
 // Payload 契约（POD，可 memcpy；跨进程由 ipc_wire 序列化）
 // 命名：\<动作\>Payload / \<动作\>ReqPayload / \<动作\>RspPayload
 
