@@ -2446,12 +2446,24 @@ void GlavoService::on_transport_result(uint8_t result)
 void GlavoService::handle_mcu_ota_start(const middleware::Message& msg)
 {
     (void)msg;
+    {
+        std::lock_guard<std::mutex> lock(mcu_ota_status_pub_mtx_);
+        mcu_ota_status_pub_has_last_ = false;
+    }
     if(McuLink::instance().ota_active()) {
         UPC_LOG_MCU_OTA(Warn, "mcu_ota_start: already active");
+        middleware::McuOtaStatusPayload st{};
+        st.state = middleware::McuOtaState::Failed;
+        st.progress = 0;
+        publish_mcu_ota_status(st);
         return;
     }
     if(McuLink::instance().serial_ota_active()) {
         UPC_LOG_MCU_OTA(Warn, "mcu_ota_start: serial ota active");
+        middleware::McuOtaStatusPayload st{};
+        st.state = middleware::McuOtaState::Failed;
+        st.progress = 0;
+        publish_mcu_ota_status(st);
         return;
     }
     if(!McuLink::instance().start_mcu_ota(GALVO_OTA_IMAGE_DIR)) {
@@ -2473,12 +2485,49 @@ void GlavoService::handle_mcu_ota_cancel(const middleware::Message& msg)
 void GlavoService::publish_mcu_ota_status(
     const middleware::McuOtaStatusPayload& st)
 {
-    middleware::Message out(middleware::MsgType::APP_Mcu_Ota_Status_Ntf,
-                            middleware::ModuleId::APP_GLAVO,
-                            middleware::ModuleId::UI);
-    out.payload = middleware::MsgPayload::from_bytes(
+    const auto state = static_cast<middleware::McuOtaState>(st.state);
+    const bool terminal =
+        (state == middleware::McuOtaState::Success) ||
+        (state == middleware::McuOtaState::Failed) ||
+        (state == middleware::McuOtaState::Cancelled);
+    {
+        std::lock_guard<std::mutex> lock(mcu_ota_status_pub_mtx_);
+        if(mcu_ota_status_pub_has_last_) {
+            const auto& last = mcu_ota_status_pub_last_;
+            if(last.state == st.state && last.progress == st.progress) {
+                return;
+            }
+            if(!terminal && last.state == st.state) {
+                const int delta = static_cast<int>(st.progress) - static_cast<int>(last.progress);
+                const auto now = std::chrono::steady_clock::now();
+                const auto elapsed_ms =
+                    std::chrono::duration_cast<std::chrono::milliseconds>(
+                        now - mcu_ota_status_pub_last_ts_)
+                        .count();
+                // 非终态场景下做降频：进度变化很小且时间很短时，跳过本次推送。
+                if(delta >= 0 && delta < 6 && elapsed_ms < 80) {
+                    return;
+                }
+            }
+        }
+        mcu_ota_status_pub_last_ = st;
+        mcu_ota_status_pub_last_ts_ = std::chrono::steady_clock::now();
+        mcu_ota_status_pub_has_last_ = true;
+    }
+
+    middleware::Message out_ui(middleware::MsgType::APP_Mcu_Ota_Status_Ntf,
+                               middleware::ModuleId::APP_GLAVO,
+                               middleware::ModuleId::UI);
+    out_ui.payload = middleware::MsgPayload::from_bytes(
         reinterpret_cast<const uint8_t*>(&st), sizeof(st));
-    (void)publish_async(out);
+    (void)publish_async(out_ui);
+
+    middleware::Message out_mqtt(middleware::MsgType::APP_Mcu_Ota_Status_Ntf,
+                                 middleware::ModuleId::APP_GLAVO,
+                                 middleware::ModuleId::APP_MQTT);
+    out_mqtt.payload = middleware::MsgPayload::from_bytes(
+        reinterpret_cast<const uint8_t*>(&st), sizeof(st));
+    (void)publish_async(out_mqtt);
 }
 
 /** @brief 处理 UI_Serial_Mcu_Ota_Start_Req，启动 McuLink 串口 OTA 会话 */

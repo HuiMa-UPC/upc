@@ -261,6 +261,12 @@ private:
     std::condition_variable first_layer_visual_cv_;
     bool first_layer_visual_waiting_ = false;
     uint8_t first_layer_visual_result_ = 0;
+
+    /** @brief MCU OTA 状态上报节流：同值去重 + 高频降采样 */
+    std::mutex mcu_ota_status_pub_mtx_;
+    bool mcu_ota_status_pub_has_last_ = false;
+    middleware::McuOtaStatusPayload mcu_ota_status_pub_last_{};
+    std::chrono::steady_clock::time_point mcu_ota_status_pub_last_ts_{};
 };
 
 } // namespace upc::glavo

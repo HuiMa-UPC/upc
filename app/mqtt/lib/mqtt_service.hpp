@@ -9,6 +9,7 @@
 #include <MQTTClient.h>
 
 #include <atomic>
+#include <condition_variable>
 #include <cstdint>
 #include <cstring>
 #include <mutex>
@@ -90,6 +91,7 @@ private:
     void subscribe_messages();
     void on_env_update(const middleware::Message& msg);
     void on_mcu_version(const middleware::Message& msg);
+    void on_mcu_ota_status(const middleware::Message& msg);
     void on_galvo_version(const middleware::Message& msg);
     void on_env_sim_state(const middleware::Message& msg);
     void on_ota_user_decision(const middleware::Message& msg);
@@ -152,6 +154,8 @@ private:
     bool publish_manifest_request(const std::string& task_id);
     bool publish_ota_progress_cloud(const middleware::OtaProgressPayload& progress);
     void publish_ota_progress_ui(const middleware::OtaProgressPayload& progress);
+    bool trigger_galvo_real_ota(const std::string& task_id, const std::string& component);
+    bool wait_galvo_real_ota(std::string& err_code);
     void run_manifest_download_task(std::string task_id, std::vector<OtaComponent> components);
     void start_manifest_download(std::string task_id, std::vector<OtaComponent> components);
     void request_firmware_versions_force(bool need_mcu, bool need_galvo);
@@ -241,6 +245,22 @@ private:
     OtaNotify pending_ota_notify_{};
     std::thread ota_download_thread_;
     bool ota_download_running_ = false;
+    struct GalvoOtaSync {
+        bool waiting = false;
+        bool finished = false;
+        bool success = false;
+        bool terminal_seen = false;
+        bool last_apply_pct_valid = false;
+        uint8_t last_apply_pct = 0;
+        bool last_mcu_status_valid = false;
+        middleware::McuOtaState last_mcu_state = middleware::McuOtaState::Idle;
+        uint8_t last_mcu_progress = 0;
+        std::string task_id;
+        std::string component;
+        std::string error_code;
+    } galvo_ota_sync_{};
+    std::mutex galvo_ota_mtx_;
+    std::condition_variable galvo_ota_cv_;
 
     std::atomic<uint32_t> seq_{0};
 };

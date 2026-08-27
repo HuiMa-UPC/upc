@@ -764,6 +764,10 @@ void MqttService::subscribe_messages()
         middleware::ModuleId::APP_MQTT,
         [this](const middleware::Message& msg) { on_mcu_version(msg); }));
     subs_.push_back(bus.subscribe(
+        middleware::MsgType::APP_Mcu_Ota_Status_Ntf,
+        middleware::ModuleId::APP_MQTT,
+        [this](const middleware::Message& msg) { on_mcu_ota_status(msg); }));
+    subs_.push_back(bus.subscribe(
         middleware::MsgType::GLAVO_Galvo_Version_Ntf,
         middleware::ModuleId::APP_MQTT,
         [this](const middleware::Message& msg) { on_galvo_version(msg); }));
