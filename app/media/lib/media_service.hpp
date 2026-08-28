@@ -39,6 +39,8 @@ private:
     void handle_print_video_finalize(const middleware::Message& msg);
     /** H264 worker 关闭裸流后触发，解开开门最终化栅栏。 */
     void on_print_h264_finalize_done();
+    /** H264 录制因空间耗尽提前收尾，通知 print_video 取消 print_h264 期待位。 */
+    void on_print_h264_storage_exhausted();
     /** Timelapse 优先 finalize；若 H264 仍在收尾则延后 print_h264 remux。 */
     void finalize_print_video_by_stage(const std::string& frames_dir);
     /** 第二阶段：仅完成打印录像 remux 并清 print_video_pending。 */

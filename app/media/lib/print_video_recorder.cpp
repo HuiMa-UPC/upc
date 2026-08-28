@@ -234,6 +234,20 @@ void PrintVideoRecorder::set_storage_budget_guard(std::function<bool()> fn)
     storage_budget_guard_ = std::move(fn);
 }
 
+void PrintVideoRecorder::disable_h264_expectation()
+{
+    std::lock_guard<std::mutex> lock(mtx_);
+    if(!h264_continuous_on_) {
+        return;
+    }
+    h264_continuous_on_ = false;
+    UPC_LOG_MEDIA_SERVICE(
+        Warn,
+        "print_video disable h264 expectation session=%s dir=%s",
+        session_id_.empty() ? "(none)" : session_id_.c_str(),
+        session_dir_.empty() ? "(none)" : session_dir_.c_str());
+}
+
 std::string PrintVideoRecorder::current_session_dir() const
 {
     std::lock_guard<std::mutex> lock(mtx_);

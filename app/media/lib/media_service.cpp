@@ -74,6 +74,9 @@ bool MediaService::init()
     print_h264_.set_finalize_done_callback([this] {
         on_print_h264_finalize_done();
     });
+    print_h264_.set_storage_exhausted_callback([this] {
+        on_print_h264_storage_exhausted();
+    });
 
     uint32_t timelapse_fps = CAMERA_PRINT_VIDEO_LAYER_FPS;
     upc::config::CalConfigOptions cal_cfg{};
@@ -795,6 +798,11 @@ void MediaService::on_print_h264_finalize_done()
     if(!finalize_frames_dir.empty()) {
         finalize_print_video_stage2(finalize_frames_dir);
     }
+}
+
+void MediaService::on_print_h264_storage_exhausted()
+{
+    print_video_.disable_h264_expectation();
 }
 
 void MediaService::handle_storage_usage_req(const middleware::Message& msg) const

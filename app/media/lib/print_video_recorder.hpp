@@ -70,6 +70,11 @@ public:
     void set_sender_module_id(middleware::ModuleId module_id);
     /** 关键写盘前预算检查；返回 false 时本次写盘跳过。 */
     void set_storage_budget_guard(std::function<bool()> fn);
+    /**
+     * 连续 H264 因空间耗尽被提前停止后，取消本次会话对 print_h264.mp4 的期待。
+     * 这样 finalize 阶段不会把 print_video_pending 永久置为 1。
+     */
+    void disable_h264_expectation();
     /** 当前会话目录（空=无活跃会话）。 */
     std::string current_session_dir() const;
     bool session_active() const;

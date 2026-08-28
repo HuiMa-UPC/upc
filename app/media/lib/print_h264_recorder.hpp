@@ -58,6 +58,11 @@ public:
     void enqueue_cleanup_tmp();
     /** 设置写盘前的存储空间预算检查函数；返回 false 时跳过本帧写入。 */
     void set_storage_budget_guard(std::function<bool()> cb);
+    /**
+     * 当检测到“预算不足且无法继续写盘”时触发一次回调。
+     * 回调在 worker 线程执行，可用于通知上层取消 print_video_pending 期待位。
+     */
+    void set_storage_exhausted_callback(std::function<void()> cb);
     /** 返回当前活跃会话的临时目录；无活跃会话返回空字符串。 */
     std::string current_session_dir() const;
     /** 是否正处于打印期录像中。 */
@@ -154,6 +159,8 @@ private:
     bool mpp_ready_ = false;            /**< 编码器是否已成功打开。 */
     std::function<void()> finalize_done_cb_;     /**< 完成回调。 */
     std::function<bool()> storage_budget_guard_; /**< 存储预算检查回调。 */
+    std::function<void()> storage_exhausted_cb_; /**< 空间耗尽回调。 */
+    bool storage_exhausted_reported_ = false;    /**< 单会话只上报一次耗尽事件。 */
 };
 
 } // namespace upc::media

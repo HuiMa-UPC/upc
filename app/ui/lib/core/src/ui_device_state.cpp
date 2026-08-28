@@ -65,7 +65,7 @@ void ui_device_state_init(void)
     if(!g_inited) {
         std::memset(&g_snap, 0, sizeof(g_snap));
         std::strcpy(g_snap.device_name, upc::config::kDeviceDisplayName);
-        g_snap.status         = UI_DEVICE_STATUS_READY;
+        g_snap.status         = UI_DEVICE_STATUS_IDLE;
         g_snap.wifi_connected = false;
         g_snap.signal_bars    = 0;
         /* 环境指标默认无数据（<0）→ 首帧环境到达前统一显示 "--" */

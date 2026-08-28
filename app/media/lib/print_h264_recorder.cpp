@@ -140,6 +140,11 @@ void PrintH264Recorder::set_storage_budget_guard(std::function<bool()> cb) {
     storage_budget_guard_ = std::move(cb);
 }
 
+void PrintH264Recorder::set_storage_exhausted_callback(std::function<void()> cb) {
+    std::lock_guard<std::mutex> lock(mtx_);
+    storage_exhausted_cb_ = std::move(cb);
+}
+
 /** 返回当前活跃会话目录。 */
 std::string PrintH264Recorder::current_session_dir() const {
     std::lock_guard<std::mutex> lock(mtx_);
@@ -480,6 +485,7 @@ void PrintH264Recorder::on_session_start(const middleware::PrintVideoSessionPayl
     // 编码帧率以相机开流时 set_stream_geometry 为准，不使用 layer_fps（延时摄影）。
     bitrate_bps_ = info.h264_bitrate > 0 ? info.h264_bitrate
                                          : CAMERA_PRINT_H264_BITRATE;
+    storage_exhausted_reported_ = false;
 
     // 与 PrintVideoRecorder 共用 tmp/ 目录：这里不做 remove_all，避免误删层间 PNG。
     // Media 模块已在 Session Start 前完成 recover 和清空 tmp。
@@ -657,6 +663,27 @@ void PrintH264Recorder::run_write_frame_job(const Job& job) {
         UPC_LOG_MEDIA_SERVICE(
             Warn, "STORCHK_SKIP_WRITE kind=print_h264 reason=budget_unavailable session=%s",
             job.session_id.c_str());
+        std::function<void()> exhausted_cb;
+        bool should_notify = false;
+        {
+            std::lock_guard<std::mutex> lock(mtx_);
+            if(job.session_seq == session_seq_) {
+                if(!storage_exhausted_reported_) {
+                    storage_exhausted_reported_ = true;
+                    should_notify = true;
+                    exhausted_cb = storage_exhausted_cb_;
+                }
+                if(active_ && !finalize_in_progress_) {
+                    UPC_LOG_MEDIA_SERVICE(
+                        Warn, "print_h264 stop recording early due to storage budget session=%s",
+                        job.session_id.c_str());
+                    enqueue_finalize_locked(false);
+                }
+            }
+        }
+        if(should_notify && exhausted_cb) {
+            exhausted_cb();
+        }
         return;
     }
     {

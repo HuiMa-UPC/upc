@@ -21,6 +21,7 @@
 #include <termios.h>
 
 #include <cerrno>
+#include <algorithm>
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
@@ -647,6 +648,8 @@ int McuLink::connect_tcp()
 
     tcp_fd_ = fd;
     tcp_rx_accum_len_ = 0; // 清空接收累积区
+    last_tcp_hb_rsp_ms_.store(std::chrono::duration_cast<std::chrono::milliseconds>(
+                              std::chrono::steady_clock::now().time_since_epoch()).count());
 
     UPC_LOG_MCU_LINK(Info, "TCP connected %s:%d (NODELAY=1)", ip, port);
     return 0;
@@ -1189,6 +1192,50 @@ void McuLink::publish_env_update_ntf()
         if(!middleware::MsgPort::instance().publish_async(ntf_mqtt)) {
             UPC_LOG_MCU_LINK(Warn, "APP_Update_Ntf publish_async failed target=APP_MQTT");
         }
+    }
+}
+
+void McuLink::publish_env_status_ntf_ui_only()
+{
+    const middleware::UserHomeStatus status = is_tcp_connected()
+        ? middleware::UserHomeStatus::Ready
+        : middleware::UserHomeStatus::Idle;
+
+    middleware::EnvSnapshotPayload p{};
+    std::snprintf(p.device_name, sizeof(p.device_name), "%s", upc::config::kDeviceDisplayName);
+    p.status = static_cast<uint32_t>(status);
+    const WifiSnapshot wifi = WifiManager::instance().snapshot();
+    p.wifi_connected = wifi.connected ? 1 : 0;
+    p.signal_bars = wifi.signal_bars;
+
+    const EnvSnapshotCache snap = env_snapshot();
+    if(snap.valid) {
+        p.pm25_indoor = snap.pm25_indoor;
+        p.pm25_cabin = snap.pm25_cabin;
+        p.temperature_c = snap.temperature_c;
+        p.oxygen_percent = snap.oxygen_percent;
+        p.humidity_percent = snap.humidity_percent;
+        p.pressure_kpa = snap.pressure_kpa;
+        p.pm10_indoor = snap.pm10_indoor;
+        p.powder_bits = static_cast<uint8_t>(snap.powder_bits & 0x03u);
+    } else {
+        p.pm25_indoor = -1.0f;
+        p.pm25_cabin = -1.0f;
+        p.temperature_c = -1.0f;
+        p.oxygen_percent = -1.0f;
+        p.humidity_percent = -1.0f;
+        p.pressure_kpa = -1.0f;
+        p.pm10_indoor = -1.0f;
+        p.powder_bits = 0u;
+    }
+
+    middleware::Message ntf_ui(middleware::MsgType::APP_Update_Ntf,
+        middleware::ModuleId::APP_GLAVO,
+        middleware::ModuleId::UI);
+    ntf_ui.payload = middleware::MsgPayload::from_bytes(
+        reinterpret_cast<const uint8_t*>(&p), sizeof(p));
+    if(!middleware::MsgPort::instance().publish_async(ntf_ui)) {
+        UPC_LOG_MCU_LINK(Warn, "APP_Update_Ntf(status_only) publish_async failed target=UI");
     }
 }
 
@@ -3029,6 +3076,8 @@ bool McuLink::serial_ota_active() const
 
 void McuLink::on_tcp_status_response(const tcp_response_t& resp)
 {
+    last_tcp_hb_rsp_ms_.store(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                  std::chrono::steady_clock::now().time_since_epoch()).count());
     ota_session_.on_status_response(resp);
 #if GLAVO_OTA_POST_RECONNECT_ENABLE
     if(ota_session_.take_post_success_reconnect()) {
@@ -3309,9 +3358,23 @@ void McuLink::link_thread_fn()
     using clock = std::chrono::steady_clock;
     auto next_hb = clock::now(); // 下次心跳发送时间点
     auto next_tcp_retry = clock::now(); // 下次 TCP 重连尝试时间点
+    bool tcp_state_published = false;
+    bool last_tcp_connected = false;
+    constexpr int64_t kTcpLivenessTimeoutFloorMs = 1500;
 
     while(link_run_.load()) {
         const auto now = clock::now();
+        const int64_t now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                   now.time_since_epoch()).count();
+        const bool tcp_connected_now = (tcp_fd_ >= 0);
+
+        /* UI 顶栏 Ready/Idle 需要直接反映 TCP 链路状态，不依赖传感器上报频率。
+         * 线程启动先推一次，之后仅在连接态变化时推送。 */
+        if(!tcp_state_published || tcp_connected_now != last_tcp_connected) {
+            publish_env_status_ntf_ui_only();
+            tcp_state_published = true;
+            last_tcp_connected = tcp_connected_now;
+        }
 
         // ---------- 串口 TX/RX/可靠重传：独立于 TCP，始终处理 ----------
         // 串口（MCU 调试链路）与 TCP（振镜）相互独立；即使振镜未连接，
@@ -3324,6 +3387,22 @@ void McuLink::link_thread_fn()
         // ---------- TCP RX 排空与断线检测/重连（不阻塞串口） ----------
         if(tcp_fd_ >= 0) {
             tcp_drain_rx();
+            if(!ota_session_.is_active() && !serial_ota_session_.is_active()) {
+                const int64_t hb_timeout_ms = std::max<int64_t>(
+                    kTcpLivenessTimeoutFloorMs,
+                    static_cast<int64_t>(current_tcp_heartbeat_interval_ms()) * 8);
+                const int64_t last_hb_rsp_ms = last_tcp_hb_rsp_ms_.load();
+                if(last_hb_rsp_ms > 0 &&
+                   now_ms - last_hb_rsp_ms > hb_timeout_ms) {
+                    UPC_LOG_MCU_LINK(Warn,
+                        "TCP liveness timeout: no heartbeat rsp for %lld ms (timeout=%lld), force reconnect",
+                        static_cast<long long>(now_ms - last_hb_rsp_ms),
+                        static_cast<long long>(hb_timeout_ms));
+                    close(tcp_fd_);
+                    tcp_fd_ = -1;
+                    tcp_rx_accum_len_ = 0;
+                }
+            }
         } else if(is_sending_.load() && !ota_session_.is_active() &&
                    !serial_ota_session_.is_active() &&
                    !completing_cleanup_.load()) {

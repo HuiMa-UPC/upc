@@ -243,6 +243,8 @@ public:
     void on_sensor_report(const serial_sensor_report_t& report);
     void on_motion_pos_report(const serial_motion_pos_t& pos);
     void publish_env_update_ntf();
+    /** @brief 仅向 UI 推送状态快照（Ready/Idle + WiFi），不清空环境值也不推 MQTT。 */
+    void publish_env_status_ntf_ui_only();
     /** @brief 强制推送环境无效哨兵（各 float <0），供 UI 显示 "--"；不要求 env_cache_.valid */
     void publish_env_invalid_ntf();
     void publish_debug_sensor_ntf(const serial_sensor_report_t& report);
@@ -439,6 +441,7 @@ private:
     std::atomic<uint16_t> tcp_send_interval_ms_{TCP_SEND_INTERVAL_MS}; /**< 运行时发送轮询间隔 */
     std::atomic<uint16_t> tcp_heartbeat_interval_ms_{TCP_HEARTBEAT_INTERVAL_MS}; /**< 运行时心跳间隔 */
     std::atomic<uint8_t>  tcp_cmd_backpressure_pct_{MCU_CMD_BACKPRESSURE_PCT}; /**< 运行时背压阈值 */
+    std::atomic<int64_t>  last_tcp_hb_rsp_ms_{0}; /**< 最近一次收到 TCP 状态应答的单调时刻（ms）。 */
 
     /* ---------- TCP 0x0F 首包固件版本缓存（About 页 Galvo Version） ---------- */
     std::atomic<bool>     tcp_fw_valid_{false};       /**< 是否已收到带版本的扩展包 */
