@@ -139,6 +139,8 @@ private:
     bool publish_first_layer_visual_session(bool active, const char* reason);
     bool request_first_layer_visual_check(uint16_t layer_height_um);
     void handle_visual_first_layer_check_rsp(const middleware::Message& msg);
+    /** @brief 联动切换红光/激光模式（TCP 红光 + 串口激光使能），可选按缓存去重。 */
+    bool apply_red_laser_mode(bool red_on, bool dedup, const char* reason);
     void debug_tx(const uint8_t* frame, int n);
 
     /** @brief About 页版本查询：下发串口 TLV_GET_VERSION，应答由 McuLink 直接推 UI */

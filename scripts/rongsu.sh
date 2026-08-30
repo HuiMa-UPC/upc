@@ -36,6 +36,39 @@ wait_for_socket() {
     return 1
 }
 
+BOOTANIM_DEADLINE=/tmp/bootanim.deadline
+BOOTANIM_MAX_WAIT=5
+
+# gst-video.sh 起播时会把"最早可以打断"的 uptime 写进 $BOOTANIM_DEADLINE。
+# 只补差额：上面那串服务如果已经耗掉足够时间，这里一秒都不等。
+# 上限是防止 deadline 文件异常时把开机卡死。
+wait_for_bootanim() {
+    [ -r "$BOOTANIM_DEADLINE" ] || return 0
+
+    remain=$(awk -v max="$BOOTANIM_MAX_WAIT" '
+        NR == 1 { deadline = $1; next }
+        NR == 2 {
+            d = deadline - $1
+            if (d < 0) d = 0
+            if (d > max) d = max
+            printf "%.2f", d
+        }
+    ' "$BOOTANIM_DEADLINE" /proc/uptime 2>/dev/null)
+ 
+    [ -n "$remain" ] || return 0
+    sleep "$remain"
+}
+
+# 开机动画通过 kmssink 占着 /dev/dri/card0 的 DRM master，rongsu_ui 要 set mode
+# 就必须先让它退出。放在这里而不是放在 init 脚本里，是为了让动画一直播到 UI 真正
+# 要用显示的那一刻，而不是在整串后台服务启动之前就被砍掉。
+# bootanim stop 会阻塞到播放进程被杀掉才返回，所以返回时 master 已经空出来了。
+stop_bootanim() {
+    [ -x /usr/bin/bootanim ] || return 0
+    wait_for_bootanim
+    /usr/bin/bootanim stop || true
+}
+
 cmd="${1:-}"
 
 start_daemon() {
@@ -52,6 +85,7 @@ start_daemon() {
     "$XFR" start
     "$VISUAL" start
     "$MQTT" start
+    stop_bootanim
     "$UI" start
     echo "Started broker + glavo + rongsu_camera + rongsu_media + rongsu_xfr + rongsu_visual + rongsu_mqtt + ui"
 }
@@ -117,6 +151,8 @@ run_foreground() {
 
     "$MQTT" run &
     MPID=$!
+
+    stop_bootanim
 
     "$UI" run &
     UPID=$!

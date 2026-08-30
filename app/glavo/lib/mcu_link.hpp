@@ -35,7 +35,7 @@ enum class McuLinkEvent : uint8_t {
 using McuLinkEventCb = std::function<void(McuLinkEvent)>;
 /** @brief 进度回调类型：每成功下发一批运动包后触发，用于更新进度条等 UI */
 using McuLinkProgressCb = std::function<void()>;
-/** @brief 清粉测试完成回调：参数为 TLV 0x22 result_code。 */
+/** @brief 清粉测试完成回调：参数为清粉完成上报 result_code（A2/42/0x01）。 */
 using McuLinkCleanTestDoneCb = std::function<void(uint8_t)>;
 using McuLinkTransportResultCb = std::function<void(uint8_t)>;
 /** @brief 首层视觉检测回调：true=通过，false=不通过（继续铺粉）。 */
@@ -408,6 +408,8 @@ private:
     /** @brief 立即应用 TCP 档位参数（legacy / small-mem） */
     void apply_tcp_profile(bool small_mem, const char* reason,
                            uint32_t fw_version_le);
+    /** @brief TCP 刚连上时强制回红光（TCP 红光 + 串口关激光）。 */
+    void force_switch_to_red_mode_on_tcp_connect();
 
     /* ---------- 核心依赖 ---------- */
     upc::parser::RingBuffer* rb_ = nullptr;          /**< 绑定的 RingBuffer，运动包来源 */

@@ -2393,6 +2393,24 @@ bool McuLink::send_tcp_emergency_ctrl(bool stop, bool pause)
     return send_tcp_emergency_ctrl_ex(stop_code, pause_code, 0u);
 }
 
+void McuLink::force_switch_to_red_mode_on_tcp_connect()
+{
+    /* 连接恢复时先关串口激光，再开 TCP 红光，保证默认落在安全态。 */
+    uint8_t sbuf[SERIAL_DEBUG_MAX_FRAME];
+    const int slen = serial_debug_build_switch(0u, false, sbuf, sizeof(sbuf));
+    if(slen > 0) {
+        enqueue_serial_tx(sbuf, static_cast<size_t>(slen), false);
+    } else {
+        UPC_LOG_MCU_LINK(Warn, "tcp connect failsafe: build serial laser-off failed");
+    }
+
+    if(!send_tcp_emergency_ctrl_ex(0u, 0u, 1u)) {
+        UPC_LOG_MCU_LINK(Warn, "tcp connect failsafe: switch to red mode failed");
+        return;
+    }
+    UPC_LOG_MCU_LINK(Info, "tcp connect failsafe: switched to red mode");
+}
+
 void McuLink::set_print_task_flow_active(bool active) noexcept
 {
     print_task_flow_active_.store(active);
@@ -3372,6 +3390,11 @@ void McuLink::link_thread_fn()
          * 线程启动先推一次，之后仅在连接态变化时推送。 */
         if(!tcp_state_published || tcp_connected_now != last_tcp_connected) {
             publish_env_status_ntf_ui_only();
+            const bool tcp_just_connected =
+                tcp_connected_now && (!tcp_state_published || !last_tcp_connected);
+            if(tcp_just_connected) {
+                force_switch_to_red_mode_on_tcp_connect();
+            }
             tcp_state_published = true;
             last_tcp_connected = tcp_connected_now;
         }

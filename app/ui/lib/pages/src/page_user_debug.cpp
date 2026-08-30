@@ -9,6 +9,7 @@
 #include "control.hpp"
 #include "ui_message_store.hpp"
 #include "ui_alarm_state.hpp"
+#include "config/cal_config.hpp"
 
 #include <cstdint>
 #include <cstdlib>
@@ -88,6 +89,9 @@ lv_obj_t *g_galvo_x_lbl    = nullptr;
 lv_obj_t *g_galvo_y_lbl    = nullptr;
 lv_obj_t *g_galvo_scale_ta = nullptr;
 lv_obj_t *g_galvo_step_seg = nullptr;
+bool      g_galvo_center_valid = false;
+double    g_galvo_center_x = 0.0;
+double    g_galvo_center_y = 0.0;
 lv_obj_t *g_dev_btn[4]     = { nullptr };
 lv_obj_t *g_dev_state[4]   = { nullptr };   /**< 设备快捷行状态字（已唤醒/休眠中…） */
 lv_obj_t *g_fan_duty_ta      = nullptr;     /**< 其他控制：风扇占空比输入 */
@@ -128,6 +132,54 @@ float read_ta_float(lv_obj_t *ta) {
     }
     const char *s = lv_textarea_get_text(ta);
     return s ? static_cast<float>(std::atof(s)) : 0.0f;
+}
+
+/**
+ * 从cal.csv读取中心点偏移（第 4 行：X,<offset>,Y,<offset>）。
+ * 本页仅用于调试展示，读取失败时回退为无效态（标签显示 "--"）。
+ */
+bool load_galvo_center_offset_from_cal(double &out_x, double &out_y)
+{
+    out_x = 0.0;
+    out_y = 0.0;
+    FILE *fp = std::fopen(upc::config::kCalDefaultPath, "r");
+    if(!fp) {
+        return false;
+    }
+    char line[512];
+    bool ok = false;
+    while(std::fgets(line, sizeof(line), fp)) {
+        double x = 0.0;
+        double y = 0.0;
+        if(std::sscanf(line, " X,%lf,Y,%lf", &x, &y) == 2 ||
+           std::sscanf(line, " x,%lf,y,%lf", &x, &y) == 2)
+        {
+            out_x = x;
+            out_y = y;
+            ok = true;
+            break;
+        }
+    }
+    std::fclose(fp);
+    return ok;
+}
+
+void apply_galvo_center_labels()
+{
+    if(g_galvo_x_lbl) {
+        if(g_galvo_center_valid) {
+            lv_label_set_text_fmt(g_galvo_x_lbl, "%.3f", g_galvo_center_x);
+        } else {
+            lv_label_set_text(g_galvo_x_lbl, "--");
+        }
+    }
+    if(g_galvo_y_lbl) {
+        if(g_galvo_center_valid) {
+            lv_label_set_text_fmt(g_galvo_y_lbl, "%.3f", g_galvo_center_y);
+        } else {
+            lv_label_set_text(g_galvo_y_lbl, "--");
+        }
+    }
 }
 
 /* 调试页按钮尺寸：在主题默认基础上放大约 1/3，便于触摸（仅本页使用，不影响其它页面）。
@@ -768,6 +820,7 @@ lv_obj_t *build_galvo_card(lv_obj_t *parent)
 
     make_galvo_readout(left, "X", &g_galvo_x_lbl);
     make_galvo_readout(left, "Y", &g_galvo_y_lbl);
+    apply_galvo_center_labels();
 
     build_dpad(body);
 
@@ -1767,7 +1820,7 @@ lv_obj_t *build_laser_tab(lv_obj_t *body)
 
     lv_obj_t *redrow = make_action_row(pc_card, "Red Laser Mode");
     const char *onoff[2] = { "On", "Off" };
-    g_laser_redlight_seg = ui_user_make_segmented(redrow, onoff, 2, 1);
+    g_laser_redlight_seg = ui_user_make_segmented(redrow, onoff, 2, 0);
     lv_obj_add_event_cb(g_laser_redlight_seg, on_red_laser_changed, LV_EVENT_VALUE_CHANGED, nullptr);
     seg_fit_content(g_laser_redlight_seg);
     style_debug_seg(g_laser_redlight_seg);
@@ -1828,8 +1881,9 @@ void bind_debug_callbacks()
     });
 
     proxy.register_galvo([](const middleware::DebugGalvoStatePayload &p) {
-        if(g_galvo_x_lbl) lv_label_set_text_fmt(g_galvo_x_lbl, "%.3f", static_cast<double>(p.x));
-        if(g_galvo_y_lbl) lv_label_set_text_fmt(g_galvo_y_lbl, "%.3f", static_cast<double>(p.y));
+        (void)p;
+        /* Galvo Coordinate 区域此处展示中心点偏移（来自 cal.csv），不显示运行态坐标。 */
+        apply_galvo_center_labels();
     });
 
     proxy.register_device([](const middleware::DebugDeviceStatePayload &p) {
@@ -1880,7 +1934,11 @@ void bind_debug_callbacks()
                     on ? user_color_status_ok : user_color_icon_off, 0);
             }
         }
-        /* 调试开关保持“用户点击即生效”的本地显示，不再被状态上报强制覆盖。 */
+        /* 红光模式按钮跟随后端实际状态回读，避免界面与设备状态不一致。 */
+        if(g_laser_redlight_seg) {
+            const bool red_on = (p.status & 0x0001u) != 0;
+            ui_user_segmented_set_selected(g_laser_redlight_seg, red_on ? 0u : 1u);
+        }
 
         /* 温度：JFSC 原始整数℃；AL 单位 0.1℃ */
         if(g_laser_temp_lbl) {
@@ -2010,6 +2068,9 @@ void reset_globals()
     }
     g_z_zero_lbl = g_galvo_x_lbl = g_galvo_y_lbl = nullptr;
     g_galvo_scale_ta = g_galvo_step_seg = nullptr;
+    g_galvo_center_valid = false;
+    g_galvo_center_x = 0.0;
+    g_galvo_center_y = 0.0;
     for(int i = 0; i < 7; i++) g_sensor_val[i] = nullptr;
     for(int i = 0; i < 3; i++) {
         g_axis_pos[i] = g_axis_step[i] = g_axis_ctrl[i] = nullptr;
@@ -2038,6 +2099,8 @@ void reset_globals()
 
 void page_user_debug_refresh(bool /*force*/)
 {
+    g_galvo_center_valid = load_galvo_center_offset_from_cal(g_galvo_center_x, g_galvo_center_y);
+    apply_galvo_center_labels();
     /* 读数由 DebugMsgProxy 回调驱动。页面对象由 PageManager 缓存（on_create 仅首次执行），
      * 而 page_user_debug_exit 退页时会清空回调；on_enter 每次都会调本函数，故必须在此
      * 重新挂载回调，否则「返回后再进入」将因回调为空而不再刷新读数。g_* 指针在缓存的

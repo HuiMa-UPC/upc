@@ -164,7 +164,10 @@ void home_env_init(void)
     ui::UiMsgProxy::instance().register_clean_test_done(
         [](const middleware::CleanTestDonePayload &rsp) {
             CleanDoneToastCtx *ctx = new CleanDoneToastCtx{};
-            ctx->success = (rsp.result_code == 0);
+            (void)rsp;
+            /* 协议约定：MCU 清粉完成上报的 result_code 仅表示结束类型，
+             * 00/01/02 都代表流程结束，UI 统一走正常完成态。 */
+            ctx->success = true;
             lv_async_call(on_clean_done_async, ctx);
         });
 

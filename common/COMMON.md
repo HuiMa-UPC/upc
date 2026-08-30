@@ -164,7 +164,7 @@ scripts/rongsu.sh start   # glavo + rongsu_camera → ui
 | `APP_Clean_Stop_Rsp` | `GLAVO_Clean_Stop_Rsp` | Glavo→UI | Empty | `register_clean_stop_result` | 清粉中断受理完成→前端切回开门流程 |
 | `UI_Clean_Test_Start_Req` | — | UI→Glavo | `CleanTestStartReqPayload` | `send_clean_test_start` | 打印结果页 Purify：启动清粉测试并通知 Media 按延时帧率抽帧 |
 | `APP_Clean_Test_Start_Rsp` | — | Glavo→UI | `CleanTestStartRspPayload` | `register_clean_test_start_rsp` | 请求受理状态（避免并发启动） |
-| `APP_Clean_Test_Result_Ntf` | — | Media→UI（有录像）/ Glavo→UI（无录像） | `CleanTestDonePayload` | `register_clean_test_done` | MCU TLV `0x22` 完成后：Media 停止清粉抽帧并回执；最终 MP4 在结果页退出后统一合成 |
+| `APP_Clean_Test_Result_Ntf` | — | Media→UI（有录像）/ Glavo→UI（无录像） | `CleanTestDonePayload` | `register_clean_test_done` | MCU 清粉完成上报（A2/42 TLV 0x01）后：Media 停止清粉抽帧并回执；`result_code` 00/01/02 均表示结束；最终 MP4 在结果页退出后统一合成 |
 | `UI_Clean_Test_Close_Req` | — | UI→Glavo | Empty | `send_clean_test_close` | 返回首页时强制发送 `clean_test_close` 收尾 |
 | `UI_Print_Video_Finalize_Req` | — | UI→Media | `PrintVideoFinalizeReqPayload` | `send_print_video_finalize` | 开门取件后触发：promote 目录 + 清 pending；延时成片受 `UPC_TIMELAPSE_PLAYBACK_PNG` 控制（默认跳过 `timelapse.mp4`），打印录像仍可 remux `print_h264.mp4` |
 | `APP_Clean_Test_Close_Rsp` | — | Glavo→UI | Empty | `register_clean_test_close_rsp` | close 指令已受理 |

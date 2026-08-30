@@ -1407,6 +1407,9 @@ void GlavoService::handle_parser_exit(const middleware::Message& msg)
  */
 void GlavoService::launch_print_from_prepared(const std::string& full_path)
 {
+    /* 起印前强制切回激光模式（串口开激光 + TCP 关红光），确保后续打印控制在预期态。 */
+    (void)apply_red_laser_mode(false, false, "before_print_start");
+
     bool parser_ready = false;
     if(prepared_parser_open_) {
         if(parser::IParserWorker* worker = active_parser()) {
@@ -1965,6 +1968,7 @@ void GlavoService::on_mcu_link_event(McuLinkEvent ev)
             deferred_print_start_ = false;
             PrintVideoNotify::instance().on_print_finish();
             send_print_progress(true);
+            (void)apply_red_laser_mode(true, false, "print_completed");
             publish_terminate_done();
             print_running_.store(false);
             publish_first_layer_visual_session(false, "print_completed");
@@ -1990,6 +1994,8 @@ void GlavoService::on_mcu_link_event(McuLinkEvent ev)
             }
             PrintVideoNotify::instance().on_print_abort();
             print_running_.store(false);
+            (void)apply_red_laser_mode(true, false,
+                ev == McuLinkEvent::TerminateDone ? "terminate_done" : "print_error");
             publish_first_layer_visual_session(false,
                 ev == McuLinkEvent::TerminateDone ? "terminate_done" : "print_error");
             ignore_powder_low_for_current_print_ = false;
@@ -2939,6 +2945,37 @@ void GlavoService::handle_debug_switch(const middleware::Message& msg)
                                             buf, sizeof(buf)));
 }
 
+bool GlavoService::apply_red_laser_mode(bool red_on, bool dedup, const char* reason)
+{
+    if(dedup && red_laser_cmd_cached_valid_ && red_laser_cmd_cached_ == red_on) {
+        UPC_LOG_GLAVO_SERVICE(Debug, "red/laser mode dedup ignored red_on=%d reason=%s",
+                              red_on ? 1 : 0,
+                              reason ? reason : "n/a");
+        return true;
+    }
+    /* 红光与激光使能联动：
+     * red_on=1（红光） -> 激光使能关（TLV 0x12）
+     * red_on=0（激光） -> 激光使能开（TLV 0x11） */
+    {
+        uint8_t buf[SERIAL_DEBUG_MAX_FRAME];
+        const bool laser_enable = !red_on;
+        debug_tx(buf, serial_debug_build_switch(0u, laser_enable, buf, sizeof(buf)));
+    }
+    const uint8_t red_code = red_on ? 1u : 2u;
+    if(!McuLink::instance().send_tcp_emergency_ctrl_ex(0u, 0u, red_code)) {
+        UPC_LOG_GLAVO_SERVICE(Warn, "red/laser tcp switch failed red_on=%d reason=%s",
+                              red_on ? 1 : 0,
+                              reason ? reason : "n/a");
+        return false;
+    }
+    red_laser_cmd_cached_ = red_on;
+    red_laser_cmd_cached_valid_ = true;
+    UPC_LOG_GLAVO_SERVICE(Info, "red/laser mode switched red_on=%d reason=%s",
+                          red_on ? 1 : 0,
+                          reason ? reason : "n/a");
+    return true;
+}
+
 /** @brief 调试红光开关：下发 TCP CMD=0x0A（Stop=0, Pause=0, RedLaser=on/off） */
 void GlavoService::handle_debug_galvo_red_light(const middleware::Message& msg)
 {
@@ -2946,26 +2983,7 @@ void GlavoService::handle_debug_galvo_red_light(const middleware::Message& msg)
     if(!read_inline_pod(msg.payload, p)) {
         return;
     }
-    const bool on = (p.on != 0);
-    if(red_laser_cmd_cached_valid_ && red_laser_cmd_cached_ == on) {
-        UPC_LOG_GLAVO_SERVICE(Debug, "debug red light dedup ignored on=%d", on ? 1 : 0);
-        return;
-    }
-    const uint8_t red_code = on ? 1u : 2u;
-    if(!McuLink::instance().send_tcp_emergency_ctrl_ex(0u, 0u, red_code)) {
-        UPC_LOG_GLAVO_SERVICE(Warn, "debug red light send failed on=%d", on ? 1 : 0);
-        return;
-    }
-    /* 红光与激光使能联动：
-     * red_on=1（红光） -> 激光使能关（TLV 0x12）
-     * red_on=0（激光） -> 激光使能开（TLV 0x11） */
-    {
-        uint8_t buf[SERIAL_DEBUG_MAX_FRAME];
-        const bool laser_enable = !on;
-        debug_tx(buf, serial_debug_build_switch(0u, laser_enable, buf, sizeof(buf)));
-    }
-    red_laser_cmd_cached_ = on;
-    red_laser_cmd_cached_valid_ = true;
+    (void)apply_red_laser_mode(p.on != 0, true, "debug_toggle");
 }
 
 /** @brief 启动清洁测试流程 */

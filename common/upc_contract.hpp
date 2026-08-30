@@ -460,7 +460,7 @@ enum class MsgType : uint32_t {
     // ---- UI ↔ GLAVO：打印结果页清粉测试（按钮触发，串口 clean_test_*） ----
     UI_Clean_Test_Start_Req,     /**< CleanTestStartReqPayload：开始清粉+录像 */
     APP_Clean_Test_Start_Rsp,    /**< CleanTestStartRspPayload：是否受理 */
-    APP_Clean_Test_Result_Ntf,   /**< CleanTestDonePayload：TLV 0x22 结果 + 调试保留标记 */
+    APP_Clean_Test_Result_Ntf,   /**< CleanTestDonePayload：A2/42 TLV 0x01 结果 + 调试保留标记 */
     UI_Clean_Test_Close_Req,     /**< Empty：返回首页时强制 clean_test_close */
     UI_Print_Video_Finalize_Req, /**< PrintVideoFinalizeReqPayload：结果页退出后触发统一 MP4 合成 */
     APP_Clean_Test_Close_Rsp,    /**< Empty：close 已受理 */
@@ -923,10 +923,11 @@ struct CleanTestStartRspPayload {
     uint8_t reserved[3];
 };
 
-/** APP_Clean_Test_Result_Ntf：串口 TLV 0x22 完成结果（0=成功，非0=失败）。
+/** APP_Clean_Test_Result_Ntf：清粉完成结果通知。
+ * 约定：result_code 为结束类型，00/01/02 均表示 MCU 清粉流程已结束；
  * 有清粉录像时由 Media 在清粉抽帧停止后发送；最终 MP4 在结果页退出后统一合成。 */
 struct CleanTestDonePayload {
-    uint8_t result_code;   /**< 0=成功；非0=失败 */
+    uint8_t result_code;   /**< 结束类型：00/01/02 都表示清粉结束 */
     uint8_t raw_retained;  /**< 兼容字段；PNG 路径下恒为 0 */
     uint8_t has_mp4;       /**< 1=期望存在合并后的 timelapse.mp4 */
     uint8_t reserved;
@@ -962,7 +963,7 @@ struct CleanVideoSessionStartPayload {
 /** GLAVO→MEDIA：清粉延时抽帧会话停止 */
 struct CleanVideoSessionStopPayload {
     char    session_id[32];
-    uint8_t result_code;  /**< 0=成功；非0=失败；0xfe=用户关闭 */
+    uint8_t result_code;  /**< 结束类型：00/01/02=MCU清粉结束；0xfe=用户关闭；0xff=内部收尾 */
     uint8_t keep_raw;     /**< 兼容字段；PNG 路径下忽略 */
     uint8_t reserved[2];
 };

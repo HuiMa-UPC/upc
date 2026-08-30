@@ -442,7 +442,8 @@ void CleanVideoRecorder::stop_locked(std::unique_lock<std::mutex>& lock,
     lock.unlock();
 
     const bool closed_by_user = (result_code == 0xfe);
-    const bool success = (result_code == 0);
+    const bool internal_stop = (result_code == 0xff);
+    const bool mcu_clean_done = !closed_by_user && !internal_stop;
     const uint32_t total_frames = stop_print_frames + stop_clean_frames;
     const uint32_t clean_first =
         stop_clean_frames > 0 ? stop_print_frames + 1u : 0u;
@@ -457,7 +458,7 @@ void CleanVideoRecorder::stop_locked(std::unique_lock<std::mutex>& lock,
     const std::string frames_dir_key =
         std::filesystem::path(stop_session_dir).filename().string();
 
-    if(closed_by_user || !success) {
+    if(closed_by_user || internal_stop) {
         if(clean_first > 0) {
             timelapse_util::remove_png_range(stop_session_dir, clean_first,
                                              clean_last);
@@ -519,8 +520,8 @@ void CleanVideoRecorder::stop_locked(std::unique_lock<std::mutex>& lock,
         thumb_ok ? 1 : 0,
         history_ok ? 1 : 0);
 
-    /* 用户关闭走 Close_Rsp；MCU 完成/失败由 Media 发 Done，最终 MP4 在退出结果页后统一合成。 */
-    if(!closed_by_user && result_code != 0xff) {
+    /* 用户关闭/内部收尾不发 Done；MCU 上报结束(00/01/02)统一发 Done。 */
+    if(mcu_clean_done) {
         publish_clean_test_done(result_code, false, std::string{});
     }
 
