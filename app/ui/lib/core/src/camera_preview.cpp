@@ -29,6 +29,8 @@ constexpr uint32_t kUiRefreshPeriodMs = 33u;
 constexpr uint32_t kUiRefreshInteractPeriodMs = 66u;
 constexpr uint32_t kInteractiveDecodeFps = 12u;
 constexpr uint64_t kInteractionHoldMs = 320u;
+constexpr uint32_t kStartRspWatchdogMs = 1000u;
+constexpr uint8_t kStartRspRetryMax = 2u;
 /* 录像收尾（尤其 print_h264）存在短时抖动，适当放宽卡帧告警阈值。 */
 constexpr uint64_t kPreviewStallWarnMs = 1200u;
 
@@ -435,6 +437,9 @@ void CameraPreviewPlayer::start(lv_obj_t* image_widget, lv_obj_t* hint_widget,
 
     show_hint(LV_SYMBOL_VIDEO "  Connecting camera...");
     start_req_sent_ = true;
+    start_rsp_pending_ = true;
+    start_retry_count_ = 0;
+    schedule_start_watchdog();
     UPC_LOG_CAMERA_PREVIEW(Info,
         "start req scene=%s image=%p hint=%p",
         scene_[0] ? scene_ : "(none)",
@@ -461,6 +466,9 @@ void CameraPreviewPlayer::stop()
         CameraMsgProxy::instance().send_stream_stop();
     }
     start_req_sent_ = false;
+    start_rsp_pending_ = false;
+    start_retry_count_ = 0;
+    clear_start_watchdog();
     stalled_.store(false, std::memory_order_relaxed);
     stream_up_.store(false);
     interaction_busy_.store(false, std::memory_order_relaxed);
@@ -496,6 +504,10 @@ void CameraPreviewPlayer::stop()
 void CameraPreviewPlayer::on_stream_start_rsp(
     const middleware::CameraStreamInfoPayload& info)
 {
+    start_rsp_pending_ = false;
+    start_retry_count_ = 0;
+    clear_start_watchdog();
+
     UPC_LOG_CAMERA_PREVIEW(Info,
         "stream start rsp ok=%d %ux%u@%u dma_mode=%u shm=%s active=%d",
         info.ok, info.width, info.height, info.fps, info.dma_mode, info.shm_name,
@@ -1447,6 +1459,56 @@ void CameraPreviewPlayer::delete_ui_timer()
     }
 }
 
+void CameraPreviewPlayer::schedule_start_watchdog()
+{
+    clear_start_watchdog();
+    start_watchdog_timer_ =
+        lv_timer_create(start_watchdog_timer_cb, kStartRspWatchdogMs, this);
+    if(start_watchdog_timer_) {
+        lv_timer_set_repeat_count(start_watchdog_timer_, 1);
+    }
+}
+
+void CameraPreviewPlayer::clear_start_watchdog()
+{
+    if(start_watchdog_timer_) {
+        lv_timer_delete(start_watchdog_timer_);
+        start_watchdog_timer_ = nullptr;
+    }
+}
+
+void CameraPreviewPlayer::start_watchdog_timer_cb(lv_timer_t* timer)
+{
+    auto* self = static_cast<CameraPreviewPlayer*>(lv_timer_get_user_data(timer));
+    if(!self) {
+        return;
+    }
+    self->start_watchdog_timer_ = nullptr;
+
+    if(!self->active_.load(std::memory_order_relaxed) ||
+       self->stream_up_.load(std::memory_order_relaxed) ||
+       !self->start_rsp_pending_) {
+        return;
+    }
+
+    if(self->start_retry_count_ >= kStartRspRetryMax) {
+        UPC_LOG_CAMERA_PREVIEW(Error,
+            "stream start rsp timeout scene=%s retries=%u",
+            self->scene_[0] ? self->scene_ : "(none)",
+            static_cast<unsigned>(self->start_retry_count_));
+        return;
+    }
+
+    ++self->start_retry_count_;
+    UPC_LOG_CAMERA_PREVIEW(Warn,
+        "stream start rsp timeout, retry #%u scene=%s",
+        static_cast<unsigned>(self->start_retry_count_),
+        self->scene_[0] ? self->scene_ : "(none)");
+    self->start_req_sent_ = true;
+    self->schedule_start_watchdog();
+    CameraMsgProxy::instance().send_stream_start(nullptr);
+}
+
 void CameraPreviewPlayer::ui_timer_cb(lv_timer_t* timer)
 {
     auto* self = static_cast<CameraPreviewPlayer*>(lv_timer_get_user_data(timer));
@@ -1567,6 +1629,9 @@ void CameraPreviewPlayer::reset_ui()
     pending_start_rsp_valid_ = false;
     decode_retiring_.store(false, std::memory_order_relaxed);
     retire_state_.reset();
+    start_rsp_pending_ = false;
+    start_retry_count_ = 0;
+    clear_start_watchdog();
     close_dma_fds();
     clear_frame_buffers();
 }

@@ -78,6 +78,8 @@ private:
     [[nodiscard]] int dma_fd(uint32_t idx) const noexcept;
     void schedule_ui_timer();
     void delete_ui_timer();
+    void schedule_start_watchdog();
+    void clear_start_watchdog();
     void request_decode_retire_ui();
     void finish_decode_retire_ui();
     void clear_frame_buffers();
@@ -86,6 +88,7 @@ private:
     void release_rga_streaming_cache();
 
     static void ui_timer_cb(lv_timer_t* timer);
+    static void start_watchdog_timer_cb(lv_timer_t* timer);
     static void retire_poll_timer_cb(lv_timer_t* timer);
     static void async_apply_stream_start(void* user);
     bool convert_frame(const upc_ipc::IpcDmaFrameView& frame, int slot_idx);
@@ -97,6 +100,7 @@ private:
     lv_obj_t* image_ = nullptr;
     lv_obj_t* hint_  = nullptr;
     lv_timer_t* ui_timer_ = nullptr;
+    lv_timer_t* start_watchdog_timer_ = nullptr;
     lv_timer_t* retire_poll_timer_ = nullptr;
     char scene_[32] = {}; /**< start() 传入的场景标签，供诊断日志 */
     lv_obj_t* pending_image_ = nullptr;
@@ -117,6 +121,8 @@ private:
     std::atomic<bool> decode_retiring_{false};
     std::shared_ptr<RetireState> retire_state_;
     bool start_req_sent_ = false;
+    bool start_rsp_pending_ = false;
+    uint8_t start_retry_count_ = 0;
 
     uint32_t width_  = 0;
     uint32_t height_ = 0;

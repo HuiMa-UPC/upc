@@ -561,7 +561,8 @@ void IpcEndpoint::parse_stream_frames(std::vector<InboundWireUnit>& out_units)
         uint32_t frame_len = 0;
         std::memcpy(&frame_len, rx_accum_.data(), sizeof(frame_len));
         if (frame_len == IPC_FD_FRAME_MAGIC) {
-            UPC_LOG_IPC(Error, "UPDF magic in byte stream; clearing rx_accum");
+            UPC_LOG_IPC(Warn, "UPDF magic in byte stream; handoff to fd parser");
+            fd_rx_accum_.insert(fd_rx_accum_.end(), rx_accum_.begin(), rx_accum_.end());
             rx_accum_.clear();
             break;
         }
@@ -612,6 +613,9 @@ void IpcEndpoint::recv_pending(std::vector<InboundWireUnit>& out_units)
 
     uint8_t chunk[4096];
     for (;;) {
+        if(peek_fd_frame_magic()) {
+            break;
+        }
         const ssize_t n = ::read(conn_fd_, chunk, sizeof(chunk));
         if (n < 0) {
             if (errno == EAGAIN || errno == EWOULDBLOCK) {
@@ -627,6 +631,22 @@ void IpcEndpoint::recv_pending(std::vector<InboundWireUnit>& out_units)
     }
 
     parse_stream_frames(out_units);
+
+    // read() 期间若头部切到 UPDF，parse_stream_frames 会把字节移交给 fd_rx_accum_；
+    // 本轮再尝试一次 fd 解析，避免延后到下一次 process()。
+    for (;;) {
+        const bool expect_fd = !fd_rx_accum_.empty() ||
+                               !fd_rx_fds_.empty() ||
+                               peek_fd_frame_magic();
+        if (!expect_fd) {
+            break;
+        }
+        InboundWireUnit unit;
+        if (!recv_fd_frame_unit(unit)) {
+            break;
+        }
+        out_units.push_back(std::move(unit));
+    }
 #endif
 }
 

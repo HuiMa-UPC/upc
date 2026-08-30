@@ -58,6 +58,7 @@ void CameraMsgProxy::send_stream_start(const char* video_basename)
         middleware::MsgType::UI_Camera_Stream_Start_Req,
         middleware::ModuleId::UI,
         middleware::ModuleId::APP_CAMERA);
+    msg.priority = middleware::MsgPriority::High;
 
     if(video_basename && video_basename[0]) {
         middleware::CameraStreamStartReqPayload req{};
@@ -76,6 +77,7 @@ void CameraMsgProxy::send_stream_stop()
         middleware::MsgType::UI_Camera_Stream_Stop_Req,
         middleware::ModuleId::UI,
         middleware::ModuleId::APP_CAMERA);
+    msg.priority = middleware::MsgPriority::High;
     middleware::MsgPort::instance().publish_async(msg);
 }
 
