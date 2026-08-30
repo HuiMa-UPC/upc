@@ -341,8 +341,9 @@ MCU 经串口上报的报警（`GLAVO_Alarm_Report_Ntf`，0xA3/0x20 原样透传
 作废（见下「复位」）。别照那份改代码。
 
 文案由 `ui_alarm_catalog`（`tools/gen_alarm_catalog.py` 从 doc/ 下三份 CSV 生成
-`ui_alarm_catalog_gen.cpp`，当前 87 条报警 = 79 CONDITION + 8 EVENT、59 条 detail；
-英文翻译表 `doc/alarm_catalog_en.csv` 可覆写，未翻译的用 macro 名转写兜底）+ 报文
+`ui_alarm_catalog_gen.cpp`，当前 105 条报警 = 95 CONDITION + 10 EVENT、78 条 detail；
+英文翻译表 `doc/alarm_catalog_en.csv` 可覆写，未翻译的用 macro 名转写兜底——目前还有
+41 条报警 + 48 条 detail 走兜底，标题能看但 `desc`（处理建议）是空的）+ 报文
 detail 组合；查不到的 code/detail 降级显示原始编号
 **绝不丢弃**（固件可能比字典新）。历史落盘 `/home/messages/alarm_history.jsonl`
 （上限 200 条，只存原始字段，文案加载时按当前字典重新生成）。**目录由
@@ -364,13 +365,16 @@ detail 组合；查不到的 code/detail 降级显示原始编号
 | RTN_LATCHED | 任意 | 能 |
 | ACTIVE | `OWNER_TASK` | **能**——MCU 转给业务任务做硬件恢复 |
 | ACTIVE | `LOCAL` | 不能，条件仍在时 MCU 直接拒绝 |
-| 任意 | 字典查不到 | 不能（保守，避免对未知码误发 RESET） |
+| 任意 | 字典查不到 | **能**——查不到是字典没跟上固件，不是「已知不可复位」 |
 
 ACTIVE + OWNER_TASK 这一档最容易漏：激光器 1301、各轴 1203~1230 都是这类，**不点复位
 它们永远好不了**（激光器要等 MCU 下发清除命令才恢复），锁住等于死锁，只能断电。
-现表里 25 条 `clear_mode=RESET` 中 23 条是 OWNER_TASK，只有 1124/1125 是 LOCAL。
-`reset_policy` 是「运行时一律以报文为准」的**唯一例外**——报文里没这个字段，只有
-`报警map.csv` 有，所以只能查字典。
+现表里 30 条 `clear_mode=RESET` 中 28 条是 OWNER_TASK，只有 1124/1125 是 LOCAL。
+最后那行「字典查不到」以前按 LOCAL 拦着，是**反了**：字典外的码恰恰最可能是新固件
+刚加的（2026-08-30 那批 18 条新增里，1004/1126~1129 五条全是 RESET + OWNER_TASK），
+拦下来它们永远复不了位、只能断电；而误发一帧的代价只是 MCU 不认就不回、10s 超时
+自解锁。`reset_policy` 是「运行时一律以报文为准」的**唯一例外**——报文里没这个字段，
+只有 `报警map.csv` 有，所以只能查字典。
 
 **快照对齐（`UI_Alarm_Snapshot_Ntf` / `GLAVO_Alarm_Snapshot_Ntf`，0xA3/0x81）**：
 单条上报只在状态变化时发，所以 UI 重启 / 串口重连 / SOC 比 MCU 后启动这几种情况下，
@@ -395,7 +399,10 @@ ACTIVE + OWNER_TASK 这一档最容易漏：激光器 1301、各轴 1203~1230 �
 - **对齐**：快照亮着而本地没有的补进来，本地有而快照说不亮的转历史。补进来的那条只有
   code 可用，`severity` / `clear_mode` 走字典兜底（`severity_fallback` /
   `clear_mode_fallback`），`detail` 记 0、时刻记补齐时刻——这几样快照里根本没有。
-  字典查不到就按最保守的一档：warning 且不给复位钮；
+  字典连这个 code 都查不到时 severity 取 warning、**`clear_mode` 取 RESET**：快照报文
+  里压根没有 clear_mode 字段，这里填的是个凭空造的值，填 NONE 会被
+  `ui_alarm_reset_allowed()` 第一道判断直接否掉、抽屉连 Reset 钮都不建。兜底只活到
+  该 code 的第一帧单条上报，之后一律以报文为准；
 - 反向清理**只认受快照管辖的 code**（`alarm_snapshot_covers()`：1000..1395 且组内偏移
   < 96）。EVENT 不占 bit、每组末尾 `xx96..xx99` 是保留号，这些"快照里没提"是信息缺失
   不是状态变化，照清会把真报警抹掉；
@@ -405,13 +412,22 @@ ACTIVE + OWNER_TASK 这一档最容易漏：激光器 1301、各轴 1203~1230 �
   按序重放。快照是「请求那一刻」的状态，暂存的单报都比它新，不压在快照之上就会被盖回去，
   界面出现状态回退（快照指导 §11）。EVENT 不进这个队列，它不改 CONDITION 状态。
 
-打印融合（1124/1125 未复位时 MCU 拒绝新打印）：
+打印融合（停机类报警未复位时 MCU 拒绝新打印，只回一条给不出原因的 EVENT 2003
+`PRINT_START_DENIED`）：
 
-- **入口拦截**：`control.cpp` 的 `on_detail_start_print()` 先查
-  `ui_alarm_print_blocker()`，有阻断报警弹「Unable to start print」，可复位的给
-  Reset 直达键；
-- **通知卡 + 详情抽屉**：1124/1125 与其它报警一样上浮层卡，复位走抽屉里的 Reset 钮
-  （三态判据 `ui_alarm_reset_allowed()`，与入口拦截弹窗同一份）。
+- **阻断名单**：`ui_alarm_print_blocker()` 里硬编码七条——1004 内门运动故障、
+  1124 打印步骤超时、1125 运动失败打印中止、1126/1127 筛粉电机过流与电流检测故障、
+  1128/1129 PTC 加热过流与电流检测故障，都是 `clear_mode=RESET` 的停机等待复位类。
+  **报文和字典里都没有「是否阻断打印」这个字段**，只能按报警语义维护，MCU 新增停机类
+  报警要跟着补；
+- **入口拦截**：`control.cpp` 的 `on_detail_start_print()`（文件页详情面板底部那枚
+  「Confirm Print」）先查 `ui_alarm_print_blocker()`，有阻断报警就在 `lv_layer_top()`
+  弹「Unable to start print」，可复位的给 Reset 直达键。同时亮多条时一次只提示 / 只
+  复位排在最前的那条，用户得点几轮——七条里 1126/1127 与 1128/1129 各是一对同源故障，
+  真撞上再考虑批量复位；
+- **通知卡 + 详情抽屉**：阻断报警与其它报警一样上浮层卡，复位走抽屉里的 Reset 钮
+  （三态判据 `ui_alarm_reset_allowed()`，与入口拦截弹窗同一份）。1124/1125 是 LOCAL，
+  ACTIVE 时置灰；1004/1126~1129 是 OWNER_TASK，ACTIVE 时就能点。
 
 > **曾经有过、已删除的两件东西**：终止态浮层顶部那条橙色「失败原因条」
 > （`build_result_alarm_bar()` / `sync_result_alarm_bar()`，V3.9.7 引入）不是设计稿元素，
@@ -480,7 +496,7 @@ ACTIVE + OWNER_TASK 这一档最容易漏：激光器 1301、各轴 1203~1230 �
 
   分页之前进页有肉眼可见的卡顿：`switch_to()` → `refresh()` → `rebuild_list()` 全程同步，
   页面要等整张列表建完 + 首帧渲染才显示。列表长度当时没有上限，三路上限相加约 300 条
-  （当前报警 `kCurrentCap` 80 + store `kCapacity` 24 + 历史 `UI_ALARM_HISTORY_CAP` 200，
+  （当前报警 `kCurrentCap` 128 + store `kCapacity` 24 + 历史 `UI_ALARM_HISTORY_CAP` 200，
   历史还落盘跨重启累积），而一条可删的历史卡约 19 个对象 + 9 个事件回调——200 条就是
   近 4000 个 LVGL 对象，加上 `flex_grow` 与 `LONG_WRAP` 互相依赖导致的多趟文本测量。
 - **进页只重建一次**：`refresh()` 里的 `ui_message_mark_all_read()` 在有未读时会
@@ -517,7 +533,7 @@ ACTIVE + OWNER_TASK 这一档最容易漏：激光器 1301、各轴 1203~1230 �
   （见 `rongsu_ui.defaults`），取更近的 20；时间 16 @30%、正文 16 @50%
   （都用 `user_font_text_sm`）；Reset 主按钮文字 20（稿「按钮文本EN」）。
 
-**模拟数据一律带 `[SIM] ` 前缀**：调试页两个注入开关造出来的 9 条假消息，标题前面
+**模拟数据一律带 `[SIM] ` 前缀**：调试页两个注入开关造出来的 10 条假消息，标题前面
 都加 `[SIM] `，真消息一个字不改，联调时一眼分得清。报警侧在 `compose_text()` 里加
 （浮层卡 / 消息页列表 / 详情抽屉 / 历史读的都是这一份文案，一处加完四处都有）；
 设备事件侧走 `ui_message_debug_push()`（文案仍取自码表，只是套上前缀）。
@@ -525,12 +541,15 @@ ACTIVE + OWNER_TASK 这一档最容易漏：激光器 1301、各轴 1203~1230 �
 `/home/messages/alarm_history.jsonl`。同一个码后来收到真报文会自动摘掉 `[SIM]`。
 
 联调：MCU 不发真报警时用调试页 Other → Other Switches → `Alarm Inject`
-（`ui_alarm_debug_inject()` 绕过总线直走上报路径，造 5 条假报警：1124 阻断 /
+（`ui_alarm_debug_inject()` 绕过总线直走上报路径，造 6 条假报警：1124 阻断 /
 1104 RTN_LATCHED / 1101 自动清除 / 2000 EVENT 四条显示路径，外加 1003 一条
 critical 把 information/warning/error/critical 四档等级配色凑齐——等级不进字典、
 以报文为准，不造就看不到；关掉开关注入 NORMAL 帧模拟解除）。
 1003 同时是 **ACTIVE + `reset_policy=OWNER_TASK`** 的样本，用来验那档在抽屉里
 可点 Reset；1124 是 LOCAL，ACTIVE 时该置灰——两条对照着看。
+第 6 条 **1999 是字典外的未知码**，验固件比字典新时的降级路径：标题降级成
+"Unknown alarm #1999" 而 Reset 仍可点。选 1999 是因为它在快照管辖范围
+（1000..1395）之外，30s 兜底轮询的反向清理不会把这条假报警抹掉。
 注意注入条目按 Reset 会真发 `UI_Alarm_Reset_Ntf` 到串口，MCU 不回帧时 10s 后
 pending 自动解除——正好顺带验超时路径。
 
@@ -609,27 +628,38 @@ pending 自动解除——正好顺带验超时路径。
 
 删除 Local / Prepare / Start 仍走 IPC。
 
-### 选文件页详情面板：打印板厚度（稿 4014:16631）
+### 选文件页详情面板（稿 4014:16631）
 
-右侧详情列自上而下：缩略图 → 文件名 → meta 行 → 分隔线 → `Plate Thickness` 标题 →
-`5mm / 10mm` 分段 → 未选提示 → 撑开 → `Confirm Print` → `Delete File`。
+右侧详情列自上而下：缩略图 → 文件名 → meta 行 → 撑开 → `Confirm Print` → `Delete File`。
 
-- **必须显式选择**：`g_plate_thickness`（-1 未选 / 0=5mm / 1=10mm）。未选时分段全灰、
-  提示行「Select a plate thickness to continue」可见、`Confirm Print` 置灰。置灰要同时
-  `add_state(DISABLED)` **和** `remove_flag(CLICKABLE)`——`DISABLED` 只换样式，照样发
-  `LV_EVENT_CLICKED`。三处联动都在 `apply_plate_thickness_ui()` 里，别散着写。
-- **逐文件**：改选文件 / 切 Local↔USB / 删除后都 `reset_plate_thickness()`。
-  `apply_files_list()` 的目录刷新按文件名保住选中项，那里**不清**厚度。
-- **无选中态的分段控件**：`ui_user_make_segmented(..., UI_USER_SEG_NONE)`，读回同样是
-  这个哨兵。老调用方传的都是合法索引，行为不变。
-- **后端**：契约还没有厚度字段，值目前只停在 UI。接上之后在 `on_print_confirm_ok()` 随
-  `send_print_prepare()` 下发，改契约走 `common/COMMON.md` 四步。
+- **信息元 `make_detail_inline_kv()`**：「[图标] caption value」单行小项，**详情面板与
+  文件列表行共用同一个**。三个可选项：`icon` 传 nullptr 不占图标位（USB 的文件大小行）；
+  `caption` 传 nullptr 不建标签，也就不会多吃一份 `pad_column`（列表行只要图标+数值）；
+  `value_font` 传 nullptr 用 `user_font_text()`。
+- **图标一律 24px 原尺寸 1:1，别加缩放参数**。`lv_draw_sw_transform` 是 2 抽头点采样、
+  不做面积平均，缩小时整行整列跳过源像素，而 `ic_clock` / `ic_cube` 的描边只有 1.33px，
+  跳掉一行就断一截，实机上是肉眼可见的锯齿（曾经缩到 18px，已回退）。真要小一号就照
+  `METRIC_ICONS` 的做法让 `tools/gen_home_metric_icons.py` 另出一档原生尺寸
+  （同 `ic_home_26/32/48`），运行时始终 1:1——这条规矩在那个脚本的文件头有实测数据。
+- **文件列表行的 meta** 也走这个 helper，两个元「[clock] 耗时」「[cube] 克数」，字号压到
+  `user_font_caption()` 以保持行高（图标与详情面板同为 24px），两元同用 `text_dim`
+  一个色阶（accent 蓝留给详情页强调）。原先那行拼好的纯文本 `"Xh Ymin · Zg"` 与配套的
+  `ui_user_format_file_meta()` 已删。
+- **占位符一律 ASCII `"--"`**，别用破折号 `—`(U+2014)：内置 Montserrat 只收
+  0x20–0x7F、0xB0、0x2022，U+2014 会渲染成豆腐块。
 - **1024 档的高度预算**：详情列 `pad_row` 用 `USER_PAD_SM`（不是 `USER_PAD`），且耗时/耗材
-  由两行压成「图标 + caption + value」一行，腾出的空间刚够放厚度区。再往这一列加东西前
-  先算 600px 屏。
+  由两行压成「图标 + caption + value」一行。再往这一列加东西前先算 600px 屏。
 - **按钮圆角**：稿里这套按钮组件是 8px@1280 的圆角矩形，不是全圆胶囊，用
   `USER_BTN_RADIUS`（1024=6 / 1280=8 / 1920=12）。`Confirm Print` 借 `user_style_btn_primary()`
   取主色与外发光，但要就地覆盖它的 `LV_RADIUS_CIRCLE`。
+
+> **已删除：打印板厚度选择**（`Plate Thickness` 标题 + `5mm/10mm` 分段 + 未选提示 +
+> `Confirm Print` 置灰联动，稿 4014:16631）。按产品要求整块去掉，`backend_start_job()`
+> 现固定按 10mm（`kPlateThicknessUm`）下发。**契约字段 `plate_thickness_um` 仍在**，
+> Glavo 侧 `McuLink::set_plate_thickness_um()` 到串口那条链路一个字没动，日后要恢复
+> 可选值只改 `backend_start_job()` 一处。随它一起删掉的还有 `g_plate_thickness` /
+> `apply_plate_thickness_ui()` / `reset_plate_thickness()` / `make_detail_warn_row()`，
+> 以及 `Confirm Print` 的 `LV_STATE_DISABLED` 样式——选中文件后该按钮现在恒可点。
 
 `Confirm Print` 之后的「开始打印」二次确认弹窗保留。删除确认与终止打印确认共用
 `open_user_confirm_dialog()`：标题问句（`user_font_value`）+ 一句说明（`user_font_text`）+
@@ -1064,6 +1094,14 @@ rongsu_camera 经主 IPC（/tmp/upc_camera.sock）SCM_RIGHTS 附带 dma_buf fd �
 
 - **进入/退出**：历史页缩略图点击 → `page_user_timelapse_set_source(目录,mp4路径,标题,时间)` + `switch_to("user_timelapse")`；Album 照片 → `page_user_photo_set_source(照片绝对路径)` + `switch_to("user_photo")`；两者关闭均 → `switch_to("user_history")`。
 - **LVGL 线程规则**：PNG 序列播放由主线程 `lv_timer` 换主画面；拖动预览解码在后台线程，经 `lv_async_call` 贴预览框。
+- **进度条底部那条 `pad_bottom` 别删**：knob 直径是 `3 × USER_PROGRESS_H`、轨道高只有
+  `2 ×`，knob 上下各溢出 `H/2`；而 `bottom` 容器是 `LV_SIZE_CONTENT`，高度只按子对象的
+  coords 算（knob 是 slider 的 style part，靠 `ext_draw_size` 画到框外，容器不认），
+  LVGL 又默认把子对象裁到父容器盒子里。结果本该是正圆的 knob 被削成上下平的横向胶囊
+  （实机 1024 档：36×36 渲染成 36×24，恰好丢掉 1/3）。补 `knob_overflow + USER_PAD_SM`
+  的下边距把它圈回来，上方由命中区那 48px `pad_top` 顺带兜住。
+- **PNG 序列停在末帧时重点播放要先回 0 帧**：否则 `play_timer_cb` 下一拍就撞上结束判定
+  又把 `g_playing` 关掉，表现为点了没反应。MP4 分支到末尾先 `seek(0)` 是同一回事。
 
 ### 相册全屏浏览器（`user_photo`）
 
@@ -1132,22 +1170,34 @@ padding 24、圆角 8、图标 32、图标↔文字 24、标题 20、右箭头 2
   复选框 24 圆角 4 = padding 4 + 图标 16、稿 4550:8296 横幅高 42 = 12 + 图标 18 + 12）。
   **1920 档是 1280 档的精确 1.5 倍、1024 档是 0.8 倍**，即这一列是基准而非折算结果——
   与首页/设置页那种「1280 由 1920 缩出来」的情形相反，别再照旧规律去改。
-- **例外：1280 档的 Tab / Manage 尺寸已为触摸可用性刻意偏稿**，别按稿又调回去
+- **例外：部分尺寸已为触摸可用性刻意偏稿**，别按稿又调回去
   （`ui_theme.cpp` 文件头也记了一份）：
+
+  仅 1280 档：
 
   | 字段 | 稿值 | 现值 | 管什么 |
   |---|---|---|---|
   | `user_hist_tab_h` | 40 | **52** | Tab 行高 = Tab 项命中高 = Manage 系列按钮**高** |
   | `user_hist_btn_w` | 100 | **128** | Manage 系列按钮**宽** |
-  | `user_media_btn_h` | 稿无此项（原取 `user_back_btn_h` = 44） | **56** | 全屏媒体页浮层圆钮 |
 
   横向放得下：Tab 行可用宽 1120（= 1280 − 48 − 112），管理态原占用约 775，三个按钮各
   +28 后约 859，仍余约 260。竖向内容区 688 被 Tab 行多吃 12，列表仍露 3.9 张卡（卡高 160）。
   连带一处：两页翻页钮按 `USER_HIST_TAB_H / 2` 对齐（`page_user_history.cpp` 与
   `page_user_message.cpp` 的 `lv_obj_align(col, ...)`），行高 +12 使其下移 6px——这是原有
   设计意图（浮层跟着列表中心走），不是漏改。
-  **1920 / 1024 两档未动**（`user_media_btn_h` 给 0 即沿用 `user_back_btn_h`），换档要按
-  那一档的实屏重新评估。
+
+  三档全体（稿上都无此项）：
+
+  | 字段 | 1920 | 1280 | 1024 | 管什么 |
+  |---|---|---|---|---|
+  | `user_media_btn_h` | **96** | **66** | **60** | 播放器关闭钮 + 相册关闭/左右箭头 |
+  | `user_media_play_h` | 128 | 112 | 80 | 播放器中央播放/暂停钮 |
+
+  `user_media_btn_h` 原先各档沿用 `user_back_btn_h`(64/44/40)，实机确认这几颗钮叠在
+  视频/照片上又贴屏幕边缘，太难找也太难点，统一按 1.5 倍给。圆圈放大后**图标字号必须
+  跟着提到 `user_font_icon()`**（helper 内部固定 `user_font_text()`），否则图标浮在空底上。
+  `user_media_play_h` 是**为此新拆出来的字段**：播放钮原写成 `user_media_btn_size() * 2`，
+  关闭钮一放大它就涨到屏高的两成，拆开后两者互不牵动，三个值即放大前的实际渲染尺寸。
 - **横向内距分两组**（稿上就不齐，不是实现偷懒）：
   - Tab 行用 `chrome_pad_l()` = 48 / `chrome_right_pad()` = 112（= 钮 64 + `USER_PAD`×2），
     Storage 条右缘同用后者；
@@ -1276,8 +1326,9 @@ padding 24、圆角 8、图标 32、图标↔文字 24、标题 20、右箭头 2
 
 | 控件 | 原命中区 | 外扩量 | 原因 |
 |---|---|---|---|
-| 全屏浮层圆钮（播放器关闭/播放、相册关闭/左右箭头） | `user_media_btn_size()` 见方 | 不足 `UI_USER_MIN_TOUCH`(48) 时补足 | 1280 档已把视觉尺寸提到 56，故该档不再触发外扩；1920/1024 档仍走 `user_back_btn_h`(64/40)，1024 那档由外扩补 |
+| 全屏浮层圆钮（播放器关闭/播放、相册关闭/左右箭头） | `user_media_btn_size()` 见方 | 不足 `UI_USER_MIN_TOUCH`(48) 时补足 | **三档视觉尺寸提到 96/66/60 后已全部超过 48，这条兜底不再触发**，留着是给日后新档位用 |
 | 历史页 / 消息页顶部 Tab 项 | 文字实宽 × `USER_HIST_TAB_H` | `USER_PAD_SM` | 项宽被写死成文字实宽（左右零内距），Tab 之间 `USER_PAD_LG` 全是死区 |
+| 延时播放器进度条 | 轨道 `2 × USER_PROGRESS_H`（24~40 高） | `UI_USER_MIN_TOUCH`(48) | 全屏播放时它是唯一定位手段，且是拖动而非点击，起手落偏一点就丢事件。**要同时改两处**：`bottom` 容器的 `pad_top` 让点能递归下来（`lv_indev_search_obj` 只看父节点原始 coords，不含 `ext_click_area`），slider 的 `ext_click_area` 让它自己认这些点 |
 
 **竖向偏差不能靠外扩解决,得改布局**：`ext_click_area` 是四边等量的，治不了不对称偏差。
 Tab 项原先照稿做「文字贴行顶 + 下划线贴行底」的绝对定位，那只在行高恰为稿值时成立；

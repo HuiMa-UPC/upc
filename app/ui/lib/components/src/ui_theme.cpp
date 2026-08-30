@@ -45,17 +45,28 @@ const lv_color_t user_color_status_err = LV_COLOR_MAKE(0xff, 0x4d, 0x4d);
  *  单把该字段改成 112 又会让设备名那行跟着上移 8。故 128 留给设备条，
  *  112 独立成本字段。1920 档 ×1.5 给 168，1024 档按 600/800 折算 84。
  *
- *  ---- 触摸尺寸的刻意偏稿（只在 1280 档） ----
- *  下面三个值为触摸可用性上调，**已不再是稿值**，别按稿又调回去：
+ *  ---- 触摸尺寸的刻意偏稿 ----
+ *  下面这些值为触摸可用性上调，**已不再是稿值**，别按稿又调回去。
+ *
+ *  仅 1280 档：
  *    user_hist_tab_h  40 → 52   Tab 行高 = Tab 项命中高 = Manage 系列按钮高
  *    user_hist_btn_w 100 → 128  Manage 系列按钮宽
- *    user_media_btn_h  新 = 56  全屏媒体页浮层圆钮（稿上无此项，原先取 44）
  *  实测 40/100 在 1280×800 上偏小：Tab 项宽被写死成文字实宽、左右零内距，且文字
- *  ALIGN_TOP_MID 贴顶使命中区中心比文字视觉中心偏下；浮层圆钮又都贴屏幕边缘。
+ *  ALIGN_TOP_MID 贴顶使命中区中心比文字视觉中心偏下。
  *  横向放得下：Tab 行可用宽 1120（= 1280 − 48 − 112），管理态占用约 775 + 84
  *  （三个按钮各 +28），仍余约 260。
- *  **1920 / 1024 两档未动**（user_media_btn_h 给 0 即沿用 user_back_btn_h），
- *  换档前需要按那一档的实屏重新评估。
+ *
+ *  三档全体：
+ *    user_media_btn_h   96 / 66 / 60   全屏媒体页的关闭钮与相册翻页箭头
+ *  稿上无此项，原先各档沿用 user_back_btn_h（64/44/40），实机确认这几颗钮叠在
+ *  视频/照片上又贴屏幕边缘，太难找也太难点，统一按 user_back_btn_h 的 1.5 倍给。
+ *  副作用：ui_user_make_overlay_round_btn() 里那段「不足 UI_USER_MIN_TOUCH(48)
+ *  就补命中区」的兜底，三档都超过 48 后不再触发。
+ *
+ *    user_media_play_h 128 / 112 / 80  延时播放器中央的播放/暂停钮
+ *  它原先写成 user_media_btn_size() * 2，关闭钮一放大就跟着涨到 120~192，在
+ *  600~1080 的屏高上占到两成，过于抢眼。拆成独立字段后两者互不牵动，这三个值
+ *  即放大关闭钮之前播放钮的实际渲染尺寸，等于维持原样。
  * ============================================================================ */
 static const ui_theme_t s_theme_1920 = {
     /* 开发者 Shell */
@@ -139,7 +150,8 @@ static const ui_theme_t s_theme_1920 = {
     /* user_metric_icon_sz    */ 48,   /* 稿 32@1280 × 1.5 */
     /* user_back_btn_w        */ 180,
     /* user_back_btn_h        */ 64,
-    /* user_media_btn_h       */ 0,    /* 本档未单独调，沿用 user_back_btn_h */
+    /* user_media_btn_h       */ 96,   /* 触摸可用性上调：user_back_btn_h × 3/2 */
+    /* user_media_play_h      */ 128,  /* 放大关闭钮前的实际渲染值，维持原样 */
     /* user_sensor_strip_h    */ 120,
     /* user_scroll_btn_sz     */ 0,    /* 无稿，沿用旧式 64*5/4 = 80 */
     /* user_scroll_btn_gap    */ 0,    /* 无稿，沿用旧式 USER_PAD_LG */
@@ -302,7 +314,8 @@ static const ui_theme_t s_theme_1280 = {
     /* user_metric_icon_sz    */ 32,   /* 稿值 */
     /* user_back_btn_w        */ 128,
     /* user_back_btn_h        */ 44,
-    /* user_media_btn_h       */ 56,   /* 触摸可用性上调（稿无此项）：44 偏小且都贴屏幕边缘 */
+    /* user_media_btn_h       */ 66,   /* 触摸可用性上调（稿无此项）：user_back_btn_h × 3/2 */
+    /* user_media_play_h      */ 112,  /* 放大关闭钮前的实际渲染值，维持原样 */
     /* user_sensor_strip_h    */ 84,
     /* user_scroll_btn_sz     */ 64,   /* 稿值（三页一致） */
     /* user_scroll_btn_gap    */ 160,  /* 稿值（历史页 / 消息页） */
@@ -471,7 +484,8 @@ static const ui_theme_t s_theme_1024 = {
                                         * 的字号显大，仍按折算值 */
     /* user_back_btn_w        */ 102,
     /* user_back_btn_h        */ 40,
-    /* user_media_btn_h       */ 0,    /* 本档未单独调，沿用 user_back_btn_h */
+    /* user_media_btn_h       */ 60,   /* 触摸可用性上调：user_back_btn_h × 3/2 */
+    /* user_media_play_h      */ 80,   /* 放大关闭钮前的实际渲染值，维持原样 */
     /* user_sensor_strip_h    */ 68,
     /* user_scroll_btn_sz     */ 0,    /* 无稿，沿用旧式 40*5/4 = 50 */
     /* user_scroll_btn_gap    */ 0,    /* 无稿，沿用旧式 USER_PAD_LG */
@@ -662,6 +676,12 @@ int32_t user_media_btn_size(void)
 {
     return g_ui->user_media_btn_h > 0 ? g_ui->user_media_btn_h
                                       : g_ui->user_back_btn_h;
+}
+
+int32_t user_media_play_size(void)
+{
+    return g_ui->user_media_play_h > 0 ? g_ui->user_media_play_h
+                                       : user_media_btn_size() * 2;
 }
 
 const lv_font_t *ui_font_body(void)        { return g_ui->font_body; }

@@ -16,7 +16,10 @@
 
 namespace {
 
-constexpr int      kCurrentCap      = 96;   /* CONDITION 全集 79 条，留余量 */
+/* CONDITION 全集 95 条（2026-08-30 表），留余量。这个余量必须留够：槽满时
+ * slot_alloc() 返回 -1，两个调用点只能丢掉这条报警，是**静默丢失**。MCU 每次
+ * 扩报警表都要回头看一眼这个数。 */
+constexpr int      kCurrentCap      = 128;
 constexpr int      kMaxObservers    = 4;
 constexpr uint32_t kResetTimeoutMs  = 10000; /* 复位无回报自动解锁按钮 */
 constexpr uint32_t kEventDismissMs  = 5000;  /* EVENT 蓝卡自动从浮层撤下 */
@@ -384,7 +387,11 @@ void on_alarm_condition(const middleware::AlarmReportPayload &p)
     if(i < 0) {
         i = slot_alloc();
         if(i < 0) {
-            return;   /* 槽满（不应发生：容量 > CONDITION 全集） */
+            /* 槽满（不应发生：kCurrentCap > CONDITION 全集）。真发生了这条报警
+             * 就此丢失，必须留痕——否则界面少一条谁也查不出为什么。 */
+            UPC_LOG_ALARM_STATE(Error, "current table full (%d), dropping alarm %u",
+                                kCurrentCap, static_cast<unsigned>(p.alarm_code));
+            return;
         }
         std::memset(&g_current[i], 0, sizeof(g_current[i]));
         g_current[i].used   = true;
@@ -437,10 +444,18 @@ void snapshot_upsert(uint16_t code, bool active, bool latched, int64_t now)
 
     i = slot_alloc();
     if(i < 0) {
-        return;   /* 槽满（不应发生：容量 > CONDITION 全集） */
+        /* 槽满（不应发生：kCurrentCap > CONDITION 全集），同 on_alarm_condition */
+        UPC_LOG_ALARM_STATE(Error, "current table full (%d), dropping snapshot alarm %u",
+                            kCurrentCap, static_cast<unsigned>(code));
+        return;
     }
-    /* 本地没有这条，只能靠字典把卡片凑出来。字典比固件旧时查不到，按最保守的
-     * 一档显示：warning 且不给复位钮，避免误发 RESET。 */
+    /* 本地没有这条，只能靠字典把卡片凑出来。字典比固件旧时查不到：
+     *  - severity 取 warning 这一中间档；
+     *  - clear_mode 取 RESET。快照报文里**根本没有 clear_mode 这个字段**，这里
+     *    填的是个凭空造的值；填 NONE 会被 ui_alarm_reset_allowed() 第一道判断
+     *    直接否掉，抽屉连 Reset 钮都不建，用户对字典没跟上的新报警毫无办法。
+     *    这个兜底只活到该 code 的第一帧单条上报，on_alarm_condition() 会用报文
+     *    值覆盖它——所以放宽的只是"信息缺失"，不违反"以报文为准"。 */
     const ui_alarm_catalog_entry_t *cat = ui_alarm_catalog_find(code);
     std::memset(&g_current[i], 0, sizeof(g_current[i]));
     g_current[i].used = true;
@@ -448,7 +463,8 @@ void snapshot_upsert(uint16_t code, bool active, bool latched, int64_t now)
     ui_alarm_entry_t &e = g_current[i].e;
     e.code       = code;
     e.severity   = cat ? cat->severity_fallback : 2;
-    e.clear_mode = cat ? cat->clear_mode_fallback : 3;
+    e.clear_mode = cat ? cat->clear_mode_fallback
+                       : static_cast<uint8_t>(middleware::AlarmClearMode::Reset);
     e.detail     = 0;     /* 快照没有 detail */
     e.ts_ms      = now;   /* 真实触发时刻已不可考，只能记补齐时刻 */
     e.stage      = stage;
@@ -632,7 +648,7 @@ void apply_report_async(void *raw)
     if(p->state_mask & middleware::kAlarmStateEvent) {
         /* EVENT 不改 CONDITION 状态，快照在途也能直接落历史（开发指导 §11.4）。
          * 顺带记一笔异常 clear_mode：按表 EVENT 恒为 NONE(3)，而
-         * 信息报警命令详表的示例帧里写的是 0，两者矛盾且示例已确认作废。
+         * 信息报警命令.csv 的示例帧里写的是 0，两者矛盾且示例已确认作废。
          * 真收到非 3 的话说明固件行为与表不符，得回头找 MCU 组。 */
         if(p->clear_mode != static_cast<uint8_t>(middleware::AlarmClearMode::None)) {
             UPC_LOG_ALARM_STATE(Warn, "EVENT %u clear_mode=%u (expected NONE=3)",
@@ -762,11 +778,14 @@ bool ui_alarm_reset_allowed(const ui_alarm_entry_t *e)
     if(e->stage == UI_ALARM_STAGE_RTN_LATCHED) {
         return true;
     }
-    /* ACTIVE：只有 OWNER_TASK 类值得下发——MCU 会把请求转给业务任务做硬件恢复。
+    /* ACTIVE：OWNER_TASK 类值得下发——MCU 会把请求转给业务任务做硬件恢复。
      * LOCAL 类（1124/1125）条件仍在时必被拒，让按钮亮着只会白等一轮 pending。
-     * reset_policy 不在报文里，只能查字典；查不到按 LOCAL 这一保守档处理。 */
+     * reset_policy 不在报文里，只能查字典；**查不到按放行处理**：那是字典没跟上
+     * 固件的信息缺失，不是"已知不可复位"，而现表 30 条 RESET 里 28 条都是
+     * OWNER_TASK。拦下来的代价是新报警永远复不了位（只能断电），误发一帧的代价
+     * 只是 MCU 不认就不回、10s 超时自解锁，真拒了还有失败回执立刻解锁。 */
     const ui_alarm_catalog_entry_t *cat = ui_alarm_catalog_find(e->code);
-    return cat && cat->reset_owner_task;
+    return !cat || cat->reset_owner_task;
 }
 
 bool ui_alarm_request_reset(uint16_t code)
@@ -810,11 +829,24 @@ void ui_alarm_debug_inject(uint16_t code, uint8_t severity, uint8_t state_mask,
 
 const ui_alarm_entry_t *ui_alarm_print_blocker(void)
 {
-    /* 1124/1125 未复位期间 MCU 会拒绝新打印请求（联调确认），入口先拦提示 */
+    /* 未复位期间 MCU 会拒绝新打印请求的报警。它拒的时候只回 EVENT 2003
+     * PRINT_START_DENIED，那条给不出是哪儿卡住，所以打印入口先查这张表把原因
+     * 亮出来。报文和字典里都没有"是否阻断打印"这样的字段，只能按报警语义维护——
+     * 七条都是 clear_mode=RESET 的停机等待复位类：
+     *   1004 内门运动故障   1124 打印步骤超时   1125 运动失败打印中止
+     *   1126 筛粉电机过流   1127 筛粉电流检测故障
+     *   1128 PTC 加热过流   1129 PTC 电流检测故障
+     * MCU 以后再加停机类报警，这里要跟着补。 */
+    static constexpr uint16_t kBlockers[] = {
+        1004, 1124, 1125, 1126, 1127, 1128, 1129,
+    };
+    /* 按显示序遍历，命中的第一条就是最该先说的（severity 降序、同级新在前） */
     for(int i = 0; i < g_order_count; i++) {
         const ui_alarm_entry_t &e = g_current[g_order[i]].e;
-        if(e.code == 1124 || e.code == 1125) {
-            return &e;
+        for(uint16_t blocker : kBlockers) {
+            if(e.code == blocker) {
+                return &e;
+            }
         }
     }
     return nullptr;

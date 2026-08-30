@@ -32,6 +32,13 @@ constexpr const char* kFsDrive = "A:";
 constexpr uint64_t kPreviewReqMinIntervalMs = 80;
 constexpr int64_t kMp4PreviewJumpMs = 300;
 
+/* 进度条命中区向外扩多少（px）。轨道视觉上只有 24~40px 高（随 profile），
+ * 全屏播放时它是唯一的定位手段，而且是拖动而非点击，起手落偏一点就丢事件。
+ * 取 UI_USER_MIN_TOUCH 这个量级：轨道上方多出整整一指的可抓范围。
+ * 生效要同时满足两处——bottom 的 pad_top 撑开父容器、slider 的
+ * ext_click_area 放大自身判定，原因见各自注释。 */
+constexpr int32_t kScrubTouchPad = UI_USER_MIN_TOUCH;
+
 char g_seq_dir[256] = {0};
 char g_mp4_path[256] = {0};
 char g_title[96] = {0};
@@ -485,6 +492,13 @@ void on_play_click(lv_event_t*)
     }
 
     if(g_mode == PlaybackMode::PngSequence && !g_frames.empty()) {
+        /* 停在末帧时重新点播放要先回到开头，否则 play_timer_cb 下一拍就撞上
+         * 结束判定又把 g_playing 关掉，表现为点了没反应。与上面 MP4 分支到
+         * 末尾先 seek(0) 同理。 */
+        if(!g_playing && g_cur_index + 1u >= g_frames.size()) {
+            g_cur_index = 0;
+            render_current_png_frame();
+        }
         g_playing = !g_playing;
         set_play_icon(g_playing);
     }
@@ -730,12 +744,19 @@ lv_obj_t* page_user_timelapse_create(lv_obj_t* parent)
     lv_obj_set_style_text_font(sub, user_font_caption(), 0);
     g_sub_lbl = sub;
 
+    /* 圆圈放大后图标字号得跟着提：helper 内部固定用 user_font_text()，只放大
+     * 圆圈的话图标会浮在一片空底上（播放键同理，见下）。 */
     const int32_t btn_sz = user_media_btn_size();
+    lv_obj_t* close_icon = nullptr;
     lv_obj_t* close = ui_user_make_overlay_round_btn(ov, LV_SYMBOL_CLOSE, btn_sz,
-                                                    on_close_click, nullptr);
+                                                    on_close_click, &close_icon);
+    if(close_icon) {
+        lv_obj_set_style_text_font(close_icon, user_font_icon(), 0);
+    }
     lv_obj_align(close, LV_ALIGN_TOP_RIGHT, -USER_PAD, USER_PAD);
 
-    const int32_t play_sz = btn_sz * 2;
+    /* 播放钮走独立的主题字段，不跟着关闭钮的放大一起涨（见 ui_theme.hpp） */
+    const int32_t play_sz = user_media_play_size();
     lv_obj_t* play = ui_user_make_overlay_round_btn(ov, LV_SYMBOL_PAUSE, play_sz,
                                                    on_play_click, &g_play_icon);
     lv_obj_set_style_text_font(g_play_icon, user_font_value(), 0);
@@ -753,6 +774,12 @@ lv_obj_t* page_user_timelapse_create(lv_obj_t* parent)
     lv_obj_set_style_bg_opa(bottom, LV_OPA_TRANSP, 0);
     lv_obj_add_flag(bottom, LV_OBJ_FLAG_FLOATING);
     lv_obj_clear_flag(bottom, LV_OBJ_FLAG_SCROLLABLE);
+    /* 顶部留白把这条（透明的）容器往上撑高，纯粹给进度条让出命中空间。
+     * 必须撑父容器：lv_indev_search_obj 递归进子节点的判据是父节点的原始
+     * coords，不含 ext_click_area，只给 slider 外扩的话上方那片区域根本
+     * 递归不下来。容器是 BOTTOM_MID 对齐 + SIZE_CONTENT，加 pad_top 只让
+     * 盒子朝上长，里面的时间标签和进度条位置分毫不动。 */
+    lv_obj_set_style_pad_top(bottom, kScrubTouchPad, 0);
     lv_obj_align(bottom, LV_ALIGN_BOTTOM_MID, 0, -USER_PAD);
 
     lv_obj_t* time_lbl = lv_label_create(bottom);
@@ -777,6 +804,21 @@ lv_obj_t* page_user_timelapse_create(lv_obj_t* parent)
     lv_obj_set_style_width(slider, knob_sz, LV_PART_KNOB);
     lv_obj_set_style_height(slider, knob_sz, LV_PART_KNOB);
     lv_obj_set_style_radius(slider, LV_RADIUS_CIRCLE, LV_PART_KNOB);
+    /* 与上面 bottom 的 pad_top 配套：父容器负责让点能递归下来，这里负责让
+     * 滑块自己认这些点。两者缺一不可，取同一个值。
+     * 四边等量外扩：左右伸到时间标签和边距下面（都不可点，不抢事件），
+     * 向下伸出屏幕边缘（无害），向上正好落在刚撑出来的那片留白里。 */
+    lv_obj_set_ext_click_area(slider, kScrubTouchPad);
+
+    /* knob 比轨道高（3H vs 2H），上下各溢出 (knob_sz - slider_touch_h)/2；容器是
+     * SIZE_CONTENT，高度只跟着轨道走，溢出的那两截会被父容器裁掉——表现为本该是
+     * 正圆的 knob 渲染成上下削平的横向胶囊（实机 1024 档：36×36 被压成 36×24）。
+     * 补一段下边距把 knob 整个圈进来（上方由 pad_top 那 48px 兜住），再多留
+     * USER_PAD_SM 与屏幕边缘拉开距离。容器 BOTTOM_MID 对齐，加下边距等于把
+     * 里面的内容整体上抬。 */
+    const int32_t knob_overflow = (knob_sz - slider_touch_h + 1) / 2;
+    lv_obj_set_style_pad_bottom(bottom, knob_overflow + USER_PAD_SM, 0);
+
     lv_obj_add_event_cb(slider, on_slider_pressed, LV_EVENT_PRESSED, nullptr);
     lv_obj_add_event_cb(slider, on_slider_value_changed, LV_EVENT_VALUE_CHANGED, nullptr);
     lv_obj_add_event_cb(slider, on_slider_released, LV_EVENT_RELEASED, nullptr);

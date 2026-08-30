@@ -127,18 +127,9 @@ lv_obj_t *g_detail_meta_local = nullptr;     /**< 本机详情 meta 行（耗时
 lv_obj_t *g_detail_meta_usb   = nullptr;     /**< USB 详情 meta 行（文件大小） */
 lv_obj_t *g_detail_secondary_btn = nullptr;  /**< 底部次按钮（本机=删除；USB 隐藏） */
 lv_obj_t *g_detail_secondary_lbl = nullptr;  /**< 次按钮文字 */
-lv_obj_t *g_detail_start_btn = nullptr;      /**< 底部主按钮（Confirm Print，未选厚度时置灰） */
-lv_obj_t *g_detail_plate_seg  = nullptr;     /**< 打印板厚度分段控件（5mm / 10mm） */
-lv_obj_t *g_detail_plate_warn = nullptr;     /**< 未选厚度时的红色提示行 */
+lv_obj_t *g_detail_start_btn = nullptr;      /**< 底部主按钮（Confirm Print） */
 ui_modal_dialog_t *g_confirm_dlg = nullptr;
 ui_modal_dialog_t *g_prepare_dlg = nullptr;
-
-/* 打印板厚度（稿 4014:16631 新增）：0 = 5mm，1 = 10mm，-1 = 未选。
- * 必须由用户显式选择，未选时主按钮置灰并显示提示行；每次改选文件都清回 -1。
- * 目前仅停留在 UI 层——契约（upc_contract.hpp / PrintPrepare）还没有厚度字段，
- * 后端接上之后在 on_print_confirm_ok 里随 send_print_prepare 一起下发即可。 */
-constexpr int8_t PLATE_THICKNESS_NONE = -1;
-int8_t g_plate_thickness = PLATE_THICKNESS_NONE;
 
 /* 顶部供应度（耗材/滤芯）。默认值=后端未就绪时的占位（设计稿示例 48% 充足）。 */
 middleware::SupplyStatusPayload g_supply = {48.0f, 48.0f, 1, 1};
@@ -193,6 +184,11 @@ std::deque<FileTab> g_dir_open_pending;
 void rebuild_file_grid(void);
 void update_detail_panel(const control_file_t *file);
 void show_terminated_result_without_manifest(void);
+/* 定义在详情面板那一段，但文件列表行也要用（make_file_card 在其之前） */
+void make_detail_inline_kv(lv_obj_t *parent, const lv_image_dsc_t *icon,
+                           const char *caption,
+                           lv_color_t value_color, lv_obj_t **out_val,
+                           const lv_font_t *value_font = nullptr);
 
 void apply_files_list(const std::vector<control_file_t>& files)
 {
@@ -836,14 +832,11 @@ void backend_start_job(const control_file_t *file, ProgressCb prog_cb, DoneCb do
     g_job_u = u;
 
     const uint32_t file_index = file ? file->index : 0;
-    uint16_t plate_thickness_um = 10000u; /* 默认 10mm */
-    if(g_plate_thickness == 0) {
-        plate_thickness_um = 5000u;
-    } else if(g_plate_thickness == 1) {
-        plate_thickness_um = 10000u;
-    }
+    /* 打印板厚度曾经是详情面板里让用户选的（5mm / 10mm），已按产品要求整块去掉，
+     * 这里固定按 10mm 下发。契约字段仍在，日后要恢复可选值改这一处即可。 */
+    constexpr uint16_t kPlateThicknessUm = 10000u;
     ui::UiMsgProxy::instance().send_print_start(
-        file_index, file_tab_to_source(g_file_tab), plate_thickness_um);
+        file_index, file_tab_to_source(g_file_tab), kPlateThicknessUm);
 }
 
 void backend_terminate_job()
@@ -1879,50 +1872,8 @@ void format_file_size(char *buf, size_t n, uint32_t bytes)
     }
 }
 
-/* 打印板厚度 → 分段控件 / 提示行 / 主按钮可用态三处联动。
- * 未选：分段全灰、提示行可见、Confirm Print 置灰且不可点。 */
-void apply_plate_thickness_ui(void)
-{
-    const bool chosen = (g_plate_thickness != PLATE_THICKNESS_NONE);
-
-    if(g_detail_plate_seg) {
-        ui_user_segmented_set_selected(g_detail_plate_seg,
-            chosen ? static_cast<uint8_t>(g_plate_thickness) : UI_USER_SEG_NONE);
-    }
-    if(g_detail_plate_warn) {
-        if(chosen) lv_obj_add_flag(g_detail_plate_warn, LV_OBJ_FLAG_HIDDEN);
-        else       lv_obj_clear_flag(g_detail_plate_warn, LV_OBJ_FLAG_HIDDEN);
-    }
-    if(g_detail_start_btn) {
-        if(chosen) {
-            lv_obj_clear_state(g_detail_start_btn, LV_STATE_DISABLED);
-            lv_obj_add_flag(g_detail_start_btn, LV_OBJ_FLAG_CLICKABLE);
-        } else {
-            lv_obj_add_state(g_detail_start_btn, LV_STATE_DISABLED);
-            /* DISABLED 只影响取样样式，还要摘掉 CLICKABLE 才真正拦住点击 */
-            lv_obj_remove_flag(g_detail_start_btn, LV_OBJ_FLAG_CLICKABLE);
-        }
-    }
-}
-
-/* 改选文件 / 切换来源时调用：厚度是逐文件选择，不跨文件沿用 */
-void reset_plate_thickness(void)
-{
-    g_plate_thickness = PLATE_THICKNESS_NONE;
-    apply_plate_thickness_ui();
-}
-
-void on_plate_seg_changed(lv_event_t *e)
-{
-    const uint8_t sel = ui_user_segmented_get_selected(lv_event_get_target_obj(e));
-    g_plate_thickness = (sel == UI_USER_SEG_NONE) ? PLATE_THICKNESS_NONE
-                                                  : static_cast<int8_t>(sel);
-    apply_plate_thickness_ui();
-}
-
 /* 选中文件 → 填充右侧详情面板。
- * 本机：预估耗时/耗材 + 删除按钮（原样）；USB：仅文件大小，无次按钮。
- * 打印板厚度两个来源都显示，仅按当前选择刷新联动。 */
+ * 本机：预估耗时/耗材 + 删除按钮（原样）；USB：仅文件大小，无次按钮。 */
 void update_detail_panel(const control_file_t *file)
 {
     const bool has = (file != nullptr);
@@ -1934,7 +1885,6 @@ void update_detail_panel(const control_file_t *file)
         if(has) lv_obj_clear_flag(g_detail_body, LV_OBJ_FLAG_HIDDEN);
         else    lv_obj_add_flag(g_detail_body, LV_OBJ_FLAG_HIDDEN);
     }
-    apply_plate_thickness_ui();
     if(!has) {
         return;
     }
@@ -1990,14 +1940,12 @@ void on_file_card_click(lv_event_t *e)
     /* 再次点击已选中的文件 → 取消选中，回到空态 */
     if(g_sel_index == static_cast<int>(index)) {
         g_sel_index = -1;
-        reset_plate_thickness();
         update_detail_panel(nullptr);
         highlight_file_rows();
         return;
     }
     g_sel_index = static_cast<int>(index);
     g_active_file = *file;
-    reset_plate_thickness();   /* 厚度是逐文件选的，换文件必须重新选 */
     update_detail_panel(file);
     highlight_file_rows();
     /* 不再在选择时请求 file_info：详情用目录项数据即可，避免后端为预览而全量解析阻塞 */
@@ -2010,7 +1958,8 @@ void on_file_select_cancel(lv_event_t * /*e*/)
     ui::PageManager::instance().switch_to("user_home");
 }
 
-/* ---- 打印入口拦截：1124/1125 未复位时 MCU 会拒绝新打印请求 ---- */
+/* ---- 打印入口拦截：停机类报警未复位时 MCU 会拒绝新打印请求
+ *      （名单见 ui_alarm_print_blocker()） ---- */
 
 void on_print_blocked_dismiss(lv_event_t * /*e*/)
 {
@@ -2031,10 +1980,6 @@ void on_print_blocked_reset(lv_event_t * /*e*/)
 void on_detail_start_print(lv_event_t * /*e*/)
 {
     if(!g_files_page_active || g_sel_index < 0) {
-        return;
-    }
-    /* 未选打印板厚度时按钮已置灰不可点，这里只是兜底 */
-    if(g_plate_thickness == PLATE_THICKNESS_NONE) {
         return;
     }
     /* 顺手请求一次快照：本地阻断状态可能已经过期（单条上报错过不补发），
@@ -2099,7 +2044,6 @@ void on_delete_confirm(lv_event_t * /*e*/)
     ui::UiMsgProxy::instance().send_fs_delete_ntf(idx, middleware::PrintFileSource::Local);
     g_sel_index = -1;
     g_active_file = {};
-    reset_plate_thickness();
     update_detail_panel(nullptr);
 }
 
@@ -2374,7 +2318,6 @@ void switch_source(FileTab tab)
     g_file_tab = tab;
     g_sel_index = -1;
     seg_set_active(tab, true);
-    reset_plate_thickness();
     update_detail_panel(nullptr);
     g_files.clear();
     rebuild_file_grid();
@@ -2441,15 +2384,37 @@ lv_obj_t *make_file_card(lv_obj_t *parent, const control_file_t *file, size_t in
     lv_obj_set_style_text_color(name, user_color_text, 0);
     lv_obj_set_style_text_font(name, user_font_text(), 0);
 
-    /* USB 列表行不显示预估耗时/耗材（仅本机显示） */
+    /* USB 列表行不显示预估耗时/耗材（仅本机显示）。
+     * 与详情面板同款「[图标] 数值」，只是无 caption、字号压到 caption 档以保持行高。 */
     if(g_file_tab != FileTab::Usb) {
-        char info[64];
-        ui_user_format_file_meta(info, sizeof(info),
-                                 file->duration_min, file->material_g);
-        lv_obj_t *meta = lv_label_create(col);
-        lv_label_set_text(meta, info);
-        lv_obj_set_style_text_color(meta, user_color_text_dim, 0);
-        lv_obj_set_style_text_font(meta, user_font_caption(), 0);
+        lv_obj_t *meta = lv_obj_create(col);
+        lv_obj_remove_style_all(meta);
+        lv_obj_set_size(meta, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+        lv_obj_set_flex_flow(meta, LV_FLEX_FLOW_ROW);
+        lv_obj_set_flex_align(meta, LV_FLEX_ALIGN_START,
+                              LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+        lv_obj_set_style_pad_column(meta, USER_PAD, 0);
+        lv_obj_set_style_bg_opa(meta, LV_OPA_TRANSP, 0);
+        lv_obj_clear_flag(meta, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_remove_flag(meta, LV_OBJ_FLAG_CLICKABLE);
+
+        char dur[32];
+        ui_user_format_duration_min(dur, sizeof(dur), file->duration_min);
+        lv_obj_t *dur_val = nullptr;
+        make_detail_inline_kv(meta, &ic_clock, nullptr, user_color_text_dim,
+                              &dur_val, user_font_caption());
+        if(dur_val) {
+            lv_label_set_text(dur_val, dur);
+        }
+
+        /* 与耗时同色：列表行整条 meta 保持一个色阶，accent 蓝留给详情页强调 */
+        lv_obj_t *mat_val = nullptr;
+        make_detail_inline_kv(meta, &ic_cube, nullptr, user_color_text_dim,
+                              &mat_val, user_font_caption());
+        if(mat_val) {
+            lv_label_set_text_fmt(mat_val, "%.1fg",
+                                  static_cast<double>(file->material_g));
+        }
     }
 
     return row;
@@ -2557,12 +2522,17 @@ lv_obj_t *make_source_segment(lv_obj_t *parent)
     return track;
 }
 
-/* 详情面板内的「耗时 / 耗材 / 文件大小」小项：[图标] caption value 单行排布
- * （稿 4014:16631 把原先的两行 caption/value 压成一行，给下方打印板厚度腾空间）。
- * icon 传 nullptr 则不占图标位（USB 的文件大小行）。value 句柄回传以便刷新。 */
+/* 「[图标] caption value」行内小项，详情面板与文件列表行共用。
+ * （稿 4014:16631 把原先的两行 caption/value 压成一行。）
+ *
+ * icon       传 nullptr 不占图标位（USB 的文件大小行）
+ * caption    传 nullptr 不建标签，也就不会多吃一份 pad_column（列表行只要图标+数值）
+ * value_font 传 nullptr 用 user_font_text()（列表行传 caption 字号以维持行高）
+ * out_val    回传 value 句柄以便后续刷新 */
 void make_detail_inline_kv(lv_obj_t *parent, const lv_image_dsc_t *icon,
                            const char *caption,
-                           lv_color_t value_color, lv_obj_t **out_val)
+                           lv_color_t value_color, lv_obj_t **out_val,
+                           const lv_font_t *value_font)
 {
     lv_obj_t *row = lv_obj_create(parent);
     lv_obj_remove_style_all(row);
@@ -2574,7 +2544,11 @@ void make_detail_inline_kv(lv_obj_t *parent, const lv_image_dsc_t *icon,
     lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, 0);
     lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
 
-    /* A8 图标按 24px 原尺寸 1:1 贴（见 gen_home_metric_icons.py 的 clock/cube 档） */
+    /* A8 图标按 24px 原尺寸 1:1 贴（见 gen_home_metric_icons.py 的 clock/cube 档）。
+     * **别在这儿加缩放**：lv_draw_sw_transform 是 2 抽头点采样、不做面积平均，缩小时
+     * 会整行整列跳过源像素，而这两枚图标的描边只有 1.33px，跳掉一行就断一截，实机上
+     * 是肉眼可见的锯齿。真需要小一号就照 METRIC_ICONS 的做法让生成器另出一档原生
+     * 尺寸（同 ic_home_26/32/48），运行时始终 1:1。 */
     if(icon) {
         lv_obj_t *img = lv_image_create(row);
         lv_image_set_src(img, icon);
@@ -2582,46 +2556,22 @@ void make_detail_inline_kv(lv_obj_t *parent, const lv_image_dsc_t *icon,
         lv_obj_set_style_image_recolor_opa(img, LV_OPA_COVER, 0);
     }
 
-    lv_obj_t *cap = lv_label_create(row);
-    lv_label_set_text(cap, caption);
-    lv_obj_set_style_text_color(cap, user_color_text_dim, 0);
-    lv_obj_set_style_text_font(cap, user_font_caption(), 0);
+    if(caption) {
+        lv_obj_t *cap = lv_label_create(row);
+        lv_label_set_text(cap, caption);
+        lv_obj_set_style_text_color(cap, user_color_text_dim, 0);
+        lv_obj_set_style_text_font(cap, user_font_caption(), 0);
+    }
 
     lv_obj_t *val = lv_label_create(row);
-    lv_label_set_text(val, "—");
+    /* 占位符统一用 ASCII "--"：内置 Montserrat 只收 0x20-0x7F,0xB0,0x2022，
+     * 破折号 U+2014 不在范围内，会渲染成豆腐块 */
+    lv_label_set_text(val, "--");
     lv_obj_set_style_text_color(val, value_color, 0);
-    lv_obj_set_style_text_font(val, user_font_text(), 0);
+    lv_obj_set_style_text_font(val, value_font ? value_font : user_font_text(), 0);
     if(out_val) {
         *out_val = val;
     }
-}
-
-/* 详情面板「未选打印板厚度」提示行：红色告警图标 + 红字说明（稿 4014:16631）。 */
-lv_obj_t *make_detail_warn_row(lv_obj_t *parent, const char *text)
-{
-    lv_obj_t *row = lv_obj_create(parent);
-    lv_obj_remove_style_all(row);
-    lv_obj_set_width(row, LV_PCT(100));
-    lv_obj_set_height(row, LV_SIZE_CONTENT);
-    lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(row, LV_FLEX_ALIGN_START,
-                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_column(row, USER_PAD_SM, 0);
-    lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, 0);
-    lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
-
-    lv_obj_t *img = lv_image_create(row);
-    lv_image_set_src(img, &ic_warning);
-    lv_obj_set_style_image_recolor(img, user_color_status_err, 0);
-    lv_obj_set_style_image_recolor_opa(img, LV_OPA_COVER, 0);
-
-    lv_obj_t *lbl = lv_label_create(row);
-    lv_label_set_text(lbl, text);
-    lv_label_set_long_mode(lbl, LV_LABEL_LONG_MODE_WRAP);
-    lv_obj_set_flex_grow(lbl, 1);
-    lv_obj_set_style_text_color(lbl, user_color_status_err, 0);
-    lv_obj_set_style_text_font(lbl, user_font_caption(), 0);
-    return row;
 }
 
 void build_detail_panel(lv_obj_t *parent)
@@ -2635,8 +2585,7 @@ void build_detail_panel(lv_obj_t *parent)
     lv_obj_set_flex_flow(panel, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(panel, LV_FLEX_ALIGN_START,
                           LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
-    /* 行距用 SM：稿 4014:16631 的详情列纵向间距按 16/1280 折到 1024 约 11px，
-     * 也正好给新增的打印板厚度区腾出高度（1024 档整列不能溢出）。 */
+    /* 行距用 SM：稿 4014:16631 的详情列纵向间距按 16/1280 折到 1024 约 11px。 */
     lv_obj_set_style_pad_row(panel, USER_PAD_SM, 0);
     lv_obj_clear_flag(panel, LV_OBJ_FLAG_SCROLLABLE);
 
@@ -2672,7 +2621,7 @@ void build_detail_panel(lv_obj_t *parent)
 
     /* 文件名 */
     g_detail_name_lbl = lv_label_create(g_detail_body);
-    lv_label_set_text(g_detail_name_lbl, "—");
+    lv_label_set_text(g_detail_name_lbl, "--");
     lv_label_set_long_mode(g_detail_name_lbl, LV_LABEL_LONG_MODE_DOTS);
     lv_obj_set_width(g_detail_name_lbl, LV_PCT(100));
     lv_obj_set_style_text_color(g_detail_name_lbl, user_color_text, 0);
@@ -2690,7 +2639,7 @@ void build_detail_panel(lv_obj_t *parent)
     make_detail_inline_kv(g_detail_meta_local, &ic_clock, "Est. Time",
                           user_color_text, &g_detail_time_lbl);
     make_detail_inline_kv(g_detail_meta_local, &ic_cube, "Material",
-                          user_color_accent, &g_detail_mat_lbl);
+                          user_color_text, &g_detail_mat_lbl);
 
     /* USB meta：文件大小（与本机 meta 互斥显示） */
     g_detail_meta_usb = lv_obj_create(g_detail_body);
@@ -2704,26 +2653,6 @@ void build_detail_panel(lv_obj_t *parent)
     make_detail_inline_kv(g_detail_meta_usb, nullptr, "File Size",
                           user_color_text, &g_detail_size_lbl);
 
-    /* ---- 打印板厚度（稿 4014:16631，本机/USB 都显示）----
-     * 分隔线 + 标题 + 5mm/10mm 分段 + 未选提示；未选时下方 Confirm Print 置灰。 */
-    ui_user_make_divider_line(g_detail_body, LV_PCT(100));
-
-    lv_obj_t *plate_title = lv_label_create(g_detail_body);
-    lv_label_set_text(plate_title, "Plate Thickness");
-    lv_obj_set_style_text_color(plate_title, user_color_text, 0);
-    lv_obj_set_style_text_font(plate_title, user_font_text(), 0);
-
-    static const char *const k_plate_labels[] = { "5mm", "10mm" };
-    g_detail_plate_seg = ui_user_make_segmented(g_detail_body, k_plate_labels, 2,
-                                               UI_USER_SEG_NONE);
-    lv_obj_set_width(g_detail_plate_seg, LV_PCT(100));
-    lv_obj_set_height(g_detail_plate_seg, USER_DLG_FOOTER_BTN_H);
-    lv_obj_add_event_cb(g_detail_plate_seg, on_plate_seg_changed,
-                        LV_EVENT_VALUE_CHANGED, nullptr);
-
-    g_detail_plate_warn =
-        make_detail_warn_row(g_detail_body, "Select a plate thickness to continue");
-
     /* 撑开，把按钮顶到底部 */
     lv_obj_t *sp = lv_obj_create(g_detail_body);
     lv_obj_remove_style_all(sp);
@@ -2731,7 +2660,8 @@ void build_detail_panel(lv_obj_t *parent)
     lv_obj_set_flex_grow(sp, 1);
     lv_obj_set_style_bg_opa(sp, LV_OPA_TRANSP, 0);
 
-    /* 主按钮：Confirm Print（未选厚度时由 apply_plate_thickness_ui 置灰 + 摘可点） */
+    /* 主按钮：Confirm Print（选中文件后恒可点——原先的置灰态是「未选打印板厚度」
+     * 用的，那套已随厚度选择整块删掉） */
     g_detail_start_btn = lv_button_create(g_detail_body);
     lv_obj_t *btn_start = g_detail_start_btn;
     lv_obj_add_style(btn_start, user_style_btn_primary(), 0);
@@ -2739,10 +2669,6 @@ void build_detail_panel(lv_obj_t *parent)
     lv_obj_set_height(btn_start, USER_DLG_FOOTER_BTN_H);
     /* 稿 4014:16660 是 8px 圆角矩形，压掉 user_style_btn_primary 的全圆胶囊 */
     lv_obj_set_style_radius(btn_start, USER_BTN_RADIUS, 0);
-    /* 置灰态：主色底压到 30% 并去掉外发光，文字随之变暗 */
-    lv_obj_set_style_bg_opa(btn_start, LV_OPA_30, LV_STATE_DISABLED);
-    lv_obj_set_style_shadow_opa(btn_start, LV_OPA_TRANSP, LV_STATE_DISABLED);
-    lv_obj_set_style_text_opa(btn_start, LV_OPA_50, LV_STATE_DISABLED);
     lv_obj_add_event_cb(btn_start, on_detail_start_print, LV_EVENT_CLICKED, nullptr);
     lv_obj_t *bl = lv_label_create(btn_start);
     lv_label_set_text(bl, "Confirm Print");

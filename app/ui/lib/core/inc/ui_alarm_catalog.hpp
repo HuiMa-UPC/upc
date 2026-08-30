@@ -20,10 +20,14 @@
  * 表里那两个 `*_fallback` 字段是**快照专用兜底**：快照（0xA3/0x81）只有 active /
  * latched 两个位图，给不出等级和清除方式，而快照又恰恰用在"本地表里没有这条"的
  * 场景（重启/重连后补齐）。这时只能查字典凑出一张卡片。收到该报警的单条上报后
- * 必须立刻改用报文值覆盖，不得让兜底值长期生效。
+ * 必须立刻改用报文值覆盖，不得让兜底值长期生效。字典里连这个 code 都查不到时，
+ * `ui_alarm_state::snapshot_upsert()` 另有一套放宽的兜底（warning + RESET），
+ * 理由见那里。
  *
  * `reset_owner_task` 是"以报文为准"的**唯一例外**——报文里根本没有这个字段，
- * 只有 `报警map.csv` 的 reset_policy 列有。查不到就按最保守的一档（LOCAL）处理。
+ * 只有 `报警map.csv` 的 reset_policy 列有。整条 code 查不到字典时按 OWNER_TASK
+ * 放行（见 `ui_alarm_reset_allowed()`）：那是字典没跟上固件的信息缺失，拦下来
+ * 新报警就永远复不了位。
  *
  * 快照槽位映射**不在本文件**：报警号 ↔ (slot_id,bit) 是固定公式，见
  * `middleware::alarm_snapshot_code_of()` / `alarm_snapshot_covers()`
@@ -40,7 +44,7 @@ typedef struct {
     const char *title;  /**< 显示名（英文；翻译表覆盖或 macro 自动转换） */
     const char *desc;   /**< 处理建议，可为空串（仅翻译表提供） */
     /** 报文 severity 语义：1 information / 2 warning / 3 error / 4 critical
-     *  （命名以 doc/主控板串口通信协议 - 信息报警命令详表.csv 为准）。
+     *  （命名以 doc/主控板串口通信协议 - 信息报警命令.csv 为准）。
      *  **仅快照场景兜底**，见文件头。 */
     uint8_t     severity_fallback;
     /** 0 AUTO / 1 RESET / 2 POWER_CYCLE / 3 NONE。**仅快照场景兜底**。 */
@@ -49,7 +53,7 @@ typedef struct {
     /** 1=reset_policy 为 OWNER_TASK：复位请求会被 MCU 转给业务任务做硬件恢复，
      *  故障条件仍在（ACTIVE）时也该允许下发——激光器 1301、各轴故障都属此类，
      *  不点复位它们永远好不了。0=LOCAL：条件仍在时 MCU 直接拒绝，按钮该置灰。
-     *  **不在报文里**，只能查字典；查不到按 0 处理（见文件头）。 */
+     *  **不在报文里**，只能查字典；整条 code 查不到时按放行处理（见文件头）。 */
     uint8_t     reset_owner_task;
 } ui_alarm_catalog_entry_t;
 

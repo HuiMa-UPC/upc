@@ -107,7 +107,7 @@ bool ui_alarm_request_reset(uint16_t code);
  * 这条报警此刻能不能点 Reset —— **三个复位入口共用同一判据**（消息页详情抽屉、
  * 首页终止结果条、打印入口拦截弹窗），别各写各的。
  *
- * 规则（依据 doc/主控板串口通信协议 - 信息报警命令详表.csv 与 报警map.csv 的
+ * 规则（依据 doc/主控板串口通信协议 - 信息报警命令.csv 与 报警map.csv 的
  * reset_policy 列；旧版 SOC_TLV_ALARM_SINGLE_REPORT…§5 那条
  * `show_reset = latched && clear_mode==RESET` 伪代码已作废）：
  *  - 非 RESET 清除方式 / 复位在途 → 不可点；
@@ -115,7 +115,9 @@ bool ui_alarm_request_reset(uint16_t code);
  *  - ACTIVE 时看 reset_policy：OWNER_TASK 可点（MCU 转给业务任务做硬件恢复，
  *    激光器 1301、各轴故障都属此类，不点它们永远好不了）；LOCAL 不可点
  *    （条件仍在时 MCU 直接拒绝，如 1124/1125）。
- *  - 字典查不到该 code（固件比字典新）→ 按 LOCAL 处理，避免误发 RESET。
+ *  - 字典查不到该 code（固件比字典新）→ **可点**。查不到是信息缺失而非"已知
+ *    不可复位"，现表 30 条 RESET 里 28 条是 OWNER_TASK；拦下来新报警就永远
+ *    复不了位，而误发一帧只是白等一轮 pending。
  */
 bool ui_alarm_reset_allowed(const ui_alarm_entry_t *e);
 
@@ -130,8 +132,10 @@ bool ui_alarm_reset_allowed(const ui_alarm_entry_t *e);
 void ui_alarm_request_snapshot(const char *reason);
 
 /**
- * 是否存在阻断新打印的未复位报警（1124/1125，MCU 会拒绝新打印请求）。
- * 打印入口的预检用；返回第一条阻断条目，无则 NULL。
+ * 是否存在阻断新打印的未复位报警（1004/1124/1125/1126/1127/1128/1129，MCU 会
+ * 拒绝新打印请求，只回一条给不出原因的 EVENT 2003）。打印入口的预检用；返回
+ * 第一条阻断条目，无则 NULL。名单是按报警语义硬编码的（报文与字典都没有这个
+ * 字段），MCU 新增停机类报警要同步补，见实现处注释。
  */
 const ui_alarm_entry_t *ui_alarm_print_blocker(void);
 

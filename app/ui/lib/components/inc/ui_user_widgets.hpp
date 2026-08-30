@@ -21,10 +21,6 @@ lv_obj_t *ui_user_make_body_label(lv_obj_t *parent, const char *text);
 /** 格式化时长：>=60 分钟输出 "Xh Ymin"，否则 "Ymin" */
 void ui_user_format_duration_min(char *buf, size_t buf_size, uint32_t duration_min);
 
-/** 格式化文件副信息："Xh Ymin · Zg" 或 "Ymin · Zg" */
-void ui_user_format_file_meta(char *buf, size_t buf_size,
-                              uint32_t duration_min, float material_g);
-
 /** 主色渐变预览块 */
 lv_obj_t *ui_user_make_accent_preview(lv_obj_t *parent, int32_t w, int32_t h);
 

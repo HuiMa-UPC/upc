@@ -787,18 +787,32 @@ lv_obj_t* page_user_photo_create(lv_obj_t* parent)
     lv_obj_set_style_text_font(sub, user_font_caption(), 0);
     g_sub_lbl = sub;
 
+    /* 三颗钮的图标字号都要跟着 btn_sz 提：helper 内部固定用 user_font_text()，
+     * 只放大圆圈的话图标会浮在一片空底上。 */
     const int32_t btn_sz = user_media_btn_size();
+    lv_obj_t* close_icon = nullptr;
     lv_obj_t* close = ui_user_make_overlay_round_btn(ov, LV_SYMBOL_CLOSE, btn_sz,
-                                                     on_close_click, nullptr);
+                                                     on_close_click, &close_icon);
+    if(close_icon) {
+        lv_obj_set_style_text_font(close_icon, user_font_icon(), 0);
+    }
     lv_obj_align(close, LV_ALIGN_TOP_RIGHT, -USER_PAD, USER_PAD);
 
     /* 两侧箭头正落在竖构图照片的黑边上，不压画面 */
+    lv_obj_t* prev_icon = nullptr;
     g_prev_btn = ui_user_make_overlay_round_btn(ov, LV_SYMBOL_LEFT, btn_sz,
-                                                on_prev_click, nullptr);
+                                                on_prev_click, &prev_icon);
+    if(prev_icon) {
+        lv_obj_set_style_text_font(prev_icon, user_font_icon(), 0);
+    }
     lv_obj_align(g_prev_btn, LV_ALIGN_LEFT_MID, USER_PAD, 0);
 
+    lv_obj_t* next_icon = nullptr;
     g_next_btn = ui_user_make_overlay_round_btn(ov, LV_SYMBOL_RIGHT, btn_sz,
-                                                on_next_click, nullptr);
+                                                on_next_click, &next_icon);
+    if(next_icon) {
+        lv_obj_set_style_text_font(next_icon, user_font_icon(), 0);
+    }
     lv_obj_align(g_next_btn, LV_ALIGN_RIGHT_MID, -USER_PAD, 0);
 
     /* ---- filmstrip：格数按屏宽算（主题分三档），建一次后只换绑定 ---- */

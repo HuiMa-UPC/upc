@@ -196,14 +196,20 @@ typedef struct {
     int32_t user_metric_icon_sz;
     int32_t user_back_btn_w;
     int32_t user_back_btn_h;
-    /** 全屏媒体页浮层圆钮的直径（延时播放器 + 相册浏览器的关闭/播放/翻页钮）。
+    /** 全屏媒体页浮层圆钮的直径（延时播放器关闭钮 + 相册浏览器的关闭/翻页钮）。
      *
      *  独立成字段而不是继续用 user_back_btn_h：后者还被弹窗关闭钮、打印态浮层胶囊
      *  （control.cpp 里 *3/2 与 *9/2）、调试页与设置页返回钮引用，为了两个全屏页把它
      *  调大会牵动一大片；而在无稿档位它还通过 scroll_btn_size() 影响翻页钮直径。
      *
-     *  0 = 沿用 user_back_btn_h（未单独调过的档位据此保持原渲染）。 */
+     *  三档现均取 user_back_btn_h 的 1.5 倍（96/66/60），理由见 ui_theme.cpp 文件头
+     *  「触摸尺寸的刻意偏稿」。0 = 沿用 user_back_btn_h。 */
     int32_t user_media_btn_h;
+    /** 延时播放器中央播放/暂停钮的直径，与上面的关闭钮**分开给值**。
+     *
+     *  原先写成 user_media_btn_size() * 2，关闭钮放大后它会跟着涨到屏高的两成，
+     *  过于抢眼；拆开后两者互不牵动。0 = 沿用旧的 user_media_btn_size() * 2。 */
+    int32_t user_media_play_h;
     int32_t user_sensor_strip_h;   /**< 调试页传感器条高（原先借用 user_topbar_h） */
     /** 右侧悬浮翻页钮的直径（稿 64@1280）。历史页 4366:5406、消息页 3033:5253、
      *  设置页 3238:14371 三张稿都是 64×64，故做成公共字段而非各页自算。
@@ -425,8 +431,10 @@ extern const ui_theme_t *g_ui;
 #define USER_BACK_BTN_W             (g_ui->user_back_btn_w)
 #define USER_BACK_BTN_H             (g_ui->user_back_btn_h)
 #define USER_SENSOR_STRIP_H         (g_ui->user_sensor_strip_h)
-/** 全屏媒体页浮层圆钮直径（已解析 0 = 沿用 user_back_btn_h 的回退） */
+/** 全屏媒体页关闭/翻页圆钮直径（已解析 0 = 沿用 user_back_btn_h 的回退） */
 int32_t user_media_btn_size(void);
+/** 延时播放器播放/暂停钮直径（已解析 0 = 沿用 user_media_btn_size()*2 的回退） */
+int32_t user_media_play_size(void);
 
 #define USER_DLG_W                  (g_ui->user_dlg_w)
 #define USER_DLG_PAD                (g_ui->user_dlg_pad)

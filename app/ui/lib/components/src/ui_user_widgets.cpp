@@ -39,17 +39,6 @@ void ui_user_format_duration_min(char *buf, size_t buf_size, uint32_t duration_m
     }
 }
 
-void ui_user_format_file_meta(char *buf, size_t buf_size,
-                              uint32_t duration_min, float material_g)
-{
-    if(!buf || buf_size == 0) {
-        return;
-    }
-    char dur[32];
-    ui_user_format_duration_min(dur, sizeof(dur), duration_min);
-    std::snprintf(buf, buf_size, "%s · %.1fg", dur, static_cast<double>(material_g));
-}
-
 lv_obj_t *ui_user_make_accent_preview(lv_obj_t *parent, int32_t w, int32_t h)
 {
     lv_obj_t *obj = lv_obj_create(parent);

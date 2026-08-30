@@ -980,13 +980,18 @@ const uint16_t kDbgInjectCodes[] = {
     (uint16_t)middleware::DeviceEventCode::UiDebugSample,
 };
 
-/** 报警注入按钮造的那几条 MCU 报警，覆盖四条显示路径：
- *  1124 阻断 CONDITION（error/ACTIVE/RESET）→ 打印入口拦截 + 结果页失败条 + Reset 三态；
+/** 报警注入按钮造的那几条 MCU 报警，覆盖各条显示路径：
+ *  1124 阻断 CONDITION（error/ACTIVE/RESET/LOCAL）→ 打印入口拦截 + Reset 三态；
+ *       LOCAL 类在 ACTIVE 时该置灰，与下面 1003 对照着看；
  *  1104 RTN_LATCHED（warning/RESET）→ 消息页 RESOLVED 药丸 + 可复位；
  *  1101 自动清除 CONDITION（warning/ACTIVE/AUTO）→ 无 Reset 钮的红卡；
- *  2000 EVENT（info）→ 蓝卡 5s 自动从浮层撤下、历史留档。
- *  1003 critical CONDITION（ACTIVE/RESET）→ 凑齐四档等级配色（深红那档），
- *       同时验 ACTIVE + reset_policy=OWNER_TASK 的报警在抽屉里可点 Reset。
+ *  2000 EVENT（info/NONE）→ 蓝卡 5s 自动从浮层撤下、历史留档。
+ *  1003 critical CONDITION（ACTIVE/RESET/OWNER_TASK）→ 凑齐四档等级配色（深红
+ *       那档），同时验 ACTIVE + OWNER_TASK 在抽屉里可点 Reset。
+ *  1999 **字典外**的未知码（error/ACTIVE/RESET）→ 验固件比字典新时的降级路径：
+ *       标题降级成 "Unknown alarm #1999"，且 Reset 仍**可点**
+ *       （ui_alarm_reset_allowed 查不到字典按放行处理）。刻意选 1999 是因为它在
+ *       快照管辖范围（1000..1395）之外，30s 兜底轮询的反向清理不会把它抹掉。
  *  等级不进字典、以报文为准，所以四色能不能看全全看造什么数据。
  *  关掉开关注入 NORMAL 帧模拟解除（EVENT 无需解除）。 */
 struct DbgAlarmInject {
@@ -1002,9 +1007,13 @@ const DbgAlarmInject kDbgInjectAlarms[] = {
       (uint8_t)middleware::AlarmClearMode::Reset },
     { 1101, 2, middleware::kAlarmStateActive,
       (uint8_t)middleware::AlarmClearMode::Auto },
+    /* EVENT 按报警表恒为 NONE；造 AUTO 会踩中 apply_report_async 里那条
+     * "固件行为与表不符" 的告警日志，联调时是干扰项 */
     { 2000, 1, middleware::kAlarmStateEvent,
-      (uint8_t)middleware::AlarmClearMode::Auto },
+      (uint8_t)middleware::AlarmClearMode::None },
     { 1003, 4, middleware::kAlarmStateActive,
+      (uint8_t)middleware::AlarmClearMode::Reset },
+    { 1999, 3, middleware::kAlarmStateActive,
       (uint8_t)middleware::AlarmClearMode::Reset },
 };
 
