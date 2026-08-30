@@ -658,6 +658,7 @@ void CameraService::publish_stream_start_to_peer(middleware::ModuleId peer_id,
         rsp_type,
         middleware::ModuleId::APP_CAMERA,
         peer_id);
+    rsp.priority = middleware::MsgPriority::High;
     rsp.payload = middleware::MsgPayload::from_bytes(
         reinterpret_cast<const uint8_t*>(&info), sizeof(info));
 
@@ -792,6 +793,7 @@ void CameraService::send_stream_stop_done_with_type(
         done_type,
         middleware::ModuleId::APP_CAMERA,
         req.sender_id);
+    done.priority = middleware::MsgPriority::High;
     middleware::MsgPort::instance().publish_async(done);
 }
 
