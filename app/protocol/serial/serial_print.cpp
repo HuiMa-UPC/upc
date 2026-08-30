@@ -156,14 +156,14 @@ int serial_parse_clean_test_result(const uint8_t* data, size_t len, uint8_t* res
     }
 
     /* 清粉测试完成结果：
-     * PORT_GENERAL_TASK(0xA2) + CMD_REQUEST_DEPOWDERING(0x42) + TLV(0x01)
+     * PORT_GENERAL_TASK(0xA2) + CMD_REQUEST_DEPOWDERING(0x42) + TLV(0x03)
      * Value: result_code（由上层决定语义，解析层仅透传）。 */
     const uint8_t port = data[3];
     const uint8_t cmd  = data[4];
     const uint8_t payload_len = data[6];
     const uint8_t type = data[7];
     const uint8_t tlen = data[8];
-    if(port != 0xA2 || cmd != 0x42 || type != 0x01) {
+    if(port != 0xA2 || cmd != 0x42 || type != 0x03) {
         return -2;
     }
     if(payload_len != 0x03 || tlen != 0x01) {

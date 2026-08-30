@@ -35,7 +35,7 @@ enum class McuLinkEvent : uint8_t {
 using McuLinkEventCb = std::function<void(McuLinkEvent)>;
 /** @brief 进度回调类型：每成功下发一批运动包后触发，用于更新进度条等 UI */
 using McuLinkProgressCb = std::function<void()>;
-/** @brief 清粉测试完成回调：参数为清粉完成上报 result_code（A2/42/0x01）。 */
+/** @brief 清粉测试完成回调：参数为清粉完成上报 result_code（A2/42/0x03）。 */
 using McuLinkCleanTestDoneCb = std::function<void(uint8_t)>;
 using McuLinkTransportResultCb = std::function<void(uint8_t)>;
 /** @brief 首层视觉检测回调：true=通过，false=不通过（继续铺粉）。 */

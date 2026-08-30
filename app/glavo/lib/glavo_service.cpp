@@ -2918,7 +2918,7 @@ void GlavoService::handle_debug_fan(const middleware::Message& msg)
     debug_tx(buf, serial_debug_build_fan_switch(p.on != 0, buf, sizeof(buf)));
 }
 
-/** @brief 风扇占空比（协议合法范围 35–100） */
+/** @brief 风扇占空比（协议合法范围 0–100） */
 void GlavoService::handle_debug_fan_duty(const middleware::Message& msg)
 {
     middleware::DebugFanPayload p{};
@@ -2926,7 +2926,7 @@ void GlavoService::handle_debug_fan_duty(const middleware::Message& msg)
         return;
     }
     int16_t duty = debug_round_i16(p.duty);
-    if(duty < 35)  duty = 35;
+    if(duty < 0)   duty = 0;
     if(duty > 100) duty = 100;
     uint8_t buf[SERIAL_DEBUG_MAX_FRAME];
     debug_tx(buf, serial_debug_build_fan_duty(static_cast<uint8_t>(duty),

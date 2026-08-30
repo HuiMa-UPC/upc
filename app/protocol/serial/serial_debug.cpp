@@ -44,8 +44,8 @@
 /* 洗气（Cmd 0x86） */
 #define SDBG_TLV_GAS_ON         0x01
 #define SDBG_TLV_GAS_OFF        0x02
-/* 清粉测试（Cmd 0x81） */
-#define SDBG_TLV_CLEAN_START    0x20
+/* 清粉请求（Port 0xA2 + Cmd 0x42） */
+#define SDBG_TLV_CLEAN_START    0x01
 #define SDBG_TLV_CLEAN_CLOSE    0x21
 /* 打印层参数（Cmd 0xB5） */
 #define SDBG_TLV_PRINT_LAYER    0x01
@@ -259,7 +259,7 @@ int serial_debug_build_switch(uint8_t target, bool on,
 
 int serial_debug_build_clean_test_start(uint8_t* out, size_t out_size)
 {
-    return serial_build_aa_frame(SDBG_PORT_PRINTING, SDBG_CMD_PRINTING_CTRL,
+    return serial_build_aa_frame(SDBG_PORT_GENERAL, 0x42,
                                  SDBG_TLV_CLEAN_START, 0, nullptr, out, out_size);
 }
 

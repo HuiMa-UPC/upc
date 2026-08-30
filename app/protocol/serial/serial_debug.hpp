@@ -99,14 +99,14 @@ int serial_debug_build_inner_door(uint8_t action, uint8_t* out, size_t out_size)
 /** 风扇开/关。Port=SENSORS，TLV=0x02/0x03。 */
 int serial_debug_build_fan_switch(bool on, uint8_t* out, size_t out_size);
 
-/** 风扇 PWM 占空比。duty 合法范围 35~100（调用方应自行限幅）。Port=SENSORS，TLV=0x01。 */
+/** 风扇 PWM 占空比。duty 合法范围 0~100（调用方应自行限幅）。Port=SENSORS，TLV=0x01。 */
 int serial_debug_build_fan_duty(uint8_t duty, uint8_t* out, size_t out_size);
 
 /** 其他开关：target 0=激光使能 1=洗气 2=基板加热。 */
 int serial_debug_build_switch(uint8_t target, bool on,
                               uint8_t* out, size_t out_size);
 
-/** 清粉测试开启。Port=PRINTING，Cmd=0x81，TLV=0x20。 */
+/** 清粉请求开启。Port=GENERAL(0xA2)，Cmd=0x42，TLV=0x01。 */
 int serial_debug_build_clean_test_start(uint8_t* out, size_t out_size);
 
 /** 清粉测试关闭/中止。Port=PRINTING，Cmd=0x81，TLV=0x21。 */

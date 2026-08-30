@@ -460,7 +460,7 @@ enum class MsgType : uint32_t {
     // ---- UI ↔ GLAVO：打印结果页清粉测试（按钮触发，串口 clean_test_*） ----
     UI_Clean_Test_Start_Req,     /**< CleanTestStartReqPayload：开始清粉+录像 */
     APP_Clean_Test_Start_Rsp,    /**< CleanTestStartRspPayload：是否受理 */
-    APP_Clean_Test_Result_Ntf,   /**< CleanTestDonePayload：A2/42 TLV 0x01 结果 + 调试保留标记 */
+    APP_Clean_Test_Result_Ntf,   /**< CleanTestDonePayload：A2/42 TLV 0x03 结果 + 调试保留标记 */
     UI_Clean_Test_Close_Req,     /**< Empty：返回首页时强制 clean_test_close */
     UI_Print_Video_Finalize_Req, /**< PrintVideoFinalizeReqPayload：结果页退出后触发统一 MP4 合成 */
     APP_Clean_Test_Close_Rsp,    /**< Empty：close 已受理 */
