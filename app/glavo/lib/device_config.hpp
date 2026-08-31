@@ -36,11 +36,6 @@
 #define GLAVO_ENABLE_LAYER_CHANGE  1
 #endif
 
-/** 打印前基板准备（TLV 0x12/0x13）：0=跳过，直接发打印请求；1=发请求并等待 MCU 结果 */
-#ifndef GLAVO_ENABLE_PLATE_PREPARE
-#define GLAVO_ENABLE_PLATE_PREPARE  0
-#endif
-
 /** 换层排空后向 Camera 发 Layer_Snap_Ntf：0=关；1=每层拍照录像 */
 #ifndef GLAVO_ENABLE_LAYER_SNAP
 #define GLAVO_ENABLE_LAYER_SNAP  1

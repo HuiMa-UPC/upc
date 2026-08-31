@@ -1480,7 +1480,6 @@ void GlavoService::begin_print_motion_after_reference_ready()
  *
  * 若 link 仍在发送或 terminate 清理中：只 request_terminate + 置 deferred_print_start_，
  * 真正 launch 推迟到 on_mcu_link_event(TerminateDone/PrintError)。
- * 基板厚度 plate_thickness_um 写入 McuLink，供串口握手/基板准备使用。
  */
 void GlavoService::handle_print_start(const middleware::Message& msg)
 {
@@ -1502,7 +1501,6 @@ void GlavoService::handle_print_start(const middleware::Message& msg)
 
     stop_print_job();
     auto& link = McuLink::instance();
-    link.set_plate_thickness_um(req.plate_thickness_um);
     if(link.is_sending() || link.is_terminate_pending()) {
         /* 异步 terminate 完成前不得 open/begin，否则清理会清掉新作业 */
         link.request_terminate();

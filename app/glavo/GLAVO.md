@@ -12,7 +12,7 @@
 | `lib/mcu_link.*` | TCP 运动下发 + 串口握手/传感器/换层 Snap 触发；RX 侧解析 MCU 报警单条上报（0xA3/0x20）与快照分片（0xA3/0x81），`publish_async` 原样转发 `GLAVO_Alarm_Report_Ntf` / `GLAVO_Alarm_Snapshot_Ntf` 给 UI（不查字典、不攒帧） |
 | `lib/print_video_notify.*` | 换层 Snap / 录像会话 → Camera（经 UI Hub） |
 | `lib/print_job_state.*` | 发送包计数、完成/错误标志（McuLink 与进度共用） |
-| `lib/device_config.hpp` | TCP/串口默认、换层/基板准备/Layer Snap 开关 |
+| `lib/device_config.hpp` | TCP/串口默认、换层/Layer Snap 开关 |
 | `common/fs_manifest/gcode_manifest.*` | Local `config.json` 读写（与 UI 共用；Prepare/Delete 时更新） |
 
 解析库见 [parser/PARSER.md](../parser/PARSER.md)；线协议见 [protocol/PROTOCOL.md](../protocol/PROTOCOL.md)。
@@ -54,7 +54,6 @@ UI → GlavoService（工作线程）→ ParserManager → RingBuffer → McuLin
 | 宏 | 默认 | 作用 |
 |----|------|------|
 | `GLAVO_ENABLE_LAYER_CHANGE` | `1` | 串口换层/打印握手总开关 |
-| `GLAVO_ENABLE_PLATE_PREPARE` | `1` | 起印前基板准备（0x12/0x13）；`0` 时跳过，直接发打印请求 |
 | `GLAVO_ENABLE_LAYER_SNAP` | `1` | 每层拍照录像 |
 
 | 阶段 | 调用点 | IPC |

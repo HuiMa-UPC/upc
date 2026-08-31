@@ -102,8 +102,7 @@ public:
     void send_print_prepare(uint32_t file_index, middleware::PrintFileSource source);
     void register_print_prepare_done(PrintPrepareDoneCb cb);
 
-    void send_print_start(uint32_t file_index, middleware::PrintFileSource source,
-                          uint16_t plate_thickness_um);
+    void send_print_start(uint32_t file_index, middleware::PrintFileSource source);
     void register_print_progress(PrintProgressCb cb);
 
     void send_print_terminate();

@@ -91,10 +91,10 @@
 | F-FILE-01 | Local 清单加载 | 通过成功的 Xfer 上传、USB 预处理或受控测试夹具，使 `/home/Gcode/config.json` 存在 D01 的有效条目且对应文件存在；打开 My Files 的 Local Tab。另在目录中放入一个未写入清单的文件后刷新列表。 | Local Tab 仅展示 `config.json` 中的条目及其文件名、时长、耗材和大小；未写入清单的目录文件不得显示。若清单缺失、无效或为空，列表为空且 UI 不崩溃。 |
 | F-FILE-02 | USB 文件列表 | 插入含 D01/D02 的 USB，切至 USB Tab 并刷新。 | 显示 USB 可支持文件；拔出 USB 或空盘时列表正确刷新为空/提示。 |
 | F-FILE-03 | 本地删除 | 选择 Local 文件，执行删除并在确认框确认。 | 文件从磁盘和 `/home/Gcode/config.json` 移除，列表同步刷新。取消确认时文件不得删除。 |
-| F-FILE-04 | 基板厚度门控与下发 | 选中 D01，不选厚度时确认 `Confirm Print` 不可点击；分别选择 5 mm、10 mm，完成二次确认并开始打印。每次换文件、切换 Local/USB、取消选中文件及删除本地文件后，重新观察选择状态。 | 未选时按钮置灰且不可点击；选中后可进入二次确认。真正发起 `UI_Print_Start_Req` 时，5 mm 下发 `plate_thickness_um=5000`、10 mm 下发 `=10000`；Glavo/McuLink 日志可确认相应值。上述重置操作后厚度恢复为未选择状态。 |
-| F-FILE-05 | 预处理成功（Local/USB） | 场景 A：在 Local 选择 D01，选择任意厚度、完成二次确认。场景 B：USB 插入一个当前构建支持打印的文件，执行同样操作。观察 `Preparing Print File` 弹窗、UI 结果和 `/home/Gcode/config.json`。 | Local 文件存在且可扫描时，后端复用或扫描行数并更新清单；USB 文件先复制到 `/home/Gcode`，再扫描并写入清单。两种场景均收到 `APP_Print_Prepare_Rsp(ok=1)`，准备弹窗关闭并自动进入打印流程。D02 仅在设备已启用 OVF 解析器时纳入该用例。 |
+| F-FILE-04 | 启印入口与下发 | 选中 D01，观察 `Confirm Print` 按钮状态并完成二次确认开始打印。每次换文件、切换 Local/USB、取消选中文件及删除本地文件后，重新观察按钮状态。 | 选中文件后 `Confirm Print` 可点击，点击后可进入二次确认。发起 `UI_Print_Start_Req` 时仅携带文件索引与来源，不再包含厚度字段。 |
+| F-FILE-05 | 预处理成功（Local/USB） | 场景 A：在 Local 选择 D01，完成二次确认。场景 B：USB 插入一个当前构建支持打印的文件，执行同样操作。观察 `Preparing Print File` 弹窗、UI 结果和 `/home/Gcode/config.json`。 | Local 文件存在且可扫描时，后端复用或扫描行数并更新清单；USB 文件先复制到 `/home/Gcode`，再扫描并写入清单。两种场景均收到 `APP_Print_Prepare_Rsp(ok=1)`，准备弹窗关闭并自动进入打印流程。D02 仅在设备已启用 OVF 解析器时纳入该用例。 |
 | F-FILE-05A | OVF 大文件起印时序 | 选择较大的 D02（OVF），完成二次确认并开始打印；记录 `print_prepare ok`、`print_start: path=...`、`serial TX cmd: PRINT_REQUEST`、`serial TX cmd: PRINT_START` 时间戳。 | Start 阶段不应再出现明显的二次 `open_file` 长阻塞；`print_start` 与首条串口起印握手日志间隔应显著缩短。若总耗时仍较长，应主要体现在 Prepare 阶段而非 Start 阶段。 |
-| F-FILE-06 | 预处理失败（当前无 UI 取消） | 选择 D03，或选择目录清单中存在但实际已删除/不可读的文件；选择厚度并完成二次确认。观察准备弹窗、提示和后端日志。 | 当前准备弹窗没有取消按钮，测试不应要求“用户取消”。后端返回 `APP_Print_Prepare_Rsp(ok=0)` 后，弹窗关闭、UI 提示 `Prepare failed` 并回到 Idle；不得进入打印状态或向 MCU 开始下发运动数据。若使用 USB 文件，是否保留已复制文件按当前实现记录，不作为本用例失败判据。 |
+| F-FILE-06 | 预处理失败（当前无 UI 取消） | 选择 D03，或选择目录清单中存在但实际已删除/不可读的文件；完成二次确认。观察准备弹窗、提示和后端日志。 | 当前准备弹窗没有取消按钮，测试不应要求“用户取消”。后端返回 `APP_Print_Prepare_Rsp(ok=0)` 后，弹窗关闭、UI 提示 `Prepare failed` 并回到 Idle；不得进入打印状态或向 MCU 开始下发运动数据。若使用 USB 文件，是否保留已复制文件按当前实现记录，不作为本用例失败判据。 |
 | F-FILE-07 | 打印占用门禁 | 打印结束但尚未完成取件时尝试进入 My Files 并新建任务。 | 文件页入口被阻止，不能启动第二个打印任务。 |
 
 ### 4.3 打印控制与异常流程

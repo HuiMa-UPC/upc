@@ -832,11 +832,8 @@ void backend_start_job(const control_file_t *file, ProgressCb prog_cb, DoneCb do
     g_job_u = u;
 
     const uint32_t file_index = file ? file->index : 0;
-    /* 打印板厚度曾经是详情面板里让用户选的（5mm / 10mm），已按产品要求整块去掉，
-     * 这里固定按 10mm 下发。契约字段仍在，日后要恢复可选值改这一处即可。 */
-    constexpr uint16_t kPlateThicknessUm = 10000u;
     ui::UiMsgProxy::instance().send_print_start(
-        file_index, file_tab_to_source(g_file_tab), kPlateThicknessUm);
+        file_index, file_tab_to_source(g_file_tab));
 }
 
 void backend_terminate_job()

@@ -348,7 +348,7 @@ enum class MsgType : uint32_t {
     UI_Print_Prepare_Req = 0x1040, /**< PrintPrepareReqPayload：轻量预处理 + USB 复制 */
     APP_Print_Prepare_Rsp,    /**< PrintPrepareRspPayload */
     UI_Parser_Exit_Ntf,       /**< Empty：取消解析（D1 X / 二次确认 Cancel） */
-    UI_Print_Start_Req,       /**< PrintStartReqPayload：正式解析 + 下发（含基板厚度） */
+    UI_Print_Start_Req,       /**< PrintStartReqPayload：正式解析 + 下发 */
     APP_Print_Progress_Ntf,   /**< [GLAVO_Print_Progress_Ntf] PrintProgressPayload */
     UI_Print_Terminate_Req,
     APP_Print_Terminate_Rsp,  /**< [GLAVO_Print_Terminate_Rsp] Empty */
@@ -766,13 +766,11 @@ struct PrintPrepareRspPayload {
     uint8_t reserved[3];
 };
 
-/** UI_Print_Start_Req：来源 + 索引 + 基板厚度（um） */
+/** UI_Print_Start_Req：来源 + 索引 */
 struct PrintStartReqPayload {
     uint32_t        file_index;
     PrintFileSource file_source;
-    uint8_t         reserved;
-    uint16_t        plate_thickness_um; /**< 例如 5mm=5000，10mm=10000 */
-    uint8_t         reserved2[2];
+    uint8_t         reserved[3];
 };
 
 /** Fs_Delete_Ntf 载荷：文件来源 + 索引（Local 列表删除） */

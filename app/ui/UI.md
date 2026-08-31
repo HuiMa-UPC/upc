@@ -655,9 +655,8 @@ pending 自动解除——正好顺带验超时路径。
 
 > **已删除：打印板厚度选择**（`Plate Thickness` 标题 + `5mm/10mm` 分段 + 未选提示 +
 > `Confirm Print` 置灰联动，稿 4014:16631）。按产品要求整块去掉，`backend_start_job()`
-> 现固定按 10mm（`kPlateThicknessUm`）下发。**契约字段 `plate_thickness_um` 仍在**，
-> Glavo 侧 `McuLink::set_plate_thickness_um()` 到串口那条链路一个字没动，日后要恢复
-> 可选值只改 `backend_start_job()` 一处。随它一起删掉的还有 `g_plate_thickness` /
+> 直接调用 `send_print_start(file_index, source)` 下发起印请求，不再携带厚度字段。
+> 随它一起删掉的还有 `g_plate_thickness` /
 > `apply_plate_thickness_ui()` / `reset_plate_thickness()` / `make_detail_warn_row()`，
 > 以及 `Confirm Print` 的 `LV_STATE_DISABLED` 样式——选中文件后该按钮现在恒可点。
 

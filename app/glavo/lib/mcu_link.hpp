@@ -160,7 +160,6 @@ public:
      */
     void set_print_task_flow_active(bool active) noexcept;
     [[nodiscard]] bool is_print_task_flow_active() const noexcept;
-    void set_plate_thickness_um(uint16_t thickness_um);
 
     /** @brief 运动已发完、正在等 MCU 双缓冲排空（自然完成尾段） */
     [[nodiscard]] bool is_natural_complete_pending() const noexcept;
@@ -370,7 +369,6 @@ private:
 
     /** @brief 向振镜发送终止指令（TCP CMD=0x0A，Stop=1，Pause=0） */
     void send_tcp_reset();
-    void send_serial_plate_prepare();
     void send_serial_layer_done(uint16_t next_layer_um);
     /** @brief 向 MCU 串口发送打印终止帧 */
     void send_serial_print_terminate();
@@ -459,7 +457,6 @@ private:
     std::atomic<int>  serial_handshake_phase_{0};      /**< 串口握手阶段（0=无 1=等CONDITION_OK 2=等PRINT_READY） */
     std::atomic<bool> serial_evt_condition_ok_{false}; /**< 串口收到打印条件就绪事件 */
     std::atomic<bool> serial_evt_print_ready_{false};  /**< 串口收到打印准备就绪事件 */
-    std::atomic<bool> serial_evt_plate_ready_{false};  /**< 串口收到基板准备成功（TLV 0x13 result=0） */
 
     /* ---------- 层高信息 ---------- */
     uint16_t active_layer_height_um_ = GCODE_DEFAULT_LAYER_UM; /**< 当前/下层高度（微米）：首层握手 PRINT_START 与换层 LAYER_DONE 共用 */
@@ -504,7 +501,6 @@ private:
     EnvSnapshotCache env_cache_{};
     mutable std::mutex env_mtx_;
     bool powder_low_latched_ = false; /**< 缺粉边沿通知闩锁：低电平持续期间只触发一次 */
-    uint16_t plate_thickness_um_ = 10000u; /**< 当前作业基板厚度（um），默认 10mm */
 
     std::atomic<bool> env_sim_on_{false};  /**< 环境上报模拟（调试页开关，默认关） */
     std::atomic<bool> env_sim_powder_low_target_{false}; /**< 目标缺粉态（UI 开关值） */
