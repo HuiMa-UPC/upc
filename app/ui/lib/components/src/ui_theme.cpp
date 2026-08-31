@@ -168,7 +168,7 @@ static const ui_theme_t s_theme_1920 = {
     /* user_dlg_footer_btn_h      */ 96,
     /* user_file_dlg_w            */ 1100,
     /* user_file_dlg_preview_w    */ 340,
-    /* user_file_dlg_preview_h    */ 260,
+    /* user_file_dlg_preview_h    */ 280,
     /* user_file_sel_w            */ 1500,
     /* user_file_sel_h            */ 780,
     /* user_file_card_w           */ 320,
@@ -332,7 +332,7 @@ static const ui_theme_t s_theme_1280 = {
     /* user_dlg_footer_btn_h      */ 64,
     /* user_file_dlg_w            */ 760,
     /* user_file_dlg_preview_w    */ 240,
-    /* user_file_dlg_preview_h    */ 180,
+    /* user_file_dlg_preview_h    */ 300,
     /* user_file_sel_w            */ 1040,
     /* user_file_sel_h            */ 540,
     /* user_file_card_w           */ 220,
@@ -502,7 +502,7 @@ static const ui_theme_t s_theme_1024 = {
     /* user_dlg_footer_btn_h      */ 51,
     /* user_file_dlg_w            */ 600,
     /* user_file_dlg_preview_w    */ 192,
-    /* user_file_dlg_preview_h    */ 144,
+    /* user_file_dlg_preview_h    */ 230,
     /* user_file_sel_w            */ 900,   /* < 1024，留边距 */
     /* user_file_sel_h            */ 440,   /* < 600，留边距 */
     /* user_file_card_w           */ 176,
