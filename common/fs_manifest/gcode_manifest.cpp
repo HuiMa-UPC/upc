@@ -1,6 +1,8 @@
 #include "gcode_manifest.hpp"
 
+#include <cctype>
 #include <cstdio>
+#include <cstdlib>
 #include <fstream>
 #include <sstream>
 
@@ -25,12 +27,28 @@ std::string json_escape(const std::string& s)
 
 bool parse_string_field(const std::string& obj, const char* key, std::string& out)
 {
-    const std::string needle = std::string("\"") + key + "\":\"";
-    const size_t pos = obj.find(needle);
-    if(pos == std::string::npos) {
+    const std::string needle = std::string("\"") + key + "\"";
+    const size_t key_pos = obj.find(needle);
+    if(key_pos == std::string::npos) {
         return false;
     }
-    size_t i = pos + needle.size();
+
+    size_t i = key_pos + needle.size();
+    while(i < obj.size() && std::isspace(static_cast<unsigned char>(obj[i]))) {
+        ++i;
+    }
+    if(i >= obj.size() || obj[i] != ':') {
+        return false;
+    }
+    ++i;
+    while(i < obj.size() && std::isspace(static_cast<unsigned char>(obj[i]))) {
+        ++i;
+    }
+    if(i >= obj.size() || obj[i] != '"') {
+        return false;
+    }
+    ++i;
+
     out.clear();
     while(i < obj.size()) {
         if(obj[i] == '\\' && i + 1 < obj.size()) {
@@ -49,12 +67,26 @@ bool parse_string_field(const std::string& obj, const char* key, std::string& ou
 
 bool parse_uint_field(const std::string& obj, const char* key, uint32_t& out)
 {
-    const std::string needle = std::string("\"") + key + "\":";
-    const size_t pos = obj.find(needle);
-    if(pos == std::string::npos) {
+    const std::string needle = std::string("\"") + key + "\"";
+    const size_t key_pos = obj.find(needle);
+    if(key_pos == std::string::npos) {
         return false;
     }
-    const char* start = obj.c_str() + pos + needle.size();
+    size_t i = key_pos + needle.size();
+    while(i < obj.size() && std::isspace(static_cast<unsigned char>(obj[i]))) {
+        ++i;
+    }
+    if(i >= obj.size() || obj[i] != ':') {
+        return false;
+    }
+    ++i;
+    while(i < obj.size() && std::isspace(static_cast<unsigned char>(obj[i]))) {
+        ++i;
+    }
+    if(i >= obj.size()) {
+        return false;
+    }
+    const char* start = obj.c_str() + i;
     char* end = nullptr;
     const unsigned long v = std::strtoul(start, &end, 10);
     if(end == start) {
@@ -66,12 +98,26 @@ bool parse_uint_field(const std::string& obj, const char* key, uint32_t& out)
 
 bool parse_int64_field(const std::string& obj, const char* key, int64_t& out)
 {
-    const std::string needle = std::string("\"") + key + "\":";
-    const size_t pos = obj.find(needle);
-    if(pos == std::string::npos) {
+    const std::string needle = std::string("\"") + key + "\"";
+    const size_t key_pos = obj.find(needle);
+    if(key_pos == std::string::npos) {
         return false;
     }
-    const char* start = obj.c_str() + pos + needle.size();
+    size_t i = key_pos + needle.size();
+    while(i < obj.size() && std::isspace(static_cast<unsigned char>(obj[i]))) {
+        ++i;
+    }
+    if(i >= obj.size() || obj[i] != ':') {
+        return false;
+    }
+    ++i;
+    while(i < obj.size() && std::isspace(static_cast<unsigned char>(obj[i]))) {
+        ++i;
+    }
+    if(i >= obj.size()) {
+        return false;
+    }
+    const char* start = obj.c_str() + i;
     char* end = nullptr;
     const long long v = std::strtoll(start, &end, 10);
     if(end == start) {
@@ -83,12 +129,26 @@ bool parse_int64_field(const std::string& obj, const char* key, int64_t& out)
 
 bool parse_float_field(const std::string& obj, const char* key, float& out)
 {
-    const std::string needle = std::string("\"") + key + "\":";
-    const size_t pos = obj.find(needle);
-    if(pos == std::string::npos) {
+    const std::string needle = std::string("\"") + key + "\"";
+    const size_t key_pos = obj.find(needle);
+    if(key_pos == std::string::npos) {
         return false;
     }
-    const char* start = obj.c_str() + pos + needle.size();
+    size_t i = key_pos + needle.size();
+    while(i < obj.size() && std::isspace(static_cast<unsigned char>(obj[i]))) {
+        ++i;
+    }
+    if(i >= obj.size() || obj[i] != ':') {
+        return false;
+    }
+    ++i;
+    while(i < obj.size() && std::isspace(static_cast<unsigned char>(obj[i]))) {
+        ++i;
+    }
+    if(i >= obj.size()) {
+        return false;
+    }
+    const char* start = obj.c_str() + i;
     char* end = nullptr;
     const double v = std::strtod(start, &end);
     if(end == start) {
@@ -161,30 +221,48 @@ bool gcode_manifest_load(const std::string& path, std::vector<GcodeManifestEntry
 bool gcode_manifest_save(const std::string& path,
                          const std::vector<GcodeManifestEntry>& entries)
 {
-    std::ofstream out(path, std::ios::trunc);
+    const std::string tmp_path = path + ".tmp";
+    std::ofstream out(tmp_path, std::ios::trunc);
     if(!out) {
         return false;
     }
-    out << "{\"files\":[";
+    out << "{\n"
+        << "  \"files\": [\n";
     for(size_t i = 0; i < entries.size(); ++i) {
         const auto& e = entries[i];
-        if(i > 0) {
-            out << ',';
+        out << "    {\n"
+            << "      \"name\": \"" << json_escape(e.name) << "\",\n"
+            << "      \"file_size\": " << e.file_size << ",\n"
+            << "      \"line_count\": " << e.line_count << ",\n"
+            << "      \"duration_sec\": " << e.duration_sec << ",\n"
+            << "      \"material_g\": " << e.material_g << ",\n"
+            << "      \"mtime\": " << e.mtime << ",\n"
+            << "      \"thumb_small\": \"" << json_escape(e.thumb_small) << "\",\n"
+            << "      \"thumb_large\": \"" << json_escape(e.thumb_large) << "\",\n"
+            << "      \"thumb_print\": \"" << json_escape(e.thumb_print) << "\"\n"
+            << "    }";
+        if(i + 1 < entries.size()) {
+            out << ",";
         }
-        out << '{'
-            << "\"name\":\"" << json_escape(e.name) << "\","
-            << "\"file_size\":" << e.file_size << ','
-            << "\"line_count\":" << e.line_count << ','
-            << "\"duration_sec\":" << e.duration_sec << ','
-            << "\"material_g\":" << e.material_g << ','
-            << "\"mtime\":" << e.mtime << ','
-            << "\"thumb_small\":\"" << json_escape(e.thumb_small) << "\","
-            << "\"thumb_large\":\"" << json_escape(e.thumb_large) << "\","
-            << "\"thumb_print\":\"" << json_escape(e.thumb_print) << "\""
-            << '}';
+        out << "\n";
     }
-    out << "]}";
-    return static_cast<bool>(out);
+    out << "  ]\n"
+        << "}\n";
+    if(!out) {
+        out.close();
+        (void)std::remove(tmp_path.c_str());
+        return false;
+    }
+    out.close();
+    if(!out) {
+        (void)std::remove(tmp_path.c_str());
+        return false;
+    }
+    if(std::rename(tmp_path.c_str(), path.c_str()) != 0) {
+        (void)std::remove(tmp_path.c_str());
+        return false;
+    }
+    return true;
 }
 
 void gcode_manifest_upsert(std::vector<GcodeManifestEntry>& entries,

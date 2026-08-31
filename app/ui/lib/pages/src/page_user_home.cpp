@@ -303,20 +303,6 @@ bool thumb_path_exists(const char* path)
     return std::filesystem::exists(path, ec) && !ec;
 }
 
-std::string lvgl_file_src_from_path(const char* path)
-{
-    if(!path || path[0] == '\0') {
-        return {};
-    }
-    if(std::strncmp(path, "A:/", 3) == 0) {
-        return std::string(path);
-    }
-    if(path[0] == '/') {
-        return std::string("A:") + path;
-    }
-    return std::string("A:/") + path;
-}
-
 void apply_camera_preview_layout(uint32_t src_w, uint32_t src_h = 0);
 void on_camera_viewport_size_changed(lv_event_t *e);
 void enter_monitor_mode(void);
@@ -2524,8 +2510,7 @@ void page_user_home_enter_printing_mode(const control_file_t *file)
     if(g_pc_thumb_img && g_pc_thumb_icon) {
         const bool show_real_thumb = file && thumb_path_exists(file->thumb_print);
         if(show_real_thumb) {
-            const std::string src = lvgl_file_src_from_path(file->thumb_print);
-            lv_image_set_src(g_pc_thumb_img, src.c_str());
+            lv_image_set_src(g_pc_thumb_img, file->thumb_print_src);
             lv_obj_clear_flag(g_pc_thumb_img, LV_OBJ_FLAG_HIDDEN);
             lv_obj_add_flag(g_pc_thumb_icon, LV_OBJ_FLAG_HIDDEN);
         } else {

@@ -264,6 +264,12 @@ void load_local_files_from_config()
         std::snprintf(f.thumb_small, sizeof(f.thumb_small), "%s", e.thumb_small.c_str());
         std::snprintf(f.thumb_large, sizeof(f.thumb_large), "%s", e.thumb_large.c_str());
         std::snprintf(f.thumb_print, sizeof(f.thumb_print), "%s", e.thumb_print.c_str());
+        const std::string small_src = lvgl_file_src_from_path(f.thumb_small);
+        const std::string large_src = lvgl_file_src_from_path(f.thumb_large);
+        const std::string print_src = lvgl_file_src_from_path(f.thumb_print);
+        std::snprintf(f.thumb_small_src, sizeof(f.thumb_small_src), "%s", small_src.c_str());
+        std::snprintf(f.thumb_large_src, sizeof(f.thumb_large_src), "%s", large_src.c_str());
+        std::snprintf(f.thumb_print_src, sizeof(f.thumb_print_src), "%s", print_src.c_str());
         f.duration_min = e.duration_sec / 60u;
         f.material_g   = e.material_g;
         f.file_size    = e.file_size;
@@ -340,6 +346,9 @@ void copy_file_entry(control_file_t &dst, const middleware::FileEntryPayload &sr
     dst.thumb_small[0] = '\0';
     dst.thumb_large[0] = '\0';
     dst.thumb_print[0] = '\0';
+    dst.thumb_small_src[0] = '\0';
+    dst.thumb_large_src[0] = '\0';
+    dst.thumb_print_src[0] = '\0';
     dst.index        = src.index;
     dst.duration_min = src.duration_min;
     dst.material_g   = src.material_g;
@@ -1928,8 +1937,7 @@ void update_detail_panel(const control_file_t *file)
     if(g_detail_preview_img && g_detail_preview_icon) {
         const bool show_real_thumb = !is_usb && thumb_path_exists(file->thumb_large);
         if(show_real_thumb) {
-            const std::string src = lvgl_file_src_from_path(file->thumb_large);
-            lv_image_set_src(g_detail_preview_img, src.c_str());
+            lv_image_set_src(g_detail_preview_img, file->thumb_large_src);
             lv_obj_clear_flag(g_detail_preview_img, LV_OBJ_FLAG_HIDDEN);
             lv_obj_add_flag(g_detail_preview_icon, LV_OBJ_FLAG_HIDDEN);
         } else {
@@ -2407,9 +2415,8 @@ lv_obj_t *make_file_card(lv_obj_t *parent, const control_file_t *file, size_t in
     const bool show_real_thumb =
         (g_file_tab != FileTab::Usb) && thumb_path_exists(file->thumb_small);
     if(show_real_thumb) {
-        const std::string src = lvgl_file_src_from_path(file->thumb_small);
         lv_obj_t *img = lv_image_create(thumb);
-        lv_image_set_src(img, src.c_str());
+        lv_image_set_src(img, file->thumb_small_src);
         lv_obj_set_size(img, thumb_sz, thumb_sz);
         lv_obj_align(img, LV_ALIGN_CENTER, 0, 0);
         lv_image_set_inner_align(img, LV_IMAGE_ALIGN_COVER);

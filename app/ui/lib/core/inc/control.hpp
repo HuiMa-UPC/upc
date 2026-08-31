@@ -49,6 +49,9 @@ typedef struct {
     char     thumb_small[160];
     char     thumb_large[160];
     char     thumb_print[160];
+    char     thumb_small_src[192];
+    char     thumb_large_src[192];
+    char     thumb_print_src[192];
     uint32_t duration_min;
     float    material_g;
     uint32_t file_size;

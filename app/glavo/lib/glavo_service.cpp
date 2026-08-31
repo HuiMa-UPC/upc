@@ -116,6 +116,99 @@ std::string local_config_path()
     return UPC_LOCAL_GCODE_CONFIG;
 }
 
+bool path_has_dir_prefix(const std::string& path, const std::string& dir)
+{
+    if(path.size() < dir.size()) {
+        return false;
+    }
+    if(path.compare(0, dir.size(), dir) != 0) {
+        return false;
+    }
+    return path.size() == dir.size() || path[dir.size()] == '/';
+}
+
+std::string normalize_thumb_path_for_delete(const std::string& raw)
+{
+    if(raw.empty()) {
+        return {};
+    }
+
+    std::string path = raw;
+    if(path.compare(0, 3, "A:/") == 0) {
+        path.erase(0, 2); /* A:/home/... -> /home/... */
+    }
+    if(path.empty() || path[0] != '/') {
+        return {};
+    }
+
+    const std::string local_root =
+        std::filesystem::path(GLAVO_LOCAL_GCODE_DIR).lexically_normal().string();
+    const std::string normalized =
+        std::filesystem::path(path).lexically_normal().string();
+    if(!path_has_dir_prefix(normalized, local_root)) {
+        return {};
+    }
+    return normalized;
+}
+
+bool thumb_path_used_by_other_entries(const std::vector<GcodeManifestEntry>& entries,
+                                      size_t skip_idx,
+                                      const std::string& normalized_thumb_path)
+{
+    if(normalized_thumb_path.empty()) {
+        return false;
+    }
+    for(size_t i = 0; i < entries.size(); ++i) {
+        if(i == skip_idx) {
+            continue;
+        }
+        const auto& e = entries[i];
+        if(normalize_thumb_path_for_delete(e.thumb_small) == normalized_thumb_path ||
+           normalize_thumb_path_for_delete(e.thumb_large) == normalized_thumb_path ||
+           normalize_thumb_path_for_delete(e.thumb_print) == normalized_thumb_path) {
+            return true;
+        }
+    }
+    return false;
+}
+
+void try_remove_thumb_file(const std::vector<GcodeManifestEntry>& entries,
+                           size_t deleted_idx,
+                           const std::string& thumb_path)
+{
+    const std::string normalized = normalize_thumb_path_for_delete(thumb_path);
+    if(normalized.empty()) {
+        return;
+    }
+    if(thumb_path_used_by_other_entries(entries, deleted_idx, normalized)) {
+        return;
+    }
+
+    std::error_code ec;
+    const std::filesystem::path p(normalized);
+    if(std::filesystem::is_directory(p, ec)) {
+        UPC_LOG_GLAVO_SERVICE(Warn, "fs_delete_ntf: skip thumb dir %s", normalized.c_str());
+        return;
+    }
+    ec.clear();
+    if(!std::filesystem::exists(p, ec)) {
+        return;
+    }
+    ec.clear();
+    if(!std::filesystem::is_regular_file(p, ec)) {
+        UPC_LOG_GLAVO_SERVICE(Warn, "fs_delete_ntf: skip non-regular thumb %s",
+                              normalized.c_str());
+        return;
+    }
+    ec.clear();
+    if(!std::filesystem::remove(p, ec) || ec) {
+        UPC_LOG_GLAVO_SERVICE(Warn, "fs_delete_ntf: remove thumb failed %s",
+                              normalized.c_str());
+        return;
+    }
+    UPC_LOG_GLAVO_SERVICE(Info, "fs_delete_ntf: removed thumb %s", normalized.c_str());
+}
+
 /** @brief 将分子/分母换算为 0–100 的整数百分比（四舍五入向下取整） */
 int percent_rounded(int num, int den)
 {
@@ -1150,7 +1243,8 @@ void GlavoService::handle_fs_delete_ntf(const middleware::Message& msg)
         return;
     }
 
-    const std::string name = local_manifest_[idx].name;
+    const GcodeManifestEntry deleted_entry = local_manifest_[idx];
+    const std::string name = deleted_entry.name;
     const std::string full_path = make_full_path(GLAVO_LOCAL_GCODE_DIR, name);
     if(std::remove(full_path.c_str()) != 0) {
         UPC_LOG_GLAVO_SERVICE(Warn, "fs_delete_ntf: remove file failed %s", full_path.c_str());
@@ -1167,6 +1261,10 @@ void GlavoService::handle_fs_delete_ntf(const middleware::Message& msg)
         send_delete_rsp(req, middleware::FsDeleteResult::ManifestUpdateFailed, false);
         return;
     }
+
+    try_remove_thumb_file(local_manifest_, idx, deleted_entry.thumb_small);
+    try_remove_thumb_file(local_manifest_, idx, deleted_entry.thumb_large);
+    try_remove_thumb_file(local_manifest_, idx, deleted_entry.thumb_print);
 
     if(prepared_local_path_ == full_path) {
         clear_prepare_session();
