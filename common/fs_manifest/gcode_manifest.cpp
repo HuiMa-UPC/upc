@@ -107,6 +107,9 @@ GcodeManifestEntry parse_object(const std::string& obj)
     parse_uint_field(obj, "duration_sec", e.duration_sec);
     parse_float_field(obj, "material_g", e.material_g);
     parse_int64_field(obj, "mtime", e.mtime);
+    parse_string_field(obj, "thumb_small", e.thumb_small);
+    parse_string_field(obj, "thumb_large", e.thumb_large);
+    parse_string_field(obj, "thumb_print", e.thumb_print);
     return e;
 }
 
@@ -174,7 +177,10 @@ bool gcode_manifest_save(const std::string& path,
             << "\"line_count\":" << e.line_count << ','
             << "\"duration_sec\":" << e.duration_sec << ','
             << "\"material_g\":" << e.material_g << ','
-            << "\"mtime\":" << e.mtime
+            << "\"mtime\":" << e.mtime << ','
+            << "\"thumb_small\":\"" << json_escape(e.thumb_small) << "\","
+            << "\"thumb_large\":\"" << json_escape(e.thumb_large) << "\","
+            << "\"thumb_print\":\"" << json_escape(e.thumb_print) << "\""
             << '}';
     }
     out << "]}";
@@ -186,7 +192,14 @@ void gcode_manifest_upsert(std::vector<GcodeManifestEntry>& entries,
 {
     for(auto& e : entries) {
         if(e.name == item.name) {
+            const std::string old_small = e.thumb_small;
+            const std::string old_large = e.thumb_large;
+            const std::string old_print = e.thumb_print;
             e = item;
+            /* prepare/xfer 目前不会产缩略图，保持已有路径不被覆盖丢失。 */
+            if(e.thumb_small.empty()) e.thumb_small = old_small;
+            if(e.thumb_large.empty()) e.thumb_large = old_large;
+            if(e.thumb_print.empty()) e.thumb_print = old_print;
             return;
         }
     }

@@ -21,7 +21,10 @@
 
 
 #include <cmath>
+#include <cstring>
 #include <cstdio>
+#include <filesystem>
+#include <string>
 
 /**
  * @file page_user_home.cpp
@@ -247,6 +250,8 @@ lv_obj_t *g_pc_time_cap        = nullptr; /**< "TIME LEFT" ↔ "TIME COST" */
 lv_obj_t *g_pc_time_val        = nullptr;
 lv_obj_t *g_pc_material_val    = nullptr;
 lv_obj_t *g_pc_material_unit   = nullptr; /**< CONSUMABLES 单位 "G"（无数据时隐藏） */
+lv_obj_t *g_pc_thumb_img       = nullptr; /**< 打印态卡片缩略图 */
+lv_obj_t *g_pc_thumb_icon      = nullptr; /**< 打印态卡片占位图标 */
 /* 底部两组控件（互斥显示） */
 lv_obj_t *g_ctl_run            = nullptr; /**< 运行组：暂停/恢复 + 终止 */
 lv_obj_t *g_ctl_collect        = nullptr; /**< 取件组：吹粉 + 滑动取件 */
@@ -288,6 +293,29 @@ lv_obj_t *g_monitor_photo_btn      = nullptr; /**< 监控区拍照按钮 */
 ui_slide_unlock_t *g_monitor_door  = nullptr; /**< 监控界面的滑动开门 */
 bool      g_monitor_active         = false;
 bool      g_monitor_photo_pending  = false;   /**< 拍照请求在途，防连按 */
+
+bool thumb_path_exists(const char* path)
+{
+    if(!path || path[0] == '\0') {
+        return false;
+    }
+    std::error_code ec;
+    return std::filesystem::exists(path, ec) && !ec;
+}
+
+std::string lvgl_file_src_from_path(const char* path)
+{
+    if(!path || path[0] == '\0') {
+        return {};
+    }
+    if(std::strncmp(path, "A:/", 3) == 0) {
+        return std::string(path);
+    }
+    if(path[0] == '/') {
+        return std::string("A:") + path;
+    }
+    return std::string("A:/") + path;
+}
 
 void apply_camera_preview_layout(uint32_t src_w, uint32_t src_h = 0);
 void on_camera_viewport_size_changed(lv_event_t *e);
@@ -1513,11 +1541,18 @@ lv_obj_t *build_print_stats_card(lv_obj_t *parent)
     lv_obj_set_style_bg_opa(thumb, LV_OPA_COVER, 0);
     lv_obj_set_style_radius(thumb, USER_RADIUS / 2, 0);
     lv_obj_clear_flag(thumb, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_t *thumb_icon = lv_label_create(thumb);
-    lv_label_set_text(thumb_icon, LV_SYMBOL_IMAGE);
-    lv_obj_set_style_text_color(thumb_icon, user_color_text_dim, 0);
-    lv_obj_set_style_text_font(thumb_icon, user_font_value(), 0);
-    lv_obj_center(thumb_icon);
+    g_pc_thumb_img = lv_image_create(thumb);
+    lv_image_set_src(g_pc_thumb_img, nullptr);
+    lv_obj_set_size(g_pc_thumb_img, LV_PCT(100), LV_PCT(100));
+    lv_obj_align(g_pc_thumb_img, LV_ALIGN_CENTER, 0, 0);
+    lv_image_set_inner_align(g_pc_thumb_img, LV_IMAGE_ALIGN_COVER);
+    lv_obj_add_flag(g_pc_thumb_img, LV_OBJ_FLAG_HIDDEN);
+
+    g_pc_thumb_icon = lv_label_create(thumb);
+    lv_label_set_text(g_pc_thumb_icon, LV_SYMBOL_IMAGE);
+    lv_obj_set_style_text_color(g_pc_thumb_icon, user_color_text_dim, 0);
+    lv_obj_set_style_text_font(g_pc_thumb_icon, user_font_value(), 0);
+    lv_obj_center(g_pc_thumb_icon);
 
     /* 右列：徽标行 + 进度条 + 两列指标，三段之间稿上都是 gap 16 */
     lv_obj_t *right = lv_obj_create(card);
@@ -2486,6 +2521,19 @@ void page_user_home_enter_printing_mode(const control_file_t *file)
     }
     if(g_pc_material_val)  lv_label_set_text(g_pc_material_val, "--");
     if(g_pc_material_unit) lv_obj_add_flag(g_pc_material_unit, LV_OBJ_FLAG_HIDDEN);
+    if(g_pc_thumb_img && g_pc_thumb_icon) {
+        const bool show_real_thumb = file && thumb_path_exists(file->thumb_print);
+        if(show_real_thumb) {
+            const std::string src = lvgl_file_src_from_path(file->thumb_print);
+            lv_image_set_src(g_pc_thumb_img, src.c_str());
+            lv_obj_clear_flag(g_pc_thumb_img, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_add_flag(g_pc_thumb_icon, LV_OBJ_FLAG_HIDDEN);
+        } else {
+            lv_image_set_src(g_pc_thumb_img, nullptr);
+            lv_obj_add_flag(g_pc_thumb_img, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_clear_flag(g_pc_thumb_icon, LV_OBJ_FLAG_HIDDEN);
+        }
+    }
 
     page_user_home_request_camera_preview();
 }

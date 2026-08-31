@@ -24,7 +24,9 @@
 #include <cstdlib>
 #include <cstring>
 #include <deque>
+#include <filesystem>
 #include <memory>
+#include <string>
 #include <vector>
 
 namespace {
@@ -128,6 +130,8 @@ lv_obj_t *g_detail_meta_usb   = nullptr;     /**< USB 详情 meta 行（文件�
 lv_obj_t *g_detail_secondary_btn = nullptr;  /**< 底部次按钮（本机=删除；USB 隐藏） */
 lv_obj_t *g_detail_secondary_lbl = nullptr;  /**< 次按钮文字 */
 lv_obj_t *g_detail_start_btn = nullptr;      /**< 底部主按钮（Confirm Print） */
+lv_obj_t *g_detail_preview_img = nullptr;    /**< 详情大缩略图 */
+lv_obj_t *g_detail_preview_icon = nullptr;   /**< 详情占位图标 */
 ui_modal_dialog_t *g_confirm_dlg = nullptr;
 ui_modal_dialog_t *g_prepare_dlg = nullptr;
 
@@ -190,6 +194,29 @@ void make_detail_inline_kv(lv_obj_t *parent, const lv_image_dsc_t *icon,
                            lv_color_t value_color, lv_obj_t **out_val,
                            const lv_font_t *value_font = nullptr);
 
+bool thumb_path_exists(const char* path)
+{
+    if(!path || path[0] == '\0') {
+        return false;
+    }
+    std::error_code ec;
+    return std::filesystem::exists(path, ec) && !ec;
+}
+
+std::string lvgl_file_src_from_path(const char* path)
+{
+    if(!path || path[0] == '\0') {
+        return {};
+    }
+    if(std::strncmp(path, "A:/", 3) == 0) {
+        return std::string(path);
+    }
+    if(path[0] == '/') {
+        return std::string("A:") + path;
+    }
+    return std::string("A:/") + path;
+}
+
 void apply_files_list(const std::vector<control_file_t>& files)
 {
     char prev_name[64] = {0};
@@ -234,6 +261,9 @@ void load_local_files_from_config()
         f.index = static_cast<uint32_t>(i);
         std::snprintf(f.name, sizeof(f.name), "%s", e.name.c_str());
         std::snprintf(f.path, sizeof(f.path), "%s/%s", UPC_LOCAL_GCODE_DIR, e.name.c_str());
+        std::snprintf(f.thumb_small, sizeof(f.thumb_small), "%s", e.thumb_small.c_str());
+        std::snprintf(f.thumb_large, sizeof(f.thumb_large), "%s", e.thumb_large.c_str());
+        std::snprintf(f.thumb_print, sizeof(f.thumb_print), "%s", e.thumb_print.c_str());
         f.duration_min = e.duration_sec / 60u;
         f.material_g   = e.material_g;
         f.file_size    = e.file_size;
@@ -307,6 +337,9 @@ void copy_file_entry(control_file_t &dst, const middleware::FileEntryPayload &sr
     dst.name[sizeof(dst.name) - 1] = '\0';
     std::strncpy(dst.path, src.path, sizeof(dst.path) - 1);
     dst.path[sizeof(dst.path) - 1] = '\0';
+    dst.thumb_small[0] = '\0';
+    dst.thumb_large[0] = '\0';
+    dst.thumb_print[0] = '\0';
     dst.index        = src.index;
     dst.duration_min = src.duration_min;
     dst.material_g   = src.material_g;
@@ -1892,6 +1925,20 @@ void update_detail_panel(const control_file_t *file)
         lv_label_set_text(g_detail_name_lbl, file->name);
     }
 
+    if(g_detail_preview_img && g_detail_preview_icon) {
+        const bool show_real_thumb = !is_usb && thumb_path_exists(file->thumb_large);
+        if(show_real_thumb) {
+            const std::string src = lvgl_file_src_from_path(file->thumb_large);
+            lv_image_set_src(g_detail_preview_img, src.c_str());
+            lv_obj_clear_flag(g_detail_preview_img, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_add_flag(g_detail_preview_icon, LV_OBJ_FLAG_HIDDEN);
+        } else {
+            lv_image_set_src(g_detail_preview_img, nullptr);
+            lv_obj_add_flag(g_detail_preview_img, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_clear_flag(g_detail_preview_icon, LV_OBJ_FLAG_HIDDEN);
+        }
+    }
+
     /* meta 行：本机显示耗时/耗材，USB 显示文件大小（互斥） */
     if(g_detail_meta_local) {
         if(is_usb) lv_obj_add_flag(g_detail_meta_local, LV_OBJ_FLAG_HIDDEN);
@@ -2357,11 +2404,22 @@ lv_obj_t *make_file_card(lv_obj_t *parent, const control_file_t *file, size_t in
     lv_obj_set_style_radius(thumb, USER_RADIUS, 0);
     lv_obj_clear_flag(thumb, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_remove_flag(thumb, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_t *ticon = lv_label_create(thumb);
-    lv_label_set_text(ticon, LV_SYMBOL_FILE);
-    lv_obj_set_style_text_color(ticon, user_color_text_dim, 0);
-    lv_obj_set_style_text_font(ticon, user_font_text(), 0);
-    lv_obj_center(ticon);
+    const bool show_real_thumb =
+        (g_file_tab != FileTab::Usb) && thumb_path_exists(file->thumb_small);
+    if(show_real_thumb) {
+        const std::string src = lvgl_file_src_from_path(file->thumb_small);
+        lv_obj_t *img = lv_image_create(thumb);
+        lv_image_set_src(img, src.c_str());
+        lv_obj_set_size(img, thumb_sz, thumb_sz);
+        lv_obj_align(img, LV_ALIGN_CENTER, 0, 0);
+        lv_image_set_inner_align(img, LV_IMAGE_ALIGN_COVER);
+    } else {
+        lv_obj_t *ticon = lv_label_create(thumb);
+        lv_label_set_text(ticon, LV_SYMBOL_FILE);
+        lv_obj_set_style_text_color(ticon, user_color_text_dim, 0);
+        lv_obj_set_style_text_font(ticon, user_font_text(), 0);
+        lv_obj_center(ticon);
+    }
 
     /* 文字列：名称 + meta */
     lv_obj_t *col = lv_obj_create(row);
@@ -2610,11 +2668,18 @@ void build_detail_panel(lv_obj_t *parent)
     lv_obj_set_style_bg_opa(preview, LV_OPA_COVER, 0);
     lv_obj_set_style_radius(preview, USER_RADIUS, 0);
     lv_obj_clear_flag(preview, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_t *picon = lv_label_create(preview);
-    lv_label_set_text(picon, LV_SYMBOL_FILE);
-    lv_obj_set_style_text_color(picon, user_color_text_dim, 0);
-    lv_obj_set_style_text_font(picon, user_font_value(), 0);
-    lv_obj_center(picon);
+    g_detail_preview_img = lv_image_create(preview);
+    lv_image_set_src(g_detail_preview_img, nullptr);
+    lv_obj_set_size(g_detail_preview_img, LV_PCT(100), LV_PCT(100));
+    lv_obj_align(g_detail_preview_img, LV_ALIGN_CENTER, 0, 0);
+    lv_image_set_inner_align(g_detail_preview_img, LV_IMAGE_ALIGN_COVER);
+    lv_obj_add_flag(g_detail_preview_img, LV_OBJ_FLAG_HIDDEN);
+
+    g_detail_preview_icon = lv_label_create(preview);
+    lv_label_set_text(g_detail_preview_icon, LV_SYMBOL_FILE);
+    lv_obj_set_style_text_color(g_detail_preview_icon, user_color_text_dim, 0);
+    lv_obj_set_style_text_font(g_detail_preview_icon, user_font_value(), 0);
+    lv_obj_center(g_detail_preview_icon);
 
     /* 文件名 */
     g_detail_name_lbl = lv_label_create(g_detail_body);

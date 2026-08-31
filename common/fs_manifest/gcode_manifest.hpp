@@ -29,6 +29,9 @@ struct GcodeManifestEntry {
     uint32_t    duration_sec = 0;
     float       material_g   = 0.f;
     int64_t     mtime        = 0;
+    std::string thumb_small;  /**< Local 列表小缩略图（建议 .rthm 绝对路径） */
+    std::string thumb_large;  /**< Local 详情大缩略图（建议 .rthm 绝对路径） */
+    std::string thumb_print;  /**< 打印态卡片缩略图（建议 .rthm 绝对路径） */
 };
 
 /** 从 path 读取 config.json；文件不存在返回空列表（仍返回 true） */
