@@ -108,8 +108,13 @@ void MqttService::cache_telemetry(const middleware::EnvSnapshotPayload& p)
         return;
     }
     latest_.pm25 = p.pm25_cabin;
+    latest_.pm1_0 = p.pm1_indoor;
+    latest_.pm10 = p.pm10_indoor;
     latest_.oxygen_percent = p.oxygen_percent;
     latest_.temperature_c = p.temperature_c;
+    latest_.humidity_percent = p.humidity_percent;
+    latest_.pressure_kpa = p.pressure_kpa;
+    latest_.baseplate_temp_c = p.baseplate_temp_c;
     latest_.status = p.status;
     latest_.wifi_connected = p.wifi_connected != 0;
     latest_.signal_bars = p.signal_bars;
@@ -222,12 +227,23 @@ bool MqttService::publish_chamber_telemetry()
     if(o2_ppm < 0) {
         o2_ppm = 0;
     }
-
+    auto json_num_or_null = [](float value, const char* format) -> std::string {
+        if(value < 0.0f) {
+            return "null";
+        }
+        char num[64];
+        std::snprintf(num, sizeof(num), format, static_cast<double>(value));
+        return std::string(num);
+    };
+    const std::string pm1_0 = json_num_or_null(snap.pm1_0, "%.3f");
+    const std::string pm10 = json_num_or_null(snap.pm10, "%.3f");
+    const std::string humidity = json_num_or_null(snap.humidity_percent, "%.3f");
+    const std::string pressure_1 = json_num_or_null(snap.pressure_kpa, "%.3f");
     const uint32_t seq = ++seq_;
     const long long ts = static_cast<long long>(unix_ms());
     const std::string escaped_device = json_escape(cfg_.device_id);
 
-    char payload[768];
+    char payload[1024];
     std::snprintf(payload, sizeof(payload),
         "{"
         "\"v\":1,"
@@ -238,17 +254,22 @@ bool MqttService::publish_chamber_telemetry()
         "\"data\":{"
             "\"group\":\"chamber\","
             "\"pm25\":%.3f,"
+            "\"pm1_0\":%s,"
+            "\"pm10\":%s,"
+            "\"humidity\":%s,"
+            "\"pressure_1\":%s,"
             "\"o2_ppm\":%d,"
-            "\"dp_pa\":null,"
-            "\"ir_temp_c\":null,"
-            "\"ntc_c\":%.3f,"
-            "\"smoke\":null"
+            "\"ntc_c\":%.3f"
         "}"
         "}",
         escaped_device.c_str(),
         ts,
         seq,
         static_cast<double>(snap.pm25),
+        pm1_0.c_str(),
+        pm10.c_str(),
+        humidity.c_str(),
+        pressure_1.c_str(),
         o2_ppm,
         static_cast<double>(snap.temperature_c));
 

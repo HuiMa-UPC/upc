@@ -69,7 +69,7 @@ void PrintVideoNotify::set_print_h264_bitrate(uint32_t bitrate_bps)
 void PrintVideoNotify::reset_session_state()
 {
     active_        = false;
-    layer_index_   = 0;
+    layer_index_.store(0, std::memory_order_relaxed);
     session_id_[0] = '\0';
     job_name_[0]   = '\0';
 }
@@ -99,7 +99,7 @@ void PrintVideoNotify::on_print_start(const std::string& job_path)
     reset_session_state();
     make_session_id(session_id_, sizeof(session_id_));
     copy_job_basename(job_path, job_name_, sizeof(job_name_));
-    layer_index_ = 0;
+    layer_index_.store(0, std::memory_order_relaxed);
     active_      = true;
 
     middleware::PrintVideoSessionPayload p{};
@@ -127,17 +127,18 @@ void PrintVideoNotify::on_layer_snap(uint16_t layer_height_um)
         return;
     }
 
-    ++layer_index_;
+    const uint32_t layer_index =
+        layer_index_.fetch_add(1, std::memory_order_relaxed) + 1;
     middleware::PrintVideoLayerSnapPayload p{};
     std::snprintf(p.session_id, sizeof(p.session_id), "%s", session_id_);
-    p.layer_index     = layer_index_;
+    p.layer_index     = layer_index;
     p.layer_height_um = layer_height_um;
 
     if(publish_to_camera(middleware::MsgType::APP_Print_Layer_Snap_Ntf,
                           &p, sizeof(p))) {
         UPC_LOG_GLAVO_SERVICE(Debug,
             "print_video layer_snap session=%s layer=%u height_um=%u",
-            session_id_, layer_index_,
+            session_id_, layer_index,
             static_cast<unsigned>(layer_height_um));
     }
 }
@@ -158,7 +159,8 @@ void PrintVideoNotify::on_session_end(middleware::MsgType type, const char* log_
     std::snprintf(p.job_name, sizeof(p.job_name), "%s", job_name_);
     publish_to_camera(type, &p, sizeof(p));
     UPC_LOG_GLAVO_SERVICE(Info, "print_video session %s id=%s layers=%u",
-                          log_tag, session_id_, layer_index_);
+                          log_tag, session_id_,
+                          layer_index_.load(std::memory_order_relaxed));
     reset_session_state();
 }
 
@@ -172,6 +174,11 @@ void PrintVideoNotify::on_print_abort()
 {
     on_session_end(middleware::MsgType::APP_Print_Video_Session_Abort_Ntf,
                    "abort");
+}
+
+uint32_t PrintVideoNotify::current_layer_index() const
+{
+    return layer_index_.load(std::memory_order_relaxed);
 }
 
 } // namespace upc::glavo

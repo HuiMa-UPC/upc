@@ -26,6 +26,7 @@ struct GcodeManifestEntry {
     std::string name;
     uint32_t    file_size    = 0;
     uint32_t    line_count   = 0;
+    uint32_t    layer_count  = 0; /**< G-code 中 M3000 层标记数量（0=未知或无） */
     uint32_t    duration_sec = 0;
     float       material_g   = 0.f;
     int64_t     mtime        = 0;

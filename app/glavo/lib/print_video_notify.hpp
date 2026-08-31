@@ -3,6 +3,7 @@
 
 #include "msg_runtime.hpp"
 
+#include <atomic>
 #include <cstdint>
 #include <string>
 
@@ -20,6 +21,7 @@ public:
     void on_layer_snap(uint16_t layer_height_um);
     void on_print_finish();
     void on_print_abort();
+    uint32_t current_layer_index() const;
 
 private:
     PrintVideoNotify() = default;
@@ -33,7 +35,7 @@ private:
     bool     print_h264_continuous_on_ = false;
     uint32_t layer_fps_   = 0; /**< 0=Media 侧默认 */
     uint32_t h264_bitrate_ = 0; /**< 0=Media 侧默认中等码率 */
-    uint32_t layer_index_ = 0;
+    std::atomic<uint32_t> layer_index_{0};
     char     session_id_[32]{};
     char     job_name_[64]{};
 };

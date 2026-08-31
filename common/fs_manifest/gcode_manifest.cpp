@@ -164,6 +164,7 @@ GcodeManifestEntry parse_object(const std::string& obj)
     parse_string_field(obj, "name", e.name);
     parse_uint_field(obj, "file_size", e.file_size);
     parse_uint_field(obj, "line_count", e.line_count);
+    parse_uint_field(obj, "layer_count", e.layer_count);
     parse_uint_field(obj, "duration_sec", e.duration_sec);
     parse_float_field(obj, "material_g", e.material_g);
     parse_int64_field(obj, "mtime", e.mtime);
@@ -234,6 +235,7 @@ bool gcode_manifest_save(const std::string& path,
             << "      \"name\": \"" << json_escape(e.name) << "\",\n"
             << "      \"file_size\": " << e.file_size << ",\n"
             << "      \"line_count\": " << e.line_count << ",\n"
+            << "      \"layer_count\": " << e.layer_count << ",\n"
             << "      \"duration_sec\": " << e.duration_sec << ",\n"
             << "      \"material_g\": " << e.material_g << ",\n"
             << "      \"mtime\": " << e.mtime << ",\n"
@@ -273,11 +275,16 @@ void gcode_manifest_upsert(std::vector<GcodeManifestEntry>& entries,
             const std::string old_small = e.thumb_small;
             const std::string old_large = e.thumb_large;
             const std::string old_print = e.thumb_print;
+            const uint32_t old_layer_count = e.layer_count;
             e = item;
             /* prepare/xfer 目前不会产缩略图，保持已有路径不被覆盖丢失。 */
             if(e.thumb_small.empty()) e.thumb_small = old_small;
             if(e.thumb_large.empty()) e.thumb_large = old_large;
             if(e.thumb_print.empty()) e.thumb_print = old_print;
+            /* 兼容旧写入方：若未提供 layer_count，保留已有缓存层数。 */
+            if(e.layer_count == 0 && old_layer_count > 0) {
+                e.layer_count = old_layer_count;
+            }
             return;
         }
     }

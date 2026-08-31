@@ -213,6 +213,7 @@ private:
 
     std::string prepared_local_path_;
     uint32_t    prepared_line_count_ = 0;
+    uint32_t    prepared_layer_count_ = 0; /**< Prepare 阶段扫描到的层标记(M3000)数量 */
     bool        prepare_ready_ = false;
     bool        prepared_parser_open_ = false; /**< Prepare 阶段已打开 parser 文件，可在 Start 复用。 */
 
@@ -225,6 +226,7 @@ private:
     bool deferred_print_start_{false};
 
     std::atomic<bool> print_running_{false};
+    uint32_t print_total_layers_ = 0; /**< 当前作业层总数（用于进度融合） */
     int last_print_pct_     = -1;
     bool last_parse_done_   = false;
     uint16_t last_sent_cmd_rate_  = 0xffff;

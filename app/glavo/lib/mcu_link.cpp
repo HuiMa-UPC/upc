@@ -520,10 +520,12 @@ void McuLink::clear_env_after_sim_disable()
         env_cache_ = EnvSnapshotCache{};
         env_cache_.pm25_indoor      = -1.0f;
         env_cache_.pm25_cabin       = -1.0f;
+        env_cache_.pm1_indoor       = -1.0f;
         env_cache_.temperature_c    = -1.0f;
         env_cache_.oxygen_percent   = -1.0f;
         env_cache_.humidity_percent = -1.0f;
         env_cache_.pressure_kpa     = -1.0f;
+        env_cache_.baseplate_temp_c = -1.0f;
         env_cache_.powder_bits      = 0u;
         env_cache_.outer_door_open  = false;
         env_cache_.door_state_valid = false;
@@ -947,11 +949,13 @@ void McuLink::on_sensor_report(const serial_sensor_report_t& report)
         std::lock_guard<std::mutex> lock(env_mtx_);
         env_cache_.pm25_cabin      = report.pm25_ug_m3;
         env_cache_.pm25_indoor     = report.pm25_ug_m3;
+        env_cache_.pm1_indoor      = report.pm1_ug_m3;
         env_cache_.pm10_indoor     = report.pm10_ug_m3;
         env_cache_.temperature_c   = report.temperature_c;
         env_cache_.oxygen_percent  = report.oxygen_percent;
         env_cache_.humidity_percent = report.humidity_percent;
         env_cache_.pressure_kpa    = static_cast<float>(report.pressure1_x10_kpa) / 10.0f;
+        env_cache_.baseplate_temp_c = report.substrate_temp_c;
         env_cache_.powder_bits     = static_cast<uint8_t>(report.powder_bits & 0x03u);
         env_cache_.outer_door_open = (report.outer_door_open != 0);
         env_cache_.door_state_valid = true;
@@ -1165,8 +1169,10 @@ void McuLink::publish_env_update_ntf()
     p.pm25_cabin     = snap.pm25_cabin;
     p.temperature_c  = snap.temperature_c;
     p.oxygen_percent = snap.oxygen_percent;
+    p.pm1_indoor     = snap.pm1_indoor;
     p.humidity_percent = snap.humidity_percent;
     p.pressure_kpa   = snap.pressure_kpa;
+    p.baseplate_temp_c = snap.baseplate_temp_c;
     p.powder_bits    = static_cast<uint8_t>(snap.powder_bits & 0x03u);
     p.pm10_indoor    = snap.pm10_indoor;
 
@@ -1211,8 +1217,10 @@ void McuLink::publish_env_status_ntf_ui_only()
         p.pm25_cabin = snap.pm25_cabin;
         p.temperature_c = snap.temperature_c;
         p.oxygen_percent = snap.oxygen_percent;
+        p.pm1_indoor = snap.pm1_indoor;
         p.humidity_percent = snap.humidity_percent;
         p.pressure_kpa = snap.pressure_kpa;
+        p.baseplate_temp_c = snap.baseplate_temp_c;
         p.pm10_indoor = snap.pm10_indoor;
         p.powder_bits = static_cast<uint8_t>(snap.powder_bits & 0x03u);
     } else {
@@ -1220,8 +1228,10 @@ void McuLink::publish_env_status_ntf_ui_only()
         p.pm25_cabin = -1.0f;
         p.temperature_c = -1.0f;
         p.oxygen_percent = -1.0f;
+        p.pm1_indoor = -1.0f;
         p.humidity_percent = -1.0f;
         p.pressure_kpa = -1.0f;
+        p.baseplate_temp_c = -1.0f;
         p.pm10_indoor = -1.0f;
         p.powder_bits = 0u;
     }
@@ -1253,9 +1263,11 @@ void McuLink::publish_env_invalid_ntf()
     p.pm25_cabin       = -1.0f;
     p.temperature_c    = -1.0f;
     p.oxygen_percent   = -1.0f;
+    p.pm1_indoor       = -1.0f;
     p.pm10_indoor      = -1.0f;
     p.humidity_percent = -1.0f;
     p.pressure_kpa     = -1.0f;
+    p.baseplate_temp_c = -1.0f;
     p.powder_bits      = 0u;
 
     middleware::Message ntf_ui(middleware::MsgType::APP_Update_Ntf,
@@ -1379,11 +1391,13 @@ void McuLink::poll_env_sim_tick()
         std::lock_guard<std::mutex> lock(env_mtx_);
         env_cache_.pm25_cabin       = fake.pm25_ug_m3;
         env_cache_.pm25_indoor      = fake.pm25_ug_m3;
+        env_cache_.pm1_indoor       = fake.pm1_ug_m3;
         env_cache_.pm10_indoor      = fake.pm10_ug_m3;
         env_cache_.temperature_c    = fake.temperature_c;
         env_cache_.oxygen_percent   = fake.oxygen_percent;
         env_cache_.humidity_percent = fake.humidity_percent;
         env_cache_.pressure_kpa     = static_cast<float>(fake.pressure1_x10_kpa) / 10.0f;
+        env_cache_.baseplate_temp_c = fake.substrate_temp_c;
         env_cache_.powder_bits      = static_cast<uint8_t>(fake.powder_bits & 0x03u);
         env_cache_.outer_door_open  = (fake.outer_door_open != 0);
         env_cache_.door_state_valid = true;
@@ -2881,8 +2895,13 @@ void McuLink::link_try_finish_sending()
     if(user_paused_.load()) {
         return; // 暂停期间不判自然完成，恢复后再继续
     }
-    if(!is_sending_.load() || waiting_layer_.load()) {
-        return; // 未发送中，或正在换层等待
+    if(!is_sending_.load()) {
+        return; // 未发送中
+    }
+
+    const bool waiting_layer = waiting_layer_.load();
+    if(waiting_layer && layer_drain_pending_.load()) {
+        return; // 仍在等待发送 layer_done，不能判自然完成
     }
     if(tcp_stage_count() > 0) {
         return; // 暂存队列仍有数据待下发
@@ -2899,6 +2918,18 @@ void McuLink::link_try_finish_sending()
     }
     if(!parser->is_file_read_exhausted()) {
         return; // 文件尚未读完
+    }
+
+    /* 尾层兜底：文件已耗尽且无待发数据时，若仅剩“等待下一次 PRINT_READY”，
+     * 说明没有后续层可下发，允许从 waiting_layer 退出来执行自然完成。 */
+    if(waiting_layer) {
+        UPC_LOG_MCU_LINK(Info,
+            "tail layer wait drained: finalize without next PRINT_READY");
+        waiting_layer_.store(false);
+        layer_drain_pending_.store(false);
+        serial_handshake_phase_.store(SERIAL_HS_NONE);
+        serial_evt_condition_ok_.store(false);
+        serial_evt_print_ready_.store(false);
     }
 
     const auto now = std::chrono::steady_clock::now();

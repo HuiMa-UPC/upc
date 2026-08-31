@@ -67,6 +67,7 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <unistd.h>
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
 #include <cstdint>
@@ -75,6 +76,7 @@
 #include <fstream>
 #include <sstream>
 #include <string>
+#include <string_view>
 
 namespace upc::glavo {
 
@@ -101,6 +103,8 @@ namespace {
 constexpr size_t kWorkerQueueDepth = 256;
 /** 排空段进度节流：rate 变化时至少间隔这么久才再推一帧（ms） */
 constexpr int kDrainProgressMinMs = 200;
+/** 包进度+层进度融合时，包进度允许领先层进度的最大窗口（0~95 区间） */
+constexpr int kLayerLeadWindow95 = 20;
 /** Visual 无响应时必须解除打印工作线程等待，按不通过保守处理。 */
 constexpr auto kFirstLayerVisualReplyTimeout = std::chrono::seconds(3);
 
@@ -283,17 +287,97 @@ int progress_denominator(int sent_packets)
         return parsed_packets;
     }
 
+    /* 解析进行中保守尾量：避免把分母放大太多导致进度明显偏低。 */
+    const int tail_budget = std::max(1, sent_packets / 5);
+    const int fallback = parsed_packets + tail_budget;
+
     const int parsed_lines = parser->get_parsed_lines();
     const int total_lines  = parser->get_total_lines();
     if(parsed_lines > 0 && total_lines > parsed_lines) {
-        const int64_t estimated =
+        int64_t estimated =
             (static_cast<int64_t>(parsed_packets) * total_lines) / parsed_lines;
         if(estimated > parsed_packets) {
+            const int64_t min_est = static_cast<int64_t>(parsed_packets) + 1;
+            const int64_t max_est = static_cast<int64_t>(parsed_packets) +
+                std::max<int64_t>(tail_budget, parsed_packets / 2);
+            estimated = std::clamp(estimated, min_est, max_est);
             return static_cast<int>(estimated);
         }
     }
 
-    return parsed_packets + sent_packets + 1;
+    return fallback;
+}
+
+/** @brief 统计 G-code 中的层标记数量（命令 token: M3000） */
+uint32_t count_layer_marks_m3000(const std::string& path)
+{
+    std::ifstream in(path);
+    if(!in) {
+        return 0;
+    }
+
+    uint32_t count = 0;
+    std::string line;
+    while(std::getline(in, line)) {
+        const size_t comment_pos = line.find(';');
+        const std::string_view code =
+            (comment_pos == std::string::npos)
+            ? std::string_view(line)
+            : std::string_view(line.data(), comment_pos);
+
+        const size_t n = code.size();
+        for(size_t i = 0; i + 5 <= n; ++i) {
+            const char c0 = static_cast<char>(std::toupper(
+                static_cast<unsigned char>(code[i])));
+            if(c0 != 'M' ||
+               code[i + 1] != '3' || code[i + 2] != '0' ||
+               code[i + 3] != '0' || code[i + 4] != '0') {
+                continue;
+            }
+            const bool left_ok = (i == 0) || !std::isalnum(
+                static_cast<unsigned char>(code[i - 1]));
+            const bool right_ok = (i + 5 == n) || !std::isalnum(
+                static_cast<unsigned char>(code[i + 5]));
+            if(left_ok && right_ok) {
+                ++count;
+                break;
+            }
+        }
+    }
+    return count;
+}
+
+/**
+ * @brief 融合包进度与层进度（均映射到 0~95）
+ *
+ * - 包进度决定细粒度连续性；
+ * - 层进度作为“锚点”约束，避免中后段视觉上明显偏慢/偏快。
+ */
+int fuse_send_and_layer_progress_95(int packet_pct_95,
+                                    uint32_t done_layers,
+                                    uint32_t total_layers)
+{
+    if(packet_pct_95 < 0) {
+        packet_pct_95 = 0;
+    } else if(packet_pct_95 > 95) {
+        packet_pct_95 = 95;
+    }
+    if(total_layers == 0) {
+        return packet_pct_95;
+    }
+
+    if(done_layers > total_layers) {
+        done_layers = total_layers;
+    }
+    const int layer_pct_95 = static_cast<int>(
+        (static_cast<uint64_t>(done_layers) * 95u) / total_layers);
+    const int clamped_packet = std::clamp(
+        packet_pct_95,
+        layer_pct_95,
+        std::min(95, layer_pct_95 + kLayerLeadWindow95));
+
+    /* 7:3 保持包进度平滑主导，同时跟随层进度锚点。 */
+    return (clamped_packet * 7 + layer_pct_95 * 3) / 10;
 }
 
 /** @brief float → int16_t（四舍五入 + 限幅），用于轴速度/增量、风扇占空比换算 */
@@ -357,6 +441,20 @@ std::string sanitize_job_name(const char* raw)
         out = "print";
     }
     return out;
+}
+
+bool is_m3000_scan_candidate(const std::string& path)
+{
+    const size_t dot = path.rfind('.');
+    if(dot == std::string::npos) {
+        return false;
+    }
+
+    std::string ext = path.substr(dot);
+    for(char& c : ext) {
+        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    }
+    return ext == ".gcode" || ext == ".nc" || ext == ".gco" || ext == ".gc";
 }
 
 void make_clean_test_session_id(char* out, size_t out_len)
@@ -1344,6 +1442,8 @@ void GlavoService::clear_prepare_session()
     prepared_parser_open_ = false;
     prepared_local_path_.clear();
     prepared_line_count_ = 0;
+    prepared_layer_count_ = 0;
+    print_total_layers_ = 0;
     prepare_ready_ = false;
 }
 
@@ -1395,13 +1495,19 @@ bool GlavoService::run_print_prepare(middleware::PrintFileSource source, uint32_
     }
 
     uint32_t line_count = 0;
+    uint32_t layer_count = 0;
     if(source == middleware::PrintFileSource::Local) {
         const auto& e = local_manifest_[index];
         const bool same_mtime = e.mtime == static_cast<int64_t>(st.st_mtime);
         const bool same_size =
             e.file_size == static_cast<uint32_t>(st.st_size);
-        if(e.line_count > 0 && same_mtime && same_size) {
-            line_count = e.line_count;
+        if(same_mtime && same_size) {
+            if(e.line_count > 0) {
+                line_count = e.line_count;
+            }
+            if(e.layer_count > 0) {
+                layer_count = e.layer_count;
+            }
         }
     }
     const int line_hint = line_count > 0 ? static_cast<int>(line_count) : -1;
@@ -1427,6 +1533,10 @@ bool GlavoService::run_print_prepare(middleware::PrintFileSource source, uint32_
     entry.name        = basename;
     entry.file_size   = static_cast<uint32_t>(st.st_size);
     entry.line_count  = line_count;
+    if(layer_count == 0 && is_m3000_scan_candidate(local_path_out)) {
+        layer_count = count_layer_marks_m3000(local_path_out);
+    }
+    entry.layer_count = layer_count;
     entry.duration_sec = 0;
     entry.material_g  = 0.f;
     entry.mtime       = static_cast<int64_t>(st.st_mtime);
@@ -1442,7 +1552,13 @@ bool GlavoService::run_print_prepare(middleware::PrintFileSource source, uint32_
 
     prepared_local_path_ = local_path_out;
     prepared_line_count_ = line_count;
+    prepared_layer_count_ = layer_count;
     prepare_ready_ = true;
+    UPC_LOG_GLAVO_SERVICE(Info,
+        "prepare stats: lines=%u layers=%u path=%s",
+        static_cast<unsigned>(prepared_line_count_),
+        static_cast<unsigned>(prepared_layer_count_),
+        local_path_out.c_str());
     return true;
 }
 
@@ -1530,6 +1646,10 @@ void GlavoService::launch_print_from_prepared(const std::string& full_path)
     prepared_parser_open_ = false;
     current_file_path_ = full_path;
     PrintJobState::instance().reset_job_counters();
+    print_total_layers_ = prepared_layer_count_;
+    if(print_total_layers_ == 0 && is_m3000_scan_candidate(full_path)) {
+        print_total_layers_ = count_layer_marks_m3000(full_path);
+    }
     reset_print_progress_state();
     parser::ParserManager::instance().start_parse();
 
@@ -1555,7 +1675,8 @@ void GlavoService::launch_print_from_prepared(const std::string& full_path)
 
     begin_print_motion_after_reference_ready();
 
-    UPC_LOG_GLAVO_SERVICE(Info, "print_start: path=%s", full_path.c_str());
+    UPC_LOG_GLAVO_SERVICE(Info, "print_start: path=%s total_layers=%u",
+        full_path.c_str(), static_cast<unsigned>(print_total_layers_));
 }
 
 void GlavoService::begin_print_motion_after_reference_ready()
@@ -1773,10 +1894,15 @@ void GlavoService::send_print_progress(bool force_complete)
                 pct = 99;
             }
         } else {
-            pct = map_send_progress_to_95(job.sent_packets, denom);
-            if(!parse_done && pct > 95) {
-                pct = 95;
+            int packet_pct_95 = map_send_progress_to_95(job.sent_packets, denom);
+            if(!parse_done && packet_pct_95 > 95) {
+                packet_pct_95 = 95;
             }
+            const uint32_t done_layers =
+                PrintVideoNotify::instance().current_layer_index();
+            pct = fuse_send_and_layer_progress_95(packet_pct_95,
+                                                  done_layers,
+                                                  print_total_layers_);
             if(last_print_pct_ >= 0 && pct < last_print_pct_) {
                 pct = last_print_pct_;
             }

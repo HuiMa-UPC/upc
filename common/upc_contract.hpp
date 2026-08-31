@@ -604,7 +604,7 @@ enum class UserHomeStatus : uint32_t {
 };
 
 /** APP_Update_Ntf 载荷：首页环境/状态快照（Inline）
- *  尾部三字段为待机首页新增指标；后端未采集到时填 <0（或 NaN）表示无效，
+ *  尾部扩展字段为首页/遥测复用指标；后端未采集到时填 <0（或 NaN）表示无效，
  *  UI 首页据此显示 "--"（见 page_user_home 哨兵判空）。 */
 struct EnvSnapshotPayload {
     char     device_name[32];
@@ -615,9 +615,11 @@ struct EnvSnapshotPayload {
     float    pm25_cabin;
     float    temperature_c;
     float    oxygen_percent;
+    float    pm1_indoor;        /**< 室内 PM1.0 (μg/m³)；无效填 <0 */
     float    pm10_indoor;       /**< 室内 PM10 (μg/m³)；无效填 <0（HOME 卡切换指标用） */
     float    humidity_percent;  /**< 舱内湿度 %；无效填 <0 */
     float    pressure_kpa;      /**< 舱内气压 kPa；无效填 <0 */
+    float    baseplate_temp_c;  /**< 基板温度 ℃；无效填 <0 */
     uint8_t  powder_bits;       /**< 粉量位：取 bit0/bit1（0=缺粉；>=1 允许继续打印） */
 };
 

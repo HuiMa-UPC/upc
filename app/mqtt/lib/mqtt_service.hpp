@@ -35,8 +35,13 @@ public:
 private:
     struct ChamberTelemetry {
         float pm25 = 0.0f;
+        float pm1_0 = -1.0f;
+        float pm10 = -1.0f;
         float oxygen_percent = 0.0f;
         float temperature_c = 0.0f;
+        float humidity_percent = -1.0f;
+        float pressure_kpa = -1.0f;
+        float baseplate_temp_c = -1.0f;
         uint32_t status = 0;
         bool wifi_connected = false;
         int signal_bars = -1;

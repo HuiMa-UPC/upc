@@ -45,11 +45,13 @@ using McuLinkFirstLayerCheckCb = std::function<bool(uint16_t)>;
 struct EnvSnapshotCache {
     float pm25_indoor     = 0.f;
     float pm25_cabin      = 0.f;
+    float pm1_indoor      = -1.f;  /**< 室内 PM1.0 (μg/m³)；无源时 <0 */
     float pm10_indoor     = -1.f;  /**< 室内 PM10 (μg/m³)；无源时 <0 */
     float temperature_c   = 0.f;
     float oxygen_percent  = 0.f;
     float humidity_percent = 0.f;
     float pressure_kpa    = -1.f;   /**< 舱内1气压 kPa（0x9B value[2..3]/10）；无源时 <0 */
+    float baseplate_temp_c = -1.f;  /**< 基板温度 ℃；无源时 <0 */
     uint8_t powder_bits   = 0u;     /**< 粉量位 bit0/bit1（0=缺粉） */
     bool  outer_door_open = false;  /**< 外门锁状态：false=门关 true=门开（来源 0x9B value[10] bit7） */
     bool  door_state_valid = false; /**< 是否已收到至少一帧可用门状态 */
