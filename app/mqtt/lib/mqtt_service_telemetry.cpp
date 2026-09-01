@@ -93,6 +93,19 @@ void MqttService::on_env_sim_state(const middleware::Message& msg)
     env_sim_on_ = (p.on != 0);
 }
 
+void MqttService::on_print_state(const middleware::Message& msg)
+{
+    middleware::PrintStateNtfPayload p{};
+    if(!read_inline_pod(msg.payload, p)) {
+        UPC_LOG_MQTT_SERVICE(Warn, "invalid GLAVO_Print_State_Ntf payload");
+        return;
+    }
+    UPC_LOG_MQTT_SERVICE(Debug, "IPC RX GLAVO_Print_State_Ntf mode=%u since=%llu",
+        static_cast<unsigned>(p.mode),
+        static_cast<unsigned long long>(p.since_ms));
+    (void)publish_state(p.mode, p.since_ms);
+}
+
 void MqttService::cache_telemetry(const middleware::EnvSnapshotPayload& p)
 {
     std::lock_guard<std::mutex> lock(data_mtx_);
@@ -295,6 +308,90 @@ bool MqttService::publish_chamber_telemetry()
     }
     UPC_LOG_MQTT_SERVICE(Debug,
         "MQTT TX telemetry queued topic=%s token=%d",
+        topic.c_str(), static_cast<int>(token));
+    return true;
+}
+
+bool MqttService::publish_state(uint32_t mode, uint64_t since_ms)
+{
+    /* mode 取值复用 UserHomeStatus；此处仅处理本阶段上报的两个状态边沿：
+     *   Printing=2（开始打印）→ 携带 job 子对象（占位值，后续补全）
+     *   Idle=0（打印结束）   → 不带 job
+     * substate 当前固定 idle；health 各子系统当前固定 ok。 */
+    const bool printing =
+        (mode == static_cast<uint32_t>(middleware::UserHomeStatus::Printing));
+    const char* mode_str = printing ? "printing" : "idle";
+
+    const uint32_t seq = ++seq_;
+    const long long ts = static_cast<long long>(unix_ms());
+    const long long since = (since_ms != 0)
+        ? static_cast<long long>(since_ms)
+        : ts;
+    const std::string escaped_device = json_escape(cfg_.device_id);
+
+    /* job 子对象仅在 printing mode 下携带；字段先按协议占位，后续接作业信息补全 */
+    const char* job_json = printing
+        ? "\"job\":{"
+            "\"job_id\":\"\","
+            "\"layer\":0,"
+            "\"total_layers\":0,"
+            "\"progress_pct\":0,"
+            "\"eta_s\":null,"
+            "\"started_at\":0"
+          "}"
+        : "\"job\":null";
+
+    char payload[1024];
+    std::snprintf(payload, sizeof(payload),
+        "{"
+        "\"v\":1,"
+        "\"type\":\"state\","
+        "\"device_id\":\"%s\","
+        "\"ts\":%lld,"
+        "\"seq\":%u,"
+        "\"data\":{"
+            "\"mode\":\"%s\","
+            "\"substate\":\"idle\","
+            "\"since\":%lld,"
+            "%s,"
+            "\"health\":{"
+                "\"laser\":\"ok\","
+                "\"galvo\":\"ok\","
+                "\"motion\":\"ok\","
+                "\"dust\":\"ok\","
+                "\"safety\":\"ok\""
+            "}"
+        "}"
+        "}",
+        escaped_device.c_str(),
+        ts,
+        seq,
+        mode_str,
+        since,
+        job_json);
+
+    const std::string topic = cfg_.topic_state();
+    MQTTClient_message msg = MQTTClient_message_initializer;
+    msg.payload = payload;
+    msg.payloadlen = static_cast<int>(std::strlen(payload));
+    msg.qos = cfg_.qos_heartbeat;
+    msg.retained = 0;
+
+    debug_log_mqtt_frame("TX", topic, msg.payload,
+                         static_cast<size_t>(msg.payloadlen),
+                         msg.qos, msg.retained);
+
+    MQTTClient_deliveryToken token;
+    const int rc = MQTTClient_publishMessage(client_, topic.c_str(), &msg, &token);
+    if(rc != MQTTCLIENT_SUCCESS) {
+        UPC_LOG_MQTT_SERVICE(Warn, "publish state fail rc=%d topic=%s",
+                             rc, topic.c_str());
+        mqtt_connected_ = false;
+        cmd_subscribed_ = false;
+        return false;
+    }
+    UPC_LOG_MQTT_SERVICE(Debug,
+        "MQTT TX state queued topic=%s token=%d",
         topic.c_str(), static_cast<int>(token));
     return true;
 }

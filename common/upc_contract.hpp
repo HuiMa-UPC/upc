@@ -357,6 +357,7 @@ enum class MsgType : uint32_t {
     UI_Print_Powder_Low_Ignore_Req, /**< Empty：本次打印忽略缺粉自动暂停与缺粉通知 */
     APP_Print_Pause_Rsp,      /**< [GLAVO_Print_Pause_Rsp] PrintPauseStatePayload：暂停/恢复响应（Pause/Resume Req 共用） */
     APP_Print_Powder_Low_Ntf, /**< Empty：粉量传感器 bit0/bit1 同时为 0，触发一次缺粉通知 */
+    GLAVO_Print_State_Ntf = 0x104C, /**< [GLAVO→MQTT] PrintStateNtfPayload：开始打印/打印结束状态边沿（触发一次 state 上报） */
 
     // ---- UI ↔ GLAVO：耗材/滤芯 ----
     UI_Supply_Status_Req = 0x1060, /**< Empty */
@@ -812,6 +813,15 @@ struct PrintProgressPayload {
     float    oxygen_percent;
     uint16_t cmd_cache_rate;   /**< MCU 指令缓存占用率（TCP 心跳，0=排空） */
     uint16_t data_cache_rate;  /**< MCU 数据缓存占用率（TCP 心跳，0=排空） */
+};
+
+/** GLAVO_Print_State_Ntf 载荷：开始打印/打印结束状态边沿（Inline）。
+ *  mode 取值复用 UserHomeStatus：Printing=2 表示开始打印，Idle=0 表示打印结束。
+ *  since_ms 为进入该 mode 的 Unix 毫秒时间戳（Glavo 侧填写）。 */
+struct PrintStateNtfPayload {
+    uint32_t mode;       /**< UserHomeStatus：2=Printing 开始打印 / 0=Idle 打印结束 */
+    uint32_t reserved;
+    uint64_t since_ms;   /**< 进入当前 mode 的 Unix 毫秒时间戳 */
 };
 
 /** UI_Camera_Stream_Start_Req：可选 basename；空串则使用后端当前相机实时流 */

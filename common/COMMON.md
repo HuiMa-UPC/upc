@@ -182,6 +182,7 @@ scripts/rongsu.sh start   # glavo + rongsu_camera → ui
 | `APP_Print_Pause_Rsp` | `GLAVO_Print_Pause_Rsp` | Glavo→UI | `PrintPauseStatePayload` | `register_print_pause_done` | 暂停/恢复响应（paused=1/0；Pause/Resume Req 共用） |
 | `APP_Print_Powder_Low_Ntf` | — | Glavo→UI | Empty | `register_print_powder_low` | 打印中粉量位 bit0/bit1 同时为 0 时仅通知一次；UI 弹补粉弹窗 |
 | `APP_Print_Terminate_Rsp` | `GLAVO_Print_Terminate_Rsp` | Glavo→UI | Empty | `register_print_terminate_done` | — |
+| `GLAVO_Print_State_Ntf` | — | Glavo→MQTT | `PrintStateNtfPayload`（`mode` 复用 `UserHomeStatus`：`2`=开始打印 / `0`=打印结束；`since_ms`=进入该 mode 的 Unix ms） | — | 打印状态边沿：开始打印/打印结束空闲时推一次，触发 MQTT 上报 `state` 消息 |
 | `UI_Supply_Status_Req` | — | UI→Glavo | Empty | `send_supply_status` | stub |
 | `APP_Supply_Status_Rsp` | `GLAVO_Supply_Status_Rsp` | Glavo→UI | `SupplyStatusPayload` | `register_supply_status` | — |
 | `UI_Camera_Stream_Start_Req` | — | UI→Camera | `CameraStreamStartReqPayload` | `CameraMsgProxy::send_stream_start` | 开预览 |

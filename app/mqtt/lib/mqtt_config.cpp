@@ -102,6 +102,11 @@ std::string MqttConfig::topic_heartbeat() const
     return topic_prefix() + "heartbeat";
 }
 
+std::string MqttConfig::topic_state() const
+{
+    return topic_prefix() + "state";
+}
+
 std::string MqttConfig::topic_ota_notify() const
 {
     return topic_prefix() + "ota/notify";

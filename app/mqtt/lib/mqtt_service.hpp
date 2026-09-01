@@ -99,6 +99,7 @@ private:
     void on_mcu_ota_status(const middleware::Message& msg);
     void on_galvo_version(const middleware::Message& msg);
     void on_env_sim_state(const middleware::Message& msg);
+    void on_print_state(const middleware::Message& msg);
     void on_ota_user_decision(const middleware::Message& msg);
     void on_rtsp_start_rsp(const middleware::Message& msg);
     void on_rtsp_stop_rsp(const middleware::Message& msg);
@@ -119,6 +120,7 @@ private:
 
     bool publish_chamber_telemetry();
     bool publish_heartbeat();
+    bool publish_state(uint32_t mode, uint64_t since_ms);
     bool publish_cmd_ack(const std::string& req_id,
                          const std::string& cmd,
                          const std::string& result,

@@ -1656,6 +1656,7 @@ void GlavoService::launch_print_from_prepared(const std::string& full_path)
     ignore_powder_low_for_current_print_ = false;
     print_running_.store(true);
     McuLink::instance().set_print_task_flow_active(true);
+    publish_print_state_ntf(static_cast<uint32_t>(middleware::UserHomeStatus::Printing));
     if(first_layer_visual_check_on_) {
         first_layer_reference_waiting_ = true;
         if(!publish_first_layer_visual_session(true, "print_start")) {
@@ -2022,6 +2023,26 @@ void GlavoService::publish_print_powder_low_ntf()
     }
 }
 
+/** @brief 向 MQTT 推送 GLAVO_Print_State_Ntf（开始打印/打印结束状态边沿） */
+void GlavoService::publish_print_state_ntf(uint32_t mode)
+{
+    middleware::PrintStateNtfPayload p{};
+    p.mode = mode;
+    p.reserved = 0;
+    p.since_ms = static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count());
+
+    middleware::Message ntf(middleware::MsgType::GLAVO_Print_State_Ntf,
+        static_cast<middleware::ModuleId>(module_id()),
+        middleware::ModuleId::APP_MQTT);
+    ntf.payload = middleware::MsgPayload::from_bytes(
+        reinterpret_cast<const uint8_t*>(&p), sizeof(p));
+    if(!publish_async(ntf)) {
+        UPC_LOG_GLAVO_SERVICE(Warn, "print_state_ntf publish failed mode=%u", mode);
+    }
+}
+
 void GlavoService::publish_device_event(middleware::DeviceEventCode code,
                                         middleware::DeviceEventSeverity severity,
                                         bool active)
@@ -2196,6 +2217,7 @@ void GlavoService::on_mcu_link_event(McuLinkEvent ev)
             publish_first_layer_visual_session(false, "print_completed");
             ignore_powder_low_for_current_print_ = false;
             clear_prepare_session();
+            publish_print_state_ntf(static_cast<uint32_t>(middleware::UserHomeStatus::Idle));
             break;
         case McuLinkEvent::TerminateDone:
         case McuLinkEvent::PrintError:
@@ -2223,6 +2245,7 @@ void GlavoService::on_mcu_link_event(McuLinkEvent ev)
             ignore_powder_low_for_current_print_ = false;
             publish_terminate_done();
             clear_prepare_session();
+            publish_print_state_ntf(static_cast<uint32_t>(middleware::UserHomeStatus::Idle));
             break;
         case McuLinkEvent::PowderLow: {
             if(!print_running_.load()) {

@@ -170,6 +170,8 @@ private:
     void publish_print_pause_done(bool paused);
     void publish_print_h264_record_pause(bool paused);
     void publish_print_powder_low_ntf();
+    /** @brief 向 MQTT 推送 GLAVO_Print_State_Ntf（开始打印/打印结束状态边沿） */
+    void publish_print_state_ntf(uint32_t mode);
     void publish_device_event(middleware::DeviceEventCode code,
                               middleware::DeviceEventSeverity severity,
                               bool active);

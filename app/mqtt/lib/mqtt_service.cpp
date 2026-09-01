@@ -776,6 +776,10 @@ void MqttService::subscribe_messages()
         middleware::ModuleId::APP_MQTT,
         [this](const middleware::Message& msg) { on_env_sim_state(msg); }));
     subs_.push_back(bus.subscribe(
+        middleware::MsgType::GLAVO_Print_State_Ntf,
+        middleware::ModuleId::APP_MQTT,
+        [this](const middleware::Message& msg) { on_print_state(msg); }));
+    subs_.push_back(bus.subscribe(
         middleware::MsgType::UI_Ota_User_Decision_Req,
         middleware::ModuleId::APP_MQTT,
         [this](const middleware::Message& msg) { on_ota_user_decision(msg); }));
@@ -951,6 +955,9 @@ bool MqttService::connect_mqtt()
     }
 
     UPC_LOG_MQTT_SERVICE(Info, "MQTT connected uri=%s", cfg_.broker_uri.c_str());
+
+    /* 设备上线后主动上报一次完整状态（协议 §四）：mode 默认 idle，since 取当前时刻 */
+    (void)publish_state(static_cast<uint32_t>(middleware::UserHomeStatus::Idle), 0);
     return true;
 }
 
