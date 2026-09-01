@@ -103,8 +103,13 @@ namespace {
 constexpr size_t kWorkerQueueDepth = 256;
 /** 排空段进度节流：rate 变化时至少间隔这么久才再推一帧（ms） */
 constexpr int kDrainProgressMinMs = 200;
-/** 包进度+层进度融合时，包进度允许领先层进度的最大窗口（0~95 区间） */
-constexpr int kLayerLeadWindow95 = 20;
+/**
+ * 层进度锚点上限（0~95 区间）：留出余量，避免层计数先于包发送到顶时
+ * 直接把下发段顶到 95，导致末段长时间停在 95。
+ */
+constexpr int kLayerAnchorMax95 = 90;
+/** 融合结果相对包进度的最大偏离（0~95 区间），层计数异常时限制其影响 */
+constexpr int kLayerFuseDeviation95 = 10;
 /** Visual 无响应时必须解除打印工作线程等待，按不通过保守处理。 */
 constexpr auto kFirstLayerVisualReplyTimeout = std::chrono::seconds(3);
 
@@ -350,8 +355,10 @@ uint32_t count_layer_marks_m3000(const std::string& path)
 /**
  * @brief 融合包进度与层进度（均映射到 0~95）
  *
- * - 包进度决定细粒度连续性；
- * - 层进度作为“锚点”约束，避免中后段视觉上明显偏慢/偏快。
+ * - 包进度决定细粒度连续性，始终是主导量；
+ * - 层进度只作为参考锚点：总层数（M3000 计数）与运行时 Snap 次数定义不同，
+ *   两者可能互相超前/滞后，因此层进度不得单独把进度顶上去或压死，
+ *   融合结果被限制在包进度附近的有限窗口内。
  */
 int fuse_send_and_layer_progress_95(int packet_pct_95,
                                     uint32_t done_layers,
@@ -369,15 +376,15 @@ int fuse_send_and_layer_progress_95(int packet_pct_95,
     if(done_layers > total_layers) {
         done_layers = total_layers;
     }
-    const int layer_pct_95 = static_cast<int>(
+    const int layer_pct_raw = static_cast<int>(
         (static_cast<uint64_t>(done_layers) * 95u) / total_layers);
-    const int clamped_packet = std::clamp(
-        packet_pct_95,
-        layer_pct_95,
-        std::min(95, layer_pct_95 + kLayerLeadWindow95));
+    const int layer_anchor = std::min(layer_pct_raw, kLayerAnchorMax95);
 
     /* 7:3 保持包进度平滑主导，同时跟随层进度锚点。 */
-    return (clamped_packet * 7 + layer_pct_95 * 3) / 10;
+    const int fused = (packet_pct_95 * 7 + layer_anchor * 3) / 10;
+    const int lo = std::max(0, packet_pct_95 - kLayerFuseDeviation95);
+    const int hi = std::min(95, packet_pct_95 + kLayerFuseDeviation95);
+    return std::clamp(fused, lo, hi);
 }
 
 /** @brief float → int16_t（四舍五入 + 限幅），用于轴速度/增量、风扇占空比换算 */
@@ -1646,10 +1653,15 @@ void GlavoService::launch_print_from_prepared(const std::string& full_path)
     prepared_parser_open_ = false;
     current_file_path_ = full_path;
     PrintJobState::instance().reset_job_counters();
+#if GLAVO_ENABLE_LAYER_SNAP
     print_total_layers_ = prepared_layer_count_;
     if(print_total_layers_ == 0 && is_m3000_scan_candidate(full_path)) {
         print_total_layers_ = count_layer_marks_m3000(full_path);
     }
+#else
+    /* 未开启换层 Snap 时没有层完成事件，层进度恒为 0，只能退化为纯包进度。 */
+    print_total_layers_ = 0;
+#endif
     reset_print_progress_state();
     parser::ParserManager::instance().start_parse();
 
@@ -1928,13 +1940,9 @@ void GlavoService::send_print_progress(bool force_complete)
             }
             last_drain_progress_at_ = now;
         }
-        if(last_print_pct_ >= 0) {
-            if(pct <= last_print_pct_ && !rates_changed) {
-                return;
-            }
-            if(pct - last_print_pct_ < 1 && !rates_changed) {
-                return;
-            }
+        /* 百分比未前进时不推送，除非缓存 rate 变化需要带环境字段刷新 */
+        if(last_print_pct_ >= 0 && pct <= last_print_pct_ && !rates_changed) {
+            return;
         }
     } else if(last_print_pct_ >= 100) {
         return;
