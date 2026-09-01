@@ -38,6 +38,9 @@ namespace upc::mqtt {
  *
  * JSON 可打印字符保持原样，控制字符/二进制字节转义为 \xNN；分块限制单条日志长度，
  * 避免超过 rs_log 的消息缓冲区。该函数完全受 UPC_MOD_MQTT_SERVICE 控制。
+ *
+ * 每行 payload 都带 topic：分块后各行会散落在同一日志文件里，缺少 topic 就无法分辨
+ * 属于哪条消息；同时 rs_log 依赖 "payload topic=" 把原始帧归入 topic_mqtt_wire.log。
  */
 void debug_log_mqtt_frame(const char* direction,
                           const std::string& topic,
@@ -52,7 +55,8 @@ void debug_log_mqtt_frame(const char* direction,
         dir, topic.c_str(), qos, retained, payload_len);
 
     if(!payload || payload_len == 0) {
-        UPC_LOG_MQTT_SERVICE(Debug, "MQTT %s payload=<empty>", dir);
+        UPC_LOG_MQTT_SERVICE(Debug, "MQTT %s payload topic=%s <empty>",
+                             dir, topic.c_str());
         return;
     }
 
@@ -99,8 +103,9 @@ void debug_log_mqtt_frame(const char* direction,
         }
 
         UPC_LOG_MQTT_SERVICE(Debug,
-            "MQTT %s payload chunk=%zu range[%zu..%zu/%zu]=\"%s\"",
-            dir, chunk_idx, begin, offset, payload_len, encoded.c_str());
+            "MQTT %s payload topic=%s chunk=%zu range[%zu..%zu/%zu]=\"%s\"",
+            dir, topic.c_str(), chunk_idx, begin, offset, payload_len,
+            encoded.c_str());
     }
 }
 #else

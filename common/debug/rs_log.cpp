@@ -79,15 +79,26 @@ const char* select_topic_file(const char* module, const char* msg) {
     }
 
     if (std::strcmp(module, "MqttService") == 0) {
-        if (contains_text(msg, "ota")) {
-            return "topic_mqtt_ota.log";
+        /* 原始帧必须最先判定：payload 正文里是云端/设备的业务 JSON，若排在内容关键词
+         * 之后，正文中的字面量会把整条日志带偏（例如 state 的 "total_layers" 含子串
+         * "ota"，会让状态帧原文错落到 OTA 专题）。 */
+        if (contains_text(msg, "MQTT RX frame") || contains_text(msg, "MQTT TX frame") ||
+            contains_text(msg, "payload topic=")) {
+            return "topic_mqtt_wire.log";
         }
-        if (contains_text(msg, "telemetry") || contains_text(msg, "heartbeat")) {
+        if (contains_text(msg, "state queued") || contains_text(msg, "publish state fail") ||
+            contains_text(msg, "Print_State_Ntf")) {
+            return "topic_mqtt_state.log";
+        }
+        if (contains_text(msg, "telemetry") || contains_text(msg, "heartbeat") ||
+            contains_text(msg, "APP_Update_Ntf")) {
             return "topic_mqtt_telemetry.log";
         }
-        if (contains_text(msg, "MQTT RX frame") || contains_text(msg, "MQTT TX frame") ||
-            contains_text(msg, "payload[")) {
-            return "topic_mqtt_wire.log";
+        /* 启发式：以下关键词只作用于设备侧固定文案（业务正文已被上面的原始帧规则拦下），
+         * 覆盖 "ota xxx" 小写文案、"OTA" 大写文案与 "*_Ota_*" 消息名。 */
+        if (contains_text(msg, "ota") || contains_text(msg, "OTA") ||
+            contains_text(msg, "Ota_")) {
+            return "topic_mqtt_ota.log";
         }
         return "topic_mqtt_command.log";
     }
@@ -154,7 +165,10 @@ const char* select_topic_file(const char* module, const char* msg) {
         if (contains_text(msg, "storage") || contains_text(msg, "STORRCLM")) {
             return "topic_storage_usage.log";
         }
-        if (contains_text(msg, "live_rtsp")) {
+        /* 直播三件套（云端推流 / 本地 RTSP Server / 共用编码器）同归一个话题 */
+        if (contains_text(msg, "live_rtsp") ||
+            contains_text(msg, "local_rtsp") ||
+            contains_text(msg, "h264_enc")) {
             return "topic_media_rtsp.log";
         }
         return "topic_media_record.log";

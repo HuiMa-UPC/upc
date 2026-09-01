@@ -196,6 +196,9 @@ const char* upc_msg_type_name(MsgType type) {
         case MsgType::UI_Debug_Env_Sim_Get_Ntf: return "UI_Debug_Env_Sim_Get_Ntf";
         case MsgType::UI_Debug_Env_Sim_Powder_Set_Ntf: return "UI_Debug_Env_Sim_Powder_Set_Ntf";
         case MsgType::UI_Debug_Env_Sim_Powder_Get_Ntf: return "UI_Debug_Env_Sim_Powder_Get_Ntf";
+        case MsgType::UI_Debug_Local_Rtsp_Set_Ntf: return "UI_Debug_Local_Rtsp_Set_Ntf";
+        case MsgType::UI_Debug_Local_Rtsp_Get_Ntf: return "UI_Debug_Local_Rtsp_Get_Ntf";
+        case MsgType::APP_Media_Local_Rtsp_State_Ntf: return "APP_Media_Local_Rtsp_State_Ntf";
         case MsgType::GLAVO_Debug_Sensor_Ntf: return "GLAVO_Debug_Sensor_Ntf";
         case MsgType::GLAVO_Debug_Axis_Ntf: return "GLAVO_Debug_Axis_Ntf";
         case MsgType::GLAVO_Debug_Device_Ntf: return "GLAVO_Debug_Device_Ntf";

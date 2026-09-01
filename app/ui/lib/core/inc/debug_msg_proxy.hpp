@@ -13,7 +13,8 @@ namespace ui {
  * @brief 调试页（手动控制/标定）与消息总线之间的门面，独立于 UiMsgProxy。
  *
  * send_*：UI → APP_GLAVO（命令）。后端未实现时为无害发送。
- * register_*：APP_GLAVO → UI 状态回读回调（按模块拆分，见 upc_contract.hpp）。
+ *         少数开关直连其它进程（如本地 RTSP Server → APP_MEDIA），由 target 参数指定。
+ * register_*：后端 → UI 状态回读回调（按模块拆分，见 upc_contract.hpp）。
  */
 
 using DebugSensorCb  = std::function<void(const middleware::DebugSensorPayload&)>;
@@ -26,6 +27,7 @@ using DebugCleanRecordCb = std::function<void(bool)>;
 using DebugEnvSimCb = std::function<void(bool)>;
 using DebugEnvSimPowderCb = std::function<void(bool)>;
 using DebugFirstLayerVisualCheckCb = std::function<void(bool)>;
+using DebugLocalRtspCb = std::function<void(bool)>;
 
 class DebugMsgProxy {
 public:
@@ -71,6 +73,9 @@ public:
     void request_env_sim_powder_state();
     void send_first_layer_visual_check_set(bool on);
     void request_first_layer_visual_check_state();
+    /** 本地局域网 RTSP Server 开关：直发 APP_MEDIA，实际状态以其回报为准。 */
+    void send_local_rtsp_set(bool on);
+    void request_local_rtsp_state();
 
     /* ---- 状态回读 ---- */
     void register_sensor(DebugSensorCb cb);
@@ -83,6 +88,7 @@ public:
     void register_env_sim(DebugEnvSimCb cb);
     void register_env_sim_powder(DebugEnvSimPowderCb cb);
     void register_first_layer_visual_check(DebugFirstLayerVisualCheckCb cb);
+    void register_local_rtsp(DebugLocalRtspCb cb);
 
 private:
     DebugMsgProxy() = default;
@@ -97,18 +103,19 @@ private:
         return true;
     }
 
+    /** 默认目标 APP_GLAVO；直连其它进程的开关显式传 target。 */
     template <typename T>
-    void publish_pod(middleware::MsgType type, const T& pod) {
-        middleware::Message msg(type, middleware::ModuleId::UI,
-                                middleware::ModuleId::APP_GLAVO);
+    void publish_pod(middleware::MsgType type, const T& pod,
+                     middleware::ModuleId target = middleware::ModuleId::APP_GLAVO) {
+        middleware::Message msg(type, middleware::ModuleId::UI, target);
         msg.payload = middleware::MsgPayload::from_bytes(
             reinterpret_cast<const uint8_t*>(&pod), sizeof(T));
         middleware::MsgPort::instance().publish_async(msg);
     }
 
-    void publish_empty(middleware::MsgType type) {
-        middleware::Message msg(type, middleware::ModuleId::UI,
-                                middleware::ModuleId::APP_GLAVO);
+    void publish_empty(middleware::MsgType type,
+                       middleware::ModuleId target = middleware::ModuleId::APP_GLAVO) {
+        middleware::Message msg(type, middleware::ModuleId::UI, target);
         middleware::MsgPort::instance().publish_async(msg);
     }
 
@@ -123,6 +130,7 @@ private:
     DebugEnvSimCb env_sim_cb_;
     DebugEnvSimPowderCb env_sim_powder_cb_;
     DebugFirstLayerVisualCheckCb first_layer_visual_check_cb_;
+    DebugLocalRtspCb local_rtsp_cb_;
 };
 
 } // namespace ui

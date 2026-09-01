@@ -215,6 +215,9 @@ scripts/rongsu.sh start   # glavo + rongsu_camera → ui
 | `APP_Mqtt_Rtsp_Start_Rsp` | — | Media→MQTT | `RtspPushRspPayload` | — | 映射 `cmd/ack`（accepted/rejected/error + reason/detail） |
 | `MQTT_Media_Rtsp_Stop_Req` | — | MQTT→Media | `RtspPushStopReqPayload` | — | 云端 `stop_rtsp_push`；不摘 Camera peer |
 | `APP_Mqtt_Rtsp_Stop_Rsp` | — | Media→MQTT | `RtspPushRspPayload` | — | 停流结果 → `cmd/ack` |
+| `UI_Debug_Local_Rtsp_Set_Ntf` | — | UI→Media | `DebugOnOffPayload` | `DebugMsgProxy::send_local_rtsp_set` | 局域网 live555 RTSP Server 开关（调试页 Other，仅本次运行，默认关）；**target 是 `APP_MEDIA` 不是 `APP_GLAVO`** |
+| `UI_Debug_Local_Rtsp_Get_Ntf` | — | UI→Media | Empty | `DebugMsgProxy::request_local_rtsp_state` | 进页查询当前开关状态 |
+| `APP_Media_Local_Rtsp_State_Ntf` | — | Media→UI | `DebugOnOffPayload` | `DebugMsgProxy::register_local_rtsp` | 回报**实际**状态：相机流未就绪/编码器失败时回 0，UI 据此把开关弹回 |
 | `MQTT_Ota_Notify_Ntf` | — | MQTT→UI | `OtaNotifyPayload` | `register_ota_notify` | 收到云端 OTA 通知后弹确认框（用户确认后再请求 manifest） |
 | `UI_Ota_User_Decision_Req` | — | UI→MQTT | `OtaDecisionReqPayload` | `send_ota_user_decision` | 用户确认/取消 OTA 通知（取消仅关弹窗，不上报云端） |
 | `APP_Mqtt_Ota_Progress_Ntf` | — | MQTT→UI | `OtaProgressPayload` | `register_ota_progress` | 下载与校验进度；OTA 应用阶段可直接 100%（本期跳过真实刷写） |

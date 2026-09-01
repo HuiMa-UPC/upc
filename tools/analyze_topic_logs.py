@@ -15,7 +15,8 @@ Input:
       topic_camera_capture.log
       topic_ui_preview.log
       topic_system_resource.log
-      topic_mqtt_telemetry.log / topic_mqtt_command.log / topic_mqtt_wire.log / topic_mqtt_ota.log
+      topic_mqtt_telemetry.log / topic_mqtt_command.log / topic_mqtt_wire.log
+      topic_mqtt_ota.log / topic_mqtt_state.log
 
 Output:
     <output_dir>/

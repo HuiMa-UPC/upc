@@ -101,6 +101,16 @@ void DebugMsgProxy::init()
                 first_layer_visual_check_cb_(p.on != 0);
             }
         }));
+
+    /* 来自 APP_MEDIA：开关的实际状态（开启失败时为 0，用于把 UI 开关弹回）。 */
+    subs_.push_back(bus.subscribe(
+        middleware::MsgType::APP_Media_Local_Rtsp_State_Ntf, middleware::ModuleId::UI,
+        [this](const middleware::Message& msg) {
+            middleware::DebugOnOffPayload p{};
+            if(local_rtsp_cb_ && read_inline_pod(msg, p)) {
+                local_rtsp_cb_(p.on != 0);
+            }
+        }));
 }
 
 /* ---- Tab1 ---- */
@@ -318,6 +328,21 @@ void DebugMsgProxy::request_first_layer_visual_check_state()
     publish_empty(middleware::MsgType::UI_Debug_FirstLayer_Visual_Check_Get_Ntf);
 }
 
+/* 本地 RTSP Server 由 Media 进程持有，直发 APP_MEDIA 而非 APP_GLAVO。 */
+void DebugMsgProxy::send_local_rtsp_set(bool on)
+{
+    middleware::DebugOnOffPayload p{};
+    p.on = on ? 1 : 0;
+    publish_pod(middleware::MsgType::UI_Debug_Local_Rtsp_Set_Ntf, p,
+                middleware::ModuleId::APP_MEDIA);
+}
+
+void DebugMsgProxy::request_local_rtsp_state()
+{
+    publish_empty(middleware::MsgType::UI_Debug_Local_Rtsp_Get_Ntf,
+                  middleware::ModuleId::APP_MEDIA);
+}
+
 /* ---- 回读注册 ---- */
 void DebugMsgProxy::register_sensor(DebugSensorCb cb) { sensor_cb_ = std::move(cb); }
 void DebugMsgProxy::register_axis(DebugAxisCb cb)     { axis_cb_   = std::move(cb); }
@@ -347,6 +372,11 @@ void DebugMsgProxy::register_env_sim_powder(DebugEnvSimPowderCb cb)
 void DebugMsgProxy::register_first_layer_visual_check(DebugFirstLayerVisualCheckCb cb)
 {
     first_layer_visual_check_cb_ = std::move(cb);
+}
+
+void DebugMsgProxy::register_local_rtsp(DebugLocalRtspCb cb)
+{
+    local_rtsp_cb_ = std::move(cb);
 }
 
 } // namespace ui

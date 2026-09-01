@@ -14,7 +14,9 @@
 | `../media/lib/print_video_recorder.*` | 元数据环取帧 → ffmpeg 软编 PNG → `/home/media/video/tmp/` + `.rthm` |
 | `../media/lib/print_h264_recorder.*` | 预览 NV12 异步入队；worker RKMPP 实时编 `print.h264`（队列满丢帧） |
 | `../media/lib/clean_video_recorder.*` | 清粉延时抽帧：按 `TIMELAPSE_VIDEO_FPS` 写接续 PNG，成功后重建 `timelapse.mp4`+`thumb.rthm` 并删除清粉 PNG |
-| `../media/lib/live_rtsp_pusher.*` | 云端 live：NV12 → RKMPP → ffmpeg `-c copy -f rtsp`（`push_url` 原样；不摘 Camera peer） |
+| `../media/lib/h264_stream_encoder.*` | 直播共用 RKMPP 编码器：NV12 单槽 latest-wins → Annex-B → 多 sink 分发；缓存 SPS/PPS |
+| `../media/lib/live_rtsp_pusher.*` | 云端 live：编码器 sink → ffmpeg `-c copy -f rtsp`（`push_url` 原样；不摘 Camera peer） |
+| `../media/lib/local_rtsp_server.*` | 局域网 live：编码器 sink → live555 RTSP Server（调试开关控制，默认关） |
 | `lib/device_config.hpp` | 设备、分辨率、IQ、SHM、录像路径宏 |
 
 ## 数据路径
@@ -94,6 +96,38 @@ Glavo Snap IPC → PrintVideoRecorder worker
 磁盘跟不上时录像可能丢帧（日志 `print_h264 queue full drop=...`），优先保证预览不卡死。
 CBR 码率默认中等（`CAMERA_PRINT_H264_BITRATE`=2.5Mbps）；可由 `cal.csv` Config 段 `PRINT_H264_BITRATE`（500000–8000000）覆盖，经 `PrintVideoSessionPayload.h264_bitrate` 下发。
 
+### 直播（云端推流 + 局域网 RTSP Server）
+
+两路直播**共用同一路 H.264 编码**（`H264StreamEncoder`），只编一次、分发多份：
+
+```
+预览帧 → H264StreamEncoder.on_frame_nv12（单槽 latest-wins，积压丢旧帧）
+  → worker：RKMPP CBR 编 Annex-B（GOP≈1s，每个 IDR 都带 SPS/PPS）
+  → sink 分发：
+      · LiveRtspPusher   → write(ffmpeg stdin) → -c copy -f rtsp → 云端 push_url
+      · LocalRtspServer  → 拆裸 NAL 入队 + triggerEvent
+                         → live555 事件循环：H264VideoStreamDiscreteFramer → RTP
+```
+
+- 编码参数由**首个** sink 决定（云端 `max_bitrate_kbps`；本地不指定，沿用既有或板端默认），
+  后续 sink 沿用——改码率需重开 MPP，会打断在途的另一路。
+- sink 之间互不连坐：某一路投递失败只摘该路；只有 MPP 自身失败才停整个编码会话。
+- **live555 事件循环随 Media 进程常驻**，不随开关销毁（反复销毁 env/scheduler 易踩回收陷阱）；
+  开关只控制 `ServerMediaSession` 的挂载与编码器 sink 的增删。
+- 除 `triggerEvent()` 外，所有 live555 API 只能在事件循环线程内调用；挂/摘 session 通过命令队列投递。
+- 拉流地址 `rtsp://<本机IP>:8554/live`（一期**不做鉴权**，仅打日志、不在 UI 展示，需手动输入 IP）。
+- 选址（`LocalRtspServer::lan_ipv4_list()`）跳过 loopback、DOWN、虚拟网卡（`dummy`/`docker`/`veth`/…）
+  与 `169.254.0.0/16` 链路本地地址，按 `UPC_WIFI_IFACE`(默认 `wlan0`) → 其它无线 → 有线 → USB 排序。
+  **不能简单取"第一个非 loopback 接口"**：多网口设备上 `dummy0` 带着 169.254 地址且序号排在真实网卡之前。
+  服务本身监听 `0.0.0.0`，日志里 `candidates=[...]` 会列出全部可选地址备查。
+- **`OutPacketBuffer::maxSize` 必须调大**（`UPC_LOCAL_RTSP_MAX_FRAME_BYTES`，默认 1MB）：
+  live555 默认只有 60000 字节，而 1080×1280 的 I 帧可达 150～200KB，超出部分被 RTPSink
+  静默丢弃，客户端每个 I 帧花屏且误差沿 P 帧传播。必须在任何 RTPSink 构造前设好。
+- 相机流未就绪时 Media 回 `on=0`，UI 开关自动弹回。
+- 日志：`live_rtsp` / `local_rtsp` / `h264_enc` 三个前缀都归入 `topic_media_rtsp.log`；
+  `local_rtsp client stream started/ended` 标记首个客户端接入与最后一个客户端离开；
+  live555 库内诊断经 `LogUsageEnvironment` 转成 `local_rtsp live555: …`（默认只落 stderr，不接就看不见）。
+
 `config.json` 由 Media 独写；字段含 `job_name` / `start_unix` / `duration_sec` / `material_g` / `status` / `frames_dir` / `thumb`。UI 历史页直读该文件（解析见 `common/fs_manifest/print_history_manifest.*`）。
 
 Snap 依赖预览流已开（同一 SHM）；与 UI 解码线程共享 ring，偶发 `snap miss` 见日志。
@@ -115,6 +149,9 @@ Snap 依赖预览流已开（同一 SHM）；与 UI 解码线程共享 ring，�
 | `APP_Print_Video_Session_*` | **Media** 处理打印录像会话、生成缩略图/MP4/manifest |
 | `APP_Clean_Video_Session_*` | **Media** 处理清粉延时抽帧（接续 PNG → 合并 `timelapse.mp4`） |
 | `APP_Print_Video_Manifest_Ntf` | **Media→UI**：manifest `rename()` 成功后发（0 帧也必发） |
+| `MQTT_Media_Rtsp_Start/Stop_Req` | **Media** 起停云端 live 推流，`APP_Mqtt_Rtsp_*_Rsp` 回 ack |
+| `UI_Debug_Local_Rtsp_Set/Get_Ntf` | **Media** 起停/查询局域网 RTSP Server（调试页开关，直发 `APP_MEDIA`） |
+| `APP_Media_Local_Rtsp_State_Ntf` | **Media→UI**：本地 RTSP 实际开关状态（失败回 0，UI 据此弹回） |
 
 Glavo→Media 经 Broker 转发；`sender_id` 仍为 `APP_GLAVO`（见 IPC.md）。
 
@@ -139,6 +176,9 @@ Glavo→Media 经 Broker 转发；`sender_id` 仍为 `APP_GLAVO`（见 IPC.md）
 | 拍照缩略图 | `/home/media/photo/photo_{stamp}_{WxH}.rthm`（同帧 NV12→dma32+RGA） | 同上；失败不影响 PNG |
 | 历史清单 | `/home/media/video/config.json` | `UPC_VIDEO_CONFIG` |
 | ffmpeg | `/usr/bin/ffmpeg` | `CAMERA_FFMPEG_BIN` |
+| 本地 RTSP 端口 | 8554 | `UPC_LOCAL_RTSP_PORT` / `UPC_LOCAL_RTSP_PORT_DEFAULT` |
+| 本地 RTSP 流名 | `live` | `UPC_LOCAL_RTSP_STREAM_NAME` |
+| 本地 RTSP NAL 队列 | 128（满丢最旧） | `UPC_LOCAL_RTSP_QUEUE_MAX` |
 
 SHM 元数据环：`stride_y` 为 V4L2 实际 Y stride（dma 模式），`buffer_idx` 指向 fd 表；像素走 dma fd。
 

@@ -46,6 +46,19 @@ bool path_is_legacy_work_dir(const std::string& dir_name)
     return dir_name.find(".__work_") != std::string::npos;
 }
 
+/** 本地 RTSP 监听端口：`UPC_LOCAL_RTSP_PORT` 覆盖，非法值回落默认。 */
+uint16_t local_rtsp_port()
+{
+    const char* env = std::getenv("UPC_LOCAL_RTSP_PORT");
+    if(env && env[0]) {
+        const long v = std::strtol(env, nullptr, 10);
+        if(v > 0 && v <= 65535) {
+            return static_cast<uint16_t>(v);
+        }
+    }
+    return UPC_LOCAL_RTSP_PORT_DEFAULT;
+}
+
 } // namespace
 
 MediaService::~MediaService()
@@ -77,6 +90,11 @@ bool MediaService::init()
     print_h264_.set_storage_exhausted_callback([this] {
         on_print_h264_storage_exhausted();
     });
+    /* 云端推流与本地 RTSP Server 共用同一路 H.264 编码。 */
+    live_rtsp_.set_encoder(&h264_encoder_);
+    local_rtsp_.set_encoder(&h264_encoder_);
+    /* live555 事件循环随本进程常驻；调试开关只控制 session 挂载与编码器 sink。 */
+    (void)local_rtsp_.init(local_rtsp_port());
 
     uint32_t timelapse_fps = CAMERA_PRINT_VIDEO_LAYER_FPS;
     upc::config::CalConfigOptions cal_cfg{};
@@ -99,6 +117,7 @@ void MediaService::shutdown()
     std::snprintf(stop_req.req_id, sizeof(stop_req.req_id), "shutdown");
     std::snprintf(stop_req.stream_type, sizeof(stop_req.stream_type), "live");
     (void)live_rtsp_.stop(stop_req);
+    local_rtsp_.shutdown();
 
     send_stream_stop_req();
     stop_worker();
@@ -184,6 +203,14 @@ void MediaService::subscribe_messages()
         middleware::MsgType::MQTT_Media_Rtsp_Stop_Req,
         middleware::ModuleId::APP_MEDIA,
         [this](const middleware::Message& msg) { handle_message(msg); }));
+    subs_.push_back(bus.subscribe(
+        middleware::MsgType::UI_Debug_Local_Rtsp_Set_Ntf,
+        middleware::ModuleId::APP_MEDIA,
+        [this](const middleware::Message& msg) { handle_message(msg); }));
+    subs_.push_back(bus.subscribe(
+        middleware::MsgType::UI_Debug_Local_Rtsp_Get_Ntf,
+        middleware::ModuleId::APP_MEDIA,
+        [this](const middleware::Message& msg) { handle_message(msg); }));
 }
 
 void MediaService::handle_message(const middleware::Message& msg)
@@ -220,6 +247,12 @@ void MediaService::handle_message(const middleware::Message& msg)
         break;
     case middleware::MsgType::MQTT_Media_Rtsp_Stop_Req:
         handle_rtsp_stop_req(msg);
+        break;
+    case middleware::MsgType::UI_Debug_Local_Rtsp_Set_Ntf:
+        handle_local_rtsp_set(msg);
+        break;
+    case middleware::MsgType::UI_Debug_Local_Rtsp_Get_Ntf:
+        handle_local_rtsp_get(msg);
         break;
     default:
         break;
@@ -323,7 +356,7 @@ void MediaService::on_stream_start_rsp(const middleware::Message& msg)
     print_video_.set_stream_geometry(stream_width_, stream_height_, stream_fps_);
     print_h264_.set_stream_geometry(stream_width_, stream_height_, stream_fps_);
     clean_video_.set_stream_geometry(stream_width_, stream_height_, stream_fps_);
-    live_rtsp_.set_stream_geometry(stream_width_, stream_height_, stream_fps_);
+    h264_encoder_.set_stream_geometry(stream_width_, stream_height_, stream_fps_);
 
     {
         std::lock_guard<std::mutex> lock(state_mtx_);
@@ -424,7 +457,7 @@ void MediaService::worker_thread_fn()
                     /* 连续录像/清粉录像逐帧入口：已迁移到 media 进程。 */
                     clean_video_.on_frame_nv12(src_y, src_uv, stride);
                     print_h264_.on_frame_nv12(src_y, src_uv, stride);
-                    live_rtsp_.on_frame_nv12(src_y, src_uv, stride);
+                    h264_encoder_.on_frame_nv12(src_y, src_uv, stride);
                 }
             }
             update_latest_nv12_snapshot(*frame);
@@ -870,7 +903,7 @@ void MediaService::handle_rtsp_start_req(const middleware::Message& msg)
     {
         std::lock_guard<std::mutex> lock(state_mtx_);
         if(stream_up_) {
-            live_rtsp_.set_stream_geometry(
+            h264_encoder_.set_stream_geometry(
                 stream_width_, stream_height_, stream_fps_);
         }
     }
@@ -894,6 +927,66 @@ void MediaService::handle_rtsp_stop_req(const middleware::Message& msg)
     req.stream_type[sizeof(req.stream_type) - 1] = '\0';
     const auto rsp = live_rtsp_.stop(req);
     send_rtsp_rsp(middleware::MsgType::APP_Mqtt_Rtsp_Stop_Rsp, rsp);
+}
+
+/**
+ * 调试页开关：开/停本地局域网 RTSP Server。
+ * 无论成败都回报实际状态：相机流未就绪时 start() 失败，UI 据此把开关弹回。
+ */
+void MediaService::handle_local_rtsp_set(const middleware::Message& msg)
+{
+    middleware::DebugOnOffPayload req{};
+    if(!read_inline_pod(msg.payload, req)) {
+        UPC_LOG_MEDIA_SERVICE(Warn, "local_rtsp set: bad payload len=%u need=%zu",
+                              static_cast<unsigned>(msg.payload.length), sizeof(req));
+        publish_local_rtsp_state();
+        return;
+    }
+
+    if(req.on != 0) {
+        {
+            std::lock_guard<std::mutex> lock(state_mtx_);
+            if(!stream_up_) {
+                UPC_LOG_MEDIA_SERVICE(Warn, "local_rtsp on rejected: camera stream down");
+                publish_local_rtsp_state();
+                return;
+            }
+            h264_encoder_.set_stream_geometry(
+                stream_width_, stream_height_, stream_fps_);
+        }
+        if(!local_rtsp_.start()) {
+            UPC_LOG_MEDIA_SERVICE(Warn, "local_rtsp on failed");
+        }
+    } else {
+        local_rtsp_.stop();
+    }
+    publish_local_rtsp_state();
+}
+
+/** 调试页进入时的状态查询。 */
+void MediaService::handle_local_rtsp_get(const middleware::Message& /*msg*/)
+{
+    publish_local_rtsp_state();
+}
+
+/** 向 UI 回报本地 RTSP Server 实际开关状态。 */
+void MediaService::publish_local_rtsp_state() const
+{
+    middleware::DebugOnOffPayload state{};
+    state.on = local_rtsp_.active() ? 1u : 0u;
+
+    middleware::Message ntf(
+        middleware::MsgType::APP_Media_Local_Rtsp_State_Ntf,
+        middleware::ModuleId::APP_MEDIA,
+        middleware::ModuleId::UI);
+    ntf.payload = middleware::MsgPayload::from_bytes(
+        reinterpret_cast<const uint8_t*>(&state), sizeof(state));
+    if(!middleware::MsgPort::instance().publish_async(ntf)) {
+        UPC_LOG_MEDIA_SERVICE(Warn, "local_rtsp state publish fail");
+    }
+    if(state.on != 0) {
+        UPC_LOG_MEDIA_SERVICE(Info, "local_rtsp on url=%s", local_rtsp_.url().c_str());
+    }
 }
 
 uint64_t MediaService::monotonic_ms()

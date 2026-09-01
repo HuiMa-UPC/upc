@@ -2,8 +2,10 @@
 #define UPC_MEDIA_SERVICE_HPP
 
 #include "clean_video_recorder.hpp"
+#include "h264_stream_encoder.hpp"
 #include "ipc_dma_frame_ring.hpp"
 #include "live_rtsp_pusher.hpp"
+#include "local_rtsp_server.hpp"
 #include "msg_port.hpp"
 #include "print_h264_recorder.hpp"
 #include "print_video_recorder.hpp"
@@ -50,6 +52,11 @@ private:
     void handle_storage_usage_req(const middleware::Message& msg) const;
     void handle_rtsp_start_req(const middleware::Message& msg);
     void handle_rtsp_stop_req(const middleware::Message& msg);
+    /** 调试页开关：开/停本地局域网 RTSP Server，随后回报实际状态。 */
+    void handle_local_rtsp_set(const middleware::Message& msg);
+    void handle_local_rtsp_get(const middleware::Message& msg);
+    /** 向 UI 回报本地 RTSP Server 实际开关状态（开启失败时为 0）。 */
+    void publish_local_rtsp_state() const;
     void send_rtsp_rsp(middleware::MsgType type,
                        const middleware::RtspPushRspPayload& rsp) const;
     /** 开机/开打前：尽力收尾 pending，再清空 tmp 与遗留 __work_* */
@@ -156,7 +163,10 @@ private:
     PrintVideoRecorder print_video_;
     PrintH264Recorder print_h264_;
     CleanVideoRecorder clean_video_;
+    /* 必须声明在两个消费者之前：析构逆序，它们摘 sink 时编码器须仍存活。 */
+    H264StreamEncoder h264_encoder_;
     LiveRtspPusher live_rtsp_;
+    LocalRtspServer local_rtsp_;
 };
 
 } // namespace upc::media

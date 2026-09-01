@@ -107,6 +107,8 @@ lv_obj_t *g_env_sim_powder_btn = nullptr;   /**< 其他控制：环境模拟缺�
 lv_obj_t *g_env_sim_powder_state_lbl = nullptr; /**< 其他控制：环境模拟缺粉状态文本 */
 lv_obj_t *g_first_layer_visual_btn = nullptr; /**< 其他控制：首层视觉检测开关按钮 */
 lv_obj_t *g_first_layer_visual_state_lbl = nullptr; /**< 其他控制：首层视觉检测状态文本 */
+lv_obj_t *g_local_rtsp_btn = nullptr;       /**< 其他控制：本地 RTSP Server 开关按钮 */
+lv_obj_t *g_local_rtsp_state_lbl = nullptr; /**< 其他控制：本地 RTSP Server 状态文本 */
 bool g_env_sim_on = false;                  /**< 缓存 Env Sim 回读状态，用于门控 Powder Sim 按钮 */
 
 /* 设备快捷行状态字（受 Montserrat 字库约束，沿用英文） */
@@ -1089,6 +1091,10 @@ void on_dbg_toggle(lv_event_t *e)
                      }
                  }
                  break;
+        /* 本地局域网 RTSP Server（→Media，仅本次运行）。相机流未就绪时 Media 会回 Off，
+         * register_local_rtsp 的回调据此把按钮弹回。 */
+        case 13: proxy.send_local_rtsp_set(on);
+                 break;
         default: break;
     }
 }
@@ -1498,6 +1504,11 @@ void build_other_switches_card(lv_obj_t *parent)
     /* 造 5 条假 MCU 报警（阻断/RTN/自动清除/EVENT 各一 + 一条 critical 凑齐四色），
      * 验报警整条 UI 链路 */
     make_dbg_toggle(rowD, "Alarm Inject", "On", "Off", LV_SYMBOL_WARNING, false, 12, 0);
+
+    lv_obj_t *rowE = make_switch_grid_row(grid);
+    /* 局域网 RTSP 直播：桌面/安卓端用 rtsp://<本机IP>:8554/live 拉流，地址见 Media 日志 */
+    make_dbg_toggle(rowE, "Local RTSP", "On", "Off", LV_SYMBOL_VIDEO, false,
+                    13, 0, true, 0, &g_local_rtsp_btn, &g_local_rtsp_state_lbl);
 }
 
 lv_obj_t *build_other_tab(lv_obj_t *body)
@@ -2062,6 +2073,22 @@ void bind_debug_callbacks()
                                         on ? user_color_accent : user_color_text_dim, 0);
         }
     });
+
+    /* Media 回报的是实际状态：相机未就绪 / 编码器打不开时会回 Off，按钮随之弹回。 */
+    proxy.register_local_rtsp([](bool on) {
+        if(g_local_rtsp_btn) {
+            if(on) {
+                lv_obj_add_state(g_local_rtsp_btn, LV_STATE_CHECKED);
+            } else {
+                lv_obj_clear_state(g_local_rtsp_btn, LV_STATE_CHECKED);
+            }
+        }
+        if(g_local_rtsp_state_lbl) {
+            lv_label_set_text(g_local_rtsp_state_lbl, on ? "On" : "Off");
+            lv_obj_set_style_text_color(g_local_rtsp_state_lbl,
+                                        on ? user_color_accent : user_color_text_dim, 0);
+        }
+    });
 }
 
 void reset_globals()
@@ -2101,6 +2128,8 @@ void reset_globals()
     g_env_sim_powder_state_lbl = nullptr;
     g_first_layer_visual_btn = nullptr;
     g_first_layer_visual_state_lbl = nullptr;
+    g_local_rtsp_btn = nullptr;
+    g_local_rtsp_state_lbl = nullptr;
     g_env_sim_on = false;
 }
 
@@ -2120,6 +2149,7 @@ void page_user_debug_refresh(bool /*force*/)
     ui::DebugMsgProxy::instance().request_env_sim_state();
     ui::DebugMsgProxy::instance().request_env_sim_powder_state();
     ui::DebugMsgProxy::instance().request_first_layer_visual_check_state();
+    ui::DebugMsgProxy::instance().request_local_rtsp_state();
 }
 
 void page_user_debug_exit(void)
@@ -2137,6 +2167,7 @@ void page_user_debug_exit(void)
     proxy.register_env_sim(nullptr);
     proxy.register_env_sim_powder(nullptr);
     proxy.register_first_layer_visual_check(nullptr);
+    proxy.register_local_rtsp(nullptr);
 }
 
 lv_obj_t *page_user_debug_create(lv_obj_t *parent)
