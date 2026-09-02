@@ -55,6 +55,12 @@ private:
     /** 调试页开关：开/停本地局域网 RTSP Server，随后回报实际状态。 */
     void handle_local_rtsp_set(const middleware::Message& msg);
     void handle_local_rtsp_get(const middleware::Message& msg);
+    /**
+     * 按 local_rtsp_desired_ 拉起本地 RTSP。
+     * 相机流就绪后调用：开流前编码几何未知，start() 必失败，故上电默认开启
+     * 只能推迟到这里；已在运行则跳过（相机看门狗重启不会打断在连客户端）。
+     */
+    void apply_local_rtsp_desired();
     /** 向 UI 回报本地 RTSP Server 实际开关状态（开启失败时为 0）。 */
     void publish_local_rtsp_state() const;
     void send_rtsp_rsp(middleware::MsgType type,
@@ -167,6 +173,9 @@ private:
     H264StreamEncoder h264_encoder_;
     LiveRtspPusher live_rtsp_;
     LocalRtspServer local_rtsp_;
+    /** 本地 RTSP 的期望状态：上电取 UPC_LOCAL_RTSP_AUTO_START，之后跟随调试页开关。
+     *  与 active() 分开记，才能在相机流恢复后重建用户真正想要的状态。 */
+    bool local_rtsp_desired_ = (UPC_LOCAL_RTSP_AUTO_START != 0);
 };
 
 } // namespace upc::media

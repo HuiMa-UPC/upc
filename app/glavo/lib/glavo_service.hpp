@@ -139,8 +139,8 @@ private:
     bool publish_first_layer_visual_session(bool active, const char* reason);
     bool request_first_layer_visual_check(uint16_t layer_height_um);
     void handle_visual_first_layer_check_rsp(const middleware::Message& msg);
-    /** @brief 联动切换红光/激光模式（TCP 红光 + 串口激光使能），可选按缓存去重。 */
-    bool apply_red_laser_mode(bool red_on, bool dedup, const char* reason);
+    /** @brief 联动切换红光/激光模式（TCP 红光 + 串口激光使能），每次调用都下发。 */
+    bool apply_red_laser_mode(bool red_on, const char* reason);
     void debug_tx(const uint8_t* frame, int n);
 
     /** @brief About 页版本查询：下发串口 TLV_GET_VERSION，应答由 McuLink 直接推 UI */
@@ -261,8 +261,6 @@ private:
     bool env_sim_on_ = false;  /**< 环境上报模拟（仅本次运行，默认关） */
     bool env_sim_powder_low_on_ = false; /**< 环境模拟粉量缺粉开关（目标状态，延迟生效由 McuLink 管） */
     bool ignore_powder_low_for_current_print_ = false; /**< 本次打印是否忽略缺粉检测（Cancel 后置位） */
-    bool red_laser_cmd_cached_ = false;       /**< 最近一次已下发红光状态 */
-    bool red_laser_cmd_cached_valid_ = false; /**< 最近一次红光状态是否有效 */
     std::mutex first_layer_visual_mtx_;
     std::condition_variable first_layer_visual_cv_;
     bool first_layer_visual_waiting_ = false;

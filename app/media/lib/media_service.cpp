@@ -366,6 +366,24 @@ void MediaService::on_stream_start_rsp(const middleware::Message& msg)
 
     stop_worker_.store(false);
     worker_ = std::thread(&MediaService::worker_thread_fn, this);
+
+    /* 几何已知、worker 已起，此时才具备开本地 RTSP 的条件。 */
+    apply_local_rtsp_desired();
+}
+
+/**
+ * 按期望状态拉起本地 RTSP（相机流就绪后）。
+ * 已在运行则跳过：相机看门狗重启会再次走到这里，重开会白白断掉在连的客户端。
+ */
+void MediaService::apply_local_rtsp_desired()
+{
+    if(!local_rtsp_desired_ || local_rtsp_.active()) {
+        return;
+    }
+    if(!local_rtsp_.start()) {
+        UPC_LOG_MEDIA_SERVICE(Warn, "local_rtsp auto start failed");
+    }
+    publish_local_rtsp_state();
 }
 
 void MediaService::on_stream_stop_done(const middleware::Message& msg)
@@ -942,6 +960,9 @@ void MediaService::handle_local_rtsp_set(const middleware::Message& msg)
         publish_local_rtsp_state();
         return;
     }
+
+    /* 记住用户意图：相机流中断再恢复时据此重建，而不是一律回到上电默认值。 */
+    local_rtsp_desired_ = (req.on != 0);
 
     if(req.on != 0) {
         {

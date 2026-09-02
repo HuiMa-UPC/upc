@@ -129,6 +129,14 @@
 #ifndef UPC_GLAVO_LOG_LASER_POWER_DEFAULT
 #define UPC_GLAVO_LOG_LASER_POWER_DEFAULT 1
 #endif
+/**
+ * Media: 直播链路运行期心跳统计日志（`h264_enc/live_rtsp/local_rtsp stat`，5s 一行）。
+ * 排查"画面卡住/延迟大"时靠它定位断点，平时嫌吵可置 0；
+ * 关闭只停打印，计数仍在累加，停流时的汇总日志不受影响。
+ */
+#ifndef UPC_MEDIA_LOG_STREAM_STAT
+#define UPC_MEDIA_LOG_STREAM_STAT 0
+#endif
 
 #else /* !UPC_DEBUG */
 
@@ -155,6 +163,7 @@
 #define UPC_GLAVO_LOG_TCP_HEARTBEAT_RSP_DEFAULT 0
 #define UPC_GLAVO_LOG_TCP_TX_DEFAULT 0
 #define UPC_GLAVO_LOG_LASER_POWER_DEFAULT 0
+#define UPC_MEDIA_LOG_STREAM_STAT 0
 
 #endif /* UPC_DEBUG */
 
@@ -429,7 +438,7 @@ enum class MsgType : uint32_t {
     GLAVO_Debug_Sensor_Ntf = 0x1200, /**< DebugSensorPayload：顶部 7 路传感器 */
     GLAVO_Debug_Axis_Ntf,           /**< DebugAxisStatePayload：Z/S/D 位置 + Z 工作坐标 */
     GLAVO_Debug_Device_Ntf,         /**< DebugDeviceStatePayload：设备/门/电机/照明 */
-    GLAVO_Debug_Galvo_Ntf,          /**< DebugGalvoStatePayload：振镜 X/Y + 红光 */
+    GLAVO_Debug_Galvo_Ntf,          /**< DebugGalvoStatePayload：振镜 X/Y */
     GLAVO_Debug_Laser_Ntf,          /**< DebugLaserStatePayload：激光器状态/报警/功率/温度 */
     GLAVO_Debug_Print_H264_Record_Ntf, /**< DebugOnOffPayload：打印期连续 H264 录像开关状态 */
     GLAVO_Debug_Clean_Record_Ntf,      /**< DebugOnOffPayload：清粉录像开关状态 */
@@ -1236,12 +1245,10 @@ struct DebugDeviceStatePayload {
     uint8_t light_on;
 };
 
-/** GLAVO_Debug_Galvo_Ntf：振镜 X/Y + 红光 */
+/** GLAVO_Debug_Galvo_Ntf：振镜 X/Y */
 struct DebugGalvoStatePayload {
     float   x;
     float   y;
-    uint8_t red_light_on;
-    uint8_t reserved[3];
 };
 
 struct DebugPowderBucketStatePayload {

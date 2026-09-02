@@ -22,13 +22,18 @@ namespace upc::media {
 
 namespace {
 
-/** 墙钟微秒，用作 RTP 时间戳基准。 */
+#if UPC_MEDIA_LOG_STREAM_STAT
+/**
+ * 墙钟微秒，仅供心跳日志计时。
+ * 帧的 presentation time 由编码器在采帧时打好后透传，不在本文件取时刻。
+ */
 int64_t now_us()
 {
     return static_cast<int64_t>(
         std::chrono::duration_cast<std::chrono::microseconds>(
             std::chrono::system_clock::now().time_since_epoch()).count());
 }
+#endif
 
 /** WiFi 接口名；与 `wifi_manager` 的 `UPC_WIFI_IFACE` 约定保持一致。 */
 const char* wifi_iface_name()
@@ -386,6 +391,7 @@ bool LocalRtspServer::pop_nal(NalUnit& out)
     }
     out = std::move(nal_queue_.front());
     nal_queue_.pop_front();
+    ++stat_nal_out_;
     return true;
 }
 
@@ -398,6 +404,7 @@ bool LocalRtspServer::pop_nal(NalUnit& out)
 void LocalRtspServer::attach_source(void* source)
 {
     current_source_ = source;
+    has_client_.store(true);
     UPC_LOG_MEDIA_SERVICE(Info, "local_rtsp client stream started");
 }
 
@@ -406,6 +413,7 @@ void LocalRtspServer::detach_source(void* source)
 {
     if(current_source_ == source) {
         current_source_ = nullptr;
+        has_client_.store(false);
         UPC_LOG_MEDIA_SERVICE(Info, "local_rtsp client stream ended");
     }
 }
@@ -689,8 +697,8 @@ bool LocalRtspServer::start()
     /* 码率不指定：与云端推流共用编码器时沿用既有参数，独占时用板端默认。 */
     H264StreamEncoder::SinkOptions opt{};
     const int sink_id = encoder->add_sink(
-        [this](const uint8_t* annexb, size_t len, bool) {
-            return on_encoded_packet(annexb, len);
+        [this](const uint8_t* annexb, size_t len, bool, int64_t pts_us) {
+            return on_encoded_packet(annexb, len, pts_us);
         },
         [this] { on_sink_dropped(); },
         opt);
@@ -705,6 +713,11 @@ bool LocalRtspServer::start()
         active_ = true;
         nal_queue_.clear();
         dropped_ = 0;
+        stat_nal_in_ = 0;
+        stat_nal_out_ = 0;
+        stat_last_log_us_ = 0;
+        stat_last_in_ = 0;
+        stat_last_out_ = 0;
     }
     post_cmd(Cmd::AddSession);
 
@@ -761,8 +774,13 @@ void LocalRtspServer::stop()
  *
  * 队列满时丢最旧（实时优先）。始终返回 true：本地投递不会像管道那样断开，
  * 停流由 stop() 主动摘 sink 完成。
+ *
+ * pts_us 由编码器在采帧时统一打戳并透传，本帧全部 NAL 共用；不可在此处
+ * 各自取时刻，否则同一 AU 的 NAL 会带不同 presentation time，live555 据此
+ * 判定 AU 边界与 marker bit，客户端会报 "missing picture in access unit"。
  */
-bool LocalRtspServer::on_encoded_packet(const uint8_t* annexb, size_t len)
+bool LocalRtspServer::on_encoded_packet(const uint8_t* annexb, size_t len,
+                                        int64_t pts_us)
 {
     bool queued = false;
     {
@@ -770,9 +788,8 @@ bool LocalRtspServer::on_encoded_packet(const uint8_t* annexb, size_t len)
         if(!active_) {
             return true;
         }
-        const int64_t pts = now_us();
         H264StreamEncoder::for_each_nal(annexb, len,
-            [this, pts, &queued](const uint8_t* nal, size_t nal_len) {
+            [this, pts_us, &queued](const uint8_t* nal, size_t nal_len) {
                 if(nal_len == 0) {
                     return;
                 }
@@ -782,15 +799,58 @@ bool LocalRtspServer::on_encoded_packet(const uint8_t* annexb, size_t len)
                 }
                 NalUnit unit;
                 unit.data.assign(nal, nal + nal_len);
-                unit.pts_us = pts;
+                unit.pts_us = pts_us;
                 nal_queue_.push_back(std::move(unit));
+                ++stat_nal_in_;
                 queued = true;
             });
+        maybe_log_stats_locked();
     }
     if(queued) {
         notify_frame_ready();
     }
     return true;
+}
+
+/**
+ * 每 5 秒打一行本地直播心跳。
+ *
+ * queue 持续贴近上限说明 live555 取不赢，端到端延迟会顶到队列容量对应的
+ * 时长（默认 128 个 NAL、30fps 下约 4s）；in 涨而 out 不涨说明事件循环
+ * 或客户端连接卡住了。调用前必须持有 mtx_。
+ *
+ * 由 UPC_MEDIA_LOG_STREAM_STAT 控制；关闭时本函数为空，计数照常累加。
+ */
+void LocalRtspServer::maybe_log_stats_locked()
+{
+#if UPC_MEDIA_LOG_STREAM_STAT
+    const int64_t now = now_us();
+    if(stat_last_log_us_ == 0) {
+        stat_last_log_us_ = now;
+        return;
+    }
+    const int64_t elapsed = now - stat_last_log_us_;
+    if(elapsed < kStatsPeriodUs) {
+        return;
+    }
+
+    const double secs = static_cast<double>(elapsed) / 1000000.0;
+    const uint64_t d_in = stat_nal_in_ - stat_last_in_;
+    const uint64_t d_out = stat_nal_out_ - stat_last_out_;
+    UPC_LOG_MEDIA_SERVICE(Info,
+        "local_rtsp stat in=%llu(%.1f/s) out=%llu(%.1f/s) queue=%zu/%u "
+        "dropped=%u client=%d",
+        static_cast<unsigned long long>(stat_nal_in_),
+        static_cast<double>(d_in) / secs,
+        static_cast<unsigned long long>(stat_nal_out_),
+        static_cast<double>(d_out) / secs,
+        nal_queue_.size(), UPC_LOCAL_RTSP_QUEUE_MAX,
+        dropped_, has_client_.load() ? 1 : 0);
+
+    stat_last_log_us_ = now;
+    stat_last_in_ = stat_nal_in_;
+    stat_last_out_ = stat_nal_out_;
+#endif /* UPC_MEDIA_LOG_STREAM_STAT */
 }
 
 /** 编码器摘除本路 sink（编码器级故障）：撤下 session 并复位开关。 */

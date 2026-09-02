@@ -74,7 +74,6 @@ lv_obj_t *g_laser_power_lbl     = nullptr;      /**< 功率读数 */
 lv_obj_t *g_laser_power_ta      = nullptr;      /**< 设置功率输入 */
 lv_obj_t *g_laser_type_lbl      = nullptr;      /**< 激光器类型显示区（JFSC / AL 200W / …） */
 lv_obj_t *g_laser_current_lbl   = nullptr;      /**< 电流读数 */
-lv_obj_t *g_laser_redlight_seg  = nullptr;      /**< 红光模式开关（On/Off） */
 uint8_t   g_laser_type_code     = 0;            /**< 最近一次上报的激光器型号（0=未知 1=JFSC 2=AL） */
 
 lv_obj_t *g_sensor_val[7] = { nullptr };
@@ -715,6 +714,17 @@ void on_red_laser_changed(lv_event_t *e)
         ui_user_segmented_get_selected(seg) == 0);
 }
 
+/* Laser 页红光/激光：按一下发一条，不跟随设备真实状态（纯测试用途）。 */
+void on_red_mode_click(lv_event_t *)
+{
+    ui::DebugMsgProxy::instance().send_galvo_red_light(true);
+}
+
+void on_laser_mode_click(lv_event_t *)
+{
+    ui::DebugMsgProxy::instance().send_galvo_red_light(false);
+}
+
 void on_galvo_save(lv_event_t *)
 {
     ui::DebugMsgProxy::instance().send_galvo_param_save(
@@ -1091,8 +1101,8 @@ void on_dbg_toggle(lv_event_t *e)
                      }
                  }
                  break;
-        /* 本地局域网 RTSP Server（→Media，仅本次运行）。相机流未就绪时 Media 会回 Off，
-         * register_local_rtsp 的回调据此把按钮弹回。 */
+        /* 本地局域网 RTSP Server（→Media，仅本次运行；上电默认开启）。相机流未就绪时
+         * Media 会回 Off，register_local_rtsp 的回调据此把按钮弹回。 */
         case 13: proxy.send_local_rtsp_set(on);
                  break;
         default: break;
@@ -1506,8 +1516,10 @@ void build_other_switches_card(lv_obj_t *parent)
     make_dbg_toggle(rowD, "Alarm Inject", "On", "Off", LV_SYMBOL_WARNING, false, 12, 0);
 
     lv_obj_t *rowE = make_switch_grid_row(grid);
-    /* 局域网 RTSP 直播：桌面/安卓端用 rtsp://<本机IP>:8554/live 拉流，地址见 Media 日志 */
-    make_dbg_toggle(rowE, "Local RTSP", "On", "Off", LV_SYMBOL_VIDEO, false,
+    /* 局域网 RTSP 直播：桌面/安卓端用 rtsp://<本机IP>:8554/live 拉流，地址见 Media 日志。
+     * 初值 true 对齐 Media 的 UPC_LOCAL_RTSP_AUTO_START（上电自动开启），免得首帧
+     * 先画成 Off 再被回报刷成 On；Media 若未能开起来会回报 Off，按钮随之弹回。 */
+    make_dbg_toggle(rowE, "Local RTSP", "On", "Off", LV_SYMBOL_VIDEO, true,
                     13, 0, true, 0, &g_local_rtsp_btn, &g_local_rtsp_state_lbl);
 }
 
@@ -1838,12 +1850,20 @@ lv_obj_t *build_laser_tab(lv_obj_t *body)
     lv_obj_t *cancelrow = make_action_row(pc_card, "Cancel Power");
     make_ghost_button(cancelrow, "Cancel", on_laser_power_cancel);
 
+    /* 红光/激光：两个独立按钮，按一下即下发一次对应模式指令。
+     * 不做状态回读，界面上无“当前模式”概念，纯测试下发用。 */
     lv_obj_t *redrow = make_action_row(pc_card, "Red Laser Mode");
-    const char *onoff[2] = { "On", "Off" };
-    g_laser_redlight_seg = ui_user_make_segmented(redrow, onoff, 2, 0);
-    lv_obj_add_event_cb(g_laser_redlight_seg, on_red_laser_changed, LV_EVENT_VALUE_CHANGED, nullptr);
-    seg_fit_content(g_laser_redlight_seg);
-    style_debug_seg(g_laser_redlight_seg);
+    lv_obj_t *redbtns = lv_obj_create(redrow);
+    lv_obj_remove_style_all(redbtns);
+    lv_obj_set_size(redbtns, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(redbtns, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(redbtns, LV_FLEX_ALIGN_END,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_column(redbtns, USER_PAD_SM, 0);
+    lv_obj_set_style_bg_opa(redbtns, LV_OPA_TRANSP, 0);
+    lv_obj_clear_flag(redbtns, LV_OBJ_FLAG_SCROLLABLE);
+    make_ghost_button(redbtns, "Red", on_red_mode_click);
+    make_ghost_button(redbtns, "Laser", on_laser_mode_click);
 
     lv_obj_t *ops_card = make_laser_card(right, "Alarm Ops");
     lv_obj_t *opsrow = make_action_row(ops_card, "Laser Alarm Reset");
@@ -1954,12 +1974,6 @@ void bind_debug_callbacks()
                     on ? user_color_status_ok : user_color_icon_off, 0);
             }
         }
-        /* 红光模式按钮跟随后端实际状态回读，避免界面与设备状态不一致。 */
-        if(g_laser_redlight_seg) {
-            const bool red_on = (p.status & 0x0001u) != 0;
-            ui_user_segmented_set_selected(g_laser_redlight_seg, red_on ? 0u : 1u);
-        }
-
         /* 温度：JFSC 原始整数℃；AL 单位 0.1℃ */
         if(g_laser_temp_lbl) {
             if(is_al) {
@@ -2096,7 +2110,7 @@ void reset_globals()
     ui::debug_test_reset();
     g_tab1 = g_tab2 = g_tab3 = g_tab4 = nullptr;
     g_laser_alarm_box = g_laser_temp_lbl = g_laser_power_lbl = g_laser_power_ta = nullptr;
-    g_laser_type_lbl = g_laser_current_lbl = g_laser_redlight_seg = nullptr;
+    g_laser_type_lbl = g_laser_current_lbl = nullptr;
     g_laser_type_code = 0;
     for(int i = 0; i < 4; i++) {
         g_laser_status_lbl[i] = nullptr;

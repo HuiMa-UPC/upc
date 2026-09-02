@@ -14,9 +14,9 @@
 | `../media/lib/print_video_recorder.*` | 元数据环取帧 → ffmpeg 软编 PNG → `/home/media/video/tmp/` + `.rthm` |
 | `../media/lib/print_h264_recorder.*` | 预览 NV12 异步入队；worker RKMPP 实时编 `print.h264`（队列满丢帧） |
 | `../media/lib/clean_video_recorder.*` | 清粉延时抽帧：按 `TIMELAPSE_VIDEO_FPS` 写接续 PNG，成功后重建 `timelapse.mp4`+`thumb.rthm` 并删除清粉 PNG |
-| `../media/lib/h264_stream_encoder.*` | 直播共用 RKMPP 编码器：NV12 单槽 latest-wins → Annex-B → 多 sink 分发；缓存 SPS/PPS |
-| `../media/lib/live_rtsp_pusher.*` | 云端 live：编码器 sink → ffmpeg `-c copy -f rtsp`（`push_url` 原样；不摘 Camera peer） |
-| `../media/lib/local_rtsp_server.*` | 局域网 live：编码器 sink → live555 RTSP Server（调试开关控制，默认关） |
+| `../media/lib/h264_stream_encoder.*` | 直播共用 RKMPP 编码器：NV12 单槽 latest-wins → Annex-B → 多 sink 分发（带采帧 pts）；缓存 SPS/PPS |
+| `../media/lib/live_rtsp_pusher.*` | 云端 live：编码器 sink → 发送队列 → writer 线程 → ffmpeg `-c copy -f rtsp`（`push_url` 原样；不摘 Camera peer） |
+| `../media/lib/local_rtsp_server.*` | 局域网 live：编码器 sink → live555 RTSP Server（上电默认开，调试开关可改） |
 | `lib/device_config.hpp` | 设备、分辨率、IQ、SHM、录像路径宏 |
 
 ## 数据路径
@@ -94,24 +94,35 @@ Glavo Snap IPC → PrintVideoRecorder worker
 
 与层间 `PrintVideoRecorder` worker 并行；结果页仍只等层间 Manifest，不依赖 H264 编完。
 磁盘跟不上时录像可能丢帧（日志 `print_h264 queue full drop=...`），优先保证预览不卡死。
-CBR 码率默认中等（`CAMERA_PRINT_H264_BITRATE`=2.5Mbps）；可由 `cal.csv` Config 段 `PRINT_H264_BITRATE`（500000–8000000）覆盖，经 `PrintVideoSessionPayload.h264_bitrate` 下发。
+CBR 码率默认 `CAMERA_PRINT_H264_BITRATE`=2048kbps（与直播共用同一常量）；可由 `cal.csv` Config 段 `PRINT_H264_BITRATE`（500000–8000000）覆盖，经 `PrintVideoSessionPayload.h264_bitrate` 下发。
 
 ### 直播（云端推流 + 局域网 RTSP Server）
 
 两路直播**共用同一路 H.264 编码**（`H264StreamEncoder`），只编一次、分发多份：
 
 ```
-预览帧 → H264StreamEncoder.on_frame_nv12（单槽 latest-wins，积压丢旧帧）
-  → worker：RKMPP CBR 编 Annex-B（GOP≈1s，每个 IDR 都带 SPS/PPS）
-  → sink 分发：
-      · LiveRtspPusher   → write(ffmpeg stdin) → -c copy -f rtsp → 云端 push_url
+预览帧 → H264StreamEncoder.on_frame_nv12（单槽 latest-wins，积压丢旧帧；此处打采帧时间戳）
+  → worker：RKMPP CBR 编 Annex-B（GOP=fps/2≈0.5s，每个 IDR 都带 SPS/PPS）
+  → sink 分发（带同一帧的 pts_us）：
+      · LiveRtspPusher   → 入发送队列 → writer 线程 write(ffmpeg stdin)
+                         → -c copy -f rtsp → 云端 push_url
       · LocalRtspServer  → 拆裸 NAL 入队 + triggerEvent
                          → live555 事件循环：H264VideoStreamDiscreteFramer → RTP
 ```
 
-- 编码参数由**首个** sink 决定（云端 `max_bitrate_kbps`；本地不指定，沿用既有或板端默认），
-  后续 sink 沿用——改码率需重开 MPP，会打断在途的另一路。
+- 码率**固定**取 `CAMERA_PRINT_H264_BITRATE`，不按 sink 指定：改码率需重开 MPP，会打断在途的
+  另一路。云端下发的 `max_bitrate_kbps` 不再参与配置，仅在与板端值不同时记一条日志备查。
+- **时间戳在采帧时打，一帧一个值，透传给该帧产生的所有包**。不可由各 sink 自行取时刻：
+  MPP 可能把一帧拆成多个包（EACH_IDR 下参数集常自成一包），若各包 presentation time 不同，
+  live555 会误判 AU 边界、marker bit 置错，客户端报 `missing picture in access unit`；
+  取编码完成时刻也不行——编码耗时抖动会灌进 pts，播放器为抹平抖动而加大缓冲、拉高延迟。
 - sink 之间互不连坐：某一路投递失败只摘该路；只有 MPP 自身失败才停整个编码会话。
+- **sink 回调不得阻塞**：编码器 worker 串行调用各 sink，任一路阻塞都会连带冻结其余路。
+  故云端那路只入队即返回，实际 `write()` 下沉到自己的 writer 线程（管道设 `O_NONBLOCK`，
+  写满时 `poll(POLLOUT)` 等待）；队列积压超 `UPC_LIVE_PUSH_QUEUE_MAX_BYTES`（默认 1MB）时
+  **整段丢弃到下一个 IDR**，而不是丢单个包——给 ffmpeg 送残缺 NAL 会直接破坏码流。
+- 会话拆除顺序固定为 **摘 sink → 停 writer → 关 ffmpeg fd**：摘 sink 返回后才没有新包入队，
+  而 writer 可能正卡在该 fd 的 `poll` 上，先关 fd 会让它 poll 到已回收的描述符。
 - **live555 事件循环随 Media 进程常驻**，不随开关销毁（反复销毁 env/scheduler 易踩回收陷阱）；
   开关只控制 `ServerMediaSession` 的挂载与编码器 sink 的增删。
 - 除 `triggerEvent()` 外，所有 live555 API 只能在事件循环线程内调用；挂/摘 session 通过命令队列投递。
@@ -123,10 +134,24 @@ CBR 码率默认中等（`CAMERA_PRINT_H264_BITRATE`=2.5Mbps）；可由 `cal.cs
 - **`OutPacketBuffer::maxSize` 必须调大**（`UPC_LOCAL_RTSP_MAX_FRAME_BYTES`，默认 1MB）：
   live555 默认只有 60000 字节，而 1080×1280 的 I 帧可达 150～200KB，超出部分被 RTPSink
   静默丢弃，客户端每个 I 帧花屏且误差沿 P 帧传播。必须在任何 RTPSink 构造前设好。
+- **上电默认开启**（`UPC_LOCAL_RTSP_AUTO_START`，默认 1）。实际拉起时机是相机流就绪之后
+  （`on_stream_start_rsp` 末尾）——开流前编码几何未知，`start()` 必失败。
+  Media 侧另记 `local_rtsp_desired_`：调试页开关会改写它，相机看门狗重启后据此重建用户
+  真正想要的状态，而不是一律回到上电默认值；已在运行则跳过，避免打断在连客户端。
 - 相机流未就绪时 Media 回 `on=0`，UI 开关自动弹回。
 - 日志：`live_rtsp` / `local_rtsp` / `h264_enc` 三个前缀都归入 `topic_media_rtsp.log`；
   `local_rtsp client stream started/ended` 标记首个客户端接入与最后一个客户端离开；
   live555 库内诊断经 `LogUsageEnvironment` 转成 `local_rtsp live555: …`（默认只落 stderr，不接就看不见）。
+- **运行期心跳**：三处各 5s 一行，是排查"画面卡住"的第一现场（此前所有计数只在 stop 时才打印，
+  故障时完全看不出断在哪一环）。由 `UPC_MEDIA_LOG_STREAM_STAT`（`upc_contract.hpp`，**默认 0**，
+  平时嫌吵，排查时置 1 重编）控制；置 0 时整段代码不编入二进制，计数仍照常累加、
+  停流汇总日志不受影响：
+
+  | 日志 | 关键字段 | 怎么读 |
+  |---|---|---|
+  | `h264_enc stat` | `sinks` / `in` / `enc` / `kbps` / `overwritten` | `in` 不涨=相机没送帧；`in` 涨而 `enc` 不涨=卡在 MPP 或某路 sink 回调；`overwritten`=单槽被新帧覆盖的次数 |
+  | `live_rtsp stat` | `in` / `out` / `kbps` / `queue` / `dropped` / `drop_events` | `queue` 持续贴上限=云端吃不下该码率；`in` 涨而 `out` 不涨=写端卡住 |
+  | `local_rtsp stat` | `in` / `out` / `queue` / `dropped` / `client` | `queue` 持续贴上限=live555 取不赢，延迟会顶到队列容量对应时长 |
 
 `config.json` 由 Media 独写；字段含 `job_name` / `start_unix` / `duration_sec` / `material_g` / `status` / `frames_dir` / `thumb`。UI 历史页直读该文件（解析见 `common/fs_manifest/print_history_manifest.*`）。
 
@@ -178,7 +203,13 @@ Glavo→Media 经 Broker 转发；`sender_id` 仍为 `APP_GLAVO`（见 IPC.md）
 | ffmpeg | `/usr/bin/ffmpeg` | `CAMERA_FFMPEG_BIN` |
 | 本地 RTSP 端口 | 8554 | `UPC_LOCAL_RTSP_PORT` / `UPC_LOCAL_RTSP_PORT_DEFAULT` |
 | 本地 RTSP 流名 | `live` | `UPC_LOCAL_RTSP_STREAM_NAME` |
-| 本地 RTSP NAL 队列 | 128（满丢最旧） | `UPC_LOCAL_RTSP_QUEUE_MAX` |
+| 本地 RTSP 上电默认 | 开（相机流就绪后拉起） | `UPC_LOCAL_RTSP_AUTO_START` |
+| 本地 RTSP NAL 队列 | 128（满丢最旧） | `UPC_LOCAL_RTSP_QUEUE_MAX`（30fps 下约合 4s，即积压时的延迟上限） |
+| 本地 RTSP 单帧上限 | 1 MB | `UPC_LOCAL_RTSP_MAX_FRAME_BYTES`（`OutPacketBuffer::maxSize`） |
+| 云端推流发送队列 | 1 MB（满则丢到下个 IDR） | `UPC_LIVE_PUSH_QUEUE_MAX_BYTES` |
+| 直播/录像码率 | 2048 kbps | `CAMERA_PRINT_H264_BITRATE`（直播固定；录像可被 `cal.csv` 覆盖） |
+| 直播 GOP | `fps/2`≈0.5s（每秒 2 个 IDR） | `h264_stream_encoder.cpp` `rc:gop` |
+| 心跳日志周期 | 5 s | 三处 `kStatsPeriodUs`；开关 `UPC_MEDIA_LOG_STREAM_STAT`（默认 0） |
 
 SHM 元数据环：`stride_y` 为 V4L2 实际 Y stride（dma 模式），`buffer_idx` 指向 fd 表；像素走 dma fd。
 

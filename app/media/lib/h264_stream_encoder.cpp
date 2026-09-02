@@ -3,6 +3,7 @@
 #include "rs_log.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cstring>
 
 #if defined(UPC_MEDIA_HAS_MPP) && UPC_MEDIA_HAS_MPP
@@ -21,6 +22,17 @@ constexpr uint8_t kNalTypeIdr = 5;
 constexpr uint8_t kNalTypeSps = 7;
 /** H.264 NAL 类型：图像参数集。 */
 constexpr uint8_t kNalTypePps = 8;
+
+/**
+ * 墙钟微秒。用作帧的 presentation time 基准：live555 的 RTCP SR 要拿它
+ * 换算 NTP 时间戳，故必须是墙钟而非单调钟。
+ */
+int64_t now_us()
+{
+    return static_cast<int64_t>(
+        std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count());
+}
 } // namespace
 
 /**
@@ -176,8 +188,9 @@ void H264StreamEncoder::copy_nv12_tight(uint8_t* dst, const uint8_t* src_y,
 /**
  * 注册一路 sink。
  *
- * 首个 sink 决定编码参数并打开 MPP；后续 sink 沿用，其 desired_bitrate_bps
- * 被忽略（改码率需重开 MPP，会打断在途的另一路）。
+ * 首个 sink 打开 MPP，后续 sink 沿用同一路码流。
+ * 码率固定取 CAMERA_PRINT_H264_BITRATE，不接受按 sink 指定：改码率需重开
+ * MPP，会打断在途的另一路。
  */
 int H264StreamEncoder::add_sink(PacketCb on_packet, ErrorCb on_error,
                                 const SinkOptions& opt)
@@ -194,8 +207,6 @@ int H264StreamEncoder::add_sink(PacketCb on_packet, ErrorCb on_error,
 
     const bool first = sinks_.empty();
     if(first) {
-        bitrate_bps_ = opt.desired_bitrate_bps > 0 ? opt.desired_bitrate_bps
-                                                   : CAMERA_PRINT_H264_BITRATE;
         sps_.clear();
         pps_.clear();
         has_pending_ = false;
@@ -209,10 +220,6 @@ int H264StreamEncoder::add_sink(PacketCb on_packet, ErrorCb on_error,
             worker_ = std::thread(&H264StreamEncoder::worker_fn, this);
             worker_started_ = true;
         }
-    } else if(opt.desired_bitrate_bps > 0 && opt.desired_bitrate_bps != bitrate_bps_) {
-        UPC_LOG_MEDIA_SERVICE(Info,
-            "h264_enc bitrate %u kept (sink asked %u; encoder is shared)",
-            bitrate_bps_, opt.desired_bitrate_bps);
     }
 
     auto entry = std::make_shared<SinkEntry>();
@@ -226,7 +233,7 @@ int H264StreamEncoder::add_sink(PacketCb on_packet, ErrorCb on_error,
     const uint32_t log_w = width_;
     const uint32_t log_h = height_;
     const uint32_t log_fps = fps_;
-    const uint32_t log_bps = bitrate_bps_;
+    const uint32_t log_bps = CAMERA_PRINT_H264_BITRATE;
     lock.unlock();
 
     if(opt.request_idr_on_join) {
@@ -311,9 +318,57 @@ void H264StreamEncoder::on_frame_nv12(const uint8_t* src_y, const uint8_t* src_u
         copy_nv12_tight(pending_nv12_.data(), src_y, src_uv, stride_y, w, h);
         pending_w_ = w;
         pending_h_ = h;
+        /* 采帧时刻打戳，而非编码完成时刻：后者会把编码耗时的抖动直接
+         * 灌进 presentation time，客户端为抹平抖动会加大缓冲、拉高延迟。 */
+        pending_pts_us_ = now_us();
         has_pending_ = true;
+        ++stat_in_frames_;
     }
     cv_.notify_one();
+}
+
+/**
+ * 每 5 秒打一行运行期心跳。
+ *
+ * 这几个计数是排查"画面卡住"时的第一现场：in 不涨说明相机没送帧，
+ * in 涨而 enc 不涨说明卡在 MPP 或某个 sink 的投递回调里，两者都涨
+ * 则说明编码链路正常，问题在下游传输。调用前必须持有 mtx_。
+ *
+ * 由 UPC_MEDIA_LOG_STREAM_STAT 控制；关闭时本函数为空，计数照常累加。
+ */
+void H264StreamEncoder::maybe_log_stats_locked()
+{
+#if UPC_MEDIA_LOG_STREAM_STAT
+    const int64_t now = now_us();
+    if(stat_last_log_us_ == 0) {
+        stat_last_log_us_ = now;
+        return;
+    }
+    const int64_t elapsed = now - stat_last_log_us_;
+    if(elapsed < kStatsPeriodUs) {
+        return;
+    }
+
+    const uint64_t d_in = stat_in_frames_ - stat_last_in_;
+    const uint64_t d_enc = stat_enc_frames_ - stat_last_enc_;
+    const uint64_t d_bytes = stat_enc_bytes_ - stat_last_bytes_;
+    const double secs = static_cast<double>(elapsed) / 1000000.0;
+    UPC_LOG_MEDIA_SERVICE(Info,
+        "h264_enc stat sinks=%zu in=%llu(%.1f/s) enc=%llu(%.1f/s) "
+        "kbps=%.0f overwritten=%u",
+        sinks_.size(),
+        static_cast<unsigned long long>(stat_in_frames_),
+        static_cast<double>(d_in) / secs,
+        static_cast<unsigned long long>(stat_enc_frames_),
+        static_cast<double>(d_enc) / secs,
+        static_cast<double>(d_bytes) * 8.0 / secs / 1000.0,
+        dropped_);
+
+    stat_last_log_us_ = now;
+    stat_last_in_ = stat_in_frames_;
+    stat_last_enc_ = stat_enc_frames_;
+    stat_last_bytes_ = stat_enc_bytes_;
+#endif /* UPC_MEDIA_LOG_STREAM_STAT */
 }
 
 /** join worker 并清除 started 标志；仅析构路径调用。 */
@@ -338,6 +393,7 @@ void H264StreamEncoder::worker_fn()
         std::vector<uint8_t> nv12;
         uint32_t w = 0;
         uint32_t h = 0;
+        int64_t pts_us = 0;
         std::vector<std::shared_ptr<SinkEntry>> sinks;
         void* ctx = nullptr;
         void* mpi = nullptr;
@@ -356,6 +412,7 @@ void H264StreamEncoder::worker_fn()
             nv12.swap(pending_nv12_);
             w = pending_w_;
             h = pending_h_;
+            pts_us = pending_pts_us_;
             has_pending_ = false;
             sinks = sinks_;
             ctx = mpp_ctx_;
@@ -364,11 +421,18 @@ void H264StreamEncoder::worker_fn()
         }
 
         std::vector<std::shared_ptr<SinkEntry>> failed;
-        const bool enc_ok = encode_and_dispatch(ctx, mpi, nv12, w, h, sinks, failed);
+        size_t enc_bytes = 0;
+        const bool enc_ok = encode_and_dispatch(ctx, mpi, nv12, w, h, pts_us,
+                                                sinks, failed, enc_bytes);
 
         {
             std::lock_guard<std::mutex> lock(mtx_);
             dispatching_ = false;
+            if(enc_ok) {
+                ++stat_enc_frames_;
+                stat_enc_bytes_ += enc_bytes;
+            }
+            maybe_log_stats_locked();
             if(!enc_ok) {
                 /* 编码器级故障：所有 sink 一起下线，避免持续空转。 */
                 failed = sinks_;
@@ -426,8 +490,7 @@ bool H264StreamEncoder::open_encoder_locked()
 
     (void)mpi->control(ctx, MPP_ENC_GET_CFG, cfg);
     const int fps = static_cast<int>(std::max(1u, fps_));
-    const int bps = static_cast<int>(bitrate_bps_ > 0 ? bitrate_bps_
-                                                      : CAMERA_PRINT_H264_BITRATE);
+    const int bps = static_cast<int>(CAMERA_PRINT_H264_BITRATE);
     mpp_enc_cfg_set_s32(cfg, "prep:width", static_cast<int>(width_));
     mpp_enc_cfg_set_s32(cfg, "prep:height", static_cast<int>(height_));
     mpp_enc_cfg_set_s32(cfg, "prep:hor_stride", static_cast<int>(width_));
@@ -437,8 +500,9 @@ bool H264StreamEncoder::open_encoder_locked()
     mpp_enc_cfg_set_s32(cfg, "rc:bps_target", bps);
     mpp_enc_cfg_set_s32(cfg, "rc:fps_in_num", fps);
     mpp_enc_cfg_set_s32(cfg, "rc:fps_out_num", fps);
-    /* ~1s IDR，便于 App 中途 PLAY */
-    mpp_enc_cfg_set_s32(cfg, "rc:gop", fps);
+    /* ~0.5s IDR（每秒两个）：客户端中途 PLAY 起图更快，丢包后恢复也更快，
+     * 代价是同码率下 I 帧占比翻倍、P 帧预算被摊薄。 */
+    mpp_enc_cfg_set_s32(cfg, "rc:gop", std::max(1, fps / 2));
     (void)mpi->control(ctx, MPP_ENC_SET_CFG, cfg);
 
     /* 每个 IDR 都重发 SPS/PPS：live555 客户端中途接入必须拿到参数集。 */
@@ -525,16 +589,19 @@ void H264StreamEncoder::request_idr()
  */
 bool H264StreamEncoder::encode_and_dispatch(
     void* ctx, void* mpi,
-    const std::vector<uint8_t>& nv12, uint32_t w, uint32_t h,
+    const std::vector<uint8_t>& nv12, uint32_t w, uint32_t h, int64_t pts_us,
     const std::vector<std::shared_ptr<SinkEntry>>& sinks,
-    std::vector<std::shared_ptr<SinkEntry>>& failed)
+    std::vector<std::shared_ptr<SinkEntry>>& failed,
+    size_t& out_bytes)
 {
+    out_bytes = 0;
 #if !(defined(UPC_MEDIA_HAS_MPP) && UPC_MEDIA_HAS_MPP)
     (void)ctx;
     (void)mpi;
     (void)nv12;
     (void)w;
     (void)h;
+    (void)pts_us;
     (void)sinks;
     (void)failed;
     return false;
@@ -594,11 +661,13 @@ bool H264StreamEncoder::encode_and_dispatch(
                 std::lock_guard<std::mutex> lock(mtx_);
                 keyframe = scan_packet(bytes, n);
             }
+            out_bytes += n;
+            /* 本帧所有 packet 共用同一个采帧时刻，见 PacketCb 注释。 */
             for(const auto& s : sinks) {
                 if(!s->alive.load()) {
                     continue;
                 }
-                if(!s->on_packet(bytes, n, keyframe)) {
+                if(!s->on_packet(bytes, n, keyframe, pts_us)) {
                     s->alive.store(false);
                     failed.push_back(s);
                 }

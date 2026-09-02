@@ -3,6 +3,7 @@
 
 #include "h264_stream_encoder.hpp"
 
+#include <atomic>
 #include <cstdint>
 #include <deque>
 #include <mutex>
@@ -18,6 +19,15 @@
 /** 本地 RTSP 流名：rtsp://<ip>:<port>/live */
 #ifndef UPC_LOCAL_RTSP_STREAM_NAME
 #define UPC_LOCAL_RTSP_STREAM_NAME "live"
+#endif
+
+/**
+ * 上电是否默认启用本地 RTSP（调试页 Other → Local RTSP 开关的初值）。
+ * 实际拉起时机是相机流就绪之后——开流前编码几何未知，start() 必失败。
+ * 置 0 则恢复"上电关闭、需手动打开"。
+ */
+#ifndef UPC_LOCAL_RTSP_AUTO_START
+#define UPC_LOCAL_RTSP_AUTO_START 1
 #endif
 
 /** NAL 队列上限（个）：超出丢最旧，保实时优先。 */
@@ -134,8 +144,11 @@ private:
         RemoveSession,  /**< 断开客户端并撤下 session */
     };
 
-    /** 编码器 sink 回调：拆包入队并唤醒事件循环。 */
-    bool on_encoded_packet(const uint8_t* annexb, size_t len);
+    /**
+     * 编码器 sink 回调：拆包入队并唤醒事件循环。
+     * @param pts_us 采帧时刻，本帧所有 NAL 共用（AU 边界判定依赖于此）。
+     */
+    bool on_encoded_packet(const uint8_t* annexb, size_t len, int64_t pts_us);
     /** 编码器摘除本路 sink 后的通知。 */
     void on_sink_dropped();
     /** 入队一条命令并触发事件循环处理。 */
@@ -146,6 +159,8 @@ private:
     void loop_fn();
     /** 清空 NAL 队列（停流时）。 */
     void clear_queue();
+    /** 距上次心跳满周期则打一行；调用前必须持有 mtx_。 */
+    void maybe_log_stats_locked();
     /** 取首选局域网 IPv4（`lan_ipv4_list()` 首项）；无可用地址返回空串。 */
     static std::string local_ipv4();
 
@@ -163,7 +178,19 @@ private:
     uint32_t dropped_ = 0;                /**< 队列溢出丢弃的 NAL 计数。 */
     std::deque<Cmd> cmd_queue_;
 
+    /* 运行期心跳统计：队列深度持续贴近上限即说明 live555 取不赢，延迟会顶到
+     * 队列容量对应的时长；in 涨而 out 不涨则说明事件循环卡住了。 */
+    static constexpr int64_t kStatsPeriodUs = 5000000; /**< 心跳周期 5s。 */
+    uint64_t stat_nal_in_ = 0;            /**< 累计入队 NAL 数。 */
+    uint64_t stat_nal_out_ = 0;           /**< 累计被 source 取走的 NAL 数。 */
+    int64_t  stat_last_log_us_ = 0;       /**< 上次心跳打印时刻；0=尚未打过。 */
+    uint64_t stat_last_in_ = 0;           /**< 上次心跳时的 stat_nal_in_。 */
+    uint64_t stat_last_out_ = 0;          /**< 上次心跳时的 stat_nal_out_。 */
+
     void* current_source_ = nullptr;      /**< H264FramedSource*，仅事件循环线程访问。 */
+    /** 有无客户端在拉流。current_source_ 无锁且仅限事件循环线程，
+     *  心跳日志跑在编码器 sink 线程上，故另用原子标志跨线程读。 */
+    std::atomic<bool> has_client_{false};
 
     /* live555 对象用 void* 封装，避免头文件依赖 liveMedia.hh。 */
     void* scheduler_ = nullptr;           /**< BasicTaskScheduler* */

@@ -37,14 +37,19 @@ public:
      * 每个编码包（Annex-B，可能含多个 NAL）的投递回调。
      * 返回 false 表示该路已失效（如管道断开），Encoder 会摘掉它并回调 ErrorCb。
      * 禁止在本回调内调用 remove_sink()（会自等死锁）。
+     *
+     * pts_us 是**采帧时刻**的墙钟微秒，同一输入帧产生的所有包共用同一值：
+     * MPP 可能把一帧拆成多个包（EACH_IDR 下参数集常自成一包），若各包各自
+     * 取时刻，live555 会因 presentation time 不同而误判 AU 边界、marker bit
+     * 置错，客户端表现为 "missing picture in access unit"。
      */
-    using PacketCb = std::function<bool(const uint8_t* annexb, size_t len, bool keyframe)>;
+    using PacketCb = std::function<bool(const uint8_t* annexb, size_t len,
+                                        bool keyframe, int64_t pts_us)>;
     /** sink 被 Encoder 摘除后的通知（worker 线程，未持锁）。 */
     using ErrorCb = std::function<void()>;
 
     struct SinkOptions {
-        uint32_t desired_bitrate_bps = 0;  /**< 0=板端默认；仅首个 sink 生效 */
-        bool     request_idr_on_join = true; /**< 接入时请求立即 IDR，免等一个 GOP */
+        bool request_idr_on_join = true; /**< 接入时请求立即 IDR，免等一个 GOP */
     };
 
     H264StreamEncoder() = default;
@@ -58,6 +63,7 @@ public:
 
     /**
      * 注册一路 sink。sink 数 0→1 时打开 MPP 并启动 worker。
+     * 码率固定为 CAMERA_PRINT_H264_BITRATE，不随 sink 变化。
      * @return sink 句柄；几何未知或 MPP 打不开返回 -1。
      */
     int add_sink(PacketCb on_packet, ErrorCb on_error, const SinkOptions& opt);
@@ -117,14 +123,19 @@ private:
     /**
      * 编码一帧并分发给 snapshot 出来的 sink 列表。
      * 锁外执行：MPP put/get 与各 sink 回调都可能阻塞。
+     * @param pts_us 本帧采帧时刻，透传给所有 sink。
      * @param failed 出参，收集投递失败的 sink。
+     * @param out_bytes 出参，本帧编码输出的总字节数（心跳统计用）。
      * @return false 表示 MPP 自身失败（编码器级故障，应停整个会话）。
      */
     bool encode_and_dispatch(void* ctx, void* mpi,
                              const std::vector<uint8_t>& nv12,
-                             uint32_t w, uint32_t h,
+                             uint32_t w, uint32_t h, int64_t pts_us,
                              const std::vector<std::shared_ptr<SinkEntry>>& sinks,
-                             std::vector<std::shared_ptr<SinkEntry>>& failed);
+                             std::vector<std::shared_ptr<SinkEntry>>& failed,
+                             size_t& out_bytes);
+    /** 距上次心跳满 kStatsPeriodUs 则打一行统计；调用前必须持有 mtx_。 */
+    void maybe_log_stats_locked();
     /** 扫描包内 NAL：缓存 SPS/PPS，并判定是否含 IDR。 */
     bool scan_packet(const uint8_t* annexb, size_t len);
     /** 将带 stride 的 NV12 拷成紧凑布局（Y 平面后接 UV）。 */
@@ -146,13 +157,23 @@ private:
     uint32_t width_ = CAMERA_WIDTH_DEFAULT;
     uint32_t height_ = CAMERA_HEIGHT_DEFAULT;
     uint32_t fps_ = CAMERA_FPS_DEFAULT;
-    uint32_t bitrate_bps_ = CAMERA_PRINT_H264_BITRATE; /**< 目标码率；由首个 sink 决定。 */
 
     bool has_pending_ = false;            /**< pending_nv12_ 是否有待编码帧。 */
     std::vector<uint8_t> pending_nv12_;   /**< 单槽最新帧（紧凑 NV12）。 */
     uint32_t pending_w_ = 0;
     uint32_t pending_h_ = 0;
+    int64_t  pending_pts_us_ = 0;         /**< 单槽帧的采帧时刻（墙钟微秒）。 */
     uint32_t dropped_ = 0;                /**< 因单槽覆盖而丢弃的旧帧计数。 */
+
+    /* 运行期心跳统计：故障时靠这几个计数是否还在涨定位断点。 */
+    static constexpr int64_t kStatsPeriodUs = 5000000; /**< 心跳周期 5s。 */
+    uint64_t stat_in_frames_ = 0;         /**< 累计进入 on_frame_nv12 的帧数。 */
+    uint64_t stat_enc_frames_ = 0;        /**< 累计成功编码的帧数。 */
+    uint64_t stat_enc_bytes_ = 0;         /**< 累计编码输出字节数。 */
+    int64_t  stat_last_log_us_ = 0;       /**< 上次心跳打印时刻；0=尚未打过。 */
+    uint64_t stat_last_in_ = 0;           /**< 上次心跳时的 stat_in_frames_。 */
+    uint64_t stat_last_enc_ = 0;          /**< 上次心跳时的 stat_enc_frames_。 */
+    uint64_t stat_last_bytes_ = 0;        /**< 上次心跳时的 stat_enc_bytes_。 */
 
     std::vector<uint8_t> sps_;            /**< 最近一次 IDR 的 SPS（不含起始码）。 */
     std::vector<uint8_t> pps_;            /**< 最近一次 IDR 的 PPS（不含起始码）。 */
