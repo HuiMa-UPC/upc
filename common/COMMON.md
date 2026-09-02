@@ -34,6 +34,8 @@ scripts/rongsu.sh start   # glavo + rongsu_camera → ui
 |------|---------|-----|
 | 全进程统一 | `/var/log/topic/*.log`（按专题拆分） | 各自 `/var/run/rongsu_*.pid` |
 
+专题文件命名与归属见 [§ 专题日志字典](#专题日志字典varlogtopiclog)。
+
 各业务进程为 IPC **Client**，连中央 **Broker**（`rongsu_broker`）。
 
 **上电标记**：各进程在 `daemonize`（或 `run`）后调用 `process_log_boot_banner()`，日志写入 `topic_boot_lifecycle.log`，可用 `grep PROCESS_BOOT /var/log/topic/topic_boot_lifecycle.log` 确认是否重新拉起。
@@ -587,5 +589,81 @@ ParserManager → RingBuffer → McuLink（TCP + 串口）
 cmake -B build -DUPC_DEBUG=ON \
   -DCMAKE_CXX_FLAGS="-DUPC_MOD_MCU_LINK=0 -DUPC_MOD_CAMERA_PREVIEW=0"
 ```
+
+## 专题日志字典（`/var/log/topic/*.log`）
+
+所有 `UPC_LOG_*` 最终进 `rs_log.cpp` 的 `select_topic_file(module, msg)`，按 **module 标签 +
+消息关键词** 落到唯一一个专题文件。文件名统一为：
+
+```
+topic_<大类>_<子类>.log        # 兜底文件例外：topic_misc.log
+```
+
+- **大类**（第一段名词）= 功能域，是**归类/打包上传的粒度**，脚本按 `topic_<大类>_*.log` glob 即可。
+- **子类**（后续名词）= 该域内的细分视角，是**排查定位的粒度**。
+- 一条日志只会落到一个文件，**不重复写**；`select_topic_file()` 内分支**自上而下短路**，越靠前的判据优先级越高。
+
+### 大类速查（17 类 / 27 文件）
+
+| 大类前缀 | 功能域 | 子类数 | 建议上传分组 |
+|----------|--------|--------|--------------|
+| `topic_boot_*` | 进程上电/重启生命周期 | 1 | 基础运行 |
+| `topic_ipc_*` | 跨进程线协议与消息投递 | 2 | 基础运行 |
+| `topic_msgbus_*` | 进程内总线与内存池 | 1 | 基础运行 |
+| `topic_system_*` | 主控资源（CPU/内存/温度） | 1 | 基础运行 |
+| `topic_misc` | 未归类兜底（**无子类**） | 1 | 基础运行 |
+| `topic_mqtt_*` | 云端 MQTT 网关 | 5 | 云端链路 |
+| `topic_xfr_*` | WiFi 文件传输 | 1 | 云端链路 |
+| `topic_serial_*` | MCU 串口链路 | 3 | 下位机链路 |
+| `topic_tcp_*` | 振镜控制板 TCP 链路 | 2 | 下位机链路 |
+| `topic_laser_*` | 激光器功率下发 | 1 | 下位机链路 |
+| `topic_device_*` | 下位机固件升级 | 1 | 下位机链路 |
+| `topic_print_*` | 打印主流程与解析 | 1 | 打印业务 |
+| `topic_visual_*` | 视觉检测 | 1 | 打印业务 |
+| `topic_camera_*` | 相机采集侧 | 1 | 影像与界面 |
+| `topic_media_*` | 媒体录制/推流 | 2 | 影像与界面 |
+| `topic_storage_*` | 媒体存储容量与回收 | 1 | 影像与界面 |
+| `topic_ui_*` | UI 侧渲染与状态机 | 2 | 影像与界面 |
+
+### 子类明细
+
+| 文件 | 来源 module | 路由判据（`select_topic_file` 顺序敏感） | 内容 |
+|------|-------------|------------------------------------------|------|
+| `topic_boot_lifecycle.log` | `BOOT` | module 精确匹配 | `PROCESS_BOOT`（pid / boot_id / uptime / prev_clean），同时是 `start` 模式 stdout/stderr 重定向目标；判断掉电或进程被重新拉起 |
+| `topic_ipc_wire.log` | `IPC` | module 精确匹配 | socket 收发与线协议编解码：`IPC_TX` / `IPC_RX` / `IPC_FWD` |
+| `topic_ipc_message.log` | `MSGBUS` | msg 以 `IPC_` 开头 | 跨进程消息投递阶段：`IPC_ENQUEUE` / `IPC_DELIVER` / `IPC_DELIVER miss` |
+| `topic_msgbus_local.log` | `MSGBUS` / `MemPool` / `BufferPool` | `MSGBUS` 其余 msg；`MemPool`、`BufferPool` 全量 | 进程内订阅分发、固定块池与 BufferPool 分配 |
+| `topic_system_resource.log` | `HostMonitor` | module 精确匹配 | `cpu_sys` / `cpu_proc` / `temp` / `mem_avail` / `rss` 周期采样 |
+| `topic_misc.log` | 兜底 | module 为空或未登记 | **新增 module 未加分支时会掉进这里**，出现即说明字典漏配 |
+| `topic_mqtt_wire.log` | `MqttService` | `MQTT RX/TX frame`、`payload topic=`（**必须最先判**） | 云端原始帧与 payload 正文。业务 JSON 里可能含 `ota`、`state` 等字面量，若排在内容判据之后会被误分流 |
+| `topic_mqtt_state.log` | `MqttService` | `state queued` / `publish state fail` / `Print_State_Ntf` | 打印状态边沿上报（开始打印 / 打印结束） |
+| `topic_mqtt_telemetry.log` | `MqttService` | `telemetry` / `heartbeat` / `APP_Update_Ntf` | 遥测与心跳上报 |
+| `topic_mqtt_ota.log` | `MqttService` | `ota` / `OTA` / `Ota_` | 云端 OTA 通知、下载与校验进度 |
+| `topic_mqtt_command.log` | `MqttService` | 以上都不命中 | 云端下行命令与 `cmd/ack`、订阅与激活 |
+| `topic_serial_sensor.log` | `McuLink` | msg 以 `sensor:` / `env_sim:` 开头 | 环境量周期上报（O2 / 温湿度 / PM / 压力 / 粉量位 / 门状态），含调试页模拟数据 |
+| `topic_serial_alarm.log` | `McuLink` | `alarm_` / `RX ALARM` / `EVENT ` | MCU 报警与事件单条上报、快照、复位回执 |
+| `topic_serial_layer.log` | `McuLink` | `serial TX cmd:` / `RX LAYER` / `notify_serial_event` | 换层握手：串口层指令下发与层事件回报 |
+| `topic_tcp_motion_tx.log` | `McuLink` | `TCP_TX frame` / `tcp emergency` | 振镜运动数据包与紧急指令（急停 / 暂停 / 红光） |
+| `topic_tcp_heartbeat.log` | `McuLink` | `tcp hb rsp` / `cmd_rate=` / `data_rate=` | TCP 心跳应答与下发速率统计 |
+| `topic_laser_power.log` | `McuLink` | msg 以 `laser_power_set raw=` 开头 | 激光功率包实际下发值（仅变化时打印），与上报功率做闭环比对 |
+| `topic_print_flow.log` | `McuLink` 兜底 + `GlavoService` / `CalParser` / `ParserContext` / `GcodeWorker` / `OvfWorker` / `ServiceBase` | `McuLink` 未命中上述关键词；解析类 module 全量 | 打印主流程：起印/暂停/恢复/终止、G-code 与 OVF 解析、标定参数 |
+| `topic_visual_firstlayer.log` | `VisualService` | module 精确匹配 | 首层视觉：裸板参考采集、检测请求与判定结果 |
+| `topic_device_ota.log` | `McuOta` | module 精确匹配 | 下位机固件升级（振镜以太网 OTA / MCU 串口 OTA） |
+| `topic_camera_capture.log` | `CameraService` | module 精确匹配 | 采集侧：V4L2 取流、dma fd 分发、SHM 环 `committed` / `slot_fail` 统计 |
+| `topic_media_record.log` | `MediaService` | 兜底（非存储、非直播） | 拍照、打印/清粉延时抽帧、H264 录制、MP4 合成与 manifest |
+| `topic_media_rtsp.log` | `MediaService` | `live_rtsp` / `local_rtsp` / `h264_enc` | 直播三件套：云端 RTSP 推流、局域网 live555 Server、共用 H264 编码器 |
+| `topic_storage_usage.log` | `MediaService` | `storage` / `STORRCLM` | `/home/media` 容量统计与空间回收 |
+| `topic_ui_preview.log` | `CameraPreview` | module 精确匹配 | UI 侧预览解码：`decode 5s` 统计、RGA 与软件转换回退 |
+| `topic_ui_alarm_state.log` | `AlarmState` | module 精确匹配 | UI 报警状态机：state_mask 推导生命周期、喂消息中心、快照攒帧对齐 |
+
+### 新增大类 / 子类（固定四步）
+
+1. **`common/debug/rs_log.cpp`** — `select_topic_file()` 加分支；注意分支顺序，**原始帧/透传正文类判据必须排在内容关键词之前**（参照 `MqttService` 的注释）。
+2. **本表** — 大类速查 + 子类明细各补一行；只加子类时同步大类的“子类数”。
+3. **`tools/analyze_topic_logs.py`** — 文件头 Usage 注释列出新文件名；需要出指标/图表时再加正则与 CSV。
+4. **打包上传** — 按 `topic_<大类>_*.log` glob，不要逐文件枚举，新增子类才能自动被带上。
+
+新增 module 标签（`rs_log.hpp` 里的 `UPC_LOG_XXX` 宏）后若忘了第 1 步，日志会静默落进
+`topic_misc.log`，可用 `grep -c module= /var/log/topic/topic_misc.log` 自检。
 
 详阅 [doc/LOG_GUIDE.md](../doc/LOG_GUIDE.md)

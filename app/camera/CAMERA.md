@@ -127,6 +127,14 @@ CBR 码率默认 `CAMERA_PRINT_H264_BITRATE`=2048kbps（与直播共用同一常
   开关只控制 `ServerMediaSession` 的挂载与编码器 sink 的增删。
 - 除 `triggerEvent()` 外，所有 live555 API 只能在事件循环线程内调用；挂/摘 session 通过命令队列投递。
 - 拉流地址 `rtsp://<本机IP>:8554/live`（一期**不做鉴权**，仅打日志、不在 UI 展示，需手动输入 IP）。
+- **强制 RTP-over-TCP**：WiFi 下 UDP 丢包会直接花屏并报 `missed packets`，局域网内交织传输
+  的开销可忽略。live555 只有反向开关 `disableStreamingRTPOverTCP()`，故由 `TcpOnlyRtspServer`
+  在 SETUP 阶段判定 Transport 头，非 `RTP/AVP/TCP` 一律回 **461 Unsupported Transport**
+  并记一条 `local_rtsp SETUP over UDP rejected` 日志。461 是标准的传输协商失败码，
+  ffmpeg / VLC 收到后会自动改用 TCP 重发 SETUP，故客户端**不写** `-rtsp_transport tcp`
+  也能连上，只是多一轮握手。
+  实现上借 `ConnAccessor` 做派生类型转换取得 `handleCmd_unsupportedTransport()` 的访问权——
+  该函数只对 `RTSPClientSession` 开放友元，而友元关系不随继承传递。
 - 选址（`LocalRtspServer::lan_ipv4_list()`）跳过 loopback、DOWN、虚拟网卡（`dummy`/`docker`/`veth`/…）
   与 `169.254.0.0/16` 链路本地地址，按 `UPC_WIFI_IFACE`(默认 `wlan0`) → 其它无线 → 有线 → USB 排序。
   **不能简单取"第一个非 loopback 接口"**：多网口设备上 `dummy0` 带着 169.254 地址且序号排在真实网卡之前。

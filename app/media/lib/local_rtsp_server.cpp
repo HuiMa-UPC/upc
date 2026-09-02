@@ -8,6 +8,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <strings.h>
 #include <arpa/inet.h>
 #include <ifaddrs.h>
 #include <net/if.h>
@@ -284,6 +285,118 @@ private:
     LocalRtspServer* owner_;
 };
 
+/** 大小写不敏感子串查找：RTSP 头字段与传输协议名都不区分大小写。 */
+bool contains_ci(const char* hay, const char* needle)
+{
+    if(!hay || !needle) {
+        return false;
+    }
+    const size_t nlen = std::strlen(needle);
+    if(nlen == 0) {
+        return true;
+    }
+    for(const char* p = hay; *p != '\0'; ++p) {
+        if(strncasecmp(p, needle, nlen) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/**
+ * 判定 SETUP 是否请求 RTP-over-TCP（交织）。
+ *
+ * 请求 UDP 时 Transport 头形如 `RTP/AVP;unicast;client_port=5000-5001`，
+ * 请求 TCP 时为 `RTP/AVP/TCP;unicast;interleaved=0-1`。
+ * `RTP/AVP/TCP` 这个记号只会出现在 Transport 头里，故不必先切出该行。
+ */
+bool setup_wants_tcp(const char* full_request)
+{
+    return contains_ci(full_request, "RTP/AVP/TCP");
+}
+
+/**
+ * 借派生类型转换取得 RTSPClientConnection 的 protected 成员访问权。
+ *
+ * `handleCmd_unsupportedTransport()` 在 live555 里只对 RTSPClientSession 开放
+ * （靠友元声明），而友元关系不随继承传递——下面的 TcpOnlyClientSession 并不在
+ * 友元名单内。这里只做指针类型转换、从不构造 ConnAccessor 对象；被调的是虚函数，
+ * 最终仍分派到真实对象的实现。
+ */
+class ConnAccessor : public RTSPServer::RTSPClientConnection {
+public:
+    static void reject_transport(RTSPServer::RTSPClientConnection* conn)
+    {
+        static_cast<ConnAccessor*>(conn)->handleCmd_unsupportedTransport();
+    }
+};
+
+/**
+ * 只接受 RTP-over-TCP 的客户端会话。
+ *
+ * live555 只给了反向开关 `disableStreamingRTPOverTCP()`，没有"禁用 UDP"的接口，
+ * 故在 SETUP 阶段自行判定，非 TCP 一律回 461 Unsupported Transport。
+ *
+ * 461 是 RTSP 标准的传输协商失败码：ffmpeg / VLC 收到后会自动改用 TCP 重发 SETUP，
+ * 所以客户端即使没写 `-rtsp_transport tcp` 也能连上，只是多一轮握手。
+ * 强制 TCP 的理由是 WiFi 下 UDP 丢包会直接导致花屏与 `missed packets`，
+ * 而本地拉流都在局域网内，交织传输的开销可以忽略。
+ */
+class TcpOnlyClientSession : public RTSPServer::RTSPClientSession {
+public:
+    TcpOnlyClientSession(RTSPServer& server, u_int32_t session_id)
+        : RTSPClientSession(server, session_id)
+    {
+    }
+
+protected:
+    void handleCmd_SETUP(RTSPServer::RTSPClientConnection* conn,
+                         char const* url_pre_suffix,
+                         char const* url_suffix,
+                         char const* full_request) override
+    {
+        if(!setup_wants_tcp(full_request)) {
+            UPC_LOG_MEDIA_SERVICE(Info,
+                "local_rtsp SETUP over UDP rejected (461) — client should retry via TCP");
+            ConnAccessor::reject_transport(conn);
+            return;
+        }
+        RTSPClientSession::handleCmd_SETUP(conn, url_pre_suffix, url_suffix,
+                                           full_request);
+    }
+};
+
+/** 除了改用 TcpOnlyClientSession，其余行为与 RTSPServer 一致。 */
+class TcpOnlyRtspServer : public RTSPServer {
+public:
+    static TcpOnlyRtspServer* createNew(UsageEnvironment& env, Port port)
+    {
+        /* setUpOurSocket 取 Port&（端口传 0 时会回填实际端口），故不能传临时量。 */
+        int socket_v4 = setUpOurSocket(env, port, AF_INET);
+        int socket_v6 = setUpOurSocket(env, port, AF_INET6);
+        if(socket_v4 < 0 && socket_v6 < 0) {
+            return nullptr;
+        }
+        return new TcpOnlyRtspServer(env, socket_v4, socket_v6, port);
+    }
+
+protected:
+    /** authDatabase=nullptr：一期不做鉴权，局域网内可直接拉流。 */
+    TcpOnlyRtspServer(UsageEnvironment& env, int socket_v4, int socket_v6, Port port)
+        : RTSPServer(env, socket_v4, socket_v6, port, nullptr, kReclamationSeconds)
+    {
+    }
+
+    ClientSession* createNewClientSession(u_int32_t session_id) override
+    {
+        return new TcpOnlyClientSession(*this, session_id);
+    }
+
+private:
+    /** 与 RTSPServer::createNew 的默认值一致：超时无 RTSP/RTCP 交互则回收会话。 */
+    static constexpr unsigned kReclamationSeconds = 65;
+};
+
 /** trigger 回调：有新帧待投递。 */
 void frame_trigger_handler(void* client_data)
 {
@@ -472,8 +585,8 @@ bool LocalRtspServer::init(uint16_t port)
         delete scheduler;
         return false;
     }
-    /* authDatabase=nullptr：一期不做鉴权，局域网内可直接拉流。 */
-    RTSPServer* server = RTSPServer::createNew(*env, Port(port), nullptr);
+    /* 强制 RTP-over-TCP：UDP 的 SETUP 会被回 461，客户端自行改用 TCP 重试。 */
+    RTSPServer* server = TcpOnlyRtspServer::createNew(*env, Port(port));
     if(!server) {
         UPC_LOG_MEDIA_SERVICE(Error, "local_rtsp listen :%u fail — %s",
                               static_cast<unsigned>(port), env->getResultMsg());
