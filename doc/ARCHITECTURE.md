@@ -45,9 +45,9 @@
 | 符号 | 路径 | 一句话 |
 |------|------|--------|
 | `GlavoService` | `glavo_service.*` | IPC 业务编排 + 工作线程（打印/USB 目录/门控）；`init()` 绑定 RingBuffer → `McuLink` |
-| `gcode_manifest` | `common/fs_manifest/gcode_manifest.*` | Local `/home/Gcode/config.json`（UI 读列表，Glavo Prepare/Delete 写） |
-| `print_history_manifest` | `common/fs_manifest/print_history_manifest.*` | `/home/media/video/config.json`（Media upsert 写；UI 历史页读，删除后重写） |
-| `media_paths` | `common/fs_manifest/media_paths.hpp` | `/home/media/{photo,video,video/tmp}` 路径宏（各进程共用） |
+| `gcode_manifest` | `common/fs_manifest/gcode_manifest.*` | Local `UPC_LOCAL_GCODE_DIR/config.json`（UI 读列表，Glavo Prepare/Delete 写） |
+| `print_history_manifest` | `common/fs_manifest/print_history_manifest.*` | `UPC_VIDEO_CONFIG`（Media upsert 写；UI 历史页读，删除后重写） |
+| `media_paths` | `common/fs_manifest/media_paths.hpp` | `UPC_MEDIA_ROOT`（photo/video/tmp + 首层视觉诊断图，各进程共用） |
 | `McuLink` | `mcu_link.*` | TCP 运动 + 串口握手/传感器 |
 | `PrintJobState` | `print_job_state.*` | 打印任务计数/状态 |
 | `PrintVideoNotify` | `print_video_notify.*` | 换层 Snap / 录像会话 IPC → Camera |

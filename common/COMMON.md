@@ -346,9 +346,10 @@ rongsu_broker ──listen──► /tmp/upc_broker.sock ◄── UI / Glavo / 
 | `common/upc_contract.hpp` | **唯一源码契约**（MsgType / Payload / IPC 配置 / 日志开关 / 进程表 / WIRE ABI） | 双组评审 |
 | `common/middleware/message_bus/msg_runtime.hpp` | 进程内 `Message` / `MsgPayload`（依赖 BufferPool） | 平台组 |
 | `common/CMakeLists.txt` | 统一静态库 `upc::common`（兼容别名 `upc::ipc` 等） | 平台组 |
-| `common/fs_manifest/gcode_manifest.*` | Local `/home/Gcode/config.json` 读写（UI 读列表 + Glavo 写） | 平台 / UI / Glavo |
-| `common/fs_manifest/print_history_manifest.*` | `/home/media/video/config.json`（Media 写，UI 历史页读） | 平台 / Media / UI |
-| `common/fs_manifest/media_paths.hpp` | `/home/media/{photo,video}` 路径宏；`UPC_TIMELAPSE_PLAYBACK_PNG`（默认 1=PNG 播延时） | 平台 / Media / UI |
+| `common/fs_manifest/gcode_manifest.*` | Local `UPC_LOCAL_GCODE_DIR/config.json` 读写（UI 读列表 + Glavo 写） | 平台 / UI / Glavo |
+| `common/fs_manifest/print_history_manifest.*` | `UPC_VIDEO_CONFIG`（Media 写，UI 历史页读） | 平台 / Media / UI |
+| `common/fs_manifest/media_paths.hpp` | `UPC_MEDIA_ROOT`（photo/video/tmp + 首层视觉诊断图）；`UPC_TIMELAPSE_PLAYBACK_PNG`（默认 1=PNG 播延时） | 平台 / Media / UI / Visual |
+| `common/config/cal_config.hpp` | `UPC_CAL_PATH`（默认 `/home/CAL/cal.csv`） | 平台 / Glavo / Media / UI / Xfer |
 | `common/ipc/msg_port.hpp` | 业务唯一 IPC 入口 | 平台组 |
 | `common/ipc/ipc_wire.*` | 线协议 | 平台组 |
 | `common/ipc/ipc_endpoint.*` | Socket 传输 | 平台组 |

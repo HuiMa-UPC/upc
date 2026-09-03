@@ -1,9 +1,17 @@
 #ifndef UPC_PARSER_CONFIG_HPP
 #define UPC_PARSER_CONFIG_HPP
 
-/** 默认校准 CSV 路径 */
+/** 默认校准 CSV 路径（默认值须与 common/config/cal_config.hpp 的 UPC_CAL_* 一致） */
+#ifndef UPC_CAL_DIR
+#define UPC_CAL_DIR  "/home/CAL"
+#endif
+
+#ifndef UPC_CAL_PATH
+#define UPC_CAL_PATH  UPC_CAL_DIR "/cal.csv"
+#endif
+
 #ifndef CAL_DEFAULT_FILE_PATH
-#define CAL_DEFAULT_FILE_PATH "/home/CAL/cal.csv"
+#define CAL_DEFAULT_FILE_PATH  UPC_CAL_PATH
 #endif
 
 /** 默认层厚（μm） */

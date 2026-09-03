@@ -18,6 +18,7 @@
 #include "ui_alarm_state.hpp"
 #include "upc_contract.hpp"
 #include "config/camera_resolution_profile.hpp"
+#include "media_paths.hpp"
 
 
 #include <cmath>
@@ -150,7 +151,9 @@ void home_env_init(void)
                 lv_obj_clear_state(g_result_photo_btn, LV_STATE_DISABLED);
             }
             if(rsp.ok) {
-                ui_toast_show("Photo saved to /home/media/photo", user_color_accent, 1500);
+                char toast[160];
+                std::snprintf(toast, sizeof(toast), "Photo saved to %s", UPC_PHOTO_DIR);
+                ui_toast_show(toast, user_color_accent, 1500);
             } else {
                 ui_toast_show("Photo save failed", ui_color_danger, 1500);
             }

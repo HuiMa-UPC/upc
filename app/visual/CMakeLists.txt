@@ -53,6 +53,7 @@ if(UPC_BUILD_FIRST_LAYER_SMOKE)
     target_include_directories(rknn_first_layer_smoke
         PRIVATE
             ${VISUAL_LIB_DIR}
+            ${CMAKE_SOURCE_DIR}/common/fs_manifest
             ${OpenCV_INCLUDE_DIRS}
     )
     target_link_libraries(rknn_first_layer_smoke

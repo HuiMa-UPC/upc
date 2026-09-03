@@ -1,6 +1,8 @@
 #ifndef UPC_GENERATED_RKNN_CONTRACT_HPP
 #define UPC_GENERATED_RKNN_CONTRACT_HPP
 
+#include "media_paths.hpp"
+
 #include <cstdint>
 
 namespace rknn_first_layer_contract {
@@ -13,8 +15,7 @@ inline constexpr const char* kFusionPath =
     "/opt/first_layer_rknn/fusion.rknn";
 inline constexpr const char* kCachePath =
     "/home/first_layer_rknn_geometry.yml";
-inline constexpr const char* kQualifiedImageDir =
-    "/home/media/first_layer_visual/qualified";
+inline constexpr const char* kQualifiedImageDir = UPC_FLV_QUALIFIED_DIR;
 inline constexpr uint32_t kMaxQualifiedImages = 200;
 inline constexpr const char* kSegmentationSha256 =
     "3222c50d46f76c8594b0355ebe3f4baacb65ae6de0e32e5895d719afc10525bf";

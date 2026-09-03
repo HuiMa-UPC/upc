@@ -36,8 +36,17 @@ struct CalConfigOptions {
     uint32_t print_h264_bitrate = 0;
 };
 
+/** 默认校准目录 / 文件（部署路径；parser 独立构建见 parser_config.hpp 同名宏） */
+#ifndef UPC_CAL_DIR
+#define UPC_CAL_DIR  "/home/CAL"
+#endif
+
+#ifndef UPC_CAL_PATH
+#define UPC_CAL_PATH  UPC_CAL_DIR "/cal.csv"
+#endif
+
 /** 默认校准文件路径（部署路径） */
-constexpr const char* kCalDefaultPath = "/home/CAL/cal.csv";
+constexpr const char* kCalDefaultPath = UPC_CAL_PATH;
 
 /** UI 顶栏等场景使用的设备显示名。 */
 inline constexpr const char* kDeviceDisplayName = "SNOWPOD A1";

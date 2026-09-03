@@ -10,6 +10,7 @@
  *       config.json          打印历史清单
  *       tmp/                 唯一打印中临时目录（开打前/开机可清空）
  *       {job}/               正式会话产物
+ *     first_layer_visual/    首层视觉诊断图（qualified / rejected）
  *
  * Media / UI / 清单解析共用此头，避免各进程硬编码分叉。
  */
@@ -43,6 +44,19 @@
 /** 相册清单（可选；当前 Album 仍可扫目录，路径预留给后续） */
 #ifndef UPC_PHOTO_CONFIG
 #define UPC_PHOTO_CONFIG  UPC_PHOTO_DIR "/config.json"
+#endif
+
+/** 首层视觉诊断图（相对 UPC_MEDIA_ROOT） */
+#ifndef UPC_FLV_DIR
+#define UPC_FLV_DIR  UPC_MEDIA_ROOT "/first_layer_visual"
+#endif
+
+#ifndef UPC_FLV_QUALIFIED_DIR
+#define UPC_FLV_QUALIFIED_DIR  UPC_FLV_DIR "/qualified"
+#endif
+
+#ifndef UPC_FLV_REJECTED_DIR
+#define UPC_FLV_REJECTED_DIR  UPC_FLV_DIR "/rejected"
 #endif
 
 /**

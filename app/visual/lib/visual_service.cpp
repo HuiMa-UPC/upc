@@ -2,6 +2,7 @@
 
 #include "generated_fusion_model.hpp"
 #include "generated_rknn_contract.hpp"
+#include "media_paths.hpp"
 #include "rs_log.hpp"
 #include "upc_contract.hpp"
 
@@ -78,7 +79,7 @@ std::string qualified_image_dir()
 std::string rejected_image_dir()
 {
     return diagnostic_image_dir("FIRST_LAYER_REJECTED_IMAGE_DIR",
-                                "/home/media/first_layer_visual/rejected");
+                                UPC_FLV_REJECTED_DIR);
 }
 
 bool ensure_directory_tree(const std::string& path, std::string& error)

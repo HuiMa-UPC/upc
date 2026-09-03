@@ -172,10 +172,11 @@
 /* -------------------------------------------------------------------------- */
 /* 路径                                                                         */
 /* -------------------------------------------------------------------------- */
+#include "gcode_manifest.hpp"
+
 /** 打印文件目录（仅 Glavo 使用；UI 通过 PrintFileSource 0/1 选择） */
-/** 须与 common/fs_manifest/gcode_manifest.hpp 的 UPC_LOCAL_GCODE_DIR 保持一致 */
 #ifndef GLAVO_LOCAL_GCODE_DIR
-#define GLAVO_LOCAL_GCODE_DIR  "/home/Gcode"
+#define GLAVO_LOCAL_GCODE_DIR  UPC_LOCAL_GCODE_DIR
 #endif
 
 #ifndef GLAVO_USB_MOUNT_DIR
