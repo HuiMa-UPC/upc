@@ -2120,18 +2120,35 @@ void McuLink::refill_tcp_stage_from_ring()
 
 /* ---------- 状态辅助 ---------- */
 
-bool McuLink::mcu_rates_drained() const
+bool McuLink::mcu_rates_drained(int pending_packets,
+                                std::chrono::steady_clock::time_point since) const
 {
     const auto snap = PrintJobState::instance().snapshot();
     if(snap.cmd_cache_rate  > static_cast<uint16_t>(MCU_DRAIN_MAX_RATE) ||
        snap.data_cache_rate > static_cast<uint16_t>(MCU_DRAIN_MAX_RATE)) {
         return false;
     }
-    /* 已下发运动包后，须先观测到缓存非空再接受归零，避免短 G-code 心跳未刷新时误判 */
-    if(snap.sent_packets > 0 && !mcu_rates_seen_nonempty_.load()) {
-        return false;
+    if(pending_packets <= 0) {
+        return true; // 未下发过运动包，无需确认缓存
     }
-    return true;
+    /* 已下发运动包后，须先观测到缓存非空再接受归零，避免短 G-code 心跳未刷新时误判 */
+    if(mcu_rates_seen_nonempty_.load()) {
+        return true;
+    }
+    /* 从未观测到非空：可能是超薄层/超小文件在两帧心跳之间就被 MCU 执行完。
+     * 按已等待时长兜底放行，包数不足一个 batch 时用更短的窗口。 */
+    if(since.time_since_epoch().count() == 0) {
+        return false; // 尚未开始计时，等下一轮
+    }
+    const int64_t need_ms = (pending_packets < current_tcp_batch_size())
+        ? static_cast<int64_t>(MCU_DRAIN_SMALL_BATCH_MS)
+        : static_cast<int64_t>(MCU_DRAIN_FALLBACK_MS);
+    if(need_ms <= 0) {
+        return false; // 兜底已禁用，维持原“必须观测到非空”语义
+    }
+    const auto waited = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - since).count();
+    return waited >= need_ms;
 }
 
 bool McuLink::motion_stream_active() const
@@ -2224,6 +2241,7 @@ void McuLink::reset_motion_state(bool clear_start_pending)
     user_paused_.store(false);
     waiting_layer_.store(false);
     layer_drain_pending_.store(false);
+    layer_drain_since_ = {};
     natural_complete_pending_.store(false);
     natural_complete_since_ = {};
     mcu_rates_seen_nonempty_.store(false);
@@ -2246,6 +2264,7 @@ void McuLink::begin_sending_internal()
     is_sending_.store(true);
     waiting_layer_.store(false);
     layer_drain_pending_.store(false);
+    layer_drain_since_ = {};
     natural_complete_pending_.store(false);
     natural_complete_since_ = {};
     mcu_rates_seen_nonempty_.store(false);
@@ -2614,6 +2633,7 @@ bool McuLink::link_handle_layer_mark()
     // 进入换层等待状态，等待当前层运动包全部下发并 MCU 缓存排空
     waiting_layer_.store(true);
     layer_drain_pending_.store(true);
+    layer_drain_since_ = std::chrono::steady_clock::now();
     serial_evt_condition_ok_.store(false);
     serial_evt_print_ready_.store(false);
     serial_handshake_phase_.store(SERIAL_HS_NONE);
@@ -2639,13 +2659,22 @@ void McuLink::link_try_layer_serial_dispatch()
         serial_handshake_phase_.store(SERIAL_HS_NONE);
         return;
     }
-    // 必须等 MCU 缓存完全排空，确保当前层最后一包已被执行
-    if(!mcu_rates_drained()) {
+    // 本层须已下发过扫描指令，才允许发单层扫描完成（协议：扫描 → 0x05）
+    const int layer_packets =
+        PrintJobState::instance().snapshot().sent_packets - sent_at_layer_ready_;
+    if(layer_packets <= 0) {
         return;
     }
-    // 本层须已下发过扫描指令，才允许发单层扫描完成（协议：扫描 → 0x05）
-    if(PrintJobState::instance().snapshot().sent_packets <= sent_at_layer_ready_) {
+    // 必须等 MCU 缓存完全排空，确保当前层最后一包已被执行
+    if(!mcu_rates_drained(layer_packets, layer_drain_since_)) {
         return;
+    }
+    if(!mcu_rates_seen_nonempty_.load()) {
+        /* 兜底放行：本层太薄，MCU 在两帧心跳之间就跑空了，缓存非空从未被观测到 */
+        UPC_LOG_MCU_LINK(Warn,
+            "layer drain fallback: rates stayed 0 for the whole layer "
+            "(layer=%u um packets=%d)",
+            static_cast<unsigned>(active_layer_height_um_), layer_packets);
     }
 
 #if GLAVO_ENABLE_LAYER_SNAP
@@ -2935,7 +2964,8 @@ void McuLink::link_try_finish_sending()
     const auto now = std::chrono::steady_clock::now();
 
     // 所有运动包已下发，但需等 MCU 缓存排空才算真正完成
-    if(!mcu_rates_drained()) {
+    if(!mcu_rates_drained(PrintJobState::instance().snapshot().sent_packets,
+                          natural_complete_since_)) {
         if(!natural_complete_pending_.load()) {
             natural_complete_since_ = now;
         }

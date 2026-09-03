@@ -387,8 +387,18 @@ private:
     /** @brief OTA Success 后尝试 connect_tcp（含强制刷新已有 fd） */
     void link_try_ota_post_reconnect();
 
-    /** @brief 判断 MCU 的指令缓存与数据缓存是否均已排空 */
-    bool mcu_rates_drained() const;
+    /**
+     * @brief 判断 MCU 的指令缓存与数据缓存是否均已排空
+     * @param pending_packets 本次需确认排空的运动包数（换层取层内包数，完成取全作业包数）；
+     *                        <= 0 表示尚未下发任何包，无需确认
+     * @param since 进入排空等待状态的时刻；默认构造（epoch 0）表示尚未开始计时
+     *
+     * rate 必须先降到 MCU_DRAIN_MAX_RATE 以下；随后若本作业曾观测到缓存非空则直接放行，
+     * 否则按 MCU_DRAIN_SMALL_BATCH_MS / MCU_DRAIN_FALLBACK_MS 兜底放行，
+     * 避免超薄层在两帧心跳之间跑空导致的永久自锁。
+     */
+    bool mcu_rates_drained(int pending_packets,
+                           std::chrono::steady_clock::time_point since) const;
     /** @brief 当前是否处于“应持续发运动包”的活跃流状态 */
     bool motion_stream_active() const;
     /** @brief 当前是否因 MCU 指令缓存达到阈值而暂停运动包下发 */
@@ -456,6 +466,7 @@ private:
     /* ---------- 换层/串口握手状态 ---------- */
     std::atomic<bool> waiting_layer_{false};           /**< 当前是否处于换层等待状态 */
     std::atomic<bool> layer_drain_pending_{false};     /**< 已遇到 LayerMark，等待 MCU 缓存排空后发送 layer_done */
+    std::chrono::steady_clock::time_point layer_drain_since_{}; /**< 进入换层排空等待的时刻，用于兜底放行计时 */
     std::atomic<int>  serial_handshake_phase_{0};      /**< 串口握手阶段（0=无 1=等CONDITION_OK 2=等PRINT_READY） */
     std::atomic<bool> serial_evt_condition_ok_{false}; /**< 串口收到打印条件就绪事件 */
     std::atomic<bool> serial_evt_print_ready_{false};  /**< 串口收到打印准备就绪事件 */
