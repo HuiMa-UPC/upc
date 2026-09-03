@@ -30,6 +30,7 @@ struct PrintHistoryEntry {
     int64_t             start_unix = 0; /**< Session_Start 墙钟秒 */
     uint32_t            duration_sec = 0;
     float               material_g = 0.f;
+    uint32_t            layer_count = 0; /**< G-code 层数（M3000 标记数）；0=未知，UI 显示 "--" */
     PrintHistoryStatus  status = PrintHistoryStatus::Complete;
     std::string         frames_dir;    /**< 相对目录名，如 benchy */
     std::string         thumb;         /**< 延时摄影缩略图，相对路径，如 benchy/thumb.rthm */
@@ -66,11 +67,14 @@ const char* print_history_status_str(PrintHistoryStatus s);
 bool print_history_status_parse(const std::string& s, PrintHistoryStatus& out);
 
 /**
- * 从 G-code config.json 按 job 基名查找 material_g。
- * name 可为 "benchy" 或 "benchy.gcode"；找不到返回 0。
+ * 从 G-code config.json 按 job 基名查找打印统计（耗材克重 + 层数）。
+ * name 可为 "benchy" 或 "benchy.gcode"；找不到时两个出参均置 0。
+ * 两项同源，合并成一次查询避免重复读盘解析。
  */
-float print_history_lookup_material_g(const std::string& gcode_config_path,
-                                      const std::string& job_basename);
+void print_history_lookup_gcode_stats(const std::string& gcode_config_path,
+                                      const std::string& job_basename,
+                                      float& material_g,
+                                      uint32_t& layer_count);
 
 } // namespace upc
 

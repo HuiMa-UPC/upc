@@ -12,6 +12,13 @@
 #define UPC_LOG_ENABLED UPC_DEBUG
 #endif
 
+/**
+ * 专题日志根目录的唯一定义点：rs_log 按专题写这里，process_ctl 也用它拼
+ * boot log 路径做 stdout/stderr 重定向。别处不要再写一遍字面量，否则改路径时
+ * 两边会漂移。改这里要同步 scripts/topic 里的 logrotate 路径。
+ */
+#define UPC_TOPIC_LOG_DIR "/var/log/topic"
+
 namespace upc {
 
 enum class Level : int {

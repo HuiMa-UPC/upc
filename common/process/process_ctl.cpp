@@ -74,33 +74,20 @@ void process_remove_pid(const char* pid_file) {
 
 namespace {
 
-constexpr const char* kTopicLogDir = "/var/log/topic";
-constexpr const char* kBootLogPath = "/var/log/topic/topic_boot_lifecycle.log";
+/* 日志根目录取自 rs_log.hpp，boot log 在其下拼出来：两处若各写一份字面量，
+ * 改路径时 rs_log 与这里的 stdout/stderr 重定向会指向不同目录。 */
+constexpr const char* kTopicLogDir = UPC_TOPIC_LOG_DIR;
+constexpr const char* kBootLogPath = UPC_TOPIC_LOG_DIR "/topic_boot_lifecycle.log";
 constexpr const char* kBootStateDir = "/home/.upc_boot_state";
 
 char g_boot_proc_name[64] = {};
 bool g_boot_atexit_registered = false;
 
-void ensure_topic_log_dir()
+/* mkdir -p：逐级建目录，已存在的 EEXIST 忽略 */
+void mkdir_p(const char* dir)
 {
     char path[256];
-    std::snprintf(path, sizeof(path), "%s", kTopicLogDir);
-    const size_t len = std::strlen(path);
-    for(size_t i = 1; i < len; ++i) {
-        if(path[i] != '/') {
-            continue;
-        }
-        path[i] = '\0';
-        (void)mkdir(path, 0755);
-        path[i] = '/';
-    }
-    (void)mkdir(path, 0755);
-}
-
-void ensure_boot_state_dir()
-{
-    char path[256];
-    std::snprintf(path, sizeof(path), "%s", kBootStateDir);
+    std::snprintf(path, sizeof(path), "%s", dir);
     const size_t len = std::strlen(path);
     for(size_t i = 1; i < len; ++i) {
         if(path[i] != '/') {
@@ -124,7 +111,7 @@ void build_boot_state_path(const char* proc_name, char* out, size_t out_size)
 
 void write_boot_state(const char* proc_name, int clean, int pid, long long ts_unix)
 {
-    ensure_boot_state_dir();
+    mkdir_p(kBootStateDir);
     char path[320];
     build_boot_state_path(proc_name, path, sizeof(path));
 
@@ -233,7 +220,7 @@ void process_mark_clean_shutdown()
 
 void redirect_stdio_to_boot_log()
 {
-    ensure_topic_log_dir();
+    mkdir_p(kTopicLogDir);
     int fd = open(kBootLogPath, O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0644);
     if(fd < 0) {
         fd = open("/dev/null", O_WRONLY | O_CLOEXEC);

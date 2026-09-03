@@ -59,12 +59,14 @@
  * 缩略图：/home/media/video/{thumb}（.rthm 原始 RGB565，自定义 decoder），
  *          cover 居中裁切（竖构图相机图铺满横槽）。
  *
- * 三处等后端补数据（其余字段 manifest 已齐）：
- *   1. Layers   —— manifest 无层数字段，暂显示 "--"（Camera 侧可由换层 Snap 的
- *                  最大 layer_index 落盘，见 PrintVideoLayerSnapPayload）。
- *   2. Storage  —— 无容量上报接口，用本文件顶部的 kStorageUsedMB/kStorageTotalMB
- *                  占位；接上后端后只需改 storage_used_mb()/storage_total_mb()。
- *   3. Storage 目前仍为占位常量，待后端容量上报接口接入。
+ * 指标数据源（Duration / Filament / Layers 均取自 manifest）：
+ *   Layers 与 Filament 由 Media 落盘历史条目时从 /home/Gcode/config.json 快照
+ *   （见 print_history_lookup_gcode_stats）；旧清单无该字段或切片未提供时显示 "--"。
+ *
+ * 一处等后端补数据：
+ *   Storage —— 无容量上报接口，用本文件顶部的 kStorageUsedMBFallback/
+ *              kStorageTotalMBFallback 占位；接上后端后只需改
+ *              storage_used_mb()/storage_total_mb()。
  */
 
 namespace {
@@ -325,6 +327,16 @@ void format_material(float g, char *buf, size_t n)
 {
     if(g > 0.01f) {
         std::snprintf(buf, n, "%.1fg", static_cast<double>(g));
+    } else {
+        std::snprintf(buf, n, "%s", "--");
+    }
+}
+
+/** layer_count → "128"；0（旧清单无该字段 / G-code 无 M3000 标记）显示 "--" */
+void format_layers(uint32_t layers, char *buf, size_t n)
+{
+    if(layers > 0) {
+        std::snprintf(buf, n, "%u", static_cast<unsigned>(layers));
     } else {
         std::snprintf(buf, n, "%s", "--");
     }
@@ -1728,11 +1740,12 @@ void build_entry(lv_obj_t *parent, const upc::PrintHistoryEntry &e)
     }
     g_cards.push_back(ctx);
 
-    char range_buf[40], date_buf[32], dur_buf[16], mat_buf[24];
+    char range_buf[40], date_buf[32], dur_buf[16], mat_buf[24], layer_buf[16];
     format_time_range(e.start_unix, e.duration_sec, range_buf, sizeof(range_buf));
     format_date(e.start_unix, date_buf, sizeof(date_buf));
     format_duration(e.duration_sec, dur_buf, sizeof(dur_buf));
     format_material(e.material_g, mat_buf, sizeof(mat_buf));
+    format_layers(e.layer_count, layer_buf, sizeof(layer_buf));
 
     /* 播放器标题/副标题 */
     ctx->title    = e.job_name.empty()
@@ -1815,8 +1828,8 @@ void build_entry(lv_obj_t *parent, const upc::PrintHistoryEntry &e)
     ui_user_make_divider_vline(metrics, USER_PAD_SM);
     make_metric(metrics, &ic_cube, "Filament", mat_buf);
     ui_user_make_divider_vline(metrics, USER_PAD_SM);
-    /* Layers：manifest 还没有层数字段，先占位（见文件头「等后端补数据」） */
-    make_metric(metrics, &ic_layers, "Layers", "--");
+    /* Layers：Media 落盘时从 /home/Gcode/config.json 快照的层数；无数据显示 "--" */
+    make_metric(metrics, &ic_layers, "Layers", layer_buf);
 
     apply_card_selection(ctx);
 }

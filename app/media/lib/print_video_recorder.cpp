@@ -885,8 +885,9 @@ bool PrintVideoRecorder::upsert_print_history(
     entry.job_name     = job_name_.empty() ? "print" : job_name_;
     entry.start_unix   = start;
     entry.duration_sec = duration;
-    entry.material_g   = upc::print_history_lookup_material_g(
-        UPC_LOCAL_GCODE_CONFIG, entry.job_name);
+    /* 耗材与层数由 /home/Gcode/config.json 快照下来：G-code 删除后历史仍保真 */
+    upc::print_history_lookup_gcode_stats(UPC_LOCAL_GCODE_CONFIG, entry.job_name,
+                                          entry.material_g, entry.layer_count);
     entry.status = aborted ? upc::PrintHistoryStatus::Terminated
                            : upc::PrintHistoryStatus::Complete;
     entry.frames_dir = frames_dir_name;
@@ -931,12 +932,13 @@ bool PrintVideoRecorder::upsert_print_history(
 
     UPC_LOG_MEDIA_SERVICE(
         Info,
-        "print_history upsert job=%s status=%s frames_dir=%s duration=%u material_g=%.2f",
+        "print_history upsert job=%s status=%s frames_dir=%s duration=%u material_g=%.2f layers=%u",
         entry.job_name.c_str(),
         upc::print_history_status_str(entry.status),
         entry.frames_dir.c_str(),
         entry.duration_sec,
-        static_cast<double>(entry.material_g));
+        static_cast<double>(entry.material_g),
+        static_cast<unsigned>(entry.layer_count));
     return true;
 }
 

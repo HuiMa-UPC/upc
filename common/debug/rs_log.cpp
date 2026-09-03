@@ -22,7 +22,7 @@ char g_process_name[32] = "?";
 bool g_process_log_enabled = true;
 std::mutex g_log_mtx;
 
-constexpr const char* kTopicLogDir = "/var/log/topic";
+constexpr const char* kTopicLogDir = UPC_TOPIC_LOG_DIR;
 constexpr const char* kTopicDefault = "topic_misc.log";
 
 bool starts_with(const char* s, const char* prefix) {
@@ -37,7 +37,15 @@ bool contains_text(const char* s, const char* token) {
     return s && token && std::strstr(s, token) != nullptr;
 }
 
+/* 目录只在首次写日志时建：本函数在 log_write 的热路径上，而 kTopicLogDir 有三级，
+ * 每条日志都跑一遍就是三次注定 EEXIST 的 mkdir。目录被外部删掉的情况由 log_write
+ * 里 fopen 失败后清标志重试兜底。调用方持有 g_log_mtx，故标志无需原子。 */
+bool g_topic_dir_ready = false;
+
 void ensure_topic_log_dir() {
+    if (g_topic_dir_ready) {
+        return;
+    }
     char path[256];
     std::snprintf(path, sizeof(path), "%s", kTopicLogDir);
     const size_t len = std::strlen(path);
@@ -53,6 +61,7 @@ void ensure_topic_log_dir() {
         path[i] = '/';
     }
     (void)mkdir(path, 0755);
+    g_topic_dir_ready = true;
 }
 
 const char* select_topic_file(const char* module, const char* msg) {
@@ -315,6 +324,19 @@ void log_write(Level level, const char* src, const char* module,
     const int msg_len = std::vsnprintf(msg_buf, sizeof(msg_buf), fmt, args);
     va_end(args);
 
+    /* vsnprintf 返回"本应写入"的长度：正文超过 msg_buf 时它大于缓冲区大小，
+     * 直接拿去 fwrite 会读出栈上的越界数据，这里夹到实际截断后的长度。
+     * 返回负值（编码错误）时缓冲区内容未定义，置空避免后续按 C 串读越界。 */
+    std::size_t msg_out = 0;
+    if (msg_len > 0) {
+        msg_out = static_cast<std::size_t>(msg_len);
+        if (msg_out > sizeof(msg_buf) - 1) {
+            msg_out = sizeof(msg_buf) - 1;
+        }
+    } else if (msg_len < 0) {
+        msg_buf[0] = '\0';
+    }
+
     std::lock_guard<std::mutex> lock(g_log_mtx);
     ensure_topic_log_dir();
 
@@ -324,6 +346,13 @@ void log_write(Level level, const char* src, const char* module,
 
     FILE* fp = std::fopen(path, "a");
     if (!fp) {
+        /* 目录可能被外部清理掉了（手工 rm、挂载点变动）：重建一次再试，
+         * 仍失败才退到 stderr。 */
+        g_topic_dir_ready = false;
+        ensure_topic_log_dir();
+        fp = std::fopen(path, "a");
+    }
+    if (!fp) {
         fp = stderr;
     }
 
@@ -331,8 +360,8 @@ void log_write(Level level, const char* src, const char* module,
                  ts, level_name(level), log_process_name(),
                  src ? src : "?", module ? module : "?");
 
-    if (msg_len > 0) {
-        std::fwrite(msg_buf, 1, static_cast<std::size_t>(msg_len), fp);
+    if (msg_out > 0) {
+        std::fwrite(msg_buf, 1, msg_out, fp);
     }
 
     std::fputc('\n', fp);

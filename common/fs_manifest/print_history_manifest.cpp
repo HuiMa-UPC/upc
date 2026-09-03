@@ -146,6 +146,8 @@ PrintHistoryEntry parse_object(const std::string& obj)
     parse_int64_field(obj, "start_unix", e.start_unix);
     parse_uint_field(obj, "duration_sec", e.duration_sec);
     parse_float_field(obj, "material_g", e.material_g);
+    /* 旧清单无该字段，保持默认 0（未知） */
+    (void)parse_uint_field(obj, "layer_count", e.layer_count);
     std::string status_s;
     if(parse_string_field(obj, "status", status_s)) {
         (void)print_history_status_parse(status_s, e.status);
@@ -245,6 +247,7 @@ bool print_history_manifest_save(const std::string& path,
             << "\"start_unix\":" << e.start_unix << ','
             << "\"duration_sec\":" << e.duration_sec << ','
             << "\"material_g\":" << e.material_g << ','
+            << "\"layer_count\":" << e.layer_count << ','
             << "\"status\":\"" << print_history_status_str(e.status) << "\","
             << "\"frames_dir\":\"" << json_escape(e.frames_dir) << "\","
             << "\"thumb\":\"" << json_escape(e.thumb) << "\","
@@ -275,22 +278,27 @@ void print_history_manifest_upsert(std::vector<PrintHistoryEntry>& entries,
     entries.push_back(item);
 }
 
-float print_history_lookup_material_g(const std::string& gcode_config_path,
-                                      const std::string& job_basename)
+void print_history_lookup_gcode_stats(const std::string& gcode_config_path,
+                                      const std::string& job_basename,
+                                      float& material_g,
+                                      uint32_t& layer_count)
 {
+    material_g  = 0.f;
+    layer_count = 0;
     if(job_basename.empty()) {
-        return 0.f;
+        return;
     }
     std::vector<GcodeManifestEntry> files;
     if(!gcode_manifest_load(gcode_config_path, files)) {
-        return 0.f;
+        return;
     }
     for(const auto& e : files) {
         if(e.name == job_basename || basename_no_ext(e.name) == job_basename) {
-            return e.material_g;
+            material_g  = e.material_g;
+            layer_count = e.layer_count;
+            return;
         }
     }
-    return 0.f;
 }
 
 } // namespace upc

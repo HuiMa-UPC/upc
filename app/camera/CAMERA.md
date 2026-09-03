@@ -161,7 +161,7 @@ CBR 码率默认 `CAMERA_PRINT_H264_BITRATE`=2048kbps（与直播共用同一常
   | `live_rtsp stat` | `in` / `out` / `kbps` / `queue` / `dropped` / `drop_events` | `queue` 持续贴上限=云端吃不下该码率；`in` 涨而 `out` 不涨=写端卡住 |
   | `local_rtsp stat` | `in` / `out` / `queue` / `dropped` / `client` | `queue` 持续贴上限=live555 取不赢，延迟会顶到队列容量对应时长 |
 
-`config.json` 由 Media 独写；字段含 `job_name` / `start_unix` / `duration_sec` / `material_g` / `status` / `frames_dir` / `thumb`。UI 历史页直读该文件（解析见 `common/fs_manifest/print_history_manifest.*`）。
+`config.json` 由 Media 独写；字段含 `job_name` / `start_unix` / `duration_sec` / `material_g` / `layer_count` / `status` / `frames_dir` / `thumb`。其中 `material_g` 与 `layer_count` 在 upsert 时按 job 基名从 `/home/Gcode/config.json` 快照（`print_history_lookup_gcode_stats`），查不到写 0，UI 显示 "--"。UI 历史页直读该文件（解析见 `common/fs_manifest/print_history_manifest.*`）。
 
 Snap 依赖预览流已开（同一 SHM）；与 UI 解码线程共享 ring，偶发 `snap miss` 见日志。
 

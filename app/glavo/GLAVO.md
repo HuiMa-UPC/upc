@@ -87,7 +87,7 @@ UI 侧的消息中心（左下通知浮层 + 侧栏红点）已经接好订阅�
 ## 日志
 
 - McuLink：`module=McuLink`，开关 `UPC_MOD_MCU_LINK`
-- 详见 [doc/LOG_GUIDE.md](../../doc/LOG_GUIDE.md)
+- 详见 [common/COMMON.md § 专题日志字典](../../common/COMMON.md#专题日志字典varlogtopiclog)（McuLink 按内容分流到 `topic_serial_*` / `topic_tcp_*` / `topic_laser_*` / `topic_print_flow.log`）
 
 ## 相关文档
 

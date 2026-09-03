@@ -34,7 +34,8 @@ scripts/rongsu.sh start   # glavo + rongsu_camera → ui
 |------|---------|-----|
 | 全进程统一 | `/var/log/topic/*.log`（按专题拆分） | 各自 `/var/run/rongsu_*.pid` |
 
-专题文件命名与归属见 [§ 专题日志字典](#专题日志字典varlogtopiclog)。
+专题文件命名与归属见 [§ 专题日志字典](#专题日志字典varlogtopiclog)，体积控制见
+[§ 落盘与轮转](#落盘与轮转)。
 
 各业务进程为 IPC **Client**，连中央 **Broker**（`rongsu_broker`）。
 
@@ -465,7 +466,7 @@ Glavo publish_async(target=APP_CAMERA)
 | `IPC_DELIVER` | 投递订阅回调（`handlers=N`） |
 | `IPC_DELIVER miss` | 本地应处理但无订阅者 |
 
-详见 [doc/LOG_GUIDE.md](../../doc/LOG_GUIDE.md) §4。
+落盘文件见 [§ 专题日志字典](#专题日志字典varlogtopiclog)（`topic_ipc_wire.log` / `topic_ipc_message.log`）。
 
 ## 默认 socket
 
@@ -544,7 +545,7 @@ ParserManager → RingBuffer → McuLink（TCP + 串口）
 | 文件 | 职责 |
 |------|------|
 | `process_ctl.cpp` | daemonize、PID 文件、信号处理、`process_log_boot_banner` |
-| （已移除）`log_rotating.cpp` | 旧的按进程三文件轮转方案，已由 `/var/log/topic` 专题日志替代 |
+| （已移除）`log_rotating.cpp` | 旧的按进程三文件轮转方案，已由 `/var/log/topic` 专题日志替代；轮转改由板端 logrotate 承担，配置见 [scripts/topic](../scripts/topic) |
 | `upc_contract.hpp` §3 | 各进程 PID / 日志路径 |
 
 ## 进程配置速查
@@ -555,7 +556,7 @@ ParserManager → RingBuffer → McuLink（TCP + 串口）
 | `process_config_glavo()` | `rongsu_glavo` | `/var/run/rongsu_glavo.pid` | `/var/log/topic/*.log` |
 | `process_config_camera()` | `rongsu_camera` | `/var/run/rongsu_camera.pid` | `/var/log/topic/*.log` |
 
-各进程 `main.cpp` 支持 `{start|stop|status|run}`；`start` 时 stderr/stdout 重定向到 `/var/log/topic/topic_boot_lifecycle.log`，业务日志由 `rs_log` 按专题写入 `/var/log/topic/*.log`。
+各进程 `main.cpp` 支持 `{start|stop|status|run}`；`start` 时 stderr/stdout 重定向到 `/var/log/topic/topic_boot_lifecycle.log`，业务日志由 `rs_log` 按专题写入 `/var/log/topic/*.log`。这处 `dup2` 也是 `topic_boot_lifecycle.log` 只能用 `copytruncate` 轮转的原因，见 [§ 落盘与轮转](#落盘与轮转)。
 
 - 启动脚本：[scripts/rongsu.sh](../scripts/rongsu.sh)
 
@@ -640,6 +641,7 @@ topic_<大类>_<子类>.log        # 兜底文件例外：topic_misc.log
 | `topic_mqtt_telemetry.log` | `MqttService` | `telemetry` / `heartbeat` / `APP_Update_Ntf` | 遥测与心跳上报 |
 | `topic_mqtt_ota.log` | `MqttService` | `ota` / `OTA` / `Ota_` | 云端 OTA 通知、下载与校验进度 |
 | `topic_mqtt_command.log` | `MqttService` | 以上都不命中 | 云端下行命令与 `cmd/ack`、订阅与激活 |
+| `topic_xfr_upload.log` | `XfrService` | module 精确匹配 | WiFi 发现、PIN 配对、HTTP 文件上传（仅收 `.json` / `.svg`） |
 | `topic_serial_sensor.log` | `McuLink` | msg 以 `sensor:` / `env_sim:` 开头 | 环境量周期上报（O2 / 温湿度 / PM / 压力 / 粉量位 / 门状态），含调试页模拟数据 |
 | `topic_serial_alarm.log` | `McuLink` | `alarm_` / `RX ALARM` / `EVENT ` | MCU 报警与事件单条上报、快照、复位回执 |
 | `topic_serial_layer.log` | `McuLink` | `serial TX cmd:` / `RX LAYER` / `notify_serial_event` | 换层握手：串口层指令下发与层事件回报 |
@@ -656,14 +658,75 @@ topic_<大类>_<子类>.log        # 兜底文件例外：topic_misc.log
 | `topic_ui_preview.log` | `CameraPreview` | module 精确匹配 | UI 侧预览解码：`decode 5s` 统计、RGA 与软件转换回退 |
 | `topic_ui_alarm_state.log` | `AlarmState` | module 精确匹配 | UI 报警状态机：state_mask 推导生命周期、喂消息中心、快照攒帧对齐 |
 
-### 新增大类 / 子类（固定四步）
+### 落盘与轮转
+
+日志始终落在 `rs_log.cpp` 写死的 `kTopicLogDir = /var/log/topic`，不做搬迁，轮转交给外部
+logrotate 控制体积。
+
+配置源文件 [scripts/topic](../scripts/topic) → 板端 `/etc/logrotate.d/topic`。这是一个片段
+文件，靠板端 `/etc/logrotate.conf` 里的 `include /etc/logrotate.d` 生效，**不覆盖**板子原生的
+logrotate 配置。rootfs 无 cron，由 `/etc/init.d/S02logrotate` 每 600s 调一次。
+
+| 组 | 大小阈值 | 保留份数 | 策略 | 单大类上限 |
+|----|----------|----------|------|------------|
+| 普通专题（`topic_<大类>_*.log`） | 4M | 3 | rename + `nocreate` | 4M + 3 份归档 |
+| `topic_boot_lifecycle.log` | 4M | 3 | `copytruncate` | 4M + 3 份归档 |
+
+归档命名 `topic_xxx.log.1`；片段内只声明 `missingok` / `notifempty`，是否压缩成 `.log.1.gz`
+取决于板端 `/etc/logrotate.conf` 有没有全局 `compress`（片段会继承全局指令）。
+
+两点约束值得记住：
+
+- 普通专题能用 rename，是因为 `rs_log` 每条日志各自 `fopen`/`fclose`，不持有长期 fd，下一条写入会重建文件。
+- `topic_boot_lifecycle.log` 是例外：各进程 `redirect_stdio_to_boot_log()` 用 `dup2` 把它挂到
+  STDOUT/STDERR 且不处理 SIGHUP，rename 后会继续写旧 inode，所以只能原地截断。
+
+#### 板端自检
+
+按顺序走，哪步不符预期就停在哪步查：
+
+```sh
+command -v logrotate                      # 1. 二进制须在 S02logrotate 的 PATH 内
+/etc/init.d/S02logrotate status           # 2. 应是 running (pid N)
+ls -l /etc/logrotate.d/topic              # 3. 片段已部署
+logrotate -d /etc/logrotate.conf          # 4. 干跑，只看有无 error / duplicate
+logrotate -vf -s <STATE> /etc/logrotate.conf   # 5. 强制转一次，STATE 取自 S02logrotate
+ls -l /var/log/topic/                     # 6. 应出现 *.log.1
+```
+
+第 1 步返回空就会让 `S02logrotate start` 打印 `SKIP (not installed)`，timer 根本不起——配置写得
+再对也不会轮转。第 5 步的 `-s` **不能省**，且要和 `S02logrotate` 里的 `STATE` 变量一致：不带就会
+去写 logrotate 的默认状态文件，与 timer 用的那份分家，之后对「上次何时转过」的判断会失准。
+`-f` 只跳过大小阈值，`notifempty` 仍生效，空文件不转。
+
+日常运行痕迹：`S02logrotate` 把 logrotate 输出 pipe 给 `logger -t logrotate`，
+在 syslog（`messages`）里能看到每轮记录。
+
+想确认两种策略各自生效，比对轮转前后的 inode（`stat -c %i`）：普通专题走 rename，inode 会变；
+`topic_boot_lifecycle.log` 走 copytruncate，inode 不变而 size 归零——若它 inode 也变了，说明误用了
+rename，各进程的 STDOUT/STDERR 已经写向游离的旧 inode，日志会静默丢失。
+
+### 新增大类 / 子类（固定五步）
 
 1. **`common/debug/rs_log.cpp`** — `select_topic_file()` 加分支；注意分支顺序，**原始帧/透传正文类判据必须排在内容关键词之前**（参照 `MqttService` 的注释）。
 2. **本表** — 大类速查 + 子类明细各补一行；只加子类时同步大类的“子类数”。
-3. **`tools/analyze_topic_logs.py`** — 文件头 Usage 注释列出新文件名；需要出指标/图表时再加正则与 CSV。
-4. **打包上传** — 按 `topic_<大类>_*.log` glob，不要逐文件枚举，新增子类才能自动被带上。
+3. **[scripts/topic](../scripts/topic)** — **仅新增大类时**：在多路径 stanza 的列表里加一行 `/var/log/topic/topic_<大类>_*.log`（保持字母序），不要新开 stanza，参数与同组一致。新增子类不用动，已被大类 glob 覆盖。改完记得同步到板端 `/etc/logrotate.d/topic`。
+4. **`tools/analyze_topic_logs.py`** — 文件头 Usage 注释列出新文件名；需要出指标/图表时再加正则与 CSV。
+5. **打包上传** — 按 `topic_<大类>_*.log` glob，不要逐文件枚举，新增子类才能自动被带上。
 
 新增 module 标签（`rs_log.hpp` 里的 `UPC_LOG_XXX` 宏）后若忘了第 1 步，日志会静默落进
 `topic_misc.log`，可用 `grep -c module= /var/log/topic/topic_misc.log` 自检。
 
-详阅 [doc/LOG_GUIDE.md](../doc/LOG_GUIDE.md)
+忘了第 3 步同样**没有任何报错**（`missingok` 让 logrotate 静默跳过），该文件会一直涨到吃光
+`/var/log` 所在的 tmpfs。自检：`ls -lS /var/log/topic/*.log | head`，明显超过 4M 却没有配套
+`.log.1` 归档的就是漏配的。
+
+三个易踩的坑：
+
+- **行尾必须是 LF**。`scripts/topic` 一旦被存成 CRLF，logrotate 会报
+  `lines must begin with a keyword or a filename` 并把**整个文件**丢弃（`logrotate -d` 显示
+  `Handling 0 logs`），所有专题都不再轮转，且 timer 照常运行不报警。改完用
+  `logrotate -d scripts/topic` 确认解析出 2 个 stanza。
+- 大类若无子类后缀（如 `topic_misc.log`），`topic_misc_*.log` 匹配不到它，glob 必须写全名。
+- 新专题若不走 `rs_log`、而是长期持有 fd 写入，就不能并进普通组，得照 `topic_boot_lifecycle.log`
+  单开 `copytruncate` stanza（同一文件被两个 stanza 命中时 logrotate 会直接报 duplicate 并跳过）。
