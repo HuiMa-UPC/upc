@@ -480,15 +480,6 @@ void make_clean_test_session_id(char* out, size_t out_len)
  * 静态工具
  * ============================================================================ */
 
-/** @brief 将 Inline 类型 payload 转为字符串；非 Inline 或空 payload 返回空串 */
-std::string GlavoService::payload_to_string(const middleware::MsgPayload& payload)
-{
-    if (payload.type != middleware::MsgPayload::Type::Inline || payload.length == 0) {
-        return {};
-    }
-    return std::string(reinterpret_cast<const char*>(payload.data.bytes.data()), payload.length);
-}
-
 /** @brief 拼接目录与文件名，自动处理末尾 '/' */
 std::string GlavoService::make_full_path(const std::string& dir, const std::string& name)
 {
@@ -1400,25 +1391,6 @@ bool GlavoService::copy_usb_to_local(const std::string& src, const std::string& 
     }
     out << in.rdbuf();
     return static_cast<bool>(out);
-}
-
-/**
- * @brief 轻量扫描 G-code 行数（打开→读 total_lines→关闭，不启动完整解析）
- * @param line_count 成功时写入行数
- */
-bool GlavoService::light_scan_line_count(const std::string& path, uint32_t& line_count)
-{
-    line_count = 0;
-    if(parser::ParserManager::instance().open_file(path) != 0) {
-        return false;
-    }
-    parser::IParserWorker* worker = active_parser();
-    if(!worker) {
-        return false;
-    }
-    line_count = static_cast<uint32_t>(worker->get_total_lines());
-    worker->close_file();
-    return true;
 }
 
 /* ============================================================================

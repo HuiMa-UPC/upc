@@ -160,7 +160,6 @@ private:
     void send_dir_open_usb(const middleware::Message& req, const std::string& usb_path);
     void stop_print_job();
     void clear_prepare_session();
-    bool light_scan_line_count(const std::string& path, uint32_t& line_count);
     bool copy_usb_to_local(const std::string& src, const std::string& dst);
     bool run_print_prepare(middleware::PrintFileSource source, uint32_t index,
                            std::string& local_path_out);
@@ -196,7 +195,6 @@ private:
     }
 
     std::string make_full_path(const std::string& dir, const std::string& name);
-    static std::string payload_to_string(const middleware::MsgPayload& payload);
 
     std::atomic<ServiceState> state_{ServiceState::Idle};
     std::vector<middleware::Subscription> subscriptions_;
