@@ -55,12 +55,12 @@
  * 左侧插入复选框（flex 会跳过隐藏对象，所以显隐复选框天然带出卡片的缩进）；
  * 期间禁用左滑删除，点卡片任意位置切换勾选。
  *
- * 数据源：/home/media/video/config.json（common/fs_manifest/print_history_manifest）。
- * 缩略图：/home/media/video/{thumb}（.rthm 原始 RGB565，自定义 decoder），
+ * 数据源：/data/media/video/config.json（common/fs_manifest/print_history_manifest）。
+ * 缩略图：/data/media/video/{thumb}（.rthm 原始 RGB565，自定义 decoder），
  *          cover 居中裁切（竖构图相机图铺满横槽）。
  *
  * 指标数据源（Duration / Filament / Layers 均取自 manifest）：
- *   Layers 与 Filament 由 Media 落盘历史条目时从 /home/Gcode/config.json 快照
+ *   Layers 与 Filament 由 Media 落盘历史条目时从 /data/Gcode/config.json 快照
  *   （见 print_history_lookup_gcode_stats）；旧清单无该字段或切片未提供时显示 "--"。
  *
  * 一处等后端补数据：
@@ -155,7 +155,7 @@ struct HistoryCard {
     std::string thumb;
     std::string print_thumb;
     std::string video;
-    std::string thumb_src;          /**< LVGL FS 路径，如 A:/home/media/video/x/thumb.rthm */
+    std::string thumb_src;          /**< LVGL FS 路径，如 A:/data/media/video/x/thumb.rthm */
     std::string title;              /**< 播放器标题（作业名） */
     std::string subtitle;           /**< 播放器副标题（时间 日期） */
     bool        video_ready   = false;
@@ -1828,7 +1828,7 @@ void build_entry(lv_obj_t *parent, const upc::PrintHistoryEntry &e)
     ui_user_make_divider_vline(metrics, USER_PAD_SM);
     make_metric(metrics, &ic_cube, "Filament", mat_buf);
     ui_user_make_divider_vline(metrics, USER_PAD_SM);
-    /* Layers：Media 落盘时从 /home/Gcode/config.json 快照的层数；无数据显示 "--" */
+    /* Layers：Media 落盘时从 /data/Gcode/config.json 快照的层数；无数据显示 "--" */
     make_metric(metrics, &ic_layers, "Layers", layer_buf);
 
     apply_card_selection(ctx);

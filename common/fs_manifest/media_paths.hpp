@@ -4,7 +4,7 @@
 /**
  * 本机媒体落盘根路径（拍照 / 延时摄影 / 打印录像）。
  *
- *   /home/media/
+ *   /data/media/
  *     photo/                 相册 PNG + 配对 .rthm
  *     video/
  *       config.json          打印历史清单
@@ -16,7 +16,7 @@
  */
 
 #ifndef UPC_MEDIA_ROOT
-#define UPC_MEDIA_ROOT  "/home/media"
+#define UPC_MEDIA_ROOT  "/data/media"
 #endif
 
 #ifndef UPC_PHOTO_DIR

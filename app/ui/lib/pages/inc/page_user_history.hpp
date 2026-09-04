@@ -8,8 +8,8 @@ extern "C" {
 #endif
 
 /**
- * 用户打印历史页：读取 /home/media/video/config.json，按时间倒序展示每次打印的
- * 时间/文件名/状态/时长/耗材 + 延时摄影缩略图；Album 扫 /home/media/photo；
+ * 用户打印历史页：读取 /data/media/video/config.json，按时间倒序展示每次打印的
+ * 时间/文件名/状态/时长/耗材 + 延时摄影缩略图；Album 扫 /data/media/photo；
  * 支持上下翻页与左滑删除。
  */
 lv_obj_t *page_user_history_create(lv_obj_t *parent);

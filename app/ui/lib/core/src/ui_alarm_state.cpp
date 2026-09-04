@@ -1,6 +1,7 @@
 #include "ui_alarm_state.hpp"
 
 #include "lvgl_wrap.hpp"
+#include "message_paths.hpp"
 #include "rs_log.hpp"
 #include "ui_alarm_catalog.hpp"
 #include "ui_message_store.hpp"
@@ -43,13 +44,13 @@ constexpr uint32_t kSnapPollMs       = 30000;
  * 攒帧窗口只有 2s，正常撑死几条；溢出就退回直接应用，宁可有回退风险也别丢报警。 */
 constexpr int      kPendingReportCap = 16;
 
-/* 消息中心自己的落盘目录，独立于 /home/media——报警历史不是媒体，早先挂在
+/* 消息中心自己的落盘目录，独立于 UPC_MEDIA_ROOT——报警历史不是媒体，早先挂在
  * media 下只是为了借那边的路径宏。目录由 ui_alarm_state_init() 负责创建：UI 起得
  * 可能比 Media 早，不能指望别的进程先建好。 */
-constexpr const char *kMessageDir     = "/home/messages";
-constexpr const char *kHistoryPath    = "/home/messages/alarm_history.jsonl";
+constexpr const char *kMessageDir     = UPC_MESSAGE_DIR;
+constexpr const char *kHistoryPath    = UPC_ALARM_HISTORY_PATH;
 /* 先写 .tmp 再 rename，掉电不会留下半截文件 */
-constexpr const char *kHistoryPathTmp = "/home/messages/alarm_history.jsonl.tmp";
+constexpr const char *kHistoryPathTmp = UPC_ALARM_HISTORY_PATH_TMP;
 
 /* ---- 当前 CONDITION：固定槽位，不搬移 ----
  * ui_message_store 只存 title/body 指针，条目存续期内地址必须稳定。 */

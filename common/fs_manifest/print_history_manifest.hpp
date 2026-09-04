@@ -2,7 +2,7 @@
 #define UPC_PRINT_HISTORY_MANIFEST_HPP
 
 /**
- * 打印历史（延时摄影 + 可选打印录像）目录清单：/home/media/video/config.json
+ * 打印历史（延时摄影 + 可选打印录像）目录清单：/data/media/video/config.json
  * - 路径：common/fs_manifest/
  * - Media：Finish/Abort remux 成功后 upsert 一条
  * - UI：进入历史页时直接读取（不经列表 IPC）

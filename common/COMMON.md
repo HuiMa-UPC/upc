@@ -26,7 +26,7 @@ scripts/rongsu.sh start   # glavo + rongsu_camera → ui
 | `ipc/` | Unix socket、`MsgPort`、SHM/dma 帧环 |
 | `debug/` | `UPC_LOG_*`、`upc_sys_monitor` |
 | `process/` | PID、daemon、专题日志重定向 |
-| `fs_manifest/` | 本地清单 JSON（G-code / 打印历史 `config.json`；根路径见 `media_paths.hpp`） |
+| `fs_manifest/` | 本地清单 JSON（G-code / 打印历史 `config.json`）；板端数据根默认 `/data/{CAL,image,media,Gcode,transport,messages}` |
 
 ## 进程与日志
 
@@ -152,7 +152,7 @@ scripts/rongsu.sh start   # glavo + rongsu_camera → ui
 | `APP_PM25_Rsp` | `GLAVO_PM25_Check_Rsp` | Glavo→UI | `Pm25ResultPayload` | `register_pm25_result` | PM2.5 流程 |
 | `UI_CLOSE_DOOR_Req` | — | UI→Glavo | Empty | `send_close_door_check` | 关门检测 |
 | `APP_CLOSE_DOOR_Rsp` | `GLAVO_Door_Close_Rsp` | Glavo→UI | `DoorResultPayload` | `register_close_door_result` | — |
-| `Fs_DirOpen_Req` | `FS_Dir_Open_Req` | UI→Glavo | `PrintFileSource`（仅 USB） | `send_fs_dir_open` | Local 不走 IPC，UI 直读 `/home/Gcode/config.json` |
+| `Fs_DirOpen_Req` | `FS_Dir_Open_Req` | UI→Glavo | `PrintFileSource`（仅 USB） | `send_fs_dir_open` | Local 不走 IPC，UI 直读 `/data/Gcode/config.json` |
 | `Fs_DirOpen_Rsp` | `FS_Dir_Open_Rsp` | Glavo→UI | `FsDirHeader` + `FileEntryPayload[]` | `register_fs_dir` | **仅 USB** 扫盘应答 |
 | `Fs_Delete_Ntf` | `FS_Delete_Ntf` | UI→Glavo | `FsDeleteNtfPayload` | `send_fs_delete_ntf` | 删 Local 文件 + 更新 config.json |
 | `APP_Fs_Delete_Rsp` | — | Glavo→UI | `FsDeleteRspPayload` | `register_fs_delete_rsp` | Local 删除完成/失败回执；UI 收到 `ok=1` 后刷新本地目录 |
@@ -193,10 +193,10 @@ scripts/rongsu.sh start   # glavo + rongsu_camera → ui
 | `UI_Camera_Stream_Stop_Req` | — | UI→Camera | Empty | `send_stream_stop` | 关预览 |
 | `APP_Camera_Stream_Stop_Rsp` | — | Camera→UI | Empty | `register_stream_stop_done` | — |
 | `APP_Camera_Frame_Ntf` | — | Camera→UI | `CameraFrameNtfPayload` | （可选） | 帧序号；默认关 |
-| `UI_Camera_Snapshot_Req` | — | UI→Media | Empty | `send_snapshot_req` | 存当前帧 PNG + 配对 `.rthm` 缩略图到 `/home/media/photo` |
+| `UI_Camera_Snapshot_Req` | — | UI→Media | Empty | `send_snapshot_req` | 存当前帧 PNG + 配对 `.rthm` 缩略图到 `/data/media/photo` |
 | `APP_Camera_Snapshot_Rsp` | — | Media→UI | `CameraSnapshotRspPayload` | `register_snapshot_rsp` | — |
 | `UI_Storage_Usage_Req` | — | UI→Media | Empty | （历史页直接发总线） | 历史页进入时请求一次容量统计（used/total） |
-| `APP_Storage_Usage_Rsp` | — | Media→UI | `StorageUsagePayload` | （历史页直接订阅总线） | 返回 `/home/media` 所在分区已用/总容量，刷新右上角 Storage |
+| `APP_Storage_Usage_Rsp` | — | Media→UI | `StorageUsagePayload` | （历史页直接订阅总线） | 返回 `/data/media` 所在分区已用/总容量，刷新右上角 Storage |
 | `VISUAL_Camera_Stream_Start_Req` | — | Visual→Camera | `CameraStreamStartReqPayload`/Empty | — | 视觉进程申请并行取流 |
 | `APP_Visual_Camera_Stream_Start_Rsp` | — | Camera→Visual | `CameraStreamInfoPayload` | — | 视觉侧 SHM 参数 / dma fd |
 | `VISUAL_Camera_Stream_Stop_Req` | — | Visual→Camera | Empty | — | 视觉进程停止取流 |
@@ -208,7 +208,7 @@ scripts/rongsu.sh start   # glavo + rongsu_camera → ui
 | `APP_Visual_FirstLayer_Check_Rsp` | `0x1424` | Visual→Glavo | `VisualFirstLayerCheckRspPayload` | — | 首层检测结果：`result=1` 继续打印，`result=0` 继续铺粉 |
 | `APP_Print_Video_Session_Start_Ntf` | — | Glavo→Media（Hub FWD） | `PrintVideoSessionPayload`（含 `h264_bitrate`，0=Media 默认中等码率 / cal `PRINT_H264_BITRATE`） | — | `PrintVideoNotify` / `MediaService` |
 | `APP_Print_Layer_Snap_Ntf` | — | Glavo→Media（Hub FWD） | `PrintVideoLayerSnapPayload` | — | 换层 Snap |
-| `APP_Print_Video_Session_Finish_Ntf` | — | Glavo→Media（Hub FWD） | `PrintVideoSessionPayload` | — | 保存 `/home/media/video/{job}/1.png...N.png` + `thumb.rthm` + config 快路径（`video_pending`） |
+| `APP_Print_Video_Session_Finish_Ntf` | — | Glavo→Media（Hub FWD） | `PrintVideoSessionPayload` | — | 保存 `/data/media/video/{job}/1.png...N.png` + `thumb.rthm` + config 快路径（`video_pending`） |
 | `APP_Print_Video_Session_Abort_Ntf` | — | Glavo→Media（Hub FWD） | `PrintVideoSessionPayload` | — | 有帧同样落盘目录 + manifest 快路径（`terminated` + `video_pending`）；0 帧不清整目录 |
 | `APP_Print_H264_Record_Pause_Ntf` | — | Glavo→Media（Hub FWD） | `PrintPauseStatePayload` | — | 打印暂停/恢复时同步连续 H264 录制状态（paused=1 暂停采帧，0 恢复） |
 | `APP_Clean_Video_Session_Start_Ntf` | — | Glavo→Media（Hub FWD） | `CleanVideoSessionStartPayload` | — | 清粉延时抽帧开始：接续打印 `N.png`，按 `fps`/`TIMELAPSE_VIDEO_FPS` 定时写 `(N+1).png…` |
@@ -225,8 +225,8 @@ scripts/rongsu.sh start   # glavo + rongsu_camera → ui
 | `UI_Ota_User_Decision_Req` | — | UI→MQTT | `OtaDecisionReqPayload` | `send_ota_user_decision` | 用户确认/取消 OTA 通知（取消仅关弹窗，不上报云端） |
 | `APP_Mqtt_Ota_Progress_Ntf` | — | MQTT→UI | `OtaProgressPayload` | `register_ota_progress` | 下载与校验进度；OTA 应用阶段可直接 100%（本期跳过真实刷写） |
 | `XFR_Transfer_Progress_Ntf` | — | XFR→UI | `XfrTransferProgressPayload` | `register_xfr_transfer_progress` | WiFi 传输阶段进度（Uploading/Slicing/Finished/Error） |
-| `UI_Mcu_Ota_Start_Req` / `UI_Mcu_Ota_Cancel_Ntf` / `APP_Mcu_Ota_Status_Ntf` | — | UI↔Glavo | `McuOtaStatusPayload` | `send_mcu_ota_start` / `send_mcu_ota_cancel` / `register_mcu_ota_status` | Galvo 以太网 OTA（`/home/image/galvo`） |
-| `UI_Serial_Mcu_Ota_Start_Req` / `UI_Serial_Mcu_Ota_Cancel_Ntf` / `APP_Serial_Mcu_Ota_Status_Ntf` | — | UI↔Glavo | `McuOtaStatusPayload` | `send_serial_mcu_ota_start` / `send_serial_mcu_ota_cancel` / `register_serial_mcu_ota_status` | MCU 串口 OTA（`/home/image/mcu`） |
+| `UI_Mcu_Ota_Start_Req` / `UI_Mcu_Ota_Cancel_Ntf` / `APP_Mcu_Ota_Status_Ntf` | — | UI↔Glavo | `McuOtaStatusPayload` | `send_mcu_ota_start` / `send_mcu_ota_cancel` / `register_mcu_ota_status` | Galvo 以太网 OTA（`/data/image/galvo`） |
+| `UI_Serial_Mcu_Ota_Start_Req` / `UI_Serial_Mcu_Ota_Cancel_Ntf` / `APP_Serial_Mcu_Ota_Status_Ntf` | — | UI↔Glavo | `McuOtaStatusPayload` | `send_serial_mcu_ota_start` / `send_serial_mcu_ota_cancel` / `register_serial_mcu_ota_status` | MCU 串口 OTA（`/data/image/mcu`） |
 | `UI_Debug_Axis_Jog_Ntf` | — | UI→Glavo | `DebugAxisJogPayload` | `DebugMsgProxy::send_axis_jog` | **后端待实现** |
 | `UI_Debug_Axis_Hold_Stop_Ntf` | — | UI→Glavo | `DebugAxisPayload` | `send_axis_hold_stop` | 长按松手停 |
 | `UI_Debug_Axis_SetZero_Ntf` | — | UI→Glavo | `DebugAxisPayload` | `send_axis_set_zero` | Z 工作零点 |
@@ -349,7 +349,10 @@ rongsu_broker ──listen──► /tmp/upc_broker.sock ◄── UI / Glavo / 
 | `common/fs_manifest/gcode_manifest.*` | Local `UPC_LOCAL_GCODE_DIR/config.json` 读写（UI 读列表 + Glavo 写） | 平台 / UI / Glavo |
 | `common/fs_manifest/print_history_manifest.*` | `UPC_VIDEO_CONFIG`（Media 写，UI 历史页读） | 平台 / Media / UI |
 | `common/fs_manifest/media_paths.hpp` | `UPC_MEDIA_ROOT`（photo/video/tmp + 首层视觉诊断图）；`UPC_TIMELAPSE_PLAYBACK_PNG`（默认 1=PNG 播延时） | 平台 / Media / UI / Visual |
-| `common/config/cal_config.hpp` | `UPC_CAL_PATH`（默认 `/home/CAL/cal.csv`） | 平台 / Glavo / Media / UI / Xfer |
+| `common/fs_manifest/image_paths.hpp` | `UPC_IMAGE_ROOT`（soc/mcu/galvo/tmp OTA 落盘） | 平台 / MQTT / Glavo |
+| `common/fs_manifest/message_paths.hpp` | `UPC_MESSAGE_DIR`（报警历史 jsonl） | 平台 / UI |
+| `common/fs_manifest/xfr_paths.hpp` | `UPC_XFR_STORAGE_DIR`（局域网上传暂存与 token） | 平台 / Xfer |
+| `common/config/cal_config.hpp` | `UPC_CAL_PATH`（默认 `/data/CAL/cal.csv`） | 平台 / Glavo / Media / UI / Xfer |
 | `common/ipc/msg_port.hpp` | 业务唯一 IPC 入口 | 平台组 |
 | `common/ipc/ipc_wire.*` | 线协议 | 平台组 |
 | `common/ipc/ipc_endpoint.*` | Socket 传输 | 平台组 |
@@ -655,7 +658,7 @@ topic_<大类>_<子类>.log        # 兜底文件例外：topic_misc.log
 | `topic_camera_capture.log` | `CameraService` | module 精确匹配 | 采集侧：V4L2 取流、dma fd 分发、SHM 环 `committed` / `slot_fail` 统计 |
 | `topic_media_record.log` | `MediaService` | 兜底（非存储、非直播） | 拍照、打印/清粉延时抽帧、H264 录制、MP4 合成与 manifest |
 | `topic_media_rtsp.log` | `MediaService` | `live_rtsp` / `local_rtsp` / `h264_enc` | 直播三件套：云端 RTSP 推流、局域网 live555 Server、共用 H264 编码器 |
-| `topic_storage_usage.log` | `MediaService` | `storage` / `STORRCLM` | `/home/media` 容量统计与空间回收 |
+| `topic_storage_usage.log` | `MediaService` | `storage` / `STORRCLM` | `/data/media` 容量统计与空间回收 |
 | `topic_ui_preview.log` | `CameraPreview` | module 精确匹配 | UI 侧预览解码：`decode 5s` 统计、RGA 与软件转换回退 |
 | `topic_ui_alarm_state.log` | `AlarmState` | module 精确匹配 | UI 报警状态机：state_mask 推导生命周期、喂消息中心、快照攒帧对齐 |
 

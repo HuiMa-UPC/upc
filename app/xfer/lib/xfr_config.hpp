@@ -2,6 +2,7 @@
 #define UPC_XFR_CONFIG_HPP
 
 #include "gcode_manifest.hpp"
+#include "xfr_paths.hpp"
 
 #include <cstdint>
 #include <string>
@@ -10,9 +11,9 @@ namespace upc::xfr {
 
 struct XfrConfig {
     uint16_t http_port = 8080;
-    std::string storage_dir = "/home/transport";
+    std::string storage_dir = UPC_XFR_STORAGE_DIR;
     std::string gcode_dir = UPC_LOCAL_GCODE_DIR;
-    std::string token_file = "/home/transport/.xfr_tokens";
+    std::string token_file = UPC_XFR_TOKEN_FILE;
     std::string mdns_service_file = "/etc/avahi/services/snowpod.service";
     std::string snowslice_bin = "/home/snowslice";
     std::string progress_file = "/tmp/progress.txt";

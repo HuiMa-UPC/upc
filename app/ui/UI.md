@@ -345,11 +345,11 @@ MCU 经串口上报的报警（`GLAVO_Alarm_Report_Ntf`，0xA3/0x20 原样透传
 英文翻译表 `doc/alarm_catalog_en.csv` 可覆写，未翻译的用 macro 名转写兜底——目前还有
 41 条报警 + 48 条 detail 走兜底，标题能看但 `desc`（处理建议）是空的）+ 报文
 detail 组合；查不到的 code/detail 降级显示原始编号
-**绝不丢弃**（固件可能比字典新）。历史落盘 `/home/messages/alarm_history.jsonl`
+**绝不丢弃**（固件可能比字典新）。历史落盘 `/data/messages/alarm_history.jsonl`
 （上限 200 条，只存原始字段，文案加载时按当前字典重新生成）。**目录由
 `ui_alarm_state_init()` 自己 `create_directories`**——UI 可能比 Media 先起，不能
 指望别的进程建；不建的话 `fopen` 失败会把历史整段静默丢掉（现已补 `UPC_LOG_ALARM_STATE`
-错误日志）。这里刻意**不放在 `/home/media` 下**：报警历史不是媒体，早先挂在那儿只是
+错误日志）。这里刻意**不放在 `/data/media` 下**：报警历史不是媒体，早先挂在那儿只是
 为了借 `UPC_MEDIA_ROOT` 那个宏，现已解除对 `media_paths.hpp` 的依赖。
 
 复位：`ui_alarm_request_reset(code)` → `UI_Alarm_Reset_Ntf` → Glavo 组 0x82 帧下发。
@@ -538,7 +538,7 @@ ACTIVE + OWNER_TASK 这一档最容易漏：激光器 1301、各轴 1203~1230 �
 （浮层卡 / 消息页列表 / 详情抽屉 / 历史读的都是这一份文案，一处加完四处都有）；
 设备事件侧走 `ui_message_debug_push()`（文案仍取自码表，只是套上前缀）。
 **假报警还不落盘**：`history_save()` 跳过 `simulated` 条目，重启即净，不用再手删
-`/home/messages/alarm_history.jsonl`。同一个码后来收到真报文会自动摘掉 `[SIM]`。
+`/data/messages/alarm_history.jsonl`。同一个码后来收到真报文会自动摘掉 `[SIM]`。
 
 联调：MCU 不发真报警时用调试页 Other → Other Switches → `Alarm Inject`
 （`ui_alarm_debug_inject()` 绕过总线直走上报路径，造 6 条假报警：1124 阻断 /
@@ -623,7 +623,7 @@ pending 自动解除——正好顺带验超时路径。
 
 | Tab | 数据源 |
 |-----|--------|
-| **Local** | UI 直接读 `/home/Gcode/config.json`（`common/fs_manifest/gcode_manifest.*`），**不发** `Fs_DirOpen_Req` |
+| **Local** | UI 直接读 `/data/Gcode/config.json`（`common/fs_manifest/gcode_manifest.*`），**不发** `Fs_DirOpen_Req` |
 | **USB** | `send_fs_dir_open(Usb)` → Glavo 扫盘 → `Fs_DirOpen_Rsp` |
 
 删除 Local / Prepare / Start 仍走 IPC。
@@ -947,7 +947,7 @@ Glavo Print_Terminate_Rsp / 进度 100% → control.cpp finish_printing()
   → enter_state(CONTROL_STATE_PRINT_DONE)   // 只停看门狗，预览保活，界面维持打印中原样
   → （开门 finalize：promote 目录；`UPC_TIMELAPSE_PLAYBACK_PNG=1` 时不编 timelapse.mp4，保留 PNG 即可播；`=0` 时后台编 mp4）
   → APP_Print_Video_Manifest_Ntf (Camera→UI)
-  → control.cpp on_print_video_manifest()：按 frames_dir 主键读 /home/media/video/config.json
+  → control.cpp on_print_video_manifest()：按 frames_dir 主键读 /data/media/video/config.json
   → page_user_home_enter_print_result()     // 徽标切结束档 + 底部换取件组
 ```
 
@@ -1087,7 +1087,7 @@ rongsu_camera 经主 IPC（/tmp/upc_camera.sock）SCM_RIGHTS 附带 dma_buf fd �
 
 | 组件 | 文件 | 职责 |
 |------|------|------|
-| `page_user_history` | `pages/page_user_history.*` | 读 `/home/media/video/config.json`（`common/fs_manifest/print_history_manifest`）→ 按 `start_unix` 倒序、按自然日分组的卡片列表；卡片三指标 Duration / Filament / Layers 分别取 `duration_sec` / `material_g` / `layer_count`（后两者由 Media 从 `/home/Gcode/config.json` 快照，为 0 时显示 "--"）；缩略图 `A:/home/media/video/{thumb}`（RTHM 解码，`LV_IMAGE_ALIGN_COVER`）；**Album** 走 `ui::album::scan()` 扫 `/home/media/photo`，缩略图优先同名 `.rthm`；顶部三 Tab + Storage 容量条；管理（多选）模式批量删除；上下翻页；**左滑删除**（跟手拖动，见「左滑删除：跟手拖动」一节）→ History/Timelapse **按类型独立删除**后重写 config.json；Album 删 PNG + 配对 `.rthm` |
+| `page_user_history` | `pages/page_user_history.*` | 读 `/data/media/video/config.json`（`common/fs_manifest/print_history_manifest`）→ 按 `start_unix` 倒序、按自然日分组的卡片列表；卡片三指标 Duration / Filament / Layers 分别取 `duration_sec` / `material_g` / `layer_count`（后两者由 Media 从 `/data/Gcode/config.json` 快照，为 0 时显示 "--"）；缩略图 `A:/data/media/video/{thumb}`（RTHM 解码，`LV_IMAGE_ALIGN_COVER`）；**Album** 走 `ui::album::scan()` 扫 `/data/media/photo`，缩略图优先同名 `.rthm`；顶部三 Tab + Storage 容量条；管理（多选）模式批量删除；上下翻页；**左滑删除**（跟手拖动，见「左滑删除：跟手拖动」一节）→ History/Timelapse **按类型独立删除**后重写 config.json；Album 删 PNG + 配对 `.rthm` |
 | `page_user_timelapse` | `pages/page_user_timelapse.*` | 全屏播放页（建于 `lv_layer_top()`）：受 `UPC_TIMELAPSE_PLAYBACK_PNG` 控制——默认 PNG 序列；`=0` 时优先 `timelapse.mp4`（失败回退 PNG）；拖动预览为后台小图 scrub，松手后再 settle 主画面 |
 | `page_user_photo` | `pages/page_user_photo.*` | 相册全屏浏览器（同建于 `lv_layer_top()`，与播放器同一套 chrome）：主图 `LV_IMAGE_ALIGN_CONTAIN`，左右滑动 / 两侧箭头翻页、首末循环回绕，底部 filmstrip 点格跳转，单击主图切控件层 |
 
@@ -1163,7 +1163,7 @@ padding 24、圆角 8、图标 32、图标↔文字 24、标题 20、右箭头 2
   `N selected + Delete + Select All + Cancel`（都是 `USER_HIST_BTN_W × USER_HIST_TAB_H` 胶囊）。
   两组按钮都上抬 `manage_btn_lift()`（`USER_PAD_SM / 2`）比 Tab 文字略高；按钮高度本就等于行高，
   所以 Tab 行也要 `OVERFLOW_VISIBLE` + `tab_row_ext_draw_cb` 才不被裁掉顶部。
-  行下一条通栏分隔线。**Album** 数据源为 `/home/media/photo`（PNG 原图 + 可选同名 `.rthm` 缩略图）。
+  行下一条通栏分隔线。**Album** 数据源为 `/data/media/photo`（PNG 原图 + 可选同名 `.rthm` 缩略图）。
 - **七个 `USER_HIST_*` 原本都是稿值**（稿 4430:6108 Tab 行高 40 与按钮 100×40、稿
   4456:6230 卡高 160 与缩略图 256×160 的 8:5、稿 4547:7974 存储条 160×8、稿 4470:6958
   复选框 24 圆角 4 = padding 4 + 图标 16、稿 4550:8296 横幅高 42 = 12 + 图标 18 + 12）。
@@ -1307,9 +1307,9 @@ padding 24、圆角 8、图标 32、图标↔文字 24、标题 20、右箭头 2
 |------|------|------|
 | `Layers` | 显示 `--` | manifest 加层数字段（Camera 可取换层 Snap 的最大 `layer_index`） |
 | Storage 容量 | `page_user_history.cpp` 顶部 `kStorageUsedMB/kStorageTotalMB` 常量占位 | 接上报后改 `storage_used_mb()/storage_total_mb()` 两个取数函数即可 |
-| Timelapse / Album | 已按 Tab 分支：Timelapse 读 manifest；Album 走 `ui::album::scan()` 扫 `/home/media/photo`（缩略图优先 `.rthm`），点开进 `user_photo` 全屏浏览器 | — |
+| Timelapse / Album | 已按 Tab 分支：Timelapse 读 manifest；Album 走 `ui::album::scan()` 扫 `/data/media/photo`（缩略图优先 `.rthm`），点开进 `user_photo` 全屏浏览器 | — |
 | 相册 filmstrip | 已做：窗口化的底部缩略图条（格数按屏宽算，`.rthm` 常驻内存），见上一节 | — |
-| 相册容量 | `/home/media/photo` **无上限也无清理**（全工程只有 Media 建目录/写文件、UI 扫目录三处碰它），照片只会堆到用户手动删或盘满；`media_paths.hpp` 预留的 `UPC_PHOTO_CONFIG` 至今未用 | 需要配额/轮转的话在 Media 侧做，UI 这边 filmstrip 已窗口化不受条数影响，但历史页列表仍是无分页地每张一卡 |
+| 相册容量 | `/data/media/photo` **无上限也无清理**（全工程只有 Media 建目录/写文件、UI 扫目录三处碰它），照片只会堆到用户手动删或盘满；`media_paths.hpp` 预留的 `UPC_PHOTO_CONFIG` 至今未用 | 需要配额/轮转的话在 Media 侧做，UI 这边 filmstrip 已窗口化不受条数影响，但历史页列表仍是无分页地每张一卡 |
 
 ### 触摸命中区（`lv_obj_set_ext_click_area`）
 
@@ -1351,7 +1351,7 @@ Tab 取 `USER_PAD_SM`（小于 Tab 间距 `USER_PAD_LG` 的一半），故相邻
 
 ### LVGL 配置依赖（`3rdparty/.../configs/rongsu_ui.defaults`）
 - `LV_USE_TJPGD=1`：历史缩略图 baseline JPEG 解码
-- `LV_USE_FS_POSIX=1` + `LV_FS_POSIX_LETTER='A'`：按路径加载 `/home/media/video`、`/home/media/photo` 图片（`"A:/home/media/video/x.rthm"` / `"A:/home/media/photo/x.rthm"`）
+- `LV_USE_FS_POSIX=1` + `LV_FS_POSIX_LETTER='A'`：按路径加载 `/data/media/video`、`/data/media/photo` 图片（`"A:/data/media/video/x.rthm"` / `"A:/data/media/photo/x.rthm"`）
 - lvgl 目标加 `_DEFAULT_SOURCE`（`3rdparty/.../CMakeLists.txt`）：修 FS 驱动 `DT_DIR` 在 `_POSIX_C_SOURCE` 下不可见的编译错误
 - 缩略图 `toast` 与播放器同建于 `lv_layer_top()`，全屏时提示可见
 - **libpng 不走 lv_conf，是 CMake 探测的**（`app/ui/CMakeLists.txt` → `UPC_UI_HAS_LIBPNG`）：拖动预览与相册大图都在后台线程用它（`core/png_decode_util.*`）。探不到时两处解码恒失败——拖动预览退回只刷小框，相册浏览器则转交 LVGL 内置 lodepng 同步解（会卡顿，但不至于打不开）

@@ -61,7 +61,7 @@ LV_USE_TJPGD 1
 # 延时摄影序列帧 PNG 解码（lv_image_set_src("A:/.../*.png")）
 LV_USE_LODEPNG 1
 
-# POSIX 文件系统驱动：按路径加载 /home/video 下缩略图（盘符 'A'，如 "A:/home/video/x.jpg"）
+# POSIX 文件系统驱动：按路径加载 /data/media/video 下缩略图（盘符 'A'，如 "A:/data/media/video/x.rthm"）
 LV_USE_FS_POSIX 1
 LV_FS_POSIX_LETTER 'A'
 

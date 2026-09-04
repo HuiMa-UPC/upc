@@ -378,7 +378,7 @@ enum class MsgType : uint32_t {
     UI_Camera_Stream_Stop_Req,           /**< Empty */
     APP_Camera_Stream_Stop_Rsp,          /**< Empty */
     APP_Camera_Frame_Ntf,                /**< CameraFrameNtfPayload（可选唤醒 UI） */
-    UI_Camera_Snapshot_Req,              /**< Empty：请求保存当前最新 NV12 帧到 /home/media/photo */
+    UI_Camera_Snapshot_Req,              /**< Empty：请求保存当前最新 NV12 帧到 /data/media/photo */
     APP_Camera_Snapshot_Rsp,             /**< CameraSnapshotRspPayload */
 
     // ---- GLAVO → MEDIA：打印层拍照录像（控制面；MEDIA 消费 CAMERA 预览 SHM） ----
@@ -391,10 +391,10 @@ enum class MsgType : uint32_t {
     APP_Print_Video_Manifest_Ntf,               /**< PrintVideoManifestPayload */
 
     // ---- UI ↔ GLAVO：MCU OTA（测试） ----
-    UI_Mcu_Ota_Start_Req = 0x1090, /**< Empty：启动 Galvo(以太网) OTA，扫描 /home/image/galvo */
+    UI_Mcu_Ota_Start_Req = 0x1090, /**< Empty：启动 Galvo(以太网) OTA，扫描 /data/image/galvo */
     UI_Mcu_Ota_Cancel_Ntf,         /**< Empty：中止 Glavo OTA 会话 */
     APP_Mcu_Ota_Status_Ntf,        /**< McuOtaStatusPayload（Glavo OTA 状态） */
-    UI_Serial_Mcu_Ota_Start_Req,   /**< Empty：启动 MCU(串口) OTA，扫描 /home/image/mcu */
+    UI_Serial_Mcu_Ota_Start_Req,   /**< Empty：启动 MCU(串口) OTA，扫描 /data/image/mcu */
     UI_Serial_Mcu_Ota_Cancel_Ntf,  /**< Empty：中止 MCU 串口 OTA 会话 */
     APP_Serial_Mcu_Ota_Status_Ntf, /**< McuOtaStatusPayload（MCU 串口 OTA 状态） */
 
@@ -892,7 +892,7 @@ struct VisualFirstLayerReferenceReadyPayload {
 /** GLAVO→CAMERA 打印录像会话（Start/Finish/Abort 共用） */
 struct PrintVideoSessionPayload {
     char     session_id[32];
-    char     job_name[64];   /**< 用于输出 /home/media/video/{job}/ 目录名 */
+    char     job_name[64];   /**< 用于输出 /data/media/video/{job}/ 目录名 */
     uint32_t width;          /**< 0=Camera 默认 */
     uint32_t height;         /**< 0=Camera 默认 */
     uint32_t layer_fps;      /**< MP4 层帧率；0=默认 */
@@ -920,7 +920,7 @@ struct PrintVideoLayerSnapPayload {
  * （`has_entry=0`），否则 UI 会永远停在打印中界面下不来。
  *
  * UI 用法：
- *   - `has_entry=1` → 以 `frames_dir` 为主键在 `/home/media/video/config.json` 定位该条，
+ *   - `has_entry=1` → 以 `frames_dir` 为主键在 `/data/media/video/config.json` 定位该条，
  *     读 `status` / `duration_sec` / `material_g`（清单为权威数据源）
  *   - `has_entry=0` → 清单无此条，改用本 payload 的 `aborted` 判定完成/终止，
  *     耗时与耗材显示占位
@@ -935,7 +935,7 @@ struct PrintVideoManifestPayload {
 
 /** UI_Clean_Test_Start_Req：打印结果页 Purify 按钮触发清粉测试 + 录像 */
 struct CleanTestStartReqPayload {
-    char job_name[64];   /**< 对应 /home/media/video/{job_name}/ */
+    char job_name[64];   /**< 对应 /data/media/video/{job_name}/ */
     uint32_t width;      /**< 0=跟随 Camera 当前预览宽 */
     uint32_t height;     /**< 0=跟随 Camera 当前预览高 */
     uint32_t fps;        /**< 0=跟随 Camera 当前预览 fps */
@@ -955,12 +955,12 @@ struct CleanTestDonePayload {
     uint8_t raw_retained;  /**< 兼容字段；PNG 路径下恒为 0 */
     uint8_t has_mp4;       /**< 1=期望存在合并后的 timelapse.mp4 */
     uint8_t reserved;
-    char    mp4_rel_path[96]; /**< 相对 /home/media/video 的路径，如 job/timelapse.mp4 */
+    char    mp4_rel_path[96]; /**< 相对 /data/media/video 的路径，如 job/timelapse.mp4 */
 };
 
 /** UI→MEDIA：结果页退出后触发统一 MP4 合成（按 frames_dir 定位会话目录） */
 struct PrintVideoFinalizeReqPayload {
-    char frames_dir[96]; /**< 对应 /home/media/video/{frames_dir}/ */
+    char frames_dir[96]; /**< 对应 /data/media/video/{frames_dir}/ */
 };
 
 /** APP_Storage_Usage_Rsp：历史页容量显示（bytes）。 */

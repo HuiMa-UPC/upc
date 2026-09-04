@@ -27,7 +27,7 @@ bool PairManager::load_tokens()
     std::lock_guard<std::mutex> lk(mu_);
     //清空缓存
     tokens_.clear();
-    //打开 token_file_（默认 /home/transport/.xfr_tokens）
+    //打开 token_file_（默认 /data/transport/.xfr_tokens）
     std::ifstream ifs(token_file_);
     if (!ifs.good()) {
         return true;

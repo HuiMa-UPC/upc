@@ -22,7 +22,7 @@ namespace upc::media {
  * 职责：
  * - 媒体消费线程只负责把 NV12 帧拷贝后入队，不做重编码等耗时操作，避免阻塞上游。
  * - 后台 worker 线程异步将 NV12 帧喂给 RKMPP 编码器，输出 H.264 裸流。
- * - 边录边封装为 /home/media/video/tmp/print_h264.mp4。
+ * - 边录边封装为 /data/media/video/tmp/print_h264.mp4。
  * - 当写盘队列满时主动丢帧，保预览实时性，不阻塞媒体流消费。
  *
  * 生命周期：

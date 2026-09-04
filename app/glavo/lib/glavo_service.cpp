@@ -44,7 +44,7 @@
  *   Abort    UI_Print_Terminate_Req → stop_parse + request_terminate + 录像 abort
  *   Done     McuLinkEvent::PrintCompleted / TerminateDone / PrintError → 清会话、通知 UI
  *
- * Local 文件列表：UI 直读 /home/Gcode/config.json；本服务只处理 USB 扫盘与 Prepare/Delete 写清单。
+ * Local 文件列表：UI 直读 /data/Gcode/config.json；本服务只处理 USB 扫盘与 Prepare/Delete 写清单。
  */
 
 #include "glavo_service.hpp"
@@ -144,7 +144,7 @@ std::string normalize_thumb_path_for_delete(const std::string& raw)
 
     std::string path = raw;
     if(path.compare(0, 3, "A:/") == 0) {
-        path.erase(0, 2); /* A:/home/... -> /home/... */
+        path.erase(0, 2); /* A:/abs/... -> /abs/... */
     }
     if(path.empty() || path[0] != '/') {
         return {};

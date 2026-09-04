@@ -170,9 +170,11 @@
 /* -------------------------------------------------------------------------- */
 /* OTA                                                                          */
 /* -------------------------------------------------------------------------- */
+#include "image_paths.hpp"
+
 /** MCU OTA 测试：固件目录与块大小 */
 #ifndef GALVO_OTA_IMAGE_DIR
-#define GALVO_OTA_IMAGE_DIR  "/home/image/galvo"
+#define GALVO_OTA_IMAGE_DIR  UPC_IMAGE_GALVO_DIR
 #endif
 
 #ifndef GLAVO_OTA_CHUNK_SIZE
@@ -180,7 +182,7 @@
 #endif
 
 #ifndef MCU_OTA_IMAGE_DIR
-#define MCU_OTA_IMAGE_DIR  "/home/image/mcu"
+#define MCU_OTA_IMAGE_DIR  UPC_IMAGE_MCU_DIR
 #endif
 
 #ifndef MCU_OTA_CHUNK_SIZE

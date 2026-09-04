@@ -11,7 +11,7 @@
 | `main.cpp` | IPC Server、`CameraService` 生命周期、`process(2)` 循环 |
 | `lib/camera_service.*` | 流控 IPC、dma fd 元数据环推流、录像消息分派 |
 | `lib/vi_capture.*` | rkaiq ISP + V4L2 NV12 采集 |
-| `../media/lib/print_video_recorder.*` | 元数据环取帧 → ffmpeg 软编 PNG → `/home/media/video/tmp/` + `.rthm` |
+| `../media/lib/print_video_recorder.*` | 元数据环取帧 → ffmpeg 软编 PNG → `/data/media/video/tmp/` + `.rthm` |
 | `../media/lib/print_h264_recorder.*` | 预览 NV12 异步入队；worker RKMPP 实时编 `print.h264`（队列满丢帧） |
 | `../media/lib/clean_video_recorder.*` | 清粉延时抽帧：按 `TIMELAPSE_VIDEO_FPS` 写接续 PNG，成功后重建 `timelapse.mp4`+`thumb.rthm` 并删除清粉 PNG |
 | `../media/lib/h264_stream_encoder.*` | 直播共用 RKMPP 编码器：NV12 单槽 latest-wins → Annex-B → 多 sink 分发（带采帧 pts）；缓存 SPS/PPS |
@@ -49,7 +49,7 @@ Sensor → rkaiq ISP → /dev/video0 (NV12)
 ### 媒体落盘根目录
 
 ```
-/home/media/
+/data/media/
   photo/          相册 PNG + .rthm
   video/
     config.json   打印历史清单（延时 + 可选打印录像）
@@ -60,7 +60,7 @@ Sensor → rkaiq ISP → /dev/video0 (NV12)
 旧路径 `/home/photo`、`/home/video`（及 `manifest.json`）在 Media 启动时自动迁入（若新路径尚不存在）。
 遗留 `{job}.__work_*` 也会在开机/开打前清理。
 
-存储水位（`statvfs(/home/media)`）：
+存储水位（`statvfs(/data/media)`）：
 - ≥90%：本会话停 H264、跳过层间拍照
 - ≥95%：强制清空 `tmp/` 与遗留 `__work_*`
 
@@ -71,10 +71,10 @@ Glavo Snap IPC → PrintVideoRecorder worker
   → `IpcDmaFrameRingConsumer::acquire_latest_frame` 拿到 `buffer_idx`
   → 通过 fd 回调 `mmap` 取 NV12（如 stride 有 padding 会按 active width 解压）
   → ffmpeg 软编 PNG（连续编号 1.png,2.png,...）
-      → /home/media/video/tmp/
+      → /data/media/video/tmp/
   → finish/abort
   → 缩略图：dma32 + RGA importbuffer_fd 生成 thumb.rthm（失败则无缩略图）
-  → upsert /home/media/video/config.json（frames_dir=tmp，status=complete|terminated）
+  → upsert /data/media/video/config.json（frames_dir=tmp，status=complete|terminated）
   → APP_Print_Video_Manifest_Ntf → UI（切打印结果页）
   → 结果页退出 finalize：tmp → {job}/；延时默认 PNG 播放（`UPC_TIMELAPSE_PLAYBACK_PNG=1` 不编 timelapse.mp4）；开启打印录像时仍 remux print_h264.mp4（PTS 用相机流帧率，默认 30fps，勿用 layer_fps）
 ```
@@ -161,7 +161,7 @@ CBR 码率默认 `CAMERA_PRINT_H264_BITRATE`=2048kbps（与直播共用同一常
   | `live_rtsp stat` | `in` / `out` / `kbps` / `queue` / `dropped` / `drop_events` | `queue` 持续贴上限=云端吃不下该码率；`in` 涨而 `out` 不涨=写端卡住 |
   | `local_rtsp stat` | `in` / `out` / `queue` / `dropped` / `client` | `queue` 持续贴上限=live555 取不赢，延迟会顶到队列容量对应时长 |
 
-`config.json` 由 Media 独写；字段含 `job_name` / `start_unix` / `duration_sec` / `material_g` / `layer_count` / `status` / `frames_dir` / `thumb`。其中 `material_g` 与 `layer_count` 在 upsert 时按 job 基名从 `/home/Gcode/config.json` 快照（`print_history_lookup_gcode_stats`），查不到写 0，UI 显示 "--"。UI 历史页直读该文件（解析见 `common/fs_manifest/print_history_manifest.*`）。
+`config.json` 由 Media 独写；字段含 `job_name` / `start_unix` / `duration_sec` / `material_g` / `layer_count` / `status` / `frames_dir` / `thumb`。其中 `material_g` 与 `layer_count` 在 upsert 时按 job 基名从 `/data/Gcode/config.json` 快照（`print_history_lookup_gcode_stats`），查不到写 0，UI 显示 "--"。UI 历史页直读该文件（解析见 `common/fs_manifest/print_history_manifest.*`）。
 
 Snap 依赖预览流已开（同一 SHM）；与 UI 解码线程共享 ring，偶发 `snap miss` 见日志。
 
@@ -178,7 +178,7 @@ Snap 依赖预览流已开（同一 SHM）；与 UI 解码线程共享 ring，�
 | `VISUAL_Camera_Stream_Stop_Req` | Visual 停流（仅移除 Visual 会话） |
 | `MEDIA_Camera_Stream_Start_Req` | Media 并行取流（独立 SHM `/upc_camera_preview_media`） |
 | `MEDIA_Camera_Stream_Stop_Req` | Media 停流（仅移除 Media 会话） |
-| `UI_Camera_Snapshot_Req` | **Media** 保存当前预览帧 PNG + 配对 `.rthm` 缩略图到 `/home/media/photo` |
+| `UI_Camera_Snapshot_Req` | **Media** 保存当前预览帧 PNG + 配对 `.rthm` 缩略图到 `/data/media/photo` |
 | `APP_Print_Video_Session_*` | **Media** 处理打印录像会话、生成缩略图/MP4/manifest |
 | `APP_Clean_Video_Session_*` | **Media** 处理清粉延时抽帧（接续 PNG → 合并 `timelapse.mp4`） |
 | `APP_Print_Video_Manifest_Ntf` | **Media→UI**：manifest `rename()` 成功后发（0 帧也必发） |
@@ -202,12 +202,12 @@ Glavo→Media 经 Broker 转发；`sender_id` 仍为 `APP_GLAVO`（见 IPC.md）
 | SHM 槽位 | 6 | `CAMERA_SHM_SLOT_COUNT`（UI/Snap 双消费；过小易 `slot release timeout`） |
 | 看门狗无帧阈值 | 3000 ms | `CAMERA_STREAM_WATCHDOG_STALL_MS`（0=关） |
 | 看门狗重启冷却 | 8000 ms | `CAMERA_STREAM_WATCHDOG_COOLDOWN_MS` |
-| 录像输出 | `/home/media/video/tmp/`（打印中）→ finalize 后 `/home/media/video/{job}/` | `UPC_VIDEO_TMP` / `CAMERA_PRINT_VIDEO_OUT_DIR` |
+| 录像输出 | `/data/media/video/tmp/`（打印中）→ finalize 后 `/data/media/video/{job}/` | `UPC_VIDEO_TMP` / `CAMERA_PRINT_VIDEO_OUT_DIR` |
 | 缩略图 | `{dir}/thumb.rthm` | `CAMERA_PRINT_VIDEO_THUMB_EXT` |
 | 缩略图最大宽 | 240 | `CAMERA_PRINT_VIDEO_THUMB_MAX_W` |
-| 拍照原图 | `/home/media/photo/photo_{stamp}_{WxH}.png` | Media `save_latest_png_snapshot` |
-| 拍照缩略图 | `/home/media/photo/photo_{stamp}_{WxH}.rthm`（同帧 NV12→dma32+RGA） | 同上；失败不影响 PNG |
-| 历史清单 | `/home/media/video/config.json` | `UPC_VIDEO_CONFIG` |
+| 拍照原图 | `/data/media/photo/photo_{stamp}_{WxH}.png` | Media `save_latest_png_snapshot` |
+| 拍照缩略图 | `/data/media/photo/photo_{stamp}_{WxH}.rthm`（同帧 NV12→dma32+RGA） | 同上；失败不影响 PNG |
+| 历史清单 | `/data/media/video/config.json` | `UPC_VIDEO_CONFIG` |
 | ffmpeg | `/usr/bin/ffmpeg` | `CAMERA_FFMPEG_BIN` |
 | 本地 RTSP 端口 | 8554 | `UPC_LOCAL_RTSP_PORT` / `UPC_LOCAL_RTSP_PORT_DEFAULT` |
 | 本地 RTSP 流名 | `live` | `UPC_LOCAL_RTSP_STREAM_NAME` |

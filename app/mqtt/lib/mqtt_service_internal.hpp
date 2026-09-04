@@ -1,6 +1,8 @@
 #ifndef UPC_MQTT_SERVICE_INTERNAL_HPP
 #define UPC_MQTT_SERVICE_INTERNAL_HPP
 
+#include "image_paths.hpp"
+
 #include <cstdint>
 #include <filesystem>
 #include <functional>
@@ -23,11 +25,11 @@ inline constexpr const char* kCmdRejectReasonInvalidState = "invalid_state";
 inline constexpr const char* kCmdRejectReasonEncoderError = "encoder_error";
 inline constexpr uint64_t kRtspAckTimeoutMs = 8000;
 
-/** OTA 包下载/落盘目录约定。 */
-inline constexpr const char* kImageTmpDir = "/home/image/tmp";
-inline constexpr const char* kImageSocDir = "/home/image/soc";
-inline constexpr const char* kImageMcuDir = "/home/image/mcu";
-inline constexpr const char* kImageGalvoDir = "/home/image/galvo";
+/** OTA 包下载/落盘目录约定（根路径见 common/fs_manifest/image_paths.hpp）。 */
+inline constexpr const char* kImageTmpDir = UPC_IMAGE_TMP_DIR;
+inline constexpr const char* kImageSocDir = UPC_IMAGE_SOC_DIR;
+inline constexpr const char* kImageMcuDir = UPC_IMAGE_MCU_DIR;
+inline constexpr const char* kImageGalvoDir = UPC_IMAGE_GALVO_DIR;
 
 /** 最小 URL 结构，供 OTA 下载链路使用。 */
 struct ParsedUrl {
