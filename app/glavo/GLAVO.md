@@ -10,7 +10,7 @@
 | `main.cpp` | 进程守护、IPC Server、McuLink 连接、`MsgPort::process` 循环 |
 | `lib/glavo_service.*` | IPC 业务 + 工作线程 + 订阅/发布（USB 目录/打印/门控/进度）；`init()` 内绑定 RingBuffer → `McuLink` |
 | `lib/mcu_link.*` | TCP 运动下发 + 串口握手/传感器/换层 Snap 触发；RX 侧解析 MCU 报警单条上报（0xA3/0x20）与快照分片（0xA3/0x81），`publish_async` 原样转发 `GLAVO_Alarm_Report_Ntf` / `GLAVO_Alarm_Snapshot_Ntf` 给 UI（不查字典、不攒帧） |
-| `lib/print_video_notify.*` | 换层 Snap / 录像会话 → Camera（经 UI Hub） |
+| `lib/print_video_notify.*` | 换层 Snap / 录像会话 → Media（经 UI Hub） |
 | `lib/print_job_state.*` | 发送包计数、完成/错误标志（McuLink 与进度共用） |
 | `lib/device_config.hpp` | TCP/串口默认、换层/Layer Snap 开关 |
 | `common/fs_manifest/gcode_manifest.*` | Local `config.json` 读写（与 UI 共用；Prepare/Delete 时更新） |
@@ -47,7 +47,7 @@ UI → GlavoService（工作线程）→ ParserManager → RingBuffer → McuLin
 
 跨进程回复 UI：**必须** `publish_async`（`GlavoService` 工作线程内禁止 `MsgPort::publish` 同步路径）。
 
-### 打印层录像（Glavo → Camera）
+### 打印层录像（Glavo → Media）
 
 开关（均在 `device_config.hpp`）：
 
@@ -64,7 +64,7 @@ UI → GlavoService（工作线程）→ ParserManager → RingBuffer → McuLin
 | 完成 | `PrintCompleted` | `APP_Print_Video_Session_Finish_Ntf` |
 | 中止 | 终止 / `PrintError` | `APP_Print_Video_Session_Abort_Ntf` |
 
-`PrintVideoNotify::publish_to_camera`：`publish_async`，`target_id = APP_CAMERA`，经 [common/COMMON.md](../../common/COMMON.md) Hub 转发。
+`PrintVideoNotify::publish_to_camera`：`publish_async`，`target_id = APP_MEDIA`，经 [common/COMMON.md](../../common/COMMON.md) Hub 转发。落盘与封装见 [media/MEDIA.md](../media/MEDIA.md)。
 
 ## 待实现：设备事件上报（`GLAVO_Device_Event_Ntf`）
 
@@ -91,4 +91,4 @@ UI 侧的消息中心（左下通知浮层 + 侧栏红点）已经接好订阅�
 
 ## 相关文档
 
-- [ui/UI.md](../ui/UI.md) · [camera/CAMERA.md](../camera/CAMERA.md) · [common/COMMON.md](../../common/COMMON.md)
+- [ui/UI.md](../ui/UI.md) · [camera/CAMERA.md](../camera/CAMERA.md) · [media/MEDIA.md](../media/MEDIA.md) · [common/COMMON.md](../../common/COMMON.md)

@@ -9,7 +9,7 @@
 | UI | `rongsu_ui` | `app/ui/main.cpp` | [ui/UI.md](../app/ui/UI.md) | `/var/log/topic/*.log` |
 | Glavo | `rongsu_glavo` | `app/glavo/main.cpp` | [glavo/GLAVO.md](../app/glavo/GLAVO.md) | `/var/log/topic/*.log` |
 | 相机 | `rongsu_camera` | `app/camera/main.cpp` | [camera/CAMERA.md](../app/camera/CAMERA.md) | `/var/log/topic/*.log` |
-| 媒体 | `rongsu_media` | `app/media/main.cpp` | [camera/CAMERA.md](../app/camera/CAMERA.md) | `/var/log/topic/*.log` |
+| 媒体 | `rongsu_media` | `app/media/main.cpp` | [media/MEDIA.md](../app/media/MEDIA.md) | `/var/log/topic/*.log` |
 | Xfer | `rongsu_xfr` | `app/xfer/main.cpp` | [xfer/XFER.md](../app/xfer/XFER.md) | `/var/log/topic/*.log` |
 | Visual | `rongsu_visual` | `app/visual/main.cpp` | [visual/VISUAL.md](../app/visual/VISUAL.md) | `/var/log/topic/*.log` |
 | MQTT | `rongsu_mqtt` | `app/mqtt/main.cpp` | — | `/var/log/topic/*.log` |
@@ -33,7 +33,7 @@
 | `app/ui/` | [UI.md](../app/ui/UI.md) | LVGL 界面、UiMsgProxy、IPC Hub 客户端 |
 | `app/glavo/` | [GLAVO.md](../app/glavo/GLAVO.md) | 打印编排、McuLink、IPC Server |
 | `app/camera/` | [CAMERA.md](../app/camera/CAMERA.md) | 相机采集、SHM 预览、IPC Server |
-| `app/media/` | [CAMERA.md](../app/camera/CAMERA.md) | 拍照/录像/延时封装 + 直播（云端 RTSP 推流、局域网 live555 RTSP Server；消费 Camera DMA 流） |
+| `app/media/` | [MEDIA.md](../app/media/MEDIA.md) | 拍照/录像/延时封装 + 直播（云端 RTSP 推流、局域网 live555 RTSP Server；消费 Camera DMA 流） |
 | `app/xfer/` | [XFER.md](../app/xfer/XFER.md) | WiFi 发现、PIN 配对、HTTP 文件上传（仅收 `.json/.svg`） |
 | `app/visual/` | [VISUAL.md](../app/visual/VISUAL.md) | 视觉 demo：相机流取帧、OpenCV 矩形识别、坐标回传 UI |
 | `app/mqtt/` | — | MQTT 网关：环境遥测、`set_light`、云端 `start/stop_rtsp_push`→Media |
@@ -51,18 +51,30 @@
 | `image_paths` | `common/fs_manifest/image_paths.hpp` | `UPC_IMAGE_ROOT`（默认 `/data/image`：soc/mcu/galvo/tmp） |
 | `McuLink` | `mcu_link.*` | TCP 运动 + 串口握手/传感器 |
 | `PrintJobState` | `print_job_state.*` | 打印任务计数/状态 |
-| `PrintVideoNotify` | `print_video_notify.*` | 换层 Snap / 录像会话 IPC → Camera |
+| `PrintVideoNotify` | `print_video_notify.*` | 换层 Snap / 录像会话 IPC → Media |
 | `device_config.hpp` | 头文件 | TCP/串口默认、`GLAVO_ENABLE_LAYER_SNAP` 等 |
 
 ## Camera（`app/camera/lib/` → 源编入 `rongsu_camera`，无独立静态库）
 
 | 符号 | 路径 | 一句话 |
 |------|------|--------|
-| `CameraService` | `camera_service.*` | IPC Server + SHM 推流 + 录像分派 |
-| `PrintVideoRecorder` | `print_video_recorder.*` | 层 Snap→PNG→封装 MP4/缩略图 + upsert `config.json` + 发 `APP_Print_Video_Manifest_Ntf` 给 UI |
+| `CameraService` | `camera_service.*` | IPC Server + 多 peer SHM 推流（UI/Visual/Media） |
 | `ViCapture` | `vi_capture.*` | rkaiq + V4L2 NV12 |
 | `CameraDmaFrameSource` | `camera_dma_frame_source.*` | V4L2 dma fd 导出、stride padding |
-| `device_config.hpp` | 头文件 | 设备/分辨率/IQ/SHM/录像路径宏 |
+| `device_config.hpp` | 头文件 | 设备/分辨率/IQ/SHM 宏 |
+
+## Media（`app/media/lib/` → 源编入 `rongsu_media`，无独立静态库）
+
+| 符号 | 路径 | 一句话 |
+|------|------|--------|
+| `MediaService` | `media_service.*` | IPC 客户端 + DMA 消费 + 拍照/录像/直播分派 |
+| `PrintVideoRecorder` | `print_video_recorder.*` | 层 Snap→PNG + thumb/manifest + 开门 finalize |
+| `PrintH264Recorder` | `print_h264_recorder.*` | 打印期 RKMPP 边编边封装 `print_h264.mp4` |
+| `CleanVideoRecorder` | `clean_video_recorder.*` | 清粉延时接续 PNG |
+| `H264StreamEncoder` | `h264_stream_encoder.*` | 直播共用 RKMPP，多 sink 分发 |
+| `LiveRtspPusher` | `live_rtsp_pusher.*` | 云端 RTSP 推流（ffmpeg `-c copy`） |
+| `LocalRtspServer` | `local_rtsp_server.*` | 局域网 live555 RTSP Server |
+| `device_config.hpp` | 头文件 | 缩略图/ffmpeg/码率/延时 fps |
 
 ## UI core（`app/ui/lib/core/` → `ui::port` 一部分）
 
@@ -115,7 +127,7 @@ UI → IPC → GlavoService → ParserManager → RingBuffer
                               ↓
                          McuLink → TCP（运动）+ 串口（握手/传感器）
                               ↓（换层排空后，可选 GLAVO_ENABLE_LAYER_SNAP）
-                    PrintVideoNotify → IPC(UI Hub FWD) → Camera → MP4
+                    PrintVideoNotify → IPC(UI Hub FWD) → Media → PNG/MP4
 ```
 
 预览像素：`rongsu_camera` → 主 IPC `SCM_RIGHTS` 传 dma_buf fd + SHM `/upc_camera_preview` 元数据环 → UI `CameraPreviewPlayer`（`MsgPort::take_peer_dma_fds` + RGA `importbuffer_fd` 或 SW 转 BGRX；与控制 IPC 分离）。
@@ -134,7 +146,7 @@ UI → IPC → GlavoService → ParserManager → RingBuffer
 | 类型 | 路径 |
 |------|------|
 | 架构索引 | `doc/ARCHITECTURE.md`（本文件） |
-| 模块说明 | `app/{ui,glavo,camera,parser,protocol}/*.md`、`common/{ipc,middleware}/*.md` |
+| 模块说明 | `app/{ui,glavo,camera,media,parser,protocol}/*.md`、`common/{ipc,middleware}/*.md` |
 | 专利参考 | [专利参考-系统架构与运行逻辑.md](专利参考-系统架构与运行逻辑.md)、[专利参考-振镜校准算法与增益设置.md](专利参考-振镜校准算法与增益设置.md) |
 | Cursor Rules | `.cursor/rules/*.mdc` |
 | 并发检查 MCP | `.cursor/mcp/cpp-concurrency-check.py` |
