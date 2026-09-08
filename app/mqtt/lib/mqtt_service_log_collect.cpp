@@ -6,6 +6,7 @@
 #include <openssl/evp.h>
 #include <openssl/kdf.h>
 #include <openssl/rand.h>
+#include <openssl/sha.h>
 
 #include <algorithm>
 #include <cctype>
@@ -75,6 +76,28 @@ bool base64_decode(const std::string& in, std::vector<unsigned char>& out)
     return !out.empty();
 }
 
+/**
+ * IKM = sha256Hex(device_secret)：secret 原文 → SHA-256 → 小写 hex（64 字符 ASCII）。
+ * 与云端 activation_secret_hash / SecurityUtils.sha256Hex 同源；不是 raw 32 字节，也不是明文 secret。
+ */
+std::string sha256_hex_lowercase(const std::string& secret)
+{
+    unsigned char digest[SHA256_DIGEST_LENGTH]{};
+    SHA256(reinterpret_cast<const unsigned char*>(secret.data()),
+           secret.size(), digest);
+    static const char kHex[] = "0123456789abcdef";
+    std::string out;
+    out.resize(static_cast<size_t>(SHA256_DIGEST_LENGTH) * 2u);
+    for(size_t i = 0; i < static_cast<size_t>(SHA256_DIGEST_LENGTH); ++i) {
+        out[i * 2] = kHex[(digest[i] >> 4) & 0xF];
+        out[i * 2 + 1] = kHex[digest[i] & 0xF];
+    }
+    return out;
+}
+
+/**
+ * HKDF-SHA256：IKM 为 64 字符小写 hex（UTF-8），salt 为二进制，info 见 kLogHkdfInfo，输出 32 字节 AES key。
+ */
 bool hkdf_sha256_aes_key(const std::string& ikm,
                          const std::vector<unsigned char>& salt,
                          unsigned char key_out[kLogAesKeyLen])
@@ -480,7 +503,8 @@ void MqttService::run_log_collect_task(LogCollectCommand cmd)
     }
 
     unsigned char aes_key[kLogAesKeyLen]{};
-    if(!hkdf_sha256_aes_key(cfg_.device_secret, salt_bin, aes_key)) {
+    const std::string ikm = sha256_hex_lowercase(cfg_.device_secret);
+    if(!hkdf_sha256_aes_key(ikm, salt_bin, aes_key)) {
         publish_log_collect_error(cmd, kLogErrEncryptFail);
         return;
     }
@@ -581,7 +605,7 @@ void MqttService::run_log_collect_task(LogCollectCommand cmd)
     if(!any_collected) {
         std::filesystem::remove_all(work_dir, ec);
         publish_log_collect_error(
-            cmd, any_size_exceeded ? kLogErrInternal : kLogErrNoFileFound);
+            cmd, any_size_exceeded ? kLogErrSizeExceeded : kLogErrNoFileFound);
         return;
     }
 
@@ -611,7 +635,7 @@ void MqttService::run_log_collect_task(LogCollectCommand cmd)
 
     if(static_cast<int64_t>(sealed.size()) > cmd.max_packet_size) {
         std::filesystem::remove_all(work_dir, ec);
-        publish_log_collect_error(cmd, kLogErrInternal);
+        publish_log_collect_error(cmd, kLogErrSizeExceeded);
         return;
     }
 

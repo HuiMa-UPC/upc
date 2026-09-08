@@ -2285,7 +2285,8 @@ void McuLink::begin_sending_internal()
 
 #if GLAVO_ENABLE_LAYER_CHANGE
     // 若串口已打开：打印请求 → CONDITION_OK → PRINT_READY
-    if(serial_fd_ >= 0) {
+    // 测试图无 M3000：跳过首层串口握手，直接下发运动包
+    if(!test_image_motion_.load() && serial_fd_ >= 0) {
         waiting_layer_.store(true);
         serial_evt_condition_ok_.store(false);
         serial_evt_print_ready_.store(false);
@@ -2299,10 +2300,21 @@ void McuLink::begin_sending_internal()
     }
 #endif
 
-    UPC_LOG_MCU_LINK(Info, "begin_sending");
+    UPC_LOG_MCU_LINK(Info, "begin_sending test_image=%d",
+                     test_image_motion_.load() ? 1 : 0);
 }
 
-void McuLink::begin_sending()
+void McuLink::set_test_image_motion(bool on) noexcept
+{
+    test_image_motion_.store(on);
+}
+
+bool McuLink::is_test_image_motion() const noexcept
+{
+    return test_image_motion_.load();
+}
+
+void McuLink::begin_sending(bool skip_layer_handshake)
 {
     if(tcp_fd_ < 0) {
         return; // TCP 未连接，无法开始
@@ -2315,6 +2327,11 @@ void McuLink::begin_sending()
         UPC_LOG_MCU_LINK(Warn,
             "begin_sending refused: terminate/cleanup in progress");
         return;
+    }
+    if(skip_layer_handshake) {
+        test_image_motion_.store(true);
+    } else {
+        test_image_motion_.store(false);
     }
     if(!ring_meets_start_threshold()) {
         // 缓存不足，设置挂起标志，由链路线程在条件满足时自动启动
@@ -2531,9 +2548,13 @@ void McuLink::run_natural_complete_cleanup()
         return;
     }
 
-    // 1. 末层无 M3000 时补 Snap，再通知 MCU 打印完成
-    link_try_final_layer_snap();
-    send_serial_print_finished();
+    const bool test_motion = test_image_motion_.load();
+    // 1. 正式打印：末层无 M3000 时补 Snap，再通知 MCU 打印完成
+    //    测试图：无换层、无录像，跳过 Snap / PRINT_FINISHED
+    if(!test_motion) {
+        link_try_final_layer_snap();
+        send_serial_print_finished();
+    }
 
     // 2. 先清发送态，再发 TCP 0x0A(Stop=1)（避免 is_sending 时断线误触发 terminate）
     reset_motion_state(true);

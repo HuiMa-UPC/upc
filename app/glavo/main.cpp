@@ -23,9 +23,11 @@ const char* broker_socket_path() {
 }
 
 int start_glavo(char daemon) {
+    //日志初始化
     upc::log_set_process_name(kProc.name);
+    //信号注册与时区初始化
     process_install_signals();
-
+    //守护进程相关工作
     if (daemon) {
         const int running = process_check_running(kProc.pid_file);
         if (running > 0) {
@@ -43,18 +45,19 @@ int start_glavo(char daemon) {
         }
         std::printf("Starting %s (PID: %d)...\n", kProc.name, getpid());
     }
-
+    //进程启动日志打印
     process_log_boot_banner(kProc.name);
 
+    //IPC消息总线初始化
+    //1.配置角色：把总线设为 Client 模式，记录本进程身份 local_id = APP_GLAVO 和 broker 的 socket 路径
+    //2.初始化内存池：MemPool BufferPool 初始化（消息零拷贝传递用的共享内存/buffer 管理）
+    //3.尝试连接 broker
     auto& port = middleware::MsgPort::instance();
     if (!port.set_mode_ipc_client(middleware::ModuleId::APP_GLAVO,
                                   broker_socket_path())) {
         std::fprintf(stderr, "%s IPC connect failed on %s\n",
             kProc.name, broker_socket_path());
         return 4;
-    }
-    if (!port.init()) {
-        return 5;
     }
 
     upc::glavo::GlavoService glavo_service;

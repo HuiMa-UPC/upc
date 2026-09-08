@@ -102,6 +102,19 @@ void DebugMsgProxy::init()
             }
         }));
 
+    subs_.push_back(bus.subscribe(
+        middleware::MsgType::GLAVO_Debug_TestImage_Ntf, middleware::ModuleId::UI,
+        [this](const middleware::Message& msg) {
+            middleware::DebugOnOffPayload p{};
+            if(!read_inline_pod(msg, p)) {
+                return;
+            }
+            test_image_active_ = (p.on != 0);
+            if(test_image_cb_) {
+                test_image_cb_(test_image_active_);
+            }
+        }));
+
     /* 来自 APP_MEDIA：开关的实际状态（开启失败时为 0，用于把 UI 开关弹回）。 */
     subs_.push_back(bus.subscribe(
         middleware::MsgType::APP_Media_Local_Rtsp_State_Ntf, middleware::ModuleId::UI,
@@ -111,6 +124,9 @@ void DebugMsgProxy::init()
                 local_rtsp_cb_(p.on != 0);
             }
         }));
+
+    /* Confirm Print 互斥依赖此状态；进调试页前也可能需要。 */
+    request_test_image_state();
 }
 
 /* ---- Tab1 ---- */
@@ -147,21 +163,6 @@ void DebugMsgProxy::send_axis_home(middleware::DebugAxis axis)
     publish_pod(middleware::MsgType::UI_Debug_Axis_Home_Ntf, p);
 }
 
-void DebugMsgProxy::send_galvo_move(middleware::DebugGalvoAxis axis,
-                                    int dir, float step_mm)
-{
-    middleware::DebugGalvoMovePayload p{};
-    p.axis    = static_cast<uint8_t>(axis);
-    p.dir     = static_cast<int8_t>(dir < 0 ? -1 : 1);
-    p.step_mm = step_mm;
-    publish_pod(middleware::MsgType::UI_Debug_Galvo_Move_Ntf, p);
-}
-
-void DebugMsgProxy::send_galvo_home()
-{
-    publish_empty(middleware::MsgType::UI_Debug_Galvo_Home_Ntf);
-}
-
 void DebugMsgProxy::send_galvo_red_light(bool on)
 {
     middleware::DebugOnOffPayload p{};
@@ -169,9 +170,15 @@ void DebugMsgProxy::send_galvo_red_light(bool on)
     publish_pod(middleware::MsgType::UI_Debug_Galvo_RedLight_Ntf, p);
 }
 
-void DebugMsgProxy::send_galvo_param_save(float scale, float step_mm)
+void DebugMsgProxy::send_galvo_param_save(float scale, float step_mm,
+                                          float center_offset_x,
+                                          float center_offset_y)
 {
-    middleware::DebugGalvoParamPayload p{scale, step_mm};
+    middleware::DebugGalvoParamPayload p{};
+    p.scale = scale;
+    p.step_mm = step_mm;
+    p.center_offset_x = center_offset_x;
+    p.center_offset_y = center_offset_y;
     publish_pod(middleware::MsgType::UI_Debug_Galvo_Param_Save_Ntf, p);
 }
 
@@ -328,6 +335,18 @@ void DebugMsgProxy::request_first_layer_visual_check_state()
     publish_empty(middleware::MsgType::UI_Debug_FirstLayer_Visual_Check_Get_Ntf);
 }
 
+void DebugMsgProxy::send_test_image_set(bool on)
+{
+    middleware::DebugOnOffPayload p{};
+    p.on = on ? 1 : 0;
+    publish_pod(middleware::MsgType::UI_Debug_TestImage_Set_Ntf, p);
+}
+
+void DebugMsgProxy::request_test_image_state()
+{
+    publish_empty(middleware::MsgType::UI_Debug_TestImage_Get_Ntf);
+}
+
 /* 本地 RTSP Server 由 Media 进程持有，直发 APP_MEDIA 而非 APP_GLAVO。 */
 void DebugMsgProxy::send_local_rtsp_set(bool on)
 {
@@ -372,6 +391,11 @@ void DebugMsgProxy::register_env_sim_powder(DebugEnvSimPowderCb cb)
 void DebugMsgProxy::register_first_layer_visual_check(DebugFirstLayerVisualCheckCb cb)
 {
     first_layer_visual_check_cb_ = std::move(cb);
+}
+
+void DebugMsgProxy::register_test_image(DebugTestImageCb cb)
+{
+    test_image_cb_ = std::move(cb);
 }
 
 void DebugMsgProxy::register_local_rtsp(DebugLocalRtspCb cb)

@@ -25,7 +25,7 @@
 
 ## 初始化
 
-1. `set_mode_ipc_client(APP_MEDIA)` + `MsgPort::init`
+1. `set_mode_ipc_client(APP_MEDIA)`
 2. 建 `/data/media/{photo,video}`（**不再**迁 `/home/photo`、`/home/video`）
 3. `recover_pending_and_reset_tmp()`：尽力收尾 pending，再清空 `tmp/` 与遗留 `{job}.__work_*`
 4. 注入 snapshot / 存储预算 / H264 finalize 回调；`live_rtsp`/`local_rtsp` 绑同一 `H264StreamEncoder`

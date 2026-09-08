@@ -60,9 +60,6 @@ int start_mqtt(char daemon)
                      kProc.name, broker_socket_path());
         return 4;
     }
-    if(!port.init()) {
-        return 5;
-    }
 
     upc::mqtt::MqttService service;
     if(!service.init()) {

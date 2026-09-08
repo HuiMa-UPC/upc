@@ -115,6 +115,9 @@ private:
     void handle_debug_fan_duty(const middleware::Message& msg);
     void handle_debug_switch(const middleware::Message& msg);
     void handle_debug_galvo_red_light(const middleware::Message& msg);
+    void handle_debug_galvo_param_save(const middleware::Message& msg);
+    void handle_debug_test_image_set(const middleware::Message& msg);
+    void handle_debug_test_image_get(const middleware::Message& msg);
     void handle_debug_clean_test_start(const middleware::Message& msg);
     void handle_debug_clean_test_close(const middleware::Message& msg);
     void handle_debug_print_param(const middleware::Message& msg);
@@ -136,6 +139,12 @@ private:
     void publish_debug_env_sim_state();
     void publish_debug_env_sim_powder_state();
     void publish_debug_first_layer_visual_check_state();
+    void publish_debug_test_image_state();
+    /** @brief 开一轮测试图：红光 + open/parse/begin（无媒体/换层握手） */
+    bool launch_test_image_pass();
+    /** @brief 停测试循环：清 desired，request_terminate（不切激光） */
+    void stop_test_image_session();
+    void clear_test_image_session();
     bool publish_first_layer_visual_session(bool active, const char* reason);
     bool request_first_layer_visual_check(uint16_t layer_height_um);
     void handle_visual_first_layer_check_rsp(const middleware::Message& msg);
@@ -226,6 +235,12 @@ private:
     bool deferred_print_start_{false};
 
     std::atomic<bool> print_running_{false};
+    /**
+     * 调试 Test image：与正式 print_running_ 互斥。
+     * desired=用户开关；active=本轮正在解析/下发或等待完成事件。
+     */
+    bool test_image_desired_{false};
+    bool test_image_active_{false};
     uint32_t print_total_layers_ = 0; /**< 当前作业层总数（用于进度融合） */
     int last_print_pct_     = -1;
     bool last_parse_done_   = false;

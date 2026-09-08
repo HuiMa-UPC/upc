@@ -33,6 +33,7 @@ inline constexpr const char* kLogErrPutFailed = "PUT_FAILED";
 inline constexpr const char* kLogErrDiskFull = "DISK_FULL";
 inline constexpr const char* kLogErrEncryptFail = "ENCRYPT_FAIL";
 inline constexpr const char* kLogErrNoFileFound = "NO_FILE_FOUND";
+inline constexpr const char* kLogErrSizeExceeded = "SIZE_EXCEEDED";
 inline constexpr const char* kLogErrInternal = "INTERNAL";
 
 /** fileReport.reason 闭集（collected=false 时）。 */

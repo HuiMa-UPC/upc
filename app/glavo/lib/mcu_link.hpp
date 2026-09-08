@@ -130,8 +130,17 @@ public:
      * 若 RingBuffer 中可用包数不足，则设置 start_pending_ 标志，
      * 待 RingBuffer 累积到阈值后由链路线程自动启动。
      * terminate/cleanup 进行中会拒绝起印（避免与清理竞态）。
+     * @param skip_layer_handshake true=跳过串口首层/换层握手（测试图无 M3000）
      */
-    void begin_sending();
+    void begin_sending(bool skip_layer_handshake = false);
+
+    /**
+     * @brief 标记当前运动作业为调试测试图模式
+     *
+     * 自然完成时跳过末层 Snap 与串口 PRINT_FINISHED（仍发 TCP Stop + PrintCompleted）。
+     */
+    void set_test_image_motion(bool on) noexcept;
+    [[nodiscard]] bool is_test_image_motion() const noexcept;
 
     /** @brief 请求异步终止打印（用户手动停止或 TCP 断线触发） */
     void request_terminate();
@@ -345,7 +354,7 @@ private:
      */
     void reset_motion_state(bool clear_start_pending);
     /** @brief 内部真正开始发送：初始化层高、状态标志，并可选发起串口打印请求握手 */
-    void begin_sending_internal();
+    void begin_sending_internal(); /**< 使用 test_image_motion_ 决定是否跳过串口握手 */
     /** @brief 判断 RingBuffer 是否满足开始发送的阈值条件 */
     bool ring_meets_start_threshold() const;
     /** @brief 若存在挂起的 begin_sending 且阈值已满足，则正式启动 */
@@ -441,6 +450,7 @@ private:
     std::atomic<bool> is_sending_{false};              /**< 是否正在下发运动包 */
     std::atomic<bool> user_paused_{false};             /**< 用户暂停：停止 TCP 运动下发，解析与换层逻辑继续 */
     std::atomic<bool> print_task_flow_active_{false};  /**< 打印任务流程窗口（开始打印→开门解锁） */
+    std::atomic<bool> test_image_motion_{false};       /**< 调试测试图：跳过串口握手/末层 Snap/PRINT_FINISHED */
     std::atomic<bool> start_pending_{false};           /**< begin_sending 已调用但 RingBuffer 未达阈值，等待中 */
     std::atomic<bool> terminate_pending_{false};       /**< 收到终止请求，待链路线程执行清理 */
     std::atomic<bool> natural_complete_pending_{false};/**< 运动包已发完，等待 MCU 缓存排空以触发自然完成 */

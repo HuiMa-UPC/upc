@@ -1,8 +1,8 @@
 cmake_minimum_required(VERSION 3.16)
 
-set(TOOLCHAIN k1mini-buildroot-toolchain)
+#set(TOOLCHAIN k1mini-buildroot-toolchain)
 # set(TOOLCHAIN atk-dlrk356x-toolchain)
-# set(TOOLCHAIN phx-buildroot-toolchain)
+set(TOOLCHAIN phx-buildroot-toolchain)
 
 set(CMAKE_TOOLCHAIN_FILE "${CMAKE_SOURCE_DIR}/cmake/${TOOLCHAIN}.cmake"
     CACHE FILEPATH "Cross toolchain (optional)")
@@ -13,7 +13,7 @@ project(rongsu_upc
 )
 
 # 产品发布版本（UI About 等展示；与 project VERSION 独立）
-set(UPC_PRODUCT_VERSION "V4.0.9.7" CACHE STRING "Product release version string")
+set(UPC_PRODUCT_VERSION "V4.0.9.8" CACHE STRING "Product release version string")
 
 set(CMAKE_C_STANDARD 99)
 set(CMAKE_C_STANDARD_REQUIRED ON)

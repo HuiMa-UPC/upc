@@ -406,7 +406,7 @@ enum class MsgType : uint32_t {
     UI_Debug_Galvo_Move_Ntf,        /**< DebugGalvoMovePayload：振镜方向步进 */
     UI_Debug_Galvo_Home_Ntf,        /**< Empty：振镜回中/复位 */
     UI_Debug_Galvo_RedLight_Ntf,    /**< DebugOnOffPayload：红光开关 */
-    UI_Debug_Galvo_Param_Save_Ntf,  /**< DebugGalvoParamPayload：保存 Scale/步长 */
+    UI_Debug_Galvo_Param_Save_Ntf,  /**< DebugGalvoParamPayload：保存 Scale + 中心偏移到 cal.csv */
     UI_Debug_Galvo_Calib_Ntf,       /**< Empty：开始标定测试 */
     UI_Debug_Device_Ntf,            /**< DebugDevicePayload：设备/门/电机/照明 */
     UI_Debug_Powder_Bucket_Ntf,     /**< DebugBucketPayload：粉桶开关 */
@@ -433,6 +433,8 @@ enum class MsgType : uint32_t {
     UI_Debug_FirstLayer_Visual_Check_Get_Ntf, /**< Empty：查询当前首层视觉检测开关状态 */
     UI_Debug_Local_Rtsp_Set_Ntf,        /**< DebugOnOffPayload：本地局域网 RTSP Server 开关（→Media，仅本次运行，默认关） */
     UI_Debug_Local_Rtsp_Get_Ntf,        /**< Empty：查询当前本地 RTSP Server 开关状态（→Media） */
+    UI_Debug_TestImage_Set_Ntf,         /**< DebugOnOffPayload：红光测试图循环打印开关（/data/test/test.gcode） */
+    UI_Debug_TestImage_Get_Ntf,         /**< Empty：查询当前测试图循环打印状态 */
 
     // ---- GLAVO → UI：调试页状态回读（按模块拆分） ----
     GLAVO_Debug_Sensor_Ntf = 0x1200, /**< DebugSensorPayload：顶部 7 路传感器 */
@@ -445,6 +447,7 @@ enum class MsgType : uint32_t {
     GLAVO_Debug_Env_Sim_Ntf,           /**< DebugOnOffPayload：环境上报模拟开关状态 */
     GLAVO_Debug_Env_Sim_Powder_Ntf,    /**< DebugOnOffPayload：环境模拟粉量缺粉开关状态 */
     GLAVO_Debug_FirstLayer_Visual_Check_Ntf, /**< DebugOnOffPayload：首层视觉检测开关状态 */
+    GLAVO_Debug_TestImage_Ntf,         /**< DebugOnOffPayload：测试图循环打印实际状态 */
 
     // ---- MEDIA → UI：调试页状态回读 ----
     APP_Media_Local_Rtsp_State_Ntf, /**< DebugOnOffPayload：本地 RTSP Server 实际开关状态（相机未就绪时回 0，UI 据此弹回） */
@@ -1154,10 +1157,12 @@ struct DebugOnOffPayload {
     uint8_t reserved[3];
 };
 
-/** UI_Debug_Galvo_Param_Save_Ntf：保存 Scale / 步长 */
+/** UI_Debug_Galvo_Param_Save_Ntf：写入 cal.csv（Scale 可保留；中心偏移写第 4 行） */
 struct DebugGalvoParamPayload {
     float scale;
-    float step_mm;
+    float step_mm;          /**< 调试页 Step 选择，后端可忽略 */
+    float center_offset_x;  /**< cal.csv 第 4 行 X 中心平移（mm） */
+    float center_offset_y;  /**< cal.csv 第 4 行 Y 中心平移（mm） */
 };
 
 /** UI_Debug_Device_Ntf：设备/门/电机/照明 */

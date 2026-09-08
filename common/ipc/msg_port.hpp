@@ -24,7 +24,6 @@ public:
     bool set_mode_ipc_client(middleware::ModuleId local_id,
                              const char* broker_path = UPC_BROKER_SOCKET_DEFAULT);
 
-    bool init();
     void shutdown();
 
     Subscription subscribe(MsgType type, ModuleId module_id, MsgHandler handler);
