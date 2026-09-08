@@ -2,6 +2,7 @@
 #define UPC_MQTT_SERVICE_INTERNAL_HPP
 
 #include "image_paths.hpp"
+#include "rs_log.hpp"
 
 #include <cstdint>
 #include <filesystem>
@@ -21,9 +22,35 @@ inline constexpr uint64_t kFirmwareQueryIntervalMs = 10000;
 inline constexpr const char* kCmdSetLight = "set_light";
 inline constexpr const char* kCmdStartRtspPush = "start_rtsp_push";
 inline constexpr const char* kCmdStopRtspPush = "stop_rtsp_push";
+inline constexpr const char* kCmdLogCollect = "log_collect";
 inline constexpr const char* kCmdRejectReasonInvalidState = "invalid_state";
 inline constexpr const char* kCmdRejectReasonEncoderError = "encoder_error";
 inline constexpr uint64_t kRtspAckTimeoutMs = 8000;
+
+/** 日志采集任务级 error.reason 闭集（设备端不自造码）。 */
+inline constexpr const char* kLogErrUrlExpired = "URL_EXPIRED";
+inline constexpr const char* kLogErrPutFailed = "PUT_FAILED";
+inline constexpr const char* kLogErrDiskFull = "DISK_FULL";
+inline constexpr const char* kLogErrEncryptFail = "ENCRYPT_FAIL";
+inline constexpr const char* kLogErrNoFileFound = "NO_FILE_FOUND";
+inline constexpr const char* kLogErrSizeExceeded = "SIZE_EXCEEDED";
+inline constexpr const char* kLogErrInternal = "INTERNAL";
+
+/** fileReport.reason 闭集（collected=false 时）。 */
+inline constexpr const char* kLogFileNotFound = "not_found";
+inline constexpr const char* kLogFileEmpty = "empty";
+inline constexpr const char* kLogFileSizeExceeded = "size_exceeded";
+
+/** 日志采集加密与落盘约定。 */
+inline constexpr const char* kLogEncryptAlgorithm = "AES-256-GCM";
+inline constexpr const char* kLogHkdfInfo = "snowx:iot:log-collect:enc:v1";
+inline constexpr const char* kLogPutContentType = "application/octet-stream";
+inline constexpr const char* kTopicLogDir = UPC_TOPIC_LOG_DIR;
+inline constexpr const char* kLogCollectTmpDir = "/tmp/snowpod_log_collect";
+inline constexpr int kLogRotateMaxGenerations = 3;
+inline constexpr size_t kLogGcmNonceLen = 12;
+inline constexpr size_t kLogGcmTagLen = 16;
+inline constexpr size_t kLogAesKeyLen = 32;
 
 /** OTA 包下载/落盘目录约定（根路径见 common/fs_manifest/image_paths.hpp）。 */
 inline constexpr const char* kImageTmpDir = UPC_IMAGE_TMP_DIR;
@@ -59,6 +86,15 @@ bool download_file_with_progress(const std::string& url,
                                  const std::filesystem::path& out_file,
                                  const std::function<void(size_t, size_t)>& on_progress,
                                  std::string& err);
+/**
+ * HTTPS PUT 预签名直传：body 原样写入，固定 Content-Type: application/octet-stream
+ * （与云端 Oss/S3 预签名头一致）。成功返回 true。
+ */
+bool upload_http_put(const std::string& url,
+                     const void* body,
+                     size_t body_len,
+                     std::string& err,
+                     const std::function<void(size_t, size_t)>& on_progress = {});
 /** OTA 组件名映射到目标目录。 */
 const char* component_target_dir(const std::string& component);
 /** shell 安全单引号转义。 */

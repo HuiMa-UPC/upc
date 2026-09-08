@@ -100,6 +100,31 @@ void MqttService::handle_command_message(const std::string& payload)
         return;
     }
 
+    if(cmd_name == kCmdLogCollect) {
+        LogCollectCommand collect{};
+        if(!parse_log_collect_command(data_json, req_id, collect, reject_reason)) {
+            (void)publish_cmd_ack(req_id, kCmdLogCollect, "rejected",
+                                  reject_reason.empty()
+                                      ? kCmdRejectReasonInvalidState
+                                      : reject_reason.c_str(),
+                                  ("{\"collectId\":\"" +
+                                   json_escape(collect.collect_id) + "\"}").c_str());
+            return;
+        }
+        UPC_LOG_MQTT_SERVICE(Info,
+            "MQTT RX log_collect req_id=%s collectId=%s files=%zu",
+            collect.req_id.c_str(), collect.collect_id.c_str(),
+            collect.topic_files.size());
+        const std::string collect_id = collect.collect_id;
+        if(!start_log_collect(std::move(collect))) {
+            (void)publish_cmd_ack(req_id, kCmdLogCollect, "rejected",
+                                  kCmdRejectReasonInvalidState,
+                                  ("{\"collectId\":\"" +
+                                   json_escape(collect_id) + "\"}").c_str());
+        }
+        return;
+    }
+
     UPC_LOG_MQTT_SERVICE(Debug,
         "MQTT RX command ignored req_id=%s cmd=%s",
         req_id.c_str(), cmd_name.c_str());

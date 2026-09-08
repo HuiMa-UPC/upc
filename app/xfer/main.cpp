@@ -32,10 +32,6 @@ void try_init_ipc()
         UPC_LOG_XFR_SERVICE(Warn, "set_mode_ipc_client failed");
         return;
     }
-    if (!port.init()) {
-        UPC_LOG_XFR_SERVICE(Warn, "IPC init failed, continue without UI notify");
-        return;
-    }
     g_ipc_ready = true;
     UPC_LOG_XFR_SERVICE(Info, "IPC connected to broker: %s", broker_socket_path());
 }

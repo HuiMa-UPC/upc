@@ -32,6 +32,25 @@ public:
     void shutdown();
     void tick();
 
+    /** 云端 log_collect 下行业务体（忽略 timeRange*）。 */
+    struct LogCollectCommand {
+        std::string req_id;
+        std::string collect_id;
+        std::string object_key;
+        std::string upload_url;
+        int64_t upload_url_expires_at = 0; /**< Unix 秒 */
+        int64_t max_packet_size = 0;       /**< 密文包上限（含 nonce+tag） */
+        std::string encrypt_salt_b64;      /**< 下行原文，回显不重编 */
+        std::vector<std::string> topic_files;
+    };
+
+    struct LogFileReport {
+        std::string file;
+        bool collected = false;
+        int64_t size = 0;       /**< collected=true 或 empty/size_exceeded 时 */
+        std::string reason;     /**< collected=false 时：not_found/empty/size_exceeded */
+    };
+
 private:
     struct ChamberTelemetry {
         float pm25 = 0.0f;
@@ -145,11 +164,25 @@ private:
                                  const std::string& req_id,
                                  RtspCommand& out,
                                  std::string& reject_reason) const;
+    bool parse_log_collect_command(const std::string& data_json,
+                                   const std::string& req_id,
+                                   LogCollectCommand& out,
+                                   std::string& reject_reason) const;
     bool dispatch_set_light_to_glavo(const LightCommand& cmd);
     bool dispatch_rtsp_start_to_media(const RtspCommand& cmd);
     bool dispatch_rtsp_stop_to_media(const RtspCommand& cmd);
     void handle_rtsp_rsp(const middleware::Message& msg, const char* expect_cmd);
     bool track_pending_ack(const std::string& req_id, const std::string& cmd);
+    bool start_log_collect(LogCollectCommand cmd);
+    void run_log_collect_task(LogCollectCommand cmd);
+    void publish_log_collect_error(const LogCollectCommand& cmd, const char* reason);
+    void publish_log_collect_accepted(const LogCollectCommand& cmd,
+                                      int64_t file_size,
+                                      const std::vector<LogFileReport>& reports);
+    void publish_log_collect_progress(const std::string& collect_id,
+                                      const std::string& attempt_id,
+                                      int64_t transferred_bytes,
+                                      int64_t total_bytes);
     bool subscribe_ota_topics();
     void handle_ota_notify(const std::string& payload);
     void handle_ota_manifest_response(const std::string& payload);
@@ -191,6 +224,10 @@ private:
     static bool json_extract_string(const std::string& json, const char* key,
                                     std::string& out);
     static bool json_extract_int(const std::string& json, const char* key, int& out);
+    static bool json_extract_int64(const std::string& json, const char* key, int64_t& out);
+    /** 提取字符串数组（如 topicFiles）。 */
+    static bool json_extract_string_array(const std::string& json, const char* key,
+                                          std::vector<std::string>& out);
     /** 提取指定 JSON 对象（包含首尾花括号），用于严格解析命令根节点的 data。 */
     static bool json_extract_object(const std::string& json, const char* key,
                                     std::string& out);
@@ -268,6 +305,11 @@ private:
     } galvo_ota_sync_{};
     std::mutex galvo_ota_mtx_;
     std::condition_variable galvo_ota_cv_;
+
+    std::mutex log_collect_mtx_;
+    std::thread log_collect_thread_;
+    bool log_collect_running_ = false;
+    uint64_t last_log_collect_attempt_ms_ = 0;
 
     std::atomic<uint32_t> seq_{0};
 };

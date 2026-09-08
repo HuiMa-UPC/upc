@@ -216,7 +216,8 @@
 - 架构与进程边界：`doc/ARCHITECTURE.md`
 - UI、打印流程、历史、预览、设置功能：`app/ui/UI.md`
 - Glavo 打印和 MCU 编排：`app/glavo/GLAVO.md`
-- 相机、拍照、录像、媒体落盘：`app/camera/CAMERA.md`
+- 相机采集/预览推流：`app/camera/CAMERA.md`
+- 拍照、录像、延时、直播：`app/media/MEDIA.md`
 - Xfer 服务接口与上传约束：`app/xfer/XFER.md`
 - MQTT 遥测和命令：`app/mqtt/lib/mqtt_service.cpp`
 - 日志分析工具：`tools/analyze_topic_logs.py`

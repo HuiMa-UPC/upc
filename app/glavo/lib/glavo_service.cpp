@@ -52,6 +52,7 @@
 #include "print_video_notify.hpp"
 #include "parser_config.hpp"
 #include "device_config.hpp"
+#include "cal_parser.hpp"
 #include "parser_context.hpp"
 #include "parser_manager.hpp"
 #include "parser_registry.hpp"
@@ -711,6 +712,9 @@ bool GlavoService::start()
         middleware::MsgType::UI_Debug_Fan_Duty_Ntf,
         middleware::MsgType::UI_Debug_Switch_Ntf,
         middleware::MsgType::UI_Debug_Galvo_RedLight_Ntf,
+        middleware::MsgType::UI_Debug_Galvo_Param_Save_Ntf,
+        middleware::MsgType::UI_Debug_TestImage_Set_Ntf,
+        middleware::MsgType::UI_Debug_TestImage_Get_Ntf,
         middleware::MsgType::UI_Debug_CleanTest_Start_Ntf,
         middleware::MsgType::UI_Debug_CleanTest_Close_Ntf,
         middleware::MsgType::UI_Debug_PrintParam_Set_Ntf,
@@ -750,6 +754,7 @@ bool GlavoService::start()
     publish_debug_env_sim_state();
     publish_debug_env_sim_powder_state();
     publish_debug_first_layer_visual_check_state();
+    publish_debug_test_image_state();
     return true;
 }
 
@@ -788,6 +793,7 @@ bool GlavoService::stop()
     }
 
     stop_print_job();
+    clear_test_image_session();
     stop_clean_worker();
     clear_prepare_session();
     WifiManager::instance().shutdown();
@@ -1099,6 +1105,15 @@ void GlavoService::handle_message(const middleware::Message& msg)
             break;
         case middleware::MsgType::UI_Debug_Galvo_RedLight_Ntf:
             handle_debug_galvo_red_light(msg);
+            break;
+        case middleware::MsgType::UI_Debug_Galvo_Param_Save_Ntf:
+            handle_debug_galvo_param_save(msg);
+            break;
+        case middleware::MsgType::UI_Debug_TestImage_Set_Ntf:
+            handle_debug_test_image_set(msg);
+            break;
+        case middleware::MsgType::UI_Debug_TestImage_Get_Ntf:
+            handle_debug_test_image_get(msg);
             break;
         case middleware::MsgType::UI_Debug_CleanTest_Start_Ntf:
             handle_debug_clean_test_start(msg);
@@ -1548,6 +1563,16 @@ void GlavoService::handle_print_prepare(const middleware::Message& msg)
     middleware::PrintPrepareRspPayload rsp{};
     rsp.ok = 0;
 
+    if(test_image_active_ || test_image_desired_) {
+        UPC_LOG_GLAVO_SERVICE(Warn, "print_prepare rejected: test image active");
+        middleware::Message out(middleware::MsgType::APP_Print_Prepare_Rsp,
+            static_cast<middleware::ModuleId>(module_id()), msg.sender_id);
+        out.payload = middleware::MsgPayload::from_bytes(
+            reinterpret_cast<const uint8_t*>(&rsp), sizeof(rsp));
+        (void)publish_async(out);
+        return;
+    }
+
     if (!read_inline_pod(msg.payload, req)) {
         UPC_LOG_GLAVO_SERVICE(Warn, "print_prepare: invalid payload");
     } else {
@@ -1693,6 +1718,11 @@ void GlavoService::handle_print_start(const middleware::Message& msg)
         return;
     }
 
+    if(test_image_active_ || test_image_desired_) {
+        UPC_LOG_GLAVO_SERVICE(Warn, "print_start rejected: test image active");
+        return;
+    }
+
     if(!prepare_ready_ || prepared_local_path_.empty()) {
         UPC_LOG_GLAVO_SERVICE(Warn, "print_start: no prepared session");
         return;
@@ -1705,6 +1735,7 @@ void GlavoService::handle_print_start(const middleware::Message& msg)
 
     stop_print_job();
     auto& link = McuLink::instance();
+    link.set_test_image_motion(false);
     if(link.is_sending() || link.is_terminate_pending()) {
         /* 异步 terminate 完成前不得 open/begin，否则清理会清掉新作业 */
         link.request_terminate();
@@ -2187,6 +2218,22 @@ void GlavoService::on_mcu_link_event(McuLinkEvent ev)
 {
     switch(ev) {
         case McuLinkEvent::PrintCompleted:
+            if(test_image_active_) {
+                UPC_LOG_GLAVO_SERVICE(Info, "tcp_job_event: PrintCompleted (test image)");
+                if(test_image_desired_) {
+                    /* 立刻重开同一测试文件；不推正式打印完成旁路 */
+                    if(!launch_test_image_pass()) {
+                        UPC_LOG_GLAVO_SERVICE(Warn,
+                            "test image loop relaunch failed; stopping");
+                        clear_test_image_session();
+                        publish_debug_test_image_state();
+                    }
+                } else {
+                    clear_test_image_session();
+                    publish_debug_test_image_state();
+                }
+                break;
+            }
             UPC_LOG_GLAVO_SERVICE(Info, "tcp_job_event: PrintCompleted");
             deferred_print_start_ = false;
             PrintVideoNotify::instance().on_print_finish();
@@ -2201,6 +2248,20 @@ void GlavoService::on_mcu_link_event(McuLinkEvent ev)
             break;
         case McuLinkEvent::TerminateDone:
         case McuLinkEvent::PrintError:
+            if(test_image_active_ || McuLink::instance().is_test_image_motion()) {
+                if(ev == McuLinkEvent::TerminateDone) {
+                    UPC_LOG_GLAVO_SERVICE(Info,
+                        "tcp_job_event: TerminateDone (test image)");
+                } else {
+                    UPC_LOG_GLAVO_SERVICE(Warn,
+                        "tcp_job_event: PrintError (test image)");
+                }
+                /* Off 或异常：结束测试会话；不切激光、不推正式 Terminate_Rsp */
+                test_image_desired_ = false;
+                clear_test_image_session();
+                publish_debug_test_image_state();
+                break;
+            }
             if(ev == McuLinkEvent::TerminateDone) {
                 UPC_LOG_GLAVO_SERVICE(Info, "tcp_job_event: TerminateDone");
             } else {
@@ -2228,6 +2289,10 @@ void GlavoService::on_mcu_link_event(McuLinkEvent ev)
             publish_print_state_ntf(static_cast<uint32_t>(middleware::UserHomeStatus::Idle));
             break;
         case McuLinkEvent::PowderLow: {
+            if(test_image_active_) {
+                UPC_LOG_GLAVO_SERVICE(Debug, "powder low ignored during test image");
+                break;
+            }
             if(!print_running_.load()) {
                 break;
             }
@@ -3206,6 +3271,178 @@ void GlavoService::handle_debug_galvo_red_light(const middleware::Message& msg)
         return;
     }
     (void)apply_red_laser_mode(p.on != 0, "debug_toggle");
+}
+
+/** @brief 保存振镜中心偏移到 cal.csv 并热加载 ParserContext（不重启进程即可生效） */
+void GlavoService::handle_debug_galvo_param_save(const middleware::Message& msg)
+{
+    middleware::DebugGalvoParamPayload p{};
+    if(!read_inline_pod(msg.payload, p)) {
+        UPC_LOG_GLAVO_SERVICE(Warn, "galvo_param_save: invalid payload");
+        return;
+    }
+
+    if(print_running_.load() || test_image_active_ || test_image_desired_) {
+        UPC_LOG_GLAVO_SERVICE(Warn,
+            "galvo_param_save rejected: print/test image busy");
+        return;
+    }
+
+    (void)p.scale;
+    (void)p.step_mm;
+
+    const char* path = CAL_DEFAULT_FILE_PATH;
+    if(parser::cal_update_center_offset(
+           path,
+           static_cast<double>(p.center_offset_x),
+           static_cast<double>(p.center_offset_y)) != 0) {
+        UPC_LOG_GLAVO_SERVICE(Error,
+            "galvo_param_save: write center failed path=%s x=%.4f y=%.4f",
+            path, static_cast<double>(p.center_offset_x),
+            static_cast<double>(p.center_offset_y));
+        return;
+    }
+
+    parser::ParserContext::instance().load_calibration(path);
+    UPC_LOG_GLAVO_SERVICE(Info,
+        "galvo_param_save ok center=(%.4f,%.4f) path=%s",
+        static_cast<double>(p.center_offset_x),
+        static_cast<double>(p.center_offset_y), path);
+}
+
+void GlavoService::publish_debug_test_image_state()
+{
+    middleware::DebugOnOffPayload p{};
+    p.on = (test_image_desired_ && test_image_active_) ? 1 : 0;
+    middleware::Message ntf(
+        middleware::MsgType::GLAVO_Debug_TestImage_Ntf,
+        middleware::ModuleId::APP_GLAVO,
+        middleware::ModuleId::UI);
+    ntf.payload = middleware::MsgPayload::from_bytes(
+        reinterpret_cast<const uint8_t*>(&p), sizeof(p));
+    if(!publish_async(ntf)) {
+        UPC_LOG_GLAVO_SERVICE(Warn, "test_image state publish failed");
+    }
+}
+
+void GlavoService::clear_test_image_session()
+{
+    test_image_active_ = false;
+    test_image_desired_ = false;
+    McuLink::instance().set_test_image_motion(false);
+    parser::ParserManager::instance().stop_parse();
+    if(parser::IParserWorker* worker = active_parser()) {
+        if(worker->is_file_open()) {
+            worker->close_file();
+        }
+    }
+}
+
+bool GlavoService::launch_test_image_pass()
+{
+    const char* path = GLAVO_TEST_GCODE_PATH;
+    struct stat st{};
+    if(stat(path, &st) != 0 || !S_ISREG(st.st_mode)) {
+        UPC_LOG_GLAVO_SERVICE(Warn, "test image file missing: %s", path);
+        return false;
+    }
+
+    auto& link = McuLink::instance();
+    if(link.is_terminate_pending() || link.is_sending()) {
+        /* 一轮刚结束时 sending 已清；若仍在 terminate 清理中则稍后再试 */
+        UPC_LOG_GLAVO_SERVICE(Warn,
+            "test image launch deferred: link busy sending=%d term=%d",
+            link.is_sending() ? 1 : 0, link.is_terminate_pending() ? 1 : 0);
+        return false;
+    }
+
+    (void)apply_red_laser_mode(true, "test_image_start");
+
+    parser::ParserManager::instance().stop_parse();
+    if(parser::ParserManager::instance().open_file(path) != 0) {
+        UPC_LOG_GLAVO_SERVICE(Error, "test image open failed path=%s", path);
+        return false;
+    }
+    PrintJobState::instance().reset_job_counters();
+    parser::ParserManager::instance().start_parse();
+    link.set_test_image_motion(true);
+    link.begin_sending(true /* skip_layer_handshake */);
+    test_image_active_ = true;
+    UPC_LOG_GLAVO_SERVICE(Info, "test image pass started path=%s", path);
+    return true;
+}
+
+void GlavoService::stop_test_image_session()
+{
+    test_image_desired_ = false;
+    if(!test_image_active_ && !McuLink::instance().is_sending() &&
+       !McuLink::instance().is_terminate_pending()) {
+        clear_test_image_session();
+        publish_debug_test_image_state();
+        return;
+    }
+    UPC_LOG_GLAVO_SERVICE(Info, "test image stop: terminate (keep red)");
+    parser::ParserManager::instance().stop_parse();
+    McuLink::instance().request_terminate();
+    /* active 在 TerminateDone 清；此处仍报 desired=0 的过渡态用 active 反映 */
+    publish_debug_test_image_state();
+}
+
+void GlavoService::handle_debug_test_image_set(const middleware::Message& msg)
+{
+    middleware::DebugOnOffPayload p{};
+    if(!read_inline_pod(msg.payload, p)) {
+        return;
+    }
+
+    if(p.on == 0) {
+        stop_test_image_session();
+        return;
+    }
+
+    if(print_running_.load()) {
+        UPC_LOG_GLAVO_SERVICE(Warn, "test image rejected: formal print running");
+        test_image_desired_ = false;
+        test_image_active_ = false;
+        publish_debug_test_image_state();
+        return;
+    }
+
+    if(test_image_desired_ && test_image_active_) {
+        publish_debug_test_image_state();
+        return;
+    }
+
+    struct stat st{};
+    if(stat(GLAVO_TEST_GCODE_PATH, &st) != 0 || !S_ISREG(st.st_mode)) {
+        UPC_LOG_GLAVO_SERVICE(Warn, "test image file missing: %s",
+                              GLAVO_TEST_GCODE_PATH);
+        test_image_desired_ = false;
+        test_image_active_ = false;
+        McuLink::instance().set_test_image_motion(false);
+        publish_debug_test_image_state();
+        return;
+    }
+
+    /* 若正式 prepare 会话还在，清掉以免互踩 parser */
+    if(prepare_ready_) {
+        clear_prepare_session();
+    }
+    stop_print_job();
+
+    test_image_desired_ = true;
+    if(!launch_test_image_pass()) {
+        clear_test_image_session();
+        publish_debug_test_image_state();
+        return;
+    }
+    publish_debug_test_image_state();
+}
+
+void GlavoService::handle_debug_test_image_get(const middleware::Message& msg)
+{
+    (void)msg;
+    publish_debug_test_image_state();
 }
 
 /** @brief 启动清洁测试流程 */

@@ -4,6 +4,7 @@
 #include "msg_port.hpp"
 #include "gcode_manifest.hpp"
 #include "print_history_manifest.hpp"
+#include "debug_msg_proxy.hpp"
 #include "ui_theme.hpp"
 #include "ui_feedback.hpp"
 #include "ui_modal_dialog.hpp"
@@ -2072,6 +2073,10 @@ void on_print_confirm_ok(lv_event_t * /*e*/)
 {
     close_confirm_dlg();
     if(!g_files_page_active || g_sel_index < 0) {
+        return;
+    }
+    if(ui::DebugMsgProxy::instance().test_image_active()) {
+        ui_toast_show("Test mode active", user_color_status_err, 1800);
         return;
     }
     enter_state(CONTROL_STATE_PREPARE_WAIT);

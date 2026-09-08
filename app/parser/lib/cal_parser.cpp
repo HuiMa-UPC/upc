@@ -328,4 +328,92 @@ void cal_apply_xy(const CalData *cal, float slice_x, float slice_y,
     *out_y = y;
 }
 
+int cal_update_center_offset(const char *path, double offset_x, double offset_y)
+{
+    if(!path || path[0] == '\0') {
+        return -1;
+    }
+
+    FILE *fp = std::fopen(path, "r");
+    if(!fp) {
+        UPC_LOG_CAL_PARSER(Error, "update center: fopen read failed: %s", path);
+        return -1;
+    }
+
+    char tmp_path[512];
+    std::snprintf(tmp_path, sizeof(tmp_path), "%s.tmp", path);
+    FILE *out = std::fopen(tmp_path, "w");
+    if(!out) {
+        UPC_LOG_CAL_PARSER(Error, "update center: fopen write failed: %s", tmp_path);
+        std::fclose(fp);
+        return -1;
+    }
+
+    char line_buf[4096];
+    bool replaced = false;
+    bool first_line = true;
+    while(std::fgets(line_buf, sizeof(line_buf), fp)) {
+        char work[4096];
+        std::snprintf(work, sizeof(work), "%s", line_buf);
+        if(first_line) {
+            first_line = false;
+            if((unsigned char)work[0] == 0xEF &&
+               (unsigned char)work[1] == 0xBB &&
+               (unsigned char)work[2] == 0xBF) {
+                /* 保留 BOM：写回时原样带上；匹配用去掉 BOM 的副本 */
+            }
+        }
+
+        char match_buf[4096];
+        std::snprintf(match_buf, sizeof(match_buf), "%s", line_buf);
+        if((unsigned char)match_buf[0] == 0xEF &&
+           (unsigned char)match_buf[1] == 0xBB &&
+           (unsigned char)match_buf[2] == 0xBF) {
+            memmove(match_buf, match_buf + 3, strlen(match_buf + 3) + 1);
+        }
+        trim_inplace(match_buf);
+
+        if(!replaced && ci_starts_with(match_buf, "X,")) {
+            double ox = 0.0;
+            double oy = 0.0;
+            if(sscanf(match_buf, "X,%lf,Y,%lf", &ox, &oy) == 2 ||
+               sscanf(match_buf, "x,%lf,y,%lf", &ox, &oy) == 2) {
+                /* 保留行尾换行风格：原行含 \n 则补上 */
+                const bool has_nl = (std::strchr(line_buf, '\n') != nullptr);
+                if(has_nl) {
+                    std::fprintf(out, "X,%.4f,Y,%.4f\n", offset_x, offset_y);
+                } else {
+                    std::fprintf(out, "X,%.4f,Y,%.4f", offset_x, offset_y);
+                }
+                replaced = true;
+                continue;
+            }
+        }
+        std::fputs(line_buf, out);
+    }
+
+    std::fclose(fp);
+    if(std::fclose(out) != 0) {
+        std::remove(tmp_path);
+        return -1;
+    }
+
+    if(!replaced) {
+        UPC_LOG_CAL_PARSER(Error, "update center: no X,<x>,Y,<y> line in %s", path);
+        std::remove(tmp_path);
+        return -1;
+    }
+
+    if(std::rename(tmp_path, path) != 0) {
+        UPC_LOG_CAL_PARSER(Error, "update center: rename failed %s -> %s",
+                           tmp_path, path);
+        std::remove(tmp_path);
+        return -1;
+    }
+
+    UPC_LOG_CAL_PARSER(Info, "center offset updated: X=%.4f Y=%.4f path=%s",
+                       offset_x, offset_y, path);
+    return 0;
+}
+
 } // namespace upc::parser

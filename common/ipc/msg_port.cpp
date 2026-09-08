@@ -14,11 +14,6 @@ bool MsgPort::set_mode_ipc_client(ModuleId local_id, const char* broker_path)
     return upc_ipc::IpcMsgBus::instance().init_ipc_client(local_id, broker_path);
 }
 
-bool MsgPort::init()
-{
-    return true;
-}
-
 void MsgPort::shutdown()
 {
     upc_ipc::IpcMsgBus::instance().shutdown();

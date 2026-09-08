@@ -545,6 +545,159 @@ bool download_file_with_progress(const std::string& url,
     return false;
 }
 
+bool upload_http_put(const std::string& url,
+                     const void* body,
+                     size_t body_len,
+                     std::string& err,
+                     const std::function<void(size_t, size_t)>& on_progress)
+{
+    err.clear();
+    ParsedUrl parsed{};
+    if(!parse_url(url, parsed)) {
+        err = "invalid_url";
+        return false;
+    }
+    const int fd = connect_tcp_socket(parsed.host, parsed.port);
+    if(fd < 0) {
+        err = "connect_failed";
+        return false;
+    }
+
+    SSL_CTX* ssl_ctx = nullptr;
+    SSL* ssl = nullptr;
+    if(parsed.scheme == "https") {
+        ssl_ctx = SSL_CTX_new(TLS_client_method());
+        if(!ssl_ctx) {
+            ::close(fd);
+            err = "ssl_ctx_failed";
+            return false;
+        }
+        ssl = SSL_new(ssl_ctx);
+        if(!ssl || SSL_set_fd(ssl, fd) != 1 || SSL_connect(ssl) != 1) {
+            if(ssl) {
+                SSL_free(ssl);
+            }
+            SSL_CTX_free(ssl_ctx);
+            ::close(fd);
+            err = "ssl_connect_failed";
+            return false;
+        }
+    }
+
+    auto cleanup = [&]() {
+        if(ssl) {
+            SSL_shutdown(ssl);
+            SSL_free(ssl);
+            SSL_CTX_free(ssl_ctx);
+        }
+        ::close(fd);
+    };
+
+    auto write_all = [&](const char* data, size_t len) -> bool {
+        size_t sent = 0;
+        while(sent < len) {
+            int n = 0;
+            if(ssl) {
+                n = SSL_write(ssl, data + sent, static_cast<int>(len - sent));
+            } else {
+                n = static_cast<int>(::send(fd, data + sent, len - sent, 0));
+            }
+            if(n <= 0) {
+                return false;
+            }
+            sent += static_cast<size_t>(n);
+        }
+        return true;
+    };
+    auto read_some = [&](char* data, size_t len) -> int {
+        if(ssl) {
+            return SSL_read(ssl, data, static_cast<int>(len));
+        }
+        return static_cast<int>(::recv(fd, data, len, 0));
+    };
+
+    /* Content-Type 必须与预签名一致，否则 Oss/S3 返回 403。 */
+    const std::string request =
+        "PUT " + parsed.path + " HTTP/1.1\r\n"
+        "Host: " + make_host_header_value(parsed) + "\r\n"
+        "Content-Type: " + std::string(kLogPutContentType) + "\r\n"
+        "Content-Length: " + std::to_string(body_len) + "\r\n"
+        "Connection: close\r\n"
+        "User-Agent: snowpod-mqtt-log/1.0\r\n\r\n";
+    if(!write_all(request.data(), request.size())) {
+        err = "http_send_failed";
+        cleanup();
+        return false;
+    }
+    if(body_len > 0 && body) {
+        /* 用户自定义进度回调：把 body 切成 64KB 块写出，每块完成后
+           回调一次 "已发/总字节"，供日志采集进度上报使用。 */
+        size_t body_sent = 0;
+        const size_t total = body_len;
+        const char* base = static_cast<const char*>(body);
+        while(body_sent < total) {
+            const size_t chunk = std::min<size_t>(64 * 1024, total - body_sent);
+            if(!write_all(base + body_sent, chunk)) {
+                err = "http_body_send_failed";
+                cleanup();
+                return false;
+            }
+            body_sent += chunk;
+            if(on_progress) {
+                on_progress(body_sent, total);
+            }
+        }
+    }
+
+    std::string header;
+    std::array<char, 4096> buf{};
+    int status_code = 0;
+    bool header_done = false;
+    for(;;) {
+        const int n = read_some(buf.data(), buf.size());
+        if(n <= 0) {
+            break;
+        }
+        if(!header_done) {
+            header.append(buf.data(), static_cast<size_t>(n));
+            const size_t split = header.find("\r\n\r\n");
+            if(split == std::string::npos) {
+                continue;
+            }
+            header_done = true;
+            std::istringstream iss(header.substr(0, split + 4));
+            std::string status_line;
+            if(!std::getline(iss, status_line)) {
+                err = "bad_http_status";
+                break;
+            }
+            if(!status_line.empty() && status_line.back() == '\r') {
+                status_line.pop_back();
+            }
+            std::istringstream sl(status_line);
+            std::string http_ver;
+            if(!(sl >> http_ver >> status_code)) {
+                err = "bad_http_status";
+                break;
+            }
+            break;
+        }
+    }
+    cleanup();
+
+    if(!header_done) {
+        if(err.empty()) {
+            err = "http_recv_failed";
+        }
+        return false;
+    }
+    if(status_code < 200 || status_code >= 300) {
+        err = "http_status_" + std::to_string(status_code);
+        return false;
+    }
+    return true;
+}
+
 const char* component_target_dir(const std::string& component)
 {
     if(component == "soc") {
@@ -725,6 +878,9 @@ void MqttService::shutdown()
     }
     if(ota_download_thread_.joinable()) {
         ota_download_thread_.join();
+    }
+    if(log_collect_thread_.joinable()) {
+        log_collect_thread_.join();
     }
     {
         std::lock_guard<std::mutex> lock(pending_mtx_);
@@ -1034,35 +1190,42 @@ bool MqttService::publish_cmd_ack(const std::string& req_id,
         : "null";
     const char* detail = detail_json ? detail_json : "{}";
 
-    char payload[1024];
-    std::snprintf(payload, sizeof(payload),
-        "{"
-        "\"v\":1,"
-        "\"type\":\"command_ack\","
-        "\"device_id\":\"%s\","
-        "\"ts\":%lld,"
-        "\"seq\":%u,"
-        "\"req_id\":\"%s\","
-        "\"data\":{"
-            "\"cmd\":\"%s\","
-            "\"result\":\"%s\","
-            "\"reason\":%s,"
-            "\"detail\":%s"
-        "}"
-        "}",
-        escaped_device.c_str(),
-        ts,
-        seq,
-        escaped_req.c_str(),
-        escaped_cmd.c_str(),
-        escaped_result.c_str(),
-        reason_json.c_str(),
-        detail);
+    /* log_collect 的 fileReport 可能很长，用动态缓冲避免截断导致 LOG_REPORT_MISSING。 */
+    std::string payload;
+    payload.reserve(512 + std::strlen(detail));
+    payload += '{';
+    payload += "\"v\":1,";
+    payload += "\"type\":\"command_ack\",";
+    payload += "\"device_id\":\"";
+    payload += escaped_device;
+    payload += "\",";
+    payload += "\"ts\":";
+    payload += std::to_string(ts);
+    payload += ',';
+    payload += "\"seq\":";
+    payload += std::to_string(seq);
+    payload += ',';
+    payload += "\"req_id\":\"";
+    payload += escaped_req;
+    payload += "\",";
+    payload += "\"data\":{";
+    payload += "\"cmd\":\"";
+    payload += escaped_cmd;
+    payload += "\",";
+    payload += "\"result\":\"";
+    payload += escaped_result;
+    payload += "\",";
+    payload += "\"reason\":";
+    payload += reason_json;
+    payload += ',';
+    payload += "\"detail\":";
+    payload += detail;
+    payload += "}}";
 
     const std::string topic = cfg_.topic_cmd_ack();
     MQTTClient_message msg = MQTTClient_message_initializer;
-    msg.payload = payload;
-    msg.payloadlen = static_cast<int>(std::strlen(payload));
+    msg.payload = payload.data();
+    msg.payloadlen = static_cast<int>(payload.size());
     msg.qos = cfg_.qos_ack;
     msg.retained = 0;
 
@@ -1303,6 +1466,16 @@ bool MqttService::json_extract_string(const std::string& json, const char* key,
 
 bool MqttService::json_extract_int(const std::string& json, const char* key, int& out)
 {
+    int64_t v = 0;
+    if(!json_extract_int64(json, key, v)) {
+        return false;
+    }
+    out = static_cast<int>(v);
+    return true;
+}
+
+bool MqttService::json_extract_int64(const std::string& json, const char* key, int64_t& out)
+{
     const std::string token = std::string("\"") + key + "\"";
     const size_t key_pos = json.find(token);
     if(key_pos == std::string::npos) {
@@ -1329,8 +1502,71 @@ bool MqttService::json_extract_int(const std::string& json, const char* key, int
     if(end == pos || (end == pos + 1 && json[pos] == '-')) {
         return false;
     }
-    out = std::atoi(json.substr(pos, end - pos).c_str());
+    out = std::strtoll(json.substr(pos, end - pos).c_str(), nullptr, 10);
     return true;
+}
+
+bool MqttService::json_extract_string_array(const std::string& json, const char* key,
+                                            std::vector<std::string>& out)
+{
+    out.clear();
+    if(!key || !key[0]) {
+        return false;
+    }
+    const std::string token = std::string("\"") + key + "\"";
+    const size_t key_pos = json.find(token);
+    if(key_pos == std::string::npos) {
+        return false;
+    }
+    size_t pos = json.find(':', key_pos + token.size());
+    if(pos == std::string::npos) {
+        return false;
+    }
+    ++pos;
+    while(pos < json.size() && std::isspace(static_cast<unsigned char>(json[pos]))) {
+        ++pos;
+    }
+    if(pos >= json.size() || json[pos] != '[') {
+        return false;
+    }
+    ++pos;
+    for(; pos < json.size();) {
+        while(pos < json.size() &&
+              (std::isspace(static_cast<unsigned char>(json[pos])) || json[pos] == ',')) {
+            ++pos;
+        }
+        if(pos >= json.size()) {
+            return false;
+        }
+        if(json[pos] == ']') {
+            return true;
+        }
+        if(json[pos] != '"') {
+            return false;
+        }
+        ++pos;
+        std::string value;
+        bool escaped = false;
+        for(; pos < json.size(); ++pos) {
+            const char c = json[pos];
+            if(escaped) {
+                value.push_back(c);
+                escaped = false;
+                continue;
+            }
+            if(c == '\\') {
+                escaped = true;
+                continue;
+            }
+            if(c == '"') {
+                out.push_back(std::move(value));
+                ++pos;
+                break;
+            }
+            value.push_back(c);
+        }
+    }
+    return false;
 }
 
 bool MqttService::json_extract_object(const std::string& json, const char* key,

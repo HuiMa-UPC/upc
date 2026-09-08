@@ -54,9 +54,6 @@ int start_visual(char daemon)
                      kProc.name, broker_socket_path());
         return 4;
     }
-    if(!port.init()) {
-        return 5;
-    }
 
     upc::visual::VisualService service;
     if(!service.init()) {

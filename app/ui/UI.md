@@ -39,7 +39,7 @@ while (!g_shutdown_requested) {
 }
 ```
 
-后端→后端（如 Glavo→Camera 打印录像）由 Hub 在 `process()` 内 **`IPC_FWD` 同步转发**，不经过 UiMsgProxy。预览像素走 dma fd 旁路 + SHM 元数据环，不走 MsgPort payload。
+后端→后端（如 Glavo→Media 打印录像）由 Hub 在 `process()` 内 **`IPC_FWD` 同步转发**，不经过 UiMsgProxy。预览像素走 dma fd 旁路 + SHM 元数据环，不走 MsgPort payload。
 
 ## PageManager 约定
 
@@ -1531,7 +1531,7 @@ Tab 取 `USER_PAD_SM`（小于 Tab 间距 `USER_PAD_LG` 的一半），故相邻
 - 启动顺序见 `scripts/rongsu.sh`
 - 细节：[common/COMMON.md](../../common/COMMON.md) § IPC
 
-当前 peer：`APP_GLAVO`（required）、`APP_CAMERA`（optional，预览 + 打印录像转发）。
+当前 peer：`APP_GLAVO`（required）、`APP_CAMERA`（optional，预览）、`APP_MEDIA`（拍照/录像/直播；Glavo 打印录像经 Hub 转发至此）。
 
 ## CMake
 
@@ -1547,4 +1547,4 @@ Tab 取 `USER_PAD_SM`（小于 Tab 间距 `USER_PAD_LG` 的一半），故相邻
 
 ## 相关文档
 
-- [glavo/GLAVO.md](../glavo/GLAVO.md) · [common/COMMON.md](../../common/COMMON.md)
+- [glavo/GLAVO.md](../glavo/GLAVO.md) · [camera/CAMERA.md](../camera/CAMERA.md) · [media/MEDIA.md](../media/MEDIA.md) · [common/COMMON.md](../../common/COMMON.md)
