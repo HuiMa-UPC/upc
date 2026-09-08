@@ -97,7 +97,7 @@ private:
     /** 委托 timelapse_util：dma32 + importbuffer_fd 生成 RTHM 缩略图 */
     bool create_raw_thumb_from_nv12(const std::vector<uint8_t>& nv12,
                                     const char* out_path) const;
-    /** 完成目录落盘后 upsert /data/media/video/config.json；true=已原子替换成功 */
+    /** 完成目录落盘后 upsert /userdata/media/video/config.json；true=已原子替换成功 */
     bool upsert_print_history(bool aborted,
                               const std::string& frames_dir_name,
                               const std::string& thumb_name,

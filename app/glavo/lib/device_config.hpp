@@ -206,7 +206,7 @@
 
 /** 调试页 Test image 固定路径（红光循环；无 M3000，不进 Local manifest） */
 #ifndef GLAVO_TEST_GCODE_PATH
-#define GLAVO_TEST_GCODE_PATH  "/data/test/test.gcode"
+#define GLAVO_TEST_GCODE_PATH  "/userdata/test/test.gcode"
 #endif
 
 #ifndef GLAVO_USB_MOUNT_DIR

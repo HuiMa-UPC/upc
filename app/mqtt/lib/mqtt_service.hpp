@@ -116,6 +116,7 @@ private:
     void on_env_update(const middleware::Message& msg);
     void on_mcu_version(const middleware::Message& msg);
     void on_mcu_ota_status(const middleware::Message& msg);
+    void on_serial_mcu_ota_status(const middleware::Message& msg);
     void on_galvo_version(const middleware::Message& msg);
     void on_env_sim_state(const middleware::Message& msg);
     void on_print_state(const middleware::Message& msg);
@@ -196,6 +197,41 @@ private:
     void publish_ota_progress_ui(const middleware::OtaProgressPayload& progress);
     bool trigger_galvo_real_ota(const std::string& task_id, const std::string& component);
     bool wait_galvo_real_ota(std::string& err_code);
+    bool trigger_mcu_real_ota(const std::string& task_id, const std::string& component);
+    bool wait_mcu_real_ota(std::string& err_code);
+
+    struct ApplyOtaSync {
+        bool waiting = false;
+        bool finished = false;
+        bool success = false;
+        bool terminal_seen = false;
+        bool last_apply_pct_valid = false;
+        uint8_t last_apply_pct = 0;
+        bool last_mcu_status_valid = false;
+        middleware::McuOtaState last_mcu_state = middleware::McuOtaState::Idle;
+        uint8_t last_mcu_progress = 0;
+        std::string task_id;
+        std::string component;
+        std::string error_code;
+    };
+    void on_apply_ota_status(const middleware::Message& msg,
+                             ApplyOtaSync& sync,
+                             std::mutex& mtx,
+                             std::condition_variable& cv,
+                             const char* invalid_log,
+                             const char* fail_code);
+    bool trigger_apply_ota(const std::string& task_id,
+                           const std::string& component,
+                           middleware::MsgType start_type,
+                           ApplyOtaSync& sync,
+                           std::mutex& mtx,
+                           const char* already_log,
+                           const char* start_log);
+    bool wait_apply_ota(std::string& err_code,
+                        ApplyOtaSync& sync,
+                        std::mutex& mtx,
+                        std::condition_variable& cv,
+                        const char* default_fail);
     void run_manifest_download_task(std::string task_id, std::vector<OtaComponent> components);
     void start_manifest_download(std::string task_id, std::vector<OtaComponent> components);
     void request_firmware_versions_force(bool need_mcu, bool need_galvo);
@@ -289,22 +325,12 @@ private:
     OtaNotify pending_ota_notify_{};
     std::thread ota_download_thread_;
     bool ota_download_running_ = false;
-    struct GalvoOtaSync {
-        bool waiting = false;
-        bool finished = false;
-        bool success = false;
-        bool terminal_seen = false;
-        bool last_apply_pct_valid = false;
-        uint8_t last_apply_pct = 0;
-        bool last_mcu_status_valid = false;
-        middleware::McuOtaState last_mcu_state = middleware::McuOtaState::Idle;
-        uint8_t last_mcu_progress = 0;
-        std::string task_id;
-        std::string component;
-        std::string error_code;
-    } galvo_ota_sync_{};
+    ApplyOtaSync galvo_ota_sync_{};
     std::mutex galvo_ota_mtx_;
     std::condition_variable galvo_ota_cv_;
+    ApplyOtaSync mcu_ota_sync_{};
+    std::mutex mcu_ota_mtx_;
+    std::condition_variable mcu_ota_cv_;
 
     std::mutex log_collect_mtx_;
     std::thread log_collect_thread_;

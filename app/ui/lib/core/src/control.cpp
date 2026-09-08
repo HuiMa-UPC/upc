@@ -246,7 +246,7 @@ void apply_files_list(const std::vector<control_file_t>& files)
     }
 }
 
-/** Local：UI 直接读 /data/Gcode/config.json（不经 Fs_DirOpen IPC） */
+/** Local：UI 直接读 /userdata/Gcode/config.json（不经 Fs_DirOpen IPC） */
 void load_local_files_from_config()
 {
     std::vector<upc::GcodeManifestEntry> entries;
@@ -3235,7 +3235,7 @@ void show_terminated_result_without_manifest(void)
 }
 
 /**
- * Media 写完 /data/media/video/config.json → 切打印结果页。
+ * Media 写完 /userdata/media/video/config.json → 切打印结果页。
  * has_entry=1 时以 manifest 条目为权威（status/耗时/耗材）；
  * has_entry=0（0 帧未落盘）时退回用 payload.aborted 判定，统计值显示 "--"。
  */

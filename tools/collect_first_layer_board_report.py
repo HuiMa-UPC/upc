@@ -219,7 +219,7 @@ def run_command(args: list[str], *, allow_failure: bool = False) -> subprocess.C
     return result
 
 
-DIAGNOSTIC_ROOT_REMOTE = "/data/media/first_layer_visual"
+DIAGNOSTIC_ROOT_REMOTE = "/userdata/media/first_layer_visual"
 
 
 def collect_from_board(adb: str, serial: str, output_dir: Path) -> list[Path]:
@@ -647,7 +647,7 @@ def run_self_test() -> None:
             "alignment=1 cache=1 cache_event=cache_stable segmentation_ran=0 "
             "segmentation_ms=0.000 preprocessing_ms=4.000 fusion_ms=8.000 total_ms=12.000 "
             "rejection= result=1 qualified_image_saved=1 "
-            "qualified_image_path=/data/media/first_layer_visual/qualified/test.jpg "
+            "qualified_image_path=/userdata/media/first_layer_visual/qualified/test.jpg "
             "image_save_ms=18.000 image_error=none",
             "2026-08-18 10:00:02.100000 level=WARN proc=rongsu_visual src=x module=visual "
             "first layer inference report_v=1 session_id=1001 status=no_snapshot frame=0 width=0 height=0 "
@@ -663,7 +663,7 @@ def run_self_test() -> None:
     records, session_id, session_stop = select_latest_session(records, session_stops)
     assert session_id == "1001" and len(records) == 2 and session_stop is not None
     assert referenced_diagnostic_paths([(records, session_id, session_stop)]) == [
-        "/data/media/first_layer_visual/qualified/test.jpg"
+        "/userdata/media/first_layer_visual/qualified/test.jpg"
     ]
     assert records[0]["ready_margin"] == "0.120000"
     assert records[0]["qualified_image_saved"] == "1"

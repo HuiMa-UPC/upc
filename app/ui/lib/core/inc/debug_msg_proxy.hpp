@@ -73,7 +73,7 @@ public:
     void request_env_sim_powder_state();
     void send_first_layer_visual_check_set(bool on);
     void request_first_layer_visual_check_state();
-    /** 调试页 Test image：红光循环打印 /data/test/test.gcode */
+    /** 调试页 Test image：红光循环打印 /userdata/test/test.gcode */
     void send_test_image_set(bool on);
     void request_test_image_state();
     /** 本地局域网 RTSP Server 开关：直发 APP_MEDIA，实际状态以其回报为准。 */

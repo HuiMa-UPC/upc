@@ -13,8 +13,8 @@
 namespace upc {
 
 enum class OtaImageKind : uint8_t {
-    Mcu   = 0, /**< /data/image/mcu ：MainBoard_Slot{A|B}_V*.bin */
-    Galvo = 1, /**< /data/image/galvo：Galvo_Slot{A|B}_V*.bin */
+    Mcu   = 0, /**< /userdata/image/mcu ：MainBoard_Slot{A|B}_V*.bin */
+    Galvo = 1, /**< /userdata/image/galvo：Galvo_Slot{A|B}_V*.bin */
 };
 
 enum class OtaImageSlot : uint8_t {

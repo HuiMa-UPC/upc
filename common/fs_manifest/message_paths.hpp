@@ -6,12 +6,12 @@
  *
  * 刻意不放在 UPC_MEDIA_ROOT 下：报警历史不是媒体。
  *
- *   /data/messages/
+ *   /userdata/messages/
  *     alarm_history.jsonl
  */
 
 #ifndef UPC_MESSAGE_DIR
-#define UPC_MESSAGE_DIR  "/data/messages"
+#define UPC_MESSAGE_DIR  "/userdata/messages"
 #endif
 
 #ifndef UPC_ALARM_HISTORY_PATH

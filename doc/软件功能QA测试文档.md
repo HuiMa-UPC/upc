@@ -13,7 +13,7 @@
 2. **0 层终止误删历史防护**：新增对非法 `frames_dir`（误传 `.ovf` 文件名）的保护，避免 `commit miss` 触发历史录像回收删除。
 3. **历史录像回收风险回归**：补充“开始打印后立即终止”场景，验证不会删除既有历史记录。
 4. **视频播放器稳定性修复**：针对长视频播放抖动/黑屏/崩溃风险，补充长时播放、频繁拖动和进出页面压力测试。
-5. **媒体目录策略变更**：启动仅初始化 `/data/media/*` 目录，不再做 `/home/video`、`/home/photo`、`manifest.json` 旧布局迁移。
+5. **媒体目录策略变更**：启动仅初始化 `/userdata/media/*` 目录，不再做 `/home/video`、`/home/photo`、`manifest.json` 旧布局迁移。
 6. **打印启动链路优化（OVF）**：Prepare 阶段复用解析器会话，减少 Start 阶段重复 `open_file` 开销，重点回归“大 OVF 点击开始后首条串口起印指令时延”。
 7. **环境传感器协议升级**：`0xA5/0x9B/TLV 0x02` 支持新旧长度兼容（旧版 13 字节、新版 21 字节），新增 `PM1.0 / PM10 / 滤芯气压 / 舱内2气压` 解析。
 8. **传感器日志去重与口径统一**：移除重复的 `RX SENSOR OK` 详细日志，统一以 `sensor:` Info 日志输出；气压按协议口径 `0.1kPa` 解析并展示。
@@ -47,7 +47,7 @@
 | 系统服务 | 使用 `scripts/rongsu.sh start` 启动；启动顺序为 Glavo、Camera、Media、Xfer、Visual、MQTT、UI |
 | 网络 | Wi-Fi 用例准备一个正确密码热点和一个错误密码场景；Xfer/MQTT 用例要求测试机与设备处于可达网络 |
 | 文件 | 准备有效 `.gcode`、有效 `.ovf`、损坏/不支持格式文件；准备 USB 存储介质 |
-| 存储 | 确保 `/data/Gcode`、`/data/media/photo`、`/data/media/video` 可写；容量测试需能构造 90% 与 100% 水位 |
+| 存储 | 确保 `/userdata/Gcode`、`/userdata/media/photo`、`/userdata/media/video` 可写；容量测试需能构造 90% 与 100% 水位 |
 | 相机 | 相机可正常出流；录像、拍照和视觉用例需有可观察画面 |
 | 日志分析（V4.0.4） | 准备可在 Windows 或 Linux 运行 Python3 的主机；基础解析仅需标准库，静态图需 `matplotlib`，交互图需 `plotly` |
 | 可观测性 | 统一专题日志目录 `/var/log/topic/*.log`（按串口、TCP、IPC、MQTT、相机、UI、存储、系统监控等专题拆分） |
@@ -68,7 +68,7 @@
 | D04 | 不支持扩展名，例如 `.txt` | 上传格式拦截 |
 | D05 | 正确与错误 Wi-Fi 密码 | Wi-Fi 连接正反用例 |
 | D06 | 可访问 MQTT Broker、激活服务和 RTSP 接收端 | MQTT/云端直播 |
-| D07 | MCU OTA 文件 `/data/image/galvo`、串口 OTA 文件 `/data/image/mcu` | OTA 用例 |
+| D07 | MCU OTA 文件 `/userdata/image/galvo`、串口 OTA 文件 `/userdata/image/mcu` | OTA 用例 |
 
 ## 4. 功能测试用例
 
@@ -88,11 +88,11 @@
 
 | ID | 测试项 | 步骤 | 预期结果 |
 | --- | --- | --- | --- |
-| F-FILE-01 | Local 清单加载 | 通过成功的 Xfer 上传、USB 预处理或受控测试夹具，使 `/data/Gcode/config.json` 存在 D01 的有效条目且对应文件存在；打开 My Files 的 Local Tab。另在目录中放入一个未写入清单的文件后刷新列表。 | Local Tab 仅展示 `config.json` 中的条目及其文件名、时长、耗材和大小；未写入清单的目录文件不得显示。若清单缺失、无效或为空，列表为空且 UI 不崩溃。 |
+| F-FILE-01 | Local 清单加载 | 通过成功的 Xfer 上传、USB 预处理或受控测试夹具，使 `/userdata/Gcode/config.json` 存在 D01 的有效条目且对应文件存在；打开 My Files 的 Local Tab。另在目录中放入一个未写入清单的文件后刷新列表。 | Local Tab 仅展示 `config.json` 中的条目及其文件名、时长、耗材和大小；未写入清单的目录文件不得显示。若清单缺失、无效或为空，列表为空且 UI 不崩溃。 |
 | F-FILE-02 | USB 文件列表 | 插入含 D01/D02 的 USB，切至 USB Tab 并刷新。 | 显示 USB 可支持文件；拔出 USB 或空盘时列表正确刷新为空/提示。 |
-| F-FILE-03 | 本地删除 | 选择 Local 文件，执行删除并在确认框确认。 | 文件从磁盘和 `/data/Gcode/config.json` 移除，列表同步刷新。取消确认时文件不得删除。 |
+| F-FILE-03 | 本地删除 | 选择 Local 文件，执行删除并在确认框确认。 | 文件从磁盘和 `/userdata/Gcode/config.json` 移除，列表同步刷新。取消确认时文件不得删除。 |
 | F-FILE-04 | 启印入口与下发 | 选中 D01，观察 `Confirm Print` 按钮状态并完成二次确认开始打印。每次换文件、切换 Local/USB、取消选中文件及删除本地文件后，重新观察按钮状态。 | 选中文件后 `Confirm Print` 可点击，点击后可进入二次确认。发起 `UI_Print_Start_Req` 时仅携带文件索引与来源，不再包含厚度字段。 |
-| F-FILE-05 | 预处理成功（Local/USB） | 场景 A：在 Local 选择 D01，完成二次确认。场景 B：USB 插入一个当前构建支持打印的文件，执行同样操作。观察 `Preparing Print File` 弹窗、UI 结果和 `/data/Gcode/config.json`。 | Local 文件存在且可扫描时，后端复用或扫描行数并更新清单；USB 文件先复制到 `/data/Gcode`，再扫描并写入清单。两种场景均收到 `APP_Print_Prepare_Rsp(ok=1)`，准备弹窗关闭并自动进入打印流程。D02 仅在设备已启用 OVF 解析器时纳入该用例。 |
+| F-FILE-05 | 预处理成功（Local/USB） | 场景 A：在 Local 选择 D01，完成二次确认。场景 B：USB 插入一个当前构建支持打印的文件，执行同样操作。观察 `Preparing Print File` 弹窗、UI 结果和 `/userdata/Gcode/config.json`。 | Local 文件存在且可扫描时，后端复用或扫描行数并更新清单；USB 文件先复制到 `/userdata/Gcode`，再扫描并写入清单。两种场景均收到 `APP_Print_Prepare_Rsp(ok=1)`，准备弹窗关闭并自动进入打印流程。D02 仅在设备已启用 OVF 解析器时纳入该用例。 |
 | F-FILE-05A | OVF 大文件起印时序 | 选择较大的 D02（OVF），完成二次确认并开始打印；记录 `print_prepare ok`、`print_start: path=...`、`serial TX cmd: PRINT_REQUEST`、`serial TX cmd: PRINT_START` 时间戳。 | Start 阶段不应再出现明显的二次 `open_file` 长阻塞；`print_start` 与首条串口起印握手日志间隔应显著缩短。若总耗时仍较长，应主要体现在 Prepare 阶段而非 Start 阶段。 |
 | F-FILE-06 | 预处理失败（当前无 UI 取消） | 选择 D03，或选择目录清单中存在但实际已删除/不可读的文件；完成二次确认。观察准备弹窗、提示和后端日志。 | 当前准备弹窗没有取消按钮，测试不应要求“用户取消”。后端返回 `APP_Print_Prepare_Rsp(ok=0)` 后，弹窗关闭、UI 提示 `Prepare failed` 并回到 Idle；不得进入打印状态或向 MCU 开始下发运动数据。若使用 USB 文件，是否保留已复制文件按当前实现记录，不作为本用例失败判据。 |
 | F-FILE-07 | 打印占用门禁 | 打印结束但尚未完成取件时尝试进入 My Files 并新建任务。 | 文件页入口被阻止，不能启动第二个打印任务。 |
@@ -109,7 +109,7 @@
 | F-PRINT-06 | 缺粉告警 | 打印中模拟粉量位 bit0/bit1 同时为 0。 | 后端暂停并只推一次缺粉告警；UI 弹补粉框。点击补粉恢复后仍缺粉时应再次暂停并重新弹框。 |
 | F-PRINT-06A | 新版粉位位图兼容 | 使用新版 `TLV_SENSOR_REPORT_1ST`（含完整位图）分别构造：A `powder_bits=0x00`，B `powder_bits=0x01/0x02/0x03`。 | 缺粉判定保持旧规则：仅 `bit0/bit1 == 00` 触发缺粉；其余值不触发缺粉。日志中的 `powder_bits` 与 `powder_ok` 与注入值一致。 |
 | F-PRINT-07 | 缺粉取消 | 在缺粉弹窗点击 Cancel，再通过底部恢复按钮尝试恢复。 | Cancel 只关闭提示并保持暂停；恢复后仍由后端粉量判定是否允许继续。 |
-| F-PRINT-08 | 结果页拍照 | 打印中、完成、终止三种状态分别点击拍照。 | Media 保存 PNG 至 `/data/media/photo`；有条件时生成同名 `.rthm`；UI 显示成功/失败反馈。 |
+| F-PRINT-08 | 结果页拍照 | 打印中、完成、终止三种状态分别点击拍照。 | Media 保存 PNG 至 `/userdata/media/photo`；有条件时生成同名 `.rthm`；UI 显示成功/失败反馈。 |
 | F-PRINT-09 | 取件与关门 | 结果页滑动 `SWIPE TO COLLECT`，完成开门、取件、关门确认。 | 正确经历清粉/开门/关门流程，最终回到 Idle；未确认关门前不得提前收掉结果上下文。 |
 | F-PRINT-10 | 清粉流程 | 在结果页点击吹粉，观察运行和完成状态。 | 状态依次为 `AIR PURIFYING...`、完成提醒；不会把主打印徽标错误改为其他状态。 |
 | F-PRINT-11 | 转运盒流程 | 在调试页启用 Transfer Box，完成一次取件。 | 依次出现装盒、转运、推闸门及成功提示；收到成功结果才可进入推闸门。失败/中止会停在转圈页，记录为当前已知行为。 |
@@ -134,7 +134,7 @@
 | F-HIST-04 | 历史批量删除 | 在 Print History 和 Timelapse 分别多选、删除并确认/取消。 | 确认后仅删除所选类型资产及必要清单项；取消不删除；`video_pending` / `print_video_pending` 条目不可删除。 |
 | F-HIST-05 | 空态 | 删除当前 Tab 最后一条记录。 | 显示正确空态；Print History 空态提供 Start Print，Timelapse/Album 空态不提供该按钮。 |
 | F-HIST-06 | 存储容量提示 | 构造 <90%、≥90%、100% 三个使用率。 | 容量条颜色依次为正常、橙色、红色；≥90% 出现告警横幅；100% 不会导致 UI 异常。 |
-| F-HIST-07 | 旧布局不迁移验证 | 在升级设备上保留旧路径 `/home/video`、`/home/photo`、`manifest.json`（若有），上电后执行一次打印与历史浏览。 | 系统仅使用 `/data/media/*`；旧路径不会自动迁移。若旧资产仍需保留，按升级方案手工迁移并记录。 |
+| F-HIST-07 | 旧布局不迁移验证 | 在升级设备上保留旧路径 `/home/video`、`/home/photo`、`manifest.json`（若有），上电后执行一次打印与历史浏览。 | 系统仅使用 `/userdata/media/*`；旧路径不会自动迁移。若旧资产仍需保留，按升级方案手工迁移并记录。 |
 
 ### 4.5 设置、网络与 OTA
 
@@ -155,7 +155,7 @@
 | F-XFR-01 | 服务发现与信息 | 在局域网浏览 `_snowpod._tcp`，访问 `GET /api/v1/info`。 | 能发现设备；服务返回 SN、model、api_version、need_pair、state。 |
 | F-XFR-02 | PIN 配对 | 调用 `/pair/start`，在 UI/设备获取 PIN，依次提交正确、错误、过期 PIN。 | 正确 PIN 获得 token；错误 PIN 返回拒绝，超过限制后会话锁定；过期返回过期结果。 |
 | F-XFR-03 | 鉴权与撤销 | 使用有效 token 调受保护接口，再撤销 token 后重复请求。 | 有效 token 可访问；撤销后请求被拒绝，客户端需重新配对。 |
-| F-XFR-04 | OVF 分块上传 | 对 D02 调用 init、按 Content-Range 分块 PUT、complete。 | 返回连续 offset；完成后 SHA-256 校验通过，文件落入 `/data/Gcode` 且清单更新。 |
+| F-XFR-04 | OVF 分块上传 | 对 D02 调用 init、按 Content-Range 分块 PUT、complete。 | 返回连续 offset；完成后 SHA-256 校验通过，文件落入 `/userdata/Gcode` 且清单更新。 |
 | F-XFR-05 | 断点续传与校验失败 | 上传中断后重新 init/status 继续；使用错误 SHA-256 complete。 | 可从服务端 offset 继续；校验失败返回错误且不产生可打印正式文件。 |
 | F-XFR-06 | 格式与进度 UI | 上传 D04；上传 D02 时观察 UI 传输弹窗。 | 非 `.ovf` 被拒绝；Uploading/Slicing 时显示进度，Finished/Error/Idle 自动关闭，完成后文件列表刷新并提示。 |
 

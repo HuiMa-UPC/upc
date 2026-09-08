@@ -378,7 +378,7 @@ enum class MsgType : uint32_t {
     UI_Camera_Stream_Stop_Req,           /**< Empty */
     APP_Camera_Stream_Stop_Rsp,          /**< Empty */
     APP_Camera_Frame_Ntf,                /**< CameraFrameNtfPayload（可选唤醒 UI） */
-    UI_Camera_Snapshot_Req,              /**< Empty：请求保存当前最新 NV12 帧到 /data/media/photo */
+    UI_Camera_Snapshot_Req,              /**< Empty：请求保存当前最新 NV12 帧到 /userdata/media/photo */
     APP_Camera_Snapshot_Rsp,             /**< CameraSnapshotRspPayload */
 
     // ---- GLAVO → MEDIA：打印层拍照录像（控制面；MEDIA 消费 CAMERA 预览 SHM） ----
@@ -391,10 +391,10 @@ enum class MsgType : uint32_t {
     APP_Print_Video_Manifest_Ntf,               /**< PrintVideoManifestPayload */
 
     // ---- UI ↔ GLAVO：MCU OTA（测试） ----
-    UI_Mcu_Ota_Start_Req = 0x1090, /**< Empty：启动 Galvo(以太网) OTA，扫描 /data/image/galvo */
+    UI_Mcu_Ota_Start_Req = 0x1090, /**< Empty：启动 Galvo(以太网) OTA，扫描 /userdata/image/galvo */
     UI_Mcu_Ota_Cancel_Ntf,         /**< Empty：中止 Glavo OTA 会话 */
     APP_Mcu_Ota_Status_Ntf,        /**< McuOtaStatusPayload（Glavo OTA 状态） */
-    UI_Serial_Mcu_Ota_Start_Req,   /**< Empty：启动 MCU(串口) OTA，扫描 /data/image/mcu */
+    UI_Serial_Mcu_Ota_Start_Req,   /**< Empty：启动 MCU(串口) OTA，扫描 /userdata/image/mcu */
     UI_Serial_Mcu_Ota_Cancel_Ntf,  /**< Empty：中止 MCU 串口 OTA 会话 */
     APP_Serial_Mcu_Ota_Status_Ntf, /**< McuOtaStatusPayload（MCU 串口 OTA 状态） */
 
@@ -433,7 +433,7 @@ enum class MsgType : uint32_t {
     UI_Debug_FirstLayer_Visual_Check_Get_Ntf, /**< Empty：查询当前首层视觉检测开关状态 */
     UI_Debug_Local_Rtsp_Set_Ntf,        /**< DebugOnOffPayload：本地局域网 RTSP Server 开关（→Media，仅本次运行，默认关） */
     UI_Debug_Local_Rtsp_Get_Ntf,        /**< Empty：查询当前本地 RTSP Server 开关状态（→Media） */
-    UI_Debug_TestImage_Set_Ntf,         /**< DebugOnOffPayload：红光测试图循环打印开关（/data/test/test.gcode） */
+    UI_Debug_TestImage_Set_Ntf,         /**< DebugOnOffPayload：红光测试图循环打印开关（/userdata/test/test.gcode） */
     UI_Debug_TestImage_Get_Ntf,         /**< Empty：查询当前测试图循环打印状态 */
 
     // ---- GLAVO → UI：调试页状态回读（按模块拆分） ----
@@ -517,7 +517,7 @@ enum class MsgType : uint32_t {
     // ---- MQTT OTA v1.1：通知/确认/进度（下载落盘阶段） ----
     MQTT_Ota_Notify_Ntf,                    /**< OtaNotifyPayload：MQTT 侧收到 ota/notify 后转发 UI */
     UI_Ota_User_Decision_Req,               /**< OtaDecisionReqPayload：UI 确认/取消 OTA 通知 */
-    APP_Mqtt_Ota_Progress_Ntf,              /**< OtaProgressPayload：下载+校验进度（OTA 应用阶段可直拉满） */
+    APP_Mqtt_Ota_Progress_Ntf,              /**< OtaProgressPayload：下载/校验/刷写进度 */
 
     // ---- UI ↔ GLAVO：MCU 固件版本查询（串口 PORT_GENERAL_TASK 0xA2 / CMD_PROJECT_INFO 0x10） ----
     UI_Mcu_Version_Ntf = 0x1500, /**< Empty：进入 Settings/About 页时查询一次 */
@@ -895,7 +895,7 @@ struct VisualFirstLayerReferenceReadyPayload {
 /** GLAVO→CAMERA 打印录像会话（Start/Finish/Abort 共用） */
 struct PrintVideoSessionPayload {
     char     session_id[32];
-    char     job_name[64];   /**< 用于输出 /data/media/video/{job}/ 目录名 */
+    char     job_name[64];   /**< 用于输出 /userdata/media/video/{job}/ 目录名 */
     uint32_t width;          /**< 0=Camera 默认 */
     uint32_t height;         /**< 0=Camera 默认 */
     uint32_t layer_fps;      /**< MP4 层帧率；0=默认 */
@@ -923,7 +923,7 @@ struct PrintVideoLayerSnapPayload {
  * （`has_entry=0`），否则 UI 会永远停在打印中界面下不来。
  *
  * UI 用法：
- *   - `has_entry=1` → 以 `frames_dir` 为主键在 `/data/media/video/config.json` 定位该条，
+ *   - `has_entry=1` → 以 `frames_dir` 为主键在 `/userdata/media/video/config.json` 定位该条，
  *     读 `status` / `duration_sec` / `material_g`（清单为权威数据源）
  *   - `has_entry=0` → 清单无此条，改用本 payload 的 `aborted` 判定完成/终止，
  *     耗时与耗材显示占位
@@ -938,7 +938,7 @@ struct PrintVideoManifestPayload {
 
 /** UI_Clean_Test_Start_Req：打印结果页 Purify 按钮触发清粉测试 + 录像 */
 struct CleanTestStartReqPayload {
-    char job_name[64];   /**< 对应 /data/media/video/{job_name}/ */
+    char job_name[64];   /**< 对应 /userdata/media/video/{job_name}/ */
     uint32_t width;      /**< 0=跟随 Camera 当前预览宽 */
     uint32_t height;     /**< 0=跟随 Camera 当前预览高 */
     uint32_t fps;        /**< 0=跟随 Camera 当前预览 fps */
@@ -958,12 +958,12 @@ struct CleanTestDonePayload {
     uint8_t raw_retained;  /**< 兼容字段；PNG 路径下恒为 0 */
     uint8_t has_mp4;       /**< 1=期望存在合并后的 timelapse.mp4 */
     uint8_t reserved;
-    char    mp4_rel_path[96]; /**< 相对 /data/media/video 的路径，如 job/timelapse.mp4 */
+    char    mp4_rel_path[96]; /**< 相对 /userdata/media/video 的路径，如 job/timelapse.mp4 */
 };
 
 /** UI→MEDIA：结果页退出后触发统一 MP4 合成（按 frames_dir 定位会话目录） */
 struct PrintVideoFinalizeReqPayload {
-    char frames_dir[96]; /**< 对应 /data/media/video/{frames_dir}/ */
+    char frames_dir[96]; /**< 对应 /userdata/media/video/{frames_dir}/ */
 };
 
 /** APP_Storage_Usage_Rsp：历史页容量显示（bytes）。 */
@@ -1077,7 +1077,7 @@ struct OtaDecisionReqPayload {
 enum class OtaProgressState : uint8_t {
     Downloading = 0,
     Verifying   = 1,
-    Applying    = 2,  /**< 当前阶段可跳过真实 OTA，直接拉满 */
+    Applying    = 2,  /**< mcu/galvo 跟真实刷写；soc 落盘后可直接拉满 */
     Completed   = 3,
     Failed      = 4,
     RolledBack  = 5

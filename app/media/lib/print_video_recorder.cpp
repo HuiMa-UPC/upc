@@ -885,7 +885,7 @@ bool PrintVideoRecorder::upsert_print_history(
     entry.job_name     = job_name_.empty() ? "print" : job_name_;
     entry.start_unix   = start;
     entry.duration_sec = duration;
-    /* 耗材与层数由 /data/Gcode/config.json 快照下来：G-code 删除后历史仍保真 */
+    /* 耗材与层数由 /userdata/Gcode/config.json 快照下来：G-code 删除后历史仍保真 */
     upc::print_history_lookup_gcode_stats(UPC_LOCAL_GCODE_CONFIG, entry.job_name,
                                           entry.material_g, entry.layer_count);
     entry.status = aborted ? upc::PrintHistoryStatus::Terminated

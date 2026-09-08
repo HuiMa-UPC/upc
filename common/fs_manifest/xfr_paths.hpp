@@ -4,7 +4,7 @@
 /**
  * 局域网 Xfer 上传暂存与配对 token。
  *
- *   /data/transport/
+ *   /userdata/transport/
  *     .xfr_tokens
  *     （分块上传 .part 与完成前的临时文件）
  *
@@ -12,7 +12,7 @@
  */
 
 #ifndef UPC_XFR_STORAGE_DIR
-#define UPC_XFR_STORAGE_DIR  "/data/transport"
+#define UPC_XFR_STORAGE_DIR  "/userdata/transport"
 #endif
 
 #ifndef UPC_XFR_TOKEN_FILE

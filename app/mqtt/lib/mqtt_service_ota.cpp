@@ -244,11 +244,16 @@ void MqttService::publish_ota_progress_ui(const middleware::OtaProgressPayload& 
     (void)middleware::MsgPort::instance().publish_async(msg);
 }
 
-void MqttService::on_mcu_ota_status(const middleware::Message& msg)
+void MqttService::on_apply_ota_status(const middleware::Message& msg,
+                                      ApplyOtaSync& sync,
+                                      std::mutex& mtx,
+                                      std::condition_variable& cv,
+                                      const char* invalid_log,
+                                      const char* fail_code)
 {
     middleware::McuOtaStatusPayload st{};
     if(!read_inline_pod(msg.payload, st)) {
-        UPC_LOG_MQTT_SERVICE(Warn, "invalid APP_Mcu_Ota_Status_Ntf payload");
+        UPC_LOG_MQTT_SERVICE(Warn, "%s", invalid_log ? invalid_log : "invalid OTA status payload");
         return;
     }
 
@@ -271,24 +276,24 @@ void MqttService::on_mcu_ota_status(const middleware::Message& msg)
     std::string final_error;
 
     {
-        std::lock_guard<std::mutex> lock(galvo_ota_mtx_);
-        if(!galvo_ota_sync_.waiting) {
+        std::lock_guard<std::mutex> lock(mtx);
+        if(!sync.waiting) {
             return;
         }
-        if(galvo_ota_sync_.terminal_seen && !terminal) {
+        if(sync.terminal_seen && !terminal) {
             return;
         }
-        if(galvo_ota_sync_.last_mcu_status_valid &&
-           galvo_ota_sync_.last_mcu_state == st.state &&
-           galvo_ota_sync_.last_mcu_progress == st.progress) {
+        if(sync.last_mcu_status_valid &&
+           sync.last_mcu_state == st.state &&
+           sync.last_mcu_progress == st.progress) {
             return;
         }
-        galvo_ota_sync_.last_mcu_status_valid = true;
-        galvo_ota_sync_.last_mcu_state = st.state;
-        galvo_ota_sync_.last_mcu_progress = st.progress;
+        sync.last_mcu_status_valid = true;
+        sync.last_mcu_state = st.state;
+        sync.last_mcu_progress = st.progress;
 
-        task_id = galvo_ota_sync_.task_id;
-        component = galvo_ota_sync_.component;
+        task_id = sync.task_id;
+        component = sync.component;
         if(task_id.empty() || component.empty()) {
             return;
         }
@@ -304,7 +309,7 @@ void MqttService::on_mcu_ota_status(const middleware::Message& msg)
             publish_progress = true;
             mark_finished = true;
             mark_success = true;
-            galvo_ota_sync_.terminal_seen = true;
+            sync.terminal_seen = true;
             break;
         case middleware::McuOtaState::Cancelled:
             p.state = static_cast<uint8_t>(middleware::OtaProgressState::Failed);
@@ -313,16 +318,17 @@ void MqttService::on_mcu_ota_status(const middleware::Message& msg)
             publish_progress = true;
             mark_finished = true;
             final_error = "cancelled";
-            galvo_ota_sync_.terminal_seen = true;
+            sync.terminal_seen = true;
             break;
         case middleware::McuOtaState::Failed:
             p.state = static_cast<uint8_t>(middleware::OtaProgressState::Failed);
             p.progress_pct = map_apply_progress(st.progress);
-            std::snprintf(p.error_code, sizeof(p.error_code), "%s", "galvo_ota_failed");
+            std::snprintf(p.error_code, sizeof(p.error_code), "%s",
+                          fail_code ? fail_code : "ota_failed");
             publish_progress = true;
             mark_finished = true;
-            final_error = "galvo_ota_failed";
-            galvo_ota_sync_.terminal_seen = true;
+            final_error = fail_code ? fail_code : "ota_failed";
+            sync.terminal_seen = true;
             break;
         case middleware::McuOtaState::Preparing:
         case middleware::McuOtaState::Transferring:
@@ -332,11 +338,10 @@ void MqttService::on_mcu_ota_status(const middleware::Message& msg)
             p.state = static_cast<uint8_t>(middleware::OtaProgressState::Applying);
             p.progress_pct = map_apply_progress(st.progress);
             p.error_code[0] = '\0';
-            // 仅保留“最新状态”语义：Applying 只允许进度单调前进。
-            if(!galvo_ota_sync_.last_apply_pct_valid ||
-               p.progress_pct > galvo_ota_sync_.last_apply_pct) {
-                galvo_ota_sync_.last_apply_pct_valid = true;
-                galvo_ota_sync_.last_apply_pct = p.progress_pct;
+            if(!sync.last_apply_pct_valid ||
+               p.progress_pct > sync.last_apply_pct) {
+                sync.last_apply_pct_valid = true;
+                sync.last_apply_pct = p.progress_pct;
                 publish_progress = true;
             }
             break;
@@ -344,9 +349,9 @@ void MqttService::on_mcu_ota_status(const middleware::Message& msg)
         }
 
         if(mark_finished) {
-            galvo_ota_sync_.finished = true;
-            galvo_ota_sync_.success = mark_success;
-            galvo_ota_sync_.error_code = mark_success ? std::string() : final_error;
+            sync.finished = true;
+            sync.success = mark_success;
+            sync.error_code = mark_success ? std::string() : final_error;
         }
     }
 
@@ -355,55 +360,112 @@ void MqttService::on_mcu_ota_status(const middleware::Message& msg)
         (void)publish_ota_progress_cloud(p);
     }
     if(mark_finished) {
-        galvo_ota_cv_.notify_all();
+        cv.notify_all();
     }
+}
+
+void MqttService::on_mcu_ota_status(const middleware::Message& msg)
+{
+    on_apply_ota_status(msg, galvo_ota_sync_, galvo_ota_mtx_, galvo_ota_cv_,
+                        "invalid APP_Mcu_Ota_Status_Ntf payload",
+                        "galvo_ota_failed");
+}
+
+void MqttService::on_serial_mcu_ota_status(const middleware::Message& msg)
+{
+    on_apply_ota_status(msg, mcu_ota_sync_, mcu_ota_mtx_, mcu_ota_cv_,
+                        "invalid APP_Serial_Mcu_Ota_Status_Ntf payload",
+                        "mcu_ota_failed");
+}
+
+bool MqttService::trigger_apply_ota(const std::string& task_id,
+                                    const std::string& component,
+                                    middleware::MsgType start_type,
+                                    ApplyOtaSync& sync,
+                                    std::mutex& mtx,
+                                    const char* already_log,
+                                    const char* start_log)
+{
+    {
+        std::lock_guard<std::mutex> lock(mtx);
+        if(sync.waiting) {
+            UPC_LOG_MQTT_SERVICE(Warn, "%s task_id=%s",
+                                 already_log ? already_log : "ota already waiting",
+                                 task_id.c_str());
+            return false;
+        }
+        sync.waiting = true;
+        sync.finished = false;
+        sync.success = false;
+        sync.terminal_seen = false;
+        sync.last_apply_pct_valid = false;
+        sync.last_apply_pct = 0;
+        sync.last_mcu_status_valid = false;
+        sync.last_mcu_state = middleware::McuOtaState::Idle;
+        sync.last_mcu_progress = 0;
+        sync.task_id = task_id;
+        sync.component = component;
+        sync.error_code.clear();
+    }
+
+    middleware::Message start(start_type,
+                              middleware::ModuleId::APP_MQTT,
+                              middleware::ModuleId::APP_GLAVO);
+    (void)middleware::MsgPort::instance().publish_async(start);
+    UPC_LOG_MQTT_SERVICE(Info, "%s task_id=%s",
+                         start_log ? start_log : "trigger real ota",
+                         task_id.c_str());
+    return true;
+}
+
+bool MqttService::wait_apply_ota(std::string& err_code,
+                                 ApplyOtaSync& sync,
+                                 std::mutex& mtx,
+                                 std::condition_variable& cv,
+                                 const char* default_fail)
+{
+    std::unique_lock<std::mutex> lock(mtx);
+    cv.wait(lock, [&sync]() { return sync.finished; });
+    const bool ok = sync.success;
+    if(ok) {
+        err_code.clear();
+    } else if(sync.error_code.empty()) {
+        err_code = default_fail ? default_fail : "ota_failed";
+    } else {
+        err_code = sync.error_code;
+    }
+    sync = ApplyOtaSync{};
+    return ok;
 }
 
 bool MqttService::trigger_galvo_real_ota(const std::string& task_id, const std::string& component)
 {
-    {
-        std::lock_guard<std::mutex> lock(galvo_ota_mtx_);
-        if(galvo_ota_sync_.waiting) {
-            UPC_LOG_MQTT_SERVICE(Warn, "galvo ota already waiting, reject task_id=%s",
-                                 task_id.c_str());
-            return false;
-        }
-        galvo_ota_sync_.waiting = true;
-        galvo_ota_sync_.finished = false;
-        galvo_ota_sync_.success = false;
-        galvo_ota_sync_.terminal_seen = false;
-        galvo_ota_sync_.last_apply_pct_valid = false;
-        galvo_ota_sync_.last_apply_pct = 0;
-        galvo_ota_sync_.last_mcu_status_valid = false;
-        galvo_ota_sync_.last_mcu_state = middleware::McuOtaState::Idle;
-        galvo_ota_sync_.last_mcu_progress = 0;
-        galvo_ota_sync_.task_id = task_id;
-        galvo_ota_sync_.component = component;
-        galvo_ota_sync_.error_code.clear();
-    }
-
-    middleware::Message start(middleware::MsgType::UI_Mcu_Ota_Start_Req,
-                              middleware::ModuleId::APP_MQTT,
-                              middleware::ModuleId::APP_GLAVO);
-    (void)middleware::MsgPort::instance().publish_async(start);
-    UPC_LOG_MQTT_SERVICE(Info, "trigger galvo real ota task_id=%s", task_id.c_str());
-    return true;
+    return trigger_apply_ota(task_id, component,
+                             middleware::MsgType::UI_Mcu_Ota_Start_Req,
+                             galvo_ota_sync_, galvo_ota_mtx_,
+                             "galvo ota already waiting, reject",
+                             "trigger galvo real ota");
 }
 
 bool MqttService::wait_galvo_real_ota(std::string& err_code)
 {
-    std::unique_lock<std::mutex> lock(galvo_ota_mtx_);
-    galvo_ota_cv_.wait(lock, [this]() { return galvo_ota_sync_.finished; });
-    const bool ok = galvo_ota_sync_.success;
-    if(ok) {
-        err_code.clear();
-    } else if(galvo_ota_sync_.error_code.empty()) {
-        err_code = "galvo_ota_failed";
-    } else {
-        err_code = galvo_ota_sync_.error_code;
-    }
-    galvo_ota_sync_ = GalvoOtaSync{};
-    return ok;
+    return wait_apply_ota(err_code, galvo_ota_sync_, galvo_ota_mtx_, galvo_ota_cv_,
+                          "galvo_ota_failed");
+}
+
+bool MqttService::trigger_mcu_real_ota(const std::string& task_id, const std::string& component)
+{
+    return trigger_apply_ota(task_id, component,
+                             middleware::MsgType::UI_Serial_Mcu_Ota_Start_Req,
+                             mcu_ota_sync_, mcu_ota_mtx_,
+                             "mcu ota already waiting, reject",
+                             "trigger mcu real ota");
+}
+
+bool MqttService::wait_mcu_real_ota(std::string& err_code)
+{
+    return wait_apply_ota(err_code, mcu_ota_sync_, mcu_ota_mtx_, mcu_ota_cv_,
+                          "mcu_ota_failed");
 }
 
 void MqttService::start_manifest_download(std::string task_id,
@@ -652,7 +714,8 @@ void MqttService::run_manifest_download_task(std::string task_id,
         }
 
         progress.state = static_cast<uint8_t>(middleware::OtaProgressState::Applying);
-        progress.progress_pct = static_cast<uint8_t>(comp.component == "galvo" ? 90 : 100);
+        progress.progress_pct = static_cast<uint8_t>(
+            (comp.component == "galvo" || comp.component == "mcu") ? 90 : 100);
         publish_ota_progress_ui(progress);
         (void)publish_ota_progress_cloud(progress);
 
@@ -728,6 +791,16 @@ void MqttService::run_manifest_download_task(std::string task_id,
             }
             std::string apply_err;
             if(!wait_galvo_real_ota(apply_err)) {
+                publish_failed(comp.component.c_str(), apply_err.c_str());
+                return;
+            }
+        } else if(comp.component == "mcu") {
+            if(!trigger_mcu_real_ota(task_id, comp.component)) {
+                publish_failed(comp.component.c_str(), "mcu_ota_start_failed");
+                return;
+            }
+            std::string apply_err;
+            if(!wait_mcu_real_ota(apply_err)) {
                 publish_failed(comp.component.c_str(), apply_err.c_str());
                 return;
             }

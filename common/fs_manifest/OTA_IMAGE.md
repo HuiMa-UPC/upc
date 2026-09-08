@@ -1,9 +1,9 @@
 # OTA 镜像 AB 对（MCU / Galvo）
 
-改 `/data/image/mcu`、`/data/image/galvo` 的落盘、扫描或刷写前读本文。
+改 `/userdata/image/mcu`、`/userdata/image/galvo` 的落盘、扫描或刷写前读本文。
 实现：`common/fs_manifest/ota_image_pair.*`。路径宏：`image_paths.hpp`。
 
-SOC（`/data/image/soc`）不走本规则。
+SOC（`/userdata/image/soc`）不走本规则。
 
 ## 文件名
 
@@ -11,8 +11,8 @@ SOC（`/data/image/soc`）不走本规则。
 
 | 目录 | SlotA | SlotB |
 |------|--------|--------|
-| `/data/image/mcu` | `MainBoard_SlotA_V3.0.7.bin` | `MainBoard_SlotB_V3.0.7.bin` |
-| `/data/image/galvo` | `Galvo_SlotA_V4.0.0.bin` | `Galvo_SlotB_V4.0.0.bin` |
+| `/userdata/image/mcu` | `MainBoard_SlotA_V3.0.7.bin` | `MainBoard_SlotB_V3.0.7.bin` |
+| `/userdata/image/galvo` | `Galvo_SlotA_V4.0.0.bin` | `Galvo_SlotB_V4.0.0.bin` |
 
 版本按 `major.minor.patch` **数值**比较（`3.0.10` > `3.0.9`）。
 
@@ -26,4 +26,4 @@ SOC（`/data/image/soc`）不走本规则。
 4. **不降级**：最高这一对 header/首包都被拒或刷写失败 → **失败**，不试更低版本。
 5. 同一对内 SlotA 被拒再试 SlotB，这是槽位匹配，不是降级。
 
-云端 tar（component=`mcu`/`galvo`）解包后必须正好这一对名字；MQTT 用同一套解析，失败码 `ab_pair_invalid` / `tar_entry_invalid`。
+云端 tar（component=`mcu`/`galvo`）解包后必须正好这一对名字；MQTT 用同一套解析，失败码 `ab_pair_invalid` / `tar_entry_invalid`。落盘成功后 MQTT 分别发 `UI_Serial_Mcu_Ota_Start_Req` / `UI_Mcu_Ota_Start_Req` 走真实刷写，进度跟 `APP_Serial_Mcu_Ota_Status_Ntf` / `APP_Mcu_Ota_Status_Ntf`。

@@ -11,7 +11,7 @@
 
 namespace upc::glavo {
 
-/** 串口 MCU OTA：/data/image/mcu 最高版本 MainBoard AB 对（见 OTA_IMAGE.md） */
+/** 串口 MCU OTA：/userdata/image/mcu 最高版本 MainBoard AB 对（见 OTA_IMAGE.md） */
 class McuSerialOtaSession {
 public:
     McuSerialOtaSession() = default;

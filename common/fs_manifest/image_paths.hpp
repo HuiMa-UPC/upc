@@ -4,7 +4,7 @@
 /**
  * OTA 固件镜像落盘根路径（SOC / MCU / Galvo）。
  *
- *   /data/image/
+ *   /userdata/image/
  *     tmp/     云端下载暂存
  *     soc/     SOC 升级包
  *     mcu/     串口 MCU OTA（MainBoard_Slot{A|B}_V*.bin，见 OTA_IMAGE.md）
@@ -15,7 +15,7 @@
  */
 
 #ifndef UPC_IMAGE_ROOT
-#define UPC_IMAGE_ROOT  "/data/image"
+#define UPC_IMAGE_ROOT  "/userdata/image"
 #endif
 
 #ifndef UPC_IMAGE_TMP_DIR

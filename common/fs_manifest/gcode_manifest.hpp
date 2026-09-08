@@ -2,7 +2,7 @@
 #define UPC_GCODE_MANIFEST_HPP
 
 /**
- * Local G-code 目录 manifest：/data/Gcode/config.json
+ * Local G-code 目录 manifest：/userdata/Gcode/config.json
  * - 路径：common/fs_manifest/（跨进程共用清单解析目录）
  * - Glavo：Prepare/Delete 时读写
  * - UI：进入 Local 列表时直接读取（不经 Fs_DirOpen IPC）
@@ -15,7 +15,7 @@
 namespace upc {
 
 #ifndef UPC_LOCAL_GCODE_DIR
-#define UPC_LOCAL_GCODE_DIR  "/data/Gcode"
+#define UPC_LOCAL_GCODE_DIR  "/userdata/Gcode"
 #endif
 
 #ifndef UPC_LOCAL_GCODE_CONFIG

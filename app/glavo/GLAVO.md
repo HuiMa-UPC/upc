@@ -13,8 +13,8 @@
 | `lib/print_video_notify.*` | 换层 Snap / 录像会话 → Media（经 UI Hub） |
 | `lib/print_job_state.*` | 发送包计数、完成/错误标志（McuLink 与进度共用） |
 | `lib/device_config.hpp` | TCP/串口默认、换层/Layer Snap 开关、`GLAVO_TEST_GCODE_PATH` |
-| `lib/mcu_ota_session.*` | Galvo 以太网 OTA：扫描 `/data/image/galvo` 最高版本 AB 对 |
-| `lib/mcu_serial_ota_session.*` | MCU 串口 OTA：扫描 `/data/image/mcu` 最高版本 AB 对 |
+| `lib/mcu_ota_session.*` | Galvo 以太网 OTA：扫描 `/userdata/image/galvo` 最高版本 AB 对 |
+| `lib/mcu_serial_ota_session.*` | MCU 串口 OTA：扫描 `/userdata/image/mcu` 最高版本 AB 对 |
 | `common/fs_manifest/gcode_manifest.*` | Local `config.json` 读写（与 UI 共用；Prepare/Delete 时更新） |
 
 解析库见 [parser/PARSER.md](../parser/PARSER.md)；线协议见 [protocol/PROTOCOL.md](../protocol/PROTOCOL.md)。
@@ -44,7 +44,7 @@ UI → GlavoService（工作线程）→ ParserManager → RingBuffer → McuLin
 | `UI_Print_Terminate_Req` | `stop_parse` + `request_terminate` + `on_print_abort` |
 | `UI_Print_Pause_Req` | `set_user_dispatch_paused(true)`，仅停 TCP 运动下发 |
 | `UI_Print_Resume_Req` | `set_user_dispatch_paused(false)`，恢复 TCP 运动下发 |
-| `UI_Debug_TestImage_Set_Ntf` | 红光循环打印 `GLAVO_TEST_GCODE_PATH`（默认 `/data/test/test.gcode`）；无录像/延时/换层握手/首页打印态；Off 仅 `request_terminate`，不切激光 |
+| `UI_Debug_TestImage_Set_Ntf` | 红光循环打印 `GLAVO_TEST_GCODE_PATH`（默认 `/userdata/test/test.gcode`）；无录像/延时/换层握手/首页打印态；Off 仅 `request_terminate`，不切激光 |
 | `UI_Debug_Galvo_Param_Save_Ntf` | 写 `cal.csv` 第 4 行中心偏移 + `ParserContext::load_calibration`；打印/测试图进行中拒绝 |
 | `UI_PM25_Req` / 门控 Req | 环境快照或占位 Rsp |
 | `UI_Alarm_Reset_Ntf` | `serial_build_alarm_reset` 组 0xA3/0x82 帧直发串口；结果不回 Rsp，以 MCU 后续单条上报为准 |
@@ -54,7 +54,7 @@ UI → GlavoService（工作线程）→ ParserManager → RingBuffer → McuLin
 ### MCU / Galvo 固件 OTA
 
 镜像命名与选包：[common/fs_manifest/OTA_IMAGE.md](../../common/fs_manifest/OTA_IMAGE.md)。  
-`UI_Mcu_Ota_Start_Req` → `/data/image/galvo`；`UI_Serial_Mcu_Ota_Start_Req` → `/data/image/mcu`。只刷最高版本成对的 SlotA→SlotB，不成对或名称非法则启动失败。
+`UI_Mcu_Ota_Start_Req`（UI 或 MQTT）→ `/userdata/image/galvo`；`UI_Serial_Mcu_Ota_Start_Req` → `/userdata/image/mcu`。只刷最高版本成对的 SlotA→SlotB，不成对或名称非法则启动失败。两路互斥。状态 `APP_*_Ota_Status_Ntf` 双发 UI 与 MQTT，供云端进度映射。
 
 ### 打印层录像（Glavo → Media）
 

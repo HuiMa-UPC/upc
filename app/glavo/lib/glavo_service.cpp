@@ -44,7 +44,7 @@
  *   Abort    UI_Print_Terminate_Req → stop_parse + request_terminate + 录像 abort
  *   Done     McuLinkEvent::PrintCompleted / TerminateDone / PrintError → 清会话、通知 UI
  *
- * Local 文件列表：UI 直读 /data/Gcode/config.json；本服务只处理 USB 扫盘与 Prepare/Delete 写清单。
+ * Local 文件列表：UI 直读 /userdata/Gcode/config.json；本服务只处理 USB 扫盘与 Prepare/Delete 写清单。
  */
 
 #include "glavo_service.hpp"
@@ -2735,7 +2735,7 @@ void GlavoService::on_transport_result(uint8_t result)
  * MCU OTA
  *
  * 两路互斥：TCP 振镜 OTA（GALVO_OTA_IMAGE_DIR）与串口 MCU OTA（MCU_OTA_IMAGE_DIR）。
- * 状态进度由 McuLink 回调直接 publish_*_ota_status → UI，不经 worker 队列。
+ * 状态进度由 McuLink 回调直接 publish_*_ota_status → UI / MQTT，不经 worker 队列。
  * ============================================================================ */
 
 /** @brief 处理 UI_Mcu_Ota_Start_Req，启动 McuLink OTA 会话 */
@@ -2835,6 +2835,18 @@ void GlavoService::handle_serial_mcu_ota_start(const middleware::Message& msg)
     (void)msg;
     if(McuLink::instance().serial_ota_active()) {
         UPC_LOG_MCU_OTA(Warn, "serial_mcu_ota_start: already active");
+        middleware::McuOtaStatusPayload st{};
+        st.state = middleware::McuOtaState::Failed;
+        st.progress = 0;
+        publish_serial_mcu_ota_status(st);
+        return;
+    }
+    if(McuLink::instance().ota_active()) {
+        UPC_LOG_MCU_OTA(Warn, "serial_mcu_ota_start: galvo ota active");
+        middleware::McuOtaStatusPayload st{};
+        st.state = middleware::McuOtaState::Failed;
+        st.progress = 0;
+        publish_serial_mcu_ota_status(st);
         return;
     }
     if(!McuLink::instance().start_serial_mcu_ota(MCU_OTA_IMAGE_DIR)) {
@@ -2852,16 +2864,32 @@ void GlavoService::handle_serial_mcu_ota_cancel(const middleware::Message& msg)
     McuLink::instance().cancel_serial_mcu_ota();
 }
 
-/** @brief 向 UI 推送 APP_Serial_Mcu_Ota_Status_Ntf */
+/** @brief 向 UI / MQTT 推送 APP_Serial_Mcu_Ota_Status_Ntf */
 void GlavoService::publish_serial_mcu_ota_status(
     const middleware::McuOtaStatusPayload& st)
 {
-    middleware::Message out(middleware::MsgType::APP_Serial_Mcu_Ota_Status_Ntf,
-                            middleware::ModuleId::APP_GLAVO,
-                            middleware::ModuleId::UI);
-    out.payload = middleware::MsgPayload::from_bytes(
+    const auto state = static_cast<middleware::McuOtaState>(st.state);
+    const bool terminal =
+        (state == middleware::McuOtaState::Success) ||
+        (state == middleware::McuOtaState::Failed) ||
+        (state == middleware::McuOtaState::Cancelled);
+
+    middleware::Message out_ui(middleware::MsgType::APP_Serial_Mcu_Ota_Status_Ntf,
+                               middleware::ModuleId::APP_GLAVO,
+                               middleware::ModuleId::UI);
+    out_ui.priority = terminal ? middleware::MsgPriority::Realtime
+                               : middleware::MsgPriority::High;
+    out_ui.payload = middleware::MsgPayload::from_bytes(
         reinterpret_cast<const uint8_t*>(&st), sizeof(st));
-    (void)publish_async(out);
+    (void)publish_async(out_ui);
+
+    middleware::Message out_mqtt(middleware::MsgType::APP_Serial_Mcu_Ota_Status_Ntf,
+                                 middleware::ModuleId::APP_GLAVO,
+                                 middleware::ModuleId::APP_MQTT);
+    out_mqtt.priority = out_ui.priority;
+    out_mqtt.payload = middleware::MsgPayload::from_bytes(
+        reinterpret_cast<const uint8_t*>(&st), sizeof(st));
+    (void)publish_async(out_mqtt);
 }
 
 /* ============================================================================

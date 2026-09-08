@@ -82,7 +82,7 @@ Visual 空闲时不取流、不分割、不分类；会话停止后释放 Camera
 每次检测会在 `rongsu_visual` 日志中写一条 `first layer inference report_v=1` 结构化记录，
 包含合格概率、当前阈值、置信度、OOD、定位缓存、拒绝原因以及分割/预处理/分类耗时。
 不会为每次检测单独创建日志或报告文件。最终 `result=1` 时，每个首层会话最多保存一张
-诊断合成图到 `/data/media/first_layer_visual/qualified/`：左侧是完整相机帧，右侧是透视
+诊断合成图到 `/userdata/media/first_layer_visual/qualified/`：左侧是完整相机帧，右侧是透视
 矫正后的模型基板区域。目录仅保留按文件名排序的最近 200 张。
 测试结束后可在电脑端执行：
 

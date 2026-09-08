@@ -26,7 +26,7 @@
  * 移动控制：左列 Z/S/D 三轴卡（点击移动/长按移动），右列 振镜坐标卡 + 振镜标定卡。
  * 振镜方向盘（X/-X/Y/-Y）按 Step 本地增减中心偏移；复位回上次 Save/读盘值。
  * Save 写 cal.csv 第 4 行并由 Glavo load_calibration；测试图/正式打印中禁用。
- * Test image 开关：红光循环打印 /data/test/test.gcode（经 DebugMsgProxy）。
+ * Test image 开关：红光循环打印 /userdata/test/test.gcode（经 DebugMsgProxy）。
  * 其余命令经 DebugMsgProxy → APP_GLAVO（后端待实现）；图标暂用 LV_SYMBOL/文字占位。
  */
 

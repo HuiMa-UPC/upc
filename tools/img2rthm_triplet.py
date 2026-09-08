@@ -9,7 +9,7 @@ Preset sizes:
 
 Usage:
   python tools/img2rthm_triplet.py -i /path/model.png -o /path/thumbs
-  python tools/img2rthm_triplet.py -i /path/model.jpg -o /data/Gcode/thumbs --name demo_a
+  python tools/img2rthm_triplet.py -i /path/model.jpg -o /userdata/Gcode/thumbs --name demo_a
 
 Output files:
   <out_dir>/<name>_small.rthm

@@ -38,7 +38,7 @@ struct CalConfigOptions {
 
 /** 默认校准目录 / 文件（部署路径；parser 独立构建见 parser_config.hpp 同名宏） */
 #ifndef UPC_CAL_DIR
-#define UPC_CAL_DIR  "/data/CAL"
+#define UPC_CAL_DIR  "/userdata/CAL"
 #endif
 
 #ifndef UPC_CAL_PATH

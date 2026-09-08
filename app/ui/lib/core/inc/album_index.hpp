@@ -25,7 +25,7 @@ struct PhotoEntry {
  */
 bool is_photo_file(const std::string& path);
 
-/** PNG 旁路 RTHM：/data/media/photo/foo.png → …/foo.rthm（非 PNG 返回空串） */
+/** PNG 旁路 RTHM：/userdata/media/photo/foo.png → …/foo.rthm（非 PNG 返回空串） */
 std::string companion_rthm(const std::string& photo_abs_path);
 
 /**
