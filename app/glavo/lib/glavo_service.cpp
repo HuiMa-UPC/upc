@@ -2585,9 +2585,10 @@ void GlavoService::on_clean_test_done(uint8_t result_code)
 }
 
 /**
- * @brief 启动清粉测试：串口下发 + 通知 Media 开始延时抽帧
+ * @brief 启动清粉测试：串口下发 +（按请求）通知 Media 开始延时抽帧
  *
- * clean_video_record_on_ 仅供调试页状态回读，不再门控是否录像。
+ * 是否录像由 `req.record_video` 决定，不再无条件开会话。
+ * clean_video_record_on_ 仅供调试页状态回读，从来不门控是否录像。
  */
 void GlavoService::handle_clean_test_start_request(const middleware::Message& msg)
 {
@@ -2615,9 +2616,13 @@ void GlavoService::handle_clean_test_start_request(const middleware::Message& ms
 
     clean_test_active_ = true;
     debug_tx(frame, n);
-    /* Purify 路径始终录像；调试开关仅保留状态回读，不再门控 */
-    notify_clean_video_start(req);
-    clean_video_session_started_ = true;
+    /* 录像由请求方决定：Purify 路径带 record_video=1 照旧全程录；控制页手动清粉给 0，
+     * 于是不建会话、不写 config.json，结束回执改由 on_clean_test_done() 的
+     * !video_started 分支直接发。调试开关仅保留状态回读，不再门控。 */
+    if(req.record_video) {
+        notify_clean_video_start(req);
+        clean_video_session_started_ = true;
+    }
     publish_clean_test_start_rsp(static_cast<uint32_t>(msg.sender_id), true);
 }
 

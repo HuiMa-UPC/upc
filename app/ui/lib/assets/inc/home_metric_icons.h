@@ -46,6 +46,16 @@ extern const lv_image_dsc_t ic_pressure_32;
 extern const lv_image_dsc_t ic_pressure_26;
 extern const lv_image_dsc_t *const ic_pressure_set[];
 
+extern const lv_image_dsc_t ic_bolt_48;
+extern const lv_image_dsc_t ic_bolt_32;
+extern const lv_image_dsc_t ic_bolt_26;
+extern const lv_image_dsc_t *const ic_bolt_set[];
+
+extern const lv_image_dsc_t ic_bulb_48;
+extern const lv_image_dsc_t ic_bulb_32;
+extern const lv_image_dsc_t ic_bulb_26;
+extern const lv_image_dsc_t *const ic_bulb_set[];
+
 extern const lv_image_dsc_t ic_info;
 extern const lv_image_dsc_t ic_clock;
 extern const lv_image_dsc_t ic_cube;

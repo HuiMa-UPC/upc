@@ -22,6 +22,7 @@
 #include "ui_device_state.hpp"
 #include "ui_message_store.hpp"
 #include "ui_alarm_state.hpp"
+#include "ui_clean_state.hpp"
 #include "ui_modal_dialog.hpp"
 #include "ui_user_widgets.hpp"
 #include "ui_feedback.hpp"
@@ -215,6 +216,10 @@ void app_init(lv_obj_t* screen) {
     /* MCU 报警：生命周期缓存 + 历史加载，喂消息中心（须在 store 之后） */
     ui_alarm_state_init();
 
+    /* 清粉回执：接管两个单槽 Proxy 回调，再按发起方扇出给首页结果页与控制页。
+     * 两个页面都在 on_create 里注册观察者，所以这里只要赶在建页之前。 */
+    ui_clean_state_init();
+
     PageManager::instance().init(screen);
 
     PageManager::instance().register_page(
@@ -231,7 +236,8 @@ void app_init(lv_obj_t* screen) {
     PageManager::instance().register_page(
         std::make_unique<SimplePage>("user_control",
                                      page_user_control_create,
-                                     page_user_control_refresh),
+                                     page_user_control_refresh,
+                                     page_user_control_exit),
         &nav_icon_control);
     PageManager::instance().register_page(
         std::make_unique<SimplePage>("user_settings",

@@ -140,6 +140,12 @@ middleware::SupplyStatusPayload g_supply = {48.0f, 48.0f, 1, 1};
 lv_obj_t *g_supply_mat_bar = nullptr, *g_supply_mat_pct = nullptr, *g_supply_mat_status = nullptr;
 lv_obj_t *g_supply_filt_bar = nullptr, *g_supply_filt_pct = nullptr, *g_supply_filt_status = nullptr;
 
+/* 对外快照 + 观察者（见 control.hpp「供应度」一节）：Proxy 那个回调是单槽的，本文件
+ * 占着它，所以别的页面只能从这里拿数据。两份值在 apply_supply() 里一处同步。 */
+constexpr int kMaxSupplyObservers = 4;
+control_supply_t g_supply_pub = { 48.0f, 48.0f, true, true };
+control_supply_observer_t g_supply_observers[kMaxSupplyObservers] = { nullptr };
+
 /* ---------- 后端异步状态（UiMsgProxy 适配，仅本文件使用） ---------- */
 bool  g_proxy_wired = false;
 bool  g_pm25_high = false;
@@ -291,6 +297,7 @@ void request_fs_dir_open(FileTab tab)
 
 void enter_state(control_state_t s);
 void refresh_supply_bars(void);
+void apply_supply(const middleware::SupplyStatusPayload &p);
 void highlight_file_rows(void);
 void close_confirm_dlg(void);
 void show_print_confirm_dialog(void);
@@ -672,8 +679,7 @@ void wire_msg_proxy()
     });
 
     proxy.register_supply_status([](const middleware::SupplyStatusPayload &p) {
-        g_supply = p;
-        refresh_supply_bars();
+        apply_supply(p);
     });
 
     proxy.register_print_prepare_done([](bool ok) {
@@ -2301,6 +2307,25 @@ void on_detail_secondary(lv_event_t * /*e*/)
     show_delete_confirm();
 }
 
+/**
+ * 落一次供应度：内部值 + 对外快照 + 本页那两根 bar + 观察者扇出，四件事只在这里做。
+ * 分成两份值是因为 control.hpp 不该把 upc_contract.hpp 拖进每个 include 它的页面。
+ */
+void apply_supply(const middleware::SupplyStatusPayload &p)
+{
+    g_supply = p;
+    g_supply_pub.material_pct = p.material_pct;
+    g_supply_pub.filter_pct   = p.filter_pct;
+    g_supply_pub.material_ok  = (p.material_ok != 0);
+    g_supply_pub.filter_ok    = (p.filter_ok != 0);
+    refresh_supply_bars();
+    for(int i = 0; i < kMaxSupplyObservers; i++) {
+        if(g_supply_observers[i]) {
+            g_supply_observers[i](&g_supply_pub);
+        }
+    }
+}
+
 void refresh_supply_bars(void)
 {
     if(g_supply_mat_bar) {
@@ -3548,6 +3573,32 @@ void control_set_transfer_box_flow(bool on)
 bool control_transfer_box_flow_enabled(void)
 {
     return g_transfer_box_flow;
+}
+
+const control_supply_t *control_supply_get(void)
+{
+    return &g_supply_pub;
+}
+
+void control_supply_request(void)
+{
+    ui::UiMsgProxy::instance().send_supply_status();
+}
+
+void control_supply_add_observer(control_supply_observer_t cb)
+{
+    if(!cb) {
+        return;
+    }
+    for(int i = 0; i < kMaxSupplyObservers; i++) {
+        if(g_supply_observers[i] == cb) {
+            return;   /* 幂等：页面重建时重复注册不会叠加 */
+        }
+        if(!g_supply_observers[i]) {
+            g_supply_observers[i] = cb;
+            return;
+        }
+    }
 }
 
 void control_terminate_request(void)

@@ -933,12 +933,19 @@ struct PrintVideoManifestPayload {
     uint8_t reserved;
 };
 
-/** UI_Clean_Test_Start_Req：打印结果页 Purify 按钮触发清粉测试 + 录像 */
+/** UI_Clean_Test_Start_Req：Purify / 手动清粉触发清粉测试（录像可选）
+ *
+ * `record_video=0` 时 Glavo 不开 Media 清粉录像会话，因此不写
+ * `/data/media/video/{job_name}/`、也不进打印历史；MCU 清粉结束后由 Glavo 自己发
+ * `APP_Clean_Test_Result_Ntf`（`on_clean_test_done()` 的 `!video_started` 分支）。
+ * 控制页的手动清粉走这一档，`job_name` 随之无人读取。 */
 struct CleanTestStartReqPayload {
-    char job_name[64];   /**< 对应 /data/media/video/{job_name}/ */
+    char job_name[64];   /**< 对应 /data/media/video/{job_name}/；record_video=0 时忽略 */
     uint32_t width;      /**< 0=跟随 Camera 当前预览宽 */
     uint32_t height;     /**< 0=跟随 Camera 当前预览高 */
     uint32_t fps;        /**< 0=跟随 Camera 当前预览 fps */
+    uint8_t record_video; /**< 1=同时开清粉录像（结果页 Purify）；0=只清粉不录 */
+    uint8_t reserved[3];
 };
 
 /** APP_Clean_Test_Start_Rsp：清粉测试请求是否被 Glavo 受理 */
