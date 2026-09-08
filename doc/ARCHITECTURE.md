@@ -90,6 +90,7 @@
 | `ui_device_bar_*` | `ui_device_bar.*` | 常驻设备信息条（WiFi + 设备名 + 状态点/字），PageManager 持有 |
 | `ui_message_*` | `ui_message_store.*` | 消息中心：设备事件去重/排序/未读计数 + 码→文案表（`GLAVO_Device_Event_Ntf`）；`push_ex` 供报警等外部文案接入 |
 | `ui_alarm_*` | `ui_alarm_state.*` | MCU 报警唯一数据源：生命周期缓存 + 复位在途/失败回执 + 历史落盘 + 快照请求与稀疏攒帧 + 打印阻断/会话抑制 |
+| `ui_clean_state_*` | `ui_clean_state.*` | 清粉（clean_test）发起与回执的唯一来源：接管两个单槽 Proxy 回调，按发起方（结果页 Purify / 控制页手动清粉）扇出；`record_video` 决定是否连带清粉录像 |
 | `ui_alarm_catalog_*` | `ui_alarm_catalog.hpp` / `ui_alarm_catalog_gen.cpp` | 报警字典（生成物，改 `tools/gen_alarm_catalog.py` + `doc/alarm_catalog_en.csv`）；槽位映射不在此，是 `upc_contract.hpp` 里的固定公式 |
 | `ui_notice_stack_*` | `ui_notice_stack.*` | 右上通知浮层（最多两张卡 + 「查看剩余 N 条」；消息页/历史页/设置页不显示），PageManager 持有 |
 | `app_init()` | `ui_app.*` | 主题、Proxy、`ui_device_state_init`、`ui_message_store_init`、`ui_alarm_state_init`、页面注册、control |
@@ -106,7 +107,7 @@
 |---------|------|------|
 | `user_home` | `page_user_home.*` | 首页：环境、打印模式、预览、打印结果页（完成/终止浮层） |
 | `user_history` | `page_user_history.*` | 打印历史：三 Tab + Storage 条 + 日期分组卡片 + 管理态批量删除 + 左滑删除 |
-| `user_control` | `page_user_control.*` | skeleton 占位 |
+| `user_control` | `page_user_control.*` | 控制面板：两列玻璃卡（环境/耗材滤芯/清粉/激光功率/照明）+ 开门滑块 + 两个调整弹窗；页内切「更多控制」（Motion 三轴点动 / Device 打印参数·风扇·电机·开关） |
 | `user_settings` | `page_user_settings.*` | 设置列表 + 开发者密码弹窗 |
 | `user_message` | `page_user_message.*` | 消息中心：日期分组混排列表（MCU 报警 + 设备事件）+ 左滑删除历史 + 详情抽屉（Reset 三态） |
 | `user_timelapse` | `page_user_timelapse.*` | 延时摄影播放器（隐藏页，历史缩略图进入；全屏 `lv_layer_top`） |

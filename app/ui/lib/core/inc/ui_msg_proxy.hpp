@@ -79,8 +79,11 @@ public:
     /** 清粉中断（按清粉页 X）：请求后端停风机，回执经 register_clean_stop_result。 */
     void send_clean_stop();
     void register_clean_stop_result(CleanStopDoneCb cb);
-    /** 打印结果页 Purify：触发 clean_test_start（新增契约，不复用 debug 消息） */
-    void send_clean_test_start(const char* job_name, uint32_t width, uint32_t height, uint32_t fps);
+    /** 触发 clean_test_start（新增契约，不复用 debug 消息）。
+     *  `record_video=true` 是打印结果页 Purify 的用法（带清粉录像）；控制页手动清粉
+     *  传 false，此时不落盘不进历史，`job_name` 无人读取。 */
+    void send_clean_test_start(const char* job_name, uint32_t width, uint32_t height,
+                               uint32_t fps, bool record_video);
     void register_clean_test_start_rsp(CleanTestStartRspCb cb);
     void register_clean_test_done(CleanTestDoneCb cb);
     /** 返回首页时强制 clean_test_close。 */

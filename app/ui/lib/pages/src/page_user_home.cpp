@@ -16,6 +16,7 @@
 #include "ui_message_store.hpp"
 #include "ui_notice_stack.hpp"
 #include "ui_alarm_state.hpp"
+#include "ui_clean_state.hpp"
 #include "upc_contract.hpp"
 #include "config/camera_resolution_profile.hpp"
 #include "media_paths.hpp"
@@ -90,23 +91,15 @@ extern bool      g_result_purify_done;
 extern bool      g_monitor_photo_pending;
 extern char      g_result_job_name[96];
 
-struct CleanDoneToastCtx {
-    bool success;
-};
-
-void on_clean_start_reject_async(void * /*user*/)
+void on_clean_rejected(void)
 {
     g_result_cleaning = false;
     purify_stage_set(PURIFY_STAGE_IDLE);
     ui_toast_show("Powder cleaning is busy", ui_color_danger, 1800);
 }
 
-void on_clean_done_async(void *user)
+void on_clean_done(bool success)
 {
-    CleanDoneToastCtx *ctx = static_cast<CleanDoneToastCtx*>(user);
-    const bool success = ctx ? ctx->success : false;
-    delete ctx;
-
     g_result_cleaning = false;
     if(!control_is_printing()) {
         return;
@@ -119,6 +112,32 @@ void on_clean_done_async(void *user)
     } else {
         purify_stage_set(PURIFY_STAGE_IDLE);
         ui_toast_show("Powder cleaning failed, video retained", ui_color_danger, 2600);
+    }
+}
+
+/**
+ * 清粉回执：经 `ui_clean_state` 扇出，只处理本页发起的那一路。
+ *
+ * 那两个 Proxy 回调是单槽的、控制页的手动清粉也要用，所以订阅收到了
+ * `core/ui_clean_state`（见该头文件开头的说明）。它保证回调已在 UI 线程，
+ * 故这里不再 `lv_async_call`——原先那两个 `*_async` 包装因此收掉了。
+ */
+void on_clean_state_event(ui_clean_event_t ev, ui_clean_owner_t owner)
+{
+    if(owner != UI_CLEAN_OWNER_PRINT_RESULT) {
+        return;   /* 控制页的手动清粉与结果页无关 */
+    }
+    switch(ev) {
+        case UI_CLEAN_EVT_REJECTED:
+            on_clean_rejected();
+            break;
+        case UI_CLEAN_EVT_DONE:
+            /* 协议约定 result_code 只表结束类型，一律按成功处理，见 ui_clean_state */
+            on_clean_done(true);
+            break;
+        case UI_CLEAN_EVT_ACCEPTED:
+        default:
+            break;   /* 点击时已切 RUNNING，受理无需额外动作 */
     }
 }
 
@@ -159,23 +178,9 @@ void home_env_init(void)
             }
         });
 
-    ui::UiMsgProxy::instance().register_clean_test_start_rsp(
-        [](bool accepted) {
-            if(accepted) {
-                return;
-            }
-            lv_async_call(on_clean_start_reject_async, nullptr);
-        });
-
-    ui::UiMsgProxy::instance().register_clean_test_done(
-        [](const middleware::CleanTestDonePayload &rsp) {
-            CleanDoneToastCtx *ctx = new CleanDoneToastCtx{};
-            (void)rsp;
-            /* 协议约定：MCU 清粉完成上报的 result_code 仅表示结束类型，
-             * 00/01/02 都代表流程结束，UI 统一走正常完成态。 */
-            ctx->success = true;
-            lv_async_call(on_clean_done_async, ctx);
-        });
+    /* clean_test 的受理与完成回执走 ui_clean_state（单槽回调与控制页共用）；
+     * clean_test_close 的回执只有本页用，仍直接注册。 */
+    ui_clean_state_add_observer(on_clean_state_event);
 
     ui::UiMsgProxy::instance().register_clean_test_close_rsp([]() {
         lv_async_call(on_clean_close_rsp_async, nullptr);
@@ -1203,7 +1208,8 @@ void on_result_purify_click(lv_event_t * /*e*/)
         return;
     }
     g_result_cleaning = true;
-    ui::UiMsgProxy::instance().send_clean_test_start(g_result_job_name, 0, 0, 0);
+    /* PRINT_RESULT 这一档带清粉录像，与控制页的手动清粉（不录像）区分开 */
+    ui_clean_state_request(UI_CLEAN_OWNER_PRINT_RESULT, g_result_job_name);
     purify_stage_set(PURIFY_STAGE_RUNNING);
 }
 

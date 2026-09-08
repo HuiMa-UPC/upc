@@ -694,7 +694,7 @@ pending 自动解除——正好顺带验超时路径。
 |---------|------|------|
 | `user_home` | `page_user_home.*` | 首页：环境、打印模式、预览、打印结果页 |
 | `user_history` | `page_user_history.*` | 打印历史：三 Tab + Storage 条 + 日期分组卡片 + 管理态批量删除 + 左滑删除 |
-| `user_control` | `page_user_control.*` | skeleton 占位 |
+| `user_control` | `page_user_control.*` | 控制面板 + 更多控制（页内两视图）。见下方「控制页」一节 |
 | `user_settings` | `page_user_settings.*` | 设置列表 + 开发者密码弹窗 |
 | `user_message` | `page_user_message.*` | 消息中心：日期分组混排列表（MCU 报警 + 设备事件）+ 初始 10 条与底部 Load More + 左滑删除历史 + 管理态批量删除 + 详情抽屉（Reset 三态）。按稿 3033:5247 / 3063:7338 / 3201:9570 / 5380:28971 实现 |
 | `user_timelapse` | `page_user_timelapse.*` | 延时摄影播放器（隐藏页，历史缩略图进入；全屏 `lv_layer_top`） |
@@ -1310,6 +1310,174 @@ padding 24、圆角 8、图标 32、图标↔文字 24、标题 20、右箭头 2
 | Timelapse / Album | 已按 Tab 分支：Timelapse 读 manifest；Album 走 `ui::album::scan()` 扫 `/userdata/media/photo`（缩略图优先 `.rthm`），点开进 `user_photo` 全屏浏览器 | — |
 | 相册 filmstrip | 已做：窗口化的底部缩略图条（格数按屏宽算，`.rthm` 常驻内存），见上一节 | — |
 | 相册容量 | `/userdata/media/photo` **无上限也无清理**（全工程只有 Media 建目录/写文件、UI 扫目录三处碰它），照片只会堆到用户手动删或盘满；`media_paths.hpp` 预留的 `UPC_PHOTO_CONFIG` 至今未用 | 需要配额/轮转的话在 Media 侧做，UI 这边 filmstrip 已窗口化不受条数影响，但历史页列表仍是无分页地每张一卡 |
+
+### 控制页（稿 5782:12911 / 5814:16936 / 5815:17390 / 5788:14284+14635 / 5788:15012）
+
+**一个 Page 两个视图，靠显隐切换，不是两个 Page。** 主面板 ←「More Controls」→ 更多控制。
+
+之所以不把「更多控制」做成隐藏页：`apply_device_bar()` 按「侧栏有菜单按钮」判显隐，
+隐藏页会连常驻设备条一起隐掉并把 `pad_top` 收回 0——而稿 5814:16936 / 5815:17390 顶上
+明明画着设备条。做成页内视图则设备条与侧栏天然照稿保留，`ui_app.cpp` 也不必多注册一个页。
+
+代价是右上角的通知浮层会压住更多控制那条横跨全宽的传感器条（浮层 400 宽、退 32，
+传感器条顶在 y=185），所以本页在 `show_view()` 里用 `ui_notice_stack_set_visible()` 自己
+关开。**换页时不必还原**：`switch_to()` 的顺序是 `on_exit()` → `apply_device_bar()` →
+`on_enter()`，紧随其后那句就按新页规则重设了；在 `on_exit()` 里写 `set_visible(true)` 只会
+被覆盖，还会让人误以为本页要管别页的浮层。反过来，进页（`refresh()`）**必须**按当前视图
+再设一次，因为 `apply_device_bar()` 刚把它按「五个标签页一律显示」重置过——同首页
+`sync_notice_offset()` 的处理。
+
+**三路数据一路都不是本页自己订阅的**，三个订阅点全是单槽的，抢了会静默弄坏别人：
+
+| 数据 | 取法 | 单槽点被谁占着 |
+|---|---|---|
+| 环境四项（舱内/室内 PM2.5、舱温、氧浓度） | `ui_device_state_add_observer()` | `ui_device_state`（`register_env_update`） |
+| 耗材 / 滤芯 | `control_supply_add_observer()` + `control_supply_request()` | `control.cpp`（`register_supply_status`） |
+| 传感器条 / 三轴位置 / 设备开关态 / 激光读数 | `DebugMsgProxy` 的 sensor/axis/device/laser | 调试页也在用**同一组** |
+
+最后那组因此**进页注册、离页清空**（`page_user_control_exit()`），与
+`page_user_debug_exit()` 对称。不清的话从本页切去调试页，那边的传感器条、三轴位置、
+设备行、激光读数全都不再刷新。
+
+**`lv_obj_create()` 的默认尺寸是固定的 130×130，不是 `LV_SIZE_CONTENT`。** 本页所有布局
+容器都从 `make_box()` 起手，那里**必须**显式 `lv_obj_set_size(o, LV_SIZE_CONTENT,
+LV_SIZE_CONTENT)`——`lv_obj_class` 的 `width_def/height_def` 都是 `LV_DPI_DEF`（=130，工程
+未覆盖）。第一版漏了这句，实机上一次性炸出四个症状，值得记下来避免再踩：
+
+- **大数值被裁掉下半截**：`head(130) → txt(130) → vrow(130)` 三层固定高，`txt` 装不下
+  caption + vrow 就把 vrow 裁到约 110 可见；而 vrow 上有 `LV_FLEX_ALIGN_END`（让单位与
+  数字底对齐），行容器的交叉轴是竖向，数字被推到 130 高的底部、正好落在裁剪线之外。
+- **整列顶出屏幕**：卡高从应有的约 156 涨到 218，左列四张 872 > 内容区 688。
+- **弹窗里 "INTERIOR PM2.5" 裁成 "INTERIOR PM"**：`nrow` 固定 130 宽装不下 165，图标也被挤变形。
+- **命中区跟着错位**，点哪儿都可能落到别的控件上。
+
+需要百分比宽高或 `flex_grow` 的调用点在 `make_box()` 之后各自覆盖对应那一维，不冲突。
+
+**页面底与卡片底色是一对、不能只改一个。** 稿上底是 `#272628` + -49° 渐变、卡片是白 4%
+（折成不透明约 `#302F31`，只比底高 9 级）。第一版跳过了背景层，页面透到
+`user_color_bg`（`#0a0909`），白 4% 叠出来约 `#191818`——**实机两块屏上都读不出卡片轮廓**，
+1024 那块几乎完全看不见。现在两件都做：
+
+- 背景：页根整屏出血铺 `#272628` + 渐变，做法与理由见下一段；
+- 卡片：不透明 `kCardBg` = `#3D3C3E`（等效白 10%，比底高 22 级）。**别改成
+  `user_color_panel`(#1c1c1c)**——它比页面底更暗，卡片会变成凹陷的、与稿的「浮起」层次
+  正好反过来；`user_color_panel_alt`(#262626) 与底几乎同色，等于没对比。历史页/消息页用
+  `user_color_panel` 是因为它们的页面底是近黑的 `user_color_bg`，那个前提在本页不成立。
+
+**背景整屏出血**：页根 `pos(-USER_SIDEBAR_W, -USER_CONTENT_TOP)` + `size(LV_HOR_RES,
+LV_VER_RES)`，再用自己的 `pad_left`/`pad_top` 把内容推回内容区——同首页
+`page_user_home_create()`。不出血的话设备条那条透明带会露出 `user_color_bg`、在
+y=`USER_CONTENT_TOP` 处出现一道横向接缝。两个坑：尺寸**不能**用 `LV_PCT(100)`（那算的是
+父内容区、会被 `pad_top` 扣掉一条）；纵向抵消的是 `pad_top`，跟 `USER_CONTENT_TOP`
+而**不是** `USER_TOPBAR_H`（1280 档 112 对 128），用错整页竖直错开 16。渐变取**不透明
+两停**（把稿的 `rgba(61,58,78,0.4)` 预先与 `#272628` 混成 `#302E37`）而不是带 alpha 的
+叠加层：alpha 停会让那一段透到底下的 `user_color_bg`，就得再养一层实色底。描述符必须
+static 持久，`bg_grad` 只存指针（同 `ui_slide_unlock.cpp` 的红条）。
+
+**列高与卡高一律钉死，不让内容累加决定**（`col_h()` / `card_h_*()`）。稿上两列精确地从
+y=125 铺到 y=729、**各 604 高**，靠的是每张卡自己的确定高度：
+
+| | 稿@1280 | 备注 |
+|---|---|---|
+| 指标卡（条+胶囊） | 156 | 内距 32 + 卡头 67 + 12 + 条 8 + 12 + 胶囊 25，一像素不剩 |
+| 温度+氧组合卡 | 200 | 稿里明写 `dimensions.height: 200` |
+| Powder Clean / Laser Power | 100 | 带状态字/数值 |
+| LIGHT / More Controls | 64 | 见下条，LIGHT **没有**状态字 |
+
+左列 156+7+156+7+200+8+64 = 604，右列 156+7+156+7+100+7+100+7+64 = 604。两列都钉死
+`col_h()` + `SPACE_BETWEEN`，几像素出入落进行距（稿上左列首张 162 比第二张高 6，是那枚胶囊
+内距用了四周 8px 而非 4px 8px，这 6px 不单独建模）。
+
+**为什么必须钉死、不能内容自适应**，两个理由都是实机踩出来的：
+
+1. 两列卡种类不同（左 4 张、右 5 张），累加出来必然不等，底边对不齐；
+2. 指标卡的状态胶囊在无数据时要隐掉，而 **flex 会跳过 `LV_OBJ_FLAG_HIDDEN` 子节点**——卡片
+   会当场矮约 37px，等数据一到又长回去，**列高跟着运行时数据跳**。实机上表现为无环境数据
+   时左列反而比右列短。现在 `apply_metric()` 无数据时改用**透明占位**而不是 HIDDEN，连卡内
+   进度条的位置也不会挪。
+
+**1024 档不能按 0.75 折算**：那样得 117/150/75/48，而按该档字体实测（value 24 行高 33、
+caption_sm 12 行高 17、内距 11、图标 26）指标卡要 118、组合卡要 151，会裁掉 1~3px。故该档
+按算术给值并各留几像素余量（120/152/78/48），`col_h` 取两列所需的较大者（右列 468）加 2 =
+470；可用高度 600 − 84 − 8 = 508，仍余 38。
+
+> **⚠ 待删（上机前）**：`page_user_control.cpp` 顶部的 `UPC_CONTROL_DEV_CLEAN_TIMEOUT`
+> 宏 + 三处 `#if` 块 + 那条 `#warning`。它给 Powder Clean 加了 10s 自解锁，仅供联调期把
+> 界面从忙态里捞出来；真实清粉一轮远超 10s，**开发期它会在清粉还在跑时把开关翻回 Off**，
+> 那是预期行为不是 bug。编译时每次都会刷一条 `DEV: control page ...` 提醒。
+
+几处对稿的取舍：
+
+- **稿全中文，实现全英文**（Montserrat；CJK 子集只覆盖调试测试页）。术语一律沿用调试页
+  已有的串：`Print Plane Height (Z)` / `Powder Scraper (S)` / `Powder Bucket Rod (D)`、
+  `Click move` / `Long-press`、`Print Params` / `Layer (um)` / `Balance` / `Send`、
+  `Fan` / `Duty`、`Other Switches` / `Sieve Motor` / `Inner Door` / `Gas Wash` / `Base Heat`、
+  `Filter` / `Material`（后两个取自 `control.cpp` 的 supply bar，**耗材是 Material 不是
+  Consumable**）。**稿上 S 轴标题写的是「打印平面高度（S轴）」，那是把 Z 卡标题复制过去
+  忘改了**——S 轴实际是铺粉刮刀，按调试页取 `Powder Scraper (S)`，别照稿改回去。
+- **`backdrop blur(25px)` 略去**：LVGL 画不了背景模糊，同首页那两枚玻璃钮的 inset 阴影。
+  只留白 4% 底 + 白 10% 描边（稿写 0.5px，整数栅格上取 1）。
+- **PM2.5 的红/绿门限不写死 50**：后端 `pm25_clean_threshold_` 默认 50 但可由 `cal.csv` 的
+  Config 段 `PM2.5Clean` 覆盖，且开门前清粉与 `APP_PM25_Rsp.is_high` 都按那个值判。写死会让
+  改过 cal.csv 的机器上「红胶囊说不能开门」和「实际能开门」对不上。条按门限的两倍做满量程，
+  门限处正好半条，与稿上 73.6 占半条一致。
+- **设备线稿插画（稿 333×672，主面板右侧）本轮未做**，右侧留空只保留背景。补的话照
+  `gen_home_bg.py` 出位图，别指望 LVGL 图元拼出那种 line-art。
+- **Laser Power / LIGHT 的卡头图标是本轮新描的** `ic_bolt_*` / `ic_bulb_*`（进了
+  `gen_home_metric_icons.py`，出 48/32/26 三档）。Filter / Material / Powder Clean 三枚稿上
+  的矢量未导出，按语义就近取 `ic_layers` / `ic_cube` / `ic_purify`。
+- **LIGHT 与 Powder Clean 在稿里不是同一个模板**，别当成一个：Powder Clean
+  （`#5815:18006`）有 28 号状态字「关闭」、卡高 100；**LIGHT（`#5782:13071`）只有 caption**
+  （子节点 `#5782:13079` 里只有一个 `[TEXT] "LIGHT"`）、卡高 64。第一版给 LIGHT 也套了带
+  状态字的模板，多出一行 32px，是两列底边对不齐的原因之一。`build_toggle_card()` 现在靠
+  `state0 == nullptr` 区分两种，`ToggleCard::state` 因此**可能为空**，写它的五处都要判空。
+- **稿未给弹窗的那五张卡**（EXTERIOR PM2.5 除外，它的箭头在稿里是 `opacity 0` 即不可点）
+  箭头照画、点了弹「Not available yet」，等设计稿到了换弹窗内容。
+**更多控制的 chrome 纵向节奏按稿给三个数**（`more_gap_chrome/strip/bot`）：稿上 chrome 行
+y=125 高 40、传感器条 y=185 高 109、内容 y=318，而 Motion 的轴卡高 **434**
+（`layout_4c04db04` 里显式写死）→ 底边距 800−318−434 = 48。原先两段间距都用统一的
+`USER_PAD`(24)、底边距也是 24，于是条与内容各下移 4、内容区高出 20。**两段间距不等（20/24）**，
+所以 `pad_row` 取前一段、后一段靠 body 的 `margin_top` 补差。
+
+**稿自身在这两个 Tab 上不自洽**：Motion 的内容收在 752，Device 的却收在 779
+（`#5815:17746` 在 y=555 高 224）。共享同一个内容区高只能取一个，取 Motion 的 434——它是稿里
+显式的尺寸，Device 那边是由两块坐标反推的。1024 档的底边距同样**不能按 0.75 折算**（36 会让
+内容区只剩 317，而该档最高的 Z 轴卡按字体实测约需 318），取 28 留约 7px 余量。
+
+**设备控制两列的高度策略必须一致。** 右列的 `mrow`/`other` 都 `flex_grow` 恒定撑满，左列第一版
+两张卡是 `LV_SIZE_CONTENT`、够不够全看字体推出来的高度凑不凑巧，实机上短了一截。现在
+**Fan 卡 `flex_grow(1)` 吃掉左列剩余高度** + 卡内三行 `SPACE_BETWEEN`：底边与右列齐平（稿上
+两列本来就齐，右列 318+217+20+224 收在 779、左列两张卡加起来也正好到 779），多出来的高度分给
+行距、顺带把 Send 那行撑开。
+
+- **风扇卡按稿没有 Send，实现里加了一枚**（节点 5815:17974 只有占空比行与开关行）。这是刻意
+  偏离：`UI_Debug_Fan_Ntf`（开关，带 duty）与 `UI_Debug_Fan_Duty_Ntf`（仅设占空比）本是两条
+  消息，只有开关那一下会带占空比，**没有独立 Send 的话风扇转起来之后改 Duty 完全无效**、
+  得先关再开。调试页正因如此配了 Send（`on_fan_send_click`），两处对齐。Send 放在 Duty
+  那一行的数值组里而不是像调试页那样与电源钮同排：语义上它发的是这行的值，且横向宽裕
+  ——这张卡 1280 档只有 300 宽，开关那行已被状态块 + 80 的电源钮占去大半，1024 档更紧。
+  高度取**和旁边输入框一样**（`num_input_h()`，1280 档 48）而不是 `make_outline_btn` 的稿值 32：
+  32 低于 `UI_USER_MIN_TOUCH`(48)、实机上点不灵，而同一行两个控件等高看着才像有意为之。
+  `make_outline_btn()` 另外对**所有**不足 48 的实例自动外扩命中区补足差额（视觉尺寸不变，
+  故不影响还原度）——「Set Work Zero」按稿是 32 高，有同样的问题，一并兜住了。
+- **激光功率弹窗的副标题在稿上是「当前PM值过高，请手动净化空气」**，那是从 PM2.5 弹窗复制
+  忘改的，实现换成操作说明。底部那条按稿是**只有左圆角的填充块、不是带 knob 的 slider**，
+  说明只能靠 ± 改值，故用定宽填充而非 `lv_slider`。档位词按区间给（<33 Low / 33~66 Medium
+  / >66 High），下面小字显示百分比，± 步长 5%。
+- **开关不用 `lv_switch`**：稿那颗钮是 40 宽的横向圆角矩形（比轨道高还宽），套 `lv_switch`
+  要跟它按轨道高推出的方钮几何反复较劲。全工程原本也没有任何 `lv_switch` 用例。
+
+两处交互上的坑：
+
+- **点动不能只挂 `LV_EVENT_CLICKED`**：CLICKED 是松手才发的，长按模式下会退化成「按住不动、
+  一松手才走一下又立刻停」。点击模式听 CLICKED，长按模式听 `PRESSED` 起步 + `RELEASED` 补停帧，
+  且**必须连 `PRESS_LOST` 一起收**——手指按住时滑出钮外只发 PRESS_LOST，漏掉它轴会一直走，
+  这是会撞机的那类漏洞。四个事件由 `attach_jog()` 一次挂全。
+- **`Purify Now` 与 `Powder Clean` 走同一条 clean_test 路径**，不走 `send_clean_start()`：后者
+  的回执由 `control.cpp` 的开门流程独占（单槽 + `invoke_done` 对空回调是 no-op），控制页发了
+  只会得到静默。走 clean_test 既拿得到完成回执，两个控件也共享同一份忙态、不会各说一套。
+  两者都走 `record_video=false`（`UI_CLEAN_OWNER_CONTROL`）：不开 Media 录像会话、不写
+  `config.json`、不进打印历史。清粉期间开关**置灰不可取消**（中途打断会留下舱内 PM 偏高）。
 
 ### 触摸命中区（`lv_obj_set_ext_click_area`）
 

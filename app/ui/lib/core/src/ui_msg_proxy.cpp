@@ -700,7 +700,8 @@ void UiMsgProxy::register_clean_stop_result(CleanStopDoneCb cb)
 }
 
 void UiMsgProxy::send_clean_test_start(const char* job_name, uint32_t width,
-                                       uint32_t height, uint32_t fps)
+                                       uint32_t height, uint32_t fps,
+                                       bool record_video)
 {
     middleware::CleanTestStartReqPayload req{};
     if(job_name && job_name[0]) {
@@ -709,6 +710,7 @@ void UiMsgProxy::send_clean_test_start(const char* job_name, uint32_t width,
     req.width = width;
     req.height = height;
     req.fps = fps;
+    req.record_video = record_video ? 1 : 0;
     publish_pod(middleware::MsgType::UI_Clean_Test_Start_Req,
                 middleware::ModuleId::APP_GLAVO, req);
 }
