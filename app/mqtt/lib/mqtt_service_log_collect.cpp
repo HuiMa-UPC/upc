@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <chrono>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
@@ -21,6 +22,59 @@
 namespace upc::mqtt {
 
 namespace {
+
+/** Crockford Base32 字母表（ULID 专用，不含 I/L/O/U）。 */
+constexpr char kCrockfordBase32[] = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+
+/**
+ * ULID 生成：48bit 毫秒时间戳 + 80bit 随机，共 128bit 编码为 26 字符。
+ * 时间戳种子取 max(now_ms, last_ms)，随机部分每次重新生成，防时钟回退导致
+ * attemptId 字典序倒退（协议 §五「会话间单调」）。
+ */
+std::string generate_ulid(uint64_t& last_ms)
+{
+    const auto now_ms = static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count());
+    const uint64_t ts = std::max<uint64_t>(now_ms, last_ms);
+    last_ms = ts;
+
+    unsigned char rand_bytes[10]{};
+    if(RAND_bytes(rand_bytes, static_cast<int>(sizeof(rand_bytes))) != 1) {
+        /* 随机数失败兜底：用时间+地址熵填充，仅用于极端环境，不影响格式。 */
+        const uint64_t fallback = now_ms ^ static_cast<uint64_t>(
+            reinterpret_cast<uintptr_t>(&last_ms));
+        for(size_t i = 0; i < sizeof(rand_bytes); ++i) {
+            rand_bytes[i] = static_cast<unsigned char>((fallback >> (i * 8)) & 0xFF);
+        }
+    }
+
+    std::string out;
+    out.resize(26);
+
+    /* 前 10 字符 = 48bit 时间戳（高 48bit 的 10 个 5bit 组）。 */
+    uint64_t t = ts;
+    for(int i = 9; i >= 0; --i) {
+        out[static_cast<size_t>(i)] = kCrockfordBase32[t & 0x1F];
+        t >>= 5;
+    }
+
+    /* 后 16 字符 = 80bit 随机（16 组 5bit）。 */
+    for(int i = 0; i < 16; ++i) {
+        const size_t bit_off = static_cast<size_t>(i) * 5;
+        const size_t byte_off = bit_off / 8;
+        const int shift = static_cast<int>(bit_off % 8);
+        uint16_t word =
+            static_cast<uint16_t>(rand_bytes[byte_off]) << 8;
+        if(byte_off + 1 < sizeof(rand_bytes)) {
+            word |= rand_bytes[byte_off + 1];
+        }
+        const int drop = 16 - 5 - shift;
+        const uint8_t group = static_cast<uint8_t>((word >> drop) & 0x1F);
+        out[static_cast<size_t>(10 + i)] = kCrockfordBase32[group];
+    }
+    return out;
+}
 
 bool topic_file_name_safe(const std::string& name)
 {
@@ -476,6 +530,57 @@ void MqttService::publish_log_collect_accepted(const LogCollectCommand& cmd,
                           detail.str().c_str());
 }
 
+void MqttService::publish_log_collect_progress(const std::string& collect_id,
+                                               const std::string& attempt_id,
+                                               int64_t transferred_bytes,
+                                               int64_t total_bytes)
+{
+    if(!mqtt_connected_) {
+        return;
+    }
+    char payload[512];
+    std::snprintf(payload, sizeof(payload),
+        "{"
+        "\"v\":1,"
+        "\"type\":\"log_collect_progress\","
+        "\"device_id\":\"%s\","
+        "\"ts\":%lld,"
+        "\"seq\":%u,"
+        "\"data\":{"
+            "\"collectId\":\"%s\","
+            "\"attemptId\":\"%s\","
+            "\"transferredBytes\":%lld,"
+            "\"totalBytes\":%lld"
+        "}"
+        "}",
+        json_escape(cfg_.device_id).c_str(),
+        static_cast<long long>(unix_ms()),
+        ++seq_,
+        json_escape(collect_id).c_str(),
+        json_escape(attempt_id).c_str(),
+        static_cast<long long>(transferred_bytes),
+        static_cast<long long>(total_bytes));
+
+    const std::string topic = cfg_.topic_log_collect_progress();
+    MQTTClient_message msg = MQTTClient_message_initializer;
+    msg.payload = payload;
+    msg.payloadlen = static_cast<int>(std::strlen(payload));
+    msg.qos = 1;
+    msg.retained = 0;
+    MQTTClient_deliveryToken token{};
+    const int rc = MQTTClient_publishMessage(client_, topic.c_str(), &msg, &token);
+    if(rc != MQTTCLIENT_SUCCESS) {
+        UPC_LOG_MQTT_SERVICE(Warn, "publish log_collect progress failed rc=%d", rc);
+        mqtt_connected_ = false;
+        cmd_subscribed_ = false;
+        ota_subscribed_ = false;
+        return;
+    }
+    debug_log_mqtt_frame("TX", topic, msg.payload,
+                         static_cast<size_t>(msg.payloadlen),
+                         msg.qos, msg.retained);
+}
+
 void MqttService::run_log_collect_task(LogCollectCommand cmd)
 {
     UPC_LOG_MQTT_SERVICE(Info,
@@ -646,7 +751,31 @@ void MqttService::run_log_collect_task(LogCollectCommand cmd)
     }
 
     std::string put_err;
-    if(!upload_http_put(cmd.upload_url, sealed.data(), sealed.size(), put_err)) {
+    /* 进度上报接线（整包方案）：attemptId 每次 PUT 前重新生成；
+       totalBytes = 密文 sealed.size()，与 ack fileSize 同口径。 */
+    const std::string attempt_id = generate_ulid(last_log_collect_attempt_ms_);
+    const int64_t total_bytes = static_cast<int64_t>(sealed.size());
+    const auto now_steady = std::chrono::steady_clock::now();
+    int64_t last_reported_bytes = 0;
+    auto last_reported_us = now_steady;
+    const auto on_progress = [&](size_t sent, size_t /*total*/) {
+        const int64_t sent_i = static_cast<int64_t>(sent);
+        /* 节流：字节增量 ≥1% 且距上次 ≥300ms 才发，避免每块一包。 */
+        const auto elapsed_us =
+            std::chrono::duration_cast<std::chrono::microseconds>(
+                std::chrono::steady_clock::now() - last_reported_us).count();
+        const bool pct_step =
+            (sent_i - last_reported_bytes) * 100 >= total_bytes;
+        if(!pct_step && elapsed_us < 300000) {
+            return;
+        }
+        last_reported_bytes = sent_i;
+        last_reported_us = std::chrono::steady_clock::now();
+        publish_log_collect_progress(cmd.collect_id, attempt_id,
+                                     sent_i, total_bytes);
+    };
+    if(!upload_http_put(cmd.upload_url, sealed.data(), sealed.size(), put_err,
+                        on_progress)) {
         UPC_LOG_MQTT_SERVICE(Warn, "log_collect PUT failed collectId=%s err=%s",
                              cmd.collect_id.c_str(), put_err.c_str());
         std::filesystem::remove_all(work_dir, ec);
@@ -660,6 +789,7 @@ void MqttService::run_log_collect_task(LogCollectCommand cmd)
         publish_log_collect_error(cmd, reason);
         return;
     }
+    /* PUT 成功后乘终态回执收尾，不再补发 100% 进度（协议：终态即结束）。 */
 
     std::filesystem::remove_all(work_dir, ec);
     publish_log_collect_accepted(cmd, static_cast<int64_t>(sealed.size()), reports);

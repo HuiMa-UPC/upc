@@ -548,7 +548,8 @@ bool download_file_with_progress(const std::string& url,
 bool upload_http_put(const std::string& url,
                      const void* body,
                      size_t body_len,
-                     std::string& err)
+                     std::string& err,
+                     const std::function<void(size_t, size_t)>& on_progress)
 {
     err.clear();
     ParsedUrl parsed{};
@@ -629,10 +630,22 @@ bool upload_http_put(const std::string& url,
         return false;
     }
     if(body_len > 0 && body) {
-        if(!write_all(static_cast<const char*>(body), body_len)) {
-            err = "http_body_send_failed";
-            cleanup();
-            return false;
+        /* 用户自定义进度回调：把 body 切成 64KB 块写出，每块完成后
+           回调一次 "已发/总字节"，供日志采集进度上报使用。 */
+        size_t body_sent = 0;
+        const size_t total = body_len;
+        const char* base = static_cast<const char*>(body);
+        while(body_sent < total) {
+            const size_t chunk = std::min<size_t>(64 * 1024, total - body_sent);
+            if(!write_all(base + body_sent, chunk)) {
+                err = "http_body_send_failed";
+                cleanup();
+                return false;
+            }
+            body_sent += chunk;
+            if(on_progress) {
+                on_progress(body_sent, total);
+            }
         }
     }
 

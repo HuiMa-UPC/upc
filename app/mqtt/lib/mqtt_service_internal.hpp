@@ -93,7 +93,8 @@ bool download_file_with_progress(const std::string& url,
 bool upload_http_put(const std::string& url,
                      const void* body,
                      size_t body_len,
-                     std::string& err);
+                     std::string& err,
+                     const std::function<void(size_t, size_t)>& on_progress = {});
 /** OTA 组件名映射到目标目录。 */
 const char* component_target_dir(const std::string& component);
 /** shell 安全单引号转义。 */

@@ -172,7 +172,7 @@
 /* -------------------------------------------------------------------------- */
 #include "image_paths.hpp"
 
-/** MCU OTA 测试：固件目录与块大小 */
+/** MCU / Galvo OTA：固件目录与块大小（AB 文件名见 common/fs_manifest/OTA_IMAGE.md） */
 #ifndef GALVO_OTA_IMAGE_DIR
 #define GALVO_OTA_IMAGE_DIR  UPC_IMAGE_GALVO_DIR
 #endif

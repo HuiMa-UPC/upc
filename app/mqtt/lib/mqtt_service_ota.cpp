@@ -1,6 +1,7 @@
 #include "mqtt_service.hpp"
 
 #include "mqtt_service_internal.hpp"
+#include "ota_image_pair.hpp"
 #include "rs_log.hpp"
 
 #include <algorithm>
@@ -574,7 +575,23 @@ void MqttService::run_manifest_download_task(std::string task_id,
             if(entry.empty()) {
                 continue;
             }
-            if(!archive_entry_safe_flat(entry) || !is_bin_name(entry)) {
+            if(!archive_entry_safe_flat(entry)) {
+                std::filesystem::remove_all(extract_dir, ec);
+                std::filesystem::remove(tmp_final, ec);
+                publish_failed(comp.component.c_str(), "tar_entry_invalid");
+                return;
+            }
+            upc::OtaImageKind kind{};
+            if(upc::ota_image_kind_from_component(comp.component, kind)) {
+                upc::OtaImageSlot slot = upc::OtaImageSlot::A;
+                upc::OtaImageVersion ver{};
+                if(!upc::parse_ota_image_basename(entry, kind, slot, ver)) {
+                    std::filesystem::remove_all(extract_dir, ec);
+                    std::filesystem::remove(tmp_final, ec);
+                    publish_failed(comp.component.c_str(), "tar_entry_invalid");
+                    return;
+                }
+            } else if(!is_bin_name(entry)) {
                 std::filesystem::remove_all(extract_dir, ec);
                 std::filesystem::remove(tmp_final, ec);
                 publish_failed(comp.component.c_str(), "tar_entry_invalid");
@@ -593,22 +610,45 @@ void MqttService::run_manifest_download_task(std::string task_id,
         }
 
         std::vector<std::filesystem::path> extracted_files;
-        for(const auto& ent : std::filesystem::directory_iterator(extract_dir, ec)) {
-            if(ec || !ent.is_regular_file()) {
-                continue;
+        upc::OtaImageKind kind{};
+        const bool named_ab = upc::ota_image_kind_from_component(comp.component, kind);
+        if(named_ab) {
+            std::vector<std::string> extracted_paths;
+            for(const auto& ent : std::filesystem::directory_iterator(extract_dir, ec)) {
+                if(ec || !ent.is_regular_file()) {
+                    continue;
+                }
+                extracted_paths.push_back(ent.path().string());
             }
-            const std::string name = ent.path().filename().string();
-            if(!is_bin_name(name)) {
-                continue;
+            upc::OtaImagePair pair{};
+            const upc::OtaImagePairError pair_err =
+                upc::select_highest_ota_image_pair(extracted_paths, kind, pair);
+            if(extracted_paths.size() != 2 || pair_err != upc::OtaImagePairError::Ok) {
+                std::filesystem::remove_all(extract_dir, ec);
+                std::filesystem::remove(tmp_final, ec);
+                publish_failed(comp.component.c_str(), "ab_pair_invalid");
+                return;
             }
-            extracted_files.push_back(ent.path());
-        }
-        // 解包后要求仅包含两份 bin 文件，避免目录噪声或异常条目。
-        if(extracted_files.size() != 2) {
-            std::filesystem::remove_all(extract_dir, ec);
-            std::filesystem::remove(tmp_final, ec);
-            publish_failed(comp.component.c_str(), "extract_ab_invalid");
-            return;
+            extracted_files.push_back(pair.slot_a_path);
+            extracted_files.push_back(pair.slot_b_path);
+        } else {
+            for(const auto& ent : std::filesystem::directory_iterator(extract_dir, ec)) {
+                if(ec || !ent.is_regular_file()) {
+                    continue;
+                }
+                const std::string name = ent.path().filename().string();
+                if(!is_bin_name(name)) {
+                    continue;
+                }
+                extracted_files.push_back(ent.path());
+            }
+            // 解包后要求仅包含两份 bin 文件，避免目录噪声或异常条目。
+            if(extracted_files.size() != 2) {
+                std::filesystem::remove_all(extract_dir, ec);
+                std::filesystem::remove(tmp_final, ec);
+                publish_failed(comp.component.c_str(), "extract_ab_invalid");
+                return;
+            }
         }
 
         progress.state = static_cast<uint8_t>(middleware::OtaProgressState::Applying);

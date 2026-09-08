@@ -179,6 +179,10 @@ private:
     void publish_log_collect_accepted(const LogCollectCommand& cmd,
                                       int64_t file_size,
                                       const std::vector<LogFileReport>& reports);
+    void publish_log_collect_progress(const std::string& collect_id,
+                                      const std::string& attempt_id,
+                                      int64_t transferred_bytes,
+                                      int64_t total_bytes);
     bool subscribe_ota_topics();
     void handle_ota_notify(const std::string& payload);
     void handle_ota_manifest_response(const std::string& payload);
@@ -305,6 +309,7 @@ private:
     std::mutex log_collect_mtx_;
     std::thread log_collect_thread_;
     bool log_collect_running_ = false;
+    uint64_t last_log_collect_attempt_ms_ = 0;
 
     std::atomic<uint32_t> seq_{0};
 };

@@ -2,29 +2,18 @@
 #include "device_config.hpp"
 #include "tcp_tx.hpp"
 #include "rs_log.hpp"
+#include "ota_image_pair.hpp"
 
-#include <dirent.h>
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
-#include <algorithm>
 #include <cerrno>
-#include <cstring>
 #include <vector>
 
 namespace upc::glavo {
 
 namespace {
-
-bool ends_with_bin(const char* name)
-{
-    if(!name) {
-        return false;
-    }
-    const size_t n = std::strlen(name);
-    return n >= 4 && std::strcmp(name + n - 4, ".bin") == 0;
-}
 
 const char* basename_only(const std::string& path)
 {
@@ -97,46 +86,21 @@ bool McuOtaSession::scan_bin_candidates(const char* dir)
         return false;
     }
 
-    DIR* dp = ::opendir(dir);
-    if(!dp) {
-        UPC_LOG_MCU_OTA(Error, "OTA opendir fail %s errno=%d", dir, errno);
+    upc::OtaImagePair pair{};
+    const upc::OtaImagePairError err =
+        upc::scan_highest_ota_image_pair(dir, upc::OtaImageKind::Galvo, pair);
+    if(err != upc::OtaImagePairError::Ok) {
+        UPC_LOG_MCU_OTA(Error, "OTA galvo pair select failed dir=%s err=%s",
+                         dir, upc::ota_image_pair_error_cstr(err));
         return false;
     }
 
-    const std::string prefix = [&dir]() {
-        std::string p = dir;
-        if(!p.empty() && p.back() != '/') {
-            p += '/';
-        }
-        return p;
-    }();
+    candidate_paths_.push_back(pair.slot_a_path);
+    candidate_paths_.push_back(pair.slot_b_path);
 
-    for(dirent* ent = ::readdir(dp); ent; ent = ::readdir(dp)) {
-        if(!ends_with_bin(ent->d_name)) {
-            continue;
-        }
-        const std::string path = prefix + ent->d_name;
-        struct stat file_stat{};
-        if(::stat(path.c_str(), &file_stat) != 0 ||
-           !S_ISREG(file_stat.st_mode) || file_stat.st_size <= 0) {
-            continue;
-        }
-        candidate_paths_.push_back(path);
-    }
-    ::closedir(dp);
-
-    std::sort(candidate_paths_.begin(), candidate_paths_.end(),
-              [](const std::string& a, const std::string& b) {
-                  return std::strcmp(basename_only(a), basename_only(b)) < 0;
-              });
-
-    if(candidate_paths_.empty()) {
-        UPC_LOG_MCU_OTA(Error, "OTA no .bin in %s", dir);
-        return false;
-    }
-
-    UPC_LOG_MCU_OTA(Info, "OTA found %zu .bin candidate(s) in %s",
-                     candidate_paths_.size(), dir);
+    UPC_LOG_MCU_OTA(Info, "OTA galvo pair V%u.%u.%u SlotA→SlotB in %s",
+                     pair.version.major, pair.version.minor, pair.version.patch,
+                     dir);
     for(size_t i = 0; i < candidate_paths_.size(); ++i) {
         UPC_LOG_MCU_OTA(Info, "OTA candidate[%zu] %s", i,
                          basename_only(candidate_paths_[i]));

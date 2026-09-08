@@ -13,6 +13,8 @@
 | `lib/print_video_notify.*` | 换层 Snap / 录像会话 → Media（经 UI Hub） |
 | `lib/print_job_state.*` | 发送包计数、完成/错误标志（McuLink 与进度共用） |
 | `lib/device_config.hpp` | TCP/串口默认、换层/Layer Snap 开关、`GLAVO_TEST_GCODE_PATH` |
+| `lib/mcu_ota_session.*` | Galvo 以太网 OTA：扫描 `/data/image/galvo` 最高版本 AB 对 |
+| `lib/mcu_serial_ota_session.*` | MCU 串口 OTA：扫描 `/data/image/mcu` 最高版本 AB 对 |
 | `common/fs_manifest/gcode_manifest.*` | Local `config.json` 读写（与 UI 共用；Prepare/Delete 时更新） |
 
 解析库见 [parser/PARSER.md](../parser/PARSER.md)；线协议见 [protocol/PROTOCOL.md](../protocol/PROTOCOL.md)。
@@ -48,6 +50,11 @@ UI → GlavoService（工作线程）→ ParserManager → RingBuffer → McuLin
 | `UI_Alarm_Reset_Ntf` | `serial_build_alarm_reset` 组 0xA3/0x82 帧直发串口；结果不回 Rsp，以 MCU 后续单条上报为准 |
 
 跨进程回复 UI：**必须** `publish_async`（`GlavoService` 工作线程内禁止 `MsgPort::publish` 同步路径）。
+
+### MCU / Galvo 固件 OTA
+
+镜像命名与选包：[common/fs_manifest/OTA_IMAGE.md](../../common/fs_manifest/OTA_IMAGE.md)。  
+`UI_Mcu_Ota_Start_Req` → `/data/image/galvo`；`UI_Serial_Mcu_Ota_Start_Req` → `/data/image/mcu`。只刷最高版本成对的 SlotA→SlotB，不成对或名称非法则启动失败。
 
 ### 打印层录像（Glavo → Media）
 

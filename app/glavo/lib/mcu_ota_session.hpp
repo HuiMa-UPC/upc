@@ -17,8 +17,8 @@ using McuOtaStatusCb = std::function<void(const middleware::McuOtaStatusPayload&
 /**
  * @brief MCU 以太网 OTA 会话（一问一答，测试用）
  *
- * /data/image/galvo 下全部 .bin 按文件名字典序依次尝试；MCU 0x03 就绪后发 seq=0 首包，
- * 等 0x0A（正确）或 0x0B（换下一个 .bin 并重发 0x03 BEGIN）；seq>=1 每包等 0x23。
+ * /data/image/galvo 只刷最高版本 Galvo AB 对（见 OTA_IMAGE.md）；MCU 0x03 就绪后发 seq=0 首包，
+ * 等 0x0A（正确）或 0x0B（换 SlotB 并重发 0x03 BEGIN）；seq>=1 每包等 0x23。
  * WaitReady/WaitHeaderAck/Streaming 期间抑制空闲心跳 TX（FRAME CMD=0x0B）。
  * 全部 DATA 发完后：发心跳 → 收应答 → 发 0x03 Mode=0x02 → 等 MCU 0x13 完成。
  */
