@@ -33,6 +33,7 @@ namespace {
 constexpr uint64_t kStartRetryMs = 1000;
 constexpr std::size_t kTemporalFrameCount = 5;
 constexpr uint32_t kTemporalFrameStride = 3;
+constexpr uint32_t kRequiredConsecutivePasses = 2;
 constexpr double kTemporalDirectRejectProbability = 0.45;
 constexpr double kTemporalDirectAcceptProbability = 0.70;
 
@@ -270,10 +271,21 @@ bool VisualService::init()
     UPC_LOG_VISUAL_SERVICE(Info,
         "first layer session idle camera_stream=0 segmentation=0 inference=0");
     UPC_LOG_VISUAL_SERVICE(Info,
-        "first layer model report_v=1 rknn_contract=%s segmentation_sha256=%s "
+        "first layer model report_v=2 rknn_contract=%s segmentation_sha256=%s "
         "fusion_sha256=%s ready_threshold=%.6f confidence_threshold=%.6f "
         "ood_threshold=%.6f inset_scale=%.6f audit_interval_frames=%u "
-        "qualified_image_dir=%s rejected_image_dir=%s max_diagnostic_images=%u",
+        "geometry_mask_coverage_min=%.6f geometry_quad_fill_min=%.6f "
+        "geometry_edge_residual_max_320=%.6f edge_snap_radius_320=%d "
+        "edge_snap_side_radius_320=%d edge_snap_max_corner_delta_320=%.2f "
+        "edge_snap_min_score=%.6f edge_snap_min_continuity=%.6f "
+        "qualified_image_dir=%s rejected_image_dir=%s "
+        "local_powder_gate=enabled local_evidence_grid=%u "
+        "local_decision_grid=%u local_decision_border=%u "
+        "local_min_reference_change_mean_abs=%.3f "
+        "local_bare_texture_correlation=%.3f "
+        "local_min_powder_signed_change=%.3f "
+        "local_min_covered_cells=%u local_max_bare_component=%u "
+        "required_consecutive_successes=%u max_diagnostic_images=%u",
         rknn_first_layer_contract::kContractVersion,
         rknn_first_layer_contract::kSegmentationSha256,
         rknn_first_layer_contract::kFusionSha256,
@@ -282,8 +294,29 @@ bool VisualService::init()
         static_cast<double>(fusion_model::kOodThreshold),
         static_cast<double>(rknn_first_layer_contract::kInsetScale),
         static_cast<unsigned>(rknn_first_layer_contract::kAuditIntervalFrames),
+        static_cast<double>(rknn_first_layer_contract::kGeometryMaskCoverageMin),
+        static_cast<double>(rknn_first_layer_contract::kGeometryQuadFillMin),
+        static_cast<double>(
+            rknn_first_layer_contract::kGeometryEdgeResidualMax320),
+        rknn_first_layer_contract::kGeometryEdgeSnapSearchRadius320,
+        rknn_first_layer_contract::kGeometryEdgeSnapSideSearchRadius320,
+        static_cast<double>(
+            rknn_first_layer_contract::kGeometryEdgeSnapMaxCornerDelta320),
+        static_cast<double>(rknn_first_layer_contract::kGeometryEdgeSnapMinScore),
+        static_cast<double>(
+            rknn_first_layer_contract::kGeometryEdgeSnapMinContinuity),
         qualified_image_dir().c_str(),
         rejected_image_dir().c_str(),
+        static_cast<unsigned>(local_powder_gate::kEvidenceGridSize),
+        static_cast<unsigned>(local_powder_gate::kDecisionGridSize),
+        static_cast<unsigned>(local_powder_gate::kDecisionBorder),
+        local_powder_gate::kMinReferenceChangeMeanAbs,
+        local_powder_gate::kBareFineTextureCorrelation,
+        local_powder_gate::kMinPowderSignedChange,
+        static_cast<unsigned>(local_powder_gate::kMinCoveredDecisionCells),
+        static_cast<unsigned>(
+            local_powder_gate::kMaxConnectedBareDecisionCells),
+        static_cast<unsigned>(kRequiredConsecutivePasses),
         static_cast<unsigned>(rknn_first_layer_contract::kMaxQualifiedImages));
     return true;
 }
@@ -385,6 +418,8 @@ void VisualService::start_first_layer_session(const char* reason)
                 std::chrono::duration_cast<std::chrono::milliseconds>(
                     std::chrono::system_clock::now().time_since_epoch()).count());
             first_layer_session_passed_ = false;
+            first_layer_consecutive_passes_ = 0;
+            first_layer_last_pass_frame_seq_ = 0;
             reference_capture_pending_ = true;
             last_reference_capture_attempt_ms_ = 0;
             last_reference_failure_report_ms_ = 0;
@@ -422,6 +457,8 @@ void VisualService::stop_first_layer_session(const char* reason)
         passed = first_layer_session_passed_;
         session_id = first_layer_session_id_;
         first_layer_session_active_ = false;
+        first_layer_consecutive_passes_ = 0;
+        first_layer_last_pass_frame_seq_ = 0;
         reference_capture_pending_ = false;
         last_reference_capture_attempt_ms_ = 0;
         last_reference_failure_report_ms_ = 0;
@@ -725,17 +762,21 @@ void VisualService::worker_thread_fn()
                     if(observation.cache_available) {
                         UPC_LOG_VISUAL_SERVICE(Info,
                             "first layer geometry frame=%u event=%s reason=%s "
-                            "cache=1 segmentation_ms=%.3f",
+                            "cache=1 segmentation_ms=%.3f detail=%s",
                             static_cast<unsigned>(snapshot_seq),
                             observation.event.c_str(), observation.reason.c_str(),
-                            observation.segmentation_ms);
+                            observation.segmentation_ms,
+                            observation.detail.empty()
+                                ? "none" : observation.detail.c_str());
                     } else {
                         UPC_LOG_VISUAL_SERVICE(Warn,
                             "first layer geometry frame=%u event=%s reason=%s "
-                            "cache=0 segmentation_ms=%.3f",
+                            "cache=0 segmentation_ms=%.3f detail=%s",
                             static_cast<unsigned>(snapshot_seq),
                             observation.event.c_str(), observation.reason.c_str(),
-                            observation.segmentation_ms);
+                            observation.segmentation_ms,
+                            observation.detail.empty()
+                                ? "none" : observation.detail.c_str());
                     }
                     last_geometry_log_frame_ = snapshot_seq;
                     last_geometry_log_event_ = observation.event;
@@ -925,6 +966,7 @@ bool VisualService::process_first_layer_frames(
             "first layer inference report_v=2 session_id=%llu status=no_snapshot "
             "frame=0 width=0 height=0 result=0 rejection=no_snapshot",
             static_cast<unsigned long long>(session_id));
+        update_consecutive_passes(false, 0);
         return false;
     }
 
@@ -943,6 +985,7 @@ bool VisualService::process_first_layer_frames(
             static_cast<unsigned long long>(session_id),
             static_cast<unsigned>(frame_seq), static_cast<unsigned>(width),
             static_cast<unsigned>(height), nv12.size(), expected_nv12_bytes);
+        update_consecutive_passes(false, 0);
         return false;
     }
 
@@ -958,6 +1001,7 @@ bool VisualService::process_first_layer_frames(
             static_cast<unsigned>(frame_seq), static_cast<unsigned>(width),
             static_cast<unsigned>(height), latest_detection.total_ms,
             latest_detection.error.c_str());
+        update_consecutive_passes(false, 0);
         return false;
     }
 
@@ -1030,6 +1074,14 @@ bool VisualService::process_first_layer_frames(
 
     detector_lock.unlock();
 
+    const bool candidate_pass = final_pass;
+    const uint32_t consecutive_passes =
+        update_consecutive_passes(candidate_pass, frame_seq);
+    if(candidate_pass && consecutive_passes < kRequiredConsecutivePasses) {
+        final_pass = false;
+        final_rejection = "consecutive_pass_pending";
+    }
+
     DiagnosticImageSaveResult qualified_image;
     if(final_pass && latest_detection.passed) {
         qualified_image = save_diagnostic(
@@ -1060,8 +1112,13 @@ bool VisualService::process_first_layer_frames(
         "width=%u height=%u raw_class=%s output_class=%s "
         "ready_probability=%.6f latest_ready_probability=%.6f "
         "decision_mode=%s temporal_frames=%zu temporal_usable=%zu "
+        "candidate_result=%d consecutive_successes=%u "
+        "required_consecutive_successes=%u "
         "ready_threshold=%.6f confidence=%.6f confidence_threshold=%.6f "
-        "ood=%d ood_distance=%.6f ood_threshold=%.6f alignment=%d cache=%d "
+        "ood=%d ood_distance=%.6f ood_threshold=%.6f "
+        "local_powder_gate=%d reference_change_mean_abs=%.3f "
+        "local_powder_coverage=%.3f local_bare_cells=%u "
+        "local_bare_max_component=%u alignment=%d cache=%d "
         "cache_event=%s segmentation_ran=%d segmentation_ms=%.3f "
         "preprocessing_ms=%.3f fusion_ms=%.3f total_ms=%.3f "
         "rejection=%s result=%d qualified_image_saved=%d "
@@ -1071,11 +1128,19 @@ bool VisualService::process_first_layer_frames(
         static_cast<unsigned>(height), latest_detection.raw_class.c_str(),
         latest_detection.output_class.c_str(), decision_probability,
         latest_detection.ready_probability, decision_mode.c_str(), frames.size(),
-        temporal_usable, static_cast<double>(fusion_model::kReadyThreshold),
+        temporal_usable, candidate_pass ? 1 : 0,
+        static_cast<unsigned>(consecutive_passes),
+        static_cast<unsigned>(kRequiredConsecutivePasses),
+        static_cast<double>(fusion_model::kReadyThreshold),
         latest_detection.confidence,
         static_cast<double>(fusion_model::kConfidenceThreshold),
         latest_detection.is_ood ? 1 : 0, latest_detection.ood_distance,
         static_cast<double>(fusion_model::kOodThreshold),
+        latest_detection.local_powder_gate_passed ? 1 : 0,
+        latest_detection.reference_change_mean_abs,
+        latest_detection.local_powder_coverage,
+        static_cast<unsigned>(latest_detection.local_bare_cells),
+        static_cast<unsigned>(latest_detection.local_bare_max_component),
         latest_detection.alignment_passed ? 1 : 0,
         latest_detection.cache_available ? 1 : 0,
         latest_detection.cache_event.c_str(),
@@ -1092,6 +1157,22 @@ bool VisualService::process_first_layer_frames(
     }
     return final_pass;
 }
+
+uint32_t VisualService::update_consecutive_passes(bool candidate_pass,
+                                                  uint32_t frame_seq)
+{
+    std::lock_guard<std::mutex> lock(state_mtx_);
+    if(!candidate_pass) {
+        first_layer_consecutive_passes_ = 0;
+        first_layer_last_pass_frame_seq_ = 0;
+    } else if(frame_seq != first_layer_last_pass_frame_seq_ &&
+              first_layer_consecutive_passes_ < kRequiredConsecutivePasses) {
+        ++first_layer_consecutive_passes_;
+        first_layer_last_pass_frame_seq_ = frame_seq;
+    }
+    return first_layer_consecutive_passes_;
+}
+
 void VisualService::on_first_layer_check_req(const middleware::Message& msg)
 {
     middleware::VisualFirstLayerCheckReqPayload req{};
@@ -1121,6 +1202,7 @@ void VisualService::on_first_layer_check_req(const middleware::Message& msg)
     std::vector<FrameSnapshot> frames;
     bool pass = false;
     if(!has_req) {
+        update_consecutive_passes(false, 0);
         UPC_LOG_VISUAL_SERVICE(Warn, "first layer check invalid request payload");
         UPC_LOG_VISUAL_SERVICE(Warn,
             "first layer inference report_v=2 session_id=%llu status=invalid_request frame=0 "
@@ -1129,6 +1211,7 @@ void VisualService::on_first_layer_check_req(const middleware::Message& msg)
     } else if(copy_recent_snapshots(frames)) {
         pass = process_first_layer_frames(frames);
     } else {
+        update_consecutive_passes(false, 0);
         UPC_LOG_VISUAL_SERVICE(Warn, "first layer check no snapshot available");
         UPC_LOG_VISUAL_SERVICE(Warn,
             "first layer inference report_v=2 session_id=%llu status=no_snapshot frame=0 "

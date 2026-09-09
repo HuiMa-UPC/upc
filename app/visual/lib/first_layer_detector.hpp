@@ -1,6 +1,7 @@
 #ifndef UPC_FIRST_LAYER_DETECTOR_HPP
 #define UPC_FIRST_LAYER_DETECTOR_HPP
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -8,6 +9,25 @@
 #include <vector>
 
 namespace upc::visual {
+
+namespace local_powder_gate {
+
+/**
+ * Evidence is measured on 14x14 cells, aggregated 2x2 into a 7x7 decision
+ * grid.  The outside decision-cell ring is diagnostic-only because the plate
+ * rim and the perspective warp are less stable there.
+ */
+inline constexpr uint32_t kEvidenceGridSize = 14;
+inline constexpr uint32_t kDecisionGridSize = 7;
+inline constexpr uint32_t kDecisionBorder = 1;
+inline constexpr uint32_t kEvaluatedDecisionCells = 25;
+inline constexpr uint32_t kMinCoveredDecisionCells = 20;
+inline constexpr uint32_t kMaxConnectedBareDecisionCells = 3;
+inline constexpr double kMinReferenceChangeMeanAbs = 4.0;
+inline constexpr double kBareFineTextureCorrelation = 0.55;
+inline constexpr double kMinPowderSignedChange = 32.0;
+
+} // namespace local_powder_gate
 
 struct FirstLayerDetection {
     bool passed = false;
@@ -18,6 +38,11 @@ struct FirstLayerDetection {
     double ready_probability = 0.0;
     double confidence = 0.0;
     double ood_distance = 0.0;
+    bool local_powder_gate_passed = false;
+    double reference_change_mean_abs = 0.0;
+    double local_powder_coverage = 0.0;
+    uint32_t local_bare_cells = 0;
+    uint32_t local_bare_max_component = 0;
     double segmentation_ms = 0.0;
     double preprocessing_ms = 0.0;
     double fusion_ms = 0.0;
@@ -30,6 +55,17 @@ struct FirstLayerDetection {
     uint32_t canonical_width = 0;
     uint32_t canonical_height = 0;
     std::vector<uint8_t> canonical_gray;
+    std::vector<uint8_t> canonical_bare_gray;
+    /** Exact uint8 representation of fusion input channel 5: log(A)-log(B0). */
+    uint32_t reference_change_width = 0;
+    uint32_t reference_change_height = 0;
+    std::vector<uint8_t> reference_change_gray;
+};
+
+struct BareReferenceDiagnostic {
+    uint32_t canonical_width = 0;
+    uint32_t canonical_height = 0;
+    std::vector<uint8_t> canonical_gray;
 };
 
 struct FirstLayerGeometryObservation {
@@ -38,6 +74,7 @@ struct FirstLayerGeometryObservation {
     double segmentation_ms = 0.0;
     std::string event = "not_run";
     std::string reason = "not_run";
+    std::string detail;
 };
 
 /**
@@ -75,7 +112,7 @@ public:
     bool capture_bare_reference_nv12(
         const uint8_t* nv12, std::size_t bytes,
         uint32_t width, uint32_t height, uint32_t frame_seq,
-        std::string& reason);
+        std::string& reason, BareReferenceDiagnostic* diagnostic = nullptr);
 
     /** Clear B0 at print-session boundaries. */
     void clear_bare_reference();

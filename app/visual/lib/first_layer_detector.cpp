@@ -277,8 +277,15 @@ struct GeometryCandidate {
     std::array<cv::Point2f, 4> corners{};
     float area_ratio = 0.0f;
     float component_fraction = 0.0f;
-    float quad_iou = 0.0f;
+    float mask_coverage = 0.0f;
+    float quad_fill = 0.0f;
+    float edge_residual = 0.0f;
+    float edge_inlier_fraction = 0.0f;
     float mean_probability = 0.0f;
+    bool edge_snap_applied = false;
+    std::array<float, 4> edge_snap_offsets{};
+    std::array<float, 4> edge_snap_scores{};
+    std::string edge_snap_error;
 };
 
 struct GeometryCache {
@@ -296,31 +303,661 @@ struct ObserveResult {
     double segmentation_ms = 0.0;
     std::string event = "cache_reused";
     std::string reason = "not_run";
+    std::string detail;
 };
 
-std::array<cv::Point2f, 4> order_quad(const std::vector<cv::Point>& points)
+std::string describe_candidate(const GeometryCandidate& candidate)
 {
-    if(points.size() != 4) {
-        throw std::runtime_error("quadrilateral does not contain four points");
+    char buffer[768]{};
+    std::snprintf(buffer, sizeof(buffer),
+        "area=%.5f coverage=%.4f fill=%.4f residual=%.3f inliers=%.3f "
+        "snap=%d corners=[%.1f,%.1f;%.1f,%.1f;%.1f,%.1f;%.1f,%.1f] "
+        "offsets=[%.1f,%.1f,%.1f,%.1f] scores=[%.1f,%.1f,%.1f,%.1f]",
+        candidate.area_ratio,
+        candidate.mask_coverage, candidate.quad_fill,
+        candidate.edge_residual, candidate.edge_inlier_fraction,
+        candidate.edge_snap_applied ? 1 : 0,
+        candidate.corners[0].x, candidate.corners[0].y,
+        candidate.corners[1].x, candidate.corners[1].y,
+        candidate.corners[2].x, candidate.corners[2].y,
+        candidate.corners[3].x, candidate.corners[3].y,
+        candidate.edge_snap_offsets[0], candidate.edge_snap_offsets[1],
+        candidate.edge_snap_offsets[2], candidate.edge_snap_offsets[3],
+        candidate.edge_snap_scores[0], candidate.edge_snap_scores[1],
+        candidate.edge_snap_scores[2], candidate.edge_snap_scores[3]);
+    return std::string(buffer) + " snap_error=" +
+        (candidate.edge_snap_error.empty() ? "none" : candidate.edge_snap_error);
+}
+
+struct AxisSpan {
+    int coordinate = 0;
+    int lower = 0;
+    int upper = 0;
+};
+
+struct RobustLine {
+    cv::Vec4f value{};
+    float residual = std::numeric_limits<float>::infinity();
+    float inlier_fraction = 0.0f;
+};
+
+struct GeometryFit {
+    std::array<cv::Point2f, 4> corners{};
+    cv::Mat component;
+    float area_ratio = 0.0f;
+    float component_fraction = 0.0f;
+    float mask_coverage = 0.0f;
+    float quad_fill = 0.0f;
+    float edge_residual = std::numeric_limits<float>::infinity();
+    float edge_inlier_fraction = 0.0f;
+    bool edge_snap_applied = false;
+    double edge_snap_ms = 0.0;
+    std::array<float, 4> edge_snap_offsets{};
+    std::array<float, 4> edge_snap_scores{};
+    std::string edge_snap_error;
+    std::string error;
+};
+
+float percentile(std::vector<float> values, float fraction);
+bool intersect_lines(const RobustLine& first, const RobustLine& second,
+                     cv::Point2f& output);
+
+float bilinear_sample(const cv::Mat& image, const cv::Point2f& point)
+{
+    const float x = std::max(0.0f, std::min(point.x,
+        static_cast<float>(image.cols - 1)));
+    const float y = std::max(0.0f, std::min(point.y,
+        static_cast<float>(image.rows - 1)));
+    const int x0 = cvFloor(x);
+    const int y0 = cvFloor(y);
+    const int x1 = std::min(x0 + 1, image.cols - 1);
+    const int y1 = std::min(y0 + 1, image.rows - 1);
+    const float fx = x - x0;
+    const float fy = y - y0;
+    const float upper = image.at<float>(y0, x0) * (1.0f - fx) +
+                        image.at<float>(y0, x1) * fx;
+    const float lower = image.at<float>(y1, x0) * (1.0f - fx) +
+                        image.at<float>(y1, x1) * fx;
+    return upper * (1.0f - fy) + lower * fy;
+}
+
+struct EdgeSnapLine {
+    RobustLine line;
+    float offset = 0.0f;
+    float score = 0.0f;
+    float continuity = 0.0f;
+};
+
+bool snap_quad_to_image_edges(const cv::Mat& bgr,
+                              GeometryFit& geometry)
+{
+    const auto begin = Clock::now();
+    if(bgr.empty() || bgr.type() != CV_8UC3) {
+        geometry.edge_snap_error = "invalid_bgr";
+        geometry.edge_snap_ms = elapsed_ms(begin);
+        return false;
     }
-    std::array<cv::Point2f, 4> ordered{};
-    auto min_sum = points.begin();
-    auto max_sum = points.begin();
-    auto min_diff = points.begin();
-    auto max_diff = points.begin();
-    for(auto iterator = points.begin(); iterator != points.end(); ++iterator) {
-        const int sum = iterator->x + iterator->y;
-        const int diff = iterator->x - iterator->y;
-        if(sum < min_sum->x + min_sum->y) min_sum = iterator;
-        if(sum > max_sum->x + max_sum->y) max_sum = iterator;
-        if(diff < min_diff->x - min_diff->y) min_diff = iterator;
-        if(diff > max_diff->x - max_diff->y) max_diff = iterator;
+
+    cv::Mat gray_u8;
+    cv::cvtColor(bgr, gray_u8, cv::COLOR_BGR2GRAY);
+    cv::GaussianBlur(gray_u8, gray_u8, cv::Size(3, 3), 0.0);
+    cv::Mat gray;
+    gray_u8.convertTo(gray, CV_32F);
+    cv::Mat gradient_x;
+    cv::Mat gradient_y;
+    cv::Sobel(gray, gradient_x, CV_32F, 1, 0, 3);
+    cv::Sobel(gray, gradient_y, CV_32F, 0, 1, 3);
+
+    cv::Point2f center(0.0f, 0.0f);
+    for(const auto& corner : geometry.corners) center += corner;
+    center *= 0.25f;
+
+    std::array<EdgeSnapLine, 4> snapped_lines{};
+    int snapped_count = 0;
+    for(std::size_t edge = 0; edge < 4; ++edge) {
+        const cv::Point2f first = geometry.corners[edge];
+        const cv::Point2f second = geometry.corners[(edge + 1) % 4];
+        const cv::Point2f delta = second - first;
+        const float length = static_cast<float>(cv::norm(delta));
+        if(length < 32.0f) {
+            geometry.edge_snap_error = "short_edge_" + std::to_string(edge);
+            geometry.edge_snap_ms = elapsed_ms(begin);
+            return false;
+        }
+        cv::Point2f tangent = delta * (1.0f / length);
+        /* The false-positive region is on the platform's left.  Use the
+         * much more stable opposite side to seed the left-edge direction. */
+        if(edge == 3) {
+            tangent = cv::Point2f(-snapped_lines[1].line.value[0],
+                                  -snapped_lines[1].line.value[1]);
+        }
+        cv::Point2f inward(-tangent.y, tangent.x);
+        const cv::Point2f midpoint = (first + second) * 0.5f;
+        if(inward.dot(center - midpoint) < 0.0f) inward *= -1.0f;
+
+        const float trim = contract::kGeometryEdgeSnapTrimFraction;
+        const int sample_count = std::max(32, cvRound(length * (1.0f - 2.0f * trim)));
+        bool found = false;
+        EdgeSnapLine best;
+        const int search_radius = edge == 3
+            ? contract::kGeometryEdgeSnapSideSearchRadius320
+            : contract::kGeometryEdgeSnapSearchRadius320;
+        const float minimum_normal_gradient = edge == 3
+            ? contract::kGeometryEdgeSnapSideMinNormalGradient
+            : contract::kGeometryEdgeSnapMinNormalGradient;
+        const float minimum_continuity = edge == 3
+            ? contract::kGeometryEdgeSnapSideMinContinuity
+            : contract::kGeometryEdgeSnapMinContinuity;
+        const float minimum_score = edge == 3
+            ? contract::kGeometryEdgeSnapSideMinScore
+            : contract::kGeometryEdgeSnapMinScore;
+        const float distance_penalty = edge == 3
+            ? contract::kGeometryEdgeSnapSideDistancePenalty
+            : contract::kGeometryEdgeSnapDistancePenalty;
+        for(int integer_offset = -search_radius;
+            integer_offset <= search_radius;
+            ++integer_offset) {
+            const float offset = static_cast<float>(integer_offset);
+            std::vector<float> strengths;
+            strengths.reserve(sample_count);
+            int continuous = 0;
+            for(int sample = 0; sample < sample_count; ++sample) {
+                const float t = trim + (1.0f - 2.0f * trim) *
+                    (static_cast<float>(sample) + 0.5f) / sample_count;
+                const cv::Point2f point = midpoint +
+                    tangent * ((t - 0.5f) * length) + inward * offset;
+                if(point.x < 2.0f || point.x >= bgr.cols - 2.0f ||
+                   point.y < 2.0f || point.y >= bgr.rows - 2.0f) {
+                    continue;
+                }
+                const float normal_gradient = std::abs(
+                    bilinear_sample(gradient_x, point) * inward.x +
+                    bilinear_sample(gradient_y, point) * inward.y);
+                const float center_gray = bilinear_sample(gray, point);
+                const float neighbor_gray = 0.5f * (
+                    bilinear_sample(gray, point - inward * 2.0f) +
+                    bilinear_sample(gray, point + inward * 2.0f));
+                const float dark_gap = std::max(0.0f, neighbor_gray - center_gray);
+                const float strength = normal_gradient + 0.6f * dark_gap;
+                strengths.push_back(strength);
+                if(normal_gradient >= minimum_normal_gradient) {
+                    ++continuous;
+                }
+            }
+            if(strengths.size() < 24) continue;
+            const float continuity = static_cast<float>(continuous) /
+                                     strengths.size();
+            const float robust_strength =
+                0.65f * percentile(strengths, 0.50f) +
+                0.35f * percentile(strengths, 0.25f);
+            const float score = robust_strength -
+                std::abs(offset) * distance_penalty;
+            if(continuity >= minimum_continuity &&
+               score >= minimum_score &&
+               (!found || score > best.score)) {
+                found = true;
+                best.offset = offset;
+                best.score = score;
+                best.continuity = continuity;
+                best.line.value = cv::Vec4f(tangent.x, tangent.y,
+                    midpoint.x + inward.x * offset,
+                    midpoint.y + inward.y * offset);
+            }
+        }
+        if(!found) {
+            best.offset = 0.0f;
+            best.score = 0.0f;
+            best.continuity = 0.0f;
+            best.line.value = cv::Vec4f(tangent.x, tangent.y,
+                                        midpoint.x, midpoint.y);
+        } else {
+            ++snapped_count;
+        }
+        snapped_lines[edge] = best;
     }
-    ordered[0] = *min_sum;
-    ordered[1] = *max_diff;
-    ordered[2] = *max_sum;
-    ordered[3] = *min_diff;
-    return ordered;
+    if(snapped_count != 4) {
+        geometry.edge_snap_error = "incomplete_edge_set_count_" +
+            std::to_string(snapped_count);
+        geometry.edge_snap_ms = elapsed_ms(begin);
+        return false;
+    }
+
+    std::array<cv::Point2f, 4> snapped{};
+    if(!intersect_lines(snapped_lines[3].line, snapped_lines[0].line, snapped[0]) ||
+       !intersect_lines(snapped_lines[0].line, snapped_lines[1].line, snapped[1]) ||
+       !intersect_lines(snapped_lines[1].line, snapped_lines[2].line, snapped[2]) ||
+       !intersect_lines(snapped_lines[2].line, snapped_lines[3].line, snapped[3])) {
+        geometry.edge_snap_error = "intersection";
+        geometry.edge_snap_ms = elapsed_ms(begin);
+        return false;
+    }
+    float maximum_corner_delta = 0.0f;
+    for(std::size_t corner = 0; corner < snapped.size(); ++corner) {
+        maximum_corner_delta = std::max(maximum_corner_delta,
+            static_cast<float>(cv::norm(
+                snapped[corner] - geometry.corners[corner])));
+    }
+    if(maximum_corner_delta >
+       contract::kGeometryEdgeSnapMaxCornerDelta320) {
+        char diagnostic[96]{};
+        std::snprintf(diagnostic, sizeof(diagnostic),
+            "corner_delta_%.2f_max_%.2f", maximum_corner_delta,
+            contract::kGeometryEdgeSnapMaxCornerDelta320);
+        geometry.edge_snap_error = diagnostic;
+        geometry.edge_snap_ms = elapsed_ms(begin);
+        return false;
+    }
+    const std::vector<cv::Point2f> old_polygon(
+        geometry.corners.begin(), geometry.corners.end());
+    const std::vector<cv::Point2f> new_polygon(snapped.begin(), snapped.end());
+    const double old_area = std::abs(cv::contourArea(old_polygon));
+    const double new_area = std::abs(cv::contourArea(new_polygon));
+    const float area_scale = static_cast<float>(new_area / std::max(1.0, old_area));
+    if(!cv::isContourConvex(new_polygon) ||
+       area_scale < contract::kGeometryEdgeSnapAreaRatioMin ||
+       area_scale > contract::kGeometryEdgeSnapAreaRatioMax ||
+       cv::pointPolygonTest(new_polygon, center, false) < 0.0) {
+        geometry.edge_snap_error = "snapped_shape";
+        geometry.edge_snap_ms = elapsed_ms(begin);
+        return false;
+    }
+    for(const auto& corner : snapped) {
+        if(corner.x < -8.0f || corner.x > bgr.cols + 8.0f ||
+            corner.y < -8.0f || corner.y > bgr.rows + 8.0f) {
+            geometry.edge_snap_error = "snapped_bounds";
+            geometry.edge_snap_ms = elapsed_ms(begin);
+            return false;
+        }
+    }
+
+    const float snapped_area_ratio = static_cast<float>(new_area / bgr.total());
+    cv::Mat quad = cv::Mat::zeros(geometry.component.size(), CV_8U);
+    std::vector<cv::Point> integer_polygon;
+    for(const auto& corner : snapped) {
+        integer_polygon.emplace_back(cvRound(corner.x), cvRound(corner.y));
+    }
+    cv::fillConvexPoly(quad, integer_polygon, cv::Scalar(255));
+    cv::Mat intersection;
+    cv::bitwise_and(geometry.component, quad, intersection);
+    const int intersection_area = cv::countNonZero(intersection);
+    const float snapped_mask_coverage = static_cast<float>(intersection_area) /
+        std::max(1, cv::countNonZero(geometry.component));
+    const float snapped_quad_fill = static_cast<float>(intersection_area) /
+        std::max(1, cv::countNonZero(quad));
+    if(snapped_area_ratio < contract::kAreaRatioMin ||
+       snapped_area_ratio > contract::kAreaRatioMax ||
+       snapped_mask_coverage < contract::kGeometryMaskCoverageMin ||
+       snapped_quad_fill < contract::kGeometryQuadFillMin) {
+        char diagnostic[192]{};
+        std::snprintf(diagnostic, sizeof(diagnostic),
+            "snapped_quality_area=%.4f_coverage=%.4f_fill=%.4f",
+            snapped_area_ratio, snapped_mask_coverage, snapped_quad_fill);
+        geometry.edge_snap_error = diagnostic;
+        geometry.edge_snap_ms = elapsed_ms(begin);
+        return false;
+    }
+    geometry.corners = snapped;
+    geometry.area_ratio = snapped_area_ratio;
+    geometry.mask_coverage = snapped_mask_coverage;
+    geometry.quad_fill = snapped_quad_fill;
+    geometry.edge_snap_applied = true;
+    geometry.edge_snap_error.clear();
+    for(std::size_t edge = 0; edge < 4; ++edge) {
+        geometry.edge_snap_offsets[edge] = snapped_lines[edge].offset;
+        geometry.edge_snap_scores[edge] = snapped_lines[edge].score;
+    }
+    geometry.edge_snap_ms = elapsed_ms(begin);
+    return true;
+}
+
+float point_line_distance(const cv::Point2f& point, const cv::Vec4f& line)
+{
+    const cv::Point2f direction(line[0], line[1]);
+    const cv::Point2f origin(line[2], line[3]);
+    return std::abs(direction.x * (point.y - origin.y) -
+                    direction.y * (point.x - origin.x));
+}
+
+float percentile(std::vector<float> values, float fraction)
+{
+    if(values.empty()) {
+        return std::numeric_limits<float>::infinity();
+    }
+    const std::size_t index = std::min(
+        values.size() - 1,
+        static_cast<std::size_t>(fraction * static_cast<float>(values.size() - 1)));
+    std::nth_element(values.begin(), values.begin() + index, values.end());
+    return values[index];
+}
+
+bool robust_fit_line(const std::vector<cv::Point2f>& points, RobustLine& output)
+{
+    if(points.size() < 12) {
+        return false;
+    }
+    cv::fitLine(points, output.value, cv::DIST_WELSCH, 0.0, 0.01, 0.01);
+    std::vector<cv::Point2f> inliers;
+    inliers.reserve(points.size());
+    for(const auto& point : points) {
+        if(point_line_distance(point, output.value) <=
+           contract::kGeometryEdgeInlierDistance320) {
+            inliers.push_back(point);
+        }
+    }
+    output.inlier_fraction = static_cast<float>(inliers.size()) /
+                             static_cast<float>(points.size());
+    if(inliers.size() < 10 || output.inlier_fraction <
+       contract::kGeometryEdgeInlierFractionMin) {
+        return false;
+    }
+    cv::fitLine(inliers, output.value, cv::DIST_L2, 0.0, 0.01, 0.01);
+    std::vector<float> residuals;
+    residuals.reserve(inliers.size());
+    for(const auto& point : inliers) {
+        residuals.push_back(point_line_distance(point, output.value));
+    }
+    output.residual = percentile(std::move(residuals), 0.90f);
+    return true;
+}
+
+bool horizontal_span_containing(const cv::Mat& mask, int y, int anchor_x,
+                                AxisSpan& output)
+{
+    const uint8_t* row = mask.ptr<uint8_t>(y);
+    int x = 0;
+    while(x < mask.cols) {
+        while(x < mask.cols && row[x] == 0) ++x;
+        if(x >= mask.cols) break;
+        const int start = x;
+        while(x + 1 < mask.cols && row[x + 1] != 0) ++x;
+        const int end = x;
+        if(start <= anchor_x && anchor_x <= end) {
+            output = {y, start, end};
+            return true;
+        }
+        ++x;
+    }
+    return false;
+}
+
+bool vertical_span_containing(const cv::Mat& mask, int x, int anchor_y,
+                              AxisSpan& output)
+{
+    int y = 0;
+    while(y < mask.rows) {
+        while(y < mask.rows && mask.ptr<uint8_t>(y)[x] == 0) ++y;
+        if(y >= mask.rows) break;
+        const int start = y;
+        while(y + 1 < mask.rows && mask.ptr<uint8_t>(y + 1)[x] != 0) ++y;
+        const int end = y;
+        if(start <= anchor_y && anchor_y <= end) {
+            output = {x, start, end};
+            return true;
+        }
+        ++y;
+    }
+    return false;
+}
+
+float line_x_at_y(const RobustLine& line, float y)
+{
+    if(std::abs(line.value[1]) < 1e-5f) {
+        return std::numeric_limits<float>::quiet_NaN();
+    }
+    return line.value[2] + (y - line.value[3]) * line.value[0] / line.value[1];
+}
+
+bool intersect_lines(const RobustLine& first, const RobustLine& second,
+                     cv::Point2f& output)
+{
+    const cv::Point2f p(first.value[2], first.value[3]);
+    const cv::Point2f r(first.value[0], first.value[1]);
+    const cv::Point2f q(second.value[2], second.value[3]);
+    const cv::Point2f s(second.value[0], second.value[1]);
+    const float cross = r.x * s.y - r.y * s.x;
+    if(std::abs(cross) < 1e-5f) {
+        return false;
+    }
+    const cv::Point2f delta = q - p;
+    const float scale = (delta.x * s.y - delta.y * s.x) / cross;
+    output = p + scale * r;
+    return std::isfinite(output.x) && std::isfinite(output.y);
+}
+
+GeometryFit fit_platform_geometry(const cv::Mat& raw_mask)
+{
+    GeometryFit result;
+    if(raw_mask.empty() || raw_mask.type() != CV_8U) {
+        result.error = "invalid_mask";
+        return result;
+    }
+
+    cv::Mat mask;
+    const int kernel_size = contract::kGeometryCloseKernel;
+    const cv::Mat kernel = cv::getStructuringElement(
+        cv::MORPH_ELLIPSE, cv::Size(kernel_size, kernel_size));
+    cv::morphologyEx(raw_mask, mask, cv::MORPH_CLOSE, kernel);
+    const int foreground = cv::countNonZero(mask);
+    if(foreground == 0) {
+        result.error = "empty_mask";
+        return result;
+    }
+
+    cv::Mat labels;
+    cv::Mat stats;
+    cv::Mat centroids;
+    const int label_count = cv::connectedComponentsWithStats(
+        mask, labels, stats, centroids, 8, CV_32S);
+    if(label_count <= 1) {
+        result.error = "no_component";
+        return result;
+    }
+
+    const int central_left = cvRound(mask.cols * contract::kGeometryCentralRoiMin);
+    const int central_top = cvRound(mask.rows * contract::kGeometryCentralRoiMin);
+    const int central_right = cvRound(mask.cols * contract::kGeometryCentralRoiMax);
+    const int central_bottom = cvRound(mask.rows * contract::kGeometryCentralRoiMax);
+    const cv::Rect central_roi(
+        central_left, central_top,
+        std::max(1, central_right - central_left),
+        std::max(1, central_bottom - central_top));
+
+    int selected_label = 0;
+    int selected_central_pixels = 0;
+    int selected_area = 0;
+    for(int label = 1; label < label_count; ++label) {
+        cv::Mat central_match;
+        cv::compare(labels(central_roi), label, central_match, cv::CMP_EQ);
+        const int central_pixels = cv::countNonZero(central_match);
+        const int area = stats.at<int>(label, cv::CC_STAT_AREA);
+        if(central_pixels > selected_central_pixels ||
+           (central_pixels == selected_central_pixels && area > selected_area)) {
+            selected_label = label;
+            selected_central_pixels = central_pixels;
+            selected_area = area;
+        }
+    }
+    if(selected_label == 0 || selected_central_pixels == 0) {
+        result.error = "position_constraint";
+        return result;
+    }
+    cv::compare(labels, selected_label, result.component, cv::CMP_EQ);
+    result.component_fraction = static_cast<float>(selected_area) / foreground;
+
+    /*
+     * Closing is used for coverage and small-hole recovery, but its expanded
+     * pixels must not bridge a narrow gap between the platform and a false
+     * positive blob.  Edge samples therefore come only from pixels that were
+     * already present in the raw model mask inside the selected central
+     * component.
+     */
+    cv::Mat edge_component;
+    cv::bitwise_and(raw_mask, result.component, edge_component);
+
+    cv::Mat distance;
+    cv::distanceTransform(edge_component, distance, cv::DIST_L2, 3);
+    double anchor_distance = 0.0;
+    cv::Point local_anchor;
+    cv::minMaxLoc(distance(central_roi), nullptr, &anchor_distance,
+                  nullptr, &local_anchor);
+    if(anchor_distance < 4.0) {
+        result.error = "position_constraint";
+        return result;
+    }
+    const cv::Point anchor(local_anchor.x + central_roi.x,
+                           local_anchor.y + central_roi.y);
+
+    std::vector<AxisSpan> rows;
+    for(int y = 0; y < edge_component.rows; ++y) {
+        AxisSpan span;
+        if(horizontal_span_containing(edge_component, y, anchor.x, span)) {
+            rows.push_back(span);
+        }
+    }
+    if(rows.size() < 32) {
+        result.error = "edge_fit_rows";
+        return result;
+    }
+    const std::size_t row_trim = std::min(
+        rows.size() / 3,
+        static_cast<std::size_t>(rows.size() *
+                                 contract::kGeometryEdgeTrimFraction));
+    std::vector<cv::Point2f> left_points;
+    std::vector<cv::Point2f> right_points;
+    for(std::size_t index = row_trim; index < rows.size() - row_trim; ++index) {
+        left_points.emplace_back(static_cast<float>(rows[index].lower),
+                                 static_cast<float>(rows[index].coordinate));
+        right_points.emplace_back(static_cast<float>(rows[index].upper),
+                                  static_cast<float>(rows[index].coordinate));
+    }
+    RobustLine left;
+    RobustLine right;
+    const bool left_fit = robust_fit_line(left_points, left);
+    const bool right_fit = robust_fit_line(right_points, right);
+    if(!left_fit || !right_fit ||
+       std::abs(left.value[1]) < std::abs(left.value[0]) * 0.5f ||
+       std::abs(right.value[1]) < std::abs(right.value[0]) * 0.5f) {
+        result.error = "edge_fit_sides";
+        return result;
+    }
+
+    const float left_at_anchor = line_x_at_y(left, static_cast<float>(anchor.y));
+    const float right_at_anchor = line_x_at_y(right, static_cast<float>(anchor.y));
+    if(!std::isfinite(left_at_anchor) || !std::isfinite(right_at_anchor) ||
+       left_at_anchor >= anchor.x - 16.0f || right_at_anchor <= anchor.x + 16.0f) {
+        result.error = "position_constraint";
+        return result;
+    }
+
+    std::vector<AxisSpan> columns;
+    const int first_x = std::max(0, cvCeil(left_at_anchor));
+    const int last_x = std::min(mask.cols - 1, cvFloor(right_at_anchor));
+    for(int x = first_x; x <= last_x; ++x) {
+        AxisSpan span;
+        if(vertical_span_containing(edge_component, x, anchor.y, span)) {
+            columns.push_back(span);
+        }
+    }
+    if(columns.size() < 32) {
+        result.error = "edge_fit_columns";
+        return result;
+    }
+    const std::size_t column_trim = std::min(
+        columns.size() / 3,
+        static_cast<std::size_t>(columns.size() *
+                                 contract::kGeometryEdgeTrimFraction));
+    std::vector<cv::Point2f> top_points;
+    std::vector<cv::Point2f> bottom_points;
+    for(std::size_t index = column_trim;
+        index < columns.size() - column_trim; ++index) {
+        top_points.emplace_back(static_cast<float>(columns[index].coordinate),
+                                static_cast<float>(columns[index].lower));
+        bottom_points.emplace_back(static_cast<float>(columns[index].coordinate),
+                                   static_cast<float>(columns[index].upper));
+    }
+    RobustLine top;
+    RobustLine bottom;
+    if(!robust_fit_line(top_points, top) ||
+       !robust_fit_line(bottom_points, bottom) ||
+       std::abs(top.value[0]) < std::abs(top.value[1]) * 0.5f ||
+       std::abs(bottom.value[0]) < std::abs(bottom.value[1]) * 0.5f) {
+        result.error = "edge_fit_top_bottom";
+        return result;
+    }
+
+    if(!intersect_lines(top, left, result.corners[0]) ||
+       !intersect_lines(top, right, result.corners[1]) ||
+       !intersect_lines(bottom, right, result.corners[2]) ||
+       !intersect_lines(bottom, left, result.corners[3])) {
+        result.error = "edge_fit_intersection";
+        return result;
+    }
+
+    std::vector<cv::Point2f> polygon(result.corners.begin(), result.corners.end());
+    const double quad_area = std::abs(cv::contourArea(polygon));
+    if(quad_area <= 1.0 || !cv::isContourConvex(polygon) ||
+       cv::pointPolygonTest(polygon, cv::Point2f(anchor), false) < 0.0) {
+        result.error = "position_constraint";
+        return result;
+    }
+    const float top_length = static_cast<float>(
+        cv::norm(result.corners[1] - result.corners[0]));
+    const float right_length = static_cast<float>(
+        cv::norm(result.corners[2] - result.corners[1]));
+    const float bottom_length = static_cast<float>(
+        cv::norm(result.corners[3] - result.corners[2]));
+    const float left_length = static_cast<float>(
+        cv::norm(result.corners[0] - result.corners[3]));
+    const auto length_balance = [](float first, float second) {
+        return std::min(first, second) / std::max(1.0f, std::max(first, second));
+    };
+    if(length_balance(top_length, bottom_length) <
+           contract::kGeometryOppositeEdgeLengthRatioMin ||
+       length_balance(left_length, right_length) <
+           contract::kGeometryOppositeEdgeLengthRatioMin) {
+        result.error = "shape_constraint";
+        return result;
+    }
+    cv::Point2f center(0.0f, 0.0f);
+    for(const auto& corner : result.corners) {
+        if(corner.x < -8.0f || corner.x > mask.cols + 8.0f ||
+           corner.y < -8.0f || corner.y > mask.rows + 8.0f) {
+            result.error = "position_constraint";
+            return result;
+        }
+        center += corner;
+    }
+    center *= 0.25f;
+    const float center_min = contract::kGeometryCentralRoiMin;
+    const float center_max = contract::kGeometryCentralRoiMax;
+    if(center.x < mask.cols * center_min || center.x > mask.cols * center_max ||
+       center.y < mask.rows * center_min || center.y > mask.rows * center_max) {
+        result.error = "position_constraint";
+        return result;
+    }
+
+    cv::Mat quad = cv::Mat::zeros(mask.size(), CV_8U);
+    std::vector<cv::Point> integer_polygon;
+    for(const auto& corner : result.corners) {
+        integer_polygon.emplace_back(cvRound(corner.x), cvRound(corner.y));
+    }
+    cv::fillConvexPoly(quad, integer_polygon, cv::Scalar(255));
+    cv::Mat intersection;
+    cv::bitwise_and(result.component, quad, intersection);
+    const int intersection_area = cv::countNonZero(intersection);
+    const int quad_pixels = cv::countNonZero(quad);
+    result.area_ratio = static_cast<float>(quad_area) / mask.total();
+    result.mask_coverage = static_cast<float>(intersection_area) /
+                           std::max(1, selected_area);
+    result.quad_fill = static_cast<float>(intersection_area) /
+                       std::max(1, quad_pixels);
+    result.edge_residual = std::max(
+        std::max(left.residual, right.residual),
+        std::max(top.residual, bottom.residual));
+    result.edge_inlier_fraction = std::min(
+        std::min(left.inlier_fraction, right.inlier_fraction),
+        std::min(top.inlier_fraction, bottom.inlier_fraction));
+    return result;
 }
 
 std::pair<std::array<cv::Point2f, 4>, float> summarize_group(
@@ -468,7 +1105,8 @@ cv::Mat fixed_centered_u8(const cv::Mat& values, float limit)
 }
 
 cv::Mat build_fusion_input(const cv::Mat& canonical_gray,
-                           const cv::Mat& canonical_bare)
+                           const cv::Mat& canonical_bare,
+                           cv::Mat* reference_change)
 {
     if(canonical_gray.empty() || canonical_bare.empty() ||
        canonical_gray.type() != CV_8UC1 || canonical_bare.type() != CV_8UC1 ||
@@ -507,14 +1145,15 @@ cv::Mat build_fusion_input(const cv::Mat& canonical_gray,
     bare_log += fusion_model::kLogFloor;
     cv::log(bare_log, bare_log);
 
+    cv::Mat reference_change_channel = fixed_signed_u8(
+        log_values - bare_log, fusion_model::kReferenceChangeLogLimit);
     std::vector<cv::Mat> channels{
         canonical_gray,
         fixed_signed_u8(log_values - fine_illumination, 0.12f),
         fixed_centered_u8(log_values - low_frequency,
                           fusion_model::kLowFrequencyLogLimit),
         fixed_unsigned_u8(gradient, 0.90f),
-        fixed_signed_u8(log_values - bare_log,
-                        fusion_model::kReferenceChangeLogLimit),
+        std::move(reference_change_channel),
     };
     std::vector<cv::Mat> resized_channels;
     resized_channels.reserve(channels.size());
@@ -525,9 +1164,257 @@ cv::Mat build_fusion_input(const cv::Mat& canonical_gray,
                    0.0, 0.0, cv::INTER_AREA);
         resized_channels.push_back(std::move(resized));
     }
+    if(reference_change) {
+        *reference_change = resized_channels.back().clone();
+    }
     cv::Mat merged;
     cv::merge(resized_channels, merged);
     return merged.isContinuous() ? merged : merged.clone();
+}
+
+struct LocalPowderGateResult {
+    bool reference_change_passed = false;
+    bool coverage_passed = false;
+    bool connected_component_passed = false;
+    bool passed = false;
+    double reference_change_mean_abs = 0.0;
+    double coverage = 0.0;
+    uint32_t bare_cells = 0;
+    uint32_t max_bare_component = 0;
+};
+
+double patch_correlation(const cv::Mat& first, const cv::Mat& second,
+                         int left, int top, int width, int height)
+{
+    double sum_first = 0.0;
+    double sum_second = 0.0;
+    double sum_first_squared = 0.0;
+    double sum_second_squared = 0.0;
+    double sum_product = 0.0;
+    for(int row = top; row < top + height; ++row) {
+        const float* first_row = first.ptr<float>(row) + left;
+        const float* second_row = second.ptr<float>(row) + left;
+        for(int column = 0; column < width; ++column) {
+            const double first_value = first_row[column];
+            const double second_value = second_row[column];
+            sum_first += first_value;
+            sum_second += second_value;
+            sum_first_squared += first_value * first_value;
+            sum_second_squared += second_value * second_value;
+            sum_product += first_value * second_value;
+        }
+    }
+    const double count = static_cast<double>(width * height);
+    const double first_variance =
+        count * sum_first_squared - sum_first * sum_first;
+    const double second_variance =
+        count * sum_second_squared - sum_second * sum_second;
+    const double denominator = std::sqrt(
+        std::max(first_variance * second_variance, 0.0));
+    if(denominator <= 1.0e-12) {
+        return 1.0;
+    }
+    return std::max(-1.0, std::min(
+        1.0, (count * sum_product - sum_first * sum_second) / denominator));
+}
+
+LocalPowderGateResult evaluate_local_powder_gate(
+    const cv::Mat& canonical_gray, const cv::Mat& canonical_bare,
+    const cv::Mat& reference_change)
+{
+    using namespace local_powder_gate;
+    if(canonical_gray.empty() || canonical_bare.empty() ||
+       reference_change.empty() || canonical_gray.type() != CV_8UC1 ||
+       canonical_bare.type() != CV_8UC1 ||
+       reference_change.type() != CV_8UC1 ||
+       canonical_gray.size() != canonical_bare.size() ||
+       canonical_gray.rows % static_cast<int>(kEvidenceGridSize) != 0 ||
+       canonical_gray.cols % static_cast<int>(kEvidenceGridSize) != 0 ||
+       reference_change.rows % static_cast<int>(kEvidenceGridSize) != 0 ||
+       reference_change.cols % static_cast<int>(kEvidenceGridSize) != 0) {
+        throw std::runtime_error("invalid local powder gate input");
+    }
+
+    cv::Mat current_log;
+    cv::Mat bare_log;
+    canonical_gray.convertTo(current_log, CV_32F);
+    canonical_bare.convertTo(bare_log, CV_32F);
+    current_log += fusion_model::kLogFloor;
+    bare_log += fusion_model::kLogFloor;
+    cv::log(current_log, current_log);
+    cv::log(bare_log, bare_log);
+    cv::Mat current_fine;
+    cv::Mat bare_fine;
+    cv::GaussianBlur(current_log, current_fine, cv::Size(), 2.0, 2.0,
+                     cv::BORDER_REFLECT_101);
+    cv::GaussianBlur(bare_log, bare_fine, cv::Size(), 2.0, 2.0,
+                     cv::BORDER_REFLECT_101);
+    current_fine = current_log - current_fine;
+    bare_fine = bare_log - bare_fine;
+
+    constexpr std::size_t kEvidenceCellCount =
+        kEvidenceGridSize * kEvidenceGridSize;
+    constexpr std::size_t kDecisionCellCount =
+        kDecisionGridSize * kDecisionGridSize;
+    std::array<double, kEvidenceCellCount> correlations{};
+    std::array<double, kEvidenceCellCount> signed_changes{};
+    const int canonical_cell_width =
+        canonical_gray.cols / static_cast<int>(kEvidenceGridSize);
+    const int canonical_cell_height =
+        canonical_gray.rows / static_cast<int>(kEvidenceGridSize);
+    const int change_cell_width =
+        reference_change.cols / static_cast<int>(kEvidenceGridSize);
+    const int change_cell_height =
+        reference_change.rows / static_cast<int>(kEvidenceGridSize);
+
+    double total_absolute_change = 0.0;
+    for(int row = 0; row < reference_change.rows; ++row) {
+        const uint8_t* values = reference_change.ptr<uint8_t>(row);
+        for(int column = 0; column < reference_change.cols; ++column) {
+            total_absolute_change += std::abs(
+                static_cast<int>(values[column]) - 128);
+        }
+    }
+
+    for(uint32_t grid_row = 0; grid_row < kEvidenceGridSize; ++grid_row) {
+        for(uint32_t grid_column = 0; grid_column < kEvidenceGridSize;
+            ++grid_column) {
+            const std::size_t index =
+                static_cast<std::size_t>(grid_row) * kEvidenceGridSize +
+                grid_column;
+            correlations[index] = patch_correlation(
+                bare_fine, current_fine,
+                static_cast<int>(grid_column) * canonical_cell_width,
+                static_cast<int>(grid_row) * canonical_cell_height,
+                canonical_cell_width, canonical_cell_height);
+            double signed_sum = 0.0;
+            for(int row = static_cast<int>(grid_row) * change_cell_height;
+                row < static_cast<int>(grid_row + 1) * change_cell_height;
+                ++row) {
+                const uint8_t* values = reference_change.ptr<uint8_t>(row);
+                for(int column =
+                        static_cast<int>(grid_column) * change_cell_width;
+                    column < static_cast<int>(grid_column + 1) *
+                        change_cell_width;
+                    ++column) {
+                    signed_sum += static_cast<int>(values[column]) - 128;
+                }
+            }
+            signed_changes[index] = signed_sum /
+                static_cast<double>(change_cell_width * change_cell_height);
+        }
+    }
+
+    std::array<bool, kDecisionCellCount> bare_cells{};
+    for(uint32_t decision_row = 0; decision_row < kDecisionGridSize;
+        ++decision_row) {
+        for(uint32_t decision_column = 0;
+            decision_column < kDecisionGridSize; ++decision_column) {
+            double correlation = 0.0;
+            double signed_change = 0.0;
+            for(uint32_t offset_row = 0; offset_row < 2; ++offset_row) {
+                for(uint32_t offset_column = 0; offset_column < 2;
+                    ++offset_column) {
+                    const uint32_t evidence_row = decision_row * 2 + offset_row;
+                    const uint32_t evidence_column =
+                        decision_column * 2 + offset_column;
+                    const std::size_t evidence_index =
+                        static_cast<std::size_t>(evidence_row) *
+                        kEvidenceGridSize + evidence_column;
+                    correlation += correlations[evidence_index];
+                    signed_change += signed_changes[evidence_index];
+                }
+            }
+            correlation *= 0.25;
+            signed_change *= 0.25;
+            const std::size_t decision_index =
+                static_cast<std::size_t>(decision_row) * kDecisionGridSize +
+                decision_column;
+            bare_cells[decision_index] =
+                correlation >= kBareFineTextureCorrelation ||
+                signed_change < kMinPowderSignedChange;
+        }
+    }
+
+    LocalPowderGateResult result;
+    result.reference_change_mean_abs = total_absolute_change /
+        static_cast<double>(reference_change.total());
+    for(uint32_t row = kDecisionBorder;
+        row < kDecisionGridSize - kDecisionBorder; ++row) {
+        for(uint32_t column = kDecisionBorder;
+            column < kDecisionGridSize - kDecisionBorder; ++column) {
+            const std::size_t index =
+                static_cast<std::size_t>(row) * kDecisionGridSize + column;
+            if(bare_cells[index]) {
+                ++result.bare_cells;
+            }
+        }
+    }
+    const uint32_t covered_cells =
+        kEvaluatedDecisionCells - result.bare_cells;
+    result.coverage = static_cast<double>(covered_cells) /
+        kEvaluatedDecisionCells;
+
+    std::array<bool, kDecisionCellCount> visited{};
+    std::array<std::size_t, kDecisionCellCount> queue{};
+    for(uint32_t row = kDecisionBorder;
+        row < kDecisionGridSize - kDecisionBorder; ++row) {
+        for(uint32_t column = kDecisionBorder;
+            column < kDecisionGridSize - kDecisionBorder; ++column) {
+            const std::size_t start =
+                static_cast<std::size_t>(row) * kDecisionGridSize + column;
+            if(!bare_cells[start] || visited[start]) {
+                continue;
+            }
+            std::size_t head = 0;
+            std::size_t tail = 0;
+            queue[tail++] = start;
+            visited[start] = true;
+            uint32_t component_size = 0;
+            while(head < tail) {
+                const std::size_t current = queue[head++];
+                ++component_size;
+                const int current_row =
+                    static_cast<int>(current / kDecisionGridSize);
+                const int current_column =
+                    static_cast<int>(current % kDecisionGridSize);
+                constexpr std::array<int, 4> kRowOffsets{1, -1, 0, 0};
+                constexpr std::array<int, 4> kColumnOffsets{0, 0, 1, -1};
+                for(std::size_t direction = 0; direction < 4; ++direction) {
+                    const int next_row = current_row + kRowOffsets[direction];
+                    const int next_column =
+                        current_column + kColumnOffsets[direction];
+                    if(next_row < static_cast<int>(kDecisionBorder) ||
+                       next_row >= static_cast<int>(
+                           kDecisionGridSize - kDecisionBorder) ||
+                       next_column < static_cast<int>(kDecisionBorder) ||
+                       next_column >= static_cast<int>(
+                           kDecisionGridSize - kDecisionBorder)) {
+                        continue;
+                    }
+                    const std::size_t next =
+                        static_cast<std::size_t>(next_row) *
+                        kDecisionGridSize + static_cast<std::size_t>(next_column);
+                    if(bare_cells[next] && !visited[next]) {
+                        visited[next] = true;
+                        queue[tail++] = next;
+                    }
+                }
+            }
+            result.max_bare_component = std::max(
+                result.max_bare_component, component_size);
+        }
+    }
+
+    result.reference_change_passed =
+        result.reference_change_mean_abs >= kMinReferenceChangeMeanAbs;
+    result.coverage_passed =
+        covered_cells >= kMinCoveredDecisionCells;
+    result.connected_component_passed =
+        result.max_bare_component <= kMaxConnectedBareDecisionCells;
+    result.passed = result.reference_change_passed && result.coverage_passed &&
+        result.connected_component_passed;
+    return result;
 }
 
 } // namespace
@@ -566,6 +1453,7 @@ public:
             output.segmentation_ms = observation.segmentation_ms;
             output.event = observation.event;
             output.reason = observation.reason;
+            output.detail = observation.detail;
         } catch(const std::exception& error) {
             last_cache_event_ = "segmentation_exception";
             last_segmentation_reason_ = error.what();
@@ -580,7 +1468,8 @@ public:
 
     bool capture_bare_reference(const uint8_t* nv12, std::size_t bytes,
                                 uint32_t width, uint32_t height,
-                                uint32_t frame_seq, std::string& reason)
+                                uint32_t frame_seq, std::string& reason,
+                                BareReferenceDiagnostic* diagnostic)
     {
         std::lock_guard<std::mutex> lock(mutex_);
         try {
@@ -611,6 +1500,17 @@ public:
             bare_reference_width_ = width;
             bare_reference_height_ = height;
             bare_reference_frame_seq_ = frame_seq;
+            if(diagnostic) {
+                const cv::Mat canonical_tight = canonical.isContinuous()
+                    ? canonical : canonical.clone();
+                diagnostic->canonical_width =
+                    static_cast<uint32_t>(canonical_tight.cols);
+                diagnostic->canonical_height =
+                    static_cast<uint32_t>(canonical_tight.rows);
+                diagnostic->canonical_gray.assign(
+                    canonical_tight.ptr<uint8_t>(),
+                    canonical_tight.ptr<uint8_t>() + canonical_tight.total());
+            }
             reason = "ok";
             return true;
         } catch(const std::exception& error) {
@@ -677,7 +1577,19 @@ public:
                                          contract::kCanonicalSize),
                                 cv::INTER_LINEAR, cv::BORDER_REFLECT_101);
             SceneQuality quality = check_scene_quality(canonical);
-            cv::Mat fusion_input = build_fusion_input(canonical, canonical_bare);
+            cv::Mat reference_change;
+            cv::Mat fusion_input = build_fusion_input(
+                canonical, canonical_bare, &reference_change);
+            const LocalPowderGateResult local_powder =
+                evaluate_local_powder_gate(
+                    canonical, canonical_bare, reference_change);
+            result.local_powder_gate_passed = local_powder.passed;
+            result.reference_change_mean_abs =
+                local_powder.reference_change_mean_abs;
+            result.local_powder_coverage = local_powder.coverage;
+            result.local_bare_cells = local_powder.bare_cells;
+            result.local_bare_max_component =
+                local_powder.max_bare_component;
             result.preprocessing_ms = elapsed_ms(preprocessing_begin);
 
             std::vector<std::vector<float>> outputs;
@@ -723,6 +1635,21 @@ public:
                     result.output_class = "not_ready_for_first_layer";
                     reasons.emplace_back("ready_probability_below_threshold");
                 }
+                if(result.output_class == "ready_for_first_layer" &&
+                   !local_powder.passed) {
+                    result.output_class = "not_ready_for_first_layer";
+                    if(!local_powder.reference_change_passed) {
+                        reasons.emplace_back("reference_change_too_small");
+                    }
+                    if(!local_powder.coverage_passed) {
+                        reasons.emplace_back(
+                            "local_powder_coverage_below_threshold");
+                    }
+                    if(!local_powder.connected_component_passed) {
+                        reasons.emplace_back(
+                            "local_bare_component_too_large");
+                    }
+                }
             } else {
                 result.output_class = "uncertain";
             }
@@ -738,6 +1665,21 @@ public:
                 result.canonical_gray.assign(
                     canonical_tight.ptr<uint8_t>(),
                     canonical_tight.ptr<uint8_t>() + canonical_tight.total());
+                const cv::Mat bare_tight = canonical_bare.isContinuous()
+                    ? canonical_bare : canonical_bare.clone();
+                result.canonical_bare_gray.assign(
+                    bare_tight.ptr<uint8_t>(),
+                    bare_tight.ptr<uint8_t>() + bare_tight.total());
+                const cv::Mat reference_change_tight = reference_change.isContinuous()
+                    ? reference_change : reference_change.clone();
+                result.reference_change_width =
+                    static_cast<uint32_t>(reference_change_tight.cols);
+                result.reference_change_height =
+                    static_cast<uint32_t>(reference_change_tight.rows);
+                result.reference_change_gray.assign(
+                    reference_change_tight.ptr<uint8_t>(),
+                    reference_change_tight.ptr<uint8_t>() +
+                        reference_change_tight.total());
             }
         } catch(const std::exception& error) {
             result.error = error.what();
@@ -902,7 +1844,17 @@ private:
         result.segmentation_ms = elapsed_ms(begin);
         result.reason = reason;
         if(!valid) {
-            candidates_.clear();
+            /*
+             * Startup geometry is sampled from a live camera stream.  A
+             * transient mask defect must not discard the valid observations
+             * already collected in this same session; group scatter still
+             * rejects observations that do not describe one stable platform.
+             * Cache audits remain conservative and restart their proposal
+             * after any failed sample.
+             */
+            if(cache_available_) {
+                candidates_.clear();
+            }
             next_segmentation_frame_ = frame_seq +
                 (reason == "scene_too_dark" ? contract::kDarkSceneRetryFrames
                                              : contract::kFailedRetryFrames);
@@ -917,6 +1869,7 @@ private:
             return result;
         }
         result.event = accept_candidate(candidate, width, height, frame_seq);
+        result.detail = describe_candidate(candidate);
         return result;
     }
 
@@ -976,101 +1929,59 @@ private:
         }
         cv::Mat mask;
         cv::compare(probability, 0.5f, mask, cv::CMP_GE);
-        const int foreground = cv::countNonZero(mask);
-        if(foreground == 0) {
-            reason = "empty_mask";
+        GeometryFit geometry = fit_platform_geometry(mask);
+        if(!geometry.error.empty()) {
+            reason = geometry.error;
             return false;
         }
-        cv::Mat labels;
-        cv::Mat stats;
-        cv::Mat centroids;
-        const int label_count = cv::connectedComponentsWithStats(
-            mask, labels, stats, centroids, 8, CV_32S);
-        if(label_count <= 1) {
-            reason = "no_component";
-            return false;
-        }
-        int largest_label = 1;
-        int largest_area = stats.at<int>(1, cv::CC_STAT_AREA);
-        for(int label = 2; label < label_count; ++label) {
-            const int area = stats.at<int>(label, cv::CC_STAT_AREA);
-            if(area > largest_area) {
-                largest_area = area;
-                largest_label = label;
-            }
-        }
-        cv::Mat component;
-        cv::compare(labels, largest_label, component, cv::CMP_EQ);
-        const float component_fraction = static_cast<float>(largest_area) / foreground;
-        const float area_ratio = static_cast<float>(largest_area) / mask.total();
-        std::vector<std::vector<cv::Point>> contours;
-        cv::findContours(component.clone(), contours, cv::RETR_EXTERNAL,
-                         cv::CHAIN_APPROX_SIMPLE);
-        if(contours.empty()) {
-            reason = "no_contour";
-            return false;
-        }
-        const auto largest = std::max_element(
-            contours.begin(), contours.end(), [](const auto& left, const auto& right) {
-                return cv::contourArea(left) < cv::contourArea(right);
-            });
-        std::vector<cv::Point> hull;
-        cv::convexHull(*largest, hull);
-        const double perimeter = cv::arcLength(hull, true);
-        float best_iou = -1.0f;
-        std::array<cv::Point2f, 4> best_corners{};
-        for(int step = 0; step <= 76; ++step) {
-            const double epsilon_ratio = 0.004 + 0.001 * step;
-            std::vector<cv::Point> approximation;
-            cv::approxPolyDP(hull, approximation, epsilon_ratio * perimeter, true);
-            if(approximation.size() != 4 || !cv::isContourConvex(approximation)) {
-                continue;
-            }
-            const auto corners = order_quad(approximation);
-            std::vector<cv::Point> polygon;
-            for(const auto& point : corners) {
-                polygon.emplace_back(cvRound(point.x), cvRound(point.y));
-            }
-            cv::Mat quad = cv::Mat::zeros(component.size(), CV_8U);
-            cv::fillConvexPoly(quad, polygon, cv::Scalar(255));
-            cv::Mat intersection;
-            cv::Mat union_mask;
-            cv::bitwise_and(component, quad, intersection);
-            cv::bitwise_or(component, quad, union_mask);
-            const float iou = static_cast<float>(cv::countNonZero(intersection)) /
-                              std::max(1, cv::countNonZero(union_mask));
-            if(iou > best_iou) {
-                best_iou = iou;
-                best_corners = corners;
-            }
-        }
-        if(best_iou < 0.0f) {
-            reason = "no_quadrilateral";
-            return false;
-        }
-        const float mean_probability = static_cast<float>(cv::mean(probability, component)[0]);
+        snap_quad_to_image_edges(resized, geometry);
+        const float mean_probability = static_cast<float>(
+            cv::mean(probability, geometry.component)[0]);
         std::vector<std::string> failures;
-        if(area_ratio < contract::kAreaRatioMin || area_ratio > contract::kAreaRatioMax)
+        if(geometry.area_ratio < contract::kAreaRatioMin ||
+           geometry.area_ratio > contract::kAreaRatioMax)
             failures.emplace_back("area_ratio");
         if(cache_available_ &&
-           std::abs(area_ratio / cache_.area_ratio - 1.0f) >
+           std::abs(geometry.area_ratio / cache_.area_ratio - 1.0f) >
                contract::kCachedAreaRelativeTolerance)
             failures.emplace_back("cached_area_delta");
-        if(component_fraction < contract::kComponentFractionMin)
+        if(geometry.component_fraction < contract::kComponentFractionMin)
             failures.emplace_back("fragmented");
-        if(best_iou < contract::kQuadIouMin)
-            failures.emplace_back("quad_fit");
+        if(geometry.mask_coverage < contract::kGeometryMaskCoverageMin)
+            failures.emplace_back("mask_coverage");
+        if(geometry.quad_fill < contract::kGeometryQuadFillMin)
+            failures.emplace_back("quad_fill");
+        /*
+         * A successful image-edge snap has already required all four sides
+         * to satisfy the original-image gradient/continuity gates.  The mask
+         * line residual describes only the coarse seed in that case and must
+         * not veto a stronger four-side image observation.
+         */
+        if(!geometry.edge_snap_applied) {
+            if(geometry.edge_inlier_fraction <
+               contract::kGeometryEdgeInlierFractionMin)
+                failures.emplace_back("edge_support");
+            if(geometry.edge_residual > contract::kGeometryEdgeResidualMax320)
+                failures.emplace_back("edge_residual");
+        }
         if(mean_probability < contract::kMeanProbabilityMin)
             failures.emplace_back("low_probability");
         if(!failures.empty()) {
             reason = join_reasons(failures);
             return false;
         }
-        candidate.corners = best_corners;
-        candidate.area_ratio = area_ratio;
-        candidate.component_fraction = component_fraction;
-        candidate.quad_iou = best_iou;
+        candidate.corners = geometry.corners;
+        candidate.area_ratio = geometry.area_ratio;
+        candidate.component_fraction = geometry.component_fraction;
+        candidate.mask_coverage = geometry.mask_coverage;
+        candidate.quad_fill = geometry.quad_fill;
+        candidate.edge_residual = geometry.edge_residual;
+        candidate.edge_inlier_fraction = geometry.edge_inlier_fraction;
         candidate.mean_probability = mean_probability;
+        candidate.edge_snap_applied = geometry.edge_snap_applied;
+        candidate.edge_snap_offsets = geometry.edge_snap_offsets;
+        candidate.edge_snap_scores = geometry.edge_snap_scores;
+        candidate.edge_snap_error = geometry.edge_snap_error;
         reason = "ok";
         return true;
     }
@@ -1089,10 +2000,36 @@ private:
         auto summary = summarize_group(candidates_);
         const float scatter = group_scatter(candidates_, summary.first);
         if(scatter > contract::kGroupScatterMax320) {
-            const GeometryCandidate latest = candidates_.back();
-            candidates_.assign(1, latest);
-            next_segmentation_frame_ = frame_seq + contract::kFailedRetryFrames;
-            return "unstable_candidate_group";
+            std::vector<GeometryCandidate> best_cluster;
+            for(const auto& seed : candidates_) {
+                std::vector<GeometryCandidate> cluster;
+                for(const auto& sample : candidates_) {
+                    float maximum = 0.0f;
+                    for(std::size_t point = 0; point < 4; ++point) {
+                        maximum = std::max(maximum, static_cast<float>(
+                            cv::norm(sample.corners[point] - seed.corners[point])));
+                    }
+                    if(maximum <= contract::kGroupScatterMax320) {
+                        cluster.push_back(sample);
+                    }
+                }
+                if(cluster.size() > best_cluster.size()) {
+                    best_cluster = std::move(cluster);
+                }
+            }
+            if(static_cast<int>(best_cluster.size()) >= required) {
+                candidates_ = std::move(best_cluster);
+                summary = summarize_group(candidates_);
+            } else {
+                const std::size_t maximum_window =
+                    static_cast<std::size_t>(required * 4);
+                if(candidates_.size() > maximum_window) {
+                    candidates_.erase(candidates_.begin(),
+                        candidates_.begin() + (candidates_.size() - maximum_window));
+                }
+                next_segmentation_frame_ = frame_seq + 1;
+                return "unstable_candidate_group";
+            }
         }
         if(!cache_available_) {
             install_cache(summary.first, summary.second, width, height, frame_seq);
@@ -1240,10 +2177,11 @@ FirstLayerGeometryObservation FirstLayerDetector::observe_nv12(
 
 bool FirstLayerDetector::capture_bare_reference_nv12(
     const uint8_t* nv12, std::size_t bytes, uint32_t width, uint32_t height,
-    uint32_t frame_seq, std::string& reason)
+    uint32_t frame_seq, std::string& reason,
+    BareReferenceDiagnostic* diagnostic)
 {
     return impl_->capture_bare_reference(
-        nv12, bytes, width, height, frame_seq, reason);
+        nv12, bytes, width, height, frame_seq, reason, diagnostic);
 }
 
 void FirstLayerDetector::clear_bare_reference()

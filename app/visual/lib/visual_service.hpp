@@ -77,6 +77,8 @@ private:
                               uint32_t& height, uint32_t& frame_seq);
     bool copy_recent_snapshots(std::vector<FrameSnapshot>& out);
     bool process_first_layer_frames(const std::vector<FrameSnapshot>& frames);
+    /** Require consecutive accepted checks; any rejected check resets the count. */
+    uint32_t update_consecutive_passes(bool candidate_pass, uint32_t frame_seq);
     void cache_final_rejected_diagnostic(const std::vector<uint8_t>& nv12,
                                          uint32_t width, uint32_t height,
                                          uint32_t frame_seq,
@@ -100,6 +102,8 @@ private:
     bool first_layer_session_active_ = false;
     uint64_t first_layer_session_id_ = 0;
     bool first_layer_session_passed_ = false;
+    uint32_t first_layer_consecutive_passes_ = 0;
+    uint32_t first_layer_last_pass_frame_seq_ = 0;
     bool reference_capture_pending_ = false;
     uint64_t last_reference_capture_attempt_ms_ = 0;
     uint64_t last_reference_failure_report_ms_ = 0;

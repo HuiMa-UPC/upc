@@ -560,8 +560,24 @@ void IpcMsgBus::broker_unregister_client(BrokerClientSlot& slot,
     const middleware::ModuleId module_id = slot.module_id;
     const bool was_registered              = slot.registered;
 
-    if (slot.endpoint && slot.endpoint->connected()) {
-        poll_unregister(slot.endpoint->conn_fd());
+    /* recv/send 出错时 IpcEndpoint 会先 close 并把 conn_fd 置为 -1。
+     * 必须使用注册 poller 时保存的 fd 清理 poll_slots_，否则旧条目会在
+     * 内核复用 fd 后挡住新客户端的 EPOLL_CTL_ADD。 */
+    const int poll_fd = slot.poll_fd;
+    slot.poll_fd = -1;
+    if (poll_fd >= 0) {
+        const auto it = poll_slots_.find(poll_fd);
+        if (it != poll_slots_.end() && it->second &&
+            it->second->kind == PollKind::BrokerClient &&
+            it->second->broker_client == &slot) {
+            poll_unregister(poll_fd);
+        } else {
+            /* fd 可能已被内核复用并归属新客户端；旧连接的迟到清理
+             * 绝不能删除新 owner 的 poll 注册。 */
+            UPC_LOG_IPC(Warn,
+                        "broker skip stale poll unregister fd=%d module=%s",
+                        poll_fd, upc_msg_module_name(module_id));
+        }
     }
 
     if (was_registered) {
@@ -796,8 +812,33 @@ bool IpcMsgBus::poll_register_broker_client(BrokerClientSlot& client_slot)
         return false;
     }
     const int fd = client_slot.endpoint->conn_fd();
-    if (fd < 0 || poll_slots_.count(fd) != 0) {
-        return fd >= 0;
+    if (fd < 0) {
+        return false;
+    }
+
+    const auto existing = poll_slots_.find(fd);
+    if (existing != poll_slots_.end()) {
+        PollSlot& poll_slot = *existing->second;
+        if (poll_slot.kind == PollKind::BrokerClient &&
+            poll_slot.broker_client == &client_slot) {
+            client_slot.poll_fd = fd;
+            return true;
+        }
+
+        /* 该 fd 对应的旧 socket 已由内核从 epoll 自动移除，但旧 PollSlot
+         * 仍在本地表中。复用对象可保证本轮 epoll_wait 已返回的 data.ptr
+         * 生命周期稳定，再把新 socket 正式加入 poller。 */
+        UPC_LOG_IPC(Warn,
+                    "broker replace stale poll slot fd=%d old_kind=%u",
+                    fd, static_cast<unsigned>(poll_slot.kind));
+        if (!poller_.add(fd, kPollInEvents, &poll_slot)) {
+            return false;
+        }
+        poll_slot.kind = PollKind::BrokerClient;
+        poll_slot.fd = fd;
+        poll_slot.broker_client = &client_slot;
+        client_slot.poll_fd = fd;
+        return true;
     }
 
     auto slot             = std::make_unique<PollSlot>();
@@ -809,6 +850,7 @@ bool IpcMsgBus::poll_register_broker_client(BrokerClientSlot& client_slot)
         return false;
     }
     poll_slots_.emplace(fd, std::move(slot));
+    client_slot.poll_fd = fd;
     return true;
 #endif
 }
@@ -844,12 +886,25 @@ void IpcMsgBus::poll_unregister(int fd)
         return;
     }
     poller_.del(fd);
-    poll_slots_.erase(fd);
+    const auto it = poll_slots_.find(fd);
+    if (it != poll_slots_.end()) {
+        PollSlot* slot = it->second.get();
+        if (slot && slot->kind == PollKind::BrokerClient &&
+            slot->broker_client && slot->broker_client->poll_fd == fd) {
+            slot->broker_client->poll_fd = -1;
+        }
+        poll_slots_.erase(it);
+    }
 }
 
 void IpcMsgBus::poll_clear()
 {
     for (const auto& kv : poll_slots_) {
+        const PollSlot* slot = kv.second.get();
+        if (slot && slot->kind == PollKind::BrokerClient &&
+            slot->broker_client && slot->broker_client->poll_fd == kv.first) {
+            slot->broker_client->poll_fd = -1;
+        }
         poller_.del(kv.first);
     }
     poll_slots_.clear();
@@ -873,7 +928,13 @@ void IpcMsgBus::accept_broker_client()
         std::lock_guard<std::mutex> lock(broker_clients_mtx_);
         broker_clients_.push_back(std::move(client_slot));
     }
-    poll_register_broker_client(*raw);
+#if defined(__linux__)
+    if (!poll_register_broker_client(*raw)) {
+        UPC_LOG_IPC(Error, "broker client poll register failed fd=%d", fd);
+        broker_unregister_client(*raw, false);
+        return;
+    }
+#endif
     UPC_LOG_IPC(Info, "broker accepted client fd=%d", fd);
 }
 

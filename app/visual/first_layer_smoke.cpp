@@ -57,6 +57,14 @@ int main(int argc, char** argv)
         << "ready_probability=" << result.ready_probability << '\n'
         << "confidence=" << result.confidence << '\n'
         << "ood_distance=" << result.ood_distance << '\n'
+        << "local_powder_gate="
+        << (result.local_powder_gate_passed ? 1 : 0) << '\n'
+        << "reference_change_mean_abs="
+        << result.reference_change_mean_abs << '\n'
+        << "local_powder_coverage=" << result.local_powder_coverage << '\n'
+        << "local_bare_cells=" << result.local_bare_cells << '\n'
+        << "local_bare_max_component="
+        << result.local_bare_max_component << '\n'
         << "rejection_reasons=" << result.rejection_reasons << '\n'
         << "preprocessing_ms=" << result.preprocessing_ms << '\n'
         << "fusion_ms=" << result.fusion_ms << '\n'

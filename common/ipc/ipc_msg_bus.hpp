@@ -62,6 +62,7 @@ private:
         std::unique_ptr<IpcEndpoint> endpoint;
         middleware::ModuleId module_id{middleware::ModuleId{0}};
         bool registered{false};
+        int poll_fd{-1}; /**< 注册进 poller 的 fd；endpoint 断开后 conn_fd 已失效，不能用于反注册 */
     };
 
     struct PollSlot {
