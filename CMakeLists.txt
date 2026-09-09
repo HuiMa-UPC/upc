@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.16)
 
-# set(TOOLCHAIN k1mini-buildroot-toolchain)
+#set(TOOLCHAIN k1mini-buildroot-toolchain)
 # set(TOOLCHAIN atk-dlrk356x-toolchain)
 set(TOOLCHAIN phx-buildroot-toolchain)
 

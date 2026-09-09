@@ -47,6 +47,8 @@ using McuVersionCb     = std::function<void(const middleware::McuVersionPayload&
 using GalvoVersionCb   = std::function<void(const middleware::GalvoVersionPayload&)>;
 using OtaNotifyCb      = std::function<void(const middleware::OtaNotifyPayload&)>;
 using OtaProgressCb    = std::function<void(const middleware::OtaProgressPayload&)>;
+using SocOtaReadyCb    = std::function<void(const middleware::SocOtaReadyPayload&)>;
+using SocOtaApplyRspCb = std::function<void(const middleware::SocOtaApplyRspPayload&)>;
 using DeviceEventCb    = std::function<void(const middleware::DeviceEventPayload&)>;
 using AlarmReportCb    = std::function<void(const middleware::AlarmReportPayload&)>;
 using AlarmSnapshotCb  = std::function<void(const middleware::AlarmSnapshotPayload&)>;
@@ -152,6 +154,11 @@ public:
     void register_ota_notify(OtaNotifyCb cb);       /**< MQTT_Ota_Notify_Ntf */
     void register_ota_progress(OtaProgressCb cb);   /**< APP_Mqtt_Ota_Progress_Ntf */
 
+    /** SOC 全包升级：固件就绪后由用户决定重启时机（"稍后"不发消息，直接关窗）。 */
+    void send_soc_ota_apply(middleware::SocOtaApplyAction action);
+    void register_soc_ota_ready(SocOtaReadyCb cb);      /**< APP_Soc_Ota_Ready_Ntf */
+    void register_soc_ota_apply_rsp(SocOtaApplyRspCb cb); /**< APP_Soc_Ota_Apply_Rsp */
+
     /** GLAVO_Device_Event_Ntf：设备事件/告警，喂消息中心。
      *  Glavo 侧还没实现发布，接好放着——后端上线后 UI 不用改。 */
     void register_device_event(DeviceEventCb cb);
@@ -250,6 +257,8 @@ private:
     GalvoVersionCb galvo_version_cb_;
     OtaNotifyCb ota_notify_cb_;
     OtaProgressCb ota_progress_cb_;
+    SocOtaReadyCb soc_ota_ready_cb_;
+    SocOtaApplyRspCb soc_ota_apply_rsp_cb_;
     DeviceEventCb device_event_cb_;
     AlarmReportCb alarm_report_cb_;
     AlarmSnapshotCb alarm_snapshot_cb_;

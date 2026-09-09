@@ -617,6 +617,40 @@ void MqttService::run_manifest_download_task(std::string task_id,
             return;
         }
 
+        /* SOC 全包升级在此分流：包内是单个 .img，不走 AB 对与整目录替换，
+         * 落到固定路径后把重启时机交给用户。详见 mqtt_service_soc_ota.cpp。 */
+        if(comp.component == "soc") {
+            std::string soc_err;
+            const bool staged =
+                run_soc_ota_stage(task_id, comp, tmp_final, progress, soc_err);
+            std::filesystem::remove(tmp_final, ec);
+            if(!staged) {
+                publish_failed(comp.component.c_str(), soc_err.c_str());
+                return;
+            }
+
+            /* 固件已就绪：先把进度拉满，再让 UI 切到"是否重启升级"弹窗。 */
+            progress.state = static_cast<uint8_t>(middleware::OtaProgressState::Completed);
+            progress.progress_pct = 100;
+            progress.error_code[0] = '\0';
+            publish_ota_progress_ui(progress);
+            (void)publish_ota_progress_cloud(progress);
+
+            SocOtaPending pending{};
+            if(soc_ota_pending_load(pending)) {
+                publish_soc_ota_ready(pending);
+            }
+
+            /* 与循环末尾共用段一致：Env Sim 下让心跳立刻反映目标版本。 */
+            if(!comp.version.empty()) {
+                std::lock_guard<std::mutex> lock(data_mtx_);
+                if(env_sim_on_) {
+                    soc_fw_override_ = comp.version;
+                }
+            }
+            continue;
+        }
+
         if(!ensure_dir(extract_dir)) {
             std::filesystem::remove(tmp_final, ec);
             publish_failed(comp.component.c_str(), "extract_dir_failed");
@@ -952,8 +986,12 @@ bool MqttService::parse_manifest_response(const std::string& payload,
         if(c.file_name.empty()) {
             (void)json_extract_string(obj, "filename", c.file_name);
         }
-        int size_bytes = 0;
-        if(json_extract_int(obj, "size_bytes", size_bytes) && size_bytes > 0) {
+        /* 用 int64 解析：SOC 全包 .img 可超 2GB，int 会截断。键名兼容两种风格。 */
+        int64_t size_bytes = 0;
+        if(!json_extract_int64(obj, "size_bytes", size_bytes)) {
+            (void)json_extract_int64(obj, "sizeBytes", size_bytes);
+        }
+        if(size_bytes > 0) {
             c.size_bytes = static_cast<uint64_t>(size_bytes);
         }
         if(c.url.empty()) {

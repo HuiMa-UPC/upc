@@ -12,6 +12,7 @@
 #include <condition_variable>
 #include <cstdint>
 #include <cstring>
+#include <filesystem>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -110,6 +111,19 @@ private:
         std::string sha256;
         uint64_t size_bytes = 0;
         std::string file_name;
+    };
+
+    /**
+     * SOC 全包升级的待应用固件状态。
+     *
+     * 落盘到 UPC_SOC_OTA_PENDING_FILE：用户可以选"稍后"再重启，中间可能隔着
+     * 断电或进程重启，只放内存会让那个几百 MB 的 .img 变成没有入口的孤儿文件。
+     */
+    struct SocOtaPending {
+        std::string task_id;
+        std::string version;
+        std::string img_path;
+        uint64_t    img_bytes = 0;
     };
 
     void subscribe_messages();
@@ -234,6 +248,28 @@ private:
                         const char* default_fail);
     void run_manifest_download_task(std::string task_id, std::vector<OtaComponent> components);
     void start_manifest_download(std::string task_id, std::vector<OtaComponent> components);
+
+    /* ---- SOC 全包升级（mqtt_service_soc_ota.cpp） ---- */
+    /**
+     * 接过已下载并通过 SHA256 的 tar.gz，完成 SOC 全包升级的落盘准备。
+     * 校验包内唯一 .img、检查 /userdata 空间、解包改名为固定路径、写待应用状态。
+     * 失败时把原因码写入 err_code 由调用方统一上报。
+     */
+    bool run_soc_ota_stage(const std::string& task_id,
+                           const OtaComponent& comp,
+                           const std::filesystem::path& tar_gz,
+                           middleware::OtaProgressPayload& progress,
+                           std::string& err_code);
+    void on_soc_ota_apply(const middleware::Message& msg);
+    /** MQTT 首次连上云端后补发一次遗留固件提示（比 UI 先起，早发会丢）。 */
+    void notify_soc_ota_ready_after_connect();
+    void publish_soc_ota_ready(const SocOtaPending& pending);
+    void publish_soc_ota_apply_rsp(middleware::SocOtaApplyAction action,
+                                   middleware::SocOtaApplyResult result,
+                                   const char* reason);
+    bool soc_ota_pending_load(SocOtaPending& out) const;
+    bool soc_ota_pending_save(const SocOtaPending& pending) const;
+    void soc_ota_pending_clear() const;
     void request_firmware_versions_force(bool need_mcu, bool need_galvo);
     void poll_ota_heartbeat_wait();
     static bool parse_mcu_version_text(const std::string& text,
@@ -325,6 +361,8 @@ private:
     OtaNotify pending_ota_notify_{};
     std::thread ota_download_thread_;
     bool ota_download_running_ = false;
+    /** 本次运行是否已补发过遗留固件提示，避免每次重连都弹一遍。 */
+    bool soc_ota_ready_notified_ = false;
     ApplyOtaSync galvo_ota_sync_{};
     std::mutex galvo_ota_mtx_;
     std::condition_variable galvo_ota_cv_;
