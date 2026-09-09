@@ -65,6 +65,8 @@ rongsu_media worker
 
 `config.json` 字段：`job_name` / `start_unix` / `duration_sec` / `material_g` / `layer_count` / `status` / `frames_dir` / `thumb`。`material_g` 与 `layer_count` 在 upsert 时按 job 基名从 `/userdata/Gcode/config.json` 快照（`print_history_lookup_gcode_stats`），查不到写 0。解析见 `common/fs_manifest/print_history_manifest.*`。
 
+**`job_name` 存原始 G-code 基名，不要净化。** 它同时是回查 `/userdata/Gcode/config.json` 的主键，而那边存的是真实文件名；一旦按 `sanitize_filename()` 把 `~`、`(`、空格等换成 `_`，形如 `xfk-8.10-0.03-150~170-0.06(30).gcode` 的文件就匹配不上，历史卡片的 Filament/Layers 会全变 "--"。需要路径安全的是 `frames_dir`，它由 `make_session_name()` 生成，内部自带净化。
+
 ## 存储
 
 环形预算（`ensure_video_storage_budget`，`statvfs(/userdata/media)`）：

@@ -252,6 +252,7 @@ lv_obj_t *g_print_overlay      = nullptr; /**< 浮层根（默认隐藏） */
 lv_obj_t *g_pc_card            = nullptr; /**< 卡片根（通知浮层要按它的高度抬起来） */
 lv_obj_t *g_pc_badge_icon      = nullptr; /**< 徽标图标盒（转圈/三角/圆圈感叹/勾） */
 lv_obj_t *g_pc_badge_text      = nullptr; /**< "PRINTING..." / "PRINT COMPLETE" … */
+lv_obj_t *g_pc_layer           = nullptr; /**< 徽标行「当前层/总层」（无总层数时隐藏） */
 lv_obj_t *g_pc_percent         = nullptr; /**< 徽标行右端百分比 */
 lv_obj_t *g_pc_bar             = nullptr; /**< 进度条 */
 lv_obj_t *g_pc_time_cap        = nullptr; /**< "TIME LEFT" ↔ "TIME COST" */
@@ -1588,6 +1589,17 @@ lv_obj_t *build_print_stats_card(lv_obj_t *parent)
     lv_obj_set_flex_grow(spacer, 1);
     lv_obj_set_style_bg_opa(spacer, LV_OPA_TRANSP, 0);
 
+    /* 层号紧贴百分比左侧，摆在徽标行而不是下面新开一列：右列 1280 档只有 268 宽，
+     * 两列均分后 CONSUMABLES 已经要靠 caption_sm 才不被裁，再插第三列每列剩不到
+     * 90，那个词必溢出。徽标行有 spacer 撑出的空档，放得下 "999/999"。
+     * 用 dim 色 + 小一档字号压住层级，别跟同色的状态词/百分比抢眼。 */
+    g_pc_layer = lv_label_create(head);
+    lv_label_set_text(g_pc_layer, "");
+    lv_obj_set_style_text_color(g_pc_layer, user_color_text_dim, 0);
+    lv_obj_set_style_text_font(g_pc_layer, user_font_caption_sm(), 0);
+    lv_obj_set_style_text_letter_space(g_pc_layer, 1, 0);
+    lv_obj_add_flag(g_pc_layer, LV_OBJ_FLAG_HIDDEN);
+
     g_pc_percent = lv_label_create(head);
     lv_label_set_text(g_pc_percent, "0%");
     lv_obj_set_style_text_font(g_pc_percent, user_font_caption(), 0);
@@ -2505,6 +2517,11 @@ void page_user_home_enter_printing_mode(const control_file_t *file)
     /* 进度与两列指标复位：耗材要等打完才有数，先按占位显示 */
     if(g_pc_bar)     lv_bar_set_value(g_pc_bar, 0, LV_ANIM_OFF);
     if(g_pc_percent) lv_label_set_text(g_pc_percent, "0%");
+    /* 层号先隐掉：总层数要等第一帧 Progress 才知道，且上一单的层号不能留在这 */
+    if(g_pc_layer) {
+        lv_label_set_text(g_pc_layer, "");
+        lv_obj_add_flag(g_pc_layer, LV_OBJ_FLAG_HIDDEN);
+    }
     if(g_pc_time_val) {
         if(file) {
             char dur[32];
@@ -2645,6 +2662,17 @@ void page_user_home_printing_update(const control_progress_t *p)
     }
     if(g_pc_percent) {
         lv_label_set_text_fmt(g_pc_percent, "%d%%", p->progress_percent);
+    }
+    /* 后端给不出总层数（OVF / 无层标记）时整条隐掉，不留 "--/--" 占位 */
+    if(g_pc_layer) {
+        if(p->total_layers > 0) {
+            lv_label_set_text_fmt(g_pc_layer, "%u/%u",
+                                  static_cast<unsigned>(p->current_layer),
+                                  static_cast<unsigned>(p->total_layers));
+            lv_obj_remove_flag(g_pc_layer, LV_OBJ_FLAG_HIDDEN);
+        } else {
+            lv_obj_add_flag(g_pc_layer, LV_OBJ_FLAG_HIDDEN);
+        }
     }
     if(g_pc_time_val) {
         char dur[32];

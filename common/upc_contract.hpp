@@ -831,6 +831,12 @@ struct PrintProgressPayload {
     float    oxygen_percent;
     uint16_t cmd_cache_rate;   /**< MCU 指令缓存占用率（TCP 心跳，0=排空） */
     uint16_t data_cache_rate;  /**< MCU 数据缓存占用率（TCP 心跳，0=排空） */
+    /** 正在打印的层号（1-based，= 已完成层 + 1，钳在 total_layers 内）；
+     *  total_layers=0 时无意义 */
+    uint32_t current_layer;
+    /** 总层数（G-code 的 M3000 计数）；0=未知（OVF / 无层标记 / 关闭 Layer
+     *  Snap），此时 UI 不显示层号 */
+    uint32_t total_layers;
 };
 
 /** GLAVO_Print_State_Ntf 载荷：开始打印/打印结束状态边沿（Inline）。

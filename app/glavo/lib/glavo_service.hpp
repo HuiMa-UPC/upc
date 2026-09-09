@@ -244,12 +244,15 @@ private:
      */
     bool test_image_desired_{false};
     bool test_image_active_{false};
-    uint32_t print_total_layers_ = 0; /**< 当前作业层总数（用于进度融合） */
+    uint32_t print_total_layers_ = 0; /**< 当前作业层总数（纯层进度分母 / 回退时的层锚点分母） */
+    /** 本作业是否走纯层台阶进度（G-code + 能数出 M3000 + 换层 Snap 已启用） */
+    bool layer_progress_mode_ = false;
     int last_print_pct_     = -1;
-    bool last_parse_done_   = false;
     uint16_t last_sent_cmd_rate_  = 0xffff;
     uint16_t last_sent_data_rate_ = 0xffff;
     std::chrono::steady_clock::time_point last_drain_progress_at_{};
+    /** 上次进度推送时刻；纯层段层内百分比不变时用于环境字段保活 */
+    std::chrono::steady_clock::time_point last_progress_push_at_{};
     bool last_usb_mounted_ = false;
     bool door_real_open_enabled_ = (GLAVO_DOOR_REAL_OPEN_ENABLE != 0);
     bool door_real_close_check_enabled_ = (GLAVO_DOOR_REAL_CLOSE_CHECK_ENABLE != 0);

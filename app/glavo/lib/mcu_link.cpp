@@ -2709,6 +2709,13 @@ void McuLink::link_try_layer_serial_dispatch()
     // 转入等待 PRINT_READY 状态
     serial_handshake_phase_.store(SERIAL_HS_WAIT_PRINT_READY);
     serial_evt_print_ready_.store(false);
+
+    /* 换层铺粉期间不下发运动包，link_send_one_motion_batch 不会触发进度回调。
+     * 纯层进度以 Snap 计数为分子，这里补推一次，台阶才会在本层结束时立刻出现，
+     * 而不是等下一层开始发包；同时刷新载荷里的环境字段。 */
+    if(progress_cb_) {
+        progress_cb_();
+    }
 }
 
 /* ---------- 运动包批量下发 ---------- */
