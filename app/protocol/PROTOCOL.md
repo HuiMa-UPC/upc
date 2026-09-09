@@ -43,7 +43,7 @@ target_link_libraries(my_target PRIVATE upc::protocol)
 
 - `payload[0]`（Stop）：`1=急停，0=不修改`
 - `payload[1]`（Pause）：`2=暂停，1=继续，0=不修改`
-- `payload[2]`（Red）：`2=激光，1=红光，0=不修改`
+- `payload[2]`（Red）：`3=红光常亮，2=激光，1=红光，0=不修改`
 
 注意：
 

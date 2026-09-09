@@ -162,7 +162,7 @@ public:
      * @brief 下发 TCP CMD=0x0A 扩展紧急指令（Stop/Pause/RedLaser）
      * @param stop_code DATA[1]：1=急停，0=不修改
      * @param pause_code DATA[2]：2=暂停，1=继续，0=不修改
-     * @param red_code DATA[3]：2=激光，1=红光，0=不修改
+     * @param red_code DATA[3]：3=红光常亮，2=激光，1=红光，0=不修改
      */
     bool send_tcp_emergency_ctrl_ex(uint8_t stop_code, uint8_t pause_code, uint8_t red_code);
     /**

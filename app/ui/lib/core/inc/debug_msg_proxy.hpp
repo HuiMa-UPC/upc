@@ -43,6 +43,8 @@ public:
     void send_axis_set_zero(middleware::DebugAxis axis);
     void send_axis_home(middleware::DebugAxis axis);
     void send_galvo_red_light(bool on);
+    /** 红光常亮：TCP 0x0A DATA[3]=3（点发，不回读） */
+    void send_galvo_red_always();
     void send_galvo_param_save(float scale, float step_mm,
                                float center_offset_x, float center_offset_y);
     void send_galvo_calib();

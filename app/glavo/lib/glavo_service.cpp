@@ -712,6 +712,7 @@ bool GlavoService::start()
         middleware::MsgType::UI_Debug_Fan_Duty_Ntf,
         middleware::MsgType::UI_Debug_Switch_Ntf,
         middleware::MsgType::UI_Debug_Galvo_RedLight_Ntf,
+        middleware::MsgType::UI_Debug_Galvo_RedAlways_Ntf,
         middleware::MsgType::UI_Debug_Galvo_Param_Save_Ntf,
         middleware::MsgType::UI_Debug_TestImage_Set_Ntf,
         middleware::MsgType::UI_Debug_TestImage_Get_Ntf,
@@ -1105,6 +1106,9 @@ void GlavoService::handle_message(const middleware::Message& msg)
             break;
         case middleware::MsgType::UI_Debug_Galvo_RedLight_Ntf:
             handle_debug_galvo_red_light(msg);
+            break;
+        case middleware::MsgType::UI_Debug_Galvo_RedAlways_Ntf:
+            handle_debug_galvo_red_always(msg);
             break;
         case middleware::MsgType::UI_Debug_Galvo_Param_Save_Ntf:
             handle_debug_galvo_param_save(msg);
@@ -3291,6 +3295,24 @@ bool GlavoService::apply_red_laser_mode(bool red_on, const char* reason)
     return true;
 }
 
+bool GlavoService::apply_red_always_mode(const char* reason)
+{
+    /* 红光常亮与普通红光一样关激光使能，TCP Red 码用协议 3。 */
+    {
+        uint8_t buf[SERIAL_DEBUG_MAX_FRAME];
+        debug_tx(buf, serial_debug_build_switch(0u, false, buf, sizeof(buf)));
+    }
+    constexpr uint8_t k_red_always = 3u;
+    if(!McuLink::instance().send_tcp_emergency_ctrl_ex(0u, 0u, k_red_always)) {
+        UPC_LOG_GLAVO_SERVICE(Warn, "red-always tcp switch failed reason=%s",
+                              reason ? reason : "n/a");
+        return false;
+    }
+    UPC_LOG_GLAVO_SERVICE(Info, "red-always mode switched reason=%s",
+                          reason ? reason : "n/a");
+    return true;
+}
+
 /** @brief 调试红光开关：下发 TCP CMD=0x0A（Stop=0, Pause=0, RedLaser=on/off） */
 void GlavoService::handle_debug_galvo_red_light(const middleware::Message& msg)
 {
@@ -3299,6 +3321,12 @@ void GlavoService::handle_debug_galvo_red_light(const middleware::Message& msg)
         return;
     }
     (void)apply_red_laser_mode(p.on != 0, "debug_toggle");
+}
+
+/** @brief 调试红光常亮：下发 TCP CMD=0x0A（Stop=0, Pause=0, Red=3） */
+void GlavoService::handle_debug_galvo_red_always(const middleware::Message& /*msg*/)
+{
+    (void)apply_red_always_mode("debug_red_always");
 }
 
 /** @brief 保存振镜中心偏移到 cal.csv 并热加载 ParserContext（不重启进程即可生效） */

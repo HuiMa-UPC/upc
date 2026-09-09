@@ -115,6 +115,7 @@ private:
     void handle_debug_fan_duty(const middleware::Message& msg);
     void handle_debug_switch(const middleware::Message& msg);
     void handle_debug_galvo_red_light(const middleware::Message& msg);
+    void handle_debug_galvo_red_always(const middleware::Message& msg);
     void handle_debug_galvo_param_save(const middleware::Message& msg);
     void handle_debug_test_image_set(const middleware::Message& msg);
     void handle_debug_test_image_get(const middleware::Message& msg);
@@ -150,6 +151,8 @@ private:
     void handle_visual_first_layer_check_rsp(const middleware::Message& msg);
     /** @brief 联动切换红光/激光模式（TCP 红光 + 串口激光使能），每次调用都下发。 */
     bool apply_red_laser_mode(bool red_on, const char* reason);
+    /** @brief 红光常亮：串口关激光 + TCP 0x0A red=3。 */
+    bool apply_red_always_mode(const char* reason);
     void debug_tx(const uint8_t* frame, int n);
 
     /** @brief About 页版本查询：下发串口 TLV_GET_VERSION，应答由 McuLink 直接推 UI */

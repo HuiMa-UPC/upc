@@ -762,6 +762,11 @@ void on_laser_mode_click(lv_event_t *)
     ui::DebugMsgProxy::instance().send_galvo_red_light(false);
 }
 
+void on_red_always_click(lv_event_t *)
+{
+    ui::DebugMsgProxy::instance().send_galvo_red_always();
+}
+
 void on_galvo_save(lv_event_t *)
 {
     if(galvo_save_busy()) {
@@ -1913,20 +1918,39 @@ lv_obj_t *build_laser_tab(lv_obj_t *body)
     lv_obj_t *cancelrow = make_action_row(pc_card, "Cancel Power");
     make_ghost_button(cancelrow, "Cancel", on_laser_power_cancel);
 
-    /* 红光/激光：两个独立按钮，按一下即下发一次对应模式指令。
-     * 不做状态回读，界面上无“当前模式”概念，纯测试下发用。 */
-    lv_obj_t *redrow = make_action_row(pc_card, "Red Laser Mode");
-    lv_obj_t *redbtns = lv_obj_create(redrow);
+    /* 红光/激光/常亮：三个独立按钮，按一下即下发一次对应模式指令。
+     * 不做状态回读，界面上无“当前模式”概念，纯测试下发用。
+     * 三键并排时「Red Laser Mode」标题 + 按钮会在 1024 档挤爆，故改成
+     * 标题独占一行、按钮组下一行右对齐。 */
+    lv_obj_t *redblk = lv_obj_create(pc_card);
+    lv_obj_remove_style_all(redblk);
+    lv_obj_set_width(redblk, LV_PCT(100));
+    lv_obj_set_height(redblk, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(redblk, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(redblk, LV_FLEX_ALIGN_START,
+                          LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
+    lv_obj_set_style_pad_row(redblk, USER_PAD_SM / 2, 0);
+    lv_obj_set_style_bg_opa(redblk, LV_OPA_TRANSP, 0);
+    lv_obj_clear_flag(redblk, LV_OBJ_FLAG_SCROLLABLE);
+    add_caption(redblk, "Red Laser Mode");
+
+    lv_obj_t *redbtns = lv_obj_create(redblk);
     lv_obj_remove_style_all(redbtns);
-    lv_obj_set_size(redbtns, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_set_width(redbtns, LV_PCT(100));
+    lv_obj_set_height(redbtns, LV_SIZE_CONTENT);
     lv_obj_set_flex_flow(redbtns, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(redbtns, LV_FLEX_ALIGN_END,
                           LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_column(redbtns, USER_PAD_SM, 0);
+    lv_obj_set_style_pad_column(redbtns, USER_PAD_SM / 2, 0);
     lv_obj_set_style_bg_opa(redbtns, LV_OPA_TRANSP, 0);
     lv_obj_clear_flag(redbtns, LV_OBJ_FLAG_SCROLLABLE);
-    make_ghost_button(redbtns, "Red", on_red_mode_click);
-    make_ghost_button(redbtns, "Laser", on_laser_mode_click);
+    lv_obj_t *btn_red = make_ghost_button(redbtns, "Red", on_red_mode_click);
+    lv_obj_t *btn_laser = make_ghost_button(redbtns, "Laser", on_laser_mode_click);
+    lv_obj_t *btn_always = make_ghost_button(redbtns, "Red_On", on_red_always_click);
+    /* 三键略收紧左右内距，1024 右栏更稳 */
+    lv_obj_set_style_pad_hor(btn_red, USER_PAD_SM, 0);
+    lv_obj_set_style_pad_hor(btn_laser, USER_PAD_SM, 0);
+    lv_obj_set_style_pad_hor(btn_always, USER_PAD_SM, 0);
 
     lv_obj_t *ops_card = make_laser_card(right, "Alarm Ops");
     lv_obj_t *opsrow = make_action_row(ops_card, "Laser Alarm Reset");

@@ -234,6 +234,7 @@ scripts/rongsu.sh start   # glavo + rongsu_camera → ui
 | `UI_Debug_Galvo_Move_Ntf` | — | 契约预留 | `DebugGalvoMovePayload` | — | 振镜步进；调试页方向键不再发送 |
 | `UI_Debug_Galvo_Home_Ntf` | — | 契约预留 | Empty | — | 振镜回中；调试页复位钮不再发送 |
 | `UI_Debug_Galvo_RedLight_Ntf` | — | UI→Glavo | `DebugOnOffPayload` | `send_galvo_red_light` | 红光/激光模式切换（`on=1` 红光，`on=0` 激光）。Glavo 侧每次都下发（TCP 0x0A + 串口激光使能），不去重、不回读状态 |
+| `UI_Debug_Galvo_RedAlways_Ntf` | — | UI→Glavo | Empty | `send_galvo_red_always` | 红光常亮（TCP 0x0A `stop=0 pause=0 red=3` + 串口关激光使能）。调试页点发，不去重、不回读状态 |
 | `UI_Debug_Galvo_Param_Save_Ntf` | — | UI→Glavo | `DebugGalvoParamPayload` | `send_galvo_param_save` | 写 `cal.csv` 第 4 行中心偏移并 `load_calibration`；测试图/正式打印中 UI 禁用 Save |
 | `UI_Debug_Galvo_Calib_Ntf` | — | UI→Glavo | Empty | `send_galvo_calib` | 开始标定 |
 | `UI_Debug_Device_Ntf` | — | UI→Glavo | `DebugDevicePayload` | `send_device` | 设备/门/电机/照明 |
@@ -294,14 +295,15 @@ scripts/rongsu.sh start   # glavo + rongsu_camera → ui
 
 - `DATA[1] Stop`：`1=急停`，`0=不修改`
 - `DATA[2] Pause`：`2=暂停`，`1=继续`，`0=不修改`
-- `DATA[3] Red`：`2=激光`，`1=红光`，`0=不修改`
+- `DATA[3] Red`：`3=红光常亮`，`2=激光`，`1=红光`，`0=不修改`
 
 实现注意：
 
-- 禁止写法：`payload[x] = v ? 1u : 0u;`（会把 `2` 误压成 `1`）
+- 禁止写法：`payload[x] = v ? 1u : 0u;`（会把 `2`/`3` 误压成 `1`）
 - 正确写法：`payload[x] = v;`
 - 典型场景：
   - 调试红光开关：`stop=0 pause=0 red=1/2`
+  - 调试红光常亮：`stop=0 pause=0 red=3`
   - 打印暂停/恢复：`stop=0 pause=2/1 red=0`
   - 急停：`stop=1 pause=0 red=0`
 

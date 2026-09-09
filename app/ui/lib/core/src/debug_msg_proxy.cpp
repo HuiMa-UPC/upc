@@ -170,6 +170,11 @@ void DebugMsgProxy::send_galvo_red_light(bool on)
     publish_pod(middleware::MsgType::UI_Debug_Galvo_RedLight_Ntf, p);
 }
 
+void DebugMsgProxy::send_galvo_red_always()
+{
+    publish_empty(middleware::MsgType::UI_Debug_Galvo_RedAlways_Ntf);
+}
+
 void DebugMsgProxy::send_galvo_param_save(float scale, float step_mm,
                                           float center_offset_x,
                                           float center_offset_y)

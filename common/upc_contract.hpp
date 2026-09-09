@@ -435,6 +435,7 @@ enum class MsgType : uint32_t {
     UI_Debug_Local_Rtsp_Get_Ntf,        /**< Empty：查询当前本地 RTSP Server 开关状态（→Media） */
     UI_Debug_TestImage_Set_Ntf,         /**< DebugOnOffPayload：红光测试图循环打印开关（/userdata/test/test.gcode） */
     UI_Debug_TestImage_Get_Ntf,         /**< Empty：查询当前测试图循环打印状态 */
+    UI_Debug_Galvo_RedAlways_Ntf,       /**< Empty：红光常亮（TCP 0x0A DATA[3]=3；串口关激光使能） */
 
     // ---- GLAVO → UI：调试页状态回读（按模块拆分） ----
     GLAVO_Debug_Sensor_Ntf = 0x1200, /**< DebugSensorPayload：顶部 7 路传感器 */
