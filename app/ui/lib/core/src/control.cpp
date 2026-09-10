@@ -709,6 +709,8 @@ void wire_msg_proxy()
             pr.pm25_cabin        = p.pm25_cabin;
             pr.temperature_c     = p.temperature_c;
             pr.oxygen_percent    = p.oxygen_percent;
+            pr.current_layer     = p.current_layer;
+            pr.total_layers      = p.total_layers;
             g_job_prog_cb(&pr, g_job_u);
         }
         if(p.progress_percent < 99) {

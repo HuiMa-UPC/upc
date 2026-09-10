@@ -65,6 +65,8 @@ typedef struct {
     float    pm25_cabin;
     float    temperature_c;
     float    oxygen_percent;
+    uint32_t current_layer;  /**< 正在打印的层号（1-based）；total_layers=0 时无意义 */
+    uint32_t total_layers;   /**< 总层数；0=后端无法给出（OVF / 无层标记），不显示层号 */
 } control_progress_t;
 
 /** 打印结果页展示数据；来源见 control.cpp on_print_video_manifest()。 */

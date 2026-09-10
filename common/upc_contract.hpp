@@ -519,6 +519,10 @@ enum class MsgType : uint32_t {
     MQTT_Ota_Notify_Ntf,                    /**< OtaNotifyPayload：MQTT 侧收到 ota/notify 后转发 UI */
     UI_Ota_User_Decision_Req,               /**< OtaDecisionReqPayload：UI 确认/取消 OTA 通知 */
     APP_Mqtt_Ota_Progress_Ntf,              /**< OtaProgressPayload：下载/校验/刷写进度 */
+    // ---- MQTT ↔ UI：SOC 全包升级（重启时机交给用户） ----
+    APP_Soc_Ota_Ready_Ntf,                  /**< SocOtaReadyPayload：.img 已就绪，UI 弹窗问是否重启 */
+    UI_Soc_Ota_Apply_Req,                   /**< SocOtaApplyReqPayload：立即重启升级 / 放弃并删除 */
+    APP_Soc_Ota_Apply_Rsp,                  /**< SocOtaApplyRspPayload：处置结果（成功重启则收不到） */
 
     // ---- UI ↔ GLAVO：MCU 固件版本查询（串口 PORT_GENERAL_TASK 0xA2 / CMD_PROJECT_INFO 0x10） ----
     UI_Mcu_Version_Ntf = 0x1500, /**< Empty：进入 Settings/About 页时查询一次 */
@@ -561,6 +565,8 @@ inline constexpr bool is_ipc_reliable_msg_type(MsgType type) noexcept
     // OTA / 告警：终态与关键事件
     case MsgType::APP_Mcu_Ota_Status_Ntf:
     case MsgType::APP_Mqtt_Ota_Progress_Ntf:
+    case MsgType::APP_Soc_Ota_Ready_Ntf:
+    case MsgType::APP_Soc_Ota_Apply_Rsp:
     case MsgType::GLAVO_Alarm_Report_Ntf:
     case MsgType::GLAVO_Alarm_Reset_Result_Ntf:
         return true;
@@ -831,6 +837,12 @@ struct PrintProgressPayload {
     float    oxygen_percent;
     uint16_t cmd_cache_rate;   /**< MCU 指令缓存占用率（TCP 心跳，0=排空） */
     uint16_t data_cache_rate;  /**< MCU 数据缓存占用率（TCP 心跳，0=排空） */
+    /** 正在打印的层号（1-based，= 已完成层 + 1，钳在 total_layers 内）；
+     *  total_layers=0 时无意义 */
+    uint32_t current_layer;
+    /** 总层数（G-code 的 M3000 计数）；0=未知（OVF / 无层标记 / 关闭 Layer
+     *  Snap），此时 UI 不显示层号 */
+    uint32_t total_layers;
 };
 
 /** GLAVO_Print_State_Ntf 载荷：开始打印/打印结束状态边沿（Inline）。
@@ -1098,6 +1110,43 @@ struct OtaProgressPayload {
     uint8_t progress_pct;       /**< 0..100 */
     uint8_t reserved[2];
     char    error_code[64];     /**< 失败原因码；成功/进行中为空串 */
+};
+
+/**
+ * APP_Soc_Ota_Ready_Ntf：SOC 全包固件已下载校验完并落到 UPC_SOC_OTA_IMG。
+ *
+ * 两个时机各发一次：本次下载完成时；开机后 MQTT 首次连上云端且检测到
+ * 上次遗留的未应用固件时（进程比 UI 先起，早发会丢，故推迟到连云成功）。
+ */
+struct SocOtaReadyPayload {
+    char     version[32];       /**< 云端 manifest 给的目标固件版本 */
+    char     task_id[64];       /**< 云端任务号，UI 仅展示 */
+    uint64_t img_bytes;         /**< .img 字节数，UI 展示占用空间 */
+};
+
+/** UI_Soc_Ota_Apply_Req：用户对已就绪固件的处置（"稍后"不发消息，UI 自行关窗） */
+enum class SocOtaApplyAction : uint8_t {
+    RebootNow = 0,  /**< 写 misc 分区并重启进 recovery 刷写 */
+    Discard   = 1,  /**< 放弃升级并删除固件，释放 /userdata 空间 */
+};
+
+struct SocOtaApplyReqPayload {
+    uint8_t action;             /**< SocOtaApplyAction */
+    uint8_t reserved[3];
+};
+
+/** APP_Soc_Ota_Apply_Rsp：处置结果。RebootNow 成功时设备已重启，UI 收不到本条 */
+enum class SocOtaApplyResult : uint8_t {
+    Ok          = 0,
+    NoPending   = 1,  /**< 无待应用固件：状态文件或 .img 已不在 */
+    ApplyFailed = 2,  /**< updateEngine 返回非零，misc 未写入 */
+};
+
+struct SocOtaApplyRspPayload {
+    uint8_t action;             /**< 回显 SocOtaApplyAction */
+    uint8_t result;             /**< SocOtaApplyResult */
+    uint8_t reserved[2];
+    char    reason[64];         /**< 失败详情；成功为空串 */
 };
 
 /**

@@ -31,6 +31,7 @@
 
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <string>
 
 namespace ui {
@@ -55,6 +56,7 @@ void sync_message_badge(void)
 lv_obj_t* g_ota_screen = nullptr;
 ui_modal_dialog_t* g_ota_prompt_dlg = nullptr;
 ui_modal_dialog_t* g_ota_progress_dlg = nullptr;
+ui_modal_dialog_t* g_soc_ota_dlg = nullptr;
 lv_obj_t* g_ota_progress_bar = nullptr;
 lv_obj_t* g_ota_progress_label = nullptr;
 std::string g_ota_task_id;
@@ -65,6 +67,14 @@ void close_ota_prompt()
     if(g_ota_prompt_dlg) {
         ui_modal_dialog_close(g_ota_prompt_dlg);
         g_ota_prompt_dlg = nullptr;
+    }
+}
+
+void close_soc_ota_prompt()
+{
+    if(g_soc_ota_dlg) {
+        ui_modal_dialog_close(g_soc_ota_dlg);
+        g_soc_ota_dlg = nullptr;
     }
 }
 
@@ -177,6 +187,11 @@ void on_ota_progress(const middleware::OtaProgressPayload& p)
 
     if(state == middleware::OtaProgressState::Completed) {
         close_ota_prompt();
+        /* SOC 全包升级：进度拉满后不关窗、不弹成功提示，等 APP_Soc_Ota_Ready_Ntf
+         * 把界面切成"是否重启升级"。其它组件保持原有的一闪即过提示。 */
+        if(std::strcmp(p.component, "soc") == 0) {
+            return;
+        }
         ui_toast_show("OTA files ready", user_color_status_ok, 1800);
         close_ota_progress();
     } else if(state == middleware::OtaProgressState::Failed) {
@@ -187,6 +202,92 @@ void on_ota_progress(const middleware::OtaProgressPayload& p)
         ui_toast_show(err, user_color_status_err, 2200);
         close_ota_progress();
     }
+}
+
+/**
+ * 用户对已就绪 SOC 固件的处置。
+ *
+ * 打印中拦截"立即重启"：重启会毁掉正在进行的打印任务，这里只提示不关窗，
+ * 用户打印结束后还能再点。"稍后"不发消息，MQTT 侧的待应用状态已持久化，
+ * 下次开机连上云端会重新提示。
+ */
+void soc_ota_apply_cb(lv_event_t* e)
+{
+    const auto action = static_cast<middleware::SocOtaApplyAction>(
+        reinterpret_cast<intptr_t>(lv_event_get_user_data(e)));
+
+    if(action == middleware::SocOtaApplyAction::RebootNow && control_is_printing()) {
+        ui_toast_show("Printing in progress, cannot reboot",
+                      user_color_status_err, 2200);
+        return;
+    }
+    UiMsgProxy::instance().send_soc_ota_apply(action);
+    close_soc_ota_prompt();
+}
+
+void soc_ota_later_cb(lv_event_t*)
+{
+    close_soc_ota_prompt();
+}
+
+void on_soc_ota_ready(const middleware::SocOtaReadyPayload& p)
+{
+    if(!g_ota_screen) {
+        return;
+    }
+    /* 进度框让位给确认框：下载阶段的 100% 已经展示完了。 */
+    close_ota_progress();
+    close_ota_prompt();
+    close_soc_ota_prompt();
+
+    ui_modal_dialog_cfg_t cfg =
+        ui_modal_dialog_cfg_user("System Update Ready", USER_DLG_W, true);
+    g_soc_ota_dlg = ui_modal_dialog_open(g_ota_screen, &cfg);
+    if(!g_soc_ota_dlg) {
+        return;
+    }
+
+    char body[224];
+    std::snprintf(body, sizeof(body),
+                  "Version: %s\nSize: %.1f MB\n"
+                  "The device will reboot to install the update.",
+                  p.version[0] ? p.version : "unknown",
+                  static_cast<double>(p.img_bytes) / (1024.0 * 1024.0));
+    lv_obj_t* lbl = ui_user_make_body_label(g_soc_ota_dlg->body, body);
+    lv_label_set_long_mode(lbl, LV_LABEL_LONG_MODE_WRAP);
+    lv_obj_set_width(lbl, LV_PCT(100));
+    lv_obj_set_style_text_align(lbl, LV_TEXT_ALIGN_CENTER, 0);
+
+    ui_user_make_confirm_footer_btn(
+        g_soc_ota_dlg->footer, "Discard", false, user_color_text_dim,
+        soc_ota_apply_cb,
+        reinterpret_cast<void*>(
+            static_cast<intptr_t>(middleware::SocOtaApplyAction::Discard)));
+    ui_user_make_confirm_footer_btn(
+        g_soc_ota_dlg->footer, "Later", false, user_color_text_dim,
+        soc_ota_later_cb, nullptr);
+    ui_user_make_confirm_footer_btn(
+        g_soc_ota_dlg->footer, "Reboot", true, user_color_accent,
+        soc_ota_apply_cb,
+        reinterpret_cast<void*>(
+            static_cast<intptr_t>(middleware::SocOtaApplyAction::RebootNow)));
+}
+
+void on_soc_ota_apply_rsp(const middleware::SocOtaApplyRspPayload& p)
+{
+    const auto result = static_cast<middleware::SocOtaApplyResult>(p.result);
+    if(result == middleware::SocOtaApplyResult::Ok) {
+        /* RebootNow 成功时设备正在重启，没必要提示；只回执删除结果。 */
+        if(static_cast<middleware::SocOtaApplyAction>(p.action) ==
+           middleware::SocOtaApplyAction::Discard) {
+            ui_toast_show("Update package removed", user_color_status_ok, 1800);
+        }
+        return;
+    }
+    char err[128];
+    std::snprintf(err, sizeof(err), "Update failed: %s",
+                  p.reason[0] ? p.reason : "unknown");
+    ui_toast_show(err, user_color_status_err, 2200);
 }
 
 } // namespace
@@ -201,6 +302,8 @@ void app_init(lv_obj_t* screen) {
     UiMsgProxy::instance().init();
     UiMsgProxy::instance().register_ota_notify(on_ota_notify);
     UiMsgProxy::instance().register_ota_progress(on_ota_progress);
+    UiMsgProxy::instance().register_soc_ota_ready(on_soc_ota_ready);
+    UiMsgProxy::instance().register_soc_ota_apply_rsp(on_soc_ota_apply_rsp);
     CameraMsgProxy::instance().init();
     DebugMsgProxy::instance().init();
     CameraPreviewPlayer::instance().init();

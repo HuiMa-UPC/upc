@@ -177,7 +177,7 @@ scripts/rongsu.sh start   # glavo + rongsu_camera → ui
 | `APP_Print_Prepare_Rsp` | — | Glavo→UI | `PrintPrepareRspPayload` | `register_print_prepare_done` | — |
 | `UI_Parser_Exit_Ntf` | — | UI→Glavo | Empty | `send_parser_exit` | 取消解析 |
 | `UI_Print_Start_Req` | — | UI→Glavo | `PrintStartReqPayload` | `send_print_start` | 正式解析+下发 |
-| `APP_Print_Progress_Ntf` | `GLAVO_Print_Progress_Ntf` | Glavo→UI | `PrintProgressPayload` | `register_print_progress` | 进度推送 |
+| `APP_Print_Progress_Ntf` | `GLAVO_Print_Progress_Ntf` | Glavo→UI | `PrintProgressPayload` | `register_print_progress` | 进度推送（百分比 + 环境读数 + 当前层/总层） |
 | `UI_Print_Terminate_Req` | — | UI→Glavo | Empty | `send_print_terminate` | 终止作业 |
 | `UI_Print_Pause_Req` | — | UI→Glavo | Empty | `send_print_pause` | 暂停 TCP 运动下发（解析继续） |
 | `UI_Print_Resume_Req` | — | UI→Glavo | Empty | `send_print_resume` | 恢复 TCP 运动下发 |
@@ -223,7 +223,10 @@ scripts/rongsu.sh start   # glavo + rongsu_camera → ui
 | `APP_Media_Local_Rtsp_State_Ntf` | — | Media→UI | `DebugOnOffPayload` | `DebugMsgProxy::register_local_rtsp` | 回报**实际**状态：相机流未就绪/编码器失败时回 0，UI 据此把开关弹回 |
 | `MQTT_Ota_Notify_Ntf` | — | MQTT→UI | `OtaNotifyPayload` | `register_ota_notify` | 收到云端 OTA 通知后弹确认框（用户确认后再请求 manifest） |
 | `UI_Ota_User_Decision_Req` | — | UI→MQTT | `OtaDecisionReqPayload` | `send_ota_user_decision` | 用户确认/取消 OTA 通知（取消仅关弹窗，不上报云端） |
-| `APP_Mqtt_Ota_Progress_Ntf` | — | MQTT→UI | `OtaProgressPayload` | `register_ota_progress` | 下载/校验/刷写进度；`mcu`/`galvo` 应用阶段跟真实会话，`soc` 落盘后直接 100% |
+| `APP_Mqtt_Ota_Progress_Ntf` | — | MQTT→UI | `OtaProgressPayload` | `register_ota_progress` | 下载/校验/刷写进度；`mcu`/`galvo` 应用阶段跟真实会话，`soc` 固件就绪后直接 100% |
+| `APP_Soc_Ota_Ready_Ntf` | — | MQTT→UI | `SocOtaReadyPayload` | `register_soc_ota_ready` | SOC 全包 `.img` 已就绪（进度已 100%），UI 切成"是否重启升级"弹窗。下载完成时发一次；开机后 MQTT **首次连上云端**再补发一次（比 UI 先起，早发会丢） |
+| `UI_Soc_Ota_Apply_Req` | — | UI→MQTT | `SocOtaApplyReqPayload` | `send_soc_ota_apply` | `RebootNow` 写 misc 分区后重启进 recovery；`Discard` 删固件释放空间。"稍后"不发消息（状态已持久化，下次开机重提示） |
+| `APP_Soc_Ota_Apply_Rsp` | — | MQTT→UI | `SocOtaApplyRspPayload` | `register_soc_ota_apply_rsp` | 处置结果；`RebootNow` 成功时设备已重启，UI 收不到本条 |
 | `XFR_Transfer_Progress_Ntf` | — | XFR→UI | `XfrTransferProgressPayload` | `register_xfr_transfer_progress` | WiFi 传输阶段进度（Uploading/Slicing/Finished/Error） |
 | `UI_Mcu_Ota_Start_Req` / `UI_Mcu_Ota_Cancel_Ntf` / `APP_Mcu_Ota_Status_Ntf` | — | UI/MQTT↔Glavo | `McuOtaStatusPayload` | `send_mcu_ota_start` / `send_mcu_ota_cancel` / `register_mcu_ota_status` | Galvo 以太网 OTA（`/userdata/image/galvo`，AB 对规则见 [OTA_IMAGE.md](fs_manifest/OTA_IMAGE.md)）。状态 Glavo 双发 UI 与 MQTT |
 | `UI_Serial_Mcu_Ota_Start_Req` / `UI_Serial_Mcu_Ota_Cancel_Ntf` / `APP_Serial_Mcu_Ota_Status_Ntf` | — | UI/MQTT↔Glavo | `McuOtaStatusPayload` | `send_serial_mcu_ota_start` / `send_serial_mcu_ota_cancel` / `register_serial_mcu_ota_status` | MCU 串口 OTA（`/userdata/image/mcu`，AB 对规则见 [OTA_IMAGE.md](fs_manifest/OTA_IMAGE.md)）。云端落盘后 MQTT 发 Start；状态双发 UI 与 MQTT |

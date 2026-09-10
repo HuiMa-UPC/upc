@@ -58,6 +58,13 @@ inline constexpr const char* kImageSocDir = UPC_IMAGE_SOC_DIR;
 inline constexpr const char* kImageMcuDir = UPC_IMAGE_MCU_DIR;
 inline constexpr const char* kImageGalvoDir = UPC_IMAGE_GALVO_DIR;
 
+/** SOC 全包升级：固件固定路径、待应用状态文件、刷写工具。 */
+inline constexpr const char* kSocOtaImgPath = UPC_SOC_OTA_IMG;
+inline constexpr const char* kSocOtaPendingFile = UPC_SOC_OTA_PENDING_FILE;
+inline constexpr const char* kSocOtaUpdateEngine = "updateEngine";
+/** 解包后除 .img 自身外还要留的余量，避免把 /userdata 刚好占满。 */
+inline constexpr uint64_t kSocOtaSpareBytes = 64ull * 1024 * 1024;
+
 /** 最小 URL 结构，供 OTA 下载链路使用。 */
 struct ParsedUrl {
     std::string scheme;
@@ -111,6 +118,10 @@ bool run_shell_ok(const std::string& cmd);
 std::string to_upper_ascii(std::string s);
 /** 是否为 .bin 文件名。 */
 bool is_bin_name(const std::string& name);
+/** 是否为 .img 文件名（SOC 全包升级固件）。 */
+bool is_img_name(const std::string& name);
+/** 查询 path 所在文件系统的可用字节数（非特权可用部分）。 */
+bool fs_free_bytes(const char* path, uint64_t& out);
 /** 设备激活失败重试退避。 */
 uint64_t activation_retry_interval_ms(uint32_t fail_count);
 

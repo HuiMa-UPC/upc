@@ -18,6 +18,7 @@
 #include <sstream>
 #include <string>
 #include <sys/socket.h>
+#include <sys/statvfs.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <netdb.h>
@@ -813,6 +814,31 @@ bool is_bin_name(const std::string& name)
     return upper.rfind(".BIN") == upper.size() - 4;
 }
 
+bool is_img_name(const std::string& name)
+{
+    const std::string normalized = strip_archive_leading_current_dir(name);
+    if(normalized.size() < 5) {
+        return false;
+    }
+    const std::string upper = to_upper_ascii(normalized);
+    return upper.rfind(".IMG") == upper.size() - 4;
+}
+
+bool fs_free_bytes(const char* path, uint64_t& out)
+{
+    out = 0;
+    if(!path || !path[0]) {
+        return false;
+    }
+    struct statvfs st{};
+    if(::statvfs(path, &st) != 0) {
+        return false;
+    }
+    /* 用 f_bavail 而非 f_bfree：后者含仅 root 可动用的保留块，普通进程写不到。 */
+    out = static_cast<uint64_t>(st.f_bavail) * static_cast<uint64_t>(st.f_frsize);
+    return true;
+}
+
 uint64_t activation_retry_interval_ms(uint32_t fail_count)
 {
     if(fail_count <= 1) {
@@ -948,6 +974,10 @@ void MqttService::subscribe_messages()
         middleware::MsgType::UI_Ota_User_Decision_Req,
         middleware::ModuleId::APP_MQTT,
         [this](const middleware::Message& msg) { on_ota_user_decision(msg); }));
+    subs_.push_back(bus.subscribe(
+        middleware::MsgType::UI_Soc_Ota_Apply_Req,
+        middleware::ModuleId::APP_MQTT,
+        [this](const middleware::Message& msg) { on_soc_ota_apply(msg); }));
     subs_.push_back(bus.subscribe(
         middleware::MsgType::APP_Mqtt_Rtsp_Start_Rsp,
         middleware::ModuleId::APP_MQTT,
@@ -1123,6 +1153,10 @@ bool MqttService::connect_mqtt()
 
     /* 设备上线后主动上报一次完整状态（协议 §四）：mode 默认 idle，since 取当前时刻 */
     (void)publish_state(static_cast<uint32_t>(middleware::UserHomeStatus::Idle), 0);
+
+    /* 遗留的 SOC 待应用固件在这里补提示：MQTT 比 UI 先启动，放 init() 里发
+     * 的话 UI 还没订阅，消息会丢。内部只执行一次。 */
+    notify_soc_ota_ready_after_connect();
     return true;
 }
 
