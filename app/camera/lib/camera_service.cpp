@@ -516,13 +516,22 @@ void CameraService::stream_thread_fn()
         const auto now = clock::now();
         if(now - stats_since >= std::chrono::seconds(5)) {
             /* 流诊断受 UPC_MOD_CAMERA_PREVIEW 控制，5s 聚合输出 */
+            const ViCaptureLatencyStats lat = capture_.take_latency_stats();
+            const uint64_t drv_age_avg_us =
+                lat.samples > 0 ? (lat.latency_us_sum / lat.samples) : 0;
             UPC_LOG_CAMERA_PREVIEW(Debug,
                 "stream 5s: committed=%u last_seq=%u last_slot=%u "
                 "slot_fail=%u dequeue_fail=%u release_timeout=%u "
-                "inflight_max=%u/%zu",
+                "inflight_max=%u/%zu "
+                "drv_age_avg_us=%llu drv_age_max_us=%llu drv_drop=%u "
+                "drv_drained=%u ts_mono=%d",
                 frames_1s, last_seq, last_slot,
                 slot_fail_1s, dequeue_fail_1s, timeout_1s,
-                inflight_max_1s, max_in_flight);
+                inflight_max_1s, max_in_flight,
+                static_cast<unsigned long long>(drv_age_avg_us),
+                static_cast<unsigned long long>(lat.latency_us_max),
+                lat.seq_gap, lat.drained,
+                lat.timestamp_monotonic ? 1 : 0);
             frames_1s = slot_fail_1s = dequeue_fail_1s = timeout_1s = 0;
             inflight_max_1s = 0;
             stats_since = now;
@@ -715,6 +724,12 @@ void CameraService::stream_thread_fn()
             in_flight.pop_front();
         }
 
+        /*
+         * 按帧周期补睡，避免空转把 CPU 打满。
+         * sleep_for 会过冲几十微秒，本线程因此比 sensor 略慢；这点差额过去会
+         * 在驱动队列里累积成不断增长的画面延迟，现在由 dequeue_frame 的排空
+         * 兜住（见 vi_capture.cpp），所以这里只当限流用。
+         */
         const auto elapsed = clock::now() - tick_start;
         if(elapsed < frame_period) {
             std::this_thread::sleep_for(frame_period - elapsed);

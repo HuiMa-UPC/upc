@@ -10,6 +10,7 @@
 #include <linux/dma-buf.h>
 
 #include <atomic>
+#include <cerrno>
 #include <chrono>
 #include <cstring>
 #include <sys/ioctl.h>
@@ -25,9 +26,12 @@ namespace {
  * 基础常量与工具函数（匿名命名空间）
  * ========================= */
 
-constexpr uint32_t kUiRefreshPeriodMs = 33u;
+/* 与 LV_DEF_REFR_PERIOD(16) 对齐：切图周期越长，转换好的帧就要多等一拍才上屏。 */
+constexpr uint32_t kUiRefreshPeriodMs = 16u;
 constexpr uint32_t kUiRefreshInteractPeriodMs = 66u;
 constexpr uint32_t kInteractiveDecodeFps = 12u;
+/* 环里暂时无新帧时的小憩时长，决定 SHM 轮询粒度（越小延迟越低）。 */
+constexpr uint32_t kNoFrameNapMs = 5u;
 constexpr uint64_t kInteractionHoldMs = 320u;
 constexpr uint32_t kStartRspWatchdogMs = 1000u;
 constexpr uint8_t kStartRspRetryMax = 2u;
@@ -70,6 +74,18 @@ uint64_t monotonic_ms()
 {
     return static_cast<uint64_t>(
         std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now().time_since_epoch())
+            .count());
+}
+
+/**
+ * 与 Camera 侧 commit 时间戳同源（Linux 上 steady_clock 即 CLOCK_MONOTONIC），
+ * 故可直接与 slot 里的 timestamp_us 相减，得到跨进程的 SHM 等待时间。
+ */
+uint64_t monotonic_us()
+{
+    return static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::microseconds>(
             std::chrono::steady_clock::now().time_since_epoch())
             .count());
 }
@@ -423,6 +439,10 @@ void CameraPreviewPlayer::start(lv_obj_t* image_widget, lv_obj_t* hint_widget,
     decode_target_fps_override_.store(0, std::memory_order_relaxed);
     ui_refresh_period_ms_ = kUiRefreshPeriodMs;
     last_anim_count_ = 0;
+    display_publish_us_.store(0, std::memory_order_relaxed);
+    ui_show_delay_us_sum_.store(0, std::memory_order_relaxed);
+    ui_show_delay_us_max_.store(0, std::memory_order_relaxed);
+    ui_show_samples_.store(0, std::memory_order_relaxed);
 
     if(image_) {
         lv_obj_add_flag(image_, LV_OBJ_FLAG_HIDDEN);
@@ -585,10 +605,22 @@ bool CameraPreviewPlayer::prepare_rga_streaming_cache()
     release_rga_streaming_cache();
     rga_src_direct_ = true;
 
+    /*
+     * 每个失败点都要单独报，且要带 errno / 序号 / 请求大小。
+     * 这里失败只会退化成软件转换（每帧 22ms）、画面照常出，外部看不出异常，
+     * 曾经因此静默降级很久才被发现；调用方那条 warning 分不清是哪一步挂的。
+     */
     if(!rga_path_ready_ || !rga_stream_src_.valid() || !rga_stream_dst_.valid()) {
+        UPC_LOG_CAMERA_PREVIEW(Error,
+            "RGA streaming cache: scratch unavailable ready=%d src_valid=%d dst_valid=%d",
+            rga_path_ready_ ? 1 : 0, rga_stream_src_.valid() ? 1 : 0,
+            rga_stream_dst_.valid() ? 1 : 0);
         return false;
     }
     if(dma_fds_.empty() || dma_nv12_bytes_ == 0u) {
+        UPC_LOG_CAMERA_PREVIEW(Error,
+            "RGA streaming cache: no source fds count=%zu nv12_bytes=%zu",
+            dma_fds_.size(), dma_nv12_bytes_);
         return false;
     }
 
@@ -597,6 +629,12 @@ bool CameraPreviewPlayer::prepare_rga_streaming_cache()
     const rga_buffer_handle_t dst_scratch_h =
         importbuffer_fd(rga_stream_dst_.fd(), static_cast<int>(rga_stream_dst_.size()));
     if(src_scratch_h == 0 || dst_scratch_h == 0) {
+        UPC_LOG_CAMERA_PREVIEW(Error,
+            "RGA streaming cache: scratch import failed src_h=%d dst_h=%d "
+            "src_bytes=%zu dst_bytes=%zu (%s)",
+            static_cast<int>(src_scratch_h), static_cast<int>(dst_scratch_h),
+            rga_stream_src_.size(), rga_stream_dst_.size(),
+            std::strerror(errno));
         if(src_scratch_h) {
             releasebuffer_handle(src_scratch_h);
         }
@@ -608,17 +646,32 @@ bool CameraPreviewPlayer::prepare_rga_streaming_cache()
     rga_stream_src_handle_ = static_cast<uint32_t>(src_scratch_h);
     rga_stream_dst_handle_ = static_cast<uint32_t>(dst_scratch_h);
 
+    /*
+     * 逐 fd 常驻 mmap + importbuffer_fd。导入数量 = V4L2 缓冲数 + 2 块 scratch，
+     * RGA 侧有上限：rk3568 实测 4 个缓冲（共 6 句柄）可用，6 个（8 句柄）必失败。
+     * 所以调 CAMERA_V4L2_BUF_COUNT 会直接影响这里，见 camera/device_config.hpp。
+     */
     rga_src_maps_.reserve(dma_fds_.size());
-    for(int fd : dma_fds_) {
+    for(size_t i = 0; i < dma_fds_.size(); ++i) {
+        const int fd = dma_fds_[i];
         if(fd < 0) {
+            UPC_LOG_CAMERA_PREVIEW(Error,
+                "RGA streaming cache: bad src fd idx=%zu", i);
             return false;
         }
         void* va = mmap(nullptr, dma_nv12_bytes_, PROT_READ, MAP_SHARED, fd, 0);
         if(va == MAP_FAILED) {
+            UPC_LOG_CAMERA_PREVIEW(Error,
+                "RGA streaming cache: mmap failed idx=%zu/%zu fd=%d size=%zu (%s)",
+                i, dma_fds_.size(), fd, dma_nv12_bytes_, std::strerror(errno));
             return false;
         }
         const rga_buffer_handle_t h = importbuffer_fd(fd, static_cast<int>(dma_nv12_bytes_));
         if(h == 0) {
+            UPC_LOG_CAMERA_PREVIEW(Error,
+                "RGA streaming cache: importbuffer_fd failed idx=%zu/%zu fd=%d "
+                "size=%zu (%s) — 缓冲数超过 RGA 导入上限？",
+                i, dma_fds_.size(), fd, dma_nv12_bytes_, std::strerror(errno));
             munmap(va, dma_nv12_bytes_);
             return false;
         }
@@ -1032,6 +1085,9 @@ void CameraPreviewPlayer::decode_thread_fn()
     uint64_t loop_us_sum    = 0; /* 整圈循环耗时累计 */
     uint64_t loop_us_max    = 0; /* 单圈最大耗时 */
     uint64_t last_convert_ms = 0; /* 上次真正做转换的时刻，交互降频用 */
+    uint64_t shm_wait_us_sum = 0; /* Camera commit → 本线程取到，累计 */
+    uint64_t shm_wait_us_max = 0; /* 同上单帧最大值 */
+    uint32_t shm_wait_samples = 0;
     auto stats_since = std::chrono::steady_clock::now();
 
     UPC_LOG_CAMERA_PREVIEW(Info,
@@ -1057,7 +1113,8 @@ void CameraPreviewPlayer::decode_thread_fn()
         if(!frame) {
             /* ring 暂时没有 READY 槽：稍等再试，避免空转打满 CPU。 */
             ++frames_no_slot;
-            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            std::this_thread::sleep_for(
+                std::chrono::milliseconds(kNoFrameNapMs));
         } else {
             /* ---- 有帧：做 NV12→BGRX 并交给 UI ---- */
 
@@ -1072,6 +1129,23 @@ void CameraPreviewPlayer::decode_thread_fn()
                 logged_first_meta = true;
             }
             last_seq = frame->seq;
+
+            /*
+             * SHM 等待时间：Camera commit 该帧到本线程取到它之间的空等。
+             * 两侧时间戳同源（CLOCK_MONOTONIC），所以可直接相减。
+             * 这一段本质上是轮询粒度带来的延迟，理论上不超过 kNoFrameNapMs。
+             */
+            if(frame->timestamp_us != 0) {
+                const uint64_t now_us = monotonic_us();
+                if(now_us > frame->timestamp_us) {
+                    const uint64_t wait_us = now_us - frame->timestamp_us;
+                    shm_wait_us_sum += wait_us;
+                    ++shm_wait_samples;
+                    if(wait_us > shm_wait_us_max) {
+                        shm_wait_us_max = wait_us;
+                    }
+                }
+            }
 
             /*
              * [步骤 2] 挑选本帧要写入的显示槽。
@@ -1118,6 +1192,9 @@ void CameraPreviewPlayer::decode_thread_fn()
                 if(convert_frame(*frame, write_idx)) {
                     ++frames_ok;
                     last_frame_ok_ms_.store(monotonic_ms(), std::memory_order_relaxed);
+                    /* 记录发布时刻，供 ui_timer_cb 算出「转换完成 → 上屏」延迟。 */
+                    display_publish_us_.store(monotonic_us(),
+                                              std::memory_order_relaxed);
                     display_buf_.store(write_idx, std::memory_order_release);
                     if(!logged_first_out) {
                         /* 抽查输出缓冲角点/中心像素，确认不是全黑或格式错乱。 */
@@ -1171,11 +1248,24 @@ void CameraPreviewPlayer::decode_thread_fn()
                 timed > 0 ? (convert_us_sum / timed) : 0;
             const uint64_t loop_avg =
                 loops > 0 ? (loop_us_sum / loops) : 0;
+            /* 取走 ui_timer_cb 累积的「发布 → 上屏」延迟并清零。 */
+            const uint32_t show_samples =
+                ui_show_samples_.exchange(0, std::memory_order_relaxed);
+            const uint64_t show_sum =
+                ui_show_delay_us_sum_.exchange(0, std::memory_order_relaxed);
+            const uint64_t show_max =
+                ui_show_delay_us_max_.exchange(0, std::memory_order_relaxed);
+            const uint64_t shm_wait_avg =
+                shm_wait_samples > 0 ? (shm_wait_us_sum / shm_wait_samples) : 0;
+            const uint64_t show_avg =
+                show_samples > 0 ? (show_sum / show_samples) : 0;
             UPC_LOG_CAMERA_PREVIEW(Debug,
                 "decode 5s: scene=%s image=%p ok=%u fail=%u skip=%u no_frame=%u "
                 "last_seq=%u display_buf=%d "
                 "cvt_avg_us=%llu cvt_max_us=%llu "
-                "loop_avg_us=%llu loop_max_us=%llu rga=%d",
+                "loop_avg_us=%llu loop_max_us=%llu rga=%d "
+                "shm_wait_avg_us=%llu shm_wait_max_us=%llu "
+                "show_avg_us=%llu show_max_us=%llu show_n=%u",
                 scene_[0] ? scene_ : "(none)", static_cast<void*>(image_),
                 frames_ok, frames_fail, frames_skip, frames_no_slot, last_seq,
                 display_buf_.load(std::memory_order_relaxed),
@@ -1183,27 +1273,32 @@ void CameraPreviewPlayer::decode_thread_fn()
                 static_cast<unsigned long long>(convert_us_max),
                 static_cast<unsigned long long>(loop_avg),
                 static_cast<unsigned long long>(loop_us_max),
-                rga_path_ready_ ? 1 : 0);
+                rga_path_ready_ ? 1 : 0,
+                static_cast<unsigned long long>(shm_wait_avg),
+                static_cast<unsigned long long>(shm_wait_us_max),
+                static_cast<unsigned long long>(show_avg),
+                static_cast<unsigned long long>(show_max),
+                show_samples);
             /* 清零窗口统计，开始下一个 5 秒。 */
             frames_ok = frames_no_slot = frames_fail = frames_skip = 0;
             convert_us_sum = convert_us_max = 0;
             loop_us_sum = loop_us_max = 0;
+            shm_wait_us_sum = shm_wait_us_max = 0;
+            shm_wait_samples = 0;
             stats_since = now;
         }
 
         /*
-         * [步骤 5] 帧率限速。
-         * 始终按相机帧率跑：交互降频只在上面作用于转换，绝不推迟取帧，
-         * 否则槽位滞留会反压 Camera 采集线程。
-         * 若本圈比目标周期还快，睡到接近 frame_period，避免空转占满 CPU；
-         * 若已经超时（转换慢），则不再睡，直接进入下一圈。
+         * [步骤 5] 轮询节奏。
+         * 不再按相机帧周期补睡。限速由 acquire_latest_frame 天然承担：
+         * 没有比 last_seq 更新的帧它就返回 nullopt，所以转换频率不会超过
+         * 相机帧率。而补睡会把 SHM 的轮询粒度从 kNoFrameNapMs 拉到整整一个
+         * 帧周期（无帧那一圈 elapsed 只有 5ms，末尾要再睡 28ms），凭空给
+         * 预览加上平均半帧的等待。
+         *
+         * 交互降频只在上面作用于转换，绝不推迟取帧与归还槽位，否则槽位滞留
+         * 会占满 Camera 的在飞窗口并反压采集线程。
          */
-        const auto elapsed = now - tick_start;
-        const auto frame_period =
-            std::chrono::microseconds(1000000u / base_fps);
-        if(elapsed < frame_period) {
-            std::this_thread::sleep_for(frame_period - elapsed);
-        }
     }
 
     UPC_LOG_CAMERA_PREVIEW(Info, "decode thread exiting scene=%s",
@@ -1606,6 +1701,29 @@ void CameraPreviewPlayer::ui_timer_cb(lv_timer_t* timer)
     // UI 定时器只做“指针切换”，不参与像素转换，保持主线程轻量。
     self->shown_buf_.store(idx, std::memory_order_relaxed);
 
+    /*
+     * 「转换完成 → 上屏」延迟：解码线程发布 display_buf_ 的时刻到此刻。
+     * 这一段等的是定时器下一拍，理论上不超过 ui_refresh_period_ms_。
+     * exchange(0) 保证同一帧只统计一次；由解码线程的 5s 日志读出并清零。
+     */
+    const uint64_t publish_us =
+        self->display_publish_us_.exchange(0, std::memory_order_relaxed);
+    if(publish_us != 0) {
+        const uint64_t now_us = monotonic_us();
+        if(now_us > publish_us) {
+            const uint64_t delay_us = now_us - publish_us;
+            self->ui_show_delay_us_sum_.fetch_add(delay_us,
+                                                  std::memory_order_relaxed);
+            self->ui_show_samples_.fetch_add(1, std::memory_order_relaxed);
+            /* 诊断量，max 用「读-比-写」近似即可，无需 CAS。 */
+            if(delay_us >
+               self->ui_show_delay_us_max_.load(std::memory_order_relaxed)) {
+                self->ui_show_delay_us_max_.store(delay_us,
+                                                  std::memory_order_relaxed);
+            }
+        }
+    }
+
     const bool first_show = !self->logged_first_ui_show_;
     if(first_show) {
         self->logged_first_ui_show_ = true;
@@ -1649,6 +1767,10 @@ void CameraPreviewPlayer::reset_ui()
     decode_target_fps_override_.store(0, std::memory_order_relaxed);
     ui_refresh_period_ms_ = kUiRefreshPeriodMs;
     last_anim_count_ = 0;
+    display_publish_us_.store(0, std::memory_order_relaxed);
+    ui_show_delay_us_sum_.store(0, std::memory_order_relaxed);
+    ui_show_delay_us_max_.store(0, std::memory_order_relaxed);
+    ui_show_samples_.store(0, std::memory_order_relaxed);
     pending_start_rsp_valid_ = false;
     decode_retiring_.store(false, std::memory_order_relaxed);
     retire_state_.reset();

@@ -15,7 +15,12 @@ namespace upc_ipc {
 namespace {
 
 constexpr uint32_t kMagic   = 0x44504156u; // "DPAV"
-constexpr uint32_t kVersion = 1u;
+/*
+ * v2：seq 从"按槽自增"改为全环发号（IpcDmaFrameGlobalHeader::seq_next）。
+ * 语义变了但结构体大小没变，所以必须靠 version 拦住新旧混搭——否则老消费者
+ * 表面能跑，只是继续丢一半帧，比直接报错难查得多。
+ */
+constexpr uint32_t kVersion = 2u;
 
 constexpr uint32_t kStateEmpty    = 0u;
 constexpr uint32_t kStateWriting  = 1u;
@@ -94,6 +99,8 @@ IpcShmError IpcDmaFrameRingProducer::create(const char* name, uint32_t width,
     global_->format           = format;
     global_->slot_count       = slot_count;
     global_->slot_header_size = sizeof(IpcDmaFrameSlotHeader);
+    /* memset 已清零，这里显式写一次，免得以后调初始化顺序时漏掉发号器。 */
+    global_->seq_next.store(0u, std::memory_order_relaxed);
 
     return IpcShmError::OK;
 }
@@ -160,7 +167,12 @@ uint32_t IpcDmaFrameRingProducer::commit_slot(uint32_t idx, uint64_t timestamp_u
 
     slot.timestamp_us = timestamp_us;
     slot.buffer_idx   = buffer_idx;
-    const uint32_t new_seq = slot.seq.load(std::memory_order_relaxed) + 1u;
+    /*
+     * 从全环发号器取号，不是给本槽自增：消费者跨槽比 seq 找最新帧、并用单个
+     * 水位过滤已消费帧，只有全环单调才成立。详见 IpcDmaFrameGlobalHeader。
+     */
+    const uint32_t new_seq =
+        global_->seq_next.fetch_add(1u, std::memory_order_relaxed) + 1u;
     slot.seq.store(new_seq, std::memory_order_release);
     slot.state.store(kStateReady, std::memory_order_release);
     return new_seq;

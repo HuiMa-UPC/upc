@@ -3,6 +3,7 @@
 #include "upc_contract.hpp"
 #include "msg_port.hpp"
 #include "ui_app.hpp"
+#include "ui_perf_probe.hpp"
 #include "upc_sys_monitor.hpp"
 #include "rs_log.hpp"
 
@@ -90,13 +91,27 @@ int start_ui(char daemon) {
 
     ui::app_init(lv_scr_act());
 
+    /* 主线程性能探针：量出主循环一圈与 LVGL 刷新各段的耗时（见 ui_perf_probe.hpp）。 */
+    ui::perf_attach_display(lv_display_get_default());
+
     auto& port = middleware::MsgPort::instance();
     while (!g_shutdown_requested) {
+        /*
+         * 分段计时：lv_timer_handler 里每个到期定时器一圈只跑一次，所以
+         * 一圈的时间就是 ui_timer_cb（预览换帧）的真实周期。四段各自记时
+         * 才能区分是 LVGL 刷新慢，还是 IPC / 监控采样把这一圈拖长了。
+         */
+        const uint64_t t0 = ui::perf_now_us();
         port.process(8);
+        const uint64_t t1 = ui::perf_now_us();
         const uint32_t delay = lv_timer_handler();
         (void)delay;
+        const uint64_t t2 = ui::perf_now_us();
         port.process(0);
+        const uint64_t t3 = ui::perf_now_us();
         upc_sys_monitor_tick();
+        const uint64_t t4 = ui::perf_now_us();
+        ui::perf_loop_sample(t1 - t0, t2 - t1, t3 - t2, t4 - t3);
     }
 
     port.shutdown();
