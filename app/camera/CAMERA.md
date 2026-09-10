@@ -38,7 +38,9 @@ Sensor → rkaiq ISP → /dev/video0 (NV12)
 
 - 若 V4L2 输出 stride 不满足 RGA 对齐要求，后端把数据拷贝到 `CameraDmaFrameSource` 内部的对齐 dma_buf，再交给 UI。
 - UI 不再分配中间 NV12 staging；源 fd 直接来自 V4L2 或后端 padding buffer。
-- 状态机：后端 `DQBUF` 后把 `buffer_idx` 写入 `EMPTY` slot 并 `commit` 为 `READY`；消费者 `acquire_latest_frame` 取到 `buffer_idx` 后查 fd 表，用完 `release_slot` 置 `EMPTY`；后端 `wait_slot_empty` 等到 `EMPTY` 才把对应 V4L2 buffer `QBUF` 回去。
+- 状态机：后端 `DQBUF` 后把 `buffer_idx` 写入 `EMPTY` slot 并 `commit` 为 `READY`；消费者 `acquire_latest_frame` 取到 `buffer_idx` 后查 fd 表，用完 `release_slot` 置 `EMPTY`；buffer 要等所有 peer 都归还槽位后才 `QBUF` 回去。
+- **在飞窗口（不锁步）**：采集线程 commit 后不逐帧等待，而是把该帧挂进在飞队列，每轮用 `slot_is_empty` 非阻塞回收已完成的帧；只有队列达到 `CAMERA_MAX_FRAMES_IN_FLIGHT` 才 `wait_slot_empty` 等最老一帧（超时仍强制归还 buffer，宁可让慢消费者读到被覆写的画面，也不停整条流）。
+  这样单个消费者的瞬时抖动（UI 交互降频、Visual 分割、Media 编码/推流）被窗口吸收，不会把采集帧率拉到最慢消费者的速率。窗口取 `min(CAMERA_MAX_FRAMES_IN_FLIGHT, buffer 数-2, 槽位数-1)`。
 - **采集看门狗**：`stream_thread` 若超过 `CAMERA_STREAM_WATCHDOG_STALL_MS`（默认 3s）无成功 dequeue，则原地重启 ISP/V4L2（不清 peer 表），重建各 peer SHM 并重推 `*_Stream_Start_Rsp` + 新 dma fd；两次重启间隔至少 `CAMERA_STREAM_WATCHDOG_COOLDOWN_MS`（默认 8s）。Media 据此重绑 fd，并按 `local_rtsp_desired_` 决定是否重建本地 RTSP。
 - 参考 `doc/rv1106` ISP 初始化；当前无 Rockit VENC，不经 MPI 预览。
 
@@ -70,7 +72,8 @@ Sensor → rkaiq ISP → /dev/video0 (NV12)
 | 分辨率 | 1080×1280 | `CAMERA_WIDTH/HEIGHT_DEFAULT` |
 | 帧率 | 30 | `UPC_CAMERA_FPS` |
 | IQ | `/home/wpcam_NC_NC.json` | `UPC_CAMERA_IQ_DIR` / `UPC_CAMERA_IQ_FILE` |
-| V4L2 缓冲 | 4 | `CAMERA_V4L2_BUF_COUNT` |
+| V4L2 缓冲 | 6 | `CAMERA_V4L2_BUF_COUNT`（需同供驱动填充/当前处理/已下发；stride 不对齐时 padding pool 按同数分配） |
+| 在飞帧上限 | 3 | `CAMERA_MAX_FRAMES_IN_FLIGHT`（@30fps 约吸收 100ms 抖动；实际取 `min(本值, 缓冲数-2, 槽位数-1)`） |
 | SHM 槽位 | 6 | `CAMERA_SHM_SLOT_COUNT`（多消费者；过小易 `slot release timeout`） |
 | 看门狗无帧阈值 | 3000 ms | `CAMERA_STREAM_WATCHDOG_STALL_MS`（0=关） |
 | 看门狗重启冷却 | 8000 ms | `CAMERA_STREAM_WATCHDOG_COOLDOWN_MS` |

@@ -460,27 +460,42 @@ void MediaService::worker_thread_fn()
             continue;
         }
 
+        /*
+         * 持槽期间只做一次紧凑拷贝，随后立刻归还槽位。
+         * 下面三路各自还要把帧拷进自己的队列，若留在槽内做，持槽时间会翻几倍，
+         * 直接占满 Camera 的在飞窗口并反压采集线程。
+         */
+        const uint32_t width  = frame->width();
+        const uint32_t height = frame->height();
+        const uint32_t stride = frame->stride_y();
+        bool staged = false;
         if(frame->buffer_idx < dma_fds_.size() &&
-           map_dma_views_if_needed()) {
-            const uint32_t width = frame->width();
-            const uint32_t height = frame->height();
-            const uint32_t stride = frame->stride_y();
-            if(width > 0 && height > 0 && stride > 0 &&
-               frame->buffer_idx < dma_maps_.size()) {
-                uint8_t* src = dma_maps_[frame->buffer_idx];
-                if(src) {
-                    const uint8_t* src_y = src;
-                    const uint8_t* src_uv =
-                        src + static_cast<size_t>(stride) * height;
-                    /* 连续录像/清粉录像逐帧入口：已迁移到 media 进程。 */
-                    clean_video_.on_frame_nv12(src_y, src_uv, stride);
-                    print_h264_.on_frame_nv12(src_y, src_uv, stride);
-                    h264_encoder_.on_frame_nv12(src_y, src_uv, stride);
-                }
+           map_dma_views_if_needed() &&
+           width > 0 && height > 0 && stride > 0 &&
+           frame->buffer_idx < dma_maps_.size()) {
+            uint8_t* src = dma_maps_[frame->buffer_idx];
+            if(src) {
+                staging_nv12_.resize(
+                    static_cast<size_t>(width) * height * 3u / 2u);
+                copy_nv12_tight(staging_nv12_.data(), src,
+                                src + static_cast<size_t>(stride) * height,
+                                stride, width, height);
+                staged = true;
             }
-            update_latest_nv12_snapshot(*frame);
         }
         consumer_.release_slot(frame->slot_index);
+
+        if(!staged) {
+            continue;
+        }
+
+        const uint8_t* src_y = staging_nv12_.data();
+        const uint8_t* src_uv = src_y + static_cast<size_t>(width) * height;
+        /* 连续录像/清粉录像逐帧入口：已迁移到 media 进程。 */
+        clean_video_.on_frame_nv12(src_y, src_uv, width);
+        print_h264_.on_frame_nv12(src_y, src_uv, width);
+        h264_encoder_.on_frame_nv12(src_y, src_uv, width);
+        publish_latest_nv12_snapshot(width, height);
     }
 }
 
@@ -510,30 +525,21 @@ void MediaService::copy_nv12_tight(uint8_t* dst, const uint8_t* src_y,
     }
 }
 
-void MediaService::update_latest_nv12_snapshot(const upc_ipc::IpcDmaFrameView& frame)
+/**
+ * 把本帧的紧凑 NV12（staging_nv12_）发布为最新快照，供拍照与层拍取用。
+ *
+ * 与 staging 缓冲互换而不是再拷一份：staging 下一帧会被整体覆写，换回来的
+ * 旧快照缓冲容量已经够用，resize 不会重新分配。
+ */
+void MediaService::publish_latest_nv12_snapshot(uint32_t width, uint32_t height)
 {
-    if(frame.buffer_idx >= dma_maps_.size()) {
-        return;
-    }
-    uint8_t* src = dma_maps_[frame.buffer_idx];
-    if(!src) {
-        return;
-    }
-    const uint32_t width = frame.width();
-    const uint32_t height = frame.height();
-    const uint32_t stride = frame.stride_y();
-    if(width == 0 || height == 0 || stride == 0) {
-        return;
-    }
-
-    const uint8_t* src_y = src;
-    const uint8_t* src_uv = src + static_cast<size_t>(stride) * height;
     const size_t need =
         static_cast<size_t>(width) * static_cast<size_t>(height) * 3u / 2u;
+    if(need == 0 || staging_nv12_.size() < need) {
+        return;
+    }
     std::lock_guard<std::mutex> lock(latest_nv12_mtx_);
-    latest_nv12_snapshot_.resize(need);
-    copy_nv12_tight(latest_nv12_snapshot_.data(), src_y, src_uv, stride,
-                    width, height);
+    staging_nv12_.swap(latest_nv12_snapshot_);
     latest_nv12_valid_ = true;
 }
 

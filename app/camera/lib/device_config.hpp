@@ -71,9 +71,30 @@
 #define CAMERA_SENSOR_ENTITY_FALLBACK  "m00_b_wpcam"
 #endif
 
-/** V4L2 采集缓冲个数 */
+/**
+ * V4L2 采集缓冲个数。
+ *
+ * 需同时供三份：驱动侧待填充、采集线程当前处理、已下发给消费者尚未归还
+ * （见 CAMERA_MAX_FRAMES_IN_FLIGHT）。stride 不对齐时 padding pool 按同样
+ * 个数分配，因此这里每 +1 约多占两倍单帧 dma 内存。
+ */
 #ifndef CAMERA_V4L2_BUF_COUNT
-#define CAMERA_V4L2_BUF_COUNT  4u
+#define CAMERA_V4L2_BUF_COUNT  6u
+#endif
+
+/**
+ * 允许同时"在飞"（已 commit 给消费者、buffer 尚未归还）的帧数上限。
+ *
+ * 采集线程不再逐帧同步等待消费者归还，而是把已提交的帧挂进在飞队列，
+ * 每轮先非阻塞回收已完成的，只在队列达到本上限时才阻塞等最老一帧。
+ * 这样单个消费者的瞬时抖动被窗口吸收，不会把整条采集链路（以及依赖它的
+ * 直播编码）拖到该消费者的速率。
+ *
+ * 实际窗口还会被 buffer 数（留 2 个给驱动填充）与 SHM 槽位数（留 1 个给
+ * 写入）夹住，取三者最小值。3 帧 @30fps 约可吸收 100ms 抖动。
+ */
+#ifndef CAMERA_MAX_FRAMES_IN_FLIGHT
+#define CAMERA_MAX_FRAMES_IN_FLIGHT  3u
 #endif
 
 /** SHM 帧环（与 UI CameraPreviewPlayer 约定一致） */

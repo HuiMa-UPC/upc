@@ -12,6 +12,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <ctime>
+#include <deque>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -398,6 +399,10 @@ void CameraService::remove_stream_peer(middleware::ModuleId peer)
         const uint32_t key = static_cast<uint32_t>(peer);
         auto it = stream_peers_.find(key);
         if(it != stream_peers_.end()) {
+            if(it->second) {
+                /* 采集线程的在飞队列可能还持有本会话的槽位，先解除等待。 */
+                it->second->active.store(false, std::memory_order_release);
+            }
             stream_peers_.erase(it);
             removed = true;
         }
@@ -427,10 +432,79 @@ void CameraService::stream_thread_fn()
     uint32_t slot_fail_1s    = 0;
     uint32_t dequeue_fail_1s = 0;
     uint32_t timeout_1s      = 0;
+    uint32_t inflight_max_1s = 0;
     bool logged_first_commit = false;
     uint32_t warmup_left = stream_warmup_frames_;
     uint64_t last_frame_ok_ms = monotonic_ms();
     uint64_t last_watchdog_restart_ms = 0;
+
+    /** 本帧在某个 peer 环上占用的槽位。 */
+    struct PeerCommit {
+        std::shared_ptr<StreamPeerSession> peer;
+        uint32_t slot_idx;
+        uint32_t seq;
+    };
+    /** 已 commit 给消费者、底层 buffer 尚未归还的一帧。 */
+    struct InFlightFrame {
+        uint32_t buf_idx;                /**< 待归还的采集 / padding buffer */
+        std::vector<PeerCommit> commits; /**< 各 peer 上占用的槽位 */
+    };
+    std::deque<InFlightFrame> in_flight;
+
+    /* 归还底层 buffer；SHM 槽位状态由 Consumer 侧 release_slot 负责恢复。 */
+    auto release_frame_buffer = [this](uint32_t idx) {
+        if(dma_source_.stride_aligned()) {
+            capture_.queue_frame(idx);
+        } else {
+            dma_source_.release_padded(idx);
+        }
+    };
+
+    /*
+     * 在飞窗口上限：受 buffer 总数（留 2 个给驱动持续填充）与 SHM 槽位数
+     * （留 1 个给下一次 acquire_write_slot）共同约束，再与配置上限取小。
+     * 看门狗重启后 buffer 数可能变化，需要重算。
+     */
+    auto compute_max_in_flight = [this]() -> size_t {
+        const uint32_t bufs = dma_source_.buffer_count();
+        const uint32_t buf_budget  = bufs > 2u ? bufs - 2u : 1u;
+        const uint32_t slot_budget = CAMERA_SHM_SLOT_COUNT > 1u
+                                         ? CAMERA_SHM_SLOT_COUNT - 1u
+                                         : 1u;
+        uint32_t n = buf_budget < slot_budget ? buf_budget : slot_budget;
+        if(n > CAMERA_MAX_FRAMES_IN_FLIGHT) {
+            n = CAMERA_MAX_FRAMES_IN_FLIGHT;
+        }
+        return n > 0u ? static_cast<size_t>(n) : 1u;
+    };
+    size_t max_in_flight = compute_max_in_flight();
+
+    /*
+     * 非阻塞回收队头已被所有 peer 归还的帧。
+     * 消费者取最新帧时会把更旧的 Ready 槽直接标 Empty，队头总是最先完成，
+     * 因此 FIFO 扫描即可，不必遍历整个队列。
+     */
+    auto reclaim_completed = [&]() {
+        while(!in_flight.empty()) {
+            const InFlightFrame& oldest = in_flight.front();
+            bool done = true;
+            for(const auto& c : oldest.commits) {
+                /* 已停流的 peer 不会再 release_slot，直接判完成。 */
+                if(!c.peer->active.load(std::memory_order_acquire)) {
+                    continue;
+                }
+                if(!c.peer->producer.slot_is_empty(c.slot_idx)) {
+                    done = false;
+                    break;
+                }
+            }
+            if(!done) {
+                break;
+            }
+            release_frame_buffer(oldest.buf_idx);
+            in_flight.pop_front();
+        }
+    };
 
     if(warmup_left > 0) {
         UPC_LOG_CAMERA_SERVICE(Info,
@@ -444,14 +518,21 @@ void CameraService::stream_thread_fn()
             /* 流诊断受 UPC_MOD_CAMERA_PREVIEW 控制，5s 聚合输出 */
             UPC_LOG_CAMERA_PREVIEW(Debug,
                 "stream 5s: committed=%u last_seq=%u last_slot=%u "
-                "slot_fail=%u dequeue_fail=%u release_timeout=%u",
+                "slot_fail=%u dequeue_fail=%u release_timeout=%u "
+                "inflight_max=%u/%zu",
                 frames_1s, last_seq, last_slot,
-                slot_fail_1s, dequeue_fail_1s, timeout_1s);
+                slot_fail_1s, dequeue_fail_1s, timeout_1s,
+                inflight_max_1s, max_in_flight);
             frames_1s = slot_fail_1s = dequeue_fail_1s = timeout_1s = 0;
+            inflight_max_1s = 0;
             stats_since = now;
         }
 
         const auto tick_start = clock::now();
+
+        /* 每轮开头先收一次：预热与 dequeue 失败分支都会提前 continue，
+         * 只有放在这里才能保证 buffer 不滞留在在飞队列。 */
+        reclaim_completed();
 
         auto try_watchdog_restart = [&](const char* why) -> bool {
 #if CAMERA_STREAM_WATCHDOG_STALL_MS == 0
@@ -472,6 +553,9 @@ void CameraService::stream_thread_fn()
                 why ? why : "?",
                 static_cast<unsigned long long>(now_ms - last_frame_ok_ms));
             last_watchdog_restart_ms = now_ms;
+            /* 重启会重建采集 buffer 与 padding pool，在飞帧记录的 buf_idx
+             * 随即失效，只能丢弃而不能归还——无论重启成败都要先清掉。 */
+            in_flight.clear();
             if(!restart_capture_keep_peers()) {
                 last_frame_ok_ms = monotonic_ms();
                 return false;
@@ -479,6 +563,7 @@ void CameraService::stream_thread_fn()
             warmup_left = stream_warmup_frames_;
             logged_first_commit = false;
             last_frame_ok_ms = monotonic_ms();
+            max_in_flight = compute_max_in_flight();
             if(warmup_left > 0) {
                 UPC_LOG_CAMERA_SERVICE(Info,
                     "stream watchdog: AE warmup %u frames after restart",
@@ -544,11 +629,6 @@ void CameraService::stream_thread_fn()
             slot_buf_idx = static_cast<uint32_t>(padded_idx);
         }
 
-        struct PeerCommit {
-            std::shared_ptr<StreamPeerSession> peer;
-            uint32_t slot_idx;
-            uint32_t seq;
-        };
         std::vector<PeerCommit> commits;
         {
             std::vector<std::shared_ptr<StreamPeerSession>> peers;
@@ -598,30 +678,41 @@ void CameraService::stream_thread_fn()
             last_slot = commits[0].slot_idx;
         }
 
-        bool all_released = true;
-        for(const auto& c : commits) {
-            const bool slot_released =
-                c.peer->producer.wait_slot_empty(c.slot_idx, kPeerWaitSlotEmptyMs);
-            if(!slot_released) {
-                all_released = false;
+        /* 本帧挂进在飞队列：buffer 要等所有 peer 归还槽位后才能回收，
+         * 但采集线程不在这里等，先去取下一帧。 */
+        in_flight.push_back(InFlightFrame{slot_buf_idx, std::move(commits)});
+        if(in_flight.size() > inflight_max_1s) {
+            inflight_max_1s = static_cast<uint32_t>(in_flight.size());
+        }
+
+        /* 消费者跟得上时，这一轮就把窗口收干净，队列长期保持在 1。 */
+        reclaim_completed();
+
+        /*
+         * 窗口耗尽才阻塞等最老一帧——此时该消费者已落后 max_in_flight 帧。
+         * 即使等不到，也要把底层 buffer 还回去，避免 V4L2 / padding pool 泄漏：
+         * 宁可让它读到被 ISP 覆写的画面，也不能让整条采集链路（以及依赖它的
+         * 直播编码）停下来。slot 本身仍保持 READY/READING，等 Consumer 最终
+         * release_slot 后恢复 EMPTY。
+         */
+        while(in_flight.size() > max_in_flight) {
+            const InFlightFrame& oldest = in_flight.front();
+            for(const auto& c : oldest.commits) {
+                if(!c.peer->active.load(std::memory_order_acquire)) {
+                    continue;
+                }
+                if(c.peer->producer.wait_slot_empty(c.slot_idx,
+                                                    kPeerWaitSlotEmptyMs)) {
+                    continue;
+                }
                 ++timeout_1s;
                 UPC_LOG_CAMERA_SERVICE(Warn,
                     "slot release timeout sender=%u slot=%u seq=%u buf_idx=%u (backpressure)",
                     static_cast<unsigned>(c.peer->peer_id),
-                    c.slot_idx, c.seq, slot_buf_idx);
+                    c.slot_idx, c.seq, oldest.buf_idx);
             }
-        }
-
-        // 即使 UI 释放超时，也要把底层 buffer 还回去，避免 V4L2 / padding pool 泄漏。
-        // slot 本身仍保持 READY/READING，等 Consumer 最终 release_slot 后恢复 EMPTY。
-        if(dma_source_.stride_aligned()) {
-            capture_.queue_frame(slot_buf_idx);
-        } else {
-            dma_source_.release_padded(slot_buf_idx);
-        }
-
-        if(!all_released) {
-            continue;
+            release_frame_buffer(oldest.buf_idx);
+            in_flight.pop_front();
         }
 
         const auto elapsed = clock::now() - tick_start;
@@ -629,6 +720,12 @@ void CameraService::stream_thread_fn()
             std::this_thread::sleep_for(frame_period - elapsed);
         }
     }
+
+    /* 退出前归还仍在飞的 buffer，避免 padding pool 计数残留到下次开流。 */
+    for(const auto& f : in_flight) {
+        release_frame_buffer(f.buf_idx);
+    }
+    in_flight.clear();
 }
 
 void CameraService::send_stream_start_rsp(const middleware::Message& req, bool ok)

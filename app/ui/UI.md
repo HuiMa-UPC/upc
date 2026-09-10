@@ -1088,6 +1088,7 @@ rongsu_camera 经主 IPC（/tmp/upc_camera.sock）SCM_RIGHTS 附带 dma_buf fd �
 - **开流**：`page_user_home` 打印模式 → `CameraPreviewPlayer::start()` → IPC Start → `apply_stream_start_ui` 开 SHM 元数据环 + `take_peer_dma_fds` + `setup_frame_buffers` + 解码线程。
 - **关流/换流**：UI 仅请求解码线程退役；后台回收线程等待退出，LVGL 定时器确认退出后才关闭旧 SHM、DMA fd 与显示缓冲，因此主线程不阻塞在 `join()`。
 - **恢复职责**：Camera 侧采集看门狗是唯一的自动重连发起者；UI 只检测并记录预览卡帧，等待 Camera 重建 SHM 与重推 `Stream_Start_Rsp`，不再自行 Stop/Start 流。
+- **交互降频只降转换，不降取帧**：按压 / 有动画时 `decode_target_fps_override_` 置 `kInteractiveDecodeFps`(12)，解码线程据此**跳过 RGA/SW 转换**，但 `acquire_latest_frame` + `release_slot` 始终按相机帧率跑。若连取帧一起降频，滞留的槽位会占满 Camera 的在飞窗口并反压采集线程，把 Visual 与直播一起拖到 12fps（见 [camera/CAMERA.md](../camera/CAMERA.md) 「在飞窗口」）。5s 诊断里 `skip=` 即这类跳过的帧。
 - **RGA 路径**：`setup_frame_buffers` 时 `RgaDmaBuf` 分配成功则 `rga_path=1`；失败退化为 `std::vector` 软件转换。无进程级预热，首帧到达即转换。
 - **DMA 约束**：RK3568 RGA2 仅支持 4G 以下物理地址；源 fd 必须来自 V4L2 / dma-heap（dma32），UI 直接用 `importbuffer_fd`。
 - **Stride 对齐**：RGA 源 stride 使用后端传来的实际 `stride_y`，不再假设 `stride_y == width`。

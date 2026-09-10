@@ -78,6 +78,15 @@ public:
     uint32_t commit_slot(uint32_t idx, uint64_t timestamp_us, uint32_t buffer_idx);
 
     /**
+     * @brief 非阻塞查询某个 slot 是否已被 Consumer 释放为 Empty。
+     *
+     * 供 Producer 做"在飞帧"回收：不必逐帧阻塞等待，可先扫一遍已完成的
+     * 帧把底层 buffer 收回，只在窗口耗尽时才退化为 wait_slot_empty。
+     * @return true 已是 Empty；false 仍被消费者占用或 slot 索引非法。
+     */
+    bool slot_is_empty(uint32_t idx) const;
+
+    /**
      * @brief 等待某个 slot 被 Consumer 释放为 Empty（带超时）。
      * @return true 成功等到，false 超时或 slot 索引非法。
      */
