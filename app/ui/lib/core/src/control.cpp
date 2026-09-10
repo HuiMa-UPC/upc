@@ -313,6 +313,7 @@ lv_obj_t *make_round_icon_btn(lv_obj_t *parent, const char *symbol, lv_event_cb_
 lv_obj_t *make_dlg_wide_button(lv_obj_t *parent, const char *text, bool enabled,
                                lv_event_cb_t cb);
 void on_powder_low_async(void *user);
+void on_print_start_rejected_async(void *user);
 void close_powder_dlg(void);
 void stop_print_watchdogs(void);
 void start_print_peer_watch(void);
@@ -723,6 +724,10 @@ void wire_msg_proxy()
     /* 缺粉：后端已自动暂停（另发 Pause_Rsp 让徽标翻到 PAUSE），这里只弹补粉窗 */
     proxy.register_print_powder_low([]() {
         lv_async_call(on_powder_low_async, nullptr);
+    });
+
+    proxy.register_print_start_rejected([](const middleware::PrintStartRejectedPayload&) {
+        lv_async_call(on_print_start_rejected_async, nullptr);
     });
 
     proxy.register_print_terminate_done([]() {
@@ -1908,6 +1913,16 @@ void on_powder_low_async(void * /*user*/)
     show_powder_dialog();
 }
 
+/** 光路检测失败等起印拒绝：走用户终止同一条路径（无 Camera manifest 的终止页）。 */
+void on_print_start_rejected_async(void * /*user*/)
+{
+    if(g_state != CONTROL_STATE_PRINTING) {
+        return;
+    }
+    g_terminate_pending = true;
+    finish_printing(false);
+}
+
 /* 文件大小（字节）→ 人类可读字符串 */
 void format_file_size(char *buf, size_t n, uint32_t bytes)
 {
@@ -2077,7 +2092,8 @@ void on_print_confirm_ok(lv_event_t * /*e*/)
     if(!g_files_page_active || g_sel_index < 0) {
         return;
     }
-    if(ui::DebugMsgProxy::instance().test_image_active()) {
+    if(ui::DebugMsgProxy::instance().test_image_active() ||
+       ui::DebugMsgProxy::instance().galvo_point_test_active()) {
         ui_toast_show("Test mode active", user_color_status_err, 1800);
         return;
     }
@@ -2296,7 +2312,8 @@ void show_prepare_dlg(void)
     }
 
     ui_user_make_body_label(g_prepare_dlg->body,
-                            "Copying and scanning file, please wait");
+                            "Copying and scanning file, please wait.\n"
+                            "Optical path check starts after this, on the print page.");
 
     lv_obj_t *vc = ui_user_make_spinner_container(g_prepare_dlg->body, USER_SPINNER_SZ);
     ui_arc_spinner_t *sp = ui_arc_spinner_create(vc, USER_SPINNER_SZ);

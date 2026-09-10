@@ -195,6 +195,24 @@ void UiMsgProxy::init()
         }));
 
     subs_.push_back(bus.subscribe(
+        middleware::MsgType::APP_OpticalPath_Progress_Ntf, middleware::ModuleId::UI,
+        [this](const middleware::Message& msg) {
+            middleware::OpticalPathProgressPayload p{};
+            if(optical_path_progress_cb_ && read_inline_pod(msg, p)) {
+                optical_path_progress_cb_(p);
+            }
+        }));
+
+    subs_.push_back(bus.subscribe(
+        middleware::MsgType::APP_Print_Start_Rejected_Ntf, middleware::ModuleId::UI,
+        [this](const middleware::Message& msg) {
+            middleware::PrintStartRejectedPayload p{};
+            if(print_start_rejected_cb_ && read_inline_pod(msg, p)) {
+                print_start_rejected_cb_(p);
+            }
+        }));
+
+    subs_.push_back(bus.subscribe(
         middleware::MsgType::APP_Supply_Status_Rsp, middleware::ModuleId::UI,
         [this](const middleware::Message& msg) {
             middleware::SupplyStatusPayload p{};
@@ -910,6 +928,16 @@ void UiMsgProxy::send_print_powder_low_ignore()
 void UiMsgProxy::register_print_powder_low(PrintPowderLowCb cb)
 {
     print_powder_low_cb_ = std::move(cb);
+}
+
+void UiMsgProxy::register_optical_path_progress(OpticalPathProgressCb cb)
+{
+    optical_path_progress_cb_ = std::move(cb);
+}
+
+void UiMsgProxy::register_print_start_rejected(PrintStartRejectedCb cb)
+{
+    print_start_rejected_cb_ = std::move(cb);
 }
 
 void UiMsgProxy::send_parser_exit()

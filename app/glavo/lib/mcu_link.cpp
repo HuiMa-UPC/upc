@@ -2408,6 +2408,32 @@ bool McuLink::send_tcp_emergency_ctrl_ex(uint8_t stop_code, uint8_t pause_code, 
     return true;
 }
 
+bool McuLink::send_debug_motion_subpacket(const uint8_t subpacket[11])
+{
+    if(!subpacket || is_sending_.load() || start_pending_.load() ||
+       terminate_pending_.load()) {
+        UPC_LOG_MCU_LINK(Warn,
+            "debug motion rejected sending=%d start_pending=%d terminate=%d",
+            is_sending_.load() ? 1 : 0,
+            start_pending_.load() ? 1 : 0,
+            terminate_pending_.load() ? 1 : 0);
+        return false;
+    }
+
+    uint8_t frame[14];
+    const int flen = tcp_build_motion_frame(subpacket, 1, frame, sizeof(frame));
+    if(flen <= 0) {
+        UPC_LOG_MCU_LINK(Warn, "build debug motion frame failed");
+        return false;
+    }
+    const int rc = tcp_send_raw(frame, static_cast<size_t>(flen));
+    if(rc != 0) {
+        UPC_LOG_MCU_LINK(Warn, "debug motion send failed rc=%d", rc);
+        return false;
+    }
+    return true;
+}
+
 bool McuLink::send_tcp_emergency_ctrl(bool stop, bool pause)
 {
     const uint8_t stop_code = stop ? 1u : 0u;

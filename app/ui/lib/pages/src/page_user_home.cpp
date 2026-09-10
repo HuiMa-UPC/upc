@@ -68,6 +68,7 @@ enum print_phase_t {
     PRINT_PHASE_PAUSED,         /**< PAUSE            蓝 */
     PRINT_PHASE_TERMINATED,     /**< PRINT TERMINATED 橙 */
     PRINT_PHASE_DONE,           /**< PRINT COMPLETE   绿 */
+    PRINT_PHASE_OPTICAL_CHECK,  /**< OPTICAL PATH CHECK 蓝；打印前光路检测 */
 };
 
 /** 结束态下的吹粉子阶段，决定状态栏文字、提示条变体与胶囊文案。 */
@@ -159,6 +160,11 @@ void home_env_init(void)
     /* 暂停/恢复回执：以后端状态为准同步按钮图标 */
     ui::UiMsgProxy::instance().register_print_pause_done(
         [](bool paused) { set_pause_ui(paused); });
+
+    ui::UiMsgProxy::instance().register_optical_path_progress(
+        [](const middleware::OpticalPathProgressPayload& p) {
+            page_user_home_optical_path_update(p.point_index, p.point_total, p.state);
+        });
 
     ui::CameraMsgProxy::instance().register_snapshot_rsp(
         [](const middleware::CameraSnapshotRspPayload &rsp) {
@@ -428,6 +434,9 @@ void set_pause_ui(bool paused)
  *  提示只是噪音。 */
 void on_pause_click(lv_event_t *)
 {
+    if(g_print_phase == PRINT_PHASE_OPTICAL_CHECK) {
+        return;
+    }
     const bool want_pause = !g_print_paused;
     set_pause_ui(want_pause);
     if(want_pause) {
@@ -1905,6 +1914,7 @@ lv_color_t phase_accent(void)
     case PRINT_PHASE_DONE:       return lv_color_hex(kPhaseGreen);
     case PRINT_PHASE_PRINTING:
     case PRINT_PHASE_PAUSED:
+    case PRINT_PHASE_OPTICAL_CHECK:
     default:                     return lv_color_hex(kPhaseBlue);
     }
 }
@@ -1926,11 +1936,12 @@ void apply_print_phase(void)
 
     /* 徽标行：图标 + 文案 + 百分比同色 */
     struct BadgeSpec { const lv_image_dsc_t *icon; const char *text; };
-    const BadgeSpec kBadges[4] = {
-        { &ic_badge_spin,  "PRINTING..."       },
-        { &ic_badge_play,  "PAUSE"             },
-        { &ic_badge_alert, "PRINT TERMINATED"  },
-        { &ic_badge_check, "PRINT COMPLETE"    },
+    const BadgeSpec kBadges[5] = {
+        { &ic_badge_spin,  "PRINTING..."         },
+        { &ic_badge_play,  "PAUSE"               },
+        { &ic_badge_alert, "PRINT TERMINATED"    },
+        { &ic_badge_check, "PRINT COMPLETE"      },
+        { &ic_badge_spin,  "OPTICAL PATH CHECK"  },
     };
     const BadgeSpec &badge = kBadges[g_print_phase];
     if(g_pc_badge_icon) {
@@ -1980,6 +1991,18 @@ void apply_print_phase(void)
     if(g_ctl_collect) {
         if(finished) lv_obj_remove_flag(g_ctl_collect, LV_OBJ_FLAG_HIDDEN);
         else         lv_obj_add_flag(g_ctl_collect, LV_OBJ_FLAG_HIDDEN);
+    }
+
+    /* 光路检测阶段：暂停钮灰掉（运动包还没开始，暂停没有意义）；终止钮保持可点。 */
+    if(g_btn_pause) {
+        const bool pause_ok = (g_print_phase != PRINT_PHASE_OPTICAL_CHECK);
+        if(pause_ok) {
+            lv_obj_add_flag(g_btn_pause, LV_OBJ_FLAG_CLICKABLE);
+            lv_obj_clear_state(g_btn_pause, LV_STATE_DISABLED);
+        } else {
+            lv_obj_clear_flag(g_btn_pause, LV_OBJ_FLAG_CLICKABLE);
+            lv_obj_add_state(g_btn_pause, LV_STATE_DISABLED);
+        }
     }
 
     /* 两条提示只在结束态出现（稿上打印中/暂停两张都没有）：吹粉前催吹粉，
@@ -2572,6 +2595,14 @@ void page_user_home_enter_print_result(const control_print_result_t *result)
         ui_slide_unlock_reset(g_result_slide);
     }
 
+    /* 光路检测借用了层号位显示点位计数（"2/5"）。它跟层号同形不同义，留到结果页
+     * 会被读成"第 2 层 / 共 5 层"，所以从检测态直接跳结果页时要清掉。
+     * 正常打印中途终止时层号是真数据，保留。 */
+    if(g_print_phase == PRINT_PHASE_OPTICAL_CHECK && g_pc_layer) {
+        lv_label_set_text(g_pc_layer, "");
+        lv_obj_add_flag(g_pc_layer, LV_OBJ_FLAG_HIDDEN);
+    }
+
     /* 完成/终止两稿的差异只有徽标档；进度条停在最后一次的百分比（完成态即 100%）。 */
     g_print_phase  = result->terminated ? PRINT_PHASE_TERMINATED : PRINT_PHASE_DONE;
     g_purify_stage = PURIFY_STAGE_IDLE;
@@ -2655,6 +2686,10 @@ void page_user_home_printing_update(const control_progress_t *p)
     if(phase_is_finished()) {
         return;
     }
+    /* 光路检测占用徽标行的层号位（3/5）和 0% 进度条，正式进度来了再让位。 */
+    if(g_print_phase == PRINT_PHASE_OPTICAL_CHECK) {
+        return;
+    }
 
     g_print_percent = p->progress_percent;
     if(g_pc_bar) {
@@ -2678,5 +2713,42 @@ void page_user_home_printing_update(const control_progress_t *p)
         char dur[32];
         ui_user_format_duration_min(dur, sizeof(dur), p->remaining_minutes);
         lv_label_set_text(g_pc_time_val, dur);
+    }
+}
+
+void page_user_home_optical_path_update(uint8_t point_index, uint8_t point_total,
+                                       uint8_t state)
+{
+    if(!g_printing_active || !g_print_overlay || phase_is_finished()) {
+        return;
+    }
+
+    if(state == static_cast<uint8_t>(middleware::OpticalPathPointState::Complete)) {
+        g_print_phase = PRINT_PHASE_PRINTING;
+        if(g_pc_layer) {
+            lv_label_set_text(g_pc_layer, "");
+            lv_obj_add_flag(g_pc_layer, LV_OBJ_FLAG_HIDDEN);
+        }
+        apply_print_phase();
+        return;
+    }
+
+    if(g_print_phase != PRINT_PHASE_OPTICAL_CHECK) {
+        g_print_phase = PRINT_PHASE_OPTICAL_CHECK;
+        g_print_percent = 0;
+        if(g_pc_bar) {
+            lv_bar_set_value(g_pc_bar, 0, LV_ANIM_OFF);
+        }
+        if(g_pc_percent) {
+            lv_label_set_text(g_pc_percent, "0%");
+        }
+        apply_print_phase();
+    }
+
+    if(g_pc_layer && point_total > 0) {
+        const unsigned shown = static_cast<unsigned>(point_index) + 1u;
+        lv_label_set_text_fmt(g_pc_layer, "%u/%u", shown,
+                              static_cast<unsigned>(point_total));
+        lv_obj_remove_flag(g_pc_layer, LV_OBJ_FLAG_HIDDEN);
     }
 }

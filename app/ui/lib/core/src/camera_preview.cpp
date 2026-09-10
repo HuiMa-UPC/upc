@@ -1024,12 +1024,14 @@ void CameraPreviewPlayer::decode_thread_fn()
     /* ---- 下面这一组只用于每 5 秒汇总一次 Debug 日志，不影响功能 ---- */
     uint32_t frames_ok     = 0; /* 转换成功次数 */
     uint32_t frames_fail   = 0; /* 转换失败次数 */
+    uint32_t frames_skip   = 0; /* 交互降频时取帧后直接归还、跳过转换的次数 */
     uint32_t frames_no_slot = 0; /* ring 里暂时没有可取帧的次数 */
     uint32_t last_seq      = 0; /* 最近一帧的 seq，便于对照 Camera 侧 */
     uint64_t convert_us_sum = 0; /* 转换耗时累计（微秒） */
     uint64_t convert_us_max = 0; /* 单次转换最大耗时 */
     uint64_t loop_us_sum    = 0; /* 整圈循环耗时累计 */
     uint64_t loop_us_max    = 0; /* 单圈最大耗时 */
+    uint64_t last_convert_ms = 0; /* 上次真正做转换的时刻，交互降频用 */
     auto stats_since = std::chrono::steady_clock::now();
 
     UPC_LOG_CAMERA_PREVIEW(Info,
@@ -1092,30 +1094,53 @@ void CameraPreviewPlayer::decode_thread_fn()
              *   - display_buf_ = write_idx（发布给 UI；release 保证 UI acquire 能看见）
              *   - write_idx 前进，下一圈换槽
              */
-            const auto cvt_start = std::chrono::steady_clock::now();
-            if(convert_frame(*frame, write_idx)) {
-                ++frames_ok;
-                last_frame_ok_ms_.store(monotonic_ms(), std::memory_order_relaxed);
-                display_buf_.store(write_idx, std::memory_order_release);
-                if(!logged_first_out) {
-                    /* 抽查输出缓冲角点/中心像素，确认不是全黑或格式错乱。 */
-                    log_bgrx_probe("first_convert_out", slots_[write_idx].data(),
-                                   width_, height_, pixel_stride_px_);
-                    logged_first_out = true;
+            /*
+             * 交互期（按压 / 有动画）只降低「转换」频率，取帧与归还槽位仍按
+             * 相机帧率全速跑。若连取帧一起降频，滞留的槽位会占满 Camera 的
+             * 在飞窗口并反压采集线程，把视觉与直播一起拖到交互帧率。
+             */
+            bool want_convert = true;
+            const uint32_t override_fps =
+                decode_target_fps_override_.load(std::memory_order_relaxed);
+            if(override_fps > 0u && override_fps < base_fps) {
+                const uint64_t now_ms = monotonic_ms();
+                const uint64_t min_gap_ms = 1000u / override_fps;
+                if(last_convert_ms != 0u &&
+                   now_ms - last_convert_ms < min_gap_ms) {
+                    want_convert = false;
+                } else {
+                    last_convert_ms = now_ms;
                 }
-                write_idx = (write_idx + 1) % kFrameSlots;
-            } else {
-                ++frames_fail;
             }
 
-            /* 统计本次转换耗时（微秒）。 */
-            const uint64_t cvt_us = static_cast<uint64_t>(
-                std::chrono::duration_cast<std::chrono::microseconds>(
-                    std::chrono::steady_clock::now() - cvt_start)
-                    .count());
-            convert_us_sum += cvt_us;
-            if(cvt_us > convert_us_max) {
-                convert_us_max = cvt_us;
+            if(want_convert) {
+                const auto cvt_start = std::chrono::steady_clock::now();
+                if(convert_frame(*frame, write_idx)) {
+                    ++frames_ok;
+                    last_frame_ok_ms_.store(monotonic_ms(), std::memory_order_relaxed);
+                    display_buf_.store(write_idx, std::memory_order_release);
+                    if(!logged_first_out) {
+                        /* 抽查输出缓冲角点/中心像素，确认不是全黑或格式错乱。 */
+                        log_bgrx_probe("first_convert_out", slots_[write_idx].data(),
+                                       width_, height_, pixel_stride_px_);
+                        logged_first_out = true;
+                    }
+                    write_idx = (write_idx + 1) % kFrameSlots;
+                } else {
+                    ++frames_fail;
+                }
+
+                /* 统计本次转换耗时（微秒）。 */
+                const uint64_t cvt_us = static_cast<uint64_t>(
+                    std::chrono::duration_cast<std::chrono::microseconds>(
+                        std::chrono::steady_clock::now() - cvt_start)
+                        .count());
+                convert_us_sum += cvt_us;
+                if(cvt_us > convert_us_max) {
+                    convert_us_max = cvt_us;
+                }
+            } else {
+                ++frames_skip;
             }
 
             /*
@@ -1140,18 +1165,19 @@ void CameraPreviewPlayer::decode_thread_fn()
         if(now - stats_since >= std::chrono::seconds(5)) {
             const uint32_t timed =
                 frames_ok + frames_fail; /* 有 convert 计时的帧数 */
-            const uint32_t loops = frames_ok + frames_fail + frames_no_slot;
+            const uint32_t loops =
+                frames_ok + frames_fail + frames_skip + frames_no_slot;
             const uint64_t cvt_avg =
                 timed > 0 ? (convert_us_sum / timed) : 0;
             const uint64_t loop_avg =
                 loops > 0 ? (loop_us_sum / loops) : 0;
             UPC_LOG_CAMERA_PREVIEW(Debug,
-                "decode 5s: scene=%s image=%p ok=%u fail=%u no_frame=%u "
+                "decode 5s: scene=%s image=%p ok=%u fail=%u skip=%u no_frame=%u "
                 "last_seq=%u display_buf=%d "
                 "cvt_avg_us=%llu cvt_max_us=%llu "
                 "loop_avg_us=%llu loop_max_us=%llu rga=%d",
                 scene_[0] ? scene_ : "(none)", static_cast<void*>(image_),
-                frames_ok, frames_fail, frames_no_slot, last_seq,
+                frames_ok, frames_fail, frames_skip, frames_no_slot, last_seq,
                 display_buf_.load(std::memory_order_relaxed),
                 static_cast<unsigned long long>(cvt_avg),
                 static_cast<unsigned long long>(convert_us_max),
@@ -1159,7 +1185,7 @@ void CameraPreviewPlayer::decode_thread_fn()
                 static_cast<unsigned long long>(loop_us_max),
                 rga_path_ready_ ? 1 : 0);
             /* 清零窗口统计，开始下一个 5 秒。 */
-            frames_ok = frames_no_slot = frames_fail = 0;
+            frames_ok = frames_no_slot = frames_fail = frames_skip = 0;
             convert_us_sum = convert_us_max = 0;
             loop_us_sum = loop_us_max = 0;
             stats_since = now;
@@ -1167,17 +1193,14 @@ void CameraPreviewPlayer::decode_thread_fn()
 
         /*
          * [步骤 5] 帧率限速。
+         * 始终按相机帧率跑：交互降频只在上面作用于转换，绝不推迟取帧，
+         * 否则槽位滞留会反压 Camera 采集线程。
          * 若本圈比目标周期还快，睡到接近 frame_period，避免空转占满 CPU；
          * 若已经超时（转换慢），则不再睡，直接进入下一圈。
          */
         const auto elapsed = now - tick_start;
-        uint32_t target_fps =
-            decode_target_fps_override_.load(std::memory_order_relaxed);
-        if(target_fps == 0u || target_fps > base_fps) {
-            target_fps = base_fps;
-        }
-        const auto frame_period = std::chrono::microseconds(
-            1000000u / (target_fps > 0 ? target_fps : 1u));
+        const auto frame_period =
+            std::chrono::microseconds(1000000u / base_fps);
         if(elapsed < frame_period) {
             std::this_thread::sleep_for(frame_period - elapsed);
         }

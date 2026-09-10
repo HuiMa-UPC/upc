@@ -166,6 +166,14 @@ uint32_t IpcDmaFrameRingProducer::commit_slot(uint32_t idx, uint64_t timestamp_u
     return new_seq;
 }
 
+bool IpcDmaFrameRingProducer::slot_is_empty(uint32_t idx) const
+{
+    if(!slots_ || idx >= global_->slot_count) {
+        return false;
+    }
+    return slots_[idx].state.load(std::memory_order_acquire) == kStateEmpty;
+}
+
 bool IpcDmaFrameRingProducer::wait_slot_empty(uint32_t idx,
                                               int timeout_ms) const
 {

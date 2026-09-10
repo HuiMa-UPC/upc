@@ -31,6 +31,8 @@ using PrintProgressCb  = std::function<void(const middleware::PrintProgressPaylo
 using PrintTerminateDoneCb = std::function<void()>;
 using PrintPauseDoneCb = std::function<void(bool paused)>;
 using PrintPowderLowCb = std::function<void()>;
+using OpticalPathProgressCb = std::function<void(const middleware::OpticalPathProgressPayload&)>;
+using PrintStartRejectedCb = std::function<void(const middleware::PrintStartRejectedPayload&)>;
 using SupplyStatusCb   = std::function<void(const middleware::SupplyStatusPayload&)>;
 using PrintPrepareDoneCb = std::function<void(bool ok)>;
 using McuOtaStatusCb   = std::function<void(const middleware::McuOtaStatusPayload&)>;
@@ -124,6 +126,11 @@ public:
      * APP_Print_Pause_Rsp(paused=1)，本回调只负责弹补粉弹窗。
      */
     void register_print_powder_low(PrintPowderLowCb cb);
+
+    /** 打印前光路检测逐点进度（打印卡徽标行）。 */
+    void register_optical_path_progress(OpticalPathProgressCb cb);
+    /** 起印被后端拒绝（光路检测失败）：UI 跳终止结果页。 */
+    void register_print_start_rejected(PrintStartRejectedCb cb);
 
     /** D1 X / 二次确认 Cancel：退出解析线程并清空 RingBuffer */
     void send_parser_exit();
@@ -241,6 +248,8 @@ private:
     PrintTerminateDoneCb print_terminate_done_cb_;
     PrintPauseDoneCb print_pause_done_cb_;
     PrintPowderLowCb print_powder_low_cb_;
+    OpticalPathProgressCb optical_path_progress_cb_;
+    PrintStartRejectedCb print_start_rejected_cb_;
     SupplyStatusCb   supply_status_cb_;
     PrintPrepareDoneCb print_prepare_done_cb_;
     McuOtaStatusCb   mcu_ota_status_cb_;

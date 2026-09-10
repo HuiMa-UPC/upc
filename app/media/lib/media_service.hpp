@@ -92,7 +92,7 @@ private:
     void close_dma_fds();
     void unmap_dma_views();
     bool map_dma_views_if_needed();
-    void update_latest_nv12_snapshot(const upc_ipc::IpcDmaFrameView& frame);
+    void publish_latest_nv12_snapshot(uint32_t width, uint32_t height);
     bool copy_latest_nv12_snapshot(std::vector<uint8_t>& out) const;
     bool save_latest_png_snapshot(std::string& out_path) const;
     void send_snapshot_rsp(const middleware::Message& req, bool ok,
@@ -149,6 +149,9 @@ private:
 
     std::thread worker_;
     std::atomic<bool> stop_worker_{false};
+
+    /** 取帧线程私有：本帧的紧凑 NV12，持槽期间只填这一份，随后与快照互换。 */
+    std::vector<uint8_t> staging_nv12_;
 
     mutable std::mutex latest_nv12_mtx_;
     std::vector<uint8_t> latest_nv12_snapshot_;

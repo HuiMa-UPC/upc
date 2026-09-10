@@ -90,6 +90,12 @@ const CatalogEntry kCatalog[] = {
       "First layer not passed", "Recoating and retrying first-layer check" },
     { (uint16_t)DeviceEventCode::FirstLayerVisualPassed, UI_MSG_SEV_INFO,
       "First layer passed", "Continuing normal printing" },
+    { (uint16_t)DeviceEventCode::OpticalPathCheckStarted, UI_MSG_SEV_INFO,
+      "Optical path check", "Verifying red-dot visibility at five points" },
+    { (uint16_t)DeviceEventCode::OpticalPathCheckPassed, UI_MSG_SEV_INFO,
+      "Optical path passed", "Starting the print job" },
+    { (uint16_t)DeviceEventCode::OpticalPathCheckFail, UI_MSG_SEV_CRITICAL,
+      "Optical path abnormal", "Print blocked. Check galvo / red laser / camera" },
     /* ---- UI 本地 ---- */
     { (uint16_t)DeviceEventCode::UiWearMask, UI_MSG_SEV_CRITICAL,
       "Wear a mask before opening", "Cabin powder may become airborne" },
