@@ -166,6 +166,11 @@ public:
      */
     bool send_tcp_emergency_ctrl_ex(uint8_t stop_code, uint8_t pause_code, uint8_t red_code);
     /**
+     * @brief 调试专用：直接下发一个已编码的 11 字节运动子包
+     * @note 仅允许在无打印/测试图运动流、无终止清理时调用。
+     */
+    bool send_debug_motion_subpacket(const uint8_t subpacket[11]);
+    /**
      * @brief 标记“打印任务流程”是否激活（用于门控高频心跳回包日志）
      * @note 业务约定：从进入打印到用户滑动开门解锁成功，均视为同一流程。
      */

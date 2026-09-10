@@ -78,6 +78,12 @@ private:
         middleware::MsgType rsp_type{middleware::MsgType::APP_Camera_Stream_Start_Rsp};
         std::string shm_name;
         upc_ipc::IpcDmaFrameRingProducer producer;
+        /**
+         * 会话是否仍在流中。停流时置 false，采集线程据此把在飞队列里属于
+         * 该 peer 的槽位直接判为已完成——消费者已经不再 release_slot，
+         * 再去等只会白白拖满超时。
+         */
+        std::atomic<bool> active{true};
     };
 
     mutable std::mutex stream_peers_mtx_;

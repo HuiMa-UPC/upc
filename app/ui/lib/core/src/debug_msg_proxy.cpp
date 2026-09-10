@@ -103,6 +103,15 @@ void DebugMsgProxy::init()
         }));
 
     subs_.push_back(bus.subscribe(
+        middleware::MsgType::GLAVO_Debug_OpticalPath_Check_Ntf, middleware::ModuleId::UI,
+        [this](const middleware::Message& msg) {
+            middleware::DebugOnOffPayload p{};
+            if(optical_path_check_cb_ && read_inline_pod(msg, p)) {
+                optical_path_check_cb_(p.on != 0);
+            }
+        }));
+
+    subs_.push_back(bus.subscribe(
         middleware::MsgType::GLAVO_Debug_TestImage_Ntf, middleware::ModuleId::UI,
         [this](const middleware::Message& msg) {
             middleware::DebugOnOffPayload p{};
@@ -112,6 +121,20 @@ void DebugMsgProxy::init()
             test_image_active_ = (p.on != 0);
             if(test_image_cb_) {
                 test_image_cb_(test_image_active_);
+            }
+        }));
+
+    subs_.push_back(bus.subscribe(
+        middleware::MsgType::GLAVO_Debug_Galvo_PointTest_Ntf,
+        middleware::ModuleId::UI,
+        [this](const middleware::Message& msg) {
+            middleware::DebugOnOffPayload p{};
+            if(!read_inline_pod(msg, p)) {
+                return;
+            }
+            galvo_point_test_active_ = (p.on != 0);
+            if(galvo_point_test_cb_) {
+                galvo_point_test_cb_(galvo_point_test_active_);
             }
         }));
 
@@ -127,6 +150,7 @@ void DebugMsgProxy::init()
 
     /* Confirm Print 互斥依赖此状态；进调试页前也可能需要。 */
     request_test_image_state();
+    request_galvo_point_test_state();
 }
 
 /* ---- Tab1 ---- */
@@ -190,6 +214,16 @@ void DebugMsgProxy::send_galvo_param_save(float scale, float step_mm,
 void DebugMsgProxy::send_galvo_calib()
 {
     publish_empty(middleware::MsgType::UI_Debug_Galvo_Calib_Ntf);
+}
+
+void DebugMsgProxy::start_galvo_point_test()
+{
+    publish_empty(middleware::MsgType::UI_Debug_Galvo_PointTest_Start_Ntf);
+}
+
+void DebugMsgProxy::request_galvo_point_test_state()
+{
+    publish_empty(middleware::MsgType::UI_Debug_Galvo_PointTest_Get_Ntf);
 }
 
 void DebugMsgProxy::send_device(middleware::DebugDeviceTarget target, bool on)
@@ -340,6 +374,18 @@ void DebugMsgProxy::request_first_layer_visual_check_state()
     publish_empty(middleware::MsgType::UI_Debug_FirstLayer_Visual_Check_Get_Ntf);
 }
 
+void DebugMsgProxy::send_optical_path_check_set(bool on)
+{
+    middleware::DebugOnOffPayload p{};
+    p.on = on ? 1 : 0;
+    publish_pod(middleware::MsgType::UI_Debug_OpticalPath_Check_Set_Ntf, p);
+}
+
+void DebugMsgProxy::request_optical_path_check_state()
+{
+    publish_empty(middleware::MsgType::UI_Debug_OpticalPath_Check_Get_Ntf);
+}
+
 void DebugMsgProxy::send_test_image_set(bool on)
 {
     middleware::DebugOnOffPayload p{};
@@ -398,9 +444,19 @@ void DebugMsgProxy::register_first_layer_visual_check(DebugFirstLayerVisualCheck
     first_layer_visual_check_cb_ = std::move(cb);
 }
 
+void DebugMsgProxy::register_optical_path_check(DebugOpticalPathCheckCb cb)
+{
+    optical_path_check_cb_ = std::move(cb);
+}
+
 void DebugMsgProxy::register_test_image(DebugTestImageCb cb)
 {
     test_image_cb_ = std::move(cb);
+}
+
+void DebugMsgProxy::register_galvo_point_test(DebugGalvoPointTestCb cb)
+{
+    galvo_point_test_cb_ = std::move(cb);
 }
 
 void DebugMsgProxy::register_local_rtsp(DebugLocalRtspCb cb)

@@ -5,6 +5,7 @@
 
 #include "gcode_manifest.hpp"
 #include "mcu_link.hpp"
+#include "optical_path_check.hpp"
 #include "wifi_manager.hpp"
 #include "msg_port.hpp"
 #include "msg_runtime.hpp"
@@ -50,6 +51,11 @@ private:
     void handle_print_start(const middleware::Message& msg);
     /** @brief 在已 prepare 的路径上真正 open/parse/begin（供起印与延迟起印共用） */
     void launch_print_from_prepared(const std::string& full_path);
+    /**
+     * @brief 光路检测放行后的起印后半段：open/parse + 首层参考图 gate
+     * @note 从 launch_print_from_prepared 拆出，供检测通过后由 worker 续跑。
+     */
+    void continue_print_after_optical_ready(const std::string& full_path);
     void begin_print_motion_after_reference_ready();
     void handle_visual_first_layer_reference_ready_rsp(
         const middleware::Message& msg);
@@ -117,6 +123,8 @@ private:
     void handle_debug_galvo_red_light(const middleware::Message& msg);
     void handle_debug_galvo_red_always(const middleware::Message& msg);
     void handle_debug_galvo_param_save(const middleware::Message& msg);
+    void handle_debug_galvo_point_test_start(const middleware::Message& msg);
+    void handle_debug_galvo_point_test_get(const middleware::Message& msg);
     void handle_debug_test_image_set(const middleware::Message& msg);
     void handle_debug_test_image_get(const middleware::Message& msg);
     void handle_debug_clean_test_start(const middleware::Message& msg);
@@ -135,12 +143,44 @@ private:
     void handle_debug_env_sim_powder_get(const middleware::Message& msg);
     void handle_debug_first_layer_visual_check_set(const middleware::Message& msg);
     void handle_debug_first_layer_visual_check_get(const middleware::Message& msg);
+    void handle_debug_optical_path_check_set(const middleware::Message& msg);
+    void handle_debug_optical_path_check_get(const middleware::Message& msg);
+    void handle_visual_optical_path_point_rsp(const middleware::Message& msg);
     void publish_debug_print_h264_record_state();
     void publish_debug_clean_record_state();
     void publish_debug_env_sim_state();
     void publish_debug_env_sim_powder_state();
     void publish_debug_first_layer_visual_check_state();
     void publish_debug_test_image_state();
+    void publish_debug_galvo_point_test_state();
+    void publish_debug_optical_path_check_state();
+    /** @brief 停止并回收点位测试线程；仅用于服务退出。 */
+    void stop_galvo_point_test_worker();
+
+    /* ---- 打印前光路检测（优先级高于首层检测） ---- */
+    /** @brief 注册 OpticalPathCheck 的依赖回调；init 阶段调用一次。 */
+    void configure_optical_path_check();
+    /**
+     * @brief 起印前的光路检测 gate
+     * @return true=已起一轮检测，调用方须立即 return 等回灌；false=无需检测，继续起印
+     */
+    bool begin_optical_path_gate();
+    /** @brief 检测线程结果回灌 worker 后的处理（续跑起印或阻断并报警）。 */
+    void on_optical_path_check_done();
+    /**
+     * @brief 「运动还没开始就起印失败」的统一收尾
+     *
+     * 切红光安全态、清挂起标志与打印态、通知 UI 跳终止结果页。
+     * prepare 会话（本地副本 + 行数缓存）保留，便于重试时跳过复制与扫描。
+     */
+    void abort_print_start(middleware::PrintStartRejectReason reason, uint8_t detail);
+    /** @brief 光路检测失败：先推 Critical 告警，再走 abort_print_start。 */
+    void abort_print_for_optical_path(uint8_t failed_point_index);
+    void publish_optical_path_progress(
+        const middleware::OpticalPathProgressPayload& payload);
+    void publish_optical_path_visual_session(bool active);
+    void publish_print_start_rejected(middleware::PrintStartRejectReason reason,
+                                      uint8_t detail);
     /** @brief 开一轮测试图：红光 + open/parse/begin（无媒体/换层握手） */
     bool launch_test_image_pass();
     /** @brief 停测试循环：清 desired，request_terminate（不切激光） */
@@ -244,6 +284,15 @@ private:
      */
     bool test_image_desired_{false};
     bool test_image_active_{false};
+    /**
+     * 中心点 + 四角红光驻留测试：独立线程执行，避免 3 秒等待阻塞业务 worker。
+     * UI 不提供取消；stop_requested 仅用于进程退出时及时回收线程。
+     */
+    std::thread galvo_point_test_thread_;
+    std::atomic<bool> galvo_point_test_active_{false};
+    std::atomic<bool> galvo_point_test_stop_requested_{false};
+    std::mutex galvo_point_test_wait_mtx_;
+    std::condition_variable galvo_point_test_wait_cv_;
     uint32_t print_total_layers_ = 0; /**< 当前作业层总数（纯层进度分母 / 回退时的层锚点分母） */
     /** 本作业是否走纯层台阶进度（G-code + 能数出 M3000 + 换层 Snap 已启用） */
     bool layer_progress_mode_ = false;
@@ -277,6 +326,21 @@ private:
     bool first_layer_visual_check_on_ = false; /**< 首层视觉检测开关（仅本次运行） */
     bool first_layer_visual_session_active_ = false; /**< Visual Camera/定位预热会话状态 */
     bool first_layer_reference_waiting_ = false; /**< 等待Visual锁定本次打印裸板B0 */
+    /* ---- 打印前光路检测 ---- */
+    bool optical_path_check_on_ = false; /**< 光路检测开关（仅本次运行，默认关） */
+    OpticalPathCheck optical_path_check_;
+    /**
+     * 检测线程结果回灌 worker 的 pending 位（与 clean_test_done_pending_ 同款）。
+     * 线程侧只置位 + notify，起印续跑一律回到 worker 串行执行。
+     */
+    std::atomic<bool> optical_path_done_pending_{false};
+    std::atomic<bool> optical_path_done_passed_{false};
+    std::atomic<uint8_t> optical_path_failed_point_{kNoFailedPoint};
+    /**
+     * 上一作业仍在 terminate 清理时，运动包会被 McuLink 拒发而误报光路异常。
+     * 此时置位，等 TerminateDone/PrintError 再起检测（仿 deferred_print_start_）。
+     */
+    bool deferred_optical_check_ = false;
     bool env_sim_on_ = false;  /**< 环境上报模拟（仅本次运行，默认关） */
     bool env_sim_powder_low_on_ = false; /**< 环境模拟粉量缺粉开关（目标状态，延迟生效由 McuLink 管） */
     bool ignore_powder_low_for_current_print_ = false; /**< 本次打印是否忽略缺粉检测（Cancel 后置位） */
