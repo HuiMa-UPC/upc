@@ -697,6 +697,7 @@ pending 自动解除——正好顺带验超时路径。
 | `user_control` | `page_user_control.*` | 控制面板 + 更多控制（页内两视图）。见下方「控制页」一节 |
 | `user_settings` | `page_user_settings.*` | 设置列表 + 开发者密码弹窗 |
 | `user_message` | `page_user_message.*` | 消息中心：日期分组混排列表（MCU 报警 + 设备事件）+ 初始 10 条与底部 Load More + 左滑删除历史 + 管理态批量删除 + 详情抽屉（Reset 三态）。按稿 3033:5247 / 3063:7338 / 3201:9570 / 5380:28971 实现 |
+| `user_debug` | `page_user_debug.*` | 调试控制台；Other 页 `Galvo Point Test` 按当前校准表依次显示中心和四角红光点，与正式打印及 Test image 双向互斥 |
 | `user_timelapse` | `page_user_timelapse.*` | 延时摄影播放器（隐藏页，历史缩略图进入；全屏 `lv_layer_top`） |
 
 注册仅在 `ui_app.cpp`；打印流程走 `control_*`，pages 不直接订阅 MsgBus。详见 `lib/pages/README.md`。
@@ -862,8 +863,9 @@ CABIN 四行的行首图标里，`ic_temp` / `ic_o2` 这次一并从稿重描并
 
 两个状态量决定外观，改哪个都走 `apply_print_phase()` 一处刷新：
 
-- `g_print_phase`（徽标四档）：`PRINTING...` 蓝 / `PAUSE` 蓝 / `PRINT TERMINATED` 橙 /
-  `PRINT COMPLETE` 绿。徽标色同时是百分比色与进度条填充色。
+- `g_print_phase`（徽标五档）：`PRINTING...` 蓝 / `PAUSE` 蓝 / `PRINT TERMINATED` 橙 /
+  `PRINT COMPLETE` 绿 / `OPTICAL PATH CHECK` 蓝（打印前光路检测，层号位显示 n/5，暂停钮灰掉）。
+  徽标色同时是百分比色与进度条填充色。
 - `g_purify_stage`（结束态下的吹粉子阶段，走 `purify_stage_set()`）：`IDLE` / `RUNNING`
   （吹粉钮图标 2s 一圈逆时针转、胶囊文案换 `AIR PURIFYING...`）/ `DONE`（通知换口罩提醒）。
   按稿 4234:6385，吹粉中**不改徽标**——吹粉态只靠状态栏与胶囊文案表达。

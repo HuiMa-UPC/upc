@@ -15,6 +15,13 @@ void page_user_home_refresh(bool force);
 void page_user_home_enter_printing_mode(const control_file_t *file);
 void page_user_home_exit_printing_mode(void);
 void page_user_home_printing_update(const control_progress_t *p);
+/**
+ * 光路检测逐点进度。state 见 OpticalPathPointState：
+ * Moving/Passed/Failed 切到 OPTICAL PATH CHECK 徽标并用层号位显示 n/5；
+ * Complete 恢复 PRINTING 徽标，进度条仍为 0 直到正式进度到达。
+ */
+void page_user_home_optical_path_update(uint8_t point_index, uint8_t point_total,
+                                       uint8_t state);
 
 /**
  * 打印结果浮层（PRINT COMPLETE / PRINT TERMINATED）。

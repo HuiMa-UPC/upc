@@ -367,6 +367,10 @@ enum class MsgType : uint32_t {
     APP_Print_Pause_Rsp,      /**< [GLAVO_Print_Pause_Rsp] PrintPauseStatePayload：暂停/恢复响应（Pause/Resume Req 共用） */
     APP_Print_Powder_Low_Ntf, /**< Empty：粉量传感器 bit0/bit1 同时为 0，触发一次缺粉通知 */
     GLAVO_Print_State_Ntf = 0x104C, /**< [GLAVO→MQTT] PrintStateNtfPayload：开始打印/打印结束状态边沿（触发一次 state 上报） */
+    /* 打印前光路检测（优先级高于首层检测）：UI 已进打印页，运动尚未开始。
+     * 追加在 GLAVO_Print_State_Ntf 之后，避免挪动上面那段的隐式编号。 */
+    APP_OpticalPath_Progress_Ntf,   /**< OpticalPathProgressPayload：光路检测逐点进度（打印卡徽标行） */
+    APP_Print_Start_Rejected_Ntf,   /**< PrintStartRejectedPayload：起印被后端拒绝，UI 跳终止结果页 */
 
     // ---- UI ↔ GLAVO：耗材/滤芯 ----
     UI_Supply_Status_Req = 0x1060, /**< Empty */
@@ -436,6 +440,10 @@ enum class MsgType : uint32_t {
     UI_Debug_TestImage_Set_Ntf,         /**< DebugOnOffPayload：红光测试图循环打印开关（/userdata/test/test.gcode） */
     UI_Debug_TestImage_Get_Ntf,         /**< Empty：查询当前测试图循环打印状态 */
     UI_Debug_Galvo_RedAlways_Ntf,       /**< Empty：红光常亮（TCP 0x0A DATA[3]=3；串口关激光使能） */
+    UI_Debug_Galvo_PointTest_Start_Ntf, /**< Empty：启动中心点 + 四角红光驻留测试 */
+    UI_Debug_Galvo_PointTest_Get_Ntf,   /**< Empty：查询红光点位测试运行状态 */
+    UI_Debug_OpticalPath_Check_Set_Ntf, /**< DebugOnOffPayload：打印前光路检测开关（仅本次运行，默认关） */
+    UI_Debug_OpticalPath_Check_Get_Ntf, /**< Empty：查询当前打印前光路检测开关状态 */
 
     // ---- GLAVO → UI：调试页状态回读（按模块拆分） ----
     GLAVO_Debug_Sensor_Ntf = 0x1200, /**< DebugSensorPayload：顶部 7 路传感器 */
@@ -449,6 +457,8 @@ enum class MsgType : uint32_t {
     GLAVO_Debug_Env_Sim_Powder_Ntf,    /**< DebugOnOffPayload：环境模拟粉量缺粉开关状态 */
     GLAVO_Debug_FirstLayer_Visual_Check_Ntf, /**< DebugOnOffPayload：首层视觉检测开关状态 */
     GLAVO_Debug_TestImage_Ntf,         /**< DebugOnOffPayload：测试图循环打印实际状态 */
+    GLAVO_Debug_Galvo_PointTest_Ntf,   /**< DebugOnOffPayload：红光点位测试运行状态 */
+    GLAVO_Debug_OpticalPath_Check_Ntf, /**< DebugOnOffPayload：打印前光路检测开关状态 */
 
     // ---- MEDIA → UI：调试页状态回读 ----
     APP_Media_Local_Rtsp_State_Ntf, /**< DebugOnOffPayload：本地 RTSP Server 实际开关状态（相机未就绪时回 0，UI 据此弹回） */
@@ -504,6 +514,11 @@ enum class MsgType : uint32_t {
     GLAVO_Visual_FirstLayer_Session_Start_Ntf = 0x1425, /**< Empty：打印开始，Visual 起流并预热定位缓存 */
     GLAVO_Visual_FirstLayer_Session_Stop_Ntf = 0x1426,  /**< Empty：首层通过/打印结束，Visual 停流休眠 */
     APP_Visual_FirstLayer_Reference_Ready_Rsp = 0x1427, /**< VisualFirstLayerReferenceReadyPayload：本次打印裸板 B0 已锁定 */
+    /* 打印前光路检测：Glavo 逐点移红光，Visual 在判定窗口内轮询识别后单次回包。 */
+    GLAVO_Visual_OpticalPath_Session_Start_Ntf = 0x1428, /**< Empty：光路检测开始，Visual 起流预热 */
+    GLAVO_Visual_OpticalPath_Session_Stop_Ntf,           /**< Empty：光路检测结束，Visual 释放取流 */
+    GLAVO_Visual_OpticalPath_Point_Check_Req,            /**< VisualOpticalPathCheckReqPayload：单点红光识别 */
+    APP_Visual_OpticalPath_Point_Check_Rsp,              /**< VisualOpticalPathCheckRspPayload：单点识别结果 */
     // ---- MEDIA ↔ CAMERA：媒体进程并行取流（拍照/录像） ----
     MEDIA_Camera_Stream_Start_Req = 0x1450,  /**< CameraStreamStartReqPayload（媒体侧取流） */
     APP_Media_Camera_Stream_Start_Rsp,       /**< CameraStreamInfoPayload */
@@ -576,6 +591,7 @@ inline constexpr bool is_ipc_reliable_msg_type(MsgType type) noexcept
     case MsgType::APP_Print_Terminate_Rsp:
     case MsgType::APP_Print_Pause_Rsp:
     case MsgType::APP_Print_Powder_Low_Ntf:
+    case MsgType::APP_OpticalPath_Progress_Ntf:
         return true;
 
     // 换层/录像链路：层抓拍与会话闭环
@@ -591,6 +607,14 @@ inline constexpr bool is_ipc_reliable_msg_type(MsgType type) noexcept
     case MsgType::APP_Visual_FirstLayer_Reference_Ready_Rsp:
     case MsgType::GLAVO_Visual_FirstLayer_Session_Start_Ntf:
     case MsgType::GLAVO_Visual_FirstLayer_Session_Stop_Ntf:
+        return true;
+
+    // 打印前光路检测：单点判定与阻断结论丢一条就会误判/卡界面
+    case MsgType::GLAVO_Visual_OpticalPath_Point_Check_Req:
+    case MsgType::APP_Visual_OpticalPath_Point_Check_Rsp:
+    case MsgType::GLAVO_Visual_OpticalPath_Session_Start_Ntf:
+    case MsgType::GLAVO_Visual_OpticalPath_Session_Stop_Ntf:
+    case MsgType::APP_Print_Start_Rejected_Ntf:
         return true;
 
     default:
@@ -612,6 +636,7 @@ inline constexpr bool is_ipc_latest_only_msg_type(MsgType type) noexcept
     case MsgType::APP_Print_Pause_Rsp:
     case MsgType::APP_Print_Video_Manifest_Ntf:
     case MsgType::APP_Visual_FirstLayer_Reference_Ready_Rsp:
+    case MsgType::APP_OpticalPath_Progress_Ntf:
         return true;
     default:
         return false;
@@ -903,6 +928,65 @@ struct VisualFirstLayerReferenceReadyPayload {
     uint8_t result;      /**< 1=B0 已采集且可用，0=采集失败；失败时禁止开始运动 */
     uint8_t reserved[3];
     uint32_t frame_seq;  /**< B0 对应相机帧序号；失败时为 0 */
+};
+
+/* ---- 打印前光路检测（Glavo ↔ Visual ↔ UI） ----
+ * 判定窗口内的多帧轮询由 Visual 负责：收到 Req 后在 timeout_ms 内反复取最新帧
+ * 识别红点，命中即回 result=1，窗口耗尽回 result=0（fail-closed）。
+ * Glavo 侧另有 timeout_ms + grace 的兜底等待，Visual 不回包同样判失败。 */
+
+/** GLAVO_Visual_OpticalPath_Point_Check_Req：单点红光识别请求（Inline） */
+struct VisualOpticalPathCheckReqPayload {
+    uint8_t  point_index;      /**< 0=中心 1=右上 2=右下 3=左下 4=左上 */
+    uint8_t  point_total;      /**< 本轮总点数，当前为 5 */
+    uint8_t  reserved[2];
+    int16_t  expect_x_mm_x10;  /**< 期望振镜坐标 X（0.1mm），供视觉做 ROI 预测 */
+    int16_t  expect_y_mm_x10;  /**< 期望振镜坐标 Y（0.1mm） */
+    uint32_t timeout_ms;       /**< 判定窗口时长；视觉据此决定轮询轮次 */
+    uint32_t session_id;       /**< 本轮检测会话号；回包须回显以丢弃过期结果 */
+};
+
+/** APP_Visual_OpticalPath_Point_Check_Rsp：单点识别结果（Inline） */
+struct VisualOpticalPathCheckRspPayload {
+    uint8_t  result;           /**< 1=识别到红点，0=未识别到 */
+    uint8_t  point_index;      /**< 回显请求点位，用于与 Glavo 侧等待配对 */
+    uint8_t  reserved[2];
+    uint32_t session_id;       /**< 回显请求会话号 */
+    int16_t  detected_x_px;    /**< 识别到的像素中心 X；未识别到填 -1 */
+    int16_t  detected_y_px;    /**< 识别到的像素中心 Y；未识别到填 -1 */
+    uint16_t confidence_q8;    /**< 置信度 ×256（0..256）；未识别到为 0 */
+    uint16_t reserved2;
+};
+
+/** 光路检测阶段状态：驱动 UI 打印卡徽标行文案。 */
+enum class OpticalPathPointState : uint8_t {
+    Moving   = 0,  /**< 红光已下发，正在等待视觉识别 */
+    Passed   = 1,  /**< 该点识别通过，即将移到下一点 */
+    Failed   = 2,  /**< 该点超时未识别到，整轮判失败 */
+    Complete = 3,  /**< 五点全部通过，UI 把打印卡恢复成正常进度 */
+};
+
+/** APP_OpticalPath_Progress_Ntf：光路检测逐点进度（Inline） */
+struct OpticalPathProgressPayload {
+    uint8_t point_index;  /**< 当前点位 0..4 */
+    uint8_t point_total;  /**< 本轮总点数，当前为 5 */
+    uint8_t state;        /**< OpticalPathPointState */
+    uint8_t reserved;
+};
+
+/** 起印被拒原因。数值跨进程传输，只准往末尾追加。 */
+enum class PrintStartRejectReason : uint8_t {
+    Unknown         = 0,
+    OpticalPathFail = 1,  /**< 打印前光路检测未通过 */
+    FileOpenFail    = 2,  /**< 本地副本打不开（已 prepare 但文件被删/损坏） */
+};
+
+/** APP_Print_Start_Rejected_Ntf：起印被后端拒绝（Inline）
+ *  UI 收到后跳终止结果页（作业从未开始，不会有 Camera manifest）。 */
+struct PrintStartRejectedPayload {
+    uint8_t reason;       /**< PrintStartRejectReason */
+    uint8_t detail;       /**< reason=OpticalPathFail 时为失败点位索引，无效填 0xff */
+    uint8_t reserved[2];
 };
 
 /** GLAVO→CAMERA 打印录像会话（Start/Finish/Abort 共用） */
@@ -1387,6 +1471,9 @@ enum class DeviceEventCode : uint16_t {
     FirstLayerVisualPassed = 28, /**< 首层检测通过，进入正常打印（one_shot） */
     FirstLayerReferenceRetrying = 29, /**< 参考图采集失败，继续重试（one_shot） */
     FirstLayerReferenceReady = 30, /**< 参考图采集成功，开始首层检测（one_shot） */
+    OpticalPathCheckStarted = 31, /**< 打印前光路检测开始（one_shot，severity=info） */
+    OpticalPathCheckPassed  = 32, /**< 打印前光路检测通过（one_shot，severity=info） */
+    OpticalPathCheckFail    = 33, /**< 光路异常，已阻断本次打印（one_shot，severity=critical） */
 
     /* ---- 以下为 UI 本地事件：不走总线，由前端自己 push，占同一码空间以便
      *      消息中心统一排序去重。后端不应发送这些码。 ---- */

@@ -27,7 +27,9 @@ using DebugCleanRecordCb = std::function<void(bool)>;
 using DebugEnvSimCb = std::function<void(bool)>;
 using DebugEnvSimPowderCb = std::function<void(bool)>;
 using DebugFirstLayerVisualCheckCb = std::function<void(bool)>;
+using DebugOpticalPathCheckCb = std::function<void(bool)>;
 using DebugTestImageCb = std::function<void(bool)>;
+using DebugGalvoPointTestCb = std::function<void(bool)>;
 using DebugLocalRtspCb = std::function<void(bool)>;
 
 class DebugMsgProxy {
@@ -48,6 +50,9 @@ public:
     void send_galvo_param_save(float scale, float step_mm,
                                float center_offset_x, float center_offset_y);
     void send_galvo_calib();
+    /** Other 页：中心点 + 四角红光驻留测试（一次性，不提供取消）。 */
+    void start_galvo_point_test();
+    void request_galvo_point_test_state();
     void send_device(middleware::DebugDeviceTarget target, bool on);
 
     /* ---- Tab2 其他控制 ---- */
@@ -75,6 +80,8 @@ public:
     void request_env_sim_powder_state();
     void send_first_layer_visual_check_set(bool on);
     void request_first_layer_visual_check_state();
+    void send_optical_path_check_set(bool on);
+    void request_optical_path_check_state();
     /** 调试页 Test image：红光循环打印 /userdata/test/test.gcode */
     void send_test_image_set(bool on);
     void request_test_image_state();
@@ -93,11 +100,17 @@ public:
     void register_env_sim(DebugEnvSimCb cb);
     void register_env_sim_powder(DebugEnvSimPowderCb cb);
     void register_first_layer_visual_check(DebugFirstLayerVisualCheckCb cb);
+    void register_optical_path_check(DebugOpticalPathCheckCb cb);
     void register_test_image(DebugTestImageCb cb);
+    void register_galvo_point_test(DebugGalvoPointTestCb cb);
     void register_local_rtsp(DebugLocalRtspCb cb);
 
     /** Confirm Print 互斥：Glavo 回报的测试图实际运行态 */
     [[nodiscard]] bool test_image_active() const noexcept { return test_image_active_; }
+    /** Confirm Print 互斥：Glavo 回报的红光点位测试运行态 */
+    [[nodiscard]] bool galvo_point_test_active() const noexcept {
+        return galvo_point_test_active_;
+    }
 
 private:
     DebugMsgProxy() = default;
@@ -139,9 +152,12 @@ private:
     DebugEnvSimCb env_sim_cb_;
     DebugEnvSimPowderCb env_sim_powder_cb_;
     DebugFirstLayerVisualCheckCb first_layer_visual_check_cb_;
+    DebugOpticalPathCheckCb optical_path_check_cb_;
     DebugTestImageCb test_image_cb_;
+    DebugGalvoPointTestCb galvo_point_test_cb_;
     DebugLocalRtspCb local_rtsp_cb_;
     bool test_image_active_ = false;
+    bool galvo_point_test_active_ = false;
 };
 
 } // namespace ui

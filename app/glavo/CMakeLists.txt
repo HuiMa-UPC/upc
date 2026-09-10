@@ -2,7 +2,9 @@ set(UPC_GLAVO_TARGET upc_glavo)
 set(GLAVO_LIB_DIR ${CMAKE_CURRENT_SOURCE_DIR}/lib)
 
 set(UPC_GLAVO_SOURCES
+    ${GLAVO_LIB_DIR}/galvo_motion_encode.cpp
     ${GLAVO_LIB_DIR}/glavo_service.cpp
+    ${GLAVO_LIB_DIR}/optical_path_check.cpp
     ${GLAVO_LIB_DIR}/mcu_link.cpp
     ${GLAVO_LIB_DIR}/mcu_ota_session.cpp
     ${GLAVO_LIB_DIR}/mcu_serial_ota_session.cpp

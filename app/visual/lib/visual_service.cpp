@@ -18,6 +18,7 @@
 #include <cstring>
 #include <ctime>
 #include <string>
+#include <thread>
 #include <utility>
 
 #include <dirent.h>
@@ -290,8 +291,45 @@ bool VisualService::init()
 
 void VisualService::shutdown()
 {
+    stop_optical_path_session("shutdown");
     stop_first_layer_session("shutdown");
     subs_.clear();
+}
+
+bool VisualService::any_session_active_locked() const
+{
+    return first_layer_session_active_ || optical_path_session_active_;
+}
+
+/**
+ * @brief 两类会话都停了才真正拆流
+ *
+ * 单独给某一类会话调 send_stream_stop_req + stop_worker 会把另一类正要用的流
+ * 一起拆掉（并清掉帧快照缓存），所以拆流动作统一收敛到这里。
+ */
+void VisualService::release_stream_if_idle(const char* reason)
+{
+    bool had_activity = false;
+    {
+        std::lock_guard<std::mutex> lock(state_mtx_);
+        if(any_session_active_locked()) {
+            return;
+        }
+        had_activity = stream_up_ || start_req_sent_;
+        start_req_sent_ = false;
+    }
+
+    if(had_activity) {
+        send_stream_stop_req();
+    }
+    stop_worker();
+    unmap_dma_views();
+    consumer_.close();
+    close_dma_fds(dma_fds_);
+    clear_latest_snapshot();
+    if(had_activity) {
+        UPC_LOG_VISUAL_SERVICE(Info, "camera stream released reason=%s", reason);
+    }
 }
 
 void VisualService::tick()
@@ -323,6 +361,24 @@ void VisualService::subscribe_messages()
         middleware::MsgType::GLAVO_Visual_FirstLayer_Check_Req,
         middleware::ModuleId::APP_VISUAL,
         [this](const middleware::Message& msg) { on_first_layer_check_req(msg); }));
+    subs_.push_back(bus.subscribe(
+        middleware::MsgType::GLAVO_Visual_OpticalPath_Session_Start_Ntf,
+        middleware::ModuleId::APP_VISUAL,
+        [this](const middleware::Message& msg) {
+            on_optical_path_session_start(msg);
+        }));
+    subs_.push_back(bus.subscribe(
+        middleware::MsgType::GLAVO_Visual_OpticalPath_Session_Stop_Ntf,
+        middleware::ModuleId::APP_VISUAL,
+        [this](const middleware::Message& msg) {
+            on_optical_path_session_stop(msg);
+        }));
+    subs_.push_back(bus.subscribe(
+        middleware::MsgType::GLAVO_Visual_OpticalPath_Point_Check_Req,
+        middleware::ModuleId::APP_VISUAL,
+        [this](const middleware::Message& msg) {
+            on_optical_path_point_check_req(msg);
+        }));
 }
 
 void VisualService::send_stream_start_req()
@@ -330,7 +386,8 @@ void VisualService::send_stream_start_req()
     const uint64_t now = monotonic_ms();
     {
         std::lock_guard<std::mutex> lock(state_mtx_);
-        if(!first_layer_session_active_ || stream_up_) {
+        /* 首层检测与光路检测共用这一路流：任一会话激活就该起流。 */
+        if(!any_session_active_locked() || stream_up_) {
             return;
         }
         if(start_req_sent_ && now - last_start_req_ms_ < kStartRetryMs) {
@@ -426,21 +483,14 @@ void VisualService::stop_first_layer_session(const char* reason)
         last_reference_capture_attempt_ms_ = 0;
         last_reference_failure_report_ms_ = 0;
         last_reference_failure_reason_.clear();
-        start_req_sent_ = false;
     }
 
-    if(had_activity) {
-        send_stream_stop_req();
-    }
-    stop_worker();
-    unmap_dma_views();
-    consumer_.close();
-    close_dma_fds(dma_fds_);
+    /* 拆流交给 release_stream_if_idle：光路检测会话可能还在用这一路流。 */
+    release_stream_if_idle(reason);
     {
         std::lock_guard<std::mutex> detector_lock(detector_mtx_);
         first_layer_detector_.clear_bare_reference();
     }
-    clear_latest_snapshot();
 
     if(had_activity) {
         DiagnosticImageSaveResult rejected_image;
@@ -467,6 +517,193 @@ void VisualService::stop_first_layer_session(const char* reason)
             rejected_image.saved ? 1 : 0, rejected_image.path.c_str(),
             rejected_image.elapsed_ms, rejected_image.error.c_str());
     }
+}
+
+void VisualService::on_optical_path_session_start(const middleware::Message& msg)
+{
+    (void)msg;
+    start_optical_path_session("glavo_start");
+}
+
+void VisualService::on_optical_path_session_stop(const middleware::Message& msg)
+{
+    (void)msg;
+    stop_optical_path_session("glavo_stop");
+}
+
+void VisualService::start_optical_path_session(const char* reason)
+{
+    bool newly_active = false;
+    uint64_t session_id = 0;
+    {
+        std::lock_guard<std::mutex> lock(state_mtx_);
+        if(!optical_path_session_active_) {
+            optical_path_session_active_ = true;
+            optical_path_session_id_ = static_cast<uint64_t>(
+                std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::system_clock::now().time_since_epoch()).count());
+            newly_active = true;
+        }
+        session_id = optical_path_session_id_;
+    }
+    if(newly_active) {
+        red_dot_detector_.reset_session();
+        UPC_LOG_VISUAL_SERVICE(Info,
+            "optical path session start session_id=%llu reason=%s",
+            static_cast<unsigned long long>(session_id), reason);
+    }
+    send_stream_start_req();
+}
+
+void VisualService::stop_optical_path_session(const char* reason)
+{
+    bool was_active = false;
+    uint64_t session_id = 0;
+    {
+        std::lock_guard<std::mutex> lock(state_mtx_);
+        was_active = optical_path_session_active_;
+        session_id = optical_path_session_id_;
+        optical_path_session_active_ = false;
+    }
+    stop_optical_point_thread();
+    release_stream_if_idle(reason);
+    if(was_active) {
+        UPC_LOG_VISUAL_SERVICE(Info,
+            "optical path session stop session_id=%llu reason=%s",
+            static_cast<unsigned long long>(session_id), reason);
+    }
+}
+
+void VisualService::stop_optical_point_thread()
+{
+    optical_point_abort_.store(true);
+    if(optical_point_thread_.joinable()) {
+        optical_point_thread_.join();
+    }
+    optical_point_abort_.store(false);
+}
+
+void VisualService::on_optical_path_point_check_req(const middleware::Message& msg)
+{
+    middleware::VisualOpticalPathCheckReqPayload req{};
+    if(msg.payload.type != middleware::MsgPayload::Type::Inline ||
+       msg.payload.length < sizeof(req)) {
+        UPC_LOG_VISUAL_SERVICE(Warn, "optical path check invalid request payload");
+        middleware::VisualOpticalPathCheckReqPayload dummy{};
+        dummy.session_id = 0;
+        dummy.point_index = 0xff;
+        send_optical_path_point_rsp(dummy, RedDotDetection{});
+        return;
+    }
+    std::memcpy(&req, msg.payload.data.bytes.data(), sizeof(req));
+
+    bool session_active = false;
+    {
+        std::lock_guard<std::mutex> lock(state_mtx_);
+        session_active = optical_path_session_active_;
+    }
+    if(!session_active) {
+        /* 会话 Start 丢失时先起流；本点没帧则窗口耗尽后回 result=0。 */
+        start_optical_path_session("check_without_start");
+    }
+
+    /* 上一点的取点线程理论上已经结束（Glavo 逐点等待），但防御性回收一次。
+     * abort 标志由 stop_optical_point_thread 在 join 后自行落回 false。 */
+    stop_optical_point_thread();
+    optical_point_thread_ = std::thread(
+        [this, req]() { run_optical_point_window(req); });
+}
+
+void VisualService::run_optical_point_window(
+    const middleware::VisualOpticalPathCheckReqPayload& req)
+{
+    const uint32_t timeout_ms = (req.timeout_ms == 0u) ? 3000u : req.timeout_ms;
+    const uint64_t deadline = monotonic_ms() + timeout_ms;
+    RedDotHint hint;
+    hint.expect_x_mm = static_cast<double>(req.expect_x_mm_x10) / 10.0;
+    hint.expect_y_mm = static_cast<double>(req.expect_y_mm_x10) / 10.0;
+    hint.point_index = req.point_index;
+    hint.point_total = req.point_total;
+
+    RedDotDetection last;
+    last.found = false;
+    last.reason = "timeout";
+
+    while(!optical_point_abort_.load() && monotonic_ms() < deadline) {
+        std::vector<uint8_t> nv12;
+        uint32_t width = 0;
+        uint32_t height = 0;
+        uint32_t frame_seq = 0;
+        if(copy_latest_snapshot(nv12, width, height, frame_seq)) {
+            last = red_dot_detector_.detect_nv12(
+                nv12.data(), nv12.size(), width, height, frame_seq, hint);
+            if(last.found) {
+                send_optical_path_point_rsp(req, last);
+                UPC_LOG_VISUAL_SERVICE(Info,
+                    "optical path point found idx=%u seq=%u px=%.1f,%.1f conf=%.3f",
+                    static_cast<unsigned>(req.point_index),
+                    static_cast<unsigned>(frame_seq),
+                    last.center_x, last.center_y, last.confidence);
+                return;
+            }
+        }
+        /* 轮询周期 ~33ms：对应 ~30fps 最新帧。sleep 在取点线程上，
+         * 不阻塞 Visual 主循环的 tick / IPC 分发。 */
+        std::this_thread::sleep_for(std::chrono::milliseconds(33));
+    }
+
+    if(optical_point_abort_.load()) {
+        last.reason = "aborted";
+        /* 被 abort 时不回包：Glavo 侧已经走终止路径，迟到回包会被 session 过滤。 */
+        UPC_LOG_VISUAL_SERVICE(Info,
+            "optical path point aborted idx=%u session=%u",
+            static_cast<unsigned>(req.point_index),
+            static_cast<unsigned>(req.session_id));
+        return;
+    }
+    send_optical_path_point_rsp(req, last);
+    UPC_LOG_VISUAL_SERVICE(Warn,
+        "optical path point not found idx=%u session=%u reason=%s",
+        static_cast<unsigned>(req.point_index),
+        static_cast<unsigned>(req.session_id), last.reason.c_str());
+}
+
+void VisualService::send_optical_path_point_rsp(
+    const middleware::VisualOpticalPathCheckReqPayload& req,
+    const RedDotDetection& detection)
+{
+    middleware::VisualOpticalPathCheckRspPayload rsp{};
+    rsp.result = detection.found ? 1 : 0;
+    rsp.point_index = req.point_index;
+    rsp.session_id = req.session_id;
+    if(detection.found) {
+        const auto clamp_i16 = [](double v) -> int16_t {
+            if(v < -32768.0) return static_cast<int16_t>(-32768);
+            if(v >  32767.0) return static_cast<int16_t>( 32767);
+            return static_cast<int16_t>(v);
+        };
+        rsp.detected_x_px = clamp_i16(detection.center_x);
+        rsp.detected_y_px = clamp_i16(detection.center_y);
+        const double q8 = detection.confidence * 256.0;
+        if(q8 <= 0.0) {
+            rsp.confidence_q8 = 0;
+        } else if(q8 >= 65535.0) {
+            rsp.confidence_q8 = 65535;
+        } else {
+            rsp.confidence_q8 = static_cast<uint16_t>(q8);
+        }
+    } else {
+        rsp.detected_x_px = -1;
+        rsp.detected_y_px = -1;
+        rsp.confidence_q8 = 0;
+    }
+    middleware::Message out(
+        middleware::MsgType::APP_Visual_OpticalPath_Point_Check_Rsp,
+        middleware::ModuleId::APP_VISUAL,
+        middleware::ModuleId::APP_GLAVO);
+    out.payload = middleware::MsgPayload::from_bytes(
+        reinterpret_cast<const uint8_t*>(&rsp), sizeof(rsp));
+    middleware::MsgPort::instance().publish_async(out);
 }
 
 void VisualService::cache_final_rejected_diagnostic(
@@ -599,7 +836,10 @@ void VisualService::on_stream_start_rsp(const middleware::Message& msg)
     bool session_active = false;
     {
         std::lock_guard<std::mutex> lock(state_mtx_);
-        session_active = first_layer_session_active_;
+        /* 必须与 send_stream_start_req 用同一个判据：光路检测会话单独激活时
+         * 首层会话是关着的，只看 first_layer_session_active_ 会把自己请来的
+         * 起流回执当成野包丢掉（关 fd 不 mmap），取帧线程永远起不来。 */
+        session_active = any_session_active_locked();
         if(!session_active) {
             start_req_sent_ = false;
         }
@@ -612,7 +852,7 @@ void VisualService::on_stream_start_rsp(const middleware::Message& msg)
         }
         send_stream_stop_req();
         UPC_LOG_VISUAL_SERVICE(Info,
-            "ignore camera stream response outside first layer session");
+            "ignore camera stream response: no visual session active");
         return;
     }
 
