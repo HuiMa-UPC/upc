@@ -34,6 +34,7 @@ set(UPC_COMMON_SOURCES
     # fs_manifest（跨进程共用的本地清单 JSON：G-code / 打印历史）
     ${CMAKE_CURRENT_SOURCE_DIR}/fs_manifest/gcode_manifest.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/fs_manifest/print_history_manifest.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/fs_manifest/ota_image_pair.cpp
     # cal.csv Config 段解析（运行时可选覆盖）
     ${CMAKE_CURRENT_SOURCE_DIR}/config/cal_config.cpp
 )

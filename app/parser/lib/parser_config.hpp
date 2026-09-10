@@ -3,7 +3,7 @@
 
 /** 默认校准 CSV 路径（默认值须与 common/config/cal_config.hpp 的 UPC_CAL_* 一致） */
 #ifndef UPC_CAL_DIR
-#define UPC_CAL_DIR  "/data/CAL"
+#define UPC_CAL_DIR  "/userdata/CAL"
 #endif
 
 #ifndef UPC_CAL_PATH

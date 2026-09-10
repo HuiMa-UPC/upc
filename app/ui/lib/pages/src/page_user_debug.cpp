@@ -24,7 +24,10 @@
  * 顶部 7 路传感器条 + 设备快捷行（设备/门/电机/照明）+ Tab（Move/Other/Laser/Test）。
  * Test（测试）Tab 为自动化用例表，实现见 page_user_debug_test.cpp（中文界面）。
  * 移动控制：左列 Z/S/D 三轴卡（点击移动/长按移动），右列 振镜坐标卡 + 振镜标定卡。
- * 命令经 DebugMsgProxy → APP_GLAVO（后端待实现）；图标暂用 LV_SYMBOL/文字占位。
+ * 振镜方向盘（X/-X/Y/-Y）按 Step 本地增减中心偏移；复位回上次 Save/读盘值。
+ * Save 写 cal.csv 第 4 行并由 Glavo load_calibration；测试图/正式打印中禁用。
+ * Test image 开关：红光循环打印 /userdata/test/test.gcode（经 DebugMsgProxy）。
+ * 其余命令经 DebugMsgProxy → APP_GLAVO（后端待实现）；图标暂用 LV_SYMBOL/文字占位。
  */
 
 namespace {
@@ -88,9 +91,13 @@ lv_obj_t *g_galvo_x_lbl    = nullptr;
 lv_obj_t *g_galvo_y_lbl    = nullptr;
 lv_obj_t *g_galvo_scale_ta = nullptr;
 lv_obj_t *g_galvo_step_seg = nullptr;
+lv_obj_t *g_test_image_seg = nullptr;
+lv_obj_t *g_galvo_save_btn = nullptr;
 bool      g_galvo_center_valid = false;
-double    g_galvo_center_x = 0.0;
+double    g_galvo_center_x = 0.0;   /**< 编辑中的中心偏移（未 Save 前仅 UI） */
 double    g_galvo_center_y = 0.0;
+double    g_galvo_saved_x = 0.0;    /**< 上次从 cal.csv / Save 成功后的值（复位目标） */
+double    g_galvo_saved_y = 0.0;
 lv_obj_t *g_dev_btn[4]     = { nullptr };
 lv_obj_t *g_dev_state[4]   = { nullptr };   /**< 设备快捷行状态字（已唤醒/休眠中…） */
 lv_obj_t *g_fan_duty_ta      = nullptr;     /**< 其他控制：风扇占空比输入 */
@@ -180,6 +187,29 @@ void apply_galvo_center_labels()
         } else {
             lv_label_set_text(g_galvo_y_lbl, "--");
         }
+    }
+}
+
+/** 正式打印或测试图运行中禁止写 cal.csv */
+bool galvo_save_busy()
+{
+    const bool test_seg_on =
+        g_test_image_seg &&
+        ui_user_segmented_get_selected(g_test_image_seg) == 0;
+    return control_is_printing() ||
+           ui::DebugMsgProxy::instance().test_image_active() ||
+           test_seg_on;
+}
+
+void update_galvo_save_enabled()
+{
+    if(!g_galvo_save_btn) {
+        return;
+    }
+    if(galvo_save_busy()) {
+        lv_obj_add_state(g_galvo_save_btn, LV_STATE_DISABLED);
+    } else {
+        lv_obj_clear_state(g_galvo_save_btn, LV_STATE_DISABLED);
     }
 }
 
@@ -699,22 +729,29 @@ void on_galvo_dir(lv_event_t *e)
     const uintptr_t v = reinterpret_cast<uintptr_t>(lv_event_get_user_data(e));
     const auto axis = static_cast<DebugGalvoAxis>((v >> 1) & 1u);
     const int dir = (v & 1u) ? 1 : -1;
-    ui::DebugMsgProxy::instance().send_galvo_move(axis, dir, galvo_step());
+    const double delta = static_cast<double>(galvo_step()) * static_cast<double>(dir);
+    if(!g_galvo_center_valid) {
+        g_galvo_center_x = 0.0;
+        g_galvo_center_y = 0.0;
+        g_galvo_center_valid = true;
+    }
+    if(axis == DebugGalvoAxis::X) {
+        g_galvo_center_x += delta;
+    } else {
+        g_galvo_center_y += delta;
+    }
+    apply_galvo_center_labels();
 }
 
 void on_galvo_home(lv_event_t *)
 {
-    ui::DebugMsgProxy::instance().send_galvo_home();
+    /* 复位到上次从 cal 读入 / Save 成功后的偏移，不是清零 */
+    g_galvo_center_x = g_galvo_saved_x;
+    g_galvo_center_y = g_galvo_saved_y;
+    g_galvo_center_valid = true;
+    apply_galvo_center_labels();
 }
 
-void on_red_laser_changed(lv_event_t *e)
-{
-    lv_obj_t *seg = lv_event_get_target_obj(e);
-    ui::DebugMsgProxy::instance().send_galvo_red_light(
-        ui_user_segmented_get_selected(seg) == 0);
-}
-
-/* Laser 页红光/激光：按一下发一条，不跟随设备真实状态（纯测试用途）。 */
 void on_red_mode_click(lv_event_t *)
 {
     ui::DebugMsgProxy::instance().send_galvo_red_light(true);
@@ -725,11 +762,39 @@ void on_laser_mode_click(lv_event_t *)
     ui::DebugMsgProxy::instance().send_galvo_red_light(false);
 }
 
+void on_red_always_click(lv_event_t *)
+{
+    ui::DebugMsgProxy::instance().send_galvo_red_always();
+}
+
 void on_galvo_save(lv_event_t *)
 {
+    if(galvo_save_busy()) {
+        ui_toast_show("Cannot save while printing", user_color_status_err, 1800);
+        update_galvo_save_enabled();
+        return;
+    }
+    if(!g_galvo_center_valid) {
+        ui_toast_show("No center offset loaded", user_color_status_err, 1500);
+        return;
+    }
     ui::DebugMsgProxy::instance().send_galvo_param_save(
-        read_ta_float(g_galvo_scale_ta), galvo_step());
+        read_ta_float(g_galvo_scale_ta), galvo_step(),
+        static_cast<float>(g_galvo_center_x),
+        static_cast<float>(g_galvo_center_y));
+    /* Save 成功后以当前编辑值为“已保存”，供复位键回退 */
+    g_galvo_saved_x = g_galvo_center_x;
+    g_galvo_saved_y = g_galvo_center_y;
     ui_toast_show("Saved", user_color_accent, 1200);
+}
+
+void on_test_image_changed(lv_event_t *e)
+{
+    lv_obj_t *seg = lv_event_get_target_obj(e);
+    const bool on = (ui_user_segmented_get_selected(seg) == 0);
+    ui::DebugMsgProxy::instance().send_test_image_set(on);
+    /* 乐观禁用：实际态以 GLAVO_Debug_TestImage_Ntf 为准再校正 */
+    update_galvo_save_enabled();
 }
 
 void on_calib_click(lv_event_t *)
@@ -787,9 +852,9 @@ lv_obj_t *build_dpad(lv_obj_t *parent)
         return r;
     };
 
-    /* 上 +Y */
+    /* 上 +Y：本地增减中心偏移，Save 后才写 cal.csv */
     make_dir(pad, "Y", static_cast<uint8_t>(DebugGalvoAxis::Y), +1);
-    /* 中：-X 复位 +X */
+    /* 中：-X 复位(回上次保存) +X */
     lv_obj_t *mid = make_mid_row();
     make_dir(mid, "-X", static_cast<uint8_t>(DebugGalvoAxis::X), -1);
     make_circle_btn(mid, bsz, LV_SYMBOL_REFRESH, on_galvo_home, nullptr);
@@ -836,7 +901,7 @@ lv_obj_t *build_galvo_card(lv_obj_t *parent)
 
     build_dpad(body);
 
-    /* Scale / 红光：整行（卡片直接子，避免窄列裁剪） */
+    /* Scale / Test image：整行（卡片直接子，避免窄列裁剪） */
     lv_obj_t *scale_row = lv_obj_create(card);
     lv_obj_remove_style_all(scale_row);
     lv_obj_set_width(scale_row, LV_PCT(100));
@@ -864,14 +929,15 @@ lv_obj_t *build_galvo_card(lv_obj_t *parent)
     lv_obj_set_style_bg_opa(rl_row, LV_OPA_TRANSP, 0);
     lv_obj_clear_flag(rl_row, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_t *rlcap = lv_label_create(rl_row);
-    lv_label_set_text(rlcap, "Red light");
+    lv_label_set_text(rlcap, "Test image");
     lv_obj_set_style_text_color(rlcap, user_color_text_dim, 0);
     lv_obj_set_style_text_font(rlcap, user_font_caption(), 0);
     const char *onoff[2] = { "On", "Off" };
-    lv_obj_t *rl_seg = ui_user_make_segmented(rl_row, onoff, 2, 1);
-    lv_obj_add_event_cb(rl_seg, on_red_laser_changed, LV_EVENT_VALUE_CHANGED, nullptr);
-    seg_fit_content(rl_seg);
-    style_debug_seg(rl_seg);
+    g_test_image_seg = ui_user_make_segmented(rl_row, onoff, 2, 1);
+    lv_obj_add_event_cb(g_test_image_seg, on_test_image_changed,
+                        LV_EVENT_VALUE_CHANGED, nullptr);
+    seg_fit_content(g_test_image_seg);
+    style_debug_seg(g_test_image_seg);
 
     /* 底行：步长 + 保存 */
     lv_obj_t *foot = lv_obj_create(card);
@@ -903,6 +969,8 @@ lv_obj_t *build_galvo_card(lv_obj_t *parent)
     lv_obj_add_style(save, user_style_btn_primary(), 0);
     lv_obj_set_size(save, USER_BTN_PRIMARY_W, USER_BTN_PRIMARY_H);
     lv_obj_add_event_cb(save, on_galvo_save, LV_EVENT_CLICKED, nullptr);
+    g_galvo_save_btn = save;
+    update_galvo_save_enabled();
     lv_obj_t *sl = lv_label_create(save);
     lv_label_set_text(sl, "Save");
     lv_obj_center(sl);
@@ -1850,20 +1918,39 @@ lv_obj_t *build_laser_tab(lv_obj_t *body)
     lv_obj_t *cancelrow = make_action_row(pc_card, "Cancel Power");
     make_ghost_button(cancelrow, "Cancel", on_laser_power_cancel);
 
-    /* 红光/激光：两个独立按钮，按一下即下发一次对应模式指令。
-     * 不做状态回读，界面上无“当前模式”概念，纯测试下发用。 */
-    lv_obj_t *redrow = make_action_row(pc_card, "Red Laser Mode");
-    lv_obj_t *redbtns = lv_obj_create(redrow);
+    /* 红光/激光/常亮：三个独立按钮，按一下即下发一次对应模式指令。
+     * 不做状态回读，界面上无“当前模式”概念，纯测试下发用。
+     * 三键并排时「Red Laser Mode」标题 + 按钮会在 1024 档挤爆，故改成
+     * 标题独占一行、按钮组下一行右对齐。 */
+    lv_obj_t *redblk = lv_obj_create(pc_card);
+    lv_obj_remove_style_all(redblk);
+    lv_obj_set_width(redblk, LV_PCT(100));
+    lv_obj_set_height(redblk, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(redblk, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(redblk, LV_FLEX_ALIGN_START,
+                          LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
+    lv_obj_set_style_pad_row(redblk, USER_PAD_SM / 2, 0);
+    lv_obj_set_style_bg_opa(redblk, LV_OPA_TRANSP, 0);
+    lv_obj_clear_flag(redblk, LV_OBJ_FLAG_SCROLLABLE);
+    add_caption(redblk, "Red Laser Mode");
+
+    lv_obj_t *redbtns = lv_obj_create(redblk);
     lv_obj_remove_style_all(redbtns);
-    lv_obj_set_size(redbtns, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_set_width(redbtns, LV_PCT(100));
+    lv_obj_set_height(redbtns, LV_SIZE_CONTENT);
     lv_obj_set_flex_flow(redbtns, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(redbtns, LV_FLEX_ALIGN_END,
                           LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_column(redbtns, USER_PAD_SM, 0);
+    lv_obj_set_style_pad_column(redbtns, USER_PAD_SM / 2, 0);
     lv_obj_set_style_bg_opa(redbtns, LV_OPA_TRANSP, 0);
     lv_obj_clear_flag(redbtns, LV_OBJ_FLAG_SCROLLABLE);
-    make_ghost_button(redbtns, "Red", on_red_mode_click);
-    make_ghost_button(redbtns, "Laser", on_laser_mode_click);
+    lv_obj_t *btn_red = make_ghost_button(redbtns, "Red", on_red_mode_click);
+    lv_obj_t *btn_laser = make_ghost_button(redbtns, "Laser", on_laser_mode_click);
+    lv_obj_t *btn_always = make_ghost_button(redbtns, "Red_On", on_red_always_click);
+    /* 三键略收紧左右内距，1024 右栏更稳 */
+    lv_obj_set_style_pad_hor(btn_red, USER_PAD_SM, 0);
+    lv_obj_set_style_pad_hor(btn_laser, USER_PAD_SM, 0);
+    lv_obj_set_style_pad_hor(btn_always, USER_PAD_SM, 0);
 
     lv_obj_t *ops_card = make_laser_card(right, "Alarm Ops");
     lv_obj_t *opsrow = make_action_row(ops_card, "Laser Alarm Reset");
@@ -2103,6 +2190,21 @@ void bind_debug_callbacks()
                                         on ? user_color_accent : user_color_text_dim, 0);
         }
     });
+
+    /* Glavo 回报实际状态：文件缺失 / 正式打印互斥失败时回 Off，开关弹回。 */
+    proxy.register_test_image([](bool on) {
+        if(g_test_image_seg) {
+            const uint8_t want = on ? 0u : 1u; /* 0=On 1=Off */
+            if(ui_user_segmented_get_selected(g_test_image_seg) != want) {
+                ui_user_segmented_set_selected(g_test_image_seg, want);
+                if(!on) {
+                    ui_toast_show("Test file missing or busy",
+                                  user_color_status_err, 1800);
+                }
+            }
+        }
+        update_galvo_save_enabled();
+    });
 }
 
 void reset_globals()
@@ -2117,10 +2219,12 @@ void reset_globals()
         g_laser_status_dot[i] = nullptr;
     }
     g_z_zero_lbl = g_galvo_x_lbl = g_galvo_y_lbl = nullptr;
-    g_galvo_scale_ta = g_galvo_step_seg = nullptr;
+    g_galvo_scale_ta = g_galvo_step_seg = g_test_image_seg = g_galvo_save_btn = nullptr;
     g_galvo_center_valid = false;
     g_galvo_center_x = 0.0;
     g_galvo_center_y = 0.0;
+    g_galvo_saved_x = 0.0;
+    g_galvo_saved_y = 0.0;
     for(int i = 0; i < 7; i++) g_sensor_val[i] = nullptr;
     for(int i = 0; i < 3; i++) {
         g_axis_pos[i] = g_axis_step[i] = g_axis_ctrl[i] = nullptr;
@@ -2152,17 +2256,21 @@ void reset_globals()
 void page_user_debug_refresh(bool /*force*/)
 {
     g_galvo_center_valid = load_galvo_center_offset_from_cal(g_galvo_center_x, g_galvo_center_y);
+    g_galvo_saved_x = g_galvo_center_x;
+    g_galvo_saved_y = g_galvo_center_y;
     apply_galvo_center_labels();
     /* 读数由 DebugMsgProxy 回调驱动。页面对象由 PageManager 缓存（on_create 仅首次执行），
      * 而 page_user_debug_exit 退页时会清空回调；on_enter 每次都会调本函数，故必须在此
      * 重新挂载回调，否则「返回后再进入」将因回调为空而不再刷新读数。g_* 指针在缓存的
      * 页面对象上始终有效，可安全重挂。 */
     bind_debug_callbacks();
+    update_galvo_save_enabled();
     ui::DebugMsgProxy::instance().request_print_h264_record_state();
     ui::DebugMsgProxy::instance().request_clean_record_state();
     ui::DebugMsgProxy::instance().request_env_sim_state();
     ui::DebugMsgProxy::instance().request_env_sim_powder_state();
     ui::DebugMsgProxy::instance().request_first_layer_visual_check_state();
+    ui::DebugMsgProxy::instance().request_test_image_state();
     ui::DebugMsgProxy::instance().request_local_rtsp_state();
 }
 
@@ -2181,6 +2289,7 @@ void page_user_debug_exit(void)
     proxy.register_env_sim(nullptr);
     proxy.register_env_sim_powder(nullptr);
     proxy.register_first_layer_visual_check(nullptr);
+    proxy.register_test_image(nullptr);
     proxy.register_local_rtsp(nullptr);
 }
 

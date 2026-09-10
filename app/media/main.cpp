@@ -54,10 +54,6 @@ int start_media(char daemon)
                               broker_socket_path());
         return 4;
     }
-    if(!port.init()) {
-        UPC_LOG_MEDIA_SERVICE(Error, "MsgPort init failed");
-        return 5;
-    }
 
     upc::media::MediaService service;
     if(!service.init()) {

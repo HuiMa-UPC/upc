@@ -25,8 +25,8 @@
 
 ## 初始化
 
-1. `set_mode_ipc_client(APP_MEDIA)` + `MsgPort::init`
-2. 建 `/data/media/{photo,video}`（**不再**迁 `/home/photo`、`/home/video`）
+1. `set_mode_ipc_client(APP_MEDIA)`
+2. 建 `/userdata/media/{photo,video}`（**不再**迁 `/home/photo`、`/home/video`）
 3. `recover_pending_and_reset_tmp()`：尽力收尾 pending，再清空 `tmp/` 与遗留 `{job}.__work_*`
 4. 注入 snapshot / 存储预算 / H264 finalize 回调；`live_rtsp`/`local_rtsp` 绑同一 `H264StreamEncoder`
 5. `local_rtsp.init(port)`：live555 事件循环随进程常驻
@@ -52,10 +52,10 @@ rongsu_media worker
 
 ## 落盘根目录
 
-路径宏：`common/fs_manifest/media_paths.hpp`（`UPC_MEDIA_ROOT` 默认 `/data/media`）。
+路径宏：`common/fs_manifest/media_paths.hpp`（`UPC_MEDIA_ROOT` 默认 `/userdata/media`）。
 
 ```
-/data/media/
+/userdata/media/
   photo/          相册 PNG + 配对 .rthm
   video/
     config.json   打印历史清单（Media 独写；UI 直读）
@@ -63,11 +63,13 @@ rongsu_media worker
     {job}/        正式会话产物
 ```
 
-`config.json` 字段：`job_name` / `start_unix` / `duration_sec` / `material_g` / `layer_count` / `status` / `frames_dir` / `thumb`。`material_g` 与 `layer_count` 在 upsert 时按 job 基名从 `/data/Gcode/config.json` 快照（`print_history_lookup_gcode_stats`），查不到写 0。解析见 `common/fs_manifest/print_history_manifest.*`。
+`config.json` 字段：`job_name` / `start_unix` / `duration_sec` / `material_g` / `layer_count` / `status` / `frames_dir` / `thumb`。`material_g` 与 `layer_count` 在 upsert 时按 job 基名从 `/userdata/Gcode/config.json` 快照（`print_history_lookup_gcode_stats`），查不到写 0。解析见 `common/fs_manifest/print_history_manifest.*`。
+
+**`job_name` 存原始 G-code 基名，不要净化。** 它同时是回查 `/userdata/Gcode/config.json` 的主键，而那边存的是真实文件名；一旦按 `sanitize_filename()` 把 `~`、`(`、空格等换成 `_`，形如 `xfk-8.10-0.03-150~170-0.06(30).gcode` 的文件就匹配不上，历史卡片的 Filament/Layers 会全变 "--"。需要路径安全的是 `frames_dir`，它由 `make_session_name()` 生成，内部自带净化。
 
 ## 存储
 
-环形预算（`ensure_video_storage_budget`，`statvfs(/data/media)`）：
+环形预算（`ensure_video_storage_budget`，`statvfs(/userdata/media)`）：
 
 - 录像目录占用 ≤ 分区容量的 `UPC_VIDEO_STORAGE_QUOTA_PCT`（默认 80%）
 - 分区可用 ≥ `UPC_VIDEO_STORAGE_MIN_FREE_PCT`（默认 5%）
@@ -83,7 +85,7 @@ rongsu_media worker
 ## 拍照
 
 `UI_Camera_Snapshot_Req` → 拷 latest NV12 → ffmpeg PNG  
-`/data/media/photo/photo_{stamp}_{WxH}.png` + 同帧 RTHM（dma32+RGA；失败不影响 PNG）→ `APP_Camera_Snapshot_Rsp`。
+`/userdata/media/photo/photo_{stamp}_{WxH}.png` + 同帧 RTHM（dma32+RGA；失败不影响 PNG）→ `APP_Camera_Snapshot_Rsp`。
 
 依赖预览流已开；偶发空快照见日志。
 
@@ -189,11 +191,11 @@ Glavo PrintVideoNotify → APP_MEDIA
 
 | 项 | 默认 | 环境变量 / 宏 |
 |----|------|---------------|
-| 录像输出 | `/data/media/video/tmp/` → finalize `/data/media/video/{job}/` | `UPC_VIDEO_TMP` / `CAMERA_PRINT_VIDEO_OUT_DIR` |
+| 录像输出 | `/userdata/media/video/tmp/` → finalize `/userdata/media/video/{job}/` | `UPC_VIDEO_TMP` / `CAMERA_PRINT_VIDEO_OUT_DIR` |
 | 缩略图 | `{dir}/thumb.rthm` | `CAMERA_PRINT_VIDEO_THUMB_EXT` |
 | 缩略图最大宽 | 240 | `CAMERA_PRINT_VIDEO_THUMB_MAX_W` |
-| 拍照 | `/data/media/photo/photo_{stamp}_{WxH}.png` + `.rthm` | `save_latest_png_snapshot` |
-| 历史清单 | `/data/media/video/config.json` | `UPC_VIDEO_CONFIG` |
+| 拍照 | `/userdata/media/photo/photo_{stamp}_{WxH}.png` + `.rthm` | `save_latest_png_snapshot` |
+| 历史清单 | `/userdata/media/video/config.json` | `UPC_VIDEO_CONFIG` |
 | ffmpeg | `/usr/bin/ffmpeg` | `CAMERA_FFMPEG_BIN` |
 | 延时 fps | 5 | `CAMERA_PRINT_VIDEO_LAYER_FPS` / `cal.csv` `TIMELAPSE_VIDEO_FPS` |
 | 延时播放 | PNG 序列 | `UPC_TIMELAPSE_PLAYBACK_PNG`（默认 1） |

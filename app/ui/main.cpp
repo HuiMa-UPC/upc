@@ -30,9 +30,6 @@ bool connect_ipc_with_retry() {
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
             continue;
         }
-        if (!port.init()) {
-            continue;
-        }
         for (int j = 0; j < 20; ++j) {
             port.process(50);
             if (port.peer_connected()) {

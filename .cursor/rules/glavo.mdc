@@ -11,3 +11,4 @@ alwaysApply: false
 - `GlavoService` 编排 IPC；`McuLink` 负责双通道 I/O；`app/protocol/` 仅编解码
 - 解析输出为 `RingBuffer` 的 `rb_packet_t`
 - MCU 协议以 `app/protocol/` + `mcu_link.*` 为准；表见 `doc/*.xlsx`
+- MCU/Galvo OTA 镜像命名与选包：`common/fs_manifest/OTA_IMAGE.md`

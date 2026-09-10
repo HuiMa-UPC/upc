@@ -53,6 +53,7 @@ target_link_libraries(my_proc PRIVATE
 | 5+ | `X1`…`Xn` / `Y1`…`Yn` | 双线性畸变表 |
 
 启动时 `ParserContext::load_calibration()` 加载一次；各 Worker 在 `apply_calibration_from_context()` 中复制 `CalData`。
+调试页 Save 可通过 `cal_update_center_offset()` 改写第 4 行后再次 `load_calibration()`，无需重启进程。
 
 **新 Worker 组包时**应调用 `cal_apply_xy()` 将切片坐标转为校准后物理坐标（中心平移 + 网格 Δ），再乘 `scale_gain` 并编码 MCU 包，与 G-code/OVF 保持一致：
 

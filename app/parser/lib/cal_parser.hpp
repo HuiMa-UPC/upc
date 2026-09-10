@@ -48,6 +48,13 @@ int cal_interpolate_delta(const CalData *cal, double x, double y,
 void cal_apply_xy(const CalData *cal, float slice_x, float slice_y,
                   float *out_x, float *out_y);
 
+/**
+ * 就地更新 cal.csv 第 4 行中心平移（匹配 `X,<x>,Y,<y>`，不改 X1/Y1 网格行）。
+ * 写临时文件后 rename，避免半截写入。
+ * @return 0 成功，-1 失败（文件不存在 / 无匹配行 / IO 错）
+ */
+int cal_update_center_offset(const char *path, double offset_x, double offset_y);
+
 } // namespace upc::parser
 
 #endif // CAL_PARSER_HPP

@@ -65,6 +65,8 @@ typedef struct {
     float    pm25_cabin;
     float    temperature_c;
     float    oxygen_percent;
+    uint32_t current_layer;  /**< 正在打印的层号（1-based）；total_layers=0 时无意义 */
+    uint32_t total_layers;   /**< 总层数；0=后端无法给出（OVF / 无层标记），不显示层号 */
 } control_progress_t;
 
 /** 打印结果页展示数据；来源见 control.cpp on_print_video_manifest()。 */
@@ -105,6 +107,30 @@ void control_terminate_request(void);
  * 「开门 → 确认关门」两步。纯 UI 本地标志（不发消息、不落盘），重启回到关闭。 */
 void control_set_transfer_box_flow(bool on);
 bool control_transfer_box_flow_enabled(void);
+
+/* ---- 供应度（耗材/滤芯）：control.cpp 是这份数据的唯一持有者 ----
+ * `UiMsgProxy::register_supply_status` 是**单槽**的，页面里千万别再注册一次——
+ * 那会静默顶掉 control.cpp 的注册，选文件页顶部那两根 supply bar 从此不再更新。
+ * 要用这份数据请走下面三个接口（同 ui_device_state 的形态：快照 + 观察者扇出）。 */
+typedef struct {
+    float material_pct;   /**< 耗材余量 0..100 */
+    float filter_pct;     /**< 滤芯余量 0..100 */
+    bool  material_ok;    /**< true=充足 */
+    bool  filter_ok;      /**< true=充足 */
+} control_supply_t;
+
+/** 观察者：快照变化后在 UI 线程被调用（Proxy 回调本就在 UI 线程）。 */
+typedef void (*control_supply_observer_t)(const control_supply_t *s);
+
+/** 当前快照；指针在进程生命周期内恒定，可长期持有。
+ *  后端还没回过 Rsp 时是占位值，进页面时用 control_supply_request() 主动拉一次。 */
+const control_supply_t *control_supply_get(void);
+
+/** 请求后端刷新一次；结果经观察者回调，本函数不阻塞也不回调。 */
+void control_supply_request(void);
+
+/** 注册观察者（上限 4 个，幂等；注册时不会立即回调）。 */
+void control_supply_add_observer(control_supply_observer_t cb);
 
 #ifdef __cplusplus
 }

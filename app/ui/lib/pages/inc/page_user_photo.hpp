@@ -20,7 +20,7 @@ void page_user_photo_exit(void);
 /**
  * 设置待看照片（switch_to("user_photo") 之前调用）。
  * 照片列表由 ui::album::scan() 统一枚举，这里只需要落点。
- * @param photo_abs_path 绝对路径，如 "/data/media/photo/photo_xxx.png"
+ * @param photo_abs_path 绝对路径，如 "/userdata/media/photo/photo_xxx.png"
  */
 void page_user_photo_set_source(const char *photo_abs_path);
 

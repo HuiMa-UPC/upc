@@ -4,6 +4,7 @@
 #include "msg_port.hpp"
 #include "gcode_manifest.hpp"
 #include "print_history_manifest.hpp"
+#include "debug_msg_proxy.hpp"
 #include "ui_theme.hpp"
 #include "ui_feedback.hpp"
 #include "ui_modal_dialog.hpp"
@@ -140,6 +141,12 @@ middleware::SupplyStatusPayload g_supply = {48.0f, 48.0f, 1, 1};
 lv_obj_t *g_supply_mat_bar = nullptr, *g_supply_mat_pct = nullptr, *g_supply_mat_status = nullptr;
 lv_obj_t *g_supply_filt_bar = nullptr, *g_supply_filt_pct = nullptr, *g_supply_filt_status = nullptr;
 
+/* 对外快照 + 观察者（见 control.hpp「供应度」一节）：Proxy 那个回调是单槽的，本文件
+ * 占着它，所以别的页面只能从这里拿数据。两份值在 apply_supply() 里一处同步。 */
+constexpr int kMaxSupplyObservers = 4;
+control_supply_t g_supply_pub = { 48.0f, 48.0f, true, true };
+control_supply_observer_t g_supply_observers[kMaxSupplyObservers] = { nullptr };
+
 /* ---------- 后端异步状态（UiMsgProxy 适配，仅本文件使用） ---------- */
 bool  g_proxy_wired = false;
 bool  g_pm25_high = false;
@@ -245,7 +252,7 @@ void apply_files_list(const std::vector<control_file_t>& files)
     }
 }
 
-/** Local：UI 直接读 /data/Gcode/config.json（不经 Fs_DirOpen IPC） */
+/** Local：UI 直接读 /userdata/Gcode/config.json（不经 Fs_DirOpen IPC） */
 void load_local_files_from_config()
 {
     std::vector<upc::GcodeManifestEntry> entries;
@@ -291,6 +298,7 @@ void request_fs_dir_open(FileTab tab)
 
 void enter_state(control_state_t s);
 void refresh_supply_bars(void);
+void apply_supply(const middleware::SupplyStatusPayload &p);
 void highlight_file_rows(void);
 void close_confirm_dlg(void);
 void show_print_confirm_dialog(void);
@@ -672,8 +680,7 @@ void wire_msg_proxy()
     });
 
     proxy.register_supply_status([](const middleware::SupplyStatusPayload &p) {
-        g_supply = p;
-        refresh_supply_bars();
+        apply_supply(p);
     });
 
     proxy.register_print_prepare_done([](bool ok) {
@@ -702,6 +709,8 @@ void wire_msg_proxy()
             pr.pm25_cabin        = p.pm25_cabin;
             pr.temperature_c     = p.temperature_c;
             pr.oxygen_percent    = p.oxygen_percent;
+            pr.current_layer     = p.current_layer;
+            pr.total_layers      = p.total_layers;
             g_job_prog_cb(&pr, g_job_u);
         }
         if(p.progress_percent < 99) {
@@ -2068,6 +2077,10 @@ void on_print_confirm_ok(lv_event_t * /*e*/)
     if(!g_files_page_active || g_sel_index < 0) {
         return;
     }
+    if(ui::DebugMsgProxy::instance().test_image_active()) {
+        ui_toast_show("Test mode active", user_color_status_err, 1800);
+        return;
+    }
     enter_state(CONTROL_STATE_PREPARE_WAIT);
     ui::UiMsgProxy::instance().send_print_prepare(
         static_cast<uint32_t>(g_sel_index), file_tab_to_source(g_file_tab));
@@ -2299,6 +2312,25 @@ void on_detail_secondary(lv_event_t * /*e*/)
         return;
     }
     show_delete_confirm();
+}
+
+/**
+ * 落一次供应度：内部值 + 对外快照 + 本页那两根 bar + 观察者扇出，四件事只在这里做。
+ * 分成两份值是因为 control.hpp 不该把 upc_contract.hpp 拖进每个 include 它的页面。
+ */
+void apply_supply(const middleware::SupplyStatusPayload &p)
+{
+    g_supply = p;
+    g_supply_pub.material_pct = p.material_pct;
+    g_supply_pub.filter_pct   = p.filter_pct;
+    g_supply_pub.material_ok  = (p.material_ok != 0);
+    g_supply_pub.filter_ok    = (p.filter_ok != 0);
+    refresh_supply_bars();
+    for(int i = 0; i < kMaxSupplyObservers; i++) {
+        if(g_supply_observers[i]) {
+            g_supply_observers[i](&g_supply_pub);
+        }
+    }
 }
 
 void refresh_supply_bars(void)
@@ -3230,7 +3262,7 @@ void show_terminated_result_without_manifest(void)
 }
 
 /**
- * Media 写完 /data/media/video/config.json → 切打印结果页。
+ * Media 写完 /userdata/media/video/config.json → 切打印结果页。
  * has_entry=1 时以 manifest 条目为权威（status/耗时/耗材）；
  * has_entry=0（0 帧未落盘）时退回用 payload.aborted 判定，统计值显示 "--"。
  */
@@ -3548,6 +3580,32 @@ void control_set_transfer_box_flow(bool on)
 bool control_transfer_box_flow_enabled(void)
 {
     return g_transfer_box_flow;
+}
+
+const control_supply_t *control_supply_get(void)
+{
+    return &g_supply_pub;
+}
+
+void control_supply_request(void)
+{
+    ui::UiMsgProxy::instance().send_supply_status();
+}
+
+void control_supply_add_observer(control_supply_observer_t cb)
+{
+    if(!cb) {
+        return;
+    }
+    for(int i = 0; i < kMaxSupplyObservers; i++) {
+        if(g_supply_observers[i] == cb) {
+            return;   /* 幂等：页面重建时重复注册不会叠加 */
+        }
+        if(!g_supply_observers[i]) {
+            g_supply_observers[i] = cb;
+            return;
+        }
+    }
 }
 
 void control_terminate_request(void)

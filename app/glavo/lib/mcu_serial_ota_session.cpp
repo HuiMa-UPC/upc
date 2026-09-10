@@ -2,47 +2,23 @@
 #include "device_config.hpp"
 #include "protocol.hpp"
 #include "rs_log.hpp"
+#include "ota_image_pair.hpp"
 
-#include <dirent.h>
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
-#include <algorithm>
 #include <cerrno>
-#include <cstring>
 #include <vector>
 
 namespace upc::glavo {
 
 namespace {
 
-bool ends_with_bin(const char* name)
-{
-    if(!name) {
-        return false;
-    }
-    const size_t n = std::strlen(name);
-    return n >= 4 && std::strcmp(name + n - 4, ".bin") == 0;
-}
-
 const char* basename_only(const std::string& path)
 {
     const size_t pos = path.find_last_of('/');
     return pos == std::string::npos ? path.c_str() : path.c_str() + pos + 1;
-}
-
-bool file_newer(const std::string& a, const std::string& b)
-{
-    struct stat sa{};
-    struct stat sb{};
-    if(::stat(a.c_str(), &sa) != 0 || ::stat(b.c_str(), &sb) != 0) {
-        return a < b;
-    }
-    if(sa.st_mtime != sb.st_mtime) {
-        return sa.st_mtime > sb.st_mtime;
-    }
-    return a < b;
 }
 
 } // namespace
@@ -86,42 +62,21 @@ bool McuSerialOtaSession::scan_bin_candidates(const char* dir)
         return false;
     }
 
-    DIR* dp = ::opendir(dir);
-    if(!dp) {
-        UPC_LOG_MCU_OTA(Error, "SERIAL_OTA opendir fail %s errno=%d", dir, errno);
+    upc::OtaImagePair pair{};
+    const upc::OtaImagePairError err =
+        upc::scan_highest_ota_image_pair(dir, upc::OtaImageKind::Mcu, pair);
+    if(err != upc::OtaImagePairError::Ok) {
+        UPC_LOG_MCU_OTA(Error, "SERIAL_OTA mcu pair select failed dir=%s err=%s",
+                        dir, upc::ota_image_pair_error_cstr(err));
         return false;
     }
 
-    const std::string prefix = [&dir]() {
-        std::string p = dir;
-        if(!p.empty() && p.back() != '/') {
-            p += '/';
-        }
-        return p;
-    }();
+    candidate_paths_.push_back(pair.slot_a_path);
+    candidate_paths_.push_back(pair.slot_b_path);
 
-    for(dirent* ent = ::readdir(dp); ent; ent = ::readdir(dp)) {
-        if(!ends_with_bin(ent->d_name)) {
-            continue;
-        }
-        const std::string path = prefix + ent->d_name;
-        struct stat st{};
-        if(::stat(path.c_str(), &st) != 0 || !S_ISREG(st.st_mode) || st.st_size <= 0) {
-            continue;
-        }
-        candidate_paths_.push_back(path);
-    }
-    ::closedir(dp);
-
-    std::sort(candidate_paths_.begin(), candidate_paths_.end(), file_newer);
-
-    if(candidate_paths_.empty()) {
-        UPC_LOG_MCU_OTA(Error, "SERIAL_OTA no .bin in %s", dir);
-        return false;
-    }
-
-    UPC_LOG_MCU_OTA(Info, "SERIAL_OTA found %zu candidate(s) in %s",
-                    candidate_paths_.size(), dir);
+    UPC_LOG_MCU_OTA(Info, "SERIAL_OTA mcu pair V%u.%u.%u SlotA→SlotB in %s",
+                    pair.version.major, pair.version.minor, pair.version.patch,
+                    dir);
     for(size_t i = 0; i < candidate_paths_.size(); ++i) {
         UPC_LOG_MCU_OTA(Info, "SERIAL_OTA candidate[%zu] %s",
                         i, basename_only(candidate_paths_[i]));

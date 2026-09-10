@@ -115,6 +115,10 @@ private:
     void handle_debug_fan_duty(const middleware::Message& msg);
     void handle_debug_switch(const middleware::Message& msg);
     void handle_debug_galvo_red_light(const middleware::Message& msg);
+    void handle_debug_galvo_red_always(const middleware::Message& msg);
+    void handle_debug_galvo_param_save(const middleware::Message& msg);
+    void handle_debug_test_image_set(const middleware::Message& msg);
+    void handle_debug_test_image_get(const middleware::Message& msg);
     void handle_debug_clean_test_start(const middleware::Message& msg);
     void handle_debug_clean_test_close(const middleware::Message& msg);
     void handle_debug_print_param(const middleware::Message& msg);
@@ -136,11 +140,19 @@ private:
     void publish_debug_env_sim_state();
     void publish_debug_env_sim_powder_state();
     void publish_debug_first_layer_visual_check_state();
+    void publish_debug_test_image_state();
+    /** @brief 开一轮测试图：红光 + open/parse/begin（无媒体/换层握手） */
+    bool launch_test_image_pass();
+    /** @brief 停测试循环：清 desired，request_terminate（不切激光） */
+    void stop_test_image_session();
+    void clear_test_image_session();
     bool publish_first_layer_visual_session(bool active, const char* reason);
     bool request_first_layer_visual_check(uint16_t layer_height_um);
     void handle_visual_first_layer_check_rsp(const middleware::Message& msg);
     /** @brief 联动切换红光/激光模式（TCP 红光 + 串口激光使能），每次调用都下发。 */
     bool apply_red_laser_mode(bool red_on, const char* reason);
+    /** @brief 红光常亮：串口关激光 + TCP 0x0A red=3。 */
+    bool apply_red_always_mode(const char* reason);
     void debug_tx(const uint8_t* frame, int n);
 
     /** @brief About 页版本查询：下发串口 TLV_GET_VERSION，应答由 McuLink 直接推 UI */
@@ -226,12 +238,21 @@ private:
     bool deferred_print_start_{false};
 
     std::atomic<bool> print_running_{false};
-    uint32_t print_total_layers_ = 0; /**< 当前作业层总数（用于进度融合） */
+    /**
+     * 调试 Test image：与正式 print_running_ 互斥。
+     * desired=用户开关；active=本轮正在解析/下发或等待完成事件。
+     */
+    bool test_image_desired_{false};
+    bool test_image_active_{false};
+    uint32_t print_total_layers_ = 0; /**< 当前作业层总数（纯层进度分母 / 回退时的层锚点分母） */
+    /** 本作业是否走纯层台阶进度（G-code + 能数出 M3000 + 换层 Snap 已启用） */
+    bool layer_progress_mode_ = false;
     int last_print_pct_     = -1;
-    bool last_parse_done_   = false;
     uint16_t last_sent_cmd_rate_  = 0xffff;
     uint16_t last_sent_data_rate_ = 0xffff;
     std::chrono::steady_clock::time_point last_drain_progress_at_{};
+    /** 上次进度推送时刻；纯层段层内百分比不变时用于环境字段保活 */
+    std::chrono::steady_clock::time_point last_progress_push_at_{};
     bool last_usb_mounted_ = false;
     bool door_real_open_enabled_ = (GLAVO_DOOR_REAL_OPEN_ENABLE != 0);
     bool door_real_close_check_enabled_ = (GLAVO_DOOR_REAL_CLOSE_CHECK_ENABLE != 0);

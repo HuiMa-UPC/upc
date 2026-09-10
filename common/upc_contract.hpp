@@ -378,7 +378,7 @@ enum class MsgType : uint32_t {
     UI_Camera_Stream_Stop_Req,           /**< Empty */
     APP_Camera_Stream_Stop_Rsp,          /**< Empty */
     APP_Camera_Frame_Ntf,                /**< CameraFrameNtfPayload（可选唤醒 UI） */
-    UI_Camera_Snapshot_Req,              /**< Empty：请求保存当前最新 NV12 帧到 /data/media/photo */
+    UI_Camera_Snapshot_Req,              /**< Empty：请求保存当前最新 NV12 帧到 /userdata/media/photo */
     APP_Camera_Snapshot_Rsp,             /**< CameraSnapshotRspPayload */
 
     // ---- GLAVO → MEDIA：打印层拍照录像（控制面；MEDIA 消费 CAMERA 预览 SHM） ----
@@ -391,10 +391,10 @@ enum class MsgType : uint32_t {
     APP_Print_Video_Manifest_Ntf,               /**< PrintVideoManifestPayload */
 
     // ---- UI ↔ GLAVO：MCU OTA（测试） ----
-    UI_Mcu_Ota_Start_Req = 0x1090, /**< Empty：启动 Galvo(以太网) OTA，扫描 /data/image/galvo */
+    UI_Mcu_Ota_Start_Req = 0x1090, /**< Empty：启动 Galvo(以太网) OTA，扫描 /userdata/image/galvo */
     UI_Mcu_Ota_Cancel_Ntf,         /**< Empty：中止 Glavo OTA 会话 */
     APP_Mcu_Ota_Status_Ntf,        /**< McuOtaStatusPayload（Glavo OTA 状态） */
-    UI_Serial_Mcu_Ota_Start_Req,   /**< Empty：启动 MCU(串口) OTA，扫描 /data/image/mcu */
+    UI_Serial_Mcu_Ota_Start_Req,   /**< Empty：启动 MCU(串口) OTA，扫描 /userdata/image/mcu */
     UI_Serial_Mcu_Ota_Cancel_Ntf,  /**< Empty：中止 MCU 串口 OTA 会话 */
     APP_Serial_Mcu_Ota_Status_Ntf, /**< McuOtaStatusPayload（MCU 串口 OTA 状态） */
 
@@ -406,7 +406,7 @@ enum class MsgType : uint32_t {
     UI_Debug_Galvo_Move_Ntf,        /**< DebugGalvoMovePayload：振镜方向步进 */
     UI_Debug_Galvo_Home_Ntf,        /**< Empty：振镜回中/复位 */
     UI_Debug_Galvo_RedLight_Ntf,    /**< DebugOnOffPayload：红光开关 */
-    UI_Debug_Galvo_Param_Save_Ntf,  /**< DebugGalvoParamPayload：保存 Scale/步长 */
+    UI_Debug_Galvo_Param_Save_Ntf,  /**< DebugGalvoParamPayload：保存 Scale + 中心偏移到 cal.csv */
     UI_Debug_Galvo_Calib_Ntf,       /**< Empty：开始标定测试 */
     UI_Debug_Device_Ntf,            /**< DebugDevicePayload：设备/门/电机/照明 */
     UI_Debug_Powder_Bucket_Ntf,     /**< DebugBucketPayload：粉桶开关 */
@@ -433,6 +433,9 @@ enum class MsgType : uint32_t {
     UI_Debug_FirstLayer_Visual_Check_Get_Ntf, /**< Empty：查询当前首层视觉检测开关状态 */
     UI_Debug_Local_Rtsp_Set_Ntf,        /**< DebugOnOffPayload：本地局域网 RTSP Server 开关（→Media，仅本次运行，默认关） */
     UI_Debug_Local_Rtsp_Get_Ntf,        /**< Empty：查询当前本地 RTSP Server 开关状态（→Media） */
+    UI_Debug_TestImage_Set_Ntf,         /**< DebugOnOffPayload：红光测试图循环打印开关（/userdata/test/test.gcode） */
+    UI_Debug_TestImage_Get_Ntf,         /**< Empty：查询当前测试图循环打印状态 */
+    UI_Debug_Galvo_RedAlways_Ntf,       /**< Empty：红光常亮（TCP 0x0A DATA[3]=3；串口关激光使能） */
 
     // ---- GLAVO → UI：调试页状态回读（按模块拆分） ----
     GLAVO_Debug_Sensor_Ntf = 0x1200, /**< DebugSensorPayload：顶部 7 路传感器 */
@@ -445,6 +448,7 @@ enum class MsgType : uint32_t {
     GLAVO_Debug_Env_Sim_Ntf,           /**< DebugOnOffPayload：环境上报模拟开关状态 */
     GLAVO_Debug_Env_Sim_Powder_Ntf,    /**< DebugOnOffPayload：环境模拟粉量缺粉开关状态 */
     GLAVO_Debug_FirstLayer_Visual_Check_Ntf, /**< DebugOnOffPayload：首层视觉检测开关状态 */
+    GLAVO_Debug_TestImage_Ntf,         /**< DebugOnOffPayload：测试图循环打印实际状态 */
 
     // ---- MEDIA → UI：调试页状态回读 ----
     APP_Media_Local_Rtsp_State_Ntf, /**< DebugOnOffPayload：本地 RTSP Server 实际开关状态（相机未就绪时回 0，UI 据此弹回） */
@@ -514,7 +518,11 @@ enum class MsgType : uint32_t {
     // ---- MQTT OTA v1.1：通知/确认/进度（下载落盘阶段） ----
     MQTT_Ota_Notify_Ntf,                    /**< OtaNotifyPayload：MQTT 侧收到 ota/notify 后转发 UI */
     UI_Ota_User_Decision_Req,               /**< OtaDecisionReqPayload：UI 确认/取消 OTA 通知 */
-    APP_Mqtt_Ota_Progress_Ntf,              /**< OtaProgressPayload：下载+校验进度（OTA 应用阶段可直拉满） */
+    APP_Mqtt_Ota_Progress_Ntf,              /**< OtaProgressPayload：下载/校验/刷写进度 */
+    // ---- MQTT ↔ UI：SOC 全包升级（重启时机交给用户） ----
+    APP_Soc_Ota_Ready_Ntf,                  /**< SocOtaReadyPayload：.img 已就绪，UI 弹窗问是否重启 */
+    UI_Soc_Ota_Apply_Req,                   /**< SocOtaApplyReqPayload：立即重启升级 / 放弃并删除 */
+    APP_Soc_Ota_Apply_Rsp,                  /**< SocOtaApplyRspPayload：处置结果（成功重启则收不到） */
 
     // ---- UI ↔ GLAVO：MCU 固件版本查询（串口 PORT_GENERAL_TASK 0xA2 / CMD_PROJECT_INFO 0x10） ----
     UI_Mcu_Version_Ntf = 0x1500, /**< Empty：进入 Settings/About 页时查询一次 */
@@ -557,6 +565,8 @@ inline constexpr bool is_ipc_reliable_msg_type(MsgType type) noexcept
     // OTA / 告警：终态与关键事件
     case MsgType::APP_Mcu_Ota_Status_Ntf:
     case MsgType::APP_Mqtt_Ota_Progress_Ntf:
+    case MsgType::APP_Soc_Ota_Ready_Ntf:
+    case MsgType::APP_Soc_Ota_Apply_Rsp:
     case MsgType::GLAVO_Alarm_Report_Ntf:
     case MsgType::GLAVO_Alarm_Reset_Result_Ntf:
         return true;
@@ -827,6 +837,12 @@ struct PrintProgressPayload {
     float    oxygen_percent;
     uint16_t cmd_cache_rate;   /**< MCU 指令缓存占用率（TCP 心跳，0=排空） */
     uint16_t data_cache_rate;  /**< MCU 数据缓存占用率（TCP 心跳，0=排空） */
+    /** 正在打印的层号（1-based，= 已完成层 + 1，钳在 total_layers 内）；
+     *  total_layers=0 时无意义 */
+    uint32_t current_layer;
+    /** 总层数（G-code 的 M3000 计数）；0=未知（OVF / 无层标记 / 关闭 Layer
+     *  Snap），此时 UI 不显示层号 */
+    uint32_t total_layers;
 };
 
 /** GLAVO_Print_State_Ntf 载荷：开始打印/打印结束状态边沿（Inline）。
@@ -892,7 +908,7 @@ struct VisualFirstLayerReferenceReadyPayload {
 /** GLAVO→CAMERA 打印录像会话（Start/Finish/Abort 共用） */
 struct PrintVideoSessionPayload {
     char     session_id[32];
-    char     job_name[64];   /**< 用于输出 /data/media/video/{job}/ 目录名 */
+    char     job_name[64];   /**< 用于输出 /userdata/media/video/{job}/ 目录名 */
     uint32_t width;          /**< 0=Camera 默认 */
     uint32_t height;         /**< 0=Camera 默认 */
     uint32_t layer_fps;      /**< MP4 层帧率；0=默认 */
@@ -920,7 +936,7 @@ struct PrintVideoLayerSnapPayload {
  * （`has_entry=0`），否则 UI 会永远停在打印中界面下不来。
  *
  * UI 用法：
- *   - `has_entry=1` → 以 `frames_dir` 为主键在 `/data/media/video/config.json` 定位该条，
+ *   - `has_entry=1` → 以 `frames_dir` 为主键在 `/userdata/media/video/config.json` 定位该条，
  *     读 `status` / `duration_sec` / `material_g`（清单为权威数据源）
  *   - `has_entry=0` → 清单无此条，改用本 payload 的 `aborted` 判定完成/终止，
  *     耗时与耗材显示占位
@@ -933,12 +949,19 @@ struct PrintVideoManifestPayload {
     uint8_t reserved;
 };
 
-/** UI_Clean_Test_Start_Req：打印结果页 Purify 按钮触发清粉测试 + 录像 */
+/** UI_Clean_Test_Start_Req：Purify / 手动清粉触发清粉测试（录像可选）
+ *
+ * `record_video=0` 时 Glavo 不开 Media 清粉录像会话，因此不写
+ * `/data/media/video/{job_name}/`、也不进打印历史；MCU 清粉结束后由 Glavo 自己发
+ * `APP_Clean_Test_Result_Ntf`（`on_clean_test_done()` 的 `!video_started` 分支）。
+ * 控制页的手动清粉走这一档，`job_name` 随之无人读取。 */
 struct CleanTestStartReqPayload {
-    char job_name[64];   /**< 对应 /data/media/video/{job_name}/ */
+    char job_name[64];   /**< 对应 /userdata/media/video/{job_name}/ */
     uint32_t width;      /**< 0=跟随 Camera 当前预览宽 */
     uint32_t height;     /**< 0=跟随 Camera 当前预览高 */
     uint32_t fps;        /**< 0=跟随 Camera 当前预览 fps */
+    uint8_t record_video; /**< 1=同时开清粉录像（结果页 Purify）；0=只清粉不录 */
+    uint8_t reserved[3];
 };
 
 /** APP_Clean_Test_Start_Rsp：清粉测试请求是否被 Glavo 受理 */
@@ -955,12 +978,12 @@ struct CleanTestDonePayload {
     uint8_t raw_retained;  /**< 兼容字段；PNG 路径下恒为 0 */
     uint8_t has_mp4;       /**< 1=期望存在合并后的 timelapse.mp4 */
     uint8_t reserved;
-    char    mp4_rel_path[96]; /**< 相对 /data/media/video 的路径，如 job/timelapse.mp4 */
+    char    mp4_rel_path[96]; /**< 相对 /userdata/media/video 的路径，如 job/timelapse.mp4 */
 };
 
 /** UI→MEDIA：结果页退出后触发统一 MP4 合成（按 frames_dir 定位会话目录） */
 struct PrintVideoFinalizeReqPayload {
-    char frames_dir[96]; /**< 对应 /data/media/video/{frames_dir}/ */
+    char frames_dir[96]; /**< 对应 /userdata/media/video/{frames_dir}/ */
 };
 
 /** APP_Storage_Usage_Rsp：历史页容量显示（bytes）。 */
@@ -1074,7 +1097,7 @@ struct OtaDecisionReqPayload {
 enum class OtaProgressState : uint8_t {
     Downloading = 0,
     Verifying   = 1,
-    Applying    = 2,  /**< 当前阶段可跳过真实 OTA，直接拉满 */
+    Applying    = 2,  /**< mcu/galvo 跟真实刷写；soc 落盘后可直接拉满 */
     Completed   = 3,
     Failed      = 4,
     RolledBack  = 5
@@ -1087,6 +1110,43 @@ struct OtaProgressPayload {
     uint8_t progress_pct;       /**< 0..100 */
     uint8_t reserved[2];
     char    error_code[64];     /**< 失败原因码；成功/进行中为空串 */
+};
+
+/**
+ * APP_Soc_Ota_Ready_Ntf：SOC 全包固件已下载校验完并落到 UPC_SOC_OTA_IMG。
+ *
+ * 两个时机各发一次：本次下载完成时；开机后 MQTT 首次连上云端且检测到
+ * 上次遗留的未应用固件时（进程比 UI 先起，早发会丢，故推迟到连云成功）。
+ */
+struct SocOtaReadyPayload {
+    char     version[32];       /**< 云端 manifest 给的目标固件版本 */
+    char     task_id[64];       /**< 云端任务号，UI 仅展示 */
+    uint64_t img_bytes;         /**< .img 字节数，UI 展示占用空间 */
+};
+
+/** UI_Soc_Ota_Apply_Req：用户对已就绪固件的处置（"稍后"不发消息，UI 自行关窗） */
+enum class SocOtaApplyAction : uint8_t {
+    RebootNow = 0,  /**< 写 misc 分区并重启进 recovery 刷写 */
+    Discard   = 1,  /**< 放弃升级并删除固件，释放 /userdata 空间 */
+};
+
+struct SocOtaApplyReqPayload {
+    uint8_t action;             /**< SocOtaApplyAction */
+    uint8_t reserved[3];
+};
+
+/** APP_Soc_Ota_Apply_Rsp：处置结果。RebootNow 成功时设备已重启，UI 收不到本条 */
+enum class SocOtaApplyResult : uint8_t {
+    Ok          = 0,
+    NoPending   = 1,  /**< 无待应用固件：状态文件或 .img 已不在 */
+    ApplyFailed = 2,  /**< updateEngine 返回非零，misc 未写入 */
+};
+
+struct SocOtaApplyRspPayload {
+    uint8_t action;             /**< 回显 SocOtaApplyAction */
+    uint8_t result;             /**< SocOtaApplyResult */
+    uint8_t reserved[2];
+    char    reason[64];         /**< 失败详情；成功为空串 */
 };
 
 /**
@@ -1154,10 +1214,12 @@ struct DebugOnOffPayload {
     uint8_t reserved[3];
 };
 
-/** UI_Debug_Galvo_Param_Save_Ntf：保存 Scale / 步长 */
+/** UI_Debug_Galvo_Param_Save_Ntf：写入 cal.csv（Scale 可保留；中心偏移写第 4 行） */
 struct DebugGalvoParamPayload {
     float scale;
-    float step_mm;
+    float step_mm;          /**< 调试页 Step 选择，后端可忽略 */
+    float center_offset_x;  /**< cal.csv 第 4 行 X 中心平移（mm） */
+    float center_offset_y;  /**< cal.csv 第 4 行 Y 中心平移（mm） */
 };
 
 /** UI_Debug_Device_Ntf：设备/门/电机/照明 */

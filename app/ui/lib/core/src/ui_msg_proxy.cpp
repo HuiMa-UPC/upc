@@ -349,6 +349,27 @@ void UiMsgProxy::init()
         }));
 
     subs_.push_back(bus.subscribe(
+        middleware::MsgType::APP_Soc_Ota_Ready_Ntf, middleware::ModuleId::UI,
+        [this](const middleware::Message& msg) {
+            middleware::SocOtaReadyPayload p{};
+            if (soc_ota_ready_cb_ && read_inline_pod(msg, p)) {
+                p.version[sizeof(p.version) - 1] = '\0';
+                p.task_id[sizeof(p.task_id) - 1] = '\0';
+                soc_ota_ready_cb_(p);
+            }
+        }));
+
+    subs_.push_back(bus.subscribe(
+        middleware::MsgType::APP_Soc_Ota_Apply_Rsp, middleware::ModuleId::UI,
+        [this](const middleware::Message& msg) {
+            middleware::SocOtaApplyRspPayload p{};
+            if (soc_ota_apply_rsp_cb_ && read_inline_pod(msg, p)) {
+                p.reason[sizeof(p.reason) - 1] = '\0';
+                soc_ota_apply_rsp_cb_(p);
+            }
+        }));
+
+    subs_.push_back(bus.subscribe(
         middleware::MsgType::GLAVO_Device_Event_Ntf, middleware::ModuleId::UI,
         [this](const middleware::Message& msg) {
             middleware::DeviceEventPayload p{};
@@ -579,6 +600,24 @@ void UiMsgProxy::register_ota_progress(OtaProgressCb cb)
     ota_progress_cb_ = std::move(cb);
 }
 
+void UiMsgProxy::send_soc_ota_apply(middleware::SocOtaApplyAction action)
+{
+    middleware::SocOtaApplyReqPayload payload{};
+    payload.action = static_cast<uint8_t>(action);
+    publish_pod(middleware::MsgType::UI_Soc_Ota_Apply_Req,
+                middleware::ModuleId::APP_MQTT, payload);
+}
+
+void UiMsgProxy::register_soc_ota_ready(SocOtaReadyCb cb)
+{
+    soc_ota_ready_cb_ = std::move(cb);
+}
+
+void UiMsgProxy::register_soc_ota_apply_rsp(SocOtaApplyRspCb cb)
+{
+    soc_ota_apply_rsp_cb_ = std::move(cb);
+}
+
 void UiMsgProxy::register_device_event(DeviceEventCb cb)
 {
     device_event_cb_ = std::move(cb);
@@ -700,7 +739,8 @@ void UiMsgProxy::register_clean_stop_result(CleanStopDoneCb cb)
 }
 
 void UiMsgProxy::send_clean_test_start(const char* job_name, uint32_t width,
-                                       uint32_t height, uint32_t fps)
+                                       uint32_t height, uint32_t fps,
+                                       bool record_video)
 {
     middleware::CleanTestStartReqPayload req{};
     if(job_name && job_name[0]) {
@@ -709,6 +749,7 @@ void UiMsgProxy::send_clean_test_start(const char* job_name, uint32_t width,
     req.width = width;
     req.height = height;
     req.fps = fps;
+    req.record_video = record_video ? 1 : 0;
     publish_pod(middleware::MsgType::UI_Clean_Test_Start_Req,
                 middleware::ModuleId::APP_GLAVO, req);
 }

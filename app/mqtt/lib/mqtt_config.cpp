@@ -127,6 +127,11 @@ std::string MqttConfig::topic_ota_progress() const
     return topic_prefix() + "ota/progress";
 }
 
+std::string MqttConfig::topic_log_collect_progress() const
+{
+    return topic_prefix() + "log_collect/progress";
+}
+
 //桌面调试
 // "SNOWPOD-050986DC98001000";
 // "bacff0d7cc54115f6c268e4eabc5538670346c2a084037079796f50abd52e985"
@@ -145,7 +150,7 @@ std::string MqttConfig::topic_ota_progress() const
 MqttConfig load_mqtt_config()
 {
     MqttConfig cfg;
-    const std::string key_file = get_env_or_default("SNOWPOD_DEVICE_KEY_FILE", "/data/snowpod/key");
+    const std::string key_file = get_env_or_default("SNOWPOD_DEVICE_KEY_FILE", "/userdata/snowpod/key");
     std::string file_device_id;
     std::string file_device_secret;
     (void)read_device_key_file(key_file, file_device_id, file_device_secret);
@@ -157,7 +162,7 @@ MqttConfig load_mqtt_config()
     cfg.activation_base_url = get_env_or_default(
         "SNOWPOD_DEVICE_INIT_BASE_URL", "http://172.17.13.31:8081");
     cfg.credential_file = get_env_or_default(
-        "SNOWPOD_MQTT_CREDENTIAL_FILE", "/data/snowpod/mqtt-credential");
+        "SNOWPOD_MQTT_CREDENTIAL_FILE", "/userdata/snowpod/mqtt-credential");
     cfg.keepalive_sec = get_env_int_or_default("SNOWPOD_MQTT_KEEPALIVE_SEC", 60);
     cfg.qos_telemetry = get_env_int_or_default("SNOWPOD_MQTT_QOS_TELEMETRY", 1);
     cfg.qos_heartbeat = get_env_int_or_default("SNOWPOD_MQTT_QOS_HEARTBEAT", 1);

@@ -51,10 +51,6 @@ int start_camera(char daemon)
                                broker_socket_path());
         return 4;
     }
-    if(!port.init()) {
-        UPC_LOG_CAMERA_SERVICE(Error, "MsgPort init failed");
-        return 5;
-    }
 
     upc::camera::CameraService service;
     if(!service.init()) {

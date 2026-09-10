@@ -21,7 +21,7 @@
  * 降级显示原始编号，**绝不丢弃**（固件可能比字典新）。severity/clear_mode
  * 一律以报文为准，字典只出文字。
  *
- * 历史落盘 `/data/messages/alarm_history.jsonl`（一行一条，只存原始字段，文案
+ * 历史落盘 `/userdata/messages/alarm_history.jsonl`（一行一条，只存原始字段，文案
  * 加载时从字典重新生成），上限 UI_ALARM_HISTORY_CAP 条，满了丢最旧。
  *
  * 线程约定：总线回调先 lv_async_call 切回 UI 线程（同 ui_message_store），

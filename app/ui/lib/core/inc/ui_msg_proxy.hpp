@@ -47,6 +47,8 @@ using McuVersionCb     = std::function<void(const middleware::McuVersionPayload&
 using GalvoVersionCb   = std::function<void(const middleware::GalvoVersionPayload&)>;
 using OtaNotifyCb      = std::function<void(const middleware::OtaNotifyPayload&)>;
 using OtaProgressCb    = std::function<void(const middleware::OtaProgressPayload&)>;
+using SocOtaReadyCb    = std::function<void(const middleware::SocOtaReadyPayload&)>;
+using SocOtaApplyRspCb = std::function<void(const middleware::SocOtaApplyRspPayload&)>;
 using DeviceEventCb    = std::function<void(const middleware::DeviceEventPayload&)>;
 using AlarmReportCb    = std::function<void(const middleware::AlarmReportPayload&)>;
 using AlarmSnapshotCb  = std::function<void(const middleware::AlarmSnapshotPayload&)>;
@@ -79,8 +81,11 @@ public:
     /** 清粉中断（按清粉页 X）：请求后端停风机，回执经 register_clean_stop_result。 */
     void send_clean_stop();
     void register_clean_stop_result(CleanStopDoneCb cb);
-    /** 打印结果页 Purify：触发 clean_test_start（新增契约，不复用 debug 消息） */
-    void send_clean_test_start(const char* job_name, uint32_t width, uint32_t height, uint32_t fps);
+    /** 触发 clean_test_start（新增契约，不复用 debug 消息）。
+     *  `record_video=true` 是打印结果页 Purify 的用法（带清粉录像）；控制页手动清粉
+     *  传 false，此时不落盘不进历史，`job_name` 无人读取。 */
+    void send_clean_test_start(const char* job_name, uint32_t width, uint32_t height,
+                               uint32_t fps, bool record_video);
     void register_clean_test_start_rsp(CleanTestStartRspCb cb);
     void register_clean_test_done(CleanTestDoneCb cb);
     /** 返回首页时强制 clean_test_close。 */
@@ -148,6 +153,11 @@ public:
     void send_ota_user_decision(const char* task_id, bool approve);
     void register_ota_notify(OtaNotifyCb cb);       /**< MQTT_Ota_Notify_Ntf */
     void register_ota_progress(OtaProgressCb cb);   /**< APP_Mqtt_Ota_Progress_Ntf */
+
+    /** SOC 全包升级：固件就绪后由用户决定重启时机（"稍后"不发消息，直接关窗）。 */
+    void send_soc_ota_apply(middleware::SocOtaApplyAction action);
+    void register_soc_ota_ready(SocOtaReadyCb cb);      /**< APP_Soc_Ota_Ready_Ntf */
+    void register_soc_ota_apply_rsp(SocOtaApplyRspCb cb); /**< APP_Soc_Ota_Apply_Rsp */
 
     /** GLAVO_Device_Event_Ntf：设备事件/告警，喂消息中心。
      *  Glavo 侧还没实现发布，接好放着——后端上线后 UI 不用改。 */
@@ -247,6 +257,8 @@ private:
     GalvoVersionCb galvo_version_cb_;
     OtaNotifyCb ota_notify_cb_;
     OtaProgressCb ota_progress_cb_;
+    SocOtaReadyCb soc_ota_ready_cb_;
+    SocOtaApplyRspCb soc_ota_apply_rsp_cb_;
     DeviceEventCb device_event_cb_;
     AlarmReportCb alarm_report_cb_;
     AlarmSnapshotCb alarm_snapshot_cb_;

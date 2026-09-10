@@ -172,7 +172,7 @@
 /* -------------------------------------------------------------------------- */
 #include "image_paths.hpp"
 
-/** MCU OTA 测试：固件目录与块大小 */
+/** MCU / Galvo OTA：固件目录与块大小（AB 文件名见 common/fs_manifest/OTA_IMAGE.md） */
 #ifndef GALVO_OTA_IMAGE_DIR
 #define GALVO_OTA_IMAGE_DIR  UPC_IMAGE_GALVO_DIR
 #endif
@@ -202,6 +202,11 @@
 /** 打印文件目录（仅 Glavo 使用；UI 通过 PrintFileSource 0/1 选择） */
 #ifndef GLAVO_LOCAL_GCODE_DIR
 #define GLAVO_LOCAL_GCODE_DIR  UPC_LOCAL_GCODE_DIR
+#endif
+
+/** 调试页 Test image 固定路径（红光循环；无 M3000，不进 Local manifest） */
+#ifndef GLAVO_TEST_GCODE_PATH
+#define GLAVO_TEST_GCODE_PATH  "/userdata/test/test.gcode"
 #endif
 
 #ifndef GLAVO_USB_MOUNT_DIR

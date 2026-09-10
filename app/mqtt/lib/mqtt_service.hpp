@@ -12,6 +12,7 @@
 #include <condition_variable>
 #include <cstdint>
 #include <cstring>
+#include <filesystem>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -112,10 +113,24 @@ private:
         std::string file_name;
     };
 
+    /**
+     * SOC 全包升级的待应用固件状态。
+     *
+     * 落盘到 UPC_SOC_OTA_PENDING_FILE：用户可以选"稍后"再重启，中间可能隔着
+     * 断电或进程重启，只放内存会让那个几百 MB 的 .img 变成没有入口的孤儿文件。
+     */
+    struct SocOtaPending {
+        std::string task_id;
+        std::string version;
+        std::string img_path;
+        uint64_t    img_bytes = 0;
+    };
+
     void subscribe_messages();
     void on_env_update(const middleware::Message& msg);
     void on_mcu_version(const middleware::Message& msg);
     void on_mcu_ota_status(const middleware::Message& msg);
+    void on_serial_mcu_ota_status(const middleware::Message& msg);
     void on_galvo_version(const middleware::Message& msg);
     void on_env_sim_state(const middleware::Message& msg);
     void on_print_state(const middleware::Message& msg);
@@ -179,6 +194,10 @@ private:
     void publish_log_collect_accepted(const LogCollectCommand& cmd,
                                       int64_t file_size,
                                       const std::vector<LogFileReport>& reports);
+    void publish_log_collect_progress(const std::string& collect_id,
+                                      const std::string& attempt_id,
+                                      int64_t transferred_bytes,
+                                      int64_t total_bytes);
     bool subscribe_ota_topics();
     void handle_ota_notify(const std::string& payload);
     void handle_ota_manifest_response(const std::string& payload);
@@ -192,8 +211,65 @@ private:
     void publish_ota_progress_ui(const middleware::OtaProgressPayload& progress);
     bool trigger_galvo_real_ota(const std::string& task_id, const std::string& component);
     bool wait_galvo_real_ota(std::string& err_code);
+    bool trigger_mcu_real_ota(const std::string& task_id, const std::string& component);
+    bool wait_mcu_real_ota(std::string& err_code);
+
+    struct ApplyOtaSync {
+        bool waiting = false;
+        bool finished = false;
+        bool success = false;
+        bool terminal_seen = false;
+        bool last_apply_pct_valid = false;
+        uint8_t last_apply_pct = 0;
+        bool last_mcu_status_valid = false;
+        middleware::McuOtaState last_mcu_state = middleware::McuOtaState::Idle;
+        uint8_t last_mcu_progress = 0;
+        std::string task_id;
+        std::string component;
+        std::string error_code;
+    };
+    void on_apply_ota_status(const middleware::Message& msg,
+                             ApplyOtaSync& sync,
+                             std::mutex& mtx,
+                             std::condition_variable& cv,
+                             const char* invalid_log,
+                             const char* fail_code);
+    bool trigger_apply_ota(const std::string& task_id,
+                           const std::string& component,
+                           middleware::MsgType start_type,
+                           ApplyOtaSync& sync,
+                           std::mutex& mtx,
+                           const char* already_log,
+                           const char* start_log);
+    bool wait_apply_ota(std::string& err_code,
+                        ApplyOtaSync& sync,
+                        std::mutex& mtx,
+                        std::condition_variable& cv,
+                        const char* default_fail);
     void run_manifest_download_task(std::string task_id, std::vector<OtaComponent> components);
     void start_manifest_download(std::string task_id, std::vector<OtaComponent> components);
+
+    /* ---- SOC 全包升级（mqtt_service_soc_ota.cpp） ---- */
+    /**
+     * 接过已下载并通过 SHA256 的 tar.gz，完成 SOC 全包升级的落盘准备。
+     * 校验包内唯一 .img、检查 /userdata 空间、解包改名为固定路径、写待应用状态。
+     * 失败时把原因码写入 err_code 由调用方统一上报。
+     */
+    bool run_soc_ota_stage(const std::string& task_id,
+                           const OtaComponent& comp,
+                           const std::filesystem::path& tar_gz,
+                           middleware::OtaProgressPayload& progress,
+                           std::string& err_code);
+    void on_soc_ota_apply(const middleware::Message& msg);
+    /** MQTT 首次连上云端后补发一次遗留固件提示（比 UI 先起，早发会丢）。 */
+    void notify_soc_ota_ready_after_connect();
+    void publish_soc_ota_ready(const SocOtaPending& pending);
+    void publish_soc_ota_apply_rsp(middleware::SocOtaApplyAction action,
+                                   middleware::SocOtaApplyResult result,
+                                   const char* reason);
+    bool soc_ota_pending_load(SocOtaPending& out) const;
+    bool soc_ota_pending_save(const SocOtaPending& pending) const;
+    void soc_ota_pending_clear() const;
     void request_firmware_versions_force(bool need_mcu, bool need_galvo);
     void poll_ota_heartbeat_wait();
     static bool parse_mcu_version_text(const std::string& text,
@@ -285,26 +361,19 @@ private:
     OtaNotify pending_ota_notify_{};
     std::thread ota_download_thread_;
     bool ota_download_running_ = false;
-    struct GalvoOtaSync {
-        bool waiting = false;
-        bool finished = false;
-        bool success = false;
-        bool terminal_seen = false;
-        bool last_apply_pct_valid = false;
-        uint8_t last_apply_pct = 0;
-        bool last_mcu_status_valid = false;
-        middleware::McuOtaState last_mcu_state = middleware::McuOtaState::Idle;
-        uint8_t last_mcu_progress = 0;
-        std::string task_id;
-        std::string component;
-        std::string error_code;
-    } galvo_ota_sync_{};
+    /** 本次运行是否已补发过遗留固件提示，避免每次重连都弹一遍。 */
+    bool soc_ota_ready_notified_ = false;
+    ApplyOtaSync galvo_ota_sync_{};
     std::mutex galvo_ota_mtx_;
     std::condition_variable galvo_ota_cv_;
+    ApplyOtaSync mcu_ota_sync_{};
+    std::mutex mcu_ota_mtx_;
+    std::condition_variable mcu_ota_cv_;
 
     std::mutex log_collect_mtx_;
     std::thread log_collect_thread_;
     bool log_collect_running_ = false;
+    uint64_t last_log_collect_attempt_ms_ = 0;
 
     std::atomic<uint32_t> seq_{0};
 };

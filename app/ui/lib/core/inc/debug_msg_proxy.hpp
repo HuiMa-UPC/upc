@@ -27,6 +27,7 @@ using DebugCleanRecordCb = std::function<void(bool)>;
 using DebugEnvSimCb = std::function<void(bool)>;
 using DebugEnvSimPowderCb = std::function<void(bool)>;
 using DebugFirstLayerVisualCheckCb = std::function<void(bool)>;
+using DebugTestImageCb = std::function<void(bool)>;
 using DebugLocalRtspCb = std::function<void(bool)>;
 
 class DebugMsgProxy {
@@ -41,10 +42,11 @@ public:
     void send_axis_hold_stop(middleware::DebugAxis axis);
     void send_axis_set_zero(middleware::DebugAxis axis);
     void send_axis_home(middleware::DebugAxis axis);
-    void send_galvo_move(middleware::DebugGalvoAxis axis, int dir, float step_mm);
-    void send_galvo_home();
     void send_galvo_red_light(bool on);
-    void send_galvo_param_save(float scale, float step_mm);
+    /** 红光常亮：TCP 0x0A DATA[3]=3（点发，不回读） */
+    void send_galvo_red_always();
+    void send_galvo_param_save(float scale, float step_mm,
+                               float center_offset_x, float center_offset_y);
     void send_galvo_calib();
     void send_device(middleware::DebugDeviceTarget target, bool on);
 
@@ -73,6 +75,9 @@ public:
     void request_env_sim_powder_state();
     void send_first_layer_visual_check_set(bool on);
     void request_first_layer_visual_check_state();
+    /** 调试页 Test image：红光循环打印 /userdata/test/test.gcode */
+    void send_test_image_set(bool on);
+    void request_test_image_state();
     /** 本地局域网 RTSP Server 开关：直发 APP_MEDIA，实际状态以其回报为准。 */
     void send_local_rtsp_set(bool on);
     void request_local_rtsp_state();
@@ -88,7 +93,11 @@ public:
     void register_env_sim(DebugEnvSimCb cb);
     void register_env_sim_powder(DebugEnvSimPowderCb cb);
     void register_first_layer_visual_check(DebugFirstLayerVisualCheckCb cb);
+    void register_test_image(DebugTestImageCb cb);
     void register_local_rtsp(DebugLocalRtspCb cb);
+
+    /** Confirm Print 互斥：Glavo 回报的测试图实际运行态 */
+    [[nodiscard]] bool test_image_active() const noexcept { return test_image_active_; }
 
 private:
     DebugMsgProxy() = default;
@@ -130,7 +139,9 @@ private:
     DebugEnvSimCb env_sim_cb_;
     DebugEnvSimPowderCb env_sim_powder_cb_;
     DebugFirstLayerVisualCheckCb first_layer_visual_check_cb_;
+    DebugTestImageCb test_image_cb_;
     DebugLocalRtspCb local_rtsp_cb_;
+    bool test_image_active_ = false;
 };
 
 } // namespace ui
