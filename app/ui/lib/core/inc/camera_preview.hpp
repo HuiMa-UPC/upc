@@ -141,8 +141,18 @@ private:
     std::atomic<bool>     interaction_busy_{false};
     std::atomic<uint64_t> interaction_hold_until_ms_{0};
     std::atomic<uint32_t> decode_target_fps_override_{0};
-    uint32_t              ui_refresh_period_ms_ = 33;
+    uint32_t              ui_refresh_period_ms_ = 16;
     uint16_t              last_anim_count_ = 0;
+
+    /*
+     * 「转换完成 → 真正上屏」延迟统计（端到端延迟分段量化的第五段）。
+     * 解码线程发布 display_buf_ 时写入时刻，ui_timer_cb 切图时取走并累积，
+     * 再由解码线程的 5s 聚合日志读出并清零。
+     */
+    std::atomic<uint64_t> display_publish_us_{0};
+    std::atomic<uint64_t> ui_show_delay_us_sum_{0};
+    std::atomic<uint64_t> ui_show_delay_us_max_{0};
+    std::atomic<uint32_t> ui_show_samples_{0};
 
 #if defined(UPC_UI_RGA_STREAMING) && UPC_UI_RGA_STREAMING
     struct RgaSrcMap {

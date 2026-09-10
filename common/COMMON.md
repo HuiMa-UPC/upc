@@ -511,6 +511,25 @@ Glavo publish_async(target=APP_CAMERA)
 大流量：控制走 MsgPort；像素走主 IPC SCM_RIGHTS 传 dma fd + `ipc_dma_frame_ring` 元数据环（camera 预览：NV12，UI 侧 RGA/SW 转 BGRX）。
 详见 `app/camera/lib/camera_dma_frame_source.*` 与 `app/ui/lib/core/camera_preview.*`。
 
+### 预览元数据环 seq 契约（`ipc_dma_frame_ring`，format v2）
+
+| 约定 | 说明 |
+|------|------|
+| 发号者 | `IpcDmaFrameGlobalHeader::seq_next`，**全环一个**原子计数器；`commit_slot` 每帧 `fetch_add(1)`，帧号从 1 起 |
+| `slot.seq` | 只表示"本槽当前持有帧的全环帧号"，**不是**本槽的提交计数 |
+| 消费者 | `acquire_latest_frame` 跨槽比 `seq` 挑最新帧，再用单个 `last_seq_` 水位过滤已消费帧；步骤 4 把 `seq <= 当前帧` 的 READY 槽扫成 EMPTY |
+
+**为什么必须全环单调**：上面两条消费者逻辑都建立在"seq 在整个环里可比"之上。
+v1 曾按槽各自自增，环只轮转一个槽时恰好等价、看不出问题；一旦轮转两个槽，
+两个计数器停在同一数值，`seq > last_seq_` 就把其中一路整个拒掉——**正好丢一半帧，
+且无任何错误计数**（被拒帧由步骤 4 当过期槽回收）。同时"seq 最大的 READY 槽"
+也不再是最新帧，预览可能显示旧帧。
+
+改 seq 语义/结构体字段时必须同步 `kVersion`：结构体大小没变（48 字节，
+`seq_next` 正好占原 `reserved[0]`），只能靠 `version` 拦住新旧混搭，
+否则老消费者表面能跑、只是继续丢一半帧，比直接报 `VERSION_MISMATCH` 难查得多。
+**推论：升级时 camera / ui / media / visual 必须整套替换**，只换一部分会直接没画面。
+
 
 
 ---

@@ -11,6 +11,7 @@
 #include <cerrno>
 #include <cstdio>
 #include <cstring>
+#include <ctime>
 #include <fcntl.h>
 #include <poll.h>
 #include <sys/ioctl.h>
@@ -464,6 +465,14 @@ void ViCapture::stop_v4l2()
         ::close(v4l2_fd_);
         v4l2_fd_ = -1;
     }
+
+    /*
+     * 重开流后驱动的 sequence 从 0 重新计数。不清这个基准的话，跳号判据
+     * （新号 > 旧号+1）在追上旧号之前恒为假，drv_drop 会一直是 0——不是没丢帧，
+     * 是根本没在测。timestamp_monotonic 是驱动的固有属性，故意保留不清。
+     */
+    lat_have_sequence_ = false;
+    lat_last_sequence_ = 0;
 }
 
 std::optional<uint32_t> ViCapture::dequeue_frame(int timeout_ms)
@@ -486,28 +495,155 @@ std::optional<uint32_t> ViCapture::dequeue_frame(int timeout_ms)
                                   ? V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE
                                   : V4L2_BUF_TYPE_VIDEO_CAPTURE;
 
+    /*
+     * 排空到最新帧。
+     *
+     * V4L2 是 FIFO：一次 DQBUF 拿到的是队列里最老的一帧。而采集线程按固定
+     * 帧周期"取一还一"，周期里 sleep_for 的过冲让它比 sensor 慢约 0.1ms/帧，
+     * 这点差额只能累积、永远排不掉，最终把画面延迟顶到"缓冲数 × 帧周期"并
+     * 让驱动开始丢帧（实测 40s 内从 20ms 爬到 141ms）。
+     *
+     * 这里在首帧之后继续非阻塞 DQBUF 直到 EAGAIN，把过期帧立即 QBUF 还回去，
+     * 只交付最新一帧，积压因此变成可自愈的。fd 是 O_NONBLOCK 打开的（见
+     * start_v4l2），所以队列空时 DQBUF 立即返回 EAGAIN，不会阻塞。
+     *
+     * 代价：消费者卡顿期间过期帧被丢弃而不是排队，打印录像在卡顿瞬间会少几帧。
+     * 稳态 30fps 进 30fps 出时每轮通常一帧都排不出来，影响可忽略。
+     */
+    auto dqbuf_once = [&](v4l2_buffer& buf, v4l2_plane* planes) -> bool {
+        buf        = {};
+        buf.type   = buf_type;
+        buf.memory = V4L2_MEMORY_MMAP;
+        if(use_mplane_) {
+            buf.m.planes = planes;
+            buf.length   = 2;
+        }
+        return ioctl(v4l2_fd_, VIDIOC_DQBUF, &buf) >= 0;
+    };
+
     v4l2_buffer buf{};
     v4l2_plane  planes[2]{};
-    buf.type   = buf_type;
-    buf.memory = V4L2_MEMORY_MMAP;
-    if(use_mplane_) {
-        buf.m.planes = planes;
-        buf.length   = 2;
-    }
-
-    if(ioctl(v4l2_fd_, VIDIOC_DQBUF, &buf) < 0) {
+    if(!dqbuf_once(buf, planes)) {
         ++cap_fail_dqbuf_;
         log_capture_fail("dqbuf");
         return std::nullopt;
     }
 
-    const uint32_t idx = buf.index;
+    /*
+     * 只留下统计要用的两个标量，不整体搬 v4l2_buffer：它的 m.planes 指向
+     * 循环内的局部数组，拷出来就是悬垂指针。
+     */
+    uint32_t idx   = buf.index;
+    uint32_t flags = buf.flags;
+    int64_t  ts_us = static_cast<int64_t>(buf.timestamp.tv_sec) * 1000000 +
+                     buf.timestamp.tv_usec;
+    note_dequeued_sequence(buf.sequence);
+
+    /*
+     * 上限取缓冲总数：还回去的 buffer 驱动可以立刻再填，理论上存在"边排边填"
+     * 的活锁。30fps 对上微秒级的循环不会发生，但这是被外部设备驱动的循环，
+     * 给个硬上限保证一定收敛。
+     */
+    for(uint32_t i = 0; i < v4l2_buf_count_; ++i) {
+        v4l2_buffer next{};
+        v4l2_plane  next_planes[2]{};
+        if(!dqbuf_once(next, next_planes)) {
+            /* EAGAIN 是队列已空的正常收尾，不是采集失败，不能计进 dqbuf 失败数。 */
+            if(errno != EAGAIN && errno != EWOULDBLOCK) {
+                ++cap_fail_dqbuf_;
+                log_capture_fail("dqbuf_drain");
+            }
+            break;
+        }
+        /* 上一帧已过期：立刻还给驱动，只留最新的。 */
+        queue_frame(idx);
+        idx   = next.index;
+        flags = next.flags;
+        ts_us = static_cast<int64_t>(next.timestamp.tv_sec) * 1000000 +
+                next.timestamp.tv_usec;
+        /*
+         * 排空掉的帧也要过一遍 sequence 跟踪，否则它在帧号上留下的空缺会被
+         * 当成驱动丢帧记进 drv_drop——那是我们主动丢的，已经记在 drained 里了。
+         */
+        note_dequeued_sequence(next.sequence);
+        ++lat_stats_.drained;
+    }
+
     if(idx >= v4l2_buf_count_ || !buffers_[idx].start) {
         UPC_LOG_CAMERA_SERVICE(Warn, "dequeue_frame bad index %u", idx);
         return std::nullopt;
     }
 
+    /* 滞留时间只看真正交付的那一帧：画面延迟取决于它，不是被丢掉的过期帧。 */
+    accumulate_delivered_latency(flags, ts_us);
     return idx;
+}
+
+/**
+ * 记录一帧的驱动侧帧号，累积跳号数（即驱动因无空闲 buffer 丢掉的帧数）。
+ *
+ * @param sequence v4l2_buffer::sequence，驱动侧连续帧号
+ *
+ * **每一帧 DQBUF 出来都要调用，包括被排空丢弃的**。否则我们主动丢掉的帧会在
+ * 帧号上留下空缺，被误记成驱动丢帧——两者要分开：drained 是拿延迟换新鲜度
+ * （正常），seq_gap 是驱动来不及（异常）。
+ */
+void ViCapture::note_dequeued_sequence(uint32_t sequence)
+{
+    if(lat_have_sequence_ && sequence > lat_last_sequence_ + 1u) {
+        lat_stats_.seq_gap += sequence - lat_last_sequence_ - 1u;
+    }
+    lat_last_sequence_ = sequence;
+    lat_have_sequence_ = true;
+}
+
+/**
+ * 累积交付帧在驱动队列里的滞留时间。
+ *
+ * @param flags v4l2_buffer::flags，用于校验时间戳时钟域
+ * @param ts_us v4l2_buffer::timestamp 折算的微秒值，即驱动填完该帧的时刻
+ *
+ * ts_us 与当前单调时钟之差即"这一帧在驱动队列里躺了多久"。稳定在一帧周期
+ * 内说明无积压；持续爬升说明排空没生效或另有阻塞点。只对交付帧统计——
+ * 被排空丢掉的帧不上屏，它们的滞留时间不构成画面延迟。
+ */
+void ViCapture::accumulate_delivered_latency(uint32_t flags, int64_t ts_us)
+{
+    const uint32_t ts_type = flags & V4L2_BUF_FLAG_TIMESTAMP_MASK;
+    lat_stats_.timestamp_monotonic =
+        (ts_type == V4L2_BUF_FLAG_TIMESTAMP_MONOTONIC);
+
+    if(!lat_stats_.timestamp_monotonic) {
+        return;
+    }
+    timespec now{};
+    if(clock_gettime(CLOCK_MONOTONIC, &now) != 0) {
+        return;
+    }
+    const int64_t now_us =
+        static_cast<int64_t>(now.tv_sec) * 1000000 + now.tv_nsec / 1000;
+    const int64_t age_us = now_us - ts_us;
+    /* 负值只可能来自时钟域不一致，按无效样本丢弃。 */
+    if(age_us < 0) {
+        return;
+    }
+    ++lat_stats_.samples;
+    lat_stats_.latency_us_sum += static_cast<uint64_t>(age_us);
+    if(static_cast<uint64_t>(age_us) > lat_stats_.latency_us_max) {
+        lat_stats_.latency_us_max = static_cast<uint64_t>(age_us);
+    }
+}
+
+ViCaptureLatencyStats ViCapture::take_latency_stats()
+{
+    const ViCaptureLatencyStats out = lat_stats_;
+    /* 只清累积量，保留时间戳类型这一常量结论。 */
+    lat_stats_.samples        = 0;
+    lat_stats_.latency_us_sum = 0;
+    lat_stats_.latency_us_max = 0;
+    lat_stats_.seq_gap        = 0;
+    lat_stats_.drained        = 0;
+    return out;
 }
 
 bool ViCapture::queue_frame(uint32_t index)

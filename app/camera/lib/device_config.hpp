@@ -77,9 +77,21 @@
  * 需同时供三份：驱动侧待填充、采集线程当前处理、已下发给消费者尚未归还
  * （见 CAMERA_MAX_FRAMES_IN_FLIGHT）。stride 不对齐时 padding pool 按同样
  * 个数分配，因此这里每 +1 约多占两倍单帧 dma 内存。
+ *
+ * **上调前先读这段**：这一个常量同时约束三件互不相关的事，曾经因此踩坑。
+ *   1. 驱动队列深度 —— 也就是画面延迟的天花板（缓冲数 × 帧周期）。padded
+ *      模式下 V4L2 buffer 拷完立即 requeue，驱动始终握着全部缓冲，所以这
+ *      个乘积就是最坏积压。dequeue_frame 已排空到最新帧，正常不会摸到。
+ *   2. padding pool 大小 —— padded 模式下在飞窗口占的是它，不是 V4L2 队列。
+ *   3. **UI 侧 RGA 常驻导入数** —— 开流时 CameraPreviewPlayer 会把每个 fd
+ *      都 mmap + importbuffer_fd 常驻（见 prepare_rga_streaming_cache）。
+ *      实测 rk3568 上 4 个（加 2 块 scratch 共 6 个句柄、约 11.4MB 常驻映射）
+ *      可用，6 个（8 句柄、约 15.6MB）必然导入失败，UI 静默退化成软件转换、
+ *      每帧 22ms。
+ * 想给在飞窗口留更多余量，应当把 padding pool 拆成独立常量，而不是动这里。
  */
 #ifndef CAMERA_V4L2_BUF_COUNT
-#define CAMERA_V4L2_BUF_COUNT  6u
+#define CAMERA_V4L2_BUF_COUNT  4u
 #endif
 
 /**
@@ -91,7 +103,8 @@
  * 直播编码）拖到该消费者的速率。
  *
  * 实际窗口还会被 buffer 数（留 2 个给驱动填充）与 SHM 槽位数（留 1 个给
- * 写入）夹住，取三者最小值。3 帧 @30fps 约可吸收 100ms 抖动。
+ * 写入）夹住，取三者最小值。当前 CAMERA_V4L2_BUF_COUNT=4 时窗口实际是 2
+ * （@30fps 约吸收 66ms 抖动）；本值 3 是给 buffer 数放宽后留的上限。
  */
 #ifndef CAMERA_MAX_FRAMES_IN_FLIGHT
 #define CAMERA_MAX_FRAMES_IN_FLIGHT  3u

@@ -226,6 +226,18 @@ void upc_sys_monitor_tick() {
     static bool have_base = false;
     static CpuSample base{};
 
+    /*
+     * 先判间隔再读 /proc。本函数在 UI 主循环里每圈都被调用（上百次每秒），
+     * 而 read_cpu_sample 要开 /proc/stat + /proc/self/stat 两个文件，采样值
+     * 只有到了上报点才用得上——把读放在间隔判断之后，绝大多数调用就只剩
+     * 一次时钟比较。CPU 占用是「两次采样之间的均值」，基准点仍是上一次上报
+     * 时刻，语义不变。
+     */
+    const auto now = Clock::now();
+    if (have_base && now - last_report < kReportInterval) {
+        return;
+    }
+
     CpuSample cur{};
     if (!read_cpu_sample(&cur)) {
         return;
@@ -234,12 +246,7 @@ void upc_sys_monitor_tick() {
     if (!have_base) {
         base = cur;
         have_base = true;
-        last_report = Clock::now();
-        return;
-    }
-
-    const auto now = Clock::now();
-    if (now - last_report < kReportInterval) {
+        last_report = now;
         return;
     }
 
