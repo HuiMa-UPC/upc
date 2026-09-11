@@ -40,7 +40,7 @@ public:
         std::string object_key;
         std::string upload_url;
         int64_t upload_url_expires_at = 0; /**< Unix 秒 */
-        int64_t max_packet_size = 0;       /**< 密文包上限（含 nonce+tag） */
+        int64_t max_packet_size = 0;       /**< 密文包上限（含 nonce+tag）；已屏蔽，仅记录 */
         std::string encrypt_salt_b64;      /**< 下行原文，回显不重编 */
         std::vector<std::string> topic_files;
     };
@@ -49,7 +49,7 @@ public:
         std::string file;
         bool collected = false;
         int64_t size = 0;       /**< collected=true 或 empty/size_exceeded 时 */
-        std::string reason;     /**< collected=false 时：not_found/empty/size_exceeded */
+        std::string reason;     /**< collected=false 时：not_found/empty（size_exceeded 已屏蔽） */
     };
 
 private:
