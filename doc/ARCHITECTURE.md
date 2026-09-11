@@ -14,7 +14,7 @@
 | Visual | `rongsu_visual` | `app/visual/main.cpp` | [visual/VISUAL.md](../app/visual/VISUAL.md) | `/var/log/topic/*.log` |
 | MQTT | `rongsu_mqtt` | `app/mqtt/main.cpp` | — | `/var/log/topic/*.log` |
 
-启动：`scripts/rongsu.sh start`（Glavo → `rongsu_camera` → `rongsu_media` → `rongsu_xfr` → `rongsu_visual` → `rongsu_mqtt` → UI）。  
+启动：`scripts/rongsu.sh start`（Glavo → `rongsu_camera` → `rongsu_media` → `rongsu_xfr` → `rongsu_visual` → `rongsu_mqtt` → UI）。`/home/rongsu.sh` 只是选 A/B 槽的薄 bootstrap，上面这串顺序实现在槽内的 `scripts/rongsu_app.sh`，随应用层升级一起进槽；槽机制见 [OTA_IMAGE.md](../common/fs_manifest/OTA_IMAGE.md)。  
 编译：`./build.sh`（Release + 工具链，产物在 `output/`；`clean` / `reconfigure` 见脚本头注释）。  
 日志：按专题写 `/var/log/topic`，体积由板端 logrotate 控制，配置源文件 `scripts/topic` → `/etc/logrotate.d/topic`。
 

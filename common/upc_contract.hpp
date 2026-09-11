@@ -535,7 +535,7 @@ enum class MsgType : uint32_t {
     UI_Ota_User_Decision_Req,               /**< OtaDecisionReqPayload：UI 确认/取消 OTA 通知 */
     APP_Mqtt_Ota_Progress_Ntf,              /**< OtaProgressPayload：下载/校验/刷写进度 */
     // ---- MQTT ↔ UI：SOC 全包升级（重启时机交给用户） ----
-    APP_Soc_Ota_Ready_Ntf,                  /**< SocOtaReadyPayload：.img 已就绪，UI 弹窗问是否重启 */
+    APP_Soc_Ota_Ready_Ntf,                  /**< SocOtaReadyPayload：固件已就绪，UI 弹窗问是否重启 */
     UI_Soc_Ota_Apply_Req,                   /**< SocOtaApplyReqPayload：立即重启升级 / 放弃并删除 */
     APP_Soc_Ota_Apply_Rsp,                  /**< SocOtaApplyRspPayload：处置结果（成功重启则收不到） */
 
@@ -1196,8 +1196,16 @@ struct OtaProgressPayload {
     char    error_code[64];     /**< 失败原因码；成功/进行中为空串 */
 };
 
+/** SOC 升级形态：决定 UI 文案与重启后的生效方式 */
+enum class SocOtaKind : uint8_t {
+    Image = 0,  /**< 全包 .img：写 misc 分区，重启进 recovery 刷写 */
+    App   = 1,  /**< 应用层 A/B：新文件已落到非活动槽，切槽后重启生效 */
+};
+
 /**
- * APP_Soc_Ota_Ready_Ntf：SOC 全包固件已下载校验完并落到 UPC_SOC_OTA_IMG。
+ * APP_Soc_Ota_Ready_Ntf：SOC 固件已下载校验完并落盘待应用。
+ *
+ * 全包落到 UPC_SOC_OTA_IMG，应用层落到非活动槽，由 kind 区分。
  *
  * 两个时机各发一次：本次下载完成时；开机后 MQTT 首次连上云端且检测到
  * 上次遗留的未应用固件时（进程比 UI 先起，早发会丢，故推迟到连云成功）。
@@ -1205,13 +1213,19 @@ struct OtaProgressPayload {
 struct SocOtaReadyPayload {
     char     version[32];       /**< 云端 manifest 给的目标固件版本 */
     char     task_id[64];       /**< 云端任务号，UI 仅展示 */
-    uint64_t img_bytes;         /**< .img 字节数，UI 展示占用空间 */
+    uint64_t img_bytes;         /**< 固件字节数（App 为槽内文件总和），UI 展示占用空间 */
+    uint8_t  kind;              /**< SocOtaKind */
+    uint8_t  reserved[7];
 };
 
-/** UI_Soc_Ota_Apply_Req：用户对已就绪固件的处置（"稍后"不发消息，UI 自行关窗） */
+/**
+ * UI_Soc_Ota_Apply_Req：用户对已就绪固件的处置（"稍后"不发消息，UI 自行关窗）
+ *
+ * 两个动作对 Image / App 语义一致，具体手段由 MQTT 侧按 pending 记录的 kind 决定。
+ */
 enum class SocOtaApplyAction : uint8_t {
-    RebootNow = 0,  /**< 写 misc 分区并重启进 recovery 刷写 */
-    Discard   = 1,  /**< 放弃升级并删除固件，释放 /userdata 空间 */
+    RebootNow = 0,  /**< Image：写 misc 分区后重启；App：切槽后重启 */
+    Discard   = 1,  /**< 放弃升级并删除已落盘固件，释放空间 */
 };
 
 struct SocOtaApplyReqPayload {
@@ -1221,9 +1235,10 @@ struct SocOtaApplyReqPayload {
 
 /** APP_Soc_Ota_Apply_Rsp：处置结果。RebootNow 成功时设备已重启，UI 收不到本条 */
 enum class SocOtaApplyResult : uint8_t {
-    Ok          = 0,
-    NoPending   = 1,  /**< 无待应用固件：状态文件或 .img 已不在 */
-    ApplyFailed = 2,  /**< updateEngine 返回非零，misc 未写入 */
+    Ok               = 0,
+    NoPending        = 1,  /**< 无待应用固件：状态文件或固件本体已不在 */
+    ApplyFailed      = 2,  /**< Image：updateEngine 返回非零，misc 未写入 */
+    SlotSwitchFailed = 3,  /**< App：bootstrap 的 slot-switch 失败，槽未切换 */
 };
 
 struct SocOtaApplyRspPayload {

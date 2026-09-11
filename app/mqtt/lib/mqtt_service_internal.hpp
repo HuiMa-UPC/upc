@@ -65,6 +65,19 @@ inline constexpr const char* kSocOtaUpdateEngine = "updateEngine";
 /** 解包后除 .img 自身外还要留的余量，避免把 /userdata 刚好占满。 */
 inline constexpr uint64_t kSocOtaSpareBytes = 64ull * 1024 * 1024;
 
+/** SOC 应用层 A/B 升级：槽根目录、槽名、状态文件、bootstrap 入口。 */
+inline constexpr const char* kAppSlotRoot = UPC_APP_SLOT_ROOT;
+inline constexpr const char* kAppSlotA = UPC_APP_SLOT_A;
+inline constexpr const char* kAppSlotB = UPC_APP_SLOT_B;
+inline constexpr const char* kAppSlotStateFile = UPC_APP_SLOT_STATE_FILE;
+inline constexpr const char* kAppBootstrap = UPC_APP_BOOTSTRAP;
+/** 槽内启动脚本，随可执行文件一起升级（进程列表变更不影响回滚）。 */
+inline constexpr const char* kAppSlotScriptName = "rongsu_app.sh";
+/** 包内声明升级方式的描述文件；缺失时退回按解包内容推断。 */
+inline constexpr const char* kSocOtaManifestName = "ota_manifest.json";
+/** 落盘应用层固件时槽根分区要留的余量。 */
+inline constexpr uint64_t kAppSlotSpareBytes = 8ull * 1024 * 1024;
+
 /** 最小 URL 结构，供 OTA 下载链路使用。 */
 struct ParsedUrl {
     std::string scheme;
@@ -86,6 +99,8 @@ bool parse_url(const std::string& raw, ParsedUrl& out);
 std::string basename_from_url_path(const std::string& path);
 /** 目录不存在则创建。 */
 bool ensure_dir(const std::filesystem::path& p);
+/** 清空 OTA 下载暂存目录，回收掉电中断留下的残留。 */
+void clear_image_tmp_dir();
 /** 计算文件 sha256（十六进制小写）。 */
 std::string hex_sha256_file(const std::filesystem::path& p);
 /** 下载文件并在接收时回调进度。 */

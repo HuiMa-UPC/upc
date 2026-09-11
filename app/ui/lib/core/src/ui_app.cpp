@@ -247,12 +247,17 @@ void on_soc_ota_ready(const middleware::SocOtaReadyPayload& p)
         return;
     }
 
+    /* 应用层升级只换 /home 下的可执行文件，重启一次就好；全包要进 recovery
+     * 刷整机，耗时长得多，文案上先给用户一个预期。 */
+    const bool is_app =
+        static_cast<middleware::SocOtaKind>(p.kind) == middleware::SocOtaKind::App;
     char body[224];
     std::snprintf(body, sizeof(body),
-                  "Version: %s\nSize: %.1f MB\n"
-                  "The device will reboot to install the update.",
+                  "Version: %s\nSize: %.1f MB\n%s",
                   p.version[0] ? p.version : "unknown",
-                  static_cast<double>(p.img_bytes) / (1024.0 * 1024.0));
+                  static_cast<double>(p.img_bytes) / (1024.0 * 1024.0),
+                  is_app ? "The device will restart to switch to the new version."
+                         : "The device will reboot to install the update.");
     lv_obj_t* lbl = ui_user_make_body_label(g_soc_ota_dlg->body, body);
     lv_label_set_long_mode(lbl, LV_LABEL_LONG_MODE_WRAP);
     lv_obj_set_width(lbl, LV_PCT(100));
