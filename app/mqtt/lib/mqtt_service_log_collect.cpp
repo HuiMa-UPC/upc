@@ -438,10 +438,9 @@ bool MqttService::parse_log_collect_command(const std::string& data_json,
         reject_reason = kCmdRejectReasonInvalidState;
         return false;
     }
-    if(!json_extract_int64(data_json, "maxPacketSize", out.max_packet_size) ||
-       out.max_packet_size <= static_cast<int64_t>(kLogGcmNonceLen + kLogGcmTagLen)) {
-        reject_reason = kCmdRejectReasonInvalidState;
-        return false;
+    /* maxPacketSize 已屏蔽：只解析下来留作日志诊断，缺失或过小都不再拒绝指令。 */
+    if(!json_extract_int64(data_json, "maxPacketSize", out.max_packet_size)) {
+        out.max_packet_size = 0;
     }
     if(!json_extract_string_array(data_json, "topicFiles", out.topic_files) ||
        out.topic_files.empty()) {
@@ -584,7 +583,7 @@ void MqttService::publish_log_collect_progress(const std::string& collect_id,
 void MqttService::run_log_collect_task(LogCollectCommand cmd)
 {
     UPC_LOG_MQTT_SERVICE(Info,
-        "log_collect start collectId=%s files=%zu maxPacket=%lld",
+        "log_collect start collectId=%s files=%zu maxPacket=%lld(ignored)",
         cmd.collect_id.c_str(),
         cmd.topic_files.size(),
         static_cast<long long>(cmd.max_packet_size));
@@ -658,59 +657,23 @@ void MqttService::run_log_collect_task(LogCollectCommand cmd)
         groups.push_back(std::move(g));
     }
 
-    /* 按 topicFiles 顺序贪心纳入；超密文上限则整组跳过 size_exceeded。 */
+    /* maxPacketSize 已屏蔽：按 topicFiles 顺序全量纳入，不再逐组试打包判超限，
+       因此也不会再产生 size_exceeded / SIZE_EXCEEDED。 */
     std::vector<std::filesystem::path> selected;
     std::vector<LogFileReport> reports;
     reports.reserve(groups.size());
-    bool any_size_exceeded = false;
 
-    for(auto& g : groups) {
-        if(!g.report.collected) {
-            reports.push_back(g.report);
-            continue;
+    for(const auto& g : groups) {
+        if(g.report.collected) {
+            selected.insert(selected.end(), g.paths.begin(), g.paths.end());
         }
-
-        std::vector<std::filesystem::path> trial = selected;
-        trial.insert(trial.end(), g.paths.begin(), g.paths.end());
-
-        const std::filesystem::path tar_path = work_dir / "packet.tar.gz";
-        std::filesystem::remove(tar_path, ec);
-        std::string pack_err;
-        if(!create_tar_gz(trial, tar_path, pack_err)) {
-            std::filesystem::remove_all(work_dir, ec);
-            publish_log_collect_error(cmd, pack_err.c_str());
-            return;
-        }
-
-        std::vector<unsigned char> tar_bytes;
-        if(!read_file_bytes(tar_path, tar_bytes)) {
-            std::filesystem::remove_all(work_dir, ec);
-            publish_log_collect_error(cmd, kLogErrInternal);
-            return;
-        }
-
-        const int64_t cipher_est =
-            static_cast<int64_t>(kLogGcmNonceLen + tar_bytes.size() + kLogGcmTagLen);
-        if(cipher_est > cmd.max_packet_size) {
-            g.report.collected = false;
-            g.report.reason = kLogFileSizeExceeded;
-            g.report.size = g.total_size;
-            any_size_exceeded = true;
-            reports.push_back(g.report);
-            continue;
-        }
-
-        selected = std::move(trial);
         reports.push_back(g.report);
     }
 
-    const bool any_collected =
-        std::any_of(reports.begin(), reports.end(),
-                    [](const LogFileReport& r) { return r.collected; });
-    if(!any_collected) {
+    /* collected=true 蕴含 paths 非空，故 selected 空即等价于一个文件都没收到。 */
+    if(selected.empty()) {
         std::filesystem::remove_all(work_dir, ec);
-        publish_log_collect_error(
-            cmd, any_size_exceeded ? kLogErrSizeExceeded : kLogErrNoFileFound);
+        publish_log_collect_error(cmd, kLogErrNoFileFound);
         return;
     }
 
@@ -735,12 +698,6 @@ void MqttService::run_log_collect_task(LogCollectCommand cmd)
     if(!aes_256_gcm_seal(aes_key, aad, tar_bytes, sealed)) {
         std::filesystem::remove_all(work_dir, ec);
         publish_log_collect_error(cmd, kLogErrEncryptFail);
-        return;
-    }
-
-    if(static_cast<int64_t>(sealed.size()) > cmd.max_packet_size) {
-        std::filesystem::remove_all(work_dir, ec);
-        publish_log_collect_error(cmd, kLogErrSizeExceeded);
         return;
     }
 

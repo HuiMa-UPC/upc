@@ -27,7 +27,11 @@ inline constexpr const char* kCmdRejectReasonInvalidState = "invalid_state";
 inline constexpr const char* kCmdRejectReasonEncoderError = "encoder_error";
 inline constexpr uint64_t kRtspAckTimeoutMs = 8000;
 
-/** 日志采集任务级 error.reason 闭集（设备端不自造码）。 */
+/**
+ * 日志采集任务级 error.reason 闭集（设备端不自造码）。
+ * maxPacketSize 判超限已屏蔽，SIZE_EXCEEDED / size_exceeded 当前不会再产生，
+ * 保留定义以维持闭集完整、便于日后恢复限制。
+ */
 inline constexpr const char* kLogErrUrlExpired = "URL_EXPIRED";
 inline constexpr const char* kLogErrPutFailed = "PUT_FAILED";
 inline constexpr const char* kLogErrDiskFull = "DISK_FULL";
