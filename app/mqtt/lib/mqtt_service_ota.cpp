@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <chrono>
 #include <cstdio>
 #include <filesystem>
 #include <utility>
@@ -573,17 +574,34 @@ void MqttService::run_manifest_download_task(std::string task_id,
         std::filesystem::remove_all(extract_dir, ec);
 
         std::string dl_err;
+        /* 进度节流：原先每读 4KB 就打 UI+MQTT，SOC 全包会变成数十万次上报，
+         * 吞吐被进度洪泛拖死。仅在百分比变化，或未知总长时每 500ms 报一次。 */
+        uint8_t last_pub_pct = 0xFF;
+        auto last_pub_tp = std::chrono::steady_clock::time_point{};
         const bool dl_ok = download_file_with_progress(
             comp.url, tmp_part,
-            [this, &progress](size_t recv, size_t total) {
+            [this, &progress, &last_pub_pct, &last_pub_tp](size_t recv, size_t total) {
                 // 下载阶段仅使用 0~80，后续 90/100 预留给校验与应用。
+                uint8_t new_pct = progress.progress_pct;
                 if(total > 0) {
                     const int pct = static_cast<int>((recv * 100) / total);
-                    progress.progress_pct = static_cast<uint8_t>(std::clamp(pct, 0, 80));
+                    new_pct = static_cast<uint8_t>(std::clamp(pct, 0, 80));
                 } else if(progress.progress_pct < 80) {
-                    progress.progress_pct = static_cast<uint8_t>(
+                    new_pct = static_cast<uint8_t>(
                         std::min<int>(80, static_cast<int>(progress.progress_pct) + 1));
                 }
+                const auto now = std::chrono::steady_clock::now();
+                const bool pct_changed = (new_pct != last_pub_pct);
+                const bool due_by_time =
+                    (total == 0) &&
+                    (last_pub_tp.time_since_epoch().count() == 0 ||
+                     now - last_pub_tp >= std::chrono::milliseconds(500));
+                if(!pct_changed && !due_by_time) {
+                    return;
+                }
+                progress.progress_pct = new_pct;
+                last_pub_pct = new_pct;
+                last_pub_tp = now;
                 publish_ota_progress_ui(progress);
                 (void)publish_ota_progress_cloud(progress);
             }, dl_err);

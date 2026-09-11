@@ -17,6 +17,7 @@
 #include <memory>
 #include <sstream>
 #include <string>
+#include <vector>
 #include <sys/socket.h>
 #include <sys/statvfs.h>
 #include <sys/types.h>
@@ -417,7 +418,8 @@ bool download_file_with_progress(const std::string& url,
         }
 
         std::string header;
-        std::array<char, 4096> buf{};
+        /* 256KB：SOC 全包可达数百 MB，4KB 过小会导致过多 syscall/SSL_read。 */
+        std::vector<char> buf(256u * 1024u);
         bool header_done = false;
         bool redirect_hit = false;
         bool out_opened = false;

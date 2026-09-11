@@ -42,65 +42,6 @@ bool same_firmware_version(const std::string& a, const std::string& b)
     return !na.empty() && na == normalize(b);
 }
 
-/** 按空白切分一行。 */
-std::vector<std::string> split_ws(const std::string& line)
-{
-    std::vector<std::string> out;
-    size_t pos = 0;
-    while(pos < line.size()) {
-        while(pos < line.size() && std::isspace(static_cast<unsigned char>(line[pos]))) {
-            ++pos;
-        }
-        const size_t begin = pos;
-        while(pos < line.size() && !std::isspace(static_cast<unsigned char>(line[pos]))) {
-            ++pos;
-        }
-        if(pos > begin) {
-            out.push_back(line.substr(begin, pos - begin));
-        }
-    }
-    return out;
-}
-
-bool all_digits(const std::string& s)
-{
-    if(s.empty()) {
-        return false;
-    }
-    for(const char c : s) {
-        if(!std::isdigit(static_cast<unsigned char>(c))) {
-            return false;
-        }
-    }
-    return true;
-}
-
-/**
- * 解析一行 `tar -tzvf` 输出，取出条目名与解包后字节数。
- *
- * GNU tar 与 busybox tar 的列宽不同，但字段顺序一致：
- *   mode owner/group size date time name
- * date 含 '-'、time 含 ':'，都不是纯数字，所以从右往左跳过 name 后
- * 第一个纯数字 token 就是 size。这样不依赖固定列位置。
- */
-bool parse_tar_verbose_line(const std::string& line,
-                            std::string& out_name,
-                            uint64_t& out_size)
-{
-    const std::vector<std::string> tok = split_ws(line);
-    if(tok.size() < 4) {
-        return false;
-    }
-    out_name = tok.back();
-    for(size_t i = tok.size() - 1; i-- > 0;) {
-        if(all_digits(tok[i])) {
-            out_size = std::strtoull(tok[i].c_str(), nullptr, 10);
-            return true;
-        }
-    }
-    return false;
-}
-
 } // namespace
 
 /**
@@ -108,6 +49,9 @@ bool parse_tar_verbose_line(const std::string& line,
  *
  * 与 mcu/galvo 的差别：不走 AB 对规则、不做整目录替换、也不在这里刷写。
  * 刷写时机交给用户，见 on_soc_ota_apply。
+ *
+ * 不再先 `tar -tzvf` 再解包：gzip 无法随机访问，列目录等于白解压一整遍，
+ * SOC 全包上会多出数分钟。改为粗估空间 → 只解包一次 → 用目录内容校验。
  */
 bool MqttService::run_soc_ota_stage(const std::string& task_id,
                                     const OtaComponent& comp,
@@ -118,67 +62,30 @@ bool MqttService::run_soc_ota_stage(const std::string& task_id,
     err_code.clear();
     std::error_code ec;
 
-    /* 1) 列条目：SOC 包必须是平铺的单个 .img，同时取到解包后大小做空间预判。 */
-    std::vector<std::string> lines;
-    const std::string list_cmd = "tar -tzvf " + sh_single_quote(tar_gz.string());
-    if(!run_capture_lines(list_cmd, lines)) {
-        err_code = "tar_list_failed";
-        return false;
-    }
-
-    std::string img_entry;
-    uint64_t img_bytes = 0;
-    size_t entry_count = 0;
-    for(const std::string& raw : lines) {
-        const std::string line = trim_line(raw);
-        if(line.empty()) {
-            continue;
-        }
-        std::string name;
-        uint64_t size = 0;
-        if(!parse_tar_verbose_line(line, name, size)) {
-            err_code = "tar_list_failed";
-            return false;
-        }
-        ++entry_count;
-        if(!archive_entry_safe_flat(name) || !is_img_name(name)) {
-            UPC_LOG_MQTT_SERVICE(Warn, "soc ota reject tar entry=%s", name.c_str());
-            err_code = "tar_entry_invalid";
-            return false;
-        }
-        img_entry = name;
-        img_bytes = size;
-    }
-    if(entry_count == 0) {
-        err_code = "img_missing";
-        return false;
-    }
-    if(entry_count > 1) {
-        err_code = "img_ambiguous";
-        return false;
-    }
-
-    UPC_LOG_MQTT_SERVICE(Info, "soc ota entry=%s img_bytes=%llu",
-                         img_entry.c_str(),
-                         static_cast<unsigned long long>(img_bytes));
-
-    /* 2) 先清掉上一次遗留的待应用固件：新包已下载完，旧的必然废弃，
+    /* 1) 先清掉上一次遗留的待应用固件：新包已下载完，旧的必然废弃，
      *    而且腾出的空间正好给本次解包用。 */
     soc_ota_pending_clear();
     std::filesystem::remove(kSocOtaImgPath, ec);
 
-    /* 3) 空间预判：解包后要在同一文件系统上多放一份完整 .img。 */
+    /* 2) 粗估空间：解包期间 tar.gz 与 .img 会短暂共存。不知道解压后精确大小时，
+     *    按「压缩包的 2 倍 + 余量」估；manifest 带了 size_bytes 则优先用它。 */
+    const uint64_t tar_bytes =
+        static_cast<uint64_t>(std::filesystem::file_size(tar_gz, ec));
+    const uint64_t package_hint =
+        (comp.size_bytes > 0) ? comp.size_bytes : (ec ? 0ull : tar_bytes);
     uint64_t free_bytes = 0;
-    if(fs_free_bytes(UPC_IMAGE_ROOT, free_bytes)) {
-        const uint64_t need = img_bytes + kSocOtaSpareBytes;
-        if(img_bytes > 0 && free_bytes < need) {
+    if(package_hint > 0 && fs_free_bytes(UPC_IMAGE_ROOT, free_bytes)) {
+        const uint64_t need = package_hint * 2ull + kSocOtaSpareBytes;
+        if(free_bytes < need) {
             UPC_LOG_MQTT_SERVICE(Error,
-                "soc ota no space: need=%llu free=%llu",
+                "soc ota no space: need~=%llu free=%llu",
                 static_cast<unsigned long long>(need),
                 static_cast<unsigned long long>(free_bytes));
             err_code = "no_space";
             return false;
         }
+    } else if(package_hint == 0) {
+        UPC_LOG_MQTT_SERVICE(Warn, "soc ota skip space check (unknown package size)");
     } else {
         UPC_LOG_MQTT_SERVICE(Warn, "soc ota statvfs failed, skip space check");
     }
@@ -188,7 +95,7 @@ bool MqttService::run_soc_ota_stage(const std::string& task_id,
     publish_ota_progress_ui(progress);
     (void)publish_ota_progress_cloud(progress);
 
-    /* 4) 解包到 tmp 子目录而不是直接摊到 /userdata：与 kSocOtaImgPath 同一
+    /* 3) 解包到 tmp 子目录而不是直接摊到 /userdata：与 kSocOtaImgPath 同一
      *    文件系统，后面 rename 是原子且零拷贝的，也不会污染 /userdata 顶层。 */
     const std::filesystem::path extract_dir =
         std::filesystem::path(kImageTmpDir) / (task_id + "_soc_extract");
@@ -207,19 +114,37 @@ bool MqttService::run_soc_ota_stage(const std::string& task_id,
         return false;
     }
 
-    /* 5) 用真实目录内容定位 .img，而不是复用 tar 输出里的名字：
-     *    条目名可能含空白导致上面的列解析取不全，这里以文件系统为准。 */
+    /* 4) 目录内容校验：必须平铺且恰好一个 .img（不允许子目录或其他文件）。 */
     std::filesystem::path img_src;
     size_t img_found = 0;
+    size_t other_found = 0;
     for(const auto& ent : std::filesystem::directory_iterator(extract_dir, ec)) {
-        if(ec || !ent.is_regular_file()) {
+        if(ec) {
+            break;
+        }
+        if(ent.is_directory()) {
+            UPC_LOG_MQTT_SERVICE(Warn, "soc ota reject nested dir=%s",
+                                 ent.path().filename().c_str());
+            std::filesystem::remove_all(extract_dir, ec);
+            err_code = "tar_entry_invalid";
+            return false;
+        }
+        if(!ent.is_regular_file()) {
             continue;
         }
-        if(!is_img_name(ent.path().filename().string())) {
-            continue;
+        if(is_img_name(ent.path().filename().string())) {
+            img_src = ent.path();
+            ++img_found;
+        } else {
+            UPC_LOG_MQTT_SERVICE(Warn, "soc ota reject non-img entry=%s",
+                                 ent.path().filename().c_str());
+            ++other_found;
         }
-        img_src = ent.path();
-        ++img_found;
+    }
+    if(other_found > 0) {
+        std::filesystem::remove_all(extract_dir, ec);
+        err_code = "tar_entry_invalid";
+        return false;
     }
     if(img_found != 1) {
         std::filesystem::remove_all(extract_dir, ec);
@@ -227,7 +152,7 @@ bool MqttService::run_soc_ota_stage(const std::string& task_id,
         return false;
     }
 
-    /* 6) 改名到固定路径：永远只留一份，多次升级不会累积几百 MB 的垃圾。 */
+    /* 5) 改名到固定路径：永远只留一份，多次升级不会累积几百 MB 的垃圾。 */
     std::filesystem::rename(img_src, kSocOtaImgPath, ec);
     if(ec) {
         UPC_LOG_MQTT_SERVICE(Error, "soc ota rename to %s failed: %s",
@@ -241,12 +166,12 @@ bool MqttService::run_soc_ota_stage(const std::string& task_id,
     const uint64_t final_bytes =
         static_cast<uint64_t>(std::filesystem::file_size(kSocOtaImgPath, ec));
 
-    /* 7) 记下待应用状态：用户点"稍后"之后可能断电，重启还要能找回入口。 */
+    /* 6) 记下待应用状态：用户点"稍后"之后可能断电，重启还要能找回入口。 */
     SocOtaPending pending{};
     pending.task_id = task_id;
     pending.version = comp.version;
     pending.img_path = kSocOtaImgPath;
-    pending.img_bytes = ec ? img_bytes : final_bytes;
+    pending.img_bytes = ec ? 0ull : final_bytes;
     if(!soc_ota_pending_save(pending)) {
         std::filesystem::remove(kSocOtaImgPath, ec);
         err_code = "pending_save_failed";
