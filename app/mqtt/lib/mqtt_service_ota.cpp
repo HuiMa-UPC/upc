@@ -513,6 +513,11 @@ void MqttService::run_manifest_download_task(std::string task_id,
         return;
     }
 
+    /* 整目录清空而不是只删本任务的文件：临时文件名带 task_id，掉电中断的任务
+     * 会绕过所有清理路径，残留既不会被新任务覆盖也没人删。全包 .img 一次就是
+     * 几百 MB，攒几次能把 /userdata 占满，之后所有 OTA 都卡在 no_space 上。
+     * 同一时刻只有一个下载任务（ota_download_running_），清空是安全的。 */
+    clear_image_tmp_dir();
     if(!ensure_dir(kImageTmpDir)) {
         publish_failed("all", "tmp_dir_failed");
         return;

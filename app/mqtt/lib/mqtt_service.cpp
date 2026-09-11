@@ -274,6 +274,28 @@ bool ensure_dir(const std::filesystem::path& p)
     return std::filesystem::create_directories(p, ec);
 }
 
+/**
+ * 清空 OTA 下载暂存目录。
+ *
+ * 掉电中断的任务会绕过代码里所有清理路径，而临时文件名带 task_id，新任务用的
+ * 是新名字，残留既不会被覆盖也没人删。所以只能整目录扫掉，不能逐个点名。
+ */
+void clear_image_tmp_dir()
+{
+    std::error_code ec;
+    const uintmax_t removed = std::filesystem::remove_all(kImageTmpDir, ec);
+    if(ec) {
+        UPC_LOG_MQTT_SERVICE(Warn, "cannot clear %s: %s", kImageTmpDir,
+                             ec.message().c_str());
+        return;
+    }
+    /* 目录自身也算一个条目，只有它说明本来就是干净的 */
+    if(removed > 1) {
+        UPC_LOG_MQTT_SERVICE(Info, "cleared %llu leftover entries under %s",
+                             static_cast<unsigned long long>(removed - 1), kImageTmpDir);
+    }
+}
+
 std::string hex_sha256_file(const std::filesystem::path& p)
 {
     std::ifstream in(p, std::ios::binary);
@@ -879,6 +901,11 @@ bool MqttService::init()
         UPC_LOG_MQTT_SERVICE(Warn, "cannot load local MQTT credential: %s",
                              credential_error.c_str());
     }
+
+    /* 开机先回收一次：上次 OTA 若被掉电打断，残留会一直占着 /userdata。
+     * 等到下次 OTA 任务才清的话，长期不升级的设备就一直背着这份垃圾。
+     * 待应用固件不在这个目录（全包在 UPC_SOC_OTA_IMG，应用层在槽里），清空不影响它。 */
+    clear_image_tmp_dir();
 
     subscribe_messages();
 

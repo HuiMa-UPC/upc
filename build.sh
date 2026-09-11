@@ -95,19 +95,35 @@ do_build() {
     cmake --build "$BUILD_DIR" --parallel "$JOBS" --config "$BUILD_TYPE"
 }
 
+# 八个守护进程的构建产物路径。应用层 A/B 升级包的内容以此为准，
+# 与 scripts/rongsu_app.sh 里的启动列表保持一致。
+ARTIFACTS=(
+    "app/broker/rongsu_broker"
+    "app/ui/rongsu_ui"
+    "app/glavo/rongsu_glavo"
+    "app/camera/rongsu_camera"
+    "app/media/rongsu_media"
+    "app/xfer/rongsu_xfr"
+    "app/visual/rongsu_visual"
+    "app/mqtt/rongsu_mqtt"
+)
+
+# 从根 CMakeLists.txt 读取 UPC_PRODUCT_VERSION，供 OTA 包的描述文件使用
+read_cmake_version() {
+    local v
+    v="$(sed -n 's/^[[:space:]]*set(UPC_PRODUCT_VERSION[[:space:]]\+"\([^"]*\)".*/\1/p' \
+        "$ROOT/CMakeLists.txt" | head -n1)"
+    if [[ -z "$v" ]]; then
+        echo "错误: 根 CMakeLists.txt 中未找到 UPC_PRODUCT_VERSION" >&2
+        exit 1
+    fi
+    echo "$v"
+}
+
 do_collect_outputs() {
     mkdir -p "$OUTPUT_DIR"
 
-    local -a artifacts=(
-        "app/broker/rongsu_broker"
-        "app/ui/rongsu_ui"
-        "app/glavo/rongsu_glavo"
-        "app/camera/rongsu_camera"
-        "app/media/rongsu_media"
-        "app/xfer/rongsu_xfr"
-        "app/visual/rongsu_visual"
-        "app/mqtt/rongsu_mqtt"
-    )
+    local -a artifacts=("${ARTIFACTS[@]}")
 
     echo "==> 复制可执行文件到 $OUTPUT_DIR"
     local rel name src
@@ -171,6 +187,50 @@ do_collect_sdk() {
     install_sdk_headers protocol "$ROOT/app/protocol"
 }
 
+# 打出可直接交给云端下发的应用层 A/B 升级包（平铺 tar.gz + sha256）。
+# 手工打包很容易漏掉 rongsu_app.sh 或打出带子目录的包，设备端会直接判失败，
+# 所以这一步交给脚本固化。全包 .img 不在这里打，那是 SDK 侧的产物。
+do_pack_app_ota() {
+    local version stage pkg rel name files_json
+    version="$(read_cmake_version)"
+    stage="$OUTPUT_DIR/app_ota_stage"
+    pkg="$OUTPUT_DIR/soc_app_ota_${version}.tar.gz"
+
+    echo "==> 打包应用层升级包: $(basename "$pkg")"
+    rm -rf "$stage"
+    mkdir -p "$stage"
+
+    files_json=""
+    for rel in "${ARTIFACTS[@]}"; do
+        name="$(basename "$rel")"
+        install -m 755 "$BUILD_DIR/$rel" "$stage/$name"
+        files_json+="\"$name\", "
+    done
+    # 槽内启动脚本必须一起进包：新槽没有它就起不来，而 /home 下那个 bootstrap
+    # 只负责选槽，不认识进程列表。
+    install -m 755 "$ROOT/scripts/rongsu_app.sh" "$stage/rongsu_app.sh"
+    files_json+="\"rongsu_app.sh\""
+
+    # type 让设备端不必靠猜；files 清单用于切槽前拦住残包，避免等到新槽起不来
+    # 才靠回滚兜底。
+    cat > "$stage/ota_manifest.json" <<EOF
+{
+  "type": "app",
+  "version": "$version",
+  "files": [$files_json]
+}
+EOF
+
+    rm -f "$pkg" "$pkg.sha256"
+    # 强制 root:root：默认会把构建机的 uid/gid 写进包，设备上解包要么把系统
+    # 二进制的属主改成一个不存在的用户，要么在非 root 解包时直接报错退出，
+    # 而设备端是按 tar 的退出码判成败的。
+    tar --owner=0 --group=0 --numeric-owner -czf "$pkg" -C "$stage" .
+    rm -rf "$stage"
+    (cd "$OUTPUT_DIR" && sha256sum "$(basename "$pkg")" > "$(basename "$pkg").sha256")
+    echo "  sha256: $(cut -d' ' -f1 < "$pkg.sha256")"
+}
+
 # 工具链变更时必须清缓存再配置（编译器路径已写入 CMakeCache）
 need_reconfigure() {
     local cache="$BUILD_DIR/CMakeCache.txt"
@@ -198,9 +258,11 @@ case "$cmd" in
         do_build
         do_collect_outputs
         do_collect_sdk
+        do_pack_app_ota
         echo ""
         echo "编译完成。产物目录: $OUTPUT_DIR"
         echo "协作 SDK: $INSTALL_DIR (common/ parser/ protocol/ 各含 lib/ + include/)"
+        echo "应用层升级包: $OUTPUT_DIR/soc_app_ota_*.tar.gz（+ .sha256）"
         ;;
     clean)
         echo "==> 删除 $BUILD_DIR 与 $OUTPUT_DIR（含 install/）"

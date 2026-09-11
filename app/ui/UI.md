@@ -1594,7 +1594,7 @@ Tab 取 `USER_PAD_SM`（小于 Tab 间距 `USER_PAD_LG` 的一半），故相邻
 
 - UI = **Hub**；`add_ipc_peer(ModuleId, path, required)`
 - 单播：`target_id = APP_*`；广播：`target_id = 0`
-- 启动顺序见 `scripts/rongsu.sh`
+- 启动顺序见 `scripts/rongsu_app.sh`（`scripts/rongsu.sh` 选 A/B 槽后交棒）
 - 细节：[common/COMMON.md](../../common/COMMON.md) § IPC
 
 当前 peer：`APP_GLAVO`（required）、`APP_CAMERA`（optional，预览）、`APP_MEDIA`（拍照/录像/直播；Glavo 打印录像经 Hub 转发至此）。

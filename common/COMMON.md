@@ -230,8 +230,8 @@ scripts/rongsu.sh start   # glavo + rongsu_camera → ui
 | `MQTT_Ota_Notify_Ntf` | — | MQTT→UI | `OtaNotifyPayload` | `register_ota_notify` | 收到云端 OTA 通知后弹确认框（用户确认后再请求 manifest） |
 | `UI_Ota_User_Decision_Req` | — | UI→MQTT | `OtaDecisionReqPayload` | `send_ota_user_decision` | 用户确认/取消 OTA 通知（取消仅关弹窗，不上报云端） |
 | `APP_Mqtt_Ota_Progress_Ntf` | — | MQTT→UI | `OtaProgressPayload` | `register_ota_progress` | 下载/校验/刷写进度；`mcu`/`galvo` 应用阶段跟真实会话，`soc` 固件就绪后直接 100% |
-| `APP_Soc_Ota_Ready_Ntf` | — | MQTT→UI | `SocOtaReadyPayload` | `register_soc_ota_ready` | SOC 全包 `.img` 已就绪（进度已 100%），UI 切成"是否重启升级"弹窗。下载完成时发一次；开机后 MQTT **首次连上云端**再补发一次（比 UI 先起，早发会丢） |
-| `UI_Soc_Ota_Apply_Req` | — | UI→MQTT | `SocOtaApplyReqPayload` | `send_soc_ota_apply` | `RebootNow` 写 misc 分区后重启进 recovery；`Discard` 删固件释放空间。"稍后"不发消息（状态已持久化，下次开机重提示） |
+| `APP_Soc_Ota_Ready_Ntf` | — | MQTT→UI | `SocOtaReadyPayload` | `register_soc_ota_ready` | SOC 固件已就绪（进度已 100%），UI 切成"是否重启升级"弹窗，`kind` 区分全包 `.img` 与应用层 A/B。下载完成时发一次；开机后 MQTT **首次连上云端**再补发一次（比 UI 先起，早发会丢） |
+| `UI_Soc_Ota_Apply_Req` | — | UI→MQTT | `SocOtaApplyReqPayload` | `send_soc_ota_apply` | `RebootNow`：全包写 misc 分区后重启进 recovery，应用层切槽后重启；`Discard` 删已落盘固件释放空间。"稍后"不发消息（状态已持久化，下次开机重提示） |
 | `APP_Soc_Ota_Apply_Rsp` | — | MQTT→UI | `SocOtaApplyRspPayload` | `register_soc_ota_apply_rsp` | 处置结果；`RebootNow` 成功时设备已重启，UI 收不到本条 |
 | `XFR_Transfer_Progress_Ntf` | — | XFR→UI | `XfrTransferProgressPayload` | `register_xfr_transfer_progress` | WiFi 传输阶段进度（Uploading/Slicing/Finished/Error） |
 | `UI_Mcu_Ota_Start_Req` / `UI_Mcu_Ota_Cancel_Ntf` / `APP_Mcu_Ota_Status_Ntf` | — | UI/MQTT↔Glavo | `McuOtaStatusPayload` | `send_mcu_ota_start` / `send_mcu_ota_cancel` / `register_mcu_ota_status` | Galvo 以太网 OTA（`/userdata/image/galvo`，AB 对规则见 [OTA_IMAGE.md](fs_manifest/OTA_IMAGE.md)）。状态 Glavo 双发 UI 与 MQTT |
@@ -417,7 +417,7 @@ rongsu_broker ──listen──► /tmp/upc_broker.sock ◄── rongsu_ui / r
 - connect 后首帧 **reg**（`IPC_REG_MAGIC`，不进 MsgType）；同 `ModuleId` 重连踢旧连接。
 - Broker **零业务 subscribe**；仅按 wire `target_id` 转发（含 UPDF fd 透传）。
 - 路由靠 **`MsgType` + `target_id`**，不靠 socket fd。
-- 启动顺序：`broker → glavo → camera → ui`（`scripts/rongsu.sh`）。
+- 启动顺序：`broker → glavo → camera → ui`（`scripts/rongsu_app.sh`，由 `scripts/rongsu.sh` 选槽后交棒）。
 
 ## MsgPort 速查
 
@@ -505,7 +505,7 @@ Glavo publish_async(target=APP_CAMERA)
 
 1. `upc_contract.hpp` — `ModuleId` / `MsgType` / Payload（contract 四步）
 2. 新进程 `main` — `set_mode_ipc_client` + `process` 循环
-3. `scripts/rongsu.sh` — 启动顺序（Broker 最先）
+3. `scripts/rongsu_app.sh` — 启动顺序（Broker 最先）；同时把新进程名加进 `build.sh` 的 `ARTIFACTS`，否则不会进 A/B 升级包
 4. UI 业务 — 独立 `XxxMsgProxy`
 
 大流量：控制走 MsgPort；像素走主 IPC SCM_RIGHTS 传 dma fd + `ipc_dma_frame_ring` 元数据环（camera 预览：NV12，UI 侧 RGA/SW 转 BGRX）。
@@ -602,7 +602,7 @@ ParserManager → RingBuffer → McuLink（TCP + 串口）
 
 各进程 `main.cpp` 支持 `{start|stop|status|run}`；`start` 时 stderr/stdout 重定向到 `/var/log/topic/topic_boot_lifecycle.log`，业务日志由 `rs_log` 按专题写入 `/var/log/topic/*.log`。这处 `dup2` 也是 `topic_boot_lifecycle.log` 只能用 `copytruncate` 轮转的原因，见 [§ 落盘与轮转](#落盘与轮转)。
 
-- 启动脚本：[scripts/rongsu.sh](../scripts/rongsu.sh)
+- 启动脚本：[scripts/rongsu_app.sh](../scripts/rongsu_app.sh)（槽内），入口 [scripts/rongsu.sh](../scripts/rongsu.sh)（选槽 bootstrap）
 
 ---
 
