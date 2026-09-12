@@ -150,12 +150,46 @@ int32_t more_gap_strip(void)  { return is_1280() ? 24 : 18; }  /**< 传感器条
  */
 int32_t more_pad_bot(void)    { return is_1280() ? 48 : 28; }
 
+/* ---- Back 按钮与 Tab 组（稿 `#5814:16957` / `#5814:16961`）----
+ * Back 的绝对坐标 176..255（宽 79 = 左 8 + 图标 20 + 间距 3 + 「返回」32 + 右 16），
+ * 与 Tab 组之间 24，组内两枚 pill 之间 16。 */
+/**
+ * 更多控制的右内距。**稿上左右不对称**：内容左缘 x=176（= 侧栏 128 + 48）、右缘 x=1248
+ * （距屏右 32）。第一版照左边抄成了对称的 48，内容右缘停在 1232、整块窄了 16。
+ */
+int32_t more_pad_r(void)   { return is_1280() ? 32 : 24; }
+
+/**
+ * 轴卡底部那三枚步进圆钮（− + ↺）。**稿值是 48，这里刻意放大到 72**：48 在实机上偏难点，
+ * 1024 档折算出的 40 还低于 `UI_USER_MIH_TOUCH`。倍率取工程既有的 1.5（同 UI.md
+ * 「触摸命中区」记的 `user_media_btn_h` 那次），属于「视觉尺寸归设计稿、命中区归可用性」
+ * 里选了可用性的一档。
+ *
+ * 上限校验（按钮行可用宽 = 卡宽 − 卡内左右内距，三枚钮 + 两道 USER_PAD_LG）：
+ *   1280：卡 343 − 32 = 311，3×72 + 64 = 280，余 31；
+ *   1024：卡 293 − 22 = 271，3×60 + 72 = 252，余 19。
+ * 顶格能到 80/65，但那就和 Device 页那批 80 圆钮一样大了——那批是每张卡唯一的主操作，
+ * 这三枚只是步进微调，同大会喧宾夺主，且 1280 档只剩 2px 余量。
+ */
+int32_t axis_btn_sz(void)  { return is_1280() ? 72 : 60; }
+
+/** 弹窗里的 ± 圆钮，稿 `EL-0fcb9837` 明写 64×64（原先误用了 USER_BTN_PRIMARY_H=52）。 */
+int32_t dlg_btn_sz(void)   { return is_1280() ? 64 : 48; }
+
+int32_t back_pad_l(void)   { return is_1280() ? 8  : 6; }
+int32_t back_pad_r(void)   { return is_1280() ? 16 : 12; }
+int32_t back_gap(void)     { return is_1280() ? 3  : 2; }
+int32_t back_icon_sz(void) { return is_1280() ? 20 : 15; }
+int32_t tab_gap(void)      { return is_1280() ? 16 : 12; }
+
 /* 稿上这几个色值主题里没有，只本页用 */
 const lv_color_t kCapColor  = LV_COLOR_MAKE(0x8c, 0x8c, 0x87); /**< 卡头 caption（稿 #8C8C87） */
 const lv_color_t kLightOn   = LV_COLOR_MAKE(0xff, 0xcd, 0x42); /**< LIGHT 开态轨道（稿 #FFCD42） */
 const lv_color_t kSwOff     = LV_COLOR_MAKE(0x47, 0x47, 0x47); /**< 开关关态轨道（稿 #474747） */
 const lv_color_t kKnobOff   = LV_COLOR_MAKE(0x81, 0x81, 0x81); /**< 关态圆钮（稿 #818181） */
-const lv_color_t kTabBlue   = LV_COLOR_MAKE(0x4b, 0x87, 0xff); /**< Tab 选中字（稿 #4B87FF） */
+const lv_color_t kTabBlue   = LV_COLOR_MAKE(0x4b, 0x87, 0xff); /**< Tab 选中**字**（稿 #4B87FF） */
+/** Tab 选中**底**（稿 `fill="#64BEFF" fill-opacity="0.1"`）。比字色更亮更偏青，两者不同色。 */
+const lv_color_t kTabFill   = LV_COLOR_MAKE(0x64, 0xbe, 0xff);
 
 /**
  * 卡片底色：**不透明**，且必须比页面底（#272628）更亮。
@@ -270,15 +304,21 @@ void set_num(lv_obj_t *lbl, float v, int decimals)
  * `ic_layers` / `ic_cube` / `ic_purify` 那批手维护图标没有多档 set，调用方直接把单张
  * dsc 传给 `make_icon()`，不经本函数。
  */
-const lv_image_dsc_t *pick_metric(const lv_image_dsc_t *const *set)
+const lv_image_dsc_t *pick_icon(const lv_image_dsc_t *const *set, int32_t sz)
 {
     const lv_image_dsc_t *best = set[0];
     int32_t best_d = INT32_MAX;
     for(const lv_image_dsc_t *const *p = set; *p != nullptr; ++p) {
-        const int32_t d = LV_ABS((int32_t)(*p)->header.w - USER_METRIC_ICON_SZ);
+        const int32_t d = LV_ABS((int32_t)(*p)->header.w - sz);
         if(d < best_d) { best_d = d; best = *p; }
     }
     return best;
+}
+
+/** 卡头图标那一档（USER_METRIC_ICON_SZ）。Back 箭头是 20，另走 pick_icon()。 */
+const lv_image_dsc_t *pick_metric(const lv_image_dsc_t *const *set)
+{
+    return pick_icon(set, USER_METRIC_ICON_SZ);
 }
 
 /** 卡头 A8 图标：统一 USER_METRIC_ICON_SZ、caption 灰。 */
@@ -954,12 +994,14 @@ void open_laser_dlg(lv_event_t *)
     lv_obj_set_flex_align(row, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER,
                           LV_FLEX_ALIGN_CENTER);
 
-    make_round_btn(row, LV_SYMBOL_MINUS, USER_BTN_PRIMARY_H, on_laser_step,
+    make_round_btn(row, LV_SYMBOL_MINUS, dlg_btn_sz(), on_laser_step,
                    (void *)(intptr_t)-1);
 
     lv_obj_t *track = lv_obj_create(row);
     lv_obj_remove_style_all(track);
-    lv_obj_set_height(track, USER_BTN_PRIMARY_H);
+    /* 与两侧 ± 圆钮同高（稿 `#5788:15383` 也明写 64）：同一行三个元素等高才是稿的样子，
+     * 原先这里和圆钮一起误用了 USER_BTN_PRIMARY_H=52。 */
+    lv_obj_set_height(track, dlg_btn_sz());
     lv_obj_set_flex_grow(track, 1);
     lv_obj_set_style_radius(track, USER_BTN_RADIUS * 2, 0);
     lv_obj_set_style_bg_color(track, lv_color_black(), 0);
@@ -975,7 +1017,7 @@ void open_laser_dlg(lv_event_t *)
     lv_obj_set_style_bg_opa(g_laser_dlg_fill, LV_OPA_COVER, 0);
     lv_obj_remove_flag(g_laser_dlg_fill, LV_OBJ_FLAG_SCROLLABLE);
 
-    make_round_btn(row, LV_SYMBOL_PLUS, USER_BTN_PRIMARY_H, on_laser_step,
+    make_round_btn(row, LV_SYMBOL_PLUS, dlg_btn_sz(), on_laser_step,
                    (void *)(intptr_t)1);
 
     laser_dlg_sync();
@@ -1301,6 +1343,26 @@ const AxisCfg kAxes[3] = {
     { DebugAxis::D, "Powder Bucket Rod (D)",  "D Position:", "\xC2\xB0",     false, true  },
 };
 
+/**
+ * 轴卡正文字号。**稿是 16，这里刻意上调一档到 18。**
+ *
+ * 同样的 16px，中文比英文视觉上大将近一倍——中文字形填满 16×16 的字身框，而拉丁小写的
+ * x 高度只有约 0.52em ≈ 8px。稿上「打印平面高度（Z轴）」很扎实，换成
+ * `Print Plane Height (Z)` 就显得细小，实机确认过。所以这不是抄错，是「照抄字号」在换语言
+ * 之后本来就会失真。
+ *
+ * 上调幅度受 Z 卡限制（它比另两张多一行工作零点）：会跟着长高的有 6 行，18 号每行约 +2.5、
+ * 合计 +15，而 Z 卡的弹性空隙是 24，余 9；再上到 20 就要 +30、超 6px 会被裁，那得同时收
+ * 下半块内距或上半块行距才行。
+ *
+ * **1024 档实际不变**：该档 `user_font_text()` 与 `user_font_text_sm()` 同为 16。要那一档也
+ * 变大只能动主题的字号表，那是全局影响，不在本页范围内。
+ *
+ * 注意别拿这条去"对齐"历史页——那一页当初的结论是回到稿的 16（`text_sm`），语境不同：
+ * 它的卡片信息密度和可用宽度都与这里不是一回事。
+ */
+const lv_font_t *axis_font(void) { return user_font_text(); }
+
 lv_obj_t *g_axis_pos[3]  = { nullptr };   /**< 位置读数 */
 lv_obj_t *g_axis_step[3] = { nullptr };   /**< 单次步距输入 */
 lv_obj_t *g_z_zero_lbl   = nullptr;       /**< Z 工作零点读数 */
@@ -1345,7 +1407,9 @@ lv_obj_t *make_num_input(lv_obj_t *parent, float v0, int decimals)
     lv_obj_set_style_border_width(ta, 1, 0);
     lv_obj_set_style_radius(ta, USER_BTN_RADIUS, 0);
     lv_obj_set_style_text_color(ta, user_color_text, 0);
-    lv_obj_set_style_text_font(ta, user_font_text_sm(), 0);
+    /* 稿上输入框里的数值是 **20**（`EL-e80747d3` / `style_d2900971`，轴卡步距、打印参数、
+     * 风扇占空比三处都是），原先误用了 16。不吃布局预算——框高由 num_input_h() 钉死。 */
+    lv_obj_set_style_text_font(ta, user_font_title(), 0);
     lv_obj_set_style_text_align(ta, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_style_pad_all(ta, USER_PAD_SM / 2, 0);
     ui_keyboard_attach(ta, LV_KEYBOARD_MODE_NUMBER);
@@ -1539,13 +1603,13 @@ void build_axis_card(lv_obj_t *row, int idx)
     lv_obj_set_style_pad_hor(top, USER_PAD_SM, 0);
     lv_obj_set_style_pad_ver(top, USER_PAD_SM * 3 / 4, 0);
 
-    make_label(top, cfg.title, user_font_text_sm(), user_color_text, LV_OPA_COVER);
+    make_label(top, cfg.title, axis_font(), user_color_text, LV_OPA_COVER);
 
-    make_label(top, cfg.pos_caption, user_font_text_sm(), kCapColor, LV_OPA_COVER);
+    make_label(top, cfg.pos_caption, axis_font(), kCapColor, LV_OPA_COVER);
     lv_obj_t *prow = make_row(top, USER_PAD_SM / 2);
-    g_axis_pos[idx] = make_label(prow, "0.000", user_font_text_sm(),
+    g_axis_pos[idx] = make_label(prow, "0.000", axis_font(),
                                  user_color_text, LV_OPA_COVER);
-    make_label(prow, cfg.unit, user_font_text_sm(), kCapColor, LV_OPA_COVER);
+    make_label(prow, cfg.unit, axis_font(), kCapColor, LV_OPA_COVER);
 
     if(cfg.has_zero) {
         lv_obj_t *zrow = make_row(top, USER_PAD_SM);
@@ -1553,12 +1617,11 @@ void build_axis_card(lv_obj_t *row, int idx)
         lv_obj_set_flex_align(zrow, LV_FLEX_ALIGN_SPACE_BETWEEN,
                               LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
         lv_obj_t *zcol = make_col(zrow, USER_PAD_SM / 2);
-        make_label(zcol, "Work Zero:", user_font_text_sm(), kCapColor,
-                   LV_OPA_COVER);
+        make_label(zcol, "Work Zero:", axis_font(), kCapColor, LV_OPA_COVER);
         lv_obj_t *zvrow = make_row(zcol, USER_PAD_SM / 2);
-        g_z_zero_lbl = make_label(zvrow, "0.000", user_font_text_sm(),
+        g_z_zero_lbl = make_label(zvrow, "0.000", axis_font(),
                                   user_color_text, LV_OPA_COVER);
-        make_label(zvrow, cfg.unit, user_font_text_sm(), kCapColor, LV_OPA_COVER);
+        make_label(zvrow, cfg.unit, axis_font(), kCapColor, LV_OPA_COVER);
         make_outline_btn(zrow, "Set Work Zero", on_axis_set_zero,
                          (void *)(intptr_t)idx);
     }
@@ -1580,7 +1643,7 @@ void build_axis_card(lv_obj_t *row, int idx)
         lv_obj_set_ext_click_area(cell, USER_PAD_SM);
         lv_obj_add_event_cb(cell, on_axis_subtab, LV_EVENT_CLICKED,
                             (void *)(uintptr_t)((idx << 1) | i));
-        g_axis_tab_lbl[idx][i] = make_label(cell, kSub[i], user_font_text_sm(),
+        g_axis_tab_lbl[idx][i] = make_label(cell, kSub[i], axis_font(),
                                             kCapColor, LV_OPA_COVER);
         lv_obj_t *mark = lv_obj_create(cell);
         lv_obj_remove_style_all(mark);
@@ -1620,7 +1683,7 @@ void build_axis_card(lv_obj_t *row, int idx)
     lv_obj_set_width(brow, LV_PCT(100));
     lv_obj_set_flex_align(brow, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER,
                           LV_FLEX_ALIGN_CENTER);
-    const int32_t bsz = is_1280() ? 48 : 40;
+    const int32_t bsz = axis_btn_sz();
     void *ud_neg = (void *)(uintptr_t)((idx << 1) | 0u);
     void *ud_pos = (void *)(uintptr_t)((idx << 1) | 1u);
     /* D 轴是旋转轴，稿上用一对回转箭头且没有 home 键。
@@ -1940,21 +2003,32 @@ void build_more_view(lv_obj_t *parent)
     g_more_view = make_box(parent);
     lv_obj_set_size(g_more_view, LV_PCT(100), LV_PCT(100));
     lv_obj_set_style_pad_left(g_more_view, body_pad_l(), 0);
-    lv_obj_set_style_pad_right(g_more_view, body_pad_l(), 0);
+    lv_obj_set_style_pad_right(g_more_view, more_pad_r(), 0);
     lv_obj_set_style_pad_top(g_more_view, body_pad_t(), 0);
     lv_obj_set_style_pad_bottom(g_more_view, more_pad_bot(), 0);
     lv_obj_set_flex_flow(g_more_view, LV_FLEX_FLOW_COLUMN);
     /* 两段间距不等（稿 20 / 24），故 pad_row 取前一段、后一段靠 body 的 margin_top 补差 */
     lv_obj_set_style_pad_row(g_more_view, more_gap_chrome(), 0);
 
-    /* ---- 顶行：Back + Motion / Device ---- */
+    /* ---- 顶行：Back + [Motion | Device] ----
+     * 稿（`#5814:16955`，两个 Tab 完全相同）是**两层**，别摊平：
+     *   row gap 24
+     *   ├── edit-btn(Back)  hug×40 · padding 6/16/6/8 · gap 3 · radius 8 · 无填充
+     *   └── 子组             row gap 16 · hug     ← 两枚 pill 归成一组
+     *       ├── pill 120×40
+     *       └── pill 120×40
+     * 摊成一层三项等距（都 24）会让「Back」和「一组 Tab」读起来像三个并列按钮。
+     * 稿上的绝对坐标可作校验：Back 176..255、pill1 279..399、pill2 415..535。 */
     lv_obj_t *chrome = make_row(g_more_view, USER_PAD);
     lv_obj_set_width(chrome, LV_PCT(100));
 
     lv_obj_t *back = lv_obj_create(chrome);
     lv_obj_remove_style_all(back);
     lv_obj_set_size(back, LV_SIZE_CONTENT, is_1280() ? 40 : 34);
-    lv_obj_set_style_pad_hor(back, USER_PAD_SM / 2, 0);
+    /* 稿的内距是**非对称**的（左 8 / 右 16）：图标在左、文字在右，右边多留一档才能让
+     * 整组的视觉重心落在中间。左右都给 8 的话文字会显得贴边。 */
+    lv_obj_set_style_pad_left(back, back_pad_l(), 0);
+    lv_obj_set_style_pad_right(back, back_pad_r(), 0);
     lv_obj_set_style_radius(back, USER_BTN_RADIUS, 0);
     lv_obj_set_style_bg_color(back, user_color_text, 0);
     lv_obj_set_style_bg_opa(back, LV_OPA_TRANSP, 0);
@@ -1962,21 +2036,30 @@ void build_more_view(lv_obj_t *parent)
     lv_obj_set_flex_flow(back, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(back, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER,
                           LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_column(back, USER_PAD_SM / 4, 0);
+    lv_obj_set_style_pad_column(back, back_gap(), 0);
     lv_obj_add_flag(back, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_remove_flag(back, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_ext_click_area(back, USER_PAD_SM);
     lv_obj_add_event_cb(back, on_more_back, LV_EVENT_CLICKED, nullptr);
-    make_label(back, LV_SYMBOL_LEFT, user_font_text_sm(), user_color_text, LV_OPA_50);
+    /* 稿上这是一枚 20×20 的 SVG（`#5814:16958` @ opacity 0.5），不是文字符号。原先用
+     * LV_SYMBOL_LEFT 按 16 号排，形状与粗细都对不上；现在走从稿导出的 A8 资源。 */
+    ui_user_make_icon_img(back, pick_icon(ic_chevron_left_set, back_icon_sz()),
+                          back_icon_sz(), user_color_text);
     make_label(back, "Back", user_font_text_sm(), user_color_text, LV_OPA_COVER);
+
+    /* 两枚 pill 的子组：组内 16、与 Back 之间 24（继承 chrome 的 pad_column） */
+    lv_obj_t *tabs_grp = make_row(chrome, tab_gap());
 
     static const char *const kTabs[2] = { "Motion", "Device" };
     for(int i = 0; i < 2; i++) {
-        lv_obj_t *pill = lv_obj_create(chrome);
+        lv_obj_t *pill = lv_obj_create(tabs_grp);
         lv_obj_remove_style_all(pill);
         lv_obj_set_size(pill, is_1280() ? 120 : 98, is_1280() ? 40 : 34);
         lv_obj_set_style_radius(pill, LV_RADIUS_CIRCLE, 0);
-        lv_obj_set_style_bg_color(pill, kTabBlue, 0);
+        /* 底色与字色**不是同一个色**：稿上字是 #4B87FF，而底是更亮更偏青的
+         * #64BEFF 压到 10%（SVG 导出里那行 `fill="#64BEFF" fill-opacity="0.1"`）。
+         * 当成同一个 kTabBlue 会让选中态的底偏暗偏紫。 */
+        lv_obj_set_style_bg_color(pill, kTabFill, 0);
         lv_obj_set_style_bg_opa(pill, LV_OPA_TRANSP, 0);
         lv_obj_add_flag(pill, LV_OBJ_FLAG_CLICKABLE);
         lv_obj_remove_flag(pill, LV_OBJ_FLAG_SCROLLABLE);

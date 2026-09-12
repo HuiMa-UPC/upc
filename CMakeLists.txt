@@ -13,7 +13,7 @@ project(rongsu_upc
 )
 
 # 产品发布版本（UI About 等展示；与 project VERSION 独立）
-set(UPC_PRODUCT_VERSION "V4.1.0" CACHE STRING "Product release version string")
+set(UPC_PRODUCT_VERSION "V4.1.2.6" CACHE STRING "Product release version string")
 
 set(CMAKE_C_STANDARD 99)
 set(CMAKE_C_STANDARD_REQUIRED ON)
