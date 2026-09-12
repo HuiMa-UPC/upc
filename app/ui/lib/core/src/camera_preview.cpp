@@ -10,6 +10,7 @@
 #include <linux/dma-buf.h>
 
 #include <atomic>
+#include <cerrno>
 #include <chrono>
 #include <cstring>
 #include <sys/ioctl.h>
@@ -25,9 +26,12 @@ namespace {
  * 基础常量与工具函数（匿名命名空间）
  * ========================= */
 
-constexpr uint32_t kUiRefreshPeriodMs = 33u;
+/* 与 LV_DEF_REFR_PERIOD(16) 对齐：切图周期越长，转换好的帧就要多等一拍才上屏。 */
+constexpr uint32_t kUiRefreshPeriodMs = 16u;
 constexpr uint32_t kUiRefreshInteractPeriodMs = 66u;
 constexpr uint32_t kInteractiveDecodeFps = 12u;
+/* 环里暂时无新帧时的小憩时长，决定 SHM 轮询粒度（越小延迟越低）。 */
+constexpr uint32_t kNoFrameNapMs = 5u;
 constexpr uint64_t kInteractionHoldMs = 320u;
 constexpr uint32_t kStartRspWatchdogMs = 1000u;
 constexpr uint8_t kStartRspRetryMax = 2u;
@@ -57,19 +61,31 @@ bool rga_status_ok(IM_STATUS st)
 #if !defined(UPC_UI_RGA_STREAMING) || !UPC_UI_RGA_STREAMING
 bool rga_cvtcolor_checked(rga_buffer_t src, rga_buffer_t dst_buf, const im_rect& rect,
                           IM_STATUS* out_st);
-bool rga_nv12_to_bgrx_fd(int src_fd, int dst_fd, int w, int h, int src_stride_y,
+bool rga_nv12_to_bgrx_fd(int src_fd, int dst_fd, int src_w, int src_h, int src_stride_y,
+                         int crop_y, int crop_h, int dst_w, int dst_h,
                          int dst_stride_px, IM_STATUS* out_st);
 #endif
-#if defined(UPC_UI_RGA_STREAMING) && UPC_UI_RGA_STREAMING
+/* 裁剪 / 缩放都靠 improcess 的独立 src/dst 矩形，streaming 与非 streaming 都用得上。 */
 bool rga_cvtcolor_rect_checked(rga_buffer_t src, rga_buffer_t dst_buf,
                                const im_rect& src_rect, const im_rect& dst_rect,
                                IM_STATUS* out_st);
-#endif
 
 uint64_t monotonic_ms()
 {
     return static_cast<uint64_t>(
         std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now().time_since_epoch())
+            .count());
+}
+
+/**
+ * 与 Camera 侧 commit 时间戳同源（Linux 上 steady_clock 即 CLOCK_MONOTONIC），
+ * 故可直接与 slot 里的 timestamp_us 相减，得到跨进程的 SHM 等待时间。
+ */
+uint64_t monotonic_us()
+{
+    return static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::microseconds>(
             std::chrono::steady_clock::now().time_since_epoch())
             .count());
 }
@@ -89,25 +105,50 @@ inline uint8_t clamp_u8(int v)
     return static_cast<uint8_t>(v < 0 ? 0 : (v > 255 ? 255 : v));
 }
 
+/**
+ * NV12 → BGRX 软件回退：把源的可见带 [0, crop_y, src_w, crop_h] 铺到 dst_w × dst_h。
+ *
+ * 缩放用 16.16 定点最近邻，刻意不做双线性：这条路本来就是 RGA 不可用时的应急
+ * 路径（原来整帧约 22ms），再叠双线性只会更慢。而且输出比源小（1280×800 <
+ * 1080×1280），改成按输出遍历后单帧耗时反而比原来的 1:1 整帧转换略低。
+ *
+ * 无缩放档位（屏宽 = 流宽）下 crop_y=0、crop_h=src_h、dst_*=src_*，两个步进都
+ * 恰好是 1，逐行/逐列退化成原来的写法，行为不变。
+ */
 void nv12_to_bgrx_sw(const uint8_t* y_plane, const uint8_t* uv_plane,
-                     int w, int h, int stride_y, uint8_t* dst, int dst_stride_px)
+                     int src_w, int src_h, int stride_y, int crop_y, int crop_h,
+                     uint8_t* dst, int dst_w, int dst_h, int dst_stride_px)
 {
-    if(!y_plane || !dst || w <= 0 || h <= 0) {
+    if(!y_plane || !dst || src_w <= 0 || src_h <= 0 || crop_h <= 0 ||
+       dst_w <= 0 || dst_h <= 0) {
         return;
     }
 
-    for(int row = 0; row < h; ++row) {
-        const uint8_t* y_row   = y_plane + static_cast<size_t>(stride_y) * row;
+    /* dst 行/列 → 源行/列的定点步进；1:1 时正好等于 1<<16。 */
+    const uint32_t x_step =
+        (static_cast<uint32_t>(src_w) << 16) / static_cast<uint32_t>(dst_w);
+    const uint32_t y_step =
+        (static_cast<uint32_t>(crop_h) << 16) / static_cast<uint32_t>(dst_h);
+
+    for(int row = 0; row < dst_h; ++row) {
+        int src_row =
+            crop_y + static_cast<int>((static_cast<uint32_t>(row) * y_step) >> 16);
+        if(src_row >= src_h) {
+            src_row = src_h - 1;
+        }
+        const uint8_t* y_row   = y_plane + static_cast<size_t>(stride_y) * src_row;
         const uint8_t* uv_row  = uv_plane
-                                     ? uv_plane + static_cast<size_t>(stride_y) * (row / 2)
-                                     : y_plane + static_cast<size_t>(stride_y) * h +
-                                           static_cast<size_t>(stride_y) * (row / 2);
+                                     ? uv_plane + static_cast<size_t>(stride_y) * (src_row / 2)
+                                     : y_plane + static_cast<size_t>(stride_y) * src_h +
+                                           static_cast<size_t>(stride_y) * (src_row / 2);
         uint8_t* d_row =
             dst + static_cast<size_t>(dst_stride_px) * static_cast<size_t>(row) * 4u;
 
-        for(int col = 0; col < w; ++col) {
-            const int Y       = y_row[col];
-            const int uv_off  = (col & ~1);
+        for(int col = 0; col < dst_w; ++col) {
+            const int src_col =
+                static_cast<int>((static_cast<uint32_t>(col) * x_step) >> 16);
+            const int Y       = y_row[src_col];
+            const int uv_off  = (src_col & ~1);
             const int U       = static_cast<int>(uv_row[uv_off]) - 128;
             const int V       = static_cast<int>(uv_row[uv_off + 1]) - 128;
             const int C       = Y - 16;
@@ -149,7 +190,6 @@ bool rga_cvtcolor_checked(rga_buffer_t src, rga_buffer_t dst_buf, const im_rect&
 }
 #endif
 
-#if defined(UPC_UI_RGA_STREAMING) && UPC_UI_RGA_STREAMING
 bool rga_cvtcolor_rect_checked(rga_buffer_t src, rga_buffer_t dst_buf,
                                const im_rect& src_rect, const im_rect& dst_rect,
                                IM_STATUS* out_st)
@@ -175,28 +215,33 @@ bool rga_cvtcolor_rect_checked(rga_buffer_t src, rga_buffer_t dst_buf,
     }
     return rga_status_ok(st);
 }
-#endif
 
 #if !defined(UPC_UI_RGA_STREAMING) || !UPC_UI_RGA_STREAMING
-bool rga_nv12_to_bgrx_fd(int src_fd, int dst_fd, int w, int h, int src_stride_y,
+/**
+ * 非 streaming 构型：源 fd 与目的 fd 都是 dma-buf，RGA 一趟直接写进显示槽。
+ * 源取可见带 [0, crop_y, src_w, crop_h]，输出 dst_w × dst_h；两者相等时走
+ * imcvtcolor_t 原快路径，不同才用 improcess 让 RGA 顺手缩放。
+ */
+bool rga_nv12_to_bgrx_fd(int src_fd, int dst_fd, int src_w, int src_h, int src_stride_y,
+                         int crop_y, int crop_h, int dst_w, int dst_h,
                          int dst_stride_px, IM_STATUS* out_st)
 {
-    if(src_fd < 0 || dst_fd < 0 || w <= 0 || h <= 0 || src_stride_y <= 0 ||
-       dst_stride_px <= 0) {
+    if(src_fd < 0 || dst_fd < 0 || src_w <= 0 || src_h <= 0 || src_stride_y <= 0 ||
+       crop_y < 0 || crop_h <= 0 || dst_w <= 0 || dst_h <= 0 || dst_stride_px <= 0) {
         return false;
     }
 
-    const int src_bytes = src_stride_y * h * 3 / 2;
-    const int dst_bytes = dst_stride_px * h * 4;
+    const int src_bytes = src_stride_y * src_h * 3 / 2;
+    const int dst_bytes = dst_stride_px * dst_h * 4;
 
-    rga_buffer_handle_t src_h = importbuffer_fd(src_fd, src_bytes);
-    rga_buffer_handle_t dst_h = importbuffer_fd(dst_fd, dst_bytes);
-    if(src_h == 0 || dst_h == 0) {
-        if(src_h) {
-            releasebuffer_handle(src_h);
+    rga_buffer_handle_t src_hnd = importbuffer_fd(src_fd, src_bytes);
+    rga_buffer_handle_t dst_hnd = importbuffer_fd(dst_fd, dst_bytes);
+    if(src_hnd == 0 || dst_hnd == 0) {
+        if(src_hnd) {
+            releasebuffer_handle(src_hnd);
         }
-        if(dst_h) {
-            releasebuffer_handle(dst_h);
+        if(dst_hnd) {
+            releasebuffer_handle(dst_hnd);
         }
         if(out_st) {
             *out_st = IM_STATUS_FAILED;
@@ -204,15 +249,20 @@ bool rga_nv12_to_bgrx_fd(int src_fd, int dst_fd, int w, int h, int src_stride_y,
         return false;
     }
 
-    rga_buffer_t src = wrapbuffer_handle(src_h, w, h, kNv12RgaFormat,
-                                         src_stride_y, h);
-    rga_buffer_t dst_buf = wrapbuffer_handle(dst_h, w, h, kDstRgaFormat,
-                                             dst_stride_px, h);
-    const im_rect rect{0, 0, w, h};
-    const bool ok = rga_cvtcolor_checked(src, dst_buf, rect, out_st);
+    rga_buffer_t src = wrapbuffer_handle(src_hnd, src_w, src_h, kNv12RgaFormat,
+                                         src_stride_y, src_h);
+    rga_buffer_t dst_buf = wrapbuffer_handle(dst_hnd, dst_w, dst_h, kDstRgaFormat,
+                                             dst_stride_px, dst_h);
+    const im_rect src_rect{0, crop_y, src_w, crop_h};
+    const im_rect dst_rect{0, 0, dst_w, dst_h};
+    const bool no_scale =
+        (crop_y == 0 && crop_h == src_h && dst_w == src_w && dst_h == src_h);
+    const bool ok =
+        no_scale ? rga_cvtcolor_checked(src, dst_buf, src_rect, out_st)
+                 : rga_cvtcolor_rect_checked(src, dst_buf, src_rect, dst_rect, out_st);
 
-    releasebuffer_handle(src_h);
-    releasebuffer_handle(dst_h);
+    releasebuffer_handle(src_hnd);
+    releasebuffer_handle(dst_hnd);
     return ok;
 }
 #endif
@@ -423,6 +473,10 @@ void CameraPreviewPlayer::start(lv_obj_t* image_widget, lv_obj_t* hint_widget,
     decode_target_fps_override_.store(0, std::memory_order_relaxed);
     ui_refresh_period_ms_ = kUiRefreshPeriodMs;
     last_anim_count_ = 0;
+    display_publish_us_.store(0, std::memory_order_relaxed);
+    ui_show_delay_us_sum_.store(0, std::memory_order_relaxed);
+    ui_show_delay_us_max_.store(0, std::memory_order_relaxed);
+    ui_show_samples_.store(0, std::memory_order_relaxed);
 
     if(image_) {
         lv_obj_add_flag(image_, LV_OBJ_FLAG_HIDDEN);
@@ -585,18 +639,44 @@ bool CameraPreviewPlayer::prepare_rga_streaming_cache()
     release_rga_streaming_cache();
     rga_src_direct_ = true;
 
-    if(!rga_path_ready_ || !rga_stream_src_.valid() || !rga_stream_dst_.valid()) {
+    /*
+     * 每个失败点都要单独报，且要带 errno / 序号 / 请求大小。
+     * 这里失败只会退化成软件转换（每帧 22ms）、画面照常出，外部看不出异常，
+     * 曾经因此静默降级很久才被发现；调用方那条 warning 分不清是哪一步挂的。
+     */
+    /* 缩放路径不分配 src scratch（一趟 improcess 直接读常驻导入的源 fd），
+     * 所以这里只对 1:1 条带路径要求 src scratch 有效。 */
+    const bool need_src_scratch = !scaled_output();
+    if(!rga_path_ready_ || (need_src_scratch && !rga_stream_src_.valid()) ||
+       !rga_stream_dst_.valid()) {
+        UPC_LOG_CAMERA_PREVIEW(Error,
+            "RGA streaming cache: scratch unavailable ready=%d need_src=%d "
+            "src_valid=%d dst_valid=%d",
+            rga_path_ready_ ? 1 : 0, need_src_scratch ? 1 : 0,
+            rga_stream_src_.valid() ? 1 : 0, rga_stream_dst_.valid() ? 1 : 0);
         return false;
     }
     if(dma_fds_.empty() || dma_nv12_bytes_ == 0u) {
+        UPC_LOG_CAMERA_PREVIEW(Error,
+            "RGA streaming cache: no source fds count=%zu nv12_bytes=%zu",
+            dma_fds_.size(), dma_nv12_bytes_);
         return false;
     }
 
     const rga_buffer_handle_t src_scratch_h =
-        importbuffer_fd(rga_stream_src_.fd(), static_cast<int>(rga_stream_src_.size()));
+        need_src_scratch
+            ? importbuffer_fd(rga_stream_src_.fd(),
+                              static_cast<int>(rga_stream_src_.size()))
+            : 0;
     const rga_buffer_handle_t dst_scratch_h =
         importbuffer_fd(rga_stream_dst_.fd(), static_cast<int>(rga_stream_dst_.size()));
-    if(src_scratch_h == 0 || dst_scratch_h == 0) {
+    if((need_src_scratch && src_scratch_h == 0) || dst_scratch_h == 0) {
+        UPC_LOG_CAMERA_PREVIEW(Error,
+            "RGA streaming cache: scratch import failed src_h=%d dst_h=%d "
+            "src_bytes=%zu dst_bytes=%zu (%s)",
+            static_cast<int>(src_scratch_h), static_cast<int>(dst_scratch_h),
+            rga_stream_src_.size(), rga_stream_dst_.size(),
+            std::strerror(errno));
         if(src_scratch_h) {
             releasebuffer_handle(src_scratch_h);
         }
@@ -608,17 +688,33 @@ bool CameraPreviewPlayer::prepare_rga_streaming_cache()
     rga_stream_src_handle_ = static_cast<uint32_t>(src_scratch_h);
     rga_stream_dst_handle_ = static_cast<uint32_t>(dst_scratch_h);
 
+    /*
+     * 逐 fd 常驻 mmap + importbuffer_fd。导入数量 = V4L2 缓冲数 + scratch 块数
+     * （1:1 条带路径 2 块；缩放路径只有 dst 一块），RGA 侧有上限：rk3568 实测
+     * 4 个缓冲（共 6 句柄）可用，6 个（8 句柄）必失败。所以调
+     * CAMERA_V4L2_BUF_COUNT 会直接影响这里，见 camera/device_config.hpp。
+     */
     rga_src_maps_.reserve(dma_fds_.size());
-    for(int fd : dma_fds_) {
+    for(size_t i = 0; i < dma_fds_.size(); ++i) {
+        const int fd = dma_fds_[i];
         if(fd < 0) {
+            UPC_LOG_CAMERA_PREVIEW(Error,
+                "RGA streaming cache: bad src fd idx=%zu", i);
             return false;
         }
         void* va = mmap(nullptr, dma_nv12_bytes_, PROT_READ, MAP_SHARED, fd, 0);
         if(va == MAP_FAILED) {
+            UPC_LOG_CAMERA_PREVIEW(Error,
+                "RGA streaming cache: mmap failed idx=%zu/%zu fd=%d size=%zu (%s)",
+                i, dma_fds_.size(), fd, dma_nv12_bytes_, std::strerror(errno));
             return false;
         }
         const rga_buffer_handle_t h = importbuffer_fd(fd, static_cast<int>(dma_nv12_bytes_));
         if(h == 0) {
+            UPC_LOG_CAMERA_PREVIEW(Error,
+                "RGA streaming cache: importbuffer_fd failed idx=%zu/%zu fd=%d "
+                "size=%zu (%s) — 缓冲数超过 RGA 导入上限？",
+                i, dma_fds_.size(), fd, dma_nv12_bytes_, std::strerror(errno));
             munmap(va, dma_nv12_bytes_);
             return false;
         }
@@ -673,6 +769,76 @@ void CameraPreviewPlayer::clear_frame_buffers()
     rga_path_ready_ = false;
 }
 
+/**
+ * 按视口定下解码输出几何：宽度贴满视口，纵向取源的居中可见带。
+ *
+ * 语义必须与 page_user_home 的 `cam_apply_layout()` 一致（宽度适配 + 上下居中
+ * 裁剪），这样 UI 侧算出来的残余 zoom 正好是 1.000，lv_image 走无缩放贴图快
+ * 路径，省掉整屏逐帧双线性重采样。视口尺寸直接从 image_ 的父节点读，不新增
+ * core → pages 的依赖。
+ *
+ * 任何一步取不到有效值就整体退回「与源同尺寸」，也就是改造前的 1:1 行为：
+ * 宁可让 LVGL 慢着画，也不能输出一张尺寸对不上的图。
+ */
+void CameraPreviewPlayer::resolve_output_geometry()
+{
+    out_width_  = width_;
+    out_height_ = height_;
+    src_crop_y_ = 0;
+    src_crop_h_ = height_;
+
+    if(width_ == 0 || height_ == 0) {
+        return;
+    }
+
+    lv_obj_t* vp = image_ ? lv_obj_get_parent(image_) : nullptr;
+    if(!vp) {
+        return;
+    }
+    lv_obj_update_layout(vp);
+    const int32_t vp_w = lv_obj_get_width(vp);
+    const int32_t vp_h = lv_obj_get_height(vp);
+    if(vp_w <= 0 || vp_h <= 0) {
+        return;
+    }
+    const uint32_t dst_w = static_cast<uint32_t>(vp_w);
+    if(dst_w == width_) {
+        /* 屏宽 = 流宽（1024 档）：本来就无缩放，纵向继续交给 LVGL 裁剪。 */
+        return;
+    }
+    /* RGA2 缩放范围 1/8 ~ 8 倍，超出这个区间硬件做不了，别白试。 */
+    if(dst_w > width_ * 8u || width_ > dst_w * 8u) {
+        UPC_LOG_CAMERA_PREVIEW(Warn,
+            "output geometry: scale out of RGA range src_w=%u vp_w=%u, keep 1:1",
+            width_, dst_w);
+        return;
+    }
+
+    /* 缩放系数 dst_w/width_；纵向按同一系数反算需要多少源行，再居中取带。 */
+    uint32_t crop_h = static_cast<uint32_t>(
+        (static_cast<uint64_t>(vp_h) * width_ + dst_w / 2u) / dst_w);
+    uint32_t dst_h = static_cast<uint32_t>(vp_h);
+    if(crop_h >= height_) {
+        /* 源不够高：整高上屏、上下留黑边，而不是把画面纵向拉伸。 */
+        crop_h = height_;
+        dst_h  = static_cast<uint32_t>(
+            (static_cast<uint64_t>(crop_h) * dst_w + width_ / 2u) / width_);
+    }
+    /*
+     * NV12 的裁剪偏移与高度都必须是偶数（UV 平面按 2x2 子采样）。取偶后纵向系数
+     * 与横向差不到 0.2%，肉眼看不出；这比为了系数严格相等而留一条 1px 黑边更好。
+     */
+    crop_h &= ~1u;
+    if(crop_h < 2u || dst_h < 2u) {
+        return;
+    }
+
+    out_width_  = dst_w;
+    out_height_ = dst_h;
+    src_crop_y_ = ((height_ - crop_h) / 2u) & ~1u;
+    src_crop_h_ = crop_h;
+}
+
 bool CameraPreviewPlayer::setup_frame_buffers(size_t frame_bytes,
                                               uint32_t row_stride_bytes)
 {
@@ -711,18 +877,34 @@ bool CameraPreviewPlayer::setup_frame_buffers(size_t frame_bytes,
 #if defined(UPC_UI_RGA_STREAMING) && UPC_UI_RGA_STREAMING
     if(rga_path_ready_) {
         rga_stream_lines_ = kRgaStreamLines;
-        const size_t src_chunk_bytes = static_cast<size_t>(src_stride_y_) *
-                                       static_cast<size_t>(rga_stream_lines_) *
-                                       3u / 2u;
-        const size_t dst_chunk_bytes = static_cast<size_t>(pixel_stride_px_) *
-                                       static_cast<size_t>(rga_stream_lines_) * 4u;
-        if(src_chunk_bytes == 0u || dst_chunk_bytes == 0u ||
-           !rga_stream_src_.alloc(src_chunk_bytes) ||
+        /*
+         * 两种 scratch 布局，取决于要不要缩放：
+         *
+         * - 需要缩放：一趟 improcess 直接出整张上屏图，dst scratch 按整幅输出分配。
+         *   刻意不按输出行分条带——RGA 的缩放器只在给定 src_rect 内采样，条带边界
+         *   会钳出一条 1px 接缝。整幅输出（1280x800 约 4MB）比原来整帧 BGRX
+         *   （1080x1280 约 5.5MB）还小，代价可接受。
+         *   src scratch 只有 1:1 条带路径的 memcpy 回退才用得上，这里不分配，
+         *   常驻导入句柄数因此还少一个（见 UI.md「RGA 常驻导入数受相机缓冲数约束」）。
+         * - 无需缩放：沿用原来的按源行分条带，src/dst 各一块条带大小的 scratch。
+         */
+        const bool scaled = scaled_output();
+        const size_t src_chunk_bytes =
+            scaled ? 0u
+                   : (static_cast<size_t>(src_stride_y_) *
+                      static_cast<size_t>(rga_stream_lines_) * 3u / 2u);
+        const size_t dst_chunk_bytes =
+            scaled ? (static_cast<size_t>(pixel_stride_px_) *
+                      static_cast<size_t>(out_height_) * 4u)
+                   : (static_cast<size_t>(pixel_stride_px_) *
+                      static_cast<size_t>(rga_stream_lines_) * 4u);
+        if(dst_chunk_bytes == 0u || (!scaled && src_chunk_bytes == 0u) ||
+           (!scaled && !rga_stream_src_.alloc(src_chunk_bytes)) ||
            !rga_stream_dst_.alloc(dst_chunk_bytes)) {
             UPC_LOG_CAMERA_PREVIEW(Warn,
-                "RGA streaming scratch alloc failed src=%zu dst=%zu; "
+                "RGA streaming scratch alloc failed scaled=%d src=%zu dst=%zu; "
                 "fallback to software convert",
-                src_chunk_bytes, dst_chunk_bytes);
+                scaled ? 1 : 0, src_chunk_bytes, dst_chunk_bytes);
             rga_stream_src_.free();
             rga_stream_dst_.free();
             rga_path_ready_ = false;
@@ -738,8 +920,9 @@ bool CameraPreviewPlayer::setup_frame_buffers(size_t frame_bytes,
         img_dsc_[i]              = {};
         img_dsc_[i].header.magic = LV_IMAGE_HEADER_MAGIC;
         img_dsc_[i].header.cf    = LV_COLOR_FORMAT_XRGB8888;
-        img_dsc_[i].header.w     = width_;
-        img_dsc_[i].header.h     = height_;
+        /* 上屏尺寸 = 输出几何，不是相机流的原始尺寸（见 resolve_output_geometry）。 */
+        img_dsc_[i].header.w     = out_width_;
+        img_dsc_[i].header.h     = out_height_;
         img_dsc_[i].header.stride = row_stride_bytes;
         img_dsc_[i].data         = data;
         img_dsc_[i].data_size    = frame_bytes;
@@ -842,10 +1025,14 @@ void CameraPreviewPlayer::apply_stream_start_ui(
     UPC_LOG_CAMERA_PREVIEW(Info, "dma fds adopted from IPC count=%zu size=%zu",
                            dma_fds_.size(), dma_nv12_bytes_);
 
-    pixel_stride_px_ = (width_ + 3u) & ~3u;
+    /* 输出几何必须在算 stride / frame_bytes 之前定下来：显示槽按上屏尺寸分配，
+     * 不再按相机流的原始尺寸。 */
+    resolve_output_geometry();
+
+    pixel_stride_px_ = (out_width_ + 3u) & ~3u;
     // LVGL XRGB8888 每行按 4 字节像素对齐，像素 stride 向上 4 对齐。
     const size_t frame_bytes =
-        static_cast<size_t>(pixel_stride_px_) * height_ * 4u;
+        static_cast<size_t>(pixel_stride_px_) * out_height_ * 4u;
     const uint32_t row_stride_bytes = pixel_stride_px_ * 4u;
 
     if(!setup_frame_buffers(frame_bytes, row_stride_bytes)) {
@@ -869,11 +1056,16 @@ void CameraPreviewPlayer::apply_stream_start_ui(
     }
 
     logged_first_ui_show_ = false;
+    /* out=/crop= 是排查 8fps 那类问题的第一现场：out 与视口一致才说明 LVGL 走的
+     * 是无缩放贴图，scaled=0 则表示退回了 1:1（此时重采样又回到 LVGL 身上）。 */
     UPC_LOG_CAMERA_PREVIEW(Info,
-        "decode ready scene=%s image=%p %ux%u@%u fps frame_bytes=%zu "
-        "rga_path=%d row_stride=%u px_stride=%u src_stride=%u ui_timer=%ums",
+        "decode ready scene=%s image=%p %ux%u@%u fps out=%ux%u crop=%u+%u scaled=%d "
+        "frame_bytes=%zu rga_path=%d row_stride=%u px_stride=%u src_stride=%u "
+        "ui_timer=%ums",
         scene_[0] ? scene_ : "(none)", static_cast<void*>(image_),
-        width_, height_, fps_, frame_bytes, rga_path_ready_ ? 1 : 0,
+        width_, height_, fps_, out_width_, out_height_, src_crop_y_, src_crop_h_,
+        scaled_output() ? 1 : 0,
+        frame_bytes, rga_path_ready_ ? 1 : 0,
         row_stride_bytes, pixel_stride_px_, src_stride_y_, kUiRefreshPeriodMs);
 
     display_buf_.store(-1);
@@ -1024,12 +1216,17 @@ void CameraPreviewPlayer::decode_thread_fn()
     /* ---- 下面这一组只用于每 5 秒汇总一次 Debug 日志，不影响功能 ---- */
     uint32_t frames_ok     = 0; /* 转换成功次数 */
     uint32_t frames_fail   = 0; /* 转换失败次数 */
+    uint32_t frames_skip   = 0; /* 交互降频时取帧后直接归还、跳过转换的次数 */
     uint32_t frames_no_slot = 0; /* ring 里暂时没有可取帧的次数 */
     uint32_t last_seq      = 0; /* 最近一帧的 seq，便于对照 Camera 侧 */
     uint64_t convert_us_sum = 0; /* 转换耗时累计（微秒） */
     uint64_t convert_us_max = 0; /* 单次转换最大耗时 */
     uint64_t loop_us_sum    = 0; /* 整圈循环耗时累计 */
     uint64_t loop_us_max    = 0; /* 单圈最大耗时 */
+    uint64_t last_convert_ms = 0; /* 上次真正做转换的时刻，交互降频用 */
+    uint64_t shm_wait_us_sum = 0; /* Camera commit → 本线程取到，累计 */
+    uint64_t shm_wait_us_max = 0; /* 同上单帧最大值 */
+    uint32_t shm_wait_samples = 0;
     auto stats_since = std::chrono::steady_clock::now();
 
     UPC_LOG_CAMERA_PREVIEW(Info,
@@ -1055,7 +1252,8 @@ void CameraPreviewPlayer::decode_thread_fn()
         if(!frame) {
             /* ring 暂时没有 READY 槽：稍等再试，避免空转打满 CPU。 */
             ++frames_no_slot;
-            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            std::this_thread::sleep_for(
+                std::chrono::milliseconds(kNoFrameNapMs));
         } else {
             /* ---- 有帧：做 NV12→BGRX 并交给 UI ---- */
 
@@ -1070,6 +1268,23 @@ void CameraPreviewPlayer::decode_thread_fn()
                 logged_first_meta = true;
             }
             last_seq = frame->seq;
+
+            /*
+             * SHM 等待时间：Camera commit 该帧到本线程取到它之间的空等。
+             * 两侧时间戳同源（CLOCK_MONOTONIC），所以可直接相减。
+             * 这一段本质上是轮询粒度带来的延迟，理论上不超过 kNoFrameNapMs。
+             */
+            if(frame->timestamp_us != 0) {
+                const uint64_t now_us = monotonic_us();
+                if(now_us > frame->timestamp_us) {
+                    const uint64_t wait_us = now_us - frame->timestamp_us;
+                    shm_wait_us_sum += wait_us;
+                    ++shm_wait_samples;
+                    if(wait_us > shm_wait_us_max) {
+                        shm_wait_us_max = wait_us;
+                    }
+                }
+            }
 
             /*
              * [步骤 2] 挑选本帧要写入的显示槽。
@@ -1092,30 +1307,57 @@ void CameraPreviewPlayer::decode_thread_fn()
              *   - display_buf_ = write_idx（发布给 UI；release 保证 UI acquire 能看见）
              *   - write_idx 前进，下一圈换槽
              */
-            const auto cvt_start = std::chrono::steady_clock::now();
-            if(convert_frame(*frame, write_idx)) {
-                ++frames_ok;
-                last_frame_ok_ms_.store(monotonic_ms(), std::memory_order_relaxed);
-                display_buf_.store(write_idx, std::memory_order_release);
-                if(!logged_first_out) {
-                    /* 抽查输出缓冲角点/中心像素，确认不是全黑或格式错乱。 */
-                    log_bgrx_probe("first_convert_out", slots_[write_idx].data(),
-                                   width_, height_, pixel_stride_px_);
-                    logged_first_out = true;
+            /*
+             * 交互期（按压 / 有动画）只降低「转换」频率，取帧与归还槽位仍按
+             * 相机帧率全速跑。若连取帧一起降频，滞留的槽位会占满 Camera 的
+             * 在飞窗口并反压采集线程，把视觉与直播一起拖到交互帧率。
+             */
+            bool want_convert = true;
+            const uint32_t override_fps =
+                decode_target_fps_override_.load(std::memory_order_relaxed);
+            if(override_fps > 0u && override_fps < base_fps) {
+                const uint64_t now_ms = monotonic_ms();
+                const uint64_t min_gap_ms = 1000u / override_fps;
+                if(last_convert_ms != 0u &&
+                   now_ms - last_convert_ms < min_gap_ms) {
+                    want_convert = false;
+                } else {
+                    last_convert_ms = now_ms;
                 }
-                write_idx = (write_idx + 1) % kFrameSlots;
-            } else {
-                ++frames_fail;
             }
 
-            /* 统计本次转换耗时（微秒）。 */
-            const uint64_t cvt_us = static_cast<uint64_t>(
-                std::chrono::duration_cast<std::chrono::microseconds>(
-                    std::chrono::steady_clock::now() - cvt_start)
-                    .count());
-            convert_us_sum += cvt_us;
-            if(cvt_us > convert_us_max) {
-                convert_us_max = cvt_us;
+            if(want_convert) {
+                const auto cvt_start = std::chrono::steady_clock::now();
+                if(convert_frame(*frame, write_idx)) {
+                    ++frames_ok;
+                    last_frame_ok_ms_.store(monotonic_ms(), std::memory_order_relaxed);
+                    /* 记录发布时刻，供 ui_timer_cb 算出「转换完成 → 上屏」延迟。 */
+                    display_publish_us_.store(monotonic_us(),
+                                              std::memory_order_relaxed);
+                    display_buf_.store(write_idx, std::memory_order_release);
+                    if(!logged_first_out) {
+                        /* 抽查输出缓冲角点/中心像素，确认不是全黑或格式错乱。
+                         * 尺寸取输出几何，否则中心点会算到缓冲外面去。 */
+                        log_bgrx_probe("first_convert_out", slots_[write_idx].data(),
+                                       out_width_, out_height_, pixel_stride_px_);
+                        logged_first_out = true;
+                    }
+                    write_idx = (write_idx + 1) % kFrameSlots;
+                } else {
+                    ++frames_fail;
+                }
+
+                /* 统计本次转换耗时（微秒）。 */
+                const uint64_t cvt_us = static_cast<uint64_t>(
+                    std::chrono::duration_cast<std::chrono::microseconds>(
+                        std::chrono::steady_clock::now() - cvt_start)
+                        .count());
+                convert_us_sum += cvt_us;
+                if(cvt_us > convert_us_max) {
+                    convert_us_max = cvt_us;
+                }
+            } else {
+                ++frames_skip;
             }
 
             /*
@@ -1140,47 +1382,63 @@ void CameraPreviewPlayer::decode_thread_fn()
         if(now - stats_since >= std::chrono::seconds(5)) {
             const uint32_t timed =
                 frames_ok + frames_fail; /* 有 convert 计时的帧数 */
-            const uint32_t loops = frames_ok + frames_fail + frames_no_slot;
+            const uint32_t loops =
+                frames_ok + frames_fail + frames_skip + frames_no_slot;
             const uint64_t cvt_avg =
                 timed > 0 ? (convert_us_sum / timed) : 0;
             const uint64_t loop_avg =
                 loops > 0 ? (loop_us_sum / loops) : 0;
+            /* 取走 ui_timer_cb 累积的「发布 → 上屏」延迟并清零。 */
+            const uint32_t show_samples =
+                ui_show_samples_.exchange(0, std::memory_order_relaxed);
+            const uint64_t show_sum =
+                ui_show_delay_us_sum_.exchange(0, std::memory_order_relaxed);
+            const uint64_t show_max =
+                ui_show_delay_us_max_.exchange(0, std::memory_order_relaxed);
+            const uint64_t shm_wait_avg =
+                shm_wait_samples > 0 ? (shm_wait_us_sum / shm_wait_samples) : 0;
+            const uint64_t show_avg =
+                show_samples > 0 ? (show_sum / show_samples) : 0;
             UPC_LOG_CAMERA_PREVIEW(Debug,
-                "decode 5s: scene=%s image=%p ok=%u fail=%u no_frame=%u "
+                "decode 5s: scene=%s image=%p ok=%u fail=%u skip=%u no_frame=%u "
                 "last_seq=%u display_buf=%d "
                 "cvt_avg_us=%llu cvt_max_us=%llu "
-                "loop_avg_us=%llu loop_max_us=%llu rga=%d",
+                "loop_avg_us=%llu loop_max_us=%llu rga=%d "
+                "shm_wait_avg_us=%llu shm_wait_max_us=%llu "
+                "show_avg_us=%llu show_max_us=%llu show_n=%u",
                 scene_[0] ? scene_ : "(none)", static_cast<void*>(image_),
-                frames_ok, frames_fail, frames_no_slot, last_seq,
+                frames_ok, frames_fail, frames_skip, frames_no_slot, last_seq,
                 display_buf_.load(std::memory_order_relaxed),
                 static_cast<unsigned long long>(cvt_avg),
                 static_cast<unsigned long long>(convert_us_max),
                 static_cast<unsigned long long>(loop_avg),
                 static_cast<unsigned long long>(loop_us_max),
-                rga_path_ready_ ? 1 : 0);
+                rga_path_ready_ ? 1 : 0,
+                static_cast<unsigned long long>(shm_wait_avg),
+                static_cast<unsigned long long>(shm_wait_us_max),
+                static_cast<unsigned long long>(show_avg),
+                static_cast<unsigned long long>(show_max),
+                show_samples);
             /* 清零窗口统计，开始下一个 5 秒。 */
-            frames_ok = frames_no_slot = frames_fail = 0;
+            frames_ok = frames_no_slot = frames_fail = frames_skip = 0;
             convert_us_sum = convert_us_max = 0;
             loop_us_sum = loop_us_max = 0;
+            shm_wait_us_sum = shm_wait_us_max = 0;
+            shm_wait_samples = 0;
             stats_since = now;
         }
 
         /*
-         * [步骤 5] 帧率限速。
-         * 若本圈比目标周期还快，睡到接近 frame_period，避免空转占满 CPU；
-         * 若已经超时（转换慢），则不再睡，直接进入下一圈。
+         * [步骤 5] 轮询节奏。
+         * 不再按相机帧周期补睡。限速由 acquire_latest_frame 天然承担：
+         * 没有比 last_seq 更新的帧它就返回 nullopt，所以转换频率不会超过
+         * 相机帧率。而补睡会把 SHM 的轮询粒度从 kNoFrameNapMs 拉到整整一个
+         * 帧周期（无帧那一圈 elapsed 只有 5ms，末尾要再睡 28ms），凭空给
+         * 预览加上平均半帧的等待。
+         *
+         * 交互降频只在上面作用于转换，绝不推迟取帧与归还槽位，否则槽位滞留
+         * 会占满 Camera 的在飞窗口并反压采集线程。
          */
-        const auto elapsed = now - tick_start;
-        uint32_t target_fps =
-            decode_target_fps_override_.load(std::memory_order_relaxed);
-        if(target_fps == 0u || target_fps > base_fps) {
-            target_fps = base_fps;
-        }
-        const auto frame_period = std::chrono::microseconds(
-            1000000u / (target_fps > 0 ? target_fps : 1u));
-        if(elapsed < frame_period) {
-            std::this_thread::sleep_for(frame_period - elapsed);
-        }
     }
 
     UPC_LOG_CAMERA_PREVIEW(Info, "decode thread exiting scene=%s",
@@ -1321,6 +1579,80 @@ bool CameraPreviewPlayer::convert_frame_rga_streaming(uint32_t src_buf_idx, int 
 #endif
 }
 
+/**
+ * 缩放路径：一趟 improcess 把源可见带 [0, src_crop_y_, width_, src_crop_h_]
+ * 裁剪 + 缩放 + NV12→BGRX 成整张 out_width_ × out_height_ 的上屏图。
+ *
+ * 源用开流时常驻导入的句柄，不再逐帧 import；目的先落 dma scratch，再一次
+ * memcpy 进显示槽（显示槽是普通内存，见 setup_frame_buffers 的说明）。这次
+ * memcpy 约 4MB，跑在解码线程上，不占 LVGL 主循环。
+ *
+ * 不分条带是刻意的：RGA 缩放器只在给定 src_rect 内采样，按输出行切条带会在每个
+ * 边界钳出一条 1px 接缝。
+ */
+bool CameraPreviewPlayer::convert_frame_rga_scaled(uint32_t src_buf_idx, int src_fd,
+                                                   uint8_t* dst, int src_stride_y,
+                                                   int dst_stride_px)
+{
+#if !defined(UPC_UI_RGA_STREAMING) || !UPC_UI_RGA_STREAMING
+    (void)src_buf_idx;
+    (void)src_fd;
+    (void)dst;
+    (void)src_stride_y;
+    (void)dst_stride_px;
+    return false;
+#else
+    if(src_fd < 0 || src_buf_idx >= rga_src_maps_.size() || !dst ||
+       src_stride_y <= 0 || dst_stride_px <= 0 ||
+       !rga_stream_dst_.valid() || rga_stream_dst_handle_ == 0u) {
+        return false;
+    }
+    const RgaSrcMap& src_map = rga_src_maps_[src_buf_idx];
+    if(src_map.fd != src_fd || src_map.handle == 0u) {
+        return false;
+    }
+
+    const int src_w = static_cast<int>(width_);
+    const int src_h = static_cast<int>(height_);
+    const int out_w = static_cast<int>(out_width_);
+    const int out_h = static_cast<int>(out_height_);
+    const size_t out_bytes =
+        static_cast<size_t>(dst_stride_px) * static_cast<size_t>(out_h) * 4u;
+    if(out_bytes > rga_stream_dst_.size()) {
+        return false;
+    }
+
+    rga_buffer_t src = wrapbuffer_handle(
+        static_cast<rga_buffer_handle_t>(src_map.handle), src_w, src_h,
+        kNv12RgaFormat, src_stride_y, src_h);
+    rga_buffer_t dst_buf = wrapbuffer_handle(
+        static_cast<rga_buffer_handle_t>(rga_stream_dst_handle_), out_w, out_h,
+        kDstRgaFormat, dst_stride_px, out_h);
+    const im_rect src_rect{0, static_cast<int>(src_crop_y_), src_w,
+                           static_cast<int>(src_crop_h_)};
+    const im_rect dst_rect{0, 0, out_w, out_h};
+
+    IM_STATUS st = IM_STATUS_FAILED;
+    if(!rga_cvtcolor_rect_checked(src, dst_buf, src_rect, dst_rect, &st)) {
+        static std::atomic<uint32_t> fail_log_count{0};
+        const uint32_t n = fail_log_count.fetch_add(1, std::memory_order_relaxed);
+        if(n < 8u) {
+            UPC_LOG_CAMERA_PREVIEW(Warn,
+                "RGA scaled cvt fail #%u st=%d (%s) src=%dx%d crop=%u+%u "
+                "dst=%dx%d src_stride=%d",
+                n + 1u, static_cast<int>(st), rga_status_str(st), src_w, src_h,
+                src_crop_y_, src_crop_h_, out_w, out_h, src_stride_y);
+        }
+        return false;
+    }
+
+    dma_buf_sync_start_read(rga_stream_dst_.fd());
+    std::memcpy(dst, rga_stream_dst_.va(), out_bytes);
+    dma_buf_sync_end_read(rga_stream_dst_.fd());
+    return true;
+#endif
+}
+
 bool CameraPreviewPlayer::convert_frame_dma(const upc_ipc::IpcDmaFrameView& frame,
                                             int slot_idx)
 {
@@ -1351,8 +1683,9 @@ bool CameraPreviewPlayer::convert_frame_dma(const upc_ipc::IpcDmaFrameView& fram
             ? src_stride_y_
             : (frame.stride_y() > 0 ? frame.stride_y() : width_));
     const int dst_stride_px = static_cast<int>(pixel_stride_px_);
+    /* 显示槽按输出几何分配，不是按源高，见 resolve_output_geometry()。 */
     const size_t need_dst   =
-        static_cast<size_t>(dst_stride_px) * static_cast<size_t>(h) * 4u;
+        static_cast<size_t>(dst_stride_px) * static_cast<size_t>(out_height_) * 4u;
     if(slot.size() < need_dst) {
         return false;
     }
@@ -1373,12 +1706,20 @@ bool CameraPreviewPlayer::convert_frame_dma(const upc_ipc::IpcDmaFrameView& fram
         for(int attempt = 0; attempt < kRgaRetryCount; ++attempt) {
             IM_STATUS st = IM_STATUS_FAILED;
 #if defined(UPC_UI_RGA_STREAMING) && UPC_UI_RGA_STREAMING
-            const bool rga_ok = convert_frame_rga_streaming(
-                frame.buffer_idx, src_fd, slot_idx, dst, w, h, src_stride_y,
-                dst_stride_px);
+            /* 要缩放就走一趟整幅 improcess；否则沿用原来的按源行分条带。 */
+            const bool rga_ok =
+                scaled_output()
+                    ? convert_frame_rga_scaled(frame.buffer_idx, src_fd, dst,
+                                               src_stride_y, dst_stride_px)
+                    : convert_frame_rga_streaming(frame.buffer_idx, src_fd, slot_idx,
+                                                  dst, w, h, src_stride_y,
+                                                  dst_stride_px);
 #else
-            const bool rga_ok = rga_nv12_to_bgrx_fd(src_fd, slot.fd(), w, h,
-                                                    src_stride_y, dst_stride_px, &st);
+            const bool rga_ok = rga_nv12_to_bgrx_fd(
+                src_fd, slot.fd(), w, h, src_stride_y,
+                static_cast<int>(src_crop_y_), static_cast<int>(src_crop_h_),
+                static_cast<int>(out_width_), static_cast<int>(out_height_),
+                dst_stride_px, &st);
 #endif
             if(rga_ok) {
 #if !defined(UPC_UI_RGA_STREAMING) || !UPC_UI_RGA_STREAMING
@@ -1431,7 +1772,9 @@ bool CameraPreviewPlayer::convert_frame_dma(const upc_ipc::IpcDmaFrameView& fram
         dma_buf_sync_start_write(slot.fd());
     }
     nv12_to_bgrx_sw(src_y, src_uv, w, h, src_stride_y,
-                    dst, dst_stride_px);
+                    static_cast<int>(src_crop_y_), static_cast<int>(src_crop_h_),
+                    dst, static_cast<int>(out_width_), static_cast<int>(out_height_),
+                    dst_stride_px);
     munmap(src_va, src_size);
     dma_buf_sync_end_read(src_fd);
     if(slot.is_dma()) {
@@ -1583,6 +1926,29 @@ void CameraPreviewPlayer::ui_timer_cb(lv_timer_t* timer)
     // UI 定时器只做“指针切换”，不参与像素转换，保持主线程轻量。
     self->shown_buf_.store(idx, std::memory_order_relaxed);
 
+    /*
+     * 「转换完成 → 上屏」延迟：解码线程发布 display_buf_ 的时刻到此刻。
+     * 这一段等的是定时器下一拍，理论上不超过 ui_refresh_period_ms_。
+     * exchange(0) 保证同一帧只统计一次；由解码线程的 5s 日志读出并清零。
+     */
+    const uint64_t publish_us =
+        self->display_publish_us_.exchange(0, std::memory_order_relaxed);
+    if(publish_us != 0) {
+        const uint64_t now_us = monotonic_us();
+        if(now_us > publish_us) {
+            const uint64_t delay_us = now_us - publish_us;
+            self->ui_show_delay_us_sum_.fetch_add(delay_us,
+                                                  std::memory_order_relaxed);
+            self->ui_show_samples_.fetch_add(1, std::memory_order_relaxed);
+            /* 诊断量，max 用「读-比-写」近似即可，无需 CAS。 */
+            if(delay_us >
+               self->ui_show_delay_us_max_.load(std::memory_order_relaxed)) {
+                self->ui_show_delay_us_max_.store(delay_us,
+                                                  std::memory_order_relaxed);
+            }
+        }
+    }
+
     const bool first_show = !self->logged_first_ui_show_;
     if(first_show) {
         self->logged_first_ui_show_ = true;
@@ -1594,7 +1960,9 @@ void CameraPreviewPlayer::ui_timer_cb(lv_timer_t* timer)
 
     lv_image_set_src(self->image_, &self->img_dsc_[idx]);
     if(first_show) {
-        page_user_home_update_camera_preview_layout(self->width_, self->height_);
+        /* 传输出几何：与视口一致时 cam_apply_layout 算出的 zoom 正好 1.000。 */
+        page_user_home_update_camera_preview_layout(self->out_width_,
+                                                    self->out_height_);
     }
     lv_obj_clear_flag(self->image_, LV_OBJ_FLAG_HIDDEN);
     if(self->hint_) {
@@ -1612,6 +1980,10 @@ void CameraPreviewPlayer::reset_ui()
     display_buf_.store(-1);
     width_  = 0;
     height_ = 0;
+    out_width_  = 0;
+    out_height_ = 0;
+    src_crop_y_ = 0;
+    src_crop_h_ = 0;
     pixel_stride_px_ = 0;
     src_stride_y_    = 0;
     pending_image_   = nullptr;
@@ -1626,6 +1998,10 @@ void CameraPreviewPlayer::reset_ui()
     decode_target_fps_override_.store(0, std::memory_order_relaxed);
     ui_refresh_period_ms_ = kUiRefreshPeriodMs;
     last_anim_count_ = 0;
+    display_publish_us_.store(0, std::memory_order_relaxed);
+    ui_show_delay_us_sum_.store(0, std::memory_order_relaxed);
+    ui_show_delay_us_max_.store(0, std::memory_order_relaxed);
+    ui_show_samples_.store(0, std::memory_order_relaxed);
     pending_start_rsp_valid_ = false;
     decode_retiring_.store(false, std::memory_order_relaxed);
     retire_state_.reset();

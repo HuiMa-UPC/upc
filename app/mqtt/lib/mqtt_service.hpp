@@ -12,6 +12,7 @@
 #include <condition_variable>
 #include <cstdint>
 #include <cstring>
+#include <filesystem>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -39,7 +40,7 @@ public:
         std::string object_key;
         std::string upload_url;
         int64_t upload_url_expires_at = 0; /**< Unix 秒 */
-        int64_t max_packet_size = 0;       /**< 密文包上限（含 nonce+tag） */
+        int64_t max_packet_size = 0;       /**< 密文包上限（含 nonce+tag）；已屏蔽，仅记录 */
         std::string encrypt_salt_b64;      /**< 下行原文，回显不重编 */
         std::vector<std::string> topic_files;
     };
@@ -48,7 +49,7 @@ public:
         std::string file;
         bool collected = false;
         int64_t size = 0;       /**< collected=true 或 empty/size_exceeded 时 */
-        std::string reason;     /**< collected=false 时：not_found/empty/size_exceeded */
+        std::string reason;     /**< collected=false 时：not_found/empty（size_exceeded 已屏蔽） */
     };
 
 private:
@@ -110,6 +111,37 @@ private:
         std::string sha256;
         uint64_t size_bytes = 0;
         std::string file_name;
+    };
+
+    /**
+     * SOC 升级的待应用固件状态（全包与应用层共用一份）。
+     *
+     * 落盘到 UPC_SOC_OTA_PENDING_FILE：用户可以选"稍后"再重启，中间可能隔着
+     * 断电或进程重启，只放内存会让那个几百 MB 的 .img 变成没有入口的孤儿文件。
+     */
+    struct SocOtaPending {
+        std::string task_id;
+        std::string version;
+        /** Image 为 .img 文件路径；App 为已落盘的槽目录路径。存在性检查通用 */
+        std::string payload_path;
+        uint64_t    payload_bytes = 0;
+        middleware::SocOtaKind kind = middleware::SocOtaKind::Image;
+        /** App 专用：新文件所在的槽名（APP1/APP2），应用时据此切槽 */
+        std::string target_slot;
+    };
+
+    /**
+     * 包内 ota_manifest.json 的解析结果。
+     *
+     * present=false 表示包里没有这个文件，此时升级方式退回按解包内容推断，
+     * 以兼容加入描述文件之前打好的纯 .img 包。
+     */
+    struct SocOtaManifest {
+        bool present = false;
+        std::string type;                 /**< "image" / "app"，其它值视为非法 */
+        std::string version;
+        std::vector<std::string> files;   /**< 应用层的文件清单，空表示不校验 */
+        std::string min_compat;           /**< 允许升级的最低当前版本，空表示不限 */
     };
 
     void subscribe_messages();
@@ -234,6 +266,57 @@ private:
                         const char* default_fail);
     void run_manifest_download_task(std::string task_id, std::vector<OtaComponent> components);
     void start_manifest_download(std::string task_id, std::vector<OtaComponent> components);
+
+    /* ---- SOC 升级（mqtt_service_soc_ota.cpp） ---- */
+    /**
+     * 接过已下载并通过 SHA256 的 tar.gz，完成 SOC 升级的落盘准备。
+     *
+     * 统一解包到 /userdata 下的临时目录后判别升级方式再分流：全包直接 rename
+     * 到固定路径（同分区零拷贝），应用层再跨分区拷进槽（只有十几 MB）。反过来
+     * 先解到槽根分区的话，几百 MB 的全包既放不下也要多一次跨分区搬运。
+     * 失败时把原因码写入 err_code 由调用方统一上报。
+     */
+    bool run_soc_ota_stage(const std::string& task_id,
+                           const OtaComponent& comp,
+                           const std::filesystem::path& tar_gz,
+                           middleware::OtaProgressPayload& progress,
+                           std::string& err_code);
+    /** 全包分支：校验唯一 .img 并 rename 到 UPC_SOC_OTA_IMG。 */
+    bool stage_soc_image(const std::string& task_id,
+                         const OtaComponent& comp,
+                         const std::filesystem::path& extract_dir,
+                         SocOtaPending& pending,
+                         std::string& err_code);
+    /** 应用层分支：校验文件清单并落到非活动槽，不切槽（切槽在 apply 阶段）。 */
+    bool stage_soc_app(const std::string& task_id,
+                       const OtaComponent& comp,
+                       const std::filesystem::path& extract_dir,
+                       const SocOtaManifest& manifest,
+                       SocOtaPending& pending,
+                       std::string& err_code);
+    /** 读取包内 ota_manifest.json；文件不存在返回 true 且 present=false。 */
+    static bool parse_soc_ota_manifest(const std::filesystem::path& extract_dir,
+                                       SocOtaManifest& out);
+    /**
+     * 判定当前运行的槽名。
+     *
+     * 优先用 /proc/self/exe 而不是状态文件：它反映的是真实运行状态，状态文件
+     * 万一与现实不符（上次回滚写失败等），也绝不会把新固件覆盖到正在跑的槽上。
+     * 可执行文件不在槽内（未迁移的老布局、开发机直跑）时返回 false。
+     */
+    static bool app_slot_current(std::string& out);
+    /** 读槽状态文件的单个字段，缺文件或缺字段返回 false。 */
+    static bool app_slot_state_get(const char* key, std::string& out);
+    void on_soc_ota_apply(const middleware::Message& msg);
+    /** MQTT 首次连上云端后补发一次遗留固件提示（比 UI 先起，早发会丢）。 */
+    void notify_soc_ota_ready_after_connect();
+    void publish_soc_ota_ready(const SocOtaPending& pending);
+    void publish_soc_ota_apply_rsp(middleware::SocOtaApplyAction action,
+                                   middleware::SocOtaApplyResult result,
+                                   const char* reason);
+    bool soc_ota_pending_load(SocOtaPending& out) const;
+    bool soc_ota_pending_save(const SocOtaPending& pending) const;
+    void soc_ota_pending_clear() const;
     void request_firmware_versions_force(bool need_mcu, bool need_galvo);
     void poll_ota_heartbeat_wait();
     static bool parse_mcu_version_text(const std::string& text,
@@ -325,6 +408,8 @@ private:
     OtaNotify pending_ota_notify_{};
     std::thread ota_download_thread_;
     bool ota_download_running_ = false;
+    /** 本次运行是否已补发过遗留固件提示，避免每次重连都弹一遍。 */
+    bool soc_ota_ready_notified_ = false;
     ApplyOtaSync galvo_ota_sync_{};
     std::mutex galvo_ota_mtx_;
     std::condition_variable galvo_ota_cv_;

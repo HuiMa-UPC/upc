@@ -27,19 +27,26 @@ IPC 收包、`deliver_local`（Proxy 回调）与 LVGL 渲染**同一线程**；
 connect_ipc_with_retry();  // hub + add_ipc_peer
 platform_init();
 ui::app_init(lv_scr_act());
+ui::perf_attach_display(lv_display_get_default());   // 主线程性能探针
 
 while (!g_shutdown_requested) {
-    port.process(0);                        // 渲染前先 drain IPC
+    const uint64_t t0 = ui::perf_now_us();
+    port.process(8);                        // 带超时的 poll，同时限制一圈的下限
+    const uint64_t t1 = ui::perf_now_us();
     const uint32_t delay = lv_timer_handler();
-    int wait_ms = delay > 0 ? (int)delay : 1;
-    wait_ms = std::min(wait_ms, 8);         // 限制 blocked poll，避免拖死 IPC
-    port.process(wait_ms);
+    (void)delay;
+    const uint64_t t2 = ui::perf_now_us();
     port.process(0);                        // 同帧 Req/Rsp
+    const uint64_t t3 = ui::perf_now_us();
     upc_sys_monitor_tick();
+    const uint64_t t4 = ui::perf_now_us();
+    ui::perf_loop_sample(t1 - t0, t2 - t1, t3 - t2, t4 - t3);
 }
 ```
 
 后端→后端（如 Glavo→Media 打印录像）由 Hub 在 `process()` 内 **`IPC_FWD` 同步转发**，不经过 UiMsgProxy。预览像素走 dma fd 旁路 + SHM 元数据环，不走 MsgPort payload。
+
+**一圈的时间就是所有 `lv_timer` 的真实周期上限**：LVGL 一次 `lv_timer_handler()` 里每个到期定时器最多只跑一次，不管已经过了几个周期。所以摄像头预览换帧（`ui_timer_cb`，周期写 16ms）实际多久跑一次，取决于这一圈有多长，而不是取决于 16。分段耗时由 `ui::perf_loop_sample` 每 5s 聚合输出，见 [§ 主线程性能探针](#主线程性能探针ui_perf_probe)。
 
 ## PageManager 约定
 
@@ -604,7 +611,14 @@ pending 自动解除——正好顺带验超时路径。
 副作用：`cam_apply_layout()` 是 cover 填充（`zoom = max(zoom_w, zoom_h)`），viewport
 变宽后纵向裁得更多。1024×600 屏上纵向可见从 50.9% 降到 46.9%，但缩放系数正好变成
 1.000（屏宽 = 流宽 1024，见 `CAMERA_WIDTH_DEFAULT`），走 LVGL 无缩放快路径，省掉逐帧
-重采样——RGA 只做色彩转换不做缩放。
+重采样。
+
+**`zoom` 必须是 1.000，这不是"顺便"而是硬要求。** 1280 档把上面那个前提破掉过一次：
+屏宽 1280、流宽 1080，`zoom` 变成 303，于是 `lv_image` 落进 `lv_draw_sw_transform`
+逐像素双线性重采样，整屏一次约 98ms（`refr 5s:` 里 `draw_avg_us≈98000`、
+`loops=41/5s`），LVGL 主循环被压到约 8fps，触摸跟着发滞——解码侧明明还在
+30fps（`ok≈150` 而 `show_n≈41`）。修法不是回去调 LVGL，而是把"宽度适配 + 纵向居中
+裁剪"整个交给 RGA 在色彩转换那一趟里做掉，见「预览输出几何」。
 
 ## UiMsgProxy（Glavo）
 
@@ -697,6 +711,7 @@ pending 自动解除——正好顺带验超时路径。
 | `user_control` | `page_user_control.*` | 控制面板 + 更多控制（页内两视图）。见下方「控制页」一节 |
 | `user_settings` | `page_user_settings.*` | 设置列表 + 开发者密码弹窗 |
 | `user_message` | `page_user_message.*` | 消息中心：日期分组混排列表（MCU 报警 + 设备事件）+ 初始 10 条与底部 Load More + 左滑删除历史 + 管理态批量删除 + 详情抽屉（Reset 三态）。按稿 3033:5247 / 3063:7338 / 3201:9570 / 5380:28971 实现 |
+| `user_debug` | `page_user_debug.*` | 调试控制台；Other 页 `Galvo Point Test` 按当前校准表依次显示中心和四角红光点，与正式打印及 Test image 双向互斥 |
 | `user_timelapse` | `page_user_timelapse.*` | 延时摄影播放器（隐藏页，历史缩略图进入；全屏 `lv_layer_top`） |
 
 注册仅在 `ui_app.cpp`；打印流程走 `control_*`，pages 不直接订阅 MsgBus。详见 `lib/pages/README.md`。
@@ -847,7 +862,7 @@ CABIN 四行的行首图标里，`ic_temp` / `ic_o2` 这次一并从稿重描并
 
 | 位置 | 控件 | 说明 |
 |------|------|------|
-| 左下 | stats-card `g_pc_card` | 缩略图 + 徽标行（图标/状态词/百分比）+ 进度条 + TIME/CONSUMABLES 两列。1280 档宽 `USER_PRINT_CARD_W` 取稿值 416，按稿分解正好是 16 + 缩略图 100 + 16 + 右列 268 + 16 |
+| 左下 | stats-card `g_pc_card` | 缩略图 + 徽标行（图标/状态词/层号/百分比）+ 进度条 + TIME/CONSUMABLES 两列。1280 档宽 `USER_PRINT_CARD_W` 取稿值 416，按稿分解正好是 16 + 缩略图 100 + 16 + 右列 268 + 16 |
 | 右上（环境区下方） | 通知浮层 | **不在本层**，是全局的 `ui_notice_stack`；进出打印态时按环境区高度把它往下压 |
 | 右下 | 运行组 `g_ctl_run` | 暂停·恢复钮 + 终止钮；与取件组互斥 |
 | 右下 | 取件组 `g_ctl_collect` | 吹粉钮 + `SWIPE TO COLLECT` 胶囊；与运行组互斥。胶囊里那颗圆头显式给 `cfg.knob_sz = USER_PRINT_CTL_BTN`（64、相对轨道内缩 8）——稿 4972:32141 那颗红钮在组内 x=96，而滑块从 `blob+gap`=88 起，正好内缩 8；不给这个值控件会按 `track_h` 推出 72/内缩 4 |
@@ -862,8 +877,9 @@ CABIN 四行的行首图标里，`ic_temp` / `ic_o2` 这次一并从稿重描并
 
 两个状态量决定外观，改哪个都走 `apply_print_phase()` 一处刷新：
 
-- `g_print_phase`（徽标四档）：`PRINTING...` 蓝 / `PAUSE` 蓝 / `PRINT TERMINATED` 橙 /
-  `PRINT COMPLETE` 绿。徽标色同时是百分比色与进度条填充色。
+- `g_print_phase`（徽标五档）：`PRINTING...` 蓝 / `PAUSE` 蓝 / `PRINT TERMINATED` 橙 /
+  `PRINT COMPLETE` 绿 / `OPTICAL PATH CHECK` 蓝（打印前光路检测，层号位显示 n/5，暂停钮灰掉）。
+  徽标色同时是百分比色与进度条填充色。
 - `g_purify_stage`（结束态下的吹粉子阶段，走 `purify_stage_set()`）：`IDLE` / `RUNNING`
   （吹粉钮图标 2s 一圈逆时针转、胶囊文案换 `AIR PURIFYING...`）/ `DONE`（通知换口罩提醒）。
   按稿 4234:6385，吹粉中**不改徽标**——吹粉态只靠状态栏与胶囊文案表达。
@@ -878,6 +894,16 @@ CABIN 四行的行首图标里，`ic_temp` / `ic_o2` 这次一并从稿重描并
 |----|------|-------------|
 | 打印中 / 暂停 | `TIME LEFT`（进度推送的 `remaining_minutes`） | `--`（打印中拿不到用量） |
 | 中断 / 完成 / 吹粉 | `TIME COST`（manifest `duration_sec`，H:MM:SS） | manifest `material_g` |
+
+层号 `g_pc_layer` 摆在**徽标行**、紧贴百分比左侧，不是往两列旁边再插一列：右列
+只有 268 宽（1280 档），两列均分后 `CONSUMABLES` 已经得靠 `user_font_caption_sm()`
+才不被裁，再插第三列每列剩不到 90，那个词必溢出。徽标行有 spacer 撑出的空档，
+`999/999` 放得下。取 dim 色 + 小一档字号，避免与同色的状态词/百分比抢视线。
+
+显示的是「正在打第几层」（后端 `current_layer` = 已完成层 + 1），`total_layers`
+为 0 时整条隐藏——OVF 和无 `M3000` 的 G-code 数不出总层，不留 `--/--` 占位。开始
+打印时先隐掉，等第一帧进度推送才显。结束态与卡片其它字段同样定格在最后一次推送
+上（完成态即 `N/N`，中断态停在断点那层）。
 
 底部两组控件的玻璃底衬（稿 4796:6172 运行组 / 4231:6034 取件组）是一张预生成的
 ARGB8888 图，`make_ctl_backdrop()` 直接贴，按 profile 三档挑（`ctl_backdrop_dsc()`）。
@@ -1066,9 +1092,9 @@ rongsu_camera 经主 IPC（/tmp/upc_camera.sock）SCM_RIGHTS 附带 dma_buf fd �
   → CameraPreviewPlayer::on_stream_start_rsp 调用 MsgPort::take_peer_dma_fds(APP_CAMERA)
   → SHM /upc_camera_preview 只读 slot 状态/seq/buffer_idx
   → 解码线程 acquire_latest_frame 得到 buffer_idx
-  → [RGA] importbuffer_fd(src_fd) → imcvtcolor → slots_[3] BGRX
-  → [SW 回退] mmap(src_fd) → nv12_to_bgrx_sw → slots_
-  → lv_timer(33ms) 换 img_dsc_ 指针 → lv_image (XRGB8888)
+  → [RGA] importbuffer_fd(src_fd) → 裁剪 + 缩放 + NV12→BGRX → slots_[3] BGRX（上屏尺寸）
+  → [SW 回退] mmap(src_fd) → nv12_to_bgrx_sw（同样裁剪 + 最近邻缩放） → slots_
+  → lv_timer(16ms) 换 img_dsc_ 指针 → lv_image (XRGB8888，1:1 贴图)
 ```
 
 `CameraStreamInfoPayload.dma_socket_path` 为 ABI 保留字段；fd 不经独立 socket 传递。
@@ -1076,12 +1102,100 @@ rongsu_camera 经主 IPC（/tmp/upc_camera.sock）SCM_RIGHTS 附带 dma_buf fd �
 - **开流**：`page_user_home` 打印模式 → `CameraPreviewPlayer::start()` → IPC Start → `apply_stream_start_ui` 开 SHM 元数据环 + `take_peer_dma_fds` + `setup_frame_buffers` + 解码线程。
 - **关流/换流**：UI 仅请求解码线程退役；后台回收线程等待退出，LVGL 定时器确认退出后才关闭旧 SHM、DMA fd 与显示缓冲，因此主线程不阻塞在 `join()`。
 - **恢复职责**：Camera 侧采集看门狗是唯一的自动重连发起者；UI 只检测并记录预览卡帧，等待 Camera 重建 SHM 与重推 `Stream_Start_Rsp`，不再自行 Stop/Start 流。
+- **交互降频只降转换，不降取帧**：按压 / 有动画时 `decode_target_fps_override_` 置 `kInteractiveDecodeFps`(12)，解码线程据此**跳过 RGA/SW 转换**，但 `acquire_latest_frame` + `release_slot` 始终按相机帧率跑。若连取帧一起降频，滞留的槽位会占满 Camera 的在飞窗口并反压采集线程，把 Visual 与直播一起拖到 12fps（见 [camera/CAMERA.md](../camera/CAMERA.md) 「在飞窗口」）。5s 诊断里 `skip=` 即这类跳过的帧。
+- **解码线程不按帧周期补睡**：限速由 `acquire_latest_frame` 天然承担（没有比 `last_seq` 更新的帧就返回 `nullopt`），所以循环末尾**不再**睡到一个相机帧周期。补睡会把 SHM 的轮询粒度从 `kNoFrameNapMs`(5ms) 拉到整整一帧（无帧那圈只耗 5ms，末尾要再睡 28ms），凭空给预览加上平均半帧的等待。无帧时只睡 `kNoFrameNapMs`。
+- **`lv_timer` 周期 16ms**（`kUiRefreshPeriodMs`，与 `LV_DEF_REFR_PERIOD` 对齐）：这一拍等的是"转换好的帧什么时候被切上屏"，周期越长平均多等半个周期。交互期仍降到 `kUiRefreshInteractPeriodMs`(66) 让位给触摸响应。
 - **RGA 路径**：`setup_frame_buffers` 时 `RgaDmaBuf` 分配成功则 `rga_path=1`；失败退化为 `std::vector` 软件转换。无进程级预热，首帧到达即转换。
+- **RGA 常驻导入数受相机缓冲数约束**：streaming 模式下 `prepare_rga_streaming_cache()` 开流时把**每个**源 dma fd 都 `mmap` + `importbuffer_fd` 常驻，导入总数 = `CAMERA_V4L2_BUF_COUNT` + scratch 块数（1:1 条带路径 2 块；缩放路径不需要 src scratch，只有 1 块）。rk3568 实测 4 个缓冲（6 句柄、约 11.4MB 常驻映射）可用，6 个（8 句柄、约 15.6MB）必然导入失败。**失败只会退化成软件转换（22ms/帧）、画面照常出，外部看不出异常**，所以三个失败点各自打了带 errno 的 Error 日志；调相机缓冲数后务必 `grep RGA /var/log/topic/topic_ui_preview.log` 确认 `rga_path=1`。
 - **DMA 约束**：RK3568 RGA2 仅支持 4G 以下物理地址；源 fd 必须来自 V4L2 / dma-heap（dma32），UI 直接用 `importbuffer_fd`。
 - **Stride 对齐**：RGA 源 stride 使用后端传来的实际 `stride_y`，不再假设 `stride_y == width`。
 - **Cache 同步**：RGA 读源前 `DMA_BUF_IOCTL_SYNC(READ)`，写目的后 `DMA_BUF_IOCTL_SYNC(WRITE)`；目的缓冲优先 uncached。
 - **线程**：解码在独立线程；`on_stream_start_rsp` 与换帧须 `lv_async_call` / `lv_timer` 回到 UI 线程。
 - **CMake**：找到 `librga` 时 `-DUPC_UI_HAS_RGA=1`（当前源码仍硬依赖 RGA 头文件）。
+
+### 预览输出几何
+
+**解码侧输出的不是相机原始帧，是上屏那张图。** `resolve_output_geometry()` 在
+`apply_stream_start_ui()` 里按 viewport 一次算定，全部记在 `out_width_` /
+`out_height_`（上屏尺寸）与 `src_crop_y_` / `src_crop_h_`（对应的源可见带）：
+
+| 项 | 值（1080×1280 流 + 1280 宽屏） | 说明 |
+|----|------|------|
+| 源 | 1080×1280 | 相机 NV12，`UPC_CAMERA_STREAM_*` |
+| 可见带 | y=302 起 676 行 | 按 `vp_h × width_ / vp_w` 反算，居中；**偶数**（NV12 的 UV 按 2×2 子采样） |
+| 输出 | 1280×`vp_h` | `lv_image` 里的真实尺寸，`stream_width()/stream_height()` 返回它 |
+
+几何是**开流时定一次**，不跟 viewport 的后续变化。viewport 真改了尺寸，
+`cam_apply_layout()` 算出的 zoom 就不再是 1.000，画面仍然对、只是那段时间回到
+LVGL 重采样——这是刻意的取舍：重建缓冲要停解码线程，不值得为一次布局抖动付这个代价。
+
+三条退回 1:1 的路径（`scaled_output()` 为假，行为与改造前完全一致）：
+
+- **屏宽 = 流宽**（1024 档 + 1024 屏）：本来就无缩放，纵向继续交给 LVGL 裁剪。
+- 取不到 viewport 尺寸（`image_` 没父节点 / 宽高 ≤ 0）。
+- 缩放系数超出 RGA2 的 1/8~8 倍区间（会打一条 Warn）。
+
+两条转换实现按 `scaled_output()` 分流：
+
+- **缩放**：`convert_frame_rga_scaled()`，一趟 `improcess`（独立 src/dst 矩形）出整张输出，再一次 memcpy 进显示槽。**刻意不分条带**——RGA 缩放器只在给定 `src_rect` 内采样，按输出行切条带会在每个边界钳出一条 1px 接缝。
+- **1:1**：`convert_frame_rga_streaming()`，沿用原来按源行分条带那条路径，不动。
+
+排查入口是 `decode ready` 那条日志的 `out=` / `crop=` / `scaled=`：`out` 与
+viewport 不一致，或 `scaled=0` 而屏宽 ≠ 流宽，就说明重采样又回到 LVGL 身上了，
+`refr 5s:` 的 `draw_avg_us` 会立刻涨上去。
+
+### 预览延迟分段诊断
+
+`decode 5s:` 一行（`/var/log/topic/topic_ui_preview.log`，`proc=rongsu_ui`）把预览延迟拆成可量化的三段。同一个文件里还有 `proc=rongsu_camera` 的 `stream 5s:`（相机侧的驱动滞留，见 [camera/CAMERA.md](../camera/CAMERA.md) 「延迟诊断」），两条对照就能定位延迟落在哪里。
+
+| 字段 | 含义 | 正常范围 |
+|------|------|----------|
+| `ok` | 解码线程实际取到的帧数 | 应与同期 `stream 5s:` 的 `committed` 相当（@30fps 约 150）。**稳定只有一半且 `fail`/`slot_fail` 全为 0** 时不是"取不到"，而是元数据环把帧静默扫掉了，见 [common/COMMON.md](../../common/COMMON.md) 「预览元数据环 seq 契约」 |
+| `shm_wait_avg_us` / `shm_wait_max_us` | Camera `commit_slot` 到解码线程 `acquire_latest_frame` 取到之间的空等（两侧同用 `CLOCK_MONOTONIC`，可跨进程相减） | ≤ `kNoFrameNapMs`(5000)；明显更大说明解码线程被自己的工作拖住了 |
+| `cvt_avg_us` / `cvt_max_us` | 单帧 NV12→BGRX 耗时 | RGA 路径 3000~8000 |
+| `show_avg_us` / `show_max_us` / `show_n` | 解码线程发布 `display_buf_` 到 `ui_timer_cb` 真正 `lv_image_set_src` 的间隔 | ≤ `ui_refresh_period_ms_`(16000)；`show_n` 应接近 `ok` |
+| `loop_avg_us` / `loop_max_us` | 解码线程整圈耗时 | 与相机帧周期同量级 |
+
+### 主线程性能探针（`ui_perf_probe`）
+
+`show_n` 明显小于 `ok` 时，瓶颈在上屏这一步，`decode 5s:` 就查不下去了——它只看得到"发布了多少帧"，看不到主线程为什么来不及取。`ui_perf_probe`（`lib/core/{inc,src}/ui_perf_probe.*`）补上这一段，同样输出到 `topic_ui_preview.log`，`UPC_MOD_CAMERA_PREVIEW` 关掉时整体编成空函数。
+
+**关键前提**：LVGL 一次 `lv_timer_handler()` 里每个到期定时器**最多只跑一次**，不管已经过了几个周期。所以 `ui_timer_cb` 的真实触发周期 = 主循环周期，`lv_timer_create(..., 16ms)` 里的 16 只是下限。`show_n` 偏低要先怀疑主循环被拖长，而不是定时器周期配错。
+
+`uiloop 5s:` —— `main.cpp` 主循环一圈的四段，加起来就是一圈：
+
+| 字段 | 含义 | 怎么读 |
+|------|------|--------|
+| `loops` | 5s 内主循环圈数 | 就是 `ui_timer_cb` 的真实频率上限；应与 `show_n` 同量级 |
+| `ipcwait_avg_us` / `_max_us` | `port.process(8)` | ≤ 8000（自身超时上限），是一圈的下限 |
+| `lv_avg_us` / `_max_us` | `lv_timer_handler()` | 与 `refr 5s:` 的 `refr_avg_us` 对照：接近说明是屏幕刷新，明显更大说明是其它定时器 / indev |
+| `ipc_avg_us` / `_max_us` | `port.process(0)`（非阻塞补发） | 应接近 0 |
+| `mon_avg_us` / `_max_us` | `upc_sys_monitor_tick()` | 应接近 0（读 `/proc` 已改为只在上报点做） |
+
+`refr 5s:` —— 用 LVGL 的显示事件把一次刷新拆成**可加的四段**（`refr = pre + draw + wait + flush`）：
+
+| 字段 | 对应区间 | 含义 |
+|------|----------|------|
+| `n` / `idle` | — | 有效刷新次数 / 定时器跑了但无失效区可画的次数 |
+| `refr_*` | `REFR_START`→`REFR_READY` | 整次刷新，即 `lv_timer_handler` 里的大头 |
+| `pre_*` | `refr` − `render` | 布局更新 + **双缓冲同步区拷贝**（DIRECT 双缓冲下 `refr_sync_areas` 要把上一帧失效区从在屏缓冲拷回离屏缓冲，整屏预览时是一次全屏 memcpy） |
+| `draw_*` | `render` − `wait` − `flush` | 纯绘制 |
+| `wait_*` / `waits` | `FLUSH_WAIT_START`→`FINISH` 累计 | 等 DRM 翻页（`drm_flush_wait` 里的 `poll(-1)`）。**`waits ÷ n` 是一次刷新等了几回翻页**；明显大于 1 说明失效区没合并，每帧被多个 vblank 串行拖住 |
+| `flush_*` / `flushes` | `FLUSH_START`→`FINISH` 累计 | `flush_cb` 本身（`drmModeAtomicCommit`），应很小 |
+
+排查顺序：先看 `loops` 确认主循环频率 → 用 `lv_avg_us` 判断是不是 LVGL → 再在 `pre`/`draw`/`wait` 里定位。三者各有对策：`pre` 大是双缓冲同步拷贝，`draw` 大是绘制面积或逐像素变换，`wait` 大是翻页/失效区合并。
+
+> **`draw_*` 偏大先查缩放，不要查旋转。** `rongsu_ui.defaults` 开了 `LV_USE_OPENGLES 1`，
+> 于是 `LV_LINUX_DRM_USE_EGL` 被自动置 1，`lv_linux_drm.c` 整个文件被
+> `#if LV_USE_LINUX_DRM && !LV_LINUX_DRM_USE_EGL` 排掉，真正编进去的是
+> `lv_linux_drm_egl.c`。那边 `set_viewport()` 按 `lv_display_get_rotation()` 交换宽高、
+> 由 GPU 在贴纹理时完成旋转，所以 `2.0` 平台的 `LV_DISPLAY_ROTATION_270` 几乎不花 CPU，
+> 把它改成 `_0` 做 A/B 只会让画面躺倒、`refr_avg_us` 不动。
+>
+> 同时 `LV_USE_DRAW_OPENGLES` 默认是 0，**绘制仍然是软件的**，GPU 只负责把整屏结果
+> 当纹理贴上去并旋转（那部分计入 `flush_*`，整屏 4MB 上传 + `eglSwapBuffers` 约 12ms）。
+> 所以 `draw_*` 就是纯 CPU 像素工作，整屏预览下的头号嫌疑是 `lv_image` 的非 1.000
+> 缩放（走 `lv_draw_sw_transform` 双线性），见「摄像头整屏预览」与「预览输出几何」。
 
 ## 打印历史 + 延时摄影播放器
 
@@ -1609,6 +1723,7 @@ Tab 取 `USER_PAD_SM`（小于 Tab 间距 `USER_PAD_LG` 的一半），故相邻
 消息页共用——原先两页各写一份**字面重复**的实现（连注释都一样），命中区这类修改要同步改两遍。
 
 ### LVGL 配置依赖（`3rdparty/.../configs/rongsu_ui.defaults`）
+- `LV_USE_OPENGLES=1` → `LV_LINUX_DRM_USE_EGL` 被自动置 1（`lv_conf_internal.h`），所以显示驱动是 `lv_linux_drm_egl.c` 而**不是** `lv_linux_drm.c`（后者整个文件被 `!LV_LINUX_DRM_USE_EGL` 排掉）。而 `LV_USE_DRAW_OPENGLES` 默认 0，**绘制仍是软件的**，GPU 只负责贴整屏纹理并做屏幕旋转。看 `refr 5s:` 时这一条是前提，见 [§ 主线程性能探针](#主线程性能探针ui_perf_probe)
 - `LV_USE_TJPGD=1`：历史缩略图 baseline JPEG 解码
 - `LV_USE_FS_POSIX=1` + `LV_FS_POSIX_LETTER='A'`：按路径加载 `/userdata/media/video`、`/userdata/media/photo` 图片（`"A:/userdata/media/video/x.rthm"` / `"A:/userdata/media/photo/x.rthm"`）
 - lvgl 目标加 `_DEFAULT_SOURCE`（`3rdparty/.../CMakeLists.txt`）：修 FS 驱动 `DT_DIR` 在 `_POSIX_C_SOURCE` 下不可见的编译错误
@@ -1619,7 +1734,7 @@ Tab 取 `USER_PAD_SM`（小于 Tab 间距 `USER_PAD_LG` 的一半），故相邻
 
 - UI = **Hub**；`add_ipc_peer(ModuleId, path, required)`
 - 单播：`target_id = APP_*`；广播：`target_id = 0`
-- 启动顺序见 `scripts/rongsu.sh`
+- 启动顺序见 `scripts/rongsu_app.sh`（`scripts/rongsu.sh` 选 A/B 槽后交棒）
 - 细节：[common/COMMON.md](../../common/COMMON.md) § IPC
 
 当前 peer：`APP_GLAVO`（required）、`APP_CAMERA`（optional，预览）、`APP_MEDIA`（拍照/录像/直播；Glavo 打印录像经 Hub 转发至此）。

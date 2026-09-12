@@ -27,6 +27,7 @@
  * 振镜方向盘（X/-X/Y/-Y）按 Step 本地增减中心偏移；复位回上次 Save/读盘值。
  * Save 写 cal.csv 第 4 行并由 Glavo load_calibration；测试图/正式打印中禁用。
  * Test image 开关：红光循环打印 /userdata/test/test.gcode（经 DebugMsgProxy）。
+ * Other 点位测试：按校准表显示中心 + 四角，每点 3 秒，与打印/Test image 互斥。
  * 其余命令经 DebugMsgProxy → APP_GLAVO（后端待实现）；图标暂用 LV_SYMBOL/文字占位。
  */
 
@@ -93,6 +94,9 @@ lv_obj_t *g_galvo_scale_ta = nullptr;
 lv_obj_t *g_galvo_step_seg = nullptr;
 lv_obj_t *g_test_image_seg = nullptr;
 lv_obj_t *g_galvo_save_btn = nullptr;
+lv_obj_t *g_galvo_point_test_btn = nullptr; /**< Other：中心点 + 四角红光测试圆钮 */
+lv_obj_t *g_galvo_point_test_lbl = nullptr; /**< 点位测试状态字（Idle/Running） */
+bool      g_galvo_point_test_pending = false; /**< 点击后等待 Glavo 首次状态回报 */
 bool      g_galvo_center_valid = false;
 double    g_galvo_center_x = 0.0;   /**< 编辑中的中心偏移（未 Save 前仅 UI） */
 double    g_galvo_center_y = 0.0;
@@ -113,6 +117,8 @@ lv_obj_t *g_env_sim_powder_btn = nullptr;   /**< 其他控制：环境模拟缺�
 lv_obj_t *g_env_sim_powder_state_lbl = nullptr; /**< 其他控制：环境模拟缺粉状态文本 */
 lv_obj_t *g_first_layer_visual_btn = nullptr; /**< 其他控制：首层视觉检测开关按钮 */
 lv_obj_t *g_first_layer_visual_state_lbl = nullptr; /**< 其他控制：首层视觉检测状态文本 */
+lv_obj_t *g_optical_path_check_btn = nullptr; /**< 其他控制：打印前光路检测开关按钮 */
+lv_obj_t *g_optical_path_check_state_lbl = nullptr; /**< 其他控制：打印前光路检测状态文本 */
 lv_obj_t *g_local_rtsp_btn = nullptr;       /**< 其他控制：本地 RTSP Server 开关按钮 */
 lv_obj_t *g_local_rtsp_state_lbl = nullptr; /**< 其他控制：本地 RTSP Server 状态文本 */
 bool g_env_sim_on = false;                  /**< 缓存 Env Sim 回读状态，用于门控 Powder Sim 按钮 */
@@ -190,7 +196,7 @@ void apply_galvo_center_labels()
     }
 }
 
-/** 正式打印或测试图运行中禁止写 cal.csv */
+/** 正式打印或任一振镜测试运行中禁止写 cal.csv */
 bool galvo_save_busy()
 {
     const bool test_seg_on =
@@ -198,19 +204,56 @@ bool galvo_save_busy()
         ui_user_segmented_get_selected(g_test_image_seg) == 0;
     return control_is_printing() ||
            ui::DebugMsgProxy::instance().test_image_active() ||
+           ui::DebugMsgProxy::instance().galvo_point_test_active() ||
+           g_galvo_point_test_pending ||
            test_seg_on;
+}
+
+void update_galvo_test_controls()
+{
+    const auto& proxy = ui::DebugMsgProxy::instance();
+    const bool point_test_busy =
+        proxy.galvo_point_test_active() || g_galvo_point_test_pending;
+    const bool test_image_on =
+        proxy.test_image_active() ||
+        (g_test_image_seg &&
+         ui_user_segmented_get_selected(g_test_image_seg) == 0);
+
+    if(g_galvo_save_btn) {
+        if(galvo_save_busy()) {
+            lv_obj_add_state(g_galvo_save_btn, LV_STATE_DISABLED);
+        } else {
+            lv_obj_clear_state(g_galvo_save_btn, LV_STATE_DISABLED);
+        }
+    }
+    if(g_test_image_seg) {
+        if(point_test_busy) {
+            lv_obj_add_state(g_test_image_seg, LV_STATE_DISABLED);
+        } else {
+            lv_obj_clear_state(g_test_image_seg, LV_STATE_DISABLED);
+        }
+    }
+    /* 与 set_dbg_toggle_enabled 同款门控：连 CLICKABLE 一起摘，避免灰态仍可点。 */
+    if(g_galvo_point_test_btn) {
+        if(control_is_printing() || test_image_on || point_test_busy) {
+            lv_obj_clear_flag(g_galvo_point_test_btn, LV_OBJ_FLAG_CLICKABLE);
+            lv_obj_add_state(g_galvo_point_test_btn, LV_STATE_DISABLED);
+        } else {
+            lv_obj_add_flag(g_galvo_point_test_btn, LV_OBJ_FLAG_CLICKABLE);
+            lv_obj_clear_state(g_galvo_point_test_btn, LV_STATE_DISABLED);
+        }
+    }
+    if(g_galvo_point_test_lbl) {
+        lv_label_set_text(g_galvo_point_test_lbl,
+                          point_test_busy ? "Running" : "Idle");
+        lv_obj_set_style_text_color(g_galvo_point_test_lbl,
+            point_test_busy ? user_color_accent : user_color_text_dim, 0);
+    }
 }
 
 void update_galvo_save_enabled()
 {
-    if(!g_galvo_save_btn) {
-        return;
-    }
-    if(galvo_save_busy()) {
-        lv_obj_add_state(g_galvo_save_btn, LV_STATE_DISABLED);
-    } else {
-        lv_obj_clear_state(g_galvo_save_btn, LV_STATE_DISABLED);
-    }
+    update_galvo_test_controls();
 }
 
 /* 调试页按钮尺寸：在主题默认基础上放大约 1/3，便于触摸（仅本页使用，不影响其它页面）。
@@ -803,6 +846,26 @@ void on_calib_click(lv_event_t *)
     ui_toast_show("Calibration started", user_color_accent, 1500);
 }
 
+void on_galvo_point_test_click(lv_event_t *)
+{
+    const auto& proxy = ui::DebugMsgProxy::instance();
+    const bool test_image_on =
+        proxy.test_image_active() ||
+        (g_test_image_seg &&
+         ui_user_segmented_get_selected(g_test_image_seg) == 0);
+    if(control_is_printing() || test_image_on ||
+       proxy.galvo_point_test_active() || g_galvo_point_test_pending) {
+        ui_toast_show("Print or test mode active",
+                      user_color_status_err, 1800);
+        return;
+    }
+
+    g_galvo_point_test_pending = true;
+    update_galvo_test_controls();
+    ui::DebugMsgProxy::instance().start_galvo_point_test();
+    ui_toast_show("Galvo point test started", user_color_accent, 1500);
+}
+
 lv_obj_t *make_galvo_readout(lv_obj_t *parent, const char *axis_name, lv_obj_t **out)
 {
     lv_obj_t *row = lv_obj_create(parent);
@@ -1146,6 +1209,8 @@ void on_dbg_toggle(lv_event_t *e)
         case 9: control_set_transfer_box_flow(on);
                 break;
         case 10: proxy.send_first_layer_visual_check_set(on);  /* 首层视觉检测（仅本次运行） */
+                 break;
+        case 14: proxy.send_optical_path_check_set(on);        /* 打印前光路检测（仅本次运行，默认关） */
                  break;
         /* 造几条假消息喂通知浮层。Glavo 侧还没实现 GLAVO_Device_Event_Ntf，
          * 没有这个入口就只有打印流程那两条能看，「查看剩余 N 条」那条路径根本走不到。
@@ -1577,6 +1642,8 @@ void build_other_switches_card(lv_obj_t *parent)
                     control_transfer_box_flow_enabled(), 9, 0);
     make_dbg_toggle(rowD, "1st Layer Visual", "On", "Off", LV_SYMBOL_PLAY, false,
                     10, 0, true, 0, &g_first_layer_visual_btn, &g_first_layer_visual_state_lbl);
+    make_dbg_toggle(rowD, "Optical Path Chk", "On", "Off", LV_SYMBOL_EYE_OPEN, false,
+                    14, 0, true, 0, &g_optical_path_check_btn, &g_optical_path_check_state_lbl);
     /* 往消息中心塞 4 条假消息，验左下通知浮层与侧栏红点（后端还没发真消息） */
     make_dbg_toggle(rowD, "Msg Inject", "On", "Off", LV_SYMBOL_BELL, false, 11, 0);
     /* 造 5 条假 MCU 报警（阻断/RTN/自动清除/EVENT 各一 + 一条 critical 凑齐四色），
@@ -1589,6 +1656,35 @@ void build_other_switches_card(lv_obj_t *parent)
      * 先画成 Off 再被回报刷成 On；Media 若未能开起来会回报 Off，按钮随之弹回。 */
     make_dbg_toggle(rowE, "Local RTSP", "On", "Off", LV_SYMBOL_VIDEO, true,
                     13, 0, true, 0, &g_local_rtsp_btn, &g_local_rtsp_state_lbl);
+
+    /* 一次性红光点位测试：中心与四角各停留 3 秒，结束立即回中心并切普通红光。
+     * 不是开关量，走不了 make_dbg_toggle（那是 CHECKABLE），故按同款
+     * 「名称 + 状态字 + 圆钮」竖排手搭，圆钮复用 make_circle_btn（同筛粉/内门点动键）。 */
+    lv_obj_t *ptgrp = lv_obj_create(rowE);
+    lv_obj_remove_style_all(ptgrp);
+    lv_obj_set_size(ptgrp, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(ptgrp, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(ptgrp, LV_FLEX_ALIGN_CENTER,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_row(ptgrp, USER_PAD_SM / 2, 0);
+    lv_obj_set_style_bg_opa(ptgrp, LV_OPA_TRANSP, 0);
+    lv_obj_clear_flag(ptgrp, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *ptname = lv_label_create(ptgrp);
+    lv_label_set_text(ptname, "Galvo Point Test");
+    lv_obj_set_style_text_color(ptname, user_color_text_dim, 0);
+    lv_obj_set_style_text_font(ptname, user_font_caption(), 0);
+
+    g_galvo_point_test_lbl = lv_label_create(ptgrp);
+    lv_label_set_text(g_galvo_point_test_lbl, "Idle");
+    lv_obj_set_style_text_color(g_galvo_point_test_lbl, user_color_text_dim, 0);
+    lv_obj_set_style_text_font(g_galvo_point_test_lbl, user_font_text(), 0);
+
+    g_galvo_point_test_btn = make_circle_btn(ptgrp, dbg_round_btn_sz(),
+                                             LV_SYMBOL_PLAY,
+                                             on_galvo_point_test_click, nullptr);
+    lv_obj_set_style_margin_top(g_galvo_point_test_btn, USER_PAD_SM, 0);
+    update_galvo_test_controls();
 }
 
 lv_obj_t *build_other_tab(lv_obj_t *body)
@@ -2175,6 +2271,21 @@ void bind_debug_callbacks()
         }
     });
 
+    proxy.register_optical_path_check([](bool on) {
+        if(g_optical_path_check_btn) {
+            if(on) {
+                lv_obj_add_state(g_optical_path_check_btn, LV_STATE_CHECKED);
+            } else {
+                lv_obj_clear_state(g_optical_path_check_btn, LV_STATE_CHECKED);
+            }
+        }
+        if(g_optical_path_check_state_lbl) {
+            lv_label_set_text(g_optical_path_check_state_lbl, on ? "On" : "Off");
+            lv_obj_set_style_text_color(g_optical_path_check_state_lbl,
+                                        on ? user_color_accent : user_color_text_dim, 0);
+        }
+    });
+
     /* Media 回报的是实际状态：相机未就绪 / 编码器打不开时会回 Off，按钮随之弹回。 */
     proxy.register_local_rtsp([](bool on) {
         if(g_local_rtsp_btn) {
@@ -2205,6 +2316,16 @@ void bind_debug_callbacks()
         }
         update_galvo_save_enabled();
     });
+
+    proxy.register_galvo_point_test([](bool on) {
+        const bool was_pending = g_galvo_point_test_pending;
+        g_galvo_point_test_pending = false;
+        update_galvo_test_controls();
+        if(!on && was_pending) {
+            ui_toast_show("Point test unavailable",
+                          user_color_status_err, 1800);
+        }
+    });
 }
 
 void reset_globals()
@@ -2220,6 +2341,8 @@ void reset_globals()
     }
     g_z_zero_lbl = g_galvo_x_lbl = g_galvo_y_lbl = nullptr;
     g_galvo_scale_ta = g_galvo_step_seg = g_test_image_seg = g_galvo_save_btn = nullptr;
+    g_galvo_point_test_btn = g_galvo_point_test_lbl = nullptr;
+    g_galvo_point_test_pending = false;
     g_galvo_center_valid = false;
     g_galvo_center_x = 0.0;
     g_galvo_center_y = 0.0;
@@ -2246,6 +2369,8 @@ void reset_globals()
     g_env_sim_powder_state_lbl = nullptr;
     g_first_layer_visual_btn = nullptr;
     g_first_layer_visual_state_lbl = nullptr;
+    g_optical_path_check_btn = nullptr;
+    g_optical_path_check_state_lbl = nullptr;
     g_local_rtsp_btn = nullptr;
     g_local_rtsp_state_lbl = nullptr;
     g_env_sim_on = false;
@@ -2270,7 +2395,9 @@ void page_user_debug_refresh(bool /*force*/)
     ui::DebugMsgProxy::instance().request_env_sim_state();
     ui::DebugMsgProxy::instance().request_env_sim_powder_state();
     ui::DebugMsgProxy::instance().request_first_layer_visual_check_state();
+    ui::DebugMsgProxy::instance().request_optical_path_check_state();
     ui::DebugMsgProxy::instance().request_test_image_state();
+    ui::DebugMsgProxy::instance().request_galvo_point_test_state();
     ui::DebugMsgProxy::instance().request_local_rtsp_state();
 }
 
@@ -2289,7 +2416,9 @@ void page_user_debug_exit(void)
     proxy.register_env_sim(nullptr);
     proxy.register_env_sim_powder(nullptr);
     proxy.register_first_layer_visual_check(nullptr);
+    proxy.register_optical_path_check(nullptr);
     proxy.register_test_image(nullptr);
+    proxy.register_galvo_point_test(nullptr);
     proxy.register_local_rtsp(nullptr);
 }
 

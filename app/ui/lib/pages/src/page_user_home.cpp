@@ -68,6 +68,7 @@ enum print_phase_t {
     PRINT_PHASE_PAUSED,         /**< PAUSE            蓝 */
     PRINT_PHASE_TERMINATED,     /**< PRINT TERMINATED 橙 */
     PRINT_PHASE_DONE,           /**< PRINT COMPLETE   绿 */
+    PRINT_PHASE_OPTICAL_CHECK,  /**< OPTICAL PATH CHECK 蓝；打印前光路检测 */
 };
 
 /** 结束态下的吹粉子阶段，决定状态栏文字、提示条变体与胶囊文案。 */
@@ -159,6 +160,11 @@ void home_env_init(void)
     /* 暂停/恢复回执：以后端状态为准同步按钮图标 */
     ui::UiMsgProxy::instance().register_print_pause_done(
         [](bool paused) { set_pause_ui(paused); });
+
+    ui::UiMsgProxy::instance().register_optical_path_progress(
+        [](const middleware::OpticalPathProgressPayload& p) {
+            page_user_home_optical_path_update(p.point_index, p.point_total, p.state);
+        });
 
     ui::CameraMsgProxy::instance().register_snapshot_rsp(
         [](const middleware::CameraSnapshotRspPayload &rsp) {
@@ -252,6 +258,7 @@ lv_obj_t *g_print_overlay      = nullptr; /**< 浮层根（默认隐藏） */
 lv_obj_t *g_pc_card            = nullptr; /**< 卡片根（通知浮层要按它的高度抬起来） */
 lv_obj_t *g_pc_badge_icon      = nullptr; /**< 徽标图标盒（转圈/三角/圆圈感叹/勾） */
 lv_obj_t *g_pc_badge_text      = nullptr; /**< "PRINTING..." / "PRINT COMPLETE" … */
+lv_obj_t *g_pc_layer           = nullptr; /**< 徽标行「当前层/总层」（无总层数时隐藏） */
 lv_obj_t *g_pc_percent         = nullptr; /**< 徽标行右端百分比 */
 lv_obj_t *g_pc_bar             = nullptr; /**< 进度条 */
 lv_obj_t *g_pc_time_cap        = nullptr; /**< "TIME LEFT" ↔ "TIME COST" */
@@ -316,11 +323,31 @@ void on_camera_viewport_size_changed(lv_event_t *e);
 void enter_monitor_mode(void);
 void exit_monitor_mode(void);
 
-/** 预览布局（通用）：宽贴满 viewport；高度按等比缩放后做上下居中裁剪（解码层仍输出全帧）。
- *  打印区与监控区共用同一算法，只是作用于不同的 viewport/image。 */
+/** 预览布局（通用）：宽贴满 viewport；高度按等比缩放后做上下居中裁剪。
+ *  打印区与监控区共用同一算法，只是作用于不同的 viewport/image。
+ *
+ *  裁剪与缩放现在由解码侧的 RGA 在色彩转换那一趟里做掉（见 camera_preview.cpp
+ *  的 `resolve_output_geometry()`），所以流起来之后 src_w 就等于 viewport 宽，
+ *  下面算出的 zoom 正好是 1.000，lv_image 走无缩放贴图快路径——整屏预览时这一步
+ *  就是 8fps 与 30fps 的分界。留着这段 zoom 不是冗余：
+ *    - 开流前（占位尺寸）以及解码侧退回 1:1 时，它仍是唯一把画面铺满的手段；
+ *    - viewport 事后改尺寸时，它兜住解码几何还没跟上的那一拍（画面对、但慢）。
+ *
+ *  传入的 src_w 只是开流前的占位值：播放器活着就一律以它的上屏宽度为准，否则
+ *  enter_printing_mode / enter_monitor_mode 里写死的 UPC_CAMERA_STREAM_WIDTH
+ *  会把 zoom 又按回重采样档。 */
 static void cam_apply_layout(lv_obj_t *vp, lv_obj_t *img, uint32_t src_w, uint32_t src_h)
 {
-    if(!img || !vp || src_w == 0) {
+    if(!img || !vp) {
+        return;
+    }
+    if(ui::CameraPreviewPlayer::instance().active()) {
+        const uint32_t out_w = ui::CameraPreviewPlayer::instance().stream_width();
+        if(out_w > 0) {
+            src_w = out_w;
+        }
+    }
+    if(src_w == 0) {
         return;
     }
 
@@ -350,28 +377,30 @@ void apply_camera_preview_layout(uint32_t src_w, uint32_t src_h)
     cam_apply_layout(g_camera_viewport, g_camera_image, src_w, src_h);
 }
 
+/** 打印态与监控态两个摄像头层一起刷。
+ *
+ *  `CameraPreviewPlayer` 在首帧上屏时会回调过来告知输出几何，但它不知道自己这一
+ *  路挂在哪个 viewport 上。只刷打印态的话，`enter_monitor_mode()` 里那次
+ *  `cam_apply_layout()` 是在开流之前跑的（拿到的还是占位宽），监控层的 zoom 就会
+ *  一直停在重采样档，整屏预览在监控态照样掉到 8fps。
+ *  对隐藏的那一层多刷一次只是重设几何，没有副作用。 */
+void apply_camera_preview_layout_all(uint32_t src_w, uint32_t src_h)
+{
+    cam_apply_layout(g_camera_viewport, g_camera_image, src_w, src_h);
+    cam_apply_layout(g_monitor_camera_viewport, g_monitor_camera_image, src_w, src_h);
+}
+
+/* 两个 size_changed 只传开流前的占位宽：播放器活着时由 cam_apply_layout 统一
+ * 换成它的上屏宽度，不在调用点各写一份。 */
 void on_camera_viewport_size_changed(lv_event_t * /*e*/)
 {
-    uint32_t src_w = UPC_CAMERA_STREAM_WIDTH;
-    if(ui::CameraPreviewPlayer::instance().active()) {
-        src_w = ui::CameraPreviewPlayer::instance().stream_width();
-        if(src_w == 0) {
-            src_w = UPC_CAMERA_STREAM_WIDTH;
-        }
-    }
-    apply_camera_preview_layout(src_w);
+    apply_camera_preview_layout(UPC_CAMERA_STREAM_WIDTH);
 }
 
 void on_monitor_viewport_size_changed(lv_event_t * /*e*/)
 {
-    uint32_t src_w = UPC_CAMERA_STREAM_WIDTH;
-    if(ui::CameraPreviewPlayer::instance().active()) {
-        src_w = ui::CameraPreviewPlayer::instance().stream_width();
-        if(src_w == 0) {
-            src_w = UPC_CAMERA_STREAM_WIDTH;
-        }
-    }
-    cam_apply_layout(g_monitor_camera_viewport, g_monitor_camera_image, src_w, 0);
+    cam_apply_layout(g_monitor_camera_viewport, g_monitor_camera_image,
+                     UPC_CAMERA_STREAM_WIDTH, 0);
 }
 
 void on_files_click(lv_event_t *)
@@ -427,6 +456,9 @@ void set_pause_ui(bool paused)
  *  提示只是噪音。 */
 void on_pause_click(lv_event_t *)
 {
+    if(g_print_phase == PRINT_PHASE_OPTICAL_CHECK) {
+        return;
+    }
     const bool want_pause = !g_print_paused;
     set_pause_ui(want_pause);
     if(want_pause) {
@@ -1588,6 +1620,17 @@ lv_obj_t *build_print_stats_card(lv_obj_t *parent)
     lv_obj_set_flex_grow(spacer, 1);
     lv_obj_set_style_bg_opa(spacer, LV_OPA_TRANSP, 0);
 
+    /* 层号紧贴百分比左侧，摆在徽标行而不是下面新开一列：右列 1280 档只有 268 宽，
+     * 两列均分后 CONSUMABLES 已经要靠 caption_sm 才不被裁，再插第三列每列剩不到
+     * 90，那个词必溢出。徽标行有 spacer 撑出的空档，放得下 "999/999"。
+     * 用 dim 色 + 小一档字号压住层级，别跟同色的状态词/百分比抢眼。 */
+    g_pc_layer = lv_label_create(head);
+    lv_label_set_text(g_pc_layer, "");
+    lv_obj_set_style_text_color(g_pc_layer, user_color_text_dim, 0);
+    lv_obj_set_style_text_font(g_pc_layer, user_font_caption_sm(), 0);
+    lv_obj_set_style_text_letter_space(g_pc_layer, 1, 0);
+    lv_obj_add_flag(g_pc_layer, LV_OBJ_FLAG_HIDDEN);
+
     g_pc_percent = lv_label_create(head);
     lv_label_set_text(g_pc_percent, "0%");
     lv_obj_set_style_text_font(g_pc_percent, user_font_caption(), 0);
@@ -1893,6 +1936,7 @@ lv_color_t phase_accent(void)
     case PRINT_PHASE_DONE:       return lv_color_hex(kPhaseGreen);
     case PRINT_PHASE_PRINTING:
     case PRINT_PHASE_PAUSED:
+    case PRINT_PHASE_OPTICAL_CHECK:
     default:                     return lv_color_hex(kPhaseBlue);
     }
 }
@@ -1914,11 +1958,12 @@ void apply_print_phase(void)
 
     /* 徽标行：图标 + 文案 + 百分比同色 */
     struct BadgeSpec { const lv_image_dsc_t *icon; const char *text; };
-    const BadgeSpec kBadges[4] = {
-        { &ic_badge_spin,  "PRINTING..."       },
-        { &ic_badge_play,  "PAUSE"             },
-        { &ic_badge_alert, "PRINT TERMINATED"  },
-        { &ic_badge_check, "PRINT COMPLETE"    },
+    const BadgeSpec kBadges[5] = {
+        { &ic_badge_spin,  "PRINTING..."         },
+        { &ic_badge_play,  "PAUSE"               },
+        { &ic_badge_alert, "PRINT TERMINATED"    },
+        { &ic_badge_check, "PRINT COMPLETE"      },
+        { &ic_badge_spin,  "OPTICAL PATH CHECK"  },
     };
     const BadgeSpec &badge = kBadges[g_print_phase];
     if(g_pc_badge_icon) {
@@ -1968,6 +2013,18 @@ void apply_print_phase(void)
     if(g_ctl_collect) {
         if(finished) lv_obj_remove_flag(g_ctl_collect, LV_OBJ_FLAG_HIDDEN);
         else         lv_obj_add_flag(g_ctl_collect, LV_OBJ_FLAG_HIDDEN);
+    }
+
+    /* 光路检测阶段：暂停钮灰掉（运动包还没开始，暂停没有意义）；终止钮保持可点。 */
+    if(g_btn_pause) {
+        const bool pause_ok = (g_print_phase != PRINT_PHASE_OPTICAL_CHECK);
+        if(pause_ok) {
+            lv_obj_add_flag(g_btn_pause, LV_OBJ_FLAG_CLICKABLE);
+            lv_obj_clear_state(g_btn_pause, LV_STATE_DISABLED);
+        } else {
+            lv_obj_clear_flag(g_btn_pause, LV_OBJ_FLAG_CLICKABLE);
+            lv_obj_add_state(g_btn_pause, LV_STATE_DISABLED);
+        }
     }
 
     /* 两条提示只在结束态出现（稿上打印中/暂停两张都没有）：吹粉前催吹粉，
@@ -2366,7 +2423,7 @@ void update_cabin_metric(lv_obj_t *val, lv_obj_t *unit, float v)
 
 void page_user_home_update_camera_preview_layout(uint32_t src_w, uint32_t src_h)
 {
-    apply_camera_preview_layout(src_w, src_h);
+    apply_camera_preview_layout_all(src_w, src_h);
 }
 
 lv_obj_t *page_user_home_print_preview_parent(void)
@@ -2505,6 +2562,11 @@ void page_user_home_enter_printing_mode(const control_file_t *file)
     /* 进度与两列指标复位：耗材要等打完才有数，先按占位显示 */
     if(g_pc_bar)     lv_bar_set_value(g_pc_bar, 0, LV_ANIM_OFF);
     if(g_pc_percent) lv_label_set_text(g_pc_percent, "0%");
+    /* 层号先隐掉：总层数要等第一帧 Progress 才知道，且上一单的层号不能留在这 */
+    if(g_pc_layer) {
+        lv_label_set_text(g_pc_layer, "");
+        lv_obj_add_flag(g_pc_layer, LV_OBJ_FLAG_HIDDEN);
+    }
     if(g_pc_time_val) {
         if(file) {
             char dur[32];
@@ -2553,6 +2615,14 @@ void page_user_home_enter_print_result(const control_print_result_t *result)
     }
     if(g_result_slide) {
         ui_slide_unlock_reset(g_result_slide);
+    }
+
+    /* 光路检测借用了层号位显示点位计数（"2/5"）。它跟层号同形不同义，留到结果页
+     * 会被读成"第 2 层 / 共 5 层"，所以从检测态直接跳结果页时要清掉。
+     * 正常打印中途终止时层号是真数据，保留。 */
+    if(g_print_phase == PRINT_PHASE_OPTICAL_CHECK && g_pc_layer) {
+        lv_label_set_text(g_pc_layer, "");
+        lv_obj_add_flag(g_pc_layer, LV_OBJ_FLAG_HIDDEN);
     }
 
     /* 完成/终止两稿的差异只有徽标档；进度条停在最后一次的百分比（完成态即 100%）。 */
@@ -2638,6 +2708,10 @@ void page_user_home_printing_update(const control_progress_t *p)
     if(phase_is_finished()) {
         return;
     }
+    /* 光路检测占用徽标行的层号位（3/5）和 0% 进度条，正式进度来了再让位。 */
+    if(g_print_phase == PRINT_PHASE_OPTICAL_CHECK) {
+        return;
+    }
 
     g_print_percent = p->progress_percent;
     if(g_pc_bar) {
@@ -2646,9 +2720,57 @@ void page_user_home_printing_update(const control_progress_t *p)
     if(g_pc_percent) {
         lv_label_set_text_fmt(g_pc_percent, "%d%%", p->progress_percent);
     }
+    /* 后端给不出总层数（OVF / 无层标记）时整条隐掉，不留 "--/--" 占位 */
+    if(g_pc_layer) {
+        if(p->total_layers > 0) {
+            lv_label_set_text_fmt(g_pc_layer, "%u/%u",
+                                  static_cast<unsigned>(p->current_layer),
+                                  static_cast<unsigned>(p->total_layers));
+            lv_obj_remove_flag(g_pc_layer, LV_OBJ_FLAG_HIDDEN);
+        } else {
+            lv_obj_add_flag(g_pc_layer, LV_OBJ_FLAG_HIDDEN);
+        }
+    }
     if(g_pc_time_val) {
         char dur[32];
         ui_user_format_duration_min(dur, sizeof(dur), p->remaining_minutes);
         lv_label_set_text(g_pc_time_val, dur);
+    }
+}
+
+void page_user_home_optical_path_update(uint8_t point_index, uint8_t point_total,
+                                       uint8_t state)
+{
+    if(!g_printing_active || !g_print_overlay || phase_is_finished()) {
+        return;
+    }
+
+    if(state == static_cast<uint8_t>(middleware::OpticalPathPointState::Complete)) {
+        g_print_phase = PRINT_PHASE_PRINTING;
+        if(g_pc_layer) {
+            lv_label_set_text(g_pc_layer, "");
+            lv_obj_add_flag(g_pc_layer, LV_OBJ_FLAG_HIDDEN);
+        }
+        apply_print_phase();
+        return;
+    }
+
+    if(g_print_phase != PRINT_PHASE_OPTICAL_CHECK) {
+        g_print_phase = PRINT_PHASE_OPTICAL_CHECK;
+        g_print_percent = 0;
+        if(g_pc_bar) {
+            lv_bar_set_value(g_pc_bar, 0, LV_ANIM_OFF);
+        }
+        if(g_pc_percent) {
+            lv_label_set_text(g_pc_percent, "0%");
+        }
+        apply_print_phase();
+    }
+
+    if(g_pc_layer && point_total > 0) {
+        const unsigned shown = static_cast<unsigned>(point_index) + 1u;
+        lv_label_set_text_fmt(g_pc_layer, "%u/%u", shown,
+                              static_cast<unsigned>(point_total));
+        lv_obj_remove_flag(g_pc_layer, LV_OBJ_FLAG_HIDDEN);
     }
 }

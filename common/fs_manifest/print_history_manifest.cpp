@@ -127,6 +127,34 @@ bool parse_bool_field(const std::string& obj, const char* key, bool& out)
     return true;
 }
 
+/**
+ * 从 obj_start（'{'）起找本条目的结束 '}'，跳过字符串字面量内的字符。
+ * 条目是扁平对象（无嵌套），所以第一个「不在引号内」的 '}' 就是结束，
+ * 不需要计深度。job_name 存的是真实 G-code 名，带 '}' 时若按裸 find('}')
+ * 截断，后半段字段（frames_dir / thumb 等）会整片丢失。
+ */
+size_t find_object_end(const std::string& text, size_t obj_start)
+{
+    bool in_str = false;
+    for(size_t i = obj_start; i < text.size(); ++i) {
+        const char c = text[i];
+        if(in_str) {
+            if(c == '\\') {
+                ++i;              /* 跳过被转义的那个字符 */
+            } else if(c == '"') {
+                in_str = false;
+            }
+            continue;
+        }
+        if(c == '"') {
+            in_str = true;
+        } else if(c == '}') {
+            return i;
+        }
+    }
+    return std::string::npos;
+}
+
 /** 去掉路径与扩展名，得到可与 job_name 比对的基名 */
 std::string basename_no_ext(const std::string& name)
 {
@@ -215,7 +243,7 @@ bool print_history_manifest_load(const std::string& path,
         if(obj_start == std::string::npos) {
             break;
         }
-        const size_t obj_end = text.find('}', obj_start);
+        const size_t obj_end = find_object_end(text, obj_start);
         if(obj_end == std::string::npos) {
             break;
         }

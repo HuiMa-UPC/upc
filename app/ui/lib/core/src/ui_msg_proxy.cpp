@@ -195,6 +195,24 @@ void UiMsgProxy::init()
         }));
 
     subs_.push_back(bus.subscribe(
+        middleware::MsgType::APP_OpticalPath_Progress_Ntf, middleware::ModuleId::UI,
+        [this](const middleware::Message& msg) {
+            middleware::OpticalPathProgressPayload p{};
+            if(optical_path_progress_cb_ && read_inline_pod(msg, p)) {
+                optical_path_progress_cb_(p);
+            }
+        }));
+
+    subs_.push_back(bus.subscribe(
+        middleware::MsgType::APP_Print_Start_Rejected_Ntf, middleware::ModuleId::UI,
+        [this](const middleware::Message& msg) {
+            middleware::PrintStartRejectedPayload p{};
+            if(print_start_rejected_cb_ && read_inline_pod(msg, p)) {
+                print_start_rejected_cb_(p);
+            }
+        }));
+
+    subs_.push_back(bus.subscribe(
         middleware::MsgType::APP_Supply_Status_Rsp, middleware::ModuleId::UI,
         [this](const middleware::Message& msg) {
             middleware::SupplyStatusPayload p{};
@@ -345,6 +363,27 @@ void UiMsgProxy::init()
                 p.component[sizeof(p.component) - 1] = '\0';
                 p.error_code[sizeof(p.error_code) - 1] = '\0';
                 ota_progress_cb_(p);
+            }
+        }));
+
+    subs_.push_back(bus.subscribe(
+        middleware::MsgType::APP_Soc_Ota_Ready_Ntf, middleware::ModuleId::UI,
+        [this](const middleware::Message& msg) {
+            middleware::SocOtaReadyPayload p{};
+            if (soc_ota_ready_cb_ && read_inline_pod(msg, p)) {
+                p.version[sizeof(p.version) - 1] = '\0';
+                p.task_id[sizeof(p.task_id) - 1] = '\0';
+                soc_ota_ready_cb_(p);
+            }
+        }));
+
+    subs_.push_back(bus.subscribe(
+        middleware::MsgType::APP_Soc_Ota_Apply_Rsp, middleware::ModuleId::UI,
+        [this](const middleware::Message& msg) {
+            middleware::SocOtaApplyRspPayload p{};
+            if (soc_ota_apply_rsp_cb_ && read_inline_pod(msg, p)) {
+                p.reason[sizeof(p.reason) - 1] = '\0';
+                soc_ota_apply_rsp_cb_(p);
             }
         }));
 
@@ -577,6 +616,24 @@ void UiMsgProxy::register_ota_notify(OtaNotifyCb cb)
 void UiMsgProxy::register_ota_progress(OtaProgressCb cb)
 {
     ota_progress_cb_ = std::move(cb);
+}
+
+void UiMsgProxy::send_soc_ota_apply(middleware::SocOtaApplyAction action)
+{
+    middleware::SocOtaApplyReqPayload payload{};
+    payload.action = static_cast<uint8_t>(action);
+    publish_pod(middleware::MsgType::UI_Soc_Ota_Apply_Req,
+                middleware::ModuleId::APP_MQTT, payload);
+}
+
+void UiMsgProxy::register_soc_ota_ready(SocOtaReadyCb cb)
+{
+    soc_ota_ready_cb_ = std::move(cb);
+}
+
+void UiMsgProxy::register_soc_ota_apply_rsp(SocOtaApplyRspCb cb)
+{
+    soc_ota_apply_rsp_cb_ = std::move(cb);
 }
 
 void UiMsgProxy::register_device_event(DeviceEventCb cb)
@@ -871,6 +928,16 @@ void UiMsgProxy::send_print_powder_low_ignore()
 void UiMsgProxy::register_print_powder_low(PrintPowderLowCb cb)
 {
     print_powder_low_cb_ = std::move(cb);
+}
+
+void UiMsgProxy::register_optical_path_progress(OpticalPathProgressCb cb)
+{
+    optical_path_progress_cb_ = std::move(cb);
+}
+
+void UiMsgProxy::register_print_start_rejected(PrintStartRejectedCb cb)
+{
+    print_start_rejected_cb_ = std::move(cb);
 }
 
 void UiMsgProxy::send_parser_exit()

@@ -17,7 +17,9 @@
 #include <memory>
 #include <sstream>
 #include <string>
+#include <vector>
 #include <sys/socket.h>
+#include <sys/statvfs.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <netdb.h>
@@ -272,6 +274,28 @@ bool ensure_dir(const std::filesystem::path& p)
     return std::filesystem::create_directories(p, ec);
 }
 
+/**
+ * 清空 OTA 下载暂存目录。
+ *
+ * 掉电中断的任务会绕过代码里所有清理路径，而临时文件名带 task_id，新任务用的
+ * 是新名字，残留既不会被覆盖也没人删。所以只能整目录扫掉，不能逐个点名。
+ */
+void clear_image_tmp_dir()
+{
+    std::error_code ec;
+    const uintmax_t removed = std::filesystem::remove_all(kImageTmpDir, ec);
+    if(ec) {
+        UPC_LOG_MQTT_SERVICE(Warn, "cannot clear %s: %s", kImageTmpDir,
+                             ec.message().c_str());
+        return;
+    }
+    /* 目录自身也算一个条目，只有它说明本来就是干净的 */
+    if(removed > 1) {
+        UPC_LOG_MQTT_SERVICE(Info, "cleared %llu leftover entries under %s",
+                             static_cast<unsigned long long>(removed - 1), kImageTmpDir);
+    }
+}
+
 std::string hex_sha256_file(const std::filesystem::path& p)
 {
     std::ifstream in(p, std::ios::binary);
@@ -416,7 +440,8 @@ bool download_file_with_progress(const std::string& url,
         }
 
         std::string header;
-        std::array<char, 4096> buf{};
+        /* 256KB：SOC 全包可达数百 MB，4KB 过小会导致过多 syscall/SSL_read。 */
+        std::vector<char> buf(256u * 1024u);
         bool header_done = false;
         bool redirect_hit = false;
         bool out_opened = false;
@@ -813,6 +838,31 @@ bool is_bin_name(const std::string& name)
     return upper.rfind(".BIN") == upper.size() - 4;
 }
 
+bool is_img_name(const std::string& name)
+{
+    const std::string normalized = strip_archive_leading_current_dir(name);
+    if(normalized.size() < 5) {
+        return false;
+    }
+    const std::string upper = to_upper_ascii(normalized);
+    return upper.rfind(".IMG") == upper.size() - 4;
+}
+
+bool fs_free_bytes(const char* path, uint64_t& out)
+{
+    out = 0;
+    if(!path || !path[0]) {
+        return false;
+    }
+    struct statvfs st{};
+    if(::statvfs(path, &st) != 0) {
+        return false;
+    }
+    /* 用 f_bavail 而非 f_bfree：后者含仅 root 可动用的保留块，普通进程写不到。 */
+    out = static_cast<uint64_t>(st.f_bavail) * static_cast<uint64_t>(st.f_frsize);
+    return true;
+}
+
 uint64_t activation_retry_interval_ms(uint32_t fail_count)
 {
     if(fail_count <= 1) {
@@ -851,6 +901,11 @@ bool MqttService::init()
         UPC_LOG_MQTT_SERVICE(Warn, "cannot load local MQTT credential: %s",
                              credential_error.c_str());
     }
+
+    /* 开机先回收一次：上次 OTA 若被掉电打断，残留会一直占着 /userdata。
+     * 等到下次 OTA 任务才清的话，长期不升级的设备就一直背着这份垃圾。
+     * 待应用固件不在这个目录（全包在 UPC_SOC_OTA_IMG，应用层在槽里），清空不影响它。 */
+    clear_image_tmp_dir();
 
     subscribe_messages();
 
@@ -948,6 +1003,10 @@ void MqttService::subscribe_messages()
         middleware::MsgType::UI_Ota_User_Decision_Req,
         middleware::ModuleId::APP_MQTT,
         [this](const middleware::Message& msg) { on_ota_user_decision(msg); }));
+    subs_.push_back(bus.subscribe(
+        middleware::MsgType::UI_Soc_Ota_Apply_Req,
+        middleware::ModuleId::APP_MQTT,
+        [this](const middleware::Message& msg) { on_soc_ota_apply(msg); }));
     subs_.push_back(bus.subscribe(
         middleware::MsgType::APP_Mqtt_Rtsp_Start_Rsp,
         middleware::ModuleId::APP_MQTT,
@@ -1123,6 +1182,10 @@ bool MqttService::connect_mqtt()
 
     /* 设备上线后主动上报一次完整状态（协议 §四）：mode 默认 idle，since 取当前时刻 */
     (void)publish_state(static_cast<uint32_t>(middleware::UserHomeStatus::Idle), 0);
+
+    /* 遗留的 SOC 待应用固件在这里补提示：MQTT 比 UI 先启动，放 init() 里发
+     * 的话 UI 还没订阅，消息会丢。内部只执行一次。 */
+    notify_soc_ota_ready_after_connect();
     return true;
 }
 

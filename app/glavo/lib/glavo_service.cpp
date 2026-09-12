@@ -32,14 +32,17 @@
  * 打印主状态机（读代码时按此顺序跟）
  * =============================================================================
  *   Prepare  UI_Print_Prepare_Req
- *            → USB 复制到本地（若需要）+ 轻量扫行数 + 写 config.json
+ *            → USB 复制到本地（若需要）+ 单趟轻量扫行数/层数 + 写 config.json
  *            → prepare_ready_ / prepared_local_path_
  *   Start    UI_Print_Start_Req（必须先 Prepare 成功）
  *            → 若上一作业仍在 terminate：deferred_print_start_，等 TerminateDone 再 launch
  *            → launch_print_from_prepared：
  *                 open_file → start_parse → PrintVideoNotify::on_print_start
  *                 → McuLink::begin_sending
- *   Progress McuLink progress_callback → send_print_progress（0–95 下发 / 95–99 排空 / 100 完成）
+ *   Progress McuLink progress_callback → send_print_progress
+ *            → 纯层段（G-code 且能数出 M3000）：已完成层/总层 → 1–98 台阶
+ *            → 包段（OVF / 无层标记 / 关闭 Snap）：sent/denom → 0–95
+ *            → 两者共用尾段：95–99 排空 / 100 完成
  *   Pause    仅停 TCP 运动下发（解析可继续；RingBuffer 满则自然阻塞）
  *   Abort    UI_Print_Terminate_Req → stop_parse + request_terminate + 录像 abort
  *   Done     McuLinkEvent::PrintCompleted / TerminateDone / PrintError → 清会话、通知 UI
@@ -48,6 +51,7 @@
  */
 
 #include "glavo_service.hpp"
+#include "galvo_motion_encode.hpp"
 #include "msg_port.hpp"
 #include "print_video_notify.hpp"
 #include "parser_config.hpp"
@@ -69,6 +73,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <algorithm>
+#include <array>
 #include <cstdio>
 #include <cstring>
 #include <cstdint>
@@ -93,9 +98,18 @@ using ::upc::gcode_manifest_remove_at;
  * 文件内辅助常量与工具函数
  *
  * 进度映射约定（与 send_print_progress 配套）：
- *   - 下发段：sent/denom → 0–95（留给 MCU 排空 95–99，避免短文件瞬间跳满）
+ *   打印中按作业类型二选一：
+ *   - 纯层段（首选，layer_progress_mode_）：已完成层/总层 → 1–98 台阶。
+ *     总层 = Prepare 预扫的 M3000 计数；已完成层 = 换层 Snap 计数。层内静止。
+ *   - 包段（回退：OVF / 无 M3000 / 关闭 Layer Snap）：sent/denom → 0–95，
+ *     再与层锚点 7:3 融合（见 fuse_send_and_layer_progress_95）。
+ *   两者共用尾段：
  *   - 排空段：用 MCU cmd/data cache rate 估空闲度 → 95–99
  *   - 100%：只允许 force_complete / job_completed
+ *
+ * 打印中上限 98 是硬约束：UI（control.cpp print_ready_to_exit）把 >=99 且双缓冲
+ * 为 0 当作「可退打印页」，而换层排空时 cache rate 正好为 0，中途出现 99 会被
+ * 误判成打印结束。99 只留给尾段排空。
  * ============================================================================ */
 
 namespace {
@@ -104,6 +118,15 @@ namespace {
 constexpr size_t kWorkerQueueDepth = 256;
 /** 排空段进度节流：rate 变化时至少间隔这么久才再推一帧（ms） */
 constexpr int kDrainProgressMinMs = 200;
+/**
+ * 进度保活周期（ms）：纯层段一层内百分比长时间不变，但同一条 Ntf 还带
+ * PM2.5/温度/氧含量，必须定期推一帧，否则 UI 上的环境读数会僵住。
+ */
+constexpr int kProgressKeepAliveMs = 3000;
+/** 纯层段打印中上限：99 留给尾段排空，100 只跟完成事件（见文件内进度映射约定） */
+constexpr int kLayerPctMaxInPrint = 98;
+/** 纯层段起印下限：首层打完前没有台阶，用 1% 表示已开工 */
+constexpr int kLayerPctFloor = 1;
 /**
  * 层进度锚点上限（0~95 区间）：留出余量，避免层计数先于包发送到顶时
  * 直接把下发段顶到 95，导致末段长时间停在 95。
@@ -119,6 +142,8 @@ constexpr size_t kFsDirMaxEntries =
     (16384u - sizeof(middleware::FsDirHeader)) / sizeof(middleware::FileEntryPayload);
 /** USB 挂载轮询周期 */
 constexpr auto kUsbHotplugPollInterval = std::chrono::milliseconds(300);
+/** 红光点位测试每个观察点的停留时间。 */
+constexpr auto kGalvoPointTestDwell = std::chrono::seconds(3);
 
 /** @brief 本地 G-code 清单配置文件路径 */
 std::string local_config_path()
@@ -314,17 +339,38 @@ int progress_denominator(int sent_packets)
     return fallback;
 }
 
-/** @brief 统计 G-code 中的层标记数量（命令 token: M3000） */
-uint32_t count_layer_marks_m3000(const std::string& path)
+/**
+ * @brief 单趟扫描 G-code：同时统计总行数与层标记数（命令 token: M3000）
+ *
+ * Prepare 两个数都要：行数作为 total_lines hint 交给解析器（回退路径的进度分母
+ * 外推靠它），M3000 数作为纯层进度的分母。合并成一趟读，避免大文件在
+ * open_file 数换行与层标记扫描里被整读两遍。
+ *
+ * 行数语义与 GcodeWorker 内的 count_file_newlines / fgets 一致：末行无换行仍计
+ * 一行，空文件为 0。
+ *
+ * @param path       G-code 绝对路径
+ * @param out_lines  出参，总行数
+ * @param out_layers 出参，M3000 层标记数量
+ * @return 打开文件失败返回 false，此时两个出参为 0
+ */
+bool scan_gcode_lines_and_layers(const std::string& path,
+                                 uint32_t* out_lines,
+                                 uint32_t* out_layers)
 {
+    *out_lines  = 0;
+    *out_layers = 0;
+
     std::ifstream in(path);
     if(!in) {
-        return 0;
+        return false;
     }
 
+    uint32_t lines = 0;
     uint32_t count = 0;
     std::string line;
     while(std::getline(in, line)) {
+        ++lines;
         const size_t comment_pos = line.find(';');
         const std::string_view code =
             (comment_pos == std::string::npos)
@@ -350,11 +396,40 @@ uint32_t count_layer_marks_m3000(const std::string& path)
             }
         }
     }
-    return count;
+
+    *out_lines  = lines;
+    *out_layers = count;
+    return true;
+}
+
+/**
+ * @brief 纯层台阶进度：已完成层 / 总层 → kLayerPctFloor ~ kLayerPctMaxInPrint
+ *
+ * 打完一层跳一格，层内静止，天然单调。分子是换层 Snap 计数，分母是 Prepare
+ * 预扫的 M3000 计数，两者定义差半拍（M3000 标在一层扫描前、Snap 在扫描后，
+ * 文件头那条被跳过、末层由 link_try_final_layer_snap 补一次），因此这里对
+ * done_layers 做上限钳位，绝不因层计数超前而提前顶到 100%。
+ *
+ * @param total_layers 0 表示层数未知，调用方应改走包进度
+ */
+int map_layer_progress_98(uint32_t done_layers, uint32_t total_layers)
+{
+    if(total_layers == 0) {
+        return 0;
+    }
+    if(done_layers > total_layers) {
+        done_layers = total_layers;
+    }
+    const int raw = static_cast<int>(
+        (static_cast<uint64_t>(done_layers) * kLayerPctMaxInPrint) / total_layers);
+    return std::clamp(raw, kLayerPctFloor, kLayerPctMaxInPrint);
 }
 
 /**
  * @brief 融合包进度与层进度（均映射到 0~95）
+ *
+ * 仅用于**回退**路径（OVF / 无 M3000 / 关闭 Layer Snap）：这类作业拿不到可靠
+ * 总层数，只能以包进度为主。G-code 走纯层台阶时不经过本函数。
  *
  * - 包进度决定细粒度连续性，始终是主导量；
  * - 层进度只作为参考锚点：总层数（M3000 计数）与运行时 Snap 次数定义不同，
@@ -625,6 +700,7 @@ bool GlavoService::init()
     McuLink::instance().set_first_layer_check_callback([this](uint16_t layer_height_um) {
         return request_first_layer_visual_check(layer_height_um);
     });
+    configure_optical_path_check();
     McuLink::instance().set_ota_status_callback(
         [this](const middleware::McuOtaStatusPayload& st) {
             publish_mcu_ota_status(st);
@@ -714,6 +790,8 @@ bool GlavoService::start()
         middleware::MsgType::UI_Debug_Galvo_RedLight_Ntf,
         middleware::MsgType::UI_Debug_Galvo_RedAlways_Ntf,
         middleware::MsgType::UI_Debug_Galvo_Param_Save_Ntf,
+        middleware::MsgType::UI_Debug_Galvo_PointTest_Start_Ntf,
+        middleware::MsgType::UI_Debug_Galvo_PointTest_Get_Ntf,
         middleware::MsgType::UI_Debug_TestImage_Set_Ntf,
         middleware::MsgType::UI_Debug_TestImage_Get_Ntf,
         middleware::MsgType::UI_Debug_CleanTest_Start_Ntf,
@@ -734,6 +812,10 @@ bool GlavoService::start()
         middleware::MsgType::UI_Debug_FirstLayer_Visual_Check_Get_Ntf,
         middleware::MsgType::APP_Visual_FirstLayer_Check_Rsp,
         middleware::MsgType::APP_Visual_FirstLayer_Reference_Ready_Rsp,
+        /* 打印前光路检测：调试开关 + Visual 单点识别回包 */
+        middleware::MsgType::UI_Debug_OpticalPath_Check_Set_Ntf,
+        middleware::MsgType::UI_Debug_OpticalPath_Check_Get_Ntf,
+        middleware::MsgType::APP_Visual_OpticalPath_Point_Check_Rsp,
 
         /* Settings/About：MCU / 振镜控制板固件版本查询 */
         middleware::MsgType::UI_Mcu_Version_Ntf,
@@ -756,6 +838,7 @@ bool GlavoService::start()
     publish_debug_env_sim_powder_state();
     publish_debug_first_layer_visual_check_state();
     publish_debug_test_image_state();
+    publish_debug_galvo_point_test_state();
     return true;
 }
 
@@ -793,6 +876,8 @@ bool GlavoService::stop()
         link_event_queue_.clear();
     }
 
+    stop_galvo_point_test_worker();
+    optical_path_check_.abort();
     stop_print_job();
     clear_test_image_session();
     stop_clean_worker();
@@ -880,6 +965,7 @@ void GlavoService::worker_loop()
                 return !worker_running_.load() ||
                        clean_test_done_pending_.load() ||
                        transport_result_pending_.load() ||
+                       optical_path_done_pending_.load() ||
                        !worker_queue_.empty() ||
                        !link_event_queue_.empty();
             };
@@ -915,6 +1001,15 @@ void GlavoService::worker_loop()
                 transport_result_pending_.store(false);
                 lock.unlock();
                 on_transport_result(result_code);
+                lock.lock();
+            }
+
+            /* 光路检测线程只置位；起印续跑 / 阻断报警都回到本线程串行执行。 */
+            if(optical_path_done_pending_.load() &&
+               state() == ServiceState::Running) {
+                optical_path_done_pending_.store(false);
+                lock.unlock();
+                on_optical_path_check_done();
                 lock.lock();
             }
 
@@ -1113,6 +1208,12 @@ void GlavoService::handle_message(const middleware::Message& msg)
         case middleware::MsgType::UI_Debug_Galvo_Param_Save_Ntf:
             handle_debug_galvo_param_save(msg);
             break;
+        case middleware::MsgType::UI_Debug_Galvo_PointTest_Start_Ntf:
+            handle_debug_galvo_point_test_start(msg);
+            break;
+        case middleware::MsgType::UI_Debug_Galvo_PointTest_Get_Ntf:
+            handle_debug_galvo_point_test_get(msg);
+            break;
         case middleware::MsgType::UI_Debug_TestImage_Set_Ntf:
             handle_debug_test_image_set(msg);
             break;
@@ -1172,6 +1273,15 @@ void GlavoService::handle_message(const middleware::Message& msg)
             break;
         case middleware::MsgType::APP_Visual_FirstLayer_Reference_Ready_Rsp:
             handle_visual_first_layer_reference_ready_rsp(msg);
+            break;
+        case middleware::MsgType::UI_Debug_OpticalPath_Check_Set_Ntf:
+            handle_debug_optical_path_check_set(msg);
+            break;
+        case middleware::MsgType::UI_Debug_OpticalPath_Check_Get_Ntf:
+            handle_debug_optical_path_check_get(msg);
+            break;
+        case middleware::MsgType::APP_Visual_OpticalPath_Point_Check_Rsp:
+            handle_visual_optical_path_point_rsp(msg);
             break;
         case middleware::MsgType::UI_Mcu_Version_Ntf:
             handle_mcu_version_req(msg);
@@ -1442,7 +1552,12 @@ void GlavoService::clear_prepare_session()
     prepared_line_count_ = 0;
     prepared_layer_count_ = 0;
     print_total_layers_ = 0;
+    layer_progress_mode_ = false;
     prepare_ready_ = false;
+    /* 光路检测的"本轮已通过"随 prepare 会话一起作废，保证每次起印都重新检测。
+     * 注意不能放在 stop_print_job() 里：handle_print_start 自己会先调它一次，
+     * 那样刚检完就被清掉，会陷入"检测→起印→再检测"的死循环。 */
+    optical_path_check_.reset_passed();
 }
 
 /**
@@ -1508,6 +1623,25 @@ bool GlavoService::run_print_prepare(middleware::PrintFileSource source, uint32_
             }
         }
     }
+    /* G-code：行数与 M3000 层数一趟扫出来，行数随后作为 hint 交给解析器，
+     * open_file 便不再自己整读一遍数换行。两个数都已缓存命中时整趟跳过。
+     * 非 G-code（OVF）不扫，行数由 worker 打开文件时自行统计（段数）。 */
+    const bool m3000_candidate = is_m3000_scan_candidate(local_path_out);
+    if(m3000_candidate && (line_count == 0 || layer_count == 0)) {
+        uint32_t scanned_lines  = 0;
+        uint32_t scanned_layers = 0;
+        if(scan_gcode_lines_and_layers(local_path_out,
+                                       &scanned_lines, &scanned_layers)) {
+            if(line_count == 0) {
+                line_count = scanned_lines;
+            }
+            layer_count = scanned_layers;
+        } else {
+            UPC_LOG_GLAVO_SERVICE(Warn, "prepare: gcode scan failed %s",
+                                  local_path_out.c_str());
+        }
+    }
+
     const int line_hint = line_count > 0 ? static_cast<int>(line_count) : -1;
     if(parser::ParserManager::instance().open_file(local_path_out, line_hint) != 0) {
         UPC_LOG_GLAVO_SERVICE(Warn, "prepare: open failed %s", local_path_out.c_str());
@@ -1531,9 +1665,6 @@ bool GlavoService::run_print_prepare(middleware::PrintFileSource source, uint32_
     entry.name        = basename;
     entry.file_size   = static_cast<uint32_t>(st.st_size);
     entry.line_count  = line_count;
-    if(layer_count == 0 && is_m3000_scan_candidate(local_path_out)) {
-        layer_count = count_layer_marks_m3000(local_path_out);
-    }
     entry.layer_count = layer_count;
     entry.duration_sec = 0;
     entry.material_g  = 0.f;
@@ -1567,8 +1698,9 @@ void GlavoService::handle_print_prepare(const middleware::Message& msg)
     middleware::PrintPrepareRspPayload rsp{};
     rsp.ok = 0;
 
-    if(test_image_active_ || test_image_desired_) {
-        UPC_LOG_GLAVO_SERVICE(Warn, "print_prepare rejected: test image active");
+    if(test_image_active_ || test_image_desired_ ||
+       galvo_point_test_active_.load() || optical_path_check_.active()) {
+        UPC_LOG_GLAVO_SERVICE(Warn, "print_prepare rejected: debug motion test active");
         middleware::Message out(middleware::MsgType::APP_Print_Prepare_Rsp,
             static_cast<middleware::ModuleId>(module_id()), msg.sender_id);
         out.payload = middleware::MsgPayload::from_bytes(
@@ -1624,14 +1756,40 @@ void GlavoService::handle_parser_exit(const middleware::Message& msg)
  * @brief 在已 Prepare 的路径上真正启动一次打印作业
  *
  * 调用前须保证：prepare_ready_、路径有效，且 McuLink 不在 terminate 清理中。
- * 步骤：open_file(带行数 hint) → 重置计数/进度 → start_parse → 通知 Media 录像会话
+ * 步骤：置打印态 → 光路检测 gate → open_file(带行数 hint) → 重置计数/进度
+ *      → start_parse → 首层参考图 gate → 通知 Media 录像会话
  *      → begin_sending（link 线程开始从 RingBuffer 抽运动包）。
+ *
+ * print_running_ 在最前面就置位（而非等 parser 就绪），原因有两条：
+ *   1) 光路检测那十几秒 UI 已在打印页，后端状态必须与之一致；
+ *   2) handle_print_terminate 靠 print_running_ 判断要不要接终止请求，
+ *      置晚了检测期间的用户终止会被它的 early return 吞掉。
+ * open_file 失败分支会把它落回 false。
  */
 void GlavoService::launch_print_from_prepared(const std::string& full_path)
 {
-    /* 起印前强制切回激光模式（串口开激光 + TCP 关红光），确保后续打印控制在预期态。 */
-    (void)apply_red_laser_mode(false, "before_print_start");
+    ignore_powder_low_for_current_print_ = false;
+    print_running_.store(true);
+    McuLink::instance().set_print_task_flow_active(true);
+    publish_print_state_ntf(static_cast<uint32_t>(middleware::UserHomeStatus::Printing));
 
+    /* 光路检测优先级最高：放在 open/parse 之前，失败就不必回滚 parser 状态。
+     * 起了一轮就直接返回，结果经 pending 回灌 worker 后续跑下半段。 */
+    if(begin_optical_path_gate()) {
+        return;
+    }
+
+    continue_print_after_optical_ready(full_path);
+}
+
+/**
+ * @brief 光路检测放行后的起印后半段
+ *
+ * 与 launch_print_from_prepared 拆开是为了让光路检测能在中间异步等十几秒，
+ * 而 open/parse/首层 gate 这些步骤仍在 worker 线程串行执行。
+ */
+void GlavoService::continue_print_after_optical_ready(const std::string& full_path)
+{
     bool parser_ready = false;
     if(prepared_parser_open_) {
         if(parser::IParserWorker* worker = active_parser()) {
@@ -1646,8 +1804,11 @@ void GlavoService::launch_print_from_prepared(const std::string& full_path)
         if(parser::ParserManager::instance().open_file(full_path, line_hint) != 0) {
             UPC_LOG_GLAVO_SERVICE(Error, "print_start: open failed path=%s",
                                   full_path.c_str());
-            print_running_.store(false);
             prepared_parser_open_ = false;
+            /* 打印态是 launch_print_from_prepared 一开头就置的（光路检测要用），
+             * 所以这里必须把那一整套都落回去并通知 UI —— 否则 UI 停在打印页
+             * 0% 不动，且 print_task_flow_active 一直挂着屏蔽心跳日志。 */
+            abort_print_start(middleware::PrintStartRejectReason::FileOpenFail, 0);
             return;
         }
     }
@@ -1655,21 +1816,21 @@ void GlavoService::launch_print_from_prepared(const std::string& full_path)
     current_file_path_ = full_path;
     PrintJobState::instance().reset_job_counters();
 #if GLAVO_ENABLE_LAYER_SNAP
+    /* 层数以 Prepare 的单趟扫描为唯一来源（Start 必须在 Prepare 成功之后）。
+     * 这里不再补扫：文件本就没有 M3000 时补扫只是每次起印白读一遍全文，
+     * 扫不出来就按 0 处理，自动回退到包进度。 */
     print_total_layers_ = prepared_layer_count_;
-    if(print_total_layers_ == 0 && is_m3000_scan_candidate(full_path)) {
-        print_total_layers_ = count_layer_marks_m3000(full_path);
-    }
 #else
     /* 未开启换层 Snap 时没有层完成事件，层进度恒为 0，只能退化为纯包进度。 */
     print_total_layers_ = 0;
 #endif
+    /* 纯层台阶进度只用于「能数出 M3000 且有换层 Snap」的作业；OVF / 无层标记 /
+     * 关闭 Snap 时 print_total_layers_ 为 0，自动回退到包进度 + 排空。 */
+    layer_progress_mode_ = (print_total_layers_ > 0) &&
+                           is_m3000_scan_candidate(full_path);
     reset_print_progress_state();
     parser::ParserManager::instance().start_parse();
 
-    ignore_powder_low_for_current_print_ = false;
-    print_running_.store(true);
-    McuLink::instance().set_print_task_flow_active(true);
-    publish_print_state_ntf(static_cast<uint32_t>(middleware::UserHomeStatus::Printing));
     if(first_layer_visual_check_on_) {
         first_layer_reference_waiting_ = true;
         if(!publish_first_layer_visual_session(true, "print_start")) {
@@ -1689,8 +1850,9 @@ void GlavoService::launch_print_from_prepared(const std::string& full_path)
 
     begin_print_motion_after_reference_ready();
 
-    UPC_LOG_GLAVO_SERVICE(Info, "print_start: path=%s total_layers=%u",
-        full_path.c_str(), static_cast<unsigned>(print_total_layers_));
+    UPC_LOG_GLAVO_SERVICE(Info, "print_start: path=%s total_layers=%u layer_progress=%d",
+        full_path.c_str(), static_cast<unsigned>(print_total_layers_),
+        layer_progress_mode_ ? 1 : 0);
 }
 
 void GlavoService::begin_print_motion_after_reference_ready()
@@ -1700,6 +1862,10 @@ void GlavoService::begin_print_motion_after_reference_ready()
             "print motion start ignored: print is no longer active");
         return;
     }
+    /* 切激光模式（串口开激光使能 + TCP 关红光）压到真正开始运动的前一刻：
+     * 前面的光路检测要红光常亮，且 open_file 失败等提前返回的分支也就不会
+     * 遗留一个"激光使能开着却没在打印"的中间态。 */
+    (void)apply_red_laser_mode(false, "before_print_motion");
     first_layer_reference_waiting_ = false;
     PrintVideoNotify::instance().on_print_start(current_file_path_);
     McuLink::instance().begin_sending();
@@ -1722,8 +1888,9 @@ void GlavoService::handle_print_start(const middleware::Message& msg)
         return;
     }
 
-    if(test_image_active_ || test_image_desired_) {
-        UPC_LOG_GLAVO_SERVICE(Warn, "print_start rejected: test image active");
+    if(test_image_active_ || test_image_desired_ ||
+       galvo_point_test_active_.load() || optical_path_check_.active()) {
+        UPC_LOG_GLAVO_SERVICE(Warn, "print_start rejected: debug motion test active");
         return;
     }
 
@@ -1768,6 +1935,27 @@ void GlavoService::handle_print_terminate(const middleware::Message& msg)
 {
     (void)msg;
     UPC_LOG_GLAVO_SERVICE(Info, "print_terminate requested");
+    /* 光路检测阶段：运动与录像都还没开始，不能走下面那套 abort 流程
+     * （on_print_abort / request_terminate 都对着一个不存在的作业）。
+     * 只需打断检测线程、落回红光安全态、清会话。 */
+    if(optical_path_check_.active() || deferred_optical_check_) {
+        deferred_optical_check_ = false;
+        deferred_print_start_ = false;
+        /* abort() 会 join 检测线程，返回时那一轮的 Visual 会话 Stop 已经发过，
+         * 且它的 on_done 因 generation 作废不会再回灌，故只需清掉挂起位。 */
+        optical_path_check_.abort();
+        optical_path_done_pending_.store(false);
+        (void)apply_red_laser_mode(true, "user_terminate_during_optical");
+        print_running_.store(false);
+        McuLink::instance().set_print_task_flow_active(false);
+        parser::ParserManager::instance().stop_parse();
+        publish_print_state_ntf(static_cast<uint32_t>(middleware::UserHomeStatus::Idle));
+        /* clear_prepare_session 内部会 reset_passed，此处不必重复。 */
+        clear_prepare_session();
+        publish_terminate_done();
+        UPC_LOG_GLAVO_SERVICE(Info, "print_terminate during optical path check");
+        return;
+    }
     if(!print_running_.load()) {
         UPC_LOG_GLAVO_SERVICE(Debug, "print_terminate ignored: not running");
         publish_terminate_done();
@@ -1796,6 +1984,12 @@ void GlavoService::handle_print_pause(const middleware::Message& msg)
     (void)msg;
     if(!print_running_.load()) {
         UPC_LOG_GLAVO_SERVICE(Debug, "print_pause ignored: not running");
+        publish_print_pause_done(false);
+        return;
+    }
+    /* 检测阶段没有正式运动包，暂停钮在 UI 上已灰；这里再挡一层。 */
+    if(optical_path_check_.active() || deferred_optical_check_) {
+        UPC_LOG_GLAVO_SERVICE(Debug, "print_pause ignored: optical path check");
         publish_print_pause_done(false);
         return;
     }
@@ -1850,39 +2044,42 @@ void GlavoService::handle_print_powder_low_ignore(const middleware::Message& msg
     UPC_LOG_GLAVO_SERVICE(Warn, "powder_low_ignore enabled for current print");
 }
 
-/** @brief 重置进度推送的去重状态（last_print_pct_ / last_parse_done_） */
+/** @brief 重置进度推送的去重状态（百分比 / cache rate / 推送时刻） */
 void GlavoService::reset_print_progress_state()
 {
     last_print_pct_        = -1;
-    last_parse_done_       = false;
     last_sent_cmd_rate_    = 0xffff;
     last_sent_data_rate_   = 0xffff;
     last_drain_progress_at_ = {};
+    last_progress_push_at_ = {};
 }
 
 /**
  * @brief 计算并推送 APP_Print_Progress_Ntf
  * @param force_complete true 时强制 100%（打印完成事件）
  *
- * 两段式进度（防短文件瞬间 99%、区分发送与排空）：
- * - 下发段 0～95：sent_packets / denom 线性映射；
+ * 打印中按作业类型二选一（详见文件内「进度映射约定」）：
+ * - 纯层段 1～98：layer_progress_mode_ 时按 Snap 层数 / 总层数走台阶，层内静止；
+ * - 包段 0～95：回退路径，sent_packets / denom 线性映射后与层锚点融合。
+ * 共用尾段：
  * - 排空段 95～99：natural_complete_pending 时按 MCU 双缓冲占用；
  * - 完成 100：仅 force_complete / job_completed。
- * 百分比单调不回退；暂停 / 换层等待时冻结百分比。
+ * 百分比单调不回退；用户暂停时冻结（包段另加换层等待冻结，纯层不冻——Snap 已在
+ * 换层排空时加过一层，应当立刻走到新台阶；这一帧由 McuLink::link_try_layer_serial_dispatch
+ * 末尾补触发进度回调送出，因为换层期间没有发包、常规回调不会来）。
+ * 百分比未前进时仍会因 cache rate 变化或保活到期推一帧，避免同一条 Ntf 里的
+ * 环境字段（PM2.5/温度/氧含量）在长层内僵住。
  */
 void GlavoService::send_print_progress(bool force_complete)
 {
     auto& link = McuLink::instance();
     const auto job = PrintJobState::instance().snapshot();
 
-    parser::IParserWorker* parser = active_parser();
-    const bool parse_done = parser &&
-                            parser->is_file_read_exhausted() &&
-                            !parser->is_parsing();
-    last_parse_done_ = parse_done;
+    /* 纯层段不依赖解析包数，分母缺失也能出台阶，故跳过 denom 前置检查。 */
+    const bool layer_mode = layer_progress_mode_ && print_total_layers_ > 0;
 
     int denom = 0;
-    if(!force_complete && !job.job_completed) {
+    if(!force_complete && !job.job_completed && !layer_mode) {
         denom = progress_denominator(job.sent_packets);
         if(denom <= 0) {
             return;
@@ -1896,9 +2093,10 @@ void GlavoService::send_print_progress(bool force_complete)
         const bool paused = link.is_user_dispatch_paused();
         const bool waiting_layer = link.is_waiting_layer();
         const bool draining = link.is_natural_complete_pending();
+        const bool freeze = paused || (!layer_mode && waiting_layer);
 
-        if((paused || waiting_layer) && last_print_pct_ >= 0) {
-            /* 暂停/换层：冻结显示，仍可因 rate 变化带环境字段推送 */
+        if(freeze && last_print_pct_ >= 0) {
+            /* 用户暂停（包段还含换层等待）：冻结显示，仍可因 rate 变化带环境字段推送 */
             pct = last_print_pct_;
             if(pct > 99) {
                 pct = 99;
@@ -1913,11 +2111,19 @@ void GlavoService::send_print_progress(bool force_complete)
             if(pct > 99) {
                 pct = 99;
             }
-        } else {
-            int packet_pct_95 = map_send_progress_to_95(job.sent_packets, denom);
-            if(!parse_done && packet_pct_95 > 95) {
-                packet_pct_95 = 95;
+        } else if(layer_mode) {
+            /* 打印中上限由 map_layer_progress_98 保证；单调守卫必须放最后，
+             * 否则会把尾段已推过的 99 压回 98 造成回退。 */
+            pct = map_layer_progress_98(
+                PrintVideoNotify::instance().current_layer_index(),
+                print_total_layers_);
+            if(last_print_pct_ >= 0 && pct < last_print_pct_) {
+                pct = last_print_pct_;
             }
+        } else {
+            /* 同上：0~95 上限由 map_send_progress_to_95 + fuse 保证 */
+            const int packet_pct_95 =
+                map_send_progress_to_95(job.sent_packets, denom);
             const uint32_t done_layers =
                 PrintVideoNotify::instance().current_layer_index();
             pct = fuse_send_and_layer_progress_95(packet_pct_95,
@@ -1926,12 +2132,10 @@ void GlavoService::send_print_progress(bool force_complete)
             if(last_print_pct_ >= 0 && pct < last_print_pct_) {
                 pct = last_print_pct_;
             }
-            if(pct > 95) {
-                pct = 95;
-            }
         }
     }
 
+    const auto now = std::chrono::steady_clock::now();
     if(!force_complete && !job.job_completed) {
         const bool rates_changed =
             job.cmd_cache_rate != last_sent_cmd_rate_ ||
@@ -1939,7 +2143,6 @@ void GlavoService::send_print_progress(bool force_complete)
         const bool drained =
             job.cmd_cache_rate == 0 && job.data_cache_rate == 0;
         if(pct >= 95 && rates_changed && !drained) {
-            const auto now = std::chrono::steady_clock::now();
             if(last_drain_progress_at_.time_since_epoch().count() != 0 &&
                now - last_drain_progress_at_ <
                    std::chrono::milliseconds(kDrainProgressMinMs)) {
@@ -1947,17 +2150,24 @@ void GlavoService::send_print_progress(bool force_complete)
             }
             last_drain_progress_at_ = now;
         }
-        /* 百分比未前进时不推送，除非缓存 rate 变化需要带环境字段刷新 */
-        if(last_print_pct_ >= 0 && pct <= last_print_pct_ && !rates_changed) {
+        /* 保活：纯层段一层内百分比恒定，到期仍推一帧刷新环境字段 */
+        const bool keepalive_due =
+            last_progress_push_at_.time_since_epoch().count() == 0 ||
+            now - last_progress_push_at_ >=
+                std::chrono::milliseconds(kProgressKeepAliveMs);
+        /* 百分比未前进时不推送，除非缓存 rate 变化或保活到期需要刷新环境字段 */
+        if(last_print_pct_ >= 0 && pct <= last_print_pct_ &&
+           !rates_changed && !keepalive_due) {
             return;
         }
     } else if(last_print_pct_ >= 100) {
         return;
     }
 
-    last_print_pct_       = pct;
-    last_sent_cmd_rate_   = job.cmd_cache_rate;
-    last_sent_data_rate_  = job.data_cache_rate;
+    last_print_pct_        = pct;
+    last_sent_cmd_rate_    = job.cmd_cache_rate;
+    last_sent_data_rate_   = job.data_cache_rate;
+    last_progress_push_at_ = now;
 
     const auto env = link.env_snapshot();
 
@@ -1970,6 +2180,14 @@ void GlavoService::send_print_progress(bool force_complete)
     p.oxygen_percent    = env.valid ? env.oxygen_percent : 0.f;
     p.cmd_cache_rate    = job.cmd_cache_rate;
     p.data_cache_rate   = job.data_cache_rate;
+    /* 层号按「正在打第几层」上报：Snap 记的是已完成层，故 +1；末层排空 / 换层
+     * 那次多出来的 Snap 会顶到 total，钳一下不越界。total_layers=0（OVF、无
+     * M3000、关闭 Layer Snap）时 UI 整块不显示层号。 */
+    p.total_layers = print_total_layers_;
+    if(print_total_layers_ > 0) {
+        const uint32_t done = PrintVideoNotify::instance().current_layer_index();
+        p.current_layer = std::min(done + 1u, print_total_layers_);
+    }
 
     middleware::Message ntf(middleware::MsgType::APP_Print_Progress_Ntf,
         static_cast<middleware::ModuleId>(module_id()),
@@ -2209,6 +2427,248 @@ void GlavoService::handle_visual_first_layer_check_rsp(const middleware::Message
     }
 }
 
+/* ============================================================================
+ * 打印前光路检测（优先级高于首层检测）
+ *
+ * UI 时序：Confirm Print → Prepare → UI 进打印页（相机预览已起）→ 本检测
+ *          → 通过则继续正式打印；失败则报警 + UI 跳终止结果页。
+ * 详见 optical_path_check.hpp 的模块头注释与 doc/视觉协作-光路检测.md。
+ * ============================================================================ */
+
+void GlavoService::configure_optical_path_check()
+{
+    optical_path_check_.configure(
+        /* send_motion */
+        [](const uint8_t* subpacket) {
+            return McuLink::instance().send_debug_motion_subpacket(subpacket);
+        },
+        /* apply_red_always */
+        [this]() { return apply_red_always_mode("optical_path_start"); },
+        /* publish_check_req */
+        [this](const middleware::VisualOpticalPathCheckReqPayload& req) {
+            middleware::Message msg(
+                middleware::MsgType::GLAVO_Visual_OpticalPath_Point_Check_Req,
+                middleware::ModuleId::APP_GLAVO,
+                middleware::ModuleId::APP_VISUAL);
+            msg.payload = middleware::MsgPayload::from_bytes(
+                reinterpret_cast<const uint8_t*>(&req), sizeof(req));
+            return publish_async(msg);
+        },
+        /* publish_progress */
+        [this](const middleware::OpticalPathProgressPayload& p) {
+            publish_optical_path_progress(p);
+        },
+        /* publish_session */
+        [this](bool active) { publish_optical_path_visual_session(active); },
+        /* on_done：检测线程上下文，只置 pending + 唤醒 worker，不碰打印会话 */
+        [this](const OpticalPathCheckResult& result) {
+            optical_path_done_passed_.store(result.passed);
+            optical_path_failed_point_.store(result.failed_point_index);
+            optical_path_done_pending_.store(true);
+            worker_cv_.notify_one();
+        });
+}
+
+bool GlavoService::begin_optical_path_gate()
+{
+    if(!optical_path_check_on_ || optical_path_check_.passed()) {
+        return false;
+    }
+
+    /* 上一作业还在 terminate 清理时，McuLink 会拒发调试运动包，整轮会被误判成
+     * 光路异常。此处挂起，等 TerminateDone/PrintError 再起检测。 */
+    auto& link = McuLink::instance();
+    if(link.is_sending() || link.is_terminate_pending()) {
+        deferred_optical_check_ = true;
+        link.request_terminate();
+        UPC_LOG_GLAVO_SERVICE(Info,
+            "optical path deferred until terminate done sending=%d terminate=%d",
+            link.is_sending() ? 1 : 0,
+            link.is_terminate_pending() ? 1 : 0);
+        return true;
+    }
+
+    deferred_optical_check_ = false;
+    optical_path_done_pending_.store(false);
+    if(!optical_path_check_.start(galvo_motion_calibration_snapshot())) {
+        /* 起不起来不能默默放行（fail-closed），按检测失败阻断本次打印。 */
+        UPC_LOG_GLAVO_SERVICE(Error, "optical path start failed; blocking print");
+        abort_print_for_optical_path(kNoFailedPoint);
+        return true;
+    }
+    publish_device_event(middleware::DeviceEventCode::OpticalPathCheckStarted,
+                         middleware::DeviceEventSeverity::Info, true);
+    UPC_LOG_GLAVO_SERVICE(Info, "optical path check started");
+    return true;
+}
+
+void GlavoService::on_optical_path_check_done()
+{
+    /* 检测线程刚好在用户终止的同一瞬间跑完时，pending 会带着一份过期结论进来。
+     * 打印会话已经被终止路径拆掉了，这里必须重新确认还在打印态。 */
+    if(!print_running_.load()) {
+        UPC_LOG_GLAVO_SERVICE(Warn,
+            "optical path result dropped: print no longer active");
+        return;
+    }
+
+    if(!optical_path_done_passed_.load()) {
+        abort_print_for_optical_path(optical_path_failed_point_.load());
+        return;
+    }
+
+    publish_device_event(middleware::DeviceEventCode::OpticalPathCheckPassed,
+                         middleware::DeviceEventSeverity::Info, true);
+    if(prepared_local_path_.empty()) {
+        /* 走 abort_print_start 而不是 publish_terminate_done：0% 进度下 UI 的
+         * try_exit_print_preview 会被 print_ready_to_exit 挡住，退不出打印页。 */
+        UPC_LOG_GLAVO_SERVICE(Warn,
+            "optical path passed but prepared path is gone; abort print start");
+        abort_print_start(middleware::PrintStartRejectReason::FileOpenFail, 0);
+        return;
+    }
+    UPC_LOG_GLAVO_SERVICE(Info, "optical path passed; continue print start");
+    continue_print_after_optical_ready(prepared_local_path_);
+}
+
+/**
+ * @brief 「运动还没开始就起印失败」的统一收尾
+ *
+ * launch_print_from_prepared 一开头就置了打印态（光路检测那十几秒 UI 已经在
+ * 打印页），所以这类分支必须把那一整套都落回去并通知 UI，否则 UI 会停在打印页
+ * 0% 不动，McuLink 的 print_task_flow_active 也一直挂着。
+ *
+ * prepare 会话（本地副本 + 行数/层数缓存）刻意保留：用户排查完重选同一文件
+ * 可跳过复制与扫描。
+ */
+void GlavoService::abort_print_start(middleware::PrintStartRejectReason reason,
+                                     uint8_t detail)
+{
+    /* 落回红光模式：红光模式本身就关激光使能，是失败态下的安全态。 */
+    (void)apply_red_laser_mode(true, "print_start_aborted");
+    /* 两个挂起标志一并作废，避免 TerminateDone 迟到时又把这一单捡起来重跑。 */
+    deferred_optical_check_ = false;
+    deferred_print_start_ = false;
+    print_running_.store(false);
+    McuLink::instance().set_print_task_flow_active(false);
+    parser::ParserManager::instance().stop_parse();
+    publish_print_start_rejected(reason, detail);
+    publish_print_state_ntf(static_cast<uint32_t>(middleware::UserHomeStatus::Idle));
+    UPC_LOG_GLAVO_SERVICE(Error, "print start aborted reason=%u detail=%u",
+                          static_cast<unsigned>(reason),
+                          static_cast<unsigned>(detail));
+}
+
+void GlavoService::abort_print_for_optical_path(uint8_t failed_point_index)
+{
+    /* 不在这里补发 Visual 会话 Stop：整轮跑过的话 OpticalPathCheck::run() 收尾时
+     * 已经发过；start() 就失败的话根本没发过 Start，也没什么要关。 */
+    publish_device_event(middleware::DeviceEventCode::OpticalPathCheckFail,
+                         middleware::DeviceEventSeverity::Critical, true);
+    abort_print_start(middleware::PrintStartRejectReason::OpticalPathFail,
+                      failed_point_index);
+}
+
+void GlavoService::publish_optical_path_progress(
+    const middleware::OpticalPathProgressPayload& payload)
+{
+    middleware::Message ntf(middleware::MsgType::APP_OpticalPath_Progress_Ntf,
+        static_cast<middleware::ModuleId>(module_id()),
+        middleware::ModuleId::UI);
+    ntf.payload = middleware::MsgPayload::from_bytes(
+        reinterpret_cast<const uint8_t*>(&payload), sizeof(payload));
+    if(!publish_async(ntf)) {
+        UPC_LOG_GLAVO_SERVICE(Warn, "optical path progress publish failed point=%u",
+                              static_cast<unsigned>(payload.point_index));
+    }
+}
+
+void GlavoService::publish_optical_path_visual_session(bool active)
+{
+    middleware::Message ntf(
+        active ? middleware::MsgType::GLAVO_Visual_OpticalPath_Session_Start_Ntf
+               : middleware::MsgType::GLAVO_Visual_OpticalPath_Session_Stop_Ntf,
+        middleware::ModuleId::APP_GLAVO,
+        middleware::ModuleId::APP_VISUAL);
+    if(!publish_async(ntf)) {
+        UPC_LOG_GLAVO_SERVICE(Warn, "optical path session publish failed active=%d",
+                              active ? 1 : 0);
+    }
+}
+
+void GlavoService::publish_print_start_rejected(
+    middleware::PrintStartRejectReason reason, uint8_t detail)
+{
+    middleware::PrintStartRejectedPayload p{};
+    p.reason = static_cast<uint8_t>(reason);
+    p.detail = detail;
+    middleware::Message ntf(middleware::MsgType::APP_Print_Start_Rejected_Ntf,
+        static_cast<middleware::ModuleId>(module_id()),
+        middleware::ModuleId::UI);
+    ntf.payload = middleware::MsgPayload::from_bytes(
+        reinterpret_cast<const uint8_t*>(&p), sizeof(p));
+    if(!publish_async(ntf)) {
+        UPC_LOG_GLAVO_SERVICE(Warn, "print_start_rejected publish failed reason=%u",
+                              static_cast<unsigned>(p.reason));
+    }
+}
+
+void GlavoService::handle_visual_optical_path_point_rsp(
+    const middleware::Message& msg)
+{
+    middleware::VisualOpticalPathCheckRspPayload rsp{};
+    if(!read_inline_pod(msg.payload, rsp)) {
+        UPC_LOG_GLAVO_SERVICE(Warn, "optical path rsp invalid payload");
+        return;
+    }
+    optical_path_check_.on_point_rsp(rsp);
+}
+
+void GlavoService::publish_debug_optical_path_check_state()
+{
+    middleware::DebugOnOffPayload p{};
+    p.on = optical_path_check_on_ ? 1 : 0;
+    middleware::Message ntf(
+        middleware::MsgType::GLAVO_Debug_OpticalPath_Check_Ntf,
+        middleware::ModuleId::APP_GLAVO,
+        middleware::ModuleId::UI);
+    ntf.payload = middleware::MsgPayload::from_bytes(
+        reinterpret_cast<const uint8_t*>(&p), sizeof(p));
+    if(!publish_async(ntf)) {
+        UPC_LOG_GLAVO_SERVICE(Warn, "optical path check state publish failed");
+    }
+}
+
+void GlavoService::handle_debug_optical_path_check_set(
+    const middleware::Message& msg)
+{
+    middleware::DebugOnOffPayload p{};
+    if(!read_inline_pod(msg.payload, p)) {
+        return;
+    }
+    if(optical_path_check_.active()) {
+        UPC_LOG_GLAVO_SERVICE(Warn,
+            "optical path switch rejected: check in progress");
+        publish_debug_optical_path_check_state();
+        return;
+    }
+    optical_path_check_on_ = (p.on != 0);
+    /* 关掉开关时把"本轮已通过"一并清掉，避免下次开启后沿用旧结论。 */
+    if(!optical_path_check_on_) {
+        optical_path_check_.reset_passed();
+    }
+    UPC_LOG_GLAVO_SERVICE(Info, "debug optical_path_check=%d",
+                          optical_path_check_on_ ? 1 : 0);
+    publish_debug_optical_path_check_state();
+}
+
+void GlavoService::handle_debug_optical_path_check_get(
+    const middleware::Message& msg)
+{
+    (void)msg;
+    publish_debug_optical_path_check_state();
+}
+
 /**
  * @brief McuLink 作业事件（已在 worker 线程）：完成/终止/错误/缺粉
  *
@@ -2240,6 +2700,7 @@ void GlavoService::on_mcu_link_event(McuLinkEvent ev)
             }
             UPC_LOG_GLAVO_SERVICE(Info, "tcp_job_event: PrintCompleted");
             deferred_print_start_ = false;
+            deferred_optical_check_ = false;
             PrintVideoNotify::instance().on_print_finish();
             send_print_progress(true);
             (void)apply_red_laser_mode(true, "print_completed");
@@ -2270,6 +2731,23 @@ void GlavoService::on_mcu_link_event(McuLinkEvent ev)
                 UPC_LOG_GLAVO_SERVICE(Info, "tcp_job_event: TerminateDone");
             } else {
                 UPC_LOG_GLAVO_SERVICE(Warn, "tcp_job_event: PrintError");
+            }
+            /* 光路检测被 terminate 清理挡住过：清理完毕，现在补起那一轮。
+             * 走 begin_optical_path_gate 而不是 launch_*，因为打印态与
+             * PrintState_Ntf 已经在第一次 launch 里发过了。 */
+            if(deferred_optical_check_) {
+                deferred_optical_check_ = false;
+                if(print_running_.load() && prepare_ready_ &&
+                   !prepared_local_path_.empty()) {
+                    UPC_LOG_GLAVO_SERVICE(Info,
+                        "optical path resume after terminate path=%s",
+                        prepared_local_path_.c_str());
+                    if(begin_optical_path_gate()) {
+                        break;
+                    }
+                    continue_print_after_optical_ready(prepared_local_path_);
+                    break;
+                }
             }
             if(deferred_print_start_) {
                 deferred_print_start_ = false;
@@ -3316,6 +3794,11 @@ bool GlavoService::apply_red_always_mode(const char* reason)
 /** @brief 调试红光开关：下发 TCP CMD=0x0A（Stop=0, Pause=0, RedLaser=on/off） */
 void GlavoService::handle_debug_galvo_red_light(const middleware::Message& msg)
 {
+    if(galvo_point_test_active_.load() || optical_path_check_.active()) {
+        UPC_LOG_GLAVO_SERVICE(Warn,
+            "red/laser switch rejected: point test or optical path check active");
+        return;
+    }
     middleware::DebugOnOffPayload p{};
     if(!read_inline_pod(msg.payload, p)) {
         return;
@@ -3326,7 +3809,129 @@ void GlavoService::handle_debug_galvo_red_light(const middleware::Message& msg)
 /** @brief 调试红光常亮：下发 TCP CMD=0x0A（Stop=0, Pause=0, Red=3） */
 void GlavoService::handle_debug_galvo_red_always(const middleware::Message& /*msg*/)
 {
+    if(galvo_point_test_active_.load() || optical_path_check_.active()) {
+        UPC_LOG_GLAVO_SERVICE(Warn,
+            "red-always switch rejected: point test or optical path check active");
+        return;
+    }
     (void)apply_red_always_mode("debug_red_always");
+}
+
+void GlavoService::publish_debug_galvo_point_test_state()
+{
+    middleware::DebugOnOffPayload p{};
+    p.on = galvo_point_test_active_.load() ? 1 : 0;
+    middleware::Message ntf(
+        middleware::MsgType::GLAVO_Debug_Galvo_PointTest_Ntf,
+        middleware::ModuleId::APP_GLAVO,
+        middleware::ModuleId::UI);
+    ntf.payload = middleware::MsgPayload::from_bytes(
+        reinterpret_cast<const uint8_t*>(&p), sizeof(p));
+    if(!publish_async(ntf)) {
+        UPC_LOG_GLAVO_SERVICE(Warn, "point test state publish failed");
+    }
+}
+
+void GlavoService::stop_galvo_point_test_worker()
+{
+    galvo_point_test_stop_requested_.store(true);
+    galvo_point_test_wait_cv_.notify_all();
+    if(galvo_point_test_thread_.joinable()) {
+        galvo_point_test_thread_.join();
+    }
+    galvo_point_test_active_.store(false);
+}
+
+void GlavoService::handle_debug_galvo_point_test_start(
+    const middleware::Message& msg)
+{
+    (void)msg;
+    if(print_running_.load() || test_image_active_ || test_image_desired_ ||
+       optical_path_check_.active() ||
+       McuLink::instance().is_sending() ||
+       McuLink::instance().is_terminate_pending()) {
+        UPC_LOG_GLAVO_SERVICE(Warn,
+            "point test rejected print=%d test_image=%d optical=%d sending=%d terminate=%d",
+            print_running_.load() ? 1 : 0,
+            (test_image_active_ || test_image_desired_) ? 1 : 0,
+            optical_path_check_.active() ? 1 : 0,
+            McuLink::instance().is_sending() ? 1 : 0,
+            McuLink::instance().is_terminate_pending() ? 1 : 0);
+        publish_debug_galvo_point_test_state();
+        return;
+    }
+
+    bool expected = false;
+    if(!galvo_point_test_active_.compare_exchange_strong(expected, true)) {
+        UPC_LOG_GLAVO_SERVICE(Warn, "point test ignored: already active");
+        publish_debug_galvo_point_test_state();
+        return;
+    }
+    if(galvo_point_test_thread_.joinable()) {
+        galvo_point_test_thread_.join();
+    }
+
+    /* 校准与增益按值快照：测试线程与 cal.csv 热加载可能并发。 */
+    const GalvoMotionCalibration cal = galvo_motion_calibration_snapshot();
+    galvo_point_test_stop_requested_.store(false);
+    publish_debug_galvo_point_test_state();
+
+    galvo_point_test_thread_ = std::thread(
+        [this, cal]() {
+            bool ok = apply_red_always_mode("point_test_start");
+            for(const auto& point : kGalvoTestPoints) {
+                if(!ok || galvo_point_test_stop_requested_.load()) {
+                    break;
+                }
+                const auto packet =
+                    galvo_encode_motion_subpacket(cal, point.x, point.y);
+                ok = McuLink::instance().send_debug_motion_subpacket(packet.data());
+                if(ok) {
+                    UPC_LOG_GLAVO_SERVICE(Info,
+                        "point test move x=%.1f y=%.1f result=1",
+                        static_cast<double>(point.x),
+                        static_cast<double>(point.y));
+                } else {
+                    UPC_LOG_GLAVO_SERVICE(Warn,
+                        "point test move x=%.1f y=%.1f result=0",
+                        static_cast<double>(point.x),
+                        static_cast<double>(point.y));
+                }
+                if(!ok) {
+                    break;
+                }
+
+                std::unique_lock<std::mutex> lock(galvo_point_test_wait_mtx_);
+                if(galvo_point_test_wait_cv_.wait_for(
+                       lock, kGalvoPointTestDwell,
+                       [this]() {
+                           return galvo_point_test_stop_requested_.load();
+                       })) {
+                    break;
+                }
+            }
+
+            if(!galvo_point_test_stop_requested_.load()) {
+                const auto center = galvo_encode_motion_subpacket(cal, 0.0f, 0.0f);
+                const bool center_ok =
+                    McuLink::instance().send_debug_motion_subpacket(center.data());
+                if(center_ok) {
+                    UPC_LOG_GLAVO_SERVICE(Info, "point test final center result=1");
+                } else {
+                    UPC_LOG_GLAVO_SERVICE(Warn, "point test final center result=0");
+                }
+            }
+            (void)apply_red_laser_mode(true, "point_test_finish");
+            galvo_point_test_active_.store(false);
+            publish_debug_galvo_point_test_state();
+        });
+}
+
+void GlavoService::handle_debug_galvo_point_test_get(
+    const middleware::Message& msg)
+{
+    (void)msg;
+    publish_debug_galvo_point_test_state();
 }
 
 /** @brief 保存振镜中心偏移到 cal.csv 并热加载 ParserContext（不重启进程即可生效） */
@@ -3338,9 +3943,10 @@ void GlavoService::handle_debug_galvo_param_save(const middleware::Message& msg)
         return;
     }
 
-    if(print_running_.load() || test_image_active_ || test_image_desired_) {
+    if(print_running_.load() || test_image_active_ || test_image_desired_ ||
+       galvo_point_test_active_.load() || optical_path_check_.active()) {
         UPC_LOG_GLAVO_SERVICE(Warn,
-            "galvo_param_save rejected: print/test image busy");
+            "galvo_param_save rejected: print/debug motion test busy");
         return;
     }
 
@@ -3456,8 +4062,10 @@ void GlavoService::handle_debug_test_image_set(const middleware::Message& msg)
         return;
     }
 
-    if(print_running_.load()) {
-        UPC_LOG_GLAVO_SERVICE(Warn, "test image rejected: formal print running");
+    if(print_running_.load() || galvo_point_test_active_.load() ||
+       optical_path_check_.active()) {
+        UPC_LOG_GLAVO_SERVICE(Warn,
+            "test image rejected: formal print or point test running");
         test_image_desired_ = false;
         test_image_active_ = false;
         publish_debug_test_image_state();

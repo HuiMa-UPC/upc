@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <chrono>
 #include <cstdio>
 #include <filesystem>
 #include <utility>
@@ -512,6 +513,11 @@ void MqttService::run_manifest_download_task(std::string task_id,
         return;
     }
 
+    /* 整目录清空而不是只删本任务的文件：临时文件名带 task_id，掉电中断的任务
+     * 会绕过所有清理路径，残留既不会被新任务覆盖也没人删。全包 .img 一次就是
+     * 几百 MB，攒几次能把 /userdata 占满，之后所有 OTA 都卡在 no_space 上。
+     * 同一时刻只有一个下载任务（ota_download_running_），清空是安全的。 */
+    clear_image_tmp_dir();
     if(!ensure_dir(kImageTmpDir)) {
         publish_failed("all", "tmp_dir_failed");
         return;
@@ -573,17 +579,34 @@ void MqttService::run_manifest_download_task(std::string task_id,
         std::filesystem::remove_all(extract_dir, ec);
 
         std::string dl_err;
+        /* 进度节流：原先每读 4KB 就打 UI+MQTT，SOC 全包会变成数十万次上报，
+         * 吞吐被进度洪泛拖死。仅在百分比变化，或未知总长时每 500ms 报一次。 */
+        uint8_t last_pub_pct = 0xFF;
+        auto last_pub_tp = std::chrono::steady_clock::time_point{};
         const bool dl_ok = download_file_with_progress(
             comp.url, tmp_part,
-            [this, &progress](size_t recv, size_t total) {
+            [this, &progress, &last_pub_pct, &last_pub_tp](size_t recv, size_t total) {
                 // 下载阶段仅使用 0~80，后续 90/100 预留给校验与应用。
+                uint8_t new_pct = progress.progress_pct;
                 if(total > 0) {
                     const int pct = static_cast<int>((recv * 100) / total);
-                    progress.progress_pct = static_cast<uint8_t>(std::clamp(pct, 0, 80));
+                    new_pct = static_cast<uint8_t>(std::clamp(pct, 0, 80));
                 } else if(progress.progress_pct < 80) {
-                    progress.progress_pct = static_cast<uint8_t>(
+                    new_pct = static_cast<uint8_t>(
                         std::min<int>(80, static_cast<int>(progress.progress_pct) + 1));
                 }
+                const auto now = std::chrono::steady_clock::now();
+                const bool pct_changed = (new_pct != last_pub_pct);
+                const bool due_by_time =
+                    (total == 0) &&
+                    (last_pub_tp.time_since_epoch().count() == 0 ||
+                     now - last_pub_tp >= std::chrono::milliseconds(500));
+                if(!pct_changed && !due_by_time) {
+                    return;
+                }
+                progress.progress_pct = new_pct;
+                last_pub_pct = new_pct;
+                last_pub_tp = now;
                 publish_ota_progress_ui(progress);
                 (void)publish_ota_progress_cloud(progress);
             }, dl_err);
@@ -615,6 +638,40 @@ void MqttService::run_manifest_download_task(std::string task_id,
             std::filesystem::remove(tmp_final, ec);
             publish_failed(comp.component.c_str(), "sha256_mismatch");
             return;
+        }
+
+        /* SOC 全包升级在此分流：包内是单个 .img，不走 AB 对与整目录替换，
+         * 落到固定路径后把重启时机交给用户。详见 mqtt_service_soc_ota.cpp。 */
+        if(comp.component == "soc") {
+            std::string soc_err;
+            const bool staged =
+                run_soc_ota_stage(task_id, comp, tmp_final, progress, soc_err);
+            std::filesystem::remove(tmp_final, ec);
+            if(!staged) {
+                publish_failed(comp.component.c_str(), soc_err.c_str());
+                return;
+            }
+
+            /* 固件已就绪：先把进度拉满，再让 UI 切到"是否重启升级"弹窗。 */
+            progress.state = static_cast<uint8_t>(middleware::OtaProgressState::Completed);
+            progress.progress_pct = 100;
+            progress.error_code[0] = '\0';
+            publish_ota_progress_ui(progress);
+            (void)publish_ota_progress_cloud(progress);
+
+            SocOtaPending pending{};
+            if(soc_ota_pending_load(pending)) {
+                publish_soc_ota_ready(pending);
+            }
+
+            /* 与循环末尾共用段一致：Env Sim 下让心跳立刻反映目标版本。 */
+            if(!comp.version.empty()) {
+                std::lock_guard<std::mutex> lock(data_mtx_);
+                if(env_sim_on_) {
+                    soc_fw_override_ = comp.version;
+                }
+            }
+            continue;
         }
 
         if(!ensure_dir(extract_dir)) {
@@ -952,8 +1009,12 @@ bool MqttService::parse_manifest_response(const std::string& payload,
         if(c.file_name.empty()) {
             (void)json_extract_string(obj, "filename", c.file_name);
         }
-        int size_bytes = 0;
-        if(json_extract_int(obj, "size_bytes", size_bytes) && size_bytes > 0) {
+        /* 用 int64 解析：SOC 全包 .img 可超 2GB，int 会截断。键名兼容两种风格。 */
+        int64_t size_bytes = 0;
+        if(!json_extract_int64(obj, "size_bytes", size_bytes)) {
+            (void)json_extract_int64(obj, "sizeBytes", size_bytes);
+        }
+        if(size_bytes > 0) {
             c.size_bytes = static_cast<uint64_t>(size_bytes);
         }
         if(c.url.empty()) {

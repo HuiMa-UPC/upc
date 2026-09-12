@@ -177,13 +177,15 @@ scripts/rongsu.sh start   # glavo + rongsu_camera → ui
 | `APP_Print_Prepare_Rsp` | — | Glavo→UI | `PrintPrepareRspPayload` | `register_print_prepare_done` | — |
 | `UI_Parser_Exit_Ntf` | — | UI→Glavo | Empty | `send_parser_exit` | 取消解析 |
 | `UI_Print_Start_Req` | — | UI→Glavo | `PrintStartReqPayload` | `send_print_start` | 正式解析+下发 |
-| `APP_Print_Progress_Ntf` | `GLAVO_Print_Progress_Ntf` | Glavo→UI | `PrintProgressPayload` | `register_print_progress` | 进度推送 |
+| `APP_Print_Progress_Ntf` | `GLAVO_Print_Progress_Ntf` | Glavo→UI | `PrintProgressPayload` | `register_print_progress` | 进度推送（百分比 + 环境读数 + 当前层/总层） |
 | `UI_Print_Terminate_Req` | — | UI→Glavo | Empty | `send_print_terminate` | 终止作业 |
 | `UI_Print_Pause_Req` | — | UI→Glavo | Empty | `send_print_pause` | 暂停 TCP 运动下发（解析继续） |
 | `UI_Print_Resume_Req` | — | UI→Glavo | Empty | `send_print_resume` | 恢复 TCP 运动下发 |
 | `UI_Print_Powder_Low_Ignore_Req` | — | UI→Glavo | Empty | `send_print_powder_low_ignore` | 当前打印会话忽略后续缺粉检测：不再自动暂停、不再推缺粉通知 |
 | `APP_Print_Pause_Rsp` | `GLAVO_Print_Pause_Rsp` | Glavo→UI | `PrintPauseStatePayload` | `register_print_pause_done` | 暂停/恢复响应（paused=1/0；Pause/Resume Req 共用） |
 | `APP_Print_Powder_Low_Ntf` | — | Glavo→UI | Empty | `register_print_powder_low` | 打印中粉量位 bit0/bit1 同时为 0 时仅通知一次；UI 弹补粉弹窗 |
+| `APP_OpticalPath_Progress_Ntf` | — | Glavo→UI | `OpticalPathProgressPayload` | `register_optical_path_progress` | 打印前光路检测逐点进度（徽标 OPTICAL PATH CHECK + n/5）；`state=3` 整轮通过后恢复 PRINTING |
+| `APP_Print_Start_Rejected_Ntf` | — | Glavo→UI | `PrintStartRejectedPayload` | `register_print_start_rejected` | 起印被拒（光路检测失败 / 本地副本打不开）；UI 跳无 manifest 的终止结果页。不可用 `APP_Print_Terminate_Rsp` 代替：0% 进度会被 UI 的 `print_ready_to_exit` 挡住 |
 | `APP_Print_Terminate_Rsp` | `GLAVO_Print_Terminate_Rsp` | Glavo→UI | Empty | `register_print_terminate_done` | — |
 | `GLAVO_Print_State_Ntf` | — | Glavo→MQTT | `PrintStateNtfPayload`（`mode` 复用 `UserHomeStatus`：`2`=开始打印 / `0`=打印结束；`since_ms`=进入该 mode 的 Unix ms） | — | 打印状态边沿：开始打印/打印结束空闲时推一次，触发 MQTT 上报 `state` 消息 |
 | `UI_Supply_Status_Req` | — | UI→Glavo | Empty | `send_supply_status` | stub |
@@ -206,6 +208,10 @@ scripts/rongsu.sh start   # glavo + rongsu_camera → ui
 | `APP_Visual_FirstLayer_Reference_Ready_Rsp` | `0x1427` | Visual→Glavo | `VisualFirstLayerReferenceReadyPayload` | — | 同会话裸板 B0 采集回执；成功前禁止开始打印运动，失败则保守终止起印 |
 | `GLAVO_Visual_FirstLayer_Check_Req` | `0x1423` | Glavo→Visual | `VisualFirstLayerCheckReqPayload` | — | 触发首层视觉检测（检测前允许从 Camera 最新帧做拷贝/处理） |
 | `APP_Visual_FirstLayer_Check_Rsp` | `0x1424` | Visual→Glavo | `VisualFirstLayerCheckRspPayload` | — | 首层检测结果：`result=1` 继续打印，`result=0` 继续铺粉 |
+| `GLAVO_Visual_OpticalPath_Session_Start_Ntf` | `0x1428` | Glavo→Visual | Empty | — | 打印前光路检测开始，Visual 起流（与首层会话共用一路流） |
+| `GLAVO_Visual_OpticalPath_Session_Stop_Ntf` | — | Glavo→Visual | Empty | — | 光路检测结束；两类会话都停才拆流 |
+| `GLAVO_Visual_OpticalPath_Point_Check_Req` | — | Glavo→Visual | `VisualOpticalPathCheckReqPayload` | — | 单点红光识别；`timeout_ms` 内 Visual 轮询最新帧后单次回包 |
+| `APP_Visual_OpticalPath_Point_Check_Rsp` | — | Visual→Glavo | `VisualOpticalPathCheckRspPayload` | — | `result=1` 该点通过；`session_id`/`point_index` 必须回显 |
 | `APP_Print_Video_Session_Start_Ntf` | — | Glavo→Media（Hub FWD） | `PrintVideoSessionPayload`（含 `h264_bitrate`，0=Media 默认中等码率 / cal `PRINT_H264_BITRATE`） | — | `PrintVideoNotify` / `MediaService` |
 | `APP_Print_Layer_Snap_Ntf` | — | Glavo→Media（Hub FWD） | `PrintVideoLayerSnapPayload` | — | 换层 Snap |
 | `APP_Print_Video_Session_Finish_Ntf` | — | Glavo→Media（Hub FWD） | `PrintVideoSessionPayload` | — | 保存 `/userdata/media/video/{job}/1.png...N.png` + `thumb.rthm` + config 快路径（`video_pending`） |
@@ -223,7 +229,10 @@ scripts/rongsu.sh start   # glavo + rongsu_camera → ui
 | `APP_Media_Local_Rtsp_State_Ntf` | — | Media→UI | `DebugOnOffPayload` | `DebugMsgProxy::register_local_rtsp` | 回报**实际**状态：相机流未就绪/编码器失败时回 0，UI 据此把开关弹回 |
 | `MQTT_Ota_Notify_Ntf` | — | MQTT→UI | `OtaNotifyPayload` | `register_ota_notify` | 收到云端 OTA 通知后弹确认框（用户确认后再请求 manifest） |
 | `UI_Ota_User_Decision_Req` | — | UI→MQTT | `OtaDecisionReqPayload` | `send_ota_user_decision` | 用户确认/取消 OTA 通知（取消仅关弹窗，不上报云端） |
-| `APP_Mqtt_Ota_Progress_Ntf` | — | MQTT→UI | `OtaProgressPayload` | `register_ota_progress` | 下载/校验/刷写进度；`mcu`/`galvo` 应用阶段跟真实会话，`soc` 落盘后直接 100% |
+| `APP_Mqtt_Ota_Progress_Ntf` | — | MQTT→UI | `OtaProgressPayload` | `register_ota_progress` | 下载/校验/刷写进度；`mcu`/`galvo` 应用阶段跟真实会话，`soc` 固件就绪后直接 100% |
+| `APP_Soc_Ota_Ready_Ntf` | — | MQTT→UI | `SocOtaReadyPayload` | `register_soc_ota_ready` | SOC 固件已就绪（进度已 100%），UI 切成"是否重启升级"弹窗，`kind` 区分全包 `.img` 与应用层 A/B。下载完成时发一次；开机后 MQTT **首次连上云端**再补发一次（比 UI 先起，早发会丢） |
+| `UI_Soc_Ota_Apply_Req` | — | UI→MQTT | `SocOtaApplyReqPayload` | `send_soc_ota_apply` | `RebootNow`：全包写 misc 分区后重启进 recovery，应用层切槽后重启；`Discard` 删已落盘固件释放空间。"稍后"不发消息（状态已持久化，下次开机重提示） |
+| `APP_Soc_Ota_Apply_Rsp` | — | MQTT→UI | `SocOtaApplyRspPayload` | `register_soc_ota_apply_rsp` | 处置结果；`RebootNow` 成功时设备已重启，UI 收不到本条 |
 | `XFR_Transfer_Progress_Ntf` | — | XFR→UI | `XfrTransferProgressPayload` | `register_xfr_transfer_progress` | WiFi 传输阶段进度（Uploading/Slicing/Finished/Error） |
 | `UI_Mcu_Ota_Start_Req` / `UI_Mcu_Ota_Cancel_Ntf` / `APP_Mcu_Ota_Status_Ntf` | — | UI/MQTT↔Glavo | `McuOtaStatusPayload` | `send_mcu_ota_start` / `send_mcu_ota_cancel` / `register_mcu_ota_status` | Galvo 以太网 OTA（`/userdata/image/galvo`，AB 对规则见 [OTA_IMAGE.md](fs_manifest/OTA_IMAGE.md)）。状态 Glavo 双发 UI 与 MQTT |
 | `UI_Serial_Mcu_Ota_Start_Req` / `UI_Serial_Mcu_Ota_Cancel_Ntf` / `APP_Serial_Mcu_Ota_Status_Ntf` | — | UI/MQTT↔Glavo | `McuOtaStatusPayload` | `send_serial_mcu_ota_start` / `send_serial_mcu_ota_cancel` / `register_serial_mcu_ota_status` | MCU 串口 OTA（`/userdata/image/mcu`，AB 对规则见 [OTA_IMAGE.md](fs_manifest/OTA_IMAGE.md)）。云端落盘后 MQTT 发 Start；状态双发 UI 与 MQTT |
@@ -235,8 +244,10 @@ scripts/rongsu.sh start   # glavo + rongsu_camera → ui
 | `UI_Debug_Galvo_Home_Ntf` | — | 契约预留 | Empty | — | 振镜回中；调试页复位钮不再发送 |
 | `UI_Debug_Galvo_RedLight_Ntf` | — | UI→Glavo | `DebugOnOffPayload` | `send_galvo_red_light` | 红光/激光模式切换（`on=1` 红光，`on=0` 激光）。Glavo 侧每次都下发（TCP 0x0A + 串口激光使能），不去重、不回读状态 |
 | `UI_Debug_Galvo_RedAlways_Ntf` | — | UI→Glavo | Empty | `send_galvo_red_always` | 红光常亮（TCP 0x0A `stop=0 pause=0 red=3` + 串口关激光使能）。调试页点发，不去重、不回读状态 |
-| `UI_Debug_Galvo_Param_Save_Ntf` | — | UI→Glavo | `DebugGalvoParamPayload` | `send_galvo_param_save` | 写 `cal.csv` 第 4 行中心偏移并 `load_calibration`；测试图/正式打印中 UI 禁用 Save |
+| `UI_Debug_Galvo_Param_Save_Ntf` | — | UI→Glavo | `DebugGalvoParamPayload` | `send_galvo_param_save` | 写 `cal.csv` 第 4 行中心偏移并 `load_calibration`；正式打印或任一振镜测试中禁用 Save |
 | `UI_Debug_Galvo_Calib_Ntf` | — | UI→Glavo | Empty | `send_galvo_calib` | 开始标定 |
+| `UI_Debug_Galvo_PointTest_Start_Ntf` | — | UI→Glavo | Empty | `start_galvo_point_test` | Other 页一次性红光点位测试：常亮模式下中心及四角各停 3 秒，末尾回中心并切普通红光；坐标走当前校准表 |
+| `UI_Debug_Galvo_PointTest_Get_Ntf` | — | UI→Glavo | Empty | `request_galvo_point_test_state` | 查询红光点位测试运行状态 |
 | `UI_Debug_Device_Ntf` | — | UI→Glavo | `DebugDevicePayload` | `send_device` | 设备/门/电机/照明 |
 | `UI_Debug_Powder_Bucket_Ntf` | — | UI→Glavo | `DebugBucketPayload` | `send_powder_bucket` | 粉桶 |
 | `UI_Debug_Pusher_Ntf` | — | UI→Glavo | `DebugMotorPayload` | `send_sieve` | 筛粉电机（0=停止/1=筛粉运行/2=反转倒渣） |
@@ -258,6 +269,8 @@ scripts/rongsu.sh start   # glavo + rongsu_camera → ui
 | `UI_Debug_Env_Sim_Powder_Get_Ntf` | — | UI→Glavo | Empty | `request_env_sim_powder_state` | 查询当前“环境模拟粉量缺粉”开关状态 |
 | `UI_Debug_FirstLayer_Visual_Check_Set_Ntf` | — | UI→Glavo | `DebugOnOffPayload` | `send_first_layer_visual_check_set` | 调试页开关：首层视觉检测（仅本次运行，默认关） |
 | `UI_Debug_FirstLayer_Visual_Check_Get_Ntf` | — | UI→Glavo | Empty | `request_first_layer_visual_check_state` | 查询当前“首层视觉检测”开关状态 |
+| `UI_Debug_OpticalPath_Check_Set_Ntf` | — | UI→Glavo | `DebugOnOffPayload` | `send_optical_path_check_set` | 调试页开关：打印前光路检测（仅本次运行，默认关） |
+| `UI_Debug_OpticalPath_Check_Get_Ntf` | — | UI→Glavo | Empty | `request_optical_path_check_state` | 查询当前“打印前光路检测”开关状态 |
 | `UI_Debug_TestImage_Set_Ntf` | — | UI→Glavo | `DebugOnOffPayload` | `send_test_image_set` | 调试页 Test image：红光模式循环打印 `/userdata/test/test.gcode`；Off 仅 Stop，不切激光；无录像/延时/换层握手/首页打印态 |
 | `UI_Debug_TestImage_Get_Ntf` | — | UI→Glavo | Empty | `request_test_image_state` | 查询测试图循环打印实际状态 |
 | `GLAVO_Debug_Laser_Ntf` | — | Glavo→UI | `DebugLaserStatePayload` | `register_laser` | 激光器状态/报警/功率/温度 |
@@ -266,7 +279,9 @@ scripts/rongsu.sh start   # glavo + rongsu_camera → ui
 | `GLAVO_Debug_Env_Sim_Ntf` | — | Glavo→UI | `DebugOnOffPayload` | `register_env_sim` | 回读当前“环境上报模拟”开关状态 |
 | `GLAVO_Debug_Env_Sim_Powder_Ntf` | — | Glavo→UI | `DebugOnOffPayload` | `register_env_sim_powder` | 回读当前“环境模拟粉量缺粉”开关状态 |
 | `GLAVO_Debug_FirstLayer_Visual_Check_Ntf` | — | Glavo→UI | `DebugOnOffPayload` | `register_first_layer_visual_check` | 回读当前“首层视觉检测”开关状态 |
+| `GLAVO_Debug_OpticalPath_Check_Ntf` | — | Glavo→UI | `DebugOnOffPayload` | `register_optical_path_check` | 回读当前“打印前光路检测”开关状态 |
 | `GLAVO_Debug_TestImage_Ntf` | — | Glavo→UI | `DebugOnOffPayload` | `register_test_image` | 回读测试图循环实际状态；文件缺失/与正式打印互斥失败时回 `on=0` |
+| `GLAVO_Debug_Galvo_PointTest_Ntf` | — | Glavo→UI | `DebugOnOffPayload` | `register_galvo_point_test` | 回读红光点位测试运行状态；用于按钮、Test image 与正式打印的双向互斥 |
 | `UI_Debug_Fan_Duty_Ntf` | — | UI→Glavo | `DebugFanPayload` | `send_fan_duty` | 仅设风扇占空比（0–100） |
 | `UI_Debug_PrintParam_Set_Ntf` | — | UI→Glavo | `DebugPrintParamPayload` | `send_print_layer_param` | 打印层参数（层厚 + 平衡×1000） |
 | `GLAVO_Debug_Sensor_Ntf` | — | Glavo→UI | `DebugSensorPayload` | `register_sensor` | 7 路传感器 |
@@ -402,7 +417,7 @@ rongsu_broker ──listen──► /tmp/upc_broker.sock ◄── rongsu_ui / r
 - connect 后首帧 **reg**（`IPC_REG_MAGIC`，不进 MsgType）；同 `ModuleId` 重连踢旧连接。
 - Broker **零业务 subscribe**；仅按 wire `target_id` 转发（含 UPDF fd 透传）。
 - 路由靠 **`MsgType` + `target_id`**，不靠 socket fd。
-- 启动顺序：`broker → glavo → camera → ui`（`scripts/rongsu.sh`）。
+- 启动顺序：`broker → glavo → camera → ui`（`scripts/rongsu_app.sh`，由 `scripts/rongsu.sh` 选槽后交棒）。
 
 ## MsgPort 速查
 
@@ -490,11 +505,30 @@ Glavo publish_async(target=APP_CAMERA)
 
 1. `upc_contract.hpp` — `ModuleId` / `MsgType` / Payload（contract 四步）
 2. 新进程 `main` — `set_mode_ipc_client` + `process` 循环
-3. `scripts/rongsu.sh` — 启动顺序（Broker 最先）
+3. `scripts/rongsu_app.sh` — 启动顺序（Broker 最先）；同时把新进程名加进 `build.sh` 的 `ARTIFACTS`，否则不会进 A/B 升级包
 4. UI 业务 — 独立 `XxxMsgProxy`
 
 大流量：控制走 MsgPort；像素走主 IPC SCM_RIGHTS 传 dma fd + `ipc_dma_frame_ring` 元数据环（camera 预览：NV12，UI 侧 RGA/SW 转 BGRX）。
 详见 `app/camera/lib/camera_dma_frame_source.*` 与 `app/ui/lib/core/camera_preview.*`。
+
+### 预览元数据环 seq 契约（`ipc_dma_frame_ring`，format v2）
+
+| 约定 | 说明 |
+|------|------|
+| 发号者 | `IpcDmaFrameGlobalHeader::seq_next`，**全环一个**原子计数器；`commit_slot` 每帧 `fetch_add(1)`，帧号从 1 起 |
+| `slot.seq` | 只表示"本槽当前持有帧的全环帧号"，**不是**本槽的提交计数 |
+| 消费者 | `acquire_latest_frame` 跨槽比 `seq` 挑最新帧，再用单个 `last_seq_` 水位过滤已消费帧；步骤 4 把 `seq <= 当前帧` 的 READY 槽扫成 EMPTY |
+
+**为什么必须全环单调**：上面两条消费者逻辑都建立在"seq 在整个环里可比"之上。
+v1 曾按槽各自自增，环只轮转一个槽时恰好等价、看不出问题；一旦轮转两个槽，
+两个计数器停在同一数值，`seq > last_seq_` 就把其中一路整个拒掉——**正好丢一半帧，
+且无任何错误计数**（被拒帧由步骤 4 当过期槽回收）。同时"seq 最大的 READY 槽"
+也不再是最新帧，预览可能显示旧帧。
+
+改 seq 语义/结构体字段时必须同步 `kVersion`：结构体大小没变（48 字节，
+`seq_next` 正好占原 `reserved[0]`），只能靠 `version` 拦住新旧混搭，
+否则老消费者表面能跑、只是继续丢一半帧，比直接报 `VERSION_MISMATCH` 难查得多。
+**推论：升级时 camera / ui / media / visual 必须整套替换**，只换一部分会直接没画面。
 
 
 
@@ -568,7 +602,7 @@ ParserManager → RingBuffer → McuLink（TCP + 串口）
 
 各进程 `main.cpp` 支持 `{start|stop|status|run}`；`start` 时 stderr/stdout 重定向到 `/var/log/topic/topic_boot_lifecycle.log`，业务日志由 `rs_log` 按专题写入 `/var/log/topic/*.log`。这处 `dup2` 也是 `topic_boot_lifecycle.log` 只能用 `copytruncate` 轮转的原因，见 [§ 落盘与轮转](#落盘与轮转)。
 
-- 启动脚本：[scripts/rongsu.sh](../scripts/rongsu.sh)
+- 启动脚本：[scripts/rongsu_app.sh](../scripts/rongsu_app.sh)（槽内），入口 [scripts/rongsu.sh](../scripts/rongsu.sh)（选槽 bootstrap）
 
 ---
 

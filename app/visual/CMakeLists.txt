@@ -15,6 +15,7 @@ endif()
 add_executable(rongsu_visual
     main.cpp
     ${VISUAL_LIB_DIR}/first_layer_detector.cpp
+    ${VISUAL_LIB_DIR}/red_dot_detector.cpp
     ${VISUAL_LIB_DIR}/visual_service.cpp
 )
 

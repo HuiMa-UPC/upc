@@ -43,10 +43,13 @@ rongsu_camera
 rongsu_media worker
   ├─ take_peer_dma_fds(APP_CAMERA) + mmap
   ├─ acquire_latest_frame → buffer_idx
-  ├─ clean_video / print_h264 / h264_encoder 喂 NV12
-  ├─ 更新 latest_nv12_snapshot_（层拍/拍照用）
-  └─ release_slot
+  ├─ 一次紧凑拷贝 dma → staging_nv12_
+  ├─ release_slot（持槽期间只做上面这一次拷贝）
+  ├─ clean_video / print_h264 / h264_encoder 从 staging 喂 NV12
+  └─ staging 与 latest_nv12_snapshot_ 互换（层拍/拍照用，零拷贝发布）
 ```
+
+**槽位要尽早归还**：三路 recorder 各自还要把帧拷进自己的队列，若留在槽内做，持槽时间翻几倍，会占满 Camera 的在飞窗口并反压采集线程（见 [camera/CAMERA.md](../camera/CAMERA.md) 「在飞窗口」）。快照发布用 `swap` 而非再拷一份：staging 下一帧整体覆写，换回来的旧缓冲容量已够。
 
 几何以 `APP_Media_Camera_Stream_Start_Rsp` 为准。流就绪后才 `apply_local_rtsp_desired()`（开流前编码几何未知，`start()` 必失败）。相机看门狗重启会再走 `on_stream_start_rsp`；本地 RTSP 已在跑则跳过，避免打断在连客户端。
 
@@ -64,6 +67,8 @@ rongsu_media worker
 ```
 
 `config.json` 字段：`job_name` / `start_unix` / `duration_sec` / `material_g` / `layer_count` / `status` / `frames_dir` / `thumb`。`material_g` 与 `layer_count` 在 upsert 时按 job 基名从 `/userdata/Gcode/config.json` 快照（`print_history_lookup_gcode_stats`），查不到写 0。解析见 `common/fs_manifest/print_history_manifest.*`。
+
+**`job_name` 存原始 G-code 基名，不要净化。** 它同时是回查 `/userdata/Gcode/config.json` 的主键，而那边存的是真实文件名；一旦按 `sanitize_filename()` 把 `~`、`(`、空格等换成 `_`，形如 `xfk-8.10-0.03-150~170-0.06(30).gcode` 的文件就匹配不上，历史卡片的 Filament/Layers 会全变 "--"。需要路径安全的是 `frames_dir`，它由 `make_session_name()` 生成，内部自带净化。
 
 ## 存储
 

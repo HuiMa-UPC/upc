@@ -11,7 +11,8 @@
 | `lib/glavo_service.*` | IPC 业务 + 工作线程 + 订阅/发布（USB 目录/打印/门控/进度）；`init()` 内绑定 RingBuffer → `McuLink` |
 | `lib/mcu_link.*` | TCP 运动下发 + 串口握手/传感器/换层 Snap 触发；RX 侧解析 MCU 报警单条上报（0xA3/0x20）与快照分片（0xA3/0x81），`publish_async` 原样转发 `GLAVO_Alarm_Report_Ntf` / `GLAVO_Alarm_Snapshot_Ntf` 给 UI（不查字典、不攒帧） |
 | `lib/print_video_notify.*` | 换层 Snap / 录像会话 → Media（经 UI Hub） |
-| `lib/print_job_state.*` | 发送包计数、完成/错误标志（McuLink 与进度共用） |
+| `lib/optical_path_check.*` | 打印前光路检测状态机（独立线程，结果回灌 worker） |
+| `lib/galvo_motion_encode.*` | 调试运动包编码 + 五点坐标（点位测试与光路检测共用） |
 | `lib/device_config.hpp` | TCP/串口默认、换层/Layer Snap 开关、`GLAVO_TEST_GCODE_PATH` |
 | `lib/mcu_ota_session.*` | Galvo 以太网 OTA：扫描 `/userdata/image/galvo` 最高版本 AB 对 |
 | `lib/mcu_serial_ota_session.*` | MCU 串口 OTA：扫描 `/userdata/image/mcu` 最高版本 AB 对 |
@@ -38,14 +39,17 @@ UI → GlavoService（工作线程）→ ParserManager → RingBuffer → McuLin
 |------|------|
 | `Fs_DirOpen_Req` | **仅 USB** 扫盘；非 Usb 源忽略并回空列表 |
 | `Fs_Delete_Ntf` | 删除 Local 文件（磁盘 + config.json） |
-| `UI_Print_Prepare_Req` | 轻量预处理（USB 复制、行数扫描、写 config.json） |
+| `UI_Print_Prepare_Req` | 轻量预处理（USB 复制、单趟扫行数+`M3000` 层数、写 config.json）；层数是纯层进度的唯一来源，Start 不再补扫 |
 | `UI_Parser_Exit_Ntf` | 取消解析（stop_parse + 清会话） |
-| `UI_Print_Start_Req` | 正式解析 + `begin_sending` + `PrintVideoNotify::on_print_start` |
-| `UI_Print_Terminate_Req` | `stop_parse` + `request_terminate` + `on_print_abort` |
+| `UI_Print_Start_Req` | 置打印态 → 光路检测 gate（若开）→ 正式解析 + 首层参考图 gate + `begin_sending` + `PrintVideoNotify::on_print_start` |
+| ↑ 起印失败 | 打印态在 `launch_print_from_prepared` 最前面就置（检测那十几秒 UI 已在打印页），所以「运动还没开始就失败」的分支**一律走 `abort_print_start()`** 回滚，否则 UI 停在打印页 0% |
+| `UI_Print_Terminate_Req` | 光路检测中：打断检测线程并回红光安全态；否则 `stop_parse` + `request_terminate` + `on_print_abort` |
 | `UI_Print_Pause_Req` | `set_user_dispatch_paused(true)`，仅停 TCP 运动下发 |
 | `UI_Print_Resume_Req` | `set_user_dispatch_paused(false)`，恢复 TCP 运动下发 |
 | `UI_Debug_TestImage_Set_Ntf` | 红光循环打印 `GLAVO_TEST_GCODE_PATH`（默认 `/userdata/test/test.gcode`）；无录像/延时/换层握手/首页打印态；Off 仅 `request_terminate`，不切激光 |
-| `UI_Debug_Galvo_Param_Save_Ntf` | 写 `cal.csv` 第 4 行中心偏移 + `ParserContext::load_calibration`；打印/测试图进行中拒绝 |
+| `UI_Debug_Galvo_PointTest_Start_Ntf` | 独立线程按当前校准表发送中心与四角 G01 点位，各停 3 秒；末尾回中心并由红光常亮切回普通红光；与正式打印/Test image/光路检测互斥 |
+| `UI_Debug_OpticalPath_Check_Set_Ntf` | 打印前光路检测开关（仅本次运行，默认关）。开则 Confirm Print 后、出光前逐点等视觉识别；失败阻断并 `APP_Print_Start_Rejected_Ntf` |
+| `UI_Debug_Galvo_Param_Save_Ntf` | 写 `cal.csv` 第 4 行中心偏移 + `ParserContext::load_calibration`；打印/任一振镜测试进行中拒绝 |
 | `UI_PM25_Req` / 门控 Req | 环境快照或占位 Rsp |
 | `UI_Alarm_Reset_Ntf` | `serial_build_alarm_reset` 组 0xA3/0x82 帧直发串口；结果不回 Rsp，以 MCU 后续单条上报为准 |
 
@@ -74,6 +78,26 @@ UI → GlavoService（工作线程）→ ParserManager → RingBuffer → McuLin
 | 中止 | 终止 / `PrintError` | `APP_Print_Video_Session_Abort_Ntf` |
 
 `PrintVideoNotify::publish_to_camera`：`publish_async`，`target_id = APP_MEDIA`，经 [common/COMMON.md](../../common/COMMON.md) Hub 转发。落盘与封装见 [media/MEDIA.md](../media/MEDIA.md)。
+
+### 打印进度（`APP_Print_Progress_Ntf`）
+
+`GlavoService::send_print_progress`，打印中按作业类型二选一：
+
+| 策略 | 适用 | 打印中区间 | 说明 |
+|------|------|-----------|------|
+| 纯层台阶（首选） | G-code 且能数出 `M3000`，且 `GLAVO_ENABLE_LAYER_SNAP=1` | `1–98` | `已完成层 / 总层`。总层 = Prepare 预扫的 `M3000` 计数（缓存在 `config.json` 的 `layer_count`）；已完成层 = 换层 Snap 计数。层内静止，打完一层跳一格 |
+| 包进度（回退） | OVF / 无 `M3000` 的 G-code / 关闭 Layer Snap | `0–95` | `sent_packets / denom`，再与层锚点 7:3 融合（`fuse_send_and_layer_progress_95`） |
+
+两者共用尾段：`95–99` 按 MCU cmd/data cache 占用估排空，`100` 只跟 `force_complete` / `job_completed`。
+
+红线两条：
+
+- **打印中绝不出现 99%**。UI（`control.cpp` `print_ready_to_exit`）把 `>=99` 且双缓冲为 0 当作「可退打印页」，而换层排空时 cache rate 正好为 0，中途出现 99 会被误判成打印结束。
+- **层数口径差半拍**：`M3000` 标在一层扫描前，Snap 在扫描后；文件头那条被跳过、末层由 `link_try_final_layer_snap` 补一次。所以 `done_layers` 必须钳位，不得因层计数超前而提前顶满。
+
+纯层段一层内百分比恒定，但同一条 Ntf 还带 PM2.5/温度/氧含量，故保留 cache rate 变化推送 + 3s 保活推送，避免 UI 环境读数僵住。
+
+同一条 Ntf 另带 `current_layer` / `total_layers` 供 UI 显示层号。`total_layers` 就是上面那个预扫计数，**0 表示给不出**（OVF / 无 `M3000` / 关闭 Snap），UI 见 0 就整块隐藏，不显示占位。`current_layer` 报的是「正在打第几层」= 已完成层 + 1，同样受上面那条钳位约束，末层排空时不会越过 `total_layers`。
 
 ## 待实现：设备事件上报（`GLAVO_Device_Event_Ntf`）
 

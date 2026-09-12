@@ -15,6 +15,13 @@ void page_user_home_refresh(bool force);
 void page_user_home_enter_printing_mode(const control_file_t *file);
 void page_user_home_exit_printing_mode(void);
 void page_user_home_printing_update(const control_progress_t *p);
+/**
+ * 光路检测逐点进度。state 见 OpticalPathPointState：
+ * Moving/Passed/Failed 切到 OPTICAL PATH CHECK 徽标并用层号位显示 n/5；
+ * Complete 恢复 PRINTING 徽标，进度条仍为 0 直到正式进度到达。
+ */
+void page_user_home_optical_path_update(uint8_t point_index, uint8_t point_total,
+                                       uint8_t state);
 
 /**
  * 打印结果浮层（PRINT COMPLETE / PRINT TERMINATED）。
@@ -30,7 +37,10 @@ void page_user_home_enter_print_result(const control_print_result_t *result);
  */
 void page_user_home_reset_result_slide(void);
 void page_user_home_request_camera_preview(void);
-/** 按 viewport 宽度等比缩放预览（宽贴满，高超出的居中裁剪）；src_h=0 时用流高或 1280 默认 */
+/** 按 viewport 宽度等比缩放预览（宽贴满，高超出的居中裁剪）；src_h=0 时用流高或 1280 默认。
+ *  src_w/src_h 传的是**上屏图像**尺寸（`CameraPreviewPlayer::stream_width()` 等），
+ *  与 viewport 一致时 zoom 为 1.000，走 lv_image 无缩放贴图快路径。
+ *  打印态与监控态两个摄像头层会一起刷新。 */
 void page_user_home_update_camera_preview_layout(uint32_t src_w, uint32_t src_h);
 /** 打印预览层根容器（用于在预览区域内挂载局部弹窗）；不可用时返回 nullptr。 */
 lv_obj_t *page_user_home_print_preview_parent(void);

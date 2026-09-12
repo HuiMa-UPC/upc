@@ -104,7 +104,11 @@ void PrintVideoRecorder::on_session_start(
         }
     }
 
-    job_name_   = sanitize_filename(info.job_name);
+    /* 原样留着不净化：job_name_ 要作为主键去 /userdata/Gcode/config.json 回查
+     * 耗材与层数（见 upsert_print_history），那边存的是真实文件名。净化过的名字
+     * （`~`、`(`、空格等一律变 `_`）匹配不上，历史条目的 Filament/Layers 就会全是
+     * "--"。落盘路径不受影响：目录名走 make_session_name()，它内部会再净化一次。 */
+    job_name_   = info.job_name;
     start_unix_ = static_cast<int64_t>(std::time(nullptr));
     if(info.width > 0) {
         stream_width_ = info.width;
@@ -179,7 +183,7 @@ void PrintVideoRecorder::on_session_finish(
         return;
     }
     if(info.job_name[0] != '\0') {
-        job_name_ = sanitize_filename(info.job_name);
+        job_name_ = info.job_name;   /* 同 on_session_start：回查主键须为原始名 */
     }
     session_active_ = false;
     enqueue_job(PrintVideoJob{PrintVideoJobKind::FinishSave, 0, 0});
@@ -195,7 +199,7 @@ void PrintVideoRecorder::on_session_abort(
         return;
     }
     if(info.job_name[0] != '\0') {
-        job_name_ = sanitize_filename(info.job_name);
+        job_name_ = info.job_name;   /* 同 on_session_start：回查主键须为原始名 */
     }
     session_active_ = false;
     enqueue_job(PrintVideoJob{PrintVideoJobKind::AbortCleanup, 0, 0});

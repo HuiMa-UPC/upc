@@ -158,6 +158,34 @@ bool parse_float_field(const std::string& obj, const char* key, float& out)
     return true;
 }
 
+/**
+ * 从 obj_start（'{'）起找本条目的结束 '}'，跳过字符串字面量内的字符。
+ * 条目是扁平对象（无嵌套），所以第一个「不在引号内」的 '}' 就是结束，
+ * 不需要计深度。不这么做的话，文件名里带 '}' 会把条目从中间截断，
+ * 后半段字段（layer_count 等）全部读不到。
+ */
+size_t find_object_end(const std::string& text, size_t obj_start)
+{
+    bool in_str = false;
+    for(size_t i = obj_start; i < text.size(); ++i) {
+        const char c = text[i];
+        if(in_str) {
+            if(c == '\\') {
+                ++i;              /* 跳过被转义的那个字符 */
+            } else if(c == '"') {
+                in_str = false;
+            }
+            continue;
+        }
+        if(c == '"') {
+            in_str = true;
+        } else if(c == '}') {
+            return i;
+        }
+    }
+    return std::string::npos;
+}
+
 GcodeManifestEntry parse_object(const std::string& obj)
 {
     GcodeManifestEntry e;
@@ -205,7 +233,7 @@ bool gcode_manifest_load(const std::string& path, std::vector<GcodeManifestEntry
         if(obj_start == std::string::npos) {
             break;
         }
-        const size_t obj_end = text.find('}', obj_start);
+        const size_t obj_end = find_object_end(text, obj_start);
         if(obj_end == std::string::npos) {
             break;
         }

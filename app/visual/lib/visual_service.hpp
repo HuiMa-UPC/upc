@@ -4,6 +4,7 @@
 #include "first_layer_detector.hpp"
 #include "ipc_dma_frame_ring.hpp"
 #include "msg_port.hpp"
+#include "red_dot_detector.hpp"
 
 #include <atomic>
 #include <cstdint>
@@ -24,6 +25,10 @@ namespace upc::visual {
  * 2) 从 SHM 元数据环获取最新帧索引（buffer_idx）
  * 3) 后台线程消费并释放帧槽，并缓存最新紧凑 NV12 原图
  * 4) 收到 Glavo 首层检测请求时，使用 Y 平面运行模型并回传 0/1 结果
+ *
+ * 两类会话共用同一路取流（首层检测 / 打印前光路检测）。取流的起停按
+ * 「任一会话激活即保持」处理，任一会话单独结束不得把流拆掉，
+ * 见 any_session_active_locked() 与 release_stream_if_idle()。
  */
 class VisualService {
 public:
@@ -60,12 +65,38 @@ private:
     void on_first_layer_session_stop(const middleware::Message& msg);
     void start_first_layer_session(const char* reason);
     void stop_first_layer_session(const char* reason);
+    /** 两类会话是否有任一激活；调用前须持有 state_mtx_。 */
+    [[nodiscard]] bool any_session_active_locked() const;
+    /** 两类会话都停了才真正拆流；任一还在就保留。 */
+    void release_stream_if_idle(const char* reason);
     void send_reference_ready_rsp(bool ready, uint32_t frame_seq,
                                   const std::string& reason);
     void try_capture_bare_reference(const FrameSnapshot& frame);
     void clear_latest_snapshot();
     /** 处理 GLAVO_Visual_FirstLayer_Check_Req，回传检测结果。 */
     void on_first_layer_check_req(const middleware::Message& msg);
+
+    /* ---- 打印前光路检测 ---- */
+    void on_optical_path_session_start(const middleware::Message& msg);
+    void on_optical_path_session_stop(const middleware::Message& msg);
+    void start_optical_path_session(const char* reason);
+    void stop_optical_path_session(const char* reason);
+    /** 处理 GLAVO_Visual_OpticalPath_Point_Check_Req：起一条取点线程做窗口轮询。 */
+    void on_optical_path_point_check_req(const middleware::Message& msg);
+    /**
+     * 单点判定窗口轮询体（跑在 optical_point_thread_ 上）。
+     * 逐帧调 RedDotDetector，命中即回包；窗口耗尽回 result=0。
+     * 必须另起线程：消息分发跑在 main.cpp 的主循环里（port.process + tick），
+     * 在回调里阻塞 3 秒会连 tick 与起流应答一起卡住。
+     */
+    void run_optical_point_window(
+        const middleware::VisualOpticalPathCheckReqPayload& req);
+    void send_optical_path_point_rsp(
+        const middleware::VisualOpticalPathCheckReqPayload& req,
+        const RedDotDetection& detection);
+    /** 回收取点线程。 */
+    void stop_optical_point_thread();
+
     /** 停止后台线程并重置流状态。 */
     void stop_worker();
     /** 后台线程主循环：取最新帧、做 NV12 拷贝并释放槽位。 */
@@ -104,6 +135,9 @@ private:
     uint64_t last_reference_capture_attempt_ms_ = 0;
     uint64_t last_reference_failure_report_ms_ = 0;
     std::string last_reference_failure_reason_;
+    /** 光路检测会话：与首层会话独立开关，共用同一路取流。 */
+    bool optical_path_session_active_ = false;
+    uint64_t optical_path_session_id_ = 0;
     bool start_req_sent_ = false;
     bool stream_up_ = false;
     bool pending_start_rsp_valid_ = false;
@@ -134,6 +168,12 @@ private:
     };
     std::mutex rejected_diagnostic_mtx_;
     RejectedDiagnosticCandidate latest_rejected_diagnostic_;
+
+    /** 红点识别器（算法桩，见 red_dot_detector.hpp）。 */
+    RedDotDetector red_dot_detector_;
+    /** 单点判定窗口轮询线程；Glavo 逐点串行，同一时刻只有一条。 */
+    std::thread optical_point_thread_;
+    std::atomic<bool> optical_point_abort_{false};
 
     /** 后台取帧线程。 */
     std::thread worker_;

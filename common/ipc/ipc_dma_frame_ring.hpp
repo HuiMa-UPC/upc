@@ -33,11 +33,24 @@ struct IpcDmaFrameGlobalHeader {
     uint32_t format;      // fourcc
     uint32_t slot_count;
     uint32_t slot_header_size;
-    uint64_t reserved[2];
+    /**
+     * 全环帧号发号器：已发出的帧号总数，commit_slot 每次 fetch_add(1)。
+     *
+     * **seq 必须全环单调，不能按槽各自计数。** 消费者要跨槽比较 seq 才能
+     * 挑出最新一帧，又要拿单个 last_seq_ 水位过滤已消费的帧——两者都建立在
+     * "seq 在整个环里可比"这个前提上。曾经按槽计数，环只轮转一个槽时恰好
+     * 等价、看不出问题；一旦轮转两个槽，两个计数器停在同一数值，
+     * `seq > last_seq_` 就会把其中一路整个拒掉，**实测正好丢一半帧**，
+     * 而且没有任何错误计数（被拒的帧由步骤 4 当作过期槽扫成 EMPTY）。
+     */
+    std::atomic<uint32_t> seq_next;
+    uint32_t reserved0;
+    uint64_t reserved[1];
 };
 
 struct IpcDmaFrameSlotHeader {
     std::atomic<uint32_t> state;
+    /** 本槽当前持有帧的全环帧号（由 IpcDmaFrameGlobalHeader::seq_next 发号） */
     std::atomic<uint32_t> seq;
     uint64_t timestamp_us;
     uint32_t buffer_idx;
@@ -73,9 +86,18 @@ public:
     void cancel_write_slot(uint32_t idx);
     /**
      * @brief 提交 Writing→Ready。
-     * @return 该 slot 新 seq（从 1 起增）；失败返回 0。
+     * @return 本帧的全环帧号（从 1 起增，全环单调）；失败返回 0。
      */
     uint32_t commit_slot(uint32_t idx, uint64_t timestamp_us, uint32_t buffer_idx);
+
+    /**
+     * @brief 非阻塞查询某个 slot 是否已被 Consumer 释放为 Empty。
+     *
+     * 供 Producer 做"在飞帧"回收：不必逐帧阻塞等待，可先扫一遍已完成的
+     * 帧把底层 buffer 收回，只在窗口耗尽时才退化为 wait_slot_empty。
+     * @return true 已是 Empty；false 仍被消费者占用或 slot 索引非法。
+     */
+    bool slot_is_empty(uint32_t idx) const;
 
     /**
      * @brief 等待某个 slot 被 Consumer 释放为 Empty（带超时）。

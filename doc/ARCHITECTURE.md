@@ -14,7 +14,7 @@
 | Visual | `rongsu_visual` | `app/visual/main.cpp` | [visual/VISUAL.md](../app/visual/VISUAL.md) | `/var/log/topic/*.log` |
 | MQTT | `rongsu_mqtt` | `app/mqtt/main.cpp` | — | `/var/log/topic/*.log` |
 
-启动：`scripts/rongsu.sh start`（Glavo → `rongsu_camera` → `rongsu_media` → `rongsu_xfr` → `rongsu_visual` → `rongsu_mqtt` → UI）。  
+启动：`scripts/rongsu.sh start`（Glavo → `rongsu_camera` → `rongsu_media` → `rongsu_xfr` → `rongsu_visual` → `rongsu_mqtt` → UI）。`/home/rongsu.sh` 只是选 A/B 槽的薄 bootstrap，上面这串顺序实现在槽内的 `scripts/rongsu_app.sh`，随应用层升级一起进槽；槽机制见 [OTA_IMAGE.md](../common/fs_manifest/OTA_IMAGE.md)。  
 编译：`./build.sh`（Release + 工具链，产物在 `output/`；`clean` / `reconfigure` 见脚本头注释）。  
 日志：按专题写 `/var/log/topic`，体积由板端 logrotate 控制，配置源文件 `scripts/topic` → `/etc/logrotate.d/topic`。
 
@@ -35,7 +35,7 @@
 | `app/camera/` | [CAMERA.md](../app/camera/CAMERA.md) | 相机采集、SHM 预览、IPC Server |
 | `app/media/` | [MEDIA.md](../app/media/MEDIA.md) | 拍照/录像/延时封装 + 直播（云端 RTSP 推流、局域网 live555 RTSP Server；消费 Camera DMA 流） |
 | `app/xfer/` | [XFER.md](../app/xfer/XFER.md) | WiFi 发现、PIN 配对、HTTP 文件上传（仅收 `.json/.svg`） |
-| `app/visual/` | [VISUAL.md](../app/visual/VISUAL.md) | 视觉 demo：相机流取帧、OpenCV 矩形识别、坐标回传 UI |
+| `app/visual/` | [VISUAL.md](../app/visual/VISUAL.md) | 视觉：Camera DMA 取帧、首层检测、打印前光路检测（红点桩） |
 | `app/mqtt/` | — | MQTT 网关：环境遥测、`set_light`、云端 `start/stop_rtsp_push`→Media |
 | `app/parser/` | [PARSER.md](../app/parser/PARSER.md) | G-code/OVF 解析库（Glavo 链接） |
 | `app/protocol/` | [PROTOCOL.md](../app/protocol/PROTOCOL.md) | MCU 线协议（TCP `BE EF` + 串口 `5A A5`） |
@@ -45,6 +45,8 @@
 | 符号 | 路径 | 一句话 |
 |------|------|--------|
 | `GlavoService` | `glavo_service.*` | IPC 业务编排 + 工作线程（打印/USB 目录/门控）；`init()` 绑定 RingBuffer → `McuLink` |
+| `OpticalPathCheck` | `optical_path_check.*` | 打印前光路检测状态机（独立线程，结果回灌 worker） |
+| `galvo_motion_encode` | `galvo_motion_encode.*` | 调试运动包编码 + 五点坐标（点位测试与光路检测共用） |
 | `gcode_manifest` | `common/fs_manifest/gcode_manifest.*` | Local `UPC_LOCAL_GCODE_DIR/config.json`（UI 读列表，Glavo Prepare/Delete 写） |
 | `print_history_manifest` | `common/fs_manifest/print_history_manifest.*` | `UPC_VIDEO_CONFIG`（Media upsert 写；UI 历史页读，删除后重写） |
 | `media_paths` | `common/fs_manifest/media_paths.hpp` | `UPC_MEDIA_ROOT`（默认 `/userdata/media`：photo/video/tmp + 首层视觉诊断图，各进程共用） |

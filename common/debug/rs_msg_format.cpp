@@ -101,6 +101,8 @@ const char* upc_msg_type_name(MsgType type) {
         case MsgType::UI_Print_Powder_Low_Ignore_Req: return "UI_Print_Powder_Low_Ignore_Req";
         case MsgType::APP_Print_Pause_Rsp: return "APP_Print_Pause_Rsp";
         case MsgType::APP_Print_Powder_Low_Ntf: return "APP_Print_Powder_Low_Ntf";
+        case MsgType::APP_OpticalPath_Progress_Ntf: return "APP_OpticalPath_Progress_Ntf";
+        case MsgType::APP_Print_Start_Rejected_Ntf: return "APP_Print_Start_Rejected_Ntf";
         case MsgType::UI_Supply_Status_Req: return "UI_Supply_Status_Req";
         case MsgType::APP_Supply_Status_Rsp: return "APP_Supply_Status_Rsp";
         case MsgType::UI_Camera_Stream_Start_Req: return "UI_Camera_Stream_Start_Req";
@@ -139,6 +141,10 @@ const char* upc_msg_type_name(MsgType type) {
         case MsgType::GLAVO_Visual_FirstLayer_Session_Start_Ntf: return "GLAVO_Visual_FirstLayer_Session_Start_Ntf";
         case MsgType::GLAVO_Visual_FirstLayer_Session_Stop_Ntf: return "GLAVO_Visual_FirstLayer_Session_Stop_Ntf";
         case MsgType::APP_Visual_FirstLayer_Reference_Ready_Rsp: return "APP_Visual_FirstLayer_Reference_Ready_Rsp";
+        case MsgType::GLAVO_Visual_OpticalPath_Session_Start_Ntf: return "GLAVO_Visual_OpticalPath_Session_Start_Ntf";
+        case MsgType::GLAVO_Visual_OpticalPath_Session_Stop_Ntf: return "GLAVO_Visual_OpticalPath_Session_Stop_Ntf";
+        case MsgType::GLAVO_Visual_OpticalPath_Point_Check_Req: return "GLAVO_Visual_OpticalPath_Point_Check_Req";
+        case MsgType::APP_Visual_OpticalPath_Point_Check_Rsp: return "APP_Visual_OpticalPath_Point_Check_Rsp";
         case MsgType::MEDIA_Camera_Stream_Start_Req: return "MEDIA_Camera_Stream_Start_Req";
         case MsgType::APP_Media_Camera_Stream_Start_Rsp: return "APP_Media_Camera_Stream_Start_Rsp";
         case MsgType::MEDIA_Camera_Stream_Stop_Req: return "MEDIA_Camera_Stream_Stop_Req";
@@ -200,6 +206,10 @@ const char* upc_msg_type_name(MsgType type) {
         case MsgType::UI_Debug_Local_Rtsp_Get_Ntf: return "UI_Debug_Local_Rtsp_Get_Ntf";
         case MsgType::UI_Debug_TestImage_Set_Ntf: return "UI_Debug_TestImage_Set_Ntf";
         case MsgType::UI_Debug_TestImage_Get_Ntf: return "UI_Debug_TestImage_Get_Ntf";
+        case MsgType::UI_Debug_Galvo_PointTest_Start_Ntf: return "UI_Debug_Galvo_PointTest_Start_Ntf";
+        case MsgType::UI_Debug_Galvo_PointTest_Get_Ntf: return "UI_Debug_Galvo_PointTest_Get_Ntf";
+        case MsgType::UI_Debug_OpticalPath_Check_Set_Ntf: return "UI_Debug_OpticalPath_Check_Set_Ntf";
+        case MsgType::UI_Debug_OpticalPath_Check_Get_Ntf: return "UI_Debug_OpticalPath_Check_Get_Ntf";
         case MsgType::APP_Media_Local_Rtsp_State_Ntf: return "APP_Media_Local_Rtsp_State_Ntf";
         case MsgType::GLAVO_Debug_Sensor_Ntf: return "GLAVO_Debug_Sensor_Ntf";
         case MsgType::GLAVO_Debug_Axis_Ntf: return "GLAVO_Debug_Axis_Ntf";
@@ -211,6 +221,8 @@ const char* upc_msg_type_name(MsgType type) {
         case MsgType::GLAVO_Debug_Env_Sim_Ntf: return "GLAVO_Debug_Env_Sim_Ntf";
         case MsgType::GLAVO_Debug_Env_Sim_Powder_Ntf: return "GLAVO_Debug_Env_Sim_Powder_Ntf";
         case MsgType::GLAVO_Debug_TestImage_Ntf: return "GLAVO_Debug_TestImage_Ntf";
+        case MsgType::GLAVO_Debug_Galvo_PointTest_Ntf: return "GLAVO_Debug_Galvo_PointTest_Ntf";
+        case MsgType::GLAVO_Debug_OpticalPath_Check_Ntf: return "GLAVO_Debug_OpticalPath_Check_Ntf";
         case MsgType::UI_Mcu_Version_Ntf: return "UI_Mcu_Version_Ntf";
         case MsgType::GLAVO_Mcu_Version_Ntf: return "GLAVO_Mcu_Version_Ntf";
         case MsgType::APP_Fs_Delete_Rsp: return "APP_Fs_Delete_Rsp";
