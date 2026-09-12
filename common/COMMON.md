@@ -406,6 +406,27 @@ rongsu_broker ──listen──► /tmp/upc_broker.sock ◄── UI / Glavo / 
 `dma_heap_buffer.*` 同时被 UI `RgaDmaBuf`、camera `CameraDmaFrameSource` 与 Media
 `timelapse_util::create_raw_thumb_from_nv12`（RTHM 缩略图）复用，避免各自维护 dma-heap 候选列表。
 
+### `DmaHeapUsage`：交给 RGA 的分配必须显式声明
+
+RK3568 的 RGA2 没有 IOMMU，只能寻址**物理连续且 <4G** 的内存。候选堆里
+`system` / `system-uncached` 是页式堆，两条都不满足——从它们拿到的 buffer 能 mmap，
+但 `importbuffer_fd()` 必然返回 0。
+
+| 用途 | 候选堆 | 用尽后 |
+|---|---|---|
+| `Generic`（默认） | 连续/dma32 堆 → 页式堆兜底 | 返回 false |
+| `RgaDevice` | **仅**连续/dma32 堆 | **直接返回 false，不回退页式堆** |
+
+`RgaDevice` 之所以宁可失败也不回退：静默交出一块 RGA 用不了的内存，会让调用方
+推迟到 `importbuffer_fd` 那一步才发现问题，且日志里看不出内存来自哪个堆。
+
+失败日志由**调用方**打印，`dma_heap_buffer.cpp` 内部刻意不打——它属于 IPC 专题，
+而 `UPC_MOD_IPC` 默认为 0，写在那里的 `UPC_LOG_IPC` 会被整条编译掉。
+
+实测背景：CMA 碎片化时 `reserved` 堆连 616 KB 连续内存都给不出（内核报
+`cma_alloc: reserved: alloc failed, req-size: 154 pages`），旧代码于是滑到 `system`
+堆，导致缩略图静默不生成。详见 `app/media/MEDIA.md` 的 RTHM 双路径说明。
+
 **契约勿随意改**：`upc_contract.hpp`、本文档消息总表
 
 ## 拓扑（Broker）
