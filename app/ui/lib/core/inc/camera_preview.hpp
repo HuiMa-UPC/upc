@@ -40,8 +40,12 @@ public:
     void stop();
 
     [[nodiscard]] bool active() const noexcept { return active_; }
-    [[nodiscard]] uint32_t stream_width() const noexcept { return width_; }
-    [[nodiscard]] uint32_t stream_height() const noexcept { return height_; }
+    /**
+     * 上屏图像的尺寸，**不是**相机流的原始尺寸：解码侧已按视口做过裁剪 + 缩放。
+     * `cam_apply_layout()` 拿它算残余 zoom，正常情况下正好是 1.000（无缩放快路径）。
+     */
+    [[nodiscard]] uint32_t stream_width() const noexcept { return out_width_; }
+    [[nodiscard]] uint32_t stream_height() const noexcept { return out_height_; }
 
 private:
     static constexpr int kFrameSlots = 3;
@@ -84,6 +88,12 @@ private:
     void finish_decode_retire_ui();
     void clear_frame_buffers();
     bool setup_frame_buffers(size_t frame_bytes, uint32_t row_stride_bytes);
+    void resolve_output_geometry();
+    /** 输出几何是否与源不同（即需要 RGA/SW 在转换时顺手缩放）。 */
+    [[nodiscard]] bool scaled_output() const noexcept
+    {
+        return out_width_ != width_ || out_height_ != height_ || src_crop_h_ != height_;
+    }
     bool prepare_rga_streaming_cache();
     void release_rga_streaming_cache();
 
@@ -96,6 +106,8 @@ private:
     bool convert_frame_rga_streaming(uint32_t src_buf_idx, int src_fd, int slot_idx,
                                      uint8_t* dst, int w, int h,
                                      int src_stride_y, int dst_stride_px);
+    bool convert_frame_rga_scaled(uint32_t src_buf_idx, int src_fd, uint8_t* dst,
+                                  int src_stride_y, int dst_stride_px);
 
     lv_obj_t* image_ = nullptr;
     lv_obj_t* hint_  = nullptr;
@@ -129,6 +141,25 @@ private:
     uint32_t fps_    = 25;
     uint32_t pixel_stride_px_ = 0;
     uint32_t src_stride_y_    = 0; /**< 源 NV12 实际 stride（字节） */
+
+    /*
+     * 输出几何：上屏 BGRX 图像的尺寸（out_*）与它取自源 NV12 的哪一条可见带
+     * （src_crop_*）。由 resolve_output_geometry() 在开流时按视口一次算定。
+     *
+     * 为什么要有这一组：相机是 1080x1280 竖屏流，2.0 平台屏宽 1280。以前解码侧
+     * 只做 1:1 色彩转换、把整帧交给 LVGL，再靠 lv_image_set_scale() 逐帧做
+     * 1.185x 双线性重采样——整屏一次约 98ms，直接把 LVGL 主循环压到 8fps，
+     * 触摸跟着发滞。现在「宽度适配 + 纵向居中裁剪」交给 RGA 在色彩转换那一趟
+     * 里顺手做掉，LVGL 只剩 1:1 贴图。
+     *
+     * 屏宽本来就等于流宽时（1024 档 + 1024 屏，见 UI.md「摄像头整屏预览」），
+     * out_* 与源同尺寸、src_crop_h_ == height_，scaled_output() 为假，整条链路
+     * 退回原来那条久经验证的 1:1 快路径。
+     */
+    uint32_t out_width_  = 0;
+    uint32_t out_height_ = 0;
+    uint32_t src_crop_y_ = 0; /**< 源可见带起始行；NV12 要求偶数 */
+    uint32_t src_crop_h_ = 0; /**< 源可见带行数；NV12 要求偶数 */
 
     FrameSlot            slots_[kFrameSlots];
     bool                 rga_path_ready_ = false;

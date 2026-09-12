@@ -611,7 +611,14 @@ pending 自动解除——正好顺带验超时路径。
 副作用：`cam_apply_layout()` 是 cover 填充（`zoom = max(zoom_w, zoom_h)`），viewport
 变宽后纵向裁得更多。1024×600 屏上纵向可见从 50.9% 降到 46.9%，但缩放系数正好变成
 1.000（屏宽 = 流宽 1024，见 `CAMERA_WIDTH_DEFAULT`），走 LVGL 无缩放快路径，省掉逐帧
-重采样——RGA 只做色彩转换不做缩放。
+重采样。
+
+**`zoom` 必须是 1.000，这不是"顺便"而是硬要求。** 1280 档把上面那个前提破掉过一次：
+屏宽 1280、流宽 1080，`zoom` 变成 303，于是 `lv_image` 落进 `lv_draw_sw_transform`
+逐像素双线性重采样，整屏一次约 98ms（`refr 5s:` 里 `draw_avg_us≈98000`、
+`loops=41/5s`），LVGL 主循环被压到约 8fps，触摸跟着发滞——解码侧明明还在
+30fps（`ok≈150` 而 `show_n≈41`）。修法不是回去调 LVGL，而是把"宽度适配 + 纵向居中
+裁剪"整个交给 RGA 在色彩转换那一趟里做掉，见「预览输出几何」。
 
 ## UiMsgProxy（Glavo）
 
@@ -1085,9 +1092,9 @@ rongsu_camera 经主 IPC（/tmp/upc_camera.sock）SCM_RIGHTS 附带 dma_buf fd �
   → CameraPreviewPlayer::on_stream_start_rsp 调用 MsgPort::take_peer_dma_fds(APP_CAMERA)
   → SHM /upc_camera_preview 只读 slot 状态/seq/buffer_idx
   → 解码线程 acquire_latest_frame 得到 buffer_idx
-  → [RGA] importbuffer_fd(src_fd) → imcvtcolor → slots_[3] BGRX
-  → [SW 回退] mmap(src_fd) → nv12_to_bgrx_sw → slots_
-  → lv_timer(16ms) 换 img_dsc_ 指针 → lv_image (XRGB8888)
+  → [RGA] importbuffer_fd(src_fd) → 裁剪 + 缩放 + NV12→BGRX → slots_[3] BGRX（上屏尺寸）
+  → [SW 回退] mmap(src_fd) → nv12_to_bgrx_sw（同样裁剪 + 最近邻缩放） → slots_
+  → lv_timer(16ms) 换 img_dsc_ 指针 → lv_image (XRGB8888，1:1 贴图)
 ```
 
 `CameraStreamInfoPayload.dma_socket_path` 为 ABI 保留字段；fd 不经独立 socket 传递。
@@ -1099,12 +1106,43 @@ rongsu_camera 经主 IPC（/tmp/upc_camera.sock）SCM_RIGHTS 附带 dma_buf fd �
 - **解码线程不按帧周期补睡**：限速由 `acquire_latest_frame` 天然承担（没有比 `last_seq` 更新的帧就返回 `nullopt`），所以循环末尾**不再**睡到一个相机帧周期。补睡会把 SHM 的轮询粒度从 `kNoFrameNapMs`(5ms) 拉到整整一帧（无帧那圈只耗 5ms，末尾要再睡 28ms），凭空给预览加上平均半帧的等待。无帧时只睡 `kNoFrameNapMs`。
 - **`lv_timer` 周期 16ms**（`kUiRefreshPeriodMs`，与 `LV_DEF_REFR_PERIOD` 对齐）：这一拍等的是"转换好的帧什么时候被切上屏"，周期越长平均多等半个周期。交互期仍降到 `kUiRefreshInteractPeriodMs`(66) 让位给触摸响应。
 - **RGA 路径**：`setup_frame_buffers` 时 `RgaDmaBuf` 分配成功则 `rga_path=1`；失败退化为 `std::vector` 软件转换。无进程级预热，首帧到达即转换。
-- **RGA 常驻导入数受相机缓冲数约束**：streaming 模式下 `prepare_rga_streaming_cache()` 开流时把**每个**源 dma fd 都 `mmap` + `importbuffer_fd` 常驻，导入总数 = `CAMERA_V4L2_BUF_COUNT` + 2 块 scratch。rk3568 实测 4 个缓冲（6 句柄、约 11.4MB 常驻映射）可用，6 个（8 句柄、约 15.6MB）必然导入失败。**失败只会退化成软件转换（22ms/帧）、画面照常出，外部看不出异常**，所以三个失败点各自打了带 errno 的 Error 日志；调相机缓冲数后务必 `grep RGA /var/log/topic/topic_ui_preview.log` 确认 `rga_path=1`。
+- **RGA 常驻导入数受相机缓冲数约束**：streaming 模式下 `prepare_rga_streaming_cache()` 开流时把**每个**源 dma fd 都 `mmap` + `importbuffer_fd` 常驻，导入总数 = `CAMERA_V4L2_BUF_COUNT` + scratch 块数（1:1 条带路径 2 块；缩放路径不需要 src scratch，只有 1 块）。rk3568 实测 4 个缓冲（6 句柄、约 11.4MB 常驻映射）可用，6 个（8 句柄、约 15.6MB）必然导入失败。**失败只会退化成软件转换（22ms/帧）、画面照常出，外部看不出异常**，所以三个失败点各自打了带 errno 的 Error 日志；调相机缓冲数后务必 `grep RGA /var/log/topic/topic_ui_preview.log` 确认 `rga_path=1`。
 - **DMA 约束**：RK3568 RGA2 仅支持 4G 以下物理地址；源 fd 必须来自 V4L2 / dma-heap（dma32），UI 直接用 `importbuffer_fd`。
 - **Stride 对齐**：RGA 源 stride 使用后端传来的实际 `stride_y`，不再假设 `stride_y == width`。
 - **Cache 同步**：RGA 读源前 `DMA_BUF_IOCTL_SYNC(READ)`，写目的后 `DMA_BUF_IOCTL_SYNC(WRITE)`；目的缓冲优先 uncached。
 - **线程**：解码在独立线程；`on_stream_start_rsp` 与换帧须 `lv_async_call` / `lv_timer` 回到 UI 线程。
 - **CMake**：找到 `librga` 时 `-DUPC_UI_HAS_RGA=1`（当前源码仍硬依赖 RGA 头文件）。
+
+### 预览输出几何
+
+**解码侧输出的不是相机原始帧，是上屏那张图。** `resolve_output_geometry()` 在
+`apply_stream_start_ui()` 里按 viewport 一次算定，全部记在 `out_width_` /
+`out_height_`（上屏尺寸）与 `src_crop_y_` / `src_crop_h_`（对应的源可见带）：
+
+| 项 | 值（1080×1280 流 + 1280 宽屏） | 说明 |
+|----|------|------|
+| 源 | 1080×1280 | 相机 NV12，`UPC_CAMERA_STREAM_*` |
+| 可见带 | y=302 起 676 行 | 按 `vp_h × width_ / vp_w` 反算，居中；**偶数**（NV12 的 UV 按 2×2 子采样） |
+| 输出 | 1280×`vp_h` | `lv_image` 里的真实尺寸，`stream_width()/stream_height()` 返回它 |
+
+几何是**开流时定一次**，不跟 viewport 的后续变化。viewport 真改了尺寸，
+`cam_apply_layout()` 算出的 zoom 就不再是 1.000，画面仍然对、只是那段时间回到
+LVGL 重采样——这是刻意的取舍：重建缓冲要停解码线程，不值得为一次布局抖动付这个代价。
+
+三条退回 1:1 的路径（`scaled_output()` 为假，行为与改造前完全一致）：
+
+- **屏宽 = 流宽**（1024 档 + 1024 屏）：本来就无缩放，纵向继续交给 LVGL 裁剪。
+- 取不到 viewport 尺寸（`image_` 没父节点 / 宽高 ≤ 0）。
+- 缩放系数超出 RGA2 的 1/8~8 倍区间（会打一条 Warn）。
+
+两条转换实现按 `scaled_output()` 分流：
+
+- **缩放**：`convert_frame_rga_scaled()`，一趟 `improcess`（独立 src/dst 矩形）出整张输出，再一次 memcpy 进显示槽。**刻意不分条带**——RGA 缩放器只在给定 `src_rect` 内采样，按输出行切条带会在每个边界钳出一条 1px 接缝。
+- **1:1**：`convert_frame_rga_streaming()`，沿用原来按源行分条带那条路径，不动。
+
+排查入口是 `decode ready` 那条日志的 `out=` / `crop=` / `scaled=`：`out` 与
+viewport 不一致，或 `scaled=0` 而屏宽 ≠ 流宽，就说明重采样又回到 LVGL 身上了，
+`refr 5s:` 的 `draw_avg_us` 会立刻涨上去。
 
 ### 预览延迟分段诊断
 
@@ -1145,9 +1183,19 @@ rongsu_camera 经主 IPC（/tmp/upc_camera.sock）SCM_RIGHTS 附带 dma_buf fd �
 | `wait_*` / `waits` | `FLUSH_WAIT_START`→`FINISH` 累计 | 等 DRM 翻页（`drm_flush_wait` 里的 `poll(-1)`）。**`waits ÷ n` 是一次刷新等了几回翻页**；明显大于 1 说明失效区没合并，每帧被多个 vblank 串行拖住 |
 | `flush_*` / `flushes` | `FLUSH_START`→`FINISH` 累计 | `flush_cb` 本身（`drmModeAtomicCommit`），应很小 |
 
-排查顺序：先看 `loops` 确认主循环频率 → 用 `lv_avg_us` 判断是不是 LVGL → 再在 `pre`/`draw`/`wait` 里定位。三者各有对策：`pre` 大是双缓冲同步拷贝，`draw` 大是绘制面积或旋转，`wait` 大是翻页/失效区合并。
+排查顺序：先看 `loops` 确认主循环频率 → 用 `lv_avg_us` 判断是不是 LVGL → 再在 `pre`/`draw`/`wait` 里定位。三者各有对策：`pre` 大是双缓冲同步拷贝，`draw` 大是绘制面积或逐像素变换，`wait` 大是翻页/失效区合并。
 
-> `2.0` 平台是 `LV_DISPLAY_ROTATION_270`（`platform.hpp`）。`lv_linux_drm.c` 自己不做像素旋转，`LV_DRAW_TRANSFORM_USE_MATRIX` 也是 0，所以 `draw_*` 偏大时先用把旋转临时改成 `_0` 做一次 A/B——画面会躺倒，但 `refr_avg_us` 是否塌下来一测就知道。
+> **`draw_*` 偏大先查缩放，不要查旋转。** `rongsu_ui.defaults` 开了 `LV_USE_OPENGLES 1`，
+> 于是 `LV_LINUX_DRM_USE_EGL` 被自动置 1，`lv_linux_drm.c` 整个文件被
+> `#if LV_USE_LINUX_DRM && !LV_LINUX_DRM_USE_EGL` 排掉，真正编进去的是
+> `lv_linux_drm_egl.c`。那边 `set_viewport()` 按 `lv_display_get_rotation()` 交换宽高、
+> 由 GPU 在贴纹理时完成旋转，所以 `2.0` 平台的 `LV_DISPLAY_ROTATION_270` 几乎不花 CPU，
+> 把它改成 `_0` 做 A/B 只会让画面躺倒、`refr_avg_us` 不动。
+>
+> 同时 `LV_USE_DRAW_OPENGLES` 默认是 0，**绘制仍然是软件的**，GPU 只负责把整屏结果
+> 当纹理贴上去并旋转（那部分计入 `flush_*`，整屏 4MB 上传 + `eglSwapBuffers` 约 12ms）。
+> 所以 `draw_*` 就是纯 CPU 像素工作，整屏预览下的头号嫌疑是 `lv_image` 的非 1.000
+> 缩放（走 `lv_draw_sw_transform` 双线性），见「摄像头整屏预览」与「预览输出几何」。
 
 ## 打印历史 + 延时摄影播放器
 
@@ -1584,6 +1632,7 @@ Tab 取 `USER_PAD_SM`（小于 Tab 间距 `USER_PAD_LG` 的一半），故相邻
 消息页共用——原先两页各写一份**字面重复**的实现（连注释都一样），命中区这类修改要同步改两遍。
 
 ### LVGL 配置依赖（`3rdparty/.../configs/rongsu_ui.defaults`）
+- `LV_USE_OPENGLES=1` → `LV_LINUX_DRM_USE_EGL` 被自动置 1（`lv_conf_internal.h`），所以显示驱动是 `lv_linux_drm_egl.c` 而**不是** `lv_linux_drm.c`（后者整个文件被 `!LV_LINUX_DRM_USE_EGL` 排掉）。而 `LV_USE_DRAW_OPENGLES` 默认 0，**绘制仍是软件的**，GPU 只负责贴整屏纹理并做屏幕旋转。看 `refr 5s:` 时这一条是前提，见 [§ 主线程性能探针](#主线程性能探针ui_perf_probe)
 - `LV_USE_TJPGD=1`：历史缩略图 baseline JPEG 解码
 - `LV_USE_FS_POSIX=1` + `LV_FS_POSIX_LETTER='A'`：按路径加载 `/userdata/media/video`、`/userdata/media/photo` 图片（`"A:/userdata/media/video/x.rthm"` / `"A:/userdata/media/photo/x.rthm"`）
 - lvgl 目标加 `_DEFAULT_SOURCE`（`3rdparty/.../CMakeLists.txt`）：修 FS 驱动 `DT_DIR` 在 `_POSIX_C_SOURCE` 下不可见的编译错误
