@@ -92,8 +92,33 @@ int32_t card_pad(void)    { return USER_PAD_SM; }
 int32_t bar_h(void)       { return is_1280() ? 8 : 6; }
 /** 开关轨道 64×32、圆钮 40 宽（稿上是圆角矩形不是圆，故单独给宽）。 */
 int32_t sw_track_w(void)  { return is_1280() ? 64 : 52; }
-int32_t sw_track_h(void)  { return is_1280() ? 32 : 26; }
+/**
+ * 轨道高。**稿是 32，这里刻意提到 40**（实机偏难点）。
+ *
+ * **只加高不加宽**：难点的本来就是竖向这一维，而加宽会立刻撞上 Powder Clean 那行的横向死线
+ * （卡内可用 240 = 图标 32 + 8 + 文字 + 8 + 开关 64，文字得 128，而状态字 `Cleaning` 在
+ * `user_font_value()`(32) 下约 127，几乎零余量），得靠降状态字号或改文案去换，不值得。
+ *
+ * 上限是 40：再往上 LIGHT 卡就得高过 76，左列 604 里的行距会掉到 5 以下，那时该放宽
+ * `col_h` 而不是继续挤行距——但那会打破「两列都 604、底边落回稿的 y=729」这个已经对上的结论。
+ */
+int32_t sw_track_h(void)  { return is_1280() ? 40 : 30; }
 int32_t sw_knob_w(void)   { return is_1280() ? 40 : 32; }
+
+/**
+ * LIGHT 卡高。**从开关高度反推**而不是写死，这样以后再调 `sw_track_h()` 不会漏改这里。
+ *
+ * 稿上这张卡是 64（行内最高的是 32 的图标），但开关提到 40 之后就由开关说话了。取
+ * `max(开关, 图标)` 是为了万一开关将来又调回比图标矮，卡高不会跟着塌。
+ *
+ * **不能和 More Controls 入口卡共用一个 helper**（第一版共用 `card_h_slim()`）：那样入口卡会
+ * 一起被顶到 72，右列内容从 576 涨到 584、四道行距从 7 掉到 5，右列反被拖累。入口卡按稿
+ * 保持 64，见 `card_h_entry()`。
+ */
+int32_t card_h_light(void)
+{
+    return LV_MAX(sw_track_h(), USER_METRIC_ICON_SZ) + card_pad() * 2;
+}
 
 /* ---- 列高与卡高一律钉死，不让内容累加决定 ----
  *
@@ -124,7 +149,7 @@ int32_t col_h(void)         { return is_1280() ? 604 : 470; }
 int32_t card_h_metric(void) { return is_1280() ? 156 : 120; }  /**< 指标卡（条+胶囊） */
 int32_t card_h_combo(void)  { return is_1280() ? 200 : 152; }  /**< 温度+氧组合卡（稿明写 200） */
 int32_t card_h_state(void)  { return is_1280() ? 100 : 78;  }  /**< 带状态字/数值的卡 */
-int32_t card_h_slim(void)   { return is_1280() ? 64  : 48;  }  /**< LIGHT 与 More Controls */
+int32_t card_h_entry(void)  { return is_1280() ? 64  : 48;  }  /**< More Controls 入口卡（稿 64） */
 
 /** 数字输入框尺寸（稿 80×48）。风扇的 Send 也取这个高度，见那处注释。 */
 int32_t num_input_w(void)   { return is_1280() ? 80 : 66; }
@@ -542,6 +567,19 @@ void build_toggle(lv_obj_t *parent, ToggleCard *out, lv_event_cb_t cb)
     lv_obj_add_flag(out->track, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_remove_flag(out->track, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_event_cb(out->track, cb, LV_EVENT_CLICKED, out);
+    /**
+     * 轨道 32 高低于 `UI_USER_MIN_TOUCH`(48)，实机上偏难点，**只外扩命中区、视觉尺寸不动**
+     * ——64×32 与 40 宽的圆钮都是稿值（`layout_94c39ff6` / `layout_37729d98`），加大视觉尺寸
+     * 会连锁出一串麻烦，见 UI.md「控制页」里那两条余量说明。
+     *
+     * `ext_click_area` 是**四边等量**的（LVGL 只有这一个参数），所以左右也各多同样一截、
+     * 命中区变成 80 宽。这里无害：两个开关都在卡片右端，右侧是卡片边缘，左侧是文字容器
+     * （不可点），抢不到别人的触摸。
+     */
+    if(sw_track_h() < UI_USER_MIN_TOUCH) {
+        lv_obj_set_ext_click_area(out->track,
+                                  (UI_USER_MIN_TOUCH - sw_track_h()) / 2);
+    }
 
     const int32_t inset = 2;   /* 稿 padding 2 */
     out->knob = lv_obj_create(out->track);
@@ -1138,7 +1176,7 @@ lv_obj_t *build_toggle_card(lv_obj_t *col, ToggleCard *out,
                             lv_event_cb_t cb)
 {
     lv_obj_t *card = make_card(col);
-    lv_obj_set_height(card, state0 ? card_h_state() : card_h_slim());
+    lv_obj_set_height(card, state0 ? card_h_state() : card_h_light());
     lv_obj_t *row  = make_row(card, USER_PAD_SM / 2);
     lv_obj_set_width(row, LV_PCT(100));
 
@@ -1223,7 +1261,9 @@ void build_more_entry(lv_obj_t *col)
 {
     lv_obj_t *card = lv_obj_create(col);
     lv_obj_remove_style_all(card);
-    lv_obj_set_size(card, LV_PCT(100), card_h_slim());   /* 稿 64，与 LIGHT 同高 */
+    /* 按稿保持 64。**别改回与 LIGHT 共用一个 helper**：LIGHT 已因开关加高涨到 72，共用会把
+     * 这张也顶上去，右列四道行距从 7 掉到 5。见 card_h_light() 的说明。 */
+    lv_obj_set_size(card, LV_PCT(100), card_h_entry());
     lv_obj_set_style_bg_color(card, lv_color_black(), 0);
     lv_obj_set_style_bg_opa(card, LV_OPA_20, 0);
     lv_obj_set_style_bg_opa(card, LV_OPA_40, LV_STATE_PRESSED);
