@@ -65,6 +65,19 @@ LV_USE_LODEPNG 1
 LV_USE_FS_POSIX 1
 LV_FS_POSIX_LETTER 'A'
 
+# 图片缓存：必须显式给值，模板默认是 0（= 关闭）。
+#
+# 上面开了 FS_POSIX + LODEPNG + TJPGD，也就是允许 lv_image_set_src(img, "A:/...")
+# 直接以文件路径为源。缓存为 0 时，这类 lv_image 在 lv_timer_handler 的**每一次
+# 重绘**里都会重新读文件、重新解码——列表滚动、延时摄影播放期间会持续发生。
+# 实测（ui_perf_probe 的 uiloop 探针，16023 个 5 秒样本）：32% 的窗口里
+# lv_timer_handler 单次超过 100ms，最大 1.53s，4732 个窗口主循环掉到 10Hz 以下。
+#
+# 8MB 按本机余量给：mem_avail 常态 3.6GB，rongsu_ui RSS 约 82MB，压力可忽略。
+# HEADER_CACHE 单独计数，命中后可省掉「只为读宽高」而打开并解析文件头的开销。
+LV_CACHE_DEF_SIZE (8 * 1024 * 1024)
+LV_IMAGE_HEADER_CACHE_DEF_CNT 32
+
 LV_DRAW_LAYER_SIMPLE_BUF_SIZE (256 * 1024)
 LV_OBJ_STYLE_CACHE 1
 

@@ -43,6 +43,8 @@ Sensor → rkaiq ISP → /dev/video0 (NV12)
   代价是消费者卡顿期间过期帧被丢弃而不是排队，**打印录像在卡顿瞬间会少几帧**；稳态 30fps 进 30fps 出时每轮通常一帧都排不出来，可忽略。排掉的帧数记在 `drv_drained`。
 - **在飞窗口（不锁步）**：采集线程 commit 后不逐帧等待，而是把该帧挂进在飞队列，每轮用 `slot_is_empty` 非阻塞回收已完成的帧；只有队列达到 `CAMERA_MAX_FRAMES_IN_FLIGHT` 才 `wait_slot_empty` 等最老一帧（超时仍强制归还 buffer，宁可让慢消费者读到被覆写的画面，也不停整条流）。
   这样单个消费者的瞬时抖动（UI 交互降频、Visual 分割、Media 编码/推流）被窗口吸收，不会把采集帧率拉到最慢消费者的速率。窗口取 `min(CAMERA_MAX_FRAMES_IN_FLIGHT, buffer 数-2, 槽位数-1)`。
+- **等待上限按帧率推导，不能写死**：`wait_slot_empty` 的超时由 `peer_wait_slot_empty_ms(stream_fps_)` 算出 `kPeerWaitSlotEmptyFramePeriods`（2）个帧周期，@30fps 约 66ms。这个等待只为「让消费者用完当前帧再复用 buffer」争取时间，超时后照样归还，所以上限只需覆盖消费者处理一帧的正常耗时（UI 侧实测单帧 RGA 转换约 7ms）。
+  **曾写死 1000ms，是一个真实故障的根因**：任一消费者卡住，采集线程就每帧白等整整 1 秒，把整条采集链路（含直播编码与打印逐层快照）一起拖到 1fps 且不自行恢复——现场复现出连续 48 分钟、间隔精确 1.037 秒（1000ms 超时 + 约 37ms 真实工作）的预览塌陷，`slot release timeout` WARN 同频刷屏。按帧率推导后，最坏退化被限制成「该消费者掉几帧」，不再扩散到其它消费者。
 - **采集看门狗**：`stream_thread` 若超过 `CAMERA_STREAM_WATCHDOG_STALL_MS`（默认 3s）无成功 dequeue，则原地重启 ISP/V4L2（不清 peer 表），重建各 peer SHM 并重推 `*_Stream_Start_Rsp` + 新 dma fd；两次重启间隔至少 `CAMERA_STREAM_WATCHDOG_COOLDOWN_MS`（默认 8s）。Media 据此重绑 fd，并按 `local_rtsp_desired_` 决定是否重建本地 RTSP。
 - 参考 `doc/rv1106` ISP 初始化；当前无 Rockit VENC，不经 MPI 预览。
 
@@ -77,6 +79,7 @@ Sensor → rkaiq ISP → /dev/video0 (NV12)
 | V4L2 缓冲 | 4 | `CAMERA_V4L2_BUF_COUNT`（**上调前先读该宏的注释**：它同时约束驱动队列深度、padding pool 大小、以及 UI 侧 RGA 常驻导入数；实测 6 会让 UI 的 RGA 导入失败、静默退化成 22ms/帧的软件转换） |
 | 在飞帧上限 | 3 | `CAMERA_MAX_FRAMES_IN_FLIGHT`（实际取 `min(本值, 缓冲数-2, 槽位数-1)`，缓冲数 4 时是 2、@30fps 约吸收 66ms 抖动） |
 | SHM 槽位 | 6 | `CAMERA_SHM_SLOT_COUNT`（多消费者；过小易 `slot release timeout`） |
+| 槽位归还等待 | 2 个帧周期（@30fps ≈ 66ms） | `kPeerWaitSlotEmptyFramePeriods`（下限 `kPeerWaitSlotEmptyMinMs` = 20ms；**不要改回固定 1000ms**，理由见上文在飞窗口一节） |
 | 看门狗无帧阈值 | 3000 ms | `CAMERA_STREAM_WATCHDOG_STALL_MS`（0=关） |
 | 看门狗重启冷却 | 8000 ms | `CAMERA_STREAM_WATCHDOG_COOLDOWN_MS` |
 
