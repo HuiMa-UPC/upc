@@ -37,7 +37,10 @@ void page_user_home_enter_print_result(const control_print_result_t *result);
  */
 void page_user_home_reset_result_slide(void);
 void page_user_home_request_camera_preview(void);
-/** 按 viewport 宽度等比缩放预览（宽贴满，高超出的居中裁剪）；src_h=0 时用流高或 1280 默认 */
+/** 按 viewport 宽度等比缩放预览（宽贴满，高超出的居中裁剪）；src_h=0 时用流高或 1280 默认。
+ *  src_w/src_h 传的是**上屏图像**尺寸（`CameraPreviewPlayer::stream_width()` 等），
+ *  与 viewport 一致时 zoom 为 1.000，走 lv_image 无缩放贴图快路径。
+ *  打印态与监控态两个摄像头层会一起刷新。 */
 void page_user_home_update_camera_preview_layout(uint32_t src_w, uint32_t src_h);
 /** 打印预览层根容器（用于在预览区域内挂载局部弹窗）；不可用时返回 nullptr。 */
 lv_obj_t *page_user_home_print_preview_parent(void);

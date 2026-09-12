@@ -323,11 +323,31 @@ void on_camera_viewport_size_changed(lv_event_t *e);
 void enter_monitor_mode(void);
 void exit_monitor_mode(void);
 
-/** 预览布局（通用）：宽贴满 viewport；高度按等比缩放后做上下居中裁剪（解码层仍输出全帧）。
- *  打印区与监控区共用同一算法，只是作用于不同的 viewport/image。 */
+/** 预览布局（通用）：宽贴满 viewport；高度按等比缩放后做上下居中裁剪。
+ *  打印区与监控区共用同一算法，只是作用于不同的 viewport/image。
+ *
+ *  裁剪与缩放现在由解码侧的 RGA 在色彩转换那一趟里做掉（见 camera_preview.cpp
+ *  的 `resolve_output_geometry()`），所以流起来之后 src_w 就等于 viewport 宽，
+ *  下面算出的 zoom 正好是 1.000，lv_image 走无缩放贴图快路径——整屏预览时这一步
+ *  就是 8fps 与 30fps 的分界。留着这段 zoom 不是冗余：
+ *    - 开流前（占位尺寸）以及解码侧退回 1:1 时，它仍是唯一把画面铺满的手段；
+ *    - viewport 事后改尺寸时，它兜住解码几何还没跟上的那一拍（画面对、但慢）。
+ *
+ *  传入的 src_w 只是开流前的占位值：播放器活着就一律以它的上屏宽度为准，否则
+ *  enter_printing_mode / enter_monitor_mode 里写死的 UPC_CAMERA_STREAM_WIDTH
+ *  会把 zoom 又按回重采样档。 */
 static void cam_apply_layout(lv_obj_t *vp, lv_obj_t *img, uint32_t src_w, uint32_t src_h)
 {
-    if(!img || !vp || src_w == 0) {
+    if(!img || !vp) {
+        return;
+    }
+    if(ui::CameraPreviewPlayer::instance().active()) {
+        const uint32_t out_w = ui::CameraPreviewPlayer::instance().stream_width();
+        if(out_w > 0) {
+            src_w = out_w;
+        }
+    }
+    if(src_w == 0) {
         return;
     }
 
@@ -357,28 +377,30 @@ void apply_camera_preview_layout(uint32_t src_w, uint32_t src_h)
     cam_apply_layout(g_camera_viewport, g_camera_image, src_w, src_h);
 }
 
+/** 打印态与监控态两个摄像头层一起刷。
+ *
+ *  `CameraPreviewPlayer` 在首帧上屏时会回调过来告知输出几何，但它不知道自己这一
+ *  路挂在哪个 viewport 上。只刷打印态的话，`enter_monitor_mode()` 里那次
+ *  `cam_apply_layout()` 是在开流之前跑的（拿到的还是占位宽），监控层的 zoom 就会
+ *  一直停在重采样档，整屏预览在监控态照样掉到 8fps。
+ *  对隐藏的那一层多刷一次只是重设几何，没有副作用。 */
+void apply_camera_preview_layout_all(uint32_t src_w, uint32_t src_h)
+{
+    cam_apply_layout(g_camera_viewport, g_camera_image, src_w, src_h);
+    cam_apply_layout(g_monitor_camera_viewport, g_monitor_camera_image, src_w, src_h);
+}
+
+/* 两个 size_changed 只传开流前的占位宽：播放器活着时由 cam_apply_layout 统一
+ * 换成它的上屏宽度，不在调用点各写一份。 */
 void on_camera_viewport_size_changed(lv_event_t * /*e*/)
 {
-    uint32_t src_w = UPC_CAMERA_STREAM_WIDTH;
-    if(ui::CameraPreviewPlayer::instance().active()) {
-        src_w = ui::CameraPreviewPlayer::instance().stream_width();
-        if(src_w == 0) {
-            src_w = UPC_CAMERA_STREAM_WIDTH;
-        }
-    }
-    apply_camera_preview_layout(src_w);
+    apply_camera_preview_layout(UPC_CAMERA_STREAM_WIDTH);
 }
 
 void on_monitor_viewport_size_changed(lv_event_t * /*e*/)
 {
-    uint32_t src_w = UPC_CAMERA_STREAM_WIDTH;
-    if(ui::CameraPreviewPlayer::instance().active()) {
-        src_w = ui::CameraPreviewPlayer::instance().stream_width();
-        if(src_w == 0) {
-            src_w = UPC_CAMERA_STREAM_WIDTH;
-        }
-    }
-    cam_apply_layout(g_monitor_camera_viewport, g_monitor_camera_image, src_w, 0);
+    cam_apply_layout(g_monitor_camera_viewport, g_monitor_camera_image,
+                     UPC_CAMERA_STREAM_WIDTH, 0);
 }
 
 void on_files_click(lv_event_t *)
@@ -2401,7 +2423,7 @@ void update_cabin_metric(lv_obj_t *val, lv_obj_t *unit, float v)
 
 void page_user_home_update_camera_preview_layout(uint32_t src_w, uint32_t src_h)
 {
-    apply_camera_preview_layout(src_w, src_h);
+    apply_camera_preview_layout_all(src_w, src_h);
 }
 
 lv_obj_t *page_user_home_print_preview_parent(void)
