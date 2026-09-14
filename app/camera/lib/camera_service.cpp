@@ -23,7 +23,35 @@ namespace {
 constexpr const char* kUiShmName = CAMERA_SHM_NAME_DEFAULT;
 constexpr const char* kVisualShmName = "/upc_camera_preview_visual";
 constexpr const char* kMediaShmName = "/upc_camera_preview_media";
-constexpr int kPeerWaitSlotEmptyMs = 1000;
+
+/**
+ * 在飞窗口耗尽时，等待落后消费者归还槽位的上限（帧周期个数）。
+ *
+ * 这个等待只为「让消费者用完当前帧、再复用底层 buffer」争取时间；超时后无论
+ * 归还与否都会把 buffer 还回去（见 stream_thread_fn 窗口收尾处的注释）。所以
+ * 上限只需覆盖消费者正常处理一帧的耗时——UI 侧实测单帧 RGA 转换约 7ms、解码
+ * 线程整圈约 5ms，两个帧周期（@30fps 约 66ms）已是十倍余量。
+ *
+ * **不要再改回固定的 1000ms**：那样任何一个消费者卡住，采集线程都会每帧白等
+ * 整整 1 秒，把整条采集链路（含直播编码与打印逐层快照）一起拖到 1fps，并且不
+ * 会自行恢复——曾据此在现场复现出连续 48 分钟、间隔精确 1.037 秒的预览塌陷。
+ * 按帧率推导后，最坏退化被限制成「该消费者掉几帧」，不再扩散到其它消费者。
+ */
+constexpr uint32_t kPeerWaitSlotEmptyFramePeriods = 2u;
+
+/** 帧率异常（0 或极高）时的等待下限，避免退化成忙等。 */
+constexpr int kPeerWaitSlotEmptyMinMs = 20;
+
+/** 按当前帧率算出槽位归还等待上限；fps 为 0 时退到下限。 */
+int peer_wait_slot_empty_ms(uint32_t fps)
+{
+    if(fps == 0u) {
+        return kPeerWaitSlotEmptyMinMs;
+    }
+    const int budget =
+        static_cast<int>((1000u * kPeerWaitSlotEmptyFramePeriods) / fps);
+    return budget > kPeerWaitSlotEmptyMinMs ? budget : kPeerWaitSlotEmptyMinMs;
+}
 
 uint64_t monotonic_us()
 {
@@ -478,6 +506,8 @@ void CameraService::stream_thread_fn()
         return n > 0u ? static_cast<size_t>(n) : 1u;
     };
     size_t max_in_flight = compute_max_in_flight();
+    /* 与 max_in_flight 同源：看门狗重启后帧率可能变，两个都要重算。 */
+    int peer_wait_ms = peer_wait_slot_empty_ms(stream_fps_);
 
     /*
      * 非阻塞回收队头已被所有 peer 归还的帧。
@@ -573,6 +603,7 @@ void CameraService::stream_thread_fn()
             logged_first_commit = false;
             last_frame_ok_ms = monotonic_ms();
             max_in_flight = compute_max_in_flight();
+            peer_wait_ms = peer_wait_slot_empty_ms(stream_fps_);
             if(warmup_left > 0) {
                 UPC_LOG_CAMERA_SERVICE(Info,
                     "stream watchdog: AE warmup %u frames after restart",
@@ -711,7 +742,7 @@ void CameraService::stream_thread_fn()
                     continue;
                 }
                 if(c.peer->producer.wait_slot_empty(c.slot_idx,
-                                                    kPeerWaitSlotEmptyMs)) {
+                                                    peer_wait_ms)) {
                     continue;
                 }
                 ++timeout_1s;

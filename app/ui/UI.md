@@ -1218,7 +1218,8 @@ viewport 不一致，或 `scaled=0` 而屏宽 ≠ 流宽，就说明重采样又
 
 ### 相册全屏浏览器（`user_photo`）
 
-- **为什么不能直接 `lv_image_set_src(原图)`**：照片是 `1080×1280` PNG（`camera_resolution_profile.hpp`），`LV_COLOR_DEPTH=32` 下 lodepng 会在 LVGL 线程内同步解出约 5.5MB ARGB8888；而 `LV_CACHE_DEF_SIZE=0`（图片缓存关闭）意味着**每次重绘都重解一遍**。故大图交给 `ui::PhotoDecoder` 后台解，缩到「CONTAIN 贴合屏幕」的尺寸出 RGB565，绘制变成 1:1 blit。
+- **为什么不能直接 `lv_image_set_src(原图)`**：照片是 `1080×1280` PNG（`camera_resolution_profile.hpp`），`LV_COLOR_DEPTH=32` 下 lodepng 会在 LVGL 线程内同步解出约 5.5MB ARGB8888。故大图交给 `ui::PhotoDecoder` 后台解，缩到「CONTAIN 贴合屏幕」的尺寸出 RGB565，绘制变成 1:1 blit。
+  **注意图片缓存已开启但不改变这个结论**：`rongsu_ui.defaults` 现在给了 `LV_CACHE_DEF_SIZE (8 * 1024 * 1024)`（此前未覆盖、沿用模板默认 0，即每次重绘都重解一遍）。8MB 缓存能兜住成片的 `.rthm` 缩略图与延时序列帧，但**单张全尺寸照片解出来就约 5.5MB**，一张就几乎占满、两张必然互相顶掉，且**首次解码依然发生在调用线程**。所以「后台解 + 缩到屏幕尺寸」仍是这里的正解，缓存只是顺带减少了缩略图侧的重复解码。
 - **画面分两拍上**：先贴配对 `.rthm` 缩略图顶住（自定义 decoder 只是读文件 + memcpy，几乎零成本），后台解完再换清晰图；无 `.rthm` 时显示 `Loading...` 而不是在主线程抢着解原图。
 - **解码目标尺寸只能运行时算**：主题分 1920/1280/1024 三档且按实际 display 最长边挑（`ui_theme.cpp` 的 `pick_profile()`），所以 box 取 `lv_display_get_*_resolution()`，不能写成编译期常量。竖构图照片贴合横屏后左右各留约 1/4 屏宽黑边，**两侧箭头正落在黑边上**，这是设计选择。
 - **线程与生命周期**：`PhotoDecoder` 后台线程解码、latest-wins（世代号对不上就丢），经 `lv_async_call` 投递且合并成一次；与 `VideoPlayer` 的双缓冲翻页不同——相册每张照片几何可能不同，`dsc` 的 w/h/stride 必须由**主线程**在 `async_apply` 里发布（LVGL 是在绘制时刻读 dsc 的）。页面对象由 `PageManager` 惰性建出后**永不销毁**，故 `page_user_photo_exit()` 必须先 `lv_image_set_src(img, nullptr)` 再 `PhotoDecoder::release()`（顺序反了下一帧会读到已释放内存）。

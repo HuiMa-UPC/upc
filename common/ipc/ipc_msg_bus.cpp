@@ -12,6 +12,8 @@
 #include <algorithm>
 #include <thread>
 
+#include <unistd.h>
+
 #if defined(__linux__)
 #include <sys/epoll.h>
 #endif
@@ -684,6 +686,37 @@ void IpcMsgBus::handle_broker_client_io(BrokerClientSlot& slot)
     const bool was_connected = slot.endpoint->connected();
     std::vector<InboundWireUnit> units;
     slot.endpoint->recv_pending(units);
+
+    /*
+     * broker 只转发不消费：send_frame_with_fds 走 SCM_RIGHTS，内核已把 fd 复制
+     * 一份给目标进程，broker 自己 recvmsg 收到的这一份用完必须关掉，否则每转发
+     * 一组 dma-buf fd 就漏一组——相机每次开流 / 看门狗重启都会向各 peer 推
+     * CAMERA_V4L2_BUF_COUNT 个 fd，长跑后 broker 触发 EMFILE，accept/recvmsg
+     * 全失败，整条消息总线瘫痪。
+     *
+     * 为什么不把 close 放进 InboundWireUnit 的析构：client 路径
+     * （deliver_client_frames）靠 stash_pending_dma_fds 把这些整数移交给
+     * pending_dma_fds_，由消费者 take_pending_dma_fds 之后负责 close。若在析构
+     * 里统一关，client 侧就会对同一个 fd 双重 close。所有权差异只存在于 broker
+     * 与 client 两条路径之间，因此只在这里兜。
+     *
+     * 用 scope guard 而不是循环末尾 close：下面的分支里有多处 early return
+     * （注册帧解码失败、被踢下线等），逐个补 close 容易漏。
+     */
+    struct InboundFdGuard {
+        std::vector<InboundWireUnit>& units;
+        ~InboundFdGuard()
+        {
+            for (auto& unit : units) {
+                for (int fd : unit.fds) {
+                    if (fd >= 0) {
+                        ::close(fd);
+                    }
+                }
+                unit.fds.clear();
+            }
+        }
+    } fd_guard{units};
 
     if (was_connected && !slot.endpoint->connected()) {
         broker_unregister_client(slot, true);

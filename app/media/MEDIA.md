@@ -88,9 +88,37 @@ rongsu_media worker
 ## 拍照
 
 `UI_Camera_Snapshot_Req` → 拷 latest NV12 → ffmpeg PNG  
-`/userdata/media/photo/photo_{stamp}_{WxH}.png` + 同帧 RTHM（dma32+RGA；失败不影响 PNG）→ `APP_Camera_Snapshot_Rsp`。
+`/userdata/media/photo/photo_{stamp}_{WxH}.png` + 同帧 RTHM（RGA 优先、CPU 兜底，见下节；失败不影响 PNG）→ `APP_Camera_Snapshot_Rsp`。
 
 依赖预览流已开；偶发空快照见日志。
+
+## RTHM 缩略图双路径
+
+`timelapse_util::create_raw_thumb_from_nv12` 是拍照、打印层拍、清粉录像、H264 录像
+四条路径共用的唯一缩略图入口。它先算好几何（`dst_w` = `THUMB_MAX_W` 封顶、等比高、
+`stride = dst_w*2`），再按顺序尝试两种实现，**两者产出的 `.rthm` 字节格式完全一致**：
+
+| 路径 | 实现 | 何时使用 |
+|---|---|---|
+| RGA（优先） | `render_thumb_rga`，dma-heap + `importbuffer_fd` + `imcvtcolor_t`/`imresize` | `UPC_CAMERA_HAS_RGA` 且能拿到 RGA 可寻址内存 |
+| CPU（兜底） | `render_thumb_cpu`，纯普通堆，Y 做 box 平均、UV 最近邻 | RGA 未编入或任一环节失败 |
+
+**为什么必须有 CPU 兜底**：RGA2 无 IOMMU，只能吃物理连续且 <4G 的内存。CMA 碎片化时
+`/dev/dma_heap/reserved` 连几百 KB 连续内存都给不出（内核报 `cma_alloc: reserved:
+alloc failed`），此时 RGA 路径整条失效。旧代码没有兜底，且 `dma_heap_alloc` 会静默
+回退到页式 `system` 堆，结果是**缩略图静默不生成**——`snapshot thumb failed` 之外没有
+任何线索。缩略图只有 240 px 宽，CPU 转换几毫秒，没有理由让它依赖 CMA 运气。
+
+两条路径的色彩口径都是 **BT.601 limited range**，打包顺序对齐 LVGL `lv_color16_t`
+（`blue:5/green:6/red:5`，小端下即 `(R<<11)|(G<<5)|B`），与 UI 侧
+`raw_thumb_decoder` 直读一致，切换路径不会出现色差。
+
+PHX 分块路径的 `kDstTileRows = 16`：1080×1280 源 + 240 宽缩略图下，原先的 64 行会让
+中间 RGB565 块要到 154 页（616 KB）连续内存而稳定失败；16 行把峰值压到 41 页
+（160 KB），代价是 RGA 调用从 5 次增到 18 次。
+
+诊断：`importbuffer_fd failed` 日志会带每块 buffer 的**字节数与实际所在堆**。若堆是
+`system` / `system-uncached`，说明是内存不在 RGA 可寻址范围，而非 RGA 本身故障。
 
 ## 打印层拍 / 延时
 
@@ -99,7 +127,7 @@ Glavo PrintVideoNotify → APP_MEDIA
   Start：配额腾挪 + recover/清 tmp → PrintVideoRecorder + PrintH264Recorder
   LayerSnap：latest NV12 → ffmpeg PNG（1.png,2.png,...）→ tmp/
   Finish/Abort：
-    thumb.rthm（dma32+RGA；失败则无缩略图）
+    thumb.rthm（RGA 优先、CPU 兜底，见「RTHM 缩略图双路径」）
     upsert config.json（frames_dir=tmp，status=complete|terminated，video_pending）
     APP_Print_Video_Manifest_Ntf → UI（切结果页）
   结果页退出 UI_Print_Video_Finalize_Req：
@@ -197,6 +225,7 @@ Glavo PrintVideoNotify → APP_MEDIA
 | 录像输出 | `/userdata/media/video/tmp/` → finalize `/userdata/media/video/{job}/` | `UPC_VIDEO_TMP` / `CAMERA_PRINT_VIDEO_OUT_DIR` |
 | 缩略图 | `{dir}/thumb.rthm` | `CAMERA_PRINT_VIDEO_THUMB_EXT` |
 | 缩略图最大宽 | 240 | `CAMERA_PRINT_VIDEO_THUMB_MAX_W` |
+| 缩略图分块行数 | 16（PHX 路径） | `kDstTileRows`（`timelapse_util.cpp`） |
 | 拍照 | `/userdata/media/photo/photo_{stamp}_{WxH}.png` + `.rthm` | `save_latest_png_snapshot` |
 | 历史清单 | `/userdata/media/video/config.json` | `UPC_VIDEO_CONFIG` |
 | ffmpeg | `/usr/bin/ffmpeg` | `CAMERA_FFMPEG_BIN` |
