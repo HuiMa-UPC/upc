@@ -813,6 +813,10 @@ void McuLink::enqueue_serial_tx(const uint8_t* data, size_t len, bool reliable)
     if(!data || len == 0 || len > sizeof(SerialTxItem::data)) {
         return;
     }
+    if(serial_ota_session_.is_active()) {
+        UPC_LOG_MCU_LINK(Warn, "drop serial TX while MCU serial OTA active");
+        return;
+    }
     SerialTxItem item{};
     std::memcpy(item.data, data, len);
     item.len = len;
@@ -916,6 +920,10 @@ bool McuLink::request_transport_once()
 void McuLink::drain_serial_tx_queue()
 {
     if(serial_fd_ < 0) {
+        return;
+    }
+    /* 擦除窗及整个串口 OTA 会话期间不发非 OTA 帧；OTA 走 serial_send_raw。 */
+    if(serial_ota_session_.is_active()) {
         return;
     }
     for(;;) {
@@ -1527,7 +1535,7 @@ void McuLink::handle_serial_rx_frame(const uint8_t* frame, size_t len)
         return;
     }
 
-    if(serial_ack_enabled()) {
+    if(serial_ack_enabled() && !serial_ota_session_.is_active()) {
         send_soc_ack_for_bb(frame, len);
     }
 
@@ -1613,12 +1621,14 @@ void McuLink::handle_serial_rx_frame(const uint8_t* frame, size_t len)
     serial_project_info_t pinfo{};
     if(serial_parse_project_info_report(frame, len, &pinfo) == 0) {
         UPC_LOG_MCU_LINK(Info,
-            "mcu_version: %u.%u.%u laser=%u z_motor=%u",
+            "mcu_version: %u.%u.%u laser=%u z_motor=%u slot=%u ota=%u",
             static_cast<unsigned>(pinfo.major),
             static_cast<unsigned>(pinfo.minor),
             static_cast<unsigned>(pinfo.patch),
             static_cast<unsigned>(pinfo.laser_type),
-            static_cast<unsigned>(pinfo.z_motor_type));
+            static_cast<unsigned>(pinfo.z_motor_type),
+            static_cast<unsigned>(pinfo.run_slot),
+            static_cast<unsigned>(pinfo.ota_state));
         on_mcu_version_report(pinfo);
         return;
     }
@@ -1967,6 +1977,9 @@ void McuLink::send_soc_ack_for_bb(const uint8_t* frame, size_t len)
 void McuLink::link_process_serial_reliable_tx()
 {
     if(!serial_ack_enabled()) {
+        return;
+    }
+    if(serial_ota_session_.is_active()) {
         return;
     }
     if(!serial_reliable_pending_.active) {
@@ -3115,7 +3128,15 @@ bool McuLink::start_serial_mcu_ota(const char* image_dir)
         UPC_LOG_MCU_OTA(Warn, "SERIAL_OTA start: glavo ota active");
         return false;
     }
-    return serial_ota_session_.start(image_dir);
+    if(!serial_ota_session_.start(image_dir)) {
+        return false;
+    }
+    {
+        std::lock_guard<std::mutex> lock(serial_tx_mtx_);
+        serial_tx_queue_.clear();
+    }
+    serial_clear_reliable();
+    return true;
 }
 
 void McuLink::cancel_mcu_ota()

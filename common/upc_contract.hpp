@@ -58,16 +58,16 @@
 #if UPC_DEBUG
 
 #ifndef UPC_MOD_MSG_BUS
-#define UPC_MOD_MSG_BUS 0
+#define UPC_MOD_MSG_BUS 1
 #endif
 #ifndef UPC_MOD_IPC
-#define UPC_MOD_IPC 0
+#define UPC_MOD_IPC 1
 #endif
 #ifndef UPC_MOD_MEM_POOL
-#define UPC_MOD_MEM_POOL 0
+#define UPC_MOD_MEM_POOL 1
 #endif
 #ifndef UPC_MOD_BUFFER_POOL
-#define UPC_MOD_BUFFER_POOL 0
+#define UPC_MOD_BUFFER_POOL 1
 #endif
 #ifndef UPC_MOD_GLAVO_SERVICE
 #define UPC_MOD_GLAVO_SERVICE 1

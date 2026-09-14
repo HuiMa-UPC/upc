@@ -15,7 +15,7 @@
 | `lib/galvo_motion_encode.*` | 调试运动包编码 + 五点坐标（点位测试与光路检测共用） |
 | `lib/device_config.hpp` | TCP/串口默认、换层/Layer Snap 开关、`GLAVO_TEST_GCODE_PATH` |
 | `lib/mcu_ota_session.*` | Galvo 以太网 OTA：扫描 `/userdata/image/galvo` 最高版本 AB 对 |
-| `lib/mcu_serial_ota_session.*` | MCU 串口 OTA：扫描 `/userdata/image/mcu` 最高版本 AB 对 |
+| `lib/mcu_serial_ota_session.*` | MCU 串口 OTA：扫描 `/userdata/image/mcu` 最高版本 AB 对；停等重传 + 阶段四版本确认 |
 | `common/fs_manifest/gcode_manifest.*` | Local `config.json` 读写（与 UI 共用；Prepare/Delete 时更新） |
 
 解析库见 [parser/PARSER.md](../parser/PARSER.md)；线协议见 [protocol/PROTOCOL.md](../protocol/PROTOCOL.md)。
@@ -59,6 +59,8 @@ UI → GlavoService（工作线程）→ ParserManager → RingBuffer → McuLin
 
 镜像命名与选包：[common/fs_manifest/OTA_IMAGE.md](../../common/fs_manifest/OTA_IMAGE.md)。  
 `UI_Mcu_Ota_Start_Req`（UI 或 MQTT）→ `/userdata/image/galvo`；`UI_Serial_Mcu_Ota_Start_Req` → `/userdata/image/mcu`。只刷最高版本成对的 SlotA→SlotB，不成对或名称非法则启动失败。两路互斥。状态 `APP_*_Ota_Status_Ntf` 双发 UI 与 MQTT，供云端进度映射。
+
+MCU 串口 OTA 是停等协议（规则 [MCU_OTA丢包重传机制.md](../../doc/MCU_OTA丢包重传机制.md)）：只认 `0xBB` 业务应答；镜像须为打包工具的 128 对齐产物，原样切片、不补齐。`FINISHED_ACK=1` 只表示落槽，成功看阶段四 `value[5]==目标槽 && value[6]==4`。会话进行中 link 线程不发其它串口命令（擦除窗硬静默；阶段四只发版本查询）。
 
 ### 打印层录像（Glavo → Media）
 
