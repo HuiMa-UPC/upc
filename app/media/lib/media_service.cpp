@@ -78,11 +78,13 @@ bool MediaService::init()
     print_video_.set_print_thumb_provider([this](const char* out_path) {
         return print_h264_.create_final_thumb(out_path);
     });
+    /* 层拍与 H264 都在写盘热路径上按帧/按层调用，必须走节流版：
+     * 全量核算要遍历整个录像目录，逐帧跑会随层数越来越慢。 */
     print_video_.set_storage_budget_guard([this]() {
-        return ensure_video_storage_budget();
+        return ensure_video_storage_budget_throttled();
     });
     print_h264_.set_storage_budget_guard([this]() {
-        return ensure_video_storage_budget();
+        return ensure_video_storage_budget_throttled();
     });
     print_h264_.set_finalize_done_callback([this] {
         on_print_h264_finalize_done();
@@ -1418,6 +1420,25 @@ bool MediaService::evict_oldest_committed_video() const
     }
     UPC_LOG_MEDIA_SERVICE(Info, "STORRCLM_SESSION_DEL dir=%s", path.c_str());
     return true;
+}
+
+bool MediaService::ensure_video_storage_budget_throttled() const
+{
+    const uint64_t now_ms = monotonic_ms();
+    {
+        std::lock_guard<std::mutex> lock(storage_cache_mtx_);
+        if(storage_budget_cached_ok_ && storage_budget_checked_ms_ != 0 &&
+           now_ms - storage_budget_checked_ms_ < UPC_MEDIA_STORAGE_BUDGET_CACHE_MS) {
+            return true;
+        }
+    }
+    const bool ok = ensure_video_storage_budget();
+    {
+        std::lock_guard<std::mutex> lock(storage_cache_mtx_);
+        storage_budget_cached_ok_ = ok;
+        storage_budget_checked_ms_ = now_ms;
+    }
+    return ok;
 }
 
 bool MediaService::ensure_video_storage_budget() const

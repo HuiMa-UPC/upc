@@ -29,6 +29,17 @@
 #define UPC_IPC_PEER_RECONNECT_INTERVAL_MS 3000
 #endif
 
+/**
+ * peer 在线列表对齐请求的节流间隔（毫秒）。
+ *
+ * online_remote_peers_ 是靠 broker 的 ONLINE/OFFLINE 通知维护的纯事件缓存，
+ * 丢一条 ONLINE 就会永久误判该 peer 离线。client 在"自己连着 broker 但目标
+ * peer 显示离线"时按此间隔重发 REG，由 broker 回一次在线快照自愈。
+ */
+#ifndef UPC_IPC_PEER_RESYNC_INTERVAL_MS
+#define UPC_IPC_PEER_RESYNC_INTERVAL_MS 1000
+#endif
+
 /** rongsu.sh 等待后端 listen socket 出现的超时（毫秒） */
 #ifndef UPC_IPC_PEER_STARTUP_WAIT_MS
 #define UPC_IPC_PEER_STARTUP_WAIT_MS 10000
@@ -592,6 +603,13 @@ inline constexpr bool is_ipc_reliable_msg_type(MsgType type) noexcept
     case MsgType::APP_Print_Pause_Rsp:
     case MsgType::APP_Print_Powder_Low_Ntf:
     case MsgType::APP_OpticalPath_Progress_Ntf:
+        return true;
+
+    /* 终止是幂等命令：丢一条就等于用户按了终止而作业继续跑，必须补发。
+     * Pause/Resume 刻意**不**入表——它们是成对的瞬时状态，断连期间攒下的
+     * 暂停在几秒后补发会在用户已不想暂停时突然生效，比丢弃更危险；那一对
+     * 改由 UI 侧根据 publish 返回值回滚图标并提示重试。 */
+    case MsgType::UI_Print_Terminate_Req:
         return true;
 
     // 换层/录像链路：层抓拍与会话闭环

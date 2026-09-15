@@ -418,6 +418,88 @@ bool IpcEndpoint::peek_fd_frame_magic() const
 #endif
 }
 
+bool IpcEndpoint::recv_stream_chunk_locked(uint8_t* buf, size_t cap, ssize_t& out_n)
+{
+    out_n = -1;
+#if !defined(__linux__) && !defined(__unix__)
+    (void)buf;
+    (void)cap;
+    return false;
+#else
+    if(conn_fd_ < 0 || buf == nullptr || cap == 0) {
+        return false;
+    }
+
+    alignas(struct cmsghdr) uint8_t cmsg_buf[
+        CMSG_SPACE(sizeof(int) * IPC_FD_FRAME_MAX_FDS)];
+
+    for(;;) {
+        struct iovec iov {};
+        iov.iov_base = buf;
+        iov.iov_len  = cap;
+
+        struct msghdr msg {};
+        msg.msg_iov        = &iov;
+        msg.msg_iovlen     = 1;
+        msg.msg_control    = cmsg_buf;
+        msg.msg_controllen = sizeof(cmsg_buf);
+
+        /* MSG_CMSG_CLOEXEC：收到的 dma fd 不该被后续 fork/exec 的子进程继承。 */
+        const ssize_t n =
+            ::recvmsg(conn_fd_, &msg, MSG_DONTWAIT | MSG_CMSG_CLOEXEC);
+        if(n < 0) {
+            if(errno == EINTR) {
+                continue;
+            }
+            if(errno == EAGAIN || errno == EWOULDBLOCK) {
+                return false;
+            }
+            close_conn_locked();
+            return false;
+        }
+        if(n == 0) {
+            out_n = 0;
+            close_conn_locked();
+            return false;
+        }
+        out_n = n;
+
+        for(struct cmsghdr* cmsg = CMSG_FIRSTHDR(&msg);
+            cmsg != nullptr;
+            cmsg = CMSG_NXTHDR(&msg, cmsg)) {
+            if(cmsg->cmsg_level != SOL_SOCKET || cmsg->cmsg_type != SCM_RIGHTS) {
+                continue;
+            }
+            if(cmsg->cmsg_len < CMSG_LEN(0)) {
+                continue;
+            }
+            const size_t fd_bytes = cmsg->cmsg_len - CMSG_LEN(0);
+            const size_t fd_count = fd_bytes / sizeof(int);
+            const int* fd_ptr     = reinterpret_cast<const int*>(CMSG_DATA(cmsg));
+            if(fd_count == 0) {
+                continue;
+            }
+            if(fd_rx_fds_.size() + fd_count > IPC_FD_FRAME_MAX_FDS) {
+                /* 收不下的必须就地 close：句柄已经过户到本进程，丢掉引用就是
+                 * 泄漏，攒够就 EMFILE。 */
+                UPC_LOG_IPC(Error, "UPDF fd overflow current=%zu add=%zu",
+                            fd_rx_fds_.size(), fd_count);
+                for(size_t i = 0; i < fd_count; ++i) {
+                    if(fd_ptr[i] >= 0) {
+                        ::close(fd_ptr[i]);
+                    }
+                }
+                continue;
+            }
+            for(size_t i = 0; i < fd_count; ++i) {
+                fd_rx_fds_.push_back(fd_ptr[i]);
+            }
+        }
+        return true;
+    }
+#endif
+}
+
 bool IpcEndpoint::recv_fd_frame_unit(InboundWireUnit& out)
 {
 #if !defined(__linux__) && !defined(__unix__)
@@ -429,8 +511,6 @@ bool IpcEndpoint::recv_fd_frame_unit(InboundWireUnit& out)
     }
     const size_t max_wire_len = WIRE_MAX_PAYLOAD + 256u;
     uint8_t chunk[4096];
-    std::vector<uint8_t> cmsg_buf(
-        CMSG_SPACE(sizeof(int) * IPC_FD_FRAME_MAX_FDS));
 
     for(;;) {
         if(fd_rx_accum_.size() >= sizeof(uint32_t)) {
@@ -483,29 +563,10 @@ bool IpcEndpoint::recv_fd_frame_unit(InboundWireUnit& out)
             }
         }
 
-        struct iovec iov {};
-        iov.iov_base = chunk;
-        iov.iov_len  = sizeof(chunk);
-
-        struct msghdr msg {};
-        msg.msg_iov        = &iov;
-        msg.msg_iovlen     = 1;
-        msg.msg_control    = cmsg_buf.data();
-        msg.msg_controllen = cmsg_buf.size();
-
-        const ssize_t n = ::recvmsg(conn_fd_, &msg, MSG_DONTWAIT);
-        if(n < 0) {
-            if(errno == EINTR) {
-                continue;
-            }
-            if(errno == EAGAIN || errno == EWOULDBLOCK) {
-                return false;
-            }
-            close_conn_locked();
-            return false;
-        }
-        if(n == 0) {
-            close_conn_locked();
+        /* 收字节 + 收 SCM_RIGHTS 由 recv_stream_chunk_locked 统一负责，
+         * fd 直接进 fd_rx_fds_。 */
+        ssize_t n = 0;
+        if(!recv_stream_chunk_locked(chunk, sizeof(chunk), n)) {
             return false;
         }
 
@@ -515,34 +576,6 @@ bool IpcEndpoint::recv_fd_frame_unit(InboundWireUnit& out)
                         fd_rx_accum_.size());
             clear_fd_rx_state_locked();
             return false;
-        }
-
-        for(struct cmsghdr* cmsg = CMSG_FIRSTHDR(&msg);
-            cmsg != nullptr;
-            cmsg = CMSG_NXTHDR(&msg, cmsg)) {
-            if(cmsg->cmsg_level != SOL_SOCKET || cmsg->cmsg_type != SCM_RIGHTS) {
-                continue;
-            }
-            if(cmsg->cmsg_len < CMSG_LEN(0)) {
-                continue;
-            }
-            const size_t fd_bytes = cmsg->cmsg_len - CMSG_LEN(0);
-            const size_t fd_count = fd_bytes / sizeof(int);
-            if(fd_count == 0 || fd_count > IPC_FD_FRAME_MAX_FDS) {
-                UPC_LOG_IPC(Error, "UPDF bad fd count=%zu", fd_count);
-                clear_fd_rx_state_locked();
-                return false;
-            }
-            if(fd_rx_fds_.size() + fd_count > IPC_FD_FRAME_MAX_FDS) {
-                UPC_LOG_IPC(Error, "UPDF fd overflow current=%zu add=%zu",
-                            fd_rx_fds_.size(), fd_count);
-                clear_fd_rx_state_locked();
-                return false;
-            }
-            const int* fd_ptr = reinterpret_cast<int*>(CMSG_DATA(cmsg));
-            for(size_t i = 0; i < fd_count; ++i) {
-                fd_rx_fds_.push_back(fd_ptr[i]);
-            }
         }
     }
 #endif
@@ -616,16 +649,16 @@ void IpcEndpoint::recv_pending(std::vector<InboundWireUnit>& out_units)
         if(peek_fd_frame_magic()) {
             break;
         }
-        const ssize_t n = ::read(conn_fd_, chunk, sizeof(chunk));
-        if (n < 0) {
-            if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                break;
+        /* 这里必须走 recvmsg（见 recv_stream_chunk_locked 注释）：rx_accum_ 里
+         * 残留半帧时 peek_fd_frame_magic 一律返回 false，紧跟其后的 UPDF 帧就会
+         * 从这条路进来；用 read 会把它的 fd 丢在内核里，只剩字节，后面必然报
+         * "UPDF missing SCM_RIGHTS" 把整帧扔掉。 */
+        ssize_t n = 0;
+        if(!recv_stream_chunk_locked(chunk, sizeof(chunk), n)) {
+            if(!connected()) {
+                return; // 对端关闭或出错，close_conn_locked 已清干净
             }
             break;
-        }
-        if (n == 0) {
-            close_conn_locked();
-            return;
         }
         rx_accum_.insert(rx_accum_.end(), chunk, chunk + n);
     }

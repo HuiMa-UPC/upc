@@ -81,6 +81,13 @@ rongsu_media worker
 
 写盘路径另挂 `storage_budget_guard`：预算不够则跳过该次 PNG/H264 写。H264 耗尽时 `disable_h264_expectation()`，避免 `print_video_pending` 永久为 1。
 
+**逐帧热路径必须走 `ensure_video_storage_budget_throttled()`，不能直连全量版。** 全量核算会
+`recursive_directory_iterator` 遍历整个 `video/` 并 stat 每个文件，而层拍 PNG 会累积到上千个：
+按帧调用时开销随打印层数线性增长，实测能把 H264 编码 worker 压到只剩一半吞吐（30fps 送、
+14fps 编，其余全进 `dropped`）。节流版只缓存「预算充足」的结论，窗口
+`UPC_MEDIA_STORAGE_BUDGET_CACHE_MS`（默认 5s）；判定不足时**不缓存**，每次都重新核算，
+免得一次瞬时不足误停整场录像。会话边界（Start / commit / finalize）仍用全量版求准。
+
 `MEDIA_STORAGE_WARN_PCT` / `CRITICAL`（90/95）仍在头文件中，**当前未参与**开打水位；`apply_storage_watermark` 只尝试腾配额，层拍保持开启。
 
 `UI_Storage_Usage_Req` → `APP_Storage_Usage_Rsp`（`statvfs` 总量/已用）。
@@ -140,6 +147,11 @@ Glavo PrintVideoNotify → APP_MEDIA
 - 开了打印录像时用边录边封装的 `print_h264.mp4`（PTS 用**相机流 fps**，默认 30，勿用 layer_fps）。
 - 0 帧：不写清单条目，但**仍发** `APP_Print_Video_Manifest_Ntf`（`has_entry=0` + `aborted`），否则 UI 停在打印中。仅删**空** `tmp/`，以免误删正在写的 `print_h264.mp4`。
 - 结果页只等层间 Manifest，不依赖 H264 编完。
+- **第二阶段（`finalize_print_video=true`）必须无条件清 `print_video_pending`。** 它只在 H264
+  确定收尾后才执行（开门 finalize 等 `on_print_h264_finalize_done`，开机恢复时更是无会话在跑），
+  没有「稍后再来一次」的机会。留着 1 会让该条目被 `reclaim_orphan_or_stale_pending_for_budget()`
+  当成陈旧 pending，超 30min 连整个会话目录一起删掉，延时 PNG 一并赔进去。mp4 不可用时
+  让 `print_video` 保持为空即可，UI 自然不展示录像。
 
 ## 打印连续 H264
 
@@ -149,7 +161,15 @@ Glavo PrintVideoNotify → APP_MEDIA
   → Finish/Abort：active=0 + 入队 Finalize（消息线程立刻返回）
 ```
 
-与层拍 worker 并行。磁盘跟不上时日志 `print_h264 queue full drop=...`。  
+与层拍 worker 并行。磁盘跟不上时日志 `print_h264 queue full drop=... enc=...`（5s 汇总一行，
+首次丢帧立即打；逐帧打会反过来拖慢取流线程）。队列只有 3 帧（≈100ms），编码稳态跟不上就会
+持续丢帧且不会补回，所以 `dropped` 持续上涨要当吞吐问题查，而不是偶发抖动。
+
+收尾时 `stop_muxer_locked()` 关掉 stdin 后要等 ffmpeg 写完 mp4 尾部的 moov，上限
+`UPC_PRINT_H264_MUX_FLUSH_TIMEOUT_MS`（默认 10s）。**等不够就强杀会留下只有 ftyp+mdat、
+体积照样几百 MB 但播放器打不开的文件**；超时与「退出码非 0」在日志里分开打，便于判断
+mp4 是否可信。finalize 侧不再只看「文件非空」，而是用 `timelapse_util::mp4_has_moov_box()`
+走一遍顶层 box 链确认索引存在；解析不出结论（截断在 box 中间、读失败）时保守当可用。  
 码率默认 `CAMERA_PRINT_H264_BITRATE`=2048kbps；`cal.csv` `PRINT_H264_BITRATE`（500000–8000000）经 `PrintVideoSessionPayload.h264_bitrate` 覆盖。  
 `h264_continuous_on=0` 时 recorder 直接 return。暂停：`APP_Print_H264_Record_Pause_Ntf`。
 
@@ -232,6 +252,8 @@ Glavo PrintVideoNotify → APP_MEDIA
 | 延时 fps | 5 | `CAMERA_PRINT_VIDEO_LAYER_FPS` / `cal.csv` `TIMELAPSE_VIDEO_FPS` |
 | 延时播放 | PNG 序列 | `UPC_TIMELAPSE_PLAYBACK_PNG`（默认 1） |
 | 录像配额 | 分区 80% / 余量 5% | `UPC_VIDEO_STORAGE_QUOTA_PCT` / `MIN_FREE_PCT` |
+| 预算检查缓存窗口 | 5 s（仅缓存「充足」） | `UPC_MEDIA_STORAGE_BUDGET_CACHE_MS` |
+| mp4 收尾等待上限 | 10 s | `UPC_PRINT_H264_MUX_FLUSH_TIMEOUT_MS` |
 | 本地 RTSP 端口 | 8554 | `UPC_LOCAL_RTSP_PORT` |
 | 本地 RTSP 流名 | `live` | `UPC_LOCAL_RTSP_STREAM_NAME` |
 | 本地 RTSP 上电 | 开（流就绪后） | `UPC_LOCAL_RTSP_AUTO_START` |

@@ -74,6 +74,15 @@ private:
     bool is_protected_frames_dir(const std::string& frames_dir) const;
     /** 环形录像区回收：删除最旧的已提交完整会话直至满足 80% 配额与系统余量。 */
     bool ensure_video_storage_budget() const;
+    /**
+     * 逐帧写盘热路径专用：ensure_video_storage_budget() 的节流版本。
+     *
+     * 全量核算会递归遍历整个录像目录（层拍 PNG 可达上千个文件），按帧调用时
+     * 开销随打印层数线性增长，会把 H264 编码 worker 拖死。这里只缓存"预算充足"
+     * 的结论并在 UPC_MEDIA_STORAGE_BUDGET_CACHE_MS 内复用；一旦判定不足就不再
+     * 走缓存，每次都重新核算——否则一次瞬时不足会误停整场录像。
+     */
+    bool ensure_video_storage_budget_throttled() const;
     static uint64_t query_directory_bytes(const char* path);
     bool evict_oldest_committed_video() const;
     /** 结果页退出：先腾空间再 commit；失败则逐个删最旧已提交会话后重试。 */
@@ -163,6 +172,10 @@ private:
 
     mutable std::mutex finalize_mtx_;
     mutable std::mutex storage_mtx_;
+    /** 预算检查节流缓存；只缓存"充足"结论，见 ensure_video_storage_budget_throttled()。 */
+    mutable std::mutex storage_cache_mtx_;
+    mutable bool storage_budget_cached_ok_ = false;
+    mutable uint64_t storage_budget_checked_ms_ = 0;
     bool clean_video_active_ = false;
     bool finalize_pending_ = false;
     std::string pending_finalize_frames_dir_;

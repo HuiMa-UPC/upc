@@ -19,6 +19,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <sys/ioctl.h>
 #include <sys/stat.h>
 
@@ -398,6 +399,70 @@ bool remux_h264_to_mp4(const char* h264_path, uint32_t fps, const char* out_path
                   "-i '%s' -c:v copy -movflags +faststart '%s'",
                   CAMERA_FFMPEG_BIN, use_fps, h264_path, out_path);
     return run_shell_cmd(cmd, "ffmpeg h264->mp4") == 0;
+}
+
+bool mp4_has_moov_box(const char* path, bool* out_conclusive)
+{
+    if(out_conclusive) {
+        *out_conclusive = false;
+    }
+    if(!path || !path[0]) {
+        return false;
+    }
+
+    std::ifstream in(path, std::ios::binary);
+    if(!in) {
+        return false;
+    }
+    in.seekg(0, std::ios::end);
+    const std::streamoff file_size = in.tellg();
+    if(file_size <= 0) {
+        return false;
+    }
+
+    /* ISO BMFF 顶层 box：[4B size][4B type]，size==1 时后接 8B largesize，
+     * size==0 表示本 box 一直延伸到文件尾。 */
+    std::streamoff off = 0;
+    while(off + 8 <= file_size) {
+        in.seekg(off, std::ios::beg);
+        uint8_t hdr[16] = {};
+        if(!in.read(reinterpret_cast<char*>(hdr), 8)) {
+            return false;
+        }
+        if(std::memcmp(hdr + 4, "moov", 4) == 0) {
+            if(out_conclusive) {
+                *out_conclusive = true;
+            }
+            return true;
+        }
+        uint64_t box_size = (static_cast<uint64_t>(hdr[0]) << 24) |
+                            (static_cast<uint64_t>(hdr[1]) << 16) |
+                            (static_cast<uint64_t>(hdr[2]) << 8) |
+                            static_cast<uint64_t>(hdr[3]);
+        uint64_t header_bytes = 8;
+        if(box_size == 1) {
+            if(!in.read(reinterpret_cast<char*>(hdr) + 8, 8)) {
+                return false;
+            }
+            box_size = 0;
+            for(int i = 0; i < 8; ++i) {
+                box_size = (box_size << 8) | static_cast<uint64_t>(hdr[8 + i]);
+            }
+            header_bytes = 16;
+        } else if(box_size == 0) {
+            box_size = static_cast<uint64_t>(file_size - off);
+        }
+        if(box_size < header_bytes) {
+            return false; /* 非法长度：链已断，不再给结论 */
+        }
+        off += static_cast<std::streamoff>(box_size);
+    }
+
+    /* 只有严丝合缝走到文件尾，"没有 moov"才是可信结论。 */
+    if(out_conclusive) {
+        *out_conclusive = (off == file_size);
+    }
+    return false;
 }
 
 namespace {
