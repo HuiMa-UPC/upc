@@ -1893,6 +1893,10 @@ void GlavoService::handle_print_start(const middleware::Message& msg)
         UPC_LOG_GLAVO_SERVICE(Warn, "print_start rejected: debug motion test active");
         return;
     }
+    if(McuLink::instance().serial_ota_active() || McuLink::instance().ota_active()) {
+        UPC_LOG_GLAVO_SERVICE(Warn, "print_start rejected: OTA active");
+        return;
+    }
 
     if(!prepare_ready_ || prepared_local_path_.empty()) {
         UPC_LOG_GLAVO_SERVICE(Warn, "print_start: no prepared session");
@@ -4388,6 +4392,10 @@ void GlavoService::handle_debug_first_layer_visual_check_get(const middleware::M
 void GlavoService::handle_mcu_version_req(const middleware::Message& msg)
 {
     (void)msg;
+    if(McuLink::instance().serial_ota_active()) {
+        UPC_LOG_GLAVO_SERVICE(Info, "mcu_version query skipped: serial OTA active");
+        return;
+    }
     uint8_t frame[16];
     const int n = serial_build_project_info_request(frame, sizeof(frame));
     if(n <= 0) {

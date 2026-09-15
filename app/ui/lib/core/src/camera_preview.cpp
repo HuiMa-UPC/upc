@@ -58,6 +58,21 @@ bool rga_status_ok(IM_STATUS st)
     return st == IM_STATUS_SUCCESS || st == IM_STATUS_NOERROR;
 }
 
+/* 设置源缓冲的颜色空间模式。
+ * librga im2d 1.10+（phx SDK）提供 imsetColorSpace()；1.9.x（k1mini SDK）
+ * 没有该接口，但 rga_buffer_t::color_space_mode 字段两版结构体字段名一致，
+ * 语义相同，故旧版直接写字段即可。用头文件版本宏在编译期区分，不引入运行时判断。 */
+inline void rga_set_color_space(rga_buffer_t* buf, IM_COLOR_SPACE_MODE mode)
+{
+#if defined(RGA_API_MAJOR_VERSION) && defined(RGA_API_MINOR_VERSION) && \
+    (RGA_API_MAJOR_VERSION > 1 || \
+     (RGA_API_MAJOR_VERSION == 1 && RGA_API_MINOR_VERSION >= 10))
+    imsetColorSpace(buf, mode);
+#else
+    buf->color_space_mode = static_cast<int>(mode);
+#endif
+}
+
 #if !defined(UPC_UI_RGA_STREAMING) || !UPC_UI_RGA_STREAMING
 bool rga_cvtcolor_checked(rga_buffer_t src, rga_buffer_t dst_buf, const im_rect& rect,
                           IM_STATUS* out_st);
@@ -202,12 +217,12 @@ bool rga_cvtcolor_rect_checked(rga_buffer_t src, rga_buffer_t dst_buf,
         return false;
     }
 
-    imsetColorSpace(&src, IM_YUV_TO_RGB_BT601_LIMIT);
+    rga_set_color_space(&src, IM_YUV_TO_RGB_BT601_LIMIT);
     rga_buffer_t pat{};
     const im_rect prect{};
     IM_STATUS st = improcess(src, dst_buf, pat, src_rect, dst_rect, prect, IM_SYNC);
     if(!rga_status_ok(st)) {
-        imsetColorSpace(&src, IM_COLOR_SPACE_DEFAULT);
+        rga_set_color_space(&src, IM_COLOR_SPACE_DEFAULT);
         st = improcess(src, dst_buf, pat, src_rect, dst_rect, prect, IM_SYNC);
     }
     if(out_st) {

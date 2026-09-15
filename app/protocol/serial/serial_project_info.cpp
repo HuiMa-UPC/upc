@@ -37,6 +37,7 @@ int serial_parse_project_info_report(const uint8_t* data, size_t len,
     out->patch        = v[2];
     out->laser_type   = v[3];
     out->z_motor_type = v[4];
-    /* v[5]、v[6] 为 MCU 保留字节，当前填 0 */
+    out->run_slot     = v[5];
+    out->ota_state    = v[6];
     return 0;
 }
