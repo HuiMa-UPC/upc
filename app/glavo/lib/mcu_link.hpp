@@ -170,6 +170,8 @@ public:
      * @note 仅允许在无打印/测试图运动流、无终止清理时调用。
      */
     bool send_debug_motion_subpacket(const uint8_t subpacket[11]);
+    /** @brief 最近一次 MCU 运动位置上报的 Z 实际位置（mm）。 */
+    [[nodiscard]] float get_z_pos_mm() const noexcept;
     /**
      * @brief 标记“打印任务流程”是否激活（用于门控高频心跳回包日志）
      * @note 业务约定：从进入打印到用户滑动开门解锁成功，均视为同一流程。
@@ -525,6 +527,7 @@ private:
     SerialReliablePending serial_reliable_pending_{};
     std::deque<SerialReliableItem> serial_reliable_queue_;
     std::atomic<bool> serial_ack_enabled_{GLAVO_SERIAL_ACK_ENABLE != 0};
+    std::atomic<float> z_pos_mm_cache_{0.0f};
 
     EnvSnapshotCache env_cache_{};
     mutable std::mutex env_mtx_;

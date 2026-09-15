@@ -148,6 +148,15 @@ void DebugMsgProxy::init()
             }
         }));
 
+    subs_.push_back(bus.subscribe(
+        middleware::MsgType::GLAVO_UI_Height_Calib_Progress_Ntf, middleware::ModuleId::UI,
+        [this](const middleware::Message& msg) {
+            middleware::HeightCalibProgressPayload p{};
+            if(height_calib_progress_cb_ && read_inline_pod(msg, p)) {
+                height_calib_progress_cb_(p);
+            }
+        }));
+
     /* Confirm Print 互斥依赖此状态；进调试页前也可能需要。 */
     request_test_image_state();
     request_galvo_point_test_state();
@@ -386,6 +395,24 @@ void DebugMsgProxy::request_optical_path_check_state()
     publish_empty(middleware::MsgType::UI_Debug_OpticalPath_Check_Get_Ntf);
 }
 
+void DebugMsgProxy::send_height_calib_start(float start_mm, float end_mm,
+                                            float step_mm, const char* lut_path)
+{
+    middleware::HeightCalibStartReqPayload p{};
+    p.start_height_mm = start_mm;
+    p.end_height_mm = end_mm;
+    p.step_mm = step_mm;
+    if(lut_path) {
+        std::strncpy(p.lut_path, lut_path, sizeof(p.lut_path) - 1);
+    }
+    middleware::Message msg(middleware::MsgType::UI_Glavo_Height_Calib_Start_Req,
+                            middleware::ModuleId::UI,
+                            middleware::ModuleId::APP_GLAVO);
+    msg.payload = middleware::MsgPayload::from_bytes(
+        reinterpret_cast<const uint8_t*>(&p), sizeof(p));
+    middleware::MsgPort::instance().publish_async(msg);
+}
+
 void DebugMsgProxy::send_test_image_set(bool on)
 {
     middleware::DebugOnOffPayload p{};
@@ -457,6 +484,11 @@ void DebugMsgProxy::register_test_image(DebugTestImageCb cb)
 void DebugMsgProxy::register_galvo_point_test(DebugGalvoPointTestCb cb)
 {
     galvo_point_test_cb_ = std::move(cb);
+}
+
+void DebugMsgProxy::register_height_calib_progress(DebugHeightCalibProgressCb cb)
+{
+    height_calib_progress_cb_ = std::move(cb);
 }
 
 void DebugMsgProxy::register_local_rtsp(DebugLocalRtspCb cb)

@@ -995,6 +995,7 @@ void McuLink::on_sensor_report(const serial_sensor_report_t& report)
 
 void McuLink::on_motion_pos_report(const serial_motion_pos_t& pos)
 {
+    z_pos_mm_cache_.store(pos.z_pos_mm, std::memory_order_relaxed);
     publish_debug_axis_ntf(pos);        /* 调试页三轴位置 + Z 工作坐标回读 */
 
     UPC_LOG_MCU_LINK(Info,
@@ -2406,6 +2407,11 @@ bool McuLink::send_tcp_emergency_ctrl_ex(uint8_t stop_code, uint8_t pause_code, 
                      static_cast<unsigned>(pause_code),
                      static_cast<unsigned>(red_code));
     return true;
+}
+
+float McuLink::get_z_pos_mm() const noexcept
+{
+    return z_pos_mm_cache_.load(std::memory_order_relaxed);
 }
 
 bool McuLink::send_debug_motion_subpacket(const uint8_t subpacket[11])

@@ -5,6 +5,9 @@ set(UPC_GLAVO_SOURCES
     ${GLAVO_LIB_DIR}/galvo_motion_encode.cpp
     ${GLAVO_LIB_DIR}/glavo_service.cpp
     ${GLAVO_LIB_DIR}/optical_path_check.cpp
+    ${GLAVO_LIB_DIR}/height_lut_2d.cpp
+    ${GLAVO_LIB_DIR}/height_calibration.cpp
+    ${GLAVO_LIB_DIR}/plate_height_measure.cpp
     ${GLAVO_LIB_DIR}/mcu_link.cpp
     ${GLAVO_LIB_DIR}/mcu_ota_session.cpp
     ${GLAVO_LIB_DIR}/mcu_serial_ota_session.cpp

@@ -292,17 +292,19 @@ bool VisualService::init()
 void VisualService::shutdown()
 {
     stop_optical_path_session("shutdown");
+    stop_plate_height_session("shutdown");
     stop_first_layer_session("shutdown");
     subs_.clear();
 }
 
 bool VisualService::any_session_active_locked() const
 {
-    return first_layer_session_active_ || optical_path_session_active_;
+    return first_layer_session_active_ || optical_path_session_active_ ||
+           plate_height_session_active_;
 }
 
 /**
- * @brief 两类会话都停了才真正拆流
+ * @brief 三类会话都停了才真正拆流
  *
  * 单独给某一类会话调 send_stream_stop_req + stop_worker 会把另一类正要用的流
  * 一起拆掉（并清掉帧快照缓存），所以拆流动作统一收敛到这里。
@@ -378,6 +380,24 @@ void VisualService::subscribe_messages()
         middleware::ModuleId::APP_VISUAL,
         [this](const middleware::Message& msg) {
             on_optical_path_point_check_req(msg);
+        }));
+    subs_.push_back(bus.subscribe(
+        middleware::MsgType::GLAVO_Visual_PlateHeight_Session_Start_Ntf,
+        middleware::ModuleId::APP_VISUAL,
+        [this](const middleware::Message& msg) {
+            on_plate_height_session_start(msg);
+        }));
+    subs_.push_back(bus.subscribe(
+        middleware::MsgType::GLAVO_Visual_PlateHeight_Session_Stop_Ntf,
+        middleware::ModuleId::APP_VISUAL,
+        [this](const middleware::Message& msg) {
+            on_plate_height_session_stop(msg);
+        }));
+    subs_.push_back(bus.subscribe(
+        middleware::MsgType::GLAVO_Visual_Laser_Spot_Measure_Req,
+        middleware::ModuleId::APP_VISUAL,
+        [this](const middleware::Message& msg) {
+            on_laser_spot_measure_req(msg);
         }));
 }
 
@@ -572,6 +592,114 @@ void VisualService::stop_optical_path_session(const char* reason)
             "optical path session stop session_id=%llu reason=%s",
             static_cast<unsigned long long>(session_id), reason);
     }
+}
+
+void VisualService::on_plate_height_session_start(const middleware::Message& msg)
+{
+    (void)msg;
+    start_plate_height_session("glavo_start");
+}
+
+void VisualService::on_plate_height_session_stop(const middleware::Message& msg)
+{
+    (void)msg;
+    stop_plate_height_session("glavo_stop");
+}
+
+void VisualService::start_plate_height_session(const char* reason)
+{
+    bool newly_active = false;
+    uint64_t session_id = 0;
+    {
+        std::lock_guard<std::mutex> lock(state_mtx_);
+        if(!plate_height_session_active_) {
+            plate_height_session_active_ = true;
+            plate_height_session_id_ = static_cast<uint64_t>(
+                std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::system_clock::now().time_since_epoch()).count());
+            newly_active = true;
+        }
+        session_id = plate_height_session_id_;
+    }
+    if(newly_active) {
+        UPC_LOG_VISUAL_SERVICE(Info,
+            "plate height session start session_id=%llu reason=%s",
+            static_cast<unsigned long long>(session_id), reason);
+    }
+    send_stream_start_req();
+}
+
+void VisualService::stop_plate_height_session(const char* reason)
+{
+    bool was_active = false;
+    uint64_t session_id = 0;
+    {
+        std::lock_guard<std::mutex> lock(state_mtx_);
+        was_active = plate_height_session_active_;
+        session_id = plate_height_session_id_;
+        plate_height_session_active_ = false;
+    }
+    release_stream_if_idle(reason);
+    if(was_active) {
+        UPC_LOG_VISUAL_SERVICE(Info,
+            "plate height session stop session_id=%llu reason=%s",
+            static_cast<unsigned long long>(session_id), reason);
+    }
+}
+
+void VisualService::send_laser_spot_measure_rsp(bool ok, float x, float y)
+{
+    middleware::LaserSpotMeasureRspPayload rsp{};
+    rsp.ok = ok ? 1 : 0;
+    rsp.laser_x = x;
+    rsp.laser_y = y;
+    middleware::Message out(
+        middleware::MsgType::APP_Visual_Laser_Spot_Measure_Rsp,
+        middleware::ModuleId::APP_VISUAL,
+        middleware::ModuleId::APP_GLAVO);
+    out.payload = middleware::MsgPayload::from_bytes(
+        reinterpret_cast<const uint8_t*>(&rsp), sizeof(rsp));
+    if(!middleware::MsgPort::instance().publish_async(out)) {
+        UPC_LOG_VISUAL_SERVICE(Warn, "laser spot rsp publish failed");
+    }
+}
+
+void VisualService::on_laser_spot_measure_req(const middleware::Message& msg)
+{
+    (void)msg;
+    bool session_active = false;
+    {
+        std::lock_guard<std::mutex> lock(state_mtx_);
+        session_active = plate_height_session_active_;
+    }
+    if(!session_active) {
+        start_plate_height_session("check_without_start");
+    }
+
+    std::vector<uint8_t> nv12;
+    uint32_t width = 0, height = 0, frame_seq = 0;
+    if(!copy_latest_snapshot(nv12, width, height, frame_seq) ||
+       nv12.size() < static_cast<size_t>(width) * height) {
+        UPC_LOG_VISUAL_SERVICE(Warn, "laser spot: no frame");
+        send_laser_spot_measure_rsp(false, 0.0f, 0.0f);
+        return;
+    }
+
+    cv::Mat gray(static_cast<int>(height), static_cast<int>(width), CV_8UC1,
+                 nv12.data());
+    const LaserSpot spot = detect_laser_spot(
+        gray, "/etc/visual/plate_height_config.json");
+    if(!spot.valid) {
+        UPC_LOG_VISUAL_SERVICE(Warn, "laser spot: no valid blob frame=%u",
+                               static_cast<unsigned>(frame_seq));
+        send_laser_spot_measure_rsp(false, 0.0f, 0.0f);
+        return;
+    }
+    UPC_LOG_VISUAL_SERVICE(Info, "laser spot: x=%.3f y=%.3f frame=%u",
+                           static_cast<double>(spot.center_x),
+                           static_cast<double>(spot.center_y),
+                           static_cast<unsigned>(frame_seq));
+    send_laser_spot_measure_rsp(true, spot.center_x, spot.center_y);
 }
 
 void VisualService::stop_optical_point_thread()

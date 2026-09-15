@@ -519,6 +519,13 @@ enum class MsgType : uint32_t {
     GLAVO_Visual_OpticalPath_Session_Stop_Ntf,           /**< Empty：光路检测结束，Visual 释放取流 */
     GLAVO_Visual_OpticalPath_Point_Check_Req,            /**< VisualOpticalPathCheckReqPayload：单点红光识别 */
     APP_Visual_OpticalPath_Point_Check_Rsp,              /**< VisualOpticalPathCheckRspPayload：单点识别结果 */
+    /* 打印前基板测高 / 调试页高度校准：Visual 只回质心，LUT 在 Glavo。 */
+    GLAVO_Visual_PlateHeight_Session_Start_Ntf,          /**< Empty：测高/校准开始，Visual 起流 */
+    GLAVO_Visual_PlateHeight_Session_Stop_Ntf,           /**< Empty：测高/校准结束 */
+    GLAVO_Visual_Laser_Spot_Measure_Req,                 /**< Empty：请求激光质心坐标 */
+    APP_Visual_Laser_Spot_Measure_Rsp,                   /**< LaserSpotMeasureRspPayload */
+    UI_Glavo_Height_Calib_Start_Req,                     /**< HeightCalibStartReqPayload */
+    GLAVO_UI_Height_Calib_Progress_Ntf,                  /**< HeightCalibProgressPayload */
     // ---- MEDIA ↔ CAMERA：媒体进程并行取流（拍照/录像） ----
     MEDIA_Camera_Stream_Start_Req = 0x1450,  /**< CameraStreamStartReqPayload（媒体侧取流） */
     APP_Media_Camera_Stream_Start_Rsp,       /**< CameraStreamInfoPayload */
@@ -592,6 +599,7 @@ inline constexpr bool is_ipc_reliable_msg_type(MsgType type) noexcept
     case MsgType::APP_Print_Pause_Rsp:
     case MsgType::APP_Print_Powder_Low_Ntf:
     case MsgType::APP_OpticalPath_Progress_Ntf:
+    case MsgType::GLAVO_UI_Height_Calib_Progress_Ntf:
         return true;
 
     // 换层/录像链路：层抓拍与会话闭环
@@ -614,6 +622,10 @@ inline constexpr bool is_ipc_reliable_msg_type(MsgType type) noexcept
     case MsgType::APP_Visual_OpticalPath_Point_Check_Rsp:
     case MsgType::GLAVO_Visual_OpticalPath_Session_Start_Ntf:
     case MsgType::GLAVO_Visual_OpticalPath_Session_Stop_Ntf:
+    case MsgType::GLAVO_Visual_PlateHeight_Session_Start_Ntf:
+    case MsgType::GLAVO_Visual_PlateHeight_Session_Stop_Ntf:
+    case MsgType::GLAVO_Visual_Laser_Spot_Measure_Req:
+    case MsgType::APP_Visual_Laser_Spot_Measure_Rsp:
     case MsgType::APP_Print_Start_Rejected_Ntf:
         return true;
 
@@ -987,6 +999,41 @@ struct PrintStartRejectedPayload {
     uint8_t reason;       /**< PrintStartRejectReason */
     uint8_t detail;       /**< reason=OpticalPathFail 时为失败点位索引，无效填 0xff */
     uint8_t reserved[2];
+};
+
+/**
+ * APP_Visual_Laser_Spot_Measure_Rsp：激光质心测量结果（Inline）。
+ * 用于高度校准与打印前测高——返回原始质心像素，不用 LUT 算高度。
+ */
+struct LaserSpotMeasureRspPayload {
+    uint8_t  ok;        /**< 1=成功分割到光斑，0=失败 */
+    uint8_t  reserved[3];
+    float    laser_x;   /**< 光斑质心 X（像素） */
+    float    laser_y;   /**< 光斑质心 Y（像素） */
+};
+
+/**
+ * UI_Glavo_Height_Calib_Start_Req：启动激光高度校准（Inline）。
+ * Glavo：关舱灯 → 开红光 → Z 回零 → AXIS_INC 网格采集 → 写 LUT。
+ */
+struct HeightCalibStartReqPayload {
+    float start_height_mm;  /**< 起始高度（mm），如 -5 */
+    float end_height_mm;    /**< 结束高度（mm），如 12 */
+    float step_mm;          /**< 步长（mm），如 1 */
+    uint8_t reserved[4];
+    char  lut_path[128];    /**< LUT 输出路径，如 /etc/visual/height_lut.txt */
+};
+
+/**
+ * GLAVO_UI_Height_Calib_Progress_Ntf：校准进度/结果通知（Inline）。
+ * stage: 0=开始 1=采集中 2=完成 3=失败
+ */
+struct HeightCalibProgressPayload {
+    uint8_t  stage;
+    uint8_t  reserved[3];
+    float    current_height_mm;
+    uint16_t collected_count;
+    uint16_t total_count;
 };
 
 /** GLAVO→CAMERA 打印录像会话（Start/Finish/Abort 共用） */
@@ -1489,6 +1536,7 @@ enum class DeviceEventCode : uint16_t {
     OpticalPathCheckStarted = 31, /**< 打印前光路检测开始（one_shot，severity=info） */
     OpticalPathCheckPassed  = 32, /**< 打印前光路检测通过（one_shot，severity=info） */
     OpticalPathCheckFail    = 33, /**< 光路异常，已阻断本次打印（one_shot，severity=critical） */
+    PlateHeightFlatnessWarn = 34, /**< 打印前测高五次未通过，基板平整度需检查（one_shot，severity=error） */
 
     /* ---- 以下为 UI 本地事件：不走总线，由前端自己 push，占同一码空间以便
      *      消息中心统一排序去重。后端不应发送这些码。 ---- */

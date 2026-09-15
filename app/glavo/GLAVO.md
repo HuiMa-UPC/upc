@@ -12,6 +12,9 @@
 | `lib/mcu_link.*` | TCP 运动下发 + 串口握手/传感器/换层 Snap 触发；RX 侧解析 MCU 报警单条上报（0xA3/0x20）与快照分片（0xA3/0x81），`publish_async` 原样转发 `GLAVO_Alarm_Report_Ntf` / `GLAVO_Alarm_Snapshot_Ntf` 给 UI（不查字典、不攒帧） |
 | `lib/print_video_notify.*` | 换层 Snap / 录像会话 → Media（经 UI Hub） |
 | `lib/optical_path_check.*` | 打印前光路检测状态机（独立线程，结果回灌 worker） |
+| `lib/height_lut_2d.*` | 8 点二维高度 LUT |
+| `lib/height_calibration.*` | 调试页高度校准（关舱灯→开红光→写 LUT） |
+| `lib/plate_height_measure.*` | 打印前两步测高调 Z（光路检测之前） |
 | `lib/galvo_motion_encode.*` | 调试运动包编码 + 五点坐标（点位测试与光路检测共用） |
 | `lib/device_config.hpp` | TCP/串口默认、换层/Layer Snap 开关、`GLAVO_TEST_GCODE_PATH` |
 | `lib/mcu_ota_session.*` | Galvo 以太网 OTA：扫描 `/userdata/image/galvo` 最高版本 AB 对 |
@@ -41,7 +44,7 @@ UI → GlavoService（工作线程）→ ParserManager → RingBuffer → McuLin
 | `Fs_Delete_Ntf` | 删除 Local 文件（磁盘 + config.json） |
 | `UI_Print_Prepare_Req` | 轻量预处理（USB 复制、单趟扫行数+`M3000` 层数、写 config.json）；层数是纯层进度的唯一来源，Start 不再补扫 |
 | `UI_Parser_Exit_Ntf` | 取消解析（stop_parse + 清会话） |
-| `UI_Print_Start_Req` | 置打印态 → 光路检测 gate（若开）→ 正式解析 + 首层参考图 gate + `begin_sending` + `PrintVideoNotify::on_print_start` |
+| `UI_Print_Start_Req` | 置打印态 → 基板测高 gate（有 LUT 则跑）→ 光路检测 gate（若开）→ 正式解析 + 首层参考图 gate + `begin_sending` |
 | ↑ 起印失败 | 打印态在 `launch_print_from_prepared` 最前面就置（检测那十几秒 UI 已在打印页），所以「运动还没开始就失败」的分支**一律走 `abort_print_start()`** 回滚，否则 UI 停在打印页 0% |
 | `UI_Print_Terminate_Req` | 光路检测中：打断检测线程并回红光安全态；否则 `stop_parse` + `request_terminate` + `on_print_abort` |
 | `UI_Print_Pause_Req` | `set_user_dispatch_paused(true)`，仅停 TCP 运动下发 |

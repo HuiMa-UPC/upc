@@ -145,6 +145,12 @@ const char* upc_msg_type_name(MsgType type) {
         case MsgType::GLAVO_Visual_OpticalPath_Session_Stop_Ntf: return "GLAVO_Visual_OpticalPath_Session_Stop_Ntf";
         case MsgType::GLAVO_Visual_OpticalPath_Point_Check_Req: return "GLAVO_Visual_OpticalPath_Point_Check_Req";
         case MsgType::APP_Visual_OpticalPath_Point_Check_Rsp: return "APP_Visual_OpticalPath_Point_Check_Rsp";
+        case MsgType::GLAVO_Visual_PlateHeight_Session_Start_Ntf: return "GLAVO_Visual_PlateHeight_Session_Start_Ntf";
+        case MsgType::GLAVO_Visual_PlateHeight_Session_Stop_Ntf: return "GLAVO_Visual_PlateHeight_Session_Stop_Ntf";
+        case MsgType::GLAVO_Visual_Laser_Spot_Measure_Req: return "GLAVO_Visual_Laser_Spot_Measure_Req";
+        case MsgType::APP_Visual_Laser_Spot_Measure_Rsp: return "APP_Visual_Laser_Spot_Measure_Rsp";
+        case MsgType::UI_Glavo_Height_Calib_Start_Req: return "UI_Glavo_Height_Calib_Start_Req";
+        case MsgType::GLAVO_UI_Height_Calib_Progress_Ntf: return "GLAVO_UI_Height_Calib_Progress_Ntf";
         case MsgType::MEDIA_Camera_Stream_Start_Req: return "MEDIA_Camera_Stream_Start_Req";
         case MsgType::APP_Media_Camera_Stream_Start_Rsp: return "APP_Media_Camera_Stream_Start_Rsp";
         case MsgType::MEDIA_Camera_Stream_Stop_Req: return "MEDIA_Camera_Stream_Stop_Req";

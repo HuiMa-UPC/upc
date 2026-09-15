@@ -31,6 +31,8 @@ using DebugOpticalPathCheckCb = std::function<void(bool)>;
 using DebugTestImageCb = std::function<void(bool)>;
 using DebugGalvoPointTestCb = std::function<void(bool)>;
 using DebugLocalRtspCb = std::function<void(bool)>;
+using DebugHeightCalibProgressCb =
+    std::function<void(const middleware::HeightCalibProgressPayload&)>;
 
 class DebugMsgProxy {
 public:
@@ -82,6 +84,8 @@ public:
     void request_first_layer_visual_check_state();
     void send_optical_path_check_set(bool on);
     void request_optical_path_check_state();
+    void send_height_calib_start(float start_mm, float end_mm, float step_mm,
+                                 const char* lut_path);
     /** 调试页 Test image：红光循环打印 /userdata/test/test.gcode */
     void send_test_image_set(bool on);
     void request_test_image_state();
@@ -104,6 +108,7 @@ public:
     void register_test_image(DebugTestImageCb cb);
     void register_galvo_point_test(DebugGalvoPointTestCb cb);
     void register_local_rtsp(DebugLocalRtspCb cb);
+    void register_height_calib_progress(DebugHeightCalibProgressCb cb);
 
     /** Confirm Print 互斥：Glavo 回报的测试图实际运行态 */
     [[nodiscard]] bool test_image_active() const noexcept { return test_image_active_; }
@@ -156,6 +161,7 @@ private:
     DebugTestImageCb test_image_cb_;
     DebugGalvoPointTestCb galvo_point_test_cb_;
     DebugLocalRtspCb local_rtsp_cb_;
+    DebugHeightCalibProgressCb height_calib_progress_cb_;
     bool test_image_active_ = false;
     bool galvo_point_test_active_ = false;
 };
