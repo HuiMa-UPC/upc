@@ -59,6 +59,27 @@
 #define CAMERA_PRINT_VIDEO_LAYER_FPS  5u
 #endif
 
+/**
+ * 逐帧写盘前存储预算检查的缓存窗口（ms）。
+ *
+ * 全量核算要递归遍历整个录像目录并 stat 每个文件，而层拍 PNG 会累积到上千个，
+ * 按帧调用时开销随打印层数线性增长，足以把 H264 编码 worker 拖到丢一半帧。
+ * 配额本身是"分区容量 80%"这种粗水位，秒级刷新完全够用。
+ */
+#ifndef UPC_MEDIA_STORAGE_BUDGET_CACHE_MS
+#define UPC_MEDIA_STORAGE_BUDGET_CACHE_MS  5000u
+#endif
+
+/**
+ * finalize 时等待封装进程写完 mp4 尾部的上限（ms）。
+ *
+ * 关掉 stdin 后 ffmpeg 读到 EOF 还要写 moov 索引，几万帧时远超百毫秒级。
+ * 等不够就强杀会留下没有 moov、播放器打不开的 mp4。
+ */
+#ifndef UPC_PRINT_H264_MUX_FLUSH_TIMEOUT_MS
+#define UPC_PRINT_H264_MUX_FLUSH_TIMEOUT_MS  10000u
+#endif
+
 /** 存储已用 >= 此百分比：本会话停 H264、跳过层间拍照 */
 #ifndef MEDIA_STORAGE_WARN_PCT
 #define MEDIA_STORAGE_WARN_PCT  90u

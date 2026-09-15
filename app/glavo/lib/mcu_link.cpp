@@ -2537,11 +2537,15 @@ void McuLink::send_serial_print_finished()
 
 /* ---------- 终止/完成清理流程 ---------- */
 
-void McuLink::run_manual_terminate_cleanup()
+bool McuLink::run_manual_terminate_cleanup()
 {
     bool expected = false;
     if(!completing_cleanup_.compare_exchange_strong(expected, true)) {
-        return;
+        /* 已有 cleanup（自然完成/上一次终止）在跑：本轮什么都没做，
+         * 由调用方保留 terminate_pending_ 下一轮重试，不能当成已完成。 */
+        UPC_LOG_MCU_LINK(Warn,
+            "manual terminate deferred: cleanup already in progress");
+        return false;
     }
 
     // 1. 向振镜发 0x0A(Stop=1) 终止指令，向 MCU 发终止通知
@@ -2563,6 +2567,7 @@ void McuLink::run_manual_terminate_cleanup()
     emit_event(was_error ? McuLinkEvent::PrintError : McuLinkEvent::TerminateDone);
 
     completing_cleanup_.store(false);
+    return true;
 }
 
 void McuLink::link_try_final_layer_snap()
@@ -3518,8 +3523,11 @@ void McuLink::link_thread_fn()
         } else if(serial_ota_session_.is_active()) {
             serial_ota_tick();
         } else if(terminate_pending_.load()) {
-            run_manual_terminate_cleanup();
-            terminate_pending_.store(false);
+            /* 只有真正跑完清理才清挂起位：CAS 失败时保留，下一轮继续重试，
+             * 否则终止请求会被吃掉（作业不停、UI 等不到 TerminateDone）。 */
+            if(run_manual_terminate_cleanup()) {
+                terminate_pending_.store(false);
+            }
         } else {
             try_apply_pending_tcp_profile();
             // ---------- 心跳（空闲/用户暂停/背压时都要刷 MCU rate） ----------

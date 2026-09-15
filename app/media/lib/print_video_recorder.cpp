@@ -696,7 +696,6 @@ void PrintVideoRecorder::finalize_after_exit(const char* frames_dir,
 #endif
 
     bool h264_mp4_ok = false;
-    const bool print_video_expected = hit->print_video_pending || !hit->print_video.empty();
     if(finalize_print_video) {
         const std::string h264_mp4_path = session_dir + "/print_h264.mp4";
         const std::string h264_mp4_rel = hit->frames_dir + "/print_h264.mp4";
@@ -712,10 +711,24 @@ void PrintVideoRecorder::finalize_after_exit(const char* frames_dir,
             const uintmax_t h264_mp4_size =
                 std::filesystem::file_size(h264_mp4_path, h264_ec);
             if(!h264_ec && h264_mp4_size > 0u) {
-                h264_mp4_file_ok = true;
-                UPC_LOG_MEDIA_SERVICE(
-                    Info, "print_video finalize use edge-muxed mp4 path=%s",
-                    h264_mp4_path.c_str());
+                /* 只看"文件非空"会把收尾被强杀、没写成 moov 的残缺 mp4 判成成功：
+                 * 体积照样几百 MB，UI 上却点开就黑。解析不出结论时保守当可用，
+                 * 宁可放过也不误丢正常录像。 */
+                bool moov_conclusive = false;
+                const bool has_moov = timelapse_util::mp4_has_moov_box(
+                    h264_mp4_path.c_str(), &moov_conclusive);
+                if(!has_moov && moov_conclusive) {
+                    UPC_LOG_MEDIA_SERVICE(
+                        Warn,
+                        "print_video finalize drop mp4 without moov path=%s bytes=%llu",
+                        h264_mp4_path.c_str(),
+                        static_cast<unsigned long long>(h264_mp4_size));
+                } else {
+                    h264_mp4_file_ok = true;
+                    UPC_LOG_MEDIA_SERVICE(
+                        Info, "print_video finalize use edge-muxed mp4 path=%s",
+                        h264_mp4_path.c_str());
+                }
             }
         } else {
             UPC_LOG_MEDIA_SERVICE(
@@ -739,11 +752,13 @@ void PrintVideoRecorder::finalize_after_exit(const char* frames_dir,
 
     hit->video_pending = false;
     if(finalize_print_video) {
-        if(print_video_expected) {
-            hit->print_video_pending = !h264_mp4_ok;
-        } else {
-            hit->print_video_pending = false;
-        }
+        /* 第二阶段只在 H264 确定收尾后才会执行（开门 finalize 等 encoder，
+         * 开机恢复时更是早已无会话在跑），不存在"稍后再来一次"的机会。
+         * 所以这里无论 mp4 是否可用都必须清 pending：留着 1 会让该条目被
+         * reclaim_orphan_or_stale_pending_for_budget() 当成陈旧 pending，
+         * 超过 30min 后整个会话目录被删，连延时 PNG 一起赔进去。
+         * mp4 不可用时 print_video 保持为空，UI 自然不展示录像即可。 */
+        hit->print_video_pending = false;
     }
     hit->clean_first_png = 0;
     hit->clean_last_png = 0;

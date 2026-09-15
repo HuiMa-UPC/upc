@@ -479,12 +479,51 @@ rongsu_broker ──listen──► /tmp/upc_broker.sock ◄── rongsu_ui / r
 
 ### `publish_async` vs `publish_sync`
 
+两者都走 `send_outbound_from_local`，差别只在失败处理：
+
 | | async | sync |
 |--|-------|------|
-| 本地投递 | `enqueue_local` → 下次 `process()` | 立即 `deliver_local` |
-| 发送失败 | 打 `IPC_TX` Warn | 静默返回 false |
+| 发送失败 | 打 `IPC_TX` Warn；白名单内进补发队列（见下） | 静默返回 false，**不**缓存 |
+
+`deliver_local` 只在**入站**路径（`deliver_client_frames`）调用。`target_id` 等于本进程时两者都直接 `return true` 且**什么都不做**——进程内投递请用 `middleware::MsgBus`，不要发给自己。
+
+两者都**只发一次、绝不阻塞、也绝不在发送路径里重连**：publish 可能来自任意业务线程（Glavo link 线程、WifiManager 回调、MQTT 线程），而重连会改写 `poll_slots_`，与泵线程的 `poll_io()` 竞争同一个容器。重连与重试统一由泵线程的 `process()` 负责（`try_reconnect_broker` + `flush_pending_outbound`）。
 
 跨进程回复 UI：**必须** `publish_async`，目标 `ModuleId::UI`。
+
+### 可靠投递与补发（`upc_contract.hpp`）
+
+发送失败（目标 peer 离线 / `IPC_TX fail`）时，只有 **`is_ipc_reliable_msg_type`** 白名单内的消息会进本地 `pending_outbound_` 队列，在重连后补发；名单外一律就地丢弃并打 `IPC_TX` Warn `outbound dropped (not reliable)`。
+
+选型判据：
+
+| 语义 | 处理 | 例 |
+|------|------|-----|
+| 高频状态流 | 不入表，丢就丢 | `GLAVO_Debug_Sensor_Ntf` |
+| 状态终值 | 入表 + `is_ipc_latest_only_msg_type`（队列只留最新） | `APP_Print_Progress_Ntf` |
+| 幂等命令 | 入表 | `UI_Print_Terminate_Req` |
+| 成对瞬时状态 | **不入表**，由发起方按返回值回滚 UI | `UI_Print_Pause_Req` / `UI_Print_Resume_Req` |
+
+最后一类要特别注意：Pause/Resume 补发是**有害**的——断连期间攒下的暂停在几秒后补发，会在用户已不想暂停时突然生效，比丢弃更糟。所以 `UiMsgProxy::send_print_pause` / `send_print_resume` 返回 `bool` 且标了 `[[nodiscard]]`，调用方拿到 `false` 必须回滚乐观切换的图标并提示重试（见 `page_user_home.cpp::on_pause_click`）。
+
+新增消息默认落在 `default: return false`（不可靠）。**控制类请求必须显式登记**，否则表现为"UI 点了按钮后端毫无反应"。
+
+### peer 在线列表的自愈
+
+`online_remote_peers_` 是靠 broker 的 ONLINE/OFFLINE 通知维护的纯事件缓存，丢一条 ONLINE 就会永久误判该 peer 离线并拒发所有消息。两侧兜底：
+
+- **client**：发现"连着 broker 但目标 peer 离线"时，按 `UPC_IPC_PEER_RESYNC_INTERVAL_MS` 节流重发 `REG`
+- **broker**：在**已注册**连接上再收到 `REG` 视为对齐请求，重发一次 `broker_send_reg_snapshot`
+
+### epoll 槽位与 fd 所有权
+
+`poll_slots_`（`fd → PollSlot`）**只允许泵线程访问**，没有锁保护。相关不变式：
+
+- **反注册按槽位身份，不按 fd**：断连通常是在 `recv_pending` 内部 `close()` 之后才被发现的，那时 `conn_fd()` 已是 `-1`。按 fd 反注册必然漏掉，而 fd 号会被下一条连接复用，残留的陈旧槽位会让新连接的注册被跳过（旧实现直接 `return true`），从此彻底失联——UI 点按钮后端毫无反应就是这么来的。故用 `poll_unregister_broker_client` / `poll_unregister_client_conn`，注册侧则用 `poll_drop_stale_slot` **覆盖**而非跳过。
+- **解引用前校验存活**：epoll 事件携带裸 `PollSlot*`，同一批事件里处理前一个 fd 时可能已经释放了这个槽位（同 ModuleId 重复注册会踢掉旧连接）。`handle_poll_event` 先过 `poll_slot_alive`。
+- **入站 fd 的所有权按路径区分**：broker 只转发，`send_frame_with_fds` 后自己那份必须关（`handle_broker_client_io` 的 `InboundFdGuard`）；client 则把 fd 移交 `pending_dma_fds_`，由消费者 `take_pending_dma_fds` 之后负责关。两条路径不能共用析构器，否则 client 侧会双重 close。丢弃报文（解码失败）的路径要自己关。
+- **`pending_dma_fds_` 只留最新一批**：消费者停止取用（预览关闭 / 看门狗重启）时旧批次永远不会被取走，必须就地 close，否则长跑必然 EMFILE，届时 `accept`/`recvmsg` 全部失败、整条总线瘫痪。`shutdown()` 同样要 close 而不是 `clear()`。
+- **字节流收包必须用 `recvmsg`**：`read()` 不带 control buffer，内核会**丢弃**随行的 `SCM_RIGHTS`。`rx_accum_` 里残留半帧时 `peek_fd_frame_magic()` 一律返回 `false`，紧随其后的 UPDF 帧就会走普通字节流这条路，用 `read()` 就只剩字节没有 fd，解析必然报 `UPDF missing SCM_RIGHTS` 丢整帧。两条收包路径共用 `recv_stream_chunk_locked`。
 
 ## Broker 转发（后端互访）
 

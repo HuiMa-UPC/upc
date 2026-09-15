@@ -1894,7 +1894,11 @@ void on_powder_refilled(lv_event_t * /*e*/)
         return;
     }
     close_powder_dlg();
-    ui::UiMsgProxy::instance().send_print_resume();
+    /* 恢复请求发不出去时明确告知：作业仍停在后端的缺粉暂停态，需要重试，
+     * 不能静默关窗让用户以为已经继续打印。 */
+    if(!ui::UiMsgProxy::instance().send_print_resume()) {
+        ui_toast_show("Resume failed, please retry", user_color_status_err, 2200);
+    }
 }
 
 /* 「取消」只关窗并通知后端：本次打印忽略后续缺粉检测，保持当前暂停态。 */
