@@ -1663,7 +1663,8 @@ bool GlavoService::run_print_prepare(middleware::PrintFileSource source, uint32_
     }
     /* G-code：仅在尚无总层数时扫 M3000（兼带行数 hint）。
      * 3MF 导入已写入 Metadata.layers 时跳过整文件扫描，走纯层进度；
-     * open_file 无行数 hint 时由解析器自行数换行。OVF 不扫。 */
+     * 此时 open_file(hint=0) 也不数换行，line_count 保持 0 不写回清单。
+     * 无层数且无行数缓存时，open_file 自行数换行并写回 line_count。OVF 不扫。 */
     const bool m3000_candidate = is_m3000_scan_candidate(local_path_out);
     if(m3000_candidate && layer_count == 0) {
         uint32_t scanned_lines  = 0;
@@ -1680,7 +1681,9 @@ bool GlavoService::run_print_prepare(middleware::PrintFileSource source, uint32_
         }
     }
 
-    const int line_hint = line_count > 0 ? static_cast<int>(line_count) : -1;
+    const int line_hint = line_count > 0
+        ? static_cast<int>(line_count)
+        : (layer_count > 0 ? 0 : -1);
     if(parser::ParserManager::instance().open_file(local_path_out, line_hint) != 0) {
         UPC_LOG_GLAVO_SERVICE(Warn, "prepare: open failed %s", local_path_out.c_str());
         return false;
@@ -1690,7 +1693,8 @@ bool GlavoService::run_print_prepare(middleware::PrintFileSource source, uint32_
             UPC_LOG_GLAVO_SERVICE(Warn, "prepare: worker not open %s", local_path_out.c_str());
             return false;
         }
-        if(line_count == 0) {
+        /* 已有总层数则走纯层进度，不把 get_total_lines() 写进 manifest。 */
+        if(line_count == 0 && layer_count == 0) {
             line_count = static_cast<uint32_t>(std::max(worker->get_total_lines(), 0));
         }
     } else {
@@ -1838,7 +1842,7 @@ void GlavoService::continue_print_after_optical_ready(const std::string& full_pa
     if(!parser_ready) {
         const int line_hint = prepared_line_count_ > 0
             ? static_cast<int>(prepared_line_count_)
-            : -1;
+            : (prepared_layer_count_ > 0 ? 0 : -1);
         if(parser::ParserManager::instance().open_file(full_path, line_hint) != 0) {
             UPC_LOG_GLAVO_SERVICE(Error, "print_start: open failed path=%s",
                                   full_path.c_str());

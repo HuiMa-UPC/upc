@@ -39,7 +39,7 @@ UI → GlavoService（工作线程）→ ParserManager → RingBuffer → McuLin
 |------|------|
 | `Fs_DirOpen_Req` | **仅 USB** 扫盘；非 Usb 源忽略并回空列表 |
 | `Fs_Delete_Ntf` | 删除 Local 文件（磁盘 + config.json） |
-| `UI_Print_Prepare_Req` | 轻量预处理（USB 复制；清单无 `layer_count` 时才单趟扫 `M3000`；打开解析器并写 config.json）。总层优先用清单已有值（含 3MF Metadata.layers）；Start 不再补扫 |
+| `UI_Print_Prepare_Req` | 轻量预处理（USB 复制；清单无 `layer_count` 时才单趟扫 `M3000`；打开解析器并写 config.json）。已有总层数时不数行、不把 `get_total_lines()` 写回 `line_count`；Start 不再补扫 |
 | `UI_Parser_Exit_Ntf` | 取消解析（stop_parse + 清会话） |
 | `UI_Print_Start_Req` | 置打印态 → 光路检测 gate（若开）→ 正式解析 + 首层参考图 gate + `begin_sending` + `PrintVideoNotify::on_print_start` |
 | ↑ 起印失败 | 打印态在 `launch_print_from_prepared` 最前面就置（检测那十几秒 UI 已在打印页），所以「运动还没开始就失败」的分支**一律走 `abort_print_start()`** 回滚，否则 UI 停在打印页 0% |
