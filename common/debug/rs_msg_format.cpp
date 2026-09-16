@@ -1,7 +1,7 @@
 #include "rs_msg_format.hpp"
 #include "rs_log.hpp"
 
-#if UPC_DEBUG && (UPC_MOD_MSG_BUS || UPC_MOD_IPC)
+#if UPC_DEBUG && (UPC_MOD_MSG_BUS || UPC_MOD_IPC || UPC_LOG_MSG_TRACE)
 
 #include "msg_bus.hpp"
 #include "mem_pool.hpp"
@@ -272,20 +272,44 @@ const char* upc_msg_payload_summary(const MsgPayload& payload, char* buf, size_t
     return buf;
 }
 
+#if UPC_DEBUG && UPC_LOG_MSG_TRACE
 void upc_msg_log_message(const char* phase, const Message& msg,
     size_t handler_count, size_t queue_depth) {
     char payload[128];
     upc_msg_payload_summary(msg.payload, payload, sizeof(payload));
+    const bool ipc_phase = phase && std::strncmp(phase, "IPC_", 4) == 0;
 
     if (handler_count > 0) {
-        UPC_LOG_MSG_BUS(Debug,
-            "%s %s %s->%s pri=%u handlers=%zu payload={%s}",
+        if (ipc_phase) {
+            UPC_LOG_MSG_BUS_TO(IpcMessage, Debug,
+                "%s %s %s->%s pri=%u handlers=%zu payload={%s}",
+                phase,
+                upc_msg_type_name(msg.type),
+                upc_msg_module_name(msg.sender_id),
+                upc_msg_module_name(msg.target_id),
+                static_cast<unsigned>(msg.priority),
+                handler_count,
+                payload);
+        } else {
+            UPC_LOG_MSG_BUS(Debug,
+                "%s %s %s->%s pri=%u handlers=%zu payload={%s}",
+                phase,
+                upc_msg_type_name(msg.type),
+                upc_msg_module_name(msg.sender_id),
+                upc_msg_module_name(msg.target_id),
+                static_cast<unsigned>(msg.priority),
+                handler_count,
+                payload);
+        }
+    } else if (ipc_phase) {
+        UPC_LOG_MSG_BUS_TO(IpcMessage, Debug,
+            "%s %s %s->%s pri=%u queue=%zu payload={%s}",
             phase,
             upc_msg_type_name(msg.type),
             upc_msg_module_name(msg.sender_id),
             upc_msg_module_name(msg.target_id),
             static_cast<unsigned>(msg.priority),
-            handler_count,
+            queue_depth,
             payload);
     } else {
         UPC_LOG_MSG_BUS(Debug,
@@ -299,7 +323,9 @@ void upc_msg_log_message(const char* phase, const Message& msg,
             payload);
     }
 }
+#endif
 
+#if UPC_DEBUG && (UPC_MOD_MSG_BUS || UPC_MOD_IPC)
 void upc_msg_dump_status() {
     UPC_LOG_MSG_BUS(Info, "status pending=%zu full=%s subs=%zu",
         MsgBus::instance().pending_count(),
@@ -324,12 +350,14 @@ void upc_msg_dump_status() {
 #endif
 }
 
+#endif /* UPC_DEBUG && (UPC_MOD_MSG_BUS || UPC_MOD_IPC) */
+
 
 } // namespace middleware
 
-#else /* !(UPC_DEBUG && UPC_MOD_MSG_BUS) */
+#else /* !UPC_DEBUG || none of the log sub-switches */
 
 namespace middleware {
 } // namespace middleware
 
-#endif /* UPC_DEBUG && UPC_MOD_MSG_BUS */
+#endif /* UPC_DEBUG && (UPC_MOD_MSG_BUS || UPC_MOD_IPC || UPC_LOG_MSG_TRACE) */

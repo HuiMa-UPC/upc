@@ -28,8 +28,6 @@ using Clock = std::chrono::steady_clock;
 constexpr uint32_t kPollInEvents     = EPOLLIN | EPOLLRDHUP;
 constexpr uint32_t kPollListenEvents = EPOLLIN;
 #endif
-constexpr int kImmediateRetryCount = 3;
-constexpr auto kImmediateRetrySleep = std::chrono::milliseconds(2);
 constexpr size_t kPendingOutboundMax = 256;
 constexpr uint8_t kPendingOutboundMaxAttempts = 8;
 constexpr auto kPendingOutboundMaxAge = std::chrono::seconds(15);
@@ -135,7 +133,16 @@ void IpcMsgBus::shutdown()
         broker_module_index_.clear();
     }
     {
+        /* 这些 fd 的所有权在 bus 手里（recvmsg 收到但还没人 take），
+         * 直接 clear 就是泄漏。 */
         std::lock_guard<std::mutex> lock(pending_dma_fds_mtx_);
+        for (auto& kv : pending_dma_fds_) {
+            for (int fd : kv.second) {
+                if (fd >= 0) {
+                    ::close(fd);
+                }
+            }
+        }
         pending_dma_fds_.clear();
     }
     {
@@ -183,8 +190,10 @@ uint32_t IpcMsgBus::subscribe(middleware::MsgType type,
                               middleware::ModuleId module_id,
                               IpcHandler handler)
 {
-    const uint32_t id = next_sub_id_++;
+    /* id 的自增必须在锁内：next_sub_id_ 是普通 uint32_t，两个线程同时订阅会
+     * 拿到同一个 id，之后 unsubscribe(id) 会把别人的订阅一起摘掉。 */
     std::lock_guard<std::mutex> lock(subs_mtx_);
+    const uint32_t id = next_sub_id_++;
     subscribers_.push_back({id, type, module_id, std::move(handler)});
     return id;
 }
@@ -200,7 +209,7 @@ bool IpcMsgBus::deliver_local(const middleware::Message& msg)
     }
 
     if (handlers.empty()) {
-        UPC_LOG_MSG_BUS(Warn, "IPC_DELIVER miss %s %s->%s (no subscriber)",
+        UPC_LOG_MSG_BUS_TO(IpcMessage, Warn, "IPC_DELIVER miss %s %s->%s (no subscriber)",
                         upc_msg_type_name(msg.type),
                         upc_msg_module_name(msg.sender_id),
                         upc_msg_module_name(msg.target_id));
@@ -268,11 +277,31 @@ void IpcMsgBus::stash_pending_dma_fds(middleware::ModuleId sender,
         return;
     }
     const uint32_t key = static_cast<uint32_t>(sender);
-    std::lock_guard<std::mutex> lock(pending_dma_fds_mtx_);
-    auto& slot = pending_dma_fds_[key];
-    for (int fd : fds) {
-        if (fd >= 0) {
-            slot.push_back(fd);
+    std::vector<int> discarded;
+    {
+        std::lock_guard<std::mutex> lock(pending_dma_fds_mtx_);
+        auto& slot = pending_dma_fds_[key];
+        /* dma 帧缓冲是"只认最新"语义：消费者一旦停止 take_pending_dma_fds（预览
+         * 关闭 / 看门狗重启 / UI 不在预览页），旧批次永远不会被取走。必须就地
+         * close，否则相机每次开流推 CAMERA_V4L2_BUF_COUNT 个 fd，长跑必然 EMFILE
+         * —— 那会让 accept/recvmsg 全失败，整条消息总线瘫痪。 */
+        discarded.swap(slot);
+        for (int fd : fds) {
+            if (fd >= 0) {
+                slot.push_back(fd);
+            }
+        }
+    }
+
+    /* close 放在锁外：避免在持锁期间做系统调用。 */
+    if (!discarded.empty()) {
+        UPC_LOG_IPC(Warn,
+                    "pending dma fds dropped peer=%s count=%zu (consumer not draining)",
+                    upc_msg_module_name(sender), discarded.size());
+        for (int fd : discarded) {
+            if (fd >= 0) {
+                ::close(fd);
+            }
         }
     }
 }
@@ -304,6 +333,14 @@ void IpcMsgBus::enqueue_pending_outbound(const middleware::Message& msg,
                                          const char* reason)
 {
     if (!should_buffer_outbound(msg)) {
+        /* 不在可靠白名单里的消息发失败就地丢弃。丢弃本身是设计意图（高频状态流
+         * 不该缓存），但必须留痕：控制类请求若漏登记白名单，此前是连一条日志都
+         * 没有，表现为"UI 点了按钮后端毫无反应"且无从排查。 */
+        UPC_LOG_IPC(Warn, "outbound dropped (not reliable) %s %s->%s reason=%s",
+                    upc_msg_type_name(msg.type),
+                    upc_msg_module_name(msg.sender_id),
+                    upc_msg_module_name(msg.target_id),
+                    reason ? reason : "unknown");
         return;
     }
     std::lock_guard<std::mutex> lock(pending_outbound_mtx_);
@@ -411,21 +448,28 @@ bool IpcMsgBus::send_outbound_from_local(const middleware::Message& msg,
 
     if (msg.target_id != middleware::ModuleId{0} &&
         !peer_connected(msg.target_id)) {
+        /* "离线"可能是假的：online_remote_peers_ 只是 reg notify 维护的缓存，
+         * 丢一条 ONLINE 就会永久误判，进而把所有发往该 peer 的消息全部拒掉。
+         * 这里顺手踢一次对齐请求，下一轮 flush_pending_outbound 就能补发出去。 */
+        client_request_peer_resync();
         if (allow_buffer) {
             enqueue_pending_outbound(msg, "peer_offline");
         }
         return false;
     }
 
-    for (int i = 0; i < kImmediateRetryCount; ++i) {
-        if (send_wire_frame(frame)) {
-            upc_msg_log_message("IPC_TX", msg);
-            return true;
-        }
-        try_reconnect_broker();
-        if (i + 1 < kImmediateRetryCount) {
-            std::this_thread::sleep_for(kImmediateRetrySleep);
-        }
+    /* 只发一次，且**不**在这里重连。
+     *
+     * publish 会被任意业务线程调用（Glavo link 线程、WifiManager 回调、MQTT
+     * 线程），而 try_reconnect_broker() 会走到 poll_register_client_conn() 去
+     * 无锁改写 poll_slots_，与泵线程的 poll_io()/handle_poll_event() 直接竞争
+     * 同一个 unordered_map——那是 UB。重连只允许发生在泵线程的 process() 里。
+     *
+     * 原先的"3 次即时重试 + 每次 sleep 2ms"也一并去掉：它会把调用方阻塞 4ms
+     * 以上，而重试职责本就由 pending_outbound_ 承担（下一次 process() 会 flush）。 */
+    if (send_wire_frame(frame)) {
+        upc_msg_log_message("IPC_TX", msg);
+        return true;
     }
 
     if (warn_on_fail) {
@@ -479,6 +523,31 @@ void IpcMsgBus::apply_reg_notify(uint32_t event, middleware::ModuleId module_id)
                 event, upc_msg_module_name(module_id));
 }
 
+void IpcMsgBus::client_request_peer_resync()
+{
+    if (mode_ != IpcBusMode::Client || !client_endpoint_.connected()) {
+        return;
+    }
+
+    const int64_t now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                               Clock::now().time_since_epoch()).count();
+    int64_t last_ms = client_last_peer_resync_ms_.load(std::memory_order_relaxed);
+    if (last_ms != 0 && now_ms - last_ms < UPC_IPC_PEER_RESYNC_INTERVAL_MS) {
+        return;
+    }
+    /* CAS 兜住并发 publish：只让抢到的那个线程真发 REG，其余直接返回。 */
+    if (!client_last_peer_resync_ms_.compare_exchange_strong(
+            last_ms, now_ms, std::memory_order_relaxed)) {
+        return;
+    }
+
+    /* broker 在已注册连接上收到 REG 会重发在线快照（见 handle_broker_client_io），
+     * 于是丢掉的 ONLINE 通知不再是永久故障。 */
+    if (client_send_reg()) {
+        UPC_LOG_IPC(Info, "client peer resync: REG re-sent to realign peer list");
+    }
+}
+
 void IpcMsgBus::deliver_client_frames(const std::vector<InboundWireUnit>& units)
 {
     for (const auto& unit : units) {
@@ -494,8 +563,17 @@ void IpcMsgBus::deliver_client_frames(const std::vector<InboundWireUnit>& units)
 
         middleware::Message msg;
         if (!wire_decode(unit.frame.data(), unit.frame.size(), msg)) {
-            UPC_LOG_IPC(Warn, "client wire_decode fail frame_bytes=%zu",
-                        unit.frame.size());
+            UPC_LOG_IPC(Warn, "client wire_decode fail frame_bytes=%zu fds=%zu",
+                        unit.frame.size(), unit.fds.size());
+            /* 这条路径下 fd 不会进 pending_dma_fds_，没人再负责它们。
+             * InboundWireUnit 是裸结构体（所有权按路径区分，见
+             * handle_broker_client_io 的 InboundFdGuard 注释），
+             * 丢弃报文时必须自己关，否则解码失败一次就漏一组 dma-buf。 */
+            for (int fd : unit.fds) {
+                if (fd >= 0) {
+                    ::close(fd);
+                }
+            }
             continue;
         }
         if (!unit.fds.empty()) {
@@ -527,7 +605,17 @@ void IpcMsgBus::broker_broadcast_reg_notify(uint32_t event,
             !slot->endpoint->connected()) {
             continue;
         }
-        (void)slot->endpoint->send_frame(frame);
+        if (!slot->endpoint->send_frame(frame)) {
+            /* 这一条丢了，对端的 online_remote_peers_ 就与 broker 分叉：丢
+             * ONLINE → 它永久认为该 peer 离线并拒发所有消息。send_frame 内部
+             * 失败时已关连接，随后 handle_broker_client_io 会摘掉该 slot 并
+             * 由它重连对齐；此处不做摘除（正持有 broker_clients_mtx_，
+             * broker_unregister_client 会重入同一把锁），只负责留痕。 */
+            UPC_LOG_IPC(Warn,
+                        "broker reg notify send fail event=%u module=%s to=%s",
+                        event, upc_msg_module_name(module_id),
+                        upc_msg_module_name(slot->module_id));
+        }
     }
 }
 
@@ -550,8 +638,13 @@ void IpcMsgBus::broker_send_reg_snapshot(BrokerClientSlot& slot)
         if (!ipc_reg_notify_encode(IPC_REG_EVENT_ONLINE, peer_id, frame)) {
             continue;
         }
-        if (slot.endpoint && slot.endpoint->connected()) {
-            (void)slot.endpoint->send_frame(frame);
+        if (slot.endpoint && slot.endpoint->connected() &&
+            !slot.endpoint->send_frame(frame)) {
+            /* 快照本身就是对齐手段，丢了等于对齐失败；client 侧节流重发 REG
+             * 会再来一次，这里留痕即可。 */
+            UPC_LOG_IPC(Warn, "broker reg snapshot send fail peer=%s to=%s",
+                        upc_msg_module_name(peer_id),
+                        upc_msg_module_name(slot.module_id));
         }
     }
 }
@@ -562,9 +655,11 @@ void IpcMsgBus::broker_unregister_client(BrokerClientSlot& slot,
     const middleware::ModuleId module_id = slot.module_id;
     const bool was_registered              = slot.registered;
 
-    if (slot.endpoint && slot.endpoint->connected()) {
-        poll_unregister(slot.endpoint->conn_fd());
-    }
+    /* 无条件按槽位反注册：断连基本都是在 recv_pending 内部 close 之后才被发现的
+     * （handle_broker_client_io 的 was_connected && !connected() 分支），此时
+     * conn_fd 已是 -1，旧的"仅在 connected() 时按 fd 反注册"必然漏掉，留下的
+     * 陈旧槽位会让复用同一 fd 号的新连接注册被跳过，从此彻底失联。 */
+    poll_unregister_broker_client(slot);
 
     if (was_registered) {
         std::lock_guard<std::mutex> lock(broker_clients_mtx_);
@@ -759,6 +854,17 @@ void IpcMsgBus::handle_broker_client_io(BrokerClientSlot& slot)
         }
 
         if (ipc_reg_is_control_frame(unit.frame.data(), unit.frame.size())) {
+            /* 已注册连接上再收到 REG：这是 client 的 peer 列表对齐请求（它认为
+             * 某个 peer 离线，但很可能只是丢了一条 ONLINE 通知）。重发一次在线
+             * 快照就能自愈，不能当噪音丢掉。REG_NOTIFY 是 broker→client 方向，
+             * client 发来的不予处理（ipc_reg_decode 会失败）。 */
+            middleware::ModuleId reg_id{0};
+            if (ipc_reg_decode(unit.frame.data(), unit.frame.size(), reg_id) &&
+                reg_id == slot.module_id) {
+                broker_send_reg_snapshot(slot);
+                UPC_LOG_IPC(Info, "broker reg snapshot resent %s",
+                            upc_msg_module_name(slot.module_id));
+            }
             continue;
         }
         (void)broker_route_wire(slot, unit);
@@ -786,6 +892,12 @@ void IpcMsgBus::try_reconnect_broker()
         online_remote_peers_.clear();
     }
 
+    /* 连接可能是在 send 失败路径里被 close 的（send_stream_bytes_locked →
+     * close_conn_locked），那条路径不经过 poll，槽位会残留。先清掉再重连，
+     * 否则新 fd 复用同一号码时注册会被当成陈旧槽位处理（虽已能覆盖，但会
+     * 多打一条 Warn，且 fd 号不同时旧条目会一直留在表里）。 */
+    poll_unregister_client_conn();
+
     if (!client_endpoint_.connect_to(broker_path_.c_str()) || !client_send_reg()) {
         client_endpoint_.close();
         return;
@@ -803,9 +915,10 @@ bool IpcMsgBus::poll_register_broker_listen()
         return false;
     }
     const int fd = server_endpoint_.listen_fd();
-    if (fd < 0 || poll_slots_.count(fd) != 0) {
-        return fd >= 0;
+    if (fd < 0) {
+        return false;
     }
+    poll_drop_stale_slot(fd);
 
     auto slot       = std::make_unique<PollSlot>();
     slot->kind      = PollKind::BrokerListen;
@@ -829,9 +942,10 @@ bool IpcMsgBus::poll_register_broker_client(BrokerClientSlot& client_slot)
         return false;
     }
     const int fd = client_slot.endpoint->conn_fd();
-    if (fd < 0 || poll_slots_.count(fd) != 0) {
-        return fd >= 0;
+    if (fd < 0) {
+        return false;
     }
+    poll_drop_stale_slot(fd);
 
     auto slot             = std::make_unique<PollSlot>();
     slot->kind            = PollKind::BrokerClient;
@@ -855,9 +969,10 @@ bool IpcMsgBus::poll_register_client_conn()
         return false;
     }
     const int fd = client_endpoint_.conn_fd();
-    if (fd < 0 || poll_slots_.count(fd) != 0) {
-        return fd >= 0;
+    if (fd < 0) {
+        return false;
     }
+    poll_drop_stale_slot(fd);
 
     auto slot     = std::make_unique<PollSlot>();
     slot->kind    = PollKind::ClientConn;
@@ -871,13 +986,57 @@ bool IpcMsgBus::poll_register_client_conn()
 #endif
 }
 
-void IpcMsgBus::poll_unregister(int fd)
+bool IpcMsgBus::poll_slot_alive(const PollSlot* slot) const
 {
-    if (fd < 0) {
+    if (!slot) {
+        return false;
+    }
+    for (const auto& kv : poll_slots_) {
+        if (kv.second.get() == slot) {
+            return true;
+        }
+    }
+    return false;
+}
+
+void IpcMsgBus::poll_unregister_broker_client(BrokerClientSlot& slot)
+{
+    for (auto it = poll_slots_.begin(); it != poll_slots_.end();) {
+        if (it->second && it->second->kind == PollKind::BrokerClient &&
+            it->second->broker_client == &slot) {
+            poller_.del(it->first);
+            it = poll_slots_.erase(it);
+        } else {
+            ++it;
+        }
+    }
+}
+
+void IpcMsgBus::poll_unregister_client_conn()
+{
+    for (auto it = poll_slots_.begin(); it != poll_slots_.end();) {
+        if (it->second && it->second->kind == PollKind::ClientConn) {
+            poller_.del(it->first);
+            it = poll_slots_.erase(it);
+        } else {
+            ++it;
+        }
+    }
+}
+
+void IpcMsgBus::poll_drop_stale_slot(int fd)
+{
+    const auto it = poll_slots_.find(fd);
+    if (it == poll_slots_.end()) {
         return;
     }
+    /* 走到这里说明上一条连接的槽位没被清掉（断连路径漏了反注册），而内核已把
+     * 这个 fd 号分配给了新连接。必须覆盖，否则新连接进不了 epoll。 */
+    UPC_LOG_IPC(Warn, "poll slot stale fd=%d kind=%u replaced", fd,
+                static_cast<unsigned>(it->second ? it->second->kind
+                                                 : PollKind::ClientConn));
     poller_.del(fd);
-    poll_slots_.erase(fd);
+    poll_slots_.erase(it);
 }
 
 void IpcMsgBus::poll_clear()
@@ -898,6 +1057,9 @@ void IpcMsgBus::accept_broker_client()
     auto client_slot  = std::make_unique<BrokerClientSlot>();
     client_slot->endpoint = std::make_unique<IpcEndpoint>();
     if (!client_slot->endpoint->attach_connected_fd(fd)) {
+        /* attach 失败时 fd 还没交给 endpoint，析构不会关它，得自己收尾。 */
+        ::close(fd);
+        UPC_LOG_IPC(Warn, "broker attach client fd=%d failed", fd);
         return;
     }
 
@@ -917,11 +1079,13 @@ void IpcMsgBus::handle_poll_event(PollSlot* slot, uint32_t events)
     (void)events;
     return;
 #else
-    if (!slot) {
+    if (!slot || !poll_slot_alive(slot)) {
+        /* 同一批 epoll 事件里，处理前一个 fd 时可能已经把这个槽位释放掉了：
+         * 典型是 handle_broker_client_io 里"同一 ModuleId 重复注册"会
+         * broker_unregister_client(*kicked)，而被踢的那条连接的事件很可能就排在
+         * 本批后面。不校验存活就是对已释放内存解引用。 */
         return;
     }
-
-    const int reg_fd = slot->fd;
 
     if (slot->kind == PollKind::BrokerListen) {
         if (events & EPOLLIN) {
@@ -942,7 +1106,9 @@ void IpcMsgBus::handle_poll_event(PollSlot* slot, uint32_t events)
         std::vector<InboundWireUnit> units;
         client_endpoint_.recv_pending(units);
         if (was_connected && !client_endpoint_.connected()) {
-            poll_unregister(reg_fd);
+            /* 按 kind 而非 conn_fd 反注册：recv_pending 内部已经 close 了连接，
+             * 此时 conn_fd() 是 -1。 */
+            poll_unregister_client_conn();
             std::lock_guard<std::mutex> lock(online_peers_mtx_);
             online_remote_peers_.clear();
             UPC_LOG_IPC(Warn, "client broker disconnected");

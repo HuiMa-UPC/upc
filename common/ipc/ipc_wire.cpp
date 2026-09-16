@@ -128,6 +128,16 @@ bool wire_decode(const uint8_t* data, size_t len, middleware::Message& out) {
         static_cast<WirePayloadType>(hdr.payload_type),
         payload,
         hdr.payload_length);
+
+    /* 线上说有 payload，解出来却是空——只可能是 BufferPool 耗尽导致
+     * from_bytes 退化成 Empty。此时必须报解码失败：否则订阅者会拿到一条
+     * "字段齐全但内容为空"的消息（比如层进度、切片数据）当成有效值用，
+     * 变成无声的数据丢失，且日志里一行痕迹都没有。 */
+    if (static_cast<WirePayloadType>(hdr.payload_type) == WirePayloadType::Inline &&
+        hdr.payload_length > 0 &&
+        out.payload.type == middleware::MsgPayload::Type::Empty) {
+        return false;
+    }
     return true;
 }
 

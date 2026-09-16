@@ -1995,6 +1995,18 @@ void GlavoService::handle_print_terminate(const middleware::Message& msg)
         return;
     }
     if(!print_running_.load()) {
+        /* print_running_（UI 会话）与 McuLink 的 is_sending_（运动下发）是两个
+         * 独立状态，测试图模式与异常清态下会脱钩。脱钩时必须选安全侧：只要还在
+         * 下发运动包就真走终止流程，不能只回执不动手——那样 UI 跳到结束页而振镜
+         * 还在扫。回执交给 cleanup 的 TerminateDone，UI 侧另有超时兜底。 */
+        auto& link = McuLink::instance();
+        if(link.is_sending() || link.is_terminate_pending()) {
+            UPC_LOG_GLAVO_SERVICE(Warn,
+                "print_terminate fallback: motion active without session");
+            link.set_user_dispatch_paused(false);
+            link.request_terminate();
+            return;
+        }
         UPC_LOG_GLAVO_SERVICE(Debug, "print_terminate ignored: not running");
         publish_terminate_done();
         return;
@@ -2020,7 +2032,21 @@ void GlavoService::handle_print_terminate(const middleware::Message& msg)
 void GlavoService::handle_print_pause(const middleware::Message& msg)
 {
     (void)msg;
+    McuLink& link = McuLink::instance();
     if(!print_running_.load()) {
+        /* 同 handle_print_terminate 的理由：会话态与运动态脱钩时选安全侧，
+         * 真发 0x0A 暂停，否则 UI 图标已切到 PAUSE 而振镜还在扫。 */
+        if(link.is_sending()) {
+            UPC_LOG_GLAVO_SERVICE(Warn,
+                "print_pause fallback: motion active without session");
+            link.set_user_dispatch_paused(true);
+            if(!link.send_tcp_emergency_ctrl(false, true)) {
+                UPC_LOG_GLAVO_SERVICE(Warn,
+                    "print_pause fallback: tcp 0x0A pause send failed");
+            }
+            publish_print_pause_done(true);
+            return;
+        }
         UPC_LOG_GLAVO_SERVICE(Debug, "print_pause ignored: not running");
         publish_print_pause_done(false);
         return;
@@ -2031,7 +2057,6 @@ void GlavoService::handle_print_pause(const middleware::Message& msg)
         publish_print_pause_done(false);
         return;
     }
-    McuLink& link = McuLink::instance();
     if(link.is_user_dispatch_paused()) {
         publish_print_pause_done(true);
         return;
@@ -2048,12 +2073,25 @@ void GlavoService::handle_print_pause(const middleware::Message& msg)
 void GlavoService::handle_print_resume(const middleware::Message& msg)
 {
     (void)msg;
+    McuLink& link = McuLink::instance();
     if(!print_running_.load()) {
+        /* 必须与 handle_print_pause 的兜底对称：兜底暂停过就要能兜底恢复，
+         * 否则 user_paused_ 一直挂着，振镜再也不动且无从解除。 */
+        if(link.is_user_dispatch_paused()) {
+            UPC_LOG_GLAVO_SERVICE(Warn,
+                "print_resume fallback: clearing pause without session");
+            if(!link.send_tcp_emergency_ctrl(false, false)) {
+                UPC_LOG_GLAVO_SERVICE(Warn,
+                    "print_resume fallback: tcp 0x0A resume send failed");
+            }
+            link.set_user_dispatch_paused(false);
+            publish_print_pause_done(false);
+            return;
+        }
         UPC_LOG_GLAVO_SERVICE(Debug, "print_resume ignored: not running");
         publish_print_pause_done(false);
         return;
     }
-    McuLink& link = McuLink::instance();
     if(!link.is_user_dispatch_paused()) {
         publish_print_pause_done(false);
         return;

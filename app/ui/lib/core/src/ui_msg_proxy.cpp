@@ -901,20 +901,20 @@ void UiMsgProxy::register_print_pause_done(PrintPauseDoneCb cb)
     print_pause_done_cb_ = std::move(cb);
 }
 
-void UiMsgProxy::send_print_pause()
+bool UiMsgProxy::send_print_pause()
 {
     middleware::Message msg(middleware::MsgType::UI_Print_Pause_Req,
                             middleware::ModuleId::UI,
                             middleware::ModuleId::APP_GLAVO);
-    middleware::MsgPort::instance().publish_async(msg);
+    return middleware::MsgPort::instance().publish_async(msg);
 }
 
-void UiMsgProxy::send_print_resume()
+bool UiMsgProxy::send_print_resume()
 {
     middleware::Message msg(middleware::MsgType::UI_Print_Resume_Req,
                             middleware::ModuleId::UI,
                             middleware::ModuleId::APP_GLAVO);
-    middleware::MsgPort::instance().publish_async(msg);
+    return middleware::MsgPort::instance().publish_async(msg);
 }
 
 void UiMsgProxy::send_print_powder_low_ignore()

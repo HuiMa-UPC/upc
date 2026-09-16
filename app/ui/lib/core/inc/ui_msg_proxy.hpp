@@ -115,9 +115,15 @@ public:
     void send_print_terminate();
     void register_print_terminate_done(PrintTerminateDoneCb cb);
 
-    /** 暂停/恢复打印。回执经 register_print_pause_done（仅打印进行中有效）。 */
-    void send_print_pause();
-    void send_print_resume();
+    /**
+     * 暂停/恢复打印。回执经 register_print_pause_done（仅打印进行中有效）。
+     *
+     * @return false 表示请求没能发出（Glavo 不可达）。这一对刻意不进 IPC 可靠
+     *         白名单——过期的暂停补发比丢弃更危险，所以调用方拿到 false 必须
+     *         回滚乐观切换的 UI，不能假装已暂停。
+     */
+    [[nodiscard]] bool send_print_pause();
+    [[nodiscard]] bool send_print_resume();
     void send_print_powder_low_ignore();
     void register_print_pause_done(PrintPauseDoneCb cb);
 

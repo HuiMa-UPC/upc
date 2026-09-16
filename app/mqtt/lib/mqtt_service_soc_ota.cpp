@@ -153,7 +153,7 @@ bool MqttService::run_soc_ota_stage(const std::string& task_id,
     if(package_hint > 0 && fs_free_bytes(UPC_IMAGE_ROOT, free_bytes)) {
         const uint64_t need = package_hint * 2ull + kSocOtaSpareBytes;
         if(free_bytes < need) {
-            UPC_LOG_MQTT_SERVICE(Error,
+            UPC_LOG_MQTT_SERVICE_TO(MqttOta, Error,
                 "soc ota no space: need~=%llu free=%llu",
                 static_cast<unsigned long long>(need),
                 static_cast<unsigned long long>(free_bytes));
@@ -161,9 +161,9 @@ bool MqttService::run_soc_ota_stage(const std::string& task_id,
             return false;
         }
     } else if(package_hint == 0) {
-        UPC_LOG_MQTT_SERVICE(Warn, "soc ota skip space check (unknown package size)");
+        UPC_LOG_MQTT_SERVICE_TO(MqttOta, Warn, "soc ota skip space check (unknown package size)");
     } else {
-        UPC_LOG_MQTT_SERVICE(Warn, "soc ota statvfs failed, skip space check");
+        UPC_LOG_MQTT_SERVICE_TO(MqttOta, Warn, "soc ota statvfs failed, skip space check");
     }
 
     progress.state = static_cast<uint8_t>(middleware::OtaProgressState::Applying);
@@ -203,7 +203,7 @@ bool MqttService::run_soc_ota_stage(const std::string& task_id,
      * 继续下去会让云端的心跳版本比对永远判不出升级完成。 */
     if(!manifest.version.empty() && !comp.version.empty() &&
        !same_firmware_version(manifest.version, comp.version)) {
-        UPC_LOG_MQTT_SERVICE(Error, "soc ota version mismatch: package=%s cloud=%s",
+        UPC_LOG_MQTT_SERVICE_TO(MqttOta, Error, "soc ota version mismatch: package=%s cloud=%s",
                              manifest.version.c_str(), comp.version.c_str());
         std::filesystem::remove_all(extract_dir, ec);
         err_code = "version_mismatch";
@@ -212,7 +212,7 @@ bool MqttService::run_soc_ota_stage(const std::string& task_id,
 
     if(!manifest.min_compat.empty() &&
        compare_dotted_version(UPC_SW_VERSION, manifest.min_compat) < 0) {
-        UPC_LOG_MQTT_SERVICE(Error, "soc ota rejects jump: running=%s min_compat=%s",
+        UPC_LOG_MQTT_SERVICE_TO(MqttOta, Error, "soc ota rejects jump: running=%s min_compat=%s",
                              UPC_SW_VERSION, manifest.min_compat.c_str());
         std::filesystem::remove_all(extract_dir, ec);
         err_code = "incompatible_version";
@@ -224,7 +224,7 @@ bool MqttService::run_soc_ota_stage(const std::string& task_id,
         if(manifest.type == "app") {
             kind = middleware::SocOtaKind::App;
         } else if(manifest.type != "image") {
-            UPC_LOG_MQTT_SERVICE(Error, "soc ota unknown manifest type=%s",
+            UPC_LOG_MQTT_SERVICE_TO(MqttOta, Error, "soc ota unknown manifest type=%s",
                                  manifest.type.c_str());
             std::filesystem::remove_all(extract_dir, ec);
             err_code = "manifest_type_invalid";
@@ -249,7 +249,7 @@ bool MqttService::run_soc_ota_stage(const std::string& task_id,
         }
         if(has_img == has_app_bin) {
             /* 两种都有或两种都没有：无从判断该刷整机还是只换应用，拒绝比猜安全 */
-            UPC_LOG_MQTT_SERVICE(Error, "soc ota cannot tell kind (img=%d app=%d)",
+            UPC_LOG_MQTT_SERVICE_TO(MqttOta, Error, "soc ota cannot tell kind (img=%d app=%d)",
                                  static_cast<int>(has_img), static_cast<int>(has_app_bin));
             std::filesystem::remove_all(extract_dir, ec);
             err_code = "kind_ambiguous";
@@ -284,7 +284,7 @@ bool MqttService::run_soc_ota_stage(const std::string& task_id,
         return false;
     }
 
-    UPC_LOG_MQTT_SERVICE(Info,
+    UPC_LOG_MQTT_SERVICE_TO(MqttOta, Info,
         "soc ota staged task_id=%s kind=%s version=%s path=%s bytes=%llu",
         task_id.c_str(),
         (kind == middleware::SocOtaKind::Image) ? "image" : "app",
@@ -317,7 +317,7 @@ bool MqttService::stage_soc_image(const std::string& task_id,
             break;
         }
         if(ent.is_directory()) {
-            UPC_LOG_MQTT_SERVICE(Warn, "soc ota reject nested dir=%s",
+            UPC_LOG_MQTT_SERVICE_TO(MqttOta, Warn, "soc ota reject nested dir=%s",
                                  ent.path().filename().c_str());
             err_code = "tar_entry_invalid";
             return false;
@@ -333,7 +333,7 @@ bool MqttService::stage_soc_image(const std::string& task_id,
             img_src = ent.path();
             ++img_found;
         } else {
-            UPC_LOG_MQTT_SERVICE(Warn, "soc ota reject non-img entry=%s", name.c_str());
+            UPC_LOG_MQTT_SERVICE_TO(MqttOta, Warn, "soc ota reject non-img entry=%s", name.c_str());
             ++other_found;
         }
     }
@@ -348,7 +348,7 @@ bool MqttService::stage_soc_image(const std::string& task_id,
 
     std::filesystem::rename(img_src, kSocOtaImgPath, ec);
     if(ec) {
-        UPC_LOG_MQTT_SERVICE(Error, "soc ota rename to %s failed: %s",
+        UPC_LOG_MQTT_SERVICE_TO(MqttOta, Error, "soc ota rename to %s failed: %s",
                              kSocOtaImgPath, ec.message().c_str());
         err_code = "img_install_failed";
         return false;
@@ -382,7 +382,7 @@ bool MqttService::stage_soc_app(const std::string& task_id,
      *    布局，此时写槽只会造出一个谁也不会启动的目录，不如明确失败。 */
     std::string cur_slot;
     if(!app_slot_current(cur_slot)) {
-        UPC_LOG_MQTT_SERVICE(Error, "soc app ota needs A/B layout, exe not in a slot");
+        UPC_LOG_MQTT_SERVICE_TO(MqttOta, Error, "soc app ota needs A/B layout, exe not in a slot");
         err_code = "slot_layout_missing";
         return false;
     }
@@ -401,7 +401,7 @@ bool MqttService::stage_soc_app(const std::string& task_id,
             break;
         }
         if(ent.is_directory()) {
-            UPC_LOG_MQTT_SERVICE(Warn, "soc app ota reject nested dir=%s",
+            UPC_LOG_MQTT_SERVICE_TO(MqttOta, Warn, "soc app ota reject nested dir=%s",
                                  ent.path().filename().c_str());
             err_code = "tar_entry_invalid";
             return false;
@@ -423,7 +423,7 @@ bool MqttService::stage_soc_app(const std::string& task_id,
     if(!manifest.files.empty()) {
         for(const std::string& want : manifest.files) {
             if(want != kSocOtaManifestName && !has_entry(want)) {
-                UPC_LOG_MQTT_SERVICE(Error, "soc app ota missing declared file=%s",
+                UPC_LOG_MQTT_SERVICE_TO(MqttOta, Error, "soc app ota missing declared file=%s",
                                      want.c_str());
                 err_code = "app_file_missing";
                 return false;
@@ -432,14 +432,14 @@ bool MqttService::stage_soc_app(const std::string& task_id,
     } else {
         for(const char* want : kAppRequiredBinaries) {
             if(!has_entry(want)) {
-                UPC_LOG_MQTT_SERVICE(Error, "soc app ota missing binary=%s", want);
+                UPC_LOG_MQTT_SERVICE_TO(MqttOta, Error, "soc app ota missing binary=%s", want);
                 err_code = "app_file_missing";
                 return false;
             }
         }
     }
     if(!has_entry(kAppSlotScriptName)) {
-        UPC_LOG_MQTT_SERVICE(Error, "soc app ota missing %s", kAppSlotScriptName);
+        UPC_LOG_MQTT_SERVICE_TO(MqttOta, Error, "soc app ota missing %s", kAppSlotScriptName);
         err_code = "app_file_missing";
         return false;
     }
@@ -453,7 +453,7 @@ bool MqttService::stage_soc_app(const std::string& task_id,
     uint64_t free_bytes = 0;
     if(fs_free_bytes(kAppSlotRoot, free_bytes) &&
        free_bytes < payload_bytes + kAppSlotSpareBytes) {
-        UPC_LOG_MQTT_SERVICE(Error, "soc app ota no space: need=%llu free=%llu",
+        UPC_LOG_MQTT_SERVICE_TO(MqttOta, Error, "soc app ota no space: need=%llu free=%llu",
             static_cast<unsigned long long>(payload_bytes + kAppSlotSpareBytes),
             static_cast<unsigned long long>(free_bytes));
         err_code = "no_space";
@@ -470,7 +470,7 @@ bool MqttService::stage_soc_app(const std::string& task_id,
         std::filesystem::copy_file(extract_dir / name, staging_dir / name,
                                    std::filesystem::copy_options::overwrite_existing, ec);
         if(ec) {
-            UPC_LOG_MQTT_SERVICE(Error, "soc app ota copy %s failed: %s",
+            UPC_LOG_MQTT_SERVICE_TO(MqttOta, Error, "soc app ota copy %s failed: %s",
                                  name.c_str(), ec.message().c_str());
             std::filesystem::remove_all(staging_dir, ec);
             err_code = "app_install_failed";
@@ -488,7 +488,7 @@ bool MqttService::stage_soc_app(const std::string& task_id,
     ::sync();
     std::filesystem::rename(staging_dir, slot_dir, ec);
     if(ec) {
-        UPC_LOG_MQTT_SERVICE(Error, "soc app ota rename to %s failed: %s",
+        UPC_LOG_MQTT_SERVICE_TO(MqttOta, Error, "soc app ota rename to %s failed: %s",
                              slot_dir.c_str(), ec.message().c_str());
         std::filesystem::remove_all(staging_dir, ec);
         err_code = "app_install_failed";
@@ -498,7 +498,7 @@ bool MqttService::stage_soc_app(const std::string& task_id,
     pending.payload_path = slot_dir.string();
     pending.payload_bytes = dir_total_bytes(slot_dir);
     pending.target_slot = target_slot;
-    UPC_LOG_MQTT_SERVICE(Info, "soc app ota staged into %s (running %s)",
+    UPC_LOG_MQTT_SERVICE_TO(MqttOta, Info, "soc app ota staged into %s (running %s)",
                          target_slot.c_str(), cur_slot.c_str());
     return true;
 }
@@ -520,7 +520,7 @@ bool MqttService::parse_soc_ota_manifest(const std::filesystem::path& extract_di
     }
     const uintmax_t size = std::filesystem::file_size(path, ec);
     if(ec || size == 0 || size > 64u * 1024u) {
-        UPC_LOG_MQTT_SERVICE(Error, "soc ota manifest size invalid");
+        UPC_LOG_MQTT_SERVICE_TO(MqttOta, Error, "soc ota manifest size invalid");
         return false;
     }
 
@@ -533,7 +533,7 @@ bool MqttService::parse_soc_ota_manifest(const std::filesystem::path& extract_di
 
     out.present = true;
     if(!json_extract_string(text, "type", out.type)) {
-        UPC_LOG_MQTT_SERVICE(Error, "soc ota manifest missing type");
+        UPC_LOG_MQTT_SERVICE_TO(MqttOta, Error, "soc ota manifest missing type");
         return false;
     }
     (void)json_extract_string(text, "version", out.version);
@@ -597,7 +597,7 @@ void MqttService::on_soc_ota_apply(const middleware::Message& msg)
 {
     middleware::SocOtaApplyReqPayload req{};
     if(!read_inline_pod(msg.payload, req)) {
-        UPC_LOG_MQTT_SERVICE(Warn, "invalid UI_Soc_Ota_Apply_Req payload");
+        UPC_LOG_MQTT_SERVICE_TO(MqttOta, Warn, "invalid UI_Soc_Ota_Apply_Req payload");
         return;
     }
     const auto action = static_cast<middleware::SocOtaApplyAction>(req.action);
@@ -606,7 +606,7 @@ void MqttService::on_soc_ota_apply(const middleware::Message& msg)
     std::error_code ec;
     if(!soc_ota_pending_load(pending) ||
        !std::filesystem::exists(pending.payload_path, ec)) {
-        UPC_LOG_MQTT_SERVICE(Warn, "soc ota apply without pending firmware");
+        UPC_LOG_MQTT_SERVICE_TO(MqttOta, Warn, "soc ota apply without pending firmware");
         soc_ota_pending_clear();
         publish_soc_ota_apply_rsp(action, middleware::SocOtaApplyResult::NoPending,
                                   "no pending firmware");
@@ -622,7 +622,7 @@ void MqttService::on_soc_ota_apply(const middleware::Message& msg)
             std::filesystem::remove(pending.payload_path, ec);
         }
         soc_ota_pending_clear();
-        UPC_LOG_MQTT_SERVICE(Info, "soc ota discarded by user task_id=%s",
+        UPC_LOG_MQTT_SERVICE_TO(MqttOta, Info, "soc ota discarded by user task_id=%s",
                              pending.task_id.c_str());
         publish_soc_ota_apply_rsp(action, middleware::SocOtaApplyResult::Ok, "");
         return;
@@ -633,9 +633,9 @@ void MqttService::on_soc_ota_apply(const middleware::Message& msg)
          * 免得 C++ 和 shell 两边各写一套解析、日后改出分歧。 */
         const std::string switch_cmd = std::string(kAppBootstrap) + " slot-switch " +
             sh_single_quote(pending.target_slot) + " " + sh_single_quote(pending.version);
-        UPC_LOG_MQTT_SERVICE(Info, "soc app ota apply: %s", switch_cmd.c_str());
+        UPC_LOG_MQTT_SERVICE_TO(MqttOta, Info, "soc app ota apply: %s", switch_cmd.c_str());
         if(!run_shell_ok(switch_cmd)) {
-            UPC_LOG_MQTT_SERVICE(Error, "soc app ota slot switch failed, slot unchanged");
+            UPC_LOG_MQTT_SERVICE_TO(MqttOta, Error, "soc app ota slot switch failed, slot unchanged");
             publish_soc_ota_apply_rsp(action,
                                       middleware::SocOtaApplyResult::SlotSwitchFailed,
                                       "slot switch failed");
@@ -643,7 +643,7 @@ void MqttService::on_soc_ota_apply(const middleware::Message& msg)
         }
         /* pending 保留：新槽起来后靠比对版本决定是清理还是重新提示，回滚时
          * 则由启动脚本置的 rollback 标记来丢弃。 */
-        UPC_LOG_MQTT_SERVICE(Info, "soc app ota switched to %s, rebooting",
+        UPC_LOG_MQTT_SERVICE_TO(MqttOta, Info, "soc app ota switched to %s, rebooting",
                              pending.target_slot.c_str());
         publish_soc_ota_apply_rsp(action, middleware::SocOtaApplyResult::Ok, "");
         ::sync();
@@ -653,9 +653,9 @@ void MqttService::on_soc_ota_apply(const middleware::Message& msg)
 
     const std::string misc_cmd = std::string(kSocOtaUpdateEngine) +
         " --image_url=" + sh_single_quote(pending.payload_path) + " --misc=update";
-    UPC_LOG_MQTT_SERVICE(Info, "soc ota apply: %s", misc_cmd.c_str());
+    UPC_LOG_MQTT_SERVICE_TO(MqttOta, Info, "soc ota apply: %s", misc_cmd.c_str());
     if(!run_shell_ok(misc_cmd)) {
-        UPC_LOG_MQTT_SERVICE(Error, "soc ota updateEngine failed, misc not written");
+        UPC_LOG_MQTT_SERVICE_TO(MqttOta, Error, "soc ota updateEngine failed, misc not written");
         publish_soc_ota_apply_rsp(action, middleware::SocOtaApplyResult::ApplyFailed,
                                   "updateEngine failed");
         return;
@@ -663,7 +663,7 @@ void MqttService::on_soc_ota_apply(const middleware::Message& msg)
 
     /* misc 已写入，重启后 recovery 会接管刷写。pending 保留：新系统起来后
      * 靠比对版本决定是清理（升级成功）还是重新提示（没刷上）。 */
-    UPC_LOG_MQTT_SERVICE(Info, "soc ota misc written, rebooting into recovery");
+    UPC_LOG_MQTT_SERVICE_TO(MqttOta, Info, "soc ota misc written, rebooting into recovery");
     publish_soc_ota_apply_rsp(action, middleware::SocOtaApplyResult::Ok, "");
     ::sync();
     (void)run_shell_ok("reboot");
@@ -697,7 +697,7 @@ void MqttService::notify_soc_ota_ready_after_connect()
      * 否则又弹一次"是否重启升级"，用户点了还会被回滚，陷入提示死循环。 */
     std::string rollback;
     if(app_slot_state_get("rollback", rollback) && rollback == "1") {
-        UPC_LOG_MQTT_SERVICE(Warn,
+        UPC_LOG_MQTT_SERVICE_TO(MqttOta, Warn,
             "app slot rolled back, dropping pending soc ota task_id=%s version=%s",
             pending.task_id.c_str(), pending.version.c_str());
         if(pending.kind == middleware::SocOtaKind::App) {
@@ -708,13 +708,13 @@ void MqttService::notify_soc_ota_ready_after_connect()
     }
 
     if(!std::filesystem::exists(pending.payload_path, ec)) {
-        UPC_LOG_MQTT_SERVICE(Warn, "soc ota pending firmware missing, drop state");
+        UPC_LOG_MQTT_SERVICE_TO(MqttOta, Warn, "soc ota pending firmware missing, drop state");
         soc_ota_pending_clear();
         return;
     }
 
     if(same_firmware_version(pending.version, UPC_SW_VERSION)) {
-        UPC_LOG_MQTT_SERVICE(Info,
+        UPC_LOG_MQTT_SERVICE_TO(MqttOta, Info,
             "soc ota already applied (version=%s), cleaning up", UPC_SW_VERSION);
         /* 应用层的 payload 就是当前正在运行的槽，只清状态；全包才删那个
          * 几百 MB 的 .img。 */
@@ -725,7 +725,7 @@ void MqttService::notify_soc_ota_ready_after_connect()
         return;
     }
 
-    UPC_LOG_MQTT_SERVICE(Info,
+    UPC_LOG_MQTT_SERVICE_TO(MqttOta, Info,
         "soc ota pending firmware version=%s (running %s), re-notify UI",
         pending.version.c_str(), UPC_SW_VERSION);
     publish_soc_ota_ready(pending);
@@ -802,7 +802,7 @@ bool MqttService::soc_ota_pending_load(SocOtaPending& out) const
     }
     /* 应用层没记下目标槽就无从切槽，视为状态损坏 */
     if(out.kind == middleware::SocOtaKind::App && out.target_slot.empty()) {
-        UPC_LOG_MQTT_SERVICE(Warn, "soc ota pending state lacks target slot");
+        UPC_LOG_MQTT_SERVICE_TO(MqttOta, Warn, "soc ota pending state lacks target slot");
         return false;
     }
     return !out.payload_path.empty();
@@ -815,7 +815,7 @@ bool MqttService::soc_ota_pending_save(const SocOtaPending& pending) const
        pending.version.find_first_of("\r\n") != std::string::npos ||
        pending.task_id.find_first_of("\r\n") != std::string::npos ||
        pending.target_slot.find_first_of("\r\n") != std::string::npos) {
-        UPC_LOG_MQTT_SERVICE(Warn, "refuse to save invalid soc ota pending state");
+        UPC_LOG_MQTT_SERVICE_TO(MqttOta, Warn, "refuse to save invalid soc ota pending state");
         return false;
     }
 
@@ -866,7 +866,7 @@ bool MqttService::soc_ota_pending_save(const SocOtaPending& pending) const
 void MqttService::soc_ota_pending_clear() const
 {
     if(::unlink(kSocOtaPendingFile) != 0 && errno != ENOENT) {
-        UPC_LOG_MQTT_SERVICE(Warn, "cannot clear soc ota pending state errno=%d", errno);
+        UPC_LOG_MQTT_SERVICE_TO(MqttOta, Warn, "cannot clear soc ota pending state errno=%d", errno);
     }
 }
 

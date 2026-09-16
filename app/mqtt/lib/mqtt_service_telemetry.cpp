@@ -13,10 +13,10 @@ void MqttService::on_env_update(const middleware::Message& msg)
 {
     middleware::EnvSnapshotPayload p{};
     if(!read_env_payload(msg, p)) {
-        UPC_LOG_MQTT_SERVICE(Warn, "invalid APP_Update_Ntf payload");
+        UPC_LOG_MQTT_SERVICE_TO(MqttTelemetry, Warn, "invalid APP_Update_Ntf payload");
         return;
     }
-    UPC_LOG_MQTT_SERVICE(Debug,
+    UPC_LOG_MQTT_SERVICE_TO(MqttTelemetry, Debug,
         "IPC RX APP_Update_Ntf status=%u pm25=%.3f o2=%.3f%% temp=%.3fC "
         "humidity=%.3f%% pressure=%.3fkPa",
         static_cast<unsigned>(p.status),
@@ -97,10 +97,10 @@ void MqttService::on_print_state(const middleware::Message& msg)
 {
     middleware::PrintStateNtfPayload p{};
     if(!read_inline_pod(msg.payload, p)) {
-        UPC_LOG_MQTT_SERVICE(Warn, "invalid GLAVO_Print_State_Ntf payload");
+        UPC_LOG_MQTT_SERVICE_TO(MqttState, Warn, "invalid GLAVO_Print_State_Ntf payload");
         return;
     }
-    UPC_LOG_MQTT_SERVICE(Debug, "IPC RX GLAVO_Print_State_Ntf mode=%u since=%llu",
+    UPC_LOG_MQTT_SERVICE_TO(MqttState, Debug, "IPC RX GLAVO_Print_State_Ntf mode=%u since=%llu",
         static_cast<unsigned>(p.mode),
         static_cast<unsigned long long>(p.since_ms));
     (void)publish_state(p.mode, p.since_ms);
@@ -300,13 +300,13 @@ bool MqttService::publish_chamber_telemetry()
     MQTTClient_deliveryToken token;
     const int rc = MQTTClient_publishMessage(client_, topic.c_str(), &msg, &token);
     if(rc != MQTTCLIENT_SUCCESS) {
-        UPC_LOG_MQTT_SERVICE(Warn, "publish telemetry fail rc=%d topic=%s",
+        UPC_LOG_MQTT_SERVICE_TO(MqttTelemetry, Warn, "publish telemetry fail rc=%d topic=%s",
             rc, topic.c_str());
         mqtt_connected_ = false;
         cmd_subscribed_ = false;
         return false;
     }
-    UPC_LOG_MQTT_SERVICE(Debug,
+    UPC_LOG_MQTT_SERVICE_TO(MqttTelemetry, Debug,
         "MQTT TX telemetry queued topic=%s token=%d",
         topic.c_str(), static_cast<int>(token));
     return true;
@@ -384,13 +384,13 @@ bool MqttService::publish_state(uint32_t mode, uint64_t since_ms)
     MQTTClient_deliveryToken token;
     const int rc = MQTTClient_publishMessage(client_, topic.c_str(), &msg, &token);
     if(rc != MQTTCLIENT_SUCCESS) {
-        UPC_LOG_MQTT_SERVICE(Warn, "publish state fail rc=%d topic=%s",
+        UPC_LOG_MQTT_SERVICE_TO(MqttState, Warn, "publish state fail rc=%d topic=%s",
                              rc, topic.c_str());
         mqtt_connected_ = false;
         cmd_subscribed_ = false;
         return false;
     }
-    UPC_LOG_MQTT_SERVICE(Debug,
+    UPC_LOG_MQTT_SERVICE_TO(MqttState, Debug,
         "MQTT TX state queued topic=%s token=%d",
         topic.c_str(), static_cast<int>(token));
     return true;
@@ -487,7 +487,7 @@ bool MqttService::publish_heartbeat()
     MQTTClient_deliveryToken token;
     const int rc = MQTTClient_publishMessage(client_, topic.c_str(), &msg, &token);
     if(rc != MQTTCLIENT_SUCCESS) {
-        UPC_LOG_MQTT_SERVICE(Warn, "publish heartbeat fail rc=%d topic=%s",
+        UPC_LOG_MQTT_SERVICE_TO(MqttTelemetry, Warn, "publish heartbeat fail rc=%d topic=%s",
                              rc, topic.c_str());
         mqtt_connected_ = false;
         cmd_subscribed_ = false;
@@ -495,7 +495,7 @@ bool MqttService::publish_heartbeat()
     }
 
     last_heartbeat_pub_ms_ = now;
-    UPC_LOG_MQTT_SERVICE(Debug,
+    UPC_LOG_MQTT_SERVICE_TO(MqttTelemetry, Debug,
         "MQTT TX heartbeat queued topic=%s token=%d",
         topic.c_str(), static_cast<int>(token));
     return true;

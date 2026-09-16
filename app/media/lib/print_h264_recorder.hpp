@@ -111,8 +111,10 @@ private:
     bool start_muxer_locked();
     /** 关闭封装进程并等待退出。调用前必须持有 mtx_。 */
     bool stop_muxer_locked();
-    /** 处理 WriteFrame 任务：编码一帧并写入 MP4 封装器。 */
-    void run_write_frame_job(const Job& job);
+    /** 队列满丢帧的周期汇总日志；调用前必须持有 mtx_。 */
+    void maybe_log_queue_full_locked();
+    /** 处理 WriteFrame 任务：编码一帧并写入 MP4 封装器（成功后接管 job.nv12）。 */
+    void run_write_frame_job(Job& job);
     /** 处理 Finalize 任务：关闭编码器、落盘、日志并触发回调。 */
     void run_finalize_job(Job job);
     /** 处理 Cleanup 任务：删除临时目录下指定文件。 */
@@ -143,6 +145,7 @@ private:
     uint32_t bitrate_bps_ = CAMERA_PRINT_H264_BITRATE; /**< 目标码率。 */
     uint32_t frame_count_ = 0;          /**< 本次会话成功编码的帧数。 */
     uint32_t dropped_frames_ = 0;       /**< 本次会话因队列满丢弃的帧数。 */
+    uint64_t drop_log_last_ms_ = 0;     /**< 上次丢帧汇总日志时刻；0=本会话尚未打过。 */
     std::vector<uint8_t> last_nv12_;    /**< 最后一帧成功编码的 NV12 数据，用于缩略图。 */
 
     std::string session_id_;            /**< 当前会话 ID。 */

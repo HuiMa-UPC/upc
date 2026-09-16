@@ -452,8 +452,12 @@ void set_pause_ui(bool paused)
 }
 
 /** 暂停/恢复：乐观切换图标并发请求；后端回执经 register_print_pause_done 校正。
- *  不弹 toast——徽标行已经在 PRINTING... ↔ PAUSE 之间切，状态栏也同步，再飘一条
- *  提示只是噪音。 */
+ *  成功路径不弹 toast——徽标行已经在 PRINTING... ↔ PAUSE 之间切，状态栏也同步，
+ *  再飘一条提示只是噪音。
+ *
+ *  但请求**没发出去**时必须回滚并明说：Pause/Resume 不在 IPC 可靠白名单里（过期
+ *  的暂停补发比丢弃更危险），发失败就是真的没人收。若仍停在 PAUSE 图标，用户会
+ *  以为已经暂停而振镜还在扫，这是最坏的一种误导。 */
 void on_pause_click(lv_event_t *)
 {
     if(g_print_phase == PRINT_PHASE_OPTICAL_CHECK) {
@@ -461,10 +465,14 @@ void on_pause_click(lv_event_t *)
     }
     const bool want_pause = !g_print_paused;
     set_pause_ui(want_pause);
-    if(want_pause) {
-        ui::UiMsgProxy::instance().send_print_pause();
-    } else {
-        ui::UiMsgProxy::instance().send_print_resume();
+    const bool sent = want_pause
+        ? ui::UiMsgProxy::instance().send_print_pause()
+        : ui::UiMsgProxy::instance().send_print_resume();
+    if(!sent) {
+        set_pause_ui(!want_pause);
+        ui_toast_show(want_pause ? "Pause failed, please retry"
+                                 : "Resume failed, please retry",
+                      ui_color_danger, 2000);
     }
 }
 
