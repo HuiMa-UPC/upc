@@ -57,9 +57,15 @@
 /**
  * 总开关 UPC_DEBUG 由根 CMakeLists 注入（ON=1 / OFF=0）。
  * 子开关 UPC_MOD_* 仅在此设默认值；关闭某模块：-DUPC_MOD_MCU_LINK=0
- * 逻辑：UPC_DEBUG=OFF 时所有日志宏为空；ON 时再看对应 UPC_MOD_* 是否为 1。
+ * 逻辑：UPC_DEBUG=OFF 时所有日志宏为空；ON 时再看对应 UPC_MOD_* 是否为 1，
+ * 以及 UPC_LOG_MIN_LEVEL（低于该级别不落盘）。
  *
  * 注意：UPC_LOG_* 为打印宏，UPC_MOD_* 为模块子开关，勿混用同名。
+ *
+ * 级别数值与 upc::Level 一致：0=Error 1=Warn 2=Info 3=Debug 4=Trace。
+ * 比较规则：level > UPC_LOG_MIN_LEVEL 的行丢弃；Error 与 BOOT 不受此限，
+ * 也不受 UPC_LOG_PROC_* 进程总开关影响。
+ * 板上临时加严/放宽：环境变量 UPC_LOG_MIN_LEVEL=0..4 或 error/warn/info/debug/trace。
  */
 
 #ifndef UPC_DEBUG
@@ -148,6 +154,21 @@
 #ifndef UPC_MEDIA_LOG_STREAM_STAT
 #define UPC_MEDIA_LOG_STREAM_STAT 0
 #endif
+/**
+ * 总线/IPC 逐条摘要（PUBLISH/ENQUEUE/DELIVER/IPC_TX/IPC_RX）。
+ * 默认关：每条消息一次写盘会打满 topic_ipc_message / topic_msgbus_local。
+ * 排查投递问题时：-DUPC_LOG_MSG_TRACE=1（须重编；默认不编译逐条摘要）。
+ */
+#ifndef UPC_LOG_MSG_TRACE
+#define UPC_LOG_MSG_TRACE 0
+#endif
+/**
+ * 最低落盘级别（含本级）。默认 Info：Debug/Trace 编译进二进制但不写盘，
+ * 需要时用环境变量 UPC_LOG_MIN_LEVEL=debug 打开，无需重编。
+ */
+#ifndef UPC_LOG_MIN_LEVEL
+#define UPC_LOG_MIN_LEVEL 2
+#endif
 
 #else /* !UPC_DEBUG */
 
@@ -175,6 +196,10 @@
 #define UPC_GLAVO_LOG_TCP_TX_DEFAULT 0
 #define UPC_GLAVO_LOG_LASER_POWER_DEFAULT 0
 #define UPC_MEDIA_LOG_STREAM_STAT 0
+#define UPC_LOG_MSG_TRACE 0
+#ifndef UPC_LOG_MIN_LEVEL
+#define UPC_LOG_MIN_LEVEL 0
+#endif
 
 #endif /* UPC_DEBUG */
 
@@ -186,6 +211,7 @@
  * - UPC_LOG_PROC_DEFAULT：未单独指定进程时的默认开关
  * - UPC_LOG_PROC_<PROC>：按进程名细分，1=开，0=关
  * - 进程名与 ProcessConfig::name 对齐（如 rongsu_glavo -> RONGSU_GLAVO）
+ * - 关进程日志时 Error 与 BOOT 仍落盘；其它级别再看 UPC_LOG_MIN_LEVEL
  */
 #ifndef UPC_LOG_PROC_DEFAULT
 #define UPC_LOG_PROC_DEFAULT 1

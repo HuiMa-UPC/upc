@@ -421,7 +421,8 @@ RK3568 的 RGA2 没有 IOMMU，只能寻址**物理连续且 <4G** 的内存。�
 推迟到 `importbuffer_fd` 那一步才发现问题，且日志里看不出内存来自哪个堆。
 
 失败日志由**调用方**打印，`dma_heap_buffer.cpp` 内部刻意不打——它属于 IPC 专题，
-而 `UPC_MOD_IPC` 默认为 0，写在那里的 `UPC_LOG_IPC` 会被整条编译掉。
+而逐条 `IPC_TX`/`IPC_RX` 摘要受 `UPC_LOG_MSG_TRACE` 控制（默认 0）；连接类 `UPC_LOG_IPC`
+在 `UPC_DEBUG=ON` 时默认开启。
 
 实测背景：CMA 碎片化时 `reserved` 堆连 616 KB 连续内存都给不出（内核报
 `cma_alloc: reserved: alloc failed, req-size: 154 pages`），旧代码于是滑到 `system`
@@ -672,8 +673,8 @@ ParserManager → RingBuffer → McuLink（TCP + 串口）
 
 | 文件 | 职责 |
 |------|------|
-| `rs_log.hpp` / `rs_log.cpp` | `UPC_LOG_*` 宏、`proc=` 进程名 |
-| `upc_contract.hpp` §2 | 模块子开关 `UPC_MOD_*` |
+| `rs_log.hpp` / `rs_log.cpp` | `UPC_LOG_*` 宏、`LogTopic` 落盘、`proc=` 进程名 |
+| `upc_contract.hpp` §2 | 模块子开关 `UPC_MOD_*`、`UPC_LOG_MIN_LEVEL`、`UPC_LOG_MSG_TRACE` |
 | `rs_msg_format.cpp` | IPC 消息摘要格式化 |
 | `upc_sys_monitor.*` | HostMonitor（CPU/内存/温度） |
 
@@ -687,18 +688,28 @@ ParserManager → RingBuffer → McuLink（TCP + 串口）
 | `UPC_MOD_CAMERA_PREVIEW` | CameraPreview | rongsu_ui |
 | `UPC_MOD_ALARM_STATE` | AlarmState | rongsu_ui |
 | `UPC_MOD_MSG_BUS` / `UPC_MOD_IPC` | MSGBUS / IPC | 全部 |
+| `UPC_LOG_MIN_LEVEL`（默认 2=Info） | 低于该级别不落盘；Error / BOOT 例外 | 全部 |
+| `UPC_LOG_MSG_TRACE`（默认 0） | 总线/IPC 逐条摘要 | 全部 |
+
+`UPC_LOG_PROC_*=0` 关掉进程日志时，**Error 与 BOOT 仍写盘**。板上临时放宽级别：
+
+```bash
+export UPC_LOG_MIN_LEVEL=debug   # 0..4 或 error/warn/info/debug/trace
+```
 
 编译降噪示例：
 
 ```bash
 cmake -B build -DUPC_DEBUG=ON \
   -DCMAKE_CXX_FLAGS="-DUPC_MOD_MCU_LINK=0 -DUPC_MOD_CAMERA_PREVIEW=0"
+# 或 -DUPC_LOG_MIN_LEVEL=0 只留 Error
 ```
 
 ## 专题日志字典（`/var/log/topic/*.log`）
 
-所有 `UPC_LOG_*` 最终进 `rs_log.cpp` 的 `select_topic_file(module, msg)`，按 **module 标签 +
-消息关键词** 落到唯一一个专题文件。文件名统一为：
+所有 `UPC_LOG_*` 最终进 `rs_log.cpp`，按调用处显式的 `upc::LogTopic`（默认绑在各
+`UPC_LOG_*` 宏上；MQTT / McuLink / Media / MsgBus 用 `UPC_LOG_*_TO(Topic, ...)` 选子类）
+落到唯一一个专题文件。**禁止再靠正文 `strstr` 分流。** 文件名统一为：
 
 ```
 topic_<大类>_<子类>.log        # 兜底文件例外：topic_misc.log
@@ -706,7 +717,7 @@ topic_<大类>_<子类>.log        # 兜底文件例外：topic_misc.log
 
 - **大类**（第一段名词）= 功能域，是**归类/打包上传的粒度**，脚本按 `topic_<大类>_*.log` glob 即可。
 - **子类**（后续名词）= 该域内的细分视角，是**排查定位的粒度**。
-- 一条日志只会落到一个文件，**不重复写**；`select_topic_file()` 内分支**自上而下短路**，越靠前的判据优先级越高。
+- 一条日志只会落到一个文件，**不重复写**；专题由 `LogTopic` 决定，与正文文案无关。
 
 ### 大类速查（17 类 / 27 文件）
 
@@ -732,35 +743,35 @@ topic_<大类>_<子类>.log        # 兜底文件例外：topic_misc.log
 
 ### 子类明细
 
-| 文件 | 来源 module | 路由判据（`select_topic_file` 顺序敏感） | 内容 |
-|------|-------------|------------------------------------------|------|
-| `topic_boot_lifecycle.log` | `BOOT` | module 精确匹配 | `PROCESS_BOOT`（pid / boot_id / uptime / prev_clean），同时是 `start` 模式 stdout/stderr 重定向目标；判断掉电或进程被重新拉起 |
-| `topic_ipc_wire.log` | `IPC` | module 精确匹配 | socket 收发与线协议编解码：`IPC_TX` / `IPC_RX` / `IPC_FWD` |
-| `topic_ipc_message.log` | `MSGBUS` | msg 以 `IPC_` 开头 | 跨进程消息投递阶段：`IPC_ENQUEUE` / `IPC_DELIVER` / `IPC_DELIVER miss` |
-| `topic_msgbus_local.log` | `MSGBUS` / `MemPool` / `BufferPool` | `MSGBUS` 其余 msg；`MemPool`、`BufferPool` 全量 | 进程内订阅分发、固定块池与 BufferPool 分配 |
-| `topic_system_resource.log` | `HostMonitor` | module 精确匹配 | `cpu_sys` / `cpu_proc` / `temp` / `mem_avail` / `rss` 周期采样 |
-| `topic_misc.log` | 兜底 | module 为空或未登记 | **新增 module 未加分支时会掉进这里**，出现即说明字典漏配 |
-| `topic_mqtt_wire.log` | `MqttService` | `MQTT RX/TX frame`、`payload topic=`（**必须最先判**） | 云端原始帧与 payload 正文。业务 JSON 里可能含 `ota`、`state` 等字面量，若排在内容判据之后会被误分流 |
-| `topic_mqtt_state.log` | `MqttService` | `state queued` / `publish state fail` / `Print_State_Ntf` | 打印状态边沿上报（开始打印 / 打印结束） |
-| `topic_mqtt_telemetry.log` | `MqttService` | `telemetry` / `heartbeat` / `APP_Update_Ntf` | 遥测与心跳上报 |
-| `topic_mqtt_ota.log` | `MqttService` | `ota` / `OTA` / `Ota_` | 云端 OTA 通知、下载与校验进度 |
-| `topic_mqtt_command.log` | `MqttService` | 以上都不命中 | 云端下行命令与 `cmd/ack`、订阅与激活 |
-| `topic_xfr_upload.log` | `XfrService` | module 精确匹配 | WiFi 发现、PIN 配对、HTTP 文件上传（仅收 `.json` / `.svg`） |
-| `topic_serial_sensor.log` | `McuLink` | msg 以 `sensor:` / `env_sim:` 开头 | 环境量周期上报（O2 / 温湿度 / PM / 压力 / 粉量位 / 门状态），含调试页模拟数据 |
-| `topic_serial_alarm.log` | `McuLink` | `alarm_` / `RX ALARM` / `EVENT ` | MCU 报警与事件单条上报、快照、复位回执 |
-| `topic_serial_layer.log` | `McuLink` | `serial TX cmd:` / `RX LAYER` / `notify_serial_event` | 换层握手：串口层指令下发与层事件回报 |
-| `topic_tcp_motion_tx.log` | `McuLink` | `TCP_TX frame` / `tcp emergency` | 振镜运动数据包与紧急指令（急停 / 暂停 / 红光） |
-| `topic_tcp_heartbeat.log` | `McuLink` | `tcp hb rsp` / `cmd_rate=` / `data_rate=` | TCP 心跳应答与下发速率统计 |
-| `topic_laser_power.log` | `McuLink` | msg 以 `laser_power_set raw=` 开头 | 激光功率包实际下发值（仅变化时打印），与上报功率做闭环比对 |
-| `topic_print_flow.log` | `McuLink` 兜底 + `GlavoService` / `CalParser` / `ParserContext` / `GcodeWorker` / `OvfWorker` / `ServiceBase` | `McuLink` 未命中上述关键词；解析类 module 全量 | 打印主流程：起印/暂停/恢复/终止、G-code 与 OVF 解析、标定参数 |
-| `topic_visual_firstlayer.log` | `VisualService` | module 精确匹配 | 首层视觉：裸板参考采集、检测请求与判定结果 |
-| `topic_device_ota.log` | `McuOta` | module 精确匹配 | 下位机固件升级（振镜以太网 OTA / MCU 串口 OTA） |
-| `topic_camera_capture.log` | `CameraService` | module 精确匹配 | 采集侧：V4L2 取流、dma fd 分发、SHM 环 `committed` / `slot_fail` 统计 |
-| `topic_media_record.log` | `MediaService` | 兜底（非存储、非直播） | 拍照、打印/清粉延时抽帧、H264 录制、MP4 合成与 manifest |
-| `topic_media_rtsp.log` | `MediaService` | `live_rtsp` / `local_rtsp` / `h264_enc` | 直播三件套：云端 RTSP 推流、局域网 live555 Server、共用 H264 编码器 |
-| `topic_storage_usage.log` | `MediaService` | `storage` / `STORRCLM` | `/userdata/media` 容量统计与空间回收 |
-| `topic_ui_preview.log` | `CameraPreview` | module 精确匹配 | UI 侧预览解码：`decode 5s` 统计、RGA 与软件转换回退 |
-| `topic_ui_alarm_state.log` | `AlarmState` | module 精确匹配 | UI 报警状态机：state_mask 推导生命周期、喂消息中心、快照攒帧对齐 |
+| 文件 | 来源 module | `LogTopic` | 内容 |
+|------|-------------|------------|------|
+| `topic_boot_lifecycle.log` | `BOOT` | `Boot` | `PROCESS_BOOT`（pid / boot_id / uptime / prev_clean），同时是 `start` 模式 stdout/stderr 重定向目标；判断掉电或进程被重新拉起 |
+| `topic_ipc_wire.log` | `IPC` | `IpcWire` | socket 收发与线协议编解码：连接、路由失败、fd 透传 |
+| `topic_ipc_message.log` | `MSGBUS` | `IpcMessage` | 跨进程消息投递阶段（`UPC_LOG_MSG_TRACE=1` 时的 `IPC_TX`/`IPC_RX`/`IPC_DELIVER`） |
+| `topic_msgbus_local.log` | `MSGBUS` / `MemPool` / `BufferPool` | `MsgbusLocal` | 进程内订阅分发、固定块池与 BufferPool 分配 |
+| `topic_system_resource.log` | `HostMonitor` | `SystemResource` | `cpu_sys` / `cpu_proc` / `temp` / `mem_avail` / `rss` 周期采样 |
+| `topic_misc.log` | 兜底 | `Misc` | **新增 `LogTopic` 未加文件名映射时会掉进这里** |
+| `topic_mqtt_wire.log` | `MqttService` | `MqttWire` | 云端原始帧与 payload 正文（`debug_log_mqtt_frame`） |
+| `topic_mqtt_state.log` | `MqttService` | `MqttState` | 打印状态边沿上报（开始打印 / 打印结束） |
+| `topic_mqtt_telemetry.log` | `MqttService` | `MqttTelemetry` | 遥测与心跳上报 |
+| `topic_mqtt_ota.log` | `MqttService` | `MqttOta` | 云端 OTA 通知、下载与校验进度 |
+| `topic_mqtt_command.log` | `MqttService` | `MqttCommand`（`UPC_LOG_MQTT_SERVICE` 默认） | 云端下行命令与 `cmd/ack`、订阅与激活 |
+| `topic_xfr_upload.log` | `XfrService` | `XfrUpload` | WiFi 发现、PIN 配对、HTTP 文件上传（仅收 `.json` / `.svg`） |
+| `topic_serial_sensor.log` | `McuLink` | `SerialSensor` | 环境量周期上报（O2 / 温湿度 / PM / 压力 / 粉量位 / 门状态），含调试页模拟数据 |
+| `topic_serial_alarm.log` | `McuLink` | `SerialAlarm` | MCU 报警与事件单条上报、快照、复位回执 |
+| `topic_serial_layer.log` | `McuLink` | `SerialLayer` | 换层握手：串口层指令下发与层事件回报 |
+| `topic_tcp_motion_tx.log` | `McuLink` | `TcpMotionTx` | 振镜运动数据包与紧急指令（急停 / 暂停 / 红光） |
+| `topic_tcp_heartbeat.log` | `McuLink` | `TcpHeartbeat` | TCP 心跳应答与下发速率统计 |
+| `topic_laser_power.log` | `McuLink` | `LaserPower` | 激光功率包实际下发值（仅变化时打印），与上报功率做闭环比对 |
+| `topic_print_flow.log` | `McuLink` 默认 + `GlavoService` / 解析类 / `ServiceBase` | `PrintFlow` | 打印主流程：起印/暂停/恢复/终止、G-code 与 OVF 解析、标定参数 |
+| `topic_visual_firstlayer.log` | `VisualService` | `VisualFirstlayer` | 首层视觉：裸板参考采集、检测请求与判定结果 |
+| `topic_device_ota.log` | `McuOta` | `DeviceOta` | 下位机固件升级（振镜以太网 OTA / MCU 串口 OTA） |
+| `topic_camera_capture.log` | `CameraService` | `CameraCapture` | 采集侧：V4L2 取流、dma fd 分发、SHM 环 `committed` / `slot_fail` 统计 |
+| `topic_media_record.log` | `MediaService` | `MediaRecord`（`UPC_LOG_MEDIA_SERVICE` 默认） | 拍照、打印/清粉延时抽帧、H264 录制、MP4 合成与 manifest |
+| `topic_media_rtsp.log` | `MediaService` | `MediaRtsp` | 直播三件套：云端 RTSP 推流、局域网 live555 Server、共用 H264 编码器 |
+| `topic_storage_usage.log` | `MediaService` | `StorageUsage` | `/userdata/media` 容量统计与空间回收 |
+| `topic_ui_preview.log` | `CameraPreview` | `UiPreview` | UI 侧预览解码：`decode 5s` 统计、RGA 与软件转换回退 |
+| `topic_ui_alarm_state.log` | `AlarmState` | `UiAlarmState` | UI 报警状态机：state_mask 推导生命周期、喂消息中心、快照攒帧对齐 |
 
 ### 落盘与轮转
 
@@ -781,9 +792,11 @@ logrotate 配置。rootfs 无 cron，由 `/etc/init.d/S02logrotate` 每 600s 调
 
 两点约束值得记住：
 
-- 普通专题能用 rename，是因为 `rs_log` 每条日志各自 `fopen`/`fclose`，不持有长期 fd，下一条写入会重建文件。
+- 普通专题仍用 rename：`rs_log` 按专题缓存 `FILE*`，每次写入前 `stat` 路径 inode，
+  与已打开 fd 不一致（被 rename 走了）则关闭重开，下一条写入会重建文件。
 - `topic_boot_lifecycle.log` 是例外：各进程 `redirect_stdio_to_boot_log()` 用 `dup2` 把它挂到
   STDOUT/STDERR 且不处理 SIGHUP，rename 后会继续写旧 inode，所以只能原地截断。
+  `PROCESS_BOOT` 走 `rs_log` 的缓存 fd，copytruncate 后 inode 不变，缓存仍然有效。
 
 #### 板端自检
 
@@ -810,18 +823,19 @@ ls -l /var/log/topic/                     # 6. 应出现 *.log.1
 `topic_boot_lifecycle.log` 走 copytruncate，inode 不变而 size 归零——若它 inode 也变了，说明误用了
 rename，各进程的 STDOUT/STDERR 已经写向游离的旧 inode，日志会静默丢失。
 
-### 新增大类 / 子类（固定五步）
+### 新增大类 / 子类（固定六步）
 
-1. **`common/debug/rs_log.cpp`** — `select_topic_file()` 加分支；注意分支顺序，**原始帧/透传正文类判据必须排在内容关键词之前**（参照 `MqttService` 的注释）。
-2. **本表** — 大类速查 + 子类明细各补一行；只加子类时同步大类的“子类数”。
-3. **[scripts/topic](../scripts/topic)** — **仅新增大类时**：在多路径 stanza 的列表里加一行 `/var/log/topic/topic_<大类>_*.log`（保持字母序），不要新开 stanza，参数与同组一致。新增子类不用动，已被大类 glob 覆盖。改完记得同步到板端 `/etc/logrotate.d/topic`。
-4. **`tools/analyze_topic_logs.py`** — 文件头 Usage 注释列出新文件名；需要出指标/图表时再加正则与 CSV。
-5. **打包上传** — 按 `topic_<大类>_*.log` glob，不要逐文件枚举，新增子类才能自动被带上。
+1. **`common/debug/rs_log.hpp`** — `LogTopic` 加枚举值；需要新宏或 `UPC_LOG_*_TO` 调用点。
+2. **`common/debug/rs_log.cpp`** — `topic_file_name()` 映射到 `topic_*.log`（禁止用正文关键词分流）。
+3. **本表** — 大类速查 + 子类明细各补一行；只加子类时同步大类的“子类数”。
+4. **[scripts/topic](../scripts/topic)** — **仅新增大类时**：在多路径 stanza 的列表里加一行 `/var/log/topic/topic_<大类>_*.log`（保持字母序），不要新开 stanza，参数与同组一致。新增子类不用动，已被大类 glob 覆盖。改完记得同步到板端 `/etc/logrotate.d/topic`。
+5. **`tools/analyze_topic_logs.py`** — 文件头 Usage 注释列出新文件名；需要出指标/图表时再加正则与 CSV。
+6. **打包上传** — 按 `topic_<大类>_*.log` glob，不要逐文件枚举，新增子类才能自动被带上。
 
-新增 module 标签（`rs_log.hpp` 里的 `UPC_LOG_XXX` 宏）后若忘了第 1 步，日志会静默落进
+新增 `LogTopic` / 宏后若忘了第 2 步，日志会静默落进
 `topic_misc.log`，可用 `grep -c module= /var/log/topic/topic_misc.log` 自检。
 
-忘了第 3 步同样**没有任何报错**（`missingok` 让 logrotate 静默跳过），该文件会一直涨到吃光
+忘了第 4 步同样**没有任何报错**（`missingok` 让 logrotate 静默跳过），该文件会一直涨到吃光
 `/var/log` 所在的 tmpfs。自检：`ls -lS /var/log/topic/*.log | head`，明显超过 4M 却没有配套
 `.log.1` 归档的就是漏配的。
 
@@ -832,5 +846,6 @@ rename，各进程的 STDOUT/STDERR 已经写向游离的旧 inode，日志会�
   `Handling 0 logs`），所有专题都不再轮转，且 timer 照常运行不报警。改完用
   `logrotate -d scripts/topic` 确认解析出 2 个 stanza。
 - 大类若无子类后缀（如 `topic_misc.log`），`topic_misc_*.log` 匹配不到它，glob 必须写全名。
-- 新专题若不走 `rs_log`、而是长期持有 fd 写入，就不能并进普通组，得照 `topic_boot_lifecycle.log`
+- 新专题若不走 `rs_log`、而是自己 `dup2` 长期持有 fd 写入，就不能并进普通组，得照 `topic_boot_lifecycle.log`
   单开 `copytruncate` stanza（同一文件被两个 stanza 命中时 logrotate 会直接报 duplicate 并跳过）。
+  `rs_log` 缓存的 `FILE*` 会在路径 inode 变化时重开，可以留在普通 rename 组。

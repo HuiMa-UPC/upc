@@ -92,7 +92,7 @@ middleware::RtspPushRspPayload LiveRtspPusher::start(
     if(!encoder_) {
         rsp.result = static_cast<uint8_t>(middleware::RtspPushResult::Error);
         std::snprintf(rsp.reason, sizeof(rsp.reason), "%s", kReasonEncoderError);
-        UPC_LOG_MEDIA_SERVICE(Error, "live_rtsp start fail: encoder not bound");
+        UPC_LOG_MEDIA_SERVICE_TO(MediaRtsp, Error, "live_rtsp start fail: encoder not bound");
         return rsp;
     }
 
@@ -110,7 +110,7 @@ middleware::RtspPushRspPayload LiveRtspPusher::start(
      * 便于对账云端策略与板端实际码率的差异。 */
     if(req.max_bitrate_kbps > 0 &&
        req.max_bitrate_kbps * 1000u != CAMERA_PRINT_H264_BITRATE) {
-        UPC_LOG_MEDIA_SERVICE(Info,
+        UPC_LOG_MEDIA_SERVICE_TO(MediaRtsp, Info,
             "live_rtsp cloud max_bitrate=%ukbps ignored — encoder fixed at %ubps",
             req.max_bitrate_kbps, CAMERA_PRINT_H264_BITRATE);
     }
@@ -133,7 +133,7 @@ middleware::RtspPushRspPayload LiveRtspPusher::start(
     rsp.result = static_cast<uint8_t>(middleware::RtspPushResult::Accepted);
     rsp.reason[0] = '\0';
     rsp.push_started_at = unix_ms();
-    UPC_LOG_MEDIA_SERVICE(Info, "live_rtsp started sink=%d url=%s",
+    UPC_LOG_MEDIA_SERVICE_TO(MediaRtsp, Info, "live_rtsp started sink=%d url=%s",
                           sink_id_, req.push_url);
     return rsp;
 }
@@ -162,7 +162,7 @@ middleware::RtspPushRspPayload LiveRtspPusher::stop(
 
     rsp.result = static_cast<uint8_t>(middleware::RtspPushResult::Accepted);
     rsp.reason[0] = '\0';
-    UPC_LOG_MEDIA_SERVICE(Info, "live_rtsp stopped req_id=%s", req.req_id);
+    UPC_LOG_MEDIA_SERVICE_TO(MediaRtsp, Info, "live_rtsp stopped req_id=%s", req.req_id);
     return rsp;
 }
 
@@ -223,7 +223,7 @@ bool LiveRtspPusher::enqueue_packet(const uint8_t* data, size_t len, bool keyfra
             return true;
         }
         drop_until_idr_ = false;
-        UPC_LOG_MEDIA_SERVICE(Info, "live_rtsp resumed at IDR dropped=%llu",
+        UPC_LOG_MEDIA_SERVICE_TO(MediaRtsp, Info, "live_rtsp resumed at IDR dropped=%llu",
                               static_cast<unsigned long long>(stat_dropped_pkts_));
     }
 
@@ -233,7 +233,7 @@ bool LiveRtspPusher::enqueue_packet(const uint8_t* data, size_t len, bool keyfra
         drop_until_idr_ = true;
         ++stat_drop_events_;
         ++stat_dropped_pkts_;
-        UPC_LOG_MEDIA_SERVICE(Warn,
+        UPC_LOG_MEDIA_SERVICE_TO(MediaRtsp, Warn,
             "live_rtsp send queue full (%u bytes) — dropping to next IDR events=%u",
             UPC_LIVE_PUSH_QUEUE_MAX_BYTES, stat_drop_events_);
         return true;
@@ -284,7 +284,7 @@ void LiveRtspPusher::writer_fn()
             std::lock_guard<std::mutex> lock(q_mtx_);
             send_q_.clear();
             q_bytes_ = 0;
-            UPC_LOG_MEDIA_SERVICE(Warn,
+            UPC_LOG_MEDIA_SERVICE_TO(MediaRtsp, Warn,
                 "live_rtsp writer pipe broken err=%s — session will stop",
                 std::strerror(errno));
             continue;
@@ -415,7 +415,7 @@ void LiveRtspPusher::maybe_log_stats_locked()
     const double secs = static_cast<double>(elapsed) / 1000000.0;
     const uint64_t d_out = stat_pkts_out_ - stat_last_out_;
     const uint64_t d_bytes = stat_bytes_out_ - stat_last_bytes_;
-    UPC_LOG_MEDIA_SERVICE(Info,
+    UPC_LOG_MEDIA_SERVICE_TO(MediaRtsp, Info,
         "live_rtsp stat in=%llu out=%llu(%.1f/s) kbps=%.0f "
         "queue=%zu/%zuB dropped=%llu drop_events=%u",
         static_cast<unsigned long long>(stat_pkts_in_),
@@ -443,7 +443,7 @@ void LiveRtspPusher::on_sink_dropped()
         if(!active_ && sink_id_ < 0) {
             return;
         }
-        UPC_LOG_MEDIA_SERVICE(Warn, "live_rtsp sink dropped — stopping session");
+        UPC_LOG_MEDIA_SERVICE_TO(MediaRtsp, Warn, "live_rtsp sink dropped — stopping session");
         active_ = false;
         sink_id_ = -1;
     }
@@ -470,14 +470,14 @@ bool LiveRtspPusher::start_ffmpeg_locked(const char* push_url)
 
     int pipefd[2] = {-1, -1};
     if(::pipe(pipefd) != 0) {
-        UPC_LOG_MEDIA_SERVICE(Error, "live_rtsp pipe fail err=%s",
+        UPC_LOG_MEDIA_SERVICE_TO(MediaRtsp, Error, "live_rtsp pipe fail err=%s",
                               std::strerror(errno));
         return false;
     }
 
     const pid_t pid = ::fork();
     if(pid < 0) {
-        UPC_LOG_MEDIA_SERVICE(Error, "live_rtsp fork fail err=%s",
+        UPC_LOG_MEDIA_SERVICE_TO(MediaRtsp, Error, "live_rtsp fork fail err=%s",
                               std::strerror(errno));
         ::close(pipefd[0]);
         ::close(pipefd[1]);
@@ -514,12 +514,12 @@ bool LiveRtspPusher::start_ffmpeg_locked(const char* push_url)
      * 长期卡死在 write 上（子进程侧 stdin 仍是阻塞的，不受影响）。 */
     const int flags = ::fcntl(pipefd[1], F_GETFL, 0);
     if(flags < 0 || ::fcntl(pipefd[1], F_SETFL, flags | O_NONBLOCK) < 0) {
-        UPC_LOG_MEDIA_SERVICE(Warn, "live_rtsp set O_NONBLOCK fail err=%s",
+        UPC_LOG_MEDIA_SERVICE_TO(MediaRtsp, Warn, "live_rtsp set O_NONBLOCK fail err=%s",
                               std::strerror(errno));
     }
     ffmpeg_stdin_fd_ = pipefd[1];
     ffmpeg_pid_ = pid;
-    UPC_LOG_MEDIA_SERVICE(Info, "live_rtsp ffmpeg pid=%d", static_cast<int>(pid));
+    UPC_LOG_MEDIA_SERVICE_TO(MediaRtsp, Info, "live_rtsp ffmpeg pid=%d", static_cast<int>(pid));
     return true;
 }
 

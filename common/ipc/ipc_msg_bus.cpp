@@ -209,7 +209,7 @@ bool IpcMsgBus::deliver_local(const middleware::Message& msg)
     }
 
     if (handlers.empty()) {
-        UPC_LOG_MSG_BUS(Warn, "IPC_DELIVER miss %s %s->%s (no subscriber)",
+        UPC_LOG_MSG_BUS_TO(IpcMessage, Warn, "IPC_DELIVER miss %s %s->%s (no subscriber)",
                         upc_msg_type_name(msg.type),
                         upc_msg_module_name(msg.sender_id),
                         upc_msg_module_name(msg.target_id));

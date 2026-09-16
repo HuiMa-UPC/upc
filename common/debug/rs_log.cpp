@@ -9,6 +9,7 @@
 #include <mutex>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <unistd.h>
 
 #if defined(_POSIX_C_SOURCE) && _POSIX_C_SOURCE >= 199309L
 #include <time.h>
@@ -20,26 +21,21 @@ namespace {
 
 char g_process_name[32] = "?";
 bool g_process_log_enabled = true;
+int g_min_level = UPC_LOG_MIN_LEVEL;
+bool g_log_cfg_ready = false;
 std::mutex g_log_mtx;
 
 constexpr const char* kTopicLogDir = UPC_TOPIC_LOG_DIR;
-constexpr const char* kTopicDefault = "topic_misc.log";
 
-bool starts_with(const char* s, const char* prefix) {
-    if (!s || !prefix) {
-        return false;
-    }
-    const size_t n = std::strlen(prefix);
-    return std::strncmp(s, prefix, n) == 0;
-}
+struct TopicFp {
+    FILE* fp = nullptr;
+    ino_t ino = 0;
+    dev_t dev = 0;
+};
 
-bool contains_text(const char* s, const char* token) {
-    return s && token && std::strstr(s, token) != nullptr;
-}
+TopicFp g_topic_fp[static_cast<int>(LogTopic::Count)];
+bool g_topic_atexit = false;
 
-/* 目录只在首次写日志时建：本函数在 log_write 的热路径上，而 kTopicLogDir 有三级，
- * 每条日志都跑一遍就是三次注定 EEXIST 的 mkdir。目录被外部删掉的情况由 log_write
- * 里 fopen 失败后清标志重试兜底。调用方持有 g_log_mtx，故标志无需原子。 */
 bool g_topic_dir_ready = false;
 
 void ensure_topic_log_dir() {
@@ -64,126 +60,104 @@ void ensure_topic_log_dir() {
     g_topic_dir_ready = true;
 }
 
-const char* select_topic_file(const char* module, const char* msg) {
-    if (module == nullptr) {
-        return kTopicDefault;
+const char* topic_file_name(LogTopic topic) {
+    switch (topic) {
+        case LogTopic::Boot:             return "topic_boot_lifecycle.log";
+        case LogTopic::IpcWire:          return "topic_ipc_wire.log";
+        case LogTopic::IpcMessage:       return "topic_ipc_message.log";
+        case LogTopic::MsgbusLocal:      return "topic_msgbus_local.log";
+        case LogTopic::SystemResource:   return "topic_system_resource.log";
+        case LogTopic::MqttWire:         return "topic_mqtt_wire.log";
+        case LogTopic::MqttState:        return "topic_mqtt_state.log";
+        case LogTopic::MqttTelemetry:    return "topic_mqtt_telemetry.log";
+        case LogTopic::MqttOta:          return "topic_mqtt_ota.log";
+        case LogTopic::MqttCommand:      return "topic_mqtt_command.log";
+        case LogTopic::XfrUpload:        return "topic_xfr_upload.log";
+        case LogTopic::SerialSensor:     return "topic_serial_sensor.log";
+        case LogTopic::SerialAlarm:      return "topic_serial_alarm.log";
+        case LogTopic::SerialLayer:      return "topic_serial_layer.log";
+        case LogTopic::TcpMotionTx:      return "topic_tcp_motion_tx.log";
+        case LogTopic::TcpHeartbeat:     return "topic_tcp_heartbeat.log";
+        case LogTopic::LaserPower:       return "topic_laser_power.log";
+        case LogTopic::PrintFlow:        return "topic_print_flow.log";
+        case LogTopic::VisualFirstlayer: return "topic_visual_firstlayer.log";
+        case LogTopic::DeviceOta:        return "topic_device_ota.log";
+        case LogTopic::CameraCapture:    return "topic_camera_capture.log";
+        case LogTopic::MediaRecord:      return "topic_media_record.log";
+        case LogTopic::MediaRtsp:        return "topic_media_rtsp.log";
+        case LogTopic::StorageUsage:     return "topic_storage_usage.log";
+        case LogTopic::UiPreview:        return "topic_ui_preview.log";
+        case LogTopic::UiAlarmState:     return "topic_ui_alarm_state.log";
+        case LogTopic::Misc:
+        case LogTopic::Count:
+            break;
+    }
+    return "topic_misc.log";
+}
+
+int topic_index(LogTopic topic) {
+    const int i = static_cast<int>(topic);
+    if (i < 0 || i >= static_cast<int>(LogTopic::Count)) {
+        return static_cast<int>(LogTopic::Misc);
+    }
+    return i;
+}
+
+void close_topic_files() {
+    for (int i = 0; i < static_cast<int>(LogTopic::Count); ++i) {
+        if (g_topic_fp[i].fp) {
+            std::fclose(g_topic_fp[i].fp);
+            g_topic_fp[i].fp = nullptr;
+        }
+    }
+}
+
+void register_topic_atexit() {
+    if (g_topic_atexit) {
+        return;
+    }
+    g_topic_atexit = (std::atexit(close_topic_files) == 0);
+}
+
+FILE* open_topic_fp(LogTopic topic) {
+    const int idx = topic_index(topic);
+    TopicFp& slot = g_topic_fp[idx];
+    char path[320];
+    std::snprintf(path, sizeof(path), "%s/%s", kTopicLogDir, topic_file_name(topic));
+
+    /* rename 轮转后路径 inode 会变；copytruncate 则 inode 不变。
+     * 用 path 的 stat 对比已打开 fd，过期则重开，不必每条 fclose。 */
+    struct stat st_path {};
+    const int path_st = ::stat(path, &st_path);
+    if (slot.fp && path_st == 0 &&
+        st_path.st_ino == slot.ino && st_path.st_dev == slot.dev) {
+        return slot.fp;
+    }
+    if (slot.fp) {
+        std::fclose(slot.fp);
+        slot.fp = nullptr;
     }
 
-    if (std::strcmp(module, "BOOT") == 0) {
-        return "topic_boot_lifecycle.log";
+    FILE* fp = std::fopen(path, "a");
+    if (!fp) {
+        g_topic_dir_ready = false;
+        ensure_topic_log_dir();
+        fp = std::fopen(path, "a");
     }
-
-    if (std::strcmp(module, "IPC") == 0) {
-        return "topic_ipc_wire.log";
+    if (!fp) {
+        return nullptr;
     }
-    if (std::strcmp(module, "MSGBUS") == 0) {
-        if (starts_with(msg, "IPC_")) {
-            return "topic_ipc_message.log";
-        }
-        return "topic_msgbus_local.log";
+    struct stat st_fd {};
+    if (::fstat(::fileno(fp), &st_fd) == 0) {
+        slot.ino = st_fd.st_ino;
+        slot.dev = st_fd.st_dev;
+    } else {
+        slot.ino = 0;
+        slot.dev = 0;
     }
-    if (std::strcmp(module, "MemPool") == 0 ||
-        std::strcmp(module, "BufferPool") == 0) {
-        return "topic_msgbus_local.log";
-    }
-
-    if (std::strcmp(module, "MqttService") == 0) {
-        /* 原始帧必须最先判定：payload 正文里是云端/设备的业务 JSON，若排在内容关键词
-         * 之后，正文中的字面量会把整条日志带偏（例如 state 的 "total_layers" 含子串
-         * "ota"，会让状态帧原文错落到 OTA 专题）。 */
-        if (contains_text(msg, "MQTT RX frame") || contains_text(msg, "MQTT TX frame") ||
-            contains_text(msg, "payload topic=")) {
-            return "topic_mqtt_wire.log";
-        }
-        if (contains_text(msg, "state queued") || contains_text(msg, "publish state fail") ||
-            contains_text(msg, "Print_State_Ntf")) {
-            return "topic_mqtt_state.log";
-        }
-        if (contains_text(msg, "telemetry") || contains_text(msg, "heartbeat") ||
-            contains_text(msg, "APP_Update_Ntf")) {
-            return "topic_mqtt_telemetry.log";
-        }
-        /* 启发式：以下关键词只作用于设备侧固定文案（业务正文已被上面的原始帧规则拦下），
-         * 覆盖 "ota xxx" 小写文案、"OTA" 大写文案与 "*_Ota_*" 消息名。 */
-        if (contains_text(msg, "ota") || contains_text(msg, "OTA") ||
-            contains_text(msg, "Ota_")) {
-            return "topic_mqtt_ota.log";
-        }
-        return "topic_mqtt_command.log";
-    }
-
-    if (std::strcmp(module, "McuLink") == 0) {
-        if (starts_with(msg, "sensor:") || starts_with(msg, "env_sim:")) {
-            return "topic_serial_sensor.log";
-        }
-        if (starts_with(msg, "laser_power_set raw=")) {
-            return "topic_laser_power.log";
-        }
-        if (contains_text(msg, "alarm_") || contains_text(msg, "RX ALARM") ||
-            contains_text(msg, "EVENT ")) {
-            return "topic_serial_alarm.log";
-        }
-        if (contains_text(msg, "TCP_TX frame") || contains_text(msg, "tcp emergency")) {
-            return "topic_tcp_motion_tx.log";
-        }
-        if (contains_text(msg, "tcp hb rsp") || contains_text(msg, "cmd_rate=") ||
-            contains_text(msg, "data_rate=")) {
-            return "topic_tcp_heartbeat.log";
-        }
-        if (contains_text(msg, "serial TX cmd:") || contains_text(msg, "RX LAYER") ||
-            contains_text(msg, "notify_serial_event")) {
-            return "topic_serial_layer.log";
-        }
-        return "topic_print_flow.log";
-    }
-
-    if (std::strcmp(module, "McuOta") == 0) {
-        return "topic_device_ota.log";
-    }
-
-    if (std::strcmp(module, "GlavoService") == 0 ||
-        std::strcmp(module, "CalParser") == 0 ||
-        std::strcmp(module, "ParserContext") == 0 ||
-        std::strcmp(module, "GcodeWorker") == 0 ||
-        std::strcmp(module, "OvfWorker") == 0 ||
-        std::strcmp(module, "ServiceBase") == 0) {
-        return "topic_print_flow.log";
-    }
-
-    if (std::strcmp(module, "HostMonitor") == 0) {
-        return "topic_system_resource.log";
-    }
-
-    if (std::strcmp(module, "CameraService") == 0) {
-        return "topic_camera_capture.log";
-    }
-    if (std::strcmp(module, "CameraPreview") == 0) {
-        return "topic_ui_preview.log";
-    }
-    if (std::strcmp(module, "VisualService") == 0) {
-        return "topic_visual_firstlayer.log";
-    }
-    if (std::strcmp(module, "XfrService") == 0) {
-        return "topic_xfr_upload.log";
-    }
-    if (std::strcmp(module, "AlarmState") == 0) {
-        return "topic_ui_alarm_state.log";
-    }
-
-    if (std::strcmp(module, "MediaService") == 0) {
-        if (contains_text(msg, "storage") || contains_text(msg, "STORRCLM")) {
-            return "topic_storage_usage.log";
-        }
-        /* 直播三件套（云端推流 / 本地 RTSP Server / 共用编码器）同归一个话题 */
-        if (contains_text(msg, "live_rtsp") ||
-            contains_text(msg, "local_rtsp") ||
-            contains_text(msg, "h264_enc")) {
-            return "topic_media_rtsp.log";
-        }
-        return "topic_media_record.log";
-    }
-
-    return kTopicDefault;
+    slot.fp = fp;
+    register_topic_atexit();
+    return fp;
 }
 
 bool parse_env_switch(const char* value, bool default_value) {
@@ -207,6 +181,38 @@ bool parse_env_switch(const char* value, bool default_value) {
         std::strcmp(value, "no") == 0 ||
         std::strcmp(value, "NO") == 0) {
         return false;
+    }
+    return default_value;
+}
+
+int parse_min_level(const char* value, int default_value) {
+    if (!value || !value[0]) {
+        return default_value;
+    }
+    if (std::strcmp(value, "0") == 0 ||
+        std::strcmp(value, "error") == 0 ||
+        std::strcmp(value, "ERROR") == 0) {
+        return 0;
+    }
+    if (std::strcmp(value, "1") == 0 ||
+        std::strcmp(value, "warn") == 0 ||
+        std::strcmp(value, "WARN") == 0) {
+        return 1;
+    }
+    if (std::strcmp(value, "2") == 0 ||
+        std::strcmp(value, "info") == 0 ||
+        std::strcmp(value, "INFO") == 0) {
+        return 2;
+    }
+    if (std::strcmp(value, "3") == 0 ||
+        std::strcmp(value, "debug") == 0 ||
+        std::strcmp(value, "DEBUG") == 0) {
+        return 3;
+    }
+    if (std::strcmp(value, "4") == 0 ||
+        std::strcmp(value, "trace") == 0 ||
+        std::strcmp(value, "TRACE") == 0) {
+        return 4;
     }
     return default_value;
 }
@@ -263,10 +269,39 @@ void refresh_process_log_switch() {
     std::snprintf(env_key, sizeof(env_key), "UPC_LOG_PROC_%s", proc_upper);
     g_process_log_enabled =
         parse_env_switch(std::getenv(env_key), default_enabled);
+
+    g_min_level = parse_min_level(std::getenv("UPC_LOG_MIN_LEVEL"), UPC_LOG_MIN_LEVEL);
+    if (g_min_level < 0) {
+        g_min_level = 0;
+    }
+    if (g_min_level > 4) {
+        g_min_level = 4;
+    }
+    g_log_cfg_ready = true;
+}
+
+void ensure_log_cfg() {
+    if (!g_log_cfg_ready) {
+        refresh_process_log_switch();
+    }
 }
 
 const char* log_process_name() {
     return g_process_name[0] ? g_process_name : "?";
+}
+
+bool is_boot_module(const char* module) {
+    return module && std::strcmp(module, "BOOT") == 0;
+}
+
+bool should_emit(Level level, const char* module) {
+    if (level == Level::Error || is_boot_module(module)) {
+        return true;
+    }
+    if (!g_process_log_enabled) {
+        return false;
+    }
+    return static_cast<int>(level) <= g_min_level;
 }
 
 } // namespace
@@ -278,6 +313,17 @@ void log_set_process_name(const char* name) {
     std::strncpy(g_process_name, name, sizeof(g_process_name) - 1);
     g_process_name[sizeof(g_process_name) - 1] = '\0';
     refresh_process_log_switch();
+}
+
+bool log_would_write(Level level, const char* module) {
+#if UPC_LOG_ENABLED
+    ensure_log_cfg();
+    return should_emit(level, module);
+#else
+    (void)level;
+    (void)module;
+    return false;
+#endif
 }
 
 const char* level_name(Level level) {
@@ -292,9 +338,10 @@ const char* level_name(Level level) {
 }
 
 void log_write(Level level, const char* src, const char* module,
-               const char* fmt, ...) {
+               LogTopic topic, const char* fmt, ...) {
 #if UPC_LOG_ENABLED
-    if (!g_process_log_enabled) {
+    ensure_log_cfg();
+    if (!should_emit(level, module)) {
         return;
     }
     char ts[32];
@@ -340,18 +387,7 @@ void log_write(Level level, const char* src, const char* module,
     std::lock_guard<std::mutex> lock(g_log_mtx);
     ensure_topic_log_dir();
 
-    const char* topic_file = select_topic_file(module, msg_buf);
-    char path[320];
-    std::snprintf(path, sizeof(path), "%s/%s", kTopicLogDir, topic_file);
-
-    FILE* fp = std::fopen(path, "a");
-    if (!fp) {
-        /* 目录可能被外部清理掉了（手工 rm、挂载点变动）：重建一次再试，
-         * 仍失败才退到 stderr。 */
-        g_topic_dir_ready = false;
-        ensure_topic_log_dir();
-        fp = std::fopen(path, "a");
-    }
+    FILE* fp = open_topic_fp(topic);
     if (!fp) {
         fp = stderr;
     }
@@ -366,13 +402,11 @@ void log_write(Level level, const char* src, const char* module,
 
     std::fputc('\n', fp);
     std::fflush(fp);
-    if (fp != stderr) {
-        std::fclose(fp);
-    }
 #else
     (void)level;
     (void)src;
     (void)module;
+    (void)topic;
     (void)fmt;
 #endif
 }
