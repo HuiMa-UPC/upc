@@ -178,26 +178,28 @@ std::string normalize_thumb_path_for_delete(const std::string& raw)
 
     const std::string local_root =
         std::filesystem::path(GLAVO_LOCAL_GCODE_DIR).lexically_normal().string();
+    const std::string thumbnail_root =
+        std::filesystem::path(UPC_LOCAL_GCODE_THUMB_DIR).lexically_normal().string();
     const std::string normalized =
         std::filesystem::path(path).lexically_normal().string();
-    if(!path_has_dir_prefix(normalized, local_root)) {
+    /*
+     * 只允许删除 Local G-code 根或专用缩略图目录内的清单引用文件。
+     * /userdata/image 的 mcu/galvo/soc 等 OTA 子目录绝不能经打印文件删除触达。
+     */
+    if(!path_has_dir_prefix(normalized, local_root) &&
+       !path_has_dir_prefix(normalized, thumbnail_root)) {
         return {};
     }
     return normalized;
 }
 
 bool thumb_path_used_by_other_entries(const std::vector<GcodeManifestEntry>& entries,
-                                      size_t skip_idx,
                                       const std::string& normalized_thumb_path)
 {
     if(normalized_thumb_path.empty()) {
         return false;
     }
-    for(size_t i = 0; i < entries.size(); ++i) {
-        if(i == skip_idx) {
-            continue;
-        }
-        const auto& e = entries[i];
+    for(const GcodeManifestEntry& e : entries) {
         if(normalize_thumb_path_for_delete(e.thumb_small) == normalized_thumb_path ||
            normalize_thumb_path_for_delete(e.thumb_large) == normalized_thumb_path ||
            normalize_thumb_path_for_delete(e.thumb_print) == normalized_thumb_path) {
@@ -208,14 +210,13 @@ bool thumb_path_used_by_other_entries(const std::vector<GcodeManifestEntry>& ent
 }
 
 void try_remove_thumb_file(const std::vector<GcodeManifestEntry>& entries,
-                           size_t deleted_idx,
                            const std::string& thumb_path)
 {
     const std::string normalized = normalize_thumb_path_for_delete(thumb_path);
     if(normalized.empty()) {
         return;
     }
-    if(thumb_path_used_by_other_entries(entries, deleted_idx, normalized)) {
+    if(thumb_path_used_by_other_entries(entries, normalized)) {
         return;
     }
 
@@ -242,6 +243,38 @@ void try_remove_thumb_file(const std::vector<GcodeManifestEntry>& entries,
         return;
     }
     UPC_LOG_GLAVO_SERVICE(Info, "fs_delete_ntf: removed thumb %s", normalized.c_str());
+}
+
+std::string source_png_from_small_thumb(const std::string& thumb_path)
+{
+    const std::string normalized = normalize_thumb_path_for_delete(thumb_path);
+    constexpr const char* suffix = "_small.rthm";
+    if(normalized.size() <= std::strlen(suffix) ||
+       normalized.compare(normalized.size() - std::strlen(suffix),
+                          std::strlen(suffix), suffix) != 0) {
+        return {};
+    }
+    return normalized.substr(0, normalized.size() - std::strlen(suffix)) + ".png";
+}
+
+void try_remove_source_png(const std::vector<GcodeManifestEntry>& entries,
+                           const std::string& deleted_small_thumb)
+{
+    const std::string source_png = source_png_from_small_thumb(deleted_small_thumb);
+    if(source_png.empty()) {
+        return;
+    }
+    for(const GcodeManifestEntry& entry : entries) {
+        if(source_png_from_small_thumb(entry.thumb_small) == source_png) {
+            return;
+        }
+    }
+    std::error_code ec;
+    if(std::filesystem::is_regular_file(source_png, ec) && !ec &&
+       std::filesystem::remove(source_png, ec) && !ec) {
+        UPC_LOG_GLAVO_SERVICE(Info, "fs_delete_ntf: removed source PNG %s",
+                              source_png.c_str());
+    }
 }
 
 /** @brief 将分子/分母换算为 0–100 的整数百分比（四舍五入向下取整） */
@@ -1487,9 +1520,10 @@ void GlavoService::handle_fs_delete_ntf(const middleware::Message& msg)
         return;
     }
 
-    try_remove_thumb_file(local_manifest_, idx, deleted_entry.thumb_small);
-    try_remove_thumb_file(local_manifest_, idx, deleted_entry.thumb_large);
-    try_remove_thumb_file(local_manifest_, idx, deleted_entry.thumb_print);
+    try_remove_thumb_file(local_manifest_, deleted_entry.thumb_small);
+    try_remove_thumb_file(local_manifest_, deleted_entry.thumb_large);
+    try_remove_thumb_file(local_manifest_, deleted_entry.thumb_print);
+    try_remove_source_png(local_manifest_, deleted_entry.thumb_small);
 
     if(prepared_local_path_ == full_path) {
         clear_prepare_session();
