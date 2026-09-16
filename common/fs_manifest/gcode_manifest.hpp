@@ -22,6 +22,10 @@ namespace upc {
 #define UPC_LOCAL_GCODE_CONFIG  UPC_LOCAL_GCODE_DIR "/config.json"
 #endif
 
+#ifndef UPC_LOCAL_GCODE_THUMB_DIR
+#define UPC_LOCAL_GCODE_THUMB_DIR  "/userdata/image/gcode"
+#endif
+
 struct GcodeManifestEntry {
     std::string name;
     uint32_t    file_size    = 0;

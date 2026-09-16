@@ -1,6 +1,7 @@
 # 项目架构索引
 
 > Agent / 开发者改模块前先查此表。细节见各模块 `*.md`，不要在此重复长文。
+> 第一次看仓库：先读 [快速理解.md](快速理解.md)（进程图 + 打印/预览路径）。
 
 ## 进程
 
@@ -15,7 +16,7 @@
 | MQTT | `rongsu_mqtt` | `app/mqtt/main.cpp` | — | `/var/log/topic/*.log` |
 
 启动：`scripts/rongsu.sh start`（Glavo → `rongsu_camera` → `rongsu_media` → `rongsu_xfr` → `rongsu_visual` → `rongsu_mqtt` → UI）。`/home/rongsu.sh` 只是选 A/B 槽的薄 bootstrap，上面这串顺序实现在槽内的 `scripts/rongsu_app.sh`，随应用层升级一起进槽；槽机制见 [OTA_IMAGE.md](../common/fs_manifest/OTA_IMAGE.md)。  
-编译：`./build.sh`（Release + 工具链，产物在 `output/`；`clean` / `reconfigure` 见脚本头注释）。  
+编译：`./build.sh`（Release + 工具链，产物在 `output/`；`clean` / `reconfigure` 见脚本头注释）。接手/虚拟机交叉编译见 [编译与运行.md](编译与运行.md)。
 日志：按专题写 `/var/log/topic`，体积由板端 logrotate 控制，配置源文件 `scripts/topic` → `/etc/logrotate.d/topic`。
 
 ## 顶层目录
@@ -34,7 +35,7 @@
 | `app/glavo/` | [GLAVO.md](../app/glavo/GLAVO.md) | 打印编排、McuLink、IPC Server |
 | `app/camera/` | [CAMERA.md](../app/camera/CAMERA.md) | 相机采集、SHM 预览、IPC Server |
 | `app/media/` | [MEDIA.md](../app/media/MEDIA.md) | 拍照/录像/延时封装 + 直播（云端 RTSP 推流、局域网 live555 RTSP Server；消费 Camera DMA 流） |
-| `app/xfer/` | [XFER.md](../app/xfer/XFER.md) | WiFi 发现、PIN 配对、HTTP 文件上传（仅收 `.json/.svg`） |
+| `app/xfer/` | [XFER.md](../app/xfer/XFER.md) | WiFi 发现、PIN 配对、HTTP 分块上传；OVF 走 snowslice，传输 3MF 提取单份 G-code + PNG/RTHM 缩略图 |
 | `app/visual/` | [VISUAL.md](../app/visual/VISUAL.md) | 视觉：Camera DMA 取帧、首层检测、打印前光路检测（红点桩） |
 | `app/mqtt/` | — | MQTT 网关：环境遥测、`set_light`、云端 `start/stop_rtsp_push`→Media |
 | `app/parser/` | [PARSER.md](../app/parser/PARSER.md) | G-code/OVF 解析库（Glavo 链接） |
@@ -149,6 +150,7 @@ UI → IPC → GlavoService → ParserManager → RingBuffer
 
 | 类型 | 路径 |
 |------|------|
+| 快速理解 | [快速理解.md](快速理解.md)（进程全景、打印/预览路径） |
 | 架构索引 | `doc/ARCHITECTURE.md`（本文件） |
 | 模块说明 | `app/{ui,glavo,camera,media,parser,protocol}/*.md`、`common/{ipc,middleware}/*.md` |
 | 专利参考 | [专利参考-系统架构与运行逻辑.md](专利参考-系统架构与运行逻辑.md)、[专利参考-振镜校准算法与增益设置.md](专利参考-振镜校准算法与增益设置.md) |
