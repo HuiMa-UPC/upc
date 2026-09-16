@@ -170,7 +170,7 @@ private:
             return;
         }
         /* 带 local_rtsp 前缀，保证与本模块日志同归 topic_media_rtsp.log */
-        UPC_LOG_MEDIA_SERVICE(Warn, "local_rtsp live555: %s", line_.c_str());
+        UPC_LOG_MEDIA_SERVICE_TO(MediaRtsp, Warn, "local_rtsp live555: %s", line_.c_str());
         line_.clear();
     }
 
@@ -268,14 +268,14 @@ protected:
         std::vector<uint8_t> sps;
         std::vector<uint8_t> pps;
         if(owner_->copy_sps_pps(sps, pps) && !sps.empty() && !pps.empty()) {
-            UPC_LOG_MEDIA_SERVICE(Info, "local_rtsp client SETUP sps=%zu pps=%zu",
+            UPC_LOG_MEDIA_SERVICE_TO(MediaRtsp, Info, "local_rtsp client SETUP sps=%zu pps=%zu",
                                   sps.size(), pps.size());
             return H264VideoRTPSink::createNew(
                 envir(), rtpGroupsock, rtpPayloadTypeIfDynamic,
                 sps.data(), static_cast<unsigned>(sps.size()),
                 pps.data(), static_cast<unsigned>(pps.size()));
         }
-        UPC_LOG_MEDIA_SERVICE(Warn,
+        UPC_LOG_MEDIA_SERVICE_TO(MediaRtsp, Warn,
             "local_rtsp SDP without sprop — parameter sets not seen yet");
         return H264VideoRTPSink::createNew(envir(), rtpGroupsock,
                                            rtpPayloadTypeIfDynamic);
@@ -356,7 +356,7 @@ protected:
                          char const* full_request) override
     {
         if(!setup_wants_tcp(full_request)) {
-            UPC_LOG_MEDIA_SERVICE(Info,
+            UPC_LOG_MEDIA_SERVICE_TO(MediaRtsp, Info,
                 "local_rtsp SETUP over UDP rejected (461) — client should retry via TCP");
             ConnAccessor::reject_transport(conn);
             return;
@@ -518,7 +518,7 @@ void LocalRtspServer::attach_source(void* source)
 {
     current_source_ = source;
     has_client_.store(true);
-    UPC_LOG_MEDIA_SERVICE(Info, "local_rtsp client stream started");
+    UPC_LOG_MEDIA_SERVICE_TO(MediaRtsp, Info, "local_rtsp client stream started");
 }
 
 /** source 析构时解绑（事件循环线程）：最后一个客户端离开或 session 被撤下。 */
@@ -527,7 +527,7 @@ void LocalRtspServer::detach_source(void* source)
     if(current_source_ == source) {
         current_source_ = nullptr;
         has_client_.store(false);
-        UPC_LOG_MEDIA_SERVICE(Info, "local_rtsp client stream ended");
+        UPC_LOG_MEDIA_SERVICE_TO(MediaRtsp, Info, "local_rtsp client stream ended");
     }
 }
 
@@ -576,19 +576,19 @@ bool LocalRtspServer::init(uint16_t port)
 
     auto* scheduler = BasicTaskScheduler::createNew();
     if(!scheduler) {
-        UPC_LOG_MEDIA_SERVICE(Error, "local_rtsp scheduler create fail");
+        UPC_LOG_MEDIA_SERVICE_TO(MediaRtsp, Error, "local_rtsp scheduler create fail");
         return false;
     }
     UsageEnvironment* env = LogUsageEnvironment::createNew(*scheduler);
     if(!env) {
-        UPC_LOG_MEDIA_SERVICE(Error, "local_rtsp env create fail");
+        UPC_LOG_MEDIA_SERVICE_TO(MediaRtsp, Error, "local_rtsp env create fail");
         delete scheduler;
         return false;
     }
     /* 强制 RTP-over-TCP：UDP 的 SETUP 会被回 461，客户端自行改用 TCP 重试。 */
     RTSPServer* server = TcpOnlyRtspServer::createNew(*env, Port(port));
     if(!server) {
-        UPC_LOG_MEDIA_SERVICE(Error, "local_rtsp listen :%u fail — %s",
+        UPC_LOG_MEDIA_SERVICE_TO(MediaRtsp, Error, "local_rtsp listen :%u fail — %s",
                               static_cast<unsigned>(port), env->getResultMsg());
         env->reclaim();
         delete scheduler;
@@ -605,7 +605,7 @@ bool LocalRtspServer::init(uint16_t port)
     loop_thread_ = std::thread(&LocalRtspServer::loop_fn, this);
     loop_running_ = true;
 
-    UPC_LOG_MEDIA_SERVICE(Info, "local_rtsp server ready port=%u",
+    UPC_LOG_MEDIA_SERVICE_TO(MediaRtsp, Info, "local_rtsp server ready port=%u",
                           static_cast<unsigned>(port));
     return true;
 }
@@ -651,7 +651,7 @@ void LocalRtspServer::loop_fn()
 {
     auto* env = static_cast<UsageEnvironment*>(env_);
     env->taskScheduler().doEventLoop(&loop_stop_);
-    UPC_LOG_MEDIA_SERVICE(Info, "local_rtsp event loop exited");
+    UPC_LOG_MEDIA_SERVICE_TO(MediaRtsp, Info, "local_rtsp event loop exited");
 }
 
 /** 入队一条命令并触发事件循环处理。 */
@@ -697,13 +697,13 @@ void LocalRtspServer::run_pending_cmds()
                 *env, UPC_LOCAL_RTSP_STREAM_NAME, UPC_LOCAL_RTSP_STREAM_NAME,
                 "Snowpod camera live");
             if(!sms) {
-                UPC_LOG_MEDIA_SERVICE(Error, "local_rtsp create sms fail");
+                UPC_LOG_MEDIA_SERVICE_TO(MediaRtsp, Error, "local_rtsp create sms fail");
                 continue;
             }
             sms->addSubsession(LiveH264Subsession::createNew(*env, this));
             server->addServerMediaSession(sms);
             media_session_ = sms;
-            UPC_LOG_MEDIA_SERVICE(Info, "local_rtsp session mounted");
+            UPC_LOG_MEDIA_SERVICE_TO(MediaRtsp, Info, "local_rtsp session mounted");
         } else {
             if(!media_session_) {
                 continue;
@@ -712,7 +712,7 @@ void LocalRtspServer::run_pending_cmds()
             server->deleteServerMediaSession(
                 static_cast<ServerMediaSession*>(media_session_));
             media_session_ = nullptr;
-            UPC_LOG_MEDIA_SERVICE(Info, "local_rtsp session unmounted");
+            UPC_LOG_MEDIA_SERVICE_TO(MediaRtsp, Info, "local_rtsp session unmounted");
         }
     }
 }
@@ -750,7 +750,7 @@ void LocalRtspServer::deliver_pending_frames()
 bool LocalRtspServer::init(uint16_t port)
 {
     port_ = port;
-    UPC_LOG_MEDIA_SERVICE(Warn, "local_rtsp disabled in this build (no live555)");
+    UPC_LOG_MEDIA_SERVICE_TO(MediaRtsp, Warn, "local_rtsp disabled in this build (no live555)");
     return false;
 }
 
@@ -794,7 +794,7 @@ bool LocalRtspServer::start()
     {
         std::lock_guard<std::mutex> lock(mtx_);
         if(!loop_running_) {
-            UPC_LOG_MEDIA_SERVICE(Error, "local_rtsp start fail: server not ready");
+            UPC_LOG_MEDIA_SERVICE_TO(MediaRtsp, Error, "local_rtsp start fail: server not ready");
             return false;
         }
         if(active_) {
@@ -803,7 +803,7 @@ bool LocalRtspServer::start()
         encoder = encoder_;
     }
     if(!encoder) {
-        UPC_LOG_MEDIA_SERVICE(Error, "local_rtsp start fail: encoder not bound");
+        UPC_LOG_MEDIA_SERVICE_TO(MediaRtsp, Error, "local_rtsp start fail: encoder not bound");
         return false;
     }
 
@@ -816,7 +816,7 @@ bool LocalRtspServer::start()
         [this] { on_sink_dropped(); },
         opt);
     if(sink_id < 0) {
-        UPC_LOG_MEDIA_SERVICE(Error, "local_rtsp start fail: encoder sink rejected");
+        UPC_LOG_MEDIA_SERVICE_TO(MediaRtsp, Error, "local_rtsp start fail: encoder sink rejected");
         return false;
     }
 
@@ -845,10 +845,10 @@ bool LocalRtspServer::start()
         candidates += addr.iface + "=" + addr.ip;
     }
     if(addrs.empty()) {
-        UPC_LOG_MEDIA_SERVICE(Warn,
+        UPC_LOG_MEDIA_SERVICE_TO(MediaRtsp, Warn,
             "local_rtsp no usable LAN IPv4 — device not connected to a network?");
     }
-    UPC_LOG_MEDIA_SERVICE(Info, "local_rtsp started url=%s candidates=[%s]",
+    UPC_LOG_MEDIA_SERVICE_TO(MediaRtsp, Info, "local_rtsp started url=%s candidates=[%s]",
                           url().c_str(), candidates.c_str());
     return true;
 }
@@ -879,7 +879,7 @@ void LocalRtspServer::stop()
     }
     post_cmd(Cmd::RemoveSession);
     clear_queue();
-    UPC_LOG_MEDIA_SERVICE(Info, "local_rtsp stopped dropped=%u", dropped_);
+    UPC_LOG_MEDIA_SERVICE_TO(MediaRtsp, Info, "local_rtsp stopped dropped=%u", dropped_);
 }
 
 /**
@@ -950,7 +950,7 @@ void LocalRtspServer::maybe_log_stats_locked()
     const double secs = static_cast<double>(elapsed) / 1000000.0;
     const uint64_t d_in = stat_nal_in_ - stat_last_in_;
     const uint64_t d_out = stat_nal_out_ - stat_last_out_;
-    UPC_LOG_MEDIA_SERVICE(Info,
+    UPC_LOG_MEDIA_SERVICE_TO(MediaRtsp, Info,
         "local_rtsp stat in=%llu(%.1f/s) out=%llu(%.1f/s) queue=%zu/%u "
         "dropped=%u client=%d",
         static_cast<unsigned long long>(stat_nal_in_),
@@ -977,7 +977,7 @@ void LocalRtspServer::on_sink_dropped()
         active_ = false;
         sink_id_ = -1;
     }
-    UPC_LOG_MEDIA_SERVICE(Warn, "local_rtsp sink dropped — unmounting session");
+    UPC_LOG_MEDIA_SERVICE_TO(MediaRtsp, Warn, "local_rtsp sink dropped — unmounting session");
     post_cmd(Cmd::RemoveSession);
     clear_queue();
 }

@@ -117,7 +117,7 @@ void tcp_log_tx_frame(const uint8_t* data, size_t len)
             hex.push_back(' ');
         }
     }
-    UPC_LOG_MCU_LINK(Info, "TCP_TX frame[%zu] id=0x%02X payload=%u %s",
+    UPC_LOG_MCU_LINK_TO(TcpMotionTx, Info, "TCP_TX frame[%zu] id=0x%02X payload=%u %s",
         len, frame_id, payload_len, hex.c_str());
 }
 
@@ -180,7 +180,7 @@ void serial_log_rx_frame(const uint8_t* frame, size_t len)
     }
 
     if(serial_frame_is_sensor_report(frame, len)) {
-        UPC_LOG_MCU_LINK(Warn, "RX SENSOR FAIL len=%zu err=%s",
+        UPC_LOG_MCU_LINK_TO(SerialSensor, Warn, "RX SENSOR FAIL len=%zu err=%s",
             len, serial_sensor_err_string(serr));
         return;
     }
@@ -194,7 +194,7 @@ void serial_log_rx_frame(const uint8_t* frame, size_t len)
             case SERIAL_EVT_PRINT_CONDITION_OK: evt_name = "PRINT_CONDITION_OK"; break;
             default: break;
         }
-        UPC_LOG_MCU_LINK(Info, "RX LAYER event=%s len=%zu", evt_name, len);
+        UPC_LOG_MCU_LINK_TO(SerialLayer, Info, "RX LAYER event=%s len=%zu", evt_name, len);
         return;
     }
 
@@ -207,7 +207,7 @@ void serial_log_rx_frame(const uint8_t* frame, size_t len)
 
     serial_alarm_report_t alarm_dbg{};
     if(serial_parse_alarm_single_report(frame, len, &alarm_dbg) == 0) {
-        UPC_LOG_MCU_LINK(Debug,
+        UPC_LOG_MCU_LINK_TO(SerialAlarm, Debug,
             "RX ALARM code=%u sev=%u state=0x%02X clear=%u detail=%u",
             static_cast<unsigned>(alarm_dbg.alarm_code),
             static_cast<unsigned>(alarm_dbg.severity),
@@ -219,7 +219,7 @@ void serial_log_rx_frame(const uint8_t* frame, size_t len)
 
     serial_alarm_snapshot_t snap_dbg{};
     if(serial_parse_alarm_snapshot(frame, len, &snap_dbg) == 0) {
-        UPC_LOG_MCU_LINK(Debug,
+        UPC_LOG_MCU_LINK_TO(SerialAlarm, Debug,
             "RX ALARM SNAPSHOT slot %u (count=%u) active=0x%08X latched=0x%08X",
             static_cast<unsigned>(snap_dbg.slot_id),
             static_cast<unsigned>(snap_dbg.nonzero_slot_count),
@@ -230,7 +230,7 @@ void serial_log_rx_frame(const uint8_t* frame, size_t len)
 
     serial_alarm_reset_result_t reset_dbg{};
     if(serial_parse_alarm_reset_result(frame, len, &reset_dbg) == 0) {
-        UPC_LOG_MCU_LINK(Debug, "RX ALARM RESET_RESULT code=%u result=%u",
+        UPC_LOG_MCU_LINK_TO(SerialAlarm, Debug, "RX ALARM RESET_RESULT code=%u result=%u",
             static_cast<unsigned>(reset_dbg.alarm_code),
             static_cast<unsigned>(reset_dbg.result));
         return;
@@ -726,10 +726,10 @@ void McuLink::request_alarm_snapshot()
     uint8_t frame[16];
     const int n = serial_build_alarm_snapshot_request(frame, sizeof(frame));
     if(n <= 0) {
-        UPC_LOG_MCU_LINK(Warn, "alarm_snapshot request build failed");
+        UPC_LOG_MCU_LINK_TO(SerialAlarm, Warn, "alarm_snapshot request build failed");
         return;
     }
-    UPC_LOG_MCU_LINK(Info, "alarm_snapshot request TX (serial up)");
+    UPC_LOG_MCU_LINK_TO(SerialAlarm, Info, "alarm_snapshot request TX (serial up)");
     enqueue_serial_tx(frame, static_cast<size_t>(n), true);
 }
 
@@ -984,7 +984,7 @@ void McuLink::on_sensor_report(const serial_sensor_report_t& report)
         powder_low_latched_ = false;
     }
 
-    UPC_LOG_MCU_LINK(Info,
+    UPC_LOG_MCU_LINK_TO(SerialSensor, Info,
         "sensor: O2=%.1f%% P1=%.1fkPa T=%.1fC RH=%.1f%% PM1.0=%.1f PM2.5=%.1f PM10=%.1f "
         "Pfilter=%.1fkPa P2=%.1fkPa base=%.1fC powder_bits=0x%02X powder_ok=%d door_open=%d",
         static_cast<double>(report.oxygen_percent),
@@ -1425,7 +1425,7 @@ void McuLink::poll_env_sim_tick()
         powder_low_latched_ = false;
     }
 
-    UPC_LOG_MCU_LINK(Info,
+    UPC_LOG_MCU_LINK_TO(SerialSensor, Info,
         "env_sim: O2=%.1f%% P1=%.1fkPa P2=%.1fkPa PF=%.1fkPa T=%.1fC RH=%.1f%% PM1.0=%.1f PM2.5=%.1f PM10=%.1f base=%.1fC powder_bits=0x%02X door=%u hall=0x%04X",
         static_cast<double>(fake.oxygen_percent),
         static_cast<double>(fake.pressure1_x10_kpa) / 10.0,
@@ -1509,7 +1509,7 @@ void McuLink::notify_serial_event(serial_event_t evt)
         case SERIAL_EVT_PRINT_READY:        evt_name = "PRINT_READY";        break;
         default:                            evt_name = "NONE";               break;
     }
-    UPC_LOG_MCU_LINK(Info, "notify_serial_event: %s", evt_name);
+    UPC_LOG_MCU_LINK_TO(SerialLayer, Info, "notify_serial_event: %s", evt_name);
     if(evt == SERIAL_EVT_PRINT_PREPARING) {
         return;
     }
@@ -1580,7 +1580,7 @@ void McuLink::handle_serial_rx_frame(const uint8_t* frame, size_t len)
     /* 单条报警/EVENT 上报（0xA3 + 0x20 + TLV 0x01）：原样透传给 UI 消息中心 */
     serial_alarm_report_t alarm{};
     if(serial_parse_alarm_single_report(frame, len, &alarm) == 0) {
-        UPC_LOG_MCU_LINK(Info,
+        UPC_LOG_MCU_LINK_TO(SerialAlarm, Info,
             "alarm_report: code=%u sev=%u state=0x%02X clear=%u detail=%u",
             static_cast<unsigned>(alarm.alarm_code),
             static_cast<unsigned>(alarm.severity),
@@ -1595,7 +1595,7 @@ void McuLink::handle_serial_rx_frame(const uint8_t* frame, size_t len)
      * 用于重启/重连后补齐当前报警。稀疏响应，攒帧在 UI 侧。 */
     serial_alarm_snapshot_t snap{};
     if(serial_parse_alarm_snapshot(frame, len, &snap) == 0) {
-        UPC_LOG_MCU_LINK(Info,
+        UPC_LOG_MCU_LINK_TO(SerialAlarm, Info,
             "alarm_snapshot: slot %u (count=%u) active=0x%08X latched=0x%08X highest=%u",
             static_cast<unsigned>(snap.slot_id),
             static_cast<unsigned>(snap.nonzero_slot_count),
@@ -1610,7 +1610,7 @@ void McuLink::handle_serial_rx_frame(const uint8_t* frame, size_t len)
      * 所以必须排在快照之后（快照那支已校验 Cmd==0x81，不会误吃）。 */
     serial_alarm_reset_result_t reset_res{};
     if(serial_parse_alarm_reset_result(frame, len, &reset_res) == 0) {
-        UPC_LOG_MCU_LINK(Warn, "alarm_reset_result: code=%u result=%u (failed)",
+        UPC_LOG_MCU_LINK_TO(SerialAlarm, Warn, "alarm_reset_result: code=%u result=%u (failed)",
                          static_cast<unsigned>(reset_res.alarm_code),
                          static_cast<unsigned>(reset_res.result));
         publish_alarm_reset_result_ntf(reset_res);
@@ -2306,7 +2306,7 @@ void McuLink::begin_sending_internal()
         uint8_t sbuf[32];
         const int slen = serial_build_print_request(sbuf, sizeof(sbuf));
         if(slen > 0) {
-            UPC_LOG_MCU_LINK(Info, "serial TX cmd: PRINT_REQUEST");
+            UPC_LOG_MCU_LINK_TO(SerialLayer, Info, "serial TX cmd: PRINT_REQUEST");
             serial_send_aa_reliable(sbuf, static_cast<size_t>(slen), true);
         }
         serial_handshake_phase_.store(SERIAL_HS_WAIT_CONDITION_OK);
@@ -2397,7 +2397,7 @@ bool McuLink::send_tcp_emergency_ctrl_ex(uint8_t stop_code, uint8_t pause_code, 
     uint8_t frame[64];
     const int flen = tcp_build_emergency_frame_ex(stop_code, pause_code, red_code, frame, sizeof(frame));
     if(flen <= 0) {
-        UPC_LOG_MCU_LINK(Warn,
+        UPC_LOG_MCU_LINK_TO(TcpMotionTx, Warn,
             "build tcp emergency frame failed stop=%u pause=%u red=%u",
             static_cast<unsigned>(stop_code),
             static_cast<unsigned>(pause_code),
@@ -2406,7 +2406,7 @@ bool McuLink::send_tcp_emergency_ctrl_ex(uint8_t stop_code, uint8_t pause_code, 
     }
     const int rc = tcp_send_raw(frame, static_cast<size_t>(flen));
     if(rc != 0) {
-        UPC_LOG_MCU_LINK(Warn,
+        UPC_LOG_MCU_LINK_TO(TcpMotionTx, Warn,
             "tcp emergency send failed rc=%d stop=%u pause=%u red=%u",
             rc,
             static_cast<unsigned>(stop_code),
@@ -2414,7 +2414,7 @@ bool McuLink::send_tcp_emergency_ctrl_ex(uint8_t stop_code, uint8_t pause_code, 
             static_cast<unsigned>(red_code));
         return false;
     }
-    UPC_LOG_MCU_LINK(Info, "tcp emergency sent stop=%u pause=%u red=%u",
+    UPC_LOG_MCU_LINK_TO(TcpMotionTx, Info, "tcp emergency sent stop=%u pause=%u red=%u",
                      static_cast<unsigned>(stop_code),
                      static_cast<unsigned>(pause_code),
                      static_cast<unsigned>(red_code));
@@ -2498,7 +2498,7 @@ void McuLink::send_serial_layer_done(uint16_t next_layer_um)
     uint8_t sbuf[32];
     const int slen = serial_build_layer_done(next_layer_um, sbuf, sizeof(sbuf));
     if(slen > 0) {
-        UPC_LOG_MCU_LINK(Info, "serial TX cmd: LAYER_DONE (next_layer=%u um)",
+        UPC_LOG_MCU_LINK_TO(SerialLayer, Info, "serial TX cmd: LAYER_DONE (next_layer=%u um)",
             static_cast<unsigned>(next_layer_um));
         serial_send_aa_reliable(sbuf, static_cast<size_t>(slen), true);
     }
@@ -2514,7 +2514,7 @@ void McuLink::send_serial_print_terminate()
         uint8_t sbuf[32];
         const int slen = serial_build_print_terminate(sbuf, sizeof(sbuf));
         if(slen > 0) {
-            UPC_LOG_MCU_LINK(Info, "serial TX cmd: PRINT_TERMINATE");
+            UPC_LOG_MCU_LINK_TO(SerialLayer, Info, "serial TX cmd: PRINT_TERMINATE");
             serial_send_aa_reliable(sbuf, (size_t)slen, false);
         }
     }
@@ -2528,7 +2528,7 @@ void McuLink::send_serial_print_finished()
         uint8_t sbuf[32];
         const int slen = serial_build_print_finished(sbuf, sizeof(sbuf));
         if(slen > 0) {
-            UPC_LOG_MCU_LINK(Info, "serial TX cmd: PRINT_FINISHED");
+            UPC_LOG_MCU_LINK_TO(SerialLayer, Info, "serial TX cmd: PRINT_FINISHED");
             serial_send_aa_reliable(sbuf, (size_t)slen, false);
         }
     }
@@ -2630,7 +2630,7 @@ void McuLink::link_process_serial_handshake()
         uint8_t sbuf[32];
         const int slen = serial_build_print_start(active_layer_height_um_, sbuf, sizeof(sbuf));
         if(slen > 0) {
-            UPC_LOG_MCU_LINK(Info, "serial TX cmd: PRINT_START (layer=%u um)",
+            UPC_LOG_MCU_LINK_TO(SerialLayer, Info, "serial TX cmd: PRINT_START (layer=%u um)",
                 static_cast<unsigned>(active_layer_height_um_));
             serial_send_aa_reliable(sbuf, (size_t)slen, true);
         }
@@ -2871,7 +2871,7 @@ int McuLink::link_send_one_motion_batch()
             if(laser_power_log_valid_ && last_laser_power_raw_ == raw) {
                 continue;
             }
-            UPC_LOG_MCU_LINK(Info, "laser_power_set raw=%u",
+            UPC_LOG_MCU_LINK_TO(LaserPower, Info, "laser_power_set raw=%u",
                              static_cast<unsigned>(raw));
             last_laser_power_raw_ = raw;
             laser_power_log_valid_ = true;
@@ -3049,7 +3049,7 @@ void McuLink::link_try_finish_sending()
            now - natural_complete_since_ >=
                std::chrono::milliseconds(MCU_DRAIN_TIMEOUT_MS)) {
             const auto snap = PrintJobState::instance().snapshot();
-            UPC_LOG_MCU_LINK(Warn,
+            UPC_LOG_MCU_LINK_TO(TcpHeartbeat, Warn,
                 "finish wait: drain still pending after %d ms cmd_rate=%u data_rate=%u "
                 "(keep waiting; UI exits only when rates==0)",
                 MCU_DRAIN_TIMEOUT_MS,
@@ -3183,7 +3183,7 @@ void McuLink::on_tcp_status_response(const tcp_response_t& resp)
         }
         PrintJobState::instance().set_mcu_rates(resp.cmd_rate, resp.data_rate);
         if(tcp_hb_rsp_log_enabled() && print_task_flow_active_.load()) {
-            UPC_LOG_MCU_LINK(Debug,
+            UPC_LOG_MCU_LINK_TO(TcpHeartbeat, Debug,
                 "tcp hb rsp cmd_rate=%u data_rate=%u event=0x%02X ota=%u",
                 static_cast<unsigned>(resp.cmd_rate),
                 static_cast<unsigned>(resp.data_rate),

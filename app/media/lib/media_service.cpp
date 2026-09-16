@@ -383,7 +383,7 @@ void MediaService::apply_local_rtsp_desired()
         return;
     }
     if(!local_rtsp_.start()) {
-        UPC_LOG_MEDIA_SERVICE(Warn, "local_rtsp auto start failed");
+        UPC_LOG_MEDIA_SERVICE_TO(MediaRtsp, Warn, "local_rtsp auto start failed");
     }
     publish_local_rtsp_state();
 }
@@ -875,7 +875,7 @@ void MediaService::handle_storage_usage_req(const middleware::Message& msg) cons
         rsp.total_bytes = total;
         rsp.used_bytes = (total > free_bytes) ? (total - free_bytes) : 0u;
     } else {
-        UPC_LOG_MEDIA_SERVICE(Warn, "storage statvfs failed path=%s err=%d",
+        UPC_LOG_MEDIA_SERVICE_TO(StorageUsage, Warn, "storage statvfs failed path=%s err=%d",
                               UPC_MEDIA_ROOT, errno);
         rsp.total_bytes = 0;
         rsp.used_bytes = 0;
@@ -900,7 +900,7 @@ void MediaService::send_rtsp_rsp(middleware::MsgType type,
     msg.payload = middleware::MsgPayload::from_bytes(
         reinterpret_cast<const uint8_t*>(&rsp), sizeof(rsp));
     if(!middleware::MsgPort::instance().publish_async(msg)) {
-        UPC_LOG_MEDIA_SERVICE(Warn, "live_rtsp rsp publish fail type=%u",
+        UPC_LOG_MEDIA_SERVICE_TO(MediaRtsp, Warn, "live_rtsp rsp publish fail type=%u",
                               static_cast<unsigned>(type));
     }
 }
@@ -909,7 +909,7 @@ void MediaService::handle_rtsp_start_req(const middleware::Message& msg)
 {
     middleware::RtspPushStartReqPayload req{};
     if(!read_inline_pod(msg.payload, req)) {
-        UPC_LOG_MEDIA_SERVICE(
+        UPC_LOG_MEDIA_SERVICE_TO(MediaRtsp,
             Error,
             "live_rtsp start: bad payload type=%u len=%u need=%zu",
             static_cast<unsigned>(msg.payload.type),
@@ -963,7 +963,7 @@ void MediaService::handle_local_rtsp_set(const middleware::Message& msg)
 {
     middleware::DebugOnOffPayload req{};
     if(!read_inline_pod(msg.payload, req)) {
-        UPC_LOG_MEDIA_SERVICE(Warn, "local_rtsp set: bad payload len=%u need=%zu",
+        UPC_LOG_MEDIA_SERVICE_TO(MediaRtsp, Warn, "local_rtsp set: bad payload len=%u need=%zu",
                               static_cast<unsigned>(msg.payload.length), sizeof(req));
         publish_local_rtsp_state();
         return;
@@ -976,7 +976,7 @@ void MediaService::handle_local_rtsp_set(const middleware::Message& msg)
         {
             std::lock_guard<std::mutex> lock(state_mtx_);
             if(!stream_up_) {
-                UPC_LOG_MEDIA_SERVICE(Warn, "local_rtsp on rejected: camera stream down");
+                UPC_LOG_MEDIA_SERVICE_TO(MediaRtsp, Warn, "local_rtsp on rejected: camera stream down");
                 publish_local_rtsp_state();
                 return;
             }
@@ -984,7 +984,7 @@ void MediaService::handle_local_rtsp_set(const middleware::Message& msg)
                 stream_width_, stream_height_, stream_fps_);
         }
         if(!local_rtsp_.start()) {
-            UPC_LOG_MEDIA_SERVICE(Warn, "local_rtsp on failed");
+            UPC_LOG_MEDIA_SERVICE_TO(MediaRtsp, Warn, "local_rtsp on failed");
         }
     } else {
         local_rtsp_.stop();
@@ -1011,10 +1011,10 @@ void MediaService::publish_local_rtsp_state() const
     ntf.payload = middleware::MsgPayload::from_bytes(
         reinterpret_cast<const uint8_t*>(&state), sizeof(state));
     if(!middleware::MsgPort::instance().publish_async(ntf)) {
-        UPC_LOG_MEDIA_SERVICE(Warn, "local_rtsp state publish fail");
+        UPC_LOG_MEDIA_SERVICE_TO(MediaRtsp, Warn, "local_rtsp state publish fail");
     }
     if(state.on != 0) {
-        UPC_LOG_MEDIA_SERVICE(Info, "local_rtsp on url=%s", local_rtsp_.url().c_str());
+        UPC_LOG_MEDIA_SERVICE_TO(MediaRtsp, Info, "local_rtsp on url=%s", local_rtsp_.url().c_str());
     }
 }
 
@@ -1072,11 +1072,11 @@ bool MediaService::clear_video_tmp_dir() const
     }
     const uintmax_t removed = std::filesystem::remove_all(UPC_VIDEO_TMP, ec);
     if(ec) {
-        UPC_LOG_MEDIA_SERVICE(Warn, "STORRCLM_TMP_FAIL path=%s err=%s",
+        UPC_LOG_MEDIA_SERVICE_TO(StorageUsage, Warn, "STORRCLM_TMP_FAIL path=%s err=%s",
                               UPC_VIDEO_TMP, ec.message().c_str());
         return false;
     } else if(removed > 0) {
-        UPC_LOG_MEDIA_SERVICE(Info, "STORRCLM_TMP_OK path=%s entries=%llu",
+        UPC_LOG_MEDIA_SERVICE_TO(StorageUsage, Info, "STORRCLM_TMP_OK path=%s entries=%llu",
                               UPC_VIDEO_TMP,
                               static_cast<unsigned long long>(removed));
         return true;
@@ -1140,7 +1140,7 @@ bool MediaService::reclaim_orphan_or_stale_pending_for_budget() const
             std::string(CAMERA_PRINT_VIDEO_OUT_DIR) + "/" + it->frames_dir;
         const bool exists = std::filesystem::exists(abs, ec);
         if(!exists && !ec) {
-            UPC_LOG_MEDIA_SERVICE(
+            UPC_LOG_MEDIA_SERVICE_TO(StorageUsage,
                 Info, "STORRCLM_ORPHAN_CLEAN frames_dir=%s", it->frames_dir.c_str());
             it = entries.erase(it);
             changed = true;
@@ -1164,7 +1164,7 @@ bool MediaService::reclaim_orphan_or_stale_pending_for_budget() const
             ++it;
             continue;
         }
-        UPC_LOG_MEDIA_SERVICE(
+        UPC_LOG_MEDIA_SERVICE_TO(StorageUsage,
             Info,
             "STORRCLM_STALE_PENDING_DEL frames_dir=%s age_sec=%lld",
             it->frames_dir.c_str(), static_cast<long long>(age));
@@ -1179,7 +1179,7 @@ bool MediaService::reclaim_orphan_or_stale_pending_for_budget() const
     if(!upc::print_history_manifest_save(tmp_path, entries) ||
        std::rename(tmp_path.c_str(), UPC_PRINT_VIDEO_MANIFEST) != 0) {
         (void)std::remove(tmp_path.c_str());
-        UPC_LOG_MEDIA_SERVICE(Warn, "STORRCLM_PENDING_SAVE_FAIL");
+        UPC_LOG_MEDIA_SERVICE_TO(StorageUsage, Warn, "STORRCLM_PENDING_SAVE_FAIL");
         return reclaimed;
     }
     return reclaimed;
@@ -1400,7 +1400,7 @@ bool MediaService::evict_oldest_committed_video() const
     std::error_code ec;
     std::filesystem::remove_all(path, ec);
     if(ec) {
-        UPC_LOG_MEDIA_SERVICE(
+        UPC_LOG_MEDIA_SERVICE_TO(StorageUsage,
             Warn, "STORRCLM_SESSION_FAIL dir=%s err=%s",
             path.c_str(), ec.message().c_str());
         return false;
@@ -1414,11 +1414,11 @@ bool MediaService::evict_oldest_committed_video() const
     if(!upc::print_history_manifest_save(tmp_path, entries) ||
        std::rename(tmp_path.c_str(), UPC_PRINT_VIDEO_MANIFEST) != 0) {
         (void)std::remove(tmp_path.c_str());
-        UPC_LOG_MEDIA_SERVICE(
+        UPC_LOG_MEDIA_SERVICE_TO(StorageUsage,
             Warn, "STORRCLM_SESSION_SAVE_FAIL dir=%s", path.c_str());
         return false;
     }
-    UPC_LOG_MEDIA_SERVICE(Info, "STORRCLM_SESSION_DEL dir=%s", path.c_str());
+    UPC_LOG_MEDIA_SERVICE_TO(StorageUsage, Info, "STORRCLM_SESSION_DEL dir=%s", path.c_str());
     return true;
 }
 
@@ -1467,7 +1467,7 @@ bool MediaService::ensure_video_storage_budget() const
         const uint64_t free_bytes = static_cast<uint64_t>(vfs.f_bavail) * unit;
         if(video_bytes <= quota && free_bytes >= min_free) {
             if(reclaimed_any) {
-                UPC_LOG_MEDIA_SERVICE(
+                UPC_LOG_MEDIA_SERVICE_TO(StorageUsage,
                     Info, "STORRCLM_BUDGET_OK video=%llu quota=%llu free=%llu min_free=%llu",
                     static_cast<unsigned long long>(video_bytes),
                     static_cast<unsigned long long>(quota),
@@ -1477,7 +1477,7 @@ bool MediaService::ensure_video_storage_budget() const
             return true;
         }
         if(!evict_oldest_committed_video()) {
-            UPC_LOG_MEDIA_SERVICE(
+            UPC_LOG_MEDIA_SERVICE_TO(StorageUsage,
                 Warn, "STORRCLM_EXHAUST video=%llu quota=%llu free=%llu min_free=%llu",
                 static_cast<unsigned long long>(video_bytes),
                 static_cast<unsigned long long>(quota),

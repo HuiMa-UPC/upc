@@ -276,7 +276,7 @@ void process_log_boot_banner(const char* proc_name)
     long long prev_ts = 0;
     (void)read_boot_state(name, &prev_clean, &prev_pid, &prev_ts);
 
-    upc::log_write(upc::Level::Info, "SYS", "BOOT",
+    upc::log_write(upc::Level::Info, "SYS", "BOOT", upc::LogTopic::Boot,
                    "PROCESS_BOOT proc=%s pid=%d boot_id=%s uptime_s=%lld "
                    "prev_clean=%d prev_pid=%d prev_ts=%lld",
                    name, pid, boot_id[0] ? boot_id : "?",
