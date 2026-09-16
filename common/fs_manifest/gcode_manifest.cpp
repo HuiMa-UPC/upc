@@ -304,6 +304,7 @@ void gcode_manifest_upsert(std::vector<GcodeManifestEntry>& entries,
             const std::string old_large = e.thumb_large;
             const std::string old_print = e.thumb_print;
             const uint32_t old_layer_count = e.layer_count;
+            const uint32_t old_duration_sec = e.duration_sec;
             e = item;
             /* prepare/xfer 目前不会产缩略图，保持已有路径不被覆盖丢失。 */
             if(e.thumb_small.empty()) e.thumb_small = old_small;
@@ -312,6 +313,10 @@ void gcode_manifest_upsert(std::vector<GcodeManifestEntry>& entries,
             /* 兼容旧写入方：若未提供 layer_count，保留已有缓存层数。 */
             if(e.layer_count == 0 && old_layer_count > 0) {
                 e.layer_count = old_layer_count;
+            }
+            /* Prepare 常把 duration_sec 写成 0；保留 3MF Metadata 写入的预计时长。 */
+            if(e.duration_sec == 0 && old_duration_sec > 0) {
+                e.duration_sec = old_duration_sec;
             }
             return;
         }

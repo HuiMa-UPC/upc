@@ -133,30 +133,34 @@ const upc::GcodeManifestEntry* find_entry(
     return nullptr;
 }
 
+std::string plate_meta_json(uint32_t layers, uint32_t print_time_s)
+{
+    return std::string("{\"schema\":\"snowpath_plate_meta_v1\",\"layers\":") +
+           std::to_string(layers) + ",\"print_time_s\":" +
+           std::to_string(print_time_s) + "}";
+}
+
 } // namespace
 
 int main(int argc, char** argv)
 {
-    if(argc != 4) {
-        std::cerr << "usage: transfer_3mf_smoke <sample.3mf> <lines> <layers>\n";
+    if(argc != 3) {
+        std::cerr << "usage: transfer_3mf_smoke <sample.3mf> <layers>\n";
         return 2;
     }
 
     const std::filesystem::path output_dir = UPC_LOCAL_GCODE_DIR;
-    const std::filesystem::path image_dir = UPC_LOCAL_GCODE_THUMB_DIR;
+    const std::filesystem::path thumb_dir = UPC_LOCAL_GCODE_THUMB_DIR;
     std::error_code ec;
     std::filesystem::remove_all(output_dir, ec);
-    std::filesystem::remove_all(image_dir.parent_path(), ec);
     std::filesystem::create_directories(output_dir, ec);
     if(ec) {
         std::cerr << "cannot create test output: " << ec.message() << "\n";
         return 2;
     }
 
-    const uint32_t expected_lines =
-        static_cast<uint32_t>(std::strtoul(argv[2], nullptr, 10));
     const uint32_t expected_layers =
-        static_cast<uint32_t>(std::strtoul(argv[3], nullptr, 10));
+        static_cast<uint32_t>(std::strtoul(argv[2], nullptr, 10));
 
     upc::xfr::Transfer3mfImporter importer(output_dir.string());
     const auto result = importer.import_file(argv[1], "竖放_0_transfer.3mf");
@@ -175,16 +179,19 @@ int main(int argc, char** argv)
         std::filesystem::is_regular_file(output) &&
         std::filesystem::is_regular_file(UPC_LOCAL_GCODE_CONFIG) &&
         manifest_ok && item &&
-        std::filesystem::is_regular_file(image_dir / "竖放_0_transfer.png") &&
+        !std::filesystem::exists(thumb_dir / "竖放_0_transfer.png") &&
         check_rthm(item->thumb_small, 72, 72) &&
         check_rthm(item->thumb_large, 320, 180) &&
         check_rthm(item->thumb_print, 100, 100) &&
-        result.line_count == expected_lines &&
-        result.layer_count == expected_layers;
+        result.line_count == 0 &&
+        item->line_count == 0 &&
+        result.layer_count == expected_layers &&
+        item->layer_count == expected_layers;
     std::cout << "name=" << result.printable_name
               << " bytes=" << result.printable_size
               << " lines=" << result.line_count
-              << " layers=" << result.layer_count << "\n";
+              << " layers=" << result.layer_count
+              << " duration_s=" << (item ? item->duration_sec : 0) << "\n";
     if(!ok) {
         std::cerr << "import result does not match expected files/statistics\n";
         return 1;
@@ -195,6 +202,7 @@ int main(int argc, char** argv)
         std::filesystem::path(UPC_LOCAL_GCODE_DIR).parent_path() / "bad-thumb.3mf";
     if(!write_fixture_zip(bad_zip, {
             {"3D/竖放_0.gcode", "; replacement\nM3000\nG1 X1\n"},
+            {"Metadata/竖放_0.json", plate_meta_json(2, 60)},
             {"Thumbnails/竖放_0.png", "not-a-png"},
         })) {
         std::cerr << "cannot create corrupt-thumbnail fixture\n";
@@ -208,12 +216,13 @@ int main(int argc, char** argv)
         return 1;
     }
     item = find_entry(manifest, replaced.printable_name);
-    if(!item || !item->thumb_small.empty() || !item->thumb_large.empty() ||
+    if(!item || item->layer_count != 2 || item->duration_sec != 60 ||
+       !item->thumb_small.empty() || !item->thumb_large.empty() ||
        !item->thumb_print.empty() ||
-       std::filesystem::exists(image_dir / "竖放_0_transfer.png") ||
-       std::filesystem::exists(image_dir / "竖放_0_transfer_small.rthm") ||
-       std::filesystem::exists(image_dir / "竖放_0_transfer_large.rthm") ||
-       std::filesystem::exists(image_dir / "竖放_0_transfer_print.rthm")) {
+       std::filesystem::exists(thumb_dir / "竖放_0_transfer.png") ||
+       std::filesystem::exists(thumb_dir / "竖放_0_transfer_small.rthm") ||
+       std::filesystem::exists(thumb_dir / "竖放_0_transfer_large.rthm") ||
+       std::filesystem::exists(thumb_dir / "竖放_0_transfer_print.rthm")) {
         std::cerr << "corrupt thumbnail left stale manifest paths or image assets\n";
         return 1;
     }
@@ -223,6 +232,7 @@ int main(int argc, char** argv)
         std::filesystem::path(UPC_LOCAL_GCODE_DIR).parent_path() / "no-thumb.3mf";
     if(!write_fixture_zip(no_thumb_zip, {
             {"3D/no-thumb.gcode", "; no thumbnail\nM3000\n"},
+            {"Metadata/no-thumb.json", plate_meta_json(3, 0)},
         })) {
         std::cerr << "cannot create no-thumbnail fixture\n";
         return 1;
@@ -236,12 +246,28 @@ int main(int argc, char** argv)
         return 1;
     }
     item = find_entry(manifest, no_thumb.printable_name);
-    if(!item || !item->thumb_small.empty() || !item->thumb_large.empty() ||
-       !item->thumb_print.empty()) {
+    if(!item || item->layer_count != 3 || !item->thumb_small.empty() ||
+       !item->thumb_large.empty() || !item->thumb_print.empty()) {
         std::cerr << "missing thumbnail did not leave empty manifest paths\n";
         return 1;
     }
 
-    std::cout << "thumbnail triplet and optional-thumbnail cases passed\n";
+    /* 缺少 Metadata/*.json 必须拒绝导入。 */
+    const std::filesystem::path no_meta_zip =
+        std::filesystem::path(UPC_LOCAL_GCODE_DIR).parent_path() / "no-meta.3mf";
+    if(!write_fixture_zip(no_meta_zip, {
+            {"3D/no-meta.gcode", "; no meta\nM3000\n"},
+        })) {
+        std::cerr << "cannot create no-metadata fixture\n";
+        return 1;
+    }
+    const auto no_meta =
+        importer.import_file(no_meta_zip.string(), "no_meta_transfer.3mf");
+    if(no_meta.ok || no_meta.err_code != "3MF_META_NOT_FOUND") {
+        std::cerr << "missing Metadata/*.json should reject import\n";
+        return 1;
+    }
+
+    std::cout << "thumbnail triplet, optional-thumbnail and metadata cases passed\n";
     return 0;
 }

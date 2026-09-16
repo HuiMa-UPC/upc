@@ -334,6 +334,16 @@ HttpResponse XfrService::handle_upload_complete(const HttpRequest& req, const st
             return err(imported.http_status, imported.err_code, imported.err_msg);
         }
 
+        /* 导入成功后删除 transport 上的原 3MF；解码缓存已在 importer 内清理。 */
+        {
+            std::error_code remove_ec;
+            std::filesystem::remove(src_path, remove_ec);
+            if(remove_ec) {
+                UPC_LOG_XFR_SERVICE(Warn, "remove imported 3mf failed path=%s err=%s",
+                                    src_path.c_str(), remove_ec.message().c_str());
+            }
+        }
+
         {
             std::lock_guard<std::mutex> lk(print_state_mu_);
             upload_size_ = imported.printable_size;

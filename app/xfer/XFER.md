@@ -12,6 +12,8 @@
 - 3MF：整包 SHA-256 通过后，从 `3D/*.gcode`（兼容
   `Metadata/*.gcode`）提取**唯一一份**已切片 G-code；不运行 `snowslice`。
   ZIP 路径、条目数、压缩方法、CRC、大小与压缩比均需通过校验。
+  必须读取 `Metadata/*.json`（`snowpath_plate_meta_v1`）的 `layers` /
+  `print_time_s` 写入清单；`line_count` 固定为 0（打印走纯层进度）。
 - 两种格式完成后都更新 `UPC_LOCAL_GCODE_CONFIG`，供 UI Local 列表与打印流程使用。
 
 ## API（`/api/v1`）
@@ -54,22 +56,23 @@
 - G-code 路径为 `3D/*.gcode`；兼容早期草案的 `Metadata/*.gcode`。
 - 输出名取上传包名去掉 `.3mf` 后加 `.gcode`，例如
   `竖放_0_transfer.gcode`。
-- 原始 3MF 保留在 `/userdata/transport`；可打印文件落到
-  `/userdata/Gcode`，并写入 `/userdata/Gcode/config.json`。
+- 上传暂存目录为 `/userdata/transport`（分块 `.part.*` 与完整 `.3mf`）；
+  导入成功后**删除**原 3MF。可打印文件落到 `/userdata/Gcode`，并写入
+  `/userdata/Gcode/config.json`。
+- 必须包含 `Metadata/*.json`（优先与 G-code 同 stem；仅一份时直接使用）。
+  读取 `layers` → `layer_count`（必须 >0，否则拒绝导入）、
+  `print_time_s` → `duration_sec`；`line_count` 写 0。
 - `Thumbnails/*.png` 优先取与 G-code 同 stem 的图片；包内只有一张 PNG
-  时直接使用。原 PNG 保存到 `/userdata/image/gcode/<上传包名>.png`，
-  同时生成三份 UI 可直接读取的 RGB565 RTHM：
-  `*_small.rthm`（72×72）、`*_large.rthm`（320×180）、
-  `*_print.rthm`（100×100），绝对路径分别写入 manifest 的
-  `thumb_small` / `thumb_large` / `thumb_print`。
+  时直接使用。PNG 仅作解码缓存：生成三份 UI 可直接读取的 RGB565 RTHM 后删除：
+  `/userdata/Gcode/thumb/*_small.rthm`（72×72）、
+  `*_large.rthm`（320×180）、`*_print.rthm`（100×100），绝对路径分别写入
+  manifest 的 `thumb_small` / `thumb_large` / `thumb_print`。
 - PNG 解码使用 libpng，按 COVER 居中裁剪；有 librga 时优先由 RGA
   缩放并转 RGB565，失败自动走 CPU。缺图、图片损坏或转换失败只记录告警，
   G-code 仍正常导入，三个 manifest 字段留空。
-- G-code、有效图片、三份 RTHM 与 manifest 通过临时文件 + rename 提交；
-  同名重传会替换旧资产。删除 Local 文件时同步删除对应 RTHM 与原 PNG，
-  删除范围仅开放 `/userdata/image/gcode`，不会触达 OTA 图片目录。
-- `Metadata/*.json` 本期不导入；行数和 `M3000` 层数直接从提取后的
-  G-code 扫描。
+- G-code、三份 RTHM 与 manifest 通过临时文件 + rename 提交；
+  同名重传会替换旧资产。删除 Local 文件时同步删除对应 RTHM，
+  删除范围仅开放 `/userdata/Gcode/thumb`。
 - 样例没有 `.gcode.md5`，因此完整性由上传整包 SHA-256、ZIP CRC 和解压后大小共同保证。
 
 本机冒烟测试是独立 CMake 工程（不要使用交叉工具链）：
@@ -78,7 +81,8 @@
 sudo apt install zlib1g-dev libpng-dev
 cmake -S app/xfer/tests -B /tmp/upc-xfr-tests
 cmake --build /tmp/upc-xfr-tests
-/tmp/upc-xfr-tests/transfer_3mf_smoke doc/竖放_0_transfer.3mf 3698097 796
+/tmp/upc-xfr-tests/transfer_3mf_smoke doc/竖放_0_transfer.3mf 796
 ```
 
-该 smoke 同时检查正常 triplet、损坏 PNG 降级并清理旧图、缺图仍导入三种情况。
+该 smoke 同时检查正常 triplet（无残留 PNG）、损坏 PNG 降级并清理旧图、
+缺图仍导入、缺 Metadata 拒绝四种情况。

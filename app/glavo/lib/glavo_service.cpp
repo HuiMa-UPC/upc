@@ -184,7 +184,7 @@ std::string normalize_thumb_path_for_delete(const std::string& raw)
         std::filesystem::path(path).lexically_normal().string();
     /*
      * 只允许删除 Local G-code 根或专用缩略图目录内的清单引用文件。
-     * /userdata/image 的 mcu/galvo/soc 等 OTA 子目录绝不能经打印文件删除触达。
+     * /userdata/Gcode/thumb 为 Local 缩略图目录；不得触达 OTA 图片子目录。
      */
     if(!path_has_dir_prefix(normalized, local_root) &&
        !path_has_dir_prefix(normalized, thumbnail_root)) {
@@ -1643,6 +1643,7 @@ bool GlavoService::run_print_prepare(middleware::PrintFileSource source, uint32_
 
     uint32_t line_count = 0;
     uint32_t layer_count = 0;
+    uint32_t duration_sec = 0;
     if(source == middleware::PrintFileSource::Local) {
         const auto& e = local_manifest_[index];
         const bool same_mtime = e.mtime == static_cast<int64_t>(st.st_mtime);
@@ -1655,13 +1656,16 @@ bool GlavoService::run_print_prepare(middleware::PrintFileSource source, uint32_
             if(e.layer_count > 0) {
                 layer_count = e.layer_count;
             }
+            if(e.duration_sec > 0) {
+                duration_sec = e.duration_sec;
+            }
         }
     }
-    /* G-code：行数与 M3000 层数一趟扫出来，行数随后作为 hint 交给解析器，
-     * open_file 便不再自己整读一遍数换行。两个数都已缓存命中时整趟跳过。
-     * 非 G-code（OVF）不扫，行数由 worker 打开文件时自行统计（段数）。 */
+    /* G-code：仅在尚无总层数时扫 M3000（兼带行数 hint）。
+     * 3MF 导入已写入 Metadata.layers 时跳过整文件扫描，走纯层进度；
+     * open_file 无行数 hint 时由解析器自行数换行。OVF 不扫。 */
     const bool m3000_candidate = is_m3000_scan_candidate(local_path_out);
-    if(m3000_candidate && (line_count == 0 || layer_count == 0)) {
+    if(m3000_candidate && layer_count == 0) {
         uint32_t scanned_lines  = 0;
         uint32_t scanned_layers = 0;
         if(scan_gcode_lines_and_layers(local_path_out,
@@ -1700,7 +1704,7 @@ bool GlavoService::run_print_prepare(middleware::PrintFileSource source, uint32_
     entry.file_size   = static_cast<uint32_t>(st.st_size);
     entry.line_count  = line_count;
     entry.layer_count = layer_count;
-    entry.duration_sec = 0;
+    entry.duration_sec = duration_sec;
     entry.material_g  = 0.f;
     entry.mtime       = static_cast<int64_t>(st.st_mtime);
 
