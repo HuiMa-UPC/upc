@@ -197,7 +197,8 @@ GcodeWorker& GcodeWorker::instance()
 
 void GcodeWorker::set_total_lines_hint(int total_lines)
 {
-    total_lines_hint_ = (total_lines > 0) ? total_lines : -1;
+    /* >0 用 hint；0 跳过数换行；<0 打开时 count_file_newlines。 */
+    total_lines_hint_ = (total_lines >= 0) ? total_lines : -1;
 }
 
 /** 析构时确保解析线程已停止且文件已关闭 */
@@ -519,7 +520,7 @@ void GcodeWorker::parser_thread_fn()
     running_.store(false);
 }
 
-/** open → 统计行数 → fdopen；成功时重置运动状态与进度计数 */
+/** open → 按 hint 决定是否数换行 → fdopen；成功时重置运动状态与进度计数 */
 int GcodeWorker::open_file(const std::string& filepath)
 {
     const int hinted_total_lines = total_lines_hint_;
@@ -532,9 +533,12 @@ int GcodeWorker::open_file(const std::string& filepath)
         return -1;
     }
 
-    int cnt = -1;
+    int cnt = 0;
     if(hinted_total_lines > 0) {
         cnt = hinted_total_lines;
+    } else if(hinted_total_lines == 0) {
+        /* 纯层进度：不整文件数换行，total_lines 保持 0。 */
+        cnt = 0;
     } else {
         cnt = count_file_newlines(fd);
         if(cnt < 0) {

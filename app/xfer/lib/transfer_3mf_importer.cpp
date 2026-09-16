@@ -13,6 +13,7 @@
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <limits>
 #include <string_view>
 #include <utility>
@@ -31,6 +32,7 @@ constexpr uint16_t kZip64ExtraId = 0x0001U;
 constexpr uint64_t kMaxArchiveEntries = 256;
 constexpr uint64_t kMaxCompressionRatio = 200;
 constexpr uint64_t kMaxThumbnailPngBytes = 32ULL * 1024ULL * 1024ULL;
+constexpr uint64_t kMaxMetadataJsonBytes = 1ULL * 1024ULL * 1024ULL;
 constexpr uint64_t kEocdSearchBytes = 65557; /* EOCD 22 字节 + 最长 65535 字节注释 */
 
 struct ZipEntry {
@@ -140,6 +142,12 @@ bool is_thumbnail_png_entry(const std::string& name)
 {
     const std::string lower = lower_ascii(name);
     return starts_with(lower, "thumbnails/") && ends_with(lower, ".png");
+}
+
+bool is_metadata_json_entry(const std::string& name)
+{
+    const std::string lower = lower_ascii(name);
+    return starts_with(lower, "metadata/") && ends_with(lower, ".json");
 }
 
 bool parse_zip64_extra(const std::vector<uint8_t>& extra,
@@ -333,36 +341,79 @@ bool read_zip_directory(std::ifstream& in,
     return true;
 }
 
-bool scan_gcode_stats(const std::string& path, uint32_t* lines, uint32_t* layers)
+bool parse_json_u32_field(const std::string& text,
+                          const char* key,
+                          uint32_t* out,
+                          bool* found)
 {
-    *lines = 0;
-    *layers = 0;
+    *found = false;
+    const std::string needle = std::string("\"") + key + "\"";
+    const size_t key_pos = text.find(needle);
+    if(key_pos == std::string::npos) {
+        return true;
+    }
+    size_t i = key_pos + needle.size();
+    while(i < text.size() && std::isspace(static_cast<unsigned char>(text[i]))) {
+        ++i;
+    }
+    if(i >= text.size() || text[i] != ':') {
+        return false;
+    }
+    ++i;
+    while(i < text.size() && std::isspace(static_cast<unsigned char>(text[i]))) {
+        ++i;
+    }
+    if(i >= text.size() || !std::isdigit(static_cast<unsigned char>(text[i]))) {
+        return false;
+    }
+    uint64_t value = 0;
+    while(i < text.size() && std::isdigit(static_cast<unsigned char>(text[i]))) {
+        value = value * 10ULL + static_cast<uint64_t>(text[i] - '0');
+        if(value > std::numeric_limits<uint32_t>::max()) {
+            return false;
+        }
+        ++i;
+    }
+    *out = static_cast<uint32_t>(value);
+    *found = true;
+    return true;
+}
+
+/**
+ * 解析 snowpath_plate_meta_v1：必填 layers>0 → layer_count；
+ * 可选 print_time_s → duration_sec。
+ */
+bool parse_plate_meta_json(const std::string& path,
+                           uint32_t* layer_count,
+                           uint32_t* duration_sec,
+                           std::string* error)
+{
+    *layer_count = 0;
+    *duration_sec = 0;
     std::ifstream in(path);
     if(!in) {
+        *error = "cannot open Metadata/*.json";
+        return false;
+    }
+    std::string text((std::istreambuf_iterator<char>(in)),
+                     std::istreambuf_iterator<char>());
+    if(text.empty()) {
+        *error = "Metadata/*.json is empty";
         return false;
     }
 
-    uint64_t line_count = 0;
-    uint64_t layer_count = 0;
-    std::string line;
-    while(std::getline(in, line)) {
-        ++line_count;
-        const size_t comment = line.find(';');
-        std::string code = line.substr(0, comment);
-        code.erase(code.begin(), std::find_if(code.begin(), code.end(), [](unsigned char c) {
-            return !std::isspace(c);
-        }));
-        code.erase(std::find_if(code.rbegin(), code.rend(), [](unsigned char c) {
-            return !std::isspace(c);
-        }).base(), code.end());
-        if(lower_ascii(code) == "m3000") {
-            ++layer_count;
-        }
+    bool found_layers = false;
+    bool found_print_time = false;
+    if(!parse_json_u32_field(text, "layers", layer_count, &found_layers) ||
+       !parse_json_u32_field(text, "print_time_s", duration_sec, &found_print_time)) {
+        *error = "Metadata/*.json has invalid layers or print_time_s";
+        return false;
     }
-    *lines = static_cast<uint32_t>(std::min<uint64_t>(
-        line_count, std::numeric_limits<uint32_t>::max()));
-    *layers = static_cast<uint32_t>(std::min<uint64_t>(
-        layer_count, std::numeric_limits<uint32_t>::max()));
+    if(!found_layers || *layer_count == 0) {
+        *error = "Metadata/*.json must provide layers > 0";
+        return false;
+    }
+    (void)found_print_time;
     return true;
 }
 
@@ -537,41 +588,62 @@ std::string output_gcode_name(const std::string& package_name)
     return base + ".gcode";
 }
 
-const ZipEntry* select_thumbnail_entry(const std::vector<ZipEntry>& entries,
-                                       const ZipEntry& gcode_entry,
-                                       std::string* reason)
+const ZipEntry* select_named_sidecar_entry(
+    const std::vector<ZipEntry>& entries,
+    const ZipEntry& gcode_entry,
+    bool (*matcher)(const std::string&),
+    const char* kind,
+    std::string* reason)
 {
-    std::vector<const ZipEntry*> png_entries;
+    std::vector<const ZipEntry*> matched_kind;
     for(const ZipEntry& entry : entries) {
-        if(is_thumbnail_png_entry(entry.name)) {
-            png_entries.push_back(&entry);
+        if(matcher(entry.name)) {
+            matched_kind.push_back(&entry);
         }
     }
-    if(png_entries.empty()) {
-        *reason = "package has no Thumbnails/*.png entry";
+    if(matched_kind.empty()) {
+        *reason = std::string("package has no ") + kind + " entry";
         return nullptr;
     }
-    if(png_entries.size() == 1) {
-        return png_entries.front();
+    if(matched_kind.size() == 1) {
+        return matched_kind.front();
     }
 
     const std::string wanted =
         lower_ascii(std::filesystem::path(gcode_entry.name).stem().string());
     const ZipEntry* matched = nullptr;
-    for(const ZipEntry* entry : png_entries) {
+    for(const ZipEntry* entry : matched_kind) {
         if(lower_ascii(std::filesystem::path(entry->name).stem().string()) != wanted) {
             continue;
         }
         if(matched) {
-            *reason = "multiple thumbnail PNG entries match the G-code name";
+            *reason = std::string("multiple ") + kind +
+                      " entries match the G-code name";
             return nullptr;
         }
         matched = entry;
     }
     if(!matched) {
-        *reason = "multiple thumbnail PNG entries and none uniquely matches the G-code name";
+        *reason = std::string("multiple ") + kind +
+                  " entries and none uniquely matches the G-code name";
     }
     return matched;
+}
+
+const ZipEntry* select_thumbnail_entry(const std::vector<ZipEntry>& entries,
+                                       const ZipEntry& gcode_entry,
+                                       std::string* reason)
+{
+    return select_named_sidecar_entry(
+        entries, gcode_entry, is_thumbnail_png_entry, "Thumbnails/*.png", reason);
+}
+
+const ZipEntry* select_metadata_entry(const std::vector<ZipEntry>& entries,
+                                      const ZipEntry& gcode_entry,
+                                      std::string* reason)
+{
+    return select_named_sidecar_entry(
+        entries, gcode_entry, is_metadata_json_entry, "Metadata/*.json", reason);
 }
 
 std::filesystem::path importing_path(const std::filesystem::path& final_path)
@@ -746,19 +818,42 @@ Transfer3mfImportResult Transfer3mfImporter::import_file(
         return fail(422, "3MF_GCODE_EXTRACT_FAILED", detail);
     }
 
-    uint32_t line_count = 0;
-    uint32_t layer_count = 0;
-    if(!scan_gcode_stats(gcode_staged.string(), &line_count, &layer_count) ||
-       line_count == 0) {
+    const uint64_t gcode_size = std::filesystem::file_size(gcode_staged, ec);
+    if(ec || gcode_size == 0 || gcode_size > std::numeric_limits<uint32_t>::max()) {
         std::filesystem::remove(gcode_staged, ec);
-        return fail(422, "3MF_GCODE_INVALID", "extracted G-code is empty or unreadable");
+        return fail(422, "3MF_GCODE_INVALID",
+                    "extracted G-code is empty or size is unsupported");
     }
 
-    const uint64_t gcode_size = std::filesystem::file_size(gcode_staged, ec);
-    if(ec || gcode_size > std::numeric_limits<uint32_t>::max()) {
+    std::string meta_reason;
+    const ZipEntry* metadata_entry =
+        select_metadata_entry(entries, *gcode_entries.front(), &meta_reason);
+    if(!metadata_entry) {
         std::filesystem::remove(gcode_staged, ec);
-        return fail(422, "3MF_GCODE_INVALID", "extracted G-code size is unsupported");
+        return fail(422, "3MF_META_NOT_FOUND", meta_reason);
     }
+
+    const std::filesystem::path meta_staged =
+        importing_path(std::filesystem::path(gcode_dir_) /
+                       (std::filesystem::path(printable_name).stem().string() +
+                        ".meta.json"));
+    std::filesystem::remove(meta_staged, ec);
+    if(!extract_entry(archive, archive_size, *metadata_entry,
+                      meta_staged.string(), kMaxMetadataJsonBytes, &detail)) {
+        std::filesystem::remove(gcode_staged, ec);
+        std::filesystem::remove(meta_staged, ec);
+        return fail(422, "3MF_META_EXTRACT_FAILED", detail);
+    }
+
+    uint32_t layer_count = 0;
+    uint32_t duration_sec = 0;
+    if(!parse_plate_meta_json(meta_staged.string(), &layer_count, &duration_sec,
+                              &detail)) {
+        std::filesystem::remove(gcode_staged, ec);
+        std::filesystem::remove(meta_staged, ec);
+        return fail(422, "3MF_META_INVALID", detail);
+    }
+    std::filesystem::remove(meta_staged, ec);
 
     const std::string asset_stem =
         std::filesystem::path(printable_name).stem().string();
@@ -795,6 +890,8 @@ Transfer3mfImportResult Transfer3mfImporter::import_file(
                           png_staged.string(), thumbnail_targets, &thumbnail_reason)) {
                 std::filesystem::remove(png_staged, ec);
             } else {
+                /* PNG 只作解码缓存，RTHM 生成后立即删除。 */
+                std::filesystem::remove(png_staged, ec);
                 thumbnails_ready = true;
             }
         }
@@ -822,9 +919,9 @@ Transfer3mfImportResult Transfer3mfImporter::import_file(
     GcodeManifestEntry item;
     item.name = printable_name;
     item.file_size = static_cast<uint32_t>(gcode_size);
-    item.line_count = line_count;
+    item.line_count = 0; /* 打印走纯层进度，不在导入阶段统计行数 */
     item.layer_count = layer_count;
-    item.duration_sec = 0;
+    item.duration_sec = duration_sec;
     item.material_g = 0.f;
     item.mtime = static_cast<int64_t>(std::time(nullptr));
     if(thumbnails_ready) {
@@ -865,7 +962,6 @@ Transfer3mfImportResult Transfer3mfImporter::import_file(
     assets.push_back(
         {gcode_staged, gcode_final, backup_path(gcode_final)});
     if(thumbnails_ready) {
-        assets.push_back({png_staged, png_final, backup_path(png_final)});
         assets.push_back({
             thumbnail_targets[0].path, small_final, backup_path(small_final)});
         assets.push_back({
@@ -891,29 +987,30 @@ Transfer3mfImportResult Transfer3mfImporter::import_file(
             remove_local_thumbnail_file(old_thumbnail_paths[i]);
         }
     }
+    /* 无论本次是否出图，清掉历史残留 PNG（仅作过解码缓存）。 */
+    remove_local_thumbnail_file(png_final.string());
     if(!thumbnails_ready) {
-        remove_local_thumbnail_file(png_final.string());
         remove_local_thumbnail_file(small_final.string());
         remove_local_thumbnail_file(large_final.string());
         remove_local_thumbnail_file(print_final.string());
     }
 
     UPC_LOG_XFR_SERVICE(Info,
-        "3mf imported package=%s entry=%s output=%s bytes=%llu lines=%u layers=%u "
-        "thumbnail=%s",
+        "3mf imported package=%s entry=%s output=%s bytes=%llu layers=%u "
+        "duration_s=%u thumbnail=%s",
         package_name.c_str(), gcode_entries.front()->name.c_str(),
         gcode_final.string().c_str(),
         static_cast<unsigned long long>(gcode_size),
-        static_cast<unsigned>(line_count),
         static_cast<unsigned>(layer_count),
-        thumbnails_ready ? png_final.string().c_str() : "none");
+        static_cast<unsigned>(duration_sec),
+        thumbnails_ready ? small_final.string().c_str() : "none");
 
     Transfer3mfImportResult result;
     result.ok = true;
     result.http_status = 200;
     result.printable_name = printable_name;
     result.printable_size = gcode_size;
-    result.line_count = line_count;
+    result.line_count = 0;
     result.layer_count = layer_count;
     return result;
 }
