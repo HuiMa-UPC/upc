@@ -25,6 +25,25 @@
 - `POST /upload/{id}/complete`：整文件 SHA-256 校验后按扩展名分流：
   `.ovf` 走 snowslice/OVF 预处理；`.3mf` 解出单个 `.gcode`；最后写入 `config.json`
 - `GET /upload/{id}/status`：查询断点续传进度
+- `GET /print/status`：桌面端轮询打印机状态/进度（传输态本地维护；打印态订阅
+  Glavo/Media IPC 缓存）。传输完成对外为 `idle`；`finished` 仅表示打印完成。
+  打印中 `job_id` 优先为延时摄影 `frames_dir`（打印中多为 `tmp`）。
+- `GET /print/history?year=&month=&day=`：按打印机本地日期返回当天 `job_ids`
+  （= `/userdata/media/video/config.json` 的 `frames_dir`，升序）
+- `GET /print/{job_id}/timelapse/images`：分页返回该任务延时摄影 PNG URL 列表
+- `GET /timelapse/{job_id}/{n}.png`：匿名下载已落盘帧（列表接口已鉴权后的产物）
+
+### 打印状态 / 延时摄影（板端约定）
+
+- 历史与延时摄影的 `job_id` 使用清单主键 `frames_dir`，不是协议示例里的 `j_9001`。
+- 帧文件在 `/userdata/media/video/{frames_dir}/N.png`；URL 扩展名为 `.png`。
+- `/print/status` 中 `chamber_temp` 来自 Glavo 进度载荷的舱温（0.1℃）；
+  `nozzle_temp` / `bed_temp` / `laser_power` / `blower_*` / `filament_*` /
+  `layer_height` 本期固定为 `0`。
+- 数据源：`APP_Print_Progress_Ntf` / `APP_Print_Pause_Rsp` /
+  `GLAVO_Print_State_Ntf` / `APP_Print_Terminate_Rsp` /
+  `APP_Print_Start_Rejected_Ntf` / `APP_Print_Video_Manifest_Ntf`（Glavo/Media
+  双发 UI 与 `APP_XFR`）。
 
 ## 运行参数（环境变量）
 

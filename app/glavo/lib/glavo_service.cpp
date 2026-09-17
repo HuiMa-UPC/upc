@@ -2265,42 +2265,60 @@ void GlavoService::send_print_progress(bool force_complete)
         p.current_layer = std::min(done + 1u, print_total_layers_);
     }
 
-    middleware::Message ntf(middleware::MsgType::APP_Print_Progress_Ntf,
-        static_cast<middleware::ModuleId>(module_id()),
-        middleware::ModuleId::UI);
-    ntf.payload = middleware::MsgPayload::from_bytes(
-        reinterpret_cast<const uint8_t*>(&p), sizeof(p));
-    if(!publish_async(ntf)) {
-        UPC_LOG_GLAVO_SERVICE(Warn, "print_progress publish failed pct=%d", pct);
-    }
+    /* 双发 UI + Xfr：桌面端 /print/status 轮询依赖 Xfr 侧缓存 */
+    auto send_progress = [&](middleware::ModuleId target) {
+        middleware::Message ntf(middleware::MsgType::APP_Print_Progress_Ntf,
+            static_cast<middleware::ModuleId>(module_id()),
+            target);
+        ntf.payload = middleware::MsgPayload::from_bytes(
+            reinterpret_cast<const uint8_t*>(&p), sizeof(p));
+        if(!publish_async(ntf)) {
+            UPC_LOG_GLAVO_SERVICE(Warn,
+                "print_progress publish failed pct=%d target=%u",
+                pct, static_cast<unsigned>(target));
+        }
+    };
+    send_progress(middleware::ModuleId::UI);
+    send_progress(middleware::ModuleId::APP_XFR);
 }
 
-/** @brief 向 UI 推送 APP_Print_Terminate_Rsp */
+/** @brief 向 UI / Xfr 推送 APP_Print_Terminate_Rsp */
 void GlavoService::publish_terminate_done()
 {
-    middleware::Message ntf(middleware::MsgType::APP_Print_Terminate_Rsp,
-        static_cast<middleware::ModuleId>(module_id()),
-        middleware::ModuleId::UI);
-    if (!publish_async(ntf)) {
-        UPC_LOG_GLAVO_SERVICE(Warn, "terminate_done publish_async failed");
-    }
+    auto send_to = [&](middleware::ModuleId target) {
+        middleware::Message ntf(middleware::MsgType::APP_Print_Terminate_Rsp,
+            static_cast<middleware::ModuleId>(module_id()),
+            target);
+        if(!publish_async(ntf)) {
+            UPC_LOG_GLAVO_SERVICE(Warn,
+                "terminate_done publish_async failed target=%u",
+                static_cast<unsigned>(target));
+        }
+    };
+    send_to(middleware::ModuleId::UI);
+    send_to(middleware::ModuleId::APP_XFR);
 }
 
-/** @brief 向 UI 回复 APP_Print_Pause_Rsp（paused=1 暂停 / 0 恢复） */
+/** @brief 向 UI / Xfr 回复 APP_Print_Pause_Rsp（paused=1 暂停 / 0 恢复） */
 void GlavoService::publish_print_pause_done(bool paused)
 {
     middleware::PrintPauseStatePayload p{};
     p.paused = paused ? 1 : 0;
 
-    middleware::Message ntf(middleware::MsgType::APP_Print_Pause_Rsp,
-        static_cast<middleware::ModuleId>(module_id()),
-        middleware::ModuleId::UI);
-    ntf.payload = middleware::MsgPayload::from_bytes(
-        reinterpret_cast<const uint8_t*>(&p), sizeof(p));
-    if(!publish_async(ntf)) {
-        UPC_LOG_GLAVO_SERVICE(Warn, "print_pause_done publish failed paused=%d",
-                              paused ? 1 : 0);
-    }
+    auto send_to = [&](middleware::ModuleId target) {
+        middleware::Message ntf(middleware::MsgType::APP_Print_Pause_Rsp,
+            static_cast<middleware::ModuleId>(module_id()),
+            target);
+        ntf.payload = middleware::MsgPayload::from_bytes(
+            reinterpret_cast<const uint8_t*>(&p), sizeof(p));
+        if(!publish_async(ntf)) {
+            UPC_LOG_GLAVO_SERVICE(Warn,
+                "print_pause_done publish failed paused=%d target=%u",
+                paused ? 1 : 0, static_cast<unsigned>(target));
+        }
+    };
+    send_to(middleware::ModuleId::UI);
+    send_to(middleware::ModuleId::APP_XFR);
     publish_print_h264_record_pause(paused);
 }
 
@@ -2332,7 +2350,7 @@ void GlavoService::publish_print_powder_low_ntf()
     }
 }
 
-/** @brief 向 MQTT 推送 GLAVO_Print_State_Ntf（开始打印/打印结束状态边沿） */
+/** @brief 向 MQTT / Xfr 推送 GLAVO_Print_State_Ntf（开始打印/打印结束状态边沿） */
 void GlavoService::publish_print_state_ntf(uint32_t mode)
 {
     middleware::PrintStateNtfPayload p{};
@@ -2342,14 +2360,20 @@ void GlavoService::publish_print_state_ntf(uint32_t mode)
         std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::system_clock::now().time_since_epoch()).count());
 
-    middleware::Message ntf(middleware::MsgType::GLAVO_Print_State_Ntf,
-        static_cast<middleware::ModuleId>(module_id()),
-        middleware::ModuleId::APP_MQTT);
-    ntf.payload = middleware::MsgPayload::from_bytes(
-        reinterpret_cast<const uint8_t*>(&p), sizeof(p));
-    if(!publish_async(ntf)) {
-        UPC_LOG_GLAVO_SERVICE(Warn, "print_state_ntf publish failed mode=%u", mode);
-    }
+    auto send_to = [&](middleware::ModuleId target) {
+        middleware::Message ntf(middleware::MsgType::GLAVO_Print_State_Ntf,
+            static_cast<middleware::ModuleId>(module_id()),
+            target);
+        ntf.payload = middleware::MsgPayload::from_bytes(
+            reinterpret_cast<const uint8_t*>(&p), sizeof(p));
+        if(!publish_async(ntf)) {
+            UPC_LOG_GLAVO_SERVICE(Warn,
+                "print_state_ntf publish failed mode=%u target=%u",
+                mode, static_cast<unsigned>(target));
+        }
+    };
+    send_to(middleware::ModuleId::APP_MQTT);
+    send_to(middleware::ModuleId::APP_XFR);
 }
 
 void GlavoService::publish_device_event(middleware::DeviceEventCode code,
@@ -2678,15 +2702,21 @@ void GlavoService::publish_print_start_rejected(
     middleware::PrintStartRejectedPayload p{};
     p.reason = static_cast<uint8_t>(reason);
     p.detail = detail;
-    middleware::Message ntf(middleware::MsgType::APP_Print_Start_Rejected_Ntf,
-        static_cast<middleware::ModuleId>(module_id()),
-        middleware::ModuleId::UI);
-    ntf.payload = middleware::MsgPayload::from_bytes(
-        reinterpret_cast<const uint8_t*>(&p), sizeof(p));
-    if(!publish_async(ntf)) {
-        UPC_LOG_GLAVO_SERVICE(Warn, "print_start_rejected publish failed reason=%u",
-                              static_cast<unsigned>(p.reason));
-    }
+    auto send_to = [&](middleware::ModuleId target) {
+        middleware::Message ntf(middleware::MsgType::APP_Print_Start_Rejected_Ntf,
+            static_cast<middleware::ModuleId>(module_id()),
+            target);
+        ntf.payload = middleware::MsgPayload::from_bytes(
+            reinterpret_cast<const uint8_t*>(&p), sizeof(p));
+        if(!publish_async(ntf)) {
+            UPC_LOG_GLAVO_SERVICE(Warn,
+                "print_start_rejected publish failed reason=%u target=%u",
+                static_cast<unsigned>(p.reason),
+                static_cast<unsigned>(target));
+        }
+    };
+    send_to(middleware::ModuleId::UI);
+    send_to(middleware::ModuleId::APP_XFR);
 }
 
 void GlavoService::handle_visual_optical_path_point_rsp(

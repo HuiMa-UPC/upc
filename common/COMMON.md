@@ -177,17 +177,17 @@ scripts/rongsu.sh start   # glavo + rongsu_camera → ui
 | `APP_Print_Prepare_Rsp` | — | Glavo→UI | `PrintPrepareRspPayload` | `register_print_prepare_done` | — |
 | `UI_Parser_Exit_Ntf` | — | UI→Glavo | Empty | `send_parser_exit` | 取消解析 |
 | `UI_Print_Start_Req` | — | UI→Glavo | `PrintStartReqPayload` | `send_print_start` | 正式解析+下发 |
-| `APP_Print_Progress_Ntf` | `GLAVO_Print_Progress_Ntf` | Glavo→UI | `PrintProgressPayload` | `register_print_progress` | 进度推送（百分比 + 环境读数 + 当前层/总层） |
+| `APP_Print_Progress_Ntf` | `GLAVO_Print_Progress_Ntf` | Glavo→UI **与** Xfr | `PrintProgressPayload` | `register_print_progress` | 进度推送（百分比 + 环境读数 + 当前层/总层）；Xfr 缓存供桌面端 `GET /print/status` |
 | `UI_Print_Terminate_Req` | — | UI→Glavo | Empty | `send_print_terminate` | 终止作业 |
 | `UI_Print_Pause_Req` | — | UI→Glavo | Empty | `send_print_pause` | 暂停 TCP 运动下发（解析继续） |
 | `UI_Print_Resume_Req` | — | UI→Glavo | Empty | `send_print_resume` | 恢复 TCP 运动下发 |
 | `UI_Print_Powder_Low_Ignore_Req` | — | UI→Glavo | Empty | `send_print_powder_low_ignore` | 当前打印会话忽略后续缺粉检测：不再自动暂停、不再推缺粉通知 |
-| `APP_Print_Pause_Rsp` | `GLAVO_Print_Pause_Rsp` | Glavo→UI | `PrintPauseStatePayload` | `register_print_pause_done` | 暂停/恢复响应（paused=1/0；Pause/Resume Req 共用） |
+| `APP_Print_Pause_Rsp` | `GLAVO_Print_Pause_Rsp` | Glavo→UI **与** Xfr | `PrintPauseStatePayload` | `register_print_pause_done` | 暂停/恢复响应（paused=1/0；Pause/Resume Req 共用） |
 | `APP_Print_Powder_Low_Ntf` | — | Glavo→UI | Empty | `register_print_powder_low` | 打印中粉量位 bit0/bit1 同时为 0 时仅通知一次；UI 弹补粉弹窗 |
 | `APP_OpticalPath_Progress_Ntf` | — | Glavo→UI | `OpticalPathProgressPayload` | `register_optical_path_progress` | 打印前光路检测逐点进度（徽标 OPTICAL PATH CHECK + n/5）；`state=3` 整轮通过后恢复 PRINTING |
-| `APP_Print_Start_Rejected_Ntf` | — | Glavo→UI | `PrintStartRejectedPayload` | `register_print_start_rejected` | 起印被拒（光路检测失败 / 本地副本打不开）；UI 跳无 manifest 的终止结果页。不可用 `APP_Print_Terminate_Rsp` 代替：0% 进度会被 UI 的 `print_ready_to_exit` 挡住 |
-| `APP_Print_Terminate_Rsp` | `GLAVO_Print_Terminate_Rsp` | Glavo→UI | Empty | `register_print_terminate_done` | — |
-| `GLAVO_Print_State_Ntf` | — | Glavo→MQTT | `PrintStateNtfPayload`（`mode` 复用 `UserHomeStatus`：`2`=开始打印 / `0`=打印结束；`since_ms`=进入该 mode 的 Unix ms） | — | 打印状态边沿：开始打印/打印结束空闲时推一次，触发 MQTT 上报 `state` 消息 |
+| `APP_Print_Start_Rejected_Ntf` | — | Glavo→UI **与** Xfr | `PrintStartRejectedPayload` | `register_print_start_rejected` | 起印被拒（光路检测失败 / 本地副本打不开）；UI 跳无 manifest 的终止结果页。不可用 `APP_Print_Terminate_Rsp` 代替：0% 进度会被 UI 的 `print_ready_to_exit` 挡住 |
+| `APP_Print_Terminate_Rsp` | `GLAVO_Print_Terminate_Rsp` | Glavo→UI **与** Xfr | Empty | `register_print_terminate_done` | — |
+| `GLAVO_Print_State_Ntf` | — | Glavo→MQTT **与** Xfr | `PrintStateNtfPayload`（`mode` 复用 `UserHomeStatus`：`2`=开始打印 / `0`=打印结束；`since_ms`=进入该 mode 的 Unix ms） | — | 打印状态边沿：开始打印/打印结束空闲时推一次，触发 MQTT 上报 `state` 消息；Xfr 同步 `/print/status` |
 | `UI_Supply_Status_Req` | — | UI→Glavo | Empty | `send_supply_status` | stub |
 | `APP_Supply_Status_Rsp` | `GLAVO_Supply_Status_Rsp` | Glavo→UI | `SupplyStatusPayload` | `register_supply_status` | — |
 | `UI_Camera_Stream_Start_Req` | — | UI→Camera | `CameraStreamStartReqPayload` | `CameraMsgProxy::send_stream_start` | 开预览 |
@@ -219,7 +219,7 @@ scripts/rongsu.sh start   # glavo + rongsu_camera → ui
 | `APP_Print_H264_Record_Pause_Ntf` | — | Glavo→Media（Hub FWD） | `PrintPauseStatePayload` | — | 打印暂停/恢复时同步连续 H264 录制状态（paused=1 暂停采帧，0 恢复） |
 | `APP_Clean_Video_Session_Start_Ntf` | — | Glavo→Media（Hub FWD） | `CleanVideoSessionStartPayload` | — | 清粉延时抽帧开始：接续打印 `N.png`，按 `fps`/`TIMELAPSE_VIDEO_FPS` 定时写 `(N+1).png…` |
 | `APP_Clean_Video_Session_Stop_Ntf` | — | Glavo→Media（Hub FWD） | `CleanVideoSessionStopPayload` | — | 清粉抽帧收尾：成功时仅更新末帧 `thumb.rthm` 与清粉帧范围；最终 MP4 在 `UI_Print_Video_Finalize_Req` 时统一由全部 PNG 合成 |
-| `APP_Print_Video_Manifest_Ntf` | — | Media→UI | `PrintVideoManifestPayload` | `CameraMsgProxy::register_print_video_manifest` | manifest `rename()` 成功后发；**0 帧也必发**（`has_entry=0`），否则 UI 停在打印中界面下不来 |
+| `APP_Print_Video_Manifest_Ntf` | — | Media→UI **与** Xfr | `PrintVideoManifestPayload` | `CameraMsgProxy::register_print_video_manifest` | manifest `rename()` 成功后发；**0 帧也必发**（`has_entry=0`），否则 UI 停在打印中界面下不来；Xfr 绑定 WiFi `frames_dir` |
 | `MQTT_Media_Rtsp_Start_Req` | — | MQTT→Media | `RtspPushStartReqPayload` | — | 云端 `start_rtsp_push`：`push_url` 原样推 RTSP（已含 token）；一期仅 `live` |
 | `APP_Mqtt_Rtsp_Start_Rsp` | — | Media→MQTT | `RtspPushRspPayload` | — | 映射 `cmd/ack`（accepted/rejected/error + reason/detail） |
 | `MQTT_Media_Rtsp_Stop_Req` | — | MQTT→Media | `RtspPushStopReqPayload` | — | 云端 `stop_rtsp_push`；不摘 Camera peer |

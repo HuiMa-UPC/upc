@@ -226,17 +226,26 @@ bool HttpServer::send_response(int fd, const HttpResponse& rsp)
     oss << "Content-Type: " << rsp.content_type << "\r\n";
     oss << "Content-Length: " << rsp.body.size() << "\r\n";
     oss << "Connection: close\r\n\r\n";
-    oss << rsp.body;
-    const std::string out = oss.str();
-    const char* p = out.data();
-    std::size_t left = out.size();
-    while (left > 0) {
-        const ssize_t n = ::send(fd, p, left, 0);
-        if (n <= 0) {
-            return false;
+    const std::string head = oss.str();
+
+    auto send_all = [fd](const char* p, std::size_t left) -> bool {
+        while (left > 0) {
+            const ssize_t n = ::send(fd, p, left, 0);
+            if (n <= 0) {
+                return false;
+            }
+            p += n;
+            left -= static_cast<std::size_t>(n);
         }
-        p += n;
-        left -= static_cast<std::size_t>(n);
+        return true;
+    };
+
+    if (!send_all(head.data(), head.size())) {
+        return false;
+    }
+    if (!rsp.body.empty() &&
+        !send_all(rsp.body.data(), rsp.body.size())) {
+        return false;
     }
     return true;
 }

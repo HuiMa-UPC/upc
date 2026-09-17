@@ -438,6 +438,14 @@ Body：该区间的原始字节。
 WebSocket / SSE 推送（列入 §12 未来可选）。轮询间隔建议 1–2 s，打印中可放宽到
 5 s。
 
+**【板端约定】**
+
+- 桌面端直连本机 HTTP；打印进度来自 Glavo IPC 缓存，上传/切片来自 Xfr 本地态。
+- 上传/导入完成对外 `state=idle`（不是 `finished`）；`finished` 仅表示打印完成。
+- 真正开打后 `job_id` 优先为延时摄影目录名 `frames_dir`（打印中多为 `tmp`）。
+- `chamber_temp` 有舱温读数；`nozzle_temp` / `bed_temp` / `laser_power` /
+  `blower_*` / `filament_*` / `layer_height` 本期固定 `0`。
+
 ```json
 {
   "job_id": "j_9001",
@@ -568,6 +576,10 @@ canceled | error`。
 按日期查询打印机某一天的打印历史任务 ID 列表（用于延时摄影回看等场景：客户端先
 拿到当天全部 `job_id`，再按需查询单个任务的详情 / 延时视频）。
 
+**【板端约定】** `job_ids[]` 取自 `/userdata/media/video/config.json` 的
+`frames_dir`（本地目录主键），按 `start_unix` 升序；仅返回 `committed=true` 条目。
+协议示例中的 `j_9001` 形式不适用于当前固件。
+
 请求（Header + Query）：
 
 ```text
@@ -603,6 +615,11 @@ Authorization: Bearer <token>
 
 选中某一打印历史记录后，按 `job_id` 分页拉取该任务的延时摄影图片 URL 列表；每条
 都是可直接通过 HTTP GET 下载的文件地址（绝对路径）。
+
+**【板端约定】** 帧文件落在 `/userdata/media/video/{job_id}/N.png`（`N` 为正整数）。
+列表返回的 URL 形如 `http://{Host}/timelapse/{job_id}/1.png`（扩展名 `.png`，
+与盘上一致；协议示例中的 `.jpg` / 六位补零文件名不适用于当前固件）。静态下载
+路径**不校验 Token**。
 
 请求（Header + Path + Query）：
 

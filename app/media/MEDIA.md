@@ -229,7 +229,7 @@ mp4 是否可信。finalize 侧不再只看「文件非空」，而是用 `timel
 | `APP_Print_Video_Session_*` / `APP_Print_Layer_Snap_Ntf` | 打印录像会话 |
 | `APP_Print_H264_Record_Pause_Ntf` | 暂停/恢复连续 H264 |
 | `APP_Clean_Video_Session_*` | 清粉延时抽帧 |
-| `APP_Print_Video_Manifest_Ntf` | Media→UI：manifest `rename()` 后发（0 帧也必发） |
+| `APP_Print_Video_Manifest_Ntf` | Media→UI **与** Xfr：manifest `rename()` 后发（0 帧也必发） |
 | `UI_Print_Video_Finalize_Req` | 结果页退出：commit + 分阶段 finalize |
 | `UI_Storage_Usage_Req` | → `APP_Storage_Usage_Rsp` |
 | `MQTT_Media_Rtsp_Start/Stop_Req` | 云端 live；`APP_Mqtt_Rtsp_*_Rsp` 回 MQTT |

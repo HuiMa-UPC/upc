@@ -105,7 +105,8 @@ private:
                               bool video_pending,
                               bool print_video_pending) const;
     /**
-     * APP_Print_Video_Manifest_Ntf → UI：结果数据已就绪，可切打印结果页。
+     * APP_Print_Video_Manifest_Ntf → UI / Xfr：结果数据已就绪，可切打印结果页；
+     * Xfr 用 frames_dir 绑定 WiFi 打印状态与延时摄影。
      * 必须在 manifest rename() 之后调用；0 帧（无 manifest 条目）也要发，
      * 否则 UI 永远停在打印中界面。worker 线程调用，IPC 发帧内部有锁。
      */
