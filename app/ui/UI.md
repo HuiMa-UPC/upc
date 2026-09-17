@@ -711,7 +711,7 @@ pending 自动解除——正好顺带验超时路径。
 | `user_control` | `page_user_control.*` | 控制面板 + 更多控制（页内两视图）。见下方「控制页」一节 |
 | `user_settings` | `page_user_settings.*` | 设置列表 + 开发者密码弹窗 |
 | `user_message` | `page_user_message.*` | 消息中心：日期分组混排列表（MCU 报警 + 设备事件）+ 初始 10 条与底部 Load More + 左滑删除历史 + 管理态批量删除 + 详情抽屉（Reset 三态）。按稿 3033:5247 / 3063:7338 / 3201:9570 / 5380:28971 实现 |
-| `user_debug` | `page_user_debug.*` | 调试控制台；Other 页 `Galvo Point Test` 按当前校准表依次显示中心和四角红光点，与正式打印及 Test image 双向互斥 |
+| `user_debug` | `page_user_debug.*` | 调试控制台；Move 页振镜卡 Abs X/Y + Move 走 `send_galvo_abs_pos`；Other 页 `Galvo Point Test` 按当前校准表依次显示中心和四角红光点，与正式打印及 Test image 双向互斥 |
 | `user_timelapse` | `page_user_timelapse.*` | 延时摄影播放器（隐藏页，历史缩略图进入；全屏 `lv_layer_top`） |
 
 注册仅在 `ui_app.cpp`；打印流程走 `control_*`，pages 不直接订阅 MsgBus。详见 `lib/pages/README.md`。

@@ -52,6 +52,13 @@ int serial_debug_build_axis_inc(uint8_t axis, int16_t delta,
                                 uint8_t* out, size_t out_size);
 
 /**
+ * Z 轴相对步进。TLV 0x02，Value = INT32 LE，单位 μm（协议规定 Tlv-Len=4）。
+ * 例：+500 = 上升 0.5mm，-7263 = 下降 7.263mm。
+ * 仅校准/测高使用；调试页 Z jog 仍走 INT16 mm 的 axis_inc。
+ */
+int serial_debug_build_z_inc_um(int32_t delta_um, uint8_t* out, size_t out_size);
+
+/**
  * 轴回 Home（归零）。仅 Z(0)/S(1) 有效（Z→0x11，S→0x10）；D 无回 Home，返回 -1。
  */
 int serial_debug_build_axis_home(uint8_t axis, uint8_t* out, size_t out_size);

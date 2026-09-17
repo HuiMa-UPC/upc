@@ -1,6 +1,7 @@
 #include "gcode_worker.hpp"
 #include "parser_context.hpp"
 #include "rs_log.hpp"
+#include "galvo_coord.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -79,47 +80,6 @@ std::string normalize_command_line(const std::string& line)
         trim_string(s);
     }
     return s;
-}
-
-/**
- * 将 0–65535 整数编码为 MCU 包用的低/高字节（小端）。
- * 超出范围时钳位。
- */
-void int_to_u16_bytes(int value, uint8_t* low_byte, uint8_t* high_byte)
-{
-    if(value > 65535) {
-        value = 65535;
-    }
-    if(value < 0) {
-        value = 0;
-    }
-    *low_byte  = static_cast<uint8_t>(value & 0xFF);
-    *high_byte = static_cast<uint8_t>((value >> 8) & 0xFF);
-}
-
-/**
- * 将物理坐标映射为 16 位偏移量（中心 32768，范围 ±image_rang_gain）。
- * 用于运动包 X/Y 轴 data[1..4] 编码。
- *
- * @param coordinate_value 毫米坐标（已乘 scale_gain）
- * @param image_rang_gain  坐标满量程（来自 ParserContext）
- */
-void coordinate_to_offset_bytes(float coordinate_value, float image_rang_gain,
-                                uint8_t* low_byte, uint8_t* high_byte)
-{
-    if(image_rang_gain < 1e-6f) {
-        image_rang_gain = GCODE_DEFAULT_IMAGE_RANG_GAIN;
-    }
-    if(coordinate_value > image_rang_gain) {
-        coordinate_value = image_rang_gain;
-    }
-    if(coordinate_value < -image_rang_gain) {
-        coordinate_value = -image_rang_gain;
-    }
-
-    const float normalized = coordinate_value / image_rang_gain;
-    const int offset_value = static_cast<int>(normalized * 32767.0f + 32768.0f);
-    int_to_u16_bytes(offset_value, low_byte, high_byte);
 }
 
 /**

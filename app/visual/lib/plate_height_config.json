@@ -1,0 +1,11 @@
+{
+  "roi_quad": [[178,325], [714,328], [750,877], [128,877]],
+  "fixed_thresh": 250,
+  "min_area": 2,
+  "max_area": 200,
+  "lut_path": "/etc/visual/height_lut.txt",
+  "enable_clahe": false,
+  "clahe_clip": 3.0,
+  "enable_blur": false,
+  "blur_k": 3
+}

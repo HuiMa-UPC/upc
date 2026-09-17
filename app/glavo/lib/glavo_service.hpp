@@ -6,6 +6,8 @@
 #include "gcode_manifest.hpp"
 #include "mcu_link.hpp"
 #include "optical_path_check.hpp"
+#include "height_calibration.hpp"
+#include "plate_height_measure.hpp"
 #include "wifi_manager.hpp"
 #include "msg_port.hpp"
 #include "msg_runtime.hpp"
@@ -122,6 +124,8 @@ private:
     void handle_debug_switch(const middleware::Message& msg);
     void handle_debug_galvo_red_light(const middleware::Message& msg);
     void handle_debug_galvo_red_always(const middleware::Message& msg);
+    /** @brief 振镜绝对坐标移动（手动控制/测高扫描）：调 McuLink 下发单点运动包。 */
+    void handle_debug_galvo_abs_move(const middleware::Message& msg);
     void handle_debug_galvo_param_save(const middleware::Message& msg);
     void handle_debug_galvo_point_test_start(const middleware::Message& msg);
     void handle_debug_galvo_point_test_get(const middleware::Message& msg);
@@ -145,7 +149,11 @@ private:
     void handle_debug_first_layer_visual_check_get(const middleware::Message& msg);
     void handle_debug_optical_path_check_set(const middleware::Message& msg);
     void handle_debug_optical_path_check_get(const middleware::Message& msg);
+    void handle_debug_plate_height_adj_set(const middleware::Message& msg);
+    void handle_debug_plate_height_adj_get(const middleware::Message& msg);
     void handle_visual_optical_path_point_rsp(const middleware::Message& msg);
+    void handle_height_calib_start_req(const middleware::Message& msg);
+    void handle_laser_spot_measure_rsp(const middleware::Message& msg);
     void publish_debug_print_h264_record_state();
     void publish_debug_clean_record_state();
     void publish_debug_env_sim_state();
@@ -154,12 +162,26 @@ private:
     void publish_debug_test_image_state();
     void publish_debug_galvo_point_test_state();
     void publish_debug_optical_path_check_state();
+    void publish_debug_plate_height_adj_state();
     /** @brief 停止并回收点位测试线程；仅用于服务退出。 */
     void stop_galvo_point_test_worker();
 
     /* ---- 打印前光路检测（优先级高于首层检测） ---- */
     /** @brief 注册 OpticalPathCheck 的依赖回调；init 阶段调用一次。 */
     void configure_optical_path_check();
+    void configure_plate_height();
+    bool begin_plate_height_gate();
+    void on_plate_height_done();
+    void publish_plate_height_visual_session(bool active);
+    /** @brief 舱内灯光：与调试页 Light 同一串口 TLV（0x06 开 / 0x07 关）。 */
+    void set_cabin_light(bool on);
+    void send_z_inc(float delta_mm);
+    void send_z_home();
+    bool wait_z_settled(float target_mm, float tolerance_mm, int timeout_ms);
+    bool request_laser_spot_measure_sync(float& out_x, float& out_y, int timeout_ms);
+    void publish_height_calib_progress(uint8_t stage, float current_height_mm,
+                                       uint16_t collected, uint16_t total);
+    void wakeup_laser_spot_wait();
     /**
      * @brief 起印前的光路检测 gate
      * @return true=已起一轮检测，调用方须立即 return 等回灌；false=无需检测，继续起印
@@ -191,7 +213,7 @@ private:
     void handle_visual_first_layer_check_rsp(const middleware::Message& msg);
     /** @brief 联动切换红光/激光模式（TCP 红光 + 串口激光使能），每次调用都下发。 */
     bool apply_red_laser_mode(bool red_on, const char* reason);
-    /** @brief 红光常亮：串口关激光 + TCP 0x0A red=3。 */
+    /** @brief 红光常亮：只发 TCP 0x0A Red=3，不跟串口 0x12。 */
     bool apply_red_always_mode(const char* reason);
     void debug_tx(const uint8_t* frame, int n);
 
@@ -328,6 +350,7 @@ private:
     bool first_layer_reference_waiting_ = false; /**< 等待Visual锁定本次打印裸板B0 */
     /* ---- 打印前光路检测 ---- */
     bool optical_path_check_on_ = false; /**< 光路检测开关（仅本次运行，默认关） */
+    bool plate_height_adj_on_ = false; /**< 打印前测高调 Z（仅本次运行，默认关） */
     OpticalPathCheck optical_path_check_;
     /**
      * 检测线程结果回灌 worker 的 pending 位（与 clean_test_done_pending_ 同款）。
@@ -341,6 +364,17 @@ private:
      * 此时置位，等 TerminateDone/PrintError 再起检测（仿 deferred_print_start_）。
      */
     bool deferred_optical_check_ = false;
+    HeightCalibration height_calib_;
+    PlateHeightMeasure plate_height_;
+    std::mutex laser_spot_mtx_;
+    std::condition_variable laser_spot_cv_;
+    bool laser_spot_waiting_ = false;
+    middleware::LaserSpotMeasureRspPayload laser_spot_result_{};
+    std::atomic<bool> plate_height_done_pending_{false};
+    std::atomic<bool> plate_height_done_ok_{false};
+    std::atomic<bool> plate_height_flatness_warn_{false};
+    bool deferred_plate_height_ = false;
+    std::string plate_height_resume_path_;
     bool env_sim_on_ = false;  /**< 环境上报模拟（仅本次运行，默认关） */
     bool env_sim_powder_low_on_ = false; /**< 环境模拟粉量缺粉开关（目标状态，延迟生效由 McuLink 管） */
     bool ignore_powder_low_for_current_print_ = false; /**< 本次打印是否忽略缺粉检测（Cancel 后置位） */
