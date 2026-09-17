@@ -30,7 +30,7 @@ struct Transfer3mfImportResult {
  * 支持客户端现行的 3D 目录 G-code，也兼容早期协议草案的
  * Metadata 目录 G-code。实现会校验 ZIP 路径、条目数量、压缩方法、CRC、
  * 解压大小与压缩比，并通过临时文件 + rename 原子替换最终 G-code。
- * 必须读取 Metadata/*.json（snowpath_plate_meta_v1）的 layers /
+ * 必须读取 Metadata 目录下的 json（snowpath_plate_meta_v1）的 layers /
  * print_time_s，写入 manifest 的 layer_count / duration_sec；line_count
  * 固定为 0（打印走纯层进度）。可选的 Thumbnails PNG 仅作解码缓存，
  * 转成三份 RTHM 后写入 UPC_LOCAL_GCODE_THUMB_DIR（/userdata/Gcode/thumb），
