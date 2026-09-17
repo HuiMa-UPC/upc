@@ -67,6 +67,8 @@ private:
     void handle_print_powder_low_ignore(const middleware::Message& msg);
     void handle_supply_status_req(const middleware::Message& msg);
     void handle_pm25_request(const middleware::Message& msg);
+    void publish_pm25_rsp(uint32_t target_id, bool is_high, float pm25_cabin);
+    void stop_pm25_sample_worker();
     void handle_close_door_request(const middleware::Message& msg);
     void handle_open_door_request(const middleware::Message& msg);
     void handle_purify_request(const middleware::Message& msg);
@@ -151,6 +153,10 @@ private:
     void handle_debug_optical_path_check_get(const middleware::Message& msg);
     void handle_debug_plate_height_adj_set(const middleware::Message& msg);
     void handle_debug_plate_height_adj_get(const middleware::Message& msg);
+    void handle_debug_soc_led_set(const middleware::Message& msg);
+    void handle_debug_soc_led_get(const middleware::Message& msg);
+    void handle_debug_cabin_pm_valve_set(const middleware::Message& msg);
+    void handle_debug_cabin_pm_valve_get(const middleware::Message& msg);
     void handle_visual_optical_path_point_rsp(const middleware::Message& msg);
     void handle_height_calib_start_req(const middleware::Message& msg);
     void handle_laser_spot_measure_rsp(const middleware::Message& msg);
@@ -163,6 +169,8 @@ private:
     void publish_debug_galvo_point_test_state();
     void publish_debug_optical_path_check_state();
     void publish_debug_plate_height_adj_state();
+    void publish_debug_soc_led_state();
+    void publish_debug_cabin_pm_valve_state();
     /** @brief 停止并回收点位测试线程；仅用于服务退出。 */
     void stop_galvo_point_test_worker();
 
@@ -332,6 +340,8 @@ private:
     uint32_t print_h264_bitrate_ = 0; /**< 0=Media 默认中等；来自 cal.csv PRINT_H264_BITRATE */
     std::thread clean_worker_;
     std::atomic<bool> clean_running_{false};
+    std::thread pm25_sample_worker_;
+    std::atomic<bool> pm25_sample_busy_{false};
     std::atomic<bool> clean_cancel_requested_{false};
     std::atomic<bool> clean_stop_rsp_pending_{false};
     std::atomic<uint32_t> clean_stop_rsp_target_{0};

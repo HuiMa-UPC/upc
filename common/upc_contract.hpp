@@ -484,9 +484,13 @@ enum class MsgType : uint32_t {
     UI_Debug_Galvo_AbsMove_Ntf,         /**< DebugGalvoAbsMovePayload：振镜绝对坐标移动（手动控制/测高扫描） */
     UI_Debug_PlateHeight_Adj_Set_Ntf,   /**< DebugOnOffPayload：打印前基板测高调 Z（仅本次运行，默认关） */
     UI_Debug_PlateHeight_Adj_Get_Ntf,   /**< Empty：查询当前打印前基板测高开关状态 */
+    UI_Debug_Soc_Led_Set_Ntf,           /**< DebugSocLedPayload：六路舱灯 sysfs（lgt*），不看 MCU 版本 */
+    UI_Debug_Soc_Led_Get_Ntf,           /**< Empty：查询六路舱灯开关状态 */
+    UI_Debug_Cabin_Pm_Valve_Set_Ntf,    /**< DebugOnOffPayload：舱内 PM fa_valve，不看 MCU 版本 */
+    UI_Debug_Cabin_Pm_Valve_Get_Ntf,    /**< Empty：查询舱内 PM 阀开关状态 */
 
     // ---- GLAVO → UI：调试页状态回读（按模块拆分） ----
-    GLAVO_Debug_Sensor_Ntf = 0x1200, /**< DebugSensorPayload：顶部 7 路传感器 */
+    GLAVO_Debug_Sensor_Ntf = 0x1200, /**< DebugSensorPayload：调试顶栏传感器（含舱外/舱内 PM） */
     GLAVO_Debug_Axis_Ntf,           /**< DebugAxisStatePayload：Z/S/D 位置 + Z 工作坐标 */
     GLAVO_Debug_Device_Ntf,         /**< DebugDeviceStatePayload：设备/门/电机/照明 */
     GLAVO_Debug_Galvo_Ntf,          /**< DebugGalvoStatePayload：振镜 X/Y */
@@ -503,6 +507,8 @@ enum class MsgType : uint32_t {
     // ---- MEDIA → UI：调试页状态回读 ----
     APP_Media_Local_Rtsp_State_Ntf, /**< DebugOnOffPayload：本地 RTSP Server 实际开关状态（相机未就绪时回 0，UI 据此弹回） */
     GLAVO_Debug_PlateHeight_Adj_Ntf,    /**< DebugOnOffPayload：打印前基板测高调 Z 开关状态 */
+    GLAVO_Debug_Soc_Led_Ntf,            /**< DebugSocLedStatePayload：六路舱灯开关位图 */
+    GLAVO_Debug_Cabin_Pm_Valve_Ntf,     /**< DebugOnOffPayload：舱内 PM 阀开关状态 */
 
     // ---- UI ↔ GLAVO：网络 / WiFi（ConnMan 后端） ----
     UI_Wifi_Enable_Req = 0x1300, /**< WifiEnableReqPayload：开/关 WiFi */
@@ -567,6 +573,7 @@ enum class MsgType : uint32_t {
     APP_Visual_Laser_Spot_Measure_Rsp,                   /**< LaserSpotMeasureRspPayload */
     UI_Glavo_Height_Calib_Start_Req,                     /**< HeightCalibStartReqPayload */
     GLAVO_UI_Height_Calib_Progress_Ntf,                  /**< HeightCalibProgressPayload */
+    APP_Glavo_Height_Calib_Start_Rsp,                    /**< HeightCalibStartRspPayload：受理/拒绝（不移位 Progress 编号） */
     // ---- MEDIA ↔ CAMERA：媒体进程并行取流（拍照/录像） ----
     MEDIA_Camera_Stream_Start_Req = 0x1450,  /**< CameraStreamStartReqPayload（媒体侧取流） */
     APP_Media_Camera_Stream_Start_Rsp,       /**< CameraStreamInfoPayload */
@@ -1072,6 +1079,12 @@ struct HeightCalibStartReqPayload {
     char  lut_path[128];    /**< LUT 输出路径，如 /etc/visual/height_lut.txt */
 };
 
+/** APP_Glavo_Height_Calib_Start_Rsp：校准是否已启动（Inline） */
+struct HeightCalibStartRspPayload {
+    uint8_t ok;             /**< 1=已启动后台校准；0=拒绝（打印/测高占用等） */
+    uint8_t reserved[3];
+};
+
 /**
  * GLAVO_UI_Height_Calib_Progress_Ntf：校准进度/结果通知（Inline）。
  * stage: 0=开始 1=采集中 2=完成 3=失败
@@ -1378,6 +1391,11 @@ enum class DebugDeviceTarget: uint8_t { Device = 0, Door = 1, Motor = 2, Light =
 enum class DebugMotorAction : uint8_t { Stop = 0, Forward = 1, Reverse = 2 };
 enum class DebugSwitchTarget: uint8_t { Laser = 0, GasWash = 1, BaseHeat = 2 };
 enum class DebugPowderStatus: uint8_t { Available = 0, Busy = 1, Fault = 2 };
+/** 六路舱灯 channel（/sys/class/leds/lgt*），与 MCU 舱灯 Device/Light 无关 */
+enum class DebugSocLedChannel: uint8_t {
+    Lgt1L = 0, Lgt1R = 1, Lgt2L = 2, Lgt2R = 3, Lgt3L = 4, Lgt3R = 5
+};
+constexpr uint8_t kDebugSocLedCount = 6;
 
 /** UI_Debug_Axis_Jog_Ntf：轴点动 / 长按点动 */
 struct DebugAxisJogPayload {
@@ -1460,6 +1478,19 @@ struct DebugSwitchPayload {
     uint8_t reserved[2];
 };
 
+/** UI_Debug_Soc_Led_Set_Ntf：单路舱灯开关（sysfs lgt*，不看 MCU 版本） */
+struct DebugSocLedPayload {
+    uint8_t channel;    /**< DebugSocLedChannel 0..5 */
+    uint8_t on;
+    uint8_t reserved[2];
+};
+
+/** GLAVO_Debug_Soc_Led_Ntf：六路舱灯状态位图（bit0=Lgt1L … bit5=Lgt3R） */
+struct DebugSocLedStatePayload {
+    uint8_t mask;
+    uint8_t reserved[3];
+};
+
 /** UI_Debug_PrintParam_Set_Ntf：打印层参数（层厚 + 平衡系数×1000） */
 struct DebugPrintParamPayload {
     uint16_t layer_um;        /**< 层厚 um */
@@ -1483,15 +1514,16 @@ struct DebugLaserStatePayload {
     uint8_t  reserved[3];
 };
 
-/** GLAVO_Debug_Sensor_Ntf：顶部 7 路传感器快照 */
+/** GLAVO_Debug_Sensor_Ntf：顶部传感器快照（舱外/舱内 PM 分列，便于联调读数） */
 struct DebugSensorPayload {
     float   oxygen_percent;
     float   pressure_kpa;
-    float   pm25;
+    float   pm25;            /**< 舱外/常显 PM2.5；旧固件与舱内同源；无效 <0 */
     float   humidity_pct;
     float   cabin_temp_c;
     float   baseplate_temp_c;
-    uint8_t powder_status;   /**< DebugPowderStatus */
+    float   pm25_cabin;      /**< 舱内 PM2.5（V4=SOC 舱内 UART，阀关时可能无效）；无效 <0 */
+    uint8_t powder_status;   /**< DebugPowderStatus；0xFF=无效显示 "--" */
     uint8_t reserved[3];
 };
 

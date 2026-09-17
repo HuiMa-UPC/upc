@@ -1,5 +1,6 @@
 #include "page_user_settings.hpp"
 #include "ui_theme.hpp"
+#include "ui_backlight.hpp"
 #include "ui_user_widgets.hpp"
 #include "ui_modal_dialog.hpp"
 #include "ui_keyboard.hpp"
@@ -36,6 +37,7 @@
  *   - Wi-Fi 列表来自后端扫描推送（GLAVO_Wifi_Scan_Rsp），首次结果到达前显示 Searching。
  *   - Debug 行点击 → 开发者密码框（"888"）→ switch_to("user_debug")。
  *   - 软件版本号迁至 About 子页。
+ *   - Display & Sound：LCD 背光滑条（sysfs `/sys/class/backlight`，1~100%）。
  *   - 子导航图标暂用 LV_SYMBOL 占位，待 SVG 资源到位再替换。
  *   - 软件版本 UPC_SW_VERSION：根 CMakeLists.txt 的 UPC_PRODUCT_VERSION。
  */
@@ -1278,6 +1280,86 @@ void build_about_detail(lv_obj_t *parent)
     g_galvo_ver_lbl = about_add_row(card, "Galvo Version", g_galvo_ver_text);
 }
 
+lv_obj_t *g_bl_pct_lbl = nullptr;
+
+void backlight_refresh_pct_label(int percent)
+{
+    if(!g_bl_pct_lbl) {
+        return;
+    }
+    char buf[16];
+    std::snprintf(buf, sizeof(buf), "%d%%", percent);
+    lv_label_set_text(g_bl_pct_lbl, buf);
+}
+
+void on_backlight_slider(lv_event_t *e)
+{
+    lv_obj_t *sl = lv_event_get_target_obj(e);
+    if(!sl) {
+        return;
+    }
+    const int32_t v = lv_slider_get_value(sl);
+    (void)ui::backlight_set_percent(static_cast<int>(v));
+    backlight_refresh_pct_label(static_cast<int>(v));
+}
+
+void build_display_detail(lv_obj_t *parent)
+{
+    const int32_t slider_touch_h = (USER_PROGRESS_H * 2 > 24) ? USER_PROGRESS_H * 2 : 24;
+    const int32_t knob_sz = (USER_PROGRESS_H * 3 > 28) ? USER_PROGRESS_H * 3 : 28;
+    const int32_t knob_overflow = (knob_sz - slider_touch_h + 1) / 2;
+
+    lv_obj_t *card = ui_user_make_frosted_card(parent, false);
+    lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_row(card, USER_PAD, 0);
+    lv_obj_set_style_pad_ver(card, USER_PAD_SM + knob_overflow, 0);
+
+    lv_obj_t *head = lv_obj_create(card);
+    lv_obj_remove_style_all(head);
+    lv_obj_set_width(head, LV_PCT(100));
+    lv_obj_set_height(head, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(head, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(head, LV_FLEX_ALIGN_SPACE_BETWEEN,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_bg_opa(head, LV_OPA_TRANSP, 0);
+    lv_obj_clear_flag(head, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *title = lv_label_create(head);
+    lv_label_set_text(title, "Brightness");
+    lv_obj_set_style_text_color(title, user_color_text, 0);
+    lv_obj_set_style_text_font(title, user_font_title(), 0);
+
+    g_bl_pct_lbl = lv_label_create(head);
+    lv_obj_set_style_text_color(g_bl_pct_lbl, user_color_text_dim, 0);
+    lv_obj_set_style_text_font(g_bl_pct_lbl, user_font_text(), 0);
+
+    int pct = ui::backlight_get_percent();
+    if(pct < 5) {
+        pct = (pct < 0) ? 80 : 5;
+    }
+    if(pct > 100) {
+        pct = 100;
+    }
+    backlight_refresh_pct_label(pct);
+
+    lv_obj_t *slider = lv_slider_create(card);
+    lv_obj_set_width(slider, LV_PCT(100));
+    lv_obj_set_height(slider, slider_touch_h);
+    lv_slider_set_range(slider, 5, 100);
+    lv_slider_set_value(slider, pct, LV_ANIM_OFF);
+    lv_obj_set_style_bg_color(slider, user_color_panel_alt, LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(slider, LV_OPA_70, LV_PART_MAIN);
+    lv_obj_set_style_radius(slider, LV_RADIUS_CIRCLE, LV_PART_MAIN);
+    lv_obj_set_style_bg_color(slider, user_color_accent, LV_PART_INDICATOR);
+    lv_obj_set_style_radius(slider, LV_RADIUS_CIRCLE, LV_PART_INDICATOR);
+    lv_obj_set_style_bg_color(slider, user_color_text, LV_PART_KNOB);
+    lv_obj_set_style_width(slider, knob_sz, LV_PART_KNOB);
+    lv_obj_set_style_height(slider, knob_sz, LV_PART_KNOB);
+    lv_obj_set_style_radius(slider, LV_RADIUS_CIRCLE, LV_PART_KNOB);
+    lv_obj_set_ext_click_area(slider, USER_PAD);
+    lv_obj_add_event_cb(slider, on_backlight_slider, LV_EVENT_VALUE_CHANGED, nullptr);
+}
+
 void build_device_detail(lv_obj_t *parent)
 {
     lv_obj_t *card = ui_user_make_frosted_card(parent, false);
@@ -1317,6 +1399,7 @@ void show_detail(NavId id)
      * 否则离开 About 后到达的应答/超时会写已释放的 label。 */
     g_mcu_ver_lbl = nullptr;
     g_galvo_ver_lbl = nullptr;
+    g_bl_pct_lbl = nullptr;
     mcu_ver_stop_timer();
     lv_obj_clean(g_detail);
     /* 复位详情容器：默认不滚动、无右内边距（网络详情会按需开启） */
@@ -1336,6 +1419,7 @@ void show_detail(NavId id)
         ui::UiMsgProxy::instance().send_wifi_scan();
         wifi_rescan_start();
         break;
+    case NAV_DISPLAY: build_display_detail(g_detail); break;
     case NAV_DEVICE:  build_device_detail(g_detail);  break;
     case NAV_ABOUT:
         build_about_detail(g_detail);

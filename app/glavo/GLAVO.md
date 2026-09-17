@@ -17,7 +17,8 @@
 | `lib/height_calibration.*` | 调试页高度校准（关舱灯 + Red_On → 写 LUT → 开舱灯，红光保持） |
 | `lib/plate_height_measure.*` | 打印前两步测高调 Z（开关默认关；结束只开舱灯） |
 | `lib/galvo_motion_encode.*` | 调试运动包编码 + 五点坐标（点位测试与光路检测共用） |
-| `lib/device_config.hpp` | TCP/串口默认、换层/Layer Snap 开关、`GLAVO_TEST_GCODE_PATH` |
+| `lib/soc_sensors.*` | SOC 本地：舱内外 PMSA UART、AHT20、双路 CPM121、IIO 氧气（3.3V/100Ω/K=480）；MCU≥V4（或已收到 Len=15）可开周期采集。切入 V4 时六路舱灯默认全开。开阀采样仅固件 major≥4。六路舱灯/`fa_valve` sysfs 调试可随时写；业务采样结束强制关阀。背光不在本模块。 |
+| `lib/device_config.hpp` | TCP/串口默认、换层/Layer Snap 开关、`GLAVO_TEST_GCODE_PATH`、PM UART/`fa_valve`/`lgt*` 路径宏 |
 | `lib/mcu_ota_session.*` | Galvo 以太网 OTA：扫描 `/userdata/image/galvo` 最高版本 AB 对 |
 | `lib/mcu_serial_ota_session.*` | MCU 串口 OTA：扫描 `/userdata/image/mcu` 最高版本 AB 对；停等重传 + 阶段四版本确认 |
 | `common/fs_manifest/gcode_manifest.*` | Local `config.json` 读写（与 UI 共用；Prepare/Delete 时更新） |
@@ -55,8 +56,18 @@ UI → GlavoService（工作线程）→ ParserManager → RingBuffer → McuLin
 | `UI_Debug_OpticalPath_Check_Set_Ntf` | 打印前光路检测开关（仅本次运行，默认关）。开则 Confirm Print 后、出光前逐点等视觉识别；失败阻断并 `APP_Print_Start_Rejected_Ntf` |
 | `UI_Debug_PlateHeight_Adj_Set_Ntf` | 打印前基板测高调 Z（仅本次运行，默认关）。开则 Confirm Print 后、光路之前测 8 点并 AXIS_INC；无 LUT 或失败不阻断打印 |
 | `UI_Debug_Galvo_Param_Save_Ntf` | 写 `cal.csv` 第 4 行中心偏移 + `ParserContext::load_calibration`；打印/任一振镜测试进行中拒绝 |
-| `UI_PM25_Req` / 门控 Req | 环境快照或占位 Rsp |
+| `UI_PM25_Req` / 门控 Req | 旧固件：环境快照；**仅 MCU 固件 major≥4**：独立线程开 `fa_valve` 采 3s 舱内平均后回 `APP_PM25_Rsp`（不堵 worker）。版本未到不开阀 |
+| `UI_Debug_Soc_Led_Set_Ntf` / `Get` | 六路舱灯 `lgt1l`…`lgt3r` sysfs，不看 MCU 版本 |
+| `UI_Debug_Cabin_Pm_Valve_Set_Ntf` / `Get` | 舱内 PM `fa_valve`，不看 MCU 版本；业务采样结束**强制关阀**并回读 Off |
 | `UI_Alarm_Reset_Ntf` | `serial_build_alarm_reset` 组 0xA3/0x82 帧直发串口；结果不回 Rsp，以 MCU 后续单条上报为准 |
+
+### MCU V4 传感器
+
+- **1ST（TLV 0x02）**：Tlv-Len=15 为 V4 重排（O2/滤芯气压/基板/NTC/开关/红外）；Len 13/21 为旧布局。粉量缺粉看 OUTL/OUTR；发给 UI 的 `powder_bits` 低 2 位为「左/右匣仍有粉」。
+- **EXT（TLV 0x06）**：电气量+风机，须固件 major≥4 才消费（当前仅日志）。
+- **SOC 采集**：舱外常显 PM、舱内 PM（阀开窗口可信）、AHT20 温湿度、CPM121 气压、IIO 氧气（`in_voltage0_raw` → V=raw/1023×3.3，I[uA]=V/100×1e6，O2%=100×(1−e^(−I/K))，K 暂 480）。首页 `pm25_indoor` 在 V4 下为舱外 PMSA。Len=15 可提前开周期采集，但**开阀采样仍等版本 major≥4**（旧板无阀）。首次切入 V4 时六路舱灯 `lgt1l`…`lgt3r` 写 1 全开（调试页仍可单独关）。
+- **SOC→UI 推送（major≥4 / Len=15）**：`poll_soc_env_tick` 每 500ms 独立 `publish_async` `APP_Update_Ntf` + `GLAVO_Debug_Sensor_Ntf`，**不依赖** MCU 1ST。MCU 仍负责基板/粉量/门等；未收到 1ST 前这些字段顶栏显示 `--`。旧固件（major < 4）仍只随 MCU 0x9B 推送。
+- **开门前清粉（固件 major≥4 且真实门控开）**：风机固定吹 10s → 关风机 → 开阀 3s 平均后关阀；仍超标则循环。
 
 跨进程回复 UI：**必须** `publish_async`（`GlavoService` 工作线程内禁止 `MsgPort::publish` 同步路径）。
 

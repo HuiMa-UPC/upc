@@ -83,7 +83,7 @@ lv_obj_t *g_laser_type_lbl      = nullptr;      /**< 激光器类型显示区（
 lv_obj_t *g_laser_current_lbl   = nullptr;      /**< 电流读数 */
 uint8_t   g_laser_type_code     = 0;            /**< 最近一次上报的激光器型号（0=未知 1=JFSC 2=AL） */
 
-lv_obj_t *g_sensor_val[7] = { nullptr };
+lv_obj_t *g_sensor_val[8] = { nullptr };
 lv_obj_t *g_axis_pos[3]   = { nullptr };
 lv_obj_t *g_axis_step[3]  = { nullptr };   /**< 点击距离/速度输入（按 tab 复用） */
 lv_obj_t *g_axis_ctrl[3]  = { nullptr };   /**< 控制区容器（按子 tab 重建） */
@@ -126,9 +126,18 @@ lv_obj_t *g_optical_path_check_btn = nullptr; /**< 其他控制：打印前光�
 lv_obj_t *g_optical_path_check_state_lbl = nullptr; /**< 其他控制：打印前光路检测状态文本 */
 lv_obj_t *g_plate_height_adj_btn = nullptr; /**< 其他控制：打印前基板测高开关按钮 */
 lv_obj_t *g_plate_height_adj_state_lbl = nullptr; /**< 其他控制：打印前基板测高状态文本 */
+lv_obj_t *g_soc_led_btn[middleware::kDebugSocLedCount] = {};
+lv_obj_t *g_soc_led_state_lbl[middleware::kDebugSocLedCount] = {};
+lv_obj_t *g_cabin_pm_valve_btn = nullptr;   /**< 其他控制：舱内 PM fa_valve */
+lv_obj_t *g_cabin_pm_valve_state_lbl = nullptr;
 lv_obj_t *g_local_rtsp_btn = nullptr;       /**< 其他控制：本地 RTSP Server 开关按钮 */
 lv_obj_t *g_local_rtsp_state_lbl = nullptr; /**< 其他控制：本地 RTSP Server 状态文本 */
 bool g_env_sim_on = false;                  /**< 缓存 Env Sim 回读状态，用于门控 Powder Sim 按钮 */
+
+/* 六路舱灯名称（sysfs lgt*；与 Device/Light 串口舱灯无关） */
+const char *const kSocLedNames[middleware::kDebugSocLedCount] = {
+    "LED 1L", "LED 1R", "LED 2L", "LED 2R", "LED 3L", "LED 3R"
+};
 
 /* 设备快捷行状态字（受 Montserrat 字库约束，沿用英文） */
 const char *const kDevOn[4]  = { "Awake", "Open", "Running", "On" };
@@ -379,7 +388,7 @@ lv_obj_t *make_sensor_cell(lv_obj_t *parent, const char *caption, int idx)
     lv_label_set_text(val, "--");
     lv_obj_set_style_text_color(val, user_color_text, 0);
     lv_obj_set_style_text_font(val, user_font_text(), 0);
-    if(idx >= 0 && idx < 7) {
+    if(idx >= 0 && idx < 8) {
         g_sensor_val[idx] = val;
     }
     return cell;
@@ -396,11 +405,11 @@ lv_obj_t *build_sensor_strip(lv_obj_t *parent)
     lv_obj_set_style_pad_ver(strip, USER_PAD_SM, 0);
     lv_obj_set_style_pad_hor(strip, 0, 0);
 
-    const char *caps[7] = {
-        "Oxygen", "Pressure", "PM2.5", "Humidity",
-        "Cabin Temp", "Plate Temp", "Powder",
+    const char *caps[8] = {
+        "Oxygen", "Pressure", "PM Out", "Humidity",
+        "Cabin Temp", "Plate Temp", "PM Cabin", "Powder",
     };
-    for(int i = 0; i < 7; i++) {
+    for(int i = 0; i < 8; i++) {
         make_sensor_cell(strip, caps[i], i);
     }
     return strip;
@@ -1316,6 +1325,11 @@ void on_dbg_toggle(lv_event_t *e)
                  break;
         case 15: proxy.send_plate_height_adj_set(on);          /* 打印前基板测高调 Z（仅本次运行，默认关） */
                  break;
+        /* SOC 六路舱灯 / 舱内 PM 阀：sysfs 直控，不看 MCU 版本 */
+        case 16: proxy.send_soc_led_set(c->arg, on);
+                 break;
+        case 17: proxy.send_cabin_pm_valve_set(on);
+                 break;
         /* 造几条假消息喂通知浮层。Glavo 侧还没实现 GLAVO_Device_Event_Ntf，
          * 没有这个入口就只有打印流程那两条能看，「查看剩余 N 条」那条路径根本走不到。
          * 四条 = 两张卡 + 一颗「剩余 2 条」按钮，顺带把红/蓝两种卡和排序都覆盖上。 */
@@ -1763,10 +1777,20 @@ void build_other_switches_card(lv_obj_t *parent)
     make_dbg_toggle(rowE, "Local RTSP", "On", "Off", LV_SYMBOL_VIDEO, true,
                     13, 0, true, 0, &g_local_rtsp_btn, &g_local_rtsp_state_lbl);
 
+    /* 六路舱灯 + 舱内 PM 阀：SOC sysfs，不看 MCU 版本（与上方 Device/Light 串口舱灯无关） */
+    lv_obj_t *rowF = make_switch_grid_row(grid);
+    for(uint8_t i = 0; i < middleware::kDebugSocLedCount; ++i) {
+        make_dbg_toggle(rowF, kSocLedNames[i], "On", "Off", LV_SYMBOL_CHARGE, false,
+                        16, i, true, 0, &g_soc_led_btn[i], &g_soc_led_state_lbl[i]);
+    }
+    lv_obj_t *rowG = make_switch_grid_row(grid);
+    make_dbg_toggle(rowG, "Cabin PM Valve", "On", "Off", LV_SYMBOL_POWER, false,
+                    17, 0, true, 0, &g_cabin_pm_valve_btn, &g_cabin_pm_valve_state_lbl);
+
     /* 一次性红光点位测试：中心与四角各停留 3 秒，结束立即回中心并切普通红光。
      * 不是开关量，走不了 make_dbg_toggle（那是 CHECKABLE），故按同款
      * 「名称 + 状态字 + 圆钮」竖排手搭，圆钮复用 make_circle_btn（同筛粉/内门点动键）。 */
-    lv_obj_t *ptgrp = lv_obj_create(rowE);
+    lv_obj_t *ptgrp = lv_obj_create(rowG);
     lv_obj_remove_style_all(ptgrp);
     lv_obj_set_size(ptgrp, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
     lv_obj_set_flex_flow(ptgrp, LV_FLEX_FLOW_COLUMN);
@@ -2189,13 +2213,14 @@ void bind_debug_callbacks()
         set_metric(g_sensor_val[3], p.humidity_pct, "%.1f%%");
         set_metric(g_sensor_val[4], p.cabin_temp_c, "%.1f");
         set_metric(g_sensor_val[5], p.baseplate_temp_c, "%.1f");
-        if(g_sensor_val[6]) {
+        set_metric(g_sensor_val[6], p.pm25_cabin, "%.1f");
+        if(g_sensor_val[7]) {
             if(p.powder_status == 0xFF) {
-                lv_label_set_text(g_sensor_val[6], "--");
+                lv_label_set_text(g_sensor_val[7], "--");
             } else {
                 const char *txt = (p.powder_status == 0) ? "OK"
                                 : (p.powder_status == 1) ? "Busy" : "Fault";
-                lv_label_set_text(g_sensor_val[6], txt);
+                lv_label_set_text(g_sensor_val[7], txt);
             }
         }
     });
@@ -2426,6 +2451,39 @@ void bind_debug_callbacks()
         }
     });
 
+    proxy.register_soc_led([](uint8_t mask) {
+        for(uint8_t i = 0; i < middleware::kDebugSocLedCount; ++i) {
+            const bool on = (mask & static_cast<uint8_t>(1u << i)) != 0;
+            if(g_soc_led_btn[i]) {
+                if(on) {
+                    lv_obj_add_state(g_soc_led_btn[i], LV_STATE_CHECKED);
+                } else {
+                    lv_obj_clear_state(g_soc_led_btn[i], LV_STATE_CHECKED);
+                }
+            }
+            if(g_soc_led_state_lbl[i]) {
+                lv_label_set_text(g_soc_led_state_lbl[i], on ? "On" : "Off");
+                lv_obj_set_style_text_color(g_soc_led_state_lbl[i],
+                                            on ? user_color_accent : user_color_text_dim, 0);
+            }
+        }
+    });
+
+    proxy.register_cabin_pm_valve([](bool on) {
+        if(g_cabin_pm_valve_btn) {
+            if(on) {
+                lv_obj_add_state(g_cabin_pm_valve_btn, LV_STATE_CHECKED);
+            } else {
+                lv_obj_clear_state(g_cabin_pm_valve_btn, LV_STATE_CHECKED);
+            }
+        }
+        if(g_cabin_pm_valve_state_lbl) {
+            lv_label_set_text(g_cabin_pm_valve_state_lbl, on ? "On" : "Off");
+            lv_obj_set_style_text_color(g_cabin_pm_valve_state_lbl,
+                                        on ? user_color_accent : user_color_text_dim, 0);
+        }
+    });
+
     /* Media 回报的是实际状态：相机未就绪 / 编码器打不开时会回 Off，按钮随之弹回。 */
     proxy.register_local_rtsp([](bool on) {
         if(g_local_rtsp_btn) {
@@ -2489,7 +2547,7 @@ void reset_globals()
     g_galvo_center_y = 0.0;
     g_galvo_saved_x = 0.0;
     g_galvo_saved_y = 0.0;
-    for(int i = 0; i < 7; i++) g_sensor_val[i] = nullptr;
+    for(int i = 0; i < 8; i++) g_sensor_val[i] = nullptr;
     for(int i = 0; i < 3; i++) {
         g_axis_pos[i] = g_axis_step[i] = g_axis_ctrl[i] = nullptr;
         g_axis_mode[i] = 0;
@@ -2514,6 +2572,12 @@ void reset_globals()
     g_optical_path_check_state_lbl = nullptr;
     g_plate_height_adj_btn = nullptr;
     g_plate_height_adj_state_lbl = nullptr;
+    for(uint8_t i = 0; i < middleware::kDebugSocLedCount; ++i) {
+        g_soc_led_btn[i] = nullptr;
+        g_soc_led_state_lbl[i] = nullptr;
+    }
+    g_cabin_pm_valve_btn = nullptr;
+    g_cabin_pm_valve_state_lbl = nullptr;
     g_height_calib_lbl = nullptr;
     g_local_rtsp_btn = nullptr;
     g_local_rtsp_state_lbl = nullptr;
@@ -2541,6 +2605,8 @@ void page_user_debug_refresh(bool /*force*/)
     ui::DebugMsgProxy::instance().request_first_layer_visual_check_state();
     ui::DebugMsgProxy::instance().request_optical_path_check_state();
     ui::DebugMsgProxy::instance().request_plate_height_adj_state();
+    ui::DebugMsgProxy::instance().request_soc_led_state();
+    ui::DebugMsgProxy::instance().request_cabin_pm_valve_state();
     ui::DebugMsgProxy::instance().request_test_image_state();
     ui::DebugMsgProxy::instance().request_galvo_point_test_state();
     ui::DebugMsgProxy::instance().request_local_rtsp_state();
@@ -2563,6 +2629,8 @@ void page_user_debug_exit(void)
     proxy.register_first_layer_visual_check(nullptr);
     proxy.register_optical_path_check(nullptr);
     proxy.register_plate_height_adj(nullptr);
+    proxy.register_soc_led(nullptr);
+    proxy.register_cabin_pm_valve(nullptr);
     proxy.register_height_calib_progress(nullptr);
     proxy.register_test_image(nullptr);
     proxy.register_galvo_point_test(nullptr);

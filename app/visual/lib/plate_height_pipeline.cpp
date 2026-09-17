@@ -136,7 +136,15 @@ private:
             if (c == '}') break;
             throw std::runtime_error("JSON 对象缺少逗号或右花括号");
         }
+        /* GCC 13 aarch64：std::variant 析构路径上的假阳性 -Wmaybe-uninitialized */
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wmaybe-uninitialized"
+#endif
         return Value(std::move(obj));
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic pop
+#endif
     }
 
     Value parse_array() {
@@ -152,7 +160,14 @@ private:
             if (c == ']') break;
             throw std::runtime_error("JSON 数组缺少逗号或右方括号");
         }
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wmaybe-uninitialized"
+#endif
         return Value(std::move(arr));
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic pop
+#endif
     }
 
     std::string parse_string() {
