@@ -40,27 +40,26 @@ bool regress(const std::vector<std::array<float, 3>>& pts,  // [h, img_x, img_y]
 {
     const int n = static_cast<int>(pts.size());
     if (n < 2) {
-        return false;  // 至少 2 点才能回归斜率
+        return false;
     }
     double sh = 0, sx = 0, sy = 0;
     for (const auto& p : pts) {
         sh += p[0]; sx += p[1]; sy += p[2];
     }
     const double mh = sh / n, mx = sx / n, my = sy / n;
-    double sxx = 0, sxh = 0, syy = 0, syh = 0;
+    double sxx = 0, syy = 0, shh = 0;
     for (const auto& p : pts) {
         const double dh = p[0] - mh;
         sxx += dh * (p[1] - mx);
         syy += dh * (p[2] - my);
-        sxh += dh * dh;
-        syh += dh * dh;  // 同一个 dh²
+        shh += dh * dh;
     }
-    if (std::fabs(sxh) < 1e-12) {
-        return false;  // 高度无变化，无法回归斜率
+    if (std::fabs(shh) < 1e-12) {
+        return false;
     }
-    out.a1 = static_cast<float>(sxx / sxh);
+    out.a1 = static_cast<float>(sxx / shh);
     out.a0 = static_cast<float>(mx - out.a1 * mh);
-    out.b1 = static_cast<float>(syy / syh);
+    out.b1 = static_cast<float>(syy / shh);
     out.b0 = static_cast<float>(my - out.b1 * mh);
     out.count = n;
     return true;
@@ -81,7 +80,6 @@ bool HeightLut2d::load(const std::string& path, float h_min, float h_max) {
         return false;
     }
 
-    // 按 (galvo_x, galvo_y) 分组收集样本
     std::map<GalvoKey, std::vector<std::array<float, 3>>> groups;
     std::string line;
     int total = 0;
@@ -93,7 +91,7 @@ bool HeightLut2d::load(const std::string& path, float h_min, float h_max) {
         std::istringstream iss(str);
         float h, gx, gy, ix, iy;
         if (!(iss >> h >> gx >> gy >> ix >> iy)) {
-            continue;  // 跳过非法行（兼容旧 3 列格式会被跳过）
+            continue;
         }
         if (h < h_min - 1e-4f || h > h_max + 1e-4f) {
             continue;
@@ -107,7 +105,6 @@ bool HeightLut2d::load(const std::string& path, float h_min, float h_max) {
         return false;
     }
 
-    // 每组回归
     for (const auto& [key, pts] : groups) {
         GalvoLutEntry e{};
         e.galvo_x = key.x;
@@ -145,7 +142,6 @@ float HeightLut2d::lookup(float galvo_x, float galvo_y,
         return std::nanf("");
     }
 
-    // 找最近的校准位置（欧氏距离最小）
     const GalvoLutEntry* best = nullptr;
     float best_d2 = std::numeric_limits<float>::max();
     for (const auto& e : entries_) {
@@ -161,10 +157,9 @@ float HeightLut2d::lookup(float galvo_x, float galvo_y,
         return std::nanf("");
     }
 
-    // 二维最小二乘投影：h = (a1·(img_x-a0) + b1·(img_y-b0)) / (a1² + b1²)
     const float denom = best->a1 * best->a1 + best->b1 * best->b1;
     if (denom < 1e-12f) {
-        return std::nanf("");  // 两个斜率都为 0，无法求 h
+        return std::nanf("");
     }
     const float h = (best->a1 * (img_x - best->a0) +
                      best->b1 * (img_y - best->b0)) / denom;

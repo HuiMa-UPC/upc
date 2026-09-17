@@ -59,11 +59,11 @@ struct GalvoMotionCalibration {
 GalvoMotionCalibration galvo_motion_calibration_snapshot();
 
 /**
- * @brief 将一个 G01 X/Y F1000 E0 定位动作编码为 11 字节运动子包
+ * @brief 将一个 G01 X/Y F1000 E1 定位动作编码为 11 字节运动子包
  * @param cal   校准与增益快照（按值传入，避免热加载竞争）
  * @param x,y   目标振镜坐标（mm，编码内部过校准表）
  * @return 可直接交给 McuLink::send_debug_motion_subpacket() 的子包
- * @note E 字段恒为 0：只移动红光点，不携带激光能量。
+ * @note LD=1：在 TCP Red=3 常亮下途中保持瞄准红光；LD=0 会被 MCU 当空跳掐灭。
  */
 std::array<uint8_t, kMotionSubpacketSize> galvo_encode_motion_subpacket(
     const GalvoMotionCalibration& cal, float x, float y);

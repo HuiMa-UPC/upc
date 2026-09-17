@@ -25,9 +25,11 @@
  * Test（测试）Tab 为自动化用例表，实现见 page_user_debug_test.cpp（中文界面）。
  * 移动控制：左列 Z/S/D 三轴卡（点击移动/长按移动），右列 振镜坐标卡 + 振镜标定卡。
  * 振镜方向盘（X/-X/Y/-Y）按 Step 本地增减中心偏移；复位回上次 Save/读盘值。
+ * Abs X / Abs Y + Move：按 snowx 口径发 UI_Debug_Galvo_AbsMove_Ntf，真正移动振镜。
  * Save 写 cal.csv 第 4 行并由 Glavo load_calibration；测试图/正式打印中禁用。
  * Test image 开关：红光循环打印 /userdata/test/test.gcode（经 DebugMsgProxy）。
  * Other 点位测试：按校准表显示中心 + 四角，每点 3 秒，与打印/Test image 互斥。
+ * Other Plate Height Adj：打印前测高调 Z，默认关；开了 Confirm Print 才跑。
  * 其余命令经 DebugMsgProxy → APP_GLAVO（后端待实现）；图标暂用 LV_SYMBOL/文字占位。
  */
 
@@ -92,6 +94,8 @@ lv_obj_t *g_z_zero_lbl     = nullptr;
 lv_obj_t *g_galvo_x_lbl    = nullptr;
 lv_obj_t *g_galvo_y_lbl    = nullptr;
 lv_obj_t *g_galvo_scale_ta = nullptr;
+lv_obj_t *g_galvo_abs_x_ta = nullptr;   /**< 振镜绝对坐标 X 输入框(mm) */
+lv_obj_t *g_galvo_abs_y_ta = nullptr;   /**< 振镜绝对坐标 Y 输入框(mm) */
 lv_obj_t *g_galvo_step_seg = nullptr;
 lv_obj_t *g_test_image_seg = nullptr;
 lv_obj_t *g_galvo_save_btn = nullptr;
@@ -120,6 +124,8 @@ lv_obj_t *g_first_layer_visual_btn = nullptr; /**< 其他控制：首层视觉�
 lv_obj_t *g_first_layer_visual_state_lbl = nullptr; /**< 其他控制：首层视觉检测状态文本 */
 lv_obj_t *g_optical_path_check_btn = nullptr; /**< 其他控制：打印前光路检测开关按钮 */
 lv_obj_t *g_optical_path_check_state_lbl = nullptr; /**< 其他控制：打印前光路检测状态文本 */
+lv_obj_t *g_plate_height_adj_btn = nullptr; /**< 其他控制：打印前基板测高开关按钮 */
+lv_obj_t *g_plate_height_adj_state_lbl = nullptr; /**< 其他控制：打印前基板测高状态文本 */
 lv_obj_t *g_local_rtsp_btn = nullptr;       /**< 其他控制：本地 RTSP Server 开关按钮 */
 lv_obj_t *g_local_rtsp_state_lbl = nullptr; /**< 其他控制：本地 RTSP Server 状态文本 */
 bool g_env_sim_on = false;                  /**< 缓存 Env Sim 回读状态，用于门控 Powder Sim 按钮 */
@@ -857,6 +863,16 @@ void on_height_calib_click(lv_event_t *)
     ui_toast_show("Height calibration started", user_color_accent, 1500);
 }
 
+/** @brief 振镜绝对坐标移动：读 Abs X/Y，发 UI_Debug_Galvo_AbsMove_Ntf。
+ *  laser_on=1（运动包 LD=01 00）：Red_On 常亮时途中不关红光。 */
+void on_galvo_abs_move(lv_event_t *)
+{
+    const float x = read_ta_float(g_galvo_abs_x_ta);
+    const float y = read_ta_float(g_galvo_abs_y_ta);
+    ui::DebugMsgProxy::instance().send_galvo_abs_move(x, y, 0.0f, 1);
+    ui_toast_show("Galvo move sent", user_color_accent, 1200);
+}
+
 void on_galvo_point_test_click(lv_event_t *)
 {
     const auto& proxy = ui::DebugMsgProxy::instance();
@@ -1012,6 +1028,40 @@ lv_obj_t *build_galvo_card(lv_obj_t *parent)
                         LV_EVENT_VALUE_CHANGED, nullptr);
     seg_fit_content(g_test_image_seg);
     style_debug_seg(g_test_image_seg);
+
+    /* 绝对坐标移动行：X / Y 输入框 + Move（snowx 手动振镜，与测高同一条 TCP 包） */
+    lv_obj_t *abs_row = lv_obj_create(card);
+    lv_obj_remove_style_all(abs_row);
+    lv_obj_set_width(abs_row, LV_PCT(100));
+    lv_obj_set_height(abs_row, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(abs_row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(abs_row, LV_FLEX_ALIGN_START,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_column(abs_row, USER_PAD_SM, 0);
+    lv_obj_set_style_bg_opa(abs_row, LV_OPA_TRANSP, 0);
+    lv_obj_clear_flag(abs_row, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_t *axcap = lv_label_create(abs_row);
+    lv_label_set_text(axcap, "Abs X");
+    lv_obj_set_style_text_color(axcap, user_color_text_dim, 0);
+    lv_obj_set_style_text_font(axcap, user_font_caption(), 0);
+    g_galvo_abs_x_ta = make_value_input(abs_row, 0.0f);
+    lv_obj_t *aycap = lv_label_create(abs_row);
+    lv_label_set_text(aycap, "Y");
+    lv_obj_set_style_text_color(aycap, user_color_text_dim, 0);
+    lv_obj_set_style_text_font(aycap, user_font_caption(), 0);
+    g_galvo_abs_y_ta = make_value_input(abs_row, 0.0f);
+    lv_obj_t *abs_spacer = lv_obj_create(abs_row);
+    lv_obj_remove_style_all(abs_spacer);
+    lv_obj_set_height(abs_spacer, 1);
+    lv_obj_set_flex_grow(abs_spacer, 1);
+    lv_obj_set_style_bg_opa(abs_spacer, LV_OPA_TRANSP, 0);
+    lv_obj_t *move_btn = lv_button_create(abs_row);
+    lv_obj_add_style(move_btn, user_style_btn_primary(), 0);
+    lv_obj_set_size(move_btn, USER_BTN_PRIMARY_W, USER_BTN_PRIMARY_H);
+    lv_obj_add_event_cb(move_btn, on_galvo_abs_move, LV_EVENT_CLICKED, nullptr);
+    lv_obj_t *ml = lv_label_create(move_btn);
+    lv_label_set_text(ml, "Move");
+    lv_obj_center(ml);
 
     /* 底行：步长 + 保存 */
     lv_obj_t *foot = lv_obj_create(card);
@@ -1263,6 +1313,8 @@ void on_dbg_toggle(lv_event_t *e)
         case 10: proxy.send_first_layer_visual_check_set(on);  /* 首层视觉检测（仅本次运行） */
                  break;
         case 14: proxy.send_optical_path_check_set(on);        /* 打印前光路检测（仅本次运行，默认关） */
+                 break;
+        case 15: proxy.send_plate_height_adj_set(on);          /* 打印前基板测高调 Z（仅本次运行，默认关） */
                  break;
         /* 造几条假消息喂通知浮层。Glavo 侧还没实现 GLAVO_Device_Event_Ntf，
          * 没有这个入口就只有打印流程那两条能看，「查看剩余 N 条」那条路径根本走不到。
@@ -1696,6 +1748,8 @@ void build_other_switches_card(lv_obj_t *parent)
                     10, 0, true, 0, &g_first_layer_visual_btn, &g_first_layer_visual_state_lbl);
     make_dbg_toggle(rowD, "Optical Path Chk", "On", "Off", LV_SYMBOL_EYE_OPEN, false,
                     14, 0, true, 0, &g_optical_path_check_btn, &g_optical_path_check_state_lbl);
+    make_dbg_toggle(rowD, "Plate Height Adj", "On", "Off", LV_SYMBOL_UP, false,
+                    15, 0, true, 0, &g_plate_height_adj_btn, &g_plate_height_adj_state_lbl);
     /* 往消息中心塞 4 条假消息，验左下通知浮层与侧栏红点（后端还没发真消息） */
     make_dbg_toggle(rowD, "Msg Inject", "On", "Off", LV_SYMBOL_BELL, false, 11, 0);
     /* 造 5 条假 MCU 报警（阻断/RTN/自动清除/EVENT 各一 + 一条 critical 凑齐四色），
@@ -2357,6 +2411,21 @@ void bind_debug_callbacks()
         }
     });
 
+    proxy.register_plate_height_adj([](bool on) {
+        if(g_plate_height_adj_btn) {
+            if(on) {
+                lv_obj_add_state(g_plate_height_adj_btn, LV_STATE_CHECKED);
+            } else {
+                lv_obj_clear_state(g_plate_height_adj_btn, LV_STATE_CHECKED);
+            }
+        }
+        if(g_plate_height_adj_state_lbl) {
+            lv_label_set_text(g_plate_height_adj_state_lbl, on ? "On" : "Off");
+            lv_obj_set_style_text_color(g_plate_height_adj_state_lbl,
+                                        on ? user_color_accent : user_color_text_dim, 0);
+        }
+    });
+
     /* Media 回报的是实际状态：相机未就绪 / 编码器打不开时会回 Off，按钮随之弹回。 */
     proxy.register_local_rtsp([](bool on) {
         if(g_local_rtsp_btn) {
@@ -2412,6 +2481,7 @@ void reset_globals()
     }
     g_z_zero_lbl = g_galvo_x_lbl = g_galvo_y_lbl = nullptr;
     g_galvo_scale_ta = g_galvo_step_seg = g_test_image_seg = g_galvo_save_btn = nullptr;
+    g_galvo_abs_x_ta = g_galvo_abs_y_ta = nullptr;
     g_galvo_point_test_btn = g_galvo_point_test_lbl = nullptr;
     g_galvo_point_test_pending = false;
     g_galvo_center_valid = false;
@@ -2442,6 +2512,8 @@ void reset_globals()
     g_first_layer_visual_state_lbl = nullptr;
     g_optical_path_check_btn = nullptr;
     g_optical_path_check_state_lbl = nullptr;
+    g_plate_height_adj_btn = nullptr;
+    g_plate_height_adj_state_lbl = nullptr;
     g_height_calib_lbl = nullptr;
     g_local_rtsp_btn = nullptr;
     g_local_rtsp_state_lbl = nullptr;
@@ -2468,6 +2540,7 @@ void page_user_debug_refresh(bool /*force*/)
     ui::DebugMsgProxy::instance().request_env_sim_powder_state();
     ui::DebugMsgProxy::instance().request_first_layer_visual_check_state();
     ui::DebugMsgProxy::instance().request_optical_path_check_state();
+    ui::DebugMsgProxy::instance().request_plate_height_adj_state();
     ui::DebugMsgProxy::instance().request_test_image_state();
     ui::DebugMsgProxy::instance().request_galvo_point_test_state();
     ui::DebugMsgProxy::instance().request_local_rtsp_state();
@@ -2489,6 +2562,7 @@ void page_user_debug_exit(void)
     proxy.register_env_sim_powder(nullptr);
     proxy.register_first_layer_visual_check(nullptr);
     proxy.register_optical_path_check(nullptr);
+    proxy.register_plate_height_adj(nullptr);
     proxy.register_height_calib_progress(nullptr);
     proxy.register_test_image(nullptr);
     proxy.register_galvo_point_test(nullptr);

@@ -1,17 +1,14 @@
 /**
  * @file height_calibration.cpp
- * @brief 激光高度校准状态机：关舱灯、开红光、AXIS_INC 网格采集、写 LUT。
+ * @brief 调试页高度校准：网格采点后一次性写 LUT。
  */
 #include "height_calibration.hpp"
 
-#include "galvo_motion_encode.hpp"
-#include "height_points.hpp"
 #include "rs_log.hpp"
 
 #include <algorithm>
-#include <chrono>
-#include <thread>
 #include <cmath>
+#include <cstdio>
 #include <fstream>
 #include <iomanip>
 #include <vector>
@@ -23,30 +20,29 @@ HeightCalibration::~HeightCalibration()
     abort();
 }
 
-void HeightCalibration::configure(SendMotionFn send_motion,
-                                  PrepareIlluminationFn prepare_illumination,
-                                  SendZHomeFn send_z_home,
-                                  SendZIncFn send_z_inc,
-                                  WaitZFn wait_z,
-                                  RequestSpotFn request_spot,
-                                  PublishProgressFn publish_progress,
-                                  TurnRedOffFn turn_red_off)
+void HeightCalibration::configure(HeightMoveGalvoFn move_galvo,
+                                  HeightSessionLightFn set_session_light,
+                                  HeightSendZHomeFn send_z_home,
+                                  HeightSendZIncFn send_z_inc,
+                                  HeightWaitZFn wait_z,
+                                  HeightRequestSpotFn request_spot,
+                                  PublishProgressFn publish_progress)
 {
-    send_motion_ = std::move(send_motion);
-    prepare_illumination_ = std::move(prepare_illumination);
+    move_galvo_ = std::move(move_galvo);
+    set_session_light_ = std::move(set_session_light);
     send_z_home_ = std::move(send_z_home);
     send_z_inc_ = std::move(send_z_inc);
     wait_z_ = std::move(wait_z);
     request_spot_ = std::move(request_spot);
     publish_progress_ = std::move(publish_progress);
-    turn_red_off_ = std::move(turn_red_off);
 }
 
 bool HeightCalibration::start(const GalvoMotionCalibration& cal,
                               float start_mm, float end_mm, float step_mm,
                               std::string lut_path)
 {
-    if(!send_motion_ || !prepare_illumination_ || !send_z_home_ || !send_z_inc_ ||
+    (void)cal;
+    if(!move_galvo_ || !set_session_light_ || !send_z_home_ || !send_z_inc_ ||
        !wait_z_ || !request_spot_ || !publish_progress_) {
         UPC_LOG_GLAVO_SERVICE(Error, "height calib start rejected: not configured");
         return false;
@@ -69,9 +65,8 @@ bool HeightCalibration::start(const GalvoMotionCalibration& cal,
     if(lut_path.empty()) {
         lut_path = kHeightLutPath;
     }
-    GalvoMotionCalibration snapshot = cal;
-    worker_ = std::thread([this, snapshot, start_mm, end_mm, step_mm, lut_path]() {
-        run(snapshot, start_mm, end_mm, step_mm, lut_path);
+    worker_ = std::thread([this, start_mm, end_mm, step_mm, lut_path]() {
+        run(start_mm, end_mm, step_mm, lut_path);
     });
     UPC_LOG_GLAVO_SERVICE(Info, "height calib started: %.1f..%.1f step %.1f -> %s",
                           static_cast<double>(start_mm),
@@ -89,8 +84,8 @@ void HeightCalibration::abort()
     active_.store(false);
 }
 
-void HeightCalibration::run(GalvoMotionCalibration cal, float start_mm,
-                            float end_mm, float step_mm, std::string lut_path)
+void HeightCalibration::run(float start_mm, float end_mm, float step_mm,
+                            std::string lut_path)
 {
     std::vector<float> calib_heights;
     for(float h = start_mm; h <= end_mm + 1e-4f; h += step_mm) {
@@ -120,22 +115,22 @@ void HeightCalibration::run(GalvoMotionCalibration cal, float start_mm,
 
     uint8_t result_state = 2;
     do {
-        std::this_thread::sleep_for(std::chrono::milliseconds(1500));
-        if(abort_requested_.load()) {
-            result_state = 1;
-            break;
-        }
-        if(!prepare_illumination_()) {
-            UPC_LOG_GLAVO_SERVICE(Warn, "height calib: illumination failed");
-            break;
-        }
+        set_session_light_(true);
+        std::this_thread::sleep_for(std::chrono::milliseconds(kHeightRedSettleMs));
         if(abort_requested_.load()) {
             result_state = 1;
             break;
         }
 
         send_z_home_();
-        if(!wait_z_(0.0f, 0.1f, kHeightZHomeTimeoutMs)) {
+        if(!wait_z_(kHeightZHomeMm, 0.1f, kHeightZHomeTimeoutMs)) {
+            if(abort_requested_.load()) {
+                result_state = 1;
+                break;
+            }
+            UPC_LOG_GLAVO_SERVICE(Warn,
+                "height calib: z home failed (expect MCU Z=%.2f)",
+                static_cast<double>(kHeightZHomeMm));
             break;
         }
         if(abort_requested_.load()) {
@@ -144,8 +139,16 @@ void HeightCalibration::run(GalvoMotionCalibration cal, float start_mm,
         }
 
         const float pre_dive = start_mm - 5.0f;
-        send_z_inc_(pre_dive);
-        if(!wait_z_(pre_dive, 0.1f, kHeightZHomeTimeoutMs)) {
+        height_send_z_inc(send_z_inc_, pre_dive);
+        if(!wait_z_(height_mcu_z(pre_dive), 0.1f, kHeightZHomeTimeoutMs)) {
+            if(abort_requested_.load()) {
+                result_state = 1;
+                break;
+            }
+            UPC_LOG_GLAVO_SERVICE(Warn,
+                "height calib: pre-dive settle failed logical=%.2f mcu=%.2f",
+                static_cast<double>(pre_dive),
+                static_cast<double>(height_mcu_z(pre_dive)));
             break;
         }
         if(abort_requested_.load()) {
@@ -171,32 +174,31 @@ void HeightCalibration::run(GalvoMotionCalibration cal, float start_mm,
                 aborted = true;
                 break;
             }
-            send_z_inc_(h - z_cur);
+            height_send_z_inc(send_z_inc_, h - z_cur);
             z_cur = h;
-            if(!wait_z_(h, 0.05f, kHeightZHomeTimeoutMs)) {
-                UPC_LOG_GLAVO_SERVICE(Warn,
-                    "calib: z settle failed at %.2f, skip", static_cast<double>(h));
-                continue;
-            }
-            for(const auto& pt : kHeightMeasurePoints) {
+            if(!wait_z_(height_mcu_z(h), 0.05f, kHeightZHomeTimeoutMs)) {
                 if(abort_requested_.load()) {
                     aborted = true;
                     break;
                 }
-                const auto packet = galvo_encode_motion_subpacket(cal, pt.x, pt.y);
-                if(!send_motion_(packet.data())) {
-                    UPC_LOG_GLAVO_SERVICE(Warn,
-                        "calib: galvo move failed at h=%.2f (%.1f,%.1f), skip",
-                        static_cast<double>(h), pt.x, pt.y);
-                    continue;
-                }
-                std::this_thread::sleep_for(
-                    std::chrono::milliseconds(kHeightGalvoSettleMs));
+                UPC_LOG_GLAVO_SERVICE(Warn,
+                    "calib: z settle failed at logical=%.2f mcu=%.2f, skip",
+                    static_cast<double>(h),
+                    static_cast<double>(height_mcu_z(h)));
+                continue;
+            }
+            for(const auto& pt : kHeightMeasurePoints) {
                 float ix = 0.0f, iy = 0.0f;
-                if(!request_spot_(ix, iy, kHeightSpotTimeoutMs)) {
+                const HeightSpotRc rc = sample_galvo_spot(
+                    move_galvo_, request_spot_, abort_requested_, pt.x, pt.y, ix, iy);
+                if(rc == HeightSpotRc::Aborted) {
+                    aborted = true;
+                    break;
+                }
+                if(rc != HeightSpotRc::Ok) {
                     UPC_LOG_GLAVO_SERVICE(Warn,
-                        "calib: spot measure failed at h=%.2f (%.1f,%.1f), skip",
-                        static_cast<double>(h), pt.x, pt.y);
+                        "calib: spot skip at h=%.2f (%.1f,%.1f) rc=%d",
+                        static_cast<double>(h), pt.x, pt.y, static_cast<int>(rc));
                     continue;
                 }
                 samples.push_back({h, pt.x, pt.y, ix, iy});
@@ -226,10 +228,11 @@ void HeightCalibration::run(GalvoMotionCalibration cal, float start_mm,
                       return a.galvo_y < b.galvo_y;
                   });
         {
-            std::ofstream f(lut_path);
+            const std::string tmp_path = lut_path + ".tmp";
+            std::ofstream f(tmp_path);
             if(!f.is_open()) {
                 UPC_LOG_GLAVO_SERVICE(Error, "calib: lut open failed: %s",
-                                      lut_path.c_str());
+                                      tmp_path.c_str());
                 break;
             }
             f << "# 8-point galvo calibration: height galvo_x galvo_y img_x img_y\n";
@@ -240,9 +243,18 @@ void HeightCalibration::run(GalvoMotionCalibration cal, float start_mm,
                 f << s.height << "\t" << s.galvo_x << "\t" << s.galvo_y
                   << "\t" << s.laser_x << "\t" << s.laser_y << "\n";
             }
-            if(!f.good()) {
+            if(!f) {
                 UPC_LOG_GLAVO_SERVICE(Error, "calib: lut write failed: %s",
-                                      lut_path.c_str());
+                                      tmp_path.c_str());
+                f.close();
+                std::remove(tmp_path.c_str());
+                break;
+            }
+            f.close();
+            if(std::rename(tmp_path.c_str(), lut_path.c_str()) != 0) {
+                UPC_LOG_GLAVO_SERVICE(Error, "calib: lut rename failed: %s -> %s",
+                                      tmp_path.c_str(), lut_path.c_str());
+                std::remove(tmp_path.c_str());
                 break;
             }
         }
@@ -251,9 +263,17 @@ void HeightCalibration::run(GalvoMotionCalibration cal, float start_mm,
         result_state = 0;
     } while(false);
 
-    if(turn_red_off_) {
-        turn_red_off_();
+    set_session_light_(false);
+
+    if(!abort_requested_.load()) {
+        send_z_home_();
+        if(!wait_z_(kHeightZHomeMm, 0.1f, kHeightZHomeTimeoutMs)) {
+            UPC_LOG_GLAVO_SERVICE(Warn,
+                "height calib: return to home plane MCU Z=%.2f failed",
+                static_cast<double>(kHeightZHomeMm));
+        }
     }
+
     if(result_state == 0) {
         publish_progress_(2, 0.0f, 0, total_count);
         UPC_LOG_GLAVO_SERVICE(Info, "height calibration done");

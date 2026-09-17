@@ -112,6 +112,15 @@ void DebugMsgProxy::init()
         }));
 
     subs_.push_back(bus.subscribe(
+        middleware::MsgType::GLAVO_Debug_PlateHeight_Adj_Ntf, middleware::ModuleId::UI,
+        [this](const middleware::Message& msg) {
+            middleware::DebugOnOffPayload p{};
+            if(plate_height_adj_cb_ && read_inline_pod(msg, p)) {
+                plate_height_adj_cb_(p.on != 0);
+            }
+        }));
+
+    subs_.push_back(bus.subscribe(
         middleware::MsgType::GLAVO_Debug_TestImage_Ntf, middleware::ModuleId::UI,
         [this](const middleware::Message& msg) {
             middleware::DebugOnOffPayload p{};
@@ -223,6 +232,17 @@ void DebugMsgProxy::send_galvo_param_save(float scale, float step_mm,
 void DebugMsgProxy::send_galvo_calib()
 {
     publish_empty(middleware::MsgType::UI_Debug_Galvo_Calib_Ntf);
+}
+
+void DebugMsgProxy::send_galvo_abs_move(float x_mm, float y_mm,
+                                        float speed_mm_min, int laser_on)
+{
+    middleware::DebugGalvoAbsMovePayload p{};
+    p.x_mm = x_mm;
+    p.y_mm = y_mm;
+    p.speed_mm_min = speed_mm_min;
+    p.laser_on = laser_on ? 1 : 0;
+    publish_pod(middleware::MsgType::UI_Debug_Galvo_AbsMove_Ntf, p);
 }
 
 void DebugMsgProxy::start_galvo_point_test()
@@ -395,6 +415,18 @@ void DebugMsgProxy::request_optical_path_check_state()
     publish_empty(middleware::MsgType::UI_Debug_OpticalPath_Check_Get_Ntf);
 }
 
+void DebugMsgProxy::send_plate_height_adj_set(bool on)
+{
+    middleware::DebugOnOffPayload p{};
+    p.on = on ? 1 : 0;
+    publish_pod(middleware::MsgType::UI_Debug_PlateHeight_Adj_Set_Ntf, p);
+}
+
+void DebugMsgProxy::request_plate_height_adj_state()
+{
+    publish_empty(middleware::MsgType::UI_Debug_PlateHeight_Adj_Get_Ntf);
+}
+
 void DebugMsgProxy::send_height_calib_start(float start_mm, float end_mm,
                                             float step_mm, const char* lut_path)
 {
@@ -474,6 +506,11 @@ void DebugMsgProxy::register_first_layer_visual_check(DebugFirstLayerVisualCheck
 void DebugMsgProxy::register_optical_path_check(DebugOpticalPathCheckCb cb)
 {
     optical_path_check_cb_ = std::move(cb);
+}
+
+void DebugMsgProxy::register_plate_height_adj(DebugPlateHeightAdjCb cb)
+{
+    plate_height_adj_cb_ = std::move(cb);
 }
 
 void DebugMsgProxy::register_test_image(DebugTestImageCb cb)

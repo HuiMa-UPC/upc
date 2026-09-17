@@ -444,6 +444,9 @@ enum class MsgType : uint32_t {
     UI_Debug_Galvo_PointTest_Get_Ntf,   /**< Empty：查询红光点位测试运行状态 */
     UI_Debug_OpticalPath_Check_Set_Ntf, /**< DebugOnOffPayload：打印前光路检测开关（仅本次运行，默认关） */
     UI_Debug_OpticalPath_Check_Get_Ntf, /**< Empty：查询当前打印前光路检测开关状态 */
+    UI_Debug_Galvo_AbsMove_Ntf,         /**< DebugGalvoAbsMovePayload：振镜绝对坐标移动（手动控制/测高扫描） */
+    UI_Debug_PlateHeight_Adj_Set_Ntf,   /**< DebugOnOffPayload：打印前基板测高调 Z（仅本次运行，默认关） */
+    UI_Debug_PlateHeight_Adj_Get_Ntf,   /**< Empty：查询当前打印前基板测高开关状态 */
 
     // ---- GLAVO → UI：调试页状态回读（按模块拆分） ----
     GLAVO_Debug_Sensor_Ntf = 0x1200, /**< DebugSensorPayload：顶部 7 路传感器 */
@@ -462,6 +465,7 @@ enum class MsgType : uint32_t {
 
     // ---- MEDIA → UI：调试页状态回读 ----
     APP_Media_Local_Rtsp_State_Ntf, /**< DebugOnOffPayload：本地 RTSP Server 实际开关状态（相机未就绪时回 0，UI 据此弹回） */
+    GLAVO_Debug_PlateHeight_Adj_Ntf,    /**< DebugOnOffPayload：打印前基板测高调 Z 开关状态 */
 
     // ---- UI ↔ GLAVO：网络 / WiFi（ConnMan 后端） ----
     UI_Wifi_Enable_Req = 0x1300, /**< WifiEnableReqPayload：开/关 WiFi */
@@ -1014,7 +1018,7 @@ struct LaserSpotMeasureRspPayload {
 
 /**
  * UI_Glavo_Height_Calib_Start_Req：启动激光高度校准（Inline）。
- * Glavo：关舱灯 → 开红光 → Z 回零 → AXIS_INC 网格采集 → 写 LUT。
+ * Glavo：关舱灯 + TCP Red=3 → Z 回零 → AXIS_INC 网格采集 → 原子写 LUT；结束只开舱灯。
  */
 struct HeightCalibStartReqPayload {
     float start_height_mm;  /**< 起始高度（mm），如 -5 */
@@ -1352,6 +1356,16 @@ struct DebugGalvoMovePayload {
     int8_t  dir;        /**< +1 / -1 */
     uint8_t reserved[2];
     float   step_mm;
+};
+
+/** UI_Debug_Galvo_AbsMove_Ntf：振镜绝对坐标移动（手动控制/测高扫描用）
+ *  坐标系与切片一致：原点(0,0)为振镜中心，单位 mm，越界由底层自动截断。 */
+struct DebugGalvoAbsMovePayload {
+    float x_mm;         /**< 目标 X 坐标(mm) */
+    float y_mm;         /**< 目标 Y 坐标(mm) */
+    float speed_mm_min; /**< 扫描速度，<=0 用默认 1000mm/min */
+    uint8_t laser_on;   /**< 0=关光移动，1=开光（测高配红光时传 0） */
+    uint8_t reserved[3];
 };
 
 /** 通用开关：UI_Debug_Galvo_RedLight_Ntf / UI_Debug_Pusher_Ntf */

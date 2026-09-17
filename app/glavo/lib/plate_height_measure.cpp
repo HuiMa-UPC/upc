@@ -4,12 +4,9 @@
  */
 #include "plate_height_measure.hpp"
 
-#include "height_points.hpp"
 #include "rs_log.hpp"
 
 #include <algorithm>
-#include <chrono>
-#include <thread>
 #include <cmath>
 #include <vector>
 
@@ -20,17 +17,17 @@ PlateHeightMeasure::~PlateHeightMeasure()
     abort();
 }
 
-void PlateHeightMeasure::configure(SendMotionFn send_motion,
-                                   PrepareIlluminationFn prepare_illumination,
-                                   SendZHomeFn send_z_home,
-                                   SendZIncFn send_z_inc,
-                                   WaitZFn wait_z,
-                                   RequestSpotFn request_spot,
+void PlateHeightMeasure::configure(HeightMoveGalvoFn move_galvo,
+                                   HeightSessionLightFn set_session_light,
+                                   HeightSendZHomeFn send_z_home,
+                                   HeightSendZIncFn send_z_inc,
+                                   HeightWaitZFn wait_z,
+                                   HeightRequestSpotFn request_spot,
                                    PublishSessionFn publish_session,
                                    DoneFn on_done)
 {
-    send_motion_ = std::move(send_motion);
-    prepare_illumination_ = std::move(prepare_illumination);
+    move_galvo_ = std::move(move_galvo);
+    set_session_light_ = std::move(set_session_light);
     send_z_home_ = std::move(send_z_home);
     send_z_inc_ = std::move(send_z_inc);
     wait_z_ = std::move(wait_z);
@@ -41,8 +38,8 @@ void PlateHeightMeasure::configure(SendMotionFn send_motion,
 
 bool PlateHeightMeasure::start(const GalvoMotionCalibration& cal)
 {
-    if(!send_motion_ || !prepare_illumination_ || !send_z_home_ || !send_z_inc_ ||
-       !wait_z_ || !request_spot_ || !on_done_) {
+    if(!move_galvo_ || !set_session_light_ || !send_z_home_ || !send_z_inc_ ||
+       !wait_z_ || !request_spot_ || !publish_session_ || !on_done_) {
         UPC_LOG_GLAVO_SERVICE(Error, "plate height start rejected: not configured");
         return false;
     }
@@ -55,8 +52,6 @@ bool PlateHeightMeasure::start(const GalvoMotionCalibration& cal)
         worker_.join();
     }
     abort_requested_.store(false);
-    const uint32_t generation = generation_.fetch_add(1) + 1;
-    (void)generation;
     GalvoMotionCalibration snapshot = cal;
     worker_ = std::thread([this, snapshot]() { run(snapshot); });
     return true;
@@ -64,7 +59,6 @@ bool PlateHeightMeasure::start(const GalvoMotionCalibration& cal)
 
 void PlateHeightMeasure::abort()
 {
-    generation_.fetch_add(1);
     abort_requested_.store(true);
     if(worker_.joinable()) {
         worker_.join();
@@ -73,7 +67,7 @@ void PlateHeightMeasure::abort()
 }
 
 PlateHeightMeasure::Scan PlateHeightMeasure::scan(
-    const HeightLut2d& lut, const GalvoMotionCalibration& cal, const char* tag)
+    const HeightLut2d& lut, const char* tag)
 {
     Scan out;
     out.h_med = std::nanf("");
@@ -83,20 +77,17 @@ PlateHeightMeasure::Scan PlateHeightMeasure::scan(
     std::vector<float> hs;
     hs.reserve(static_cast<std::size_t>(kHeightMeasureCount));
     for(const auto& pt : kHeightMeasurePoints) {
-        if(abort_requested_.load()) {
+        float ix = 0.0f;
+        float iy = 0.0f;
+        const HeightSpotRc rc = sample_galvo_spot(
+            move_galvo_, request_spot_, abort_requested_, pt.x, pt.y, ix, iy);
+        if(rc == HeightSpotRc::Aborted) {
             break;
         }
-        const auto packet = galvo_encode_motion_subpacket(cal, pt.x, pt.y);
-        if(!send_motion_(packet.data())) {
+        if(rc != HeightSpotRc::Ok) {
             UPC_LOG_GLAVO_SERVICE(Warn,
-                "measure[%s]: galvo move failed (%.1f,%.1f), skip", tag, pt.x, pt.y);
-            continue;
-        }
-        std::this_thread::sleep_for(std::chrono::milliseconds(kHeightGalvoSettleMs));
-        float ix = 0.0f, iy = 0.0f;
-        if(!request_spot_(ix, iy, kHeightSpotTimeoutMs)) {
-            UPC_LOG_GLAVO_SERVICE(Warn,
-                "measure[%s]: spot failed (%.1f,%.1f), skip", tag, pt.x, pt.y);
+                "measure[%s]: spot skip (%.1f,%.1f) rc=%d",
+                tag, pt.x, pt.y, static_cast<int>(rc));
             continue;
         }
         const float h = lut.lookup(pt.x, pt.y, ix, iy);
@@ -141,29 +132,28 @@ PlateHeightMeasure::Scan PlateHeightMeasure::scan(
 
 void PlateHeightMeasure::run(GalvoMotionCalibration cal)
 {
-    if(publish_session_) {
-        publish_session_(true);
-    }
-    std::this_thread::sleep_for(std::chrono::milliseconds(1500));
+    publish_session_(true);
+    set_session_light_(true);
+    std::this_thread::sleep_for(std::chrono::milliseconds(kHeightRedSettleMs));
 
     PlateHeightMeasureResult result;
     result.ran = true;
 
     do {
-        if(abort_requested_.load()) {
-            break;
-        }
-        if(!prepare_illumination_()) {
-            UPC_LOG_GLAVO_SERVICE(Warn, "plate height: illumination failed");
-            break;
-        }
+        UPC_LOG_GLAVO_SERVICE(Info,
+            "plate height galvo=abs_pos laser_on=1 scale=%.4f range=%.3f speed=%.3f",
+            static_cast<double>(cal.scale_gain),
+            static_cast<double>(cal.range_gain),
+            static_cast<double>(cal.speed_gain));
         if(abort_requested_.load()) {
             break;
         }
 
         send_z_home_();
-        if(!wait_z_(0.0f, 0.1f, kHeightZHomeTimeoutMs)) {
-            UPC_LOG_GLAVO_SERVICE(Warn, "measure_plate_height: z home failed");
+        if(!wait_z_(kHeightZHomeMm, 0.1f, kHeightZHomeTimeoutMs)) {
+            UPC_LOG_GLAVO_SERVICE(Warn,
+                "measure_plate_height: z home failed (expect MCU Z=%.2f)",
+                static_cast<double>(kHeightZHomeMm));
             break;
         }
         if(abort_requested_.load()) {
@@ -184,14 +174,17 @@ void PlateHeightMeasure::run(GalvoMotionCalibration cal)
                 static_cast<double>(kFineLutMaxMm));
         }
 
-        const Scan coarse = scan(lut_coarse, cal, "coarse");
-        if(std::isnan(coarse.h_med)) {
+        const Scan coarse = scan(lut_coarse, "coarse");
+        if(abort_requested_.load() || std::isnan(coarse.h_med)) {
             break;
         }
         const float delta1 = -coarse.h_med;
-        send_z_inc_(delta1);
-        float z_now = delta1;
+        height_send_z_inc(send_z_inc_, delta1);
+        float z_now = height_mcu_z(delta1);
         (void)wait_z_(z_now, 0.15f, kHeightZHomeTimeoutMs);
+        if(abort_requested_.load()) {
+            break;
+        }
 
         const HeightLut2d& fine = lut_fine.valid() ? lut_fine : lut_coarse;
         float last_h = std::nanf("");
@@ -199,7 +192,7 @@ void PlateHeightMeasure::run(GalvoMotionCalibration cal)
         bool agree = false;
         auto apply_inc = [&](float h_med) {
             const float d = -h_med;
-            send_z_inc_(d);
+            height_send_z_inc(send_z_inc_, d);
             z_now += d;
             (void)wait_z_(z_now, 0.15f, kHeightZHomeTimeoutMs);
             return d;
@@ -209,7 +202,10 @@ void PlateHeightMeasure::run(GalvoMotionCalibration cal)
             if(abort_requested_.load()) {
                 break;
             }
-            const Scan s = scan(fine, cal, "fine");
+            const Scan s = scan(fine, "fine");
+            if(abort_requested_.load()) {
+                break;
+            }
             if(s.n > 0) {
                 last_h = s.h_med;
                 pending = s.h_med;
@@ -273,9 +269,8 @@ void PlateHeightMeasure::run(GalvoMotionCalibration cal)
                               static_cast<double>(last_h));
     } while(false);
 
-    if(publish_session_) {
-        publish_session_(false);
-    }
+    set_session_light_(false);
+    publish_session_(false);
     active_.store(false);
     if(abort_requested_.load()) {
         UPC_LOG_GLAVO_SERVICE(Info, "plate height round aborted");

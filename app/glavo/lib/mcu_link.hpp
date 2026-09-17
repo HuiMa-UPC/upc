@@ -168,8 +168,26 @@ public:
     /**
      * @brief 调试专用：直接下发一个已编码的 11 字节运动子包
      * @note 仅允许在无打印/测试图运动流、无终止清理时调用。
+     *       光路自检 / 点位测试走这条；测高与高度校准不要用。
      */
     bool send_debug_motion_subpacket(const uint8_t subpacket[11]);
+    /**
+     * @brief 单点振镜绝对坐标移动（手动控制 / 测高扫描用）
+     *
+     * 内部走与切片下发完全一致的编码口径：
+     *   cal_apply_xy(校准畸变) → × scale_gain → coordinate_to_offset_bytes
+     *   → 构造 11B 运动包 → build_motion_frame → tcp_send_raw
+     *
+     * 打印进行中（is_sending_）会拒绝调用，避免与批量运动包冲突。
+     *
+     * @param x_mm, y_mm     目标坐标(mm，振镜坐标系，0,0 为中心；越界自动截断)
+     * @param speed_mm_min    扫描速度，<=0 时用默认 1000mm/min
+     * @param laser_on        瞄准移动应传 1（LD=01 00）。0=空跳会途中关红光。
+     *                        本函数只给手动/测高用；打印空跳走 Parser，不走这里。
+     * @return true=组帧并发送成功；false=TCP 未就绪 / 打印中互斥 / 发送失败
+     */
+    bool send_galvo_abs_pos(float x_mm, float y_mm,
+                            float speed_mm_min, int laser_on);
     /** @brief 最近一次 MCU 运动位置上报的 Z 实际位置（mm）。 */
     [[nodiscard]] float get_z_pos_mm() const noexcept;
     /**

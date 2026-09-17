@@ -5,6 +5,9 @@
 #include "print_video_notify.hpp"
 #include "parser_manager.hpp"
 #include "parser_worker.hpp"
+#include "parser_context.hpp"
+#include "cal_parser.hpp"
+#include "galvo_coord.hpp"
 #include "msg_bus.hpp"
 #include "msg_runtime.hpp"
 #include "rs_log.hpp"
@@ -2437,6 +2440,79 @@ bool McuLink::send_debug_motion_subpacket(const uint8_t subpacket[11])
         UPC_LOG_MCU_LINK(Warn, "debug motion send failed rc=%d", rc);
         return false;
     }
+    return true;
+}
+
+bool McuLink::send_galvo_abs_pos(float x_mm, float y_mm,
+                                 float speed_mm_min, int laser_on)
+{
+    /* 1. 互斥：打印进行中拒绝手动移动，避免与批量运动包冲突 */
+    if(is_sending()) {
+        UPC_LOG_MCU_LINK(Warn,
+            "send_galvo_abs_pos rejected: print in progress (is_sending)");
+        return false;
+    }
+    /* 2. TCP 必须已连接 */
+    if(tcp_fd_ < 0) {
+        UPC_LOG_MCU_LINK(Warn, "send_galvo_abs_pos failed: tcp not connected");
+        return false;
+    }
+
+    /* 3. 从 ParserContext 取校准数据与增益（与切片下发同源） */
+    const parser::ParserContext& ctx = parser::ParserContext::instance();
+    const parser::CalData& cal = ctx.cal_data();
+    const float scale_gain = ctx.scale_gain();
+    float range_gain = ctx.range_gain();
+    const float speed_gain = ctx.speed_gain();
+
+    /* 4. 校准变换：切片坐标 → 物理坐标（中心平移 + 网格双线性畸变） */
+    float out_x = 0.0f, out_y = 0.0f;
+    parser::cal_apply_xy(&cal, x_mm, y_mm, &out_x, &out_y);
+    const float ox = out_x * scale_gain;
+    const float oy = out_y * scale_gain;
+
+    /* 5. 构造 11B 运动包（与 OvfWorker::build_and_push_packet 编码完全一致） */
+    uint8_t pkt[11];
+    pkt[0] = 0x01;  // 运动包标识
+    uint8_t lo = 0, hi = 0;
+    parser::coordinate_to_offset_bytes(ox, range_gain, &lo, &hi);
+    pkt[1] = lo;  // X 低字节
+    pkt[2] = hi;  // X 高字节
+    parser::coordinate_to_offset_bytes(oy, range_gain, &lo, &hi);
+    pkt[3] = lo;  // Y 低字节
+    pkt[4] = hi;  // Y 高字节
+    pkt[5] = 0;   // 保留
+    pkt[6] = 0;
+    const float eff_speed = (speed_mm_min > 0.0f) ? speed_mm_min : 1000.0f;
+    const int speed_int = static_cast<int>(eff_speed * speed_gain);
+    parser::int_to_u16_bytes(speed_int, &lo, &hi);
+    pkt[7] = lo;   // 速度低字节
+    pkt[8] = hi;   // 速度高字节
+    parser::int_to_u16_bytes(laser_on ? 1 : 0, &lo, &hi);
+    pkt[9]  = lo;  // 激光开关低字节
+    pkt[10] = hi;  // 激光开关高字节
+
+    /* 6. 组帧并发送（1 个子包） */
+    uint8_t frame[3 + 11];
+    const int flen = build_motion_frame(pkt, 1, frame, sizeof(frame));
+    if(flen <= 0) {
+        UPC_LOG_MCU_LINK(Error, "send_galvo_abs_pos: build_motion_frame failed");
+        return false;
+    }
+    const int rc = tcp_send_raw(frame, static_cast<size_t>(flen));
+    if(rc != 0) {
+        UPC_LOG_MCU_LINK(Warn,
+            "send_galvo_abs_pos tcp send failed rc=%d x=%.2f y=%.2f",
+            rc, static_cast<double>(x_mm), static_cast<double>(y_mm));
+        return false;
+    }
+    UPC_LOG_MCU_LINK(Info,
+        "galvo abs pos sent: x=%.2f y=%.2f speed=%.0f laser=%d "
+        "ox=%.3f oy=%.3f range=%.2f scale=%.3f",
+        static_cast<double>(x_mm), static_cast<double>(y_mm),
+        static_cast<double>(eff_speed), laser_on,
+        static_cast<double>(ox), static_cast<double>(oy),
+        static_cast<double>(range_gain), static_cast<double>(scale_gain));
     return true;
 }
 

@@ -124,6 +124,8 @@ private:
     void handle_debug_switch(const middleware::Message& msg);
     void handle_debug_galvo_red_light(const middleware::Message& msg);
     void handle_debug_galvo_red_always(const middleware::Message& msg);
+    /** @brief 振镜绝对坐标移动（手动控制/测高扫描）：调 McuLink 下发单点运动包。 */
+    void handle_debug_galvo_abs_move(const middleware::Message& msg);
     void handle_debug_galvo_param_save(const middleware::Message& msg);
     void handle_debug_galvo_point_test_start(const middleware::Message& msg);
     void handle_debug_galvo_point_test_get(const middleware::Message& msg);
@@ -147,6 +149,8 @@ private:
     void handle_debug_first_layer_visual_check_get(const middleware::Message& msg);
     void handle_debug_optical_path_check_set(const middleware::Message& msg);
     void handle_debug_optical_path_check_get(const middleware::Message& msg);
+    void handle_debug_plate_height_adj_set(const middleware::Message& msg);
+    void handle_debug_plate_height_adj_get(const middleware::Message& msg);
     void handle_visual_optical_path_point_rsp(const middleware::Message& msg);
     void handle_height_calib_start_req(const middleware::Message& msg);
     void handle_laser_spot_measure_rsp(const middleware::Message& msg);
@@ -158,6 +162,7 @@ private:
     void publish_debug_test_image_state();
     void publish_debug_galvo_point_test_state();
     void publish_debug_optical_path_check_state();
+    void publish_debug_plate_height_adj_state();
     /** @brief 停止并回收点位测试线程；仅用于服务退出。 */
     void stop_galvo_point_test_worker();
 
@@ -168,7 +173,8 @@ private:
     bool begin_plate_height_gate();
     void on_plate_height_done();
     void publish_plate_height_visual_session(bool active);
-    bool prepare_red_spot_illumination(const char* reason);
+    /** @brief 舱内灯光：与调试页 Light 同一串口 TLV（0x06 开 / 0x07 关）。 */
+    void set_cabin_light(bool on);
     void send_z_inc(float delta_mm);
     void send_z_home();
     bool wait_z_settled(float target_mm, float tolerance_mm, int timeout_ms);
@@ -207,7 +213,7 @@ private:
     void handle_visual_first_layer_check_rsp(const middleware::Message& msg);
     /** @brief 联动切换红光/激光模式（TCP 红光 + 串口激光使能），每次调用都下发。 */
     bool apply_red_laser_mode(bool red_on, const char* reason);
-    /** @brief 红光常亮：串口关激光 + TCP 0x0A red=3。 */
+    /** @brief 红光常亮：只发 TCP 0x0A Red=3，不跟串口 0x12。 */
     bool apply_red_always_mode(const char* reason);
     void debug_tx(const uint8_t* frame, int n);
 
@@ -344,6 +350,7 @@ private:
     bool first_layer_reference_waiting_ = false; /**< 等待Visual锁定本次打印裸板B0 */
     /* ---- 打印前光路检测 ---- */
     bool optical_path_check_on_ = false; /**< 光路检测开关（仅本次运行，默认关） */
+    bool plate_height_adj_on_ = false; /**< 打印前测高调 Z（仅本次运行，默认关） */
     OpticalPathCheck optical_path_check_;
     /**
      * 检测线程结果回灌 worker 的 pending 位（与 clean_test_done_pending_ 同款）。

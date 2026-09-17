@@ -1,0 +1,67 @@
+# 构建产物（./build.sh → BUILD_DIR / OUTPUT_DIR）
+/build/
+/output/
+
+# 根目录 clangd 索引（通常是 build/compile_commands.json 的拷贝或软链）
+/compile_commands.json
+
+# 编译中间文件（若有人在源码树内直接 gcc）
+*.o
+*.obj
+*.d
+*.gch
+*.pch
+*.so
+*.so.*
+*.dylib
+*.dll
+*.exe
+*.out
+*.map
+
+# CMake / CTest 散落文件
+CMakeCache.txt
+CMakeFiles/
+CMakeScripts/
+cmake_install.cmake
+CTestTestfile.cmake
+CMakeUserPresets.json
+install_manifest.txt
+Testing/
+_deps/
+Makefile
+*.ninja
+.ninja_deps
+.ninja_log
+
+# Python 工具（tools/*.py）
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+.env
+
+# clangd / ccache
+.cache/
+.clangd/
+
+# IDE / 编辑器
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+*.user
+
+# 系统与调试残留（/core 仅根目录 dump，避免误伤 app/ui/lib/core）
+.DS_Store
+Thumbs.db
+/core
+core.[0-9]*
+*.log
+*.orig
+*.rej
+tags
+cscope.out
+.gdb_history

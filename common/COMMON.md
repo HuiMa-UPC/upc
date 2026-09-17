@@ -216,7 +216,7 @@ scripts/rongsu.sh start   # glavo + rongsu_camera → ui
 | `GLAVO_Visual_PlateHeight_Session_Stop_Ntf` | `0x142D` | Glavo→Visual | Empty | — | 测高/校准结束；三类会话都停才拆流 |
 | `GLAVO_Visual_Laser_Spot_Measure_Req` | `0x142E` | Glavo→Visual | Empty | — | 请求当前帧激光质心（校准与测高）；Visual 不查 LUT |
 | `APP_Visual_Laser_Spot_Measure_Rsp` | `0x142F` | Visual→Glavo | `LaserSpotMeasureRspPayload` | — | `ok` + `laser_x/y` 像素质心 |
-| `UI_Glavo_Height_Calib_Start_Req` | `0x1430` | UI→Glavo | `HeightCalibStartReqPayload` | `send_height_calib_start` | 调试页启动高度校准（关舱灯→开红光→写 LUT） |
+| `UI_Glavo_Height_Calib_Start_Req` | `0x1430` | UI→Glavo | `HeightCalibStartReqPayload` | `send_height_calib_start` | 调试页启动高度校准（关舱灯 + Red_On → 写 LUT；结束开舱灯，红光保持） |
 | `GLAVO_UI_Height_Calib_Progress_Ntf` | `0x1431` | Glavo→UI | `HeightCalibProgressPayload` | `register_height_calib_progress` | stage 0 开始 / 1 采集 / 2 完成 / 3 失败 |
 | `APP_Print_Video_Session_Start_Ntf` | — | Glavo→Media（Hub FWD） | `PrintVideoSessionPayload`（含 `h264_bitrate`，0=Media 默认中等码率 / cal `PRINT_H264_BITRATE`） | — | `PrintVideoNotify` / `MediaService` |
 | `APP_Print_Layer_Snap_Ntf` | — | Glavo→Media（Hub FWD） | `PrintVideoLayerSnapPayload` | — | 换层 Snap |
@@ -254,6 +254,9 @@ scripts/rongsu.sh start   # glavo + rongsu_camera → ui
 | `UI_Debug_Galvo_Calib_Ntf` | — | UI→Glavo | Empty | `send_galvo_calib` | 开始标定 |
 | `UI_Debug_Galvo_PointTest_Start_Ntf` | — | UI→Glavo | Empty | `start_galvo_point_test` | Other 页一次性红光点位测试：常亮模式下中心及四角各停 3 秒，末尾回中心并切普通红光；坐标走当前校准表 |
 | `UI_Debug_Galvo_PointTest_Get_Ntf` | — | UI→Glavo | Empty | `request_galvo_point_test_state` | 查询红光点位测试运行状态 |
+| `UI_Debug_Galvo_AbsMove_Ntf` | — | UI→Glavo | `DebugGalvoAbsMovePayload` | `send_galvo_abs_move` | 振镜绝对坐标移动（snowx 口径：`McuLink::send_galvo_abs_pos`；打印中互斥） |
+| `UI_Debug_PlateHeight_Adj_Set_Ntf` | — | UI→Glavo | `DebugOnOffPayload` | `send_plate_height_adj_set` | 调试页开关：打印前基板测高并调 Z（仅本次运行，默认关） |
+| `UI_Debug_PlateHeight_Adj_Get_Ntf` | — | UI→Glavo | Empty | `request_plate_height_adj_state` | 查询当前“打印前基板测高”开关状态 |
 | `UI_Debug_Device_Ntf` | — | UI→Glavo | `DebugDevicePayload` | `send_device` | 设备/门/电机/照明 |
 | `UI_Debug_Powder_Bucket_Ntf` | — | UI→Glavo | `DebugBucketPayload` | `send_powder_bucket` | 粉桶 |
 | `UI_Debug_Pusher_Ntf` | — | UI→Glavo | `DebugMotorPayload` | `send_sieve` | 筛粉电机（0=停止/1=筛粉运行/2=反转倒渣） |
@@ -286,6 +289,7 @@ scripts/rongsu.sh start   # glavo + rongsu_camera → ui
 | `GLAVO_Debug_Env_Sim_Powder_Ntf` | — | Glavo→UI | `DebugOnOffPayload` | `register_env_sim_powder` | 回读当前“环境模拟粉量缺粉”开关状态 |
 | `GLAVO_Debug_FirstLayer_Visual_Check_Ntf` | — | Glavo→UI | `DebugOnOffPayload` | `register_first_layer_visual_check` | 回读当前“首层视觉检测”开关状态 |
 | `GLAVO_Debug_OpticalPath_Check_Ntf` | — | Glavo→UI | `DebugOnOffPayload` | `register_optical_path_check` | 回读当前“打印前光路检测”开关状态 |
+| `GLAVO_Debug_PlateHeight_Adj_Ntf` | — | Glavo→UI | `DebugOnOffPayload` | `register_plate_height_adj` | 回读当前“打印前基板测高”开关状态 |
 | `GLAVO_Debug_TestImage_Ntf` | — | Glavo→UI | `DebugOnOffPayload` | `register_test_image` | 回读测试图循环实际状态；文件缺失/与正式打印互斥失败时回 `on=0` |
 | `GLAVO_Debug_Galvo_PointTest_Ntf` | — | Glavo→UI | `DebugOnOffPayload` | `register_galvo_point_test` | 回读红光点位测试运行状态；用于按钮、Test image 与正式打印的双向互斥 |
 | `UI_Debug_Fan_Duty_Ntf` | — | UI→Glavo | `DebugFanPayload` | `send_fan_duty` | 仅设风扇占空比（0–100） |

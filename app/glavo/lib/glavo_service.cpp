@@ -796,6 +796,7 @@ bool GlavoService::start()
         middleware::MsgType::UI_Debug_Switch_Ntf,
         middleware::MsgType::UI_Debug_Galvo_RedLight_Ntf,
         middleware::MsgType::UI_Debug_Galvo_RedAlways_Ntf,
+        middleware::MsgType::UI_Debug_Galvo_AbsMove_Ntf,
         middleware::MsgType::UI_Debug_Galvo_Param_Save_Ntf,
         middleware::MsgType::UI_Debug_Galvo_PointTest_Start_Ntf,
         middleware::MsgType::UI_Debug_Galvo_PointTest_Get_Ntf,
@@ -822,6 +823,8 @@ bool GlavoService::start()
         /* 打印前光路检测：调试开关 + Visual 单点识别回包 */
         middleware::MsgType::UI_Debug_OpticalPath_Check_Set_Ntf,
         middleware::MsgType::UI_Debug_OpticalPath_Check_Get_Ntf,
+        middleware::MsgType::UI_Debug_PlateHeight_Adj_Set_Ntf,
+        middleware::MsgType::UI_Debug_PlateHeight_Adj_Get_Ntf,
         middleware::MsgType::APP_Visual_OpticalPath_Point_Check_Rsp,
         middleware::MsgType::APP_Visual_Laser_Spot_Measure_Rsp,
         middleware::MsgType::UI_Glavo_Height_Calib_Start_Req,
@@ -846,6 +849,8 @@ bool GlavoService::start()
     publish_debug_env_sim_state();
     publish_debug_env_sim_powder_state();
     publish_debug_first_layer_visual_check_state();
+    publish_debug_optical_path_check_state();
+    publish_debug_plate_height_adj_state();
     publish_debug_test_image_state();
     publish_debug_galvo_point_test_state();
     return true;
@@ -1226,6 +1231,9 @@ void GlavoService::handle_message(const middleware::Message& msg)
         case middleware::MsgType::UI_Debug_Galvo_RedAlways_Ntf:
             handle_debug_galvo_red_always(msg);
             break;
+        case middleware::MsgType::UI_Debug_Galvo_AbsMove_Ntf:
+            handle_debug_galvo_abs_move(msg);
+            break;
         case middleware::MsgType::UI_Debug_Galvo_Param_Save_Ntf:
             handle_debug_galvo_param_save(msg);
             break;
@@ -1300,6 +1308,12 @@ void GlavoService::handle_message(const middleware::Message& msg)
             break;
         case middleware::MsgType::UI_Debug_OpticalPath_Check_Get_Ntf:
             handle_debug_optical_path_check_get(msg);
+            break;
+        case middleware::MsgType::UI_Debug_PlateHeight_Adj_Set_Ntf:
+            handle_debug_plate_height_adj_set(msg);
+            break;
+        case middleware::MsgType::UI_Debug_PlateHeight_Adj_Get_Ntf:
+            handle_debug_plate_height_adj_get(msg);
             break;
         case middleware::MsgType::APP_Visual_OpticalPath_Point_Check_Rsp:
             handle_visual_optical_path_point_rsp(msg);
@@ -1783,7 +1797,7 @@ void GlavoService::handle_parser_exit(const middleware::Message& msg)
  * @brief 在已 Prepare 的路径上真正启动一次打印作业
  *
  * 调用前须保证：prepare_ready_、路径有效，且 McuLink 不在 terminate 清理中。
- * 步骤：置打印态 → 基板测高 gate（有 LUT 才跑）→ 光路检测 gate →
+ * 步骤：置打印态 → 基板测高 gate（`Plate Height Adj` 开且有 LUT 才跑）→ 光路检测 gate →
  *      open_file(带行数 hint) → 重置计数/进度 → start_parse →
  *      首层参考图 gate → 通知 Media 录像会话 → begin_sending。
  *
@@ -1799,6 +1813,10 @@ void GlavoService::launch_print_from_prepared(const std::string& full_path)
     print_running_.store(true);
     McuLink::instance().set_print_task_flow_active(true);
     publish_print_state_ntf(static_cast<uint32_t>(middleware::UserHomeStatus::Printing));
+
+    /* 起印与校准同一套：关舱灯 + UI Red_On（TCP Red=3）。测高结束再开舱灯，红光保持。 */
+    set_cabin_light(false);
+    (void)apply_red_always_mode("print_start");
 
     /* 测高在光路之前：基板离焦时红点容易出视野。起了一轮就返回等回灌。 */
     if(begin_plate_height_gate()) {
@@ -2656,15 +2674,11 @@ void GlavoService::wakeup_laser_spot_wait()
     laser_spot_cv_.notify_all();
 }
 
-bool GlavoService::prepare_red_spot_illumination(const char* reason)
+void GlavoService::set_cabin_light(bool on)
 {
     uint8_t buf[SERIAL_DEBUG_MAX_FRAME];
-    debug_tx(buf, serial_debug_build_light(false, buf, sizeof(buf)));
-    if(!apply_red_laser_mode(true, reason ? reason : "red_spot")) {
-        return false;
-    }
-    std::this_thread::sleep_for(std::chrono::milliseconds(kHeightRedSettleMs));
-    return true;
+    debug_tx(buf, serial_debug_build_light(on, buf, sizeof(buf)));
+    UPC_LOG_GLAVO_SERVICE(Info, "cabin light %s", on ? "on" : "off");
 }
 
 void GlavoService::send_z_inc(float delta_mm)
@@ -2735,20 +2749,30 @@ bool GlavoService::request_laser_spot_measure_sync(float& out_x, float& out_y,
         return false;
     }
     std::unique_lock<std::mutex> lock(laser_spot_mtx_);
-    const bool ok = laser_spot_cv_.wait_for(lock,
-        std::chrono::milliseconds(timeout_ms),
-        [this]{
-            return !laser_spot_waiting_ ||
-                   height_calib_.cancel_requested() ||
-                   plate_height_.cancel_requested();
-        });
+    const auto deadline = std::chrono::steady_clock::now() +
+                          std::chrono::milliseconds(timeout_ms);
+    while(true) {
+        if(height_calib_.cancel_requested() || plate_height_.cancel_requested()) {
+            laser_spot_waiting_ = false;
+            return false;
+        }
+        if(!laser_spot_waiting_) {
+            break;
+        }
+        const auto now = std::chrono::steady_clock::now();
+        if(now >= deadline) {
+            laser_spot_waiting_ = false;
+            UPC_LOG_GLAVO_SERVICE(Warn, "laser spot measure timeout %dms", timeout_ms);
+            return false;
+        }
+        auto remain = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now);
+        if(remain.count() > 100) {
+            remain = std::chrono::milliseconds(100);
+        }
+        laser_spot_cv_.wait_for(lock, remain);
+    }
     if(height_calib_.cancel_requested() || plate_height_.cancel_requested()) {
         laser_spot_waiting_ = false;
-        return false;
-    }
-    if(!ok) {
-        laser_spot_waiting_ = false;
-        UPC_LOG_GLAVO_SERVICE(Warn, "laser spot measure timeout %dms", timeout_ms);
         return false;
     }
     if(!laser_spot_result_.ok) {
@@ -2797,11 +2821,16 @@ void GlavoService::publish_plate_height_visual_session(bool active)
 
 void GlavoService::configure_plate_height()
 {
-    auto send_motion = [](const uint8_t* subpacket) {
-        return McuLink::instance().send_debug_motion_subpacket(subpacket);
+    auto move_galvo = [](float x, float y) {
+        return McuLink::instance().send_galvo_abs_pos(x, y, 1000.0f, 1);
     };
-    auto prepare = [this]() {
-        return prepare_red_spot_illumination("plate_height");
+    auto set_red = [this](bool on) {
+        if(on) {
+            set_cabin_light(false);
+            (void)apply_red_always_mode("height_session_start");
+        } else {
+            set_cabin_light(true);
+        }
     };
     auto z_home = [this]() { send_z_home(); };
     auto z_inc = [this](float d) { send_z_inc(d); };
@@ -2813,19 +2842,17 @@ void GlavoService::configure_plate_height()
     };
 
     height_calib_.configure(
-        send_motion,
-        [this]() { return prepare_red_spot_illumination("height_calib"); },
+        move_galvo, set_red,
         z_home, z_inc, wait_z, spot,
         [this](uint8_t stage, float h, uint16_t c, uint16_t tot) {
             publish_height_calib_progress(stage, h, c, tot);
             if(stage == 2 || stage == 3) {
                 publish_plate_height_visual_session(false);
             }
-        },
-        [this]() { (void)apply_red_laser_mode(false, "height_calib_end"); });
+        });
 
     plate_height_.configure(
-        send_motion, prepare, z_home, z_inc, wait_z, spot,
+        move_galvo, set_red, z_home, z_inc, wait_z, spot,
         [this](bool active) { publish_plate_height_visual_session(active); },
         [this](const PlateHeightMeasureResult& result) {
             plate_height_done_ok_.store(result.ok);
@@ -2837,6 +2864,10 @@ void GlavoService::configure_plate_height()
 
 bool GlavoService::begin_plate_height_gate()
 {
+    if(!plate_height_adj_on_) {
+        UPC_LOG_GLAVO_SERVICE(Info, "plate height skipped: adj off");
+        return false;
+    }
     HeightLut2d probe;
     if(!probe.load(kHeightLutPath) || !probe.valid()) {
         UPC_LOG_GLAVO_SERVICE(Info,
@@ -3018,6 +3049,47 @@ void GlavoService::handle_debug_optical_path_check_get(
 {
     (void)msg;
     publish_debug_optical_path_check_state();
+}
+
+void GlavoService::publish_debug_plate_height_adj_state()
+{
+    middleware::DebugOnOffPayload p{};
+    p.on = plate_height_adj_on_ ? 1 : 0;
+    middleware::Message ntf(
+        middleware::MsgType::GLAVO_Debug_PlateHeight_Adj_Ntf,
+        middleware::ModuleId::APP_GLAVO,
+        middleware::ModuleId::UI);
+    ntf.payload = middleware::MsgPayload::from_bytes(
+        reinterpret_cast<const uint8_t*>(&p), sizeof(p));
+    if(!publish_async(ntf)) {
+        UPC_LOG_GLAVO_SERVICE(Warn, "plate height adj state publish failed");
+    }
+}
+
+void GlavoService::handle_debug_plate_height_adj_set(
+    const middleware::Message& msg)
+{
+    middleware::DebugOnOffPayload p{};
+    if(!read_inline_pod(msg.payload, p)) {
+        return;
+    }
+    if(plate_height_.active()) {
+        UPC_LOG_GLAVO_SERVICE(Warn,
+            "plate height adj switch rejected: measure in progress");
+        publish_debug_plate_height_adj_state();
+        return;
+    }
+    plate_height_adj_on_ = (p.on != 0);
+    UPC_LOG_GLAVO_SERVICE(Info, "debug plate_height_adj=%d",
+                          plate_height_adj_on_ ? 1 : 0);
+    publish_debug_plate_height_adj_state();
+}
+
+void GlavoService::handle_debug_plate_height_adj_get(
+    const middleware::Message& msg)
+{
+    (void)msg;
+    publish_debug_plate_height_adj_state();
 }
 
 /**
@@ -4144,11 +4216,9 @@ bool GlavoService::apply_red_laser_mode(bool red_on, const char* reason)
 
 bool GlavoService::apply_red_always_mode(const char* reason)
 {
-    /* 红光常亮与普通红光一样关激光使能，TCP Red 码用协议 3。 */
-    {
-        uint8_t buf[SERIAL_DEBUG_MAX_FRAME];
-        debug_tx(buf, serial_debug_build_switch(0u, false, buf, sizeof(buf)));
-    }
+    /* 红光常亮只走 TCP Red=3。
+     * 不要跟串口 0x12：debug_tx 是异步队列，会在 TCP 之后发出 LASER_DISABLE，
+     * MCU 会把刚打开的瞄准红光关掉，看起来就是开一下又关。 */
     constexpr uint8_t k_red_always = 3u;
     if(!McuLink::instance().send_tcp_emergency_ctrl_ex(0u, 0u, k_red_always)) {
         UPC_LOG_GLAVO_SERVICE(Warn, "red-always tcp switch failed reason=%s",
@@ -4178,12 +4248,42 @@ void GlavoService::handle_debug_galvo_red_light(const middleware::Message& msg)
 /** @brief 调试红光常亮：下发 TCP CMD=0x0A（Stop=0, Pause=0, Red=3） */
 void GlavoService::handle_debug_galvo_red_always(const middleware::Message& /*msg*/)
 {
-    if(galvo_point_test_active_.load() || optical_path_check_.active() || plate_height_.active() || height_calib_.active()) {
+    if(galvo_point_test_active_.load() || optical_path_check_.active()) {
         UPC_LOG_GLAVO_SERVICE(Warn,
             "red-always switch rejected: point test or optical path check active");
         return;
     }
     (void)apply_red_always_mode("debug_red_always");
+}
+
+/** @brief 振镜绝对坐标移动（手动控制/测高扫描）：
+ *  解析 (x,y,speed) 后调 McuLink 下发单点运动包，LD 固定为 1（途中保持 Red=3 红光）。
+ *  并回传 GLAVO_Debug_Galvo_Ntf 让 UI 知道最近一次目标坐标。 */
+void GlavoService::handle_debug_galvo_abs_move(const middleware::Message& msg)
+{
+    middleware::DebugGalvoAbsMovePayload p{};
+    if(!read_inline_pod(msg.payload, p)) {
+        UPC_LOG_GLAVO_SERVICE(Warn, "galvo abs move: invalid payload");
+        return;
+    }
+    const bool ok = McuLink::instance().send_galvo_abs_pos(
+        p.x_mm, p.y_mm, p.speed_mm_min, 1);
+
+    middleware::DebugGalvoStatePayload state{};
+    state.x = p.x_mm;
+    state.y = p.y_mm;
+    middleware::Message ntf(
+        middleware::MsgType::GLAVO_Debug_Galvo_Ntf,
+        middleware::ModuleId::APP_GLAVO,
+        middleware::ModuleId::UI);
+    ntf.payload = middleware::MsgPayload::from_bytes(
+        reinterpret_cast<const uint8_t*>(&state), sizeof(state));
+    publish_async(ntf);
+    if(!ok) {
+        UPC_LOG_GLAVO_SERVICE(Warn,
+            "galvo abs move failed x=%.2f y=%.2f",
+            static_cast<double>(p.x_mm), static_cast<double>(p.y_mm));
+    }
 }
 
 void GlavoService::publish_debug_galvo_point_test_state()

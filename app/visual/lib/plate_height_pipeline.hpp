@@ -51,7 +51,7 @@ struct PlateHeightConfig {
     // —— 分割 ——
     std::vector<cv::Point> roi_quad; ///< 光斑搜索区(不规则四边形，4 个顶点)；空表示整幅图
     uint8_t fixed_thresh{250};   ///< 二值化阈值
-    int min_area{5};             ///< 光斑最小像素面积
+    int min_area{2};             ///< 光斑最小像素面积
     int max_area{200};            ///< 光斑最大像素面积
 
     // —— LUT ——
