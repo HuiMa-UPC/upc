@@ -15,7 +15,10 @@ extern "C" {
  * 查询（SOC→MCU）：5A A5 AA A2 10 01 02 01 00 5F
  *   TLV_GET_VERSION(0x01)，无 Value。
  * 上报（MCU→SOC）：5A A5 BB A2 10 01 09 02 07 <7B Value> <cks>
- *   TLV_REPORT_VERSION(0x02)，Value = major/minor/patch/laser/z_motor/reserve×2。
+ *   TLV_REPORT_VERSION(0x02)，Value 7 字节：
+ *     [0..2] major/minor/patch
+ *     [3] laser_type  [4] z_motor_type
+ *     [5] 运行槽（1=A, 2=B）  [6] OTA 状态（0 空闲 / 3 TESTING / 4 CONFIRMED / 5 FAILED）
  *
  * 末字节为校验和（`serial_checksum`），非帧尾；general_task_app 在任意机器状态下应答。
  */
@@ -32,6 +35,8 @@ typedef struct {
     uint8_t patch;        /**< 修订号 0~255（FW_VERSION_PATCH） */
     uint8_t laser_type;   /**< 激光器类别：JFSC_LASER=1，AL_LASER=2 */
     uint8_t z_motor_type; /**< Z 轴电机：闭环 BRIDGE=0，开环 OPEN_CONTROL=1 */
+    uint8_t run_slot;     /**< 运行槽：1=A, 2=B（TLV value[5]） */
+    uint8_t ota_state;    /**< OTA 状态（TLV value[6]）：0 空闲, 3 TESTING, 4 CONFIRMED, 5 FAILED */
 } serial_project_info_t;
 
 /**

@@ -42,7 +42,7 @@ namespace upc::mqtt {
  * 避免超过 rs_log 的消息缓冲区。该函数完全受 UPC_MOD_MQTT_SERVICE 控制。
  *
  * 每行 payload 都带 topic：分块后各行会散落在同一日志文件里，缺少 topic 就无法分辨
- * 属于哪条消息；同时 rs_log 依赖 "payload topic=" 把原始帧归入 topic_mqtt_wire.log。
+ * 属于哪条消息。调用时显式指定 LogTopic::MqttWire。
  */
 void debug_log_mqtt_frame(const char* direction,
                           const std::string& topic,
@@ -51,13 +51,16 @@ void debug_log_mqtt_frame(const char* direction,
                           int qos,
                           int retained)
 {
+    if(!upc::log_would_write(upc::Level::Debug)) {
+        return;
+    }
     const char* dir = direction ? direction : "?";
-    UPC_LOG_MQTT_SERVICE(Debug,
+    UPC_LOG_MQTT_SERVICE_TO(MqttWire, Debug,
         "MQTT %s frame topic=%s qos=%d retained=%d len=%zu",
         dir, topic.c_str(), qos, retained, payload_len);
 
     if(!payload || payload_len == 0) {
-        UPC_LOG_MQTT_SERVICE(Debug, "MQTT %s payload topic=%s <empty>",
+        UPC_LOG_MQTT_SERVICE_TO(MqttWire, Debug, "MQTT %s payload topic=%s <empty>",
                              dir, topic.c_str());
         return;
     }
@@ -104,7 +107,7 @@ void debug_log_mqtt_frame(const char* direction,
             ++offset;
         }
 
-        UPC_LOG_MQTT_SERVICE(Debug,
+        UPC_LOG_MQTT_SERVICE_TO(MqttWire, Debug,
             "MQTT %s payload topic=%s chunk=%zu range[%zu..%zu/%zu]=\"%s\"",
             dir, topic.c_str(), chunk_idx, begin, offset, payload_len,
             encoded.c_str());
@@ -1208,19 +1211,19 @@ bool MqttService::subscribe_ota_topics()
     const std::string notify_topic = cfg_.topic_ota_notify();
     const int rc_notify = MQTTClient_subscribe(client_, notify_topic.c_str(), 1);
     if(rc_notify != MQTTCLIENT_SUCCESS) {
-        UPC_LOG_MQTT_SERVICE(Error, "MQTT subscribe ota notify failed rc=%d topic=%s",
+        UPC_LOG_MQTT_SERVICE_TO(MqttOta, Error, "MQTT subscribe ota notify failed rc=%d topic=%s",
                              rc_notify, notify_topic.c_str());
         return false;
     }
     const std::string manifest_topic = cfg_.topic_ota_manifest_resp();
     const int rc_manifest = MQTTClient_subscribe(client_, manifest_topic.c_str(), 1);
     if(rc_manifest != MQTTCLIENT_SUCCESS) {
-        UPC_LOG_MQTT_SERVICE(Error, "MQTT subscribe ota manifest failed rc=%d topic=%s",
+        UPC_LOG_MQTT_SERVICE_TO(MqttOta, Error, "MQTT subscribe ota manifest failed rc=%d topic=%s",
                              rc_manifest, manifest_topic.c_str());
         return false;
     }
     ota_subscribed_ = true;
-    UPC_LOG_MQTT_SERVICE(Info, "MQTT subscribed ota topics notify=%s manifest=%s",
+    UPC_LOG_MQTT_SERVICE_TO(MqttOta, Info, "MQTT subscribed ota topics notify=%s manifest=%s",
                          notify_topic.c_str(), manifest_topic.c_str());
     return true;
 }

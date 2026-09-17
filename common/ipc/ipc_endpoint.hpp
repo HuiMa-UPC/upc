@@ -6,6 +6,8 @@
 #include <mutex>
 #include <vector>
 
+#include <sys/types.h> // ssize_t（recv_stream_chunk_locked 的出参）
+
 namespace upc_ipc {
 
 /** 单次 inbound：普通 wire 帧，或 wire+SCM_RIGHTS（fds 非空） */
@@ -55,6 +57,18 @@ private:
     void clear_fd_rx_state_locked();
     bool send_stream_bytes_locked(const uint8_t* buf, size_t n);
     bool peek_fd_frame_magic() const;
+    /**
+     * @brief 收一段字节流，并把随行的 SCM_RIGHTS 全部收进 fd_rx_fds_
+     * @param buf   接收缓冲
+     * @param cap   缓冲容量
+     * @param out_n 实际收到的字节数（>0 有效；0 表示对端关闭；<0 见返回值）
+     * @return false 表示本轮收不到更多数据（EAGAIN / 对端关闭 / 出错）
+     * @note 必须用 recvmsg 而非 read：read 不带 control buffer，内核会把随行的
+     *       fd **丢弃**。UPDF 帧的字节有可能走普通字节流这条路（rx_accum_ 里
+     *       残留半帧时 peek_fd_frame_magic 一律返回 false），那时用 read 就会
+     *       只剩字节没有 fd，后续解析必然报 "UPDF missing SCM_RIGHTS" 丢整帧。
+     */
+    bool recv_stream_chunk_locked(uint8_t* buf, size_t cap, ssize_t& out_n);
     bool recv_fd_frame_unit(InboundWireUnit& out);
     void parse_stream_frames(std::vector<InboundWireUnit>& out_units);
 

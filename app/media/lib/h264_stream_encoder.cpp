@@ -201,7 +201,7 @@ int H264StreamEncoder::add_sink(PacketCb on_packet, ErrorCb on_error,
 
     std::unique_lock<std::mutex> lock(mtx_);
     if(width_ == 0 || height_ == 0) {
-        UPC_LOG_MEDIA_SERVICE(Error, "h264_enc add_sink fail: stream geometry unknown");
+        UPC_LOG_MEDIA_SERVICE_TO(MediaRtsp, Error, "h264_enc add_sink fail: stream geometry unknown");
         return -1;
     }
 
@@ -239,7 +239,7 @@ int H264StreamEncoder::add_sink(PacketCb on_packet, ErrorCb on_error,
     if(opt.request_idr_on_join) {
         request_idr();
     }
-    UPC_LOG_MEDIA_SERVICE(Info, "h264_enc sink+ id=%d count=%zu %ux%u@%u bps=%u",
+    UPC_LOG_MEDIA_SERVICE_TO(MediaRtsp, Info, "h264_enc sink+ id=%d count=%zu %ux%u@%u bps=%u",
                           handle, sink_count, log_w, log_h, log_fps, log_bps);
     return handle;
 }
@@ -270,7 +270,7 @@ void H264StreamEncoder::shutdown_if_no_sink_locked()
     has_pending_ = false;
     pending_nv12_.clear();
     close_encoder_locked();
-    UPC_LOG_MEDIA_SERVICE(Info, "h264_enc idle — encoder closed dropped=%u", dropped_);
+    UPC_LOG_MEDIA_SERVICE_TO(MediaRtsp, Info, "h264_enc idle — encoder closed dropped=%u", dropped_);
 }
 
 /**
@@ -287,7 +287,7 @@ void H264StreamEncoder::remove_sink(int handle)
     }
     dispatch_cv_.wait(lock, [this] { return !dispatching_; });
     shutdown_if_no_sink_locked();
-    UPC_LOG_MEDIA_SERVICE(Info, "h264_enc sink- id=%d count=%zu",
+    UPC_LOG_MEDIA_SERVICE_TO(MediaRtsp, Info, "h264_enc sink- id=%d count=%zu",
                           handle, sinks_.size());
 }
 
@@ -353,7 +353,7 @@ void H264StreamEncoder::maybe_log_stats_locked()
     const uint64_t d_enc = stat_enc_frames_ - stat_last_enc_;
     const uint64_t d_bytes = stat_enc_bytes_ - stat_last_bytes_;
     const double secs = static_cast<double>(elapsed) / 1000000.0;
-    UPC_LOG_MEDIA_SERVICE(Info,
+    UPC_LOG_MEDIA_SERVICE_TO(MediaRtsp, Info,
         "h264_enc stat sinks=%zu in=%llu(%.1f/s) enc=%llu(%.1f/s) "
         "kbps=%.0f overwritten=%u",
         sinks_.size(),
@@ -436,7 +436,7 @@ void H264StreamEncoder::worker_fn()
             if(!enc_ok) {
                 /* 编码器级故障：所有 sink 一起下线，避免持续空转。 */
                 failed = sinks_;
-                UPC_LOG_MEDIA_SERVICE(Warn,
+                UPC_LOG_MEDIA_SERVICE_TO(MediaRtsp, Warn,
                     "h264_enc encode fail — dropping all sinks dropped=%u", dropped_);
             }
             for(const auto& s : failed) {
@@ -463,7 +463,7 @@ void H264StreamEncoder::worker_fn()
 bool H264StreamEncoder::open_encoder_locked()
 {
 #if !(defined(UPC_MEDIA_HAS_MPP) && UPC_MEDIA_HAS_MPP)
-    UPC_LOG_MEDIA_SERVICE(Error, "h264_enc RKMPP disabled in this build");
+    UPC_LOG_MEDIA_SERVICE_TO(MediaRtsp, Error, "h264_enc RKMPP disabled in this build");
     return false;
 #else
     if(mpp_ready_) return true;
@@ -473,17 +473,17 @@ bool H264StreamEncoder::open_encoder_locked()
     MppApi* mpi = nullptr;
     MppEncCfg cfg = nullptr;
     if(mpp_create(&ctx, &mpi) != MPP_OK || !ctx || !mpi) {
-        UPC_LOG_MEDIA_SERVICE(Error, "h264_enc mpp_create fail");
+        UPC_LOG_MEDIA_SERVICE_TO(MediaRtsp, Error, "h264_enc mpp_create fail");
         return false;
     }
     if(mpp_init(ctx, MPP_CTX_ENC, MPP_VIDEO_CodingAVC) != MPP_OK) {
-        UPC_LOG_MEDIA_SERVICE(Error, "h264_enc mpp_init fail");
+        UPC_LOG_MEDIA_SERVICE_TO(MediaRtsp, Error, "h264_enc mpp_init fail");
         mpp_destroy(ctx);
         return false;
     }
     mpp_enc_cfg_init(&cfg);
     if(!cfg) {
-        UPC_LOG_MEDIA_SERVICE(Error, "h264_enc mpp_enc_cfg_init fail");
+        UPC_LOG_MEDIA_SERVICE_TO(MediaRtsp, Error, "h264_enc mpp_enc_cfg_init fail");
         mpp_destroy(ctx);
         return false;
     }

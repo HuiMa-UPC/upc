@@ -287,7 +287,7 @@ private:
 
     std::string prepared_local_path_;
     uint32_t    prepared_line_count_ = 0;
-    uint32_t    prepared_layer_count_ = 0; /**< Prepare 阶段扫描到的层标记(M3000)数量 */
+    uint32_t    prepared_layer_count_ = 0; /**< Prepare 阶段得到的总层数（清单或 M3000） */
     bool        prepare_ready_ = false;
     bool        prepared_parser_open_ = false; /**< Prepare 阶段已打开 parser 文件，可在 Start 复用。 */
 

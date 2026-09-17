@@ -184,26 +184,28 @@ std::string normalize_thumb_path_for_delete(const std::string& raw)
 
     const std::string local_root =
         std::filesystem::path(GLAVO_LOCAL_GCODE_DIR).lexically_normal().string();
+    const std::string thumbnail_root =
+        std::filesystem::path(UPC_LOCAL_GCODE_THUMB_DIR).lexically_normal().string();
     const std::string normalized =
         std::filesystem::path(path).lexically_normal().string();
-    if(!path_has_dir_prefix(normalized, local_root)) {
+    /*
+     * 只允许删除 Local G-code 根或专用缩略图目录内的清单引用文件。
+     * /userdata/Gcode/thumb 为 Local 缩略图目录；不得触达 OTA 图片子目录。
+     */
+    if(!path_has_dir_prefix(normalized, local_root) &&
+       !path_has_dir_prefix(normalized, thumbnail_root)) {
         return {};
     }
     return normalized;
 }
 
 bool thumb_path_used_by_other_entries(const std::vector<GcodeManifestEntry>& entries,
-                                      size_t skip_idx,
                                       const std::string& normalized_thumb_path)
 {
     if(normalized_thumb_path.empty()) {
         return false;
     }
-    for(size_t i = 0; i < entries.size(); ++i) {
-        if(i == skip_idx) {
-            continue;
-        }
-        const auto& e = entries[i];
+    for(const GcodeManifestEntry& e : entries) {
         if(normalize_thumb_path_for_delete(e.thumb_small) == normalized_thumb_path ||
            normalize_thumb_path_for_delete(e.thumb_large) == normalized_thumb_path ||
            normalize_thumb_path_for_delete(e.thumb_print) == normalized_thumb_path) {
@@ -214,14 +216,13 @@ bool thumb_path_used_by_other_entries(const std::vector<GcodeManifestEntry>& ent
 }
 
 void try_remove_thumb_file(const std::vector<GcodeManifestEntry>& entries,
-                           size_t deleted_idx,
                            const std::string& thumb_path)
 {
     const std::string normalized = normalize_thumb_path_for_delete(thumb_path);
     if(normalized.empty()) {
         return;
     }
-    if(thumb_path_used_by_other_entries(entries, deleted_idx, normalized)) {
+    if(thumb_path_used_by_other_entries(entries, normalized)) {
         return;
     }
 
@@ -248,6 +249,38 @@ void try_remove_thumb_file(const std::vector<GcodeManifestEntry>& entries,
         return;
     }
     UPC_LOG_GLAVO_SERVICE(Info, "fs_delete_ntf: removed thumb %s", normalized.c_str());
+}
+
+std::string source_png_from_small_thumb(const std::string& thumb_path)
+{
+    const std::string normalized = normalize_thumb_path_for_delete(thumb_path);
+    constexpr const char* suffix = "_small.rthm";
+    if(normalized.size() <= std::strlen(suffix) ||
+       normalized.compare(normalized.size() - std::strlen(suffix),
+                          std::strlen(suffix), suffix) != 0) {
+        return {};
+    }
+    return normalized.substr(0, normalized.size() - std::strlen(suffix)) + ".png";
+}
+
+void try_remove_source_png(const std::vector<GcodeManifestEntry>& entries,
+                           const std::string& deleted_small_thumb)
+{
+    const std::string source_png = source_png_from_small_thumb(deleted_small_thumb);
+    if(source_png.empty()) {
+        return;
+    }
+    for(const GcodeManifestEntry& entry : entries) {
+        if(source_png_from_small_thumb(entry.thumb_small) == source_png) {
+            return;
+        }
+    }
+    std::error_code ec;
+    if(std::filesystem::is_regular_file(source_png, ec) && !ec &&
+       std::filesystem::remove(source_png, ec) && !ec) {
+        UPC_LOG_GLAVO_SERVICE(Info, "fs_delete_ntf: removed source PNG %s",
+                              source_png.c_str());
+    }
 }
 
 /** @brief 将分子/分母换算为 0–100 的整数百分比（四舍五入向下取整） */
@@ -1528,9 +1561,10 @@ void GlavoService::handle_fs_delete_ntf(const middleware::Message& msg)
         return;
     }
 
-    try_remove_thumb_file(local_manifest_, idx, deleted_entry.thumb_small);
-    try_remove_thumb_file(local_manifest_, idx, deleted_entry.thumb_large);
-    try_remove_thumb_file(local_manifest_, idx, deleted_entry.thumb_print);
+    try_remove_thumb_file(local_manifest_, deleted_entry.thumb_small);
+    try_remove_thumb_file(local_manifest_, deleted_entry.thumb_large);
+    try_remove_thumb_file(local_manifest_, deleted_entry.thumb_print);
+    try_remove_source_png(local_manifest_, deleted_entry.thumb_small);
 
     if(prepared_local_path_ == full_path) {
         clear_prepare_session();
@@ -1650,6 +1684,7 @@ bool GlavoService::run_print_prepare(middleware::PrintFileSource source, uint32_
 
     uint32_t line_count = 0;
     uint32_t layer_count = 0;
+    uint32_t duration_sec = 0;
     if(source == middleware::PrintFileSource::Local) {
         const auto& e = local_manifest_[index];
         const bool same_mtime = e.mtime == static_cast<int64_t>(st.st_mtime);
@@ -1662,13 +1697,17 @@ bool GlavoService::run_print_prepare(middleware::PrintFileSource source, uint32_
             if(e.layer_count > 0) {
                 layer_count = e.layer_count;
             }
+            if(e.duration_sec > 0) {
+                duration_sec = e.duration_sec;
+            }
         }
     }
-    /* G-code：行数与 M3000 层数一趟扫出来，行数随后作为 hint 交给解析器，
-     * open_file 便不再自己整读一遍数换行。两个数都已缓存命中时整趟跳过。
-     * 非 G-code（OVF）不扫，行数由 worker 打开文件时自行统计（段数）。 */
+    /* G-code：仅在尚无总层数时扫 M3000（兼带行数 hint）。
+     * 3MF 导入已写入 Metadata.layers 时跳过整文件扫描，走纯层进度；
+     * 此时 open_file(hint=0) 也不数换行，line_count 保持 0 不写回清单。
+     * 无层数且无行数缓存时，open_file 自行数换行并写回 line_count。OVF 不扫。 */
     const bool m3000_candidate = is_m3000_scan_candidate(local_path_out);
-    if(m3000_candidate && (line_count == 0 || layer_count == 0)) {
+    if(m3000_candidate && layer_count == 0) {
         uint32_t scanned_lines  = 0;
         uint32_t scanned_layers = 0;
         if(scan_gcode_lines_and_layers(local_path_out,
@@ -1683,7 +1722,9 @@ bool GlavoService::run_print_prepare(middleware::PrintFileSource source, uint32_
         }
     }
 
-    const int line_hint = line_count > 0 ? static_cast<int>(line_count) : -1;
+    const int line_hint = line_count > 0
+        ? static_cast<int>(line_count)
+        : (layer_count > 0 ? 0 : -1);
     if(parser::ParserManager::instance().open_file(local_path_out, line_hint) != 0) {
         UPC_LOG_GLAVO_SERVICE(Warn, "prepare: open failed %s", local_path_out.c_str());
         return false;
@@ -1693,7 +1734,8 @@ bool GlavoService::run_print_prepare(middleware::PrintFileSource source, uint32_
             UPC_LOG_GLAVO_SERVICE(Warn, "prepare: worker not open %s", local_path_out.c_str());
             return false;
         }
-        if(line_count == 0) {
+        /* 已有总层数则走纯层进度，不把 get_total_lines() 写进 manifest。 */
+        if(line_count == 0 && layer_count == 0) {
             line_count = static_cast<uint32_t>(std::max(worker->get_total_lines(), 0));
         }
     } else {
@@ -1707,7 +1749,7 @@ bool GlavoService::run_print_prepare(middleware::PrintFileSource source, uint32_
     entry.file_size   = static_cast<uint32_t>(st.st_size);
     entry.line_count  = line_count;
     entry.layer_count = layer_count;
-    entry.duration_sec = 0;
+    entry.duration_sec = duration_sec;
     entry.material_g  = 0.f;
     entry.mtime       = static_cast<int64_t>(st.st_mtime);
 
@@ -1850,7 +1892,7 @@ void GlavoService::continue_print_after_optical_ready(const std::string& full_pa
     if(!parser_ready) {
         const int line_hint = prepared_line_count_ > 0
             ? static_cast<int>(prepared_line_count_)
-            : -1;
+            : (prepared_layer_count_ > 0 ? 0 : -1);
         if(parser::ParserManager::instance().open_file(full_path, line_hint) != 0) {
             UPC_LOG_GLAVO_SERVICE(Error, "print_start: open failed path=%s",
                                   full_path.c_str());
@@ -1943,6 +1985,10 @@ void GlavoService::handle_print_start(const middleware::Message& msg)
         UPC_LOG_GLAVO_SERVICE(Warn, "print_start rejected: debug motion test active");
         return;
     }
+    if(McuLink::instance().serial_ota_active() || McuLink::instance().ota_active()) {
+        UPC_LOG_GLAVO_SERVICE(Warn, "print_start rejected: OTA active");
+        return;
+    }
 
     if(!prepare_ready_ || prepared_local_path_.empty()) {
         UPC_LOG_GLAVO_SERVICE(Warn, "print_start: no prepared session");
@@ -2024,6 +2070,18 @@ void GlavoService::handle_print_terminate(const middleware::Message& msg)
         return;
     }
     if(!print_running_.load()) {
+        /* print_running_（UI 会话）与 McuLink 的 is_sending_（运动下发）是两个
+         * 独立状态，测试图模式与异常清态下会脱钩。脱钩时必须选安全侧：只要还在
+         * 下发运动包就真走终止流程，不能只回执不动手——那样 UI 跳到结束页而振镜
+         * 还在扫。回执交给 cleanup 的 TerminateDone，UI 侧另有超时兜底。 */
+        auto& link = McuLink::instance();
+        if(link.is_sending() || link.is_terminate_pending()) {
+            UPC_LOG_GLAVO_SERVICE(Warn,
+                "print_terminate fallback: motion active without session");
+            link.set_user_dispatch_paused(false);
+            link.request_terminate();
+            return;
+        }
         UPC_LOG_GLAVO_SERVICE(Debug, "print_terminate ignored: not running");
         publish_terminate_done();
         return;
@@ -2049,7 +2107,21 @@ void GlavoService::handle_print_terminate(const middleware::Message& msg)
 void GlavoService::handle_print_pause(const middleware::Message& msg)
 {
     (void)msg;
+    McuLink& link = McuLink::instance();
     if(!print_running_.load()) {
+        /* 同 handle_print_terminate 的理由：会话态与运动态脱钩时选安全侧，
+         * 真发 0x0A 暂停，否则 UI 图标已切到 PAUSE 而振镜还在扫。 */
+        if(link.is_sending()) {
+            UPC_LOG_GLAVO_SERVICE(Warn,
+                "print_pause fallback: motion active without session");
+            link.set_user_dispatch_paused(true);
+            if(!link.send_tcp_emergency_ctrl(false, true)) {
+                UPC_LOG_GLAVO_SERVICE(Warn,
+                    "print_pause fallback: tcp 0x0A pause send failed");
+            }
+            publish_print_pause_done(true);
+            return;
+        }
         UPC_LOG_GLAVO_SERVICE(Debug, "print_pause ignored: not running");
         publish_print_pause_done(false);
         return;
@@ -2061,7 +2133,6 @@ void GlavoService::handle_print_pause(const middleware::Message& msg)
         publish_print_pause_done(false);
         return;
     }
-    McuLink& link = McuLink::instance();
     if(link.is_user_dispatch_paused()) {
         publish_print_pause_done(true);
         return;
@@ -2078,12 +2149,25 @@ void GlavoService::handle_print_pause(const middleware::Message& msg)
 void GlavoService::handle_print_resume(const middleware::Message& msg)
 {
     (void)msg;
+    McuLink& link = McuLink::instance();
     if(!print_running_.load()) {
+        /* 必须与 handle_print_pause 的兜底对称：兜底暂停过就要能兜底恢复，
+         * 否则 user_paused_ 一直挂着，振镜再也不动且无从解除。 */
+        if(link.is_user_dispatch_paused()) {
+            UPC_LOG_GLAVO_SERVICE(Warn,
+                "print_resume fallback: clearing pause without session");
+            if(!link.send_tcp_emergency_ctrl(false, false)) {
+                UPC_LOG_GLAVO_SERVICE(Warn,
+                    "print_resume fallback: tcp 0x0A resume send failed");
+            }
+            link.set_user_dispatch_paused(false);
+            publish_print_pause_done(false);
+            return;
+        }
         UPC_LOG_GLAVO_SERVICE(Debug, "print_resume ignored: not running");
         publish_print_pause_done(false);
         return;
     }
-    McuLink& link = McuLink::instance();
     if(!link.is_user_dispatch_paused()) {
         publish_print_pause_done(false);
         return;
@@ -4859,6 +4943,10 @@ void GlavoService::handle_debug_first_layer_visual_check_get(const middleware::M
 void GlavoService::handle_mcu_version_req(const middleware::Message& msg)
 {
     (void)msg;
+    if(McuLink::instance().serial_ota_active()) {
+        UPC_LOG_GLAVO_SERVICE(Info, "mcu_version query skipped: serial OTA active");
+        return;
+    }
     uint8_t frame[16];
     const int n = serial_build_project_info_request(frame, sizeof(frame));
     if(n <= 0) {

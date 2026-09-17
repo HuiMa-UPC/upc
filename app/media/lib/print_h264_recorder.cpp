@@ -31,6 +31,17 @@ namespace {
 constexpr const char* kH264Mp4Name = "print_h264.mp4";
 /** 允许最多积压的未编码帧数；超过后丢帧，防止编码跟不上导致内存膨胀。 */
 constexpr size_t kMaxPendingFrameJobs = 3u;
+/** 等待封装进程退出的轮询间隔（ms）。 */
+constexpr uint32_t kMuxerPollIntervalMs = 10u;
+/** 队列满丢帧的汇总日志周期（ms）：逐帧打会反过来拖慢取流线程。 */
+constexpr uint64_t kQueueFullLogPeriodMs = 5000u;
+
+/** 单调时钟毫秒；仅用于日志节流与超时判定。 */
+uint64_t monotonic_ms() {
+    return static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count());
+}
 
 bool write_all(int fd, const uint8_t* data, size_t len) {
     if(fd < 0 || !data) return false;
@@ -203,6 +214,7 @@ void PrintH264Recorder::reset_session_state_locked() {
     had_write_error_ = false;
     frame_count_ = 0;
     dropped_frames_ = 0;
+    drop_log_last_ms_ = 0;
     last_nv12_.clear();
     bitrate_bps_ = CAMERA_PRINT_H264_BITRATE;
     clear_session_paths_locked();
@@ -361,7 +373,12 @@ bool PrintH264Recorder::stop_muxer_locked() {
     if(muxer_pid_ > 0) {
         int status = 0;
         bool exited = false;
-        for(int i = 0; i < 50; ++i) {
+        /* stdin 已关，ffmpeg 读到 EOF 后还要写 mp4 尾部的 moov 索引才会退出，
+         * 耗时随帧数增长（几万帧远超百毫秒级）。这里必须等够：提前强杀留下的是
+         * 没有 moov、播放器直接打不开的文件，而调用方只看文件非空会误判成功。 */
+        for(uint32_t waited = 0;
+            waited < UPC_PRINT_H264_MUX_FLUSH_TIMEOUT_MS;
+            waited += kMuxerPollIntervalMs) {
             const pid_t w = ::waitpid(muxer_pid_, &status, WNOHANG);
             if(w == muxer_pid_) {
                 exited = true;
@@ -372,18 +389,27 @@ bool PrintH264Recorder::stop_muxer_locked() {
                 status = 0;
                 break;
             }
-            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            std::this_thread::sleep_for(
+                std::chrono::milliseconds(kMuxerPollIntervalMs));
         }
-        if(!exited && ::waitpid(muxer_pid_, &status, WNOHANG) == 0) {
+        if(!exited && ::waitpid(muxer_pid_, &status, WNOHANG) == muxer_pid_) {
+            exited = true;
+        }
+        if(!exited) {
+            /* 超时与"退出码非 0"是两种故障，日志分开才能判断 mp4 是否可信。 */
+            UPC_LOG_MEDIA_SERVICE(Error,
+                "print_h264 muxer flush timeout after %ums — killing, mp4 may lack moov",
+                static_cast<unsigned>(UPC_PRINT_H264_MUX_FLUSH_TIMEOUT_MS));
             (void)::kill(muxer_pid_, SIGTERM);
-            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            std::this_thread::sleep_for(std::chrono::milliseconds(200));
             if(::waitpid(muxer_pid_, &status, WNOHANG) == 0) {
                 (void)::kill(muxer_pid_, SIGKILL);
                 (void)::waitpid(muxer_pid_, &status, 0);
             }
-            exited = true;
-        }
-        if(exited && status != 0 && !(WIFEXITED(status) && WEXITSTATUS(status) == 0)) {
+            ok = false;
+        } else if(!(WIFEXITED(status) && WEXITSTATUS(status) == 0)) {
+            UPC_LOG_MEDIA_SERVICE(Error,
+                "print_h264 muxer exit abnormal status=%d", status);
             ok = false;
         }
         muxer_pid_ = -1;
@@ -545,6 +571,7 @@ void PrintH264Recorder::on_frame_nv12(const uint8_t* src_y, const uint8_t* src_u
         if(!active_ || paused_ || had_write_error_ || !src_y || !src_uv || width_ == 0 || height_ == 0) return;
         if(count_pending_write_frames(jobs_) >= kMaxPendingFrameJobs) {
             ++dropped_frames_;
+            maybe_log_queue_full_locked();
             return;
         }
         seq = session_seq_;
@@ -571,6 +598,27 @@ void PrintH264Recorder::on_frame_nv12(const uint8_t* src_y, const uint8_t* src_u
         jobs_.push_back(std::move(job));
     }
     cv_.notify_one();
+}
+
+/**
+ * 队列满丢帧的汇总日志（kQueueFullLogPeriodMs 一行，首次丢帧立即打）。
+ *
+ * 丢帧判定发生在取流线程上，逐帧打日志会反过来拖慢采集，所以只做周期汇总。
+ * 没有这行日志时，整场打印只能在 finalize 那一条看到丢帧总数，
+ * 无法判断丢帧是均匀分布还是跟着层拍尖峰走。
+ *
+ * 调用前必须持有 mtx_。
+ */
+void PrintH264Recorder::maybe_log_queue_full_locked() {
+    const uint64_t now_ms = monotonic_ms();
+    if(drop_log_last_ms_ != 0 &&
+       now_ms - drop_log_last_ms_ < kQueueFullLogPeriodMs) {
+        return;
+    }
+    drop_log_last_ms_ = now_ms;
+    UPC_LOG_MEDIA_SERVICE(Warn,
+        "print_h264 queue full drop=%u enc=%u session=%s",
+        dropped_frames_, frame_count_, session_id_.c_str());
 }
 
 /**
@@ -646,9 +694,9 @@ void PrintH264Recorder::worker_fn() {
  * 3. 打开 RKMPP 编码器。
  * 4. 将 NV12 数据拷贝到 MPP buffer，构造 MPP frame 送入编码器。
  * 5. 循环从编码器拉取 H.264 packet 写入文件。
- * 6. 若成功，更新帧计数和 last_nv12_ 用于缩略图。
+ * 6. 若成功，更新帧计数并接管 job.nv12 作为缩略图源帧。
  */
-void PrintH264Recorder::run_write_frame_job(const Job& job) {
+void PrintH264Recorder::run_write_frame_job(Job& job) {
     const size_t need = static_cast<size_t>(job.width) * job.height * 3u / 2u;
     void* ctx = nullptr;
     void* mpi = nullptr;
@@ -763,10 +811,11 @@ void PrintH264Recorder::run_write_frame_job(const Job& job) {
 #endif
 
     // 编码写盘成功，更新统计和最后一帧缓存。
+    // job 随后即被 worker 丢弃，这里直接接管它的缓冲，省掉每帧一次 2MB 拷贝。
     std::lock_guard<std::mutex> lock(mtx_);
     if(job.session_seq == session_seq_ && !had_write_error_) {
         ++frame_count_;
-        last_nv12_ = job.nv12;
+        last_nv12_ = std::move(job.nv12);
     }
 }
 

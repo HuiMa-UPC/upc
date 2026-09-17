@@ -19,7 +19,7 @@
 | `lib/galvo_motion_encode.*` | 调试运动包编码 + 五点坐标（点位测试与光路检测共用） |
 | `lib/device_config.hpp` | TCP/串口默认、换层/Layer Snap 开关、`GLAVO_TEST_GCODE_PATH` |
 | `lib/mcu_ota_session.*` | Galvo 以太网 OTA：扫描 `/userdata/image/galvo` 最高版本 AB 对 |
-| `lib/mcu_serial_ota_session.*` | MCU 串口 OTA：扫描 `/userdata/image/mcu` 最高版本 AB 对 |
+| `lib/mcu_serial_ota_session.*` | MCU 串口 OTA：扫描 `/userdata/image/mcu` 最高版本 AB 对；停等重传 + 阶段四版本确认 |
 | `common/fs_manifest/gcode_manifest.*` | Local `config.json` 读写（与 UI 共用；Prepare/Delete 时更新） |
 
 解析库见 [parser/PARSER.md](../parser/PARSER.md)；线协议见 [protocol/PROTOCOL.md](../protocol/PROTOCOL.md)。
@@ -43,7 +43,7 @@ UI → GlavoService（工作线程）→ ParserManager → RingBuffer → McuLin
 |------|------|
 | `Fs_DirOpen_Req` | **仅 USB** 扫盘；非 Usb 源忽略并回空列表 |
 | `Fs_Delete_Ntf` | 删除 Local 文件（磁盘 + config.json） |
-| `UI_Print_Prepare_Req` | 轻量预处理（USB 复制、单趟扫行数+`M3000` 层数、写 config.json）；层数是纯层进度的唯一来源，Start 不再补扫 |
+| `UI_Print_Prepare_Req` | 轻量预处理（USB 复制；清单无 `layer_count` 时才单趟扫 `M3000`；打开解析器并写 config.json）。已有总层数时不数行、不把 `get_total_lines()` 写回 `line_count`；Start 不再补扫 |
 | `UI_Parser_Exit_Ntf` | 取消解析（stop_parse + 清会话） |
 | `UI_Print_Start_Req` | 置打印态 → 基板测高 gate（`Plate Height Adj` 开且有 LUT 才跑）→ 光路检测 gate（若开）→ 正式解析 + 首层参考图 gate + `begin_sending` |
 | ↑ 起印失败 | 打印态在 `launch_print_from_prepared` 最前面就置（检测那十几秒 UI 已在打印页），所以「运动还没开始就失败」的分支**一律走 `abort_print_start()`** 回滚，否则 UI 停在打印页 0% |
@@ -64,6 +64,8 @@ UI → GlavoService（工作线程）→ ParserManager → RingBuffer → McuLin
 
 镜像命名与选包：[common/fs_manifest/OTA_IMAGE.md](../../common/fs_manifest/OTA_IMAGE.md)。  
 `UI_Mcu_Ota_Start_Req`（UI 或 MQTT）→ `/userdata/image/galvo`；`UI_Serial_Mcu_Ota_Start_Req` → `/userdata/image/mcu`。只刷最高版本成对的 SlotA→SlotB，不成对或名称非法则启动失败。两路互斥。状态 `APP_*_Ota_Status_Ntf` 双发 UI 与 MQTT，供云端进度映射。
+
+MCU 串口 OTA 是停等协议（规则 [MCU_OTA丢包重传机制.md](../../doc/MCU_OTA丢包重传机制.md)）：只认 `0xBB` 业务应答；镜像须为打包工具的 128 对齐产物，原样切片、不补齐。`FINISHED_ACK=1` 只表示落槽，成功看阶段四 `value[5]==目标槽 && value[6]==4`。会话进行中 link 线程不发其它串口命令（擦除窗硬静默；阶段四只发版本查询）。
 
 ### 打印层录像（Glavo → Media）
 
@@ -90,7 +92,7 @@ UI → GlavoService（工作线程）→ ParserManager → RingBuffer → McuLin
 
 | 策略 | 适用 | 打印中区间 | 说明 |
 |------|------|-----------|------|
-| 纯层台阶（首选） | G-code 且能数出 `M3000`，且 `GLAVO_ENABLE_LAYER_SNAP=1` | `1–98` | `已完成层 / 总层`。总层 = Prepare 预扫的 `M3000` 计数（缓存在 `config.json` 的 `layer_count`）；已完成层 = 换层 Snap 计数。层内静止，打完一层跳一格 |
+| 纯层台阶（首选） | G-code 且 `layer_count>0`，且 `GLAVO_ENABLE_LAYER_SNAP=1` | `1–98` | `已完成层 / 总层`。总层 = 清单 `layer_count`（3MF 来自 Metadata.layers；其它可来自 Prepare 预扫的 `M3000`）；已完成层 = 换层 Snap 计数。层内静止，打完一层跳一格 |
 | 包进度（回退） | OVF / 无 `M3000` 的 G-code / 关闭 Layer Snap | `0–95` | `sent_packets / denom`，再与层锚点 7:3 融合（`fuse_send_and_layer_progress_95`） |
 
 两者共用尾段：`95–99` 按 MCU cmd/data cache 占用估排空，`100` 只跟 `force_complete` / `job_completed`。

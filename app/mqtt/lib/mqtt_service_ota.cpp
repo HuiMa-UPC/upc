@@ -22,12 +22,12 @@ void MqttService::on_ota_user_decision(const middleware::Message& msg)
 {
     middleware::OtaDecisionReqPayload p{};
     if(!read_inline_pod(msg.payload, p)) {
-        UPC_LOG_MQTT_SERVICE(Warn, "invalid UI_Ota_User_Decision_Req payload");
+        UPC_LOG_MQTT_SERVICE_TO(MqttOta, Warn, "invalid UI_Ota_User_Decision_Req payload");
         return;
     }
     p.task_id[sizeof(p.task_id) - 1] = '\0';
     if(p.task_id[0] == '\0') {
-        UPC_LOG_MQTT_SERVICE(Warn, "ignore OTA decision with empty task_id");
+        UPC_LOG_MQTT_SERVICE_TO(MqttOta, Warn, "ignore OTA decision with empty task_id");
         return;
     }
     if(p.approve == 0) {
@@ -38,10 +38,10 @@ void MqttService::on_ota_user_decision(const middleware::Message& msg)
                        pending_ota_notify_.task_id == p.task_id;
         }
         if(required) {
-            UPC_LOG_MQTT_SERVICE(Warn, "ignore cancel for required OTA task_id=%s", p.task_id);
+            UPC_LOG_MQTT_SERVICE_TO(MqttOta, Warn, "ignore cancel for required OTA task_id=%s", p.task_id);
             return;
         }
-        UPC_LOG_MQTT_SERVICE(Info, "OTA notify cancelled by UI task_id=%s", p.task_id);
+        UPC_LOG_MQTT_SERVICE_TO(MqttOta, Info, "OTA notify cancelled by UI task_id=%s", p.task_id);
         return;
     }
     (void)publish_manifest_request(p.task_id);
@@ -51,7 +51,7 @@ void MqttService::handle_ota_notify(const std::string& payload)
 {
     OtaNotify notify{};
     if(!parse_ota_notify(payload, notify)) {
-        UPC_LOG_MQTT_SERVICE(Warn, "invalid ota notify payload");
+        UPC_LOG_MQTT_SERVICE_TO(MqttOta, Warn, "invalid ota notify payload");
         return;
     }
     {
@@ -79,11 +79,11 @@ void MqttService::handle_ota_manifest_response(const std::string& payload)
     std::string err_code;
     std::vector<OtaComponent> components;
     if(!parse_manifest_response(payload, task_id, components, err_code)) {
-        UPC_LOG_MQTT_SERVICE(Warn, "invalid ota manifest response");
+        UPC_LOG_MQTT_SERVICE_TO(MqttOta, Warn, "invalid ota manifest response");
         return;
     }
     if(task_id.empty()) {
-        UPC_LOG_MQTT_SERVICE(Warn, "ota manifest response without task_id");
+        UPC_LOG_MQTT_SERVICE_TO(MqttOta, Warn, "ota manifest response without task_id");
         return;
     }
     // 云端显式返回错误码，直接上报失败并终止当前 OTA 流。
@@ -160,13 +160,13 @@ bool MqttService::publish_manifest_request(const std::string& task_id)
     MQTTClient_deliveryToken token{};
     const int rc = MQTTClient_publishMessage(client_, topic.c_str(), &msg, &token);
     if(rc != MQTTCLIENT_SUCCESS) {
-        UPC_LOG_MQTT_SERVICE(Warn, "publish ota manifest request failed rc=%d", rc);
+        UPC_LOG_MQTT_SERVICE_TO(MqttOta, Warn, "publish ota manifest request failed rc=%d", rc);
         mqtt_connected_ = false;
         cmd_subscribed_ = false;
         ota_subscribed_ = false;
         return false;
     }
-    UPC_LOG_MQTT_SERVICE(Info, "ota manifest request sent task_id=%s token=%d",
+    UPC_LOG_MQTT_SERVICE_TO(MqttOta, Info, "ota manifest request sent task_id=%s token=%d",
                          task_id.c_str(), static_cast<int>(token));
     return true;
 }
@@ -217,7 +217,7 @@ bool MqttService::publish_ota_progress_cloud(const middleware::OtaProgressPayloa
     MQTTClient_deliveryToken token{};
     const int rc = MQTTClient_publishMessage(client_, topic.c_str(), &msg, &token);
     if(rc != MQTTCLIENT_SUCCESS) {
-        UPC_LOG_MQTT_SERVICE(Warn, "publish ota progress failed rc=%d", rc);
+        UPC_LOG_MQTT_SERVICE_TO(MqttOta, Warn, "publish ota progress failed rc=%d", rc);
         mqtt_connected_ = false;
         cmd_subscribed_ = false;
         ota_subscribed_ = false;
@@ -254,7 +254,7 @@ void MqttService::on_apply_ota_status(const middleware::Message& msg,
 {
     middleware::McuOtaStatusPayload st{};
     if(!read_inline_pod(msg.payload, st)) {
-        UPC_LOG_MQTT_SERVICE(Warn, "%s", invalid_log ? invalid_log : "invalid OTA status payload");
+        UPC_LOG_MQTT_SERVICE_TO(MqttOta, Warn, "%s", invalid_log ? invalid_log : "invalid OTA status payload");
         return;
     }
 
@@ -390,7 +390,7 @@ bool MqttService::trigger_apply_ota(const std::string& task_id,
     {
         std::lock_guard<std::mutex> lock(mtx);
         if(sync.waiting) {
-            UPC_LOG_MQTT_SERVICE(Warn, "%s task_id=%s",
+            UPC_LOG_MQTT_SERVICE_TO(MqttOta, Warn, "%s task_id=%s",
                                  already_log ? already_log : "ota already waiting",
                                  task_id.c_str());
             return false;
@@ -413,7 +413,7 @@ bool MqttService::trigger_apply_ota(const std::string& task_id,
                               middleware::ModuleId::APP_MQTT,
                               middleware::ModuleId::APP_GLAVO);
     (void)middleware::MsgPort::instance().publish_async(start);
-    UPC_LOG_MQTT_SERVICE(Info, "%s task_id=%s",
+    UPC_LOG_MQTT_SERVICE_TO(MqttOta, Info, "%s task_id=%s",
                          start_log ? start_log : "trigger real ota",
                          task_id.c_str());
     return true;
@@ -475,7 +475,7 @@ void MqttService::start_manifest_download(std::string task_id,
     {
         std::lock_guard<std::mutex> lock(ota_mtx_);
         if(ota_download_running_) {
-            UPC_LOG_MQTT_SERVICE(Warn, "ota download already running, ignore task_id=%s",
+            UPC_LOG_MQTT_SERVICE_TO(MqttOta, Warn, "ota download already running, ignore task_id=%s",
                                  task_id.c_str());
             return;
         }

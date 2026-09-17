@@ -56,6 +56,10 @@ extern const lv_image_dsc_t ic_bulb_32;
 extern const lv_image_dsc_t ic_bulb_26;
 extern const lv_image_dsc_t *const ic_bulb_set[];
 
+extern const lv_image_dsc_t ic_chevron_left_20;
+extern const lv_image_dsc_t ic_chevron_left_15;
+extern const lv_image_dsc_t *const ic_chevron_left_set[];
+
 extern const lv_image_dsc_t ic_info;
 extern const lv_image_dsc_t ic_clock;
 extern const lv_image_dsc_t ic_cube;

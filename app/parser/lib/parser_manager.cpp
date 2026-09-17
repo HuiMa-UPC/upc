@@ -41,7 +41,8 @@ int ParserManager::open_file(const std::string& path, int total_lines_hint)
         notify_sink();
     }
 
-    if(total_lines_hint > 0) {
+    /* >0：已知行数；0：跳过整文件数换行（纯层进度）；<0：打开时自行统计。 */
+    if(total_lines_hint >= 0) {
         worker->set_total_lines_hint(total_lines_hint);
     }
     return worker->open_file(path);

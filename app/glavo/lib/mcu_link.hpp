@@ -410,8 +410,14 @@ private:
     void send_serial_print_terminate();
     /** @brief 向 MCU 串口发送打印完成帧 */
     void send_serial_print_finished();
-    /** @brief 执行手动终止后的清理：发 reset、清队列、回调 TerminateDone/PrintError */
-    void run_manual_terminate_cleanup();
+    /**
+     * @brief 执行手动终止后的清理：发 reset、清队列、回调 TerminateDone/PrintError
+     * @return true 本轮确实执行了清理并已上报事件；false 已有 cleanup 在进行，
+     *         调用方**必须**保留 terminate_pending_ 以便下一轮重试
+     * @note 返回 false 时不会发 reset、也不会 emit 任何事件；若调用方仍无条件清掉
+     *       terminate_pending_，这次终止请求就被静默吃掉（振镜不停、UI 收不到回执）
+     */
+    [[nodiscard]] bool run_manual_terminate_cleanup();
     /** @brief 执行自然完成后的清理：发 finished、回调 PrintCompleted */
     void run_natural_complete_cleanup();
     void emit_event(McuLinkEvent ev);
