@@ -121,6 +121,24 @@ void DebugMsgProxy::init()
         }));
 
     subs_.push_back(bus.subscribe(
+        middleware::MsgType::GLAVO_Debug_Soc_Led_Ntf, middleware::ModuleId::UI,
+        [this](const middleware::Message& msg) {
+            middleware::DebugSocLedStatePayload p{};
+            if(soc_led_cb_ && read_inline_pod(msg, p)) {
+                soc_led_cb_(p.mask);
+            }
+        }));
+
+    subs_.push_back(bus.subscribe(
+        middleware::MsgType::GLAVO_Debug_Cabin_Pm_Valve_Ntf, middleware::ModuleId::UI,
+        [this](const middleware::Message& msg) {
+            middleware::DebugOnOffPayload p{};
+            if(cabin_pm_valve_cb_ && read_inline_pod(msg, p)) {
+                cabin_pm_valve_cb_(p.on != 0);
+            }
+        }));
+
+    subs_.push_back(bus.subscribe(
         middleware::MsgType::GLAVO_Debug_TestImage_Ntf, middleware::ModuleId::UI,
         [this](const middleware::Message& msg) {
             middleware::DebugOnOffPayload p{};
@@ -427,6 +445,31 @@ void DebugMsgProxy::request_plate_height_adj_state()
     publish_empty(middleware::MsgType::UI_Debug_PlateHeight_Adj_Get_Ntf);
 }
 
+void DebugMsgProxy::send_soc_led_set(uint8_t channel, bool on)
+{
+    middleware::DebugSocLedPayload p{};
+    p.channel = channel;
+    p.on = on ? 1 : 0;
+    publish_pod(middleware::MsgType::UI_Debug_Soc_Led_Set_Ntf, p);
+}
+
+void DebugMsgProxy::request_soc_led_state()
+{
+    publish_empty(middleware::MsgType::UI_Debug_Soc_Led_Get_Ntf);
+}
+
+void DebugMsgProxy::send_cabin_pm_valve_set(bool on)
+{
+    middleware::DebugOnOffPayload p{};
+    p.on = on ? 1 : 0;
+    publish_pod(middleware::MsgType::UI_Debug_Cabin_Pm_Valve_Set_Ntf, p);
+}
+
+void DebugMsgProxy::request_cabin_pm_valve_state()
+{
+    publish_empty(middleware::MsgType::UI_Debug_Cabin_Pm_Valve_Get_Ntf);
+}
+
 void DebugMsgProxy::send_height_calib_start(float start_mm, float end_mm,
                                             float step_mm, const char* lut_path)
 {
@@ -511,6 +554,16 @@ void DebugMsgProxy::register_optical_path_check(DebugOpticalPathCheckCb cb)
 void DebugMsgProxy::register_plate_height_adj(DebugPlateHeightAdjCb cb)
 {
     plate_height_adj_cb_ = std::move(cb);
+}
+
+void DebugMsgProxy::register_soc_led(DebugSocLedCb cb)
+{
+    soc_led_cb_ = std::move(cb);
+}
+
+void DebugMsgProxy::register_cabin_pm_valve(DebugCabinPmValveCb cb)
+{
+    cabin_pm_valve_cb_ = std::move(cb);
 }
 
 void DebugMsgProxy::register_test_image(DebugTestImageCb cb)

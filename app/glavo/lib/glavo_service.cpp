@@ -25,7 +25,8 @@
  *     2) 清粉测试完成 / 转运结果（来自 link 回调置位的 pending）
  *     3) 一条 UI IPC 消息 → handle_message()
  * - usb_hotplug_thread_：轮询 /proc/mounts，变化时发 GLAVO_USB_Hotplug_Ntf。
- * - clean_worker_：开门前清粉（风机 + 轮询 PM2.5）；完成后经 publish 回 UI。
+ * - clean_worker_：开门前清粉（风机 + 轮询/阀采样 PM2.5）；完成后经 publish 回 UI。
+ * - pm25_sample_worker_：V4 开门前舱内 PM 阀采样（3s），避免堵 worker。
  * - WifiManager / McuLink / Parser 线程不在本文件创建，但通过回调/队列与 worker 汇合。
  *
  * =============================================================================
@@ -65,6 +66,7 @@
 #include "parser_registry.hpp"
 #include "parser_worker.hpp"
 #include "mcu_link.hpp"
+#include "soc_sensors.hpp"
 #include "print_job_state.hpp"
 #include "msg_runtime.hpp"
 #include "buffer_pool.hpp"
@@ -622,6 +624,7 @@ GlavoService::~GlavoService()
 {
     stop_usb_hotplug_monitor();
     stop_clean_worker();
+    stop_pm25_sample_worker();
     stop_print_job();
     clear_prepare_session();
     if (state() == ServiceState::Running) {
@@ -858,6 +861,10 @@ bool GlavoService::start()
         middleware::MsgType::UI_Debug_OpticalPath_Check_Get_Ntf,
         middleware::MsgType::UI_Debug_PlateHeight_Adj_Set_Ntf,
         middleware::MsgType::UI_Debug_PlateHeight_Adj_Get_Ntf,
+        middleware::MsgType::UI_Debug_Soc_Led_Set_Ntf,
+        middleware::MsgType::UI_Debug_Soc_Led_Get_Ntf,
+        middleware::MsgType::UI_Debug_Cabin_Pm_Valve_Set_Ntf,
+        middleware::MsgType::UI_Debug_Cabin_Pm_Valve_Get_Ntf,
         middleware::MsgType::APP_Visual_OpticalPath_Point_Check_Rsp,
         middleware::MsgType::APP_Visual_Laser_Spot_Measure_Rsp,
         middleware::MsgType::UI_Glavo_Height_Calib_Start_Req,
@@ -884,6 +891,8 @@ bool GlavoService::start()
     publish_debug_first_layer_visual_check_state();
     publish_debug_optical_path_check_state();
     publish_debug_plate_height_adj_state();
+    publish_debug_soc_led_state();
+    publish_debug_cabin_pm_valve_state();
     publish_debug_test_image_state();
     publish_debug_galvo_point_test_state();
     return true;
@@ -931,6 +940,7 @@ bool GlavoService::stop()
     stop_print_job();
     clear_test_image_session();
     stop_clean_worker();
+    stop_pm25_sample_worker();
     clear_prepare_session();
     WifiManager::instance().shutdown();
     subscriptions_.clear();
@@ -1119,6 +1129,14 @@ void GlavoService::stop_clean_worker()
     clean_video_session_started_ = false;
     clean_test_session_id_[0] = '\0';
     clean_test_job_name_[0] = '\0';
+}
+
+void GlavoService::stop_pm25_sample_worker()
+{
+    if(pm25_sample_worker_.joinable()) {
+        pm25_sample_worker_.join();
+    }
+    pm25_sample_busy_.store(false);
 }
 
 /** @brief 订阅指定 MsgType 并记录 Subscription 句柄，stop 时统一释放 */
@@ -1347,6 +1365,18 @@ void GlavoService::handle_message(const middleware::Message& msg)
             break;
         case middleware::MsgType::UI_Debug_PlateHeight_Adj_Get_Ntf:
             handle_debug_plate_height_adj_get(msg);
+            break;
+        case middleware::MsgType::UI_Debug_Soc_Led_Set_Ntf:
+            handle_debug_soc_led_set(msg);
+            break;
+        case middleware::MsgType::UI_Debug_Soc_Led_Get_Ntf:
+            handle_debug_soc_led_get(msg);
+            break;
+        case middleware::MsgType::UI_Debug_Cabin_Pm_Valve_Set_Ntf:
+            handle_debug_cabin_pm_valve_set(msg);
+            break;
+        case middleware::MsgType::UI_Debug_Cabin_Pm_Valve_Get_Ntf:
+            handle_debug_cabin_pm_valve_get(msg);
             break;
         case middleware::MsgType::APP_Visual_OpticalPath_Point_Check_Rsp:
             handle_visual_optical_path_point_rsp(msg);
@@ -3014,12 +3044,26 @@ void GlavoService::on_plate_height_done()
 
 void GlavoService::handle_height_calib_start_req(const middleware::Message& msg)
 {
+    auto send_start_rsp = [this, &msg](bool ok) {
+        middleware::HeightCalibStartRspPayload p{};
+        p.ok = ok ? 1 : 0;
+        middleware::Message rsp(middleware::MsgType::APP_Glavo_Height_Calib_Start_Rsp,
+            static_cast<middleware::ModuleId>(module_id()), msg.sender_id);
+        rsp.payload = middleware::MsgPayload::from_bytes(
+            reinterpret_cast<const uint8_t*>(&p), sizeof(p));
+        if(!publish_async(rsp)) {
+            UPC_LOG_GLAVO_SERVICE(Warn, "height calib start rsp publish failed ok=%d",
+                                  ok ? 1 : 0);
+        }
+    };
+
     if(print_running_.load() || plate_height_.active() ||
        optical_path_check_.active() || galvo_point_test_active_.load() ||
        test_image_active_ || test_image_desired_ ||
        McuLink::instance().is_sending() ||
        McuLink::instance().is_terminate_pending()) {
         UPC_LOG_GLAVO_SERVICE(Warn, "height calib rejected: print or motion test active");
+        send_start_rsp(false);
         publish_height_calib_progress(3, 0.0f, 0, 0);
         return;
     }
@@ -3038,9 +3082,11 @@ void GlavoService::handle_height_calib_start_req(const middleware::Message& msg)
                             req.start_height_mm, req.end_height_mm,
                             req.step_mm, lut_path)) {
         publish_plate_height_visual_session(false);
+        send_start_rsp(false);
         publish_height_calib_progress(3, 0.0f, 0, 0);
         return;
     }
+    send_start_rsp(true);
 }
 
 void GlavoService::handle_laser_spot_measure_rsp(const middleware::Message& msg)
@@ -3174,6 +3220,80 @@ void GlavoService::handle_debug_plate_height_adj_get(
 {
     (void)msg;
     publish_debug_plate_height_adj_state();
+}
+
+void GlavoService::publish_debug_soc_led_state()
+{
+    middleware::DebugSocLedStatePayload p{};
+    p.mask = SocSensors::instance().cabin_led_mask();
+    middleware::Message ntf(
+        middleware::MsgType::GLAVO_Debug_Soc_Led_Ntf,
+        middleware::ModuleId::APP_GLAVO,
+        middleware::ModuleId::UI);
+    ntf.payload = middleware::MsgPayload::from_bytes(
+        reinterpret_cast<const uint8_t*>(&p), sizeof(p));
+    if(!publish_async(ntf)) {
+        UPC_LOG_GLAVO_SERVICE(Warn, "soc led state publish failed");
+    }
+}
+
+void GlavoService::handle_debug_soc_led_set(const middleware::Message& msg)
+{
+    middleware::DebugSocLedPayload p{};
+    if(!read_inline_pod(msg.payload, p)) {
+        return;
+    }
+    if(p.channel >= middleware::kDebugSocLedCount) {
+        UPC_LOG_GLAVO_SERVICE(Warn, "debug soc_led bad channel=%u",
+                              static_cast<unsigned>(p.channel));
+        publish_debug_soc_led_state();
+        return;
+    }
+    const bool ok = SocSensors::instance().set_cabin_led(p.channel, p.on != 0);
+    UPC_LOG_GLAVO_SERVICE(Info, "debug soc_led ch=%u on=%u ok=%d",
+                          static_cast<unsigned>(p.channel),
+                          static_cast<unsigned>(p.on),
+                          ok ? 1 : 0);
+    publish_debug_soc_led_state();
+}
+
+void GlavoService::handle_debug_soc_led_get(const middleware::Message& msg)
+{
+    (void)msg;
+    publish_debug_soc_led_state();
+}
+
+void GlavoService::publish_debug_cabin_pm_valve_state()
+{
+    middleware::DebugOnOffPayload p{};
+    p.on = SocSensors::instance().pm_valve_open() ? 1 : 0;
+    middleware::Message ntf(
+        middleware::MsgType::GLAVO_Debug_Cabin_Pm_Valve_Ntf,
+        middleware::ModuleId::APP_GLAVO,
+        middleware::ModuleId::UI);
+    ntf.payload = middleware::MsgPayload::from_bytes(
+        reinterpret_cast<const uint8_t*>(&p), sizeof(p));
+    if(!publish_async(ntf)) {
+        UPC_LOG_GLAVO_SERVICE(Warn, "cabin pm valve state publish failed");
+    }
+}
+
+void GlavoService::handle_debug_cabin_pm_valve_set(const middleware::Message& msg)
+{
+    middleware::DebugOnOffPayload p{};
+    if(!read_inline_pod(msg.payload, p)) {
+        return;
+    }
+    SocSensors::instance().set_pm_valve(p.on != 0);
+    UPC_LOG_GLAVO_SERVICE(Info, "debug cabin_pm_valve=%u",
+                          static_cast<unsigned>(p.on));
+    publish_debug_cabin_pm_valve_state();
+}
+
+void GlavoService::handle_debug_cabin_pm_valve_get(const middleware::Message& msg)
+{
+    (void)msg;
+    publish_debug_cabin_pm_valve_state();
 }
 
 /**
@@ -3345,23 +3465,66 @@ void GlavoService::handle_supply_status_req(const middleware::Message& msg)
     }
 }
 
-/** @brief 回复舱内 PM2.5（来自 McuLink 环境快照） */
-void GlavoService::handle_pm25_request(const middleware::Message& msg)
+/** @brief 回复舱内 PM2.5（旧：MCU 快照；SOC 路径：独立线程开阀采样 3s 平均） */
+void GlavoService::publish_pm25_rsp(uint32_t target_id, bool is_high, float pm25_cabin)
 {
-    /* 阈值判定归后端：舱内 PM2.5 ≥ 阈值 判不合格（is_high=1）→ 触发开门前清粉。
-     * 阈值默认 50，可由 cal.csv Config 段 PM2.5Clean 覆盖。 */
-    const auto env = McuLink::instance().env_snapshot();
     middleware::Pm25ResultPayload p{};
-    p.is_high   = (env.valid && env.pm25_cabin >= pm25_clean_threshold_) ? 1 : 0;
-    p.pm25_cabin = env.valid ? env.pm25_cabin : 0.f;
-
+    p.is_high = is_high ? 1 : 0;
+    p.pm25_cabin = pm25_cabin;
     middleware::Message rsp(middleware::MsgType::APP_PM25_Rsp,
-        static_cast<middleware::ModuleId>(module_id()), msg.sender_id);
+        static_cast<middleware::ModuleId>(module_id()),
+        static_cast<middleware::ModuleId>(target_id));
     rsp.payload = middleware::MsgPayload::from_bytes(
         reinterpret_cast<const uint8_t*>(&p), sizeof(p));
     if(!publish_async(rsp)) {
         UPC_LOG_GLAVO_SERVICE(Warn, "pm25_rsp publish_async failed");
     }
+}
+
+void GlavoService::handle_pm25_request(const middleware::Message& msg)
+{
+    /* 阈值判定归后端：舱内 PM2.5 ≥ 阈值 判不合格（is_high=1）→ 触发开门前清粉。
+     * 阈值默认 50，可由 cal.csv Config 段 PM2.5Clean 覆盖。 */
+    const uint32_t target = static_cast<uint32_t>(msg.sender_id);
+
+    if(!door_real_open_enabled_) {
+        /* 门控关闭：跳过舱内 PM 检测与清粉，直接判合格让 UI 去占位开门 */
+        UPC_LOG_GLAVO_SERVICE(Info, "pm25_req: door gate off, skip cabin PM check");
+        publish_pm25_rsp(target, false, 0.f);
+        return;
+    }
+    if(!McuLink::instance().mcu_sensor_protocol_v4()) {
+        const auto env = McuLink::instance().env_snapshot();
+        const bool high = env.valid && env.pm25_cabin >= pm25_clean_threshold_;
+        publish_pm25_rsp(target, high, env.valid ? env.pm25_cabin : 0.f);
+        return;
+    }
+
+    if(pm25_sample_busy_.load()) {
+        /* 已在采：不堵 worker，用当前舱内缓存立刻回 */
+        const auto env = McuLink::instance().env_snapshot();
+        const bool high = env.valid && env.pm25_cabin >= pm25_clean_threshold_;
+        UPC_LOG_GLAVO_SERVICE(Info, "pm25_req: sample busy, use snapshot");
+        publish_pm25_rsp(target, high, env.valid ? env.pm25_cabin : 0.f);
+        return;
+    }
+    pm25_sample_busy_.store(true);
+    if(pm25_sample_worker_.joinable()) {
+        pm25_sample_worker_.join();
+    }
+    const float threshold = pm25_clean_threshold_;
+    pm25_sample_worker_ = std::thread([this, target, threshold]() {
+        constexpr uint32_t kSampleMs = 3000;
+        const float avg = SocSensors::instance().sample_cabin_pm25_avg(kSampleMs);
+        const bool high = (avg >= 0.f && avg >= threshold);
+        UPC_LOG_GLAVO_SERVICE(Info,
+            "pm25_req(soc valve sample): avg=%.1f threshold=%.1f is_high=%u",
+            static_cast<double>(avg), static_cast<double>(threshold),
+            high ? 1u : 0u);
+        publish_pm25_rsp(target, high, (avg >= 0.f) ? avg : 0.f);
+        publish_debug_cabin_pm_valve_state();
+        pm25_sample_busy_.store(false);
+    });
 }
 
 /** @brief 发送门控操作结果 Rsp */
@@ -3456,11 +3619,10 @@ void GlavoService::handle_purify_request(const middleware::Message& msg)
 /**
  * @brief 处理 UI_Clean_Start_Req（开门前清粉）
  *
- * 业务顺序（在 clean_worker_ 中执行，不阻塞 worker 主循环）：
- *   风机占空比 60% → 开风机 → 每 1s 读舱内 PM2.5
- *   → 低于阈值（或用户 Stop）→ 关风机 → APP_Clean_Start_Rsp / Stop_Rsp
- *
- * Stop：只置 cancel 标志；真正 Rsp 仍由 clean_worker_ 退出路径发出。
+ * 旧固件：风机 60% → 每 1s 读舱内 PM2.5 → 低于阈值或 Stop → 关风机。
+ * V4（且真实开门门控开）：风机固定吹 10s（不中途看 PM）→ 关风机 →
+ *   再开阀采样 3s 平均；仍超标则循环；≤阈值则回 Start_Rsp（UI 再开门）。
+ * 门控关闭时走旧快照路径（与跳过检测一致，由 UI 侧决定是否发 Clean）。
  */
 void GlavoService::handle_clean_start_request(const middleware::Message& msg)
 {
@@ -3474,56 +3636,92 @@ void GlavoService::handle_clean_start_request(const middleware::Message& msg)
 
     constexpr uint8_t kCleanFanDutyPercent = 60u;
     constexpr auto kCleanPollInterval = std::chrono::seconds(1);
+    constexpr auto kCleanFixedBlow = std::chrono::seconds(10);
+    constexpr uint32_t kValveSampleMs = 3000;
     const uint32_t reply_target = static_cast<uint32_t>(msg.sender_id);
+    const bool v4_fixed =
+        door_real_open_enabled_ && McuLink::instance().mcu_sensor_protocol_v4();
     clean_cancel_requested_.store(false);
     clean_stop_rsp_pending_.store(false);
     clean_stop_rsp_target_.store(0);
     clean_running_.store(true);
 
-    clean_worker_ = std::thread([this, reply_target, kCleanFanDutyPercent, kCleanPollInterval]() {
+    clean_worker_ = std::thread([this, reply_target, kCleanFanDutyPercent,
+                                 kCleanPollInterval, kCleanFixedBlow, kValveSampleMs,
+                                 v4_fixed]() {
         bool cancelled = false;
         uint8_t buf[SERIAL_DEBUG_MAX_FRAME];
-        int n = serial_debug_build_fan_duty(kCleanFanDutyPercent, buf, sizeof(buf));
-        if(n <= 0) {
-            UPC_LOG_GLAVO_SERVICE(Warn,
-                "clean_start_req: build fan duty failed duty=%u",
-                static_cast<unsigned>(kCleanFanDutyPercent));
-        } else {
-            debug_tx(buf, n);
-        }
 
-        n = serial_debug_build_fan_switch(true, buf, sizeof(buf));
-        if(n <= 0) {
-            UPC_LOG_GLAVO_SERVICE(Warn, "clean_start_req: build fan on failed");
-        } else {
-            debug_tx(buf, n);
-        }
-
-        UPC_LOG_GLAVO_SERVICE(Info,
-            "clean_start_req: fan on, waiting pm25 < %.1f",
-            static_cast<double>(pm25_clean_threshold_));
-        for(;;) {
-            if(clean_cancel_requested_.load()) {
-                cancelled = true;
-                UPC_LOG_GLAVO_SERVICE(Info, "clean_start_req: cancelled by stop request");
-                break;
+        auto fan_on = [&]() {
+            int n = serial_debug_build_fan_duty(kCleanFanDutyPercent, buf, sizeof(buf));
+            if(n > 0) {
+                debug_tx(buf, n);
             }
-            const auto env = McuLink::instance().env_snapshot();
-            if(env.valid && env.pm25_cabin < pm25_clean_threshold_) {
+            n = serial_debug_build_fan_switch(true, buf, sizeof(buf));
+            if(n > 0) {
+                debug_tx(buf, n);
+            }
+        };
+        auto fan_off = [&]() {
+            const int n = serial_debug_build_fan_switch(false, buf, sizeof(buf));
+            if(n > 0) {
+                debug_tx(buf, n);
+            }
+        };
+
+        if(v4_fixed) {
+            UPC_LOG_GLAVO_SERVICE(Info,
+                "clean_start_req(v4): fixed %lld s blow + valve resample, threshold=%.1f",
+                static_cast<long long>(kCleanFixedBlow.count()),
+                static_cast<double>(pm25_clean_threshold_));
+            for(;;) {
+                if(clean_cancel_requested_.load()) {
+                    cancelled = true;
+                    break;
+                }
+                fan_on();
+                const auto blow_deadline = std::chrono::steady_clock::now() + kCleanFixedBlow;
+                while(std::chrono::steady_clock::now() < blow_deadline) {
+                    if(clean_cancel_requested_.load()) {
+                        cancelled = true;
+                        break;
+                    }
+                    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+                }
+                fan_off();
+                if(cancelled) {
+                    break;
+                }
+                const float avg = SocSensors::instance().sample_cabin_pm25_avg(kValveSampleMs);
                 UPC_LOG_GLAVO_SERVICE(Info,
-                    "clean_start_req: pm25 reached %.1f < %.1f",
-                    static_cast<double>(env.pm25_cabin),
-                    static_cast<double>(pm25_clean_threshold_));
-                break;
+                    "clean_start_req(v4): resample avg=%.1f", static_cast<double>(avg));
+                publish_debug_cabin_pm_valve_state();
+                if(avg < 0.f || avg < pm25_clean_threshold_) {
+                    break;
+                }
             }
-            std::this_thread::sleep_for(kCleanPollInterval);
-        }
-
-        n = serial_debug_build_fan_switch(false, buf, sizeof(buf));
-        if(n <= 0) {
-            UPC_LOG_GLAVO_SERVICE(Warn, "clean_start_req: build fan off failed");
         } else {
-            debug_tx(buf, n);
+            fan_on();
+            UPC_LOG_GLAVO_SERVICE(Info,
+                "clean_start_req: fan on, waiting pm25 < %.1f",
+                static_cast<double>(pm25_clean_threshold_));
+            for(;;) {
+                if(clean_cancel_requested_.load()) {
+                    cancelled = true;
+                    UPC_LOG_GLAVO_SERVICE(Info, "clean_start_req: cancelled by stop request");
+                    break;
+                }
+                const auto env = McuLink::instance().env_snapshot();
+                if(env.valid && env.pm25_cabin < pm25_clean_threshold_) {
+                    UPC_LOG_GLAVO_SERVICE(Info,
+                        "clean_start_req: pm25 reached %.1f < %.1f",
+                        static_cast<double>(env.pm25_cabin),
+                        static_cast<double>(pm25_clean_threshold_));
+                    break;
+                }
+                std::this_thread::sleep_for(kCleanPollInterval);
+            }
+            fan_off();
         }
 
         if(cancelled) {
@@ -4362,7 +4560,9 @@ void GlavoService::handle_debug_galvo_abs_move(const middleware::Message& msg)
         middleware::ModuleId::UI);
     ntf.payload = middleware::MsgPayload::from_bytes(
         reinterpret_cast<const uint8_t*>(&state), sizeof(state));
-    publish_async(ntf);
+    if(!publish_async(ntf)) {
+        UPC_LOG_GLAVO_SERVICE(Warn, "galvo abs move state publish failed");
+    }
     if(!ok) {
         UPC_LOG_GLAVO_SERVICE(Warn,
             "galvo abs move failed x=%.2f y=%.2f",
