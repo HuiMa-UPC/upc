@@ -1,6 +1,7 @@
 #include "mcu_link.hpp"
 #include "protocol.hpp"
 #include "soc_sensors.hpp"
+#include "spi_status_led.hpp"
 #include "wifi_manager.hpp"
 #include "print_job_state.hpp"
 #include "print_video_notify.hpp"
@@ -942,6 +943,7 @@ void McuLink::refresh_soc_v4_mode()
         }
         env_cache_.sensor_v4 = v4;
     }
+    SpiStatusLed::instance().set_enabled(v4);
     if(entered_v4) {
         publish_debug_soc_led_ntf();
     }
@@ -1001,6 +1003,7 @@ void McuLink::on_sensor_report(const serial_sensor_report_t& report)
     if(report.layout == SERIAL_SENSOR_LAYOUT_V4) {
         /* 版本应答前若已收到 Len=15，先打开 SOC 采集，避免等版本空窗 */
         if(SocSensors::instance().set_v4_mode(true)) {
+            SpiStatusLed::instance().set_enabled(true);
             publish_debug_soc_led_ntf();
         }
     }
@@ -1897,6 +1900,7 @@ void McuLink::handle_serial_rx_frame(const uint8_t* frame, size_t len)
             static_cast<unsigned>(alarm.clear_mode),
             static_cast<unsigned>(alarm.detail));
         publish_alarm_report_ntf(alarm);
+        SpiStatusLed::instance().on_alarm_report(alarm);
         return;
     }
 
@@ -1912,6 +1916,7 @@ void McuLink::handle_serial_rx_frame(const uint8_t* frame, size_t len)
             static_cast<unsigned>(snap.latched_mask),
             static_cast<unsigned>(snap.highest_severity));
         publish_alarm_snapshot_ntf(snap);
+        SpiStatusLed::instance().on_alarm_snapshot(snap);
         return;
     }
 

@@ -10,6 +10,7 @@ set(UPC_GLAVO_SOURCES
     ${GLAVO_LIB_DIR}/plate_height_measure.cpp
     ${GLAVO_LIB_DIR}/mcu_link.cpp
     ${GLAVO_LIB_DIR}/soc_sensors.cpp
+    ${GLAVO_LIB_DIR}/spi_status_led.cpp
     ${GLAVO_LIB_DIR}/mcu_ota_session.cpp
     ${GLAVO_LIB_DIR}/mcu_serial_ota_session.cpp
     ${GLAVO_LIB_DIR}/print_job_state.cpp

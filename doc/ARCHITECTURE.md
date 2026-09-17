@@ -56,6 +56,7 @@
 | `ota_image_pair` | `common/fs_manifest/ota_image_pair.*` | MCU/Galvo AB 文件名与最高版本选取（规则 [OTA_IMAGE.md](../common/fs_manifest/OTA_IMAGE.md)） |
 | `McuLink` | `mcu_link.*` | TCP 运动 + 串口握手/传感器；MCU≥V4 时合并 `SocSensors` 本地采集 |
 | `SocSensors` | `soc_sensors.*` | MCU≥V4：舱内外 PMSA UART、AHT20、CPM121、IIO 氧气周期采集；六路舱灯/`fa_valve` sysfs 随时可写（调试页，不看 MCU 版本）；与 UI 背光无关 |
+| `SpiStatusLed` | `spi_status_led.*` | MCU≥V4：SPI 灯效板状态色（空闲蓝 / 打印橙 / CONDITION 红） |
 | `PrintJobState` | `print_job_state.*` | 打印任务计数/状态 |
 | `PrintVideoNotify` | `print_video_notify.*` | 换层 Snap / 录像会话 IPC → Media |
 | `device_config.hpp` | 头文件 | TCP/串口默认、`GLAVO_ENABLE_LAYER_SNAP` 等 |
