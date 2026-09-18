@@ -1870,7 +1870,7 @@ void GlavoService::handle_parser_exit(const middleware::Message& msg)
  * @brief 在已 Prepare 的路径上真正启动一次打印作业
  *
  * 调用前须保证：prepare_ready_、路径有效，且 McuLink 不在 terminate 清理中。
- * 步骤：置打印态 → 基板测高 gate（`Plate Height Adj` 开且有 LUT 才跑）→ 光路检测 gate →
+ * 步骤：置打印态 → 光路检测 gate（若开）→ 基板测高 gate（`Plate Height Adj` 开且有 LUT 才跑）→
  *      open_file(带行数 hint) → 重置计数/进度 → start_parse →
  *      首层参考图 gate → 通知 Media 录像会话 → begin_sending。
  *
@@ -1887,18 +1887,17 @@ void GlavoService::launch_print_from_prepared(const std::string& full_path)
     McuLink::instance().set_print_task_flow_active(true);
     publish_print_state_ntf(static_cast<uint32_t>(middleware::UserHomeStatus::Printing));
 
-    /* 起印与校准同一套：关舱灯 + UI Red_On（TCP Red=3）。测高结束再开舱灯，红光保持。 */
+    /* 起印关舱灯 + UI Red_On。本链路只发关灯，不开舱灯。 */
     set_cabin_light(false);
     (void)apply_red_always_mode("print_start");
 
-    /* 测高在光路之前：基板离焦时红点容易出视野。起了一轮就返回等回灌。 */
-    if(begin_plate_height_gate()) {
+    /* 光路在测高之前。起了一轮就返回，结果经 pending 回灌后再测高。 */
+    if(begin_optical_path_gate()) {
         return;
     }
 
-    /* 光路检测优先级高于首层：放在 open/parse 之前，失败就不必回滚 parser 状态。
-     * 起了一轮就直接返回，结果经 pending 回灌 worker 后续跑下半段。 */
-    if(begin_optical_path_gate()) {
+    /* 测高在光路之后、open/parse 之前。起了一轮就返回等回灌。 */
+    if(begin_plate_height_gate()) {
         return;
     }
 
@@ -1906,7 +1905,7 @@ void GlavoService::launch_print_from_prepared(const std::string& full_path)
 }
 
 /**
- * @brief 光路检测放行后的起印后半段
+ * @brief 光路/测高放行后的起印后半段
  *
  * 与 launch_print_from_prepared 拆开是为了让光路检测能在中间异步等十几秒，
  * 而 open/parse/首层 gate 这些步骤仍在 worker 线程串行执行。
@@ -2679,6 +2678,7 @@ bool GlavoService::begin_optical_path_gate()
 
     deferred_optical_check_ = false;
     optical_path_done_pending_.store(false);
+    set_cabin_light(false);
     if(!optical_path_check_.start(galvo_motion_calibration_snapshot())) {
         /* 起不起来不能默默放行（fail-closed），按检测失败阻断本次打印。 */
         UPC_LOG_GLAVO_SERVICE(Error, "optical path start failed; blocking print");
@@ -2716,7 +2716,10 @@ void GlavoService::on_optical_path_check_done()
         abort_print_start(middleware::PrintStartRejectReason::FileOpenFail, 0);
         return;
     }
-    UPC_LOG_GLAVO_SERVICE(Info, "optical path passed; continue print start");
+    UPC_LOG_GLAVO_SERVICE(Info, "optical path passed; continue to plate height");
+    if(begin_plate_height_gate()) {
+        return;
+    }
     continue_print_after_optical_ready(prepared_local_path_);
 }
 
@@ -2735,8 +2738,9 @@ void GlavoService::abort_print_start(middleware::PrintStartRejectReason reason,
 {
     /* 落回红光模式：红光模式本身就关激光使能，是失败态下的安全态。 */
     (void)apply_red_laser_mode(true, "print_start_aborted");
-    /* 两个挂起标志一并作废，避免 TerminateDone 迟到时又把这一单捡起来重跑。 */
+    /* 挂起标志一并作废，避免 TerminateDone 迟到时又把这一单捡起来重跑。 */
     deferred_optical_check_ = false;
+    deferred_plate_height_ = false;
     deferred_print_start_ = false;
     set_print_running(false);
     McuLink::instance().set_print_task_flow_active(false);
@@ -2817,6 +2821,24 @@ void GlavoService::send_z_home()
     uint8_t buf[SERIAL_DEBUG_MAX_FRAME];
     debug_tx(buf, serial_debug_build_axis_home(0, buf, sizeof(buf)));
     UPC_LOG_GLAVO_SERVICE(Info, "z home sent");
+}
+
+void GlavoService::send_z_home_with_retract()
+{
+    const float z0 = McuLink::instance().get_z_pos_mm();
+    UPC_LOG_GLAVO_SERVICE(Info,
+        "z home retract: AXIS_INC %.1f mm (MCU Z=%.2f), wait %d ms then home",
+        static_cast<double>(-kHeightHomeRetractMm),
+        static_cast<double>(z0),
+        kHeightHomeRetractWaitMs);
+    send_z_inc(-kHeightHomeRetractMm);
+    /* 无绝对编码器：不等 MCU 报到 z0-20。编码器若在动则提前结束，否则短超时后 Home。 */
+    (void)wait_z_settled(z0 - kHeightHomeRetractMm, 1.0f, kHeightHomeRetractWaitMs);
+    if(height_calib_.cancel_requested() || plate_height_.cancel_requested()) {
+        UPC_LOG_GLAVO_SERVICE(Info, "z home retract cancelled; skip home");
+        return;
+    }
+    send_z_home();
 }
 
 bool GlavoService::wait_z_settled(float target_mm, float tolerance_mm, int timeout_ms)
@@ -2945,7 +2967,8 @@ void GlavoService::configure_plate_height()
     auto move_galvo = [](float x, float y) {
         return McuLink::instance().send_galvo_abs_pos(x, y, 1000.0f, 1);
     };
-    auto set_red = [this](bool on) {
+    /* 校准：结束开舱灯。打印前测高：只关不开。 */
+    auto start_height_illum = [this](bool on) {
         if(on) {
             set_cabin_light(false);
             (void)apply_red_always_mode("height_session_start");
@@ -2953,7 +2976,13 @@ void GlavoService::configure_plate_height()
             set_cabin_light(true);
         }
     };
-    auto z_home = [this]() { send_z_home(); };
+    auto keep_cabin_dark = [this](bool on) {
+        if(on) {
+            set_cabin_light(false);
+            (void)apply_red_always_mode("height_session_start");
+        }
+    };
+    auto z_home_retract = [this]() { send_z_home_with_retract(); };
     auto z_inc = [this](float d) { send_z_inc(d); };
     auto wait_z = [this](float target, float tol, int ms) {
         return wait_z_settled(target, tol, ms);
@@ -2963,8 +2992,8 @@ void GlavoService::configure_plate_height()
     };
 
     height_calib_.configure(
-        move_galvo, set_red,
-        z_home, z_inc, wait_z, spot,
+        move_galvo, start_height_illum,
+        z_home_retract, z_inc, wait_z, spot,
         [this](uint8_t stage, float h, uint16_t c, uint16_t tot) {
             publish_height_calib_progress(stage, h, c, tot);
             if(stage == 2 || stage == 3) {
@@ -2973,7 +3002,7 @@ void GlavoService::configure_plate_height()
         });
 
     plate_height_.configure(
-        move_galvo, set_red, z_home, z_inc, wait_z, spot,
+        move_galvo, keep_cabin_dark, z_home_retract, z_inc, wait_z, spot,
         [this](bool active) { publish_plate_height_visual_session(active); },
         [this](const PlateHeightMeasureResult& result) {
             plate_height_done_ok_.store(result.ok);
@@ -3014,6 +3043,7 @@ bool GlavoService::begin_plate_height_gate()
     deferred_plate_height_ = false;
     plate_height_done_pending_.store(false);
     plate_height_resume_path_ = prepared_local_path_;
+    set_cabin_light(false);
     if(!plate_height_.start(galvo_motion_calibration_snapshot())) {
         UPC_LOG_GLAVO_SERVICE(Error, "plate height start failed; continue without Z");
         return false;
@@ -3035,10 +3065,7 @@ void GlavoService::on_plate_height_done()
     }
     if(!plate_height_done_ok_.load()) {
         UPC_LOG_GLAVO_SERVICE(Warn,
-            "plate height failed or skipped Z; continue print gates");
-    }
-    if(begin_optical_path_gate()) {
-        return;
+            "plate height failed or skipped Z; continue print start");
     }
     if(prepared_local_path_.empty()) {
         UPC_LOG_GLAVO_SERVICE(Warn,
@@ -3084,6 +3111,9 @@ void GlavoService::handle_height_calib_start_req(const middleware::Message& msg)
     }
     std::string lut_path = req.lut_path[0] != '\0' ? std::string(req.lut_path)
                                                    : std::string(kHeightLutPath);
+    if(lut_path == "/etc/visual/height_lut.txt") {
+        lut_path = kHeightLutPath;
+    }
     publish_plate_height_visual_session(true);
     if(!height_calib_.start(galvo_motion_calibration_snapshot(),
                             req.start_height_mm, req.end_height_mm,
@@ -3367,26 +3397,8 @@ void GlavoService::on_mcu_link_event(McuLinkEvent ev)
             } else {
                 UPC_LOG_GLAVO_SERVICE(Warn, "tcp_job_event: PrintError");
             }
-            /* 光路检测被 terminate 清理挡住过：清理完毕，现在补起那一轮。
-             * 走 begin_optical_path_gate 而不是 launch_*，因为打印态与
-             * PrintState_Ntf 已经在第一次 launch 里发过了。 */
-            if(deferred_plate_height_) {
-                deferred_plate_height_ = false;
-                if(print_running_.load() && prepare_ready_ &&
-                   !prepared_local_path_.empty()) {
-                    UPC_LOG_GLAVO_SERVICE(Info,
-                        "plate height resume after terminate path=%s",
-                        prepared_local_path_.c_str());
-                    if(begin_plate_height_gate()) {
-                        break;
-                    }
-                    if(begin_optical_path_gate()) {
-                        break;
-                    }
-                    continue_print_after_optical_ready(prepared_local_path_);
-                    break;
-                }
-            }
+            /* 光路/测高被 terminate 清理挡住过：清理完毕后按同一顺序补起。
+             * 走 gate 而不是 launch_*，因为打印态与 PrintState_Ntf 已经发过。 */
             if(deferred_optical_check_) {
                 deferred_optical_check_ = false;
                 if(print_running_.load() && prepare_ready_ &&
@@ -3395,6 +3407,23 @@ void GlavoService::on_mcu_link_event(McuLinkEvent ev)
                         "optical path resume after terminate path=%s",
                         prepared_local_path_.c_str());
                     if(begin_optical_path_gate()) {
+                        break;
+                    }
+                    if(begin_plate_height_gate()) {
+                        break;
+                    }
+                    continue_print_after_optical_ready(prepared_local_path_);
+                    break;
+                }
+            }
+            if(deferred_plate_height_) {
+                deferred_plate_height_ = false;
+                if(print_running_.load() && prepare_ready_ &&
+                   !prepared_local_path_.empty()) {
+                    UPC_LOG_GLAVO_SERVICE(Info,
+                        "plate height resume after terminate path=%s",
+                        prepared_local_path_.c_str());
+                    if(begin_plate_height_gate()) {
                         break;
                     }
                     continue_print_after_optical_ready(prepared_local_path_);

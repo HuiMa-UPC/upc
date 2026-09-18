@@ -1069,14 +1069,14 @@ struct LaserSpotMeasureRspPayload {
 
 /**
  * UI_Glavo_Height_Calib_Start_Req：启动激光高度校准（Inline）。
- * Glavo：关舱灯 + TCP Red=3 → Z 回零 → AXIS_INC 网格采集 → 原子写 LUT；结束只开舱灯。
+ * Glavo：关舱灯 + TCP Red=3 → 先下降 20mm 再 Z 回零 → AXIS_INC 网格采集 → 原子写 LUT；结束只开舱灯。
  */
 struct HeightCalibStartReqPayload {
     float start_height_mm;  /**< 起始高度（mm），如 -5 */
     float end_height_mm;    /**< 结束高度（mm），如 12 */
     float step_mm;          /**< 步长（mm），如 1 */
     uint8_t reserved[4];
-    char  lut_path[128];    /**< LUT 输出路径，如 /etc/visual/height_lut.txt */
+    char  lut_path[128];    /**< LUT 输出路径，默认 /userdata/visual/height_lut.txt */
 };
 
 /** APP_Glavo_Height_Calib_Start_Rsp：校准是否已启动（Inline） */

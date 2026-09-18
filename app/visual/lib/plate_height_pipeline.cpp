@@ -12,7 +12,7 @@
  * 设计要点:
  *   - 分割 / 预处理为策略接口，可替换可扩展，无需改本文件
  *   - 配置全部从 plate_height_config.json 读取，调参不重编译
- *   - 不写文件、不打印日志 (异常用 throw 抛出)，与 frame_diff_pipeline 风格一致
+ *   - 分割路径不写文件；配置缺失时 load_plate_height_config 回退默认值
  */
 
 #include "plate_height_pipeline.hpp"
@@ -301,19 +301,22 @@ inline std::vector<cv::Point> get_quad(const Value& root, const std::string& key
 //  配置加载
 // ================================================================
 PlateHeightConfig load_plate_height_config(const std::string& config_path) {
-    const json::Value root = json::parse_file(config_path);
-
     PlateHeightConfig cfg;
-    cfg.roi_quad     = json::get_quad(root, "roi_quad");
-    cfg.fixed_thresh = static_cast<uint8_t>(
-        json::get<int>(root, "fixed_thresh", cfg.fixed_thresh));
-    cfg.min_area     = json::get<int>(root, "min_area",     cfg.min_area);
-    cfg.max_area     = json::get<int>(root, "max_area",     cfg.max_area);
-    cfg.lut_path     = json::get<std::string>(root, "lut_path", cfg.lut_path);
-    cfg.enable_clahe = json::get<bool>(root, "enable_clahe", cfg.enable_clahe);
-    cfg.clahe_clip   = json::get<double>(root, "clahe_clip", cfg.clahe_clip);
-    cfg.enable_blur  = json::get<bool>(root, "enable_blur",  cfg.enable_blur);
-    cfg.blur_k       = json::get<int>(root, "blur_k",       cfg.blur_k);
+    try {
+        const json::Value root = json::parse_file(config_path);
+        cfg.roi_quad     = json::get_quad(root, "roi_quad");
+        cfg.fixed_thresh = static_cast<uint8_t>(
+            json::get<int>(root, "fixed_thresh", cfg.fixed_thresh));
+        cfg.min_area     = json::get<int>(root, "min_area",     cfg.min_area);
+        cfg.max_area     = json::get<int>(root, "max_area",     cfg.max_area);
+        cfg.lut_path     = json::get<std::string>(root, "lut_path", cfg.lut_path);
+        cfg.enable_clahe = json::get<bool>(root, "enable_clahe", cfg.enable_clahe);
+        cfg.clahe_clip   = json::get<double>(root, "clahe_clip", cfg.clahe_clip);
+        cfg.enable_blur  = json::get<bool>(root, "enable_blur",  cfg.enable_blur);
+        cfg.blur_k       = json::get<int>(root, "blur_k",       cfg.blur_k);
+    } catch (const std::exception&) {
+        /* 缺文件或非法 JSON：用头文件默认值，不让质心请求把 Visual 打崩。 */
+    }
     return cfg;
 }
 

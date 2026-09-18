@@ -3,7 +3,7 @@
 
 /**
  * @file height_calibration.hpp
- * @brief 调试页高度校准：关舱灯+Red_On → Z 网格采点 → 写 LUT → 开舱灯（红光保持）。
+ * @brief 调试页高度校准：关舱灯+Red_On → 回零（先下降 20mm 再 Home）→ Z 网格采点 → 写 LUT → 开舱灯（红光保持）。
  */
 
 #include "galvo_motion_encode.hpp"

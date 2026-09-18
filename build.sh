@@ -142,7 +142,7 @@ do_collect_outputs() {
     local cfg="$ROOT/app/visual/lib/plate_height_config.json"
     if [[ -f "$cfg" ]]; then
         install -m 644 "$cfg" "$OUTPUT_DIR/plate_height_config.json"
-        echo "  plate_height_config.json (deploy to /etc/visual/)"
+        echo "  plate_height_config.json (deploy to /userdata/visual/)"
     fi
 }
 
