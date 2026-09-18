@@ -178,7 +178,7 @@
  * 舱外 PMSA003-A
  */
 #ifndef GLAVO_PM_OUTDOOR_UART
-#define GLAVO_PM_OUTDOOR_UART  "/dev/ttyS1"
+#define GLAVO_PM_OUTDOOR_UART  "/dev/ttyS5"
 #endif
 #ifndef GLAVO_PM_VALVE_SYSFS
 #define GLAVO_PM_VALVE_SYSFS  "/sys/class/leds/fa_valve/brightness"
@@ -202,7 +202,14 @@
 #ifndef GLAVO_SOC_LED_LGT3R_SYSFS
 #define GLAVO_SOC_LED_LGT3R_SYSFS  "/sys/class/leds/lgt3r/brightness"
 #endif
+/** AHT20 最短采样间隔（ms）；驱动/器件约束，小于此间隔不读 hwmon */
+#ifndef GLAVO_AHT20_MIN_INTERVAL_MS
+#define GLAVO_AHT20_MIN_INTERVAL_MS  2000
+#endif
 /** 氧传感器：IIO 原始计数 → 3.3V 满幅；I[uA]=V/100Ω×1e6；O2%=100*(1-e^(-I/K)) */
+#ifndef GLAVO_O2_READY_PATH
+#define GLAVO_O2_READY_PATH  "/run/o2_ready"  /**< S46o2-preheat 约 100s 后创建 */
+#endif
 #ifndef GLAVO_O2_IIO_RAW
 #define GLAVO_O2_IIO_RAW  "/sys/bus/iio/devices/iio:device0/in_voltage0_raw"
 #endif

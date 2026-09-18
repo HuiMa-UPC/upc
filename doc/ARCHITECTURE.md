@@ -159,5 +159,6 @@ UI → IPC → GlavoService → ParserManager → RingBuffer
 | 专利参考 | [专利参考-系统架构与运行逻辑.md](专利参考-系统架构与运行逻辑.md)、[专利参考-振镜校准算法与增益设置.md](专利参考-振镜校准算法与增益设置.md) |
 | Cursor Rules | `.cursor/rules/*.mdc` |
 | 并发检查 MCP | `.cursor/mcp/cpp-concurrency-check.py` |
+| IPC 契约 MCP | `.cursor/mcp/upc-dev.py`（`lookup_msg` / `lookup_payload` / `check_contract_drift` / `lookup_alarm`） |
 | 日志 | [common/COMMON.md § 专题日志字典](../common/COMMON.md#专题日志字典varlogtopiclog)（专题划分、落盘路径、轮转；**新增大类必须同步 `scripts/topic`**） |
 | 消息契约 | [common/COMMON.md](../common/COMMON.md)（`upc_contract.hpp` 总表） |
