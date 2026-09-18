@@ -147,7 +147,7 @@ scripts/rongsu.sh start   # glavo + rongsu_camera → ui
 
 | MsgType（当前枚举） | 规范名（新消息参照） | 方向 | Payload | UI API | Glavo 处理 |
 |---------------------|----------------------|------|---------|--------|------------|
-| `APP_Update_Ntf` | `GLAVO_Env_Update_Ntf` | Glavo→UI/MQTT | `EnvSnapshotPayload`（含 `pm1_indoor`/`pm10_indoor`/`humidity_percent`/`pressure_kpa`/`baseplate_temp_c`/`powder_bits`；环境指标无效填 <0→UI 显示 `--`；`powder_bits` 用于缺粉弹窗继续按钮门控） | `register_env_update` | `McuLink` 推送（UI 与 MQTT 双发） |
+| `APP_Update_Ntf` | `GLAVO_Env_Update_Ntf` | Glavo→UI/MQTT | `EnvSnapshotPayload`（含 `pm1_indoor`/`pm10_indoor`/`humidity_percent`/`pressure_kpa`/`baseplate_temp_c`/`powder_bits`/`sensor_v4`/`pm1_cabin`/`pm10_cabin`；环境指标无效填 <0→UI 显示 `--`；`powder_bits` 用于缺粉弹窗继续按钮门控；V4 时 MQTT `telemetry/chamber` 用 SOC 舱内量，`telemetry/chamber_ext` 用舱外 PM） | `register_env_update` | `McuLink` 推送（UI 与 MQTT 双发） |
 | `UI_PM25_Req` | — | UI→Glavo | Empty | `send_pm25_check` | `handle_pm25_req` |
 | `APP_PM25_Rsp` | `GLAVO_PM25_Check_Rsp` | Glavo→UI | `Pm25ResultPayload` | `register_pm25_result` | PM2.5 流程 |
 | `UI_CLOSE_DOOR_Req` | — | UI→Glavo | Empty | `send_close_door_check` | 关门检测 |
@@ -281,6 +281,8 @@ scripts/rongsu.sh start   # glavo + rongsu_camera → ui
 | `UI_Debug_Env_Sim_Get_Ntf` | — | UI→Glavo | Empty | `request_env_sim_state` | 查询当前“环境上报模拟”开关状态 |
 | `UI_Debug_Env_Sim_Powder_Set_Ntf` | — | UI→Glavo | `DebugOnOffPayload` | `send_env_sim_powder_set` | 环境模拟粉量缺粉开关（仅 Env Sim=On 可设；切换后延迟 5 秒生效） |
 | `UI_Debug_Env_Sim_Powder_Get_Ntf` | — | UI→Glavo | Empty | `request_env_sim_powder_state` | 查询当前“环境模拟粉量缺粉”开关状态 |
+| `UI_Debug_Skip_O2_Gate_Set_Ntf` | — | UI→Glavo | `DebugOnOffPayload` | `send_skip_o2_gate_set` | 调试页开关：跳过 V4 SOC 氧打印门（仅本次运行，默认关；开则起印不等氧、打印中不因氧高暂停/1120） |
+| `UI_Debug_Skip_O2_Gate_Get_Ntf` | — | UI→Glavo | Empty | `request_skip_o2_gate_state` | 查询当前“跳过氧门”开关状态 |
 | `UI_Debug_FirstLayer_Visual_Check_Set_Ntf` | — | UI→Glavo | `DebugOnOffPayload` | `send_first_layer_visual_check_set` | 调试页开关：首层视觉检测（仅本次运行，默认关） |
 | `UI_Debug_FirstLayer_Visual_Check_Get_Ntf` | — | UI→Glavo | Empty | `request_first_layer_visual_check_state` | 查询当前“首层视觉检测”开关状态 |
 | `UI_Debug_OpticalPath_Check_Set_Ntf` | — | UI→Glavo | `DebugOnOffPayload` | `send_optical_path_check_set` | 调试页开关：打印前光路检测（仅本次运行，默认关） |
@@ -292,6 +294,7 @@ scripts/rongsu.sh start   # glavo + rongsu_camera → ui
 | `GLAVO_Debug_Clean_Record_Ntf` | — | Glavo→UI | `DebugOnOffPayload` | `register_clean_record` | 回读当前“清粉录像”开关状态 |
 | `GLAVO_Debug_Env_Sim_Ntf` | — | Glavo→UI | `DebugOnOffPayload` | `register_env_sim` | 回读当前“环境上报模拟”开关状态 |
 | `GLAVO_Debug_Env_Sim_Powder_Ntf` | — | Glavo→UI | `DebugOnOffPayload` | `register_env_sim_powder` | 回读当前“环境模拟粉量缺粉”开关状态 |
+| `GLAVO_Debug_Skip_O2_Gate_Ntf` | — | Glavo→UI | `DebugOnOffPayload` | `register_skip_o2_gate` | 回读当前“跳过 SOC 氧打印门”开关状态 |
 | `GLAVO_Debug_FirstLayer_Visual_Check_Ntf` | — | Glavo→UI | `DebugOnOffPayload` | `register_first_layer_visual_check` | 回读当前“首层视觉检测”开关状态 |
 | `GLAVO_Debug_OpticalPath_Check_Ntf` | — | Glavo→UI | `DebugOnOffPayload` | `register_optical_path_check` | 回读当前“打印前光路检测”开关状态 |
 | `GLAVO_Debug_PlateHeight_Adj_Ntf` | — | Glavo→UI | `DebugOnOffPayload` | `register_plate_height_adj` | 回读当前“打印前基板测高”开关状态 |
@@ -336,6 +339,8 @@ scripts/rongsu.sh start   # glavo + rongsu_camera → ui
 - 典型场景：
   - 调试红光开关：`stop=0 pause=0 red=1/2`
   - 调试红光常亮：`stop=0 pause=0 red=3`
+  - 上电 / TCP 重连：`stop=0 pause=0 red=1`（不跟串口 `0x12`）
+  - 串口 MCU 真实版本上报后：先 `0x12` 关激光使能，出队后再补 `red=1`
   - 打印暂停/恢复：`stop=0 pause=2/1 red=0`
   - 急停：`stop=1 pause=0 red=0`
 

@@ -147,6 +147,8 @@ private:
     void handle_debug_env_sim_get(const middleware::Message& msg);
     void handle_debug_env_sim_powder_set(const middleware::Message& msg);
     void handle_debug_env_sim_powder_get(const middleware::Message& msg);
+    void handle_debug_skip_o2_gate_set(const middleware::Message& msg);
+    void handle_debug_skip_o2_gate_get(const middleware::Message& msg);
     void handle_debug_first_layer_visual_check_set(const middleware::Message& msg);
     void handle_debug_first_layer_visual_check_get(const middleware::Message& msg);
     void handle_debug_optical_path_check_set(const middleware::Message& msg);
@@ -164,6 +166,7 @@ private:
     void publish_debug_clean_record_state();
     void publish_debug_env_sim_state();
     void publish_debug_env_sim_powder_state();
+    void publish_debug_skip_o2_gate_state();
     void publish_debug_first_layer_visual_check_state();
     void publish_debug_test_image_state();
     void publish_debug_galvo_point_test_state();
@@ -390,7 +393,9 @@ private:
     std::string plate_height_resume_path_;
     bool env_sim_on_ = false;  /**< 环境上报模拟（仅本次运行，默认关） */
     bool env_sim_powder_low_on_ = false; /**< 环境模拟粉量缺粉开关（目标状态，延迟生效由 McuLink 管） */
+    bool skip_o2_print_gate_on_ = false; /**< 跳过 SOC 氧打印门（仅本次运行，默认关） */
     bool ignore_powder_low_for_current_print_ = false; /**< 本次打印是否忽略缺粉检测（Cancel 后置位） */
+    bool o2_auto_paused_ = false; /**< 本次因 SOC 氧过高由本层自动暂停（恢复时只清这类暂停） */
     std::mutex first_layer_visual_mtx_;
     std::condition_variable first_layer_visual_cv_;
     bool first_layer_visual_waiting_ = false;

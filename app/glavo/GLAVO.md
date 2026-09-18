@@ -9,7 +9,7 @@
 |------|------|
 | `main.cpp` | 进程守护、IPC Server、McuLink 连接、`MsgPort::process` 循环 |
 | `lib/glavo_service.*` | IPC 业务 + 工作线程 + 订阅/发布（USB 目录/打印/门控/进度）；`init()` 内绑定 RingBuffer → `McuLink` |
-| `lib/mcu_link.*` | TCP 运动下发 + 串口握手/传感器/换层 Snap 触发；RX 侧解析 MCU 报警单条上报（0xA3/0x20）与快照分片（0xA3/0x81），`publish_async` 原样转发 `GLAVO_Alarm_Report_Ntf` / `GLAVO_Alarm_Snapshot_Ntf` 给 UI（不查字典、不攒帧） |
+| `lib/mcu_link.*` | TCP 运动下发 + 串口握手/传感器/换层 Snap 触发；RX 侧解析 MCU 报警单条上报（0xA3/0x20）与快照分片（0xA3/0x81），攒齐后并入 SOC 1120 再 `publish_async` `GLAVO_Alarm_Report_Ntf` / `GLAVO_Alarm_Snapshot_Ntf` 给 UI |
 | `lib/print_video_notify.*` | 换层 Snap / 录像会话 → Media（经 UI Hub） |
 | `lib/optical_path_check.*` | 打印前光路检测状态机（独立线程，结果回灌 worker） |
 | `lib/height_points.hpp` | 测高/校准共用 8 点、Z 零点偏置、门限、单点采样 |
@@ -37,6 +37,8 @@ UI → GlavoService（工作线程）→ ParserManager → RingBuffer → McuLin
 1. `set_mode_ipc_client(APP_GLAVO)`
 2. `GlavoService::init/start`
 3. `McuLink::connect_tcp` + `open_serial` + `start_link_thread`
+   - TCP 刚连上：只发 `CMD=0x0A` `Red=1`（普通红光）
+   - 串口 MCU 工程版本上报成功后：再发 `0x12` 关激光使能；出队后再补一次 `Red=1`（避免 `0x12` 掐瞄准红光）。Env Sim 假版本不走这条
 4. 主循环 `port.process(2)`
 
 ## IPC 处理
@@ -67,8 +69,9 @@ UI → GlavoService（工作线程）→ ParserManager → RingBuffer → McuLin
 - **1ST（TLV 0x02）**：Tlv-Len=15 为 V4 重排（O2/滤芯气压/基板/NTC/开关/红外）；Len 13/21 为旧布局。粉量缺粉看 OUTL/OUTR；发给 UI 的 `powder_bits` 低 2 位为「左/右匣仍有粉」。
 - **EXT（TLV 0x06）**：电气量+风机，须固件 major≥4 才消费（当前仅日志）。
 - **SOC 采集**：舱外常显 PM、舱内 PM（阀开窗口可信）、AHT20 温湿度（最短 2s）、CPM121 气压、IIO 氧气（须 `/run/o2_ready` 后读 `in_voltage0_raw`；本板无 scale，raw 为 nV → V=raw×1e−9，I[uA]=V/100×1e6，O2%=100×(1−e^(−I/K))，空气标定 K≈655）。首页 `pm25_indoor` 在 V4 下为舱外 PMSA。Len=15 可提前开周期采集，但**开阀采样与舱灯默认全开仍等版本 major≥4**（旧板无阀/无此默认）。固件 major≥4 首次确认后六路舱灯 `lgt1l`…`lgt3r` 写 1 全开（调试页仍可单独关）。
+- **V4 打印氧门（SOC）**：MCU 串口 `PRINT_CONDITION_OK`（`5A A5 BB A4 01 … 02`）之后，须 SOC 氧 **&lt; `GLAVO_O2_PRINT_MAX_PERCENT`（默认 0.8%）** 才发 `PRINT_START`；打印中氧 **≥ 0.8%** TCP 暂停并合成报警 **1120**（`GLAVO_Alarm_Report_Ntf`，AUTO），回落 **≤ `GLAVO_O2_PRINT_RESUME_PERCENT`（0.7%）** 自动恢复。Env Sim / 测试图 / 调试页 **Skip O2 Gate**（默认关，仅本次运行）跳过。`o2_hold_` 期间不判自然完成。MCU 快照在 Glavo 攒齐后若缺 slot3 则补 bit20（count+1），全零快照改为只发 slot3，避免 UI 对齐把 1120 清掉。
 - **SPI 灯效板（major≥4）**：`SpiStatusLed` 写 `/dev/spidev1.0`。红=MCU CONDITION 且 ACTIVE；橙=Confirm 后的打印会话；否则蓝。EVENT / 仅 latched 不红。无设备只 Warn 一次。
-- **SOC→UI 推送（major≥4 / Len=15）**：`poll_soc_env_tick` 每 500ms 独立 `publish_async` `APP_Update_Ntf` + `GLAVO_Debug_Sensor_Ntf`，**不依赖** MCU 1ST。MCU 仍负责基板/粉量/门等；未收到 1ST 前这些字段顶栏显示 `--`。旧固件（major < 4）仍只随 MCU 0x9B 推送。
+- **SOC→UI 推送（major≥4 / Len=15）**：`poll_soc_env_tick` 每 500ms 独立 `publish_async` `APP_Update_Ntf` + `GLAVO_Debug_Sensor_Ntf`，**不依赖** MCU 1ST。MCU 仍负责基板/粉量/门等；未收到 1ST 前这些字段顶栏显示 `--`。旧固件（major < 4）仍只随 MCU 0x9B 推送。V4 下 MQTT `telemetry/chamber` 用 SOC 舱内 PM/温湿/气压/氧，`telemetry/chamber_ext` 上报舱外 PM；无效氧发 `null` 不夹成 0。
 - **开门前清粉（固件 major≥4 且真实门控开）**：风机固定吹 10s → 关风机 → 开阀 3s 平均后关阀；仍超标则循环。
 
 跨进程回复 UI：**必须** `publish_async`（`GlavoService` 工作线程内禁止 `MsgPort::publish` 同步路径）。

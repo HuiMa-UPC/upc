@@ -228,6 +228,22 @@
 #ifndef GLAVO_O2_K
 #define GLAVO_O2_K  655.f  /**< 空气标定系数；再标定可改 */
 #endif
+/**
+ * V4 打印氧门（SOC IIO；MCU 不再报氧）。
+ * 起印：串口 CONDITION_OK 后须 O2 < MAX 才发 PRINT_START。
+ * 打印中：O2 ≥ MAX 暂停；O2 ≤ RESUME 自动恢复（迟滞防抖）。
+ * Env Sim / 测试图跳过本门控。
+ */
+#ifndef GLAVO_O2_PRINT_MAX_PERCENT
+#define GLAVO_O2_PRINT_MAX_PERCENT  0.8f
+#endif
+#ifndef GLAVO_O2_PRINT_RESUME_PERCENT
+#define GLAVO_O2_PRINT_RESUME_PERCENT  0.7f
+#endif
+/** 与报警字典 CHAMBER_OXYGEN_HIGH 一致；SOC 合成 GLAVO_Alarm_Report_Ntf */
+#ifndef GLAVO_ALARM_CODE_CHAMBER_OXYGEN_HIGH
+#define GLAVO_ALARM_CODE_CHAMBER_OXYGEN_HIGH  1120u
+#endif
 /** SPI 灯效板（WS，40 颗）；仅 MCU≥V4 打开 */
 #ifndef GLAVO_SPI_STATUS_LED_DEV
 #define GLAVO_SPI_STATUS_LED_DEV  "/dev/spidev1.0"

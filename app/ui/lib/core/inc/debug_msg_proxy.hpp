@@ -26,6 +26,7 @@ using DebugPrintH264RecordCb = std::function<void(bool)>;
 using DebugCleanRecordCb = std::function<void(bool)>;
 using DebugEnvSimCb = std::function<void(bool)>;
 using DebugEnvSimPowderCb = std::function<void(bool)>;
+using DebugSkipO2GateCb = std::function<void(bool)>;
 using DebugFirstLayerVisualCheckCb = std::function<void(bool)>;
 using DebugOpticalPathCheckCb = std::function<void(bool)>;
 using DebugPlateHeightAdjCb = std::function<void(bool)>;
@@ -87,6 +88,8 @@ public:
     void request_env_sim_state();
     void send_env_sim_powder_set(bool on);
     void request_env_sim_powder_state();
+    void send_skip_o2_gate_set(bool on);
+    void request_skip_o2_gate_state();
     void send_first_layer_visual_check_set(bool on);
     void request_first_layer_visual_check_state();
     void send_optical_path_check_set(bool on);
@@ -117,6 +120,7 @@ public:
     void register_clean_record(DebugCleanRecordCb cb);
     void register_env_sim(DebugEnvSimCb cb);
     void register_env_sim_powder(DebugEnvSimPowderCb cb);
+    void register_skip_o2_gate(DebugSkipO2GateCb cb);
     void register_first_layer_visual_check(DebugFirstLayerVisualCheckCb cb);
     void register_optical_path_check(DebugOpticalPathCheckCb cb);
     void register_plate_height_adj(DebugPlateHeightAdjCb cb);
@@ -173,6 +177,7 @@ private:
     DebugCleanRecordCb clean_record_cb_;
     DebugEnvSimCb env_sim_cb_;
     DebugEnvSimPowderCb env_sim_powder_cb_;
+    DebugSkipO2GateCb skip_o2_gate_cb_;
     DebugFirstLayerVisualCheckCb first_layer_visual_check_cb_;
     DebugOpticalPathCheckCb optical_path_check_cb_;
     DebugPlateHeightAdjCb plate_height_adj_cb_;

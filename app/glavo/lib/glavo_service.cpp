@@ -708,8 +708,10 @@ bool GlavoService::init()
     first_layer_visual_check_on_ = false;
     env_sim_on_ = false;
     env_sim_powder_low_on_ = false;
+    skip_o2_print_gate_on_ = false;
     McuLink::instance().set_env_sim_enabled(false);
     McuLink::instance().set_env_sim_powder_low(false);
+    McuLink::instance().set_skip_o2_print_gate(false);
     PrintVideoNotify::instance().set_print_h264_continuous(print_h264_continuous_on_);
     PrintVideoNotify::instance().set_timelapse_fps(timelapse_video_fps_);
     PrintVideoNotify::instance().set_print_h264_bitrate(print_h264_bitrate_);
@@ -853,6 +855,8 @@ bool GlavoService::start()
         middleware::MsgType::UI_Debug_Env_Sim_Get_Ntf,
         middleware::MsgType::UI_Debug_Env_Sim_Powder_Set_Ntf,
         middleware::MsgType::UI_Debug_Env_Sim_Powder_Get_Ntf,
+        middleware::MsgType::UI_Debug_Skip_O2_Gate_Set_Ntf,
+        middleware::MsgType::UI_Debug_Skip_O2_Gate_Get_Ntf,
         middleware::MsgType::UI_Debug_FirstLayer_Visual_Check_Set_Ntf,
         middleware::MsgType::UI_Debug_FirstLayer_Visual_Check_Get_Ntf,
         middleware::MsgType::APP_Visual_FirstLayer_Check_Rsp,
@@ -889,6 +893,7 @@ bool GlavoService::start()
     publish_debug_clean_record_state();
     publish_debug_env_sim_state();
     publish_debug_env_sim_powder_state();
+    publish_debug_skip_o2_gate_state();
     publish_debug_first_layer_visual_check_state();
     publish_debug_optical_path_check_state();
     publish_debug_plate_height_adj_state();
@@ -1342,6 +1347,12 @@ void GlavoService::handle_message(const middleware::Message& msg)
             break;
         case middleware::MsgType::UI_Debug_Env_Sim_Powder_Get_Ntf:
             handle_debug_env_sim_powder_get(msg);
+            break;
+        case middleware::MsgType::UI_Debug_Skip_O2_Gate_Set_Ntf:
+            handle_debug_skip_o2_gate_set(msg);
+            break;
+        case middleware::MsgType::UI_Debug_Skip_O2_Gate_Get_Ntf:
+            handle_debug_skip_o2_gate_get(msg);
             break;
         case middleware::MsgType::UI_Debug_FirstLayer_Visual_Check_Set_Ntf:
             handle_debug_first_layer_visual_check_set(msg);
@@ -1883,6 +1894,7 @@ void GlavoService::handle_parser_exit(const middleware::Message& msg)
 void GlavoService::launch_print_from_prepared(const std::string& full_path)
 {
     ignore_powder_low_for_current_print_ = false;
+    o2_auto_paused_ = false;
     set_print_running(true);
     McuLink::instance().set_print_task_flow_active(true);
     publish_print_state_ntf(static_cast<uint32_t>(middleware::UserHomeStatus::Printing));
@@ -2198,7 +2210,19 @@ void GlavoService::handle_print_resume(const middleware::Message& msg)
         publish_print_pause_done(false);
         return;
     }
+    if(link.is_o2_hold()) {
+        UPC_LOG_GLAVO_SERVICE(Warn, "print_resume blocked: chamber oxygen still high");
+        publish_print_pause_done(true);
+        return;
+    }
     if(!link.is_user_dispatch_paused()) {
+        /* 仅 UI 因氧暂停、主机未置 user_paused_：氧已回落时允许清 UI */
+        if(o2_auto_paused_) {
+            o2_auto_paused_ = false;
+            publish_print_pause_done(false);
+            UPC_LOG_GLAVO_SERVICE(Info, "print_resume: clear O2 UI pause");
+            return;
+        }
         publish_print_pause_done(false);
         return;
     }
@@ -2206,6 +2230,7 @@ void GlavoService::handle_print_resume(const middleware::Message& msg)
         UPC_LOG_GLAVO_SERVICE(Warn, "print_resume: tcp 0x0A resume send failed");
     }
     link.set_user_dispatch_paused(false);
+    o2_auto_paused_ = false;
     UPC_LOG_GLAVO_SERVICE(Info, "print_resume accepted");
     publish_print_pause_done(false);
 }
@@ -3373,6 +3398,7 @@ void GlavoService::on_mcu_link_event(McuLinkEvent ev)
             set_print_running(false);
             publish_first_layer_visual_session(false, "print_completed");
             ignore_powder_low_for_current_print_ = false;
+            o2_auto_paused_ = false;
             clear_prepare_session();
             publish_print_state_ntf(static_cast<uint32_t>(middleware::UserHomeStatus::Idle));
             break;
@@ -3447,6 +3473,7 @@ void GlavoService::on_mcu_link_event(McuLinkEvent ev)
             publish_first_layer_visual_session(false,
                 ev == McuLinkEvent::TerminateDone ? "terminate_done" : "print_error");
             ignore_powder_low_for_current_print_ = false;
+            o2_auto_paused_ = false;
             publish_terminate_done();
             clear_prepare_session();
             publish_print_state_ntf(static_cast<uint32_t>(middleware::UserHomeStatus::Idle));
@@ -3470,6 +3497,30 @@ void GlavoService::on_mcu_link_event(McuLinkEvent ev)
                 UPC_LOG_GLAVO_SERVICE(Warn, "auto pause due to powder low");
             }
             publish_print_powder_low_ntf();
+            break;
+        }
+        case McuLinkEvent::OxygenHigh: {
+            if(test_image_active_ || !print_running_.load()) {
+                break;
+            }
+            /* 运动停靠由 McuLink::o2_hold_ + TCP 0x0A 负责；这里只同步 UI 暂停态。 */
+            if(!McuLink::instance().is_o2_hold()) {
+                break; /* 已回落，忽略过期 High 事件 */
+            }
+            o2_auto_paused_ = true;
+            publish_print_pause_done(true);
+            UPC_LOG_GLAVO_SERVICE(Warn, "UI pause due to chamber oxygen high");
+            break;
+        }
+        case McuLinkEvent::OxygenRecovered: {
+            if(!o2_auto_paused_) {
+                break;
+            }
+            o2_auto_paused_ = false;
+            if(!McuLink::instance().is_user_dispatch_paused()) {
+                publish_print_pause_done(false);
+                UPC_LOG_GLAVO_SERVICE(Info, "UI resume after chamber oxygen OK");
+            }
             break;
         }
     }
@@ -5099,6 +5150,41 @@ void GlavoService::handle_debug_env_sim_powder_get(const middleware::Message& ms
 {
     (void)msg;
     publish_debug_env_sim_powder_state();
+}
+
+void GlavoService::publish_debug_skip_o2_gate_state()
+{
+    middleware::DebugOnOffPayload p{};
+    p.on = skip_o2_print_gate_on_ ? 1 : 0;
+    middleware::Message ntf(
+        middleware::MsgType::GLAVO_Debug_Skip_O2_Gate_Ntf,
+        middleware::ModuleId::APP_GLAVO,
+        middleware::ModuleId::UI);
+    ntf.payload = middleware::MsgPayload::from_bytes(
+        reinterpret_cast<const uint8_t*>(&p), sizeof(p));
+    if(!publish_async(ntf)) {
+        UPC_LOG_GLAVO_SERVICE(Warn, "GLAVO_Debug_Skip_O2_Gate_Ntf publish_async failed");
+    }
+}
+
+void GlavoService::handle_debug_skip_o2_gate_set(const middleware::Message& msg)
+{
+    middleware::DebugOnOffPayload p{};
+    if(!read_inline_pod(msg.payload, p)) {
+        UPC_LOG_GLAVO_SERVICE(Warn, "invalid UI_Debug_Skip_O2_Gate_Set_Ntf payload");
+        return;
+    }
+    skip_o2_print_gate_on_ = (p.on != 0);
+    McuLink::instance().set_skip_o2_print_gate(skip_o2_print_gate_on_);
+    UPC_LOG_GLAVO_SERVICE(Info, "debug skip_o2_print_gate=%d",
+                          skip_o2_print_gate_on_ ? 1 : 0);
+    publish_debug_skip_o2_gate_state();
+}
+
+void GlavoService::handle_debug_skip_o2_gate_get(const middleware::Message& msg)
+{
+    (void)msg;
+    publish_debug_skip_o2_gate_state();
 }
 
 void GlavoService::publish_debug_first_layer_visual_check_state()
