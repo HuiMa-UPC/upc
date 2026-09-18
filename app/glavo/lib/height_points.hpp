@@ -52,7 +52,7 @@ constexpr float kHeightCloseMm = 0.030f;
 constexpr float kHeightAgreeMm = 0.200f;
 constexpr int kHeightAgreeMaxRounds = 5;
 
-constexpr const char* kHeightLutPath = "/etc/visual/height_lut.txt";
+constexpr const char* kHeightLutPath = "/userdata/visual/height_lut.txt";
 
 using HeightMoveGalvoFn = std::function<bool(float x_mm, float y_mm)>;
 /** true=关舱灯+Red_On；false=只开舱灯（红光保持）。 */
