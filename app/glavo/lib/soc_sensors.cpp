@@ -293,7 +293,8 @@ bool read_cpm121(const char* i2c_dev, float* kpa)
 
 /**
  * IIO raw → 氧浓度 %。
- * V = raw / ADC_MAX * 3.3；I[uA] = V / R_sense × 1e6；O2 = 100*(1-exp(-I/K))。
+ * 本板无 in_voltage0_scale：raw 单位 nV，V = raw × GLAVO_O2_RAW_TO_VOLT；
+ * I[uA] = V / R_sense × 1e6；O2 = 100*(1-exp(-I/K))。
  */
 bool read_o2_percent(float* oxygen_percent)
 {
@@ -301,8 +302,7 @@ bool read_o2_percent(float* oxygen_percent)
     if(!read_text_int(GLAVO_O2_IIO_RAW, &raw) || raw < 0) {
         return false;
     }
-    const float v = (static_cast<float>(raw) / static_cast<float>(GLAVO_O2_ADC_MAX)) *
-                    GLAVO_O2_VREF;
+    const float v = static_cast<float>(raw) * GLAVO_O2_RAW_TO_VOLT;
     if(!(v >= 0.f) || !std::isfinite(v)) {
         return false;
     }

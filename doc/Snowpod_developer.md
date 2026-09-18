@@ -116,8 +116,9 @@ dmesg | grep xhci-hcd.0         # 应该没有了，只剩 xhci-hcd.1.auto
 ## 6. 氧浓度查看及换算
 
 ```bash
-# 读 ADC 原始值（氧浓度换算用 k 系数在用户态做）
-cat /sys/bus/iio/devices/iio:device0/in_voltage0_raw    电压值 需要转换公式计算
+# 读 IIO 原始值（本板无 in_voltage0_scale：raw 单位 nV）
+# 用户态：V=raw×1e-9，I[uA]=V/100×1e6，O2%=100×(1−e^(−I/K))，空气标定 K≈655
+cat /sys/bus/iio/devices/iio:device0/in_voltage0_raw
 
 cd /sys/class/pwm/pwmchip0   # 对应 pwm0   pwm@fdd70020
 

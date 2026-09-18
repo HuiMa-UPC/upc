@@ -17,7 +17,7 @@
 | `lib/height_calibration.*` | 调试页高度校准（关舱灯 + Red_On → 回零先下降 20mm → 写 LUT → 开舱灯，红光保持） |
 | `lib/plate_height_measure.*` | 打印前两步测高调 Z（开关默认关；光路之后；回零先下降 20mm；开始再发关灯，结束不开舱灯） |
 | `lib/galvo_motion_encode.*` | 调试运动包编码 + 五点坐标（点位测试与光路检测共用） |
-| `lib/soc_sensors.*` | SOC 本地：舱内外 PMSA UART、AHT20（≥2s）、双路 CPM121、IIO 氧气（须 `/run/o2_ready`，3.3V/100Ω/K=480）；MCU≥V4（或已收到 Len=15）可开周期采集。六路舱灯默认全开仅固件 major≥4。开阀采样仅固件 major≥4。六路舱灯/`fa_valve` sysfs 调试可随时写；业务采样结束强制关阀。背光不在本模块。 |
+| `lib/soc_sensors.*` | SOC 本地：舱内外 PMSA UART、AHT20（≥2s）、双路 CPM121、IIO 氧气（须 `/run/o2_ready`；raw 单位 nV→V，100Ω/K≈655）；MCU≥V4（或已收到 Len=15）可开周期采集。六路舱灯默认全开仅固件 major≥4。开阀采样仅固件 major≥4。六路舱灯/`fa_valve` sysfs 调试可随时写；业务采样结束强制关阀。背光不在本模块。 |
 | `lib/spi_status_led.*` | V4：`/dev/spidev1.0` 灯效板 40 颗 WS 单色。CONDITION+ACTIVE 红，`print_running_` 橙，空闲蓝。 |
 | `lib/device_config.hpp` | TCP/串口默认、换层/Layer Snap 开关、`GLAVO_TEST_GCODE_PATH`、PM UART/`fa_valve`/`lgt*` 路径宏 |
 | `lib/mcu_ota_session.*` | Galvo 以太网 OTA：扫描 `/userdata/image/galvo` 最高版本 AB 对 |
@@ -66,7 +66,7 @@ UI → GlavoService（工作线程）→ ParserManager → RingBuffer → McuLin
 
 - **1ST（TLV 0x02）**：Tlv-Len=15 为 V4 重排（O2/滤芯气压/基板/NTC/开关/红外）；Len 13/21 为旧布局。粉量缺粉看 OUTL/OUTR；发给 UI 的 `powder_bits` 低 2 位为「左/右匣仍有粉」。
 - **EXT（TLV 0x06）**：电气量+风机，须固件 major≥4 才消费（当前仅日志）。
-- **SOC 采集**：舱外常显 PM、舱内 PM（阀开窗口可信）、AHT20 温湿度（最短 2s）、CPM121 气压、IIO 氧气（须 `/run/o2_ready` 后读 `in_voltage0_raw` → V=raw/1023×3.3，I[uA]=V/100×1e6，O2%=100×(1−e^(−I/K))，K 暂 480）。首页 `pm25_indoor` 在 V4 下为舱外 PMSA。Len=15 可提前开周期采集，但**开阀采样与舱灯默认全开仍等版本 major≥4**（旧板无阀/无此默认）。固件 major≥4 首次确认后六路舱灯 `lgt1l`…`lgt3r` 写 1 全开（调试页仍可单独关）。
+- **SOC 采集**：舱外常显 PM、舱内 PM（阀开窗口可信）、AHT20 温湿度（最短 2s）、CPM121 气压、IIO 氧气（须 `/run/o2_ready` 后读 `in_voltage0_raw`；本板无 scale，raw 为 nV → V=raw×1e−9，I[uA]=V/100×1e6，O2%=100×(1−e^(−I/K))，空气标定 K≈655）。首页 `pm25_indoor` 在 V4 下为舱外 PMSA。Len=15 可提前开周期采集，但**开阀采样与舱灯默认全开仍等版本 major≥4**（旧板无阀/无此默认）。固件 major≥4 首次确认后六路舱灯 `lgt1l`…`lgt3r` 写 1 全开（调试页仍可单独关）。
 - **SPI 灯效板（major≥4）**：`SpiStatusLed` 写 `/dev/spidev1.0`。红=MCU CONDITION 且 ACTIVE；橙=Confirm 后的打印会话；否则蓝。EVENT / 仅 latched 不红。无设备只 Warn 一次。
 - **SOC→UI 推送（major≥4 / Len=15）**：`poll_soc_env_tick` 每 500ms 独立 `publish_async` `APP_Update_Ntf` + `GLAVO_Debug_Sensor_Ntf`，**不依赖** MCU 1ST。MCU 仍负责基板/粉量/门等；未收到 1ST 前这些字段顶栏显示 `--`。旧固件（major < 4）仍只随 MCU 0x9B 推送。
 - **开门前清粉（固件 major≥4 且真实门控开）**：风机固定吹 10s → 关风机 → 开阀 3s 平均后关阀；仍超标则循环。

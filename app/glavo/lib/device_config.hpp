@@ -206,24 +206,27 @@
 #ifndef GLAVO_AHT20_MIN_INTERVAL_MS
 #define GLAVO_AHT20_MIN_INTERVAL_MS  2000
 #endif
-/** 氧传感器：IIO 原始计数 → 3.3V 满幅；I[uA]=V/100Ω×1e6；O2%=100*(1-e^(-I/K)) */
+/**
+ * 氧传感器（IIO 无 in_voltage0_scale）：
+ *   V = raw × GLAVO_O2_RAW_TO_VOLT（raw 单位 nV）
+ *   I[uA] = V / R_sense × 1e6
+ *   O2% = 100 × (1 − e^(−I/K))
+ * 空气标定：raw≈1.54e7 → ~15.4mV → K≈655 对准约 20.9%。
+ */
 #ifndef GLAVO_O2_READY_PATH
 #define GLAVO_O2_READY_PATH  "/run/o2_ready"  /**< S46o2-preheat 约 100s 后创建 */
 #endif
 #ifndef GLAVO_O2_IIO_RAW
 #define GLAVO_O2_IIO_RAW  "/sys/bus/iio/devices/iio:device0/in_voltage0_raw"
 #endif
-#ifndef GLAVO_O2_VREF
-#define GLAVO_O2_VREF  3.3f
-#endif
-#ifndef GLAVO_O2_ADC_MAX
-#define GLAVO_O2_ADC_MAX  1023  /**< RK SARADC 10bit */
+#ifndef GLAVO_O2_RAW_TO_VOLT
+#define GLAVO_O2_RAW_TO_VOLT  1e-9f  /**< nV → V；勿再按 ADC 满幅换算 */
 #endif
 #ifndef GLAVO_O2_RSENSE_OHM
 #define GLAVO_O2_RSENSE_OHM  100.f
 #endif
 #ifndef GLAVO_O2_K
-#define GLAVO_O2_K  480.f  /**< 标定系数；空气标定后可改 */
+#define GLAVO_O2_K  655.f  /**< 空气标定系数；再标定可改 */
 #endif
 /** SPI 灯效板（WS，40 颗）；仅 MCU≥V4 打开 */
 #ifndef GLAVO_SPI_STATUS_LED_DEV
