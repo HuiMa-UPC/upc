@@ -185,6 +185,8 @@ private:
     void set_cabin_light(bool on);
     void send_z_inc(float delta_mm);
     void send_z_home();
+    /** 校准/测高回零：AXIS_INC 下降 kHeightHomeRetractMm，短等后发 Home。 */
+    void send_z_home_with_retract();
     bool wait_z_settled(float target_mm, float tolerance_mm, int timeout_ms);
     bool request_laser_spot_measure_sync(float& out_x, float& out_y, int timeout_ms);
     void publish_height_calib_progress(uint8_t stage, float current_height_mm,
@@ -192,7 +194,7 @@ private:
     void wakeup_laser_spot_wait();
     /**
      * @brief 起印前的光路检测 gate
-     * @return true=已起一轮检测，调用方须立即 return 等回灌；false=无需检测，继续起印
+     * @return true=已起一轮检测，调用方须立即 return 等回灌；false=无需检测，继续测高/起印
      */
     bool begin_optical_path_gate();
     /** @brief 检测线程结果回灌 worker 后的处理（续跑起印或阻断并报警）。 */

@@ -14,8 +14,8 @@
 | `lib/optical_path_check.*` | 打印前光路检测状态机（独立线程，结果回灌 worker） |
 | `lib/height_points.hpp` | 测高/校准共用 8 点、Z 零点偏置、门限、单点采样 |
 | `lib/height_lut_2d.*` | 8 点二维高度 LUT |
-| `lib/height_calibration.*` | 调试页高度校准（关舱灯 + Red_On → 写 LUT → 开舱灯，红光保持） |
-| `lib/plate_height_measure.*` | 打印前两步测高调 Z（开关默认关；结束只开舱灯） |
+| `lib/height_calibration.*` | 调试页高度校准（关舱灯 + Red_On → 回零先下降 20mm → 写 LUT → 开舱灯，红光保持） |
+| `lib/plate_height_measure.*` | 打印前两步测高调 Z（开关默认关；光路之后；回零先下降 20mm；开始再发关灯，结束不开舱灯） |
 | `lib/galvo_motion_encode.*` | 调试运动包编码 + 五点坐标（点位测试与光路检测共用） |
 | `lib/soc_sensors.*` | SOC 本地：舱内外 PMSA UART、AHT20、双路 CPM121、IIO 氧气（3.3V/100Ω/K=480）；MCU≥V4（或已收到 Len=15）可开周期采集。六路舱灯默认全开仅固件 major≥4。开阀采样仅固件 major≥4。六路舱灯/`fa_valve` sysfs 调试可随时写；业务采样结束强制关阀。背光不在本模块。 |
 | `lib/spi_status_led.*` | V4：`/dev/spidev1.0` 灯效板 40 颗 WS 单色。CONDITION+ACTIVE 红，`print_running_` 橙，空闲蓝。 |
@@ -47,15 +47,15 @@ UI → GlavoService（工作线程）→ ParserManager → RingBuffer → McuLin
 | `Fs_Delete_Ntf` | 删除 Local 文件（磁盘 + config.json） |
 | `UI_Print_Prepare_Req` | 轻量预处理（USB 复制；清单无 `layer_count` 时才单趟扫 `M3000`；打开解析器并写 config.json）。已有总层数时不数行、不把 `get_total_lines()` 写回 `line_count`；Start 不再补扫 |
 | `UI_Parser_Exit_Ntf` | 取消解析（stop_parse + 清会话） |
-| `UI_Print_Start_Req` | 置打印态 → 基板测高 gate（`Plate Height Adj` 开且有 LUT 才跑）→ 光路检测 gate（若开）→ 正式解析 + 首层参考图 gate + `begin_sending` |
+| `UI_Print_Start_Req` | 置打印态 → 光路检测 gate（若开）→ 基板测高 gate（`Plate Height Adj` 开且有 LUT 才跑）→ 正式解析 + 首层参考图 gate + `begin_sending` |
 | ↑ 起印失败 | 打印态在 `launch_print_from_prepared` 最前面就置（检测那十几秒 UI 已在打印页），所以「运动还没开始就失败」的分支**一律走 `abort_print_start()`** 回滚，否则 UI 停在打印页 0% |
-| `UI_Print_Terminate_Req` | 光路检测中：打断检测线程并回红光安全态；否则 `stop_parse` + `request_terminate` + `on_print_abort` |
+| `UI_Print_Terminate_Req` | 光路/测高阶段：打断对应线程并回红光安全态；否则 `stop_parse` + `request_terminate` + `on_print_abort` |
 | `UI_Print_Pause_Req` | `set_user_dispatch_paused(true)`，仅停 TCP 运动下发 |
 | `UI_Print_Resume_Req` | `set_user_dispatch_paused(false)`，恢复 TCP 运动下发 |
 | `UI_Debug_TestImage_Set_Ntf` | 红光循环打印 `GLAVO_TEST_GCODE_PATH`（默认 `/userdata/test/test.gcode`）；无录像/延时/换层握手/首页打印态；Off 仅 `request_terminate`，不切激光 |
 | `UI_Debug_Galvo_AbsMove_Ntf` | 调试页 Abs X/Y + Move：snowx 口径单点 TCP 运动包（`send_galvo_abs_pos`）；打印中拒绝 |
 | `UI_Debug_OpticalPath_Check_Set_Ntf` | 打印前光路检测开关（仅本次运行，默认关）。开则 Confirm Print 后、出光前逐点等视觉识别；失败阻断并 `APP_Print_Start_Rejected_Ntf` |
-| `UI_Debug_PlateHeight_Adj_Set_Ntf` | 打印前基板测高调 Z（仅本次运行，默认关）。开则 Confirm Print 后、光路之前测 8 点并 AXIS_INC；无 LUT 或失败不阻断打印 |
+| `UI_Debug_PlateHeight_Adj_Set_Ntf` | 打印前基板测高调 Z（仅本次运行，默认关）。开则 Confirm Print 后、光路之后测 8 点并 AXIS_INC；无 LUT 或失败不阻断打印 |
 | `UI_Debug_Galvo_Param_Save_Ntf` | 写 `cal.csv` 第 4 行中心偏移 + `ParserContext::load_calibration`；打印/任一振镜测试进行中拒绝 |
 | `UI_PM25_Req` / 门控 Req | 旧固件：环境快照；**仅 MCU 固件 major≥4**：独立线程开 `fa_valve` 采 3s 舱内平均后回 `APP_PM25_Rsp`（不堵 worker）。版本未到不开阀 |
 | `UI_Debug_Soc_Led_Set_Ntf` / `Get` | 六路舱灯 `lgt1l`…`lgt3r` sysfs，不看 MCU 版本 |

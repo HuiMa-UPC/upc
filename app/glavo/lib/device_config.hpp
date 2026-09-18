@@ -21,7 +21,7 @@
 #endif
 
 #ifndef GLAVO_SERIAL_DEFAULT_DEVICE
-#define GLAVO_SERIAL_DEFAULT_DEVICE  "/dev/ttyS4"
+#define GLAVO_SERIAL_DEFAULT_DEVICE  "/dev/ttyS3"
 #endif
 
 #ifndef GLAVO_SERIAL_DEFAULT_BAUD

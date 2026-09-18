@@ -26,7 +26,7 @@ scripts/rongsu.sh start   # glavo + rongsu_camera → ui
 | `ipc/` | Unix socket、`MsgPort`、SHM/dma 帧环 |
 | `debug/` | `UPC_LOG_*`、`upc_sys_monitor` |
 | `process/` | PID、daemon、专题日志重定向 |
-| `fs_manifest/` | 本地清单 JSON（G-code / 打印历史 `config.json`）；板端数据根默认 `/userdata/{CAL,image,media,Gcode,transport,messages,test,snowpod}` |
+| `fs_manifest/` | 本地清单 JSON（G-code / 打印历史 `config.json`）；板端数据根默认 `/userdata/{CAL,image,media,visual,Gcode,transport,messages,test,snowpod}` |
 
 ## 进程与日志
 
@@ -216,7 +216,7 @@ scripts/rongsu.sh start   # glavo + rongsu_camera → ui
 | `GLAVO_Visual_PlateHeight_Session_Stop_Ntf` | `0x142D` | Glavo→Visual | Empty | — | 测高/校准结束；三类会话都停才拆流 |
 | `GLAVO_Visual_Laser_Spot_Measure_Req` | `0x142E` | Glavo→Visual | Empty | — | 请求当前帧激光质心（校准与测高）；Visual 不查 LUT |
 | `APP_Visual_Laser_Spot_Measure_Rsp` | `0x142F` | Visual→Glavo | `LaserSpotMeasureRspPayload` | — | `ok` + `laser_x/y` 像素质心 |
-| `UI_Glavo_Height_Calib_Start_Req` | `0x1430` | UI→Glavo | `HeightCalibStartReqPayload` | `send_height_calib_start` | 调试页启动高度校准（关舱灯 + Red_On → 写 LUT；结束开舱灯，红光保持） |
+| `UI_Glavo_Height_Calib_Start_Req` | `0x1430` | UI→Glavo | `HeightCalibStartReqPayload` | `send_height_calib_start` | 调试页高度校准（关舱灯 + Red_On → 先下降 20mm 再 Home → 写 LUT；结束开舱灯） |
 | `APP_Glavo_Height_Calib_Start_Rsp` | `0x1432` | Glavo→UI | `HeightCalibStartRspPayload` | — | 是否已启动后台校准；`ok=0` 时仍会推 `Progress stage=3` |
 | `GLAVO_UI_Height_Calib_Progress_Ntf` | `0x1431` | Glavo→UI | `HeightCalibProgressPayload` | `register_height_calib_progress` | stage 0 开始 / 1 采集 / 2 完成 / 3 失败 |
 | `APP_Print_Video_Session_Start_Ntf` | — | Glavo→Media（Hub FWD） | `PrintVideoSessionPayload`（含 `h264_bitrate`，0=Media 默认中等码率 / cal `PRINT_H264_BITRATE`） | — | `PrintVideoNotify` / `MediaService` |
