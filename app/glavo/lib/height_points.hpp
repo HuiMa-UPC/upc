@@ -41,6 +41,11 @@ constexpr int kHeightZHomeTimeoutMs = 30000;
 /** MCU Z Home 停点(mm)。逻辑 0 = 此平面；wait_z 用 MCU 上报值须加此偏置。 */
 constexpr float kHeightZHomeMm = 1.0f;
 
+/** 校准/测高每次回零先相对下降（负向 AXIS_INC），再 Home。Z 无绝对编码器。 */
+constexpr float kHeightHomeRetractMm = 20.0f;
+/** 下降行程等待：编码器在动则提前到点，否则超时后仍发 Home。 */
+constexpr int kHeightHomeRetractWaitMs = 8000;
+
 inline float height_mcu_z(float logical_mm) noexcept
 {
     return logical_mm + kHeightZHomeMm;
@@ -55,7 +60,7 @@ constexpr int kHeightAgreeMaxRounds = 5;
 constexpr const char* kHeightLutPath = "/userdata/visual/height_lut.txt";
 
 using HeightMoveGalvoFn = std::function<bool(float x_mm, float y_mm)>;
-/** true=关舱灯+Red_On；false=只开舱灯（红光保持）。 */
+/** true=关舱灯+Red_On；false=开舱灯（红光保持）。测高回调的 false 为空操作。 */
 using HeightSessionLightFn = std::function<void(bool on)>;
 using HeightSendZHomeFn = std::function<void()>;
 using HeightSendZIncFn = std::function<void(float delta_mm)>;

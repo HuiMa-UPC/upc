@@ -7,10 +7,12 @@
 #include "rs_log.hpp"
 
 #include <algorithm>
+#include <cerrno>
 #include <cmath>
 #include <cstdio>
 #include <fstream>
 #include <iomanip>
+#include <sys/stat.h>
 #include <vector>
 
 namespace upc::glavo {
@@ -228,6 +230,11 @@ void HeightCalibration::run(float start_mm, float end_mm, float step_mm,
                       return a.galvo_y < b.galvo_y;
                   });
         {
+            if(::mkdir("/userdata/visual", 0755) != 0 && errno != EEXIST) {
+                UPC_LOG_GLAVO_SERVICE(Error, "calib: mkdir /userdata/visual failed errno=%d",
+                                      errno);
+                break;
+            }
             const std::string tmp_path = lut_path + ".tmp";
             std::ofstream f(tmp_path);
             if(!f.is_open()) {

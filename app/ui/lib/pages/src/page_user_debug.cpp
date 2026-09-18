@@ -865,7 +865,7 @@ void on_calib_click(lv_event_t *)
 void on_height_calib_click(lv_event_t *)
 {
     ui::DebugMsgProxy::instance().send_height_calib_start(
-        -5.0f, 12.0f, 1.0f, "/etc/visual/height_lut.txt");
+        -5.0f, 12.0f, 1.0f, "/userdata/visual/height_lut.txt");
     if(g_height_calib_lbl) {
         lv_label_set_text(g_height_calib_lbl, "Starting...");
     }
