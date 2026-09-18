@@ -44,10 +44,15 @@ public:
     void start();
     void stop();
 
-    /** MCU≥V4 时打开周期采集；unknown/&lt;V4 关闭（不清已采缓存）。
+    /** MCU≥V4 / Len=15 时打开周期采集；unknown/&lt;V4 关闭（不清已采缓存）。
      *  关模式不清阀/灯：调试页可随时开关，不随版本门控。
-     *  @return true=本次从非 V4 切入 V4（已点亮六路舱灯） */
+     *  舱灯默认全开不在此函数——须等固件 major≥4 后调 ensure_cabin_leds_default_on()。
+     *  @return true=本次从非 V4 切入 V4 */
     bool set_v4_mode(bool enabled);
+
+    /** 仅 MCU 固件 major≥4 确认后调用：首次把六路舱灯全开。
+     *  @return true=本次执行了全开（可发 LED Ntf） */
+    bool ensure_cabin_leds_default_on();
 
     [[nodiscard]] SocEnvSample snapshot() const;
 
@@ -84,6 +89,7 @@ private:
 
     std::atomic<bool> running_{false};
     std::atomic<bool> v4_mode_{false};
+    std::atomic<bool> cabin_leds_default_applied_{false};
     std::atomic<bool> valve_open_{false};
     std::atomic<bool> debug_valve_want_{false};
     std::atomic<uint8_t> led_mask_{0};

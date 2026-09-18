@@ -67,6 +67,7 @@
 #include "parser_worker.hpp"
 #include "mcu_link.hpp"
 #include "soc_sensors.hpp"
+#include "spi_status_led.hpp"
 #include "print_job_state.hpp"
 #include "msg_runtime.hpp"
 #include "buffer_pool.hpp"
@@ -1882,7 +1883,7 @@ void GlavoService::handle_parser_exit(const middleware::Message& msg)
 void GlavoService::launch_print_from_prepared(const std::string& full_path)
 {
     ignore_powder_low_for_current_print_ = false;
-    print_running_.store(true);
+    set_print_running(true);
     McuLink::instance().set_print_task_flow_active(true);
     publish_print_state_ntf(static_cast<uint32_t>(middleware::UserHomeStatus::Printing));
 
@@ -2051,7 +2052,7 @@ void GlavoService::handle_print_start(const middleware::Message& msg)
 void GlavoService::stop_print_job()
 {
     first_layer_reference_waiting_ = false;
-    print_running_.store(false);
+    set_print_running(false);
     publish_first_layer_visual_session(false, "print_stop");
     parser::ParserManager::instance().stop_parse();
 }
@@ -2072,7 +2073,7 @@ void GlavoService::handle_print_terminate(const middleware::Message& msg)
         plate_height_.abort();
         plate_height_done_pending_.store(false);
         (void)apply_red_laser_mode(true, "user_terminate_during_height");
-        print_running_.store(false);
+        set_print_running(false);
         McuLink::instance().set_print_task_flow_active(false);
         parser::ParserManager::instance().stop_parse();
         publish_print_state_ntf(static_cast<uint32_t>(middleware::UserHomeStatus::Idle));
@@ -2089,7 +2090,7 @@ void GlavoService::handle_print_terminate(const middleware::Message& msg)
         optical_path_check_.abort();
         optical_path_done_pending_.store(false);
         (void)apply_red_laser_mode(true, "user_terminate_during_optical");
-        print_running_.store(false);
+        set_print_running(false);
         McuLink::instance().set_print_task_flow_active(false);
         parser::ParserManager::instance().stop_parse();
         publish_print_state_ntf(static_cast<uint32_t>(middleware::UserHomeStatus::Idle));
@@ -2118,7 +2119,7 @@ void GlavoService::handle_print_terminate(const middleware::Message& msg)
     }
     deferred_print_start_ = false;
     first_layer_reference_waiting_ = false;
-    print_running_.store(false);
+    set_print_running(false);
     {
         std::lock_guard<std::mutex> lock(first_layer_visual_mtx_);
         first_layer_visual_waiting_ = false;
@@ -2438,6 +2439,12 @@ void GlavoService::publish_print_powder_low_ntf()
     }
 }
 
+void GlavoService::set_print_running(bool on)
+{
+    print_running_.store(on);
+    SpiStatusLed::instance().set_printing(on);
+}
+
 /** @brief 向 MQTT 推送 GLAVO_Print_State_Ntf（开始打印/打印结束状态边沿） */
 void GlavoService::publish_print_state_ntf(uint32_t mode)
 {
@@ -2731,7 +2738,7 @@ void GlavoService::abort_print_start(middleware::PrintStartRejectReason reason,
     /* 两个挂起标志一并作废，避免 TerminateDone 迟到时又把这一单捡起来重跑。 */
     deferred_optical_check_ = false;
     deferred_print_start_ = false;
-    print_running_.store(false);
+    set_print_running(false);
     McuLink::instance().set_print_task_flow_active(false);
     parser::ParserManager::instance().stop_parse();
     publish_print_start_rejected(reason, detail);
@@ -3333,7 +3340,7 @@ void GlavoService::on_mcu_link_event(McuLinkEvent ev)
             send_print_progress(true);
             (void)apply_red_laser_mode(true, "print_completed");
             publish_terminate_done();
-            print_running_.store(false);
+            set_print_running(false);
             publish_first_layer_visual_session(false, "print_completed");
             ignore_powder_low_for_current_print_ = false;
             clear_prepare_session();
@@ -3405,7 +3412,7 @@ void GlavoService::on_mcu_link_event(McuLinkEvent ev)
                 }
             }
             PrintVideoNotify::instance().on_print_abort();
-            print_running_.store(false);
+            set_print_running(false);
             (void)apply_red_laser_mode(true,
                 ev == McuLinkEvent::TerminateDone ? "terminate_done" : "print_error");
             publish_first_layer_visual_session(false,

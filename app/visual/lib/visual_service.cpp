@@ -688,7 +688,7 @@ void VisualService::on_laser_spot_measure_req(const middleware::Message& msg)
     cv::Mat gray(static_cast<int>(height), static_cast<int>(width), CV_8UC1,
                  nv12.data());
     const LaserSpot spot = detect_laser_spot(
-        gray, "/etc/visual/plate_height_config.json");
+        gray, "/userdata/visual/plate_height_config.json");
     if(!spot.valid) {
         UPC_LOG_VISUAL_SERVICE(Warn, "laser spot: no valid blob frame=%u",
                                static_cast<unsigned>(frame_seq));

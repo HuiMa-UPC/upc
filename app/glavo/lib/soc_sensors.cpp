@@ -353,14 +353,24 @@ void SocSensors::stop()
 bool SocSensors::set_v4_mode(bool enabled)
 {
     const bool was = v4_mode_.exchange(enabled);
-    if(enabled && !was) {
-        const bool ok = set_all_cabin_leds(true);
-        UPC_LOG_GLAVO_SERVICE(Info, "V4: cabin LEDs all on ok=%d mask=0x%02X",
-                              ok ? 1 : 0,
-                              static_cast<unsigned>(cabin_led_mask()));
-        return true;
+    if(!enabled) {
+        /* 退出 V4 后允许再次确认版本时重做默认全开 */
+        cabin_leds_default_applied_.store(false);
     }
-    return false;
+    return enabled && !was;
+}
+
+bool SocSensors::ensure_cabin_leds_default_on()
+{
+    bool expected = false;
+    if(!cabin_leds_default_applied_.compare_exchange_strong(expected, true)) {
+        return false;
+    }
+    const bool ok = set_all_cabin_leds(true);
+    UPC_LOG_GLAVO_SERVICE(Info, "V4: cabin LEDs all on (MCU≥4) ok=%d mask=0x%02X",
+                          ok ? 1 : 0,
+                          static_cast<unsigned>(cabin_led_mask()));
+    return true;
 }
 
 SocEnvSample SocSensors::snapshot() const

@@ -1,6 +1,7 @@
 #include "mcu_link.hpp"
 #include "protocol.hpp"
 #include "soc_sensors.hpp"
+#include "spi_status_led.hpp"
 #include "wifi_manager.hpp"
 #include "print_job_state.hpp"
 #include "print_video_notify.hpp"
@@ -923,7 +924,7 @@ void McuLink::publish_debug_soc_led_ntf()
 void McuLink::refresh_soc_v4_mode()
 {
     const bool v4 = mcu_sensor_protocol_v4();
-    const bool entered_v4 = SocSensors::instance().set_v4_mode(v4);
+    (void)SocSensors::instance().set_v4_mode(v4);
     {
         std::lock_guard<std::mutex> lock(env_mtx_);
         if(v4 && !env_cache_.sensor_v4) {
@@ -942,7 +943,9 @@ void McuLink::refresh_soc_v4_mode()
         }
         env_cache_.sensor_v4 = v4;
     }
-    if(entered_v4) {
+    SpiStatusLed::instance().set_enabled(v4);
+    /* 舱灯默认全开：必须 MCU 版本 major≥4 已确认，不能靠 Len=15 提前开 */
+    if(v4 && SocSensors::instance().ensure_cabin_leds_default_on()) {
         publish_debug_soc_led_ntf();
     }
 }
@@ -999,9 +1002,10 @@ void McuLink::on_sensor_report(const serial_sensor_report_t& report)
     const bool v4 = (report.layout == SERIAL_SENSOR_LAYOUT_V4) ||
                     mcu_sensor_protocol_v4();
     if(report.layout == SERIAL_SENSOR_LAYOUT_V4) {
-        /* 版本应答前若已收到 Len=15，先打开 SOC 采集，避免等版本空窗 */
+        /* 版本应答前若已收到 Len=15，先打开 SOC 采集，避免等版本空窗。
+         * 舱灯默认全开仍等 major≥4（refresh_soc_v4_mode），此处不点亮。 */
         if(SocSensors::instance().set_v4_mode(true)) {
-            publish_debug_soc_led_ntf();
+            SpiStatusLed::instance().set_enabled(true);
         }
     }
 
@@ -1897,6 +1901,7 @@ void McuLink::handle_serial_rx_frame(const uint8_t* frame, size_t len)
             static_cast<unsigned>(alarm.clear_mode),
             static_cast<unsigned>(alarm.detail));
         publish_alarm_report_ntf(alarm);
+        SpiStatusLed::instance().on_alarm_report(alarm);
         return;
     }
 
@@ -1912,6 +1917,7 @@ void McuLink::handle_serial_rx_frame(const uint8_t* frame, size_t len)
             static_cast<unsigned>(snap.latched_mask),
             static_cast<unsigned>(snap.highest_severity));
         publish_alarm_snapshot_ntf(snap);
+        SpiStatusLed::instance().on_alarm_snapshot(snap);
         return;
     }
 

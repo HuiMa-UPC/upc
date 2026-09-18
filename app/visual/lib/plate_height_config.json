@@ -3,7 +3,7 @@
   "fixed_thresh": 250,
   "min_area": 2,
   "max_area": 200,
-  "lut_path": "/etc/visual/height_lut.txt",
+  "lut_path": "/userdata/visual/height_lut.txt",
   "enable_clahe": false,
   "clahe_clip": 3.0,
   "enable_blur": false,

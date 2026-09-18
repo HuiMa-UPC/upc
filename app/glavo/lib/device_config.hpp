@@ -218,6 +218,10 @@
 #ifndef GLAVO_O2_K
 #define GLAVO_O2_K  480.f  /**< 标定系数；空气标定后可改 */
 #endif
+/** SPI 灯效板（WS，40 颗）；仅 MCU≥V4 打开 */
+#ifndef GLAVO_SPI_STATUS_LED_DEV
+#define GLAVO_SPI_STATUS_LED_DEV  "/dev/spidev1.0"
+#endif
 
 /* -------------------------------------------------------------------------- */
 /* OTA                                                                          */
