@@ -41,20 +41,23 @@ using McuLinkTransportResultCb = std::function<void(uint8_t)>;
 /** @brief 首层视觉检测回调：true=通过，false=不通过（继续铺粉）。 */
 using McuLinkFirstLayerCheckCb = std::function<bool(uint16_t)>;
 
-/** @brief 环境传感器缓存（串口 0x9B 上报解析结果，供 UI/打印进度读取） */
+/** @brief 环境传感器缓存（串口 0x9B + SOC 本地采集合并，供 UI/打印进度读取） */
 struct EnvSnapshotCache {
-    float pm25_indoor     = 0.f;
-    float pm25_cabin      = 0.f;
-    float pm1_indoor      = -1.f;  /**< 室内 PM1.0 (μg/m³)；无源时 <0 */
-    float pm10_indoor     = -1.f;  /**< 室内 PM10 (μg/m³)；无源时 <0 */
+    float pm25_indoor     = 0.f;   /**< 舱外/室内常显 PM2.5（V4=SOC UART 舱外） */
+    float pm25_cabin      = 0.f;   /**< 舱内 PM2.5（V4=SOC UART 舱内，阀关时可能无效） */
+    float pm1_indoor      = -1.f;  /**< 舱外 PM1.0；无源时 <0 */
+    float pm10_indoor     = -1.f;  /**< 舱外 PM10；无源时 <0 */
     float temperature_c   = 0.f;
     float oxygen_percent  = 0.f;
     float humidity_percent = 0.f;
-    float pressure_kpa    = -1.f;   /**< 舱内1气压 kPa（0x9B value[2..3]/10）；无源时 <0 */
+    float pressure_kpa    = -1.f;   /**< 舱内气压 kPa（旧=MCU；V4=SOC CPM121） */
     float baseplate_temp_c = -1.f;  /**< 基板温度 ℃；无源时 <0 */
-    uint8_t powder_bits   = 0u;     /**< 粉量位 bit0/bit1（0=缺粉） */
-    bool  outer_door_open = false;  /**< 外门锁状态：false=门关 true=门开（来源 0x9B value[10] bit7） */
+    float filter_pressure_kpa = -1.f; /**< 滤芯气压 SC0（MCU 1ST） */
+    uint8_t powder_bits   = 0u;     /**< 旧：bit0/bit1；V4：红外低 2 位兼容 */
+    uint8_t powder_ir_bits = 0u;    /**< V4：A1..OUTR 八路红外 */
+    bool  outer_door_open = false;  /**< false=门关 true=门开 */
     bool  door_state_valid = false; /**< 是否已收到至少一帧可用门状态 */
+    bool  sensor_v4       = false;  /**< 当前按 V4 协议路径填缓存 */
     bool  valid           = false;
 };
 
@@ -168,8 +171,28 @@ public:
     /**
      * @brief 调试专用：直接下发一个已编码的 11 字节运动子包
      * @note 仅允许在无打印/测试图运动流、无终止清理时调用。
+     *       光路自检 / 点位测试走这条；测高与高度校准不要用。
      */
     bool send_debug_motion_subpacket(const uint8_t subpacket[11]);
+    /**
+     * @brief 单点振镜绝对坐标移动（手动控制 / 测高扫描用）
+     *
+     * 内部走与切片下发完全一致的编码口径：
+     *   cal_apply_xy(校准畸变) → × scale_gain → coordinate_to_offset_bytes
+     *   → 构造 11B 运动包 → build_motion_frame → tcp_send_raw
+     *
+     * 打印进行中（is_sending_）会拒绝调用，避免与批量运动包冲突。
+     *
+     * @param x_mm, y_mm     目标坐标(mm，振镜坐标系，0,0 为中心；越界自动截断)
+     * @param speed_mm_min    扫描速度，<=0 时用默认 1000mm/min
+     * @param laser_on        瞄准移动应传 1（LD=01 00）。0=空跳会途中关红光。
+     *                        本函数只给手动/测高用；打印空跳走 Parser，不走这里。
+     * @return true=组帧并发送成功；false=TCP 未就绪 / 打印中互斥 / 发送失败
+     */
+    bool send_galvo_abs_pos(float x_mm, float y_mm,
+                            float speed_mm_min, int laser_on);
+    /** @brief 最近一次 MCU 运动位置上报的 Z 实际位置（mm）。 */
+    [[nodiscard]] float get_z_pos_mm() const noexcept;
     /**
      * @brief 标记“打印任务流程”是否激活（用于门控高频心跳回包日志）
      * @note 业务约定：从进入打印到用户滑动开门解锁成功，均视为同一流程。
@@ -210,6 +233,15 @@ public:
 
     /** @brief 读取最新环境传感器快照（线程安全） */
     [[nodiscard]] EnvSnapshotCache env_snapshot() const;
+
+    /**
+     * @brief MCU 固件是否已报到且 major≥4（传感器走 V4 布局 + SOC 本地采集 / 开阀采样）。
+     * unknown / major&lt;4 → false：旧板无 fa_valve，不开阀。
+     */
+    [[nodiscard]] bool mcu_sensor_protocol_v4() const noexcept;
+
+    /** @brief 读 MCU 版本缓存（About / 门控逻辑） */
+    [[nodiscard]] middleware::McuVersionPayload mcu_version_cached() const;
 
     /**
      * @brief 调试：环境上报模拟开关（仅本次运行，默认关）
@@ -256,6 +288,10 @@ public:
     void handle_serial_rx_frame(const uint8_t* frame, size_t len);
 
     void on_sensor_report(const serial_sensor_report_t& report);
+    void on_sensor_ext_report(const serial_sensor_ext_t& ext);
+    void merge_soc_env_into_cache_locked();
+    void refresh_soc_v4_mode();
+    void publish_debug_soc_led_ntf();
     void on_motion_pos_report(const serial_motion_pos_t& pos);
     void publish_env_update_ntf();
     /** @brief 仅向 UI 推送状态快照（Ready/Idle + WiFi），不清空环境值也不推 MQTT。 */
@@ -265,6 +301,11 @@ public:
     void publish_debug_sensor_ntf(const serial_sensor_report_t& report);
     /** @brief 调试页传感器条推无效哨兵（<0 → UI "--"） */
     void publish_debug_sensor_invalid_ntf();
+    /**
+     * @brief V4：用 SOC 快照 + 已缓存的 MCU 字段推调试顶栏（不依赖本周期 1ST）
+     * @note 未收到过 MCU 1ST 时 O2/基板/粉量发无效哨兵；PM/温湿度/气压走 SOC。
+     */
+    void publish_debug_sensor_from_soc_and_cache();
     void publish_debug_axis_ntf(const serial_motion_pos_t& pos);
     void on_mcu_version_report(const serial_project_info_t& info);
     void publish_mcu_version_ntf();
@@ -273,6 +314,11 @@ public:
     bool should_publish_env_to_mqtt(bool force = false) noexcept;
     /** @brief 调试环境模拟：周期写假数据并 publish_env_update_ntf */
     void poll_env_sim_tick();
+    /**
+     * @brief V4：SOC 本地采集独立推 UI（APP_Update_Ntf + 调试顶栏）
+     * @note 旧固件不跑；Env Sim 开启时跳过。与 MCU 1ST 解耦，避免无 1ST 时顶栏/首页一直 "--"。
+     */
+    void poll_soc_env_tick();
     /** @brief 关闭模拟后清缓存并推送无效哨兵，等待真实 0x9B 再恢复 */
     void clear_env_after_sim_disable();
 
@@ -531,16 +577,20 @@ private:
     SerialReliablePending serial_reliable_pending_{};
     std::deque<SerialReliableItem> serial_reliable_queue_;
     std::atomic<bool> serial_ack_enabled_{GLAVO_SERIAL_ACK_ENABLE != 0};
+    std::atomic<float> z_pos_mm_cache_{0.0f};
 
     EnvSnapshotCache env_cache_{};
     mutable std::mutex env_mtx_;
     bool powder_low_latched_ = false; /**< 缺粉边沿通知闩锁：低电平持续期间只触发一次 */
+    /** 本运行是否已收到过真实 MCU 1ST（关 Env Sim 后清零）；供 SOC 独立推送时区分 MCU 字段 */
+    std::atomic<bool> mcu_1st_seen_{false};
 
     std::atomic<bool> env_sim_on_{false};  /**< 环境上报模拟（调试页开关，默认关） */
     std::atomic<bool> env_sim_powder_low_target_{false}; /**< 目标缺粉态（UI 开关值） */
     bool env_sim_powder_low_effective_ = false;          /**< 已生效缺粉态（延迟后应用） */
     std::chrono::steady_clock::time_point env_sim_powder_switch_at_{}; /**< 延迟切换时刻 */
     std::chrono::steady_clock::time_point next_env_sim_tick_{};
+    std::chrono::steady_clock::time_point next_soc_env_tick_{};
     float env_sim_phase_ = 0.f;
     std::atomic<int64_t> last_env_mqtt_publish_ms_{0}; /**< Glavo→MQTT 环境 IPC 最近发送时刻 */
     bool laser_power_log_valid_ = false; /**< 功率包日志去重：最近一次已打印的功率值是否有效 */
@@ -561,6 +611,7 @@ private:
     static constexpr int kEnvSimIntervalMs = 1000; /**< 环境模拟刷新间隔 */
     static constexpr int kEnvSimPowderDelayMs = 5000; /**< 粉量模拟切换延迟 */
     static constexpr int kEnvMqttPublishIntervalMs = 2000; /**< Glavo→MQTT 环境 IPC 间隔 */
+    static constexpr int kSocEnvPublishIntervalMs = 500; /**< V4 SOC→UI 推送间隔 */
 };
 
 } // namespace upc::glavo

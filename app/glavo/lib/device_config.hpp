@@ -21,7 +21,7 @@
 #endif
 
 #ifndef GLAVO_SERIAL_DEFAULT_DEVICE
-#define GLAVO_SERIAL_DEFAULT_DEVICE  "/dev/ttyS3"
+#define GLAVO_SERIAL_DEFAULT_DEVICE  "/dev/ttyS4"
 #endif
 
 #ifndef GLAVO_SERIAL_DEFAULT_BAUD
@@ -165,6 +165,62 @@
 /** 真实开门请求等待 MCU 结果超时（毫秒） */
 #ifndef GLAVO_DOOR_OPEN_TIMEOUT_MS
 #define GLAVO_DOOR_OPEN_TIMEOUT_MS  5000
+#endif
+
+/* -------------------------------------------------------------------------- */
+/* SOC 本地传感器（MCU≥V4；背光在 UI，不经本配置）                              */
+/* -------------------------------------------------------------------------- */
+/** 舱内 PMSA003-A */
+#ifndef GLAVO_PM_CABIN_UART
+#define GLAVO_PM_CABIN_UART  "/dev/ttyS0"
+#endif
+/**
+ * 舱外 PMSA003-A
+ */
+#ifndef GLAVO_PM_OUTDOOR_UART
+#define GLAVO_PM_OUTDOOR_UART  "/dev/ttyS1"
+#endif
+#ifndef GLAVO_PM_VALVE_SYSFS
+#define GLAVO_PM_VALVE_SYSFS  "/sys/class/leds/fa_valve/brightness"
+#endif
+/** 六路舱灯（调试页单独开关；不看 MCU 版本） */
+#ifndef GLAVO_SOC_LED_LGT1L_SYSFS
+#define GLAVO_SOC_LED_LGT1L_SYSFS  "/sys/class/leds/lgt1l/brightness"
+#endif
+#ifndef GLAVO_SOC_LED_LGT1R_SYSFS
+#define GLAVO_SOC_LED_LGT1R_SYSFS  "/sys/class/leds/lgt1r/brightness"
+#endif
+#ifndef GLAVO_SOC_LED_LGT2L_SYSFS
+#define GLAVO_SOC_LED_LGT2L_SYSFS  "/sys/class/leds/lgt2l/brightness"
+#endif
+#ifndef GLAVO_SOC_LED_LGT2R_SYSFS
+#define GLAVO_SOC_LED_LGT2R_SYSFS  "/sys/class/leds/lgt2r/brightness"
+#endif
+#ifndef GLAVO_SOC_LED_LGT3L_SYSFS
+#define GLAVO_SOC_LED_LGT3L_SYSFS  "/sys/class/leds/lgt3l/brightness"
+#endif
+#ifndef GLAVO_SOC_LED_LGT3R_SYSFS
+#define GLAVO_SOC_LED_LGT3R_SYSFS  "/sys/class/leds/lgt3r/brightness"
+#endif
+/** 氧传感器：IIO 原始计数 → 3.3V 满幅；I[uA]=V/100Ω×1e6；O2%=100*(1-e^(-I/K)) */
+#ifndef GLAVO_O2_IIO_RAW
+#define GLAVO_O2_IIO_RAW  "/sys/bus/iio/devices/iio:device0/in_voltage0_raw"
+#endif
+#ifndef GLAVO_O2_VREF
+#define GLAVO_O2_VREF  3.3f
+#endif
+#ifndef GLAVO_O2_ADC_MAX
+#define GLAVO_O2_ADC_MAX  1023  /**< RK SARADC 10bit */
+#endif
+#ifndef GLAVO_O2_RSENSE_OHM
+#define GLAVO_O2_RSENSE_OHM  100.f
+#endif
+#ifndef GLAVO_O2_K
+#define GLAVO_O2_K  480.f  /**< 标定系数；空气标定后可改 */
+#endif
+/** SPI 灯效板（WS，40 颗）；仅 MCU≥V4 打开 */
+#ifndef GLAVO_SPI_STATUS_LED_DEV
+#define GLAVO_SPI_STATUS_LED_DEV  "/dev/spidev1.0"
 #endif
 
 /* -------------------------------------------------------------------------- */

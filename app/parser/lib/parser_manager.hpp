@@ -18,7 +18,7 @@ public:
     IParserWorker* active() const { return active_; }
 
     int  open_file(const std::string& path);
-    int  open_file(const std::string& path, int total_lines_hint);
+    int  open_file(const std::string& path, int total_lines_hint); /**< hint: >0 已知行数，0 跳过数换行，<0 自行统计 */
     void start_parse();
     void stop_parse();
 

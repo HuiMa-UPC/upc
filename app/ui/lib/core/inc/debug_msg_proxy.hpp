@@ -28,9 +28,14 @@ using DebugEnvSimCb = std::function<void(bool)>;
 using DebugEnvSimPowderCb = std::function<void(bool)>;
 using DebugFirstLayerVisualCheckCb = std::function<void(bool)>;
 using DebugOpticalPathCheckCb = std::function<void(bool)>;
+using DebugPlateHeightAdjCb = std::function<void(bool)>;
+using DebugSocLedCb = std::function<void(uint8_t mask)>;
+using DebugCabinPmValveCb = std::function<void(bool)>;
 using DebugTestImageCb = std::function<void(bool)>;
 using DebugGalvoPointTestCb = std::function<void(bool)>;
 using DebugLocalRtspCb = std::function<void(bool)>;
+using DebugHeightCalibProgressCb =
+    std::function<void(const middleware::HeightCalibProgressPayload&)>;
 
 class DebugMsgProxy {
 public:
@@ -50,6 +55,10 @@ public:
     void send_galvo_param_save(float scale, float step_mm,
                                float center_offset_x, float center_offset_y);
     void send_galvo_calib();
+    /** @brief 振镜绝对坐标移动：发 UI_Debug_Galvo_AbsMove_Ntf。
+     *  坐标系与切片一致，原点(0,0)为振镜中心，单位 mm；speed<=0 用默认。 */
+    void send_galvo_abs_move(float x_mm, float y_mm,
+                             float speed_mm_min, int laser_on);
     /** Other 页：中心点 + 四角红光驻留测试（一次性，不提供取消）。 */
     void start_galvo_point_test();
     void request_galvo_point_test_state();
@@ -82,6 +91,15 @@ public:
     void request_first_layer_visual_check_state();
     void send_optical_path_check_set(bool on);
     void request_optical_path_check_state();
+    void send_plate_height_adj_set(bool on);
+    void request_plate_height_adj_state();
+    /** 六路舱灯 / 舱内 PM 阀：sysfs 直控，不看 MCU 版本 */
+    void send_soc_led_set(uint8_t channel, bool on);
+    void request_soc_led_state();
+    void send_cabin_pm_valve_set(bool on);
+    void request_cabin_pm_valve_state();
+    void send_height_calib_start(float start_mm, float end_mm, float step_mm,
+                                 const char* lut_path);
     /** 调试页 Test image：红光循环打印 /userdata/test/test.gcode */
     void send_test_image_set(bool on);
     void request_test_image_state();
@@ -101,9 +119,13 @@ public:
     void register_env_sim_powder(DebugEnvSimPowderCb cb);
     void register_first_layer_visual_check(DebugFirstLayerVisualCheckCb cb);
     void register_optical_path_check(DebugOpticalPathCheckCb cb);
+    void register_plate_height_adj(DebugPlateHeightAdjCb cb);
+    void register_soc_led(DebugSocLedCb cb);
+    void register_cabin_pm_valve(DebugCabinPmValveCb cb);
     void register_test_image(DebugTestImageCb cb);
     void register_galvo_point_test(DebugGalvoPointTestCb cb);
     void register_local_rtsp(DebugLocalRtspCb cb);
+    void register_height_calib_progress(DebugHeightCalibProgressCb cb);
 
     /** Confirm Print 互斥：Glavo 回报的测试图实际运行态 */
     [[nodiscard]] bool test_image_active() const noexcept { return test_image_active_; }
@@ -153,9 +175,13 @@ private:
     DebugEnvSimPowderCb env_sim_powder_cb_;
     DebugFirstLayerVisualCheckCb first_layer_visual_check_cb_;
     DebugOpticalPathCheckCb optical_path_check_cb_;
+    DebugPlateHeightAdjCb plate_height_adj_cb_;
+    DebugSocLedCb soc_led_cb_;
+    DebugCabinPmValveCb cabin_pm_valve_cb_;
     DebugTestImageCb test_image_cb_;
     DebugGalvoPointTestCb galvo_point_test_cb_;
     DebugLocalRtspCb local_rtsp_cb_;
+    DebugHeightCalibProgressCb height_calib_progress_cb_;
     bool test_image_active_ = false;
     bool galvo_point_test_active_ = false;
 };

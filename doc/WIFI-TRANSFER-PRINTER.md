@@ -264,8 +264,8 @@ PIN 通过后保存该别名并在响应里回带。
 ```
 <project>_transfer.3mf
 ├── 3D/<project>.gcode                     ← ★ 已切片、可直接打印
-├── Metadata/<project>.json                ← 盘/层/材料等元数据（本期不导入）
-└── Thumbnails/<project>.png               ← 缩略图（板端导入并生成 RTHM）
+├── Metadata/<project>.json                ← layers / print_time_s 等（必导）
+└── Thumbnails/<project>.png               ← 缩略图（解码后生成 RTHM，不保留 PNG）
 ```
 
 - **G-code 条目**：正式路径为 `3D/*.gcode`；板端同时兼容早期草案曾约定的
@@ -278,24 +278,30 @@ PIN 通过后保存该别名并在响应里回带。
   `RSSlicer::emitGCodeLayer` 按层生成，文件头形如 `; SLM GCode - Snowpath`，
   含层数 / 层高 / 扫描速度 / 各段激光功率等注释。
 
-板端导入后，原始 3MF 保留在 `/userdata/transport`；可打印体以
-`<上传包名去后缀>.gcode` 落到 `/userdata/Gcode`，并更新
-`/userdata/Gcode/config.json`。用户从打印机 Local 列表选择后，复用现有
+板端导入后，可打印体以 `<上传包名去后缀>.gcode` 落到 `/userdata/Gcode`，
+并更新 `/userdata/Gcode/config.json`。上传暂存在 `/userdata/transport` 的
+原 3MF 在导入成功后删除。用户从打印机 Local 列表选择后，复用现有
 GcodeWorker 打印，不再运行 snowslice。
+
+`Metadata/*.json`（`snowpath_plate_meta_v1`）约定：
+
+- 包内必须有且能唯一匹配一份 `Metadata/*.json`（优先与 G-code 同 stem）。
+- `layers` → `config.json` 的 `layer_count`（必须 >0，否则拒绝导入）。
+- `print_time_s` → `duration_sec`；`line_count` 固定写 0（打印走纯层进度）。
 
 缩略图导入约定：
 
 - 优先使用与 G-code 同 stem 的 `Thumbnails/*.png`；包内只有一张 PNG 时
   直接使用。多图且无法唯一匹配时按无图降级。
-- 原 PNG 保存到 `/userdata/image/gcode/<上传包名去后缀>.png`。
-- 板端从该 PNG 生成 `*_small.rthm`（72×72）、`*_large.rthm`
+- PNG 仅作解码缓存，不落盘保留；板端生成
+  `/userdata/Gcode/thumb/*_small.rthm`（72×72）、`*_large.rthm`
   （320×180）、`*_print.rthm`（100×100），并将绝对路径写入
   `thumb_small`、`thumb_large`、`thumb_print`。RTHM 是项目自定义的
   RGB565 文件格式；RGA 只负责加速 COVER 裁剪、缩放和像素格式转换，
   不可用时由 CPU 兜底。
 - 缺图、坏图或图片转换失败不影响 G-code 导入，三个缩略图字段留空并记录
   `topic_xfr_upload.log` 告警。同名重传会清理不再有效的旧图；删除 Local
-  打印文件时同步删除其 PNG/RTHM。
+  打印文件时同步删除其 RTHM（范围仅 `/userdata/Gcode/thumb`）。
 
 ### 5.2 与普通另存 3mf 的区别
 

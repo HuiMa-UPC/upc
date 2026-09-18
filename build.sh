@@ -138,6 +138,12 @@ do_collect_outputs() {
         install -m 755 "$src" "$OUTPUT_DIR/$name"
         echo "  $name"
     done
+
+    local cfg="$ROOT/app/visual/lib/plate_height_config.json"
+    if [[ -f "$cfg" ]]; then
+        install -m 644 "$cfg" "$OUTPUT_DIR/plate_height_config.json"
+        echo "  plate_height_config.json (deploy to /etc/visual/)"
+    fi
 }
 
 do_collect_sdk() {

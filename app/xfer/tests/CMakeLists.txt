@@ -25,7 +25,7 @@ target_compile_definitions(transfer_3mf_smoke PRIVATE
     UPC_DEBUG=0
     UPC_LOCAL_GCODE_DIR="${CMAKE_CURRENT_BINARY_DIR}/local"
     UPC_LOCAL_GCODE_CONFIG="${CMAKE_CURRENT_BINARY_DIR}/local/config.json"
-    UPC_LOCAL_GCODE_THUMB_DIR="${CMAKE_CURRENT_BINARY_DIR}/image/gcode"
+    UPC_LOCAL_GCODE_THUMB_DIR="${CMAKE_CURRENT_BINARY_DIR}/local/thumb"
     UPC_XFR_HAS_RGA=0
 )
 target_link_libraries(transfer_3mf_smoke PRIVATE ZLIB::ZLIB ${UPC_TEST_PNG_LIBRARY})

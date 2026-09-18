@@ -18,6 +18,7 @@
 #include "page_user_photo.hpp"
 
 #include "ui_theme.hpp"
+#include "ui_backlight.hpp"
 #include "ui_keyboard.hpp"
 #include "ui_device_state.hpp"
 #include "ui_message_store.hpp"
@@ -299,6 +300,7 @@ void on_soc_ota_apply_rsp(const middleware::SocOtaApplyRspPayload& p)
 
 void app_init(lv_obj_t* screen) {
     ui_theme_init();
+    ui::backlight_apply_saved();
     raw_thumb_decoder_init();
 
     lv_obj_set_style_bg_color(screen, user_color_bg, 0);

@@ -47,13 +47,16 @@
 |------|------|--------|
 | `GlavoService` | `glavo_service.*` | IPC 业务编排 + 工作线程（打印/USB 目录/门控）；`init()` 绑定 RingBuffer → `McuLink` |
 | `OpticalPathCheck` | `optical_path_check.*` | 打印前光路检测状态机（独立线程，结果回灌 worker） |
+| `HeightLut2d` / `HeightCalibration` / `PlateHeightMeasure` | `height_points.hpp` `height_lut_2d.*` `height_calibration.*` `plate_height_measure.*` | 高度校准与打印前测高 |
 | `galvo_motion_encode` | `galvo_motion_encode.*` | 调试运动包编码 + 五点坐标（点位测试与光路检测共用） |
 | `gcode_manifest` | `common/fs_manifest/gcode_manifest.*` | Local `UPC_LOCAL_GCODE_DIR/config.json`（UI 读列表，Glavo Prepare/Delete 写） |
 | `print_history_manifest` | `common/fs_manifest/print_history_manifest.*` | `UPC_VIDEO_CONFIG`（Media upsert 写；UI 历史页读，删除后重写） |
 | `media_paths` | `common/fs_manifest/media_paths.hpp` | `UPC_MEDIA_ROOT`（默认 `/userdata/media`：photo/video/tmp + 首层视觉诊断图，各进程共用） |
 | `image_paths` | `common/fs_manifest/image_paths.hpp` | `UPC_IMAGE_ROOT`（默认 `/userdata/image`：soc/mcu/galvo/tmp） |
 | `ota_image_pair` | `common/fs_manifest/ota_image_pair.*` | MCU/Galvo AB 文件名与最高版本选取（规则 [OTA_IMAGE.md](../common/fs_manifest/OTA_IMAGE.md)） |
-| `McuLink` | `mcu_link.*` | TCP 运动 + 串口握手/传感器 |
+| `McuLink` | `mcu_link.*` | TCP 运动 + 串口握手/传感器；MCU≥V4 时合并 `SocSensors` 本地采集 |
+| `SocSensors` | `soc_sensors.*` | MCU≥V4：舱内外 PMSA UART、AHT20、CPM121、IIO 氧气周期采集；六路舱灯/`fa_valve` sysfs 随时可写（调试页，不看 MCU 版本）；与 UI 背光无关 |
+| `SpiStatusLed` | `spi_status_led.*` | MCU≥V4：SPI 灯效板状态色（空闲蓝 / 打印橙 / CONDITION 红） |
 | `PrintJobState` | `print_job_state.*` | 打印任务计数/状态 |
 | `PrintVideoNotify` | `print_video_notify.*` | 换层 Snap / 录像会话 IPC → Media |
 | `device_config.hpp` | 头文件 | TCP/串口默认、`GLAVO_ENABLE_LAYER_SNAP` 等 |
@@ -96,7 +99,7 @@
 | `ui_clean_state_*` | `ui_clean_state.*` | 清粉（clean_test）发起与回执的唯一来源：接管两个单槽 Proxy 回调，按发起方（结果页 Purify / 控制页手动清粉）扇出；`record_video` 决定是否连带清粉录像 |
 | `ui_alarm_catalog_*` | `ui_alarm_catalog.hpp` / `ui_alarm_catalog_gen.cpp` | 报警字典（生成物，改 `tools/gen_alarm_catalog.py` + `doc/alarm_catalog_en.csv`）；槽位映射不在此，是 `upc_contract.hpp` 里的固定公式 |
 | `ui_notice_stack_*` | `ui_notice_stack.*` | 右上通知浮层（最多两张卡 + 「查看剩余 N 条」；消息页/历史页/设置页不显示），PageManager 持有 |
-| `app_init()` | `ui_app.*` | 主题、Proxy、`ui_device_state_init`、`ui_message_store_init`、`ui_alarm_state_init`、页面注册、control |
+| `ui_backlight_*` | `ui_backlight.*` | LCD 背光 sysfs（设置页 Display），不经 Glavo、不看 MCU 版本 |
 | `control_*` | `control.*` | 打印状态机（含 `CONTROL_STATE_PRINT_DONE` 结果页、`CONTROL_STATE_TRANSFER_BOX` 取件转运盒）+ overlay UI |
 | `VideoPlayer` | `video_player.*` | 延时视频 libav* 软解 → BGRX/RGB565 → lv_image（play/pause/seek；拖动预览缩小帧 + latest-wins） |
 | `PngScrubPreview` | `png_scrub_preview.*` | PNG 序列拖动预览：后台 libpng 解码缩放到小图 RGB565 |

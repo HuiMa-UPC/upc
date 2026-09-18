@@ -112,6 +112,33 @@ void DebugMsgProxy::init()
         }));
 
     subs_.push_back(bus.subscribe(
+        middleware::MsgType::GLAVO_Debug_PlateHeight_Adj_Ntf, middleware::ModuleId::UI,
+        [this](const middleware::Message& msg) {
+            middleware::DebugOnOffPayload p{};
+            if(plate_height_adj_cb_ && read_inline_pod(msg, p)) {
+                plate_height_adj_cb_(p.on != 0);
+            }
+        }));
+
+    subs_.push_back(bus.subscribe(
+        middleware::MsgType::GLAVO_Debug_Soc_Led_Ntf, middleware::ModuleId::UI,
+        [this](const middleware::Message& msg) {
+            middleware::DebugSocLedStatePayload p{};
+            if(soc_led_cb_ && read_inline_pod(msg, p)) {
+                soc_led_cb_(p.mask);
+            }
+        }));
+
+    subs_.push_back(bus.subscribe(
+        middleware::MsgType::GLAVO_Debug_Cabin_Pm_Valve_Ntf, middleware::ModuleId::UI,
+        [this](const middleware::Message& msg) {
+            middleware::DebugOnOffPayload p{};
+            if(cabin_pm_valve_cb_ && read_inline_pod(msg, p)) {
+                cabin_pm_valve_cb_(p.on != 0);
+            }
+        }));
+
+    subs_.push_back(bus.subscribe(
         middleware::MsgType::GLAVO_Debug_TestImage_Ntf, middleware::ModuleId::UI,
         [this](const middleware::Message& msg) {
             middleware::DebugOnOffPayload p{};
@@ -145,6 +172,15 @@ void DebugMsgProxy::init()
             middleware::DebugOnOffPayload p{};
             if(local_rtsp_cb_ && read_inline_pod(msg, p)) {
                 local_rtsp_cb_(p.on != 0);
+            }
+        }));
+
+    subs_.push_back(bus.subscribe(
+        middleware::MsgType::GLAVO_UI_Height_Calib_Progress_Ntf, middleware::ModuleId::UI,
+        [this](const middleware::Message& msg) {
+            middleware::HeightCalibProgressPayload p{};
+            if(height_calib_progress_cb_ && read_inline_pod(msg, p)) {
+                height_calib_progress_cb_(p);
             }
         }));
 
@@ -214,6 +250,17 @@ void DebugMsgProxy::send_galvo_param_save(float scale, float step_mm,
 void DebugMsgProxy::send_galvo_calib()
 {
     publish_empty(middleware::MsgType::UI_Debug_Galvo_Calib_Ntf);
+}
+
+void DebugMsgProxy::send_galvo_abs_move(float x_mm, float y_mm,
+                                        float speed_mm_min, int laser_on)
+{
+    middleware::DebugGalvoAbsMovePayload p{};
+    p.x_mm = x_mm;
+    p.y_mm = y_mm;
+    p.speed_mm_min = speed_mm_min;
+    p.laser_on = laser_on ? 1 : 0;
+    publish_pod(middleware::MsgType::UI_Debug_Galvo_AbsMove_Ntf, p);
 }
 
 void DebugMsgProxy::start_galvo_point_test()
@@ -386,6 +433,61 @@ void DebugMsgProxy::request_optical_path_check_state()
     publish_empty(middleware::MsgType::UI_Debug_OpticalPath_Check_Get_Ntf);
 }
 
+void DebugMsgProxy::send_plate_height_adj_set(bool on)
+{
+    middleware::DebugOnOffPayload p{};
+    p.on = on ? 1 : 0;
+    publish_pod(middleware::MsgType::UI_Debug_PlateHeight_Adj_Set_Ntf, p);
+}
+
+void DebugMsgProxy::request_plate_height_adj_state()
+{
+    publish_empty(middleware::MsgType::UI_Debug_PlateHeight_Adj_Get_Ntf);
+}
+
+void DebugMsgProxy::send_soc_led_set(uint8_t channel, bool on)
+{
+    middleware::DebugSocLedPayload p{};
+    p.channel = channel;
+    p.on = on ? 1 : 0;
+    publish_pod(middleware::MsgType::UI_Debug_Soc_Led_Set_Ntf, p);
+}
+
+void DebugMsgProxy::request_soc_led_state()
+{
+    publish_empty(middleware::MsgType::UI_Debug_Soc_Led_Get_Ntf);
+}
+
+void DebugMsgProxy::send_cabin_pm_valve_set(bool on)
+{
+    middleware::DebugOnOffPayload p{};
+    p.on = on ? 1 : 0;
+    publish_pod(middleware::MsgType::UI_Debug_Cabin_Pm_Valve_Set_Ntf, p);
+}
+
+void DebugMsgProxy::request_cabin_pm_valve_state()
+{
+    publish_empty(middleware::MsgType::UI_Debug_Cabin_Pm_Valve_Get_Ntf);
+}
+
+void DebugMsgProxy::send_height_calib_start(float start_mm, float end_mm,
+                                            float step_mm, const char* lut_path)
+{
+    middleware::HeightCalibStartReqPayload p{};
+    p.start_height_mm = start_mm;
+    p.end_height_mm = end_mm;
+    p.step_mm = step_mm;
+    if(lut_path) {
+        std::strncpy(p.lut_path, lut_path, sizeof(p.lut_path) - 1);
+    }
+    middleware::Message msg(middleware::MsgType::UI_Glavo_Height_Calib_Start_Req,
+                            middleware::ModuleId::UI,
+                            middleware::ModuleId::APP_GLAVO);
+    msg.payload = middleware::MsgPayload::from_bytes(
+        reinterpret_cast<const uint8_t*>(&p), sizeof(p));
+    middleware::MsgPort::instance().publish_async(msg);
+}
+
 void DebugMsgProxy::send_test_image_set(bool on)
 {
     middleware::DebugOnOffPayload p{};
@@ -449,6 +551,21 @@ void DebugMsgProxy::register_optical_path_check(DebugOpticalPathCheckCb cb)
     optical_path_check_cb_ = std::move(cb);
 }
 
+void DebugMsgProxy::register_plate_height_adj(DebugPlateHeightAdjCb cb)
+{
+    plate_height_adj_cb_ = std::move(cb);
+}
+
+void DebugMsgProxy::register_soc_led(DebugSocLedCb cb)
+{
+    soc_led_cb_ = std::move(cb);
+}
+
+void DebugMsgProxy::register_cabin_pm_valve(DebugCabinPmValveCb cb)
+{
+    cabin_pm_valve_cb_ = std::move(cb);
+}
+
 void DebugMsgProxy::register_test_image(DebugTestImageCb cb)
 {
     test_image_cb_ = std::move(cb);
@@ -457,6 +574,11 @@ void DebugMsgProxy::register_test_image(DebugTestImageCb cb)
 void DebugMsgProxy::register_galvo_point_test(DebugGalvoPointTestCb cb)
 {
     galvo_point_test_cb_ = std::move(cb);
+}
+
+void DebugMsgProxy::register_height_calib_progress(DebugHeightCalibProgressCb cb)
+{
+    height_calib_progress_cb_ = std::move(cb);
 }
 
 void DebugMsgProxy::register_local_rtsp(DebugLocalRtspCb cb)
