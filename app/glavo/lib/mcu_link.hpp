@@ -53,6 +53,7 @@ struct EnvSnapshotCache {
     float pm10_cabin      = -1.f;  /**< 舱内 PM10（V4 SOC）；无源时 <0 */
     float temperature_c   = 0.f;
     float oxygen_percent  = 0.f;
+    float filter_oxygen_percent = -1.f; /**< 滤芯氧 %（V4 MCU 1ST）；无源时 <0 */
     float humidity_percent = 0.f;
     float pressure_kpa    = -1.f;   /**< 舱内气压 kPa（旧=MCU；V4=SOC CPM121） */
     float baseplate_temp_c = -1.f;  /**< 基板温度 ℃；无源时 <0 */

@@ -542,6 +542,7 @@ void McuLink::clear_env_after_sim_disable()
         env_cache_.pm1_indoor       = -1.0f;
         env_cache_.temperature_c    = -1.0f;
         env_cache_.oxygen_percent   = -1.0f;
+        env_cache_.filter_oxygen_percent = -1.0f;
         env_cache_.humidity_percent = -1.0f;
         env_cache_.pressure_kpa     = -1.0f;
         env_cache_.baseplate_temp_c = -1.0f;
@@ -1227,10 +1228,13 @@ void McuLink::on_sensor_report(const serial_sensor_report_t& report)
             env_cache_.powder_bits = static_cast<uint8_t>(
                 ((report.powder_left_low == 0) ? 0x01u : 0u) |
                 ((report.powder_right_low == 0) ? 0x02u : 0u));
+            /* V4 1ST oxygen_percent = 滤芯氧；舱内氧由 SOC 填 */
+            env_cache_.filter_oxygen_percent = report.oxygen_percent;
             /* 温湿度/舱压/PM 由 SOC 填 */
             merge_soc_env_into_cache_locked();
         } else {
             env_cache_.oxygen_percent = report.oxygen_percent;
+            env_cache_.filter_oxygen_percent = -1.0f;
             env_cache_.pm25_cabin = report.pm25_ug_m3;
             env_cache_.pm25_indoor = report.pm25_ug_m3;
             env_cache_.pm1_indoor = report.pm1_ug_m3;
@@ -1742,6 +1746,8 @@ void McuLink::publish_debug_sensor_ntf(const serial_sensor_report_t& report)
         : static_cast<uint8_t>(middleware::DebugPowderStatus::Fault);
 
     if(report.layout == SERIAL_SENSOR_LAYOUT_V4 || mcu_sensor_protocol_v4()) {
+        /* 1ST 的 oxygen 即滤芯氧；舱内氧改用 SOC */
+        p.filter_oxygen_percent = report.oxygen_percent;
         const SocEnvSample soc = SocSensors::instance().snapshot();
         p.oxygen_percent = (soc.oxygen_percent >= 0.f) ? soc.oxygen_percent : -1.f;
         p.pressure_kpa = (soc.pressure1_kpa > 0.f)
@@ -1752,6 +1758,8 @@ void McuLink::publish_debug_sensor_ntf(const serial_sensor_report_t& report)
         p.humidity_pct = soc.humidity_percent;
         p.cabin_temp_c = soc.temperature_c;
     } else {
+        /* 旧固件无滤芯氧；Env Sim 用同一路读数填列，便于顶栏联调 */
+        p.filter_oxygen_percent = env_sim_on_.load() ? report.oxygen_percent : -1.0f;
         p.pressure_kpa     = static_cast<float>(report.pressure1_x10_kpa) / 10.0f;
         p.pm25             = report.pm25_ug_m3;
         p.pm25_cabin       = report.pm25_ug_m3; /* 旧固件单路：舱内外同值便于对照 */
@@ -1772,6 +1780,7 @@ void McuLink::publish_debug_sensor_invalid_ntf()
 {
     middleware::DebugSensorPayload p{};
     p.oxygen_percent   = -1.0f;
+    p.filter_oxygen_percent = -1.0f;
     p.pressure_kpa     = -1.0f;
     p.pm25             = -1.0f;
     p.humidity_pct     = -1.0f;
@@ -1805,6 +1814,7 @@ void McuLink::publish_debug_sensor_from_soc_and_cache()
     } else {
         p.oxygen_percent = -1.0f;
     }
+    p.filter_oxygen_percent = snap.filter_oxygen_percent;
     if(mcu_1st_seen_.load()) {
         p.baseplate_temp_c = snap.baseplate_temp_c;
         /* V4 powder_bits：两匣都有粉 → Available；否则 Fault */
@@ -1936,6 +1946,7 @@ void McuLink::poll_env_sim_tick()
         env_cache_.pm10_indoor      = fake.pm10_ug_m3;
         env_cache_.temperature_c    = fake.temperature_c;
         env_cache_.oxygen_percent   = fake.oxygen_percent;
+        env_cache_.filter_oxygen_percent = fake.oxygen_percent;
         env_cache_.humidity_percent = fake.humidity_percent;
         env_cache_.pressure_kpa     = static_cast<float>(fake.pressure1_x10_kpa) / 10.0f;
         env_cache_.baseplate_temp_c = fake.substrate_temp_c;

@@ -84,7 +84,7 @@ lv_obj_t *g_laser_type_lbl      = nullptr;      /**< 激光器类型显示区（
 lv_obj_t *g_laser_current_lbl   = nullptr;      /**< 电流读数 */
 uint8_t   g_laser_type_code     = 0;            /**< 最近一次上报的激光器型号（0=未知 1=JFSC 2=AL） */
 
-lv_obj_t *g_sensor_val[8] = { nullptr };
+lv_obj_t *g_sensor_val[9] = { nullptr };
 lv_obj_t *g_axis_pos[3]   = { nullptr };
 lv_obj_t *g_axis_step[3]  = { nullptr };   /**< 点击距离/速度输入（按 tab 复用） */
 lv_obj_t *g_axis_ctrl[3]  = { nullptr };   /**< 控制区容器（按子 tab 重建） */
@@ -395,7 +395,7 @@ lv_obj_t *make_sensor_cell(lv_obj_t *parent, const char *caption, int idx)
     lv_label_set_text(val, "--");
     lv_obj_set_style_text_color(val, user_color_text, 0);
     lv_obj_set_style_text_font(val, user_font_text(), 0);
-    if(idx >= 0 && idx < 8) {
+    if(idx >= 0 && idx < 9) {
         g_sensor_val[idx] = val;
     }
     return cell;
@@ -412,11 +412,11 @@ lv_obj_t *build_sensor_strip(lv_obj_t *parent)
     lv_obj_set_style_pad_ver(strip, USER_PAD_SM, 0);
     lv_obj_set_style_pad_hor(strip, 0, 0);
 
-    const char *caps[8] = {
-        "Oxygen", "Pressure", "PM Out", "Humidity",
+    const char *caps[9] = {
+        "Oxygen", "Filter O2", "Pressure", "PM Out", "Humidity",
         "Cabin Temp", "Plate Temp", "PM Cabin", "Powder",
     };
-    for(int i = 0; i < 8; i++) {
+    for(int i = 0; i < 9; i++) {
         make_sensor_cell(strip, caps[i], i);
     }
     return strip;
@@ -2354,19 +2354,20 @@ void bind_debug_callbacks()
             lv_label_set_text_fmt(lbl, fmt_with_unit, static_cast<double>(v));
         };
         set_metric(g_sensor_val[0], p.oxygen_percent, "%.1f%%");
-        set_metric(g_sensor_val[1], p.pressure_kpa, "%.1f");
-        set_metric(g_sensor_val[2], p.pm25, "%.1f");
-        set_metric(g_sensor_val[3], p.humidity_pct, "%.1f%%");
-        set_metric(g_sensor_val[4], p.cabin_temp_c, "%.1f");
-        set_metric(g_sensor_val[5], p.baseplate_temp_c, "%.1f");
-        set_metric(g_sensor_val[6], p.pm25_cabin, "%.1f");
-        if(g_sensor_val[7]) {
+        set_metric(g_sensor_val[1], p.filter_oxygen_percent, "%.1f%%");
+        set_metric(g_sensor_val[2], p.pressure_kpa, "%.1f");
+        set_metric(g_sensor_val[3], p.pm25, "%.1f");
+        set_metric(g_sensor_val[4], p.humidity_pct, "%.1f%%");
+        set_metric(g_sensor_val[5], p.cabin_temp_c, "%.1f");
+        set_metric(g_sensor_val[6], p.baseplate_temp_c, "%.1f");
+        set_metric(g_sensor_val[7], p.pm25_cabin, "%.1f");
+        if(g_sensor_val[8]) {
             if(p.powder_status == 0xFF) {
-                lv_label_set_text(g_sensor_val[7], "--");
+                lv_label_set_text(g_sensor_val[8], "--");
             } else {
                 const char *txt = (p.powder_status == 0) ? "OK"
                                 : (p.powder_status == 1) ? "Busy" : "Fault";
-                lv_label_set_text(g_sensor_val[7], txt);
+                lv_label_set_text(g_sensor_val[8], txt);
             }
         }
     });
@@ -2741,7 +2742,7 @@ void reset_globals()
     g_galvo_center_y = 0.0;
     g_galvo_saved_x = 0.0;
     g_galvo_saved_y = 0.0;
-    for(int i = 0; i < 8; i++) g_sensor_val[i] = nullptr;
+    for(int i = 0; i < 9; i++) g_sensor_val[i] = nullptr;
     for(int i = 0; i < 3; i++) {
         g_axis_pos[i] = g_axis_step[i] = g_axis_ctrl[i] = nullptr;
         g_axis_mode[i] = 0;
