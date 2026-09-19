@@ -291,7 +291,7 @@ UI 上必须恒定同一种观感，否则后端改个字段卡片就换色了�
 SVG 的，那样没法按未读数开关。
 
 **后端还没实现 `GLAVO_Device_Event_Ntf` 的发布**，接好的回调目前收不到任何消息。
-要验「超过两条 + 查看剩余 N 条」这条路径，用调试页 Other → Other Switches → `Msg Inject`
+要验「超过两条 + 查看剩余 N 条」这条路径，用调试页 Other → Inject → `Msg Inject`
 （造 4 条假消息：1 条 critical + 3 条 info）。
 
 ### 通知徽标配色（消息页列表 + 左下浮层共用）
@@ -416,8 +416,13 @@ ACTIVE + OWNER_TASK 这一档最容易漏：激光器 1301、各轴 1203~1230 �
 - 已在表里的条目只校正生命周期（ACTIVE ↔ RTN_LATCHED），
   `severity` / `clear_mode` / `detail` 保持单条上报给的值——那才是权威数据；
 - **快照在途时到达的 CONDITION 单报先攒着**（`g_pending`，上限 16 条），等快照原子提交后
-  按序重放。快照是「请求那一刻」的状态，暂存的单报都比它新，不压在快照之上就会被盖回去，
-  界面出现状态回退（快照指导 §11）。EVENT 不进这个队列，它不改 CONDITION 状态。
+  按序重放；**同时立刻 `on_alarm_condition` 上屏**（灯效板已按单报变色，浮层不应等 MCU
+  回齐）。提交时反向清理会跳过仍在 `g_pending` 里的 code，避免「先撤卡再重放」闪一下。
+  快照是「请求那一刻」的状态，暂存的单报都比它新，不压在快照之上就会被盖回去
+  （快照指导 §11）。EVENT 不进这个队列，它不改 CONDITION 状态。
+- **攒帧 2s 超时由 oneshot 定时器主动触发**（`g_snap_assemble_timer`），不再只靠「下一帧
+  快照 / 下一轮请求」被动检查；MCU 忙着起印握手时迟迟不回，也不会把 pending 单报卡到
+  30s 轮询。
 
 打印融合（停机类报警未复位时 MCU 拒绝新打印，只回一条给不出原因的 EVENT 2003
 `PRINT_START_DENIED`）：
@@ -547,7 +552,7 @@ ACTIVE + OWNER_TASK 这一档最容易漏：激光器 1301、各轴 1203~1230 �
 **假报警还不落盘**：`history_save()` 跳过 `simulated` 条目，重启即净，不用再手删
 `/userdata/messages/alarm_history.jsonl`。同一个码后来收到真报文会自动摘掉 `[SIM]`。
 
-联调：MCU 不发真报警时用调试页 Other → Other Switches → `Alarm Inject`
+联调：MCU 不发真报警时用调试页 Other → Inject → `Alarm Inject`
 （`ui_alarm_debug_inject()` 绕过总线直走上报路径，造 6 条假报警：1124 阻断 /
 1104 RTN_LATCHED / 1101 自动清除 / 2000 EVENT 四条显示路径，外加 1003 一条
 critical 把 information/warning/error/critical 四档等级配色凑齐——等级不进字典、
@@ -711,7 +716,7 @@ pending 自动解除——正好顺带验超时路径。
 | `user_control` | `page_user_control.*` | 控制面板 + 更多控制（页内两视图）。见下方「控制页」一节 |
 | `user_settings` | `page_user_settings.*` | 设置列表 + Display 背光滑条 + 开发者密码弹窗 |
 | `user_message` | `page_user_message.*` | 消息中心：日期分组混排列表（MCU 报警 + 设备事件）+ 初始 10 条与底部 Load More + 左滑删除历史 + 管理态批量删除 + 详情抽屉（Reset 三态）。按稿 3033:5247 / 3063:7338 / 3201:9570 / 5380:28971 实现 |
-| `user_debug` | `page_user_debug.*` | 调试控制台；Move 页振镜卡 Abs X/Y + Move 走 `send_galvo_abs_pos`；Other 页 `Galvo Point Test` 按当前校准表依次显示中心和四角红光点，与正式打印及 Test image 双向互斥 |
+| `user_debug` | `page_user_debug.*` | 调试控制台；Move 页振镜卡 Abs X/Y + Move 走 `send_galvo_abs_pos`；Other 页按 Process / Cabin / Print Gates / Media & Sim / Inject 分组。`Galvo Point Test` 在 Print Gates，按当前校准表依次显示中心和四角红光点，与正式打印及 Test image 双向互斥。O2 Calib 在左列：输入参考浓度后点圆钮写 `/userdata/CAL/o2_cal.json`；失败 toast 提示、标签仍显示原 K |
 | `user_timelapse` | `page_user_timelapse.*` | 延时摄影播放器（隐藏页，历史缩略图进入；全屏 `lv_layer_top`） |
 
 注册仅在 `ui_app.cpp`；打印流程走 `control_*`，pages 不直接订阅 MsgBus。详见 `lib/pages/README.md`。
@@ -995,7 +1000,7 @@ Glavo Print_Terminate_Rsp / 进度 100% → control.cpp finish_printing()
 ### 转运盒流程（稿 3171:7305 / 3225:10476 / 3225:13586 / 4811:6178+6191）
 
 滑动取件开门之后、关门确认之前的一段：把工件转移进转运盒再取下。默认**不启用**，由调试页
-`Other` → `Other Switches` → `Transfer Box` 打开（`control_set_transfer_box_flow()`，纯 UI
+`Other` → `Print Gates` → `Transfer Box` 打开（`control_set_transfer_box_flow()`，纯 UI
 本地标志，不发消息也不落盘，重启回到关闭）。
 
 ```
@@ -1526,7 +1531,7 @@ caption_sm 12 行高 17、内距 11、图标 26）指标卡要 118、组合卡�
 - **稿全中文，实现全英文**（Montserrat；CJK 子集只覆盖调试测试页）。术语一律沿用调试页
   已有的串：`Print Plane Height (Z)` / `Powder Scraper (S)` / `Powder Bucket Rod (D)`、
   `Click move` / `Long-press`、`Print Params` / `Layer (um)` / `Balance` / `Send`、
-  `Fan` / `Duty`、`Other Switches` / `Sieve Motor` / `Inner Door` / `Gas Wash` / `Base Heat`、
+  `Fan` / `Duty`、Other 页 `Process` / `Sieve Motor` / `Inner Door` / `Gas Wash` / `Base Heat`、
   `Filter` / `Material`（后两个取自 `control.cpp` 的 supply bar，**耗材是 Material 不是
   Consumable**）。**稿上 S 轴标题写的是「打印平面高度（S轴）」，那是把 Z 卡标题复制过去
   忘改了**——S 轴实际是铺粉刮刀，按调试页取 `Powder Scraper (S)`，别照稿改回去。

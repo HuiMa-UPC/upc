@@ -17,7 +17,7 @@
 | `lib/height_calibration.*` | 调试页高度校准（关舱灯 + Red_On → 回零先下降 20mm → 写 LUT → 开舱灯，红光保持） |
 | `lib/plate_height_measure.*` | 打印前两步测高调 Z（开关默认关；光路之后；回零先下降 20mm；开始再发关灯，结束不开舱灯） |
 | `lib/galvo_motion_encode.*` | 调试运动包编码 + 五点坐标（点位测试与光路检测共用） |
-| `lib/soc_sensors.*` | SOC 本地：舱内外 PMSA UART、AHT20（≥2s）、双路 CPM121、IIO 氧气（须 `/run/o2_ready`；raw 单位 nV→V，100Ω/K≈655）；MCU≥V4（或已收到 Len=15）可开周期采集。六路舱灯默认全开仅固件 major≥4。开阀采样仅固件 major≥4。六路舱灯/`fa_valve` sysfs 调试可随时写；业务采样结束强制关阀。背光不在本模块。 |
+| `lib/soc_sensors.*` | SOC 本地：舱内外 PMSA UART、AHT20（≥2s）、双路 CPM121、IIO 氧气（须 `/run/o2_ready`；raw 单位 nV→V，100Ω；K 读 `/userdata/CAL/o2_cal.json` 缺省≈655）；MCU≥V4（或已收到 Len=15）可开周期采集。六路舱灯默认全开仅固件 major≥4。开阀采样仅固件 major≥4。六路舱灯/`fa_valve` sysfs 调试可随时写；业务采样结束强制关阀。背光不在本模块。 |
 | `lib/spi_status_led.*` | V4：`/dev/spidev1.0` 灯效板 40 颗 WS 单色。CONDITION+ACTIVE 红，`print_running_` 橙，空闲蓝。 |
 | `lib/device_config.hpp` | TCP/串口默认、换层/Layer Snap 开关、`GLAVO_TEST_GCODE_PATH`、PM UART/`fa_valve`/`lgt*` 路径宏 |
 | `lib/mcu_ota_session.*` | Galvo 以太网 OTA：扫描 `/userdata/image/galvo` 最高版本 AB 对 |
@@ -62,14 +62,15 @@ UI → GlavoService（工作线程）→ ParserManager → RingBuffer → McuLin
 | `UI_PM25_Req` / 门控 Req | 旧固件：环境快照；**仅 MCU 固件 major≥4**：独立线程开 `fa_valve` 采 3s 舱内平均后回 `APP_PM25_Rsp`（不堵 worker）。版本未到不开阀 |
 | `UI_Debug_Soc_Led_Set_Ntf` / `Get` | 六路舱灯 `lgt1l`…`lgt3r` sysfs，不看 MCU 版本 |
 | `UI_Debug_Cabin_Pm_Valve_Set_Ntf` / `Get` | 舱内 PM `fa_valve`，不看 MCU 版本；业务采样结束**强制关阀**并回读 Off |
+| `UI_Debug_O2_Calib_Req` / `Get_Ntf` | 单点标定 K（参考浓度由 UI 输入）→ `/userdata/CAL/o2_cal.json`；Req 只回 `GLAVO_Debug_O2_Calib_Rsp`（SocSensors 独立线程采样，不堵 worker）；Get 回 `Ntf`；打印/测高/测试中拒绝 |
 | `UI_Alarm_Reset_Ntf` | `serial_build_alarm_reset` 组 0xA3/0x82 帧直发串口；结果不回 Rsp，以 MCU 后续单条上报为准 |
 
 ### MCU V4 传感器
 
 - **1ST（TLV 0x02）**：Tlv-Len=15 为 V4 重排（O2/滤芯气压/基板/NTC/开关/红外）；Len 13/21 为旧布局。粉量缺粉看 OUTL/OUTR；发给 UI 的 `powder_bits` 低 2 位为「左/右匣仍有粉」。
 - **EXT（TLV 0x06）**：电气量+风机，须固件 major≥4 才消费（当前仅日志）。
-- **SOC 采集**：舱外常显 PM、舱内 PM（阀开窗口可信）、AHT20 温湿度（最短 2s）、CPM121 气压、IIO 氧气（须 `/run/o2_ready` 后读 `in_voltage0_raw`；本板无 scale，raw 为 nV → V=raw×1e−9，I[uA]=V/100×1e6，O2%=100×(1−e^(−I/K))，空气标定 K≈655）。首页 `pm25_indoor` 在 V4 下为舱外 PMSA。Len=15 可提前开周期采集，但**开阀采样与舱灯默认全开仍等版本 major≥4**（旧板无阀/无此默认）。固件 major≥4 首次确认后六路舱灯 `lgt1l`…`lgt3r` 写 1 全开（调试页仍可单独关）。
-- **V4 打印氧门（SOC）**：MCU 串口 `PRINT_CONDITION_OK`（`5A A5 BB A4 01 … 02`）之后，须 SOC 氧 **&lt; `GLAVO_O2_PRINT_MAX_PERCENT`（默认 0.8%）** 才发 `PRINT_START`；打印中氧 **≥ 0.8%** TCP 暂停并合成报警 **1120**（`GLAVO_Alarm_Report_Ntf`，AUTO），回落 **≤ `GLAVO_O2_PRINT_RESUME_PERCENT`（0.7%）** 自动恢复。Env Sim / 测试图 / 调试页 **Skip O2 Gate**（默认关，仅本次运行）跳过。`o2_hold_` 期间不判自然完成。MCU 快照在 Glavo 攒齐后若缺 slot3 则补 bit20（count+1），全零快照改为只发 slot3，避免 UI 对齐把 1120 清掉。
+- **SOC 采集**：舱外常显 PM、舱内 PM（阀开窗口可信）、AHT20 温湿度（最短 2s）、CPM121 气压、IIO 氧气（须 `/run/o2_ready` 后读 `in_voltage0_raw`；本板无 scale，raw 为 nV → V=raw×1e−9，I[uA]=V/100×1e6，O2%=100×(1−e^(−I/K))）。**K** 优先读 `/userdata/CAL/o2_cal.json`（调试页 **O2 Calib**：输入参考浓度后一键标定，启动加载、标定后立即生效）；缺文件回退出厂默认 `GLAVO_O2_K`≈655。首页 `pm25_indoor` 在 V4 下为舱外 PMSA。Len=15 可提前开周期采集，但**开阀采样与舱灯默认全开仍等版本 major≥4**（旧板无阀/无此默认）。固件 major≥4 首次确认后六路舱灯 `lgt1l`…`lgt3r` 写 1 全开（调试页仍可单独关）。
+- **V4 打印氧门（SOC）**：MCU 串口 `PRINT_CONDITION_OK`（`5A A5 BB A4 01 … 02`）之后：氧门开启时 SOC 发洗气开（`0xA1/0x86` ON）并须 SOC 氧 **&lt; `GLAVO_O2_PRINT_MAX_PERCENT`（默认 0.8%）** 才发 `PRINT_START`；等氧期间氧高同样合成报警 **1120**（不 TCP 暂停）。打印中氧 **≥ 0.8%** TCP 暂停并合成 **1120**（`GLAVO_Alarm_Report_Ntf`，AUTO），回落 **≤ `GLAVO_O2_PRINT_RESUME_PERCENT`（0.7%）** 自动恢复。终止/`PRINT_FINISHED` 时若本作业 SOC 开过阀则发洗气关。Env Sim / 测试图 / 调试页 **Skip O2 Gate**（默认关，仅本次运行）跳过：不起印洗气开、不等氧、打印中不因氧暂停。`o2_hold_` 期间不判自然完成。MCU 快照在 Glavo 攒齐后若缺 slot3 则补 bit20（count+1），全零快照改为只发 slot3，避免 UI 对齐把 1120 清掉。
 - **SPI 灯效板（major≥4）**：`SpiStatusLed` 写 `/dev/spidev1.0`。红=MCU CONDITION 且 ACTIVE；橙=Confirm 后的打印会话；否则蓝。EVENT / 仅 latched 不红。无设备只 Warn 一次。
 - **SOC→UI 推送（major≥4 / Len=15）**：`poll_soc_env_tick` 每 500ms 独立 `publish_async` `APP_Update_Ntf` + `GLAVO_Debug_Sensor_Ntf`，**不依赖** MCU 1ST。MCU 仍负责基板/粉量/门等；未收到 1ST 前这些字段顶栏显示 `--`。旧固件（major < 4）仍只随 MCU 0x9B 推送。V4 下 MQTT `telemetry/chamber` 用 SOC 舱内 PM/温湿/气压/氧，`telemetry/chamber_ext` 上报舱外 PM；无效氧发 `null` 不夹成 0。
 - **开门前清粉（固件 major≥4 且真实门控开）**：风机固定吹 10s → 关风机 → 开阀 3s 平均后关阀；仍超标则循环。

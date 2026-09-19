@@ -29,7 +29,7 @@ const ui_alarm_catalog_entry_t kAlarms[] = {
     { 1108, "LEFT_POWDER_TYPE_MISMATCH", "Left powder type mismatch", "The left powder bucket type does not match the job.", 3, 0, 0, 0 },
     { 1109, "RIGHT_POWDER_TYPE_MISMATCH", "Right powder type mismatch", "The right powder bucket type does not match the job.", 3, 0, 0, 0 },
     { 1110, "WSASTE_POWDER_TYPE_MISMATCH", "Waste powder type mismatch", "The waste bucket type does not match.", 3, 0, 0, 0 },
-    { 1120, "CHAMBER_OXYGEN_HIGH", "Chamber oxygen too high", "Oxygen level is too high while printing. Printing is paused.", 2, 0, 0, 0 },
+    { 1120, "CHAMBER_OXYGEN_HIGH", "Chamber oxygen too high", "Oxygen level is too high. Printing waits or pauses until it drops.", 2, 0, 0, 0 },
     { 1121, "CHAMBER_PRESSURE_HIGH", "Chamber pressure too high", "Chamber pressure is above the limit.", 3, 0, 0, 0 },
     { 1122, "CHAMBER_PRESSURE_LOW", "Chamber pressure too low", "Chamber pressure is below the limit.", 3, 0, 0, 0 },
     { 1124, "PRINT_STEP_TIMEOUT", "Print step timeout", "A print step timed out and the job was aborted. Reset required.", 3, 1, 0, 0 },

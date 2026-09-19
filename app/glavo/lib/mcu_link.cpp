@@ -274,7 +274,8 @@ void serial_log_rx_frame(const uint8_t* frame, size_t len)
  *
  * 仅在 GLAVO_ENABLE_LAYER_CHANGE 开启时有效：
  * - NONE：无需握手或已完成
- * - WAIT_CONDITION_OK：已发打印请求，等待 MCU 打印条件就绪；V4 另须 SOC 氧 < 阈值
+ * - WAIT_CONDITION_OK：已发打印请求，等待 MCU 打印条件就绪；
+ *   V4 氧门开启时另发洗气开并等 SOC 氧 < 阈值；Skip O2 / EnvSim / 测试图跳过洗气与等氧
  * - WAIT_PRINT_READY：已发首层/换层参数，等待 MCU 返回准备就绪
  */
 enum SerialHandshakePhase : int {
@@ -2806,6 +2807,8 @@ void McuLink::reset_motion_state(bool clear_start_pending)
     serial_evt_condition_ok_.store(false);
     serial_evt_print_ready_.store(false);
     o2_hold_.store(false);
+    /* 兜底：终止/完成路径已关阀；其它 reset 入口也勿让洗气阀挂着 */
+    close_print_gas_wash_if_opened();
     if(o2_alarm_active_) {
         publish_soc_chamber_oxygen_alarm(false);
     }
@@ -2827,6 +2830,7 @@ void McuLink::begin_sending_internal()
         publish_soc_chamber_oxygen_alarm(false);
     }
     last_o2_wait_log_ = {};
+    gas_wash_opened_by_soc_.store(false);
     is_sending_.store(true);
     waiting_layer_.store(false);
     layer_drain_pending_.store(false);
@@ -3240,6 +3244,44 @@ void McuLink::send_serial_print_finished()
 #endif
 }
 
+void McuLink::send_serial_gas_wash(bool on)
+{
+    if(serial_fd_ < 0) {
+        return;
+    }
+    uint8_t sbuf[SERIAL_DEBUG_MAX_FRAME];
+    const int slen = serial_debug_build_switch(1u, on, sbuf, sizeof(sbuf));
+    if(slen <= 0) {
+        UPC_LOG_MCU_LINK(Warn, "serial gas wash build failed on=%d", on ? 1 : 0);
+        return;
+    }
+    UPC_LOG_MCU_LINK_TO(SerialLayer, Info, "serial TX cmd: GAS_WASH_%s",
+                        on ? "ON" : "OFF");
+    /* 开阀走可靠发送，避免洗气未开就 PRINT_START；关阀尽力发出即可 */
+    if(on) {
+        serial_send_aa_reliable(sbuf, static_cast<size_t>(slen), true);
+    } else {
+        serial_send_aa_reliable(sbuf, static_cast<size_t>(slen), false);
+    }
+}
+
+void McuLink::ensure_print_gas_wash_on()
+{
+    if(gas_wash_opened_by_soc_.load()) {
+        return;
+    }
+    send_serial_gas_wash(true);
+    gas_wash_opened_by_soc_.store(true);
+}
+
+void McuLink::close_print_gas_wash_if_opened()
+{
+    if(!gas_wash_opened_by_soc_.exchange(false)) {
+        return;
+    }
+    send_serial_gas_wash(false);
+}
+
 /* ---------- 终止/完成清理流程 ---------- */
 
 bool McuLink::run_manual_terminate_cleanup()
@@ -3256,6 +3298,7 @@ bool McuLink::run_manual_terminate_cleanup()
     // 1. 向振镜发 0x0A(Stop=1) 终止指令，向 MCU 发终止通知
     send_tcp_reset();
     send_serial_print_terminate();
+    close_print_gas_wash_if_opened();
 
     // 2. 停止解析、清空 RingBuffer 与 stage 队列
     parser::ParserManager::instance().stop_parse();
@@ -3304,6 +3347,7 @@ void McuLink::run_natural_complete_cleanup()
         link_try_final_layer_snap();
         send_serial_print_finished();
     }
+    close_print_gas_wash_if_opened();
 
     // 2. 先清发送态，再发 TCP 0x0A(Stop=1)（避免 is_sending 时断线误触发 terminate）
     reset_motion_state(true);
@@ -3329,20 +3373,25 @@ void McuLink::link_process_serial_handshake()
 
     const int phase = serial_handshake_phase_.load();
 
-    // 阶段一：MCU PRINT_CONDITION_OK 后；V4 还须 SOC 氧 < 阈值才发 PRINT_START
+    // 阶段一：MCU PRINT_CONDITION_OK 后
+    //   - 氧门开：SOC 发洗气开，等氧 < 阈值再 PRINT_START
+    //   - Skip O2 / EnvSim / 非 V4：不发洗气开，直接 PRINT_START
     if(phase == SERIAL_HS_WAIT_CONDITION_OK &&
        serial_evt_condition_ok_.load()) {
         if(soc_o2_print_gate_enabled()) {
+            ensure_print_gas_wash_on();
             float o2 = -1.f;
             const bool o2_ok = read_print_o2_percent(&o2) &&
                                o2 < GLAVO_O2_PRINT_MAX_PERCENT;
             if(!o2_ok) {
+                /* 起印尚未开扫，不做 TCP 暂停；仍发 1120 让 UI 提示氧高。 */
+                publish_soc_chamber_oxygen_alarm(true);
                 const auto now = std::chrono::steady_clock::now();
                 if(last_o2_wait_log_.time_since_epoch().count() == 0 ||
                    now - last_o2_wait_log_ >= std::chrono::seconds(5)) {
                     last_o2_wait_log_ = now;
                     UPC_LOG_MCU_LINK_TO(SerialLayer, Info,
-                        "wait SOC O2 < %.2f%% before PRINT_START (now=%s%.2f%%)",
+                        "gas wash on; wait SOC O2 < %.2f%% before PRINT_START (now=%s%.2f%%)",
                         static_cast<double>(GLAVO_O2_PRINT_MAX_PERCENT),
                         (o2 >= 0.f) ? "" : "invalid/",
                         static_cast<double>((o2 >= 0.f) ? o2 : -1.f));
@@ -3350,10 +3399,18 @@ void McuLink::link_process_serial_handshake()
                 return;
             }
             last_o2_wait_log_ = {};
+            publish_soc_chamber_oxygen_alarm(false);
             UPC_LOG_MCU_LINK_TO(SerialLayer, Info,
                 "SOC O2 gate pass: %.2f%% < %.2f%%, send PRINT_START",
                 static_cast<double>(o2),
                 static_cast<double>(GLAVO_O2_PRINT_MAX_PERCENT));
+        } else {
+            UPC_LOG_MCU_LINK_TO(SerialLayer, Info,
+                "O2 gate skipped (skip=%d env_sim=%d test=%d v4=%d): no gas wash, PRINT_START",
+                skip_o2_print_gate_.load() ? 1 : 0,
+                env_sim_on_.load() ? 1 : 0,
+                test_image_motion_.load() ? 1 : 0,
+                mcu_sensor_protocol_v4() ? 1 : 0);
         }
         serial_evt_condition_ok_.store(false);
         uint8_t sbuf[32];

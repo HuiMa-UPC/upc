@@ -102,6 +102,19 @@ void DebugMsgProxy::init()
             }
         }));
 
+    auto on_o2_calib = [this](const middleware::Message& msg) {
+        middleware::DebugO2CalibRspPayload p{};
+        if(o2_calib_cb_ && read_inline_pod(msg, p)) {
+            o2_calib_cb_(p);
+        }
+    };
+    subs_.push_back(bus.subscribe(
+        middleware::MsgType::GLAVO_Debug_O2_Calib_Rsp, middleware::ModuleId::UI,
+        on_o2_calib));
+    subs_.push_back(bus.subscribe(
+        middleware::MsgType::GLAVO_Debug_O2_Calib_Ntf, middleware::ModuleId::UI,
+        on_o2_calib));
+
     subs_.push_back(bus.subscribe(
         middleware::MsgType::GLAVO_Debug_FirstLayer_Visual_Check_Ntf, middleware::ModuleId::UI,
         [this](const middleware::Message& msg) {
@@ -430,6 +443,18 @@ void DebugMsgProxy::request_skip_o2_gate_state()
     publish_empty(middleware::MsgType::UI_Debug_Skip_O2_Gate_Get_Ntf);
 }
 
+void DebugMsgProxy::send_o2_calib(float ref_o2_percent)
+{
+    middleware::DebugO2CalibReqPayload p{};
+    p.ref_o2_percent = ref_o2_percent;
+    publish_pod(middleware::MsgType::UI_Debug_O2_Calib_Req, p);
+}
+
+void DebugMsgProxy::request_o2_calib_state()
+{
+    publish_empty(middleware::MsgType::UI_Debug_O2_Calib_Get_Ntf);
+}
+
 void DebugMsgProxy::send_first_layer_visual_check_set(bool on)
 {
     middleware::DebugOnOffPayload p{};
@@ -565,6 +590,11 @@ void DebugMsgProxy::register_env_sim_powder(DebugEnvSimPowderCb cb)
 void DebugMsgProxy::register_skip_o2_gate(DebugSkipO2GateCb cb)
 {
     skip_o2_gate_cb_ = std::move(cb);
+}
+
+void DebugMsgProxy::register_o2_calib(DebugO2CalibCb cb)
+{
+    o2_calib_cb_ = std::move(cb);
 }
 
 void DebugMsgProxy::register_first_layer_visual_check(DebugFirstLayerVisualCheckCb cb)
