@@ -494,7 +494,7 @@ enum class MsgType : uint32_t {
     UI_Debug_O2_Calib_Get_Ntf,          /**< Empty：查询当前氧标定 K（不重新采样） */
 
     // ---- GLAVO → UI：调试页状态回读（按模块拆分） ----
-    GLAVO_Debug_Sensor_Ntf = 0x1200, /**< DebugSensorPayload：调试顶栏传感器（含舱外/舱内 PM） */
+    GLAVO_Debug_Sensor_Ntf = 0x1200, /**< DebugSensorPayload：调试顶栏传感器（舱内/滤芯氧 + 舱外/舱内 PM） */
     GLAVO_Debug_Axis_Ntf,           /**< DebugAxisStatePayload：Z/S/D 位置 + Z 工作坐标 */
     GLAVO_Debug_Device_Ntf,         /**< DebugDeviceStatePayload：设备/门/电机/照明 */
     GLAVO_Debug_Galvo_Ntf,          /**< DebugGalvoStatePayload：振镜 X/Y */
@@ -1560,14 +1560,15 @@ struct DebugLaserStatePayload {
 
 /** GLAVO_Debug_Sensor_Ntf：顶部传感器快照（舱外/舱内 PM 分列，便于联调读数） */
 struct DebugSensorPayload {
-    float   oxygen_percent;
+    float   oxygen_percent;          /**< 舱内氧 %（V4=SOC IIO；旧=MCU 1ST）；无效 <0 */
     float   pressure_kpa;
-    float   pm25;            /**< 舱外/常显 PM2.5；旧固件与舱内同源；无效 <0 */
+    float   pm25;                    /**< 舱外/常显 PM2.5；旧固件与舱内同源；无效 <0 */
     float   humidity_pct;
     float   cabin_temp_c;
     float   baseplate_temp_c;
-    float   pm25_cabin;      /**< 舱内 PM2.5（V4=SOC 舱内 UART，阀关时可能无效）；无效 <0 */
-    uint8_t powder_status;   /**< DebugPowderStatus；0xFF=无效显示 "--" */
+    float   pm25_cabin;              /**< 舱内 PM2.5（V4=SOC 舱内 UART，阀关时可能无效）；无效 <0 */
+    float   filter_oxygen_percent;   /**< 滤芯氧 %（V4 MCU 1ST value[0..1]）；旧固件无此路，无效 <0 */
+    uint8_t powder_status;           /**< DebugPowderStatus；0xFF=无效显示 "--" */
     uint8_t reserved[3];
 };
 
