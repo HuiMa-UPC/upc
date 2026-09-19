@@ -94,6 +94,15 @@ void DebugMsgProxy::init()
         }));
 
     subs_.push_back(bus.subscribe(
+        middleware::MsgType::GLAVO_Debug_Skip_O2_Gate_Ntf, middleware::ModuleId::UI,
+        [this](const middleware::Message& msg) {
+            middleware::DebugOnOffPayload p{};
+            if(skip_o2_gate_cb_ && read_inline_pod(msg, p)) {
+                skip_o2_gate_cb_(p.on != 0);
+            }
+        }));
+
+    subs_.push_back(bus.subscribe(
         middleware::MsgType::GLAVO_Debug_FirstLayer_Visual_Check_Ntf, middleware::ModuleId::UI,
         [this](const middleware::Message& msg) {
             middleware::DebugOnOffPayload p{};
@@ -409,6 +418,18 @@ void DebugMsgProxy::request_env_sim_powder_state()
     publish_empty(middleware::MsgType::UI_Debug_Env_Sim_Powder_Get_Ntf);
 }
 
+void DebugMsgProxy::send_skip_o2_gate_set(bool on)
+{
+    middleware::DebugOnOffPayload p{};
+    p.on = on ? 1 : 0;
+    publish_pod(middleware::MsgType::UI_Debug_Skip_O2_Gate_Set_Ntf, p);
+}
+
+void DebugMsgProxy::request_skip_o2_gate_state()
+{
+    publish_empty(middleware::MsgType::UI_Debug_Skip_O2_Gate_Get_Ntf);
+}
+
 void DebugMsgProxy::send_first_layer_visual_check_set(bool on)
 {
     middleware::DebugOnOffPayload p{};
@@ -539,6 +560,11 @@ void DebugMsgProxy::register_env_sim(DebugEnvSimCb cb)
 void DebugMsgProxy::register_env_sim_powder(DebugEnvSimPowderCb cb)
 {
     env_sim_powder_cb_ = std::move(cb);
+}
+
+void DebugMsgProxy::register_skip_o2_gate(DebugSkipO2GateCb cb)
+{
+    skip_o2_gate_cb_ = std::move(cb);
 }
 
 void DebugMsgProxy::register_first_layer_visual_check(DebugFirstLayerVisualCheckCb cb)

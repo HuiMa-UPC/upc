@@ -21,7 +21,7 @@
 #endif
 
 #ifndef GLAVO_SERIAL_DEFAULT_DEVICE
-#define GLAVO_SERIAL_DEFAULT_DEVICE  "/dev/ttyS3"
+#define GLAVO_SERIAL_DEFAULT_DEVICE  "/dev/ttyS4"
 #endif
 
 #ifndef GLAVO_SERIAL_DEFAULT_BAUD
@@ -178,7 +178,7 @@
  * 舱外 PMSA003-A
  */
 #ifndef GLAVO_PM_OUTDOOR_UART
-#define GLAVO_PM_OUTDOOR_UART  "/dev/ttyS1"
+#define GLAVO_PM_OUTDOOR_UART  "/dev/ttyS5"
 #endif
 #ifndef GLAVO_PM_VALVE_SYSFS
 #define GLAVO_PM_VALVE_SYSFS  "/sys/class/leds/fa_valve/brightness"
@@ -202,21 +202,47 @@
 #ifndef GLAVO_SOC_LED_LGT3R_SYSFS
 #define GLAVO_SOC_LED_LGT3R_SYSFS  "/sys/class/leds/lgt3r/brightness"
 #endif
-/** 氧传感器：IIO 原始计数 → 3.3V 满幅；I[uA]=V/100Ω×1e6；O2%=100*(1-e^(-I/K)) */
+/** AHT20 最短采样间隔（ms）；驱动/器件约束，小于此间隔不读 hwmon */
+#ifndef GLAVO_AHT20_MIN_INTERVAL_MS
+#define GLAVO_AHT20_MIN_INTERVAL_MS  2000
+#endif
+/**
+ * 氧传感器（IIO 无 in_voltage0_scale）：
+ *   V = raw × GLAVO_O2_RAW_TO_VOLT（raw 单位 nV）
+ *   I[uA] = V / R_sense × 1e6
+ *   O2% = 100 × (1 − e^(−I/K))
+ * 空气标定：raw≈1.54e7 → ~15.4mV → K≈655 对准约 20.9%。
+ */
+#ifndef GLAVO_O2_READY_PATH
+#define GLAVO_O2_READY_PATH  "/run/o2_ready"  /**< S46o2-preheat 约 100s 后创建 */
+#endif
 #ifndef GLAVO_O2_IIO_RAW
 #define GLAVO_O2_IIO_RAW  "/sys/bus/iio/devices/iio:device0/in_voltage0_raw"
 #endif
-#ifndef GLAVO_O2_VREF
-#define GLAVO_O2_VREF  3.3f
-#endif
-#ifndef GLAVO_O2_ADC_MAX
-#define GLAVO_O2_ADC_MAX  1023  /**< RK SARADC 10bit */
+#ifndef GLAVO_O2_RAW_TO_VOLT
+#define GLAVO_O2_RAW_TO_VOLT  1e-9f  /**< nV → V；勿再按 ADC 满幅换算 */
 #endif
 #ifndef GLAVO_O2_RSENSE_OHM
 #define GLAVO_O2_RSENSE_OHM  100.f
 #endif
 #ifndef GLAVO_O2_K
-#define GLAVO_O2_K  480.f  /**< 标定系数；空气标定后可改 */
+#define GLAVO_O2_K  655.f  /**< 空气标定系数；再标定可改 */
+#endif
+/**
+ * V4 打印氧门（SOC IIO；MCU 不再报氧）。
+ * 起印：串口 CONDITION_OK 后须 O2 < MAX 才发 PRINT_START。
+ * 打印中：O2 ≥ MAX 暂停；O2 ≤ RESUME 自动恢复（迟滞防抖）。
+ * Env Sim / 测试图跳过本门控。
+ */
+#ifndef GLAVO_O2_PRINT_MAX_PERCENT
+#define GLAVO_O2_PRINT_MAX_PERCENT  0.8f
+#endif
+#ifndef GLAVO_O2_PRINT_RESUME_PERCENT
+#define GLAVO_O2_PRINT_RESUME_PERCENT  0.7f
+#endif
+/** 与报警字典 CHAMBER_OXYGEN_HIGH 一致；SOC 合成 GLAVO_Alarm_Report_Ntf */
+#ifndef GLAVO_ALARM_CODE_CHAMBER_OXYGEN_HIGH
+#define GLAVO_ALARM_CODE_CHAMBER_OXYGEN_HIGH  1120u
 #endif
 /** SPI 灯效板（WS，40 颗）；仅 MCU≥V4 打开 */
 #ifndef GLAVO_SPI_STATUS_LED_DEV

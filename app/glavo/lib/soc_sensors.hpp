@@ -3,7 +3,7 @@
 
 /**
  * @file soc_sensors.hpp
- * @brief SOC 侧外设：舱内外 PMSA / AHT20 / CPM121 / IIO 氧气 周期采集（MCU≥V4 才轮询）；
+ * @brief SOC 侧外设：舱内外 PMSA / AHT20（≥2s）/ CPM121 / IIO 氧气（须 /run/o2_ready）周期采集（MCU≥V4 才轮询）；
  *        六路舱灯与 fa_valve 为 sysfs 直控，**不看 MCU 版本**（调试页可随时开关）。
  *
  * 背光调节在 UI 进程，不经本模块、也不看 MCU 版本。

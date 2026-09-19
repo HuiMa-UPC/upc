@@ -293,7 +293,8 @@ bool read_cpm121(const char* i2c_dev, float* kpa)
 
 /**
  * IIO raw → 氧浓度 %。
- * V = raw / ADC_MAX * 3.3；I[uA] = V / R_sense × 1e6；O2 = 100*(1-exp(-I/K))。
+ * 本板无 in_voltage0_scale：raw 单位 nV，V = raw × GLAVO_O2_RAW_TO_VOLT；
+ * I[uA] = V / R_sense × 1e6；O2 = 100*(1-exp(-I/K))。
  */
 bool read_o2_percent(float* oxygen_percent)
 {
@@ -301,8 +302,7 @@ bool read_o2_percent(float* oxygen_percent)
     if(!read_text_int(GLAVO_O2_IIO_RAW, &raw) || raw < 0) {
         return false;
     }
-    const float v = (static_cast<float>(raw) / static_cast<float>(GLAVO_O2_ADC_MAX)) *
-                    GLAVO_O2_VREF;
+    const float v = static_cast<float>(raw) * GLAVO_O2_RAW_TO_VOLT;
     if(!(v >= 0.f) || !std::isfinite(v)) {
         return false;
     }
@@ -534,11 +534,19 @@ void SocSensors::poll_once()
         }
     }
 
-    float t = 0, h = 0;
-    if(read_aht20(&t, &h)) {
-        s.temperature_c = t;
-        s.humidity_percent = h;
-        s.valid = true;
+    /* AHT20：最短 2s 一采；间隔内沿用 cache_ 里上一拍温湿度 */
+    static auto last_aht20 = std::chrono::steady_clock::time_point{};
+    const auto now = std::chrono::steady_clock::now();
+    const bool aht20_due = (last_aht20.time_since_epoch().count() == 0) ||
+        (now - last_aht20 >= std::chrono::milliseconds(GLAVO_AHT20_MIN_INTERVAL_MS));
+    if(aht20_due) {
+        float t = 0, h = 0;
+        if(read_aht20(&t, &h)) {
+            s.temperature_c = t;
+            s.humidity_percent = h;
+            s.valid = true;
+            last_aht20 = now;
+        }
     }
 
     float p = 0;
@@ -551,10 +559,17 @@ void SocSensors::poll_once()
         s.valid = true;
     }
 
-    float o2 = 0.f;
-    if(read_o2_percent(&o2)) {
-        s.oxygen_percent = o2;
-        s.valid = true;
+    /* 氧气：预热完成标志 /run/o2_ready 出现后才读 IIO；PM 圈仍 200ms */
+    static bool o2_ready = false;
+    if(!o2_ready) {
+        o2_ready = (::access(GLAVO_O2_READY_PATH, F_OK) == 0);
+    }
+    if(o2_ready) {
+        float o2 = 0.f;
+        if(read_o2_percent(&o2)) {
+            s.oxygen_percent = o2;
+            s.valid = true;
+        }
     }
 
     {

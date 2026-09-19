@@ -224,6 +224,8 @@ const char* upc_msg_type_name(MsgType type) {
         case MsgType::UI_Debug_Soc_Led_Get_Ntf: return "UI_Debug_Soc_Led_Get_Ntf";
         case MsgType::UI_Debug_Cabin_Pm_Valve_Set_Ntf: return "UI_Debug_Cabin_Pm_Valve_Set_Ntf";
         case MsgType::UI_Debug_Cabin_Pm_Valve_Get_Ntf: return "UI_Debug_Cabin_Pm_Valve_Get_Ntf";
+        case MsgType::UI_Debug_Skip_O2_Gate_Set_Ntf: return "UI_Debug_Skip_O2_Gate_Set_Ntf";
+        case MsgType::UI_Debug_Skip_O2_Gate_Get_Ntf: return "UI_Debug_Skip_O2_Gate_Get_Ntf";
         case MsgType::APP_Media_Local_Rtsp_State_Ntf: return "APP_Media_Local_Rtsp_State_Ntf";
         case MsgType::GLAVO_Debug_Sensor_Ntf: return "GLAVO_Debug_Sensor_Ntf";
         case MsgType::GLAVO_Debug_Axis_Ntf: return "GLAVO_Debug_Axis_Ntf";
@@ -240,6 +242,7 @@ const char* upc_msg_type_name(MsgType type) {
         case MsgType::GLAVO_Debug_PlateHeight_Adj_Ntf: return "GLAVO_Debug_PlateHeight_Adj_Ntf";
         case MsgType::GLAVO_Debug_Soc_Led_Ntf: return "GLAVO_Debug_Soc_Led_Ntf";
         case MsgType::GLAVO_Debug_Cabin_Pm_Valve_Ntf: return "GLAVO_Debug_Cabin_Pm_Valve_Ntf";
+        case MsgType::GLAVO_Debug_Skip_O2_Gate_Ntf: return "GLAVO_Debug_Skip_O2_Gate_Ntf";
         case MsgType::UI_Mcu_Version_Ntf: return "UI_Mcu_Version_Ntf";
         case MsgType::GLAVO_Mcu_Version_Ntf: return "GLAVO_Mcu_Version_Ntf";
         case MsgType::APP_Fs_Delete_Rsp: return "APP_Fs_Delete_Rsp";

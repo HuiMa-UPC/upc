@@ -25,8 +25,9 @@ constexpr size_t kBufSize = static_cast<size_t>(kLedNum) * kBytesPerLed + kReset
 constexpr uint32_t kWsHz = 3200000;
 constexpr uint8_t kNib[2] = {0x8, 0xE};
 
-constexpr uint8_t kBlueR = 0, kBlueG = 48, kBlueB = 255;
-constexpr uint8_t kOrangeR = 255, kOrangeG = 96, kOrangeB = 0;
+// constexpr uint8_t kBlueR = 167, kBlueG = 194, kBlueB = 227;
+constexpr uint8_t kBlueR = 30, kBlueG = 30, kBlueB = 30;
+constexpr uint8_t kOrangeR = 255, kOrangeG = 30, kOrangeB = 0;
 constexpr uint8_t kRedR = 255, kRedG = 0, kRedB = 0;
 
 void enc_byte(uint8_t* buf, uint32_t* p, uint8_t v)

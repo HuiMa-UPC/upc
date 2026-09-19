@@ -40,6 +40,7 @@ struct MqttConfig {
     [[nodiscard]] std::string topic_cmd() const;
     [[nodiscard]] std::string topic_cmd_ack() const;
     [[nodiscard]] std::string topic_telemetry_chamber() const;
+    [[nodiscard]] std::string topic_telemetry_chamber_ext() const;
     [[nodiscard]] std::string topic_heartbeat() const;
     [[nodiscard]] std::string topic_state() const;
     [[nodiscard]] std::string topic_ota_notify() const;

@@ -488,6 +488,8 @@ enum class MsgType : uint32_t {
     UI_Debug_Soc_Led_Get_Ntf,           /**< Empty：查询六路舱灯开关状态 */
     UI_Debug_Cabin_Pm_Valve_Set_Ntf,    /**< DebugOnOffPayload：舱内 PM fa_valve，不看 MCU 版本 */
     UI_Debug_Cabin_Pm_Valve_Get_Ntf,    /**< Empty：查询舱内 PM 阀开关状态 */
+    UI_Debug_Skip_O2_Gate_Set_Ntf,      /**< DebugOnOffPayload：跳过 SOC 氧打印门（仅本次运行，默认关） */
+    UI_Debug_Skip_O2_Gate_Get_Ntf,      /**< Empty：查询当前跳过氧门开关状态 */
 
     // ---- GLAVO → UI：调试页状态回读（按模块拆分） ----
     GLAVO_Debug_Sensor_Ntf = 0x1200, /**< DebugSensorPayload：调试顶栏传感器（含舱外/舱内 PM） */
@@ -509,6 +511,7 @@ enum class MsgType : uint32_t {
     GLAVO_Debug_PlateHeight_Adj_Ntf,    /**< DebugOnOffPayload：打印前基板测高调 Z 开关状态 */
     GLAVO_Debug_Soc_Led_Ntf,            /**< DebugSocLedStatePayload：六路舱灯开关位图 */
     GLAVO_Debug_Cabin_Pm_Valve_Ntf,     /**< DebugOnOffPayload：舱内 PM 阀开关状态 */
+    GLAVO_Debug_Skip_O2_Gate_Ntf,       /**< DebugOnOffPayload：跳过 SOC 氧打印门开关状态 */
 
     // ---- UI ↔ GLAVO：网络 / WiFi（ConnMan 后端） ----
     UI_Wifi_Enable_Req = 0x1300, /**< WifiEnableReqPayload：开/关 WiFi */
@@ -738,6 +741,9 @@ struct EnvSnapshotPayload {
     float    pressure_kpa;      /**< 舱内气压 kPa；无效填 <0 */
     float    baseplate_temp_c;  /**< 基板温度 ℃；无效填 <0 */
     uint8_t  powder_bits;       /**< 粉量位：取 bit0/bit1（0=缺粉；>=1 允许继续打印） */
+    uint8_t  sensor_v4;         /**< 1=MCU V4：舱氧/PM/温湿/气压以 SOC 为准 */
+    float    pm1_cabin;         /**< 舱内 PM1.0；无效填 <0（V4 SOC） */
+    float    pm10_cabin;        /**< 舱内 PM10；无效填 <0（V4 SOC） */
 };
 
 /** APP_PM25_Rsp 载荷：PM2.5 检测结果（Inline） */
@@ -1711,9 +1717,11 @@ constexpr bool alarm_snapshot_covers(uint16_t code)
  *  快照是**请求-响应**的：MCU 不会主动推，UI 得先发 UI_Alarm_Snapshot_Ntf。
  *  响应**稀疏**——只回 (active|latched) 非零的 slot，没回的 slot 一律按全零处理，
  *  不能保留上一轮旧值。`nonzero_slot_count=0` 是合法的「当前无报警」响应。
- *  Glavo 侧不加工，攒帧与原子对齐都在 UI（`ui_alarm_state`）做。
+ *  Glavo 攒齐 MCU 一轮并可并入 SOC 1120 后再转发；UI（`ui_alarm_state`）做原子对齐。
  *
- *  只含 CONDITION，EVENT 不占 bit。槽位→报警号用 alarm_snapshot_code_of()。 */
+ *  只含 CONDITION，EVENT 不占 bit。槽位→报警号用 alarm_snapshot_code_of()。
+ *  V4 SOC 氧 1120：Glavo 攒齐 MCU 一轮后，若 1120 活跃且缺 slot3 则补 bit20
+ *  （并统一抬高本轮 nonzero_slot_count），再转发 UI。 */
 struct AlarmSnapshotPayload {
     uint8_t  nonzero_slot_count; /**< 本轮非零 slot 总数（0..12）；0=全清 */
     uint8_t  slot_id;            /**< 本帧的 slot（0..11），非连续、不保证顺序 */
