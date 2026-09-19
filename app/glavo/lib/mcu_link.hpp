@@ -236,6 +236,13 @@ public:
      * @note 队列满时丢弃最旧一条
      */
     void enqueue_serial_tx(const uint8_t* data, size_t len, bool reliable = false);
+    /**
+     * @brief 本轮串口队列 drain 之后再发 TCP 红光（Red=1 或 Red=3）。
+     *        给「先入队 0x12、再开瞄准红光」用。切激光会作废这次补发。
+     */
+    void request_reassert_red_after_serial_tx(uint8_t red_code);
+    /** @brief 作废尚未执行的红光补发（切激光 / 普通红光时调用）。 */
+    void cancel_pending_red_reassert();
 
     /** @brief 读取最新环境传感器快照（线程安全） */
     [[nodiscard]] EnvSnapshotCache env_snapshot() const;
@@ -529,7 +536,7 @@ private:
     void force_switch_to_red_mode_on_tcp_connect();
     /** @brief 串口 MCU 真实版本上报后：关激光使能；下一轮 drain 后再补 TCP 红光。 */
     void apply_serial_laser_off_after_mcu_ready();
-    /** @brief 0x12 出队后再补 Red=1，避免关使能把瞄准红光掐灭。 */
+    /** @brief 0x12 出队后再补 TCP 红光，避免关使能把瞄准红光掐灭。 */
     void maybe_reassert_red_after_serial_laser_off();
 
     /* ---------- 核心依赖 ---------- */
@@ -577,7 +584,9 @@ private:
     mutable std::mutex mcu_fw_mtx_;
     std::atomic<bool> serial_laser_off_applied_{false}; /**< 本串口会话已发过上电 0x12 */
     std::atomic<bool> serial_laser_off_pending_{false}; /**< 版本已到但当时在打印，待空闲再发 */
-    std::atomic<bool> reassert_red_after_laser_off_{false}; /**< 等 0x12 出队后再补 TCP 红光 */
+    std::atomic<bool> reassert_red_after_laser_off_{false}; /**< 等串口 0x12 出队后再发 TCP 红光 */
+    std::atomic<uint8_t> reassert_red_code_{1}; /**< 补发的 DATA[3]：1=红光，3=红光常亮 */
+    std::atomic<uint8_t> last_requested_red_code_{0}; /**< 最近一次意图：1/2/3；2=激光，补发必须让路 */
 
     /* ---------- 换层/串口握手状态 ---------- */
     std::atomic<bool> waiting_layer_{false};           /**< 当前是否处于换层等待状态 */

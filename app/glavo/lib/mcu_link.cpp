@@ -1023,6 +1023,21 @@ void McuLink::enqueue_serial_tx(const uint8_t* data, size_t len, bool reliable)
     serial_tx_queue_.push_back(item);
 }
 
+void McuLink::request_reassert_red_after_serial_tx(uint8_t red_code)
+{
+    if(red_code != 1u && red_code != 3u) {
+        red_code = 1u;
+    }
+    last_requested_red_code_.store(red_code);
+    reassert_red_code_.store(red_code);
+    reassert_red_after_laser_off_.store(true);
+}
+
+void McuLink::cancel_pending_red_reassert()
+{
+    reassert_red_after_laser_off_.store(false);
+}
+
 EnvSnapshotCache McuLink::env_snapshot() const
 {
     EnvSnapshotCache out;
@@ -2879,6 +2894,7 @@ void McuLink::begin_sending(bool skip_layer_handshake)
             "begin_sending refused: terminate/cleanup in progress");
         return;
     }
+    cancel_pending_red_reassert();
     if(skip_layer_handshake) {
         test_image_motion_.store(true);
     } else {
@@ -2956,6 +2972,13 @@ bool McuLink::send_tcp_emergency_ctrl_ex(uint8_t stop_code, uint8_t pause_code, 
             static_cast<unsigned>(pause_code),
             static_cast<unsigned>(red_code));
         return false;
+    }
+    if(red_code == 1u || red_code == 2u || red_code == 3u) {
+        last_requested_red_code_.store(red_code);
+        if(red_code == 2u) {
+            /* 已切激光：作废排队里的红光补发，避免盖掉 Red=2。 */
+            reassert_red_after_laser_off_.store(false);
+        }
     }
     UPC_LOG_MCU_LINK_TO(TcpMotionTx, Info, "tcp emergency sent stop=%u pause=%u red=%u",
                      static_cast<unsigned>(stop_code),
@@ -3111,23 +3134,47 @@ void McuLink::apply_serial_laser_off_after_mcu_ready()
     enqueue_serial_tx(sbuf, static_cast<size_t>(slen), false);
     serial_laser_off_applied_.store(true);
     serial_laser_off_pending_.store(false);
-    reassert_red_after_laser_off_.store(true);
+    request_reassert_red_after_serial_tx(1u);
     UPC_LOG_MCU_LINK(Info, "mcu version failsafe: serial laser-off queued");
 }
 
 void McuLink::maybe_reassert_red_after_serial_laser_off()
 {
+    if(!reassert_red_after_laser_off_.load()) {
+        return;
+    }
+    /* 串口还没发出 0x12：下一轮再试，不要先把标志清掉。 */
+    if(serial_fd_ < 0 || serial_ota_session_.is_active()) {
+        return;
+    }
+    if(is_sending_.load()) {
+        reassert_red_after_laser_off_.store(false);
+        UPC_LOG_MCU_LINK(Info, "skip red reassert: motion sending");
+        return;
+    }
+    const uint8_t red_code = reassert_red_code_.load();
+    const uint8_t want = last_requested_red_code_.load();
+    if(want == 2u || want != red_code) {
+        reassert_red_after_laser_off_.store(false);
+        UPC_LOG_MCU_LINK(Info,
+            "skip red reassert: stale want=%u pending=%u",
+            static_cast<unsigned>(want),
+            static_cast<unsigned>(red_code));
+        return;
+    }
     if(!reassert_red_after_laser_off_.exchange(false)) {
         return;
     }
     if(tcp_fd_ < 0) {
         return;
     }
-    if(!send_tcp_emergency_ctrl_ex(0u, 0u, 1u)) {
-        UPC_LOG_MCU_LINK(Warn, "mcu version failsafe: reassert red mode failed");
+    if(!send_tcp_emergency_ctrl_ex(0u, 0u, red_code)) {
+        UPC_LOG_MCU_LINK(Warn, "reassert red failed code=%u",
+                         static_cast<unsigned>(red_code));
         return;
     }
-    UPC_LOG_MCU_LINK(Info, "mcu version failsafe: reasserted red mode after laser-off");
+    UPC_LOG_MCU_LINK(Info, "red after laser-off code=%u",
+                     static_cast<unsigned>(red_code));
 }
 
 void McuLink::set_print_task_flow_active(bool active) noexcept

@@ -226,7 +226,7 @@ private:
     void handle_visual_first_layer_check_rsp(const middleware::Message& msg);
     /** @brief 联动切换红光/激光模式（TCP 红光 + 串口激光使能），每次调用都下发。 */
     bool apply_red_laser_mode(bool red_on, const char* reason);
-    /** @brief 红光常亮：只发 TCP 0x0A Red=3，不跟串口 0x12。 */
+    /** @brief 红光常亮：先入队串口 0x12，drain 后再发 TCP Red=3（V3/V4 相同）。 */
     bool apply_red_always_mode(const char* reason);
     void debug_tx(const uint8_t* frame, int n);
 

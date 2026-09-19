@@ -338,7 +338,7 @@ scripts/rongsu.sh start   # glavo + rongsu_camera → ui
 - 正确写法：`payload[x] = v;`
 - 典型场景：
   - 调试红光开关：`stop=0 pause=0 red=1/2`
-  - 调试红光常亮：`stop=0 pause=0 red=3`
+  - 调试红光常亮：先串口 `0x12` 关激光使能，出队后再 `stop=0 pause=0 red=3`（不先发 TCP）
   - 上电 / TCP 重连：`stop=0 pause=0 red=1`（不跟串口 `0x12`）
   - 串口 MCU 真实版本上报后：先 `0x12` 关激光使能，出队后再补 `red=1`
   - 打印暂停/恢复：`stop=0 pause=2/1 red=0`

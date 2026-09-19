@@ -4565,13 +4565,16 @@ bool GlavoService::apply_red_laser_mode(bool red_on, const char* reason)
     /* 红光与激光使能联动：
      * red_on=1（红光） -> 激光使能关（TLV 0x12）
      * red_on=0（激光） -> 激光使能开（TLV 0x11） */
+    auto& link = McuLink::instance();
+    /* 先作废常亮补发，避免 0x12 drain 后把刚切好的 Red=2 盖回 Red=3。 */
+    link.cancel_pending_red_reassert();
     {
         uint8_t buf[SERIAL_DEBUG_MAX_FRAME];
         const bool laser_enable = !red_on;
         debug_tx(buf, serial_debug_build_switch(0u, laser_enable, buf, sizeof(buf)));
     }
     const uint8_t red_code = red_on ? 1u : 2u;
-    if(!McuLink::instance().send_tcp_emergency_ctrl_ex(0u, 0u, red_code)) {
+    if(!link.send_tcp_emergency_ctrl_ex(0u, 0u, red_code)) {
         UPC_LOG_GLAVO_SERVICE(Warn, "red/laser tcp switch failed red_on=%d reason=%s",
                               red_on ? 1 : 0,
                               reason ? reason : "n/a");
@@ -4585,16 +4588,19 @@ bool GlavoService::apply_red_laser_mode(bool red_on, const char* reason)
 
 bool GlavoService::apply_red_always_mode(const char* reason)
 {
-    /* 红光常亮只走 TCP Red=3。
-     * 不要跟串口 0x12：debug_tx 是异步队列，会在 TCP 之后发出 LASER_DISABLE，
-     * MCU 会把刚打开的瞄准红光关掉，看起来就是开一下又关。 */
-    constexpr uint8_t k_red_always = 3u;
-    if(!McuLink::instance().send_tcp_emergency_ctrl_ex(0u, 0u, k_red_always)) {
-        UPC_LOG_GLAVO_SERVICE(Warn, "red-always tcp switch failed reason=%s",
+    /* 关激光使能（V3/V4 同一条 TLV 0x12）必须跟常亮。
+     * 不先发 TCP Red=3：否则 0x12 还在队列时瞄准已开、使能可能仍开。
+     * 入队 0x12 后等 link drain，再发唯一一次 Red=3。 */
+    uint8_t buf[SERIAL_DEBUG_MAX_FRAME];
+    const int n = serial_debug_build_switch(0u, false, buf, sizeof(buf));
+    if(n <= 0) {
+        UPC_LOG_GLAVO_SERVICE(Warn, "red-always serial laser-off build failed reason=%s",
                               reason ? reason : "n/a");
         return false;
     }
-    UPC_LOG_GLAVO_SERVICE(Info, "red-always mode switched reason=%s",
+    debug_tx(buf, n);
+    McuLink::instance().request_reassert_red_after_serial_tx(3u);
+    UPC_LOG_GLAVO_SERVICE(Info, "red-always queued (serial laser-off then Red=3) reason=%s",
                           reason ? reason : "n/a");
     return true;
 }
@@ -4614,10 +4620,11 @@ void GlavoService::handle_debug_galvo_red_light(const middleware::Message& msg)
     (void)apply_red_laser_mode(p.on != 0, "debug_toggle");
 }
 
-/** @brief 调试红光常亮：下发 TCP CMD=0x0A（Stop=0, Pause=0, Red=3） */
+/** @brief 调试红光常亮：入队 0x12，drain 后再 TCP Red=3 */
 void GlavoService::handle_debug_galvo_red_always(const middleware::Message& /*msg*/)
 {
-    if(galvo_point_test_active_.load() || optical_path_check_.active()) {
+    if(galvo_point_test_active_.load() || optical_path_check_.active() ||
+       plate_height_.active() || height_calib_.active()) {
         UPC_LOG_GLAVO_SERVICE(Warn,
             "red-always switch rejected: point test or optical path check active");
         return;
