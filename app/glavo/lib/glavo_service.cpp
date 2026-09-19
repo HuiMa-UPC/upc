@@ -27,6 +27,7 @@
  * - usb_hotplug_thread_：轮询 /proc/mounts，变化时发 GLAVO_USB_Hotplug_Ntf。
  * - clean_worker_：开门前清粉（风机 + 轮询/阀采样 PM2.5）；完成后经 publish 回 UI。
  * - pm25_sample_worker_：V4 开门前舱内 PM 阀采样（3s），避免堵 worker。
+ * - SocSensors o2_calib 线程：调试页单点标定约 0.7s 采样，Rsp 由该线程 publish_async。
  * - WifiManager / McuLink / Parser 线程不在本文件创建，但通过回调/队列与 worker 汇合。
  *
  * =============================================================================
@@ -857,6 +858,8 @@ bool GlavoService::start()
         middleware::MsgType::UI_Debug_Env_Sim_Powder_Get_Ntf,
         middleware::MsgType::UI_Debug_Skip_O2_Gate_Set_Ntf,
         middleware::MsgType::UI_Debug_Skip_O2_Gate_Get_Ntf,
+        middleware::MsgType::UI_Debug_O2_Calib_Req,
+        middleware::MsgType::UI_Debug_O2_Calib_Get_Ntf,
         middleware::MsgType::UI_Debug_FirstLayer_Visual_Check_Set_Ntf,
         middleware::MsgType::UI_Debug_FirstLayer_Visual_Check_Get_Ntf,
         middleware::MsgType::APP_Visual_FirstLayer_Check_Rsp,
@@ -894,6 +897,7 @@ bool GlavoService::start()
     publish_debug_env_sim_state();
     publish_debug_env_sim_powder_state();
     publish_debug_skip_o2_gate_state();
+    publish_debug_o2_calib_state();
     publish_debug_first_layer_visual_check_state();
     publish_debug_optical_path_check_state();
     publish_debug_plate_height_adj_state();
@@ -907,7 +911,7 @@ bool GlavoService::start()
 /**
  * @brief 停止 worker、清空队列与订阅，并终止进行中的打印/准备会话
  *
- * 顺序：先停 USB 监视 → join worker（此后不再处理新消息）→ 停打印/清粉 → Wifi shutdown。
+ * 顺序：先停 USB 监视 → join worker（此后不再处理新消息）→ join 氧标定线程 → 停打印/清粉 → Wifi shutdown。
  * @return 仅 Running 状态下可调用，成功返回 true
  */
 bool GlavoService::stop()
@@ -938,6 +942,7 @@ bool GlavoService::stop()
         link_event_queue_.clear();
     }
 
+    SocSensors::instance().join_o2_calib();
     stop_galvo_point_test_worker();
     wakeup_laser_spot_wait();
     height_calib_.abort();
@@ -1353,6 +1358,12 @@ void GlavoService::handle_message(const middleware::Message& msg)
             break;
         case middleware::MsgType::UI_Debug_Skip_O2_Gate_Get_Ntf:
             handle_debug_skip_o2_gate_get(msg);
+            break;
+        case middleware::MsgType::UI_Debug_O2_Calib_Req:
+            handle_debug_o2_calib_req(msg);
+            break;
+        case middleware::MsgType::UI_Debug_O2_Calib_Get_Ntf:
+            handle_debug_o2_calib_get(msg);
             break;
         case middleware::MsgType::UI_Debug_FirstLayer_Visual_Check_Set_Ntf:
             handle_debug_first_layer_visual_check_set(msg);
@@ -5192,6 +5203,68 @@ void GlavoService::handle_debug_skip_o2_gate_get(const middleware::Message& msg)
 {
     (void)msg;
     publish_debug_skip_o2_gate_state();
+}
+
+void GlavoService::publish_debug_o2_calib_state()
+{
+    middleware::DebugO2CalibRspPayload p{};
+    SocSensors::instance().fill_o2_calib_state(&p);
+    middleware::Message ntf(
+        middleware::MsgType::GLAVO_Debug_O2_Calib_Ntf,
+        middleware::ModuleId::APP_GLAVO,
+        middleware::ModuleId::UI);
+    ntf.payload = middleware::MsgPayload::from_bytes(
+        reinterpret_cast<const uint8_t*>(&p), sizeof(p));
+    if(!publish_async(ntf)) {
+        UPC_LOG_GLAVO_SERVICE(Warn, "GLAVO_Debug_O2_Calib_Ntf publish_async failed");
+    }
+}
+
+void GlavoService::handle_debug_o2_calib_req(const middleware::Message& msg)
+{
+    auto send_rsp = [this](const middleware::DebugO2CalibRspPayload& p) {
+        middleware::Message rsp(
+            middleware::MsgType::GLAVO_Debug_O2_Calib_Rsp,
+            middleware::ModuleId::APP_GLAVO,
+            middleware::ModuleId::UI);
+        rsp.payload = middleware::MsgPayload::from_bytes(
+            reinterpret_cast<const uint8_t*>(&p), sizeof(p));
+        if(!publish_async(rsp)) {
+            UPC_LOG_GLAVO_SERVICE(Warn, "GLAVO_Debug_O2_Calib_Rsp publish_async failed");
+        }
+    };
+
+    middleware::DebugO2CalibRspPayload out{};
+    SocSensors::instance().fill_o2_calib_state(&out);
+    out.ok = 0;
+
+    if(print_running_.load() || plate_height_.active() ||
+       optical_path_check_.active() || galvo_point_test_active_.load() ||
+       test_image_active_ || test_image_desired_ ||
+       height_calib_.active() ||
+       McuLink::instance().is_sending() ||
+       McuLink::instance().is_terminate_pending()) {
+        out.err = static_cast<uint8_t>(middleware::DebugO2CalibErr::Printing);
+        UPC_LOG_GLAVO_SERVICE(Warn, "o2 calib rejected: print or motion test active");
+        send_rsp(out);
+        return;
+    }
+
+    middleware::DebugO2CalibReqPayload req{};
+    float ref = 0.f;
+    if(read_inline_pod(msg.payload, req)) {
+        ref = req.ref_o2_percent;
+    }
+    if(!SocSensors::instance().start_calibrate_o2(ref, send_rsp)) {
+        out.err = static_cast<uint8_t>(middleware::DebugO2CalibErr::Busy);
+        send_rsp(out);
+    }
+}
+
+void GlavoService::handle_debug_o2_calib_get(const middleware::Message& msg)
+{
+    (void)msg;
+    publish_debug_o2_calib_state();
 }
 
 void GlavoService::publish_debug_first_layer_visual_check_state()

@@ -27,6 +27,8 @@ using DebugCleanRecordCb = std::function<void(bool)>;
 using DebugEnvSimCb = std::function<void(bool)>;
 using DebugEnvSimPowderCb = std::function<void(bool)>;
 using DebugSkipO2GateCb = std::function<void(bool)>;
+using DebugO2CalibCb =
+    std::function<void(const middleware::DebugO2CalibRspPayload&)>;
 using DebugFirstLayerVisualCheckCb = std::function<void(bool)>;
 using DebugOpticalPathCheckCb = std::function<void(bool)>;
 using DebugPlateHeightAdjCb = std::function<void(bool)>;
@@ -90,6 +92,9 @@ public:
     void request_env_sim_powder_state();
     void send_skip_o2_gate_set(bool on);
     void request_skip_o2_gate_state();
+    /** 空气单点氧标定；ref_o2_percent≤0 用后端默认 20.9 */
+    void send_o2_calib(float ref_o2_percent = 0.f);
+    void request_o2_calib_state();
     void send_first_layer_visual_check_set(bool on);
     void request_first_layer_visual_check_state();
     void send_optical_path_check_set(bool on);
@@ -121,6 +126,7 @@ public:
     void register_env_sim(DebugEnvSimCb cb);
     void register_env_sim_powder(DebugEnvSimPowderCb cb);
     void register_skip_o2_gate(DebugSkipO2GateCb cb);
+    void register_o2_calib(DebugO2CalibCb cb);
     void register_first_layer_visual_check(DebugFirstLayerVisualCheckCb cb);
     void register_optical_path_check(DebugOpticalPathCheckCb cb);
     void register_plate_height_adj(DebugPlateHeightAdjCb cb);
@@ -178,6 +184,7 @@ private:
     DebugEnvSimCb env_sim_cb_;
     DebugEnvSimPowderCb env_sim_powder_cb_;
     DebugSkipO2GateCb skip_o2_gate_cb_;
+    DebugO2CalibCb o2_calib_cb_;
     DebugFirstLayerVisualCheckCb first_layer_visual_check_cb_;
     DebugOpticalPathCheckCb optical_path_check_cb_;
     DebugPlateHeightAdjCb plate_height_adj_cb_;

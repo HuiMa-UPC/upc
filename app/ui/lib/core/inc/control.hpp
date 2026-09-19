@@ -102,7 +102,7 @@ const char *control_home_section_target(void);
 
 void control_terminate_request(void);
 
-/* ---- 转运盒流程开关（调试页 Other Switches） ----
+/* ---- 转运盒流程开关（调试页 Other → Print Gates） ----
  * 打开后，取件分支在门开之后插入转运盒三步，且关门确认改用新稿样式；关闭则完全回到
  * 「开门 → 确认关门」两步。纯 UI 本地标志（不发消息、不落盘），重启回到关闭。 */
 void control_set_transfer_box_flow(bool on);

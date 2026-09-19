@@ -264,7 +264,7 @@ public:
     [[nodiscard]] bool env_sim_enabled() const noexcept;
     /**
      * @brief 调试：跳过 V4 SOC 氧打印门（仅本次运行，默认关）
-     * @note 开：起印不等氧、打印中不因氧高 pause/1120；关：恢复正常门闸。
+     * @note 开：起印不发洗气开、不等氧、打印中不因氧高 pause/1120；关：恢复开阀洗气+氧门。
      */
     void set_skip_o2_print_gate(bool on);
     [[nodiscard]] bool skip_o2_print_gate() const noexcept;
@@ -466,11 +466,14 @@ private:
     void link_try_final_layer_snap();
     /** @brief 从 tcp_stage_ 取一批运动包，组帧后通过 TCP 下发 */
     int link_send_one_motion_batch();
-    /** @brief 处理串口打印前的握手状态机（CONDITION_OK -> PRINT_READY） */
+    /** @brief 处理串口打印前的握手状态机（CONDITION_OK → 洗气/氧门 → PRINT_START → PRINT_READY） */
     void link_process_serial_handshake();
     /** @brief V4 打印中 SOC 氧门：超限暂停 / 回落恢复 + 1120 报警 */
     void link_process_o2_print_gate();
-    /** @brief 是否启用 SOC 氧门（MCU≥V4、非测试图、非 Env Sim） */
+    /**
+     * @brief 是否启用 SOC 氧门+打印前洗气（MCU≥V4、非测试图、非 Env Sim、未 Skip O2）
+     * @note 关时：起印不发洗气开、不等氧；开时：CONDITION_OK 后 0x86 开阀再等氧。
+     */
     [[nodiscard]] bool soc_o2_print_gate_enabled() const noexcept;
     /** @brief 读当前用于门控的氧浓度；false=无效（未就绪/读失败） */
     [[nodiscard]] bool read_print_o2_percent(float* oxygen_percent) const;
@@ -484,6 +487,12 @@ private:
     void send_serial_print_terminate();
     /** @brief 向 MCU 串口发送打印完成帧 */
     void send_serial_print_finished();
+    /** @brief 洗气阀串口开关（Port 0xA1 Cmd 0x86）；target=1 */
+    void send_serial_gas_wash(bool on);
+    /** @brief 本作业 SOC 曾开过洗气则发关阀并清标志 */
+    void close_print_gas_wash_if_opened();
+    /** @brief 氧门开启时确保已发洗气开（幂等） */
+    void ensure_print_gas_wash_on();
     /**
      * @brief 执行手动终止后的清理：发 reset、清队列、回调 TerminateDone/PrintError
      * @return true 本轮确实执行了清理并已上报事件；false 已有 cleanup 在进行，
@@ -647,7 +656,9 @@ private:
     std::atomic<bool> mcu_1st_seen_{false};
 
     std::atomic<bool> env_sim_on_{false};  /**< 环境上报模拟（调试页开关，默认关） */
-    std::atomic<bool> skip_o2_print_gate_{false}; /**< 调试：跳过 SOC 氧打印门（默认关） */
+    std::atomic<bool> skip_o2_print_gate_{false}; /**< 调试：跳过 SOC 氧打印门+打印前洗气（默认关） */
+    /** 本打印作业由 SOC 发过洗气开；终止/完成后据此关阀，Skip O2 路径保持 false */
+    std::atomic<bool> gas_wash_opened_by_soc_{false};
     std::atomic<bool> env_sim_powder_low_target_{false}; /**< 目标缺粉态（UI 开关值） */
     bool env_sim_powder_low_effective_ = false;          /**< 已生效缺粉态（延迟后应用） */
     std::chrono::steady_clock::time_point env_sim_powder_switch_at_{}; /**< 延迟切换时刻 */

@@ -281,8 +281,10 @@ scripts/rongsu.sh start   # glavo + rongsu_camera → ui
 | `UI_Debug_Env_Sim_Get_Ntf` | — | UI→Glavo | Empty | `request_env_sim_state` | 查询当前“环境上报模拟”开关状态 |
 | `UI_Debug_Env_Sim_Powder_Set_Ntf` | — | UI→Glavo | `DebugOnOffPayload` | `send_env_sim_powder_set` | 环境模拟粉量缺粉开关（仅 Env Sim=On 可设；切换后延迟 5 秒生效） |
 | `UI_Debug_Env_Sim_Powder_Get_Ntf` | — | UI→Glavo | Empty | `request_env_sim_powder_state` | 查询当前“环境模拟粉量缺粉”开关状态 |
-| `UI_Debug_Skip_O2_Gate_Set_Ntf` | — | UI→Glavo | `DebugOnOffPayload` | `send_skip_o2_gate_set` | 调试页开关：跳过 V4 SOC 氧打印门（仅本次运行，默认关；开则起印不等氧、打印中不因氧高暂停/1120） |
+| `UI_Debug_Skip_O2_Gate_Set_Ntf` | — | UI→Glavo | `DebugOnOffPayload` | `send_skip_o2_gate_set` | 调试页开关：跳过 V4 SOC 氧打印门（仅本次运行，默认关；开则起印不发洗气开、不等氧、打印中不因氧高暂停/1120） |
 | `UI_Debug_Skip_O2_Gate_Get_Ntf` | — | UI→Glavo | Empty | `request_skip_o2_gate_state` | 查询当前“跳过氧门”开关状态 |
+| `UI_Debug_O2_Calib_Req` | — | UI→Glavo | `DebugO2CalibReqPayload` | `send_o2_calib` | 调试页氧标定：参考浓度单点求 K，写 `/userdata/CAL/o2_cal.json`；Glavo worker 只做打印互斥后丢给 SocSensors 独立线程，完成后只发 Rsp |
+| `UI_Debug_O2_Calib_Get_Ntf` | — | UI→Glavo | Empty | `request_o2_calib_state` | 查询当前氧标定 K（不重新采样） |
 | `UI_Debug_FirstLayer_Visual_Check_Set_Ntf` | — | UI→Glavo | `DebugOnOffPayload` | `send_first_layer_visual_check_set` | 调试页开关：首层视觉检测（仅本次运行，默认关） |
 | `UI_Debug_FirstLayer_Visual_Check_Get_Ntf` | — | UI→Glavo | Empty | `request_first_layer_visual_check_state` | 查询当前“首层视觉检测”开关状态 |
 | `UI_Debug_OpticalPath_Check_Set_Ntf` | — | UI→Glavo | `DebugOnOffPayload` | `send_optical_path_check_set` | 调试页开关：打印前光路检测（仅本次运行，默认关） |
@@ -295,6 +297,8 @@ scripts/rongsu.sh start   # glavo + rongsu_camera → ui
 | `GLAVO_Debug_Env_Sim_Ntf` | — | Glavo→UI | `DebugOnOffPayload` | `register_env_sim` | 回读当前“环境上报模拟”开关状态 |
 | `GLAVO_Debug_Env_Sim_Powder_Ntf` | — | Glavo→UI | `DebugOnOffPayload` | `register_env_sim_powder` | 回读当前“环境模拟粉量缺粉”开关状态 |
 | `GLAVO_Debug_Skip_O2_Gate_Ntf` | — | Glavo→UI | `DebugOnOffPayload` | `register_skip_o2_gate` | 回读当前“跳过 SOC 氧打印门”开关状态 |
+| `GLAVO_Debug_O2_Calib_Rsp` | — | Glavo→UI | `DebugO2CalibRspPayload` | `register_o2_calib` | 氧标定 Req 应答（ok/err/k/i_ua/o2）；成功不再另推 Ntf |
+| `GLAVO_Debug_O2_Calib_Ntf` | — | Glavo→UI | `DebugO2CalibRspPayload` | `register_o2_calib` | 进页 Get 回读当前 K（不改盘；i_ua=0；与 Rsp 同结构） |
 | `GLAVO_Debug_FirstLayer_Visual_Check_Ntf` | — | Glavo→UI | `DebugOnOffPayload` | `register_first_layer_visual_check` | 回读当前“首层视觉检测”开关状态 |
 | `GLAVO_Debug_OpticalPath_Check_Ntf` | — | Glavo→UI | `DebugOnOffPayload` | `register_optical_path_check` | 回读当前“打印前光路检测”开关状态 |
 | `GLAVO_Debug_PlateHeight_Adj_Ntf` | — | Glavo→UI | `DebugOnOffPayload` | `register_plate_height_adj` | 回读当前“打印前基板测高”开关状态 |
@@ -396,6 +400,7 @@ rongsu_broker ──listen──► /tmp/upc_broker.sock ◄── UI / Glavo / 
 | `common/fs_manifest/message_paths.hpp` | `UPC_MESSAGE_DIR`（报警历史 jsonl） | 平台 / UI |
 | `common/fs_manifest/xfr_paths.hpp` | `UPC_XFR_STORAGE_DIR`（局域网上传暂存与 token） | 平台 / Xfer |
 | `common/config/cal_config.hpp` | `UPC_CAL_PATH`（默认 `/userdata/CAL/cal.csv`） | 平台 / Glavo / Media / UI / Xfer |
+| `app/glavo/lib/device_config.hpp` | `GLAVO_O2_CAL_JSON_PATH`（默认 `/userdata/CAL/o2_cal.json`）氧 K 标定 | Glavo |
 | `common/ipc/msg_port.hpp` | 业务唯一 IPC 入口 | 平台组 |
 | `common/ipc/ipc_wire.*` | 线协议 | 平台组 |
 | `common/ipc/ipc_endpoint.*` | Socket 传输 | 平台组 |

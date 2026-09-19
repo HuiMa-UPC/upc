@@ -488,8 +488,10 @@ enum class MsgType : uint32_t {
     UI_Debug_Soc_Led_Get_Ntf,           /**< Empty：查询六路舱灯开关状态 */
     UI_Debug_Cabin_Pm_Valve_Set_Ntf,    /**< DebugOnOffPayload：舱内 PM fa_valve，不看 MCU 版本 */
     UI_Debug_Cabin_Pm_Valve_Get_Ntf,    /**< Empty：查询舱内 PM 阀开关状态 */
-    UI_Debug_Skip_O2_Gate_Set_Ntf,      /**< DebugOnOffPayload：跳过 SOC 氧打印门（仅本次运行，默认关） */
+    UI_Debug_Skip_O2_Gate_Set_Ntf,      /**< DebugOnOffPayload：跳过 SOC 氧打印门+打印前洗气（仅本次运行，默认关） */
     UI_Debug_Skip_O2_Gate_Get_Ntf,      /**< Empty：查询当前跳过氧门开关状态 */
+    UI_Debug_O2_Calib_Req,              /**< DebugO2CalibReqPayload：空气/标准气单点标定 K */
+    UI_Debug_O2_Calib_Get_Ntf,          /**< Empty：查询当前氧标定 K（不重新采样） */
 
     // ---- GLAVO → UI：调试页状态回读（按模块拆分） ----
     GLAVO_Debug_Sensor_Ntf = 0x1200, /**< DebugSensorPayload：调试顶栏传感器（含舱外/舱内 PM） */
@@ -512,6 +514,8 @@ enum class MsgType : uint32_t {
     GLAVO_Debug_Soc_Led_Ntf,            /**< DebugSocLedStatePayload：六路舱灯开关位图 */
     GLAVO_Debug_Cabin_Pm_Valve_Ntf,     /**< DebugOnOffPayload：舱内 PM 阀开关状态 */
     GLAVO_Debug_Skip_O2_Gate_Ntf,       /**< DebugOnOffPayload：跳过 SOC 氧打印门开关状态 */
+    GLAVO_Debug_O2_Calib_Rsp,           /**< DebugO2CalibRspPayload：氧标定结果（Req 应答） */
+    GLAVO_Debug_O2_Calib_Ntf,           /**< DebugO2CalibRspPayload：当前 K 回读（Get，ok=1 且未改盘） */
 
     // ---- UI ↔ GLAVO：网络 / WiFi（ConnMan 后端） ----
     UI_Wifi_Enable_Req = 0x1300, /**< WifiEnableReqPayload：开/关 WiFi */
@@ -658,6 +662,11 @@ inline constexpr bool is_ipc_reliable_msg_type(MsgType type) noexcept
      * 暂停在几秒后补发会在用户已不想暂停时突然生效，比丢弃更危险；那一对
      * 改由 UI 侧根据 publish 返回值回滚图标并提示重试。 */
     case MsgType::UI_Print_Terminate_Req:
+        return true;
+
+    // 调试氧单点标定：控制类 Req/Rsp，丢一条 UI 会以为没点到
+    case MsgType::UI_Debug_O2_Calib_Req:
+    case MsgType::GLAVO_Debug_O2_Calib_Rsp:
         return true;
 
     // 换层/录像链路：层抓拍与会话闭环
@@ -1440,6 +1449,35 @@ struct DebugGalvoAbsMovePayload {
 struct DebugOnOffPayload {
     uint8_t on;
     uint8_t reserved[3];
+};
+
+/** UI_Debug_O2_Calib_Req：单点标定（参考浓度由 UI 输入；Inline） */
+struct DebugO2CalibReqPayload {
+    float   ref_o2_percent; /**< 参考浓度 %；≤0 则用默认空气 20.9 */
+    uint8_t reserved[4];
+};
+
+/** GLAVO_Debug_O2_Calib_Rsp / GLAVO_Debug_O2_Calib_Ntf：标定结果或当前 K */
+enum class DebugO2CalibErr : uint8_t {
+    Ok           = 0,
+    NotReady     = 1, /**< 无 /run/o2_ready */
+    IioFail      = 2, /**< 无有效采样，或有效点数不足 SAMPLE_MIN */
+    IOutOfRange  = 3, /**< 平均电流过小/过大 */
+    KOutOfRange  = 4,
+    Printing     = 5, /**< 打印/测高/光路/点测/测试图/振镜发送中 */
+    WriteFail    = 6,
+    Busy         = 7,
+    BadRef       = 8, /**< 参考浓度非法 */
+};
+
+struct DebugO2CalibRspPayload {
+    uint8_t ok;             /**< 1=成功（标定写入或 Get 回读） */
+    uint8_t err;            /**< DebugO2CalibErr */
+    uint8_t reserved[2];
+    float   k;              /**< 当前/新标定系数 */
+    float   i_ua;           /**< 标定采样平均电流 μA；Get 可为 0 */
+    float   o2_percent;     /**< 用当前 K 算出的浓度 %；无效 <0 */
+    float   ref_o2_percent; /**< 本次参考浓度；Get 回读上次标定参考或默认 */
 };
 
 /** UI_Debug_Galvo_Param_Save_Ntf：写入 cal.csv（Scale 可保留；中心偏移写第 4 行） */

@@ -13,7 +13,7 @@ alarm,1107,Powder bucket cover not seated,Close the powder bucket cover.
 alarm,1108,Left powder type mismatch,The left powder bucket type does not match the job.
 alarm,1109,Right powder type mismatch,The right powder bucket type does not match the job.
 alarm,1110,Waste powder type mismatch,The waste bucket type does not match.
-alarm,1120,Chamber oxygen too high,Oxygen level is too high while printing. Printing is paused.
+alarm,1120,Chamber oxygen too high,Oxygen level is too high. Printing waits or pauses until it drops.
 alarm,1121,Chamber pressure too high,Chamber pressure is above the limit.
 alarm,1122,Chamber pressure too low,Chamber pressure is below the limit.
 alarm,1124,Print step timeout,A print step timed out and the job was aborted. Reset required.
