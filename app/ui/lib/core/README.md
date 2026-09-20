@@ -12,8 +12,8 @@
 | `ui_msg_proxy` | UI ↔ Glavo MsgBus 封装（send / register） |
 | `ui_device_state` | 设备名/联网/运行状态/环境快照的唯一来源（订阅一次，扇出给观察者） |
 | `ui_device_bar` | 顶部常驻设备信息条（建在 `shell_` 上，按页显隐） |
-| `ui_message_store` | 消息中心数据源：事件去重排序、未读计数、码→文案表 |
-| `ui_notice_stack` | 右上通知浮层：最多两张卡 + 「查看剩余 N 条」；消息页/历史页/设置页不显示 |
+| `ui_message_store` | 消息中心数据源：事件去重排序、未读计数、码→文案表、按等级自动收起（`sync` / `emit` 两种写入语义） |
+| `ui_notice_stack` | 右上通知三态：toast / 铃铛 / 面板互斥，只在首页；打印态与监控态退回黑玻璃卡 |
 | `camera_msg_proxy` | UI ↔ Camera 预览开停 IPC |
 | `camera_preview` | SHM 消费、RGA/SW NV12→BGRX、三缓冲 + lv_image 显示 |
 | `video_player` | MP4 软解播放；拖动预览缩小帧 + scrub 世代丢弃 |

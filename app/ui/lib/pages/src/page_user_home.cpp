@@ -7,7 +7,6 @@
 #include "camera_preview.hpp"
 #include "control.hpp"
 #include "home_assets.h"
-#include "home_btn_icons.h"
 #include "home_metric_icons.h"
 #include "ctl_backdrop_img.h"
 #include "ui_slide_unlock.hpp"
@@ -15,6 +14,7 @@
 #include "ui_device_state.hpp"
 #include "ui_message_store.hpp"
 #include "ui_notice_stack.hpp"
+#include "page_manager.hpp"
 #include "ui_alarm_state.hpp"
 #include "ui_clean_state.hpp"
 #include "upc_contract.hpp"
@@ -220,20 +220,23 @@ lv_obj_t *g_topbar       = nullptr;   /**< 占位行根（打印中浮于摄像�
 /* ---------- 首页左卡（HOME 空气质量·可切换 PM2.5/PM10） ---------- */
 lv_obj_t *g_home_card_title = nullptr;  /**< "HOME PM2.5" / "HOME PM10" */
 lv_obj_t *g_home_card_level = nullptr;  /**< 分级大字 Good/Fair/Poor/Very Poor */
-lv_obj_t *g_home_card_value = nullptr;  /**< 灰色小字 "(36.5 ug/m3)" */
+lv_obj_t *g_home_card_value = nullptr;  /**< 分级大字下那行读数 "36.5 ug/m3" */
 lv_obj_t *g_home_seg_track  = nullptr;  /**< 4 段色条容器（用于计算游标 x） */
 lv_obj_t *g_home_seg_dot    = nullptr;  /**< 分级游标圆点 */
 int       g_home_metric_idx = 0;        /**< 0=PM2.5 1=PM10（切换按钮，重启复位） */
 
-/* ---------- 首页右侧 Cabin condition（4 行数值） ---------- */
+/* ---------- 首页右侧四宫格（温度 / 氧浓度 / 湿度 / 气压） ----------
+ * 浅色稿 6040:66164 把早先那个「悬浮文本 + 引线」的 CABIN 面板换成了 2×2 白卡，
+ * 单位并进读数字符串，所以不再有单独的 unit label。 */
 lv_obj_t *g_cab_temp_val  = nullptr;
-lv_obj_t *g_cab_temp_unit = nullptr;
 lv_obj_t *g_cab_o2_val    = nullptr;
-lv_obj_t *g_cab_o2_unit   = nullptr;
 lv_obj_t *g_cab_hum_val   = nullptr;
-lv_obj_t *g_cab_hum_unit  = nullptr;
 lv_obj_t *g_cab_prs_val   = nullptr;
-lv_obj_t *g_cab_prs_unit  = nullptr;
+
+/* ---------- 首页问候语与设备图上的两颗余量胶囊 ---------- */
+lv_obj_t *g_greet_title    = nullptr;  /**< Morning / Afternoon / Evening */
+lv_obj_t *g_supply_pill_a  = nullptr;  /**< 左：1 号料桶余量 */
+lv_obj_t *g_supply_pill_b  = nullptr;  /**< 右：2 号料桶余量（暂借 filter_pct，见 make_supply_pill） */
 
 /* ---------- 页面容器：用于打印中模式切换 ---------- */
 lv_obj_t *g_page_root    = nullptr;
@@ -476,12 +479,20 @@ void on_pause_click(lv_event_t *)
     }
 }
 
-/** 按钮内图标：A8 掩膜 recolor 成白色，等比缩放到 target；外套固定尺寸盒，
+/** 按钮内图标：A8 掩膜 recolor 成 color，等比缩放到 target；外套固定尺寸盒，
  *  保证在 flex 布局里只占 target×target（避免大尺寸源图撑开按钮）。
- *  源图边长从图头取，96×96（home_btn_icons）与 40×40（home_metric_icons）通吃。 */
-lv_obj_t *make_btn_icon(lv_obj_t *parent, const lv_image_dsc_t *src, int32_t target)
+ *  源图边长从图头取，各档尺寸通吃；调用方通常先用 ui_user_pick_icon() 挑出与 target
+ *  等宽的那份，走不到缩放。
+ *
+ *  **颜色必须在这里给，不能拿返回值再补一笔**：返回的是外层那个固定尺寸盒，而
+ *  `LV_STYLE_IMAGE_RECOLOR` 在 LVGL 的属性表里 inherit 标志是 0（见 lv_style.c），
+ *  设在盒上传不到里面那张图。浅色稿的白底方钮曾因此白底白图标、整枚隐身。
+ *
+ *  默认白是给打印态/监控态那批压在摄像头画面或深色玻璃上的钮用的，占多数。 */
+lv_obj_t *make_btn_icon(lv_obj_t *parent, const lv_image_dsc_t *src, int32_t target,
+                        lv_color_t color = lv_color_white())
 {
-    return ui_user_make_icon_img(parent, src, target, lv_color_white());
+    return ui_user_make_icon_img(parent, src, target, color);
 }
 
 void on_camera_btn_click(lv_event_t * /*e*/)
@@ -544,22 +555,14 @@ struct AirMetric {
 
 /* 阈值取自设计稿分级表：PM2.5 35/75/150，PM10 50/150/350（μg/m³）。 */
 const AirMetric kAirMetrics[2] = {
-    { "HOME PM2.5", 35.0f,  75.0f, 150.0f, 300.0f },
-    { "HOME PM10",  50.0f, 150.0f, 350.0f, 700.0f },
+    { "PM2.5", 35.0f,  75.0f, 150.0f, 300.0f },
+    { "PM10",  50.0f, 150.0f, 350.0f, 700.0f },
 };
 
 const char *const kLevelName[4] = { "Good", "Fair", "Poor", "Very Poor" };
 
-/** 四档色段颜色（绿/黄/橙/红，对齐 Figma AQI-优/良/轻度/中度）。 */
-lv_color_t air_level_color(int level)
-{
-    switch(level) {
-    case 0:  return lv_color_hex(0x4cd276);
-    case 1:  return lv_color_hex(0xf2d33a);
-    case 2:  return lv_color_hex(0xf99635);
-    default: return lv_color_hex(0xec4848);
-    }
-}
+/* 早先这里还有一枚 air_level_color()，给色条那四段上绿/黄/橙/红。浅色稿把四段改成了
+ * 白色、不透明度递增（分级改由游标位置和分级大字表达），它就没有调用点了，已删。 */
 
 /** 由数值定档并给出色条全局比例（0..1）：档内按数值在区间内线性插值。 */
 int air_classify(const AirMetric &m, float v, float *frac_global)
@@ -577,33 +580,17 @@ int air_classify(const AirMetric &m, float v, float *frac_global)
     return level;
 }
 
-/** 从 NULL 结尾的候选表里挑出边长最接近 sz 的那份原生位图。
- *
- *  **图标按档位出多份原生尺寸、运行时不缩放，是刻意的**。LVGL 的
- *  `lv_draw_sw_transform` 是 2 抽头点采样、不做面积平均，缩小时步长大于一个源
- *  像素就会整行整列跳过源数据：原先一张 40×40 喂三档，32 档实测横杠 alpha 在
- *  225..251 之间起伏、26 档 188..220 且峰值到不了实心，屏上就是毛刺加断续。
- *  资源现在按三档屏各出一份（生成脚本的 `METRIC_SIZES`），尺寸走
- *  `USER_METRIC_ICON_SZ`，正常都能精确命中、走不到缩放。
- *  同一套做法见 `ui_message_store.cpp` 的 `ui_message_severity_icon()`。
- *
- *  取最接近而不是只认精确相等，是为了监控态那枚返回钮——它的图标边长跟的是
- *  `USER_PRINT_CTL_BTN / 2`（48/32/25），1024 档的 25 与本表的 26 差 1px。
- */
+/** 多档 set 挑图，实现在 `ui_user_pick_icon()`（侧栏、控制页也在用同一份）。
+ *  本页调用点多，留个短名转调。 */
 const lv_image_dsc_t *pick_icon(const lv_image_dsc_t *const *set, int32_t sz)
 {
-    const lv_image_dsc_t *best = set[0];
-    int32_t best_d = INT32_MAX;
-    for(const lv_image_dsc_t *const *p = set; *p != nullptr; ++p) {
-        const int32_t d = LV_ABS((int32_t)(*p)->header.w - sz);
-        if(d < best_d) { best_d = d; best = *p; }
-    }
-    return best;
+    return ui_user_pick_icon(set, sz);
 }
 
-/** dim 着色的指标图标：取 set 里与 sz 等宽的那份，1:1 画进 sz 方盒、居中。
+/** 着色的指标图标：取 set 里与 sz 等宽的那份，1:1 画进 sz 方盒、居中。
  *  尺寸对不上（改了主题却没同步生成脚本）才退回缩放，保证形不崩、只是糊。 */
-lv_obj_t *make_dim_icon(lv_obj_t *parent, const lv_image_dsc_t *const *set, int32_t sz)
+lv_obj_t *make_tinted_icon(lv_obj_t *parent, const lv_image_dsc_t *const *set,
+                           int32_t sz, lv_color_t color)
 {
     const lv_image_dsc_t *src = pick_icon(set, sz);
 
@@ -616,7 +603,7 @@ lv_obj_t *make_dim_icon(lv_obj_t *parent, const lv_image_dsc_t *const *set, int3
 
     lv_obj_t *img = lv_image_create(box);
     lv_image_set_src(img, src);
-    lv_obj_set_style_image_recolor(img, user_color_text_dim, 0);
+    lv_obj_set_style_image_recolor(img, color, 0);
     lv_obj_set_style_image_recolor_opa(img, LV_OPA_COVER, 0);
     const int32_t sw = (int32_t)src->header.w;
     if(sw != sz) {
@@ -625,6 +612,12 @@ lv_obj_t *make_dim_icon(lv_obj_t *parent, const lv_image_dsc_t *const *set, int3
     }
     lv_obj_center(img);
     return box;
+}
+
+/** 深色页面上那档 dim 灰（打印态/监控态在用）。 */
+lv_obj_t *make_dim_icon(lv_obj_t *parent, const lv_image_dsc_t *const *set, int32_t sz)
+{
+    return make_tinted_icon(parent, set, sz, user_color_text_dim);
 }
 
 void home_card_update(void);   /* 定义见下方数据刷新区 */
@@ -636,313 +629,281 @@ void on_home_metric_toggle(lv_event_t * /*e*/)
     home_card_update();
 }
 
-/* 左卡：HOME 空气质量磨砂卡（对齐 Figma 5277:11664）。 */
+/** 把浅色稿 HOME 卡内部的设计坐标（基准 240×300@1280）折到当前档位。
+ *  卡内所有元素都是稿上的绝对定位，逐个开主题字段不值当，统一按卡宽比例折。
+ *  **基准要跟着 user_home_card_w 的 1280 档走**，改那个值就要改这里的除数。 */
+int32_t card_px(int32_t design_v)
+{
+    return design_v * USER_HOME_CARD_W / 240;
+}
+
+/** 卡内那枚 dim 图标：浅色稿里 HOME 卡与四宫格的卡头图标都是 24@1280，
+ *  即 USER_METRIC_ICON_SZ 的 3/4（三档整除成 36/24/19，生成脚本里都有原生尺寸）。 */
+int32_t light_icon_sz(void)
+{
+    return USER_METRIC_ICON_SZ * 3 / 4;
+}
+
+const lv_image_dsc_t *home_card_bg_dsc(void);   /* 定义见下方背景挑图区 */
+
+/* 左卡：HOME 空气质量卡（浅色稿 6064:70631）。
+ *
+ * 底是预生成位图（径向渐变 + 点阵 + 底缘柔光，见 tools/gen_home_bg.py），卡内元素全是
+ * 稿上的绝对定位，所以这里一律 FLOATING + align，不走 flex——稿本身就没有流式结构，
+ * 硬套 flex 反而要为每一格编一套间距。
+ *
+ * 分级阈值、四档配色、游标插值这些逻辑一个没动，只是换了外观：色条从「绿/黄/橙/红四段」
+ * 变成稿上的「白色四段、不透明度 20/40/60/80% 递增」，分级靠游标位置而不是颜色表达。 */
 lv_obj_t *build_home_card(lv_obj_t *parent)
 {
     lv_obj_t *card = lv_obj_create(parent);
     lv_obj_remove_style_all(card);
     lv_obj_add_flag(card, LV_OBJ_FLAG_FLOATING);
-    lv_obj_set_width(card, USER_HOME_CARD_W);
-    lv_obj_set_height(card, LV_SIZE_CONTENT);
-    lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_flex_align(card, LV_FLEX_ALIGN_START,
-                          LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
-    /* 内边距稿上是 20，取 USER_PAD（24）差 4px——20 不落在 16/24/32 这套梯度上，
-     * 为它单开一个字段不值当。行距稿上是 24，正好是 USER_PAD。 */
-    lv_obj_set_style_pad_all(card, USER_PAD, 0);
-    lv_obj_set_style_pad_row(card, USER_PAD, 0);
-    /* 稿上这张卡 fills 是空的、只有一层 backdrop blur(25px)，LVGL 没有背景模糊，
-     * 仍用半透明深底 + 细白描边近似——纯靠模糊的话浅色背景处文字读不清。 */
-    lv_obj_set_style_bg_color(card, lv_color_black(), 0);
-    lv_obj_set_style_bg_opa(card, LV_OPA_40, 0);
-    lv_obj_set_style_radius(card, USER_RADIUS, 0);
-    lv_obj_set_style_border_width(card, 1, 0);
-    lv_obj_set_style_border_color(card, lv_color_white(), 0);
-    lv_obj_set_style_border_opa(card, LV_OPA_10, 0);
+    lv_obj_set_size(card, USER_HOME_CARD_W, USER_HOME_CARD_H);
+    lv_obj_set_style_radius(card, USER_LIGHT_RADIUS, 0);
+    /* 背景位图是方的，圆角靠这个裁——不把圆角烤进图里，换圆角就不用重跑脚本。 */
+    lv_obj_set_style_clip_corner(card, true, 0);
+    lv_obj_set_style_bg_opa(card, LV_OPA_TRANSP, 0);
     lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
-    /* 稿 5339:27207 把这张卡摆在上半区（左下让给两枚入口胶囊），不再垂直居中。
-     * 顶距原先写成 USER_TOPBAR_H + USER_PAD_LG*2，那是按旧稿 5277:11664 的 208 折算的；
-     * 新稿量出来是 241，而间距梯度改成 32 后那个式子只算得 192、离稿更远，故独立成
-     * USER_HOME_CARD_TOP。左边距 32 是稿上内容区的统一左内距，正好等于 USER_PAD_LG，
-     * 但父节点 area 现在铺满整屏（背景要跨到屏幕左缘），所以左对齐还得补一个侧栏宽
-     * ——同 build_monitor_area 里的 EXIT 钮。 */
+    /* 左边距 32 是稿上内容区的统一左内距（正好等于 USER_PAD_LG），但父节点 area 铺满
+     * 整屏、没让开侧栏，所以左对齐还得自己补一个侧栏宽——同 build_monitor_area 的 EXIT 钮。 */
     lv_obj_align(card, LV_ALIGN_TOP_LEFT, USER_PAD_LG + USER_SIDEBAR_W,
                  USER_HOME_CARD_TOP);
 
-    /* 头部：[home 图标] 标题 ...(撑开)... [切换按钮] */
-    lv_obj_t *head = lv_obj_create(card);
-    lv_obj_remove_style_all(head);
-    lv_obj_set_width(head, LV_PCT(100));
-    lv_obj_set_height(head, LV_SIZE_CONTENT);
-    lv_obj_set_flex_flow(head, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(head, LV_FLEX_ALIGN_START,
-                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_column(head, USER_PAD_SM, 0);
-    lv_obj_set_style_bg_opa(head, LV_OPA_TRANSP, 0);
-    lv_obj_clear_flag(head, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_t *bg = lv_image_create(card);
+    lv_image_set_src(bg, home_card_bg_dsc());
+    lv_obj_set_size(bg, LV_PCT(100), LV_PCT(100));
+    lv_image_set_inner_align(bg, LV_IMAGE_ALIGN_COVER);
+    lv_obj_center(bg);
 
-    make_dim_icon(head, ic_home_set, USER_METRIC_ICON_SZ);
+    /* 头部：房子图标 (24,24) + 标题，右上角一枚 48 的切换钮 (180,12)。
+     * 标题左缘 52 = 图标左 24 + 图标 24 + 间距 4；顶 24 是让它与 24 见方的图标居中对齐
+     * 后的视觉位置（稿上整组的 opacity 是 90%）。 */
+    lv_obj_t *hicon = make_tinted_icon(card, ic_home_set, light_icon_sz(),
+                                       lv_color_white());
+    lv_obj_align(hicon, LV_ALIGN_TOP_LEFT, card_px(24), card_px(24));
 
-    g_home_card_title = lv_label_create(head);
+    g_home_card_title = lv_label_create(card);
     lv_label_set_text(g_home_card_title, kAirMetrics[0].title);
-    lv_obj_set_style_text_color(g_home_card_title, user_color_text, 0);
-    lv_obj_set_style_text_opa(g_home_card_title, LV_OPA_50, 0);
-    lv_obj_set_style_text_font(g_home_card_title, user_font_text(), 0);
+    lv_obj_set_style_text_color(g_home_card_title, lv_color_white(), 0);
+    lv_obj_set_style_text_opa(g_home_card_title, LV_OPA_90, 0);
+    lv_obj_set_style_text_font(g_home_card_title, user_font_title(), 0);
+    lv_obj_align(g_home_card_title, LV_ALIGN_TOP_LEFT, card_px(52), card_px(24));
 
-    lv_obj_t *hspacer = lv_obj_create(head);
-    lv_obj_remove_style_all(hspacer);
-    lv_obj_set_height(hspacer, 1);
-    lv_obj_set_flex_grow(hspacer, 1);
-    lv_obj_set_style_bg_opa(hspacer, LV_OPA_TRANSP, 0);
-
-    lv_obj_t *toggle = lv_button_create(head);
+    lv_obj_t *toggle = lv_button_create(card);
     lv_obj_remove_style_all(toggle);
-    /* 可点方框比图标本身大一圈（1280 档 32→40），给指尖留余量 */
-    lv_obj_set_size(toggle, USER_METRIC_ICON_SZ * 5 / 4, USER_METRIC_ICON_SZ * 5 / 4);
-    lv_obj_set_style_bg_opa(toggle, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_bg_color(toggle, lv_color_white(), LV_STATE_PRESSED);
-    lv_obj_set_style_bg_opa(toggle, LV_OPA_10, LV_STATE_PRESSED);
-    lv_obj_set_style_radius(toggle, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_size(toggle, card_px(48), card_px(48));
+    /* 稿上这枚是白 30% 的圆角方块（不是全圆），圆角 16 取卡圆角的 2/3 */
+    lv_obj_set_style_radius(toggle, USER_LIGHT_RADIUS * 2 / 3, 0);
+    lv_obj_set_style_bg_color(toggle, lv_color_white(), 0);
+    lv_obj_set_style_bg_opa(toggle, LV_OPA_30, 0);
+    lv_obj_set_style_bg_opa(toggle, LV_OPA_50, LV_STATE_PRESSED);
+    lv_obj_align(toggle, LV_ALIGN_TOP_LEFT, card_px(180), card_px(12));
     lv_obj_add_event_cb(toggle, on_home_metric_toggle, LV_EVENT_CLICKED, nullptr);
-    lv_obj_t *tg_icon = make_dim_icon(toggle, ic_switch_set, USER_METRIC_ICON_SZ);
+    lv_obj_t *tg_icon = make_tinted_icon(toggle, ic_switch_set, light_icon_sz(),
+                                         lv_color_white());
     lv_obj_center(tg_icon);
 
-    /* 分隔线（稿 5277:11674 是白 30%，比旧稿那条亮一档） */
-    lv_obj_t *div = lv_obj_create(card);
-    lv_obj_remove_style_all(div);
-    lv_obj_set_size(div, LV_PCT(100), 1);
-    lv_obj_set_style_bg_color(div, user_color_text, 0);
-    lv_obj_set_style_bg_opa(div, LV_OPA_30, 0);
-
-    /* 分级大字 + 灰色小字（底对齐） */
-    lv_obj_t *lrow = lv_obj_create(card);
-    lv_obj_remove_style_all(lrow);
-    lv_obj_set_size(lrow, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
-    lv_obj_set_flex_flow(lrow, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(lrow, LV_FLEX_ALIGN_START,
-                          LV_FLEX_ALIGN_END, LV_FLEX_ALIGN_END);
-    lv_obj_set_style_pad_column(lrow, USER_PAD_SM, 0);
-    lv_obj_set_style_bg_opa(lrow, LV_OPA_TRANSP, 0);
-    lv_obj_clear_flag(lrow, LV_OBJ_FLAG_SCROLLABLE);
-
-    g_home_card_level = lv_label_create(lrow);
+    /* 分级大字与读数。稿上是一个 gap 4 的竖向块，顶在 136；"Good" 行高 52 而字号 40，
+     * 上下各有 6 的行内留白，所以标签自身的顶落在 142。左缘 24 与上面的图标对齐。 */
+    g_home_card_level = lv_label_create(card);
     lv_label_set_text(g_home_card_level, "--");
-    lv_obj_set_style_text_color(g_home_card_level, user_color_text, 0);
-    lv_obj_set_style_text_font(g_home_card_level, user_font_value(), 0);
+    lv_obj_set_style_text_color(g_home_card_level, lv_color_white(), 0);
+    lv_obj_set_style_text_font(g_home_card_level, user_font_display(), 0);
+    lv_obj_align(g_home_card_level, LV_ALIGN_TOP_LEFT, card_px(24), card_px(142));
 
-    g_home_card_value = lv_label_create(lrow);
+    g_home_card_value = lv_label_create(card);
     lv_label_set_text(g_home_card_value, "");
-    lv_obj_set_style_text_color(g_home_card_value, user_color_text, 0);
-    lv_obj_set_style_text_opa(g_home_card_value, LV_OPA_50, 0);
-    lv_obj_set_style_text_font(g_home_card_value, user_font_caption(), 0);
-    lv_obj_set_style_margin_bottom(g_home_card_value, USER_PAD_SM, 0);
+    lv_obj_set_style_text_color(g_home_card_value, lv_color_white(), 0);
+    lv_obj_set_style_text_opa(g_home_card_value, LV_OPA_70, 0);
+    lv_obj_set_style_text_font(g_home_card_value, user_font_body(), 0);
+    lv_obj_align(g_home_card_value, LV_ALIGN_TOP_LEFT, card_px(24), card_px(198));
 
-    /* 四段色条 + 游标圆点（游标在 wrap 内按比例定位；track 宽度 100%） */
+    /* 四段色条 (24,262) 宽 192 高 8 间距 4，游标 20 居中骑在上面（外框按游标高取 20，
+     * 顶因此比色条早 6，即 256——正好是稿上游标自己的顶）。
+     * 稿上四段是**白色、不透明度 20/40/60/80% 递增**，不是早先那套绿/黄/橙/红——
+     * 分级改由游标位置和上面那行大字表达，色条只当刻度。 */
     lv_obj_t *seg_wrap = lv_obj_create(card);
     lv_obj_remove_style_all(seg_wrap);
-    lv_obj_set_width(seg_wrap, LV_PCT(100));
-    /* 稿 5339:27457 这一格高 24：轨道 8 居中（上下各 8），游标 16 居中（上下各 4）。 */
-    lv_obj_set_height(seg_wrap, 24);
+    lv_obj_set_size(seg_wrap, card_px(192), card_px(20));
     lv_obj_set_style_bg_opa(seg_wrap, LV_OPA_TRANSP, 0);
     lv_obj_clear_flag(seg_wrap, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_align(seg_wrap, LV_ALIGN_TOP_LEFT, card_px(24), card_px(256));
 
     g_home_seg_track = lv_obj_create(seg_wrap);
     lv_obj_remove_style_all(g_home_seg_track);
     lv_obj_set_width(g_home_seg_track, LV_PCT(100));
-    lv_obj_set_height(g_home_seg_track, 8);
+    lv_obj_set_height(g_home_seg_track, card_px(8));
     lv_obj_align(g_home_seg_track, LV_ALIGN_LEFT_MID, 0, 0);
     lv_obj_set_flex_flow(g_home_seg_track, LV_FLEX_FLOW_ROW);
-    lv_obj_set_style_pad_column(g_home_seg_track, 4, 0);
+    lv_obj_set_style_pad_column(g_home_seg_track, card_px(4), 0);
     lv_obj_set_style_bg_opa(g_home_seg_track, LV_OPA_TRANSP, 0);
     lv_obj_clear_flag(g_home_seg_track, LV_OBJ_FLAG_SCROLLABLE);
+    static const lv_opa_t kSegOpa[4] = { LV_OPA_20, LV_OPA_40, LV_OPA_60, LV_OPA_80 };
     for(int i = 0; i < 4; ++i) {
         lv_obj_t *seg = lv_obj_create(g_home_seg_track);
         lv_obj_remove_style_all(seg);
         lv_obj_set_flex_grow(seg, 1);
-        lv_obj_set_height(seg, 8);
-        lv_obj_set_style_radius(seg, 2, 0);
-        lv_obj_set_style_bg_color(seg, air_level_color(i), 0);
-        lv_obj_set_style_bg_opa(seg, LV_OPA_COVER, 0);
+        lv_obj_set_height(seg, LV_PCT(100));
+        lv_obj_set_style_radius(seg, card_px(2), 0);
+        lv_obj_set_style_bg_color(seg, lv_color_white(), 0);
+        lv_obj_set_style_bg_opa(seg, kSegOpa[i], 0);
         lv_obj_clear_flag(seg, LV_OBJ_FLAG_SCROLLABLE);
     }
 
     g_home_seg_dot = lv_obj_create(seg_wrap);
     lv_obj_remove_style_all(g_home_seg_dot);
-    lv_obj_set_size(g_home_seg_dot, 16, 16);   /* 稿 5339:27463 */
+    lv_obj_set_size(g_home_seg_dot, card_px(20), card_px(20));
     lv_obj_set_style_radius(g_home_seg_dot, LV_RADIUS_CIRCLE, 0);
     lv_obj_set_style_bg_color(g_home_seg_dot, lv_color_white(), 0);
     lv_obj_set_style_bg_opa(g_home_seg_dot, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_width(g_home_seg_dot, 2, 0);
-    lv_obj_set_style_border_color(g_home_seg_dot, lv_color_black(), 0);
-    lv_obj_set_style_border_opa(g_home_seg_dot, LV_OPA_30, 0);
     lv_obj_align(g_home_seg_dot, LV_ALIGN_LEFT_MID, 0, 0);
     lv_obj_clear_flag(g_home_seg_dot, LV_OBJ_FLAG_SCROLLABLE);
+
+    /* 色条下原先还有 Good / Fair / Poor / Bad 四个刻度名，新稿去掉了：分级只由上面
+     * 那行大字和游标位置表达，色条纯当刻度。 */
 
     return card;
 }
 
-/* Cabin 单行：[图标] 标签 ...(撑开)... 数值 + 单位（稿 5277:11591 起四行都带单位）。 */
-lv_obj_t *make_cabin_row(lv_obj_t *parent, const lv_image_dsc_t *const *icon,
-                         const char *label, const char *unit_text,
-                         lv_obj_t **out_val, lv_obj_t **out_unit)
+/** 同一行里混两个字号时，让小字与大字**基线**对齐要补的量。
+ *
+ *  LVGL 的 flex 只能按盒子边对齐，没有基线对齐。label 的盒高就是 font->line_height，
+ *  基线距盒底正好是 font->base_line（下伸部）。两个 label 盒底对齐时，小字的基线会比
+ *  大字低 (base_big - base_small)，把这个差值补成小字的 pad_bottom 即可抬回去。
+ *  字号随档位变，所以这里从字体现取、不写死。 */
+int32_t baseline_pad(const lv_font_t *big, const lv_font_t *small)
 {
-    lv_obj_t *row = lv_obj_create(parent);
-    lv_obj_remove_style_all(row);
-    lv_obj_set_width(row, LV_PCT(100));
-    lv_obj_set_height(row, LV_SIZE_CONTENT);
-    lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(row, LV_FLEX_ALIGN_START,
-                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_column(row, USER_PAD_SM, 0);
-    lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, 0);
-    lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
+    const int32_t d = (int32_t)big->base_line - (int32_t)small->base_line;
+    return d > 0 ? d : 0;
+}
 
-    make_dim_icon(row, icon, USER_METRIC_ICON_SZ);
+/* 四宫格里的一格（稿 6201:85940 一族）：白卡，左上 caption、左下大读数，没有图标。
+ * 卡尺寸由外层网格算好后传进来，caption 与读数之间用 SPACE_BETWEEN 撑开。
+ *
+ * caption 与读数都可能是「大字 + 小一号后缀」的组合（稿上 `Temp.` 20 配 `(°C)` 13、
+ * `592.0` 32 配 `kpa` 20），LVGL 一个 label 只能一种字体，所以各自拆成两个 label
+ * 横排、用 baseline_pad() 把基线找齐。
+ *
+ * @param cap_sm  caption 的小字后缀，可为 NULL（只有 Temp. 这一格有）
+ * @param unit    读数后面的单位，可为 NULL
+ * @param out_val 回传**数值**那个 label；单位是它的下一个兄弟，见 update_grid_metric()
+ */
+lv_obj_t *make_metric_cell(lv_obj_t *parent, const char *label, const char *cap_sm,
+                           const char *unit, int32_t w, int32_t h,
+                           lv_obj_t **out_val)
+{
+    lv_obj_t *cell = lv_obj_create(parent);
+    lv_obj_remove_style_all(cell);
+    lv_obj_set_size(cell, w, h);
+    lv_obj_set_style_radius(cell, USER_LIGHT_RADIUS, 0);
+    lv_obj_set_style_bg_color(cell, user_light_card, 0);
+    lv_obj_set_style_bg_opa(cell, LV_OPA_COVER, 0);
+    /* 稿上是 drop-shadow(0 2 3 rgba(0,0,0,0.04))，很淡但不能省：白卡压在 #f5f5f5 上，
+     * 没有这层影子边界会看不出来。 */
+    lv_obj_set_style_shadow_width(cell, 3, 0);
+    lv_obj_set_style_shadow_ofs_y(cell, 2, 0);
+    lv_obj_set_style_shadow_color(cell, lv_color_black(), 0);
+    lv_obj_set_style_shadow_opa(cell, 10, 0);
+    lv_obj_set_style_pad_all(cell, USER_PAD, 0);   /* 稿 24 */
+    lv_obj_set_flex_flow(cell, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(cell, LV_FLEX_ALIGN_SPACE_BETWEEN,
+                          LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
+    lv_obj_clear_flag(cell, LV_OBJ_FLAG_SCROLLABLE);
 
-    lv_obj_t *cap = lv_label_create(row);
+    /* caption 行：两段文字紧挨着排。
+     * **主轴不能用 SPACE_BETWEEN**——那是改版前为了把右上角那枚图标顶到卡片另一端
+     * 设的，图标删掉之后会把 `Temp.` 和 `(°C)` 撑到卡片两端去。
+     * **交叉轴必须是 END**：baseline_pad() 补的是「盒底对齐时两个字号的基线差」，
+     * 只有底对齐才成立；CENTER 下它反而会把小字往上抬半个补偿量。 */
+    lv_obj_t *head = lv_obj_create(cell);
+    lv_obj_remove_style_all(head);
+    lv_obj_set_size(head, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(head, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(head, LV_FLEX_ALIGN_START,
+                          LV_FLEX_ALIGN_END, LV_FLEX_ALIGN_END);
+    lv_obj_set_style_bg_opa(head, LV_OPA_TRANSP, 0);
+    lv_obj_clear_flag(head, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *cap = lv_label_create(head);
     lv_label_set_text(cap, label);
-    lv_obj_set_style_text_color(cap, user_color_text, 0);
-    lv_obj_set_style_text_opa(cap, LV_OPA_50, 0);
-    lv_obj_set_style_text_font(cap, user_font_text(), 0);
+    lv_obj_set_style_text_color(cap, user_light_text, 0);
+    lv_obj_set_style_text_opa(cap, LV_OPA_60, 0);
+    lv_obj_set_style_text_font(cap, user_font_title(), 0);
 
-    lv_obj_t *spacer = lv_obj_create(row);
-    lv_obj_remove_style_all(spacer);
-    lv_obj_set_height(spacer, 1);
-    lv_obj_set_flex_grow(spacer, 1);
-    lv_obj_set_style_bg_opa(spacer, LV_OPA_TRANSP, 0);
+    if(cap_sm) {
+        lv_obj_t *cs = lv_label_create(head);
+        lv_label_set_text(cs, cap_sm);
+        lv_obj_set_style_text_color(cs, user_light_text, 0);
+        lv_obj_set_style_text_opa(cs, LV_OPA_60, 0);
+        lv_obj_set_style_text_font(cs, user_font_caption(), 0);
+        lv_obj_set_style_pad_bottom(cs, baseline_pad(user_font_title(),
+                                                     user_font_caption()), 0);
+    }
 
-    /* 数值 + 单位（底对齐） */
-    lv_obj_t *vrow = lv_obj_create(row);
+    /* 读数行：数值 + 单位，底对齐后靠 pad_bottom 把基线找齐。 */
+    lv_obj_t *vrow = lv_obj_create(cell);
     lv_obj_remove_style_all(vrow);
     lv_obj_set_size(vrow, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
     lv_obj_set_flex_flow(vrow, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(vrow, LV_FLEX_ALIGN_START,
                           LV_FLEX_ALIGN_END, LV_FLEX_ALIGN_END);
-    lv_obj_set_style_pad_column(vrow, USER_PAD_SM / 2, 0);
     lv_obj_set_style_bg_opa(vrow, LV_OPA_TRANSP, 0);
     lv_obj_clear_flag(vrow, LV_OBJ_FLAG_SCROLLABLE);
 
     lv_obj_t *val = lv_label_create(vrow);
     lv_label_set_text(val, "--");
-    lv_obj_set_style_text_color(val, user_color_text, 0);
-    lv_obj_set_style_text_font(val, user_font_value(), 0);
-    if(out_val) *out_val = val;
+    lv_obj_set_style_text_color(val, user_light_value, 0);
+    lv_obj_set_style_text_font(val, user_font_metric(), 0);
 
-    /* 单位可选：不带单位的行传 unit_text=nullptr，此时不建 label 并回传空指针，
-     * 下游 update_cabin_metric() 靠判空决定要不要跟着数值一起隐藏。 */
-    if(unit_text) {
+    if(unit) {
         lv_obj_t *u = lv_label_create(vrow);
-        lv_label_set_text(u, unit_text);
-        lv_obj_set_style_text_color(u, user_color_text, 0);
-        lv_obj_set_style_text_opa(u, LV_OPA_50, 0);
-        lv_obj_set_style_text_font(u, user_font_caption(), 0);
-        lv_obj_set_style_margin_bottom(u, USER_PAD_SM, 0);
-        if(out_unit) *out_unit = u;
-    } else if(out_unit) {
-        *out_unit = nullptr;
+        lv_label_set_text(u, unit);
+        lv_obj_set_style_text_color(u, user_light_value, 0);
+        lv_obj_set_style_text_font(u, user_font_title(), 0);
+        lv_obj_set_style_pad_bottom(u, baseline_pad(user_font_metric(),
+                                                    user_font_title()), 0);
     }
-    return row;
+
+    if(out_val) *out_val = val;
+    return cell;
 }
 
-/* 右侧 CABIN CONDITION：头部 + 引线分隔线 + 4 行（悬浮文本，无卡片底）。
+/* 右侧四宫格（稿 6040:66164）：2×2 白卡，与左边 HOME 卡等高并排、中间隔 16。
  *
- * 稿 5339:27390/27436/27389/27442 的几何（1280×800 原生）：
- *   文字区（标题 + 四行）x=946 宽 294，右缘 1240（距屏右 40）
- *   分隔线              x=766 宽 474 —— 比文字区左缘再往左探 180，右端与文字区齐
- *   线左端的空心圆环     x=750 直径 16，圆心落在线上
- * 于是面板整体宽 = 引线段(180) + 圆环(16) + 文字区(294) = 490，标题与四行数据都相对
- * 面板左缘缩进 196，只有分隔线那一行独占全宽。
+ * 这块取代了早先那个「悬浮文本 + 引线 + 空心圆环」的 CABIN 面板：浅色稿里它变成了
+ * 规规矩矩的卡片网格，引线那套几何（USER_HOME_CABIN_LEAD_W 等）随之作废。
+ * 四项语义没变，仍是舱内的温度/氧浓度/湿度/气压，数据源也还是同一份快照。
  *
- * 纵向节奏（相对标题顶）：标题 0..32、线 56、四行 80..256。圆环在稿里是绝对定位、
- * 骑在线上不占流高，而这里它在 flex 流里、把那一格撑成 16 高，所以三段间距统一取
- * USER_PAD_SM(16) 而不是稿上标注的 24——算下来线正好落在 56、四行正好从 80 起，
- * 与稿逐像素一致。**别改成 USER_PAD**，那会把四行整体推低 15px。 */
-lv_obj_t *build_cabin_panel(lv_obj_t *parent)
+ * 单卡尺寸由总宽高减去一道间距再折半推出来（1280 档正好是稿的 166×139），不单开字段。
+ * 稿上单位是并进读数字符串的（"23.6°" / "59.0kpa"），不再单起一个 label。 */
+lv_obj_t *build_metric_grid(lv_obj_t *parent)
 {
-    /* 圆环直径：1280 档 USER_STATUS_DOT_SZ*4/3 正好是稿上的 16。 */
-    const int32_t ring_sz = USER_STATUS_DOT_SZ * 4 / 3;
-    const int32_t indent  = USER_HOME_CABIN_LEAD_W + ring_sz;
+    const int32_t gap = USER_PAD_SM / 2;                    /* 稿 8 */
+    const int32_t cw  = (USER_HOME_GRID_W - gap) / 2;
+    const int32_t ch  = (USER_HOME_CARD_H - gap) / 2;
 
-    lv_obj_t *panel = lv_obj_create(parent);
-    lv_obj_remove_style_all(panel);
-    lv_obj_add_flag(panel, LV_OBJ_FLAG_FLOATING);
-    lv_obj_set_width(panel, USER_HOME_CABIN_W + indent);
-    lv_obj_set_height(panel, LV_SIZE_CONTENT);
-    lv_obj_set_flex_flow(panel, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_flex_align(panel, LV_FLEX_ALIGN_START,
+    lv_obj_t *grid = lv_obj_create(parent);
+    lv_obj_remove_style_all(grid);
+    lv_obj_add_flag(grid, LV_OBJ_FLAG_FLOATING);
+    lv_obj_set_size(grid, USER_HOME_GRID_W, USER_HOME_CARD_H);
+    lv_obj_set_flex_flow(grid, LV_FLEX_FLOW_ROW_WRAP);
+    lv_obj_set_flex_align(grid, LV_FLEX_ALIGN_START,
                           LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
-    lv_obj_set_style_pad_row(panel, USER_PAD_SM, 0);
-    lv_obj_set_style_bg_opa(panel, LV_OPA_TRANSP, 0);
-    lv_obj_clear_flag(panel, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_align(panel, LV_ALIGN_RIGHT_MID, -USER_HOME_CABIN_PAD_RIGHT, 0);
+    lv_obj_set_style_pad_column(grid, gap, 0);
+    lv_obj_set_style_pad_row(grid, gap, 0);
+    lv_obj_set_style_bg_opa(grid, LV_OPA_TRANSP, 0);
+    lv_obj_clear_flag(grid, LV_OBJ_FLAG_SCROLLABLE);
+    /* 紧贴 HOME 卡右侧：左缘 = 卡左缘 + 卡宽 + 间距，顶与卡齐。 */
+    lv_obj_align(grid, LV_ALIGN_TOP_LEFT,
+                 USER_PAD_LG + USER_SIDEBAR_W + USER_HOME_CARD_W + USER_PAD_SM,
+                 USER_HOME_CARD_TOP);
 
-    /* 头部：[cabin 图标] CABIN CONDITION —— 靠 margin_left 缩回文字区左缘。 */
-    lv_obj_t *head = lv_obj_create(panel);
-    lv_obj_remove_style_all(head);
-    lv_obj_set_size(head, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
-    lv_obj_set_flex_flow(head, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(head, LV_FLEX_ALIGN_START,
-                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_column(head, USER_PAD_SM, 0);
-    lv_obj_set_style_margin_left(head, indent, 0);
-    lv_obj_set_style_bg_opa(head, LV_OPA_TRANSP, 0);
-    lv_obj_clear_flag(head, LV_OBJ_FLAG_SCROLLABLE);
-    make_dim_icon(head, ic_cabin_set, USER_METRIC_ICON_SZ);
-    lv_obj_t *htitle = lv_label_create(head);
-    lv_label_set_text(htitle, "CABIN CONDITION");
-    lv_obj_set_style_text_color(htitle, user_color_text, 0);
-    lv_obj_set_style_text_opa(htitle, LV_OPA_50, 0);
-    lv_obj_set_style_text_font(htitle, user_font_text(), 0);
-    lv_obj_set_style_text_letter_space(htitle, 1, 0);
-
-    /* 引线那一行：[空心圆环][分隔线吃掉剩余宽]，整行独占面板全宽。
-     * 圆环与线都靠交叉轴居中，所以线恰好穿过圆心。 */
-    lv_obj_t *lead = lv_obj_create(panel);
-    lv_obj_remove_style_all(lead);
-    lv_obj_set_size(lead, LV_PCT(100), ring_sz);
-    lv_obj_set_flex_flow(lead, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(lead, LV_FLEX_ALIGN_START,
-                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_bg_opa(lead, LV_OPA_TRANSP, 0);
-    lv_obj_clear_flag(lead, LV_OBJ_FLAG_SCROLLABLE);
-
-    lv_obj_t *ring = lv_obj_create(lead);
-    lv_obj_remove_style_all(ring);
-    lv_obj_set_size(ring, ring_sz, ring_sz);
-    lv_obj_set_style_radius(ring, LV_RADIUS_CIRCLE, 0);
-    lv_obj_set_style_bg_opa(ring, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_border_width(ring, 1, 0);
-    lv_obj_set_style_border_color(ring, user_color_text, 0);
-    lv_obj_set_style_border_opa(ring, LV_OPA_30, 0);
-    lv_obj_clear_flag(ring, LV_OBJ_FLAG_SCROLLABLE);
-
-    lv_obj_t *div = lv_obj_create(lead);
-    lv_obj_remove_style_all(div);
-    lv_obj_set_height(div, 1);
-    lv_obj_set_flex_grow(div, 1);
-    lv_obj_set_style_bg_color(div, user_color_text, 0);
-    lv_obj_set_style_bg_opa(div, LV_OPA_20, 0);
-
-    /* 四行数据缩回文字区：套一层 pad_left 容器，而**不是**给行本身加左边距——行是
-     * LV_PCT(100) 宽的，直接加边距会连宽度一起被推出面板右缘。
-     * 舱内 PM2.5 那行按稿 5277:11590 去掉，只留温度/氧浓度/湿度/气压。 */
-    lv_obj_t *rows = lv_obj_create(panel);
-    lv_obj_remove_style_all(rows);
-    lv_obj_set_width(rows, LV_PCT(100));
-    lv_obj_set_height(rows, LV_SIZE_CONTENT);
-    lv_obj_set_flex_flow(rows, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_flex_align(rows, LV_FLEX_ALIGN_START,
-                          LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
-    lv_obj_set_style_pad_left(rows, indent, 0);
-    lv_obj_set_style_pad_row(rows, USER_PAD_SM, 0);
-    lv_obj_set_style_bg_opa(rows, LV_OPA_TRANSP, 0);
-    lv_obj_clear_flag(rows, LV_OBJ_FLAG_SCROLLABLE);
-
-    make_cabin_row(rows, ic_temp_set,     "TEMP",     "\xC2\xB0""C", &g_cab_temp_val, &g_cab_temp_unit);
-    make_cabin_row(rows, ic_o2_set,       "O2 CONC.", "%",           &g_cab_o2_val,   &g_cab_o2_unit);
-    make_cabin_row(rows, ic_humidity_set, "HUMIDITY", "%",           &g_cab_hum_val,  &g_cab_hum_unit);
-    make_cabin_row(rows, ic_pressure_set, "PRESSURE", "kPa",         &g_cab_prs_val,  &g_cab_prs_unit);
-    return panel;
+    make_metric_cell(grid, "Temp.", " (\xC2\xB0""C)", "\xC2\xB0", cw, ch, &g_cab_temp_val);
+    make_metric_cell(grid, "O2",       nullptr, "%",   cw, ch, &g_cab_o2_val);
+    make_metric_cell(grid, "Humidity", nullptr, "%",   cw, ch, &g_cab_hum_val);
+    make_metric_cell(grid, "Pressure", nullptr, "kpa", cw, ch, &g_cab_prs_val);
+    return grid;
 }
 
 /** 取当前 profile 的首页背景图。1280 档用「背景图1」——新首页稿 5339:27207 那层背景就是
@@ -955,21 +916,101 @@ lv_obj_t *build_cabin_panel(lv_obj_t *parent)
  *  1024 档两侧变成 18 / 19px。推导与 1920 档的连带影响见 tools/gen_home_bg.py 的 PROFILES。
  *
  *  两个节点怎么选的、哪档换图要连带改什么，见 tools/gen_home_bg.py 的注释。 */
-const lv_image_dsc_t *home_bg_dsc()
+const lv_image_dsc_t *home_device_dsc()
 {
-    return (g_ui->profile_id == UI_RES_1280) ? &home_bg_1280 : &home_bg_1024;
+    return (g_ui->profile_id == UI_RES_1024) ? &home_device_1024 : &home_device_1280;
 }
 
-/** 中部主区：全屏整机背景（RGB565）+ 左卡（空气质量）+ 右侧 CABIN 面板。
- *  area 是**铺满整屏**的浮层（含状态栏区域与侧栏之下那条），整机背景一直顶到最上；
- *  状态栏在其后创建 → 浮于背景之上，顶部不再留黑边。
+const lv_image_dsc_t *home_card_bg_dsc()
+{
+    return (g_ui->profile_id == UI_RES_1024) ? &home_card_bg_1024 : &home_card_bg_1280;
+}
+
+/* 早先这里还有一个 build_status_hints()，在 HOME 卡与四宫格下方画 Home Status /
+ * Cabin Status 两行说明小字。新稿把它们去掉了（卡片本身已经贴到内容区底部），
+ * 连带主题里那枚只给它俩用的 user_light_hint 也一并删了。 */
+
+/** 问候语块（稿 6201:86001）：大字 + 一行副标题。
+ *  稿上左缘 160 与 HOME 卡对齐，两行间距 7。 */
+void build_greeting(lv_obj_t *parent)
+{
+    lv_obj_t *box = lv_obj_create(parent);
+    lv_obj_remove_style_all(box);
+    lv_obj_set_size(box, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(box, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(box, LV_FLEX_ALIGN_START,
+                          LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
+    lv_obj_set_style_pad_row(box, USER_PAD_SM / 2, 0);   /* 稿 7，取 8 */
+    lv_obj_set_style_bg_opa(box, LV_OPA_TRANSP, 0);
+    lv_obj_clear_flag(box, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_align(box, LV_ALIGN_TOP_LEFT, USER_PAD_LG + USER_SIDEBAR_W,
+                 USER_HOME_GREET_TOP);
+
+    g_greet_title = lv_label_create(box);
+    lv_label_set_text(g_greet_title, "Good morning");
+    lv_obj_set_style_text_color(g_greet_title, user_light_text, 0);
+    lv_obj_set_style_text_font(g_greet_title, user_font_metric(), 0);
+
+    lv_obj_t *sub = lv_label_create(box);
+    lv_label_set_text(sub, "Ready for your next print?");
+    lv_obj_set_style_text_color(sub, user_light_text, 0);
+    lv_obj_set_style_text_font(sub, user_font_body(), 0);
+}
+
+/** 设备图上那两颗余量胶囊（稿 6201:86004 / 86016）：白底全圆、20 料桶图标 + 20 文字。
  *
- *  用负偏移 + LV_HOR_RES 跨回本页根节点的 pad_left，与打印态/监控态的摄像头层同一套
- *  做法（见 build_printing_area）。**这一点不是可选的**：稿里背景铺满整屏 1280、侧栏是
- *  20% 黑的浮层压在背景之上，而背景层若只铺内容区，同一张 1.6 的图塞进更窄的框再从
- *  x=USER_SIDEBAR_W 起画，等效把设备整体往右推（1280 档 64px）。以前那笔账是靠
- *  gen_home_bg.py 把设备左移若干像素烤进资源来抵的，现在跨回整屏后 COVER 的结果与稿
- *  逐像素对齐，那个补偿已归零。改回只铺内容区就必须把补偿一起算回来。 */
+ *  图标是**主色的料桶 + 桶号**（`ic_barrel_1_set` / `ic_barrel_2_set`），与设备透图里
+ *  那两个料桶一一对应——两颗胶囊就钉在各自的桶上，所以编号不能对调。
+ *
+ *  **第二颗的取值还是借来的**：图标已经说明两颗都是料桶，但协议的 `SupplyStatusPayload`
+ *  只有 `material_pct` / `filter_pct` 两项、没有第二桶的余量，所以 update_supply_pills()
+ *  暂时拿 `filter_pct` 顶着。后端补上第二桶字段后改那一行即可，几何与样式不用动。 */
+lv_obj_t *make_supply_pill(lv_obj_t *parent, const lv_image_dsc_t *const *icon,
+                           int32_t x, int32_t y, lv_obj_t **out_label)
+{
+    lv_obj_t *pill = lv_obj_create(parent);
+    lv_obj_remove_style_all(pill);
+    lv_obj_set_size(pill, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_set_style_radius(pill, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_bg_color(pill, user_light_card, 0);
+    lv_obj_set_style_bg_opa(pill, 230, 0);               /* 稿 white @90%，压在设备图上 */
+    lv_obj_set_style_shadow_width(pill, 5, 0);
+    lv_obj_set_style_shadow_ofs_y(pill, 4, 0);
+    lv_obj_set_style_shadow_color(pill, lv_color_hex(0x4B68DE), 0);
+    lv_obj_set_style_shadow_opa(pill, 26, 0);            /* 稿 10% */
+    /* 稿量到：左内距 12、右内距 16（右边比左边宽一截，文字那侧要多留白）、
+     * 上下 11（胶囊高 44 = 11 + 文字行高 22 + 11）。上下与左取同一个值，
+     * 落地高 46、与稿差 2，在圆整范围内。 */
+    lv_obj_set_style_pad_left(pill, USER_PAD_SM * 3 / 4, 0);
+    lv_obj_set_style_pad_right(pill, USER_PAD_SM, 0);
+    lv_obj_set_style_pad_ver(pill, USER_PAD_SM * 3 / 4, 0);
+    lv_obj_set_style_pad_column(pill, USER_PAD_SM / 4, 0);     /* 稿 4 */
+    lv_obj_set_flex_flow(pill, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(pill, LV_FLEX_ALIGN_START,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_clear_flag(pill, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_align(pill, LV_ALIGN_TOP_LEFT, x, y);
+
+    /* 稿 20；三档折算正好是 USER_METRIC_ICON_SZ * 5/8 = 30/20/16，与图标的尺寸表对齐 */
+    make_tinted_icon(pill, icon, light_icon_sz() * 5 / 6, user_light_accent);
+
+    lv_obj_t *lbl = lv_label_create(pill);
+    lv_label_set_text(lbl, "--");
+    lv_obj_set_style_text_color(lbl, lv_color_black(), 0);
+    lv_obj_set_style_text_font(lbl, user_font_title(), 0);   /* 稿 20 */
+    if(out_label) *out_label = lbl;
+    return pill;
+}
+
+/** 中部主区：浅色底 + 定位摆放的设备图 + 问候语 + HOME 卡 + 四宫格 + 余量胶囊。
+ *
+ *  area 是**铺满整屏**的浮层（含状态栏区域与侧栏之下那条），用负偏移 + LV_HOR_RES 跨回
+ *  本页根节点的 pad_left，与打印态/监控态的摄像头层同一套做法（见 build_printing_area）。
+ *  稿上的坐标都是整屏坐标系（设备图 x=663、HOME 卡 x=160 都含侧栏那 128），所以这里必须
+ *  铺整屏才能直接照抄；若改回只铺内容区，所有 x 都要减去一个侧栏宽。
+ *
+ *  设备图右下两侧都是**出血**的（663 + 700 = 1363 > 1280、172 + 700 = 872 > 800），
+ *  超出部分由 area 裁掉，稿本身就这样。 */
 lv_obj_t *build_main_area(lv_obj_t *parent)
 {
     lv_obj_t *area = lv_obj_create(parent);
@@ -978,23 +1019,31 @@ lv_obj_t *build_main_area(lv_obj_t *parent)
     lv_obj_set_size(area, LV_HOR_RES, LV_PCT(100));
     lv_obj_set_pos(area, -USER_SIDEBAR_W, 0);
     lv_obj_set_style_pad_all(area, 0, 0);
-    lv_obj_set_style_bg_opa(area, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_bg_color(area, user_light_bg, 0);
+    lv_obj_set_style_bg_opa(area, LV_OPA_COVER, 0);
     lv_obj_clear_flag(area, LV_OBJ_FLAG_SCROLLABLE);
 
-    /* 整机背景大图：铺满 area（现在就是整屏）、等比 cover、居中。资源按 profile 出两份
-     * （见 tools/gen_home_bg.py），各自就是该档的屏幕原尺寸，所以 COVER 都落到 1.000、
-     * 零重采样：1280 档 1280×800 严丝合缝，1024 档 1024×640 只纵向上下各裁 20px。
-     * 1280 档原先是拿 1024×640 放大 1.25× 的，那是它发软的原因。
-     * 旧注释里说的「只铺内容区、靠资源里 20px 左移补偿」已随 area 跨回整屏而作废，
-     * 详见 app/ui/UI.md「首页待机布局」。 */
-    lv_obj_t *bg = lv_image_create(area);
-    lv_image_set_src(bg, home_bg_dsc());
-    lv_obj_set_size(bg, LV_PCT(100), LV_PCT(100));
-    lv_image_set_inner_align(bg, LV_IMAGE_ALIGN_COVER);
-    lv_obj_center(bg);
+    /* 设备渲染图：资源按档位出原生尺寸（见 tools/gen_home_bg.py），1280/1024 两档
+     * COVER 都落到 1.000、零重采样；1920 档复用 1280 那份、放大 1.5×，会软。 */
+    lv_obj_t *dev = lv_image_create(area);
+    lv_image_set_src(dev, home_device_dsc());
+    lv_obj_set_size(dev, USER_HOME_DEV_IMG, USER_HOME_DEV_IMG);
+    lv_image_set_inner_align(dev, LV_IMAGE_ALIGN_COVER);
+    lv_obj_align(dev, LV_ALIGN_TOP_LEFT, USER_HOME_DEV_IMG_X, USER_HOME_DEV_IMG_Y);
 
+    build_greeting(area);
     build_home_card(area);
-    build_cabin_panel(area);
+    build_metric_grid(area);
+
+    /* 两颗余量胶囊钉在设备图上。稿上给的是整屏坐标 (844,325) / (1097,353)，这里换算成
+     * 相对设备图左上角（663,172）的比例，换档位时跟着图一起缩放、不会飘离料盒。
+     * 图标的桶号要与钉的位置对上：A 在左桶、B 在右桶。 */
+    make_supply_pill(area, ic_barrel_1_set,
+                     USER_HOME_DEV_IMG_X + USER_HOME_DEV_IMG * 181 / 700,
+                     USER_HOME_DEV_IMG_Y + USER_HOME_DEV_IMG * 153 / 700, &g_supply_pill_a);
+    make_supply_pill(area, ic_barrel_2_set,
+                     USER_HOME_DEV_IMG_X + USER_HOME_DEV_IMG * 434 / 700,
+                     USER_HOME_DEV_IMG_Y + USER_HOME_DEV_IMG * 181 / 700, &g_supply_pill_b);
 
     return area;
 }
@@ -1006,109 +1055,131 @@ lv_obj_t *build_door_floating(lv_obj_t *parent)
     cfg.hint_text  = "SLIDE TO UNLOCK";   /* 箭头由控件绘制 3 个 chevron */
     cfg.on_unlocked = on_door_slide_unlocked;
     cfg.user_data  = nullptr;
-    /* 稿 5339:27265 的开门滑块：1280 档 400×80、圆头 64 内缩 8，与打印态取件胶囊同一套
-     * 几何。走 USER_DOOR_SLIDE_* 而不是 USER_SLIDE_*——后者还被延时摄影页的拖动预览框
-     * 和放版弹窗的最小宽钳制用着，见 ui_theme.hpp 的说明。 */
-    cfg.track_w    = USER_DOOR_SLIDE_W;
-    cfg.track_h    = USER_DOOR_SLIDE_H;
-    cfg.knob_sz    = USER_DOOR_SLIDE_KNOB;
-    cfg.custom_accent = true;                /* 设计稿为红色渐变滑块 */
-    cfg.accent_color  = user_color_status_err;
+    /* 浅色稿 6201:85972 的开门滑块：1280 档 453×94、旋钮 84 上下各内缩 5，圆角 28/24。
+     * **不走 USER_DOOR_SLIDE_***：那一族是控制页与打印态那三条深色红渐变滑块，出自
+     * 各自的稿、尺寸也不同（1280 档 400×80）。本条单独一套 USER_HOME_SLIDE_*，旋钮
+     * 与左下方钮、PRINT 同源，都是 USER_ACTION_BTN_SZ。 */
+    cfg.track_w    = USER_HOME_SLIDE_W;
+    cfg.track_h    = USER_HOME_SLIDE_H;
+    cfg.knob_sz    = USER_ACTION_BTN_SZ;
+    cfg.light_theme = true;                  /* 待机态是浅色底，见 ui_slide_unlock.hpp */
+    /* 稿上旋钮里是右箭头，不是控件默认那枚开门图标。按控件浅色档的图标边长
+     * （knob_sz * 8/21）挑原生尺寸，上屏 1:1 不缩放。 */
+    cfg.knob_icon  = ui_user_pick_icon(ic_arrow_right_set, USER_ACTION_BTN_SZ * 8 / 21);
     g_door_slide = ui_slide_unlock_create(parent, &cfg);
 
     lv_obj_t *root = ui_slide_unlock_get_root(g_door_slide);
     if(root) {
         lv_obj_add_flag(root, LV_OBJ_FLAG_FLOATING);
-        /* 稿上这条退屏边 30/32，与左下入口胶囊行同一个退让量（USER_PAD_LG）。 */
-        lv_obj_align(root, LV_ALIGN_BOTTOM_RIGHT, -USER_PAD_LG, -USER_PAD_LG);
+        /* 右距就是 USER_HOME_EDGE_GAP；底距要再减掉旋钮的内缩——稿上与左下按钮行上下
+         * 对齐的是**旋钮**（两者顶都在 668、底都在 752），轨道比旋钮上下各高出 5。 */
+        const int32_t inset = (USER_HOME_SLIDE_H - USER_ACTION_BTN_SZ) / 2;
+        lv_obj_align(root, LV_ALIGN_BOTTOM_RIGHT, -USER_HOME_EDGE_GAP,
+                     -(USER_HOME_EDGE_GAP - inset));
     }
     return root;
 }
 
 /* ---------------------------------------------------------------------------
- *  左下两枚入口胶囊（稿 5339:27275）。稿 5277:11571 起顶栏右侧那颗"查看监控"圆钮
- *  与"Start Print"胶囊取消、两个入口搬到左下；稿 5339:27275 又把它们从方块改成
- *  一行等高胶囊：
- *    ┌───────────────────┐ ┌──────────────────────────┐
- *    │ [摄像机] Monitor    │ │ [文件夹]      Start Print  │
- *    └───────────────────┘ └──────────────────────────┘
- *  左边灰玻璃钮按内容撑宽，右边蓝钮 flex_grow 吃掉整行剩余宽（稿上蓝钮是 flex-1），
- *  整行总宽走 USER_HOME_ACTION_ROW_W。两枚都是全圆胶囊、等高 USER_BTN_PRIMARY_H×5/4
- *  （90/65/55，即 ui_user_make_primary_pill_btn 逼近稿上 64@1280 用的那个算法）。
- *  旧方块上那行静态提示语 "Place the build plate first" 在新稿里已删除。
+ *  左下两枚入口（稿 6060:69185 + 6060:69177）：
+ *    ┌────┐ ┌──────────────────────┐
+ *    │ 📷 │ │  [文件夹]   PRINT      │
+ *    └────┘ └──────────────────────┘
+ *  这两个入口一路搬过家：先从顶栏的「查看监控」圆钮 + Start Print 胶囊挪到左下变成
+ *  方块，再变成一行等高的全圆胶囊，浅色稿又把左边缩成纯图标方钮、右边换成圆角矩形
+ *  并把文案缩成 PRINT。所以整行不再定宽，两枚各自定宽、按内容排。
  *
- *  稿上的描边是渐变（灰玻璃白 20%→10%→10%→20%，蓝钮白 40%→0%→40%），LVGL 画不了
- *  渐变边框，各取一个中间值当单色；灰玻璃那圈 inset 阴影与背景模糊同样画不出来，
- *  略去（同 make_glass_round_btn）。
+ *  稿上两处白色都带 backdrop blur(15px)，LVGL 没有背景模糊，直接给不透明白——底下是
+ *  #f5f5f5，肉眼差别只在边缘那一点点。同一处理见铃铛。
  * ------------------------------------------------------------------------- */
 
-/** 灰玻璃胶囊（稿 5339:27276「Button / On Light」的玻璃档）：图标 + 单行文字水平居中。
- *  材质与 make_glass_round_btn 同一份（0x757575 @ 20% + 白 20% 描边），只是形状从
- *  圆钮变胶囊。只有首页这一处在用，故不进 ui_user_widgets。 */
-lv_obj_t *make_glass_pill_btn(lv_obj_t *parent, const lv_image_dsc_t *icon,
-                              const char *text, lv_event_cb_t cb)
+/** 首页底部那批按钮里的图标边长（稿 40@1280）。取 USER_METRIC_ICON_SZ 的 5/4：
+ *  三档算下来正好是 60 / 40 / 32，与稿的 ×1.5 / ×1 / ×0.8 逐档吻合。 */
+int32_t action_icon_sz(void)
 {
-    /* 高度与图标边长都照抄 ui_user_make_primary_pill_btn 的算法（不是随手取的比例）：
-     * 同一行里两枚胶囊必须严格等高，换成别的常量哪怕只差几像素也会看出来。 */
-    const int32_t h = USER_BTN_PRIMARY_H * 5 / 4;
+    return USER_METRIC_ICON_SZ * 5 / 4;
+}
 
+/** 左下那枚白玻璃方钮（稿 6201:85989「Button / On Light」）：84 见方、圆角 24、纯图标。
+ *  浅色稿里它从「图标 + Monitor 文字的全圆胶囊」缩成了只剩图标的方钮，所以不再需要
+ *  文字参数；材质也从灰玻璃换成白 90% + 白描边。 */
+lv_obj_t *make_light_square_btn(lv_obj_t *parent, const lv_image_dsc_t *icon,
+                                lv_event_cb_t cb)
+{
     lv_obj_t *btn = lv_button_create(parent);
     lv_obj_remove_style_all(btn);
-    lv_obj_set_size(btn, LV_SIZE_CONTENT, h);
-    lv_obj_set_style_radius(btn, LV_RADIUS_CIRCLE, 0);
-    lv_obj_set_style_bg_color(btn, lv_color_hex(0x757575), 0);
-    lv_obj_set_style_bg_opa(btn, LV_OPA_20, 0);
-    lv_obj_set_style_bg_opa(btn, LV_OPA_40, LV_STATE_PRESSED);
+    lv_obj_set_size(btn, USER_ACTION_BTN_SZ, USER_ACTION_BTN_SZ);
+    lv_obj_set_style_radius(btn, USER_LIGHT_RADIUS, 0);
+    /* 稿上是 #fcfcfc + backdrop blur(15px)；LVGL 没有背景模糊，直接给不透明色——
+     * 底下是 #f5f5f5，肉眼差别只在边缘那一点点。同一处理见铃铛与开门滑块轨道。 */
+    lv_obj_set_style_bg_color(btn, user_light_glass, 0);
+    lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_color(btn, user_light_text, LV_STATE_PRESSED);
+    lv_obj_set_style_bg_opa(btn, LV_OPA_10, LV_STATE_PRESSED);
     lv_obj_set_style_border_width(btn, 1, 0);
     lv_obj_set_style_border_color(btn, lv_color_white(), 0);
-    lv_obj_set_style_border_opa(btn, LV_OPA_20, 0);
-    /* 稿上是左 24 / 右 32@1280 的不对称内边距，这里两侧统一取 USER_PAD（1280 档 24）：
-     * 左侧正好是稿值，右侧少 8px。同一行的蓝钮是公共组件（历史页空态也在用）、同样
-     * 对称内边距，为这 8px 给它开一套不对称参数不值当。 */
-    lv_obj_set_style_pad_hor(btn, USER_PAD, 0);
-    lv_obj_set_style_pad_column(btn, USER_PAD_SM, 0);
-    lv_obj_set_flex_flow(btn, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(btn, LV_FLEX_ALIGN_CENTER,
-                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_border_opa(btn, LV_OPA_COVER, 0);
+    lv_obj_set_style_shadow_width(btn, 6, 0);
+    lv_obj_set_style_shadow_ofs_y(btn, 2, 0);
+    lv_obj_set_style_shadow_color(btn, lv_color_hex(0x283184), 0);
+    lv_obj_set_style_shadow_opa(btn, 26, 0);   /* 稿 10% */
     lv_obj_clear_flag(btn, LV_OBJ_FLAG_SCROLLABLE);
     if(cb) {
         lv_obj_add_event_cb(btn, cb, LV_EVENT_CLICKED, nullptr);
     }
-
-    make_btn_icon(btn, icon, USER_BTN_PRIMARY_H * 5 / 8);   /* 稿上 32@1280 = 胶囊高的一半 */
-
-    lv_obj_t *lbl = lv_label_create(btn);
-    lv_label_set_text(lbl, text);
-    lv_obj_set_style_text_color(lbl, lv_color_white(), 0);
-    lv_obj_set_style_text_font(lbl, user_font_text(), 0);
+    lv_obj_t *ic = make_btn_icon(btn, icon, action_icon_sz(), user_light_text);
+    lv_obj_center(ic);
     return btn;
 }
 
+/** 右边那枚 PRINT **不再复用** ui_user_make_primary_pill_btn：那个组件是全圆胶囊、主色
+ *  蓝底（历史页空态那枚还在用），而稿这里要的是圆角 24 的深色 #333145 底，两处已经不是
+ *  同一枚按钮了。整行布局的来龙去脉见上面那段。 */
 lv_obj_t *build_action_tiles(lv_obj_t *parent)
 {
     lv_obj_t *row = lv_obj_create(parent);
     lv_obj_remove_style_all(row);
     lv_obj_add_flag(row, LV_OBJ_FLAG_FLOATING);
-    /* 整行定宽（稿上外层容器就是定宽，灰钮 hug、蓝钮吃剩余），高度由胶囊撑。 */
-    lv_obj_set_size(row, USER_HOME_ACTION_ROW_W, LV_SIZE_CONTENT);
+    lv_obj_set_size(row, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
     lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(row, LV_FLEX_ALIGN_START,
                           LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_set_style_pad_column(row, USER_PAD_SM, 0);
     lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, 0);
     lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
-    /* 稿上这一行的左缘距侧栏 32、底缘距屏底 32，与右下开门滑块同一个退让量
-     * （USER_PAD_LG）。横向只退这一个值——本页根节点的 pad_left 已经让开侧栏，
-     * 不用再补侧栏宽度（同 build_door_floating）。 */
-    lv_obj_align(row, LV_ALIGN_BOTTOM_LEFT, USER_PAD_LG, -USER_PAD_LG);
+    /* 稿上这一行的左缘距侧栏 32（USER_PAD_LG，与上方卡片同一条竖线），底缘距屏底 48
+     * （USER_HOME_EDGE_GAP）——**这两个值不一样，稿本身就不对称**。横向只退一个
+     * USER_PAD_LG：本页根节点的 pad_left 已经让开侧栏，不用再补侧栏宽度
+     * （同 build_door_floating）。 */
+    lv_obj_align(row, LV_ALIGN_BOTTOM_LEFT, USER_PAD_LG, -USER_HOME_EDGE_GAP);
 
-    make_glass_pill_btn(row, &ic_camera, "Monitor", on_camera_btn_click);
+    make_light_square_btn(row, ui_user_pick_icon(ic_camera_set, action_icon_sz()),
+                          on_camera_btn_click);
 
-    /* 蓝钮与打印历史空态那枚 Start Print 共用组件，保证两处是同一枚按钮；本处按稿
-     * 定宽 + 图标贴左、文字贴右（spread），宽度交给 flex_grow 吃掉行内剩余。 */
-    lv_obj_t *print = ui_user_make_primary_pill_btn(row, &ic_folder, "Start Print",
-                                                    on_files_click, 0, true);
-    lv_obj_set_flex_grow(print, 1);
+    lv_obj_t *print = lv_button_create(row);
+    lv_obj_remove_style_all(print);
+    lv_obj_set_size(print, USER_HOME_PRINT_BTN_W, USER_ACTION_BTN_SZ);
+    lv_obj_set_style_radius(print, USER_LIGHT_RADIUS, 0);
+    lv_obj_set_style_bg_color(print, user_light_nav_on, 0);
+    lv_obj_set_style_bg_opa(print, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_color(print, user_light_accent, LV_STATE_PRESSED);
+    lv_obj_set_style_shadow_width(print, 10, 0);
+    lv_obj_set_style_shadow_ofs_y(print, 5, 0);
+    lv_obj_set_style_shadow_color(print, lv_color_hex(0xA1A1A1), 0);
+    lv_obj_set_style_shadow_opa(print, LV_OPA_20, 0);
+    lv_obj_set_style_pad_column(print, USER_PAD_SM, 0);
+    lv_obj_set_flex_flow(print, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(print, LV_FLEX_ALIGN_CENTER,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_clear_flag(print, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_event_cb(print, on_files_click, LV_EVENT_CLICKED, nullptr);
+    make_btn_icon(print, ui_user_pick_icon(ic_folder_set, action_icon_sz()),
+                  action_icon_sz());
+    lv_obj_t *plbl = lv_label_create(print);
+    lv_label_set_text(plbl, "PRINT");
+    lv_obj_set_style_text_color(plbl, lv_color_white(), 0);
+    lv_obj_set_style_text_font(plbl, user_font_body(), 0);   /* 稿 24 */
+    lv_obj_set_style_text_letter_space(plbl, 2, 0);   /* 稿 tracking 1.92 */
 
     return row;
 }
@@ -1476,9 +1547,11 @@ lv_obj_t *build_env_wrap(lv_obj_t *parent, env_block_t *eb)
     lv_obj_set_style_pad_column(wrap, USER_PAD_SM / 2, 0);
     lv_obj_set_style_bg_opa(wrap, LV_OPA_TRANSP, 0);
     lv_obj_clear_flag(wrap, LV_OBJ_FLAG_SCROLLABLE);
-    /* 稿 4972:31316 里这一块在 x=699 y=32，右缘落在 1248 —— 即距屏右和距屏顶都是 32，
-     * 与右侧中部的拍照钮、底部两组控件同一个退让量（USER_PAD_LG）。 */
-    lv_obj_align(wrap, LV_ALIGN_TOP_RIGHT, -USER_PAD_LG, USER_PAD_LG);
+    /* 退让量跟 ui_notice_stack 走同一个 USER_HOME_EDGE_GAP（稿 48）：通知浮层就叠在
+     * 本块下方（见 sync_notice_offset），两块的右缘与起算点必须是同一个值，否则一栏
+     * 会看着错开。本块自己的旧稿 4972:31316 给的是 32（右缘 1248），但那张稿的浅色
+     * 改版还没到；待机态的铃铛与开门滑块按新稿都是 48，以那边为准先统一过来。 */
+    lv_obj_align(wrap, LV_ALIGN_TOP_RIGHT, -USER_HOME_EDGE_GAP, USER_HOME_EDGE_GAP);
 
     /* 通知浮层也贴右上角，靠 sync_notice_offset 按本块的高度往下让，故要存句柄 */
     eb->root = wrap;
@@ -2038,16 +2111,19 @@ void apply_print_phase(void)
     /* 两条提示只在结束态出现（稿上打印中/暂停两张都没有）：吹粉前催吹粉，
      * 吹粉完成后无论 PM 高低都提醒戴口罩。它们走的是全局消息中心而不是本层
      * 自己的一条 bar——这样离开首页也看得到，且与后端上报的告警排在同一摞里。
-     * push 是幂等的，本函数被反复调用不会把卡片刷来刷去。 */
+     *
+     * **必须是 sync 不能是 emit**：本函数每次态刷新都跑，打印期间每秒好几次。sync
+     * 只在「本地还没有这条」时弹一次，之后一律静默更新，收进铃铛了也不会被顶回来；
+     * 换成 emit 就是每次刷新重弹一次 toast，未读也会被反复点亮。 */
     const bool masked = finished && (g_purify_stage == PURIFY_STAGE_DONE);
     const bool nag_purify = finished && !masked;
     if(g_printing_active && masked) {
-        ui_message_push((uint16_t)middleware::DeviceEventCode::UiWearMask, 0);
+        ui_message_sync((uint16_t)middleware::DeviceEventCode::UiWearMask, 0);
     } else {
         ui_message_retract((uint16_t)middleware::DeviceEventCode::UiWearMask);
     }
     if(g_printing_active && nag_purify) {
-        ui_message_push((uint16_t)middleware::DeviceEventCode::UiPurifyBeforeOpen, 0);
+        ui_message_sync((uint16_t)middleware::DeviceEventCode::UiPurifyBeforeOpen, 0);
     } else {
         ui_message_retract((uint16_t)middleware::DeviceEventCode::UiPurifyBeforeOpen);
     }
@@ -2368,7 +2444,10 @@ void home_card_update(void)
     const int level = air_classify(m, v, &frac);
     lv_label_set_text(g_home_card_level, kLevelName[level]);
     lv_obj_set_style_text_color(g_home_card_level, user_color_text, 0);
-    lv_label_set_text_fmt(g_home_card_value, "(%.1f ug/m3)", v);
+    /* 稿是 `35 μg/m³`，没有括号。**单位只能写成 ug/m3**：LVGL 的 Montserrat 字符集是
+     * `0x20-0x7F,0xB0,0x2022`（ASCII + 度号 + 圆点，`23.6°` 能显示就是靠那个 0xB0），
+     * `μ`(U+03BC) 与 `³`(U+00B3) 都不在里面。要上稿的写法得扩字符集重新生成整套字体。 */
+    lv_label_set_text_fmt(g_home_card_value, "%.1f ug/m3", v);
 
     /* 游标：档内插值得到全局比例 frac，落在色条对应位置。 */
     if(g_home_seg_dot && g_home_seg_track) {
@@ -2427,6 +2506,67 @@ void update_cabin_metric(lv_obj_t *val, lv_obj_t *unit, float v)
     }
 }
 
+/** 四宫格那一格的读数。稿上数值与单位是同一行的两个字号（`592.0` 32 配 `kpa` 20），
+ *  所以它们是两个 label：`val` 是数值，单位是它的下一个兄弟（见 make_metric_cell）。
+ *  无效时整行收成 "--"，单位一并藏掉。 */
+void update_grid_metric(lv_obj_t *val, float v)
+{
+    if(!val) {
+        return;
+    }
+    lv_obj_t *unit = lv_obj_get_sibling(val, 1);
+    if(metric_invalid(v)) {
+        lv_label_set_text(val, "--");
+        if(unit) lv_obj_add_flag(unit, LV_OBJ_FLAG_HIDDEN);
+    } else {
+        lv_label_set_text_fmt(val, "%.1f", v);
+        if(unit) lv_obj_remove_flag(unit, LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
+/** 问候语按本机时段切（稿上只画了 "Good morning" 这一态，另两档照它的句式补）。
+ *  副标题是固定文案，不随状态变。 */
+void update_greeting(void)
+{
+    if(!g_greet_title) {
+        return;
+    }
+    const time_t now = time(nullptr);
+    struct tm tmv {};
+    localtime_r(&now, &tmv);
+    const char *word = (tmv.tm_hour < 12) ? "Good morning"
+                     : (tmv.tm_hour < 18) ? "Good afternoon" : "Good evening";
+    lv_label_set_text(g_greet_title, word);
+}
+
+/** 余量百分比 → 稿上那三档词。阈值是照常识取的，稿只给了 Medium / Low 两个样例，
+ *  确认后若有正式分档表，改这里一处即可。 */
+const char *supply_level_name(float pct)
+{
+    if(pct >= 60.0f) return "High";
+    if(pct >= 25.0f) return "Medium";
+    return "Low";
+}
+
+/** 刷新设备图上那两颗余量胶囊。 */
+void update_supply_pills(void)
+{
+    const control_supply_t *s = control_supply_get();
+    if(g_supply_pill_a && s) {
+        lv_label_set_text(g_supply_pill_a, supply_level_name(s->material_pct));
+    }
+    if(g_supply_pill_b && s) {
+        /* **等后端补第二桶字段**：稿上这颗是 2 号料桶，但 SupplyStatusPayload 只有
+         * material_pct / filter_pct，没有第二桶的量，先拿滤芯顶着。补上之后换掉这一行。 */
+        lv_label_set_text(g_supply_pill_b, supply_level_name(s->filter_pct));
+    }
+}
+
+void on_supply_changed(const control_supply_t * /*s*/)
+{
+    update_supply_pills();
+}
+
 } /* namespace */
 
 void page_user_home_update_camera_preview_layout(uint32_t src_w, uint32_t src_h)
@@ -2447,20 +2587,27 @@ void page_user_home_refresh(bool /*force*/)
     /* 设备名/WiFi/状态点那一组不在本页——外壳的常驻条自己观察同一份快照。 */
     const ui_device_snapshot_t &snap = *ui_device_state_get();
 
-    /* 换页时 PageManager 会把通知栈的让位量清零，回到本页要按当前态再让一次。
-     * 本函数就是首页的 on_enter，进出打印态/监控态也都会走到这儿。 */
+    /* 换页时 PageManager 会把通知栈的让位量与侧栏档位都复位，回到本页要按当前态再置
+     * 一次。本函数就是首页的 on_enter，进出打印态/监控态也都会走到这儿。 */
     sync_notice_offset();
+    /* 打印态与监控态是整屏摄像头预览：侧栏那层几乎全透的白 4% 压不住亮帧要退回深底，
+     * 右上角的通知也同理退回改版前那摞黑玻璃卡（那两个态的新稿还没到）。 */
+    const bool video_mode = (g_printing_active || g_monitor_active);
+    ui::PageManager::instance().set_sidebar_video_mode(video_mode);
+    ui_notice_stack_set_dark(video_mode);
 
     /* 首页左卡（HOME 空气质量·可切换 PM2.5/PM10：分级 + 四档色条 + 游标） */
     home_card_update();
+    update_greeting();
+    update_supply_pills();
 
-    /* 首页右侧 Cabin condition：稿 5277:11590 起舱内 PM2.5 那行已去掉，四行都按哨兵
-     * 判空。舱内 PM2.5 仍在打印态/监控态那条 5 列环境小条里保留一列（见下方 kEnvBlocks
-     * 循环），按档位着色也只用在那条上。 */
-    update_cabin_metric(g_cab_temp_val, g_cab_temp_unit, snap.temperature_c);
-    update_cabin_metric(g_cab_o2_val,   g_cab_o2_unit,   snap.oxygen_percent);
-    update_cabin_metric(g_cab_hum_val,  g_cab_hum_unit,  snap.humidity_percent);
-    update_cabin_metric(g_cab_prs_val,  g_cab_prs_unit,  snap.pressure_kpa);
+    /* 首页右侧四宫格：四项语义与早先那个 CABIN 面板一致（温度/氧浓度/湿度/气压），
+     * 只是单位并进了读数串。舱内 PM2.5 仍在打印态/监控态那条环境小条里（见下方
+     * kEnvBlocks 循环），按档位着色也只用在那条上。 */
+    update_grid_metric(g_cab_temp_val, snap.temperature_c);
+    update_grid_metric(g_cab_o2_val,   snap.oxygen_percent);
+    update_grid_metric(g_cab_hum_val,  snap.humidity_percent);
+    update_grid_metric(g_cab_prs_val,  snap.pressure_kpa);
 
     /* 右上环境区：打印态浮层与待机监控层各一份，两份内容相同，一起刷。
      * 舱内 PM2.5 那一列已删（见 build_result_env_bar），所以 snap.pm25_cabin 在 UI 侧
@@ -2518,6 +2665,11 @@ lv_obj_t *page_user_home_create(lv_obj_t *parent)
      * 进态时还会 move_background 再压一次）。 */
     g_door_float   = build_door_floating(page);
     g_action_tiles = build_action_tiles(page);
+
+    /* 设备图上那两颗余量胶囊的数据源。observer 是幂等的，页面只建一次所以也只注册一次；
+     * 主动拉一发是因为后端没回过 Rsp 前快照里是占位值（见 control.hpp「供应度」一节）。 */
+    control_supply_add_observer(on_supply_changed);
+    control_supply_request();
 
     page_user_home_refresh(true);
     return page;

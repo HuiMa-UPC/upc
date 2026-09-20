@@ -9,8 +9,11 @@ extern "C" {
 #endif
 
 extern const lv_image_dsc_t ic_home_48;
+extern const lv_image_dsc_t ic_home_36;
 extern const lv_image_dsc_t ic_home_32;
 extern const lv_image_dsc_t ic_home_26;
+extern const lv_image_dsc_t ic_home_24;
+extern const lv_image_dsc_t ic_home_19;
 extern const lv_image_dsc_t *const ic_home_set[];
 
 extern const lv_image_dsc_t ic_switch_48;
@@ -22,38 +25,59 @@ extern const lv_image_dsc_t ic_switch_19;
 extern const lv_image_dsc_t *const ic_switch_set[];
 
 extern const lv_image_dsc_t ic_cabin_48;
+extern const lv_image_dsc_t ic_cabin_36;
 extern const lv_image_dsc_t ic_cabin_32;
 extern const lv_image_dsc_t ic_cabin_26;
+extern const lv_image_dsc_t ic_cabin_24;
+extern const lv_image_dsc_t ic_cabin_19;
 extern const lv_image_dsc_t *const ic_cabin_set[];
 
 extern const lv_image_dsc_t ic_temp_48;
+extern const lv_image_dsc_t ic_temp_36;
 extern const lv_image_dsc_t ic_temp_32;
 extern const lv_image_dsc_t ic_temp_26;
+extern const lv_image_dsc_t ic_temp_24;
+extern const lv_image_dsc_t ic_temp_19;
 extern const lv_image_dsc_t *const ic_temp_set[];
 
 extern const lv_image_dsc_t ic_o2_48;
+extern const lv_image_dsc_t ic_o2_36;
 extern const lv_image_dsc_t ic_o2_32;
 extern const lv_image_dsc_t ic_o2_26;
+extern const lv_image_dsc_t ic_o2_24;
+extern const lv_image_dsc_t ic_o2_19;
 extern const lv_image_dsc_t *const ic_o2_set[];
 
 extern const lv_image_dsc_t ic_humidity_48;
+extern const lv_image_dsc_t ic_humidity_36;
 extern const lv_image_dsc_t ic_humidity_32;
 extern const lv_image_dsc_t ic_humidity_26;
+extern const lv_image_dsc_t ic_humidity_24;
+extern const lv_image_dsc_t ic_humidity_19;
 extern const lv_image_dsc_t *const ic_humidity_set[];
 
 extern const lv_image_dsc_t ic_pressure_48;
+extern const lv_image_dsc_t ic_pressure_36;
 extern const lv_image_dsc_t ic_pressure_32;
 extern const lv_image_dsc_t ic_pressure_26;
+extern const lv_image_dsc_t ic_pressure_24;
+extern const lv_image_dsc_t ic_pressure_19;
 extern const lv_image_dsc_t *const ic_pressure_set[];
 
 extern const lv_image_dsc_t ic_bolt_48;
+extern const lv_image_dsc_t ic_bolt_36;
 extern const lv_image_dsc_t ic_bolt_32;
 extern const lv_image_dsc_t ic_bolt_26;
+extern const lv_image_dsc_t ic_bolt_24;
+extern const lv_image_dsc_t ic_bolt_19;
 extern const lv_image_dsc_t *const ic_bolt_set[];
 
 extern const lv_image_dsc_t ic_bulb_48;
+extern const lv_image_dsc_t ic_bulb_36;
 extern const lv_image_dsc_t ic_bulb_32;
 extern const lv_image_dsc_t ic_bulb_26;
+extern const lv_image_dsc_t ic_bulb_24;
+extern const lv_image_dsc_t ic_bulb_19;
 extern const lv_image_dsc_t *const ic_bulb_set[];
 
 extern const lv_image_dsc_t ic_chevron_left_20;
@@ -63,6 +87,96 @@ extern const lv_image_dsc_t *const ic_chevron_left_set[];
 extern const lv_image_dsc_t ic_info;
 extern const lv_image_dsc_t ic_clock;
 extern const lv_image_dsc_t ic_cube;
+extern const lv_image_dsc_t ic_nav_home_52;
+extern const lv_image_dsc_t ic_nav_home_32;
+extern const lv_image_dsc_t ic_nav_home_50;
+extern const lv_image_dsc_t *const ic_nav_home_set[];
+
+extern const lv_image_dsc_t ic_nav_history_52;
+extern const lv_image_dsc_t ic_nav_history_32;
+extern const lv_image_dsc_t ic_nav_history_50;
+extern const lv_image_dsc_t *const ic_nav_history_set[];
+
+extern const lv_image_dsc_t ic_nav_control_52;
+extern const lv_image_dsc_t ic_nav_control_32;
+extern const lv_image_dsc_t ic_nav_control_50;
+extern const lv_image_dsc_t *const ic_nav_control_set[];
+
+extern const lv_image_dsc_t ic_nav_settings_52;
+extern const lv_image_dsc_t ic_nav_settings_32;
+extern const lv_image_dsc_t ic_nav_settings_50;
+extern const lv_image_dsc_t *const ic_nav_settings_set[];
+
+extern const lv_image_dsc_t ic_nav_message_52;
+extern const lv_image_dsc_t ic_nav_message_32;
+extern const lv_image_dsc_t ic_nav_message_50;
+extern const lv_image_dsc_t *const ic_nav_message_set[];
+
+extern const lv_image_dsc_t ic_nav_message_dot_52;
+extern const lv_image_dsc_t ic_nav_message_dot_32;
+extern const lv_image_dsc_t ic_nav_message_dot_50;
+extern const lv_image_dsc_t *const ic_nav_message_dot_set[];
+
+extern const lv_image_dsc_t ic_arrow_right_48;
+extern const lv_image_dsc_t ic_arrow_right_32;
+extern const lv_image_dsc_t ic_arrow_right_25;
+extern const lv_image_dsc_t *const ic_arrow_right_set[];
+
+extern const lv_image_dsc_t ic_bell_60;
+extern const lv_image_dsc_t ic_bell_40;
+extern const lv_image_dsc_t ic_bell_32;
+extern const lv_image_dsc_t *const ic_bell_set[];
+
+extern const lv_image_dsc_t ic_bell_dot_60;
+extern const lv_image_dsc_t ic_bell_dot_40;
+extern const lv_image_dsc_t ic_bell_dot_32;
+extern const lv_image_dsc_t *const ic_bell_dot_set[];
+
+extern const lv_image_dsc_t ic_camera_60;
+extern const lv_image_dsc_t ic_camera_40;
+extern const lv_image_dsc_t ic_camera_32;
+extern const lv_image_dsc_t *const ic_camera_set[];
+
+extern const lv_image_dsc_t ic_folder_60;
+extern const lv_image_dsc_t ic_folder_40;
+extern const lv_image_dsc_t ic_folder_32;
+extern const lv_image_dsc_t *const ic_folder_set[];
+
+extern const lv_image_dsc_t ic_barrel_1_30;
+extern const lv_image_dsc_t ic_barrel_1_20;
+extern const lv_image_dsc_t ic_barrel_1_16;
+extern const lv_image_dsc_t *const ic_barrel_1_set[];
+
+extern const lv_image_dsc_t ic_barrel_2_30;
+extern const lv_image_dsc_t ic_barrel_2_20;
+extern const lv_image_dsc_t ic_barrel_2_16;
+extern const lv_image_dsc_t *const ic_barrel_2_set[];
+
+extern const lv_image_dsc_t ic_hist_clock_48;
+extern const lv_image_dsc_t ic_hist_clock_32;
+extern const lv_image_dsc_t ic_hist_clock_26;
+extern const lv_image_dsc_t *const ic_hist_clock_set[];
+
+extern const lv_image_dsc_t ic_hist_film_48;
+extern const lv_image_dsc_t ic_hist_film_32;
+extern const lv_image_dsc_t ic_hist_film_26;
+extern const lv_image_dsc_t *const ic_hist_film_set[];
+
+extern const lv_image_dsc_t ic_hist_image_48;
+extern const lv_image_dsc_t ic_hist_image_32;
+extern const lv_image_dsc_t ic_hist_image_26;
+extern const lv_image_dsc_t *const ic_hist_image_set[];
+
+extern const lv_image_dsc_t ic_hist_play_96;
+extern const lv_image_dsc_t ic_hist_play_64;
+extern const lv_image_dsc_t ic_hist_play_51;
+extern const lv_image_dsc_t *const ic_hist_play_set[];
+
+extern const lv_image_dsc_t ic_hist_check_36;
+extern const lv_image_dsc_t ic_hist_check_24;
+extern const lv_image_dsc_t ic_hist_check_19;
+extern const lv_image_dsc_t *const ic_hist_check_set[];
+
 /* 手维护图标（源矢量已丢失） */
 extern const lv_image_dsc_t ic_warning;
 extern const lv_image_dsc_t ic_layers;

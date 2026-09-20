@@ -22,12 +22,13 @@
 #include "ui_device_state.hpp"
 #include "ui_message_store.hpp"
 #include "ui_alarm_state.hpp"
+#include "ui_notice_stack.hpp"
 #include "ui_clean_state.hpp"
 #include "ui_modal_dialog.hpp"
 #include "ui_user_widgets.hpp"
 #include "ui_feedback.hpp"
 #include "control.hpp"
-#include "nav_icons.h"
+#include "home_metric_icons.h"
 
 #include <cstdint>
 #include <cstdio>
@@ -44,13 +45,21 @@ void settings_page_exit(void)
     ui_keyboard_hide();
 }
 
-/** 同步侧栏消息图标上的红点：有未读，或还有未解除/未复位的 MCU 报警
- *  （当前报警表非空）就亮——进一次消息页只消未读，报警要处理完才灭。 */
+/** 同步两颗红点（侧栏消息图标 + 首页右上铃铛）：有未读，或还有未解除的告警级消息
+ *  就亮——进一次消息页只消未读，告警要处理完才灭。
+ *
+ *  判据从原先的「未读 || ui_alarm_current_count() > 0」收紧成了 store 里那个谓词，
+ *  收的是两个边：旧判据只看 MCU 报警、漏掉后端 GLAVO_Device_Event_Ntf 推来的告警级
+ *  事件；而且它不分等级，一条 INFO 级的 CONDITION 也会让红点常亮。新谓词扫的是
+ *  store（报警也在里面，解除时会被 retract 掉），两个边一起收。
+ *
+ *  **和铃铛面板的取数共用同一个谓词**，所以「红点亮」与「面板里有东西」恒等价，
+ *  不会出现点开是空的。 */
 void sync_message_badge(void)
 {
-    PageManager::instance().set_menu_badge(
-        "user_message",
-        ui_message_unread_count() > 0 || ui_alarm_current_count() > 0);
+    const bool on = ui_message_needs_attention();
+    PageManager::instance().set_menu_badge("user_message", on);
+    ui_notice_stack_set_badge(on);
 }
 
 lv_obj_t* g_ota_screen = nullptr;
@@ -123,11 +132,11 @@ void open_ota_prompt(const middleware::OtaNotifyPayload& p)
     lv_obj_set_style_text_align(lbl, LV_TEXT_ALIGN_CENTER, 0);
     if(!g_ota_required) {
         ui_user_make_confirm_footer_btn(g_ota_prompt_dlg->footer, "Cancel", false,
-                                        user_color_text_dim, ota_decision_cb,
+                                        user_color_text_dim, false, ota_decision_cb,
                                         reinterpret_cast<void*>(0));
     }
     ui_user_make_confirm_footer_btn(g_ota_prompt_dlg->footer, "Confirm", true,
-                                    user_color_accent, ota_decision_cb,
+                                    user_color_accent, false, ota_decision_cb,
                                     reinterpret_cast<void*>(1));
 }
 
@@ -264,15 +273,15 @@ void on_soc_ota_ready(const middleware::SocOtaReadyPayload& p)
     lv_obj_set_style_text_align(lbl, LV_TEXT_ALIGN_CENTER, 0);
 
     ui_user_make_confirm_footer_btn(
-        g_soc_ota_dlg->footer, "Discard", false, user_color_text_dim,
+        g_soc_ota_dlg->footer, "Discard", false, user_color_text_dim, false,
         soc_ota_apply_cb,
         reinterpret_cast<void*>(
             static_cast<intptr_t>(middleware::SocOtaApplyAction::Discard)));
     ui_user_make_confirm_footer_btn(
-        g_soc_ota_dlg->footer, "Later", false, user_color_text_dim,
+        g_soc_ota_dlg->footer, "Later", false, user_color_text_dim, false,
         soc_ota_later_cb, nullptr);
     ui_user_make_confirm_footer_btn(
-        g_soc_ota_dlg->footer, "Reboot", true, user_color_accent,
+        g_soc_ota_dlg->footer, "Reboot", true, user_color_accent, false,
         soc_ota_apply_cb,
         reinterpret_cast<void*>(
             static_cast<intptr_t>(middleware::SocOtaApplyAction::RebootNow)));
@@ -334,31 +343,32 @@ void app_init(lv_obj_t* screen) {
         std::make_unique<SimplePage>("user_home",
                                      page_user_home_create,
                                      page_user_home_refresh),
-        &nav_icon_home);
+        ic_nav_home_set);
     PageManager::instance().register_page(
         std::make_unique<SimplePage>("user_history",
                                      page_user_history_create,
                                      page_user_history_refresh,
                                      page_user_history_exit),
-        &nav_icon_history);
+        ic_nav_history_set);
     PageManager::instance().register_page(
         std::make_unique<SimplePage>("user_control",
                                      page_user_control_create,
                                      page_user_control_refresh,
                                      page_user_control_exit),
-        &nav_icon_control);
+        ic_nav_control_set);
     PageManager::instance().register_page(
         std::make_unique<SimplePage>("user_settings",
                                      page_user_settings_create,
                                      page_user_settings_refresh,
                                      settings_page_exit),
-        &nav_icon_settings);
+        ic_nav_settings_set);
     PageManager::instance().register_page(
         std::make_unique<SimplePage>("user_message",
                                      page_user_message_create,
                                      page_user_message_refresh,
                                      page_user_message_exit),
-        &nav_icon_message);
+        /* 第二个 set 是有未读时换上的那版：右上角咬掉一块给红点让位（稿 6255:95805） */
+        ic_nav_message_set, ic_nav_message_dot_set);
 
     /* 选择文件页：隐藏页（无侧边栏图标），归属首页菜单按钮，由「My Files」进入 */
     PageManager::instance().register_hidden_page(
@@ -396,8 +406,8 @@ void app_init(lv_obj_t* screen) {
         "user_history");
 
     /* 红点要等消息页注册完才挂得上（set_menu_badge 认页名）。
-     * 报警观察者也要挂：报警解除/复位不走消息 store 的未读计数，
-     * 只靠 ui_message 观察者的话红点不会跟着灭。 */
+     * 两个数据源都挂：报警的生命周期变化（解除、复位）有些只落在 ui_alarm_state 里，
+     * 不一定同时动到 store，只订一边会让红点慢一拍。注册是幂等的，重复触发无害。 */
     ui_message_add_observer(sync_message_badge);
     ui_alarm_add_observer(sync_message_badge);
     sync_message_badge();

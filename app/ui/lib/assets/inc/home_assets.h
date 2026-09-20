@@ -14,11 +14,19 @@
 extern "C" {
 #endif
 
-/* 首页背景层，按屏分辨率两份（定义在 home_bg.c，由 tools/gen_home_bg.py 生成）。
- * 别直接引用某一份——用 page_user_home.cpp 的 home_bg_dsc() 按当前 profile 挑。
- * 1280 档来自「背景图1」、1024 档来自「背景图2」，两个节点的取舍见那个脚本的注释。 */
-extern const lv_image_dsc_t home_bg_1280;
-extern const lv_image_dsc_t home_bg_1024;
+/* 首页待机态的两张预生成位图，都按屏分辨率两份，由 tools/gen_home_bg.py 生成。
+ * 别直接引用某一份——用 page_user_home.cpp 的 home_device_dsc() / home_card_bg_dsc()
+ * 按当前 profile 挑；1920 档复用 1280 那份（放大 1.5×、会软，该档不出货）。
+ *
+ * 设备渲染图（稿 6039:66132）：592 见方、RGB565A8。浅色稿把整机从「铺满整屏的背景」
+ * 改成了「浅底上定位摆放的一张图」，旧的 home_bg_* 已随之退场，来龙去脉见生成脚本。 */
+extern const lv_image_dsc_t home_device_1280;
+extern const lv_image_dsc_t home_device_1024;
+
+/* HOME 空气质量卡的背景（稿 6064:70631）：径向渐变 + 点阵 + 底缘柔光烤成一张
+ * 不透明 RGB565；卡的圆角不在图里，运行时由 LVGL 的 radius 裁。 */
+extern const lv_image_dsc_t home_card_bg_1280;
+extern const lv_image_dsc_t home_card_bg_1024;
 
 #ifdef __cplusplus
 }
