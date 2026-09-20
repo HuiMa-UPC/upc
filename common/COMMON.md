@@ -435,9 +435,21 @@ rongsu_broker ──listen──► /tmp/upc_broker.sock ◄── UI / Glavo / 
 
 ### `DmaHeapUsage`：交给 RGA 的分配必须显式声明
 
-RK3568 的 RGA2 没有 IOMMU，只能寻址**物理连续且 <4G** 的内存。候选堆里
+RK3568 的 RGA2 **不是 IOMMU 客户端**，只能寻址**物理连续且 <4G** 的内存。候选堆里
 `system` / `system-uncached` 是页式堆，两条都不满足——从它们拿到的 buffer 能 mmap，
 但 `importbuffer_fd()` 必然返回 0。
+
+板端（`rk3568-buildroot`）已用设备树 / sysfs 核对，换 SoC 或改 DTS 时重跑即可：
+
+| 设备 | 节点 | `of_node/iommus` | sysfs `iommu` |
+|------|------|------------------|---------------|
+| RGA2 | `fdeb0000.rk_rga`（`compatible: rockchip,rga2`） | 无 | 无 |
+| ISP | `fdff0000.rkisp`（`rockchip,rk3568-rkisp`） | 有 | `fdff1a00.iommu`，group 7 |
+| VDPU | `fdea0400.vdpu`（`rockchip,vpu-decoder-v2`） | 有 | `fdea0800.iommu`，group 1 |
+
+`rkisp-vir0` 无独立 `iommu` 软链接，映射在物理 `rkisp` 上。`fe102400.nocp-gpu-vpu-rga-venc` 是 NoC 探针，不是 RGA。`fdea0800` 是 **VPU 的 IOMMU**，不是 RGA 基址。
+
+核对命令：看 `.../of_node` 有没有 `iommus`，以及 `/sys/devices/platform/<dev>/iommu` 软链接。RGA 没有、ISP/VPU 有，才能说「RGA 不走 IOMMU」。采集链路上 IOMMU 只出现在 **rkisp 写 V4L2 缓冲**（以及 MPP/VPU 用自有 buffer）时；RGA 用 `importbuffer_fd` 拿物理地址。同一 dma-buf 在 ISP 已 `QBUF` 时再被 CPU/RGA 访问，风险在 ISP 的 `rk_iommu`/`dma_resv`，不在 RGA 建页表。当前采集路径**始终**经隔离 pool 拷贝后再分发，消费者不持有 V4L2 buf；窗口满时丢新帧、不抢还。详见 [camera/CAMERA.md](../app/camera/CAMERA.md) 「ISP IOMMU 与 dma-buf 所有权」。
 
 | 用途 | 候选堆 | 用尽后 |
 |---|---|---|

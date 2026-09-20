@@ -8,9 +8,13 @@
 namespace upc::camera {
 
 /**
- * @brief 相机 dma fd 帧源：V4L2 dma_buf + 可选 stride padding。
+ * @brief 相机 dma fd 帧源：V4L2 采集缓冲 → 隔离 pool（dma32/CMA）→ 分发给消费者。
  *
- * fd 经 MsgPort IPC（/tmp/upc_camera.sock）SCM_RIGHTS 随 Start_Rsp 送达 UI。
+ * 始终拷贝到隔离 pool，再经 MsgPort IPC（/tmp/upc_camera.sock）SCM_RIGHTS
+ * 随 Start_Rsp 发给 UI/Media/Visual。消费者从不持有 ISP 正在 map 的 V4L2 buf，
+ * 避免超时/看门狗路径上 rkisp IOMMU 与 RGA/mmap 交叉。
+ *
+ * 隔离 pool 用 DmaHeapUsage::RgaDevice，保证 UI 侧 importbuffer_fd 可用。
  */
 class CameraDmaFrameSource {
 public:
@@ -27,7 +31,13 @@ public:
     [[nodiscard]] const std::vector<int>& ipc_fds() const noexcept {
         return fds_to_send_;
     }
-    [[nodiscard]] bool stride_aligned() const noexcept { return stride_aligned_; }
+    /**
+     * 采集侧 stride 是否已满足 CAMERA_STRIDE_ALIGN（仅诊断）。
+     * 交付路径始终走隔离拷贝，与此无关。
+     */
+    [[nodiscard]] bool capture_stride_aligned() const noexcept {
+        return capture_stride_aligned_;
+    }
     [[nodiscard]] uint32_t dma_stride_y() const noexcept { return aligned_stride_; }
     [[nodiscard]] uint32_t buffer_count() const noexcept;
     [[nodiscard]] int fd_for_buffer_idx(uint32_t idx) const;
@@ -58,11 +68,11 @@ private:
     std::vector<int>          capture_fds_;
     std::vector<int>          fds_to_send_;
 
-    bool     stride_aligned_ = false;
-    uint32_t aligned_stride_ = 0;
-    uint32_t aligned_height_ = 0;
-    uint32_t width_          = 0;
-    uint32_t height_         = 0;
+    bool     capture_stride_aligned_ = false;
+    uint32_t aligned_stride_         = 0;
+    uint32_t aligned_height_         = 0;
+    uint32_t width_                  = 0;
+    uint32_t height_                 = 0;
 };
 
 } // namespace upc::camera
