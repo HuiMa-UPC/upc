@@ -5,6 +5,7 @@
 #include "ipc_dma_frame_ring.hpp"
 #include "msg_port.hpp"
 #include "red_dot_detector.hpp"
+#include "plate_height_pipeline.hpp"
 
 #include <atomic>
 #include <cstdint>
@@ -26,7 +27,7 @@ namespace upc::visual {
  * 3) 后台线程消费并释放帧槽，并缓存最新紧凑 NV12 原图
  * 4) 收到 Glavo 首层检测请求时，使用 Y 平面运行模型并回传 0/1 结果
  *
- * 两类会话共用同一路取流（首层检测 / 打印前光路检测）。取流的起停按
+ * 三类会话共用同一路取流（首层检测 / 打印前光路检测 / 基板测高）。取流的起停按
  * 「任一会话激活即保持」处理，任一会话单独结束不得把流拆掉，
  * 见 any_session_active_locked() 与 release_stream_if_idle()。
  */
@@ -65,9 +66,15 @@ private:
     void on_first_layer_session_stop(const middleware::Message& msg);
     void start_first_layer_session(const char* reason);
     void stop_first_layer_session(const char* reason);
-    /** 两类会话是否有任一激活；调用前须持有 state_mtx_。 */
+    /** 三类会话是否有任一激活；调用前须持有 state_mtx_。 */
     [[nodiscard]] bool any_session_active_locked() const;
-    /** 两类会话都停了才真正拆流；任一还在就保留。 */
+    void on_plate_height_session_start(const middleware::Message& msg);
+    void on_plate_height_session_stop(const middleware::Message& msg);
+    void start_plate_height_session(const char* reason);
+    void stop_plate_height_session(const char* reason);
+    void on_laser_spot_measure_req(const middleware::Message& msg);
+    void send_laser_spot_measure_rsp(bool ok, float x, float y);
+    /** 三类会话都停了才真正拆流；任一还在就保留。 */
     void release_stream_if_idle(const char* reason);
     void send_reference_ready_rsp(bool ready, uint32_t frame_seq,
                                   const std::string& reason);
@@ -138,6 +145,8 @@ private:
     /** 光路检测会话：与首层会话独立开关，共用同一路取流。 */
     bool optical_path_session_active_ = false;
     uint64_t optical_path_session_id_ = 0;
+    bool plate_height_session_active_ = false;
+    uint64_t plate_height_session_id_ = 0;
     bool start_req_sent_ = false;
     bool stream_up_ = false;
     bool pending_start_rsp_valid_ = false;

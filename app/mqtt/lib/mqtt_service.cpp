@@ -966,6 +966,7 @@ void MqttService::tick()
     MQTTClient_yield();
     request_firmware_versions_if_needed();
     (void)publish_chamber_telemetry();
+    (void)publish_chamber_ext_telemetry();
     (void)publish_heartbeat();
     poll_ota_heartbeat_wait();
     expire_pending_acks();

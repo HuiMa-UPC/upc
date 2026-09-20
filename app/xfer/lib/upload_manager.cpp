@@ -15,6 +15,13 @@
 
 namespace upc::xfr {
 
+namespace {
+
+/* 传输 3MF 会在板端展开；先限制压缩包本身，避免上传阶段耗尽 transport 分区。 */
+constexpr uint64_t kMaxTransfer3mfBytes = 512ULL * 1024ULL * 1024ULL;
+
+} // namespace
+
 UploadManager::UploadManager(std::string storage_dir, uint32_t chunk_max_bytes)
     : storage_dir_(std::move(storage_dir)),
       chunk_max_(chunk_max_bytes ? chunk_max_bytes : (4U * 1024U * 1024U))
@@ -36,7 +43,7 @@ UploadInitResult UploadManager::init(const std::string& filename,
     const std::string base = basename_only(filename);
     if (base.empty() || !is_supported_filename(base)) {
         out.err_code = "UNSUPPORTED_FILE_TYPE";
-        out.err_msg = "only .ovf files are allowed";
+        out.err_msg = "only .ovf and .3mf files are allowed";
         out.http_status = 422;
         return out;
     }
@@ -44,6 +51,16 @@ UploadInitResult UploadManager::init(const std::string& filename,
         out.err_code = "BAD_REQUEST";
         out.err_msg = "size must be > 0";
         out.http_status = 400;
+        return out;
+    }
+    const std::string lower_base = to_lower(base);
+    const bool is_3mf =
+        lower_base.size() > 4 &&
+        lower_base.rfind(".3mf") == lower_base.size() - 4;
+    if (is_3mf && size > kMaxTransfer3mfBytes) {
+        out.err_code = "FILE_TOO_LARGE";
+        out.err_msg = "3mf exceeds 512 MiB upload limit";
+        out.http_status = 413;
         return out;
     }
 
@@ -239,7 +256,8 @@ bool UploadManager::is_supported_filename(const std::string& filename)
 {
     const std::string lower = to_lower(filename);
     const bool is_ovf = lower.size() > 4 && lower.rfind(".ovf") == lower.size() - 4;
-    return is_ovf;
+    const bool is_3mf = lower.size() > 4 && lower.rfind(".3mf") == lower.size() - 4;
+    return is_ovf || is_3mf;
 }
 
 std::string UploadManager::basename_only(const std::string& path)

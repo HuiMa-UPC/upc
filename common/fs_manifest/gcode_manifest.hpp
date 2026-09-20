@@ -22,11 +22,15 @@ namespace upc {
 #define UPC_LOCAL_GCODE_CONFIG  UPC_LOCAL_GCODE_DIR "/config.json"
 #endif
 
+#ifndef UPC_LOCAL_GCODE_THUMB_DIR
+#define UPC_LOCAL_GCODE_THUMB_DIR  UPC_LOCAL_GCODE_DIR "/thumb"
+#endif
+
 struct GcodeManifestEntry {
     std::string name;
     uint32_t    file_size    = 0;
     uint32_t    line_count   = 0;
-    uint32_t    layer_count  = 0; /**< G-code 中 M3000 层标记数量（0=未知或无） */
+    uint32_t    layer_count  = 0; /**< 总层数：3MF 来自 Metadata.json 的 layers；其它可来自 M3000（0=未知或无） */
     uint32_t    duration_sec = 0;
     float       material_g   = 0.f;
     int64_t     mtime        = 0;

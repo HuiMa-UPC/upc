@@ -96,6 +96,10 @@ struct SnapAssembly {
 };
 SnapAssembly g_snap{};
 uint32_t g_snap_last_req_tick = 0;  /* 上次发请求的 tick，用于节流；0=从未发过 */
+/** 攒帧超时 oneshot：文档写「攒超 2s 作废」，但原先只在下一帧快照或下一轮请求时
+ *  才检查 elapsed。MCU 忙（起印握手/铺粉）迟迟不回时，busy 会一直占着，CONDITION
+ *  单报（含 SOC 合成的 1120）卡在 g_pending，灯已红、浮层却要等最多 30s 轮询。 */
+lv_timer_t *g_snap_assemble_timer = nullptr;
 
 /* 快照在途期间暂存的 CONDITION 单报，收齐后按序重放（EVENT 不进这里，
  * 它不改 CONDITION 状态，直接落历史即可）。 */
@@ -510,13 +514,27 @@ void snapshot_commit(void)
 
     /* 二、本地有、快照说不亮了 → 当作已解除转历史。
      * 只处理受快照管辖的 code：EVENT 与保留号段（xx96..xx99）不占 bit，
-     * 它们"快照里没提"是信息缺失不是状态变化，照清会把真报警抹掉。 */
+     * 它们"快照里没提"是信息缺失不是状态变化，照清会把真报警抹掉。
+     *
+     * 已在 g_pending 里的码先跳过：在途单报已乐观上屏（见 apply_report_async），
+     * 快照是请求那一刻的旧位图，照清会先撤卡再被重放接回来，浮层闪一下
+     * （打印氧门 1120：灯已红、卡却眨）。round_end 重放仍会以单报为准。 */
     for(int i = 0; i < kCurrentCap; i++) {
         if(!g_current[i].used) {
             continue;
         }
         ui_alarm_entry_t &e = g_current[i].e;
         if(!middleware::alarm_snapshot_covers(e.code)) {
+            continue;
+        }
+        bool in_pending = false;
+        for(int j = 0; j < g_pending_count; j++) {
+            if(g_pending[j].alarm_code == e.code) {
+                in_pending = true;
+                break;
+            }
+        }
+        if(in_pending) {
             continue;
         }
         const int rel  = e.code - 1000;
@@ -534,9 +552,37 @@ void snapshot_commit(void)
     notify_observers();
 }
 
+void snapshot_reject(const char *why); /* 前向：超时 cb 在 round_end 之前 */
+
+void snap_assemble_timer_cancel(void)
+{
+    if(g_snap_assemble_timer) {
+        lv_timer_delete(g_snap_assemble_timer);
+        g_snap_assemble_timer = nullptr;
+    }
+}
+
+void snap_assemble_timeout_cb(lv_timer_t * /*t*/)
+{
+    /* repeat_count=1：回调后由 LVGL 自删，先摘句柄避免 round_end 再 delete。 */
+    g_snap_assemble_timer = nullptr;
+    if(g_snap.busy) {
+        snapshot_reject("assemble timeout");
+    }
+}
+
+void snap_assemble_timer_arm(void)
+{
+    snap_assemble_timer_cancel();
+    g_snap_assemble_timer = lv_timer_create(snap_assemble_timeout_cb,
+                                            kSnapAssembleMs, nullptr);
+    lv_timer_set_repeat_count(g_snap_assemble_timer, 1);
+}
+
 /** 结束当前这一轮（提交与否由调用方决定），并按序重放暂存的单条上报。 */
 void snapshot_round_end(bool commit)
 {
+    snap_assemble_timer_cancel();
     if(commit) {
         snapshot_commit();
     }
@@ -651,6 +697,7 @@ void snapshot_request(const char *reason)
     g_snap.busy         = true;
     g_snap.started_tick = now;
     g_snap_last_req_tick = now ? now : 1u;   /* 0 是"从未发过"的哨兵，避开它 */
+    snap_assemble_timer_arm();
     UPC_LOG_ALARM_STATE(Info, "snapshot request (%s)", reason ? reason : "-");
     ui::UiMsgProxy::instance().send_alarm_snapshot_req();
 }
@@ -671,9 +718,11 @@ void apply_report_async(void *raw)
         }
         on_alarm_event(p->alarm_code, p->severity, p->detail);
     } else if(g_snap.busy && g_pending_count < kPendingReportCap) {
-        /* 快照在途：这条比快照新，先攒着，等快照原子提交后再压上去重放，
-         * 免得较旧的快照把它盖回去（开发指导 §11）。 */
+        /* 快照在途：仍入 pending，等原子提交后按序重放（开发指导 §11）。
+         * 同时立刻应用一遍——否则要等 MCU 回齐或 2s 超时才上浮层，而 Glavo
+         * 侧灯效已按单报变红（打印氧门 1120）。重放幂等，同码 ACTIVE 只刷新。 */
         g_pending[g_pending_count++] = *p;
+        on_alarm_condition(*p);
     } else {
         /* 暂存溢出就直接应用：回退风险远小于把报警丢掉 */
         on_alarm_condition(*p);

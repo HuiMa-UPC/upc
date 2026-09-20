@@ -1,6 +1,7 @@
 # 项目架构索引
 
 > Agent / 开发者改模块前先查此表。细节见各模块 `*.md`，不要在此重复长文。
+> 第一次看仓库：先读 [快速理解.md](快速理解.md)（进程图 + 打印/预览路径）。
 
 ## 进程
 
@@ -15,7 +16,7 @@
 | MQTT | `rongsu_mqtt` | `app/mqtt/main.cpp` | — | `/var/log/topic/*.log` |
 
 启动：`scripts/rongsu.sh start`（Glavo → `rongsu_camera` → `rongsu_media` → `rongsu_xfr` → `rongsu_visual` → `rongsu_mqtt` → UI）。`/home/rongsu.sh` 只是选 A/B 槽的薄 bootstrap，上面这串顺序实现在槽内的 `scripts/rongsu_app.sh`，随应用层升级一起进槽；槽机制见 [OTA_IMAGE.md](../common/fs_manifest/OTA_IMAGE.md)。  
-编译：`./build.sh`（Release + 工具链，产物在 `output/`；`clean` / `reconfigure` 见脚本头注释）。  
+编译：`./build.sh`（Release + 工具链，产物在 `output/`；`clean` / `reconfigure` 见脚本头注释）。接手/虚拟机交叉编译见 [编译与运行.md](编译与运行.md)。
 日志：按专题写 `/var/log/topic`，体积由板端 logrotate 控制，配置源文件 `scripts/topic` → `/etc/logrotate.d/topic`。
 
 ## 顶层目录
@@ -34,7 +35,7 @@
 | `app/glavo/` | [GLAVO.md](../app/glavo/GLAVO.md) | 打印编排、McuLink、IPC Server |
 | `app/camera/` | [CAMERA.md](../app/camera/CAMERA.md) | 相机采集、SHM 预览、IPC Server |
 | `app/media/` | [MEDIA.md](../app/media/MEDIA.md) | 拍照/录像/延时封装 + 直播（云端 RTSP 推流、局域网 live555 RTSP Server；消费 Camera DMA 流） |
-| `app/xfer/` | [XFER.md](../app/xfer/XFER.md) | WiFi 发现、PIN 配对、HTTP 文件上传（仅收 `.json/.svg`） |
+| `app/xfer/` | [XFER.md](../app/xfer/XFER.md) | WiFi 发现、PIN 配对、HTTP 分块上传；OVF 走 snowslice，传输 3MF 提取单份 G-code + PNG/RTHM 缩略图 |
 | `app/visual/` | [VISUAL.md](../app/visual/VISUAL.md) | 视觉：Camera DMA 取帧、首层检测、打印前光路检测（红点桩） |
 | `app/mqtt/` | — | MQTT 网关：环境遥测、`set_light`、云端 `start/stop_rtsp_push`→Media |
 | `app/parser/` | [PARSER.md](../app/parser/PARSER.md) | G-code/OVF 解析库（Glavo 链接） |
@@ -46,13 +47,16 @@
 |------|------|--------|
 | `GlavoService` | `glavo_service.*` | IPC 业务编排 + 工作线程（打印/USB 目录/门控）；`init()` 绑定 RingBuffer → `McuLink` |
 | `OpticalPathCheck` | `optical_path_check.*` | 打印前光路检测状态机（独立线程，结果回灌 worker） |
+| `HeightLut2d` / `HeightCalibration` / `PlateHeightMeasure` | `height_points.hpp` `height_lut_2d.*` `height_calibration.*` `plate_height_measure.*` | 高度校准与打印前测高 |
 | `galvo_motion_encode` | `galvo_motion_encode.*` | 调试运动包编码 + 五点坐标（点位测试与光路检测共用） |
 | `gcode_manifest` | `common/fs_manifest/gcode_manifest.*` | Local `UPC_LOCAL_GCODE_DIR/config.json`（UI 读列表，Glavo Prepare/Delete 写） |
 | `print_history_manifest` | `common/fs_manifest/print_history_manifest.*` | `UPC_VIDEO_CONFIG`（Media upsert 写；UI 历史页读，删除后重写） |
 | `media_paths` | `common/fs_manifest/media_paths.hpp` | `UPC_MEDIA_ROOT`（默认 `/userdata/media`：photo/video/tmp + 首层视觉诊断图，各进程共用） |
 | `image_paths` | `common/fs_manifest/image_paths.hpp` | `UPC_IMAGE_ROOT`（默认 `/userdata/image`：soc/mcu/galvo/tmp） |
 | `ota_image_pair` | `common/fs_manifest/ota_image_pair.*` | MCU/Galvo AB 文件名与最高版本选取（规则 [OTA_IMAGE.md](../common/fs_manifest/OTA_IMAGE.md)） |
-| `McuLink` | `mcu_link.*` | TCP 运动 + 串口握手/传感器 |
+| `McuLink` | `mcu_link.*` | TCP 运动 + 串口握手/传感器；MCU≥V4 时合并 `SocSensors` 本地采集 |
+| `SocSensors` | `soc_sensors.*` | MCU≥V4：舱内外 PMSA UART、AHT20、CPM121、IIO 氧气周期采集；六路舱灯/`fa_valve` sysfs 随时可写（调试页，不看 MCU 版本）；与 UI 背光无关 |
+| `SpiStatusLed` | `spi_status_led.*` | MCU≥V4：SPI 灯效板状态色（空闲蓝 / 打印橙 / CONDITION 红） |
 | `PrintJobState` | `print_job_state.*` | 打印任务计数/状态 |
 | `PrintVideoNotify` | `print_video_notify.*` | 换层 Snap / 录像会话 IPC → Media |
 | `device_config.hpp` | 头文件 | TCP/串口默认、`GLAVO_ENABLE_LAYER_SNAP` 等 |
@@ -63,7 +67,7 @@
 |------|------|--------|
 | `CameraService` | `camera_service.*` | IPC Server + 多 peer SHM 推流（UI/Visual/Media） |
 | `ViCapture` | `vi_capture.*` | rkaiq + V4L2 NV12 |
-| `CameraDmaFrameSource` | `camera_dma_frame_source.*` | V4L2 dma fd 导出、stride padding |
+| `CameraDmaFrameSource` | `camera_dma_frame_source.*` | V4L2→隔离 pool 拷贝、dma fd 导出 |
 | `device_config.hpp` | 头文件 | 设备/分辨率/IQ/SHM 宏 |
 
 ## Media（`app/media/lib/` → 源编入 `rongsu_media`，无独立静态库）
@@ -95,7 +99,8 @@
 | `ui_clean_state_*` | `ui_clean_state.*` | 清粉（clean_test）发起与回执的唯一来源：接管两个单槽 Proxy 回调，按发起方（结果页 Purify / 控制页手动清粉）扇出；`record_video` 决定是否连带清粉录像 |
 | `ui_alarm_catalog_*` | `ui_alarm_catalog.hpp` / `ui_alarm_catalog_gen.cpp` | 报警字典（生成物，改 `tools/gen_alarm_catalog.py` + `doc/alarm_catalog_en.csv`）；槽位映射不在此，是 `upc_contract.hpp` 里的固定公式 |
 | `ui_notice_stack_*` | `ui_notice_stack.*` | 右上通知三态：toast / 铃铛 / 面板互斥（**只在首页**；首页打印态与监控态退回改版前那摞黑玻璃卡），PageManager 持有 |
-| `app_init()` | `ui_app.*` | 主题、Proxy、`ui_device_state_init`、`ui_message_store_init`、`ui_alarm_state_init`、页面注册、control |
+| `ui_backlight_*` | `ui_backlight.*` | LCD 背光 sysfs（设置页 Display），不经 Glavo、不看 MCU 版本 |
+| `app_init()` | `ui_app.*` | 主题、背光（`backlight_apply_saved`）、Proxy、`ui_device_state_init`、`ui_message_store_init`、`ui_alarm_state_init`、页面注册、control |
 | `control_*` | `control.*` | 打印状态机（含 `CONTROL_STATE_PRINT_DONE` 结果页、`CONTROL_STATE_TRANSFER_BOX` 取件转运盒）+ overlay UI |
 | `VideoPlayer` | `video_player.*` | 延时视频 libav* 软解 → BGRX/RGB565 → lv_image（play/pause/seek；拖动预览缩小帧 + latest-wins） |
 | `PngScrubPreview` | `png_scrub_preview.*` | PNG 序列拖动预览：后台 libpng 解码缩放到小图 RGB565 |
@@ -134,7 +139,7 @@ UI → IPC → GlavoService → ParserManager → RingBuffer
                     PrintVideoNotify → IPC(UI Hub FWD) → Media → PNG/MP4
 ```
 
-预览像素：`rongsu_camera` → 主 IPC `SCM_RIGHTS` 传 dma_buf fd + SHM `/upc_camera_preview` 元数据环 → UI `CameraPreviewPlayer`（`MsgPort::take_peer_dma_fds` + RGA `importbuffer_fd` 或 SW 转 BGRX；与控制 IPC 分离）。
+预览像素：`rongsu_camera` → 隔离 pool 拷贝 → 主 IPC `SCM_RIGHTS` 传 dma_buf fd + SHM `/upc_camera_preview` 元数据环 → UI `CameraPreviewPlayer`（`MsgPort::take_peer_dma_fds` + RGA `importbuffer_fd` 或 SW 转 BGRX；与控制 IPC 分离）。RK3568 上 RGA2 无 IOMMU、rkisp 有；所有权见 [camera/CAMERA.md](../app/camera/CAMERA.md) 「ISP IOMMU 与 dma-buf 所有权」。
 
 ## 跨模块红线
 
@@ -149,10 +154,12 @@ UI → IPC → GlavoService → ParserManager → RingBuffer
 
 | 类型 | 路径 |
 |------|------|
+| 快速理解 | [快速理解.md](快速理解.md)（进程全景、打印/预览路径） |
 | 架构索引 | `doc/ARCHITECTURE.md`（本文件） |
 | 模块说明 | `app/{ui,glavo,camera,media,parser,protocol}/*.md`、`common/{ipc,middleware}/*.md` |
 | 专利参考 | [专利参考-系统架构与运行逻辑.md](专利参考-系统架构与运行逻辑.md)、[专利参考-振镜校准算法与增益设置.md](专利参考-振镜校准算法与增益设置.md) |
 | Cursor Rules | `.cursor/rules/*.mdc` |
 | 并发检查 MCP | `.cursor/mcp/cpp-concurrency-check.py` |
+| IPC 契约 MCP | `.cursor/mcp/upc-dev.py`（`lookup_msg` / `lookup_payload` / `check_contract_drift` / `lookup_alarm`） |
 | 日志 | [common/COMMON.md § 专题日志字典](../common/COMMON.md#专题日志字典varlogtopiclog)（专题划分、落盘路径、轮转；**新增大类必须同步 `scripts/topic`**） |
 | 消息契约 | [common/COMMON.md](../common/COMMON.md)（`upc_contract.hpp` 总表） |

@@ -14,7 +14,9 @@
 | `ui_device_bar` | 顶部常驻设备信息条（建在 `shell_` 上，按页显隐） |
 | `ui_message_store` | 消息中心数据源：事件去重排序、未读计数、码→文案表、按等级自动收起（`sync` / `emit` 两种写入语义） |
 | `ui_notice_stack` | 右上通知三态：toast / 铃铛 / 面板互斥，只在首页；打印态与监控态退回黑玻璃卡 |
+| `ui_backlight` | LCD 背光 sysfs（设置页 Display，滑条 5~100%），不经 Glavo、不看 MCU 版本 |
 | `camera_msg_proxy` | UI ↔ Camera 预览开停 IPC |
+| `debug_msg_proxy` | 调试页（手动控制/标定）专用消息门面，独立于 `ui_msg_proxy`；默认目标 APP_GLAVO，少数开关直连其它进程 |
 | `camera_preview` | SHM 消费、RGA/SW NV12→BGRX、三缓冲 + lv_image 显示 |
 | `video_player` | MP4 软解播放；拖动预览缩小帧 + scrub 世代丢弃 |
 | `png_scrub_preview` | PNG 拖动预览异步解码（libpng → 小图 RGB565） |

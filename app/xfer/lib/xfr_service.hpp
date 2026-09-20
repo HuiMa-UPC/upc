@@ -5,6 +5,7 @@
 #include "gcode_manifest.hpp"
 #include "http_server.hpp"
 #include "mdns_publisher.hpp"
+#include "transfer_3mf_importer.hpp"
 #include "upload_manager.hpp"
 #include "xfr_config.hpp"
 
@@ -64,6 +65,7 @@ private:
     XfrConfig cfg_;
     PairManager pair_mgr_;
     UploadManager upload_mgr_;
+    Transfer3mfImporter transfer_3mf_importer_;
     MdnsPublisher mdns_;
     HttpServer http_;
     mutable std::mutex print_state_mu_;

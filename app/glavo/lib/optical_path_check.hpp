@@ -9,7 +9,8 @@
  *
  *   launch_print_from_prepared
  *     ├─ print_running_ = true + 打印态通知
- *     ├─ 【本模块】光路检测 gate ──► 失败：报警 + 通知 UI 跳终止结果页
+ *     ├─ 关舱灯 + 【本模块】光路检测 gate ──► 失败：报警 + 通知 UI 跳终止结果页
+ *     ├─ 关舱灯 + 基板测高 gate（结束仍关灯，不开舱灯）
  *     ├─ open_file / start_parse
  *     ├─ 首层参考图 gate
  *     └─ begin_print_motion_after_reference_ready（此处才切激光模式）

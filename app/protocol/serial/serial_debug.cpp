@@ -82,6 +82,15 @@ static void sdbg_put_le16(uint8_t* p, int16_t v)
     p[1] = (uint8_t)(((uint16_t)v >> 8u) & 0xFFu);
 }
 
+static void sdbg_put_le32(uint8_t* p, int32_t v)
+{
+    const uint32_t u = (uint32_t)v;
+    p[0] = (uint8_t)(u & 0xFFu);
+    p[1] = (uint8_t)((u >> 8u) & 0xFFu);
+    p[2] = (uint8_t)((u >> 16u) & 0xFFu);
+    p[3] = (uint8_t)((u >> 24u) & 0xFFu);
+}
+
 static int32_t sdbg_read_le32(const uint8_t* p)
 {
     return (int32_t)((uint32_t)p[0] | ((uint32_t)p[1] << 8u) |
@@ -135,6 +144,14 @@ int serial_debug_build_axis_inc(uint8_t axis, int16_t delta,
     sdbg_put_le16(v, delta);
     return serial_build_aa_frame(SDBG_PORT_GENERAL, cmd,
                                  SDBG_TLV_AXIS_INC, 2, v, out, out_size);
+}
+
+int serial_debug_build_z_inc_um(int32_t delta_um, uint8_t* out, size_t out_size)
+{
+    uint8_t v[4];
+    sdbg_put_le32(v, delta_um);
+    return serial_build_aa_frame(SDBG_PORT_GENERAL, SDBG_CMD_Z_MOVE,
+                                 SDBG_TLV_AXIS_INC, 4, v, out, out_size);
 }
 
 int serial_debug_build_axis_home(uint8_t axis, uint8_t* out, size_t out_size)

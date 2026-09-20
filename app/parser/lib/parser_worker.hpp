@@ -14,6 +14,7 @@ public:
 
     /**
      * 为下一次 open_file 提供总行数提示。
+     * >0 已知行数；0 跳过整文件数换行（调用方走纯层进度）；<0 打开时自行统计。
      * 默认实现为 no-op；不支持的解析器可忽略。
      */
     virtual void set_total_lines_hint(int total_lines) { (void)total_lines; }

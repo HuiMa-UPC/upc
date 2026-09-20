@@ -102,6 +102,8 @@ const CatalogEntry kCatalog[] = {
       "Optical path passed", "Starting the print job" },
     { (uint16_t)DeviceEventCode::OpticalPathCheckFail, UI_MSG_SEV_CRITICAL,
       "Optical path abnormal", "Print blocked. Check galvo / red laser / camera" },
+    { (uint16_t)DeviceEventCode::PlateHeightFlatnessWarn, UI_MSG_SEV_ERROR,
+      "Plate flatness check", "Height measure did not pass in 5 rounds; inspect the plate" },
     /* ---- UI 本地 ---- */
     { (uint16_t)DeviceEventCode::UiWearMask, UI_MSG_SEV_CRITICAL,
       "Wear a mask before opening", "Cabin powder may become airborne" },

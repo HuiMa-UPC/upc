@@ -29,6 +29,8 @@ enum class McuLinkEvent : uint8_t {
     TerminateDone,      /**< 用户手动终止或异常中断后的清理已完成 */
     PrintError,         /**< 打印过程中发生错误（如 TCP 断线）导致的终止 */
     PowderLow,          /**< 打印中检测到缺粉（0x9B value[10] bit0/bit1 == 00） */
+    OxygenHigh,         /**< V4：打印中 SOC 氧 ≥ 阈值，已 TCP 暂停；上层可同步 UI 暂停态 */
+    OxygenRecovered,    /**< V4：打印中 SOC 氧回落到恢复线，已解除氧暂停 */
 };
 
 /** @brief 链路事件回调类型：接收到 McuLinkEvent 时通知上层 */
@@ -41,20 +43,26 @@ using McuLinkTransportResultCb = std::function<void(uint8_t)>;
 /** @brief 首层视觉检测回调：true=通过，false=不通过（继续铺粉）。 */
 using McuLinkFirstLayerCheckCb = std::function<bool(uint16_t)>;
 
-/** @brief 环境传感器缓存（串口 0x9B 上报解析结果，供 UI/打印进度读取） */
+/** @brief 环境传感器缓存（串口 0x9B + SOC 本地采集合并，供 UI/打印进度读取） */
 struct EnvSnapshotCache {
-    float pm25_indoor     = 0.f;
-    float pm25_cabin      = 0.f;
-    float pm1_indoor      = -1.f;  /**< 室内 PM1.0 (μg/m³)；无源时 <0 */
-    float pm10_indoor     = -1.f;  /**< 室内 PM10 (μg/m³)；无源时 <0 */
+    float pm25_indoor     = 0.f;   /**< 舱外/室内常显 PM2.5（V4=SOC UART 舱外） */
+    float pm25_cabin      = 0.f;   /**< 舱内 PM2.5（V4=SOC UART 舱内，阀关时可能无效） */
+    float pm1_indoor      = -1.f;  /**< 舱外 PM1.0；无源时 <0 */
+    float pm10_indoor     = -1.f;  /**< 舱外 PM10；无源时 <0 */
+    float pm1_cabin       = -1.f;  /**< 舱内 PM1.0（V4 SOC）；无源时 <0 */
+    float pm10_cabin      = -1.f;  /**< 舱内 PM10（V4 SOC）；无源时 <0 */
     float temperature_c   = 0.f;
     float oxygen_percent  = 0.f;
+    float filter_oxygen_percent = -1.f; /**< 滤芯氧 %（V4 MCU 1ST）；无源时 <0 */
     float humidity_percent = 0.f;
-    float pressure_kpa    = -1.f;   /**< 舱内1气压 kPa（0x9B value[2..3]/10）；无源时 <0 */
+    float pressure_kpa    = -1.f;   /**< 舱内气压 kPa（旧=MCU；V4=SOC CPM121） */
     float baseplate_temp_c = -1.f;  /**< 基板温度 ℃；无源时 <0 */
-    uint8_t powder_bits   = 0u;     /**< 粉量位 bit0/bit1（0=缺粉） */
-    bool  outer_door_open = false;  /**< 外门锁状态：false=门关 true=门开（来源 0x9B value[10] bit7） */
+    float filter_pressure_kpa = -1.f; /**< 滤芯气压 SC0（MCU 1ST） */
+    uint8_t powder_bits   = 0u;     /**< 旧：bit0/bit1；V4：红外低 2 位兼容 */
+    uint8_t powder_ir_bits = 0u;    /**< V4：A1..OUTR 八路红外 */
+    bool  outer_door_open = false;  /**< false=门关 true=门开 */
     bool  door_state_valid = false; /**< 是否已收到至少一帧可用门状态 */
+    bool  sensor_v4       = false;  /**< 当前按 V4 协议路径填缓存 */
     bool  valid           = false;
 };
 
@@ -151,6 +159,8 @@ public:
      */
     void set_user_dispatch_paused(bool paused);
     [[nodiscard]] bool is_user_dispatch_paused() const noexcept;
+    /** @brief V4 SOC 氧过高导致的运动保持（与用户暂停独立） */
+    [[nodiscard]] bool is_o2_hold() const noexcept;
     /**
      * @brief 下发 TCP CMD=0x0A 通用紧急指令（Stop/Pause）
      * @param stop  true=急停/终止（最高优先级）
@@ -168,8 +178,28 @@ public:
     /**
      * @brief 调试专用：直接下发一个已编码的 11 字节运动子包
      * @note 仅允许在无打印/测试图运动流、无终止清理时调用。
+     *       光路自检 / 点位测试走这条；测高与高度校准不要用。
      */
     bool send_debug_motion_subpacket(const uint8_t subpacket[11]);
+    /**
+     * @brief 单点振镜绝对坐标移动（手动控制 / 测高扫描用）
+     *
+     * 内部走与切片下发完全一致的编码口径：
+     *   cal_apply_xy(校准畸变) → × scale_gain → coordinate_to_offset_bytes
+     *   → 构造 11B 运动包 → build_motion_frame → tcp_send_raw
+     *
+     * 打印进行中（is_sending_）会拒绝调用，避免与批量运动包冲突。
+     *
+     * @param x_mm, y_mm     目标坐标(mm，振镜坐标系，0,0 为中心；越界自动截断)
+     * @param speed_mm_min    扫描速度，<=0 时用默认 1000mm/min
+     * @param laser_on        瞄准移动应传 1（LD=01 00）。0=空跳会途中关红光。
+     *                        本函数只给手动/测高用；打印空跳走 Parser，不走这里。
+     * @return true=组帧并发送成功；false=TCP 未就绪 / 打印中互斥 / 发送失败
+     */
+    bool send_galvo_abs_pos(float x_mm, float y_mm,
+                            float speed_mm_min, int laser_on);
+    /** @brief 最近一次 MCU 运动位置上报的 Z 实际位置（mm）。 */
+    [[nodiscard]] float get_z_pos_mm() const noexcept;
     /**
      * @brief 标记“打印任务流程”是否激活（用于门控高频心跳回包日志）
      * @note 业务约定：从进入打印到用户滑动开门解锁成功，均视为同一流程。
@@ -207,9 +237,25 @@ public:
      * @note 队列满时丢弃最旧一条
      */
     void enqueue_serial_tx(const uint8_t* data, size_t len, bool reliable = false);
+    /**
+     * @brief 本轮串口队列 drain 之后再发 TCP 红光（Red=1 或 Red=3）。
+     *        给「先入队 0x12、再开瞄准红光」用。切激光会作废这次补发。
+     */
+    void request_reassert_red_after_serial_tx(uint8_t red_code);
+    /** @brief 作废尚未执行的红光补发（切激光 / 普通红光时调用）。 */
+    void cancel_pending_red_reassert();
 
     /** @brief 读取最新环境传感器快照（线程安全） */
     [[nodiscard]] EnvSnapshotCache env_snapshot() const;
+
+    /**
+     * @brief MCU 固件是否已报到且 major≥4（传感器走 V4 布局 + SOC 本地采集 / 开阀采样）。
+     * unknown / major&lt;4 → false：旧板无 fa_valve，不开阀。
+     */
+    [[nodiscard]] bool mcu_sensor_protocol_v4() const noexcept;
+
+    /** @brief 读 MCU 版本缓存（About / 门控逻辑） */
+    [[nodiscard]] middleware::McuVersionPayload mcu_version_cached() const;
 
     /**
      * @brief 调试：环境上报模拟开关（仅本次运行，默认关）
@@ -217,6 +263,12 @@ public:
      */
     void set_env_sim_enabled(bool on);
     [[nodiscard]] bool env_sim_enabled() const noexcept;
+    /**
+     * @brief 调试：跳过 V4 SOC 氧打印门（仅本次运行，默认关）
+     * @note 开：起印不发洗气开、不等氧、打印中不因氧高 pause/1120；关：恢复开阀洗气+氧门。
+     */
+    void set_skip_o2_print_gate(bool on);
+    [[nodiscard]] bool skip_o2_print_gate() const noexcept;
     /** @brief 调试：环境模拟粉量缺粉目标开关（延迟 5s 生效） */
     void set_env_sim_powder_low(bool on);
     [[nodiscard]] bool env_sim_powder_low() const noexcept;
@@ -256,6 +308,10 @@ public:
     void handle_serial_rx_frame(const uint8_t* frame, size_t len);
 
     void on_sensor_report(const serial_sensor_report_t& report);
+    void on_sensor_ext_report(const serial_sensor_ext_t& ext);
+    void merge_soc_env_into_cache_locked();
+    void refresh_soc_v4_mode();
+    void publish_debug_soc_led_ntf();
     void on_motion_pos_report(const serial_motion_pos_t& pos);
     void publish_env_update_ntf();
     /** @brief 仅向 UI 推送状态快照（Ready/Idle + WiFi），不清空环境值也不推 MQTT。 */
@@ -265,6 +321,11 @@ public:
     void publish_debug_sensor_ntf(const serial_sensor_report_t& report);
     /** @brief 调试页传感器条推无效哨兵（<0 → UI "--"） */
     void publish_debug_sensor_invalid_ntf();
+    /**
+     * @brief V4：用 SOC 快照 + 已缓存的 MCU 字段推调试顶栏（不依赖本周期 1ST）
+     * @note 未收到过 MCU 1ST 时 O2/基板/粉量发无效哨兵；PM/温湿度/气压走 SOC。
+     */
+    void publish_debug_sensor_from_soc_and_cache();
     void publish_debug_axis_ntf(const serial_motion_pos_t& pos);
     void on_mcu_version_report(const serial_project_info_t& info);
     void publish_mcu_version_ntf();
@@ -273,6 +334,11 @@ public:
     bool should_publish_env_to_mqtt(bool force = false) noexcept;
     /** @brief 调试环境模拟：周期写假数据并 publish_env_update_ntf */
     void poll_env_sim_tick();
+    /**
+     * @brief V4：SOC 本地采集独立推 UI（APP_Update_Ntf + 调试顶栏）
+     * @note 旧固件不跑；Env Sim 开启时跳过。与 MCU 1ST 解耦，避免无 1ST 时顶栏/首页一直 "--"。
+     */
+    void poll_soc_env_tick();
     /** @brief 关闭模拟后清缓存并推送无效哨兵，等待真实 0x9B 再恢复 */
     void clear_env_after_sim_disable();
 
@@ -300,6 +366,11 @@ public:
      *       错过的状态变化；UI 侧另有启动/进页/轮询等触发点（那边带节流）。
      */
     void request_alarm_snapshot();
+    /**
+     * @brief 收齐 MCU 快照一轮后转发 UI；若 SOC 1120 活跃且缺 slot3 则补 bit20
+     * @note UI 要求同轮所有分片 nonzero_slot_count 一致，故须在 Glavo 攒齐再发。
+     */
+    void ingest_alarm_snapshot_slot(const serial_alarm_snapshot_t& snap);
 
 private:
     struct SerialReliableItem {
@@ -307,6 +378,22 @@ private:
         size_t  len = 0;
         bool    abort_print_on_fail = false;
     };
+
+    /** MCU 报警快照攒帧（与 UI 同语义；用于并入 SOC 1120 后再转发） */
+    struct AlarmSnapAssembly {
+        bool busy = false;
+        bool meta_known = false;
+        uint8_t count = 0;
+        uint8_t severity = 0;
+        uint16_t got_mask = 0;
+        uint8_t got_count = 0;
+        serial_alarm_snapshot_t slots[SERIAL_ALARM_SNAPSHOT_SLOTS]{};
+        std::chrono::steady_clock::time_point started{};
+    };
+
+    void reset_alarm_snap_assembly();
+    void flush_alarm_snap_assembly();
+    static constexpr int kAlarmSnapAssembleMs = 1500;
 
     McuLink();
     ~McuLink();
@@ -380,8 +467,19 @@ private:
     void link_try_final_layer_snap();
     /** @brief 从 tcp_stage_ 取一批运动包，组帧后通过 TCP 下发 */
     int link_send_one_motion_batch();
-    /** @brief 处理串口打印前的握手状态机（CONDITION_OK -> PRINT_READY） */
+    /** @brief 处理串口打印前的握手状态机（CONDITION_OK → 洗气/氧门 → PRINT_START → PRINT_READY） */
     void link_process_serial_handshake();
+    /** @brief V4 打印中 SOC 氧门：超限暂停 / 回落恢复 + 1120 报警 */
+    void link_process_o2_print_gate();
+    /**
+     * @brief 是否启用 SOC 氧门+打印前洗气（MCU≥V4、非测试图、非 Env Sim、未 Skip O2）
+     * @note 关时：起印不发洗气开、不等氧；开时：CONDITION_OK 后 0x86 开阀再等氧。
+     */
+    [[nodiscard]] bool soc_o2_print_gate_enabled() const noexcept;
+    /** @brief 读当前用于门控的氧浓度；false=无效（未就绪/读失败） */
+    [[nodiscard]] bool read_print_o2_percent(float* oxygen_percent) const;
+    /** @brief SOC 合成 1120 报警边沿（ACTIVE/NORMAL）并驱动灯效板 */
+    void publish_soc_chamber_oxygen_alarm(bool active);
 
     /** @brief 向振镜发送终止指令（TCP CMD=0x0A，Stop=1，Pause=0） */
     void send_tcp_reset();
@@ -390,6 +488,12 @@ private:
     void send_serial_print_terminate();
     /** @brief 向 MCU 串口发送打印完成帧 */
     void send_serial_print_finished();
+    /** @brief 洗气阀串口开关（Port 0xA1 Cmd 0x86）；target=1 */
+    void send_serial_gas_wash(bool on);
+    /** @brief 本作业 SOC 曾开过洗气则发关阀并清标志 */
+    void close_print_gas_wash_if_opened();
+    /** @brief 氧门开启时确保已发洗气开（幂等） */
+    void ensure_print_gas_wash_on();
     /**
      * @brief 执行手动终止后的清理：发 reset、清队列、回调 TerminateDone/PrintError
      * @return true 本轮确实执行了清理并已上报事件；false 已有 cleanup 在进行，
@@ -438,8 +542,12 @@ private:
     /** @brief 立即应用 TCP 档位参数（legacy / small-mem） */
     void apply_tcp_profile(bool small_mem, const char* reason,
                            uint32_t fw_version_le);
-    /** @brief TCP 刚连上时强制回红光（TCP 红光 + 串口关激光）。 */
+    /** @brief TCP 刚连上：只发振镜红光（Red=1），不跟串口 0x12。 */
     void force_switch_to_red_mode_on_tcp_connect();
+    /** @brief 串口 MCU 真实版本上报后：关激光使能；下一轮 drain 后再补 TCP 红光。 */
+    void apply_serial_laser_off_after_mcu_ready();
+    /** @brief 0x12 出队后再补 TCP 红光，避免关使能把瞄准红光掐灭。 */
+    void maybe_reassert_red_after_serial_laser_off();
 
     /* ---------- 核心依赖 ---------- */
     upc::parser::RingBuffer* rb_ = nullptr;          /**< 绑定的 RingBuffer，运动包来源 */
@@ -460,6 +568,7 @@ private:
     /* ---------- 发送状态机 ---------- */
     std::atomic<bool> is_sending_{false};              /**< 是否正在下发运动包 */
     std::atomic<bool> user_paused_{false};             /**< 用户暂停：停止 TCP 运动下发，解析与换层逻辑继续 */
+    std::atomic<bool> o2_hold_{false};                 /**< V4 SOC 氧过高：停运动下发（与 user_paused_ 独立） */
     std::atomic<bool> print_task_flow_active_{false};  /**< 打印任务流程窗口（开始打印→开门解锁） */
     std::atomic<bool> test_image_motion_{false};       /**< 调试测试图：跳过串口握手/末层 Snap/PRINT_FINISHED */
     std::atomic<bool> start_pending_{false};           /**< begin_sending 已调用但 RingBuffer 未达阈值，等待中 */
@@ -483,6 +592,11 @@ private:
     std::atomic<bool>     mcu_fw_valid_{false};       /**< 是否已收到串口版本上报 */
     middleware::McuVersionPayload mcu_fw_cache_{};    /**< MCU 版本缓存（由 mcu_fw_mtx_ 保护） */
     mutable std::mutex mcu_fw_mtx_;
+    std::atomic<bool> serial_laser_off_applied_{false}; /**< 本串口会话已发过上电 0x12 */
+    std::atomic<bool> serial_laser_off_pending_{false}; /**< 版本已到但当时在打印，待空闲再发 */
+    std::atomic<bool> reassert_red_after_laser_off_{false}; /**< 等串口 0x12 出队后再发 TCP 红光 */
+    std::atomic<uint8_t> reassert_red_code_{1}; /**< 补发的 DATA[3]：1=红光，3=红光常亮 */
+    std::atomic<uint8_t> last_requested_red_code_{0}; /**< 最近一次意图：1/2/3；2=激光，补发必须让路 */
 
     /* ---------- 换层/串口握手状态 ---------- */
     std::atomic<bool> waiting_layer_{false};           /**< 当前是否处于换层等待状态 */
@@ -531,16 +645,26 @@ private:
     SerialReliablePending serial_reliable_pending_{};
     std::deque<SerialReliableItem> serial_reliable_queue_;
     std::atomic<bool> serial_ack_enabled_{GLAVO_SERIAL_ACK_ENABLE != 0};
+    std::atomic<float> z_pos_mm_cache_{0.0f};
 
     EnvSnapshotCache env_cache_{};
     mutable std::mutex env_mtx_;
     bool powder_low_latched_ = false; /**< 缺粉边沿通知闩锁：低电平持续期间只触发一次 */
+    bool o2_alarm_active_ = false; /**< SOC 1120 当前是否 ACTIVE（供快照/灯效补齐） */
+    AlarmSnapAssembly alarm_snap_{}; /**< MCU 快照攒帧，转发前可并入 1120 */
+    std::chrono::steady_clock::time_point last_o2_wait_log_{}; /**< 起印等氧日志节流 */
+    /** 本运行是否已收到过真实 MCU 1ST（关 Env Sim 后清零）；供 SOC 独立推送时区分 MCU 字段 */
+    std::atomic<bool> mcu_1st_seen_{false};
 
     std::atomic<bool> env_sim_on_{false};  /**< 环境上报模拟（调试页开关，默认关） */
+    std::atomic<bool> skip_o2_print_gate_{false}; /**< 调试：跳过 SOC 氧打印门+打印前洗气（默认关） */
+    /** 本打印作业由 SOC 发过洗气开；终止/完成后据此关阀，Skip O2 路径保持 false */
+    std::atomic<bool> gas_wash_opened_by_soc_{false};
     std::atomic<bool> env_sim_powder_low_target_{false}; /**< 目标缺粉态（UI 开关值） */
     bool env_sim_powder_low_effective_ = false;          /**< 已生效缺粉态（延迟后应用） */
     std::chrono::steady_clock::time_point env_sim_powder_switch_at_{}; /**< 延迟切换时刻 */
     std::chrono::steady_clock::time_point next_env_sim_tick_{};
+    std::chrono::steady_clock::time_point next_soc_env_tick_{};
     float env_sim_phase_ = 0.f;
     std::atomic<int64_t> last_env_mqtt_publish_ms_{0}; /**< Glavo→MQTT 环境 IPC 最近发送时刻 */
     bool laser_power_log_valid_ = false; /**< 功率包日志去重：最近一次已打印的功率值是否有效 */
@@ -561,6 +685,7 @@ private:
     static constexpr int kEnvSimIntervalMs = 1000; /**< 环境模拟刷新间隔 */
     static constexpr int kEnvSimPowderDelayMs = 5000; /**< 粉量模拟切换延迟 */
     static constexpr int kEnvMqttPublishIntervalMs = 2000; /**< Glavo→MQTT 环境 IPC 间隔 */
+    static constexpr int kSocEnvPublishIntervalMs = 500; /**< V4 SOC→UI 推送间隔 */
 };
 
 } // namespace upc::glavo
