@@ -1093,7 +1093,7 @@ UI 侧只做提示：`control.cpp` 的 `show_powder_dialog()`，几何复用门�
 预览统一走 dma fd 旁路（`dma_mode=1`）：
 
 ```
-rongsu_camera 经主 IPC（/tmp/upc_camera.sock）SCM_RIGHTS 附带 dma_buf fd 表
+rongsu_camera 经主 IPC（/tmp/upc_camera.sock）SCM_RIGHTS 附带隔离 pool 的 dma_buf fd 表
   → CameraPreviewPlayer::on_stream_start_rsp 调用 MsgPort::take_peer_dma_fds(APP_CAMERA)
   → SHM /upc_camera_preview 只读 slot 状态/seq/buffer_idx
   → 解码线程 acquire_latest_frame 得到 buffer_idx
@@ -1102,7 +1102,7 @@ rongsu_camera 经主 IPC（/tmp/upc_camera.sock）SCM_RIGHTS 附带 dma_buf fd �
   → lv_timer(16ms) 换 img_dsc_ 指针 → lv_image (XRGB8888，1:1 贴图)
 ```
 
-`CameraStreamInfoPayload.dma_socket_path` 为 ABI 保留字段；fd 不经独立 socket 传递。
+`CameraStreamInfoPayload.dma_socket_path` 为 ABI 保留字段；fd 不经独立 socket 传递。源 fd 来自 Camera 隔离 pool（dma32/CMA），不是 ISP 的 V4L2 buf，见 [camera/CAMERA.md](../camera/CAMERA.md) 「ISP IOMMU 与 dma-buf 所有权」。
 
 - **开流**：`page_user_home` 打印模式 → `CameraPreviewPlayer::start()` → IPC Start → `apply_stream_start_ui` 开 SHM 元数据环 + `take_peer_dma_fds` + `setup_frame_buffers` + 解码线程。
 - **关流/换流**：UI 仅请求解码线程退役；后台回收线程等待退出，LVGL 定时器确认退出后才关闭旧 SHM、DMA fd 与显示缓冲，因此主线程不阻塞在 `join()`。
@@ -1112,9 +1112,9 @@ rongsu_camera 经主 IPC（/tmp/upc_camera.sock）SCM_RIGHTS 附带 dma_buf fd �
 - **`lv_timer` 周期 16ms**（`kUiRefreshPeriodMs`，与 `LV_DEF_REFR_PERIOD` 对齐）：这一拍等的是"转换好的帧什么时候被切上屏"，周期越长平均多等半个周期。交互期仍降到 `kUiRefreshInteractPeriodMs`(66) 让位给触摸响应。
 - **RGA 路径**：`setup_frame_buffers` 时 `RgaDmaBuf` 分配成功则 `rga_path=1`；失败退化为 `std::vector` 软件转换。无进程级预热，首帧到达即转换。
 - **RGA 常驻导入数受相机缓冲数约束**：streaming 模式下 `prepare_rga_streaming_cache()` 开流时把**每个**源 dma fd 都 `mmap` + `importbuffer_fd` 常驻，导入总数 = `CAMERA_V4L2_BUF_COUNT` + scratch 块数（1:1 条带路径 2 块；缩放路径不需要 src scratch，只有 1 块）。rk3568 实测 4 个缓冲（6 句柄、约 11.4MB 常驻映射）可用，6 个（8 句柄、约 15.6MB）必然导入失败。**失败只会退化成软件转换（22ms/帧）、画面照常出，外部看不出异常**，所以三个失败点各自打了带 errno 的 Error 日志；调相机缓冲数后务必 `grep RGA /var/log/topic/topic_ui_preview.log` 确认 `rga_path=1`。
-- **DMA 约束**：RK3568 RGA2 仅支持 4G 以下物理地址；源 fd 必须来自 V4L2 / dma-heap（dma32），UI 直接用 `importbuffer_fd`。
+- **DMA 约束**：RK3568 RGA2 不是 IOMMU 客户端，仅支持 4G 以下物理地址（板端节点 `fdeb0000.rk_rga`，核对见 [common/COMMON.md](../../common/COMMON.md) `DmaHeapUsage`）。源 fd 必须来自 V4L2 / dma-heap（dma32），UI 直接用 `importbuffer_fd`。相机缓冲上的 IOMMU 是 ISP 的事，见 [camera/CAMERA.md](../camera/CAMERA.md) 「ISP IOMMU 与 dma-buf 所有权」。
 - **Stride 对齐**：RGA 源 stride 使用后端传来的实际 `stride_y`，不再假设 `stride_y == width`。
-- **Cache 同步**：RGA 读源前 `DMA_BUF_IOCTL_SYNC(READ)`，写目的后 `DMA_BUF_IOCTL_SYNC(WRITE)`；目的缓冲优先 uncached。
+- **Cache 同步**：phx streaming（`UPC_UI_RGA_STREAMING=1`）**不对相机源 fd 做** `DMA_BUF_IOCTL_SYNC`，只对 dst scratch 在 CPU `memcpy` 前后 `SYNC READ`；1:1 条带回退 memcpy 时才 `SYNC WRITE` 源 scratch。k1mini 非 streaming 才对源 fd `SYNC START READ` 再逐帧 import。软件回退两条工具链都会对源 fd `SYNC` + `mmap`。目的显示槽若是 dma 则写完 `SYNC WRITE`。
 - **线程**：解码在独立线程；`on_stream_start_rsp` 与换帧须 `lv_async_call` / `lv_timer` 回到 UI 线程。
 - **CMake**：找到 `librga` 时 `-DUPC_UI_HAS_RGA=1`（当前源码仍硬依赖 RGA 头文件）。
 

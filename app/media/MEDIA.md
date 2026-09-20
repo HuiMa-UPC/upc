@@ -110,7 +110,9 @@ rongsu_media worker
 | RGA（优先） | `render_thumb_rga`，dma-heap + `importbuffer_fd` + `imcvtcolor_t`/`imresize` | `UPC_CAMERA_HAS_RGA` 且能拿到 RGA 可寻址内存 |
 | CPU（兜底） | `render_thumb_cpu`，纯普通堆，Y 做 box 平均、UV 最近邻 | RGA 未编入或任一环节失败 |
 
-**为什么必须有 CPU 兜底**：RGA2 无 IOMMU，只能吃物理连续且 <4G 的内存。CMA 碎片化时
+缩略图与打印/直播编码都是先把 NV12 **拷出**相机 dma-buf，再进独立 dma-heap / `mpp_buffer`，不 `import` 正在给 ISP 用的 fd（与采集 IOMMU 的关系见 [camera/CAMERA.md](../camera/CAMERA.md) 「ISP IOMMU 与 dma-buf 所有权」）。
+
+**为什么必须有 CPU 兜底**：RGA2 无 IOMMU，只能吃物理连续且 <4G 的内存（板端核对见 [common/COMMON.md](../../common/COMMON.md) `DmaHeapUsage`）。CMA 碎片化时
 `/dev/dma_heap/reserved` 连几百 KB 连续内存都给不出（内核报 `cma_alloc: reserved:
 alloc failed`），此时 RGA 路径整条失效。旧代码没有兜底，且 `dma_heap_alloc` 会静默
 回退到页式 `system` 堆，结果是**缩略图静默不生成**——`snapshot thumb failed` 之外没有

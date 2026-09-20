@@ -13,6 +13,16 @@ namespace upc::camera {
 
 namespace {
 
+void dma_buf_sync_start_write(int fd)
+{
+    if(fd < 0) {
+        return;
+    }
+    struct dma_buf_sync sync {};
+    sync.flags = DMA_BUF_SYNC_START | DMA_BUF_SYNC_WRITE;
+    (void)ioctl(fd, DMA_BUF_IOCTL_SYNC, &sync);
+}
+
 void dma_buf_sync_end_write(int fd)
 {
     if(fd < 0) {
@@ -47,9 +57,12 @@ bool CameraDmaFrameSource::alloc_padded_pool(uint32_t count, uint32_t stride_y,
 
     for(uint32_t i = 0; i < count; ++i) {
         upc_ipc::DmaHeapBuffer hb{};
-        if(!upc_ipc::dma_heap_alloc(size, hb)) {
+        /* RgaDevice：池要给 UI importbuffer_fd，绝不能落到页式 system 堆。 */
+        if(!upc_ipc::dma_heap_alloc(size, hb, upc_ipc::DmaHeapUsage::RgaDevice)) {
             UPC_LOG_CAMERA_SERVICE(Error,
-                "DmaFrameSource padding alloc failed idx=%u size=%zu", i, size);
+                "DmaFrameSource isolation alloc failed idx=%u size=%zu "
+                "(no RGA-safe heap)",
+                i, size);
             free_padded_pool();
             return false;
         }
@@ -61,8 +74,9 @@ bool CameraDmaFrameSource::alloc_padded_pool(uint32_t count, uint32_t stride_y,
     }
 
     UPC_LOG_CAMERA_SERVICE(Info,
-        "DmaFrameSource padding pool count=%u stride=%u height=%u size=%zu",
-        count, stride_y, height, size);
+        "DmaFrameSource isolation pool count=%u stride=%u height=%u size=%zu heap=%s",
+        count, stride_y, height, size,
+        padded_bufs_[0].fd >= 0 ? "rga-safe" : "?");
     return true;
 }
 
@@ -91,45 +105,40 @@ bool CameraDmaFrameSource::prepare(uint32_t width, uint32_t height,
         return false;
     }
 
-    width_          = width;
-    height_         = height;
-    capture_fds_    = capture_dma_fds;
-    stride_aligned_ = (capture_stride_y % CAMERA_STRIDE_ALIGN) == 0;
-    aligned_stride_ = stride_aligned_
-                          ? capture_stride_y
-                          : align_up(capture_stride_y, CAMERA_STRIDE_ALIGN);
-    aligned_height_ = align_up(height, CAMERA_STRIDE_ALIGN);
+    width_                   = width;
+    height_                  = height;
+    capture_fds_             = capture_dma_fds;
+    capture_stride_aligned_  = (capture_stride_y % CAMERA_STRIDE_ALIGN) == 0;
+    aligned_stride_          = capture_stride_aligned_
+                                   ? capture_stride_y
+                                   : align_up(capture_stride_y, CAMERA_STRIDE_ALIGN);
+    aligned_height_          = align_up(height, CAMERA_STRIDE_ALIGN);
+
+    /*
+     * 始终建隔离 pool：发给消费者的是 heap fd，不是 V4L2 EXPBUF。
+     * V4L2 buf 只在本进程拷贝窗口内使用，拷完立刻 QBUF 还给 ISP。
+     */
+    if(!alloc_padded_pool(static_cast<uint32_t>(capture_fds_.size()),
+                          aligned_stride_, aligned_height_)) {
+        shutdown();
+        return false;
+    }
 
     fds_to_send_.clear();
-    fds_to_send_.reserve(capture_fds_.size());
-
-    if(stride_aligned_) {
-        for(int fd : capture_fds_) {
-            if(fd < 0) {
-                shutdown();
-                return false;
-            }
-            fds_to_send_.push_back(fd);
-        }
-    } else {
-        if(!alloc_padded_pool(static_cast<uint32_t>(capture_fds_.size()),
-                              aligned_stride_, aligned_height_)) {
+    fds_to_send_.reserve(padded_bufs_.size());
+    for(uint32_t i = 0; i < padded_bufs_.size(); ++i) {
+        const int fd = padded_bufs_[i].fd;
+        if(fd < 0) {
             shutdown();
             return false;
         }
-        for(uint32_t i = 0; i < padded_bufs_.size(); ++i) {
-            const int fd = padded_bufs_[i].fd;
-            if(fd < 0) {
-                shutdown();
-                return false;
-            }
-            fds_to_send_.push_back(fd);
-        }
+        fds_to_send_.push_back(fd);
     }
 
     UPC_LOG_CAMERA_SERVICE(Info,
-        "DmaFrameSource ready aligned=%d stride=%u height=%u bufs=%zu",
-        stride_aligned_ ? 1 : 0, aligned_stride_, aligned_height_,
+        "DmaFrameSource ready isolation=1 cap_stride_aligned=%d stride=%u "
+        "height=%u bufs=%zu",
+        capture_stride_aligned_ ? 1 : 0, aligned_stride_, aligned_height_,
         fds_to_send_.size());
     return true;
 }
@@ -139,31 +148,26 @@ void CameraDmaFrameSource::shutdown()
     free_padded_pool();
     capture_fds_.clear();
     fds_to_send_.clear();
-    stride_aligned_ = false;
-    aligned_stride_ = 0;
-    aligned_height_ = 0;
-    width_          = 0;
-    height_         = 0;
+    capture_stride_aligned_ = false;
+    aligned_stride_         = 0;
+    aligned_height_         = 0;
+    width_                  = 0;
+    height_                 = 0;
 }
 
 uint32_t CameraDmaFrameSource::buffer_count() const noexcept
 {
-    return stride_aligned_
-               ? static_cast<uint32_t>(capture_fds_.size())
-               : static_cast<uint32_t>(padded_bufs_.size());
+    return static_cast<uint32_t>(padded_bufs_.size());
 }
 
 int CameraDmaFrameSource::fd_for_buffer_idx(uint32_t idx) const
 {
-    if(stride_aligned_) {
-        return idx < capture_fds_.size() ? capture_fds_[idx] : -1;
-    }
     return idx < padded_bufs_.size() ? padded_bufs_[idx].fd : -1;
 }
 
 int CameraDmaFrameSource::acquire_padded()
 {
-    if(stride_aligned_ || padded_free_.empty()) {
+    if(padded_free_.empty()) {
         return -1;
     }
     for(size_t i = 0; i < padded_free_.size(); ++i) {
@@ -188,7 +192,7 @@ void CameraDmaFrameSource::copy_padded_frame(uint32_t dst_idx,
                                              uint32_t src_stride_y,
                                              uint32_t width, uint32_t height)
 {
-    if(stride_aligned_ || !src_y || width == 0 || height == 0) {
+    if(!src_y || width == 0 || height == 0) {
         return;
     }
     if(dst_idx >= padded_bufs_.size()) {
@@ -207,16 +211,20 @@ void CameraDmaFrameSource::copy_padded_frame(uint32_t dst_idx,
     uint8_t* dst_y  = static_cast<uint8_t*>(dst.va);
     uint8_t* dst_uv = dst_y + static_cast<size_t>(dst.stride_y) * height;
 
+    dma_buf_sync_start_write(dst.fd);
+
+    const uint32_t copy_w =
+        width < dst.stride_y ? width : dst.stride_y;
     const uint32_t uv_h = height / 2u;
     for(uint32_t row = 0; row < height; ++row) {
         std::memcpy(dst_y + static_cast<size_t>(row) * dst.stride_y,
                     src_y + static_cast<size_t>(row) * src_stride_y,
-                    width);
+                    copy_w);
     }
     for(uint32_t row = 0; row < uv_h; ++row) {
         std::memcpy(dst_uv + static_cast<size_t>(row) * dst.stride_y,
                     src_uv_eff + static_cast<size_t>(row) * src_stride_y,
-                    width);
+                    copy_w);
     }
 
     dma_buf_sync_end_write(dst.fd);
