@@ -942,6 +942,10 @@ struct PrintProgressPayload {
     /** 总层数（G-code 的 M3000 计数）；0=未知（OVF / 无层标记 / 关闭 Layer
      *  Snap），此时 UI 不显示层号 */
     uint32_t total_layers;
+    /** 当前层高（微米，G-code Z / 铺粉）；0=未知。Xfr 转成毫米写
+     *  GET /print/status 的 layer_height */
+    uint16_t layer_height_um;
+    uint16_t reserved_layer_height;
 };
 
 /** GLAVO_Print_State_Ntf 载荷：开始打印/打印结束状态边沿（Inline）。

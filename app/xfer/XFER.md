@@ -40,8 +40,9 @@
 - 历史与延时摄影的 `job_id` 使用清单主键 `frames_dir`，不是协议示例里的 `j_9001`。
 - 帧文件在 `/userdata/media/video/{frames_dir}/N.png`；URL 扩展名为 `.png`。
 - `/print/status` 中 `chamber_temp` 来自 Glavo 进度载荷的舱温（0.1℃）；
-  `nozzle_temp` / `bed_temp` / `laser_power` / `blower_*` / `filament_*` /
-  `layer_height` 本期固定为 `0`。
+  `layer_height` 来自进度载荷 `layer_height_um`（毫米，打印中有值，空闲为 `0`）；
+  `nozzle_temp` / `bed_temp` / `laser_power` / `blower_*` / `filament_*`
+  本期固定为 `0`。
 - 数据源：`APP_Print_Progress_Ntf` / `APP_Print_Pause_Rsp` /
   `GLAVO_Print_State_Ntf` / `APP_Print_Terminate_Rsp` /
   `APP_Print_Start_Rejected_Ntf` / `APP_Print_Video_Manifest_Ntf`（Glavo/Media

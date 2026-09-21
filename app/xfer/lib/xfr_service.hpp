@@ -119,6 +119,7 @@ private:
     int32_t  glavo_progress_percent_ = 0;
     uint32_t glavo_current_layer_ = 0;
     uint32_t glavo_total_layers_ = 0;
+    uint16_t glavo_layer_height_um_ = 0;
     uint32_t glavo_remaining_minutes_ = 0;
     float    glavo_chamber_temp_c_ = 0.f;
     uint64_t glavo_since_ms_ = 0;

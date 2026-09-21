@@ -234,6 +234,9 @@ public:
     /** @brief 读取最新环境传感器快照（线程安全） */
     [[nodiscard]] EnvSnapshotCache env_snapshot() const;
 
+    /** @brief 当前/下层铺粉高度（微米）；未开打时为默认层高 */
+    [[nodiscard]] uint16_t active_layer_height_um() const;
+
     /**
      * @brief MCU 固件是否已报到且 major≥4（传感器走 V4 布局 + SOC 本地采集 / 开阀采样）。
      * unknown / major&lt;4 → false：旧板无 fa_valve，不开阀。

@@ -853,6 +853,11 @@ void McuLink::enqueue_serial_tx(const uint8_t* data, size_t len, bool reliable)
     serial_tx_queue_.push_back(item);
 }
 
+uint16_t McuLink::active_layer_height_um() const
+{
+    return active_layer_height_um_;
+}
+
 EnvSnapshotCache McuLink::env_snapshot() const
 {
     EnvSnapshotCache out;

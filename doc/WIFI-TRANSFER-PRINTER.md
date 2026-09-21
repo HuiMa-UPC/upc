@@ -449,8 +449,9 @@ WebSocket / SSE 推送（列入 §12 未来可选）。轮询间隔建议 1–2 
 - 桌面端直连本机 HTTP；打印进度来自 Glavo IPC 缓存，上传/切片来自 Xfr 本地态。
 - 上传/导入完成对外 `state=idle`（不是 `finished`）；`finished` 仅表示打印完成。
 - 真正开打后 `job_id` 优先为延时摄影目录名 `frames_dir`（打印中多为 `tmp`）。
-- `chamber_temp` 有舱温读数；`nozzle_temp` / `bed_temp` / `laser_power` /
-  `blower_*` / `filament_*` / `layer_height` 本期固定 `0`。
+- `chamber_temp` 有舱温读数；`layer_height` 打印中为当前铺粉层高（毫米，来自
+  G-code Z）；`nozzle_temp` / `bed_temp` / `laser_power` / `blower_*` /
+  `filament_*` 本期固定 `0`。
 
 ```json
 {
@@ -482,7 +483,8 @@ WebSocket / SSE 推送（列入 §12 未来可选）。轮询间隔建议 1–2 
 - `progress`：打印进度，归一化 [0,1]，`0.42` 即 42%。
 - `layer`：当前层号（正在打印第几层）。
 - `layer_total`：总层数。
-- `layer_height`：层高，单位毫米（mm）。
+- `layer_height`：层高，单位毫米（mm）。打印中来自 Glavo 当前铺粉高度
+  （IPC 微米 / 1000）；空闲或未知为 `0`。
 - `elapsed_s`：已用时间，单位秒。
 - `remaining_s`：剩余时间，单位秒。
 - `filament_total_g`：本次任务预计耗材总量，单位克。

@@ -2380,6 +2380,7 @@ void GlavoService::send_print_progress(bool force_complete)
         const uint32_t done = PrintVideoNotify::instance().current_layer_index();
         p.current_layer = std::min(done + 1u, print_total_layers_);
     }
+    p.layer_height_um = link.active_layer_height_um();
 
     /* 双发 UI + Xfr：桌面端 /print/status 轮询依赖 Xfr 侧缓存 */
     auto send_progress = [&](middleware::ModuleId target) {

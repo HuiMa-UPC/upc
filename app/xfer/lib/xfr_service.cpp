@@ -625,6 +625,7 @@ HttpResponse XfrService::handle_print_status(const HttpRequest& req)
     int32_t glavo_pct = 0;
     uint32_t glavo_layer = 0;
     uint32_t glavo_total = 0;
+    uint16_t glavo_layer_um = 0;
     uint32_t remaining_minutes = 0;
     float chamber_c = 0.f;
     uint64_t since_ms = 0;
@@ -651,6 +652,7 @@ HttpResponse XfrService::handle_print_status(const HttpRequest& req)
         glavo_pct = glavo_progress_percent_;
         glavo_layer = glavo_current_layer_;
         glavo_total = glavo_total_layers_;
+        glavo_layer_um = glavo_layer_height_um_;
         remaining_minutes = glavo_remaining_minutes_;
         chamber_c = glavo_chamber_temp_c_;
         since_ms = glavo_since_ms_;
@@ -710,15 +712,18 @@ HttpResponse XfrService::handle_print_status(const HttpRequest& req)
             error_json = nullptr;
         }
     } else if (transfer_state == "uploading") {
+        glavo_layer_um = 0;
         state = "uploading";
         progress = static_cast<double>(calc_progress_percent(
             transfer_state, upload_size, upload_offset, slice_progress_pct)) / 100.0;
     } else if (transfer_state == "slicing") {
+        glavo_layer_um = 0;
         /* 对外仍映射 printing，兼容既有桌面端对切片阶段的轮询 */
         state = "printing";
         progress = static_cast<double>(calc_progress_percent(
             transfer_state, upload_size, upload_offset, slice_progress_pct)) / 100.0;
     } else if (transfer_state == "error") {
+        glavo_layer_um = 0;
         state = "error";
         progress = static_cast<double>(calc_progress_percent(
             transfer_state, upload_size, upload_offset, slice_progress_pct)) / 100.0;
@@ -730,9 +735,11 @@ HttpResponse XfrService::handle_print_status(const HttpRequest& req)
         progress = 0.0;
         layer = 0;
         layer_total = 0;
+        glavo_layer_um = 0;
     }
 
     const int chamber_temp = static_cast<int>(chamber_c * 10.0f + (chamber_c >= 0.f ? 0.5f : -0.5f));
+    const double layer_height_mm = static_cast<double>(glavo_layer_um) / 1000.0;
 
     std::ostringstream oss;
     oss << std::fixed << std::setprecision(3);
@@ -742,7 +749,7 @@ HttpResponse XfrService::handle_print_status(const HttpRequest& req)
         << "\"progress\":" << progress << ","
         << "\"layer\":" << layer << ","
         << "\"layer_total\":" << layer_total << ","
-        << "\"layer_height\":0,"
+        << "\"layer_height\":" << layer_height_mm << ","
         << "\"elapsed_s\":" << elapsed_s << ","
         << "\"remaining_s\":" << remaining_s << ","
         << "\"filament_total_g\":0,"
@@ -1126,6 +1133,7 @@ void XfrService::on_print_ipc(const middleware::Message& msg)
             glavo_chamber_temp_c_ = p.temperature_c;
             glavo_current_layer_ = p.current_layer;
             glavo_total_layers_ = p.total_layers;
+            glavo_layer_height_um_ = p.layer_height_um;
             /* 迟到订阅 / 仅收到 progress：在非终态下可进入 printing；
              * 不覆盖 canceled/error，避免终止后的迟到包把状态拉回。 */
             if (glavo_phase_ != GlavoPhase::Canceled &&
