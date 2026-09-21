@@ -750,7 +750,7 @@ struct EnvSnapshotPayload {
     float    pressure_kpa;      /**< 舱内气压 kPa；无效填 <0 */
     float    baseplate_temp_c;  /**< 基板温度 ℃；无效填 <0 */
     uint8_t  powder_bits;       /**< 粉量位：取 bit0/bit1（0=缺粉；>=1 允许继续打印） */
-    uint8_t  sensor_v4;         /**< 1=MCU V4：舱氧/PM/温湿/气压以 SOC 为准 */
+    uint8_t  sensor_v4;         /**< 固定 1：舱氧/PM/温湿/气压以 SOC 为准（ABI 保留） */
     float    pm1_cabin;         /**< 舱内 PM1.0；无效填 <0（V4 SOC） */
     float    pm10_cabin;        /**< 舱内 PM10；无效填 <0（V4 SOC） */
 };
@@ -1560,14 +1560,14 @@ struct DebugLaserStatePayload {
 
 /** GLAVO_Debug_Sensor_Ntf：顶部传感器快照（舱外/舱内 PM 分列，便于联调读数） */
 struct DebugSensorPayload {
-    float   oxygen_percent;          /**< 舱内氧 %（V4=SOC IIO；旧=MCU 1ST）；无效 <0 */
+    float   oxygen_percent;          /**< 舱内氧 %（SOC IIO）；无效 <0 */
     float   pressure_kpa;
-    float   pm25;                    /**< 舱外/常显 PM2.5；旧固件与舱内同源；无效 <0 */
+    float   pm25;                    /**< 舱外/常显 PM2.5；无效 <0 */
     float   humidity_pct;
     float   cabin_temp_c;
     float   baseplate_temp_c;
-    float   pm25_cabin;              /**< 舱内 PM2.5（V4=SOC 舱内 UART，阀关时可能无效）；无效 <0 */
-    float   filter_oxygen_percent;   /**< 滤芯氧 %（V4 MCU 1ST value[0..1]）；旧固件无此路，无效 <0 */
+    float   pm25_cabin;              /**< 舱内 PM2.5（SOC 舱内 UART，阀关时可能无效）；无效 <0 */
+    float   filter_oxygen_percent;   /**< 滤芯氧 %（MCU 1ST value[0..1]）；无效 <0 */
     uint8_t powder_status;           /**< DebugPowderStatus；0xFF=无效显示 "--" */
     uint8_t reserved[3];
 };

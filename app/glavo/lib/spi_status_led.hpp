@@ -3,10 +3,10 @@
 
 /**
  * @file spi_status_led.hpp
- * @brief V4：SPI 灯效板（/dev/spidev1.0，40 颗 WS）按设备状态刷单色。
+ * @brief SPI 灯效板（/dev/spidev1.0，40 颗 WS）按设备状态刷单色。
  *
  * 优先级：MCU CONDITION+ACTIVE 红 > print_running_ 橙 > 空闲蓝。
- * 仅 major≥4 才开 SPI；节点缺失只 Warn 一次。
+ * 进程启动即打开；节点缺失只 Warn 一次。
  */
 
 #include "serial_alarm.hpp"
@@ -22,7 +22,7 @@ class SpiStatusLed {
 public:
     static SpiStatusLed& instance();
 
-    /** MCU≥V4 打开灯板；退出 V4 关 fd，不再发色。 */
+    /** 打开灯板；false 关 fd，不再发色。 */
     void set_enabled(bool on);
 
     /** Confirm 打印会话（含测高/光路/暂停）。 */
