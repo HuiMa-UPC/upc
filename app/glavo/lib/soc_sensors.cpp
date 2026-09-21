@@ -298,7 +298,7 @@ bool read_cpm121(const char* i2c_dev, float* kpa)
 
 /**
  * IIO raw → 电压 / 电流。
- * 本板无 in_voltage0_scale：raw 单位 nV，V = raw × GLAVO_O2_RAW_TO_VOLT；
+ * 本板无 in_voltage0_scale：V = raw × GLAVO_O2_RAW_TO_VOLT（raw × 3.3 / 2^31）；
  * I[uA] = V / R_sense × 1e6。
  */
 bool read_o2_raw_i(long* raw_out, float* i_ua_out)

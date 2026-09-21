@@ -82,6 +82,11 @@ std::string MqttConfig::topic_prefix() const
     return "snowpod/cn/" + device_id + "/";
 }
 
+std::string MqttConfig::topic_mgmt() const
+{
+    return "downlink/" + device_id + "/mgmt";
+}
+
 std::string MqttConfig::topic_cmd() const
 {
     return topic_prefix() + "cmd";

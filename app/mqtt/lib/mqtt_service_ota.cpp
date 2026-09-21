@@ -164,6 +164,7 @@ bool MqttService::publish_manifest_request(const std::string& task_id)
         mqtt_connected_ = false;
         cmd_subscribed_ = false;
         ota_subscribed_ = false;
+        mgmt_subscribed_ = false;
         return false;
     }
     UPC_LOG_MQTT_SERVICE_TO(MqttOta, Info, "ota manifest request sent task_id=%s token=%d",
@@ -221,6 +222,7 @@ bool MqttService::publish_ota_progress_cloud(const middleware::OtaProgressPayloa
         mqtt_connected_ = false;
         cmd_subscribed_ = false;
         ota_subscribed_ = false;
+        mgmt_subscribed_ = false;
         return false;
     }
     return true;

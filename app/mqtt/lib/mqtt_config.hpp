@@ -18,7 +18,7 @@ namespace upc::mqtt {
 struct MqttConfig {
     /** 出厂烧录的设备 SN；MQTT clientId 与 username 均使用该值。 */
     std::string device_id;
-    /** 出厂烧录的设备根密钥；仅用于激活 HMAC，绝不能记录到日志。 */
+    /** 出厂烧录的设备根密钥；仅用于激活/轮换 HMAC，绝不能记录到日志。 */
     std::string device_secret;
     /** 由激活服务 mqttEndpoint 下发并持久化，禁止在设备侧静态配置。 */
     std::string broker_uri;
@@ -37,6 +37,8 @@ struct MqttConfig {
     bool clean_session = true;
 
     [[nodiscard]] std::string topic_prefix() const;
+    /** 管理通道：凭证轮换等，与 snowpod/.../cmd 业务通道分离。 */
+    [[nodiscard]] std::string topic_mgmt() const;
     [[nodiscard]] std::string topic_cmd() const;
     [[nodiscard]] std::string topic_cmd_ack() const;
     [[nodiscard]] std::string topic_telemetry_chamber() const;

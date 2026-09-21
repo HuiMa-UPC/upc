@@ -14,6 +14,7 @@ namespace upc::mqtt {
 
 /** MQTT 连接/遥测轮询相关常量。 */
 inline constexpr uint64_t kReconnectIntervalMs = 3000;
+inline constexpr const char* kRotateCredentialAction = "ROTATE_CREDENTIAL";
 inline constexpr uint64_t kTelemetryPrintingIntervalMs = 2000;
 inline constexpr uint64_t kTelemetryIdleIntervalMs = 30000;
 /** V4 舱外 PM 遥测间隔（协议 chamber_ext 5–10s） */

@@ -208,11 +208,11 @@
 #endif
 /**
  * 氧传感器（IIO 无 in_voltage0_scale）：
- *   V = raw × GLAVO_O2_RAW_TO_VOLT（raw 单位 nV）
+ *   V = raw × GLAVO_O2_RAW_TO_VOLT（raw × 3.3 / 2^31）
  *   I[uA] = V / R_sense × 1e6
  *   O2% = 100 × (1 − e^(−I/K))
  * K 优先读 /userdata/CAL/o2_cal.json（调试页一键标定写入）；缺文件回退 GLAVO_O2_K。
- * 出厂默认空气点：raw≈1.54e7 → ~15.4mV → K≈655 对准约 20.9%。
+ * 出厂默认空气点：raw≈1.54e7 → ~23.7mV → K≈655 对准约 20.9%。
  */
 #ifndef GLAVO_O2_READY_PATH
 #define GLAVO_O2_READY_PATH  "/run/o2_ready"  /**< S46o2-preheat 约 100s 后创建 */
@@ -221,7 +221,7 @@
 #define GLAVO_O2_IIO_RAW  "/sys/bus/iio/devices/iio:device0/in_voltage0_raw"
 #endif
 #ifndef GLAVO_O2_RAW_TO_VOLT
-#define GLAVO_O2_RAW_TO_VOLT  1e-9f  /**< nV → V；勿再按 ADC 满幅换算 */
+#define GLAVO_O2_RAW_TO_VOLT  (3.3f / 2147483648.f)  /**< V = raw × 3.3 / 2^31 */
 #endif
 #ifndef GLAVO_O2_RSENSE_OHM
 #define GLAVO_O2_RSENSE_OHM  100.f

@@ -13,6 +13,8 @@ namespace upc::mqtt {
 struct ActivatedMqttCredential {
     std::string mqtt_password;
     std::string mqtt_endpoint;
+    /** 关窗前保留的上一轮 mqttPassword；空表示无需回退。 */
+    std::string mqtt_password_prev;
 };
 
 /**

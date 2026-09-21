@@ -573,6 +573,7 @@ void MqttService::publish_log_collect_progress(const std::string& collect_id,
         mqtt_connected_ = false;
         cmd_subscribed_ = false;
         ota_subscribed_ = false;
+        mgmt_subscribed_ = false;
         return;
     }
     debug_log_mqtt_frame("TX", topic, msg.payload,

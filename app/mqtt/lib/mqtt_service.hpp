@@ -3,6 +3,7 @@
 
 #include "mqtt_config.hpp"
 #include "device_activation.hpp"
+#include "credential_rotation.hpp"
 #include "upc_contract.hpp"
 #include "msg_port.hpp"
 
@@ -167,9 +168,18 @@ private:
     void disconnect_mqtt();
     void try_reconnect();
     bool subscribe_cmd_topic();
+    bool subscribe_mgmt_topic();
     void start_activation();
     void poll_activation();
     void join_activation_thread();
+    void handle_mgmt_message(const std::string& payload);
+    void start_rotation();
+    void poll_rotation();
+    void join_rotation_thread();
+    [[nodiscard]] bool rotation_blocked_by_task();
+    [[nodiscard]] bool persist_mqtt_credential(const std::string& password,
+                                               const std::string& password_prev,
+                                               std::string& error);
 
     bool publish_chamber_telemetry();
     bool publish_chamber_ext_telemetry();
@@ -378,11 +388,24 @@ private:
     ActivatedMqttCredential activated_credential_{};
     std::string activation_error_;
 
+    std::string mqtt_credential_endpoint_;
+    std::string mqtt_password_prev_;
+    std::thread rotation_thread_;
+    std::mutex rotation_mtx_;
+    bool rotation_pending_ = false;
+    bool rotation_wait_logged_ = false;
+    bool rotation_running_ = false;
+    bool rotation_result_ready_ = false;
+    bool rotation_succeeded_ = false;
+    std::string rotated_password_;
+    std::string rotation_error_;
+
     MQTTClient client_{nullptr};
     bool mqtt_created_ = false;
     bool mqtt_connected_ = false;
     bool cmd_subscribed_ = false;
     bool ota_subscribed_ = false;
+    bool mgmt_subscribed_ = false;
     uint64_t last_reconnect_ms_ = 0;
 
     std::mutex data_mtx_;
