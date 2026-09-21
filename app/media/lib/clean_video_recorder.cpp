@@ -215,7 +215,7 @@ void CleanVideoRecorder::worker_fn()
 
         bool ok = false;
         if(frame_index > 0u) {
-            ok = timelapse_util::encode_nv12_to_png(
+            ok = timelapse_util::encode_nv12_to_jpeg(
                 job.nv12.data(), job.nv12.size(),
                 job.width, job.height, job.session_dir, frame_index);
         }
@@ -228,7 +228,7 @@ void CleanVideoRecorder::worker_fn()
                 last_clean_nv12_ = std::move(job.nv12);
             } else if(frame_index > 0u && !ok) {
                 UPC_LOG_MEDIA_SERVICE(Warn,
-                    "clean_video png encode fail frame=%u", frame_index);
+                    "clean_video jpeg encode fail frame=%u", frame_index);
             }
             worker_busy_ = false;
             worker_busy_session_ = 0;
@@ -262,12 +262,12 @@ void CleanVideoRecorder::on_session_start(
         1000000ull / static_cast<uint64_t>(std::max(1u, timelapse_fps_));
 
     ++session_seq_;
-    /* 结果页未 finalize 前 PNG 在 video/tmp；已 promote 则在 {job}/ */
+    /* 结果页未 finalize 前 JPEG 在 video/tmp；已 promote 则在 {job}/ */
     const std::string tmp_dir = UPC_VIDEO_TMP;
     const std::string job_dir =
         std::string(CAMERA_PRINT_VIDEO_OUT_DIR) + "/" + job_name_;
-    const uint32_t tmp_png = timelapse_util::scan_max_png_index(tmp_dir);
-    if(tmp_png > 0u) {
+    const uint32_t tmp_jpeg = timelapse_util::scan_max_jpeg_index(tmp_dir);
+    if(tmp_jpeg > 0u) {
         session_dir_ = tmp_dir;
     } else {
         session_dir_ = job_dir;
@@ -280,7 +280,7 @@ void CleanVideoRecorder::on_session_start(
         return;
     }
 
-    print_frame_count_ = timelapse_util::scan_max_png_index(session_dir_);
+    print_frame_count_ = timelapse_util::scan_max_jpeg_index(session_dir_);
     clean_frame_count_ = 0;
     last_clean_nv12_.clear();
     dropped_frames_ = 0;
@@ -314,7 +314,7 @@ void CleanVideoRecorder::on_frame_nv12(const uint8_t* src_y, const uint8_t* src_
         if(!active_) {
             return;
         }
-        /* 清粉 PNG 仅在存在打印段 PNG 时才允许参与后续合成。 */
+        /* 清粉 JPEG 仅在存在打印段 JPEG 时才允许参与后续合成。 */
         if(print_frame_count_ == 0u) {
             return;
         }
@@ -460,7 +460,7 @@ void CleanVideoRecorder::stop_locked(std::unique_lock<std::mutex>& lock,
 
     if(closed_by_user || internal_stop) {
         if(clean_first > 0) {
-            timelapse_util::remove_png_range(stop_session_dir, clean_first,
+            timelapse_util::remove_jpeg_range(stop_session_dir, clean_first,
                                              clean_last);
         }
         const bool dir_removed = timelapse_util::remove_empty_dir(stop_session_dir);
@@ -471,9 +471,9 @@ void CleanVideoRecorder::stop_locked(std::unique_lock<std::mutex>& lock,
         }
         history_ok = update_clean_history_metadata(frames_dir_key, std::string{}, 0u, 0u);
     } else if(!allow_clean_merge) {
-        /* 没有打印段 PNG 时，清粉段不允许参与合成：强制清理并清空清粉范围元数据。 */
+        /* 没有打印段 JPEG 时，清粉段不允许参与合成：强制清理并清空清粉范围元数据。 */
         if(clean_first > 0) {
-            timelapse_util::remove_png_range(stop_session_dir, clean_first,
+            timelapse_util::remove_jpeg_range(stop_session_dir, clean_first,
                                              clean_last);
         }
         const bool dir_removed = timelapse_util::remove_empty_dir(stop_session_dir);

@@ -16,10 +16,10 @@ namespace upc::media {
 
 /**
  * 清粉延时摄影（与打印层拍对齐）：
- * - Start：接续打印目录已有 1..N.png，按 timelapse fps 定时抽帧写 (N+1).png...
- *          若打印层拍 PNG 不存在（N=0），清粉段不参与录制/合成。
+ * - Start：接续打印目录已有 1..N.jpg，按 timelapse fps 定时抽帧写 (N+1).jpg...
+ *          若打印层拍 JPEG 不存在（N=0），清粉段不参与录制/合成。
  * - Stop 成功：记录清粉帧范围并更新末帧 thumb.rthm；MP4 统一在结果页退出后合成
- * - Stop 失败/用户关闭：删除清粉 PNG，仅保留打印段 PNG
+ * - Stop 失败/用户关闭：删除清粉 JPEG，仅保留打印段 JPEG
  */
 class CleanVideoRecorder {
 public:
@@ -80,8 +80,8 @@ private:
     std::string session_id_;
     std::string job_name_;
     std::string session_dir_;
-    uint32_t print_frame_count_ = 0; /**< 启动时已有打印 PNG 数 */
-    uint32_t clean_frame_count_ = 0; /**< 本次清粉成功写入的 PNG 数 */
+    uint32_t print_frame_count_ = 0; /**< 启动时已有打印 JPEG 数 */
+    uint32_t clean_frame_count_ = 0; /**< 本次清粉成功写入的 JPEG 数 */
     std::vector<uint8_t> last_clean_nv12_;
 };
 

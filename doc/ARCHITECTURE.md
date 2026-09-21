@@ -75,9 +75,9 @@
 | 符号 | 路径 | 一句话 |
 |------|------|--------|
 | `MediaService` | `media_service.*` | IPC 客户端 + DMA 消费 + 拍照/录像/直播分派 |
-| `PrintVideoRecorder` | `print_video_recorder.*` | 层 Snap→PNG + thumb/manifest + 开门 finalize |
+| `PrintVideoRecorder` | `print_video_recorder.*` | 层 Snap→JPEG + thumb/manifest + 开门 finalize |
 | `PrintH264Recorder` | `print_h264_recorder.*` | 打印期 RKMPP 边编边封装 `print_h264.mp4` |
-| `CleanVideoRecorder` | `clean_video_recorder.*` | 清粉延时接续 PNG |
+| `CleanVideoRecorder` | `clean_video_recorder.*` | 清粉延时接续 JPEG |
 | `H264StreamEncoder` | `h264_stream_encoder.*` | 直播共用 RKMPP，多 sink 分发 |
 | `LiveRtspPusher` | `live_rtsp_pusher.*` | 云端 RTSP 推流（ffmpeg `-c copy`） |
 | `LocalRtspServer` | `local_rtsp_server.*` | 局域网 live555 RTSP Server |
@@ -104,9 +104,9 @@
 | `app_init()` | `ui_app.*` | 主题、背光（`backlight_apply_saved`）、Proxy、`ui_device_state_init`、`ui_message_store_init`、`ui_alarm_state_init`、页面注册、control |
 | `control_*` | `control.*` | 打印状态机（含 `CONTROL_STATE_PRINT_DONE` 结果页、`CONTROL_STATE_TRANSFER_BOX` 取件转运盒）+ overlay UI |
 | `VideoPlayer` | `video_player.*` | 延时视频 libav* 软解 → BGRX/RGB565 → lv_image（play/pause/seek；拖动预览缩小帧 + latest-wins） |
-| `PngScrubPreview` | `png_scrub_preview.*` | PNG 序列拖动预览：后台 libpng 解码缩放到小图 RGB565 |
+| `PngScrubPreview` | `png_scrub_preview.*` | JPEG 序列拖动预览：后台 turbojpeg 解码缩放到小图 RGB565 |
 | `PhotoDecoder` | `photo_decoder.*` | 相册大图后台解码：等比贴合屏幕 → RGB565 → lv_image（latest-wins；几何由主线程发布） |
-| `png_util` | `png_decode_util.*` | PNG→RGBA 解码 + RGB565 缩放（点采样/box）+ CONTAIN 贴合算尺寸；上面两者共用 |
+| `png_util` | `png_decode_util.*` | JPEG/PNG→RGBA 解码 + RGB565 缩放（点采样/box）+ CONTAIN 贴合算尺寸；上面两者共用 |
 | `ui::album` | `album_index.*` | 相册目录枚举/mtime 倒序/配对 `.rthm`（历史页列表与全屏浏览器必须同序） |
 
 ## UI 页面（`app/ui/lib/pages/`）
@@ -137,7 +137,7 @@ UI → IPC → GlavoService → ParserManager → RingBuffer
                               ↓
                          McuLink → TCP（运动）+ 串口（握手/传感器）
                               ↓（换层排空后，可选 GLAVO_ENABLE_LAYER_SNAP）
-                    PrintVideoNotify → IPC(UI Hub FWD) → Media → PNG/MP4
+                    PrintVideoNotify → IPC(UI Hub FWD) → Media → JPEG/MP4
 ```
 
 预览像素：`rongsu_camera` → 隔离 pool 拷贝 → 主 IPC `SCM_RIGHTS` 传 dma_buf fd + SHM `/upc_camera_preview` 元数据环 → UI `CameraPreviewPlayer`（`MsgPort::take_peer_dma_fds` + RGA `importbuffer_fd` 或 SW 转 BGRX；与控制 IPC 分离）。RK3568 上 RGA2 无 IOMMU、rkisp 有；所有权见 [camera/CAMERA.md](../app/camera/CAMERA.md) 「ISP IOMMU 与 dma-buf 所有权」。

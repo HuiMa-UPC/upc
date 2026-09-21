@@ -12,7 +12,7 @@ namespace ui::album {
 bool is_photo_file(const std::string& path)
 {
     const std::string ext = std::filesystem::path(path).extension().string();
-    return ext == ".png" || ext == ".jpg" || ext == ".jpeg" ||
+    return ext == ".jpg" || ext == ".jpeg" || ext == ".JPG" || ext == ".JPEG" ||
            ext == ".webp" || ext == ".bmp";
 }
 
@@ -23,7 +23,7 @@ std::string companion_rthm(const std::string& photo_abs_path)
     }
     const std::filesystem::path p(photo_abs_path);
     const std::string ext = p.extension().string();
-    if(ext != ".png" && ext != ".PNG") {
+    if(ext != ".jpg" && ext != ".JPG" && ext != ".jpeg" && ext != ".JPEG") {
         return {};
     }
     return p.parent_path().string() + "/" + p.stem().string() + ".rthm";

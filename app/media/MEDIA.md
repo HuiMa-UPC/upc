@@ -12,16 +12,16 @@
 |------|------|
 | `main.cpp` | 进程守护、IPC 客户端、`MediaService` 生命周期、`process(2)` + `tick()` |
 | `lib/media_service.*` | 订阅分派、DMA 消费线程、NV12 快照、存储预算、finalize 栅栏、直播开关 |
-| `lib/print_video_recorder.*` | 层 Snap→ffmpeg PNG → `tmp/`；Finish 写 thumb + manifest 快路径；开门 finalize |
+| `lib/print_video_recorder.*` | 层 Snap→CPU JPEG → `tmp/`；Finish 写 thumb + manifest 快路径；开门 finalize |
 | `lib/print_h264_recorder.*` | 预览 NV12 异步入队；worker RKMPP 边编边封装 `print_h264.mp4`（队列满丢帧） |
-| `lib/clean_video_recorder.*` | 清粉延时抽帧：按 timelapse fps 接续写 PNG；MP4 等开门 finalize |
-| `lib/timelapse_util.*` | NV12→PNG、PNG→MP4、H264 remux、RTHM 缩略图、PNG 扫描/清理 |
+| `lib/clean_video_recorder.*` | 清粉延时抽帧：按 timelapse fps 接续写 JPEG；MP4 等开门 finalize |
+| `lib/timelapse_util.*` | NV12→JPEG、JPEG→MP4、H264 remux、RTHM 缩略图、JPEG 扫描/清理 |
 | `lib/h264_stream_encoder.*` | 直播共用 RKMPP：NV12 单槽 latest-wins → Annex-B → 多 sink（采帧 pts）；缓存 SPS/PPS |
 | `lib/live_rtsp_pusher.*` | 云端 live：sink 入队 → writer → ffmpeg `-c copy -f rtsp`（`push_url` 原样；不摘 Camera peer） |
 | `lib/local_rtsp_server.*` | 局域网 live：sink → live555 RTSP Server（上电默认开，调试开关可改） |
 | `lib/device_config.hpp` | 几何初值、缩略图/ffmpeg、H264 码率、延时 fps、水位宏 |
 
-可选依赖（CMake 探测不到则对应路径空实现/关闭）：`librga`、`RKMPP`、`live555`。
+可选依赖（CMake 探测不到则对应路径空实现/关闭）：`librga`、`RKMPP`、`live555`。静图 JPEG 的 `libturbojpeg` 是必选，缺失则配置失败。
 
 ## 初始化
 
@@ -59,7 +59,7 @@ rongsu_media worker
 
 ```
 /userdata/media/
-  photo/          相册 PNG + 配对 .rthm
+  photo/          相册 JPEG + 配对 .rthm
   video/
     config.json   打印历史清单（Media 独写；UI 直读）
     tmp/          唯一打印中临时目录（开机/开打前清空）
@@ -79,10 +79,10 @@ rongsu_media worker
 - 超出则删最旧**已提交**会话；保护 `tmp/`、在途 session、待 finalize 目录
 - 先清孤儿/超时（30min）pending，再 eviction
 
-写盘路径另挂 `storage_budget_guard`：预算不够则跳过该次 PNG/H264 写。H264 耗尽时 `disable_h264_expectation()`，避免 `print_video_pending` 永久为 1。
+写盘路径另挂 `storage_budget_guard`：预算不够则跳过该次 JPEG/H264 写。H264 耗尽时 `disable_h264_expectation()`，避免 `print_video_pending` 永久为 1。
 
 **逐帧热路径必须走 `ensure_video_storage_budget_throttled()`，不能直连全量版。** 全量核算会
-`recursive_directory_iterator` 遍历整个 `video/` 并 stat 每个文件，而层拍 PNG 会累积到上千个：
+`recursive_directory_iterator` 遍历整个 `video/` 并 stat 每个文件，而层拍 JPEG 会累积到上千个：
 按帧调用时开销随打印层数线性增长，实测能把 H264 编码 worker 压到只剩一半吞吐（30fps 送、
 14fps 编，其余全进 `dropped`）。节流版只缓存「预算充足」的结论，窗口
 `UPC_MEDIA_STORAGE_BUDGET_CACHE_MS`（默认 5s）；判定不足时**不缓存**，每次都重新核算，
@@ -94,8 +94,10 @@ rongsu_media worker
 
 ## 拍照
 
-`UI_Camera_Snapshot_Req` → 拷 latest NV12 → ffmpeg PNG  
-`/userdata/media/photo/photo_{stamp}_{WxH}.png` + 同帧 RTHM（RGA 优先、CPU 兜底，见下节；失败不影响 PNG）→ `APP_Camera_Snapshot_Rsp`。
+`UI_Camera_Snapshot_Req` → 拷 latest NV12 → libturbojpeg（quality 80，`TJFLAG_FASTDCT`，4:2:0）  
+`/userdata/media/photo/photo_{stamp}_{WxH}.jpg` + 同帧 RTHM（RGA 优先、CPU 兜底，见下节；失败不影响 JPEG）→ `APP_Camera_Snapshot_Rsp`。
+
+不走 RK MPP：打印 H.264 与局域网 RTSP 已占 VPU。旧 `.png` 不再写入、也不再扫描播放。
 
 依赖预览流已开；偶发空快照见日志。
 
@@ -134,7 +136,7 @@ PHX 分块路径的 `kDstTileRows = 16`：1080×1280 源 + 240 宽缩略图下�
 ```
 Glavo PrintVideoNotify → APP_MEDIA
   Start：配额腾挪 + recover/清 tmp → PrintVideoRecorder + PrintH264Recorder
-  LayerSnap：latest NV12 → ffmpeg PNG（1.png,2.png,...）→ tmp/
+  LayerSnap：latest NV12 → CPU JPEG（1.jpg,2.jpg,...）→ tmp/
   Finish/Abort：
     thumb.rthm（RGA 优先、CPU 兜底，见「RTHM 缩略图双路径」）
     upsert config.json（frames_dir=tmp，status=complete|terminated，video_pending）
@@ -145,14 +147,14 @@ Glavo PrintVideoNotify → APP_MEDIA
     若开了连续 H264 且 encoder 未收尾，等 on_print_h264_finalize_done 再第二阶段
 ```
 
-- `UPC_TIMELAPSE_PLAYBACK_PNG=1`（默认）：不编 `timelapse.mp4`，保留 PNG；`=0` 则 PNG→mp4，成功后可删清粉段 PNG。
+- `UPC_TIMELAPSE_PLAYBACK_PNG=1`（默认，宏名保留）：不编 `timelapse.mp4`，保留 JPEG；`=0` 则 JPEG→mp4，成功后可删清粉段 JPEG。
 - 开了打印录像时用边录边封装的 `print_h264.mp4`（PTS 用**相机流 fps**，默认 30，勿用 layer_fps）。
 - 0 帧：不写清单条目，但**仍发** `APP_Print_Video_Manifest_Ntf`（`has_entry=0` + `aborted`），否则 UI 停在打印中。仅删**空** `tmp/`，以免误删正在写的 `print_h264.mp4`。
 - 结果页只等层间 Manifest，不依赖 H264 编完。
 - **第二阶段（`finalize_print_video=true`）必须无条件清 `print_video_pending`。** 它只在 H264
   确定收尾后才执行（开门 finalize 等 `on_print_h264_finalize_done`，开机恢复时更是无会话在跑），
   没有「稍后再来一次」的机会。留着 1 会让该条目被 `reclaim_orphan_or_stale_pending_for_budget()`
-  当成陈旧 pending，超 30min 连整个会话目录一起删掉，延时 PNG 一并赔进去。mp4 不可用时
+  当成陈旧 pending，超 30min 连整个会话目录一起删掉，延时 JPEG 一并赔进去。mp4 不可用时
   让 `print_video` 保持为空即可，UI 自然不展示录像。
 
 ## 打印连续 H264
@@ -179,7 +181,7 @@ mp4 是否可信。finalize 侧不再只看「文件非空」，而是用 `timel
 
 ## 清粉延时
 
-`APP_Clean_Video_Session_*`：接续打印目录已有 `1..N.png`，按 timelapse fps 写 `(N+1).png…`。N=0（无打印 PNG）则清粉段不录。Stop 成功只更新末帧 thumb 与清粉范围；MP4 在 `UI_Print_Video_Finalize_Req` 与打印 PNG 一起合成。Stop 失败/用户关：删清粉 PNG。Finalize 会等清粉会话结束（`clean_video_active_` 栅栏）。
+`APP_Clean_Video_Session_*`：接续打印目录已有 `1..N.jpg`，按 timelapse fps 写 `(N+1).jpg…`。N=0（无打印 JPEG）则清粉段不录。Stop 成功只更新末帧 thumb 与清粉范围；MP4 在 `UI_Print_Video_Finalize_Req` 与打印 JPEG 一起合成。Stop 失败/用户关：删清粉 JPEG。Finalize 会等清粉会话结束（`clean_video_active_` 栅栏）。JSON 字段名仍是 `clean_first_png` / `clean_last_png`（帧序号，不是格式）。
 
 ## 直播（云端 + 局域网）
 
@@ -227,7 +229,7 @@ mp4 是否可信。finalize 侧不再只看「文件非空」，而是用 `timel
 | MsgType | 动作 |
 |---------|------|
 | `MEDIA_Camera_Stream_Start_Req` / `Stop_Req` | →Camera 并行取流；Rsp 带 SHM 名 + dma fd |
-| `UI_Camera_Snapshot_Req` | 存 PNG + `.rthm` → `APP_Camera_Snapshot_Rsp` |
+| `UI_Camera_Snapshot_Req` | 存 JPEG + `.rthm` → `APP_Camera_Snapshot_Rsp` |
 | `APP_Print_Video_Session_*` / `APP_Print_Layer_Snap_Ntf` | 打印录像会话 |
 | `APP_Print_H264_Record_Pause_Ntf` | 暂停/恢复连续 H264 |
 | `APP_Clean_Video_Session_*` | 清粉延时抽帧 |
@@ -248,11 +250,12 @@ mp4 是否可信。finalize 侧不再只看「文件非空」，而是用 `timel
 | 缩略图 | `{dir}/thumb.rthm` | `CAMERA_PRINT_VIDEO_THUMB_EXT` |
 | 缩略图最大宽 | 240 | `CAMERA_PRINT_VIDEO_THUMB_MAX_W` |
 | 缩略图分块行数 | 16（PHX 路径） | `kDstTileRows`（`timelapse_util.cpp`） |
-| 拍照 | `/userdata/media/photo/photo_{stamp}_{WxH}.png` + `.rthm` | `save_latest_png_snapshot` |
+| 拍照 | `/userdata/media/photo/photo_{stamp}_{WxH}.jpg` + `.rthm` | `save_latest_jpeg_snapshot` |
 | 历史清单 | `/userdata/media/video/config.json` | `UPC_VIDEO_CONFIG` |
-| ffmpeg | `/usr/bin/ffmpeg` | `CAMERA_FFMPEG_BIN` |
+| ffmpeg | `/usr/bin/ffmpeg` | `CAMERA_FFMPEG_BIN`（打印 H.264 封装 / 序列转 mp4；静图不走 ffmpeg） |
+| 静图 JPEG 质量 | 80 | `CAMERA_STILL_JPEG_QUALITY` |
 | 延时 fps | 5 | `CAMERA_PRINT_VIDEO_LAYER_FPS` / `cal.csv` `TIMELAPSE_VIDEO_FPS` |
-| 延时播放 | PNG 序列 | `UPC_TIMELAPSE_PLAYBACK_PNG`（默认 1） |
+| 延时播放 | JPEG 序列（`1.jpg`…） | `UPC_TIMELAPSE_PLAYBACK_PNG`（默认 1；宏名保留） |
 | 录像配额 | 分区 80% / 余量 5% | `UPC_VIDEO_STORAGE_QUOTA_PCT` / `MIN_FREE_PCT` |
 | 预算检查缓存窗口 | 5 s（仅缓存「充足」） | `UPC_MEDIA_STORAGE_BUDGET_CACHE_MS` |
 | mp4 收尾等待上限 | 10 s | `UPC_PRINT_H264_MUX_FLUSH_TIMEOUT_MS` |

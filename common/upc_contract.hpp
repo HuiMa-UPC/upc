@@ -1182,7 +1182,7 @@ struct CleanTestStartRspPayload {
  * 有清粉录像时由 Media 在清粉抽帧停止后发送；最终 MP4 在结果页退出后统一合成。 */
 struct CleanTestDonePayload {
     uint8_t result_code;   /**< 结束类型：00/01/02 都表示清粉结束 */
-    uint8_t raw_retained;  /**< 兼容字段；PNG 路径下恒为 0 */
+    uint8_t raw_retained;  /**< 兼容字段；JPEG 静图路径下恒为 0 */
     uint8_t has_mp4;       /**< 1=期望存在合并后的 timelapse.mp4 */
     uint8_t reserved;
     char    mp4_rel_path[96]; /**< 相对 /userdata/media/video 的路径，如 job/timelapse.mp4 */
@@ -1205,7 +1205,7 @@ struct TransportResultPayload {
     uint8_t reserved[3];
 };
 
-/** GLAVO→MEDIA：清粉延时抽帧会话开始（接续打印 PNG，按 fps 定时采样） */
+/** GLAVO→MEDIA：清粉延时抽帧会话开始（接续打印 JPEG，按 fps 定时采样） */
 struct CleanVideoSessionStartPayload {
     char     session_id[32];
     char     job_name[64];
@@ -1218,7 +1218,7 @@ struct CleanVideoSessionStartPayload {
 struct CleanVideoSessionStopPayload {
     char    session_id[32];
     uint8_t result_code;  /**< 结束类型：00/01/02=MCU清粉结束；0xfe=用户关闭；0xff=内部收尾 */
-    uint8_t keep_raw;     /**< 兼容字段；PNG 路径下忽略 */
+    uint8_t keep_raw;     /**< 兼容字段；JPEG 静图路径下忽略 */
     uint8_t reserved[2];
 };
 
