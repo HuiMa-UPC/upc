@@ -97,6 +97,11 @@ std::string MqttConfig::topic_telemetry_chamber() const
     return topic_prefix() + "telemetry/chamber";
 }
 
+std::string MqttConfig::topic_telemetry_chamber_ext() const
+{
+    return topic_prefix() + "telemetry/chamber_ext";
+}
+
 std::string MqttConfig::topic_heartbeat() const
 {
     return topic_prefix() + "heartbeat";

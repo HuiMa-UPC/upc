@@ -5,10 +5,13 @@
 
 #include <cerrno>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
+#include <ctime>
 #include <dirent.h>
 #include <fcntl.h>
 #include <sys/ioctl.h>
+#include <sys/stat.h>
 #include <termios.h>
 #include <unistd.h>
 
@@ -17,9 +20,11 @@
 #include <linux/i2c.h>
 #endif
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace upc {
@@ -292,23 +297,37 @@ bool read_cpm121(const char* i2c_dev, float* kpa)
 }
 
 /**
- * IIO raw → 氧浓度 %。
- * V = raw / ADC_MAX * 3.3；I[uA] = V / R_sense × 1e6；O2 = 100*(1-exp(-I/K))。
+ * IIO raw → 电压 / 电流。
+ * 本板无 in_voltage0_scale：raw 单位 nV，V = raw × GLAVO_O2_RAW_TO_VOLT；
+ * I[uA] = V / R_sense × 1e6。
  */
-bool read_o2_percent(float* oxygen_percent)
+bool read_o2_raw_i(long* raw_out, float* i_ua_out)
 {
     long raw = 0;
     if(!read_text_int(GLAVO_O2_IIO_RAW, &raw) || raw < 0) {
         return false;
     }
-    const float v = (static_cast<float>(raw) / static_cast<float>(GLAVO_O2_ADC_MAX)) *
-                    GLAVO_O2_VREF;
+    const float v = static_cast<float>(raw) * GLAVO_O2_RAW_TO_VOLT;
     if(!(v >= 0.f) || !std::isfinite(v)) {
         return false;
     }
     const float i_ua = (v / GLAVO_O2_RSENSE_OHM) * 1.0e6f;
-    const float k = GLAVO_O2_K;
-    if(!(k > 0.f)) {
+    if(!std::isfinite(i_ua) || i_ua < 0.f) {
+        return false;
+    }
+    if(raw_out) {
+        *raw_out = raw;
+    }
+    if(i_ua_out) {
+        *i_ua_out = i_ua;
+    }
+    return true;
+}
+
+/** I[uA] + K → 氧浓度 %。 */
+bool o2_from_i(float i_ua, float k, float* oxygen_percent)
+{
+    if(!(k > 0.f) || !std::isfinite(i_ua) || i_ua < 0.f) {
         return false;
     }
     float o2 = 100.f * (1.f - std::exp(-i_ua / k));
@@ -321,6 +340,44 @@ bool read_o2_percent(float* oxygen_percent)
         o2 = 100.f;
     }
     *oxygen_percent = o2;
+    return true;
+}
+
+bool read_o2_percent(float k, float* oxygen_percent)
+{
+    float i_ua = 0.f;
+    if(!read_o2_raw_i(nullptr, &i_ua)) {
+        return false;
+    }
+    return o2_from_i(i_ua, k, oxygen_percent);
+}
+
+/** 从简易 JSON 文本里取 "key": number。 */
+bool json_find_number(const char* text, const char* key, float* out)
+{
+    if(!text || !key || !out) {
+        return false;
+    }
+    char pat[64];
+    std::snprintf(pat, sizeof(pat), "\"%s\"", key);
+    const char* p = std::strstr(text, pat);
+    if(!p) {
+        return false;
+    }
+    p = std::strchr(p + std::strlen(pat), ':');
+    if(!p) {
+        return false;
+    }
+    ++p;
+    while(*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r') {
+        ++p;
+    }
+    char* end = nullptr;
+    const float v = std::strtof(p, &end);
+    if(end == p || !std::isfinite(v)) {
+        return false;
+    }
+    *out = v;
     return true;
 }
 
@@ -338,7 +395,272 @@ void SocSensors::start()
     if(!running_.compare_exchange_strong(expected, true)) {
         return;
     }
+    load_o2_cal_from_json();
     worker_ = std::thread([this]() { thread_fn(); });
+}
+
+void SocSensors::load_o2_cal_from_json()
+{
+    FILE* fp = std::fopen(GLAVO_O2_CAL_JSON_PATH, "r");
+    if(!fp) {
+        UPC_LOG_GLAVO_SERVICE(Info, "o2 cal: no %s, use default K=%.1f",
+                              GLAVO_O2_CAL_JSON_PATH,
+                              static_cast<double>(GLAVO_O2_K));
+        o2_k_.store(GLAVO_O2_K);
+        o2_cal_ref_.store(GLAVO_O2_CAL_REF_PERCENT);
+        return;
+    }
+    char buf[1024];
+    const size_t n = std::fread(buf, 1, sizeof(buf) - 1, fp);
+    std::fclose(fp);
+    buf[n] = '\0';
+
+    float k = 0.f;
+    float ref = GLAVO_O2_CAL_REF_PERCENT;
+    if(!json_find_number(buf, "k", &k) ||
+       !(k >= GLAVO_O2_CAL_K_MIN && k <= GLAVO_O2_CAL_K_MAX)) {
+        UPC_LOG_GLAVO_SERVICE(Warn, "o2 cal: invalid k in %s, keep default %.1f",
+                              GLAVO_O2_CAL_JSON_PATH,
+                              static_cast<double>(GLAVO_O2_K));
+        o2_k_.store(GLAVO_O2_K);
+        o2_cal_ref_.store(GLAVO_O2_CAL_REF_PERCENT);
+        return;
+    }
+    float ref_tmp = 0.f;
+    if(json_find_number(buf, "ref_o2_percent", &ref_tmp) &&
+       ref_tmp > 0.f && ref_tmp < 100.f) {
+        ref = ref_tmp;
+    }
+    o2_k_.store(k);
+    o2_cal_ref_.store(ref);
+    UPC_LOG_GLAVO_SERVICE(Info, "o2 cal: loaded K=%.3f ref=%.2f%% from %s",
+                          static_cast<double>(k), static_cast<double>(ref),
+                          GLAVO_O2_CAL_JSON_PATH);
+}
+
+bool SocSensors::save_o2_cal_json(float k, float ref_o2, float i_ua, long raw_nv,
+                                  uint32_t sample_count)
+{
+    /* 确保 /userdata/CAL 存在 */
+    (void)::mkdir("/userdata", 0755);
+    (void)::mkdir("/userdata/CAL", 0755);
+
+    char tmp_path[256];
+    std::snprintf(tmp_path, sizeof(tmp_path), "%s.tmp", GLAVO_O2_CAL_JSON_PATH);
+    FILE* fp = std::fopen(tmp_path, "w");
+    if(!fp) {
+        UPC_LOG_GLAVO_SERVICE(Warn, "o2 cal: open %s failed errno=%d",
+                              tmp_path, errno);
+        return false;
+    }
+    const std::time_t now = std::time(nullptr);
+    const int n = std::fprintf(
+        fp,
+        "{\n"
+        "  \"version\": 1,\n"
+        "  \"k\": %.6f,\n"
+        "  \"ref_o2_percent\": %.3f,\n"
+        "  \"i_ua\": %.3f,\n"
+        "  \"raw_nv\": %ld,\n"
+        "  \"rsense_ohm\": %.1f,\n"
+        "  \"sample_count\": %u,\n"
+        "  \"calibrated_unix\": %lld,\n"
+        "  \"source\": \"user\"\n"
+        "}\n",
+        static_cast<double>(k),
+        static_cast<double>(ref_o2),
+        static_cast<double>(i_ua),
+        raw_nv,
+        static_cast<double>(GLAVO_O2_RSENSE_OHM),
+        sample_count,
+        static_cast<long long>(now));
+    if(std::fflush(fp) != 0 || n <= 0) {
+        std::fclose(fp);
+        (void)::unlink(tmp_path);
+        return false;
+    }
+    std::fclose(fp);
+    if(::rename(tmp_path, GLAVO_O2_CAL_JSON_PATH) != 0) {
+        UPC_LOG_GLAVO_SERVICE(Warn, "o2 cal: rename to %s failed errno=%d",
+                              GLAVO_O2_CAL_JSON_PATH, errno);
+        (void)::unlink(tmp_path);
+        return false;
+    }
+    return true;
+}
+
+void SocSensors::fill_o2_calib_state(middleware::DebugO2CalibRspPayload* out) const
+{
+    if(!out) {
+        return;
+    }
+    *out = {};
+    out->ok = 1;
+    out->err = static_cast<uint8_t>(middleware::DebugO2CalibErr::Ok);
+    out->k = o2_k_.load();
+    out->ref_o2_percent = o2_cal_ref_.load();
+    out->i_ua = 0.f;
+    out->o2_percent = -1.f;
+    {
+        std::lock_guard<std::mutex> lock(mtx_);
+        if(cache_.oxygen_percent >= 0.f) {
+            out->o2_percent = cache_.oxygen_percent;
+        }
+    }
+}
+
+bool SocSensors::start_calibrate_o2(
+    float ref_o2_percent,
+    std::function<void(const middleware::DebugO2CalibRspPayload&)> done)
+{
+    bool expected = false;
+    if(!o2_calib_busy_.compare_exchange_strong(expected, true)) {
+        return false;
+    }
+    o2_calib_cancel_.store(false);
+
+    std::lock_guard<std::mutex> lock(o2_calib_thread_mtx_);
+    if(o2_calib_thread_.joinable()) {
+        o2_calib_thread_.join();
+    }
+    try {
+        o2_calib_thread_ = std::thread(
+            [this, ref_o2_percent, done = std::move(done)]() {
+                middleware::DebugO2CalibRspPayload out{};
+                run_o2_calib(ref_o2_percent, &out);
+                if(done) {
+                    done(out);
+                }
+            });
+    } catch(...) {
+        o2_calib_busy_.store(false);
+        return false;
+    }
+    return true;
+}
+
+void SocSensors::join_o2_calib()
+{
+    o2_calib_cancel_.store(true);
+    std::lock_guard<std::mutex> lock(o2_calib_thread_mtx_);
+    if(o2_calib_thread_.joinable()) {
+        o2_calib_thread_.join();
+    }
+    o2_calib_cancel_.store(false);
+}
+
+void SocSensors::run_o2_calib(float ref_o2_percent,
+                              middleware::DebugO2CalibRspPayload* out)
+{
+    middleware::DebugO2CalibRspPayload local{};
+    if(!out) {
+        out = &local;
+    }
+    fill_o2_calib_state(out);
+    out->ok = 0;
+
+    struct BusyGuard {
+        std::atomic<bool>* flag;
+        ~BusyGuard() { flag->store(false); }
+    } guard{&o2_calib_busy_};
+
+    float ref = ref_o2_percent;
+    if(!(ref > 0.f)) {
+        ref = GLAVO_O2_CAL_REF_PERCENT;
+    }
+    if(!(ref > 0.f && ref < 100.f)) {
+        out->err = static_cast<uint8_t>(middleware::DebugO2CalibErr::BadRef);
+        return;
+    }
+    out->ref_o2_percent = ref;
+
+    if(::access(GLAVO_O2_READY_PATH, F_OK) != 0) {
+        out->err = static_cast<uint8_t>(middleware::DebugO2CalibErr::NotReady);
+        return;
+    }
+
+    const uint32_t n_samp = GLAVO_O2_CAL_SAMPLE_COUNT;
+    const uint32_t n_min =
+        std::min<uint32_t>(GLAVO_O2_CAL_SAMPLE_MIN, n_samp);
+    double sum_i = 0.0;
+    double sum_raw = 0.0;
+    uint32_t ok_n = 0;
+    for(uint32_t i = 0; i < n_samp; ++i) {
+        if(o2_calib_cancel_.load()) {
+            out->err = static_cast<uint8_t>(middleware::DebugO2CalibErr::IioFail);
+            UPC_LOG_GLAVO_SERVICE(Warn, "o2 cal: cancelled");
+            return;
+        }
+        long raw = 0;
+        float i_ua = 0.f;
+        if(read_o2_raw_i(&raw, &i_ua)) {
+            sum_i += static_cast<double>(i_ua);
+            sum_raw += static_cast<double>(raw);
+            ++ok_n;
+        }
+        if(i + 1 < n_samp) {
+            std::this_thread::sleep_for(
+                std::chrono::milliseconds(GLAVO_O2_CAL_SAMPLE_INTERVAL_MS));
+        }
+    }
+    if(ok_n < n_min) {
+        out->err = static_cast<uint8_t>(middleware::DebugO2CalibErr::IioFail);
+        UPC_LOG_GLAVO_SERVICE(Warn, "o2 cal: samples %u < min %u", ok_n, n_min);
+        return;
+    }
+
+    const float i_avg = static_cast<float>(sum_i / static_cast<double>(ok_n));
+    const long raw_avg =
+        static_cast<long>(sum_raw / static_cast<double>(ok_n) + 0.5);
+    out->i_ua = i_avg;
+
+    if(!(i_avg >= GLAVO_O2_CAL_I_MIN_UA && i_avg <= GLAVO_O2_CAL_I_MAX_UA)) {
+        out->err = static_cast<uint8_t>(middleware::DebugO2CalibErr::IOutOfRange);
+        UPC_LOG_GLAVO_SERVICE(Warn,
+            "o2 cal: I=%.3fuA out of range [%.2f,%.0f]",
+            static_cast<double>(i_avg),
+            static_cast<double>(GLAVO_O2_CAL_I_MIN_UA),
+            static_cast<double>(GLAVO_O2_CAL_I_MAX_UA));
+        return;
+    }
+
+    /* k = -I / ln(1 - ref/100) */
+    const float one_minus = 1.f - ref / 100.f;
+    if(!(one_minus > 0.f && one_minus < 1.f)) {
+        out->err = static_cast<uint8_t>(middleware::DebugO2CalibErr::BadRef);
+        return;
+    }
+    const float k = -i_avg / std::log(one_minus);
+    if(!(k >= GLAVO_O2_CAL_K_MIN && k <= GLAVO_O2_CAL_K_MAX) ||
+       !std::isfinite(k)) {
+        out->err = static_cast<uint8_t>(middleware::DebugO2CalibErr::KOutOfRange);
+        UPC_LOG_GLAVO_SERVICE(Warn, "o2 cal: K=%.3f out of range",
+                              static_cast<double>(k));
+        return;
+    }
+
+    if(!save_o2_cal_json(k, ref, i_avg, raw_avg, ok_n)) {
+        out->err = static_cast<uint8_t>(middleware::DebugO2CalibErr::WriteFail);
+        return;
+    }
+
+    o2_k_.store(k);
+    o2_cal_ref_.store(ref);
+    float o2 = 0.f;
+    if(o2_from_i(i_avg, k, &o2)) {
+        out->o2_percent = o2;
+        std::lock_guard<std::mutex> lock(mtx_);
+        cache_.oxygen_percent = o2;
+        cache_.valid = true;
+    }
+    out->k = k;
+    out->ok = 1;
+    out->err = static_cast<uint8_t>(middleware::DebugO2CalibErr::Ok);
+    UPC_LOG_GLAVO_SERVICE(Info,
+        "o2 cal: OK K=%.3f I=%.2fuA ref=%.2f%% O2=%.2f%% samples=%u raw=%ld",
+        static_cast<double>(k), static_cast<double>(i_avg),
+        static_cast<double>(ref), static_cast<double>(out->o2_percent),
+        ok_n, raw_avg);
 }
 
 void SocSensors::stop()
@@ -347,6 +669,7 @@ void SocSensors::stop()
     if(worker_.joinable()) {
         worker_.join();
     }
+    join_o2_calib();
     set_pm_valve(false);
 }
 
@@ -534,11 +857,19 @@ void SocSensors::poll_once()
         }
     }
 
-    float t = 0, h = 0;
-    if(read_aht20(&t, &h)) {
-        s.temperature_c = t;
-        s.humidity_percent = h;
-        s.valid = true;
+    /* AHT20：最短 2s 一采；间隔内沿用 cache_ 里上一拍温湿度 */
+    static auto last_aht20 = std::chrono::steady_clock::time_point{};
+    const auto now = std::chrono::steady_clock::now();
+    const bool aht20_due = (last_aht20.time_since_epoch().count() == 0) ||
+        (now - last_aht20 >= std::chrono::milliseconds(GLAVO_AHT20_MIN_INTERVAL_MS));
+    if(aht20_due) {
+        float t = 0, h = 0;
+        if(read_aht20(&t, &h)) {
+            s.temperature_c = t;
+            s.humidity_percent = h;
+            s.valid = true;
+            last_aht20 = now;
+        }
     }
 
     float p = 0;
@@ -551,10 +882,17 @@ void SocSensors::poll_once()
         s.valid = true;
     }
 
-    float o2 = 0.f;
-    if(read_o2_percent(&o2)) {
-        s.oxygen_percent = o2;
-        s.valid = true;
+    /* 氧气：预热完成标志 /run/o2_ready 出现后才读 IIO；PM 圈仍 200ms */
+    static bool o2_ready = false;
+    if(!o2_ready) {
+        o2_ready = (::access(GLAVO_O2_READY_PATH, F_OK) == 0);
+    }
+    if(o2_ready) {
+        float o2 = 0.f;
+        if(read_o2_percent(o2_k_.load(), &o2)) {
+            s.oxygen_percent = o2;
+            s.valid = true;
+        }
     }
 
     {

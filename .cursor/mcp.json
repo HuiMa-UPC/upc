@@ -3,6 +3,10 @@
       "cpp-concurrency": {
         "command": "python3",
         "args": ["${workspaceFolder}/.cursor/mcp/cpp-concurrency-check.py"]
+      },
+      "upc-dev": {
+        "command": "python3",
+        "args": ["${workspaceFolder}/.cursor/mcp/upc-dev.py"]
       }
     }
   }

@@ -57,6 +57,7 @@ private:
         float pm25 = 0.0f;
         float pm1_0 = -1.0f;
         float pm10 = -1.0f;
+        float pm25_outdoor = -1.0f; /**< V4 舱外 PM2.5 → chamber_ext */
         float oxygen_percent = 0.0f;
         float temperature_c = 0.0f;
         float humidity_percent = -1.0f;
@@ -65,6 +66,7 @@ private:
         uint32_t status = 0;
         bool wifi_connected = false;
         int signal_bars = -1;
+        bool sensor_v4 = false;
         bool has_value = false;
     };
 
@@ -171,6 +173,7 @@ private:
     void join_activation_thread();
 
     bool publish_chamber_telemetry();
+    bool publish_chamber_ext_telemetry();
     bool publish_heartbeat();
     bool publish_state(uint32_t mode, uint64_t since_ms);
     bool publish_cmd_ack(const std::string& req_id,
@@ -397,6 +400,7 @@ private:
         uint64_t deadline_ms = 0;
     } ota_hb_wait_{};
     uint64_t last_telemetry_pub_ms_ = 0;
+    uint64_t last_chamber_ext_pub_ms_ = 0;
     uint64_t last_heartbeat_pub_ms_ = 0;
     uint64_t last_fw_query_ms_ = 0;
     std::string boot_id_;

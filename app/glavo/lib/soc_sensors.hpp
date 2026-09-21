@@ -3,14 +3,18 @@
 
 /**
  * @file soc_sensors.hpp
- * @brief SOC 侧外设：舱内外 PMSA / AHT20 / CPM121 / IIO 氧气 周期采集（MCU≥V4 才轮询）；
+ * @brief SOC 侧外设：舱内外 PMSA / AHT20（≥2s）/ CPM121 / IIO 氧气（须 /run/o2_ready）周期采集（MCU≥V4 才轮询）；
  *        六路舱灯与 fa_valve 为 sysfs 直控，**不看 MCU 版本**（调试页可随时开关）。
  *
  * 背光调节在 UI 进程，不经本模块、也不看 MCU 版本。
  */
 
+#include "device_config.hpp"
+#include "upc_contract.hpp"
+
 #include <atomic>
 #include <cstdint>
+#include <functional>
 #include <mutex>
 #include <thread>
 
@@ -82,10 +86,31 @@ public:
     /** 六路舱灯一齐开关；不看 MCU 版本。返回全部 sysfs 写入成功 */
     bool set_all_cabin_leds(bool on);
 
+    /**
+     * @brief 空气/标准气单点标定：独立线程多采 IIO → 求 K → 原子写 JSON → 内存立即生效。
+     * @param ref_o2_percent 参考浓度 %；≤0 用 GLAVO_O2_CAL_REF_PERCENT
+     * @param done 完成后回调（任意线程；Glavo 侧须 publish_async）
+     * @return false=已有标定在跑（调用方填 Busy，不会调 done）
+     * @note 不阻塞调用方；stop()/join_o2_calib() 会等线程结束。
+     */
+    bool start_calibrate_o2(
+        float ref_o2_percent,
+        std::function<void(const middleware::DebugO2CalibRspPayload&)> done);
+
+    /** 取消进行中的采样并 join 标定线程（GlavoService::stop 须先于销毁回调） */
+    void join_o2_calib();
+
+    /** 仅回读当前 K/氧（不采样标定）；填 out.ok=1 */
+    void fill_o2_calib_state(middleware::DebugO2CalibRspPayload* out) const;
+
 private:
     SocSensors() = default;
     void thread_fn();
     void poll_once();
+    void load_o2_cal_from_json();
+    bool save_o2_cal_json(float k, float ref_o2, float i_ua, long raw_nv,
+                          uint32_t sample_count);
+    void run_o2_calib(float ref_o2_percent, middleware::DebugO2CalibRspPayload* out);
 
     std::atomic<bool> running_{false};
     std::atomic<bool> v4_mode_{false};
@@ -105,6 +130,13 @@ private:
     std::atomic<bool> cabin_accum_active_{false};
     std::atomic<double> cabin_accum_sum_{0.0};
     std::atomic<int> cabin_accum_count_{0};
+
+    std::atomic<float> o2_k_{GLAVO_O2_K};
+    std::atomic<float> o2_cal_ref_{GLAVO_O2_CAL_REF_PERCENT};
+    std::atomic<bool> o2_calib_busy_{false};
+    std::atomic<bool> o2_calib_cancel_{false};
+    std::mutex o2_calib_thread_mtx_;
+    std::thread o2_calib_thread_;
 };
 
 } // namespace glavo

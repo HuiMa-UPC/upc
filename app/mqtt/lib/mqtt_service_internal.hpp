@@ -16,6 +16,8 @@ namespace upc::mqtt {
 inline constexpr uint64_t kReconnectIntervalMs = 3000;
 inline constexpr uint64_t kTelemetryPrintingIntervalMs = 2000;
 inline constexpr uint64_t kTelemetryIdleIntervalMs = 30000;
+/** V4 舱外 PM 遥测间隔（协议 chamber_ext 5–10s） */
+inline constexpr uint64_t kTelemetryChamberExtIntervalMs = 8000;
 inline constexpr uint64_t kFirmwareQueryIntervalMs = 10000;
 
 /** 云控命令协议关键字与超时配置。 */

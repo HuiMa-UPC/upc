@@ -116,8 +116,11 @@ dmesg | grep xhci-hcd.0         # 应该没有了，只剩 xhci-hcd.1.auto
 ## 6. 氧浓度查看及换算
 
 ```bash
-# 读 ADC 原始值（氧浓度换算用 k 系数在用户态做）
-cat /sys/bus/iio/devices/iio:device0/in_voltage0_raw    电压值 需要转换公式计算
+# 读 IIO 原始值（本板无 in_voltage0_scale：raw 单位 nV）
+# 用户态：V=raw×1e-9，I[uA]=V/100×1e6，O2%=100×(1−e^(−I/K))
+# K：优先 /userdata/CAL/o2_cal.json（调试页 O2 Calib：输入参考浓度后标定）；缺省≈655
+cat /sys/bus/iio/devices/iio:device0/in_voltage0_raw
+cat /userdata/CAL/o2_cal.json   # 可选；无则用出厂默认 K
 
 cd /sys/class/pwm/pwmchip0   # 对应 pwm0   pwm@fdd70020
 
@@ -125,8 +128,9 @@ cd /sys/class/pwm/pwmchip0   # 对应 pwm0   pwm@fdd70020
 /etc/init.d/S46o2-preheat start
 cat /sys/class/pwm/pwmchip0/pwm0/duty_cycle   # 应该在往上爬
 ls /run/o2_ready                              # 约 100s 后出现
-
 ```
+
+标定：舱内气体浓度须与输入框一致（空气填 20.9）。调试页 Other 左列 **O2 Calib** → 改 Ref % → 点圆钮 → 写 JSON 并立即换 K。采样 15 次、有效点数须 ≥10。手册建议首次稳定约 30 分钟后再标；产线可缩短但电流须看平。
 
 ## 7. spi 小屏测试
 

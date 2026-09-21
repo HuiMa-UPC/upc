@@ -291,7 +291,7 @@ UI 上必须恒定同一种观感，否则后端改个字段卡片就换色了�
 SVG 的，那样没法按未读数开关。
 
 **后端还没实现 `GLAVO_Device_Event_Ntf` 的发布**，接好的回调目前收不到任何消息。
-要验「超过两条 + 查看剩余 N 条」这条路径，用调试页 Other → Other Switches → `Msg Inject`
+要验「超过两条 + 查看剩余 N 条」这条路径，用调试页 Other → Inject → `Msg Inject`
 （造 4 条假消息：1 条 critical + 3 条 info）。
 
 ### 通知徽标配色（消息页列表 + 左下浮层共用）
@@ -416,8 +416,13 @@ ACTIVE + OWNER_TASK 这一档最容易漏：激光器 1301、各轴 1203~1230 �
 - 已在表里的条目只校正生命周期（ACTIVE ↔ RTN_LATCHED），
   `severity` / `clear_mode` / `detail` 保持单条上报给的值——那才是权威数据；
 - **快照在途时到达的 CONDITION 单报先攒着**（`g_pending`，上限 16 条），等快照原子提交后
-  按序重放。快照是「请求那一刻」的状态，暂存的单报都比它新，不压在快照之上就会被盖回去，
-  界面出现状态回退（快照指导 §11）。EVENT 不进这个队列，它不改 CONDITION 状态。
+  按序重放；**同时立刻 `on_alarm_condition` 上屏**（灯效板已按单报变色，浮层不应等 MCU
+  回齐）。提交时反向清理会跳过仍在 `g_pending` 里的 code，避免「先撤卡再重放」闪一下。
+  快照是「请求那一刻」的状态，暂存的单报都比它新，不压在快照之上就会被盖回去
+  （快照指导 §11）。EVENT 不进这个队列，它不改 CONDITION 状态。
+- **攒帧 2s 超时由 oneshot 定时器主动触发**（`g_snap_assemble_timer`），不再只靠「下一帧
+  快照 / 下一轮请求」被动检查；MCU 忙着起印握手时迟迟不回，也不会把 pending 单报卡到
+  30s 轮询。
 
 打印融合（停机类报警未复位时 MCU 拒绝新打印，只回一条给不出原因的 EVENT 2003
 `PRINT_START_DENIED`）：
@@ -547,7 +552,7 @@ ACTIVE + OWNER_TASK 这一档最容易漏：激光器 1301、各轴 1203~1230 �
 **假报警还不落盘**：`history_save()` 跳过 `simulated` 条目，重启即净，不用再手删
 `/userdata/messages/alarm_history.jsonl`。同一个码后来收到真报文会自动摘掉 `[SIM]`。
 
-联调：MCU 不发真报警时用调试页 Other → Other Switches → `Alarm Inject`
+联调：MCU 不发真报警时用调试页 Other → Inject → `Alarm Inject`
 （`ui_alarm_debug_inject()` 绕过总线直走上报路径，造 6 条假报警：1124 阻断 /
 1104 RTN_LATCHED / 1101 自动清除 / 2000 EVENT 四条显示路径，外加 1003 一条
 critical 把 information/warning/error/critical 四档等级配色凑齐——等级不进字典、
@@ -711,7 +716,7 @@ pending 自动解除——正好顺带验超时路径。
 | `user_control` | `page_user_control.*` | 控制面板 + 更多控制（页内两视图）。见下方「控制页」一节 |
 | `user_settings` | `page_user_settings.*` | 设置列表 + Display 背光滑条 + 开发者密码弹窗 |
 | `user_message` | `page_user_message.*` | 消息中心：日期分组混排列表（MCU 报警 + 设备事件）+ 初始 10 条与底部 Load More + 左滑删除历史 + 管理态批量删除 + 详情抽屉（Reset 三态）。按稿 3033:5247 / 3063:7338 / 3201:9570 / 5380:28971 实现 |
-| `user_debug` | `page_user_debug.*` | 调试控制台；Move 页振镜卡 Abs X/Y + Move 走 `send_galvo_abs_pos`；Other 页 `Galvo Point Test` 按当前校准表依次显示中心和四角红光点，与正式打印及 Test image 双向互斥 |
+| `user_debug` | `page_user_debug.*` | 调试控制台；Move 页振镜卡 Abs X/Y + Move 走 `send_galvo_abs_pos`；Other 页按 Process / Cabin / Print Gates / Media & Sim / Inject 分组。`Galvo Point Test` 在 Print Gates，按当前校准表依次显示中心和四角红光点，与正式打印及 Test image 双向互斥。O2 Calib 在左列：输入参考浓度后点圆钮写 `/userdata/CAL/o2_cal.json`；失败 toast 提示、标签仍显示原 K |
 | `user_timelapse` | `page_user_timelapse.*` | 延时摄影播放器（隐藏页，历史缩略图进入；全屏 `lv_layer_top`） |
 
 注册仅在 `ui_app.cpp`；打印流程走 `control_*`，pages 不直接订阅 MsgBus。详见 `lib/pages/README.md`。
@@ -995,7 +1000,7 @@ Glavo Print_Terminate_Rsp / 进度 100% → control.cpp finish_printing()
 ### 转运盒流程（稿 3171:7305 / 3225:10476 / 3225:13586 / 4811:6178+6191）
 
 滑动取件开门之后、关门确认之前的一段：把工件转移进转运盒再取下。默认**不启用**，由调试页
-`Other` → `Other Switches` → `Transfer Box` 打开（`control_set_transfer_box_flow()`，纯 UI
+`Other` → `Print Gates` → `Transfer Box` 打开（`control_set_transfer_box_flow()`，纯 UI
 本地标志，不发消息也不落盘，重启回到关闭）。
 
 ```
@@ -1088,7 +1093,7 @@ UI 侧只做提示：`control.cpp` 的 `show_powder_dialog()`，几何复用门�
 预览统一走 dma fd 旁路（`dma_mode=1`）：
 
 ```
-rongsu_camera 经主 IPC（/tmp/upc_camera.sock）SCM_RIGHTS 附带 dma_buf fd 表
+rongsu_camera 经主 IPC（/tmp/upc_camera.sock）SCM_RIGHTS 附带隔离 pool 的 dma_buf fd 表
   → CameraPreviewPlayer::on_stream_start_rsp 调用 MsgPort::take_peer_dma_fds(APP_CAMERA)
   → SHM /upc_camera_preview 只读 slot 状态/seq/buffer_idx
   → 解码线程 acquire_latest_frame 得到 buffer_idx
@@ -1097,7 +1102,7 @@ rongsu_camera 经主 IPC（/tmp/upc_camera.sock）SCM_RIGHTS 附带 dma_buf fd �
   → lv_timer(16ms) 换 img_dsc_ 指针 → lv_image (XRGB8888，1:1 贴图)
 ```
 
-`CameraStreamInfoPayload.dma_socket_path` 为 ABI 保留字段；fd 不经独立 socket 传递。
+`CameraStreamInfoPayload.dma_socket_path` 为 ABI 保留字段；fd 不经独立 socket 传递。源 fd 来自 Camera 隔离 pool（dma32/CMA），不是 ISP 的 V4L2 buf，见 [camera/CAMERA.md](../camera/CAMERA.md) 「ISP IOMMU 与 dma-buf 所有权」。
 
 - **开流**：`page_user_home` 打印模式 → `CameraPreviewPlayer::start()` → IPC Start → `apply_stream_start_ui` 开 SHM 元数据环 + `take_peer_dma_fds` + `setup_frame_buffers` + 解码线程。
 - **关流/换流**：UI 仅请求解码线程退役；后台回收线程等待退出，LVGL 定时器确认退出后才关闭旧 SHM、DMA fd 与显示缓冲，因此主线程不阻塞在 `join()`。
@@ -1107,9 +1112,9 @@ rongsu_camera 经主 IPC（/tmp/upc_camera.sock）SCM_RIGHTS 附带 dma_buf fd �
 - **`lv_timer` 周期 16ms**（`kUiRefreshPeriodMs`，与 `LV_DEF_REFR_PERIOD` 对齐）：这一拍等的是"转换好的帧什么时候被切上屏"，周期越长平均多等半个周期。交互期仍降到 `kUiRefreshInteractPeriodMs`(66) 让位给触摸响应。
 - **RGA 路径**：`setup_frame_buffers` 时 `RgaDmaBuf` 分配成功则 `rga_path=1`；失败退化为 `std::vector` 软件转换。无进程级预热，首帧到达即转换。
 - **RGA 常驻导入数受相机缓冲数约束**：streaming 模式下 `prepare_rga_streaming_cache()` 开流时把**每个**源 dma fd 都 `mmap` + `importbuffer_fd` 常驻，导入总数 = `CAMERA_V4L2_BUF_COUNT` + scratch 块数（1:1 条带路径 2 块；缩放路径不需要 src scratch，只有 1 块）。rk3568 实测 4 个缓冲（6 句柄、约 11.4MB 常驻映射）可用，6 个（8 句柄、约 15.6MB）必然导入失败。**失败只会退化成软件转换（22ms/帧）、画面照常出，外部看不出异常**，所以三个失败点各自打了带 errno 的 Error 日志；调相机缓冲数后务必 `grep RGA /var/log/topic/topic_ui_preview.log` 确认 `rga_path=1`。
-- **DMA 约束**：RK3568 RGA2 仅支持 4G 以下物理地址；源 fd 必须来自 V4L2 / dma-heap（dma32），UI 直接用 `importbuffer_fd`。
+- **DMA 约束**：RK3568 RGA2 不是 IOMMU 客户端，仅支持 4G 以下物理地址（板端节点 `fdeb0000.rk_rga`，核对见 [common/COMMON.md](../../common/COMMON.md) `DmaHeapUsage`）。源 fd 必须来自 V4L2 / dma-heap（dma32），UI 直接用 `importbuffer_fd`。相机缓冲上的 IOMMU 是 ISP 的事，见 [camera/CAMERA.md](../camera/CAMERA.md) 「ISP IOMMU 与 dma-buf 所有权」。
 - **Stride 对齐**：RGA 源 stride 使用后端传来的实际 `stride_y`，不再假设 `stride_y == width`。
-- **Cache 同步**：RGA 读源前 `DMA_BUF_IOCTL_SYNC(READ)`，写目的后 `DMA_BUF_IOCTL_SYNC(WRITE)`；目的缓冲优先 uncached。
+- **Cache 同步**：phx streaming（`UPC_UI_RGA_STREAMING=1`）**不对相机源 fd 做** `DMA_BUF_IOCTL_SYNC`，只对 dst scratch 在 CPU `memcpy` 前后 `SYNC READ`；1:1 条带回退 memcpy 时才 `SYNC WRITE` 源 scratch。k1mini 非 streaming 才对源 fd `SYNC START READ` 再逐帧 import。软件回退两条工具链都会对源 fd `SYNC` + `mmap`。目的显示槽若是 dma 则写完 `SYNC WRITE`。
 - **线程**：解码在独立线程；`on_stream_start_rsp` 与换帧须 `lv_async_call` / `lv_timer` 回到 UI 线程。
 - **CMake**：找到 `librga` 时 `-DUPC_UI_HAS_RGA=1`（当前源码仍硬依赖 RGA 头文件）。
 
@@ -1526,7 +1531,7 @@ caption_sm 12 行高 17、内距 11、图标 26）指标卡要 118、组合卡�
 - **稿全中文，实现全英文**（Montserrat；CJK 子集只覆盖调试测试页）。术语一律沿用调试页
   已有的串：`Print Plane Height (Z)` / `Powder Scraper (S)` / `Powder Bucket Rod (D)`、
   `Click move` / `Long-press`、`Print Params` / `Layer (um)` / `Balance` / `Send`、
-  `Fan` / `Duty`、`Other Switches` / `Sieve Motor` / `Inner Door` / `Gas Wash` / `Base Heat`、
+  `Fan` / `Duty`、Other 页 `Process` / `Sieve Motor` / `Inner Door` / `Gas Wash` / `Base Heat`、
   `Filter` / `Material`（后两个取自 `control.cpp` 的 supply bar，**耗材是 Material 不是
   Consumable**）。**稿上 S 轴标题写的是「打印平面高度（S轴）」，那是把 Z 卡标题复制过去
   忘改了**——S 轴实际是铺粉刮刀，按调试页取 `Powder Scraper (S)`，别照稿改回去。

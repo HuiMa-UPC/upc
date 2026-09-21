@@ -68,7 +68,7 @@
 |------|------|--------|
 | `CameraService` | `camera_service.*` | IPC Server + 多 peer SHM 推流（UI/Visual/Media） |
 | `ViCapture` | `vi_capture.*` | rkaiq + V4L2 NV12 |
-| `CameraDmaFrameSource` | `camera_dma_frame_source.*` | V4L2 dma fd 导出、stride padding |
+| `CameraDmaFrameSource` | `camera_dma_frame_source.*` | V4L2→隔离 pool 拷贝、dma fd 导出 |
 | `device_config.hpp` | 头文件 | 设备/分辨率/IQ/SHM 宏 |
 
 ## Media（`app/media/lib/` → 源编入 `rongsu_media`，无独立静态库）
@@ -139,7 +139,7 @@ UI → IPC → GlavoService → ParserManager → RingBuffer
                     PrintVideoNotify → IPC(UI Hub FWD) → Media → PNG/MP4
 ```
 
-预览像素：`rongsu_camera` → 主 IPC `SCM_RIGHTS` 传 dma_buf fd + SHM `/upc_camera_preview` 元数据环 → UI `CameraPreviewPlayer`（`MsgPort::take_peer_dma_fds` + RGA `importbuffer_fd` 或 SW 转 BGRX；与控制 IPC 分离）。
+预览像素：`rongsu_camera` → 隔离 pool 拷贝 → 主 IPC `SCM_RIGHTS` 传 dma_buf fd + SHM `/upc_camera_preview` 元数据环 → UI `CameraPreviewPlayer`（`MsgPort::take_peer_dma_fds` + RGA `importbuffer_fd` 或 SW 转 BGRX；与控制 IPC 分离）。RK3568 上 RGA2 无 IOMMU、rkisp 有；所有权见 [camera/CAMERA.md](../app/camera/CAMERA.md) 「ISP IOMMU 与 dma-buf 所有权」。
 
 ## 跨模块红线
 
@@ -160,5 +160,6 @@ UI → IPC → GlavoService → ParserManager → RingBuffer
 | 专利参考 | [专利参考-系统架构与运行逻辑.md](专利参考-系统架构与运行逻辑.md)、[专利参考-振镜校准算法与增益设置.md](专利参考-振镜校准算法与增益设置.md) |
 | Cursor Rules | `.cursor/rules/*.mdc` |
 | 并发检查 MCP | `.cursor/mcp/cpp-concurrency-check.py` |
+| IPC 契约 MCP | `.cursor/mcp/upc-dev.py`（`lookup_msg` / `lookup_payload` / `check_contract_drift` / `lookup_alarm`） |
 | 日志 | [common/COMMON.md § 专题日志字典](../common/COMMON.md#专题日志字典varlogtopiclog)（专题划分、落盘路径、轮转；**新增大类必须同步 `scripts/topic`**） |
 | 消息契约 | [common/COMMON.md](../common/COMMON.md)（`upc_contract.hpp` 总表） |

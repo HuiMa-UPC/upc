@@ -95,7 +95,7 @@ void schedule_commit_print_result_history()
 enum class DoorFlowOrigin { PrintPrep, HomeStandalone, PrintCollect };
 DoorFlowOrigin g_door_origin = DoorFlowOrigin::PrintPrep;
 
-/* 转运盒流程总开关（调试页 Other Switches → Transfer Box）。默认关：取件仍是
+/* 转运盒流程总开关（调试页 Other → Print Gates → Transfer Box）。默认关：取件仍是
  * 「开门 → 确认关门」两步。打开后取件分支才插入 TRANSFER_BOX 三步，并把关门确认
  * 换成新稿样式。纯 UI 本地标志，不发消息也不落盘。 */
 bool g_transfer_box_flow = false;
