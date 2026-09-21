@@ -30,11 +30,11 @@ struct PrintVideoJob {
 };
 
 /**
- * 打印层拍照：dma 元数据环取帧 → 软件编码 PNG（1.png,2.png,...）；
+ * 打印层拍照：NV12 → CPU JPEG（1.jpg,2.jpg,...）；
  * Finish/Abort 时仅生成 thumb.rthm + manifest 快路径（video_pending /
  * print_video_pending）。开门 finalize：
- *   - `UPC_TIMELAPSE_PLAYBACK_PNG=1`（默认）：不编 timelapse.mp4，保留 PNG；
- *   - `=0`：PNG→timelapse.mp4，成功后可删清粉段 PNG。
+ *   - `UPC_TIMELAPSE_PLAYBACK_PNG=1`（默认）：不编 timelapse.mp4，保留 JPEG；
+ *   - `=0`：JPEG→timelapse.mp4，成功后可删清粉段 JPEG。
  * 若 Session_Start 开了连续 H264，直接使用边录边封装的 print_h264.mp4
  * （与延时开关无关；封装帧率用相机流 fps）。
  */
@@ -60,7 +60,7 @@ public:
     /** 结果页退出后先把条目标记为可见。 */
     bool commit_after_exit(const char* frames_dir);
     /**
-     * 结果页退出后触发：按目录内 PNG 统一合成/更新最终 MP4。
+     * 结果页退出后触发：按目录内 JPEG 统一合成/更新最终 MP4。
      * finalize_print_video=false 时仅完成 Timelapse，保留 print_video_pending
      * 给 H264 finalize done 后的二次收尾。
      */
@@ -90,8 +90,8 @@ private:
     void worker_fn();
     void enqueue_job(PrintVideoJob job);
     bool grab_latest_nv12(std::vector<uint8_t>& out);
-    /** NV12 → PNG（ffmpeg 软编）→ session_dir_/N.png（N 从 1 连续） */
-    bool encode_nv12_to_png(const uint8_t* nv12, size_t bytes, uint32_t frame_index);
+    /** NV12 → JPEG（libturbojpeg）→ session_dir_/N.jpg（N 从 1 连续） */
+    bool encode_nv12_to_jpeg(const uint8_t* nv12, size_t bytes, uint32_t frame_index);
     bool handle_layer_snap(const PrintVideoJob& job);
     void finalize_session(bool aborted);
     /** 委托 timelapse_util：dma32 + importbuffer_fd 生成 RTHM 缩略图 */
@@ -115,7 +115,7 @@ private:
     static std::string make_session_name(const std::string& job_name,
                                          int64_t start_unix = 0);
     bool remove_session_dir();
-    std::string frame_png_path(uint32_t frame_index) const;
+    std::string frame_jpeg_path(uint32_t frame_index) const;
     static bool mkdir_p(const char* path);
     static std::string sanitize_filename(const char* name);
     static int run_shell_cmd(const char* cmd, const char* log_tag);
@@ -137,7 +137,7 @@ private:
     uint32_t stream_height_  = CAMERA_HEIGHT_DEFAULT;
     uint32_t stream_fps_     = CAMERA_FPS_DEFAULT; /**< 与 PrintH264 编码帧率一致 */
     uint32_t layer_fps_      = CAMERA_PRINT_VIDEO_LAYER_FPS;
-    uint32_t frame_count_    = 0; /**< 成功写入的 PNG 帧数（连续 1..N） */
+    uint32_t frame_count_    = 0; /**< 成功写入的 JPEG 帧数（连续 1..N.jpg） */
     std::vector<uint8_t> last_layer_nv12_; /**< 最近一次层拍成功帧（用于生成 thumb） */
     std::string session_id_;
     std::string job_name_;

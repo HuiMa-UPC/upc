@@ -61,8 +61,8 @@
  *          cover 居中裁切（竖构图相机图铺满横槽）。
  *
  * meta 行右侧那个数：Timelapse 是帧数，Video 是时长。
- *   帧数清单里没有，靠 session_frame_count() 在 frames_dir 上二分探 N.png 求出；
- *   探不到（非 PNG 播放模式、或帧已被删）就退回显示时长，见 build_entry。
+ *   帧数清单里没有，靠 session_frame_count() 在 frames_dir 上二分探 N.jpg 求出；
+ *   探不到（非序列播放模式、或帧已被删）就退回显示时长，见 build_entry。
  */
 
 namespace {
@@ -333,10 +333,10 @@ void format_frames(uint32_t frames, char *buf, size_t n)
 /* ============================================================================
  *  删除（多选批量；新稿去掉左滑后这里只剩一个入口）
  *
- *  Timelapse：只删延时资产（*.png / thumb.rthm / timelapse.mp4），保留打印录像。
+ *  Timelapse：只删延时资产（*.jpg，以及旧版残留 *.png / thumb.rthm / timelapse.mp4），保留打印录像。
  *  Print History：只删打印录像（print_h264.mp4 / print_thumb / print.h264），保留延时。
  *  两侧都空后：移除清单条目；目录空则删目录。
- *  Album：删 PNG 原图及其配对 `.rthm` 缩略图。
+ *  Album：删 JPEG 原图及其配对 `.rthm` 缩略图。
  * ========================================================================= */
 
 bool remove_file_if_exists(const std::string& abs_path)
@@ -372,7 +372,7 @@ bool remove_empty_session_dir(const std::string& frames_dir)
     return std::filesystem::remove(abs_dir, ec);
 }
 
-/** 删延时摄影：层间 PNG + thumb + timelapse.mp4 */
+/** 删延时摄影：层间 JPEG（含旧版残留 .png）+ thumb + timelapse.mp4 */
 bool remove_timelapse_assets(const std::string& frames_dir)
 {
     if(frames_dir.empty()) {
@@ -390,11 +390,12 @@ bool remove_timelapse_assets(const std::string& frames_dir)
             }
             const std::string name = de.path().filename().string();
             const std::string ext = de.path().extension().string();
-            const bool is_png =
-                (ext == ".png" || ext == ".PNG");
+            const bool is_still =
+                (ext == ".jpg" || ext == ".JPG" ||
+                 ext == ".png" || ext == ".PNG");
             const bool is_thumb = (name == "thumb.rthm");
             const bool is_tl_mp4 = (name == "timelapse.mp4");
-            if(is_png || is_thumb || is_tl_mp4) {
+            if(is_still || is_thumb || is_tl_mp4) {
                 if(!remove_file_if_exists(de.path().string())) {
                     return false;
                 }
@@ -420,26 +421,26 @@ bool remove_print_video_assets(const std::string& frames_dir)
     return true;
 }
 
-/** 会话目录是否至少有首帧 PNG（1.png）。 */
-bool session_has_png_frames(const std::string& frames_dir)
+/** 会话目录是否至少有首帧 JPEG（1.jpg）。 */
+bool session_has_jpeg_frames(const std::string& frames_dir)
 {
     if(frames_dir.empty()) {
         return false;
     }
-    const std::string abs_first_png = session_abs_dir(frames_dir) + "/1.png";
+    const std::string abs_first = session_abs_dir(frames_dir) + "/1.jpg";
     std::error_code ec;
-    return std::filesystem::exists(abs_first_png, ec);
+    return std::filesystem::exists(abs_first, ec);
 }
 
 /**
  * 会话的延时帧数（新稿 Timelapse 卡 meta 行右侧那个「234 Frames」）。
  *
- * 清单里没有这个数，只能从盘上数。帧文件是从 1.png 起连号的（清粉段也在同一串里，
+ * 清单里没有这个数，只能从盘上数。帧文件是从 1.jpg 起连号的（清粉段也在同一串里，
  * 见 clean_first_png / clean_last_png），所以**先倍增探上界、再二分**求最大的 N，
  * 约 2·log2(N) 次 stat 就够。不用 directory_iterator 逐个数：一个会话动辄上千帧，
  * 而这函数是在分块建列表时每张卡调一次的，列目录会把建列表的耗时拖上去。
  *
- * @return 帧数；目录不存在 / 非 PNG 播放模式 / 帧已被删时返回 0（调用方退回显示时长）
+ * @return 帧数；目录不存在 / 非静图播放模式 / 帧已被删时返回 0（调用方退回显示时长）
  */
 uint32_t session_frame_count(const std::string& frames_dir)
 {
@@ -449,7 +450,7 @@ uint32_t session_frame_count(const std::string& frames_dir)
     const std::string dir = session_abs_dir(frames_dir);
     const auto exists_nth = [&dir](uint32_t i) {
         std::error_code ec;
-        return std::filesystem::exists(dir + "/" + std::to_string(i) + ".png", ec);
+        return std::filesystem::exists(dir + "/" + std::to_string(i) + ".jpg", ec);
     };
     if(!exists_nth(1u)) {
         return 0u;
@@ -479,7 +480,7 @@ bool entry_has_timelapse(const upc::PrintHistoryEntry& e)
         return true;
     }
 #if UPC_TIMELAPSE_PLAYBACK_PNG
-    return session_has_png_frames(e.frames_dir);
+    return session_has_jpeg_frames(e.frames_dir);
 #else
     return false;
 #endif
@@ -947,7 +948,7 @@ void on_thumb_click(lv_event_t *e)
                   UPC_PRINT_VIDEO_DIR, c->frames_dir.c_str());
     char video_path[256];
     video_path[0] = '\0';
-    /* Print History 始终走 print_h264.mp4；延时在 PNG 宏下不传 mp4。 */
+    /* Print History 始终走 print_h264.mp4；延时在序列宏下不传 mp4。 */
     const bool pass_mp4 =
         (c->kind == HistoryCard::Kind::PrintVideo)
 #if !UPC_TIMELAPSE_PLAYBACK_PNG
@@ -981,10 +982,10 @@ std::string make_thumb_src_fallback(const upc::PrintHistoryEntry& e,
         }
     }
     if(!e.frames_dir.empty()) {
-        const std::string abs_first_png = base + e.frames_dir + "/1.png";
+        const std::string abs_first = base + e.frames_dir + "/1.jpg";
         std::error_code ec;
-        if(std::filesystem::exists(abs_first_png, ec)) {
-            return std::string(kThumbDrive) + abs_first_png;
+        if(std::filesystem::exists(abs_first, ec)) {
+            return std::string(kThumbDrive) + abs_first;
         }
     }
     return {};
@@ -1455,8 +1456,8 @@ void build_entry(lv_obj_t *parent, const upc::PrintHistoryEntry &e)
             }
         } else {
 #if UPC_TIMELAPSE_PLAYBACK_PNG
-            /* 列表里已提前算好 thumb_src（thumb.rthm 或 1.png 回退），
-             * 这里直接复用，避免为每个会话遍历整目录扫描 PNG。 */
+            /* 列表里已提前算好 thumb_src（thumb.rthm 或 1.jpg 回退），
+             * 这里直接复用，避免为每个会话遍历整目录扫描 JPEG。 */
             media_ready = !ctx->thumb_src.empty();
 #else
             if(!ctx->video.empty()) {
@@ -1486,7 +1487,7 @@ void build_entry(lv_obj_t *parent, const upc::PrintHistoryEntry &e)
     format_card_stamp(e.start_unix, stamp_buf, sizeof(stamp_buf));
 
     /* meta 行右侧：Timelapse 是帧数、Video 是时长。帧数清单里没有，要扫盘求，
-     * 扫不出（非 PNG 播放模式 / 帧已删）就退回时长——总比空着强。 */
+     * 扫不出（非序列播放模式 / 帧已删）就退回时长——总比空着强。 */
     uint32_t frames = 0u;
     if(ctx->kind == HistoryCard::Kind::Timelapse) {
         frames = session_frame_count(e.frames_dir);
