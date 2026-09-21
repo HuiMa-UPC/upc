@@ -99,6 +99,7 @@
 | `ui_clean_state_*` | `ui_clean_state.*` | 清粉（clean_test）发起与回执的唯一来源：接管两个单槽 Proxy 回调，按发起方（结果页 Purify / 控制页手动清粉）扇出；`record_video` 决定是否连带清粉录像 |
 | `ui_alarm_catalog_*` | `ui_alarm_catalog.hpp` / `ui_alarm_catalog_gen.cpp` | 报警字典（生成物，改 `tools/gen_alarm_catalog.py` + `doc/alarm_catalog_en.csv`）；槽位映射不在此，是 `upc_contract.hpp` 里的固定公式 |
 | `ui_notice_stack_*` | `ui_notice_stack.*` | 右上通知三态：toast / 铃铛 / 面板互斥（**只在首页**；首页打印态与监控态退回改版前那摞黑玻璃卡），PageManager 持有 |
+| `ui_sys_hud_*` | `ui_sys_hud.*` | 调试红字蒙版（`lv_layer_sys` 右上角：CPU 温 / 整机与本进程占用 / 内存 used/total+rss；调试页 Media & Sim「Sys HUD」，`upc_sys_monitor_sample` 读本机 `/proc`，仅本次运行） |
 | `ui_backlight_*` | `ui_backlight.*` | LCD 背光 sysfs（设置页 Display），不经 Glavo、不看 MCU 版本 |
 | `app_init()` | `ui_app.*` | 主题、背光（`backlight_apply_saved`）、Proxy、`ui_device_state_init`、`ui_message_store_init`、`ui_alarm_state_init`、页面注册、control |
 | `control_*` | `control.*` | 打印状态机（含 `CONTROL_STATE_PRINT_DONE` 结果页、`CONTROL_STATE_TRANSFER_BOX` 取件转运盒）+ overlay UI |
