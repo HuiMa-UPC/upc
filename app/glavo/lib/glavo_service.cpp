@@ -11,6 +11,7 @@
  *                         ├─ McuLink（独立 link 线程）：TCP 振镜 + 串口握手/传感器
  *                         ├─ PrintVideoNotify：换层 Snap / 录像会话 → Media
  *                         ├─ WifiManager（独立线程）：wpa_supplicant
+ *                         ├─ N2BleClient（独立线程）：BlueZ GATT 制氮机
  *                         └─ usb_hotplug / clean_worker：按需辅助线程
  *
  * 跨进程回复 UI **必须** publish_async()（worker 内禁止同步 publish，以免死锁/卡 IPC）。
@@ -27,7 +28,7 @@
  * - usb_hotplug_thread_：轮询 /proc/mounts，变化时发 GLAVO_USB_Hotplug_Ntf。
  * - clean_worker_：开门前清粉（风机 + 轮询/阀采样 PM2.5）；完成后经 publish 回 UI。
  * - pm25_sample_worker_：V4 开门前舱内 PM 阀采样（3s），避免堵 worker。
- * - WifiManager / McuLink / Parser 线程不在本文件创建，但通过回调/队列与 worker 汇合。
+ * - WifiManager / N2BleClient / McuLink / Parser 线程不在本文件创建，但通过回调/队列与 worker 汇合。
  *
  * =============================================================================
  * 打印主状态机（读代码时按此顺序跟）
@@ -765,6 +766,11 @@ bool GlavoService::init()
             publish_wifi_connect_result(ok, ssid);
         });
 
+#if GLAVO_N2_BLE_ENABLE
+    N2BleClient::instance().init(
+        [this](const N2BleSnapshot& s) { publish_n2_status(s); });
+#endif
+
     last_usb_mounted_ = is_mountpoint_mounted(usb_mount_point());
 
     state_ = ServiceState::Idle;
@@ -943,6 +949,9 @@ bool GlavoService::stop()
     stop_clean_worker();
     stop_pm25_sample_worker();
     clear_prepare_session();
+#if GLAVO_N2_BLE_ENABLE
+    N2BleClient::instance().shutdown();
+#endif
     WifiManager::instance().shutdown();
     subscriptions_.clear();
     state_ = ServiceState::Idle;
@@ -4219,7 +4228,28 @@ void GlavoService::publish_serial_mcu_ota_status(
          reinterpret_cast<const uint8_t*>(&p), sizeof(p));
      (void)publish_async(out);
  }
- 
+
+void GlavoService::publish_n2_status(const N2BleSnapshot& snap)
+{
+    middleware::N2StatusPayload p{};
+    p.online = snap.online ? 1 : 0;
+    p.n2_valid = snap.n2_valid ? 1 : 0;
+    p.state = static_cast<uint8_t>(snap.state);
+    p.seq = snap.seq;
+    p.n2_percent = snap.n2_percent;
+    p.since_ms = static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count());
+
+    middleware::Message out(middleware::MsgType::APP_N2_Status_Ntf,
+        middleware::ModuleId::APP_GLAVO, middleware::ModuleId::UI);
+    out.payload = middleware::MsgPayload::from_bytes(
+        reinterpret_cast<const uint8_t*>(&p), sizeof(p));
+    if (!publish_async(out)) {
+        UPC_LOG_N2_BLE(Warn, "APP_N2_Status_Ntf publish failed");
+    }
+}
+
  /** @brief 组 [WifiListHeader][WifiEntryPayload×N] 并经 BufferPool 推送 Scan/Saved 结果。 */
  void GlavoService::publish_wifi_list(WifiListKind kind,
                                       const std::vector<WifiEntry>& entries)

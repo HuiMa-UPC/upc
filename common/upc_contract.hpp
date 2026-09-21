@@ -134,6 +134,9 @@
 #ifndef UPC_MOD_ALARM_STATE
 #define UPC_MOD_ALARM_STATE 1
 #endif
+#ifndef UPC_MOD_N2_BLE
+#define UPC_MOD_N2_BLE 1
+#endif
 /** Glavo: TCP 心跳/状态应答日志默认开关（环境变量可覆盖） */
 #ifndef UPC_GLAVO_LOG_TCP_HEARTBEAT_RSP_DEFAULT
 #define UPC_GLAVO_LOG_TCP_HEARTBEAT_RSP_DEFAULT 0
@@ -192,6 +195,7 @@
 #define UPC_MOD_MQTT_SERVICE 0
 #define UPC_MOD_MEDIA_SERVICE 0
 #define UPC_MOD_ALARM_STATE 0
+#define UPC_MOD_N2_BLE 0
 #define UPC_GLAVO_LOG_TCP_HEARTBEAT_RSP_DEFAULT 0
 #define UPC_GLAVO_LOG_TCP_TX_DEFAULT 0
 #define UPC_GLAVO_LOG_LASER_POWER_DEFAULT 0
@@ -613,6 +617,9 @@ enum class MsgType : uint32_t {
     UI_Alarm_Snapshot_Ntf,           /**< Empty：请求 MCU 回一轮报警快照（Cmd 0x81 TLV 0x05 len=0） */
     GLAVO_Alarm_Reset_Result_Ntf,    /**< AlarmResetResultPayload：复位失败回执（Cmd 0x82 TLV 0x04） */
 
+    // ---- GLAVO → UI：制氮机 BLE 状态（v1 UI 可不订阅） ----
+    APP_N2_Status_Ntf = 0x1620, /**< N2StatusPayload：在线/浓度/STATE/seq；变化立即推，否则最多 1Hz */
+
 };
 
 enum class MsgPriority : uint8_t {
@@ -945,6 +952,21 @@ struct PrintStateNtfPayload {
     uint32_t reserved;
     uint64_t since_ms;   /**< 进入当前 mode 的 Unix 毫秒时间戳 */
 };
+
+/** APP_N2_Status_Ntf：制氮机 ESP BLE ASCII 解析后的快照（Inline）。
+ *  state：0=UNKNOWN 1=WARMUP 2=BUILD 3=RUN 4=SAFE。
+ *  n2_valid=0 时 n2_percent 无意义（warming / waiting / 离线）。 */
+struct N2StatusPayload {
+    uint8_t  online;      /**< 1=已连接且近期有 Notify */
+    uint8_t  n2_valid;    /**< 1=N2= 为数值百分比 */
+    uint8_t  state;       /**< 见上 */
+    uint8_t  reserved;
+    uint32_t seq;         /**< 帧序号；无 seq 字段时为 0 */
+    float    n2_percent;  /**< 浓度 %；n2_valid=0 时为 0 */
+    uint32_t reserved2;
+    uint64_t since_ms;    /**< Unix 毫秒 */
+};
+static_assert(sizeof(N2StatusPayload) == 24, "N2StatusPayload ABI");
 
 /** UI_Camera_Stream_Start_Req：可选 basename；空串则使用后端当前相机实时流 */
 struct CameraStreamStartReqPayload {

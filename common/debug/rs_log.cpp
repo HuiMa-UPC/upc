@@ -88,6 +88,7 @@ const char* topic_file_name(LogTopic topic) {
         case LogTopic::StorageUsage:     return "topic_storage_usage.log";
         case LogTopic::UiPreview:        return "topic_ui_preview.log";
         case LogTopic::UiAlarmState:     return "topic_ui_alarm_state.log";
+        case LogTopic::N2Ble:            return "topic_n2_ble.log";
         case LogTopic::Misc:
         case LogTopic::Count:
             break;

@@ -59,7 +59,8 @@
 | `SpiStatusLed` | `spi_status_led.*` | MCU≥V4：SPI 灯效板状态色（空闲蓝 / 打印橙 / CONDITION 红） |
 | `PrintJobState` | `print_job_state.*` | 打印任务计数/状态 |
 | `PrintVideoNotify` | `print_video_notify.*` | 换层 Snap / 录像会话 IPC → Media |
-| `device_config.hpp` | 头文件 | TCP/串口默认、`GLAVO_ENABLE_LAYER_SNAP` 等 |
+| `device_config.hpp` | 头文件 | TCP/串口默认、`GLAVO_ENABLE_LAYER_SNAP`、`GLAVO_N2_BLE_ENABLE` 等 |
+| `N2BleClient` | `n2_ble_client.*` / `n2_ble_transport.*` / `n2_ble_parse.*` | 制氮机 BLE GATT Client → `APP_N2_Status_Ntf` |
 
 ## Camera（`app/camera/lib/` → 源编入 `rongsu_camera`，无独立静态库）
 

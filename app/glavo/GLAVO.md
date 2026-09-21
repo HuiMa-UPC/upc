@@ -19,7 +19,9 @@
 | `lib/galvo_motion_encode.*` | 调试运动包编码 + 五点坐标（点位测试与光路检测共用） |
 | `lib/soc_sensors.*` | SOC 本地：舱内外 PMSA UART、AHT20、双路 CPM121、IIO 氧气（3.3V/100Ω/K=480）；MCU≥V4（或已收到 Len=15）可开周期采集。六路舱灯默认全开仅固件 major≥4。开阀采样仅固件 major≥4。六路舱灯/`fa_valve` sysfs 调试可随时写；业务采样结束强制关阀。背光不在本模块。 |
 | `lib/spi_status_led.*` | V4：`/dev/spidev1.0` 灯效板 40 颗 WS 单色。CONDITION+ACTIVE 红，`print_running_` 橙，空闲蓝。 |
-| `lib/device_config.hpp` | TCP/串口默认、换层/Layer Snap 开关、`GLAVO_TEST_GCODE_PATH`、PM UART/`fa_valve`/`lgt*` 路径宏 |
+| `lib/wifi_manager.*` | wpa_supplicant WiFi |
+| `lib/n2_ble_client.*` / `n2_ble_transport.*` / `n2_ble_parse.*` | 制氮机 BLE：BlueZ GATT Client + ASCII 解析；推 `APP_N2_Status_Ntf`（v1 UI 不订阅） |
+| `lib/device_config.hpp` | TCP/串口默认、换层/Layer Snap 开关、`GLAVO_TEST_GCODE_PATH`、PM UART/`fa_valve`/`lgt*` 路径宏、`GLAVO_N2_BLE_ENABLE` |
 | `lib/mcu_ota_session.*` | Galvo 以太网 OTA：扫描 `/userdata/image/galvo` 最高版本 AB 对 |
 | `lib/mcu_serial_ota_session.*` | MCU 串口 OTA：扫描 `/userdata/image/mcu` 最高版本 AB 对；停等重传 + 阶段四版本确认 |
 | `common/fs_manifest/gcode_manifest.*` | Local `config.json` 读写（与 UI 共用；Prepare/Delete 时更新） |
@@ -61,6 +63,12 @@ UI → GlavoService（工作线程）→ ParserManager → RingBuffer → McuLin
 | `UI_Debug_Soc_Led_Set_Ntf` / `Get` | 六路舱灯 `lgt1l`…`lgt3r` sysfs，不看 MCU 版本 |
 | `UI_Debug_Cabin_Pm_Valve_Set_Ntf` / `Get` | 舱内 PM `fa_valve`，不看 MCU 版本；业务采样结束**强制关阀**并回读 Off |
 | `UI_Alarm_Reset_Ntf` | `serial_build_alarm_reset` 组 0xA3/0x82 帧直发串口；结果不回 Rsp，以 MCU 后续单条上报为准 |
+| `APP_N2_Status_Ntf` | `N2BleClient` 后台线程 `publish_async` 到 UI（v1 UI 不订阅） |
+
+### 制氮机 BLE
+
+- 广播名 `N2_Machine`，特征 `0x1B9A` Notify ASCII。本板 BlueZ `Connect` 带 ADDR_TYPE，见 [制氮机对接协议.md](../../doc/制氮机对接协议.md)。
+- 无 libdbus 时 `UPC_GLAVO_HAS_BLUEZ=0` 空跑。`GLAVO_N2_BLE_ENABLE=0` 不启线程。
 
 ### MCU V4 传感器
 

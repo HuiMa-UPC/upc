@@ -188,6 +188,7 @@ scripts/rongsu.sh start   # glavo + rongsu_camera → ui
 | `APP_Print_Start_Rejected_Ntf` | — | Glavo→UI **与** Xfr | `PrintStartRejectedPayload` | `register_print_start_rejected` | 起印被拒（光路检测失败 / 本地副本打不开）；UI 跳无 manifest 的终止结果页。不可用 `APP_Print_Terminate_Rsp` 代替：0% 进度会被 UI 的 `print_ready_to_exit` 挡住 |
 | `APP_Print_Terminate_Rsp` | `GLAVO_Print_Terminate_Rsp` | Glavo→UI **与** Xfr | Empty | `register_print_terminate_done` | — |
 | `GLAVO_Print_State_Ntf` | — | Glavo→MQTT **与** Xfr | `PrintStateNtfPayload`（`mode` 复用 `UserHomeStatus`：`2`=开始打印 / `0`=打印结束；`since_ms`=进入该 mode 的 Unix ms） | — | 打印状态边沿：开始打印/打印结束空闲时推一次，触发 MQTT 上报 `state` 消息；Xfr 同步 `/print/status` |
+| `APP_N2_Status_Ntf` | `0x1620` | Glavo→UI | `N2StatusPayload` | v1 不订阅 | 制氮机 BLE 快照（在线/浓度/STATE/seq）；无 BlueZ 时空跑 |
 | `UI_Supply_Status_Req` | — | UI→Glavo | Empty | `send_supply_status` | stub |
 | `APP_Supply_Status_Rsp` | `GLAVO_Supply_Status_Rsp` | Glavo→UI | `SupplyStatusPayload` | `register_supply_status` | — |
 | `UI_Camera_Stream_Start_Req` | — | UI→Camera | `CameraStreamStartReqPayload` | `CameraMsgProxy::send_stream_start` | 开预览 |
@@ -789,6 +790,7 @@ topic_<大类>_<子类>.log        # 兜底文件例外：topic_misc.log
 | `topic_storage_usage.log` | `MediaService` | `StorageUsage` | `/userdata/media` 容量统计与空间回收 |
 | `topic_ui_preview.log` | `CameraPreview` | `UiPreview` | UI 侧预览解码：`decode 5s` 统计、RGA 与软件转换回退 |
 | `topic_ui_alarm_state.log` | `AlarmState` | `UiAlarmState` | UI 报警状态机：state_mask 推导生命周期、喂消息中心、快照攒帧对齐 |
+| `topic_n2_ble.log` | `N2Ble` | `N2Ble` | 制氮机 BLE：扫描/连接/Notify ASCII 与解析 |
 
 ### 落盘与轮转
 
