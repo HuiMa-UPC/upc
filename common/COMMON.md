@@ -147,7 +147,7 @@ scripts/rongsu.sh start   # glavo + rongsu_camera → ui
 
 | MsgType（当前枚举） | 规范名（新消息参照） | 方向 | Payload | UI API | Glavo 处理 |
 |---------------------|----------------------|------|---------|--------|------------|
-| `APP_Update_Ntf` | `GLAVO_Env_Update_Ntf` | Glavo→UI/MQTT | `EnvSnapshotPayload`（含 `pm1_indoor`/`pm10_indoor`/`humidity_percent`/`pressure_kpa`/`baseplate_temp_c`/`powder_bits`/`sensor_v4`/`pm1_cabin`/`pm10_cabin`；环境指标无效填 <0→UI 显示 `--`；`powder_bits` 用于缺粉弹窗继续按钮门控；V4 时 MQTT `telemetry/chamber` 用 SOC 舱内量，`telemetry/chamber_ext` 用舱外 PM） | `register_env_update` | `McuLink` 推送（UI 与 MQTT 双发） |
+| `APP_Update_Ntf` | `GLAVO_Env_Update_Ntf` | Glavo→UI/MQTT | `EnvSnapshotPayload`（含 `pm1_indoor`/`pm10_indoor`/`humidity_percent`/`pressure_kpa`/`baseplate_temp_c`/`powder_bits`/`sensor_v4`/`pm1_cabin`/`pm10_cabin`；环境指标无效填 <0→UI 显示 `--`；`powder_bits` 用于缺粉弹窗继续按钮门控；`sensor_v4` 固定 1。MQTT `telemetry/chamber` 用 SOC 舱内量，`telemetry/chamber_ext` 用舱外 PM） | `register_env_update` | `McuLink` 推送（UI 与 MQTT 双发） |
 | `UI_PM25_Req` | — | UI→Glavo | Empty | `send_pm25_check` | `handle_pm25_req` |
 | `APP_PM25_Rsp` | `GLAVO_PM25_Check_Rsp` | Glavo→UI | `Pm25ResultPayload` | `register_pm25_result` | PM2.5 流程 |
 | `UI_CLOSE_DOOR_Req` | — | UI→Glavo | Empty | `send_close_door_check` | 关门检测 |
@@ -281,7 +281,7 @@ scripts/rongsu.sh start   # glavo + rongsu_camera → ui
 | `UI_Debug_Env_Sim_Get_Ntf` | — | UI→Glavo | Empty | `request_env_sim_state` | 查询当前“环境上报模拟”开关状态 |
 | `UI_Debug_Env_Sim_Powder_Set_Ntf` | — | UI→Glavo | `DebugOnOffPayload` | `send_env_sim_powder_set` | 环境模拟粉量缺粉开关（仅 Env Sim=On 可设；切换后延迟 5 秒生效） |
 | `UI_Debug_Env_Sim_Powder_Get_Ntf` | — | UI→Glavo | Empty | `request_env_sim_powder_state` | 查询当前“环境模拟粉量缺粉”开关状态 |
-| `UI_Debug_Skip_O2_Gate_Set_Ntf` | — | UI→Glavo | `DebugOnOffPayload` | `send_skip_o2_gate_set` | 调试页开关：跳过 V4 SOC 氧打印门（仅本次运行，默认关；开则起印不发洗气开、不等氧、打印中不因氧高暂停/1120） |
+| `UI_Debug_Skip_O2_Gate_Set_Ntf` | — | UI→Glavo | `DebugOnOffPayload` | `send_skip_o2_gate_set` | 调试页开关：跳过 SOC 氧打印门（仅本次运行，默认关；开则起印不发洗气开、不等氧、打印中不因氧高暂停/1120） |
 | `UI_Debug_Skip_O2_Gate_Get_Ntf` | — | UI→Glavo | Empty | `request_skip_o2_gate_state` | 查询当前“跳过氧门”开关状态 |
 | `UI_Debug_O2_Calib_Req` | — | UI→Glavo | `DebugO2CalibReqPayload` | `send_o2_calib` | 调试页氧标定：参考浓度单点求 K，写 `/userdata/CAL/o2_cal.json`；Glavo worker 只做打印互斥后丢给 SocSensors 独立线程，完成后只发 Rsp |
 | `UI_Debug_O2_Calib_Get_Ntf` | — | UI→Glavo | Empty | `request_o2_calib_state` | 查询当前氧标定 K（不重新采样） |
