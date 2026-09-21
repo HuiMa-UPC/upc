@@ -9,6 +9,7 @@
 #include "control.hpp"
 #include "ui_message_store.hpp"
 #include "ui_alarm_state.hpp"
+#include "ui_sys_hud.hpp"
 #include "config/cal_config.hpp"
 
 #include <cstdint>
@@ -30,6 +31,7 @@
  * Test image 开关：红光循环打印 /userdata/test/test.gcode（经 DebugMsgProxy）。
  * Other 点位测试：按校准表显示中心 + 四角，每点 3 秒，与打印/Test image 互斥。
  * Other 页按 Process / Cabin / Print Gates / Media & Sim / Inject 分组；
+ * Media & Sim 含 Sys HUD：开则右上角 lv_layer_sys 红字蒙版显示 CPU 温/占用/内存。
  * 左侧 Print Params + Fan + O2 Calib（参考浓度输入后点圆钮标定）。
  * 其余命令经 DebugMsgProxy → APP_GLAVO（后端待实现）；图标暂用 LV_SYMBOL/文字占位。
  */
@@ -1300,8 +1302,8 @@ struct DbgToggleCtx {
     lv_obj_t   *state_lbl;
     const char *on_txt;
     const char *off_txt;
-    uint8_t     kind;   /**< 0 粉桶 / 1 推粉 / 2 风扇 / 3 其他开关 / 4 清粉 / 5 打印H264 / 6 清粉录像 / 7 环境模拟 / 8 环境模拟缺粉 / 9 转运盒流程 / 10 首层视觉检测 / 11 消息注入 / 12 报警注入 */
-    uint8_t     arg;    /**< 粉桶号 / DebugSwitchTarget */
+    uint8_t     kind;   /**< 0 粉桶 / 1 推粉 / 2 风扇 / 3 其他开关 / 4 清粉 / 5 打印H264 / 6 清粉录像 / 7 环境模拟 / 8 环境模拟缺粉 / 9 转运盒流程 / 10 首层视觉检测 / 11 消息注入 / 12 报警注入 / 13 本地RTSP / 14 光路检测 / 15 基板测高 / 16 SOC舱灯 / 17 舱内PM阀 / 18 跳过氧门 / 19 Sys HUD */
+    uint8_t     arg;    /**< 粉桶号 / DebugSwitchTarget / SOC LED channel */
 };
 
 /** 消息注入按钮造的那几条：一条 critical + 两条 info + 一条本地调试码。 */
@@ -1435,6 +1437,9 @@ void on_dbg_toggle(lv_event_t *e)
         /* 本地局域网 RTSP Server（→Media，仅本次运行；上电默认开启）。相机流未就绪时
          * Media 会回 Off，register_local_rtsp 的回调据此把按钮弹回。 */
         case 13: proxy.send_local_rtsp_set(on);
+                 break;
+        /* 右上角红字 Host 资源蒙版（本机 /proc，纯 UI，仅本次运行）。 */
+        case 19: ui_sys_hud_set_enabled(on);
                  break;
         default: break;
     }
@@ -2106,6 +2111,8 @@ void build_other_switches_column(lv_obj_t *parent)
     lv_obj_t *rowM2 = make_switch_grid_row(media);
     make_dbg_toggle(rowM2, "Local RTSP", "On", "Off", LV_SYMBOL_VIDEO, true,
                     13, 0, true, 0, &g_local_rtsp_btn, &g_local_rtsp_state_lbl);
+    make_dbg_toggle(rowM2, "Sys HUD", "On", "Off", LV_SYMBOL_LIST,
+                    ui_sys_hud_enabled(), 19, 0);
 
     /* ---- 注入联调 ---- */
     lv_obj_t *inj = make_section_card(col, "Inject");

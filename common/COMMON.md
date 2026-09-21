@@ -722,7 +722,11 @@ ParserManager → RingBuffer → McuLink（TCP + 串口）
 | `rs_log.hpp` / `rs_log.cpp` | `UPC_LOG_*` 宏、`LogTopic` 落盘、`proc=` 进程名 |
 | `upc_contract.hpp` §2 | 模块子开关 `UPC_MOD_*`、`UPC_LOG_MIN_LEVEL`、`UPC_LOG_MSG_TRACE` |
 | `rs_msg_format.cpp` | IPC 消息摘要格式化 |
-| `upc_sys_monitor.*` | HostMonitor（CPU/内存/温度） |
+| `upc_sys_monitor.*` | HostMonitor（CPU/内存/温度）；`tick` 60s 落盘，`sample` 给 UI 蒙版即时读数 |
+
+`upc_sys_monitor_sample()` **始终可编**（读 `/proc` + thermal sysfs），不依赖 `UPC_DEBUG`；
+`tick()` 的落盘仍受 `UPC_DEBUG && UPC_MOD_SYS_MONITOR` 控制。UI 调试页 **Sys HUD** 经
+`ui_sys_hud` 约 1Hz 调 `sample()`，红字挂在 `lv_layer_sys`。
 
 ## 模块开关（`UPC_DEBUG=ON` 时）
 
