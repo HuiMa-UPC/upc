@@ -84,6 +84,7 @@ do_configure() {
     cmake --no-warn-unused-cli -B "$BUILD_DIR" -S "$ROOT" -G "Unix Makefiles" \
         -DCMAKE_BUILD_TYPE:STRING="$BUILD_TYPE" \
         -DCMAKE_EXPORT_COMPILE_COMMANDS:BOOL=TRUE \
+        -DTOOLCHAIN:STRING="$TOOLCHAIN" \
         -DCMAKE_TOOLCHAIN_FILE="$TOOLCHAIN_FILE" \
         -DCMAKE_C_COMPILER:FILEPATH="$CMAKE_C_COMPILER" \
         -DCMAKE_CXX_COMPILER:FILEPATH="$CMAKE_CXX_COMPILER" \
@@ -137,6 +138,12 @@ do_collect_outputs() {
         install -m 755 "$src" "$OUTPUT_DIR/$name"
         echo "  $name"
     done
+
+    local cfg="$ROOT/app/visual/lib/plate_height_config.json"
+    if [[ -f "$cfg" ]]; then
+        install -m 644 "$cfg" "$OUTPUT_DIR/plate_height_config.json"
+        echo "  plate_height_config.json (deploy to /userdata/visual/)"
+    fi
 }
 
 do_collect_sdk() {

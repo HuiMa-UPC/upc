@@ -61,7 +61,7 @@ std::array<uint8_t, kMotionSubpacketSize> galvo_encode_motion_subpacket(
     encode_coordinate(out_y * cal.scale_gain, &pkt[3], &pkt[4]);
     /* pkt[5..6] 保留 0；速度固定 F1000（与设计约定的测试指令一致） */
     encode_u16_clamped(static_cast<int>(1000.0f * cal.speed_gain), &pkt[7], &pkt[8]);
-    encode_u16_clamped(0, &pkt[9], &pkt[10]); /* E0：仅移动红光点 */
+    encode_u16_clamped(1, &pkt[9], &pkt[10]); /* LD=1：Red=3 时常亮跟着走，避免空跳灭红光 */
     return pkt;
 }
 

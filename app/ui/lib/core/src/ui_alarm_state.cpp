@@ -23,7 +23,6 @@ namespace {
 constexpr int      kCurrentCap      = 128;
 constexpr int      kMaxObservers    = 4;
 constexpr uint32_t kResetTimeoutMs  = 10000; /* 复位无回报自动解锁按钮 */
-constexpr uint32_t kEventDismissMs  = 5000;  /* EVENT 蓝卡自动从浮层撤下 */
 
 /* ---- 快照攒帧 ----
  * 快照是请求-响应的，MCU 只回 (active|latched)!=0 的 slot，没回的一律按全零算。
@@ -97,6 +96,10 @@ struct SnapAssembly {
 };
 SnapAssembly g_snap{};
 uint32_t g_snap_last_req_tick = 0;  /* 上次发请求的 tick，用于节流；0=从未发过 */
+/** 攒帧超时 oneshot：文档写「攒超 2s 作废」，但原先只在下一帧快照或下一轮请求时
+ *  才检查 elapsed。MCU 忙（起印握手/铺粉）迟迟不回时，busy 会一直占着，CONDITION
+ *  单报（含 SOC 合成的 1120）卡在 g_pending，灯已红、浮层却要等最多 30s 轮询。 */
+lv_timer_t *g_snap_assemble_timer = nullptr;
 
 /* 快照在途期间暂存的 CONDITION 单报，收齐后按序重放（EVENT 不进这里，
  * 它不改 CONDITION 状态，直接落历史即可）。 */
@@ -288,8 +291,13 @@ int slot_alloc(void)
     return -1;
 }
 
-/* ---- 定时器：复位超时 / EVENT 自动撤浮层 ----
- * user_data 直接塞 code（uintptr），不挂堆内存。 */
+/* ---- 定时器：复位超时 ----
+ * user_data 直接塞 code（uintptr），不挂堆内存。
+ *
+ * 这里原先还有一支 EVENT 专用的 5s 自动撤浮层定时器。自动收起现在归
+ * `ui_message_store` 统一按等级计时（INFO 5s / 告警级 15s），这支就撤了——留着会和
+ * 那边打架，同一条 EVENT 被两个时长各撤一次。而且它一直只对 INFO 生效：撤下走的是
+ * `ui_message_dismiss()`，那个函数第一道门就把非 INFO 挡掉了。 */
 
 void reset_timeout_cb(lv_timer_t *t)
 {
@@ -302,13 +310,6 @@ void reset_timeout_cb(lv_timer_t *t)
         g_current[i].e.reset_pending = false;
         notify_observers();
     }
-}
-
-void event_dismiss_cb(lv_timer_t *t)
-{
-    const uint16_t code =
-        static_cast<uint16_t>(reinterpret_cast<uintptr_t>(lv_timer_get_user_data(t)));
-    ui_message_dismiss(code);
 }
 
 void arm_oneshot(lv_timer_cb_t cb, uint32_t period_ms, uint16_t code)
@@ -355,10 +356,10 @@ void on_alarm_event(uint16_t code, uint8_t severity, uint32_t detail)
     EventText *txt = event_text_slot(code);
     compose_text(code, detail, g_inject_simulated, txt->title, sizeof(txt->title),
                  txt->body, sizeof(txt->body));
-    ui_message_push_ex(code, ui_alarm_severity_to_msg(severity),
-                       txt->title, txt->body, now, true);
-    /* EVENT 是看过即走的消息：浮层挂几秒自动撤，列表里还留着 */
-    arm_oneshot(event_dismiss_cb, kEventDismissMs, code);
+    /* EVENT 每一帧都是一次独立发生，一律 emit：哪怕同一个码上一次被关掉或收起过，
+     * 也该重新弹。停留多久由 ui_message_store 按等级计时，这里不用管。 */
+    ui_message_emit_ex(code, ui_alarm_severity_to_msg(severity),
+                       txt->title, txt->body, now);
     notify_observers();
 }
 
@@ -385,6 +386,9 @@ void on_alarm_condition(const middleware::AlarmReportPayload &p)
         return;
     }
 
+    /* 首帧（本地还没有这条）必然是一次新发生；已有的则看是不是从「已恢复等复位」
+     * 回到了「条件又出现」——门关了又开、传感器反复越限都走这个上升沿。 */
+    bool fresh = (i < 0);
     if(i < 0) {
         i = slot_alloc();
         if(i < 0) {
@@ -398,6 +402,8 @@ void on_alarm_condition(const middleware::AlarmReportPayload &p)
         g_current[i].used   = true;
         g_current[i].e.code = p.alarm_code;
         g_current[i].e.ts_ms = now;
+    } else if(active && g_current[i].e.stage == UI_ALARM_STAGE_RTN_LATCHED) {
+        fresh = true;
     }
 
     ui_alarm_entry_t &e = g_current[i].e;
@@ -411,11 +417,18 @@ void on_alarm_condition(const middleware::AlarmReportPayload &p)
     compose_text(e.code, e.detail, e.simulated, e.title, sizeof(e.title),
                  e.body, sizeof(e.body));
 
-    /* CONDITION 状态迁移原位更新（renew=false），不打扰已读/排序。
+    /* 记录粒度仍是「一轮一条」：上面这个上升沿不新建条目，只是让 toast 重新弹一次，
+     * 提醒用户条件又回来了。ACTIVE→RTN_LATCHED 这个方向只是同一轮内的状态迁移，
+     * 走 sync 静默更新，不打扰已读与排序。
      * 1124/1125 以前在打印会话期被抑制（那时终止结果页自带失败原因条 + Reset），
      * 那个条已删，抑制也一并去掉——否则打印中断时哪儿都看不到停机原因。 */
-    ui_message_push_ex(e.code, ui_alarm_severity_to_msg(e.severity),
-                       e.title, e.body, e.ts_ms, false);
+    if(fresh) {
+        ui_message_emit_ex(e.code, ui_alarm_severity_to_msg(e.severity),
+                           e.title, e.body, e.ts_ms);
+    } else {
+        ui_message_sync_ex(e.code, ui_alarm_severity_to_msg(e.severity),
+                           e.title, e.body, e.ts_ms);
+    }
     notify_observers();
 }
 
@@ -472,8 +485,12 @@ void snapshot_upsert(uint16_t code, bool active, bool latched, int64_t now)
     compose_text(e.code, e.detail, false, e.title, sizeof(e.title),
                  e.body, sizeof(e.body));
 
-    ui_message_push_ex(e.code, ui_alarm_severity_to_msg(e.severity),
-                       e.title, e.body, e.ts_ms, false);
+    /* 快照一律走 sync：它是对齐、不是事件。上面那个 slot_find 命中的分支直接 return，
+     * 所以走到这里必然是「本地压根没有这条」——开机或串口重连后补齐 MCU 那边一直亮着
+     * 的报警。sync 在从无到有时会弹一次，正是这一档要的：用户刚开机就该看见还有
+     * 没处理完的事。反过来，30s 兜底轮询里那些本地已有的条目走不到这儿，不会刷屏。 */
+    ui_message_sync_ex(e.code, ui_alarm_severity_to_msg(e.severity),
+                       e.title, e.body, e.ts_ms);
 }
 
 /** 收齐一轮后做全量对齐（原子提交）。未收到的 slot 已在缓存里保持全零。 */
@@ -497,13 +514,27 @@ void snapshot_commit(void)
 
     /* 二、本地有、快照说不亮了 → 当作已解除转历史。
      * 只处理受快照管辖的 code：EVENT 与保留号段（xx96..xx99）不占 bit，
-     * 它们"快照里没提"是信息缺失不是状态变化，照清会把真报警抹掉。 */
+     * 它们"快照里没提"是信息缺失不是状态变化，照清会把真报警抹掉。
+     *
+     * 已在 g_pending 里的码先跳过：在途单报已乐观上屏（见 apply_report_async），
+     * 快照是请求那一刻的旧位图，照清会先撤卡再被重放接回来，浮层闪一下
+     * （打印氧门 1120：灯已红、卡却眨）。round_end 重放仍会以单报为准。 */
     for(int i = 0; i < kCurrentCap; i++) {
         if(!g_current[i].used) {
             continue;
         }
         ui_alarm_entry_t &e = g_current[i].e;
         if(!middleware::alarm_snapshot_covers(e.code)) {
+            continue;
+        }
+        bool in_pending = false;
+        for(int j = 0; j < g_pending_count; j++) {
+            if(g_pending[j].alarm_code == e.code) {
+                in_pending = true;
+                break;
+            }
+        }
+        if(in_pending) {
             continue;
         }
         const int rel  = e.code - 1000;
@@ -521,9 +552,37 @@ void snapshot_commit(void)
     notify_observers();
 }
 
+void snapshot_reject(const char *why); /* 前向：超时 cb 在 round_end 之前 */
+
+void snap_assemble_timer_cancel(void)
+{
+    if(g_snap_assemble_timer) {
+        lv_timer_delete(g_snap_assemble_timer);
+        g_snap_assemble_timer = nullptr;
+    }
+}
+
+void snap_assemble_timeout_cb(lv_timer_t * /*t*/)
+{
+    /* repeat_count=1：回调后由 LVGL 自删，先摘句柄避免 round_end 再 delete。 */
+    g_snap_assemble_timer = nullptr;
+    if(g_snap.busy) {
+        snapshot_reject("assemble timeout");
+    }
+}
+
+void snap_assemble_timer_arm(void)
+{
+    snap_assemble_timer_cancel();
+    g_snap_assemble_timer = lv_timer_create(snap_assemble_timeout_cb,
+                                            kSnapAssembleMs, nullptr);
+    lv_timer_set_repeat_count(g_snap_assemble_timer, 1);
+}
+
 /** 结束当前这一轮（提交与否由调用方决定），并按序重放暂存的单条上报。 */
 void snapshot_round_end(bool commit)
 {
+    snap_assemble_timer_cancel();
     if(commit) {
         snapshot_commit();
     }
@@ -638,6 +697,7 @@ void snapshot_request(const char *reason)
     g_snap.busy         = true;
     g_snap.started_tick = now;
     g_snap_last_req_tick = now ? now : 1u;   /* 0 是"从未发过"的哨兵，避开它 */
+    snap_assemble_timer_arm();
     UPC_LOG_ALARM_STATE(Info, "snapshot request (%s)", reason ? reason : "-");
     ui::UiMsgProxy::instance().send_alarm_snapshot_req();
 }
@@ -658,9 +718,11 @@ void apply_report_async(void *raw)
         }
         on_alarm_event(p->alarm_code, p->severity, p->detail);
     } else if(g_snap.busy && g_pending_count < kPendingReportCap) {
-        /* 快照在途：这条比快照新，先攒着，等快照原子提交后再压上去重放，
-         * 免得较旧的快照把它盖回去（开发指导 §11）。 */
+        /* 快照在途：仍入 pending，等原子提交后按序重放（开发指导 §11）。
+         * 同时立刻应用一遍——否则要等 MCU 回齐或 2s 超时才上浮层，而 Glavo
+         * 侧灯效已按单报变红（打印氧门 1120）。重放幂等，同码 ACTIVE 只刷新。 */
         g_pending[g_pending_count++] = *p;
+        on_alarm_condition(*p);
     } else {
         /* 暂存溢出就直接应用：回退风险远小于把报警丢掉 */
         on_alarm_condition(*p);

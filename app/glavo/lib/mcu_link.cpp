@@ -1,10 +1,15 @@
 #include "mcu_link.hpp"
 #include "protocol.hpp"
+#include "soc_sensors.hpp"
+#include "spi_status_led.hpp"
 #include "wifi_manager.hpp"
 #include "print_job_state.hpp"
 #include "print_video_notify.hpp"
 #include "parser_manager.hpp"
 #include "parser_worker.hpp"
+#include "parser_context.hpp"
+#include "cal_parser.hpp"
+#include "galvo_coord.hpp"
 #include "msg_bus.hpp"
 #include "msg_runtime.hpp"
 #include "rs_log.hpp"
@@ -34,6 +39,14 @@ namespace upc::glavo {
 namespace parser = upc::parser;
 
 namespace {
+
+/** 1120 = alarm_snapshot_code_of(3, 20)；SOC 氧报警并进快照/灯效。 */
+constexpr uint8_t kChamberOxygenAlarmSlotId = 3;
+constexpr uint8_t kChamberOxygenAlarmBit = 20;
+constexpr uint32_t kChamberOxygenAlarmBitMask = (1u << kChamberOxygenAlarmBit);
+
+void publish_alarm_snapshot_ntf(const serial_alarm_snapshot_t& snap);
+serial_alarm_report_t make_soc_o2_alarm_report(bool active);
 
 bool parse_env_switch(const char* value, bool default_value)
 {
@@ -168,6 +181,11 @@ void serial_log_rx_frame(const uint8_t* frame, size_t len)
         return;
     }
 
+    serial_sensor_ext_t sext{};
+    if(serial_parse_sensor_ext_detail(frame, len, &sext, nullptr) == 0) {
+        return;
+    }
+
     /* 运动轴位置上报（0xA5 0x9B + TLV 0x05）：与传感器帧同 Port/Cmd，需在
      * serial_frame_is_sensor_report 之前判定，否则会被误记为 RX SENSOR FAIL。 */
     serial_motion_pos_t mpos{};
@@ -256,7 +274,8 @@ void serial_log_rx_frame(const uint8_t* frame, size_t len)
  *
  * 仅在 GLAVO_ENABLE_LAYER_CHANGE 开启时有效：
  * - NONE：无需握手或已完成
- * - WAIT_CONDITION_OK：已发打印请求，等待 MCU 返回打印条件就绪
+ * - WAIT_CONDITION_OK：已发打印请求，等待 MCU 打印条件就绪；
+ *   V4 氧门开启时另发洗气开并等 SOC 氧 < 阈值；Skip O2 / EnvSim / 测试图跳过洗气与等氧
  * - WAIT_PRINT_READY：已发首层/换层参数，等待 MCU 返回准备就绪
  */
 enum SerialHandshakePhase : int {
@@ -523,16 +542,22 @@ void McuLink::clear_env_after_sim_disable()
         env_cache_.pm1_indoor       = -1.0f;
         env_cache_.temperature_c    = -1.0f;
         env_cache_.oxygen_percent   = -1.0f;
+        env_cache_.filter_oxygen_percent = -1.0f;
         env_cache_.humidity_percent = -1.0f;
         env_cache_.pressure_kpa     = -1.0f;
         env_cache_.baseplate_temp_c = -1.0f;
+        env_cache_.pm10_indoor      = -1.0f;
+        env_cache_.pm1_cabin        = -1.0f;
+        env_cache_.pm10_cabin       = -1.0f;
         env_cache_.powder_bits      = 0u;
         env_cache_.outer_door_open  = false;
         env_cache_.door_state_valid = false;
         env_cache_.valid            = false;
     }
+    mcu_1st_seen_.store(false);
     env_sim_phase_ = 0.f;
     next_env_sim_tick_ = {};
+    next_soc_env_tick_ = {};
     publish_env_invalid_ntf();
     publish_debug_sensor_invalid_ntf();
 }
@@ -540,6 +565,19 @@ void McuLink::clear_env_after_sim_disable()
 bool McuLink::env_sim_enabled() const noexcept
 {
     return env_sim_on_.load();
+}
+
+void McuLink::set_skip_o2_print_gate(bool on)
+{
+    const bool was = skip_o2_print_gate_.exchange(on);
+    if(was != on) {
+        UPC_LOG_MCU_LINK(Info, "skip_o2_print_gate=%d", on ? 1 : 0);
+    }
+}
+
+bool McuLink::skip_o2_print_gate() const noexcept
+{
+    return skip_o2_print_gate_.load();
 }
 
 void McuLink::set_env_sim_powder_low(bool on)
@@ -713,16 +751,31 @@ int McuLink::open_serial(const char* device, int baud)
     }
 
     UPC_LOG_MCU_LINK(Info, "serial open %s @ %d", device, baud);
+    serial_laser_off_applied_.store(false);
+    serial_laser_off_pending_.store(false);
 
     /* 串口刚通就补一次报警快照：单条上报只在状态变化时发，断连期间发生的变化
      * 我们全错过了，不主动问就再也拿不到。UI 侧也会在启动/进消息页等时机请求，
      * 那边有节流，重复请求不会叠加。 */
     request_alarm_snapshot();
+
+    /* 尽早查 MCU 版本，避免 V4 1ST 被旧解析器误读；未知版本期间 Len=15 仍按长度走 V4 布局。 */
+    {
+        uint8_t vframe[16];
+        const int vn = serial_build_project_info_request(vframe, sizeof(vframe));
+        if(vn > 0) {
+            enqueue_serial_tx(vframe, static_cast<size_t>(vn), false);
+            UPC_LOG_MCU_LINK(Info, "mcu_version query TX (serial up)");
+        }
+    }
     return 0;
 }
 
 void McuLink::request_alarm_snapshot()
 {
+    /* 新请求作废未收齐的旧轮，避免混帧。 */
+    reset_alarm_snap_assembly();
+
     uint8_t frame[16];
     const int n = serial_build_alarm_snapshot_request(frame, sizeof(frame));
     if(n <= 0) {
@@ -731,6 +784,147 @@ void McuLink::request_alarm_snapshot()
     }
     UPC_LOG_MCU_LINK_TO(SerialAlarm, Info, "alarm_snapshot request TX (serial up)");
     enqueue_serial_tx(frame, static_cast<size_t>(n), true);
+}
+
+void McuLink::reset_alarm_snap_assembly()
+{
+    alarm_snap_ = AlarmSnapAssembly{};
+}
+
+void McuLink::flush_alarm_snap_assembly()
+{
+    const bool o2_active = o2_alarm_active_;
+    uint8_t count = alarm_snap_.count;
+    uint8_t severity = alarm_snap_.severity;
+    bool has_slot3 =
+        (alarm_snap_.got_mask & (1u << kChamberOxygenAlarmSlotId)) != 0;
+
+    if(o2_active) {
+        if(severity < 2) {
+            severity = 2;
+        }
+        if(!has_slot3) {
+            if(count >= SERIAL_ALARM_SNAPSHOT_SLOTS) {
+                UPC_LOG_MCU_LINK_TO(SerialAlarm, Warn,
+                    "alarm snapshot full (%u), cannot append SOC O2 slot3",
+                    static_cast<unsigned>(count));
+            } else {
+                serial_alarm_snapshot_t& s =
+                    alarm_snap_.slots[kChamberOxygenAlarmSlotId];
+                s.slot_id = kChamberOxygenAlarmSlotId;
+                s.active_mask = kChamberOxygenAlarmBitMask;
+                s.latched_mask = 0;
+                s.highest_severity = severity;
+                alarm_snap_.got_mask |=
+                    static_cast<uint16_t>(1u << kChamberOxygenAlarmSlotId);
+                ++count;
+                has_slot3 = true;
+            }
+        } else {
+            alarm_snap_.slots[kChamberOxygenAlarmSlotId].active_mask |=
+                kChamberOxygenAlarmBitMask;
+        }
+    }
+
+    /* 同轮所有分片的 count/severity 必须一致，否则 UI 会 reject。 */
+    for(uint8_t i = 0; i < SERIAL_ALARM_SNAPSHOT_SLOTS; ++i) {
+        if((alarm_snap_.got_mask & (1u << i)) == 0) {
+            continue;
+        }
+        serial_alarm_snapshot_t s = alarm_snap_.slots[i];
+        s.nonzero_slot_count = count;
+        s.highest_severity = severity;
+        publish_alarm_snapshot_ntf(s);
+        SpiStatusLed::instance().on_alarm_snapshot(s);
+    }
+
+    if(o2_active) {
+        SpiStatusLed::instance().on_alarm_report(make_soc_o2_alarm_report(true));
+    }
+
+    reset_alarm_snap_assembly();
+}
+
+void McuLink::ingest_alarm_snapshot_slot(const serial_alarm_snapshot_t& snap)
+{
+    const auto now = std::chrono::steady_clock::now();
+    if(alarm_snap_.busy &&
+       now - alarm_snap_.started >
+           std::chrono::milliseconds(kAlarmSnapAssembleMs)) {
+        UPC_LOG_MCU_LINK_TO(SerialAlarm, Warn,
+            "alarm snapshot assemble timeout, drop incomplete round");
+        reset_alarm_snap_assembly();
+    }
+
+    /* count=0：MCU 全清。若 SOC 1120 仍活跃，改发仅含 slot3 的一轮，
+     * 切勿先发全零（UI 会原子清空后再拒迟到的 slot3）。 */
+    if(snap.nonzero_slot_count == 0) {
+        reset_alarm_snap_assembly();
+        if(o2_alarm_active_) {
+            serial_alarm_snapshot_t o2{};
+            o2.nonzero_slot_count = 1;
+            o2.slot_id = kChamberOxygenAlarmSlotId;
+            o2.highest_severity = 2;
+            o2.active_mask = kChamberOxygenAlarmBitMask;
+            o2.latched_mask = 0;
+            publish_alarm_snapshot_ntf(o2);
+            SpiStatusLed::instance().on_alarm_snapshot(o2);
+            SpiStatusLed::instance().on_alarm_report(make_soc_o2_alarm_report(true));
+        } else {
+            publish_alarm_snapshot_ntf(snap);
+            SpiStatusLed::instance().on_alarm_snapshot(snap);
+        }
+        return;
+    }
+
+    if(snap.slot_id >= SERIAL_ALARM_SNAPSHOT_SLOTS ||
+       snap.nonzero_slot_count > SERIAL_ALARM_SNAPSHOT_SLOTS) {
+        UPC_LOG_MCU_LINK_TO(SerialAlarm, Warn,
+            "alarm snapshot slot/count out of range: slot=%u count=%u",
+            static_cast<unsigned>(snap.slot_id),
+            static_cast<unsigned>(snap.nonzero_slot_count));
+        reset_alarm_snap_assembly();
+        return;
+    }
+
+    if(!alarm_snap_.busy) {
+        alarm_snap_.busy = true;
+        alarm_snap_.started = now;
+        alarm_snap_.meta_known = true;
+        alarm_snap_.count = snap.nonzero_slot_count;
+        alarm_snap_.severity = snap.highest_severity;
+    } else if(alarm_snap_.count != snap.nonzero_slot_count ||
+              alarm_snap_.severity != snap.highest_severity) {
+        UPC_LOG_MCU_LINK_TO(SerialAlarm, Warn,
+            "alarm snapshot metadata mismatch, restart round");
+        reset_alarm_snap_assembly();
+        alarm_snap_.busy = true;
+        alarm_snap_.started = now;
+        alarm_snap_.meta_known = true;
+        alarm_snap_.count = snap.nonzero_slot_count;
+        alarm_snap_.severity = snap.highest_severity;
+    }
+
+    const uint16_t bit = static_cast<uint16_t>(1u << snap.slot_id);
+    if((alarm_snap_.got_mask & bit) != 0) {
+        UPC_LOG_MCU_LINK_TO(SerialAlarm, Warn,
+            "alarm snapshot duplicate slot %u, restart round",
+            static_cast<unsigned>(snap.slot_id));
+        reset_alarm_snap_assembly();
+        alarm_snap_.busy = true;
+        alarm_snap_.started = now;
+        alarm_snap_.meta_known = true;
+        alarm_snap_.count = snap.nonzero_slot_count;
+        alarm_snap_.severity = snap.highest_severity;
+    }
+
+    alarm_snap_.slots[snap.slot_id] = snap;
+    alarm_snap_.got_mask |= bit;
+    ++alarm_snap_.got_count;
+
+    if(alarm_snap_.got_count >= alarm_snap_.count) {
+        flush_alarm_snap_assembly();
+    }
 }
 
 /* ---------- 链路线程控制 ---------- */
@@ -744,6 +938,8 @@ void McuLink::start_link_thread()
     if(link_th_.joinable()) {
         link_th_.join(); // 等待旧线程结束（理论上不应发生）
     }
+    SocSensors::instance().start();
+    refresh_soc_v4_mode();
     link_th_ = std::thread(&McuLink::link_thread_fn, this);
 }
 
@@ -753,6 +949,7 @@ void McuLink::stop()
     if(link_th_.joinable()) {
         link_th_.join(); // 等待线程结束
     }
+    SocSensors::instance().stop();
     // 关闭文件描述符
     if(tcp_fd_ >= 0) {
         close(tcp_fd_);
@@ -828,10 +1025,277 @@ void McuLink::enqueue_serial_tx(const uint8_t* data, size_t len, bool reliable)
     serial_tx_queue_.push_back(item);
 }
 
+void McuLink::request_reassert_red_after_serial_tx(uint8_t red_code)
+{
+    if(red_code != 1u && red_code != 3u) {
+        red_code = 1u;
+    }
+    last_requested_red_code_.store(red_code);
+    reassert_red_code_.store(red_code);
+    reassert_red_after_laser_off_.store(true);
+}
+
+void McuLink::cancel_pending_red_reassert()
+{
+    reassert_red_after_laser_off_.store(false);
+}
+
 EnvSnapshotCache McuLink::env_snapshot() const
 {
-    std::lock_guard<std::mutex> lock(env_mtx_);
-    return env_cache_;
+    EnvSnapshotCache out;
+    {
+        std::lock_guard<std::mutex> lock(env_mtx_);
+        out = env_cache_;
+    }
+    if(out.sensor_v4 || mcu_sensor_protocol_v4()) {
+        const SocEnvSample soc = SocSensors::instance().snapshot();
+        if(soc.pm25_outdoor >= 0.f) {
+            out.pm25_indoor = soc.pm25_outdoor;
+            out.pm1_indoor = soc.pm1_outdoor;
+            out.pm10_indoor = soc.pm10_outdoor;
+        }
+        if(soc.pm25_cabin >= 0.f) {
+            out.pm25_cabin = soc.pm25_cabin;
+        }
+        if(soc.pm1_cabin >= 0.f) {
+            out.pm1_cabin = soc.pm1_cabin;
+        }
+        if(soc.pm10_cabin >= 0.f) {
+            out.pm10_cabin = soc.pm10_cabin;
+        }
+        if(soc.temperature_c >= -40.f && soc.temperature_c < 200.f) {
+            out.temperature_c = soc.temperature_c;
+        }
+        if(soc.humidity_percent >= 0.f) {
+            out.humidity_percent = soc.humidity_percent;
+        }
+        if(soc.pressure1_kpa > 0.f) {
+            out.pressure_kpa = soc.pressure1_kpa;
+        }
+        if(soc.oxygen_percent >= 0.f) {
+            out.oxygen_percent = soc.oxygen_percent;
+        }
+        if(soc.valid) {
+            out.valid = true;
+        }
+    }
+    return out;
+}
+
+bool McuLink::mcu_sensor_protocol_v4() const noexcept
+{
+    if(!mcu_fw_valid_.load()) {
+        return false;
+    }
+    std::lock_guard<std::mutex> lock(mcu_fw_mtx_);
+    return mcu_fw_cache_.valid != 0 && mcu_fw_cache_.major >= 4;
+}
+
+middleware::McuVersionPayload McuLink::mcu_version_cached() const
+{
+    middleware::McuVersionPayload p{};
+    if(mcu_fw_valid_.load()) {
+        std::lock_guard<std::mutex> lock(mcu_fw_mtx_);
+        p = mcu_fw_cache_;
+    }
+    return p;
+}
+
+void McuLink::publish_debug_soc_led_ntf()
+{
+    middleware::DebugSocLedStatePayload p{};
+    p.mask = SocSensors::instance().cabin_led_mask();
+    middleware::Message ntf(middleware::MsgType::GLAVO_Debug_Soc_Led_Ntf,
+        middleware::ModuleId::APP_GLAVO, middleware::ModuleId::UI);
+    ntf.payload = middleware::MsgPayload::from_bytes(
+        reinterpret_cast<const uint8_t*>(&p), sizeof(p));
+    if(!middleware::MsgPort::instance().publish_async(ntf)) {
+        UPC_LOG_MCU_LINK(Warn, "GLAVO_Debug_Soc_Led_Ntf publish_async failed");
+    }
+}
+
+void McuLink::refresh_soc_v4_mode()
+{
+    const bool v4 = mcu_sensor_protocol_v4();
+    (void)SocSensors::instance().set_v4_mode(v4);
+    {
+        std::lock_guard<std::mutex> lock(env_mtx_);
+        if(v4 && !env_cache_.sensor_v4) {
+            /* 首次切入 V4：SOC 字段先置无效哨兵，避免默认 0 被 UI 当成真值 */
+            env_cache_.pm25_indoor      = -1.0f;
+            env_cache_.pm25_cabin       = -1.0f;
+            env_cache_.pm1_indoor       = -1.0f;
+            env_cache_.pm10_indoor      = -1.0f;
+            env_cache_.pm1_cabin        = -1.0f;
+            env_cache_.pm10_cabin       = -1.0f;
+            env_cache_.temperature_c    = -1.0f;
+            env_cache_.humidity_percent = -1.0f;
+            env_cache_.pressure_kpa     = -1.0f;
+            env_cache_.oxygen_percent   = -1.0f;
+            if(!mcu_1st_seen_.load()) {
+                env_cache_.baseplate_temp_c = -1.0f;
+            }
+        }
+        env_cache_.sensor_v4 = v4;
+    }
+    SpiStatusLed::instance().set_enabled(v4);
+    /* 舱灯默认全开：必须 MCU 版本 major≥4 已确认，不能靠 Len=15 提前开 */
+    if(v4 && SocSensors::instance().ensure_cabin_leds_default_on()) {
+        publish_debug_soc_led_ntf();
+    }
+}
+
+void McuLink::merge_soc_env_into_cache_locked()
+{
+    /* env_mtx_ 已持有 */
+    if(!env_cache_.sensor_v4) {
+        return;
+    }
+    const SocEnvSample soc = SocSensors::instance().snapshot();
+    if(soc.pm25_outdoor >= 0.f) {
+        env_cache_.pm25_indoor = soc.pm25_outdoor;
+        env_cache_.pm1_indoor = soc.pm1_outdoor;
+        env_cache_.pm10_indoor = soc.pm10_outdoor;
+    }
+    if(soc.pm25_cabin >= 0.f) {
+        env_cache_.pm25_cabin = soc.pm25_cabin;
+    }
+    if(soc.pm1_cabin >= 0.f) {
+        env_cache_.pm1_cabin = soc.pm1_cabin;
+    }
+    if(soc.pm10_cabin >= 0.f) {
+        env_cache_.pm10_cabin = soc.pm10_cabin;
+    }
+    if(soc.temperature_c >= -40.f && soc.temperature_c < 200.f) {
+        env_cache_.temperature_c = soc.temperature_c;
+    }
+    if(soc.humidity_percent >= 0.f) {
+        env_cache_.humidity_percent = soc.humidity_percent;
+    }
+    if(soc.pressure1_kpa > 0.f) {
+        env_cache_.pressure_kpa = soc.pressure1_kpa;
+    }
+    if(soc.oxygen_percent >= 0.f) {
+        env_cache_.oxygen_percent = soc.oxygen_percent;
+    }
+}
+
+void McuLink::on_sensor_ext_report(const serial_sensor_ext_t& ext)
+{
+    UPC_LOG_MCU_LINK_TO(SerialSensor, Info,
+        "sensor_ext: sieve=%umA door=%umA fan_rpm=%u fault=%u state=%u link=%u",
+        static_cast<unsigned>(ext.sieve_current_ma),
+        static_cast<unsigned>(ext.door_coil_ma),
+        static_cast<unsigned>(ext.fan_rpm),
+        static_cast<unsigned>(ext.fan_fault),
+        static_cast<unsigned>(ext.fan_state),
+        static_cast<unsigned>((ext.fan_status_bits >> 7) & 1u));
+    (void)ext;
+}
+
+void McuLink::on_sensor_report(const serial_sensor_report_t& report)
+{
+    /* 模拟开启时跳过真实串口写缓存/上报，避免覆盖测试数据。 */
+    if(env_sim_on_.load()) {
+        return;
+    }
+
+    const bool v4 = (report.layout == SERIAL_SENSOR_LAYOUT_V4) ||
+                    mcu_sensor_protocol_v4();
+    if(report.layout == SERIAL_SENSOR_LAYOUT_V4) {
+        /* 版本应答前若已收到 Len=15，先打开 SOC 采集，避免等版本空窗。
+         * 舱灯默认全开仍等 major≥4（refresh_soc_v4_mode），此处不点亮。 */
+        if(SocSensors::instance().set_v4_mode(true)) {
+            SpiStatusLed::instance().set_enabled(true);
+        }
+    }
+
+    mcu_1st_seen_.store(true);
+
+    {
+        std::lock_guard<std::mutex> lock(env_mtx_);
+        env_cache_.sensor_v4 = v4;
+        env_cache_.baseplate_temp_c = report.substrate_temp_c;
+        env_cache_.filter_pressure_kpa =
+            static_cast<float>(report.filter_pressure_x10_kpa) / 10.0f;
+        env_cache_.outer_door_open = (report.outer_door_open != 0);
+        env_cache_.door_state_valid = true;
+        env_cache_.valid = true;
+
+        if(v4) {
+            env_cache_.powder_ir_bits = report.powder_ir_bits;
+            /* 旧 UI 只看 bit0/bit1：映射为左/右匣仍有粉（非 OUT 缺粉） */
+            env_cache_.powder_bits = static_cast<uint8_t>(
+                ((report.powder_left_low == 0) ? 0x01u : 0u) |
+                ((report.powder_right_low == 0) ? 0x02u : 0u));
+            /* V4 1ST oxygen_percent = 滤芯氧；舱内氧由 SOC 填 */
+            env_cache_.filter_oxygen_percent = report.oxygen_percent;
+            /* 温湿度/舱压/PM 由 SOC 填 */
+            merge_soc_env_into_cache_locked();
+        } else {
+            env_cache_.oxygen_percent = report.oxygen_percent;
+            env_cache_.filter_oxygen_percent = -1.0f;
+            env_cache_.pm25_cabin = report.pm25_ug_m3;
+            env_cache_.pm25_indoor = report.pm25_ug_m3;
+            env_cache_.pm1_indoor = report.pm1_ug_m3;
+            env_cache_.pm10_indoor = report.pm10_ug_m3;
+            env_cache_.temperature_c = report.temperature_c;
+            env_cache_.humidity_percent = report.humidity_percent;
+            env_cache_.pressure_kpa =
+                static_cast<float>(report.pressure1_x10_kpa) / 10.0f;
+            env_cache_.powder_bits = static_cast<uint8_t>(report.powder_bits & 0x03u);
+            env_cache_.powder_ir_bits = 0;
+        }
+    }
+    publish_env_update_ntf();
+    publish_debug_sensor_ntf(report);
+
+    bool powder_low = false;
+    if(v4) {
+        powder_low = (report.powder_left_low != 0) || (report.powder_right_low != 0);
+    } else {
+        powder_low = ((report.powder_bits & 0x03u) == 0x00u);
+    }
+    if(powder_low) {
+        if(!powder_low_latched_) {
+            powder_low_latched_ = true;
+            emit_event(McuLinkEvent::PowderLow);
+        }
+    } else {
+        powder_low_latched_ = false;
+    }
+
+    if(v4) {
+        UPC_LOG_MCU_LINK_TO(SerialSensor, Info,
+            "sensor(v4): O2=%.1f%% SCfilter=%.1fkPa base=%.1fC envNTC=%.1fC "
+            "filterNTC=%.1fC sw=0x%02X ir=0x%02X door_open=%d powder_L/R_low=%d/%d",
+            static_cast<double>(report.oxygen_percent),
+            static_cast<double>(report.filter_pressure_x10_kpa) / 10.0,
+            static_cast<double>(report.substrate_temp_c),
+            static_cast<double>(report.env_ntc_c),
+            static_cast<double>(report.filter_ntc_c),
+            static_cast<unsigned>(report.local_switch_bits),
+            static_cast<unsigned>(report.powder_ir_bits),
+            report.outer_door_open ? 1 : 0,
+            report.powder_left_low ? 1 : 0,
+            report.powder_right_low ? 1 : 0);
+    } else {
+        UPC_LOG_MCU_LINK_TO(SerialSensor, Info,
+            "sensor: O2=%.1f%% P1=%.1fkPa T=%.1fC RH=%.1f%% PM1.0=%.1f PM2.5=%.1f PM10=%.1f "
+            "Pfilter=%.1fkPa P2=%.1fkPa base=%.1fC powder_bits=0x%02X powder_ok=%d door_open=%d",
+            static_cast<double>(report.oxygen_percent),
+            static_cast<double>(report.pressure1_x10_kpa) / 10.0,
+            static_cast<double>(report.temperature_c),
+            static_cast<double>(report.humidity_percent),
+            static_cast<double>(report.pm1_ug_m3),
+            static_cast<double>(report.pm25_ug_m3),
+            static_cast<double>(report.pm10_ug_m3),
+            static_cast<double>(report.filter_pressure_x10_kpa) / 10.0,
+            static_cast<double>(report.pressure2_x10_kpa) / 10.0,
+            static_cast<double>(report.substrate_temp_c),
+            static_cast<unsigned>(report.powder_bits), report.powder_present,
+            report.outer_door_open ? 1 : 0);
+    }
 }
 
 bool McuLink::request_open_door_and_wait(uint32_t timeout_ms, bool* opened_out)
@@ -946,63 +1410,9 @@ void McuLink::drain_serial_tx_queue()
     }
 }
 
-void McuLink::on_sensor_report(const serial_sensor_report_t& report)
-{
-    /* 模拟开启时跳过真实串口写缓存/上报，避免覆盖测试数据。 */
-    if(env_sim_on_.load()) {
-        return;
-    }
-
-    {
-        std::lock_guard<std::mutex> lock(env_mtx_);
-        env_cache_.pm25_cabin      = report.pm25_ug_m3;
-        env_cache_.pm25_indoor     = report.pm25_ug_m3;
-        env_cache_.pm1_indoor      = report.pm1_ug_m3;
-        env_cache_.pm10_indoor     = report.pm10_ug_m3;
-        env_cache_.temperature_c   = report.temperature_c;
-        env_cache_.oxygen_percent  = report.oxygen_percent;
-        env_cache_.humidity_percent = report.humidity_percent;
-        env_cache_.pressure_kpa    = static_cast<float>(report.pressure1_x10_kpa) / 10.0f;
-        env_cache_.baseplate_temp_c = report.substrate_temp_c;
-        env_cache_.powder_bits     = static_cast<uint8_t>(report.powder_bits & 0x03u);
-        env_cache_.outer_door_open = (report.outer_door_open != 0);
-        env_cache_.door_state_valid = true;
-        env_cache_.valid           = true;
-    }
-    publish_env_update_ntf();
-    publish_debug_sensor_ntf(report);   /* 调试页顶部 7 路传感器回读 */
-
-    /* 粉量传感器：bit0/bit1 同时为 0 视为缺粉。
-     * 仅在“进入缺粉”边沿触发一次，避免持续低电平反复通知。 */
-    const bool powder_low = ((report.powder_bits & 0x03u) == 0x00u);
-    if(powder_low) {
-        if(!powder_low_latched_) {
-            powder_low_latched_ = true;
-            emit_event(McuLinkEvent::PowderLow);
-        }
-    } else {
-        powder_low_latched_ = false;
-    }
-
-    UPC_LOG_MCU_LINK_TO(SerialSensor, Info,
-        "sensor: O2=%.1f%% P1=%.1fkPa T=%.1fC RH=%.1f%% PM1.0=%.1f PM2.5=%.1f PM10=%.1f "
-        "Pfilter=%.1fkPa P2=%.1fkPa base=%.1fC powder_bits=0x%02X powder_ok=%d door_open=%d",
-        static_cast<double>(report.oxygen_percent),
-        static_cast<double>(report.pressure1_x10_kpa) / 10.0,
-        static_cast<double>(report.temperature_c),
-        static_cast<double>(report.humidity_percent),
-        static_cast<double>(report.pm1_ug_m3),
-        static_cast<double>(report.pm25_ug_m3),
-        static_cast<double>(report.pm10_ug_m3),
-        static_cast<double>(report.filter_pressure_x10_kpa) / 10.0,
-        static_cast<double>(report.pressure2_x10_kpa) / 10.0,
-        static_cast<double>(report.substrate_temp_c),
-        static_cast<unsigned>(report.powder_bits), report.powder_present,
-        report.outer_door_open ? 1 : 0);
-}
-
 void McuLink::on_motion_pos_report(const serial_motion_pos_t& pos)
 {
+    z_pos_mm_cache_.store(pos.z_pos_mm, std::memory_order_relaxed);
     publish_debug_axis_ntf(pos);        /* 调试页三轴位置 + Z 工作坐标回读 */
 
     UPC_LOG_MCU_LINK(Info,
@@ -1112,9 +1522,7 @@ void publish_alarm_report_ntf(const serial_alarm_report_t& report)
     }
 }
 
-/** 组装并异步下发 GLAVO_Alarm_Snapshot_Ntf：快照的一个 slot，同样原样透传。
- *  攒帧（收齐 nonzero_slot_count 个不同 slot）与原子对齐都在 UI 侧做——
- *  当前报警表在那边。 */
+/** 组装并异步下发 GLAVO_Alarm_Snapshot_Ntf：快照的一个 slot。 */
 void publish_alarm_snapshot_ntf(const serial_alarm_snapshot_t& snap)
 {
     middleware::AlarmSnapshotPayload p{};
@@ -1131,6 +1539,17 @@ void publish_alarm_snapshot_ntf(const serial_alarm_snapshot_t& snap)
     if(!middleware::MsgPort::instance().publish_async(ntf)) {
         UPC_LOG_MCU_LINK(Warn, "GLAVO_Alarm_Snapshot_Ntf publish_async failed");
     }
+}
+
+serial_alarm_report_t make_soc_o2_alarm_report(bool active)
+{
+    serial_alarm_report_t o2{};
+    o2.alarm_code = static_cast<uint16_t>(GLAVO_ALARM_CODE_CHAMBER_OXYGEN_HIGH);
+    o2.severity = 2;
+    o2.state_mask = active ? SERIAL_ALARM_STATE_ACTIVE : 0;
+    o2.clear_mode = SERIAL_ALARM_CLEAR_AUTO;
+    o2.detail = 0;
+    return o2;
 }
 
 /** 组装并异步下发 GLAVO_Alarm_Reset_Result_Ntf：复位失败回执。
@@ -1183,6 +1602,14 @@ void McuLink::publish_env_update_ntf()
     p.baseplate_temp_c = snap.baseplate_temp_c;
     p.powder_bits    = static_cast<uint8_t>(snap.powder_bits & 0x03u);
     p.pm10_indoor    = snap.pm10_indoor;
+    p.sensor_v4      = snap.sensor_v4 ? 1u : 0u;
+    p.pm1_cabin      = snap.pm1_cabin;
+    p.pm10_cabin     = snap.pm10_cabin;
+    /* V4 且尚未收到 MCU 1ST：基板/粉量仍属 MCU；O2 已改 SOC */
+    if(snap.sensor_v4 && !mcu_1st_seen_.load()) {
+        p.baseplate_temp_c = -1.0f;
+        p.powder_bits      = 0u;
+    }
 
     middleware::Message ntf_ui(middleware::MsgType::APP_Update_Ntf,
         middleware::ModuleId::APP_GLAVO,
@@ -1231,6 +1658,9 @@ void McuLink::publish_env_status_ntf_ui_only()
         p.baseplate_temp_c = snap.baseplate_temp_c;
         p.pm10_indoor = snap.pm10_indoor;
         p.powder_bits = static_cast<uint8_t>(snap.powder_bits & 0x03u);
+        p.sensor_v4 = snap.sensor_v4 ? 1u : 0u;
+        p.pm1_cabin = snap.pm1_cabin;
+        p.pm10_cabin = snap.pm10_cabin;
     } else {
         p.pm25_indoor = -1.0f;
         p.pm25_cabin = -1.0f;
@@ -1242,6 +1672,9 @@ void McuLink::publish_env_status_ntf_ui_only()
         p.baseplate_temp_c = -1.0f;
         p.pm10_indoor = -1.0f;
         p.powder_bits = 0u;
+        p.sensor_v4 = 0u;
+        p.pm1_cabin = -1.0f;
+        p.pm10_cabin = -1.0f;
     }
 
     middleware::Message ntf_ui(middleware::MsgType::APP_Update_Ntf,
@@ -1277,6 +1710,9 @@ void McuLink::publish_env_invalid_ntf()
     p.pressure_kpa     = -1.0f;
     p.baseplate_temp_c = -1.0f;
     p.powder_bits      = 0u;
+    p.sensor_v4        = 0u;
+    p.pm1_cabin        = -1.0f;
+    p.pm10_cabin       = -1.0f;
 
     middleware::Message ntf_ui(middleware::MsgType::APP_Update_Ntf,
         middleware::ModuleId::APP_GLAVO,
@@ -1304,14 +1740,32 @@ void McuLink::publish_debug_sensor_ntf(const serial_sensor_report_t& report)
 {
     middleware::DebugSensorPayload p{};
     p.oxygen_percent   = report.oxygen_percent;
-    p.pressure_kpa     = static_cast<float>(report.pressure1_x10_kpa) / 10.0f;
-    p.pm25             = report.pm25_ug_m3;
-    p.humidity_pct     = report.humidity_percent;
-    p.cabin_temp_c     = report.temperature_c;
     p.baseplate_temp_c = report.substrate_temp_c;
     p.powder_status    = report.powder_present
         ? static_cast<uint8_t>(middleware::DebugPowderStatus::Available)
         : static_cast<uint8_t>(middleware::DebugPowderStatus::Fault);
+
+    if(report.layout == SERIAL_SENSOR_LAYOUT_V4 || mcu_sensor_protocol_v4()) {
+        /* 1ST 的 oxygen 即滤芯氧；舱内氧改用 SOC */
+        p.filter_oxygen_percent = report.oxygen_percent;
+        const SocEnvSample soc = SocSensors::instance().snapshot();
+        p.oxygen_percent = (soc.oxygen_percent >= 0.f) ? soc.oxygen_percent : -1.f;
+        p.pressure_kpa = (soc.pressure1_kpa > 0.f)
+            ? soc.pressure1_kpa
+            : (static_cast<float>(report.filter_pressure_x10_kpa) / 10.0f);
+        p.pm25 = (soc.pm25_outdoor >= 0.f) ? soc.pm25_outdoor : -1.f;
+        p.pm25_cabin = (soc.pm25_cabin >= 0.f) ? soc.pm25_cabin : -1.f;
+        p.humidity_pct = soc.humidity_percent;
+        p.cabin_temp_c = soc.temperature_c;
+    } else {
+        /* 旧固件无滤芯氧；Env Sim 用同一路读数填列，便于顶栏联调 */
+        p.filter_oxygen_percent = env_sim_on_.load() ? report.oxygen_percent : -1.0f;
+        p.pressure_kpa     = static_cast<float>(report.pressure1_x10_kpa) / 10.0f;
+        p.pm25             = report.pm25_ug_m3;
+        p.pm25_cabin       = report.pm25_ug_m3; /* 旧固件单路：舱内外同值便于对照 */
+        p.humidity_pct     = report.humidity_percent;
+        p.cabin_temp_c     = report.temperature_c;
+    }
 
     middleware::Message ntf(middleware::MsgType::GLAVO_Debug_Sensor_Ntf,
         middleware::ModuleId::APP_GLAVO, middleware::ModuleId::UI);
@@ -1326,11 +1780,13 @@ void McuLink::publish_debug_sensor_invalid_ntf()
 {
     middleware::DebugSensorPayload p{};
     p.oxygen_percent   = -1.0f;
+    p.filter_oxygen_percent = -1.0f;
     p.pressure_kpa     = -1.0f;
     p.pm25             = -1.0f;
     p.humidity_pct     = -1.0f;
     p.cabin_temp_c     = -1.0f;
     p.baseplate_temp_c = -1.0f;
+    p.pm25_cabin       = -1.0f;
     /* 与数值哨兵配套：UI 对 powder_status==0xFF 显示 "--" */
     p.powder_status    = 0xFF;
 
@@ -1341,6 +1797,93 @@ void McuLink::publish_debug_sensor_invalid_ntf()
     if(!middleware::MsgPort::instance().publish_async(ntf)) {
         UPC_LOG_MCU_LINK(Warn, "GLAVO_Debug_Sensor_Ntf(invalid) publish_async failed");
     }
+}
+
+void McuLink::publish_debug_sensor_from_soc_and_cache()
+{
+    EnvSnapshotCache snap;
+    {
+        std::lock_guard<std::mutex> lock(env_mtx_);
+        snap = env_cache_;
+    }
+    const SocEnvSample soc = SocSensors::instance().snapshot();
+
+    middleware::DebugSensorPayload p{};
+    if(soc.oxygen_percent >= 0.f) {
+        p.oxygen_percent = soc.oxygen_percent;
+    } else {
+        p.oxygen_percent = -1.0f;
+    }
+    p.filter_oxygen_percent = snap.filter_oxygen_percent;
+    if(mcu_1st_seen_.load()) {
+        p.baseplate_temp_c = snap.baseplate_temp_c;
+        /* V4 powder_bits：两匣都有粉 → Available；否则 Fault */
+        p.powder_status = ((snap.powder_bits & 0x03u) == 0x03u)
+            ? static_cast<uint8_t>(middleware::DebugPowderStatus::Available)
+            : static_cast<uint8_t>(middleware::DebugPowderStatus::Fault);
+    } else {
+        p.baseplate_temp_c = -1.0f;
+        p.powder_status    = 0xFF;
+    }
+
+    p.pm25 = (soc.pm25_outdoor >= 0.f) ? soc.pm25_outdoor : -1.f;
+    p.pm25_cabin = (soc.pm25_cabin >= 0.f) ? soc.pm25_cabin : -1.f;
+    p.humidity_pct = soc.humidity_percent;
+    p.cabin_temp_c = soc.temperature_c;
+    if(soc.pressure1_kpa > 0.f) {
+        p.pressure_kpa = soc.pressure1_kpa;
+    } else if(snap.filter_pressure_kpa > 0.f) {
+        p.pressure_kpa = snap.filter_pressure_kpa;
+    } else {
+        p.pressure_kpa = -1.0f;
+    }
+
+    middleware::Message ntf(middleware::MsgType::GLAVO_Debug_Sensor_Ntf,
+        middleware::ModuleId::APP_GLAVO, middleware::ModuleId::UI);
+    ntf.payload = middleware::MsgPayload::from_bytes(
+        reinterpret_cast<const uint8_t*>(&p), sizeof(p));
+    if(!middleware::MsgPort::instance().publish_async(ntf)) {
+        UPC_LOG_MCU_LINK(Warn, "GLAVO_Debug_Sensor_Ntf(soc) publish_async failed");
+    }
+}
+
+void McuLink::poll_soc_env_tick()
+{
+    if(env_sim_on_.load()) {
+        return;
+    }
+
+    bool v4 = mcu_sensor_protocol_v4();
+    if(!v4) {
+        std::lock_guard<std::mutex> lock(env_mtx_);
+        v4 = env_cache_.sensor_v4;
+    }
+    if(!v4) {
+        return;
+    }
+
+    const auto now = std::chrono::steady_clock::now();
+    if(next_soc_env_tick_.time_since_epoch().count() != 0 && now < next_soc_env_tick_) {
+        return;
+    }
+    next_soc_env_tick_ = now + std::chrono::milliseconds(kSocEnvPublishIntervalMs);
+
+    {
+        std::lock_guard<std::mutex> lock(env_mtx_);
+        env_cache_.sensor_v4 = true;
+        merge_soc_env_into_cache_locked();
+    }
+    {
+        const SocEnvSample soc = SocSensors::instance().snapshot();
+        if(soc.valid) {
+            std::lock_guard<std::mutex> lock(env_mtx_);
+            env_cache_.valid = true;
+        }
+    }
+
+    /* 首页/控制页：有任一有效源才推；调试顶栏每拍都推（无数则 "--"） */
+    publish_env_update_ntf();
+    publish_debug_sensor_from_soc_and_cache();
 }
 
 void McuLink::poll_env_sim_tick()
@@ -1403,6 +1946,7 @@ void McuLink::poll_env_sim_tick()
         env_cache_.pm10_indoor      = fake.pm10_ug_m3;
         env_cache_.temperature_c    = fake.temperature_c;
         env_cache_.oxygen_percent   = fake.oxygen_percent;
+        env_cache_.filter_oxygen_percent = fake.oxygen_percent;
         env_cache_.humidity_percent = fake.humidity_percent;
         env_cache_.pressure_kpa     = static_cast<float>(fake.pressure1_x10_kpa) / 10.0f;
         env_cache_.baseplate_temp_c = fake.substrate_temp_c;
@@ -1473,7 +2017,9 @@ void McuLink::on_mcu_version_report(const serial_project_info_t& info)
         mcu_fw_cache_ = p;
     }
     mcu_fw_valid_.store(true);
+    refresh_soc_v4_mode();
     publish_mcu_version_ntf();
+    apply_serial_laser_off_after_mcu_ready();
 }
 
 void McuLink::publish_mcu_version_ntf()
@@ -1588,6 +2134,7 @@ void McuLink::handle_serial_rx_frame(const uint8_t* frame, size_t len)
             static_cast<unsigned>(alarm.clear_mode),
             static_cast<unsigned>(alarm.detail));
         publish_alarm_report_ntf(alarm);
+        SpiStatusLed::instance().on_alarm_report(alarm);
         return;
     }
 
@@ -1602,7 +2149,7 @@ void McuLink::handle_serial_rx_frame(const uint8_t* frame, size_t len)
             static_cast<unsigned>(snap.active_mask),
             static_cast<unsigned>(snap.latched_mask),
             static_cast<unsigned>(snap.highest_severity));
-        publish_alarm_snapshot_ntf(snap);
+        ingest_alarm_snapshot_slot(snap);
         return;
     }
 
@@ -1637,6 +2184,15 @@ void McuLink::handle_serial_rx_frame(const uint8_t* frame, size_t len)
     serial_sensor_err_t serr = SERIAL_SENSOR_ERR_NONE;
     if(serial_parse_sensor_report_detail(frame, len, &sensor, &serr) == 0) {
         on_sensor_report(sensor);
+        return;
+    }
+
+    /* V4 EXT（0x06）：须在「SENSOR FAIL」判定前识别，否则周期刷警告 */
+    serial_sensor_ext_t sext{};
+    if(serial_parse_sensor_ext_detail(frame, len, &sext, nullptr) == 0) {
+        if(mcu_sensor_protocol_v4()) {
+            on_sensor_ext_report(sext);
+        }
         return;
     }
 
@@ -2261,6 +2817,12 @@ void McuLink::reset_motion_state(bool clear_start_pending)
     serial_handshake_phase_.store(SERIAL_HS_NONE);
     serial_evt_condition_ok_.store(false);
     serial_evt_print_ready_.store(false);
+    o2_hold_.store(false);
+    /* 兜底：终止/完成路径已关阀；其它 reset 入口也勿让洗气阀挂着 */
+    close_print_gas_wash_if_opened();
+    if(o2_alarm_active_) {
+        publish_soc_chamber_oxygen_alarm(false);
+    }
     sent_at_layer_ready_ = 0;
     current_layer_snapped_ = false;
     first_layer_check_passed_ = false;
@@ -2274,6 +2836,12 @@ void McuLink::begin_sending_internal()
 {
     powder_low_latched_ = false;
     user_paused_.store(false);
+    o2_hold_.store(false);
+    if(o2_alarm_active_) {
+        publish_soc_chamber_oxygen_alarm(false);
+    }
+    last_o2_wait_log_ = {};
+    gas_wash_opened_by_soc_.store(false);
     is_sending_.store(true);
     waiting_layer_.store(false);
     layer_drain_pending_.store(false);
@@ -2341,6 +2909,7 @@ void McuLink::begin_sending(bool skip_layer_handshake)
             "begin_sending refused: terminate/cleanup in progress");
         return;
     }
+    cancel_pending_red_reassert();
     if(skip_layer_handshake) {
         test_image_motion_.store(true);
     } else {
@@ -2392,6 +2961,11 @@ bool McuLink::is_user_dispatch_paused() const noexcept
     return user_paused_.load();
 }
 
+bool McuLink::is_o2_hold() const noexcept
+{
+    return o2_hold_.load();
+}
+
 bool McuLink::send_tcp_emergency_ctrl_ex(uint8_t stop_code, uint8_t pause_code, uint8_t red_code)
 {
     uint8_t frame[64];
@@ -2414,11 +2988,23 @@ bool McuLink::send_tcp_emergency_ctrl_ex(uint8_t stop_code, uint8_t pause_code, 
             static_cast<unsigned>(red_code));
         return false;
     }
+    if(red_code == 1u || red_code == 2u || red_code == 3u) {
+        last_requested_red_code_.store(red_code);
+        if(red_code == 2u) {
+            /* 已切激光：作废排队里的红光补发，避免盖掉 Red=2。 */
+            reassert_red_after_laser_off_.store(false);
+        }
+    }
     UPC_LOG_MCU_LINK_TO(TcpMotionTx, Info, "tcp emergency sent stop=%u pause=%u red=%u",
                      static_cast<unsigned>(stop_code),
                      static_cast<unsigned>(pause_code),
                      static_cast<unsigned>(red_code));
     return true;
+}
+
+float McuLink::get_z_pos_mm() const noexcept
+{
+    return z_pos_mm_cache_.load(std::memory_order_relaxed);
 }
 
 bool McuLink::send_debug_motion_subpacket(const uint8_t subpacket[11])
@@ -2447,6 +3033,79 @@ bool McuLink::send_debug_motion_subpacket(const uint8_t subpacket[11])
     return true;
 }
 
+bool McuLink::send_galvo_abs_pos(float x_mm, float y_mm,
+                                 float speed_mm_min, int laser_on)
+{
+    /* 1. 互斥：打印进行中拒绝手动移动，避免与批量运动包冲突 */
+    if(is_sending()) {
+        UPC_LOG_MCU_LINK(Warn,
+            "send_galvo_abs_pos rejected: print in progress (is_sending)");
+        return false;
+    }
+    /* 2. TCP 必须已连接 */
+    if(tcp_fd_ < 0) {
+        UPC_LOG_MCU_LINK(Warn, "send_galvo_abs_pos failed: tcp not connected");
+        return false;
+    }
+
+    /* 3. 从 ParserContext 取校准数据与增益（与切片下发同源） */
+    const parser::ParserContext& ctx = parser::ParserContext::instance();
+    const parser::CalData& cal = ctx.cal_data();
+    const float scale_gain = ctx.scale_gain();
+    float range_gain = ctx.range_gain();
+    const float speed_gain = ctx.speed_gain();
+
+    /* 4. 校准变换：切片坐标 → 物理坐标（中心平移 + 网格双线性畸变） */
+    float out_x = 0.0f, out_y = 0.0f;
+    parser::cal_apply_xy(&cal, x_mm, y_mm, &out_x, &out_y);
+    const float ox = out_x * scale_gain;
+    const float oy = out_y * scale_gain;
+
+    /* 5. 构造 11B 运动包（与 OvfWorker::build_and_push_packet 编码完全一致） */
+    uint8_t pkt[11];
+    pkt[0] = 0x01;  // 运动包标识
+    uint8_t lo = 0, hi = 0;
+    parser::coordinate_to_offset_bytes(ox, range_gain, &lo, &hi);
+    pkt[1] = lo;  // X 低字节
+    pkt[2] = hi;  // X 高字节
+    parser::coordinate_to_offset_bytes(oy, range_gain, &lo, &hi);
+    pkt[3] = lo;  // Y 低字节
+    pkt[4] = hi;  // Y 高字节
+    pkt[5] = 0;   // 保留
+    pkt[6] = 0;
+    const float eff_speed = (speed_mm_min > 0.0f) ? speed_mm_min : 1000.0f;
+    const int speed_int = static_cast<int>(eff_speed * speed_gain);
+    parser::int_to_u16_bytes(speed_int, &lo, &hi);
+    pkt[7] = lo;   // 速度低字节
+    pkt[8] = hi;   // 速度高字节
+    parser::int_to_u16_bytes(laser_on ? 1 : 0, &lo, &hi);
+    pkt[9]  = lo;  // 激光开关低字节
+    pkt[10] = hi;  // 激光开关高字节
+
+    /* 6. 组帧并发送（1 个子包） */
+    uint8_t frame[3 + 11];
+    const int flen = build_motion_frame(pkt, 1, frame, sizeof(frame));
+    if(flen <= 0) {
+        UPC_LOG_MCU_LINK(Error, "send_galvo_abs_pos: build_motion_frame failed");
+        return false;
+    }
+    const int rc = tcp_send_raw(frame, static_cast<size_t>(flen));
+    if(rc != 0) {
+        UPC_LOG_MCU_LINK(Warn,
+            "send_galvo_abs_pos tcp send failed rc=%d x=%.2f y=%.2f",
+            rc, static_cast<double>(x_mm), static_cast<double>(y_mm));
+        return false;
+    }
+    UPC_LOG_MCU_LINK(Info,
+        "galvo abs pos sent: x=%.2f y=%.2f speed=%.0f laser=%d "
+        "ox=%.3f oy=%.3f range=%.2f scale=%.3f",
+        static_cast<double>(x_mm), static_cast<double>(y_mm),
+        static_cast<double>(eff_speed), laser_on,
+        static_cast<double>(ox), static_cast<double>(oy),
+        static_cast<double>(range_gain), static_cast<double>(scale_gain));
+    return true;
+}
+
 bool McuLink::send_tcp_emergency_ctrl(bool stop, bool pause)
 {
     const uint8_t stop_code = stop ? 1u : 0u;
@@ -2456,20 +3115,81 @@ bool McuLink::send_tcp_emergency_ctrl(bool stop, bool pause)
 
 void McuLink::force_switch_to_red_mode_on_tcp_connect()
 {
-    /* 连接恢复时先关串口激光，再开 TCP 红光，保证默认落在安全态。 */
-    uint8_t sbuf[SERIAL_DEBUG_MAX_FRAME];
-    const int slen = serial_debug_build_switch(0u, false, sbuf, sizeof(sbuf));
-    if(slen > 0) {
-        enqueue_serial_tx(sbuf, static_cast<size_t>(slen), false);
-    } else {
-        UPC_LOG_MCU_LINK(Warn, "tcp connect failsafe: build serial laser-off failed");
-    }
-
+    /* 振镜板与串口 MCU 独立：连上只切 TCP 红光。关激光使能等真实版本上报。 */
     if(!send_tcp_emergency_ctrl_ex(0u, 0u, 1u)) {
         UPC_LOG_MCU_LINK(Warn, "tcp connect failsafe: switch to red mode failed");
         return;
     }
     UPC_LOG_MCU_LINK(Info, "tcp connect failsafe: switched to red mode");
+}
+
+void McuLink::apply_serial_laser_off_after_mcu_ready()
+{
+    if(serial_laser_off_applied_.load()) {
+        return;
+    }
+    if(serial_fd_ < 0 || serial_ota_session_.is_active()) {
+        return;
+    }
+    /* 打印中关使能会掐出光；记 pending，空闲后再发。 */
+    if(is_sending_.load() || print_task_flow_active_.load()) {
+        if(!serial_laser_off_pending_.exchange(true)) {
+            UPC_LOG_MCU_LINK(Info,
+                "mcu version failsafe: serial laser-off deferred (print active)");
+        }
+        return;
+    }
+
+    uint8_t sbuf[SERIAL_DEBUG_MAX_FRAME];
+    const int slen = serial_debug_build_switch(0u, false, sbuf, sizeof(sbuf));
+    if(slen <= 0) {
+        UPC_LOG_MCU_LINK(Warn, "mcu version failsafe: build serial laser-off failed");
+        return;
+    }
+    enqueue_serial_tx(sbuf, static_cast<size_t>(slen), false);
+    serial_laser_off_applied_.store(true);
+    serial_laser_off_pending_.store(false);
+    request_reassert_red_after_serial_tx(1u);
+    UPC_LOG_MCU_LINK(Info, "mcu version failsafe: serial laser-off queued");
+}
+
+void McuLink::maybe_reassert_red_after_serial_laser_off()
+{
+    if(!reassert_red_after_laser_off_.load()) {
+        return;
+    }
+    /* 串口还没发出 0x12：下一轮再试，不要先把标志清掉。 */
+    if(serial_fd_ < 0 || serial_ota_session_.is_active()) {
+        return;
+    }
+    if(is_sending_.load()) {
+        reassert_red_after_laser_off_.store(false);
+        UPC_LOG_MCU_LINK(Info, "skip red reassert: motion sending");
+        return;
+    }
+    const uint8_t red_code = reassert_red_code_.load();
+    const uint8_t want = last_requested_red_code_.load();
+    if(want == 2u || want != red_code) {
+        reassert_red_after_laser_off_.store(false);
+        UPC_LOG_MCU_LINK(Info,
+            "skip red reassert: stale want=%u pending=%u",
+            static_cast<unsigned>(want),
+            static_cast<unsigned>(red_code));
+        return;
+    }
+    if(!reassert_red_after_laser_off_.exchange(false)) {
+        return;
+    }
+    if(tcp_fd_ < 0) {
+        return;
+    }
+    if(!send_tcp_emergency_ctrl_ex(0u, 0u, red_code)) {
+        UPC_LOG_MCU_LINK(Warn, "reassert red failed code=%u",
+                         static_cast<unsigned>(red_code));
+        return;
+    }
+    UPC_LOG_MCU_LINK(Info, "red after laser-off code=%u",
+                     static_cast<unsigned>(red_code));
 }
 
 void McuLink::set_print_task_flow_active(bool active) noexcept
@@ -2535,6 +3255,44 @@ void McuLink::send_serial_print_finished()
 #endif
 }
 
+void McuLink::send_serial_gas_wash(bool on)
+{
+    if(serial_fd_ < 0) {
+        return;
+    }
+    uint8_t sbuf[SERIAL_DEBUG_MAX_FRAME];
+    const int slen = serial_debug_build_switch(1u, on, sbuf, sizeof(sbuf));
+    if(slen <= 0) {
+        UPC_LOG_MCU_LINK(Warn, "serial gas wash build failed on=%d", on ? 1 : 0);
+        return;
+    }
+    UPC_LOG_MCU_LINK_TO(SerialLayer, Info, "serial TX cmd: GAS_WASH_%s",
+                        on ? "ON" : "OFF");
+    /* 开阀走可靠发送，避免洗气未开就 PRINT_START；关阀尽力发出即可 */
+    if(on) {
+        serial_send_aa_reliable(sbuf, static_cast<size_t>(slen), true);
+    } else {
+        serial_send_aa_reliable(sbuf, static_cast<size_t>(slen), false);
+    }
+}
+
+void McuLink::ensure_print_gas_wash_on()
+{
+    if(gas_wash_opened_by_soc_.load()) {
+        return;
+    }
+    send_serial_gas_wash(true);
+    gas_wash_opened_by_soc_.store(true);
+}
+
+void McuLink::close_print_gas_wash_if_opened()
+{
+    if(!gas_wash_opened_by_soc_.exchange(false)) {
+        return;
+    }
+    send_serial_gas_wash(false);
+}
+
 /* ---------- 终止/完成清理流程 ---------- */
 
 bool McuLink::run_manual_terminate_cleanup()
@@ -2551,6 +3309,7 @@ bool McuLink::run_manual_terminate_cleanup()
     // 1. 向振镜发 0x0A(Stop=1) 终止指令，向 MCU 发终止通知
     send_tcp_reset();
     send_serial_print_terminate();
+    close_print_gas_wash_if_opened();
 
     // 2. 停止解析、清空 RingBuffer 与 stage 队列
     parser::ParserManager::instance().stop_parse();
@@ -2599,6 +3358,7 @@ void McuLink::run_natural_complete_cleanup()
         link_try_final_layer_snap();
         send_serial_print_finished();
     }
+    close_print_gas_wash_if_opened();
 
     // 2. 先清发送态，再发 TCP 0x0A(Stop=1)（避免 is_sending 时断线误触发 terminate）
     reset_motion_state(true);
@@ -2624,9 +3384,46 @@ void McuLink::link_process_serial_handshake()
 
     const int phase = serial_handshake_phase_.load();
 
-    // 阶段一：收到 PRINT_CONDITION_OK 后，发送首层/换层高度并进入阶段二
+    // 阶段一：MCU PRINT_CONDITION_OK 后
+    //   - 氧门开：SOC 发洗气开，等氧 < 阈值再 PRINT_START
+    //   - Skip O2 / EnvSim / 非 V4：不发洗气开，直接 PRINT_START
     if(phase == SERIAL_HS_WAIT_CONDITION_OK &&
-       serial_evt_condition_ok_.exchange(false)) {
+       serial_evt_condition_ok_.load()) {
+        if(soc_o2_print_gate_enabled()) {
+            ensure_print_gas_wash_on();
+            float o2 = -1.f;
+            const bool o2_ok = read_print_o2_percent(&o2) &&
+                               o2 < GLAVO_O2_PRINT_MAX_PERCENT;
+            if(!o2_ok) {
+                /* 起印尚未开扫，不做 TCP 暂停；仍发 1120 让 UI 提示氧高。 */
+                publish_soc_chamber_oxygen_alarm(true);
+                const auto now = std::chrono::steady_clock::now();
+                if(last_o2_wait_log_.time_since_epoch().count() == 0 ||
+                   now - last_o2_wait_log_ >= std::chrono::seconds(5)) {
+                    last_o2_wait_log_ = now;
+                    UPC_LOG_MCU_LINK_TO(SerialLayer, Info,
+                        "gas wash on; wait SOC O2 < %.2f%% before PRINT_START (now=%s%.2f%%)",
+                        static_cast<double>(GLAVO_O2_PRINT_MAX_PERCENT),
+                        (o2 >= 0.f) ? "" : "invalid/",
+                        static_cast<double>((o2 >= 0.f) ? o2 : -1.f));
+                }
+                return;
+            }
+            last_o2_wait_log_ = {};
+            publish_soc_chamber_oxygen_alarm(false);
+            UPC_LOG_MCU_LINK_TO(SerialLayer, Info,
+                "SOC O2 gate pass: %.2f%% < %.2f%%, send PRINT_START",
+                static_cast<double>(o2),
+                static_cast<double>(GLAVO_O2_PRINT_MAX_PERCENT));
+        } else {
+            UPC_LOG_MCU_LINK_TO(SerialLayer, Info,
+                "O2 gate skipped (skip=%d env_sim=%d test=%d v4=%d): no gas wash, PRINT_START",
+                skip_o2_print_gate_.load() ? 1 : 0,
+                env_sim_on_.load() ? 1 : 0,
+                test_image_motion_.load() ? 1 : 0,
+                mcu_sensor_protocol_v4() ? 1 : 0);
+        }
+        serial_evt_condition_ok_.store(false);
         uint8_t sbuf[32];
         const int slen = serial_build_print_start(active_layer_height_um_, sbuf, sizeof(sbuf));
         if(slen > 0) {
@@ -2666,6 +3463,127 @@ void McuLink::link_process_serial_handshake()
         current_layer_snapped_ = false;
         waiting_layer_.store(false);
         serial_handshake_phase_.store(SERIAL_HS_NONE);
+    }
+}
+
+bool McuLink::soc_o2_print_gate_enabled() const noexcept
+{
+    if(test_image_motion_.load() || env_sim_on_.load() ||
+       skip_o2_print_gate_.load()) {
+        return false;
+    }
+    return mcu_sensor_protocol_v4();
+}
+
+bool McuLink::read_print_o2_percent(float* oxygen_percent) const
+{
+    if(!oxygen_percent) {
+        return false;
+    }
+    if(env_sim_on_.load()) {
+        std::lock_guard<std::mutex> lock(env_mtx_);
+        if(env_cache_.oxygen_percent < 0.f) {
+            return false;
+        }
+        *oxygen_percent = env_cache_.oxygen_percent;
+        return true;
+    }
+    const SocEnvSample soc = SocSensors::instance().snapshot();
+    if(soc.oxygen_percent < 0.f) {
+        return false;
+    }
+    *oxygen_percent = soc.oxygen_percent;
+    return true;
+}
+
+void McuLink::publish_soc_chamber_oxygen_alarm(bool active)
+{
+    if(o2_alarm_active_ == active) {
+        return;
+    }
+    o2_alarm_active_ = active;
+
+    serial_alarm_report_t report{};
+    report.alarm_code = static_cast<uint16_t>(GLAVO_ALARM_CODE_CHAMBER_OXYGEN_HIGH);
+    report.severity = 2; /* warning，与字典 CHAMBER_OXYGEN_HIGH 一致 */
+    report.state_mask = active ? SERIAL_ALARM_STATE_ACTIVE : 0;
+    report.clear_mode = SERIAL_ALARM_CLEAR_AUTO;
+    report.detail = 0;
+
+    /* UPC_LOG_* 的 lvl 必须是 Level 枚举名，不能写三元表达式。 */
+    if(active) {
+        UPC_LOG_MCU_LINK_TO(SerialAlarm, Warn,
+            "SOC chamber oxygen alarm ACTIVE (code=%u)",
+            static_cast<unsigned>(GLAVO_ALARM_CODE_CHAMBER_OXYGEN_HIGH));
+    } else {
+        UPC_LOG_MCU_LINK_TO(SerialAlarm, Info,
+            "SOC chamber oxygen alarm NORMAL (code=%u)",
+            static_cast<unsigned>(GLAVO_ALARM_CODE_CHAMBER_OXYGEN_HIGH));
+    }
+    publish_alarm_report_ntf(report);
+    SpiStatusLed::instance().on_alarm_report(report);
+}
+
+void McuLink::link_process_o2_print_gate()
+{
+    if(!soc_o2_print_gate_enabled()) {
+        if(o2_hold_.load() || o2_alarm_active_) {
+            o2_hold_.store(false);
+            publish_soc_chamber_oxygen_alarm(false);
+            if(!user_paused_.load()) {
+                (void)send_tcp_emergency_ctrl(false, false);
+            }
+            emit_event(McuLinkEvent::OxygenRecovered);
+        }
+        return;
+    }
+    if(!is_sending_.load() || terminate_pending_.load()) {
+        return;
+    }
+    /* 起印等 CONDITION/氧/PRINT_READY 阶段尚未开扫，只做门闸不在此暂停。 */
+    if(waiting_layer_.load() &&
+       serial_handshake_phase_.load() != SERIAL_HS_NONE) {
+        return;
+    }
+
+    float o2 = -1.f;
+    const bool valid = read_print_o2_percent(&o2);
+    const bool too_high = !valid || o2 >= GLAVO_O2_PRINT_MAX_PERCENT;
+    const bool recovered = valid && o2 <= GLAVO_O2_PRINT_RESUME_PERCENT;
+
+    if(too_high) {
+        if(!o2_hold_.load()) {
+            o2_hold_.store(true);
+            publish_soc_chamber_oxygen_alarm(true);
+            if(!send_tcp_emergency_ctrl(false, true)) {
+                UPC_LOG_MCU_LINK(Warn, "O2 hold: tcp pause send failed");
+            }
+            UPC_LOG_MCU_LINK(Warn,
+                "O2 hold: pause print (o2=%s%.2f%% threshold=%.2f%%)",
+                valid ? "" : "invalid/",
+                static_cast<double>(valid ? o2 : -1.f),
+                static_cast<double>(GLAVO_O2_PRINT_MAX_PERCENT));
+            emit_event(McuLinkEvent::OxygenHigh);
+        } else if(!o2_alarm_active_) {
+            publish_soc_chamber_oxygen_alarm(true);
+        }
+        return;
+    }
+
+    if(o2_hold_.load() && recovered) {
+        o2_hold_.store(false);
+        publish_soc_chamber_oxygen_alarm(false);
+        if(!user_paused_.load()) {
+            if(!send_tcp_emergency_ctrl(false, false)) {
+                UPC_LOG_MCU_LINK(Warn, "O2 recover: tcp resume send failed");
+            }
+        }
+        UPC_LOG_MCU_LINK(Info,
+            "O2 hold clear: o2=%.2f%% <= %.2f%% user_paused=%d",
+            static_cast<double>(o2),
+            static_cast<double>(GLAVO_O2_PRINT_RESUME_PERCENT),
+            user_paused_.load() ? 1 : 0);
+        emit_event(McuLinkEvent::OxygenRecovered);
     }
 }
 
@@ -2766,8 +3684,8 @@ void McuLink::link_try_layer_serial_dispatch()
 
 int McuLink::link_send_one_motion_batch()
 {
-    if(user_paused_.load()) {
-        return 0; // 用户暂停：不下发 TCP 运动包
+    if(user_paused_.load() || o2_hold_.load()) {
+        return 0; // 用户暂停或 SOC 氧过高：不下发 TCP 运动包
     }
     if(tcp_stage_count() == 0) {
         return 0; // 暂存队列为空
@@ -2993,8 +3911,8 @@ void McuLink::link_try_finish_sending()
     if(completing_cleanup_.load()) {
         return;
     }
-    if(user_paused_.load()) {
-        return; // 暂停期间不判自然完成，恢复后再继续
+    if(user_paused_.load() || o2_hold_.load()) {
+        return; // 用户暂停或 SOC 氧暂停：MCU 可能仍有缓存，恢复后再判完成
     }
     if(!is_sending_.load()) {
         return; // 未发送中
@@ -3136,6 +4054,10 @@ bool McuLink::start_serial_mcu_ota(const char* image_dir)
     if(!serial_ota_session_.start(image_dir)) {
         return false;
     }
+    /* MCU 升级后会复位，下一份真实版本上报再发一次上电 0x12。 */
+    serial_laser_off_applied_.store(false);
+    serial_laser_off_pending_.store(false);
+    reassert_red_after_laser_off_.store(false);
     {
         std::lock_guard<std::mutex> lock(serial_tx_mtx_);
         serial_tx_queue_.clear();
@@ -3475,9 +4397,14 @@ void McuLink::link_thread_fn()
         // 串口（MCU 调试链路）与 TCP（振镜）相互独立；即使振镜未连接，
         // 调试命令（UI_Debug_*）与传感器上报也必须照常收发。
         drain_serial_tx_queue();
+        maybe_reassert_red_after_serial_laser_off();
+        if(serial_laser_off_pending_.load()) {
+            apply_serial_laser_off_after_mcu_ready();
+        }
         serial_drain_rx();
         link_process_serial_reliable_tx();
         poll_env_sim_tick();
+        poll_soc_env_tick();
 
         // ---------- TCP RX 排空与断线检测/重连（不阻塞串口） ----------
         if(tcp_fd_ >= 0) {
@@ -3534,7 +4461,8 @@ void McuLink::link_thread_fn()
             const bool stream = motion_stream_active();
             const bool backpressured = motion_stream_backpressured();
             const bool need_hb =
-                (!stream || (is_sending_.load() && user_paused_.load()) ||
+                (!stream || (is_sending_.load() &&
+                             (user_paused_.load() || o2_hold_.load())) ||
                  backpressured) &&
                 !ota_session_.suppress_idle_heartbeat() &&
                 tcp_fd_ >= 0 && now >= next_hb;
@@ -3551,6 +4479,7 @@ void McuLink::link_thread_fn()
 
             // ---------- 串口换层握手（打印流程相关） ----------
             link_process_serial_handshake();
+            link_process_o2_print_gate();
 
             // ---------- 开始发送（处理挂起的 begin_sending） ----------
             try_complete_pending_start();

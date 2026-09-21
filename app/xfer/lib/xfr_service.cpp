@@ -36,12 +36,25 @@ std::string body_to_string(const HttpRequest& req)
     return std::string(reinterpret_cast<const char*>(req.body.data()), req.body.size());
 }
 
+bool is_3mf_filename(const std::string& name)
+{
+    if(name.size() <= 4) {
+        return false;
+    }
+    std::string ext = name.substr(name.size() - 4);
+    std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) {
+        return static_cast<char>(std::tolower(c));
+    });
+    return ext == ".3mf";
+}
+
 } // namespace
 
 XfrService::XfrService(const XfrConfig& cfg)
     : cfg_(cfg),
       pair_mgr_(cfg.token_file, cfg.pair_pin_ttl_s, cfg.pair_pin_max_attempts),
       upload_mgr_(cfg.storage_dir, cfg.chunk_max_bytes),
+      transfer_3mf_importer_(cfg.gcode_dir),
       mdns_(cfg.mdns_service_file)
 {
 }
@@ -297,6 +310,69 @@ HttpResponse XfrService::handle_upload_complete(const HttpRequest& req, const st
     }
 
     const std::string src_path = cfg_.storage_dir + "/" + r.file_name;
+    if (is_3mf_filename(r.file_name)) {
+        {
+            std::lock_guard<std::mutex> lk(print_state_mu_);
+            upload_size_ = r.size;
+            upload_offset_ = r.size;
+            slice_progress_pct_ = 0;
+            /* 复用既有 Slicing 线协议表示“上传后处理”，避免改变 UI/IPC 契约。 */
+            print_state_ = "slicing";
+            transfer_name_ = r.file_name;
+        }
+
+        const Transfer3mfImportResult imported =
+            transfer_3mf_importer_.import_file(src_path, r.file_name);
+        if (!imported.ok) {
+            UPC_LOG_XFR_SERVICE(Error, "3mf import failed file=%s code=%s msg=%s",
+                                src_path.c_str(), imported.err_code.c_str(),
+                                imported.err_msg.c_str());
+            {
+                std::lock_guard<std::mutex> lk(print_state_mu_);
+                print_state_ = "error";
+            }
+            return err(imported.http_status, imported.err_code, imported.err_msg);
+        }
+
+        /* 导入成功后删除 transport 上的原 3MF；解码缓存已在 importer 内清理。 */
+        {
+            std::error_code remove_ec;
+            std::filesystem::remove(src_path, remove_ec);
+            if(remove_ec) {
+                UPC_LOG_XFR_SERVICE(Warn, "remove imported 3mf failed path=%s err=%s",
+                                    src_path.c_str(), remove_ec.message().c_str());
+            }
+        }
+
+        {
+            std::lock_guard<std::mutex> lk(print_state_mu_);
+            upload_size_ = imported.printable_size;
+            upload_offset_ = imported.printable_size;
+            slice_progress_pct_ = 100;
+            print_state_ = "finished";
+            transfer_name_ = imported.printable_name;
+        }
+        notify_file_received(imported.printable_name, imported.printable_size);
+        UPC_LOG_XFR_SERVICE(Info,
+            "upload complete accepted 3mf=%s gcode=%s size=%llu lines=%u layers=%u",
+            r.file_name.c_str(), imported.printable_name.c_str(),
+            static_cast<unsigned long long>(imported.printable_size),
+            static_cast<unsigned>(imported.line_count),
+            static_cast<unsigned>(imported.layer_count));
+
+        std::ostringstream oss;
+        oss << "{"
+            << "\"file_id\":\"" << json_escape(r.file_id) << "\","
+            << "\"size\":" << imported.printable_size << ","
+            << "\"verified\":" << (r.verified ? "true" : "false")
+            << "}";
+        HttpResponse rsp;
+        rsp.status = 200;
+        rsp.body = oss.str();
+        return rsp;
+    }
+
+    /* OVF 兼容路径保持不变：snowslice 输出 *_out.ovf，再写 Local manifest。 */
     const std::string output_name = output_ovf_name(r.file_name);
     const std::string dst_path = cfg_.gcode_dir + "/" + output_name;
     {

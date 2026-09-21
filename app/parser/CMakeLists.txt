@@ -154,6 +154,7 @@ set(UPC_PARSER_OVF_TARGET upc_parser_ovf)
 set(UPC_PARSER_CORE_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/lib/slice_ring_buffer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/lib/cal_parser.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/lib/galvo_coord.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/lib/parser_context.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/lib/parser_registry.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/lib/parser_manager.cpp

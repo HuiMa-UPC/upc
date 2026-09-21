@@ -95,7 +95,7 @@ void schedule_commit_print_result_history()
 enum class DoorFlowOrigin { PrintPrep, HomeStandalone, PrintCollect };
 DoorFlowOrigin g_door_origin = DoorFlowOrigin::PrintPrep;
 
-/* 转运盒流程总开关（调试页 Other Switches → Transfer Box）。默认关：取件仍是
+/* 转运盒流程总开关（调试页 Other → Print Gates → Transfer Box）。默认关：取件仍是
  * 「开门 → 确认关门」两步。打开后取件分支才插入 TRANSFER_BOX 三步，并把关门确认
  * 换成新稿样式。纯 UI 本地标志，不发消息也不落盘。 */
 bool g_transfer_box_flow = false;
@@ -2155,9 +2155,9 @@ void open_user_confirm_dialog(lv_obj_t *parent, const char *title, const char *b
     lv_obj_set_style_text_align(body_lbl, LV_TEXT_ALIGN_CENTER, 0);
 
     ui_user_make_confirm_footer_btn(g_confirm_dlg->footer, cancel_text, false,
-                                    user_color_panel_alt, cancel_cb, nullptr);
+                                    user_color_panel_alt, false, cancel_cb, nullptr);
     ui_user_make_confirm_footer_btn(g_confirm_dlg->footer, confirm_text, true,
-                                    confirm_color, confirm_cb, nullptr);
+                                    confirm_color, false, confirm_cb, nullptr);
 }
 
 /* 删除二次确认弹窗（稿 2567:5555）：标题问句 + 一句不可撤销说明 + 取消/删除 */
@@ -2179,7 +2179,8 @@ lv_obj_t *make_print_confirm_btn(lv_obj_t *parent, const char *text,
                                  bool primary, lv_event_cb_t cb)
 {
     lv_obj_t *btn = ui_user_make_confirm_footer_btn(parent, text, primary,
-                                                    user_color_accent, cb, nullptr);
+                                                    user_color_accent, false,
+                                                    cb, nullptr);
     if(primary) {
         lv_obj_set_style_shadow_width(btn, 24, 0);
         lv_obj_set_style_shadow_color(btn, user_color_accent, 0);

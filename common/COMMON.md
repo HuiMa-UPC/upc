@@ -26,7 +26,7 @@ scripts/rongsu.sh start   # glavo + rongsu_camera → ui
 | `ipc/` | Unix socket、`MsgPort`、SHM/dma 帧环 |
 | `debug/` | `UPC_LOG_*`、`upc_sys_monitor` |
 | `process/` | PID、daemon、专题日志重定向 |
-| `fs_manifest/` | 本地清单 JSON（G-code / 打印历史 `config.json`）；板端数据根默认 `/userdata/{CAL,image,media,Gcode,transport,messages,test,snowpod}` |
+| `fs_manifest/` | 本地清单 JSON（G-code / 打印历史 `config.json`）；板端数据根默认 `/userdata/{CAL,image,media,visual,Gcode,transport,messages,test,snowpod}` |
 
 ## 进程与日志
 
@@ -147,7 +147,7 @@ scripts/rongsu.sh start   # glavo + rongsu_camera → ui
 
 | MsgType（当前枚举） | 规范名（新消息参照） | 方向 | Payload | UI API | Glavo 处理 |
 |---------------------|----------------------|------|---------|--------|------------|
-| `APP_Update_Ntf` | `GLAVO_Env_Update_Ntf` | Glavo→UI/MQTT | `EnvSnapshotPayload`（含 `pm1_indoor`/`pm10_indoor`/`humidity_percent`/`pressure_kpa`/`baseplate_temp_c`/`powder_bits`；环境指标无效填 <0→UI 显示 `--`；`powder_bits` 用于缺粉弹窗继续按钮门控） | `register_env_update` | `McuLink` 推送（UI 与 MQTT 双发） |
+| `APP_Update_Ntf` | `GLAVO_Env_Update_Ntf` | Glavo→UI/MQTT | `EnvSnapshotPayload`（含 `pm1_indoor`/`pm10_indoor`/`humidity_percent`/`pressure_kpa`/`baseplate_temp_c`/`powder_bits`/`sensor_v4`/`pm1_cabin`/`pm10_cabin`；环境指标无效填 <0→UI 显示 `--`；`powder_bits` 用于缺粉弹窗继续按钮门控；V4 时 MQTT `telemetry/chamber` 用 SOC 舱内量，`telemetry/chamber_ext` 用舱外 PM） | `register_env_update` | `McuLink` 推送（UI 与 MQTT 双发） |
 | `UI_PM25_Req` | — | UI→Glavo | Empty | `send_pm25_check` | `handle_pm25_req` |
 | `APP_PM25_Rsp` | `GLAVO_PM25_Check_Rsp` | Glavo→UI | `Pm25ResultPayload` | `register_pm25_result` | PM2.5 流程 |
 | `UI_CLOSE_DOOR_Req` | — | UI→Glavo | Empty | `send_close_door_check` | 关门检测 |
@@ -209,9 +209,16 @@ scripts/rongsu.sh start   # glavo + rongsu_camera → ui
 | `GLAVO_Visual_FirstLayer_Check_Req` | `0x1423` | Glavo→Visual | `VisualFirstLayerCheckReqPayload` | — | 触发首层视觉检测（检测前允许从 Camera 最新帧做拷贝/处理） |
 | `APP_Visual_FirstLayer_Check_Rsp` | `0x1424` | Visual→Glavo | `VisualFirstLayerCheckRspPayload` | — | 首层检测结果：`result=1` 继续打印，`result=0` 继续铺粉 |
 | `GLAVO_Visual_OpticalPath_Session_Start_Ntf` | `0x1428` | Glavo→Visual | Empty | — | 打印前光路检测开始，Visual 起流（与首层会话共用一路流） |
-| `GLAVO_Visual_OpticalPath_Session_Stop_Ntf` | — | Glavo→Visual | Empty | — | 光路检测结束；两类会话都停才拆流 |
-| `GLAVO_Visual_OpticalPath_Point_Check_Req` | — | Glavo→Visual | `VisualOpticalPathCheckReqPayload` | — | 单点红光识别；`timeout_ms` 内 Visual 轮询最新帧后单次回包 |
-| `APP_Visual_OpticalPath_Point_Check_Rsp` | — | Visual→Glavo | `VisualOpticalPathCheckRspPayload` | — | `result=1` 该点通过；`session_id`/`point_index` 必须回显 |
+| `GLAVO_Visual_OpticalPath_Session_Stop_Ntf` | `0x1429` | Glavo→Visual | Empty | — | 光路检测结束；三类会话都停才拆流 |
+| `GLAVO_Visual_OpticalPath_Point_Check_Req` | `0x142A` | Glavo→Visual | `VisualOpticalPathCheckReqPayload` | — | 单点红光识别；`timeout_ms` 内 Visual 轮询最新帧后单次回包 |
+| `APP_Visual_OpticalPath_Point_Check_Rsp` | `0x142B` | Visual→Glavo | `VisualOpticalPathCheckRspPayload` | — | `result=1` 该点通过；`session_id`/`point_index` 必须回显 |
+| `GLAVO_Visual_PlateHeight_Session_Start_Ntf` | `0x142C` | Glavo→Visual | Empty | — | 打印前测高 / 高度校准开始，Visual 起流（与首层、光路共用一路） |
+| `GLAVO_Visual_PlateHeight_Session_Stop_Ntf` | `0x142D` | Glavo→Visual | Empty | — | 测高/校准结束；三类会话都停才拆流 |
+| `GLAVO_Visual_Laser_Spot_Measure_Req` | `0x142E` | Glavo→Visual | Empty | — | 请求当前帧激光质心（校准与测高）；Visual 不查 LUT |
+| `APP_Visual_Laser_Spot_Measure_Rsp` | `0x142F` | Visual→Glavo | `LaserSpotMeasureRspPayload` | — | `ok` + `laser_x/y` 像素质心 |
+| `UI_Glavo_Height_Calib_Start_Req` | `0x1430` | UI→Glavo | `HeightCalibStartReqPayload` | `send_height_calib_start` | 调试页高度校准（关舱灯 + Red_On → 先下降 20mm 再 Home → 写 LUT；结束开舱灯） |
+| `APP_Glavo_Height_Calib_Start_Rsp` | `0x1432` | Glavo→UI | `HeightCalibStartRspPayload` | — | 是否已启动后台校准；`ok=0` 时仍会推 `Progress stage=3` |
+| `GLAVO_UI_Height_Calib_Progress_Ntf` | `0x1431` | Glavo→UI | `HeightCalibProgressPayload` | `register_height_calib_progress` | stage 0 开始 / 1 采集 / 2 完成 / 3 失败 |
 | `APP_Print_Video_Session_Start_Ntf` | — | Glavo→Media（Hub FWD） | `PrintVideoSessionPayload`（含 `h264_bitrate`，0=Media 默认中等码率 / cal `PRINT_H264_BITRATE`） | — | `PrintVideoNotify` / `MediaService` |
 | `APP_Print_Layer_Snap_Ntf` | — | Glavo→Media（Hub FWD） | `PrintVideoLayerSnapPayload` | — | 换层 Snap |
 | `APP_Print_Video_Session_Finish_Ntf` | — | Glavo→Media（Hub FWD） | `PrintVideoSessionPayload` | — | 保存 `/userdata/media/video/{job}/1.png...N.png` + `thumb.rthm` + config 快路径（`video_pending`） |
@@ -248,6 +255,13 @@ scripts/rongsu.sh start   # glavo + rongsu_camera → ui
 | `UI_Debug_Galvo_Calib_Ntf` | — | UI→Glavo | Empty | `send_galvo_calib` | 开始标定 |
 | `UI_Debug_Galvo_PointTest_Start_Ntf` | — | UI→Glavo | Empty | `start_galvo_point_test` | Other 页一次性红光点位测试：常亮模式下中心及四角各停 3 秒，末尾回中心并切普通红光；坐标走当前校准表 |
 | `UI_Debug_Galvo_PointTest_Get_Ntf` | — | UI→Glavo | Empty | `request_galvo_point_test_state` | 查询红光点位测试运行状态 |
+| `UI_Debug_Galvo_AbsMove_Ntf` | — | UI→Glavo | `DebugGalvoAbsMovePayload` | `send_galvo_abs_move` | 振镜绝对坐标移动（snowx 口径：`McuLink::send_galvo_abs_pos`；打印中互斥） |
+| `UI_Debug_PlateHeight_Adj_Set_Ntf` | — | UI→Glavo | `DebugOnOffPayload` | `send_plate_height_adj_set` | 调试页开关：打印前基板测高并调 Z（仅本次运行，默认关） |
+| `UI_Debug_PlateHeight_Adj_Get_Ntf` | — | UI→Glavo | Empty | `request_plate_height_adj_state` | 查询当前“打印前基板测高”开关状态 |
+| `UI_Debug_Soc_Led_Set_Ntf` | — | UI→Glavo | `DebugSocLedPayload` | `send_soc_led_set` | 调试页：六路舱灯 `lgt1l`…`lgt3r` sysfs 单独开关；**不看 MCU 版本**（与 Device/Light 串口舱灯无关） |
+| `UI_Debug_Soc_Led_Get_Ntf` | — | UI→Glavo | Empty | `request_soc_led_state` | 查询六路舱灯开关位图 |
+| `UI_Debug_Cabin_Pm_Valve_Set_Ntf` | — | UI→Glavo | `DebugOnOffPayload` | `send_cabin_pm_valve_set` | 调试页：舱内 PM2.5 电磁阀 `fa_valve`；**不看 MCU 版本** |
+| `UI_Debug_Cabin_Pm_Valve_Get_Ntf` | — | UI→Glavo | Empty | `request_cabin_pm_valve_state` | 查询舱内 PM 阀开关状态 |
 | `UI_Debug_Device_Ntf` | — | UI→Glavo | `DebugDevicePayload` | `send_device` | 设备/门/电机/照明 |
 | `UI_Debug_Powder_Bucket_Ntf` | — | UI→Glavo | `DebugBucketPayload` | `send_powder_bucket` | 粉桶 |
 | `UI_Debug_Pusher_Ntf` | — | UI→Glavo | `DebugMotorPayload` | `send_sieve` | 筛粉电机（0=停止/1=筛粉运行/2=反转倒渣） |
@@ -267,6 +281,10 @@ scripts/rongsu.sh start   # glavo + rongsu_camera → ui
 | `UI_Debug_Env_Sim_Get_Ntf` | — | UI→Glavo | Empty | `request_env_sim_state` | 查询当前“环境上报模拟”开关状态 |
 | `UI_Debug_Env_Sim_Powder_Set_Ntf` | — | UI→Glavo | `DebugOnOffPayload` | `send_env_sim_powder_set` | 环境模拟粉量缺粉开关（仅 Env Sim=On 可设；切换后延迟 5 秒生效） |
 | `UI_Debug_Env_Sim_Powder_Get_Ntf` | — | UI→Glavo | Empty | `request_env_sim_powder_state` | 查询当前“环境模拟粉量缺粉”开关状态 |
+| `UI_Debug_Skip_O2_Gate_Set_Ntf` | — | UI→Glavo | `DebugOnOffPayload` | `send_skip_o2_gate_set` | 调试页开关：跳过 V4 SOC 氧打印门（仅本次运行，默认关；开则起印不发洗气开、不等氧、打印中不因氧高暂停/1120） |
+| `UI_Debug_Skip_O2_Gate_Get_Ntf` | — | UI→Glavo | Empty | `request_skip_o2_gate_state` | 查询当前“跳过氧门”开关状态 |
+| `UI_Debug_O2_Calib_Req` | — | UI→Glavo | `DebugO2CalibReqPayload` | `send_o2_calib` | 调试页氧标定：参考浓度单点求 K，写 `/userdata/CAL/o2_cal.json`；Glavo worker 只做打印互斥后丢给 SocSensors 独立线程，完成后只发 Rsp |
+| `UI_Debug_O2_Calib_Get_Ntf` | — | UI→Glavo | Empty | `request_o2_calib_state` | 查询当前氧标定 K（不重新采样） |
 | `UI_Debug_FirstLayer_Visual_Check_Set_Ntf` | — | UI→Glavo | `DebugOnOffPayload` | `send_first_layer_visual_check_set` | 调试页开关：首层视觉检测（仅本次运行，默认关） |
 | `UI_Debug_FirstLayer_Visual_Check_Get_Ntf` | — | UI→Glavo | Empty | `request_first_layer_visual_check_state` | 查询当前“首层视觉检测”开关状态 |
 | `UI_Debug_OpticalPath_Check_Set_Ntf` | — | UI→Glavo | `DebugOnOffPayload` | `send_optical_path_check_set` | 调试页开关：打印前光路检测（仅本次运行，默认关） |
@@ -278,13 +296,19 @@ scripts/rongsu.sh start   # glavo + rongsu_camera → ui
 | `GLAVO_Debug_Clean_Record_Ntf` | — | Glavo→UI | `DebugOnOffPayload` | `register_clean_record` | 回读当前“清粉录像”开关状态 |
 | `GLAVO_Debug_Env_Sim_Ntf` | — | Glavo→UI | `DebugOnOffPayload` | `register_env_sim` | 回读当前“环境上报模拟”开关状态 |
 | `GLAVO_Debug_Env_Sim_Powder_Ntf` | — | Glavo→UI | `DebugOnOffPayload` | `register_env_sim_powder` | 回读当前“环境模拟粉量缺粉”开关状态 |
+| `GLAVO_Debug_Skip_O2_Gate_Ntf` | — | Glavo→UI | `DebugOnOffPayload` | `register_skip_o2_gate` | 回读当前“跳过 SOC 氧打印门”开关状态 |
+| `GLAVO_Debug_O2_Calib_Rsp` | — | Glavo→UI | `DebugO2CalibRspPayload` | `register_o2_calib` | 氧标定 Req 应答（ok/err/k/i_ua/o2）；成功不再另推 Ntf |
+| `GLAVO_Debug_O2_Calib_Ntf` | — | Glavo→UI | `DebugO2CalibRspPayload` | `register_o2_calib` | 进页 Get 回读当前 K（不改盘；i_ua=0；与 Rsp 同结构） |
 | `GLAVO_Debug_FirstLayer_Visual_Check_Ntf` | — | Glavo→UI | `DebugOnOffPayload` | `register_first_layer_visual_check` | 回读当前“首层视觉检测”开关状态 |
 | `GLAVO_Debug_OpticalPath_Check_Ntf` | — | Glavo→UI | `DebugOnOffPayload` | `register_optical_path_check` | 回读当前“打印前光路检测”开关状态 |
+| `GLAVO_Debug_PlateHeight_Adj_Ntf` | — | Glavo→UI | `DebugOnOffPayload` | `register_plate_height_adj` | 回读当前“打印前基板测高”开关状态 |
+| `GLAVO_Debug_Soc_Led_Ntf` | — | Glavo→UI | `DebugSocLedStatePayload` | `register_soc_led` | 回读六路舱灯开关位图（bit0=`lgt1l`…bit5=`lgt3r`） |
+| `GLAVO_Debug_Cabin_Pm_Valve_Ntf` | — | Glavo→UI | `DebugOnOffPayload` | `register_cabin_pm_valve` | 回读舱内 PM `fa_valve` 开关状态 |
 | `GLAVO_Debug_TestImage_Ntf` | — | Glavo→UI | `DebugOnOffPayload` | `register_test_image` | 回读测试图循环实际状态；文件缺失/与正式打印互斥失败时回 `on=0` |
 | `GLAVO_Debug_Galvo_PointTest_Ntf` | — | Glavo→UI | `DebugOnOffPayload` | `register_galvo_point_test` | 回读红光点位测试运行状态；用于按钮、Test image 与正式打印的双向互斥 |
 | `UI_Debug_Fan_Duty_Ntf` | — | UI→Glavo | `DebugFanPayload` | `send_fan_duty` | 仅设风扇占空比（0–100） |
 | `UI_Debug_PrintParam_Set_Ntf` | — | UI→Glavo | `DebugPrintParamPayload` | `send_print_layer_param` | 打印层参数（层厚 + 平衡×1000） |
-| `GLAVO_Debug_Sensor_Ntf` | — | Glavo→UI | `DebugSensorPayload` | `register_sensor` | 7 路传感器 |
+| `GLAVO_Debug_Sensor_Ntf` | — | Glavo→UI | `DebugSensorPayload` | `register_sensor` | 调试页顶栏：舱内O2/滤芯O2/气压/舱外PM/湿度/舱温/基板温/舱内PM/粉量 |
 | `GLAVO_Debug_Axis_Ntf` | — | Glavo→UI | `DebugAxisStatePayload` | `register_axis` | Z/S/D + Z 工作坐标 |
 | `GLAVO_Debug_Device_Ntf` | — | Glavo→UI | `DebugDeviceStatePayload` | `register_device` | 设备行状态 |
 | `GLAVO_Debug_Galvo_Ntf` | — | Glavo→UI | `DebugGalvoStatePayload` | `register_galvo` | 振镜 X/Y |
@@ -318,7 +342,9 @@ scripts/rongsu.sh start   # glavo + rongsu_camera → ui
 - 正确写法：`payload[x] = v;`
 - 典型场景：
   - 调试红光开关：`stop=0 pause=0 red=1/2`
-  - 调试红光常亮：`stop=0 pause=0 red=3`
+  - 调试红光常亮：先串口 `0x12` 关激光使能，出队后再 `stop=0 pause=0 red=3`（不先发 TCP）
+  - 上电 / TCP 重连：`stop=0 pause=0 red=1`（不跟串口 `0x12`）
+  - 串口 MCU 真实版本上报后：先 `0x12` 关激光使能，出队后再补 `red=1`
   - 打印暂停/恢复：`stop=0 pause=2/1 red=0`
   - 急停：`stop=1 pause=0 red=0`
 
@@ -374,6 +400,7 @@ rongsu_broker ──listen──► /tmp/upc_broker.sock ◄── UI / Glavo / 
 | `common/fs_manifest/message_paths.hpp` | `UPC_MESSAGE_DIR`（报警历史 jsonl） | 平台 / UI |
 | `common/fs_manifest/xfr_paths.hpp` | `UPC_XFR_STORAGE_DIR`（局域网上传暂存与 token） | 平台 / Xfer |
 | `common/config/cal_config.hpp` | `UPC_CAL_PATH`（默认 `/userdata/CAL/cal.csv`） | 平台 / Glavo / Media / UI / Xfer |
+| `app/glavo/lib/device_config.hpp` | `GLAVO_O2_CAL_JSON_PATH`（默认 `/userdata/CAL/o2_cal.json`）氧 K 标定 | Glavo |
 | `common/ipc/msg_port.hpp` | 业务唯一 IPC 入口 | 平台组 |
 | `common/ipc/ipc_wire.*` | 线协议 | 平台组 |
 | `common/ipc/ipc_endpoint.*` | Socket 传输 | 平台组 |
@@ -408,9 +435,21 @@ rongsu_broker ──listen──► /tmp/upc_broker.sock ◄── UI / Glavo / 
 
 ### `DmaHeapUsage`：交给 RGA 的分配必须显式声明
 
-RK3568 的 RGA2 没有 IOMMU，只能寻址**物理连续且 <4G** 的内存。候选堆里
+RK3568 的 RGA2 **不是 IOMMU 客户端**，只能寻址**物理连续且 <4G** 的内存。候选堆里
 `system` / `system-uncached` 是页式堆，两条都不满足——从它们拿到的 buffer 能 mmap，
 但 `importbuffer_fd()` 必然返回 0。
+
+板端（`rk3568-buildroot`）已用设备树 / sysfs 核对，换 SoC 或改 DTS 时重跑即可：
+
+| 设备 | 节点 | `of_node/iommus` | sysfs `iommu` |
+|------|------|------------------|---------------|
+| RGA2 | `fdeb0000.rk_rga`（`compatible: rockchip,rga2`） | 无 | 无 |
+| ISP | `fdff0000.rkisp`（`rockchip,rk3568-rkisp`） | 有 | `fdff1a00.iommu`，group 7 |
+| VDPU | `fdea0400.vdpu`（`rockchip,vpu-decoder-v2`） | 有 | `fdea0800.iommu`，group 1 |
+
+`rkisp-vir0` 无独立 `iommu` 软链接，映射在物理 `rkisp` 上。`fe102400.nocp-gpu-vpu-rga-venc` 是 NoC 探针，不是 RGA。`fdea0800` 是 **VPU 的 IOMMU**，不是 RGA 基址。
+
+核对命令：看 `.../of_node` 有没有 `iommus`，以及 `/sys/devices/platform/<dev>/iommu` 软链接。RGA 没有、ISP/VPU 有，才能说「RGA 不走 IOMMU」。采集链路上 IOMMU 只出现在 **rkisp 写 V4L2 缓冲**（以及 MPP/VPU 用自有 buffer）时；RGA 用 `importbuffer_fd` 拿物理地址。同一 dma-buf 在 ISP 已 `QBUF` 时再被 CPU/RGA 访问，风险在 ISP 的 `rk_iommu`/`dma_resv`，不在 RGA 建页表。当前采集路径**始终**经隔离 pool 拷贝后再分发，消费者不持有 V4L2 buf；窗口满时丢新帧、不抢还。详见 [camera/CAMERA.md](../app/camera/CAMERA.md) 「ISP IOMMU 与 dma-buf 所有权」。
 
 | 用途 | 候选堆 | 用尽后 |
 |---|---|---|

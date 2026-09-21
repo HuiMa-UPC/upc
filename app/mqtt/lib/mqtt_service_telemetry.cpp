@@ -120,9 +120,19 @@ void MqttService::cache_telemetry(const middleware::EnvSnapshotPayload& p)
         latest_.has_value = false;
         return;
     }
-    latest_.pm25 = p.pm25_cabin;
-    latest_.pm1_0 = p.pm1_indoor;
-    latest_.pm10 = p.pm10_indoor;
+    latest_.sensor_v4 = (p.sensor_v4 != 0);
+    if(latest_.sensor_v4) {
+        /* V4：chamber 用 SOC 舱内量；舱外 PM 另走 chamber_ext */
+        latest_.pm25 = p.pm25_cabin;
+        latest_.pm1_0 = p.pm1_cabin;
+        latest_.pm10 = p.pm10_cabin;
+        latest_.pm25_outdoor = p.pm25_indoor;
+    } else {
+        latest_.pm25 = p.pm25_cabin;
+        latest_.pm1_0 = p.pm1_indoor;
+        latest_.pm10 = p.pm10_indoor;
+        latest_.pm25_outdoor = -1.0f;
+    }
     latest_.oxygen_percent = p.oxygen_percent;
     latest_.temperature_c = p.temperature_c;
     latest_.humidity_percent = p.humidity_percent;
@@ -236,10 +246,6 @@ bool MqttService::publish_chamber_telemetry()
     }
     last_telemetry_pub_ms_ = now;
 
-    int o2_ppm = static_cast<int>(std::lround(static_cast<double>(snap.oxygen_percent) * 10000.0));
-    if(o2_ppm < 0) {
-        o2_ppm = 0;
-    }
     auto json_num_or_null = [](float value, const char* format) -> std::string {
         if(value < 0.0f) {
             return "null";
@@ -248,10 +254,21 @@ bool MqttService::publish_chamber_telemetry()
         std::snprintf(num, sizeof(num), format, static_cast<double>(value));
         return std::string(num);
     };
+    /* 无效氧发 null，禁止夹成 0 ppm（云端会误判为已洗气到位） */
+    std::string o2_ppm = "null";
+    if(snap.oxygen_percent >= 0.0f) {
+        const int ppm = static_cast<int>(
+            std::lround(static_cast<double>(snap.oxygen_percent) * 10000.0));
+        char buf[32];
+        std::snprintf(buf, sizeof(buf), "%d", ppm < 0 ? 0 : ppm);
+        o2_ppm = buf;
+    }
+    const std::string pm25 = json_num_or_null(snap.pm25, "%.3f");
     const std::string pm1_0 = json_num_or_null(snap.pm1_0, "%.3f");
     const std::string pm10 = json_num_or_null(snap.pm10, "%.3f");
     const std::string humidity = json_num_or_null(snap.humidity_percent, "%.3f");
     const std::string pressure_1 = json_num_or_null(snap.pressure_kpa, "%.3f");
+    const std::string ntc_c = json_num_or_null(snap.temperature_c, "%.3f");
     const uint32_t seq = ++seq_;
     const long long ts = static_cast<long long>(unix_ms());
     const std::string escaped_device = json_escape(cfg_.device_id);
@@ -266,25 +283,25 @@ bool MqttService::publish_chamber_telemetry()
         "\"seq\":%u,"
         "\"data\":{"
             "\"group\":\"chamber\","
-            "\"pm25\":%.3f,"
+            "\"pm25\":%s,"
             "\"pm1_0\":%s,"
             "\"pm10\":%s,"
             "\"humidity\":%s,"
             "\"pressure_1\":%s,"
-            "\"o2_ppm\":%d,"
-            "\"ntc_c\":%.3f"
+            "\"o2_ppm\":%s,"
+            "\"ntc_c\":%s"
         "}"
         "}",
         escaped_device.c_str(),
         ts,
         seq,
-        static_cast<double>(snap.pm25),
+        pm25.c_str(),
         pm1_0.c_str(),
         pm10.c_str(),
         humidity.c_str(),
         pressure_1.c_str(),
-        o2_ppm,
-        static_cast<double>(snap.temperature_c));
+        o2_ppm.c_str(),
+        ntc_c.c_str());
 
     const std::string topic = cfg_.topic_telemetry_chamber();
     MQTTClient_message msg = MQTTClient_message_initializer;
@@ -308,6 +325,73 @@ bool MqttService::publish_chamber_telemetry()
     }
     UPC_LOG_MQTT_SERVICE_TO(MqttTelemetry, Debug,
         "MQTT TX telemetry queued topic=%s token=%d",
+        topic.c_str(), static_cast<int>(token));
+    return true;
+}
+
+bool MqttService::publish_chamber_ext_telemetry()
+{
+    ChamberTelemetry snap{};
+    {
+        std::lock_guard<std::mutex> lock(data_mtx_);
+        snap = latest_;
+    }
+    /* 仅 V4：舱外 PM 由 SOC 常显采集，走 chamber_ext */
+    if(!snap.has_value || !snap.sensor_v4 || snap.pm25_outdoor < 0.0f) {
+        return false;
+    }
+
+    const uint64_t now = monotonic_ms();
+    if(last_chamber_ext_pub_ms_ != 0 &&
+       now - last_chamber_ext_pub_ms_ < kTelemetryChamberExtIntervalMs) {
+        return false;
+    }
+    last_chamber_ext_pub_ms_ = now;
+
+    const uint32_t seq = ++seq_;
+    const long long ts = static_cast<long long>(unix_ms());
+    const std::string escaped_device = json_escape(cfg_.device_id);
+
+    char payload[512];
+    std::snprintf(payload, sizeof(payload),
+        "{"
+        "\"v\":1,"
+        "\"type\":\"telemetry\","
+        "\"device_id\":\"%s\","
+        "\"ts\":%lld,"
+        "\"seq\":%u,"
+        "\"data\":{"
+            "\"group\":\"chamber_ext\","
+            "\"pm25\":%.3f"
+        "}"
+        "}",
+        escaped_device.c_str(),
+        ts,
+        seq,
+        static_cast<double>(snap.pm25_outdoor));
+
+    const std::string topic = cfg_.topic_telemetry_chamber_ext();
+    MQTTClient_message msg = MQTTClient_message_initializer;
+    msg.payload = payload;
+    msg.payloadlen = static_cast<int>(std::strlen(payload));
+    msg.qos = cfg_.qos_telemetry;
+    msg.retained = 0;
+
+    debug_log_mqtt_frame("TX", topic, msg.payload,
+                         static_cast<size_t>(msg.payloadlen),
+                         msg.qos, msg.retained);
+
+    MQTTClient_deliveryToken token;
+    const int rc = MQTTClient_publishMessage(client_, topic.c_str(), &msg, &token);
+    if(rc != MQTTCLIENT_SUCCESS) {
+        UPC_LOG_MQTT_SERVICE_TO(MqttTelemetry, Warn,
+            "publish chamber_ext fail rc=%d topic=%s", rc, topic.c_str());
+        mqtt_connected_ = false;
+        cmd_subscribed_ = false;
+        return false;
+    }
+    UPC_LOG_MQTT_SERVICE_TO(MqttTelemetry, Debug,
+        "MQTT TX chamber_ext queued topic=%s token=%d",
         topic.c_str(), static_cast<int>(token));
     return true;
 }

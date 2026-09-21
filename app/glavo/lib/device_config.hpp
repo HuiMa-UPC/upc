@@ -21,7 +21,7 @@
 #endif
 
 #ifndef GLAVO_SERIAL_DEFAULT_DEVICE
-#define GLAVO_SERIAL_DEFAULT_DEVICE  "/dev/ttyS3"
+#define GLAVO_SERIAL_DEFAULT_DEVICE  "/dev/ttyS4"
 #endif
 
 #ifndef GLAVO_SERIAL_DEFAULT_BAUD
@@ -165,6 +165,120 @@
 /** 真实开门请求等待 MCU 结果超时（毫秒） */
 #ifndef GLAVO_DOOR_OPEN_TIMEOUT_MS
 #define GLAVO_DOOR_OPEN_TIMEOUT_MS  5000
+#endif
+
+/* -------------------------------------------------------------------------- */
+/* SOC 本地传感器（MCU≥V4；背光在 UI，不经本配置）                              */
+/* -------------------------------------------------------------------------- */
+/** 舱内 PMSA003-A */
+#ifndef GLAVO_PM_CABIN_UART
+#define GLAVO_PM_CABIN_UART  "/dev/ttyS0"
+#endif
+/**
+ * 舱外 PMSA003-A
+ */
+#ifndef GLAVO_PM_OUTDOOR_UART
+#define GLAVO_PM_OUTDOOR_UART  "/dev/ttyS5"
+#endif
+#ifndef GLAVO_PM_VALVE_SYSFS
+#define GLAVO_PM_VALVE_SYSFS  "/sys/class/leds/fa_valve/brightness"
+#endif
+/** 六路舱灯（调试页单独开关；不看 MCU 版本） */
+#ifndef GLAVO_SOC_LED_LGT1L_SYSFS
+#define GLAVO_SOC_LED_LGT1L_SYSFS  "/sys/class/leds/lgt1l/brightness"
+#endif
+#ifndef GLAVO_SOC_LED_LGT1R_SYSFS
+#define GLAVO_SOC_LED_LGT1R_SYSFS  "/sys/class/leds/lgt1r/brightness"
+#endif
+#ifndef GLAVO_SOC_LED_LGT2L_SYSFS
+#define GLAVO_SOC_LED_LGT2L_SYSFS  "/sys/class/leds/lgt2l/brightness"
+#endif
+#ifndef GLAVO_SOC_LED_LGT2R_SYSFS
+#define GLAVO_SOC_LED_LGT2R_SYSFS  "/sys/class/leds/lgt2r/brightness"
+#endif
+#ifndef GLAVO_SOC_LED_LGT3L_SYSFS
+#define GLAVO_SOC_LED_LGT3L_SYSFS  "/sys/class/leds/lgt3l/brightness"
+#endif
+#ifndef GLAVO_SOC_LED_LGT3R_SYSFS
+#define GLAVO_SOC_LED_LGT3R_SYSFS  "/sys/class/leds/lgt3r/brightness"
+#endif
+/** AHT20 最短采样间隔（ms）；驱动/器件约束，小于此间隔不读 hwmon */
+#ifndef GLAVO_AHT20_MIN_INTERVAL_MS
+#define GLAVO_AHT20_MIN_INTERVAL_MS  2000
+#endif
+/**
+ * 氧传感器（IIO 无 in_voltage0_scale）：
+ *   V = raw × GLAVO_O2_RAW_TO_VOLT（raw 单位 nV）
+ *   I[uA] = V / R_sense × 1e6
+ *   O2% = 100 × (1 − e^(−I/K))
+ * K 优先读 /userdata/CAL/o2_cal.json（调试页一键标定写入）；缺文件回退 GLAVO_O2_K。
+ * 出厂默认空气点：raw≈1.54e7 → ~15.4mV → K≈655 对准约 20.9%。
+ */
+#ifndef GLAVO_O2_READY_PATH
+#define GLAVO_O2_READY_PATH  "/run/o2_ready"  /**< S46o2-preheat 约 100s 后创建 */
+#endif
+#ifndef GLAVO_O2_IIO_RAW
+#define GLAVO_O2_IIO_RAW  "/sys/bus/iio/devices/iio:device0/in_voltage0_raw"
+#endif
+#ifndef GLAVO_O2_RAW_TO_VOLT
+#define GLAVO_O2_RAW_TO_VOLT  1e-9f  /**< nV → V；勿再按 ADC 满幅换算 */
+#endif
+#ifndef GLAVO_O2_RSENSE_OHM
+#define GLAVO_O2_RSENSE_OHM  100.f
+#endif
+#ifndef GLAVO_O2_K
+#define GLAVO_O2_K  655.f  /**< 缺 JSON 时的出厂默认；再标定写 o2_cal.json */
+#endif
+#ifndef GLAVO_O2_CAL_JSON_PATH
+#define GLAVO_O2_CAL_JSON_PATH  "/userdata/CAL/o2_cal.json"
+#endif
+#ifndef GLAVO_O2_CAL_REF_PERCENT
+#define GLAVO_O2_CAL_REF_PERCENT  20.9f  /**< 空气单点默认参考浓度 % */
+#endif
+/** 标定电流窗（μA）：只拦噪声/卡死，不限定空气点（参考浓度由 UI 填写） */
+#ifndef GLAVO_O2_CAL_I_MIN_UA
+#define GLAVO_O2_CAL_I_MIN_UA  0.05f
+#endif
+#ifndef GLAVO_O2_CAL_I_MAX_UA
+#define GLAVO_O2_CAL_I_MAX_UA  2000.f
+#endif
+#ifndef GLAVO_O2_CAL_K_MIN
+#define GLAVO_O2_CAL_K_MIN  200.f
+#endif
+#ifndef GLAVO_O2_CAL_K_MAX
+#define GLAVO_O2_CAL_K_MAX  1200.f
+#endif
+#ifndef GLAVO_O2_CAL_SAMPLE_COUNT
+#define GLAVO_O2_CAL_SAMPLE_COUNT  15
+#endif
+/** 有效采样下限；低于此数视为 IIO 失败（≤ SAMPLE_COUNT） */
+#ifndef GLAVO_O2_CAL_SAMPLE_MIN
+#define GLAVO_O2_CAL_SAMPLE_MIN  10
+#endif
+#ifndef GLAVO_O2_CAL_SAMPLE_INTERVAL_MS
+#define GLAVO_O2_CAL_SAMPLE_INTERVAL_MS  50
+#endif
+/**
+ * V4 打印氧门（SOC IIO；MCU 不再报氧）。
+ * 起印：串口 CONDITION_OK 后，氧门开启时 SOC 发洗气开并须 O2 < MAX 才发 PRINT_START；
+ *       Skip O2 Gate / Env Sim / 测试图跳过洗气开与等氧。
+ * 打印中：O2 ≥ MAX 暂停；O2 ≤ RESUME 自动恢复（迟滞防抖）。
+ * 终止/打完：若本作业 SOC 开过洗气阀则发关阀。
+ * Env Sim / 测试图跳过本门控。
+ */
+#ifndef GLAVO_O2_PRINT_MAX_PERCENT
+#define GLAVO_O2_PRINT_MAX_PERCENT  0.8f
+#endif
+#ifndef GLAVO_O2_PRINT_RESUME_PERCENT
+#define GLAVO_O2_PRINT_RESUME_PERCENT  0.7f
+#endif
+/** 与报警字典 CHAMBER_OXYGEN_HIGH 一致；SOC 合成 GLAVO_Alarm_Report_Ntf */
+#ifndef GLAVO_ALARM_CODE_CHAMBER_OXYGEN_HIGH
+#define GLAVO_ALARM_CODE_CHAMBER_OXYGEN_HIGH  1120u
+#endif
+/** SPI 灯效板（WS，40 颗）；仅 MCU≥V4 打开 */
+#ifndef GLAVO_SPI_STATUS_LED_DEV
+#define GLAVO_SPI_STATUS_LED_DEV  "/dev/spidev1.0"
 #endif
 
 /* -------------------------------------------------------------------------- */

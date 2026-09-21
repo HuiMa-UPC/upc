@@ -74,35 +74,35 @@
 /**
  * V4L2 采集缓冲个数。
  *
- * 需同时供三份：驱动侧待填充、采集线程当前处理、已下发给消费者尚未归还
- * （见 CAMERA_MAX_FRAMES_IN_FLIGHT）。stride 不对齐时 padding pool 按同样
- * 个数分配，因此这里每 +1 约多占两倍单帧 dma 内存。
+ * 需同时供：驱动侧待填充、采集线程当前 DQBUF 处理。交付给消费者的是等量的
+ * **隔离 pool**（dma32/CMA，见 CameraDmaFrameSource），V4L2 buf 拷完立即
+ * QBUF，因此在飞窗口占的是 isolation pool，不是 ISP 队列。
  *
  * **上调前先读这段**：这一个常量同时约束三件互不相关的事，曾经因此踩坑。
- *   1. 驱动队列深度 —— 也就是画面延迟的天花板（缓冲数 × 帧周期）。padded
- *      模式下 V4L2 buffer 拷完立即 requeue，驱动始终握着全部缓冲，所以这
- *      个乘积就是最坏积压。dequeue_frame 已排空到最新帧，正常不会摸到。
- *   2. padding pool 大小 —— padded 模式下在飞窗口占的是它，不是 V4L2 队列。
- *   3. **UI 侧 RGA 常驻导入数** —— 开流时 CameraPreviewPlayer 会把每个 fd
- *      都 mmap + importbuffer_fd 常驻（见 prepare_rga_streaming_cache）。
+ *   1. 驱动队列深度 —— 也就是画面延迟的天花板（缓冲数 × 帧周期）。
+ *      dequeue_frame 已排空到最新帧，正常不会摸到。
+ *   2. isolation pool 大小 —— 在飞窗口占的是它；每 +1 约多占一帧 NV12 的
+ *      dma32/CMA（另加 V4L2 侧一帧）。
+ *   3. **UI 侧 RGA 常驻导入数** —— 开流时 CameraPreviewPlayer 会把每个
+ *      isolation fd 都 mmap + importbuffer_fd 常驻（见 prepare_rga_streaming_cache）。
  *      实测 rk3568 上 4 个（加 2 块 scratch 共 6 个句柄、约 11.4MB 常驻映射）
  *      可用，6 个（8 句柄、约 15.6MB）必然导入失败，UI 静默退化成软件转换、
  *      每帧 22ms。
- * 想给在飞窗口留更多余量，应当把 padding pool 拆成独立常量，而不是动这里。
+ * 想给在飞窗口留更多余量，应当把 isolation pool 拆成独立常量，而不是动这里。
  */
 #ifndef CAMERA_V4L2_BUF_COUNT
 #define CAMERA_V4L2_BUF_COUNT  4u
 #endif
 
 /**
- * 允许同时"在飞"（已 commit 给消费者、buffer 尚未归还）的帧数上限。
+ * 允许同时"在飞"（已 commit 给消费者、isolation buffer 尚未归还）的帧数上限。
  *
  * 采集线程不再逐帧同步等待消费者归还，而是把已提交的帧挂进在飞队列，
- * 每轮先非阻塞回收已完成的，只在队列达到本上限时才阻塞等最老一帧。
- * 这样单个消费者的瞬时抖动被窗口吸收，不会把整条采集链路（以及依赖它的
- * 直播编码）拖到该消费者的速率。
+ * 每轮先非阻塞回收已完成的。窗口满时短等最老帧；仍满则**丢弃新帧**，
+ * 绝不提前 release 仍被持有的 isolation buf（对齐 V4L2/libcamera 所有权：
+ * DQBUF 后的 buffer 在用户态归还前驱动不得再写）。
  *
- * 实际窗口还会被 buffer 数（留 2 个给驱动填充）与 SHM 槽位数（留 1 个给
+ * 实际窗口还会被 buffer 数（留 2 个给采集持续拷贝）与 SHM 槽位数（留 1 个给
  * 写入）夹住，取三者最小值。当前 CAMERA_V4L2_BUF_COUNT=4 时窗口实际是 2
  * （@30fps 约吸收 66ms 抖动）；本值 3 是给 buffer 数放宽后留的上限。
  */

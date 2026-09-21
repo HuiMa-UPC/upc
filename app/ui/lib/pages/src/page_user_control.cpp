@@ -321,23 +321,15 @@ void set_num(lv_obj_t *lbl, float v, int decimals)
 }
 
 /**
- * 从多档 set 里挑与卡头图标尺寸等宽的那份，让上屏 1:1 不缩放。
- *
- * `lv_draw_sw_transform` 是 2 抽头点采样、不做面积平均，缩小时会整行整列跳过源像素，
- * 而这批图标描边只有 1.6px——跳掉一行就断一截。同 page_user_home.cpp 的 pick_icon()。
+ * 多档 set 挑图，实现在 `ui_user_pick_icon()`（首页、侧栏也在用同一份）。
+ * 本页调用点多，留个短名转调。
  *
  * `ic_layers` / `ic_cube` / `ic_purify` 那批手维护图标没有多档 set，调用方直接把单张
  * dsc 传给 `make_icon()`，不经本函数。
  */
 const lv_image_dsc_t *pick_icon(const lv_image_dsc_t *const *set, int32_t sz)
 {
-    const lv_image_dsc_t *best = set[0];
-    int32_t best_d = INT32_MAX;
-    for(const lv_image_dsc_t *const *p = set; *p != nullptr; ++p) {
-        const int32_t d = LV_ABS((int32_t)(*p)->header.w - sz);
-        if(d < best_d) { best_d = d; best = *p; }
-    }
-    return best;
+    return ui_user_pick_icon(set, sz);
 }
 
 /** 卡头图标那一档（USER_METRIC_ICON_SZ）。Back 箭头是 20，另走 pick_icon()。 */
@@ -902,7 +894,7 @@ void open_pm_dlg(lv_event_t *)
 
     /* 满宽主按钮「Purify Now」 */
     lv_obj_t *btn = ui_user_make_confirm_footer_btn(g_pm_dlg->footer, "Purify Now",
-                                                    true, user_color_accent,
+                                                    true, user_color_accent, false,
                                                     on_pm_purify, nullptr);
     (void)btn;
 

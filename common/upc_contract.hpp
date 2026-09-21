@@ -481,9 +481,20 @@ enum class MsgType : uint32_t {
     UI_Debug_Galvo_PointTest_Get_Ntf,   /**< Empty：查询红光点位测试运行状态 */
     UI_Debug_OpticalPath_Check_Set_Ntf, /**< DebugOnOffPayload：打印前光路检测开关（仅本次运行，默认关） */
     UI_Debug_OpticalPath_Check_Get_Ntf, /**< Empty：查询当前打印前光路检测开关状态 */
+    UI_Debug_Galvo_AbsMove_Ntf,         /**< DebugGalvoAbsMovePayload：振镜绝对坐标移动（手动控制/测高扫描） */
+    UI_Debug_PlateHeight_Adj_Set_Ntf,   /**< DebugOnOffPayload：打印前基板测高调 Z（仅本次运行，默认关） */
+    UI_Debug_PlateHeight_Adj_Get_Ntf,   /**< Empty：查询当前打印前基板测高开关状态 */
+    UI_Debug_Soc_Led_Set_Ntf,           /**< DebugSocLedPayload：六路舱灯 sysfs（lgt*），不看 MCU 版本 */
+    UI_Debug_Soc_Led_Get_Ntf,           /**< Empty：查询六路舱灯开关状态 */
+    UI_Debug_Cabin_Pm_Valve_Set_Ntf,    /**< DebugOnOffPayload：舱内 PM fa_valve，不看 MCU 版本 */
+    UI_Debug_Cabin_Pm_Valve_Get_Ntf,    /**< Empty：查询舱内 PM 阀开关状态 */
+    UI_Debug_Skip_O2_Gate_Set_Ntf,      /**< DebugOnOffPayload：跳过 SOC 氧打印门+打印前洗气（仅本次运行，默认关） */
+    UI_Debug_Skip_O2_Gate_Get_Ntf,      /**< Empty：查询当前跳过氧门开关状态 */
+    UI_Debug_O2_Calib_Req,              /**< DebugO2CalibReqPayload：空气/标准气单点标定 K */
+    UI_Debug_O2_Calib_Get_Ntf,          /**< Empty：查询当前氧标定 K（不重新采样） */
 
     // ---- GLAVO → UI：调试页状态回读（按模块拆分） ----
-    GLAVO_Debug_Sensor_Ntf = 0x1200, /**< DebugSensorPayload：顶部 7 路传感器 */
+    GLAVO_Debug_Sensor_Ntf = 0x1200, /**< DebugSensorPayload：调试顶栏传感器（舱内/滤芯氧 + 舱外/舱内 PM） */
     GLAVO_Debug_Axis_Ntf,           /**< DebugAxisStatePayload：Z/S/D 位置 + Z 工作坐标 */
     GLAVO_Debug_Device_Ntf,         /**< DebugDeviceStatePayload：设备/门/电机/照明 */
     GLAVO_Debug_Galvo_Ntf,          /**< DebugGalvoStatePayload：振镜 X/Y */
@@ -499,6 +510,12 @@ enum class MsgType : uint32_t {
 
     // ---- MEDIA → UI：调试页状态回读 ----
     APP_Media_Local_Rtsp_State_Ntf, /**< DebugOnOffPayload：本地 RTSP Server 实际开关状态（相机未就绪时回 0，UI 据此弹回） */
+    GLAVO_Debug_PlateHeight_Adj_Ntf,    /**< DebugOnOffPayload：打印前基板测高调 Z 开关状态 */
+    GLAVO_Debug_Soc_Led_Ntf,            /**< DebugSocLedStatePayload：六路舱灯开关位图 */
+    GLAVO_Debug_Cabin_Pm_Valve_Ntf,     /**< DebugOnOffPayload：舱内 PM 阀开关状态 */
+    GLAVO_Debug_Skip_O2_Gate_Ntf,       /**< DebugOnOffPayload：跳过 SOC 氧打印门开关状态 */
+    GLAVO_Debug_O2_Calib_Rsp,           /**< DebugO2CalibRspPayload：氧标定结果（Req 应答） */
+    GLAVO_Debug_O2_Calib_Ntf,           /**< DebugO2CalibRspPayload：当前 K 回读（Get，ok=1 且未改盘） */
 
     // ---- UI ↔ GLAVO：网络 / WiFi（ConnMan 后端） ----
     UI_Wifi_Enable_Req = 0x1300, /**< WifiEnableReqPayload：开/关 WiFi */
@@ -556,6 +573,14 @@ enum class MsgType : uint32_t {
     GLAVO_Visual_OpticalPath_Session_Stop_Ntf,           /**< Empty：光路检测结束，Visual 释放取流 */
     GLAVO_Visual_OpticalPath_Point_Check_Req,            /**< VisualOpticalPathCheckReqPayload：单点红光识别 */
     APP_Visual_OpticalPath_Point_Check_Rsp,              /**< VisualOpticalPathCheckRspPayload：单点识别结果 */
+    /* 打印前基板测高 / 调试页高度校准：Visual 只回质心，LUT 在 Glavo。 */
+    GLAVO_Visual_PlateHeight_Session_Start_Ntf,          /**< Empty：测高/校准开始，Visual 起流 */
+    GLAVO_Visual_PlateHeight_Session_Stop_Ntf,           /**< Empty：测高/校准结束 */
+    GLAVO_Visual_Laser_Spot_Measure_Req,                 /**< Empty：请求激光质心坐标 */
+    APP_Visual_Laser_Spot_Measure_Rsp,                   /**< LaserSpotMeasureRspPayload */
+    UI_Glavo_Height_Calib_Start_Req,                     /**< HeightCalibStartReqPayload */
+    GLAVO_UI_Height_Calib_Progress_Ntf,                  /**< HeightCalibProgressPayload */
+    APP_Glavo_Height_Calib_Start_Rsp,                    /**< HeightCalibStartRspPayload：受理/拒绝（不移位 Progress 编号） */
     // ---- MEDIA ↔ CAMERA：媒体进程并行取流（拍照/录像） ----
     MEDIA_Camera_Stream_Start_Req = 0x1450,  /**< CameraStreamStartReqPayload（媒体侧取流） */
     APP_Media_Camera_Stream_Start_Rsp,       /**< CameraStreamInfoPayload */
@@ -629,6 +654,7 @@ inline constexpr bool is_ipc_reliable_msg_type(MsgType type) noexcept
     case MsgType::APP_Print_Pause_Rsp:
     case MsgType::APP_Print_Powder_Low_Ntf:
     case MsgType::APP_OpticalPath_Progress_Ntf:
+    case MsgType::GLAVO_UI_Height_Calib_Progress_Ntf:
         return true;
 
     /* 终止是幂等命令：丢一条就等于用户按了终止而作业继续跑，必须补发。
@@ -636,6 +662,11 @@ inline constexpr bool is_ipc_reliable_msg_type(MsgType type) noexcept
      * 暂停在几秒后补发会在用户已不想暂停时突然生效，比丢弃更危险；那一对
      * 改由 UI 侧根据 publish 返回值回滚图标并提示重试。 */
     case MsgType::UI_Print_Terminate_Req:
+        return true;
+
+    // 调试氧单点标定：控制类 Req/Rsp，丢一条 UI 会以为没点到
+    case MsgType::UI_Debug_O2_Calib_Req:
+    case MsgType::GLAVO_Debug_O2_Calib_Rsp:
         return true;
 
     // 换层/录像链路：层抓拍与会话闭环
@@ -658,6 +689,10 @@ inline constexpr bool is_ipc_reliable_msg_type(MsgType type) noexcept
     case MsgType::APP_Visual_OpticalPath_Point_Check_Rsp:
     case MsgType::GLAVO_Visual_OpticalPath_Session_Start_Ntf:
     case MsgType::GLAVO_Visual_OpticalPath_Session_Stop_Ntf:
+    case MsgType::GLAVO_Visual_PlateHeight_Session_Start_Ntf:
+    case MsgType::GLAVO_Visual_PlateHeight_Session_Stop_Ntf:
+    case MsgType::GLAVO_Visual_Laser_Spot_Measure_Req:
+    case MsgType::APP_Visual_Laser_Spot_Measure_Rsp:
     case MsgType::APP_Print_Start_Rejected_Ntf:
         return true;
 
@@ -715,6 +750,9 @@ struct EnvSnapshotPayload {
     float    pressure_kpa;      /**< 舱内气压 kPa；无效填 <0 */
     float    baseplate_temp_c;  /**< 基板温度 ℃；无效填 <0 */
     uint8_t  powder_bits;       /**< 粉量位：取 bit0/bit1（0=缺粉；>=1 允许继续打印） */
+    uint8_t  sensor_v4;         /**< 1=MCU V4：舱氧/PM/温湿/气压以 SOC 为准 */
+    float    pm1_cabin;         /**< 舱内 PM1.0；无效填 <0（V4 SOC） */
+    float    pm10_cabin;        /**< 舱内 PM10；无效填 <0（V4 SOC） */
 };
 
 /** APP_PM25_Rsp 载荷：PM2.5 检测结果（Inline） */
@@ -1033,6 +1071,47 @@ struct PrintStartRejectedPayload {
     uint8_t reserved[2];
 };
 
+/**
+ * APP_Visual_Laser_Spot_Measure_Rsp：激光质心测量结果（Inline）。
+ * 用于高度校准与打印前测高——返回原始质心像素，不用 LUT 算高度。
+ */
+struct LaserSpotMeasureRspPayload {
+    uint8_t  ok;        /**< 1=成功分割到光斑，0=失败 */
+    uint8_t  reserved[3];
+    float    laser_x;   /**< 光斑质心 X（像素） */
+    float    laser_y;   /**< 光斑质心 Y（像素） */
+};
+
+/**
+ * UI_Glavo_Height_Calib_Start_Req：启动激光高度校准（Inline）。
+ * Glavo：关舱灯 + TCP Red=3 → 先下降 20mm 再 Z 回零 → AXIS_INC 网格采集 → 原子写 LUT；结束只开舱灯。
+ */
+struct HeightCalibStartReqPayload {
+    float start_height_mm;  /**< 起始高度（mm），如 -5 */
+    float end_height_mm;    /**< 结束高度（mm），如 12 */
+    float step_mm;          /**< 步长（mm），如 1 */
+    uint8_t reserved[4];
+    char  lut_path[128];    /**< LUT 输出路径，默认 /userdata/visual/height_lut.txt */
+};
+
+/** APP_Glavo_Height_Calib_Start_Rsp：校准是否已启动（Inline） */
+struct HeightCalibStartRspPayload {
+    uint8_t ok;             /**< 1=已启动后台校准；0=拒绝（打印/测高占用等） */
+    uint8_t reserved[3];
+};
+
+/**
+ * GLAVO_UI_Height_Calib_Progress_Ntf：校准进度/结果通知（Inline）。
+ * stage: 0=开始 1=采集中 2=完成 3=失败
+ */
+struct HeightCalibProgressPayload {
+    uint8_t  stage;
+    uint8_t  reserved[3];
+    float    current_height_mm;
+    uint16_t collected_count;
+    uint16_t total_count;
+};
+
 /** GLAVO→CAMERA 打印录像会话（Start/Finish/Abort 共用） */
 struct PrintVideoSessionPayload {
     char     session_id[32];
@@ -1327,6 +1406,11 @@ enum class DebugDeviceTarget: uint8_t { Device = 0, Door = 1, Motor = 2, Light =
 enum class DebugMotorAction : uint8_t { Stop = 0, Forward = 1, Reverse = 2 };
 enum class DebugSwitchTarget: uint8_t { Laser = 0, GasWash = 1, BaseHeat = 2 };
 enum class DebugPowderStatus: uint8_t { Available = 0, Busy = 1, Fault = 2 };
+/** 六路舱灯 channel（/sys/class/leds/lgt*），与 MCU 舱灯 Device/Light 无关 */
+enum class DebugSocLedChannel: uint8_t {
+    Lgt1L = 0, Lgt1R = 1, Lgt2L = 2, Lgt2R = 3, Lgt3L = 4, Lgt3R = 5
+};
+constexpr uint8_t kDebugSocLedCount = 6;
 
 /** UI_Debug_Axis_Jog_Ntf：轴点动 / 长按点动 */
 struct DebugAxisJogPayload {
@@ -1351,10 +1435,49 @@ struct DebugGalvoMovePayload {
     float   step_mm;
 };
 
+/** UI_Debug_Galvo_AbsMove_Ntf：振镜绝对坐标移动（手动控制/测高扫描用）
+ *  坐标系与切片一致：原点(0,0)为振镜中心，单位 mm，越界由底层自动截断。 */
+struct DebugGalvoAbsMovePayload {
+    float x_mm;         /**< 目标 X 坐标(mm) */
+    float y_mm;         /**< 目标 Y 坐标(mm) */
+    float speed_mm_min; /**< 扫描速度，<=0 用默认 1000mm/min */
+    uint8_t laser_on;   /**< 0=关光移动，1=开光（测高配红光时传 0） */
+    uint8_t reserved[3];
+};
+
 /** 通用开关：UI_Debug_Galvo_RedLight_Ntf / UI_Debug_Pusher_Ntf */
 struct DebugOnOffPayload {
     uint8_t on;
     uint8_t reserved[3];
+};
+
+/** UI_Debug_O2_Calib_Req：单点标定（参考浓度由 UI 输入；Inline） */
+struct DebugO2CalibReqPayload {
+    float   ref_o2_percent; /**< 参考浓度 %；≤0 则用默认空气 20.9 */
+    uint8_t reserved[4];
+};
+
+/** GLAVO_Debug_O2_Calib_Rsp / GLAVO_Debug_O2_Calib_Ntf：标定结果或当前 K */
+enum class DebugO2CalibErr : uint8_t {
+    Ok           = 0,
+    NotReady     = 1, /**< 无 /run/o2_ready */
+    IioFail      = 2, /**< 无有效采样，或有效点数不足 SAMPLE_MIN */
+    IOutOfRange  = 3, /**< 平均电流过小/过大 */
+    KOutOfRange  = 4,
+    Printing     = 5, /**< 打印/测高/光路/点测/测试图/振镜发送中 */
+    WriteFail    = 6,
+    Busy         = 7,
+    BadRef       = 8, /**< 参考浓度非法 */
+};
+
+struct DebugO2CalibRspPayload {
+    uint8_t ok;             /**< 1=成功（标定写入或 Get 回读） */
+    uint8_t err;            /**< DebugO2CalibErr */
+    uint8_t reserved[2];
+    float   k;              /**< 当前/新标定系数 */
+    float   i_ua;           /**< 标定采样平均电流 μA；Get 可为 0 */
+    float   o2_percent;     /**< 用当前 K 算出的浓度 %；无效 <0 */
+    float   ref_o2_percent; /**< 本次参考浓度；Get 回读上次标定参考或默认 */
 };
 
 /** UI_Debug_Galvo_Param_Save_Ntf：写入 cal.csv（Scale 可保留；中心偏移写第 4 行） */
@@ -1399,6 +1522,19 @@ struct DebugSwitchPayload {
     uint8_t reserved[2];
 };
 
+/** UI_Debug_Soc_Led_Set_Ntf：单路舱灯开关（sysfs lgt*，不看 MCU 版本） */
+struct DebugSocLedPayload {
+    uint8_t channel;    /**< DebugSocLedChannel 0..5 */
+    uint8_t on;
+    uint8_t reserved[2];
+};
+
+/** GLAVO_Debug_Soc_Led_Ntf：六路舱灯状态位图（bit0=Lgt1L … bit5=Lgt3R） */
+struct DebugSocLedStatePayload {
+    uint8_t mask;
+    uint8_t reserved[3];
+};
+
 /** UI_Debug_PrintParam_Set_Ntf：打印层参数（层厚 + 平衡系数×1000） */
 struct DebugPrintParamPayload {
     uint16_t layer_um;        /**< 层厚 um */
@@ -1422,15 +1558,17 @@ struct DebugLaserStatePayload {
     uint8_t  reserved[3];
 };
 
-/** GLAVO_Debug_Sensor_Ntf：顶部 7 路传感器快照 */
+/** GLAVO_Debug_Sensor_Ntf：顶部传感器快照（舱外/舱内 PM 分列，便于联调读数） */
 struct DebugSensorPayload {
-    float   oxygen_percent;
+    float   oxygen_percent;          /**< 舱内氧 %（V4=SOC IIO；旧=MCU 1ST）；无效 <0 */
     float   pressure_kpa;
-    float   pm25;
+    float   pm25;                    /**< 舱外/常显 PM2.5；旧固件与舱内同源；无效 <0 */
     float   humidity_pct;
     float   cabin_temp_c;
     float   baseplate_temp_c;
-    uint8_t powder_status;   /**< DebugPowderStatus */
+    float   pm25_cabin;              /**< 舱内 PM2.5（V4=SOC 舱内 UART，阀关时可能无效）；无效 <0 */
+    float   filter_oxygen_percent;   /**< 滤芯氧 %（V4 MCU 1ST value[0..1]）；旧固件无此路，无效 <0 */
+    uint8_t powder_status;           /**< DebugPowderStatus；0xFF=无效显示 "--" */
     uint8_t reserved[3];
 };
 
@@ -1533,6 +1671,7 @@ enum class DeviceEventCode : uint16_t {
     OpticalPathCheckStarted = 31, /**< 打印前光路检测开始（one_shot，severity=info） */
     OpticalPathCheckPassed  = 32, /**< 打印前光路检测通过（one_shot，severity=info） */
     OpticalPathCheckFail    = 33, /**< 光路异常，已阻断本次打印（one_shot，severity=critical） */
+    PlateHeightFlatnessWarn = 34, /**< 打印前测高五次未通过，基板平整度需检查（one_shot，severity=error） */
 
     /* ---- 以下为 UI 本地事件：不走总线，由前端自己 push，占同一码空间以便
      *      消息中心统一排序去重。后端不应发送这些码。 ---- */
@@ -1617,9 +1756,11 @@ constexpr bool alarm_snapshot_covers(uint16_t code)
  *  快照是**请求-响应**的：MCU 不会主动推，UI 得先发 UI_Alarm_Snapshot_Ntf。
  *  响应**稀疏**——只回 (active|latched) 非零的 slot，没回的 slot 一律按全零处理，
  *  不能保留上一轮旧值。`nonzero_slot_count=0` 是合法的「当前无报警」响应。
- *  Glavo 侧不加工，攒帧与原子对齐都在 UI（`ui_alarm_state`）做。
+ *  Glavo 攒齐 MCU 一轮并可并入 SOC 1120 后再转发；UI（`ui_alarm_state`）做原子对齐。
  *
- *  只含 CONDITION，EVENT 不占 bit。槽位→报警号用 alarm_snapshot_code_of()。 */
+ *  只含 CONDITION，EVENT 不占 bit。槽位→报警号用 alarm_snapshot_code_of()。
+ *  V4 SOC 氧 1120：Glavo 攒齐 MCU 一轮后，若 1120 活跃且缺 slot3 则补 bit20
+ *  （并统一抬高本轮 nonzero_slot_count），再转发 UI。 */
 struct AlarmSnapshotPayload {
     uint8_t  nonzero_slot_count; /**< 本轮非零 slot 总数（0..12）；0=全清 */
     uint8_t  slot_id;            /**< 本帧的 slot（0..11），非连续、不保证顺序 */

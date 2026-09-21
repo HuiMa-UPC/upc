@@ -68,7 +68,9 @@ def resize_cover(img: Image.Image, width: int, height: int) -> Image.Image:
         new_w = width
         new_h = max(1, int(round(width / src_ratio)))
 
-    resized = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
+    # Pillow < 9.1 没有 Image.Resampling；两种写法的 LANCZOS 值相同。
+    resampling = getattr(Image, "Resampling", Image)
+    resized = img.resize((new_w, new_h), resampling.LANCZOS)
     ox = max(0, (new_w - width) // 2)
     oy = max(0, (new_h - height) // 2)
     return resized.crop((ox, oy, ox + width, oy + height))

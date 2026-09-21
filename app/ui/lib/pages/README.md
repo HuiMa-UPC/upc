@@ -10,7 +10,7 @@
 | `page_user_settings.*` | 设置列表、开发者密码弹窗 |
 | `page_user_history.*` | 历史 Tab：三 Tab（只有 Print History 有数据）+ Storage 容量条与告警横幅 + 日期分组卡片 + 管理态多选批量删除 + 左滑删除 + 空态 |
 | `page_user_control.*` | 控制 Tab（占位） |
-| `page_user_message.*` | 消息 Tab：日期分组混排列表（MCU 报警当前/历史 + 设备事件）+ 左滑删除（仅历史/已解除）+ 详情抽屉（Reset 三态）；进页即把消息中心全部标已读、熄侧栏红点 |
+| `page_user_message.*` | 消息 Tab（浅色档）：三 Tab + All read 浮层顶栏 + 日期分组混排列表（MCU 报警当前/历史 + 设备事件）+ 底部 Load More 分页 + 左滑删除（仅历史/已解除）+ 右侧 632 详情抽屉（Reset 三态）；进页即把消息中心全部标已读、熄侧栏红点 |
 
 ## 不在本目录的内容
 
