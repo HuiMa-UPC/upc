@@ -873,6 +873,8 @@ bool GlavoService::start()
         middleware::MsgType::UI_Debug_Soc_Led_Get_Ntf,
         middleware::MsgType::UI_Debug_Cabin_Pm_Valve_Set_Ntf,
         middleware::MsgType::UI_Debug_Cabin_Pm_Valve_Get_Ntf,
+        middleware::MsgType::UI_Debug_Status_Led_Set_Ntf,
+        middleware::MsgType::UI_Debug_Status_Led_Get_Ntf,
         middleware::MsgType::APP_Visual_OpticalPath_Point_Check_Rsp,
         middleware::MsgType::APP_Visual_Laser_Spot_Measure_Rsp,
         middleware::MsgType::UI_Glavo_Height_Calib_Start_Req,
@@ -1400,6 +1402,12 @@ void GlavoService::handle_message(const middleware::Message& msg)
             break;
         case middleware::MsgType::UI_Debug_Cabin_Pm_Valve_Get_Ntf:
             handle_debug_cabin_pm_valve_get(msg);
+            break;
+        case middleware::MsgType::UI_Debug_Status_Led_Set_Ntf:
+            handle_debug_status_led_set(msg);
+            break;
+        case middleware::MsgType::UI_Debug_Status_Led_Get_Ntf:
+            handle_debug_status_led_get(msg);
             break;
         case middleware::MsgType::APP_Visual_OpticalPath_Point_Check_Rsp:
             handle_visual_optical_path_point_rsp(msg);
@@ -3367,6 +3375,50 @@ void GlavoService::handle_debug_cabin_pm_valve_get(const middleware::Message& ms
 {
     (void)msg;
     publish_debug_cabin_pm_valve_state();
+}
+
+void GlavoService::publish_debug_status_led_state()
+{
+    middleware::DebugStatusLedPayload p{};
+    bool force = false;
+    uint8_t color = 0, r = 0, g = 0, b = 0;
+    SpiStatusLed::instance().debug_force_state(force, color, r, g, b);
+    p.force = force ? 1 : 0;
+    p.color = color;
+    p.r = r;
+    p.g = g;
+    p.b = b;
+    middleware::Message ntf(
+        middleware::MsgType::GLAVO_Debug_Status_Led_Ntf,
+        middleware::ModuleId::APP_GLAVO,
+        middleware::ModuleId::UI);
+    ntf.payload = middleware::MsgPayload::from_bytes(
+        reinterpret_cast<const uint8_t*>(&p), sizeof(p));
+    if(!publish_async(ntf)) {
+        UPC_LOG_GLAVO_SERVICE(Warn, "status led state publish failed");
+    }
+}
+
+void GlavoService::handle_debug_status_led_set(const middleware::Message& msg)
+{
+    middleware::DebugStatusLedPayload p{};
+    if(!read_inline_pod(msg.payload, p)) {
+        return;
+    }
+    SpiStatusLed::instance().set_debug_force(p.force != 0, p.color, p.r, p.g, p.b);
+    UPC_LOG_GLAVO_SERVICE(Info, "debug status_led force=%u color=%u rgb=%u,%u,%u",
+                          static_cast<unsigned>(p.force),
+                          static_cast<unsigned>(p.color),
+                          static_cast<unsigned>(p.r),
+                          static_cast<unsigned>(p.g),
+                          static_cast<unsigned>(p.b));
+    publish_debug_status_led_state();
+}
+
+void GlavoService::handle_debug_status_led_get(const middleware::Message& msg)
+{
+    (void)msg;
+    publish_debug_status_led_state();
 }
 
 /**

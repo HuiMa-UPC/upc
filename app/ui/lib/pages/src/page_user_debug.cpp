@@ -137,6 +137,14 @@ lv_obj_t *g_soc_led_btn[middleware::kDebugSocLedCount] = {};
 lv_obj_t *g_soc_led_state_lbl[middleware::kDebugSocLedCount] = {};
 lv_obj_t *g_cabin_pm_valve_btn = nullptr;   /**< 其他控制：舱内 PM fa_valve */
 lv_obj_t *g_cabin_pm_valve_state_lbl = nullptr;
+/* SPI 灯板验色：三个互斥的强制色按钮（下标同 kStatusLedBtns）+ 释放接管的 Auto 键
+ * + 裸 RGB 调色输入 */
+lv_obj_t *g_status_led_btn[3] = {};
+lv_obj_t *g_status_led_state_lbl[3] = {};
+lv_obj_t *g_status_led_rgb_ta[3] = {};      /**< R/G/B 输入框（0-255） */
+lv_obj_t *g_status_led_rgb_lbl = nullptr;   /**< 裸 RGB 当前生效值回显 */
+lv_obj_t *g_status_led_auto_btn = nullptr;  /**< 释放强制接管，回自动推导 */
+lv_obj_t *g_status_led_auto_lbl = nullptr;
 lv_obj_t *g_local_rtsp_btn = nullptr;       /**< 其他控制：本地 RTSP Server 开关按钮 */
 lv_obj_t *g_local_rtsp_state_lbl = nullptr; /**< 其他控制：本地 RTSP Server 状态文本 */
 bool g_env_sim_on = false;                  /**< 缓存 Env Sim 回读状态，用于门控 Powder Sim 按钮 */
@@ -1791,11 +1799,12 @@ lv_obj_t *make_section_card(lv_obj_t *parent, const char *title)
     return card;
 }
 
-/** 一次性动作：名称 + 状态字 + 圆钮（非 CHECKABLE）。 */
+/** 一次性动作：名称 + 状态字 + 圆钮（非 CHECKABLE）。
+ *  ud 透传给点击回调，供同一回调服务多个按钮时区分来源。 */
 lv_obj_t *make_one_shot_action(lv_obj_t *parent, const char *name,
                                const char *idle_txt, const char *sym,
                                lv_event_cb_t cb, lv_obj_t **out_btn,
-                               lv_obj_t **out_lbl)
+                               lv_obj_t **out_lbl, void *ud = nullptr)
 {
     lv_obj_t *grp = lv_obj_create(parent);
     lv_obj_remove_style_all(grp);
@@ -1817,7 +1826,7 @@ lv_obj_t *make_one_shot_action(lv_obj_t *parent, const char *name,
     lv_obj_set_style_text_color(st, user_color_text_dim, 0);
     lv_obj_set_style_text_font(st, user_font_text(), 0);
 
-    lv_obj_t *btn = make_circle_btn(grp, dbg_round_btn_sz(), sym, cb, nullptr);
+    lv_obj_t *btn = make_circle_btn(grp, dbg_round_btn_sz(), sym, cb, ud);
     lv_obj_set_style_margin_top(btn, USER_PAD_SM, 0);
     if(out_btn) {
         *out_btn = btn;
@@ -1879,6 +1888,135 @@ void build_o2_calib_card(lv_obj_t *parent)
                                      on_o2_calib_click, nullptr);
 }
 
+/* ===================== SPI 灯板验色（Status LED） ====================== */
+
+/* 三个验色按钮对应的强制色，下标与 g_status_led_btn / g_status_led_state_lbl 一致 */
+const middleware::DebugStatusLedColor kStatusLedBtns[3] = {
+    middleware::DebugStatusLedColor::Blue,
+    middleware::DebugStatusLedColor::Orange,
+    middleware::DebugStatusLedColor::Red,
+};
+
+/* 最近一次 GLAVO_Debug_Status_Led_Ntf 回读；三色按钮据此判断"再点一次=释放" */
+bool    g_status_led_force = false;
+uint8_t g_status_led_color = 0;
+
+/** 按回读状态刷三个按钮的状态字：被强制那颗显示 Forced，其余 Auto。 */
+void apply_status_led_labels()
+{
+    for(uint8_t i = 0; i < 3; ++i) {
+        if(!g_status_led_state_lbl[i]) {
+            continue;
+        }
+        const bool forced = g_status_led_force &&
+                            g_status_led_color == static_cast<uint8_t>(kStatusLedBtns[i]);
+        lv_label_set_text(g_status_led_state_lbl[i], forced ? "Forced" : "Auto");
+        lv_obj_set_style_text_color(g_status_led_state_lbl[i],
+                                    forced ? user_color_accent : user_color_text_dim, 0);
+    }
+    if(g_status_led_rgb_lbl) {
+        const bool raw = g_status_led_force &&
+                         g_status_led_color ==
+                             static_cast<uint8_t>(middleware::DebugStatusLedColor::Raw);
+        lv_label_set_text(g_status_led_rgb_lbl, raw ? "Forced" : "Auto");
+        lv_obj_set_style_text_color(g_status_led_rgb_lbl,
+                                    raw ? user_color_accent : user_color_text_dim, 0);
+    }
+    /* Auto 键与三色键相反：没有任何强制时它才是生效的那个。这里不能写 Forced，
+     * 否则会被读成"Auto 被强制了"。 */
+    if(g_status_led_auto_lbl) {
+        lv_label_set_text(g_status_led_auto_lbl, g_status_led_force ? "Idle" : "Active");
+        lv_obj_set_style_text_color(g_status_led_auto_lbl,
+                                    g_status_led_force ? user_color_text_dim
+                                                       : user_color_accent, 0);
+    }
+}
+
+/* 三色互斥；点当前已强制那色即释放回自动，与 Auto 键是等价的两条路径（都发
+ * force=0），操作员不必先找哪颗亮着。
+ * 真实状态以 GLAVO_Debug_Status_Led_Ntf 回读为准，这里不做乐观更新。 */
+void on_status_led_color(lv_event_t *e)
+{
+    const uint8_t idx = static_cast<uint8_t>(
+        reinterpret_cast<uintptr_t>(lv_event_get_user_data(e)));
+    if(idx >= 3) {
+        return;
+    }
+    const uint8_t color = static_cast<uint8_t>(kStatusLedBtns[idx]);
+    const bool release = g_status_led_force && g_status_led_color == color;
+    ui::DebugMsgProxy::instance().send_status_led_set(!release, color);
+}
+
+/* 显式释放接管：灯板回到 报警红 > 打印橙 > 空闲蓝 的自动推导 */
+void on_status_led_auto(lv_event_t *)
+{
+    ui::DebugMsgProxy::instance().send_status_led_set(false, 0);
+}
+
+/* 裸 RGB 直发：用于现场调 kBlue/kOrange/kRed 的取值，定稿后回写 spi_status_led.cpp */
+void on_status_led_rgb_send(lv_event_t *)
+{
+    uint8_t rgb[3] = {0, 0, 0};
+    for(uint8_t i = 0; i < 3; ++i) {
+        float v = g_status_led_rgb_ta[i] ? read_ta_float(g_status_led_rgb_ta[i]) : 0.f;
+        if(v < 0.f)        v = 0.f;
+        else if(v > 255.f) v = 255.f;
+        rgb[i] = static_cast<uint8_t>(v + 0.5f);
+    }
+    ui::DebugMsgProxy::instance().send_status_led_set(
+        true, static_cast<uint8_t>(middleware::DebugStatusLedColor::Raw),
+        rgb[0], rgb[1], rgb[2]);
+}
+
+/** 裸 RGB 调色卡：三个 0-255 输入框 + Send，直发到灯板（不经三色常量）。 */
+void build_status_led_rgb_card(lv_obj_t *parent)
+{
+    lv_obj_t *card = ui_user_make_frosted_card(parent, false);
+    lv_obj_set_width(card, LV_PCT(100));
+    lv_obj_set_height(card, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(card, LV_FLEX_ALIGN_START,
+                          LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
+    lv_obj_set_style_pad_row(card, USER_PAD_SM / 2, 0);
+    add_card_title(card, "Status LED RGB");
+
+    lv_obj_t *row = lv_obj_create(card);
+    lv_obj_remove_style_all(row);
+    lv_obj_set_width(row, LV_PCT(100));
+    lv_obj_set_height(row, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(row, LV_FLEX_ALIGN_START,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_column(row, USER_PAD_SM / 2, 0);
+    lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, 0);
+    lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
+
+    /* 默认填当前 kBlue(30,30,30)，与 spi_status_led.cpp 的常量对齐 */
+    const char *const names[3] = { "R", "G", "B" };
+    for(uint8_t i = 0; i < 3; ++i) {
+        add_caption(row, names[i]);
+        g_status_led_rgb_ta[i] = make_value_input(row, 30.f, true);
+        lv_obj_set_flex_grow(g_status_led_rgb_ta[i], 1);
+    }
+
+    lv_obj_t *srow = lv_obj_create(card);
+    lv_obj_remove_style_all(srow);
+    lv_obj_set_width(srow, LV_PCT(100));
+    lv_obj_set_height(srow, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(srow, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(srow, LV_FLEX_ALIGN_SPACE_BETWEEN,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_bg_opa(srow, LV_OPA_TRANSP, 0);
+    lv_obj_clear_flag(srow, LV_OBJ_FLAG_SCROLLABLE);
+
+    g_status_led_rgb_lbl = lv_label_create(srow);
+    lv_label_set_text(g_status_led_rgb_lbl, "Auto");
+    lv_obj_set_style_text_color(g_status_led_rgb_lbl, user_color_text_dim, 0);
+    lv_obj_set_style_text_font(g_status_led_rgb_lbl, user_font_text(), 0);
+
+    make_send_button(srow, on_status_led_rgb_send, false);
+}
+
 void build_other_switches_column(lv_obj_t *parent)
 {
     lv_obj_t *col = lv_obj_create(parent);
@@ -1921,6 +2059,20 @@ void build_other_switches_column(lv_obj_t *parent)
                     17, 0, true, 0, &g_cabin_pm_valve_btn, &g_cabin_pm_valve_state_lbl);
     make_dbg_toggle(rowCab, "Skip O2 Gate", "On", "Off", LV_SYMBOL_OK, false,
                     18, 0, true, 0, &g_skip_o2_gate_btn, &g_skip_o2_gate_state_lbl);
+
+    /* ---- SPI 灯板验色：强制 kBlue / kOrange / kRed ---- */
+    lv_obj_t *sled = make_section_card(col, "Status LED");
+    lv_obj_t *rowSled = make_switch_grid_row(sled);
+    const char *const kStatusLedNames[3] = { "LED Blue", "LED Orange", "LED Red" };
+    for(uint8_t i = 0; i < 3; ++i) {
+        make_one_shot_action(rowSled, kStatusLedNames[i], "Auto", LV_SYMBOL_CHARGE,
+                             on_status_led_color, &g_status_led_btn[i],
+                             &g_status_led_state_lbl[i],
+                             reinterpret_cast<void *>(static_cast<uintptr_t>(i)));
+    }
+    make_one_shot_action(rowSled, "LED Auto", "Active", LV_SYMBOL_REFRESH,
+                         on_status_led_auto, &g_status_led_auto_btn,
+                         &g_status_led_auto_lbl);
 
     /* ---- 打印门控 / 视觉 ---- */
     lv_obj_t *gate = make_section_card(col, "Print Gates");
@@ -1989,6 +2141,7 @@ lv_obj_t *build_other_tab(lv_obj_t *body)
     build_print_params_card(left);
     build_fan_card(left);
     build_o2_calib_card(left);
+    build_status_led_rgb_card(left);
 
     build_other_switches_column(row);
 
@@ -2679,6 +2832,28 @@ void bind_debug_callbacks()
         }
     });
 
+    /* 灯板强制态以 Glavo 回读为准；三色按钮的"再点一次=释放"也据此判断 */
+    proxy.register_status_led([](const middleware::DebugStatusLedPayload &p) {
+        g_status_led_force = (p.force != 0);
+        g_status_led_color = p.color;
+        apply_status_led_labels();
+        /* 裸 RGB 生效值回填输入框，避免退页重进后显示与灯板不一致；
+         * 正在编辑的框不动，否则会把用户刚输入的值冲掉 */
+        if(g_status_led_force &&
+           p.color == static_cast<uint8_t>(middleware::DebugStatusLedColor::Raw)) {
+            const uint8_t rgb[3] = { p.r, p.g, p.b };
+            for(uint8_t i = 0; i < 3; ++i) {
+                if(!g_status_led_rgb_ta[i] ||
+                   lv_obj_has_state(g_status_led_rgb_ta[i], LV_STATE_FOCUSED)) {
+                    continue;
+                }
+                char buf[8];
+                std::snprintf(buf, sizeof(buf), "%u", static_cast<unsigned>(rgb[i]));
+                lv_textarea_set_text(g_status_led_rgb_ta[i], buf);
+            }
+        }
+    });
+
     /* Media 回报的是实际状态：相机未就绪 / 编码器打不开时会回 Off，按钮随之弹回。 */
     proxy.register_local_rtsp([](bool on) {
         if(g_local_rtsp_btn) {
@@ -2779,6 +2954,16 @@ void reset_globals()
     }
     g_cabin_pm_valve_btn = nullptr;
     g_cabin_pm_valve_state_lbl = nullptr;
+    for(uint8_t i = 0; i < 3; ++i) {
+        g_status_led_btn[i] = nullptr;
+        g_status_led_state_lbl[i] = nullptr;
+        g_status_led_rgb_ta[i] = nullptr;
+    }
+    g_status_led_rgb_lbl = nullptr;
+    g_status_led_auto_btn = nullptr;
+    g_status_led_auto_lbl = nullptr;
+    g_status_led_force = false;
+    g_status_led_color = 0;
     g_height_calib_lbl = nullptr;
     g_local_rtsp_btn = nullptr;
     g_local_rtsp_state_lbl = nullptr;
@@ -2810,6 +2995,7 @@ void page_user_debug_refresh(bool /*force*/)
     ui::DebugMsgProxy::instance().request_plate_height_adj_state();
     ui::DebugMsgProxy::instance().request_soc_led_state();
     ui::DebugMsgProxy::instance().request_cabin_pm_valve_state();
+    ui::DebugMsgProxy::instance().request_status_led_state();
     ui::DebugMsgProxy::instance().request_test_image_state();
     ui::DebugMsgProxy::instance().request_galvo_point_test_state();
     ui::DebugMsgProxy::instance().request_local_rtsp_state();
@@ -2820,6 +3006,8 @@ void page_user_debug_exit(void)
     ui_keyboard_hide();
     ui::debug_test_stop_flow();   /* 退页停止正在运行的测试流程（含点动补停） */
     auto &proxy = ui::DebugMsgProxy::instance();
+    /* 无条件释放灯板接管：否则退页后灯板卡在验色色上，真报警的红灯就看不到了 */
+    proxy.send_status_led_set(false, 0);
     proxy.register_sensor(nullptr);
     proxy.register_axis(nullptr);
     proxy.register_galvo(nullptr);
@@ -2836,6 +3024,7 @@ void page_user_debug_exit(void)
     proxy.register_plate_height_adj(nullptr);
     proxy.register_soc_led(nullptr);
     proxy.register_cabin_pm_valve(nullptr);
+    proxy.register_status_led(nullptr);
     proxy.register_height_calib_progress(nullptr);
     proxy.register_test_image(nullptr);
     proxy.register_galvo_point_test(nullptr);

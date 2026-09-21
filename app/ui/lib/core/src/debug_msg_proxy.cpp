@@ -161,6 +161,15 @@ void DebugMsgProxy::init()
         }));
 
     subs_.push_back(bus.subscribe(
+        middleware::MsgType::GLAVO_Debug_Status_Led_Ntf, middleware::ModuleId::UI,
+        [this](const middleware::Message& msg) {
+            middleware::DebugStatusLedPayload p{};
+            if(status_led_cb_ && read_inline_pod(msg, p)) {
+                status_led_cb_(p);
+            }
+        }));
+
+    subs_.push_back(bus.subscribe(
         middleware::MsgType::GLAVO_Debug_TestImage_Ntf, middleware::ModuleId::UI,
         [this](const middleware::Message& msg) {
             middleware::DebugOnOffPayload p{};
@@ -516,6 +525,23 @@ void DebugMsgProxy::request_cabin_pm_valve_state()
     publish_empty(middleware::MsgType::UI_Debug_Cabin_Pm_Valve_Get_Ntf);
 }
 
+void DebugMsgProxy::send_status_led_set(bool force, uint8_t color,
+                                        uint8_t r, uint8_t g, uint8_t b)
+{
+    middleware::DebugStatusLedPayload p{};
+    p.force = force ? 1 : 0;
+    p.color = color;
+    p.r = r;
+    p.g = g;
+    p.b = b;
+    publish_pod(middleware::MsgType::UI_Debug_Status_Led_Set_Ntf, p);
+}
+
+void DebugMsgProxy::request_status_led_state()
+{
+    publish_empty(middleware::MsgType::UI_Debug_Status_Led_Get_Ntf);
+}
+
 void DebugMsgProxy::send_height_calib_start(float start_mm, float end_mm,
                                             float step_mm, const char* lut_path)
 {
@@ -620,6 +646,11 @@ void DebugMsgProxy::register_soc_led(DebugSocLedCb cb)
 void DebugMsgProxy::register_cabin_pm_valve(DebugCabinPmValveCb cb)
 {
     cabin_pm_valve_cb_ = std::move(cb);
+}
+
+void DebugMsgProxy::register_status_led(DebugStatusLedCb cb)
+{
+    status_led_cb_ = std::move(cb);
 }
 
 void DebugMsgProxy::register_test_image(DebugTestImageCb cb)

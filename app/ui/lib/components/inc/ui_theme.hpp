@@ -82,6 +82,9 @@ extern const lv_color_t user_light_dev_name;
 /** 未读红点 #fe6868。两处共用：侧栏消息图标（稿 6255:95797）与首页右上铃铛
  *  （稿 6201:85994）。**不是 ui_color_danger(#f85149)**，那个是深色档的危险红。 */
 extern const lv_color_t user_light_notice_dot;
+/** 设置页左栏渐变底的中间色 #f4f4f4（稿 6240:92194 的 50% 色标；两端是
+ *  user_light_bg 的 #fafafa）。只有这一处在用。 */
+extern const lv_color_t user_light_rail_mid;
 
 /* ============================================================================
  *  尺寸 / 字体集合
@@ -159,8 +162,6 @@ typedef struct {
      * **0 = 沿用改动前的旧式**（左栏 LV_PCT(34)、内距 USER_PAD、列间距 USER_PAD_LG、
      * 右内距 USER_PAD），1024/1920 两档填 0 以保持渲染不变。 */
     int32_t user_settings_nav_w;
-    int32_t user_settings_gap;       /**< 兼作左内距与两栏列间距（稿都是 36） */
-    int32_t user_settings_gutter_r;  /**< 右侧留给翻页钮的那一段（稿 176） */
     /** Wi-Fi 开关分段控件的高（稿 3361:18541 是 72）。宽度不用另给：行高改成 80 后
      *  旧式的 USER_NAV_ITEM_H*16/5 正好算出稿上的 256。0 = 沿用旧式 *4/5。 */
     int32_t user_settings_seg_h;
@@ -244,14 +245,6 @@ typedef struct {
      *  过于抢眼；拆开后两者互不牵动。0 = 沿用旧的 user_media_btn_size() * 2。 */
     int32_t user_media_play_h;
     int32_t user_sensor_strip_h;   /**< 调试页传感器条高（原先借用 user_topbar_h） */
-    /** 右侧悬浮翻页钮的直径（稿 64@1280）。历史页 4366:5406、消息页 3033:5253、
-     *  设置页 3238:14371 三张稿都是 64×64，故做成公共字段而非各页自算。
-     *  0 = 沿用旧式 user_back_btn_h * 5/4（无稿的档位据此保持原渲染）。 */
-    int32_t user_scroll_btn_sz;
-    /** 上下两枚翻页钮的间距（稿 160@1280）。历史页 4366:5406/5409 与消息页
-     *  3033:5253/5256 都是 160；**设置页那张稿是 192**，未统一，故该页仍用旧值。
-     *  0 = 沿用旧式 USER_PAD_LG。 */
-    int32_t user_scroll_btn_gap;
     /** 空态那枚图标圆底的直径（稿 4531:7206 是 80，内含 36 的图标）。
      *  0 = 沿用旧式 user_btn_primary_h * 10/9——那个式子是照 1920 档（72×10/9 = 80）
      *  写的，1280 档只算得 57，与稿差 23，故本档改为直接给值。 */
@@ -523,8 +516,6 @@ extern const ui_theme_t *g_ui;
 #define USER_NAV_GAP                (g_ui->user_nav_gap)
 #define USER_NAV_ITEM_H             (g_ui->user_nav_item_h)
 #define USER_SETTINGS_NAV_W         (g_ui->user_settings_nav_w)
-#define USER_SETTINGS_GAP           (g_ui->user_settings_gap)
-#define USER_SETTINGS_GUTTER_R      (g_ui->user_settings_gutter_r)
 #define USER_SETTINGS_SEG_H         (g_ui->user_settings_seg_h)
 #define USER_NAV_ICON_SZ            (g_ui->user_nav_icon_sz)
 #define USER_NAV_ICON_PAD           (g_ui->user_nav_icon_pad)
@@ -626,8 +617,6 @@ int32_t user_media_play_size(void);
 #define USER_HOME_EDGE_GAP          (g_ui->user_home_edge_gap)
 #define USER_PANEL_W                (g_ui->user_panel_w)
 #define USER_PANEL_ROW_H            (g_ui->user_panel_row_h)
-#define USER_SCROLL_BTN_SZ          (g_ui->user_scroll_btn_sz)
-#define USER_SCROLL_BTN_GAP         (g_ui->user_scroll_btn_gap)
 #define USER_EMPTY_RING_SZ          (g_ui->user_empty_ring_sz)
 
 /**

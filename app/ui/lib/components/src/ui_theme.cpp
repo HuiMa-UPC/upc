@@ -51,6 +51,7 @@ const lv_color_t user_light_more_bg    = LV_COLOR_MAKE(0xf5, 0xf5, 0xf6);
 const lv_color_t user_light_ok         = LV_COLOR_MAKE(0x00, 0xc7, 0x4e);
 const lv_color_t user_light_dev_name   = LV_COLOR_MAKE(0x1d, 0x1d, 0x24);
 const lv_color_t user_light_notice_dot = LV_COLOR_MAKE(0xfe, 0x68, 0x68);
+const lv_color_t user_light_rail_mid   = LV_COLOR_MAKE(0xf4, 0xf4, 0xf4);
 const lv_color_t user_light_glass      = LV_COLOR_MAKE(0xfc, 0xfc, 0xfc);
 
 /* ============================================================================
@@ -141,8 +142,6 @@ static const ui_theme_t s_theme_1920 = {
     /* user_nav_gap           */ 100,  /* 复现旧 SPACE_EVENLY 在 1080 高下的项距 180 */
     /* user_nav_item_h        */ 96,
     /* user_settings_nav_w    */ 0,    /* 0 = 沿用旧式，本档观感不变 */
-    /* user_settings_gap      */ 0,
-    /* user_settings_gutter_r */ 0,
     /* user_settings_seg_h    */ 0,
     /* user_nav_icon_sz       */ 52,   /* 让上屏字形保持改版前的 49：49 ÷ (30/32) */
     /* user_nav_icon_pad      */ 12,
@@ -171,8 +170,6 @@ static const ui_theme_t s_theme_1920 = {
     /* user_media_btn_h       */ 96,   /* 触摸可用性上调：user_back_btn_h × 3/2 */
     /* user_media_play_h      */ 128,  /* 放大关闭钮前的实际渲染值，维持原样 */
     /* user_sensor_strip_h    */ 120,
-    /* user_scroll_btn_sz     */ 0,    /* 无稿，沿用旧式 64*5/4 = 80 */
-    /* user_scroll_btn_gap    */ 0,    /* 无稿，沿用旧式 USER_PAD_LG */
     /* user_empty_ring_sz     */ 0,    /* 无稿，沿用旧式 72*10/9 = 80 */
 
     /* 打印流程 */
@@ -322,8 +319,6 @@ static const ui_theme_t s_theme_1280 = {
     /* user_nav_gap           */ 16,   /* 稿值 */
     /* user_nav_item_h        */ 80,   /* 稿 24(padding) + 32(图标) + 24 */
     /* user_settings_nav_w    */ 300,  /* 稿值 */
-    /* user_settings_gap      */ 36,   /* 稿值（左内距与列间距同值） */
-    /* user_settings_gutter_r */ 176,  /* 稿值（翻页钮落在这一段） */
     /* user_settings_seg_h    */ 72,   /* 稿值 */
     /* user_nav_icon_sz       */ 32,   /* 稿值（图标盒边长，字形在里面占 30） */
     /* user_nav_icon_pad      */ 8,
@@ -355,8 +350,6 @@ static const ui_theme_t s_theme_1280 = {
     /* user_media_btn_h       */ 66,   /* 触摸可用性上调（稿无此项）：user_back_btn_h × 3/2 */
     /* user_media_play_h      */ 112,  /* 放大关闭钮前的实际渲染值，维持原样 */
     /* user_sensor_strip_h    */ 84,
-    /* user_scroll_btn_sz     */ 64,   /* 稿值（三页一致） */
-    /* user_scroll_btn_gap    */ 160,  /* 稿值（历史页 / 消息页） */
     /* user_empty_ring_sz     */ 80,   /* 稿值；旧式在本档只算得 57 */
 
     /* 打印流程 */
@@ -513,8 +506,6 @@ static const ui_theme_t s_theme_1024 = {
     /* user_nav_gap           */ 44,   /* 复现旧 SPACE_EVENLY 在 600 高下的项距 102 */
     /* user_nav_item_h        */ 72,
     /* user_settings_nav_w    */ 0,    /* 0 = 沿用旧式，本档观感不变 */
-    /* user_settings_gap      */ 0,
-    /* user_settings_gutter_r */ 0,
     /* user_settings_seg_h    */ 0,
     /* user_nav_icon_sz       */ 50,   /* 让上屏字形保持改版前的 47：47 ÷ (30/32) */
     /* user_nav_icon_pad      */ 8,
@@ -545,8 +536,6 @@ static const ui_theme_t s_theme_1024 = {
     /* user_media_btn_h       */ 60,   /* 触摸可用性上调：user_back_btn_h × 3/2 */
     /* user_media_play_h      */ 80,   /* 放大关闭钮前的实际渲染值，维持原样 */
     /* user_sensor_strip_h    */ 68,
-    /* user_scroll_btn_sz     */ 0,    /* 无稿，沿用旧式 40*5/4 = 50 */
-    /* user_scroll_btn_gap    */ 0,    /* 无稿，沿用旧式 USER_PAD_LG */
     /* user_empty_ring_sz     */ 0,    /* 无稿，沿用旧式 44*10/9 = 48 */
 
     /* 打印流程 */

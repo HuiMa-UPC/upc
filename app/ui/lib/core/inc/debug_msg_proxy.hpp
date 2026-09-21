@@ -34,6 +34,8 @@ using DebugOpticalPathCheckCb = std::function<void(bool)>;
 using DebugPlateHeightAdjCb = std::function<void(bool)>;
 using DebugSocLedCb = std::function<void(uint8_t mask)>;
 using DebugCabinPmValveCb = std::function<void(bool)>;
+using DebugStatusLedCb =
+    std::function<void(const middleware::DebugStatusLedPayload&)>;
 using DebugTestImageCb = std::function<void(bool)>;
 using DebugGalvoPointTestCb = std::function<void(bool)>;
 using DebugLocalRtspCb = std::function<void(bool)>;
@@ -106,6 +108,10 @@ public:
     void request_soc_led_state();
     void send_cabin_pm_valve_set(bool on);
     void request_cabin_pm_valve_state();
+    /** SPI 灯板验色：force=false 释放接管回自动；r/g/b 仅 color=Raw 时生效 */
+    void send_status_led_set(bool force, uint8_t color,
+                             uint8_t r = 0, uint8_t g = 0, uint8_t b = 0);
+    void request_status_led_state();
     void send_height_calib_start(float start_mm, float end_mm, float step_mm,
                                  const char* lut_path);
     /** 调试页 Test image：红光循环打印 /userdata/test/test.gcode */
@@ -132,6 +138,7 @@ public:
     void register_plate_height_adj(DebugPlateHeightAdjCb cb);
     void register_soc_led(DebugSocLedCb cb);
     void register_cabin_pm_valve(DebugCabinPmValveCb cb);
+    void register_status_led(DebugStatusLedCb cb);
     void register_test_image(DebugTestImageCb cb);
     void register_galvo_point_test(DebugGalvoPointTestCb cb);
     void register_local_rtsp(DebugLocalRtspCb cb);
@@ -190,6 +197,7 @@ private:
     DebugPlateHeightAdjCb plate_height_adj_cb_;
     DebugSocLedCb soc_led_cb_;
     DebugCabinPmValveCb cabin_pm_valve_cb_;
+    DebugStatusLedCb status_led_cb_;
     DebugTestImageCb test_image_cb_;
     DebugGalvoPointTestCb galvo_point_test_cb_;
     DebugLocalRtspCb local_rtsp_cb_;
