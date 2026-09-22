@@ -455,6 +455,11 @@ void DebugMsgProxy::request_o2_calib_state()
     publish_empty(middleware::MsgType::UI_Debug_O2_Calib_Get_Ntf);
 }
 
+void DebugMsgProxy::send_alarm_inject(const middleware::AlarmReportPayload& p)
+{
+    publish_pod(middleware::MsgType::UI_Debug_Alarm_Inject_Ntf, p);
+}
+
 void DebugMsgProxy::send_first_layer_visual_check_set(bool on)
 {
     middleware::DebugOnOffPayload p{};

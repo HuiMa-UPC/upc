@@ -142,6 +142,16 @@ std::string MqttConfig::topic_log_collect_progress() const
     return topic_prefix() + "log_collect/progress";
 }
 
+std::string MqttConfig::topic_alarm_report() const
+{
+    return topic_prefix() + "alarm/report";
+}
+
+std::string MqttConfig::topic_alarm_ack() const
+{
+    return topic_prefix() + "alarm/ack";
+}
+
 //桌面调试
 // "SNOWPOD-050986DC98001000";
 // "bacff0d7cc54115f6c268e4eabc5538670346c2a084037079796f50abd52e985"

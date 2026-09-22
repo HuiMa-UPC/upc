@@ -95,6 +95,8 @@ public:
     /** 空气单点氧标定；ref_o2_percent≤0 用后端默认 20.9 */
     void send_o2_calib(float ref_o2_percent = 0.f);
     void request_o2_calib_state();
+    /** 调试页 Alarm Inject：转 Glavo → MQTT `alarm.single`（UI 仍本地造 [SIM]）。 */
+    void send_alarm_inject(const middleware::AlarmReportPayload& p);
     void send_first_layer_visual_check_set(bool on);
     void request_first_layer_visual_check_state();
     void send_optical_path_check_set(bool on);

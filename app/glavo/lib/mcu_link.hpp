@@ -362,6 +362,11 @@ public:
      */
     void request_alarm_snapshot();
     /**
+     * @brief 调试页 Alarm Inject：把一帧单报只发给 MQTT（不上 UI、不改快照/灯效）
+     * @note UI 自己走 `ui_alarm_debug_inject` 带 `[SIM]`；这里只为云端 `alarm.single`。
+     */
+    void publish_debug_alarm_inject(const middleware::AlarmReportPayload& p);
+    /**
      * @brief 收齐 MCU 快照一轮后转发 UI；若 SOC 1120 活跃且缺 slot3 则补 bit20
      * @note UI 要求同轮所有分片 nonzero_slot_count 一致，故须在 Glavo 攒齐再发。
      */

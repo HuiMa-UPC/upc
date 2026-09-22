@@ -143,6 +143,24 @@ bool read_process_rss_kb(unsigned long* rss_kb) {
     return false;
 }
 
+bool read_thermal_temp_c(const char* path, float* temp_c) {
+    if (!path || !temp_c) {
+        return false;
+    }
+    FILE* fp = std::fopen(path, "r");
+    if (!fp) {
+        return false;
+    }
+    int millideg = 0;
+    const bool ok = (std::fscanf(fp, "%d", &millideg) == 1 && millideg > 0);
+    std::fclose(fp);
+    if (!ok) {
+        return false;
+    }
+    *temp_c = static_cast<float>(millideg) / 1000.f;
+    return true;
+}
+
 bool read_cpu_temp_c(float* temp_c) {
     if (!temp_c) {
         return false;
@@ -155,17 +173,9 @@ bool read_cpu_temp_c(float* temp_c) {
     };
 
     for (const char* path : kPaths) {
-        FILE* fp = std::fopen(path, "r");
-        if (!fp) {
-            continue;
-        }
-        int millideg = 0;
-        if (std::fscanf(fp, "%d", &millideg) == 1 && millideg > 0) {
-            *temp_c = static_cast<float>(millideg) / 1000.f;
-            std::fclose(fp);
+        if (read_thermal_temp_c(path, temp_c)) {
             return true;
         }
-        std::fclose(fp);
     }
     return false;
 }
@@ -218,6 +228,9 @@ void fill_mem_temp(UpcSysMonitorSample* out) {
 
     float temp_c = 0.f;
     out->cpu_temp_c = read_cpu_temp_c(&temp_c) ? temp_c : -1.f;
+    temp_c = 0.f;
+    out->zone4_temp_c = read_thermal_temp_c(
+        "/sys/class/thermal/thermal_zone4/temp", &temp_c) ? temp_c : -1.f;
 }
 
 #if UPC_DEBUG && UPC_MOD_SYS_MONITOR
@@ -235,18 +248,34 @@ void log_sample(const CpuSample& prev, const CpuSample& cur) {
     UpcSysMonitorSample snap{};
     fill_mem_temp(&snap);
 
+    char cpu_t[16];
+    char z4_t[16];
     if (snap.cpu_temp_c >= 0.f) {
+        std::snprintf(cpu_t, sizeof(cpu_t), "%.1fC",
+                      static_cast<double>(snap.cpu_temp_c));
+    } else {
+        std::snprintf(cpu_t, sizeof(cpu_t), "N/A");
+    }
+    if (snap.zone4_temp_c >= 0.f) {
+        std::snprintf(z4_t, sizeof(z4_t), "%.1fC",
+                      static_cast<double>(snap.zone4_temp_c));
+    } else {
+        std::snprintf(z4_t, sizeof(z4_t), "N/A");
+    }
+
+    if (snap.cpu_temp_c >= 0.f || snap.zone4_temp_c >= 0.f) {
         UPC_LOG_SYS_MONITOR(Info,
-            "cpu_sys=%.1f%% cpu_proc=%.1f%% temp=%.1fC mem_avail=%luMB/%luMB rss=%luMB",
+            "cpu_sys=%.1f%% cpu_proc=%.1f%% temp=%s z4=%s mem_avail=%luMB/%luMB rss=%luMB",
             cpu_sys_pct,
             cpu_proc_pct,
-            snap.cpu_temp_c,
+            cpu_t,
+            z4_t,
             snap.mem_avail_kb / 1024UL,
             snap.mem_total_kb / 1024UL,
             snap.rss_kb / 1024UL);
     } else {
         UPC_LOG_SYS_MONITOR(Warn,
-            "cpu_sys=%.1f%% cpu_proc=%.1f%% temp=N/A mem_avail=%luMB/%luMB rss=%luMB",
+            "cpu_sys=%.1f%% cpu_proc=%.1f%% temp=N/A z4=N/A mem_avail=%luMB/%luMB rss=%luMB",
             cpu_sys_pct,
             cpu_proc_pct,
             snap.mem_avail_kb / 1024UL,
@@ -265,6 +294,7 @@ bool upc_sys_monitor_sample(UpcSysMonitorSample* out) {
     }
     std::memset(out, 0, sizeof(*out));
     out->cpu_temp_c   = -1.f;
+    out->zone4_temp_c = -1.f;
     out->cpu_sys_pct  = -1.f;
     out->cpu_proc_pct = -1.f;
 

@@ -285,6 +285,7 @@ scripts/rongsu.sh start   # glavo + rongsu_camera → ui
 | `UI_Debug_Skip_O2_Gate_Get_Ntf` | — | UI→Glavo | Empty | `request_skip_o2_gate_state` | 查询当前“跳过氧门”开关状态 |
 | `UI_Debug_O2_Calib_Req` | — | UI→Glavo | `DebugO2CalibReqPayload` | `send_o2_calib` | 调试页氧标定：参考浓度单点求 K，写 `/userdata/CAL/o2_cal.json`；Glavo worker 只做打印互斥后丢给 SocSensors 独立线程，完成后只发 Rsp |
 | `UI_Debug_O2_Calib_Get_Ntf` | — | UI→Glavo | Empty | `request_o2_calib_state` | 查询当前氧标定 K（不重新采样） |
+| `UI_Debug_Alarm_Inject_Ntf` | — | UI→Glavo | `AlarmReportPayload` | `send_alarm_inject` | 调试页 **Alarm Inject**：Glavo 转成 `GLAVO_Alarm_Report_Ntf` **只发 MQTT**（不上 UI，避免与本地 `[SIM]` 双弹；不改 MCU 快照）。关开关对 CONDITION 发 `state_mask=0` 模拟解除 |
 | `UI_Debug_FirstLayer_Visual_Check_Set_Ntf` | — | UI→Glavo | `DebugOnOffPayload` | `send_first_layer_visual_check_set` | 调试页开关：首层视觉检测（仅本次运行，默认关） |
 | `UI_Debug_FirstLayer_Visual_Check_Get_Ntf` | — | UI→Glavo | Empty | `request_first_layer_visual_check_state` | 查询当前“首层视觉检测”开关状态 |
 | `UI_Debug_OpticalPath_Check_Set_Ntf` | — | UI→Glavo | `DebugOnOffPayload` | `send_optical_path_check_set` | 调试页开关：打印前光路检测（仅本次运行，默认关） |
@@ -318,10 +319,11 @@ scripts/rongsu.sh start   # glavo + rongsu_camera → ui
 | `UI_Galvo_Version_Ntf` | — | UI→Glavo | Empty | `send_galvo_version_query` | 进入 Settings/About 页读取振镜控制板版本缓存（TCP 0x0F 首包，非实时查询下位机） |
 | `GLAVO_Galvo_Version_Ntf` | — | Glavo→UI | `GalvoVersionPayload` | `register_galvo_version` | 振镜板版本：TCP 连上后首包主动推一次；About 进页 Req 再回缓存。显示 `V<(v>>16)>.<(v>>8)&0xff>.<(v&0xff)>` |
 | `GLAVO_Device_Event_Ntf` | — | Glavo→UI | `DeviceEventPayload` | `register_device_event` | 设备事件/告警上报，喂消息中心。只发数值码 + 等级 + 触发时刻，文案在 UI 侧码表（`ui_message_store`）。码表见 [`doc/设备通信协议-数据结构定义（v0.9）.md`](../doc/设备通信协议-数据结构定义（v0.9）.md) 第五节。**Glavo 侧尚未实现**，当前只有 UI 侧接好了订阅 |
-| `GLAVO_Alarm_Report_Ntf` | — | Glavo→UI | `AlarmReportPayload` | `register_alarm_report` | MCU 单条报警/EVENT 上报（串口 0xA3/0x20 TLV 0x01 原样透传，McuLink 不查字典）。UI 侧 `ui_alarm_state` 按 state_mask 推导生命周期并喂消息中心；字典与开发指导见 `doc/主控板串口通信协议 - 报警&事件表.csv`、`doc/SOC_TLV_ALARM_SINGLE_REPORT报警显示开发指导.md` |
+| `GLAVO_Alarm_Report_Ntf` | — | Glavo→UI/MQTT | `AlarmReportPayload` | `register_alarm_report` | 单条报警/EVENT：MCU 串口 0xA3/0x20 原样透传，或 SOC 合成舱氧 **1120**。Glavo **双发** UI 与 MQTT；MCU 同源 1120 丢弃（由 SOC 氧门独占）。调试页 Alarm Inject 经 `UI_Debug_Alarm_Inject_Ntf` 只向 MQTT 再发一份（不上 UI）。UI 侧 `ui_alarm_state` 按 state_mask 推导生命周期；MQTT 映射 `alarm.single`（契约 [soc-alarm-contract-v1.md](../doc/soc-alarm-contract-v1.md)）。字典见 `doc/主控板串口通信协议 - 报警&事件表.csv` |
 | `UI_Alarm_Reset_Ntf` | — | UI→Glavo | `AlarmResetReqPayload` | `send_alarm_reset` | 请求复位某条 CONDITION 报警（串口 0xA3/0x82 TLV 0x01，alarm_code 小端）。ACK 不代表复位成功，最终状态以后续 `GLAVO_Alarm_Report_Ntf` 为准 |
-| `UI_Alarm_Snapshot_Ntf` | — | UI→Glavo | Empty | `send_alarm_snapshot_req` | 请求 MCU 回一轮报警快照（串口 0xA3/0x81 TLV 0x05 len=0）。MCU **不会主动推**快照，不发这条就永远收不到；触发点：UI 启动、串口重连、进消息中心、30s 轮询、开始打印前 |
+| `UI_Alarm_Snapshot_Ntf` | — | UI/MQTT→Glavo | Empty | `send_alarm_snapshot_req` | 请求 MCU 回一轮报警快照（串口 0xA3/0x81 TLV 0x05 len=0）。MCU **不会主动推**快照；触发点：UI 启动、串口重连、进消息中心、30s 轮询、开始打印前；MQTT 连云后也可发以补全量 |
 | `GLAVO_Alarm_Snapshot_Ntf` | — | Glavo→UI | `AlarmSnapshotPayload` | `register_alarm_snapshot` | 报警快照的**一个 slot**（串口 0xA3/0x81 TLV 0x04 原样透传）。响应**稀疏**：只回 `(active｜latched)!=0` 的 slot，没回的按全零处理；`nonzero_slot_count=0` 表示当前无报警。槽位→报警号用固定公式 `alarm_snapshot_code_of()` 不查表。攒帧与原子对齐在 UI 侧 `ui_alarm_state` 做。用于重启/重连后补齐——单条上报只在状态变化时发，错过就再也收不到 |
+| `GLAVO_Alarm_Cloud_Snapshot_Ntf` | — | Glavo→MQTT | `AlarmCloudSnapshotPayload` | — | Glavo 攒齐 MCU 一轮并可并入 SOC 1120 后的**完整** CONDITION 位图（12 slot active/latched）。MQTT 展开为一条 `alarm.snapshot`（coverage=`condition_slots_v1`）；方案 A 条目元数据一律 unknown。含 `mcu_link` 供 `alarm.status` |
 | `GLAVO_Alarm_Reset_Result_Ntf` | — | Glavo→UI | `AlarmResetResultPayload` | `register_alarm_reset_result` | 复位**失败**回执（串口 0xA3/0x82 TLV 0x04）。只在失败时发，成功仍以后续 NORMAL 单报为准；Seq 固定 0，按 alarm_code 关联。UI 收到即解除 `reset_pending`，不用干等 10s 超时 |
 
 `CameraStreamInfoPayload.dma_mode` 当前固定为 `1`：
@@ -715,11 +717,13 @@ ParserManager → RingBuffer → McuLink（TCP + 串口）
 | `rs_log.hpp` / `rs_log.cpp` | `UPC_LOG_*` 宏、`LogTopic` 落盘、`proc=` 进程名 |
 | `upc_contract.hpp` §2 | 模块子开关 `UPC_MOD_*`、`UPC_LOG_MIN_LEVEL`、`UPC_LOG_MSG_TRACE` |
 | `rs_msg_format.cpp` | IPC 消息摘要格式化 |
-| `upc_sys_monitor.*` | HostMonitor（CPU/内存/温度）；`tick` 60s 落盘，`sample` 给 UI 蒙版即时读数 |
+| `upc_sys_monitor.*` | HostMonitor（CPU/内存/zone0-1 与 zone4 温度）；`tick` 60s 落盘，`sample` 给 UI 蒙版即时读数 |
 
 `upc_sys_monitor_sample()` **始终可编**（读 `/proc` + thermal sysfs），不依赖 `UPC_DEBUG`；
-`tick()` 的落盘仍受 `UPC_DEBUG && UPC_MOD_SYS_MONITOR` 控制。UI 调试页 **Sys HUD** 经
-`ui_sys_hud` 约 1Hz 调 `sample()`，红字挂在 `lv_layer_sys`。
+温度文件为毫度，用户态 `/1000` 得 °C。`cpu_temp_c` 先 `thermal_zone0` 再 `thermal_zone1`；
+`zone4_temp_c` 读 `thermal_zone4`。`tick()` 的落盘仍受 `UPC_DEBUG && UPC_MOD_SYS_MONITOR` 控制。
+UI 调试页 **Sys HUD** 经 `ui_sys_hud` 约 1Hz 调 `sample()`，红字挂在 `lv_layer_sys`。
+调试页顶部传感器条另用 `zone4_temp_c` 常显 Zone4（进页起 1Hz 定时器，退页停）。
 
 ## 模块开关（`UPC_DEBUG=ON` 时）
 
@@ -796,11 +800,11 @@ topic_<大类>_<子类>.log        # 兜底文件例外：topic_misc.log
 | `topic_misc.log` | 兜底 | `Misc` | **新增 `LogTopic` 未加文件名映射时会掉进这里** |
 | `topic_mqtt_wire.log` | `MqttService` | `MqttWire` | 云端原始帧与 payload 正文（`debug_log_mqtt_frame`） |
 | `topic_mqtt_state.log` | `MqttService` | `MqttState` | 打印状态边沿上报（开始打印 / 打印结束） |
-| `topic_mqtt_telemetry.log` | `MqttService` | `MqttTelemetry` | 遥测与心跳上报 |
+| `topic_mqtt_telemetry.log` | `MqttService` | `MqttTelemetry` | 遥测与心跳上报；报警上云（`alarm/report`/`alarm/ack`、outbox） |
 | `topic_mqtt_ota.log` | `MqttService` | `MqttOta` | 云端 OTA 通知、下载与校验进度 |
 | `topic_mqtt_command.log` | `MqttService` | `MqttCommand`（`UPC_LOG_MQTT_SERVICE` 默认） | 云端下行命令与 `cmd/ack`、订阅与激活 |
 | `topic_xfr_upload.log` | `XfrService` | `XfrUpload` | WiFi 发现、PIN 配对、HTTP 文件上传（仅收 `.json` / `.svg`） |
-| `topic_serial_sensor.log` | `McuLink` | `SerialSensor` | 环境量周期上报（O2 / 温湿度 / PM / 压力 / 粉量位 / 门状态），含调试页模拟数据 |
+| `topic_serial_sensor.log` | `McuLink` | `SerialSensor` | 环境量周期上报（O2 / 温湿度 / PM / 压力 / 粉量位 / 门状态），含调试页模拟数据；SOC `soc_pm:` 舱外/舱内缓存（首页用舱外，`<0` 为 `--`） |
 | `topic_serial_alarm.log` | `McuLink` | `SerialAlarm` | MCU 报警与事件单条上报、快照、复位回执 |
 | `topic_serial_layer.log` | `McuLink` | `SerialLayer` | 换层握手：串口层指令下发与层事件回报 |
 | `topic_tcp_motion_tx.log` | `McuLink` | `TcpMotionTx` | 振镜运动数据包与紧急指令（急停 / 暂停 / 红光） |

@@ -754,6 +754,10 @@ ACTIVE + OWNER_TASK 这一档最容易漏：激光器 1301、各轴 1203~1230 �
 1104 RTN_LATCHED / 1101 自动清除 / 2000 EVENT 四条显示路径，外加 1003 一条
 critical 把 information/warning/error/critical 四档等级配色凑齐——等级不进字典、
 以报文为准，不造就看不到；关掉开关注入 NORMAL 帧模拟解除）。
+同一开关经 `UI_Debug_Alarm_Inject_Ntf` 让 Glavo **只向 MQTT** 发
+`GLAVO_Alarm_Report_Ntf`（`alarm.single`），不上 UI、不改 MCU 快照/灯效。
+云端会当成真 MCU 单报；连云后的完整快照仍按 MCU 位图，范围内的假 CONDITION
+可能被快照抹掉。`Msg Inject` 仍是本机设备事件，**没有** MQTT 通道。
 1003 同时是 **ACTIVE + `reset_policy=OWNER_TASK`** 的样本，用来验那档在抽屉里
 可点 Reset；1124 是 LOCAL，ACTIVE 时该置灰——两条对照着看。
 第 6 条 **1999 是字典外的未知码**，验固件比字典新时的降级路径：标题降级成
@@ -919,7 +923,7 @@ pending 自动解除——正好顺带验超时路径。
 | `user_control` | `page_user_control.*` | 控制面板 + 更多控制（页内两视图）。见下方「控制页」一节 |
 | `user_settings` | `page_user_settings.*` | 设置列表 + Display 背光滑条 + 开发者密码弹窗 |
 | `user_message` | `page_user_message.*` | 消息中心（浅色档）：三 Tab + All read 浮层顶栏 + 日期分组混排列表（MCU 报警 + 设备事件）+ 初始 10 条与底部 Load More + 左滑删除历史 + 右侧 632 详情抽屉（Reset 三态）。按稿 6230:89616 / 6091:13405 / 6091:13612 / 6091:13847 实现 |
-| `user_debug` | `page_user_debug.*` | 调试控制台；Move 页振镜卡 Abs X/Y + Move 走 `send_galvo_abs_pos`；Other 页按 Process / Cabin / Print Gates / Media & Sim / Inject 分组。`Galvo Point Test` 在 Print Gates，按当前校准表依次显示中心和四角红光点，与正式打印及 Test image 双向互斥。O2 Calib 在左列：输入参考浓度后点圆钮写 `/userdata/CAL/o2_cal.json`；失败 toast 提示、标签仍显示原 K。Media & Sim 的 **Sys HUD** 打开后，`ui_sys_hud` 在 `lv_layer_sys` 右上角红字显示 CPU 温 / 整机与本进程占用 / 内存（`upc_sys_monitor_sample` 读本机 `/proc`，不经 IPC），不进布局、不可点，仅本次运行 |
+| `user_debug` | `page_user_debug.*` | 调试控制台；Move 页振镜卡 Abs X/Y + Move 走 `send_galvo_abs_pos`；Other 页按 Process / Cabin / Print Gates / Media & Sim / Inject 分组。`Galvo Point Test` 在 Print Gates，按当前校准表依次显示中心和四角红光点，与正式打印及 Test image 双向互斥。O2 Calib 在左列：输入参考浓度后点圆钮写 `/userdata/CAL/o2_cal.json`；失败 toast 提示、标签仍显示原 K。Media & Sim 的 **Sys HUD** 打开后，`ui_sys_hud` 在 `lv_layer_sys` 右上角红字显示 CPU 温 / 整机与本进程占用 / 内存（`upc_sys_monitor_sample` 读本机 `/proc` 与 thermal sysfs，不经 IPC），不进布局、不可点，仅本次运行。顶部传感器条末格 **Zone4** 进页后约 1Hz 读 `thermal_zone4`（同 `sample().zone4_temp_c`），退页停定时器 |
 | `user_timelapse` | `page_user_timelapse.*` | 延时摄影播放器（隐藏页，历史缩略图进入；全屏 `lv_layer_top`） |
 
 注册仅在 `ui_app.cpp`；打印流程走 `control_*`，pages 不直接订阅 MsgBus。详见 `lib/pages/README.md`。

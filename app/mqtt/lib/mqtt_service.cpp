@@ -912,6 +912,12 @@ bool MqttService::init()
      * 待应用固件不在这个目录（全包在 UPC_SOC_OTA_IMG，应用层在槽里），清空不影响它。 */
     clear_image_tmp_dir();
 
+    {
+        std::lock_guard<std::mutex> lock(alarm_mtx_);
+        alarm_stream_load();
+        alarm_outbox_load();
+    }
+
     subscribe_messages();
 
     UPC_LOG_MQTT_SERVICE(Info,
@@ -974,6 +980,14 @@ void MqttService::tick()
     (void)publish_heartbeat();
     poll_ota_heartbeat_wait();
     expire_pending_acks();
+
+    const uint64_t now_alarm = monotonic_ms();
+    if(last_alarm_outbox_retry_ms_ == 0 ||
+       now_alarm - last_alarm_outbox_retry_ms_ >= kAlarmOutboxRetryIntervalMs) {
+        last_alarm_outbox_retry_ms_ = now_alarm;
+        alarm_flush_outbox();
+    }
+    alarm_maybe_publish_status(false);
 }
 
 void MqttService::subscribe_messages()
@@ -1008,6 +1022,14 @@ void MqttService::subscribe_messages()
         middleware::ModuleId::APP_MQTT,
         [this](const middleware::Message& msg) { on_print_state(msg); }));
     subs_.push_back(bus.subscribe(
+        middleware::MsgType::GLAVO_Alarm_Report_Ntf,
+        middleware::ModuleId::APP_MQTT,
+        [this](const middleware::Message& msg) { on_alarm_report(msg); }));
+    subs_.push_back(bus.subscribe(
+        middleware::MsgType::GLAVO_Alarm_Cloud_Snapshot_Ntf,
+        middleware::ModuleId::APP_MQTT,
+        [this](const middleware::Message& msg) { on_alarm_cloud_snapshot(msg); }));
+    subs_.push_back(bus.subscribe(
         middleware::MsgType::UI_Ota_User_Decision_Req,
         middleware::ModuleId::APP_MQTT,
         [this](const middleware::Message& msg) { on_ota_user_decision(msg); }));
@@ -1035,6 +1057,7 @@ bool MqttService::ensure_mqtt_connected()
     cmd_subscribed_ = false;
     ota_subscribed_ = false;
     mgmt_subscribed_ = false;
+    alarm_ack_subscribed_ = false;
     try_reconnect();
     return mqtt_connected_;
 }
@@ -1221,11 +1244,22 @@ bool MqttService::connect_mqtt()
         disconnect_mqtt();
         return false;
     }
+    if(!subscribe_alarm_ack_topic()) {
+        disconnect_mqtt();
+        return false;
+    }
 
     UPC_LOG_MQTT_SERVICE(Info, "MQTT connected uri=%s", cfg_.broker_uri.c_str());
 
     /* 设备上线后主动上报一次完整状态（协议 §四）：mode 默认 idle，since 取当前时刻 */
     (void)publish_state(static_cast<uint32_t>(middleware::UserHomeStatus::Idle), 0);
+
+    /* 报警：重发未 ack outbox；向 Glavo 要一轮完整快照；发 alarm.status */
+    alarm_flush_outbox();
+    if(alarm_need_snapshot_after_connect_) {
+        alarm_request_snapshot_from_glavo();
+    }
+    alarm_maybe_publish_status(true);
 
     /* 遗留的 SOC 待应用固件在这里补提示：MQTT 比 UI 先启动，放 init() 里发
      * 的话 UI 还没订阅，消息会丢。内部只执行一次。 */
@@ -1292,6 +1326,7 @@ void MqttService::disconnect_mqtt()
     cmd_subscribed_ = false;
     ota_subscribed_ = false;
     mgmt_subscribed_ = false;
+    alarm_ack_subscribed_ = false;
 }
 
 bool MqttService::persist_mqtt_credential(const std::string& password,
@@ -1586,6 +1621,8 @@ int MqttService::on_message_arrived(void* context, char* topic_name,
             self->handle_ota_notify(payload);
         } else if(topic == self->cfg_.topic_ota_manifest_resp()) {
             self->handle_ota_manifest_response(payload);
+        } else if(topic == self->cfg_.topic_alarm_ack()) {
+            self->handle_alarm_ack(payload);
         } else {
             UPC_LOG_MQTT_SERVICE(Debug, "MQTT RX ignored topic=%s", topic.c_str());
         }

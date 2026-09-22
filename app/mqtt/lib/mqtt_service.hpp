@@ -154,6 +154,8 @@ private:
     void on_galvo_version(const middleware::Message& msg);
     void on_env_sim_state(const middleware::Message& msg);
     void on_print_state(const middleware::Message& msg);
+    void on_alarm_report(const middleware::Message& msg);
+    void on_alarm_cloud_snapshot(const middleware::Message& msg);
     void on_ota_user_decision(const middleware::Message& msg);
     void on_rtsp_start_rsp(const middleware::Message& msg);
     void on_rtsp_stop_rsp(const middleware::Message& msg);
@@ -190,6 +192,35 @@ private:
                          const std::string& result,
                          const char* reason,
                          const char* detail_json = "{}");
+
+    /* ---- 报警上云（mqtt_service_alarm.cpp） ---- */
+    bool subscribe_alarm_ack_topic();
+    void handle_alarm_ack(const std::string& payload);
+    void alarm_stream_load();
+    void alarm_stream_save();
+    void alarm_outbox_load();
+    void alarm_outbox_trim();
+    bool alarm_outbox_persist(const std::string& message_id,
+                              const std::string& body,
+                              bool is_snapshot);
+    void alarm_outbox_erase(const std::string& message_id);
+    void alarm_enqueue_and_try_send(std::string body, bool is_snapshot);
+    bool alarm_publish_body(const std::string& body);
+    void alarm_flush_outbox();
+    void alarm_maybe_publish_status(bool force);
+    void alarm_request_snapshot_from_glavo();
+    std::string alarm_next_message_id();
+    std::string alarm_alloc_report_seq();
+    std::string build_alarm_single_json(const middleware::AlarmReportPayload& p,
+                                        const std::string& message_id,
+                                        const std::string& report_seq);
+    std::string build_alarm_snapshot_json(
+        const middleware::AlarmCloudSnapshotPayload& p,
+        const std::string& message_id,
+        const std::string& report_seq);
+    std::string build_alarm_status_json(const std::string& message_id,
+                                        const std::string& report_seq);
+    static std::string make_uuid_v4();
 
     void handle_command_message(const std::string& payload);
     bool parse_common_command(const std::string& payload,
@@ -406,6 +437,7 @@ private:
     bool cmd_subscribed_ = false;
     bool ota_subscribed_ = false;
     bool mgmt_subscribed_ = false;
+    bool alarm_ack_subscribed_ = false;
     uint64_t last_reconnect_ms_ = 0;
 
     std::mutex data_mtx_;
@@ -429,6 +461,22 @@ private:
 
     std::mutex pending_mtx_;
     std::unordered_map<std::string, PendingAck> pending_acks_;
+
+    struct AlarmOutboxItem {
+        std::string message_id;
+        std::string report_seq;
+        std::string body;
+        bool is_snapshot = false;
+    };
+    std::mutex alarm_mtx_;
+    std::string alarm_stream_id_;
+    int64_t alarm_report_seq_ = 0; /**< 已分配的最大 report_seq；下一条 = +1 */
+    std::vector<AlarmOutboxItem> alarm_outbox_;
+    uint8_t alarm_mcu_link_ =
+        static_cast<uint8_t>(middleware::AlarmMcuLink::Unknown);
+    uint64_t last_alarm_status_ms_ = 0;
+    uint64_t last_alarm_outbox_retry_ms_ = 0;
+    bool alarm_need_snapshot_after_connect_ = true;
 
     std::mutex ota_mtx_;
     OtaNotify pending_ota_notify_{};

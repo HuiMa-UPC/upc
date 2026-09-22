@@ -860,6 +860,7 @@ bool GlavoService::start()
         middleware::MsgType::UI_Debug_Skip_O2_Gate_Get_Ntf,
         middleware::MsgType::UI_Debug_O2_Calib_Req,
         middleware::MsgType::UI_Debug_O2_Calib_Get_Ntf,
+        middleware::MsgType::UI_Debug_Alarm_Inject_Ntf,
         middleware::MsgType::UI_Debug_FirstLayer_Visual_Check_Set_Ntf,
         middleware::MsgType::UI_Debug_FirstLayer_Visual_Check_Get_Ntf,
         middleware::MsgType::APP_Visual_FirstLayer_Check_Rsp,
@@ -1364,6 +1365,9 @@ void GlavoService::handle_message(const middleware::Message& msg)
             break;
         case middleware::MsgType::UI_Debug_O2_Calib_Get_Ntf:
             handle_debug_o2_calib_get(msg);
+            break;
+        case middleware::MsgType::UI_Debug_Alarm_Inject_Ntf:
+            handle_debug_alarm_inject(msg);
             break;
         case middleware::MsgType::UI_Debug_FirstLayer_Visual_Check_Set_Ntf:
             handle_debug_first_layer_visual_check_set(msg);
@@ -5230,6 +5234,15 @@ void GlavoService::handle_debug_o2_calib_get(const middleware::Message& msg)
 {
     (void)msg;
     publish_debug_o2_calib_state();
+}
+
+void GlavoService::handle_debug_alarm_inject(const middleware::Message& msg)
+{
+    middleware::AlarmReportPayload p{};
+    if(!read_inline_pod(msg.payload, p)) {
+        return;
+    }
+    McuLink::instance().publish_debug_alarm_inject(p);
 }
 
 void GlavoService::publish_debug_first_layer_visual_check_state()
