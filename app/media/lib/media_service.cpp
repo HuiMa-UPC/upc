@@ -558,11 +558,11 @@ bool MediaService::copy_latest_nv12_snapshot(std::vector<uint8_t>& out) const
 void MediaService::handle_snapshot_req(const middleware::Message& msg)
 {
     std::string out_path;
-    const bool ok = save_latest_png_snapshot(out_path);
+    const bool ok = save_latest_jpeg_snapshot(out_path);
     send_snapshot_rsp(msg, ok, ok ? out_path.c_str() : "");
 }
 
-bool MediaService::save_latest_png_snapshot(std::string& out_path) const
+bool MediaService::save_latest_jpeg_snapshot(std::string& out_path) const
 {
     out_path.clear();
     std::vector<uint8_t> nv12;
@@ -581,33 +581,14 @@ bool MediaService::save_latest_png_snapshot(std::string& out_path) const
     const std::string stem = "photo_" + stamp + "_" +
                              std::to_string(stream_width_) + "x" +
                              std::to_string(stream_height_);
-    const std::string out_png_path =
-        std::string(UPC_PHOTO_DIR) + "/" + stem + ".png";
+    const std::string out_jpeg_path =
+        std::string(UPC_PHOTO_DIR) + "/" + stem + ".jpg";
     const std::string out_rthm_path =
         std::string(UPC_PHOTO_DIR) + "/" + stem + CAMERA_PRINT_VIDEO_THUMB_EXT;
-    const std::string tmp_nv12_path =
-        "/tmp/media_snapshot_" + stamp + "_" + std::to_string(monotonic_us()) + ".nv12";
 
-    FILE* fp = std::fopen(tmp_nv12_path.c_str(), "wb");
-    if(!fp) {
-        return false;
-    }
-    const bool ok = std::fwrite(nv12.data(), 1, nv12.size(), fp) == nv12.size();
-    if(std::fclose(fp) != 0 || !ok) {
-        (void)std::remove(tmp_nv12_path.c_str());
-        return false;
-    }
-
-    char cmd[1024];
-    std::snprintf(
-        cmd, sizeof(cmd),
-        "%s -y -loglevel error -f rawvideo -pix_fmt nv12 -s %ux%u -i '%s' "
-        "-frames:v 1 -c:v png '%s'",
-        CAMERA_FFMPEG_BIN, stream_width_, stream_height_,
-        tmp_nv12_path.c_str(), out_png_path.c_str());
-    const bool png_ok = (run_shell_cmd(cmd, "ffmpeg png") == 0);
-    (void)std::remove(tmp_nv12_path.c_str());
-    if(!png_ok) {
+    if(!timelapse_util::encode_nv12_to_jpeg_file(
+           nv12.data(), nv12.size(), stream_width_, stream_height_,
+           out_jpeg_path.c_str())) {
         return false;
     }
 
@@ -619,7 +600,7 @@ bool MediaService::save_latest_png_snapshot(std::string& out_path) const
                               out_rthm_path.c_str());
     }
 
-    out_path = out_png_path;
+    out_path = out_jpeg_path;
     UPC_LOG_MEDIA_SERVICE(Info, "snapshot saved path=%s", out_path.c_str());
     return true;
 }
@@ -864,21 +845,46 @@ void MediaService::on_print_h264_storage_exhausted()
     print_video_.disable_h264_expectation();
 }
 
+/**
+ * 按卷回容量。
+ *
+ * **只实现了 Internal 这一支**：设置页存储管理（稿 6251:94362）另要 SD 卡与 U 盘，
+ * 那两个卷的挂载点还没定，回 `present=0` 让 UI 显示「未插入」而不是假装容量为 0。
+ * 后端要补的内容见 doc/STORAGE_BACKEND_API.md。
+ *
+ * 请求方没带载荷时（旧调用方）按 Internal 处理，行为与改动前一致。
+ */
 void MediaService::handle_storage_usage_req(const middleware::Message& msg) const
 {
-    struct statvfs vfs {};
+    middleware::StorageUsageReqPayload req{};
+    if(msg.payload.type == middleware::MsgPayload::Type::Inline &&
+       msg.payload.length >= sizeof(req)) {
+        std::memcpy(&req, msg.payload.data.bytes.data(), sizeof(req));
+    }
+
     middleware::StorageUsagePayload rsp{};
-    if(::statvfs(UPC_MEDIA_ROOT, &vfs) == 0) {
-        const uint64_t block_size = static_cast<uint64_t>(vfs.f_frsize);
-        const uint64_t total = static_cast<uint64_t>(vfs.f_blocks) * block_size;
-        const uint64_t free_bytes = static_cast<uint64_t>(vfs.f_bavail) * block_size;
-        rsp.total_bytes = total;
-        rsp.used_bytes = (total > free_bytes) ? (total - free_bytes) : 0u;
+    rsp.volume = req.volume;
+
+    if(static_cast<middleware::StorageVolume>(req.volume) !=
+       middleware::StorageVolume::Internal) {
+        /* SD / U 盘：后端未实现，明确回「不在」 */
+        rsp.present = 0;
     } else {
-        UPC_LOG_MEDIA_SERVICE_TO(StorageUsage, Warn, "storage statvfs failed path=%s err=%d",
-                              UPC_MEDIA_ROOT, errno);
-        rsp.total_bytes = 0;
-        rsp.used_bytes = 0;
+        struct statvfs vfs {};
+        if(::statvfs(UPC_MEDIA_ROOT, &vfs) == 0) {
+            const uint64_t block_size = static_cast<uint64_t>(vfs.f_frsize);
+            const uint64_t total = static_cast<uint64_t>(vfs.f_blocks) * block_size;
+            const uint64_t free_bytes = static_cast<uint64_t>(vfs.f_bavail) * block_size;
+            rsp.total_bytes = total;
+            rsp.used_bytes = (total > free_bytes) ? (total - free_bytes) : 0u;
+            rsp.present = 1;
+        } else {
+            UPC_LOG_MEDIA_SERVICE_TO(StorageUsage, Warn, "storage statvfs failed path=%s err=%d",
+                                  UPC_MEDIA_ROOT, errno);
+            rsp.total_bytes = 0;
+            rsp.used_bytes = 0;
+            rsp.present = 0;
+        }
     }
 
     middleware::Message ntf(

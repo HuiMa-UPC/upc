@@ -76,14 +76,22 @@ public:
 
     /**
      * @brief 注册页面（使用图片图标，推荐：可还原设计稿自定义图标）
-     * @param page         页面智能指针
-     * @param menu_icon_img A8 图标资源（lv_image_dsc_t）；同时当选中态的位图蒙版用
+     * @param page          页面智能指针
+     * @param menu_icon_set A8 图标的多档 set（NULL 结尾），如 `ic_nav_home_set`
+     * @param badge_icon_set 可选：**有未读红点时**换上的那版图标（NULL = 没有变体）
      *
-     * 每个按钮里建两层互斥的图标：未选中露 A8 图标 recolor 成 user_color_icon_off，
-     * 选中露一块蓝渐变（稿 2235:8699 的 #4054FD → #4D80EE）经同一份 A8 蒙版裁出的字形。
-     * 分两层是因为 image_recolor 只能上单色，画不出稿里的渐变。
+     * 收 set 而不是单张 dsc：图标按档位各出一份原生尺寸，这里按 `USER_NAV_ICON_SZ`
+     * 挑等宽的那份、上屏 1:1 不缩放（挑图与「为什么不缩放」见 `ui_user_pick_icon()`）。
+     * 选中与否只差颜色，同一枚图标 recolor 即可——未选中 `user_light_icon_off`、选中白，
+     * 底板由按钮自身的 `LV_STATE_CHECKED` 画，见 `make_menu_button()`。
+     *
+     * `badge_icon_set` 是另一回事，**不是颜色能替代的**：稿上带红点那版把图标右上角
+     * 咬掉了一块给红点让位（消息页 6255:95805，与首页铃铛 6201:85994 同一套做法），
+     * 轮廓本身就不一样。给了它，`set_menu_badge()` 会连图标一起换；不给就只叠红点，
+     * 红点会压在原轮廓上。
      */
-    void register_page(PagePtr page, const lv_image_dsc_t* menu_icon_img);
+    void register_page(PagePtr page, const lv_image_dsc_t* const* menu_icon_set,
+                       const lv_image_dsc_t* const* badge_icon_set = nullptr);
 
     /**
      * @brief 注册「隐藏页」：有页面、但不在侧边栏生成菜单按钮。
@@ -124,6 +132,36 @@ public:
      */
     void set_menu_badge(const std::string& page_name, bool on);
 
+    /**
+     * @brief 侧栏切到「整屏视频」配色（首页打印中 / 监控中）。
+     *
+     * 浅色稿把侧栏改成了几乎全透的白 4% + 一道右侧外投影，压在 #f5f5f5 页面上很轻。
+     * 但整屏摄像头预览时侧栏背后是视频帧，那点不透明度压不住亮帧，`#9E9E9E` 的未选中
+     * 图标会被盖过去——这个坑 app/ui/UI.md「外壳布局」一节记过，当年 bg_opa 从 40%
+     * 提到 90% 就是为它。所以这两个态退回深底 + 原来那档图标灰。
+     */
+    void set_sidebar_video_mode(bool on);
+
+    /**
+     * @brief 整屏底色切浅色档（`user_light_bg`）还是深色档（`user_color_bg`）。
+     *
+     * 底色画在 `shell_` 上，`content_panel_` 与各页根节点都是透明的，所以这一个开关
+     * 决定所有页面的底。**按页设**：浅色稿是一页一页改过来的，已改的页开、没改的页
+     * 仍是深色内容、翻成浅底会立刻看不见字。名单在 `apply_device_bar()` 里。
+     *
+     * 换页时由 `apply_device_bar()` 统一置位，页面自己一般不用调。
+     */
+    void set_shell_light(bool on);
+
+    /**
+     * @brief 把侧栏重新提到 shell_ 的最前。
+     *
+     * 侧栏在 `init()` 末尾被提到最前，是外壳里 z 序最高的一层。通知面板展开时要临时
+     * 越过它（捕获层得盖住侧栏，否则点侧栏收不起面板、会直接切页），收起后由
+     * `ui_notice_stack` 调本函数把次序还原。
+     */
+    void raise_sidebar();
+
 private:
     PageManager() = default;
 
@@ -131,9 +169,13 @@ private:
     struct PageEntry {
         PagePtr page;           /**< 页面实例 */
         lv_obj_t* menu_btn = nullptr; /**< 左侧菜单按钮对象 */
-        lv_obj_t* menu_icon_img = nullptr; /**< 未选中态：A8 图标 recolor 成灰（图片图标时非空） */
-        lv_obj_t* menu_icon_grad = nullptr;/**< 选中态：蓝渐变 + 位图蒙版裁出的字形，与 menu_icon_img 互斥显示 */
+        /** A8 图标，靠 recolor 换色：未选中灰、选中白（浅色稿 6073:72801 里选中态是
+         *  深色底板 + 白字形，不再是早先那种渐变字形，故一层就够）。 */
+        lv_obj_t* menu_icon_img = nullptr;
         lv_obj_t* menu_badge = nullptr;    /**< 未读红点（懒建，见 set_menu_badge） */
+        /** 常态 / 带红点两版图标 set；后者为 NULL 表示这枚图标没有变体。 */
+        const lv_image_dsc_t* const* menu_icon_set = nullptr;
+        const lv_image_dsc_t* const* menu_icon_badge_set = nullptr;
         std::string owner_menu;  /**< 隐藏页：激活时用此页的菜单按钮高亮（空=无映射） */
         std::function<std::string()> target_resolver; /**< 菜单按钮点击的动态目标（空=切到本页） */
         bool created = false;   /**< 标记页面是否已执行过 on_create */
@@ -147,6 +189,14 @@ private:
     lv_obj_t* notice_stack_ = nullptr; /**< 左下通知浮层（浮于页面之上） */
     std::vector<PageEntry> entries_;   /**< 已注册页面列表 */
     Page* current_ = nullptr;          /**< 当前显示的页面 */
+    bool sidebar_video_ = false;       /**< 侧栏是否处于整屏视频配色，见 set_sidebar_video_mode */
+    bool shell_light_ = false;         /**< 整屏底是否浅色档，见 set_shell_light */
+
+    /** 按 sidebar_video_ 刷一遍侧栏底与图标色。两处调用：切换视频态、重新高亮。 */
+    void apply_sidebar_style();
+
+    /** 按 shell_light_ 刷一遍整屏底色。两处调用：init() 建壳、切换档位。 */
+    void apply_shell_style();
 
     /** 根据名称查找对应的页面条目 */
     PageEntry* find_entry(const std::string& name);

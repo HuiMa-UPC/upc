@@ -45,24 +45,24 @@ using McuLinkFirstLayerCheckCb = std::function<bool(uint16_t)>;
 
 /** @brief 环境传感器缓存（串口 0x9B + SOC 本地采集合并，供 UI/打印进度读取） */
 struct EnvSnapshotCache {
-    float pm25_indoor     = 0.f;   /**< 舱外/室内常显 PM2.5（V4=SOC UART 舱外） */
-    float pm25_cabin      = 0.f;   /**< 舱内 PM2.5（V4=SOC UART 舱内，阀关时可能无效） */
+    float pm25_indoor     = 0.f;   /**< 舱外/室内常显 PM2.5（SOC UART 舱外） */
+    float pm25_cabin      = 0.f;   /**< 舱内 PM2.5（SOC UART 舱内，阀关时可能无效） */
     float pm1_indoor      = -1.f;  /**< 舱外 PM1.0；无源时 <0 */
     float pm10_indoor     = -1.f;  /**< 舱外 PM10；无源时 <0 */
-    float pm1_cabin       = -1.f;  /**< 舱内 PM1.0（V4 SOC）；无源时 <0 */
-    float pm10_cabin      = -1.f;  /**< 舱内 PM10（V4 SOC）；无源时 <0 */
+    float pm1_cabin       = -1.f;  /**< 舱内 PM1.0（SOC）；无源时 <0 */
+    float pm10_cabin      = -1.f;  /**< 舱内 PM10（SOC）；无源时 <0 */
     float temperature_c   = 0.f;
     float oxygen_percent  = 0.f;
-    float filter_oxygen_percent = -1.f; /**< 滤芯氧 %（V4 MCU 1ST）；无源时 <0 */
+    float filter_oxygen_percent = -1.f; /**< 滤芯氧 %（MCU 1ST）；无源时 <0 */
     float humidity_percent = 0.f;
-    float pressure_kpa    = -1.f;   /**< 舱内气压 kPa（旧=MCU；V4=SOC CPM121） */
+    float pressure_kpa    = -1.f;   /**< 舱内气压 kPa（SOC CPM121） */
     float baseplate_temp_c = -1.f;  /**< 基板温度 ℃；无源时 <0 */
     float filter_pressure_kpa = -1.f; /**< 滤芯气压 SC0（MCU 1ST） */
-    uint8_t powder_bits   = 0u;     /**< 旧：bit0/bit1；V4：红外低 2 位兼容 */
-    uint8_t powder_ir_bits = 0u;    /**< V4：A1..OUTR 八路红外 */
+    uint8_t powder_bits   = 0u;     /**< bit0=左匣有粉 bit1=右匣有粉 */
+    uint8_t powder_ir_bits = 0u;    /**< A1..OUTR 八路红外 */
     bool  outer_door_open = false;  /**< false=门关 true=门开 */
     bool  door_state_valid = false; /**< 是否已收到至少一帧可用门状态 */
-    bool  sensor_v4       = false;  /**< 当前按 V4 协议路径填缓存 */
+    bool  sensor_v4       = false;  /**< 1=已按 SOC 模型填缓存（链路启动后恒为 true；Env Sim 期间不叠真实 SOC） */
     bool  valid           = false;
 };
 
@@ -248,13 +248,7 @@ public:
     /** @brief 读取最新环境传感器快照（线程安全） */
     [[nodiscard]] EnvSnapshotCache env_snapshot() const;
 
-    /**
-     * @brief MCU 固件是否已报到且 major≥4（传感器走 V4 布局 + SOC 本地采集 / 开阀采样）。
-     * unknown / major&lt;4 → false：旧板无 fa_valve，不开阀。
-     */
-    [[nodiscard]] bool mcu_sensor_protocol_v4() const noexcept;
-
-    /** @brief 读 MCU 版本缓存（About / 门控逻辑） */
+    /** @brief 读 MCU 版本缓存（About / MQTT / OTA） */
     [[nodiscard]] middleware::McuVersionPayload mcu_version_cached() const;
 
     /**
@@ -264,7 +258,7 @@ public:
     void set_env_sim_enabled(bool on);
     [[nodiscard]] bool env_sim_enabled() const noexcept;
     /**
-     * @brief 调试：跳过 V4 SOC 氧打印门（仅本次运行，默认关）
+     * @brief 调试：跳过 SOC 氧打印门（仅本次运行，默认关）
      * @note 开：起印不发洗气开、不等氧、打印中不因氧高 pause/1120；关：恢复开阀洗气+氧门。
      */
     void set_skip_o2_print_gate(bool on);
@@ -310,7 +304,8 @@ public:
     void on_sensor_report(const serial_sensor_report_t& report);
     void on_sensor_ext_report(const serial_sensor_ext_t& ext);
     void merge_soc_env_into_cache_locked();
-    void refresh_soc_v4_mode();
+    /** @brief 进程启动即点六路舱灯 + SPI 灯效，并置 SOC 环境哨兵。不等串口/版本。 */
+    void arm_soc_peripherals();
     void publish_debug_soc_led_ntf();
     void on_motion_pos_report(const serial_motion_pos_t& pos);
     void publish_env_update_ntf();
@@ -319,11 +314,13 @@ public:
     /** @brief 强制推送环境无效哨兵（各 float <0），供 UI 显示 "--"；不要求 env_cache_.valid */
     void publish_env_invalid_ntf();
     void publish_debug_sensor_ntf(const serial_sensor_report_t& report);
+    /** @brief 调试页风扇卡：MCU V4 EXT 帧的风机实测转速/故障/状态 */
+    void publish_debug_fan_ntf(const serial_sensor_ext_t& ext);
     /** @brief 调试页传感器条推无效哨兵（<0 → UI "--"） */
     void publish_debug_sensor_invalid_ntf();
     /**
-     * @brief V4：用 SOC 快照 + 已缓存的 MCU 字段推调试顶栏（不依赖本周期 1ST）
-     * @note 未收到过 MCU 1ST 时 O2/基板/粉量发无效哨兵；PM/温湿度/气压走 SOC。
+     * @brief 用 SOC 快照 + 已缓存的 MCU 字段推调试顶栏（不依赖本周期 1ST）
+     * @note 未收到过 MCU 1ST 时基板/粉量发无效哨兵；滤芯氧来自 1ST；PM/温湿度/舱氧/气压走 SOC。
      */
     void publish_debug_sensor_from_soc_and_cache();
     void publish_debug_axis_ntf(const serial_motion_pos_t& pos);
@@ -335,8 +332,8 @@ public:
     /** @brief 调试环境模拟：周期写假数据并 publish_env_update_ntf */
     void poll_env_sim_tick();
     /**
-     * @brief V4：SOC 本地采集独立推 UI（APP_Update_Ntf + 调试顶栏）
-     * @note 旧固件不跑；Env Sim 开启时跳过。与 MCU 1ST 解耦，避免无 1ST 时顶栏/首页一直 "--"。
+     * @brief SOC 本地采集独立推 UI（APP_Update_Ntf + 调试顶栏）
+     * @note Env Sim 开启时跳过。与 MCU 1ST 解耦，避免无 1ST 时顶栏/首页一直 "--"。
      */
     void poll_soc_env_tick();
     /** @brief 关闭模拟后清缓存并推送无效哨兵，等待真实 0x9B 再恢复 */
@@ -469,10 +466,10 @@ private:
     int link_send_one_motion_batch();
     /** @brief 处理串口打印前的握手状态机（CONDITION_OK → 洗气/氧门 → PRINT_START → PRINT_READY） */
     void link_process_serial_handshake();
-    /** @brief V4 打印中 SOC 氧门：超限暂停 / 回落恢复 + 1120 报警 */
+    /** @brief 打印中 SOC 氧门：超限暂停 / 回落恢复 + 1120 报警 */
     void link_process_o2_print_gate();
     /**
-     * @brief 是否启用 SOC 氧门+打印前洗气（MCU≥V4、非测试图、非 Env Sim、未 Skip O2）
+     * @brief 是否启用 SOC 氧门+打印前洗气（非测试图、非 Env Sim、未 Skip O2）
      * @note 关时：起印不发洗气开、不等氧；开时：CONDITION_OK 后 0x86 开阀再等氧。
      */
     [[nodiscard]] bool soc_o2_print_gate_enabled() const noexcept;
@@ -568,7 +565,7 @@ private:
     /* ---------- 发送状态机 ---------- */
     std::atomic<bool> is_sending_{false};              /**< 是否正在下发运动包 */
     std::atomic<bool> user_paused_{false};             /**< 用户暂停：停止 TCP 运动下发，解析与换层逻辑继续 */
-    std::atomic<bool> o2_hold_{false};                 /**< V4 SOC 氧过高：停运动下发（与 user_paused_ 独立） */
+    std::atomic<bool> o2_hold_{false};                 /**< SOC 氧过高：停运动下发（与 user_paused_ 独立） */
     std::atomic<bool> print_task_flow_active_{false};  /**< 打印任务流程窗口（开始打印→开门解锁） */
     std::atomic<bool> test_image_motion_{false};       /**< 调试测试图：跳过串口握手/末层 Snap/PRINT_FINISHED */
     std::atomic<bool> start_pending_{false};           /**< begin_sending 已调用但 RingBuffer 未达阈值，等待中 */

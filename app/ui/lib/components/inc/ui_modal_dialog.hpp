@@ -44,6 +44,17 @@ typedef struct {
     bool        with_footer;    /**< true 时创建 footer 容器 */
     bool        accent_underline; /**< true 时标题下加主色分割线（用户层已统一 false） */
     bool        with_close_btn; /**< true 时在卡片右上角加一个 "X" 关闭按钮 */
+    /**
+     * 浅色档（稿 6251:94239）：白卡 + 深色标题 + 更大的圆角/更浅的遮罩。
+     *
+     * **按调用点开**，不是全局翻。浅色稿是一页一页改过来的，目前只有历史页的批量删除
+     * 确认有新稿；其余十四个弹窗里装着白字读数、深色输入框与键盘、进度条，底一翻白
+     * 那些内容会当场看不见。哪个弹窗改了稿就把哪个打开，别图省事全开。
+     *
+     * 只管**外壳**（卡底 / 标题 / 圆角 / 内距 / 遮罩）。body 与 footer 里的东西由调用方
+     * 自己上色——footer 那两枚走 ui_user_make_confirm_footer_btn() 的 light 形参。
+     */
+    bool        light_theme;
 } ui_modal_dialog_cfg_t;
 
 /**

@@ -27,7 +27,7 @@ constexpr uint8_t kNib[2] = {0x8, 0xE};
 
 // constexpr uint8_t kBlueR = 167, kBlueG = 194, kBlueB = 227;
 constexpr uint8_t kBlueR = 30, kBlueG = 30, kBlueB = 30;
-constexpr uint8_t kOrangeR = 255, kOrangeG = 30, kOrangeB = 0;
+constexpr uint8_t kOrangeR = 50, kOrangeG = 255, kOrangeB = 0;
 constexpr uint8_t kRedR = 255, kRedG = 0, kRedB = 0;
 
 void enc_byte(uint8_t* buf, uint32_t* p, uint8_t v)
@@ -79,6 +79,46 @@ void SpiStatusLed::set_printing(bool on)
     std::lock_guard<std::mutex> lock(mtx_);
     printing_ = on;
     apply_locked();
+}
+
+void SpiStatusLed::set_debug_force(bool force, uint8_t color,
+                                   uint8_t r, uint8_t g, uint8_t b)
+{
+    std::lock_guard<std::mutex> lock(mtx_);
+    const bool was_force = dbg_force_;
+    dbg_force_ = force;
+    if(force) {
+        dbg_color_ = (color > static_cast<uint8_t>(Color::Raw))
+                         ? Color::Blue
+                         : static_cast<Color>(color);
+        dbg_r_ = r;
+        dbg_g_ = g;
+        dbg_b_ = b;
+    }
+    if(force || enabled_) {
+        /* force_send=true：同色重复点击也真发一帧，否则看不出灯板有没有响应；
+         * 释放时同样强发，让 alarm/printing 推导结果立刻可见。 */
+        apply_locked(true);
+        return;
+    }
+    /* 释放接管且未进 V4：本模块本不该点灯，但验色已把灯点亮，而 WS 会锁存最后一帧。
+     * 先刷回空闲蓝再关 fd，否则灯板一直停在测试色上。 */
+    if(was_force) {
+        send_rgb_locked(kBlueR, kBlueG, kBlueB);
+    }
+    close_locked();
+    last_sent_ = false;
+}
+
+void SpiStatusLed::debug_force_state(bool& force, uint8_t& color,
+                                     uint8_t& r, uint8_t& g, uint8_t& b)
+{
+    std::lock_guard<std::mutex> lock(mtx_);
+    force = dbg_force_;
+    color = static_cast<uint8_t>(dbg_color_);
+    r = dbg_r_;
+    g = dbg_g_;
+    b = dbg_b_;
 }
 
 void SpiStatusLed::on_alarm_report(const serial_alarm_report_t& report)
@@ -190,23 +230,31 @@ void SpiStatusLed::close_locked()
     }
 }
 
-void SpiStatusLed::apply_locked()
+void SpiStatusLed::apply_locked(bool force_send)
 {
-    if(!enabled_) {
+    /* 调试接管时绕开 MCU major≥4 版本门，否则台架上点按钮完全静默 */
+    if(!enabled_ && !dbg_force_) {
         return;
     }
     Color c = Color::Blue;
-    if(!condition_active_.empty()) {
+    if(dbg_force_) {
+        c = dbg_color_;
+    } else if(!condition_active_.empty()) {
         c = Color::Red;
     } else if(printing_) {
         c = Color::Orange;
     }
-    if(last_sent_ && c == last_color_) {
+    if(!force_send && last_sent_ && c == last_color_) {
         return;
     }
     uint8_t r = kBlueR, g = kBlueG, b = kBlueB;
     const char* name = "blue";
-    if(c == Color::Orange) {
+    if(c == Color::Raw) {
+        r = dbg_r_;
+        g = dbg_g_;
+        b = dbg_b_;
+        name = "raw";
+    } else if(c == Color::Orange) {
         r = kOrangeR;
         g = kOrangeG;
         b = kOrangeB;
@@ -222,7 +270,9 @@ void SpiStatusLed::apply_locked()
     }
     last_color_ = c;
     last_sent_ = true;
-    UPC_LOG_GLAVO_SERVICE(Info, "spi status led color=%s", name);
+    UPC_LOG_GLAVO_SERVICE(Info, "spi status led color=%s rgb=%u,%u,%u%s", name,
+                          static_cast<unsigned>(r), static_cast<unsigned>(g),
+                          static_cast<unsigned>(b), dbg_force_ ? " (debug)" : "");
 }
 
 bool SpiStatusLed::send_rgb_locked(uint8_t r, uint8_t g, uint8_t b)
