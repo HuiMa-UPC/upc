@@ -45,6 +45,13 @@ using XfrPairPinCb     = std::function<void(const middleware::XfrPairPinPayload&
 using XfrFileReceivedCb = std::function<void(const middleware::XfrFileReceivedPayload&)>;
 using XfrTransferProgressCb = std::function<void(const middleware::XfrTransferProgressPayload&)>;
 using UsbHotplugCb     = std::function<void(const middleware::UsbHotplugPayload&)>;
+/* 设置页存储管理（稿 6251:94362）。后三个的后端**尚未实现**，见
+ * doc/STORAGE_BACKEND_API.md；UI 侧接线已就位，后端一上来就能通。 */
+using StorageUsageCb   = std::function<void(const middleware::StorageUsagePayload&)>;
+using StorageFormatProgressCb =
+    std::function<void(const middleware::StorageFormatProgressPayload&)>;
+using StorageFormatResultCb =
+    std::function<void(const middleware::StorageFormatRspPayload&)>;
 using McuVersionCb     = std::function<void(const middleware::McuVersionPayload&)>;
 using GalvoVersionCb   = std::function<void(const middleware::GalvoVersionPayload&)>;
 using OtaNotifyCb      = std::function<void(const middleware::OtaNotifyPayload&)>;
@@ -199,6 +206,12 @@ public:
     void send_wifi_forget(const char* ssid);
     void send_wifi_disconnect(const char* ssid);   /**< 断开当前连接 */
     void send_wifi_info();
+
+    /* ---- 存储管理（设置页，稿 6251:94362）----
+     * 容量那条 media 侧已实现（仅 Internal 卷）；格式化那条**后端未实现**，
+     * 发出去暂时没人应答，UI 靠超时兜底。见 doc/STORAGE_BACKEND_API.md。 */
+    void send_storage_usage(middleware::StorageVolume volume);
+    void send_storage_format(middleware::StorageVolume volume);
     void send_wifi_saved_query();   /**< 请求已保存网络列表 → GLAVO_Wifi_Saved_Rsp */
     /** GLAVO_Wifi_State_Ntf：多路监听（顶栏图标、设置页各注册一次，互不覆盖）。 */
     void add_wifi_state_listener(WifiStateCb cb);
@@ -208,7 +221,14 @@ public:
     void register_xfr_pair_pin(XfrPairPinCb cb);
     void register_xfr_file_received(XfrFileReceivedCb cb);
     void register_xfr_transfer_progress(XfrTransferProgressCb cb);
-    void register_usb_hotplug(UsbHotplugCb cb);
+    /** GLAVO_USB_Hotplug_Ntf：多路监听（文件页 USB 列表、设置页格式化钮各注册一次，互不覆盖）。 */
+    void add_usb_hotplug_listener(UsbHotplugCb cb);
+    /** SD 卡挂载变化。**后端未实现**，回调目前永远不会被触发。 */
+    void register_sdcard_hotplug(UsbHotplugCb cb);
+    void register_storage_usage(StorageUsageCb cb);            /**< APP_Storage_Usage_Rsp */
+    /** 格式化进度 / 终态。**后端未实现**，两个回调目前都不会被触发。 */
+    void register_storage_format_progress(StorageFormatProgressCb cb);
+    void register_storage_format_result(StorageFormatResultCb cb);
 
 private:
     UiMsgProxy() = default;
@@ -267,7 +287,11 @@ private:
     XfrPairPinCb xfr_pair_pin_cb_;
     XfrFileReceivedCb xfr_file_received_cb_;
     XfrTransferProgressCb xfr_transfer_progress_cb_;
-    UsbHotplugCb usb_hotplug_cb_;
+    std::vector<UsbHotplugCb> usb_hotplug_cbs_;
+    UsbHotplugCb sdcard_hotplug_cb_;
+    StorageUsageCb storage_usage_cb_;
+    StorageFormatProgressCb storage_format_progress_cb_;
+    StorageFormatResultCb storage_format_result_cb_;
     McuVersionCb mcu_version_cb_;
     GalvoVersionCb galvo_version_cb_;
     OtaNotifyCb ota_notify_cb_;

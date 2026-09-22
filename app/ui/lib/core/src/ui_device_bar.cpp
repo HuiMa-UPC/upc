@@ -11,32 +11,12 @@ lv_obj_t *g_lbl_name   = nullptr;
 lv_obj_t *g_dot_status = nullptr;
 lv_obj_t *g_lbl_status = nullptr;
 
-/* 第二组（稿上的 NitroPod）。数据源未接通，先在 create() 里填占位值，
- * 之后由 ui_device_bar_set_peer() 改写，见头文件。 */
-lv_obj_t *g_divider      = nullptr;
-lv_obj_t *g_peer_group   = nullptr;
-lv_obj_t *g_lbl_peer     = nullptr;
-lv_obj_t *g_dot_peer     = nullptr;
-lv_obj_t *g_lbl_peer_st  = nullptr;
-
 /** 稿上状态点是 8@1280，而共享的 USER_STATUS_DOT_SZ 是 12（还被调试页、
  *  ui_user_widgets、侧栏红点、通知徽标用着，不能动）。按 2/3 折算三档得
  *  12 / 8 / 6，与稿的 ×1.5 / ×1 / ×0.8 逐档吻合。 */
 int32_t dot_sz(void)
 {
     return USER_STATUS_DOT_SZ * 2 / 3;
-}
-
-/* 只有三档：稿上第二台设备只画了 Connected 一态，多余的等级等接上真数据、
- * 知道它到底有哪些状态了再加，免得凭空造一套语义。 */
-lv_color_t peer_level_color(ui_peer_level_t level)
-{
-    switch(level) {
-    case UI_PEER_ERROR:   return user_color_status_err;
-    case UI_PEER_OFFLINE: return user_light_icon_off;
-    case UI_PEER_OK:
-    default:              return user_light_ok;
-    }
 }
 
 /** 建一组「设备名 + 状态点 + 状态字」。稿 6201:85961：组内 gap 16，
@@ -138,7 +118,7 @@ lv_obj_t *ui_device_bar_create(lv_obj_t *parent)
      * 那个字段仍被首页那条顶部占位带用着，不动它。 */
     lv_obj_set_style_pad_left(bar, USER_SIDEBAR_W + USER_PAD_LG, 0);
     lv_obj_set_style_pad_right(bar, USER_TOPBAR_PAD_HOR, 0);
-    /* 稿上 wifi 图标与第一组、组与分隔线之间都是 10.667，取 11。
+    /* 稿上 wifi 图标与设备组之间是 10.667，取 11。
      * 组内那两档间距（16 / 8）另给，见 make_group()。 */
     lv_obj_set_style_pad_column(bar, USER_PAD_SM * 2 / 3, 0);
     lv_obj_set_style_bg_opa(bar, LV_OPA_TRANSP, 0);
@@ -156,46 +136,10 @@ lv_obj_t *ui_device_bar_create(lv_obj_t *parent)
 
     make_group(bar, &g_lbl_name, &g_dot_status, &g_lbl_status);
 
-    /* 两组之间那道竖线（稿 1×20 #d9d9d9）。它与第二组同进同退，见 set_peer。 */
-    g_divider = lv_obj_create(bar);
-    lv_obj_remove_style_all(g_divider);
-    lv_obj_set_size(g_divider, 1, USER_STATUS_DOT_SZ * 5 / 3);   /* 稿 20 */
-    lv_obj_set_style_bg_color(g_divider, user_light_divider, 0);
-    lv_obj_set_style_bg_opa(g_divider, LV_OPA_COVER, 0);
-    lv_obj_remove_flag(g_divider, LV_OBJ_FLAG_CLICKABLE);
-
-    g_peer_group = make_group(bar, &g_lbl_peer, &g_dot_peer, &g_lbl_peer_st);
-
     g_bar = bar;
     ui_device_state_add_observer(on_state_changed);
     on_state_changed(ui_device_state_get());   /* 首帧：先按当前快照填一次 */
-
-    /* 第二台设备的数据源还没接通，先按稿写死。接上之后把这一行挪到数据更新处即可。 */
-    ui_device_bar_set_peer("NitroPod", "Connected", UI_PEER_OK);
     return g_bar;
-}
-
-void ui_device_bar_set_peer(const char *name, const char *status,
-                            ui_peer_level_t level)
-{
-    if(!g_peer_group) {
-        return;
-    }
-    /* 没名字 = 那台设备不存在：整组连同分隔线一起收起来，第一组仍正常显示。 */
-    const bool show = (name != nullptr) && (name[0] != '\0');
-    if(!show) {
-        lv_obj_add_flag(g_peer_group, LV_OBJ_FLAG_HIDDEN);
-        if(g_divider) lv_obj_add_flag(g_divider, LV_OBJ_FLAG_HIDDEN);
-        return;
-    }
-    lv_obj_remove_flag(g_peer_group, LV_OBJ_FLAG_HIDDEN);
-    if(g_divider) lv_obj_remove_flag(g_divider, LV_OBJ_FLAG_HIDDEN);
-
-    const lv_color_t c = peer_level_color(level);
-    lv_label_set_text(g_lbl_peer, name);
-    lv_label_set_text(g_lbl_peer_st, status ? status : "");
-    lv_obj_set_style_text_color(g_lbl_peer_st, c, 0);
-    lv_obj_set_style_bg_color(g_dot_peer, c, 0);
 }
 
 void ui_device_bar_set_visible(bool visible)

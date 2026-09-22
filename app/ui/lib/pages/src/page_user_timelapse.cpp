@@ -703,10 +703,12 @@ lv_obj_t* page_user_timelapse_create(lv_obj_t* parent)
     lv_obj_clear_flag(page, LV_OBJ_FLAG_SCROLLABLE);
     g_page = page;
 
+    /* 主画面 CONTAIN：竖构图（1080×1280）铺满横屏会裁上下；整图可见，左右留黑边。
+     * 与相册页一致，不用 COVER。 */
     lv_obj_t* img = lv_image_create(page);
     lv_obj_set_size(img, LV_PCT(100), LV_PCT(100));
     lv_obj_center(img);
-    lv_image_set_inner_align(img, LV_IMAGE_ALIGN_COVER);
+    lv_image_set_inner_align(img, LV_IMAGE_ALIGN_CONTAIN);
     lv_obj_add_flag(img, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_event_cb(img, on_video_click, LV_EVENT_CLICKED, nullptr);
     g_video_img = img;
@@ -850,7 +852,8 @@ lv_obj_t* page_user_timelapse_create(lv_obj_t* parent)
     lv_obj_set_style_bg_opa(pimg, LV_OPA_COVER, 0);
     lv_obj_set_style_radius(pimg, USER_RADIUS / 2, 0);
     lv_obj_set_style_clip_corner(pimg, true, 0);
-    lv_image_set_inner_align(pimg, LV_IMAGE_ALIGN_COVER);
+    /* 与主画面同口径：小窗里也整图可见，不裁切。 */
+    lv_image_set_inner_align(pimg, LV_IMAGE_ALIGN_CONTAIN);
     g_preview_img = pimg;
 
     lv_obj_t* ptime = lv_label_create(pv);

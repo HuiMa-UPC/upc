@@ -4,6 +4,7 @@
 #include "upc_contract.hpp"
 #include "ui_theme.hpp"
 #include "ui_feedback.hpp"
+#include "ui_user_widgets.hpp"   /* ui_user_pick_icon */
 #include "notice_badge_icons.h"
 
 #include <cstdio>
@@ -366,18 +367,19 @@ lv_color_t ui_message_severity_color(ui_msg_severity_t sev)
     return lv_color_hex(0xFFC942);   /* 未知等级按不低于 warning */
 }
 
-/* 按档位取原生尺寸那一版：调用方拿它去 ui_user_make_icon_img(target)，
+/* 按目标边长取原生尺寸那一版：调用方拿它去 ui_user_make_icon_img(target)，
  * target == src_sz 时缩放整段被跳过，徽标才是逐像素干净的。原先只有一张 36px
  * 位图，1024 档要缩到 0.39 倍，细描边糊成一团。
- * 尺寸表在 tools/gen_notice_badge_icons.py，改那边要同步这里。 */
-const lv_image_dsc_t *ui_message_severity_icon(ui_msg_severity_t sev)
+ *
+ * **这里不看 profile_id**，只看 target。屏档只是「徽标多大」的间接因素，真正决定
+ * 该取哪张图的是显示边长；照屏档硬编码的旧写法在消息页把徽标从 SZ*2 改成 SZ*3
+ * 之后就失准了（24 的位置上拿 18 的图放大 1.33 倍）。交给 ui_user_pick_icon()
+ * 按边长挑，倍数再变也只会落到最近的现成尺寸，不会退回放大。
+ * 尺寸表在 tools/gen_notice_badge_icons.py，要加档位去那边。 */
+const lv_image_dsc_t *ui_message_severity_icon(ui_msg_severity_t sev, int32_t target)
 {
     const bool info = (sev == UI_MSG_SEV_INFO);
-    switch(g_ui->profile_id) {
-        case UI_RES_1920: return info ? &ic_notice_info_27 : &ic_notice_alert_27;
-        case UI_RES_1280: return info ? &ic_notice_info_18 : &ic_notice_alert_18;
-        default:          return info ? &ic_notice_info_14 : &ic_notice_alert_14;
-    }
+    return ui_user_pick_icon(info ? ic_notice_info_set : ic_notice_alert_set, target);
 }
 
 void ui_message_store_init(void)

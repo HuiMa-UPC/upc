@@ -1,6 +1,7 @@
 #include "camera_preview.hpp"
 #include "camera_msg_proxy.hpp"
 #include "page_user_home.hpp"
+#include "page_user_monitor.hpp"
 #include "msg_port.hpp"
 #include "rs_log.hpp"
 
@@ -1975,9 +1976,15 @@ void CameraPreviewPlayer::ui_timer_cb(lv_timer_t* timer)
 
     lv_image_set_src(self->image_, &self->img_dsc_[idx]);
     if(first_show) {
-        /* 传输出几何：与视口一致时 cam_apply_layout 算出的 zoom 正好 1.000。 */
-        page_user_home_update_camera_preview_layout(self->out_width_,
-                                                    self->out_height_);
+        /* 传输出几何：与视口一致时 cam_apply_layout 算出的 zoom 正好 1.000。
+         * 活路径在监控页；首页打印/监控层是存档，scene="print" 时仍刷那边。 */
+        if(std::strcmp(self->scene_, "monitor") == 0) {
+            page_user_monitor_update_camera_preview_layout(self->out_width_,
+                                                           self->out_height_);
+        } else {
+            page_user_home_update_camera_preview_layout(self->out_width_,
+                                                        self->out_height_);
+        }
     }
     lv_obj_clear_flag(self->image_, LV_OBJ_FLAG_HIDDEN);
     if(self->hint_) {
