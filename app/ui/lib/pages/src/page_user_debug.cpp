@@ -10,6 +10,7 @@
 #include "ui_message_store.hpp"
 #include "ui_alarm_state.hpp"
 #include "ui_sys_hud.hpp"
+#include "upc_sys_monitor.hpp"
 #include "config/cal_config.hpp"
 
 #include <cstdint>
@@ -22,7 +23,7 @@
  * @file page_user_debug.cpp
  * @brief 调试页（开发者/工厂手动控制台）—— "移动控制" Tab。
  *
- * 顶部 7 路传感器条 + 设备快捷行（设备/门/电机/照明）+ Tab（Move/Other/Laser/Test）。
+ * 顶部传感器条（含 Zone4 本机 thermal）+ 设备快捷行（设备/门/电机/照明）+ Tab（Move/Other/Laser/Test）。
  * Test（测试）Tab 为自动化用例表，实现见 page_user_debug_test.cpp（中文界面）。
  * 移动控制：左列 Z/S/D 三轴卡（点击移动/长按移动），右列 振镜坐标卡 + 振镜标定卡。
  * 振镜方向盘（X/-X/Y/-Y）按 Step 本地增减中心偏移；复位回上次 Save/读盘值。
@@ -32,6 +33,7 @@
  * Other 点位测试：按校准表显示中心 + 四角，每点 3 秒，与打印/Test image 互斥。
  * Other 页按 Process / Cabin / Print Gates / Media & Sim / Inject 分组；
  * Media & Sim 含 Sys HUD：开则右上角 lv_layer_sys 红字蒙版显示 CPU 温/占用/内存。
+ * Zone4 温度在顶部传感器条常显（本机 thermal_zone4，不经 IPC）。
  * 左侧 Print Params + Fan + O2 Calib（参考浓度输入后点圆钮标定）。
  * 其余命令经 DebugMsgProxy → APP_GLAVO（后端待实现）；图标暂用 LV_SYMBOL/文字占位。
  */
@@ -86,7 +88,8 @@ lv_obj_t *g_laser_type_lbl      = nullptr;      /**< 激光器类型显示区（
 lv_obj_t *g_laser_current_lbl   = nullptr;      /**< 电流读数 */
 uint8_t   g_laser_type_code     = 0;            /**< 最近一次上报的激光器型号（0=未知 1=JFSC 2=AL） */
 
-lv_obj_t *g_sensor_val[9] = { nullptr };
+lv_obj_t *g_sensor_val[10] = { nullptr }; /**< [9]=Zone4（本机 thermal_zone4） */
+lv_timer_t *g_zone4_timer = nullptr;      /**< 顶部条 Zone4 约 1Hz 刷新 */
 lv_obj_t *g_axis_pos[3]   = { nullptr };
 lv_obj_t *g_axis_step[3]  = { nullptr };   /**< 点击距离/速度输入（按 tab 复用） */
 lv_obj_t *g_axis_ctrl[3]  = { nullptr };   /**< 控制区容器（按子 tab 重建） */
@@ -407,10 +410,40 @@ lv_obj_t *make_sensor_cell(lv_obj_t *parent, const char *caption, int idx)
     lv_label_set_text(val, "--");
     lv_obj_set_style_text_color(val, user_color_text, 0);
     lv_obj_set_style_text_font(val, user_font_text(), 0);
-    if(idx >= 0 && idx < 9) {
+    if(idx >= 0 && idx < 10) {
         g_sensor_val[idx] = val;
     }
     return cell;
+}
+
+void refresh_zone4_temp(lv_timer_t * /*t*/)
+{
+    if(!g_sensor_val[9]) {
+        return;
+    }
+    UpcSysMonitorSample s{};
+    if(!upc_sys_monitor_sample(&s) || s.zone4_temp_c < 0.f) {
+        lv_label_set_text(g_sensor_val[9], "--");
+        return;
+    }
+    lv_label_set_text_fmt(g_sensor_val[9], "%.1f",
+                          static_cast<double>(s.zone4_temp_c));
+}
+
+void start_zone4_timer(void)
+{
+    if(!g_zone4_timer) {
+        g_zone4_timer = lv_timer_create(refresh_zone4_temp, 1000, nullptr);
+    }
+    refresh_zone4_temp(nullptr);
+}
+
+void stop_zone4_timer(void)
+{
+    if(g_zone4_timer) {
+        lv_timer_delete(g_zone4_timer);
+        g_zone4_timer = nullptr;
+    }
 }
 
 lv_obj_t *build_sensor_strip(lv_obj_t *parent)
@@ -424,11 +457,11 @@ lv_obj_t *build_sensor_strip(lv_obj_t *parent)
     lv_obj_set_style_pad_ver(strip, USER_PAD_SM, 0);
     lv_obj_set_style_pad_hor(strip, 0, 0);
 
-    const char *caps[9] = {
+    const char *caps[10] = {
         "Oxygen", "Filter O2", "Pressure", "PM Out", "Humidity",
-        "Cabin Temp", "Plate Temp", "PM Cabin", "Powder",
+        "Cabin Temp", "Plate Temp", "PM Cabin", "Powder", "Zone4",
     };
-    for(int i = 0; i < 9; i++) {
+    for(int i = 0; i < 10; i++) {
         make_sensor_cell(strip, caps[i], i);
     }
     return strip;
@@ -1424,15 +1457,27 @@ void on_dbg_toggle(lv_event_t *e)
                  }
                  break;
         /* 造几条假 MCU 报警走真实上报路径（ui_alarm_state），MCU 不发真报警时
-         * 验消息页/浮层/打印拦截整条链路。关掉注入 NORMAL 帧模拟解除。 */
+         * 验消息页/浮层/打印拦截整条链路。关掉注入 NORMAL 帧模拟解除。
+         * 同时经 Glavo 只向 MQTT 发 GLAVO_Alarm_Report_Ntf，供云端 alarm.single 联调；
+         * 不上 UI，避免与本地 [SIM] 双弹。 */
         case 12: for(const auto &a : kDbgInjectAlarms) {
+                     middleware::AlarmReportPayload p{};
+                     p.alarm_code = a.code;
+                     p.severity   = a.severity;
+                     p.clear_mode = a.clear_mode;
                      if(a.state_mask & middleware::kAlarmStateEvent) {
-                         if(on) ui_alarm_debug_inject(a.code, a.severity,
-                                                      a.state_mask, a.clear_mode, 0);
+                         if(on) {
+                             ui_alarm_debug_inject(a.code, a.severity,
+                                                   a.state_mask, a.clear_mode, 0);
+                             p.state_mask = a.state_mask;
+                             proxy.send_alarm_inject(p);
+                         }
                      } else {
                          ui_alarm_debug_inject(a.code, a.severity,
                                                on ? a.state_mask : 0,
                                                a.clear_mode, 0);
+                         p.state_mask = on ? a.state_mask : 0;
+                         proxy.send_alarm_inject(p);
                      }
                  }
                  break;
@@ -2997,6 +3042,7 @@ void bind_debug_callbacks()
 
 void reset_globals()
 {
+    stop_zone4_timer();
     ui::debug_test_reset();
     g_tab1 = g_tab2 = g_tab3 = g_tab4 = nullptr;
     g_laser_alarm_box = g_laser_temp_lbl = g_laser_power_lbl = g_laser_power_ta = nullptr;
@@ -3016,7 +3062,8 @@ void reset_globals()
     g_galvo_center_y = 0.0;
     g_galvo_saved_x = 0.0;
     g_galvo_saved_y = 0.0;
-    for(int i = 0; i < 9; i++) g_sensor_val[i] = nullptr;
+    for(int i = 0; i < 10; i++) g_sensor_val[i] = nullptr;
+    g_zone4_timer = nullptr;
     for(int i = 0; i < 3; i++) {
         g_axis_pos[i] = g_axis_step[i] = g_axis_ctrl[i] = nullptr;
         g_axis_mode[i] = 0;
@@ -3084,6 +3131,7 @@ void page_user_debug_refresh(bool /*force*/)
      * 重新挂载回调，否则「返回后再进入」将因回调为空而不再刷新读数。g_* 指针在缓存的
      * 页面对象上始终有效，可安全重挂。 */
     bind_debug_callbacks();
+    start_zone4_timer();
     update_galvo_save_enabled();
     ui::DebugMsgProxy::instance().request_print_h264_record_state();
     ui::DebugMsgProxy::instance().request_clean_record_state();
@@ -3105,6 +3153,7 @@ void page_user_debug_refresh(bool /*force*/)
 void page_user_debug_exit(void)
 {
     ui_keyboard_hide();
+    stop_zone4_timer();
     ui::debug_test_stop_flow();   /* 退页停止正在运行的测试流程（含点动补停） */
     auto &proxy = ui::DebugMsgProxy::instance();
     /* 无条件释放灯板接管：否则退页后灯板卡在验色色上，真报警的红灯就看不到了 */

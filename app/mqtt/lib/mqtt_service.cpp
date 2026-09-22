@@ -898,6 +898,8 @@ bool MqttService::init()
     if(credential_store_.load(saved_credential, credential_error)) {
         cfg_.password = saved_credential.mqtt_password;
         cfg_.broker_uri = normalise_broker_uri(saved_credential.mqtt_endpoint);
+        mqtt_credential_endpoint_ = saved_credential.mqtt_endpoint;
+        mqtt_password_prev_ = saved_credential.mqtt_password_prev;
         credentials_ready_ = true;
         UPC_LOG_MQTT_SERVICE(Info, "loaded locally activated MQTT credential");
     } else if(!credential_error.empty()) {
@@ -909,6 +911,12 @@ bool MqttService::init()
      * 等到下次 OTA 任务才清的话，长期不升级的设备就一直背着这份垃圾。
      * 待应用固件不在这个目录（全包在 UPC_SOC_OTA_IMG，应用层在槽里），清空不影响它。 */
     clear_image_tmp_dir();
+
+    {
+        std::lock_guard<std::mutex> lock(alarm_mtx_);
+        alarm_stream_load();
+        alarm_outbox_load();
+    }
 
     subscribe_messages();
 
@@ -930,6 +938,7 @@ bool MqttService::init()
 void MqttService::shutdown()
 {
     join_activation_thread();
+    join_rotation_thread();
     {
         std::lock_guard<std::mutex> lock(ota_mtx_);
         ota_download_running_ = false;
@@ -959,6 +968,7 @@ void MqttService::tick()
         poll_activation();
         return;
     }
+    poll_rotation();
     if(!ensure_mqtt_connected()) {
         return;
     }
@@ -970,6 +980,14 @@ void MqttService::tick()
     (void)publish_heartbeat();
     poll_ota_heartbeat_wait();
     expire_pending_acks();
+
+    const uint64_t now_alarm = monotonic_ms();
+    if(last_alarm_outbox_retry_ms_ == 0 ||
+       now_alarm - last_alarm_outbox_retry_ms_ >= kAlarmOutboxRetryIntervalMs) {
+        last_alarm_outbox_retry_ms_ = now_alarm;
+        alarm_flush_outbox();
+    }
+    alarm_maybe_publish_status(false);
 }
 
 void MqttService::subscribe_messages()
@@ -1004,6 +1022,14 @@ void MqttService::subscribe_messages()
         middleware::ModuleId::APP_MQTT,
         [this](const middleware::Message& msg) { on_print_state(msg); }));
     subs_.push_back(bus.subscribe(
+        middleware::MsgType::GLAVO_Alarm_Report_Ntf,
+        middleware::ModuleId::APP_MQTT,
+        [this](const middleware::Message& msg) { on_alarm_report(msg); }));
+    subs_.push_back(bus.subscribe(
+        middleware::MsgType::GLAVO_Alarm_Cloud_Snapshot_Ntf,
+        middleware::ModuleId::APP_MQTT,
+        [this](const middleware::Message& msg) { on_alarm_cloud_snapshot(msg); }));
+    subs_.push_back(bus.subscribe(
         middleware::MsgType::UI_Ota_User_Decision_Req,
         middleware::ModuleId::APP_MQTT,
         [this](const middleware::Message& msg) { on_ota_user_decision(msg); }));
@@ -1029,6 +1055,9 @@ bool MqttService::ensure_mqtt_connected()
 
     mqtt_connected_ = false;
     cmd_subscribed_ = false;
+    ota_subscribed_ = false;
+    mgmt_subscribed_ = false;
+    alarm_ack_subscribed_ = false;
     try_reconnect();
     return mqtt_connected_;
 }
@@ -1098,6 +1127,8 @@ void MqttService::poll_activation()
             if(credential_store_.save(credential, save_error)) {
                 cfg_.password = credential.mqtt_password;
                 cfg_.broker_uri = normalise_broker_uri(credential.mqtt_endpoint);
+                mqtt_credential_endpoint_ = credential.mqtt_endpoint;
+                mqtt_password_prev_.clear();
                 credentials_ready_ = true;
                 activation_fail_count_ = 0;
                 UPC_LOG_MQTT_SERVICE(Info, "device activation succeeded; MQTT credential saved");
@@ -1150,25 +1181,53 @@ bool MqttService::connect_mqtt()
         MQTTClient_setCallbacks(client_, this, nullptr, &MqttService::on_message_arrived, nullptr);
     }
 
-    MQTTClient_connectOptions opts = MQTTClient_connectOptions_initializer;
-    opts.keepAliveInterval = cfg_.keepalive_sec;
-    opts.cleansession = cfg_.clean_session ? 1 : 0;
-// #ifdef MQTTVERSION_5
-//     opts.MQTTVersion = MQTTVERSION_5;
-// #endif
-    if(!cfg_.username.empty()) {
-        opts.username = cfg_.username.c_str();
-    }
-    if(!cfg_.password.empty()) {
-        opts.password = cfg_.password.c_str();
-    }
+    auto try_connect = [this](const std::string& password) {
+        MQTTClient_connectOptions opts = MQTTClient_connectOptions_initializer;
+        opts.keepAliveInterval = cfg_.keepalive_sec;
+        opts.cleansession = cfg_.clean_session ? 1 : 0;
+        if(!cfg_.username.empty()) {
+            opts.username = cfg_.username.c_str();
+        }
+        if(!password.empty()) {
+            opts.password = password.c_str();
+        }
+        return MQTTClient_connect(client_, &opts);
+    };
 
-    const int rc = MQTTClient_connect(client_, &opts);
+    int rc = try_connect(cfg_.password);
+    bool used_prev = false;
+    if(rc != MQTTCLIENT_SUCCESS &&
+       !mqtt_password_prev_.empty() &&
+       mqtt_password_prev_ != cfg_.password) {
+        UPC_LOG_MQTT_SERVICE(Warn,
+            "MQTT connect failed rc=%d uri=%s; retrying previous password",
+            rc, cfg_.broker_uri.c_str());
+        rc = try_connect(mqtt_password_prev_);
+        used_prev = rc == MQTTCLIENT_SUCCESS;
+    }
     if(rc != MQTTCLIENT_SUCCESS) {
         UPC_LOG_MQTT_SERVICE(Warn, "MQTT connect failed rc=%d uri=%s",
             rc, cfg_.broker_uri.c_str());
         mqtt_connected_ = false;
         return false;
+    }
+
+    if(used_prev) {
+        std::string save_error;
+        if(!persist_mqtt_credential(mqtt_password_prev_, "", save_error)) {
+            UPC_LOG_MQTT_SERVICE(Warn, "MQTT recovered with previous password but save failed: %s",
+                                 save_error.c_str());
+            cfg_.password = mqtt_password_prev_;
+            mqtt_password_prev_.clear();
+        } else {
+            UPC_LOG_MQTT_SERVICE(Info, "MQTT recovered with previous password");
+        }
+    } else if(!mqtt_password_prev_.empty()) {
+        std::string save_error;
+        if(!persist_mqtt_credential(cfg_.password, "", save_error)) {
+            UPC_LOG_MQTT_SERVICE(Warn, "MQTT connected with new password but cannot drop previous: %s",
+                                 save_error.c_str());
+        }
     }
 
     mqtt_connected_ = true;
@@ -1181,11 +1240,26 @@ bool MqttService::connect_mqtt()
         disconnect_mqtt();
         return false;
     }
+    if(!subscribe_mgmt_topic()) {
+        disconnect_mqtt();
+        return false;
+    }
+    if(!subscribe_alarm_ack_topic()) {
+        disconnect_mqtt();
+        return false;
+    }
 
     UPC_LOG_MQTT_SERVICE(Info, "MQTT connected uri=%s", cfg_.broker_uri.c_str());
 
     /* 设备上线后主动上报一次完整状态（协议 §四）：mode 默认 idle，since 取当前时刻 */
     (void)publish_state(static_cast<uint32_t>(middleware::UserHomeStatus::Idle), 0);
+
+    /* 报警：重发未 ack outbox；向 Glavo 要一轮完整快照；发 alarm.status */
+    alarm_flush_outbox();
+    if(alarm_need_snapshot_after_connect_) {
+        alarm_request_snapshot_from_glavo();
+    }
+    alarm_maybe_publish_status(true);
 
     /* 遗留的 SOC 待应用固件在这里补提示：MQTT 比 UI 先启动，放 init() 里发
      * 的话 UI 还没订阅，消息会丢。内部只执行一次。 */
@@ -1229,6 +1303,20 @@ bool MqttService::subscribe_ota_topics()
     return true;
 }
 
+bool MqttService::subscribe_mgmt_topic()
+{
+    const std::string topic = cfg_.topic_mgmt();
+    const int rc = MQTTClient_subscribe(client_, topic.c_str(), 1);
+    if(rc != MQTTCLIENT_SUCCESS) {
+        UPC_LOG_MQTT_SERVICE(Error, "MQTT subscribe failed rc=%d topic=%s",
+            rc, topic.c_str());
+        return false;
+    }
+    mgmt_subscribed_ = true;
+    UPC_LOG_MQTT_SERVICE(Info, "MQTT subscribed topic=%s", topic.c_str());
+    return true;
+}
+
 void MqttService::disconnect_mqtt()
 {
     if(mqtt_created_ && MQTTClient_isConnected(client_)) {
@@ -1237,6 +1325,185 @@ void MqttService::disconnect_mqtt()
     mqtt_connected_ = false;
     cmd_subscribed_ = false;
     ota_subscribed_ = false;
+    mgmt_subscribed_ = false;
+    alarm_ack_subscribed_ = false;
+}
+
+bool MqttService::persist_mqtt_credential(const std::string& password,
+                                          const std::string& password_prev,
+                                          std::string& error)
+{
+    if(mqtt_credential_endpoint_.empty()) {
+        error = "缺少 mqttEndpoint，无法保存凭据";
+        return false;
+    }
+    ActivatedMqttCredential credential;
+    credential.mqtt_password = password;
+    credential.mqtt_endpoint = mqtt_credential_endpoint_;
+    credential.mqtt_password_prev = password_prev;
+    if(!credential_store_.save(credential, error)) {
+        return false;
+    }
+    cfg_.password = password;
+    mqtt_password_prev_ = password_prev;
+    return true;
+}
+
+bool MqttService::rotation_blocked_by_task()
+{
+    {
+        std::lock_guard<std::mutex> lock(ota_mtx_);
+        if(ota_download_running_) {
+            return true;
+        }
+    }
+    {
+        std::lock_guard<std::mutex> lock(log_collect_mtx_);
+        if(log_collect_running_) {
+            return true;
+        }
+    }
+    {
+        std::lock_guard<std::mutex> lock(galvo_ota_mtx_);
+        if(galvo_ota_sync_.waiting) {
+            return true;
+        }
+    }
+    {
+        std::lock_guard<std::mutex> lock(mcu_ota_mtx_);
+        if(mcu_ota_sync_.waiting) {
+            return true;
+        }
+    }
+    return false;
+}
+
+void MqttService::handle_mgmt_message(const std::string& payload)
+{
+    std::string action;
+    if(!json_extract_string(payload, "action", action) || action.empty()) {
+        UPC_LOG_MQTT_SERVICE(Debug, "MQTT RX mgmt ignored: missing action");
+        return;
+    }
+    if(action != kRotateCredentialAction) {
+        UPC_LOG_MQTT_SERVICE(Debug, "MQTT RX mgmt ignored action=%s", action.c_str());
+        return;
+    }
+
+    bool running = false;
+    {
+        std::lock_guard<std::mutex> lock(rotation_mtx_);
+        running = rotation_running_;
+    }
+    if(running || rotation_pending_) {
+        UPC_LOG_MQTT_SERVICE(Info, "credential rotation already pending or running; ignore duplicate");
+        return;
+    }
+    rotation_pending_ = true;
+    rotation_wait_logged_ = false;
+    UPC_LOG_MQTT_SERVICE(Info, "queued credential rotation");
+}
+
+void MqttService::start_rotation()
+{
+    {
+        std::lock_guard<std::mutex> lock(rotation_mtx_);
+        if(rotation_running_) {
+            return;
+        }
+        rotation_running_ = true;
+        rotation_result_ready_ = false;
+        rotation_succeeded_ = false;
+        rotation_error_.clear();
+        rotated_password_.clear();
+    }
+
+    join_rotation_thread();
+    const MqttConfig rotation_config = cfg_;
+    rotation_thread_ = std::thread([this, rotation_config]() {
+        DeviceCredentialRotationClient client(rotation_config);
+        std::string password;
+        std::string error;
+        const bool succeeded = client.rotate(password, error);
+        std::lock_guard<std::mutex> lock(rotation_mtx_);
+        rotation_succeeded_ = succeeded;
+        rotated_password_ = std::move(password);
+        rotation_error_ = std::move(error);
+        rotation_running_ = false;
+        rotation_result_ready_ = true;
+    });
+}
+
+void MqttService::poll_rotation()
+{
+    bool result_ready = false;
+    bool succeeded = false;
+    std::string password;
+    std::string error;
+    {
+        std::lock_guard<std::mutex> lock(rotation_mtx_);
+        result_ready = rotation_result_ready_;
+        if(result_ready) {
+            succeeded = rotation_succeeded_;
+            password = rotated_password_;
+            error = rotation_error_;
+            rotation_result_ready_ = false;
+        }
+    }
+
+    if(result_ready) {
+        join_rotation_thread();
+        if(!succeeded) {
+            UPC_LOG_MQTT_SERVICE(Warn,
+                "credential rotation HTTP failed: %s; keep current password until next command",
+                error.c_str());
+            return;
+        }
+        const std::string old_password = cfg_.password;
+        std::string save_error;
+        if(!persist_mqtt_credential(password, old_password, save_error)) {
+            UPC_LOG_MQTT_SERVICE(Warn,
+                "credential rotation got new password but save failed: %s; keep current password",
+                save_error.c_str());
+            return;
+        }
+        UPC_LOG_MQTT_SERVICE(Info, "credential rotation saved; reconnecting with new password");
+        disconnect_mqtt();
+        last_reconnect_ms_ = 0;
+        if(!connect_mqtt()) {
+            UPC_LOG_MQTT_SERVICE(Warn,
+                "credential rotation reconnect failed; previous password kept if still accepted");
+        }
+        return;
+    }
+
+    bool running = false;
+    {
+        std::lock_guard<std::mutex> lock(rotation_mtx_);
+        running = rotation_running_;
+    }
+    if(!rotation_pending_ || running) {
+        return;
+    }
+    if(rotation_blocked_by_task()) {
+        if(!rotation_wait_logged_) {
+            UPC_LOG_MQTT_SERVICE(Info,
+                "credential rotation waiting until OTA or log collect finishes");
+            rotation_wait_logged_ = true;
+        }
+        return;
+    }
+    rotation_pending_ = false;
+    rotation_wait_logged_ = false;
+    UPC_LOG_MQTT_SERVICE(Info, "starting credential rotation");
+    start_rotation();
+}
+
+void MqttService::join_rotation_thread()
+{
+    if(rotation_thread_.joinable()) {
+        rotation_thread_.join();
+    }
 }
 
 bool MqttService::publish_cmd_ack(const std::string& req_id,
@@ -1348,10 +1615,14 @@ int MqttService::on_message_arrived(void* context, char* topic_name,
             : std::string{};
         if(topic == self->cfg_.topic_cmd()) {
             self->handle_command_message(payload);
+        } else if(topic == self->cfg_.topic_mgmt()) {
+            self->handle_mgmt_message(payload);
         } else if(topic == self->cfg_.topic_ota_notify()) {
             self->handle_ota_notify(payload);
         } else if(topic == self->cfg_.topic_ota_manifest_resp()) {
             self->handle_ota_manifest_response(payload);
+        } else if(topic == self->cfg_.topic_alarm_ack()) {
+            self->handle_alarm_ack(payload);
         } else {
             UPC_LOG_MQTT_SERVICE(Debug, "MQTT RX ignored topic=%s", topic.c_str());
         }

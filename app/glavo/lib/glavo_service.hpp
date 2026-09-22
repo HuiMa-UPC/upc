@@ -151,6 +151,7 @@ private:
     void handle_debug_skip_o2_gate_get(const middleware::Message& msg);
     void handle_debug_o2_calib_req(const middleware::Message& msg);
     void handle_debug_o2_calib_get(const middleware::Message& msg);
+    void handle_debug_alarm_inject(const middleware::Message& msg);
     void handle_debug_first_layer_visual_check_set(const middleware::Message& msg);
     void handle_debug_first_layer_visual_check_get(const middleware::Message& msg);
     void handle_debug_optical_path_check_set(const middleware::Message& msg);

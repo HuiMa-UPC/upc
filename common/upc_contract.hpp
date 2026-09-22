@@ -494,6 +494,7 @@ enum class MsgType : uint32_t {
     UI_Debug_O2_Calib_Get_Ntf,          /**< Empty：查询当前氧标定 K（不重新采样） */
     UI_Debug_Status_Led_Set_Ntf,        /**< DebugStatusLedPayload：强制 SPI 灯板颜色（仅本次运行，绕开 MCU 版本门） */
     UI_Debug_Status_Led_Get_Ntf,        /**< Empty：查询当前灯板强制态 */
+    UI_Debug_Alarm_Inject_Ntf,          /**< AlarmReportPayload：调试页 Alarm Inject，Glavo 只转发 MQTT（不上 UI、不改快照） */
 
     // ---- GLAVO → UI：调试页状态回读（按模块拆分） ----
     GLAVO_Debug_Sensor_Ntf = 0x1200, /**< DebugSensorPayload：调试顶栏传感器（舱内/滤芯氧 + 舱外/舱内 PM） */
@@ -618,11 +619,14 @@ enum class MsgType : uint32_t {
     GLAVO_Device_Event_Ntf = 0x1600, /**< DeviceEventPayload：一条设备事件的触发或恢复 */
 
     // ---- UI ↔ GLAVO：MCU 报警（串口 PORT_ALARM_TASK 0xA3；字典见 doc/主控板串口通信协议 - 报警&事件表.csv） ----
-    GLAVO_Alarm_Report_Ntf = 0x1610, /**< AlarmReportPayload：MCU 单条报警/EVENT 上报（Cmd 0x20 TLV 0x01 原样透传） */
+    GLAVO_Alarm_Report_Ntf = 0x1610, /**< AlarmReportPayload：单条报警/EVENT（Glavo 双发 UI + MQTT；MCU TLV 或 SOC 合成 1120） */
     UI_Alarm_Reset_Ntf,              /**< AlarmResetReqPayload：请求复位某条 CONDITION 报警（Cmd 0x82 TLV 0x01） */
-    GLAVO_Alarm_Snapshot_Ntf,        /**< AlarmSnapshotPayload：报警快照的一个 slot（Cmd 0x81 TLV 0x04 原样透传） */
+    GLAVO_Alarm_Snapshot_Ntf,        /**< AlarmSnapshotPayload：报警快照的一个 slot（Cmd 0x81 TLV 0x04 原样透传）→ UI */
     UI_Alarm_Snapshot_Ntf,           /**< Empty：请求 MCU 回一轮报警快照（Cmd 0x81 TLV 0x05 len=0） */
     GLAVO_Alarm_Reset_Result_Ntf,    /**< AlarmResetResultPayload：复位失败回执（Cmd 0x82 TLV 0x04） */
+    /** AlarmCloudSnapshotPayload：Glavo 攒齐一轮（可并入 SOC 1120）后的完整 CONDITION 位图 → MQTT 上云。
+     *  云端契约见 doc/soc-alarm-contract-v1.md（alarm.snapshot）；不发串口分片。 */
+    GLAVO_Alarm_Cloud_Snapshot_Ntf,
 
     /* ---- 设置页存储管理（稿 6251:94362）----
      *
@@ -666,6 +670,7 @@ inline constexpr bool is_ipc_reliable_msg_type(MsgType type) noexcept
     case MsgType::APP_Soc_Ota_Apply_Rsp:
     case MsgType::GLAVO_Alarm_Report_Ntf:
     case MsgType::GLAVO_Alarm_Reset_Result_Ntf:
+    case MsgType::GLAVO_Alarm_Cloud_Snapshot_Ntf:
         return true;
 
     // 打印主流程：关键状态与异常通知
@@ -687,6 +692,10 @@ inline constexpr bool is_ipc_reliable_msg_type(MsgType type) noexcept
     // 调试氧单点标定：控制类 Req/Rsp，丢一条 UI 会以为没点到
     case MsgType::UI_Debug_O2_Calib_Req:
     case MsgType::GLAVO_Debug_O2_Calib_Rsp:
+        return true;
+
+    /* 调试页 Alarm Inject：点了却丢包则云端收不到单报，联调会误判 MQTT 没接上。 */
+    case MsgType::UI_Debug_Alarm_Inject_Ntf:
         return true;
 
     // 换层/录像链路：层抓拍与会话闭环
@@ -1872,6 +1881,29 @@ struct AlarmResetResultPayload {
     uint16_t alarm_code;  /**< 关联正在复位的报警 */
     uint8_t  result;      /**< kAlarmResetResultFailed */
     uint8_t  reserved;
+};
+
+/** GLAVO_Alarm_Cloud_Snapshot_Ntf：串口 MCU 链路质量（供 alarm.status / 快照旁路）。 */
+enum class AlarmMcuLink : uint8_t {
+    Unknown = 0,
+    Online  = 1,
+    Offline = 2,
+};
+
+/**
+ * GLAVO_Alarm_Cloud_Snapshot_Ntf 载荷：完整 CONDITION 快照（Inline）。
+ *
+ * Glavo 在串口快照攒齐并并入 SOC 1120 后发给 MQTT；MQTT 展开为
+ * alarm.snapshot entries（coverage=condition_slots_v1）。未收到的 slot 按全零。
+ * 空快照（全 NORMAL）合法：highest_severity=0 且全部 mask=0。
+ * 元数据（severity/clear_mode/detail）不在本载荷——方案 A 上云一律 unknown。
+ */
+struct AlarmCloudSnapshotPayload {
+    uint8_t  highest_severity; /**< 本轮最高等级；0=无有效 CONDITION */
+    uint8_t  mcu_link;         /**< AlarmMcuLink */
+    uint16_t reserved;
+    uint32_t active_mask[kAlarmSnapshotSlotCount];
+    uint32_t latched_mask[kAlarmSnapshotSlotCount];
 };
 
 } // namespace middleware

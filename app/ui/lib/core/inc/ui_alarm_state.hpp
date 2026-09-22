@@ -153,6 +153,7 @@ void ui_alarm_add_observer(ui_alarm_observer_t cb);
 /**
  * 调试注入：绕过总线直接走上报处理路径（等价于收到一帧
  * `GLAVO_Alarm_Report_Ntf`），供调试页在 MCU 不发真报警时验证整条 UI 链路。
+ * 云端 `alarm.single` 不走本函数，由调试页另发 `UI_Debug_Alarm_Inject_Ntf`。
  * 仅 UI 线程可调；state_mask/clear_mode 语义同 `middleware::kAlarmState*` /
  * `middleware::AlarmClearMode`。注入 state_mask=0（NORMAL）即模拟解除。
  */

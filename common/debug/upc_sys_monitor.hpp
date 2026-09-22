@@ -3,7 +3,7 @@
 
 /**
  * @file upc_sys_monitor.hpp
- * @brief Host 资源采样：CPU 温度 / 整机与本进程占用 / 内存。
+ * @brief Host 资源采样：CPU 温度 / thermal_zone4 / 整机与本进程占用 / 内存。
  *
  * - `upc_sys_monitor_tick()`：主循环每帧调用；内部按 60s 间隔落盘（受
  *   UPC_DEBUG + UPC_MOD_SYS_MONITOR 控制；关掉时为空函数）。
@@ -16,7 +16,8 @@ extern "C" {
 #endif
 
 typedef struct UpcSysMonitorSample {
-    float         cpu_temp_c;   /**< SoC 温度 °C；读失败为 -1 */
+    float         cpu_temp_c;   /**< SoC 温度 °C（zone0，失败则 zone1）；读失败为 -1 */
+    float         zone4_temp_c; /**< thermal_zone4 °C；读失败为 -1 */
     float         cpu_sys_pct;  /**< 整机 CPU%（0..100）；尚未形成差值时为 -1 */
     float         cpu_proc_pct; /**< 本进程 CPU%（相对整机）；同上 */
     unsigned long mem_total_kb;

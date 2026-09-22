@@ -14,11 +14,20 @@ namespace upc::mqtt {
 
 /** MQTT 连接/遥测轮询相关常量。 */
 inline constexpr uint64_t kReconnectIntervalMs = 3000;
+inline constexpr const char* kRotateCredentialAction = "ROTATE_CREDENTIAL";
 inline constexpr uint64_t kTelemetryPrintingIntervalMs = 2000;
 inline constexpr uint64_t kTelemetryIdleIntervalMs = 30000;
 /** V4 舱外 PM 遥测间隔（协议 chamber_ext 5–10s） */
 inline constexpr uint64_t kTelemetryChamberExtIntervalMs = 8000;
 inline constexpr uint64_t kFirmwareQueryIntervalMs = 10000;
+
+/** 报警上云（doc/soc-alarm-contract-v1.md，方案 A）。 */
+inline constexpr const char* kAlarmOutboxDir = "/userdata/snowpod/alarm-outbox";
+inline constexpr const char* kAlarmStreamFile = "/userdata/snowpod/alarm-stream.json";
+inline constexpr const char* kAlarmDefinitionVersion = "1.0.0";
+inline constexpr size_t kAlarmOutboxMaxItems = 512;
+inline constexpr uint64_t kAlarmStatusIntervalMs = 30000;
+inline constexpr uint64_t kAlarmOutboxRetryIntervalMs = 5000;
 
 /** 云控命令协议关键字与超时配置。 */
 inline constexpr const char* kCmdSetLight = "set_light";

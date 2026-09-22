@@ -2178,8 +2178,9 @@ lv_obj_t *page_user_settings_create(lv_obj_t *parent)
             }
         });
 
-    /* U 盘热插拔：决定「格式化 U 盘」那枚钮能不能点。这条后端**已实现**。 */
-    ui::UiMsgProxy::instance().register_usb_hotplug(
+    /* U 盘热插拔：决定「格式化 U 盘」那枚钮能不能点。这条后端**已实现**。
+     * 与文件页共用 add_usb_hotplug_listener，勿用单槽 register，否则后注册的会顶掉这边。 */
+    ui::UiMsgProxy::instance().add_usb_hotplug_listener(
         [](const middleware::UsbHotplugPayload &p) {
             g_usb_present = (p.present != 0 && p.mounted != 0);
             if(g_fmt_usb_btn) {

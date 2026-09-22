@@ -779,7 +779,7 @@ void wire_msg_proxy()
         }
     });
 
-    proxy.register_usb_hotplug([](const middleware::UsbHotplugPayload& p) {
+    proxy.add_usb_hotplug_listener([](const middleware::UsbHotplugPayload& p) {
         if(!page_user_files_active() || page_user_files_source() != FileTab::Usb) {
             return;
         }

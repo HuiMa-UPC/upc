@@ -319,9 +319,14 @@ void UiMsgProxy::init()
         middleware::MsgType::GLAVO_USB_Hotplug_Ntf, middleware::ModuleId::UI,
         [this](const middleware::Message& msg) {
             middleware::UsbHotplugPayload p{};
-            if (usb_hotplug_cb_ && read_inline_pod(msg, p)) {
-                p.mount_path[sizeof(p.mount_path) - 1] = '\0';
-                usb_hotplug_cb_(p);
+            if (usb_hotplug_cbs_.empty() || !read_inline_pod(msg, p)) {
+                return;
+            }
+            p.mount_path[sizeof(p.mount_path) - 1] = '\0';
+            for (const auto& cb : usb_hotplug_cbs_) {
+                if (cb) {
+                    cb(p);
+                }
             }
         }));
 
@@ -639,9 +644,11 @@ void UiMsgProxy::register_xfr_transfer_progress(XfrTransferProgressCb cb)
     xfr_transfer_progress_cb_ = std::move(cb);
 }
 
-void UiMsgProxy::register_usb_hotplug(UsbHotplugCb cb)
+void UiMsgProxy::add_usb_hotplug_listener(UsbHotplugCb cb)
 {
-    usb_hotplug_cb_ = std::move(cb);
+    if (cb) {
+        usb_hotplug_cbs_.push_back(std::move(cb));
+    }
 }
 
 void UiMsgProxy::send_mcu_version_query()

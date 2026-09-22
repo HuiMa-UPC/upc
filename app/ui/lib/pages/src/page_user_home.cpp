@@ -163,35 +163,13 @@ void home_env_init(void)
      * 数据源顶掉。 */
     ui_device_state_add_observer(on_device_state);
 
-    /* 暂停/恢复回执：以后端状态为准同步按钮图标 */
-    ui::UiMsgProxy::instance().register_print_pause_done(
-        [](bool paused) { set_pause_ui(paused); });
+    /* 暂停回执 / 光路进度 / 拍照回执：活路径已搬到监控页（monitor_backend_init）。
+     * 本页打印/监控浮层是存档、无调用方；这里再 register 单槽会在建页顺序上
+     * 先占坑，虽会被监控页顶掉，但以后若有人在本页 on_enter 再订一次就会把
+     * 监控页顶死。别在这里订。 */
 
-    ui::UiMsgProxy::instance().register_optical_path_progress(
-        [](const middleware::OpticalPathProgressPayload& p) {
-            page_user_home_optical_path_update(p.point_index, p.point_total, p.state);
-        });
-
-    ui::CameraMsgProxy::instance().register_snapshot_rsp(
-        [](const middleware::CameraSnapshotRspPayload &rsp) {
-            g_monitor_photo_pending = false;
-            if(g_monitor_photo_btn) {
-                lv_obj_clear_state(g_monitor_photo_btn, LV_STATE_DISABLED);
-            }
-            if(g_result_photo_btn) {
-                lv_obj_clear_state(g_result_photo_btn, LV_STATE_DISABLED);
-            }
-            if(rsp.ok) {
-                char toast[160];
-                std::snprintf(toast, sizeof(toast), "Photo saved to %s", UPC_PHOTO_DIR);
-                ui_toast_show(toast, user_color_accent, 1500);
-            } else {
-                ui_toast_show("Photo save failed", ui_color_danger, 1500);
-            }
-        });
-
-    /* clean_test 的受理与完成回执走 ui_clean_state（单槽回调与控制页共用）；
-     * clean_test_close 的回执只有本页用，仍直接注册。 */
+    /* clean_test 的受理与完成回执走 ui_clean_state（多观察者，与监控页共用）；
+     * clean_test_close 的回执只有本页结果态用，仍直接注册。 */
     ui_clean_state_add_observer(on_clean_state_event);
 
     ui::UiMsgProxy::instance().register_clean_test_close_rsp([]() {

@@ -796,6 +796,10 @@ ACTIVE + OWNER_TASK 这一档最容易漏：激光器 1301、各轴 1203~1230 �
 1104 RTN_LATCHED / 1101 自动清除 / 2000 EVENT 四条显示路径，外加 1003 一条
 critical 把 information/warning/error/critical 四档等级配色凑齐——等级不进字典、
 以报文为准，不造就看不到；关掉开关注入 NORMAL 帧模拟解除）。
+同一开关经 `UI_Debug_Alarm_Inject_Ntf` 让 Glavo **只向 MQTT** 发
+`GLAVO_Alarm_Report_Ntf`（`alarm.single`），不上 UI、不改 MCU 快照/灯效。
+云端会当成真 MCU 单报；连云后的完整快照仍按 MCU 位图，范围内的假 CONDITION
+可能被快照抹掉。`Msg Inject` 仍是本机设备事件，**没有** MQTT 通道。
 1003 同时是 **ACTIVE + `reset_policy=OWNER_TASK`** 的样本，用来验那档在抽屉里
 可点 Reset；1124 是 LOCAL，ACTIVE 时该置灰——两条对照着看。
 第 6 条 **1999 是字典外的未知码**，验固件比字典新时的降级路径：标题降级成
@@ -1006,7 +1010,7 @@ pending 自动解除——正好顺带验超时路径。
 | `user_history` | `page_user_history.*` | 打印历史：三 Tab + Storage 条 + 日期分组卡片 + 管理态批量删除 + 左滑删除 |
 | `user_settings` | `page_user_settings.*` | 设置（浅色档）：8 项左导航 + 右栏白卡版式。Network（Wi-Fi 开关/列表/子页）、Display & Brightness（背光滑条 + 熄屏选择子页，占位）、Storage（容量 + 格式化 + 文件管理，仅前端）、About（版本 + Galvo/MCU OTA）、Debug 密码弹窗。按稿 6089:11322 / 6235:91450 / 6240:92007 / 6251:94362 实现 |
 | `user_message` | `page_user_message.*` | 消息中心（浅色档）：三 Tab + All read 浮层顶栏 + 日期分组混排列表（MCU 报警 + 设备事件）+ 初始 10 条与底部 Load More + 左滑删除历史 + 右侧 632 详情抽屉（Reset 三态）。按稿 6230:89616 / 6091:13405 / 6091:13612 / 6091:13847 实现 |
-| `user_debug` | `page_user_debug.*` | 调试控制台；Move 页振镜卡 Abs X/Y + Move 走 `send_galvo_abs_pos`；Other 页按 Process / Cabin / Print Gates / Media & Sim / Inject 分组。`Galvo Point Test` 在 Print Gates，按当前校准表依次显示中心和四角红光点，与正式打印及 Test image 双向互斥。O2 Calib 在左列：输入参考浓度后点圆钮写 `/userdata/CAL/o2_cal.json`；失败 toast 提示、标签仍显示原 K。Media & Sim 的 **Sys HUD** 打开后，`ui_sys_hud` 在 `lv_layer_sys` 右上角红字显示 CPU 温 / 整机与本进程占用 / 内存（`upc_sys_monitor_sample` 读本机 `/proc`，不经 IPC），不进布局、不可点，仅本次运行 |
+| `user_debug` | `page_user_debug.*` | 调试控制台；Move 页振镜卡 Abs X/Y + Move 走 `send_galvo_abs_pos`；Other 页按 Process / Cabin / Print Gates / Media & Sim / Inject 分组。`Galvo Point Test` 在 Print Gates，按当前校准表依次显示中心和四角红光点，与正式打印及 Test image 双向互斥。O2 Calib 在左列：输入参考浓度后点圆钮写 `/userdata/CAL/o2_cal.json`；失败 toast 提示、标签仍显示原 K。Media & Sim 的 **Sys HUD** 打开后，`ui_sys_hud` 在 `lv_layer_sys` 右上角红字显示 CPU 温 / 整机与本进程占用 / 内存（`upc_sys_monitor_sample` 读本机 `/proc` 与 thermal sysfs，不经 IPC），不进布局、不可点，仅本次运行。顶部传感器条末格 **Zone4** 进页后约 1Hz 读 `thermal_zone4`（同 `sample().zone4_temp_c`），退页停定时器 |
 | `user_timelapse` | `page_user_timelapse.*` | 延时摄影播放器（隐藏页，历史缩略图进入；全屏 `lv_layer_top`） |
 
 注册仅在 `ui_app.cpp`；打印流程走 `control_*`，pages 不直接订阅 MsgBus。详见 `lib/pages/README.md`。
@@ -1674,7 +1678,7 @@ viewport 不一致，或 `scaled=0` 而屏宽 ≠ 流宽，就说明重采样又
 | 组件 | 文件 | 职责 |
 |------|------|------|
 | `page_user_history` | `pages/page_user_history.*` | 读 `/userdata/media/video/config.json`（`common/fs_manifest/print_history_manifest`）→ 按 `start_unix` 倒序、按自然日分组的卡片列表；卡片三指标 Duration / Filament / Layers 分别取 `duration_sec` / `material_g` / `layer_count`（后两者由 Media 从 `/userdata/Gcode/config.json` 快照，为 0 时显示 "--"）；缩略图 `A:/userdata/media/video/{thumb}`（RTHM 解码，`LV_IMAGE_ALIGN_COVER`）；**Album** 走 `ui::album::scan()` 扫 `/userdata/media/photo`，缩略图优先同名 `.rthm`；顶部三 Tab + Storage 容量条；管理（多选）模式批量删除；上下翻页；**左滑删除**（跟手拖动，见「左滑删除：跟手拖动」一节）→ History/Timelapse **按类型独立删除**后重写 config.json；Album 删 JPEG + 配对 `.rthm` |
-| `page_user_timelapse` | `pages/page_user_timelapse.*` | 全屏播放页（建于 `lv_layer_top()`）：受 `UPC_TIMELAPSE_PLAYBACK_PNG` 控制——默认 JPEG 序列（`1.jpg`…）；`=0` 时优先 `timelapse.mp4`（失败回退 JPEG）；拖动预览为后台小图 scrub，松手后再 settle 主画面 |
+| `page_user_timelapse` | `pages/page_user_timelapse.*` | 全屏播放页（建于 `lv_layer_top()`）：受 `UPC_TIMELAPSE_PLAYBACK_PNG` 控制——默认 JPEG 序列（`1.jpg`…）；`=0` 时优先 `timelapse.mp4`（失败回退 JPEG）；主画面与拖动预览均 `LV_IMAGE_ALIGN_CONTAIN`（竖图整幅可见，左右留黑边，不裁切）；拖动预览为后台小图 scrub，松手后再 settle 主画面 |
 | `page_user_photo` | `pages/page_user_photo.*` | 相册全屏浏览器（同建于 `lv_layer_top()`，与播放器同一套 chrome）：主图 `LV_IMAGE_ALIGN_CONTAIN`，左右滑动 / 两侧箭头翻页、首末循环回绕，底部 filmstrip 点格跳转，单击主图切控件层 |
 
 - **进入/退出**：历史页缩略图点击 → `page_user_timelapse_set_source(目录,mp4路径,标题,时间)` + `switch_to("user_timelapse")`；Album 照片 → `page_user_photo_set_source(照片绝对路径)` + `switch_to("user_photo")`；两者关闭均 → `switch_to("user_history")`。
@@ -1784,7 +1788,7 @@ Storage / Advanced Print / Privacy & Security / About / Debug。
   `ui_user_make_divider_line()` 默认给的是深色档那个、压在白卡上太重。
   选项**纯 UI 占位**：只存静态变量，不落盘、也不真的熄屏。
 - **Storage**：两张容量卡（并排、各 `flex_grow`，内距 20 / 行距 12）+ 格式化两行
-  （红描边白底钮；U 盘那行按 `register_usb_hotplug` 置灰）+ 文件管理两行（只画不接）。
+  （红描边白底钮；U 盘那行按 `add_usb_hotplug_listener` 置灰）+ 文件管理两行（只画不接）。
   确认弹窗复用历史页那个 `light_theme` 的 496×231。**三个卷不是同一批**：概览是
   Internal + SdCard，格式化是 Internal + UsbDisk。后端只实现了 Internal 的容量查询，
   其余见 [doc/STORAGE_BACKEND_API.md](../../doc/STORAGE_BACKEND_API.md)。

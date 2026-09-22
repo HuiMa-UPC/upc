@@ -221,7 +221,8 @@ public:
     void register_xfr_pair_pin(XfrPairPinCb cb);
     void register_xfr_file_received(XfrFileReceivedCb cb);
     void register_xfr_transfer_progress(XfrTransferProgressCb cb);
-    void register_usb_hotplug(UsbHotplugCb cb);
+    /** GLAVO_USB_Hotplug_Ntf：多路监听（文件页 USB 列表、设置页格式化钮各注册一次，互不覆盖）。 */
+    void add_usb_hotplug_listener(UsbHotplugCb cb);
     /** SD 卡挂载变化。**后端未实现**，回调目前永远不会被触发。 */
     void register_sdcard_hotplug(UsbHotplugCb cb);
     void register_storage_usage(StorageUsageCb cb);            /**< APP_Storage_Usage_Rsp */
@@ -286,7 +287,7 @@ private:
     XfrPairPinCb xfr_pair_pin_cb_;
     XfrFileReceivedCb xfr_file_received_cb_;
     XfrTransferProgressCb xfr_transfer_progress_cb_;
-    UsbHotplugCb usb_hotplug_cb_;
+    std::vector<UsbHotplugCb> usb_hotplug_cbs_;
     UsbHotplugCb sdcard_hotplug_cb_;
     StorageUsageCb storage_usage_cb_;
     StorageFormatProgressCb storage_format_progress_cb_;
