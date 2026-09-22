@@ -7,6 +7,7 @@
 static lv_obj_t *s_toast = nullptr;
 static lv_timer_t *s_toast_timer = nullptr;
 static lv_timer_t *s_toast_fade_timer = nullptr;
+static bool s_toast_light = false;   /**< 见 ui_toast_set_light */
 
 static void toast_hide_now(void)
 {
@@ -46,6 +47,11 @@ static void toast_dismiss_cb(lv_timer_t *t)
     lv_timer_set_repeat_count(s_toast_fade_timer, 1);
 }
 
+void ui_toast_set_light(bool on)
+{
+    s_toast_light = on;
+}
+
 void ui_toast_show(const char *msg, lv_color_t color, uint32_t duration_ms)
 {
     ui_toast_show_icon(msg, color, duration_ms, nullptr);
@@ -73,17 +79,6 @@ void ui_toast_show_icon(const char *msg, lv_color_t color, uint32_t duration_ms,
         s_toast = lv_obj_create(scr);
         lv_obj_remove_style_all(s_toast);
         lv_obj_set_size(s_toast, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
-        lv_obj_set_style_bg_color(s_toast, ui_color_panel_alt, 0);
-        lv_obj_set_style_bg_opa(s_toast, LV_OPA_COVER, 0);
-        lv_obj_set_style_border_color(s_toast, ui_color_border, 0);
-        lv_obj_set_style_border_width(s_toast, 1, 0);
-        lv_obj_set_style_radius(s_toast, UI_RADIUS, 0);
-        lv_obj_set_style_pad_hor(s_toast, UI_PAD, 0);
-        lv_obj_set_style_pad_ver(s_toast, UI_PAD_SM, 0);
-        lv_obj_set_style_pad_column(s_toast, UI_PAD_SM, 0);
-        lv_obj_set_style_shadow_width(s_toast, 12, 0);
-        lv_obj_set_style_shadow_color(s_toast, lv_color_black(), 0);
-        lv_obj_set_style_shadow_opa(s_toast, LV_OPA_40, 0);
         lv_obj_clear_flag(s_toast, LV_OBJ_FLAG_SCROLLABLE);
         lv_obj_add_flag(s_toast, LV_OBJ_FLAG_FLOATING);
         /* 行布局承载「可选图标 + 文字」；图标有无因调用而异，故每次重建子节点。 */
@@ -92,24 +87,75 @@ void ui_toast_show_icon(const char *msg, lv_color_t color, uint32_t duration_ms,
                               LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     }
 
+    /* 档位样式**每次都要重刷**，不能只在上面那个构造块里给：s_toast 是跨页复用的
+     * 静态对象，只在创建时设一次的话，切到另一档的页面后气泡还是上一档的样子。 */
+    const int32_t stripe_w = 4;
+    if(s_toast_light) {
+        /* 与三个浅色页的卡片同款：白底 + 1px 白 10% 描边 + 0 2 6 黑 4% */
+        lv_obj_set_style_bg_color(s_toast, user_light_card, 0);
+        lv_obj_set_style_border_color(s_toast, lv_color_white(), 0);
+        lv_obj_set_style_border_opa(s_toast, 26, 0);
+        lv_obj_set_style_radius(s_toast, USER_HIST_CARD_RADIUS, 0);
+        lv_obj_set_style_shadow_width(s_toast, 6, 0);
+        lv_obj_set_style_shadow_ofs_y(s_toast, 2, 0);
+        lv_obj_set_style_shadow_opa(s_toast, 10, 0);
+        /* 左内距让开那道色条，右侧维持原值 */
+        lv_obj_set_style_pad_left(s_toast, UI_PAD + stripe_w, 0);
+        lv_obj_set_style_pad_right(s_toast, UI_PAD, 0);
+        /* 色条贴左缘满高，圆角那两块交给 clip_corner 裁，省得自己算切角 */
+        lv_obj_set_style_clip_corner(s_toast, true, 0);
+    } else {
+        lv_obj_set_style_clip_corner(s_toast, false, 0);
+        lv_obj_set_style_bg_color(s_toast, ui_color_panel_alt, 0);
+        lv_obj_set_style_border_color(s_toast, ui_color_border, 0);
+        lv_obj_set_style_border_opa(s_toast, LV_OPA_COVER, 0);
+        lv_obj_set_style_radius(s_toast, UI_RADIUS, 0);
+        lv_obj_set_style_shadow_width(s_toast, 12, 0);
+        lv_obj_set_style_shadow_ofs_y(s_toast, 0, 0);
+        lv_obj_set_style_shadow_opa(s_toast, LV_OPA_40, 0);
+        lv_obj_set_style_pad_hor(s_toast, UI_PAD, 0);
+    }
+    lv_obj_set_style_bg_opa(s_toast, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(s_toast, 1, 0);
+    lv_obj_set_style_shadow_color(s_toast, lv_color_black(), 0);
+    lv_obj_set_style_pad_ver(s_toast, UI_PAD_SM, 0);
+    lv_obj_set_style_pad_column(s_toast, UI_PAD_SM, 0);
+
     lv_obj_clean(s_toast);
     if(icon) {
         ui_user_make_icon_img(s_toast, icon,
-                              lv_font_get_line_height(ui_font_body()), color);
+                              lv_font_get_line_height(ui_font_body()),
+                              s_toast_light ? user_light_text : color);
     }
     lv_obj_t *lbl = lv_label_create(s_toast);
     lv_label_set_long_mode(lbl, LV_LABEL_LONG_MODE_WRAP);
-    if(icon) {
-        /* 带图标时按内容收窄（图标+文字要居中成一条），长文案仍在 480 处折行 */
-        lv_obj_set_width(lbl, LV_SIZE_CONTENT);
-        lv_obj_set_style_max_width(lbl, 480, 0);
-    } else {
-        lv_obj_set_width(lbl, 480);
-    }
+    /* 按内容收窄、长文案仍在 480 处折行。定宽 480 会让 "Wi-Fi Off" 这种短提示
+     * 撑出一条大半屏的空条，文字孤零零贴在左边。 */
+    lv_obj_set_width(lbl, LV_SIZE_CONTENT);
+    lv_obj_set_style_max_width(lbl, 480, 0);
     lv_obj_set_style_text_font(lbl, ui_font_body(), 0);
     lv_label_set_text(lbl, msg);
-    lv_obj_set_style_text_color(lbl, color, 0);
+    lv_obj_set_style_text_color(lbl, s_toast_light ? user_light_text : color, 0);
+
+    /* 浅色档的语义色条：FLOATING 脱离 flex 行，不影响图标与文字的排布。 */
+    lv_obj_t *stripe = nullptr;
+    if(s_toast_light) {
+        stripe = lv_obj_create(s_toast);
+        lv_obj_remove_style_all(stripe);
+        lv_obj_add_flag(stripe, LV_OBJ_FLAG_FLOATING);
+        lv_obj_set_width(stripe, stripe_w);
+        lv_obj_set_style_bg_color(stripe, color, 0);
+        lv_obj_set_style_bg_opa(stripe, LV_OPA_COVER, 0);
+    }
     lv_obj_update_layout(s_toast);
+
+    if(stripe) {
+        /* 高度与横向位置都得等上面那次 layout 之后才知道：气泡是 SIZE_CONTENT 的，
+         * 而 align 是相对内容盒（已扣掉内距）的，要贴到边框内沿得往回退一个左内距。
+         * 色条 FLOATING，改它不会反过来影响气泡尺寸，不存在回环。 */
+        lv_obj_set_height(stripe, lv_obj_get_height(s_toast));
+        lv_obj_align(stripe, LV_ALIGN_LEFT_MID, -(UI_PAD + stripe_w), 0);
+    }
 
     const int32_t sw = lv_obj_get_width(scr);
     const int32_t sh = lv_obj_get_height(scr);

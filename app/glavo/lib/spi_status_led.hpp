@@ -28,6 +28,19 @@ public:
     /** Confirm 打印会话（含测高/光路/暂停）。 */
     void set_printing(bool on);
 
+    /**
+     * @brief 调试页强制单色；force=false 释放接管回自动推导。
+     *
+     * 不看 enabled_（绕开 MCU major≥4 版本门），且每次调用必发一帧，便于台架验色。
+     * color 取 DebugStatusLedColor；仅 Raw 用 r/g/b，其余三色用本文件的常量。
+     */
+    void set_debug_force(bool force, uint8_t color,
+                         uint8_t r = 0, uint8_t g = 0, uint8_t b = 0);
+
+    /** 调试态回读：force=false 时 color/rgb 无意义。 */
+    void debug_force_state(bool& force, uint8_t& color,
+                           uint8_t& r, uint8_t& g, uint8_t& b);
+
     void on_alarm_report(const serial_alarm_report_t& report);
     void on_alarm_snapshot(const serial_alarm_snapshot_t& snap);
 
@@ -37,11 +50,13 @@ private:
     SpiStatusLed(const SpiStatusLed&) = delete;
     SpiStatusLed& operator=(const SpiStatusLed&) = delete;
 
-    enum class Color : uint8_t { Blue = 0, Orange = 1, Red = 2 };
+    /** 与 middleware::DebugStatusLedColor 同序；Raw 仅调试接管可达。 */
+    enum class Color : uint8_t { Blue = 0, Orange = 1, Red = 2, Raw = 3 };
 
     bool ensure_open_locked();
     void close_locked();
-    void apply_locked();
+    /** force_send=true 跳过同色去重，强制真发一帧（仅调试接管用）。 */
+    void apply_locked(bool force_send = false);
     bool send_rgb_locked(uint8_t r, uint8_t g, uint8_t b);
     void commit_snapshot_round_locked();
 
@@ -52,6 +67,11 @@ private:
     bool open_warn_done_ = false;
     Color last_color_ = Color::Blue;
     bool last_sent_ = false;
+
+    /* 调试页验色接管：优先于 alarm/printing 推导，且不受 enabled_ 约束 */
+    bool dbg_force_ = false;
+    Color dbg_color_ = Color::Blue;
+    uint8_t dbg_r_ = 0, dbg_g_ = 0, dbg_b_ = 0;
 
     std::unordered_set<uint16_t> condition_active_;
 

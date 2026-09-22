@@ -8,10 +8,11 @@
 extern "C" {
 #endif
 
+extern const lv_image_dsc_t settings_icon_account;
 extern const lv_image_dsc_t settings_icon_network;
 extern const lv_image_dsc_t settings_icon_display;
+extern const lv_image_dsc_t settings_icon_storage;
 extern const lv_image_dsc_t settings_icon_print;
-extern const lv_image_dsc_t settings_icon_device;
 extern const lv_image_dsc_t settings_icon_privacy;
 extern const lv_image_dsc_t settings_icon_about;
 extern const lv_image_dsc_t settings_icon_debug;

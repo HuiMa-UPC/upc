@@ -845,21 +845,46 @@ void MediaService::on_print_h264_storage_exhausted()
     print_video_.disable_h264_expectation();
 }
 
+/**
+ * 按卷回容量。
+ *
+ * **只实现了 Internal 这一支**：设置页存储管理（稿 6251:94362）另要 SD 卡与 U 盘，
+ * 那两个卷的挂载点还没定，回 `present=0` 让 UI 显示「未插入」而不是假装容量为 0。
+ * 后端要补的内容见 doc/STORAGE_BACKEND_API.md。
+ *
+ * 请求方没带载荷时（旧调用方）按 Internal 处理，行为与改动前一致。
+ */
 void MediaService::handle_storage_usage_req(const middleware::Message& msg) const
 {
-    struct statvfs vfs {};
+    middleware::StorageUsageReqPayload req{};
+    if(msg.payload.type == middleware::MsgPayload::Type::Inline &&
+       msg.payload.length >= sizeof(req)) {
+        std::memcpy(&req, msg.payload.data.bytes.data(), sizeof(req));
+    }
+
     middleware::StorageUsagePayload rsp{};
-    if(::statvfs(UPC_MEDIA_ROOT, &vfs) == 0) {
-        const uint64_t block_size = static_cast<uint64_t>(vfs.f_frsize);
-        const uint64_t total = static_cast<uint64_t>(vfs.f_blocks) * block_size;
-        const uint64_t free_bytes = static_cast<uint64_t>(vfs.f_bavail) * block_size;
-        rsp.total_bytes = total;
-        rsp.used_bytes = (total > free_bytes) ? (total - free_bytes) : 0u;
+    rsp.volume = req.volume;
+
+    if(static_cast<middleware::StorageVolume>(req.volume) !=
+       middleware::StorageVolume::Internal) {
+        /* SD / U 盘：后端未实现，明确回「不在」 */
+        rsp.present = 0;
     } else {
-        UPC_LOG_MEDIA_SERVICE_TO(StorageUsage, Warn, "storage statvfs failed path=%s err=%d",
-                              UPC_MEDIA_ROOT, errno);
-        rsp.total_bytes = 0;
-        rsp.used_bytes = 0;
+        struct statvfs vfs {};
+        if(::statvfs(UPC_MEDIA_ROOT, &vfs) == 0) {
+            const uint64_t block_size = static_cast<uint64_t>(vfs.f_frsize);
+            const uint64_t total = static_cast<uint64_t>(vfs.f_blocks) * block_size;
+            const uint64_t free_bytes = static_cast<uint64_t>(vfs.f_bavail) * block_size;
+            rsp.total_bytes = total;
+            rsp.used_bytes = (total > free_bytes) ? (total - free_bytes) : 0u;
+            rsp.present = 1;
+        } else {
+            UPC_LOG_MEDIA_SERVICE_TO(StorageUsage, Warn, "storage statvfs failed path=%s err=%d",
+                                  UPC_MEDIA_ROOT, errno);
+            rsp.total_bytes = 0;
+            rsp.used_bytes = 0;
+            rsp.present = 0;
+        }
     }
 
     middleware::Message ntf(

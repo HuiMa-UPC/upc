@@ -10,12 +10,13 @@
 
 #include "page_user_home.hpp"
 #include "page_user_history.hpp"
-#include "page_user_control.hpp"
+#include "page_user_monitor.hpp"
 #include "page_user_settings.hpp"
 #include "page_user_message.hpp"
 #include "page_user_debug.hpp"
 #include "page_user_timelapse.hpp"
 #include "page_user_photo.hpp"
+#include "page_user_files.hpp"
 
 #include "ui_theme.hpp"
 #include "ui_backlight.hpp"
@@ -346,18 +347,19 @@ void app_init(lv_obj_t* screen) {
                                      page_user_home_create,
                                      page_user_home_refresh),
         ic_nav_home_set);
+    /* 监控页在侧栏排第 2（稿 6338:27240）。改版前这一格是控制页，控制页已退役。 */
+    PageManager::instance().register_page(
+        std::make_unique<SimplePage>("user_monitor",
+                                     page_user_monitor_create,
+                                     page_user_monitor_refresh,
+                                     page_user_monitor_exit),
+        ic_nav_monitor_set);
     PageManager::instance().register_page(
         std::make_unique<SimplePage>("user_history",
                                      page_user_history_create,
                                      page_user_history_refresh,
                                      page_user_history_exit),
         ic_nav_history_set);
-    PageManager::instance().register_page(
-        std::make_unique<SimplePage>("user_control",
-                                     page_user_control_create,
-                                     page_user_control_refresh,
-                                     page_user_control_exit),
-        ic_nav_control_set);
     PageManager::instance().register_page(
         std::make_unique<SimplePage>("user_settings",
                                      page_user_settings_create,

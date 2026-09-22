@@ -161,6 +161,8 @@ private:
     void handle_debug_soc_led_get(const middleware::Message& msg);
     void handle_debug_cabin_pm_valve_set(const middleware::Message& msg);
     void handle_debug_cabin_pm_valve_get(const middleware::Message& msg);
+    void handle_debug_status_led_set(const middleware::Message& msg);
+    void handle_debug_status_led_get(const middleware::Message& msg);
     void handle_visual_optical_path_point_rsp(const middleware::Message& msg);
     void handle_height_calib_start_req(const middleware::Message& msg);
     void handle_laser_spot_measure_rsp(const middleware::Message& msg);
@@ -177,6 +179,7 @@ private:
     void publish_debug_plate_height_adj_state();
     void publish_debug_soc_led_state();
     void publish_debug_cabin_pm_valve_state();
+    void publish_debug_status_led_state();
     /** @brief 停止并回收点位测试线程；仅用于服务退出。 */
     void stop_galvo_point_test_worker();
 

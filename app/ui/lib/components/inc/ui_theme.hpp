@@ -82,6 +82,12 @@ extern const lv_color_t user_light_dev_name;
 /** 未读红点 #fe6868。两处共用：侧栏消息图标（稿 6255:95797）与首页右上铃铛
  *  （稿 6201:85994）。**不是 ui_color_danger(#f85149)**，那个是深色档的危险红。 */
 extern const lv_color_t user_light_notice_dot;
+/** 设置页左栏渐变底的中间色 #f4f4f4（稿 6240:92194 的 50% 色标；两端是
+ *  user_light_bg 的 #fafafa）。只有这一处在用。 */
+extern const lv_color_t user_light_rail_mid;
+/** 选文件页选中行的实色底 #ebeaec（稿 6240:93110）。**比 user_light_more_bg 深一档**，
+ *  后者（#f5f5f6）是按下态用的、拿来做选中态在白卡上几乎看不出来。 */
+extern const lv_color_t user_light_row_sel;
 
 /* ============================================================================
  *  尺寸 / 字体集合
@@ -159,8 +165,6 @@ typedef struct {
      * **0 = 沿用改动前的旧式**（左栏 LV_PCT(34)、内距 USER_PAD、列间距 USER_PAD_LG、
      * 右内距 USER_PAD），1024/1920 两档填 0 以保持渲染不变。 */
     int32_t user_settings_nav_w;
-    int32_t user_settings_gap;       /**< 兼作左内距与两栏列间距（稿都是 36） */
-    int32_t user_settings_gutter_r;  /**< 右侧留给翻页钮的那一段（稿 176） */
     /** Wi-Fi 开关分段控件的高（稿 3361:18541 是 72）。宽度不用另给：行高改成 80 后
      *  旧式的 USER_NAV_ITEM_H*16/5 正好算出稿上的 256。0 = 沿用旧式 *4/5。 */
     int32_t user_settings_seg_h;
@@ -244,14 +248,6 @@ typedef struct {
      *  过于抢眼；拆开后两者互不牵动。0 = 沿用旧的 user_media_btn_size() * 2。 */
     int32_t user_media_play_h;
     int32_t user_sensor_strip_h;   /**< 调试页传感器条高（原先借用 user_topbar_h） */
-    /** 右侧悬浮翻页钮的直径（稿 64@1280）。历史页 4366:5406、消息页 3033:5253、
-     *  设置页 3238:14371 三张稿都是 64×64，故做成公共字段而非各页自算。
-     *  0 = 沿用旧式 user_back_btn_h * 5/4（无稿的档位据此保持原渲染）。 */
-    int32_t user_scroll_btn_sz;
-    /** 上下两枚翻页钮的间距（稿 160@1280）。历史页 4366:5406/5409 与消息页
-     *  3033:5253/5256 都是 160；**设置页那张稿是 192**，未统一，故该页仍用旧值。
-     *  0 = 沿用旧式 USER_PAD_LG。 */
-    int32_t user_scroll_btn_gap;
     /** 空态那枚图标圆底的直径（稿 4531:7206 是 80，内含 36 的图标）。
      *  0 = 沿用旧式 user_btn_primary_h * 10/9——那个式子是照 1920 档（72×10/9 = 80）
      *  写的，1280 档只算得 57，与稿差 23，故本档改为直接给值。 */
@@ -283,7 +279,6 @@ typedef struct {
     int32_t user_dlg_body_lead;
     int32_t user_file_dlg_w;
     int32_t user_file_dlg_preview_w;
-    int32_t user_file_dlg_preview_h;
     int32_t user_file_sel_w;
     int32_t user_file_sel_h;
     int32_t user_file_card_w;
@@ -387,16 +382,21 @@ typedef struct {
     int32_t user_home_grid_w;
     /** 问候语块顶距（稿 160@1280）。左缘走 USER_PAD_LG + 侧栏宽，与 HOME 卡同一条竖线。 */
     int32_t user_home_greet_top;
-    /** 设备渲染图边长（稿 700@1280）。资源按档位出原生尺寸、运行时 1:1 不缩放，
-     *  改这个值必须同步改 tools/gen_home_bg.py 的 DEVICE_SIZES。 */
-    int32_t user_home_dev_img;
-    /** 设备图左缘 / 顶距（稿 663 / 172@1280，整屏坐标系）。稿上这张图右下两侧都是
-     *  出血的（663 + 700 = 1363 > 1280、172 + 700 = 872 > 800），超出部分由父节点裁掉，
+    /** 设备渲染图的框宽 / 框高（稿 525 × 791@1280）。资源按档位出原生尺寸、运行时
+     *  1:1 不缩放，改这两个值必须同步改 tools/gen_home_bg.py 的 DEVICE_SIZES。
+     *
+     *  **不是正方形**：上一版稿（6201:85912）是 700 见方、只有一个字段，新稿
+     *  （6230:89954）改成了竖长条，故拆成宽高两个。 */
+    int32_t user_home_dev_img_w;
+    int32_t user_home_dev_img_h;
+    /** 设备图左缘 / 顶距（稿 772 / 89@1280，整屏坐标系）。稿上这张图右下两侧都是
+     *  出血的（772 + 525 = 1297 > 1280、89 + 791 = 880 > 800），超出部分由父节点裁掉，
      *  不是画错了。图本身的下半截也已经在生成时淡成全透明，见 gen_home_bg.py 的
      *  DEV_FADES。 */
     int32_t user_home_dev_img_x;
     int32_t user_home_dev_img_y;
-    /** 左下 PRINT 胶囊宽（稿 202@1280）。同一行左边那枚方钮是正方形，走 user_action_btn_sz。 */
+    /** 左下 PRINT 钮宽（稿 216@1280）。新稿把同一行左边那枚摄像机方钮删了（监控已移到
+     *  侧栏），整行只剩它一枚，位置也从 x=260 挪回与 HOME 卡同一条竖线的 x=160。 */
     int32_t user_home_print_btn_w;
     /** 首页待机右下那条开门滑块的轨道宽 / 高（稿 453 × 94@1280，旋钮上下各内缩 5）。
      *  **不与 user_door_slide_* 共用**：那一族是控制页与打印态那三条深色红渐变滑块，
@@ -414,6 +414,24 @@ typedef struct {
     int32_t user_panel_w;
     /** 铃铛面板里单条消息的行高（稿 48@1280）。左侧等级色竖条高取本值的 2/3（稿 32）。 */
     int32_t user_panel_row_h;
+
+    /* ---- 监控页（稿 6338:27240 打印态 / 6338:27049 待机态 / 6307:40977 Manual）---- */
+    /** 右栏整条宽（稿 420@1280，屏上是 860..1280）。内容区 = 本值 − 2×USER_PAD_LG
+     *  （1280 档 420−64 = 356，正是稿值）。摄像头视口宽 = 屏宽 − 侧栏 − 本值。 */
+    int32_t user_mon_panel_w;
+    /** 右栏里那些「一行高」的元素：Tab 行、底部按钮（稿都是 64/84@1280 —— Tab 64、
+     *  按钮走 USER_ACTION_BTN_SZ 的 84）。本字段只给 Tab 行；
+     *  Manual 的上下钮高取 `× 7/8`（稿 56）。 */
+    int32_t user_mon_row_h;
+    /** 右栏卡片/轨道的圆角（稿 16@1280）。**落不回现有梯度**：USER_RADIUS 本档才 14、
+     *  USER_LIGHT_RADIUS 是 24，两个都不是这个数，故单开。 */
+    int32_t user_mon_radius;
+    /** Job 卡顶部那块模型缩略图框的高（稿 210@1280）。宽度铺满内容区。 */
+    int32_t user_mon_thumb_h;
+    /** Job 卡下面 Time used / Total Cons. 两张白卡的高（稿 98@1280）。 */
+    int32_t user_mon_stat_h;
+    /** Job 卡进度条的高（稿 24@1280，圆角取其 1/3 = 稿的 8）。 */
+    int32_t user_mon_bar_h;
 
     /* ---- 字体（开发者 Shell） ---- */
     const lv_font_t *font_body;
@@ -523,8 +541,6 @@ extern const ui_theme_t *g_ui;
 #define USER_NAV_GAP                (g_ui->user_nav_gap)
 #define USER_NAV_ITEM_H             (g_ui->user_nav_item_h)
 #define USER_SETTINGS_NAV_W         (g_ui->user_settings_nav_w)
-#define USER_SETTINGS_GAP           (g_ui->user_settings_gap)
-#define USER_SETTINGS_GUTTER_R      (g_ui->user_settings_gutter_r)
 #define USER_SETTINGS_SEG_H         (g_ui->user_settings_seg_h)
 #define USER_NAV_ICON_SZ            (g_ui->user_nav_icon_sz)
 #define USER_NAV_ICON_PAD           (g_ui->user_nav_icon_pad)
@@ -569,7 +585,6 @@ int32_t user_media_play_size(void);
 #define USER_DLG_BODY_LEAD          (g_ui->user_dlg_body_lead)
 #define USER_FILE_DLG_W             (g_ui->user_file_dlg_w)
 #define USER_FILE_DLG_PREVIEW_W     (g_ui->user_file_dlg_preview_w)
-#define USER_FILE_DLG_PREVIEW_H     (g_ui->user_file_dlg_preview_h)
 #define USER_FILE_SEL_W             (g_ui->user_file_sel_w)
 #define USER_FILE_SEL_H             (g_ui->user_file_sel_h)
 #define USER_FILE_CARD_W            (g_ui->user_file_card_w)
@@ -617,7 +632,8 @@ int32_t user_media_play_size(void);
 #define USER_HOME_CARD_H            (g_ui->user_home_card_h)
 #define USER_HOME_GRID_W            (g_ui->user_home_grid_w)
 #define USER_HOME_GREET_TOP         (g_ui->user_home_greet_top)
-#define USER_HOME_DEV_IMG           (g_ui->user_home_dev_img)
+#define USER_HOME_DEV_IMG_W         (g_ui->user_home_dev_img_w)
+#define USER_HOME_DEV_IMG_H         (g_ui->user_home_dev_img_h)
 #define USER_HOME_DEV_IMG_X         (g_ui->user_home_dev_img_x)
 #define USER_HOME_DEV_IMG_Y         (g_ui->user_home_dev_img_y)
 #define USER_HOME_PRINT_BTN_W       (g_ui->user_home_print_btn_w)
@@ -626,9 +642,14 @@ int32_t user_media_play_size(void);
 #define USER_HOME_EDGE_GAP          (g_ui->user_home_edge_gap)
 #define USER_PANEL_W                (g_ui->user_panel_w)
 #define USER_PANEL_ROW_H            (g_ui->user_panel_row_h)
-#define USER_SCROLL_BTN_SZ          (g_ui->user_scroll_btn_sz)
-#define USER_SCROLL_BTN_GAP         (g_ui->user_scroll_btn_gap)
 #define USER_EMPTY_RING_SZ          (g_ui->user_empty_ring_sz)
+
+#define USER_MON_PANEL_W            (g_ui->user_mon_panel_w)
+#define USER_MON_ROW_H              (g_ui->user_mon_row_h)
+#define USER_MON_RADIUS             (g_ui->user_mon_radius)
+#define USER_MON_THUMB_H            (g_ui->user_mon_thumb_h)
+#define USER_MON_STAT_H             (g_ui->user_mon_stat_h)
+#define USER_MON_BAR_H              (g_ui->user_mon_bar_h)
 
 /**
  * 初始化主题：根据当前 lv_display 实际分辨率挑选 profile，再初始化所有 lv_style。

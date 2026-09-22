@@ -1210,8 +1210,11 @@ void build_entry(lv_obj_t *parent, const MsgItem &it)
     /* 子容器一律不可点：命中目标恒定是卡片本身，拖动才不用依赖事件冒泡 */
     lv_obj_remove_flag(badge, LV_OBJ_FLAG_CLICKABLE);
     /* 稿 48 的盒里是 24 的图标，正好一半 */
+    /* 取图与显示用同一个 ic_sz：severity_icon 按这个边长挑原生尺寸的那一档，
+     * 对上了就不会走缩放。稿 6230:89622 是 48 徽标内含 24 图标。 */
+    const int32_t ic_sz = box_sz / 2;
     lv_obj_center(ui_user_make_icon_img(badge,
-        ui_message_severity_icon(it.sev), box_sz / 2, lv_color_white()));
+        ui_message_severity_icon(it.sev, ic_sz), ic_sz, lv_color_white()));
 
     /* 中列：标题 + 描述（两行截断） */
     lv_obj_t *mid = lv_obj_create(card);
