@@ -51,20 +51,11 @@ namespace {
 constexpr const char *kDevPassword = "888";
 
 /* ---- 子导航定义 ---- */
-/**
- * 子导航项，顺序即稿 6089:11322 左栏从上到下。
- *
- * 相对旧版的三处变动：**新增 Account 与 Storage**；**去掉 Device & Account**——
- * 它装的是 Galvo OTA / MCU OTA 两行，与账号无关，已并进 About；`Display & Sound`
- * 改名 `Display & Brightness`（稿 image1 那帧写的是「显示与声音」，image3~6 都写
- * 「显示与亮度」，且里面确实只有亮度与熄屏、没有声音，以后者为准）。
- */
 enum NavId {
-    NAV_ACCOUNT = 0,
-    NAV_NETWORK,
+    NAV_NETWORK = 0,
     NAV_DISPLAY,
-    NAV_STORAGE,
     NAV_PRINT,
+    NAV_DEVICE,
     NAV_PRIVACY,
     NAV_ABOUT,
     NAV_DEBUG,
@@ -77,11 +68,10 @@ struct NavDef {
 };
 
 const NavDef kNavDefs[NAV_COUNT] = {
-    { &settings_icon_account, "Account"                },
     { &settings_icon_network, "Network & Connectivity" },
-    { &settings_icon_display, "Display & Brightness"   },
-    { &settings_icon_storage, "Storage"                },
+    { &settings_icon_display, "Display & Sound"        },
     { &settings_icon_print,   "Advanced Print"         },
+    { &settings_icon_device,  "Device & Account"       },
     { &settings_icon_privacy, "Privacy & Security"     },
     { &settings_icon_about,   "About"                  },
     { &settings_icon_debug,   "Debug"                  },
@@ -316,13 +306,10 @@ void wifi_rescan_stop(void)
 
 lv_obj_t *g_nav_btns[NAV_COUNT]  = { nullptr };
 lv_obj_t *g_nav_icons[NAV_COUNT] = { nullptr };
-lv_obj_t *g_nav_arrows[NAV_COUNT] = { nullptr };  /**< 右箭头，只在选中项显示 */
-/** 右下浮动返回钮。**只有熄屏选择子页用它**（稿 6240:92007）；其余子页仍是顶部
- *  返回条（make_subpage_header），两种并存是稿上就有的，不要顺手统一。 */
-lv_obj_t *g_float_back = nullptr;
 lv_obj_t *g_detail     = nullptr;   /**< 右侧详情容器（按选中重建） */
-lv_obj_t *g_wifi_list  = nullptr;   /**< 网络详情里那段可滚的列表容器 */
-lv_obj_t *g_page       = nullptr;   /**< 设置页根：子页浮动返回钮挂这里 */
+lv_obj_t *g_wifi_list  = nullptr;   /**< 翻页按钮的滚动目标（网络详情=整个详情容器） */
+lv_obj_t *g_page       = nullptr;   /**< 设置页根：翻页按钮悬浮父级（整屏居中用） */
+lv_obj_t *g_scroll_btns= nullptr;   /**< Wi-Fi 翻页按钮悬浮层（仅网络详情存在） */
 lv_obj_t *g_wifi_list_box = nullptr;/**< 主网络页可隐藏的列表容器（WiFi 关时隐藏） */
 lv_obj_t *g_wifi_seg_on  = nullptr; /**< WiFi 开关矩形分段：On 段 */
 lv_obj_t *g_wifi_seg_off = nullptr; /**< WiFi 开关矩形分段：Off 段 */
@@ -673,60 +660,13 @@ void open_wifi_connect_dialog(const char *ssid)
 /** 右栏分组标题（`Current Wi-Fi` / `Available Wi-Fi` 这类）。
  *  稿 3361:18547/18558 是「一级标题」20、纯白；这里字号跟稿，颜色仍用 dim 保持
  *  与下方行内容的层次（稿靠字重区分，Montserrat 只有一个字重，做不出来）。 */
-/** 分区标题（稿 6101:14249 是 Poppins SemiBold 22 / #333145）。 */
 lv_obj_t *make_caption(lv_obj_t *parent, const char *text)
 {
     lv_obj_t *l = lv_label_create(parent);
     lv_label_set_text(l, text);
-    lv_obj_set_style_text_color(l, user_light_text, 0);
-    /* 稿 22；与浅色档弹窗页脚钮同档，走 user_font_dlg_btn() */
-    lv_obj_set_style_text_font(l, user_font_dlg_btn(), 0);
+    lv_obj_set_style_text_color(l, user_color_text_dim, 0);
+    lv_obj_set_style_text_font(l, user_font_title(), 0);
     return l;
-}
-
-/**
- * 右栏卡片的统一外观（稿 6101:14257 那一款，整页所有行卡都是它）：
- * 白底实色 + 1px 白 10% 描边 + `0 2 6 rgba(0,0,0,.04)` 投影 + 圆角 16 + 内距 24。
- *
- * 白底压白描边等于看不见，稿上就这么画的，照留；真正撑出边界的是那道投影。
- * 与历史页/消息页卡片同款，改一处三页要同步看。
- */
-void apply_card_style(lv_obj_t *obj)
-{
-    lv_obj_set_style_radius(obj, USER_HIST_CARD_RADIUS, 0);      /* 稿 16 */
-    lv_obj_set_style_bg_color(obj, user_light_card, 0);
-    lv_obj_set_style_bg_opa(obj, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_width(obj, 1, 0);
-    lv_obj_set_style_border_color(obj, lv_color_white(), 0);
-    lv_obj_set_style_border_opa(obj, 26, 0);                     /* 稿 白 10% */
-    lv_obj_set_style_shadow_width(obj, 6, 0);
-    lv_obj_set_style_shadow_ofs_y(obj, 2, 0);
-    lv_obj_set_style_shadow_color(obj, lv_color_black(), 0);
-    lv_obj_set_style_shadow_opa(obj, 10, 0);                     /* 稿 4% ≈ 10/255 */
-    lv_obj_set_style_pad_all(obj, USER_PAD, 0);                  /* 稿 24 */
-    lv_obj_set_style_pad_column(obj, USER_PAD, 0);
-    /* 按下压一档灰：不能改 bg_opa，白卡透下去会露出页面底 */
-    lv_obj_set_style_bg_color(obj, user_light_more_bg, LV_STATE_PRESSED);
-}
-
-/**
- * 竖排白卡容器。
- *
- * 替掉本页原先各处的 `ui_user_make_frosted_card()`——那是深色档的磨砂卡
- * （半透明白 + 白字），整屏翻浅之后压在 #FAFAFA 上就只剩一片白。
- * 那个 helper 本身没动，调试页还在用。
- */
-lv_obj_t *make_light_card(lv_obj_t *parent)
-{
-    lv_obj_t *card = lv_obj_create(parent);
-    lv_obj_remove_style_all(card);
-    lv_obj_set_width(card, LV_PCT(100));
-    lv_obj_set_height(card, LV_SIZE_CONTENT);
-    apply_card_style(card);
-    lv_obj_set_style_bg_color(card, user_light_card, LV_STATE_PRESSED);
-    lv_obj_set_style_text_color(card, user_light_text, 0);
-    lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
-    return card;
 }
 
 void on_wifi_item_click(lv_event_t *e)
@@ -761,12 +701,18 @@ lv_obj_t *make_wifi_item(lv_obj_t *parent, const char *ssid, bool connected)
     lv_obj_t *btn = lv_button_create(parent);
     lv_obj_remove_style_all(btn);
     lv_obj_set_width(btn, LV_PCT(100));
-    lv_obj_set_height(btn, LV_SIZE_CONTENT);
-    apply_card_style(btn);
+    lv_obj_set_height(btn, USER_NAV_ITEM_H);
+    /* 稿 3361:18548 与左栏项同结构：圆角 8、内距 24、图标↔文字 24。 */
+    lv_obj_set_style_radius(btn, USER_BTN_RADIUS, 0);
+    lv_obj_set_style_bg_color(btn, user_color_text, 0);
+    lv_obj_set_style_bg_opa(btn, 10, 0);             /* ≈4% 白底（对齐设计稿） */
+    lv_obj_set_style_bg_opa(btn, 28, LV_STATE_PRESSED);
+    lv_obj_set_style_pad_hor(btn, USER_PAD, 0);
+    lv_obj_set_style_pad_column(btn, USER_PAD, 0);
     lv_obj_set_flex_flow(btn, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(btn, LV_FLEX_ALIGN_START,
                           LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_text_color(btn, user_light_text, 0);
+    lv_obj_set_style_text_color(btn, user_color_text, 0);
     /* 未连接=点整条连接（弹密码框/免密直连）；已连接项整条不响应，
      * 断开请走右箭头详情页的 Disconnect。 */
     if(!connected) {
@@ -792,14 +738,14 @@ lv_obj_t *make_wifi_item(lv_obj_t *parent, const char *ssid, bool connected)
     }
 
     /* 右箭头独立按钮：已连接=详情子页；未连接=空页面。落在此区域的点击不触发整条行。
-     * 卡片内距已是 24，钮本身只要够大即可，故取行高档的 USER_NAV_ITEM_H 见方。 */
+     * 触发区放大：方形宽度取行高、整行高度，形成舒适的点按目标。 */
     lv_obj_t *arrow_btn = lv_button_create(btn);
     lv_obj_remove_style_all(arrow_btn);
-    lv_obj_set_size(arrow_btn, USER_NAV_ITEM_H / 2, USER_NAV_ITEM_H / 2);
+    lv_obj_set_size(arrow_btn, USER_NAV_ITEM_H, LV_PCT(100));
     lv_obj_set_style_radius(arrow_btn, LV_RADIUS_CIRCLE, 0);
-    lv_obj_set_style_bg_color(arrow_btn, user_light_text, 0);
+    lv_obj_set_style_bg_color(arrow_btn, user_color_text, 0);
     lv_obj_set_style_bg_opa(arrow_btn, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_bg_opa(arrow_btn, 26, LV_STATE_PRESSED);
+    lv_obj_set_style_bg_opa(arrow_btn, 28, LV_STATE_PRESSED);
     lv_obj_add_event_cb(arrow_btn,
                         connected ? on_connected_wifi_click : on_wifi_arrow_empty,
                         LV_EVENT_CLICKED, const_cast<char *>(ssid));
@@ -807,8 +753,7 @@ lv_obj_t *make_wifi_item(lv_obj_t *parent, const char *ssid, bool connected)
     lv_obj_t *arrow = lv_label_create(arrow_btn);
     lv_label_set_text(arrow, LV_SYMBOL_RIGHT);
     lv_obj_set_style_text_font(arrow, user_font_text(), 0);
-    lv_obj_set_style_text_color(arrow, user_light_text, 0);
-    lv_obj_set_style_text_opa(arrow, LV_OPA_50, 0);
+    lv_obj_set_style_text_color(arrow, user_color_text_dim, 0);
     lv_obj_center(arrow);
     return btn;
 }
@@ -820,12 +765,17 @@ lv_obj_t *make_link_row(lv_obj_t *parent, const char *label,
     lv_obj_t *btn = lv_button_create(parent);
     lv_obj_remove_style_all(btn);
     lv_obj_set_width(btn, LV_PCT(100));
-    lv_obj_set_height(btn, LV_SIZE_CONTENT);
-    apply_card_style(btn);
+    lv_obj_set_height(btn, USER_NAV_ITEM_H);
+    lv_obj_set_style_radius(btn, USER_BTN_RADIUS, 0);   /* 稿 8 */
+    lv_obj_set_style_bg_color(btn, user_color_text, 0);
+    lv_obj_set_style_bg_opa(btn, 10, 0);
+    lv_obj_set_style_bg_opa(btn, 28, LV_STATE_PRESSED);
+    lv_obj_set_style_pad_hor(btn, USER_PAD, 0);
+    lv_obj_set_style_pad_column(btn, USER_PAD, 0);
     lv_obj_set_flex_flow(btn, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(btn, LV_FLEX_ALIGN_START,
                           LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_text_color(btn, user_light_text, 0);
+    lv_obj_set_style_text_color(btn, user_color_text, 0);
     if(cb) {
         lv_obj_add_event_cb(btn, cb, LV_EVENT_CLICKED, ud);
     }
@@ -837,9 +787,8 @@ lv_obj_t *make_link_row(lv_obj_t *parent, const char *label,
 
     lv_obj_t *arrow = lv_label_create(btn);
     lv_label_set_text(arrow, LV_SYMBOL_RIGHT);
-    lv_obj_set_style_text_font(arrow, user_font_text(), 0);
-    lv_obj_set_style_text_color(arrow, user_light_text, 0);
-    lv_obj_set_style_text_opa(arrow, LV_OPA_50, 0);
+    lv_obj_set_style_text_font(arrow, user_font_caption(), 0);
+    lv_obj_set_style_text_color(arrow, user_color_text_dim, 0);
     return btn;
 }
 
@@ -851,9 +800,12 @@ lv_obj_t *make_value_row(lv_obj_t *parent, const char *label, const char *value,
     lv_obj_t *row = lv_obj_create(parent);
     lv_obj_remove_style_all(row);
     lv_obj_set_width(row, LV_PCT(100));
-    lv_obj_set_height(row, LV_SIZE_CONTENT);
-    apply_card_style(row);
-    lv_obj_set_style_bg_color(row, user_light_card, LV_STATE_PRESSED);  /* 不可点，不给按压反馈 */
+    lv_obj_set_height(row, USER_NAV_ITEM_H);
+    lv_obj_set_style_radius(row, USER_BTN_RADIUS, 0);   /* 稿 8 */
+    lv_obj_set_style_bg_color(row, user_color_text, 0);
+    lv_obj_set_style_bg_opa(row, 10, 0);
+    lv_obj_set_style_pad_hor(row, USER_PAD, 0);
+    lv_obj_set_style_pad_column(row, USER_PAD, 0);
     lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(row, LV_FLEX_ALIGN_START,
                           LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
@@ -862,53 +814,17 @@ lv_obj_t *make_value_row(lv_obj_t *parent, const char *label, const char *value,
     lv_obj_t *lbl = lv_label_create(row);
     lv_label_set_text(lbl, label);
     lv_obj_set_style_text_font(lbl, user_font_title(), 0);   /* 稿「一级标题」20 */
-    lv_obj_set_style_text_color(lbl, user_light_text, 0);
+    lv_obj_set_style_text_color(lbl, user_color_text, 0);
     lv_obj_set_flex_grow(lbl, 1);
 
     lv_obj_t *val = lv_label_create(row);
     lv_label_set_text(val, value);
-    lv_obj_set_style_text_font(val, user_font_title(), 0);
-    lv_obj_set_style_text_color(val, user_light_text, 0);
-    lv_obj_set_style_text_opa(val, LV_OPA_50, 0);
+    lv_obj_set_style_text_font(val, user_font_text(), 0);
+    lv_obj_set_style_text_color(val, user_color_text_dim, 0);
     if(out_val) {
         *out_val = val;
     }
     return row;
-}
-
-/** 可点的键值行：[标题 ... 值(50%) ›]。稿 6235:91471 的「熄屏时间 5分钟 ›」那一款。 */
-lv_obj_t *make_value_row_clickable(lv_obj_t *parent, const char *label,
-                                   const char *value, lv_event_cb_t cb)
-{
-    lv_obj_t *btn = lv_button_create(parent);
-    lv_obj_remove_style_all(btn);
-    lv_obj_set_width(btn, LV_PCT(100));
-    lv_obj_set_height(btn, LV_SIZE_CONTENT);
-    apply_card_style(btn);
-    lv_obj_set_flex_flow(btn, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(btn, LV_FLEX_ALIGN_START,
-                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    if(cb) {
-        lv_obj_add_event_cb(btn, cb, LV_EVENT_CLICKED, nullptr);
-    }
-
-    lv_obj_t *lbl = lv_label_create(btn);
-    lv_label_set_text(lbl, label);
-    lv_obj_set_style_text_font(lbl, user_font_title(), 0);
-    lv_obj_set_style_text_color(lbl, user_light_text, 0);
-    lv_obj_set_flex_grow(lbl, 1);
-
-    lv_obj_t *val = lv_label_create(btn);
-    lv_label_set_text(val, value);
-    lv_obj_set_style_text_font(val, user_font_title(), 0);
-    lv_obj_set_style_text_color(val, user_light_text, 0);
-
-    lv_obj_t *arrow = lv_label_create(btn);
-    lv_label_set_text(arrow, LV_SYMBOL_RIGHT);
-    lv_obj_set_style_text_font(arrow, user_font_text(), 0);
-    lv_obj_set_style_text_color(arrow, user_light_text, 0);
-    lv_obj_set_style_text_opa(arrow, LV_OPA_50, 0);
-    return btn;
 }
 
 /** 子页头部：返回圆钮 + 标题。 */
@@ -930,20 +846,20 @@ lv_obj_t *make_subpage_header(lv_obj_t *parent, const char *title,
     lv_obj_remove_style_all(back);
     lv_obj_set_size(back, USER_BACK_BTN_H, USER_BACK_BTN_H);
     lv_obj_set_style_radius(back, LV_RADIUS_CIRCLE, 0);
-    lv_obj_set_style_bg_color(back, user_light_card, 0);
-    lv_obj_set_style_bg_opa(back, LV_OPA_COVER, 0);
-    lv_obj_set_style_bg_color(back, user_light_more_bg, LV_STATE_PRESSED);
+    lv_obj_set_style_bg_color(back, user_color_panel_alt, 0);
+    lv_obj_set_style_bg_opa(back, LV_OPA_60, 0);
+    lv_obj_set_style_bg_opa(back, LV_OPA_COVER, LV_STATE_PRESSED);
     lv_obj_add_event_cb(back, back_cb, LV_EVENT_CLICKED, nullptr);
     lv_obj_t *bi = lv_label_create(back);
     lv_label_set_text(bi, LV_SYMBOL_LEFT);
-    lv_obj_set_style_text_color(bi, user_light_text, 0);
+    lv_obj_set_style_text_color(bi, user_color_text, 0);
     lv_obj_set_style_text_font(bi, user_font_text(), 0);
     lv_obj_center(bi);
 
     lv_obj_t *t = lv_label_create(row);
     lv_label_set_text(t, title);
-    lv_obj_set_style_text_color(t, user_light_text, 0);
-    lv_obj_set_style_text_font(t, user_font_dlg_btn(), 0);   /* 同分区标题 22 */
+    lv_obj_set_style_text_color(t, user_color_text, 0);
+    lv_obj_set_style_text_font(t, user_font_text(), 0);
     return row;
 }
 
@@ -955,11 +871,10 @@ void wifi_seg_set_style(lv_obj_t *btn, bool selected)
     if(!btn) {
         return;
     }
-    /* 稿 6101:14231：选中段是**白色实块**（不是半透明的深色），未选中全透。 */
-    lv_obj_set_style_bg_color(btn, user_light_card, 0);
-    lv_obj_set_style_bg_opa(btn, selected ? LV_OPA_COVER : LV_OPA_TRANSP, 0);
-    lv_obj_set_style_text_color(btn, user_light_text, 0);
-    lv_obj_set_style_text_opa(btn, selected ? LV_OPA_COVER : LV_OPA_50, 0);
+    lv_obj_set_style_bg_color(btn, user_color_text, 0);
+    lv_obj_set_style_bg_opa(btn, selected ? LV_OPA_20 : LV_OPA_TRANSP, 0);
+    lv_obj_set_style_text_color(btn, selected ? user_color_text
+                                              : user_color_text_dim, 0);
 }
 
 /** 按 g_wifi_on 刷新两段高亮。 */
@@ -980,10 +895,14 @@ void wifi_apply_enabled(bool on)
     } else {
         g_scan_valid = false;                          /* 关闭后清空扫描缓存 */
     }
-    /* 关闭时隐藏下方 WiFi 列表 */
+    /* 关闭时隐藏下方 WiFi 列表与翻页按钮 */
     if(g_wifi_list_box) {
         if(on) lv_obj_remove_flag(g_wifi_list_box, LV_OBJ_FLAG_HIDDEN);
         else   lv_obj_add_flag(g_wifi_list_box, LV_OBJ_FLAG_HIDDEN);
+    }
+    if(g_scroll_btns) {
+        if(on) lv_obj_remove_flag(g_scroll_btns, LV_OBJ_FLAG_HIDDEN);
+        else   lv_obj_add_flag(g_scroll_btns, LV_OBJ_FLAG_HIDDEN);
     }
     wifi_seg_refresh();
 }
@@ -998,13 +917,12 @@ lv_obj_t *make_wifi_seg_btn(lv_obj_t *parent, const char *text, lv_event_cb_t cb
     lv_obj_remove_style_all(btn);
     lv_obj_set_height(btn, LV_PCT(100));
     lv_obj_set_flex_grow(btn, 1);
-    /* 稿 14 = 外框 16 减去 2 的内距，两个圆角才同心 */
-    lv_obj_set_style_radius(btn, USER_HIST_CARD_RADIUS - 2, 0);
+    lv_obj_set_style_radius(btn, USER_RADIUS, 0);
     lv_obj_add_event_cb(btn, cb, LV_EVENT_CLICKED, nullptr);
 
     lv_obj_t *l = lv_label_create(btn);
     lv_label_set_text(l, text);
-    lv_obj_set_style_text_font(l, user_font_title(), 0);
+    lv_obj_set_style_text_font(l, user_font_text(), 0);
     lv_obj_center(l);
     return btn;
 }
@@ -1014,18 +932,16 @@ void make_wifi_seg_toggle(lv_obj_t *parent)
 {
     lv_obj_t *seg = lv_obj_create(parent);
     lv_obj_remove_style_all(seg);
-    /* 稿 6101:14231 是 256×72、圆角 16、内距 2、段间 4，底 rgba(51,49,69,0.04)。
-     * 行高是稿的 80 之后旧式的 *16/5 正好算出 256，宽度不用另给；高度那项 *4/5
-     * 只有 64，所以 1280 档单独走 USER_SETTINGS_SEG_H。
-     * **它不跟其余卡片一样满 660 宽**——稿上这一处就是这么窄的。 */
+    /* 稿 3361:18541 是 256×72、圆角 16。行高改成稿的 80 之后旧式的 *16/5 正好算出
+     * 256，宽度不用另给；高度那项 *4/5 只有 64，所以 1280 档单独走 USER_SETTINGS_SEG_H。 */
     lv_obj_set_size(seg, USER_NAV_ITEM_H * 16 / 5,
                     USER_SETTINGS_SEG_H > 0 ? USER_SETTINGS_SEG_H
                                             : USER_NAV_ITEM_H * 4 / 5);
-    lv_obj_set_style_radius(seg, USER_HIST_CARD_RADIUS, 0);
-    lv_obj_set_style_bg_color(seg, user_light_text, 0);
-    lv_obj_set_style_bg_opa(seg, 10, 0);            /* 稿 4% */
-    lv_obj_set_style_pad_all(seg, 2, 0);
-    lv_obj_set_style_pad_column(seg, 4, 0);
+    lv_obj_set_style_radius(seg, USER_RADIUS, 0);
+    lv_obj_set_style_bg_color(seg, user_color_text, 0);
+    lv_obj_set_style_bg_opa(seg, 10, 0);
+    lv_obj_set_style_pad_all(seg, USER_PAD_SM / 2, 0);
+    lv_obj_set_style_pad_column(seg, USER_PAD_SM / 2, 0);
     lv_obj_set_flex_flow(seg, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(seg, LV_FLEX_ALIGN_CENTER,
                           LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
@@ -1034,6 +950,45 @@ void make_wifi_seg_toggle(lv_obj_t *parent)
     g_wifi_seg_on  = make_wifi_seg_btn(seg, "On",  on_wifi_seg_on);
     g_wifi_seg_off = make_wifi_seg_btn(seg, "Off", on_wifi_seg_off);
     wifi_seg_refresh();
+}
+
+void on_wifi_scroll_up(lv_event_t *)
+{
+    if(g_wifi_list) {
+        /* bounded：夹到内容边界，避免翻过头出现空白（无边界滚动） */
+        lv_obj_scroll_by_bounded(g_wifi_list, 0, USER_NAV_ITEM_H * 2, LV_ANIM_ON);
+    }
+}
+
+void on_wifi_scroll_down(lv_event_t *)
+{
+    if(g_wifi_list) {
+        lv_obj_scroll_by_bounded(g_wifi_list, 0, -USER_NAV_ITEM_H * 2, LV_ANIM_ON);
+    }
+}
+
+/** 右侧竖排圆形翻页按钮（对齐设计稿磨砂上下钮） */
+lv_obj_t *make_scroll_btn(lv_obj_t *parent, const char *sym, lv_event_cb_t cb)
+{
+    lv_obj_t *btn = lv_button_create(parent);
+    lv_obj_remove_style_all(btn);
+    /* 稿 3238:14371 是 64 见方，与历史页/消息页同值，故取公共字段；
+     * 无稿的档位由该字段的 0 退回旧式「比返回钮略大一圈」。 */
+    const int32_t sz = USER_SCROLL_BTN_SZ > 0 ? USER_SCROLL_BTN_SZ
+                                              : USER_BACK_BTN_H * 5 / 4;
+    lv_obj_set_size(btn, sz, sz);
+    lv_obj_set_style_radius(btn, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_bg_color(btn, user_color_panel_alt, 0);
+    lv_obj_set_style_bg_opa(btn, LV_OPA_60, 0);
+    lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, LV_STATE_PRESSED);
+    lv_obj_add_event_cb(btn, cb, LV_EVENT_CLICKED, nullptr);
+
+    lv_obj_t *l = lv_label_create(btn);
+    lv_label_set_text(l, sym);
+    lv_obj_set_style_text_color(l, user_color_text, 0);
+    lv_obj_set_style_text_font(l, user_font_text(), 0);
+    lv_obj_center(l);
+    return btn;
 }
 
 /* ---- 网络子页：回调 ---- */
@@ -1073,15 +1028,14 @@ void on_forget_saved(lv_event_t *e)
 void build_network_detail(lv_obj_t *parent)
 {
     /*
-     * 主网络页：WiFi 开关段 +（可隐藏的）列表容器 + 底部 Advanced Settings。
-     * 列表整块纵向滚动——扫到的网络条数不定，超出一屏就得能划。
-     * **右内距不要在这里改**：它是右栏的稿值 64，改了整页横向就偏了
-     * （旧版曾在此加宽到 79 给悬浮翻页钮让位，钮已按新稿删掉）。
+     * 主网络页：WiFi 开关行 +（可隐藏的）列表容器 + 底部 Advanced Settings。
+     * 列表整块纵向滚动；翻页按钮做成整屏右侧垂直居中的悬浮层，不随内容滚动。
      */
     lv_obj_add_flag(parent, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_scroll_dir(parent, LV_DIR_VER);
     lv_obj_set_scrollbar_mode(parent, LV_SCROLLBAR_MODE_OFF);
-    g_wifi_list = parent;
+    lv_obj_set_style_pad_right(parent, USER_BACK_BTN_H * 5 / 4 + USER_PAD, 0); /* 给悬浮翻页按钮留位 */
+    g_wifi_list = parent;   /* 翻页按钮滚动整个详情 */
 
     /* WiFi 开关区：上方 "WiFi" 标签 + 下方矩形分段开关（On | Off） */
     lv_obj_t *sw_sec = lv_obj_create(parent);
@@ -1093,9 +1047,11 @@ void build_network_detail(lv_obj_t *parent)
     lv_obj_set_style_bg_opa(sw_sec, LV_OPA_TRANSP, 0);
     lv_obj_clear_flag(sw_sec, LV_OBJ_FLAG_SCROLLABLE);
 
-    /* 分区标题走 make_caption，与本页其余分区同款（稿 6101:14249，22/#333145）。
-     * 这里原先是自己写的白字 20——白字压在 #FAFAFA 上等于看不见。 */
-    make_caption(sw_sec, "Wi-Fi");
+    lv_obj_t *sw_lbl = lv_label_create(sw_sec);
+    lv_label_set_text(sw_lbl, "WiFi");
+    lv_obj_set_style_text_color(sw_lbl, user_color_text, 0);
+    /* 分组标题：稿 3361:18540 是「一级标题」20。 */
+    lv_obj_set_style_text_font(sw_lbl, user_font_title(), 0);
 
     make_wifi_seg_toggle(sw_sec);
 
@@ -1143,9 +1099,39 @@ void build_network_detail(lv_obj_t *parent)
 
     make_link_row(box, "Advanced Settings", on_advanced_click, nullptr);
 
-    /* WiFi 关时：隐藏列表容器（重建后也保持隐藏） */
+    /*
+     * 翻页按钮：悬浮在整屏右侧、垂直居中，不随内容滚动。
+     * 用 FLOATING 脱离布局/滚动；挂在整页根 g_page 上，故按整屏居中。
+     */
+    if(g_page) {
+        lv_obj_t *col = lv_obj_create(g_page);
+        lv_obj_remove_style_all(col);
+        lv_obj_set_size(col, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+        lv_obj_add_flag(col, LV_OBJ_FLAG_FLOATING);
+        lv_obj_set_flex_flow(col, LV_FLEX_FLOW_COLUMN);
+        lv_obj_set_flex_align(col, LV_FLEX_ALIGN_CENTER,
+                              LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+        /* 上下钮间距取公共字段（稿 160）。本页那张稿 3238:14371/14374 量出来是 192，
+         * 与历史页/消息页的 160 不一致；三取其二后统一到 160，不为孤例单开字段。 */
+        lv_obj_set_style_pad_row(col, USER_SCROLL_BTN_GAP > 0 ? USER_SCROLL_BTN_GAP
+                                                              : USER_PAD_LG, 0);
+        lv_obj_set_style_bg_opa(col, LV_OPA_TRANSP, 0);
+        lv_obj_clear_flag(col, LV_OBJ_FLAG_SCROLLABLE);
+        /* 稿 3238:14371/14374 在 x=1184、64 见方 → 距屏右 32（USER_PAD_LG）。
+         * 两栏那边给右侧留了 USER_SETTINGS_GUTTER_R 的空，这两颗钮正落在那一段里，
+         * 不再压住右栏内容。 */
+        lv_obj_align(col, LV_ALIGN_RIGHT_MID, -USER_PAD_LG, 0);
+        make_scroll_btn(col, LV_SYMBOL_UP, on_wifi_scroll_up);
+        make_scroll_btn(col, LV_SYMBOL_DOWN, on_wifi_scroll_down);
+        g_scroll_btns = col;
+    }
+
+    /* WiFi 关时：隐藏列表容器与翻页按钮（重建后也保持隐藏） */
     if(!g_wifi_on) {
         lv_obj_add_flag(g_wifi_list_box, LV_OBJ_FLAG_HIDDEN);
+        if(g_scroll_btns) {
+            lv_obj_add_flag(g_scroll_btns, LV_OBJ_FLAG_HIDDEN);
+        }
     }
 }
 
@@ -1154,7 +1140,7 @@ void build_wifi_advanced(lv_obj_t *parent)
 {
     make_subpage_header(parent, "Advanced Settings", on_net_back_main);
 
-    lv_obj_t *card = make_light_card(parent);
+    lv_obj_t *card = ui_user_make_frosted_card(parent, false);
     lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_style_pad_row(card, USER_PAD, 0);
 
@@ -1183,9 +1169,12 @@ void build_saved_networks(lv_obj_t *parent)
         lv_obj_t *row = lv_obj_create(parent);
         lv_obj_remove_style_all(row);
         lv_obj_set_width(row, LV_PCT(100));
-        lv_obj_set_height(row, LV_SIZE_CONTENT);
-        apply_card_style(row);
-        lv_obj_set_style_bg_color(row, user_light_card, LV_STATE_PRESSED);
+        lv_obj_set_height(row, USER_NAV_ITEM_H);
+        lv_obj_set_style_radius(row, USER_BTN_RADIUS, 0);   /* 稿 8 */
+        lv_obj_set_style_bg_color(row, user_color_text, 0);
+        lv_obj_set_style_bg_opa(row, 10, 0);
+        lv_obj_set_style_pad_hor(row, USER_PAD, 0);
+        lv_obj_set_style_pad_column(row, USER_PAD, 0);
         lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
         lv_obj_set_flex_align(row, LV_FLEX_ALIGN_START,
                               LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
@@ -1193,12 +1182,12 @@ void build_saved_networks(lv_obj_t *parent)
 
         lv_obj_t *icon = lv_label_create(row);
         lv_label_set_text(icon, LV_SYMBOL_WIFI);
-        lv_obj_set_style_text_color(icon, user_light_text, 0);
+        lv_obj_set_style_text_color(icon, user_color_text, 0);
         lv_obj_set_style_text_font(icon, user_font_text(), 0);
 
         lv_obj_t *lbl = lv_label_create(row);
         lv_label_set_text(lbl, ssid);
-        lv_obj_set_style_text_color(lbl, user_light_text, 0);
+        lv_obj_set_style_text_color(lbl, user_color_text, 0);
         lv_obj_set_style_text_font(lbl, user_font_title(), 0);   /* 稿「一级标题」20 */
         lv_label_set_long_mode(lbl, LV_LABEL_LONG_MODE_DOTS);
         lv_obj_set_flex_grow(lbl, 1);
@@ -1226,9 +1215,8 @@ void build_wifi_empty(lv_obj_t *parent)
 
     lv_obj_t *l = lv_label_create(parent);
     lv_label_set_text(l, "(coming soon)");
-    lv_obj_set_style_text_color(l, user_light_text, 0);
-    lv_obj_set_style_text_opa(l, LV_OPA_50, 0);
-    lv_obj_set_style_text_font(l, user_font_title(), 0);
+    lv_obj_set_style_text_color(l, user_color_text_dim, 0);
+    lv_obj_set_style_text_font(l, user_font_text(), 0);
     lv_obj_set_style_margin_top(l, USER_PAD_LG, 0);
 }
 
@@ -1236,7 +1224,7 @@ void build_wifi_connected_detail(lv_obj_t *parent)
 {
     make_subpage_header(parent, wifi_current_ssid(), on_net_back_main);
 
-    lv_obj_t *card = make_light_card(parent);
+    lv_obj_t *card = ui_user_make_frosted_card(parent, false);
     lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_style_pad_row(card, USER_PAD, 0);
 
@@ -1248,6 +1236,10 @@ void build_wifi_connected_detail(lv_obj_t *parent)
 /* ---- 网络子页切换（清空详情区后重建目标子视图） ---- */
 void net_reset(void)
 {
+    if(g_scroll_btns) {
+        lv_obj_del(g_scroll_btns);
+        g_scroll_btns = nullptr;
+    }
     g_wifi_list = nullptr;
     g_wifi_list_box = nullptr;
     g_wifi_seg_on = nullptr;
@@ -1255,6 +1247,7 @@ void net_reset(void)
     g_ip_val_lbl = nullptr;
     lv_obj_clean(g_detail);
     lv_obj_clear_flag(g_detail, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_style_pad_right(g_detail, 0, 0);
 }
 
 void net_show_main(void)        { g_net_subpage = NET_MAIN;     net_reset(); build_network_detail(g_detail); }
@@ -1269,15 +1262,14 @@ lv_obj_t *about_add_row(lv_obj_t *card, const char *label, const char *value)
     lv_obj_t *row = ui_user_make_setting_row(card, label, nullptr, nullptr);
     lv_obj_t *val = lv_label_create(row);
     lv_label_set_text(val, value);
-    lv_obj_set_style_text_color(val, user_light_text, 0);
-    lv_obj_set_style_text_opa(val, LV_OPA_50, 0);
-    lv_obj_set_style_text_font(val, user_font_title(), 0);
+    lv_obj_set_style_text_color(val, user_color_text_dim, 0);
+    lv_obj_set_style_text_font(val, user_font_text(), 0);
     return val;
 }
 
 void build_about_detail(lv_obj_t *parent)
 {
-    lv_obj_t *card = make_light_card(parent);
+    lv_obj_t *card = ui_user_make_frosted_card(parent, false);
     lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
 
     about_add_row(card, "Software Version", UPC_SW_VERSION);
@@ -1286,11 +1278,6 @@ void build_about_detail(lv_obj_t *parent)
     g_mcu_ver_lbl = about_add_row(card, "MCU Version", g_mcu_ver_text);
     /* 振镜板版本来自 TCP 0x0F 首包缓存：先填缓存，进页 Req 后由 galvo_ver_* 刷新 */
     g_galvo_ver_lbl = about_add_row(card, "Galvo Version", g_galvo_ver_text);
-
-    /* 两枚 OTA 入口原本挂在「Device & Account」下，新稿去掉了那一项——它装的是
-     * 固件升级、与账号无关。挪到 About：版本号就在上面几行，语义上最近。 */
-    ui_user_make_setting_row(card, "Galvo OTA", "Start", on_glavo_ota_entry_click);
-    ui_user_make_setting_row(card, "MCU OTA", "Start", on_mcu_ota_entry_click);
 }
 
 lv_obj_t *g_bl_pct_lbl = nullptr;
@@ -1316,504 +1303,78 @@ void on_backlight_slider(lv_event_t *e)
     backlight_refresh_pct_label(static_cast<int>(v));
 }
 
-/* ---- 熄屏时间（稿 6235:91471 / 6240:92007）----
- *
- * **纯 UI 占位**：选项只存在这个静态变量里，不落盘、也不真的熄屏。
- * 工程里目前连背光超时都没有（背光亮度本身也不落盘，重启回默认），要真做得先定
- * 熄屏策略（空闲计时器 + 背光置 0 或 sysfs blank + 触摸唤醒），那是另一件事。
- */
-constexpr const char *kSleepOptions[] = {
-    "30 sec", "1 min", "2 min", "3 min", "4 min", "5 min", "Never",
-};
-constexpr int kSleepOptionCount =
-    static_cast<int>(sizeof(kSleepOptions) / sizeof(kSleepOptions[0]));
-int g_sleep_idx = 5;   /**< 默认 5 min，与稿上的选中项一致 */
-
-void disp_show_main(void);
-void disp_show_sleep(void);
-
-void on_sleep_row_click(lv_event_t *)   { disp_show_sleep(); }
-void on_sleep_back(lv_event_t *)        { disp_show_main(); }
-
-void on_sleep_pick(lv_event_t *e)
-{
-    const int idx = static_cast<int>(
-        reinterpret_cast<intptr_t>(lv_event_get_user_data(e)));
-    if(idx >= 0 && idx < kSleepOptionCount) {
-        g_sleep_idx = idx;
-    }
-    disp_show_main();
-}
-
-/** 亮度卡（稿 6235:91455：column / 内距 24 / 行距 24）+ 熄屏时间行。 */
 void build_display_detail(lv_obj_t *parent)
 {
     const int32_t slider_touch_h = (USER_PROGRESS_H * 2 > 24) ? USER_PROGRESS_H * 2 : 24;
     const int32_t knob_sz = (USER_PROGRESS_H * 3 > 28) ? USER_PROGRESS_H * 3 : 28;
+    const int32_t knob_overflow = (knob_sz - slider_touch_h + 1) / 2;
 
-    /* ---- Screen Brightness ---- */
-    lv_obj_t *sec = lv_obj_create(parent);
-    lv_obj_remove_style_all(sec);
-    lv_obj_set_width(sec, LV_PCT(100));
-    lv_obj_set_height(sec, LV_SIZE_CONTENT);
-    lv_obj_set_flex_flow(sec, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_style_pad_row(sec, USER_PAD_SM, 0);   /* 稿 标题↔卡片 16 */
-    lv_obj_set_style_bg_opa(sec, LV_OPA_TRANSP, 0);
-    lv_obj_clear_flag(sec, LV_OBJ_FLAG_SCROLLABLE);
-    make_caption(sec, "Screen Brightness");
+    lv_obj_t *card = ui_user_make_frosted_card(parent, false);
+    lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_row(card, USER_PAD, 0);
+    lv_obj_set_style_pad_ver(card, USER_PAD_SM + knob_overflow, 0);
 
-    lv_obj_t *card = lv_obj_create(sec);
-    lv_obj_remove_style_all(card);
-    lv_obj_set_width(card, LV_PCT(100));
-    lv_obj_set_height(card, LV_SIZE_CONTENT);
-    apply_card_style(card);
-    lv_obj_set_style_bg_color(card, user_light_card, LV_STATE_PRESSED);
-    lv_obj_set_flex_flow(card, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(card, LV_FLEX_ALIGN_START,
+    lv_obj_t *head = lv_obj_create(card);
+    lv_obj_remove_style_all(head);
+    lv_obj_set_width(head, LV_PCT(100));
+    lv_obj_set_height(head, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(head, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(head, LV_FLEX_ALIGN_SPACE_BETWEEN,
                           LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_style_bg_opa(head, LV_OPA_TRANSP, 0);
+    lv_obj_clear_flag(head, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *title = lv_label_create(head);
+    lv_label_set_text(title, "Brightness");
+    lv_obj_set_style_text_color(title, user_color_text, 0);
+    lv_obj_set_style_text_font(title, user_font_title(), 0);
+
+    g_bl_pct_lbl = lv_label_create(head);
+    lv_obj_set_style_text_color(g_bl_pct_lbl, user_color_text_dim, 0);
+    lv_obj_set_style_text_font(g_bl_pct_lbl, user_font_text(), 0);
 
     int pct = ui::backlight_get_percent();
-    if(pct < 5)   { pct = (pct < 0) ? 80 : 5; }
-    if(pct > 100) { pct = 100; }
-
-    /* 稿 6235:91455 的滑条左右各有一枚小/大太阳图标盒；工程没有那两个矢量资源，
-     * 用同尺寸的百分比标签顶上——信息量只多不少，且亮度值本来就该看得见。 */
-    g_bl_pct_lbl = lv_label_create(card);
-    lv_obj_set_style_text_color(g_bl_pct_lbl, user_light_text, 0);
-    lv_obj_set_style_text_opa(g_bl_pct_lbl, LV_OPA_50, 0);
-    lv_obj_set_style_text_font(g_bl_pct_lbl, user_font_title(), 0);
+    if(pct < 5) {
+        pct = (pct < 0) ? 80 : 5;
+    }
+    if(pct > 100) {
+        pct = 100;
+    }
     backlight_refresh_pct_label(pct);
 
     lv_obj_t *slider = lv_slider_create(card);
-    lv_obj_set_flex_grow(slider, 1);
+    lv_obj_set_width(slider, LV_PCT(100));
     lv_obj_set_height(slider, slider_touch_h);
     lv_slider_set_range(slider, 5, 100);
     lv_slider_set_value(slider, pct, LV_ANIM_OFF);
-    lv_obj_set_style_bg_color(slider, user_light_text, LV_PART_MAIN);
-    lv_obj_set_style_bg_opa(slider, 26, LV_PART_MAIN);
+    lv_obj_set_style_bg_color(slider, user_color_panel_alt, LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(slider, LV_OPA_70, LV_PART_MAIN);
     lv_obj_set_style_radius(slider, LV_RADIUS_CIRCLE, LV_PART_MAIN);
-    /* 稿上填充段是深色 #333145，不是主色蓝 */
-    lv_obj_set_style_bg_color(slider, user_light_text, LV_PART_INDICATOR);
+    lv_obj_set_style_bg_color(slider, user_color_accent, LV_PART_INDICATOR);
     lv_obj_set_style_radius(slider, LV_RADIUS_CIRCLE, LV_PART_INDICATOR);
-    lv_obj_set_style_bg_color(slider, user_light_card, LV_PART_KNOB);
-    lv_obj_set_style_border_width(slider, 1, LV_PART_KNOB);
-    lv_obj_set_style_border_color(slider, user_light_divider, LV_PART_KNOB);
+    lv_obj_set_style_bg_color(slider, user_color_text, LV_PART_KNOB);
     lv_obj_set_style_width(slider, knob_sz, LV_PART_KNOB);
     lv_obj_set_style_height(slider, knob_sz, LV_PART_KNOB);
     lv_obj_set_style_radius(slider, LV_RADIUS_CIRCLE, LV_PART_KNOB);
     lv_obj_set_ext_click_area(slider, USER_PAD);
     lv_obj_add_event_cb(slider, on_backlight_slider, LV_EVENT_VALUE_CHANGED, nullptr);
-
-    /* ---- Sleep Timeout ---- */
-    lv_obj_t *sec2 = lv_obj_create(parent);
-    lv_obj_remove_style_all(sec2);
-    lv_obj_set_width(sec2, LV_PCT(100));
-    lv_obj_set_height(sec2, LV_SIZE_CONTENT);
-    lv_obj_set_flex_flow(sec2, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_style_pad_row(sec2, USER_PAD_SM, 0);
-    lv_obj_set_style_bg_opa(sec2, LV_OPA_TRANSP, 0);
-    lv_obj_clear_flag(sec2, LV_OBJ_FLAG_SCROLLABLE);
-    make_caption(sec2, "Sleep Timeout");
-    make_value_row_clickable(sec2, "Sleep Timeout", kSleepOptions[g_sleep_idx],
-                             on_sleep_row_click);
 }
 
-/** 熄屏时间选择子页（稿 6240:92007）：一张白卡里 7 行单选，选中项右侧蓝勾。 */
-void build_sleep_detail(lv_obj_t *parent)
+void build_device_detail(lv_obj_t *parent)
 {
-    lv_obj_t *sec = lv_obj_create(parent);
-    lv_obj_remove_style_all(sec);
-    lv_obj_set_width(sec, LV_PCT(100));
-    lv_obj_set_height(sec, LV_SIZE_CONTENT);
-    lv_obj_set_flex_flow(sec, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_style_pad_row(sec, USER_PAD_SM, 0);
-    lv_obj_set_style_bg_opa(sec, LV_OPA_TRANSP, 0);
-    lv_obj_clear_flag(sec, LV_OBJ_FLAG_SCROLLABLE);
-    make_caption(sec, "Sleep Timeout");
-
-    /* 稿上 7 行是**一整张卡**、行间以分隔线断开，不是 7 张卡 */
-    lv_obj_t *card = lv_obj_create(sec);
-    lv_obj_remove_style_all(card);
-    lv_obj_set_width(card, LV_PCT(100));
-    lv_obj_set_height(card, LV_SIZE_CONTENT);
-    apply_card_style(card);
-    lv_obj_set_style_bg_color(card, user_light_card, LV_STATE_PRESSED);
-    lv_obj_set_style_pad_all(card, 0, 0);   /* 内距落到每一行上，分隔线才能通栏 */
+    lv_obj_t *card = ui_user_make_frosted_card(parent, false);
     lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
-    lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
 
-    for(int i = 0; i < kSleepOptionCount; i++) {
-        lv_obj_t *row = lv_button_create(card);
-        lv_obj_remove_style_all(row);
-        lv_obj_set_width(row, LV_PCT(100));
-        lv_obj_set_height(row, LV_SIZE_CONTENT);
-        lv_obj_set_style_pad_all(row, USER_PAD, 0);
-        lv_obj_set_style_bg_color(row, user_light_more_bg, LV_STATE_PRESSED);
-        lv_obj_set_style_bg_opa(row, LV_OPA_COVER, LV_STATE_PRESSED);
-        lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
-        lv_obj_set_flex_align(row, LV_FLEX_ALIGN_START,
-                              LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-        lv_obj_add_event_cb(row, on_sleep_pick, LV_EVENT_CLICKED,
-                            reinterpret_cast<void *>(static_cast<intptr_t>(i)));
-
-        lv_obj_t *lbl = lv_label_create(row);
-        lv_label_set_text(lbl, kSleepOptions[i]);
-        lv_obj_set_style_text_font(lbl, user_font_title(), 0);
-        lv_obj_set_style_text_color(lbl, user_light_text, 0);
-        lv_obj_set_flex_grow(lbl, 1);
-
-        if(i == g_sleep_idx) {
-            lv_obj_t *tick = lv_label_create(row);
-            lv_label_set_text(tick, LV_SYMBOL_OK);
-            lv_obj_set_style_text_font(tick, user_font_text(), 0);
-            lv_obj_set_style_text_color(tick, user_light_accent, 0);
-        }
-        if(i + 1 < kSleepOptionCount) {
-            /* 那个 helper 默认上深色档的分隔色，压在白卡上太重，换浅色档的 */
-            lv_obj_t *ln = ui_user_make_divider_line(card, LV_PCT(100));
-            lv_obj_set_style_bg_color(ln, user_light_divider, 0);
-            lv_obj_set_style_bg_opa(ln, LV_OPA_50, 0);
-        }
-    }
-
-    /* 稿 6240:92007 右下那枚浮动返回钮。**只有这一页用**，其余子页仍是顶部返回条。 */
-    if(g_page) {
-        lv_obj_t *back = lv_button_create(g_page);
-        lv_obj_remove_style_all(back);
-        lv_obj_add_flag(back, LV_OBJ_FLAG_FLOATING);
-        lv_obj_set_size(back, USER_LIGHT_BTN_SZ, USER_LIGHT_BTN_SZ);
-        apply_card_style(back);
-        lv_obj_set_style_pad_all(back, 0, 0);
-        lv_obj_align(back, LV_ALIGN_BOTTOM_RIGHT, -USER_PAD_LG, -USER_PAD_LG);
-        lv_obj_add_event_cb(back, on_sleep_back, LV_EVENT_CLICKED, nullptr);
-        lv_obj_t *ico = lv_label_create(back);
-        lv_label_set_text(ico, LV_SYMBOL_LEFT);
-        lv_obj_set_style_text_font(ico, user_font_title(), 0);
-        lv_obj_set_style_text_color(ico, user_light_text, 0);
-        lv_obj_center(ico);
-        g_float_back = back;
-    }
+    ui_user_make_setting_row(card, "Galvo OTA", "Start", on_glavo_ota_entry_click);
+    ui_user_make_setting_row(card, "MCU OTA", "Start", on_mcu_ota_entry_click);
 }
-
-/* ============================================================================
- *  存储管理（稿 6251:94362）
- *
- *  **只做前端**：容量走现成的 UI_Storage_Usage_Req（media 侧只实现了主机那一卷，
- *  SD 卡回 present=0）；格式化那三条消息是新留的契约，后端未实现，发出去没人应答。
- *  后端要补什么见 doc/STORAGE_BACKEND_API.md。
- * ========================================================================= */
-
-struct VolCard {
-    lv_obj_t *bar   = nullptr;   /**< 容量条的填充段 */
-    lv_obj_t *value = nullptr;   /**< 右下角的剩余量文字 */
-};
-VolCard g_vol_cards[2];          /**< 0=Internal 1=SdCard，与稿上两张卡同序 */
-lv_obj_t *g_fmt_usb_btn = nullptr;   /**< U 盘格式化钮，没插盘时置灰 */
-bool g_usb_present = false;
-ui_modal_dialog_t *g_fmt_dlg = nullptr;
-middleware::StorageVolume g_fmt_target = middleware::StorageVolume::Internal;
-
-void fmt_dlg_close(void)
-{
-    if(g_fmt_dlg) {
-        ui_modal_dialog_close(g_fmt_dlg);
-        g_fmt_dlg = nullptr;
-    }
-}
-
-void bytes_to_text(uint64_t bytes, char *buf, size_t n)
-{
-    const double gb = static_cast<double>(bytes) / (1024.0 * 1024.0 * 1024.0);
-    if(gb >= 1.0) { std::snprintf(buf, n, "%.0f GB", gb); }
-    else          { std::snprintf(buf, n, "%.0f MB", gb * 1024.0); }
-}
-
-/** 一张容量卡（稿 6285:12447：column / 内距 20 / 行距 12）。 */
-void make_volume_card(lv_obj_t *parent, int slot, const char *title)
-{
-    lv_obj_t *card = lv_obj_create(parent);
-    lv_obj_remove_style_all(card);
-    lv_obj_set_flex_grow(card, 1);
-    lv_obj_set_height(card, LV_SIZE_CONTENT);
-    apply_card_style(card);
-    lv_obj_set_style_bg_color(card, user_light_card, LV_STATE_PRESSED);
-    lv_obj_set_style_pad_all(card, USER_PAD_SM + 4, 0);   /* 稿 20 */
-    lv_obj_set_style_pad_row(card, USER_PAD_SM * 3 / 4, 0);   /* 稿 12 */
-    lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
-    lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
-
-    lv_obj_t *t = lv_label_create(card);
-    lv_label_set_text(t, title);
-    lv_obj_set_style_text_font(t, user_font_title(), 0);
-    lv_obj_set_style_text_color(t, user_light_text, 0);
-
-    lv_obj_t *track = lv_obj_create(card);
-    lv_obj_remove_style_all(track);
-    lv_obj_set_width(track, LV_PCT(100));
-    lv_obj_set_height(track, USER_PROGRESS_H / 2 > 4 ? USER_PROGRESS_H / 2 : 4);
-    lv_obj_set_style_radius(track, LV_RADIUS_CIRCLE, 0);
-    lv_obj_set_style_bg_color(track, user_light_text, 0);
-    lv_obj_set_style_bg_opa(track, 26, 0);
-    lv_obj_clear_flag(track, LV_OBJ_FLAG_SCROLLABLE);
-
-    lv_obj_t *fill = lv_obj_create(track);
-    lv_obj_remove_style_all(fill);
-    lv_obj_set_height(fill, LV_PCT(100));
-    lv_obj_set_width(fill, 0);
-    lv_obj_set_style_radius(fill, LV_RADIUS_CIRCLE, 0);
-    lv_obj_set_style_bg_color(fill, user_light_text, 0);
-    lv_obj_set_style_bg_opa(fill, LV_OPA_COVER, 0);
-
-    lv_obj_t *row = lv_obj_create(card);
-    lv_obj_remove_style_all(row);
-    lv_obj_set_width(row, LV_PCT(100));
-    lv_obj_set_height(row, LV_SIZE_CONTENT);
-    lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(row, LV_FLEX_ALIGN_SPACE_BETWEEN,
-                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, 0);
-    lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
-
-    lv_obj_t *cap = lv_label_create(row);
-    lv_label_set_text(cap, "Free space");
-    lv_obj_set_style_text_font(cap, user_font_text(), 0);
-    lv_obj_set_style_text_color(cap, user_light_text, 0);
-    lv_obj_set_style_text_opa(cap, LV_OPA_50, 0);
-
-    lv_obj_t *val = lv_label_create(row);
-    lv_label_set_text(val, "--");
-    lv_obj_set_style_text_font(val, user_font_title(), 0);
-    lv_obj_set_style_text_color(val, user_light_text, 0);
-
-    g_vol_cards[slot].bar   = fill;
-    g_vol_cards[slot].value = val;
-}
-
-/** 收到容量回执：更新对应那张卡。present=0 时显示 `--` 并把条清零。 */
-void storage_apply_usage(const middleware::StorageUsagePayload &p)
-{
-    const int slot = (p.volume == static_cast<uint8_t>(middleware::StorageVolume::SdCard))
-                     ? 1 : 0;
-    if(p.volume == static_cast<uint8_t>(middleware::StorageVolume::UsbDisk)) {
-        return;   /* U 盘不在概览里，只在格式化那一行 */
-    }
-    VolCard &c = g_vol_cards[slot];
-    if(!c.value || !c.bar) {
-        return;
-    }
-    if(!p.present || p.total_bytes == 0) {
-        lv_label_set_text(c.value, "--");
-        lv_obj_set_width(c.bar, 0);
-        return;
-    }
-    char buf[32];
-    bytes_to_text(p.total_bytes - p.used_bytes, buf, sizeof(buf));
-    lv_label_set_text(c.value, buf);
-    const int32_t pct = static_cast<int32_t>(p.used_bytes * 100u / p.total_bytes);
-    lv_obj_set_width(c.bar, lv_pct(pct > 100 ? 100 : pct));
-}
-
-void on_fmt_cancel(lv_event_t *) { fmt_dlg_close(); }
-
-void on_fmt_confirm(lv_event_t *)
-{
-    fmt_dlg_close();
-    ui::UiMsgProxy::instance().send_storage_format(g_fmt_target);
-    /* 后端未实现，这条发出去不会有回执；toast 明说，免得用户以为在跑 */
-    ui_toast_show("Format requested (backend pending)", user_color_accent, 2500);
-}
-
-/** 格式化二次确认（稿 6283:26740）：复用历史页那个浅色档弹窗。 */
-void open_format_confirm(middleware::StorageVolume vol, const char *what)
-{
-    if(g_fmt_dlg) {
-        return;
-    }
-    g_fmt_target = vol;
-    char title[64];
-    std::snprintf(title, sizeof(title), "Format %s?", what);
-
-    ui_modal_dialog_cfg_t cfg = ui_modal_dialog_cfg_user(title, USER_DLG_W, true);
-    cfg.light_theme = true;
-    g_fmt_dlg = ui_modal_dialog_open(lv_layer_top(), &cfg);
-    if(!g_fmt_dlg) {
-        return;
-    }
-    lv_obj_t *body = ui_user_make_body_label(g_fmt_dlg->body,
-                                             "All data will be erased.");
-    lv_label_set_long_mode(body, LV_LABEL_LONG_MODE_WRAP);
-    lv_obj_set_width(body, LV_PCT(100));
-    lv_obj_set_style_text_align(body, LV_TEXT_ALIGN_CENTER, 0);
-    /* 同历史页删除弹窗：稿是 rgba(51,49,69,0.5)，用实色 + 50% 文字不透明度压出来 */
-    lv_obj_set_style_text_color(body, user_light_text, 0);
-    lv_obj_set_style_text_opa(body, LV_OPA_50, 0);
-    lv_obj_set_style_text_font(body, user_font_title(), 0);
-
-    ui_user_make_confirm_footer_btn(g_fmt_dlg->footer, "Cancel", false,
-                                    user_color_panel_alt, true,
-                                    on_fmt_cancel, nullptr);
-    ui_user_make_confirm_footer_btn(g_fmt_dlg->footer, "Confirm", true,
-                                    user_color_status_err, true,
-                                    on_fmt_confirm, nullptr);
-}
-
-void on_fmt_internal(lv_event_t *)
-{
-    open_format_confirm(middleware::StorageVolume::Internal, "internal storage");
-}
-void on_fmt_usb(lv_event_t *)
-{
-    if(!g_usb_present) {
-        ui_toast_show("No USB drive", user_color_text_dim, 1500);
-        return;
-    }
-    open_format_confirm(middleware::StorageVolume::UsbDisk, "USB drive");
-}
-void on_album_click(lv_event_t *) { ui_toast_show("Not implemented", user_color_text_dim, 1200); }
-void on_model_click(lv_event_t *) { ui_toast_show("Not implemented", user_color_text_dim, 1200); }
-
-/** 格式化行：[标题 / 副标题 ... 红描边按钮]（稿 6285:12401）。 */
-lv_obj_t *make_format_row(lv_obj_t *parent, const char *title, const char *sub,
-                          lv_event_cb_t cb)
-{
-    lv_obj_t *row = lv_obj_create(parent);
-    lv_obj_remove_style_all(row);
-    lv_obj_set_width(row, LV_PCT(100));
-    lv_obj_set_height(row, LV_SIZE_CONTENT);
-    apply_card_style(row);
-    lv_obj_set_style_bg_color(row, user_light_card, LV_STATE_PRESSED);
-    lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(row, LV_FLEX_ALIGN_START,
-                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
-
-    lv_obj_t *col = lv_obj_create(row);
-    lv_obj_remove_style_all(col);
-    lv_obj_set_flex_grow(col, 1);
-    lv_obj_set_height(col, LV_SIZE_CONTENT);
-    lv_obj_set_flex_flow(col, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_style_pad_row(col, USER_PAD_SM / 2, 0);
-    lv_obj_set_style_bg_opa(col, LV_OPA_TRANSP, 0);
-    lv_obj_clear_flag(col, LV_OBJ_FLAG_SCROLLABLE);
-
-    lv_obj_t *t = lv_label_create(col);
-    lv_label_set_text(t, title);
-    lv_obj_set_style_text_font(t, user_font_title(), 0);
-    lv_obj_set_style_text_color(t, user_light_text, 0);
-
-    lv_obj_t *s = lv_label_create(col);
-    lv_label_set_text(s, sub);
-    lv_obj_set_style_text_font(s, user_font_text(), 0);
-    lv_obj_set_style_text_color(s, user_light_text, 0);
-    lv_obj_set_style_text_opa(s, LV_OPA_50, 0);
-
-    /* 稿 image5：红描边白底（image6 那版深色实心是设计删改时的残留，以 image5 为准） */
-    lv_obj_t *btn = lv_button_create(row);
-    lv_obj_remove_style_all(btn);
-    lv_obj_set_size(btn, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
-    lv_obj_set_style_radius(btn, USER_BTN_RADIUS, 0);
-    lv_obj_set_style_bg_opa(btn, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_border_width(btn, 1, 0);
-    lv_obj_set_style_border_color(btn, user_color_status_err, 0);
-    lv_obj_set_style_bg_color(btn, user_color_status_err, LV_STATE_PRESSED);
-    lv_obj_set_style_bg_opa(btn, 26, LV_STATE_PRESSED);
-    lv_obj_set_style_pad_hor(btn, USER_PAD, 0);
-    lv_obj_set_style_pad_ver(btn, USER_PAD_SM / 2, 0);
-    lv_obj_add_event_cb(btn, cb, LV_EVENT_CLICKED, nullptr);
-
-    lv_obj_t *bl = lv_label_create(btn);
-    lv_label_set_text(bl, "Format");
-    lv_obj_set_style_text_font(bl, user_font_text(), 0);
-    lv_obj_set_style_text_color(bl, user_color_status_err, 0);
-    lv_obj_center(bl);
-    return btn;
-}
-
-/** 存储管理详情页：存储概览 + 格式化 + 文件管理 三段。 */
-void build_storage_detail(lv_obj_t *parent)
-{
-    g_vol_cards[0] = VolCard{};
-    g_vol_cards[1] = VolCard{};
-
-    /* ---- Storage Overview ---- */
-    lv_obj_t *s1 = lv_obj_create(parent);
-    lv_obj_remove_style_all(s1);
-    lv_obj_set_width(s1, LV_PCT(100));
-    lv_obj_set_height(s1, LV_SIZE_CONTENT);
-    lv_obj_set_flex_flow(s1, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_style_pad_row(s1, USER_PAD_SM, 0);
-    lv_obj_set_style_bg_opa(s1, LV_OPA_TRANSP, 0);
-    lv_obj_clear_flag(s1, LV_OBJ_FLAG_SCROLLABLE);
-    make_caption(s1, "Storage Overview");
-
-    lv_obj_t *cards = lv_obj_create(s1);
-    lv_obj_remove_style_all(cards);
-    lv_obj_set_width(cards, LV_PCT(100));
-    lv_obj_set_height(cards, LV_SIZE_CONTENT);
-    lv_obj_set_flex_flow(cards, LV_FLEX_FLOW_ROW);
-    lv_obj_set_style_pad_column(cards, USER_PAD_SM, 0);   /* 稿 两卡间距 16 */
-    lv_obj_set_style_bg_opa(cards, LV_OPA_TRANSP, 0);
-    lv_obj_clear_flag(cards, LV_OBJ_FLAG_SCROLLABLE);
-    make_volume_card(cards, 0, "Internal Storage");
-    make_volume_card(cards, 1, "SD Card");
-
-    /* ---- Format ---- */
-    lv_obj_t *s2 = lv_obj_create(parent);
-    lv_obj_remove_style_all(s2);
-    lv_obj_set_width(s2, LV_PCT(100));
-    lv_obj_set_height(s2, LV_SIZE_CONTENT);
-    lv_obj_set_flex_flow(s2, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_style_pad_row(s2, USER_PAD_SM, 0);
-    lv_obj_set_style_bg_opa(s2, LV_OPA_TRANSP, 0);
-    lv_obj_clear_flag(s2, LV_OBJ_FLAG_SCROLLABLE);
-    make_caption(s2, "Format");
-    make_format_row(s2, "Format internal storage",
-                    "Erases all data on the device", on_fmt_internal);
-    g_fmt_usb_btn = make_format_row(s2, "Format USB drive",
-                                    "Erases all data on the USB drive", on_fmt_usb);
-    if(!g_usb_present) {
-        lv_obj_set_style_opa(g_fmt_usb_btn, LV_OPA_40, 0);
-    }
-
-    /* ---- File Management（两行只画不接，去向待定）---- */
-    lv_obj_t *s3 = lv_obj_create(parent);
-    lv_obj_remove_style_all(s3);
-    lv_obj_set_width(s3, LV_PCT(100));
-    lv_obj_set_height(s3, LV_SIZE_CONTENT);
-    lv_obj_set_flex_flow(s3, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_style_pad_row(s3, USER_PAD_SM, 0);
-    lv_obj_set_style_bg_opa(s3, LV_OPA_TRANSP, 0);
-    lv_obj_clear_flag(s3, LV_OBJ_FLAG_SCROLLABLE);
-    make_caption(s3, "File Management");
-    make_link_row(s3, "Album", on_album_click, nullptr);
-    make_link_row(s3, "Models", on_model_click, nullptr);
-
-    /* 进页拉一次两个卷的容量（SD 卡那支后端未实现，会回 present=0） */
-    ui::UiMsgProxy::instance().send_storage_usage(middleware::StorageVolume::Internal);
-    ui::UiMsgProxy::instance().send_storage_usage(middleware::StorageVolume::SdCard);
-}
-
-void disp_reset(void)
-{
-    if(g_float_back) {
-        lv_obj_del(g_float_back);
-        g_float_back = nullptr;
-    }
-    g_bl_pct_lbl = nullptr;
-    lv_obj_clean(g_detail);
-}
-
-void disp_show_main(void)  { disp_reset(); build_display_detail(g_detail); }
-void disp_show_sleep(void) { disp_reset(); build_sleep_detail(g_detail); }
 
 void build_placeholder_detail(lv_obj_t *parent, const char *title)
 {
     lv_obj_t *l = lv_label_create(parent);
     lv_label_set_text_fmt(l, "%s\n(coming soon)", title);
-    lv_obj_set_style_text_color(l, user_light_text, 0);
-    lv_obj_set_style_text_opa(l, LV_OPA_50, 0);
-    lv_obj_set_style_text_font(l, user_font_title(), 0);
+    lv_obj_set_style_text_color(l, user_color_text_dim, 0);
+    lv_obj_set_style_text_font(l, user_font_text(), 0);
     lv_obj_set_style_text_align(l, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_center(l);
 }
@@ -1823,10 +1384,10 @@ void show_detail(NavId id)
     if(!g_detail) {
         return;
     }
-    /* 清掉上一次的浮动返回钮（只有熄屏选择子页会创建） */
-    if(g_float_back) {
-        lv_obj_del(g_float_back);
-        g_float_back = nullptr;
+    /* 清掉上一次的悬浮翻页层（仅网络详情会创建） */
+    if(g_scroll_btns) {
+        lv_obj_del(g_scroll_btns);
+        g_scroll_btns = nullptr;
     }
     g_wifi_list = nullptr;
     g_wifi_list_box = nullptr;
@@ -1841,9 +1402,9 @@ void show_detail(NavId id)
     g_bl_pct_lbl = nullptr;
     mcu_ver_stop_timer();
     lv_obj_clean(g_detail);
-    /* 复位详情容器：默认不滚动（网络详情会按需开启）。
-     * 内距不动——那是右栏的稿值 72/64，由 page_user_settings_create 一次设好。 */
+    /* 复位详情容器：默认不滚动、无右内边距（网络详情会按需开启） */
     lv_obj_clear_flag(g_detail, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_style_pad_right(g_detail, 0, 0);
 
     if(id != NAV_NETWORK) {
         wifi_rescan_stop();
@@ -1859,7 +1420,7 @@ void show_detail(NavId id)
         wifi_rescan_start();
         break;
     case NAV_DISPLAY: build_display_detail(g_detail); break;
-    case NAV_STORAGE: build_storage_detail(g_detail); break;
+    case NAV_DEVICE:  build_device_detail(g_detail);  break;
     case NAV_ABOUT:
         build_about_detail(g_detail);
         /* 进入 About：向 MCU 查询一次固件版本；向 Glavo 读振镜板 TCP 首包缓存 */
@@ -1882,15 +1443,10 @@ void update_nav_highlight(void)
         } else {
             lv_obj_clear_state(g_nav_btns[i], LV_STATE_CHECKED);
         }
-        /* 图标与文字的明暗由 LV_STATE_CHECKED 的 image_opa / text_opa 管，
-         * 见 make_nav_item，这里不用再逐个着色。
-         * 右箭头只在选中项露面（Debug 那枚是外链箭头、常驻，见 make_nav_item）。 */
-        if(g_nav_arrows[i] && i != NAV_DEBUG) {
-            if(active) {
-                lv_obj_remove_flag(g_nav_arrows[i], LV_OBJ_FLAG_HIDDEN);
-            } else {
-                lv_obj_add_flag(g_nav_arrows[i], LV_OBJ_FLAG_HIDDEN);
-            }
+        /* 图标随选中态着色：选中白、未选灰（与 btn 文字色一致） */
+        if(g_nav_icons[i]) {
+            lv_obj_set_style_image_recolor(g_nav_icons[i],
+                active ? user_color_text : user_color_text_dim, 0);
         }
     }
 }
@@ -1918,32 +1474,20 @@ lv_obj_t *make_nav_item(lv_obj_t *parent, NavId id)
     lv_obj_t *btn = lv_button_create(parent);
     lv_obj_remove_style_all(btn);
     lv_obj_set_width(btn, LV_PCT(100));
-    lv_obj_set_height(btn, USER_NAV_ITEM_H);   /* 稿 80 = 24 + 32 图标 + 24 */
-    /* 稿 6089:11402：**未选中无底、圆角 8**；选中才是白卡（圆角 16 + 1px 白 10%
-     * 描边 + 0 2 6 rgba(0,0,0,.04) 投影）。两态圆角不同，所以不能只切 bg_opa。 */
+    lv_obj_set_height(btn, USER_NAV_ITEM_H);
+    /* 稿 3361:18467：圆角 8、内距 24、图标↔文字 24。 */
     lv_obj_set_style_radius(btn, USER_BTN_RADIUS, 0);
-    lv_obj_set_style_radius(btn, USER_HIST_CARD_RADIUS, LV_STATE_CHECKED);
-    lv_obj_set_style_bg_color(btn, user_light_card, 0);
+    lv_obj_set_style_bg_color(btn, user_color_text, 0);
     lv_obj_set_style_bg_opa(btn, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, LV_STATE_CHECKED);
-    lv_obj_set_style_bg_opa(btn, 26, LV_STATE_PRESSED);
-    lv_obj_set_style_border_width(btn, 1, LV_STATE_CHECKED);
-    lv_obj_set_style_border_color(btn, lv_color_white(), LV_STATE_CHECKED);
-    lv_obj_set_style_border_opa(btn, 26, LV_STATE_CHECKED);
-    lv_obj_set_style_shadow_width(btn, 6, LV_STATE_CHECKED);
-    lv_obj_set_style_shadow_ofs_y(btn, 2, LV_STATE_CHECKED);
-    lv_obj_set_style_shadow_color(btn, lv_color_black(), LV_STATE_CHECKED);
-    lv_obj_set_style_shadow_opa(btn, 10, LV_STATE_CHECKED);
+    lv_obj_set_style_bg_opa(btn, 14, LV_STATE_CHECKED);
+    lv_obj_set_style_bg_opa(btn, 14, LV_STATE_PRESSED);
     lv_obj_set_style_pad_hor(btn, USER_PAD, 0);
     lv_obj_set_style_pad_column(btn, USER_PAD, 0);
     lv_obj_set_flex_flow(btn, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(btn, LV_FLEX_ALIGN_START,
                           LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    /* 选中与否只差不透明度（同历史页/消息页 Tab 的处理）：稿上是字重差，
-     * Montserrat 单字重追不了，只落地这一半。 */
-    lv_obj_set_style_text_color(btn, user_light_text, 0);
-    lv_obj_set_style_text_opa(btn, LV_OPA_50, 0);
-    lv_obj_set_style_text_opa(btn, LV_OPA_COVER, LV_STATE_CHECKED);
+    lv_obj_set_style_text_color(btn, user_color_text_dim, 0);
+    lv_obj_set_style_text_color(btn, user_color_text, LV_STATE_CHECKED);
     lv_obj_add_event_cb(btn, on_nav_click, LV_EVENT_CLICKED,
                         reinterpret_cast<void *>(static_cast<intptr_t>(id)));
 
@@ -1956,11 +1500,8 @@ lv_obj_t *make_nav_item(lv_obj_t *parent, NavId id)
     lv_image_set_src(icon, d.icon);
     lv_obj_set_size(icon, icon_sz, icon_sz);
     lv_image_set_inner_align(icon, LV_IMAGE_ALIGN_STRETCH);
-    lv_obj_set_style_image_recolor(icon, user_light_text, 0);
+    lv_obj_set_style_image_recolor(icon, user_color_text_dim, 0);
     lv_obj_set_style_image_recolor_opa(icon, LV_OPA_COVER, 0);
-    /* 图标跟着文字一起明暗：未选中压到 50%（同 text_opa） */
-    lv_obj_set_style_image_opa(icon, LV_OPA_50, 0);
-    lv_obj_set_style_image_opa(icon, LV_OPA_COVER, LV_STATE_CHECKED);
     g_nav_icons[id] = icon;
 
     lv_obj_t *lbl = lv_label_create(btn);
@@ -1969,78 +1510,25 @@ lv_obj_t *make_nav_item(lv_obj_t *parent, NavId id)
     lv_label_set_long_mode(lbl, LV_LABEL_LONG_MODE_DOTS);
     lv_obj_set_flex_grow(lbl, 1);
 
-    /* **只有选中项才出右箭头**（稿 6089:11402；未选中那几项右侧是空的）。
-     * Debug 是例外：它不进右栏、是跳出去开发者页，稿上给的是外链箭头 ↗，故常驻。
-     * LVGL 符号字库里没有斜向箭头，退而用同向的 ›——语义（有去处）保住了。 */
     lv_obj_t *arrow = lv_label_create(btn);
     lv_label_set_text(arrow, LV_SYMBOL_RIGHT);
-    lv_obj_set_style_text_font(arrow, user_font_text(), 0);
-    lv_obj_set_style_text_color(arrow, user_light_text, 0);
-    if(id != NAV_DEBUG) {
-        lv_obj_add_flag(arrow, LV_OBJ_FLAG_HIDDEN);
-    } else {
-        lv_obj_set_style_text_opa(arrow, LV_OPA_50, 0);
-    }
-    g_nav_arrows[id] = arrow;
+    lv_obj_set_style_text_font(arrow, user_font_caption(), 0);
+    lv_obj_set_style_text_color(arrow, user_color_text_dim, 0);
 
     g_nav_btns[id] = btn;
     return btn;
 }
 
-/**
- * 左栏：一条满高的渐变底带 + 里面 300 宽的导航列。
- *
- * 稿 6240:92194 给底带的是**竖向渐变** `#FAFAFA → #F4F4F4(50%) → #FAFAFA`，
- * 内距 48/32/0，总宽 364 = 32 + 300 + 32（整屏 x 128..492，右缘正是右栏的起点）。
- * LVGL 的 bg_grad 只有两个色标，中间那档做不出来，所以拆成上下两半各一段渐变：
- * 上半 FAFAFA→F4F4F4、下半 F4F4F4→FAFAFA，接缝在中点、与稿的 50% 色标重合。
- */
 lv_obj_t *build_subnav(lv_obj_t *parent)
 {
-    const bool spec = (USER_SETTINGS_NAV_W > 0);   /* 有稿的档位（1280） */
-
-    lv_obj_t *band = lv_obj_create(parent);
-    lv_obj_remove_style_all(band);
-    lv_obj_set_width(band, LV_SIZE_CONTENT);
-    lv_obj_set_height(band, LV_PCT(100));
-    lv_obj_set_style_pad_hor(band, spec ? USER_PAD_LG : USER_PAD, 0);   /* 稿 32 */
-    lv_obj_set_style_pad_top(band, USER_PAD * 2, 0);                    /* 稿 48 */
-    lv_obj_clear_flag(band, LV_OBJ_FLAG_SCROLLABLE);
-
-    if(spec) {
-        lv_obj_t *half_top = lv_obj_create(band);
-        lv_obj_remove_style_all(half_top);
-        lv_obj_add_flag(half_top, LV_OBJ_FLAG_FLOATING);
-        lv_obj_set_size(half_top, LV_PCT(100), LV_PCT(50));
-        lv_obj_align(half_top, LV_ALIGN_TOP_MID, 0, 0);
-        lv_obj_set_style_bg_color(half_top, user_light_bg, 0);
-        lv_obj_set_style_bg_grad_color(half_top, user_light_rail_mid, 0);
-        lv_obj_set_style_bg_grad_dir(half_top, LV_GRAD_DIR_VER, 0);
-        lv_obj_set_style_bg_opa(half_top, LV_OPA_COVER, 0);
-        lv_obj_remove_flag(half_top, LV_OBJ_FLAG_CLICKABLE);
-        lv_obj_move_background(half_top);
-
-        lv_obj_t *half_bot = lv_obj_create(band);
-        lv_obj_remove_style_all(half_bot);
-        lv_obj_add_flag(half_bot, LV_OBJ_FLAG_FLOATING);
-        lv_obj_set_size(half_bot, LV_PCT(100), LV_PCT(50));
-        lv_obj_align(half_bot, LV_ALIGN_BOTTOM_MID, 0, 0);
-        lv_obj_set_style_bg_color(half_bot, user_light_rail_mid, 0);
-        lv_obj_set_style_bg_grad_color(half_bot, user_light_bg, 0);
-        lv_obj_set_style_bg_grad_dir(half_bot, LV_GRAD_DIR_VER, 0);
-        lv_obj_set_style_bg_opa(half_bot, LV_OPA_COVER, 0);
-        lv_obj_remove_flag(half_bot, LV_OBJ_FLAG_CLICKABLE);
-        lv_obj_move_background(half_bot);
-    }
-
-    lv_obj_t *nav = lv_obj_create(band);
+    lv_obj_t *nav = lv_obj_create(parent);
     lv_obj_remove_style_all(nav);
     /* 稿 300 定宽；该字段为 0 的档位沿用旧式百分比。 */
-    if(spec) lv_obj_set_width(nav, USER_SETTINGS_NAV_W);
-    else     lv_obj_set_width(nav, LV_PCT(34));
+    if(USER_SETTINGS_NAV_W > 0) lv_obj_set_width(nav, USER_SETTINGS_NAV_W);
+    else                        lv_obj_set_width(nav, LV_PCT(34));
     lv_obj_set_height(nav, LV_PCT(100));
     lv_obj_set_flex_flow(nav, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_style_pad_row(nav, USER_PAD_SM, 0);   /* 稿 16 */
+    lv_obj_set_style_pad_row(nav, USER_PAD_SM, 0);
     lv_obj_set_style_bg_opa(nav, LV_OPA_TRANSP, 0);
     lv_obj_set_scroll_dir(nav, LV_DIR_VER);
     lv_obj_set_scrollbar_mode(nav, LV_SCROLLBAR_MODE_OFF);
@@ -2048,7 +1536,7 @@ lv_obj_t *build_subnav(lv_obj_t *parent)
     for(int i = 0; i < NAV_COUNT; i++) {
         make_nav_item(nav, static_cast<NavId>(i));
     }
-    return band;
+    return nav;
 }
 
 } /* namespace */
@@ -2082,12 +1570,11 @@ lv_obj_t *page_user_settings_create(lv_obj_t *parent)
     g_wifi_seg_on = nullptr;
     g_wifi_seg_off = nullptr;
     g_page       = nullptr;
-    g_float_back = nullptr;
+    g_scroll_btns = nullptr;
     g_mcu_ver_lbl = nullptr;
     for(int i = 0; i < NAV_COUNT; i++) {
         g_nav_btns[i]  = nullptr;
         g_nav_icons[i] = nullptr;
-        g_nav_arrows[i] = nullptr;
     }
 
     /* 缓存后端网络状态：IP 就地改标签，连接态/SSID 变了才重建列表页——整页重建
@@ -2170,46 +1657,6 @@ lv_obj_t *page_user_settings_create(lv_obj_t *parent)
             galvo_ver_apply(p);
         });
 
-    /* 存储容量回执：刷新存储页那两张卡（只在该页停留时才有对象可刷）。 */
-    ui::UiMsgProxy::instance().register_storage_usage(
-        [](const middleware::StorageUsagePayload &p) {
-            if(g_selected == NAV_STORAGE) {
-                storage_apply_usage(p);
-            }
-        });
-
-    /* U 盘热插拔：决定「格式化 U 盘」那枚钮能不能点。这条后端**已实现**。 */
-    ui::UiMsgProxy::instance().register_usb_hotplug(
-        [](const middleware::UsbHotplugPayload &p) {
-            g_usb_present = (p.present != 0 && p.mounted != 0);
-            if(g_fmt_usb_btn) {
-                lv_obj_set_style_opa(g_fmt_usb_btn,
-                                     g_usb_present ? LV_OPA_COVER : LV_OPA_40, 0);
-            }
-        });
-
-    /* 格式化进度 / 终态：后端**未实现**，这两个回调目前不会被触发；先接好线，
-     * 后端一上来就能用。见 doc/STORAGE_BACKEND_API.md。 */
-    ui::UiMsgProxy::instance().register_storage_format_progress(
-        [](const middleware::StorageFormatProgressPayload &p) {
-            char buf[48];
-            std::snprintf(buf, sizeof(buf), "Formatting... %u%%",
-                          static_cast<unsigned>(p.percent));
-            ui_toast_show(buf, user_color_accent, 1000);
-        });
-    ui::UiMsgProxy::instance().register_storage_format_result(
-        [](const middleware::StorageFormatRspPayload &p) {
-            if(p.result == 0) {
-                ui_toast_show("Format complete", user_color_status_ok, 2000);
-                if(g_selected == NAV_STORAGE) {
-                    ui::UiMsgProxy::instance().send_storage_usage(
-                        static_cast<middleware::StorageVolume>(p.volume));
-                }
-            } else {
-                ui_toast_show("Format failed", ui_color_danger, 2500);
-            }
-        });
-
     /* 连接结果：关闭"连接中"模态，成功轻提示；失败弹"连接失败"（如密码错/超时）。 */
     ui::UiMsgProxy::instance().register_wifi_connect_result(
         [](bool ok, const char * /*ssid*/) {
@@ -2237,13 +1684,25 @@ lv_obj_t *page_user_settings_create(lv_obj_t *parent)
     lv_obj_set_flex_flow(body, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(body, LV_FLEX_ALIGN_START,
                           LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
-    /* 稿 6089:11322 的两栏在内容区 1152 里正好闭合，**内距全落在各自栏里**、
-     * body 本身零内距：
-     *   左栏渐变带 364（= 32 + 300 + 32，见 build_subnav）
-     *   右栏 788（= 64 + 660 + 64），起点 x=492 正是渐变带的右缘
-     * 旧版那套「body 左内距 36 + 列间距 36 + 右留白 176」是给悬浮翻页钮让位的，
-     * 钮已按新稿去掉，这三个量一并收掉。 */
-    lv_obj_set_style_pad_all(body, 0, 0);
+    /* 稿 3238:14296 的两栏在内容区 1152 里正好闭合：
+     *   左内距 36 + 左栏 300 + 列间距 36 + 右栏 604 + 右留白 176
+     * 右栏是 flex_grow，604 自动得到；右留白不是白放的，翻页圆钮就浮在那一段里
+     * （稿 x=1184，距屏右 32，见 build_scroll_buttons 的对齐）。
+     * USER_SETTINGS_* 为 0 的档位沿用旧式内距，渲染不变。 */
+    if(USER_SETTINGS_GAP > 0) {
+        lv_obj_set_style_pad_left(body, USER_SETTINGS_GAP, 0);
+        lv_obj_set_style_pad_right(body, USER_SETTINGS_GUTTER_R, 0);
+        lv_obj_set_style_pad_column(body, USER_SETTINGS_GAP, 0);
+        /* 稿 3238:14296 的左栏顶在 y=124，比外壳给的内容顶低 12。
+         * USER_CONTENT_TOP（112）取的是历史页/消息页 Tab 行的稿值，那两页一致；
+         * 本页是两栏导航、没有 Tab 行，稿上本就是另一个数，故在此补差，
+         * 不去动全局字段（动了会把那两页推偏）。 */
+        lv_obj_set_style_pad_top(body, USER_PAD / 2, 0);
+    } else {
+        lv_obj_set_style_pad_hor(body, USER_PAD, 0);
+        lv_obj_set_style_pad_column(body, USER_PAD_LG, 0);
+    }
+    lv_obj_set_style_pad_bottom(body, USER_PAD, 0);
     lv_obj_set_style_bg_opa(body, LV_OPA_TRANSP, 0);
     lv_obj_clear_flag(body, LV_OBJ_FLAG_SCROLLABLE);
 
@@ -2254,12 +1713,9 @@ lv_obj_t *page_user_settings_create(lv_obj_t *parent)
     lv_obj_set_height(g_detail, LV_PCT(100));
     lv_obj_set_flex_grow(g_detail, 1);
     lv_obj_set_flex_flow(g_detail, LV_FLEX_FLOW_COLUMN);
-    /* 稿 6285:12390 的右栏内距 72/64/0，分区之间 48（组内标题↔内容才是 16）。 */
-    const bool spec = (USER_SETTINGS_NAV_W > 0);
-    lv_obj_set_style_pad_top(g_detail, spec ? USER_PAD * 3 : USER_PAD, 0);
-    lv_obj_set_style_pad_hor(g_detail, spec ? USER_PAD_LG * 2 : USER_PAD, 0);
-    lv_obj_set_style_pad_bottom(g_detail, USER_PAD, 0);
-    lv_obj_set_style_pad_row(g_detail, spec ? USER_PAD * 2 : USER_PAD, 0);
+    /* 稿 3361:18538 的分组之间是 48（组内标题↔内容才是 16）。 */
+    lv_obj_set_style_pad_row(g_detail,
+                             USER_SETTINGS_GAP > 0 ? USER_PAD * 2 : USER_PAD, 0);
     lv_obj_set_style_bg_opa(g_detail, LV_OPA_TRANSP, 0);
     lv_obj_clear_flag(g_detail, LV_OBJ_FLAG_SCROLLABLE);
 

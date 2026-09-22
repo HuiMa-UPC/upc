@@ -66,8 +66,6 @@ int start_glavo(char daemon) {
     }
 
     auto& mcu = upc::glavo::McuLink::instance();
-    /* 舱灯 / SPI 灯效不依赖串口或 MCU 版本：进程起来就亮。 */
-    mcu.arm_soc_peripherals();
     /* TCP 振镜为可选链路：首次尝试一次即可，连不上由 link 线程后台自动重连，
      * 不阻塞串口/调试链路的启动（否则振镜未接时串口与 UI_Debug_* 都无法工作）。 */
     mcu.connect_tcp();

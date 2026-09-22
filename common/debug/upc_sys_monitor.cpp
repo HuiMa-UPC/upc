@@ -1,6 +1,8 @@
 #include "upc_sys_monitor.hpp"
 #include "rs_log.hpp"
 
+#if UPC_DEBUG && UPC_MOD_SYS_MONITOR
+
 #include <chrono>
 #include <cstdio>
 #include <cstring>
@@ -8,6 +10,8 @@
 namespace {
 
 using Clock = std::chrono::steady_clock;
+
+constexpr auto kReportInterval = std::chrono::minutes(1);
 
 struct CpuSample {
     uint64_t total_jiffies = 0;
@@ -177,53 +181,6 @@ double cpu_usage_pct(uint64_t delta_busy, uint64_t delta_total) {
     return 100.0 * static_cast<double>(delta_busy) / static_cast<double>(delta_total);
 }
 
-/* sample() 与 tick() 各自维护基线，互不干扰：HUD ~1Hz、日志 60s。 */
-struct CpuBaseline {
-    bool      have = false;
-    CpuSample base{};
-};
-
-void fill_cpu_pct(CpuBaseline* bl, const CpuSample& cur,
-                  float* sys_pct, float* proc_pct) {
-    if (!bl->have) {
-        bl->base = cur;
-        bl->have = true;
-        *sys_pct  = -1.f;
-        *proc_pct = -1.f;
-        return;
-    }
-    const uint64_t total_delta = cur.total_jiffies - bl->base.total_jiffies;
-    const uint64_t idle_delta  = cur.idle_jiffies - bl->base.idle_jiffies;
-    const uint64_t proc_delta  = cur.proc_jiffies - bl->base.proc_jiffies;
-    *sys_pct  = static_cast<float>(cpu_usage_pct(total_delta - idle_delta, total_delta));
-    *proc_pct = static_cast<float>(cpu_usage_pct(proc_delta, total_delta));
-    bl->base = cur;
-}
-
-void fill_mem_temp(UpcSysMonitorSample* out) {
-    unsigned long mem_total_kb = 0;
-    unsigned long mem_avail_kb = 0;
-    if (!read_meminfo(&mem_total_kb, &mem_avail_kb)) {
-        mem_total_kb = 0;
-        mem_avail_kb = 0;
-    }
-    out->mem_total_kb = mem_total_kb;
-    out->mem_avail_kb = mem_avail_kb;
-
-    unsigned long rss_kb = 0;
-    if (!read_process_rss_kb(&rss_kb)) {
-        rss_kb = 0;
-    }
-    out->rss_kb = rss_kb;
-
-    float temp_c = 0.f;
-    out->cpu_temp_c = read_cpu_temp_c(&temp_c) ? temp_c : -1.f;
-}
-
-#if UPC_DEBUG && UPC_MOD_SYS_MONITOR
-
-constexpr auto kReportInterval = std::chrono::minutes(1);
-
 void log_sample(const CpuSample& prev, const CpuSample& cur) {
     const uint64_t total_delta = cur.total_jiffies - prev.total_jiffies;
     const uint64_t idle_delta  = cur.idle_jiffies - prev.idle_jiffies;
@@ -232,58 +189,42 @@ void log_sample(const CpuSample& prev, const CpuSample& cur) {
     const double cpu_sys_pct  = cpu_usage_pct(total_delta - idle_delta, total_delta);
     const double cpu_proc_pct = cpu_usage_pct(proc_delta, total_delta);
 
-    UpcSysMonitorSample snap{};
-    fill_mem_temp(&snap);
+    unsigned long mem_total_kb = 0;
+    unsigned long mem_avail_kb = 0;
+    read_meminfo(&mem_total_kb, &mem_avail_kb);
 
-    if (snap.cpu_temp_c >= 0.f) {
+    unsigned long rss_kb = 0;
+    read_process_rss_kb(&rss_kb);
+
+    float temp_c = 0.f;
+    const bool have_temp = read_cpu_temp_c(&temp_c);
+
+    if (have_temp) {
         UPC_LOG_SYS_MONITOR(Info,
             "cpu_sys=%.1f%% cpu_proc=%.1f%% temp=%.1fC mem_avail=%luMB/%luMB rss=%luMB",
             cpu_sys_pct,
             cpu_proc_pct,
-            snap.cpu_temp_c,
-            snap.mem_avail_kb / 1024UL,
-            snap.mem_total_kb / 1024UL,
-            snap.rss_kb / 1024UL);
+            temp_c,
+            mem_avail_kb / 1024UL,
+            mem_total_kb / 1024UL,
+            rss_kb / 1024UL);
     } else {
         UPC_LOG_SYS_MONITOR(Warn,
             "cpu_sys=%.1f%% cpu_proc=%.1f%% temp=N/A mem_avail=%luMB/%luMB rss=%luMB",
             cpu_sys_pct,
             cpu_proc_pct,
-            snap.mem_avail_kb / 1024UL,
-            snap.mem_total_kb / 1024UL,
-            snap.rss_kb / 1024UL);
+            mem_avail_kb / 1024UL,
+            mem_total_kb / 1024UL,
+            rss_kb / 1024UL);
     }
 }
-
-#endif /* UPC_DEBUG && UPC_MOD_SYS_MONITOR */
 
 } // namespace
 
-bool upc_sys_monitor_sample(UpcSysMonitorSample* out) {
-    if (!out) {
-        return false;
-    }
-    std::memset(out, 0, sizeof(*out));
-    out->cpu_temp_c   = -1.f;
-    out->cpu_sys_pct  = -1.f;
-    out->cpu_proc_pct = -1.f;
-
-    CpuSample cur{};
-    if (!read_cpu_sample(&cur)) {
-        return false;
-    }
-
-    static CpuBaseline bl{};
-    fill_cpu_pct(&bl, cur, &out->cpu_sys_pct, &out->cpu_proc_pct);
-    fill_mem_temp(out);
-    return true;
-}
-
-#if UPC_DEBUG && UPC_MOD_SYS_MONITOR
-
 void upc_sys_monitor_tick() {
     static Clock::time_point last_report{};
-    static CpuBaseline bl{};
+    static bool have_base = false;
+    static CpuSample base{};
 
     /*
      * 先判间隔再读 /proc。本函数在 UI 主循环里每圈都被调用（上百次每秒），
@@ -293,7 +234,7 @@ void upc_sys_monitor_tick() {
      * 时刻，语义不变。
      */
     const auto now = Clock::now();
-    if (bl.have && now - last_report < kReportInterval) {
+    if (have_base && now - last_report < kReportInterval) {
         return;
     }
 
@@ -302,15 +243,15 @@ void upc_sys_monitor_tick() {
         return;
     }
 
-    if (!bl.have) {
-        bl.base = cur;
-        bl.have = true;
+    if (!have_base) {
+        base = cur;
+        have_base = true;
         last_report = now;
         return;
     }
 
-    log_sample(bl.base, cur);
-    bl.base = cur;
+    log_sample(base, cur);
+    base = cur;
     last_report = now;
 }
 

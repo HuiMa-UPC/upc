@@ -12,8 +12,8 @@ extern "C" {
  * @brief 清粉（clean_test）的发起与回执在 UI 侧的唯一来源。
  *
  * `UiMsgProxy::register_clean_test_start_rsp` / `register_clean_test_done` 都是
- * **单槽**的（`xxx_cb_ = std::move(cb)`），谁后注册谁把前一个静默顶掉。而清粉有
- * 两个发起方——监控页打印结果态的吹粉（带清粉录像）和 Manual 页的手动吹粉（不录像）
+ * **单槽**的（`xxx_cb_ = std::move(cb)`），谁后注册谁把前一个静默顶掉。而清粉现在有
+ * 两个发起方——首页打印结果页的 Purify（带清粉录像）和控制页的手动清粉（不录像）
  * ——各自注册必然互相顶掉。所以订阅在本模块做一次（`ui_clean_state_init()`，由
  * `ui_app.cpp` 调），再按「谁发起的」扇出给观察者。形态同 `ui_device_state`。
  *
@@ -27,10 +27,8 @@ extern "C" {
 /** 清粉发起方。 */
 typedef enum {
     UI_CLEAN_OWNER_NONE = 0,
-    UI_CLEAN_OWNER_PRINT_RESULT, /**< 监控页打印结果态的吹粉：带清粉录像、进打印历史 */
-    /** 监控页 Manual 的手动吹粉：不录像、不落盘、不进历史。
-     *  改版前这一档叫 `CONTROL`（控制页的手动清粉），控制页退役后语义原样搬过来。 */
-    UI_CLEAN_OWNER_MANUAL,
+    UI_CLEAN_OWNER_PRINT_RESULT, /**< 首页打印结果页 Purify：带清粉录像、进打印历史 */
+    UI_CLEAN_OWNER_CONTROL,      /**< 控制页手动清粉：不录像、不落盘、不进历史 */
 } ui_clean_owner_t;
 
 /** 回执类型。 */

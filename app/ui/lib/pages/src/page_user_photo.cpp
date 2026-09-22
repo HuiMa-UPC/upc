@@ -23,7 +23,7 @@
  *
  * 结构（与延时摄影播放器同一套 chrome，建在 lv_layer_top() 上盖住侧栏与常驻条）：
  *   ┌──────────────────────────────────────────────────────┐
- *   │ ┌ photo_xxx.jpg ─┐                              ( X )│
+ *   │ ┌ photo_xxx.png ─┐                              ( X )│
  *   │ │ 21:00:13 …  3/42│                                  │
  *   │ └─────────────────┘                                  │
  *   │ ( ‹ )        [ 照片 CONTAIN 居中 ]           ( › )    │
@@ -409,7 +409,7 @@ void on_photo_ready(const lv_image_dsc_t* image, uint64_t token)
         return; /* 已经翻到别的照片，这张过期了 */
     }
     if(!image) {
-        /* 后台解 JPEG（turbojpeg）和 PNG。解失败时 bmp 等交给 LVGL 内置解码器同步解一次；
+        /* 后台只解 PNG（libpng）。jpg/bmp 交给 LVGL 内置 TJPGD / BMP 同步解一次；
          * 先问一遍 decoder 能不能认，认不出来（如 webp 当前无解码器）就给提示，
          * 而不是留一屏黑让人以为卡住了。 */
         const std::string p = lvgl_path(g_photos[g_index].path);

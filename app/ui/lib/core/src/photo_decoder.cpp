@@ -129,8 +129,8 @@ struct PhotoDecoder::Impl {
     }
 
     /**
-     * 解不出来也要回一声：本类吃 JPEG（turbojpeg）和 PNG（libpng）。bmp 等解不了的
-     * 交给页面走 LVGL 内置解码器。不回的话页面会一直停在「Loading…」。
+     * 解不出来也要回一声：本类只吃 PNG（libpng），jpg/bmp 得让页面去走 LVGL 内置
+     * 解码器。不回的话页面会一直停在「Loading…」。
      */
     void publish_failure(uint64_t token, uint64_t gen)
     {

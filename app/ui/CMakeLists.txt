@@ -82,7 +82,7 @@ if(UPC_UI_AVFORMAT AND UPC_UI_AVCODEC AND UPC_UI_AVUTIL AND UPC_UI_SWSCALE)
         ${UPC_UI_SWRESAMPLE})
     target_compile_definitions(${UI_TARGET} PRIVATE UPC_UI_HAS_LIBAV=1)
 else()
-    message(WARNING "ui: ffmpeg libs not found — mp4 playback fallback to JPEG sequence")
+    message(WARNING "ui: ffmpeg libs not found — mp4 playback fallback to PNG sequence")
     target_compile_definitions(${UI_TARGET} PRIVATE UPC_UI_HAS_LIBAV=0)
 endif()
 
@@ -100,25 +100,6 @@ if(UPC_UI_PNG)
 else()
     message(WARNING "ui: libpng not found — PNG scrub falls back to throttled sync decode")
     target_compile_definitions(${UI_TARGET} PRIVATE UPC_UI_HAS_LIBPNG=0)
-endif()
-
-# 相册大图与延时拖动预览：后台解 JPEG（与 Media 落盘同一套 libturbojpeg）
-if(CMAKE_SYSROOT)
-    find_path(UPC_UI_TURBOJPEG_INCLUDE NAMES turbojpeg.h
-        PATHS ${CMAKE_SYSROOT}/usr/include NO_DEFAULT_PATH)
-    find_library(UPC_UI_TURBOJPEG NAMES turbojpeg
-        PATHS ${CMAKE_SYSROOT}/usr/lib ${CMAKE_SYSROOT}/lib NO_DEFAULT_PATH)
-else()
-    find_path(UPC_UI_TURBOJPEG_INCLUDE NAMES turbojpeg.h)
-    find_library(UPC_UI_TURBOJPEG NAMES turbojpeg)
-endif()
-if(UPC_UI_TURBOJPEG_INCLUDE AND UPC_UI_TURBOJPEG)
-    message(STATUS "ui: linking libturbojpeg ${UPC_UI_TURBOJPEG}")
-    target_include_directories(${UI_TARGET} PRIVATE ${UPC_UI_TURBOJPEG_INCLUDE})
-    target_link_libraries(${UI_TARGET} PRIVATE ${UPC_UI_TURBOJPEG})
-    target_compile_definitions(${UI_TARGET} PRIVATE UPC_UI_HAS_TURBOJPEG=1)
-else()
-    message(FATAL_ERROR "ui: libturbojpeg not found (required to decode camera JPEG stills)")
 endif()
 
 target_compile_options(${UI_TARGET}

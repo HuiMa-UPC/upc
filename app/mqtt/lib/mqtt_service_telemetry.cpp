@@ -120,11 +120,19 @@ void MqttService::cache_telemetry(const middleware::EnvSnapshotPayload& p)
         latest_.has_value = false;
         return;
     }
-    /* chamber 用舱内量；舱外 PM 另走 chamber_ext */
-    latest_.pm25 = p.pm25_cabin;
-    latest_.pm1_0 = p.pm1_cabin;
-    latest_.pm10 = p.pm10_cabin;
-    latest_.pm25_outdoor = p.pm25_indoor;
+    latest_.sensor_v4 = (p.sensor_v4 != 0);
+    if(latest_.sensor_v4) {
+        /* V4：chamber 用 SOC 舱内量；舱外 PM 另走 chamber_ext */
+        latest_.pm25 = p.pm25_cabin;
+        latest_.pm1_0 = p.pm1_cabin;
+        latest_.pm10 = p.pm10_cabin;
+        latest_.pm25_outdoor = p.pm25_indoor;
+    } else {
+        latest_.pm25 = p.pm25_cabin;
+        latest_.pm1_0 = p.pm1_indoor;
+        latest_.pm10 = p.pm10_indoor;
+        latest_.pm25_outdoor = -1.0f;
+    }
     latest_.oxygen_percent = p.oxygen_percent;
     latest_.temperature_c = p.temperature_c;
     latest_.humidity_percent = p.humidity_percent;
@@ -328,8 +336,8 @@ bool MqttService::publish_chamber_ext_telemetry()
         std::lock_guard<std::mutex> lock(data_mtx_);
         snap = latest_;
     }
-    /* 舱外 PM 走 chamber_ext；无数则不发 */
-    if(!snap.has_value || snap.pm25_outdoor < 0.0f) {
+    /* 仅 V4：舱外 PM 由 SOC 常显采集，走 chamber_ext */
+    if(!snap.has_value || !snap.sensor_v4 || snap.pm25_outdoor < 0.0f) {
         return false;
     }
 

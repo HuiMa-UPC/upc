@@ -77,7 +77,7 @@ private:
     /**
      * 逐帧写盘热路径专用：ensure_video_storage_budget() 的节流版本。
      *
-     * 全量核算会递归遍历整个录像目录（层拍 JPEG 可达上千个文件），按帧调用时
+     * 全量核算会递归遍历整个录像目录（层拍 PNG 可达上千个文件），按帧调用时
      * 开销随打印层数线性增长，会把 H264 编码 worker 拖死。这里只缓存"预算充足"
      * 的结论并在 UPC_MEDIA_STORAGE_BUDGET_CACHE_MS 内复用；一旦判定不足就不再
      * 走缓存，每次都重新核算——否则一次瞬时不足会误停整场录像。
@@ -103,7 +103,7 @@ private:
     bool map_dma_views_if_needed();
     void publish_latest_nv12_snapshot(uint32_t width, uint32_t height);
     bool copy_latest_nv12_snapshot(std::vector<uint8_t>& out) const;
-    bool save_latest_jpeg_snapshot(std::string& out_path) const;
+    bool save_latest_png_snapshot(std::string& out_path) const;
     void send_snapshot_rsp(const middleware::Message& req, bool ok,
                            const char* path) const;
 

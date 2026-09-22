@@ -8,13 +8,28 @@
 extern "C" {
 #endif
 
+/** 1ST 布局：0=旧固件 Len13/21；1=V4+ Len15 重排 */
+#define SERIAL_SENSOR_LAYOUT_LEGACY  0u
+#define SERIAL_SENSOR_LAYOUT_V4      1u
+
 typedef struct {
-    float oxygen_percent;        /**< 滤芯氧 %；无效 -1。舱内氧由 SOC IIO 填 */
-    int16_t filter_pressure_x10_kpa; /**< 滤芯气压 SC0，单位 0.1kPa */
+    float oxygen_percent;
+    int16_t pressure1_x10_kpa;   /**< 舱内1气压（旧）或未用（V4）；单位 0.1kPa */
+    float temperature_c;         /**< 舱温（旧）/ 无效时由 SOC AHT20 填 */
+    float humidity_percent;
+    float pm25_ug_m3;            /**< 旧 1ST 单路 PM；V4 由 SOC UART 填 */
+    float pm1_ug_m3;
+    float pm10_ug_m3;
+    int16_t filter_pressure_x10_kpa; /**< 滤芯气压 SC0（新旧均有） */
+    int16_t pressure2_x10_kpa;       /**< 舱内2气压（旧 Len21） */
+    uint8_t powder_present;  /**< 粉充足：旧=bit0/1==11；V4=左右匣均非缺粉 */
+    uint8_t powder_bits;     /**< 旧：value[10] 低 2 位；V4：bit0=左匣有粉 bit1=右匣有粉（OUTL/OUTR 取反） */
+    uint8_t outer_door_open; /**< 1=门开：旧 bit7；V4=!(舱门关到位 bit2) */
     float substrate_temp_c;
-    uint8_t powder_present;      /**< 1=左右匣均非缺粉 */
-    uint8_t powder_bits;         /**< bit0=左匣有粉 bit1=右匣有粉（OUTL/OUTR 取反） */
-    uint8_t outer_door_open;     /**< 1=门开：!(舱门关到位 bit2) */
+    uint16_t hall_bitmap;
+
+    /* ---- V4 1ST 扩展字段（layout==V4 时有效） ---- */
+    uint8_t layout;              /**< SERIAL_SENSOR_LAYOUT_* */
     float env_ntc_c;             /**< 环境 NTC 0.1℃ */
     float filter_ntc_c;          /**< 滤芯 NTC_LX */
     uint8_t local_switch_bits;   /**< 本地接近开关：bit2 舱门关到位等 */
@@ -25,7 +40,7 @@ typedef struct {
     uint8_t powder_right_low;    /**< 1=右匣缺粉（OUTR 无粉） */
 } serial_sensor_report_t;
 
-/** TLV 0x06 EXT：电气量 + 风机 */
+/** TLV 0x06 EXT：电气量 + 风机（仅 V4 布局有意义；Len 与旧版相同须靠版本切换） */
 typedef struct {
     uint16_t sieve_current_ma;
     uint16_t door_coil_ma;
@@ -58,7 +73,8 @@ typedef enum {
 int serial_frame_is_sensor_report(const uint8_t* data, size_t len);
 
 /**
- * @brief 解析 TLV 0x02 1ST。只接受 Tlv-Len==15。
+ * @brief 解析 TLV 0x02 1ST。
+ * Tlv-Len==15 固定按 V4 布局；Len 13/21 走旧布局（二者字段不兼容）。
  */
 int serial_parse_sensor_report_detail(const uint8_t* data, size_t len,
                                       serial_sensor_report_t* out,
@@ -67,7 +83,7 @@ int serial_parse_sensor_report_detail(const uint8_t* data, size_t len,
 int serial_parse_sensor_report(const uint8_t* data, size_t len,
                                serial_sensor_report_t* out);
 
-/** 解析 TLV 0x06 EXT（电气量 + 风机） */
+/** 解析 TLV 0x06 EXT（须调用方确认 MCU≥V4，因 Len 与旧 EXT 相同） */
 int serial_parse_sensor_ext_detail(const uint8_t* data, size_t len,
                                    serial_sensor_ext_t* out,
                                    serial_sensor_err_t* err_out);

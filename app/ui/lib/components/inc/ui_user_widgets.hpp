@@ -80,17 +80,11 @@ lv_obj_t *ui_user_make_overlay_round_btn(lv_obj_t *parent, const char *sym,
  * 命中区另外外扩 USER_PAD_SM：项宽被写死成文字实宽（左右零内距），Tab 之间那段
  * 间距全是死区，不外扩横向很难点中。
  *
- * @param font      文字字体。**必传、且必须是最终字号**：项宽与下划线宽都是照它
- *                  量出来后写死的，建完再改字号不会重新量，文字会撑出容器、被居中
- *                  裁掉两头（踩过一次：历史页事后把 16 改成 24，`Timelapse` 就只剩
- *                  中间的 `melaps`）。消息页传 user_font_text_sm()（稿 16），
- *                  历史页传 user_font_body()（浅色稿 24）。
  * @param user_data 随 LV_EVENT_CLICKED 回传给 cb（两页都传 Tab 下标）
  * @param out_root / out_label / out_mark 均可为 NULL；下划线建出来是显示态，
  *        选中样式由调用方的 apply_tab_style() 维护
  */
 void ui_user_make_tab_item(lv_obj_t *parent, const char *text,
-                           const lv_font_t *font,
                            lv_event_cb_t cb, void *user_data,
                            lv_obj_t **out_root, lv_obj_t **out_label,
                            lv_obj_t **out_mark);
@@ -102,23 +96,6 @@ void ui_user_make_tab_item(lv_obj_t *parent, const char *text,
  */
 lv_obj_t *ui_user_make_icon_img(lv_obj_t *parent, const lv_image_dsc_t *src,
                                 int32_t target, lv_color_t color);
-
-/**
- * 从 NULL 结尾的多档候选表里挑出边长最接近 sz 的那份原生位图。
- *
- * **图标按档位出多份原生尺寸、运行时不缩放，是刻意的**：LVGL 的
- * `lv_draw_sw_transform` 是 2 抽头点采样、不做面积平均，缩小时步长大于一个源像素
- * 就会整行整列跳过源数据。原先一张 40×40 喂三档，32 档实测横杠 alpha 在 225..251
- * 之间起伏、26 档 188..220 且峰值到不了实心，屏上就是毛刺加断续。资源现在由
- * `tools/gen_home_metric_icons.py` 按档位各出一份，正常都能精确命中、走不到缩放。
- *
- * 取最接近而不是只认精确相等，是为了那几处尺寸不落在表上的调用点——比如监控态
- * 返回钮的图标边长跟的是 `USER_PRINT_CTL_BTN / 2`（48/32/25），1024 档的 25 与表里
- * 的 26 差 1px。挑不到等宽的只是糊一点，形不会崩。
- *
- * 同一套做法见 `ui_message_store.cpp` 的 `ui_message_severity_icon()`。
- */
-const lv_image_dsc_t *ui_user_pick_icon(const lv_image_dsc_t *const *set, int32_t sz);
 
 /**
  * 主按钮胶囊：蓝色对角渐变 + 白色亮边 + 柔和蓝投影 + 可选图标（稿「Button / On Light」）。
@@ -137,16 +114,11 @@ lv_obj_t *ui_user_make_primary_pill_btn(lv_obj_t *parent, const lv_image_dsc_t *
  * 二次确认弹窗页脚按钮（稿 2567:5555 的「弹窗副按钮 / 弹窗重点按钮」）：
  *   filled=true  → fill_color 填充的重点按钮；
  *   filled=false → 4% 白填充、无描边的副按钮。
- * 两种都是圆角矩形（不是全圆胶囊），并用 flex_grow 等分整行宽度。
+ * 两种都是 USER_BTN_RADIUS 圆角矩形（不是全圆胶囊），并用 flex_grow 等分整行宽度。
  * 共用方：选文件页删除确认、终止打印确认、打印历史批量删除确认。
- *
- * @param light 跟随所在弹窗的档位（`ui_modal_dialog_cfg_t::light_theme`），**必须与之
- *              一致**：非填充档的底色在两档里是反的（深色档白 4%、浅色档 `#333145` 10%），
- *              给错那枚副按钮会整个消失。浅色档同时把高与圆角抬到稿 6251:94239 的 72 / 12。
  */
 lv_obj_t *ui_user_make_confirm_footer_btn(lv_obj_t *footer, const char *text,
                                           bool filled, lv_color_t fill_color,
-                                          bool light,
                                           lv_event_cb_t cb, void *user_data);
 
 /** 首页数值块：横线 + 标签 + 大数字；out_value 可接刷新指针 */
@@ -161,9 +133,17 @@ lv_obj_t *ui_user_make_status_dot(lv_obj_t *parent, bool ready);
 lv_obj_t *ui_user_make_supply_indicator(lv_obj_t *parent, const char *name,
                                         bool ready);
 
-/** 设置页列表行：左标题 + 右可选按钮。
- *  **浅色档专用**——设置页整屏已按新稿翻浅，这里的配色跟着换了，目前也只有它在用。
- *  要给深色页面复用的话得先把颜色参数化。 */
+/**
+ * 供应度卡片（设计稿 1.1.5 顶部「耗材可用/滤芯可用 + 进度条 + 百分比」）。
+ * 名称行 + 状态(Adequate/Low) + 进度条 + 百分比。out_* 接刷新句柄（可为 NULL）。
+ */
+lv_obj_t *ui_user_make_supply_bar(lv_obj_t *parent, const char *name,
+                                  bool ok, int percent,
+                                  lv_obj_t **out_bar,
+                                  lv_obj_t **out_pct_lbl,
+                                  lv_obj_t **out_status_lbl);
+
+/** 设置页列表行：左标题 + 右可选按钮 */
 lv_obj_t *ui_user_make_setting_row(lv_obj_t *parent, const char *label,
                                    const char *btn_text, lv_event_cb_t btn_cb);
 

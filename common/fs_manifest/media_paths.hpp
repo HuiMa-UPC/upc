@@ -5,7 +5,7 @@
  * 本机媒体落盘根路径（拍照 / 延时摄影 / 打印录像）。
  *
  *   /userdata/media/
- *     photo/                 相册 JPEG + 配对 .rthm
+ *     photo/                 相册 PNG + 配对 .rthm
  *     video/
  *       config.json          打印历史清单
  *       tmp/                 唯一打印中临时目录（开打前/开机可清空）
@@ -60,10 +60,10 @@
 #endif
 
 /**
- * 延时摄影播放形态（Media + UI 共用编译开关；宏名保留 PNG，实际帧是 JPEG）：
- *   1 = 静图序列播放（默认）：开门 finalize 不编 timelapse.mp4，保留层间 1.jpg…；
+ * 延时摄影播放形态（Media + UI 共用编译开关）：
+ *   1 = PNG 序列播放（默认）：开门 finalize 不编 timelapse.mp4，保留层间 PNG；
  *       打印录像（print_h264.mp4）仍可按开关 remux。
- *   0 = MP4 播放：开门后后台 JPEG→timelapse.mp4，成功后可删清粉段 JPEG。
+ *   0 = MP4 播放：开门后后台 PNG→timelapse.mp4，成功后可删清粉段 PNG。
  * 可用 -DUPC_TIMELAPSE_PLAYBACK_PNG=0 覆盖。
  */
 #ifndef UPC_TIMELAPSE_PLAYBACK_PNG

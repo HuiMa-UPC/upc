@@ -27,7 +27,7 @@ enum class PlaybackMode : uint8_t {
     Mp4,
 };
 
-constexpr uint32_t kPlayIntervalMs = 200u; /* 序列回放默认 5fps */
+constexpr uint32_t kPlayIntervalMs = 200u; /* PNG 回退模式 5fps */
 constexpr const char* kFsDrive = "A:";
 constexpr uint64_t kPreviewReqMinIntervalMs = 80;
 constexpr int64_t kMp4PreviewJumpMs = 300;
@@ -108,7 +108,7 @@ bool parse_png_index(const char* name, uint32_t& out)
     while(name[i] && std::isdigit(static_cast<unsigned char>(name[i]))) {
         ++i;
     }
-    if(i == 0 || std::strcmp(name + i, ".jpg") != 0) {
+    if(i == 0 || std::strcmp(name + i, ".png") != 0) {
         return false;
     }
     out = static_cast<uint32_t>(std::strtoul(name, nullptr, 10));
@@ -648,7 +648,7 @@ void page_user_timelapse_refresh(bool)
         hide_preview_chrome();
         return;
     } else if(g_mp4_path[0] != '\0') {
-        ui_toast_show("MP4 open failed, fallback JPEG", user_color_accent, 1200);
+        ui_toast_show("MP4 open failed, fallback PNG", user_color_accent, 1200);
     }
 
     if(!load_sequence_frames()) {

@@ -7,7 +7,7 @@
  * - Media：Finish/Abort remux 成功后 upsert 一条
  * - UI：进入历史页时直接读取（不经列表 IPC）
  *
- * 媒体目录命名：{job_name}/（目录内 1.jpg,2.jpg,... 与 thumb.rthm）
+ * 媒体目录命名：{job_name}/（目录内 1.png,2.png,... 与 thumb.rthm）
  * 同一 job_name 重复打印会覆盖目录与媒体文件。
  */
 
@@ -35,7 +35,7 @@ struct PrintHistoryEntry {
     std::string         frames_dir;    /**< 相对目录名，如 benchy */
     std::string         thumb;         /**< 延时摄影缩略图，相对路径，如 benchy/thumb.rthm */
     std::string         print_thumb;   /**< 打印录像缩略图，相对路径，如 benchy/print_thumb.rthm */
-    std::string         video;         /**< 延时摄影视频，相对路径，如 benchy/timelapse.mp4；序列播放模式下可空 */
+    std::string         video;         /**< 延时摄影视频，相对路径，如 benchy/timelapse.mp4；PNG 播放模式下可空 */
     std::string         print_video;   /**< 相对路径，如 benchy/print_h264.mp4 */
     bool                video_pending = false; /**< 1=后台仍在生成延时摄影视频 */
     /** 1=本次会话开了连续 H264，且 print_h264.mp4 尚未落盘（Print History 用） */

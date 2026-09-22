@@ -325,45 +325,6 @@ void UiMsgProxy::init()
             }
         }));
 
-    /* SD 卡热插拔：载荷与 USB 那条同形，但**是两个不同的卷**，回调各挂各的。
-     * 后端未实现，这条订阅目前收不到任何东西。 */
-    subs_.push_back(bus.subscribe(
-        middleware::MsgType::GLAVO_SdCard_Hotplug_Ntf, middleware::ModuleId::UI,
-        [this](const middleware::Message& msg) {
-            middleware::UsbHotplugPayload p{};
-            if (sdcard_hotplug_cb_ && read_inline_pod(msg, p)) {
-                p.mount_path[sizeof(p.mount_path) - 1] = '\0';
-                sdcard_hotplug_cb_(p);
-            }
-        }));
-
-    subs_.push_back(bus.subscribe(
-        middleware::MsgType::APP_Storage_Usage_Rsp, middleware::ModuleId::UI,
-        [this](const middleware::Message& msg) {
-            middleware::StorageUsagePayload p{};
-            if (storage_usage_cb_ && read_inline_pod(msg, p)) {
-                storage_usage_cb_(p);
-            }
-        }));
-
-    subs_.push_back(bus.subscribe(
-        middleware::MsgType::APP_Storage_Format_Progress_Ntf, middleware::ModuleId::UI,
-        [this](const middleware::Message& msg) {
-            middleware::StorageFormatProgressPayload p{};
-            if (storage_format_progress_cb_ && read_inline_pod(msg, p)) {
-                storage_format_progress_cb_(p);
-            }
-        }));
-
-    subs_.push_back(bus.subscribe(
-        middleware::MsgType::APP_Storage_Format_Rsp, middleware::ModuleId::UI,
-        [this](const middleware::Message& msg) {
-            middleware::StorageFormatRspPayload p{};
-            if (storage_format_result_cb_ && read_inline_pod(msg, p)) {
-                storage_format_result_cb_(p);
-            }
-        }));
-
     subs_.push_back(bus.subscribe(
         middleware::MsgType::GLAVO_Mcu_Version_Ntf, middleware::ModuleId::UI,
         [this](const middleware::Message& msg) {
@@ -524,20 +485,6 @@ void UiMsgProxy::send_wifi_scan()
     middleware::MsgPort::instance().publish_async(msg);
 }
 
-void UiMsgProxy::send_storage_usage(middleware::StorageVolume volume)
-{
-    const middleware::StorageUsageReqPayload payload{ static_cast<uint8_t>(volume), {} };
-    publish_pod(middleware::MsgType::UI_Storage_Usage_Req,
-                middleware::ModuleId::APP_MEDIA, payload);
-}
-
-void UiMsgProxy::send_storage_format(middleware::StorageVolume volume)
-{
-    const middleware::StorageFormatReqPayload payload{ static_cast<uint8_t>(volume), {} };
-    publish_pod(middleware::MsgType::UI_Storage_Format_Req,
-                middleware::ModuleId::APP_MEDIA, payload);
-}
-
 void UiMsgProxy::send_wifi_connect(const char* ssid, const char* password)
 {
     middleware::WifiConnectReqPayload payload{};
@@ -597,26 +544,6 @@ void UiMsgProxy::add_wifi_state_listener(WifiStateCb cb)
 void UiMsgProxy::register_wifi_scan(WifiListCb cb)
 {
     wifi_scan_cb_ = std::move(cb);
-}
-
-void UiMsgProxy::register_sdcard_hotplug(UsbHotplugCb cb)
-{
-    sdcard_hotplug_cb_ = std::move(cb);
-}
-
-void UiMsgProxy::register_storage_usage(StorageUsageCb cb)
-{
-    storage_usage_cb_ = std::move(cb);
-}
-
-void UiMsgProxy::register_storage_format_progress(StorageFormatProgressCb cb)
-{
-    storage_format_progress_cb_ = std::move(cb);
-}
-
-void UiMsgProxy::register_storage_format_result(StorageFormatResultCb cb)
-{
-    storage_format_result_cb_ = std::move(cb);
 }
 
 void UiMsgProxy::register_wifi_saved(WifiListCb cb)

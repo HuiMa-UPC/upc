@@ -27,10 +27,7 @@ ui_modal_dialog_t *ui_modal_dialog_open(lv_obj_t *parent,
     lv_obj_remove_style_all(backdrop);
     lv_obj_set_size(backdrop, LV_PCT(100), LV_PCT(100));
     lv_obj_set_style_bg_color(backdrop, lv_color_black(), 0);
-    /* 浅色档的遮罩比深色档淡一档（稿 6251:94118 是 black @50%）：白卡本身够抢眼，
-     * 再压 70% 会让底下那页看着像断电。 */
-    lv_obj_set_style_bg_opa(backdrop,
-        cfg->light_theme ? LV_OPA_50 : USER_DLG_BACKDROP_OPA, 0);
+    lv_obj_set_style_bg_opa(backdrop, USER_DLG_BACKDROP_OPA, 0);
     lv_obj_clear_flag(backdrop, LV_OBJ_FLAG_SCROLLABLE);
     /* 让遮罩自身可点（吞掉穿透到底层 home 的事件） */
     lv_obj_add_flag(backdrop, LV_OBJ_FLAG_CLICKABLE);
@@ -43,33 +40,16 @@ ui_modal_dialog_t *ui_modal_dialog_open(lv_obj_t *parent,
     const int32_t w = cfg->card_width > 0 ? cfg->card_width : USER_DLG_W;
     lv_obj_set_width(card, w);
     lv_obj_set_height(card, LV_SIZE_CONTENT);
-    /* 两档只差外壳配色与几个量；结构完全一样，所以做成开关而不是另起一套控件。
-     * 浅色档的几何值都落回了现成 token（稿 1280 档：圆角 24 / 内距 24 / 行距 16）：
-     *   圆角 USER_LIGHT_RADIUS   36 / 24 / 19（稿 ×1.5 / ×0.8 = 36 / 19.2）
-     *   内距 USER_PAD            40 / 24 / 22
-     *   行距 USER_PAD_SM         20 / 16 / 11
-     * 卡宽也不必分档：USER_DLG_W 的 1280 档就是稿值 496。 */
-    lv_obj_set_style_bg_color(card, cfg->light_theme ? user_light_card : user_color_panel, 0);
+    lv_obj_set_style_bg_color(card, user_color_panel, 0);
     lv_obj_set_style_bg_opa(card, LV_OPA_COVER, 0);
-    lv_obj_set_style_radius(card, cfg->light_theme ? USER_LIGHT_RADIUS : USER_DLG_RADIUS, 0);
-    if(cfg->light_theme) {
-        /* 稿上白卡只有一道极淡的外描边（white @10%），压在 50% 遮罩上几乎看不见，
-         * 这里索性不画；投影也收掉——深色档那 60/60% 的重投影是给深底用的。 */
-        lv_obj_set_style_border_width(card, 0, 0);
-        lv_obj_set_style_shadow_width(card, 0, 0);
-    } else {
-        lv_obj_set_style_border_width(card, 1, 0);
-        lv_obj_set_style_border_color(card, user_color_divider, 0);
-        lv_obj_set_style_shadow_width(card, 60, 0);
-        lv_obj_set_style_shadow_color(card, lv_color_black(), 0);
-        lv_obj_set_style_shadow_opa(card, LV_OPA_60, 0);
-    }
-    const int32_t card_pad = cfg->light_theme ? USER_PAD : USER_DLG_PAD;
-    lv_obj_set_style_pad_all(card, card_pad, 0);
-    /* 浅色档的行距与内距不同值：稿把标题与正文收在同一个 16 间距的组里，组与页脚
-     * 之间才是 32。card 的 pad_row 只有一个值，所以取 16 管住「标题→正文」，
-     * 「正文→页脚」那 32 由它再加上页脚自己的 pad_top（同样 16）凑出来。 */
-    lv_obj_set_style_pad_row(card, cfg->light_theme ? USER_PAD_SM : card_pad, 0);
+    lv_obj_set_style_radius(card, USER_DLG_RADIUS, 0);
+    lv_obj_set_style_border_width(card, 1, 0);
+    lv_obj_set_style_border_color(card, user_color_divider, 0);
+    lv_obj_set_style_shadow_width(card, 60, 0);
+    lv_obj_set_style_shadow_color(card, lv_color_black(), 0);
+    lv_obj_set_style_shadow_opa(card, LV_OPA_60, 0);
+    lv_obj_set_style_pad_all(card, USER_DLG_PAD, 0);
+    lv_obj_set_style_pad_row(card, USER_DLG_PAD, 0);
     lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(card, LV_FLEX_ALIGN_START,
                           LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
@@ -81,21 +61,10 @@ ui_modal_dialog_t *ui_modal_dialog_open(lv_obj_t *parent,
     if(cfg->title_text && cfg->title_text[0]) {
         lv_obj_t *title = lv_label_create(card);
         lv_label_set_text(title, cfg->title_text);
-        lv_obj_set_style_text_color(title,
-            cfg->light_theme ? user_light_text : user_color_text, 0);
-        /* 浅色档另有一档标题字号（稿 28@1280）：user 系在那一档正好跳过 28，沿用
-         * value(32) 实机量到卡片比稿高 9px、标题字身大 13%。深色那套不动。 */
-        lv_obj_set_style_text_font(title,
-            cfg->light_theme ? user_font_dlg_title() : user_font_value(), 0);
+        lv_obj_set_style_text_color(title, user_color_text, 0);
+        lv_obj_set_style_text_font(title, user_font_value(), 0);
         lv_obj_set_style_text_align(title, LV_TEXT_ALIGN_CENTER, 0);
         lv_obj_set_width(title, LV_PCT(100));
-        if(cfg->light_theme) {
-            /* 把 Montserrat 的 line_height 撑回稿的行盒，见 USER_DLG_TITLE_LEAD。
-             * 上多下少是照稿的基线位置分的（稿基线在 39 的行盒里偏下）。 */
-            const int32_t lead = USER_DLG_TITLE_LEAD;
-            lv_obj_set_style_margin_top(title, lead - lead / 2, 0);
-            lv_obj_set_style_margin_bottom(title, lead / 2, 0);
-        }
         /* 有右上角关闭按钮时，左右对称预留其宽度，避免居中标题压到 "X" */
         if(cfg->with_close_btn) {
             lv_obj_set_style_pad_left(title, USER_BACK_BTN_H + USER_PAD_SM, 0);
@@ -121,13 +90,6 @@ ui_modal_dialog_t *ui_modal_dialog_open(lv_obj_t *parent,
     lv_obj_set_height(body, LV_SIZE_CONTENT);
     lv_obj_set_style_bg_opa(body, LV_OPA_TRANSP, 0);
     lv_obj_set_style_pad_all(body, 0, 0);
-    if(cfg->light_theme) {
-        /* 同标题，补正文的行盒差；加在 slot 上而不是标签上，这样页面往 body 里塞
-         * 什么都不用管这件事。见 USER_DLG_BODY_LEAD。 */
-        const int32_t lead = USER_DLG_BODY_LEAD;
-        lv_obj_set_style_pad_top(body, lead - lead / 2, 0);
-        lv_obj_set_style_pad_bottom(body, lead / 2, 0);
-    }
     lv_obj_set_style_pad_row(body, USER_PAD, 0);
     lv_obj_set_flex_flow(body, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(body, LV_FLEX_ALIGN_CENTER,

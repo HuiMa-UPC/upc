@@ -1,7 +1,6 @@
 #include "page_manager.hpp"
 #include "ui_theme.hpp"
 #include "ui_feedback.hpp"
-#include "ui_user_widgets.hpp"
 #include "ui_device_bar.hpp"
 #include "ui_notice_stack.hpp"
 #include "control.hpp"
@@ -29,9 +28,9 @@ void PageManager::init(lv_obj_t* screen) {
     lv_obj_set_flex_flow(shell_, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(shell_, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
 
+    lv_obj_set_style_bg_color(shell_, user_color_bg, 0);
     lv_obj_set_style_bg_grad_dir(shell_, LV_GRAD_DIR_NONE, 0);
     lv_obj_set_style_bg_opa(shell_, LV_OPA_COVER, 0);
-    apply_shell_style();   /* 底色两档都在这里给，见 set_shell_light */
 
     /* 侧栏是浮层而不是 flex 的第一格：首页的摄像头层要延伸到屏幕左边缘（整屏预览），
      * 侧栏浮在画面之上。content_panel_ 用 pad_left 补回侧栏宽度，所以其余页面的
@@ -52,10 +51,25 @@ void PageManager::init(lv_obj_t* screen) {
     /* 左右内边距由「侧栏宽 − 项边长」反推：稿上这段是 16@1280（128 = 16+96+16）。 */
     lv_obj_set_style_pad_hor(menu_panel_, (USER_SIDEBAR_W - USER_NAV_ITEM_SZ) / 2, 0);
     lv_obj_set_style_pad_row(menu_panel_, USER_NAV_GAP, 0);
+    lv_obj_set_style_bg_color(menu_panel_, user_color_panel, 0);
+    /* 摄像头整屏时侧栏背后是视频，图标底色由当前帧决定：亮帧下合成色会盖过
+     * user_color_icon_off（#555555），未选中图标糊掉。面板自己吃掉大部分不透明度，
+     * 暗色就只落在侧栏这 USER_SIDEBAR_W 内，不额外压暗画面。
+     * 其余页面背后是 user_color_bg（#0a0909，近纯黑），提高不透明度肉眼无差别。
+     * 取值依据：叠上摄像头层那条 LV_OPA_70 底衬后，全白帧下图标底色约 #212121，
+     * 与其余页面的 #131212 接近。想让画面多透一点可降到 LV_OPA_80（约 #262626）。 */
+    lv_obj_set_style_bg_opa(menu_panel_, LV_OPA_90, 0);
+    lv_obj_set_style_border_width(menu_panel_, 1, 0);
+    lv_obj_set_style_border_color(menu_panel_, user_color_divider, 0);
+    lv_obj_set_style_border_opa(menu_panel_, LV_OPA_50, 0);
+    lv_obj_set_style_border_side(menu_panel_, LV_BORDER_SIDE_RIGHT, 0);
     lv_obj_set_style_radius(menu_panel_, 0, 0);
+    /* 侧栏保留轻微层次，避免与内容区之间出现明显黑色竖缝。 */
+    lv_obj_set_style_shadow_width(menu_panel_, 8, 0);
+    lv_obj_set_style_shadow_color(menu_panel_, lv_color_black(), 0);
+    lv_obj_set_style_shadow_opa(menu_panel_, LV_OPA_10, 0);
     lv_obj_set_scrollbar_mode(menu_panel_, LV_SCROLLBAR_MODE_OFF);
     lv_obj_clear_flag(menu_panel_, LV_OBJ_FLAG_SCROLLABLE);
-    apply_sidebar_style();   /* 底色/描边/投影两档都在这里给，见 set_sidebar_video_mode */
 
     content_panel_ = lv_obj_create(shell_);
     lv_obj_set_width(content_panel_, 0);
@@ -90,97 +104,22 @@ void PageManager::init(lv_obj_t* screen) {
     lv_obj_move_foreground(menu_panel_);
 }
 
-/* 侧栏两档外观。浅色那档照稿 6073:72801：白 4% 的底几乎看不见，侧栏与页面的分界
- * 全靠右侧那道 #0C1C61 @4% / offset(2,0) / blur 6 的外投影划出来，所以投影不能省。
- * 深色那档是整屏视频态的退路，值沿用改版前的：bg_opa 90% 是实测出来的——叠上摄像头层
- * 那条 LV_OPA_70 底衬后，全白帧下图标底色约 #212121，与其余暗色页面的 #131212 接近；
- * 想让画面多透一点可降到 LV_OPA_80（约 #262626），再低未选中图标就要糊。 */
-void PageManager::apply_sidebar_style() {
-    if (!menu_panel_) {
-        return;
-    }
-    if (sidebar_video_) {
-        lv_obj_set_style_bg_color(menu_panel_, user_color_panel, 0);
-        lv_obj_set_style_bg_opa(menu_panel_, LV_OPA_90, 0);
-        lv_obj_set_style_border_width(menu_panel_, 1, 0);
-        lv_obj_set_style_border_color(menu_panel_, user_color_divider, 0);
-        lv_obj_set_style_border_opa(menu_panel_, LV_OPA_50, 0);
-        lv_obj_set_style_border_side(menu_panel_, LV_BORDER_SIDE_RIGHT, 0);
-        lv_obj_set_style_shadow_width(menu_panel_, 8, 0);
-        lv_obj_set_style_shadow_ofs_x(menu_panel_, 0, 0);
-        lv_obj_set_style_shadow_color(menu_panel_, lv_color_black(), 0);
-        lv_obj_set_style_shadow_opa(menu_panel_, LV_OPA_10, 0);
-    } else {
-        lv_obj_set_style_bg_color(menu_panel_, lv_color_white(), 0);
-        lv_obj_set_style_bg_opa(menu_panel_, 10, 0);     /* 稿 4%，255 的 4% ≈ 10 */
-        lv_obj_set_style_border_width(menu_panel_, 0, 0);
-        lv_obj_set_style_shadow_width(menu_panel_, 6, 0);
-        lv_obj_set_style_shadow_ofs_x(menu_panel_, 2, 0);
-        lv_obj_set_style_shadow_color(menu_panel_, user_light_shadow, 0);
-        lv_obj_set_style_shadow_opa(menu_panel_, 10, 0); /* 稿 4% */
-    }
-    /* 图标色跟着档位走，重新按当前高亮刷一遍 */
-    update_menu_highlight(current_ ? current_->name() : std::string());
-}
-
-void PageManager::raise_sidebar() {
-    if (menu_panel_) {
-        /* menu_panel_ 早已是 FLOATING，这里只改 z 序不会动到 shell_ 的 flex 布局顺序
-         * ——顺序反了的后果见 init() 里那段说明。 */
-        lv_obj_move_foreground(menu_panel_);
-    }
-}
-
-void PageManager::set_sidebar_video_mode(bool on) {
-    if (sidebar_video_ == on) {
-        return;
-    }
-    sidebar_video_ = on;
-    apply_sidebar_style();
-}
-
-/* 整屏底色两档。页面根节点与 content_panel_ 都是透明的，底全由这一层给。
- *
- * 之所以是**一个开关而不是直接换成浅色**：浅色稿是一页一页改过来的，改完的页面
- * （首页 / 历史页 / 消息页 / 设置页）要浅底，控制页与隐藏页仍是深色内容——翻成浅底
- * 那些页的白字会当场看不见。名单在 apply_device_bar()。 */
-void PageManager::apply_shell_style() {
-    if (!shell_) {
-        return;
-    }
-    lv_obj_set_style_bg_color(shell_, shell_light_ ? user_light_bg : user_color_bg, 0);
-    /* Toast 跟着一起切档。挂在这里而不是 set_shell_light()：那个函数档位没变就提前
-     * 返回，初始态（init() 建壳那次）会漏掉；这里是两条路径唯一的收口。 */
-    ui_toast_set_light(shell_light_);
-}
-
-void PageManager::set_shell_light(bool on) {
-    if (shell_light_ == on) {
-        return;
-    }
-    shell_light_ = on;
-    apply_shell_style();
-}
-
-/* 创建左侧菜单按钮外壳，返回按钮对象。
+/* 创建左侧菜单按钮外壳（仅按压反馈，无常显底板），返回按钮对象。
  *
  * 背景分四档，靠 LVGL 的状态选择器叠出来：
- *   默认                          → 透明
- *   CHECKED                       → #333145 实色底板（稿 6073:72715 的 Nav_Home_Active）
+ *   默认                          → 透明（稿 2235:8697 的选中态只有字形，没有底板）
+ *   CHECKED                       → 透明，见下
  *   PRESSED                       → 白 20%，按的是未选中的标签
  *   CHECKED | PRESSED             → 主色蓝 20%，按的是已选中的标签
  * 组合态一定压过单态：候选样式要求状态位是对象当前状态的子集，再取状态值最大的那条，
  * 而 LV_STATE_CHECKED(1<<2) | LV_STATE_PRESSED(1<<7) = 132 > PRESSED 的 128。
  *
- * **CHECKED 那档必须显式给 bg_color + bg_opa，不能只是「不设」**：lv_btn_create 会带上
+ * **CHECKED 那档必须显式写成 LV_OPA_TRANSP，不能只是「不设」**：lv_btn_create 会带上
  * 默认主题，而主题给每个普通按钮的 checked 态都挂了 bg_color_secondary（副色 +
  * LV_OPA_COVER，见 lv_theme_default.c 的 apply 分支），副色由 lv_display.c 自动初始化
  * 主题时传的 LV_PALETTE_RED——不压住的话选中态会是一块不透明红底（已实机踩过）。
- * 早先是靠把 bg_opa 写成 LV_OPA_TRANSP 来压制的（那时稿上选中态没有底板），现在稿
- * 自带底板，局部给一个不透明的 #333145 同样盖得住，绕法可以退掉了。
- *
- * 圆角取 USER_NAV_ITEM_SZ/3（1280 档 96/3 = 32，正是稿值），跟着项边长走而不是借用
- * USER_RADIUS——后者是通用卡片圆角（1280 档才 14），和导航项没有关系。 */
+ * 局部样式优先于主题样式，所以只要局部把 bg_opa 设成透明就盖住了；bg_color 不用管，
+ * 底不画出来颜色无所谓。反过来也别给它设可见的背景色，那就成了稿上没有的常显底板。 */
 static lv_obj_t* make_menu_button(lv_obj_t* parent, void* page_raw,
                                   lv_event_cb_t cb) {
     lv_obj_t* btn = lv_btn_create(parent);
@@ -189,33 +128,20 @@ static lv_obj_t* make_menu_button(lv_obj_t* parent, void* page_raw,
     const int32_t nav_btn_sz = USER_NAV_ITEM_SZ;
     lv_obj_set_size(btn, nav_btn_sz, nav_btn_sz);
     lv_obj_set_style_bg_opa(btn, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_bg_color(btn, user_light_nav_on, LV_STATE_CHECKED);
-    lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, LV_STATE_CHECKED);
+    lv_obj_set_style_bg_opa(btn, LV_OPA_TRANSP, LV_STATE_CHECKED);
     lv_obj_set_style_bg_color(btn, user_color_text, LV_STATE_PRESSED);
     lv_obj_set_style_bg_opa(btn, LV_OPA_20, LV_STATE_PRESSED);
     lv_obj_set_style_bg_color(btn, user_color_accent,
                               LV_STATE_CHECKED | LV_STATE_PRESSED);
-    lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, LV_STATE_CHECKED | LV_STATE_PRESSED);
+    lv_obj_set_style_bg_opa(btn, LV_OPA_20, LV_STATE_CHECKED | LV_STATE_PRESSED);
     lv_obj_set_style_border_width(btn, 0, 0);
-    lv_obj_set_style_radius(btn, USER_NAV_ITEM_SZ / 3, 0);
-    lv_obj_set_style_pad_all(btn, USER_NAV_ICON_PAD, 0);
-    /* 选中底板的外投影，**只给 LV_STATE_CHECKED**。稿导出的 SVG 是 feOffset dy=4 +
-     * feGaussianBlur stdDeviation=6，即视觉模糊约 12（filter 区域也正好在 96 框外留了
-     * 12 的边）。
-     *
-     * **别图省事挂在默认态上**：LVGL 决定画不画影子只看 shadow_width / shadow_opa，
-     * 压根不查 bg_opa（见 lv_draw_rect.c 里 has_shadow 那段，bg_opa 走的是另一条独立的
-     * has_fill）。挂默认态的话五枚全带影子。而且未选中那四枚底是透明的、bg_cover 为
-     * false，lv_draw_sw_box_shadow.c 里那句 `simple = dsc->bg_cover` 就不成立，影子连
-     * 按钮正中间也画出来——屏上是每枚未选中项底下压着一团完整的深色柔光，看着像浮起来。
-     *
-     * 五枚导出里只有 Nav_Home_Active 带这个 filter，其余四枚没有：那是导出差异不是设计
-     * 意图，投影挂在「选中」那个变体上，而任一时刻只有一项选中。 */
     lv_obj_set_style_shadow_width(btn, 0, 0);
-    lv_obj_set_style_shadow_width(btn, 12, LV_STATE_CHECKED);
-    lv_obj_set_style_shadow_ofs_y(btn, 4, LV_STATE_CHECKED);
-    lv_obj_set_style_shadow_color(btn, user_light_nav_on, LV_STATE_CHECKED);
-    lv_obj_set_style_shadow_opa(btn, LV_OPA_20, LV_STATE_CHECKED);
+    lv_obj_set_style_radius(btn, USER_RADIUS, 0);
+    lv_obj_set_style_pad_all(btn, USER_NAV_ICON_PAD, 0);
+    /* 选中态那层渐变按蒙版原尺寸（64×64）建，在窄侧栏的档位上比按钮还大（1024 档
+     * 按钮 58），不放开溢出会先被裁掉再缩放，字形四角就缺了。1280 档按钮已加到 96、
+     * 不再溢出，但这个标志要留着给其余档位。见 register_page 的说明。 */
+    lv_obj_add_flag(btn, LV_OBJ_FLAG_OVERFLOW_VISIBLE);
     lv_obj_add_event_cb(btn, cb, LV_EVENT_CLICKED, page_raw);
     return btn;
 }
@@ -227,10 +153,8 @@ void PageManager::register_page(PagePtr page, const char* menu_icon) {
 
     lv_obj_t* btn = make_menu_button(menu_panel_, raw, menu_btn_event_cb);
     lv_obj_set_style_text_font(btn, user_font_icon(), 0);
-    /* 符号图标这条路只剩调试入口在用，不跟侧栏档位切换：未选中取浅色稿的灰，
-     * 选中态在 #333145 底板上取白（与图片图标那条一致）。 */
-    lv_obj_set_style_text_color(btn, user_light_icon_off, 0);
-    lv_obj_set_style_text_color(btn, lv_color_white(), LV_STATE_CHECKED);
+    lv_obj_set_style_text_color(btn, user_color_icon_off, 0);
+    lv_obj_set_style_text_color(btn, user_color_accent, LV_STATE_CHECKED);
 
     lv_obj_t* lbl = lv_label_create(btn);
     lv_label_set_text(lbl, menu_icon ? menu_icon : raw->name().c_str());
@@ -240,43 +164,83 @@ void PageManager::register_page(PagePtr page, const char* menu_icon) {
     entries_.push_back(std::move(entry));
 }
 
-/* 浅色稿 6073:72801 的选中态是「#333145 实色底板 + 白色字形」，比早先那版简单得多：
- * 那时稿上选中态没有底板、只有一枚蓝渐变字形，而 A8 图标只存 alpha、recolor 只能上
- * 单色，于是每个按钮里建了两层互斥的图标——未选中露 A8 灰图标，选中露一块铺了渐变的
- * 方块、用同一份 A8 当 bitmap_mask_src 裁成字形。那套连带三个 LVGL 的坑（蒙版按原
- * 尺寸居中贴不缩放、transform_pivot 默认在左上角、窄侧栏档位要放开 OVERFLOW_VISIBLE）
- * 已随稿一并退役，现在一层图标 + 换 recolor 颜色就够。 */
-void PageManager::register_page(PagePtr page, const lv_image_dsc_t* const* menu_icon_set,
-                                const lv_image_dsc_t* const* badge_icon_set) {
+/* 选中态字形的蓝色对角渐变。方向取左上→右下，与 ui_user_make_primary_pill_btn /
+ * ui_slide_unlock 近似稿上 139° 的做法一致。
+ * bg_grad 只存指针，故渐变描述符必须持久——五个图标共用这一份。
+ *
+ * **色值比稿宽**：稿 2235:8699 是 #4054FD → #4D80EE，两色只差绿通道 44（红 +13、蓝 −15），
+ * 亮度差约 28/255，在 54px 的字形上肉眼就是一片纯蓝、看不出深浅，所以起点压暗、终点提亮
+ * 到 #3348E8 → #6699F5（亮度差约 64）。同一处理见 ui_slide_unlock 的红条：注释里的稿值
+ * 是 #FF2424 → #FF4B4B，实取 #D00A0A → #FF8484。**别照稿值改回去**，那等于关掉渐变。
+ *
+ * 停靠点 {45, 198} 而不是 {0, 255}：渐变铺满整个 64×64 方块，而字形只占 x/y 的 6..57，
+ * 沿对角线是整条色带的 9%~89%，用 {0,255} 会把两端各浪费掉一截。稿上的 11%/86% 本就是
+ * 相对字形自身算的（渐变挂在字形节点上，不是带留白的外框），换算到本方块即这两个值。 */
+static const lv_grad_dsc_t& nav_active_grad() {
+    static lv_grad_dsc_t s_grad;
+    static bool s_ready = false;
+    if (!s_ready) {
+        const lv_color_t cols[2] = { lv_color_hex(0x3348E8), lv_color_hex(0x6699F5) };
+        const lv_opa_t   opa[2]  = { LV_OPA_COVER, LV_OPA_COVER };
+        const uint8_t    frac[2] = { 45, 198 };
+        lv_grad_init_stops(&s_grad, cols, opa, frac, 2);
+        lv_grad_linear_init(&s_grad, LV_GRAD_LEFT, LV_GRAD_TOP,
+                            LV_GRAD_RIGHT, LV_GRAD_BOTTOM, LV_GRAD_EXTEND_PAD);
+        s_ready = true;
+    }
+    return s_grad;
+}
+
+void PageManager::register_page(PagePtr page, const lv_image_dsc_t* menu_icon_img) {
     PageEntry entry;
     entry.page = std::move(page);
     Page* raw = entry.page.get();
 
     lv_obj_t* btn = make_menu_button(menu_panel_, raw, menu_btn_event_cb);
-    /* 底板与按压反馈都由按钮自身整块绘制，见 make_menu_button。 */
+    /* 按压反馈（未选中白 20% / 已选中主色 20%）由按钮自身整块绘制，见 make_menu_button。 */
 
-    /* 按当前档位挑等宽的那份，正常情况下 src_sz == USER_NAV_ICON_SZ、下面那段缩放
-     * 整个跳过。留着缩放是兜底：主题改了尺寸却没同步改生成脚本的 NAV_SIZES 时，
-     * 形不崩、只是糊。 */
-    const lv_image_dsc_t* src = ui_user_pick_icon(menu_icon_set, USER_NAV_ICON_SZ);
     lv_obj_t* img = lv_image_create(btn);
-    lv_image_set_src(img, src);
+    lv_image_set_src(img, menu_icon_img);
     lv_obj_center(img);
-    if (src && src->header.w > 0) {
-        const int32_t src_sz = (int32_t)src->header.w;
-        if (src_sz != USER_NAV_ICON_SZ) {
-            /* pivot 默认在左上角，不挪到中心会朝左上缩 */
-            lv_image_set_pivot(img, src_sz / 2, src_sz / 2);
-            lv_image_set_scale(img, 256 * USER_NAV_ICON_SZ / src_sz);
-        }
+    /* 缩放到 USER_NAV_ICON_SZ（256 = 100%） */
+    if (menu_icon_img && menu_icon_img->header.w > 0) {
+        const int32_t zoom = 256 * USER_NAV_ICON_SZ / (int32_t)menu_icon_img->header.w;
+        lv_image_set_scale(img, zoom);
     }
-    /* 具体颜色随选中态与侧栏档位变，统一在 update_menu_highlight 里给。 */
+    /* A8 图标用 recolor 着色，恒为未选灰——选中态改由下面那层渐变负责，
+     * 因为 recolor 只能上单色，画不出稿里的渐变。 */
+    lv_obj_set_style_image_recolor(img, user_color_icon_off, 0);
     lv_obj_set_style_image_recolor_opa(img, LV_OPA_COVER, 0);
+
+    /* 选中态：一块铺了蓝渐变的方块，再用同一份 A8 图标当位图蒙版裁成字形。
+     * 两个尺寸约束都来自 LVGL 的实现（lv_draw_sw_img.c 的 apply_mask）：
+     *   - 蒙版按原尺寸居中贴、**不缩放**，所以方块必须与图头等大（这里 64×64），
+     *     否则字形会被裁或四周留空；
+     *   - 于是缩到 USER_NAV_ICON_SZ 只能靠 transform_scale，且 pivot 默认在左上角，
+     *     必须挪到中心，不然会朝左上角缩。
+     * 与 img 互斥显示，切换见 update_menu_highlight。 */
+    lv_obj_t* grad = nullptr;
+    if (menu_icon_img && menu_icon_img->header.w > 0) {
+        const int32_t mask_sz = (int32_t)menu_icon_img->header.w;
+        grad = lv_obj_create(btn);
+        lv_obj_remove_style_all(grad);
+        lv_obj_set_size(grad, mask_sz, (int32_t)menu_icon_img->header.h);
+        lv_obj_center(grad);
+        lv_obj_set_style_bg_color(grad, lv_color_hex(0x3348E8), 0);   /* 渐变起点，兜底用 */
+        lv_obj_set_style_bg_grad(grad, &nav_active_grad(), 0);
+        lv_obj_set_style_bg_opa(grad, LV_OPA_COVER, 0);
+        lv_obj_set_style_bitmap_mask_src(grad, menu_icon_img, 0);
+        lv_obj_set_style_transform_pivot_x(grad, mask_sz / 2, 0);
+        lv_obj_set_style_transform_pivot_y(grad, mask_sz / 2, 0);
+        lv_obj_set_style_transform_scale(grad, 256 * USER_NAV_ICON_SZ / mask_sz, 0);
+        lv_obj_remove_flag(grad, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_remove_flag(grad, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_add_flag(grad, LV_OBJ_FLAG_HIDDEN);
+    }
 
     entry.menu_btn = btn;
     entry.menu_icon_img = img;
-    entry.menu_icon_set = menu_icon_set;
-    entry.menu_icon_badge_set = badge_icon_set;
+    entry.menu_icon_grad = grad;
     entries_.push_back(std::move(entry));
 }
 
@@ -326,67 +290,41 @@ void PageManager::update_menu_highlight(const std::string& active_name) {
         } else {
             lv_obj_clear_state(entry.menu_btn, LV_STATE_CHECKED);
         }
-        /* 图片图标只有一层，靠 recolor 换色。选中态恒为白（底板是深色 #333145，
-         * 两档都一样）；未选中态跟着侧栏档位走：浅色档 #9E9E9E（稿值），整屏视频档
-         * 退回 #555555——那一档底是深的，稿值那个亮灰反而会和白色选中态糊在一起。
+        /* 图片图标：未选中露 A8 灰图标，选中露渐变层，两者互斥。
          * （符号图标那条路仍由按钮的 text_color 处理，见另一个 register_page 重载） */
-        if (entry.menu_icon_img) {
-            const lv_color_t c = active ? lv_color_white()
-                                        : (sidebar_video_ ? user_color_icon_off
-                                                          : user_light_icon_off);
-            lv_obj_set_style_image_recolor(entry.menu_icon_img, c, 0);
+        if (entry.menu_icon_grad) {
+            if (active) {
+                lv_obj_remove_flag(entry.menu_icon_grad, LV_OBJ_FLAG_HIDDEN);
+                if (entry.menu_icon_img) lv_obj_add_flag(entry.menu_icon_img, LV_OBJ_FLAG_HIDDEN);
+            } else {
+                lv_obj_add_flag(entry.menu_icon_grad, LV_OBJ_FLAG_HIDDEN);
+                if (entry.menu_icon_img) lv_obj_remove_flag(entry.menu_icon_img, LV_OBJ_FLAG_HIDDEN);
+            }
         }
     }
 }
 
 void PageManager::apply_device_bar(const PageEntry& entry) {
-    const std::string& page = entry.page->name();
     /* 有菜单按钮 = 侧栏那五个标签页 → 显示；隐藏页（选文件 / 调试 / 延时摄影）
      * 不显示。用这条规则而不是写死页名：以后新增隐藏页默认就不显示。
-     * 延时摄影页另外还建在 lv_layer_top() 上整屏覆盖，本来也盖得住这条。
-     *
-     * **历史页 / 消息页 / 设置页是例外**：三页的浅色稿（6122 一族 / 6230:89616 一族 /
-     * 6089:11322 一族）顶部都没画这条，页面从屏顶起就是自己的内容（各自给顶内距）。
-     * 消息页的稿里那条设备条其实还躺在图层树上（6101:14137），但被不透明的顶栏整条
-     * 盖住了，等价于不画。代价是在这三页看不到设备名与联机状态，这是照稿的取舍。
-     * 不显示时下面那句会把 pad_top 收回 0，整屏高度还给页面。
-     *
-     * 设置页**必须**排除，不是可选的美化：左栏 8 项的高度预算是
-     * 48 + 8×80 + 7×16 = 800，正好等于屏高，被 USER_CONTENT_TOP 下推 112 之后
-     * 末项 Debug 会整个掉出屏外。
-     *
-     * 监控页同样排除：稿 6338:27240 一族里摄像头画面从 y=0 起、右栏 Tab 行顶在
-     * y=32，整屏没有给这条带子留位置。 */
-    const bool show = entry.menu_btn != nullptr &&
-                      page != "user_history" && page != "user_message" &&
-                      page != "user_settings" && page != "user_monitor";
+     * 延时摄影页另外还建在 lv_layer_top() 上整屏覆盖，本来也盖得住这条。 */
+    const bool show = entry.menu_btn != nullptr;
     ui_device_bar_set_visible(show);
     lv_obj_set_style_pad_top(content_panel_, show ? USER_CONTENT_TOP : 0, 0);
-    /* 通知三态（toast / 铃铛 / 面板）**只在首页显示**。
-     *
-     * 早先的规则是「侧栏那五个标签页显示，另外排除消息页、历史页、设置页」，实际落到
-     * 首页 + 控制页两处。浅色稿把右上角这块做成了首页布局的一部分（铃铛在稿上就画在
-     * 首页那一帧里），所以收窄到首页；控制页的新消息与其余页面一样，靠侧栏消息图标那
-     * 颗红点提示。
-     *
-     * 被排除的几页各有各的理由，收窄之后一并覆盖：消息页自己（消息都摊在页面上了，
-     * 再在右上角浮两张重复的没意义）、历史页与设置页（右上角已经有 Storage 容量条和
-     * Wi-Fi 的 On/Off 开关，浮层压上去会连触摸一起吃掉）。 */
-    ui_notice_stack_set_visible(show && page == "user_home");
+    /* 通知浮层同一条规则，另外排除三页：
+     *   - 消息页自己：消息都摊在页面上了，再在右上角浮两张重复的没意义；
+     *   - 历史页 / 设置页：这两页的右上角已经有常驻内容（Storage 容量条、Wi-Fi 的
+     *     On/Off 开关），浮层压上去会挡住它们——开关还可点，连触摸一起吃掉。这两页的
+     *     新消息只靠侧栏消息图标的红点提示。
+     * 试过降级成单行细条，但细条底是半透明的，与 Storage 条叠印两层字都读不清；往下
+     * 移又会压到 Manage 按钮和那个开关，所以直接不显示。 */
+    const std::string& page = entry.page->name();
+    ui_notice_stack_set_visible(show && page != "user_message"
+                                     && page != "user_history"
+                                     && page != "user_settings");
     /* 让位量是打印态/监控态首页专属的（要让开右上角那块环境区），换页一律清零；
      * 首页自己会在 on_enter 里按当前状态再让一次。 */
     ui_notice_stack_set_top_offset(0);
-    /* 侧栏的深色档同理，只在首页那两个整屏视频态用。换页一律回浅色——打印在后台继续
-     * 跑时用户可能切到别的页，那些页是浅底/暗底但都不是视频，深色侧栏没有必要。
-     * 首页在 on_enter 里按当前状态再置一次。 */
-    set_sidebar_video_mode(false);
-    /* 整屏底色：**已按浅色稿改过的页面**才给浅底。控制页还是深色内容，翻成浅底
-     * 白字会当场看不见；那一页改稿时把页名加进来即可。
-     * 隐藏页（选文件 / 调试 / 延时摄影 / 相册全屏）不在名单里，一律走深色——它们本就
-     * 是深底的整屏媒体/表单。 */
-    set_shell_light(page == "user_home" || page == "user_monitor" ||
-                    page == "user_history" || page == "user_message" ||
-                    page == "user_settings" || page == "user_files");
 }
 
 void PageManager::set_menu_badge(const std::string& page_name, bool on) {
@@ -396,22 +334,17 @@ void PageManager::set_menu_badge(const std::string& page_name, bool on) {
     }
     if (on && !entry->menu_badge) {
         /* 稿里红点是烤进图标 SVG 的，那样没法按未读数开关，所以另叠一个小圆。
-         * FLOATING：菜单按钮里图标是 center 摆的，红点不能占布局。
-         *
-         * 稿 6255:95797 给的是确值：96 的导航项里 circle(60,36) r=4，即直径 8、
-         * 圆心从项心 (48,48) 往右上各让 12。颜色 #FE6868 与首页铃铛那颗同值
-         * （那边早就是稿值了，这边原先填的是深色档的 ui_color_danger #F85149）。 */
-        const int32_t sz  = USER_NAV_ITEM_SZ * 8 / 96;
-        const int32_t off = USER_NAV_ITEM_SZ * 12 / 96;
+         * FLOATING：菜单按钮里图标是 center 摆的，红点不能占布局。 */
+        const int32_t sz = USER_STATUS_DOT_SZ;
         lv_obj_t* dot = lv_obj_create(entry->menu_btn);
         lv_obj_remove_style_all(dot);
         lv_obj_add_flag(dot, LV_OBJ_FLAG_FLOATING);
         lv_obj_set_size(dot, sz, sz);
         lv_obj_set_style_radius(dot, LV_RADIUS_CIRCLE, 0);
-        lv_obj_set_style_bg_color(dot, user_light_notice_dot, 0);
+        lv_obj_set_style_bg_color(dot, ui_color_danger, 0);
         lv_obj_set_style_bg_opa(dot, LV_OPA_COVER, 0);
         lv_obj_remove_flag(dot, LV_OBJ_FLAG_CLICKABLE);
-        lv_obj_align(dot, LV_ALIGN_CENTER, off, -off);
+        lv_obj_align(dot, LV_ALIGN_TOP_RIGHT, 0, 0);
         entry->menu_badge = dot;
     }
     if (entry->menu_badge) {
@@ -420,14 +353,6 @@ void PageManager::set_menu_badge(const std::string& page_name, bool on) {
         } else {
             lv_obj_add_flag(entry->menu_badge, LV_OBJ_FLAG_HIDDEN);
         }
-    }
-    /* 有带红点变体的话连图标一起换：那一版把右上角咬掉了一块给红点让位，
-     * 不换的话红点会压在原轮廓上（同 ui_notice_stack.cpp 的 build_bell）。 */
-    if (entry->menu_icon_img && entry->menu_icon_badge_set) {
-        const lv_image_dsc_t* const* set =
-            on ? entry->menu_icon_badge_set : entry->menu_icon_set;
-        lv_image_set_src(entry->menu_icon_img,
-                         ui_user_pick_icon(set, USER_NAV_ICON_SZ));
     }
 }
 

@@ -10,13 +10,10 @@ namespace ui::album {
 /** 找不到时的下标返回值 */
 constexpr std::size_t kInvalidIndex = static_cast<std::size_t>(-1);
 
-/** 相册一条：图片本体 + 配对缩略图 + 拍摄时间 */
+/** 相册一条：图片本体 + 配对缩略图 */
 struct PhotoEntry {
     std::string path;   /**< 图片绝对路径 */
     std::string thumb;  /**< 配对 .rthm 绝对路径；空 = 无，需回退解原图 */
-    /** 文件 mtime（Unix 秒）。照片没有清单、文件名里也不带时间，这是唯一的时间来源；
-     *  历史页拿它显示卡片角上的时间戳、并按月分组。取不到时为 0，调用方按「未知」处理。 */
-    int64_t     mtime_unix = 0;
 };
 
 /**
@@ -28,7 +25,7 @@ struct PhotoEntry {
  */
 bool is_photo_file(const std::string& path);
 
-/** 相机 JPEG 旁路 RTHM：foo.jpg → …/foo.rthm。新拍只写 .jpg，不认旧 .png。 */
+/** PNG 旁路 RTHM：/userdata/media/photo/foo.png → …/foo.rthm（非 PNG 返回空串） */
 std::string companion_rthm(const std::string& photo_abs_path);
 
 /**
