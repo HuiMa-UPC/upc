@@ -141,14 +141,17 @@ void PageManager::set_sidebar_video_mode(bool on) {
 
 /* 整屏底色两档。页面根节点与 content_panel_ 都是透明的，底全由这一层给。
  *
- * 之所以是**一个开关而不是直接换成浅色**：浅色稿是一页一页改过来的，改完的页面（首页、
- * 历史页）要浅底，还没改的三页仍是深色内容——翻成浅底那些页的白字会当场看不见。
- * 名单在 apply_device_bar()。 */
+ * 之所以是**一个开关而不是直接换成浅色**：浅色稿是一页一页改过来的，改完的页面
+ * （首页 / 历史页 / 消息页 / 设置页）要浅底，控制页与隐藏页仍是深色内容——翻成浅底
+ * 那些页的白字会当场看不见。名单在 apply_device_bar()。 */
 void PageManager::apply_shell_style() {
     if (!shell_) {
         return;
     }
     lv_obj_set_style_bg_color(shell_, shell_light_ ? user_light_bg : user_color_bg, 0);
+    /* Toast 跟着一起切档。挂在这里而不是 set_shell_light()：那个函数档位没变就提前
+     * 返回，初始态（init() 建壳那次）会漏掉；这里是两条路径唯一的收口。 */
+    ui_toast_set_light(shell_light_);
 }
 
 void PageManager::set_shell_light(bool on) {
@@ -350,10 +353,13 @@ void PageManager::apply_device_bar(const PageEntry& entry) {
      *
      * 设置页**必须**排除，不是可选的美化：左栏 8 项的高度预算是
      * 48 + 8×80 + 7×16 = 800，正好等于屏高，被 USER_CONTENT_TOP 下推 112 之后
-     * 末项 Debug 会整个掉出屏外。 */
+     * 末项 Debug 会整个掉出屏外。
+     *
+     * 监控页同样排除：稿 6338:27240 一族里摄像头画面从 y=0 起、右栏 Tab 行顶在
+     * y=32，整屏没有给这条带子留位置。 */
     const bool show = entry.menu_btn != nullptr &&
                       page != "user_history" && page != "user_message" &&
-                      page != "user_settings";
+                      page != "user_settings" && page != "user_monitor";
     ui_device_bar_set_visible(show);
     lv_obj_set_style_pad_top(content_panel_, show ? USER_CONTENT_TOP : 0, 0);
     /* 通知三态（toast / 铃铛 / 面板）**只在首页显示**。
@@ -378,8 +384,9 @@ void PageManager::apply_device_bar(const PageEntry& entry) {
      * 白字会当场看不见；那一页改稿时把页名加进来即可。
      * 隐藏页（选文件 / 调试 / 延时摄影 / 相册全屏）不在名单里，一律走深色——它们本就
      * 是深底的整屏媒体/表单。 */
-    set_shell_light(page == "user_home" || page == "user_history" ||
-                    page == "user_message" || page == "user_settings");
+    set_shell_light(page == "user_home" || page == "user_monitor" ||
+                    page == "user_history" || page == "user_message" ||
+                    page == "user_settings" || page == "user_files");
 }
 
 void PageManager::set_menu_badge(const std::string& page_name, bool on) {

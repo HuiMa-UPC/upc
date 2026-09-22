@@ -143,8 +143,9 @@ void build_dark_card(lv_obj_t *parent, const ui_message_t *m)
     lv_obj_set_style_radius(box, USER_RADIUS / 2, 0);
     lv_obj_clear_flag(box, LV_OBJ_FLAG_SCROLLABLE);
 
+    const int32_t ic_sz = box_sz * 9 / 16;
     lv_obj_t *icon = ui_user_make_icon_img(box,
-        ui_message_severity_icon(m->severity), box_sz * 9 / 16, lv_color_white());
+        ui_message_severity_icon(m->severity, ic_sz), ic_sz, lv_color_white());
     lv_obj_center(icon);
 
     lv_obj_t *texts = lv_obj_create(card);
@@ -274,8 +275,9 @@ void build_toast_card(lv_obj_t *parent, const ui_message_t *m)
     lv_obj_set_style_bg_opa(box, LV_OPA_COVER, 0);
     lv_obj_set_style_radius(box, USER_BTN_RADIUS, 0);
     lv_obj_clear_flag(box, LV_OBJ_FLAG_SCROLLABLE);
+    const int32_t ic_sz = box_sz * 9 / 16;
     lv_obj_t *icon = ui_user_make_icon_img(box,
-        ui_message_severity_icon(m->severity), box_sz * 9 / 16, lv_color_white());
+        ui_message_severity_icon(m->severity, ic_sz), ic_sz, lv_color_white());
     lv_obj_center(icon);
 
     lv_obj_t *texts = lv_obj_create(card);

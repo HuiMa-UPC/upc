@@ -113,6 +113,8 @@ double    g_galvo_saved_y = 0.0;
 lv_obj_t *g_dev_btn[4]     = { nullptr };
 lv_obj_t *g_dev_state[4]   = { nullptr };   /**< 设备快捷行状态字（已唤醒/休眠中…） */
 lv_obj_t *g_fan_duty_ta      = nullptr;     /**< 其他控制：风扇占空比输入 */
+lv_obj_t *g_fan_rpm_lbl      = nullptr;     /**< 风扇卡：MCU 实测转速（与 Duty 同行便于对照） */
+lv_obj_t *g_fan_state_lbl    = nullptr;     /**< 风扇卡：风机状态机 / 故障名 */
 lv_obj_t *g_print_layer_ta   = nullptr;     /**< 其他控制：打印层厚输入 */
 lv_obj_t *g_print_balance_ta = nullptr;     /**< 其他控制：打印平衡系数×1000 输入 */
 lv_obj_t *g_print_h264_btn   = nullptr;     /**< 其他控制：打印期 H264 开关按钮 */
@@ -1729,7 +1731,43 @@ void build_print_params_card(lv_obj_t *parent)
     make_send_button(card, on_print_param_send, true);
 }
 
-/* 风扇卡：Duty 行 + Send(发占空比) 与 开关 上下排列 */
+/* 风机故障码 / 状态机文字，取自 doc/主控板串口通信协议 - 传感器上报命令.csv value[25]、value[26] */
+const char *const kFanFaultNames[8] = {
+    "OK", "Hall Invalid", "Hall Disorder", "Stalled",
+    "Overcurrent", "Undervoltage", "Overvoltage", "Overspeed" };
+const char *const kFanStateNames[5] = {
+    "Stopped", "Starting", "Running", "Retry Wait", "Fault Lock" };
+
+/**
+ * 刷风扇实测：转速与 Duty 同行（便于对照下发值），状态/故障单独一行。
+ * 链路异常(valid=0)时 MCU 把转速填 0，必须显示 "--"，否则 0 会被当成"风机停了"。
+ * 有故障码时两个 label 一起标红——只红一个看着像单独某项出了问题。
+ */
+void apply_fan_state(const middleware::DebugFanStatePayload &p)
+{
+    if(!g_fan_rpm_lbl || !g_fan_state_lbl) {
+        return;
+    }
+    if(p.valid == 0) {
+        lv_label_set_text(g_fan_rpm_lbl, "--");
+        lv_label_set_text(g_fan_state_lbl, "--");
+        lv_obj_set_style_text_color(g_fan_rpm_lbl, user_color_text_dim, 0);
+        lv_obj_set_style_text_color(g_fan_state_lbl, user_color_text_dim, 0);
+        return;
+    }
+    const bool bad = (p.fault != 0);
+    char buf[8];    /* rpm 为 uint16_t，最大 65535 共 5 位 */
+    std::snprintf(buf, sizeof(buf), "%u", static_cast<unsigned>(p.rpm));
+    lv_label_set_text(g_fan_rpm_lbl, buf);
+    lv_label_set_text(g_fan_state_lbl,
+                      bad ? ((p.fault < 8) ? kFanFaultNames[p.fault] : "Unknown")
+                          : ((p.state < 5) ? kFanStateNames[p.state] : "Unknown"));
+    const lv_color_t c = bad ? user_color_status_err : user_color_text;
+    lv_obj_set_style_text_color(g_fan_rpm_lbl, c, 0);
+    lv_obj_set_style_text_color(g_fan_state_lbl, c, 0);
+}
+
+/* 风扇卡：Duty+实测 RPM 行 + 风机状态行 + Send(发占空比) 与 开关，上下排列 */
 void build_fan_card(lv_obj_t *parent)
 {
     lv_obj_t *card = ui_user_make_frosted_card(parent, false);
@@ -1755,6 +1793,29 @@ void build_fan_card(lv_obj_t *parent)
     add_caption(drow, "Duty");
     g_fan_duty_ta = make_value_input(drow, 0.0f, true);
     add_caption(drow, "%");
+    /* 实测转速紧跟下发占空比：两个数并排才看得出"发了 60% 却只有 200 转" */
+    add_caption(drow, "RPM");
+    g_fan_rpm_lbl = lv_label_create(drow);
+    lv_label_set_text(g_fan_rpm_lbl, "--");
+    lv_obj_set_style_text_color(g_fan_rpm_lbl, user_color_text_dim, 0);
+    lv_obj_set_style_text_font(g_fan_rpm_lbl, user_font_text(), 0);
+
+    /* 状态行（只读）：MCU V4 EXT 帧约 1s 一次；旧固件不发该帧，恒 "--" */
+    lv_obj_t *rrow = lv_obj_create(card);
+    lv_obj_remove_style_all(rrow);
+    lv_obj_set_width(rrow, LV_PCT(100));
+    lv_obj_set_height(rrow, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(rrow, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(rrow, LV_FLEX_ALIGN_START,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_column(rrow, USER_PAD_SM, 0);
+    lv_obj_set_style_bg_opa(rrow, LV_OPA_TRANSP, 0);
+    lv_obj_clear_flag(rrow, LV_OBJ_FLAG_SCROLLABLE);
+    add_caption(rrow, "State");
+    g_fan_state_lbl = lv_label_create(rrow);
+    lv_label_set_text(g_fan_state_lbl, "--");
+    lv_obj_set_style_text_color(g_fan_state_lbl, user_color_text_dim, 0);
+    lv_obj_set_style_text_font(g_fan_state_lbl, user_font_text(), 0);
 
     /* Send（发占空比）与 开关 并排：Send 左，开关右 */
     lv_obj_t *frow = lv_obj_create(card);
@@ -1802,6 +1863,14 @@ lv_obj_t *make_section_card(lv_obj_t *parent, const char *title)
     lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
     add_card_title(card, title);
     return card;
+}
+
+/** 三个粉料弹窗的手动触发，档位由 user_data 带过来。见 build_other_left 的 Inject 组。 */
+void on_supply_dlg_click(lv_event_t *e)
+{
+    const auto kind = static_cast<control_supply_dlg_t>(
+        reinterpret_cast<intptr_t>(lv_event_get_user_data(e)));
+    control_show_supply_dialog(kind);
 }
 
 /** 一次性动作：名称 + 状态字 + 圆钮（非 CHECKABLE）。
@@ -2119,6 +2188,24 @@ void build_other_switches_column(lv_obj_t *parent)
     lv_obj_t *rowI = make_switch_grid_row(inj);
     make_dbg_toggle(rowI, "Msg Inject", "On", "Off", LV_SYMBOL_BELL, false, 11, 0);
     make_dbg_toggle(rowI, "Alarm Inject", "On", "Off", LV_SYMBOL_WARNING, false, 12, 0);
+
+    /* 三个粉料阻塞弹窗的手动触发（稿 6345:31129 / 6343:30738 / 6343:30854）。
+     * 「粉舱已空」平时由 APP_Print_Powder_Low_Ntf 自动弹，这里只是方便单看版式；
+     * **另两档目前没有协议**，只能从这儿打——协议补上之后这两颗可以撤。
+     * 三张都挂在打印预览区域内，所以要先进打印态（或至少让监控页建出来）才看得到。 */
+    lv_obj_t *rowI2 = make_switch_grid_row(inj);
+    make_one_shot_action(rowI2, "Powder Empty", "Dialog", LV_SYMBOL_WARNING,
+                         on_supply_dlg_click, nullptr, nullptr,
+                         reinterpret_cast<void *>(
+                             static_cast<intptr_t>(CONTROL_SUPPLY_DLG_POWDER_EMPTY)));
+    make_one_shot_action(rowI2, "Recycle Full", "Dialog", LV_SYMBOL_WARNING,
+                         on_supply_dlg_click, nullptr, nullptr,
+                         reinterpret_cast<void *>(
+                             static_cast<intptr_t>(CONTROL_SUPPLY_DLG_RECYCLE_FULL)));
+    make_one_shot_action(rowI2, "Waste Full", "Dialog", LV_SYMBOL_WARNING,
+                         on_supply_dlg_click, nullptr, nullptr,
+                         reinterpret_cast<void *>(
+                             static_cast<intptr_t>(CONTROL_SUPPLY_DLG_WASTE_FULL)));
 }
 
 lv_obj_t *build_other_tab(lv_obj_t *body)
@@ -2861,6 +2948,11 @@ void bind_debug_callbacks()
         }
     });
 
+    /* 风机实测：MCU V4 EXT 帧驱动（约 1s），旧固件不发该帧，行保持 "--" */
+    proxy.register_fan_state([](const middleware::DebugFanStatePayload &p) {
+        apply_fan_state(p);
+    });
+
     /* Media 回报的是实际状态：相机未就绪 / 编码器打不开时会回 Off，按钮随之弹回。 */
     proxy.register_local_rtsp([](bool on) {
         if(g_local_rtsp_btn) {
@@ -2933,6 +3025,8 @@ void reset_globals()
     }
     for(int i = 0; i < 4; i++) { g_dev_btn[i] = nullptr; g_dev_state[i] = nullptr; }
     g_fan_duty_ta = nullptr;
+    g_fan_rpm_lbl = nullptr;
+    g_fan_state_lbl = nullptr;
     g_print_layer_ta = nullptr;
     g_print_balance_ta = nullptr;
     g_print_h264_btn = nullptr;
@@ -3032,6 +3126,7 @@ void page_user_debug_exit(void)
     proxy.register_soc_led(nullptr);
     proxy.register_cabin_pm_valve(nullptr);
     proxy.register_status_led(nullptr);
+    proxy.register_fan_state(nullptr);
     proxy.register_height_calib_progress(nullptr);
     proxy.register_test_image(nullptr);
     proxy.register_galvo_point_test(nullptr);

@@ -32,6 +32,12 @@
  * @file page_user_home.cpp
  * @brief Snowpod 风格用户首页
  *
+ * > **本文件里的打印态浮层（`g_print_area`）与待机监控层（`g_monitor_area`）现在
+ * > 是存档，没有任何调用方。** 新稿 6338:27240 一族把它们做成了独立的监控页
+ * > （`page_user_monitor.*`），`control.cpp` 也已改接那一组同名函数。两层留着是等
+ * > 「首页打印态」那张稿到位后再决定是删是改，见 `page_user_home.hpp` 里那段说明。
+ * > 期间**别把它们重新接通**：会和监控页争同一个 `CameraPreviewPlayer` 单例。
+ *
  * 视觉层次（对齐设计稿 5277:11571）：
  *   ┌────────────────────────────────────────────────┐
  *   │ (设备信息由外壳的常驻条画)      (通知浮层贴右上) │ ← topbar（空占位带）
@@ -1006,10 +1012,10 @@ lv_obj_t *make_supply_pill(lv_obj_t *parent, const lv_image_dsc_t *const *icon,
  *
  *  area 是**铺满整屏**的浮层（含状态栏区域与侧栏之下那条），用负偏移 + LV_HOR_RES 跨回
  *  本页根节点的 pad_left，与打印态/监控态的摄像头层同一套做法（见 build_printing_area）。
- *  稿上的坐标都是整屏坐标系（设备图 x=663、HOME 卡 x=160 都含侧栏那 128），所以这里必须
+ *  稿上的坐标都是整屏坐标系（设备图 x=772、HOME 卡 x=160 都含侧栏那 128），所以这里必须
  *  铺整屏才能直接照抄；若改回只铺内容区，所有 x 都要减去一个侧栏宽。
  *
- *  设备图右下两侧都是**出血**的（663 + 700 = 1363 > 1280、172 + 700 = 872 > 800），
+ *  设备图右下两侧都是**出血**的（772 + 525 = 1297 > 1280、89 + 791 = 880 > 800），
  *  超出部分由 area 裁掉，稿本身就这样。 */
 lv_obj_t *build_main_area(lv_obj_t *parent)
 {
@@ -1027,7 +1033,7 @@ lv_obj_t *build_main_area(lv_obj_t *parent)
      * COVER 都落到 1.000、零重采样；1920 档复用 1280 那份、放大 1.5×，会软。 */
     lv_obj_t *dev = lv_image_create(area);
     lv_image_set_src(dev, home_device_dsc());
-    lv_obj_set_size(dev, USER_HOME_DEV_IMG, USER_HOME_DEV_IMG);
+    lv_obj_set_size(dev, USER_HOME_DEV_IMG_W, USER_HOME_DEV_IMG_H);
     lv_image_set_inner_align(dev, LV_IMAGE_ALIGN_COVER);
     lv_obj_align(dev, LV_ALIGN_TOP_LEFT, USER_HOME_DEV_IMG_X, USER_HOME_DEV_IMG_Y);
 
@@ -1035,15 +1041,16 @@ lv_obj_t *build_main_area(lv_obj_t *parent)
     build_home_card(area);
     build_metric_grid(area);
 
-    /* 两颗余量胶囊钉在设备图上。稿上给的是整屏坐标 (844,325) / (1097,353)，这里换算成
-     * 相对设备图左上角（663,172）的比例，换档位时跟着图一起缩放、不会飘离料盒。
+    /* 两颗余量胶囊钉在设备图上。稿上给的是整屏坐标 (862,316) / (1077,368)，这里换算成
+     * 相对设备图左上角（772,89）的比例，换档位时跟着图一起缩放、不会飘离料盒。
+     * 分母是 1280 档的框宽/框高（525 × 791），改 USER_HOME_DEV_IMG_W/H 要同步改。
      * 图标的桶号要与钉的位置对上：A 在左桶、B 在右桶。 */
     make_supply_pill(area, ic_barrel_1_set,
-                     USER_HOME_DEV_IMG_X + USER_HOME_DEV_IMG * 181 / 700,
-                     USER_HOME_DEV_IMG_Y + USER_HOME_DEV_IMG * 153 / 700, &g_supply_pill_a);
+                     USER_HOME_DEV_IMG_X + USER_HOME_DEV_IMG_W *  90 / 525,
+                     USER_HOME_DEV_IMG_Y + USER_HOME_DEV_IMG_H * 227 / 791, &g_supply_pill_a);
     make_supply_pill(area, ic_barrel_2_set,
-                     USER_HOME_DEV_IMG_X + USER_HOME_DEV_IMG * 434 / 700,
-                     USER_HOME_DEV_IMG_Y + USER_HOME_DEV_IMG * 181 / 700, &g_supply_pill_b);
+                     USER_HOME_DEV_IMG_X + USER_HOME_DEV_IMG_W * 305 / 525,
+                     USER_HOME_DEV_IMG_Y + USER_HOME_DEV_IMG_H * 279 / 791, &g_supply_pill_b);
 
     return area;
 }
@@ -1063,9 +1070,11 @@ lv_obj_t *build_door_floating(lv_obj_t *parent)
     cfg.track_h    = USER_HOME_SLIDE_H;
     cfg.knob_sz    = USER_ACTION_BTN_SZ;
     cfg.light_theme = true;                  /* 待机态是浅色底，见 ui_slide_unlock.hpp */
-    /* 稿上旋钮里是右箭头，不是控件默认那枚开门图标。按控件浅色档的图标边长
-     * （knob_sz * 8/21）挑原生尺寸，上屏 1:1 不缩放。 */
-    cfg.knob_icon  = ui_user_pick_icon(ic_arrow_right_set, USER_ACTION_BTN_SZ * 8 / 21);
+    /* 旋钮里那枚门（稿 6230:89954 的 x 815..836）。上一版浅色稿（6201:85974）画的是
+     * 右箭头，新稿换回了门——与监控页 Manual 底部那颗 OPEN 是**逐点相同的同一枚**
+     * 图标（只差整体平移），所以共用 ic_door_panel_set，`ic_arrow_right_set` 随之
+     * 没有调用点。按控件浅色档的图标边长（knob_sz * 8/21）挑原生尺寸，上屏 1:1。 */
+    cfg.knob_icon  = ui_user_pick_icon(ic_door_panel_set, USER_ACTION_BTN_SZ * 8 / 21);
     g_door_slide = ui_slide_unlock_create(parent, &cfg);
 
     lv_obj_t *root = ui_slide_unlock_get_root(g_door_slide);
@@ -1081,15 +1090,18 @@ lv_obj_t *build_door_floating(lv_obj_t *parent)
 }
 
 /* ---------------------------------------------------------------------------
- *  左下两枚入口（稿 6060:69185 + 6060:69177）：
- *    ┌────┐ ┌──────────────────────┐
- *    │ 📷 │ │  [文件夹]   PRINT      │
- *    └────┘ └──────────────────────┘
- *  这两个入口一路搬过家：先从顶栏的「查看监控」圆钮 + Start Print 胶囊挪到左下变成
- *  方块，再变成一行等高的全圆胶囊，浅色稿又把左边缩成纯图标方钮、右边换成圆角矩形
- *  并把文案缩成 PRINT。所以整行不再定宽，两枚各自定宽、按内容排。
+ *  左下的 PRINT 入口（稿 6230:89954 的 (160,668) 216×84）：
+ *    ┌──────────────────────┐
+ *    │  [文件夹]   PRINT      │
+ *    └──────────────────────┘
+ *  这个入口一路搬过家：先从顶栏的 Start Print 胶囊挪到左下变成方块，再变成一行等高
+ *  的全圆胶囊，浅色稿又换成圆角矩形并把文案缩成 PRINT。
  *
- *  稿上两处白色都带 backdrop blur(15px)，LVGL 没有背景模糊，直接给不透明白——底下是
+ *  **新稿把同排左边那枚摄像机方钮删掉了**：监控已经独立成页、挂在侧栏第 2 格，首页
+ *  不再需要入口。整行于是只剩 PRINT 一枚，左缘从 x=260 挪回 x=160（与 HOME 卡同一条
+ *  竖线），宽度从 202 涨到 216。`make_light_square_btn()` 随之没有调用点、一并删掉。
+ *
+ *  稿上白色都带 backdrop blur(15px)，LVGL 没有背景模糊，直接给不透明白——底下是
  *  #f5f5f5，肉眼差别只在边缘那一点点。同一处理见铃铛。
  * ------------------------------------------------------------------------- */
 
@@ -1100,41 +1112,9 @@ int32_t action_icon_sz(void)
     return USER_METRIC_ICON_SZ * 5 / 4;
 }
 
-/** 左下那枚白玻璃方钮（稿 6201:85989「Button / On Light」）：84 见方、圆角 24、纯图标。
- *  浅色稿里它从「图标 + Monitor 文字的全圆胶囊」缩成了只剩图标的方钮，所以不再需要
- *  文字参数；材质也从灰玻璃换成白 90% + 白描边。 */
-lv_obj_t *make_light_square_btn(lv_obj_t *parent, const lv_image_dsc_t *icon,
-                                lv_event_cb_t cb)
-{
-    lv_obj_t *btn = lv_button_create(parent);
-    lv_obj_remove_style_all(btn);
-    lv_obj_set_size(btn, USER_ACTION_BTN_SZ, USER_ACTION_BTN_SZ);
-    lv_obj_set_style_radius(btn, USER_LIGHT_RADIUS, 0);
-    /* 稿上是 #fcfcfc + backdrop blur(15px)；LVGL 没有背景模糊，直接给不透明色——
-     * 底下是 #f5f5f5，肉眼差别只在边缘那一点点。同一处理见铃铛与开门滑块轨道。 */
-    lv_obj_set_style_bg_color(btn, user_light_glass, 0);
-    lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, 0);
-    lv_obj_set_style_bg_color(btn, user_light_text, LV_STATE_PRESSED);
-    lv_obj_set_style_bg_opa(btn, LV_OPA_10, LV_STATE_PRESSED);
-    lv_obj_set_style_border_width(btn, 1, 0);
-    lv_obj_set_style_border_color(btn, lv_color_white(), 0);
-    lv_obj_set_style_border_opa(btn, LV_OPA_COVER, 0);
-    lv_obj_set_style_shadow_width(btn, 6, 0);
-    lv_obj_set_style_shadow_ofs_y(btn, 2, 0);
-    lv_obj_set_style_shadow_color(btn, lv_color_hex(0x283184), 0);
-    lv_obj_set_style_shadow_opa(btn, 26, 0);   /* 稿 10% */
-    lv_obj_clear_flag(btn, LV_OBJ_FLAG_SCROLLABLE);
-    if(cb) {
-        lv_obj_add_event_cb(btn, cb, LV_EVENT_CLICKED, nullptr);
-    }
-    lv_obj_t *ic = make_btn_icon(btn, icon, action_icon_sz(), user_light_text);
-    lv_obj_center(ic);
-    return btn;
-}
-
-/** 右边那枚 PRINT **不再复用** ui_user_make_primary_pill_btn：那个组件是全圆胶囊、主色
- *  蓝底（历史页空态那枚还在用），而稿这里要的是圆角 24 的深色 #333145 底，两处已经不是
- *  同一枚按钮了。整行布局的来龙去脉见上面那段。 */
+/** PRINT **不复用** ui_user_make_primary_pill_btn：那个组件是全圆胶囊、主色蓝底
+ *  （历史页空态那枚还在用），而稿这里要的是圆角 24 的深色 #333145 底，两处已经不是
+ *  同一枚按钮了。整行的来龙去脉见上面那段。 */
 lv_obj_t *build_action_tiles(lv_obj_t *parent)
 {
     lv_obj_t *row = lv_obj_create(parent);
@@ -1152,9 +1132,6 @@ lv_obj_t *build_action_tiles(lv_obj_t *parent)
      * USER_PAD_LG：本页根节点的 pad_left 已经让开侧栏，不用再补侧栏宽度
      * （同 build_door_floating）。 */
     lv_obj_align(row, LV_ALIGN_BOTTOM_LEFT, USER_PAD_LG, -USER_HOME_EDGE_GAP);
-
-    make_light_square_btn(row, ui_user_pick_icon(ic_camera_set, action_icon_sz()),
-                          on_camera_btn_click);
 
     lv_obj_t *print = lv_button_create(row);
     lv_obj_remove_style_all(print);

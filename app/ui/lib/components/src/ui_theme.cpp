@@ -52,6 +52,7 @@ const lv_color_t user_light_ok         = LV_COLOR_MAKE(0x00, 0xc7, 0x4e);
 const lv_color_t user_light_dev_name   = LV_COLOR_MAKE(0x1d, 0x1d, 0x24);
 const lv_color_t user_light_notice_dot = LV_COLOR_MAKE(0xfe, 0x68, 0x68);
 const lv_color_t user_light_rail_mid   = LV_COLOR_MAKE(0xf4, 0xf4, 0xf4);
+const lv_color_t user_light_row_sel    = LV_COLOR_MAKE(0xeb, 0xea, 0xec);
 const lv_color_t user_light_glass      = LV_COLOR_MAKE(0xfc, 0xfc, 0xfc);
 
 /* ============================================================================
@@ -185,7 +186,6 @@ static const ui_theme_t s_theme_1920 = {
     /* user_dlg_body_lead         */ 9,    /* 稿 24×1.5=36 − montserrat_24 的 27 */
     /* user_file_dlg_w            */ 1100,
     /* user_file_dlg_preview_w    */ 340,
-    /* user_file_dlg_preview_h    */ 280,
     /* user_file_sel_w            */ 1500,
     /* user_file_sel_h            */ 780,
     /* user_file_card_w           */ 320,
@@ -236,15 +236,24 @@ static const ui_theme_t s_theme_1920 = {
     /* user_home_card_h       */ 450,
     /* user_home_grid_w       */ 510,
     /* user_home_greet_top    */ 240,
-    /* user_home_dev_img      */ 1050,
-    /* user_home_dev_img_x    */ 995,
-    /* user_home_dev_img_y    */ 258,
-    /* user_home_print_btn_w  */ 303,
+    /* user_home_dev_img_w    */ 788,
+    /* user_home_dev_img_h    */ 1187,
+    /* user_home_dev_img_x    */ 1158,
+    /* user_home_dev_img_y    */ 134,
+    /* user_home_print_btn_w  */ 324,
     /* user_home_slide_w      */ 680,
     /* user_home_slide_h      */ 141,
     /* user_home_edge_gap     */ 72,
     /* user_panel_w           */ 480,
     /* user_panel_row_h       */ 72,
+
+    /* 监控页：1280 档取稿值，本档按 ×1.5 折算 */
+    /* user_mon_panel_w       */ 630,
+    /* user_mon_row_h         */ 96,
+    /* user_mon_radius        */ 24,
+    /* user_mon_thumb_h       */ 315,
+    /* user_mon_stat_h        */ 147,
+    /* user_mon_bar_h         */ 36,
 
     /* 字体（dev） */
     /* font_body          */ &lv_font_montserrat_32,
@@ -365,7 +374,6 @@ static const ui_theme_t s_theme_1280 = {
     /* user_dlg_body_lead         */ 2,    /* 稿 24 − montserrat_20 的 22 */
     /* user_file_dlg_w            */ 760,
     /* user_file_dlg_preview_w    */ 240,
-    /* user_file_dlg_preview_h    */ 300,
     /* user_file_sel_w            */ 1040,
     /* user_file_sel_h            */ 540,
     /* user_file_card_w           */ 220,
@@ -417,15 +425,24 @@ static const ui_theme_t s_theme_1280 = {
     /* user_home_card_h       */ 300,  /* 稿值（HOME 卡与四宫格等高） */
     /* user_home_grid_w       */ 340,  /* 稿值（扣 8 的间距后单卡 166 宽 146 高，与稿一致） */
     /* user_home_greet_top    */ 160,  /* 稿值 */
-    /* user_home_dev_img      */ 700,  /* 稿值 */
-    /* user_home_dev_img_x    */ 663,  /* 稿值（右侧出血，超出部分由父节点裁） */
-    /* user_home_dev_img_y    */ 172,  /* 稿值（下方同样出血） */
-    /* user_home_print_btn_w  */ 202,  /* 稿值 */
+    /* user_home_dev_img_w    */ 525,  /* 稿值 */
+    /* user_home_dev_img_h    */ 791,  /* 稿值 */
+    /* user_home_dev_img_x    */ 772,  /* 稿值（右侧出血，超出部分由父节点裁） */
+    /* user_home_dev_img_y    */ 89,   /* 稿值（下方同样出血） */
+    /* user_home_print_btn_w  */ 216,  /* 稿值 */
     /* user_home_slide_w      */ 453,  /* 稿值 */
     /* user_home_slide_h      */ 94,   /* 稿值（旋钮 84 上下各内缩 5） */
     /* user_home_edge_gap     */ 48,   /* 稿值（横向仍是 USER_PAD_LG 的 32，稿就不对称） */
     /* user_panel_w           */ 320,  /* 稿值 */
     /* user_panel_row_h       */ 48,   /* 稿值 */
+
+    /* 监控页（稿 6338:27240 一族），本档全取稿值 */
+    /* user_mon_panel_w       */ 420,  /* 屏上 860..1280，内容区 420−2×32 = 356 */
+    /* user_mon_row_h         */ 64,
+    /* user_mon_radius        */ 16,
+    /* user_mon_thumb_h       */ 210,
+    /* user_mon_stat_h        */ 98,
+    /* user_mon_bar_h         */ 24,
 
     /* 字体（dev） */
     /* font_body          */ &lv_font_montserrat_24,
@@ -551,7 +568,6 @@ static const ui_theme_t s_theme_1024 = {
     /* user_dlg_body_lead         */ 1,    /* 稿 24×0.8=19 − montserrat_16 的 18 */
     /* user_file_dlg_w            */ 600,
     /* user_file_dlg_preview_w    */ 192,
-    /* user_file_dlg_preview_h    */ 230,
     /* user_file_sel_w            */ 900,   /* < 1024，留边距 */
     /* user_file_sel_h            */ 440,   /* < 600，留边距 */
     /* user_file_card_w           */ 176,
@@ -602,15 +618,26 @@ static const ui_theme_t s_theme_1024 = {
     /* user_home_card_h       */ 240,
     /* user_home_grid_w       */ 272,
     /* user_home_greet_top    */ 128,
-    /* user_home_dev_img      */ 560,
-    /* user_home_dev_img_x    */ 530,
-    /* user_home_dev_img_y    */ 138,
-    /* user_home_print_btn_w  */ 162,
+    /* user_home_dev_img_w    */ 420,
+    /* user_home_dev_img_h    */ 633,
+    /* user_home_dev_img_x    */ 618,
+    /* user_home_dev_img_y    */ 71,
+    /* user_home_print_btn_w  */ 173,
     /* user_home_slide_w      */ 362,
     /* user_home_slide_h      */ 75,
     /* user_home_edge_gap     */ 38,
     /* user_panel_w           */ 256,
     /* user_panel_row_h       */ 38,
+
+    /* 监控页：1280 档取稿值，本档按 ×0.8 折算。
+     * panel_w 特意留得比 336（420×0.8）宽一点：本档 USER_PAD_LG 是 36（比 1280 档的 32
+     * 还大，见「间距梯度」那一节的非单调说明），内容区会被多扣 8，344−72 = 272 已经很窄。 */
+    /* user_mon_panel_w       */ 344,
+    /* user_mon_row_h         */ 51,
+    /* user_mon_radius        */ 13,
+    /* user_mon_thumb_h       */ 168,
+    /* user_mon_stat_h        */ 78,
+    /* user_mon_bar_h         */ 19,
 
     /* 字体（dev） */
     /* font_body          */ &lv_font_montserrat_20,

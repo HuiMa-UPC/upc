@@ -319,6 +319,8 @@ public:
     /** @brief 强制推送环境无效哨兵（各 float <0），供 UI 显示 "--"；不要求 env_cache_.valid */
     void publish_env_invalid_ntf();
     void publish_debug_sensor_ntf(const serial_sensor_report_t& report);
+    /** @brief 调试页风扇卡：MCU V4 EXT 帧的风机实测转速/故障/状态 */
+    void publish_debug_fan_ntf(const serial_sensor_ext_t& ext);
     /** @brief 调试页传感器条推无效哨兵（<0 → UI "--"） */
     void publish_debug_sensor_invalid_ntf();
     /**

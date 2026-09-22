@@ -75,8 +75,18 @@ typedef struct {
  */
 lv_color_t ui_message_severity_color(ui_msg_severity_t sev);
 
-/** 等级图标：INFO 出消息气泡，其余一律 alert-triangle（稿 3058:7058 / 7233）。 */
-const lv_image_dsc_t *ui_message_severity_icon(ui_msg_severity_t sev);
+/**
+ * 等级图标：INFO 出消息气泡，其余一律 alert-triangle（稿 3058:7058 / 7233）。
+ *
+ * **按目标边长取，别按屏档取**。位图是按边长直接从矢量栅格化的，拿错尺寸会让
+ * ui_user_make_icon_img() 走 lv_image_set_scale 放大，细描边当场糊掉——消息页
+ * 改版把徽标从 *2 改成 *3 之后就踩过一次。传你真正要显示的 target，内部用
+ * ui_user_pick_icon() 挑最接近的那档；表里现有哪些尺寸见
+ * tools/gen_notice_badge_icons.py 的 SIZES。
+ *
+ * @param target 图标显示边长，与随后传给 ui_user_make_icon_img() 的应当一致
+ */
+const lv_image_dsc_t *ui_message_severity_icon(ui_msg_severity_t sev, int32_t target);
 
 /** 观察者：消息集合变化后在 UI 线程被调用。 */
 typedef void (*ui_message_observer_t)(void);

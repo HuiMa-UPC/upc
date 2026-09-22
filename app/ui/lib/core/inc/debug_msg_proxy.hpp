@@ -36,6 +36,8 @@ using DebugSocLedCb = std::function<void(uint8_t mask)>;
 using DebugCabinPmValveCb = std::function<void(bool)>;
 using DebugStatusLedCb =
     std::function<void(const middleware::DebugStatusLedPayload&)>;
+using DebugFanStateCb =
+    std::function<void(const middleware::DebugFanStatePayload&)>;
 using DebugTestImageCb = std::function<void(bool)>;
 using DebugGalvoPointTestCb = std::function<void(bool)>;
 using DebugLocalRtspCb = std::function<void(bool)>;
@@ -139,6 +141,8 @@ public:
     void register_soc_led(DebugSocLedCb cb);
     void register_cabin_pm_valve(DebugCabinPmValveCb cb);
     void register_status_led(DebugStatusLedCb cb);
+    /** 风机实测状态：MCU V4 EXT 帧周期上报，无查询语义（不配 request_） */
+    void register_fan_state(DebugFanStateCb cb);
     void register_test_image(DebugTestImageCb cb);
     void register_galvo_point_test(DebugGalvoPointTestCb cb);
     void register_local_rtsp(DebugLocalRtspCb cb);
@@ -198,6 +202,7 @@ private:
     DebugSocLedCb soc_led_cb_;
     DebugCabinPmValveCb cabin_pm_valve_cb_;
     DebugStatusLedCb status_led_cb_;
+    DebugFanStateCb fan_state_cb_;
     DebugTestImageCb test_image_cb_;
     DebugGalvoPointTestCb galvo_point_test_cb_;
     DebugLocalRtspCb local_rtsp_cb_;

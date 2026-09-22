@@ -519,6 +519,7 @@ enum class MsgType : uint32_t {
     GLAVO_Debug_O2_Calib_Rsp,           /**< DebugO2CalibRspPayload：氧标定结果（Req 应答） */
     GLAVO_Debug_O2_Calib_Ntf,           /**< DebugO2CalibRspPayload：当前 K 回读（Get，ok=1 且未改盘） */
     GLAVO_Debug_Status_Led_Ntf,         /**< DebugStatusLedPayload：灯板强制态回读 */
+    GLAVO_Debug_Fan_Ntf,                /**< DebugFanStatePayload：风机实测转速/故障/状态（V4 EXT 帧，约 1s） */
 
     // ---- UI ↔ GLAVO：网络 / WiFi（ConnMan 后端） ----
     UI_Wifi_Enable_Req = 0x1300, /**< WifiEnableReqPayload：开/关 WiFi */
@@ -1684,10 +1685,17 @@ struct DebugRecycleMotorStatePayload {
     uint8_t reserved[3];
 };
 
+/** GLAVO_Debug_Fan_Ntf：风机实测（MCU V4 EXT 帧 TLV 0x06）；valid=0 时其余值无意义。
+ *  不含 on/duty：Glavo 只组帧下发不留状态，那两个值无处可取。 */
 struct DebugFanStatePayload {
-    uint8_t on;
-    uint8_t reserved[3];
-    float   duty;
+    uint8_t  valid;      /**< fan_status_bits bit7：驱动链路正常 */
+    uint8_t  fault;      /**< 0无 1Hall非法 2Hall错序 3堵转 4过流 5欠压 6过压 7超速 */
+    uint8_t  state;      /**< 0停 1启动 2运行 3重试等待 4故障锁定 */
+    uint8_t  reserved;
+    uint16_t rpm;
+    uint16_t bus_v_x10;  /**< 0.1V */
+    uint16_t bus_i_ma;
+    uint8_t  reserved2[2];
 };
 
 struct DebugSwitchStatePayload {

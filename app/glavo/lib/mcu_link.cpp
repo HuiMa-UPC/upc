@@ -1190,7 +1190,32 @@ void McuLink::on_sensor_ext_report(const serial_sensor_ext_t& ext)
         static_cast<unsigned>(ext.fan_fault),
         static_cast<unsigned>(ext.fan_state),
         static_cast<unsigned>((ext.fan_status_bits >> 7) & 1u));
-    (void)ext;
+    /* 电气量暂无消费方，仅日志；风机部分推调试页 */
+    publish_debug_fan_ntf(ext);
+}
+
+/**
+ * @brief 调试页风扇卡：推 MCU 实测转速/故障/状态。
+ * @note bit7=0（驱动链路异常）时 MCU 把转速等字段填 0，这里原样透传并置
+ *       valid=0，由 UI 显示 "--"；夹成 0 会被误读成「风机停了」。
+ */
+void McuLink::publish_debug_fan_ntf(const serial_sensor_ext_t& ext)
+{
+    middleware::DebugFanStatePayload p{};
+    p.valid     = static_cast<uint8_t>((ext.fan_status_bits >> 7) & 1u);
+    p.fault     = ext.fan_fault;
+    p.state     = ext.fan_state;
+    p.rpm       = ext.fan_rpm;
+    p.bus_v_x10 = ext.fan_bus_v_x10;
+    p.bus_i_ma  = ext.fan_bus_i_ma;
+
+    middleware::Message ntf(middleware::MsgType::GLAVO_Debug_Fan_Ntf,
+        middleware::ModuleId::APP_GLAVO, middleware::ModuleId::UI);
+    ntf.payload = middleware::MsgPayload::from_bytes(
+        reinterpret_cast<const uint8_t*>(&p), sizeof(p));
+    if(!middleware::MsgPort::instance().publish_async(ntf)) {
+        UPC_LOG_MCU_LINK(Warn, "GLAVO_Debug_Fan_Ntf publish_async failed");
+    }
 }
 
 void McuLink::on_sensor_report(const serial_sensor_report_t& report)
