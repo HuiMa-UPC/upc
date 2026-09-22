@@ -147,7 +147,7 @@ scripts/rongsu.sh start   # glavo + rongsu_camera → ui
 
 | MsgType（当前枚举） | 规范名（新消息参照） | 方向 | Payload | UI API | Glavo 处理 |
 |---------------------|----------------------|------|---------|--------|------------|
-| `APP_Update_Ntf` | `GLAVO_Env_Update_Ntf` | Glavo→UI/MQTT | `EnvSnapshotPayload`（含 `pm1_indoor`/`pm10_indoor`/`humidity_percent`/`pressure_kpa`/`baseplate_temp_c`/`powder_bits`/`sensor_v4`/`pm1_cabin`/`pm10_cabin`；环境指标无效填 <0→UI 显示 `--`；`powder_bits` 用于缺粉弹窗继续按钮门控；V4 时 MQTT `telemetry/chamber` 用 SOC 舱内量，`telemetry/chamber_ext` 用舱外 PM） | `register_env_update` | `McuLink` 推送（UI 与 MQTT 双发） |
+| `APP_Update_Ntf` | `GLAVO_Env_Update_Ntf` | Glavo→UI/MQTT | `EnvSnapshotPayload`（含 `pm1_indoor`/`pm10_indoor`/`humidity_percent`/`pressure_kpa`/`baseplate_temp_c`/`powder_bits`/`sensor_v4`/`pm1_cabin`/`pm10_cabin`；环境指标无效填 <0→UI 显示 `--`；`powder_bits` 用于缺粉弹窗继续按钮门控；`sensor_v4` 固定 1。MQTT `telemetry/chamber` 用 SOC 舱内量，`telemetry/chamber_ext` 用舱外 PM） | `register_env_update` | `McuLink` 推送（UI 与 MQTT 双发） |
 | `UI_PM25_Req` | — | UI→Glavo | Empty | `send_pm25_check` | `handle_pm25_req` |
 | `APP_PM25_Rsp` | `GLAVO_PM25_Check_Rsp` | Glavo→UI | `Pm25ResultPayload` | `register_pm25_result` | PM2.5 流程 |
 | `UI_CLOSE_DOOR_Req` | — | UI→Glavo | Empty | `send_close_door_check` | 关门检测 |
@@ -195,7 +195,7 @@ scripts/rongsu.sh start   # glavo + rongsu_camera → ui
 | `UI_Camera_Stream_Stop_Req` | — | UI→Camera | Empty | `send_stream_stop` | 关预览 |
 | `APP_Camera_Stream_Stop_Rsp` | — | Camera→UI | Empty | `register_stream_stop_done` | — |
 | `APP_Camera_Frame_Ntf` | — | Camera→UI | `CameraFrameNtfPayload` | （可选） | 帧序号；默认关 |
-| `UI_Camera_Snapshot_Req` | — | UI→Media | Empty | `send_snapshot_req` | 存当前帧 PNG + 配对 `.rthm` 缩略图到 `/userdata/media/photo` |
+| `UI_Camera_Snapshot_Req` | — | UI→Media | Empty | `send_snapshot_req` | 存当前帧 JPEG + 配对 `.rthm` 缩略图到 `/userdata/media/photo` |
 | `APP_Camera_Snapshot_Rsp` | — | Media→UI | `CameraSnapshotRspPayload` | `register_snapshot_rsp` | — |
 | `UI_Storage_Usage_Req` | — | UI→Media | `StorageUsageReqPayload` | `send_storage_usage` | 按卷请求容量；历史页（Internal）与设置页存储概览（Internal + SdCard）共用 |
 | `APP_Storage_Usage_Rsp` | — | Media→UI | `StorageUsagePayload` | `register_storage_usage` | 回带 `volume` + `present`；Media 只实现了 Internal（`/userdata/media` 所在分区），另两卷回 `present=0` |
@@ -224,11 +224,11 @@ scripts/rongsu.sh start   # glavo + rongsu_camera → ui
 | `GLAVO_UI_Height_Calib_Progress_Ntf` | `0x1431` | Glavo→UI | `HeightCalibProgressPayload` | `register_height_calib_progress` | stage 0 开始 / 1 采集 / 2 完成 / 3 失败 |
 | `APP_Print_Video_Session_Start_Ntf` | — | Glavo→Media（Hub FWD） | `PrintVideoSessionPayload`（含 `h264_bitrate`，0=Media 默认中等码率 / cal `PRINT_H264_BITRATE`） | — | `PrintVideoNotify` / `MediaService` |
 | `APP_Print_Layer_Snap_Ntf` | — | Glavo→Media（Hub FWD） | `PrintVideoLayerSnapPayload` | — | 换层 Snap |
-| `APP_Print_Video_Session_Finish_Ntf` | — | Glavo→Media（Hub FWD） | `PrintVideoSessionPayload` | — | 保存 `/userdata/media/video/{job}/1.png...N.png` + `thumb.rthm` + config 快路径（`video_pending`） |
+| `APP_Print_Video_Session_Finish_Ntf` | — | Glavo→Media（Hub FWD） | `PrintVideoSessionPayload` | — | 保存 `/userdata/media/video/{job}/1.jpg...N.jpg` + `thumb.rthm` + config 快路径（`video_pending`） |
 | `APP_Print_Video_Session_Abort_Ntf` | — | Glavo→Media（Hub FWD） | `PrintVideoSessionPayload` | — | 有帧同样落盘目录 + manifest 快路径（`terminated` + `video_pending`）；0 帧不清整目录 |
 | `APP_Print_H264_Record_Pause_Ntf` | — | Glavo→Media（Hub FWD） | `PrintPauseStatePayload` | — | 打印暂停/恢复时同步连续 H264 录制状态（paused=1 暂停采帧，0 恢复） |
-| `APP_Clean_Video_Session_Start_Ntf` | — | Glavo→Media（Hub FWD） | `CleanVideoSessionStartPayload` | — | 清粉延时抽帧开始：接续打印 `N.png`，按 `fps`/`TIMELAPSE_VIDEO_FPS` 定时写 `(N+1).png…` |
-| `APP_Clean_Video_Session_Stop_Ntf` | — | Glavo→Media（Hub FWD） | `CleanVideoSessionStopPayload` | — | 清粉抽帧收尾：成功时仅更新末帧 `thumb.rthm` 与清粉帧范围；最终 MP4 在 `UI_Print_Video_Finalize_Req` 时统一由全部 PNG 合成 |
+| `APP_Clean_Video_Session_Start_Ntf` | — | Glavo→Media（Hub FWD） | `CleanVideoSessionStartPayload` | — | 清粉延时抽帧开始：接续打印 `N.jpg`，按 `fps`/`TIMELAPSE_VIDEO_FPS` 定时写 `(N+1).jpg…` |
+| `APP_Clean_Video_Session_Stop_Ntf` | — | Glavo→Media（Hub FWD） | `CleanVideoSessionStopPayload` | — | 清粉抽帧收尾：成功时仅更新末帧 `thumb.rthm` 与清粉帧范围；最终 MP4 在 `UI_Print_Video_Finalize_Req` 时统一由全部 JPEG 合成 |
 | `APP_Print_Video_Manifest_Ntf` | — | Media→UI | `PrintVideoManifestPayload` | `CameraMsgProxy::register_print_video_manifest` | manifest `rename()` 成功后发；**0 帧也必发**（`has_entry=0`），否则 UI 停在打印中界面下不来 |
 | `MQTT_Media_Rtsp_Start_Req` | — | MQTT→Media | `RtspPushStartReqPayload` | — | 云端 `start_rtsp_push`：`push_url` 原样推 RTSP（已含 token）；一期仅 `live` |
 | `APP_Mqtt_Rtsp_Start_Rsp` | — | Media→MQTT | `RtspPushRspPayload` | — | 映射 `cmd/ack`（accepted/rejected/error + reason/detail） |
@@ -284,7 +284,7 @@ scripts/rongsu.sh start   # glavo + rongsu_camera → ui
 | `UI_Debug_Env_Sim_Get_Ntf` | — | UI→Glavo | Empty | `request_env_sim_state` | 查询当前“环境上报模拟”开关状态 |
 | `UI_Debug_Env_Sim_Powder_Set_Ntf` | — | UI→Glavo | `DebugOnOffPayload` | `send_env_sim_powder_set` | 环境模拟粉量缺粉开关（仅 Env Sim=On 可设；切换后延迟 5 秒生效） |
 | `UI_Debug_Env_Sim_Powder_Get_Ntf` | — | UI→Glavo | Empty | `request_env_sim_powder_state` | 查询当前“环境模拟粉量缺粉”开关状态 |
-| `UI_Debug_Skip_O2_Gate_Set_Ntf` | — | UI→Glavo | `DebugOnOffPayload` | `send_skip_o2_gate_set` | 调试页开关：跳过 V4 SOC 氧打印门（仅本次运行，默认关；开则起印不发洗气开、不等氧、打印中不因氧高暂停/1120） |
+| `UI_Debug_Skip_O2_Gate_Set_Ntf` | — | UI→Glavo | `DebugOnOffPayload` | `send_skip_o2_gate_set` | 调试页开关：跳过 SOC 氧打印门（仅本次运行，默认关；开则起印不发洗气开、不等氧、打印中不因氧高暂停/1120） |
 | `UI_Debug_Skip_O2_Gate_Get_Ntf` | — | UI→Glavo | Empty | `request_skip_o2_gate_state` | 查询当前“跳过氧门”开关状态 |
 | `UI_Debug_O2_Calib_Req` | — | UI→Glavo | `DebugO2CalibReqPayload` | `send_o2_calib` | 调试页氧标定：参考浓度单点求 K，写 `/userdata/CAL/o2_cal.json`；Glavo worker 只做打印互斥后丢给 SocSensors 独立线程，完成后只发 Rsp |
 | `UI_Debug_O2_Calib_Get_Ntf` | — | UI→Glavo | Empty | `request_o2_calib_state` | 查询当前氧标定 K（不重新采样） |
@@ -402,7 +402,7 @@ rongsu_broker ──listen──► /tmp/upc_broker.sock ◄── UI / Glavo / 
 | `common/CMakeLists.txt` | 统一静态库 `upc::common`（兼容别名 `upc::ipc` 等） | 平台组 |
 | `common/fs_manifest/gcode_manifest.*` | Local `UPC_LOCAL_GCODE_DIR/config.json` 读写（UI 读列表 + Glavo 写） | 平台 / UI / Glavo |
 | `common/fs_manifest/print_history_manifest.*` | `UPC_VIDEO_CONFIG`（Media 写，UI 历史页读） | 平台 / Media / UI |
-| `common/fs_manifest/media_paths.hpp` | `UPC_MEDIA_ROOT`（photo/video/tmp + 首层视觉诊断图）；`UPC_TIMELAPSE_PLAYBACK_PNG`（默认 1=PNG 播延时） | 平台 / Media / UI / Visual |
+| `common/fs_manifest/media_paths.hpp` | `UPC_MEDIA_ROOT`（photo/video/tmp + 首层视觉诊断图）；`UPC_TIMELAPSE_PLAYBACK_PNG`（默认 1=JPEG 序列播延时，宏名保留） | 平台 / Media / UI / Visual |
 | `common/fs_manifest/image_paths.hpp` | `UPC_IMAGE_ROOT`（soc/mcu/galvo/tmp OTA 落盘） | 平台 / MQTT / Glavo |
 | `common/fs_manifest/ota_image_pair.*` / [OTA_IMAGE.md](fs_manifest/OTA_IMAGE.md) | MCU/Galvo AB 文件名与最高版本选取 | 平台 / MQTT / Glavo |
 | `common/fs_manifest/message_paths.hpp` | `UPC_MESSAGE_DIR`（报警历史 jsonl） | 平台 / UI |

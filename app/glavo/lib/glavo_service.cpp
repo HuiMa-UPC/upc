@@ -3643,12 +3643,6 @@ void GlavoService::handle_pm25_request(const middleware::Message& msg)
         publish_pm25_rsp(target, false, 0.f);
         return;
     }
-    if(!McuLink::instance().mcu_sensor_protocol_v4()) {
-        const auto env = McuLink::instance().env_snapshot();
-        const bool high = env.valid && env.pm25_cabin >= pm25_clean_threshold_;
-        publish_pm25_rsp(target, high, env.valid ? env.pm25_cabin : 0.f);
-        return;
-    }
 
     if(pm25_sample_busy_.load()) {
         /* 已在采：不堵 worker，用当前舱内缓存立刻回 */
@@ -3722,7 +3716,7 @@ void GlavoService::handle_open_door_request(const middleware::Message& msg)
 {
     if(door_real_open_enabled_) {
         /* 按传感器协议判定开门成功：
-         * 先发送一次开门指令，再在超时窗内轮询 0x9B value[10] bit7（outer_door_open）。 */
+         * 先发送一次开门指令，再在超时窗内轮询舱门关到位（outer_door_open）。 */
         const bool sent = McuLink::instance().request_open_door_once();
         bool opened = false;
         bool valid_seen = false;
@@ -3769,10 +3763,9 @@ void GlavoService::handle_purify_request(const middleware::Message& msg)
 /**
  * @brief 处理 UI_Clean_Start_Req（开门前清粉）
  *
- * 旧固件：风机 60% → 每 1s 读舱内 PM2.5 → 低于阈值或 Stop → 关风机。
- * V4（且真实开门门控开）：风机固定吹 10s（不中途看 PM）→ 关风机 →
- *   再开阀采样 3s 平均；仍超标则循环；≤阈值则回 Start_Rsp（UI 再开门）。
- * 门控关闭时走旧快照路径（与跳过检测一致，由 UI 侧决定是否发 Clean）。
+ * 风机固定吹 10s（不中途看 PM）→ 关风机 → 再开阀采样 3s 平均；
+ * 仍超标则循环；≤阈值则回 Start_Rsp（UI 再开门）。
+ * 门控关闭时 UI 侧通常不发 Clean；若仍收到，同样走开阀采样。
  */
 void GlavoService::handle_clean_start_request(const middleware::Message& msg)
 {
@@ -3785,20 +3778,16 @@ void GlavoService::handle_clean_start_request(const middleware::Message& msg)
     }
 
     constexpr uint8_t kCleanFanDutyPercent = 60u;
-    constexpr auto kCleanPollInterval = std::chrono::seconds(1);
     constexpr auto kCleanFixedBlow = std::chrono::seconds(10);
     constexpr uint32_t kValveSampleMs = 3000;
     const uint32_t reply_target = static_cast<uint32_t>(msg.sender_id);
-    const bool v4_fixed =
-        door_real_open_enabled_ && McuLink::instance().mcu_sensor_protocol_v4();
     clean_cancel_requested_.store(false);
     clean_stop_rsp_pending_.store(false);
     clean_stop_rsp_target_.store(0);
     clean_running_.store(true);
 
     clean_worker_ = std::thread([this, reply_target, kCleanFanDutyPercent,
-                                 kCleanPollInterval, kCleanFixedBlow, kValveSampleMs,
-                                 v4_fixed]() {
+                                 kCleanFixedBlow, kValveSampleMs]() {
         bool cancelled = false;
         uint8_t buf[SERIAL_DEBUG_MAX_FRAME];
 
@@ -3819,59 +3808,35 @@ void GlavoService::handle_clean_start_request(const middleware::Message& msg)
             }
         };
 
-        if(v4_fixed) {
-            UPC_LOG_GLAVO_SERVICE(Info,
-                "clean_start_req(v4): fixed %lld s blow + valve resample, threshold=%.1f",
-                static_cast<long long>(kCleanFixedBlow.count()),
-                static_cast<double>(pm25_clean_threshold_));
-            for(;;) {
-                if(clean_cancel_requested_.load()) {
-                    cancelled = true;
-                    break;
-                }
-                fan_on();
-                const auto blow_deadline = std::chrono::steady_clock::now() + kCleanFixedBlow;
-                while(std::chrono::steady_clock::now() < blow_deadline) {
-                    if(clean_cancel_requested_.load()) {
-                        cancelled = true;
-                        break;
-                    }
-                    std::this_thread::sleep_for(std::chrono::milliseconds(200));
-                }
-                fan_off();
-                if(cancelled) {
-                    break;
-                }
-                const float avg = SocSensors::instance().sample_cabin_pm25_avg(kValveSampleMs);
-                UPC_LOG_GLAVO_SERVICE(Info,
-                    "clean_start_req(v4): resample avg=%.1f", static_cast<double>(avg));
-                publish_debug_cabin_pm_valve_state();
-                if(avg < 0.f || avg < pm25_clean_threshold_) {
-                    break;
-                }
+        UPC_LOG_GLAVO_SERVICE(Info,
+            "clean_start_req: fixed %lld s blow + valve resample, threshold=%.1f",
+            static_cast<long long>(kCleanFixedBlow.count()),
+            static_cast<double>(pm25_clean_threshold_));
+        for(;;) {
+            if(clean_cancel_requested_.load()) {
+                cancelled = true;
+                break;
             }
-        } else {
             fan_on();
-            UPC_LOG_GLAVO_SERVICE(Info,
-                "clean_start_req: fan on, waiting pm25 < %.1f",
-                static_cast<double>(pm25_clean_threshold_));
-            for(;;) {
+            const auto blow_deadline = std::chrono::steady_clock::now() + kCleanFixedBlow;
+            while(std::chrono::steady_clock::now() < blow_deadline) {
                 if(clean_cancel_requested_.load()) {
                     cancelled = true;
-                    UPC_LOG_GLAVO_SERVICE(Info, "clean_start_req: cancelled by stop request");
                     break;
                 }
-                const auto env = McuLink::instance().env_snapshot();
-                if(env.valid && env.pm25_cabin < pm25_clean_threshold_) {
-                    UPC_LOG_GLAVO_SERVICE(Info,
-                        "clean_start_req: pm25 reached %.1f < %.1f",
-                        static_cast<double>(env.pm25_cabin),
-                        static_cast<double>(pm25_clean_threshold_));
-                    break;
-                }
-                std::this_thread::sleep_for(kCleanPollInterval);
+                std::this_thread::sleep_for(std::chrono::milliseconds(200));
             }
             fan_off();
+            if(cancelled) {
+                break;
+            }
+            const float avg = SocSensors::instance().sample_cabin_pm25_avg(kValveSampleMs);
+            UPC_LOG_GLAVO_SERVICE(Info,
+                "clean_start_req: resample avg=%.1f", static_cast<double>(avg));
+            publish_debug_cabin_pm_valve_state();
+            if(avg < 0.f || avg < pm25_clean_threshold_) {
+                break;
+            }
         }
 
         if(cancelled) {

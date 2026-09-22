@@ -59,10 +59,10 @@ LV_USE_MATRIX 1
 LV_USE_SYSMON 0
 LV_USE_PERF_MONITOR 0
 
-# TJPGD：打印历史缩略图 JPEG 解码（baseline JPEG）
+# TJPGD：相机 JPEG 静图、延时序列帧（lv_image_set_src "A:/.../*.jpg"）与历史缩略图
 LV_USE_TJPGD 1
 
-# 延时摄影序列帧 PNG 解码（lv_image_set_src("A:/.../*.png")）
+# LODEPNG：非相机 PNG（3MF/G-code 缩略图等）。延时主画面已改 .jpg，不再靠它播序列
 LV_USE_LODEPNG 1
 
 # POSIX 文件系统驱动：按路径加载 /data/media/video 下缩略图（盘符 'A'，如 "A:/data/media/video/x.rthm"）

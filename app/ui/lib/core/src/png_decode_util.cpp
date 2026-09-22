@@ -1,6 +1,12 @@
 #include "png_decode_util.hpp"
 
 #include <cstdio>
+#include <cstring>
+#include <vector>
+
+#if defined(UPC_UI_HAS_TURBOJPEG) && UPC_UI_HAS_TURBOJPEG
+#include <turbojpeg.h>
+#endif
 
 #if defined(UPC_UI_HAS_LIBPNG) && UPC_UI_HAS_LIBPNG
 #include <png.h>
@@ -8,13 +14,104 @@
 
 namespace ui::png_util {
 
+namespace {
+
+bool ext_is(const char* path, const char* ext)
+{
+    if(!path || !ext) {
+        return false;
+    }
+    const size_t n = std::strlen(path);
+    const size_t e = std::strlen(ext);
+    if(n < e) {
+        return false;
+    }
+    return std::strcmp(path + (n - e), ext) == 0;
+}
+
+bool is_jpeg_path(const char* path)
+{
+    return ext_is(path, ".jpg") || ext_is(path, ".JPG") ||
+           ext_is(path, ".jpeg") || ext_is(path, ".JPEG");
+}
+
+#if defined(UPC_UI_HAS_TURBOJPEG) && UPC_UI_HAS_TURBOJPEG
+bool decode_jpeg_rgba(const char* path, std::vector<uint8_t>& rgba,
+                      uint32_t& w, uint32_t& h)
+{
+    w = 0;
+    h = 0;
+    FILE* fp = std::fopen(path, "rb");
+    if(!fp) {
+        return false;
+    }
+    if(std::fseek(fp, 0, SEEK_END) != 0) {
+        std::fclose(fp);
+        return false;
+    }
+    const long sz = std::ftell(fp);
+    if(sz <= 0 || sz > 32L * 1024L * 1024L) {
+        std::fclose(fp);
+        return false;
+    }
+    if(std::fseek(fp, 0, SEEK_SET) != 0) {
+        std::fclose(fp);
+        return false;
+    }
+    std::vector<uint8_t> jpeg(static_cast<size_t>(sz));
+    if(std::fread(jpeg.data(), 1, jpeg.size(), fp) != jpeg.size()) {
+        std::fclose(fp);
+        return false;
+    }
+    std::fclose(fp);
+
+    tjhandle handle = tjInitDecompress();
+    if(!handle) {
+        return false;
+    }
+    int width = 0;
+    int height = 0;
+    int subsamp = 0;
+    int colorspace = 0;
+    if(tjDecompressHeader3(handle, jpeg.data(), jpeg.size(),
+                           &width, &height, &subsamp, &colorspace) != 0 ||
+       width <= 0 || height <= 0 || width > 8192 || height > 8192) {
+        tjDestroy(handle);
+        return false;
+    }
+    rgba.assign(static_cast<size_t>(width) * static_cast<size_t>(height) * 4u, 0);
+    const int rc = tjDecompress2(handle, jpeg.data(), jpeg.size(), rgba.data(),
+                                 width, 0, height, TJPF_RGBA, TJFLAG_FASTDCT);
+    tjDestroy(handle);
+    if(rc != 0) {
+        rgba.clear();
+        return false;
+    }
+    w = static_cast<uint32_t>(width);
+    h = static_cast<uint32_t>(height);
+    return true;
+}
+#endif
+
+} // namespace
+
 bool decode_rgba(const char* path, std::vector<uint8_t>& rgba,
                  uint32_t& w, uint32_t& h)
 {
-#if defined(UPC_UI_HAS_LIBPNG) && UPC_UI_HAS_LIBPNG
     if(!path || !path[0]) {
         return false;
     }
+#if defined(UPC_UI_HAS_TURBOJPEG) && UPC_UI_HAS_TURBOJPEG
+    if(is_jpeg_path(path)) {
+        return decode_jpeg_rgba(path, rgba, w, h);
+    }
+#else
+    if(is_jpeg_path(path)) {
+        return false;
+    }
+#endif
+
+#if defined(UPC_UI_HAS_LIBPNG) && UPC_UI_HAS_LIBPNG
     FILE* fp = std::fopen(path, "rb");
     if(!fp) {
         return false;

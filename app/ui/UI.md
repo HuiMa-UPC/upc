@@ -1437,7 +1437,7 @@ Montserrat（稿是 Poppins，同字号更宽）。实测 `Humidity` 的 caption
 ```
 Glavo Print_Terminate_Rsp / 进度 100% → control.cpp finish_printing()
   → enter_state(CONTROL_STATE_PRINT_DONE)   // 只停看门狗，预览保活，界面维持打印中原样
-  → （开门 finalize：promote 目录；`UPC_TIMELAPSE_PLAYBACK_PNG=1` 时不编 timelapse.mp4，保留 PNG 即可播；`=0` 时后台编 mp4）
+  → （开门 finalize：promote 目录；`UPC_TIMELAPSE_PLAYBACK_PNG=1` 时不编 timelapse.mp4，保留 JPEG 即可播；`=0` 时后台编 mp4）
   → APP_Print_Video_Manifest_Ntf (Camera→UI)
   → control.cpp on_print_video_manifest()：按 frames_dir 主键读 /userdata/media/video/config.json
   → page_user_monitor_enter_print_result()  // 状态行切结束档 + 底部换 吹粉 + RETRIEVE
@@ -1452,7 +1452,7 @@ Glavo Print_Terminate_Rsp / 进度 100% → control.cpp finish_printing()
   离开结果态改点左侧标签栏，页面被 PageManager 缓存住，再点监控仍回到结果态。
 - **PRINT_DONE 期间** `control_is_printing()` 返回 true → PageManager 挡住 `user_files`，
   取件前不能开新任务。
-- 吹粉钮：触发清粉测试；Media 按 `TIMELAPSE_VIDEO_FPS` 抽帧接续 PNG，成功后合并进同一
+- 吹粉钮：触发清粉测试；Media 按 `TIMELAPSE_VIDEO_FPS` 抽帧接续 JPEG，成功后合并进同一
   `timelapse.mp4`（一次打印结果仅允许成功一次）。吹粉进行中点 `RETRIEVE` 会被挡下并 toast
   提示，但稿上「吹粉完成前 RETRIEVE 置灰」那道门禁还没做，按钮本身一直是亮的。
 
@@ -1673,24 +1673,24 @@ viewport 不一致，或 `scaled=0` 而屏宽 ≠ 流宽，就说明重采样又
 
 | 组件 | 文件 | 职责 |
 |------|------|------|
-| `page_user_history` | `pages/page_user_history.*` | 读 `/userdata/media/video/config.json`（`common/fs_manifest/print_history_manifest`）→ 按 `start_unix` 倒序、按自然日分组的卡片列表；卡片三指标 Duration / Filament / Layers 分别取 `duration_sec` / `material_g` / `layer_count`（后两者由 Media 从 `/userdata/Gcode/config.json` 快照，为 0 时显示 "--"）；缩略图 `A:/userdata/media/video/{thumb}`（RTHM 解码，`LV_IMAGE_ALIGN_COVER`）；**Album** 走 `ui::album::scan()` 扫 `/userdata/media/photo`，缩略图优先同名 `.rthm`；顶部三 Tab + Storage 容量条；管理（多选）模式批量删除；上下翻页；**左滑删除**（跟手拖动，见「左滑删除：跟手拖动」一节）→ History/Timelapse **按类型独立删除**后重写 config.json；Album 删 PNG + 配对 `.rthm` |
-| `page_user_timelapse` | `pages/page_user_timelapse.*` | 全屏播放页（建于 `lv_layer_top()`）：受 `UPC_TIMELAPSE_PLAYBACK_PNG` 控制——默认 PNG 序列；`=0` 时优先 `timelapse.mp4`（失败回退 PNG）；拖动预览为后台小图 scrub，松手后再 settle 主画面 |
+| `page_user_history` | `pages/page_user_history.*` | 读 `/userdata/media/video/config.json`（`common/fs_manifest/print_history_manifest`）→ 按 `start_unix` 倒序、按自然日分组的卡片列表；卡片三指标 Duration / Filament / Layers 分别取 `duration_sec` / `material_g` / `layer_count`（后两者由 Media 从 `/userdata/Gcode/config.json` 快照，为 0 时显示 "--"）；缩略图 `A:/userdata/media/video/{thumb}`（RTHM 解码，`LV_IMAGE_ALIGN_COVER`）；**Album** 走 `ui::album::scan()` 扫 `/userdata/media/photo`，缩略图优先同名 `.rthm`；顶部三 Tab + Storage 容量条；管理（多选）模式批量删除；上下翻页；**左滑删除**（跟手拖动，见「左滑删除：跟手拖动」一节）→ History/Timelapse **按类型独立删除**后重写 config.json；Album 删 JPEG + 配对 `.rthm` |
+| `page_user_timelapse` | `pages/page_user_timelapse.*` | 全屏播放页（建于 `lv_layer_top()`）：受 `UPC_TIMELAPSE_PLAYBACK_PNG` 控制——默认 JPEG 序列（`1.jpg`…）；`=0` 时优先 `timelapse.mp4`（失败回退 JPEG）；拖动预览为后台小图 scrub，松手后再 settle 主画面 |
 | `page_user_photo` | `pages/page_user_photo.*` | 相册全屏浏览器（同建于 `lv_layer_top()`，与播放器同一套 chrome）：主图 `LV_IMAGE_ALIGN_CONTAIN`，左右滑动 / 两侧箭头翻页、首末循环回绕，底部 filmstrip 点格跳转，单击主图切控件层 |
 
 - **进入/退出**：历史页缩略图点击 → `page_user_timelapse_set_source(目录,mp4路径,标题,时间)` + `switch_to("user_timelapse")`；Album 照片 → `page_user_photo_set_source(照片绝对路径)` + `switch_to("user_photo")`；两者关闭均 → `switch_to("user_history")`。
-- **LVGL 线程规则**：PNG 序列播放由主线程 `lv_timer` 换主画面；拖动预览解码在后台线程，经 `lv_async_call` 贴预览框。
+- **LVGL 线程规则**：JPEG 序列播放由主线程 `lv_timer` 换主画面；拖动预览解码在后台线程，经 `lv_async_call` 贴预览框。
 - **进度条底部那条 `pad_bottom` 别删**：knob 直径是 `3 × USER_PROGRESS_H`、轨道高只有
   `2 ×`，knob 上下各溢出 `H/2`；而 `bottom` 容器是 `LV_SIZE_CONTENT`，高度只按子对象的
   coords 算（knob 是 slider 的 style part，靠 `ext_draw_size` 画到框外，容器不认），
   LVGL 又默认把子对象裁到父容器盒子里。结果本该是正圆的 knob 被削成上下平的横向胶囊
   （实机 1024 档：36×36 渲染成 36×24，恰好丢掉 1/3）。补 `knob_overflow + USER_PAD_SM`
   的下边距把它圈回来，上方由命中区那 48px `pad_top` 顺带兜住。
-- **PNG 序列停在末帧时重点播放要先回 0 帧**：否则 `play_timer_cb` 下一拍就撞上结束判定
+- **JPEG 序列停在末帧时重点播放要先回 0 帧**：否则 `play_timer_cb` 下一拍就撞上结束判定
   又把 `g_playing` 关掉，表现为点了没反应。MP4 分支到末尾先 `seek(0)` 是同一回事。
 
 ### 相册全屏浏览器（`user_photo`）
 
-- **为什么不能直接 `lv_image_set_src(原图)`**：照片是 `1080×1280` PNG（`camera_resolution_profile.hpp`），`LV_COLOR_DEPTH=32` 下 lodepng 会在 LVGL 线程内同步解出约 5.5MB ARGB8888。故大图交给 `ui::PhotoDecoder` 后台解，缩到「CONTAIN 贴合屏幕」的尺寸出 RGB565，绘制变成 1:1 blit。
+- **为什么不能直接 `lv_image_set_src(原图)`**：照片是 `1080×1280` JPEG（`camera_resolution_profile.hpp`），`LV_COLOR_DEPTH=32` 下 TJPGD 会在 LVGL 线程内同步解出约 5.5MB。故大图交给 `ui::PhotoDecoder` 后台解（libturbojpeg → RGBA，再缩到「CONTAIN 贴合屏幕」出 RGB565），绘制变成 1:1 blit。
   **注意图片缓存已开启但不改变这个结论**：`rongsu_ui.defaults` 现在给了 `LV_CACHE_DEF_SIZE (8 * 1024 * 1024)`（此前未覆盖、沿用模板默认 0，即每次重绘都重解一遍）。8MB 缓存能兜住成片的 `.rthm` 缩略图与延时序列帧，但**单张全尺寸照片解出来就约 5.5MB**，一张就几乎占满、两张必然互相顶掉，且**首次解码依然发生在调用线程**。所以「后台解 + 缩到屏幕尺寸」仍是这里的正解，缓存只是顺带减少了缩略图侧的重复解码。
 - **画面分两拍上**：先贴配对 `.rthm` 缩略图顶住（自定义 decoder 只是读文件 + memcpy，几乎零成本），后台解完再换清晰图；无 `.rthm` 时显示 `Loading...` 而不是在主线程抢着解原图。
 - **解码目标尺寸只能运行时算**：主题分 1920/1280/1024 三档且按实际 display 最长边挑（`ui_theme.cpp` 的 `pick_profile()`），所以 box 取 `lv_display_get_*_resolution()`，不能写成编译期常量。竖构图照片贴合横屏后左右各留约 1/4 屏宽黑边，**两侧箭头正落在黑边上**，这是设计选择。
@@ -1698,7 +1698,7 @@ viewport 不一致，或 `scaled=0` 而屏宽 ≠ 流宽，就说明重采样又
 - **滑动手势不用 `LV_EVENT_GESTURE`**：与历史页左滑删除同一套理由（见「左滑删除：跟手拖动」），手写 `PRESSED/PRESSING/RELEASED/PRESS_LOST` 四件套 + 起拖阈值 + 方向锁定，并靠 `just_dragged` 吃掉松手时那一下 `CLICKED`，否则每滑一次会顺带闪一下控件层。
 - **翻页判据是「距离 or 轻扫」两条**，缺一不可：只看距离（屏宽 1/5）的话快速短扫会被判成没动、手感发滞；只看速度的话慢慢拖过半屏反而翻不了页。轻扫阈值 600px/s 且至少 24px 位移（挡住原地手抖）。速度取按下到松手的**平均值**而非瞬时值——轻扫本就是一气呵成的短手势，两者接近，做瞬时速度得留位置历史，不值当。
 - **两处手感细节**：跟手位移要**扣掉起拖阈值**（`shift = dx ∓ kSwipeStartPx`），否则判定成立那一帧画面会突然跳 12px；翻页与弹回都走 `lv_anim` ease-out（`kSlideMs`）而不是瞬间归位。因为只有一个 `lv_image`，做不出「旧图滑出 + 新图滑入」的双图轮播，退一步只做**滑入**，方向跟手——观感已经连贯，且不必多养一份解码缓冲。跟手拖动前要 `stop_shift_anim()` 掐掉上一次的滑入动画，离页同理。
-- **非 PNG 的兜底**：后台解码只吃 PNG（libpng）。`ui::album::is_photo_file()` 还收 `.jpg/.jpeg/.bmp/.webp`，前三者由 `PhotoDecoder` 回一个空 image、页面转交 LVGL 内置 TJPGD / BMP 同步解；`.webp` 当前无解码器，先用 `lv_image_decoder_get_info()` 问一遍，认不出来就显示 `Cannot display this photo`，不留黑屏。
+- **非 JPEG/PNG 的兜底**：后台解码吃 `.jpg`/`.jpeg`（turbojpeg）和 PNG（libpng）。`ui::album::is_photo_file()` 还收 `.bmp/.webp`（不再收旧 `.png`）。解失败时 `.bmp` 由页面转交 LVGL 内置解码器同步解；`.webp` 当前无解码器，先用 `lv_image_decoder_get_info()` 问一遍，认不出来就显示 `Cannot display this photo`，不留黑屏。
 - **列表与浏览器必须同序**：枚举/排序/配对 `.rthm` 统一在 `ui::album::scan()`（`core/album_index.*`），历史页 `rebuild_list()` 与本页 `refresh()` 都调它。两处各自扫目录的话，「下一张」会和列表看到的顺序错位。落点照片若在此期间被删（`index_of` 返回 `kInvalidIndex`），退到最新一张。
 - **共用 chrome**：半透明黑底圆形浮层按钮抽成 `ui_user_make_overlay_round_btn()`（`components/ui_user_widgets.*`），播放器与浏览器共用；原先只存在于播放器的匿名 namespace 里。尺寸不足 `UI_USER_MIN_TOUCH` 时该函数自动外扩命中区，见下面「触摸命中区」一节。
 - **filmstrip（底部横向缩略图条）**：
@@ -1865,9 +1865,9 @@ Storage / Advanced Print / Privacy & Security / About / Debug。
   > 字库。同理，文件名里若有中文也会是豆腐（Montserrat 不含 CJK），那条路得走
   > `user_font_cjk()`。
 - **帧数是扫盘数出来的**：manifest 里没有帧数字段，`session_frame_count()` 在会话目录上
-  **倍增探上界再二分**找最大的 `N.png`（帧从 1 连号，清粉段也在同一串里），约 2·log₂(N)
+  **倍增探上界再二分**找最大的 `N.jpg`（帧从 1 连号，清粉段也在同一串里），约 2·log₂(N)
   次 `stat`。不用 `directory_iterator` 逐个数：一个会话动辄上千帧，而这函数是分块建列表
-  时每张卡调一次的，列目录会把建列表的耗时拖上去。探不到（非 PNG 播放模式 / 帧已被删）
+  时每张卡调一次的，列目录会把建列表的耗时拖上去。探不到（非序列播放模式 / 帧已被删）
   返回 0，此时退回显示时长。
 - **月分组**（稿 `6122:80020`）：`build_month_title()` 建的标题设 `LV_PCT(100)` 宽，在
   `ROW_WRAP` 里天然独占一行、把后面的卡挤到下一行，不用另建行容器。
@@ -2030,8 +2030,8 @@ Storage / Advanced Print / Privacy & Security / About / Debug。
   Montserrat 的字宽与稿的 PingFang SC / Inter / Poppins 不同，标题与正文的横向长度比稿
   各宽 10~20px，这跟着字库走，不是布局没对上。
 - **删除动作**走原有那套不变：`remove_cards_with_rollback()` 按当前 Tab **独立删除**（Timelapse 只清延时资产
-  `*.png` / `thumb.rthm` / `timelapse.mp4`；Video 只清 `print_h264.mp4` / `print_thumb` /
-  `print.h264`；Photo 删 PNG 原图及配对 `.rthm`），另一侧仍保留；两侧都空才移除清单条目
+  `*.jpg` / `thumb.rthm` / `timelapse.mp4`；Video 只清 `print_h264.mp4` / `print_thumb` /
+  `print.h264`；Photo 删 JPEG 原图及配对 `.rthm`），另一侧仍保留；两侧都空才移除清单条目
   并删会话目录。`video_pending` / `print_video_pending` 的条目不可勾选，避免打断落盘。
 - **分块建列表照旧保留**（`append_list_build_chunk()` / `list_build_timer_cb()` /
   `kListBuildChunkSize`）：长列表一次建完会卡帧。只是每块建的东西从「一行卡」变成
@@ -2059,7 +2059,7 @@ Storage / Advanced Print / Privacy & Security / About / Debug。
 
 | 缺口 | 现状 | 补法 |
 |------|------|------|
-| Timelapse 帧数 | `session_frame_count()` 扫盘二分数 `N.png` | manifest 落盘时顺手记一个帧数字段，UI 直接读 |
+| Timelapse 帧数 | `session_frame_count()` 扫盘二分数 `N.jpg` | manifest 落盘时顺手记一个帧数字段，UI 直接读 |
 
 ### 触摸命中区（`lv_obj_set_ext_click_area`）
 
@@ -2107,11 +2107,11 @@ Tab 取 `USER_PAD_SM`（小于 Tab 间距 `USER_PAD_LG` 的一半），故相邻
 
 ### LVGL 配置依赖（`3rdparty/.../configs/rongsu_ui.defaults`）
 - `LV_USE_OPENGLES=1` → `LV_LINUX_DRM_USE_EGL` 被自动置 1（`lv_conf_internal.h`），所以显示驱动是 `lv_linux_drm_egl.c` 而**不是** `lv_linux_drm.c`（后者整个文件被 `!LV_LINUX_DRM_USE_EGL` 排掉）。而 `LV_USE_DRAW_OPENGLES` 默认 0，**绘制仍是软件的**，GPU 只负责贴整屏纹理并做屏幕旋转。看 `refr 5s:` 时这一条是前提，见 [§ 主线程性能探针](#主线程性能探针ui_perf_probe)
-- `LV_USE_TJPGD=1`：历史缩略图 baseline JPEG 解码
-- `LV_USE_FS_POSIX=1` + `LV_FS_POSIX_LETTER='A'`：按路径加载 `/userdata/media/video`、`/userdata/media/photo` 图片（`"A:/userdata/media/video/x.rthm"` / `"A:/userdata/media/photo/x.rthm"`）
+- `LV_USE_TJPGD=1`：相机 JPEG 静图、延时序列帧与历史缩略图（baseline JPEG）
+- `LV_USE_FS_POSIX=1` + `LV_FS_POSIX_LETTER='A'`：按路径加载 `/userdata/media/video`、`/userdata/media/photo` 图片（`"A:/userdata/media/video/x.rthm"` / `"A:/userdata/media/photo/x.jpg"`）
 - lvgl 目标加 `_DEFAULT_SOURCE`（`3rdparty/.../CMakeLists.txt`）：修 FS 驱动 `DT_DIR` 在 `_POSIX_C_SOURCE` 下不可见的编译错误
 - 缩略图 `toast` 与播放器同建于 `lv_layer_top()`，全屏时提示可见
-- **libpng 不走 lv_conf，是 CMake 探测的**（`app/ui/CMakeLists.txt` → `UPC_UI_HAS_LIBPNG`）：拖动预览与相册大图都在后台线程用它（`core/png_decode_util.*`）。探不到时两处解码恒失败——拖动预览退回只刷小框，相册浏览器则转交 LVGL 内置 lodepng 同步解（会卡顿，但不至于打不开）
+- **libturbojpeg / libpng 不走 lv_conf，是 CMake 探测的**（`app/ui/CMakeLists.txt` → `UPC_UI_HAS_TURBOJPEG` / `UPC_UI_HAS_LIBPNG`）：拖动预览与相册大图都在后台线程用 `core/png_decode_util.*`。turbojpeg 缺失则配置失败；libpng 探不到时 PNG 解码失败，JPEG 不受影响。延时主画面 `lv_image_set_src` 走 LVGL 内置 TJPGD
 
 ## 多后端 IPC
 

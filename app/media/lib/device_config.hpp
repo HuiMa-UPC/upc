@@ -35,6 +35,14 @@
 #define CAMERA_PRINT_VIDEO_THUMB_MAX_W  240
 #endif
 
+/**
+ * 相册拍照 / 延时层拍 / 清粉抽帧的 JPEG 质量（1..100）。
+ * CPU libturbojpeg，不占 RKMPP（H.264 录像与直播仍走硬件）。
+ */
+#ifndef CAMERA_STILL_JPEG_QUALITY
+#define CAMERA_STILL_JPEG_QUALITY  80
+#endif
+
 /** 板端 ffmpeg 可执行文件（rootfs 需已部署） */
 #ifndef CAMERA_FFMPEG_BIN
 #define CAMERA_FFMPEG_BIN  "/usr/bin/ffmpeg"
@@ -62,7 +70,7 @@
 /**
  * 逐帧写盘前存储预算检查的缓存窗口（ms）。
  *
- * 全量核算要递归遍历整个录像目录并 stat 每个文件，而层拍 PNG 会累积到上千个，
+ * 全量核算要递归遍历整个录像目录并 stat 每个文件，而层拍 JPEG 会累积到上千个，
  * 按帧调用时开销随打印层数线性增长，足以把 H264 编码 worker 拖到丢一半帧。
  * 配额本身是"分区容量 80%"这种粗水位，秒级刷新完全够用。
  */
