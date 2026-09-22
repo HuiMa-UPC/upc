@@ -8,23 +8,13 @@
 extern "C" {
 #endif
 
-extern const lv_image_dsc_t ic_notice_alert_14;   /* 1024 档 · 通知浮层 */
-extern const lv_image_dsc_t ic_notice_alert_18;   /* 1280 档 · 通知浮层 */
-extern const lv_image_dsc_t ic_notice_alert_27;   /* 1920 档 · 通知浮层 */
-extern const lv_image_dsc_t ic_notice_alert_19;   /* 1024 档 · 消息页 */
-extern const lv_image_dsc_t ic_notice_alert_24;   /* 1280 档 · 消息页 */
-extern const lv_image_dsc_t ic_notice_alert_36;   /* 1920 档 · 消息页 */
-/** 全尺寸表，配 ui_user_pick_icon() 用；单张的用途见上。 */
-extern const lv_image_dsc_t *const ic_notice_alert_set[];
+extern const lv_image_dsc_t ic_notice_alert_14;   /* 1024 档 */
+extern const lv_image_dsc_t ic_notice_alert_18;   /* 1280 档 */
+extern const lv_image_dsc_t ic_notice_alert_27;   /* 1920 档 */
 
-extern const lv_image_dsc_t ic_notice_info_14;   /* 1024 档 · 通知浮层 */
-extern const lv_image_dsc_t ic_notice_info_18;   /* 1280 档 · 通知浮层 */
-extern const lv_image_dsc_t ic_notice_info_27;   /* 1920 档 · 通知浮层 */
-extern const lv_image_dsc_t ic_notice_info_19;   /* 1024 档 · 消息页 */
-extern const lv_image_dsc_t ic_notice_info_24;   /* 1280 档 · 消息页 */
-extern const lv_image_dsc_t ic_notice_info_36;   /* 1920 档 · 消息页 */
-/** 全尺寸表，配 ui_user_pick_icon() 用；单张的用途见上。 */
-extern const lv_image_dsc_t *const ic_notice_info_set[];
+extern const lv_image_dsc_t ic_notice_info_14;   /* 1024 档 */
+extern const lv_image_dsc_t ic_notice_info_18;   /* 1280 档 */
+extern const lv_image_dsc_t ic_notice_info_27;   /* 1920 档 */
 
 #ifdef __cplusplus
 }

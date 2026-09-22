@@ -8,17 +8,16 @@ extern "C" {
 #endif
 
 /**
- * 用户打印历史页：三列缩略图网格，按自然月分组、时间倒序。
- *
- * 三个 Tab —— Timelapse / Video 读 /userdata/media/video/config.json，
- * Photo 扫 /userdata/media/photo。长按卡片进多选，多选态下可批量删除。
+ * 用户打印历史页：读取 /userdata/media/video/config.json，按时间倒序展示每次打印的
+ * 时间/文件名/状态/时长/耗材 + 延时摄影缩略图；Album 扫 /userdata/media/photo；
+ * 支持上下翻页与左滑删除。
  */
 lv_obj_t *page_user_history_create(lv_obj_t *parent);
 
-/** 进入/刷新：重新加载 manifest 并重建网格 */
+/** 进入/刷新：重新加载 manifest 并重建列表 */
 void page_user_history_refresh(bool force);
 
-/** 离页清理：关掉确认弹窗、退出多选态 */
+/** 离页清理：复位左滑状态 */
 void page_user_history_exit(void);
 
 #ifdef __cplusplus

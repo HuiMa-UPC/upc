@@ -7,33 +7,25 @@
 
 namespace upc::media {
 
-/** 延时摄影 / 清粉共用：NV12→JPEG、JPEG→MP4、RTHM 缩略图（dma32+RGA）、帧序号扫描与清理。 */
+/** 延时摄影 / 清粉共用：NV12→PNG、PNG→MP4、RTHM 缩略图（dma32+RGA）、PNG 序号扫描与清理。 */
 namespace timelapse_util {
 
 std::string sanitize_filename(const char* name);
 bool mkdir_p(const char* path);
 int run_shell_cmd(const char* cmd, const char* log_tag);
 
-std::string frame_jpeg_path(const std::string& session_dir, uint32_t frame_index);
+std::string frame_png_path(const std::string& session_dir, uint32_t frame_index);
 
-/** 扫描目录内最大 N.jpg；无则返回 0。不认旧的 .png。 */
-uint32_t scan_max_jpeg_index(const std::string& session_dir);
+/** 扫描目录内最大 N.png；无则返回 0。 */
+uint32_t scan_max_png_index(const std::string& session_dir);
 
-/**
- * NV12 → JPEG 文件（libturbojpeg，质量 CAMERA_STILL_JPEG_QUALITY）。
- * 宽高须为偶数。不走 ffmpeg、不占 MPP。
- */
-bool encode_nv12_to_jpeg_file(const uint8_t* nv12, size_t bytes,
-                              uint32_t width, uint32_t height,
-                              const char* out_path);
+bool encode_nv12_to_png(const uint8_t* nv12, size_t bytes,
+                        uint32_t width, uint32_t height,
+                        const std::string& session_dir, uint32_t frame_index);
 
-bool encode_nv12_to_jpeg(const uint8_t* nv12, size_t bytes,
-                         uint32_t width, uint32_t height,
-                         const std::string& session_dir, uint32_t frame_index);
-
-bool encode_jpeg_sequence_to_mp4(const std::string& session_dir,
-                                 uint32_t frame_count, uint32_t fps,
-                                 const char* out_path);
+bool encode_png_sequence_to_mp4(const std::string& session_dir,
+                                uint32_t frame_count, uint32_t fps,
+                                const char* out_path);
 
 /** 将 print.h264 裸流封装为 MP4（无音频）。 */
 bool remux_h264_to_mp4(const char* h264_path, uint32_t fps, const char* out_path);
@@ -60,9 +52,9 @@ bool create_raw_thumb_from_nv12(const std::vector<uint8_t>& nv12,
                                 uint32_t width, uint32_t height,
                                 const char* out_path);
 
-/** 删除 [first_index, last_index] 闭区间内的 JPEG（N.jpg）。 */
-void remove_jpeg_range(const std::string& session_dir,
-                       uint32_t first_index, uint32_t last_index);
+/** 删除 [first_index, last_index] 闭区间内的 PNG。 */
+void remove_png_range(const std::string& session_dir,
+                      uint32_t first_index, uint32_t last_index);
 
 /** 仅当目录为空时删除目录本身（非空不删）。 */
 bool remove_empty_dir(const std::string& session_dir);

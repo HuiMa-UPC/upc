@@ -23,6 +23,7 @@ namespace {
 constexpr int      kCurrentCap      = 128;
 constexpr int      kMaxObservers    = 4;
 constexpr uint32_t kResetTimeoutMs  = 10000; /* 复位无回报自动解锁按钮 */
+constexpr uint32_t kEventDismissMs  = 5000;  /* EVENT 蓝卡自动从浮层撤下 */
 
 /* ---- 快照攒帧 ----
  * 快照是请求-响应的，MCU 只回 (active|latched)!=0 的 slot，没回的一律按全零算。
@@ -291,13 +292,8 @@ int slot_alloc(void)
     return -1;
 }
 
-/* ---- 定时器：复位超时 ----
- * user_data 直接塞 code（uintptr），不挂堆内存。
- *
- * 这里原先还有一支 EVENT 专用的 5s 自动撤浮层定时器。自动收起现在归
- * `ui_message_store` 统一按等级计时（INFO 5s / 告警级 15s），这支就撤了——留着会和
- * 那边打架，同一条 EVENT 被两个时长各撤一次。而且它一直只对 INFO 生效：撤下走的是
- * `ui_message_dismiss()`，那个函数第一道门就把非 INFO 挡掉了。 */
+/* ---- 定时器：复位超时 / EVENT 自动撤浮层 ----
+ * user_data 直接塞 code（uintptr），不挂堆内存。 */
 
 void reset_timeout_cb(lv_timer_t *t)
 {
@@ -310,6 +306,13 @@ void reset_timeout_cb(lv_timer_t *t)
         g_current[i].e.reset_pending = false;
         notify_observers();
     }
+}
+
+void event_dismiss_cb(lv_timer_t *t)
+{
+    const uint16_t code =
+        static_cast<uint16_t>(reinterpret_cast<uintptr_t>(lv_timer_get_user_data(t)));
+    ui_message_dismiss(code);
 }
 
 void arm_oneshot(lv_timer_cb_t cb, uint32_t period_ms, uint16_t code)
@@ -356,10 +359,10 @@ void on_alarm_event(uint16_t code, uint8_t severity, uint32_t detail)
     EventText *txt = event_text_slot(code);
     compose_text(code, detail, g_inject_simulated, txt->title, sizeof(txt->title),
                  txt->body, sizeof(txt->body));
-    /* EVENT 每一帧都是一次独立发生，一律 emit：哪怕同一个码上一次被关掉或收起过，
-     * 也该重新弹。停留多久由 ui_message_store 按等级计时，这里不用管。 */
-    ui_message_emit_ex(code, ui_alarm_severity_to_msg(severity),
-                       txt->title, txt->body, now);
+    ui_message_push_ex(code, ui_alarm_severity_to_msg(severity),
+                       txt->title, txt->body, now, true);
+    /* EVENT 是看过即走的消息：浮层挂几秒自动撤，列表里还留着 */
+    arm_oneshot(event_dismiss_cb, kEventDismissMs, code);
     notify_observers();
 }
 
@@ -386,9 +389,6 @@ void on_alarm_condition(const middleware::AlarmReportPayload &p)
         return;
     }
 
-    /* 首帧（本地还没有这条）必然是一次新发生；已有的则看是不是从「已恢复等复位」
-     * 回到了「条件又出现」——门关了又开、传感器反复越限都走这个上升沿。 */
-    bool fresh = (i < 0);
     if(i < 0) {
         i = slot_alloc();
         if(i < 0) {
@@ -402,8 +402,6 @@ void on_alarm_condition(const middleware::AlarmReportPayload &p)
         g_current[i].used   = true;
         g_current[i].e.code = p.alarm_code;
         g_current[i].e.ts_ms = now;
-    } else if(active && g_current[i].e.stage == UI_ALARM_STAGE_RTN_LATCHED) {
-        fresh = true;
     }
 
     ui_alarm_entry_t &e = g_current[i].e;
@@ -417,18 +415,11 @@ void on_alarm_condition(const middleware::AlarmReportPayload &p)
     compose_text(e.code, e.detail, e.simulated, e.title, sizeof(e.title),
                  e.body, sizeof(e.body));
 
-    /* 记录粒度仍是「一轮一条」：上面这个上升沿不新建条目，只是让 toast 重新弹一次，
-     * 提醒用户条件又回来了。ACTIVE→RTN_LATCHED 这个方向只是同一轮内的状态迁移，
-     * 走 sync 静默更新，不打扰已读与排序。
+    /* CONDITION 状态迁移原位更新（renew=false），不打扰已读/排序。
      * 1124/1125 以前在打印会话期被抑制（那时终止结果页自带失败原因条 + Reset），
      * 那个条已删，抑制也一并去掉——否则打印中断时哪儿都看不到停机原因。 */
-    if(fresh) {
-        ui_message_emit_ex(e.code, ui_alarm_severity_to_msg(e.severity),
-                           e.title, e.body, e.ts_ms);
-    } else {
-        ui_message_sync_ex(e.code, ui_alarm_severity_to_msg(e.severity),
-                           e.title, e.body, e.ts_ms);
-    }
+    ui_message_push_ex(e.code, ui_alarm_severity_to_msg(e.severity),
+                       e.title, e.body, e.ts_ms, false);
     notify_observers();
 }
 
@@ -485,12 +476,8 @@ void snapshot_upsert(uint16_t code, bool active, bool latched, int64_t now)
     compose_text(e.code, e.detail, false, e.title, sizeof(e.title),
                  e.body, sizeof(e.body));
 
-    /* 快照一律走 sync：它是对齐、不是事件。上面那个 slot_find 命中的分支直接 return，
-     * 所以走到这里必然是「本地压根没有这条」——开机或串口重连后补齐 MCU 那边一直亮着
-     * 的报警。sync 在从无到有时会弹一次，正是这一档要的：用户刚开机就该看见还有
-     * 没处理完的事。反过来，30s 兜底轮询里那些本地已有的条目走不到这儿，不会刷屏。 */
-    ui_message_sync_ex(e.code, ui_alarm_severity_to_msg(e.severity),
-                       e.title, e.body, e.ts_ms);
+    ui_message_push_ex(e.code, ui_alarm_severity_to_msg(e.severity),
+                       e.title, e.body, e.ts_ms, false);
 }
 
 /** 收齐一轮后做全量对齐（原子提交）。未收到的 slot 已在缓存里保持全零。 */

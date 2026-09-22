@@ -36,10 +36,24 @@ int serial_frame_is_sensor_report(const uint8_t* data, size_t len)
             data[3] == 0xA5 && data[4] == 0x9B) ? 1 : 0;
 }
 
-/** 1ST：Tlv-Len=15。舱温/湿度/PM/舱压不在本帧，由 SOC 采集。 */
-static void parse_1st(const uint8_t* v, serial_sensor_report_t* out)
+static void sensor_report_clear_v4_fields(serial_sensor_report_t* out)
+{
+    out->layout = SERIAL_SENSOR_LAYOUT_LEGACY;
+    out->env_ntc_c = 0.f;
+    out->filter_ntc_c = 0.f;
+    out->local_switch_bits = 0;
+    out->adapter_input_bits = 0;
+    out->powder_ir_bits = 0;
+    out->validity_bits = 0;
+    out->powder_left_low = 0;
+    out->powder_right_low = 0;
+}
+
+/** V4 1ST：Tlv-Len=15，字段偏移与旧固件完全不同。 */
+static int parse_1st_v4(const uint8_t* v, serial_sensor_report_t* out)
 {
     const uint8_t valid = v[14];
+    out->layout = SERIAL_SENSOR_LAYOUT_V4;
     out->validity_bits = valid;
 
     out->oxygen_percent = (valid & 0x01u) ? ((float)serial_read_le16(v + 0) / 10.0f) : -1.f;
@@ -52,7 +66,7 @@ static void parse_1st(const uint8_t* v, serial_sensor_report_t* out)
     out->adapter_input_bits = (valid & 0x40u) ? serial_read_le16u(v + 11) : 0u;
     out->powder_ir_bits = (valid & 0x80u) ? v[13] : 0u;
 
-    /* 舱门：bit2=1 关到位 → outer_door_open=0 */
+    /* 舱门：bit2=1 关到位 → outer_door_open=0；极性与旧 bit7 相反 */
     if(valid & 0x20u) {
         out->outer_door_open = (uint8_t)((out->local_switch_bits & 0x04u) ? 0u : 1u);
     } else {
@@ -63,7 +77,7 @@ static void parse_1st(const uint8_t* v, serial_sensor_report_t* out)
     if(valid & 0x80u) {
         out->powder_left_low  = (uint8_t)((out->powder_ir_bits & 0x40u) ? 1u : 0u);
         out->powder_right_low = (uint8_t)((out->powder_ir_bits & 0x80u) ? 1u : 0u);
-        /* bit0/bit1：左/右匣仍有粉，与 A1/A2 原始位无关 */
+        /* 兼容旧 2bit：有粉=1，与 A1/A2 原始位无关 */
         out->powder_bits = (uint8_t)(
             ((out->powder_left_low == 0) ? 0x01u : 0u) |
             ((out->powder_right_low == 0) ? 0x02u : 0u));
@@ -74,6 +88,52 @@ static void parse_1st(const uint8_t* v, serial_sensor_report_t* out)
         out->powder_bits = 0;
         out->powder_present = 0;
     }
+
+    /* V4 不再从 MCU 取舱温/湿度/PM/舱压；占位无效 */
+    out->temperature_c = -1.f;
+    out->humidity_percent = -1.f;
+    out->pm25_ug_m3 = -1.f;
+    out->pm1_ug_m3 = -1.f;
+    out->pm10_ug_m3 = -1.f;
+    out->pressure1_x10_kpa = 0;
+    out->pressure2_x10_kpa = 0;
+    out->hall_bitmap = out->adapter_input_bits;
+    return 0;
+}
+
+static int parse_1st_legacy(const uint8_t* v, uint8_t tlv_len, serial_sensor_report_t* out)
+{
+    sensor_report_clear_v4_fields(out);
+    out->layout = SERIAL_SENSOR_LAYOUT_LEGACY;
+
+    const int16_t o2_raw   = serial_read_le16(v + 0);
+    const int16_t press1   = serial_read_le16(v + 2);
+    const int16_t temp_raw = serial_read_le16(v + 4);
+    const int16_t hum_raw  = serial_read_le16(v + 6);
+    const int16_t pm25_raw = serial_read_le16(v + 8);
+
+    out->oxygen_percent     = (float)o2_raw / 10.0f;
+    out->pressure1_x10_kpa  = press1;
+    out->temperature_c      = (float)temp_raw / 10.0f;
+    out->humidity_percent   = (float)hum_raw / 10.0f;
+    out->pm25_ug_m3         = (float)pm25_raw;
+    out->pm1_ug_m3          = 0.0f;
+    out->pm10_ug_m3         = 0.0f;
+    out->filter_pressure_x10_kpa = 0;
+    out->pressure2_x10_kpa  = 0;
+    out->powder_bits        = static_cast<uint8_t>(v[10] & 0x03u);
+    out->powder_present     = (out->powder_bits == 0x03u) ? 1u : 0u;
+    out->outer_door_open    = (uint8_t)((v[10] & 0x80u) ? 1u : 0u);
+    out->substrate_temp_c   = (float)serial_read_le16(v + 11) / 10.0f;
+    out->hall_bitmap        = 0;
+
+    if(tlv_len >= 21) {
+        out->pm1_ug_m3             = (float)serial_read_le16(v + 13);
+        out->pm10_ug_m3            = (float)serial_read_le16(v + 15);
+        out->filter_pressure_x10_kpa = serial_read_le16(v + 17);
+        out->pressure2_x10_kpa     = serial_read_le16(v + 19);
+    }
+    return 0;
 }
 
 int serial_parse_sensor_report_detail(const uint8_t* data, size_t len,
@@ -90,8 +150,8 @@ int serial_parse_sensor_report_detail(const uint8_t* data, size_t len,
     if(!data || !out) {
         return fail(SERIAL_SENSOR_ERR_PARAM);
     }
-    /* Tlv-Len=15 → payload≥17，整帧 ≥ 8+17=25 */
-    if(len < 25) {
+    /* 最短：旧 Len13 → 整帧 8+15=23；V4 Len15 → 8+17=25 */
+    if(len < 23) {
         return fail(SERIAL_SENSOR_ERR_TOO_SHORT);
     }
     if(data[0] != SERIAL_SOF0 || data[1] != SERIAL_SOF1 ||
@@ -119,10 +179,18 @@ int serial_parse_sensor_report_detail(const uint8_t* data, size_t len,
         return fail(SERIAL_SENSOR_ERR_CHECKSUM);
     }
 
-    if(tlv_len != 15 || payload_len < 17) {
+    const uint8_t* v = &data[9];
+    if(tlv_len == 15) {
+        /* V4 重排：与旧 Len21 不可混用，凭长度区分即可 */
+        if(payload_len < 17) {
+            return fail(SERIAL_SENSOR_ERR_TLV);
+        }
+        parse_1st_v4(v, out);
+    } else if(tlv_len >= 13) {
+        parse_1st_legacy(v, tlv_len, out);
+    } else {
         return fail(SERIAL_SENSOR_ERR_TLV);
     }
-    parse_1st(&data[9], out);
 
     if(err_out) {
         *err_out = SERIAL_SENSOR_ERR_NONE;

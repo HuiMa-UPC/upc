@@ -6,8 +6,6 @@
 #include "raw_thumb_format.hpp"
 #include "rs_log.hpp"
 
-#include <turbojpeg.h>
-
 #if defined(UPC_CAMERA_HAS_RGA) && UPC_CAMERA_HAS_RGA
 #include <rga/im2d.hpp>
 #include <rga/rga.h>
@@ -284,14 +282,14 @@ int run_shell_cmd(const char* cmd, const char* log_tag)
     return rc;
 }
 
-std::string frame_jpeg_path(const std::string& session_dir, uint32_t frame_index)
+std::string frame_png_path(const std::string& session_dir, uint32_t frame_index)
 {
     char name[64];
-    std::snprintf(name, sizeof(name), "%u.jpg", frame_index);
+    std::snprintf(name, sizeof(name), "%u.png", frame_index);
     return session_dir + "/" + name;
 }
 
-uint32_t scan_max_jpeg_index(const std::string& session_dir)
+uint32_t scan_max_png_index(const std::string& session_dir)
 {
     if(session_dir.empty()) {
         return 0;
@@ -309,7 +307,7 @@ uint32_t scan_max_jpeg_index(const std::string& session_dir)
             continue;
         }
         const std::string name = ent.path().filename().string();
-        if(name.size() < 5 || name.compare(name.size() - 4, 4, ".jpg") != 0) {
+        if(name.size() < 5 || name.compare(name.size() - 4, 4, ".png") != 0) {
             continue;
         }
         const std::string stem = name.substr(0, name.size() - 4);
@@ -323,20 +321,12 @@ uint32_t scan_max_jpeg_index(const std::string& session_dir)
     return max_idx;
 }
 
-bool encode_nv12_to_jpeg_file(const uint8_t* nv12, size_t bytes,
-                              uint32_t width, uint32_t height,
-                              const char* out_path)
+bool encode_nv12_to_png(const uint8_t* nv12, size_t bytes,
+                        uint32_t width, uint32_t height,
+                        const std::string& session_dir, uint32_t frame_index)
 {
-    if(!nv12 || !out_path || !out_path[0] || width == 0 || height == 0) {
-        return false;
-    }
-    if((width & 1u) != 0 || (height & 1u) != 0) {
-        UPC_LOG_MEDIA_SERVICE(Error, "jpeg encode need even geometry %ux%u",
-                               width, height);
-        return false;
-    }
-    if(width > static_cast<uint32_t>(INT_MAX) ||
-       height > static_cast<uint32_t>(INT_MAX)) {
+    if(!nv12 || session_dir.empty() || width == 0 || height == 0 ||
+       frame_index == 0) {
         return false;
     }
     const size_t need = static_cast<size_t>(width) * height * 3u / 2u;
@@ -344,87 +334,38 @@ bool encode_nv12_to_jpeg_file(const uint8_t* nv12, size_t bytes,
         return false;
     }
 
-    const uint32_t cw = width / 2u;
-    const uint32_t ch = height / 2u;
-    std::vector<uint8_t> u(static_cast<size_t>(cw) * ch);
-    std::vector<uint8_t> v(static_cast<size_t>(cw) * ch);
-    const uint8_t* uv = nv12 + static_cast<size_t>(width) * height;
-    for(uint32_t row = 0; row < ch; ++row) {
-        const uint8_t* src = uv + static_cast<size_t>(row) * width;
-        uint8_t* dst_u = u.data() + static_cast<size_t>(row) * cw;
-        uint8_t* dst_v = v.data() + static_cast<size_t>(row) * cw;
-        for(uint32_t col = 0; col < cw; ++col) {
-            dst_u[col] = src[col * 2u];
-            dst_v[col] = src[col * 2u + 1u];
+    const std::string png_path = frame_png_path(session_dir, frame_index);
+    char cmd[1280];
+    std::snprintf(
+        cmd, sizeof(cmd),
+        "%s -y -loglevel error -f rawvideo -pix_fmt nv12 -s %ux%u -i - "
+        "-frames:v 1 -c:v png '%s'",
+        CAMERA_FFMPEG_BIN, width, height, png_path.c_str());
+    FILE* ff = ::popen(cmd, "w");
+    if(!ff) {
+        UPC_LOG_MEDIA_SERVICE(Error, "timelapse open ffmpeg pipe fail frame=%u",
+                               frame_index);
+        return false;
+    }
+    const bool write_ok = (std::fwrite(nv12, 1, need, ff) == need);
+    const int rc = ::pclose(ff);
+    const bool ok = write_ok && (rc == 0);
+    if(!ok) {
+        if(!write_ok) {
+            UPC_LOG_MEDIA_SERVICE(Error, "timelapse write frame to ffmpeg fail frame=%u",
+                                   frame_index);
+        } else {
+            UPC_LOG_MEDIA_SERVICE(Error, "timelapse ffmpeg png failed rc=%d frame=%u",
+                                   rc, frame_index);
         }
+        (void)std::remove(png_path.c_str());
     }
-
-    const unsigned char* planes[3] = {
-        nv12, u.data(), v.data()
-    };
-    const int strides[3] = {
-        static_cast<int>(width),
-        static_cast<int>(cw),
-        static_cast<int>(cw)
-    };
-
-    tjhandle handle = tjInitCompress();
-    if(!handle) {
-        UPC_LOG_MEDIA_SERVICE(Error, "jpeg tjInitCompress failed");
-        return false;
-    }
-    unsigned char* jpeg_buf = nullptr;
-    unsigned long jpeg_size = 0;
-    const int rc = tjCompressFromYUVPlanes(
-        handle, planes, static_cast<int>(width), strides,
-        static_cast<int>(height), TJSAMP_420,
-        &jpeg_buf, &jpeg_size, CAMERA_STILL_JPEG_QUALITY, TJFLAG_FASTDCT);
-    if(rc != 0 || !jpeg_buf || jpeg_size == 0) {
-        UPC_LOG_MEDIA_SERVICE(Error, "jpeg compress failed: %s",
-                               tjGetErrorStr2(handle));
-        tjDestroy(handle);
-        if(jpeg_buf) {
-            tjFree(jpeg_buf);
-        }
-        return false;
-    }
-    tjDestroy(handle);
-
-    FILE* fp = std::fopen(out_path, "wb");
-    if(!fp) {
-        UPC_LOG_MEDIA_SERVICE(Error, "jpeg fopen failed path=%s", out_path);
-        tjFree(jpeg_buf);
-        return false;
-    }
-    const bool write_ok = std::fwrite(jpeg_buf, 1, jpeg_size, fp) == jpeg_size;
-    const int close_rc = std::fclose(fp);
-    tjFree(jpeg_buf);
-    if(!write_ok || close_rc != 0) {
-        UPC_LOG_MEDIA_SERVICE(Error, "jpeg write failed path=%s", out_path);
-        (void)std::remove(out_path);
-        return false;
-    }
-    return true;
+    return ok;
 }
 
-bool encode_nv12_to_jpeg(const uint8_t* nv12, size_t bytes,
-                         uint32_t width, uint32_t height,
-                         const std::string& session_dir, uint32_t frame_index)
-{
-    if(session_dir.empty() || frame_index == 0) {
-        return false;
-    }
-    const std::string path = frame_jpeg_path(session_dir, frame_index);
-    if(!encode_nv12_to_jpeg_file(nv12, bytes, width, height, path.c_str())) {
-        (void)std::remove(path.c_str());
-        return false;
-    }
-    return true;
-}
-
-bool encode_jpeg_sequence_to_mp4(const std::string& session_dir,
-                                 uint32_t frame_count, uint32_t fps,
-                                 const char* out_path)
+bool encode_png_sequence_to_mp4(const std::string& session_dir,
+                                uint32_t frame_count, uint32_t fps,
+                                const char* out_path)
 {
     if(!out_path || !out_path[0] || session_dir.empty() || frame_count == 0u) {
         return false;
@@ -434,13 +375,12 @@ bool encode_jpeg_sequence_to_mp4(const std::string& session_dir,
     if(frame_count == 1u) {
         std::snprintf(cmd, sizeof(cmd),
                       "%s -y -loglevel error -loop 1 -framerate %u -t 1 "
-                      "-i '%s/1.jpg' -c:v mpeg4 -q:v 5 -pix_fmt yuv420p "
+                      "-i '%s/1.png' -c:v mpeg4 -q:v 5 -pix_fmt yuv420p "
                       "-movflags +faststart '%s'",
                       CAMERA_FFMPEG_BIN, use_fps, session_dir.c_str(), out_path);
     } else {
         std::snprintf(cmd, sizeof(cmd),
-                      "%s -y -loglevel error -framerate %u -start_number 1 "
-                      "-i '%s/%%d.jpg' "
+                      "%s -y -loglevel error -framerate %u -i '%s/%%d.png' "
                       "-c:v mpeg4 -q:v 5 -pix_fmt yuv420p -movflags +faststart '%s'",
                       CAMERA_FFMPEG_BIN, use_fps, session_dir.c_str(), out_path);
     }
@@ -962,14 +902,14 @@ bool create_raw_thumb_from_nv12(const std::vector<uint8_t>& nv12,
     return true;
 }
 
-void remove_jpeg_range(const std::string& session_dir,
-                       uint32_t first_index, uint32_t last_index)
+void remove_png_range(const std::string& session_dir,
+                      uint32_t first_index, uint32_t last_index)
 {
     if(session_dir.empty() || first_index == 0 || last_index < first_index) {
         return;
     }
     for(uint32_t i = first_index; i <= last_index; ++i) {
-        const std::string path = frame_jpeg_path(session_dir, i);
+        const std::string path = frame_png_path(session_dir, i);
         (void)std::remove(path.c_str());
     }
 }

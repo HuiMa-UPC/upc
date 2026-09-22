@@ -94,61 +94,9 @@ void control_print_result_collect(void);
 * 确认关门后回首页。仅 IDLE 态生效。 */
 void control_open_door_request(void);
 
-/* ---- 打印中的三个粉料阻塞弹窗（稿 6345:31129 / 6343:30738 / 6343:30854）---- */
-typedef enum {
-    CONTROL_SUPPLY_DLG_POWDER_EMPTY = 0, /**< 粉舱已空 */
-    CONTROL_SUPPLY_DLG_RECYCLE_FULL,     /**< 回粉盒满 */
-    CONTROL_SUPPLY_DLG_WASTE_FULL,       /**< 废粉盒满 */
-} control_supply_dlg_t;
-
-/**
- * 直接弹出某一档粉料弹窗。**给调试页 Other → Inject 用的联调入口。**
- *
- * 三档里只有 `POWDER_EMPTY` 接了真实触发（`APP_Print_Powder_Low_Ntf`，后端判空并
- * 先自行暂停）；另两档**还没有协议**——MCU 报警表里有 `WASTE_BUCKET_FULL(1101)` 与
- * `SIEVE_PAUSED(2006, 回粉上限接近开关5)`，但都没有接到「打印中阻塞 + 弹窗 + 我已
- * 处理继续」这条路径上。所以先只做 UI，触发靠本函数手动打。
- */
-void control_show_supply_dialog(control_supply_dlg_t kind);
-
-/* ---- 选择文件页（page_user_files.cpp）用到的数据与流程入口 ----
- *
- * 页面只做视图，文件列表、打印状态机、确认弹窗都在 control.cpp。反向那几个
- * （页面当前选中/页签）见 page_user_files.hpp。 */
-
-/** 文件来源页签。页面与打印流程都要说这个词，故放在共享头里。 */
-enum class FileTab : uint8_t {
-    Local = 0,
-    Usb   = 1,
-};
-
-size_t                control_files_count(void);
-const control_file_t *control_files_get(size_t index);
-
-/** 拉取指定来源的目录：本机直读 config.json，USB 走 Fs_DirOpen（应答后回刷页面）。 */
-void control_files_request_dir_open(FileTab tab);
-/** 清空 USB Fs_DirOpen 的在途队列（进/离页面时调用，避免错位应答刷错 Tab）。 */
-void control_files_reset_dir_pending(void);
-
-/** 缓存当前选中文件，供打印流程取用；传 nullptr 清空。 */
-void control_files_set_active(const control_file_t *file);
-/** 清空文件列表（切页签时先清再拉，避免旧源的条目残留一帧）。 */
-void control_files_clear(void);
-/** 返回键：首页区视图归位到仪表盘并切页。 */
-void control_files_close(void);
-
-/** 弹打印确认（报警预检在页面侧做完之后调用）。 */
-void control_files_show_print_confirm(void);
-
-/** 删除是否被允许（打印中不给删）。 */
-bool control_files_delete_allowed(void);
-
-/** 通用二次确认弹窗（删除文件 / 终止打印共用）。light=true 走浅色档。 */
-void control_files_open_confirm(const char *title, const char *body,
-                                const char *cancel_text, const char *confirm_text,
-                                lv_color_t confirm_color, bool light,
-                                lv_event_cb_t cancel_cb, lv_event_cb_t confirm_cb);
-void control_files_close_dialog(void);
+lv_obj_t *page_user_files_create(lv_obj_t *parent);
+void      page_user_files_refresh(bool force);
+void      page_user_files_exit(void);
 
 const char *control_home_section_target(void);
 

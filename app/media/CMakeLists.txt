@@ -80,25 +80,6 @@ else()
     message(WARNING "media: RKMPP not found — print_h264 recorder disabled")
 endif()
 
-# 相册 / 延时层拍 / 清粉抽帧：CPU JPEG（libturbojpeg）。不走 MPP，避免和 H.264 抢 VPU。
-if(CMAKE_SYSROOT)
-    find_path(UPC_MEDIA_TURBOJPEG_INCLUDE NAMES turbojpeg.h
-        PATHS ${CMAKE_SYSROOT}/usr/include NO_DEFAULT_PATH)
-    find_library(UPC_MEDIA_TURBOJPEG_LIB NAMES turbojpeg
-        PATHS ${CMAKE_SYSROOT}/usr/lib ${CMAKE_SYSROOT}/lib NO_DEFAULT_PATH)
-else()
-    find_path(UPC_MEDIA_TURBOJPEG_INCLUDE NAMES turbojpeg.h)
-    find_library(UPC_MEDIA_TURBOJPEG_LIB NAMES turbojpeg)
-endif()
-if(UPC_MEDIA_TURBOJPEG_INCLUDE AND UPC_MEDIA_TURBOJPEG_LIB)
-    message(STATUS "media: linking libturbojpeg ${UPC_MEDIA_TURBOJPEG_LIB}")
-    target_include_directories(rongsu_media PRIVATE ${UPC_MEDIA_TURBOJPEG_INCLUDE})
-    target_link_libraries(rongsu_media PRIVATE ${UPC_MEDIA_TURBOJPEG_LIB})
-    target_compile_definitions(rongsu_media PRIVATE UPC_MEDIA_HAS_TURBOJPEG=1)
-else()
-    message(FATAL_ERROR "media: libturbojpeg not found (headers + libturbojpeg.so required for still JPEG)")
-endif()
-
 # live555：本地局域网 RTSP Server。部分工具链的 sysroot 未打包该库，
 # 找不到时整个 LocalRtspServer 退化为空实现（UPC_MEDIA_HAS_LIVE555 未定义）。
 # 库名与探测用头文件一一对应（groupsock 目录下的头是 Groupsock.hh，首字母大写）

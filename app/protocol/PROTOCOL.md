@@ -20,7 +20,7 @@
 | `serial/serial_frame.*` | 串口公共帧格式、校验、AA 组帧、BB/BA 分帧 |
 | `serial/serial_ack.*` | AB/BA ACK 组包与匹配 |
 | `serial/serial_print.*` | 打印握手/换层（8 步命令表）+ 自动转运请求/结果（A2/0x41，TLV 0x02 请求 / 0x04 结果） |
-| `serial/serial_env.*` | 环境传感器上报（A5/9B）：TLV 0x02 1ST（仅 Tlv-Len=15）、TLV 0x06 EXT（电气量/风机） |
+| `serial/serial_env.*` | 环境传感器上报（A5/9B）：TLV 0x02 1ST（旧 Len13/21 与 V4 Len15 重排）、TLV 0x06 EXT（电气量/风机；须固件 major≥4 才消费） |
 | `serial/serial_debug.*` | 调试页手动控制：三轴/设备/粉桶/三通/风扇/开关/清粉 组帧 + 运动位置上报（A5/9B，TLV 0x05）解析 |
 | `serial/serial_project_info.*` | 工程版本查询/上报（A2/0x10，TLV 0x01 查询 / 0x02 上报）：MCU 固件版本 + 激光器/Z 电机 + 运行槽 `value[5]` + OTA 状态 `value[6]` |
 | `serial/serial_ota.*` | MCU 串口 OTA 组帧/应答解析（A2/0x30 请求，A6/0x31 数据与收尾）；停等与阶段四见 [MCU_OTA丢包重传机制.md](../../doc/MCU_OTA丢包重传机制.md) |

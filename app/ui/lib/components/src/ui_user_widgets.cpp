@@ -153,7 +153,6 @@ lv_obj_t *ui_user_make_overlay_round_btn(lv_obj_t *parent, const char *sym,
 }
 
 void ui_user_make_tab_item(lv_obj_t *parent, const char *text,
-                           const lv_font_t *font,
                            lv_event_cb_t cb, void *user_data,
                            lv_obj_t **out_root, lv_obj_t **out_label,
                            lv_obj_t **out_mark)
@@ -174,9 +173,9 @@ void ui_user_make_tab_item(lv_obj_t *parent, const char *text,
 
     lv_obj_t *lbl = lv_label_create(item);
     lv_label_set_text(lbl, text);
-    /* 字号由调用方给：两页的稿值不同（消息页 16、历史页浅色稿 24）。**必须在量宽之前
-     * 设好**，理由见头文件里 @param font 那段。 */
-    lv_obj_set_style_text_font(lbl, font ? font : user_font_text_sm(), 0);
+    /* 稿上 Tab 文字是 16；user_font_text 在 1280 档是 18，故取 text_sm（该档稿值 16）。
+     * 其余档位 text_sm == text，观感不变。 */
+    lv_obj_set_style_text_font(lbl, user_font_text_sm(), 0);
 
     /* 量出文字宽度后把项宽写死：SIZE_CONTENT 的容器里放百分比宽的子对象会互相
      * 依赖（下划线要按文字宽算，文字宽又决定容器宽），量一次直接给定值最省心。 */
@@ -245,23 +244,6 @@ lv_obj_t *ui_user_make_icon_img(lv_obj_t *parent, const lv_image_dsc_t *src,
     return box;
 }
 
-const lv_image_dsc_t *ui_user_pick_icon(const lv_image_dsc_t *const *set, int32_t sz)
-{
-    if(!set || !set[0]) {
-        return nullptr;
-    }
-    const lv_image_dsc_t *best = set[0];
-    int32_t best_d = INT32_MAX;
-    for(const lv_image_dsc_t *const *p = set; *p != nullptr; ++p) {
-        const int32_t d = LV_ABS(static_cast<int32_t>((*p)->header.w) - sz);
-        if(d < best_d) {
-            best_d = d;
-            best = *p;
-        }
-    }
-    return best;
-}
-
 lv_obj_t *ui_user_make_primary_pill_btn(lv_obj_t *parent, const lv_image_dsc_t *icon,
                                         const char *text, lv_event_cb_t cb,
                                         int32_t width, bool spread)
@@ -321,29 +303,18 @@ lv_obj_t *ui_user_make_primary_pill_btn(lv_obj_t *parent, const lv_image_dsc_t *
 
 lv_obj_t *ui_user_make_confirm_footer_btn(lv_obj_t *footer, const char *text,
                                           bool filled, lv_color_t fill_color,
-                                          bool light,
                                           lv_event_cb_t cb, void *user_data)
 {
     lv_obj_t *btn = lv_button_create(footer);
     lv_obj_remove_style_all(btn);
     /* 稿上两枚各 212、间距 24，正好铺满 496 卡片的内宽，所以用 flex_grow 而不是定宽 */
     lv_obj_set_flex_grow(btn, 1);
-    /* 浅色档的按钮比深色档高一档、圆角也大一档（稿 6251:94239 是 72 / 12，深色那套是
-     * 64 / 8）。两个量都从现成 token 推，不另开字段：
-     *   高   USER_DLG_FOOTER_BTN_H * 9/8  → 108 / 72 / 57（稿 ×1.5 / ×0.8 = 108 / 57.6）
-     *   圆角 USER_LIGHT_RADIUS / 2        → 18 / 12 / 9 */
-    lv_obj_set_height(btn, light ? USER_DLG_FOOTER_BTN_H * 9 / 8 : USER_DLG_FOOTER_BTN_H);
-    lv_obj_set_style_radius(btn, light ? USER_LIGHT_RADIUS / 2 : USER_BTN_RADIUS, 0);
+    lv_obj_set_height(btn, USER_DLG_FOOTER_BTN_H);
+    lv_obj_set_style_radius(btn, USER_BTN_RADIUS, 0);
     if(filled) {
         lv_obj_set_style_bg_color(btn, fill_color, 0);
         lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, 0);
         lv_obj_set_style_bg_opa(btn, LV_OPA_80, LV_STATE_PRESSED);
-    } else if(light) {
-        /* 稿 #333145 @10%：浅色卡上要压深色，沿用深色档那套「白 4%」会整个消失。
-         * LV_OPA_10 是 25/255，白底上混出来正好是稿的 (235,235,237)。 */
-        lv_obj_set_style_bg_color(btn, user_light_text, 0);
-        lv_obj_set_style_bg_opa(btn, LV_OPA_10, 0);
-        lv_obj_set_style_bg_opa(btn, LV_OPA_20, LV_STATE_PRESSED);
     } else {
         /* 稿是 rgba(255,255,255,0.04)：白底压到 4%（LV_OPA 里约 10/255） */
         lv_obj_set_style_bg_color(btn, user_color_text, 0);
@@ -355,17 +326,8 @@ lv_obj_t *ui_user_make_confirm_footer_btn(lv_obj_t *footer, const char *text,
     }
     lv_obj_t *lbl = lv_label_create(btn);
     lv_label_set_text(lbl, text);
-    /* 填充档两边都是白字（底是实色主色/危险色）；非填充档跟着卡片底走 */
-    lv_obj_set_style_text_color(lbl,
-        (light && !filled) ? user_light_text : user_color_text, 0);
-    /* 浅色档的按钮文字稿上是 22（稿 6024:23245/23259 的 Poppins Medium 22/32），
-     * 比深色档那套的 18 大两档。
-     *
-     * 原先借的是 user_font_title()（24/20/16），1280 档落在 20——比稿小一档，实机量到
-     * 字身窄约 9%。现在走单开的 user_font_dlg_btn（32/22/18），1280 档正中稿值。
-     *
-     * 字重追不平：稿是 Medium，项目字库只有一个字重（同 apply_tab_style() 那里的处境）。 */
-    lv_obj_set_style_text_font(lbl, light ? user_font_dlg_btn() : user_font_text(), 0);
+    lv_obj_set_style_text_color(lbl, user_color_text, 0);
+    lv_obj_set_style_text_font(lbl, user_font_text(), 0);
     lv_obj_center(lbl);
     return btn;
 }
@@ -444,6 +406,77 @@ lv_obj_t *ui_user_make_supply_indicator(lv_obj_t *parent, const char *name,
     return row;
 }
 
+lv_obj_t *ui_user_make_supply_bar(lv_obj_t *parent, const char *name,
+                                  bool ok, int percent,
+                                  lv_obj_t **out_bar,
+                                  lv_obj_t **out_pct_lbl,
+                                  lv_obj_t **out_status_lbl)
+{
+    if(percent < 0)   percent = 0;
+    if(percent > 100) percent = 100;
+
+    lv_obj_t *card = lv_obj_create(parent);
+    lv_obj_remove_style_all(card);
+    lv_obj_set_height(card, LV_SIZE_CONTENT);
+    lv_obj_set_flex_grow(card, 1);
+    lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_all(card, 0, 0);
+    lv_obj_set_style_pad_row(card, USER_PAD_SM / 2, 0);
+    lv_obj_set_style_bg_opa(card, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(card, 0, 0);
+    lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
+
+    /* 第一行：名称 + 状态 */
+    lv_obj_t *head = lv_obj_create(card);
+    lv_obj_remove_style_all(head);
+    lv_obj_set_width(head, LV_PCT(100));
+    lv_obj_set_height(head, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(head, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(head, LV_FLEX_ALIGN_SPACE_BETWEEN,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_bg_opa(head, LV_OPA_TRANSP, 0);
+    lv_obj_clear_flag(head, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *name_lbl = lv_label_create(head);
+    lv_label_set_text(name_lbl, name ? name : "");
+    lv_obj_set_style_text_color(name_lbl, user_color_text, 0);
+    lv_obj_set_style_text_font(name_lbl, user_font_text(), 0);
+
+    lv_obj_t *status_lbl = lv_label_create(head);
+    lv_label_set_text(status_lbl, ok ? "Adequate" : "Low");
+    lv_obj_set_style_text_color(status_lbl,
+        ok ? user_color_status_ok : user_color_status_err, 0);
+    lv_obj_set_style_text_font(status_lbl, user_font_caption(), 0);
+
+    /* 第二行：进度条 + 百分比 */
+    lv_obj_t *bar_row = lv_obj_create(card);
+    lv_obj_remove_style_all(bar_row);
+    lv_obj_set_width(bar_row, LV_PCT(100));
+    lv_obj_set_height(bar_row, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(bar_row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(bar_row, LV_FLEX_ALIGN_START,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_column(bar_row, USER_PAD_SM, 0);
+    lv_obj_set_style_bg_opa(bar_row, LV_OPA_TRANSP, 0);
+    lv_obj_clear_flag(bar_row, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *bar = ui_user_make_progress_bar(bar_row, LV_PCT(100), USER_PROGRESS_H);
+    lv_obj_set_flex_grow(bar, 1);
+    lv_obj_set_style_bg_color(bar,
+        ok ? user_color_status_ok : user_color_status_err, LV_PART_INDICATOR);
+    lv_bar_set_value(bar, percent, LV_ANIM_OFF);
+
+    lv_obj_t *pct_lbl = lv_label_create(bar_row);
+    lv_label_set_text_fmt(pct_lbl, "%d%%", percent);
+    lv_obj_set_style_text_color(pct_lbl,
+        ok ? user_color_accent : user_color_status_err, 0);
+    lv_obj_set_style_text_font(pct_lbl, user_font_caption(), 0);
+
+    if(out_bar)        *out_bar = bar;
+    if(out_pct_lbl)    *out_pct_lbl = pct_lbl;
+    if(out_status_lbl) *out_status_lbl = status_lbl;
+    return card;
+}
 
 lv_obj_t *ui_user_make_setting_row(lv_obj_t *parent, const char *label,
                                    const char *btn_text, lv_event_cb_t btn_cb)
@@ -458,33 +491,22 @@ lv_obj_t *ui_user_make_setting_row(lv_obj_t *parent, const char *label,
     lv_obj_set_style_pad_ver(row, USER_PAD_SM, 0);
     lv_obj_set_style_pad_hor(row, USER_PAD_SM, 0);
     lv_obj_set_style_border_width(row, 0, 0);
-    lv_obj_set_style_border_color(row, user_light_divider, 0);
+    lv_obj_set_style_border_color(row, user_color_divider, 0);
     lv_obj_set_style_border_side(row, LV_BORDER_SIDE_BOTTOM, 0);
     lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, 0);
 
     lv_obj_t *lbl = lv_label_create(row);
     lv_label_set_text(lbl, label ? label : "");
-    lv_obj_set_style_text_color(lbl, user_light_text, 0);
-    lv_obj_set_style_text_font(lbl, user_font_title(), 0);
+    lv_obj_set_style_text_color(lbl, user_color_text, 0);
+    lv_obj_set_style_text_font(lbl, user_font_text(), 0);
 
     if(btn_text && btn_cb) {
-        /* 深描边幽灵钮：白底卡上用主文字色描边，不能用 user_style_btn_ghost()
-         * ——那个是深色档的白描边白字，翻浅之后整枚看不见。 */
         lv_obj_t *btn = lv_button_create(row);
-        lv_obj_remove_style_all(btn);
+        lv_obj_add_style(btn, user_style_btn_ghost(), 0);
         lv_obj_set_size(btn, USER_BTN_PRIMARY_W, USER_BTN_PRIMARY_H);
-        lv_obj_set_style_radius(btn, USER_BTN_RADIUS, 0);
-        lv_obj_set_style_bg_opa(btn, LV_OPA_TRANSP, 0);
-        lv_obj_set_style_border_width(btn, 1, 0);
-        lv_obj_set_style_border_color(btn, user_light_text, 0);
-        lv_obj_set_style_border_opa(btn, LV_OPA_40, 0);
-        lv_obj_set_style_bg_color(btn, user_light_more_bg, LV_STATE_PRESSED);
-        lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, LV_STATE_PRESSED);
         lv_obj_add_event_cb(btn, btn_cb, LV_EVENT_CLICKED, nullptr);
         lv_obj_t *btn_lbl = lv_label_create(btn);
         lv_label_set_text(btn_lbl, btn_text);
-        lv_obj_set_style_text_color(btn_lbl, user_light_text, 0);
-        lv_obj_set_style_text_font(btn_lbl, user_font_text(), 0);
         lv_obj_center(btn_lbl);
     }
     return row;

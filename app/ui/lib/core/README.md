@@ -12,12 +12,9 @@
 | `ui_msg_proxy` | UI ↔ Glavo MsgBus 封装（send / register） |
 | `ui_device_state` | 设备名/联网/运行状态/环境快照的唯一来源（订阅一次，扇出给观察者） |
 | `ui_device_bar` | 顶部常驻设备信息条（建在 `shell_` 上，按页显隐） |
-| `ui_message_store` | 消息中心数据源：事件去重排序、未读计数、码→文案表、按等级自动收起（`sync` / `emit` 两种写入语义） |
-| `ui_notice_stack` | 右上通知三态：toast / 铃铛 / 面板互斥，只在首页；打印态与监控态退回黑玻璃卡 |
-| `ui_sys_hud` | 调试红字蒙版：挂 `lv_layer_sys` 右上角，显示 CPU 温 / 整机与本进程占用 / 内存；调试页 Media & Sim「Sys HUD」开关，仅本次运行 |
-| `ui_backlight` | LCD 背光 sysfs（设置页 Display，滑条 5~100%），不经 Glavo、不看 MCU 版本 |
+| `ui_message_store` | 消息中心数据源：事件去重排序、未读计数、码→文案表 |
+| `ui_notice_stack` | 右上通知浮层：最多两张卡 + 「查看剩余 N 条」；消息页/历史页/设置页不显示 |
 | `camera_msg_proxy` | UI ↔ Camera 预览开停 IPC |
-| `debug_msg_proxy` | 调试页（手动控制/标定）专用消息门面，独立于 `ui_msg_proxy`；默认目标 APP_GLAVO，少数开关直连其它进程 |
 | `camera_preview` | SHM 消费、RGA/SW NV12→BGRX、三缓冲 + lv_image 显示 |
 | `video_player` | MP4 软解播放；拖动预览缩小帧 + scrub 世代丢弃 |
 | `png_scrub_preview` | PNG 拖动预览异步解码（libpng → 小图 RGB565） |
