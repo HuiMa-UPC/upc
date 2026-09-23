@@ -27,8 +27,8 @@ typedef enum {
     CONTROL_STATE_PLATE_PROMPT,     /**< 入口：是否已放入打印版（两卡片 + 已放入/未放入子视图） */
     CONTROL_STATE_DOOR_OPENING,     /**< 未放入分支：PM2.5 检测 + 开门 loading */
     /**
-     * 取件分支专用：门开之后的转运盒三步（装盒 → 转移工件 → 推入闸门），走完才进
-     * DOOR_CONFIRM 关门。仅在调试开关打开时插入，见 control_set_transfer_box_flow()。
+     * 取件分支专用：门开之后的转运盒三步（装盒并抽出隔断板 → 转移工件 → 推入闸门），
+     * 走完才进 DOOR_CONFIRM 关门。仅在调试开关打开时插入，见 control_set_transfer_box_flow()。
      */
     CONTROL_STATE_TRANSFER_BOX,
     CONTROL_STATE_DOOR_CONFIRM,     /**< 舱门：DoorOpened 等待关门监测 → DoorClosed 用户确认 */
@@ -155,8 +155,9 @@ const char *control_home_section_target(void);
 void control_terminate_request(void);
 
 /* ---- 转运盒流程开关（调试页 Other → Print Gates） ----
- * 打开后，取件分支在门开之后插入转运盒三步，且关门确认改用新稿样式；关闭则完全回到
- * 「开门 → 确认关门」两步。纯 UI 本地标志（不发消息、不落盘），重启回到关闭。 */
+ * 打开后，取件分支在门开之后插入转运盒三步；关闭则完全回到「开门 → 确认关门」两步。
+ * 纯 UI 本地标志（不发消息、不落盘），重启回到关闭。
+ * 它**只管流程**：关门确认那两态的样式改稿后三个入口已经统一，不再随本开关分叉。 */
 void control_set_transfer_box_flow(bool on);
 bool control_transfer_box_flow_enabled(void);
 

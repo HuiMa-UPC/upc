@@ -25,12 +25,19 @@ ui_modal_dialog_t *ui_modal_dialog_open(lv_obj_t *parent,
     /* ---- 背景遮罩 ---- */
     lv_obj_t *backdrop = lv_obj_create(parent);
     lv_obj_remove_style_all(backdrop);
+    /* 铺满父容器。**这一行删不得**：remove_style_all 已经把主题给的尺寸清空，没有它
+     * 遮罩会退回 LVGL 的默认边长 LV_DPI_DEF(130)，卡片在 130×130 里居中后绝大部分被
+     * 裁到屏外，只在左上角露出中间一小条，且整屏不再压暗。踩过一次。 */
     lv_obj_set_size(backdrop, LV_PCT(100), LV_PCT(100));
-    lv_obj_set_style_bg_color(backdrop, lv_color_black(), 0);
-    /* 浅色档的遮罩比深色档淡一档（稿 6251:94118 是 black @50%）：白卡本身够抢眼，
-     * 再压 70% 会让底下那页看着像断电。 */
+    /* 浅色档的遮罩比深色档淡得多：白卡本身够抢眼，再压 70% 会让底下那页看着像断电。
+     * 新稿（6423:51743）量下来是 **#333145 @28%** 而不是纯黑——压在 #fafafa 的页底上
+     * 带一点蓝紫调，与整套浅色是同一个墨色。旧值是 black @50%（稿 6251:94118）。
+     * 数字键盘那块遮罩仍是黑 @50%（稿 6363:44775 自己标了「50%黑色蒙版」），它不走
+     * 本控件、在 ui_keyboard.cpp 里另给。 */
+    lv_obj_set_style_bg_color(backdrop,
+        cfg->light_theme ? user_light_text : lv_color_black(), 0);
     lv_obj_set_style_bg_opa(backdrop,
-        cfg->light_theme ? LV_OPA_50 : USER_DLG_BACKDROP_OPA, 0);
+        cfg->light_theme ? USER_LIGHT_BACKDROP_OPA : USER_DLG_BACKDROP_OPA, 0);
     lv_obj_clear_flag(backdrop, LV_OBJ_FLAG_SCROLLABLE);
     /* 让遮罩自身可点（吞掉穿透到底层 home 的事件） */
     lv_obj_add_flag(backdrop, LV_OBJ_FLAG_CLICKABLE);
@@ -162,13 +169,16 @@ ui_modal_dialog_t *ui_modal_dialog_open(lv_obj_t *parent,
         lv_obj_align(btn, LV_ALIGN_TOP_RIGHT, 0, 0);
         lv_obj_set_style_radius(btn, LV_RADIUS_CIRCLE, 0);
         lv_obj_set_style_bg_opa(btn, LV_OPA_TRANSP, 0);
-        lv_obj_set_style_bg_color(btn, user_color_panel_alt, LV_STATE_PRESSED);
-        lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, LV_STATE_PRESSED);
+        lv_obj_set_style_bg_color(btn,
+            cfg->light_theme ? user_light_nav_on : user_color_panel_alt, LV_STATE_PRESSED);
+        lv_obj_set_style_bg_opa(btn,
+            cfg->light_theme ? LV_OPA_10 : LV_OPA_COVER, LV_STATE_PRESSED);
         lv_obj_clear_flag(btn, LV_OBJ_FLAG_SCROLLABLE);
 
         lv_obj_t *x = lv_label_create(btn);
         lv_label_set_text(x, LV_SYMBOL_CLOSE);
-        lv_obj_set_style_text_color(x, user_color_text_dim, 0);
+        lv_obj_set_style_text_color(x,
+            cfg->light_theme ? user_light_text : user_color_text_dim, 0);
         lv_obj_set_style_text_font(x, user_font_icon(), 0);
         lv_obj_center(x);
 

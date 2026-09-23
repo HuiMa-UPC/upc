@@ -457,6 +457,7 @@ void open_ota_dialog(OtaTarget target, const char *title)
     ui_modal_dialog_cfg_t cfg =
         ui_modal_dialog_cfg_user(title, USER_DLG_W, false);
     cfg.with_close_btn = true;
+    cfg.light_theme    = true;
     state->dlg = ui_modal_dialog_open(lv_screen_active(), &cfg);
     if(!state->dlg) {
         return;
@@ -496,8 +497,53 @@ void on_mcu_ota_entry_click(lv_event_t *)
     ui::UiMsgProxy::instance().send_serial_mcu_ota_start();
 }
 
+/* ---- 密码弹窗给键盘让位 ----
+ *
+ * 稿 6423:51743 上密码弹窗是屏幕居中的，但点输入框会弹出键盘，卡片就被挡住了——
+ * 文本键盘占屏幕下半的 42%，密码卡底边（居中时约在 0.72 屏高）正落在里面，Cancel /
+ * Connect 两枚按钮会被盖掉。
+ *
+ * 改稿前的做法是**静态**顶对齐（`LV_ALIGN_TOP_MID` + USER_PAD_LG），不管键盘在不在
+ * 都贴着屏幕上沿，居中稿因此落不了地。现在改成动态：键盘弹出时在"屏幕减去键盘"的
+ * 剩余矩形里居中，收起后回到整屏居中。
+ *
+ * 用矩形而不是高度，是因为两种键盘遮的方向不同：文本键盘是下半屏横条（要往上让），
+ * 数字键盘是右侧整列竖板（要往左让）。下面按遮挡矩形贴哪条边来判断让哪个方向。 */
+void dlg_dodge_keyboard(bool shown, const lv_area_t *obstructed, void * /*ud*/)
+{
+    if(!g_dlg || !g_dlg->card) {
+        return;
+    }
+    if(!shown || !obstructed) {
+        lv_obj_align(g_dlg->card, LV_ALIGN_CENTER, 0, 0);
+        return;
+    }
+
+    lv_display_t *disp = lv_display_get_default();
+    const int32_t scr_w = lv_display_get_horizontal_resolution(disp);
+    const int32_t scr_h = lv_display_get_vertical_resolution(disp);
+    const int32_t ob_w  = lv_area_get_width(obstructed);
+    const int32_t ob_h  = lv_area_get_height(obstructed);
+
+    /* 横条（宽≈满屏）→ 往上让；竖板 → 往没被占的那侧让。 */
+    if(ob_w * 2 >= scr_w) {
+        const int32_t free_h = obstructed->y1;
+        lv_obj_align(g_dlg->card, LV_ALIGN_TOP_MID, 0, (free_h - lv_obj_get_height(g_dlg->card)) / 2);
+    } else {
+        const bool on_right = (obstructed->x1 * 2 > scr_w - ob_w);
+        const int32_t free_w = on_right ? obstructed->x1 : scr_w - obstructed->x2;
+        const int32_t x = on_right ? (free_w - lv_obj_get_width(g_dlg->card)) / 2
+                                   : obstructed->x2 + (free_w - lv_obj_get_width(g_dlg->card)) / 2;
+        lv_obj_align(g_dlg->card, LV_ALIGN_TOP_LEFT, x,
+                     (scr_h - lv_obj_get_height(g_dlg->card)) / 2);
+    }
+    (void)ob_h;
+}
+
 void dlg_close(void)
 {
+    /* 先注销再收键盘：hide 会回调 dlg_dodge_keyboard，而这里正要把 g_dlg 释放掉。 */
+    ui_keyboard_set_visibility_cb(nullptr, nullptr);
     ui_keyboard_hide();
     if(g_dlg) {
         ui_modal_dialog_close(g_dlg);
@@ -527,6 +573,7 @@ void open_connecting_dialog(const char *ssid)
 {
     close_connecting_dialog();   /* 互斥，避免叠加 */
     ui_modal_dialog_cfg_t cfg = ui_modal_dialog_cfg_user("Connecting", 0, false);
+    cfg.light_theme = true;
     g_conn_dlg = ui_modal_dialog_open(lv_screen_active(), &cfg);
     if(!g_conn_dlg) {
         return;
@@ -548,7 +595,8 @@ void on_dlg_cancel(lv_event_t *)
     dlg_close();
 }
 
-/* 输入框统一样式 */
+/* 输入框统一样式。稿 6423:51893 是满宽、高 64、圆角 14、底 `#333145 @5%`、无描边，
+ * placeholder 与输入的字都是深墨（前者压到 40%）。 */
 lv_obj_t *make_dialog_textarea(lv_obj_t *parent, const char *placeholder,
                                lv_keyboard_mode_t kb_mode)
 {
@@ -559,11 +607,42 @@ lv_obj_t *make_dialog_textarea(lv_obj_t *parent, const char *placeholder,
     lv_obj_set_width(ta, LV_PCT(100));
     lv_obj_set_height(ta, UI_INPUT_H);
     lv_obj_set_style_text_font(ta, user_font_text(), 0);
-    lv_obj_set_style_bg_color(ta, user_color_bg, 0);
-    lv_obj_set_style_border_color(ta, user_color_divider, 0);
-    lv_obj_set_style_text_color(ta, user_color_text, 0);
+    lv_obj_set_style_radius(ta, USER_LIGHT_RADIUS * 7 / 12, 0);   /* 稿 14@1280 */
+    lv_obj_set_style_bg_color(ta, user_light_nav_on, 0);
+    lv_obj_set_style_bg_opa(ta, 13, 0);                           /* 稿 #333145 @5% */
+    lv_obj_set_style_border_width(ta, 0, 0);
+    lv_obj_set_style_text_color(ta, user_light_text, 0);
+    lv_obj_set_style_text_color(ta, user_light_text, LV_PART_TEXTAREA_PLACEHOLDER);
+    lv_obj_set_style_text_opa(ta, LV_OPA_40, LV_PART_TEXTAREA_PLACEHOLDER);
     ui_keyboard_attach(ta, kb_mode);
     return ta;
+}
+
+/* 稿 6423:51893 页脚那两枚等宽按钮：Cancel 是 `#333145 @10%` 底配深墨字，
+ * Connect 是深墨实心配白字，各占半宽、圆角 12。
+ * 不走 ui_user_make_confirm_footer_btn：那枚是「取消 / 危险红」的语义配色，
+ * 这里的主按钮是中性深墨而不是红。 */
+lv_obj_t *make_pwd_dlg_btn(lv_obj_t *footer, const char *text, bool primary,
+                           lv_event_cb_t cb)
+{
+    lv_obj_t *btn = lv_button_create(footer);
+    lv_obj_remove_style_all(btn);
+    lv_obj_set_flex_grow(btn, 1);
+    lv_obj_set_height(btn, USER_DLG_FOOTER_BTN_H);
+    lv_obj_set_style_radius(btn, USER_LIGHT_RADIUS / 2, 0);
+    lv_obj_set_style_bg_color(btn, user_light_nav_on, 0);
+    lv_obj_set_style_bg_opa(btn, primary ? LV_OPA_COVER : LV_OPA_10, 0);
+    lv_obj_set_style_bg_opa(btn, primary ? LV_OPA_80 : LV_OPA_20, LV_STATE_PRESSED);
+    lv_obj_clear_flag(btn, LV_OBJ_FLAG_SCROLLABLE);
+    if(cb) {
+        lv_obj_add_event_cb(btn, cb, LV_EVENT_CLICKED, nullptr);
+    }
+    lv_obj_t *lbl = lv_label_create(btn);
+    lv_label_set_text(lbl, text);
+    lv_obj_set_style_text_color(lbl, primary ? lv_color_white() : user_light_text, 0);
+    lv_obj_set_style_text_font(lbl, user_font_dlg_btn(), 0);
+    lv_obj_center(lbl);
+    return btn;
 }
 
 /* ---- 开发者密码弹窗 → 通过则进调试页 ---- */
@@ -588,21 +667,17 @@ void on_dev_confirm(lv_event_t *)
     }
 }
 
-/* 两个密码弹窗共用的确认钮（Enter / Connect）。
- * 底子是 user_style_btn_primary()（accent 实心 + accent 外发光），但那套样式的圆角是
- * 全圆胶囊，与其余弹窗页脚的圆角矩形不一致，所以在调用点把 radius 压回 USER_BTN_RADIUS。
- * 不直接改 user_style_btn_primary()：调试页那几颗按钮还在原样用它的胶囊形。 */
-lv_obj_t *make_pwd_dlg_ok_btn(lv_obj_t *footer, const char *text, lv_event_cb_t cb)
+/* 两个密码弹窗共用的左对齐灰字说明行（稿 6423:51893 的「输入网络密码」那行）。 */
+lv_obj_t *make_pwd_dlg_hint(lv_obj_t *parent, const char *text)
 {
-    lv_obj_t *btn = lv_button_create(footer);
-    lv_obj_add_style(btn, user_style_btn_primary(), 0);
-    lv_obj_set_size(btn, USER_DLG_FOOTER_BTN_W, USER_DLG_FOOTER_BTN_H);
-    lv_obj_set_style_radius(btn, USER_BTN_RADIUS, 0);
-    lv_obj_add_event_cb(btn, cb, LV_EVENT_CLICKED, nullptr);
-    lv_obj_t *lbl = lv_label_create(btn);
+    lv_obj_t *lbl = lv_label_create(parent);
     lv_label_set_text(lbl, text);
-    lv_obj_center(lbl);
-    return btn;
+    lv_obj_set_width(lbl, LV_PCT(100));
+    lv_obj_set_style_text_align(lbl, LV_TEXT_ALIGN_LEFT, 0);
+    lv_obj_set_style_text_color(lbl, user_light_text, 0);
+    lv_obj_set_style_text_opa(lbl, LV_OPA_50, 0);
+    lv_obj_set_style_text_font(lbl, user_font_text_sm(), 0);
+    return lbl;
 }
 
 void open_dev_password_dialog(void)
@@ -610,16 +685,18 @@ void open_dev_password_dialog(void)
     if(g_dlg) {
         return;
     }
-    ui_modal_dialog_cfg_t cfg = ui_modal_dialog_cfg_user("Enter Developer Mode", 0, true);
+    /* 与 Wi-Fi 密码弹窗同一套外壳（稿只给了后者，这里对齐它）：白卡、560 宽、
+     * 页脚两枚等宽钮。它走数字键盘，弹出的是右侧竖板，让位方向由 dlg_dodge_keyboard 判。 */
+    ui_modal_dialog_cfg_t cfg =
+        ui_modal_dialog_cfg_user("Enter Developer Mode", USER_WIFI_DLG_W, true);
+    cfg.light_theme = true;
     g_dlg = ui_modal_dialog_open(lv_screen_active(), &cfg);
     if(!g_dlg) {
         return;
     }
-    /* 顶部对齐，给底部 42% 键盘让位 */
-    lv_obj_align(g_dlg->card, LV_ALIGN_TOP_MID, 0, USER_PAD_LG);
+    ui_keyboard_set_visibility_cb(dlg_dodge_keyboard, nullptr);
 
-    lv_obj_t *hint = ui_user_make_body_label(g_dlg->body, "Enter access password:");
-    lv_obj_set_width(hint, LV_PCT(100));
+    make_pwd_dlg_hint(g_dlg->body, "Enter access password");
 
     g_pwd_ta = make_dialog_textarea(g_dlg->body, "Password", LV_KEYBOARD_MODE_NUMBER);
     /* 键盘对勾（LV_EVENT_READY）即校验进入，无需再点 Enter */
@@ -631,9 +708,8 @@ void open_dev_password_dialog(void)
     lv_obj_set_style_text_font(g_pwd_err, user_font_caption(), 0);
     lv_obj_add_flag(g_pwd_err, LV_OBJ_FLAG_HIDDEN);
 
-    ui_user_make_footer_ghost_btn(g_dlg->footer, "Cancel", on_dlg_cancel);
-
-    make_pwd_dlg_ok_btn(g_dlg->footer, "Enter", on_dev_confirm);
+    make_pwd_dlg_btn(g_dlg->footer, "Cancel", false, on_dlg_cancel);
+    make_pwd_dlg_btn(g_dlg->footer, "Enter", true, on_dev_confirm);
 }
 
 /* ---- Wi-Fi 连接密码弹窗 ---- */
@@ -646,27 +722,29 @@ void on_wifi_connect_confirm(lv_event_t *)
     open_connecting_dialog(ssid);   /* 持续显示直到连接结果返回 */
 }
 
+/* 稿 6423:51743（整屏）/ 51893（弹窗本体）：560×334 白卡，SSID 居中作标题，
+ * 下面一行左对齐灰字，满宽输入框，页脚 Cancel / Connect 两枚等宽钮。 */
 void open_wifi_connect_dialog(const char *ssid)
 {
     if(g_dlg) {
         return;
     }
     g_connect_ssid = ssid;
-    ui_modal_dialog_cfg_t cfg = ui_modal_dialog_cfg_user(ssid ? ssid : "Wi-Fi", 0, true);
+    ui_modal_dialog_cfg_t cfg =
+        ui_modal_dialog_cfg_user(ssid ? ssid : "Wi-Fi", USER_WIFI_DLG_W, true);
+    cfg.light_theme = true;
     g_dlg = ui_modal_dialog_open(lv_screen_active(), &cfg);
     if(!g_dlg) {
         return;
     }
-    lv_obj_align(g_dlg->card, LV_ALIGN_TOP_MID, 0, USER_PAD_LG);
+    ui_keyboard_set_visibility_cb(dlg_dodge_keyboard, nullptr);
 
-    lv_obj_t *hint = ui_user_make_body_label(g_dlg->body, "Enter Wi-Fi password:");
-    lv_obj_set_width(hint, LV_PCT(100));
+    make_pwd_dlg_hint(g_dlg->body, "Enter network password");
 
     g_pwd_ta = make_dialog_textarea(g_dlg->body, "Password", LV_KEYBOARD_MODE_TEXT_LOWER);
 
-    ui_user_make_footer_ghost_btn(g_dlg->footer, "Cancel", on_dlg_cancel);
-
-    make_pwd_dlg_ok_btn(g_dlg->footer, "Connect", on_wifi_connect_confirm);
+    make_pwd_dlg_btn(g_dlg->footer, "Cancel", false, on_dlg_cancel);
+    make_pwd_dlg_btn(g_dlg->footer, "Connect", true, on_wifi_connect_confirm);
 }
 
 /* ---- 小构件 ---- */

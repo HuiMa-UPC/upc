@@ -793,9 +793,28 @@ void on_pm_toggle(lv_event_t * /*e*/)
     status_update();
 }
 
-/** Status 页的一格指标卡（2×2 网格里的一张）。 */
-lv_obj_t *make_status_cell(lv_obj_t *parent, const char *label, const char *unit,
-                           int32_t w, int32_t h, lv_obj_t **out_val)
+/** 两个字号盒底对齐时，小字的基线会偏低，差值正好是两份字体 `base_line`（下伸部）
+ *  之差，补成小字的 `pad_bottom` 抬回去。与首页 `make_metric_cell()` 同一个式子。 */
+int32_t baseline_pad(const lv_font_t *big, const lv_font_t *small)
+{
+    const int32_t d = (int32_t)big->base_line - (int32_t)small->base_line;
+    return d > 0 ? d : 0;
+}
+
+/* Status 页的一格指标卡（2×2 网格里的一张，稿 6338:28064 的 170×113）。
+ *
+ * **这一格与首页四宫格是稿上的同一个组件**，字号必须同一套：caption 20 配小后缀 13
+ * （Montserrat 无 13 号，取最近的 caption 14）、数值 32 配单位 20。早先这里照 Job 卡
+ * 那套给了 16 / 20 / 16，整体小一档半，上板一眼就能看出来。
+ *
+ * caption 与读数都可能是「大字 + 小一号后缀」的组合，LVGL 一个 label 只能一种字体，
+ * 所以各自拆成两个 label 横排、用 baseline_pad() 把基线找齐。
+ *
+ * @param cap_sm caption 的小字后缀，可为 NULL（只有 Temp. 那格有）
+ * @param unit   读数后面的单位
+ */
+lv_obj_t *make_status_cell(lv_obj_t *parent, const char *label, const char *cap_sm,
+                           const char *unit, int32_t w, int32_t h, lv_obj_t **out_val)
 {
     lv_obj_t *cell = lv_obj_create(parent);
     lv_obj_remove_style_all(cell);
@@ -807,17 +826,38 @@ lv_obj_t *make_status_cell(lv_obj_t *parent, const char *label, const char *unit
     lv_obj_set_style_shadow_ofs_y(cell, 2, 0);
     lv_obj_set_style_shadow_color(cell, lv_color_black(), 0);
     lv_obj_set_style_shadow_opa(cell, 10, 0);
-    lv_obj_set_style_pad_all(cell, USER_PAD_SM, 0);
+    lv_obj_set_style_pad_all(cell, USER_PAD_SM, 0);   /* 稿 16 */
     lv_obj_set_flex_flow(cell, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(cell, LV_FLEX_ALIGN_SPACE_BETWEEN,
                           LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
     lv_obj_clear_flag(cell, LV_OBJ_FLAG_SCROLLABLE);
 
-    lv_obj_t *cap = lv_label_create(cell);
+    /* caption 行。**交叉轴必须是 END**：baseline_pad() 补的是「盒底对齐时两个字号的
+     * 基线差」，只有底对齐才成立；CENTER 下反而会把小字往上抬半个补偿量。 */
+    lv_obj_t *head = lv_obj_create(cell);
+    lv_obj_remove_style_all(head);
+    lv_obj_set_size(head, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(head, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(head, LV_FLEX_ALIGN_START,
+                          LV_FLEX_ALIGN_END, LV_FLEX_ALIGN_END);
+    lv_obj_set_style_bg_opa(head, LV_OPA_TRANSP, 0);
+    lv_obj_clear_flag(head, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *cap = lv_label_create(head);
     lv_label_set_text(cap, label);
     lv_obj_set_style_text_color(cap, user_light_text, 0);
     lv_obj_set_style_text_opa(cap, LV_OPA_60, 0);
-    lv_obj_set_style_text_font(cap, user_font_text_sm(), 0);
+    lv_obj_set_style_text_font(cap, user_font_title(), 0);
+
+    if(cap_sm) {
+        lv_obj_t *cs = lv_label_create(head);
+        lv_label_set_text(cs, cap_sm);
+        lv_obj_set_style_text_color(cs, user_light_text, 0);
+        lv_obj_set_style_text_opa(cs, LV_OPA_60, 0);
+        lv_obj_set_style_text_font(cs, user_font_caption(), 0);
+        lv_obj_set_style_pad_bottom(cs, baseline_pad(user_font_title(),
+                                                     user_font_caption()), 0);
+    }
 
     lv_obj_t *row = lv_obj_create(cell);
     lv_obj_remove_style_all(row);
@@ -831,13 +871,15 @@ lv_obj_t *make_status_cell(lv_obj_t *parent, const char *label, const char *unit
     lv_obj_t *val = lv_label_create(row);
     lv_label_set_text(val, "--");
     lv_obj_set_style_text_color(val, user_light_value, 0);
-    lv_obj_set_style_text_font(val, user_font_title(), 0);
+    lv_obj_set_style_text_font(val, user_font_metric(), 0);
     if(out_val) *out_val = val;
 
     lv_obj_t *u = lv_label_create(row);
     lv_label_set_text(u, unit);
     lv_obj_set_style_text_color(u, user_light_value, 0);
-    lv_obj_set_style_text_font(u, user_font_text_sm(), 0);
+    lv_obj_set_style_text_font(u, user_font_title(), 0);
+    lv_obj_set_style_pad_bottom(u, baseline_pad(user_font_metric(),
+                                                user_font_title()), 0);
     return cell;
 }
 
@@ -854,13 +896,19 @@ lv_obj_t *build_view_status(lv_obj_t *parent)
     lv_obj_set_style_bg_opa(v, LV_OPA_TRANSP, 0);
     lv_obj_clear_flag(v, LV_OBJ_FLAG_SCROLLABLE);
 
-    /* ---- PM 卡（稿 6338:28064）：标题行 + 分级大字 + 读数 + 四段色条 ---- */
-    lv_obj_t *card = make_card(v, LV_SIZE_CONTENT);
-    lv_obj_set_style_pad_all(card, USER_PAD, 0);
+    /* ---- PM 卡（稿 6338:28064，356×210）：标题行 + 分级大字 + 读数 + 四段色条 ----
+     *
+     * **定高不靠内容撑**：稿上色条与卡底之间留了 24 的空，内容自适应会把卡收矮一圈。
+     * 横向内距取稿的 24（色条左缘 916 − 卡左缘 892），纵向上 16 下 24——稿上就是
+     * 不对称的。三段之间只留 4，段与色条之间由色条自己的 margin_top 拉开。 */
+    lv_obj_t *card = make_card(v, USER_MON_PM_H);
+    lv_obj_set_style_pad_hor(card, USER_PAD, 0);     /* 稿 24（色条左缘 916 − 卡左 892）*/
+    lv_obj_set_style_pad_top(card, USER_PAD_SM, 0);  /* 稿 16 */
+    lv_obj_set_style_pad_bottom(card, USER_PAD, 0);  /* 稿 24，见下面占位那段 */
     lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(card, LV_FLEX_ALIGN_START,
                           LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
-    lv_obj_set_style_pad_row(card, USER_PAD_SM / 2, 0);
+    lv_obj_set_style_pad_row(card, USER_PAD_SM / 4, 0);
 
     lv_obj_t *head = lv_obj_create(card);
     lv_obj_remove_style_all(head);
@@ -887,7 +935,7 @@ lv_obj_t *build_view_status(lv_obj_t *parent)
     lv_label_set_text(g_pm_title, kAirMetrics[0].title);
     lv_obj_set_style_text_color(g_pm_title, user_light_text, 0);
     lv_obj_set_style_text_opa(g_pm_title, LV_OPA_60, 0);
-    lv_obj_set_style_text_font(g_pm_title, user_font_text_sm(), 0);
+    lv_obj_set_style_text_font(g_pm_title, user_font_title(), 0);   /* 稿 20 */
 
     /* 切换钮：稿 (1188,124) 48×48 rx16，#333145@4% */
     lv_obj_t *sw = lv_button_create(head);
@@ -904,31 +952,49 @@ lv_obj_t *build_view_status(lv_obj_t *parent)
     g_pm_level = lv_label_create(card);
     lv_label_set_text(g_pm_level, "--");
     lv_obj_set_style_text_color(g_pm_level, user_light_value, 0);
-    lv_obj_set_style_text_font(g_pm_level, user_font_metric(), 0);
+    lv_obj_set_style_text_font(g_pm_level, user_font_metric(), 0);   /* 稿 32 */
 
     g_pm_value = lv_label_create(card);
     lv_label_set_text(g_pm_value, "");
     lv_obj_set_style_text_color(g_pm_value, user_light_text, 0);
     lv_obj_set_style_text_opa(g_pm_value, LV_OPA_60, 0);
-    lv_obj_set_style_text_font(g_pm_value, user_font_text_sm(), 0);
+    lv_obj_set_style_text_font(g_pm_value, user_font_body(), 0);     /* 稿 24 */
 
     /* 四段色条 + 游标。**这里的四段是彩色的**（稿 #55D273/#F3CD3A/#F5803B/#EA4948），
      * 与首页 HOME 卡那条「白色四段、不透明度递增」不是一回事——那张卡是蓝底，白段
-     * 才看得见；本卡是白底，只能靠颜色分档。 */
+     * 才看得见；本卡是白底，只能靠颜色分档。
+     *
+     * **行高按游标直径给、色条只占中间 8**，不是让行高等于色条高：游标比色条高一圈
+     * （稿上色条 y286..293、圆点 ~y283..303），行高若只有 8，LVGL 会把圆点按父内容区
+     * 裁成一条 8 高的白片——实机上表现为「游标整个不见了」。踩过一次。 */
+    const int32_t bar_h = USER_PAD_SM / 2;             /* 稿 8 */
+    const int32_t dot_sz = USER_PAD_SM * 5 / 4;        /* 稿 20 */
+
+    /* 撑开的占位：把色条顶到内容区底部。**比给色条写死 margin_top 稳**——三段文字的
+     * 行高是字体算出来的，写死间距一旦加起来超过定高，色条会被卡片裁掉半截；用
+     * flex_grow 则无论行高怎么变，色条都贴着 pad_bottom 那条线。
+     * 卡底内距取 24：稿上色条 y286..293、卡底 323，20 高的行正好落在 279..299。 */
+    lv_obj_t *spacer = lv_obj_create(card);
+    lv_obj_remove_style_all(spacer);
+    lv_obj_set_width(spacer, 1);
+    lv_obj_set_flex_grow(spacer, 1);
+    lv_obj_set_style_bg_opa(spacer, LV_OPA_TRANSP, 0);
+
     g_pm_track = lv_obj_create(card);
     lv_obj_remove_style_all(g_pm_track);
     lv_obj_set_width(g_pm_track, LV_PCT(100));
-    lv_obj_set_height(g_pm_track, USER_PAD_SM / 2);
+    lv_obj_set_height(g_pm_track, dot_sz);
     lv_obj_set_flex_flow(g_pm_track, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(g_pm_track, LV_FLEX_ALIGN_START,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_set_style_pad_column(g_pm_track, USER_PAD_SM / 4, 0);
     lv_obj_set_style_bg_opa(g_pm_track, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_margin_top(g_pm_track, USER_PAD_SM, 0);
     lv_obj_clear_flag(g_pm_track, LV_OBJ_FLAG_SCROLLABLE);
     for(uint32_t c : kBarColors) {
         lv_obj_t *seg = lv_obj_create(g_pm_track);
         lv_obj_remove_style_all(seg);
         lv_obj_set_flex_grow(seg, 1);
-        lv_obj_set_height(seg, LV_PCT(100));
+        lv_obj_set_height(seg, bar_h);
         lv_obj_set_style_radius(seg, 2, 0);
         lv_obj_set_style_bg_color(seg, lv_color_hex(c), 0);
         lv_obj_set_style_bg_opa(seg, LV_OPA_COVER, 0);
@@ -936,7 +1002,7 @@ lv_obj_t *build_view_status(lv_obj_t *parent)
     g_pm_dot = lv_obj_create(g_pm_track);
     lv_obj_remove_style_all(g_pm_dot);
     lv_obj_add_flag(g_pm_dot, LV_OBJ_FLAG_FLOATING);
-    lv_obj_set_size(g_pm_dot, USER_PAD_SM, USER_PAD_SM);
+    lv_obj_set_size(g_pm_dot, dot_sz, dot_sz);
     lv_obj_set_style_radius(g_pm_dot, LV_RADIUS_CIRCLE, 0);
     lv_obj_set_style_bg_color(g_pm_dot, lv_color_white(), 0);
     lv_obj_set_style_bg_opa(g_pm_dot, LV_OPA_COVER, 0);
@@ -944,10 +1010,10 @@ lv_obj_t *build_view_status(lv_obj_t *parent)
     lv_obj_set_style_border_color(g_pm_dot, user_light_text, 0);
     lv_obj_set_style_border_opa(g_pm_dot, LV_OPA_30, 0);
 
-    /* ---- 2×2 指标网格 ---- */
+    /* ---- 2×2 指标网格（稿 170×113，缝 16）---- */
     const int32_t gap = USER_PAD_SM;
     const int32_t cw  = (panel_content_w() - gap) / 2;
-    const int32_t ch  = USER_MON_STAT_H;
+    const int32_t ch  = USER_MON_CELL_H;
 
     lv_obj_t *grid = lv_obj_create(v);
     lv_obj_remove_style_all(grid);
@@ -959,10 +1025,11 @@ lv_obj_t *build_view_status(lv_obj_t *parent)
     lv_obj_set_style_bg_opa(grid, LV_OPA_TRANSP, 0);
     lv_obj_clear_flag(grid, LV_OBJ_FLAG_SCROLLABLE);
 
-    make_status_cell(grid, "Temp.",    "\xC2\xB0", cw, ch, &g_st_temp);
-    make_status_cell(grid, "O2",       "%",        cw, ch, &g_st_o2);
-    make_status_cell(grid, "Humidity", "%",        cw, ch, &g_st_hum);
-    make_status_cell(grid, "Pressure", "kpa",      cw, ch, &g_st_prs);
+    /* 四项的 caption / 小后缀 / 单位与首页四宫格逐字一致（稿上就是同一个组件）。 */
+    make_status_cell(grid, "Temp.", " (\xC2\xB0""C)", "\xC2\xB0", cw, ch, &g_st_temp);
+    make_status_cell(grid, "O2",       nullptr, "%",   cw, ch, &g_st_o2);
+    make_status_cell(grid, "Humidity", nullptr, "%",   cw, ch, &g_st_hum);
+    make_status_cell(grid, "Pressure", nullptr, "kpa", cw, ch, &g_st_prs);
     return v;
 }
 

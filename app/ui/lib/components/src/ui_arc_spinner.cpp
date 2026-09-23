@@ -31,9 +31,11 @@ ui_arc_spinner_t *ui_arc_spinner_create(lv_obj_t *parent, int32_t size)
      * lv_spinner 内部让弧起止角以不同速度推进，弧长随之伸缩。 */
     lv_spinner_set_anim_params(sp, 1000, 270);
 
-    /* 底环（淡灰整圈） */
-    lv_obj_set_style_arc_color(sp, user_color_divider, LV_PART_MAIN);
-    lv_obj_set_style_arc_opa(sp, LV_OPA_40, LV_PART_MAIN);
+    /* 底环（淡灰整圈）。三个调用点（门弹窗 / 预处理弹窗 / 连接中弹窗）现在都是白卡，
+     * 原先的 user_color_divider(#333333) @40% 压在白底上是一圈发黑的重环，比稿上那道
+     * 几乎看不见的底环抢眼得多，故改成深墨 10%。 */
+    lv_obj_set_style_arc_color(sp, user_light_nav_on, LV_PART_MAIN);
+    lv_obj_set_style_arc_opa(sp, LV_OPA_10, LV_PART_MAIN);
     lv_obj_set_style_arc_width(sp, USER_SPINNER_STROKE, LV_PART_MAIN);
     lv_obj_set_style_arc_rounded(sp, true, LV_PART_MAIN);
 
