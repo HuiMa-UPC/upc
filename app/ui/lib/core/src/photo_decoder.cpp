@@ -220,6 +220,14 @@ PhotoDecoder::~PhotoDecoder()
     if(impl_->worker.joinable()) {
         impl_->worker.join();
     }
+    {
+        std::lock_guard<std::mutex> ulk(impl_->ui_mtx);
+        impl_->ui_pending = false;
+        impl_->ui_failed = false;
+        impl_->async_scheduled = false;
+        impl_->ready_cb = nullptr;
+    }
+    (void)lv_async_call_cancel(Impl::async_apply, impl_);
     delete impl_;
     impl_ = nullptr;
 }

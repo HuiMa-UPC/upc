@@ -82,7 +82,13 @@ static void style_single_line_ta(lv_obj_t *ta)
         lv_obj_set_style_text_font(ta, font, 0);
     }
 
-    int32_t h = lv_obj_get_height(ta);
+    /* 优先用样式高度：attach 时常在首次 layout 之前（如 Other 隐藏 tab），
+     * lv_obj_get_height() 读 coords 会得到 0/默认值，pad 被钳成 2 导致数字贴顶偏高。 */
+    int32_t h = lv_obj_get_style_height(ta, LV_PART_MAIN);
+    if(h == LV_SIZE_CONTENT || LV_COORD_IS_PCT(h) || h <= 0) {
+        lv_obj_update_layout(ta);
+        h = lv_obj_get_height(ta);
+    }
     int32_t lh = lv_font_get_line_height(font);
     int32_t border = lv_obj_get_style_border_width(ta, LV_PART_MAIN);
     if(h > 0 && lh > 0) {

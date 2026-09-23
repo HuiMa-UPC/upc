@@ -147,11 +147,11 @@ scripts/rongsu.sh start   # glavo + rongsu_camera → ui
 
 | MsgType（当前枚举） | 规范名（新消息参照） | 方向 | Payload | UI API | Glavo 处理 |
 |---------------------|----------------------|------|---------|--------|------------|
-| `APP_Update_Ntf` | `GLAVO_Env_Update_Ntf` | Glavo→UI/MQTT | `EnvSnapshotPayload`（含 `pm1_indoor`/`pm10_indoor`/`humidity_percent`/`pressure_kpa`/`baseplate_temp_c`/`powder_bits`/`sensor_v4`/`pm1_cabin`/`pm10_cabin`；环境指标无效填 <0→UI 显示 `--`；`powder_bits` 用于缺粉弹窗继续按钮门控；`sensor_v4` 固定 1。MQTT `telemetry/chamber` 用 SOC 舱内量，`telemetry/chamber_ext` 用舱外 PM） | `register_env_update` | `McuLink` 推送（UI 与 MQTT 双发） |
+| `APP_Update_Ntf` | `GLAVO_Env_Update_Ntf` | Glavo→UI/MQTT | `EnvSnapshotPayload`（含 `pm1_indoor`/`pm10_indoor`/`humidity_percent`/`pressure_kpa`/`baseplate_temp_c`/`powder_bits`/`sensor_v4`/`pm1_cabin`/`pm10_cabin`/`outer_door_open`/`door_state_valid`；环境指标无效填 <0→UI 显示 `--`；`powder_bits` 用于缺粉弹窗继续按钮门控；`sensor_v4` 固定 1；外门字段供 Manual 内门门闩记忆。MQTT `telemetry/chamber` 用 SOC 舱内量，`telemetry/chamber_ext` 用舱外 PM） | `register_env_update` | `McuLink` 推送（UI 与 MQTT 双发） |
 | `UI_PM25_Req` | — | UI→Glavo | Empty | `send_pm25_check` | `handle_pm25_req` |
 | `APP_PM25_Rsp` | `GLAVO_PM25_Check_Rsp` | Glavo→UI | `Pm25ResultPayload` | `register_pm25_result` | PM2.5 流程 |
-| `UI_CLOSE_DOOR_Req` | — | UI→Glavo | Empty | `send_close_door_check` | 关门检测 |
-| `APP_CLOSE_DOOR_Rsp` | `GLAVO_Door_Close_Rsp` | Glavo→UI | `DoorResultPayload` | `register_close_door_result` | — |
+| `UI_CLOSE_DOOR_Req` | — | UI→Glavo | Empty | （已停用） | 历史关门检测；滑动开门流程不再发送 |
+| `APP_CLOSE_DOOR_Rsp` | `GLAVO_Door_Close_Rsp` | Glavo→UI | `DoorResultPayload` | （已停用） | 兼容保留：收到即回 ok |
 | `Fs_DirOpen_Req` | `FS_Dir_Open_Req` | UI→Glavo | `PrintFileSource`（仅 USB） | `send_fs_dir_open` | Local 不走 IPC，UI 直读 `/userdata/Gcode/config.json` |
 | `Fs_DirOpen_Rsp` | `FS_Dir_Open_Rsp` | Glavo→UI | `FsDirHeader` + `FileEntryPayload[]` | `register_fs_dir` | **仅 USB** 扫盘应答 |
 | `Fs_Delete_Ntf` | `FS_Delete_Ntf` | UI→Glavo | `FsDeleteNtfPayload` | `send_fs_delete_ntf` | 删 Local 文件 + 更新 config.json |
@@ -165,12 +165,12 @@ scripts/rongsu.sh start   # glavo + rongsu_camera → ui
 | `APP_Clean_Start_Rsp` | `GLAVO_Clean_Start_Rsp` | Glavo→UI | Empty | `register_clean_start_result` | 清粉达标完成→前端自动开门 |
 | `UI_Clean_Stop_Req` | — | UI→Glavo | Empty | `send_clean_stop` | 清粉中断（按清粉页 X 触发），请求后端立即关风机 |
 | `APP_Clean_Stop_Rsp` | `GLAVO_Clean_Stop_Rsp` | Glavo→UI | Empty | `register_clean_stop_result` | 清粉中断受理完成→前端切回开门流程 |
-| `UI_Clean_Test_Start_Req` | — | UI→Glavo | `CleanTestStartReqPayload` | `send_clean_test_start` | 启动清粉测试。`record_video=1`（监控页打印结果态的吹粉）同时通知 Media 按延时帧率抽帧；`=0`（监控页 Manual 的手动吹粉）不开录像会话、不写 `config.json`、不进打印历史，结束回执改由 Glavo 直接发 |
+| `UI_Clean_Test_Start_Req` | — | UI→Glavo | `CleanTestStartReqPayload` | `ui_clean_state_request` / `send_clean_test_start` | 启动清粉。监控页结果态（Complete/Terminated 自动开 + 钮再开）`record_video=1` 通知 Media 仅在清粉窗口按延时帧率抽帧；Manual `=0` 不开录像、结束由 Glavo 直接发 Done |
 | `APP_Clean_Test_Start_Rsp` | — | Glavo→UI | `CleanTestStartRspPayload` | `register_clean_test_start_rsp` | 请求受理状态（避免并发启动） |
 | `APP_Clean_Test_Result_Ntf` | — | Media→UI（有录像）/ Glavo→UI（无录像） | `CleanTestDonePayload` | `register_clean_test_done` | MCU 清粉完成上报（A2/42 TLV 0x03）后：Media 停止清粉抽帧并回执；`result_code` 00/01/02 均表示结束；最终 MP4 在结果页退出后统一合成 |
-| `UI_Clean_Test_Close_Req` | — | UI→Glavo | Empty | `send_clean_test_close` | 返回首页时强制发送 `clean_test_close` 收尾 |
+| `UI_Clean_Test_Close_Req` | — | UI→Glavo | Empty | `ui_clean_state_stop` / `send_clean_test_close` | 中止清粉（结果页吹粉钮再点、取件回 IDLE 等）：下发 MCU close、停风扇；有录像时 Media 对 `0xfe` 不发 Result_Ntf，UI 靠 Close_Rsp → `UI_CLEAN_EVT_STOPPED` |
 | `UI_Print_Video_Finalize_Req` | — | UI→Media | `PrintVideoFinalizeReqPayload` | `send_print_video_finalize` | 开门取件后触发：promote 目录 + 清 pending；延时成片受 `UPC_TIMELAPSE_PLAYBACK_PNG` 控制（默认跳过 `timelapse.mp4`），打印录像仍可 remux `print_h264.mp4` |
-| `APP_Clean_Test_Close_Rsp` | — | Glavo→UI | Empty | `register_clean_test_close_rsp` | close 指令已受理 |
+| `APP_Clean_Test_Close_Rsp` | — | Glavo→UI | Empty | `register_clean_test_close_rsp`（`ui_clean_state`） | close 已受理 → 扇出 `UI_CLEAN_EVT_STOPPED` |
 | `UI_Transport_Req` | — | UI→Glavo | Empty | `send_transport_request` | 转运盒 Ready：发串口自动转运请求（A2/0x41 TLV 0x02） |
 | `APP_Transport_Result_Ntf` | — | Glavo→UI | `TransportResultPayload` | `register_transport_result` | MCU TLV 0x04：`0`=完成→BoxShutter；`1/2` 失败/中止→停留转圈页（无超时） |
 | `UI_Print_Prepare_Req` | — | UI→Glavo | `PrintPrepareReqPayload` | `send_print_prepare` | USB 复制+轻量扫描+config |
@@ -184,8 +184,11 @@ scripts/rongsu.sh start   # glavo + rongsu_camera → ui
 | `UI_Print_Powder_Low_Ignore_Req` | — | UI→Glavo | Empty | `send_print_powder_low_ignore` | 当前打印会话忽略后续缺粉检测：不再自动暂停、不再推缺粉通知 |
 | `APP_Print_Pause_Rsp` | `GLAVO_Print_Pause_Rsp` | Glavo→UI | `PrintPauseStatePayload` | `register_print_pause_done` | 暂停/恢复响应（paused=1/0；Pause/Resume Req 共用） |
 | `APP_Print_Powder_Low_Ntf` | — | Glavo→UI | Empty | `register_print_powder_low` | 打印中粉量位 bit0/bit1 同时为 0 时仅通知一次；UI 弹补粉弹窗 |
-| `APP_OpticalPath_Progress_Ntf` | — | Glavo→UI | `OpticalPathProgressPayload` | `register_optical_path_progress` | 打印前光路检测逐点进度（徽标 OPTICAL PATH CHECK + n/5）；`state=3` 整轮通过后恢复 PRINTING |
-| `APP_Print_Start_Rejected_Ntf` | — | Glavo→UI | `PrintStartRejectedPayload` | `register_print_start_rejected` | 起印被拒（光路检测失败 / 本地副本打不开）；UI 跳无 manifest 的终止结果页。不可用 `APP_Print_Terminate_Rsp` 代替：0% 进度会被 UI 的 `print_ready_to_exit` 挡住 |
+| `APP_OpticalPath_Progress_Ntf` | — | Glavo→UI | `OpticalPathProgressPayload` | `register_optical_path_progress` | 打印前光路逐点（Job 卡右侧 n/5）；标题/总进度条由 `APP_Print_Prep_Progress_Ntf` 驱动；`state=3` Complete 只清 n/5，不切 Printing |
+| `APP_Print_Prep_Progress_Ntf` | — | Glavo→UI | `PrintPrepProgressPayload` | `register_print_prep_progress` | 起印环境检查进度：Job 卡标题（外门/内门/光路/测高/氧门/首层）+ 进度条；跳过的步骤不推、直接进下一步；氧门与首层在开扫握手阶段仍属 Prepare；`step=Ready` 后切 Printing 并从 0% 计打印进度 |
+| `APP_Print_Start_Rejected_Ntf` | — | Glavo→UI | `PrintStartRejectedPayload` | `register_print_start_rejected` | 起印被拒（光路/测高失败、本地副本打不开、TCP 未连、关内门套件失败等）；UI 跳转 manifest 终止结果页。不可用 `APP_Print_Terminate_Rsp` 代替：0% 进度会被 UI 的 `print_ready_to_exit` 挡住 |
+| `GLAVO_Outer_Door_Confirm_Req` | — | Glavo→UI | Empty | `register_outer_door_confirm_req` | 起印前外门未关：弹窗 Confirm / Cancel（无超时） |
+| `UI_Outer_Door_Confirm_Rsp` | — | UI→Glavo | `OuterDoorConfirmRspPayload` | `send_outer_door_confirm` | Confirm：`skip=0`，Glavo 再读门，仍开则再次 Req；Cancel：`skip=1`，不检门，直接进内门套件 |
 | `APP_Print_Terminate_Rsp` | `GLAVO_Print_Terminate_Rsp` | Glavo→UI | Empty | `register_print_terminate_done` | — |
 | `GLAVO_Print_State_Ntf` | — | Glavo→MQTT | `PrintStateNtfPayload`（`mode` 复用 `UserHomeStatus`：`2`=开始打印 / `0`=打印结束；`since_ms`=进入该 mode 的 Unix ms） | — | 打印状态边沿：开始打印/打印结束空闲时推一次，触发 MQTT 上报 `state` 消息 |
 | `UI_Supply_Status_Req` | — | UI→Glavo | Empty | `send_supply_status` | stub |
@@ -286,11 +289,16 @@ scripts/rongsu.sh start   # glavo + rongsu_camera → ui
 | `UI_Debug_Env_Sim_Powder_Get_Ntf` | — | UI→Glavo | Empty | `request_env_sim_powder_state` | 查询当前“环境模拟粉量缺粉”开关状态 |
 | `UI_Debug_Skip_O2_Gate_Set_Ntf` | — | UI→Glavo | `DebugOnOffPayload` | `send_skip_o2_gate_set` | 调试页开关：跳过 SOC 氧打印门（仅本次运行，默认关；开则起印不发洗气开、不等氧、打印中不因氧高暂停/1120） |
 | `UI_Debug_Skip_O2_Gate_Get_Ntf` | — | UI→Glavo | Empty | `request_skip_o2_gate_state` | 查询当前“跳过氧门”开关状态 |
+| `UI_Debug_Skip_Outer_Door_Set_Ntf` | — | UI→Glavo | `DebugOnOffPayload` | `send_skip_outer_door_set` | 调试页开关：跳过外门检测+关内门套件（仅本次运行，**默认关=要做**；开则不检门、不开→关边沿也不跑套件） |
+| `UI_Debug_Skip_Outer_Door_Get_Ntf` | — | UI→Glavo | Empty | `request_skip_outer_door_state` | 查询跳过外门检测开关 |
 | `UI_Debug_O2_Calib_Req` | — | UI→Glavo | `DebugO2CalibReqPayload` | `send_o2_calib` | 调试页氧标定：参考浓度单点求 K，写 `/userdata/CAL/o2_cal.json`；Glavo worker 只做打印互斥后丢给 SocSensors 独立线程，完成后只发 Rsp |
 | `UI_Debug_O2_Calib_Get_Ntf` | — | UI→Glavo | Empty | `request_o2_calib_state` | 查询当前氧标定 K（不重新采样） |
 | `UI_Debug_Status_Led_Set_Ntf` | — | UI→Glavo | `DebugStatusLedPayload` | `send_status_led_set` | 调试页灯板验色：强制 SPI 灯板单色（`color=Raw` 时用 payload 裸 RGB）；**绕开 MCU major≥4 版本门**且每次必发一帧；`force=0` 释放接管回自动推导 |
 | `UI_Debug_Status_Led_Get_Ntf` | — | UI→Glavo | Empty | `request_status_led_state` | 查询当前灯板强制态 |
 | `GLAVO_Debug_Status_Led_Ntf` | — | Glavo→UI | `DebugStatusLedPayload` | `register_status_led` | 灯板强制态回读（Set/Get 后各回一次） |
+| `UI_Debug_Spi_Pm25_Lcd_Set_Ntf` | — | UI→Glavo | `DebugOnOffPayload` | `send_spi_pm25_lcd_test_set` | 调试页：SPI 小屏周期整屏刷测试色（红/绿/蓝/白/黑，约 500ms，走 fbdev `pwrite`）；仅本次运行，默认关 |
+| `UI_Debug_Spi_Pm25_Lcd_Get_Ntf` | — | UI→Glavo | Empty | `request_spi_pm25_lcd_test_state` | 查询 SPI 小屏测试刷屏开关 |
+| `GLAVO_Debug_Spi_Pm25_Lcd_Ntf` | — | Glavo→UI | `DebugOnOffPayload` | `register_spi_pm25_lcd_test` | 回读 SPI 小屏测试刷屏开关 |
 | `GLAVO_Debug_Fan_Ntf` | — | Glavo→UI | `DebugFanStatePayload` | `register_fan_state` | 风机实测转速/母线电压电流/故障码/状态机；MCU V4 EXT 帧（TLV 0x06，默认 1000ms）驱动，**仅固件 major≥4**；`valid=0`（链路异常）时各值无意义，UI 显示 `--` |
 | `UI_Debug_Alarm_Inject_Ntf` | — | UI→Glavo | `AlarmReportPayload` | `send_alarm_inject` | 调试页 **Alarm Inject**：Glavo 转成 `GLAVO_Alarm_Report_Ntf` **只发 MQTT**（不上 UI，避免与本地 `[SIM]` 双弹；不改 MCU 快照）。关开关对 CONDITION 发 `state_mask=0` 模拟解除 |
 | `UI_Debug_FirstLayer_Visual_Check_Set_Ntf` | — | UI→Glavo | `DebugOnOffPayload` | `send_first_layer_visual_check_set` | 调试页开关：首层视觉检测（仅本次运行，默认关） |
@@ -305,6 +313,7 @@ scripts/rongsu.sh start   # glavo + rongsu_camera → ui
 | `GLAVO_Debug_Env_Sim_Ntf` | — | Glavo→UI | `DebugOnOffPayload` | `register_env_sim` | 回读当前“环境上报模拟”开关状态 |
 | `GLAVO_Debug_Env_Sim_Powder_Ntf` | — | Glavo→UI | `DebugOnOffPayload` | `register_env_sim_powder` | 回读当前“环境模拟粉量缺粉”开关状态 |
 | `GLAVO_Debug_Skip_O2_Gate_Ntf` | — | Glavo→UI | `DebugOnOffPayload` | `register_skip_o2_gate` | 回读当前“跳过 SOC 氧打印门”开关状态 |
+| `GLAVO_Debug_Skip_Outer_Door_Ntf` | — | Glavo→UI | `DebugOnOffPayload` | `register_skip_outer_door` | 回读当前“跳过外门检测”开关状态 |
 | `GLAVO_Debug_O2_Calib_Rsp` | — | Glavo→UI | `DebugO2CalibRspPayload` | `register_o2_calib` | 氧标定 Req 应答（ok/err/k/i_ua/o2）；成功不再另推 Ntf |
 | `GLAVO_Debug_O2_Calib_Ntf` | — | Glavo→UI | `DebugO2CalibRspPayload` | `register_o2_calib` | 进页 Get 回读当前 K（不改盘；i_ua=0；与 Rsp 同结构） |
 | `GLAVO_Debug_FirstLayer_Visual_Check_Ntf` | — | Glavo→UI | `DebugOnOffPayload` | `register_first_layer_visual_check` | 回读当前“首层视觉检测”开关状态 |
@@ -410,6 +419,7 @@ rongsu_broker ──listen──► /tmp/upc_broker.sock ◄── UI / Glavo / 
 | `common/fs_manifest/message_paths.hpp` | `UPC_MESSAGE_DIR`（报警历史 jsonl） | 平台 / UI |
 | `common/fs_manifest/xfr_paths.hpp` | `UPC_XFR_STORAGE_DIR`（局域网上传暂存与 token） | 平台 / Xfer |
 | `common/config/cal_config.hpp` | `UPC_CAL_PATH`（默认 `/userdata/CAL/cal.csv`） | 平台 / Glavo / Media / UI / Xfer |
+| `common/nv12_copy.hpp` | `upc::copy_nv12_tight`：带 stride 的 NV12 拷成紧凑缓冲（Media / Visual 共用） | 平台 / Media / Visual |
 | `app/glavo/lib/device_config.hpp` | `GLAVO_O2_CAL_JSON_PATH`（默认 `/userdata/CAL/o2_cal.json`）氧 K 标定 | Glavo |
 | `common/ipc/msg_port.hpp` | 业务唯一 IPC 入口 | 平台组 |
 | `common/ipc/ipc_wire.*` | 线协议 | 平台组 |

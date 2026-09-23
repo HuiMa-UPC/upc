@@ -80,6 +80,8 @@ private:
     void publish_transport_result(uint8_t result);
     void on_transport_result(uint8_t result);
     void stop_clean_worker();
+    /** @brief 回收真实开门轮询线程（stop / 析构前调用）。 */
+    void stop_door_open_worker();
     void publish_clean_rsp(middleware::MsgType type, uint32_t target_id);
     void publish_clean_test_start_rsp(uint32_t target_id, bool accepted);
     void publish_clean_test_done(uint8_t result_code, bool raw_retained,
@@ -149,6 +151,9 @@ private:
     void handle_debug_env_sim_powder_get(const middleware::Message& msg);
     void handle_debug_skip_o2_gate_set(const middleware::Message& msg);
     void handle_debug_skip_o2_gate_get(const middleware::Message& msg);
+    void handle_debug_skip_outer_door_set(const middleware::Message& msg);
+    void handle_debug_skip_outer_door_get(const middleware::Message& msg);
+    void handle_outer_door_confirm_rsp(const middleware::Message& msg);
     void handle_debug_o2_calib_req(const middleware::Message& msg);
     void handle_debug_o2_calib_get(const middleware::Message& msg);
     void handle_debug_alarm_inject(const middleware::Message& msg);
@@ -164,6 +169,8 @@ private:
     void handle_debug_cabin_pm_valve_get(const middleware::Message& msg);
     void handle_debug_status_led_set(const middleware::Message& msg);
     void handle_debug_status_led_get(const middleware::Message& msg);
+    void handle_debug_spi_pm25_lcd_set(const middleware::Message& msg);
+    void handle_debug_spi_pm25_lcd_get(const middleware::Message& msg);
     void handle_visual_optical_path_point_rsp(const middleware::Message& msg);
     void handle_height_calib_start_req(const middleware::Message& msg);
     void handle_laser_spot_measure_rsp(const middleware::Message& msg);
@@ -172,6 +179,7 @@ private:
     void publish_debug_env_sim_state();
     void publish_debug_env_sim_powder_state();
     void publish_debug_skip_o2_gate_state();
+    void publish_debug_skip_outer_door_state();
     void publish_debug_o2_calib_state();
     void publish_debug_first_layer_visual_check_state();
     void publish_debug_test_image_state();
@@ -181,6 +189,7 @@ private:
     void publish_debug_soc_led_state();
     void publish_debug_cabin_pm_valve_state();
     void publish_debug_status_led_state();
+    void publish_debug_spi_pm25_lcd_state();
     /** @brief 停止并回收点位测试线程；仅用于服务退出。 */
     void stop_galvo_point_test_worker();
 
@@ -191,7 +200,10 @@ private:
     bool begin_plate_height_gate();
     void on_plate_height_done();
     void publish_plate_height_visual_session(bool active);
-    /** @brief 舱内灯光：与调试页 Light 同一串口 TLV（0x06 开 / 0x07 关）。 */
+    /**
+     * @brief 舱内灯光：SOC 六路 `lgt*` 全开/全关（与调试页 Cabin LED 同源）。
+     *        仅光路/测高期间关灯；失败 abort 与检测通过后开灯。
+     */
     void set_cabin_light(bool on);
     void send_z_inc(float delta_mm);
     void send_z_home();
@@ -202,6 +214,25 @@ private:
     void publish_height_calib_progress(uint8_t stage, float current_height_mm,
                                        uint16_t collected, uint16_t total);
     void wakeup_laser_spot_wait();
+    /**
+     * @brief 起印前外门闸门
+     * @return true=已发确认 Req，调用方须 return 等 UI_Outer_Door_Confirm_Rsp；
+     *         false=已关或跳过，可继续关内门套件
+     */
+    bool begin_outer_door_gate();
+    /** @brief 外门闸通过后：关内门套件 → 光路/测高 → 起印后半段。 */
+    void continue_print_after_outer_door_ready();
+    /**
+     * @brief 关内门套件：记 Z → −10mm → 关内门 → 等 4s → Z 回原位。
+     * @param blocking true=起印路径阻塞等锁；false=边沿路径 try_lock，忙则跳过
+     * @return false 仅 blocking 且套件失败时
+     */
+    bool run_inner_door_close_kit(bool blocking);
+    /** @brief 起印路径：跑关内门套件，失败则 abort + 告警。 */
+    bool ensure_inner_door_kit_for_print();
+    /** @brief 外门开→关边沿：非打印发送中时跑关内门套件（Skip 时不跑）。 */
+    void on_outer_door_closed_edge();
+    void publish_outer_door_confirm_req();
     /**
      * @brief 起印前的光路检测 gate
      * @return true=已起一轮检测，调用方须立即 return 等回灌；false=无需检测，继续测高/起印
@@ -221,6 +252,28 @@ private:
     void publish_optical_path_progress(
         const middleware::OpticalPathProgressPayload& payload);
     void publish_optical_path_visual_session(bool active);
+    /** @brief 起印前规划本趟实际环境检查步数（跳过的不计）。 */
+    void reset_print_prep_plan();
+    /**
+     * @brief 推送起印环境检查进度。进入新 step 时 step_index 自增；
+     *        同一步内（光路点位）只更新 sub_*。Ready 把 index 拉满。
+     */
+    void publish_print_prep_progress(middleware::PrintPrepStep step,
+                                     uint8_t sub_index = 0,
+                                     uint8_t sub_total = 0);
+    /** @brief 本趟是否会跑起印氧门（与 McuLink::soc_o2_print_gate_enabled 一致）。 */
+    [[nodiscard]] bool print_prep_needs_oxygen() const;
+    /** @brief 本趟是否会跑首层视觉（含参考图）。 */
+    [[nodiscard]] bool print_prep_needs_first_layer() const;
+    /**
+     * @brief 外门/内门/光路/测高结束后进入开扫后半段。
+     *        若后面还有氧门/首层则不发 Ready；否则发 Ready 再 continue。
+     */
+    void continue_after_static_print_prep();
+    /** @brief 氧门通过后：有首层则推 FirstLayer，否则 Ready。 */
+    void on_print_prep_oxygen_gate_passed();
+    /** @brief 首层视觉通过后推 Ready（失败重铺粉不推）。 */
+    void on_print_prep_first_layer_passed();
     void publish_print_start_rejected(middleware::PrintStartRejectReason reason,
                                       uint8_t detail);
     /** @brief 开一轮测试图：红光 + open/parse/begin（无媒体/换层握手） */
@@ -250,6 +303,7 @@ private:
     void handle_alarm_snapshot_req(const middleware::Message& msg);
 
     void send_door_rsp(const middleware::Message& msg, middleware::MsgType rsp_type, bool ok);
+    void send_door_rsp_to(uint32_t target_id, middleware::MsgType rsp_type, bool ok);
     void send_dir_open_empty(const middleware::Message& req);
     void send_dir_open_usb(const middleware::Message& req, const std::string& usb_path);
     void stop_print_job();
@@ -347,7 +401,6 @@ private:
     std::chrono::steady_clock::time_point last_progress_push_at_{};
     bool last_usb_mounted_ = false;
     bool door_real_open_enabled_ = (GLAVO_DOOR_REAL_OPEN_ENABLE != 0);
-    bool door_real_close_check_enabled_ = (GLAVO_DOOR_REAL_CLOSE_CHECK_ENABLE != 0);
     float pm25_clean_threshold_ = 50.0f;
     uint32_t timelapse_video_fps_ = 0; /**< 0=Media 默认；来自 cal.csv TIMELAPSE_VIDEO_FPS */
     uint32_t print_h264_bitrate_ = 0; /**< 0=Media 默认中等；来自 cal.csv PRINT_H264_BITRATE */
@@ -355,6 +408,9 @@ private:
     std::atomic<bool> clean_running_{false};
     std::thread pm25_sample_worker_;
     std::atomic<bool> pm25_sample_busy_{false};
+    /** 真实开门：传感器轮询放独立线程，避免堵 worker 最长 GLAVO_DOOR_OPEN_TIMEOUT_MS。 */
+    std::thread door_open_worker_;
+    std::atomic<bool> door_open_busy_{false};
     std::atomic<bool> clean_cancel_requested_{false};
     std::atomic<bool> clean_stop_rsp_pending_{false};
     std::atomic<uint32_t> clean_stop_rsp_target_{0};
@@ -401,6 +457,15 @@ private:
     bool env_sim_on_ = false;  /**< 环境上报模拟（仅本次运行，默认关） */
     bool env_sim_powder_low_on_ = false; /**< 环境模拟粉量缺粉开关（目标状态，延迟生效由 McuLink 管） */
     bool skip_o2_print_gate_on_ = false; /**< 跳过 SOC 氧打印门（仅本次运行，默认关） */
+    bool skip_outer_door_on_ = false; /**< 跳过外门检测+关内门套件（仅本次运行，默认关=要做） */
+    bool outer_door_confirm_waiting_ = false; /**< 已发 Confirm_Req，等 UI Rsp */
+    std::mutex inner_door_seq_mtx_; /**< 关内门套件互斥（起印 / 开→关边沿） */
+    /** 用户终止：IPC 线程先置位，打断 worker 上阻塞的关内门套件 / wait_z */
+    std::atomic<bool> print_prep_abort_{false};
+    /** 起印环境检查进度：本趟总步数 / 当前已进入步序号 / 上一次推送的 step */
+    uint8_t prep_step_total_ = 0;
+    uint8_t prep_step_index_ = 0;
+    uint8_t prep_last_step_ = 0xff;
     bool ignore_powder_low_for_current_print_ = false; /**< 本次打印是否忽略缺粉检测（Cancel 后置位） */
     bool o2_auto_paused_ = false; /**< 本次因 SOC 氧过高由本层自动暂停（恢复时只清这类暂停） */
     std::mutex first_layer_visual_mtx_;

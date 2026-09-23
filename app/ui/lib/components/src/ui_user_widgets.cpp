@@ -3,6 +3,7 @@
 
 #include <cstdio>
 #include <cstdint>
+#include <filesystem>
 
 ui_modal_dialog_cfg_t ui_modal_dialog_cfg_user(const char *title,
                                                int32_t card_width,
@@ -592,6 +593,15 @@ uint8_t ui_user_segmented_get_selected(lv_obj_t *seg)
         return UI_USER_SEG_NONE;
     }
     return static_cast<uint8_t>(reinterpret_cast<intptr_t>(lv_obj_get_user_data(seg)));
+}
+
+bool ui_user_thumb_path_exists(const char *path)
+{
+    if(!path || path[0] == '\0') {
+        return false;
+    }
+    std::error_code ec;
+    return std::filesystem::exists(path, ec) && !ec;
 }
 
 lv_obj_t *ui_user_make_footer_ghost_btn(lv_obj_t *footer, const char *text,

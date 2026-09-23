@@ -158,6 +158,12 @@ PngScrubPreview::~PngScrubPreview()
     if(impl_->worker.joinable()) {
         impl_->worker.join();
     }
+    {
+        std::lock_guard<std::mutex> ulk(impl_->ui_mtx);
+        impl_->ui_pending = false;
+        impl_->preview_cb = nullptr;
+    }
+    (void)lv_async_call_cancel(Impl::async_apply, impl_);
     delete impl_;
     impl_ = nullptr;
 }
@@ -221,6 +227,9 @@ void PngScrubPreview::set_scrubbing(bool scrubbing)
 void PngScrubPreview::cancel()
 {
     set_scrubbing(false);
+    if(impl_) {
+        (void)lv_async_call_cancel(Impl::async_apply, impl_);
+    }
 }
 
 } // namespace ui

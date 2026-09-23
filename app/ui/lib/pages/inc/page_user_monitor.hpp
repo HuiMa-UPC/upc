@@ -17,34 +17,39 @@ extern "C" {
  * 摄像头全程不断流。稿：待机 6338:27049 一族、打印 6338:27240 一族、
  * Manual 6307:40977。
  *
- * **打印态的界面从首页搬到了这里。** `page_user_home.hpp` 里那一组同名导出
- * （`page_user_home_enter_printing_mode` 等）已经没有调用方，作为「首页打印态稿」
- * 到位前的存档留着，别再往那边接线，见该头文件的说明。
+ * 打印态界面在本页完成，不经过首页。
  */
 
 lv_obj_t *page_user_monitor_create(lv_obj_t *parent);
 void page_user_monitor_refresh(bool force);
 /**
  * 离页收尾。两件事：
- *  - 清掉 `DebugMsgProxy` 的 axis / device 两个**单槽**回调（Manual 页在用，调试页
- *    也在用同一组）。不清的话从本页切去调试页，那边的三轴位置与设备行不再刷新；
+ *  - 清掉 `DebugMsgProxy` 的 axis / device / soc_led **单槽**回调（Manual 照明与轴
+ *    读数在用，调试页也在用同一组）。不清的话从本页切去调试页，那边会静默失联；
  *  - 待机态停掉摄像头预览。**打印态不停**——打印中用户可能切去别的页看消息，
  *    回来时不该黑一下，且结果页要停在最后一帧上。
  */
 void page_user_monitor_exit(void);
 
-/* ---- 打印流程接线（由 control.cpp 调用，语义与原首页那一组一一对应）---- */
+/* ---- 打印流程接线（由 control.cpp 调用）---- */
 
 void page_user_monitor_enter_printing_mode(const control_file_t *file);
 void page_user_monitor_exit_printing_mode(void);
 void page_user_monitor_printing_update(const control_progress_t *p);
 /**
- * 光路检测逐点进度。state 见 OpticalPathPointState：
- * Moving/Passed/Failed 切到 `OPTICAL PATH CHECK` 状态行并在右侧显示 n/5；
- * Complete 恢复 `Printing...`，进度条仍为 0 直到正式进度到达。
+ * 光路检测逐点进度。右侧 n/5 与 Complete→Printing 兼容回落；
+ * Job 卡标题与总进度条由 `page_user_monitor_print_prep_update` 驱动。
  */
 void page_user_monitor_optical_path_update(uint8_t point_index, uint8_t point_total,
                                            uint8_t state);
+/**
+ * 起印环境检查进度。按实际会跑的步骤更新 Job 卡标题与进度条；
+ * `step=Ready` 切回 Printing 并把条复位到 0%（与打印层进度分开）。
+ * Prepare 阶段不驱动缩略图蒙版。跳过的步骤后端不推，UI 直接看到下一步。
+ * step / step_index / step_total / sub_index / sub_total 对齐 PrintPrepProgressPayload。
+ */
+void page_user_monitor_print_prep_update(uint8_t step, uint8_t step_index, uint8_t step_total,
+                                         uint8_t sub_index, uint8_t sub_total);
 /**
  * 打印结果（Print Complete / Print Terminated）。
  * 仍在本页内切：摄像头不停，只把 Job 卡的状态行与底部按钮组换掉。

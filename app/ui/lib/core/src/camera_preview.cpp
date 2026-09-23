@@ -1,6 +1,5 @@
 #include "camera_preview.hpp"
 #include "camera_msg_proxy.hpp"
-#include "page_user_home.hpp"
 #include "page_user_monitor.hpp"
 #include "msg_port.hpp"
 #include "rs_log.hpp"
@@ -460,7 +459,8 @@ void CameraPreviewPlayer::start(lv_obj_t* image_widget, lv_obj_t* hint_widget,
         return;
     }
     if(active_.load()) {
-        stop();
+        /* 内部重开：不要清掉可能刚排上的 pending_start（见 stop_impl）。 */
+        stop_impl(false);
         if(decode_retiring_.load(std::memory_order_acquire)) {
             UPC_LOG_CAMERA_PREVIEW(Info,
                 "start deferred: active decode session is retiring");
@@ -520,15 +520,23 @@ void CameraPreviewPlayer::start(lv_obj_t* image_widget, lv_obj_t* hint_widget,
 
 void CameraPreviewPlayer::stop()
 {
+    stop_impl(true);
+}
+
+void CameraPreviewPlayer::stop_impl(bool cancel_pending)
+{
     // had_session 决定是否需要向 Camera 发送 stop，避免无效 IPC。
     const bool had_session =
         active_.load() || stream_up_.load() || start_req_sent_;
 
     active_.store(false);
     stop_decode_.store(true);
-    pending_start_ = false;
-    UPC_LOG_CAMERA_PREVIEW(Info, "stop (had_session=%d stream_up=%d)",
-                           had_session ? 1 : 0, stream_up_.load() ? 1 : 0);
+    if(cancel_pending) {
+        pending_start_ = false;
+    }
+    UPC_LOG_CAMERA_PREVIEW(Info, "stop (had_session=%d stream_up=%d cancel_pending=%d)",
+                           had_session ? 1 : 0, stream_up_.load() ? 1 : 0,
+                           cancel_pending ? 1 : 0);
 
     if(had_session &&
        middleware::MsgPort::instance().peer_connected(
@@ -556,6 +564,10 @@ void CameraPreviewPlayer::stop()
             "(live cabin feed will appear while printing)");
         lv_obj_clear_flag(hint_, LV_OBJ_FLAG_HIDDEN);
     }
+    /* 立刻丢掉控件指针：退役/后续 async 不得再 lv_image_set_src 到已停会话的对象。
+     * hide/文案已用完局部引用；reset_ui() 在非退役路径仍会再清一遍。 */
+    image_ = nullptr;
+    hint_  = nullptr;
 
     if(decode_retiring_.load(std::memory_order_acquire)) {
         return;
@@ -788,7 +800,7 @@ void CameraPreviewPlayer::clear_frame_buffers()
 /**
  * 按视口定下解码输出几何：宽度贴满视口，纵向取源的居中可见带。
  *
- * 语义必须与 page_user_home 的 `cam_apply_layout()` 一致（宽度适配 + 上下居中
+ * 语义必须与 page_user_monitor 的 `cam_apply_layout()` 一致（宽度适配 + 上下居中
  * 裁剪），这样 UI 侧算出来的残余 zoom 正好是 1.000，lv_image 走无缩放贴图快
  * 路径，省掉整屏逐帧双线性重采样。视口尺寸直接从 image_ 的父节点读，不新增
  * core → pages 的依赖。
@@ -1855,6 +1867,10 @@ void CameraPreviewPlayer::start_watchdog_timer_cb(lv_timer_t* timer)
             "stream start rsp timeout scene=%s retries=%u",
             self->scene_[0] ? self->scene_ : "(none)",
             static_cast<unsigned>(self->start_retry_count_));
+        self->start_rsp_pending_ = false;
+        self->start_req_sent_ = false;
+        self->active_.store(false);
+        self->show_hint(LV_SYMBOL_WARNING "  Camera start timeout");
         return;
     }
 
@@ -1976,15 +1992,9 @@ void CameraPreviewPlayer::ui_timer_cb(lv_timer_t* timer)
 
     lv_image_set_src(self->image_, &self->img_dsc_[idx]);
     if(first_show) {
-        /* 传输出几何：与视口一致时 cam_apply_layout 算出的 zoom 正好 1.000。
-         * 活路径在监控页；首页打印/监控层是存档，scene="print" 时仍刷那边。 */
-        if(std::strcmp(self->scene_, "monitor") == 0) {
-            page_user_monitor_update_camera_preview_layout(self->out_width_,
-                                                           self->out_height_);
-        } else {
-            page_user_home_update_camera_preview_layout(self->out_width_,
-                                                        self->out_height_);
-        }
+        /* 传输出几何：与视口一致时 cam_apply_layout 算出的 zoom 正好 1.000。 */
+        page_user_monitor_update_camera_preview_layout(self->out_width_,
+                                                       self->out_height_);
     }
     lv_obj_clear_flag(self->image_, LV_OBJ_FLAG_HIDDEN);
     if(self->hint_) {

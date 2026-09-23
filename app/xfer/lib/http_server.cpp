@@ -85,6 +85,16 @@ void HttpServer::stop()
     if (accept_thread_.joinable()) {
         accept_thread_.join();
     }
+    std::vector<std::thread> clients;
+    {
+        std::lock_guard<std::mutex> lock(client_threads_mtx_);
+        clients.swap(client_threads_);
+    }
+    for (auto& t : clients) {
+        if (t.joinable()) {
+            t.join();
+        }
+    }
 }
 
 void HttpServer::run_accept()
@@ -100,7 +110,9 @@ void HttpServer::run_accept()
             }
             continue;
         }
-        std::thread(&HttpServer::handle_client, this, fd).detach();
+        std::thread t(&HttpServer::handle_client, this, fd);
+        std::lock_guard<std::mutex> lock(client_threads_mtx_);
+        client_threads_.push_back(std::move(t));
     }
 }
 

@@ -15,6 +15,8 @@ bool g_inited = false;
  * → 可 A 的 DONE 随后会被算到 B 头上，A 的界面永远不复位。 */
 ui_clean_owner_t g_pending = UI_CLEAN_OWNER_NONE;
 ui_clean_owner_t g_active  = UI_CLEAN_OWNER_NONE;
+/** Close 发出时记下的 owner：受理前就点停时 g_active 可能还是 NONE。 */
+ui_clean_owner_t g_stop_owner = UI_CLEAN_OWNER_NONE;
 
 /** 跨 `lv_async_call` 传事件用；指针塞不进那个 void* 之外的东西，只能堆上过一手。 */
 struct EventCtx {
@@ -75,11 +77,26 @@ void ui_clean_state_init(void)
 
     proxy.register_clean_test_done([](const middleware::CleanTestDonePayload &rsp) {
         /* 协议约定：result_code 只表示结束类型，00/01/02 都代表流程已结束，
-         * UI 一律按正常完成处理，故不读 payload。 */
+         * UI 一律按正常完成处理，故不读 payload。用户 Close(0xfe) Media 不发本消息。 */
         (void)rsp;
         const ui_clean_owner_t owner = g_active;
         g_active = UI_CLEAN_OWNER_NONE;
-        post(UI_CLEAN_EVT_DONE, owner);
+        g_stop_owner = UI_CLEAN_OWNER_NONE;
+        if(owner != UI_CLEAN_OWNER_NONE) {
+            post(UI_CLEAN_EVT_DONE, owner);
+        }
+    });
+
+    proxy.register_clean_test_close_rsp([]() {
+        const ui_clean_owner_t owner =
+            (g_active != UI_CLEAN_OWNER_NONE) ? g_active :
+            (g_stop_owner != UI_CLEAN_OWNER_NONE) ? g_stop_owner : g_pending;
+        g_active = UI_CLEAN_OWNER_NONE;
+        g_pending = UI_CLEAN_OWNER_NONE;
+        g_stop_owner = UI_CLEAN_OWNER_NONE;
+        if(owner != UI_CLEAN_OWNER_NONE) {
+            post(UI_CLEAN_EVT_STOPPED, owner);
+        }
     });
 }
 
@@ -105,9 +122,20 @@ void ui_clean_state_request(ui_clean_owner_t owner, const char *job_name)
         return;
     }
     g_pending = owner;
+    g_stop_owner = UI_CLEAN_OWNER_NONE;
     const bool record = (owner == UI_CLEAN_OWNER_PRINT_RESULT);
     /* 宽/高/帧率一律 0 = 跟随 Camera 当前预览参数；两个发起方都没有自己的取值需求。 */
     ui::UiMsgProxy::instance().send_clean_test_start(job_name, 0, 0, 0, record);
+}
+
+void ui_clean_state_stop(void)
+{
+    if(g_active != UI_CLEAN_OWNER_NONE) {
+        g_stop_owner = g_active;
+    } else if(g_pending != UI_CLEAN_OWNER_NONE) {
+        g_stop_owner = g_pending;
+    }
+    ui::UiMsgProxy::instance().send_clean_test_close();
 }
 
 ui_clean_owner_t ui_clean_state_active_owner(void)

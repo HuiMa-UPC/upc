@@ -152,14 +152,9 @@
 /* -------------------------------------------------------------------------- */
 /* 门控                                                                         */
 /* -------------------------------------------------------------------------- */
-/** 门控：0=保持旧占位（直接通过）；1=走真实串口门控流程 */
+/** 门控：0=保持旧占位（直接通过）；1=走真实串口开门 + PM2.5/清粉流程 */
 #ifndef GLAVO_DOOR_REAL_OPEN_ENABLE
 #define GLAVO_DOOR_REAL_OPEN_ENABLE  0
-#endif
-
-/** 关门检测：0=保持旧占位（直接判已关）；1=按传感器上报外门锁状态判定 */
-#ifndef GLAVO_DOOR_REAL_CLOSE_CHECK_ENABLE
-#define GLAVO_DOOR_REAL_CLOSE_CHECK_ENABLE  0
 #endif
 
 /** 真实开门请求等待 MCU 结果超时（毫秒） */
@@ -172,13 +167,15 @@
 /* -------------------------------------------------------------------------- */
 /** 舱内 PMSA003-A */
 #ifndef GLAVO_PM_CABIN_UART
-#define GLAVO_PM_CABIN_UART  "/dev/ttyS0"
+// #define GLAVO_PM_CABIN_UART  "/dev/ttyS0"
+#define GLAVO_PM_CABIN_UART  "/dev/ttyS5"
 #endif
 /**
  * 舱外 PMSA003-A
  */
 #ifndef GLAVO_PM_OUTDOOR_UART
-#define GLAVO_PM_OUTDOOR_UART  "/dev/ttyS5"
+// #define GLAVO_PM_OUTDOOR_UART  "/dev/ttyS5"
+#define GLAVO_PM_OUTDOOR_UART  "/dev/ttyS0"
 #endif
 #ifndef GLAVO_PM_VALVE_SYSFS
 #define GLAVO_PM_VALVE_SYSFS  "/sys/class/leds/fa_valve/brightness"
@@ -279,6 +276,10 @@
 /** SPI 灯效板（WS，40 颗） */
 #ifndef GLAVO_SPI_STATUS_LED_DEV
 #define GLAVO_SPI_STATUS_LED_DEV  "/dev/spidev1.0"
+#endif
+/** SPI PM2.5 小屏 fbdev name（扫 /sys/class/graphics/fbN/name，勿写死 fb0） */
+#ifndef GLAVO_SPI_PM25_LCD_FB_NAME
+#define GLAVO_SPI_PM25_LCD_FB_NAME  "st7735rdrmfb"
 #endif
 
 /* -------------------------------------------------------------------------- */

@@ -1,5 +1,6 @@
 #include "h264_stream_encoder.hpp"
 
+#include "nv12_copy.hpp"
 #include "rs_log.hpp"
 
 #include <algorithm>
@@ -156,36 +157,6 @@ bool H264StreamEncoder::scan_packet(const uint8_t* annexb, size_t len)
 }
 
 /**
- * 将带 stride 的 NV12 平面拷贝为紧凑 NV12（Y 后接 UV，stride==width）。
- * stride==width 时整块 memcpy；否则逐行拷贝去掉行尾 padding。
- */
-void H264StreamEncoder::copy_nv12_tight(uint8_t* dst, const uint8_t* src_y,
-                                        const uint8_t* src_uv, uint32_t src_stride_y,
-                                        uint32_t width, uint32_t height)
-{
-    if(!dst || !src_y || !src_uv || src_stride_y == 0 || width == 0 || height == 0) {
-        return;
-    }
-    const size_t y_size = static_cast<size_t>(width) * height;
-    uint8_t* dst_uv = dst + y_size;
-    if(src_stride_y == width) {
-        std::memcpy(dst, src_y, y_size);
-        std::memcpy(dst_uv, src_uv, y_size / 2u);
-        return;
-    }
-    for(uint32_t row = 0; row < height; ++row) {
-        std::memcpy(dst + static_cast<size_t>(row) * width,
-                    src_y + static_cast<size_t>(row) * src_stride_y,
-                    width);
-    }
-    for(uint32_t row = 0; row < height / 2u; ++row) {
-        std::memcpy(dst_uv + static_cast<size_t>(row) * width,
-                    src_uv + static_cast<size_t>(row) * src_stride_y,
-                    width);
-    }
-}
-
-/**
  * 注册一路 sink。
  *
  * 首个 sink 打开 MPP，后续 sink 沿用同一路码流。
@@ -315,7 +286,7 @@ void H264StreamEncoder::on_frame_nv12(const uint8_t* src_y, const uint8_t* src_u
             ++dropped_;
         }
         pending_nv12_.resize(static_cast<size_t>(w) * h * 3u / 2u);
-        copy_nv12_tight(pending_nv12_.data(), src_y, src_uv, stride_y, w, h);
+        upc::copy_nv12_tight(pending_nv12_.data(), src_y, src_uv, stride_y, w, h);
         pending_w_ = w;
         pending_h_ = h;
         /* 采帧时刻打戳，而非编码完成时刻：后者会把编码耗时的抖动直接

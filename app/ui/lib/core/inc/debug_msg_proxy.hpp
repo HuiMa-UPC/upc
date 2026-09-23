@@ -27,6 +27,7 @@ using DebugCleanRecordCb = std::function<void(bool)>;
 using DebugEnvSimCb = std::function<void(bool)>;
 using DebugEnvSimPowderCb = std::function<void(bool)>;
 using DebugSkipO2GateCb = std::function<void(bool)>;
+using DebugSkipOuterDoorCb = std::function<void(bool)>;
 using DebugO2CalibCb =
     std::function<void(const middleware::DebugO2CalibRspPayload&)>;
 using DebugFirstLayerVisualCheckCb = std::function<void(bool)>;
@@ -96,6 +97,8 @@ public:
     void request_env_sim_powder_state();
     void send_skip_o2_gate_set(bool on);
     void request_skip_o2_gate_state();
+    void send_skip_outer_door_set(bool on);
+    void request_skip_outer_door_state();
     /** 空气单点氧标定；ref_o2_percent≤0 用后端默认 20.9 */
     void send_o2_calib(float ref_o2_percent = 0.f);
     void request_o2_calib_state();
@@ -116,6 +119,8 @@ public:
     void send_status_led_set(bool force, uint8_t color,
                              uint8_t r = 0, uint8_t g = 0, uint8_t b = 0);
     void request_status_led_state();
+    void send_spi_pm25_lcd_test_set(bool on);
+    void request_spi_pm25_lcd_test_state();
     void send_height_calib_start(float start_mm, float end_mm, float step_mm,
                                  const char* lut_path);
     /** 调试页 Test image：红光循环打印 /userdata/test/test.gcode */
@@ -136,6 +141,7 @@ public:
     void register_env_sim(DebugEnvSimCb cb);
     void register_env_sim_powder(DebugEnvSimPowderCb cb);
     void register_skip_o2_gate(DebugSkipO2GateCb cb);
+    void register_skip_outer_door(DebugSkipOuterDoorCb cb);
     void register_o2_calib(DebugO2CalibCb cb);
     void register_first_layer_visual_check(DebugFirstLayerVisualCheckCb cb);
     void register_optical_path_check(DebugOpticalPathCheckCb cb);
@@ -143,6 +149,7 @@ public:
     void register_soc_led(DebugSocLedCb cb);
     void register_cabin_pm_valve(DebugCabinPmValveCb cb);
     void register_status_led(DebugStatusLedCb cb);
+    void register_spi_pm25_lcd_test(DebugEnvSimCb cb);
     /** 风机实测状态：MCU V4 EXT 帧周期上报，无查询语义（不配 request_） */
     void register_fan_state(DebugFanStateCb cb);
     void register_test_image(DebugTestImageCb cb);
@@ -197,6 +204,7 @@ private:
     DebugEnvSimCb env_sim_cb_;
     DebugEnvSimPowderCb env_sim_powder_cb_;
     DebugSkipO2GateCb skip_o2_gate_cb_;
+    DebugSkipOuterDoorCb skip_outer_door_cb_;
     DebugO2CalibCb o2_calib_cb_;
     DebugFirstLayerVisualCheckCb first_layer_visual_check_cb_;
     DebugOpticalPathCheckCb optical_path_check_cb_;
@@ -204,6 +212,7 @@ private:
     DebugSocLedCb soc_led_cb_;
     DebugCabinPmValveCb cabin_pm_valve_cb_;
     DebugStatusLedCb status_led_cb_;
+    DebugEnvSimCb spi_pm25_lcd_test_cb_;
     DebugFanStateCb fan_state_cb_;
     DebugTestImageCb test_image_cb_;
     DebugGalvoPointTestCb galvo_point_test_cb_;

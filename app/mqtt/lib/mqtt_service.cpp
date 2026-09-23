@@ -943,6 +943,8 @@ void MqttService::shutdown()
         std::lock_guard<std::mutex> lock(ota_mtx_);
         ota_download_running_ = false;
     }
+    /* 先唤醒可能卡在 wait_apply_ota 的下载线程，再 join，避免 shutdown 本身挂死。 */
+    cancel_apply_ota_waits();
     if(ota_download_thread_.joinable()) {
         ota_download_thread_.join();
     }
