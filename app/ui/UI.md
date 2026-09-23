@@ -701,7 +701,8 @@ ACTIVE + OWNER_TASK 这一档最容易漏：激光器 1301、各轴 1203~1230 �
   `lv_obj_update_layout()` 再按 `lv_obj_get_scroll_bottom()` 夹着滚回去。
   `lv_obj_clean` 会把滚动位置清零，不接这一手删一条就弹回顶部；夹取也不能省——
   删掉末尾几条后列表变矮，旧滚动量越界会停在空白上。两页都是这么做的；
-- **三 Tab + All read 行**（稿 6230:89689）：`All` / `Device` / `System`，字号 24，
+- **四 Tab + All read 行**（稿 6230:89689 的三个 + 稿外临时加的 `Unresolved`）：
+  `All` / `Unresolved` / `Device` / `System`，字号 24，
   **没有下划线**——选中与否只差不透明度（选中 `user_light_text` 实色、未选中同色 50%）。
   共享构造 `ui_user_make_tab_item` 仍会建出那条下划线，建完永久藏起来，与历史页同一
   处理。分档判据是**码段**：`DeviceEventCode::UiWearMask`(512) 以上是「UI 本地事件，
@@ -709,6 +710,17 @@ ACTIVE + OWNER_TASK 这一档最容易漏：激光器 1301、各轴 1203~1230 �
   （码 <512），**System** = 前端本地提示（512..999）。稿上 System 那栏画的是 OTA 升级、
   账号共享，**本工程还没有这类数据源**，所以该 Tab 目前只有打印结束那两条本地提示，
   多数时候是空的。切 Tab 回列表顶部；
+- **`Unresolved` 是 RTC 没配好期间的临时页签**（稿上没有）：开机到 NTP 对上之前，
+  `ui_alarm_state` 用 `time()` 记下的报警时刻是 1970，All 按 `sort_ts` 倒序会把它沉到
+  最底、单列一个 "Jan 01, 1970" 组。这个页签只收处理完会自己离开的两类——当前
+  CONDITION（ACTIVE / RTN_LATCHED）与前端本地提示（512..999）；后端设备事件不收
+  （Glavo 只发 `active=true`、从不撤回，收进来就永远挂着），报警历史与 EVENT 已经结束，
+  也不收。排序按 store 的到达序号 `seq` 新→旧（与铃铛面板同一口径，报警再次触发会刷新），
+  **不看墙钟**；当前报警的 `seq` 取 store 里同码镜像的，镜像被 evict 挤掉时按 0 排到最后。
+  不分日期组，顶上一行 "N unresolved" 总数——它借组标题的样式和 margin_top，不放这一行
+  首卡会贴住顶栏。与 Device / System 一样只是筛选，条目在 All 里照样出现。实现见
+  `collect_unresolved()`。同页的时间格式化顺带把早于 2024-01-01 的时刻一律当未知
+  （`ts_known()`）：卡片右侧留空、抽屉里显示 `--`，不再出 "08:00" 这种假时间；
 - 右上那枚 `All read`（稿 6255:95773）是白底卡片钮（圆角 16 / 内距 16-24 / 字号 22），
   **目前只画不接逻辑**：「进过一次消息页就全部标已读」的现有语义还在
   `page_user_message_refresh()` 里，这枚钮的点击语义待产品定，定了再挂回调；
@@ -723,10 +735,11 @@ ACTIVE + OWNER_TASK 这一档最容易漏：激光器 1301、各轴 1203~1230 �
   **单行文本的行盒高仍追不平**（稿 28 vs Montserrat 22），卡片因此比稿矮 10，列表往下
   会累积漂移——这是字族差异的直接后果，headless 量过，接受；
 - **分页：初始只建最近 10 条 + 底部「Load More」**（稿 6091:13921 的 `查看更多`）。
-  `collect_items()` 已按 `sort_ts` 降序，所以取前 `g_visible_limit` 条就是
-  最近的那些；每点一次 Load More 加 `kRowsPerPage`(10) 后原地重建，放完了就不建这一行、
-  等于自动隐藏。截断可能落在某个日期组中间，但分组标题是"组名变了才插"，最后一组不完整
-  也不会漏标题；重建末尾那段 `keep_scroll` 恢复让展开时视口不跳、新内容出现在下方。
+  `collect_items()` 已按 `sort_ts` 降序（Unresolved 页签按 `seq` 降序），所以取前
+  `g_visible_limit` 条就是最近的那些；每点一次 Load More 加 `kRowsPerPage`(10) 后
+  原地重建，放完了就不建这一行、等于自动隐藏。截断可能落在某个日期组中间，但分组标题是
+  "组名变了才插"，最后一组不完整也不会漏标题；重建末尾那段 `keep_scroll` 恢复让展开时
+  视口不跳、新内容出现在下方。
 
   **`g_visible_limit` 的重置只放在切 Tab 与进页，绝不能放进 `rebuild_list()`**：
   observer 的 `rebuild_async()` 也走 `rebuild_list()`，放进去的话用户展开到第 50 条时
@@ -1020,7 +1033,7 @@ pending 自动解除——正好顺带验超时路径。
 | `user_monitor` | `page_user_monitor.*` | 监控页（侧栏第 2 格，浅色档）：左摄像头 + 右栏三 Tab（Job / Status / Manual）+ 全屏切换 + 取件弹窗。打印流程的落点。见「监控页」一节 |
 | `user_history` | `page_user_history.*` | 打印历史：三 Tab + Storage 条 + 日期分组卡片 + 管理态批量删除 + 左滑删除 |
 | `user_settings` | `page_user_settings.*` | 设置（浅色档）：8 项左导航 + 右栏白卡版式。Network（Wi-Fi 开关/列表/子页）、Display & Brightness（背光滑条 + 熄屏选择子页，占位）、Storage（容量 + 格式化 + 文件管理，仅前端）、About（版本 + Galvo/MCU OTA）、Debug 密码弹窗。按稿 6089:11322 / 6235:91450 / 6240:92007 / 6251:94362 实现 |
-| `user_message` | `page_user_message.*` | 消息中心（浅色档）：三 Tab + All read 浮层顶栏 + 日期分组混排列表（MCU 报警 + 设备事件）+ 初始 10 条与底部 Load More + 左滑删除历史 + 右侧 632 详情抽屉（Reset 三态）。按稿 6230:89616 / 6091:13405 / 6091:13612 / 6091:13847 实现 |
+| `user_message` | `page_user_message.*` | 消息中心（浅色档）：四 Tab（含临时的 Unresolved，按到达序汇总未处理报警）+ All read 浮层顶栏 + 日期分组混排列表（MCU 报警 + 设备事件）+ 初始 10 条与底部 Load More + 左滑删除历史 + 右侧 632 详情抽屉（Reset 三态）。按稿 6230:89616 / 6091:13405 / 6091:13612 / 6091:13847 实现 |
 | `user_debug` | `page_user_debug.*` | 调试控制台；Move 页振镜卡 Abs X/Y + Move 走 `send_galvo_abs_pos`；Other 页按 Process / Cabin / Print Gates / Media & Sim / Inject 分组。`Galvo Point Test` 在 Print Gates，按当前校准表依次显示中心和四角红光点，与正式打印及 Test image 双向互斥。O2 Calib 在左列：输入参考浓度后点圆钮写 `/userdata/CAL/o2_cal.json`；失败 toast 提示、标签仍显示原 K。Media & Sim 的 **Sys HUD** 打开后，`ui_sys_hud` 在 `lv_layer_sys` 右上角红字显示 CPU 温 / 整机与本进程占用 / 内存（`upc_sys_monitor_sample` 读本机 `/proc` 与 thermal sysfs，不经 IPC），不进布局、不可点，仅本次运行。顶部传感器条末格 **Zone4** 进页后约 1Hz 读 `thermal_zone4`（同 `sample().zone4_temp_c`），退页停定时器 |
 | `user_timelapse` | `page_user_timelapse.*` | 延时摄影播放器（隐藏页，历史缩略图进入；全屏 `lv_layer_top`） |
 
