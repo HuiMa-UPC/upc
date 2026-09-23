@@ -116,6 +116,8 @@ public:
     void send_status_led_set(bool force, uint8_t color,
                              uint8_t r = 0, uint8_t g = 0, uint8_t b = 0);
     void request_status_led_state();
+    void send_spi_pm25_lcd_test_set(bool on);
+    void request_spi_pm25_lcd_test_state();
     void send_height_calib_start(float start_mm, float end_mm, float step_mm,
                                  const char* lut_path);
     /** 调试页 Test image：红光循环打印 /userdata/test/test.gcode */
@@ -143,6 +145,7 @@ public:
     void register_soc_led(DebugSocLedCb cb);
     void register_cabin_pm_valve(DebugCabinPmValveCb cb);
     void register_status_led(DebugStatusLedCb cb);
+    void register_spi_pm25_lcd_test(DebugEnvSimCb cb);
     /** 风机实测状态：MCU V4 EXT 帧周期上报，无查询语义（不配 request_） */
     void register_fan_state(DebugFanStateCb cb);
     void register_test_image(DebugTestImageCb cb);
@@ -204,6 +207,7 @@ private:
     DebugSocLedCb soc_led_cb_;
     DebugCabinPmValveCb cabin_pm_valve_cb_;
     DebugStatusLedCb status_led_cb_;
+    DebugEnvSimCb spi_pm25_lcd_test_cb_;
     DebugFanStateCb fan_state_cb_;
     DebugTestImageCb test_image_cb_;
     DebugGalvoPointTestCb galvo_point_test_cb_;

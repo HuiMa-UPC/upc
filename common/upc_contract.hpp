@@ -495,6 +495,8 @@ enum class MsgType : uint32_t {
     UI_Debug_Status_Led_Set_Ntf,        /**< DebugStatusLedPayload：强制 SPI 灯板颜色（仅本次运行，绕开 MCU 版本门） */
     UI_Debug_Status_Led_Get_Ntf,        /**< Empty：查询当前灯板强制态 */
     UI_Debug_Alarm_Inject_Ntf,          /**< AlarmReportPayload：调试页 Alarm Inject，Glavo 只转发 MQTT（不上 UI、不改快照） */
+    UI_Debug_Spi_Pm25_Lcd_Set_Ntf,      /**< DebugOnOffPayload：SPI 小屏周期刷测试色（仅本次运行，默认关） */
+    UI_Debug_Spi_Pm25_Lcd_Get_Ntf,      /**< Empty：查询 SPI 小屏测试刷屏开关 */
 
     // ---- GLAVO → UI：调试页状态回读（按模块拆分） ----
     GLAVO_Debug_Sensor_Ntf = 0x1200, /**< DebugSensorPayload：调试顶栏传感器（舱内/滤芯氧 + 舱外/舱内 PM） */
@@ -521,6 +523,7 @@ enum class MsgType : uint32_t {
     GLAVO_Debug_O2_Calib_Ntf,           /**< DebugO2CalibRspPayload：当前 K 回读（Get，ok=1 且未改盘） */
     GLAVO_Debug_Status_Led_Ntf,         /**< DebugStatusLedPayload：灯板强制态回读 */
     GLAVO_Debug_Fan_Ntf,                /**< DebugFanStatePayload：风机实测转速/故障/状态（V4 EXT 帧，约 1s） */
+    GLAVO_Debug_Spi_Pm25_Lcd_Ntf,       /**< DebugOnOffPayload：SPI 小屏测试刷屏开关状态 */
 
     // ---- UI ↔ GLAVO：网络 / WiFi（ConnMan 后端） ----
     UI_Wifi_Enable_Req = 0x1300, /**< WifiEnableReqPayload：开/关 WiFi */

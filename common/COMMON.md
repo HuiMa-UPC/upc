@@ -291,6 +291,9 @@ scripts/rongsu.sh start   # glavo + rongsu_camera → ui
 | `UI_Debug_Status_Led_Set_Ntf` | — | UI→Glavo | `DebugStatusLedPayload` | `send_status_led_set` | 调试页灯板验色：强制 SPI 灯板单色（`color=Raw` 时用 payload 裸 RGB）；**绕开 MCU major≥4 版本门**且每次必发一帧；`force=0` 释放接管回自动推导 |
 | `UI_Debug_Status_Led_Get_Ntf` | — | UI→Glavo | Empty | `request_status_led_state` | 查询当前灯板强制态 |
 | `GLAVO_Debug_Status_Led_Ntf` | — | Glavo→UI | `DebugStatusLedPayload` | `register_status_led` | 灯板强制态回读（Set/Get 后各回一次） |
+| `UI_Debug_Spi_Pm25_Lcd_Set_Ntf` | — | UI→Glavo | `DebugOnOffPayload` | `send_spi_pm25_lcd_test_set` | 调试页：SPI 小屏周期整屏刷测试色（红/绿/蓝/白/黑，约 500ms，走 fbdev `pwrite`）；仅本次运行，默认关 |
+| `UI_Debug_Spi_Pm25_Lcd_Get_Ntf` | — | UI→Glavo | Empty | `request_spi_pm25_lcd_test_state` | 查询 SPI 小屏测试刷屏开关 |
+| `GLAVO_Debug_Spi_Pm25_Lcd_Ntf` | — | Glavo→UI | `DebugOnOffPayload` | `register_spi_pm25_lcd_test` | 回读 SPI 小屏测试刷屏开关 |
 | `GLAVO_Debug_Fan_Ntf` | — | Glavo→UI | `DebugFanStatePayload` | `register_fan_state` | 风机实测转速/母线电压电流/故障码/状态机；MCU V4 EXT 帧（TLV 0x06，默认 1000ms）驱动，**仅固件 major≥4**；`valid=0`（链路异常）时各值无意义，UI 显示 `--` |
 | `UI_Debug_Alarm_Inject_Ntf` | — | UI→Glavo | `AlarmReportPayload` | `send_alarm_inject` | 调试页 **Alarm Inject**：Glavo 转成 `GLAVO_Alarm_Report_Ntf` **只发 MQTT**（不上 UI，避免与本地 `[SIM]` 双弹；不改 MCU 快照）。关开关对 CONDITION 发 `state_mask=0` 模拟解除 |
 | `UI_Debug_FirstLayer_Visual_Check_Set_Ntf` | — | UI→Glavo | `DebugOnOffPayload` | `send_first_layer_visual_check_set` | 调试页开关：首层视觉检测（仅本次运行，默认关） |

@@ -2,6 +2,7 @@
 #include "protocol.hpp"
 #include "soc_sensors.hpp"
 #include "spi_status_led.hpp"
+#include "spi_pm25_lcd.hpp"
 #include "wifi_manager.hpp"
 #include "print_job_state.hpp"
 #include "print_video_notify.hpp"
@@ -1193,6 +1194,7 @@ void McuLink::arm_soc_peripherals()
         env_cache_.sensor_v4 = true;
     }
     SpiStatusLed::instance().set_enabled(true);
+    SpiPm25Lcd::instance().start();
     if(SocSensors::instance().ensure_cabin_leds_default_on()) {
         publish_debug_soc_led_ntf();
     }
@@ -1937,6 +1939,9 @@ void McuLink::poll_soc_env_tick()
             static_cast<double>(soc.pm25_outdoor),
             static_cast<double>(soc.pm25_cabin));
     }
+
+    /* SPI 小屏常显舱外 PM；模块内同值去重，约 1Hz 量级即可 */
+    SpiPm25Lcd::instance().update(soc.pm25_outdoor);
 }
 
 void McuLink::poll_env_sim_tick()
@@ -2013,6 +2018,9 @@ void McuLink::poll_env_sim_tick()
     }
 
     publish_env_update_ntf();
+
+    /* Env Sim 时 poll_soc_env_tick 直接 return，小屏改走这里 */
+    SpiPm25Lcd::instance().update(pm25);
 
     middleware::DebugSensorPayload dbg{};
     dbg.oxygen_percent = oxygen;

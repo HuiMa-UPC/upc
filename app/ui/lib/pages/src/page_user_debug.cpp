@@ -152,6 +152,8 @@ lv_obj_t *g_status_led_rgb_ta[3] = {};      /**< R/G/B 输入框（0-255） */
 lv_obj_t *g_status_led_rgb_lbl = nullptr;   /**< 裸 RGB 当前生效值回显 */
 lv_obj_t *g_status_led_auto_btn = nullptr;  /**< 释放强制接管，回自动推导 */
 lv_obj_t *g_status_led_auto_lbl = nullptr;
+lv_obj_t *g_spi_pm25_lcd_btn = nullptr;     /**< SPI 小屏测试刷屏 */
+lv_obj_t *g_spi_pm25_lcd_state_lbl = nullptr;
 lv_obj_t *g_local_rtsp_btn = nullptr;       /**< 其他控制：本地 RTSP Server 开关按钮 */
 lv_obj_t *g_local_rtsp_state_lbl = nullptr; /**< 其他控制：本地 RTSP Server 状态文本 */
 bool g_env_sim_on = false;                  /**< 缓存 Env Sim 回读状态，用于门控 Powder Sim 按钮 */
@@ -562,6 +564,10 @@ void on_tab_changed(lv_event_t *e)
     set_vis(g_tab2, sel == 1);
     set_vis(g_tab3, sel == 2);
     set_vis(g_tab4, sel == 3);
+    /* Other 含六路舱灯：切进来再 Get 一次，对齐监控页总开关改过的 mask */
+    if(sel == 1) {
+        ui::DebugMsgProxy::instance().request_soc_led_state();
+    }
 }
 
 /*
@@ -1488,6 +1494,8 @@ void on_dbg_toggle(lv_event_t *e)
         /* 右上角红字 Host 资源蒙版（本机 /proc，纯 UI，仅本次运行）。 */
         case 19: ui_sys_hud_set_enabled(on);
                  break;
+        case 20: proxy.send_spi_pm25_lcd_test_set(on); /* SPI 小屏周期刷测试色 */
+                 break;
         default: break;
     }
 }
@@ -2192,6 +2200,9 @@ void build_other_switches_column(lv_obj_t *parent)
     make_one_shot_action(rowSled, "LED Auto", "Active", LV_SYMBOL_REFRESH,
                          on_status_led_auto, &g_status_led_auto_btn,
                          &g_status_led_auto_lbl);
+    lv_obj_t *rowSled2 = make_switch_grid_row(sled);
+    make_dbg_toggle(rowSled2, "SPI LCD Test", "On", "Off", LV_SYMBOL_REFRESH, false,
+                    20, 0, true, 0, &g_spi_pm25_lcd_btn, &g_spi_pm25_lcd_state_lbl);
 
     /* ---- 打印门控 / 视觉 ---- */
     lv_obj_t *gate = make_section_card(col, "Print Gates");
@@ -2993,6 +3004,21 @@ void bind_debug_callbacks()
         }
     });
 
+    proxy.register_spi_pm25_lcd_test([](bool on) {
+        if(g_spi_pm25_lcd_btn) {
+            if(on) {
+                lv_obj_add_state(g_spi_pm25_lcd_btn, LV_STATE_CHECKED);
+            } else {
+                lv_obj_clear_state(g_spi_pm25_lcd_btn, LV_STATE_CHECKED);
+            }
+        }
+        if(g_spi_pm25_lcd_state_lbl) {
+            lv_label_set_text(g_spi_pm25_lcd_state_lbl, on ? "On" : "Off");
+            lv_obj_set_style_text_color(g_spi_pm25_lcd_state_lbl,
+                                        on ? user_color_accent : user_color_text_dim, 0);
+        }
+    });
+
     /* 风机实测：MCU V4 EXT 帧驱动（约 1s），旧固件不发该帧，行保持 "--" */
     proxy.register_fan_state([](const middleware::DebugFanStatePayload &p) {
         apply_fan_state(p);
@@ -3110,6 +3136,8 @@ void reset_globals()
     g_status_led_rgb_lbl = nullptr;
     g_status_led_auto_btn = nullptr;
     g_status_led_auto_lbl = nullptr;
+    g_spi_pm25_lcd_btn = nullptr;
+    g_spi_pm25_lcd_state_lbl = nullptr;
     g_status_led_force = false;
     g_status_led_color = 0;
     g_height_calib_lbl = nullptr;
@@ -3145,6 +3173,7 @@ void page_user_debug_refresh(bool /*force*/)
     ui::DebugMsgProxy::instance().request_soc_led_state();
     ui::DebugMsgProxy::instance().request_cabin_pm_valve_state();
     ui::DebugMsgProxy::instance().request_status_led_state();
+    ui::DebugMsgProxy::instance().request_spi_pm25_lcd_test_state();
     ui::DebugMsgProxy::instance().request_test_image_state();
     ui::DebugMsgProxy::instance().request_galvo_point_test_state();
     ui::DebugMsgProxy::instance().request_local_rtsp_state();
@@ -3175,6 +3204,7 @@ void page_user_debug_exit(void)
     proxy.register_soc_led(nullptr);
     proxy.register_cabin_pm_valve(nullptr);
     proxy.register_status_led(nullptr);
+    proxy.register_spi_pm25_lcd_test(nullptr);
     proxy.register_fan_state(nullptr);
     proxy.register_height_calib_progress(nullptr);
     proxy.register_test_image(nullptr);

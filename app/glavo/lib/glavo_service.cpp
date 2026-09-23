@@ -69,6 +69,7 @@
 #include "mcu_link.hpp"
 #include "soc_sensors.hpp"
 #include "spi_status_led.hpp"
+#include "spi_pm25_lcd.hpp"
 #include "print_job_state.hpp"
 #include "msg_runtime.hpp"
 #include "buffer_pool.hpp"
@@ -876,6 +877,8 @@ bool GlavoService::start()
         middleware::MsgType::UI_Debug_Cabin_Pm_Valve_Get_Ntf,
         middleware::MsgType::UI_Debug_Status_Led_Set_Ntf,
         middleware::MsgType::UI_Debug_Status_Led_Get_Ntf,
+        middleware::MsgType::UI_Debug_Spi_Pm25_Lcd_Set_Ntf,
+        middleware::MsgType::UI_Debug_Spi_Pm25_Lcd_Get_Ntf,
         middleware::MsgType::APP_Visual_OpticalPath_Point_Check_Rsp,
         middleware::MsgType::APP_Visual_Laser_Spot_Measure_Rsp,
         middleware::MsgType::UI_Glavo_Height_Calib_Start_Req,
@@ -908,6 +911,7 @@ bool GlavoService::start()
     publish_debug_cabin_pm_valve_state();
     publish_debug_test_image_state();
     publish_debug_galvo_point_test_state();
+    publish_debug_spi_pm25_lcd_state();
     return true;
 }
 
@@ -1412,6 +1416,12 @@ void GlavoService::handle_message(const middleware::Message& msg)
             break;
         case middleware::MsgType::UI_Debug_Status_Led_Get_Ntf:
             handle_debug_status_led_get(msg);
+            break;
+        case middleware::MsgType::UI_Debug_Spi_Pm25_Lcd_Set_Ntf:
+            handle_debug_spi_pm25_lcd_set(msg);
+            break;
+        case middleware::MsgType::UI_Debug_Spi_Pm25_Lcd_Get_Ntf:
+            handle_debug_spi_pm25_lcd_get(msg);
             break;
         case middleware::MsgType::APP_Visual_OpticalPath_Point_Check_Rsp:
             handle_visual_optical_path_point_rsp(msg);
@@ -3423,6 +3433,39 @@ void GlavoService::handle_debug_status_led_get(const middleware::Message& msg)
 {
     (void)msg;
     publish_debug_status_led_state();
+}
+
+void GlavoService::publish_debug_spi_pm25_lcd_state()
+{
+    middleware::DebugOnOffPayload p{};
+    p.on = SpiPm25Lcd::instance().test_pattern_on() ? 1 : 0;
+    middleware::Message ntf(
+        middleware::MsgType::GLAVO_Debug_Spi_Pm25_Lcd_Ntf,
+        middleware::ModuleId::APP_GLAVO,
+        middleware::ModuleId::UI);
+    ntf.payload = middleware::MsgPayload::from_bytes(
+        reinterpret_cast<const uint8_t*>(&p), sizeof(p));
+    if(!publish_async(ntf)) {
+        UPC_LOG_GLAVO_SERVICE(Warn, "spi pm25 lcd test state publish failed");
+    }
+}
+
+void GlavoService::handle_debug_spi_pm25_lcd_set(const middleware::Message& msg)
+{
+    middleware::DebugOnOffPayload p{};
+    if(!read_inline_pod(msg.payload, p)) {
+        return;
+    }
+    SpiPm25Lcd::instance().set_test_pattern(p.on != 0);
+    UPC_LOG_GLAVO_SERVICE(Info, "debug spi pm25 lcd test on=%u",
+                          static_cast<unsigned>(p.on));
+    publish_debug_spi_pm25_lcd_state();
+}
+
+void GlavoService::handle_debug_spi_pm25_lcd_get(const middleware::Message& msg)
+{
+    (void)msg;
+    publish_debug_spi_pm25_lcd_state();
 }
 
 /**

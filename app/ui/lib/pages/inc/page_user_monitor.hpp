@@ -26,8 +26,8 @@ lv_obj_t *page_user_monitor_create(lv_obj_t *parent);
 void page_user_monitor_refresh(bool force);
 /**
  * 离页收尾。两件事：
- *  - 清掉 `DebugMsgProxy` 的 axis / device 两个**单槽**回调（Manual 页在用，调试页
- *    也在用同一组）。不清的话从本页切去调试页，那边的三轴位置与设备行不再刷新；
+ *  - 清掉 `DebugMsgProxy` 的 axis / device / soc_led **单槽**回调（Manual 照明与轴
+ *    读数在用，调试页也在用同一组）。不清的话从本页切去调试页，那边会静默失联；
  *  - 待机态停掉摄像头预览。**打印态不停**——打印中用户可能切去别的页看消息，
  *    回来时不该黑一下，且结果页要停在最后一帧上。
  */

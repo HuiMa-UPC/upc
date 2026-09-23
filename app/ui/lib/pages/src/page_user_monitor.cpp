@@ -49,8 +49,9 @@
  * 1. **本页不显示常驻设备条**（`apply_device_bar()` 里按页名排除），所以页根只要跨过
  *    `pad_left` 出血到屏幕左边缘，纵向不用抵消 `pad_top`——那个值此时已经是 0。
  * 2. **摄像头输出几何恒按全屏宽算**，见 `cam_apply_layout()`。
- * 3. **Manual 页用的是 `DebugMsgProxy` 的单槽回调**，调试页也在用同一组，所以进页注册、
- *    离页清空（`page_user_monitor_exit()`），与 `page_user_debug_exit()` 对称。
+ * 3. **Manual 页用的是 `DebugMsgProxy` 的单槽回调**（axis / device / soc_led），调试页
+ *    也在用同一组，所以进页注册、离页清空（`page_user_monitor_exit()`），与
+ *    `page_user_debug_exit()` 对称。照明钮控 SOC 六路舱灯，进页 Get mask 对齐。
  */
 
 namespace {
@@ -202,7 +203,7 @@ purify_stage_t g_purify        = PURIFY_IDLE;
 int            g_percent       = 0;
 bool           g_printing      = false;
 bool           g_fullscreen    = false;
-bool           g_light_on      = false;
+bool           g_light_on      = true;  /* 上电六路舱灯默认全开；进页 Get 再对齐 */
 bool           g_snap_pending  = false;
 bool           g_purify_busy   = false;
 bool           g_purify_done   = false;
@@ -387,23 +388,34 @@ void on_fullscreen_click(lv_event_t * /*e*/)
     apply_fullscreen();
 }
 
-void on_light_click(lv_event_t * /*e*/)
+/** 按六路舱灯 mask 刷照明钮：任一亮=开，全关=关（与调试页 Cabin LED 同源）。 */
+void apply_light_btn_from_mask(uint8_t mask)
 {
-    g_light_on = !g_light_on;
-    ui::DebugMsgProxy::instance().send_device(middleware::DebugDeviceTarget::Light,
-                                              g_light_on);
+    const bool on = (mask != 0);
+    g_light_on = on;
     if(g_light_icon) {
         lv_obj_t *img = lv_obj_get_child(g_light_icon, 0);
         if(img) {
             lv_obj_set_style_image_recolor(
-                img, g_light_on ? lv_color_hex(kLightOn) : lv_color_white(), 0);
+                img, on ? lv_color_hex(kLightOn) : lv_color_white(), 0);
         }
     }
     if(g_light_btn) {
         lv_obj_set_style_bg_color(g_light_btn,
-                                  g_light_on ? lv_color_hex(kLightOn) : lv_color_white(), 0);
-        lv_obj_set_style_bg_opa(g_light_btn, g_light_on ? LV_OPA_COVER : 38, 0);
+                                  on ? lv_color_hex(kLightOn) : lv_color_white(), 0);
+        lv_obj_set_style_bg_opa(g_light_btn, on ? LV_OPA_COVER : 38, 0);
     }
+}
+
+void on_light_click(lv_event_t * /*e*/)
+{
+    /* 舱内灯已改 SOC sysfs（调试页六路 lgt*），不再下发 MCU Device/Light */
+    const bool on = !g_light_on;
+    auto &proxy = ui::DebugMsgProxy::instance();
+    for(uint8_t i = 0; i < middleware::kDebugSocLedCount; ++i) {
+        proxy.send_soc_led_set(i, on);
+    }
+    apply_light_btn_from_mask(on ? static_cast<uint8_t>(0x3Fu) : 0u);
 }
 
 void on_snapshot_click(lv_event_t * /*e*/)
@@ -510,6 +522,8 @@ lv_obj_t *build_cam_layer(lv_obj_t *parent)
     lv_obj_set_style_text_font(g_chip_label, user_font_text_sm(), 0);
 
     g_light_btn = make_glass_btn(layer, ic_light_set, on_light_click, &g_light_icon);
+    /* 上电默认全开：建钮后先按开态画，进页 Get 再校正 */
+    apply_light_btn_from_mask(static_cast<uint8_t>(0x3Fu));
     g_snap_btn  = make_glass_btn(layer, ic_snapshot_set, on_snapshot_click, nullptr);
     g_fs_btn    = make_glass_btn(layer, ic_fullscreen_set, on_fullscreen_click, nullptr);
 
@@ -1820,14 +1834,15 @@ void on_clean_state_event(ui_clean_event_t ev, ui_clean_owner_t owner)
     }
 }
 
-/** 进页注册这一组；离页由 page_user_monitor_exit() 清掉。**四个槽都是单槽的**，
- *  调试页也在用，不清会让那边静默失联。 */
+/** 进页注册这一组；离页由 page_user_monitor_exit() 清掉。axis / device / soc_led
+ *  都是单槽，调试页也在用，不清会让那边静默失联。照明钮走 soc_led，进页再 Get。 */
 void wire_debug_proxy(bool on)
 {
     auto &proxy = ui::DebugMsgProxy::instance();
     if(!on) {
         proxy.register_axis(nullptr);
         proxy.register_device(nullptr);
+        proxy.register_soc_led(nullptr);
         return;
     }
     proxy.register_axis([](const middleware::DebugAxisStatePayload &p) {
@@ -1840,16 +1855,11 @@ void wire_debug_proxy(bool on)
         if(g_outer_door_open) {
             close_outer_door_dlg();
         }
-        const bool light = (p.light_on != 0);
-        if(light != g_light_on) {
-            g_light_on = light;
-            if(g_light_btn) {
-                lv_obj_set_style_bg_color(g_light_btn,
-                    light ? lv_color_hex(kLightOn) : lv_color_white(), 0);
-                lv_obj_set_style_bg_opa(g_light_btn, light ? LV_OPA_COVER : 38, 0);
-            }
-        }
     });
+    proxy.register_soc_led([](uint8_t mask) {
+        apply_light_btn_from_mask(mask);
+    });
+    proxy.request_soc_led_state();
 }
 
 void monitor_backend_init(void)

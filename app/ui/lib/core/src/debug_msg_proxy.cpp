@@ -170,6 +170,15 @@ void DebugMsgProxy::init()
         }));
 
     subs_.push_back(bus.subscribe(
+        middleware::MsgType::GLAVO_Debug_Spi_Pm25_Lcd_Ntf, middleware::ModuleId::UI,
+        [this](const middleware::Message& msg) {
+            middleware::DebugOnOffPayload p{};
+            if(spi_pm25_lcd_test_cb_ && read_inline_pod(msg, p)) {
+                spi_pm25_lcd_test_cb_(p.on != 0);
+            }
+        }));
+
+    subs_.push_back(bus.subscribe(
         middleware::MsgType::GLAVO_Debug_Fan_Ntf, middleware::ModuleId::UI,
         [this](const middleware::Message& msg) {
             middleware::DebugFanStatePayload p{};
@@ -556,6 +565,18 @@ void DebugMsgProxy::request_status_led_state()
     publish_empty(middleware::MsgType::UI_Debug_Status_Led_Get_Ntf);
 }
 
+void DebugMsgProxy::send_spi_pm25_lcd_test_set(bool on)
+{
+    middleware::DebugOnOffPayload p{};
+    p.on = on ? 1 : 0;
+    publish_pod(middleware::MsgType::UI_Debug_Spi_Pm25_Lcd_Set_Ntf, p);
+}
+
+void DebugMsgProxy::request_spi_pm25_lcd_test_state()
+{
+    publish_empty(middleware::MsgType::UI_Debug_Spi_Pm25_Lcd_Get_Ntf);
+}
+
 void DebugMsgProxy::send_height_calib_start(float start_mm, float end_mm,
                                             float step_mm, const char* lut_path)
 {
@@ -665,6 +686,11 @@ void DebugMsgProxy::register_cabin_pm_valve(DebugCabinPmValveCb cb)
 void DebugMsgProxy::register_status_led(DebugStatusLedCb cb)
 {
     status_led_cb_ = std::move(cb);
+}
+
+void DebugMsgProxy::register_spi_pm25_lcd_test(DebugEnvSimCb cb)
+{
+    spi_pm25_lcd_test_cb_ = std::move(cb);
 }
 
 void DebugMsgProxy::register_fan_state(DebugFanStateCb cb)

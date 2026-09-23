@@ -172,13 +172,15 @@
 /* -------------------------------------------------------------------------- */
 /** 舱内 PMSA003-A */
 #ifndef GLAVO_PM_CABIN_UART
-#define GLAVO_PM_CABIN_UART  "/dev/ttyS0"
+// #define GLAVO_PM_CABIN_UART  "/dev/ttyS0"
+#define GLAVO_PM_CABIN_UART  "/dev/ttyS5"
 #endif
 /**
  * 舱外 PMSA003-A
  */
 #ifndef GLAVO_PM_OUTDOOR_UART
-#define GLAVO_PM_OUTDOOR_UART  "/dev/ttyS5"
+// #define GLAVO_PM_OUTDOOR_UART  "/dev/ttyS5"
+#define GLAVO_PM_OUTDOOR_UART  "/dev/ttyS0"
 #endif
 #ifndef GLAVO_PM_VALVE_SYSFS
 #define GLAVO_PM_VALVE_SYSFS  "/sys/class/leds/fa_valve/brightness"
@@ -279,6 +281,10 @@
 /** SPI 灯效板（WS，40 颗） */
 #ifndef GLAVO_SPI_STATUS_LED_DEV
 #define GLAVO_SPI_STATUS_LED_DEV  "/dev/spidev1.0"
+#endif
+/** SPI PM2.5 小屏 fbdev name（扫 /sys/class/graphics/fbN/name，勿写死 fb0） */
+#ifndef GLAVO_SPI_PM25_LCD_FB_NAME
+#define GLAVO_SPI_PM25_LCD_FB_NAME  "st7735rdrmfb"
 #endif
 
 /* -------------------------------------------------------------------------- */

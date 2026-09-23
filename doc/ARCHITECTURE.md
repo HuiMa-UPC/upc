@@ -57,6 +57,7 @@
 | `McuLink` | `mcu_link.*` | TCP 运动 + 串口握手/传感器；环境量合并 `SocSensors` 本地采集 |
 | `SocSensors` | `soc_sensors.*` | 舱内外 PMSA UART、AHT20、CPM121、IIO 氧气周期采集；六路舱灯/`fa_valve` sysfs 随时可写（调试页）；与 UI 背光无关 |
 | `SpiStatusLed` | `spi_status_led.*` | SPI 灯效板状态色（空闲蓝 / 打印橙 / CONDITION 红） |
+| `SpiPm25Lcd` | `spi_pm25_lcd.*` | ST7735 SPI 小屏（fbdev `st7735rdrmfb`）常显舱外 PM2.5 |
 | `PrintJobState` | `print_job_state.*` | 打印任务计数/状态 |
 | `PrintVideoNotify` | `print_video_notify.*` | 换层 Snap / 录像会话 IPC → Media |
 | `device_config.hpp` | 头文件 | TCP/串口默认、`GLAVO_ENABLE_LAYER_SNAP` 等 |

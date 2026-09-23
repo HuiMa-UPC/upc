@@ -1336,10 +1336,11 @@ Manual，`ui_segmented_set_item_enabled()` 会自动退到第一个可用项并�
 
 #### DebugMsgProxy 的两个单槽回调要进页注册、离页清空
 
-Manual 页的三轴位置与设备开关态取自 `DebugMsgProxy` 的 `register_axis` / `register_device`，
-**这两个都是单槽的、调试页也在用同一组**。所以 `page_user_monitor_refresh()` 里注册、
-`page_user_monitor_exit()` 里置 `nullptr`，与 `page_user_debug_exit()` 对称。不清的话从本页
-切去调试页，那边的三轴位置与设备行会静默不再刷新。这条规则是从退役的控制页继承下来的。
+Manual 页的三轴位置、外门态与照明钮取自 `DebugMsgProxy` 的 `register_axis` /
+`register_device` / `register_soc_led`，**都是单槽的、调试页也在用同一组**。所以
+`page_user_monitor_refresh()` 里注册、`page_user_monitor_exit()` 里置 `nullptr`，与
+`page_user_debug_exit()` 对称。不清的话从本页切去调试页，那边会静默不再刷新。这条规则
+是从退役的控制页继承下来的。照明钮进页会 `request_soc_led_state()`，按 mask 对齐。
 
 #### 与打印流程的接线
 
@@ -1374,6 +1375,10 @@ Manual 页的三轴位置与设备开关态取自 `DebugMsgProxy` 的 `register_
 #### 照明钮打印中隐藏
 
 稿上待机那八帧都有画面左下那枚照明钮，打印那五帧一帧都没有。按稿隐藏。
+
+照明钮控制 SOC 六路舱灯（`lgt1l`…`lgt3r`，与调试页 Other→Cabin 同源），**不再下发 MCU
+Device/Light**。进页 `request_soc_led_state()`：mask≠0 钮亮，全 0 钮灭；点按则六路同开/同关。
+调试页进 Other 也会再 Get 一次，两边进页对齐即可（单槽，不做跨页直播）。
 
 #### Manual 页几处待补
 
