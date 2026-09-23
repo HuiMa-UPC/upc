@@ -37,8 +37,8 @@
 > 通知徽标那两枚早先已摘出去放进 `notice_badge_icons`（源 SVG 在 `tools/_badge_svg/`，
 > 可重跑）；其余 12 枚的处置方式待定。
 | `settings_icons.h` / `.c` | 设置页分组图标 `settings_icon_*` | `tools/gen_settings_icons.py` |
-| `print_flow_img.h` / `.c` | 打印流程弹窗顶图：打印板 `img_plate_single` / `img_plate_double`、门态三图、`img_mask`；转运盒那批 `img_box_install` `img_box_moving` `img_box_shutter` `img_door_close_hint`。**⚠ 别跑那个脚本**：它是列表驱动 + 整体重写，而转运盒那四张不在它的表里、依赖的 `tools/_pf_tmp/` 源 PNG 也已不在仓库里，跑一次会把全部抹掉 | `tools/gen_print_flow_assets.py` |
-| `powder_dialog_img.h` / `.c` | 打印中三个粉料阻塞弹窗的顶图：`img_powder_empty`（粉舱已空）`img_powder_recycle`（回粉盒满）`img_powder_waste`（废粉盒满）。均 496×321 **RGB565**（三张都是不透明照片，存 alpha 纯浪费；门弹窗那族用 ARGB8888 是因为里面有透明背景的插画），缩放共用 `control.cpp` 的 `door_set_image()`。合计约 933KB。源节点 6345:31129 / 6343:30738 / 6343:30854 | `tools/gen_powder_dialog_img.py`（**自带输入**：直接读 `tools/pages/monitor/printing/image{8,9,10}` 这三份稿 SVG，base64 图片与摆放矩阵都在里面） |
+| `popup_dialog_img.h` / `.c` | 打印流程弹窗插图：门三态 `img_door_opening` / `img_door_opened` / `img_door_closed`、转运盒三步 `img_box_install` / `img_box_moving` / `img_box_shutter`（均 496×321，满宽出血，缩放共用 `control.cpp` 的 `door_set_image()`）、放版两态 `img_plate_loaded` / `img_plate_empty`（320×272，圆角由容器 `clip_corner` 裁）。全部 **RGB565** 不透明，合计约 2.2MB。取代已退役的 `print_flow_img`（那版是 ARGB8888，21MB） | `tools/gen_popup_dialog_img.py`（**自带输入**：读 `tools/pages/popup&toast/image{2,3,4,11,14,15,16}.png`，那些 PNG 是同名稿 SVG 的 2 倍图；**不读 SVG**，因为蓝箭头与高亮描边是叠在位图之上的矢量图元，只抠 `<pattern>` 会把它们丢掉） |
+| `powder_dialog_img.h` / `.c` | 打印中三个粉料阻塞弹窗的顶图：`img_powder_empty`（粉舱已空）`img_powder_recycle`（回粉盒满）`img_powder_waste`（废粉盒满）。均 496×321 **RGB565**（三张都是不透明照片，存 alpha 纯浪费），缩放共用 `control.cpp` 的 `door_set_image()`。合计约 933KB。源节点 6345:31129 / 6343:30738 / 6343:30854 | `tools/gen_powder_dialog_img.py`（**自带输入**：直接读 `tools/pages/monitor/printing/image{8,9,10}` 这三份稿 SVG，base64 图片与摆放矩阵都在里面） |
 | `ctl_backdrop_img.h` / `.c` | 打印态底部复合控件的玻璃底衬 `img_ctl_bd_{run,collect}_{1920,1280,1024}`（ARGB8888，稿里的 Union 形状，含 1px 白 10% 内描边） | `tools/gen_ctl_backdrop.py` |
 | `slide_icons.h` / `.c` | 开门滑块图标 `ic_door_open` | Figma SVG→A8（node 2513:19808） |
 | `lv_font_cjk_data.c` | 思源黑体子集 TTF 字节数组（`lv_font_cjk_ttf`，`ui_theme.cpp` 的 `user_font_cjk()` 用 `lv_tiny_ttf_create_data` 运行时渲染）；新增中文需重跑脚本扩子集 | `tools/gen_cjk_font.py`（脚本已不在 `tools/`），源字体 `fonts/SourceHanSansCN-Regular.ttf` |
@@ -46,7 +46,7 @@
 ```bash
 # 示例（以脚本内实际参数为准，均从仓库根执行）
 python tools/gen_home_metric_icons.py
-python tools/gen_print_flow_assets.py
+python tools/gen_popup_dialog_img.py
 python tools/gen_ctl_backdrop.py
 ```
 

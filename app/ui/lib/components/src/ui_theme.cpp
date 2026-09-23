@@ -184,6 +184,8 @@ static const ui_theme_t s_theme_1920 = {
     /* user_dlg_footer_btn_h      */ 96,
     /* user_dlg_title_lead        */ 15,   /* 稿 39×1.5=59 − montserrat_40 的 44 */
     /* user_dlg_body_lead         */ 9,    /* 稿 24×1.5=36 − montserrat_24 的 27 */
+    /* user_plate_dlg_w           */ 1212, /* 稿 808@1280 × 1.5 */
+    /* user_wifi_dlg_w            */ 840,  /* 稿 560@1280 × 1.5 */
     /* user_file_dlg_w            */ 1100,
     /* user_file_dlg_preview_w    */ 340,
     /* user_file_sel_w            */ 1500,
@@ -253,6 +255,8 @@ static const ui_theme_t s_theme_1920 = {
     /* user_mon_radius        */ 24,
     /* user_mon_thumb_h       */ 315,
     /* user_mon_stat_h        */ 147,
+    /* user_mon_pm_h          */ 315,
+    /* user_mon_cell_h        */ 170,
     /* user_mon_bar_h         */ 36,
 
     /* 字体（dev） */
@@ -372,6 +376,8 @@ static const ui_theme_t s_theme_1280 = {
     /* user_dlg_footer_btn_h      */ 64,
     /* user_dlg_title_lead        */ 9,    /* 稿 39 − montserrat_28 的 30 */
     /* user_dlg_body_lead         */ 2,    /* 稿 24 − montserrat_20 的 22 */
+    /* user_plate_dlg_w           */ 808,  /* 稿值（6382:48451） */
+    /* user_wifi_dlg_w            */ 560,  /* 稿值（6423:51893） */
     /* user_file_dlg_w            */ 760,
     /* user_file_dlg_preview_w    */ 240,
     /* user_file_sel_w            */ 1040,
@@ -442,6 +448,8 @@ static const ui_theme_t s_theme_1280 = {
     /* user_mon_radius        */ 16,
     /* user_mon_thumb_h       */ 210,
     /* user_mon_stat_h        */ 98,
+    /* user_mon_pm_h          */ 210,  /* 稿值 */
+    /* user_mon_cell_h        */ 113,  /* 稿值 */
     /* user_mon_bar_h         */ 24,
 
     /* 字体（dev） */
@@ -566,6 +574,8 @@ static const ui_theme_t s_theme_1024 = {
     /* user_dlg_footer_btn_h      */ 51,
     /* user_dlg_title_lead        */ 4,    /* 稿 39×0.8=31 − montserrat_24 的 27 */
     /* user_dlg_body_lead         */ 1,    /* 稿 24×0.8=19 − montserrat_16 的 18 */
+    /* user_plate_dlg_w           */ 646,  /* 稿 808@1280 × 0.8 */
+    /* user_wifi_dlg_w            */ 448,  /* 稿 560@1280 × 0.8 */
     /* user_file_dlg_w            */ 600,
     /* user_file_dlg_preview_w    */ 192,
     /* user_file_sel_w            */ 900,   /* < 1024，留边距 */
@@ -637,6 +647,8 @@ static const ui_theme_t s_theme_1024 = {
     /* user_mon_radius        */ 13,
     /* user_mon_thumb_h       */ 168,
     /* user_mon_stat_h        */ 78,
+    /* user_mon_pm_h          */ 168,
+    /* user_mon_cell_h        */ 90,
     /* user_mon_bar_h         */ 19,
 
     /* 字体（dev） */

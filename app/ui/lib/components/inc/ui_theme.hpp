@@ -277,6 +277,13 @@ typedef struct {
     int32_t user_dlg_title_lead;
     /** 正文行盒补偿：稿行盒 36/24/19 − line_height 27/22/18。 */
     int32_t user_dlg_body_lead;
+    /** 放版弹窗（「是否已经放入打印版」及其两个子视图）的卡宽，稿 6382:48451 是 808。
+     *  **不能复用 user_dlg_w**：那是 496 的窄卡，这一族要横着放两张选择卡 / 一张插图
+     *  加右侧文字列。改稿前是「屏宽 × 78%」推出来的（1280 档算得 998，比稿宽 190）。 */
+    int32_t user_plate_dlg_w;
+    /** Wi-Fi 连接密码弹窗的卡宽，稿 6423:51893 是 560。
+     *  比 user_dlg_w 宽 64：稿上输入框满宽 496 加两侧 32 内距正好 560。 */
+    int32_t user_wifi_dlg_w;
     int32_t user_file_dlg_w;
     int32_t user_file_dlg_preview_w;
     int32_t user_file_sel_w;
@@ -428,8 +435,15 @@ typedef struct {
     int32_t user_mon_radius;
     /** Job 卡顶部那块模型缩略图框的高（稿 210@1280）。宽度铺满内容区。 */
     int32_t user_mon_thumb_h;
-    /** Job 卡下面 Time used / Total Cons. 两张白卡的高（稿 98@1280）。 */
+    /** Job 卡下面 Time used / Total Cons. 两张白卡的高（稿 98@1280）。
+     *  **只给 Job 页**：Status 页那 2×2 指标卡稿上是 113，见 user_mon_cell_h。 */
     int32_t user_mon_stat_h;
+    /** Status 页 PM 卡的高（稿 210@1280，宽铺满内容区的 356）。
+     *  **定高不靠内容撑**：稿上色条与卡底之间留了一大截空，内容自适应会把卡收矮一圈。 */
+    int32_t user_mon_pm_h;
+    /** Status 页 2×2 指标卡的高（稿 113@1280，宽 170 = (356−16)/2）。
+     *  **不与 user_mon_stat_h 共用**：那个是 Job 页两张数据卡的 98，稿上两处就不是一个数。 */
+    int32_t user_mon_cell_h;
     /** Job 卡进度条的高（稿 24@1280，圆角取其 1/3 = 稿的 8）。 */
     int32_t user_mon_bar_h;
 
@@ -578,11 +592,16 @@ int32_t user_media_play_size(void);
 #define USER_DLG_TITLE_PAD_BOTTOM   (g_ui->user_dlg_title_pad_bottom)
 #define USER_DLG_RADIUS             (g_ui->user_dlg_radius)
 #define USER_DLG_BACKDROP_OPA       LV_OPA_70   /* 跟分辨率无关，固定 */
+/** 浅色档弹窗的遮罩不透明度：稿 6423:51743 的 `#333145 @28%`（0.28 × 255 ≈ 71）。
+ *  色相由调用方给 user_light_text，这里只出浓度；同样跟分辨率无关。 */
+#define USER_LIGHT_BACKDROP_OPA     71
 #define USER_DLG_BODY_MIN_H         (g_ui->user_dlg_body_min_h)
 #define USER_DLG_FOOTER_BTN_W       (g_ui->user_dlg_footer_btn_w)
 #define USER_DLG_FOOTER_BTN_H       (g_ui->user_dlg_footer_btn_h)
 #define USER_DLG_TITLE_LEAD         (g_ui->user_dlg_title_lead)
 #define USER_DLG_BODY_LEAD          (g_ui->user_dlg_body_lead)
+#define USER_PLATE_DLG_W            (g_ui->user_plate_dlg_w)
+#define USER_WIFI_DLG_W             (g_ui->user_wifi_dlg_w)
 #define USER_FILE_DLG_W             (g_ui->user_file_dlg_w)
 #define USER_FILE_DLG_PREVIEW_W     (g_ui->user_file_dlg_preview_w)
 #define USER_FILE_SEL_W             (g_ui->user_file_sel_w)
@@ -649,6 +668,8 @@ int32_t user_media_play_size(void);
 #define USER_MON_RADIUS             (g_ui->user_mon_radius)
 #define USER_MON_THUMB_H            (g_ui->user_mon_thumb_h)
 #define USER_MON_STAT_H             (g_ui->user_mon_stat_h)
+#define USER_MON_PM_H               (g_ui->user_mon_pm_h)
+#define USER_MON_CELL_H             (g_ui->user_mon_cell_h)
 #define USER_MON_BAR_H              (g_ui->user_mon_bar_h)
 
 /**

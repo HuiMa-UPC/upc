@@ -118,6 +118,7 @@ void open_ota_prompt(const middleware::OtaNotifyPayload& p)
     }
     close_ota_prompt();
     ui_modal_dialog_cfg_t cfg = ui_modal_dialog_cfg_user("OTA Update Available", USER_DLG_W, true);
+    cfg.light_theme = true;
     g_ota_prompt_dlg = ui_modal_dialog_open(g_ota_screen, &cfg);
     if(!g_ota_prompt_dlg) {
         return;
@@ -134,11 +135,11 @@ void open_ota_prompt(const middleware::OtaNotifyPayload& p)
     lv_obj_set_style_text_align(lbl, LV_TEXT_ALIGN_CENTER, 0);
     if(!g_ota_required) {
         ui_user_make_confirm_footer_btn(g_ota_prompt_dlg->footer, "Cancel", false,
-                                        user_color_text_dim, false, ota_decision_cb,
+                                        user_color_text_dim, true, ota_decision_cb,
                                         reinterpret_cast<void*>(0));
     }
     ui_user_make_confirm_footer_btn(g_ota_prompt_dlg->footer, "Confirm", true,
-                                    user_color_accent, false, ota_decision_cb,
+                                    user_color_accent, true, ota_decision_cb,
                                     reinterpret_cast<void*>(1));
 }
 
@@ -148,6 +149,7 @@ void ensure_ota_progress_dialog()
         return;
     }
     ui_modal_dialog_cfg_t cfg = ui_modal_dialog_cfg_user("OTA Download Progress", USER_DLG_W, false);
+    cfg.light_theme = true;
     g_ota_progress_dlg = ui_modal_dialog_open(g_ota_screen, &cfg);
     if(!g_ota_progress_dlg) {
         return;
@@ -253,6 +255,7 @@ void on_soc_ota_ready(const middleware::SocOtaReadyPayload& p)
 
     ui_modal_dialog_cfg_t cfg =
         ui_modal_dialog_cfg_user("System Update Ready", USER_DLG_W, true);
+    cfg.light_theme = true;
     g_soc_ota_dlg = ui_modal_dialog_open(g_ota_screen, &cfg);
     if(!g_soc_ota_dlg) {
         return;
@@ -275,15 +278,15 @@ void on_soc_ota_ready(const middleware::SocOtaReadyPayload& p)
     lv_obj_set_style_text_align(lbl, LV_TEXT_ALIGN_CENTER, 0);
 
     ui_user_make_confirm_footer_btn(
-        g_soc_ota_dlg->footer, "Discard", false, user_color_text_dim, false,
+        g_soc_ota_dlg->footer, "Discard", false, user_color_text_dim, true,
         soc_ota_apply_cb,
         reinterpret_cast<void*>(
             static_cast<intptr_t>(middleware::SocOtaApplyAction::Discard)));
     ui_user_make_confirm_footer_btn(
-        g_soc_ota_dlg->footer, "Later", false, user_color_text_dim, false,
+        g_soc_ota_dlg->footer, "Later", false, user_color_text_dim, true,
         soc_ota_later_cb, nullptr);
     ui_user_make_confirm_footer_btn(
-        g_soc_ota_dlg->footer, "Reboot", true, user_color_accent, false,
+        g_soc_ota_dlg->footer, "Reboot", true, user_color_accent, true,
         soc_ota_apply_cb,
         reinterpret_cast<void*>(
             static_cast<intptr_t>(middleware::SocOtaApplyAction::RebootNow)));
