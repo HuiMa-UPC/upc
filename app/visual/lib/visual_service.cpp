@@ -1,5 +1,6 @@
 #include "visual_service.hpp"
 
+#include "nv12_copy.hpp"
 #include "generated_fusion_model.hpp"
 #include "generated_rknn_contract.hpp"
 #include "media_paths.hpp"
@@ -1165,31 +1166,6 @@ void VisualService::unmap_dma_views()
     dma_map_size_ = 0;
 }
 
-void VisualService::copy_nv12_tight(uint8_t* dst, const uint8_t* src_y,
-                                    const uint8_t* src_uv, uint32_t src_stride_y,
-                                    uint32_t width, uint32_t height)
-{
-    if(!dst || !src_y || !src_uv || src_stride_y == 0 || width == 0 || height == 0) {
-        return;
-    }
-    const size_t y_size = static_cast<size_t>(width) * static_cast<size_t>(height);
-    uint8_t* dst_uv = dst + y_size;
-    if(src_stride_y == width) {
-        std::memcpy(dst, src_y, y_size);
-        std::memcpy(dst_uv, src_uv, y_size / 2u);
-        return;
-    }
-    for(uint32_t y = 0; y < height; ++y) {
-        std::memcpy(dst + static_cast<size_t>(y) * width,
-                    src_y + static_cast<size_t>(y) * src_stride_y, width);
-    }
-    const uint32_t uv_h = height / 2u;
-    for(uint32_t y = 0; y < uv_h; ++y) {
-        std::memcpy(dst_uv + static_cast<size_t>(y) * width,
-                    src_uv + static_cast<size_t>(y) * src_stride_y, width);
-    }
-}
-
 void VisualService::update_latest_snapshot(const upc_ipc::IpcDmaFrameView& frame)
 {
     const uint32_t idx = frame.buffer_idx;
@@ -1211,7 +1187,7 @@ void VisualService::update_latest_snapshot(const upc_ipc::IpcDmaFrameView& frame
     const size_t need = static_cast<size_t>(width) * static_cast<size_t>(height) * 3u / 2u;
     std::lock_guard<std::mutex> lock(frame_mtx_);
     latest_nv12_snapshot_.resize(need);
-    copy_nv12_tight(latest_nv12_snapshot_.data(), src_y, src_uv, stride, width, height);
+    upc::copy_nv12_tight(latest_nv12_snapshot_.data(), src_y, src_uv, stride, width, height);
     latest_width_ = width;
     latest_height_ = height;
     latest_frame_seq_ = frame.seq;

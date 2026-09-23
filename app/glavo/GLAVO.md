@@ -15,10 +15,11 @@
 | `lib/height_points.hpp` | 测高/校准共用 8 点、Z 零点偏置、门限、单点采样 |
 | `lib/height_lut_2d.*` | 8 点二维高度 LUT |
 | `lib/height_calibration.*` | 调试页高度校准（关舱灯 + Red_On → 回零先下降 20mm → 写 LUT → 开舱灯，红光保持） |
-| `lib/plate_height_measure.*` | 打印前两步测高调 Z（开关默认关；光路之后；回零先下降 20mm；开始再发关灯，结束不开舱灯） |
+| `lib/plate_height_measure.*` | 打印前两步测高调 Z（开关默认关；光路之后；回零先下降 20mm；期间 SOC 舱灯全关，结束由 Glavo 全开） |
 | `lib/galvo_motion_encode.*` | 调试运动包编码 + 五点坐标（点位测试与光路检测共用） |
 | `lib/soc_sensors.*` | SOC 本地：舱内外 PMSA UART、AHT20（≥2s）、双路 CPM121、IIO 氧气（须 `/run/o2_ready`；V=raw×3.3/2^31，100Ω；K 读 `/userdata/CAL/o2_cal.json` 缺省≈655）。链路启动即周期采集。六路舱灯进程启动即默认全开。六路舱灯/`fa_valve` sysfs 调试可随时写；业务采样结束强制关阀。背光不在本模块。 |
-| `lib/spi_status_led.*` | SPI 灯效板：`/dev/spidev1.0` 40 颗 WS 单色。CONDITION+ACTIVE 红，`print_running_` 橙，空闲蓝。进程启动即打开（不等串口）。 |
+| `lib/spi_status_led.*` | SPI 灯效板：`/dev/spidev1.0` 40 颗 WS 单色。CONDITION+ACTIVE 红，`print_running_` 橙，空闲蓝。进程启动即打开（不等串口）。业务路径只改状态排队；专用 led 线程做 open/ioctl，避免堵 McuLink 串口线程。 |
+| `lib/spi_pm25_lcd.*` | ST7735 SPI 小屏：按 fbdev name `st7735rdrmfb` 打开，常显舱外 PM2.5（布局自 `doc/spilcd`）。`arm_soc_peripherals` 启动；`poll_soc_env_tick` 刷值；无效显示 `--`。 |
 | `lib/device_config.hpp` | TCP/串口默认、换层/Layer Snap 开关、`GLAVO_TEST_GCODE_PATH`、PM UART/`fa_valve`/`lgt*` 路径宏 |
 | `lib/mcu_ota_session.*` | Galvo 以太网 OTA：扫描 `/userdata/image/galvo` 最高版本 AB 对 |
 | `lib/mcu_serial_ota_session.*` | MCU 串口 OTA：扫描 `/userdata/image/mcu` 最高版本 AB 对；停等重传 + 阶段四版本确认 |
@@ -36,7 +37,7 @@ UI → GlavoService（工作线程）→ ParserManager → RingBuffer → McuLin
 
 1. `set_mode_ipc_client(APP_GLAVO)`
 2. `GlavoService::init`
-3. `McuLink::arm_soc_peripherals()`：六路舱灯全开 + SPI 灯效空闲蓝（不等串口）
+3. `McuLink::arm_soc_peripherals()`：六路舱灯全开 + SPI 灯效空闲蓝 + SPI PM2.5 小屏布局（不等串口）
 4. `McuLink::connect_tcp` + `open_serial` + `start_link_thread`，然后 `GlavoService::start`
    - TCP 刚连上：只发 `CMD=0x0A` `Red=1`（普通红光）
    - 串口 MCU 工程版本上报成功后：再发 `0x12` 关激光使能；出队后再补一次 `Red=1`（避免 `0x12` 掐瞄准红光）。Env Sim 假版本不走这条
@@ -50,21 +51,24 @@ UI → GlavoService（工作线程）→ ParserManager → RingBuffer → McuLin
 | `Fs_Delete_Ntf` | 删除 Local 文件（磁盘 + config.json） |
 | `UI_Print_Prepare_Req` | 轻量预处理（USB 复制；清单无 `layer_count` 时才单趟扫 `M3000`；打开解析器并写 config.json）。已有总层数时不数行、不把 `get_total_lines()` 写回 `line_count`；Start 不再补扫 |
 | `UI_Parser_Exit_Ntf` | 取消解析（stop_parse + 清会话） |
-| `UI_Print_Start_Req` | 置打印态 → 光路检测 gate（若开）→ 基板测高 gate（`Plate Height Adj` 开且有 LUT 才跑）→ 正式解析 + 首层参考图 gate + `begin_sending` |
-| ↑ 起印失败 | 打印态在 `launch_print_from_prepared` 最前面就置（检测那十几秒 UI 已在打印页），所以「运动还没开始就失败」的分支**一律走 `abort_print_start()`** 回滚，否则 UI 停在打印页 0% |
-| `UI_Print_Terminate_Req` | 光路/测高阶段：打断对应线程并回红光安全态；否则 `stop_parse` + `request_terminate` + `on_print_abort` |
+| `UI_Print_Start_Req` | 置打印态 → 外门闸门（未关则 `GLAVO_Outer_Door_Confirm_Req`；UI Confirm 再读门、Cancel=`skip=1` 不检门）→ 关内门套件 → 光路 → 测高 → 正式解析 + 首层参考图 + `begin_sending` → 串口氧门（洗气+等氧）→ 首层视觉比对 → 以上未跳过的步骤均推 `APP_Print_Prep_Progress_Ntf`；全部结束后才 `Ready` 进 Printing。TCP 未连则 `TcpOffline` 拒绝 |
+| ↑ 起印失败 | 打印态在 `launch_print_from_prepared` 最前面就置（检测那十几秒 UI 已在打印页），所以「运动还没开始就失败」的分支**一律走 `abort_print_start()`** 回滚，否则 UI 停在打印页 0%；失败时 SOC 舱灯全开 |
+| `UI_Print_Terminate_Req` | 外门确认/关内门套件/光路/测高/开扫前 Prepare：打断对应挂起并回红光安全态（关内门阻塞可被 `print_prep_abort_` 立刻打断）；已开扫则 `stop_parse` + `request_terminate` + `on_print_abort`；终止时内门保持当前态 |
 | `UI_Print_Pause_Req` | `set_user_dispatch_paused(true)`，仅停 TCP 运动下发 |
 | `UI_Print_Resume_Req` | `set_user_dispatch_paused(false)`，恢复 TCP 运动下发 |
 | `UI_Debug_TestImage_Set_Ntf` | 红光循环打印 `GLAVO_TEST_GCODE_PATH`（默认 `/userdata/test/test.gcode`）；无录像/延时/换层握手/首页打印态；Off 仅 `request_terminate`，不切激光 |
 | `UI_Debug_Galvo_AbsMove_Ntf` | 调试页 Abs X/Y + Move：snowx 口径单点 TCP 运动包（`send_galvo_abs_pos`）；打印中拒绝 |
-| `UI_Debug_OpticalPath_Check_Set_Ntf` | 打印前光路检测开关（仅本次运行，默认关）。开则 Confirm Print 后、出光前逐点等视觉识别；失败阻断并 `APP_Print_Start_Rejected_Ntf` |
-| `UI_Debug_PlateHeight_Adj_Set_Ntf` | 打印前基板测高调 Z（仅本次运行，默认关）。开则 Confirm Print 后、光路之后测 8 点并 AXIS_INC；无 LUT 或失败不阻断打印 |
+| `UI_Debug_OpticalPath_Check_Set_Ntf` | 打印前光路检测开关（仅本次运行，默认关）。开则 Confirm Print 后、出光前逐点等视觉识别；失败阻断并 `APP_Print_Start_Rejected_Ntf`；期间 SOC 舱灯全关，通过后全开 |
+| `UI_Debug_PlateHeight_Adj_Set_Ntf` | 打印前基板测高调 Z（仅本次运行，默认关）。开则光路之后测 8 点并 AXIS_INC；**无 LUT 或失败阻断起印**（`PlateHeightFail`） |
+| `UI_Debug_Skip_Outer_Door_Set_Ntf` | 跳过外门检测+关内门套件（仅本次运行，**默认关=要做**）；开则不检门、不开→关边沿也不跑套件 |
 | `UI_Debug_Galvo_Param_Save_Ntf` | 写 `cal.csv` 第 4 行中心偏移 + `ParserContext::load_calibration`；打印/任一振镜测试进行中拒绝 |
 | `UI_PM25_Req` / 门控 Req | 独立线程开 `fa_valve` 采 3s 舱内平均后回 `APP_PM25_Rsp`（不堵 worker）。门控关则跳过、直接判合格 |
+| `UI_OpenDoor_Req` | 真实门控：worker 发开门指令后由 `door_open_worker_` 轮询传感器（最长 `GLAVO_DOOR_OPEN_TIMEOUT_MS`），线程内 `publish_async` Rsp；重复请求直接拒；占位模式立即成功 |
 | `UI_Debug_Soc_Led_Set_Ntf` / `Get` | 六路舱灯 `lgt1l`…`lgt3r` sysfs，不看 MCU 版本 |
 | `UI_Debug_Cabin_Pm_Valve_Set_Ntf` / `Get` | 舱内 PM `fa_valve`，不看 MCU 版本；业务采样结束**强制关阀**并回读 Off |
 | `UI_Debug_O2_Calib_Req` / `Get_Ntf` | 单点标定 K（参考浓度由 UI 输入）→ `/userdata/CAL/o2_cal.json`；Req 只回 `GLAVO_Debug_O2_Calib_Rsp`（SocSensors 独立线程采样，不堵 worker）；Get 回 `Ntf`；打印/测高/测试中拒绝 |
 | `UI_Debug_Status_Led_Set_Ntf` / `Get` | SPI 灯板（`SpiStatusLed`）验色接管：强制 blue/orange/red 或裸 RGB，每次必发一帧；`force=0` 释放回自动推导 |
+| `UI_Debug_Spi_Pm25_Lcd_Set_Ntf` / `Get` | SPI 小屏测试刷屏：开则约 500ms 整屏轮换纯色并 `pwrite` fb；关则恢复舱外 PM 布局 |
 | `UI_Alarm_Reset_Ntf` | `serial_build_alarm_reset` 组 0xA3/0x82 帧直发串口；结果不回 Rsp，以 MCU 后续单条上报为准 |
 | `UI_Debug_Alarm_Inject_Ntf` | 调试页 Alarm Inject：转 `GLAVO_Alarm_Report_Ntf` **只发 MQTT**（不上 UI、不改快照/灯效） |
 
@@ -73,8 +77,9 @@ UI → GlavoService（工作线程）→ ParserManager → RingBuffer → McuLin
 - **1ST（TLV 0x02）**：只认 Tlv-Len=15（滤芯氧/滤芯气压/基板/NTC/开关/红外）。粉量缺粉看 OUTL/OUTR；发给 UI 的 `powder_bits` 低 2 位为「左/右匣仍有粉」。
 - **EXT（TLV 0x06）**：电气量+风机，解析到即消费（默认周期 1000ms）。电气量仅日志；风机转速/母线电压电流/故障码/状态机经 `GLAVO_Debug_Fan_Ntf` 推调试页风扇卡。`fan_status_bits` bit7=0 表示驱动链路异常，此时 MCU 把转速等字段填 0，UI 按无效显示 `--`。
 - **SOC 采集**：舱外常显 PM、舱内 PM（阀开窗口可信）、AHT20 温湿度（最短 2s）、CPM121 气压、IIO 氧气（须 `/run/o2_ready` 后读 `in_voltage0_raw`；本板无 scale，V=raw×3.3/2^31，I[uA]=V/100×1e6，O2%=100×(1−e^(−I/K))）。**K** 优先读 `/userdata/CAL/o2_cal.json`（调试页 **O2 Calib**：输入参考浓度后一键标定，启动加载、标定后立即生效）；缺文件回退出厂默认 `GLAVO_O2_K`≈655。首页 `pm25_indoor` 为舱外 PMSA。进程启动即六路舱灯 `lgt1l`…`lgt3r` 写 1 全开（不等串口；调试页仍可单独关）。PMSA：`pmsa outdoor|cabin` 开关口/解帧在 `topic_print_flow.log`（`GlavoService`）；推 UI 的 `soc_pm:` 在 `topic_serial_sensor.log`（5s）。
-- **打印氧门（SOC）**：MCU 串口 `PRINT_CONDITION_OK`（`5A A5 BB A4 01 … 02`）之后：氧门开启时 SOC 发洗气开（`0xA1/0x86` ON）并须 SOC 氧 **&lt; `GLAVO_O2_PRINT_MAX_PERCENT`（默认 0.8%）** 才发 `PRINT_START`；等氧期间氧高同样合成报警 **1120**（不 TCP 暂停）。打印中氧 **≥ 0.8%** TCP 暂停并合成 **1120**（`GLAVO_Alarm_Report_Ntf`，AUTO），回落 **≤ `GLAVO_O2_PRINT_RESUME_PERCENT`（0.7%）** 自动恢复。终止/`PRINT_FINISHED` 时若本作业 SOC 开过阀则发洗气关。Env Sim / 测试图 / 调试页 **Skip O2 Gate**（默认关，仅本次运行）跳过：不起印洗气开、不等氧、打印中不因氧暂停。`o2_hold_` 期间不判自然完成。MCU 快照在 Glavo 攒齐后若缺 slot3 则补 bit20（count+1），全零快照改为只发 slot3，避免 UI 对齐把 1120 清掉。
-- **SPI 灯效板**：`SpiStatusLed` 写 `/dev/spidev1.0`。红=MCU CONDITION 且 ACTIVE；橙=Confirm 后的打印会话；否则蓝。EVENT / 仅 latched 不红。无设备只 Warn 一次。进程启动即打开，不等串口。
+- **打印氧门（SOC）**：MCU 串口 `PRINT_CONDITION_OK`（`5A A5 BB A4 01 … 02`）之后：氧门开启时 SOC 发洗气开（`0xA1/0x86` ON）并须 SOC 氧 **&lt; `GLAVO_O2_PRINT_MAX_PERCENT`（默认 0.8%）** 才发 `PRINT_START`；等氧期间氧高同样合成报警 **1120**（不 TCP 暂停），并推 Prepare 步 `Oxygen`。打印中氧 **≥ 0.8%** TCP 暂停并合成 **1120**（`GLAVO_Alarm_Report_Ntf`，AUTO），回落 **≤ `GLAVO_O2_PRINT_RESUME_PERCENT`（0.7%）** 自动恢复。终止/`PRINT_FINISHED` 时若本作业 SOC 开过阀则发洗气关。Env Sim / 测试图 / 调试页 **Skip O2 Gate**（默认关，仅本次运行）跳过：不起印洗气开、不等氧、打印中不因氧暂停、Prepare 不计氧步。`o2_hold_` 期间不判自然完成。MCU 快照在 Glavo 攒齐后若缺 slot3 则补 bit20（count+1），全零快照改为只发 slot3，避免 UI 对齐把 1120 清掉。
+- **SPI 灯效板**：`SpiStatusLed` 写 `/dev/spidev1.0`。红=MCU CONDITION 且 ACTIVE；橙=Confirm 后的打印会话；否则蓝。EVENT / 仅 latched 不红。无设备只 Warn 一次。进程启动即打开，不等串口。报警/打印态只入队目标色，SPI transfer 在独立 led 线程，不堵串口心跳。
+- **SPI PM2.5 小屏**：`SpiPm25Lcd` 按 `/sys/class/graphics/fb*/name == st7735rdrmfb` 打开（勿写死 fb0）。UI 逻辑 160×80，shadow 顺时针 90° 后 `pwrite` 到 80×160 fb。舱外 `pm25_outdoor`；&lt;0 显示 `--`。与灯效板/主屏 DRM 无关。调试页 **SPI LCD Test** 开则忽略 PM、周期整屏刷红/绿/蓝/白/黑（测 fb 提交；本板 `modetest` 亦可能仅背光）。
 - **SOC→UI 推送**：`poll_soc_env_tick` 每 500ms 独立 `publish_async` `APP_Update_Ntf` + `GLAVO_Debug_Sensor_Ntf`，**不依赖** MCU 1ST。MCU 仍负责基板/粉量/门等；未收到 1ST 前这些字段顶栏显示 `--`。MQTT `telemetry/chamber` 用 SOC 舱内 PM/温湿/气压/氧，`telemetry/chamber_ext` 上报舱外 PM；无效氧发 `null` 不夹成 0。`sensor_v4` 固定填 1（ABI 保留，不再表示版本切换）。
 - **报警上云（方案 A）**：单报与完整快照经 IPC 进 `rongsu_mqtt`，映射 `snowpod/.../alarm/report`，订 `alarm/ack`；落盘 outbox `/userdata/snowpod/alarm-outbox`，流序号 `/userdata/snowpod/alarm-stream.json`。能力位全 false；`mcu_boot_id`/`source_seq` 为 null；快照条目元数据 unknown。调试页 **Alarm Inject** 只补单报 MQTT（不改快照）。契约 [doc/soc-alarm-contract-v1.md](../../doc/soc-alarm-contract-v1.md)。
 - **开门前清粉（真实门控开时 UI 才会发；收到即执行）**：风机固定吹 10s → 关风机 → 开阀 3s 平均后关阀；仍超标则循环。

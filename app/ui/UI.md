@@ -233,11 +233,11 @@ while (!g_shutdown_requested) {
   投影归 LVGL 画。另外五个导出里只有 Home 带这层 filter，那是导出差异不是设计意图——稿上投影
   挂在「选中」这个变体上，而任一时刻只有一项选中。
 
-**整屏视频档**（首页那两层存档用的，现无活调用方）走 `PageManager::set_sidebar_video_mode(true)`：
+**整屏视频档**走 `PageManager::set_sidebar_video_mode(true)`：
 底退回 `user_color_panel @ 90%`、未选中图标退回 `user_color_icon_off`（`#555555`）。
-理由是侧栏背后那时是视频帧，4% 的白压不住亮帧，`#9E9E9E` 会被盖过去——这正是当年把
-`bg_opa` 从 40% 提到 90% 的原因。换页时 `apply_device_bar()` 一律复位成浅色档，首页
-在 `on_enter` 里按当前态再置一次。
+理由是侧栏背后若是视频帧，4% 的白压不住亮帧，`#9E9E9E` 会被盖过去——这正是当年把
+`bg_opa` 从 40% 提到 90% 的原因。监控页摄像头从 x=128 起、侧栏背后是浅底，**不开启**该档。
+换页时 `apply_device_bar()` 一律复位成浅色档。
 
 **改版前那套渐变蒙版已整体退役**。那时稿上选中态没有底板、只有一枚蓝渐变字形，而 A8
 只存 alpha、`image_recolor` 只能上单色，于是每个按钮里建了两层互斥图标（`menu_icon_img`
@@ -860,15 +860,11 @@ pending 自动解除——正好顺带验超时路径。
 
 ### 摄像头整屏预览
 
-`g_print_area`（打印直播）与 `g_monitor_area`（查看监控）都是 `lv_obj_set_pos(area,
--USER_SIDEBAR_W, 0)` + 宽度 `LV_HOR_RES`，画面左边缘落在屏幕左边缘、侧栏浮于其上。
-首页根节点同样负偏移铺满整屏、再用自己的 `pad_left` 还原内容区，所以按钮行/仪表盘/
-开门滑块的几何不变（纵向的负偏移见「常驻设备信息条」，那一格不还原）。
-
-摄像头层必须留在首页根节点**内部**：切页是靠 `SimplePage::on_exit()` 隐藏根节点实现的，
-挂到 `content_panel_` 上会导致打印中切去设置页时画面仍留在底下（`switch_to` 允许
-打印中导航）。这也是不能靠 `LV_OBJ_FLAG_OVERFLOW_VISIBLE` 的原因——它只放开到
-`ext_draw_size`，给不到一整个侧栏宽度。
+监控页根节点 `lv_obj_set_pos(..., -USER_SIDEBAR_W, 0)` + 宽度 `LV_HOR_RES`，画面左边缘
+落在屏幕左边缘、侧栏浮于其上。摄像头层必须留在该页根节点**内部**：切页是靠
+`SimplePage::on_exit()` 隐藏根节点实现的，挂到 `content_panel_` 上会导致打印中切去
+设置页时画面仍留在底下（`switch_to` 允许打印中导航）。这也是不能靠
+`LV_OBJ_FLAG_OVERFLOW_VISIBLE` 的原因——它只放开到 `ext_draw_size`，给不到一整个侧栏宽度。
 
 侧栏可读性由两层叠出来：`menu_panel_` 自己的 `LV_OPA_90`，加上 `build_camera_gradient_masks()`
 里那条覆盖 `USER_SIDEBAR_W` 的实心底衬。底衬取 `LV_OPA_70`，与左渐变遮罩的起始值
@@ -897,7 +893,7 @@ pending 自动解除——正好顺带验超时路径。
 `Subscription` 必须保存在 `subs_` 等成员中。其它后端用独立 `XxxMsgProxy`，不要堆进 UiMsgProxy。
 
 `register_*` 回调在总线线程上跑，**要建/毁 LVGL 对象就得先 `lv_async_call` 回主线程**
-（例：`control.cpp` 的 `on_powder_low_async`、`page_user_home.cpp` 的 `on_clean_done_async`）。
+（例：`control.cpp` 的 `on_powder_low_async`）。
 只改现成 label / 显隐的回调沿用直调。
 
 ### 选文件页目录数据
@@ -992,7 +988,7 @@ pending 自动解除——正好顺带验超时路径。
 会漏掉这三处，改这一族记得单独过一遍。
 
 顶部预览取 `thumb_large`（与选文件页详情面板同源，二次确认该还是同一张图），判存用
-`thumb_path_exists()`，取不到才出占位图标。**先前这里只建了占位、从不加载缩略图**，所以恒
+`thumb_path_exists()` 现为 `ui_user_thumb_path_exists()`，取不到才出占位图标。**先前这里只建了占位、从不加载缩略图**，所以恒
 显示破图。
 
 删除确认与终止打印确认共用
@@ -1029,7 +1025,7 @@ pending 自动解除——正好顺带验超时路径。
 
 | Page ID | 文件 | 说明 |
 |---------|------|------|
-| `user_home` | `page_user_home.*` | 首页待机（浅色档）：设备图 + 问候语 + HOME 空气质量卡 + 四宫格 + 余量胶囊 + 左下 PRINT + 右下开门滑块。**打印态浮层与待机监控层已搬到 `user_monitor`**，文件里那两层留作存档、无调用方，见「首页那两层为什么还留着」 |
+| `user_home` | `page_user_home.*` | 首页待机（浅色档）：设备图 + 问候语 + HOME 空气质量卡 + 四宫格 + 余量胶囊 + 左下 PRINT + 右下开门滑块。打印态与待机监控在 `user_monitor` |
 | `user_monitor` | `page_user_monitor.*` | 监控页（侧栏第 2 格，浅色档）：左摄像头 + 右栏三 Tab（Job / Status / Manual）+ 全屏切换 + 取件弹窗。打印流程的落点。见「监控页」一节 |
 | `user_history` | `page_user_history.*` | 打印历史：三 Tab + Storage 条 + 日期分组卡片 + 管理态批量删除 + 左滑删除 |
 | `user_settings` | `page_user_settings.*` | 设置（浅色档）：8 项左导航 + 右栏白卡版式。Network（Wi-Fi 开关/列表/子页）、Display & Brightness（背光滑条 + 熄屏选择子页，占位）、Storage（容量 + 格式化 + 文件管理，仅前端）、About（版本 + Galvo/MCU OTA）、Debug 密码弹窗。按稿 6089:11322 / 6235:91450 / 6240:92007 / 6251:94362 实现 |
@@ -1111,8 +1107,8 @@ pending 自动解除——正好顺带验超时路径。
   （Figma 的 `justify-between` + 295 宽容器推出来的是 1079.5，比渲染图还靠右 31px，
   **推导对不上渲染，以渲染图为准**。）
 
-**首页这条滑块不与 `USER_DOOR_SLIDE_*` 共用尺寸**：那一族是首页那两层存档里的深色红渐变
-滑块，出自各自的稿、1280 档是 400×80。两边都**不复用 `USER_SLIDE_*`**：那一组
+**首页这条滑块不与 `USER_DOOR_SLIDE_*` 共用尺寸**：后者是旧打印态深色滑块的稿尺寸
+（1280 档 400×80），现无调用方。两边都**不复用 `USER_SLIDE_*`**：那一组
 还被延时摄影页的拖动预览框（`USER_SLIDE_W * 3/5`）和放版弹窗滑条的最小宽钳制用着。
 
 **HOME 卡内部全是绝对定位**，不走 flex——稿本身就没有流式结构，硬套 flex 反而要为每一格
@@ -1260,7 +1256,6 @@ x=260 挪回 x=160、宽度从 202 涨到 216，`make_light_square_btn()` 与 `i
 
 **待机与打印是同一页，不是两套界面。** 选文件页确认后 `control.cpp` 的
 `enter_state(CONTROL_STATE_PRINTING)` 直接 `switch_to("user_monitor")`，摄像头全程不断流。
-改版前这一整套是首页的浮层（`g_print_area` / `g_monitor_area`），见下面那一节。
 
 版式（稿 1280×800 坐标，其余档位按 profile 折算）：
 
@@ -1369,7 +1364,8 @@ Plate Position `inset=0 / gap=10`（322−3×100.667=20，两道缝各 10），�
 
 `RETRIEVE` 与 `OPEN` 是**同一枚按钮**换文案（稿上两态都是 256 宽深色钮，只差图标与字）。
 
-**打印态禁用 Manual**（含 Preparing 与 Pause）。稿上打印那几帧的 Manual 画的是 0.6 的正常态、
+**打印态禁用 Manual**（含 Preparing / Pause / Complete / Terminated 整段会话，
+`g_printing==true` 期间）。稿上打印那几帧的 Manual 画的是 0.6 的正常态、
 只有待机空态那帧是 0.2，**那是漏改**——以「打印中不允许手动操作」为准。置灰时若当前正停在
 Manual，`ui_segmented_set_item_enabled()` 会自动退到第一个可用项并发一次 `VALUE_CHANGED`，
 否则页面会停在一个点不回来的视图上。
@@ -1380,8 +1376,7 @@ Manual，`ui_segmented_set_item_enabled()` 会自动退到第一个可用项并�
 `apply_device_bar()` 里按页名排除（同历史 / 消息 / 设置三页）。页根因此只要跨过
 `pad_left` 出血到屏幕左边缘，**纵向不用抵消 `pad_top`**——那时它已经是 0。
 
-**侧栏保持浅色档，不开 `set_sidebar_video_mode()`。** 首页那两层要开，是因为摄像头整屏
-出血、连侧栏背后都是视频帧，4% 的白压不住亮帧；本页画面从 x=128 起（稿的 clip 就是
+**侧栏保持浅色档，不开 `set_sidebar_video_mode()`。** 本页画面从 x=128 起（稿的 clip 就是
 `translate(128) 1152×800`），侧栏背后是页根那层 `#f5f5f5`，稿里那条 `white @ 4%` 正是压在
 它上面的。开视频档反而与稿不符。
 
@@ -1389,29 +1384,46 @@ Manual，`ui_segmented_set_item_enabled()` 会自动退到第一个可用项并�
 走画面左上那枚状态胶囊与满屏弹窗；`ui_toast_show` 是挂 `lv_layer_top()` 的全局气泡，在本页
 照常弹，不特意压制。
 
-#### DebugMsgProxy 的两个单槽回调要进页注册、离页清空
+#### DebugMsgProxy 的单槽回调要进页注册、离页清空
 
-Manual 页的三轴位置与设备开关态取自 `DebugMsgProxy` 的 `register_axis` / `register_device`，
-**这两个都是单槽的、调试页也在用同一组**。所以 `page_user_monitor_refresh()` 里注册、
-`page_user_monitor_exit()` 里置 `nullptr`，与 `page_user_debug_exit()` 对称。不清的话从本页
-切去调试页，那边的三轴位置与设备行会静默不再刷新。这条规则是从退役的控制页继承下来的。
+Manual 页的三轴位置与照明钮取自 `DebugMsgProxy` 的 `register_axis` /
+`register_soc_led`（**单槽，调试页也在用**）。外门开合记忆走 `APP_Update_Ntf` →
+`ui_device_state`（`outer_door_open`/`door_state_valid`），开门 Rsp 成功还会乐观置位；
+`require_outer_door()` 读这份状态，外门开完后可直接点内门/手动吹粉。`register_device`
+仍保留作兼容（Glavo 目前不发 Device_Ntf）。`page_user_monitor_refresh()` 里注册、
+`page_user_monitor_exit()` 里置 `nullptr`，与 `page_user_debug_exit()` 对称。不清的话从
+本页切去调试页，那边会静默不再刷新。照明钮进页会 `request_soc_led_state()`，按 mask 对齐。
 
 #### 与打印流程的接线
 
-`control.cpp` 调的这一组与改版前首页那组一一对应，只是换了前缀：
+`control.cpp` 调的这一组：
 
 ```
 选文件 Confirm Print → 二次确认 → enter_state(PRINTING)
   → switch_to("user_monitor") + page_user_monitor_enter_printing_mode()
   → 进度推送 page_user_monitor_printing_update()
-  → 光路检测 page_user_monitor_optical_path_update()（占 Preparing 档与右侧 n/5）
+  → 起印环境检查 `APP_Print_Prep_Progress_Ntf` → page_user_monitor_print_prep_update()
+       Job 卡标题随步切换（Checking outer door / Closing inner door /
+       Optical path check / Plate leveling / Checking oxygen / First layer check）；
+       进度条按本趟实际步数均摊（跳过的步骤不推送，UI 直接看到下一步）；
+       氧门与首层在开扫握手阶段仍属 Prepare；`step=Ready` 切回 Printing，
+       条与百分数复位到 0%（Prepare 与打印是两套进度）
+       Prepare 阶段只动条/数字，缩略图蒙版不动（蒙版只跟打印层进度）
+  → 外门未关：`GLAVO_Outer_Door_Confirm_Req` → 弹窗 Confirm / Cancel
+       Confirm：`UI_Outer_Door_Confirm_Rsp` skip=0，Glavo 再读门，仍开再弹
+       Cancel：skip=1，不检门，直接进关内门套件（与调试 Skip Outer Door 不同，内门仍跑）
+  → 关内门套件（降 Z / 关内门 / 回 Z；调试 Skip Outer Door 可跳过外门+内门）
+  → 光路：prep 标题 + `page_user_monitor_optical_path_update()` 右侧 n/5
+  → 测高（失败/无 LUT 起印拒绝）
   → Camera manifest → page_user_monitor_enter_print_result()
   → RETRIEVE → 取件弹窗滑到底 → control_print_result_collect() → 开门流程
 ```
 
+调试页 Other→Cabin 另有 **Skip Outer Door**（默认 Off=要做外门+关内门套件）。
+
 **取件从「一条常驻滑块」改成了「按钮 + 弹窗」**（稿 6338:27929）：点 `RETRIEVE` 开弹窗，
 里面是 `SLIDE TO RETRIEVE` + `Cancel`，滑到底才调 `control_print_result_collect()`。后面的
-`DOOR_OPENING` / `TRANSFER_BOX` / `DOOR_CONFIRM` 一行没动，转运盒开关仍默认关。
+`DOOR_OPENING` / `TRANSFER_BOX` 一行没动，转运盒开关仍默认关；开门成功即收，不再等关门。
 
 **Job 卡两个数字沿用原口径**，不按稿上的示例数字改：打印中是剩余时间 + 耗材 `--`（打印中
 拿不到用量），结束后才换成实际耗时（H:MM:SS）与 manifest 的 `material_g`。caption 照稿写
@@ -1420,76 +1432,39 @@ Manual 页的三轴位置与设备开关态取自 `DebugMsgProxy` 的 `register_
 **缩略图的进度填充是模拟的**：后端还没有切片预览图，Job 卡里放的是文件列表那张静态缩略图
 （`control_file_t::thumb_print`），上面再压一层齐色遮罩，高度 = (100 − 进度)%，从顶往下盖住
 「还没打到」的部分（`thumb_progress_apply()`）。形似而已，够表达进度。
+**只跟正式打印层进度**；起印 Prepare 阶段条会涨，蒙版保持全盖（0%）。
 
 **吹粉分两路 owner，别混**（`purify_owner()`）：打印结束后那次走 `UI_CLEAN_OWNER_PRINT_RESULT`
-（带清粉录像、接进同一条 timelapse、进打印历史），Manual 页那次走 `UI_CLEAN_OWNER_MANUAL`
-（纯手动清一遍，不录像不落盘）。判据就是当前在哪个 Tab——Manual 在打印态是禁用的，两者不会
-重叠。「一次打印结果只允许成功清一次」那道闸门只对前者上锁。
+（带清粉录像、接进同一条 timelapse、进打印历史；结果页自动开一轮，钮可停/再开），
+Manual 页那次走 `UI_CLEAN_OWNER_MANUAL`（纯手动清一遍，不录像不落盘）。判据就是当前在
+哪个 Tab——Manual 在打印态是禁用的，两者不会重叠。正常结束一律等 MCU 完成帧
+（`UI_CLEAN_EVT_DONE`）；用户点停走 Close → `UI_CLEAN_EVT_STOPPED`。
 
-#### 照明钮打印中隐藏
+#### 照明钮打印中只读
 
-稿上待机那八帧都有画面左下那枚照明钮，打印那五帧一帧都没有。按稿隐藏。
+稿上打印帧没有照明钮，现机保留可见但 **Prepare / 打印 / 暂停 / 结果页不可点**
+（`g_printing` 期间 CLICKABLE 关掉并略降透明度）。待机可切。
+
+开态：黄底（`#ffcd42`）+ **白**灯泡；关态仍是半透明白底 + 白图标。
+
+照明钮控制 SOC 六路舱灯（`lgt1l`…`lgt3r`，与调试页 Other→Cabin 同源），**不再下发 MCU
+Device/Light**。进页 `request_soc_led_state()`：mask≠0 钮亮，全 0 钮灭；点按则六路同开/同关。
+调试页进 Other 也会再 Get 一次，两边进页对齐即可（单槽，不做跨页直播）。
+
+#### Manual · Plate Position 右侧读数
+
+右侧数字是 **Z 轴当前位置（mm）**，来自 `DebugAxisStatePayload::z_pos_mm`，格式 `%.1f`
+（未带单位；下方 Powder Scraper 的 S 轴读数带 `mm`）。
 
 #### Manual 页几处待补
 
 - **Plate Position 三档暂时都走 `send_axis_home(Z)`**：后端只有「回零」一个绝对动作，
-  Level / Bottom 还没有对应命令，等协议补了再分档。
+  Level / Bottom 还没有对应命令，等协议补了再分档。不是把右侧读数设成固定档位。
 - **控制页那条「舱内 PM2.5 过高 → Too poor to open the gate」预警随控制页退役丢了。**
   门限判定本身在后端（`pm25_clean_threshold_`，可被 `cal.csv` 的 `PM2.5Clean` 覆盖），开门
   仍会被拦，只是拦之前用户看不到预警。补救留到后续：在 `OPEN` 按钮上加置灰态 + 一句提示。
 
-### 首页那两层为什么还留着
-
-`page_user_home.cpp` 里的打印态浮层 `g_print_area` 与待机监控层 `g_monitor_area`（连同
-`enter_printing_mode` / `enter_print_result` / `enter_monitor_mode` 那一组函数）**现在没有
-任何调用方**，是存档不是活代码。留着是等「首页在打印中长什么样」那张稿到位后再决定是删
-是改——新稿只给了待机态。
-
-**期间别把它们重新接通**：两层都建在首页上，接通会和监控页争同一个 `CameraPreviewPlayer`
-单例。下面「右上环境区」「转运盒流程」两节里凡是提到「打印态浮层 / 待机监控层」的，说的
-都是这两层。
-
-### 右上环境区（打印态 / 待机监控共用）
-
-> **存档**：本节讲的是首页那两层里的东西，现无活调用方，见上一节。监控页的环境读数
-> 改成了 Status 页那张白卡 + 2×2 网格（稿 6338:28064），几何与配色都另起一套。
-
-`build_env_wrap()` = HOME PM2.5 卡（稿 4231:5740）+ 4 列环境条（稿 4231:5749）。
-四列 caption 全是文字（`Temp.` / `O2` / `Humidity` / `Pressure`），不是图标。
-整体贴右上、退 `USER_PAD_LG`（稿 4972:31316 是 x=699 y=32，右缘 1248 → 距屏右/屏顶各 32），
-与右侧中部的拍照钮右边缘齐。
-
-**以新版稿 4972:27560 为准，那一版本身就是四列** —— 舱内 PM2.5 那列是设计在这一版去掉的，
-与首页右侧 CABIN 面板早先按稿 5277:11590 删掉同名那行是同一个动作。旧版 frame
-（4231:5749 / 4972:31258 / 4972:32054）还是五列，**对稿时别照旧版把它加回来**。
-
-几何全取新版稿：内边距 8（`USER_PAD_SM/2`）、列间距 12（`USER_PAD_SM*3/4`，1280 档正好
-整除）、每列定宽 64（`USER_ENV_COL_W`），整条宽度因此落在稿的 **308**。
-
-**字号比稿小一档，是为了塞进稿的 64 定宽**：稿是 caption 14 / 值 16 / 单位 10，而工程排
-Montserrat（稿是 Poppins，同字号更宽）。实测 `Humidity` 的 caption @14 要 66.6px、装不进
-64，降到 `caption_sm`（1280 档 12）后是 57.1，四列最宽也只有 62.1。值取
-`user_font_text_sm()`（16，稿值），单位取 `caption_sm`（12——Montserrat 没有 10 号）。
-`USER_ENV_COL_W` 为 0 的档位（1024/1920）装不下稿的等比列宽，退回按内容自适应。
-
-**PM 卡的宽度仍是内容自适应，没取稿的 157 定宽**：最坏文案 `Very Poor (150.0 ug/m3)` 按
-稿字号实测要 165.1px，而 157 扣掉两侧 16 的内边距只剩 125，差 40px，降字号救不回来。
-根因是稿上那行画的是短文案 `Fair (25μg/m³)`，没考虑最长分级词加三位小数的读数。
-
-打印态浮层与待机监控层是**同时建、靠显隐切**的两层，所以这一块的 label 句柄不能是
-单例——后建的会覆盖先建的，先建那层从此收不到刷新。八个句柄收进 `env_block_t`，
-`g_env_print` / `g_env_monitor` 各一份，都登记在 `kEnvBlocks[]` 里；
-`result_pm_card_update()` 和快照回调遍历这个数组，两份一起写。
-
-### 待机「查看监控」（稿 3122:13224）
-
-> **存档**：同上，这一层已由独立的监控页取代。
-
-右上环境区、右侧中部拍照钮都与打印态共用上面那套构造函数，几何配色天然一致。
-左下角是同款玻璃圆钮（图标换 `ic_home`）退出监控，右下角保留 `SLIDE TO UNLOCK` 滑块。
-
-拍照钮的图标是 `ic_photo`（照相机，稿 3847:9440），不是首页左下「查看监控」入口那枚
-`ic_camera`（摄像机）——两处语义不同，别图省事复用。
+### 打印结束与结果页
 
 时序：
 
@@ -1506,14 +1481,19 @@ Glavo Print_Terminate_Rsp / 进度 100% → control.cpp finish_printing()
   `has_entry=0`（0 帧未落盘）时用 payload 的 `aborted` 判完成/终止，耗时耗材显示 `--`。
 - **出口**：`RETRIEVE` → 取件弹窗（稿 6338:27929）滑到底 → `control_print_result_collect()`
   直接进 `DOOR_OPENING` 走开门流程，**刻意不借道 IDLE**（IDLE 分支的
-  `page_user_monitor_exit_printing_mode()` 会停预览并复位结果态，弹窗就浮在待机页上了）。
-  结果态与预览原样留在弹窗背后，等关门确认后才由 `PrintCollect` 分支统一回 IDLE 收尾。
+  `page_user_monitor_exit_printing_mode()` 会把结果态收成待机空态，弹窗就浮在空 Job 卡上了）。
+  结果态与预览原样留在弹窗背后，开门成功后由 `PrintCollect` 分支统一回 IDLE 收尾。
+  人还在监控页时退出打印态**不停流**（避免 Manual OPEN / 回待机黑一下）；切走了才 `stop()`。
   离开结果态改点左侧标签栏，页面被 PageManager 缓存住，再点监控仍回到结果态。
 - **PRINT_DONE 期间** `control_is_printing()` 返回 true → PageManager 挡住 `user_files`，
   取件前不能开新任务。
-- 吹粉钮：触发清粉测试；Media 按 `TIMELAPSE_VIDEO_FPS` 抽帧接续 JPEG，成功后合并进同一
-  `timelapse.mp4`（一次打印结果仅允许成功一次）。吹粉进行中点 `RETRIEVE` 会被挡下并 toast
-  提示，但稿上「吹粉完成前 RETRIEVE 置灰」那道门禁还没做，按钮本身一直是亮的。
+- 吹粉钮：进结果页 **Complete / 打印中终止** 自动下发 `UI_Clean_Test_Start_Req`
+  （`record_video=1`，仅清粉窗口抽帧接续 JPEG）。**Prepare 阶段终止不自动清粉**
+  （作业未开扫）。钮再点 → `UI_Clean_Test_Close_Req`
+  停风扇/停粉（`UI_CLEAN_EVT_STOPPED`）；再点又 Start。MCU 完成帧仍走
+  `APP_Clean_Test_Result_Ntf` → `UI_CLEAN_EVT_DONE`。吹粉进行中点 `RETRIEVE` 会被挡下
+  并 toast 提示，但稿上「吹粉完成前 RETRIEVE 置灰」那道门禁还没做，按钮本身一直是亮的。
+- **Print Terminated**：右侧不显示进度百分数，缩略图不挂进度蒙版（完整露出）。
 
 ### 门弹窗与放版弹窗（稿 6388:49816 / 49425 / 50202 与 6382:48451 / 48694 / 6388:48910）
 
@@ -1523,16 +1503,16 @@ Glavo Print_Terminate_Rsp / 进度 100% → control.cpp finish_printing()
 只借 `ui_modal_dialog_t` 承载 root 以沿用现有关闭逻辑。
 
 - **开门态的退出口是满宽 `Cancel`，不是右上角 X**。稿把那枚 X 去掉了，行为仍是
-  `on_door_opening_cancel`（净化中先停风扇、取件分支退回结果页、其余回 IDLE）。其余四态
-  本来就不给退出口——门已经开了，必须走完才能关门。
+  `on_door_opening_cancel`（净化中先停风扇、取件分支退回结果页、其余回 IDLE）。转运盒三步
+  本来就不给退出口。
 - **净化态没有单独的稿**。稿只画了「正在准备开门」，而 `DOOR_OPENING` 进来先看 PM2.5：
   超标就切 `Cleaning`、开风扇、跑满 `CLEAN_MIN_MS` 再开门。两态共用同一张顶图与转圈，只换
   标题。标题下那行灰字（`g_door_body`）平时是空的，只在净化中点取消时显示 `Stopping fan...`。
+  开门成功即收 overlay，不再进 DoorOpened / 关门等待。
 - **口罩徽标已删**。改稿前门三态、转运盒三步、放版「未放入」各挂一枚深色胶囊徽标，新稿一律
   没有，口罩要求改为写进标题下那行灰字。`make_mask_badge()` 随之删除。
-- **顶图统一满宽出血**。稿上「门已开启」那张是内缩 24 + 圆角 16 + `#ECEEF2` 描边，与另两张
-  满宽的不一致；按多数派统一，生成器里用 cover 裁法把它补成满宽（见
-  `tools/gen_popup_dialog_img.py` 的 `fit_cover()`，纵向居中裁而不是横向拉伸）。
+- **顶图统一满宽出血**。开门/清粉顶图满宽；历史「门已开启」资源仍保留在
+  `popup_dialog_img` 中但开门流程不再切过去。
 
 放版弹窗（`show_plate_prompt()`）是同一族的宽卡版本，稿值 808（`USER_PLATE_DLG_W`），改稿前
 是「屏宽 × 78%」算出来的 998。三个子视图共用一个常驻 header（返回 / 标题 / 关闭）：
@@ -1546,7 +1526,7 @@ Glavo Print_Terminate_Rsp / 进度 100% → control.cpp finish_printing()
 
 ### 转运盒流程（稿 6357:39444 / 39504 / 39470）
 
-滑动取件开门之后、关门确认之前的一段：把工件转移进转运盒再取下。默认**不启用**，由调试页
+滑动取件开门之后、回 IDLE 之前的一段：把工件转移进转运盒再取下。默认**不启用**，由调试页
 `Other` → `Print Gates` → `Transfer Box` 打开（`control_set_transfer_box_flow()`，纯 UI
 本地标志，不发消息也不落盘，重启回到关闭）。
 
@@ -1556,18 +1536,19 @@ RETRIEVE → 取件弹窗滑到底 → DOOR_OPENING（PM2.5/清粉 → 开门）
                   ② BoxMoving   转移：只有转圈，无按钮无关闭钮
                   ③ BoxShutter  推闸门：「Unlock and Remove the Box」直接可点
                   → 绿勾 toast「Transfer complete...」
-  → DOOR_CONFIRM  关门确认 → clean_test_close → IDLE
+  → clean_test_close → IDLE
 ```
 
-- **共用门弹窗骨架**：`DoorVariant` 扩了 `BoxInstall/BoxMoving/BoxShutter` 三档，`show_door_dialog()`
-  一个不变，只由 `door_apply_variant()` 换顶图与内容列。
+未开转运盒时：`DOOR_OPENING` 开门成功即回 IDLE（首页独立开门同理；打印前置则进选文件页）。
+**不再做关门轮询 / DoorOpened 等待页。**
+
+- **共用门弹窗骨架**：`DoorVariant` 为 `Opening/Cleaning` + `BoxInstall/BoxMoving/BoxShutter`，
+  `show_door_dialog()` 一个不变，只由 `door_apply_variant()` 换顶图与内容列。
 - **「装盒」与「抽隔断板」是一步不是两步**：新稿把两件事画在同一张图上（四枚外向蓝箭头），
   文案也合成了一句 `Install the box and pull out the divider`。别按旧稿拆回两档。
-- **关门确认不再分态**：改稿前取件分支（`transfer_box_flow_active()` 为真）另走一套「两态同
-  标题、无灰字说明、顶图换 `img_mask` / `img_door_close_hint`」的样式。新稿只给了一版，那条
-  分叉连同它专用的两张顶图一起删了，三个开门入口（打印前置、首页独立开门、取件）现在共用
-  `DoorOpened → DoorClosed` 同一套。`transfer_box_flow_active()` 本身留着，它还管**流程**要不要
-  插入转运盒三步（见 `state_after_door_open()`），只是不再管样式。
+- **开门即结束**：三个开门入口（打印前置、首页独立开门、取件）开完就收 overlay，不再等
+  传感器报门关，也不再弹 `Confirm the door is closed`。`transfer_box_flow_active()` 仍只管
+  **流程**要不要插入转运盒三步（见 `proceed_after_door_open()`）。
 - **`control_is_printing()`** 把 `TRANSFER_BOX` 也算进打印占用，转运期间同样挡住 `user_files`。
 - **装盒到位占位**：① 仍靠 `BOX_READY_MS` 定时器翻 `g_box_ready`（复用 `g_door_advance_timer`）。
 - **自动转运**：Ready 确认 → `send_transport_request()`（串口 A2/0x41 TLV 0x02）并进
@@ -2157,6 +2138,11 @@ Wi-Fi 连接密码与开发者密码共用一套外壳：`USER_WIFI_DLG_W`（稿
 - **分块建列表照旧保留**（`append_list_build_chunk()` / `list_build_timer_cb()` /
   `kListBuildChunkSize`）：长列表一次建完会卡帧。只是每块建的东西从「一行卡」变成
   「一张网格卡」。
+- **进页 dirty 缓存**：离页只藏网格、不拆卡。`g_list_dirty=false` 时 `refresh()` 直接露出
+  上次内容（解决「相片/录像很多时从别页切回来卡一下」）。首次进页、切 Tab、删除、
+  `APP_Print_Video_Manifest_Ntf` / `APP_Clean_Test_Result_Ntf` 置 dirty；真正重建走
+  `queue_rebuild_list()`（`lv_async_call`），不堵 `switch_to()`。多选中通知只打脏、
+  不打断勾选。不改 Media 写 `.rthm`、也不动 `PhotoDecoder` / 选文件 Job 卡缩略图。
 - **`USER_HIST_*` 里有三个本页已不用、只剩别页在用的**，别顺手删（`ui_theme.hpp` 也记了）：
 
   | 字段 | 谁还在用 |

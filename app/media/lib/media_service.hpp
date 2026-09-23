@@ -140,9 +140,6 @@ private:
     static uint64_t monotonic_us();
     static std::string format_stamp_local();
     static int run_shell_cmd(const char* cmd, const char* log_tag);
-    static void copy_nv12_tight(uint8_t* dst, const uint8_t* src_y,
-                                const uint8_t* src_uv, uint32_t src_stride_y,
-                                uint32_t width, uint32_t height);
 
     std::vector<middleware::Subscription> subs_;
     upc_ipc::IpcDmaFrameRingConsumer consumer_;

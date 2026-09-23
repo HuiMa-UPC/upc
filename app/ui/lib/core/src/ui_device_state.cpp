@@ -41,6 +41,10 @@ void apply_env(const middleware::EnvSnapshotPayload &p)
     g_snap.humidity_percent = p.humidity_percent;
     g_snap.pressure_kpa   = p.pressure_kpa;
     g_snap.powder_bits    = p.powder_bits;
+    if(p.door_state_valid) {
+        g_snap.door_state_valid = true;
+        g_snap.outer_door_open  = (p.outer_door_open != 0);
+    }
     notify_observers();
 }
 
@@ -77,6 +81,8 @@ void ui_device_state_init(void)
         g_snap.humidity_percent = -1.0f;
         g_snap.pressure_kpa   = -1.0f;
         g_snap.powder_bits    = 0u;
+        g_snap.outer_door_open  = false;
+        g_snap.door_state_valid = false;
         g_inited = true;
     }
     ui::UiMsgProxy::instance().register_env_update(
@@ -102,6 +108,13 @@ void ui_device_state_set_status(ui_device_status_t s)
                      s == UI_DEVICE_STATUS_PAUSED ||
                      s == UI_DEVICE_STATUS_PURIFYING ||
                      s == UI_DEVICE_STATUS_PURIFY_DONE);
+    notify_observers();
+}
+
+void ui_device_state_set_outer_door_open(bool open)
+{
+    g_snap.outer_door_open  = open;
+    g_snap.door_state_valid = true;
     notify_observers();
 }
 

@@ -4,6 +4,7 @@
 #include <atomic>
 #include <cstdint>
 #include <functional>
+#include <mutex>
 #include <string>
 #include <thread>
 #include <unordered_map>
@@ -48,6 +49,8 @@ private:
     int listen_fd_ = -1;
     std::atomic<bool> running_{false};
     std::thread accept_thread_;
+    std::mutex client_threads_mtx_;
+    std::vector<std::thread> client_threads_;
     Handler handler_;
 };
 

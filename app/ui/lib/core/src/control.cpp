@@ -13,6 +13,7 @@
 #include "ui_arc_spinner.hpp"
 #include "ui_xfr_dialog.hpp"
 #include "ui_device_state.hpp"
+#include "ui_clean_state.hpp"
 #include "ui_alarm_state.hpp"
 #include "popup_dialog_img.h"
 #include "powder_dialog_img.h"
@@ -27,7 +28,6 @@
 #include <cstdlib>
 #include <cstring>
 #include <deque>
-#include <filesystem>
 #include <memory>
 #include <string>
 #include <vector>
@@ -84,17 +84,15 @@ void schedule_commit_print_result_history()
 }
 
 
-/* 门流程来源：区分同一套门弹窗（DOOR_OPENING→DOOR_CONFIRM）的入口与终态。
- *   PrintPrep      —— 打印前置流程，确认关门后进入选文件页；
- *   HomeStandalone —— 首页独立开门，确认关门后返回首页。 */
-/* 开门流程的来源：决定关门确认后往哪走，以及取消时退回哪一屏。
- * PrintCollect = 打印结果页滑动取件，取消要退回结果页而不是待机首页。 */
+/* 门流程来源：区分同一套门弹窗（DOOR_OPENING〔→TRANSFER_BOX〕）的入口与终态。
+ *   PrintPrep      —— 打印前置流程，开门成功后进入选文件页；
+ *   HomeStandalone —— 首页独立开门，开门成功后返回首页；
+ *   PrintCollect   —— 打印结果页滑动取件，取消要退回结果页而不是待机首页。 */
 enum class DoorFlowOrigin { PrintPrep, HomeStandalone, PrintCollect };
 DoorFlowOrigin g_door_origin = DoorFlowOrigin::PrintPrep;
 
-/* 转运盒流程总开关（调试页 Other → Print Gates → Transfer Box）。默认关：取件仍是
- * 「开门 → 确认关门」两步。打开后取件分支才插入 TRANSFER_BOX 三步，并把关门确认
- * 换成新稿样式。纯 UI 本地标志，不发消息也不落盘。 */
+/* 转运盒流程总开关（调试页 Other → Print Gates → Transfer Box）。默认关：取件开门成功即回 IDLE。
+ * 打开后取件分支才插入 TRANSFER_BOX 三步。纯 UI 本地标志，不发消息也不落盘。 */
 bool g_transfer_box_flow = false;
 
 /** 转运盒流程是否对当前这趟门流程生效（只认取件分支） */
@@ -143,8 +141,6 @@ DoneCb g_pm25_cb = nullptr;
 void  *g_pm25_u = nullptr;
 DoneCb g_open_cb = nullptr;
 void  *g_open_u = nullptr;
-DoneCb g_close_cb = nullptr;
-void  *g_close_u = nullptr;
 DoneCb g_purify_cb = nullptr;
 void  *g_purify_u = nullptr;
 DoneCb g_clean_cb = nullptr;
@@ -181,21 +177,6 @@ std::string lvgl_file_src_from_path(const char* path)
         return std::string("A:") + path;
     }
     return std::string("A:/") + path;
-}
-
-/** 缩略图文件在不在。`control_file_t.thumb_*` 只是清单里抄来的路径，文件可能还没生成
- *  （切片刚落盘、或 USB 源根本不带缩略图），取不到就回落到占位图标。
- *
- *  **这是工程里第四份同名实现**（另三份在 page_user_files / page_user_monitor /
- *  page_user_home，各自私有）。放这儿是因为上面那个 `lvgl_file_src_from_path()` 与
- *  `thumb_*_src` 字段本来就在本文件维护，判存放在一起最顺。四份合并成公共件是另一件事。 */
-bool thumb_path_exists(const char* path)
-{
-    if(!path || path[0] == '\0') {
-        return false;
-    }
-    std::error_code ec;
-    return std::filesystem::exists(path, ec) && !ec;
 }
 
 /* 目录数据到达：换掉列表，并**按文件名**把选中项接回去。
@@ -321,7 +302,9 @@ lv_obj_t *make_round_icon_btn(lv_obj_t *parent, const char *symbol, lv_event_cb_
 
 void on_powder_low_async(void *user);
 void on_print_start_rejected_async(void *user);
+void on_outer_door_confirm_req_async(void *user);
 void close_powder_dlg(void);
+void close_outer_door_confirm_dlg(void);
 void stop_print_watchdogs(void);
 void start_print_peer_watch(void);
 void finish_printing(bool notify_complete);
@@ -462,6 +445,7 @@ void finish_printing(bool notify_complete)
     g_last_data_cache_rate = 0;
     /* 缺粉窗可能还开着（用户既没补粉也没取消，作业已被终止/跑完） */
     close_powder_dlg();
+    close_outer_door_confirm_dlg();
 
     if(notify_complete && g_job_done_cb) {
         DoneCb done_cb = g_job_done_cb;
@@ -607,20 +591,8 @@ void wire_msg_proxy()
             arm_door_open_retry_timer();
             return;
         }
-        if(cb) {
-            cb(u);
-        }
-    });
-
-    proxy.register_close_door_result([](const middleware::DoorResultPayload &p) {
-        DoneCb cb = g_close_cb;
-        void *u = g_close_u;
-        g_close_cb = nullptr;
-        g_close_u = nullptr;
-        if(!p.ok) {
-            /* 门未关：静默（由 DoorOpened 弹窗文案提示 + 轮询重试），不逐次弹 toast */
-            return;
-        }
+        /* 开门成功：乐观记下外门已开，Manual 内门/吹粉不必再等下一帧 env */
+        ui_device_state_set_outer_door_open(true);
         if(cb) {
             cb(u);
         }
@@ -737,6 +709,10 @@ void wire_msg_proxy()
         lv_async_call(on_print_start_rejected_async, nullptr);
     });
 
+    proxy.register_outer_door_confirm_req([]() {
+        lv_async_call(on_outer_door_confirm_req_async, nullptr);
+    });
+
     proxy.register_print_terminate_done([]() {
         const bool user_terminate = g_terminate_pending;
         if(user_terminate) {
@@ -828,8 +804,6 @@ void backend_cancel_pending()
     g_pm25_u = nullptr;
     g_open_cb = nullptr;
     g_open_u = nullptr;
-    g_close_cb = nullptr;
-    g_close_u = nullptr;
     g_purify_cb = nullptr;
     g_purify_u = nullptr;
     g_clean_cb = nullptr;
@@ -867,13 +841,6 @@ void backend_start_open_door(DoneCb cb, void *u)
     g_open_cb = cb;
     g_open_u = u;
     ui::UiMsgProxy::instance().send_open_door();
-}
-
-void backend_start_close_door(DoneCb cb, void *u)
-{
-    g_close_cb = cb;
-    g_close_u = u;
-    ui::UiMsgProxy::instance().send_close_door_check();
 }
 
 size_t backend_file_count()
@@ -949,7 +916,7 @@ void close_current_dialog(void)
 /* ============================================================================
  *  打印前预确认弹窗（Figma 1.1.x）：
  *    - 宽入口弹窗（g_plate_*）：是否已放入打印版 → 已放入 / 未放入 子视图
- *    - 窄舱门弹窗（g_door_*） ：Opening → DoorOpened（监测）→ DoorClosed（用户确认）
+ *    - 窄舱门弹窗（g_door_*） ：Opening / Cleaning（PM2.5 超标时）；开门成功即收
  *  公共小部件：Mask required 徽标、缩放插画。
  * ============================================================================ */
 
@@ -963,12 +930,9 @@ lv_obj_t         *g_door_content = nullptr;  /**< 下方 padded 内容列（切 
 lv_obj_t         *g_door_title   = nullptr;
 lv_obj_t         *g_door_body    = nullptr;  /**< [D] 状态副行（PM2.5 净化提示） */
 ui_arc_spinner_t *g_door_spinner = nullptr;
-/* 门流程节奏：让 Opening / DoorOpened 两个中间态"看得见"——避免后端即时应答导致一闪而过。
- *   - Opening：最短停留后再前进；
- *   - DoorOpened：最短停留后开始"关门检测"轮询，检测到门已关才进 DoorClosed。 */
+/* 门流程节奏：让 Opening / Cleaning 中间态"看得见"——避免后端即时应答导致一闪而过。
+ *   - Opening / Cleaning：最短停留后再前进；开门成功即结束，不再等关门。 */
 constexpr uint32_t DOOR_OPENING_MIN_MS = 300u;    /**< "正在准备开门"最短显示 */
-constexpr uint32_t DOOR_OPENED_MIN_MS  = 300u;    /**< "门已开启(置灰)"最短显示后才开始检测 */
-constexpr uint32_t DOOR_CLOSE_POLL_MS  = 800u;    /**< 关门检测轮询间隔 */
 constexpr uint32_t CLEAN_MIN_MS        = 300u;    /**< "正在清粉中"最短显示 */
 constexpr uint32_t DOOR_OPEN_RETRY_MS  = 800u;    /**< 开门失败重试间隔 */
 /* 转运盒：装盒到位仍用 BOX_READY_MS 占位；转移完成等 APP_Transport_Result_Ntf（result=0），
@@ -978,7 +942,6 @@ constexpr uint32_t BOX_READY_MS        = 1500u;   /**< 「转运盒未到位」�
 constexpr int32_t DOOR_IMG_W = 496;
 constexpr int32_t DOOR_IMG_H = 321;
 lv_timer_t *g_door_advance_timer    = nullptr;    /**< Opening/Cleaning 最短停留到时→前进 */
-lv_timer_t *g_door_close_poll_timer = nullptr;    /**< DoorOpened 关门检测轮询 */
 lv_timer_t *g_door_open_retry_timer = nullptr;    /**< Opening 开门失败重试定时器 */
 uint32_t    g_door_opening_since     = 0;          /**< 进入 Opening 的 tick */
 uint32_t    g_clean_since            = 0;          /**< 进入 Cleaning 的 tick */
@@ -1387,13 +1350,13 @@ ui_modal_dialog_t *show_plate_prompt(lv_obj_t *parent)
 
 /* -------------------------- 舱门弹窗（Figma 6388:49816/49425/50202） -------------------------- */
 
-/* Opening/Cleaning/DoorOpened/DoorClosed 是门四态（Cleaning 无稿，与 Opening 同形只换标题）；
+/* Opening/Cleaning 是开门两态（Cleaning 无稿，与 Opening 同形只换标题）；
  * Box* 是取件分支插入的转运盒三步（稿 6357:39444 / 39504 / 39470），共用同一个门弹窗骨架，
- * 只换顶图与内容列。 */
-enum class DoorVariant { Opening, Cleaning, DoorOpened, DoorClosed,
+ * 只换顶图与内容列。开门成功即收 overlay，不再有 DoorOpened/关门等待。 */
+enum class DoorVariant { Opening, Cleaning,
                          BoxInstall, BoxMoving, BoxShutter };
 
-void on_door_closed_confirm_btn(lv_event_t *e);
+void finish_after_door_open(void);
 void on_door_opening_cancel(lv_event_t *e);
 void on_box_install_confirm(lv_event_t *e);
 void on_box_shutter_done(lv_event_t *e);
@@ -1538,8 +1501,8 @@ ui_modal_dialog_t *show_door_dialog(lv_obj_t *parent, DoorVariant variant)
                           LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_clear_flag(g_door_content, LV_OBJ_FLAG_SCROLLABLE);
 
-    /* 右上角那枚 X 没了：新稿把开门态的退出做成了内容列末行的满宽 Cancel，
-     * 其余四态本来就不给退出口（门已经开了，必须走完才能关门）。 */
+    /* 右上角那枚 X 没了：新稿把开门态的退出做成了内容列末行的满宽 Cancel；
+     * 转运盒三步本来就不给退出口。 */
 
     lv_obj_set_style_opa(backdrop, LV_OPA_TRANSP, 0);
     lv_obj_fade_in(backdrop, 180, 0);
@@ -1594,8 +1557,8 @@ lv_obj_t *door_make_sub_label(lv_obj_t *parent, const char *text)
     return sub;
 }
 
-/* 切换舱门弹窗形态（新稿 6388:49816/49425/50202 门三态 + 6357 一族转运盒三步）：
- * 换顶图 + 重建内容列。骨架五态共用：满宽顶图 + 标题 +（灰字说明）+ 末行按钮或转圈。 */
+/* 切换舱门弹窗形态（Opening/Cleaning + 转运盒三步）：
+ * 换顶图 + 重建内容列。骨架共用：满宽顶图 + 标题 +（灰字说明）+ 末行按钮或转圈。 */
 void door_apply_variant(DoorVariant v)
 {
     if(!g_door_img_box || !g_door_content) {
@@ -1630,61 +1593,37 @@ void door_apply_variant(DoorVariant v)
         return;
     }
 
-    /* 转运盒三步（稿 6357:39444 / 39504 / 39470）：与门确认态同骨架。
+    /* 转运盒三步（稿 6357:39444 / 39504 / 39470）。
      * 稿把原先的「装盒」与「抽隔断板」合并成了一步，两件事在同一张图上用四枚外向箭头
      * 一起表达，所以这里只有三档而不是四档。 */
-    if(v == DoorVariant::BoxInstall || v == DoorVariant::BoxMoving ||
-       v == DoorVariant::BoxShutter) {
-        if(v == DoorVariant::BoxInstall) {
-            door_set_image(&img_box_install);
-            g_door_title = door_make_title(g_door_content);
-            lv_label_set_text(g_door_title, "Install the box and pull out the divider");
-            door_make_sub_label(g_door_content,
-                                "Tap the button below once the box is in place");
-            /* 到位与否只改按钮：未到位置灰不可点。g_box_ready 由 BOX_READY_MS 占位定时器
-             * 翻起（后端出到位信号后改由轮询翻）。 */
-            make_dlg_wide_button(g_door_content,
-                                 g_box_ready ? "Done" : "Not Ready",
-                                 g_box_ready, on_box_install_confirm);
-        } else if(v == DoorVariant::BoxMoving) {
-            door_set_image(&img_box_moving);
-            g_door_title = door_make_title(g_door_content);
-            lv_label_set_text(g_door_title, "Transferring the part to the box");
-            door_make_sub_label(g_door_content,
-                                "Do not detach the device during transfer");
-            /* 稿上这步无按钮也无关闭钮：等 MCU 转运结果 result=0 才前进 */
-            door_make_spinner(g_door_content);
-        } else {
-            door_set_image(&img_box_shutter);
-            g_door_title = door_make_title(g_door_content);
-            lv_label_set_text(g_door_title, "Push the shutter in by hand");
-            door_make_sub_label(g_door_content,
-                                "Tap done once the shutter is pushed in");
-            /* 闸门到位无检测（稿上两版插图按钮都是可点的），用户自己点 */
-            make_dlg_wide_button(g_door_content, "Unlock and Remove the Box",
-                                 true, on_box_shutter_done);
-        }
-        return;
-    }
-
-    /* DoorOpened（稿 6388:49425）/ DoorClosed（稿 6388:50202）。
-     *
-     * **两个开门入口现在共用这一套**：改稿前取件分支（transfer_box_flow_active）另有
-     * 一套「两态同标题、无灰字说明」的样式，新稿只给了一版，那条分叉连同它专用的
-     * img_mask / img_door_close_hint 顶图一起去掉了。
-     *
-     * 关门确认（image16）稿上没有灰字说明行，只有标题和按钮；门已开启（image15）有。 */
-    door_set_image(v == DoorVariant::DoorOpened ? &img_door_opened : &img_door_closed);
-
-    g_door_title = door_make_title(g_door_content);
-
-    if(v == DoorVariant::DoorOpened) {
-        lv_label_set_text(g_door_title, "Door Opened");
-        door_make_sub_label(g_door_content, "Wear a mask and load the print plate");
-        make_dlg_wide_button(g_door_content, "Door Not Closed", false, nullptr);
+    if(v == DoorVariant::BoxInstall) {
+        door_set_image(&img_box_install);
+        g_door_title = door_make_title(g_door_content);
+        lv_label_set_text(g_door_title, "Install the box and pull out the divider");
+        door_make_sub_label(g_door_content,
+                            "Tap the button below once the box is in place");
+        /* 到位与否只改按钮：未到位置灰不可点。g_box_ready 由 BOX_READY_MS 占位定时器
+         * 翻起（后端出到位信号后改由轮询翻）。 */
+        make_dlg_wide_button(g_door_content,
+                             g_box_ready ? "Done" : "Not Ready",
+                             g_box_ready, on_box_install_confirm);
+    } else if(v == DoorVariant::BoxMoving) {
+        door_set_image(&img_box_moving);
+        g_door_title = door_make_title(g_door_content);
+        lv_label_set_text(g_door_title, "Transferring the part to the box");
+        door_make_sub_label(g_door_content,
+                            "Do not detach the device during transfer");
+        /* 稿上这步无按钮也无关闭钮：等 MCU 转运结果 result=0 才前进 */
+        door_make_spinner(g_door_content);
     } else {
-        lv_label_set_text(g_door_title, "Confirm the door is closed");
-        make_dlg_wide_button(g_door_content, "Door Closed", true, on_door_closed_confirm_btn);
+        door_set_image(&img_box_shutter);
+        g_door_title = door_make_title(g_door_content);
+        lv_label_set_text(g_door_title, "Push the shutter in by hand");
+        door_make_sub_label(g_door_content,
+                            "Tap done once the shutter is pushed in");
+        /* 闸门到位无检测（稿上两版插图按钮都是可点的），用户自己点 */
+        make_dlg_wide_button(g_door_content, "Unlock and Remove the Box",
+                             true, on_box_shutter_done);
     }
 }
 
@@ -1961,6 +1900,76 @@ void on_print_start_rejected_async(void * /*user*/)
     finish_printing(false);
 }
 
+/* ---- 起印前外门确认（无超时；Confirm 再检门，Cancel 跳过外门检测） ---- */
+ui_modal_dialog_t *g_outer_door_confirm_dlg = nullptr;
+
+void close_outer_door_confirm_dlg(void)
+{
+    if(g_outer_door_confirm_dlg) {
+        ui_modal_dialog_close(g_outer_door_confirm_dlg);
+        g_outer_door_confirm_dlg = nullptr;
+    }
+}
+
+void on_outer_door_confirm_ok(lv_event_t * /*e*/)
+{
+    close_outer_door_confirm_dlg();
+    ui::UiMsgProxy::instance().send_outer_door_confirm(false);
+}
+
+void on_outer_door_confirm_cancel(lv_event_t * /*e*/)
+{
+    close_outer_door_confirm_dlg();
+    ui::UiMsgProxy::instance().send_outer_door_confirm(true);
+}
+
+void show_outer_door_confirm_dlg(void)
+{
+    if(g_outer_door_confirm_dlg) {
+        return;
+    }
+    ui_modal_dialog_cfg_t cfg =
+        ui_modal_dialog_cfg_user("Close the outer door", USER_DLG_W, true);
+    /* 与弹窗新稿一族一致：白卡 + 深墨主按钮（不用 accent 蓝）。 */
+    cfg.light_theme = true;
+    cfg.with_close_btn = false;
+    g_outer_door_confirm_dlg = ui_modal_dialog_open(lv_layer_top(), &cfg);
+    if(!g_outer_door_confirm_dlg) {
+        return;
+    }
+    lv_obj_t *sub = ui_user_make_body_label(
+        g_outer_door_confirm_dlg->body,
+        "Close the outer door fully, then confirm to continue print prep.");
+    lv_label_set_long_mode(sub, LV_LABEL_LONG_MODE_WRAP);
+    lv_obj_set_width(sub, LV_PCT(100));
+    lv_obj_set_style_text_align(sub, LV_TEXT_ALIGN_CENTER, 0);
+    /* Confirm 在上、Cancel 在下；列布局时关掉 flex_grow，避免按钮被拉高。 */
+    lv_obj_set_flex_flow(g_outer_door_confirm_dlg->footer, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_row(g_outer_door_confirm_dlg->footer, USER_PAD, 0);
+    lv_obj_set_flex_align(g_outer_door_confirm_dlg->footer, LV_FLEX_ALIGN_START,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_t *ok = ui_user_make_confirm_footer_btn(
+        g_outer_door_confirm_dlg->footer, "Confirm",
+        true, user_light_nav_on, true,
+        on_outer_door_confirm_ok, nullptr);
+    lv_obj_set_flex_grow(ok, 0);
+    lv_obj_set_width(ok, LV_PCT(100));
+    lv_obj_t *cancel = ui_user_make_confirm_footer_btn(
+        g_outer_door_confirm_dlg->footer, "Cancel",
+        false, user_light_nav_on, true,
+        on_outer_door_confirm_cancel, nullptr);
+    lv_obj_set_flex_grow(cancel, 0);
+    lv_obj_set_width(cancel, LV_PCT(100));
+}
+
+void on_outer_door_confirm_req_async(void * /*user*/)
+{
+    if(g_state != CONTROL_STATE_PRINTING) {
+        return;
+    }
+    show_outer_door_confirm_dlg();
+}
+
 
 
 
@@ -2015,8 +2024,7 @@ void open_user_confirm_dialog(lv_obj_t *parent, const char *title, const char *b
         return;
     }
     ui_modal_dialog_cfg_t cfg = ui_modal_dialog_cfg_user(title, USER_DLG_W, true);
-    /* 浅色档：选文件页/删除确认用。终止打印发生在仍为深色的控制页上，故按调用点给，
-     * 不在这里一刀切。 */
+    /* 弹窗新稿落地后一律浅色；light 形参留给少数调用点显式选深色（目前已无）。 */
     cfg.light_theme = light;
     g_confirm_dlg = ui_modal_dialog_open(parent, &cfg);
     if(!g_confirm_dlg) {
@@ -2107,7 +2115,7 @@ void show_print_confirm_dialog(void)
     lv_obj_set_style_bg_opa(preview, 13, 0);          /* #333145 @5% */
     lv_obj_clear_flag(preview, LV_OBJ_FLAG_SCROLLABLE);
 
-    if(thumb_path_exists(file->thumb_large)) {
+    if(ui_user_thumb_path_exists(file->thumb_large)) {
         lv_obj_t *pimg = lv_image_create(preview);
         lv_image_set_src(pimg, file->thumb_large_src);
         lv_obj_set_size(pimg, LV_PCT(100), LV_PCT(100));
@@ -2283,10 +2291,6 @@ void stop_door_timers(void)
         lv_timer_delete(g_door_advance_timer);
         g_door_advance_timer = nullptr;
     }
-    if(g_door_close_poll_timer) {
-        lv_timer_delete(g_door_close_poll_timer);
-        g_door_close_poll_timer = nullptr;
-    }
     if(g_door_open_retry_timer) {
         lv_timer_delete(g_door_open_retry_timer);
         g_door_open_retry_timer = nullptr;
@@ -2348,14 +2352,35 @@ void arm_door_open_retry_timer(void)
 }
 
 /* ---- 转运盒三步（取件分支，稿 3171:7305 / 3225:10476 / 3225:13586）----
- * 装盒 →（转运盒到位）→ 转移工件 →（转移完成）→ 推入闸门 → 解锁取下 → 关门确认。
+ * 装盒 →（转运盒到位）→ 转移工件 →（转移完成）→ 推入闸门 → 解锁取下 → 结束开门流程。
  * 后端还没有这三处信号，两处等待用 BOX_* 定时器占位，闸门那步稿上本就靠用户点。 */
 
-/** 门开之后往哪走：取件且开了转运盒流程先走三步，否则直接关门确认。 */
-control_state_t state_after_door_open(void)
+/** 开门成功后收 overlay 并按入口走终态；不再做关门检测。 */
+void finish_after_door_open(void)
 {
-    return transfer_box_flow_active() ? CONTROL_STATE_TRANSFER_BOX
-                                      : CONTROL_STATE_DOOR_CONFIRM;
+    if(g_state != CONTROL_STATE_DOOR_OPENING &&
+       g_state != CONTROL_STATE_TRANSFER_BOX) {
+        return;
+    }
+    if(g_door_origin == DoorFlowOrigin::HomeStandalone ||
+       g_door_origin == DoorFlowOrigin::PrintCollect) {
+        if(g_door_origin == DoorFlowOrigin::PrintCollect) {
+            ui_clean_state_stop();
+        }
+        enter_state(CONTROL_STATE_IDLE);
+    } else {
+        goto_file_selection();
+    }
+}
+
+/** 门开之后往哪走：取件且开了转运盒流程先走三步，否则直接结束。 */
+void proceed_after_door_open(void)
+{
+    if(transfer_box_flow_active()) {
+        enter_state(CONTROL_STATE_TRANSFER_BOX);
+    } else {
+        finish_after_door_open();
+    }
 }
 
 /* 占位「转运盒已到位」：把置灰按钮翻成可点（重建同一形态即可，见 g_box_ready） */
@@ -2406,59 +2431,15 @@ void on_box_shutter_done(lv_event_t * /*e*/)
     }
     ui_toast_show_icon("Transfer complete. Remove the box",
                        user_color_status_ok, 3000, &ic_badge_check);
-    enter_state(CONTROL_STATE_DOOR_CONFIRM);
+    finish_after_door_open();
 }
 
-/* 未放入分支：开门 → 门已开启等待页 → 关门监测 Rsp → 关门确认页 */
-void pf_on_close_door_done(void * /*u*/)
-{
-    if(g_state != CONTROL_STATE_DOOR_CONFIRM) {
-        return;
-    }
-    /* 门已关：停轮询，切到"门已关好"可点确认态 */
-    if(g_door_close_poll_timer) {
-        lv_timer_delete(g_door_close_poll_timer);
-        g_door_close_poll_timer = nullptr;
-    }
-    door_apply_variant(DoorVariant::DoorClosed);
-}
-
-/* DoorOpened 轮询：首次在最短停留后触发，之后每 DOOR_CLOSE_POLL_MS 发一次关门检测，
- * 直到后端回"门已关"（pf_on_close_door_done 停轮询并前进）。 */
-void door_close_poll_cb(lv_timer_t *t)
-{
-    if(g_state != CONTROL_STATE_DOOR_CONFIRM) {
-        return;   /* 状态已变，计时器由 stop_door_timers 清理 */
-    }
-    lv_timer_set_period(t, DOOR_CLOSE_POLL_MS);   /* 首次后转为轮询节奏 */
-    backend_start_close_door(pf_on_close_door_done, nullptr);
-}
-
-void on_door_closed_confirm_btn(lv_event_t * /*e*/)
-{
-    if(g_state != CONTROL_STATE_DOOR_CONFIRM) {
-        return;
-    }
-    /* PrintCollect：件已取走、门也关好了，这时才真正退出打印状态回待机首页 */
-    if(g_door_origin == DoorFlowOrigin::HomeStandalone ||
-       g_door_origin == DoorFlowOrigin::PrintCollect) {
-        const bool from_print_collect = (g_door_origin == DoorFlowOrigin::PrintCollect);
-        if(from_print_collect) {
-            /* 清粉/取件流程回首页前，强制发送 clean_test_close 收尾串口流程。 */
-            ui::UiMsgProxy::instance().send_clean_test_close();
-        }
-        enter_state(CONTROL_STATE_IDLE);
-    } else {
-        goto_file_selection();
-    }
-}
-
-/* Opening 最短停留到时 → 进入 DoorOpened 确认态 */
-void door_advance_to_confirm_cb(lv_timer_t * /*t*/)
+/* Opening 最短停留到时 → 结束开门 / 进转运盒 */
+void door_advance_after_opening_cb(lv_timer_t * /*t*/)
 {
     g_door_advance_timer = nullptr;   /* one-shot：LVGL 回调后自删，仅清空句柄 */
     if(g_state == CONTROL_STATE_DOOR_OPENING) {
-        enter_state(state_after_door_open());
+        proceed_after_door_open();
     }
 }
 
@@ -2470,13 +2451,13 @@ void pf_on_open_door_done(void * /*u*/)
     }
     const uint32_t elapsed = lv_tick_elaps(g_door_opening_since);
     if(elapsed >= DOOR_OPENING_MIN_MS) {
-        enter_state(state_after_door_open());
+        proceed_after_door_open();
         return;
     }
     if(g_door_advance_timer) {
         lv_timer_delete(g_door_advance_timer);
     }
-    g_door_advance_timer = lv_timer_create(door_advance_to_confirm_cb,
+    g_door_advance_timer = lv_timer_create(door_advance_after_opening_cb,
                                            DOOR_OPENING_MIN_MS - elapsed, nullptr);
     lv_timer_set_repeat_count(g_door_advance_timer, 1);
 }
@@ -2724,14 +2705,6 @@ void enter_state(control_state_t s)
         arm_box_timer(box_ready_cb, BOX_READY_MS);
         break;
 
-    case CONTROL_STATE_DOOR_CONFIRM:
-        overlay_show();
-        g_current_dlg = show_door_dialog(g_overlay, DoorVariant::DoorOpened);
-        /* 最短停留后开始轮询关门检测（门真正关上才前进到"门已关好"） */
-        g_door_close_poll_timer = lv_timer_create(door_close_poll_cb,
-                                                  DOOR_OPENED_MIN_MS, nullptr);
-        break;
-
     case CONTROL_STATE_PREPARE_WAIT:
         overlay_show();
         show_prepare_dlg();
@@ -2756,8 +2729,8 @@ void enter_state(control_state_t s)
         break;
 
     case CONTROL_STATE_PRINT_DONE:
-        /* 刻意不动打印中浮层：page_user_monitor_exit_printing_mode() 会 stop 摄像头，
-         * 这里要让预览接着跑。界面维持打印中原样，等 Camera 的 manifest 通知到达，
+        /* 刻意不走 IDLE：exit_printing_mode() 会把 Job 卡从结果态收成待机空态。
+         * 界面维持打印中原样，等 Camera 的 manifest 通知到达，
          * on_print_video_manifest() 再切结果页浮层。 */
         stop_print_watchdogs();
         overlay_hide();
@@ -2918,8 +2891,7 @@ bool control_is_printing(void)
            g_state == CONTROL_STATE_PRINT_DONE ||
            (g_door_origin == DoorFlowOrigin::PrintCollect &&
             (g_state == CONTROL_STATE_DOOR_OPENING ||
-             g_state == CONTROL_STATE_TRANSFER_BOX ||
-             g_state == CONTROL_STATE_DOOR_CONFIRM));
+             g_state == CONTROL_STATE_TRANSFER_BOX));
 }
 
 void control_print_result_collect(void)
@@ -2927,11 +2899,11 @@ void control_print_result_collect(void)
     if(g_state != CONTROL_STATE_PRINT_DONE) {
         return;
     }
-    /* 改为滑动开门成功后即触发 finalize 链路，不再等门关闭确认。 */
+    /* 改为滑动开门成功后即触发 finalize 链路，不再等门关闭。 */
     schedule_commit_print_result_history();
     /* 取件 = 开门，但不能借道 IDLE：IDLE 分支会 page_user_monitor_exit_printing_mode()，
-     * 停掉摄像头并收起结果页浮层，弹窗就浮在待机首页上了。直接进开门态，
-     * 结果页与预览原样留在弹窗背后；关门确认后才由 PrintCollect 分支回 IDLE。 */
+     * 收起结果页浮层，弹窗就浮在待机 Job 空态上了。直接进开门态，
+     * 结果页与预览原样留在弹窗背后；开门成功后由 PrintCollect 分支回 IDLE。 */
     g_door_origin = DoorFlowOrigin::PrintCollect;
     enter_state(CONTROL_STATE_DOOR_OPENING);
 }

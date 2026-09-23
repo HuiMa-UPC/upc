@@ -11,7 +11,6 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
-#include <filesystem>
 #include <string>
 
 /*
@@ -77,15 +76,6 @@ void make_detail_inline_kv(lv_obj_t *parent, const lv_image_dsc_t *icon,
                            lv_color_t value_color, lv_obj_t **out_val,
                            const lv_font_t *value_font = nullptr);
 
-bool thumb_path_exists(const char* path)
-{
-    if(!path || path[0] == '\0') {
-        return false;
-    }
-    std::error_code ec;
-    return std::filesystem::exists(path, ec) && !ec;
-}
-
 /* 文件大小（字节）→ 人类可读字符串 */
 void format_file_size(char *buf, size_t n, uint32_t bytes)
 {
@@ -122,7 +112,7 @@ void update_detail_panel(const control_file_t *file)
     }
 
     if(g_detail_preview_img && g_detail_preview_icon) {
-        const bool show_real_thumb = !is_usb && thumb_path_exists(file->thumb_large);
+        const bool show_real_thumb = !is_usb && ui_user_thumb_path_exists(file->thumb_large);
         if(show_real_thumb) {
             lv_image_set_src(g_detail_preview_img, file->thumb_large_src);
             lv_obj_clear_flag(g_detail_preview_img, LV_OBJ_FLAG_HIDDEN);
@@ -369,7 +359,7 @@ lv_obj_t *make_file_card(lv_obj_t *parent, const control_file_t *file, size_t in
     lv_obj_clear_flag(thumb, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_remove_flag(thumb, LV_OBJ_FLAG_CLICKABLE);
     const bool show_real_thumb =
-        (g_file_tab != FileTab::Usb) && thumb_path_exists(file->thumb_small);
+        (g_file_tab != FileTab::Usb) && ui_user_thumb_path_exists(file->thumb_small);
     if(show_real_thumb) {
         lv_obj_t *img = lv_image_create(thumb);
         lv_image_set_src(img, file->thumb_small_src);
@@ -963,7 +953,6 @@ void page_user_files_refresh(bool /*force*/)
     g_files_page_active = true;
     control_files_reset_dir_pending();
     control_files_request_dir_open(g_file_tab);
-    ui::UiMsgProxy::instance().send_supply_status();
 }
 
 void page_user_files_exit(void)
