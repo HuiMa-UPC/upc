@@ -26,7 +26,7 @@ extern "C" {
 #define SDBG_PORT_SENSORS   0xA5  /* PORT_SENSORS_TASK：门/照明/风扇/三通/激光使能/基板加热 */
 #define SDBG_PORT_POWDER    0xA9  /* PORT_POWDER_TASK：粉桶 */
 #define SDBG_PORT_GAS       0xA1  /* PORT_GAS_TASK：洗气 */
-#define SDBG_PORT_PRINTING  0xA4  /* PORT_PRINTING_TASK：清粉测试/打印层参数 */
+#define SDBG_PORT_PRINTING  0xA4  /* PORT_PRINTING_TASK：打印层参数 */
 #define SDBG_PORT_LASER     0xAA  /* PORT_LASER_TASK：激光器手动功率 */
 #define SDBG_PORT_ALARM     0xA3  /* PORT_ALARM_TASK：报警复位 */
 
@@ -98,6 +98,13 @@ int serial_debug_build_powder_bucket(uint8_t bucket_id, bool on,
 int serial_debug_build_sieve_motor(uint8_t action, uint8_t* out, size_t out_size);
 
 /**
+ * 回粉电机手动。action 与 DebugMotorAction 对齐：
+ * 0=停止并恢复自动(TLV 0x18) / 1=送往 B 瓶(0x17) / 2=送往 A 瓶(0x16)。
+ * Port=SENSORS，Cmd=0x9A，无 Value。
+ */
+int serial_debug_build_return_powder_motor(uint8_t action, uint8_t* out, size_t out_size);
+
+/**
  * 内门（原回粉电机块改为内门）。action 与 DebugMotorAction 对齐：
  * 0=停止(TLV 0x0E) / 1=开(0x0C) / 2=关(0x0D)。Port=SENSORS，Cmd=0x9A，无 Value。
  */
@@ -116,7 +123,7 @@ int serial_debug_build_switch(uint8_t target, bool on,
 /** 清粉请求开启。Port=GENERAL(0xA2)，Cmd=0x42，TLV=0x01。 */
 int serial_debug_build_clean_test_start(uint8_t* out, size_t out_size);
 
-/** 清粉测试关闭/中止。Port=PRINTING，Cmd=0x81，TLV=0x21。 */
+/** 清粉测试关闭/中止。Port=GENERAL(0xA2)，Cmd=0x42，TLV=0x02。 */
 int serial_debug_build_clean_test_close(uint8_t* out, size_t out_size);
 
 /**

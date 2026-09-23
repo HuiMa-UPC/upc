@@ -120,6 +120,7 @@ private:
     void handle_debug_device(const middleware::Message& msg);
     void handle_debug_powder_bucket(const middleware::Message& msg);
     void handle_debug_pusher(const middleware::Message& msg);
+    void handle_debug_return_powder(const middleware::Message& msg);
     void handle_debug_inner_door(const middleware::Message& msg);
     void handle_debug_fan(const middleware::Message& msg);
     void handle_debug_fan_duty(const middleware::Message& msg);
@@ -361,6 +362,10 @@ private:
     bool clean_test_active_ = false;
     bool clean_video_record_on_ = true; /**< 仅调试页状态回读；Purify 录像不再受其门控 */
     bool clean_video_session_started_ = false;
+    /** 会话中途发了清粉停止：MCU 随后还会补一条属于旧会话的结束上报（中止回 result=2，
+     *  或停止前已在途的 0/1），截止时刻前到达的第一条须丢弃，免得误结束紧接着新开的会话。 */
+    bool clean_abort_ack_pending_ = false;
+    std::chrono::steady_clock::time_point clean_abort_ack_deadline_{};
     char clean_test_session_id_[32]{};
     char clean_test_job_name_[64]{};
     bool print_h264_continuous_on_ = false;

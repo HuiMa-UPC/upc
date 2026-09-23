@@ -319,6 +319,13 @@ void DebugMsgProxy::send_sieve(middleware::DebugMotorAction action)
     publish_pod(middleware::MsgType::UI_Debug_Pusher_Ntf, p);
 }
 
+void DebugMsgProxy::send_return_powder(middleware::DebugMotorAction action)
+{
+    middleware::DebugMotorPayload p{};
+    p.action = static_cast<uint8_t>(action);
+    publish_pod(middleware::MsgType::UI_Debug_Return_Powder_Ntf, p);
+}
+
 void DebugMsgProxy::send_inner_door(middleware::DebugMotorAction action)
 {
     middleware::DebugMotorPayload p{};
