@@ -940,8 +940,9 @@ pending 自动解除——正好顺带验超时路径。
   统一说 No print files 会让人以为盘是空的）。
 
 删除与终止打印两个确认弹窗都走浅色档（`open_user_confirm_dialog()` 的 `light` 参数）。
-两者共用同一个 helper，所以按调用点给、不能一刀切。终止打印发生在监控页上（背后是摄像头
-画面），浅色遮罩 `black @50%` 压上去正好把画面压暗一档、白卡浮在上面，与稿 6345:31291 一致。
+终止打印发生在监控页上（背后是摄像头画面），浅色遮罩压上去正好把画面压暗一档、白卡浮在
+上面，与稿 6345:31291 一致。遮罩现在是 `#333145 @28%`（`USER_LIGHT_BACKDROP_OPA`，稿
+6423:51743 量的），改稿前是 `black @50%`。
 
 - **信息元 `make_detail_inline_kv()`**：「[图标] caption value」单行小项，**详情面板与
   文件列表行共用同一个**。三个可选项：`icon` 传 nullptr 不占图标位（USB 的文件大小行）；
@@ -971,7 +972,17 @@ pending 自动解除——正好顺带验超时路径。
 > `apply_plate_thickness_ui()` / `reset_plate_thickness()` / `make_detail_warn_row()`，
 > 以及 `Confirm Print` 的 `LV_STATE_DISABLED` 样式——选中文件后该按钮现在恒可点。
 
-`Confirm Print` 之后的「开始打印」二次确认弹窗保留。删除确认与终止打印确认共用
+`Confirm Print` 之后的「开始打印」二次确认弹窗保留，**没有新稿，但已随弹窗新稿一族翻成
+浅色**（白卡 / 深墨 28% 遮罩 / `user_font_dlg_title` 标题 / 页脚走 `light=true`，主按钮是
+深墨实心而非 accent 蓝）。它和门弹窗、三张粉料弹窗一样**自建骨架、不走 `ui_modal_dialog`**
+——顶部那块满宽预览图做不进那个控件的四周内距里。翻浅色时按调用点扫 `ui_modal_dialog_open()`
+会漏掉这三处，改这一族记得单独过一遍。
+
+顶部预览取 `thumb_large`（与选文件页详情面板同源，二次确认该还是同一张图），判存用
+`thumb_path_exists()`，取不到才出占位图标。**先前这里只建了占位、从不加载缩略图**，所以恒
+显示破图。
+
+删除确认与终止打印确认共用
 `open_user_confirm_dialog()`：标题问句（`user_font_value`）+ 一句说明（`user_font_text`）+
 取消(4% 白底) / 危险(实心红)，两枚等分整行、`USER_BTN_RADIUS` 圆角。页脚这两枚按钮的样式
 已提到 `ui_user_make_confirm_footer_btn()`，打印历史页的批量删除确认用的是同一枚。
@@ -1262,13 +1273,44 @@ x=260 挪回 x=160、宽度从 202 涨到 216，`make_light_square_btn()` 与 `i
 | Tab 行 | `(892,32) 356×64 rx16`，底 `#333145@5%`，选中白胶囊 `114.667×60 rx14` | `USER_MON_ROW_H` / `USER_MON_RADIUS`，控件见下 |
 | Job 缩略图框 | `(892,120) 356×210 rx16`，底 `#333145@15%` | `USER_MON_THUMB_H` |
 | 进度条 | `(892,432) 356×24 rx8` | `USER_MON_BAR_H`，圆角取其 1/3 |
-| 两张数据卡 | `(892,480)` / `(1078,480)` 各 `170×98 rx16` 白 | `USER_MON_STAT_H`，两张 `flex_grow=1` 等分 |
+| Job 两张数据卡 | `(892,480)` / `(1078,480)` 各 `170×98 rx16` 白 | `USER_MON_STAT_H`，两张 `flex_grow=1` 等分 |
+| Status PM 卡 | `(892,114) 356×210 rx16` 白 | `USER_MON_PM_H`，**定高**，见下 |
+| Status 指标卡 | `170×113 rx16` 白，两行两列缝均 16 | `USER_MON_CELL_H` |
 | 底部按钮 | 统一 `y=684 h=84 rx24` | `USER_ACTION_BTN_SZ` / `USER_LIGHT_RADIUS`，四档见下 |
 | 摄像头浮钮 | `72×72 rx20` 白 15%：照明 `(160,690)`、拍照 `(662,690)`、全屏 `(750,690)`；全屏档后两枚挪到 `(1072,690)` / `(1160,690)` | `USER_LIGHT_BTN_SZ` |
 | 状态胶囊 | `(160,32) 102×46 rx12` 白 70% + `r=4` 圆点 | `chip_set()`，目前只有吹粉中一档 |
 
+右栏内所有纵向间距（Tab→PM 卡、PM 卡→网格、网格两行之间）稿上都是 16，横向两列也是 16。
+
 几处刻意与稿一致、**没有归一**的数：浮钮距视口右缘非全屏是 38、全屏是 48，而左边照明钮
 两档都是 32；右栏底色是 `#F5F5F5` 而不是其余浅色页那个 `#FAFAFA`。稿上就是这样。
+
+#### Status 页的字号与首页四宫格是同一套
+
+**稿上 Status 的 2×2 指标卡与首页四宫格是同一个组件**，所以字号必须同源：caption 20 配
+小后缀 13（Montserrat 无 13 号，取最近的 `user_font_caption()` 14）、数值 32 配单位 20；
+PM 卡的标题 20、分级大字 32、读数 24。
+
+第一版照 Job 卡那套给了 caption 16 / 数值 20 / 读数 16，**整体小一档半**，实机一眼就能看
+出来，而且 `Temp.` 那格漏了 `(°C)` 小后缀。两处「大字 + 小一号后缀」都要拆成两个 label
+横排、用 `baseline_pad()` 把基线找齐（LVGL 一个 label 只能一种字体，而 flex 只能按盒子边
+对齐、没有基线对齐），做法与首页 `make_metric_cell()` 一字不差。
+
+**指标卡的高不复用 `USER_MON_STAT_H`**：那个 98 是 Job 页两张数据卡的稿值，Status 这边
+稿上是 113，两处本来就不是一个数，共用一个字段改哪边都会牵连另一边。
+
+#### PM 卡定高 + 色条靠 flex_grow 顶到底
+
+卡定高 `USER_MON_PM_H`（稿 210）而不是内容自适应：稿上色条与卡底之间留了 24 的空，
+自适应会把卡收矮一圈。内距上 16 下 24、左右 24（色条左缘 916 减卡左缘 892）。
+
+色条**不写死 `margin_top`，用一个 `flex_grow` 占位把它顶到内容区底部**。三段文字的行高是
+字体算出来的，写死间距一旦加起来超过定高，色条会被定高卡片裁掉半截；用占位则无论行高
+怎么变都贴着 `pad_bottom` 那条线。当前三档实测余量 24px，落位与稿差 1px 以内。
+
+**色条那一行的高按游标直径给（20），色条本身只占中间的 8。** 这是个踩过的坑：游标比色条
+高一圈（稿上色条 y286..293、圆点约 y283..303），行高若只有 8，LVGL 会按父内容区把圆点裁成
+一条 8 高的白片——实机表现为「游标整个不见了」，代码明明建了对象。
 
 #### 摄像头出图几何恒按全屏宽算
 
@@ -1465,7 +1507,36 @@ Glavo Print_Terminate_Rsp / 进度 100% → control.cpp finish_printing()
   `timelapse.mp4`（一次打印结果仅允许成功一次）。吹粉进行中点 `RETRIEVE` 会被挡下并 toast
   提示，但稿上「吹粉完成前 RETRIEVE 置灰」那道门禁还没做，按钮本身一直是亮的。
 
-### 转运盒流程（稿 3171:7305 / 3225:10476 / 3225:13586 / 4811:6178+6191）
+### 门弹窗与放版弹窗（稿 6388:49816 / 49425 / 50202 与 6382:48451 / 48694 / 6388:48910）
+
+三个开门入口（打印前放版、首页独立开门、打印后取件）共用 `control.cpp` 的
+`show_door_dialog()` + `door_apply_variant()`：白卡 + **满宽出血顶图**（496×321）+ 标题 +
+（灰字说明）+ 末行按钮或转圈。骨架不走 `ui_modal_dialog`——它四周的内边距做不出满宽顶图，
+只借 `ui_modal_dialog_t` 承载 root 以沿用现有关闭逻辑。
+
+- **开门态的退出口是满宽 `Cancel`，不是右上角 X**。稿把那枚 X 去掉了，行为仍是
+  `on_door_opening_cancel`（净化中先停风扇、取件分支退回结果页、其余回 IDLE）。其余四态
+  本来就不给退出口——门已经开了，必须走完才能关门。
+- **净化态没有单独的稿**。稿只画了「正在准备开门」，而 `DOOR_OPENING` 进来先看 PM2.5：
+  超标就切 `Cleaning`、开风扇、跑满 `CLEAN_MIN_MS` 再开门。两态共用同一张顶图与转圈，只换
+  标题。标题下那行灰字（`g_door_body`）平时是空的，只在净化中点取消时显示 `Stopping fan...`。
+- **口罩徽标已删**。改稿前门三态、转运盒三步、放版「未放入」各挂一枚深色胶囊徽标，新稿一律
+  没有，口罩要求改为写进标题下那行灰字。`make_mask_badge()` 随之删除。
+- **顶图统一满宽出血**。稿上「门已开启」那张是内缩 24 + 圆角 16 + `#ECEEF2` 描边，与另两张
+  满宽的不一致；按多数派统一，生成器里用 cover 裁法把它补成满宽（见
+  `tools/gen_popup_dialog_img.py` 的 `fit_cover()`，纵向居中裁而不是横向拉伸）。
+
+放版弹窗（`show_plate_prompt()`）是同一族的宽卡版本，稿值 808（`USER_PLATE_DLG_W`），改稿前
+是「屏宽 × 78%」算出来的 998。三个子视图共用一个常驻 header（返回 / 标题 / 关闭）：
+
+- header 那两枚图标钮**底透明只留字形**——稿上它们是填白的 32×32 圆角矩形，压在白卡上就是
+  纯触摸目标。改稿前那套「深灰实心圆 + 白字形」翻白卡后会变成两颗突兀的黑扣子。
+- 「未放入」那条滑块直接开 `ui_slide_unlock_cfg_t::light_theme`，**控件一行不用改**：浅色档
+  的旋钮本来就是稿要的 `#333145` 实底 + `USER_LIGHT_RADIUS` 圆角 + 无玻璃高光，轨道 360×94、
+  旋钮 84 也正是 `plate_right_col_w()` / `USER_HOME_SLIDE_H` / `USER_ACTION_BTN_SZ`。
+  改稿前它给的是 `custom_accent` + 红色，那是深色档的样子。
+
+### 转运盒流程（稿 6357:39444 / 39504 / 39470）
 
 滑动取件开门之后、关门确认之前的一段：把工件转移进转运盒再取下。默认**不启用**，由调试页
 `Other` → `Print Gates` → `Transfer Box` 打开（`control_set_transfer_box_flow()`，纯 UI
@@ -1473,20 +1544,22 @@ Glavo Print_Terminate_Rsp / 进度 100% → control.cpp finish_printing()
 
 ```
 RETRIEVE → 取件弹窗滑到底 → DOOR_OPENING（PM2.5/清粉 → 开门）
-  → TRANSFER_BOX  ① BoxInstall  装盒：满宽按钮由「Transfer Box Not Ready」置灰翻可点
+  → TRANSFER_BOX  ① BoxInstall  装盒 + 抽隔断板：满宽按钮由「Not Ready」置灰翻「Done」
                   ② BoxMoving   转移：只有转圈，无按钮无关闭钮
                   ③ BoxShutter  推闸门：「Unlock and Remove the Box」直接可点
                   → 绿勾 toast「Transfer complete...」
-  → DOOR_CONFIRM  关门确认（取件分支专用样式）→ clean_test_close → IDLE
+  → DOOR_CONFIRM  关门确认 → clean_test_close → IDLE
 ```
 
 - **共用门弹窗骨架**：`DoorVariant` 扩了 `BoxInstall/BoxMoving/BoxShutter` 三档，`show_door_dialog()`
-  一个不变，只由 `door_apply_variant()` 换顶图与内容列。右上关闭钮只在 `Opening/Cleaning`
-  显示，转运盒三步一律隐藏——门已经开了，必须走完才能关门。
-- **关门确认分态**：`transfer_box_flow_active()`（开关打开 **且** `g_door_origin == PrintCollect`）
-  为真时走新稿——两态同标题 `Confirm the door is closed`、口罩徽标改成「开门期间持续佩戴」、
-  没有灰字说明行，只有顶图（置灰态 `img_mask` / 可点态 `img_door_close_hint`）和按钮随门是否
-  关好切换。开关关闭或另两个开门入口（打印前置、首页独立开门）仍是原来的两态两标题。
+  一个不变，只由 `door_apply_variant()` 换顶图与内容列。
+- **「装盒」与「抽隔断板」是一步不是两步**：新稿把两件事画在同一张图上（四枚外向蓝箭头），
+  文案也合成了一句 `Install the box and pull out the divider`。别按旧稿拆回两档。
+- **关门确认不再分态**：改稿前取件分支（`transfer_box_flow_active()` 为真）另走一套「两态同
+  标题、无灰字说明、顶图换 `img_mask` / `img_door_close_hint`」的样式。新稿只给了一版，那条
+  分叉连同它专用的两张顶图一起删了，三个开门入口（打印前置、首页独立开门、取件）现在共用
+  `DoorOpened → DoorClosed` 同一套。`transfer_box_flow_active()` 本身留着，它还管**流程**要不要
+  插入转运盒三步（见 `state_after_door_open()`），只是不再管样式。
 - **`control_is_printing()`** 把 `TRANSFER_BOX` 也算进打印占用，转运期间同样挡住 `user_files`。
 - **装盒到位占位**：① 仍靠 `BOX_READY_MS` 定时器翻 `g_box_ready`（复用 `g_door_advance_timer`）。
 - **自动转运**：Ready 确认 → `send_transport_request()`（串口 A2/0x41 TLV 0x02）并进
@@ -1500,8 +1573,10 @@ RETRIEVE → 取件弹窗滑到底 → DOOR_OPENING（PM2.5/清粉 → 开门）
 顶图由 `tools/gen_powder_dialog_img.py` 出（RGB565，三张都是不透明照片），缩放共用门弹窗的
 `door_set_image()` 那套换算。
 
-**配色走浅色档**（白卡 + 深色标题），与门弹窗那一族的深色骨架不同——这三张有新稿、门弹窗
-还没有。等门弹窗也改稿了再统一。
+**配色走浅色档**（白卡 + 深色标题）。门弹窗那一族原先还是深色骨架，弹窗新稿落地后也翻成了
+白卡，两族现在同一套了；三张的满宽主/副按钮就是门弹窗那两枚共用 helper
+（`make_dlg_wide_button` / `make_dlg_wide_ghost_button`），跟着改稿一并变成了深墨实心 +
+深墨 10% 底。副按钮那枚改稿前是「白 4% 底 + 白字」压在白卡上，实际是隐形的。
 
 挂在打印预览区域内（`page_user_monitor_print_preview_parent()`）而不是 `lv_layer_top()`：
 切到别的页面仍可互动。
@@ -1524,9 +1599,12 @@ RETRIEVE → 取件弹窗滑到底 → DOOR_OPENING（PM2.5/清粉 → 开门）
 
 ### WiFi 传输弹窗（PIN 配对 / 文件接收）
 
-`lib/components/ui_xfr_dialog.*`，对齐 Figma 3859:9545 与 3859:9810。两者共用
-`ui_modal_dialog` 外壳，只在建窗时就地覆盖两处（卡内行距 `USER_PAD_SM`、遮罩
-`LV_OPA_50`），不动 `USER_DLG_*` 宏以免连带改掉打印流程那批弹窗。
+`lib/components/ui_xfr_dialog.*`，对齐 Figma 6363:44046 与 6363:44211。两者共用
+`ui_modal_dialog` 的 `light_theme` 外壳，只在建窗时就地覆盖一处（卡内行距 `USER_PAD_SM`），
+不动 `USER_DLG_*` 宏以免连带改掉打印流程那批弹窗。
+
+稿 6363:44364 另画了一版「文件名 + 转圈」的接收态，**未落地**：XFR 的 `Uploading` 与
+`Slicing` 都带百分比，两态统一走进度条。
 
 挂 `lv_layer_top()` 而不是 `control` 的 `g_overlay`：配对/传输是网络事件，任何
 时刻都可能到，而 `g_overlay` 在 IDLE 态是隐藏的。按设计打印中也照弹。
@@ -1544,6 +1622,12 @@ RETRIEVE → 取件弹窗滑到底 → DOOR_OPENING（PM2.5/清粉 → 开门）
 
 - **取消按钮只关 UI**。UI→XFR 方向目前一条消息都没有，点 `Cancel Pairing` 之后
   后端配对会话仍然存活，手机那时候依然能配对成功。
+
+  接收弹窗上这个洞还要更深一层：**「Cancel Transfer」按下去等于没按**。进度回调的逻辑是
+  「只要状态是 `Uploading/Slicing` 且当前没开着窗，就开一个」，而取消只是把 `g_xfr_recv_dlg`
+  清空、后端并不知情、进度照推——于是下一条推送到达时窗又开回来了，推得多快就弹回得多快。
+  修它不需要动协议（记下被取消的文件名、传完或出错前不再开窗即可），但本轮按「等后端出
+  取消契约时一并做」处理，没有实现。PIN 弹窗没有这个问题：它只在收到新 PIN 通知时开窗。
 - **PIN 弹窗只能手动关**。`XfrPairPinPayload.expires_s` 没有使用，PIN 过期不会自动
   收窗；弹窗遮罩会吞掉全屏点击，无人处理时会一直挡着（含打印中）。
 
@@ -1798,6 +1882,25 @@ Storage / Advanced Print / Privacy & Security / About / Debug。
   Internal + SdCard，格式化是 Internal + UsbDisk。后端只实现了 Internal 的容量查询，
   其余见 [doc/STORAGE_BACKEND_API.md](../../doc/STORAGE_BACKEND_API.md)。
 
+#### 两个密码弹窗与键盘让位（稿 6423:51743 / 51893）
+
+Wi-Fi 连接密码与开发者密码共用一套外壳：`USER_WIFI_DLG_W`（稿 560，比 `USER_DLG_W` 宽 64
+——稿上输入框满宽 496 加两侧 32 内距）、白卡、SSID 居中作标题、下面一行左对齐灰字、满宽
+输入框、页脚两枚**等宽**钮（`Cancel` 是 `#333145 @10%` 底配深墨字，`Connect` 深墨实心配白字，
+见 `make_pwd_dlg_btn()`）。开发者密码那张没有稿，对齐 Wi-Fi 这张。
+
+**卡片要给键盘让位，而且方向不固定。** 稿上弹窗是屏幕居中的，但点输入框会弹键盘把它挡住。
+改稿前的做法是**静态**顶对齐（`LV_ALIGN_TOP_MID` + `USER_PAD_LG`），不管键盘在不在都贴着
+屏幕上沿，居中稿因此落不了地。现在改成动态：`ui_keyboard_set_visibility_cb()` 注册一个
+**单槽**回调，键盘弹出时把卡片摆到「屏幕减去键盘」的剩余矩形中心，收起后回到整屏居中。
+
+回调给的是**完整矩形**而不是一个高度，因为两种键盘遮的方向不同：文本键盘（Wi-Fi 密码走
+`TEXT_LOWER`）是屏幕下半的横条，要往上让；数字键盘（开发者密码走 `NUMBER`）是屏幕右侧的
+整列竖板，要往左让。`dlg_dodge_keyboard()` 按遮挡矩形的宽高比判断是哪一种。
+
+> `dlg_close()` 里**必须先注销回调再收键盘**：`ui_keyboard_hide()` 会回调过来，而那时正要
+> 把 `g_dlg` 释放掉。
+
 ### 打印历史页布局（浅色稿 6122 一族）
 
 对应稿：Timelapse 网格 `6122:79998`、Video 网格 `6122:79784`、Photo 网格 `6122:80163`、
@@ -1981,9 +2084,10 @@ Storage / Advanced Print / Privacy & Security / About / Debug。
 
   条宽**现算**而不是 `LV_PCT(100)`：`FLOATING` 不吃 flex 布局，百分比只会撑满父宽、让不出
   两侧那 32。网格的 `pad_bottom` 另留了 `SELBAR_H + PAD_LG*2`，多选态下最后一行不会被压住。
-- **删除确认弹窗开了浅色档**（稿 6251:94239）：走共享的 `ui_modal_dialog`，但
-  `cfg.light_theme = true`——**全工程十五个弹窗里目前只有这一个开**，别顺手全开，另外
-  十四个装着白字读数、深色输入框与键盘、进度条，底一翻白那些内容会当场看不见。
+- **删除确认弹窗开了浅色档**（稿 6251:94239）：走共享的 `ui_modal_dialog`，
+  `cfg.light_theme = true`。它是第一个开的；弹窗新稿落地后**全工程弹窗已经一律开着它**，
+  连带 `ui_user_make_body_label` / `ui_user_make_progress_bar` / `ui_arc_spinner` 的默认配色
+  也都换到了浅底档，所以新建弹窗默认就该开（详见 `ui_modal_dialog.hpp` 的字段说明）。
 
   开关只管**外壳**（白卡 `user_light_card` / 深色标题 / 圆角 `USER_LIGHT_RADIUS` / 内距
   `USER_PAD` / 遮罩 `LV_OPA_50`，并收掉深色档那圈描边与重投影）。body 与 footer 里的内容
@@ -1992,7 +2096,7 @@ Storage / Advanced Print / Privacy & Security / About / Debug。
   | 部位 | 怎么给 |
   |---|---|
   | 标题 | 由 `light_theme` 管，`user_light_text` |
-  | body 文字 | 调用方改色**与字号**（`ui_user_make_body_label` 有 13 个调用点，不为一处加档位参数） |
+  | body 文字 | `ui_user_make_body_label()` 的默认值已是浅底档（`user_light_text` @50%）；要另给字号仍由调用方改 |
   | 两枚页脚钮 | `ui_user_make_confirm_footer_btn()` 的 `light` 形参 |
 
   body 那行稿上是 Inter Regular 20 / `rgba(51,49,69,0.5)`。**颜色不是实色灰**：用
@@ -2142,6 +2246,16 @@ Tab 取 `USER_PAD_SM`（小于 Tab 间距 `USER_PAD_LG` 的一半），故相邻
 | 收不到 Glavo 回复 | 主循环是否 `process()` |
 | 切页后仍收旧回调 | `on_exit` 清空 register |
 | IPC 发错后端 | 检查 `target_id` |
+| 弹窗只在左上角露一小条、整屏不压暗 | 遮罩漏了 `lv_obj_set_size(..., LV_PCT(100), LV_PCT(100))`，见下 |
+
+**`lv_obj_remove_style_all()` 之后必须自己把尺寸设回来。** 它会把主题给的宽高一并清掉，
+对象于是退回 LVGL 的默认边长 `LV_DPI_DEF`（本工程 130）。全屏遮罩踩过一次：130×130 的
+遮罩会把居中的卡片裁得只剩中间一条露在屏幕左上角，而且因为遮罩不覆盖全屏，**底下那页
+不会变暗**——于是看着像「布局塌了」，实际是尺寸没设。
+
+排查这类几何问题别靠读代码推，直接从叶子节点往上逐层打 `lv_obj_get_coords()`，哪一层的
+尺寸不对就是哪一层，一次运行定位。日志落在 `/var/log/topic/topic_boot_lifecycle.log`
+（`process_ctl.cpp` 把所有进程的 stdout/stderr 都 `dup2` 到那里）。
 
 ## 相关文档
 
