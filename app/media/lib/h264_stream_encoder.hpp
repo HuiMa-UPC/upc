@@ -138,10 +138,6 @@ private:
     void maybe_log_stats_locked();
     /** 扫描包内 NAL：缓存 SPS/PPS，并判定是否含 IDR。 */
     bool scan_packet(const uint8_t* annexb, size_t len);
-    /** 将带 stride 的 NV12 拷成紧凑布局（Y 平面后接 UV）。 */
-    static void copy_nv12_tight(uint8_t* dst, const uint8_t* src_y,
-                                const uint8_t* src_uv, uint32_t src_stride_y,
-                                uint32_t width, uint32_t height);
 
     mutable std::mutex mtx_;              /**< 保护 sink 表、pending、MPP 句柄、参数集。 */
     std::condition_variable cv_;          /**< 通知 worker：有新帧或应停止。 */

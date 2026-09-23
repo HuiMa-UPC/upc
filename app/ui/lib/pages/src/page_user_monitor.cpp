@@ -21,7 +21,6 @@
 
 #include <cmath>
 #include <cstdio>
-#include <filesystem>
 
 /**
  * @file page_user_monitor.cpp
@@ -72,8 +71,9 @@ constexpr uint32_t kPhaseGreenB    = 0x5ceb95;
 constexpr uint32_t kBtnBlue = 0x4054fd;
 constexpr uint32_t kBtnRed  = 0xfd4242;
 
-/* 照明钮点亮那档的黄（稿 6338:27049 的 paint0）。 */
-constexpr uint32_t kLightOn = 0xffcd42;
+/* 照明钮点亮那档：黄底 + 白灯泡（稿黄 6338:27049；白图标比深墨更好看）。 */
+constexpr uint32_t kLightOnBg   = 0xffcd42;
+constexpr uint32_t kLightOnIcon = 0xffffff;
 
 /* Manual 的 Plate Position 选中档（稿 6307:40977）。 */
 constexpr uint32_t kPlateOn = 0x485dff;
@@ -100,7 +100,7 @@ enum tab_t { TAB_JOB = 0, TAB_STATUS, TAB_MANUAL, TAB_COUNT };
 /** 打印阶段五档。与原首页 `print_phase_t` 一一对应，文案按新稿改成了句首大写。 */
 enum phase_t {
     PHASE_IDLE = 0,       /**< 没有打印任务：Job 页是空态 */
-    PHASE_PREPARING,      /**< Preparing...      蓝；光路检测占用这一档 */
+    PHASE_PREPARING,      /**< Preparing / 起印环境检查步骤文案；蓝 */
     PHASE_PRINTING,       /**< Printing...       蓝 */
     PHASE_PAUSED,         /**< Pause             蓝 */
     PHASE_TERMINATED,     /**< Print Terminated  橙 */
@@ -178,7 +178,7 @@ lv_obj_t *g_jog_down    = nullptr;
 lv_obj_t *g_s_val       = nullptr;
 lv_obj_t *g_door_btn    = nullptr;  /**< Inner Door 电源钮 */
 bool      g_inner_door_open = false;
-bool      g_outer_door_open = false; /**< 由 DebugDeviceStatePayload.door_open 同步 */
+bool      g_outer_door_open = false; /**< 由 env 快照 / 开门 Rsp 乐观置位同步 */
 
 /* 底部按钮组 */
 lv_obj_t *g_bottom      = nullptr;
@@ -209,6 +209,8 @@ bool           g_purify_busy   = false;
 bool           g_purify_done   = false;
 bool           g_page_visible  = false;
 char           g_job_label[96] = {0};
+/** PREPARING 态自定义标题；空则回落到默认 "Preparing..."。由 print_prep 进度写入。 */
+char           g_prep_title[48] = {0};
 
 void apply_phase(void);
 void apply_bottom(void);
@@ -241,15 +243,6 @@ lv_color_t phase_accent(void)
     case PHASE_DONE:       return lv_color_hex(kPhaseGreen);
     default:               return lv_color_hex(kPhaseBlue);
     }
-}
-
-bool thumb_path_exists(const char *path)
-{
-    if(!path || !path[0]) {
-        return false;
-    }
-    std::error_code ec;
-    return std::filesystem::exists(path, ec);
 }
 
 /** 白卡：稿上右栏那批卡片统一「白底 + 16 圆角 + 一道很淡的投影」。 */
@@ -396,19 +389,38 @@ void apply_light_btn_from_mask(uint8_t mask)
     if(g_light_icon) {
         lv_obj_t *img = lv_obj_get_child(g_light_icon, 0);
         if(img) {
+            /* 开：白灯泡压在黄底上；关：白图标压在半透明白底上。 */
             lv_obj_set_style_image_recolor(
-                img, on ? lv_color_hex(kLightOn) : lv_color_white(), 0);
+                img, on ? lv_color_hex(kLightOnIcon) : lv_color_white(), 0);
         }
     }
     if(g_light_btn) {
         lv_obj_set_style_bg_color(g_light_btn,
-                                  on ? lv_color_hex(kLightOn) : lv_color_white(), 0);
+                                  on ? lv_color_hex(kLightOnBg) : lv_color_white(), 0);
         lv_obj_set_style_bg_opa(g_light_btn, on ? LV_OPA_COVER : 38, 0);
+    }
+}
+
+/** 打印会话中（Prepare / 打印 / 暂停 / 结果页）照明钮只读，不可切换。 */
+void apply_light_btn_interactive(void)
+{
+    if(!g_light_btn) {
+        return;
+    }
+    if(g_printing) {
+        lv_obj_remove_flag(g_light_btn, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_set_style_opa(g_light_btn, LV_OPA_60, 0);
+    } else {
+        lv_obj_add_flag(g_light_btn, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_set_style_opa(g_light_btn, LV_OPA_COVER, 0);
     }
 }
 
 void on_light_click(lv_event_t * /*e*/)
 {
+    if(g_printing) {
+        return; /* Prepare / 打印中不允许切舱灯 */
+    }
     /* 舱内灯已改 SOC sysfs（调试页六路 lgt*），不再下发 MCU Device/Light */
     const bool on = !g_light_on;
     auto &proxy = ui::DebugMsgProxy::instance();
@@ -433,10 +445,14 @@ void on_snapshot_click(lv_event_t * /*e*/)
 
 void deferred_cam_start(void * /*u*/)
 {
+    if(!g_page_visible || !g_cam_image) {
+        return;
+    }
     ui::CameraPreviewPlayer::instance().start(g_cam_image, g_cam_hint, "monitor");
 }
 
-/** 开流。已经在跑就只重算几何，避免切页/进打印态时白停一次。 */
+/** 开流。已经在跑（含 Connecting）只重算几何；未 active 才异步 start。
+ *  Start 超时会把 active 清掉，下次进页 / ensure 可再开。 */
 void cam_ensure_running(void)
 {
     if(ui::CameraPreviewPlayer::instance().active()) {
@@ -1148,6 +1164,11 @@ void show_outer_door_dlg(void)
 /** 外门没开就拦下并弹提示。返回 true 表示可以继续。 */
 bool require_outer_door(void)
 {
+    /* 进页期间可能还没走过 observer；先跟快照对齐一次。 */
+    const ui_device_snapshot_t *snap = ui_device_state_get();
+    if(snap && snap->door_state_valid) {
+        g_outer_door_open = snap->outer_door_open;
+    }
     if(g_outer_door_open) {
         return true;
     }
@@ -1428,8 +1449,9 @@ void on_purify_click(lv_event_t * /*e*/)
     if(g_tab == TAB_MANUAL && !require_outer_door()) {
         return;
     }
-    /* 「一次打印结果只允许成功清一次」只管打印那一路；Manual 的手动吹粉可以反复来。 */
-    if(g_purify_busy || (g_purify_done && g_tab != TAB_MANUAL)) {
+    /* 清粉中再点 = Close 停风扇/停粉；空闲再点 = 再开一轮。 */
+    if(g_purify == PURIFY_RUNNING || g_purify_busy) {
+        ui_clean_state_stop();
         return;
     }
     g_purify_busy = true;
@@ -1742,7 +1764,12 @@ void apply_phase(void)
             lv_obj_set_style_image_recolor(img, accent, 0);
         }
     }
-    lv_label_set_text(g_job_state, b.text);
+    /* PREPARING 优先用 prep 推送的步骤文案；未到首条进度前仍显示 Preparing... */
+    if(g_phase == PHASE_PREPARING && g_prep_title[0]) {
+        lv_label_set_text(g_job_state, g_prep_title);
+    } else {
+        lv_label_set_text(g_job_state, b.text);
+    }
     lv_obj_set_style_text_color(g_job_state, accent, 0);
     if(g_job_percent) {
         lv_obj_set_style_text_color(g_job_percent, accent, 0);
@@ -1790,13 +1817,14 @@ void apply_phase(void)
         }
     }
 
-    /* 打印态禁用 Manual（含 Preparing / Pause）。置灰当前选中项时控件会自己退到
-     * 第一个可用项并发一次 VALUE_CHANGED，apply_view() 因此会跟着换视图。 */
+    /* 整个打印会话（含 Preparing / 结果页）禁用 Manual，避免轴/门误操作。
+     * 置灰当前选中项时控件会自己退到第一个可用项并发一次 VALUE_CHANGED。 */
     if(g_tabs) {
-        ui_segmented_set_item_enabled(g_tabs, TAB_MANUAL, !phase_running());
+        ui_segmented_set_item_enabled(g_tabs, TAB_MANUAL, !g_printing);
     }
 
     apply_bottom();
+    apply_light_btn_interactive();
 
     /* 两条提示走全局消息中心而不是本页自己的一条 bar：离开本页也看得到，且与后端
      * 上报的告警排在同一摞里。**必须是 sync 不能是 emit**——本函数打印期间每秒好
@@ -1864,8 +1892,14 @@ void on_tab_changed(lv_event_t *e)
  *  后端回调
  * ========================================================================== */
 
-void on_device_state(const ui_device_snapshot_t * /*snap*/)
+void on_device_state(const ui_device_snapshot_t *snap)
 {
+    if(snap && snap->door_state_valid) {
+        g_outer_door_open = snap->outer_door_open;
+        if(g_outer_door_open) {
+            close_outer_door_dlg();
+        }
+    }
     if(g_tab == TAB_STATUS) {
         status_update();
     }
@@ -1882,12 +1916,17 @@ void on_clean_state_event(ui_clean_event_t ev, ui_clean_owner_t owner)
     switch(ev) {
     case UI_CLEAN_EVT_REJECTED:
         g_purify_busy = false;
-        purify_stage_set(PURIFY_IDLE);
+        purify_stage_set(g_purify_done ? PURIFY_DONE : PURIFY_IDLE);
         ui_toast_show("Powder cleaning is busy", ui_color_danger, 1800);
+        break;
+    case UI_CLEAN_EVT_STOPPED:
+        /* 用户中止：风扇停，按钮可再开。曾 MCU 成功过则徽标仍可留 Done（口罩提示）。 */
+        g_purify_busy = false;
+        purify_stage_set(g_purify_done ? PURIFY_DONE : PURIFY_IDLE);
         break;
     case UI_CLEAN_EVT_DONE:
         g_purify_busy = false;
-        /* 「只许成功一次」的闸门只对打印那一路上锁，Manual 的手动吹粉不受限。 */
+        /* MCU 完成帧：打印结果路记成功态；Manual 回空闲可再点。 */
         if(owner == UI_CLEAN_OWNER_PRINT_RESULT) {
             g_purify_done = true;
             purify_stage_set(PURIFY_DONE);
@@ -1897,7 +1936,7 @@ void on_clean_state_event(ui_clean_event_t ev, ui_clean_owner_t owner)
         break;
     case UI_CLEAN_EVT_ACCEPTED:
     default:
-        break;   /* 点击时已切 RUNNING，受理无需额外动作 */
+        break;   /* 点击/自动开时已切 RUNNING，受理无需额外动作 */
     }
 }
 
@@ -1916,9 +1955,10 @@ void wire_debug_proxy(bool on)
         if(g_plate_val) lv_label_set_text_fmt(g_plate_val, "%.1f", static_cast<double>(p.z_pos_mm));
         if(g_s_val)     lv_label_set_text_fmt(g_s_val, "%.3f mm", static_cast<double>(p.s_pos_mm));
     });
+    /* 外门态主路径走 env 快照（on_device_state）；Device_Ntf 若将来有回读仍可覆盖。 */
     proxy.register_device([](const middleware::DebugDeviceStatePayload &p) {
         g_outer_door_open = (p.door_open != 0);
-        /* 外门一开就把拦截弹窗收掉，省得用户开完门还得手动关一次。 */
+        ui_device_state_set_outer_door_open(g_outer_door_open);
         if(g_outer_door_open) {
             close_outer_door_dlg();
         }
@@ -1945,6 +1985,12 @@ void monitor_backend_init(void)
     ui::UiMsgProxy::instance().register_optical_path_progress(
         [](const middleware::OpticalPathProgressPayload &p) {
             page_user_monitor_optical_path_update(p.point_index, p.point_total, p.state);
+        });
+
+    ui::UiMsgProxy::instance().register_print_prep_progress(
+        [](const middleware::PrintPrepProgressPayload &p) {
+            page_user_monitor_print_prep_update(p.step, p.step_index, p.step_total,
+                                               p.sub_index, p.sub_total);
         });
 
     ui::CameraMsgProxy::instance().register_snapshot_rsp(
@@ -2043,10 +2089,8 @@ lv_obj_t *page_user_monitor_create(lv_obj_t *parent)
 void page_user_monitor_refresh(bool /*force*/)
 {
     g_page_visible = true;
-    /* **侧栏保持浅色档，不开 set_sidebar_video_mode()。** 首页打印态要开那一档，是
-     * 因为它的摄像头整屏出血、连侧栏背后都是视频帧，4% 的白压不住亮帧。本页不一样：
-     * 稿上画面从 x=128 起（clip 就是 translate(128) 1152×800），侧栏背后是页根那层
-     * #f5f5f5，稿里那条 `white @ 4%` 正是压在它上面的——开视频档反而与稿不符。 */
+    /* **侧栏保持浅色档，不开 set_sidebar_video_mode()。** 本页画面从 x=128 起，
+     * 侧栏背后是页根 #f5f5f5；开整屏视频档会与稿不符。 */
     status_update();
     apply_view();
     apply_phase();
@@ -2089,6 +2133,7 @@ void page_user_monitor_enter_printing_mode(const control_file_t *file)
     g_purify_done  = false;
     g_percent      = 0;
     g_snap_pending = false;
+    g_prep_title[0] = '\0';
 
     /* 打印态强制回 Job 页：Manual 这时要禁用，停在它上面会看到一个点不动的界面。 */
     g_tab = TAB_JOB;
@@ -2103,7 +2148,10 @@ void page_user_monitor_enter_printing_mode(const control_file_t *file)
                   file && file->name[0] ? file->name : "");
 
     if(g_job_bar)     lv_bar_set_value(g_job_bar, 0, LV_ANIM_OFF);
-    if(g_job_percent) lv_label_set_text(g_job_percent, "0%");
+    if(g_job_percent) {
+        lv_obj_remove_flag(g_job_percent, LV_OBJ_FLAG_HIDDEN);
+        lv_label_set_text(g_job_percent, "0%");
+    }
     if(g_job_extra) {
         lv_label_set_text(g_job_extra, "");
         lv_obj_add_flag(g_job_extra, LV_OBJ_FLAG_HIDDEN);
@@ -2121,7 +2169,7 @@ void page_user_monitor_enter_printing_mode(const control_file_t *file)
     if(g_job_cons_unit) lv_obj_add_flag(g_job_cons_unit, LV_OBJ_FLAG_HIDDEN);
 
     if(g_job_thumb_img && g_job_thumb_icon) {
-        const bool real = file && thumb_path_exists(file->thumb_print);
+        const bool real = file && ui_user_thumb_path_exists(file->thumb_print);
         if(real) {
             lv_image_set_src(g_job_thumb_img, file->thumb_print_src);
             lv_obj_remove_flag(g_job_thumb_img, LV_OBJ_FLAG_HIDDEN);
@@ -2141,18 +2189,22 @@ void page_user_monitor_enter_printing_mode(const control_file_t *file)
 
 void page_user_monitor_exit_printing_mode(void)
 {
-    ui::CameraPreviewPlayer::instance().stop();
+    /* 人还在监控页：预览本来就要接着当待机直播，stop 再 start 会黑一下
+     * （Manual OPEN 回 IDLE、打印结束回待机都走这里）。切走了才停流。 */
+    if(!g_page_visible) {
+        ui::CameraPreviewPlayer::instance().stop();
+    }
     g_printing    = false;
     g_purify_busy = false;
     g_purify_done = false;
     g_phase       = PHASE_IDLE;
     g_purify      = PURIFY_IDLE;
     g_percent     = 0;
+    g_prep_title[0] = '\0';
     close_retrieve_dlg();
     apply_phase();
     ui_device_state_set_status(UI_DEVICE_STATUS_READY);
 
-    /* 页面还开着就把预览接回来（待机监控），否则留给下次进页。 */
     if(g_page_visible) {
         cam_ensure_running();
     }
@@ -2163,7 +2215,7 @@ void page_user_monitor_printing_update(const control_progress_t *p)
     if(!p || !g_printing || phase_finished()) {
         return;
     }
-    /* 光路检测占着状态行与 0% 进度条，正式进度来了才让位。 */
+    /* 起印环境检查占着状态行与进度条，正式进度来了才让位。 */
     if(g_phase == PHASE_PREPARING) {
         return;
     }
@@ -2196,20 +2248,17 @@ void page_user_monitor_optical_path_update(uint8_t point_index, uint8_t point_to
         return;
     }
     if(state == static_cast<uint8_t>(middleware::OpticalPathPointState::Complete)) {
-        g_phase = PHASE_PRINTING;
+        /* 光路只是 Prepare 里的一步；后面还可能有测高/氧门/首层。
+         * 切 Printing 一律等 print_prep 的 Ready，这里只清右侧 n/5。 */
         if(g_job_extra) {
             lv_label_set_text(g_job_extra, "");
             lv_obj_add_flag(g_job_extra, LV_OBJ_FLAG_HIDDEN);
         }
-        apply_phase();
         return;
     }
+    /* 标题与总进度由 print_prep 驱动；此处只补右侧 n/5，并保证仍在 PREPARING。 */
     if(g_phase != PHASE_PREPARING) {
-        g_phase   = PHASE_PREPARING;
-        g_percent = 0;
-        if(g_job_bar)     lv_bar_set_value(g_job_bar, 0, LV_ANIM_OFF);
-        if(g_job_percent) lv_label_set_text(g_job_percent, "0%");
-        thumb_progress_apply(0);
+        g_phase = PHASE_PREPARING;
         apply_phase();
     }
     if(g_job_extra && point_total > 0) {
@@ -2220,11 +2269,114 @@ void page_user_monitor_optical_path_update(uint8_t point_index, uint8_t point_to
     }
 }
 
+void page_user_monitor_print_prep_update(uint8_t step, uint8_t step_index, uint8_t step_total,
+                                         uint8_t sub_index, uint8_t sub_total)
+{
+    if(!g_printing || phase_finished()) {
+        return;
+    }
+
+    if(step == static_cast<uint8_t>(middleware::PrintPrepStep::Ready) || step_total == 0) {
+        /* Prepare 与打印是两套进度：环境检查结束回到 0%，再吃正式层进度。 */
+        g_prep_title[0] = '\0';
+        g_phase   = PHASE_PRINTING;
+        g_percent = 0;
+        if(g_job_bar) {
+            lv_bar_set_value(g_job_bar, 0, LV_ANIM_OFF);
+        }
+        if(g_job_percent) {
+            lv_obj_remove_flag(g_job_percent, LV_OBJ_FLAG_HIDDEN);
+            lv_label_set_text(g_job_percent, "0%");
+        }
+        thumb_progress_apply(0);
+        if(g_job_extra) {
+            lv_label_set_text(g_job_extra, "");
+            lv_obj_add_flag(g_job_extra, LV_OBJ_FLAG_HIDDEN);
+        }
+        apply_phase();
+        return;
+    }
+
+    const char *title = "Preparing...";
+    switch(static_cast<middleware::PrintPrepStep>(step)) {
+    case middleware::PrintPrepStep::OuterDoor:
+        title = "Checking outer door...";
+        break;
+    case middleware::PrintPrepStep::InnerDoor:
+        title = "Closing inner door...";
+        break;
+    case middleware::PrintPrepStep::OpticalPath:
+        title = "Optical path check...";
+        break;
+    case middleware::PrintPrepStep::PlateHeight:
+        title = "Plate leveling...";
+        break;
+    case middleware::PrintPrepStep::Oxygen:
+        title = "Checking oxygen...";
+        break;
+    case middleware::PrintPrepStep::FirstLayer:
+        title = "First layer check...";
+        break;
+    default:
+        break;
+    }
+    std::snprintf(g_prep_title, sizeof(g_prep_title), "%s", title);
+
+    int percent = 0;
+    if(step_index >= 1 && step_total >= 1) {
+        if(sub_total > 0) {
+            /* 已完成步 + 当前步内子进度，均摊到总步数。 */
+            percent = static_cast<int>(
+                ((static_cast<unsigned>(step_index) - 1u) * 100u +
+                 (static_cast<unsigned>(sub_index) + 1u) * 100u /
+                     static_cast<unsigned>(sub_total)) /
+                static_cast<unsigned>(step_total));
+        } else {
+            /* 步刚进入：停在该步切片起点。 */
+            percent = static_cast<int>(
+                (static_cast<unsigned>(step_index) - 1u) * 100u /
+                static_cast<unsigned>(step_total));
+        }
+    }
+    if(percent < 0) {
+        percent = 0;
+    } else if(percent > 100) {
+        percent = 100;
+    }
+    g_percent = percent;
+    g_phase   = PHASE_PREPARING;
+
+    if(g_job_bar) {
+        lv_bar_set_value(g_job_bar, g_percent, LV_ANIM_OFF);
+    }
+    if(g_job_percent) {
+        lv_label_set_text_fmt(g_job_percent, "%d%%", g_percent);
+    }
+    /* Prepare 只驱动条与数字；缩略图蒙版表示打印层进度，环境检查阶段保持 0%。 */
+
+    if(step == static_cast<uint8_t>(middleware::PrintPrepStep::OpticalPath) &&
+       sub_total > 0 && g_job_extra) {
+        lv_label_set_text_fmt(g_job_extra, "%u/%u",
+                              static_cast<unsigned>(sub_index) + 1u,
+                              static_cast<unsigned>(sub_total));
+        lv_obj_remove_flag(g_job_extra, LV_OBJ_FLAG_HIDDEN);
+    } else if(g_job_extra) {
+        lv_label_set_text(g_job_extra, "");
+        lv_obj_add_flag(g_job_extra, LV_OBJ_FLAG_HIDDEN);
+    }
+
+    apply_phase();
+}
+
 void page_user_monitor_enter_print_result(const control_print_result_t *result)
 {
     if(!result || !g_printing) {
         return;
     }
+    /* 进结果页前记下是否还在 Prepare：终止时决定要不要自动清粉。 */
+    const bool aborted_during_prep =
+        result->terminated && (g_phase == PHASE_PREPARING);
+
     g_snap_pending = false;
     g_purify_busy  = false;
     g_purify_done  = false;
@@ -2237,20 +2389,37 @@ void page_user_monitor_enter_print_result(const control_print_result_t *result)
         lv_obj_clear_state(g_snap_btn, LV_STATE_DISABLED);
     }
 
-    /* 光路检测借用了 extra 位显示点位（"2/5"），跟层号同形不同义，进结果页要清掉。 */
+    /* 光路/prep 借用了 extra 位显示点位（"2/5"），跟层号同形不同义，进结果页要清掉。 */
     if(g_phase == PHASE_PREPARING && g_job_extra) {
         lv_label_set_text(g_job_extra, "");
         lv_obj_add_flag(g_job_extra, LV_OBJ_FLAG_HIDDEN);
     }
+    g_prep_title[0] = '\0';
 
     g_phase  = result->terminated ? PHASE_TERMINATED : PHASE_DONE;
     g_purify = PURIFY_IDLE;
-    if(!result->terminated) {
+    if(result->terminated) {
+        /* Terminated：右侧不要进度百分数，缩略图也不要蒙版进度感。 */
+        g_percent = 0;
+        if(g_job_percent) {
+            lv_label_set_text(g_job_percent, "");
+            lv_obj_add_flag(g_job_percent, LV_OBJ_FLAG_HIDDEN);
+        }
+        if(g_job_bar) {
+            lv_bar_set_value(g_job_bar, 0, LV_ANIM_OFF);
+        }
+        thumb_progress_apply(100); /* 隐藏蒙版，露出完整缩略图 */
+    } else {
         g_percent = 100;
+        if(g_job_percent) {
+            lv_obj_remove_flag(g_job_percent, LV_OBJ_FLAG_HIDDEN);
+            lv_label_set_text(g_job_percent, "100%");
+        }
+        if(g_job_bar) {
+            lv_bar_set_value(g_job_bar, 100, LV_ANIM_OFF);
+        }
+        thumb_progress_apply(100);
     }
-    if(g_job_bar)     lv_bar_set_value(g_job_bar, g_percent, LV_ANIM_OFF);
-    if(g_job_percent) lv_label_set_text_fmt(g_job_percent, "%d%%", g_percent);
-    thumb_progress_apply(g_percent);
 
     if(g_job_time_val) {
         if(!result->has_stats) {
@@ -2284,6 +2453,16 @@ void page_user_monitor_enter_print_result(const control_print_result_t *result)
         ui_segmented_set_active(g_tabs, TAB_JOB);
     }
     apply_view();
+    apply_phase();
+
+    /* Prepare 阶段终止：作业未真正开扫，不自动清粉。
+     * Complete / 打印中终止仍自动开一轮（带延时抽帧）；钮可再点停/再开。 */
+    if(aborted_during_prep) {
+        return;
+    }
+    g_purify_busy = true;
+    ui_clean_state_request(UI_CLEAN_OWNER_PRINT_RESULT, g_job_label);
+    g_purify = PURIFY_RUNNING;
     apply_phase();
 }
 

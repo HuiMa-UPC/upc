@@ -1,5 +1,6 @@
 #include "print_h264_recorder.hpp"
 
+#include "nv12_copy.hpp"
 #include "rs_log.hpp"
 #include "timelapse_util.hpp"
 
@@ -57,34 +58,7 @@ bool write_all(int fd, const uint8_t* data, size_t len) {
     return true;
 }
 
-/**
- * 将带有 stride 的 NV12 平面数据拷贝为紧凑 NV12 格式。
- *
- * @param dst           目标缓冲区，大小应为 width * height * 3 / 2。
- * @param src_y         源 Y 平面指针。
- * @param src_uv        源 UV 平面指针。
- * @param src_stride_y  源 Y 平面 stride（允许 >= width）。
- * @param width         图像宽度。
- * @param height        图像高度。
- */
-void copy_nv12_tight(uint8_t* dst, const uint8_t* src_y, const uint8_t* src_uv,
-                     uint32_t src_stride_y, uint32_t width, uint32_t height) {
-    const size_t y_size = static_cast<size_t>(width) * height;
-    uint8_t* dst_uv = dst + y_size;
-    if(src_stride_y == width) {
-        // stride 与宽度一致，可一次整块拷贝。
-        std::memcpy(dst, src_y, y_size);
-        std::memcpy(dst_uv, src_uv, y_size / 2u);
-        return;
-    }
-    // stride 大于宽度，需要逐行拷贝，丢弃每行末尾的填充字节。
-    for(uint32_t r = 0; r < height; ++r) {
-        std::memcpy(dst + static_cast<size_t>(r) * width, src_y + static_cast<size_t>(r) * src_stride_y, width);
-    }
-    for(uint32_t r = 0; r < height / 2u; ++r) {
-        std::memcpy(dst_uv + static_cast<size_t>(r) * width, src_uv + static_cast<size_t>(r) * src_stride_y, width);
-    }
-}
+using upc::copy_nv12_tight;
 
 /**
  * 若目录存在且为空，则删除该目录。

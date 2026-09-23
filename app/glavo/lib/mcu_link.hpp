@@ -31,6 +31,11 @@ enum class McuLinkEvent : uint8_t {
     PowderLow,          /**< 打印中检测到缺粉（0x9B value[10] bit0/bit1 == 00） */
     OxygenHigh,         /**< V4：打印中 SOC 氧 ≥ 阈值，已 TCP 暂停；上层可同步 UI 暂停态 */
     OxygenRecovered,    /**< V4：打印中 SOC 氧回落到恢复线，已解除氧暂停 */
+    OuterDoorClosed,    /**< 外门开→关边沿：上层可跑关内门套件（降 Z / 关内门 / 回 Z） */
+    /** 起印氧门：CONDITION_OK 后已开洗气、正在等 SOC 氧达标（可重复；上层去重） */
+    OxygenGateWaiting,
+    /** 起印氧门通过，即将发 PRINT_START（每作业握手段至多一次） */
+    OxygenGatePassed,
 };
 
 /** @brief 链路事件回调类型：接收到 McuLinkEvent 时通知上层 */
@@ -263,6 +268,11 @@ public:
      */
     void set_skip_o2_print_gate(bool on);
     [[nodiscard]] bool skip_o2_print_gate() const noexcept;
+    /**
+     * @brief 是否启用 SOC 氧门+打印前洗气（非测试图、非 Env Sim、未 Skip O2）
+     * @note 关时：起印不发洗气开、不等氧；开时：CONDITION_OK 后 0x86 开阀再等氧。
+     */
+    [[nodiscard]] bool soc_o2_print_gate_enabled() const noexcept;
     /** @brief 调试：环境模拟粉量缺粉目标开关（延迟 5s 生效） */
     void set_env_sim_powder_low(bool on);
     [[nodiscard]] bool env_sim_powder_low() const noexcept;
@@ -473,11 +483,6 @@ private:
     void link_process_serial_handshake();
     /** @brief 打印中 SOC 氧门：超限暂停 / 回落恢复 + 1120 报警 */
     void link_process_o2_print_gate();
-    /**
-     * @brief 是否启用 SOC 氧门+打印前洗气（非测试图、非 Env Sim、未 Skip O2）
-     * @note 关时：起印不发洗气开、不等氧；开时：CONDITION_OK 后 0x86 开阀再等氧。
-     */
-    [[nodiscard]] bool soc_o2_print_gate_enabled() const noexcept;
     /** @brief 读当前用于门控的氧浓度；false=无效（未就绪/读失败） */
     [[nodiscard]] bool read_print_o2_percent(float* oxygen_percent) const;
     /** @brief SOC 合成 1120 报警边沿（ACTIVE/NORMAL）并驱动灯效板 */

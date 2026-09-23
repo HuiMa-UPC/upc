@@ -130,6 +130,8 @@ lv_obj_t *g_env_sim_powder_btn = nullptr;   /**< 其他控制：环境模拟缺�
 lv_obj_t *g_env_sim_powder_state_lbl = nullptr; /**< 其他控制：环境模拟缺粉状态文本 */
 lv_obj_t *g_skip_o2_gate_btn = nullptr;     /**< 其他控制：跳过氧门+打印前洗气 */
 lv_obj_t *g_skip_o2_gate_state_lbl = nullptr;
+lv_obj_t *g_skip_outer_door_btn = nullptr;  /**< 其他控制：跳过外门检测+关内门套件 */
+lv_obj_t *g_skip_outer_door_state_lbl = nullptr;
 lv_obj_t *g_o2_calib_btn = nullptr;         /**< 其他控制：氧单点标定 */
 lv_obj_t *g_o2_calib_lbl = nullptr;         /**< 显示当前 K / 标定状态 */
 lv_obj_t *g_o2_calib_ref_ta = nullptr;      /**< 标定时参考氧浓度 % */
@@ -1453,6 +1455,8 @@ void on_dbg_toggle(lv_event_t *e)
                  break;
         case 18: proxy.send_skip_o2_gate_set(on);             /* 跳过氧门+打印前洗气（仅本次运行，默认关） */
                  break;
+        case 21: proxy.send_skip_outer_door_set(on);          /* 跳过外门检测+关内门套件（仅本次运行，默认关=要做） */
+                 break;
         /* 造几条假消息喂通知浮层。Glavo 侧还没实现 GLAVO_Device_Event_Ntf，
          * 没有这个入口就只有打印流程那两条能看，「查看剩余 N 条」那条路径根本走不到。
          * 四条 = 两张卡 + 一颗「剩余 2 条」按钮，顺带把红/蓝两种卡和排序都覆盖上。 */
@@ -2186,6 +2190,8 @@ void build_other_switches_column(lv_obj_t *parent)
                     17, 0, true, 0, &g_cabin_pm_valve_btn, &g_cabin_pm_valve_state_lbl);
     make_dbg_toggle(rowCab, "Skip O2 Gate", "On", "Off", LV_SYMBOL_OK, false,
                     18, 0, true, 0, &g_skip_o2_gate_btn, &g_skip_o2_gate_state_lbl);
+    make_dbg_toggle(rowCab, "Skip Outer Door", "On", "Off", LV_SYMBOL_OK, false,
+                    21, 0, true, 0, &g_skip_outer_door_btn, &g_skip_outer_door_state_lbl);
 
     /* ---- SPI 灯板验色：强制 kBlue / kOrange / kRed ---- */
     lv_obj_t *sled = make_section_card(col, "Status LED");
@@ -2852,6 +2858,21 @@ void bind_debug_callbacks()
         }
     });
 
+    proxy.register_skip_outer_door([](bool on) {
+        if(g_skip_outer_door_btn) {
+            if(on) {
+                lv_obj_add_state(g_skip_outer_door_btn, LV_STATE_CHECKED);
+            } else {
+                lv_obj_clear_state(g_skip_outer_door_btn, LV_STATE_CHECKED);
+            }
+        }
+        if(g_skip_outer_door_state_lbl) {
+            lv_label_set_text(g_skip_outer_door_state_lbl, on ? "On" : "Off");
+            lv_obj_set_style_text_color(g_skip_outer_door_state_lbl,
+                                        on ? user_color_accent : user_color_text_dim, 0);
+        }
+    });
+
     proxy.register_o2_calib([](const middleware::DebugO2CalibRspPayload& p) {
         /* Get 回读 i_ua=0：标定等待中忽略，避免提前清 pending / 盖掉 Calibrating */
         if(g_o2_calib_pending && p.ok && p.i_ua <= 0.f) {
@@ -3112,6 +3133,8 @@ void reset_globals()
     g_env_sim_powder_state_lbl = nullptr;
     g_skip_o2_gate_btn = nullptr;
     g_skip_o2_gate_state_lbl = nullptr;
+    g_skip_outer_door_btn = nullptr;
+    g_skip_outer_door_state_lbl = nullptr;
     g_o2_calib_btn = nullptr;
     g_o2_calib_lbl = nullptr;
     g_o2_calib_ref_ta = nullptr;
@@ -3166,6 +3189,7 @@ void page_user_debug_refresh(bool /*force*/)
     ui::DebugMsgProxy::instance().request_env_sim_state();
     ui::DebugMsgProxy::instance().request_env_sim_powder_state();
     ui::DebugMsgProxy::instance().request_skip_o2_gate_state();
+    ui::DebugMsgProxy::instance().request_skip_outer_door_state();
     ui::DebugMsgProxy::instance().request_o2_calib_state();
     ui::DebugMsgProxy::instance().request_first_layer_visual_check_state();
     ui::DebugMsgProxy::instance().request_optical_path_check_state();
@@ -3197,6 +3221,7 @@ void page_user_debug_exit(void)
     proxy.register_env_sim(nullptr);
     proxy.register_env_sim_powder(nullptr);
     proxy.register_skip_o2_gate(nullptr);
+    proxy.register_skip_outer_door(nullptr);
     proxy.register_o2_calib(nullptr);
     proxy.register_first_layer_visual_check(nullptr);
     proxy.register_optical_path_check(nullptr);

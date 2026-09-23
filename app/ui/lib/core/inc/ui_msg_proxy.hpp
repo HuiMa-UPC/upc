@@ -32,7 +32,9 @@ using PrintTerminateDoneCb = std::function<void()>;
 using PrintPauseDoneCb = std::function<void(bool paused)>;
 using PrintPowderLowCb = std::function<void()>;
 using OpticalPathProgressCb = std::function<void(const middleware::OpticalPathProgressPayload&)>;
+using PrintPrepProgressCb = std::function<void(const middleware::PrintPrepProgressPayload&)>;
 using PrintStartRejectedCb = std::function<void(const middleware::PrintStartRejectedPayload&)>;
+using OuterDoorConfirmReqCb = std::function<void()>;
 using SupplyStatusCb   = std::function<void(const middleware::SupplyStatusPayload&)>;
 using PrintPrepareDoneCb = std::function<void(bool ok)>;
 using McuOtaStatusCb   = std::function<void(const middleware::McuOtaStatusPayload&)>;
@@ -76,9 +78,6 @@ public:
 
     void send_open_door();
     void register_open_door_result(DoorResultCb cb);
-
-    void send_close_door_check();
-    void register_close_door_result(DoorResultCb cb);
 
     void send_purify();
     void register_purify_progress(PurifyProgressCb cb);
@@ -142,8 +141,14 @@ public:
 
     /** 打印前光路检测逐点进度（打印卡徽标行）。 */
     void register_optical_path_progress(OpticalPathProgressCb cb);
-    /** 起印被后端拒绝（光路检测失败）：UI 跳终止结果页。 */
+    /** 起印环境检查进度（Job 卡标题 + 进度条；跳过步不推）。 */
+    void register_print_prep_progress(PrintPrepProgressCb cb);
+    /** 起印被后端拒绝（光路/测高/TCP/关内门等）：UI 跳终止结果页。 */
     void register_print_start_rejected(PrintStartRejectedCb cb);
+    /** 起印前外门未关：弹确认窗；Confirm/Cancel 后 send_outer_door_confirm。 */
+    void register_outer_door_confirm_req(OuterDoorConfirmReqCb cb);
+    /** @param skip false=Confirm 后再检门；true=Cancel 跳过外门检测。 */
+    void send_outer_door_confirm(bool skip = false);
 
     /** D1 X / 二次确认 Cancel：退出解析线程并清空 RingBuffer */
     void send_parser_exit();
@@ -259,7 +264,6 @@ private:
     EnvUpdateCb      env_update_cb_;
     Pm25ResultCb     pm25_result_cb_;
     DoorResultCb     open_door_cb_;
-    DoorResultCb     close_door_cb_;
     PurifyProgressCb purify_progress_cb_;
     PurifyDoneCb     purify_done_cb_;
     CleanDoneCb      clean_done_cb_;
@@ -275,7 +279,9 @@ private:
     PrintPauseDoneCb print_pause_done_cb_;
     PrintPowderLowCb print_powder_low_cb_;
     OpticalPathProgressCb optical_path_progress_cb_;
+    PrintPrepProgressCb print_prep_progress_cb_;
     PrintStartRejectedCb print_start_rejected_cb_;
+    OuterDoorConfirmReqCb outer_door_confirm_req_cb_;
     SupplyStatusCb   supply_status_cb_;
     PrintPrepareDoneCb print_prepare_done_cb_;
     McuOtaStatusCb   mcu_ota_status_cb_;

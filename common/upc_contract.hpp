@@ -408,6 +408,12 @@ enum class MsgType : uint32_t {
      * 追加在 GLAVO_Print_State_Ntf 之后，避免挪动上面那段的隐式编号。 */
     APP_OpticalPath_Progress_Ntf,   /**< OpticalPathProgressPayload：光路检测逐点进度（打印卡徽标行） */
     APP_Print_Start_Rejected_Ntf,   /**< PrintStartRejectedPayload：起印被后端拒绝，UI 跳终止结果页 */
+    /** 外门未关：Glavo→UI 请确认关门（无超时；UI 弹窗 Confirm/Cancel 后回 UI_Outer_Door_Confirm_Rsp） */
+    GLAVO_Outer_Door_Confirm_Req,
+    /** UI→Glavo：OuterDoorConfirmRspPayload；skip=0 再读门，skip=1 跳过外门检测进下一步 */
+    UI_Outer_Door_Confirm_Rsp,
+    /** Glavo→UI：起印环境检查进度（Job 卡标题+进度条；跳过的步骤不推） */
+    APP_Print_Prep_Progress_Ntf,
 
     // ---- UI ↔ GLAVO：耗材/滤芯 ----
     UI_Supply_Status_Req = 0x1060, /**< Empty */
@@ -490,6 +496,8 @@ enum class MsgType : uint32_t {
     UI_Debug_Cabin_Pm_Valve_Get_Ntf,    /**< Empty：查询舱内 PM 阀开关状态 */
     UI_Debug_Skip_O2_Gate_Set_Ntf,      /**< DebugOnOffPayload：跳过 SOC 氧打印门+打印前洗气（仅本次运行，默认关） */
     UI_Debug_Skip_O2_Gate_Get_Ntf,      /**< Empty：查询当前跳过氧门开关状态 */
+    UI_Debug_Skip_Outer_Door_Set_Ntf,   /**< DebugOnOffPayload：跳过外门检测+关内门套件（仅本次运行，默认关=要做） */
+    UI_Debug_Skip_Outer_Door_Get_Ntf,   /**< Empty：查询跳过外门检测开关 */
     UI_Debug_O2_Calib_Req,              /**< DebugO2CalibReqPayload：空气/标准气单点标定 K */
     UI_Debug_O2_Calib_Get_Ntf,          /**< Empty：查询当前氧标定 K（不重新采样） */
     UI_Debug_Status_Led_Set_Ntf,        /**< DebugStatusLedPayload：强制 SPI 灯板颜色（仅本次运行，绕开 MCU 版本门） */
@@ -519,6 +527,7 @@ enum class MsgType : uint32_t {
     GLAVO_Debug_Soc_Led_Ntf,            /**< DebugSocLedStatePayload：六路舱灯开关位图 */
     GLAVO_Debug_Cabin_Pm_Valve_Ntf,     /**< DebugOnOffPayload：舱内 PM 阀开关状态 */
     GLAVO_Debug_Skip_O2_Gate_Ntf,       /**< DebugOnOffPayload：跳过 SOC 氧打印门开关状态 */
+    GLAVO_Debug_Skip_Outer_Door_Ntf,    /**< DebugOnOffPayload：跳过外门检测+关内门套件开关状态 */
     GLAVO_Debug_O2_Calib_Rsp,           /**< DebugO2CalibRspPayload：氧标定结果（Req 应答） */
     GLAVO_Debug_O2_Calib_Ntf,           /**< DebugO2CalibRspPayload：当前 K 回读（Get，ok=1 且未改盘） */
     GLAVO_Debug_Status_Led_Ntf,         /**< DebugStatusLedPayload：灯板强制态回读 */
@@ -682,6 +691,7 @@ inline constexpr bool is_ipc_reliable_msg_type(MsgType type) noexcept
     case MsgType::APP_Print_Pause_Rsp:
     case MsgType::APP_Print_Powder_Low_Ntf:
     case MsgType::APP_OpticalPath_Progress_Ntf:
+    case MsgType::APP_Print_Prep_Progress_Ntf:
     case MsgType::GLAVO_UI_Height_Calib_Progress_Ntf:
         return true;
 
@@ -726,6 +736,8 @@ inline constexpr bool is_ipc_reliable_msg_type(MsgType type) noexcept
     case MsgType::GLAVO_Visual_Laser_Spot_Measure_Req:
     case MsgType::APP_Visual_Laser_Spot_Measure_Rsp:
     case MsgType::APP_Print_Start_Rejected_Ntf:
+    case MsgType::GLAVO_Outer_Door_Confirm_Req:
+    case MsgType::UI_Outer_Door_Confirm_Rsp:
         return true;
 
     default:
@@ -748,6 +760,7 @@ inline constexpr bool is_ipc_latest_only_msg_type(MsgType type) noexcept
     case MsgType::APP_Print_Video_Manifest_Ntf:
     case MsgType::APP_Visual_FirstLayer_Reference_Ready_Rsp:
     case MsgType::APP_OpticalPath_Progress_Ntf:
+    case MsgType::APP_Print_Prep_Progress_Ntf:
         return true;
     default:
         return false;
@@ -785,6 +798,8 @@ struct EnvSnapshotPayload {
     uint8_t  sensor_v4;         /**< 固定 1：舱氧/PM/温湿/气压以 SOC 为准（ABI 保留） */
     float    pm1_cabin;         /**< 舱内 PM1.0；无效填 <0（V4 SOC） */
     float    pm10_cabin;        /**< 舱内 PM10；无效填 <0（V4 SOC） */
+    uint8_t  outer_door_open;   /**< 1=外门开 0=关；仅 door_state_valid=1 时有效 */
+    uint8_t  door_state_valid;  /**< 1=已收到至少一帧门传感器状态 */
 };
 
 /** APP_PM25_Rsp 载荷：PM2.5 检测结果（Inline） */
@@ -1088,11 +1103,39 @@ struct OpticalPathProgressPayload {
     uint8_t reserved;
 };
 
+/** 起印环境检查步骤。数值跨进程传输，只准往末尾追加。 */
+enum class PrintPrepStep : uint8_t {
+    OuterDoor   = 0,  /**< 等待外门关到位（Confirm 弹窗） */
+    InnerDoor   = 1,  /**< 降 Z + 关内门套件 */
+    OpticalPath = 2,  /**< 打印前光路检测 */
+    PlateHeight = 3,  /**< 基板测高调平 */
+    Ready       = 4,  /**< 环境检查结束，即将进入打印送层 */
+    /** 串口 CONDITION_OK 后洗气+等 SOC 氧 < 阈值（Skip O2 / EnvSim / 测试图不计） */
+    Oxygen      = 5,
+    /** 首层视觉：采参考图 + PRINT_READY 后比对（调试开关关则不计） */
+    FirstLayer  = 6,
+};
+
+/** APP_Print_Prep_Progress_Ntf：起印环境检查进度（Inline）
+ *  step_index/step_total 只统计本趟实际会跑的步骤（调试跳过 / 门已关则不计入）。
+ *  光路步用 sub_index/sub_total 表示点位；其它步 sub_total=0。 */
+struct PrintPrepProgressPayload {
+    uint8_t step;        /**< PrintPrepStep */
+    uint8_t step_index;  /**< 当前步在本趟中的序号，1..step_total；Ready 时 = step_total */
+    uint8_t step_total;  /**< 本趟实际步骤数；全跳过可为 0 */
+    uint8_t sub_index;   /**< 步内子进度（光路点位 0-based）；无则 0 */
+    uint8_t sub_total;   /**< 步内子总数（光路=5）；无则 0 */
+    uint8_t reserved[3];
+};
+
 /** 起印被拒原因。数值跨进程传输，只准往末尾追加。 */
 enum class PrintStartRejectReason : uint8_t {
-    Unknown         = 0,
-    OpticalPathFail = 1,  /**< 打印前光路检测未通过 */
-    FileOpenFail    = 2,  /**< 本地副本打不开（已 prepare 但文件被删/损坏） */
+    Unknown          = 0,
+    OpticalPathFail  = 1,  /**< 打印前光路检测未通过 */
+    FileOpenFail     = 2,  /**< 本地副本打不开（已 prepare 但文件被删/损坏） */
+    PlateHeightFail  = 3,  /**< 打印前基板测高失败或无 LUT */
+    TcpOffline       = 4,  /**< 振镜 TCP 未连接，无法 begin_sending */
+    InnerDoorSeqFail = 5,  /**< 关内门套件（降 Z/关内门/回 Z）失败 */
 };
 
 /** APP_Print_Start_Rejected_Ntf：起印被后端拒绝（Inline）
@@ -1101,6 +1144,14 @@ struct PrintStartRejectedPayload {
     uint8_t reason;       /**< PrintStartRejectReason */
     uint8_t detail;       /**< reason=OpticalPathFail 时为失败点位索引，无效填 0xff */
     uint8_t reserved[2];
+};
+
+/** UI_Outer_Door_Confirm_Rsp：用户对外门确认窗的回复（Inline）
+ *  skip=0：Confirm，Glavo 再读传感器，仍开则再次 Req。
+ *  skip=1：Cancel，不检门，直接 continue 内门/光路/测高。 */
+struct OuterDoorConfirmRspPayload {
+    uint8_t skip;        /**< 0=确认后再检门，1=跳过外门检测 */
+    uint8_t reserved[3];
 };
 
 /**
@@ -1766,6 +1817,10 @@ enum class DeviceEventCode : uint16_t {
     OpticalPathCheckPassed  = 32, /**< 打印前光路检测通过（one_shot，severity=info） */
     OpticalPathCheckFail    = 33, /**< 光路异常，已阻断本次打印（one_shot，severity=critical） */
     PlateHeightFlatnessWarn = 34, /**< 打印前测高五次未通过，基板平整度需检查（one_shot，severity=error） */
+    TcpLinkDown             = 35, /**< 起印时振镜 TCP 未连接（one_shot，severity=error） */
+    OuterDoorNeedClose      = 36, /**< 起印需关外门（one_shot，severity=info；弹窗另走 Confirm_Req） */
+    InnerDoorSeqFail        = 37, /**< 关内门套件失败（one_shot，severity=error） */
+    PlateHeightBlocked      = 38, /**< 测高无 LUT 或失败，已阻断起印（one_shot，severity=error） */
 
     /* ---- 以下为 UI 本地事件：不走总线，由前端自己 push，占同一码空间以便
      *      消息中心统一排序去重。后端不应发送这些码。 ---- */

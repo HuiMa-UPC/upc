@@ -119,10 +119,6 @@ private:
                                          uint32_t width, uint32_t height,
                                          uint32_t frame_seq,
                                          const FirstLayerDetection& detection);
-    static void copy_nv12_tight(uint8_t* dst, const uint8_t* src_y,
-                                const uint8_t* src_uv, uint32_t src_stride_y,
-                                uint32_t width, uint32_t height);
-
     static bool read_inline_start_rsp(const middleware::Message& msg,
                                       middleware::CameraStreamInfoPayload& out);
     static uint64_t monotonic_ms();

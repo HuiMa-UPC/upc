@@ -679,7 +679,15 @@ void page_user_timelapse_exit(void)
     g_dragging = false;
     g_mode = PlaybackMode::None;
     hide_preview_chrome();
+    if(g_play_timer) {
+        lv_timer_delete(g_play_timer);
+        g_play_timer = nullptr;
+    }
+    ui::PngScrubPreview::instance().set_preview_cb(nullptr);
     ui::PngScrubPreview::instance().cancel();
+    ui::VideoPlayer::instance().set_preview_cb(nullptr);
+    ui::VideoPlayer::instance().set_progress_cb(nullptr);
+    ui::VideoPlayer::instance().set_ended_cb(nullptr);
     ui::VideoPlayer::instance().set_scrubbing(false);
     ui::VideoPlayer::instance().pause();
     ui::VideoPlayer::instance().close();
@@ -690,6 +698,10 @@ void page_user_timelapse_exit(void)
     g_last_preview_req_ms = -1;
     g_last_preview_req_idx = -1;
     g_last_preview_req_tick_ms = 0;
+    g_video_img = nullptr;
+    g_preview_img = nullptr;
+    g_preview_box = nullptr;
+    g_preview_time = nullptr;
 }
 
 lv_obj_t* page_user_timelapse_create(lv_obj_t* parent)

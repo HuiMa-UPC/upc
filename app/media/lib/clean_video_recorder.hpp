@@ -52,9 +52,6 @@ private:
     void worker_fn();
     void wait_session_jobs_drain_locked(std::unique_lock<std::mutex>& lock,
                                         uint64_t session_seq);
-    static void copy_nv12_tight(uint8_t* dst, const uint8_t* src_y,
-                                const uint8_t* src_uv, uint32_t src_stride_y,
-                                uint32_t width, uint32_t height);
     static uint64_t monotonic_us();
 
     std::mutex mtx_;

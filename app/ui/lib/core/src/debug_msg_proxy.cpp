@@ -102,6 +102,15 @@ void DebugMsgProxy::init()
             }
         }));
 
+    subs_.push_back(bus.subscribe(
+        middleware::MsgType::GLAVO_Debug_Skip_Outer_Door_Ntf, middleware::ModuleId::UI,
+        [this](const middleware::Message& msg) {
+            middleware::DebugOnOffPayload p{};
+            if(skip_outer_door_cb_ && read_inline_pod(msg, p)) {
+                skip_outer_door_cb_(p.on != 0);
+            }
+        }));
+
     auto on_o2_calib = [this](const middleware::Message& msg) {
         middleware::DebugO2CalibRspPayload p{};
         if(o2_calib_cb_ && read_inline_pod(msg, p)) {
@@ -470,6 +479,18 @@ void DebugMsgProxy::request_skip_o2_gate_state()
     publish_empty(middleware::MsgType::UI_Debug_Skip_O2_Gate_Get_Ntf);
 }
 
+void DebugMsgProxy::send_skip_outer_door_set(bool on)
+{
+    middleware::DebugOnOffPayload p{};
+    p.on = on ? 1 : 0;
+    publish_pod(middleware::MsgType::UI_Debug_Skip_Outer_Door_Set_Ntf, p);
+}
+
+void DebugMsgProxy::request_skip_outer_door_state()
+{
+    publish_empty(middleware::MsgType::UI_Debug_Skip_Outer_Door_Get_Ntf);
+}
+
 void DebugMsgProxy::send_o2_calib(float ref_o2_percent)
 {
     middleware::DebugO2CalibReqPayload p{};
@@ -651,6 +672,11 @@ void DebugMsgProxy::register_env_sim_powder(DebugEnvSimPowderCb cb)
 void DebugMsgProxy::register_skip_o2_gate(DebugSkipO2GateCb cb)
 {
     skip_o2_gate_cb_ = std::move(cb);
+}
+
+void DebugMsgProxy::register_skip_outer_door(DebugSkipOuterDoorCb cb)
+{
+    skip_outer_door_cb_ = std::move(cb);
 }
 
 void DebugMsgProxy::register_o2_calib(DebugO2CalibCb cb)

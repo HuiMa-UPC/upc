@@ -10,6 +10,7 @@
 #include <MQTTClient.h>
 
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <cstdint>
 #include <cstring>
@@ -307,8 +308,13 @@ private:
                         std::mutex& mtx,
                         std::condition_variable& cv,
                         const char* default_fail);
+    /** 唤醒卡在 wait_apply_ota 的下载线程（shutdown / 超时兜底前先 cancel）。 */
+    void cancel_apply_ota_waits();
     void run_manifest_download_task(std::string task_id, std::vector<OtaComponent> components);
     void start_manifest_download(std::string task_id, std::vector<OtaComponent> components);
+
+    /** Glavo/MCU 实装阶段最长等待；超时后报 ota_timeout，避免永久挂起。 */
+    static constexpr std::chrono::minutes kApplyOtaWaitTimeout{30};
 
     /* ---- SOC 升级（mqtt_service_soc_ota.cpp） ---- */
     /**

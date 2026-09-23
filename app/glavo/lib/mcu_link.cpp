@@ -1282,8 +1282,11 @@ void McuLink::on_sensor_report(const serial_sensor_report_t& report)
 
     mcu_1st_seen_.store(true);
 
+    bool door_closed_edge = false;
     {
         std::lock_guard<std::mutex> lock(env_mtx_);
+        const bool prev_valid = env_cache_.door_state_valid;
+        const bool prev_open = env_cache_.outer_door_open;
         env_cache_.sensor_v4 = true;
         env_cache_.baseplate_temp_c = report.substrate_temp_c;
         env_cache_.filter_pressure_kpa =
@@ -1291,6 +1294,7 @@ void McuLink::on_sensor_report(const serial_sensor_report_t& report)
         env_cache_.outer_door_open = (report.outer_door_open != 0);
         env_cache_.door_state_valid = true;
         env_cache_.valid = true;
+        door_closed_edge = prev_valid && prev_open && !env_cache_.outer_door_open;
 
         env_cache_.powder_ir_bits = report.powder_ir_bits;
         /* UI 只看 bit0/bit1：左/右匣仍有粉（非 OUT 缺粉） */
@@ -1303,6 +1307,9 @@ void McuLink::on_sensor_report(const serial_sensor_report_t& report)
     }
     publish_env_update_ntf();
     publish_debug_sensor_ntf(report);
+    if(door_closed_edge) {
+        emit_event(McuLinkEvent::OuterDoorClosed);
+    }
 
     const bool powder_low =
         (report.powder_left_low != 0) || (report.powder_right_low != 0);
@@ -1671,6 +1678,8 @@ void McuLink::publish_env_update_ntf()
     p.sensor_v4      = 1u;
     p.pm1_cabin      = snap.pm1_cabin;
     p.pm10_cabin     = snap.pm10_cabin;
+    p.outer_door_open  = snap.outer_door_open ? 1u : 0u;
+    p.door_state_valid = snap.door_state_valid ? 1u : 0u;
     /* 尚未收到 MCU 1ST：基板/粉量仍属 MCU；舱氧已由 SOC 填 */
     if(!mcu_1st_seen_.load()) {
         p.baseplate_temp_c = -1.0f;
@@ -1727,6 +1736,8 @@ void McuLink::publish_env_status_ntf_ui_only()
         p.sensor_v4 = 1u;
         p.pm1_cabin = snap.pm1_cabin;
         p.pm10_cabin = snap.pm10_cabin;
+        p.outer_door_open = snap.outer_door_open ? 1u : 0u;
+        p.door_state_valid = snap.door_state_valid ? 1u : 0u;
     } else {
         p.pm25_indoor = -1.0f;
         p.pm25_cabin = -1.0f;
@@ -1741,6 +1752,8 @@ void McuLink::publish_env_status_ntf_ui_only()
         p.sensor_v4 = 1u;
         p.pm1_cabin = -1.0f;
         p.pm10_cabin = -1.0f;
+        p.outer_door_open = 0u;
+        p.door_state_valid = 0u;
     }
 
     middleware::Message ntf_ui(middleware::MsgType::APP_Update_Ntf,
@@ -1779,6 +1792,8 @@ void McuLink::publish_env_invalid_ntf()
     p.sensor_v4        = 1u;
     p.pm1_cabin        = -1.0f;
     p.pm10_cabin       = -1.0f;
+    p.outer_door_open  = 0u;
+    p.door_state_valid = 0u;
 
     middleware::Message ntf_ui(middleware::MsgType::APP_Update_Ntf,
         middleware::ModuleId::APP_GLAVO,
@@ -1996,8 +2011,11 @@ void McuLink::poll_env_sim_tick()
 
     /* 模拟数据自己填舱内外，不叠真实 SOC。mcu_1st_seen 避免发布时把基板/粉量打成哨兵。 */
     mcu_1st_seen_.store(true);
+    bool door_closed_edge = false;
     {
         std::lock_guard<std::mutex> lock(env_mtx_);
+        const bool prev_valid = env_cache_.door_state_valid;
+        const bool prev_open = env_cache_.outer_door_open;
         env_cache_.sensor_v4        = true;
         env_cache_.pm25_cabin       = pm25;
         env_cache_.pm25_indoor      = pm25;
@@ -2015,9 +2033,13 @@ void McuLink::poll_env_sim_tick()
         env_cache_.outer_door_open  = (door_open != 0);
         env_cache_.door_state_valid = true;
         env_cache_.valid            = true;
+        door_closed_edge = prev_valid && prev_open && !env_cache_.outer_door_open;
     }
 
     publish_env_update_ntf();
+    if(door_closed_edge) {
+        emit_event(McuLinkEvent::OuterDoorClosed);
+    }
 
     /* Env Sim 时 poll_soc_env_tick 直接 return，小屏改走这里 */
     SpiPm25Lcd::instance().update(pm25);
@@ -3486,6 +3508,7 @@ void McuLink::link_process_serial_handshake()
             if(!o2_ok) {
                 /* 起印尚未开扫，不做 TCP 暂停；仍发 1120 让 UI 提示氧高。 */
                 publish_soc_chamber_oxygen_alarm(true);
+                emit_event(McuLinkEvent::OxygenGateWaiting);
                 const auto now = std::chrono::steady_clock::now();
                 if(last_o2_wait_log_.time_since_epoch().count() == 0 ||
                    now - last_o2_wait_log_ >= std::chrono::seconds(5)) {
@@ -3500,6 +3523,7 @@ void McuLink::link_process_serial_handshake()
             }
             last_o2_wait_log_ = {};
             publish_soc_chamber_oxygen_alarm(false);
+            emit_event(McuLinkEvent::OxygenGatePassed);
             UPC_LOG_MCU_LINK_TO(SerialLayer, Info,
                 "SOC O2 gate pass: %.2f%% < %.2f%%, send PRINT_START",
                 static_cast<double>(o2),

@@ -197,11 +197,16 @@ std::string g_pending_month;
 int32_t g_pending_keep_scroll = 0;
 bool g_list_building = false;
 lv_timer_t* g_list_build_timer = nullptr;
+/** 列表是否过期。离页不拆网格；进页时 dirty=false 直接露出上次内容，避免再扫盘/建卡卡一下。 */
+bool g_list_dirty = true;
+bool g_rebuild_queued = false;
 
 /* 前向声明（定义顺序晚于调用点） */
 void set_manage_mode(bool on);
 void apply_manage_ui(void);
 void rebuild_list(void);
+void mark_list_dirty(void);
+void queue_rebuild_list(void);
 void show_empty(bool empty);
 void apply_empty_copy(void);
 void stop_list_build_timer(void);
@@ -603,7 +608,30 @@ bool remove_cards_with_rollback(const std::vector<HistoryCard*>& cards)
 
 void rebuild_list_async(void * /*user*/)
 {
+    g_rebuild_queued = false;
+    /* 离页后排队的重建作废；dirty 保留，下次进页再刷。 */
+    if(!g_history_active || !g_grid) {
+        return;
+    }
+    if(g_manage) {
+        /* 多选中不打断；回来/退出多选时仍会看到 dirty。 */
+        return;
+    }
     rebuild_list();
+}
+
+void mark_list_dirty(void)
+{
+    g_list_dirty = true;
+}
+
+void queue_rebuild_list(void)
+{
+    if(g_rebuild_queued) {
+        return;
+    }
+    g_rebuild_queued = true;
+    lv_async_call(rebuild_list_async, nullptr);
 }
 
 void close_del_dlg(void)
@@ -639,7 +667,8 @@ void on_batch_del_confirm(lv_event_t * /*e*/)
     ui_toast_show("Deleted", user_color_accent, 1200);
     /* 批量删完退出管理模式，列表整表重建（延后到事件之外，避免删中卡片时 UAF） */
     set_manage_mode(false);
-    lv_async_call(rebuild_list_async, nullptr);
+    mark_list_dirty();
+    queue_rebuild_list();
 }
 
 /**
@@ -882,6 +911,12 @@ void set_manage_mode(bool on)
             c->selected = false;
             apply_card_selection(c);
         }
+        apply_manage_ui();
+        /* 多选期间总线只打了 dirty：退出多选再刷，避免勾选中途整表拆掉。 */
+        if(g_list_dirty && g_history_active) {
+            queue_rebuild_list();
+        }
+        return;
     }
     apply_manage_ui();
 }
@@ -1030,7 +1065,8 @@ void on_tab_click(lv_event_t *e)
     g_tab = next;
     apply_tab_style();
     set_manage_mode(false);   /* 切 Tab 退出多选态 */
-    rebuild_list();
+    mark_list_dirty();
+    queue_rebuild_list();
 }
 
 /** 一个 Tab 项（稿 6122:80002）：构造与命中区在 ui_user_make_tab_item，与消息页共用 */
@@ -1713,6 +1749,7 @@ void finish_list_build(void)
         g_list_build_timer = nullptr;
     }
     g_list_building = false;
+    g_list_dirty = false;
     apply_manage_ui();
     if(g_grid && g_pending_keep_scroll > 0) {
         lv_obj_update_layout(g_grid);
@@ -1851,6 +1888,7 @@ void rebuild_list(void)
         if(photos.empty()) {
             show_empty(true);
             apply_manage_ui();
+            g_list_dirty = false;
             return;
         }
         show_empty(false);
@@ -1872,6 +1910,7 @@ void rebuild_list(void)
     if(visible_entries.empty()) {
         show_empty(true);
         apply_manage_ui();
+        g_list_dirty = false;
         return;
     }
     show_empty(false);
@@ -1894,6 +1933,8 @@ void rebuild_list(void)
 
 void refresh_history_async(void * /*user*/)
 {
+    /* 总线通知一律先打脏；人在本页则异步重建，否则下次进页再刷。 */
+    g_list_dirty = true;
     if(g_history_active) {
         page_user_history_refresh(false);
     }
@@ -1936,9 +1977,7 @@ void ensure_history_subscribed_once()
             if(!read_inline_manifest(msg, p)) {
                 return;
             }
-            if(g_history_active) {
-                lv_async_call(refresh_history_async, nullptr);
-            }
+            lv_async_call(refresh_history_async, nullptr);
         }));
     g_history_subs.push_back(bus.subscribe(
         middleware::MsgType::APP_Clean_Test_Result_Ntf,
@@ -1948,9 +1987,7 @@ void ensure_history_subscribed_once()
             if(!read_inline_clean_done(msg, p)) {
                 return;
             }
-            if(g_history_active) {
-                lv_async_call(refresh_history_async, nullptr);
-            }
+            lv_async_call(refresh_history_async, nullptr);
         }));
     /* 新稿去掉了 Storage 容量条与告警横幅，本页不再订阅 APP_Storage_Usage_Rsp。
      * Media 侧的 UI_Storage_Usage_Req 处理仍在（见 app/media/MEDIA.md），只是暂时无人问。 */
@@ -1958,20 +1995,32 @@ void ensure_history_subscribed_once()
 
 void page_user_history_refresh(bool force)
 {
-    (void)force;
+    (void)force; /* SimplePage 进页恒传 true，不当「强制重建」——靠 dirty 决定 */
     g_history_active = true;
     if(!g_grid) {
         return;
     }
-    /* 后台刷新（视频生成完等通知）不该把用户正在做的多选清掉 */
-    if(!g_manage) {
-        rebuild_list();
+    /* 后台刷新不该把用户正在做的多选清掉；只记 dirty，退出多选/下次进页再刷 */
+    if(g_manage) {
+        return;
     }
+    if(!g_list_dirty) {
+        return; /* 缓存命中：网格还在，直接露出 */
+    }
+    queue_rebuild_list();
 }
 
 void page_user_history_exit(void)
 {
+    /* 建到一半就离开：标记过期，下次进页整表重来，别把半截列表当缓存。 */
+    if(g_list_building) {
+        mark_list_dirty();
+    }
     stop_list_build_timer();
+    if(g_rebuild_queued) {
+        lv_async_call_cancel(rebuild_list_async, nullptr);
+        g_rebuild_queued = false;
+    }
     g_history_active = false;
     close_del_dlg();
     set_manage_mode(false);
@@ -1988,6 +2037,8 @@ lv_obj_t *page_user_history_create(lv_obj_t *parent)
     g_selbar         = nullptr;
     g_manage     = false;
     g_tab        = HistTab::Timelapse;
+    g_list_dirty = true;
+    g_rebuild_queued = false;
     clear_cards();
 
     lv_obj_t *page = lv_obj_create(parent);

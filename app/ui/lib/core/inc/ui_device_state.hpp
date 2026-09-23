@@ -50,6 +50,8 @@ typedef struct {
     float              humidity_percent; /**< 舱内湿度（<0/NaN=无数据） */
     float              pressure_kpa;     /**< 舱内气压（<0/NaN=无数据） */
     uint8_t            powder_bits;      /**< 粉量位 bit0/bit1（0=缺粉；>=1 允许继续） */
+    bool               outer_door_open;  /**< 外门开；仅 door_state_valid 时可信 */
+    bool               door_state_valid; /**< 是否已有传感器门状态 */
 } ui_device_snapshot_t;
 
 /** 观察者：快照变化后在 UI 线程被调用（env 推送已由 Proxy 切回 UI 线程）。 */
@@ -69,6 +71,12 @@ const ui_device_snapshot_t *ui_device_state_get(void);
  * 后续 env 推送不再覆盖，直到置回其它值——打印期间界面上的状态由前端说了算。
  */
 void ui_device_state_set_status(ui_device_status_t s);
+
+/**
+ * 乐观置外门开/关（开门 Rsp 成功后立刻放开内门门闩；随后仍以 env 传感器为准覆盖）。
+ * 同时把门状态标为有效。
+ */
+void ui_device_state_set_outer_door_open(bool open);
 
 /** 注册观察者（上限 4 个，超出丢弃）。注册时不会立即回调。 */
 void ui_device_state_add_observer(ui_device_state_observer_t cb);

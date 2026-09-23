@@ -159,14 +159,6 @@ bool load_cal_config_options(const char* path, CalConfigOptions* out)
             }
             continue;
         }
-        if(key_upper == "GLAVO_DOOR_REAL_CLOSE_CHECK_ENABLE") {
-            bool v = false;
-            if(parse_bool_like(value, &v)) {
-                out->has_glavo_door_real_close_check_enable = true;
-                out->glavo_door_real_close_check_enable = v;
-            }
-            continue;
-        }
         if(key_upper == "GLAVO_SERIAL_ACK_ENABLE") {
             bool v = false;
             if(parse_bool_like(value, &v)) {

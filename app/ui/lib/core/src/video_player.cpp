@@ -722,7 +722,6 @@ bool VideoPlayer::open(lv_obj_t* image_target, const char* path)
     close();
     {
         std::lock_guard<std::mutex> lk(impl_->mtx);
-        impl_->image_target = image_target;
         if(!impl_->open_decoder(path)) {
             impl_->opened = false;
             return false;
@@ -733,6 +732,10 @@ bool VideoPlayer::open(lv_obj_t* image_target, const char* path)
         impl_->preview_req_gen.store(0, std::memory_order_relaxed);
         impl_->commands.clear();
         impl_->cv.notify_all();
+    }
+    {
+        std::lock_guard<std::mutex> ulk(impl_->ui_payload_mtx);
+        impl_->image_target = image_target;
     }
     if(!impl_->seek_to_ms(0, false, 0)) {
         std::lock_guard<std::mutex> lk(impl_->mtx);
@@ -755,7 +758,6 @@ void VideoPlayer::close()
         std::lock_guard<std::mutex> lk(impl_->mtx);
         impl_->playing = false;
         impl_->opened = false;
-        impl_->image_target = nullptr;
         impl_->scrubbing.store(false, std::memory_order_relaxed);
         impl_->preview_req_gen.fetch_add(1, std::memory_order_relaxed);
         impl_->commands.clear();
@@ -764,7 +766,9 @@ void VideoPlayer::close()
         impl_->cv.notify_all();
     }
     {
+        /* image_target 与 async_apply_* 同锁：先置空再 cancel，避免 TOCTOU 打到已卸载控件。 */
         std::lock_guard<std::mutex> ulk(impl_->ui_payload_mtx);
+        impl_->image_target = nullptr;
         impl_->pending_preview = false;
         impl_->pending_progress = false;
         impl_->pending_ended = false;
