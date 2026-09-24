@@ -51,7 +51,7 @@ UI → GlavoService（工作线程）→ ParserManager → RingBuffer → McuLin
 | `Fs_Delete_Ntf` | 删除 Local 文件（磁盘 + config.json） |
 | `UI_Print_Prepare_Req` | 轻量预处理（USB 复制；清单无 `layer_count` 时才单趟扫 `M3000`；打开解析器并写 config.json）。已有总层数时不数行、不把 `get_total_lines()` 写回 `line_count`；Start 不再补扫 |
 | `UI_Parser_Exit_Ntf` | 取消解析（stop_parse + 清会话） |
-| `UI_Print_Start_Req` | 置打印态 → 外门闸门（未关则 `GLAVO_Outer_Door_Confirm_Req`；UI Confirm 再读门、Cancel=`skip=1` 不检门）→ 关内门套件 → 光路 → 测高 → 正式解析 + 首层参考图 + `begin_sending` → 串口氧门（洗气+等氧）→ 首层视觉比对 → 以上未跳过的步骤均推 `APP_Print_Prep_Progress_Ntf`；全部结束后才 `Ready` 进 Printing。TCP 未连则 `TcpOffline` 拒绝 |
+| `UI_Print_Start_Req` | 置打印态 → 外门闸门（未关则 `GLAVO_Outer_Door_Confirm_Req`；UI Confirm 再读门、Cancel=`skip=1` 不检门）→ 关内门套件（**静止全开或未知才跑**；bit1=0 跳过且不占 Prepare 步）→ 光路 → 测高 → 正式解析 + 首层参考图 + `begin_sending` → 串口氧门（洗气+等氧）→ 首层视觉比对 → 以上未跳过的步骤均推 `APP_Print_Prep_Progress_Ntf`；全部结束后才 `Ready` 进 Printing。TCP 未连则 `TcpOffline` 拒绝 |
 | ↑ 起印失败 | 打印态在 `launch_print_from_prepared` 最前面就置（检测那十几秒 UI 已在打印页），所以「运动还没开始就失败」的分支**一律走 `abort_print_start()`** 回滚，否则 UI 停在打印页 0%；失败时 SOC 舱灯全开 |
 | `UI_Print_Terminate_Req` | 外门确认/关内门套件/光路/测高/开扫前 Prepare：打断对应挂起并回红光安全态（关内门阻塞可被 `print_prep_abort_` 立刻打断）；已开扫则 `stop_parse` + `request_terminate` + `on_print_abort`；终止时内门保持当前态 |
 | `UI_Print_Pause_Req` | `set_user_dispatch_paused(true)`，仅停 TCP 运动下发 |
@@ -71,6 +71,8 @@ UI → GlavoService（工作线程）→ ParserManager → RingBuffer → McuLin
 | `UI_Debug_Spi_Pm25_Lcd_Set_Ntf` / `Get` | SPI 小屏测试刷屏：开则约 500ms 整屏轮换纯色并 `pwrite` fb；关则恢复舱外 PM 布局 |
 | `UI_Alarm_Reset_Ntf` | `serial_build_alarm_reset` 组 0xA3/0x82 帧直发串口；结果不回 Rsp，以 MCU 后续单条上报为准 |
 | `UI_Debug_Alarm_Inject_Ntf` | 调试页 Alarm Inject：转 `GLAVO_Alarm_Report_Ntf` **只发 MQTT**（不上 UI、不改快照/灯效） |
+
+内门 **1ST bit1（UP_SWPD）只表示全开**（1=全开，0=不在全开位）。**上电不自动关内门**。进套件前读静止位：开仅全开跳过；关仅非全开跳过（关到位未装，静止 0 不当成必须再关）。未知则开/关都跑。手动/调试同一套件（降 **20 mm** → 门动作 → 等 **2 s** → 回降前 Z）。套件进行中推 `GLAVO_Debug_Inner_Door_Busy_Ntf`（Manual / 调试 Inner Door 禁钮，含停止）；连点开/关在入队时去重。起印与外门开→关边沿按静止位决定是否关；边沿当时套件忙 / 打印发送中 / 预检中则记下，事后补关。与转运盒流程无共享状态。
 
 ### 传感器
 

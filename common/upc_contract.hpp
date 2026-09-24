@@ -498,6 +498,7 @@ enum class MsgType : uint32_t {
     UI_Debug_Skip_O2_Gate_Get_Ntf,      /**< Empty：查询当前跳过氧门开关状态 */
     UI_Debug_Skip_Outer_Door_Set_Ntf,   /**< DebugOnOffPayload：跳过外门检测+关内门套件（仅本次运行，默认关=要做） */
     UI_Debug_Skip_Outer_Door_Get_Ntf,   /**< Empty：查询跳过外门检测开关 */
+    UI_Debug_Inner_Door_Busy_Get_Ntf,   /**< Empty：查询内门开/关套件是否进行中 */
     UI_Debug_O2_Calib_Req,              /**< DebugO2CalibReqPayload：空气/标准气单点标定 K */
     UI_Debug_O2_Calib_Get_Ntf,          /**< Empty：查询当前氧标定 K（不重新采样） */
     UI_Debug_Status_Led_Set_Ntf,        /**< DebugStatusLedPayload：强制 SPI 灯板颜色（仅本次运行，绕开 MCU 版本门） */
@@ -528,6 +529,7 @@ enum class MsgType : uint32_t {
     GLAVO_Debug_Cabin_Pm_Valve_Ntf,     /**< DebugOnOffPayload：舱内 PM 阀开关状态 */
     GLAVO_Debug_Skip_O2_Gate_Ntf,       /**< DebugOnOffPayload：跳过 SOC 氧打印门开关状态 */
     GLAVO_Debug_Skip_Outer_Door_Ntf,    /**< DebugOnOffPayload：跳过外门检测+关内门套件开关状态 */
+    GLAVO_Debug_Inner_Door_Busy_Ntf,    /**< DebugOnOffPayload：内门开/关套件进行中（on=1 禁 Manual 钮） */
     GLAVO_Debug_O2_Calib_Rsp,           /**< DebugO2CalibRspPayload：氧标定结果（Req 应答） */
     GLAVO_Debug_O2_Calib_Ntf,           /**< DebugO2CalibRspPayload：当前 K 回读（Get，ok=1 且未改盘） */
     GLAVO_Debug_Status_Led_Ntf,         /**< DebugStatusLedPayload：灯板强制态回读 */
@@ -799,7 +801,8 @@ struct EnvSnapshotPayload {
     float    pm1_cabin;         /**< 舱内 PM1.0；无效填 <0（V4 SOC） */
     float    pm10_cabin;        /**< 舱内 PM10；无效填 <0（V4 SOC） */
     uint8_t  outer_door_open;   /**< 1=外门开 0=关；仅 door_state_valid=1 时有效 */
-    uint8_t  door_state_valid;  /**< 1=已收到至少一帧门传感器状态 */
+    uint8_t  door_state_valid;  /**< 1=已收到至少一帧门传感器状态（外门+内门同源） */
+    uint8_t  inner_door_open;   /**< 1=全开 0=非全开（暂时关/半开/全关皆可能）；1ST bit1 UP_SWPD；仅 door_state_valid=1 时有效 */
 };
 
 /** APP_PM25_Rsp 载荷：PM2.5 检测结果（Inline） */
@@ -1117,7 +1120,8 @@ enum class PrintPrepStep : uint8_t {
 };
 
 /** APP_Print_Prep_Progress_Ntf：起印环境检查进度（Inline）
- *  step_index/step_total 只统计本趟实际会跑的步骤（调试跳过 / 门已关则不计入）。
+ *  step_index/step_total 只统计本趟实际会跑的步骤（调试跳过 / 外门已关不计外门步；
+ *  内门静止非全开则不计 Closing inner door）。
  *  光路步用 sub_index/sub_total 表示点位；其它步 sub_total=0。 */
 struct PrintPrepProgressPayload {
     uint8_t step;        /**< PrintPrepStep */
@@ -1545,9 +1549,9 @@ enum class DebugStatusLedColor: uint8_t { Blue = 0, Orange = 1, Red = 2, Raw = 3
 struct DebugAxisJogPayload {
     uint8_t axis;       /**< DebugAxis */
     uint8_t mode;       /**< DebugJogMode：Click=单步，Hold=持续 */
-    int8_t  dir;        /**< +1 / -1 */
+    int8_t  dir;        /**< +1 / -1；Click+Z 时 dir=0 表示 value 为绝对目标 mm */
     uint8_t reserved;
-    float   value;      /**< Click=步距(mm/°)，Hold=速度(mm·°/s) */
+    float   value;      /**< Click=步距(mm/°) 或 Z 绝对目标；Hold=速度(mm·°/s) */
 };
 
 /** UI_Debug_Axis_Hold_Stop_Ntf / UI_Debug_Axis_SetZero_Ntf */

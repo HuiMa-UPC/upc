@@ -66,6 +66,7 @@ struct EnvSnapshotCache {
     uint8_t powder_bits   = 0u;     /**< bit0=左匣有粉 bit1=右匣有粉 */
     uint8_t powder_ir_bits = 0u;    /**< A1..OUTR 八路红外 */
     bool  outer_door_open = false;  /**< false=门关 true=门开 */
+    bool  inner_door_open = false;  /**< true=全开 false=非全开（1ST bit1；非关到位） */
     bool  door_state_valid = false; /**< 是否已收到至少一帧可用门状态 */
     bool  sensor_v4       = false;  /**< 1=已按 SOC 模型填缓存（链路启动后恒为 true；Env Sim 期间不叠真实 SOC） */
     bool  valid           = false;
@@ -205,6 +206,8 @@ public:
                             float speed_mm_min, int laser_on);
     /** @brief 最近一次 MCU 运动位置上报的 Z 实际位置（mm）。 */
     [[nodiscard]] float get_z_pos_mm() const noexcept;
+    /** @brief 是否已收到过 MCU 1ST 环境帧（串口已在报传感器）。 */
+    [[nodiscard]] bool mcu_1st_seen() const noexcept;
     /**
      * @brief 标记“打印任务流程”是否激活（用于门控高频心跳回包日志）
      * @note 业务约定：从进入打印到用户滑动开门解锁成功，均视为同一流程。

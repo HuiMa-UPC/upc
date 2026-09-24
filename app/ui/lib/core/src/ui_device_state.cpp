@@ -44,6 +44,7 @@ void apply_env(const middleware::EnvSnapshotPayload &p)
     if(p.door_state_valid) {
         g_snap.door_state_valid = true;
         g_snap.outer_door_open  = (p.outer_door_open != 0);
+        g_snap.inner_door_open  = (p.inner_door_open != 0);
     }
     notify_observers();
 }
@@ -82,6 +83,7 @@ void ui_device_state_init(void)
         g_snap.pressure_kpa   = -1.0f;
         g_snap.powder_bits    = 0u;
         g_snap.outer_door_open  = false;
+        g_snap.inner_door_open  = false;
         g_snap.door_state_valid = false;
         g_inited = true;
     }

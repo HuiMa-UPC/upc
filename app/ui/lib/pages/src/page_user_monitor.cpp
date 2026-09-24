@@ -177,8 +177,16 @@ lv_obj_t *g_jog_up      = nullptr;
 lv_obj_t *g_jog_down    = nullptr;
 lv_obj_t *g_s_val       = nullptr;
 lv_obj_t *g_door_btn    = nullptr;  /**< Inner Door 电源钮 */
-bool      g_inner_door_open = false;
+bool      g_inner_door_open = false; /**< env bit1 全开；亮=全开，灭=非全开 */
 bool      g_outer_door_open = false; /**< 由 env 快照 / 开门 Rsp 乐观置位同步 */
+/** 外门未开时点了 Inner Door：弹窗外门开到位后自动续跑开/关。 */
+bool      g_pending_inner_door = false;
+/** pending 时打算开还是关（跟点按瞬间的传感器态取反）。 */
+bool      g_pending_inner_want_open = true;
+/** 内门套件进行中：禁钮，防连点排队第二次开/关。 */
+bool      g_inner_door_busy = false;
+/** Manual 吹粉：外门未关时记下意图，关到位后再开清粉。 */
+bool      g_pending_purify = false;
 
 /* 底部按钮组 */
 lv_obj_t *g_bottom      = nullptr;
@@ -195,7 +203,8 @@ lv_obj_t *g_btn_wide_lbl = nullptr;
 /* 弹窗 */
 ui_modal_dialog_t *g_retrieve_dlg  = nullptr;
 ui_slide_unlock_t *g_retrieve_slide = nullptr;
-ui_modal_dialog_t *g_outer_door_dlg = nullptr;
+ui_modal_dialog_t *g_outer_door_dlg = nullptr;       /**< Inner Door：请先开外门 */
+ui_modal_dialog_t *g_purify_door_dlg = nullptr;     /**< Manual 吹粉：请先关外门 */
 
 tab_t          g_tab           = TAB_JOB;
 phase_t        g_phase         = PHASE_IDLE;
@@ -218,6 +227,7 @@ void apply_view(void);
 void status_update(void);
 void cam_apply_layout(uint32_t src_w, uint32_t src_h);
 void chip_set(const char *text);
+ui_clean_owner_t purify_owner(void);
 
 /* ========================================================================== *
  *  小工具
@@ -1119,13 +1129,172 @@ void status_update(void)
  *  Manual 页
  * ========================================================================== */
 
-/** 外门没开时，Inner Door 与吹粉都不能动（稿 6338:28265）。 */
+/** Inner Door 用的「请先开外门」滑条弹窗。 */
 void close_outer_door_dlg(void)
 {
     if(g_outer_door_dlg) {
         ui_modal_dialog_close(g_outer_door_dlg);
         g_outer_door_dlg = nullptr;
     }
+}
+
+void close_purify_door_dlg(void)
+{
+    if(g_purify_door_dlg) {
+        ui_modal_dialog_close(g_purify_door_dlg);
+        g_purify_door_dlg = nullptr;
+    }
+}
+
+/** 跟 env 快照对齐外门开合；进页期间可能还没走过 observer。 */
+void sync_outer_door_from_snap(void)
+{
+    const ui_device_snapshot_t *snap = ui_device_state_get();
+    if(snap && snap->door_state_valid) {
+        g_outer_door_open = snap->outer_door_open;
+    }
+}
+
+/** Manual / 结果页共用的开一轮清粉（调用前已确认可发）。 */
+void start_purify_now(void)
+{
+    g_pending_purify = false;
+    close_purify_door_dlg();
+    g_purify_busy = true;
+    ui_clean_state_request(purify_owner(), g_job_label);
+    g_purify = PURIFY_RUNNING;
+    apply_phase();
+}
+
+/** 外门关到位后：若有 pending Manual 吹粉，续跑一次。 */
+void try_resume_pending_purify(void)
+{
+    if(!g_pending_purify || g_outer_door_open ||
+       g_purify == PURIFY_RUNNING || g_purify_busy) {
+        return;
+    }
+    start_purify_now();
+}
+
+void on_purify_door_confirm_ok(lv_event_t * /*e*/)
+{
+    sync_outer_door_from_snap();
+    if(g_outer_door_open) {
+        ui_toast_show("Close the outer door fully", ui_color_danger, 1800);
+        return;
+    }
+    start_purify_now();
+}
+
+void on_purify_door_confirm_cancel(lv_event_t * /*e*/)
+{
+    g_pending_purify = false;
+    close_purify_door_dlg();
+}
+
+/** Manual 吹粉须外门关：未关则弹确认，关到位后再开。 */
+void show_purify_door_dlg(void)
+{
+    if(g_purify_door_dlg) {
+        return;
+    }
+    ui_modal_dialog_cfg_t cfg =
+        ui_modal_dialog_cfg_user("Close the outer door", USER_DLG_W, true);
+    cfg.light_theme = true;
+    cfg.with_close_btn = false;
+    g_purify_door_dlg = ui_modal_dialog_open(lv_layer_top(), &cfg);
+    if(!g_purify_door_dlg) {
+        return;
+    }
+    lv_obj_t *sub = ui_user_make_body_label(
+        g_purify_door_dlg->body,
+        "Powder cleaning needs the outer door closed. Close it fully, then confirm.");
+    lv_label_set_long_mode(sub, LV_LABEL_LONG_MODE_WRAP);
+    lv_obj_set_width(sub, LV_PCT(100));
+    lv_obj_set_style_text_align(sub, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_flex_flow(g_purify_door_dlg->footer, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_row(g_purify_door_dlg->footer, USER_PAD, 0);
+    lv_obj_set_flex_align(g_purify_door_dlg->footer, LV_FLEX_ALIGN_START,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_t *ok = ui_user_make_confirm_footer_btn(
+        g_purify_door_dlg->footer, "Confirm",
+        true, user_light_nav_on, true,
+        on_purify_door_confirm_ok, nullptr);
+    lv_obj_set_flex_grow(ok, 0);
+    lv_obj_set_width(ok, LV_PCT(100));
+    lv_obj_t *cancel = ui_user_make_confirm_footer_btn(
+        g_purify_door_dlg->footer, "Cancel",
+        false, user_light_nav_on, true,
+        on_purify_door_confirm_cancel, nullptr);
+    lv_obj_set_flex_grow(cancel, 0);
+    lv_obj_set_width(cancel, LV_PCT(100));
+}
+
+void apply_inner_door_btn(void)
+{
+    if(!g_door_btn) {
+        return;
+    }
+    lv_obj_set_style_bg_color(g_door_btn,
+        g_inner_door_open ? lv_color_hex(kBtnBlue) : user_light_text, 0);
+    lv_obj_set_style_bg_opa(g_door_btn, g_inner_door_open ? LV_OPA_COVER : 10, 0);
+    lv_obj_t *ic = lv_obj_get_child(g_door_btn, 0);
+    lv_obj_t *img = ic ? lv_obj_get_child(ic, 0) : nullptr;
+    if(img) {
+        lv_obj_set_style_image_recolor(
+            img, g_inner_door_open ? lv_color_white() : user_light_text, 0);
+    }
+    if(g_inner_door_busy) {
+        lv_obj_add_state(g_door_btn, LV_STATE_DISABLED);
+        lv_obj_clear_flag(g_door_btn, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_set_style_opa(g_door_btn, LV_OPA_50, 0);
+    } else {
+        lv_obj_clear_state(g_door_btn, LV_STATE_DISABLED);
+        lv_obj_add_flag(g_door_btn, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_set_style_opa(g_door_btn, LV_OPA_COVER, 0);
+    }
+}
+
+void set_inner_door_busy(bool busy)
+{
+    if(g_inner_door_busy == busy) {
+        apply_inner_door_btn();
+        return;
+    }
+    g_inner_door_busy = busy;
+    apply_inner_door_btn();
+}
+
+/** 全开→关套件；非全开→开套件。调用前须已确认外门开。 */
+void request_inner_door_toggle(void)
+{
+    if(g_inner_door_busy) {
+        return;
+    }
+    const ui_device_snapshot_t *snap = ui_device_state_get();
+    const bool open_now =
+        (snap && snap->door_state_valid) ? snap->inner_door_open : g_inner_door_open;
+    const bool want_open = !open_now;
+    /* 乐观禁钮 + 刷新外观；套件结束 Glavo 推 busy=0。 */
+    g_inner_door_open = want_open;
+    set_inner_door_busy(true);
+    ui::DebugMsgProxy::instance().send_inner_door(
+        want_open ? middleware::DebugMotorAction::Forward
+                  : middleware::DebugMotorAction::Reverse);
+}
+
+/** 外门开到位后：若有 pending Inner Door，续跑一次。 */
+void try_resume_pending_inner_door(void)
+{
+    if(!g_pending_inner_door || !g_outer_door_open || g_inner_door_busy) {
+        return;
+    }
+    g_pending_inner_door = false;
+    g_inner_door_open = g_pending_inner_want_open;
+    set_inner_door_busy(true);
+    ui::DebugMsgProxy::instance().send_inner_door(
+        g_pending_inner_want_open ? middleware::DebugMotorAction::Forward
+                                  : middleware::DebugMotorAction::Reverse);
 }
 
 void on_outer_door_slide(void * /*u*/)
@@ -1164,11 +1333,7 @@ void show_outer_door_dlg(void)
 /** 外门没开就拦下并弹提示。返回 true 表示可以继续。 */
 bool require_outer_door(void)
 {
-    /* 进页期间可能还没走过 observer；先跟快照对齐一次。 */
-    const ui_device_snapshot_t *snap = ui_device_state_get();
-    if(snap && snap->door_state_valid) {
-        g_outer_door_open = snap->outer_door_open;
-    }
+    sync_outer_door_from_snap();
     if(g_outer_door_open) {
         return true;
     }
@@ -1182,15 +1347,20 @@ void on_plate_changed(lv_event_t *e)
     if(idx == UI_SEGMENTED_NONE) {
         return;
     }
-    /* Top / Level / Bottom 三档都是 Z 轴的预置位。后端目前只有「回零」一个绝对
-     * 动作，Level / Bottom 还没有对应命令，先都走 home，等协议补了再分档。 */
-    ui::DebugMsgProxy::instance().send_axis_home(middleware::DebugAxis::Z);
+    /* Top→Z=1mm，Bottom→Z=-10mm；Level 暂不动作。绝对到位由 Glavo 按当前 Z 算增量。 */
+    auto &proxy = ui::DebugMsgProxy::instance();
+    if(idx == 0) {
+        proxy.send_axis_goto(middleware::DebugAxis::Z, 1.0f);
+    } else if(idx == 2) {
+        proxy.send_axis_goto(middleware::DebugAxis::Z, -10.0f);
+    }
 }
 
 void on_jog(lv_event_t *e)
 {
     const auto dir = static_cast<int>(
         reinterpret_cast<intptr_t>(lv_event_get_user_data(e)));
+    /* 每点 1mm；Z 走 μm AXIS_INC（见 Glavo handle_debug_axis_jog）。 */
     ui::DebugMsgProxy::instance().send_axis_jog(
         middleware::DebugAxis::Z, middleware::DebugJogMode::Click, dir, 1.0f);
 }
@@ -1210,24 +1380,19 @@ void on_s_axis(lv_event_t *e)
 
 void on_inner_door(lv_event_t * /*e*/)
 {
-    if(!require_outer_door()) {
+    if(g_inner_door_busy) {
         return;
     }
-    g_inner_door_open = !g_inner_door_open;
-    ui::DebugMsgProxy::instance().send_inner_door(
-        g_inner_door_open ? middleware::DebugMotorAction::Forward
-                          : middleware::DebugMotorAction::Reverse);
-    if(g_door_btn) {
-        lv_obj_set_style_bg_color(g_door_btn,
-            g_inner_door_open ? lv_color_hex(kBtnBlue) : user_light_text, 0);
-        lv_obj_set_style_bg_opa(g_door_btn, g_inner_door_open ? LV_OPA_COVER : 10, 0);
-        lv_obj_t *ic = lv_obj_get_child(g_door_btn, 0);
-        lv_obj_t *img = ic ? lv_obj_get_child(ic, 0) : nullptr;
-        if(img) {
-            lv_obj_set_style_image_recolor(
-                img, g_inner_door_open ? lv_color_white() : user_light_text, 0);
-        }
+    if(!require_outer_door()) {
+        const ui_device_snapshot_t *snap = ui_device_state_get();
+        const bool open_now =
+            (snap && snap->door_state_valid) ? snap->inner_door_open : g_inner_door_open;
+        g_pending_inner_want_open = !open_now;
+        g_pending_inner_door = true;
+        return;
     }
+    g_pending_inner_door = false;
+    request_inner_door_toggle();
 }
 
 /** Manual 卡里那种「标题 + 右侧读数」的表头。 */
@@ -1437,7 +1602,7 @@ void on_stop_click(lv_event_t * /*e*/)
 
 /** 本次吹粉算谁发起的。两档语义不同，**别混**：
  *  - 打印结束后那次走 `PRINT_RESULT`，带清粉录像、接进同一条 timelapse、进打印历史；
- *  - Manual 页那次走 `MANUAL`，纯手动清一遍，不录像不落盘。
+ *  - Manual 页那次走 `MANUAL`，纯手动清一遍，不录像不落盘（须外门关）。
  *  判据就是当前在哪个 Tab——Manual 在打印态是禁用的，两者不会重叠。 */
 ui_clean_owner_t purify_owner(void)
 {
@@ -1446,18 +1611,22 @@ ui_clean_owner_t purify_owner(void)
 
 void on_purify_click(lv_event_t * /*e*/)
 {
-    if(g_tab == TAB_MANUAL && !require_outer_door()) {
-        return;
-    }
-    /* 清粉中再点 = Close 停风扇/停粉；空闲再点 = 再开一轮。 */
+    /* 清粉中再点 = Close 停风扇/停粉；空闲再点 = 再开一轮。与结果页同一套可终止逻辑。 */
     if(g_purify == PURIFY_RUNNING || g_purify_busy) {
         ui_clean_state_stop();
         return;
     }
-    g_purify_busy = true;
-    ui_clean_state_request(purify_owner(), g_job_label);
-    g_purify = PURIFY_RUNNING;
-    apply_phase();
+    /* Manual：须外门关。未关弹确认，关到位后（Confirm 或传感器关边沿）再开。 */
+    if(g_tab == TAB_MANUAL) {
+        sync_outer_door_from_snap();
+        if(g_outer_door_open) {
+            g_pending_purify = true;
+            show_purify_door_dlg();
+            return;
+        }
+        g_pending_purify = false;
+    }
+    start_purify_now();
 }
 
 void close_retrieve_dlg(void)
@@ -1895,9 +2064,21 @@ void on_tab_changed(lv_event_t *e)
 void on_device_state(const ui_device_snapshot_t *snap)
 {
     if(snap && snap->door_state_valid) {
+        const bool was_outer_open = g_outer_door_open;
         g_outer_door_open = snap->outer_door_open;
+        /* 套件进行中勿用传感器覆盖乐观态，避免按钮闪一下。 */
+        if(!g_inner_door_busy) {
+            g_inner_door_open = snap->inner_door_open;
+        }
+        apply_inner_door_btn();
         if(g_outer_door_open) {
             close_outer_door_dlg();
+            try_resume_pending_inner_door();
+        } else if(was_outer_open) {
+            /* 外门从开→关：取消等外门的 Inner Door 意图；Manual 吹粉若在等关则续跑。
+             * Inner Door 仍关着、弹窗等待滑开时保留 pending，否则开外门后续跑不到。 */
+            g_pending_inner_door = false;
+            try_resume_pending_purify();
         }
     }
     if(g_tab == TAB_STATUS) {
@@ -1949,6 +2130,7 @@ void wire_debug_proxy(bool on)
         proxy.register_axis(nullptr);
         proxy.register_device(nullptr);
         proxy.register_soc_led(nullptr);
+        proxy.register_inner_door_busy(nullptr);
         return;
     }
     proxy.register_axis([](const middleware::DebugAxisStatePayload &p) {
@@ -1957,16 +2139,33 @@ void wire_debug_proxy(bool on)
     });
     /* 外门态主路径走 env 快照（on_device_state）；Device_Ntf 若将来有回读仍可覆盖。 */
     proxy.register_device([](const middleware::DebugDeviceStatePayload &p) {
+        const bool was_outer_open = g_outer_door_open;
         g_outer_door_open = (p.door_open != 0);
         ui_device_state_set_outer_door_open(g_outer_door_open);
         if(g_outer_door_open) {
             close_outer_door_dlg();
+            try_resume_pending_inner_door();
+        } else if(was_outer_open) {
+            g_pending_inner_door = false;
+            try_resume_pending_purify();
         }
     });
     proxy.register_soc_led([](uint8_t mask) {
         apply_light_btn_from_mask(mask);
     });
+    proxy.register_inner_door_busy([](bool busy) {
+        set_inner_door_busy(busy);
+        if(!busy) {
+            /* 套件结束：用传感器校正按钮亮灭。 */
+            const ui_device_snapshot_t *snap = ui_device_state_get();
+            if(snap && snap->door_state_valid) {
+                g_inner_door_open = snap->inner_door_open;
+                apply_inner_door_btn();
+            }
+        }
+    });
     proxy.request_soc_led_state();
+    proxy.request_inner_door_busy();
 }
 
 void monitor_backend_init(void)
@@ -2102,8 +2301,11 @@ void page_user_monitor_refresh(bool /*force*/)
 void page_user_monitor_exit(void)
 {
     g_page_visible = false;
+    g_pending_inner_door = false;
+    g_pending_purify = false;
     wire_debug_proxy(false);
     close_outer_door_dlg();
+    close_purify_door_dlg();
     /* 打印态不停流：用户可能只是切去看一眼消息，回来不该黑一下；结果页也要停在
      * 最后一帧上。待机态才停，省掉没人看时的解码开销。 */
     if(!g_printing) {
@@ -2131,6 +2333,8 @@ void page_user_monitor_enter_printing_mode(const control_file_t *file)
     g_purify       = PURIFY_IDLE;
     g_purify_busy  = false;
     g_purify_done  = false;
+    g_pending_purify = false;
+    close_purify_door_dlg();
     g_percent      = 0;
     g_snap_pending = false;
     g_prep_title[0] = '\0';
@@ -2197,6 +2401,8 @@ void page_user_monitor_exit_printing_mode(void)
     g_printing    = false;
     g_purify_busy = false;
     g_purify_done = false;
+    g_pending_purify = false;
+    close_purify_door_dlg();
     g_phase       = PHASE_IDLE;
     g_purify      = PURIFY_IDLE;
     g_percent     = 0;

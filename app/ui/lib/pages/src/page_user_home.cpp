@@ -234,12 +234,6 @@ lv_obj_t *make_tinted_icon(lv_obj_t *parent, const lv_image_dsc_t *const *set,
     return box;
 }
 
-/** 深色页面上那档 dim 灰（打印态/监控态在用）。 */
-lv_obj_t *make_dim_icon(lv_obj_t *parent, const lv_image_dsc_t *const *set, int32_t sz)
-{
-    return make_tinted_icon(parent, set, sz, user_color_text_dim);
-}
-
 void home_card_update(void);   /* 定义见下方数据刷新区 */
 
 /** 左卡右上角切换按钮：PM2.5 ⇄ PM10 循环（重启复位到 PM2.5）。 */

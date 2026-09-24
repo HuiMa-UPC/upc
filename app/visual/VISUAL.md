@@ -10,6 +10,7 @@
 - 保留首层检测请求/应答链路（`GLAVO_Visual_FirstLayer_Check_Req` / `APP_Visual_FirstLayer_Check_Rsp`）
 - 打印前光路检测：红点识别桩 `RedDotDetector`，窗口轮询最新 NV12；算法接入见 [doc/视觉协作-光路检测.md](../../doc/视觉协作-光路检测.md)
 - 基板测高 / 高度校准：`plate_height_pipeline` 只回光斑质心；LUT 在 Glavo。见 [doc/视觉协作-基板测高.md](../../doc/视觉协作-基板测高.md)
+- 内门挡镜头 / 平台二维码基板在位（需求，IPC 待合入）：[doc/视觉协作-内门遮挡与基板在位.md](../../doc/视觉协作-内门遮挡与基板在位.md)
 
 ## IPC
 

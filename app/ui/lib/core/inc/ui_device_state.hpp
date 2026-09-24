@@ -51,6 +51,7 @@ typedef struct {
     float              pressure_kpa;     /**< 舱内气压（<0/NaN=无数据） */
     uint8_t            powder_bits;      /**< 粉量位 bit0/bit1（0=缺粉；>=1 允许继续） */
     bool               outer_door_open;  /**< 外门开；仅 door_state_valid 时可信 */
+    bool               inner_door_open;  /**< 内门全开（1ST bit1）；0=非全开，非关到位 */
     bool               door_state_valid; /**< 是否已有传感器门状态 */
 } ui_device_snapshot_t;
 
