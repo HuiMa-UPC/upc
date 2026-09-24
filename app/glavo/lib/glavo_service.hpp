@@ -17,6 +17,7 @@
 #include <cstring>
 #include <deque>
 #include <mutex>
+#include <optional>
 #include <queue>
 #include <string>
 #include <thread>
@@ -153,6 +154,7 @@ private:
     void handle_debug_skip_o2_gate_get(const middleware::Message& msg);
     void handle_debug_skip_outer_door_set(const middleware::Message& msg);
     void handle_debug_skip_outer_door_get(const middleware::Message& msg);
+    void handle_debug_inner_door_busy_get(const middleware::Message& msg);
     void handle_outer_door_confirm_rsp(const middleware::Message& msg);
     void handle_debug_o2_calib_req(const middleware::Message& msg);
     void handle_debug_o2_calib_get(const middleware::Message& msg);
@@ -180,6 +182,8 @@ private:
     void publish_debug_env_sim_powder_state();
     void publish_debug_skip_o2_gate_state();
     void publish_debug_skip_outer_door_state();
+    /** @brief 推送内门套件忙闲（Manual 禁钮）；值变化才发。 */
+    void publish_inner_door_busy(bool busy);
     void publish_debug_o2_calib_state();
     void publish_debug_first_layer_visual_check_state();
     void publish_debug_test_image_state();
@@ -223,15 +227,27 @@ private:
     /** @brief 外门闸通过后：关内门套件 → 光路/测高 → 起印后半段。 */
     void continue_print_after_outer_door_ready();
     /**
-     * @brief 关内门套件：记 Z → −10mm → 关内门 → 等 4s → Z 回原位。
-     * @param blocking true=起印路径阻塞等锁；false=边沿路径 try_lock，忙则跳过
+     * @brief 内门开/关套件：记当前 Z → 降 20mm → 开或关内门 → 等 2s → Z 回到降前高度。
+     *        进套件前读 1ST bit1（静止位）：开仅全开跳过；关仅非全开跳过
+     *        （0=不在全开位，关到位未装，静止时不当成必须再关）。未知则开/关都跑。
+     * @param opening true=开内门；false=关内门
+     * @param blocking true=阻塞等锁；false=try_lock，忙则跳过
      * @return false 仅 blocking 且套件失败时
      */
+    bool run_inner_door_motion_kit(bool opening, bool blocking);
+    /** @brief 读 1ST bit1：valid 时 true=全开；false=非全开；无效 nullopt。 */
+    [[nodiscard]] static std::optional<bool> read_inner_door_open_sensor();
+    /**
+     * @brief 关内门套件（Skip Outer Door 时直接成功）。
+     * @param blocking true=起印路径阻塞等锁；false=边沿路径 try_lock，忙则跳过
+     */
     bool run_inner_door_close_kit(bool blocking);
-    /** @brief 起印路径：跑关内门套件，失败则 abort + 告警。 */
+    /** @brief 起印路径：静止全开或未知才跑关套件；失败则 abort + 告警。 */
     bool ensure_inner_door_kit_for_print();
-    /** @brief 外门开→关边沿：非打印发送中时跑关内门套件（Skip 时不跑）。 */
+    /** @brief 外门开→关边沿：内门静止全开或未知才跑关套件；忙/发送中/预检则记 pending 补做。 */
     void on_outer_door_closed_edge();
+    /** @brief 套件/发送结束后：若仍记着外门已关，再尝试关内门。 */
+    void try_pending_inner_close_after_outer();
     void publish_outer_door_confirm_req();
     /**
      * @brief 起印前的光路检测 gate
@@ -459,7 +475,12 @@ private:
     bool skip_o2_print_gate_on_ = false; /**< 跳过 SOC 氧打印门（仅本次运行，默认关） */
     bool skip_outer_door_on_ = false; /**< 跳过外门检测+关内门套件（仅本次运行，默认关=要做） */
     bool outer_door_confirm_waiting_ = false; /**< 已发 Confirm_Req，等 UI Rsp */
-    std::mutex inner_door_seq_mtx_; /**< 关内门套件互斥（起印 / 开→关边沿） */
+    std::mutex inner_door_seq_mtx_; /**< 内门开/关套件互斥（手动 / 起印 / 开→关边沿） */
+    std::atomic<bool> inner_door_kit_busy_{false}; /**< 套件进行中；供 UI 禁钮 + 入队去重 */
+    /** Manual/调试开或关已入队未处理完；防止连点排队第二次套件 */
+    std::atomic<bool> inner_door_cmd_queued_{false};
+    /** 外门已关但当时不能跑关内门（套件忙 / 发送中 / 预检）；稍后补做 */
+    std::atomic<bool> inner_door_close_pending_outer_{false};
     /** 用户终止：IPC 线程先置位，打断 worker 上阻塞的关内门套件 / wait_z */
     std::atomic<bool> print_prep_abort_{false};
     /** 起印环境检查进度：本趟总步数 / 当前已进入步序号 / 上一次推送的 step */

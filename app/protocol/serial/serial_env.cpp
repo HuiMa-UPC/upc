@@ -52,11 +52,13 @@ static void parse_1st(const uint8_t* v, serial_sensor_report_t* out)
     out->adapter_input_bits = (valid & 0x40u) ? serial_read_le16u(v + 11) : 0u;
     out->powder_ir_bits = (valid & 0x80u) ? v[13] : 0u;
 
-    /* 舱门：bit2=1 关到位 → outer_door_open=0 */
+    /* 舱门：bit2=1 关到位 → outer_door_open=0；内门 bit1=1 全开 / 0=非全开（关到位 bit0 未装） */
     if(valid & 0x20u) {
         out->outer_door_open = (uint8_t)((out->local_switch_bits & 0x04u) ? 0u : 1u);
+        out->inner_door_open = (uint8_t)((out->local_switch_bits & 0x02u) ? 1u : 0u);
     } else {
         out->outer_door_open = 0;
+        out->inner_door_open = 0;
     }
 
     /* 红外：1=受光无粉；OUTL=bit6 左缺粉，OUTR=bit7 右缺粉 */

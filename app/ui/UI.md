@@ -1376,7 +1376,16 @@ Manual，`ui_segmented_set_item_enabled()` 会自动退到第一个可用项并�
 Manual 页的三轴位置与照明钮取自 `DebugMsgProxy` 的 `register_axis` /
 `register_soc_led`（**单槽，调试页也在用**）。外门开合记忆走 `APP_Update_Ntf` →
 `ui_device_state`（`outer_door_open`/`door_state_valid`），开门 Rsp 成功还会乐观置位；
-`require_outer_door()` 读这份状态，外门开完后可直接点内门/手动吹粉。`register_device`
+`require_outer_door()` 读这份状态。外门未开时点 Inner Door：弹窗 + `g_pending_inner_door`，
+外门开到位后按点按时意图续跑开/关；等待滑开期间 env 仍报外门关时**不**清 pending，
+仅外门开→关边沿才取消。按钮跟 `EnvSnapshot.inner_door_open`（1ST bit1 **全开**）：
+亮=全开、灭=非全开；点一下全开则关、非全开则开（暂时关也会去开）。
+开/关套件进行中 `GLAVO_Debug_Inner_Door_Busy_Ntf` 禁钮（半透明不可点），结束或跳过才解禁；
+调试页 Inner Door 三键同样禁（含停止）。连点由 Glavo 入队去重丢弃。
+外门关边沿：静止全开才关；当时忙/发送中/预检则事后补关。
+Manual 吹粉须**外门关**（与 Inner Door 相反）：未关弹「Close the outer door」Confirm/Cancel；
+Confirm 再检门，关到位才开清粉，或传感器开→关边沿自动续跑；清粉中再点可停，与结果页同一套。
+`register_device`
 仍保留作兼容（Glavo 目前不发 Device_Ntf）。`page_user_monitor_refresh()` 里注册、
 `page_user_monitor_exit()` 里置 `nullptr`，与 `page_user_debug_exit()` 对称。不清的话从
 本页切去调试页，那边会静默不再刷新。照明钮进页会 `request_soc_led_state()`，按 mask 对齐。
@@ -1399,7 +1408,10 @@ Manual 页的三轴位置与照明钮取自 `DebugMsgProxy` 的 `register_axis` 
   → 外门未关：`GLAVO_Outer_Door_Confirm_Req` → 弹窗 Confirm / Cancel
        Confirm：`UI_Outer_Door_Confirm_Rsp` skip=0，Glavo 再读门，仍开再弹
        Cancel：skip=1，不检门，直接进关内门套件（与调试 Skip Outer Door 不同，内门仍跑）
-  → 关内门套件（降 Z / 关内门 / 回 Z；调试 Skip Outer Door 可跳过外门+内门）
+  → 关内门套件（记当前 Z → 降 20 mm / 关内门 / 等 2s / 回到降前 Z；静止 bit1=0
+       跳过且不推 Closing inner door；调试 Skip Outer Door 可跳过外门+内门）
+       Manual/调试开内门同样：降 20 mm → 开 → 等 2s → 回到降前 Z（仅全开时跳过开套件）
+       上电不自动关内门
   → 光路：prep 标题 + `page_user_monitor_optical_path_update()` 右侧 n/5
   → 测高（失败/无 LUT 起印拒绝）
   → Camera manifest → page_user_monitor_enter_print_result()
@@ -1423,8 +1435,8 @@ Manual 页的三轴位置与照明钮取自 `DebugMsgProxy` 的 `register_axis` 
 
 **吹粉分两路 owner，别混**（`purify_owner()`）：打印结束后那次走 `UI_CLEAN_OWNER_PRINT_RESULT`
 （带清粉录像、接进同一条 timelapse、进打印历史；结果页自动开一轮，钮可停/再开），
-Manual 页那次走 `UI_CLEAN_OWNER_MANUAL`（纯手动清一遍，不录像不落盘）。判据就是当前在
-哪个 Tab——Manual 在打印态是禁用的，两者不会重叠。正常结束一律等 MCU 完成帧
+Manual 页那次走 `UI_CLEAN_OWNER_MANUAL`（纯手动清一遍，不录像不落盘；须外门关，未关弹确认）。
+判据就是当前在哪个 Tab——Manual 在打印态是禁用的，两者不会重叠。正常结束一律等 MCU 完成帧
 （`UI_CLEAN_EVT_DONE`）；用户点停走 Close → `UI_CLEAN_EVT_STOPPED`。
 
 #### 照明钮打印中只读
@@ -1438,15 +1450,17 @@ Manual 页那次走 `UI_CLEAN_OWNER_MANUAL`（纯手动清一遍，不录像不�
 Device/Light**。进页 `request_soc_led_state()`：mask≠0 钮亮，全 0 钮灭；点按则六路同开/同关。
 调试页进 Other 也会再 Get 一次，两边进页对齐即可（单槽，不做跨页直播）。
 
-#### Manual · Plate Position 右侧读数
+#### Manual · Plate Position
 
-右侧数字是 **Z 轴当前位置（mm）**，来自 `DebugAxisStatePayload::z_pos_mm`，格式 `%.1f`
-（未带单位；下方 Powder Scraper 的 S 轴读数带 `mm`）。
+- 右侧数字是 **Z 轴当前位置（mm）**，来自 `DebugAxisStatePayload::z_pos_mm`，格式 `%.1f`
+  （未带单位；下方 Powder Scraper 的 S 轴读数带 `mm`）。
+- **预置**：`Top` → 绝对到位 **1 mm**，`Bottom` → **-10 mm**（`send_axis_goto` →
+  Axis_Jog `dir=0`；Glavo 读当前 MCU Z 后发 μm AXIS_INC）；`Level` 暂不动作。
+- **上下箭头**：每点相对 ±1 mm（同 Z Click 路径）。此前误用 int16/Len=2 帧，MCU 不认 Z
+  相对位移（协议要求 Len=4、μm），已改为 `serial_debug_build_z_inc_um`。
 
 #### Manual 页几处待补
 
-- **Plate Position 三档暂时都走 `send_axis_home(Z)`**：后端只有「回零」一个绝对动作，
-  Level / Bottom 还没有对应命令，等协议补了再分档。不是把右侧读数设成固定档位。
 - **控制页那条「舱内 PM2.5 过高 → Too poor to open the gate」预警随控制页退役丢了。**
   门限判定本身在后端（`pm25_clean_threshold_`，可被 `cal.csv` 的 `PM2.5Clean` 覆盖），开门
   仍会被拦，只是拦之前用户看不到预警。补救留到后续：在 `OPEN` 按钮上加置灰态 + 一句提示。

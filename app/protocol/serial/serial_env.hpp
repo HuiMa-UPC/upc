@@ -15,9 +15,10 @@ typedef struct {
     uint8_t powder_present;      /**< 1=左右匣均非缺粉 */
     uint8_t powder_bits;         /**< bit0=左匣有粉 bit1=右匣有粉（OUTL/OUTR 取反） */
     uint8_t outer_door_open;     /**< 1=门开：!(舱门关到位 bit2) */
+    uint8_t inner_door_open;     /**< 1=全开 0=非全开：bit1 UP_SWPD/PD2；非关到位 */
     float env_ntc_c;             /**< 环境 NTC 0.1℃ */
     float filter_ntc_c;          /**< 滤芯 NTC_LX */
-    uint8_t local_switch_bits;   /**< 本地接近开关：bit2 舱门关到位等 */
+    uint8_t local_switch_bits;   /**< 本地接近开关：bit1 内门全开、bit2 舱门关到位等 */
     uint16_t adapter_input_bits; /**< 转接板：粉瓶微动 + 红外镜像 */
     uint8_t powder_ir_bits;      /**< bit0..7 = A1/A2/A3/B1/B2/B3/OUTL/OUTR；1=无粉 */
     uint8_t validity_bits;       /**< value[14] 有效位图 */
