@@ -38,6 +38,8 @@ Sensor → rkaiq ISP → /dev/video0 (NV12)
       · Media/Visual：mmap 源 fd 读 NV12
 ```
 
+UPDF 帧头含 `fd_count`（见 `common/upc_contract.hpp` `IPC_FD_FRAME_HDR_SIZE`）：Broker 粘包时接收端按帧切分 SCM_RIGHTS，避免多帧 fd 并入第一封 `Start_Rsp`。
+
 - 隔离拷贝是刻意的：消费者**从不**持有 ISP 正在 map 的 V4L2 buf，避免超时/看门狗路径上 rkisp IOMMU 与 RGA/mmap 交叉（板端核对见 [common/COMMON.md](../../common/COMMON.md) `DmaHeapUsage`）。
 - UI 不再分配中间 NV12 staging；源 fd 直接来自隔离 pool。
 - 状态机：后端拷进 isolation buf 后把 `buffer_idx` 写入 `EMPTY` slot 并 `commit` 为 `READY`；消费者 `acquire_latest_frame` 取到 `buffer_idx` 后查 fd 表，用完 `release_slot` 置 `EMPTY`；isolation buf 要等所有 peer 都归还槽位后才还回 pool。

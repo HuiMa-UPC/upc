@@ -37,7 +37,7 @@
 | `app/media/` | [MEDIA.md](../app/media/MEDIA.md) | 拍照/录像/延时封装 + 直播（云端 RTSP 推流、局域网 live555 RTSP Server；消费 Camera DMA 流） |
 | `app/xfer/` | [XFER.md](../app/xfer/XFER.md) | WiFi 发现、PIN 配对、HTTP 分块上传；OVF 走 snowslice，传输 3MF 提取单份 G-code + PNG/RTHM 缩略图 |
 | `app/visual/` | [VISUAL.md](../app/visual/VISUAL.md) | 视觉：Camera DMA 取帧、首层检测、打印前光路检测（红点桩） |
-| `app/mqtt/` | — | MQTT 网关：激活/凭证轮换、环境遥测、报警上云（`alarm/report`+`alarm/ack`，契约 [soc-alarm-contract-v1.md](soc-alarm-contract-v1.md)）、`set_light`、云端 `start/stop_rtsp_push`→Media |
+| `app/mqtt/` | — | MQTT 网关：激活/凭证轮换、环境遥测、报警上云（`alarm/report`+`alarm/ack`，契约 [soc-alarm-contract-v2.md](soc-alarm-contract-v2.md)）、`set_light`、云端 `start/stop_rtsp_push`→Media |
 | `app/parser/` | [PARSER.md](../app/parser/PARSER.md) | G-code/OVF 解析库（Glavo 链接） |
 | `app/protocol/` | [PROTOCOL.md](../app/protocol/PROTOCOL.md) | MCU 线协议（TCP `BE EF` + 串口 `5A A5`） |
 

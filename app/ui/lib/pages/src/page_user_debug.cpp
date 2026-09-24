@@ -1432,7 +1432,7 @@ void on_dbg_toggle(lv_event_t *e)
         case 2: proxy.send_fan(on); break;   /* 风扇开/关；占空比由 Send 按钮单独下发 */
         case 3: proxy.send_switch(static_cast<DebugSwitchTarget>(c->arg), on); break;
         case 4: if(on) proxy.send_clean_test_start();          /* 开：启动清粉测试 */
-                else   proxy.send_clean_test_close();          /* 关：中止清粉测试 (TLV 0x21) */
+                else   proxy.send_clean_test_close();          /* 关：中止清粉 A2/42 TLV 0x02 */
                 break;
         case 5: proxy.send_print_h264_record_set(on);          /* 打印期连续 H264 录像总开关（仅本次运行） */
                 break;
@@ -1822,12 +1822,13 @@ void build_print_params_card(lv_obj_t *parent)
     make_send_button(card, on_print_param_send, true);
 }
 
-/* 风机故障码 / 状态机文字，取自 doc/主控板串口通信协议 - 传感器上报命令.csv value[25]、value[26] */
-const char *const kFanFaultNames[8] = {
+/* 风机故障码 / 状态机文字，取自 doc/主控板串口通信协议 - 传感器上报命令.csv FANBOARD */
+const char *const kFanFaultNames[10] = {
     "OK", "Hall Invalid", "Hall Disorder", "Stalled",
-    "Overcurrent", "Undervoltage", "Overvoltage", "Overspeed" };
-const char *const kFanStateNames[5] = {
-    "Stopped", "Starting", "Running", "Retry Wait", "Fault Lock" };
+    "Overcurrent", "Undervoltage", "Overvoltage", "Overspeed",
+    "Board Overheat", "NTC Fault" };
+const char *const kFanStateNames[6] = {
+    "Stopped", "Starting", "Running", "Retry Wait", "Fault Lock", "Precharge" };
 
 /**
  * 刷风扇实测：转速与 Duty 同行（便于对照下发值），状态/故障单独一行。
@@ -1851,8 +1852,8 @@ void apply_fan_state(const middleware::DebugFanStatePayload &p)
     std::snprintf(buf, sizeof(buf), "%u", static_cast<unsigned>(p.rpm));
     lv_label_set_text(g_fan_rpm_lbl, buf);
     lv_label_set_text(g_fan_state_lbl,
-                      bad ? ((p.fault < 8) ? kFanFaultNames[p.fault] : "Unknown")
-                          : ((p.state < 5) ? kFanStateNames[p.state] : "Unknown"));
+                      bad ? ((p.fault < 10) ? kFanFaultNames[p.fault] : "Unknown")
+                          : ((p.state < 6) ? kFanStateNames[p.state] : "Unknown"));
     const lv_color_t c = bad ? user_color_status_err : user_color_text;
     lv_obj_set_style_text_color(g_fan_rpm_lbl, c, 0);
     lv_obj_set_style_text_color(g_fan_state_lbl, c, 0);

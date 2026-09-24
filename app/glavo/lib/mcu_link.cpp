@@ -186,8 +186,11 @@ void serial_log_rx_frame(const uint8_t* frame, size_t len)
         return;
     }
 
-    serial_sensor_ext_t sext{};
-    if(serial_parse_sensor_ext_detail(frame, len, &sext, nullptr) == 0) {
+    serial_sensor_fanboard_t sfan{};
+    if(serial_parse_sensor_fanboard_detail(frame, len, &sfan, nullptr) == 0) {
+        return;
+    }
+    if(serial_parse_sensor_adc_frame(frame, len) == 0) {
         return;
     }
 
@@ -1236,34 +1239,33 @@ void McuLink::merge_soc_env_into_cache_locked()
     }
 }
 
-void McuLink::on_sensor_ext_report(const serial_sensor_ext_t& ext)
+void McuLink::on_sensor_fanboard_report(const serial_sensor_fanboard_t& fan)
 {
     UPC_LOG_MCU_LINK_TO(SerialSensor, Info,
-        "sensor_ext: sieve=%umA door=%umA fan_rpm=%u fault=%u state=%u link=%u",
-        static_cast<unsigned>(ext.sieve_current_ma),
-        static_cast<unsigned>(ext.door_coil_ma),
-        static_cast<unsigned>(ext.fan_rpm),
-        static_cast<unsigned>(ext.fan_fault),
-        static_cast<unsigned>(ext.fan_state),
-        static_cast<unsigned>((ext.fan_status_bits >> 7) & 1u));
-    /* 电气量暂无消费方，仅日志；风机部分推调试页 */
-    publish_debug_fan_ntf(ext);
+        "fanboard: rpm=%u fault=%u state=%u link=%u v=%u i=%umA",
+        static_cast<unsigned>(fan.fan_rpm),
+        static_cast<unsigned>(fan.fan_fault),
+        static_cast<unsigned>(fan.fan_state),
+        static_cast<unsigned>((fan.fan_status_bits >> 7) & 1u),
+        static_cast<unsigned>(fan.fan_bus_v_x10),
+        static_cast<unsigned>(fan.fan_bus_i_ma));
+    publish_debug_fan_ntf(fan);
 }
 
 /**
  * @brief 调试页风扇卡：推 MCU 实测转速/故障/状态。
- * @note bit7=0（驱动链路异常）时 MCU 把转速等字段填 0，这里原样透传并置
+ * @note bit7=0（风机板链路异常）时 MCU 把转速等字段填 0，这里原样透传并置
  *       valid=0，由 UI 显示 "--"；夹成 0 会被误读成「风机停了」。
  */
-void McuLink::publish_debug_fan_ntf(const serial_sensor_ext_t& ext)
+void McuLink::publish_debug_fan_ntf(const serial_sensor_fanboard_t& fan)
 {
     middleware::DebugFanStatePayload p{};
-    p.valid     = static_cast<uint8_t>((ext.fan_status_bits >> 7) & 1u);
-    p.fault     = ext.fan_fault;
-    p.state     = ext.fan_state;
-    p.rpm       = ext.fan_rpm;
-    p.bus_v_x10 = ext.fan_bus_v_x10;
-    p.bus_i_ma  = ext.fan_bus_i_ma;
+    p.valid     = static_cast<uint8_t>((fan.fan_status_bits >> 7) & 1u);
+    p.fault     = fan.fan_fault;
+    p.state     = fan.fan_state;
+    p.rpm       = fan.fan_rpm;
+    p.bus_v_x10 = fan.fan_bus_v_x10;
+    p.bus_i_ma  = fan.fan_bus_i_ma;
 
     middleware::Message ntf(middleware::MsgType::GLAVO_Debug_Fan_Ntf,
         middleware::ModuleId::APP_GLAVO, middleware::ModuleId::UI);
@@ -2308,10 +2310,13 @@ void McuLink::handle_serial_rx_frame(const uint8_t* frame, size_t len)
         return;
     }
 
-    /* V4 EXT（0x06）：须在「SENSOR FAIL」判定前识别，否则周期刷警告 */
-    serial_sensor_ext_t sext{};
-    if(serial_parse_sensor_ext_detail(frame, len, &sext, nullptr) == 0) {
-        on_sensor_ext_report(sext);
+    /* FANBOARD（0x08）：须在「SENSOR FAIL」判定前识别。ADC（0x07）同 Port/Cmd，只消费不刷警告。 */
+    serial_sensor_fanboard_t sfan{};
+    if(serial_parse_sensor_fanboard_detail(frame, len, &sfan, nullptr) == 0) {
+        on_sensor_fanboard_report(sfan);
+        return;
+    }
+    if(serial_parse_sensor_adc_frame(frame, len) == 0) {
         return;
     }
 

@@ -66,6 +66,7 @@ void MqttService::alarm_stream_load()
     if(!in) {
         alarm_stream_id_ = make_uuid_v4();
         alarm_report_seq_ = 0;
+        alarm_lost_ranges_.clear();
         alarm_stream_save();
         UPC_LOG_MQTT_SERVICE_TO(MqttTelemetry, Info,
             "alarm stream created id=%s", alarm_stream_id_.c_str());
@@ -84,10 +85,12 @@ void MqttService::alarm_stream_load()
         seq = 0;
     }
     alarm_report_seq_ = seq;
+    alarm_lost_ranges_load(content);
     UPC_LOG_MQTT_SERVICE_TO(MqttTelemetry, Info,
-        "alarm stream loaded id=%s report_seq=%lld",
+        "alarm stream loaded id=%s report_seq=%lld lost_ranges=%zu",
         alarm_stream_id_.c_str(),
-        static_cast<long long>(alarm_report_seq_));
+        static_cast<long long>(alarm_report_seq_),
+        alarm_lost_ranges_.size());
 }
 
 void MqttService::alarm_stream_save()
@@ -102,7 +105,120 @@ void MqttService::alarm_stream_save()
         return;
     }
     out << "{\"stream_id\":\"" << json_escape(alarm_stream_id_)
-        << "\",\"report_seq\":" << alarm_report_seq_ << "}\n";
+        << "\",\"report_seq\":" << alarm_report_seq_
+        << ",\"lost_report_ranges\":[";
+    for(size_t i = 0; i < alarm_lost_ranges_.size(); ++i) {
+        if(i > 0) {
+            out << ',';
+        }
+        out << "{\"from\":\"" << alarm_lost_ranges_[i].from
+            << "\",\"to\":\"" << alarm_lost_ranges_[i].to << "\"}";
+    }
+    out << "]}\n";
+}
+
+void MqttService::alarm_lost_ranges_load(const std::string& content)
+{
+    alarm_lost_ranges_.clear();
+    const std::string key = "\"lost_report_ranges\"";
+    const size_t key_pos = content.find(key);
+    if(key_pos == std::string::npos) {
+        return;
+    }
+    const size_t arr_begin = content.find('[', key_pos + key.size());
+    if(arr_begin == std::string::npos) {
+        return;
+    }
+    const size_t arr_end = content.find(']', arr_begin);
+    if(arr_end == std::string::npos || arr_end <= arr_begin + 1) {
+        return;
+    }
+    const std::string arr = content.substr(arr_begin + 1, arr_end - arr_begin - 1);
+    size_t pos = 0;
+    while(pos < arr.size()) {
+        const size_t obj_begin = arr.find('{', pos);
+        if(obj_begin == std::string::npos) {
+            break;
+        }
+        const size_t obj_end = arr.find('}', obj_begin);
+        if(obj_end == std::string::npos) {
+            break;
+        }
+        const std::string obj = arr.substr(obj_begin, obj_end - obj_begin + 1);
+        std::string from_s;
+        std::string to_s;
+        if(json_extract_string(obj, "from", from_s) &&
+           json_extract_string(obj, "to", to_s)) {
+            int64_t from = 0;
+            int64_t to = 0;
+            try {
+                from = std::stoll(from_s);
+                to = std::stoll(to_s);
+            } catch(...) {
+                pos = obj_end + 1;
+                continue;
+            }
+            if(from >= 1 && to >= from) {
+                AlarmLostRange r;
+                r.from = from;
+                r.to = to;
+                alarm_lost_ranges_.push_back(r);
+            }
+        }
+        pos = obj_end + 1;
+    }
+    alarm_lost_ranges_merge();
+}
+
+void MqttService::alarm_lost_ranges_merge()
+{
+    if(alarm_lost_ranges_.empty()) {
+        return;
+    }
+    std::sort(alarm_lost_ranges_.begin(), alarm_lost_ranges_.end(),
+              [](const AlarmLostRange& a, const AlarmLostRange& b) {
+                  return a.from < b.from;
+              });
+    std::vector<AlarmLostRange> merged;
+    merged.push_back(alarm_lost_ranges_.front());
+    for(size_t i = 1; i < alarm_lost_ranges_.size(); ++i) {
+        AlarmLostRange& last = merged.back();
+        const AlarmLostRange& cur = alarm_lost_ranges_[i];
+        if(cur.from <= last.to + 1) {
+            if(cur.to > last.to) {
+                last.to = cur.to;
+            }
+        } else {
+            merged.push_back(cur);
+        }
+    }
+    alarm_lost_ranges_ = std::move(merged);
+}
+
+void MqttService::alarm_note_lost_report_seq(const std::string& report_seq)
+{
+    if(report_seq.empty()) {
+        return;
+    }
+    int64_t seq = 0;
+    try {
+        seq = std::stoll(report_seq);
+    } catch(...) {
+        return;
+    }
+    if(seq < 1) {
+        return;
+    }
+    AlarmLostRange r;
+    r.from = seq;
+    r.to = seq;
+    alarm_lost_ranges_.push_back(r);
+    alarm_lost_ranges_merge();
+    /* 限制区间条数，保留最新缺口（序号更大的）。 */
+    while(alarm_lost_ranges_.size() > kAlarmLostRangesMax) {
+        alarm_lost_ranges_.erase(alarm_lost_ranges_.begin());
+    }
+    alarm_stream_save();
 }
 
 void MqttService::alarm_outbox_load()
@@ -166,11 +282,13 @@ void MqttService::alarm_outbox_trim()
         if(drop == static_cast<size_t>(-1)) {
             /* 全是快照：只留最后一条 */
             while(alarm_outbox_.size() > 1) {
+                alarm_note_lost_report_seq(alarm_outbox_.front().report_seq);
                 alarm_outbox_erase(alarm_outbox_.front().message_id);
                 alarm_outbox_.erase(alarm_outbox_.begin());
             }
             break;
         }
+        alarm_note_lost_report_seq(alarm_outbox_[drop].report_seq);
         alarm_outbox_erase(alarm_outbox_[drop].message_id);
         alarm_outbox_.erase(alarm_outbox_.begin() +
                             static_cast<std::ptrdiff_t>(drop));
@@ -235,9 +353,7 @@ std::string MqttService::build_alarm_single_json(
        << "\"data\":{"
        << "\"source_component\":\"main_mcu\","
        << "\"catalog_key\":\"main-mcu\","
-       << "\"mcu_boot_id\":null,"
        << "\"alarm_definition_version\":\"" << kAlarmDefinitionVersion << "\","
-       << "\"source_seq\":null,"
        << "\"observed_at\":null,"
        << "\"time_quality\":\"unsynced\","
        << "\"alarm_code\":" << static_cast<unsigned>(p.alarm_code) << ','
@@ -290,8 +406,7 @@ std::string MqttService::build_alarm_snapshot_json(
                     << "\"severity\":null,"
                     << "\"clear_mode\":null,"
                     << "\"detail\":null,"
-                    << "\"metadata_origin\":\"unknown\","
-                    << "\"metadata_source_seq\":null"
+                    << "\"metadata_origin\":\"unknown\""
                     << '}';
             ++reported;
         }
@@ -309,9 +424,7 @@ std::string MqttService::build_alarm_snapshot_json(
        << "\"data\":{"
        << "\"source_component\":\"main_mcu\","
        << "\"catalog_key\":\"main-mcu\","
-       << "\"mcu_boot_id\":null,"
        << "\"alarm_definition_version\":\"" << kAlarmDefinitionVersion << "\","
-       << "\"source_seq\":null,"
        << "\"observed_at\":null,"
        << "\"time_quality\":\"unsynced\","
        << "\"coverage\":\"condition_slots_v1\","
@@ -326,6 +439,16 @@ std::string MqttService::build_alarm_snapshot_json(
 std::string MqttService::build_alarm_status_json(const std::string& message_id,
                                                  const std::string& report_seq)
 {
+    std::ostringstream ranges;
+    bool first = true;
+    for(const auto& r : alarm_lost_ranges_) {
+        if(!first) {
+            ranges << ',';
+        }
+        first = false;
+        ranges << "{\"from\":\"" << r.from << "\",\"to\":\"" << r.to << "\"}";
+    }
+
     std::ostringstream os;
     os << '{'
        << "\"v\":1,"
@@ -338,17 +461,9 @@ std::string MqttService::build_alarm_status_json(const std::string& message_id,
        << "\"data\":{"
        << "\"source_component\":\"main_mcu\","
        << "\"catalog_key\":\"main-mcu\","
-       << "\"mcu_boot_id\":null,"
        << "\"alarm_definition_version\":\"" << kAlarmDefinitionVersion << "\","
        << "\"mcu_link\":\"" << mcu_link_text(alarm_mcu_link_) << "\","
-       << "\"last_source_seq\":null,"
-       << "\"capabilities\":{"
-       << "\"source_identity\":false,"
-       << "\"atomic_snapshot_watermark\":false,"
-       << "\"snapshot_metadata\":false"
-       << "},"
-       << "\"lost_report_ranges\":[],"
-       << "\"lost_source_ranges\":[]"
+       << "\"lost_report_ranges\":[" << ranges.str() << "]"
        << "}}";
     return os.str();
 }
@@ -400,6 +515,7 @@ void MqttService::alarm_enqueue_and_try_send(std::string body, bool is_snapshot)
             /* 新快照替换未 ack 的旧快照，避免 outbox 堆满过期全量。 */
             for(auto it = alarm_outbox_.begin(); it != alarm_outbox_.end();) {
                 if(it->is_snapshot) {
+                    alarm_note_lost_report_seq(it->report_seq);
                     alarm_outbox_erase(it->message_id);
                     it = alarm_outbox_.erase(it);
                 } else {
@@ -519,6 +635,8 @@ void MqttService::handle_alarm_ack(const std::string& payload)
     std::string message_id;
     std::string result;
     std::string code;
+    std::string ack_stream_id;
+    std::string ack_report_seq;
     if(!json_extract_string(payload, "message_id", message_id) ||
        message_id.empty()) {
         UPC_LOG_MQTT_SERVICE_TO(MqttTelemetry, Warn,
@@ -527,6 +645,8 @@ void MqttService::handle_alarm_ack(const std::string& payload)
     }
     (void)json_extract_string(payload, "result", result);
     (void)json_extract_string(payload, "code", code);
+    (void)json_extract_string(payload, "stream_id", ack_stream_id);
+    (void)json_extract_string(payload, "report_seq", ack_report_seq);
 
     const bool accepted =
         (result == "accepted") ||
@@ -540,14 +660,34 @@ void MqttService::handle_alarm_ack(const std::string& payload)
     if(accepted) {
         std::lock_guard<std::mutex> lock(alarm_mtx_);
         for(auto it = alarm_outbox_.begin(); it != alarm_outbox_.end(); ++it) {
-            if(it->message_id == message_id) {
-                alarm_outbox_erase(message_id);
-                alarm_outbox_.erase(it);
-                UPC_LOG_MQTT_SERVICE_TO(MqttTelemetry, Info,
-                    "alarm receipt accepted message_id=%s code=%s",
-                    message_id.c_str(), code.c_str());
+            if(it->message_id != message_id) {
+                continue;
+            }
+            /* 契约要求核对 message_id/stream_id/report_seq；回执带了则必须一致。 */
+            if(!ack_stream_id.empty() &&
+               !alarm_stream_id_.empty() &&
+               ack_stream_id != alarm_stream_id_) {
+                UPC_LOG_MQTT_SERVICE_TO(MqttTelemetry, Warn,
+                    "alarm receipt stream_id mismatch message_id=%s got=%s expect=%s",
+                    message_id.c_str(), ack_stream_id.c_str(),
+                    alarm_stream_id_.c_str());
                 return;
             }
+            if(!ack_report_seq.empty() &&
+               !it->report_seq.empty() &&
+               ack_report_seq != it->report_seq) {
+                UPC_LOG_MQTT_SERVICE_TO(MqttTelemetry, Warn,
+                    "alarm receipt report_seq mismatch message_id=%s got=%s expect=%s",
+                    message_id.c_str(), ack_report_seq.c_str(),
+                    it->report_seq.c_str());
+                return;
+            }
+            alarm_outbox_erase(message_id);
+            alarm_outbox_.erase(it);
+            UPC_LOG_MQTT_SERVICE_TO(MqttTelemetry, Info,
+                "alarm receipt accepted message_id=%s code=%s",
+                message_id.c_str(), code.c_str());
+            return;
         }
         UPC_LOG_MQTT_SERVICE_TO(MqttTelemetry, Debug,
             "alarm receipt for unknown/already-cleared message_id=%s",

@@ -471,12 +471,7 @@ void CameraPreviewPlayer::start(lv_obj_t* image_widget, lv_obj_t* hint_widget,
 
     image_     = image_widget;
     hint_      = hint_widget;
-    if(scene && scene[0]) {
-        std::strncpy(scene_, scene, sizeof(scene_) - 1);
-        scene_[sizeof(scene_) - 1] = '\0';
-    } else {
-        scene_[0] = '\0';
-    }
+    set_scene_tag(scene);
     shown_buf_.store(-1, std::memory_order_relaxed);
     logged_first_ui_show_ = false;
     active_.store(true);
@@ -516,6 +511,72 @@ void CameraPreviewPlayer::start(lv_obj_t* image_widget, lv_obj_t* hint_widget,
         static_cast<void*>(image_widget),
         static_cast<void*>(hint_widget));
     CameraMsgProxy::instance().send_stream_start(nullptr);
+}
+
+void CameraPreviewPlayer::set_scene_tag(const char* scene)
+{
+    if(scene && scene[0]) {
+        std::strncpy(scene_, scene, sizeof(scene_) - 1);
+        scene_[sizeof(scene_) - 1] = '\0';
+    } else {
+        scene_[0] = '\0';
+    }
+}
+
+void CameraPreviewPlayer::detach_widgets()
+{
+    if(image_) {
+        lv_obj_add_flag(image_, LV_OBJ_FLAG_HIDDEN);
+    }
+    /* 立刻丢掉控件指针：离页后对象可能仍存活，但不得再 lv_image_set_src。
+     * 会话与解码线程保持，回页 reattach 即可，避免 Stop/Start 叠 fd。 */
+    image_ = nullptr;
+    hint_  = nullptr;
+    UPC_LOG_CAMERA_PREVIEW(Info,
+        "detach widgets (keep session active=%d stream_up=%d)",
+        active_.load() ? 1 : 0, stream_up_.load() ? 1 : 0);
+}
+
+bool CameraPreviewPlayer::reattach(lv_obj_t* image_widget, lv_obj_t* hint_widget,
+                                   const char* scene)
+{
+    if(!active_.load()) {
+        return false;
+    }
+    if(decode_retiring_.load(std::memory_order_acquire)) {
+        pending_image_ = image_widget;
+        pending_hint_  = hint_widget;
+        std::strncpy(pending_scene_, scene ? scene : "",
+                     sizeof(pending_scene_) - 1);
+        pending_scene_[sizeof(pending_scene_) - 1] = '\0';
+        pending_start_ = true;
+        UPC_LOG_CAMERA_PREVIEW(Info,
+            "reattach deferred: decode session is retiring");
+        return true;
+    }
+
+    image_ = image_widget;
+    hint_  = hint_widget;
+    set_scene_tag(scene);
+    logged_first_ui_show_ = false;
+
+    if(image_) {
+        lv_obj_add_flag(image_, LV_OBJ_FLAG_HIDDEN);
+    }
+    if(stream_up_.load(std::memory_order_relaxed)) {
+        show_hint(LV_SYMBOL_VIDEO "  Loading preview...");
+        const int idx = display_buf_.load(std::memory_order_acquire);
+        if(idx >= 0 && idx < kFrameSlots && image_) {
+            shown_buf_.store(-1, std::memory_order_relaxed);
+        }
+    } else {
+        show_hint(LV_SYMBOL_VIDEO "  Connecting camera...");
+    }
+    UPC_LOG_CAMERA_PREVIEW(Info,
+        "reattach scene=%s image=%p stream_up=%d",
+        scene_[0] ? scene_ : "(none)", static_cast<void*>(image_widget),
+        stream_up_.load() ? 1 : 0);
+    return true;
 }
 
 void CameraPreviewPlayer::stop()
@@ -587,8 +648,8 @@ void CameraPreviewPlayer::on_stream_start_rsp(
     const middleware::CameraStreamInfoPayload& info)
 {
     start_rsp_pending_ = false;
-    start_retry_count_ = 0;
     clear_start_watchdog();
+    /* start_retry_count_ 延到 apply 成功再清零：fd/SHM 落地失败仍可重发 Start。 */
 
     UPC_LOG_CAMERA_PREVIEW(Info,
         "stream start rsp ok=%d %ux%u@%u dma_mode=%u shm=%s active=%d",
@@ -958,6 +1019,42 @@ bool CameraPreviewPlayer::setup_frame_buffers(size_t frame_bytes,
     return true;
 }
 
+void CameraPreviewPlayer::recover_stream_start(const char* reason_hint)
+{
+    close_pending_dma_fds();
+    consumer_.close();
+    stream_up_.store(false);
+
+    if(!active_.load()) {
+        return;
+    }
+    if(start_retry_count_ >= kStartRspRetryMax) {
+        UPC_LOG_CAMERA_PREVIEW(Error,
+            "stream start give up after %u recoveries scene=%s (%s)",
+            static_cast<unsigned>(start_retry_count_),
+            scene_[0] ? scene_ : "(none)",
+            reason_hint ? reason_hint : "unknown");
+        show_hint(reason_hint ? reason_hint
+                              : LV_SYMBOL_WARNING "  Camera start failed");
+        active_.store(false);
+        start_req_sent_ = false;
+        start_rsp_pending_ = false;
+        return;
+    }
+
+    ++start_retry_count_;
+    UPC_LOG_CAMERA_PREVIEW(Warn,
+        "stream start recover #%u scene=%s (%s)",
+        static_cast<unsigned>(start_retry_count_),
+        scene_[0] ? scene_ : "(none)",
+        reason_hint ? reason_hint : "unknown");
+    show_hint(LV_SYMBOL_VIDEO "  Reconnecting camera...");
+    start_req_sent_ = true;
+    start_rsp_pending_ = true;
+    schedule_start_watchdog();
+    CameraMsgProxy::instance().send_stream_start(nullptr);
+}
+
 void CameraPreviewPlayer::apply_stream_start_ui(
     const middleware::CameraStreamInfoPayload& info)
 {
@@ -986,9 +1083,7 @@ void CameraPreviewPlayer::apply_stream_start_ui(
     clear_frame_buffers();
 
     if(!info.ok) {
-        close_pending_dma_fds();
-        show_hint(LV_SYMBOL_WARNING "  Camera start failed");
-        active_.store(false);
+        recover_stream_start(LV_SYMBOL_WARNING "  Camera start failed");
         return;
     }
 
@@ -997,17 +1092,13 @@ void CameraPreviewPlayer::apply_stream_start_ui(
     fps_    = info.fps > 0 ? info.fps : 25;
 
     if(width_ == 0 || height_ == 0) {
-        close_pending_dma_fds();
-        show_hint(LV_SYMBOL_WARNING "  Invalid stream size");
-        active_.store(false);
+        recover_stream_start(LV_SYMBOL_WARNING "  Invalid stream size");
         return;
     }
 
     if(consumer_.open(info.shm_name) != upc_ipc::IpcShmError::OK) {
         UPC_LOG_CAMERA_PREVIEW(Error, "dma frame ring open failed name=%s", info.shm_name);
-        close_pending_dma_fds();
-        show_hint(LV_SYMBOL_WARNING "  SHM open failed");
-        active_.store(false);
+        recover_stream_start(LV_SYMBOL_WARNING "  SHM open failed");
         return;
     }
 
@@ -1024,26 +1115,20 @@ void CameraPreviewPlayer::apply_stream_start_ui(
     const size_t src_size = static_cast<size_t>(src_stride_y_) * height_ * 3u / 2u;
     if(pending_dma_fds_.empty()) {
         UPC_LOG_CAMERA_PREVIEW(Error, "IPC dma fds not available");
-        consumer_.close();
-        show_hint(LV_SYMBOL_WARNING "  DMA fd missing");
-        active_.store(false);
+        recover_stream_start(LV_SYMBOL_WARNING "  DMA fd missing");
         return;
     }
     if(pending_dma_fds_.size() != info.dma_buf_count) {
         UPC_LOG_CAMERA_PREVIEW(Error,
             "IPC dma fd count mismatch got=%zu expected=%u",
             pending_dma_fds_.size(), info.dma_buf_count);
-        close_pending_dma_fds();
-        show_hint(LV_SYMBOL_WARNING "  DMA fd mismatch");
-        active_.store(false);
+        recover_stream_start(LV_SYMBOL_WARNING "  DMA fd mismatch");
         return;
     }
     for(int fd : pending_dma_fds_) {
         if(fd < 0) {
             UPC_LOG_CAMERA_PREVIEW(Error, "IPC dma fd invalid");
-            close_pending_dma_fds();
-            show_hint(LV_SYMBOL_WARNING "  DMA fd invalid");
-            active_.store(false);
+            recover_stream_start(LV_SYMBOL_WARNING "  DMA fd invalid");
             return;
         }
     }
@@ -1066,8 +1151,7 @@ void CameraPreviewPlayer::apply_stream_start_ui(
     if(!setup_frame_buffers(frame_bytes, row_stride_bytes)) {
         consumer_.close();
         close_active_dma_fds();
-        show_hint(LV_SYMBOL_WARNING "  Preview buffer alloc failed");
-        active_.store(false);
+        recover_stream_start(LV_SYMBOL_WARNING "  Preview buffer alloc failed");
         return;
     }
 #if defined(UPC_UI_RGA_STREAMING) && UPC_UI_RGA_STREAMING
@@ -1105,10 +1189,10 @@ void CameraPreviewPlayer::apply_stream_start_ui(
         consumer_.close();
         close_active_dma_fds();
         clear_frame_buffers();
-        show_hint(LV_SYMBOL_WARNING "  Preview decoder unavailable");
-        active_.store(false);
+        recover_stream_start(LV_SYMBOL_WARNING "  Preview decoder unavailable");
         return;
     }
+    start_retry_count_ = 0;
     schedule_ui_timer();
     show_hint(LV_SYMBOL_VIDEO "  Loading preview...");
 }

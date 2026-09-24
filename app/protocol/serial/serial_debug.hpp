@@ -26,7 +26,7 @@ extern "C" {
 #define SDBG_PORT_SENSORS   0xA5  /* PORT_SENSORS_TASK：门/照明/风扇/三通/激光使能/基板加热 */
 #define SDBG_PORT_POWDER    0xA9  /* PORT_POWDER_TASK：粉桶 */
 #define SDBG_PORT_GAS       0xA1  /* PORT_GAS_TASK：洗气 */
-#define SDBG_PORT_PRINTING  0xA4  /* PORT_PRINTING_TASK：清粉测试/打印层参数 */
+#define SDBG_PORT_PRINTING  0xA4  /* PORT_PRINTING_TASK：打印层参数等 */
 #define SDBG_PORT_LASER     0xAA  /* PORT_LASER_TASK：激光器手动功率 */
 #define SDBG_PORT_ALARM     0xA3  /* PORT_ALARM_TASK：报警复位 */
 
@@ -116,7 +116,7 @@ int serial_debug_build_switch(uint8_t target, bool on,
 /** 清粉请求开启。Port=GENERAL(0xA2)，Cmd=0x42，TLV=0x01。 */
 int serial_debug_build_clean_test_start(uint8_t* out, size_t out_size);
 
-/** 清粉测试关闭/中止。Port=PRINTING，Cmd=0x81，TLV=0x21。 */
+/** 清粉中止。Port=GENERAL(0xA2)，Cmd=0x42，TLV=0x02（TLV_DUST_CLEAN_STOP）。 */
 int serial_debug_build_clean_test_close(uint8_t* out, size_t out_size);
 
 /**

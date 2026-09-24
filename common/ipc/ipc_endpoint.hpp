@@ -46,7 +46,7 @@ public:
     [[nodiscard]] int listen_fd() const;
 
     bool send_frame(const std::vector<uint8_t>& frame);
-    /** wire 帧与 dma fd 同一 sendmsg（UPDF 魔数），仅走 SCM_RIGHTS */
+    /** wire 帧与 dma fd 同一 sendmsg（UPDF：magic+wire_len+fd_count+body） */
     bool send_frame_with_fds(const std::vector<uint8_t>& frame,
                              const std::vector<int>& fds);
     void recv_pending(std::vector<InboundWireUnit>& out_units);

@@ -461,11 +461,12 @@ void deferred_cam_start(void * /*u*/)
     ui::CameraPreviewPlayer::instance().start(g_cam_image, g_cam_hint, "monitor");
 }
 
-/** 开流。已经在跑（含 Connecting）只重算几何；未 active 才异步 start。
- *  Start 超时会把 active 清掉，下次进页 / ensure 可再开。 */
+/** 开流。已在跑则只 reattach 控件；未 active 才异步 start。
+ *  Start 超时 / recover 用尽会把 active 清掉，下次进页 / ensure 可再开。 */
 void cam_ensure_running(void)
 {
-    if(ui::CameraPreviewPlayer::instance().active()) {
+    auto& player = ui::CameraPreviewPlayer::instance();
+    if(player.reattach(g_cam_image, g_cam_hint, "monitor")) {
         cam_apply_layout(UPC_CAMERA_STREAM_WIDTH, 0u);
         return;
     }
@@ -2307,10 +2308,10 @@ void page_user_monitor_exit(void)
     close_outer_door_dlg();
     close_purify_door_dlg();
     /* 打印态不停流：用户可能只是切去看一眼消息，回来不该黑一下；结果页也要停在
-     * 最后一帧上。待机态才停，省掉没人看时的解码开销。 */
-    if(!g_printing) {
-        ui::CameraPreviewPlayer::instance().stop();
-    }
+     * 最后一帧上。待机离页同样只 detach 控件、保持 Camera 会话——若 stop→再进
+     * start，短时间会叠两封带 SCM_RIGHTS 的 Start_Rsp，曾触发 DMA fd mismatch
+     * 黑屏；无 widget 时 ui_timer 自然空转，解码开销可接受。 */
+    ui::CameraPreviewPlayer::instance().detach_widgets();
 }
 
 void page_user_monitor_update_camera_preview_layout(uint32_t src_w, uint32_t src_h)
@@ -2394,9 +2395,10 @@ void page_user_monitor_enter_printing_mode(const control_file_t *file)
 void page_user_monitor_exit_printing_mode(void)
 {
     /* 人还在监控页：预览本来就要接着当待机直播，stop 再 start 会黑一下
-     * （Manual OPEN 回 IDLE、打印结束回待机都走这里）。切走了才停流。 */
+     * （Manual OPEN 回 IDLE、打印结束回待机都走这里）。切走了只卸控件，
+     * 会话由 detach 保留；真正关流留给进程退出或其它显式 stop。 */
     if(!g_page_visible) {
-        ui::CameraPreviewPlayer::instance().stop();
+        ui::CameraPreviewPlayer::instance().detach_widgets();
     }
     g_printing    = false;
     g_purify_busy = false;

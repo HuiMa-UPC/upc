@@ -199,6 +199,9 @@ private:
     void handle_alarm_ack(const std::string& payload);
     void alarm_stream_load();
     void alarm_stream_save();
+    void alarm_lost_ranges_load(const std::string& content);
+    void alarm_lost_ranges_merge();
+    void alarm_note_lost_report_seq(const std::string& report_seq);
     void alarm_outbox_load();
     void alarm_outbox_trim();
     bool alarm_outbox_persist(const std::string& message_id,
@@ -474,10 +477,16 @@ private:
         std::string body;
         bool is_snapshot = false;
     };
+    /** 本 stream 已知不可恢复的 report_seq 缺口（契约 lost_report_ranges）。 */
+    struct AlarmLostRange {
+        int64_t from = 0;
+        int64_t to = 0;
+    };
     std::mutex alarm_mtx_;
     std::string alarm_stream_id_;
     int64_t alarm_report_seq_ = 0; /**< 已分配的最大 report_seq；下一条 = +1 */
     std::vector<AlarmOutboxItem> alarm_outbox_;
+    std::vector<AlarmLostRange> alarm_lost_ranges_;
     uint8_t alarm_mcu_link_ =
         static_cast<uint8_t>(middleware::AlarmMcuLink::Unknown);
     uint64_t last_alarm_status_ms_ = 0;

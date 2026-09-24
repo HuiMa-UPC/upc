@@ -318,9 +318,14 @@ constexpr uint32_t WIRE_MAGIC   = 0x31504355u;
 constexpr uint32_t WIRE_VERSION = 1u;
 constexpr std::size_t WIRE_MAX_PAYLOAD = 65536u;
 
-/** wire 帧 + SCM_RIGHTS 复合包魔数（小端 "UPDF"），与 [len][body] 普通帧区分 */
+/** wire 帧 + SCM_RIGHTS 复合包魔数（小端 "UPDF"），与 [len][body] 普通帧区分。
+ *  线上布局：`[magic:u32][wire_len:u32][fd_count:u32][wire…]` + 同包 SCM_RIGHTS。
+ *  `fd_count` 必须与 SCM_RIGHTS 个数一致；接收端按该字段切 fd，避免 stream 粘包把
+ *  相邻两帧的 dma fd 全挂到第一帧（曾导致 UI「DMA fd mismatch」黑屏）。 */
 constexpr uint32_t IPC_FD_FRAME_MAGIC    = 0x46445055u;
 constexpr uint32_t IPC_FD_FRAME_MAX_FDS  = 32u;
+/** UPDF 头字节数：magic + wire_len + fd_count */
+constexpr uint32_t IPC_FD_FRAME_HDR_SIZE = 12u;
 
 /** connect 后首帧 reg（不进 MsgType）；小端 "UPRG" */
 constexpr uint32_t IPC_REG_MAGIC         = 0x47525055u;
@@ -533,7 +538,7 @@ enum class MsgType : uint32_t {
     GLAVO_Debug_O2_Calib_Rsp,           /**< DebugO2CalibRspPayload：氧标定结果（Req 应答） */
     GLAVO_Debug_O2_Calib_Ntf,           /**< DebugO2CalibRspPayload：当前 K 回读（Get，ok=1 且未改盘） */
     GLAVO_Debug_Status_Led_Ntf,         /**< DebugStatusLedPayload：灯板强制态回读 */
-    GLAVO_Debug_Fan_Ntf,                /**< DebugFanStatePayload：风机实测转速/故障/状态（V4 EXT 帧，约 1s） */
+    GLAVO_Debug_Fan_Ntf,                /**< DebugFanStatePayload：风机实测转速/故障/状态（FANBOARD TLV 0x08） */
     GLAVO_Debug_Spi_Pm25_Lcd_Ntf,       /**< DebugOnOffPayload：SPI 小屏测试刷屏开关状态 */
 
     // ---- UI ↔ GLAVO：网络 / WiFi（ConnMan 后端） ----
@@ -639,7 +644,7 @@ enum class MsgType : uint32_t {
     UI_Alarm_Snapshot_Ntf,           /**< Empty：请求 MCU 回一轮报警快照（Cmd 0x81 TLV 0x05 len=0） */
     GLAVO_Alarm_Reset_Result_Ntf,    /**< AlarmResetResultPayload：复位失败回执（Cmd 0x82 TLV 0x04） */
     /** AlarmCloudSnapshotPayload：Glavo 攒齐一轮（可并入 SOC 1120）后的完整 CONDITION 位图 → MQTT 上云。
-     *  云端契约见 doc/soc-alarm-contract-v1.md（alarm.snapshot）；不发串口分片。 */
+     *  云端契约见 doc/soc-alarm-contract-v2.md（alarm.snapshot）；不发串口分片。 */
     GLAVO_Alarm_Cloud_Snapshot_Ntf,
 
     /* ---- 设置页存储管理（稿 6251:94362）----
@@ -1752,12 +1757,12 @@ struct DebugRecycleMotorStatePayload {
     uint8_t reserved[3];
 };
 
-/** GLAVO_Debug_Fan_Ntf：风机实测（MCU V4 EXT 帧 TLV 0x06）；valid=0 时其余值无意义。
+/** GLAVO_Debug_Fan_Ntf：风机实测（MCU FANBOARD 帧 TLV 0x08）；valid=0 时其余值无意义。
  *  不含 on/duty：Glavo 只组帧下发不留状态，那两个值无处可取。 */
 struct DebugFanStatePayload {
     uint8_t  valid;      /**< fan_status_bits bit7：驱动链路正常 */
-    uint8_t  fault;      /**< 0无 1Hall非法 2Hall错序 3堵转 4过流 5欠压 6过压 7超速 */
-    uint8_t  state;      /**< 0停 1启动 2运行 3重试等待 4故障锁定 */
+    uint8_t  fault;      /**< 0无 1Hall非法 2Hall错序 3堵转 4过流 5欠压 6过压 7超速 8板温过热 9NTC */
+    uint8_t  state;      /**< 0停 1启动 2运行 3重试等待 4故障锁定 5预充电 */
     uint8_t  reserved;
     uint16_t rpm;
     uint16_t bus_v_x10;  /**< 0.1V */
@@ -1958,7 +1963,7 @@ enum class AlarmMcuLink : uint8_t {
  * Glavo 在串口快照攒齐并并入 SOC 1120 后发给 MQTT；MQTT 展开为
  * alarm.snapshot entries（coverage=condition_slots_v1）。未收到的 slot 按全零。
  * 空快照（全 NORMAL）合法：highest_severity=0 且全部 mask=0。
- * 元数据（severity/clear_mode/detail）不在本载荷——方案 A 上云一律 unknown。
+ * 元数据（severity/clear_mode/detail）不在本载荷——上云一律 unknown。
  */
 struct AlarmCloudSnapshotPayload {
     uint8_t  highest_severity; /**< 本轮最高等级；0=无有效 CONDITION */
