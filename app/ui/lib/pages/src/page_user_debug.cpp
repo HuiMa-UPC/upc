@@ -1292,8 +1292,8 @@ struct DbgToggleCtx {
     lv_obj_t   *state_lbl;
     const char *on_txt;
     const char *off_txt;
-    uint8_t     kind;   /**< 0 粉桶 / 1 推粉 / 2 风扇 / 3 其他开关 / 4 清粉 / 5 打印H264 / 6 清粉录像 / 7 环境模拟 / 8 环境模拟缺粉 / 9 转运盒流程 / 10 首层视觉检测 / 11 消息注入 / 12 报警注入 */
-    uint8_t     arg;    /**< 粉桶号 / DebugSwitchTarget */
+    uint8_t     kind;   /**< 1 推粉 / 2 风扇 / 3 其他开关 / 4 清粉 / 5 打印H264 / 6 清粉录像 / 7 环境模拟 / 8 环境模拟缺粉 / 9 转运盒流程 / 10 首层视觉检测 / 11 消息注入 / 12 报警注入 */
+    uint8_t     arg;    /**< DebugSwitchTarget 等，按 kind 解释 */
 };
 
 /** 消息注入按钮造的那几条：一条 critical + 两条 info + 一条本地调试码。 */
@@ -1372,11 +1372,10 @@ void on_dbg_toggle(lv_event_t *e)
     }
     auto &proxy = ui::DebugMsgProxy::instance();
     switch(c->kind) {
-        //case 0: proxy.send_powder_bucket(c->arg, on); break;  // 粉桶1/2功能暂时屏蔽
         case 2: proxy.send_fan(on); break;   /* 风扇开/关；占空比由 Send 按钮单独下发 */
         case 3: proxy.send_switch(static_cast<DebugSwitchTarget>(c->arg), on); break;
         case 4: if(on) proxy.send_clean_test_start();          /* 开：启动清粉测试 */
-                else   proxy.send_clean_test_close();          /* 关：中止清粉测试 (TLV 0x21) */
+                else   proxy.send_clean_test_close();          /* 关：中止清粉测试 (TLV 0x02) */
                 break;
         case 5: proxy.send_print_h264_record_set(on);          /* 打印期连续 H264 录像总开关（仅本次运行） */
                 break;
@@ -1521,8 +1520,9 @@ lv_obj_t *make_dbg_toggle(lv_obj_t *parent, const char *name,
     return grp;
 }
 
-/* 点动电机类控件（筛粉电机 / 内门）：3 个点动键 [< 停止▶ >] + 共享状态字。
- * device：0=筛粉电机 1=内门。action 与 DebugMotorAction 对齐：0=停止 1=正转/开 2=反转/关。 */
+/* 点动电机类控件（筛粉电机 / 内门 / 回粉电机）：3 个点动键 [< ▶ >] + 共享状态字。
+ * device：0=筛粉电机 1=内门 2=回粉电机。
+ * action 与 DebugMotorAction 对齐：0=停止 1=正转/开/送往 B 瓶 2=反转/关/送往 A 瓶。 */
 struct MomentBtnCtx {
     lv_obj_t *state_lbl;
     uint8_t   device;
@@ -1547,6 +1547,10 @@ void on_moment_btn(lv_event_t *e)
         ui::DebugMsgProxy::instance().send_sieve(act);
         txt = (act == DebugMotorAction::Forward) ? "Running"
             : (act == DebugMotorAction::Reverse) ? "Reversing" : "Stopped";
+    } else if(c->device == 2) {   /* 回粉电机：送往 B 瓶0x17 / 停止并恢复自动0x18 / 送往 A 瓶0x16 */
+        ui::DebugMsgProxy::instance().send_return_powder(act);
+        txt = (act == DebugMotorAction::Forward) ? "To B"
+            : (act == DebugMotorAction::Reverse) ? "To A" : "Stopped";
     } else {                      /* 内门：开0x0C / 停止0x0E / 关0x0D */
         ui::DebugMsgProxy::instance().send_inner_door(act);
         txt = (act == DebugMotorAction::Forward) ? "Open"
@@ -1569,13 +1573,45 @@ lv_obj_t *make_moment_btn(lv_obj_t *parent, const char *sym,
     return b;
 }
 
-/* 点动电机单元：名称+状态在上，[< 停止▶ >] 三键在下一行（与标签留出间距）。
- * 左 < = 反转/关，中 ▶ = 停止，右 > = 正转/开。 */
+/* Process 卡六等分：每格宽 1 + flex_grow=占列数、列间距 0，
+ * 各行同列按钮中心才会严格上下对齐。 */
+lv_obj_t *make_six_col_row(lv_obj_t *parent)
+{
+    lv_obj_t *r = lv_obj_create(parent);
+    lv_obj_remove_style_all(r);
+    lv_obj_set_width(r, LV_PCT(100));
+    lv_obj_set_height(r, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(r, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(r, LV_FLEX_ALIGN_START,
+                          LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
+    lv_obj_set_style_pad_column(r, 0, 0);
+    lv_obj_set_style_bg_opa(r, LV_OPA_TRANSP, 0);
+    lv_obj_clear_flag(r, LV_OBJ_FLAG_SCROLLABLE);
+    return r;
+}
+
+lv_obj_t *make_col_cell(lv_obj_t *row, uint8_t span)
+{
+    lv_obj_t *c = lv_obj_create(row);
+    lv_obj_remove_style_all(c);
+    lv_obj_set_width(c, 1);
+    lv_obj_set_flex_grow(c, span);
+    lv_obj_set_height(c, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(c, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(c, LV_FLEX_ALIGN_START,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_bg_opa(c, LV_OPA_TRANSP, 0);
+    lv_obj_clear_flag(c, LV_OBJ_FLAG_SCROLLABLE);
+    return c;
+}
+
+/* 点动电机单元：放进占 3 列的格子；名称+状态居中在上，[< ▶ >] 三键各占一列。
+ * 左 < = 反转/关/送往 A 瓶，中 ▶ = 停止，右 > = 正转/开/送往 B 瓶。 */
 void build_moment_motor_controls(lv_obj_t *parent, const char *name, uint8_t device)
 {
     lv_obj_t *grp = lv_obj_create(parent);
     lv_obj_remove_style_all(grp);
-    lv_obj_set_size(grp, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_set_size(grp, LV_PCT(100), LV_SIZE_CONTENT);
     lv_obj_set_flex_flow(grp, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(grp, LV_FLEX_ALIGN_CENTER,
                           LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
@@ -1592,21 +1628,15 @@ void build_moment_motor_controls(lv_obj_t *parent, const char *name, uint8_t dev
     lv_obj_set_style_text_color(st, user_color_text_dim, 0);
     lv_obj_set_style_text_font(st, user_font_text(), 0);
 
-    lv_obj_t *btnrow = lv_obj_create(grp);
-    lv_obj_remove_style_all(btnrow);
-    lv_obj_set_size(btnrow, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
-    lv_obj_set_flex_flow(btnrow, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(btnrow, LV_FLEX_ALIGN_CENTER,
-                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_column(btnrow, USER_PAD_SM, 0);
+    lv_obj_t *btnrow = make_six_col_row(grp);
     lv_obj_set_style_margin_top(btnrow, USER_PAD_SM, 0);   /* 与标签拉开间距 */
-    lv_obj_set_style_bg_opa(btnrow, LV_OPA_TRANSP, 0);
-    lv_obj_clear_flag(btnrow, LV_OBJ_FLAG_SCROLLABLE);
 
-    /* 左 < 反转/关，中 ▶ 停止，右 > 正转/开 */
-    make_moment_btn(btnrow, LV_SYMBOL_LEFT,  device, DebugMotorAction::Reverse, st);
-    make_moment_btn(btnrow, LV_SYMBOL_PLAY,  device, DebugMotorAction::Stop,    st);
-    make_moment_btn(btnrow, LV_SYMBOL_RIGHT, device, DebugMotorAction::Forward, st);
+    make_moment_btn(make_col_cell(btnrow, 1), LV_SYMBOL_LEFT,
+                    device, DebugMotorAction::Reverse, st);
+    make_moment_btn(make_col_cell(btnrow, 1), LV_SYMBOL_PLAY,
+                    device, DebugMotorAction::Stop, st);
+    make_moment_btn(make_col_cell(btnrow, 1), LV_SYMBOL_RIGHT,
+                    device, DebugMotorAction::Forward, st);
 }
 
 /** 一行卡片容器（横向 flex，等高） */
@@ -1892,22 +1922,20 @@ void build_other_switches_column(lv_obj_t *parent)
     lv_obj_set_scroll_dir(col, LV_DIR_VER);
     lv_obj_set_scrollbar_mode(col, LV_SCROLLBAR_MODE_AUTO);
 
-    /* ---- 机构 / 工艺 ---- */
+    /* ---- 机构 / 工艺：六等分，一个按钮一列，上下行按钮逐列对齐 ---- */
     lv_obj_t *proc = make_section_card(col, "Process");
-    lv_obj_t *rowA = make_switch_grid_row(proc);
-    make_dbg_toggle(rowA, "Bucket 1", "Open", "Closed", LV_SYMBOL_POWER, false, 0, 1);
-    make_dbg_toggle(rowA, "Bucket 2", "Open", "Closed", LV_SYMBOL_POWER, false, 0, 2);
-    build_moment_motor_controls(rowA, "Sieve Motor", 0);
-    make_dbg_toggle(rowA, "Powder Clean", "On", "Off", LV_SYMBOL_POWER, false, 4, 0);
+    lv_obj_t *rowA = make_six_col_row(proc);
+    build_moment_motor_controls(make_col_cell(rowA, 3), "Return Motor", 2);
+    build_moment_motor_controls(make_col_cell(rowA, 3), "Sieve Motor", 0);
 
-    lv_obj_t *rowB = make_switch_grid_row(proc);
-    make_dbg_toggle(rowB, "Laser", "On", "Off", LV_SYMBOL_POWER, false, 3,
+    lv_obj_t *rowB = make_six_col_row(proc);
+    make_dbg_toggle(make_col_cell(rowB, 1), "Laser", "On", "Off", LV_SYMBOL_POWER, false, 3,
                     static_cast<uint8_t>(DebugSwitchTarget::Laser));
-    make_dbg_toggle(rowB, "Gas Wash", "On", "Off", LV_SYMBOL_POWER, false, 3,
+    make_dbg_toggle(make_col_cell(rowB, 1), "Gas Wash", "On", "Off", LV_SYMBOL_POWER, false, 3,
                     static_cast<uint8_t>(DebugSwitchTarget::GasWash));
-    make_dbg_toggle(rowB, "Base Heat", "On", "Off", LV_SYMBOL_POWER, false, 3,
+    make_dbg_toggle(make_col_cell(rowB, 1), "Base Heat", "On", "Off", LV_SYMBOL_POWER, false, 3,
                     static_cast<uint8_t>(DebugSwitchTarget::BaseHeat));
-    build_moment_motor_controls(rowB, "Inner Door", 1);
+    build_moment_motor_controls(make_col_cell(rowB, 3), "Inner Door", 1);
 
     /* ---- 舱内灯 / 阀 / 氧门 ---- */
     lv_obj_t *cabin = make_section_card(col, "Cabin");
@@ -1937,6 +1965,7 @@ void build_other_switches_column(lv_obj_t *parent)
     make_one_shot_action(rowG2, "Galvo Point Test", "Idle", LV_SYMBOL_PLAY,
                          on_galvo_point_test_click,
                          &g_galvo_point_test_btn, &g_galvo_point_test_lbl);
+    make_dbg_toggle(rowG2, "Powder Clean", "On", "Off", LV_SYMBOL_POWER, false, 4, 0);
     update_galvo_test_controls();
 
     /* ---- 录像 / 模拟 ---- */

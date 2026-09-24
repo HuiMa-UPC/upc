@@ -492,6 +492,7 @@ enum class MsgType : uint32_t {
     UI_Debug_Skip_O2_Gate_Get_Ntf,      /**< Empty：查询当前跳过氧门开关状态 */
     UI_Debug_O2_Calib_Req,              /**< DebugO2CalibReqPayload：空气/标准气单点标定 K */
     UI_Debug_O2_Calib_Get_Ntf,          /**< Empty：查询当前氧标定 K（不重新采样） */
+    UI_Debug_Return_Powder_Ntf,         /**< DebugMotorPayload：回粉电机 停止并恢复自动/送往 B 瓶/送往 A 瓶 */
 
     // ---- GLAVO → UI：调试页状态回读（按模块拆分） ----
     GLAVO_Debug_Sensor_Ntf = 0x1200, /**< DebugSensorPayload：调试顶栏传感器（舱内/滤芯氧 + 舱外/舱内 PM） */

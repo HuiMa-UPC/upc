@@ -192,6 +192,7 @@ const char* upc_msg_type_name(MsgType type) {
         case MsgType::UI_Debug_Powder_Bucket_Ntf: return "UI_Debug_Powder_Bucket_Ntf";
         case MsgType::UI_Debug_Pusher_Ntf: return "UI_Debug_Pusher_Ntf";
         case MsgType::UI_Debug_Recycle_Motor_Ntf: return "UI_Debug_Recycle_Motor_Ntf";
+        case MsgType::UI_Debug_Return_Powder_Ntf: return "UI_Debug_Return_Powder_Ntf";
         case MsgType::UI_Debug_Fan_Ntf: return "UI_Debug_Fan_Ntf";
         case MsgType::UI_Debug_Switch_Ntf: return "UI_Debug_Switch_Ntf";
         case MsgType::UI_Debug_CleanTest_Start_Ntf: return "UI_Debug_CleanTest_Start_Ntf";

@@ -154,6 +154,9 @@ constexpr size_t kFsDirMaxEntries =
 constexpr auto kUsbHotplugPollInterval = std::chrono::milliseconds(300);
 /** 红光点位测试每个观察点的停留时间。 */
 constexpr auto kGalvoPointTestDwell = std::chrono::seconds(3);
+/** 清粉停止后等旧会话结束上报的窗口；停止时正在走的 Z 单步会先走完，留足余量，
+ *  超时未到则视为丢帧，不再吞后续上报。 */
+constexpr auto kCleanAbortAckWindow = std::chrono::seconds(10);
 
 /** @brief 本地 G-code 清单配置文件路径 */
 std::string local_config_path()
@@ -831,6 +834,7 @@ bool GlavoService::start()
         middleware::MsgType::UI_Debug_Powder_Bucket_Ntf,
         middleware::MsgType::UI_Debug_Pusher_Ntf,
         middleware::MsgType::UI_Debug_Recycle_Motor_Ntf,   /* 内门（原回粉电机块） */
+        middleware::MsgType::UI_Debug_Return_Powder_Ntf,
         middleware::MsgType::UI_Debug_Fan_Ntf,
         middleware::MsgType::UI_Debug_Fan_Duty_Ntf,
         middleware::MsgType::UI_Debug_Switch_Ntf,
@@ -1137,6 +1141,7 @@ void GlavoService::stop_clean_worker()
     clean_stop_rsp_target_.store(0);
     clean_test_done_pending_.store(false);
     clean_test_active_ = false;
+    clean_abort_ack_pending_ = false;
     clean_video_session_started_ = false;
     clean_test_session_id_[0] = '\0';
     clean_test_job_name_[0] = '\0';
@@ -1277,6 +1282,9 @@ void GlavoService::handle_message(const middleware::Message& msg)
             break;
         case middleware::MsgType::UI_Debug_Recycle_Motor_Ntf:
             handle_debug_inner_door(msg);
+            break;
+        case middleware::MsgType::UI_Debug_Return_Powder_Ntf:
+            handle_debug_return_powder(msg);
             break;
         case middleware::MsgType::UI_Debug_Fan_Ntf:
             handle_debug_fan(msg);
@@ -3935,6 +3943,15 @@ void GlavoService::notify_clean_video_stop(uint8_t result_code, bool keep_raw)
  */
 void GlavoService::on_clean_test_done(uint8_t result_code)
 {
+    if(clean_abort_ack_pending_) {
+        clean_abort_ack_pending_ = false;
+        if(std::chrono::steady_clock::now() < clean_abort_ack_deadline_) {
+            UPC_LOG_GLAVO_SERVICE(Info,
+                "drop stale clean_test_done result=%u (aborted session)",
+                static_cast<unsigned>(result_code));
+            return;
+        }
+    }
     if(!clean_test_active_) {
         return;
     }
@@ -4008,6 +4025,8 @@ void GlavoService::handle_clean_test_close_request(const middleware::Message& ms
             clean_video_session_started_ = false;
         }
         clean_test_active_ = false;
+        clean_abort_ack_pending_ = true;
+        clean_abort_ack_deadline_ = std::chrono::steady_clock::now() + kCleanAbortAckWindow;
     }
     publish_clean_test_close_rsp(static_cast<uint32_t>(msg.sender_id));
 }
@@ -4520,6 +4539,17 @@ void GlavoService::handle_debug_pusher(const middleware::Message& msg)
     }
     uint8_t buf[SERIAL_DEBUG_MAX_FRAME];
     debug_tx(buf, serial_debug_build_sieve_motor(p.action, buf, sizeof(buf)));
+}
+
+/** @brief 回粉电机手动：action 0=停止并恢复自动 1=送往 B 瓶 2=送往 A 瓶 */
+void GlavoService::handle_debug_return_powder(const middleware::Message& msg)
+{
+    middleware::DebugMotorPayload p{};
+    if(!read_inline_pod(msg.payload, p)) {
+        return;
+    }
+    uint8_t buf[SERIAL_DEBUG_MAX_FRAME];
+    debug_tx(buf, serial_debug_build_return_powder_motor(p.action, buf, sizeof(buf)));
 }
 
 /** @brief 内门：action 0=停止 1=开 2=关（原回粉电机块改为内门） */
