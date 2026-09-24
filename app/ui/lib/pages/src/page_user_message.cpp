@@ -22,7 +22,7 @@
  * **本页不显示常驻设备条**：稿上顶部从屏顶起就是 Tab 行，设备条那条被不透明顶栏
  * 整条盖住，等价于不画，判据在 page_manager 的 show 那行（同历史页）。
  *
- *   ┌ All   Device   System                              [ All read ] ┐ ← 顶栏浮层
+ *   ┌ All   Unresolved   Device   System                 [ All read ] ┐ ← 顶栏浮层
  *   │·····························································    │   y 0..124
  *   │ May 26, 2026                                                    │   y 140
  *   │ ┌──────────────────────────────────────────────────────────┐    │
@@ -48,6 +48,10 @@
  *      不可删，**点了没反应**（无抽屉，判据是 card_click_cb 里的 ItemSrc::StoreMsg）；
  *   3. `ui_alarm_state` 历史（Resolved CONDITION + EVENT）——可左滑删除，点开进抽屉。
  *   报警 EVENT 在 store 里也挂着一份（喂浮层用），列表里跳过以免与历史重复。
+ *
+ * Unresolved 页签是例外（稿外，RTC 没配好期间的临时方案）：只取上面第 1 路和第 2 路
+ * 里的前端本地提示，按 store 的到达序号新→旧平铺、不分日期组，顶上一行总数，
+ * 见 collect_unresolved()。
  *
  * 详情抽屉（右侧滑出，稿 6091:13612）：建在 `lv_layer_top()` 上，遮罩 60% 盖满整屏
  * （含侧栏），面板 632 宽贴右满高。挂页面里的话上边会被 content_panel_ 顶下来。
@@ -90,19 +94,25 @@ enum class ItemSrc : uint8_t {
     AlarmHistory,   /**< ui_alarm_state 历史（Resolved / EVENT） */
 };
 
-/* ---- 顶部三 Tab（稿 3033:5247 新版）----
+/* ---- 顶部四 Tab（稿 3033:5247 新版的三个 + 稿外临时加的 Unresolved）----
  *
  * 分档判据是码段，`DeviceEventCode::UiWearMask`(512) 以上是"UI 本地事件，后端不
  * 应发送"（见 upc_contract.hpp 那段注释），正好是设备/系统的天然分界：
  *   Device = MCU 报警（码 ≥ 1000，走 AlarmCurrent/AlarmHistory）+ 后端设备事件（码 < 512）
  *   System = 前端本地提示（512..999）
  * 稿上系统消息那栏画的是 OTA 升级、账号共享，本工程还没有这类数据源，所以这个
- * Tab 目前只有打印结束那两条本地提示，多数时候是空的。 */
-enum class MsgTab : uint8_t { All = 0, Device, System };
+ * Tab 目前只有打印结束那两条本地提示，多数时候是空的。
+ *
+ * Unresolved 是 RTC 没配好期间的**临时页签**：开机到 NTP 对上之前记下的报警时刻是
+ * 1970，在 All 里按时间倒序会沉到最底。它只收还没处理完的条目、按到达顺序排、不看
+ * 墙钟，判据见 collect_unresolved()。与 Device/System 一样只是筛选，条目在 All 里
+ * 照样出现。 */
+enum class MsgTab : uint8_t { All = 0, Unresolved, Device, System };
 
-constexpr int kTabCount = 3;
-constexpr MsgTab kTabOrder[kTabCount] = { MsgTab::All, MsgTab::Device, MsgTab::System };
-constexpr const char *kTabTitles[kTabCount] = { "All", "Device", "System" };
+constexpr int kTabCount = 4;
+constexpr MsgTab kTabOrder[kTabCount] = {
+    MsgTab::All, MsgTab::Unresolved, MsgTab::Device, MsgTab::System };
+constexpr const char *kTabTitles[kTabCount] = { "All", "Unresolved", "Device", "System" };
 
 /** 本地消息码段起点：< 512 是后端设备事件，≥ 512 是前端自己 push 的。 */
 constexpr uint16_t kLocalCodeBase = 512;
@@ -120,6 +130,7 @@ struct MsgItem {
     uint16_t    code;
     int         hist_idx;   /**< AlarmHistory：ui_alarm_history_at 下标 */
     int64_t     sort_ts;    /**< 排序/分组时刻（毫秒） */
+    uint32_t    seq;        /**< store 到达序号，越大越新；只有 Unresolved 按它排 */
     const char *title;
     const char *body;
     ui_msg_severity_t sev;  /**< 徽标配色与图标都由它出（共用四档阶梯） */
@@ -250,6 +261,15 @@ int32_t drawer_px(int32_t design_v)
  *  格式化
  * ========================================================================= */
 
+/** 早于 2024-01-01 的墙钟一律当未知（0 也落在这一档）：RTC 没配好时，开机到 NTP
+ *  对上之前 time() 从 1970 起跑，照常格式化就是 "Jan 01, 1970 08:00" 这种假时间。 */
+constexpr int64_t kMinKnownTsMs = 1704067200LL * 1000;
+
+bool ts_known(int64_t ts_ms)
+{
+    return ts_ms >= kMinKnownTsMs;
+}
+
 /** ts → 组头："Today" / "Yesterday" / "Aug 09, 2026" */
 void format_group(int64_t ts_ms, char *buf, size_t n)
 {
@@ -273,7 +293,7 @@ void format_group(int64_t ts_ms, char *buf, size_t n)
 /** ts → 卡片右侧 "14:03" */
 void format_clock(int64_t ts_ms, char *buf, size_t n)
 {
-    if(ts_ms <= 0) {
+    if(!ts_known(ts_ms)) {
         buf[0] = '\0';
         return;
     }
@@ -286,7 +306,7 @@ void format_clock(int64_t ts_ms, char *buf, size_t n)
 /** ts → 抽屉里的完整时刻 "Aug 09, 2026 14:03:27" */
 void format_full(int64_t ts_ms, char *buf, size_t n)
 {
-    if(ts_ms <= 0) {
+    if(!ts_known(ts_ms)) {
         snprintf(buf, n, "--");
         return;
     }
@@ -299,7 +319,7 @@ void format_full(int64_t ts_ms, char *buf, size_t n)
 /** ts → 抽屉标题下的相对时刻 "Today 18:30"（稿 3204:9818 那行浅字） */
 void format_relative(int64_t ts_ms, char *buf, size_t n)
 {
-    if(ts_ms <= 0) {
+    if(!ts_known(ts_ms)) {
         snprintf(buf, n, "--");
         return;
     }
@@ -310,11 +330,89 @@ void format_relative(int64_t ts_ms, char *buf, size_t n)
 }
 
 /* ============================================================================
- *  数据组装：三路合并 + 时间倒序
+ *  数据组装：三路合并 + 时间倒序；Unresolved 页签另收一份，按到达序
  * ========================================================================= */
+
+/** store 里同码条目的到达序号，找不到返回 0（排到最后）。
+ *  当前报警在 store 里都挂着一份同码镜像（ui_alarm_state 同步进去的），但 store 满
+ *  24 条时镜像可能被 evict 挤掉，所以得兜住找不到。 */
+uint32_t store_seq_of(uint16_t code)
+{
+    for(int i = 0; i < ui_message_total_count(); i++) {
+        const ui_message_t *m = ui_message_at(i);
+        if(m->code == code) {
+            return m->seq;
+        }
+    }
+    return 0;
+}
+
+/**
+ * Unresolved 页签的数据：还没处理完的条目，按到达顺序新→旧，不分日期组。
+ *
+ * **按 store 的 seq 排，不按墙钟**：RTC 没配好时，开机到 NTP 对上之前记下的时刻是
+ * 1970，按时间倒序会沉到最底。seq 与铃铛面板同一口径，报警再次触发（RTN_LATCHED
+ * 回到 ACTIVE 走 emit）时会刷新，条目随之回到最上面。
+ *
+ * 只收处理完会自己离开的两类：
+ *   1. 当前 CONDITION（ACTIVE / RTN_LATCHED），MCU 回 NORMAL 才离开；
+ *   2. 前端本地提示（512..999），打印流程态变了会 retract。
+ * 后端设备事件（< 512）不收：Glavo 只发 active=true、从不撤回，收进来就永远挂着。
+ * 报警历史与 EVENT 都已经结束，也不收。
+ *
+ * sort_ts 在这里只喂卡片右侧的时间，给原始值：未知时刻（0 / 1970）由 ts_known()
+ * 挡成空白。不能像 collect_items() 那样拿 now 顶替，顶出来的是"此刻"而不是发生时刻。
+ */
+std::vector<MsgItem> collect_unresolved(void)
+{
+    std::vector<MsgItem> items;
+
+    /* 1. 当前 CONDITION 报警 */
+    for(int i = 0; i < ui_alarm_current_count(); i++) {
+        const ui_alarm_entry_t *e = ui_alarm_current_at(i);
+        MsgItem it{};
+        it.src      = ItemSrc::AlarmCurrent;
+        it.code     = e->code;
+        it.hist_idx = -1;
+        it.sort_ts  = e->ts_ms;
+        it.seq      = store_seq_of(e->code);
+        it.title    = e->title;
+        it.body     = e->body;
+        it.sev      = ui_alarm_severity_to_msg(e->severity);
+        items.push_back(it);
+    }
+
+    /* 2. 前端本地提示 */
+    for(int i = 0; i < ui_message_total_count(); i++) {
+        const ui_message_t *m = ui_message_at(i);
+        if(m->code < kLocalCodeBase || m->code >= 1000) {
+            continue;
+        }
+        MsgItem it{};
+        it.src      = ItemSrc::StoreMsg;
+        it.code     = m->code;
+        it.hist_idx = -1;
+        it.sort_ts  = m->ts_ms;
+        it.seq      = m->seq;
+        it.title    = m->title;
+        it.body     = m->body;
+        it.sev      = m->severity;
+        items.push_back(it);
+    }
+
+    std::stable_sort(items.begin(), items.end(),
+                     [](const MsgItem &a, const MsgItem &b) {
+                         return a.seq > b.seq;
+                     });
+    return items;
+}
 
 std::vector<MsgItem> collect_items(void)
 {
+    if(g_tab == MsgTab::Unresolved) {
+        return collect_unresolved();
+    }
+
     std::vector<MsgItem> items;
     const int64_t now_ms = static_cast<int64_t>(time(nullptr)) * 1000;
 
@@ -366,7 +464,8 @@ std::vector<MsgItem> collect_items(void)
         items.push_back(it);
     }
 
-    /* Tab 过滤：报警一律算设备侧，store 消息按码段分（≥512 是前端本地提示） */
+    /* Tab 过滤：报警一律算设备侧，store 消息按码段分（≥512 是前端本地提示）。
+     * Unresolved 在函数开头就分流走了，走到这里只剩 Device / System 两档。 */
     if(g_tab != MsgTab::All) {
         const bool want_system = (g_tab == MsgTab::System);
         items.erase(std::remove_if(items.begin(), items.end(),
@@ -994,7 +1093,7 @@ void make_tab_item(lv_obj_t *parent, int idx)
 }
 
 /**
- * 顶部 Tab 行：左侧 All / Device / System + 右侧一枚 All read。
+ * 顶部 Tab 行：左侧 All / Unresolved / Device / System + 右侧一枚 All read。
  *
  * 结构与历史页 `build_tab_row()` 同构。新稿把左右内距统一成了 48（见 content_pad_l），
  * 不再像旧稿那样 Tab 行与卡片列表各缩各的——右侧那套 112/160 是给悬浮翻页钮让位的，
@@ -1313,8 +1412,11 @@ void rebuild_list(void)
     lv_obj_clean(g_list);
 
     const std::vector<MsgItem> items = collect_items();
+    const bool unresolved = (g_tab == MsgTab::Unresolved);
     if(items.empty()) {
         if(g_empty) {
+            /* 文案随页签变，每次显示都得重设，切回别的页签才换得回来 */
+            lv_label_set_text(g_empty, unresolved ? "No unresolved alarms" : "No messages");
             lv_obj_remove_flag(g_empty, LV_OBJ_FLAG_HIDDEN);
         }
         return;
@@ -1323,18 +1425,30 @@ void rebuild_list(void)
         lv_obj_add_flag(g_empty, LV_OBJ_FLAG_HIDDEN);
     }
 
-    /* 只建前 g_visible_limit 条（items 已按时间降序，即最近的那些）。截断可能落在
-     * 某个日期组中间，但分组标题是"组名变了才插"，所以最后一组不完整也不会漏标题。 */
+    /* 只建前 g_visible_limit 条（items 已按新→旧排好：Unresolved 按到达序，其余按
+     * 时间，即最近的那些）。截断可能落在某个日期组中间，但分组标题是"组名变了才插"，
+     * 所以最后一组不完整也不会漏标题。 */
     const size_t shown = (items.size() < g_visible_limit) ? items.size()
                                                           : g_visible_limit;
+
+    /* Unresolved 不分日期组（墙钟不可信），顶上只放一行总数。它借组标题的样式，也借
+     * 组标题的 margin_top 把首卡与顶栏隔开——不放这一行，首卡会贴住顶栏。 */
+    if(unresolved) {
+        char head[32];
+        std::snprintf(head, sizeof(head), "%u unresolved",
+                      static_cast<unsigned>(items.size()));
+        build_group_title(g_list, head);
+    }
     char cur_group[32] = "";
     for(size_t i = 0; i < shown; i++) {
         const MsgItem &it = items[i];
-        char grp[32];
-        format_group(it.sort_ts, grp, sizeof(grp));
-        if(std::strcmp(cur_group, grp) != 0) {
-            std::snprintf(cur_group, sizeof(cur_group), "%s", grp);
-            build_group_title(g_list, grp);
+        if(!unresolved) {
+            char grp[32];
+            format_group(it.sort_ts, grp, sizeof(grp));
+            if(std::strcmp(cur_group, grp) != 0) {
+                std::snprintf(cur_group, sizeof(cur_group), "%s", grp);
+                build_group_title(g_list, grp);
+            }
         }
         build_entry(g_list, it);
     }
