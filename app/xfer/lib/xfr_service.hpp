@@ -11,6 +11,7 @@
 #include "xfr_config.hpp"
 
 #include <chrono>
+#include <condition_variable>
 #include <cstdint>
 #include <mutex>
 #include <string>
@@ -38,7 +39,16 @@ private:
     HttpResponse handle_upload_status(const HttpRequest& req, const std::string& upload_id);
     HttpResponse handle_print_start(const HttpRequest& req);
     HttpResponse handle_print_status(const HttpRequest& req);
+    HttpResponse handle_print_cancel(const HttpRequest& req);
+    HttpResponse handle_print_pause(const HttpRequest& req);
+    HttpResponse handle_print_resume(const HttpRequest& req);
     HttpResponse handle_print_history(const HttpRequest& req);
+
+    enum class PrintCtrlKind : uint8_t { Cancel, Pause, Resume };
+    HttpResponse handle_print_control(const HttpRequest& req, PrintCtrlKind kind);
+    bool job_id_matches_locked(const std::string& job_id) const;
+    bool publish_print_ctrl(PrintCtrlKind kind) const;
+    bool wait_print_ctrl_done(std::chrono::milliseconds timeout);
     HttpResponse handle_timelapse_images(const HttpRequest& req, const std::string& job_id);
     HttpResponse handle_timelapse_file(const HttpRequest& req,
                                        const std::string& job_id,
@@ -126,6 +136,12 @@ private:
     std::string glavo_error_;
     std::string active_frames_dir_;
     bool print_session_active_ = false;
+
+    /** HTTP 线程等 Glavo 暂停/恢复/终止回包（主循环 process 后 notify） */
+    enum class PrintCtrlWait : uint8_t { None, PauseOn, PauseOff, Canceled };
+    std::condition_variable print_ctrl_cv_;
+    PrintCtrlWait print_ctrl_wait_ = PrintCtrlWait::None;
+    bool print_ctrl_got_ = false;
 };
 
 } // namespace upc::xfr

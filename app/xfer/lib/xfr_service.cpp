@@ -145,6 +145,15 @@ HttpResponse XfrService::on_request(const HttpRequest& req)
     if (req.method == "GET" && path == "/api/v1/print/status") {
         return handle_print_status(req);
     }
+    if (req.method == "POST" && path == "/api/v1/print/cancel") {
+        return handle_print_cancel(req);
+    }
+    if (req.method == "POST" && path == "/api/v1/print/pause") {
+        return handle_print_pause(req);
+    }
+    if (req.method == "POST" && path == "/api/v1/print/resume") {
+        return handle_print_resume(req);
+    }
     if (req.method == "GET" && path == "/api/v1/print/history") {
         return handle_print_history(req);
     }
@@ -793,6 +802,150 @@ HttpResponse XfrService::handle_print_status(const HttpRequest& req)
     return rsp;
 }
 
+HttpResponse XfrService::handle_print_cancel(const HttpRequest& req)
+{
+    return handle_print_control(req, PrintCtrlKind::Cancel);
+}
+
+HttpResponse XfrService::handle_print_pause(const HttpRequest& req)
+{
+    return handle_print_control(req, PrintCtrlKind::Pause);
+}
+
+HttpResponse XfrService::handle_print_resume(const HttpRequest& req)
+{
+    return handle_print_control(req, PrintCtrlKind::Resume);
+}
+
+bool XfrService::job_id_matches_locked(const std::string& job_id) const
+{
+    if (job_id.empty()) {
+        return false;
+    }
+    if (!print_job_id_.empty() && job_id == print_job_id_) {
+        return true;
+    }
+    if (!active_frames_dir_.empty() && job_id == active_frames_dir_) {
+        return true;
+    }
+    if (print_session_active_ && job_id == UPC_VIDEO_TMP_NAME) {
+        return true;
+    }
+    return false;
+}
+
+bool XfrService::publish_print_ctrl(PrintCtrlKind kind) const
+{
+    middleware::MsgType type = middleware::MsgType::UI_Print_Terminate_Req;
+    switch (kind) {
+        case PrintCtrlKind::Pause:  type = middleware::MsgType::UI_Print_Pause_Req; break;
+        case PrintCtrlKind::Resume: type = middleware::MsgType::UI_Print_Resume_Req; break;
+        case PrintCtrlKind::Cancel: type = middleware::MsgType::UI_Print_Terminate_Req; break;
+    }
+    middleware::Message msg(type,
+                            middleware::ModuleId::APP_XFR,
+                            middleware::ModuleId::APP_GLAVO);
+    return middleware::MsgPort::instance().publish_async(msg);
+}
+
+bool XfrService::wait_print_ctrl_done(std::chrono::milliseconds timeout)
+{
+    std::unique_lock<std::mutex> lk(print_state_mu_);
+    return print_ctrl_cv_.wait_for(lk, timeout, [this] { return print_ctrl_got_; });
+}
+
+HttpResponse XfrService::handle_print_control(const HttpRequest& req, PrintCtrlKind kind)
+{
+    std::string token;
+    if (!need_auth(req, &token)) {
+        return err(401, "AUTH_INVALID", "missing or invalid token");
+    }
+
+    const std::string body = body_to_string(req);
+    std::string job_id;
+    if (!json_get_string(body, "job_id", &job_id) || job_id.empty()) {
+        return err(400, "BAD_REQUEST", "job_id required");
+    }
+
+    PrintCtrlWait wait_for = PrintCtrlWait::None;
+    const char* ok_state = "canceled";
+    {
+        std::lock_guard<std::mutex> lk(print_state_mu_);
+        if (!job_id_matches_locked(job_id)) {
+            return err(404, "JOB_NOT_FOUND", "job_id does not match current print");
+        }
+        switch (kind) {
+            case PrintCtrlKind::Pause:
+                if (glavo_phase_ != GlavoPhase::Printing) {
+                    return err(409, "JOB_NOT_PRINTING", "job is not printing");
+                }
+                wait_for = PrintCtrlWait::PauseOn;
+                ok_state = "paused";
+                break;
+            case PrintCtrlKind::Resume:
+                if (glavo_phase_ != GlavoPhase::Paused) {
+                    return err(409, "JOB_NOT_PRINTING", "job is not paused");
+                }
+                wait_for = PrintCtrlWait::PauseOff;
+                ok_state = "printing";
+                break;
+            case PrintCtrlKind::Cancel:
+                if (glavo_phase_ != GlavoPhase::Printing &&
+                    glavo_phase_ != GlavoPhase::Paused) {
+                    return err(409, "JOB_NOT_PRINTING", "job is not active");
+                }
+                wait_for = PrintCtrlWait::Canceled;
+                ok_state = "canceled";
+                break;
+        }
+        print_ctrl_wait_ = wait_for;
+        print_ctrl_got_ = false;
+    }
+
+    if (!publish_print_ctrl(kind)) {
+        std::lock_guard<std::mutex> lk(print_state_mu_);
+        print_ctrl_wait_ = PrintCtrlWait::None;
+        return err(500, "INTERNAL", "publish print control failed");
+    }
+
+    constexpr auto kCtrlTimeout = std::chrono::milliseconds(3000);
+    const bool got = wait_print_ctrl_done(kCtrlTimeout);
+
+    std::string rsp_job = job_id;
+    GlavoPhase phase = GlavoPhase::Idle;
+    {
+        std::lock_guard<std::mutex> lk(print_state_mu_);
+        print_ctrl_wait_ = PrintCtrlWait::None;
+        phase = glavo_phase_;
+        if (!active_frames_dir_.empty()) {
+            rsp_job = active_frames_dir_;
+        } else if (print_session_active_) {
+            rsp_job = UPC_VIDEO_TMP_NAME;
+        }
+    }
+
+    if (kind == PrintCtrlKind::Resume && got && phase == GlavoPhase::Paused) {
+        return err(409, "JOB_NOT_PRINTING", "resume blocked (still paused)");
+    }
+    if (!got) {
+        return err(504, "GLAVO_TIMEOUT", "print control timed out");
+    }
+
+    const bool phase_ok =
+        (kind == PrintCtrlKind::Pause && phase == GlavoPhase::Paused) ||
+        (kind == PrintCtrlKind::Resume && phase == GlavoPhase::Printing) ||
+        (kind == PrintCtrlKind::Cancel && phase == GlavoPhase::Canceled);
+    if (!phase_ok) {
+        return err(500, "INTERNAL", "print control state mismatch");
+    }
+
+    HttpResponse rsp;
+    rsp.status = 200;
+    rsp.body = std::string("{\"job_id\":\"") + json_escape(rsp_job) +
+               "\",\"state\":\"" + ok_state + "\"}";
+    return rsp;
+}
+
 bool XfrService::preprocess_ovf_and_update_manifest(const std::string& ovf_path,
                                                     const std::string& ovf_name,
                                                     std::string* err_msg) const
@@ -1187,6 +1340,10 @@ void XfrService::on_print_ipc(const middleware::Message& msg)
                 glavo_phase_ = GlavoPhase::Printing;
             }
             print_session_active_ = true;
+            if (print_ctrl_wait_ == PrintCtrlWait::PauseOn ||
+                print_ctrl_wait_ == PrintCtrlWait::PauseOff) {
+                print_ctrl_got_ = true;
+            }
             break;
         }
         case middleware::MsgType::GLAVO_Print_State_Ntf: {
@@ -1222,6 +1379,9 @@ void XfrService::on_print_ipc(const middleware::Message& msg)
             glavo_phase_ = GlavoPhase::Canceled;
             print_session_active_ = false;
             glavo_error_.clear();
+            if (print_ctrl_wait_ == PrintCtrlWait::Canceled) {
+                print_ctrl_got_ = true;
+            }
             break;
         }
         case middleware::MsgType::APP_Print_Start_Rejected_Ntf: {
@@ -1244,11 +1404,17 @@ void XfrService::on_print_ipc(const middleware::Message& msg)
             if (p.aborted != 0) {
                 glavo_phase_ = GlavoPhase::Canceled;
                 print_session_active_ = false;
+                if (print_ctrl_wait_ == PrintCtrlWait::Canceled) {
+                    print_ctrl_got_ = true;
+                }
             }
             break;
         }
         default:
             break;
+    }
+    if (print_ctrl_got_) {
+        print_ctrl_cv_.notify_all();
     }
 }
 

@@ -33,6 +33,12 @@
 - `POST /print/start`：本期不代发起印（仍由板端 UI 点 Confirm）。回包 `state`
   只看 Glavo 打印态，**不**回传上传线内部的 `finished`（否则 Snowpath 会当成
   打印已结束，6.3 不再刷层高/进度/舱温）。已在打印中回 `409 PRINTER_BUSY`。
+- `POST /print/cancel` / `/print/pause` / `/print/resume`：body 仅 `job_id`
+  （与 6.3 相同：优先 `frames_dir`，打印中多为 `tmp`，也认 6.2 的 `j_*`）。
+  校验后向 Glavo 发与 UI 相同的 Terminate/Pause/Resume，等回包再 `200`。
+  `job_id` 对不上 `404 JOB_NOT_FOUND`；态不对 `409 JOB_NOT_PRINTING`；
+  3s 无回包 `504 GLAVO_TIMEOUT`。取消允许 `printing`/`paused`；暂停仅
+  `printing`；恢复仅 `paused`（氧未落下仍暂停则 `409`）。
 - `GET /print/history?year=&month=&day=`：按打印机本地日期返回当天 `job_ids`
   （= `/userdata/media/video/config.json` 的 `frames_dir`，升序）
 - `GET /print/{job_id}/timelapse/images`：分页返回该任务延时摄影 PNG URL 列表
