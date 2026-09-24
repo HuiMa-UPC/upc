@@ -13,11 +13,14 @@
 #include "ui_arc_spinner.hpp"
 #include "ui_xfr_dialog.hpp"
 #include "ui_device_state.hpp"
+#include "ui_clean_state.hpp"
 #include "ui_alarm_state.hpp"
-#include "print_flow_img.h"
+#include "popup_dialog_img.h"
+#include "powder_dialog_img.h"
 #include "home_metric_icons.h"
 
-#include "page_user_home.hpp"
+#include "page_user_monitor.hpp"
+#include "page_user_files.hpp"
 #include "page_manager.hpp"
 
 #include <cstdint>
@@ -25,17 +28,11 @@
 #include <cstdlib>
 #include <cstring>
 #include <deque>
-#include <filesystem>
 #include <memory>
 #include <string>
 #include <vector>
 
 namespace {
-
-enum class FileTab : uint8_t {
-    Local = 0,
-    Usb   = 1,
-};
 
 middleware::PrintFileSource file_tab_to_source(FileTab tab)
 {
@@ -87,17 +84,15 @@ void schedule_commit_print_result_history()
 }
 
 
-/* 门流程来源：区分同一套门弹窗（DOOR_OPENING→DOOR_CONFIRM）的入口与终态。
- *   PrintPrep      —— 打印前置流程，确认关门后进入选文件页；
- *   HomeStandalone —— 首页独立开门，确认关门后返回首页。 */
-/* 开门流程的来源：决定关门确认后往哪走，以及取消时退回哪一屏。
- * PrintCollect = 打印结果页滑动取件，取消要退回结果页而不是待机首页。 */
+/* 门流程来源：区分同一套门弹窗（DOOR_OPENING〔→TRANSFER_BOX〕）的入口与终态。
+ *   PrintPrep      —— 打印前置流程，开门成功后进入选文件页；
+ *   HomeStandalone —— 首页独立开门，开门成功后返回首页；
+ *   PrintCollect   —— 打印结果页滑动取件，取消要退回结果页而不是待机首页。 */
 enum class DoorFlowOrigin { PrintPrep, HomeStandalone, PrintCollect };
 DoorFlowOrigin g_door_origin = DoorFlowOrigin::PrintPrep;
 
-/* 转运盒流程总开关（调试页 Other → Print Gates → Transfer Box）。默认关：取件仍是
- * 「开门 → 确认关门」两步。打开后取件分支才插入 TRANSFER_BOX 三步，并把关门确认
- * 换成新稿样式。纯 UI 本地标志，不发消息也不落盘。 */
+/* 转运盒流程总开关（调试页 Other → Print Gates → Transfer Box）。默认关：取件开门成功即回 IDLE。
+ * 打开后取件分支才插入 TRANSFER_BOX 三步。纯 UI 本地标志，不发消息也不落盘。 */
 bool g_transfer_box_flow = false;
 
 /** 转运盒流程是否对当前这趟门流程生效（只认取件分支） */
@@ -106,33 +101,10 @@ bool transfer_box_flow_active(void)
     return g_transfer_box_flow && g_door_origin == DoorFlowOrigin::PrintCollect;
 }
 
-/* ---- 选择文件屏（设计稿 1.1.5）：底板 + 本机/USB 源 + 右侧详情面板 ---- */
-lv_obj_t *g_file_panel   = nullptr;   /**< 选择文件页根（PageManager 托管，常驻不销毁） */
-bool      g_files_page_active = false; /**< 选择文件页当前是否可见（PageManager on_enter/on_exit 维护） */
+/* 选择文件页的视图代码已拆到 page_user_files.cpp，这里只留数据与流程。
+ * 页面当前的选中/页签经 page_user_files_sel_index() / _source() 查询。 */
 const char *g_home_section_view = "user_home"; /**< 首页区当前视图："user_home" 或 "user_files" */
-lv_obj_t *g_file_grid    = nullptr;   /**< 文件行列表容器（源切换/响应时重建） */
-int       g_sel_index    = -1;
-FileTab   g_file_tab     = FileTab::Local;
 
-/* 本机/USB 滑动胶囊分段控件：轨道 + 滑动高亮块 + 两个文字 */
-lv_obj_t *g_seg_pill     = nullptr;   /**< 滑动高亮块（随选中左右移动） */
-lv_obj_t *g_seg_lbl_local = nullptr;
-lv_obj_t *g_seg_lbl_usb   = nullptr;
-
-/* 右侧详情面板：选中文件后填充 */
-lv_obj_t *g_detail_hint     = nullptr;  /**< 未选文件时的占位提示 */
-lv_obj_t *g_detail_body     = nullptr;  /**< 详情内容容器（选中后显示） */
-lv_obj_t *g_detail_name_lbl = nullptr;
-lv_obj_t *g_detail_time_lbl = nullptr;       /**< 本机：预估耗时 */
-lv_obj_t *g_detail_mat_lbl  = nullptr;       /**< 本机：预估耗材 */
-lv_obj_t *g_detail_size_lbl = nullptr;       /**< USB：文件大小 */
-lv_obj_t *g_detail_meta_local = nullptr;     /**< 本机详情 meta 行（耗时/耗材） */
-lv_obj_t *g_detail_meta_usb   = nullptr;     /**< USB 详情 meta 行（文件大小） */
-lv_obj_t *g_detail_secondary_btn = nullptr;  /**< 底部次按钮（本机=删除；USB 隐藏） */
-lv_obj_t *g_detail_secondary_lbl = nullptr;  /**< 次按钮文字 */
-lv_obj_t *g_detail_start_btn = nullptr;      /**< 底部主按钮（Confirm Print） */
-lv_obj_t *g_detail_preview_img = nullptr;    /**< 详情大缩略图 */
-lv_obj_t *g_detail_preview_icon = nullptr;   /**< 详情占位图标 */
 ui_modal_dialog_t *g_confirm_dlg = nullptr;
 ui_modal_dialog_t *g_prepare_dlg = nullptr;
 
@@ -169,8 +141,6 @@ DoneCb g_pm25_cb = nullptr;
 void  *g_pm25_u = nullptr;
 DoneCb g_open_cb = nullptr;
 void  *g_open_u = nullptr;
-DoneCb g_close_cb = nullptr;
-void  *g_close_u = nullptr;
 DoneCb g_purify_cb = nullptr;
 void  *g_purify_u = nullptr;
 DoneCb g_clean_cb = nullptr;
@@ -192,23 +162,8 @@ std::vector<control_file_t> g_files;
 /** USB Fs_DirOpen 请求队列：Glavo 按 FIFO 应答，弹出项须与当前 Tab 一致才刷新 UI */
 std::deque<FileTab> g_dir_open_pending;
 
-void rebuild_file_grid(void);
-void update_detail_panel(const control_file_t *file);
 void show_terminated_result_without_manifest(void);
-/* 定义在详情面板那一段，但文件列表行也要用（make_file_card 在其之前） */
-void make_detail_inline_kv(lv_obj_t *parent, const lv_image_dsc_t *icon,
-                           const char *caption,
-                           lv_color_t value_color, lv_obj_t **out_val,
-                           const lv_font_t *value_font = nullptr);
 
-bool thumb_path_exists(const char* path)
-{
-    if(!path || path[0] == '\0') {
-        return false;
-    }
-    std::error_code ec;
-    return std::filesystem::exists(path, ec) && !ec;
-}
 
 std::string lvgl_file_src_from_path(const char* path)
 {
@@ -224,31 +179,34 @@ std::string lvgl_file_src_from_path(const char* path)
     return std::string("A:/") + path;
 }
 
+/* 目录数据到达：换掉列表，并**按文件名**把选中项接回去。
+ * 按名字而不是按下标，是因为后端重排或增删之后同一个下标可能已经是别的文件了。 */
 void apply_files_list(const std::vector<control_file_t>& files)
 {
+    const int prev_sel = page_user_files_sel_index();
     char prev_name[64] = {0};
-    const bool had_sel = (g_sel_index >= 0 &&
-                          g_sel_index < static_cast<int>(g_files.size()));
+    const bool had_sel = (prev_sel >= 0 &&
+                          prev_sel < static_cast<int>(g_files.size()));
     if(had_sel) {
-        std::snprintf(prev_name, sizeof(prev_name), "%s", g_files[g_sel_index].name);
+        std::snprintf(prev_name, sizeof(prev_name), "%s", g_files[prev_sel].name);
     }
 
     g_files = files;
 
-    g_sel_index = -1;
+    int sel = -1;
     if(had_sel) {
         for(size_t i = 0; i < g_files.size(); i++) {
             if(std::strcmp(g_files[i].name, prev_name) == 0) {
-                g_sel_index = static_cast<int>(i);
+                sel = static_cast<int>(i);
                 g_active_file = g_files[i];
                 break;
             }
         }
     }
+    page_user_files_set_selection(sel);
 
-    if(g_files_page_active) {
-        rebuild_file_grid();
-        update_detail_panel(g_sel_index >= 0 ? &g_active_file : nullptr);
+    if(page_user_files_active()) {
+        page_user_files_rebuild();
     }
 }
 
@@ -299,12 +257,11 @@ void request_fs_dir_open(FileTab tab)
 void enter_state(control_state_t s);
 void refresh_supply_bars(void);
 void apply_supply(const middleware::SupplyStatusPayload &p);
-void highlight_file_rows(void);
 void close_confirm_dlg(void);
 void show_print_confirm_dialog(void);
 void open_user_confirm_dialog(lv_obj_t *parent, const char *title, const char *body,
                               const char *cancel_text, const char *confirm_text,
-                              lv_color_t confirm_color,
+                              lv_color_t confirm_color, bool light,
                               lv_event_cb_t cancel_cb, lv_event_cb_t confirm_cb);
 void close_prepare_dlg(void);
 void show_prepare_dlg(void);
@@ -312,9 +269,42 @@ void goto_file_selection(void);
 lv_obj_t *make_round_icon_btn(lv_obj_t *parent, const char *symbol, lv_event_cb_t cb);
 lv_obj_t *make_dlg_wide_button(lv_obj_t *parent, const char *text, bool enabled,
                                lv_event_cb_t cb);
+
+/* 放版弹窗 header 的返回键与关闭键。
+ *
+ * 稿 6382:48451 / 48694 上这两枚是**光秃的深墨字形**——SVG 里那两个 32×32 的圆角矩形
+ * 填的是 white，压在白卡上就是纯触摸目标、看不见。所以这里底透明、只留字形，按下时
+ * 才浮出一层 10% 深墨；先前那套「深灰实心圆 + 白字形」是深色档的，翻白卡后会变成白底
+ * 上突兀的两颗黑扣子。命中区仍是 USER_BACK_BTN_H 见方，比稿的 32 大，触摸更稳。
+ *
+ * 选文件页那枚返回钮已随页面搬到 page_user_files.cpp——新稿把它改成了 72 见方、
+ * 圆角 24 的浅色卡片，与这里不是同一个东西，故两边各留一份。 */
+lv_obj_t *make_round_icon_btn(lv_obj_t *parent, const char *symbol, lv_event_cb_t cb)
+{
+    lv_obj_t *btn = lv_button_create(parent);
+    lv_obj_remove_style_all(btn);
+    lv_obj_set_size(btn, USER_BACK_BTN_H, USER_BACK_BTN_H);
+    lv_obj_set_style_radius(btn, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_bg_color(btn, user_light_nav_on, 0);
+    lv_obj_set_style_bg_opa(btn, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_bg_opa(btn, LV_OPA_10, LV_STATE_PRESSED);
+    lv_obj_clear_flag(btn, LV_OBJ_FLAG_SCROLLABLE);
+    if(cb) {
+        lv_obj_add_event_cb(btn, cb, LV_EVENT_CLICKED, nullptr);
+    }
+    lv_obj_t *icon = lv_label_create(btn);
+    lv_label_set_text(icon, symbol);
+    lv_obj_set_style_text_color(icon, user_light_text, 0);
+    lv_obj_set_style_text_font(icon, user_font_text(), 0);
+    lv_obj_center(icon);
+    return btn;
+}
+
 void on_powder_low_async(void *user);
 void on_print_start_rejected_async(void *user);
+void on_outer_door_confirm_req_async(void *user);
 void close_powder_dlg(void);
+void close_outer_door_confirm_dlg(void);
 void stop_print_watchdogs(void);
 void start_print_peer_watch(void);
 void finish_printing(bool notify_complete);
@@ -455,6 +445,7 @@ void finish_printing(bool notify_complete)
     g_last_data_cache_rate = 0;
     /* 缺粉窗可能还开着（用户既没补粉也没取消，作业已被终止/跑完） */
     close_powder_dlg();
+    close_outer_door_confirm_dlg();
 
     if(notify_complete && g_job_done_cb) {
         DoneCb done_cb = g_job_done_cb;
@@ -600,20 +591,8 @@ void wire_msg_proxy()
             arm_door_open_retry_timer();
             return;
         }
-        if(cb) {
-            cb(u);
-        }
-    });
-
-    proxy.register_close_door_result([](const middleware::DoorResultPayload &p) {
-        DoneCb cb = g_close_cb;
-        void *u = g_close_u;
-        g_close_cb = nullptr;
-        g_close_u = nullptr;
-        if(!p.ok) {
-            /* 门未关：静默（由 DoorOpened 弹窗文案提示 + 轮询重试），不逐次弹 toast */
-            return;
-        }
+        /* 开门成功：乐观记下外门已开，Manual 内门/吹粉不必再等下一帧 env */
+        ui_device_state_set_outer_door_open(true);
         if(cb) {
             cb(u);
         }
@@ -645,7 +624,7 @@ void wire_msg_proxy()
             return;
         }
         g_dir_open_pending.pop_front();
-        if(g_file_tab != FileTab::Usb) {
+        if(page_user_files_source() != FileTab::Usb) {
             return;
         }
 
@@ -667,7 +646,7 @@ void wire_msg_proxy()
             return;
         }
         if(p.ok) {
-            if(g_file_tab == FileTab::Local) {
+            if(page_user_files_source() == FileTab::Local) {
                 request_fs_dir_open(FileTab::Local);
             }
             return;
@@ -730,6 +709,10 @@ void wire_msg_proxy()
         lv_async_call(on_print_start_rejected_async, nullptr);
     });
 
+    proxy.register_outer_door_confirm_req([]() {
+        lv_async_call(on_outer_door_confirm_req_async, nullptr);
+    });
+
     proxy.register_print_terminate_done([]() {
         const bool user_terminate = g_terminate_pending;
         if(user_terminate) {
@@ -762,7 +745,7 @@ void wire_msg_proxy()
         char msg[180];
         std::snprintf(msg, sizeof(msg), "File received: %s", p.file_name);
         ui_toast_show(msg, user_color_status_ok, 2200);
-        if(g_files_page_active && g_file_tab == FileTab::Local) {
+        if(page_user_files_active() && page_user_files_source() == FileTab::Local) {
             request_fs_dir_open(FileTab::Local);
         }
     });
@@ -791,8 +774,8 @@ void wire_msg_proxy()
         }
     });
 
-    proxy.register_usb_hotplug([](const middleware::UsbHotplugPayload& p) {
-        if(!g_files_page_active || g_file_tab != FileTab::Usb) {
+    proxy.add_usb_hotplug_listener([](const middleware::UsbHotplugPayload& p) {
+        if(!page_user_files_active() || page_user_files_source() != FileTab::Usb) {
             return;
         }
         g_dir_open_pending.clear();
@@ -810,8 +793,7 @@ void backend_reset_session()
 {
     g_pm25_high = false;
     g_purify_progress = 0;
-    g_file_tab = FileTab::Local;
-    g_sel_index = -1;
+    page_user_files_reset();
     close_xfr_recv_dlg();
     ui::UiMsgProxy::instance().send_supply_status();
 }
@@ -822,8 +804,6 @@ void backend_cancel_pending()
     g_pm25_u = nullptr;
     g_open_cb = nullptr;
     g_open_u = nullptr;
-    g_close_cb = nullptr;
-    g_close_u = nullptr;
     g_purify_cb = nullptr;
     g_purify_u = nullptr;
     g_clean_cb = nullptr;
@@ -863,13 +843,6 @@ void backend_start_open_door(DoneCb cb, void *u)
     ui::UiMsgProxy::instance().send_open_door();
 }
 
-void backend_start_close_door(DoneCb cb, void *u)
-{
-    g_close_cb = cb;
-    g_close_u = u;
-    ui::UiMsgProxy::instance().send_close_door_check();
-}
-
 size_t backend_file_count()
 {
     return active_files().size();
@@ -889,7 +862,7 @@ void backend_start_job(const control_file_t *file, ProgressCb prog_cb, DoneCb do
 
     const uint32_t file_index = file ? file->index : 0;
     ui::UiMsgProxy::instance().send_print_start(
-        file_index, file_tab_to_source(g_file_tab));
+        file_index, file_tab_to_source(page_user_files_source()));
 }
 
 void backend_terminate_job()
@@ -936,14 +909,14 @@ void close_current_dialog(void)
     }
     close_confirm_dlg();
     close_prepare_dlg();
-    /* 注意：选择文件页（g_file_panel 及其内部控件）现由 PageManager 托管、常驻不销毁，
+    /* 注意：选择文件页（见 page_user_files.cpp）现由 PageManager 托管、常驻不销毁，
      * 这里不再删除/清空其句柄。 */
 }
 
 /* ============================================================================
  *  打印前预确认弹窗（Figma 1.1.x）：
  *    - 宽入口弹窗（g_plate_*）：是否已放入打印版 → 已放入 / 未放入 子视图
- *    - 窄舱门弹窗（g_door_*） ：Opening → DoorOpened（监测）→ DoorClosed（用户确认）
+ *    - 窄舱门弹窗（g_door_*） ：Opening / Cleaning（PM2.5 超标时）；开门成功即收
  *  公共小部件：Mask required 徽标、缩放插画。
  * ============================================================================ */
 
@@ -951,19 +924,15 @@ void close_current_dialog(void)
 lv_obj_t *g_plate_content  = nullptr;   /**< 子视图内容容器（choose/inserted/notinserted 重建） */
 lv_obj_t *g_plate_back_btn = nullptr;   /**< 返回圆钮（choose 视图隐藏） */
 
-/* ---- 舱门弹窗：持久句柄（对齐 Figma 2566:5240/5306/5430：顶部满宽大图 + 内容列） ---- */
+/* ---- 舱门弹窗：持久句柄（对齐 Figma 6388:49816/49425/50202：顶部满宽大图 + 内容列） ---- */
 lv_obj_t         *g_door_img_box = nullptr;  /**< 顶部满宽图容器（切 variant 时换图） */
 lv_obj_t         *g_door_content = nullptr;  /**< 下方 padded 内容列（切 variant 时重建） */
 lv_obj_t         *g_door_title   = nullptr;
 lv_obj_t         *g_door_body    = nullptr;  /**< [D] 状态副行（PM2.5 净化提示） */
-lv_obj_t         *g_door_close_btn = nullptr;/**< Opening/Cleaning 右上角退出按钮 */
 ui_arc_spinner_t *g_door_spinner = nullptr;
-/* 门流程节奏：让 Opening / DoorOpened 两个中间态"看得见"——避免后端即时应答导致一闪而过。
- *   - Opening：最短停留后再前进；
- *   - DoorOpened：最短停留后开始"关门检测"轮询，检测到门已关才进 DoorClosed。 */
+/* 门流程节奏：让 Opening / Cleaning 中间态"看得见"——避免后端即时应答导致一闪而过。
+ *   - Opening / Cleaning：最短停留后再前进；开门成功即结束，不再等关门。 */
 constexpr uint32_t DOOR_OPENING_MIN_MS = 300u;    /**< "正在准备开门"最短显示 */
-constexpr uint32_t DOOR_OPENED_MIN_MS  = 300u;    /**< "门已开启(置灰)"最短显示后才开始检测 */
-constexpr uint32_t DOOR_CLOSE_POLL_MS  = 800u;    /**< 关门检测轮询间隔 */
 constexpr uint32_t CLEAN_MIN_MS        = 300u;    /**< "正在清粉中"最短显示 */
 constexpr uint32_t DOOR_OPEN_RETRY_MS  = 800u;    /**< 开门失败重试间隔 */
 /* 转运盒：装盒到位仍用 BOX_READY_MS 占位；转移完成等 APP_Transport_Result_Ntf（result=0），
@@ -973,50 +942,14 @@ constexpr uint32_t BOX_READY_MS        = 1500u;   /**< 「转运盒未到位」�
 constexpr int32_t DOOR_IMG_W = 496;
 constexpr int32_t DOOR_IMG_H = 321;
 lv_timer_t *g_door_advance_timer    = nullptr;    /**< Opening/Cleaning 最短停留到时→前进 */
-lv_timer_t *g_door_close_poll_timer = nullptr;    /**< DoorOpened 关门检测轮询 */
 lv_timer_t *g_door_open_retry_timer = nullptr;    /**< Opening 开门失败重试定时器 */
 uint32_t    g_door_opening_since     = 0;          /**< 进入 Opening 的 tick */
 uint32_t    g_clean_since            = 0;          /**< 进入 Cleaning 的 tick */
 bool        g_box_ready              = false;      /**< BoxInstall 的按钮是否已翻成可点 */
 
-/** 口罩提示徽标（Figma：深色半透明胶囊 + 红色"圆圈 i"图标 + 红字）。 */
-lv_obj_t *make_mask_badge(lv_obj_t *parent, const char *text)
-{
-    lv_obj_t *badge = lv_obj_create(parent);
-    lv_obj_remove_style_all(badge);
-    lv_obj_set_size(badge, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
-    lv_obj_set_style_bg_color(badge, lv_color_black(), 0);
-    lv_obj_set_style_bg_opa(badge, LV_OPA_50, 0);
-    lv_obj_set_style_radius(badge, LV_RADIUS_CIRCLE, 0);
-    lv_obj_set_style_pad_left(badge, USER_PAD_SM, 0);
-    lv_obj_set_style_pad_right(badge, USER_PAD, 0);
-    lv_obj_set_style_pad_ver(badge, USER_PAD_SM / 2, 0);
-    lv_obj_set_style_pad_column(badge, USER_PAD_SM, 0);
-    lv_obj_set_flex_flow(badge, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(badge, LV_FLEX_ALIGN_START,
-                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_clear_flag(badge, LV_OBJ_FLAG_SCROLLABLE);
-
-    /* 红色"圆圈 i"图标（A8 源 40×40，缩到 20，recolor 红） */
-    lv_obj_t *ibox = lv_obj_create(badge);
-    lv_obj_remove_style_all(ibox);
-    lv_obj_set_size(ibox, 20, 20);
-    lv_obj_set_style_bg_opa(ibox, LV_OPA_TRANSP, 0);
-    lv_obj_clear_flag(ibox, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_t *icon = lv_image_create(ibox);
-    lv_image_set_src(icon, &ic_info);
-    lv_obj_set_style_image_recolor(icon, user_color_status_err, 0);
-    lv_obj_set_style_image_recolor_opa(icon, LV_OPA_COVER, 0);
-    lv_image_set_pivot(icon, 20, 20);
-    lv_image_set_scale(icon, 256 * 20 / 40);
-    lv_obj_center(icon);
-
-    lv_obj_t *lbl = lv_label_create(badge);
-    lv_label_set_text(lbl, text);
-    lv_obj_set_style_text_color(lbl, user_color_status_err, 0);
-    lv_obj_set_style_text_font(lbl, user_font_caption(), 0);
-    return badge;
-}
+/* 口罩提示徽标（深色半透明胶囊 + 红色"圆圈 i"图标 + 红字）已随新稿删除。
+ * 门弹窗三态、转运盒三步、放版弹窗「未放入」原先各挂一枚，新稿一律没有它——
+ * 口罩要求改为写进标题下那行灰字说明。 */
 
 /** 插画缩放到显示宽 target_w 后的显示高（与 make_illustration 同一套整数取整，
  *  供需要"跟插图等高/底边对齐"的兄弟控件复用，避免两处算出差 1px 的高度）。 */
@@ -1107,46 +1040,98 @@ void on_plate_swipe_open(void * /*u*/)
     }
 }
 
-/* 单张大卡片（已放入/未放入）：左插画 + 右文字/操作列 */
-lv_obj_t *plate_make_single_card(const lv_image_dsc_t *img, int32_t img_w)
+/* ---- 放版弹窗的稿几何（6382:48451 / 48694 与 6388:48910，原生 1280×800）----
+ * 稿值（1280 档）：
+ *   卡 808｜内卡 760（左右各留 24）｜插图 320×272（距内卡左上各 24）
+ *   右列 360（插图右侧留 32，列右侧留 24）｜内卡圆角 16｜插图圆角 8
+ *
+ * **只有卡宽是查表的（USER_PLATE_DLG_W），插图与右列都按剩余空间现算。**
+ * 不按 808 的比例折算，是因为内距（USER_PAD / USER_PAD_LG）三档并非等比——1024 档的
+ * PAD_LG 反而比 1280 大，见 ui_theme.cpp 头部「间距梯度」。比例折算只在 1280 档对得上，
+ * 另两档会和 flex 实际分配的宽度差二十来像素，插图顶出卡片、滑块顶出列外。 */
+int32_t plate_dialog_width(void) { return USER_PLATE_DLG_W; }
+
+/**
+ * 卡内插图的显示宽（稿 320@808）。
+ *
+ * **按 choose 视图那张卡的可用内宽算，不按 808 的比例折算。** 两处的内距
+ * （`USER_PAD`）三档并非等比，比例折算只在 1280 档对得上：1024 档算出 255 而卡内
+ * 只有 246、1920 档算出 480 而卡内只有 466，插图会顶出卡片。choose 的卡宽由
+ * `flex_grow` 平分，所以这里照它的公式反推：
+ *   卡外宽 = (弹窗内宽 − 两卡间距) / 2，插图 = 卡外宽 − 卡内距×2
+ * 1280 档代入正好回到稿值 320。
+ */
+int32_t plate_img_w(void)
+{
+    const int32_t body_w    = USER_PLATE_DLG_W - USER_PAD * 2;   /* 弹窗内宽 */
+    const int32_t card_outer = (body_w - USER_PAD) / 2;          /* 两卡平分，间距 USER_PAD */
+    return card_outer - USER_PAD * 2;                            /* 扣掉卡自身内距 */
+}
+
+/**
+ * 单卡右侧文字/操作列的宽（稿 360@808）。
+ *
+ * 同样按剩余空间算：那一列在布局上是 `flex_grow(1)` 撑出来的，公式必须和 flex
+ * 实际分配的一致，否则滑块按它建出来会顶出列外。
+ */
+int32_t plate_right_col_w(void)
+{
+    /* 卡宽 − 弹窗内距×2 − 内卡内距×2 − 插图 − 图↔列间距 */
+    return USER_PLATE_DLG_W - USER_PAD * 4 - plate_img_w() - USER_PAD_LG;
+}
+/** 内卡圆角（稿 16@1280 = 浅色圆角的 2/3）；插图圆角是它的一半（稿 8）。 */
+int32_t plate_card_radius(void) { return USER_LIGHT_RADIUS * 2 / 3; }
+
+/** 内卡底：稿上三张分别是 10% / 5% / 4%，按多数派统一取 5%。 */
+void plate_style_inner_card(lv_obj_t *card)
+{
+    lv_obj_set_style_bg_color(card, user_light_nav_on, 0);
+    lv_obj_set_style_bg_opa(card, 13, 0);          /* 0.05 × 255 ≈ 13 */
+    lv_obj_set_style_radius(card, plate_card_radius(), 0);
+    lv_obj_set_style_border_width(card, 0, 0);
+}
+
+/** 插图 + 稿上那圈 8px 圆角。位图是不透明矩形，圆角靠容器裁而不是靠 alpha。 */
+lv_obj_t *plate_make_image(lv_obj_t *parent, const lv_image_dsc_t *img)
+{
+    lv_obj_t *box = make_illustration(parent, img, plate_img_w());
+    lv_obj_set_style_radius(box, plate_card_radius() / 2, 0);
+    lv_obj_set_style_clip_corner(box, true, 0);
+    return box;
+}
+
+/* 单张大卡片（已放入/未放入）：左插画 + 右文字/操作列。稿上内卡 760×320，
+ * 插图与右列都贴着 24 的内距，右列底边与插图底边齐（稿上按钮/滑块底边都落在 378）。 */
+lv_obj_t *plate_make_single_card(const lv_image_dsc_t *img)
 {
     lv_obj_t *card = lv_obj_create(g_plate_content);
     lv_obj_remove_style_all(card);
     lv_obj_set_width(card, LV_PCT(100));
     lv_obj_set_height(card, LV_SIZE_CONTENT);
-    lv_obj_set_style_bg_color(card, lv_color_black(), 0);
-    lv_obj_set_style_bg_opa(card, LV_OPA_20, 0);
-    lv_obj_set_style_radius(card, USER_DLG_RADIUS, 0);
-    lv_obj_set_style_border_width(card, 1, 0);
-    lv_obj_set_style_border_color(card, user_color_divider, 0);
-    lv_obj_set_style_pad_all(card, USER_DLG_PAD, 0);
-    lv_obj_set_style_pad_column(card, USER_PAD, 0);   /* 图↔文字间距收小，右列更宽 */
+    plate_style_inner_card(card);
+    lv_obj_set_style_pad_all(card, USER_PAD, 0);
+    lv_obj_set_style_pad_column(card, USER_PAD_LG, 0);   /* 稿：插图↔右列 32 */
     lv_obj_set_flex_flow(card, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(card, LV_FLEX_ALIGN_CENTER,
                           LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
 
-    make_illustration(card, img, img_w);
+    plate_make_image(card, img);
     return card;
 }
 
-/* choose 子视图：两张可点卡片（我已放入 / 还未放入） */
-lv_obj_t *plate_make_choice_card(const lv_image_dsc_t *img, int32_t img_w,
+/* choose 子视图：两张可点卡片（我已放入 / 还未放入）。稿上每张 368×369，
+ * 内含 320×272 的插图 + 下方一行标签，两张之间 24。 */
+lv_obj_t *plate_make_choice_card(const lv_image_dsc_t *img,
                                  const char *label, lv_event_cb_t cb)
 {
     lv_obj_t *card = lv_button_create(g_plate_content);
     lv_obj_remove_style_all(card);
     lv_obj_set_height(card, LV_SIZE_CONTENT);
     lv_obj_set_flex_grow(card, 1);
-    lv_obj_set_style_bg_color(card, lv_color_black(), 0);
-    lv_obj_set_style_bg_opa(card, LV_OPA_20, 0);
-    lv_obj_set_style_bg_opa(card, LV_OPA_40, LV_STATE_PRESSED);
-    lv_obj_set_style_radius(card, USER_DLG_RADIUS, 0);
-    lv_obj_set_style_border_width(card, 1, 0);
-    lv_obj_set_style_border_color(card, user_color_divider, 0);
-    lv_obj_set_style_border_color(card, user_color_accent, LV_STATE_PRESSED);
-    /* 压缩图片与边框空隙：内边距收到 SM，图↔文字用普通间距 */
-    lv_obj_set_style_pad_all(card, USER_PAD_SM, 0);
+    plate_style_inner_card(card);
+    lv_obj_set_style_bg_opa(card, LV_OPA_20, LV_STATE_PRESSED);
+    lv_obj_set_style_pad_all(card, USER_PAD, 0);
     lv_obj_set_style_pad_row(card, USER_PAD, 0);
     lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(card, LV_FLEX_ALIGN_CENTER,
@@ -1154,21 +1139,13 @@ lv_obj_t *plate_make_choice_card(const lv_image_dsc_t *img, int32_t img_w,
     lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_event_cb(card, cb, LV_EVENT_CLICKED, nullptr);
 
-    make_illustration(card, img, img_w);
+    plate_make_image(card, img);
 
     lv_obj_t *lbl = lv_label_create(card);
     lv_label_set_text(lbl, label);
-    lv_obj_set_style_text_color(lbl, user_color_text, 0);
-    lv_obj_set_style_text_font(lbl, user_font_text(), 0);
+    lv_obj_set_style_text_color(lbl, user_light_text, 0);
+    lv_obj_set_style_text_font(lbl, user_font_dlg_btn(), 0);
     return card;
-}
-
-/* 宽入口弹窗宽度：占屏 78%（需容下未放入分支右侧的滑动开门条）。
- * show_plate_prompt 与 plate_show_choose 共用，保证卡片铺图计算一致。 */
-int32_t plate_dialog_width(void)
-{
-    const int32_t disp_w = lv_display_get_horizontal_resolution(nullptr);
-    return disp_w > 0 ? disp_w * 78 / 100 : USER_DLG_W * 2;
 }
 
 void plate_show_choose(void)
@@ -1181,20 +1158,12 @@ void plate_show_choose(void)
     }
     lv_obj_clean(g_plate_content);
     lv_obj_set_flex_flow(g_plate_content, LV_FLEX_FLOW_ROW);
-    lv_obj_set_style_pad_column(g_plate_content, USER_DLG_PAD, 0);
+    lv_obj_set_style_pad_column(g_plate_content, USER_PAD, 0);   /* 稿：两卡间距 24 */
     lv_obj_set_style_pad_row(g_plate_content, 0, 0);
 
-    /* 让插图铺满卡片内宽（仅留极小边距）：
-     * 每卡外宽 = (对话内宽 - 卡间距) / 2；插图宽 = 外宽 - 卡内边距×2 - 少量安全余量。 */
-    const int32_t wide_w = plate_dialog_width();
-    const int32_t card_outer = (wide_w - USER_DLG_PAD * 2 - USER_DLG_PAD) / 2;
-    int32_t img_w = card_outer - USER_PAD_SM * 2 - 4;
-    if(img_w < 120) {
-        img_w = 120;
-    }
-    plate_make_choice_card(&img_plate_single, img_w, "Plate Loaded",
+    plate_make_choice_card(&img_plate_loaded, "Plate Loaded",
                            on_plate_pick_inserted);
-    plate_make_choice_card(&img_plate_double, img_w, "Not Loaded Yet",
+    plate_make_choice_card(&img_plate_empty, "Not Loaded Yet",
                            on_plate_pick_notinserted);
 }
 
@@ -1226,37 +1195,37 @@ void plate_show_inserted(void)
     lv_obj_set_flex_flow(g_plate_content, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_style_pad_column(g_plate_content, 0, 0);
 
-    lv_obj_t *card = plate_make_single_card(&img_plate_single, USER_HOME_DEVICE_W);
+    lv_obj_t *card = plate_make_single_card(&img_plate_loaded);
     lv_obj_t *col = plate_make_text_col(card);
 
-    /* 稿 3859:10053：右列与插图等高，文字贴顶、按钮贴底。这里给显式像素高而不是
-     * LV_PCT(100)——卡片高是 LV_SIZE_CONTENT、由插图撑出来的，子对象再按百分比取父高
-     * 会形成循环依赖。列与插图等高且同在卡片内居中，按钮底边即与插图底边齐平。 */
-    lv_obj_set_height(col, illustration_height(&img_plate_single, USER_HOME_DEVICE_W));
+    /* 稿 6382:48694：右列与插图等高，文字贴顶、按钮贴底（稿上按钮与插图底边都落在
+     * y=378）。这里给显式像素高而不是 LV_PCT(100)——卡片高是 LV_SIZE_CONTENT、由插图
+     * 撑出来的，子对象再按百分比取父高会形成循环依赖。
+     * 宽度不用给：plate_make_text_col() 的 flex_grow(1) 会把剩余横向空间全吃掉。 */
+    lv_obj_set_height(col, illustration_height(&img_plate_loaded, plate_img_w()));
 
     lv_obj_t *t = lv_label_create(col);
     lv_label_set_text(t, "Plate Loaded");
-    lv_obj_set_style_text_color(t, user_color_text, 0);
-    lv_obj_set_style_text_font(t, user_font_value(), 0);
+    lv_obj_set_style_text_color(t, user_light_text, 0);
+    lv_obj_set_style_text_font(t, user_font_dlg_title(), 0);
 
     lv_obj_t *s = lv_label_create(col);
     lv_label_set_text(s, "Tap the button below to choose a print file");
     lv_label_set_long_mode(s, LV_LABEL_LONG_MODE_WRAP);
     lv_obj_set_width(s, LV_PCT(100));
-    lv_obj_set_style_text_color(s, user_color_text_dim, 0);
-    lv_obj_set_style_text_font(s, user_font_caption(), 0);
+    lv_obj_set_style_text_color(s, user_light_text, 0);
+    lv_obj_set_style_text_opa(s, LV_OPA_50, 0);
+    lv_obj_set_style_text_font(s, user_font_text_sm(), 0);
 
-    /* 撑开，把按钮顶到列底（稿上按钮 y=208、底边齐列底 272）。
-     * 吃掉全部剩余空间后，plate_make_text_col 里的主轴 CENTER 也就不再起作用。 */
+    /* 撑开，把按钮顶到列底。吃掉全部剩余空间后，plate_make_text_col 里的主轴 CENTER
+     * 也就不再起作用。 */
     lv_obj_t *sp = lv_obj_create(col);
     lv_obj_remove_style_all(sp);
     lv_obj_set_width(sp, LV_PCT(100));
     lv_obj_set_flex_grow(sp, 1);
     lv_obj_set_style_bg_opa(sp, LV_OPA_TRANSP, 0);
 
-    /* 稿 3859:10057 是满列宽（360=右列全宽）的圆角矩形按钮；原先用 user_style_btn_primary
-     * 且没设宽，会退化成内容宽的全圆小胶囊，与稿差异明显。改用宽弹窗通用主按钮。
-     * 高度取 USER_DLG_FOOTER_BTN_H，现已按稿 64@1280 折算（1024 档 51）。 */
+    /* 稿 6382:48694 的按钮是 360×72、圆角 12，即满列宽。走宽弹窗通用主按钮。 */
     make_dlg_wide_button(col, "Select Print Job", true, on_plate_select_task);
 }
 
@@ -1272,54 +1241,57 @@ void plate_show_notinserted(void)
     lv_obj_set_flex_flow(g_plate_content, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_style_pad_column(g_plate_content, 0, 0);
 
-    lv_obj_t *card = plate_make_single_card(&img_plate_double, USER_HOME_DEVICE_W);
+    lv_obj_t *card = plate_make_single_card(&img_plate_empty);
     lv_obj_t *col = plate_make_text_col(card);
+
+    lv_obj_set_height(col, illustration_height(&img_plate_empty, plate_img_w()));
 
     lv_obj_t *t = lv_label_create(col);
     lv_label_set_text(t, "Not Loaded Yet");
-    lv_obj_set_style_text_color(t, user_color_text, 0);
-    lv_obj_set_style_text_font(t, user_font_value(), 0);
+    lv_obj_set_style_text_color(t, user_light_text, 0);
+    lv_obj_set_style_text_font(t, user_font_dlg_title(), 0);
 
+    /* 口罩要求并进这句灰字，稿上不再有单独的口罩徽标（同门弹窗那一族）。 */
     lv_obj_t *s = lv_label_create(col);
     lv_label_set_text(s, "Slide to open the door and load the plate. "
                          "Please wear a mask.");
     lv_label_set_long_mode(s, LV_LABEL_LONG_MODE_WRAP);
     lv_obj_set_width(s, LV_PCT(100));
-    lv_obj_set_style_text_color(s, user_color_text_dim, 0);
-    lv_obj_set_style_text_font(s, user_font_caption(), 0);
+    lv_obj_set_style_text_color(s, user_light_text, 0);
+    lv_obj_set_style_text_opa(s, LV_OPA_50, 0);
+    lv_obj_set_style_text_font(s, user_font_text_sm(), 0);
 
-    make_mask_badge(col, "Wear a mask before opening");
+    /* 同「已放入」：撑开把滑块顶到列底，稿上滑块底边与插图底边齐（都在 y=378）。 */
+    lv_obj_t *sp = lv_obj_create(col);
+    lv_obj_remove_style_all(sp);
+    lv_obj_set_width(sp, LV_PCT(100));
+    lv_obj_set_flex_grow(sp, 1);
+    lv_obj_set_style_bg_opa(sp, LV_OPA_TRANSP, 0);
 
-    /* 滑块加长到贴合右侧文字列右边缘：
-     * 列宽 = 对话内宽 - 插图宽 - 卡内边距×4 - 图文间距（-2 防溢出）。 */
-    int32_t slide_w = plate_dialog_width()
-                      - USER_DLG_PAD * 4 - USER_HOME_DEVICE_W - USER_PAD - 2;
-    if(slide_w < USER_SLIDE_W) {
-        slide_w = USER_SLIDE_W;
-    }
-
+    /* 稿 6388:48910 的滑块：轨道 360×94 贴满右列，旋钮 84 的圆角方块（rx20）上下内缩 5。
+     * 这三个数正是浅色档的 USER_HOME_SLIDE_H / USER_ACTION_BTN_SZ ——控件的 light 档本身
+     * 就是这套稿（深墨实底 user_light_nav_on、圆角 USER_LIGHT_RADIUS、无玻璃高光），
+     * 所以这里只要打开 light_theme，不需要再给 custom_accent。 */
     ui_slide_unlock_cfg_t slide_cfg = {};
-    slide_cfg.hint_text     = "SLIDE TO UNLOCK";   /* 箭头由控件绘制 3 个 chevron */
-    slide_cfg.on_unlocked   = on_plate_swipe_open;
-    slide_cfg.user_data     = nullptr;
-    slide_cfg.track_w       = slide_w;                         /* 贴合容器右边缘 */
-    slide_cfg.track_h       = USER_DOOR_SLIDE_H;               /* 与首页开门滑块一致（1280 档 80，圆头 64 内缩 8） */
-    slide_cfg.knob_sz       = USER_DOOR_SLIDE_KNOB;
-    slide_cfg.custom_accent = true;
-    slide_cfg.accent_color  = user_color_status_err;
-    ui_slide_unlock_t *slide = ui_slide_unlock_create(col, &slide_cfg);
-    lv_obj_t *sr = ui_slide_unlock_get_root(slide);
-    if(sr) {
-        lv_obj_set_style_margin_top(sr, USER_PAD, 0);
-    }
+    slide_cfg.hint_text    = "SLIDE TO UNLOCK";   /* 箭头由控件绘制 3 个 chevron */
+    slide_cfg.on_unlocked  = on_plate_swipe_open;
+    slide_cfg.user_data    = nullptr;
+    slide_cfg.track_w      = plate_right_col_w();
+    slide_cfg.track_h      = USER_HOME_SLIDE_H;
+    slide_cfg.knob_sz      = USER_ACTION_BTN_SZ;
+    slide_cfg.light_theme  = true;
+    slide_cfg.knob_icon    = ui_user_pick_icon(ic_door_panel_set,
+                                               USER_ACTION_BTN_SZ * 8 / 21);
+    ui_slide_unlock_create(col, &slide_cfg);
 }
 
-/* 宽入口弹窗：backdrop + 宽卡片 + 常驻 header（返回/标题/副标题/关闭）+ content */
+/* 宽入口弹窗：backdrop + 宽卡片 + 常驻 header（返回/标题/关闭）+ content。
+ * 稿 6382:48451（choose）/ 48694（已放入）/ 6388:48910（未放入），三视图共用本外壳。 */
 ui_modal_dialog_t *show_plate_prompt(lv_obj_t *parent)
 {
-    const int32_t wide_w = plate_dialog_width();
-
-    ui_modal_dialog_cfg_t cfg = ui_modal_dialog_cfg_user(nullptr, wide_w, false);
+    ui_modal_dialog_cfg_t cfg =
+        ui_modal_dialog_cfg_user(nullptr, plate_dialog_width(), false);
+    cfg.light_theme = true;
     ui_modal_dialog_t *dlg = ui_modal_dialog_open(parent, &cfg);
     if(!dlg) {
         return nullptr;
@@ -1332,7 +1304,7 @@ ui_modal_dialog_t *show_plate_prompt(lv_obj_t *parent)
         lv_obj_set_style_pad_row(dlg->body, USER_PAD_SM, 0);
     }
 
-    /* header 行：返回钮（choose 隐藏）+ 标题/副标题列（flex_grow）+ 关闭钮 */
+    /* header 行：返回钮（choose 隐藏）+ 标题列（flex_grow）+ 关闭钮 */
     lv_obj_t *header = lv_obj_create(dlg->body);
     lv_obj_remove_style_all(header);
     lv_obj_set_width(header, LV_PCT(100));
@@ -1358,8 +1330,8 @@ ui_modal_dialog_t *show_plate_prompt(lv_obj_t *parent)
 
     lv_obj_t *title = lv_label_create(tcol);
     lv_label_set_text(title, "Is Print Plate Inserted?");
-    lv_obj_set_style_text_color(title, user_color_text, 0);
-    lv_obj_set_style_text_font(title, user_font_value(), 0);
+    lv_obj_set_style_text_color(title, user_light_text, 0);
+    lv_obj_set_style_text_font(title, user_font_dlg_title(), 0);
 
     lv_obj_t *close = make_round_icon_btn(header, LV_SYMBOL_CLOSE, on_plate_close);
     (void)close;
@@ -1376,14 +1348,15 @@ ui_modal_dialog_t *show_plate_prompt(lv_obj_t *parent)
     return dlg;
 }
 
-/* -------------------------- 舱门弹窗（Figma 2566:5240/5306/5430） -------------------------- */
+/* -------------------------- 舱门弹窗（Figma 6388:49816/49425/50202） -------------------------- */
 
-/* Opening/Cleaning/DoorOpened/DoorClosed 为原有门三态；Box* 是取件分支插入的转运盒三步
- * （稿 3171:7305 / 3225:10476 / 3225:13586），共用同一个门弹窗骨架，只换顶图与内容列。 */
-enum class DoorVariant { Opening, Cleaning, DoorOpened, DoorClosed,
+/* Opening/Cleaning 是开门两态（Cleaning 无稿，与 Opening 同形只换标题）；
+ * Box* 是取件分支插入的转运盒三步（稿 6357:39444 / 39504 / 39470），共用同一个门弹窗骨架，
+ * 只换顶图与内容列。开门成功即收 overlay，不再有 DoorOpened/关门等待。 */
+enum class DoorVariant { Opening, Cleaning,
                          BoxInstall, BoxMoving, BoxShutter };
 
-void on_door_closed_confirm_btn(lv_event_t *e);
+void finish_after_door_open(void);
 void on_door_opening_cancel(lv_event_t *e);
 void on_box_install_confirm(lv_event_t *e);
 void on_box_shutter_done(lv_event_t *e);
@@ -1391,11 +1364,20 @@ void door_apply_variant(DoorVariant v);
 void on_transport_result(uint8_t result);
 void pf_start_open_door(void);
 
-/* 满宽圆角矩形主按钮（宽弹窗底部：门弹窗的确认钮、放版弹窗"已放入"的选择任务钮）。
- * 视觉与选文件页详情面板的 Confirm Print 对齐：满列宽、高 USER_DLG_FOOTER_BTN_H、
- * 圆角 USER_BTN_RADIUS、accent 实心 + 24px accent 外发光。原先用的是更圆的
- * USER_DLG_RADIUS（1024 档 16 对 6），在 51px 高的按钮上跟选文件页差得很明显。
- * enabled=false → 透明度 30、去掉外发光且不可点。 */
+/* 满宽圆角矩形主按钮（宽弹窗底部：门弹窗的确认钮、放版弹窗"已放入"的选择任务钮、
+ * 三张粉料弹窗的主按钮）。满列宽、高 USER_DLG_FOOTER_BTN_H。
+ *
+ * 圆角取 `USER_LIGHT_RADIUS / 2`（三档 18/12/9）而不是 USER_BTN_RADIUS（三档 12/8/6）：
+ * 新稿上这批按钮是 `rx=12`@1280，而 USER_BTN_RADIUS 在该档是 8。半个浅色圆角正好是
+ * 稿值，也是工程里既有的「1280 档的 12」写法（同设置页面板条目）。
+ *
+ * **配色走新稿的深墨实色，不再是 accent 蓝 + 外发光**：新弹窗稿（6357/6382/6388 一族）
+ * 里所有主按钮都是 #333145 平涂、无光晕，压在白卡上。三张粉料弹窗共用本函数，会跟着
+ * 一起变——它们本来就是白卡，蓝按钮反倒是那一族里唯一的深色档残留。
+ *
+ * enabled=false → 整枚（含文字）opa 30 且不可点。稿上置灰态是给整组加 `opacity 0.3`
+ * （见 image15 的 `<g opacity="0.3">`），文字跟着一起淡；先前只淡背景、白字仍是满
+ * 不透明，压在淡底上比可点态还扎眼。 */
 lv_obj_t *make_dlg_wide_button(lv_obj_t *parent, const char *text, bool enabled,
                                lv_event_cb_t cb)
 {
@@ -1403,16 +1385,14 @@ lv_obj_t *make_dlg_wide_button(lv_obj_t *parent, const char *text, bool enabled,
     lv_obj_remove_style_all(btn);
     lv_obj_set_width(btn, LV_PCT(100));
     lv_obj_set_height(btn, USER_DLG_FOOTER_BTN_H);
-    lv_obj_set_style_radius(btn, USER_BTN_RADIUS, 0);
-    lv_obj_set_style_bg_color(btn, user_color_accent, 0);
-    lv_obj_set_style_bg_opa(btn, enabled ? LV_OPA_COVER : LV_OPA_30, 0);
+    lv_obj_set_style_radius(btn, USER_LIGHT_RADIUS / 2, 0);
+    lv_obj_set_style_bg_color(btn, user_light_nav_on, 0);
+    lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, 0);
     lv_obj_set_style_bg_opa(btn, LV_OPA_80, LV_STATE_PRESSED);
-    /* 主按钮的 accent 外发光。按钮是满宽的，左右两侧的光会被弹窗内容区裁平，
-     * 只有上下能看见——与选文件页 Confirm Print 现在的观感一致。 */
-    lv_obj_set_style_shadow_width(btn, 24, 0);
-    lv_obj_set_style_shadow_color(btn, user_color_accent, 0);
-    lv_obj_set_style_shadow_opa(btn, enabled ? LV_OPA_30 : LV_OPA_TRANSP, 0);
     lv_obj_clear_flag(btn, LV_OBJ_FLAG_SCROLLABLE);
+    if(!enabled) {
+        lv_obj_set_style_opa(btn, LV_OPA_30, 0);
+    }
     if(enabled && cb) {
         lv_obj_add_event_cb(btn, cb, LV_EVENT_CLICKED, nullptr);
     } else {
@@ -1421,16 +1401,16 @@ lv_obj_t *make_dlg_wide_button(lv_obj_t *parent, const char *text, bool enabled,
     }
     lv_obj_t *bl = lv_label_create(btn);
     lv_label_set_text(bl, text);
-    lv_obj_set_style_text_color(bl, user_color_text, 0);
-    lv_obj_set_style_text_font(bl, user_font_text(), 0);
+    lv_obj_set_style_text_color(bl, lv_color_white(), 0);
+    lv_obj_set_style_text_font(bl, user_font_dlg_btn(), 0);
     lv_obj_center(bl);
     return btn;
 }
 
 /* 顶图：把源图等比铺满 g_door_img_box（宽 = 卡片宽）。
- * 取两轴放大倍数的较大者并向上取整：绝大多数顶图就是 DOOR_IMG_W×DOOR_IMG_H，两轴同倍数；
- * 唯有 img_mask 是 496×320（矮 1px），按宽定倍会在底边漏出一条容器底色，故按高补齐，
- * 多出的横向零点几像素由父容器裁掉。 */
+ * 取两轴放大倍数的较大者并向上取整：五张顶图都是 DOOR_IMG_W×DOOR_IMG_H（生成器统一
+ * 铺成这个尺寸），两轴同倍数，取较大者是为了容下将来尺寸不齐的图——按宽定倍会在矮
+ * 一两像素的图底边漏出一条容器底色，按高补齐则只是横向多出零点几像素、由父容器裁掉。 */
 void door_set_image(const lv_image_dsc_t *img)
 {
     if(!g_door_img_box) {
@@ -1465,34 +1445,31 @@ ui_modal_dialog_t *show_door_dialog(lv_obj_t *parent, DoorVariant variant)
     g_door_content = nullptr;
     g_door_title   = nullptr;
     g_door_body    = nullptr;
-    g_door_close_btn = nullptr;
     g_door_spinner = nullptr;
 
-    /* 背景遮罩（吞点击，防穿透底层首页） */
+    /* 背景遮罩（吞点击，防穿透底层首页）。浅色档同 ui_modal_dialog：深墨 28% 而非黑 70%。 */
     lv_obj_t *backdrop = lv_obj_create(parent);
     lv_obj_remove_style_all(backdrop);
     lv_obj_set_size(backdrop, LV_PCT(100), LV_PCT(100));
-    lv_obj_set_style_bg_color(backdrop, lv_color_black(), 0);
-    lv_obj_set_style_bg_opa(backdrop, USER_DLG_BACKDROP_OPA, 0);
+    lv_obj_set_style_bg_color(backdrop, user_light_text, 0);
+    lv_obj_set_style_bg_opa(backdrop, USER_LIGHT_BACKDROP_OPA, 0);
     lv_obj_clear_flag(backdrop, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_flag(backdrop, LV_OBJ_FLAG_CLICKABLE);
     dlg->root = backdrop;
 
-    /* 卡片：无内边距（顶图满宽），overflow 裁剪保证上圆角 */
+    /* 卡片：白底、无内边距（顶图满宽出血），overflow 裁剪保证上圆角。
+     * 圆角走浅色档的 24（稿值），不再是深色档的 USER_DLG_RADIUS。 */
     const int32_t card_w = USER_DLG_W;
     lv_obj_t *card = lv_obj_create(backdrop);
     lv_obj_remove_style_all(card);
     lv_obj_set_width(card, card_w);
     lv_obj_set_height(card, LV_SIZE_CONTENT);
-    lv_obj_set_style_bg_color(card, user_color_panel, 0);
+    lv_obj_set_style_bg_color(card, user_light_card, 0);
     lv_obj_set_style_bg_opa(card, LV_OPA_COVER, 0);
-    lv_obj_set_style_radius(card, USER_DLG_RADIUS, 0);
-    lv_obj_set_style_border_width(card, 1, 0);
-    lv_obj_set_style_border_color(card, user_color_divider, 0);
+    lv_obj_set_style_radius(card, USER_LIGHT_RADIUS, 0);
+    lv_obj_set_style_border_width(card, 0, 0);
     lv_obj_set_style_clip_corner(card, true, 0);
-    lv_obj_set_style_shadow_width(card, 60, 0);
-    lv_obj_set_style_shadow_color(card, lv_color_black(), 0);
-    lv_obj_set_style_shadow_opa(card, LV_OPA_60, 0);
+    lv_obj_set_style_shadow_width(card, 0, 0);
     lv_obj_set_style_pad_all(card, 0, 0);
     lv_obj_set_style_pad_row(card, 0, 0);
     lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
@@ -1502,34 +1479,30 @@ ui_modal_dialog_t *show_door_dialog(lv_obj_t *parent, DoorVariant variant)
     lv_obj_center(card);
     dlg->card = card;
 
-    /* 顶部满宽图容器（高 = 宽 × 321/496，齐卡片左右上边缘，圆角随卡片裁剪） */
+    /* 顶部满宽图容器（高 = 宽 × 321/496，齐卡片左右上边缘，圆角随卡片裁剪）。
+     * 底色给白：五张顶图都是不透明满幅照片，这层只在换图的一帧里露出来。 */
     g_door_img_box = lv_obj_create(card);
     lv_obj_remove_style_all(g_door_img_box);
     lv_obj_set_size(g_door_img_box, card_w, card_w * DOOR_IMG_H / DOOR_IMG_W);
-    lv_obj_set_style_bg_color(g_door_img_box, lv_color_black(), 0);
-    lv_obj_set_style_bg_opa(g_door_img_box, LV_OPA_20, 0);
+    lv_obj_set_style_bg_color(g_door_img_box, user_light_card, 0);
+    lv_obj_set_style_bg_opa(g_door_img_box, LV_OPA_COVER, 0);
     lv_obj_clear_flag(g_door_img_box, LV_OBJ_FLAG_SCROLLABLE);
 
-    /* 下方 padded 内容列（标题/徽标/副标题/按钮由 variant 重建） */
+    /* 下方 padded 内容列（标题/副标题/按钮由 variant 重建） */
     g_door_content = lv_obj_create(card);
     lv_obj_remove_style_all(g_door_content);
     lv_obj_set_width(g_door_content, LV_PCT(100));
     lv_obj_set_height(g_door_content, LV_SIZE_CONTENT);
-    lv_obj_set_style_pad_all(g_door_content, USER_DLG_PAD, 0);
-    lv_obj_set_style_pad_row(g_door_content, USER_DLG_PAD, 0);
+    lv_obj_set_style_pad_all(g_door_content, USER_PAD, 0);
+    lv_obj_set_style_pad_row(g_door_content, USER_PAD, 0);
     lv_obj_set_style_bg_opa(g_door_content, LV_OPA_TRANSP, 0);
     lv_obj_set_flex_flow(g_door_content, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(g_door_content, LV_FLEX_ALIGN_START,
                           LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_clear_flag(g_door_content, LV_OBJ_FLAG_SCROLLABLE);
 
-    /* 关闭按钮后创建并提到最前，避免被顶部图片容器遮挡。 */
-    g_door_close_btn = make_round_icon_btn(card, LV_SYMBOL_CLOSE, on_door_opening_cancel);
-    if(g_door_close_btn) {
-        lv_obj_add_flag(g_door_close_btn, LV_OBJ_FLAG_FLOATING);
-        lv_obj_align(g_door_close_btn, LV_ALIGN_TOP_RIGHT, -USER_DLG_PAD, USER_DLG_PAD);
-        lv_obj_move_foreground(g_door_close_btn);
-    }
+    /* 右上角那枚 X 没了：新稿把开门态的退出做成了内容列末行的满宽 Cancel；
+     * 转运盒三步本来就不给退出口。 */
 
     lv_obj_set_style_opa(backdrop, LV_OPA_TRANSP, 0);
     lv_obj_fade_in(backdrop, 180, 0);
@@ -1539,28 +1512,19 @@ ui_modal_dialog_t *show_door_dialog(lv_obj_t *parent, DoorVariant variant)
     return dlg;
 }
 
-/* 标题 + 徽标同组（gap SM），用于 DoorOpened / DoorClosed / Box*。返回 title 句柄。
- * 徽标文案分态：门三态是「Please wear a mask」，转运盒三步是「全程佩戴」，取件分支的
- * 关门确认是「开门期间持续佩戴」，故由调用方传入。 */
-lv_obj_t *door_make_title_group(lv_obj_t *parent, const char *badge_text)
+/* 弹窗标题（门三态 / 转运盒三步共用）。返回 title 句柄，文案由调用方 set_text。
+ *
+ * **新稿把口罩徽标整个去掉了**（6388:49816/49425/50202 与 6357 一族都没有它），
+ * 口罩要求并进了灰字说明行——「门已开启」那张写的是 "Wear a mask and load the print
+ * plate"。原先这里是「标题 + 徽标」成组、徽标文案分三种由调用方传入，现在退化成
+ * 一个标题标签，`make_mask_badge()` 在门这一族里已无调用方。 */
+lv_obj_t *door_make_title(lv_obj_t *parent)
 {
-    lv_obj_t *grp = lv_obj_create(parent);
-    lv_obj_remove_style_all(grp);
-    lv_obj_set_width(grp, LV_PCT(100));
-    lv_obj_set_height(grp, LV_SIZE_CONTENT);
-    lv_obj_set_flex_flow(grp, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_flex_align(grp, LV_FLEX_ALIGN_START,
-                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_row(grp, USER_PAD_SM, 0);
-    lv_obj_set_style_bg_opa(grp, LV_OPA_TRANSP, 0);
-    lv_obj_clear_flag(grp, LV_OBJ_FLAG_SCROLLABLE);
-
-    lv_obj_t *title = lv_label_create(grp);
-    lv_obj_set_style_text_color(title, user_color_text, 0);
-    lv_obj_set_style_text_font(title, user_font_value(), 0);
+    lv_obj_t *title = lv_label_create(parent);
+    lv_obj_set_width(title, LV_PCT(100));
+    lv_obj_set_style_text_color(title, user_light_text, 0);
+    lv_obj_set_style_text_font(title, user_font_dlg_title(), 0);
     lv_obj_set_style_text_align(title, LV_TEXT_ALIGN_CENTER, 0);
-
-    make_mask_badge(grp, badge_text);
     return title;
 }
 
@@ -1578,20 +1542,23 @@ void door_make_spinner(lv_obj_t *parent)
     }
 }
 
-/* 标题下方的灰字说明行（居中换行）。 */
+/* 标题下方的灰字说明行（居中换行）。稿上是深墨压到 50%，不是另给一个灰色——
+ * 与三张粉料弹窗的副标题同一档。 */
 lv_obj_t *door_make_sub_label(lv_obj_t *parent, const char *text)
 {
     lv_obj_t *sub = lv_label_create(parent);
     lv_label_set_long_mode(sub, LV_LABEL_LONG_MODE_WRAP);
     lv_obj_set_width(sub, LV_PCT(100));
-    lv_obj_set_style_text_color(sub, user_color_text_dim, 0);
-    lv_obj_set_style_text_font(sub, user_font_caption(), 0);
+    lv_obj_set_style_text_color(sub, user_light_text, 0);
+    lv_obj_set_style_text_opa(sub, LV_OPA_50, 0);
+    lv_obj_set_style_text_font(sub, user_font_text_sm(), 0);
     lv_obj_set_style_text_align(sub, LV_TEXT_ALIGN_CENTER, 0);
     lv_label_set_text(sub, text);
     return sub;
 }
 
-/* 切换舱门弹窗形态（Figma 三态 + 转运盒三步）：换顶图 + 重建内容列。 */
+/* 切换舱门弹窗形态（Opening/Cleaning + 转运盒三步）：
+ * 换顶图 + 重建内容列。骨架共用：满宽顶图 + 标题 +（灰字说明）+ 末行按钮或转圈。 */
 void door_apply_variant(DoorVariant v)
 {
     if(!g_door_img_box || !g_door_content) {
@@ -1604,105 +1571,59 @@ void door_apply_variant(DoorVariant v)
     lv_obj_clean(g_door_content);
     g_door_title = nullptr;
     g_door_body  = nullptr;
-    if(g_door_close_btn) {
-        if(v == DoorVariant::Opening || v == DoorVariant::Cleaning) {
-            lv_obj_clear_flag(g_door_close_btn, LV_OBJ_FLAG_HIDDEN);
-        } else {
-            lv_obj_add_flag(g_door_close_btn, LV_OBJ_FLAG_HIDDEN);
-        }
-    }
 
     if(v == DoorVariant::Opening || v == DoorVariant::Cleaning) {
-        door_set_image(&img_device_unlock);
+        door_set_image(&img_door_opening);
 
-        g_door_title = lv_label_create(g_door_content);
+        g_door_title = door_make_title(g_door_content);
         lv_label_set_text(g_door_title,
                           v == DoorVariant::Cleaning ? "Cleaning powder..."
                                                      : "Opening the door...");
-        lv_obj_set_style_text_color(g_door_title, user_color_text, 0);
-        lv_obj_set_style_text_font(g_door_title, user_font_value(), 0);
-        lv_obj_set_style_text_align(g_door_title, LV_TEXT_ALIGN_CENTER, 0);
-
-        make_mask_badge(g_door_content, "Please wear a mask");
 
         door_make_spinner(g_door_content);
 
-        /* 状态副行（PM2.5 净化提示；默认空） */
-        g_door_body = lv_label_create(g_door_content);
-        lv_label_set_text(g_door_body, "");
-        lv_obj_set_style_text_color(g_door_body, user_color_text_dim, 0);
-        lv_obj_set_style_text_font(g_door_body, user_font_caption(), 0);
-        lv_obj_set_style_text_align(g_door_body, LV_TEXT_ALIGN_CENTER, 0);
+        /* 状态副行（PM2.5 净化提示；默认空）。稿上这张只有标题+转圈+取消钮，没画这一行，
+         * 但它是取消净化时唯一的「正在停风扇」反馈（见 on_door_opening_cancel），留着；
+         * 空串时 label 不占高，无稿态下看不出差别。 */
+        g_door_body = door_make_sub_label(g_door_content, "");
+
+        /* 稿把右上角那枚 X 换成了满宽取消钮。语义不变，仍是 on_door_opening_cancel：
+         * 净化中先停风扇，取件分支退回结果页，其余回 IDLE。 */
+        make_dlg_wide_button(g_door_content, "Cancel", true, on_door_opening_cancel);
         return;
     }
 
-    /* 转运盒三步（稿 3171:7305 / 3225:10476 / 3225:13586）：与门确认态同骨架——
-     * 标题+徽标成组、灰字说明，末行是满宽按钮或转圈。 */
-    if(v == DoorVariant::BoxInstall || v == DoorVariant::BoxMoving ||
-       v == DoorVariant::BoxShutter) {
-        const char *kBoxBadge = "Wear a mask at all times";
-        if(v == DoorVariant::BoxInstall) {
-            door_set_image(&img_box_install);
-            g_door_title = door_make_title_group(g_door_content, kBoxBadge);
-            lv_label_set_text(g_door_title, "Install the transfer box");
-            door_make_sub_label(g_door_content,
-                                "Tap the button below once the box is in place");
-            /* 到位与否只改按钮：未到位置灰不可点。g_box_ready 由 BOX_READY_MS 占位定时器
-             * 翻起（后端出到位信号后改由轮询翻）。 */
-            make_dlg_wide_button(g_door_content,
-                                 g_box_ready ? "Transfer Box Ready"
-                                             : "Transfer Box Not Ready",
-                                 g_box_ready, on_box_install_confirm);
-        } else if(v == DoorVariant::BoxMoving) {
-            door_set_image(&img_box_moving);
-            g_door_title = door_make_title_group(g_door_content, kBoxBadge);
-            lv_label_set_text(g_door_title, "Transferring the part to the box");
-            door_make_sub_label(g_door_content,
-                                "Keep the transfer box attached until it finishes");
-            /* 稿上这步无按钮也无关闭钮：等 MCU 转运结果 result=0 才前进 */
-            door_make_spinner(g_door_content);
-        } else {
-            door_set_image(&img_box_shutter);
-            g_door_title = door_make_title_group(g_door_content, kBoxBadge);
-            lv_label_set_text(g_door_title, "Push the shutter in by hand");
-            door_make_sub_label(g_door_content,
-                                "Tap done once the shutter is pushed in");
-            /* 闸门到位无检测（稿上两版插图按钮都是可点的），用户自己点 */
-            make_dlg_wide_button(g_door_content, "Unlock and Remove the Box",
-                                 true, on_box_shutter_done);
-        }
-        return;
-    }
-
-    /* 取件分支（转运盒流程打开时）按新稿 4811:6178/6191 走：两态同标题、口罩文案强调
-     * 「开门期间持续佩戴」、没有灰字说明行，只有顶图和按钮随门是否关好切换。 */
-    if(transfer_box_flow_active()) {
-        door_set_image(v == DoorVariant::DoorOpened ? &img_mask : &img_door_close_hint);
-        g_door_title = door_make_title_group(g_door_content,
-                                             "Keep the mask on while the door is open");
-        lv_label_set_text(g_door_title, "Confirm the door is closed");
-        if(v == DoorVariant::DoorOpened) {
-            make_dlg_wide_button(g_door_content, "Door Not Closed", false, nullptr);
-        } else {
-            make_dlg_wide_button(g_door_content, "Door Closed", true,
-                                 on_door_closed_confirm_btn);
-        }
-        return;
-    }
-
-    /* DoorOpened / DoorClosed：标题+徽标成组 + 灰字副标题 + 满宽按钮 */
-    door_set_image(v == DoorVariant::DoorOpened ? &img_door_opened : &img_device_lock);
-
-    g_door_title = door_make_title_group(g_door_content, "Please wear a mask");
-
-    if(v == DoorVariant::DoorOpened) {
-        lv_label_set_text(g_door_title, "Door Opened");
-        door_make_sub_label(g_door_content, "Wear a mask and load the print plate");
-        make_dlg_wide_button(g_door_content, "Door Not Closed", false, nullptr);
+    /* 转运盒三步（稿 6357:39444 / 39504 / 39470）。
+     * 稿把原先的「装盒」与「抽隔断板」合并成了一步，两件事在同一张图上用四枚外向箭头
+     * 一起表达，所以这里只有三档而不是四档。 */
+    if(v == DoorVariant::BoxInstall) {
+        door_set_image(&img_box_install);
+        g_door_title = door_make_title(g_door_content);
+        lv_label_set_text(g_door_title, "Install the box and pull out the divider");
+        door_make_sub_label(g_door_content,
+                            "Tap the button below once the box is in place");
+        /* 到位与否只改按钮：未到位置灰不可点。g_box_ready 由 BOX_READY_MS 占位定时器
+         * 翻起（后端出到位信号后改由轮询翻）。 */
+        make_dlg_wide_button(g_door_content,
+                             g_box_ready ? "Done" : "Not Ready",
+                             g_box_ready, on_box_install_confirm);
+    } else if(v == DoorVariant::BoxMoving) {
+        door_set_image(&img_box_moving);
+        g_door_title = door_make_title(g_door_content);
+        lv_label_set_text(g_door_title, "Transferring the part to the box");
+        door_make_sub_label(g_door_content,
+                            "Do not detach the device during transfer");
+        /* 稿上这步无按钮也无关闭钮：等 MCU 转运结果 result=0 才前进 */
+        door_make_spinner(g_door_content);
     } else {
-        lv_label_set_text(g_door_title, "Confirm the door is closed");
-        door_make_sub_label(g_door_content, "Confirm to start selecting a job");
-        make_dlg_wide_button(g_door_content, "Door Closed", true, on_door_closed_confirm_btn);
+        door_set_image(&img_box_shutter);
+        g_door_title = door_make_title(g_door_content);
+        lv_label_set_text(g_door_title, "Push the shutter in by hand");
+        door_make_sub_label(g_door_content,
+                            "Tap done once the shutter is pushed in");
+        /* 闸门到位无检测（稿上两版插图按钮都是可点的），用户自己点 */
+        make_dlg_wide_button(g_door_content, "Unlock and Remove the Box",
+                             true, on_box_shutter_done);
     }
 }
 
@@ -1713,6 +1634,8 @@ void door_apply_variant(DoorVariant v)
  * 顶图在稿里也还是「粉舱安装示意」占位，等设计出图后按 door_set_image 那样接。 */
 ui_modal_dialog_t *g_powder_dlg = nullptr;
 lv_obj_t *g_powder_resume_btn = nullptr;
+/** 当前开着的是三档里的哪一张，决定「取消」的语义与主按钮是否受粉量门控。 */
+control_supply_dlg_t g_supply_kind = CONTROL_SUPPLY_DLG_POWDER_EMPTY;
 
 void on_powder_refilled(lv_event_t *e);
 void on_powder_cancel(lv_event_t *e);
@@ -1747,13 +1670,17 @@ void refresh_powder_resume_btn_state(void)
 
 void on_powder_state_update(const ui_device_snapshot_t * /*snap*/)
 {
-    if(g_powder_dlg) {
+    /* 只有缺粉那档的主按钮跟着粉量位走；两个满盒弹窗不受它影响，别把按钮灰掉。 */
+    if(g_powder_dlg && g_supply_kind == CONTROL_SUPPLY_DLG_POWDER_EMPTY) {
         refresh_powder_resume_btn_state();
     }
 }
 
-/* 满宽圆角副按钮：与 make_dlg_wide_button 同尺寸同圆角，4% 白底（稿「主按钮」那档）。
- * 4% 白是全工程次按钮的统一底色，与 ui_user_make_confirm_footer_btn(filled=false) 一致。 */
+/* 满宽圆角副按钮：与 make_dlg_wide_button 同尺寸同圆角，深墨 10% 底 + 深墨字。
+ *
+ * 唯一调用方是三张粉料弹窗的「Cancel」，而那三张是**白卡**。先前这里用的是全工程
+ * 深色档次按钮那套「4% 白底 + 白字」，压在白卡上底和字都看不见——整枚按钮是隐形的。
+ * 新稿的次按钮（6423:51893 的 Cancel）正是 `#333145 @10%` 底配同色字，改用它。 */
 lv_obj_t *make_dlg_wide_ghost_button(lv_obj_t *parent, const char *text,
                                      lv_event_cb_t cb)
 {
@@ -1761,18 +1688,18 @@ lv_obj_t *make_dlg_wide_ghost_button(lv_obj_t *parent, const char *text,
     lv_obj_remove_style_all(btn);
     lv_obj_set_width(btn, LV_PCT(100));
     lv_obj_set_height(btn, USER_DLG_FOOTER_BTN_H);
-    lv_obj_set_style_radius(btn, USER_BTN_RADIUS, 0);
-    lv_obj_set_style_bg_color(btn, user_color_text, 0);
-    lv_obj_set_style_bg_opa(btn, 10, 0);          /* 稿 rgba(255,255,255,0.04) */
-    lv_obj_set_style_bg_opa(btn, 30, LV_STATE_PRESSED);
+    lv_obj_set_style_radius(btn, USER_LIGHT_RADIUS / 2, 0);
+    lv_obj_set_style_bg_color(btn, user_light_nav_on, 0);
+    lv_obj_set_style_bg_opa(btn, LV_OPA_10, 0);   /* 稿 #333145 @10% */
+    lv_obj_set_style_bg_opa(btn, LV_OPA_20, LV_STATE_PRESSED);
     lv_obj_clear_flag(btn, LV_OBJ_FLAG_SCROLLABLE);
     if(cb) {
         lv_obj_add_event_cb(btn, cb, LV_EVENT_CLICKED, nullptr);
     }
     lv_obj_t *bl = lv_label_create(btn);
     lv_label_set_text(bl, text);
-    lv_obj_set_style_text_color(bl, user_color_text, 0);
-    lv_obj_set_style_text_font(bl, user_font_text(), 0);
+    lv_obj_set_style_text_color(bl, user_light_text, 0);
+    lv_obj_set_style_text_font(bl, user_font_dlg_btn(), 0);
     lv_obj_center(bl);
     return btn;
 }
@@ -1783,17 +1710,38 @@ void close_powder_dlg(void)
         ui_modal_dialog_close(g_powder_dlg);
         g_powder_dlg = nullptr;
         g_powder_resume_btn = nullptr;
+        g_supply_kind = CONTROL_SUPPLY_DLG_POWDER_EMPTY;
     }
 }
 
-/* 缺粉时后端已自行暂停，这里只负责提示与「补完了，继续」的入口。
- * 弹窗仅挂在打印预览区域内，不占用全局顶层：这样切到其它页面仍可互动。 */
-void show_powder_dialog(void)
+/* 三个粉料弹窗共用一张表。三态只差顶图与三句文案，骨架完全相同（稿
+ * 6345:31129 / 6343:30738 / 6343:30854 逐像素同构：496×632 白卡 + 496×321 满宽顶图
+ * + 标题 + 副标题 + 满宽主按钮 + 满宽副按钮）。 */
+struct SupplyDlgSpec {
+    const lv_image_dsc_t *img;
+    const char *title;
+    const char *body;
+    const char *primary;
+};
+const SupplyDlgSpec kSupplyDlgs[] = {
+    { &img_powder_empty,   "Powder bin is empty",
+      "Refill the powder bin to continue.",       "Refilled, resume printing" },
+    { &img_powder_recycle, "Recycled powder box is full",
+      "Empty the recycled powder box to continue.", "Replaced, resume printing" },
+    { &img_powder_waste,   "Waste powder box is full",
+      "Empty the waste powder box to continue.",  "Emptied, resume printing" },
+};
+
+/* 弹窗仅挂在打印预览区域内，不占用全局顶层：这样切到其它页面仍可互动。
+ *
+ * **配色走浅色档**（白卡 + 深色标题），与门弹窗那一族的深色骨架不同——这三张有新稿
+ * （白卡），门弹窗还没有。等门弹窗也改稿了再统一。 */
+void show_supply_dialog(control_supply_dlg_t kind)
 {
     if(g_powder_dlg) {
         return;
     }
-    lv_obj_t *parent = page_user_home_print_preview_parent();
+    lv_obj_t *parent = page_user_monitor_print_preview_parent();
     if(!parent) {
         return;
     }
@@ -1801,12 +1749,15 @@ void show_powder_dialog(void)
     if(!dlg) {
         return;
     }
+    const SupplyDlgSpec &spec = kSupplyDlgs[kind];
 
+    /* 遮罩同其余弹窗的浅色档：深墨 28%，不是黑 70%。卡片本来就是白的，遮罩先前还留着
+     * 深色档那档浓度，两者对不上。 */
     lv_obj_t *backdrop = lv_obj_create(parent);
     lv_obj_remove_style_all(backdrop);
     lv_obj_set_size(backdrop, LV_PCT(100), LV_PCT(100));
-    lv_obj_set_style_bg_color(backdrop, lv_color_black(), 0);
-    lv_obj_set_style_bg_opa(backdrop, USER_DLG_BACKDROP_OPA, 0);
+    lv_obj_set_style_bg_color(backdrop, user_light_text, 0);
+    lv_obj_set_style_bg_opa(backdrop, USER_LIGHT_BACKDROP_OPA, 0);
     lv_obj_clear_flag(backdrop, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_flag(backdrop, LV_OBJ_FLAG_CLICKABLE);
     dlg->root = backdrop;
@@ -1816,15 +1767,13 @@ void show_powder_dialog(void)
     lv_obj_remove_style_all(card);
     lv_obj_set_width(card, card_w);
     lv_obj_set_height(card, LV_SIZE_CONTENT);
-    lv_obj_set_style_bg_color(card, user_color_panel, 0);
+    lv_obj_set_style_bg_color(card, user_light_card, 0);
     lv_obj_set_style_bg_opa(card, LV_OPA_COVER, 0);
-    lv_obj_set_style_radius(card, USER_DLG_RADIUS, 0);
-    lv_obj_set_style_border_width(card, 1, 0);
-    lv_obj_set_style_border_color(card, user_color_divider, 0);
+    lv_obj_set_style_radius(card, USER_LIGHT_RADIUS, 0);   /* 稿 24 */
     lv_obj_set_style_clip_corner(card, true, 0);
     lv_obj_set_style_shadow_width(card, 60, 0);
     lv_obj_set_style_shadow_color(card, lv_color_black(), 0);
-    lv_obj_set_style_shadow_opa(card, LV_OPA_60, 0);
+    lv_obj_set_style_shadow_opa(card, LV_OPA_40, 0);
     lv_obj_set_style_pad_all(card, 0, 0);
     lv_obj_set_style_pad_row(card, 0, 0);
     lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
@@ -1834,19 +1783,25 @@ void show_powder_dialog(void)
     lv_obj_center(card);
     dlg->card = card;
 
-    /* 顶部满宽示意图位（高宽比同门弹窗的 321/496），暂用占位文案 */
+    /* 顶部满宽示意图（496×321，与门弹窗同框）。缩放沿用 door_set_image 那套
+     * 「取两轴倍数的较大者并向上取整」，源图就是稿的原生尺寸，1280 档正好 1:1。 */
     lv_obj_t *img_box = lv_obj_create(card);
     lv_obj_remove_style_all(img_box);
-    lv_obj_set_size(img_box, card_w, card_w * 321 / 496);
-    lv_obj_set_style_bg_color(img_box, lv_color_black(), 0);
-    lv_obj_set_style_bg_opa(img_box, LV_OPA_20, 0);
+    lv_obj_set_size(img_box, card_w, card_w * DOOR_IMG_H / DOOR_IMG_W);
+    lv_obj_set_style_bg_color(img_box, user_light_card, 0);
+    lv_obj_set_style_bg_opa(img_box, LV_OPA_COVER, 0);
     lv_obj_clear_flag(img_box, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_t *ph = lv_label_create(img_box);
-    lv_label_set_text(ph, "Powder bin refill guide");
-    lv_obj_set_style_text_color(ph, user_color_text, 0);
-    lv_obj_set_style_text_opa(ph, LV_OPA_30, 0);
-    lv_obj_set_style_text_font(ph, user_font_text(), 0);
-    lv_obj_center(ph);
+    lv_obj_t *im = lv_image_create(img_box);
+    lv_image_set_src(im, spec.img);
+    lv_image_set_pivot(im, 0, 0);
+    {
+        const int32_t bh = card_w * DOOR_IMG_H / DOOR_IMG_W;
+        const int32_t sx = (256 * card_w + DOOR_IMG_W - 1) / DOOR_IMG_W;
+        const int32_t sy = (256 * bh + DOOR_IMG_H - 1) / DOOR_IMG_H;
+        lv_image_set_scale(im, static_cast<uint32_t>(sx > sy ? sx : sy));
+    }
+    lv_obj_set_pos(im, 0, 0);
+    lv_obj_remove_flag(im, LV_OBJ_FLAG_CLICKABLE);
 
     lv_obj_t *content = lv_obj_create(card);
     lv_obj_remove_style_all(content);
@@ -1861,23 +1816,28 @@ void show_powder_dialog(void)
     lv_obj_clear_flag(content, LV_OBJ_FLAG_SCROLLABLE);
 
     lv_obj_t *title = lv_label_create(content);
-    lv_label_set_text(title, "Powder bin is empty");
-    lv_obj_set_style_text_color(title, user_color_text, 0);
-    lv_obj_set_style_text_font(title, user_font_value(), 0);
+    lv_label_set_text(title, spec.title);
+    lv_obj_set_style_text_color(title, user_light_text, 0);
+    lv_obj_set_style_text_font(title, user_font_dlg_title(), 0);
     lv_obj_set_style_text_align(title, LV_TEXT_ALIGN_CENTER, 0);
 
     lv_obj_t *sub = lv_label_create(content);
     lv_label_set_long_mode(sub, LV_LABEL_LONG_MODE_WRAP);
     lv_obj_set_width(sub, LV_PCT(100));
-    lv_label_set_text(sub, "Refill the powder bin to continue");
-    lv_obj_set_style_text_color(sub, user_color_text_dim, 0);
-    lv_obj_set_style_text_font(sub, user_font_caption(), 0);
+    lv_label_set_text(sub, spec.body);
+    lv_obj_set_style_text_color(sub, user_light_text, 0);
+    lv_obj_set_style_text_opa(sub, LV_OPA_50, 0);
+    lv_obj_set_style_text_font(sub, user_font_text_sm(), 0);
     lv_obj_set_style_text_align(sub, LV_TEXT_ALIGN_CENTER, 0);
 
-    g_powder_resume_btn = make_dlg_wide_button(content, "Refilled, resume printing", true,
+    g_powder_resume_btn = make_dlg_wide_button(content, spec.primary, true,
                                                on_powder_refilled);
     make_dlg_wide_ghost_button(content, "Cancel", on_powder_cancel);
-    refresh_powder_resume_btn_state();
+    g_supply_kind = kind;
+    /* 只有缺粉那档按实时粉量门控主按钮；两个满盒没有对应的传感器位，一律可点。 */
+    if(kind == CONTROL_SUPPLY_DLG_POWDER_EMPTY) {
+        refresh_powder_resume_btn_state();
+    }
 
     g_powder_dlg = dlg;
     lv_obj_set_style_opa(backdrop, LV_OPA_TRANSP, 0);
@@ -1885,13 +1845,22 @@ void show_powder_dialog(void)
     lv_obj_move_foreground(backdrop);
 }
 
-/* 「我已补粉，继续打印」：仅当实时粉量达到阈值（powder_bits>=1）才允许恢复。 */
+/* 缺粉时后端已自行暂停，这里只负责提示与「补完了，继续」的入口。 */
+void show_powder_dialog(void)
+{
+    show_supply_dialog(CONTROL_SUPPLY_DLG_POWDER_EMPTY);
+}
+
+/* 「我已补粉/替换/倾倒，继续打印」：缺粉那档要求实时粉量达到阈值（powder_bits>=1）
+ * 才放行；两个满盒没有对应的传感器位，只能信用户。 */
 void on_powder_refilled(lv_event_t * /*e*/)
 {
-    refresh_powder_resume_btn_state();
-    const ui_device_snapshot_t *snap = ui_device_state_get();
-    if(!snap || !powder_resume_ready(snap->powder_bits)) {
-        return;
+    if(g_supply_kind == CONTROL_SUPPLY_DLG_POWDER_EMPTY) {
+        refresh_powder_resume_btn_state();
+        const ui_device_snapshot_t *snap = ui_device_state_get();
+        if(!snap || !powder_resume_ready(snap->powder_bits)) {
+            return;
+        }
     }
     close_powder_dlg();
     /* 恢复请求发不出去时明确告知：作业仍停在后端的缺粉暂停态，需要重试，
@@ -1901,11 +1870,15 @@ void on_powder_refilled(lv_event_t * /*e*/)
     }
 }
 
-/* 「取消」只关窗并通知后端：本次打印忽略后续缺粉检测，保持当前暂停态。 */
+/* 「取消」只关窗、保持当前暂停态。缺粉那档另外通知后端「本次打印忽略后续缺粉检测」，
+ * 两个满盒没有对应的忽略指令（也还没有上报指令），所以只关窗。 */
 void on_powder_cancel(lv_event_t * /*e*/)
 {
+    const bool was_powder = (g_supply_kind == CONTROL_SUPPLY_DLG_POWDER_EMPTY);
     close_powder_dlg();
-    ui::UiMsgProxy::instance().send_print_powder_low_ignore();
+    if(was_powder) {
+        ui::UiMsgProxy::instance().send_print_powder_low_ignore();
+    }
 }
 
 /* Powder_Low 从总线线程来，建窗必须回到 LVGL 线程 */
@@ -1927,163 +1900,85 @@ void on_print_start_rejected_async(void * /*user*/)
     finish_printing(false);
 }
 
-/* 文件大小（字节）→ 人类可读字符串 */
-void format_file_size(char *buf, size_t n, uint32_t bytes)
+/* ---- 起印前外门确认（无超时；Confirm 再检门，Cancel 跳过外门检测） ---- */
+ui_modal_dialog_t *g_outer_door_confirm_dlg = nullptr;
+
+void close_outer_door_confirm_dlg(void)
 {
-    if(bytes >= 1024u * 1024u) {
-        std::snprintf(buf, n, "%.1f MB", (double)bytes / (1024.0 * 1024.0));
-    } else if(bytes >= 1024u) {
-        std::snprintf(buf, n, "%.1f KB", (double)bytes / 1024.0);
-    } else {
-        std::snprintf(buf, n, "%u B", bytes);
+    if(g_outer_door_confirm_dlg) {
+        ui_modal_dialog_close(g_outer_door_confirm_dlg);
+        g_outer_door_confirm_dlg = nullptr;
     }
 }
 
-/* 选中文件 → 填充右侧详情面板。
- * 本机：预估耗时/耗材 + 删除按钮（原样）；USB：仅文件大小，无次按钮。 */
-void update_detail_panel(const control_file_t *file)
+void on_outer_door_confirm_ok(lv_event_t * /*e*/)
 {
-    const bool has = (file != nullptr);
-    if(g_detail_hint) {
-        if(has) lv_obj_add_flag(g_detail_hint, LV_OBJ_FLAG_HIDDEN);
-        else    lv_obj_clear_flag(g_detail_hint, LV_OBJ_FLAG_HIDDEN);
-    }
-    if(g_detail_body) {
-        if(has) lv_obj_clear_flag(g_detail_body, LV_OBJ_FLAG_HIDDEN);
-        else    lv_obj_add_flag(g_detail_body, LV_OBJ_FLAG_HIDDEN);
-    }
-    if(!has) {
+    close_outer_door_confirm_dlg();
+    ui::UiMsgProxy::instance().send_outer_door_confirm(false);
+}
+
+void on_outer_door_confirm_cancel(lv_event_t * /*e*/)
+{
+    close_outer_door_confirm_dlg();
+    ui::UiMsgProxy::instance().send_outer_door_confirm(true);
+}
+
+void show_outer_door_confirm_dlg(void)
+{
+    if(g_outer_door_confirm_dlg) {
         return;
     }
-
-    const bool is_usb = (g_file_tab == FileTab::Usb);
-
-    if(g_detail_name_lbl) {
-        lv_label_set_text(g_detail_name_lbl, file->name);
-    }
-
-    if(g_detail_preview_img && g_detail_preview_icon) {
-        const bool show_real_thumb = !is_usb && thumb_path_exists(file->thumb_large);
-        if(show_real_thumb) {
-            lv_image_set_src(g_detail_preview_img, file->thumb_large_src);
-            lv_obj_clear_flag(g_detail_preview_img, LV_OBJ_FLAG_HIDDEN);
-            lv_obj_add_flag(g_detail_preview_icon, LV_OBJ_FLAG_HIDDEN);
-        } else {
-            lv_image_set_src(g_detail_preview_img, nullptr);
-            lv_obj_add_flag(g_detail_preview_img, LV_OBJ_FLAG_HIDDEN);
-            lv_obj_clear_flag(g_detail_preview_icon, LV_OBJ_FLAG_HIDDEN);
-        }
-    }
-
-    /* meta 行：本机显示耗时/耗材，USB 显示文件大小（互斥） */
-    if(g_detail_meta_local) {
-        if(is_usb) lv_obj_add_flag(g_detail_meta_local, LV_OBJ_FLAG_HIDDEN);
-        else       lv_obj_clear_flag(g_detail_meta_local, LV_OBJ_FLAG_HIDDEN);
-    }
-    if(g_detail_meta_usb) {
-        if(is_usb) lv_obj_clear_flag(g_detail_meta_usb, LV_OBJ_FLAG_HIDDEN);
-        else       lv_obj_add_flag(g_detail_meta_usb, LV_OBJ_FLAG_HIDDEN);
-    }
-    if(!is_usb) {
-        if(g_detail_time_lbl) {
-            char dur[32];
-            ui_user_format_duration_min(dur, sizeof(dur), file->duration_min);
-            lv_label_set_text(g_detail_time_lbl, dur);
-        }
-        if(g_detail_mat_lbl) {
-            lv_label_set_text_fmt(g_detail_mat_lbl, "%.1f g", (double)file->material_g);
-        }
-    } else if(g_detail_size_lbl) {
-        char sz[32];
-        format_file_size(sz, sizeof(sz), file->file_size);
-        lv_label_set_text(g_detail_size_lbl, sz);
-    }
-
-    /* 次按钮：仅本机显示“删除该文件”，USB 无次按钮 */
-    if(g_detail_secondary_btn) {
-        if(is_usb) lv_obj_add_flag(g_detail_secondary_btn, LV_OBJ_FLAG_HIDDEN);
-        else       lv_obj_clear_flag(g_detail_secondary_btn, LV_OBJ_FLAG_HIDDEN);
-    }
-    if(g_detail_secondary_lbl) {
-        lv_label_set_text(g_detail_secondary_lbl, "Delete File");
-    }
-}
-
-void on_file_card_click(lv_event_t *e)
-{
-    const size_t index =
-        static_cast<size_t>(reinterpret_cast<uintptr_t>(lv_event_get_user_data(e)));
-    const control_file_t *file = backend_get_file(index);
-    if(!file || !g_files_page_active) {
+    ui_modal_dialog_cfg_t cfg =
+        ui_modal_dialog_cfg_user("Close the outer door", USER_DLG_W, true);
+    /* 与弹窗新稿一族一致：白卡 + 深墨主按钮（不用 accent 蓝）。 */
+    cfg.light_theme = true;
+    cfg.with_close_btn = false;
+    g_outer_door_confirm_dlg = ui_modal_dialog_open(lv_layer_top(), &cfg);
+    if(!g_outer_door_confirm_dlg) {
         return;
     }
-    /* 再次点击已选中的文件 → 取消选中，回到空态 */
-    if(g_sel_index == static_cast<int>(index)) {
-        g_sel_index = -1;
-        update_detail_panel(nullptr);
-        highlight_file_rows();
-        return;
-    }
-    g_sel_index = static_cast<int>(index);
-    g_active_file = *file;
-    update_detail_panel(file);
-    highlight_file_rows();
-    /* 不再在选择时请求 file_info：详情用目录项数据即可，避免后端为预览而全量解析阻塞 */
+    lv_obj_t *sub = ui_user_make_body_label(
+        g_outer_door_confirm_dlg->body,
+        "Close the outer door fully, then confirm to continue print prep.");
+    lv_label_set_long_mode(sub, LV_LABEL_LONG_MODE_WRAP);
+    lv_obj_set_width(sub, LV_PCT(100));
+    lv_obj_set_style_text_align(sub, LV_TEXT_ALIGN_CENTER, 0);
+    /* Confirm 在上、Cancel 在下；列布局时关掉 flex_grow，避免按钮被拉高。 */
+    lv_obj_set_flex_flow(g_outer_door_confirm_dlg->footer, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_row(g_outer_door_confirm_dlg->footer, USER_PAD, 0);
+    lv_obj_set_flex_align(g_outer_door_confirm_dlg->footer, LV_FLEX_ALIGN_START,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_t *ok = ui_user_make_confirm_footer_btn(
+        g_outer_door_confirm_dlg->footer, "Confirm",
+        true, user_light_nav_on, true,
+        on_outer_door_confirm_ok, nullptr);
+    lv_obj_set_flex_grow(ok, 0);
+    lv_obj_set_width(ok, LV_PCT(100));
+    lv_obj_t *cancel = ui_user_make_confirm_footer_btn(
+        g_outer_door_confirm_dlg->footer, "Cancel",
+        false, user_light_nav_on, true,
+        on_outer_door_confirm_cancel, nullptr);
+    lv_obj_set_flex_grow(cancel, 0);
+    lv_obj_set_width(cancel, LV_PCT(100));
 }
 
-void on_file_select_cancel(lv_event_t * /*e*/)
+void on_outer_door_confirm_req_async(void * /*user*/)
 {
-    /* 选择文件页的返回键：首页区视图切回仪表盘 */
-    g_home_section_view = "user_home";
-    ui::PageManager::instance().switch_to("user_home");
+    if(g_state != CONTROL_STATE_PRINTING) {
+        return;
+    }
+    show_outer_door_confirm_dlg();
 }
+
+
+
+
 
 /* ---- 打印入口拦截：停机类报警未复位时 MCU 会拒绝新打印请求
  *      （名单见 ui_alarm_print_blocker()） ---- */
 
-void on_print_blocked_dismiss(lv_event_t * /*e*/)
-{
-    close_confirm_dlg();
-}
 
-/** 弹窗内直接下发复位；成败/在途由消息中心与结果页的三态钮体现 */
-void on_print_blocked_reset(lv_event_t * /*e*/)
-{
-    close_confirm_dlg();
-    const ui_alarm_entry_t *blk = ui_alarm_print_blocker();
-    if(blk) {
-        ui_alarm_request_reset(blk->code);
-    }
-}
 
-/* 详情面板「Start Print」→ Prepare → D1… */
-void on_detail_start_print(lv_event_t * /*e*/)
-{
-    if(!g_files_page_active || g_sel_index < 0) {
-        return;
-    }
-    /* 顺手请求一次快照：本地阻断状态可能已经过期（单条上报错过不补发），
-     * 拿旧状态拦下一次本可以开始的打印比较冤。请求是异步的，这次预检仍用当前
-     * 缓存判断——真有偏差，下次点击就纠正过来了。 */
-    ui_alarm_request_snapshot("print start");
-
-    /* 阻断报警预检：与其等 MCU 拒绝，进确认弹窗前就把原因亮出来。
-     * clear_mode=RESET 给「Reset」直达；其余（如断电重启）只能知会。 */
-    if(const ui_alarm_entry_t *blk = ui_alarm_print_blocker()) {
-        char body[256];
-        std::snprintf(body, sizeof(body), "%s\n%s", blk->title, blk->body);
-        /* 与消息页抽屉、结果页失败条同一判据（见 ui_alarm_reset_allowed） */
-        const bool resettable = ui_alarm_reset_allowed(blk);
-        open_user_confirm_dialog(lv_layer_top(), "Unable to start print", body,
-                                 "Cancel", resettable ? "Reset" : "OK",
-                                 ui_color_danger,
-                                 on_print_blocked_dismiss,
-                                 resettable ? on_print_blocked_reset
-                                            : on_print_blocked_dismiss);
-        return;
-    }
-    show_print_confirm_dialog();
-}
 
 void on_print_confirm_cancel(lv_event_t * /*e*/)
 {
@@ -2093,7 +1988,7 @@ void on_print_confirm_cancel(lv_event_t * /*e*/)
 void on_print_confirm_ok(lv_event_t * /*e*/)
 {
     close_confirm_dlg();
-    if(!g_files_page_active || g_sel_index < 0) {
+    if(!page_user_files_active() || page_user_files_sel_index() < 0) {
         return;
     }
     if(ui::DebugMsgProxy::instance().test_image_active() ||
@@ -2103,7 +1998,8 @@ void on_print_confirm_ok(lv_event_t * /*e*/)
     }
     enter_state(CONTROL_STATE_PREPARE_WAIT);
     ui::UiMsgProxy::instance().send_print_prepare(
-        static_cast<uint32_t>(g_sel_index), file_tab_to_source(g_file_tab));
+        static_cast<uint32_t>(page_user_files_sel_index()),
+        file_tab_to_source(page_user_files_source()));
 }
 
 void close_confirm_dlg(void)
@@ -2114,36 +2010,22 @@ void close_confirm_dlg(void)
     }
 }
 
-void on_delete_cancel(lv_event_t * /*e*/)
-{
-    close_confirm_dlg();
-}
 
-void on_delete_confirm(lv_event_t * /*e*/)
-{
-    close_confirm_dlg();
-    if(g_state != CONTROL_STATE_IDLE || g_sel_index < 0 || g_file_tab != FileTab::Local) {
-        return;
-    }
-    const uint32_t idx = static_cast<uint32_t>(g_sel_index);
-    ui::UiMsgProxy::instance().send_fs_delete_ntf(idx, middleware::PrintFileSource::Local);
-    g_sel_index = -1;
-    g_active_file = {};
-    update_detail_panel(nullptr);
-}
 
 /* 通用二次确认弹窗（用户层 ui_modal_dialog 风格）：取消(4% 白底) + 确认(填充色)。
  * 删除文件 / 终止打印共用，保证两处风格一致；页脚两枚按钮的样式已提到
  * ui_user_make_confirm_footer_btn()，与打印历史页的批量删除确认同源。 */
 void open_user_confirm_dialog(lv_obj_t *parent, const char *title, const char *body,
                               const char *cancel_text, const char *confirm_text,
-                              lv_color_t confirm_color,
+                              lv_color_t confirm_color, bool light,
                               lv_event_cb_t cancel_cb, lv_event_cb_t confirm_cb)
 {
     if(g_confirm_dlg || !parent) {
         return;
     }
     ui_modal_dialog_cfg_t cfg = ui_modal_dialog_cfg_user(title, USER_DLG_W, true);
+    /* 弹窗新稿落地后一律浅色；light 形参留给少数调用点显式选深色（目前已无）。 */
+    cfg.light_theme = light;
     g_confirm_dlg = ui_modal_dialog_open(parent, &cfg);
     if(!g_confirm_dlg) {
         return;
@@ -2154,44 +2036,32 @@ void open_user_confirm_dialog(lv_obj_t *parent, const char *title, const char *b
     lv_obj_set_width(body_lbl, LV_PCT(100));
     lv_obj_set_style_text_align(body_lbl, LV_TEXT_ALIGN_CENTER, 0);
 
+    /* **两枚钮的档位要跟着卡片走**：卡片翻白了而按钮还按深色档建的话，取消钮走的是
+     * 「白色压到 4%」那一支，压在白卡上完全看不见（实机上就只剩一枚确认钮）。 */
     ui_user_make_confirm_footer_btn(g_confirm_dlg->footer, cancel_text, false,
-                                    user_color_panel_alt, cancel_cb, nullptr);
+                                    user_color_panel_alt, light, cancel_cb, nullptr);
     ui_user_make_confirm_footer_btn(g_confirm_dlg->footer, confirm_text, true,
-                                    confirm_color, confirm_cb, nullptr);
+                                    confirm_color, light, confirm_cb, nullptr);
 }
 
-/* 删除二次确认弹窗（稿 2567:5555）：标题问句 + 一句不可撤销说明 + 取消/删除 */
-void show_delete_confirm(void)
-{
-    /* 文件页 IDLE 时 g_overlay 隐藏，须挂 top layer（同 control_terminate_request） */
-    open_user_confirm_dialog(lv_layer_top(), "Delete this file?",
-                             "This cannot be undone.",
-                             "Cancel", "Delete", ui_color_danger,
-                             on_delete_cancel, on_delete_confirm);
-}
 
-/* 开始打印确认弹窗的页脚按钮。
+/* 开始打印确认弹窗的页脚按钮。走共享工厂的**浅色档**：Cancel 是 `#333145 @10%` 底配
+ * 深墨字，Start Print 是 `#333145` 实心配白字。
  *
- * 原先是本地手搓的一套（圆角 USER_RADIUS、次按钮 panel_alt 实心），与其余确认弹窗
- * 不一致；现在直接复用共享工厂，只额外给主按钮补上 accent 外发光——删除/终止那几个
- * 确认弹窗的主按钮是红色危险色，不该发蓝光，所以发光留在这里而不是塞进共享工厂。 */
+ * 主按钮不用 accent 蓝也不发光：新弹窗稿一族（6357/6382/6388/6423）的主按钮一律是深墨
+ * 平涂，这里跟上。蓝色在本工程里留给 OTA 那几个确认弹窗，红色留给删除/终止。 */
 lv_obj_t *make_print_confirm_btn(lv_obj_t *parent, const char *text,
                                  bool primary, lv_event_cb_t cb)
 {
-    lv_obj_t *btn = ui_user_make_confirm_footer_btn(parent, text, primary,
-                                                    user_color_accent, cb, nullptr);
-    if(primary) {
-        lv_obj_set_style_shadow_width(btn, 24, 0);
-        lv_obj_set_style_shadow_color(btn, user_color_accent, 0);
-        lv_obj_set_style_shadow_opa(btn, LV_OPA_30, 0);
-    }
-    return btn;
+    return ui_user_make_confirm_footer_btn(parent, text, primary,
+                                           user_light_nav_on, true,
+                                           cb, nullptr);
 }
 
 /* 「开始打印」二次确认弹窗：标题 + 副标题（耗时/耗材）+ 取消/开始打印。 */
 void show_print_confirm_dialog(void)
 {
-    if(g_confirm_dlg || g_sel_index < 0) {
+    if(g_confirm_dlg || page_user_files_sel_index() < 0) {
         return;
     }
     auto *dlg = static_cast<ui_modal_dialog_t *>(std::calloc(1, sizeof(ui_modal_dialog_t)));
@@ -2203,26 +2073,25 @@ void show_print_confirm_dialog(void)
     lv_obj_t *backdrop = lv_obj_create(lv_layer_top());
     lv_obj_remove_style_all(backdrop);
     lv_obj_set_size(backdrop, LV_PCT(100), LV_PCT(100));
-    lv_obj_set_style_bg_color(backdrop, lv_color_black(), 0);
-    lv_obj_set_style_bg_opa(backdrop, USER_DLG_BACKDROP_OPA, 0);
+    lv_obj_set_style_bg_color(backdrop, user_light_text, 0);
+    lv_obj_set_style_bg_opa(backdrop, USER_LIGHT_BACKDROP_OPA, 0);
     lv_obj_clear_flag(backdrop, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_flag(backdrop, LV_OBJ_FLAG_CLICKABLE);
     dlg->root = backdrop;
 
+    /* 白卡 + 浅色圆角，与 ui_modal_dialog_open() 的 light 档同一套外壳。本弹窗自建
+     * 骨架而不走那个控件，是因为顶部那块满宽预览图做不出来（控件四周有内边距）。 */
     const int32_t card_w = USER_DLG_W;
     lv_obj_t *card = lv_obj_create(backdrop);
     lv_obj_remove_style_all(card);
     lv_obj_set_width(card, card_w);
     lv_obj_set_height(card, LV_SIZE_CONTENT);
-    lv_obj_set_style_bg_color(card, user_color_panel, 0);
+    lv_obj_set_style_bg_color(card, user_light_card, 0);
     lv_obj_set_style_bg_opa(card, LV_OPA_COVER, 0);
-    lv_obj_set_style_radius(card, USER_DLG_RADIUS, 0);
-    lv_obj_set_style_border_width(card, 1, 0);
-    lv_obj_set_style_border_color(card, user_color_divider, 0);
+    lv_obj_set_style_radius(card, USER_LIGHT_RADIUS, 0);
+    lv_obj_set_style_border_width(card, 0, 0);
     lv_obj_set_style_clip_corner(card, true, 0);
-    lv_obj_set_style_shadow_width(card, 60, 0);
-    lv_obj_set_style_shadow_color(card, lv_color_black(), 0);
-    lv_obj_set_style_shadow_opa(card, LV_OPA_60, 0);
+    lv_obj_set_style_shadow_width(card, 0, 0);
     lv_obj_set_style_pad_all(card, 0, 0);
     lv_obj_set_style_pad_row(card, 0, 0);
     lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
@@ -2232,24 +2101,42 @@ void show_print_confirm_dialog(void)
     lv_obj_center(card);
     dlg->card = card;
 
+    /* 顶部满宽预览（16:9）。有缩略图就铺图，没有才出占位图标——先前这里只建了占位、
+     * 从不去加载 thumb，于是无论如何都是一个破图。取 thumb_large 而不是 thumb_print，
+     * 与选文件页详情面板同源：二次确认紧接在详情面板之后，同一个文件该还是同一张图。
+     *
+     * 只判路径存不存在，不额外看当前页签：USB 条目的 thumb_* 在 copy_file_entry() 里
+     * 本来就是空串，判存自然为假；而页签是瞬态的页面状态，弹窗只该认它手上这份
+     * g_active_file。 */
     lv_obj_t *preview = lv_obj_create(card);
     lv_obj_remove_style_all(preview);
     lv_obj_set_size(preview, card_w, card_w * 9 / 16);
-    lv_obj_set_style_bg_color(preview, user_color_panel_alt, 0);
-    lv_obj_set_style_bg_opa(preview, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_color(preview, user_light_nav_on, 0);
+    lv_obj_set_style_bg_opa(preview, 13, 0);          /* #333145 @5% */
     lv_obj_clear_flag(preview, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_t *picon = lv_label_create(preview);
-    lv_label_set_text(picon, LV_SYMBOL_IMAGE);
-    lv_obj_set_style_text_color(picon, user_color_text_dim, 0);
-    lv_obj_set_style_text_font(picon, user_font_value(), 0);
-    lv_obj_center(picon);
+
+    if(ui_user_thumb_path_exists(file->thumb_large)) {
+        lv_obj_t *pimg = lv_image_create(preview);
+        lv_image_set_src(pimg, file->thumb_large_src);
+        lv_obj_set_size(pimg, LV_PCT(100), LV_PCT(100));
+        lv_image_set_inner_align(pimg, LV_IMAGE_ALIGN_CONTAIN);
+        lv_obj_center(pimg);
+        lv_obj_remove_flag(pimg, LV_OBJ_FLAG_CLICKABLE);
+    } else {
+        lv_obj_t *picon = lv_label_create(preview);
+        lv_label_set_text(picon, LV_SYMBOL_IMAGE);
+        lv_obj_set_style_text_color(picon, user_light_text, 0);
+        lv_obj_set_style_text_opa(picon, LV_OPA_40, 0);
+        lv_obj_set_style_text_font(picon, user_font_value(), 0);
+        lv_obj_center(picon);
+    }
 
     lv_obj_t *content = lv_obj_create(card);
     lv_obj_remove_style_all(content);
     lv_obj_set_width(content, LV_PCT(100));
     lv_obj_set_height(content, LV_SIZE_CONTENT);
-    lv_obj_set_style_pad_all(content, USER_DLG_PAD, 0);
-    lv_obj_set_style_pad_row(content, USER_DLG_PAD, 0);
+    lv_obj_set_style_pad_all(content, USER_PAD, 0);
+    lv_obj_set_style_pad_row(content, USER_PAD, 0);
     lv_obj_set_style_bg_opa(content, LV_OPA_TRANSP, 0);
     lv_obj_set_flex_flow(content, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(content, LV_FLEX_ALIGN_START,
@@ -2258,8 +2145,8 @@ void show_print_confirm_dialog(void)
 
     lv_obj_t *title = lv_label_create(content);
     lv_label_set_text(title, "Start printing this file?");
-    lv_obj_set_style_text_color(title, user_color_text, 0);
-    lv_obj_set_style_text_font(title, user_font_value(), 0);
+    lv_obj_set_style_text_color(title, user_light_text, 0);
+    lv_obj_set_style_text_font(title, user_font_dlg_title(), 0);
     lv_obj_set_style_text_align(title, LV_TEXT_ALIGN_CENTER, 0);
 
     char sub[96];
@@ -2271,8 +2158,9 @@ void show_print_confirm_dialog(void)
     lv_label_set_long_mode(sublbl, LV_LABEL_LONG_MODE_WRAP);
     lv_obj_set_width(sublbl, LV_PCT(100));
     lv_label_set_text(sublbl, sub);
-    lv_obj_set_style_text_color(sublbl, user_color_text_dim, 0);
-    lv_obj_set_style_text_font(sublbl, user_font_caption(), 0);
+    lv_obj_set_style_text_color(sublbl, user_light_text, 0);
+    lv_obj_set_style_text_opa(sublbl, LV_OPA_50, 0);
+    lv_obj_set_style_text_font(sublbl, user_font_text_sm(), 0);
     lv_obj_set_style_text_align(sublbl, LV_TEXT_ALIGN_CENTER, 0);
 
     lv_obj_t *footer = lv_obj_create(content);
@@ -2310,6 +2198,7 @@ void show_prepare_dlg(void)
     }
     ui_modal_dialog_cfg_t cfg =
         ui_modal_dialog_cfg_user("Preparing Print File", USER_DLG_W, false);
+    cfg.light_theme = true;
     g_prepare_dlg = ui_modal_dialog_open(g_overlay, &cfg);
     if(!g_prepare_dlg) {
         return;
@@ -2326,14 +2215,6 @@ void show_prepare_dlg(void)
     }
 }
 
-/* 详情面板底部次按钮：仅本机显示 → 删除该文件（二次确认） */
-void on_detail_secondary(lv_event_t * /*e*/)
-{
-    if(g_state != CONTROL_STATE_IDLE || g_sel_index < 0 || g_file_tab != FileTab::Local) {
-        return;
-    }
-    show_delete_confirm();
-}
 
 /**
  * 落一次供应度：内部值 + 对外快照 + 本页那两根 bar + 观察者扇出，四件事只在这里做。
@@ -2386,597 +2267,18 @@ void refresh_supply_bars(void)
     }
 }
 
-/* 移动滑动胶囊高亮块到当前源，并刷新两个文字的明暗 */
-void seg_set_active(FileTab tab, bool animate)
-{
-    if(g_seg_pill) {
-        const int32_t pill_w = lv_obj_get_width(g_seg_pill);
-        const int32_t target = (tab == FileTab::Local) ? 0 : pill_w;
-        if(animate) {
-            lv_anim_t a;
-            lv_anim_init(&a);
-            lv_anim_set_var(&a, g_seg_pill);
-            lv_anim_set_exec_cb(&a, (lv_anim_exec_xcb_t)lv_obj_set_x);
-            lv_anim_set_values(&a, lv_obj_get_x(g_seg_pill), target);
-            lv_anim_set_duration(&a, 180);
-            lv_anim_set_path_cb(&a, lv_anim_path_ease_out);
-            lv_anim_start(&a);
-        } else {
-            lv_obj_set_x(g_seg_pill, target);
-        }
-    }
-    if(g_seg_lbl_local) {
-        lv_obj_set_style_text_color(g_seg_lbl_local,
-            tab == FileTab::Local ? user_color_text : user_color_text_dim, 0);
-    }
-    if(g_seg_lbl_usb) {
-        lv_obj_set_style_text_color(g_seg_lbl_usb,
-            tab == FileTab::Usb ? user_color_text : user_color_text_dim, 0);
-    }
-}
 
-void switch_source(FileTab tab)
-{
-    if(g_file_tab == tab) {
-        return;
-    }
-    g_file_tab = tab;
-    g_sel_index = -1;
-    seg_set_active(tab, true);
-    update_detail_panel(nullptr);
-    g_files.clear();
-    rebuild_file_grid();
-    request_fs_dir_open(tab);
-}
 
-void on_tab_local(lv_event_t * /*e*/) { switch_source(FileTab::Local); }
-void on_tab_usb(lv_event_t * /*e*/)   { switch_source(FileTab::Usb); }
 
-/* 设计稿为横向列表行：缩略图 + 名称 + （耗时 / 耗材）meta */
-lv_obj_t *make_file_card(lv_obj_t *parent, const control_file_t *file, size_t index)
-{
-    const int32_t thumb_sz = USER_PAD * 3;   /* 方形缩略图，随 profile 缩放 */
 
-    lv_obj_t *row = lv_button_create(parent);
-    lv_obj_remove_style_all(row);
-    lv_obj_set_width(row, LV_PCT(100));
-    lv_obj_set_height(row, LV_SIZE_CONTENT);
-    lv_obj_set_style_bg_color(row, user_color_panel, 0);
-    lv_obj_set_style_bg_opa(row, LV_OPA_COVER, 0);
-    lv_obj_set_style_bg_color(row, user_color_panel_alt, LV_STATE_PRESSED);
-    lv_obj_set_style_border_width(row, 1, 0);
-    lv_obj_set_style_border_color(row, user_color_divider, 0);
-    lv_obj_set_style_radius(row, USER_RADIUS, 0);
-    lv_obj_set_style_pad_all(row, USER_PAD_SM, 0);
-    lv_obj_set_style_pad_column(row, USER_PAD, 0);
-    lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(row, LV_FLEX_ALIGN_START,
-                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_add_event_cb(row, on_file_card_click, LV_EVENT_SHORT_CLICKED,
-                        reinterpret_cast<void *>(static_cast<uintptr_t>(index)));
 
-    /* 缩略图（中性灰圆角块 + 文件图标，无设计稿渲染图时的占位） */
-    lv_obj_t *thumb = lv_obj_create(row);
-    lv_obj_remove_style_all(thumb);
-    lv_obj_set_size(thumb, thumb_sz, thumb_sz);
-    lv_obj_set_style_bg_color(thumb, user_color_panel_alt, 0);
-    lv_obj_set_style_bg_opa(thumb, LV_OPA_COVER, 0);
-    lv_obj_set_style_radius(thumb, USER_RADIUS, 0);
-    lv_obj_clear_flag(thumb, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_remove_flag(thumb, LV_OBJ_FLAG_CLICKABLE);
-    const bool show_real_thumb =
-        (g_file_tab != FileTab::Usb) && thumb_path_exists(file->thumb_small);
-    if(show_real_thumb) {
-        lv_obj_t *img = lv_image_create(thumb);
-        lv_image_set_src(img, file->thumb_small_src);
-        lv_obj_set_size(img, thumb_sz, thumb_sz);
-        lv_obj_align(img, LV_ALIGN_CENTER, 0, 0);
-        lv_image_set_inner_align(img, LV_IMAGE_ALIGN_COVER);
-    } else {
-        lv_obj_t *ticon = lv_label_create(thumb);
-        lv_label_set_text(ticon, LV_SYMBOL_FILE);
-        lv_obj_set_style_text_color(ticon, user_color_text_dim, 0);
-        lv_obj_set_style_text_font(ticon, user_font_text(), 0);
-        lv_obj_center(ticon);
-    }
 
-    /* 文字列：名称 + meta */
-    lv_obj_t *col = lv_obj_create(row);
-    lv_obj_remove_style_all(col);
-    lv_obj_set_flex_grow(col, 1);
-    lv_obj_set_height(col, LV_SIZE_CONTENT);
-    lv_obj_set_flex_flow(col, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_style_pad_row(col, USER_PAD_SM / 2, 0);
-    lv_obj_set_style_bg_opa(col, LV_OPA_TRANSP, 0);
-    lv_obj_clear_flag(col, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_remove_flag(col, LV_OBJ_FLAG_CLICKABLE);
 
-    lv_obj_t *name = lv_label_create(col);
-    lv_label_set_text(name, file->name);
-    lv_label_set_long_mode(name, LV_LABEL_LONG_MODE_DOTS);
-    lv_obj_set_width(name, LV_PCT(100));
-    lv_obj_set_style_text_color(name, user_color_text, 0);
-    lv_obj_set_style_text_font(name, user_font_text(), 0);
 
-    /* USB 列表行不显示预估耗时/耗材（仅本机显示）。
-     * 与详情面板同款「[图标] 数值」，只是无 caption、字号压到 caption 档以保持行高。 */
-    if(g_file_tab != FileTab::Usb) {
-        lv_obj_t *meta = lv_obj_create(col);
-        lv_obj_remove_style_all(meta);
-        lv_obj_set_size(meta, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
-        lv_obj_set_flex_flow(meta, LV_FLEX_FLOW_ROW);
-        lv_obj_set_flex_align(meta, LV_FLEX_ALIGN_START,
-                              LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-        lv_obj_set_style_pad_column(meta, USER_PAD, 0);
-        lv_obj_set_style_bg_opa(meta, LV_OPA_TRANSP, 0);
-        lv_obj_clear_flag(meta, LV_OBJ_FLAG_SCROLLABLE);
-        lv_obj_remove_flag(meta, LV_OBJ_FLAG_CLICKABLE);
 
-        char dur[32];
-        ui_user_format_duration_min(dur, sizeof(dur), file->duration_min);
-        lv_obj_t *dur_val = nullptr;
-        make_detail_inline_kv(meta, &ic_clock, nullptr, user_color_text_dim,
-                              &dur_val, user_font_caption());
-        if(dur_val) {
-            lv_label_set_text(dur_val, dur);
-        }
 
-        /* 与耗时同色：列表行整条 meta 保持一个色阶，accent 蓝留给详情页强调 */
-        lv_obj_t *mat_val = nullptr;
-        make_detail_inline_kv(meta, &ic_cube, nullptr, user_color_text_dim,
-                              &mat_val, user_font_caption());
-        if(mat_val) {
-            lv_label_set_text_fmt(mat_val, "%.1fg",
-                                  static_cast<double>(file->material_g));
-        }
-    }
 
-    return row;
-}
 
-void highlight_file_rows(void)
-{
-    if(!g_file_grid) {
-        return;
-    }
-    const uint32_t n = lv_obj_get_child_count(g_file_grid);
-    for(uint32_t i = 0; i < n; i++) {
-        lv_obj_t *row = lv_obj_get_child(g_file_grid, i);
-        const bool sel = (static_cast<int>(i) == g_sel_index);
-        /* 选中态：主色描边 + 主色 10% 底（稿上是同色描边 + 0.1 不透明度填充） */
-        lv_obj_set_style_border_color(row,
-            sel ? user_color_accent : user_color_divider, 0);
-        lv_obj_set_style_border_width(row, sel ? 2 : 1, 0);
-        lv_obj_set_style_bg_color(row, sel ? user_color_accent : user_color_panel, 0);
-        lv_obj_set_style_bg_opa(row, sel ? LV_OPA_10 : LV_OPA_COVER, 0);
-    }
-}
-
-void rebuild_file_grid(void)
-{
-    if(!g_file_grid) {
-        return;
-    }
-    /* 保存重建前的滚动位置，重建后恢复（切回页面刷新目录时不跳回顶端） */
-    const int32_t prev_scroll_y = lv_obj_get_scroll_y(g_file_grid);
-
-    lv_obj_clean(g_file_grid);
-    const size_t n = backend_file_count();
-    if(n == 0) {
-        lv_obj_t *empty = ui_user_make_body_label(g_file_grid, "No print files available");
-        lv_obj_set_style_text_align(empty, LV_TEXT_ALIGN_CENTER, 0);
-        lv_obj_set_width(empty, LV_PCT(100));
-        return;
-    }
-    for(size_t i = 0; i < n; i++) {
-        const control_file_t *file = backend_get_file(i);
-        if(file) {
-            make_file_card(g_file_grid, file, i);
-        }
-    }
-    highlight_file_rows();
-
-    /* 先让布局/滚动范围生效，再恢复滚动位置（超出范围会被自动钳制） */
-    lv_obj_update_layout(g_file_grid);
-    lv_obj_scroll_to_y(g_file_grid, prev_scroll_y, LV_ANIM_OFF);
-}
-
-/* 本机/USB 滑动胶囊分段控件：胶囊轨道 + 浮动滑块(g_seg_pill) + 两个透明点击按钮 */
-lv_obj_t *make_source_segment(lv_obj_t *parent)
-{
-    const int32_t seg_h   = USER_BACK_BTN_H * 3 / 2;      /* 比返回钮更高，避免偏扁 */
-    const int32_t seg_w   = USER_BACK_BTN_H * 9 / 2;      /* ≈3:1，贴近设计稿胶囊比例 */
-    const int32_t inner_w = seg_w - USER_PAD_SM;          /* 去掉左右内边距 */
-    const int32_t pill_w  = inner_w / 2;
-
-    lv_obj_t *track = lv_obj_create(parent);
-    lv_obj_remove_style_all(track);
-    lv_obj_set_size(track, seg_w, seg_h);
-    lv_obj_set_style_radius(track, LV_RADIUS_CIRCLE, 0);
-    lv_obj_set_style_bg_color(track, lv_color_black(), 0);
-    lv_obj_set_style_bg_opa(track, LV_OPA_30, 0);
-    lv_obj_set_style_pad_all(track, USER_PAD_SM / 2, 0);
-    lv_obj_set_flex_flow(track, LV_FLEX_FLOW_ROW);
-    lv_obj_clear_flag(track, LV_OBJ_FLAG_SCROLLABLE);
-
-    /* 浮动滑块（不参与 flex，绝对定位、可动画） */
-    g_seg_pill = lv_obj_create(track);
-    lv_obj_remove_style_all(g_seg_pill);
-    lv_obj_add_flag(g_seg_pill, LV_OBJ_FLAG_FLOATING);
-    lv_obj_clear_flag(g_seg_pill, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_clear_flag(g_seg_pill, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_set_size(g_seg_pill, pill_w, seg_h - USER_PAD_SM);
-    lv_obj_set_pos(g_seg_pill, 0, 0);
-    lv_obj_set_style_radius(g_seg_pill, LV_RADIUS_CIRCLE, 0);
-    lv_obj_set_style_bg_color(g_seg_pill, user_color_panel_alt, 0);
-    lv_obj_set_style_bg_opa(g_seg_pill, LV_OPA_COVER, 0);
-
-    /* 两个等宽透明点击按钮 */
-    lv_obj_t *btn_local = lv_button_create(track);
-    lv_obj_remove_style_all(btn_local);
-    lv_obj_set_size(btn_local, pill_w, LV_PCT(100));
-    lv_obj_set_style_bg_opa(btn_local, LV_OPA_TRANSP, 0);
-    lv_obj_add_event_cb(btn_local, on_tab_local, LV_EVENT_CLICKED, nullptr);
-    g_seg_lbl_local = lv_label_create(btn_local);
-    lv_label_set_text(g_seg_lbl_local, "Local");
-    lv_obj_set_style_text_font(g_seg_lbl_local, user_font_text(), 0);
-    lv_obj_center(g_seg_lbl_local);
-
-    lv_obj_t *btn_usb = lv_button_create(track);
-    lv_obj_remove_style_all(btn_usb);
-    lv_obj_set_size(btn_usb, pill_w, LV_PCT(100));
-    lv_obj_set_style_bg_opa(btn_usb, LV_OPA_TRANSP, 0);
-    lv_obj_add_event_cb(btn_usb, on_tab_usb, LV_EVENT_CLICKED, nullptr);
-    g_seg_lbl_usb = lv_label_create(btn_usb);
-    lv_label_set_text(g_seg_lbl_usb, "USB");
-    lv_obj_set_style_text_font(g_seg_lbl_usb, user_font_text(), 0);
-    lv_obj_center(g_seg_lbl_usb);
-
-    seg_set_active(g_file_tab, false);
-    return track;
-}
-
-/* 「[图标] caption value」行内小项，详情面板与文件列表行共用。
- * （稿 4014:16631 把原先的两行 caption/value 压成一行。）
- *
- * icon       传 nullptr 不占图标位（USB 的文件大小行）
- * caption    传 nullptr 不建标签，也就不会多吃一份 pad_column（列表行只要图标+数值）
- * value_font 传 nullptr 用 user_font_text()（列表行传 caption 字号以维持行高）
- * out_val    回传 value 句柄以便后续刷新 */
-void make_detail_inline_kv(lv_obj_t *parent, const lv_image_dsc_t *icon,
-                           const char *caption,
-                           lv_color_t value_color, lv_obj_t **out_val,
-                           const lv_font_t *value_font)
-{
-    lv_obj_t *row = lv_obj_create(parent);
-    lv_obj_remove_style_all(row);
-    lv_obj_set_size(row, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
-    lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(row, LV_FLEX_ALIGN_START,
-                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_column(row, USER_PAD_SM, 0);
-    lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, 0);
-    lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
-
-    /* A8 图标按 24px 原尺寸 1:1 贴（见 gen_home_metric_icons.py 的 clock/cube 档）。
-     * **别在这儿加缩放**：lv_draw_sw_transform 是 2 抽头点采样、不做面积平均，缩小时
-     * 会整行整列跳过源像素，而这两枚图标的描边只有 1.33px，跳掉一行就断一截，实机上
-     * 是肉眼可见的锯齿。真需要小一号就照 METRIC_ICONS 的做法让生成器另出一档原生
-     * 尺寸（同 ic_home_26/32/48），运行时始终 1:1。 */
-    if(icon) {
-        lv_obj_t *img = lv_image_create(row);
-        lv_image_set_src(img, icon);
-        lv_obj_set_style_image_recolor(img, user_color_text_dim, 0);
-        lv_obj_set_style_image_recolor_opa(img, LV_OPA_COVER, 0);
-    }
-
-    if(caption) {
-        lv_obj_t *cap = lv_label_create(row);
-        lv_label_set_text(cap, caption);
-        lv_obj_set_style_text_color(cap, user_color_text_dim, 0);
-        lv_obj_set_style_text_font(cap, user_font_caption(), 0);
-    }
-
-    lv_obj_t *val = lv_label_create(row);
-    /* 占位符统一用 ASCII "--"：内置 Montserrat 只收 0x20-0x7F,0xB0,0x2022，
-     * 破折号 U+2014 不在范围内，会渲染成豆腐块 */
-    lv_label_set_text(val, "--");
-    lv_obj_set_style_text_color(val, value_color, 0);
-    lv_obj_set_style_text_font(val, value_font ? value_font : user_font_text(), 0);
-    if(out_val) {
-        *out_val = val;
-    }
-}
-
-void build_detail_panel(lv_obj_t *parent)
-{
-    lv_obj_t *panel = lv_obj_create(parent);
-    lv_obj_remove_style_all(panel);
-    lv_obj_set_width(panel, LV_PCT(100));
-    lv_obj_set_flex_grow(panel, 1);
-    lv_obj_set_style_bg_opa(panel, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_pad_all(panel, 0, 0);
-    lv_obj_set_flex_flow(panel, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_flex_align(panel, LV_FLEX_ALIGN_START,
-                          LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
-    /* 行距用 SM：稿 4014:16631 的详情列纵向间距按 16/1280 折到 1024 约 11px。 */
-    lv_obj_set_style_pad_row(panel, USER_PAD_SM, 0);
-    lv_obj_clear_flag(panel, LV_OBJ_FLAG_SCROLLABLE);
-
-    /* 未选文件时的占位提示（垂直居中） */
-    g_detail_hint = ui_user_make_body_label(panel, "Select a file to continue");
-    lv_obj_set_width(g_detail_hint, LV_PCT(100));
-    lv_obj_set_style_text_align(g_detail_hint, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_flex_grow(g_detail_hint, 1);
-
-    /* 选中后显示的详情内容 */
-    g_detail_body = lv_obj_create(panel);
-    lv_obj_remove_style_all(g_detail_body);
-    lv_obj_set_width(g_detail_body, LV_PCT(100));
-    lv_obj_set_flex_grow(g_detail_body, 1);
-    lv_obj_set_flex_flow(g_detail_body, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_style_pad_row(g_detail_body, USER_PAD_SM, 0);
-    lv_obj_set_style_bg_opa(g_detail_body, LV_OPA_TRANSP, 0);
-    lv_obj_clear_flag(g_detail_body, LV_OBJ_FLAG_SCROLLABLE);
-
-    /* 大缩略图（中性灰占位） */
-    lv_obj_t *preview = lv_obj_create(g_detail_body);
-    lv_obj_remove_style_all(preview);
-    lv_obj_set_size(preview, LV_PCT(100), USER_FILE_DLG_PREVIEW_H);
-    lv_obj_set_style_bg_color(preview, user_color_panel_alt, 0);
-    lv_obj_set_style_bg_opa(preview, LV_OPA_COVER, 0);
-    lv_obj_set_style_radius(preview, USER_RADIUS, 0);
-    lv_obj_clear_flag(preview, LV_OBJ_FLAG_SCROLLABLE);
-    g_detail_preview_img = lv_image_create(preview);
-    lv_image_set_src(g_detail_preview_img, nullptr);
-    lv_obj_set_size(g_detail_preview_img, LV_PCT(100), LV_PCT(100));
-    lv_obj_align(g_detail_preview_img, LV_ALIGN_CENTER, 0, 0);
-    lv_image_set_inner_align(g_detail_preview_img, LV_IMAGE_ALIGN_COVER);
-    lv_obj_add_flag(g_detail_preview_img, LV_OBJ_FLAG_HIDDEN);
-
-    g_detail_preview_icon = lv_label_create(preview);
-    lv_label_set_text(g_detail_preview_icon, LV_SYMBOL_FILE);
-    lv_obj_set_style_text_color(g_detail_preview_icon, user_color_text_dim, 0);
-    lv_obj_set_style_text_font(g_detail_preview_icon, user_font_value(), 0);
-    lv_obj_center(g_detail_preview_icon);
-
-    /* 文件名 */
-    g_detail_name_lbl = lv_label_create(g_detail_body);
-    lv_label_set_text(g_detail_name_lbl, "--");
-    lv_label_set_long_mode(g_detail_name_lbl, LV_LABEL_LONG_MODE_DOTS);
-    lv_obj_set_width(g_detail_name_lbl, LV_PCT(100));
-    lv_obj_set_style_text_color(g_detail_name_lbl, user_color_text, 0);
-    lv_obj_set_style_text_font(g_detail_name_lbl, user_font_text(), 0);
-
-    /* 本机 meta：耗时 / 耗材 一行 */
-    g_detail_meta_local = lv_obj_create(g_detail_body);
-    lv_obj_remove_style_all(g_detail_meta_local);
-    lv_obj_set_width(g_detail_meta_local, LV_PCT(100));
-    lv_obj_set_height(g_detail_meta_local, LV_SIZE_CONTENT);
-    lv_obj_set_flex_flow(g_detail_meta_local, LV_FLEX_FLOW_ROW);
-    lv_obj_set_style_pad_column(g_detail_meta_local, USER_PAD_LG, 0);
-    lv_obj_set_style_bg_opa(g_detail_meta_local, LV_OPA_TRANSP, 0);
-    lv_obj_clear_flag(g_detail_meta_local, LV_OBJ_FLAG_SCROLLABLE);
-    make_detail_inline_kv(g_detail_meta_local, &ic_clock, "Est. Time",
-                          user_color_text, &g_detail_time_lbl);
-    make_detail_inline_kv(g_detail_meta_local, &ic_cube, "Material",
-                          user_color_text, &g_detail_mat_lbl);
-
-    /* USB meta：文件大小（与本机 meta 互斥显示） */
-    g_detail_meta_usb = lv_obj_create(g_detail_body);
-    lv_obj_remove_style_all(g_detail_meta_usb);
-    lv_obj_set_width(g_detail_meta_usb, LV_PCT(100));
-    lv_obj_set_height(g_detail_meta_usb, LV_SIZE_CONTENT);
-    lv_obj_set_flex_flow(g_detail_meta_usb, LV_FLEX_FLOW_ROW);
-    lv_obj_set_style_bg_opa(g_detail_meta_usb, LV_OPA_TRANSP, 0);
-    lv_obj_clear_flag(g_detail_meta_usb, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_add_flag(g_detail_meta_usb, LV_OBJ_FLAG_HIDDEN);
-    make_detail_inline_kv(g_detail_meta_usb, nullptr, "File Size",
-                          user_color_text, &g_detail_size_lbl);
-
-    /* 撑开，把按钮顶到底部 */
-    lv_obj_t *sp = lv_obj_create(g_detail_body);
-    lv_obj_remove_style_all(sp);
-    lv_obj_set_width(sp, LV_PCT(100));
-    lv_obj_set_flex_grow(sp, 1);
-    lv_obj_set_style_bg_opa(sp, LV_OPA_TRANSP, 0);
-
-    /* 主按钮：Confirm Print（选中文件后恒可点——原先的置灰态是「未选打印板厚度」
-     * 用的，那套已随厚度选择整块删掉） */
-    g_detail_start_btn = lv_button_create(g_detail_body);
-    lv_obj_t *btn_start = g_detail_start_btn;
-    lv_obj_add_style(btn_start, user_style_btn_primary(), 0);
-    lv_obj_set_width(btn_start, LV_PCT(100));
-    lv_obj_set_height(btn_start, USER_DLG_FOOTER_BTN_H);
-    /* 稿 4014:16660 是 8px 圆角矩形，压掉 user_style_btn_primary 的全圆胶囊 */
-    lv_obj_set_style_radius(btn_start, USER_BTN_RADIUS, 0);
-    lv_obj_add_event_cb(btn_start, on_detail_start_print, LV_EVENT_CLICKED, nullptr);
-    lv_obj_t *bl = lv_label_create(btn_start);
-    lv_label_set_text(bl, "Confirm Print");
-    lv_obj_set_style_text_color(bl, user_color_text, 0);
-    lv_obj_set_style_text_font(bl, user_font_text(), 0);
-    lv_obj_center(bl);
-
-    /* 次按钮：仅本机显示“删除该文件”（USB 无次按钮，在 update_detail_panel 中隐藏）。
-     * 稿 4014:16631 改为实心红危险按钮，与主按钮同高。 */
-    g_detail_secondary_btn = lv_button_create(g_detail_body);
-    lv_obj_t *sec = g_detail_secondary_btn;
-    lv_obj_remove_style_all(sec);
-    lv_obj_set_width(sec, LV_PCT(100));
-    lv_obj_set_height(sec, USER_DLG_FOOTER_BTN_H);
-    lv_obj_set_style_bg_color(sec, ui_color_danger, 0);
-    lv_obj_set_style_bg_opa(sec, LV_OPA_COVER, 0);
-    lv_obj_set_style_bg_opa(sec, LV_OPA_80, LV_STATE_PRESSED);
-    lv_obj_set_style_radius(sec, USER_BTN_RADIUS, 0);
-    lv_obj_set_style_border_width(sec, 0, 0);
-    lv_obj_clear_flag(sec, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_add_event_cb(sec, on_detail_secondary, LV_EVENT_CLICKED, nullptr);
-
-    g_detail_secondary_lbl = lv_label_create(sec);
-    lv_label_set_text(g_detail_secondary_lbl, "Delete File");
-    lv_obj_set_style_text_color(g_detail_secondary_lbl, user_color_text, 0);
-    lv_obj_set_style_text_font(g_detail_secondary_lbl, user_font_text(), 0);
-    lv_obj_center(g_detail_secondary_lbl);
-}
-
-/* 列表上/下滚动（设计稿右侧圆形箭头按钮）。
- * LVGL：正 dy 使内容下移（看上面的项）；负 dy 看下面的项。 */
-void on_list_scroll_up(lv_event_t * /*e*/)
-{
-    if(g_file_grid) {
-        /* bounded 版按内容范围钳制，到顶端即停、不过冲卡住 */
-        lv_obj_scroll_by_bounded(g_file_grid, 0, lv_obj_get_height(g_file_grid) * 3 / 4, LV_ANIM_ON);
-    }
-}
-
-void on_list_scroll_down(lv_event_t * /*e*/)
-{
-    if(g_file_grid) {
-        lv_obj_scroll_by_bounded(g_file_grid, 0, -lv_obj_get_height(g_file_grid) * 3 / 4, LV_ANIM_ON);
-    }
-}
-
-/* 圆形图标按钮（返回箭头等） */
-lv_obj_t *make_round_icon_btn(lv_obj_t *parent, const char *symbol, lv_event_cb_t cb)
-{
-    lv_obj_t *btn = lv_button_create(parent);
-    lv_obj_remove_style_all(btn);
-    lv_obj_set_size(btn, USER_BACK_BTN_H, USER_BACK_BTN_H);
-    lv_obj_set_style_radius(btn, LV_RADIUS_CIRCLE, 0);
-    lv_obj_set_style_bg_color(btn, user_color_panel, 0);
-    lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, 0);
-    lv_obj_set_style_bg_color(btn, user_color_panel_alt, LV_STATE_PRESSED);
-    lv_obj_set_style_border_width(btn, 1, 0);
-    lv_obj_set_style_border_color(btn, user_color_divider, 0);
-    lv_obj_clear_flag(btn, LV_OBJ_FLAG_SCROLLABLE);
-    if(cb) {
-        lv_obj_add_event_cb(btn, cb, LV_EVENT_CLICKED, nullptr);
-    }
-    lv_obj_t *icon = lv_label_create(btn);
-    lv_label_set_text(icon, symbol);
-    lv_obj_set_style_text_color(icon, user_color_text, 0);
-    lv_obj_set_style_text_font(icon, user_font_text(), 0);
-    lv_obj_center(icon);
-    return btn;
-}
-
-/* 选择文件页内容：建入 PageManager 内容区（parent 已在侧栏右侧），填满整块。
- * 返回页根，供 page_user_files_create 交给 PageManager 托管。 */
-lv_obj_t *show_file_select(lv_obj_t *parent)
-{
-    lv_obj_t *page = lv_obj_create(parent);
-    lv_obj_remove_style_all(page);
-    lv_obj_set_size(page, LV_PCT(100), LV_PCT(100));
-    lv_obj_set_style_bg_color(page, user_color_bg, 0);
-    lv_obj_set_style_bg_opa(page, LV_OPA_COVER, 0);
-    lv_obj_set_style_pad_hor(page, USER_PAD_LG, 0);
-    lv_obj_set_style_pad_ver(page, USER_PAD, 0);
-    lv_obj_set_style_pad_column(page, USER_PAD, 0);
-    lv_obj_set_flex_flow(page, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(page, LV_FLEX_ALIGN_START,
-                          LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
-    lv_obj_clear_flag(page, LV_OBJ_FLAG_SCROLLABLE);
-    g_file_panel = page;
-
-    /* ============ 左半（略宽）：顶部 返回+分段胶囊；下方 文件列表 ============ */
-    lv_obj_t *left = lv_obj_create(page);
-    lv_obj_remove_style_all(left);
-    lv_obj_set_height(left, LV_PCT(100));
-    lv_obj_set_flex_grow(left, 11);          /* 左:右 ≈ 11:9，左半略宽 */
-    lv_obj_set_flex_flow(left, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_flex_align(left, LV_FLEX_ALIGN_START,
-                          LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
-    lv_obj_set_style_pad_row(left, USER_PAD, 0);
-    lv_obj_set_style_bg_opa(left, LV_OPA_TRANSP, 0);
-    lv_obj_clear_flag(left, LV_OBJ_FLAG_SCROLLABLE);
-
-    /* 左半顶部：返回圆钮 + 本机/USB 滑动胶囊 */
-    lv_obj_t *lhead = lv_obj_create(left);
-    lv_obj_remove_style_all(lhead);
-    lv_obj_set_width(lhead, LV_PCT(100));
-    lv_obj_set_height(lhead, LV_SIZE_CONTENT);
-    lv_obj_set_flex_flow(lhead, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(lhead, LV_FLEX_ALIGN_START,
-                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_column(lhead, USER_PAD, 0);
-    lv_obj_set_style_bg_opa(lhead, LV_OPA_TRANSP, 0);
-    lv_obj_clear_flag(lhead, LV_OBJ_FLAG_SCROLLABLE);
-    make_round_icon_btn(lhead, LV_SYMBOL_LEFT, on_file_select_cancel);
-    make_source_segment(lhead);
-
-    /* 文件列表（纵向行，可滚动） */
-    g_file_grid = lv_obj_create(left);
-    lv_obj_remove_style_all(g_file_grid);
-    lv_obj_set_width(g_file_grid, LV_PCT(100));
-    lv_obj_set_flex_grow(g_file_grid, 1);
-    lv_obj_set_flex_flow(g_file_grid, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_flex_align(g_file_grid, LV_FLEX_ALIGN_START,
-                          LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
-    lv_obj_set_style_pad_row(g_file_grid, USER_PAD_SM, 0);
-    lv_obj_set_style_pad_right(g_file_grid, USER_PAD_SM, 0);  /* 给滚动条留白 */
-    lv_obj_set_style_bg_opa(g_file_grid, LV_OPA_TRANSP, 0);
-    rebuild_file_grid();
-
-    /* ============ 中间：上/下滚动箭头（圆形按钮，纵向居中） ============ */
-    lv_obj_t *arrows = lv_obj_create(page);
-    lv_obj_remove_style_all(arrows);
-    lv_obj_set_width(arrows, LV_SIZE_CONTENT);
-    lv_obj_set_height(arrows, LV_PCT(100));
-    lv_obj_set_flex_flow(arrows, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_flex_align(arrows, LV_FLEX_ALIGN_CENTER,
-                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_row(arrows, USER_PAD, 0);
-    lv_obj_set_style_bg_opa(arrows, LV_OPA_TRANSP, 0);
-    lv_obj_clear_flag(arrows, LV_OBJ_FLAG_SCROLLABLE);
-
-    /* 两列之间的竖分隔线（稿 4014:16631）：脱离 flex 贴列中线、通高，
-     * 先建所以压在箭头圆钮下层，视觉上被两枚按钮断开。 */
-    lv_obj_t *vline = lv_obj_create(arrows);
-    lv_obj_remove_style_all(vline);
-    lv_obj_add_flag(vline, LV_OBJ_FLAG_IGNORE_LAYOUT);
-    lv_obj_set_size(vline, 1, LV_PCT(100));
-    lv_obj_set_style_bg_color(vline, user_color_divider, 0);
-    lv_obj_set_style_bg_opa(vline, LV_OPA_COVER, 0);
-    lv_obj_align(vline, LV_ALIGN_CENTER, 0, 0);
-
-    make_round_icon_btn(arrows, LV_SYMBOL_UP, on_list_scroll_up);
-    make_round_icon_btn(arrows, LV_SYMBOL_DOWN, on_list_scroll_down);
-
-    /* ============ 右半：顶部 常驻供应度状态栏；下方 详情/空态 ============ */
-    lv_obj_t *right = lv_obj_create(page);
-    lv_obj_remove_style_all(right);
-    lv_obj_set_height(right, LV_PCT(100));
-    lv_obj_set_flex_grow(right, 9);
-    lv_obj_set_flex_flow(right, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_flex_align(right, LV_FLEX_ALIGN_START,
-                          LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
-    lv_obj_set_style_pad_row(right, USER_PAD, 0);
-    lv_obj_set_style_bg_opa(right, LV_OPA_TRANSP, 0);
-    lv_obj_clear_flag(right, LV_OBJ_FLAG_SCROLLABLE);
-
-    /* 右半顶部：耗材/滤芯供应度（常驻，未选文件时也显示） */
-    lv_obj_t *supply = lv_obj_create(right);
-    lv_obj_remove_style_all(supply);
-    lv_obj_set_width(supply, LV_PCT(100));
-    lv_obj_set_height(supply, LV_SIZE_CONTENT);
-    lv_obj_set_flex_flow(supply, LV_FLEX_FLOW_ROW);
-    lv_obj_set_style_pad_column(supply, USER_PAD_LG, 0);
-    lv_obj_set_style_bg_opa(supply, LV_OPA_TRANSP, 0);
-    lv_obj_clear_flag(supply, LV_OBJ_FLAG_SCROLLABLE);
-    ui_user_make_supply_bar(supply, "Material", g_supply.material_ok != 0,
-                            (int)g_supply.material_pct,
-                            &g_supply_mat_bar, &g_supply_mat_pct, &g_supply_mat_status);
-    ui_user_make_supply_bar(supply, "Filter", g_supply.filter_ok != 0,
-                            (int)g_supply.filter_pct,
-                            &g_supply_filt_bar, &g_supply_filt_pct, &g_supply_filt_status);
-
-    /* 右半下方：详情面板（含未选时的空态提示） */
-    build_detail_panel(right);
-    update_detail_panel(nullptr);
-
-    return page;
-}
 
 /* ============================================================================
  *  后端回调 → 状态推进
@@ -2988,10 +2290,6 @@ void stop_door_timers(void)
     if(g_door_advance_timer) {
         lv_timer_delete(g_door_advance_timer);
         g_door_advance_timer = nullptr;
-    }
-    if(g_door_close_poll_timer) {
-        lv_timer_delete(g_door_close_poll_timer);
-        g_door_close_poll_timer = nullptr;
     }
     if(g_door_open_retry_timer) {
         lv_timer_delete(g_door_open_retry_timer);
@@ -3016,7 +2314,7 @@ void on_door_opening_cancel(lv_event_t * /*e*/)
         if(g_door_origin == DoorFlowOrigin::PrintCollect) {
             /* 取件取消：退回结果页（浮层一直没收起），并把滑块推回起点 */
             enter_state(CONTROL_STATE_PRINT_DONE);
-            page_user_home_reset_result_slide();
+            page_user_monitor_reset_result_slide();
             return;
         }
         enter_state(CONTROL_STATE_IDLE);
@@ -3054,14 +2352,35 @@ void arm_door_open_retry_timer(void)
 }
 
 /* ---- 转运盒三步（取件分支，稿 3171:7305 / 3225:10476 / 3225:13586）----
- * 装盒 →（转运盒到位）→ 转移工件 →（转移完成）→ 推入闸门 → 解锁取下 → 关门确认。
+ * 装盒 →（转运盒到位）→ 转移工件 →（转移完成）→ 推入闸门 → 解锁取下 → 结束开门流程。
  * 后端还没有这三处信号，两处等待用 BOX_* 定时器占位，闸门那步稿上本就靠用户点。 */
 
-/** 门开之后往哪走：取件且开了转运盒流程先走三步，否则直接关门确认。 */
-control_state_t state_after_door_open(void)
+/** 开门成功后收 overlay 并按入口走终态；不再做关门检测。 */
+void finish_after_door_open(void)
 {
-    return transfer_box_flow_active() ? CONTROL_STATE_TRANSFER_BOX
-                                      : CONTROL_STATE_DOOR_CONFIRM;
+    if(g_state != CONTROL_STATE_DOOR_OPENING &&
+       g_state != CONTROL_STATE_TRANSFER_BOX) {
+        return;
+    }
+    if(g_door_origin == DoorFlowOrigin::HomeStandalone ||
+       g_door_origin == DoorFlowOrigin::PrintCollect) {
+        if(g_door_origin == DoorFlowOrigin::PrintCollect) {
+            ui_clean_state_stop();
+        }
+        enter_state(CONTROL_STATE_IDLE);
+    } else {
+        goto_file_selection();
+    }
+}
+
+/** 门开之后往哪走：取件且开了转运盒流程先走三步，否则直接结束。 */
+void proceed_after_door_open(void)
+{
+    if(transfer_box_flow_active()) {
+        enter_state(CONTROL_STATE_TRANSFER_BOX);
+    } else {
+        finish_after_door_open();
+    }
 }
 
 /* 占位「转运盒已到位」：把置灰按钮翻成可点（重建同一形态即可，见 g_box_ready） */
@@ -3112,59 +2431,15 @@ void on_box_shutter_done(lv_event_t * /*e*/)
     }
     ui_toast_show_icon("Transfer complete. Remove the box",
                        user_color_status_ok, 3000, &ic_badge_check);
-    enter_state(CONTROL_STATE_DOOR_CONFIRM);
+    finish_after_door_open();
 }
 
-/* 未放入分支：开门 → 门已开启等待页 → 关门监测 Rsp → 关门确认页 */
-void pf_on_close_door_done(void * /*u*/)
-{
-    if(g_state != CONTROL_STATE_DOOR_CONFIRM) {
-        return;
-    }
-    /* 门已关：停轮询，切到"门已关好"可点确认态 */
-    if(g_door_close_poll_timer) {
-        lv_timer_delete(g_door_close_poll_timer);
-        g_door_close_poll_timer = nullptr;
-    }
-    door_apply_variant(DoorVariant::DoorClosed);
-}
-
-/* DoorOpened 轮询：首次在最短停留后触发，之后每 DOOR_CLOSE_POLL_MS 发一次关门检测，
- * 直到后端回"门已关"（pf_on_close_door_done 停轮询并前进）。 */
-void door_close_poll_cb(lv_timer_t *t)
-{
-    if(g_state != CONTROL_STATE_DOOR_CONFIRM) {
-        return;   /* 状态已变，计时器由 stop_door_timers 清理 */
-    }
-    lv_timer_set_period(t, DOOR_CLOSE_POLL_MS);   /* 首次后转为轮询节奏 */
-    backend_start_close_door(pf_on_close_door_done, nullptr);
-}
-
-void on_door_closed_confirm_btn(lv_event_t * /*e*/)
-{
-    if(g_state != CONTROL_STATE_DOOR_CONFIRM) {
-        return;
-    }
-    /* PrintCollect：件已取走、门也关好了，这时才真正退出打印状态回待机首页 */
-    if(g_door_origin == DoorFlowOrigin::HomeStandalone ||
-       g_door_origin == DoorFlowOrigin::PrintCollect) {
-        const bool from_print_collect = (g_door_origin == DoorFlowOrigin::PrintCollect);
-        if(from_print_collect) {
-            /* 清粉/取件流程回首页前，强制发送 clean_test_close 收尾串口流程。 */
-            ui::UiMsgProxy::instance().send_clean_test_close();
-        }
-        enter_state(CONTROL_STATE_IDLE);
-    } else {
-        goto_file_selection();
-    }
-}
-
-/* Opening 最短停留到时 → 进入 DoorOpened 确认态 */
-void door_advance_to_confirm_cb(lv_timer_t * /*t*/)
+/* Opening 最短停留到时 → 结束开门 / 进转运盒 */
+void door_advance_after_opening_cb(lv_timer_t * /*t*/)
 {
     g_door_advance_timer = nullptr;   /* one-shot：LVGL 回调后自删，仅清空句柄 */
     if(g_state == CONTROL_STATE_DOOR_OPENING) {
-        enter_state(state_after_door_open());
+        proceed_after_door_open();
     }
 }
 
@@ -3176,13 +2451,13 @@ void pf_on_open_door_done(void * /*u*/)
     }
     const uint32_t elapsed = lv_tick_elaps(g_door_opening_since);
     if(elapsed >= DOOR_OPENING_MIN_MS) {
-        enter_state(state_after_door_open());
+        proceed_after_door_open();
         return;
     }
     if(g_door_advance_timer) {
         lv_timer_delete(g_door_advance_timer);
     }
-    g_door_advance_timer = lv_timer_create(door_advance_to_confirm_cb,
+    g_door_advance_timer = lv_timer_create(door_advance_after_opening_cb,
                                            DOOR_OPENING_MIN_MS - elapsed, nullptr);
     lv_timer_set_repeat_count(g_door_advance_timer, 1);
 }
@@ -3251,7 +2526,7 @@ void pf_on_pm25_check_done(void * /*u*/)
 void pf_on_print_progress(const control_progress_t *p, void * /*u*/)
 {
     if(g_state == CONTROL_STATE_PRINTING) {
-        page_user_home_printing_update(p);
+        page_user_monitor_printing_update(p);
     }
 }
 
@@ -3278,7 +2553,7 @@ void show_terminated_result_without_manifest(void)
     }
     g_print_result = r;
     g_print_result_pending = false;
-    page_user_home_enter_print_result(&g_print_result);
+    page_user_monitor_enter_print_result(&g_print_result);
     g_print_result_shown = true;
 }
 
@@ -3355,7 +2630,7 @@ void on_print_video_manifest(const middleware::PrintVideoManifestPayload &p)
         g_print_result_pending = true;
         return;
     }
-    page_user_home_enter_print_result(&r);
+    page_user_monitor_enter_print_result(&r);
     g_print_result_shown = true;
 }
 
@@ -3395,7 +2670,6 @@ void enter_state(control_state_t s)
     g_door_content     = nullptr;
     g_door_title       = nullptr;
     g_door_body        = nullptr;
-    g_door_close_btn   = nullptr;
     g_door_spinner     = nullptr;
     g_cleaning_active  = false;
     g_clean_stop_pending = false;
@@ -3408,7 +2682,7 @@ void enter_state(control_state_t s)
         stop_print_watchdogs();
         g_print_result_shown = false;
         backend_cancel_pending();
-        page_user_home_exit_printing_mode();
+        page_user_monitor_exit_printing_mode();
         overlay_hide();
         break;
 
@@ -3431,14 +2705,6 @@ void enter_state(control_state_t s)
         arm_box_timer(box_ready_cb, BOX_READY_MS);
         break;
 
-    case CONTROL_STATE_DOOR_CONFIRM:
-        overlay_show();
-        g_current_dlg = show_door_dialog(g_overlay, DoorVariant::DoorOpened);
-        /* 最短停留后开始轮询关门检测（门真正关上才前进到"门已关好"） */
-        g_door_close_poll_timer = lv_timer_create(door_close_poll_cb,
-                                                  DOOR_OPENED_MIN_MS, nullptr);
-        break;
-
     case CONTROL_STATE_PREPARE_WAIT:
         overlay_show();
         show_prepare_dlg();
@@ -3448,25 +2714,29 @@ void enter_state(control_state_t s)
         overlay_hide();
         g_print_result_pending = false;      /* 丢掉上一单可能残留的结果 */
         g_print_result_shown = false;
-        g_home_section_view = "user_home";   /* 打印中首页图标回仪表盘 */
-        ui::PageManager::instance().switch_to("user_home");
+        /* 首页图标回仪表盘：开始打印时用户正停在选文件页，那是首页区的一个视图，
+         * 不复位的话打完回首页会又落回选文件页。 */
+        g_home_section_view = "user_home";
+        /* **打印界面在监控页**（稿 6338:27240 一族），不是首页。改版前这里切的是
+         * "user_home"，浮层挂在首页上；现在整套搬到了监控页，所以直接切过去。 */
+        ui::PageManager::instance().switch_to("user_monitor");
         backend_start_job(&g_active_file,
                                      pf_on_print_progress,
                                      pf_on_print_done,
                                      nullptr);
-        page_user_home_enter_printing_mode(&g_active_file);
+        page_user_monitor_enter_printing_mode(&g_active_file);
         start_print_peer_watch();
         break;
 
     case CONTROL_STATE_PRINT_DONE:
-        /* 刻意不动打印中浮层：page_user_home_exit_printing_mode() 会 stop 摄像头，
-         * 这里要让预览接着跑。界面维持打印中原样，等 Camera 的 manifest 通知到达，
+        /* 刻意不走 IDLE：exit_printing_mode() 会把 Job 卡从结果态收成待机空态。
+         * 界面维持打印中原样，等 Camera 的 manifest 通知到达，
          * on_print_video_manifest() 再切结果页浮层。 */
         stop_print_watchdogs();
         overlay_hide();
         if(g_print_result_pending) {
             g_print_result_pending = false;
-            page_user_home_enter_print_result(&g_print_result);
+            page_user_monitor_enter_print_result(&g_print_result);
             g_print_result_shown = true;
         }
         break;
@@ -3490,6 +2760,69 @@ void goto_file_selection(void)
 /* ============================================================================
  *  对外 API
  * ============================================================================ */
+
+/* ---- 选择文件页（page_user_files.cpp）要的数据与流程入口 ---- */
+
+size_t control_files_count(void)
+{
+    return backend_file_count();
+}
+
+const control_file_t *control_files_get(size_t index)
+{
+    return backend_get_file(index);
+}
+
+void control_files_request_dir_open(FileTab tab)
+{
+    request_fs_dir_open(tab);
+}
+
+void control_files_reset_dir_pending(void)
+{
+    g_dir_open_pending.clear();
+}
+
+void control_files_set_active(const control_file_t *file)
+{
+    g_active_file = file ? *file : control_file_t{};
+}
+
+void control_files_clear(void)
+{
+    g_files.clear();
+}
+
+void control_files_close(void)
+{
+    g_home_section_view = "user_home";
+    ui::PageManager::instance().switch_to("user_home");
+}
+
+void control_files_show_print_confirm(void)
+{
+    show_print_confirm_dialog();
+}
+
+bool control_files_delete_allowed(void)
+{
+    return g_state == CONTROL_STATE_IDLE;
+}
+
+void control_files_open_confirm(const char *title, const char *body,
+                                const char *cancel_text, const char *confirm_text,
+                                lv_color_t confirm_color, bool light,
+                                lv_event_cb_t cancel_cb, lv_event_cb_t confirm_cb)
+{
+    /* 文件页 IDLE 时 g_overlay 隐藏，须挂 top layer（同 control_terminate_request） */
+    open_user_confirm_dialog(lv_layer_top(), title, body, cancel_text, confirm_text,
+                             confirm_color, light, cancel_cb, confirm_cb);
+}
+
+void control_files_close_dialog(void)
+{
+    close_confirm_dlg();
+}
 
 void control_init(lv_obj_t *parent)
 {
@@ -3523,6 +2856,11 @@ void control_start(void)
     enter_state(CONTROL_STATE_PLATE_PROMPT);
 }
 
+void control_show_supply_dialog(control_supply_dlg_t kind)
+{
+    show_supply_dialog(kind);
+}
+
 void control_open_door_request(void)
 {
     if(g_state != CONTROL_STATE_IDLE) {
@@ -3537,30 +2875,8 @@ const char *control_home_section_target(void)
     return g_home_section_view;
 }
 
-/* ---- 选择文件页（PageManager 隐藏页 "user_files"）生命周期 ---- */
-lv_obj_t *page_user_files_create(lv_obj_t *parent)
-{
-    /* 仅首次创建时复位到本机/未选；之后切走再回来由 PageManager 隐藏/显示保留状态 */
-    g_file_tab = FileTab::Local;
-    g_sel_index = -1;
-    return show_file_select(parent);
-}
 
-void page_user_files_refresh(bool /*force*/)
-{
-    /* on_enter：标记可见；Local 读 config.json，USB 走 Fs_DirOpen；选中项按名恢复 */
-    g_files_page_active = true;
-    g_dir_open_pending.clear();
-    request_fs_dir_open(g_file_tab);
-    ui::UiMsgProxy::instance().send_supply_status();
-}
 
-void page_user_files_exit(void)
-{
-    g_files_page_active = false;
-    g_dir_open_pending.clear();
-    close_confirm_dlg();
-}
 
 void control_cancel(void)
 {
@@ -3575,8 +2891,7 @@ bool control_is_printing(void)
            g_state == CONTROL_STATE_PRINT_DONE ||
            (g_door_origin == DoorFlowOrigin::PrintCollect &&
             (g_state == CONTROL_STATE_DOOR_OPENING ||
-             g_state == CONTROL_STATE_TRANSFER_BOX ||
-             g_state == CONTROL_STATE_DOOR_CONFIRM));
+             g_state == CONTROL_STATE_TRANSFER_BOX));
 }
 
 void control_print_result_collect(void)
@@ -3584,11 +2899,11 @@ void control_print_result_collect(void)
     if(g_state != CONTROL_STATE_PRINT_DONE) {
         return;
     }
-    /* 改为滑动开门成功后即触发 finalize 链路，不再等门关闭确认。 */
+    /* 改为滑动开门成功后即触发 finalize 链路，不再等门关闭。 */
     schedule_commit_print_result_history();
-    /* 取件 = 开门，但不能借道 IDLE：IDLE 分支会 page_user_home_exit_printing_mode()，
-     * 停掉摄像头并收起结果页浮层，弹窗就浮在待机首页上了。直接进开门态，
-     * 结果页与预览原样留在弹窗背后；关门确认后才由 PrintCollect 分支回 IDLE。 */
+    /* 取件 = 开门，但不能借道 IDLE：IDLE 分支会 page_user_monitor_exit_printing_mode()，
+     * 收起结果页浮层，弹窗就浮在待机 Job 空态上了。直接进开门态，
+     * 结果页与预览原样留在弹窗背后；开门成功后由 PrintCollect 分支回 IDLE。 */
     g_door_origin = DoorFlowOrigin::PrintCollect;
     enter_state(CONTROL_STATE_DOOR_OPENING);
 }
@@ -3639,9 +2954,13 @@ void control_terminate_request(void)
         close_confirm_dlg();
     }
     /* 与删除确认同款风格（用户层 ui_modal_dialog）。打印中 overlay 可能隐藏，
-     * 故挂到 top layer 确保始终可见。 */
+     * 故挂到 top layer 确保始终可见。
+     *
+     * 新稿 6345:31291（「是否确认终止任务？」）的结构与这一版**完全一致**：标题问句 +
+     * 一句不可恢复说明 + 等分两栏（灰 Cancel / 红 Terminate），所以照稿对下来无需改
+     * 版式，只是把节点号记在这里备查。 */
     open_user_confirm_dialog(lv_layer_top(), "Terminate this job?",
                              "The job cannot be resumed once terminated.",
-                             "Cancel", "Terminate", ui_color_danger,
+                             "Cancel", "Terminate", ui_color_danger, true,
                              on_terminate_cancel, on_terminate_confirm);
 }

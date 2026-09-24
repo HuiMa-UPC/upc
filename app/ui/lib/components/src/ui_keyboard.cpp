@@ -8,9 +8,14 @@
  * 键盘组件：两套输入面板共用同一套 attach/hide 接口。
  *   - 文本模式（LV_KEYBOARD_MODE_TEXT_*）：沿用 LVGL 内置 lv_keyboard，底部弹出。
  *   - 数字模式（LV_KEYBOARD_MODE_NUMBER）：自绘右侧数字键盘面板（大号读数 + 圆形键
- *     首排 C 清零 / − 负号 / ⌫ 删除，随后 7 8 9 / 4 5 6 / 1 2 3 / . 0 + 蓝色确认）。
+ *     首排 C 清零 / − 负号 / ⌫ 删除，随后 7 8 9 / 4 5 6 / 1 2 3 / . 0 + 确认）。
  *     圆形按键 + 大号读数无法用 buttonmatrix 实现，故单独自绘并直接读写 textarea。
  *     负号键切换前导 '-'，全局对所有数字输入（含 debug 页各字段）生效。
+ *
+ *     配色按新稿 6363:44775/44778 翻成浅色（白面板 + 深墨键 + 深墨字），**几何一律不动**：
+ *     稿上只画了 7-9 / 4-6 / 1-3 / . 0 确认四排，没画 C / − / ⌫ 那一排，但调试页有字段
+ *     依赖负号与删除，删掉是功能回退，故保留原布局。遮罩仍是黑 50%（稿自己标的
+ *     「50%黑色蒙版」），与弹窗那档的深墨 28% 不同。
  */
 
 static lv_obj_t *s_kb          = nullptr;  /**< 文本键盘（lv_keyboard） */
@@ -24,6 +29,30 @@ static bool      s_numpad_open          = false;
 
 /** 数字读数最大长度（含小数点/负号），防止溢出 */
 static constexpr size_t kNumpadMaxLen = 10;
+
+/** 键盘显隐观察者（单槽），见 ui_keyboard_set_visibility_cb() */
+static ui_keyboard_visibility_cb_t s_vis_cb = nullptr;
+static void                       *s_vis_ud = nullptr;
+
+/** 通知观察者键盘已弹出，并带上它遮住的屏幕矩形。
+ *  必须先 update_layout：刚 remove HIDDEN 的对象坐标还是上一帧的。 */
+static void notify_shown(lv_obj_t *kb_root)
+{
+    if(!s_vis_cb || !kb_root) {
+        return;
+    }
+    lv_obj_update_layout(kb_root);
+    lv_area_t a;
+    lv_obj_get_coords(kb_root, &a);
+    s_vis_cb(true, &a, s_vis_ud);
+}
+
+static void notify_hidden(void)
+{
+    if(s_vis_cb) {
+        s_vis_cb(false, nullptr, s_vis_ud);
+    }
+}
 
 static bool ta_input_allowed(lv_obj_t *ta)
 {
@@ -53,7 +82,13 @@ static void style_single_line_ta(lv_obj_t *ta)
         lv_obj_set_style_text_font(ta, font, 0);
     }
 
-    int32_t h = lv_obj_get_height(ta);
+    /* 优先用样式高度：attach 时常在首次 layout 之前（如 Other 隐藏 tab），
+     * lv_obj_get_height() 读 coords 会得到 0/默认值，pad 被钳成 2 导致数字贴顶偏高。 */
+    int32_t h = lv_obj_get_style_height(ta, LV_PART_MAIN);
+    if(h == LV_SIZE_CONTENT || LV_COORD_IS_PCT(h) || h <= 0) {
+        lv_obj_update_layout(ta);
+        h = lv_obj_get_height(ta);
+    }
     int32_t lh = lv_font_get_line_height(font);
     int32_t border = lv_obj_get_style_border_width(ta, LV_PART_MAIN);
     if(h > 0 && lh > 0) {
@@ -68,6 +103,9 @@ static void style_single_line_ta(lv_obj_t *ta)
 
 static void detach_keyboard_from_ta(lv_obj_t *ta)
 {
+    const bool was_visible =
+        (s_kb && !lv_obj_has_flag(s_kb, LV_OBJ_FLAG_HIDDEN)) || s_numpad_open;
+
     if(s_kb) {
         lv_obj_add_flag(s_kb, LV_OBJ_FLAG_HIDDEN);
         lv_keyboard_set_textarea(s_kb, nullptr);
@@ -82,6 +120,10 @@ static void detach_keyboard_from_ta(lv_obj_t *ta)
     }
     s_current_ta = nullptr;
     s_replace_on_first_key = false;
+
+    if(was_visible) {
+        notify_hidden();
+    }
 }
 
 static void hide_keyboard_core(lv_obj_t *ta)
@@ -196,7 +238,10 @@ static void numpad_on_ok_confirm(lv_event_t *)
     }
 }
 
-/** 圆形按键（数字 / 删除 / 确认复用）；accent=true 为蓝色高光确认键 */
+/** 圆形按键（数字 / 功能键 / 确认复用）；accent=true 为确认键（深墨实心 + 白字）。
+ *
+ * 稿 6363:44778 的配色：普通键 `#333145 @4%` 实底加一圈同色 4% 描边，字形 `#333145 @70%`；
+ * 确认键是深墨实心配白字（稿上带一层渐变与外发光，LVGL 做不了背景模糊，取平涂）。 */
 static lv_obj_t *numpad_make_key(lv_obj_t *parent, int32_t sz, const char *txt,
                                  lv_event_cb_t cb, void *ud, bool accent,
                                  const lv_font_t *font)
@@ -206,13 +251,16 @@ static lv_obj_t *numpad_make_key(lv_obj_t *parent, int32_t sz, const char *txt,
     lv_obj_set_size(btn, sz, sz);
     lv_obj_set_style_radius(btn, LV_RADIUS_CIRCLE, 0);
     if(accent) {
-        lv_obj_set_style_bg_color(btn, user_color_accent, 0);
+        lv_obj_set_style_bg_color(btn, user_light_nav_on, 0);
         lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, 0);
-        lv_obj_set_style_bg_color(btn, user_color_accent_dim, LV_STATE_PRESSED);
+        lv_obj_set_style_bg_opa(btn, LV_OPA_80, LV_STATE_PRESSED);
     } else {
-        lv_obj_set_style_bg_color(btn, user_color_text, 0);
-        lv_obj_set_style_bg_opa(btn, 13, 0);
-        lv_obj_set_style_bg_opa(btn, LV_OPA_40, LV_STATE_PRESSED);
+        lv_obj_set_style_bg_color(btn, user_light_nav_on, 0);
+        lv_obj_set_style_bg_opa(btn, 10, 0);          /* 稿 #333145 @4% */
+        lv_obj_set_style_bg_opa(btn, LV_OPA_20, LV_STATE_PRESSED);
+        lv_obj_set_style_border_width(btn, 1, 0);
+        lv_obj_set_style_border_color(btn, user_light_nav_on, 0);
+        lv_obj_set_style_border_opa(btn, 10, 0);
     }
     if(cb) {
         lv_obj_add_event_cb(btn, cb, LV_EVENT_CLICKED, ud);
@@ -220,7 +268,8 @@ static lv_obj_t *numpad_make_key(lv_obj_t *parent, int32_t sz, const char *txt,
 
     lv_obj_t *l = lv_label_create(btn);
     lv_label_set_text(l, txt);
-    lv_obj_set_style_text_color(l, user_color_text, 0);
+    lv_obj_set_style_text_color(l, accent ? lv_color_white() : user_light_text, 0);
+    lv_obj_set_style_text_opa(l, accent ? LV_OPA_COVER : LV_OPA_70, 0);
     lv_obj_set_style_text_font(l, font, 0);
     lv_obj_center(l);
     return btn;
@@ -291,14 +340,15 @@ static void build_numpad(lv_obj_t *parent)
     lv_obj_add_flag(s_numpad, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_event_cb(s_numpad, numpad_on_ok, LV_EVENT_CLICKED, nullptr);
 
-    /* 右侧面板：纵向 flex，吸收自身点击（不穿透到遮罩） */
+    /* 右侧面板：纵向 flex，吸收自身点击（不穿透到遮罩）。稿 6363:44778 是纯白底。 */
     lv_obj_t *panel = lv_obj_create(s_numpad);
     lv_obj_remove_style_all(panel);
     lv_obj_set_size(panel, panel_w, scr_h);
     lv_obj_align(panel, LV_ALIGN_RIGHT_MID, 0, 0);
-    lv_obj_set_style_bg_color(panel, user_color_panel, 0);
+    lv_obj_set_style_bg_color(panel, user_light_card, 0);
     lv_obj_set_style_bg_opa(panel, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_color(panel, user_color_divider, 0);
+    lv_obj_set_style_border_color(panel, user_light_nav_on, 0);
+    lv_obj_set_style_border_opa(panel, LV_OPA_10, 0);
     lv_obj_set_style_border_width(panel, 1, 0);
     lv_obj_set_style_border_side(panel, LV_BORDER_SIDE_LEFT, 0);
     lv_obj_set_style_pad_all(panel, side, 0);
@@ -318,7 +368,7 @@ static void build_numpad(lv_obj_t *parent)
     lv_obj_set_flex_grow(s_numpad_disp, 1);
     lv_label_set_long_mode(s_numpad_disp, LV_LABEL_LONG_CLIP);
     lv_obj_set_style_text_align(s_numpad_disp, LV_TEXT_ALIGN_LEFT, 0);
-    lv_obj_set_style_text_color(s_numpad_disp, user_color_text, 0);
+    lv_obj_set_style_text_color(s_numpad_disp, user_light_text, 0);
     lv_obj_set_style_text_font(s_numpad_disp, user_font_value(), 0);
     lv_label_set_text(s_numpad_disp, "0");
 
@@ -378,6 +428,8 @@ static void show_numpad_for_ta(lv_obj_t *ta)
     lv_obj_remove_flag(s_numpad, LV_OBJ_FLAG_HIDDEN);
     lv_obj_move_foreground(s_numpad);
     s_numpad_open = true;
+    /* 遮罩铺满全屏、面板只占右侧，让位要按面板算，所以取 panel 而不是 s_numpad */
+    notify_shown(lv_obj_get_child(s_numpad, 0));
 
     /*
      * 等当前触摸抬起后再处理下一次点击，避免抬起落在刚弹出的面板上导致输入框失焦。
@@ -409,6 +461,7 @@ static void show_keyboard_for_ta(lv_obj_t *ta, lv_keyboard_mode_t mode)
     lv_keyboard_set_textarea(s_kb, ta);
     lv_obj_remove_flag(s_kb, LV_OBJ_FLAG_HIDDEN);
     lv_obj_move_foreground(s_kb);
+    notify_shown(s_kb);
 
     lv_indev_t *indev = lv_indev_active();
     if(indev && lv_indev_get_type(indev) == LV_INDEV_TYPE_POINTER) {
@@ -520,4 +573,10 @@ void ui_keyboard_attach(lv_obj_t *ta, lv_keyboard_mode_t mode)
 void ui_keyboard_hide(void)
 {
     hide_keyboard_core(s_current_ta);
+}
+
+void ui_keyboard_set_visibility_cb(ui_keyboard_visibility_cb_t cb, void *user_data)
+{
+    s_vis_cb = cb;
+    s_vis_ud = user_data;
 }

@@ -157,14 +157,9 @@
 /* -------------------------------------------------------------------------- */
 /* 门控                                                                         */
 /* -------------------------------------------------------------------------- */
-/** 门控：0=保持旧占位（直接通过）；1=走真实串口门控流程 */
+/** 门控：0=保持旧占位（直接通过）；1=走真实串口开门 + PM2.5/清粉流程 */
 #ifndef GLAVO_DOOR_REAL_OPEN_ENABLE
 #define GLAVO_DOOR_REAL_OPEN_ENABLE  0
-#endif
-
-/** 关门检测：0=保持旧占位（直接判已关）；1=按传感器上报外门锁状态判定 */
-#ifndef GLAVO_DOOR_REAL_CLOSE_CHECK_ENABLE
-#define GLAVO_DOOR_REAL_CLOSE_CHECK_ENABLE  0
 #endif
 
 /** 真实开门请求等待 MCU 结果超时（毫秒） */
@@ -177,13 +172,15 @@
 /* -------------------------------------------------------------------------- */
 /** 舱内 PMSA003-A */
 #ifndef GLAVO_PM_CABIN_UART
-#define GLAVO_PM_CABIN_UART  "/dev/ttyS0"
+// #define GLAVO_PM_CABIN_UART  "/dev/ttyS0"
+#define GLAVO_PM_CABIN_UART  "/dev/ttyS5"
 #endif
 /**
  * 舱外 PMSA003-A
  */
 #ifndef GLAVO_PM_OUTDOOR_UART
-#define GLAVO_PM_OUTDOOR_UART  "/dev/ttyS5"
+// #define GLAVO_PM_OUTDOOR_UART  "/dev/ttyS5"
+#define GLAVO_PM_OUTDOOR_UART  "/dev/ttyS0"
 #endif
 #ifndef GLAVO_PM_VALVE_SYSFS
 #define GLAVO_PM_VALVE_SYSFS  "/sys/class/leds/fa_valve/brightness"
@@ -213,11 +210,11 @@
 #endif
 /**
  * 氧传感器（IIO 无 in_voltage0_scale）：
- *   V = raw × GLAVO_O2_RAW_TO_VOLT（raw 单位 nV）
+ *   V = raw × GLAVO_O2_RAW_TO_VOLT（raw × 3.3 / 2^31）
  *   I[uA] = V / R_sense × 1e6
  *   O2% = 100 × (1 − e^(−I/K))
  * K 优先读 /userdata/CAL/o2_cal.json（调试页一键标定写入）；缺文件回退 GLAVO_O2_K。
- * 出厂默认空气点：raw≈1.54e7 → ~15.4mV → K≈655 对准约 20.9%。
+ * 出厂默认空气点：raw≈1.54e7 → ~23.7mV → K≈655 对准约 20.9%。
  */
 #ifndef GLAVO_O2_READY_PATH
 #define GLAVO_O2_READY_PATH  "/run/o2_ready"  /**< S46o2-preheat 约 100s 后创建 */
@@ -226,7 +223,7 @@
 #define GLAVO_O2_IIO_RAW  "/sys/bus/iio/devices/iio:device0/in_voltage0_raw"
 #endif
 #ifndef GLAVO_O2_RAW_TO_VOLT
-#define GLAVO_O2_RAW_TO_VOLT  1e-9f  /**< nV → V；勿再按 ADC 满幅换算 */
+#define GLAVO_O2_RAW_TO_VOLT  (3.3f / 2147483648.f)  /**< V = raw × 3.3 / 2^31 */
 #endif
 #ifndef GLAVO_O2_RSENSE_OHM
 #define GLAVO_O2_RSENSE_OHM  100.f
@@ -284,6 +281,10 @@
 /** SPI 灯效板（WS，40 颗）；仅 MCU≥V4 打开 */
 #ifndef GLAVO_SPI_STATUS_LED_DEV
 #define GLAVO_SPI_STATUS_LED_DEV  "/dev/spidev1.0"
+#endif
+/** SPI PM2.5 小屏 fbdev name（扫 /sys/class/graphics/fbN/name，勿写死 fb0） */
+#ifndef GLAVO_SPI_PM25_LCD_FB_NAME
+#define GLAVO_SPI_PM25_LCD_FB_NAME  "st7735rdrmfb"
 #endif
 
 /* -------------------------------------------------------------------------- */

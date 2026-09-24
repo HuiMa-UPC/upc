@@ -82,6 +82,11 @@ std::string MqttConfig::topic_prefix() const
     return "snowpod/cn/" + device_id + "/";
 }
 
+std::string MqttConfig::topic_mgmt() const
+{
+    return "downlink/" + device_id + "/mgmt";
+}
+
 std::string MqttConfig::topic_cmd() const
 {
     return topic_prefix() + "cmd";
@@ -135,6 +140,16 @@ std::string MqttConfig::topic_ota_progress() const
 std::string MqttConfig::topic_log_collect_progress() const
 {
     return topic_prefix() + "log_collect/progress";
+}
+
+std::string MqttConfig::topic_alarm_report() const
+{
+    return topic_prefix() + "alarm/report";
+}
+
+std::string MqttConfig::topic_alarm_ack() const
+{
+    return topic_prefix() + "alarm/ack";
 }
 
 //桌面调试

@@ -44,6 +44,19 @@ typedef struct {
     bool        with_footer;    /**< true 时创建 footer 容器 */
     bool        accent_underline; /**< true 时标题下加主色分割线（用户层已统一 false） */
     bool        with_close_btn; /**< true 时在卡片右上角加一个 "X" 关闭按钮 */
+    /**
+     * 浅色档（稿 6251:94239 / 6423:51893）：白卡 + 深色标题 + 更大的圆角 + 深墨 28% 遮罩。
+     *
+     * **现在全部弹窗都开着它**。改稿前是一页一页翻的，那时这里写着「按调用点开，别图省事
+     * 全开」——因为当时其余弹窗里装着白字读数、深色输入框、进度条，底一翻白就看不见。
+     * 弹窗新稿落地时把那些内容一并重新上色了（`ui_user_make_body_label` /
+     * `ui_user_make_progress_bar` / `ui_arc_spinner` 的默认值都已改成浅底档），所以现在
+     * 新建弹窗**默认就该开**。真要做一个深底弹窗，先确认它 body 里的东西压在深底上还看得见。
+     *
+     * 只管**外壳**（卡底 / 标题 / 圆角 / 内距 / 遮罩 / 关闭钮）。body 与 footer 里的东西
+     * 由调用方自己上色——footer 那两枚走 ui_user_make_confirm_footer_btn() 的 light 形参。
+     */
+    bool        light_theme;
 } ui_modal_dialog_cfg_t;
 
 /**

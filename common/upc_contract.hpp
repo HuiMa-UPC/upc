@@ -412,6 +412,12 @@ enum class MsgType : uint32_t {
      * 追加在 GLAVO_Print_State_Ntf 之后，避免挪动上面那段的隐式编号。 */
     APP_OpticalPath_Progress_Ntf,   /**< OpticalPathProgressPayload：光路检测逐点进度（打印卡徽标行） */
     APP_Print_Start_Rejected_Ntf,   /**< PrintStartRejectedPayload：起印被后端拒绝，UI 跳终止结果页 */
+    /** 外门未关：Glavo→UI 请确认关门（无超时；UI 弹窗 Confirm/Cancel 后回 UI_Outer_Door_Confirm_Rsp） */
+    GLAVO_Outer_Door_Confirm_Req,
+    /** UI→Glavo：OuterDoorConfirmRspPayload；skip=0 再读门，skip=1 跳过外门检测进下一步 */
+    UI_Outer_Door_Confirm_Rsp,
+    /** Glavo→UI：起印环境检查进度（Job 卡标题+进度条；跳过的步骤不推） */
+    APP_Print_Prep_Progress_Ntf,
 
     // ---- UI ↔ GLAVO：耗材/滤芯 ----
     UI_Supply_Status_Req = 0x1060, /**< Empty */
@@ -494,8 +500,15 @@ enum class MsgType : uint32_t {
     UI_Debug_Cabin_Pm_Valve_Get_Ntf,    /**< Empty：查询舱内 PM 阀开关状态 */
     UI_Debug_Skip_O2_Gate_Set_Ntf,      /**< DebugOnOffPayload：跳过 SOC 氧打印门+打印前洗气（仅本次运行，默认关） */
     UI_Debug_Skip_O2_Gate_Get_Ntf,      /**< Empty：查询当前跳过氧门开关状态 */
+    UI_Debug_Skip_Outer_Door_Set_Ntf,   /**< DebugOnOffPayload：跳过外门检测+关内门套件（仅本次运行，默认关=要做） */
+    UI_Debug_Skip_Outer_Door_Get_Ntf,   /**< Empty：查询跳过外门检测开关 */
     UI_Debug_O2_Calib_Req,              /**< DebugO2CalibReqPayload：空气/标准气单点标定 K */
     UI_Debug_O2_Calib_Get_Ntf,          /**< Empty：查询当前氧标定 K（不重新采样） */
+    UI_Debug_Status_Led_Set_Ntf,        /**< DebugStatusLedPayload：强制 SPI 灯板颜色（仅本次运行，绕开 MCU 版本门） */
+    UI_Debug_Status_Led_Get_Ntf,        /**< Empty：查询当前灯板强制态 */
+    UI_Debug_Alarm_Inject_Ntf,          /**< AlarmReportPayload：调试页 Alarm Inject，Glavo 只转发 MQTT（不上 UI、不改快照） */
+    UI_Debug_Spi_Pm25_Lcd_Set_Ntf,      /**< DebugOnOffPayload：SPI 小屏周期刷测试色（仅本次运行，默认关） */
+    UI_Debug_Spi_Pm25_Lcd_Get_Ntf,      /**< Empty：查询 SPI 小屏测试刷屏开关 |
 
     // ---- GLAVO → UI：调试页状态回读（按模块拆分） ----
     GLAVO_Debug_Sensor_Ntf = 0x1200, /**< DebugSensorPayload：调试顶栏传感器（舱内/滤芯氧 + 舱外/舱内 PM） */
@@ -518,8 +531,12 @@ enum class MsgType : uint32_t {
     GLAVO_Debug_Soc_Led_Ntf,            /**< DebugSocLedStatePayload：六路舱灯开关位图 */
     GLAVO_Debug_Cabin_Pm_Valve_Ntf,     /**< DebugOnOffPayload：舱内 PM 阀开关状态 */
     GLAVO_Debug_Skip_O2_Gate_Ntf,       /**< DebugOnOffPayload：跳过 SOC 氧打印门开关状态 */
+    GLAVO_Debug_Skip_Outer_Door_Ntf,    /**< DebugOnOffPayload：跳过外门检测+关内门套件开关状态 */
     GLAVO_Debug_O2_Calib_Rsp,           /**< DebugO2CalibRspPayload：氧标定结果（Req 应答） */
     GLAVO_Debug_O2_Calib_Ntf,           /**< DebugO2CalibRspPayload：当前 K 回读（Get，ok=1 且未改盘） */
+    GLAVO_Debug_Status_Led_Ntf,         /**< DebugStatusLedPayload：灯板强制态回读 */
+    GLAVO_Debug_Fan_Ntf,                /**< DebugFanStatePayload：风机实测转速/故障/状态（V4 EXT 帧，约 1s） */
+    GLAVO_Debug_Spi_Pm25_Lcd_Ntf,       /**< DebugOnOffPayload：SPI 小屏测试刷屏开关状态 |
 
     // ---- UI ↔ GLAVO：网络 / WiFi（ConnMan 后端） ----
     UI_Wifi_Enable_Req = 0x1300, /**< WifiEnableReqPayload：开/关 WiFi */
@@ -618,11 +635,14 @@ enum class MsgType : uint32_t {
     GLAVO_Device_Event_Ntf = 0x1600, /**< DeviceEventPayload：一条设备事件的触发或恢复 */
 
     // ---- UI ↔ GLAVO：MCU 报警（串口 PORT_ALARM_TASK 0xA3；字典见 doc/主控板串口通信协议 - 报警&事件表.csv） ----
-    GLAVO_Alarm_Report_Ntf = 0x1610, /**< AlarmReportPayload：MCU 单条报警/EVENT 上报（Cmd 0x20 TLV 0x01 原样透传） */
+    GLAVO_Alarm_Report_Ntf = 0x1610, /**< AlarmReportPayload：单条报警/EVENT（Glavo 双发 UI + MQTT；MCU TLV 或 SOC 合成 1120） */
     UI_Alarm_Reset_Ntf,              /**< AlarmResetReqPayload：请求复位某条 CONDITION 报警（Cmd 0x82 TLV 0x01） */
-    GLAVO_Alarm_Snapshot_Ntf,        /**< AlarmSnapshotPayload：报警快照的一个 slot（Cmd 0x81 TLV 0x04 原样透传） */
+    GLAVO_Alarm_Snapshot_Ntf,        /**< AlarmSnapshotPayload：报警快照的一个 slot（Cmd 0x81 TLV 0x04 原样透传）→ UI */
     UI_Alarm_Snapshot_Ntf,           /**< Empty：请求 MCU 回一轮报警快照（Cmd 0x81 TLV 0x05 len=0） */
     GLAVO_Alarm_Reset_Result_Ntf,    /**< AlarmResetResultPayload：复位失败回执（Cmd 0x82 TLV 0x04） */
+    /** AlarmCloudSnapshotPayload：Glavo 攒齐一轮（可并入 SOC 1120）后的完整 CONDITION 位图 → MQTT 上云。
+     *  云端契约见 doc/soc-alarm-contract-v1.md（alarm.snapshot）；不发串口分片。 */
+    GLAVO_Alarm_Cloud_Snapshot_Ntf,
 
     // ---- GLAVO → UI：制氮机 BLE 状态（v1 UI 可不订阅） ----
     APP_N2_Status_Ntf = 0x1620, /**< N2StatusPayload：在线/浓度/STATE/seq；变化立即推，否则最多 1Hz */
@@ -653,6 +673,7 @@ inline constexpr bool is_ipc_reliable_msg_type(MsgType type) noexcept
     case MsgType::APP_Soc_Ota_Apply_Rsp:
     case MsgType::GLAVO_Alarm_Report_Ntf:
     case MsgType::GLAVO_Alarm_Reset_Result_Ntf:
+    case MsgType::GLAVO_Alarm_Cloud_Snapshot_Ntf:
         return true;
 
     // 打印主流程：关键状态与异常通知
@@ -661,6 +682,7 @@ inline constexpr bool is_ipc_reliable_msg_type(MsgType type) noexcept
     case MsgType::APP_Print_Pause_Rsp:
     case MsgType::APP_Print_Powder_Low_Ntf:
     case MsgType::APP_OpticalPath_Progress_Ntf:
+    case MsgType::APP_Print_Prep_Progress_Ntf:
     case MsgType::GLAVO_UI_Height_Calib_Progress_Ntf:
         return true;
 
@@ -674,6 +696,10 @@ inline constexpr bool is_ipc_reliable_msg_type(MsgType type) noexcept
     // 调试氧单点标定：控制类 Req/Rsp，丢一条 UI 会以为没点到
     case MsgType::UI_Debug_O2_Calib_Req:
     case MsgType::GLAVO_Debug_O2_Calib_Rsp:
+        return true;
+
+    /* 调试页 Alarm Inject：点了却丢包则云端收不到单报，联调会误判 MQTT 没接上。 */
+    case MsgType::UI_Debug_Alarm_Inject_Ntf:
         return true;
 
     // 换层/录像链路：层抓拍与会话闭环
@@ -701,6 +727,8 @@ inline constexpr bool is_ipc_reliable_msg_type(MsgType type) noexcept
     case MsgType::GLAVO_Visual_Laser_Spot_Measure_Req:
     case MsgType::APP_Visual_Laser_Spot_Measure_Rsp:
     case MsgType::APP_Print_Start_Rejected_Ntf:
+    case MsgType::GLAVO_Outer_Door_Confirm_Req:
+    case MsgType::UI_Outer_Door_Confirm_Rsp:
         return true;
 
     default:
@@ -723,6 +751,7 @@ inline constexpr bool is_ipc_latest_only_msg_type(MsgType type) noexcept
     case MsgType::APP_Print_Video_Manifest_Ntf:
     case MsgType::APP_Visual_FirstLayer_Reference_Ready_Rsp:
     case MsgType::APP_OpticalPath_Progress_Ntf:
+    case MsgType::APP_Print_Prep_Progress_Ntf:
         return true;
     default:
         return false;
@@ -760,6 +789,8 @@ struct EnvSnapshotPayload {
     uint8_t  sensor_v4;         /**< 1=MCU V4：舱氧/PM/温湿/气压以 SOC 为准 */
     float    pm1_cabin;         /**< 舱内 PM1.0；无效填 <0（V4 SOC） */
     float    pm10_cabin;        /**< 舱内 PM10；无效填 <0（V4 SOC） */
+    uint8_t  outer_door_open;   /**< 1=外门开 0=关；仅 door_state_valid=1 时有效 */
+    uint8_t  door_state_valid;  /**< 1=已收到至少一帧门传感器状态 */
 };
 
 /** APP_PM25_Rsp 载荷：PM2.5 检测结果（Inline） */
@@ -1082,11 +1113,39 @@ struct OpticalPathProgressPayload {
     uint8_t reserved;
 };
 
+/** 起印环境检查步骤。数值跨进程传输，只准往末尾追加。 */
+enum class PrintPrepStep : uint8_t {
+    OuterDoor   = 0,  /**< 等待外门关到位（Confirm 弹窗） */
+    InnerDoor   = 1,  /**< 降 Z + 关内门套件 */
+    OpticalPath = 2,  /**< 打印前光路检测 */
+    PlateHeight = 3,  /**< 基板测高调平 */
+    Ready       = 4,  /**< 环境检查结束，即将进入打印送层 */
+    /** 串口 CONDITION_OK 后洗气+等 SOC 氧 < 阈值（Skip O2 / EnvSim / 测试图不计） */
+    Oxygen      = 5,
+    /** 首层视觉：采参考图 + PRINT_READY 后比对（调试开关关则不计） */
+    FirstLayer  = 6,
+};
+
+/** APP_Print_Prep_Progress_Ntf：起印环境检查进度（Inline）
+ *  step_index/step_total 只统计本趟实际会跑的步骤（调试跳过 / 门已关则不计入）。
+ *  光路步用 sub_index/sub_total 表示点位；其它步 sub_total=0。 */
+struct PrintPrepProgressPayload {
+    uint8_t step;        /**< PrintPrepStep */
+    uint8_t step_index;  /**< 当前步在本趟中的序号，1..step_total；Ready 时 = step_total */
+    uint8_t step_total;  /**< 本趟实际步骤数；全跳过可为 0 */
+    uint8_t sub_index;   /**< 步内子进度（光路点位 0-based）；无则 0 */
+    uint8_t sub_total;   /**< 步内子总数（光路=5）；无则 0 */
+    uint8_t reserved[3];
+};
+
 /** 起印被拒原因。数值跨进程传输，只准往末尾追加。 */
 enum class PrintStartRejectReason : uint8_t {
-    Unknown         = 0,
-    OpticalPathFail = 1,  /**< 打印前光路检测未通过 */
-    FileOpenFail    = 2,  /**< 本地副本打不开（已 prepare 但文件被删/损坏） */
+    Unknown          = 0,
+    OpticalPathFail  = 1,  /**< 打印前光路检测未通过 */
+    FileOpenFail     = 2,  /**< 本地副本打不开（已 prepare 但文件被删/损坏） */
+    PlateHeightFail  = 3,  /**< 打印前基板测高失败或无 LUT */
+    TcpOffline       = 4,  /**< 振镜 TCP 未连接，无法 begin_sending */
+    InnerDoorSeqFail = 5,  /**< 关内门套件（降 Z/关内门/回 Z）失败 */
 };
 
 /** APP_Print_Start_Rejected_Ntf：起印被后端拒绝（Inline）
@@ -1095,6 +1154,14 @@ struct PrintStartRejectedPayload {
     uint8_t reason;       /**< PrintStartRejectReason */
     uint8_t detail;       /**< reason=OpticalPathFail 时为失败点位索引，无效填 0xff */
     uint8_t reserved[2];
+};
+
+/** UI_Outer_Door_Confirm_Rsp：用户对外门确认窗的回复（Inline）
+ *  skip=0：Confirm，Glavo 再读传感器，仍开则再次 Req。
+ *  skip=1：Cancel，不检门，直接 continue 内门/光路/测高。 */
+struct OuterDoorConfirmRspPayload {
+    uint8_t skip;        /**< 0=确认后再检门，1=跳过外门检测 */
+    uint8_t reserved[3];
 };
 
 /**
@@ -1698,6 +1765,10 @@ enum class DeviceEventCode : uint16_t {
     OpticalPathCheckPassed  = 32, /**< 打印前光路检测通过（one_shot，severity=info） */
     OpticalPathCheckFail    = 33, /**< 光路异常，已阻断本次打印（one_shot，severity=critical） */
     PlateHeightFlatnessWarn = 34, /**< 打印前测高五次未通过，基板平整度需检查（one_shot，severity=error） */
+    TcpLinkDown             = 35, /**< 起印时振镜 TCP 未连接（one_shot，severity=error） */
+    OuterDoorNeedClose      = 36, /**< 起印需关外门（one_shot，severity=info；弹窗另走 Confirm_Req） */
+    InnerDoorSeqFail        = 37, /**< 关内门套件失败（one_shot，severity=error） */
+    PlateHeightBlocked      = 38, /**< 测高无 LUT 或失败，已阻断起印（one_shot，severity=error） */
 
     /* ---- 以下为 UI 本地事件：不走总线，由前端自己 push，占同一码空间以便
      *      消息中心统一排序去重。后端不应发送这些码。 ---- */
@@ -1816,6 +1887,29 @@ struct AlarmResetResultPayload {
     uint16_t alarm_code;  /**< 关联正在复位的报警 */
     uint8_t  result;      /**< kAlarmResetResultFailed */
     uint8_t  reserved;
+};
+
+/** GLAVO_Alarm_Cloud_Snapshot_Ntf：串口 MCU 链路质量（供 alarm.status / 快照旁路）。 */
+enum class AlarmMcuLink : uint8_t {
+    Unknown = 0,
+    Online  = 1,
+    Offline = 2,
+};
+
+/**
+ * GLAVO_Alarm_Cloud_Snapshot_Ntf 载荷：完整 CONDITION 快照（Inline）。
+ *
+ * Glavo 在串口快照攒齐并并入 SOC 1120 后发给 MQTT；MQTT 展开为
+ * alarm.snapshot entries（coverage=condition_slots_v1）。未收到的 slot 按全零。
+ * 空快照（全 NORMAL）合法：highest_severity=0 且全部 mask=0。
+ * 元数据（severity/clear_mode/detail）不在本载荷——方案 A 上云一律 unknown。
+ */
+struct AlarmCloudSnapshotPayload {
+    uint8_t  highest_severity; /**< 本轮最高等级；0=无有效 CONDITION */
+    uint8_t  mcu_link;         /**< AlarmMcuLink */
+    uint16_t reserved;
+    uint32_t active_mask[kAlarmSnapshotSlotCount];
+    uint32_t latched_mask[kAlarmSnapshotSlotCount];
 };
 
 } // namespace middleware

@@ -170,6 +170,9 @@ void ui_user_segmented_set_selected(lv_obj_t *seg, uint8_t index);
 /** 读取分段控件当前选中段索引；无选中时返回 UI_USER_SEG_NONE */
 uint8_t ui_user_segmented_get_selected(lv_obj_t *seg);
 
+/** 缩略图路径是否存在（空串视为否）。清单路径可能尚未落盘。 */
+bool ui_user_thumb_path_exists(const char *path);
+
 #ifdef __cplusplus
 }
 #endif

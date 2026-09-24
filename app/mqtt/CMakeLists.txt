@@ -8,8 +8,11 @@ add_executable(rongsu_mqtt
     ${MQTT_LIB_DIR}/mqtt_service_ota.cpp
     ${MQTT_LIB_DIR}/mqtt_service_soc_ota.cpp
     ${MQTT_LIB_DIR}/mqtt_service_log_collect.cpp
+    ${MQTT_LIB_DIR}/mqtt_service_alarm.cpp
     ${MQTT_LIB_DIR}/mqtt_config.cpp
+    ${MQTT_LIB_DIR}/device_auth_http.cpp
     ${MQTT_LIB_DIR}/device_activation.cpp
+    ${MQTT_LIB_DIR}/credential_rotation.cpp
 )
 
 target_compile_features(rongsu_mqtt PRIVATE cxx_std_17)

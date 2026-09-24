@@ -164,6 +164,7 @@ bool MqttService::publish_manifest_request(const std::string& task_id)
         mqtt_connected_ = false;
         cmd_subscribed_ = false;
         ota_subscribed_ = false;
+        mgmt_subscribed_ = false;
         return false;
     }
     UPC_LOG_MQTT_SERVICE_TO(MqttOta, Info, "ota manifest request sent task_id=%s token=%d",
@@ -221,6 +222,7 @@ bool MqttService::publish_ota_progress_cloud(const middleware::OtaProgressPayloa
         mqtt_connected_ = false;
         cmd_subscribed_ = false;
         ota_subscribed_ = false;
+        mgmt_subscribed_ = false;
         return false;
     }
     return true;
@@ -426,7 +428,18 @@ bool MqttService::wait_apply_ota(std::string& err_code,
                                  const char* default_fail)
 {
     std::unique_lock<std::mutex> lock(mtx);
-    cv.wait(lock, [&sync]() { return sync.finished; });
+    const bool finished = cv.wait_for(lock, kApplyOtaWaitTimeout,
+                                      [&sync]() { return sync.finished; });
+    if(!finished) {
+        sync.waiting = false;
+        sync.finished = true;
+        sync.success = false;
+        sync.error_code = "ota_timeout";
+        UPC_LOG_MQTT_SERVICE_TO(MqttOta, Error,
+                                "apply ota wait timed out after %lld min task_id=%s",
+                                static_cast<long long>(kApplyOtaWaitTimeout.count()),
+                                sync.task_id.c_str());
+    }
     const bool ok = sync.success;
     if(ok) {
         err_code.clear();
@@ -437,6 +450,24 @@ bool MqttService::wait_apply_ota(std::string& err_code,
     }
     sync = ApplyOtaSync{};
     return ok;
+}
+
+void MqttService::cancel_apply_ota_waits()
+{
+    auto cancel_one = [](ApplyOtaSync& sync, std::mutex& mtx,
+                         std::condition_variable& cv) {
+        std::lock_guard<std::mutex> lock(mtx);
+        if(sync.waiting && !sync.finished) {
+            sync.finished = true;
+            sync.success = false;
+            if(sync.error_code.empty()) {
+                sync.error_code = "cancelled";
+            }
+        }
+        cv.notify_all();
+    };
+    cancel_one(galvo_ota_sync_, galvo_ota_mtx_, galvo_ota_cv_);
+    cancel_one(mcu_ota_sync_, mcu_ota_mtx_, mcu_ota_cv_);
 }
 
 bool MqttService::trigger_galvo_real_ota(const std::string& task_id, const std::string& component)

@@ -13,10 +13,13 @@ extern "C" {
  * @file ui_xfr_dialog.hpp
  * @brief WiFi 传输（rongsu_xfr）的两个模态弹窗：PIN 配对码 / 文件接收进度
  *
- * 对齐 Figma 两稿：「配对码接收」3859:9545、「1.1.1 首页_待机中」3859:9810。
- * 两者共用同一外壳（ui_modal_dialog + 两处局部覆盖），差异只在正文：
+ * 对齐 Figma 两稿：「配对码」6363:44046、「接收文件」6363:44211。
+ * 两者共用同一外壳（ui_modal_dialog 的 light_theme + 一处行距覆盖），差异只在正文：
  *   - PIN 弹窗   ：四位数字 + "Cancel Pairing"
  *   - 接收弹窗   ：文件名 + 进度条 + "Cancel Transfer"
+ *
+ * 稿 6363:44364 另画了一版「文件名 + 转圈」的接收态，未落地：XFR 的 Uploading 与
+ * Slicing 都带百分比，两态统一走进度条。
  *
  * 配对/传输是网络事件，任何时刻都可能到达，调用方应挂在 lv_layer_top()，
  * 而不是 control 的 g_overlay（后者在 IDLE 态是隐藏的）。

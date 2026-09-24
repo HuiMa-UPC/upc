@@ -37,7 +37,7 @@
 | `app/media/` | [MEDIA.md](../app/media/MEDIA.md) | 拍照/录像/延时封装 + 直播（云端 RTSP 推流、局域网 live555 RTSP Server；消费 Camera DMA 流） |
 | `app/xfer/` | [XFER.md](../app/xfer/XFER.md) | WiFi 发现、PIN 配对、HTTP 分块上传；OVF 走 snowslice，传输 3MF 提取单份 G-code + PNG/RTHM 缩略图 |
 | `app/visual/` | [VISUAL.md](../app/visual/VISUAL.md) | 视觉：Camera DMA 取帧、首层检测、打印前光路检测（红点桩） |
-| `app/mqtt/` | — | MQTT 网关：环境遥测、`set_light`、云端 `start/stop_rtsp_push`→Media |
+| `app/mqtt/` | — | MQTT 网关：激活/凭证轮换、环境遥测、报警上云（`alarm/report`+`alarm/ack`，契约 [soc-alarm-contract-v1.md](soc-alarm-contract-v1.md)）、`set_light`、云端 `start/stop_rtsp_push`→Media |
 | `app/parser/` | [PARSER.md](../app/parser/PARSER.md) | G-code/OVF 解析库（Glavo 链接） |
 | `app/protocol/` | [PROTOCOL.md](../app/protocol/PROTOCOL.md) | MCU 线协议（TCP `BE EF` + 串口 `5A A5`） |
 
@@ -54,9 +54,10 @@
 | `media_paths` | `common/fs_manifest/media_paths.hpp` | `UPC_MEDIA_ROOT`（默认 `/userdata/media`：photo/video/tmp + 首层视觉诊断图，各进程共用） |
 | `image_paths` | `common/fs_manifest/image_paths.hpp` | `UPC_IMAGE_ROOT`（默认 `/userdata/image`：soc/mcu/galvo/tmp） |
 | `ota_image_pair` | `common/fs_manifest/ota_image_pair.*` | MCU/Galvo AB 文件名与最高版本选取（规则 [OTA_IMAGE.md](../common/fs_manifest/OTA_IMAGE.md)） |
-| `McuLink` | `mcu_link.*` | TCP 运动 + 串口握手/传感器；MCU≥V4 时合并 `SocSensors` 本地采集 |
-| `SocSensors` | `soc_sensors.*` | MCU≥V4：舱内外 PMSA UART、AHT20、CPM121、IIO 氧气周期采集；六路舱灯/`fa_valve` sysfs 随时可写（调试页，不看 MCU 版本）；与 UI 背光无关 |
-| `SpiStatusLed` | `spi_status_led.*` | MCU≥V4：SPI 灯效板状态色（空闲蓝 / 打印橙 / CONDITION 红） |
+| `McuLink` | `mcu_link.*` | TCP 运动 + 串口握手/传感器；环境量合并 `SocSensors` 本地采集 |
+| `SocSensors` | `soc_sensors.*` | 舱内外 PMSA UART、AHT20、CPM121、IIO 氧气周期采集；六路舱灯/`fa_valve` sysfs 随时可写（调试页）；与 UI 背光无关 |
+| `SpiStatusLed` | `spi_status_led.*` | SPI 灯效板状态色（空闲蓝 / 打印橙 / CONDITION 红） |
+| `SpiPm25Lcd` | `spi_pm25_lcd.*` | ST7735 SPI 小屏（fbdev `st7735rdrmfb`）常显舱外 PM2.5 |
 | `PrintJobState` | `print_job_state.*` | 打印任务计数/状态 |
 | `PrintVideoNotify` | `print_video_notify.*` | 换层 Snap / 录像会话 IPC → Media |
 | `device_config.hpp` | 头文件 | TCP/串口默认、`GLAVO_ENABLE_LAYER_SNAP`、`GLAVO_N2_BLE_ENABLE` 等 |
@@ -99,7 +100,8 @@
 | `ui_alarm_*` | `ui_alarm_state.*` | MCU 报警唯一数据源：生命周期缓存 + 复位在途/失败回执 + 历史落盘 + 快照请求与稀疏攒帧 + 打印阻断/会话抑制 |
 | `ui_clean_state_*` | `ui_clean_state.*` | 清粉（clean_test）发起与回执的唯一来源：接管两个单槽 Proxy 回调，按发起方（结果页 Purify / 控制页手动清粉）扇出；`record_video` 决定是否连带清粉录像 |
 | `ui_alarm_catalog_*` | `ui_alarm_catalog.hpp` / `ui_alarm_catalog_gen.cpp` | 报警字典（生成物，改 `tools/gen_alarm_catalog.py` + `doc/alarm_catalog_en.csv`）；槽位映射不在此，是 `upc_contract.hpp` 里的固定公式 |
-| `ui_notice_stack_*` | `ui_notice_stack.*` | 右上通知浮层（最多两张卡 + 「查看剩余 N 条」；消息页/历史页/设置页不显示），PageManager 持有 |
+| `ui_notice_stack_*` | `ui_notice_stack.*` | 右上通知三态：toast / 铃铛 / 面板互斥（**只在首页**；监控页不建铃铛与面板，靠画面左上的状态胶囊与阻塞弹窗，其余进消息中心），PageManager 持有 |
+| `ui_sys_hud_*` | `ui_sys_hud.*` | 调试红字蒙版（`lv_layer_sys` 右上角：CPU 温 / 整机与本进程占用 / 内存 used/total+rss；调试页 Media & Sim「Sys HUD」，`upc_sys_monitor_sample` 读本机 `/proc` 与 thermal sysfs，仅本次运行） |
 | `ui_backlight_*` | `ui_backlight.*` | LCD 背光 sysfs（设置页 Display），不经 Glavo、不看 MCU 版本 |
 | `control_*` | `control.*` | 打印状态机（含 `CONTROL_STATE_PRINT_DONE` 结果页、`CONTROL_STATE_TRANSFER_BOX` 取件转运盒）+ overlay UI |
 | `VideoPlayer` | `video_player.*` | 延时视频 libav* 软解 → BGRX/RGB565 → lv_image（play/pause/seek；拖动预览缩小帧 + latest-wins） |

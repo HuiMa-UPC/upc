@@ -1,5 +1,6 @@
 #include "clean_video_recorder.hpp"
 
+#include "nv12_copy.hpp"
 #include "msg_port.hpp"
 #include "print_history_manifest.hpp"
 #include "rs_log.hpp"
@@ -108,32 +109,6 @@ uint64_t CleanVideoRecorder::monotonic_us()
     return static_cast<uint64_t>(
         std::chrono::duration_cast<std::chrono::microseconds>(
             std::chrono::steady_clock::now().time_since_epoch()).count());
-}
-
-void CleanVideoRecorder::copy_nv12_tight(uint8_t* dst, const uint8_t* src_y,
-                                         const uint8_t* src_uv,
-                                         uint32_t src_stride_y,
-                                         uint32_t width, uint32_t height)
-{
-    if(!dst || !src_y || !src_uv || width == 0 || height == 0 ||
-       src_stride_y == 0) {
-        return;
-    }
-    const size_t y_size = static_cast<size_t>(width) * height;
-    uint8_t* dst_uv = dst + y_size;
-    if(src_stride_y == width) {
-        std::memcpy(dst, src_y, y_size);
-        std::memcpy(dst_uv, src_uv, y_size / 2u);
-        return;
-    }
-    for(uint32_t r = 0; r < height; ++r) {
-        std::memcpy(dst + static_cast<size_t>(r) * width,
-                    src_y + static_cast<size_t>(r) * src_stride_y, width);
-    }
-    for(uint32_t r = 0; r < height / 2u; ++r) {
-        std::memcpy(dst_uv + static_cast<size_t>(r) * width,
-                    src_uv + static_cast<size_t>(r) * src_stride_y, width);
-    }
 }
 
 void CleanVideoRecorder::start_worker_if_needed_locked()
@@ -369,7 +344,7 @@ void CleanVideoRecorder::on_frame_nv12(const uint8_t* src_y, const uint8_t* src_
     job.height = current_height;
     job.session_dir = current_session_dir;
     job.nv12.resize(need);
-    copy_nv12_tight(job.nv12.data(), src_y, src_uv, stride_y,
+    upc::copy_nv12_tight(job.nv12.data(), src_y, src_uv, stride_y,
                     current_width, current_height);
 
     {

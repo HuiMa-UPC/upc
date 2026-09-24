@@ -116,8 +116,8 @@ dmesg | grep xhci-hcd.0         # 应该没有了，只剩 xhci-hcd.1.auto
 ## 6. 氧浓度查看及换算
 
 ```bash
-# 读 IIO 原始值（本板无 in_voltage0_scale：raw 单位 nV）
-# 用户态：V=raw×1e-9，I[uA]=V/100×1e6，O2%=100×(1−e^(−I/K))
+# 读 IIO 原始值（本板无 in_voltage0_scale）
+# 用户态：V=raw×3.3/2^31，I[uA]=V/100×1e6，O2%=100×(1−e^(−I/K))
 # K：优先 /userdata/CAL/o2_cal.json（调试页 O2 Calib：输入参考浓度后标定）；缺省≈655
 cat /sys/bus/iio/devices/iio:device0/in_voltage0_raw
 cat /userdata/CAL/o2_cal.json   # 可选；无则用出厂默认 K

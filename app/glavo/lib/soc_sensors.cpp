@@ -32,6 +32,9 @@ namespace glavo {
 namespace {
 
 constexpr speed_t kPmBaud = B9600;
+constexpr auto kPmsaOkLogInterval = std::chrono::seconds(5);
+constexpr auto kPmsaMissLogInterval = std::chrono::seconds(10);
+constexpr auto kPmsaMissGrace = std::chrono::seconds(3);
 
 int open_uart_9600(const char* path)
 {
@@ -123,7 +126,9 @@ bool pmsa_try_parse_frame(const uint8_t* f, float* pm1, float* pm25, float* pm10
 
 class PmUartReader {
 public:
-    explicit PmUartReader(const char* path) : path_(path ? path : "") {}
+    PmUartReader(const char* path, const char* tag)
+        : path_(path ? path : ""), tag_(tag ? tag : "?")
+    {}
 
     void ensure_open()
     {
@@ -131,6 +136,17 @@ public:
             return;
         }
         fd_ = open_uart_9600(path_.c_str());
+        if(fd_ < 0) {
+            if(!open_fail_logged_) {
+                open_fail_logged_ = true;
+                UPC_LOG_GLAVO_SERVICE(Warn, "pmsa %s open %s failed errno=%d",
+                                      tag_, path_.c_str(), errno);
+            }
+            return;
+        }
+        open_fail_logged_ = false;
+        opened_at_ = std::chrono::steady_clock::now();
+        UPC_LOG_GLAVO_SERVICE(Info, "pmsa %s open %s", tag_, path_.c_str());
     }
 
     void close_fd()
@@ -146,15 +162,18 @@ public:
     bool poll(float* pm1, float* pm25, float* pm10)
     {
         ensure_open();
+        const auto now = std::chrono::steady_clock::now();
         if(fd_ < 0) {
             return false;
         }
+        size_t nread = 0;
         uint8_t tmp[128];
         for(;;) {
             const ssize_t n = ::read(fd_, tmp, sizeof(tmp));
             if(n <= 0) {
                 break;
             }
+            nread += static_cast<size_t>(n);
             buf_.insert(buf_.end(), tmp, tmp + n);
             if(buf_.size() > 512) {
                 buf_.erase(buf_.begin(), buf_.begin() + static_cast<long>(buf_.size() - 256));
@@ -179,13 +198,60 @@ public:
                 buf_.erase(buf_.begin());
             }
         }
-        return got;
+        if(got) {
+            if(!frame_ok_logged_ || (now - last_ok_log_ >= kPmsaOkLogInterval)) {
+                UPC_LOG_GLAVO_SERVICE(Info,
+                    "pmsa %s frame pm1=%.1f pm25=%.1f pm10=%.1f",
+                    tag_,
+                    static_cast<double>(*pm1),
+                    static_cast<double>(*pm25),
+                    static_cast<double>(*pm10));
+                last_ok_log_ = now;
+                frame_ok_logged_ = true;
+            }
+            last_frame_at_ = now;
+            return true;
+        }
+        log_miss_if_due(now, nread);
+        return false;
     }
 
 private:
+    void log_miss_if_due(std::chrono::steady_clock::time_point now, size_t nread)
+    {
+        if(now - opened_at_ < kPmsaMissGrace) {
+            return;
+        }
+        if(now - last_miss_log_ < kPmsaMissLogInterval) {
+            return;
+        }
+        last_miss_log_ = now;
+        if(!frame_ok_logged_) {
+            UPC_LOG_GLAVO_SERVICE(Warn,
+                "pmsa %s no valid frame yet rx=%zu buf=%zu",
+                tag_, nread, buf_.size());
+            return;
+        }
+        if(last_frame_at_.time_since_epoch().count() != 0 &&
+           now - last_frame_at_ >= kPmsaMissLogInterval) {
+            UPC_LOG_GLAVO_SERVICE(Warn,
+                "pmsa %s frame stalled %.1fs rx=%zu",
+                tag_,
+                std::chrono::duration<double>(now - last_frame_at_).count(),
+                nread);
+        }
+    }
+
     std::string path_;
+    const char* tag_;
     int fd_ = -1;
     std::vector<uint8_t> buf_;
+    bool open_fail_logged_ = false;
+    bool frame_ok_logged_ = false;
+    std::chrono::steady_clock::time_point opened_at_{};
+    std::chrono::steady_clock::time_point last_ok_log_{};
+    std::chrono::steady_clock::time_point last_miss_log_{};
+    std::chrono::steady_clock::time_point last_frame_at_{};
 };
 
 bool find_aht20_hwmon(char* temp_path, size_t temp_sz, char* hum_path, size_t hum_sz)
@@ -298,7 +364,7 @@ bool read_cpm121(const char* i2c_dev, float* kpa)
 
 /**
  * IIO raw → 电压 / 电流。
- * 本板无 in_voltage0_scale：raw 单位 nV，V = raw × GLAVO_O2_RAW_TO_VOLT；
+ * 本板无 in_voltage0_scale：V = raw × GLAVO_O2_RAW_TO_VOLT（raw × 3.3 / 2^31）；
  * I[uA] = V / R_sense × 1e6。
  */
 bool read_o2_raw_i(long* raw_out, float* i_ua_out)
@@ -830,8 +896,8 @@ float SocSensors::sample_cabin_pm25_avg(uint32_t sample_ms)
 
 void SocSensors::poll_once()
 {
-    static PmUartReader outdoor(GLAVO_PM_OUTDOOR_UART);
-    static PmUartReader cabin(GLAVO_PM_CABIN_UART);
+    static PmUartReader outdoor(GLAVO_PM_OUTDOOR_UART, "outdoor");
+    static PmUartReader cabin(GLAVO_PM_CABIN_UART, "cabin");
 
     SocEnvSample s;
     {

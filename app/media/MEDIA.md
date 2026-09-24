@@ -45,11 +45,12 @@ rongsu_media worker
   ├─ acquire_latest_frame → buffer_idx
   ├─ 一次紧凑拷贝 dma → staging_nv12_
   ├─ release_slot（持槽期间只做上面这一次拷贝）
-  ├─ clean_video / print_h264 / h264_encoder 从 staging 喂 NV12
+  ├─ 仅活跃消费者从 staging 喂 NV12：clean_video / print_h264 / h264_encoder
+  │    （未录像、未直播时跳过各自二次全帧拷贝）
   └─ staging 与 latest_nv12_snapshot_ 互换（层拍/拍照用，零拷贝发布）
 ```
 
-**槽位要尽早归还**：三路 recorder 各自还要把帧拷进自己的队列，若留在槽内做，持槽时间翻几倍，会占满 Camera 的在飞窗口并反压采集线程（见 [camera/CAMERA.md](../camera/CAMERA.md) 「在飞窗口」）。快照发布用 `swap` 而非再拷一份：staging 下一帧整体覆写，换回来的旧缓冲容量已够。
+**槽位要尽早归还**：活跃 recorder 各自还要把帧拷进自己的队列，若留在槽内做，持槽时间翻几倍，会占满 Camera 的在飞窗口并反压采集线程（见 [camera/CAMERA.md](../camera/CAMERA.md) 「在飞窗口」）。快照发布用 `swap` 而非再拷一份：staging 下一帧整体覆写，换回来的旧缓冲容量已够。
 
 几何以 `APP_Media_Camera_Stream_Start_Rsp` 为准。流就绪后才 `apply_local_rtsp_desired()`（开流前编码几何未知，`start()` 必失败）。相机看门狗重启会再走 `on_stream_start_rsp`；本地 RTSP 已在跑则跳过，避免打断在连客户端。
 

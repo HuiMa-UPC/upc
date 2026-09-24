@@ -102,6 +102,15 @@ void DebugMsgProxy::init()
             }
         }));
 
+    subs_.push_back(bus.subscribe(
+        middleware::MsgType::GLAVO_Debug_Skip_Outer_Door_Ntf, middleware::ModuleId::UI,
+        [this](const middleware::Message& msg) {
+            middleware::DebugOnOffPayload p{};
+            if(skip_outer_door_cb_ && read_inline_pod(msg, p)) {
+                skip_outer_door_cb_(p.on != 0);
+            }
+        }));
+
     auto on_o2_calib = [this](const middleware::Message& msg) {
         middleware::DebugO2CalibRspPayload p{};
         if(o2_calib_cb_ && read_inline_pod(msg, p)) {
@@ -157,6 +166,33 @@ void DebugMsgProxy::init()
             middleware::DebugOnOffPayload p{};
             if(cabin_pm_valve_cb_ && read_inline_pod(msg, p)) {
                 cabin_pm_valve_cb_(p.on != 0);
+            }
+        }));
+
+    subs_.push_back(bus.subscribe(
+        middleware::MsgType::GLAVO_Debug_Status_Led_Ntf, middleware::ModuleId::UI,
+        [this](const middleware::Message& msg) {
+            middleware::DebugStatusLedPayload p{};
+            if(status_led_cb_ && read_inline_pod(msg, p)) {
+                status_led_cb_(p);
+            }
+        }));
+
+    subs_.push_back(bus.subscribe(
+        middleware::MsgType::GLAVO_Debug_Spi_Pm25_Lcd_Ntf, middleware::ModuleId::UI,
+        [this](const middleware::Message& msg) {
+            middleware::DebugOnOffPayload p{};
+            if(spi_pm25_lcd_test_cb_ && read_inline_pod(msg, p)) {
+                spi_pm25_lcd_test_cb_(p.on != 0);
+            }
+        }));
+
+    subs_.push_back(bus.subscribe(
+        middleware::MsgType::GLAVO_Debug_Fan_Ntf, middleware::ModuleId::UI,
+        [this](const middleware::Message& msg) {
+            middleware::DebugFanStatePayload p{};
+            if(fan_state_cb_ && read_inline_pod(msg, p)) {
+                fan_state_cb_(p);
             }
         }));
 
@@ -443,6 +479,18 @@ void DebugMsgProxy::request_skip_o2_gate_state()
     publish_empty(middleware::MsgType::UI_Debug_Skip_O2_Gate_Get_Ntf);
 }
 
+void DebugMsgProxy::send_skip_outer_door_set(bool on)
+{
+    middleware::DebugOnOffPayload p{};
+    p.on = on ? 1 : 0;
+    publish_pod(middleware::MsgType::UI_Debug_Skip_Outer_Door_Set_Ntf, p);
+}
+
+void DebugMsgProxy::request_skip_outer_door_state()
+{
+    publish_empty(middleware::MsgType::UI_Debug_Skip_Outer_Door_Get_Ntf);
+}
+
 void DebugMsgProxy::send_o2_calib(float ref_o2_percent)
 {
     middleware::DebugO2CalibReqPayload p{};
@@ -453,6 +501,11 @@ void DebugMsgProxy::send_o2_calib(float ref_o2_percent)
 void DebugMsgProxy::request_o2_calib_state()
 {
     publish_empty(middleware::MsgType::UI_Debug_O2_Calib_Get_Ntf);
+}
+
+void DebugMsgProxy::send_alarm_inject(const middleware::AlarmReportPayload& p)
+{
+    publish_pod(middleware::MsgType::UI_Debug_Alarm_Inject_Ntf, p);
 }
 
 void DebugMsgProxy::send_first_layer_visual_check_set(bool on)
@@ -514,6 +567,35 @@ void DebugMsgProxy::send_cabin_pm_valve_set(bool on)
 void DebugMsgProxy::request_cabin_pm_valve_state()
 {
     publish_empty(middleware::MsgType::UI_Debug_Cabin_Pm_Valve_Get_Ntf);
+}
+
+void DebugMsgProxy::send_status_led_set(bool force, uint8_t color,
+                                        uint8_t r, uint8_t g, uint8_t b)
+{
+    middleware::DebugStatusLedPayload p{};
+    p.force = force ? 1 : 0;
+    p.color = color;
+    p.r = r;
+    p.g = g;
+    p.b = b;
+    publish_pod(middleware::MsgType::UI_Debug_Status_Led_Set_Ntf, p);
+}
+
+void DebugMsgProxy::request_status_led_state()
+{
+    publish_empty(middleware::MsgType::UI_Debug_Status_Led_Get_Ntf);
+}
+
+void DebugMsgProxy::send_spi_pm25_lcd_test_set(bool on)
+{
+    middleware::DebugOnOffPayload p{};
+    p.on = on ? 1 : 0;
+    publish_pod(middleware::MsgType::UI_Debug_Spi_Pm25_Lcd_Set_Ntf, p);
+}
+
+void DebugMsgProxy::request_spi_pm25_lcd_test_state()
+{
+    publish_empty(middleware::MsgType::UI_Debug_Spi_Pm25_Lcd_Get_Ntf);
 }
 
 void DebugMsgProxy::send_height_calib_start(float start_mm, float end_mm,
@@ -592,6 +674,11 @@ void DebugMsgProxy::register_skip_o2_gate(DebugSkipO2GateCb cb)
     skip_o2_gate_cb_ = std::move(cb);
 }
 
+void DebugMsgProxy::register_skip_outer_door(DebugSkipOuterDoorCb cb)
+{
+    skip_outer_door_cb_ = std::move(cb);
+}
+
 void DebugMsgProxy::register_o2_calib(DebugO2CalibCb cb)
 {
     o2_calib_cb_ = std::move(cb);
@@ -620,6 +707,21 @@ void DebugMsgProxy::register_soc_led(DebugSocLedCb cb)
 void DebugMsgProxy::register_cabin_pm_valve(DebugCabinPmValveCb cb)
 {
     cabin_pm_valve_cb_ = std::move(cb);
+}
+
+void DebugMsgProxy::register_status_led(DebugStatusLedCb cb)
+{
+    status_led_cb_ = std::move(cb);
+}
+
+void DebugMsgProxy::register_spi_pm25_lcd_test(DebugEnvSimCb cb)
+{
+    spi_pm25_lcd_test_cb_ = std::move(cb);
+}
+
+void DebugMsgProxy::register_fan_state(DebugFanStateCb cb)
+{
+    fan_state_cb_ = std::move(cb);
 }
 
 void DebugMsgProxy::register_test_image(DebugTestImageCb cb)

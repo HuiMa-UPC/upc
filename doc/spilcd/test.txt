@@ -1,0 +1,98 @@
+重编内核后 /sys/class/graphics/ 下会出现名为 st7735rdrmfb 的节点。
+lcd_st7735.c 移植点
+1. 坐标系要旋转 90°（最大的一处，先定这个）
+GD32 那套是横屏 160×80：
+lcd_st7735.hLn 7–10
+#define LCD_W                   160U    /* 逻辑宽度（横屏） */
+#define LCD_H                   80U     /* 逻辑高度（横屏） */
+#define LCD_X_OFFSET            0U      /* 显存列偏移，模组相关 */
+#define LCD_Y_OFFSET            24U     /* 显存行偏移，模组相关 */
+内核给的是竖屏 80×160（st7735_80x160_cfg 是 DRM_SIMPLE_MODE(80, 160, ...)，DTS 里 rotation = <0>）。所以 UI 画完要旋转一次再贴到 fb。
+不要为了省这一步去把 DTS 改成 rotation = <270>。 看着很诱人——270 对应的 addr_mode = MY|MV，加上 .rgb 的 BIT3 正好是 GD32 用的 0xA8：
+st7735r.cLn 95–113
+switch (dbidev->rotation) {
+default:
+        addr_mode = ST7735R_MX | ST7735R_MY;
+        break;
+case 90:
+        addr_mode = ST7735R_MX | ST7735R_MV;
+        break;
+// ...
+case 270:
+        addr_mode = ST7735R_MY | ST7735R_MV;
+        break;
+}
+但偏移会错。mipi_dbi_set_window_address() 把 left_offset 无条件加到 CASET、top_offset 无条件加到 RASET，完全不看 rotation：
+drm_mipi_dbi.cLn 249–252
+xs += dbidev->left_offset;
+xe += dbidev->left_offset;
+ys += dbidev->top_offset;
+ye += dbidev->top_offset;
+MV=1 时行列寻址互换，那个 24 必须挪到 RASET 上——这正是 GD32 代码里 X_OFFSET=0 / Y_OFFSET=24 的原因。所以配 270 还得同时把 st7735_80x160_cfg 改成 left_offset = 0, top_offset = 24，那是驱动里一条没在板上验过的路径。rotation = <0> + left_offset = 24 是你们已经点亮验证过的组合，别动它，旋转放用户态做，反正要写 shadow buffer，映射一次成本是零：
+/* UI 逻辑坐标 160x80 -> fb 竖屏 80x160。顺时针 90 度。
+ * 装配朝向相反时换成逆时针: (159 - ui_x) * g_stride_px + ui_y */
+#define UI_W  160U
+#define UI_H  80U
+#define FB_IDX(ui_x, ui_y)  ((ui_x) * g_stride_px + (FB_W - 1U - (ui_y)))
+g_stride_px 用 fix.line_length / 2，别自己算 80。
+2. LCD_DrawPoint / LCD_FillRect 改成写内存
+lcd_st7735.cLn 246–253
+static void LCD_DrawPoint(uint16_t x, uint16_t y, uint16_t color)
+{
+    if((x >= LCD_W) || (y >= LCD_H)) {
+        return;
+    }
+    LCD_SetAddress(x, y, x, y);
+    LCD_WriteData16(color);
+}
+LCD_SetAddress + LCD_WriteData16 换成一次 g_shadow[FB_IDX(x, y)] = color;。顺带说一句：原来每画一个点都要发 CASET+RASET+RAMWR 共 11 字节命令再发 2 字节数据，而 LCD_ShowStringHalf（:481）和 LCD_FillRoundBar（:529-560）都是逐点调用的——这是那套代码在 GD32 上最大的性能包袱，改成写内存后自动消失，不用再想着优化它。
+LCD_FillRect（:256-280）的裁剪逻辑（:262-273）原样保留，只是边界从 LCD_W/LCD_H 换成 UI_W/UI_H，填充改成逐点/逐行循环。注意旋转后 UI 的一行在 fb 里是跨行的，不能直接 memset。
+3. LCD_Clear 里那圈 ±1 的 hack 整段删掉
+lcd_st7735.cLn 294–305
+/* 保留现有控制器窗口边界，保证显示效果不变。 */
+if(ax0 > 0U) {
+    ax0--;
+}
+// ...
+if(ax1 < 131U) {
+    ax1++;
+}
+那个"多刷一圈盖掉偏移误差残留"是直接操作 GRAM 才有意义的，硬编码的 131/161 是 132×162 显存的尺寸。现在 GRAM 偏移由内核的 left_offset = 24 处理，用户态看不到也碰不到；damage 矩形会被按 fb 尺寸钳制，越界写只会踩到自己的 shadow buffer 外面。LCD_Clear 改成 memset(g_shadow, 0, g_fb_len) 加一次提交就行。
+4. 整个 SPI/GPIO 层删干净
+删除
+行号
+现在由谁负责
+LCD_DelayUs
+29–35
+DTS 的 snowpod,gpio-settle-us（100nF 已拆，现在不配即 0）
+LCD_SPI_WriteByte … LCD_BeginWriteData
+137–175
+mipi_dbi_typec3_command()
+LCD_GPIO_SPI_Init
+178–215
+DTS 的 pinctrl + mipi_dbi_spi_init()
+LCD_SetAddressRaw / LCD_SetAddress
+218–243
+mipi_dbi_set_window_address()
+LCD_X_OFFSET / LCD_Y_OFFSET
+.h 9–10
+st7735_80x160_cfg.left_offset
+头文件包含 systick.h / gd32e23x.h（:6-7）换成 <stdint.h> <string.h> <fcntl.h> <unistd.h> <sys/ioctl.h> <sys/mman.h> <linux/fb.h>。
+5. LCD_Init 只剩打开 fb
+整段 ST7735 初始化序列（:576-691，软复位 / Sleep Out / FRMCTR1-3 / INVCTR / PWCTR1-5 / VMCTR1 / INVOFF / MADCTL / COLMOD / 两张 gamma 表 / NORON / DISPON）全删。st7735r_pipe_enable()（kernel-6.1/drivers/gpu/drm/tiny/st7735r.c:58-133）发的是逐条对得上的同一套参数，连 gamma 表的字节都一模一样；复位时序归 mipi_dbi_poweron_reset()。
+新的 LCD_Init()：遍历 /sys/class/graphics/fb*/name 找 st7735rdrmfb（别写死 fb0，rockchip-drm 也会占一个，编号是 probe 顺序，和 S46o2-preheat 里不写死 pwmchip0 同一个道理）→ open → FBIOGET_VSCREENINFO / FBIOGET_FSCREENINFO → 断言 bits_per_pixel == 16 并记下 line_length → 分配 shadow buffer。
+背光不用管：fbdev client 在 probe 时就会做一次 modeset，pipe enable 里 mipi_dbi_enable_flush() 会把 spi_lcd_backlight 打开。（这也是 A 方案比裸 DRM 省事的地方——裸 DRM 你不自己 SetCrtc，屏是不亮的。）
+6. 新增一个 flush 接口
+这是 API 形态上唯一的新增：原来是即时写 SPI，现在画完一帧要显式提交。
+static void LCD_Flush(void)
+{
+    (void)pwrite(g_fb_fd, g_shadow, g_fb_len, 0);
+}
+内核侧的链路我确认过：drm_fbdev_fb_write() 写完 shadow 就调 drm_fb_helper_memory_range_to_clip() + drm_fb_helper_damage()，后者累积 clip 并 schedule_work(&helper->damage_work)，工作队列里做 shadow→GEM 的 blit 再调 fb->funcs->dirty → mipi_dbi_fb_dirty() 发 SPI。也就是说 pwrite 返回时就已经报了脏并排上队，不用等 deferred_io 那个 HZ/20 ≈ 50ms 的定时器（mmap 直接画走的才是那条路）。
+内核侧只剩一次 memcpy：mipi_dbi_fb_dirty() 在「整屏 + RGB565 + swap_bytes == false + 有 dc」时走 tr = data[0].vaddr，跳过 mipi_dbi_buf_copy() 的格式转换。swap_bytes 为假是因为 spi-rockchip 的 bits_per_word_mask 含 SPI_BPW_MASK(16)，mipi_dbi_spi_init() 就不置它，发 RAMWR 时用 bpw=16 交给控制器管字节序。25600 字节在 8MHz 下约 25.6ms。
+先别做局部刷新，PM2.5 一秒一帧整屏刷完全够。而且旋转 90° 之后局部刷新基本没用：memory_range_to_clip 是按 off/line_length 换算成扫描行范围的，UI 的"数值行"是水平条带，转到 fb 里变成竖直条带，跨全部 160 行，damage 退化成整屏。哪天真需要局部刷新（比如要上到十几 fps），那才是去啃 rotation = <270> + 驱动 offset 换轴的动机——让 fb 本身就是横屏，UI 的水平条带直接对应 fb 的连续行，那时 pwrite 只写那几行的 offset/len 就是天然的局部刷新。ui_pm25.c 的 UI_Pm25_DrawValueLine() 已经是"擦旧区+重画"的结构（s_layout.value_area_x/w 就是为这个存的），到时候不用改结构。
+7. 颜色和字模零改动
+LCD_BLACK/WHITE/GREEN（.h 13-15）、LCD_Mix565（:73-87）、LCD_LevelColor（:90-102）照用。fb 是 DRM_FORMAT_RGB565 主机字节序（ARM 小端），按 uint16_t 写就对。BGR 子像素顺序由驱动的 .rgb = true（MADCTL BIT3）处理——就是 GD32 那个 0xA8 里的 0x08，用户态不用管。
+字模和 UI 层全都不用改：FontRany_GetGlyph、LCD_RanyPlaneBit(:38)、LCD_RanyLevel(:55)、LCD_RanyGlyphCols(:105)、LCD_RanyLevel2x2(:406)、LCD_DrawStringRany(:315)、LCD_MeasureString*、LCD_ShowStringHalf、LCD_FillRoundBar，以及整个 ui_pm25.c / .h——它们只调 LCD_DrawPoint / LCD_FillRect。里面用 LCD_W 做截断判断的两处（:361、:487）语义仍是"UI 逻辑宽度"，保持 160 正确。
+两件顺带的事：UI_Pm25_Init() 现在的占位值是 0.6，开机 30s 传感器没热起来时显示一个看着很正常的假数，不如显示 --；以及上一轮提到的 PM2.5 到底在 ttyS0 还是 ttyS5，两处 dtsi 注释对不上，上板 cat -v 各看一眼就能定，顺手把错的那处注释改掉。
+要我接着把 pm25-lcd 这个程序（fb 层 + 串口收帧 + S47pm25-lcd）按 package/ 的方式落下来吗

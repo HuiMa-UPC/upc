@@ -2,6 +2,7 @@
 #include "protocol.hpp"
 #include "soc_sensors.hpp"
 #include "spi_status_led.hpp"
+#include "spi_pm25_lcd.hpp"
 #include "wifi_manager.hpp"
 #include "print_job_state.hpp"
 #include "print_video_notify.hpp"
@@ -46,6 +47,10 @@ constexpr uint8_t kChamberOxygenAlarmBit = 20;
 constexpr uint32_t kChamberOxygenAlarmBitMask = (1u << kChamberOxygenAlarmBit);
 
 void publish_alarm_snapshot_ntf(const serial_alarm_snapshot_t& snap);
+void publish_alarm_cloud_snapshot_ntf(uint8_t highest_severity,
+                                      middleware::AlarmMcuLink mcu_link,
+                                      const uint32_t* active_masks,
+                                      const uint32_t* latched_masks);
 serial_alarm_report_t make_soc_o2_alarm_report(bool active);
 
 bool parse_env_switch(const char* value, bool default_value)
@@ -786,6 +791,29 @@ void McuLink::request_alarm_snapshot()
     enqueue_serial_tx(frame, static_cast<size_t>(n), true);
 }
 
+void McuLink::publish_debug_alarm_inject(const middleware::AlarmReportPayload& p)
+{
+    /* 只发 MQTT：UI 已用 ui_alarm_debug_inject 造 [SIM] 卡，再双发会叠两条。 */
+    middleware::Message ntf(middleware::MsgType::GLAVO_Alarm_Report_Ntf,
+        middleware::ModuleId::APP_GLAVO, middleware::ModuleId::APP_MQTT);
+    ntf.priority = middleware::MsgPriority::High;
+    ntf.payload = middleware::MsgPayload::from_bytes(
+        reinterpret_cast<const uint8_t*>(&p), sizeof(p));
+    if(!middleware::MsgPort::instance().publish_async(ntf)) {
+        UPC_LOG_MCU_LINK_TO(SerialAlarm, Warn,
+            "debug alarm inject publish_async failed code=%u mask=0x%02X",
+            static_cast<unsigned>(p.alarm_code),
+            static_cast<unsigned>(p.state_mask));
+        return;
+    }
+    UPC_LOG_MCU_LINK_TO(SerialAlarm, Info,
+        "debug alarm inject MQTT code=%u sev=%u mask=0x%02X clear=%u",
+        static_cast<unsigned>(p.alarm_code),
+        static_cast<unsigned>(p.severity),
+        static_cast<unsigned>(p.state_mask),
+        static_cast<unsigned>(p.clear_mode));
+}
+
 void McuLink::reset_alarm_snap_assembly()
 {
     alarm_snap_ = AlarmSnapAssembly{};
@@ -824,23 +852,54 @@ void McuLink::flush_alarm_snap_assembly()
             alarm_snap_.slots[kChamberOxygenAlarmSlotId].active_mask |=
                 kChamberOxygenAlarmBitMask;
         }
+    } else if(has_slot3) {
+        /* 1120 由 SOC 独占：MCU 快照里若带上 bit20，剥掉以免 UI/云端双写。 */
+        serial_alarm_snapshot_t& s =
+            alarm_snap_.slots[kChamberOxygenAlarmSlotId];
+        s.active_mask &= ~kChamberOxygenAlarmBitMask;
+        s.latched_mask &= ~kChamberOxygenAlarmBitMask;
+        if(s.active_mask == 0 && s.latched_mask == 0) {
+            alarm_snap_.got_mask &=
+                static_cast<uint16_t>(~(1u << kChamberOxygenAlarmSlotId));
+            if(count > 0) {
+                --count;
+            }
+            has_slot3 = false;
+        }
     }
 
+    uint32_t active_masks[SERIAL_ALARM_SNAPSHOT_SLOTS]{};
+    uint32_t latched_masks[SERIAL_ALARM_SNAPSHOT_SLOTS]{};
+
     /* 同轮所有分片的 count/severity 必须一致，否则 UI 会 reject。 */
-    for(uint8_t i = 0; i < SERIAL_ALARM_SNAPSHOT_SLOTS; ++i) {
-        if((alarm_snap_.got_mask & (1u << i)) == 0) {
-            continue;
+    if(count == 0) {
+        serial_alarm_snapshot_t empty{};
+        empty.nonzero_slot_count = 0;
+        empty.highest_severity = 0;
+        publish_alarm_snapshot_ntf(empty);
+        SpiStatusLed::instance().on_alarm_snapshot(empty);
+        severity = 0;
+    } else {
+        for(uint8_t i = 0; i < SERIAL_ALARM_SNAPSHOT_SLOTS; ++i) {
+            if((alarm_snap_.got_mask & (1u << i)) == 0) {
+                continue;
+            }
+            serial_alarm_snapshot_t s = alarm_snap_.slots[i];
+            s.nonzero_slot_count = count;
+            s.highest_severity = severity;
+            active_masks[i] = s.active_mask;
+            latched_masks[i] = s.latched_mask;
+            publish_alarm_snapshot_ntf(s);
+            SpiStatusLed::instance().on_alarm_snapshot(s);
         }
-        serial_alarm_snapshot_t s = alarm_snap_.slots[i];
-        s.nonzero_slot_count = count;
-        s.highest_severity = severity;
-        publish_alarm_snapshot_ntf(s);
-        SpiStatusLed::instance().on_alarm_snapshot(s);
     }
 
     if(o2_active) {
         SpiStatusLed::instance().on_alarm_report(make_soc_o2_alarm_report(true));
     }
+
+    publish_alarm_cloud_snapshot_ntf(
+        severity, middleware::AlarmMcuLink::Online, active_masks, latched_masks);
 
     reset_alarm_snap_assembly();
 }
@@ -860,6 +919,9 @@ void McuLink::ingest_alarm_snapshot_slot(const serial_alarm_snapshot_t& snap)
      * 切勿先发全零（UI 会原子清空后再拒迟到的 slot3）。 */
     if(snap.nonzero_slot_count == 0) {
         reset_alarm_snap_assembly();
+        uint32_t active_masks[SERIAL_ALARM_SNAPSHOT_SLOTS]{};
+        uint32_t latched_masks[SERIAL_ALARM_SNAPSHOT_SLOTS]{};
+        uint8_t severity = 0;
         if(o2_alarm_active_) {
             serial_alarm_snapshot_t o2{};
             o2.nonzero_slot_count = 1;
@@ -867,6 +929,8 @@ void McuLink::ingest_alarm_snapshot_slot(const serial_alarm_snapshot_t& snap)
             o2.highest_severity = 2;
             o2.active_mask = kChamberOxygenAlarmBitMask;
             o2.latched_mask = 0;
+            active_masks[kChamberOxygenAlarmSlotId] = kChamberOxygenAlarmBitMask;
+            severity = 2;
             publish_alarm_snapshot_ntf(o2);
             SpiStatusLed::instance().on_alarm_snapshot(o2);
             SpiStatusLed::instance().on_alarm_report(make_soc_o2_alarm_report(true));
@@ -874,6 +938,8 @@ void McuLink::ingest_alarm_snapshot_slot(const serial_alarm_snapshot_t& snap)
             publish_alarm_snapshot_ntf(snap);
             SpiStatusLed::instance().on_alarm_snapshot(snap);
         }
+        publish_alarm_cloud_snapshot_ntf(
+            severity, middleware::AlarmMcuLink::Online, active_masks, latched_masks);
         return;
     }
 
@@ -1143,9 +1209,9 @@ void McuLink::refresh_soc_v4_mode()
         }
         env_cache_.sensor_v4 = v4;
     }
-    SpiStatusLed::instance().set_enabled(v4);
-    /* 舱灯默认全开：必须 MCU 版本 major≥4 已确认，不能靠 Len=15 提前开 */
-    if(v4 && SocSensors::instance().ensure_cabin_leds_default_on()) {
+    SpiStatusLed::instance().set_enabled(true);
+    SpiPm25Lcd::instance().start();
+    if(SocSensors::instance().ensure_cabin_leds_default_on()) {
         publish_debug_soc_led_ntf();
     }
 }
@@ -1217,15 +1283,19 @@ void McuLink::on_sensor_report(const serial_sensor_report_t& report)
 
     mcu_1st_seen_.store(true);
 
+    bool door_closed_edge = false;
     {
         std::lock_guard<std::mutex> lock(env_mtx_);
-        env_cache_.sensor_v4 = v4;
+        const bool prev_valid = env_cache_.door_state_valid;
+        const bool prev_open = env_cache_.outer_door_open;
+        env_cache_.sensor_v4 = true;
         env_cache_.baseplate_temp_c = report.substrate_temp_c;
         env_cache_.filter_pressure_kpa =
             static_cast<float>(report.filter_pressure_x10_kpa) / 10.0f;
         env_cache_.outer_door_open = (report.outer_door_open != 0);
         env_cache_.door_state_valid = true;
         env_cache_.valid = true;
+        door_closed_edge = prev_valid && prev_open && !env_cache_.outer_door_open;
 
         if(v4) {
             env_cache_.powder_ir_bits = report.powder_ir_bits;
@@ -1254,6 +1324,9 @@ void McuLink::on_sensor_report(const serial_sensor_report_t& report)
     }
     publish_env_update_ntf();
     publish_debug_sensor_ntf(report);
+    if(door_closed_edge) {
+        emit_event(McuLinkEvent::OuterDoorClosed);
+    }
 
     bool powder_low = false;
     if(v4) {
@@ -1507,7 +1580,8 @@ void publish_laser_ntf(uint8_t type, uint16_t status, uint16_t alarm,
 }
 
 /** 组装并异步下发 GLAVO_Alarm_Report_Ntf：TLV 字段原样透传，不查字典不加工
- *  （severity/clear_mode 以报文为准，生命周期由 UI 侧按 state_mask 推导）。 */
+ *  （severity/clear_mode 以报文为准，生命周期由 UI 侧按 state_mask 推导）。
+ *  双发 UI + MQTT；舱氧 1120 由 SOC 独占，MCU 同源帧在调用方丢弃。 */
 void publish_alarm_report_ntf(const serial_alarm_report_t& report)
 {
     middleware::AlarmReportPayload p{};
@@ -1517,17 +1591,23 @@ void publish_alarm_report_ntf(const serial_alarm_report_t& report)
     p.clear_mode = report.clear_mode;
     p.detail     = report.detail;
 
-    middleware::Message ntf(middleware::MsgType::GLAVO_Alarm_Report_Ntf,
-        middleware::ModuleId::APP_GLAVO, middleware::ModuleId::UI);
-    ntf.priority = middleware::MsgPriority::High;
-    ntf.payload = middleware::MsgPayload::from_bytes(
-        reinterpret_cast<const uint8_t*>(&p), sizeof(p));
-    if(!middleware::MsgPort::instance().publish_async(ntf)) {
-        UPC_LOG_MCU_LINK(Warn, "GLAVO_Alarm_Report_Ntf publish_async failed");
-    }
+    auto send_to = [&](middleware::ModuleId target) {
+        middleware::Message ntf(middleware::MsgType::GLAVO_Alarm_Report_Ntf,
+            middleware::ModuleId::APP_GLAVO, target);
+        ntf.priority = middleware::MsgPriority::High;
+        ntf.payload = middleware::MsgPayload::from_bytes(
+            reinterpret_cast<const uint8_t*>(&p), sizeof(p));
+        if(!middleware::MsgPort::instance().publish_async(ntf)) {
+            UPC_LOG_MCU_LINK(Warn,
+                "GLAVO_Alarm_Report_Ntf publish_async failed target=%u",
+                static_cast<unsigned>(target));
+        }
+    };
+    send_to(middleware::ModuleId::UI);
+    send_to(middleware::ModuleId::APP_MQTT);
 }
 
-/** 组装并异步下发 GLAVO_Alarm_Snapshot_Ntf：快照的一个 slot。 */
+/** 组装并异步下发 GLAVO_Alarm_Snapshot_Ntf：快照的一个 slot（仅 UI）。 */
 void publish_alarm_snapshot_ntf(const serial_alarm_snapshot_t& snap)
 {
     middleware::AlarmSnapshotPayload p{};
@@ -1543,6 +1623,33 @@ void publish_alarm_snapshot_ntf(const serial_alarm_snapshot_t& snap)
         reinterpret_cast<const uint8_t*>(&p), sizeof(p));
     if(!middleware::MsgPort::instance().publish_async(ntf)) {
         UPC_LOG_MCU_LINK(Warn, "GLAVO_Alarm_Snapshot_Ntf publish_async failed");
+    }
+}
+
+/** 攒齐一轮后发完整 CONDITION 位图给 MQTT（云端 alarm.snapshot，不分片）。 */
+void publish_alarm_cloud_snapshot_ntf(uint8_t highest_severity,
+                                      middleware::AlarmMcuLink mcu_link,
+                                      const uint32_t* active_masks,
+                                      const uint32_t* latched_masks)
+{
+    middleware::AlarmCloudSnapshotPayload p{};
+    p.highest_severity = highest_severity;
+    p.mcu_link = static_cast<uint8_t>(mcu_link);
+    if(active_masks && latched_masks) {
+        for(uint8_t i = 0; i < middleware::kAlarmSnapshotSlotCount; ++i) {
+            p.active_mask[i] = active_masks[i];
+            p.latched_mask[i] = latched_masks[i];
+        }
+    }
+
+    middleware::Message ntf(middleware::MsgType::GLAVO_Alarm_Cloud_Snapshot_Ntf,
+        middleware::ModuleId::APP_GLAVO, middleware::ModuleId::APP_MQTT);
+    ntf.priority = middleware::MsgPriority::High;
+    ntf.payload = middleware::MsgPayload::from_bytes(
+        reinterpret_cast<const uint8_t*>(&p), sizeof(p));
+    if(!middleware::MsgPort::instance().publish_async(ntf)) {
+        UPC_LOG_MCU_LINK(Warn,
+            "GLAVO_Alarm_Cloud_Snapshot_Ntf publish_async failed");
     }
 }
 
@@ -1610,8 +1717,10 @@ void McuLink::publish_env_update_ntf()
     p.sensor_v4      = snap.sensor_v4 ? 1u : 0u;
     p.pm1_cabin      = snap.pm1_cabin;
     p.pm10_cabin     = snap.pm10_cabin;
-    /* V4 且尚未收到 MCU 1ST：基板/粉量仍属 MCU；O2 已改 SOC */
-    if(snap.sensor_v4 && !mcu_1st_seen_.load()) {
+    p.outer_door_open  = snap.outer_door_open ? 1u : 0u;
+    p.door_state_valid = snap.door_state_valid ? 1u : 0u;
+    /* 尚未收到 MCU 1ST：基板/粉量仍属 MCU；舱氧已由 SOC 填 */
+    if(!mcu_1st_seen_.load()) {
         p.baseplate_temp_c = -1.0f;
         p.powder_bits      = 0u;
     }
@@ -1666,6 +1775,8 @@ void McuLink::publish_env_status_ntf_ui_only()
         p.sensor_v4 = snap.sensor_v4 ? 1u : 0u;
         p.pm1_cabin = snap.pm1_cabin;
         p.pm10_cabin = snap.pm10_cabin;
+        p.outer_door_open = snap.outer_door_open ? 1u : 0u;
+        p.door_state_valid = snap.door_state_valid ? 1u : 0u;
     } else {
         p.pm25_indoor = -1.0f;
         p.pm25_cabin = -1.0f;
@@ -1680,6 +1791,8 @@ void McuLink::publish_env_status_ntf_ui_only()
         p.sensor_v4 = 0u;
         p.pm1_cabin = -1.0f;
         p.pm10_cabin = -1.0f;
+        p.outer_door_open = 0u;
+        p.door_state_valid = 0u;
     }
 
     middleware::Message ntf_ui(middleware::MsgType::APP_Update_Ntf,
@@ -1718,6 +1831,8 @@ void McuLink::publish_env_invalid_ntf()
     p.sensor_v4        = 0u;
     p.pm1_cabin        = -1.0f;
     p.pm10_cabin       = -1.0f;
+    p.outer_door_open  = 0u;
+    p.door_state_valid = 0u;
 
     middleware::Message ntf_ui(middleware::MsgType::APP_Update_Ntf,
         middleware::ModuleId::APP_GLAVO,
@@ -1878,17 +1993,29 @@ void McuLink::poll_soc_env_tick()
         env_cache_.sensor_v4 = true;
         merge_soc_env_into_cache_locked();
     }
-    {
-        const SocEnvSample soc = SocSensors::instance().snapshot();
-        if(soc.valid) {
-            std::lock_guard<std::mutex> lock(env_mtx_);
-            env_cache_.valid = true;
-        }
+    const SocEnvSample soc = SocSensors::instance().snapshot();
+    if(soc.valid) {
+        std::lock_guard<std::mutex> lock(env_mtx_);
+        env_cache_.valid = true;
     }
 
     /* 首页/控制页：有任一有效源才推；调试顶栏每拍都推（无数则 "--"） */
     publish_env_update_ntf();
     publish_debug_sensor_from_soc_and_cache();
+
+    /* 舱外 PM 即首页 pm25_indoor；<0 显示 "--"。5s 一条，避免 500ms 刷屏。 */
+    static std::chrono::steady_clock::time_point last_pm_log{};
+    if(last_pm_log.time_since_epoch().count() == 0 ||
+       now - last_pm_log >= std::chrono::seconds(5)) {
+        last_pm_log = now;
+        UPC_LOG_MCU_LINK_TO(SerialSensor, Info,
+            "soc_pm: outdoor=%.1f cabin=%.1f (home uses outdoor; <0 is --)",
+            static_cast<double>(soc.pm25_outdoor),
+            static_cast<double>(soc.pm25_cabin));
+    }
+
+    /* SPI 小屏常显舱外 PM；模块内同值去重，约 1Hz 量级即可 */
+    SpiPm25Lcd::instance().update(soc.pm25_outdoor);
 }
 
 void McuLink::poll_env_sim_tick()
@@ -1943,12 +2070,20 @@ void McuLink::poll_env_sim_tick()
         ((s2 > 0.4f) ? 0x0002u : 0u) |
         ((s3 > 0.4f) ? 0x0004u : 0u));
 
+    /* 模拟数据自己填舱内外，不叠真实 SOC。mcu_1st_seen 避免发布时把基板/粉量打成哨兵。 */
+    mcu_1st_seen_.store(true);
+    bool door_closed_edge = false;
     {
         std::lock_guard<std::mutex> lock(env_mtx_);
+        const bool prev_valid = env_cache_.door_state_valid;
+        const bool prev_open = env_cache_.outer_door_open;
+        env_cache_.sensor_v4        = true;
         env_cache_.pm25_cabin       = fake.pm25_ug_m3;
         env_cache_.pm25_indoor      = fake.pm25_ug_m3;
         env_cache_.pm1_indoor       = fake.pm1_ug_m3;
         env_cache_.pm10_indoor      = fake.pm10_ug_m3;
+        env_cache_.pm1_cabin        = fake.pm1_ug_m3;
+        env_cache_.pm10_cabin       = fake.pm10_ug_m3;
         env_cache_.temperature_c    = fake.temperature_c;
         env_cache_.oxygen_percent   = fake.oxygen_percent;
         env_cache_.filter_oxygen_percent = fake.oxygen_percent;
@@ -1959,10 +2094,17 @@ void McuLink::poll_env_sim_tick()
         env_cache_.outer_door_open  = (fake.outer_door_open != 0);
         env_cache_.door_state_valid = true;
         env_cache_.valid            = true;
+        door_closed_edge = prev_valid && prev_open && !env_cache_.outer_door_open;
     }
 
     publish_env_update_ntf();
     publish_debug_sensor_ntf(fake);
+    if(door_closed_edge) {
+        emit_event(McuLinkEvent::OuterDoorClosed);
+    }
+
+    /* Env Sim 时 poll_soc_env_tick 直接 return，小屏改走这里 */
+    SpiPm25Lcd::instance().update(fake.pm25_ug_m3);
 
     const bool powder_low = ((fake.powder_bits & 0x03u) == 0x00u);
     if(powder_low) {
@@ -2128,9 +2270,18 @@ void McuLink::handle_serial_rx_frame(const uint8_t* frame, size_t len)
         return;
     }
 
-    /* 单条报警/EVENT 上报（0xA3 + 0x20 + TLV 0x01）：原样透传给 UI 消息中心 */
+    /* 单条报警/EVENT 上报（0xA3 + 0x20 + TLV 0x01）：原样透传给 UI/MQTT。
+     * 舱氧 1120 由 SOC 氧门独占；MCU 同源帧丢弃，避免双写。 */
     serial_alarm_report_t alarm{};
     if(serial_parse_alarm_single_report(frame, len, &alarm) == 0) {
+        if(alarm.alarm_code ==
+           static_cast<uint16_t>(GLAVO_ALARM_CODE_CHAMBER_OXYGEN_HIGH)) {
+            UPC_LOG_MCU_LINK_TO(SerialAlarm, Info,
+                "alarm_report drop MCU 1120 (SOC-owned) sev=%u state=0x%02X",
+                static_cast<unsigned>(alarm.severity),
+                static_cast<unsigned>(alarm.state_mask));
+            return;
+        }
         UPC_LOG_MCU_LINK_TO(SerialAlarm, Info,
             "alarm_report: code=%u sev=%u state=0x%02X clear=%u detail=%u",
             static_cast<unsigned>(alarm.alarm_code),
@@ -3402,6 +3553,7 @@ void McuLink::link_process_serial_handshake()
             if(!o2_ok) {
                 /* 起印尚未开扫，不做 TCP 暂停；仍发 1120 让 UI 提示氧高。 */
                 publish_soc_chamber_oxygen_alarm(true);
+                emit_event(McuLinkEvent::OxygenGateWaiting);
                 const auto now = std::chrono::steady_clock::now();
                 if(last_o2_wait_log_.time_since_epoch().count() == 0 ||
                    now - last_o2_wait_log_ >= std::chrono::seconds(5)) {
@@ -3416,6 +3568,7 @@ void McuLink::link_process_serial_handshake()
             }
             last_o2_wait_log_ = {};
             publish_soc_chamber_oxygen_alarm(false);
+            emit_event(McuLinkEvent::OxygenGatePassed);
             UPC_LOG_MCU_LINK_TO(SerialLayer, Info,
                 "SOC O2 gate pass: %.2f%% < %.2f%%, send PRINT_START",
                 static_cast<double>(o2),

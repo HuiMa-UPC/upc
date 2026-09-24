@@ -13,8 +13,8 @@
 static const lv_color_t kGradEndColor  = LV_COLOR_MAKE(0x58, 0x6b, 0xff); /**< 进度条渐变末端 */
 static const lv_color_t kFileNameColor = LV_COLOR_MAKE(0x64, 0x76, 0xff); /**< 文件名蓝 */
 
-/** 稿上多处的 rgba(255,255,255,0.04)：副按钮底色、进度条槽 */
-static const lv_opa_t kFaintFillOpa = 10; /* 0.04 × 255 ≈ 10 */
+/** 进度条槽底：新稿（6363:44211）翻白卡后是 `#333145 @5%`，不再是深色档的白 4%。 */
+static const lv_opa_t kTrackFillOpa = 13; /* 0.05 × 255 ≈ 13 */
 
 /** 进度条圆角：稿上 2px，这个量级跟分辨率无关（同 USER_DLG_BACKDROP_OPA 的处理） */
 static const int32_t kBarRadius = 2;
@@ -28,7 +28,7 @@ static const size_t kNameMaxChars = 24;
  * ui_modal_dialog 的默认样式与这两稿有两处出入，就地覆盖。
  * 不动 USER_DLG_* 宏，否则会连带改掉打印流程那一批弹窗。
  *   - 卡内行距：宏是 USER_DLG_PAD(22/28)，稿上 16 → 用 USER_PAD_SM(11/14)
- *   - 遮罩不透明度：宏是 LV_OPA_70，稿上 0.5 → LV_OPA_50
+ * 遮罩与卡底由 light_theme 统一给（深墨 28% + 白卡），不再逐处覆盖。
  */
 static ui_modal_dialog_t *open_shell(lv_obj_t *parent, const char *title)
 {
@@ -38,21 +38,23 @@ static ui_modal_dialog_t *open_shell(lv_obj_t *parent, const char *title)
     cfg.with_footer      = false;
     cfg.accent_underline = false;
     cfg.with_close_btn   = false;
+    cfg.light_theme      = true;
 
     ui_modal_dialog_t *dlg = ui_modal_dialog_open(parent, &cfg);
     if(!dlg) {
         return nullptr;
     }
-    lv_obj_set_style_bg_opa(dlg->root, LV_OPA_50, 0);
     lv_obj_set_style_pad_row(dlg->card, USER_PAD_SM, 0);
     lv_obj_set_style_pad_row(dlg->body, USER_PAD_SM, 0);
     return dlg;
 }
 
 /**
- * 稿上的「弹窗副按钮」：满宽、极淡的白底、白字居中，圆角与其余弹窗按钮统一取
- * USER_BTN_RADIUS。ui_user_make_footer_ghost_btn 是固定宽的，对不上满宽需求，
- * 所以这里另写一个。
+ * 两稿底部那枚满宽按钮（"Cancel Pairing" / "Cancel Transfer"）。
+ *
+ * 新稿（6363:44046 / 44211）把它画成了**深墨实心**，与门弹窗那批主按钮同一档，不再是
+ * 原先的「4% 白底 + 白字」——卡底翻白之后那一版底和字都会看不见。
+ * ui_user_make_footer_ghost_btn 是固定宽的，对不上满宽需求，所以这里另写一个。
  */
 static lv_obj_t *make_secondary_btn(lv_obj_t *parent, const char *text,
                                     lv_event_cb_t cb, void *user_data)
@@ -61,10 +63,10 @@ static lv_obj_t *make_secondary_btn(lv_obj_t *parent, const char *text,
     lv_obj_remove_style_all(btn);
     lv_obj_set_width(btn, LV_PCT(100));
     lv_obj_set_height(btn, USER_DLG_FOOTER_BTN_H);
-    lv_obj_set_style_radius(btn, USER_BTN_RADIUS, 0);
-    lv_obj_set_style_bg_color(btn, lv_color_white(), 0);
-    lv_obj_set_style_bg_opa(btn, kFaintFillOpa, 0);
-    lv_obj_set_style_bg_opa(btn, LV_OPA_20, LV_STATE_PRESSED);
+    lv_obj_set_style_radius(btn, USER_LIGHT_RADIUS / 2, 0);   /* 稿 rx=12@1280 */
+    lv_obj_set_style_bg_color(btn, user_light_nav_on, 0);
+    lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_opa(btn, LV_OPA_80, LV_STATE_PRESSED);
     lv_obj_clear_flag(btn, LV_OBJ_FLAG_SCROLLABLE);
     if(cb) {
         lv_obj_add_event_cb(btn, cb, LV_EVENT_CLICKED, user_data);
@@ -72,14 +74,14 @@ static lv_obj_t *make_secondary_btn(lv_obj_t *parent, const char *text,
 
     lv_obj_t *lbl = lv_label_create(btn);
     lv_label_set_text(lbl, text ? text : "");
-    lv_obj_set_style_text_color(lbl, user_color_text, 0);
-    lv_obj_set_style_text_font(lbl, user_font_text(), 0);
+    lv_obj_set_style_text_color(lbl, lv_color_white(), 0);
+    lv_obj_set_style_text_font(lbl, user_font_dlg_btn(), 0);
     lv_obj_center(lbl);
     return btn;
 }
 
 /* ============================================================================
- *  PIN 配对码弹窗（Figma 3859:9545）
+ *  PIN 配对码弹窗（Figma 6363:44046）
  * ============================================================================ */
 
 struct ui_xfr_pin_dialog_t {
@@ -175,12 +177,10 @@ void ui_xfr_pin_dialog_close(ui_xfr_pin_dialog_t *self)
 }
 
 /* ============================================================================
- *  文件接收进度弹窗（Figma 3859:9810）
+ *  文件接收进度弹窗（Figma 6363:44211）
  *
- *  注意：这一版只建 UI，没有接线——XFR 现在只在文件落盘之后发
- *  XFR_File_Received_Ntf，没有"传输中"和进度的消息，接哪儿都是假的。
- *  等 XFR 进度契约落地后，由 control.cpp 打开本弹窗并调
- *  ui_xfr_recv_dialog_set_progress() 驱动。
+ *  由 control.cpp 的 XFR_Transfer_Progress_Ntf 回调开窗并调
+ *  ui_xfr_recv_dialog_set_progress() 驱动，见 wire_msg_proxy()。
  * ============================================================================ */
 
 struct ui_xfr_recv_dialog_t {
@@ -264,23 +264,23 @@ ui_xfr_recv_dialog_t *ui_xfr_recv_dialog_open(lv_obj_t *parent, const char *file
 
     lv_obj_t *prefix = lv_label_create(title_row);
     lv_label_set_text(prefix, "Receiving");
-    lv_obj_set_style_text_color(prefix, user_color_text, 0);
-    lv_obj_set_style_text_font(prefix, user_font_value(), 0);
+    lv_obj_set_style_text_color(prefix, user_light_text, 0);
+    lv_obj_set_style_text_font(prefix, user_font_dlg_title(), 0);
 
     char shown[64];
     shorten_file_name(shown, sizeof(shown), file_name);
     lv_obj_t *name = lv_label_create(title_row);
     lv_label_set_text(name, shown);
     lv_obj_set_style_text_color(name, kFileNameColor, 0);
-    lv_obj_set_style_text_font(name, user_font_value(), 0);
+    lv_obj_set_style_text_font(name, user_font_dlg_title(), 0);
 
-    /* ---- 进度条：槽极淡白底，填充走 #4258ff → #586bff 横向渐变 ---- */
+    /* ---- 进度条：槽是深墨 5%（稿翻白卡后的值），填充走 #4258ff → #586bff 横向渐变 ---- */
     self->bar = lv_bar_create(self->dlg->body);
     lv_obj_remove_style_all(self->bar);
     lv_obj_set_width(self->bar, LV_PCT(100));
     lv_obj_set_height(self->bar, recv_bar_h());
-    lv_obj_set_style_bg_color(self->bar, lv_color_white(), LV_PART_MAIN);
-    lv_obj_set_style_bg_opa(self->bar, kFaintFillOpa, LV_PART_MAIN);
+    lv_obj_set_style_bg_color(self->bar, user_light_nav_on, LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(self->bar, kTrackFillOpa, LV_PART_MAIN);
     lv_obj_set_style_radius(self->bar, kBarRadius, LV_PART_MAIN);
     lv_obj_set_style_bg_color(self->bar, user_color_accent, LV_PART_INDICATOR);
     lv_obj_set_style_bg_grad_color(self->bar, kGradEndColor, LV_PART_INDICATOR);

@@ -3,6 +3,7 @@
 
 #include <cstdio>
 #include <cstdint>
+#include <filesystem>
 
 ui_modal_dialog_cfg_t ui_modal_dialog_cfg_user(const char *title,
                                                int32_t card_width,
@@ -21,7 +22,11 @@ lv_obj_t *ui_user_make_body_label(lv_obj_t *parent, const char *text)
 {
     lv_obj_t *lbl = lv_label_create(parent);
     lv_label_set_text(lbl, text ? text : "");
-    lv_obj_set_style_text_color(lbl, user_color_text_dim, 0);
+    /* 深墨压 50%，不是另给一个灰——与门弹窗/粉料弹窗的副标题同一档。
+     * 全部十一个调用点都在弹窗 body 里，而弹窗现已一律是白卡，所以直接换掉默认值
+     * 而不是加一个档位形参（原先是 user_color_text_dim #9a9a9a，深底上的灰）。 */
+    lv_obj_set_style_text_color(lbl, user_light_text, 0);
+    lv_obj_set_style_text_opa(lbl, LV_OPA_50, 0);
     lv_obj_set_style_text_font(lbl, user_font_text(), 0);
     return lbl;
 }
@@ -59,8 +64,10 @@ lv_obj_t *ui_user_make_progress_bar(lv_obj_t *parent, int32_t w, int32_t h)
     lv_obj_remove_style_all(bar);
     lv_obj_set_size(bar, w, h);
 
-    lv_obj_set_style_bg_color(bar, user_color_panel_alt, LV_PART_MAIN);
-    lv_obj_set_style_bg_opa(bar, LV_OPA_COVER, LV_PART_MAIN);
+    /* 槽同 ui_xfr_dialog 的进度条：深墨 5%。两个调用点都是 OTA 弹窗，已翻白卡，
+     * 原先的 user_color_panel_alt(#262626) 压在白底上是一条黑杠。 */
+    lv_obj_set_style_bg_color(bar, user_light_nav_on, LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(bar, 13, LV_PART_MAIN);
     lv_obj_set_style_radius(bar, LV_RADIUS_CIRCLE, LV_PART_MAIN);
     lv_obj_set_style_bg_color(bar, user_color_accent, LV_PART_INDICATOR);
     lv_obj_set_style_bg_opa(bar, LV_OPA_COVER, LV_PART_INDICATOR);
@@ -608,6 +615,15 @@ uint8_t ui_user_segmented_get_selected(lv_obj_t *seg)
         return UI_USER_SEG_NONE;
     }
     return static_cast<uint8_t>(reinterpret_cast<intptr_t>(lv_obj_get_user_data(seg)));
+}
+
+bool ui_user_thumb_path_exists(const char *path)
+{
+    if(!path || path[0] == '\0') {
+        return false;
+    }
+    std::error_code ec;
+    return std::filesystem::exists(path, ec) && !ec;
 }
 
 lv_obj_t *ui_user_make_footer_ghost_btn(lv_obj_t *footer, const char *text,

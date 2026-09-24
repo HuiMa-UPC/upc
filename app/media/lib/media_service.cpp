@@ -1,5 +1,6 @@
 #include "media_service.hpp"
 
+#include "nv12_copy.hpp"
 #include "config/cal_config.hpp"
 #include "device_config.hpp"
 #include "media_paths.hpp"
@@ -479,7 +480,7 @@ void MediaService::worker_thread_fn()
             if(src) {
                 staging_nv12_.resize(
                     static_cast<size_t>(width) * height * 3u / 2u);
-                copy_nv12_tight(staging_nv12_.data(), src,
+                upc::copy_nv12_tight(staging_nv12_.data(), src,
                                 src + static_cast<size_t>(stride) * height,
                                 stride, width, height);
                 staged = true;
@@ -493,37 +494,17 @@ void MediaService::worker_thread_fn()
 
         const uint8_t* src_y = staging_nv12_.data();
         const uint8_t* src_uv = src_y + static_cast<size_t>(width) * height;
-        /* 连续录像/清粉录像逐帧入口：已迁移到 media 进程。 */
-        clean_video_.on_frame_nv12(src_y, src_uv, width);
-        print_h264_.on_frame_nv12(src_y, src_uv, width);
-        h264_encoder_.on_frame_nv12(src_y, src_uv, width);
+        /* 仅活跃消费者进 on_frame：未录像/未直播时跳过各自全帧 memcpy。 */
+        if(clean_video_active_) {
+            clean_video_.on_frame_nv12(src_y, src_uv, width);
+        }
+        if(print_h264_.session_active()) {
+            print_h264_.on_frame_nv12(src_y, src_uv, width);
+        }
+        if(h264_encoder_.active()) {
+            h264_encoder_.on_frame_nv12(src_y, src_uv, width);
+        }
         publish_latest_nv12_snapshot(width, height);
-    }
-}
-
-void MediaService::copy_nv12_tight(uint8_t* dst, const uint8_t* src_y,
-                                   const uint8_t* src_uv, uint32_t src_stride_y,
-                                   uint32_t width, uint32_t height)
-{
-    if(!dst || !src_y || !src_uv || src_stride_y == 0 || width == 0 || height == 0) {
-        return;
-    }
-    const size_t y_size = static_cast<size_t>(width) * height;
-    uint8_t* dst_uv = dst + y_size;
-    if(src_stride_y == width) {
-        std::memcpy(dst, src_y, y_size);
-        std::memcpy(dst_uv, src_uv, y_size / 2u);
-        return;
-    }
-    for(uint32_t row = 0; row < height; ++row) {
-        std::memcpy(dst + static_cast<size_t>(row) * width,
-                    src_y + static_cast<size_t>(row) * src_stride_y,
-                    width);
-    }
-    for(uint32_t row = 0; row < height / 2u; ++row) {
-        std::memcpy(dst_uv + static_cast<size_t>(row) * width,
-                    src_uv + static_cast<size_t>(row) * src_stride_y,
-                    width);
     }
 }
 

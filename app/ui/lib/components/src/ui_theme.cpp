@@ -28,7 +28,32 @@ const lv_color_t user_color_text_dim   = LV_COLOR_MAKE(0x9a, 0x9a, 0x9a);
 const lv_color_t user_color_icon_off   = LV_COLOR_MAKE(0x55, 0x55, 0x55);
 const lv_color_t user_color_divider    = LV_COLOR_MAKE(0x33, 0x33, 0x33);
 const lv_color_t user_color_status_ok  = LV_COLOR_MAKE(0x52, 0xff, 0x92);
-const lv_color_t user_color_status_err = LV_COLOR_MAKE(0xff, 0x4d, 0x4d);
+/* 稿值 #FF4242（Figma 变量 fill_5685905e）：历史页多选条与删除确认弹窗那两枚 Delete
+ * 都取它。原先填的 #FF4D4D 是取近似值时的残留，实机比稿浅了一档（量到 255,77,77）。 */
+const lv_color_t user_color_status_err = LV_COLOR_MAKE(0xff, 0x42, 0x42);
+
+/* 浅色稿一组（稿 6039:65949 / 6064:71609 / 6064:71936）。与深色那套并存，
+ * 目前只有首页待机态、侧栏和通知三态在用，详见 ui_theme.hpp 的说明。 */
+/* 稿值 #FAFAFA。首版浅色稿（6039:65949 那批）写的是 #F5F5F5，新稿三处页面帧
+ * （历史 6251:94118 / 消息 6230:89616 / 6091:13847）一致改成了 #FAFAFA，跟新的。
+ * 两者只差 5/255，首页与历史页翻上去看不出变化。 */
+const lv_color_t user_light_bg         = LV_COLOR_MAKE(0xfa, 0xfa, 0xfa);
+const lv_color_t user_light_card       = LV_COLOR_MAKE(0xff, 0xff, 0xff);
+const lv_color_t user_light_text       = LV_COLOR_MAKE(0x33, 0x31, 0x45);
+const lv_color_t user_light_value      = LV_COLOR_MAKE(0x11, 0x11, 0x11);
+const lv_color_t user_light_accent     = LV_COLOR_MAKE(0x48, 0x5d, 0xff);
+const lv_color_t user_light_icon_off   = LV_COLOR_MAKE(0x9e, 0x9e, 0x9e);
+const lv_color_t user_light_nav_on     = LV_COLOR_MAKE(0x33, 0x31, 0x45);
+const lv_color_t user_light_shadow     = LV_COLOR_MAKE(0x0c, 0x1c, 0x61);
+const lv_color_t user_light_divider    = LV_COLOR_MAKE(0xd9, 0xd9, 0xd9);
+const lv_color_t user_light_row_bg     = LV_COLOR_MAKE(0x33, 0x31, 0x45);
+const lv_color_t user_light_more_bg    = LV_COLOR_MAKE(0xf5, 0xf5, 0xf6);
+const lv_color_t user_light_ok         = LV_COLOR_MAKE(0x00, 0xc7, 0x4e);
+const lv_color_t user_light_dev_name   = LV_COLOR_MAKE(0x1d, 0x1d, 0x24);
+const lv_color_t user_light_notice_dot = LV_COLOR_MAKE(0xfe, 0x68, 0x68);
+const lv_color_t user_light_rail_mid   = LV_COLOR_MAKE(0xf4, 0xf4, 0xf4);
+const lv_color_t user_light_row_sel    = LV_COLOR_MAKE(0xeb, 0xea, 0xec);
+const lv_color_t user_light_glass      = LV_COLOR_MAKE(0xfc, 0xfc, 0xfc);
 
 /* ============================================================================
  *  两套 profile 数据
@@ -49,12 +74,11 @@ const lv_color_t user_color_status_err = LV_COLOR_MAKE(0xff, 0x4d, 0x4d);
  *  下面这些值为触摸可用性上调，**已不再是稿值**，别按稿又调回去。
  *
  *  仅 1280 档：
- *    user_hist_tab_h  40 → 52   Tab 行高 = Tab 项命中高 = Manage 系列按钮高
- *    user_hist_btn_w 100 → 128  Manage 系列按钮宽
- *  实测 40/100 在 1280×800 上偏小：Tab 项宽被写死成文字实宽、左右零内距，且文字
+ *    user_hist_tab_h  40 → 52   Tab 行高 = Tab 项命中高
+ *  实测 40 在 1280×800 上偏小：Tab 项宽被写死成文字实宽、左右零内距，且文字
  *  ALIGN_TOP_MID 贴顶使命中区中心比文字视觉中心偏下。
- *  横向放得下：Tab 行可用宽 1120（= 1280 − 48 − 112），管理态占用约 775 + 84
- *  （三个按钮各 +28），仍余约 260。
+ *  （同处曾有个 user_hist_btn_w 100 → 128，服务消息页管理态那几枚按钮；
+ *  消息页改新稿后多选模式整体去掉，该字段已删。）
  *
  *  三档全体：
  *    user_media_btn_h   96 / 66 / 60   全屏媒体页的关闭钮与相册翻页箭头
@@ -119,10 +143,8 @@ static const ui_theme_t s_theme_1920 = {
     /* user_nav_gap           */ 100,  /* 复现旧 SPACE_EVENLY 在 1080 高下的项距 180 */
     /* user_nav_item_h        */ 96,
     /* user_settings_nav_w    */ 0,    /* 0 = 沿用旧式，本档观感不变 */
-    /* user_settings_gap      */ 0,
-    /* user_settings_gutter_r */ 0,
     /* user_settings_seg_h    */ 0,
-    /* user_nav_icon_sz       */ 56,
+    /* user_nav_icon_sz       */ 52,   /* 让上屏字形保持改版前的 49：49 ÷ (30/32) */
     /* user_nav_icon_pad      */ 12,
     /* user_topbar_h          */ 192,
     /* user_content_top       */ 168,  /* 稿 112@1280 × 1.5 */
@@ -141,20 +163,14 @@ static const ui_theme_t s_theme_1920 = {
     /* user_status_dot_sz     */ 18,
     /* user_home_device_w     */ 560,
     /* user_home_device_h     */ 660,
-    /* user_home_action_row_w */ 636,
-    /* user_home_card_w       */ 540,  /* == 旧的 LV_PCT(30) × 内容区 1800，观感不变 */
-    /* user_home_card_top     */ 320,  /* == 旧的 USER_TOPBAR_H + USER_PAD_LG*2 */
-    /* user_home_cabin_w      */ 504,  /* == 旧的 LV_PCT(28) × 内容区 1800 */
-    /* user_home_cabin_lead_w */ 270,  /* 稿 180@1280 × 1.5 */
-    /* user_home_cabin_pad_right */ 64,   /* == 旧的 USER_PAD_LG */
+    /* user_home_card_w       */ 360,  /* 浅色稿 240 ×1.5 */
+    /* user_home_card_top     */ 430,  /* 浅色稿 287 ×1.5 */
     /* user_metric_icon_sz    */ 48,   /* 稿 32@1280 × 1.5 */
     /* user_back_btn_w        */ 180,
     /* user_back_btn_h        */ 64,
     /* user_media_btn_h       */ 96,   /* 触摸可用性上调：user_back_btn_h × 3/2 */
     /* user_media_play_h      */ 128,  /* 放大关闭钮前的实际渲染值，维持原样 */
     /* user_sensor_strip_h    */ 120,
-    /* user_scroll_btn_sz     */ 0,    /* 无稿，沿用旧式 64*5/4 = 80 */
-    /* user_scroll_btn_gap    */ 0,    /* 无稿，沿用旧式 USER_PAD_LG */
     /* user_empty_ring_sz     */ 0,    /* 无稿，沿用旧式 72*10/9 = 80 */
 
     /* 打印流程 */
@@ -166,9 +182,12 @@ static const ui_theme_t s_theme_1920 = {
     /* user_dlg_body_min_h        */ 260,
     /* user_dlg_footer_btn_w      */ 260,
     /* user_dlg_footer_btn_h      */ 96,
+    /* user_dlg_title_lead        */ 15,   /* 稿 39×1.5=59 − montserrat_40 的 44 */
+    /* user_dlg_body_lead         */ 9,    /* 稿 24×1.5=36 − montserrat_24 的 27 */
+    /* user_plate_dlg_w           */ 1212, /* 稿 808@1280 × 1.5 */
+    /* user_wifi_dlg_w            */ 840,  /* 稿 560@1280 × 1.5 */
     /* user_file_dlg_w            */ 1100,
     /* user_file_dlg_preview_w    */ 340,
-    /* user_file_dlg_preview_h    */ 280,
     /* user_file_sel_w            */ 1500,
     /* user_file_sel_h            */ 780,
     /* user_file_card_w           */ 320,
@@ -202,15 +221,43 @@ static const ui_theme_t s_theme_1920 = {
     /* user_env_col_w             */ 0,    /* 0 = 自适应：本档装不下稿的等比列宽 */
 
     /* 打印历史页（稿 1280 档 ×1.5） */
-    /* user_hist_tab_h            */ 60,
-    /* user_hist_card_h           */ 240,
-    /* user_hist_banner_h         */ 63,
-    /* user_hist_bar_w            */ 240,
-    /* user_hist_bar_h            */ 12,
+    /* user_hist_tab_h            */ 90,
+    /* user_hist_card_h           */ 240,  /* 仅照片浏览器缩略图带在用 */
     /* user_hist_check_sz         */ 36,
-    /* user_hist_btn_w            */ 150,
-    /* user_hist_pad_l            */ 0,    /* 无稿，沿用旧式 USER_PAD */
-    /* user_hist_list_pad_l       */ 0,    /* 无稿，沿用旧式 USER_PAD */
+    /* user_hist_pad_l            */ 72,
+    /* user_hist_grid_gap         */ 48,
+    /* user_hist_card_radius      */ 24,
+    /* user_hist_selbar_h         */ 120,  /* 稿 80×1.5 */
+    /* user_hist_del_btn_w        */ 210,
+    /* user_hist_del_btn_h        */ 96,
+
+    /* 浅色稿几何（1280 稿值 ×1.5，本档未逐个核） */
+    /* user_light_radius      */ 36,
+    /* user_light_btn_sz      */ 108,
+    /* user_action_btn_sz     */ 126,
+    /* user_home_card_h       */ 450,
+    /* user_home_grid_w       */ 510,
+    /* user_home_greet_top    */ 240,
+    /* user_home_dev_img_w    */ 788,
+    /* user_home_dev_img_h    */ 1187,
+    /* user_home_dev_img_x    */ 1158,
+    /* user_home_dev_img_y    */ 134,
+    /* user_home_print_btn_w  */ 324,
+    /* user_home_slide_w      */ 680,
+    /* user_home_slide_h      */ 141,
+    /* user_home_edge_gap     */ 72,
+    /* user_panel_w           */ 480,
+    /* user_panel_row_h       */ 72,
+
+    /* 监控页：1280 档取稿值，本档按 ×1.5 折算 */
+    /* user_mon_panel_w       */ 630,
+    /* user_mon_row_h         */ 96,
+    /* user_mon_radius        */ 24,
+    /* user_mon_thumb_h       */ 315,
+    /* user_mon_stat_h        */ 147,
+    /* user_mon_pm_h          */ 315,
+    /* user_mon_cell_h        */ 170,
+    /* user_mon_bar_h         */ 36,
 
     /* 字体（dev） */
     /* font_body          */ &lv_font_montserrat_32,
@@ -224,6 +271,11 @@ static const ui_theme_t s_theme_1920 = {
     /* font_user_title    */ &lv_font_montserrat_24,  /* == font_user_text，本档观感不变 */
     /* font_user_caption  */ &lv_font_montserrat_18,
     /* font_user_caption_sm */ &lv_font_montserrat_16,
+    /* font_user_display  */ &lv_font_montserrat_48,  /* 稿 40×1.5=60，字体表到 48 封顶 */
+    /* font_user_metric   */ &lv_font_montserrat_48,  /* 稿 32×1.5=48 */
+    /* font_user_body     */ &lv_font_montserrat_32,  /* 稿 24×1.5=36，取最近的 32 */
+    /* font_user_dlg_title*/ &lv_font_montserrat_40,  /* 稿 28×1.5=42，取最近的 40 */
+    /* font_user_dlg_btn  */ &lv_font_montserrat_32,  /* 稿 22×1.5=33，取最近的 32 */
     /* font_user_icon     */ &lv_font_montserrat_32,
 
     /* profile_id */ UI_RES_1920,
@@ -280,10 +332,8 @@ static const ui_theme_t s_theme_1280 = {
     /* user_nav_gap           */ 16,   /* 稿值 */
     /* user_nav_item_h        */ 80,   /* 稿 24(padding) + 32(图标) + 24 */
     /* user_settings_nav_w    */ 300,  /* 稿值 */
-    /* user_settings_gap      */ 36,   /* 稿值（左内距与列间距同值） */
-    /* user_settings_gutter_r */ 176,  /* 稿值（翻页钮落在这一段） */
     /* user_settings_seg_h    */ 72,   /* 稿值 */
-    /* user_nav_icon_sz       */ 59,   /* 令字形上屏 48（稿值）：48 ÷ (52/64) */
+    /* user_nav_icon_sz       */ 32,   /* 稿值（图标盒边长，字形在里面占 30） */
     /* user_nav_icon_pad      */ 8,
     /* user_topbar_h          */ 128,
     /* user_content_top       */ 112,  /* 稿值：Tab 文字顶 y=112 */
@@ -305,24 +355,18 @@ static const ui_theme_t s_theme_1280 = {
     /* user_status_dot_sz     */ 12,
     /* user_home_device_w     */ 380,
     /* user_home_device_h     */ 440,
-    /* user_home_action_row_w */ 386,  /* 稿值，不再补 10% */
-    /* user_home_card_w       */ 354,  /* 稿值 */
-    /* user_home_card_top     */ 241,  /* 稿值 */
-    /* user_home_cabin_w      */ 294,  /* 稿值 */
-    /* user_home_cabin_lead_w */ 180,  /* 稿值 */
-    /* user_home_cabin_pad_right */ 40,   /* 稿值 */
+    /* user_home_card_w       */ 240,  /* 浅色稿值（上一版浅色稿是 300） */
+    /* user_home_card_top     */ 287,  /* 浅色稿值（上一版浅色稿是 275） */
     /* user_metric_icon_sz    */ 32,   /* 稿值 */
     /* user_back_btn_w        */ 128,
     /* user_back_btn_h        */ 44,
     /* user_media_btn_h       */ 66,   /* 触摸可用性上调（稿无此项）：user_back_btn_h × 3/2 */
     /* user_media_play_h      */ 112,  /* 放大关闭钮前的实际渲染值，维持原样 */
     /* user_sensor_strip_h    */ 84,
-    /* user_scroll_btn_sz     */ 64,   /* 稿值（三页一致） */
-    /* user_scroll_btn_gap    */ 160,  /* 稿值（历史页 / 消息页） */
     /* user_empty_ring_sz     */ 80,   /* 稿值；旧式在本档只算得 57 */
 
     /* 打印流程 */
-    /* user_dlg_w                 */ 500,
+    /* user_dlg_w                 */ 496,  /* 稿值（6251:94239；原 500 是近似值）*/
     /* user_dlg_pad               */ 28,
     /* user_dlg_pad_lg            */ 40,
     /* user_dlg_title_pad_bottom  */ 16,
@@ -330,9 +374,12 @@ static const ui_theme_t s_theme_1280 = {
     /* user_dlg_body_min_h        */ 180,
     /* user_dlg_footer_btn_w      */ 180,
     /* user_dlg_footer_btn_h      */ 64,
+    /* user_dlg_title_lead        */ 9,    /* 稿 39 − montserrat_28 的 30 */
+    /* user_dlg_body_lead         */ 2,    /* 稿 24 − montserrat_20 的 22 */
+    /* user_plate_dlg_w           */ 808,  /* 稿值（6382:48451） */
+    /* user_wifi_dlg_w            */ 560,  /* 稿值（6423:51893） */
     /* user_file_dlg_w            */ 760,
     /* user_file_dlg_preview_w    */ 240,
-    /* user_file_dlg_preview_h    */ 300,
     /* user_file_sel_w            */ 1040,
     /* user_file_sel_h            */ 540,
     /* user_file_card_w           */ 220,
@@ -367,15 +414,43 @@ static const ui_theme_t s_theme_1280 = {
     /* user_env_col_w             */ 64,   /* 稿值（caption 降到 caption_sm 后四列都进） */
 
     /* 打印历史页（稿 4366:5400 原生 1280 档，直接取稿值） */
-    /* user_hist_tab_h            */ 52,   /* 触摸可用性上调，原稿值 40（见文件头说明） */
-    /* user_hist_card_h           */ 160,
-    /* user_hist_banner_h         */ 42,
-    /* user_hist_bar_w            */ 160,
-    /* user_hist_bar_h            */ 8,
-    /* user_hist_check_sz         */ 24,
-    /* user_hist_btn_w            */ 128,  /* 触摸可用性上调，原稿值 100（见文件头说明） */
-    /* user_hist_pad_l            */ 48,   /* 稿：Tab 文字 x=176 − 侧栏 128 */
-    /* user_hist_list_pad_l       */ 64,   /* 稿：卡片 x=192 − 侧栏 128 */
+    /* user_hist_tab_h            */ 60,   /* 稿值 */
+    /* user_hist_card_h           */ 160,  /* 仅照片浏览器缩略图带在用 */
+    /* user_hist_check_sz         */ 24,   /* 稿值（圆角 8 的蓝块，与 ic_hist_check 同边长） */
+    /* user_hist_pad_l            */ 48,   /* 稿：Tab 文字与卡片同在 x=176 − 侧栏 128 */
+    /* user_hist_grid_gap         */ 32,   /* 稿值 */
+    /* user_hist_card_radius      */ 16,   /* 稿值 */
+    /* user_hist_selbar_h         */ 80,   /* 稿值（6251:94204 是 1088×80）*/
+    /* user_hist_del_btn_w        */ 140,  /* 稿值 */
+    /* user_hist_del_btn_h        */ 64,   /* 稿值 */
+
+    /* 浅色稿几何（稿 6201:85911 原生 1280×800，本档逐个量的稿值） */
+    /* user_light_radius      */ 24,   /* 稿值 */
+    /* user_light_btn_sz      */ 72,   /* 稿值（右上铃铛，与下面那枚已不同值） */
+    /* user_action_btn_sz     */ 84,   /* 稿值（左下方钮 / PRINT 高 / 开门滑块旋钮） */
+    /* user_home_card_h       */ 300,  /* 稿值（HOME 卡与四宫格等高） */
+    /* user_home_grid_w       */ 340,  /* 稿值（扣 8 的间距后单卡 166 宽 146 高，与稿一致） */
+    /* user_home_greet_top    */ 160,  /* 稿值 */
+    /* user_home_dev_img_w    */ 525,  /* 稿值 */
+    /* user_home_dev_img_h    */ 791,  /* 稿值 */
+    /* user_home_dev_img_x    */ 772,  /* 稿值（右侧出血，超出部分由父节点裁） */
+    /* user_home_dev_img_y    */ 89,   /* 稿值（下方同样出血） */
+    /* user_home_print_btn_w  */ 216,  /* 稿值 */
+    /* user_home_slide_w      */ 453,  /* 稿值 */
+    /* user_home_slide_h      */ 94,   /* 稿值（旋钮 84 上下各内缩 5） */
+    /* user_home_edge_gap     */ 48,   /* 稿值（横向仍是 USER_PAD_LG 的 32，稿就不对称） */
+    /* user_panel_w           */ 320,  /* 稿值 */
+    /* user_panel_row_h       */ 48,   /* 稿值 */
+
+    /* 监控页（稿 6338:27240 一族），本档全取稿值 */
+    /* user_mon_panel_w       */ 420,  /* 屏上 860..1280，内容区 420−2×32 = 356 */
+    /* user_mon_row_h         */ 64,
+    /* user_mon_radius        */ 16,
+    /* user_mon_thumb_h       */ 210,
+    /* user_mon_stat_h        */ 98,
+    /* user_mon_pm_h          */ 210,  /* 稿值 */
+    /* user_mon_cell_h        */ 113,  /* 稿值 */
+    /* user_mon_bar_h         */ 24,
 
     /* 字体（dev） */
     /* font_body          */ &lv_font_montserrat_24,
@@ -389,6 +464,11 @@ static const ui_theme_t s_theme_1280 = {
     /* font_user_title    */ &lv_font_montserrat_20,  /* 稿「一级标题」 */
     /* font_user_caption  */ &lv_font_montserrat_14,
     /* font_user_caption_sm */ &lv_font_montserrat_12,
+    /* font_user_display  */ &lv_font_montserrat_40,  /* 稿值 */
+    /* font_user_metric   */ &lv_font_montserrat_32,  /* 稿值 */
+    /* font_user_body     */ &lv_font_montserrat_24,  /* 稿值 */
+    /* font_user_dlg_title*/ &lv_font_montserrat_28,  /* 稿值 */
+    /* font_user_dlg_btn  */ &lv_font_montserrat_22,  /* 稿值 */
     /* font_user_icon     */ &lv_font_montserrat_24,
 
     /* profile_id */ UI_RES_1280,
@@ -451,10 +531,8 @@ static const ui_theme_t s_theme_1024 = {
     /* user_nav_gap           */ 44,   /* 复现旧 SPACE_EVENLY 在 600 高下的项距 102 */
     /* user_nav_item_h        */ 72,
     /* user_settings_nav_w    */ 0,    /* 0 = 沿用旧式，本档观感不变 */
-    /* user_settings_gap      */ 0,
-    /* user_settings_gutter_r */ 0,
     /* user_settings_seg_h    */ 0,
-    /* user_nav_icon_sz       */ 54,
+    /* user_nav_icon_sz       */ 50,   /* 让上屏字形保持改版前的 47：47 ÷ (30/32) */
     /* user_nav_icon_pad      */ 8,
     /* user_topbar_h          */ 96,
     /* user_content_top       */ 84,   /* 稿 112@1280 × 600/800 */
@@ -473,12 +551,8 @@ static const ui_theme_t s_theme_1024 = {
     /* user_status_dot_sz     */ 10,
     /* user_home_device_w     */ 304,
     /* user_home_device_h     */ 352,
-    /* user_home_action_row_w */ 339,
-    /* user_home_card_w       */ 283,  /* == 旧的 LV_PCT(30) × 内容区 944，观感不变 */
-    /* user_home_card_top     */ 168,  /* == 旧的 USER_TOPBAR_H + USER_PAD_LG*2 */
-    /* user_home_cabin_w      */ 264,  /* == 旧的 LV_PCT(28) × 内容区 944 */
-    /* user_home_cabin_lead_w */ 144,  /* 稿 180@1280 × 0.8 */
-    /* user_home_cabin_pad_right */ 36,   /* == 旧的 USER_PAD_LG */
+    /* user_home_card_w       */ 192,  /* 浅色稿 240 ×0.8 */
+    /* user_home_card_top     */ 230,  /* 浅色稿 287 ×0.8 */
     /* user_metric_icon_sz    */ 26,   /* 稿 32@1280 × 0.8 = 25.6，进位；本档横杠只剩
                                         * 约 1.6px 偏软，但放大到 28 会比周围 0.8 折算
                                         * 的字号显大，仍按折算值 */
@@ -487,8 +561,6 @@ static const ui_theme_t s_theme_1024 = {
     /* user_media_btn_h       */ 60,   /* 触摸可用性上调：user_back_btn_h × 3/2 */
     /* user_media_play_h      */ 80,   /* 放大关闭钮前的实际渲染值，维持原样 */
     /* user_sensor_strip_h    */ 68,
-    /* user_scroll_btn_sz     */ 0,    /* 无稿，沿用旧式 40*5/4 = 50 */
-    /* user_scroll_btn_gap    */ 0,    /* 无稿，沿用旧式 USER_PAD_LG */
     /* user_empty_ring_sz     */ 0,    /* 无稿，沿用旧式 44*10/9 = 48 */
 
     /* 打印流程 */
@@ -500,9 +572,12 @@ static const ui_theme_t s_theme_1024 = {
     /* user_dlg_body_min_h        */ 144,
     /* user_dlg_footer_btn_w      */ 144,
     /* user_dlg_footer_btn_h      */ 51,
+    /* user_dlg_title_lead        */ 4,    /* 稿 39×0.8=31 − montserrat_24 的 27 */
+    /* user_dlg_body_lead         */ 1,    /* 稿 24×0.8=19 − montserrat_16 的 18 */
+    /* user_plate_dlg_w           */ 646,  /* 稿 808@1280 × 0.8 */
+    /* user_wifi_dlg_w            */ 448,  /* 稿 560@1280 × 0.8 */
     /* user_file_dlg_w            */ 600,
     /* user_file_dlg_preview_w    */ 192,
-    /* user_file_dlg_preview_h    */ 230,
     /* user_file_sel_w            */ 900,   /* < 1024，留边距 */
     /* user_file_sel_h            */ 440,   /* < 600，留边距 */
     /* user_file_card_w           */ 176,
@@ -536,15 +611,45 @@ static const ui_theme_t s_theme_1024 = {
     /* user_env_col_w             */ 0,    /* 0 = 自适应：本档 51 装不下 Humidity/101.3 kpa */
 
     /* 打印历史页（稿 1280 档 ×0.8） */
-    /* user_hist_tab_h            */ 32,
-    /* user_hist_card_h           */ 128,
-    /* user_hist_banner_h         */ 34,
-    /* user_hist_bar_w            */ 128,
-    /* user_hist_bar_h            */ 6,
-    /* user_hist_check_sz         */ 20,
-    /* user_hist_btn_w            */ 80,
-    /* user_hist_pad_l            */ 0,    /* 无稿，沿用旧式 USER_PAD */
-    /* user_hist_list_pad_l       */ 0,    /* 无稿，沿用旧式 USER_PAD */
+    /* user_hist_tab_h            */ 48,
+    /* user_hist_card_h           */ 128,  /* 仅照片浏览器缩略图带在用 */
+    /* user_hist_check_sz         */ 19,
+    /* user_hist_pad_l            */ 38,
+    /* user_hist_grid_gap         */ 26,
+    /* user_hist_card_radius      */ 13,
+    /* user_hist_selbar_h         */ 64,   /* 稿 80×0.8 */
+    /* user_hist_del_btn_w        */ 112,
+    /* user_hist_del_btn_h        */ 51,
+
+    /* 浅色稿几何（1280 稿值 ×0.8，本档未逐个核） */
+    /* user_light_radius      */ 19,
+    /* user_light_btn_sz      */ 58,
+    /* user_action_btn_sz     */ 67,
+    /* user_home_card_h       */ 240,
+    /* user_home_grid_w       */ 272,
+    /* user_home_greet_top    */ 128,
+    /* user_home_dev_img_w    */ 420,
+    /* user_home_dev_img_h    */ 633,
+    /* user_home_dev_img_x    */ 618,
+    /* user_home_dev_img_y    */ 71,
+    /* user_home_print_btn_w  */ 173,
+    /* user_home_slide_w      */ 362,
+    /* user_home_slide_h      */ 75,
+    /* user_home_edge_gap     */ 38,
+    /* user_panel_w           */ 256,
+    /* user_panel_row_h       */ 38,
+
+    /* 监控页：1280 档取稿值，本档按 ×0.8 折算。
+     * panel_w 特意留得比 336（420×0.8）宽一点：本档 USER_PAD_LG 是 36（比 1280 档的 32
+     * 还大，见「间距梯度」那一节的非单调说明），内容区会被多扣 8，344−72 = 272 已经很窄。 */
+    /* user_mon_panel_w       */ 344,
+    /* user_mon_row_h         */ 51,
+    /* user_mon_radius        */ 13,
+    /* user_mon_thumb_h       */ 168,
+    /* user_mon_stat_h        */ 78,
+    /* user_mon_pm_h          */ 168,
+    /* user_mon_cell_h        */ 90,
+    /* user_mon_bar_h         */ 19,
 
     /* 字体（dev） */
     /* font_body          */ &lv_font_montserrat_20,
@@ -558,6 +663,11 @@ static const ui_theme_t s_theme_1024 = {
     /* font_user_title    */ &lv_font_montserrat_16,  /* == font_user_text，本档观感不变 */
     /* font_user_caption  */ &lv_font_montserrat_14,
     /* font_user_caption_sm */ &lv_font_montserrat_12,
+    /* font_user_display  */ &lv_font_montserrat_32,  /* 稿 40×0.8=32 */
+    /* font_user_metric   */ &lv_font_montserrat_24,  /* 稿 32×0.8=25.6，取最近的 24 */
+    /* font_user_body     */ &lv_font_montserrat_20,  /* 稿 24×0.8=19.2，取最近的 20 */
+    /* font_user_dlg_title*/ &lv_font_montserrat_24,  /* 稿 28×0.8=22.4，取最近的 24 */
+    /* font_user_dlg_btn  */ &lv_font_montserrat_18,  /* 稿 22×0.8=17.6，取最近的 18 */
     /* font_user_icon     */ &lv_font_montserrat_20,
 
     /* profile_id */ UI_RES_1024,
@@ -692,6 +802,11 @@ const lv_font_t *user_font_text_sm(void)   { return g_ui->font_user_text_sm; }
 const lv_font_t *user_font_title(void)     { return g_ui->font_user_title; }
 const lv_font_t *user_font_caption(void)   { return g_ui->font_user_caption; }
 const lv_font_t *user_font_caption_sm(void){ return g_ui->font_user_caption_sm; }
+const lv_font_t *user_font_display(void)   { return g_ui->font_user_display; }
+const lv_font_t *user_font_metric(void)    { return g_ui->font_user_metric; }
+const lv_font_t *user_font_body(void)      { return g_ui->font_user_body; }
+const lv_font_t *user_font_dlg_title(void) { return g_ui->font_user_dlg_title; }
+const lv_font_t *user_font_dlg_btn(void)   { return g_ui->font_user_dlg_btn; }
 const lv_font_t *user_font_icon(void)      { return g_ui->font_user_icon; }
 
 /* 中文字体：思源黑体子集 TTF，经 LVGL TinyTTF 运行时渲染（字号 16）。

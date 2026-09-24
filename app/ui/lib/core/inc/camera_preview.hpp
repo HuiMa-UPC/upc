@@ -40,6 +40,11 @@ public:
     void stop();
 
     [[nodiscard]] bool active() const noexcept { return active_; }
+    /** 解码线程已起来且在出帧；connecting / 失败时为 false。 */
+    [[nodiscard]] bool stream_up() const noexcept
+    {
+        return stream_up_.load(std::memory_order_relaxed);
+    }
     /**
      * 上屏图像的尺寸，**不是**相机流的原始尺寸：解码侧已按视口做过裁剪 + 缩放。
      * `cam_apply_layout()` 拿它算残余 zoom，正常情况下正好是 1.000（无缩放快路径）。
@@ -69,6 +74,12 @@ private:
     };
 
     CameraPreviewPlayer() = default;
+
+    /**
+     * @param cancel_pending false=内部重开流时保留已排队的 pending_start
+     *        （避免 stop→retire→start 竞态把 deferred start 清掉导致黑屏）
+     */
+    void stop_impl(bool cancel_pending);
 
     void on_stream_start_rsp(const middleware::CameraStreamInfoPayload& info);
     void apply_stream_start_ui(const middleware::CameraStreamInfoPayload& info);

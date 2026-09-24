@@ -42,15 +42,6 @@ void UiMsgProxy::init()
         }));
 
     subs_.push_back(bus.subscribe(
-        middleware::MsgType::APP_CLOSE_DOOR_Rsp, middleware::ModuleId::UI,
-        [this](const middleware::Message& msg) {
-            middleware::DoorResultPayload p{};
-            if (close_door_cb_ && read_inline_pod(msg, p)) {
-                close_door_cb_(p);
-            }
-        }));
-
-    subs_.push_back(bus.subscribe(
         middleware::MsgType::APP_Purify_Ntf, middleware::ModuleId::UI,
         [this](const middleware::Message& msg) {
             if (purify_progress_cb_ &&
@@ -204,11 +195,28 @@ void UiMsgProxy::init()
         }));
 
     subs_.push_back(bus.subscribe(
+        middleware::MsgType::APP_Print_Prep_Progress_Ntf, middleware::ModuleId::UI,
+        [this](const middleware::Message& msg) {
+            middleware::PrintPrepProgressPayload p{};
+            if(print_prep_progress_cb_ && read_inline_pod(msg, p)) {
+                print_prep_progress_cb_(p);
+            }
+        }));
+
+    subs_.push_back(bus.subscribe(
         middleware::MsgType::APP_Print_Start_Rejected_Ntf, middleware::ModuleId::UI,
         [this](const middleware::Message& msg) {
             middleware::PrintStartRejectedPayload p{};
             if(print_start_rejected_cb_ && read_inline_pod(msg, p)) {
                 print_start_rejected_cb_(p);
+            }
+        }));
+
+    subs_.push_back(bus.subscribe(
+        middleware::MsgType::GLAVO_Outer_Door_Confirm_Req, middleware::ModuleId::UI,
+        [this](const middleware::Message&) {
+            if(outer_door_confirm_req_cb_) {
+                outer_door_confirm_req_cb_();
             }
         }));
 
@@ -319,9 +327,14 @@ void UiMsgProxy::init()
         middleware::MsgType::GLAVO_USB_Hotplug_Ntf, middleware::ModuleId::UI,
         [this](const middleware::Message& msg) {
             middleware::UsbHotplugPayload p{};
-            if (usb_hotplug_cb_ && read_inline_pod(msg, p)) {
-                p.mount_path[sizeof(p.mount_path) - 1] = '\0';
-                usb_hotplug_cb_(p);
+            if (usb_hotplug_cbs_.empty() || !read_inline_pod(msg, p)) {
+                return;
+            }
+            p.mount_path[sizeof(p.mount_path) - 1] = '\0';
+            for (const auto& cb : usb_hotplug_cbs_) {
+                if (cb) {
+                    cb(p);
+                }
             }
         }));
 
@@ -566,9 +579,11 @@ void UiMsgProxy::register_xfr_transfer_progress(XfrTransferProgressCb cb)
     xfr_transfer_progress_cb_ = std::move(cb);
 }
 
-void UiMsgProxy::register_usb_hotplug(UsbHotplugCb cb)
+void UiMsgProxy::add_usb_hotplug_listener(UsbHotplugCb cb)
 {
-    usb_hotplug_cb_ = std::move(cb);
+    if (cb) {
+        usb_hotplug_cbs_.push_back(std::move(cb));
+    }
 }
 
 void UiMsgProxy::send_mcu_version_query()
@@ -697,19 +712,6 @@ void UiMsgProxy::send_open_door()
 void UiMsgProxy::register_open_door_result(DoorResultCb cb)
 {
     open_door_cb_ = std::move(cb);
-}
-
-void UiMsgProxy::send_close_door_check()
-{
-    middleware::Message msg(middleware::MsgType::UI_CLOSE_DOOR_Req,
-                            middleware::ModuleId::UI,
-                            middleware::ModuleId::APP_GLAVO);
-    middleware::MsgPort::instance().publish_async(msg);
-}
-
-void UiMsgProxy::register_close_door_result(DoorResultCb cb)
-{
-    close_door_cb_ = std::move(cb);
 }
 
 void UiMsgProxy::send_purify()
@@ -935,9 +937,27 @@ void UiMsgProxy::register_optical_path_progress(OpticalPathProgressCb cb)
     optical_path_progress_cb_ = std::move(cb);
 }
 
+void UiMsgProxy::register_print_prep_progress(PrintPrepProgressCb cb)
+{
+    print_prep_progress_cb_ = std::move(cb);
+}
+
 void UiMsgProxy::register_print_start_rejected(PrintStartRejectedCb cb)
 {
     print_start_rejected_cb_ = std::move(cb);
+}
+
+void UiMsgProxy::register_outer_door_confirm_req(OuterDoorConfirmReqCb cb)
+{
+    outer_door_confirm_req_cb_ = std::move(cb);
+}
+
+void UiMsgProxy::send_outer_door_confirm(bool skip)
+{
+    middleware::OuterDoorConfirmRspPayload payload{};
+    payload.skip = skip ? uint8_t(1) : uint8_t(0);
+    publish_pod(middleware::MsgType::UI_Outer_Door_Confirm_Rsp,
+                middleware::ModuleId::APP_GLAVO, payload);
 }
 
 void UiMsgProxy::send_parser_exit()

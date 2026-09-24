@@ -27,7 +27,7 @@ constexpr uint8_t kNib[2] = {0x8, 0xE};
 
 // constexpr uint8_t kBlueR = 167, kBlueG = 194, kBlueB = 227;
 constexpr uint8_t kBlueR = 30, kBlueG = 30, kBlueB = 30;
-constexpr uint8_t kOrangeR = 255, kOrangeG = 30, kOrangeB = 0;
+constexpr uint8_t kOrangeR = 50, kOrangeG = 255, kOrangeB = 0;
 constexpr uint8_t kRedR = 255, kRedG = 0, kRedB = 0;
 
 void enc_byte(uint8_t* buf, uint32_t* p, uint8_t v)
@@ -55,8 +55,137 @@ SpiStatusLed& SpiStatusLed::instance()
 
 SpiStatusLed::~SpiStatusLed()
 {
+    stop_worker();
+    close_io();
+}
+
+void SpiStatusLed::ensure_worker_locked()
+{
+    if(worker_started_) {
+        return;
+    }
+    worker_stop_ = false;
+    worker_started_ = true;
+    worker_ = std::thread([this] { worker_loop(); });
+}
+
+void SpiStatusLed::stop_worker()
+{
+    {
+        std::lock_guard<std::mutex> lock(mtx_);
+        if(!worker_started_) {
+            return;
+        }
+        worker_stop_ = true;
+        cv_.notify_all();
+    }
+    if(worker_.joinable()) {
+        worker_.join();
+    }
     std::lock_guard<std::mutex> lock(mtx_);
-    close_locked();
+    worker_started_ = false;
+    worker_stop_ = false;
+    dirty_ = false;
+    close_after_send_ = false;
+}
+
+void SpiStatusLed::worker_loop()
+{
+    for(;;) {
+        uint8_t r = 0, g = 0, b = 0;
+        Color c = Color::Blue;
+        bool do_close = false;
+        {
+            std::unique_lock<std::mutex> lock(mtx_);
+            cv_.wait(lock, [this]() {
+                return worker_stop_ || dirty_;
+            });
+            if(worker_stop_ && !dirty_) {
+                break;
+            }
+            r = pending_r_;
+            g = pending_g_;
+            b = pending_b_;
+            c = pending_color_;
+            do_close = close_after_send_;
+            dirty_ = false;
+            close_after_send_ = false;
+        }
+
+        /* ioctl 在锁外：串口/报警路径只排队，不堵在 SPI transfer 上。 */
+        const bool ok = send_rgb_io(r, g, b);
+        if(do_close) {
+            close_io();
+            std::lock_guard<std::mutex> lock(mtx_);
+            last_sent_ = false;
+            continue;
+        }
+        if(ok) {
+            std::lock_guard<std::mutex> lock(mtx_);
+            last_color_ = c;
+            last_sent_ = true;
+        }
+    }
+}
+
+void SpiStatusLed::queue_apply_locked(bool force_send)
+{
+    /* 调试接管时绕开 MCU major≥4 版本门，否则台架上点按钮完全静默 */
+    if(!enabled_ && !dbg_force_) {
+        return;
+    }
+    Color c = Color::Blue;
+    if(dbg_force_) {
+        c = dbg_color_;
+    } else if(!condition_active_.empty()) {
+        c = Color::Red;
+    } else if(printing_) {
+        c = Color::Orange;
+    }
+    if(!force_send && last_sent_ && c == last_color_ && !dirty_) {
+        return;
+    }
+    uint8_t r = kBlueR, g = kBlueG, b = kBlueB;
+    const char* name = "blue";
+    if(c == Color::Raw) {
+        r = dbg_r_;
+        g = dbg_g_;
+        b = dbg_b_;
+        name = "raw";
+    } else if(c == Color::Orange) {
+        r = kOrangeR;
+        g = kOrangeG;
+        b = kOrangeB;
+        name = "orange";
+    } else if(c == Color::Red) {
+        r = kRedR;
+        g = kRedG;
+        b = kRedB;
+        name = "red";
+    }
+    pending_r_ = r;
+    pending_g_ = g;
+    pending_b_ = b;
+    pending_color_ = c;
+    close_after_send_ = false;
+    dirty_ = true;
+    ensure_worker_locked();
+    cv_.notify_one();
+    UPC_LOG_GLAVO_SERVICE(Info, "spi status led color=%s rgb=%u,%u,%u%s", name,
+                          static_cast<unsigned>(r), static_cast<unsigned>(g),
+                          static_cast<unsigned>(b), dbg_force_ ? " (debug)" : "");
+}
+
+void SpiStatusLed::queue_idle_blue_and_close_locked()
+{
+    pending_r_ = kBlueR;
+    pending_g_ = kBlueG;
+    pending_b_ = kBlueB;
+    pending_color_ = Color::Blue;
+    close_after_send_ = true;
+    dirty_ = true;
+    ensure_worker_locked();
+    cv_.notify_one();
 }
 
 void SpiStatusLed::set_enabled(bool on)
@@ -67,18 +196,54 @@ void SpiStatusLed::set_enabled(bool on)
     }
     enabled_ = on;
     if(!on) {
-        close_locked();
-        last_sent_ = false;
+        if(!dbg_force_) {
+            queue_idle_blue_and_close_locked();
+        }
         return;
     }
-    apply_locked();
+    queue_apply_locked();
 }
 
 void SpiStatusLed::set_printing(bool on)
 {
     std::lock_guard<std::mutex> lock(mtx_);
     printing_ = on;
-    apply_locked();
+    queue_apply_locked();
+}
+
+void SpiStatusLed::set_debug_force(bool force, uint8_t color,
+                                   uint8_t r, uint8_t g, uint8_t b)
+{
+    std::lock_guard<std::mutex> lock(mtx_);
+    dbg_force_ = force;
+    if(force) {
+        dbg_color_ = (color > static_cast<uint8_t>(Color::Raw))
+                         ? Color::Blue
+                         : static_cast<Color>(color);
+        dbg_r_ = r;
+        dbg_g_ = g;
+        dbg_b_ = b;
+    }
+    if(force || enabled_) {
+        /* force_send=true：同色重复点击也真发一帧，否则看不出灯板有没有响应；
+         * 释放时同样强发，让 alarm/printing 推导结果立刻可见。 */
+        queue_apply_locked(true);
+        return;
+    }
+    /* 释放接管且未进 V4：本模块本不该点灯，但验色已把灯点亮，而 WS 会锁存最后一帧。
+     * 先刷回空闲蓝再关 fd，否则灯板一直停在测试色上。 */
+    queue_idle_blue_and_close_locked();
+}
+
+void SpiStatusLed::debug_force_state(bool& force, uint8_t& color,
+                                     uint8_t& r, uint8_t& g, uint8_t& b)
+{
+    std::lock_guard<std::mutex> lock(mtx_);
+    force = dbg_force_;
+    color = static_cast<uint8_t>(dbg_color_);
+    r = dbg_r_;
+    g = dbg_g_;
+    b = dbg_b_;
 }
 
 void SpiStatusLed::on_alarm_report(const serial_alarm_report_t& report)
@@ -92,7 +257,7 @@ void SpiStatusLed::on_alarm_report(const serial_alarm_report_t& report)
     } else {
         condition_active_.erase(report.alarm_code);
     }
-    apply_locked();
+    queue_apply_locked();
 }
 
 void SpiStatusLed::on_alarm_snapshot(const serial_alarm_snapshot_t& snap)
@@ -102,7 +267,7 @@ void SpiStatusLed::on_alarm_snapshot(const serial_alarm_snapshot_t& snap)
         condition_active_.clear();
         snap_expect_ = 0;
         snap_seen_ = 0;
-        apply_locked();
+        queue_apply_locked();
         return;
     }
     if(snap.slot_id >= SERIAL_ALARM_SNAPSHOT_SLOTS) {
@@ -140,10 +305,10 @@ void SpiStatusLed::commit_snapshot_round_locked()
     }
     snap_expect_ = 0;
     snap_seen_ = 0;
-    apply_locked();
+    queue_apply_locked();
 }
 
-bool SpiStatusLed::ensure_open_locked()
+bool SpiStatusLed::ensure_open_io()
 {
     if(fd_ >= 0) {
         return true;
@@ -168,7 +333,7 @@ bool SpiStatusLed::ensure_open_locked()
             open_warn_done_ = true;
             UPC_LOG_GLAVO_SERVICE(Warn, "spi status led ioctl setup failed errno=%d", errno);
         }
-        close_locked();
+        close_io();
         return false;
     }
     UPC_LOG_GLAVO_SERVICE(Info, "spi status led open %s", GLAVO_SPI_STATUS_LED_DEV);
@@ -182,7 +347,7 @@ bool SpiStatusLed::ensure_open_locked()
 #endif
 }
 
-void SpiStatusLed::close_locked()
+void SpiStatusLed::close_io()
 {
     if(fd_ >= 0) {
         ::close(fd_);
@@ -190,44 +355,9 @@ void SpiStatusLed::close_locked()
     }
 }
 
-void SpiStatusLed::apply_locked()
+bool SpiStatusLed::send_rgb_io(uint8_t r, uint8_t g, uint8_t b)
 {
-    if(!enabled_) {
-        return;
-    }
-    Color c = Color::Blue;
-    if(!condition_active_.empty()) {
-        c = Color::Red;
-    } else if(printing_) {
-        c = Color::Orange;
-    }
-    if(last_sent_ && c == last_color_) {
-        return;
-    }
-    uint8_t r = kBlueR, g = kBlueG, b = kBlueB;
-    const char* name = "blue";
-    if(c == Color::Orange) {
-        r = kOrangeR;
-        g = kOrangeG;
-        b = kOrangeB;
-        name = "orange";
-    } else if(c == Color::Red) {
-        r = kRedR;
-        g = kRedG;
-        b = kRedB;
-        name = "red";
-    }
-    if(!send_rgb_locked(r, g, b)) {
-        return;
-    }
-    last_color_ = c;
-    last_sent_ = true;
-    UPC_LOG_GLAVO_SERVICE(Info, "spi status led color=%s", name);
-}
-
-bool SpiStatusLed::send_rgb_locked(uint8_t r, uint8_t g, uint8_t b)
-{
-    if(!ensure_open_locked()) {
+    if(!ensure_open_io()) {
         return false;
     }
 #if defined(__linux__)
@@ -249,7 +379,7 @@ bool SpiStatusLed::send_rgb_locked(uint8_t r, uint8_t g, uint8_t b)
             open_warn_done_ = true;
             UPC_LOG_GLAVO_SERVICE(Warn, "spi status led xfer failed errno=%d", errno);
         }
-        close_locked();
+        close_io();
         return false;
     }
     return true;

@@ -12,9 +12,6 @@ struct CalConfigOptions {
     bool has_glavo_door_real_open_enable = false;
     bool glavo_door_real_open_enable = false;
 
-    bool has_glavo_door_real_close_check_enable = false;
-    bool glavo_door_real_close_check_enable = false;
-
     bool has_glavo_serial_ack_enable = false;
     bool glavo_serial_ack_enable = false;
 
