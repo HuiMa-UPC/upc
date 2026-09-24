@@ -664,14 +664,23 @@ enum class MsgType : uint32_t {
      *  载荷形状与 USB 那条完全一致，故复用同一个 POD，但**是两个不同的卷**。 */
     GLAVO_SdCard_Hotplug_Ntf,
 
-    // Cabin inspection proposal: six dedicated append-only IDs; SOC review pending.
-    // No UI, actuator, or print-control semantics are added by these messages.
+    // Cabin inspection: six dedicated append-only IDs (see doc/CABIN_IPC_INTEGRATION.md).
     GLAVO_Visual_Cabin_Session_Start_Ntf = 0x1720, /**< VisualCabinSessionPayload; explicit warm-up */
     GLAVO_Visual_Cabin_Session_Stop_Ntf  = 0x1721, /**< VisualCabinSessionPayload; matching-session cancel */
     GLAVO_Visual_InnerDoor_Occlusion_Req = 0x1722, /**< VisualCabinCheckReqPayload; Snapshot or WaitOpen */
     APP_Visual_InnerDoor_Occlusion_Rsp   = 0x1723, /**< VisualCabinCheckRspPayload; InnerDoorOcclusionResult */
     GLAVO_Visual_Plate_Present_Req       = 0x1724, /**< VisualCabinCheckReqPayload; Snapshot only */
     APP_Visual_Plate_Present_Rsp         = 0x1725, /**< VisualCabinCheckRspPayload; PlatePresentResult */
+    /* Glavo↔UI：舱检业务开关 / 无板弹窗（枚举只准末尾追加，接在 0x1725 之后） */
+    UI_Debug_InnerDoor_Occlusion_Set_Ntf, /**< DebugOnOffPayload：内门视觉挡门（仅本次运行，默认关） */
+    UI_Debug_InnerDoor_Occlusion_Get_Ntf, /**< Empty：查询内门视觉挡门开关 */
+    UI_Debug_Plate_Present_Set_Ntf,       /**< DebugOnOffPayload：基板在位读码（仅本次运行，默认关） */
+    UI_Debug_Plate_Present_Get_Ntf,       /**< Empty：查询基板在位开关 */
+    GLAVO_Debug_InnerDoor_Occlusion_Ntf,  /**< DebugOnOffPayload：内门视觉挡门开关状态 */
+    GLAVO_Debug_Plate_Present_Ntf,        /**< DebugOnOffPayload：基板在位开关状态 */
+    /** 无基板：放入基板并关外门（Cancel=阻断起印，勿复用外门 skip=1 继续 Prep） */
+    GLAVO_Plate_Place_Confirm_Req,        /**< Empty */
+    UI_Plate_Place_Confirm_Rsp,           /**< PlatePlaceConfirmRspPayload */
 };
 
 enum class MsgPriority : uint8_t {
@@ -698,6 +707,8 @@ inline constexpr bool is_ipc_reliable_msg_type(MsgType type) noexcept
     case MsgType::APP_Visual_InnerDoor_Occlusion_Rsp:
     case MsgType::GLAVO_Visual_Plate_Present_Req:
     case MsgType::APP_Visual_Plate_Present_Rsp:
+    case MsgType::GLAVO_Plate_Place_Confirm_Req:
+    case MsgType::UI_Plate_Place_Confirm_Rsp:
         return true;
     // OTA / 告警：终态与关键事件
     case MsgType::APP_Mcu_Ota_Status_Ntf:
@@ -1187,6 +1198,8 @@ enum class PrintPrepStep : uint8_t {
     Oxygen      = 5,
     /** 首层视觉：采参考图 + PRINT_READY 后比对（调试开关关则不计） */
     FirstLayer  = 6,
+    /** 基板在位读码（调试开关关则不计；执行在关内门之后、光路之前） */
+    PlatePresent = 7,
 };
 
 /** APP_Print_Prep_Progress_Ntf：起印环境检查进度（Inline）
@@ -1210,6 +1223,8 @@ enum class PrintStartRejectReason : uint8_t {
     PlateHeightFail  = 3,  /**< 打印前基板测高失败或无 LUT */
     TcpOffline       = 4,  /**< 振镜 TCP 未连接，无法 begin_sending */
     InnerDoorSeqFail = 5,  /**< 关内门套件（降 Z/关内门/回 Z）失败 */
+    PlatePresentFail = 6,  /**< 基板读码 unknown/超时/Visual 无应答 */
+    PlateAbsentCancel = 7, /**< 无基板弹窗 Cancel，阻断起印 */
 };
 
 /** APP_Print_Start_Rejected_Ntf：起印被后端拒绝（Inline）
@@ -1225,6 +1240,14 @@ struct PrintStartRejectedPayload {
  *  skip=1：Cancel，不检门，直接 continue 内门/光路/测高。 */
 struct OuterDoorConfirmRspPayload {
     uint8_t skip;        /**< 0=确认后再检门，1=跳过外门检测 */
+    uint8_t reserved[3];
+};
+
+/** UI_Plate_Place_Confirm_Rsp：无基板弹窗回复（Inline）
+ *  cancel=0：Confirm，Glavo 再检外门已关 + 内门决策 + 再读码。
+ *  cancel=1：Cancel，阻断起印（与光路失败同类回滚）。 */
+struct PlatePlaceConfirmRspPayload {
+    uint8_t cancel;      /**< 0=Confirm 再检，1=Cancel 阻断 */
     uint8_t reserved[3];
 };
 
@@ -1895,6 +1918,8 @@ enum class DeviceEventCode : uint16_t {
     OuterDoorNeedClose      = 36, /**< 起印需关外门（one_shot，severity=info；弹窗另走 Confirm_Req） */
     InnerDoorSeqFail        = 37, /**< 关内门套件失败（one_shot，severity=error） */
     PlateHeightBlocked      = 38, /**< 测高无 LUT 或失败，已阻断起印（one_shot，severity=error） */
+    PlatePresentFail        = 39, /**< 基板读码失败/未知，已阻断起印（one_shot，severity=error） */
+    PlateAbsentNeedPlace    = 40, /**< 读码=无板，需放入基板并关外门（one_shot，severity=info；弹窗另走 Confirm_Req） */
 
     /* ---- 以下为 UI 本地事件：不走总线，由前端自己 push，占同一码空间以便
      *      消息中心统一排序去重。后端不应发送这些码。 ---- */

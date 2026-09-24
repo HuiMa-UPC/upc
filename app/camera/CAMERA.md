@@ -85,6 +85,8 @@ Media 直播/打印 H264 与 RTHM 缩略图都是先拷到私有缓冲再进 MPP
 
 无其他 peer 时才真正停 ISP/V4L2。
 
+`ensure_stream_peer`：同 sender 已有会话且 producer 仍 open、名字一致则复用；否则就地 `destroy`+`create` 刷新环（避免 Rsp ok 但消费者 `shm_open` ENOENT）。UI 开流失败恢复会先 `Stop` 再 `Start`，多数走新建路径。
+
 ## 默认参数
 
 | 项 | 默认 | 环境变量 / 宏 |

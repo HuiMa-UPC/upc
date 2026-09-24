@@ -1667,11 +1667,11 @@ rongsu_camera 经主 IPC（/tmp/upc_camera.sock）SCM_RIGHTS 附带隔离 pool �
 
 `CameraStreamInfoPayload.dma_socket_path` 为 ABI 保留字段；fd 不经独立 socket 传递。源 fd 来自 Camera 隔离 pool（dma32/CMA），不是 ISP 的 V4L2 buf，见 [camera/CAMERA.md](../camera/CAMERA.md) 「ISP IOMMU 与 dma-buf 所有权」。
 
-- **开流**：监控页 `cam_ensure_running()` → 已 active 则 `reattach`，否则 `CameraPreviewPlayer::start()` → IPC Start → `apply_stream_start_ui` 开 SHM 元数据环 + `take_peer_dma_fds` + `setup_frame_buffers` + 解码线程。
+- **开流**：监控页 `cam_ensure_running()` → `CameraPreviewPlayer::ensure_running()`：已出帧则只 `reattach`；半死（active 未出帧 / 上次失败残留）则先 `Stop` 再 `start()` → IPC Start → `apply_stream_start_ui` 开 SHM 元数据环 + `take_peer_dma_fds` + `setup_frame_buffers` + 解码线程。
 - **关流/换流**：UI 仅请求解码线程退役；后台回收线程等待退出，LVGL 定时器确认退出后才关闭旧 SHM、DMA fd 与显示缓冲，因此主线程不阻塞在 `join()`。
 - **离页**：监控页 `detach_widgets()` 只卸 LVGL 指针，**不**发 Stop——避免短时间 Stop/Start 叠两封带 fd 的 `Start_Rsp`（曾与 UPDF 粘包叠加成 `DMA fd mismatch` 黑屏）。`ui_timer` 在 `image_==nullptr` 时自然空转。
-- **开流落地失败可恢复**：`apply_stream_start_ui` 遇 fd/SHM 失败走 `recover_stream_start()` 重发 Start（与看门狗共用重试上限），不再把「已收到 Rsp」当成终态黑屏。
-- **恢复职责**：Camera 侧采集看门狗是唯一的自动重连发起者；UI 只检测并记录预览卡帧，等待 Camera 重建 SHM 与重推 `Stream_Start_Rsp`，不再自行 Stop/Start 流（开流落地失败的 recover 除外）。
+- **开流落地失败硬恢复**：`apply_stream_start_ui` 遇 fd/SHM 失败走 `recover_stream_start()`：**先 Stop 拆 Camera peer/SHM，再 Start**（与看门狗超时共用；重试上限 5）。give-up / 超时同样先 Stop 再清 `active_`，避免僵尸环导致「SHM open failed」且切页无法恢复。
+- **恢复职责**：采集卡死仍由 Camera 看门狗重开 ISP；UI 对开流落地失败与进页半死会话主动 Stop→Start。已出帧后的卡帧仍只记日志，等 Camera 重推 `Stream_Start_Rsp`。
 - **交互降频只降转换，不降取帧**：按压 / 有动画时 `decode_target_fps_override_` 置 `kInteractiveDecodeFps`(12)，解码线程据此**跳过 RGA/SW 转换**，但 `acquire_latest_frame` + `release_slot` 始终按相机帧率跑。若连取帧一起降频，滞留的槽位会占满 Camera 的在飞窗口并反压采集线程，把 Visual 与直播一起拖到 12fps（见 [camera/CAMERA.md](../camera/CAMERA.md) 「在飞窗口」）。5s 诊断里 `skip=` 即这类跳过的帧。
 - **解码线程不按帧周期补睡**：限速由 `acquire_latest_frame` 天然承担（没有比 `last_seq` 更新的帧就返回 `nullopt`），所以循环末尾**不再**睡到一个相机帧周期。补睡会把 SHM 的轮询粒度从 `kNoFrameNapMs`(5ms) 拉到整整一帧（无帧那圈只耗 5ms，末尾要再睡 28ms），凭空给预览加上平均半帧的等待。无帧时只睡 `kNoFrameNapMs`。
 - **`lv_timer` 周期 16ms**（`kUiRefreshPeriodMs`，与 `LV_DEF_REFR_PERIOD` 对齐）：这一拍等的是"转换好的帧什么时候被切上屏"，周期越长平均多等半个周期。交互期仍降到 `kUiRefreshInteractPeriodMs`(66) 让位给触摸响应。

@@ -35,6 +35,7 @@ using OpticalPathProgressCb = std::function<void(const middleware::OpticalPathPr
 using PrintPrepProgressCb = std::function<void(const middleware::PrintPrepProgressPayload&)>;
 using PrintStartRejectedCb = std::function<void(const middleware::PrintStartRejectedPayload&)>;
 using OuterDoorConfirmReqCb = std::function<void()>;
+using PlatePlaceConfirmReqCb = std::function<void()>;
 using SupplyStatusCb   = std::function<void(const middleware::SupplyStatusPayload&)>;
 using PrintPrepareDoneCb = std::function<void(bool ok)>;
 using McuOtaStatusCb   = std::function<void(const middleware::McuOtaStatusPayload&)>;
@@ -149,6 +150,10 @@ public:
     void register_outer_door_confirm_req(OuterDoorConfirmReqCb cb);
     /** @param skip false=Confirm 后再检门；true=Cancel 跳过外门检测。 */
     void send_outer_door_confirm(bool skip = false);
+    /** 无基板：弹放入基板窗；Confirm/Cancel 后 send_plate_place_confirm。 */
+    void register_plate_place_confirm_req(PlatePlaceConfirmReqCb cb);
+    /** @param cancel false=Confirm 再检；true=Cancel 阻断起印。 */
+    void send_plate_place_confirm(bool cancel = false);
 
     /** D1 X / 二次确认 Cancel：退出解析线程并清空 RingBuffer */
     void send_parser_exit();
@@ -282,6 +287,7 @@ private:
     PrintPrepProgressCb print_prep_progress_cb_;
     PrintStartRejectedCb print_start_rejected_cb_;
     OuterDoorConfirmReqCb outer_door_confirm_req_cb_;
+    PlatePlaceConfirmReqCb plate_place_confirm_req_cb_;
     SupplyStatusCb   supply_status_cb_;
     PrintPrepareDoneCb print_prepare_done_cb_;
     McuOtaStatusCb   mcu_ota_status_cb_;

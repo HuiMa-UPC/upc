@@ -303,8 +303,10 @@ lv_obj_t *make_round_icon_btn(lv_obj_t *parent, const char *symbol, lv_event_cb_
 void on_powder_low_async(void *user);
 void on_print_start_rejected_async(void *user);
 void on_outer_door_confirm_req_async(void *user);
+void on_plate_place_confirm_req_async(void *user);
 void close_powder_dlg(void);
 void close_outer_door_confirm_dlg(void);
+void close_plate_place_confirm_dlg(void);
 void stop_print_watchdogs(void);
 void start_print_peer_watch(void);
 void finish_printing(bool notify_complete);
@@ -446,6 +448,7 @@ void finish_printing(bool notify_complete)
     /* 缺粉窗可能还开着（用户既没补粉也没取消，作业已被终止/跑完） */
     close_powder_dlg();
     close_outer_door_confirm_dlg();
+    close_plate_place_confirm_dlg();
 
     if(notify_complete && g_job_done_cb) {
         DoneCb done_cb = g_job_done_cb;
@@ -711,6 +714,10 @@ void wire_msg_proxy()
 
     proxy.register_outer_door_confirm_req([]() {
         lv_async_call(on_outer_door_confirm_req_async, nullptr);
+    });
+
+    proxy.register_plate_place_confirm_req([]() {
+        lv_async_call(on_plate_place_confirm_req_async, nullptr);
     });
 
     proxy.register_print_terminate_done([]() {
@@ -1968,6 +1975,74 @@ void on_outer_door_confirm_req_async(void * /*user*/)
         return;
     }
     show_outer_door_confirm_dlg();
+}
+
+/* ---- 无基板：放入基板并关外门（Cancel=阻断，勿复用外门 skip 继续） ---- */
+ui_modal_dialog_t *g_plate_place_confirm_dlg = nullptr;
+
+void close_plate_place_confirm_dlg(void)
+{
+    if(g_plate_place_confirm_dlg) {
+        ui_modal_dialog_close(g_plate_place_confirm_dlg);
+        g_plate_place_confirm_dlg = nullptr;
+    }
+}
+
+void on_plate_place_confirm_ok(lv_event_t * /*e*/)
+{
+    close_plate_place_confirm_dlg();
+    ui::UiMsgProxy::instance().send_plate_place_confirm(false);
+}
+
+void on_plate_place_confirm_cancel(lv_event_t * /*e*/)
+{
+    close_plate_place_confirm_dlg();
+    ui::UiMsgProxy::instance().send_plate_place_confirm(true);
+}
+
+void show_plate_place_confirm_dlg(void)
+{
+    if(g_plate_place_confirm_dlg) {
+        return;
+    }
+    ui_modal_dialog_cfg_t cfg =
+        ui_modal_dialog_cfg_user("Place the build plate", USER_DLG_W, true);
+    cfg.light_theme = true;
+    cfg.with_close_btn = false;
+    g_plate_place_confirm_dlg = ui_modal_dialog_open(lv_layer_top(), &cfg);
+    if(!g_plate_place_confirm_dlg) {
+        return;
+    }
+    lv_obj_t *sub = ui_user_make_body_label(
+        g_plate_place_confirm_dlg->body,
+        "Doors are opening. Place the build plate, close the outer door, then confirm.");
+    lv_label_set_long_mode(sub, LV_LABEL_LONG_MODE_WRAP);
+    lv_obj_set_width(sub, LV_PCT(100));
+    lv_obj_set_style_text_align(sub, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_flex_flow(g_plate_place_confirm_dlg->footer, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_row(g_plate_place_confirm_dlg->footer, USER_PAD, 0);
+    lv_obj_set_flex_align(g_plate_place_confirm_dlg->footer, LV_FLEX_ALIGN_START,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_t *ok = ui_user_make_confirm_footer_btn(
+        g_plate_place_confirm_dlg->footer, "Confirm",
+        true, user_light_nav_on, true,
+        on_plate_place_confirm_ok, nullptr);
+    lv_obj_set_flex_grow(ok, 0);
+    lv_obj_set_width(ok, LV_PCT(100));
+    lv_obj_t *cancel = ui_user_make_confirm_footer_btn(
+        g_plate_place_confirm_dlg->footer, "Cancel",
+        false, user_light_nav_on, true,
+        on_plate_place_confirm_cancel, nullptr);
+    lv_obj_set_flex_grow(cancel, 0);
+    lv_obj_set_width(cancel, LV_PCT(100));
+}
+
+void on_plate_place_confirm_req_async(void * /*user*/)
+{
+    if(g_state != CONTROL_STATE_PRINTING) {
+        return;
+    }
+    show_plate_place_confirm_dlg();
 }
 
 

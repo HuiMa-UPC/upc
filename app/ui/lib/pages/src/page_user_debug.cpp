@@ -145,6 +145,10 @@ lv_obj_t *g_optical_path_check_btn = nullptr; /**< 其他控制：打印前光�
 lv_obj_t *g_optical_path_check_state_lbl = nullptr; /**< 其他控制：打印前光路检测状态文本 */
 lv_obj_t *g_plate_height_adj_btn = nullptr; /**< 其他控制：打印前基板测高开关按钮 */
 lv_obj_t *g_plate_height_adj_state_lbl = nullptr; /**< 其他控制：打印前基板测高状态文本 */
+lv_obj_t *g_inner_door_occlusion_btn = nullptr; /**< 其他控制：内门视觉挡门 */
+lv_obj_t *g_inner_door_occlusion_state_lbl = nullptr;
+lv_obj_t *g_plate_present_btn = nullptr; /**< 其他控制：基板在位读码 */
+lv_obj_t *g_plate_present_state_lbl = nullptr;
 lv_obj_t *g_soc_led_btn[middleware::kDebugSocLedCount] = {};
 lv_obj_t *g_soc_led_state_lbl[middleware::kDebugSocLedCount] = {};
 lv_obj_t *g_cabin_pm_valve_btn = nullptr;   /**< 其他控制：舱内 PM fa_valve */
@@ -1451,6 +1455,10 @@ void on_dbg_toggle(lv_event_t *e)
                  break;
         case 15: proxy.send_plate_height_adj_set(on);          /* 打印前基板测高调 Z（仅本次运行，默认关） */
                  break;
+        case 22: proxy.send_inner_door_occlusion_set(on);      /* 内门视觉挡门（仅本次运行，默认关） */
+                 break;
+        case 23: proxy.send_plate_present_set(on);             /* 基板在位读码开关（仅本次运行，默认关；起印闸门待后续） */
+                 break;
         /* SOC 六路舱灯 / 舱内 PM 阀：sysfs 直控，不看 MCU 版本 */
         case 16: proxy.send_soc_led_set(c->arg, on);
                  break;
@@ -2257,7 +2265,12 @@ void build_other_switches_column(lv_obj_t *parent)
     make_dbg_toggle(rowG1, "Plate Height Adj", "On", "Off", LV_SYMBOL_UP, false,
                     15, 0, true, 0, &g_plate_height_adj_btn, &g_plate_height_adj_state_lbl);
     lv_obj_t *rowG2 = make_switch_grid_row(gate);
-    make_one_shot_action(rowG2, "Galvo Point Test", "Idle", LV_SYMBOL_PLAY,
+    make_dbg_toggle(rowG2, "Inner Door Occl", "On", "Off", LV_SYMBOL_EYE_CLOSE, false,
+                    22, 0, true, 0, &g_inner_door_occlusion_btn, &g_inner_door_occlusion_state_lbl);
+    make_dbg_toggle(rowG2, "Plate Present", "On", "Off", LV_SYMBOL_OK, false,
+                    23, 0, true, 0, &g_plate_present_btn, &g_plate_present_state_lbl);
+    lv_obj_t *rowG3 = make_switch_grid_row(gate);
+    make_one_shot_action(rowG3, "Galvo Point Test", "Idle", LV_SYMBOL_PLAY,
                          on_galvo_point_test_click,
                          &g_galvo_point_test_btn, &g_galvo_point_test_lbl);
     update_galvo_test_controls();
@@ -3008,6 +3021,36 @@ void bind_debug_callbacks()
         }
     });
 
+    proxy.register_inner_door_occlusion([](bool on) {
+        if(g_inner_door_occlusion_btn) {
+            if(on) {
+                lv_obj_add_state(g_inner_door_occlusion_btn, LV_STATE_CHECKED);
+            } else {
+                lv_obj_clear_state(g_inner_door_occlusion_btn, LV_STATE_CHECKED);
+            }
+        }
+        if(g_inner_door_occlusion_state_lbl) {
+            lv_label_set_text(g_inner_door_occlusion_state_lbl, on ? "On" : "Off");
+            lv_obj_set_style_text_color(g_inner_door_occlusion_state_lbl,
+                                        on ? user_color_accent : user_color_text_dim, 0);
+        }
+    });
+
+    proxy.register_plate_present([](bool on) {
+        if(g_plate_present_btn) {
+            if(on) {
+                lv_obj_add_state(g_plate_present_btn, LV_STATE_CHECKED);
+            } else {
+                lv_obj_clear_state(g_plate_present_btn, LV_STATE_CHECKED);
+            }
+        }
+        if(g_plate_present_state_lbl) {
+            lv_label_set_text(g_plate_present_state_lbl, on ? "On" : "Off");
+            lv_obj_set_style_text_color(g_plate_present_state_lbl,
+                                        on ? user_color_accent : user_color_text_dim, 0);
+        }
+    });
+
     proxy.register_soc_led([](uint8_t mask) {
         for(uint8_t i = 0; i < middleware::kDebugSocLedCount; ++i) {
             const bool on = (mask & static_cast<uint8_t>(1u << i)) != 0;
@@ -3183,6 +3226,10 @@ void reset_globals()
     g_optical_path_check_state_lbl = nullptr;
     g_plate_height_adj_btn = nullptr;
     g_plate_height_adj_state_lbl = nullptr;
+    g_inner_door_occlusion_btn = nullptr;
+    g_inner_door_occlusion_state_lbl = nullptr;
+    g_plate_present_btn = nullptr;
+    g_plate_present_state_lbl = nullptr;
     for(uint8_t i = 0; i < middleware::kDebugSocLedCount; ++i) {
         g_soc_led_btn[i] = nullptr;
         g_soc_led_state_lbl[i] = nullptr;
@@ -3233,6 +3280,8 @@ void page_user_debug_refresh(bool /*force*/)
     ui::DebugMsgProxy::instance().request_first_layer_visual_check_state();
     ui::DebugMsgProxy::instance().request_optical_path_check_state();
     ui::DebugMsgProxy::instance().request_plate_height_adj_state();
+    ui::DebugMsgProxy::instance().request_inner_door_occlusion_state();
+    ui::DebugMsgProxy::instance().request_plate_present_state();
     ui::DebugMsgProxy::instance().request_soc_led_state();
     ui::DebugMsgProxy::instance().request_cabin_pm_valve_state();
     ui::DebugMsgProxy::instance().request_status_led_state();
@@ -3266,6 +3315,8 @@ void page_user_debug_exit(void)
     proxy.register_first_layer_visual_check(nullptr);
     proxy.register_optical_path_check(nullptr);
     proxy.register_plate_height_adj(nullptr);
+    proxy.register_inner_door_occlusion(nullptr);
+    proxy.register_plate_present(nullptr);
     proxy.register_soc_led(nullptr);
     proxy.register_cabin_pm_valve(nullptr);
     proxy.register_status_led(nullptr);

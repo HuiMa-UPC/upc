@@ -453,25 +453,12 @@ void on_snapshot_click(lv_event_t * /*e*/)
     ui_toast_show("Capturing photo...", user_color_accent, 1200);
 }
 
-void deferred_cam_start(void * /*u*/)
-{
-    if(!g_page_visible || !g_cam_image) {
-        return;
-    }
-    ui::CameraPreviewPlayer::instance().start(g_cam_image, g_cam_hint, "monitor");
-}
-
-/** 开流。已在跑则只 reattach 控件；未 active 才异步 start。
- *  Start 超时 / recover 用尽会把 active 清掉，下次进页 / ensure 可再开。 */
+/** 开流。已出帧则只 reattach；半死/失败则 Stop→Start（见 ensure_running）。 */
 void cam_ensure_running(void)
 {
     auto& player = ui::CameraPreviewPlayer::instance();
-    if(player.reattach(g_cam_image, g_cam_hint, "monitor")) {
-        cam_apply_layout(UPC_CAMERA_STREAM_WIDTH, 0u);
-        return;
-    }
+    player.ensure_running(g_cam_image, g_cam_hint, "monitor");
     cam_apply_layout(UPC_CAMERA_STREAM_WIDTH, 0u);
-    lv_async_call(deferred_cam_start, nullptr);
 }
 
 /** 画面左上那枚状态胶囊（稿 6339:30346 的「吹粉中」）。text=nullptr 收起。 */
@@ -2524,6 +2511,9 @@ void page_user_monitor_print_prep_update(uint8_t step, uint8_t step_index, uint8
         break;
     case middleware::PrintPrepStep::FirstLayer:
         title = "First layer check...";
+        break;
+    case middleware::PrintPrepStep::PlatePresent:
+        title = "Checking build plate...";
         break;
     default:
         break;

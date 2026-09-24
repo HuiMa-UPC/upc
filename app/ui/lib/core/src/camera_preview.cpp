@@ -33,8 +33,10 @@ constexpr uint32_t kInteractiveDecodeFps = 12u;
 /* 环里暂时无新帧时的小憩时长，决定 SHM 轮询粒度（越小延迟越低）。 */
 constexpr uint32_t kNoFrameNapMs = 5u;
 constexpr uint64_t kInteractionHoldMs = 320u;
-constexpr uint32_t kStartRspWatchdogMs = 1000u;
-constexpr uint8_t kStartRspRetryMax = 2u;
+/* Stop→Start 往返需留足时间；过短会在 peer 未拆完时叠 Start。 */
+constexpr uint32_t kStartRspWatchdogMs = 2000u;
+/* SHM/DMA 失败走 Stop→Start 硬恢复，允许多试几次。 */
+constexpr uint8_t kStartRspRetryMax = 5u;
 /* 录像收尾（尤其 print_h264）存在短时抖动，适当放宽卡帧告警阈值。 */
 constexpr uint64_t kPreviewStallWarnMs = 1200u;
 
@@ -579,6 +581,46 @@ bool CameraPreviewPlayer::reattach(lv_obj_t* image_widget, lv_obj_t* hint_widget
     return true;
 }
 
+void CameraPreviewPlayer::ensure_running(lv_obj_t* image_widget, lv_obj_t* hint_widget,
+                                         const char* scene)
+{
+    /* 已出帧：只绑回控件，避免无谓 Stop/Start 叠 DMA fd。 */
+    if(active_.load() && stream_up_.load(std::memory_order_relaxed)) {
+        if(reattach(image_widget, hint_widget, scene)) {
+            return;
+        }
+    }
+
+    /*
+     * 半死会话（active 但未出帧 / 卡在 Connecting / 上次 SHM 失败未清 peer）：
+     * 强制 Stop 再 Start。禁止再走「只 reattach」——那会把黑屏钉死在 hint 上。
+     */
+    if(active_.load() || start_req_sent_ || stream_up_.load() ||
+       decode_retiring_.load(std::memory_order_acquire)) {
+        UPC_LOG_CAMERA_PREVIEW(Warn,
+            "ensure_running: hard restart active=%d stream_up=%d "
+            "sent=%d pending_rsp=%d retiring=%d scene=%s",
+            active_.load() ? 1 : 0,
+            stream_up_.load() ? 1 : 0,
+            start_req_sent_ ? 1 : 0,
+            start_rsp_pending_ ? 1 : 0,
+            decode_retiring_.load(std::memory_order_acquire) ? 1 : 0,
+            (scene && scene[0]) ? scene : "(none)");
+        stop_impl(/*cancel_pending=*/false);
+        if(decode_retiring_.load(std::memory_order_acquire)) {
+            pending_image_ = image_widget;
+            pending_hint_  = hint_widget;
+            std::strncpy(pending_scene_, scene ? scene : "",
+                         sizeof(pending_scene_) - 1);
+            pending_scene_[sizeof(pending_scene_) - 1] = '\0';
+            pending_start_ = true;
+            return;
+        }
+    }
+
+    start(image_widget, hint_widget, scene);
+}
+
 void CameraPreviewPlayer::stop()
 {
     stop_impl(true);
@@ -1019,11 +1061,45 @@ bool CameraPreviewPlayer::setup_frame_buffers(size_t frame_bytes,
     return true;
 }
 
+void CameraPreviewPlayer::tear_down_camera_peer()
+{
+    if(middleware::MsgPort::instance().peer_connected(
+           middleware::ModuleId::APP_CAMERA)) {
+        CameraMsgProxy::instance().send_stream_stop();
+    }
+}
+
+void CameraPreviewPlayer::request_stream_start_after_peer_teardown(
+    const char* reason_hint)
+{
+    show_hint(LV_SYMBOL_VIDEO "  Reconnecting camera...");
+    start_req_sent_ = true;
+    start_rsp_pending_ = true;
+    schedule_start_watchdog();
+    UPC_LOG_CAMERA_PREVIEW(Warn,
+        "stream start after peer teardown scene=%s (%s) retry=%u",
+        scene_[0] ? scene_ : "(none)",
+        reason_hint ? reason_hint : "unknown",
+        static_cast<unsigned>(start_retry_count_));
+    CameraMsgProxy::instance().send_stream_start(nullptr);
+}
+
 void CameraPreviewPlayer::recover_stream_start(const char* reason_hint)
 {
     close_pending_dma_fds();
     consumer_.close();
     stream_up_.store(false);
+    close_active_dma_fds();
+    clear_frame_buffers();
+    clear_start_watchdog();
+    start_req_sent_ = false;
+    start_rsp_pending_ = false;
+
+    /*
+     * 根治：失败路径必须先 Stop 拆 Camera peer/SHM，再决定重试或放弃。
+     * 旧逻辑只叠 Start，对端僵尸环 + UI give-up 不发 Stop → 黑屏且切页无效。
+     */
+    tear_down_camera_peer();
 
     if(!active_.load()) {
         return;
@@ -1037,22 +1113,11 @@ void CameraPreviewPlayer::recover_stream_start(const char* reason_hint)
         show_hint(reason_hint ? reason_hint
                               : LV_SYMBOL_WARNING "  Camera start failed");
         active_.store(false);
-        start_req_sent_ = false;
-        start_rsp_pending_ = false;
         return;
     }
 
     ++start_retry_count_;
-    UPC_LOG_CAMERA_PREVIEW(Warn,
-        "stream start recover #%u scene=%s (%s)",
-        static_cast<unsigned>(start_retry_count_),
-        scene_[0] ? scene_ : "(none)",
-        reason_hint ? reason_hint : "unknown");
-    show_hint(LV_SYMBOL_VIDEO "  Reconnecting camera...");
-    start_req_sent_ = true;
-    start_rsp_pending_ = true;
-    schedule_start_watchdog();
-    CameraMsgProxy::instance().send_stream_start(nullptr);
+    request_stream_start_after_peer_teardown(reason_hint);
 }
 
 void CameraPreviewPlayer::apply_stream_start_ui(
@@ -1096,8 +1161,11 @@ void CameraPreviewPlayer::apply_stream_start_ui(
         return;
     }
 
-    if(consumer_.open(info.shm_name) != upc_ipc::IpcShmError::OK) {
-        UPC_LOG_CAMERA_PREVIEW(Error, "dma frame ring open failed name=%s", info.shm_name);
+    const upc_ipc::IpcShmError shm_err = consumer_.open(info.shm_name);
+    if(shm_err != upc_ipc::IpcShmError::OK) {
+        UPC_LOG_CAMERA_PREVIEW(Error,
+            "dma frame ring open failed name=%s err=%d",
+            info.shm_name, static_cast<int>(shm_err));
         recover_stream_start(LV_SYMBOL_WARNING "  SHM open failed");
         return;
     }
@@ -1953,6 +2021,8 @@ void CameraPreviewPlayer::start_watchdog_timer_cb(lv_timer_t* timer)
             static_cast<unsigned>(self->start_retry_count_));
         self->start_rsp_pending_ = false;
         self->start_req_sent_ = false;
+        /* 超时同样拆 peer，避免下次进页撞僵尸环。 */
+        self->tear_down_camera_peer();
         self->active_.store(false);
         self->show_hint(LV_SYMBOL_WARNING "  Camera start timeout");
         return;
@@ -1960,12 +2030,16 @@ void CameraPreviewPlayer::start_watchdog_timer_cb(lv_timer_t* timer)
 
     ++self->start_retry_count_;
     UPC_LOG_CAMERA_PREVIEW(Warn,
-        "stream start rsp timeout, retry #%u scene=%s",
+        "stream start rsp timeout, hard restart #%u scene=%s",
         static_cast<unsigned>(self->start_retry_count_),
         self->scene_[0] ? self->scene_ : "(none)");
-    self->start_req_sent_ = true;
-    self->schedule_start_watchdog();
-    CameraMsgProxy::instance().send_stream_start(nullptr);
+    self->consumer_.close();
+    self->stream_up_.store(false);
+    self->close_pending_dma_fds();
+    self->start_req_sent_ = false;
+    self->start_rsp_pending_ = false;
+    self->tear_down_camera_peer();
+    self->request_stream_start_after_peer_teardown("start rsp timeout");
 }
 
 void CameraPreviewPlayer::ui_timer_cb(lv_timer_t* timer)
