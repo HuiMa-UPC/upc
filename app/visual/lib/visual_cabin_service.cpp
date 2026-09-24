@@ -1,4 +1,5 @@
 #include "visual_service.hpp"
+#include "cabin_profile.hpp"
 #include "rs_log.hpp"
 #include <algorithm>
 #include <chrono>
@@ -140,16 +141,14 @@ void VisualService::run_cabin_window(middleware::VisualCabinCheckReqPayload req,
     middleware::VisualCabinCheckRspPayload rsp{};
     rsp.session_id = req.session_id; rsp.request_id = req.request_id;
     std::string reason = "timeout_or_no_fresh_frame";
-    bool config_ok = true;
-    if(door) {
-        const char* path = std::getenv("UPC_CABIN_DOOR_CONFIG");
-        config_ok = cabin_detector_.load_door_config(
-            path && *path ? path : "/userdata/visual/cabin_door_config.json",reason);
-    } else {
-        const char* path = std::getenv("UPC_CABIN_PLATE_CONFIG");
-        config_ok = cabin_detector_.load_plate_config(
-            path && *path ? path : "/userdata/visual/cabin_plate_config.json",reason);
-    }
+    std::string profile_source;
+    const bool config_ok = load_cabin_profile(cabin_detector_,door,
+        std::getenv(door ? "UPC_CABIN_DOOR_CONFIG" : "UPC_CABIN_PLATE_CONFIG"),
+        door ? "/userdata/visual/cabin_door_config.json" : "/userdata/visual/cabin_plate_config.json",
+        profile_source,reason);
+    UPC_LOG_VISUAL_SERVICE(Info,"cabin profile session=%u request=%u source=%s valid=%u",
+        req.session_id,req.request_id,profile_source.c_str(),static_cast<unsigned>(config_ok));
+    if(config_ok) reason = "timeout_or_no_fresh_frame";
     uint32_t last_seq = baseline;
     while(config_ok && !cabin_abort_.load() && monotonic_ms() < deadline) {
         std::vector<uint8_t> nv12; uint32_t w = 0, h = 0, seq = 0;

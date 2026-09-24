@@ -18,9 +18,13 @@ add_executable(rongsu_visual
     ${VISUAL_LIB_DIR}/red_dot_detector.cpp
     ${VISUAL_LIB_DIR}/plate_height_pipeline.cpp
     ${VISUAL_LIB_DIR}/cabin_detector.cpp
+    ${VISUAL_LIB_DIR}/cabin_profile.cpp
     ${VISUAL_LIB_DIR}/visual_cabin_service.cpp
     ${VISUAL_LIB_DIR}/visual_service.cpp
 )
+
+include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/CabinProfile.cmake)
+upc_embed_cabin_profile(rongsu_visual)
 
 target_compile_features(rongsu_visual PRIVATE cxx_std_17)
 

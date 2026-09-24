@@ -18,6 +18,7 @@
 #include <new>
 #include <stdexcept>
 #include <string>
+#include <system_error>
 #include <thread>
 #include <vector>
 #include <sys/mman.h>
@@ -32,6 +33,7 @@ constexpr uint32_t W = 320, H = 240, STRIDE = 352, SLOTS = 3;
 struct Shared {
     std::atomic<bool> run{true};
     std::atomic<bool> tick_enabled{true}; // test-only scheduling seam; production code is unchanged
+    std::atomic<bool> use_bundled_profile{false}, bundled_profile_ready{false};
     std::atomic<int> mode{0}; // 0=no fresh frame; 1=black; 2=clear; 3=code; 4=plate
     std::atomic<unsigned> ready{0}, starts{0}, stops{0}, frames{0};
 };
@@ -229,6 +231,11 @@ int main() {
             upc::visual::VisualService service;
             CHECK(service.init()); h.shared->ready.fetch_or(2);
             while(h.shared->run) {
+                if(h.shared->use_bundled_profile && !h.shared->bundled_profile_ready) {
+                    CHECK(::unsetenv("UPC_CABIN_DOOR_CONFIG")==0);
+                    CHECK(::unsetenv("UPC_CABIN_PLATE_CONFIG")==0);
+                    h.shared->bundled_profile_ready=true;
+                }
                 port.process(5);
                 if(h.shared->tick_enabled) service.tick();
             }
@@ -374,8 +381,8 @@ int main() {
         CHECK(responses.empty());
         request(1,true,300,63,1,4); CHECK(response(1,true).result==0);
 
-        // Missing on-disk calibration is a terminal unknown, not an implicit
-        // default classifier. A new request does not reuse the prior calibration.
+        // Missing explicitly selected files are terminal unknowns, never a
+        // silent fallback to a different profile or reuse of stale calibration.
         CHECK(::unlink((h.directory+"/door.json").c_str())==0);
         send(MsgType::GLAVO_Visual_Cabin_Session_Start_Ntf,VisualCabinSessionPayload{5});
         h.shared->mode=1;
@@ -385,6 +392,30 @@ int main() {
         request(2,false,2000,63,0,5); CHECK(response(2,false).result==0);
         send(MsgType::GLAVO_Visual_Cabin_Session_Stop_Ntf,VisualCabinSessionPayload{5});
         pump_for(100); CHECK(responses.empty());
+        // Exercise the production resolver through real IPC on a fresh host.
+        // Never read, alter or remove an engineer's real station configuration.
+        const auto station_path_absent = [](const char* path) {
+            std::error_code ec;
+            const auto status = std::filesystem::symlink_status(path,ec);
+            return status.type() == std::filesystem::file_type::not_found &&
+                (!ec || ec == std::errc::no_such_file_or_directory);
+        };
+        if(station_path_absent("/userdata/visual/cabin_door_config.json") &&
+           station_path_absent("/userdata/visual/cabin_plate_config.json")) {
+            h.shared->use_bundled_profile=true;
+            wait_until([&] { return h.shared->bundled_profile_ready.load(); });
+            send(MsgType::GLAVO_Visual_Cabin_Session_Start_Ntf,VisualCabinSessionPayload{6});
+            h.shared->mode=1;
+            request(1,true,2000,63,1,6);
+            CHECK(response(1,true).result==1); // no JSON or PNG files deployed
+            request(2,false,500,63,0,6);
+            CHECK(response(2,false).result==0); // black is not a plate, also with built-in defaults
+            send(MsgType::GLAVO_Visual_Cabin_Session_Stop_Ntf,VisualCabinSessionPayload{6});
+            pump_for(100); CHECK(responses.empty());
+            std::cout << "Built-in profile IPC path passed without external configuration\n";
+        } else {
+            std::cout << "Built-in IPC path skipped: station configuration present; resolver unit test still covers precedence\n";
+        }
         std::cout << "Native broker/Visual/camera IPC tests passed: full NV12 door and plate, stop/recheck, IDs, timeout, cancel\n";
         return 0;
     } catch(const std::exception& e) { std::cerr << e.what() << '\n'; return 1; }

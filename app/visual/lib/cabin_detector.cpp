@@ -1,4 +1,5 @@
 #include "cabin_detector.hpp"
+#include "cabin_bundled_profile.hpp"
 #include <opencv2/core.hpp>
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
@@ -70,7 +71,20 @@ double number(const cv::FileStorage& fs, const char* key, double lo, double hi) 
 cv::Mat normalized(const cv::Mat& in) {
     cv::Mat out; cv::createCLAHE(2.0, cv::Size(4,4))->apply(in, out); return out;
 }
+cv::Mat bundled_template(const std::string& name) {
+    for(const auto& asset : bundled_profile::kTemplates) {
+        if(name == asset.name) {
+            const cv::Mat bytes(1, static_cast<int>(asset.size), CV_8UC1,
+                                const_cast<unsigned char*>(asset.data));
+            return cv::imdecode(bytes, cv::IMREAD_GRAYSCALE);
+        }
+    }
+    throw std::runtime_error("unknown bundled marker template: " + name);
 }
+}
+
+const char* cabin_bundled_profile_id() { return bundled_profile::kId; }
+const char* cabin_bundled_profile_sha256() { return bundled_profile::kSha256; }
 
 struct CabinDetector::Impl {
     struct Marker { Box roi; cv::Mat image; };
@@ -83,9 +97,17 @@ struct CabinDetector::Impl {
 CabinDetector::CabinDetector() : impl_(std::make_unique<Impl>()) {}
 CabinDetector::~CabinDetector() = default;
 bool CabinDetector::load_door_config(const std::string& path, std::string& error) {
+    return load_door_source(path, false, error);
+}
+bool CabinDetector::load_bundled_door_config(std::string& error) {
+    const auto& json = bundled_profile::kDoorJson;
+    return load_door_source(std::string(reinterpret_cast<const char*>(json), sizeof(json)), true, error);
+}
+bool CabinDetector::load_door_source(const std::string& source, bool bundled, std::string& error) {
     door_calibrated_ = false;
     try {
-        cv::FileStorage fs(path, cv::FileStorage::READ | cv::FileStorage::FORMAT_JSON);
+        cv::FileStorage fs(source, cv::FileStorage::READ | cv::FileStorage::FORMAT_JSON |
+                                  (bundled ? cv::FileStorage::MEMORY : 0));
         if(!fs.isOpened()) throw std::runtime_error("door calibration unavailable");
         const double mean = number(fs,"max_mean_luma",0,40);
         const double p95 = number(fs,"max_p95_luma",0,50);
@@ -101,9 +123,17 @@ bool CabinDetector::load_door_config(const std::string& path, std::string& error
     } catch(const std::exception& e) { error=e.what(); return false; }
 }
 bool CabinDetector::load_plate_config(const std::string& path, std::string& error) {
+    return load_plate_source(path, false, error);
+}
+bool CabinDetector::load_bundled_plate_config(std::string& error) {
+    const auto& json = bundled_profile::kPlateJson;
+    return load_plate_source(std::string(reinterpret_cast<const char*>(json), sizeof(json)), true, error);
+}
+bool CabinDetector::load_plate_source(const std::string& source, bool bundled, std::string& error) {
     impl_ = std::make_unique<Impl>();
     try {
-        cv::FileStorage fs(path, cv::FileStorage::READ | cv::FileStorage::FORMAT_JSON);
+        cv::FileStorage fs(source, cv::FileStorage::READ | cv::FileStorage::FORMAT_JSON |
+                                  (bundled ? cv::FileStorage::MEMORY : 0));
         if(!fs.isOpened()) throw std::runtime_error("plate calibration unavailable");
         auto c = std::make_unique<Impl>();
         if(number(fs,"version",1,1) != 1) throw std::runtime_error("unsupported calibration version");
@@ -144,11 +174,12 @@ bool CabinDetector::load_plate_config(const std::string& path, std::string& erro
             if(!item["template"].isString()) throw std::runtime_error("marker template must be a string");
             const std::string file = static_cast<std::string>(item["template"]);
             if(file.empty()) throw std::runtime_error("marker template required");
-            const auto image_path = std::filesystem::path(path).parent_path() / file;
-            marker.image = cv::imread(image_path.string(), cv::IMREAD_GRAYSCALE);
+            const std::string image_path = bundled ? std::string("bundled:") + file :
+                (std::filesystem::path(source).parent_path() / file).string();
+            marker.image = bundled ? bundled_template(file) : cv::imread(image_path, cv::IMREAD_GRAYSCALE);
             if(marker.image.empty() || marker.image.cols < 12 || marker.image.rows < 12 ||
                marker.image.cols > w || marker.image.rows > h || marker.image.total() > kMaxPixels - template_pixels)
-                throw std::runtime_error("invalid marker template: " + image_path.string());
+                throw std::runtime_error("invalid marker template: " + image_path);
             template_pixels += marker.image.total();
             cv::Scalar mean, dev; cv::meanStdDev(marker.image, mean, dev);
             if(dev[0] < 5) throw std::runtime_error("marker template lacks contrast");
