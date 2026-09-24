@@ -28,6 +28,7 @@ using DebugEnvSimCb = std::function<void(bool)>;
 using DebugEnvSimPowderCb = std::function<void(bool)>;
 using DebugSkipO2GateCb = std::function<void(bool)>;
 using DebugSkipOuterDoorCb = std::function<void(bool)>;
+using DebugInnerDoorBusyCb = std::function<void(bool)>;
 using DebugO2CalibCb =
     std::function<void(const middleware::DebugO2CalibRspPayload&)>;
 using DebugFirstLayerVisualCheckCb = std::function<void(bool)>;
@@ -54,6 +55,11 @@ public:
     /* ---- Tab1 移动控制 ---- */
     void send_axis_jog(middleware::DebugAxis axis, middleware::DebugJogMode mode,
                        int dir, float value);
+    /**
+     * Z 轴绝对到位（mm）。走 Axis_Jog_Ntf：mode=Click、dir=0、value=目标。
+     * Glavo 用当前 MCU Z 算增量后发 μm AXIS_INC。非 Z 忽略。
+     */
+    void send_axis_goto(middleware::DebugAxis axis, float target_mm);
     void send_axis_hold_stop(middleware::DebugAxis axis);
     void send_axis_set_zero(middleware::DebugAxis axis);
     void send_axis_home(middleware::DebugAxis axis);
@@ -99,6 +105,7 @@ public:
     void request_skip_o2_gate_state();
     void send_skip_outer_door_set(bool on);
     void request_skip_outer_door_state();
+    void request_inner_door_busy();
     /** 空气单点氧标定；ref_o2_percent≤0 用后端默认 20.9 */
     void send_o2_calib(float ref_o2_percent = 0.f);
     void request_o2_calib_state();
@@ -142,6 +149,7 @@ public:
     void register_env_sim_powder(DebugEnvSimPowderCb cb);
     void register_skip_o2_gate(DebugSkipO2GateCb cb);
     void register_skip_outer_door(DebugSkipOuterDoorCb cb);
+    void register_inner_door_busy(DebugInnerDoorBusyCb cb);
     void register_o2_calib(DebugO2CalibCb cb);
     void register_first_layer_visual_check(DebugFirstLayerVisualCheckCb cb);
     void register_optical_path_check(DebugOpticalPathCheckCb cb);
@@ -205,6 +213,7 @@ private:
     DebugEnvSimPowderCb env_sim_powder_cb_;
     DebugSkipO2GateCb skip_o2_gate_cb_;
     DebugSkipOuterDoorCb skip_outer_door_cb_;
+    DebugInnerDoorBusyCb inner_door_busy_cb_;
     DebugO2CalibCb o2_calib_cb_;
     DebugFirstLayerVisualCheckCb first_layer_visual_check_cb_;
     DebugOpticalPathCheckCb optical_path_check_cb_;

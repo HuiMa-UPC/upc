@@ -30,6 +30,9 @@
 - `GET /print/status`：桌面端轮询打印机状态/进度（传输态本地维护；打印态订阅
   Glavo/Media IPC 缓存）。传输完成对外为 `idle`；`finished` 仅表示打印完成。
   打印中 `job_id` 优先为延时摄影 `frames_dir`（打印中多为 `tmp`）。
+- `POST /print/start`：本期不代发起印（仍由板端 UI 点 Confirm）。回包 `state`
+  只看 Glavo 打印态，**不**回传上传线内部的 `finished`（否则 Snowpath 会当成
+  打印已结束，6.3 不再刷层高/进度/舱温）。已在打印中回 `409 PRINTER_BUSY`。
 - `GET /print/history?year=&month=&day=`：按打印机本地日期返回当天 `job_ids`
   （= `/userdata/media/video/config.json` 的 `frames_dir`，升序）
 - `GET /print/{job_id}/timelapse/images`：分页返回该任务延时摄影 PNG URL 列表

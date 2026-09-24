@@ -556,6 +556,7 @@ void McuLink::clear_env_after_sim_disable()
         env_cache_.pm10_cabin       = -1.0f;
         env_cache_.powder_bits      = 0u;
         env_cache_.outer_door_open  = false;
+        env_cache_.inner_door_open  = false;
         env_cache_.door_state_valid = false;
         env_cache_.valid            = false;
     }
@@ -1293,6 +1294,7 @@ void McuLink::on_sensor_report(const serial_sensor_report_t& report)
         env_cache_.filter_pressure_kpa =
             static_cast<float>(report.filter_pressure_x10_kpa) / 10.0f;
         env_cache_.outer_door_open = (report.outer_door_open != 0);
+        env_cache_.inner_door_open = (report.inner_door_open != 0);
         env_cache_.door_state_valid = true;
         env_cache_.valid = true;
         door_closed_edge = prev_valid && prev_open && !env_cache_.outer_door_open;
@@ -1719,6 +1721,7 @@ void McuLink::publish_env_update_ntf()
     p.pm10_cabin     = snap.pm10_cabin;
     p.outer_door_open  = snap.outer_door_open ? 1u : 0u;
     p.door_state_valid = snap.door_state_valid ? 1u : 0u;
+    p.inner_door_open  = snap.inner_door_open ? 1u : 0u;
     /* 尚未收到 MCU 1ST：基板/粉量仍属 MCU；舱氧已由 SOC 填 */
     if(!mcu_1st_seen_.load()) {
         p.baseplate_temp_c = -1.0f;
@@ -1777,6 +1780,7 @@ void McuLink::publish_env_status_ntf_ui_only()
         p.pm10_cabin = snap.pm10_cabin;
         p.outer_door_open = snap.outer_door_open ? 1u : 0u;
         p.door_state_valid = snap.door_state_valid ? 1u : 0u;
+        p.inner_door_open = snap.inner_door_open ? 1u : 0u;
     } else {
         p.pm25_indoor = -1.0f;
         p.pm25_cabin = -1.0f;
@@ -1793,6 +1797,7 @@ void McuLink::publish_env_status_ntf_ui_only()
         p.pm10_cabin = -1.0f;
         p.outer_door_open = 0u;
         p.door_state_valid = 0u;
+        p.inner_door_open = 0u;
     }
 
     middleware::Message ntf_ui(middleware::MsgType::APP_Update_Ntf,
@@ -1833,6 +1838,7 @@ void McuLink::publish_env_invalid_ntf()
     p.pm10_cabin       = -1.0f;
     p.outer_door_open  = 0u;
     p.door_state_valid = 0u;
+    p.inner_door_open  = 0u;
 
     middleware::Message ntf_ui(middleware::MsgType::APP_Update_Ntf,
         middleware::ModuleId::APP_GLAVO,
@@ -2092,6 +2098,8 @@ void McuLink::poll_env_sim_tick()
         env_cache_.baseplate_temp_c = fake.substrate_temp_c;
         env_cache_.powder_bits      = static_cast<uint8_t>(fake.powder_bits & 0x03u);
         env_cache_.outer_door_open  = (fake.outer_door_open != 0);
+        /* Env Sim 无内门传感器：默认关，避免误跑关套件。 */
+        env_cache_.inner_door_open  = false;
         env_cache_.door_state_valid = true;
         env_cache_.valid            = true;
         door_closed_edge = prev_valid && prev_open && !env_cache_.outer_door_open;
@@ -3161,6 +3169,11 @@ bool McuLink::send_tcp_emergency_ctrl_ex(uint8_t stop_code, uint8_t pause_code, 
 float McuLink::get_z_pos_mm() const noexcept
 {
     return z_pos_mm_cache_.load(std::memory_order_relaxed);
+}
+
+bool McuLink::mcu_1st_seen() const noexcept
+{
+    return mcu_1st_seen_.load(std::memory_order_relaxed);
 }
 
 bool McuLink::send_debug_motion_subpacket(const uint8_t subpacket[11])

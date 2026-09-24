@@ -111,6 +111,15 @@ void DebugMsgProxy::init()
             }
         }));
 
+    subs_.push_back(bus.subscribe(
+        middleware::MsgType::GLAVO_Debug_Inner_Door_Busy_Ntf, middleware::ModuleId::UI,
+        [this](const middleware::Message& msg) {
+            middleware::DebugOnOffPayload p{};
+            if(inner_door_busy_cb_ && read_inline_pod(msg, p)) {
+                inner_door_busy_cb_(p.on != 0);
+            }
+        }));
+
     auto on_o2_calib = [this](const middleware::Message& msg) {
         middleware::DebugO2CalibRspPayload p{};
         if(o2_calib_cb_ && read_inline_pod(msg, p)) {
@@ -257,6 +266,19 @@ void DebugMsgProxy::send_axis_jog(middleware::DebugAxis axis,
     p.mode  = static_cast<uint8_t>(mode);
     p.dir   = static_cast<int8_t>(dir < 0 ? -1 : 1);
     p.value = value;
+    publish_pod(middleware::MsgType::UI_Debug_Axis_Jog_Ntf, p);
+}
+
+void DebugMsgProxy::send_axis_goto(middleware::DebugAxis axis, float target_mm)
+{
+    if(axis != middleware::DebugAxis::Z) {
+        return;
+    }
+    middleware::DebugAxisJogPayload p{};
+    p.axis  = static_cast<uint8_t>(axis);
+    p.mode  = static_cast<uint8_t>(middleware::DebugJogMode::Click);
+    p.dir   = 0; /* Glavo：绝对目标 mm */
+    p.value = target_mm;
     publish_pod(middleware::MsgType::UI_Debug_Axis_Jog_Ntf, p);
 }
 
@@ -491,6 +513,11 @@ void DebugMsgProxy::request_skip_outer_door_state()
     publish_empty(middleware::MsgType::UI_Debug_Skip_Outer_Door_Get_Ntf);
 }
 
+void DebugMsgProxy::request_inner_door_busy()
+{
+    publish_empty(middleware::MsgType::UI_Debug_Inner_Door_Busy_Get_Ntf);
+}
+
 void DebugMsgProxy::send_o2_calib(float ref_o2_percent)
 {
     middleware::DebugO2CalibReqPayload p{};
@@ -677,6 +704,11 @@ void DebugMsgProxy::register_skip_o2_gate(DebugSkipO2GateCb cb)
 void DebugMsgProxy::register_skip_outer_door(DebugSkipOuterDoorCb cb)
 {
     skip_outer_door_cb_ = std::move(cb);
+}
+
+void DebugMsgProxy::register_inner_door_busy(DebugInnerDoorBusyCb cb)
+{
+    inner_door_busy_cb_ = std::move(cb);
 }
 
 void DebugMsgProxy::register_o2_calib(DebugO2CalibCb cb)

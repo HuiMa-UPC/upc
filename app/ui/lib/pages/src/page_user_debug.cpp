@@ -132,6 +132,9 @@ lv_obj_t *g_skip_o2_gate_btn = nullptr;     /**< 其他控制：跳过氧门+打
 lv_obj_t *g_skip_o2_gate_state_lbl = nullptr;
 lv_obj_t *g_skip_outer_door_btn = nullptr;  /**< 其他控制：跳过外门检测+关内门套件 */
 lv_obj_t *g_skip_outer_door_state_lbl = nullptr;
+lv_obj_t *g_inner_door_btns[3] = {};        /**< Inner Door：关 / 停 / 开 */
+lv_obj_t *g_inner_door_state_lbl = nullptr;
+bool      g_inner_door_busy = false;
 lv_obj_t *g_o2_calib_btn = nullptr;         /**< 其他控制：氧单点标定 */
 lv_obj_t *g_o2_calib_lbl = nullptr;         /**< 显示当前 K / 标定状态 */
 lv_obj_t *g_o2_calib_ref_ta = nullptr;      /**< 标定时参考氧浓度 % */
@@ -1606,6 +1609,23 @@ void on_moment_btn_delete(lv_event_t *e)
     delete static_cast<MomentBtnCtx *>(lv_event_get_user_data(e));
 }
 
+void apply_inner_door_debug_busy(bool busy)
+{
+    g_inner_door_busy = busy;
+    for(lv_obj_t *b : g_inner_door_btns) {
+        set_dbg_toggle_enabled(b, !busy);
+    }
+    if(g_inner_door_state_lbl) {
+        if(busy) {
+            lv_label_set_text(g_inner_door_state_lbl, "Moving");
+            lv_obj_set_style_text_color(g_inner_door_state_lbl, user_color_accent, 0);
+        } else {
+            lv_label_set_text(g_inner_door_state_lbl, "Idle");
+            lv_obj_set_style_text_color(g_inner_door_state_lbl, user_color_text_dim, 0);
+        }
+    }
+}
+
 /* 点动：按下即发对应帧，并把该块状态字更新为运行/停止文案 */
 void on_moment_btn(lv_event_t *e)
 {
@@ -1620,9 +1640,17 @@ void on_moment_btn(lv_event_t *e)
         txt = (act == DebugMotorAction::Forward) ? "Running"
             : (act == DebugMotorAction::Reverse) ? "Reversing" : "Stopped";
     } else {                      /* 内门：开0x0C / 停止0x0E / 关0x0D */
-        ui::DebugMsgProxy::instance().send_inner_door(act);
-        txt = (act == DebugMotorAction::Forward) ? "Open"
-            : (act == DebugMotorAction::Reverse) ? "Closed" : "Stopped";
+        if(g_inner_door_busy) {
+            return;
+        }
+        if(act == DebugMotorAction::Stop) {
+            ui::DebugMsgProxy::instance().send_inner_door(act);
+            txt = "Stopped";
+        } else {
+            apply_inner_door_debug_busy(true);
+            ui::DebugMsgProxy::instance().send_inner_door(act);
+            txt = "Moving";
+        }
     }
     if(c->state_lbl) {
         lv_label_set_text(c->state_lbl, txt);
@@ -1676,9 +1704,15 @@ void build_moment_motor_controls(lv_obj_t *parent, const char *name, uint8_t dev
     lv_obj_clear_flag(btnrow, LV_OBJ_FLAG_SCROLLABLE);
 
     /* 左 < 反转/关，中 ▶ 停止，右 > 正转/开 */
-    make_moment_btn(btnrow, LV_SYMBOL_LEFT,  device, DebugMotorAction::Reverse, st);
-    make_moment_btn(btnrow, LV_SYMBOL_PLAY,  device, DebugMotorAction::Stop,    st);
-    make_moment_btn(btnrow, LV_SYMBOL_RIGHT, device, DebugMotorAction::Forward, st);
+    lv_obj_t *b_rev = make_moment_btn(btnrow, LV_SYMBOL_LEFT,  device, DebugMotorAction::Reverse, st);
+    lv_obj_t *b_stop = make_moment_btn(btnrow, LV_SYMBOL_PLAY,  device, DebugMotorAction::Stop,    st);
+    lv_obj_t *b_fwd = make_moment_btn(btnrow, LV_SYMBOL_RIGHT, device, DebugMotorAction::Forward, st);
+    if(device == 1) {
+        g_inner_door_btns[0] = b_rev;
+        g_inner_door_btns[1] = b_stop;
+        g_inner_door_btns[2] = b_fwd;
+        g_inner_door_state_lbl = st;
+    }
 }
 
 /** 一行卡片容器（横向 flex，等高） */
@@ -2869,8 +2903,11 @@ void bind_debug_callbacks()
         if(g_skip_outer_door_state_lbl) {
             lv_label_set_text(g_skip_outer_door_state_lbl, on ? "On" : "Off");
             lv_obj_set_style_text_color(g_skip_outer_door_state_lbl,
-                                        on ? user_color_accent : user_color_text_dim, 0);
+                on ? user_color_accent : user_color_text_dim, 0);
         }
+    });
+    proxy.register_inner_door_busy([](bool busy) {
+        apply_inner_door_debug_busy(busy);
     });
 
     proxy.register_o2_calib([](const middleware::DebugO2CalibRspPayload& p) {
@@ -3190,6 +3227,7 @@ void page_user_debug_refresh(bool /*force*/)
     ui::DebugMsgProxy::instance().request_env_sim_powder_state();
     ui::DebugMsgProxy::instance().request_skip_o2_gate_state();
     ui::DebugMsgProxy::instance().request_skip_outer_door_state();
+    ui::DebugMsgProxy::instance().request_inner_door_busy();
     ui::DebugMsgProxy::instance().request_o2_calib_state();
     ui::DebugMsgProxy::instance().request_first_layer_visual_check_state();
     ui::DebugMsgProxy::instance().request_optical_path_check_state();
@@ -3222,6 +3260,7 @@ void page_user_debug_exit(void)
     proxy.register_env_sim_powder(nullptr);
     proxy.register_skip_o2_gate(nullptr);
     proxy.register_skip_outer_door(nullptr);
+    proxy.register_inner_door_busy(nullptr);
     proxy.register_o2_calib(nullptr);
     proxy.register_first_layer_visual_check(nullptr);
     proxy.register_optical_path_check(nullptr);

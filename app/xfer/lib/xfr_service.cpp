@@ -487,17 +487,33 @@ HttpResponse XfrService::handle_print_start(const HttpRequest& req)
             std::chrono::steady_clock::now().time_since_epoch())
             .count());
     std::string job_id;
-    std::string state;
+    std::string state = "idle";
     {
         std::lock_guard<std::mutex> lk(print_state_mu_);
         if (print_job_id_.empty()) {
             print_job_id_ = "j_" + std::to_string(now_ms);
         }
-        if (print_state_ == "idle") {
-            print_state_ = "uploading";
-        }
         job_id = print_job_id_;
-        state = print_state_;
+        /* print_state_ 是上传/切片线，导入完成后会停在 finished。
+         * 6.2 必须报打印态：否则 Snowpath 会把「文件导入完」当成「打印结束」，
+         * 后面 6.3 层高/进度/舱温全部不再刷。真正开打仍由板端 UI 发起。 */
+        switch (glavo_phase_) {
+            case GlavoPhase::Printing: state = "printing"; break;
+            case GlavoPhase::Paused:   state = "paused"; break;
+            case GlavoPhase::Finished: state = "finished"; break;
+            case GlavoPhase::Canceled: state = "canceled"; break;
+            case GlavoPhase::Error:    state = "error"; break;
+            default:                   state = "idle"; break;
+        }
+        if (!active_frames_dir_.empty()) {
+            job_id = active_frames_dir_;
+        } else if (print_session_active_) {
+            job_id = UPC_VIDEO_TMP_NAME;
+        }
+        if (glavo_phase_ == GlavoPhase::Printing ||
+            glavo_phase_ == GlavoPhase::Paused) {
+            return err(409, "PRINTER_BUSY", "print already running");
+        }
     }
 
     std::ostringstream oss;
