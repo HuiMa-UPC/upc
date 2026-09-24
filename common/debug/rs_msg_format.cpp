@@ -148,6 +148,12 @@ const char* upc_msg_type_name(MsgType type) {
         case MsgType::GLAVO_Visual_OpticalPath_Session_Stop_Ntf: return "GLAVO_Visual_OpticalPath_Session_Stop_Ntf";
         case MsgType::GLAVO_Visual_OpticalPath_Point_Check_Req: return "GLAVO_Visual_OpticalPath_Point_Check_Req";
         case MsgType::APP_Visual_OpticalPath_Point_Check_Rsp: return "APP_Visual_OpticalPath_Point_Check_Rsp";
+        case MsgType::GLAVO_Visual_Cabin_Session_Start_Ntf: return "GLAVO_Visual_Cabin_Session_Start_Ntf";
+        case MsgType::GLAVO_Visual_Cabin_Session_Stop_Ntf: return "GLAVO_Visual_Cabin_Session_Stop_Ntf";
+        case MsgType::GLAVO_Visual_InnerDoor_Occlusion_Req: return "GLAVO_Visual_InnerDoor_Occlusion_Req";
+        case MsgType::APP_Visual_InnerDoor_Occlusion_Rsp: return "APP_Visual_InnerDoor_Occlusion_Rsp";
+        case MsgType::GLAVO_Visual_Plate_Present_Req: return "GLAVO_Visual_Plate_Present_Req";
+        case MsgType::APP_Visual_Plate_Present_Rsp: return "APP_Visual_Plate_Present_Rsp";
         case MsgType::GLAVO_Visual_PlateHeight_Session_Start_Ntf: return "GLAVO_Visual_PlateHeight_Session_Start_Ntf";
         case MsgType::GLAVO_Visual_PlateHeight_Session_Stop_Ntf: return "GLAVO_Visual_PlateHeight_Session_Stop_Ntf";
         case MsgType::GLAVO_Visual_Laser_Spot_Measure_Req: return "GLAVO_Visual_Laser_Spot_Measure_Req";

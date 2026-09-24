@@ -6,6 +6,7 @@
 #include "msg_port.hpp"
 #include "red_dot_detector.hpp"
 #include "plate_height_pipeline.hpp"
+#include "cabin_detector.hpp"
 
 #include <atomic>
 #include <cstdint>
@@ -27,7 +28,7 @@ namespace upc::visual {
  * 3) 后台线程消费并释放帧槽，并缓存最新紧凑 NV12 原图
  * 4) 收到 Glavo 首层检测请求时，使用 Y 平面运行模型并回传 0/1 结果
  *
- * 三类会话共用同一路取流（首层检测 / 打印前光路检测 / 基板测高）。取流的起停按
+ * 四类会话共用同一路取流（首层 / 光路 / 测高 / 舱内检测）。取流的起停按
  * 「任一会话激活即保持」处理，任一会话单独结束不得把流拆掉，
  * 见 any_session_active_locked() 与 release_stream_if_idle()。
  */
@@ -66,7 +67,7 @@ private:
     void on_first_layer_session_stop(const middleware::Message& msg);
     void start_first_layer_session(const char* reason);
     void stop_first_layer_session(const char* reason);
-    /** 三类会话是否有任一激活；调用前须持有 state_mtx_。 */
+    /** 是否有会话需要取流；调用前须持有 state_mtx_。 */
     [[nodiscard]] bool any_session_active_locked() const;
     void on_plate_height_session_start(const middleware::Message& msg);
     void on_plate_height_session_stop(const middleware::Message& msg);
@@ -74,7 +75,7 @@ private:
     void stop_plate_height_session(const char* reason);
     void on_laser_spot_measure_req(const middleware::Message& msg);
     void send_laser_spot_measure_rsp(bool ok, float x, float y);
-    /** 三类会话都停了才真正拆流；任一还在就保留。 */
+    /** 所有会话都不再需要流时才拆流。 */
     void release_stream_if_idle(const char* reason);
     void send_reference_ready_rsp(bool ready, uint32_t frame_seq,
                                   const std::string& reason);
@@ -103,6 +104,16 @@ private:
         const RedDotDetection& detection);
     /** 回收取点线程。 */
     void stop_optical_point_thread();
+
+    void on_cabin_session_start(const middleware::Message& msg);
+    void on_cabin_session_stop(const middleware::Message& msg);
+    void on_cabin_check_req(const middleware::Message& msg, bool door);
+    void run_cabin_window(middleware::VisualCabinCheckReqPayload req, bool door,
+                          uint32_t baseline_seq);
+    void stop_cabin_session(const char* reason);
+    void interrupt_cabin_for_legacy();
+    void drain_cabin_result();
+    void send_cabin_rsp(bool door, const middleware::VisualCabinCheckRspPayload& rsp);
 
     /** 停止后台线程并重置流状态。 */
     void stop_worker();
@@ -143,6 +154,11 @@ private:
     uint64_t optical_path_session_id_ = 0;
     bool plate_height_session_active_ = false;
     uint64_t plate_height_session_id_ = 0;
+    bool cabin_session_active_ = false;
+    bool cabin_stream_needed_ = false;
+    uint32_t cabin_session_id_ = 0;
+    uint64_t cabin_idle_deadline_ms_ = 0;
+    uint64_t cabin_stopped_ms_ = 0;
     bool start_req_sent_ = false;
     bool stream_up_ = false;
     bool pending_start_rsp_valid_ = false;
@@ -179,6 +195,20 @@ private:
     /** 单点判定窗口轮询线程；Glavo 逐点串行，同一时刻只有一条。 */
     std::thread optical_point_thread_;
     std::atomic<bool> optical_point_abort_{false};
+
+    CabinDetector cabin_detector_;
+    std::thread cabin_thread_;
+    std::atomic<bool> cabin_abort_{false};
+    // Request bookkeeping lives on the IPC thread. Only the pending result is shared.
+    bool cabin_check_active_ = false;
+    bool cabin_check_door_ = false;
+    middleware::VisualCabinCheckReqPayload cabin_request_{};
+    bool cabin_cached_valid_ = false;
+    bool cabin_cached_door_ = false;
+    middleware::VisualCabinCheckRspPayload cabin_cached_rsp_{};
+    std::mutex cabin_result_mtx_;
+    bool cabin_result_pending_ = false;
+    middleware::VisualCabinCheckRspPayload cabin_pending_rsp_{};
 
     /** 后台取帧线程。 */
     std::thread worker_;

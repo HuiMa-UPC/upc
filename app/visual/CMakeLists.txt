@@ -17,6 +17,8 @@ add_executable(rongsu_visual
     ${VISUAL_LIB_DIR}/first_layer_detector.cpp
     ${VISUAL_LIB_DIR}/red_dot_detector.cpp
     ${VISUAL_LIB_DIR}/plate_height_pipeline.cpp
+    ${VISUAL_LIB_DIR}/cabin_detector.cpp
+    ${VISUAL_LIB_DIR}/visual_cabin_service.cpp
     ${VISUAL_LIB_DIR}/visual_service.cpp
 )
 
