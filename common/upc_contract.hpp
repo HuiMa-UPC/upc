@@ -509,7 +509,7 @@ enum class MsgType : uint32_t {
     UI_Debug_Status_Led_Get_Ntf,        /**< Empty：查询当前灯板强制态 */
     UI_Debug_Alarm_Inject_Ntf,          /**< AlarmReportPayload：调试页 Alarm Inject，Glavo 只转发 MQTT（不上 UI、不改快照） */
     UI_Debug_Spi_Pm25_Lcd_Set_Ntf,      /**< DebugOnOffPayload：SPI 小屏周期刷测试色（仅本次运行，默认关） */
-    UI_Debug_Spi_Pm25_Lcd_Get_Ntf,      /**< Empty：查询 SPI 小屏测试刷屏开关 |
+    UI_Debug_Spi_Pm25_Lcd_Get_Ntf,      /**< Empty：查询 SPI 小屏测试刷屏开关 */
 
     // ---- GLAVO → UI：调试页状态回读（按模块拆分） ----
     GLAVO_Debug_Sensor_Ntf = 0x1200, /**< DebugSensorPayload：调试顶栏传感器（舱内/滤芯氧 + 舱外/舱内 PM） */
@@ -538,7 +538,7 @@ enum class MsgType : uint32_t {
     GLAVO_Debug_O2_Calib_Ntf,           /**< DebugO2CalibRspPayload：当前 K 回读（Get，ok=1 且未改盘） */
     GLAVO_Debug_Status_Led_Ntf,         /**< DebugStatusLedPayload：灯板强制态回读 */
     GLAVO_Debug_Fan_Ntf,                /**< DebugFanStatePayload：风机实测转速/故障/状态（V4 EXT 帧，约 1s） */
-    GLAVO_Debug_Spi_Pm25_Lcd_Ntf,       /**< DebugOnOffPayload：SPI 小屏测试刷屏开关状态 |
+    GLAVO_Debug_Spi_Pm25_Lcd_Ntf,       /**< DebugOnOffPayload：SPI 小屏测试刷屏开关状态 */
 
     // ---- UI ↔ GLAVO：网络 / WiFi（ConnMan 后端） ----
     UI_Wifi_Enable_Req = 0x1300, /**< WifiEnableReqPayload：开/关 WiFi */
@@ -570,7 +570,7 @@ enum class MsgType : uint32_t {
     UI_Clean_Test_Close_Req,     /**< Empty：返回首页时强制 clean_test_close */
     UI_Print_Video_Finalize_Req, /**< PrintVideoFinalizeReqPayload：结果页退出后触发统一 MP4 合成 */
     APP_Clean_Test_Close_Rsp,    /**< Empty：close 已受理 */
-    UI_Storage_Usage_Req,        /**< Empty：请求历史页存储占用（used/total） */
+    UI_Storage_Usage_Req,        /**< StorageUsageReqPayload：按卷请求容量 */
     APP_Storage_Usage_Rsp,       /**< StorageUsagePayload：存储占用回执 */
 
     // ---- UI ↔ GLAVO：转运盒自动转运（串口 A2/0x41） ----
@@ -648,6 +648,15 @@ enum class MsgType : uint32_t {
 
     // ---- GLAVO → UI：制氮机 BLE 状态（v1 UI 可不订阅） ----
     APP_N2_Status_Ntf = 0x1620, /**< N2StatusPayload：在线/浓度/STATE/seq；变化立即推，否则最多 1Hz */
+
+    // ---- UI ↔ MEDIA：按卷格式化（后端待实现，见 doc/STORAGE_BACKEND_API.md） ----
+    UI_Storage_Format_Req = 0x1700,  /**< StorageFormatReqPayload：格式化指定卷 */
+    APP_Storage_Format_Progress_Ntf, /**< StorageFormatProgressPayload：格式化进度 */
+    APP_Storage_Format_Rsp,          /**< StorageFormatRspPayload：格式化终态 */
+    /** UsbHotplugPayload：SD 卡挂载状态变化。*契约预留，后端待实现*——设置页存储
+     *  概览要靠它决定「SD 卡内存」那张卡显示容量还是显示未插入。挂载点尚未确定。
+     *  载荷形状与 USB 那条完全一致，故复用同一个 POD，但**是两个不同的卷**。 */
+    GLAVO_SdCard_Hotplug_Ntf,
 
 };
 
@@ -1290,10 +1299,50 @@ struct PrintVideoFinalizeReqPayload {
     char frames_dir[96]; /**< 对应 /userdata/media/video/{frames_dir}/ */
 };
 
-/** APP_Storage_Usage_Rsp：历史页容量显示（bytes）。 */
+enum class StorageVolume : uint8_t {
+    Internal = 0,  /**< 主机内置（userdata 所在分区） */
+    SdCard   = 1,  /**< SD 卡（*挂载点待定*，见 doc/STORAGE_BACKEND_API.md） */
+    UsbDisk  = 2,  /**< U 盘，挂载点由 GLAVO_USB_Hotplug_Ntf 的 mount_path 给出 */
+};
+
+/** UI_Storage_Usage_Req：按卷请求容量。 */
+struct StorageUsageReqPayload {
+    uint8_t volume;        /**< StorageVolume */
+    uint8_t reserved[3];
+};
+
+/**
+ * APP_Storage_Usage_Rsp：容量回执（bytes）。
+ *
+ * `present` 不能省：没有它，UI 分不清「卷在、但确实是空的」与「卷压根没插」，
+ * 两者都会拿到 used=0。设置页靠它决定那张卡显示容量条还是显示「未插入」。
+ */
 struct StorageUsagePayload {
     uint64_t used_bytes;   /**< 已用字节数 */
     uint64_t total_bytes;  /**< 总字节数 */
+    uint8_t  volume;       /**< StorageVolume，回带以便 UI 分辨是哪张卡 */
+    uint8_t  present;      /**< 1=卷存在且可读；0=未插入/未挂载，此时上面两个字段无意义 */
+    uint8_t  reserved[6];
+};
+
+/** UI_Storage_Format_Req：格式化指定卷。*后端待实现*。 */
+struct StorageFormatReqPayload {
+    uint8_t volume;        /**< StorageVolume */
+    uint8_t reserved[3];
+};
+
+/** APP_Storage_Format_Progress_Ntf：格式化进度。*后端待实现*。 */
+struct StorageFormatProgressPayload {
+    uint8_t volume;        /**< StorageVolume */
+    uint8_t percent;       /**< 0..100 */
+    uint8_t reserved[2];
+};
+
+/** APP_Storage_Format_Rsp：格式化终态。*后端待实现*。 */
+struct StorageFormatRspPayload {
+    uint8_t volume;        /**< StorageVolume */
+    uint8_t result;        /**< 0=成功 1=失败 2=忙（另一次格式化在跑） 3=卷不存在 */
+    uint8_t reserved[2];
 };
 
 /** APP_Transport_Result_Ntf：自动转运流程结果（串口 TLV 0x04）。 */
@@ -1508,6 +1557,7 @@ enum class DebugSocLedChannel: uint8_t {
     Lgt1L = 0, Lgt1R = 1, Lgt2L = 2, Lgt2R = 3, Lgt3L = 4, Lgt3R = 5
 };
 constexpr uint8_t kDebugSocLedCount = 6;
+enum class DebugStatusLedColor: uint8_t { Blue = 0, Orange = 1, Red = 2, Raw = 3 };
 
 /** UI_Debug_Axis_Jog_Ntf：轴点动 / 长按点动 */
 struct DebugAxisJogPayload {
@@ -1632,6 +1682,14 @@ struct DebugSocLedStatePayload {
     uint8_t reserved[3];
 };
 
+/** UI_Debug_Status_Led_Set_Ntf / GLAVO_Debug_Status_Led_Ntf：SPI 灯板强制色 */
+struct DebugStatusLedPayload {
+    uint8_t force;      /**< 0=释放接管回自动推导，1=强制 */
+    uint8_t color;      /**< DebugStatusLedColor；force=0 时忽略 */
+    uint8_t r, g, b;    /**< 仅 color=Raw 时生效 */
+    uint8_t reserved[3];
+};
+
 /** UI_Debug_PrintParam_Set_Ntf：打印层参数（层厚 + 平衡系数×1000） */
 struct DebugPrintParamPayload {
     uint16_t layer_um;        /**< 层厚 um */
@@ -1708,9 +1766,14 @@ struct DebugRecycleMotorStatePayload {
 };
 
 struct DebugFanStatePayload {
-    uint8_t on;
-    uint8_t reserved[3];
-    float   duty;
+    uint8_t  valid;      /**< fan_status_bits bit7：驱动链路正常 */
+    uint8_t  fault;      /**< 0无 1Hall非法 2Hall错序 3堵转 4过流 5欠压 6过压 7超速 */
+    uint8_t  state;      /**< 0停 1启动 2运行 3重试等待 4故障锁定 */
+    uint8_t  reserved;
+    uint16_t rpm;
+    uint16_t bus_v_x10;  /**< 0.1V */
+    uint16_t bus_i_ma;
+    uint8_t  reserved2[2];
 };
 
 struct DebugSwitchStatePayload {

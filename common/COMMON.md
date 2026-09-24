@@ -201,8 +201,12 @@ scripts/rongsu.sh start   # glavo + rongsu_camera → ui
 | `APP_Camera_Frame_Ntf` | — | Camera→UI | `CameraFrameNtfPayload` | （可选） | 帧序号；默认关 |
 | `UI_Camera_Snapshot_Req` | — | UI→Media | Empty | `send_snapshot_req` | 存当前帧 PNG + 配对 `.rthm` 缩略图到 `/userdata/media/photo` |
 | `APP_Camera_Snapshot_Rsp` | — | Media→UI | `CameraSnapshotRspPayload` | `register_snapshot_rsp` | — |
-| `UI_Storage_Usage_Req` | — | UI→Media | Empty | （历史页直接发总线） | 历史页进入时请求一次容量统计（used/total） |
-| `APP_Storage_Usage_Rsp` | — | Media→UI | `StorageUsagePayload` | （历史页直接订阅总线） | 返回 `/userdata/media` 所在分区已用/总容量，刷新右上角 Storage |
+| `UI_Storage_Usage_Req` | — | UI→Media | `StorageUsageReqPayload` | `send_storage_usage` | 按卷请求容量；历史页（Internal）与设置页存储概览（Internal + SdCard）共用 |
+| `APP_Storage_Usage_Rsp` | — | Media→UI | `StorageUsagePayload` | `register_storage_usage` | 回带 `volume` + `present`；Media 只实现了 Internal（`/userdata/media` 所在分区），另两卷回 `present=0` |
+| `UI_Storage_Format_Req` | — | UI→Media | `StorageFormatReqPayload` | `send_storage_format` | **后端未实现**，见 [doc/STORAGE_BACKEND_API.md](../doc/STORAGE_BACKEND_API.md) |
+| `APP_Storage_Format_Progress_Ntf` | — | 契约预留 | `StorageFormatProgressPayload` | `register_storage_format_progress` | **后端未实现**：格式化进度 0..100，UI 出 toast |
+| `APP_Storage_Format_Rsp` | — | 契约预留 | `StorageFormatRspPayload` | `register_storage_format_result` | **后端未实现**：终态 0=成功 1=失败 2=忙 3=卷不存在 |
+| `GLAVO_SdCard_Hotplug_Ntf` | — | 契约预留 | `UsbHotplugPayload` | `register_sdcard_hotplug` | **后端未实现**：SD 卡挂载状态变化，形状与 USB 热插拔同形、**是另一个卷**；挂载点待定 |
 | `VISUAL_Camera_Stream_Start_Req` | — | Visual→Camera | `CameraStreamStartReqPayload`/Empty | — | 视觉进程申请并行取流 |
 | `APP_Visual_Camera_Stream_Start_Rsp` | — | Camera→Visual | `CameraStreamInfoPayload` | — | 视觉侧 SHM 参数 / dma fd |
 | `VISUAL_Camera_Stream_Stop_Req` | — | Visual→Camera | Empty | — | 视觉进程停止取流 |

@@ -1135,7 +1135,8 @@ EnvSnapshotCache McuLink::env_snapshot() const
         if(soc.pm10_cabin >= 0.f) {
             out.pm10_cabin = soc.pm10_cabin;
         }
-        if(soc.temperature_c >= -40.f && soc.temperature_c < 200.f) {
+        /* AHT20 未采过是 -1；-1 也落在 [-40,200) 里，不能当有效温覆盖缓存。 */
+        if(soc.temperature_c >= 0.f && soc.temperature_c < 200.f) {
             out.temperature_c = soc.temperature_c;
         }
         if(soc.humidity_percent >= 0.f) {
@@ -1238,7 +1239,7 @@ void McuLink::merge_soc_env_into_cache_locked()
     if(soc.pm10_cabin >= 0.f) {
         env_cache_.pm10_cabin = soc.pm10_cabin;
     }
-    if(soc.temperature_c >= -40.f && soc.temperature_c < 200.f) {
+    if(soc.temperature_c >= 0.f && soc.temperature_c < 200.f) {
         env_cache_.temperature_c = soc.temperature_c;
     }
     if(soc.humidity_percent >= 0.f) {

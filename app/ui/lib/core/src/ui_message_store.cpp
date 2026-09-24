@@ -4,6 +4,7 @@
 #include "upc_contract.hpp"
 #include "ui_theme.hpp"
 #include "ui_feedback.hpp"
+#include "ui_user_widgets.hpp"   /* ui_user_pick_icon */
 #include "notice_badge_icons.h"
 
 #include <cstdio>
@@ -13,6 +14,12 @@ namespace {
 
 constexpr int kCapacity     = 24;
 constexpr int kMaxObservers = 4;
+
+/** 自动收起的停留时长，按等级分两档：信息看一眼就够，告警得给足读完的时间。
+ *  扫描周期取 500ms——比最短的 5s 小一个量级，误差看不出来，又不至于空转太勤。 */
+constexpr uint32_t kCollapseInfoMs  = 5000;
+constexpr uint32_t kCollapseAlarmMs = 15000;
+constexpr uint32_t kCollapseScanMs  = 500;
 
 using middleware::DeviceEventCode;
 
@@ -159,11 +166,24 @@ bool ranks_before(const ui_message_t &a, const ui_message_t &b)
     return a.seq > b.seq;
 }
 
+/** 这条还需不需要提请用户注意：没看过，或者是还没解除的告警级。
+ *  后半句不用另外判断解除与否——CONDITION 解除时 ui_alarm_state 会 retract 掉条目，
+ *  所以还在表里就等于还没解除。 */
+bool needs_attention(const ui_message_t &m)
+{
+    return m.unread || m.severity != UI_MSG_SEV_INFO;
+}
+
+uint32_t collapse_delay(ui_msg_severity_t sev)
+{
+    return (sev == UI_MSG_SEV_INFO) ? kCollapseInfoMs : kCollapseAlarmMs;
+}
+
 void rebuild_order(void)
 {
     g_order_count = 0;
     for(int i = 0; i < g_count; i++) {
-        if(g_msgs[i].dismissed) {
+        if(g_msgs[i].visual != UI_MSG_SHOWN) {
             continue;
         }
         /* 条数上限 24，插入排序足够，还能保证同权重时先来的在前 */
@@ -244,11 +264,85 @@ void apply_event_async(void *raw)
         }
     }
     if(p->active) {
-        ui_message_push(p->code, p->ts_ms);
+        /* active=true 是一次真事件，走 emit：哪怕这条之前被关掉或收起过也要重新弹。 */
+        ui_message_emit(p->code, p->ts_ms);
     } else {
         ui_message_retract(p->code);
     }
     delete p;
+}
+
+/**
+ * sync 与 emit 的共同实现。四个对外接口只是「文案从哪来」和「renew 与否」的组合。
+ *
+ * renew=false（sync）时的两条铁律：
+ *   - 已存在的条目**不碰 visual**。收起过的保持收起，否则打印流程那种每秒好几次的
+ *     无脑同步、和 30s 快照对齐，会把刚收进铃铛的 toast 一次次顶回来。
+ *   - 已存在的条目**不动 seq 与 unread**，排序和红点都不该被一次状态复述打扰。
+ * 但仍然要 notify_observers()：title/body 存的是调用方缓冲的指针，内容可能已原位变了。
+ */
+void write_entry(uint16_t code, ui_msg_severity_t severity,
+                 const char *title, const char *body, int64_t ts_ms, bool renew)
+{
+    if(!title) {
+        return;
+    }
+    int idx = find_index(code);
+    if(idx < 0) {
+        if(g_count >= kCapacity && !evict_one()) {
+            return;
+        }
+        idx = g_count++;
+        std::memset(&g_msgs[idx], 0, sizeof(g_msgs[idx]));
+        renew = true;   /* 从无到有：无论哪个入口都算一次新发生，该弹 */
+    } else if(g_msgs[idx].visual == UI_MSG_CLOSED_BY_USER) {
+        /* 用户亲手关掉之后这事又被提起：重新露面。**只认这一种**，自动收起
+         * 不在此列——那是系统行为，不代表用户处理过。 */
+        renew = true;
+    }
+
+    ui_message_t &m = g_msgs[idx];
+    m.code     = code;
+    m.severity = severity;
+    m.title    = title;
+    m.body     = body ? body : "";
+    m.ts_ms    = ts_ms;
+    if(renew) {
+        m.seq        = ++g_seq;
+        m.unread     = true;
+        m.visual     = UI_MSG_SHOWN;
+        m.shown_tick = lv_tick_get();
+    }
+    notify_observers();
+}
+
+void write_from_catalog(uint16_t code, int64_t ts_ms, bool renew)
+{
+    const CatalogEntry *cat = catalog_find(code);
+    if(!cat) {
+        return;   /* 码表里没有的码没法出文案，丢掉 */
+    }
+    write_entry(code, cat->severity, cat->title, cat->body, ts_ms, renew);
+}
+
+/** 扫描定时器：把停留到时限的消息收进铃铛。一支全局定时器扫全表，而不是每条挂一个
+ *  one-shot——条目会被 evict/retract 删掉，那样会留下一堆指向空槽的定时器。 */
+void collapse_scan_cb(lv_timer_t *)
+{
+    bool changed = false;
+    for(int i = 0; i < g_count; i++) {
+        ui_message_t &m = g_msgs[i];
+        if(m.visual != UI_MSG_SHOWN) {
+            continue;
+        }
+        if(lv_tick_elaps(m.shown_tick) >= collapse_delay(m.severity)) {
+            m.visual = UI_MSG_AUTO_COLLAPSED;
+            changed = true;
+        }
+    }
+    if(changed) {
+        notify_observers();
+    }
 }
 
 void on_device_event(const middleware::DeviceEventPayload &p)
@@ -263,7 +357,10 @@ void on_device_event(const middleware::DeviceEventPayload &p)
 } /* namespace */
 
 /* ---- 等级观感：四档阶梯 蓝 → 黄 → 橙 → 红 ----
- * 稿只定了两端（3058:7058 info 蓝 / 3058:7233 alert 红），中间两档自己填。
+ * 旧稿只定了两端（3058:7058 info 蓝 / 3058:7233 alert 红），中间两档是自己填的；
+ * 浅色稿 6064:71936 的变量表补上了这两档（Color 3 #FFC942 / Color 2 #FF7843），
+ * 现已换成稿值——与原先自填的 #FFD426 / #FF8A3D 只差一点，色相阶梯不变。
+ * 第四档红稿上仍没有样例，沿用自填的 #FF4242。
  * 之所以不是"红 + 更深的红"：暗背景下暗色视觉后退，最严重那档反而最不显眼。
  * 四档语义见 doc/SOC_TLV_ALARM_SINGLE_REPORT报警显示开发指导.md 第 7 节
  * （1 information / 2 warning / 3 fault / 4 trip=安全停机）。 */
@@ -271,25 +368,26 @@ lv_color_t ui_message_severity_color(ui_msg_severity_t sev)
 {
     switch(sev) {
         case UI_MSG_SEV_INFO:      return lv_color_hex(0x485DFF);  /* information */
-        case UI_MSG_SEV_ERROR:     return lv_color_hex(0xFFD426);  /* warning */
-        case UI_MSG_SEV_CRITICAL:  return lv_color_hex(0xFF8A3D);  /* fault */
+        case UI_MSG_SEV_ERROR:     return lv_color_hex(0xFFC942);  /* warning */
+        case UI_MSG_SEV_CRITICAL:  return lv_color_hex(0xFF7843);  /* fault */
         case UI_MSG_SEV_EMERGENCY: return lv_color_hex(0xFF4242);  /* trip */
     }
-    return lv_color_hex(0xFFD426);   /* 未知等级按不低于 warning */
+    return lv_color_hex(0xFFC942);   /* 未知等级按不低于 warning */
 }
 
-/* 按档位取原生尺寸那一版：调用方拿它去 ui_user_make_icon_img(target)，
+/* 按目标边长取原生尺寸那一版：调用方拿它去 ui_user_make_icon_img(target)，
  * target == src_sz 时缩放整段被跳过，徽标才是逐像素干净的。原先只有一张 36px
  * 位图，1024 档要缩到 0.39 倍，细描边糊成一团。
- * 尺寸表在 tools/gen_notice_badge_icons.py，改那边要同步这里。 */
-const lv_image_dsc_t *ui_message_severity_icon(ui_msg_severity_t sev)
+ *
+ * **这里不看 profile_id**，只看 target。屏档只是「徽标多大」的间接因素，真正决定
+ * 该取哪张图的是显示边长；照屏档硬编码的旧写法在消息页把徽标从 SZ*2 改成 SZ*3
+ * 之后就失准了（24 的位置上拿 18 的图放大 1.33 倍）。交给 ui_user_pick_icon()
+ * 按边长挑，倍数再变也只会落到最近的现成尺寸，不会退回放大。
+ * 尺寸表在 tools/gen_notice_badge_icons.py，要加档位去那边。 */
+const lv_image_dsc_t *ui_message_severity_icon(ui_msg_severity_t sev, int32_t target)
 {
     const bool info = (sev == UI_MSG_SEV_INFO);
-    switch(g_ui->profile_id) {
-        case UI_RES_1920: return info ? &ic_notice_info_27 : &ic_notice_alert_27;
-        case UI_RES_1280: return info ? &ic_notice_info_18 : &ic_notice_alert_18;
-        default:          return info ? &ic_notice_info_14 : &ic_notice_alert_14;
-    }
+    return ui_user_pick_icon(info ? ic_notice_info_set : ic_notice_alert_set, target);
 }
 
 void ui_message_store_init(void)
@@ -299,44 +397,33 @@ void ui_message_store_init(void)
         g_count       = 0;
         g_order_count = 0;
         g_inited      = true;
+        /* 自动收起的扫描定时器，进程内只起一支、不再撤（本模块是单例，随进程存活）。 */
+        lv_timer_create(collapse_scan_cb, kCollapseScanMs, nullptr);
     }
     ui::UiMsgProxy::instance().register_device_event(
         [](const middleware::DeviceEventPayload &p) { on_device_event(p); });
 }
 
-void ui_message_push(uint16_t code, int64_t ts_ms)
+void ui_message_sync(uint16_t code, int64_t ts_ms)
 {
-    const CatalogEntry *cat = catalog_find(code);
-    if(!cat) {
-        return;   /* 码表里没有的码没法出文案，丢掉 */
-    }
+    write_from_catalog(code, ts_ms, false);
+}
 
-    int idx = find_index(code);
-    if(idx >= 0 && !g_msgs[idx].dismissed) {
-        /* 同一条已经挂在浮层上了，重复 push 视作无事发生。stateful 事件的
-         * 重复 active=true 本来就是冗余边沿，而打印流程那两条是每次态刷新都
-         * 无脑 push 的——不在这儿吸收掉，卡片会不停重建、已读也会被顶回未读。 */
-        g_msgs[idx].ts_ms = ts_ms;
-        return;
-    }
-    if(idx < 0) {
-        if(g_count >= kCapacity && !evict_one()) {
-            return;
-        }
-        idx = g_count++;
-        std::memset(&g_msgs[idx], 0, sizeof(g_msgs[idx]));
-    }
+void ui_message_emit(uint16_t code, int64_t ts_ms)
+{
+    write_from_catalog(code, ts_ms, true);
+}
 
-    ui_message_t &m = g_msgs[idx];
-    m.code      = code;
-    m.severity  = cat->severity;
-    m.title     = cat->title;
-    m.body      = cat->body;
-    m.ts_ms     = ts_ms;
-    m.seq       = ++g_seq;
-    m.unread    = true;
-    m.dismissed = false;   /* 再次触发要重新露面，哪怕上次被 × 掉过 */
-    notify_observers();
+void ui_message_sync_ex(uint16_t code, ui_msg_severity_t severity,
+                        const char *title, const char *body, int64_t ts_ms)
+{
+    write_entry(code, severity, title, body, ts_ms, false);
+}
+
+void ui_message_emit_ex(uint16_t code, ui_msg_severity_t severity,
+                        const char *title, const char *body, int64_t ts_ms)
+{
+    write_entry(code, severity, title, body, ts_ms, true);
 }
 
 void ui_message_debug_push(uint16_t code)
@@ -366,41 +453,7 @@ void ui_message_debug_push(uint16_t code)
     }
     std::snprintf(slots[s], sizeof(slots[s]), "[SIM] %s", cat->title);
 
-    ui_message_push_ex(code, cat->severity, slots[s], cat->body, 0, true);
-}
-
-void ui_message_push_ex(uint16_t code, ui_msg_severity_t severity,
-                        const char *title, const char *body,
-                        int64_t ts_ms, bool renew)
-{
-    if(!title) {
-        return;
-    }
-    int idx = find_index(code);
-    if(idx < 0) {
-        if(g_count >= kCapacity && !evict_one()) {
-            return;
-        }
-        idx = g_count++;
-        std::memset(&g_msgs[idx], 0, sizeof(g_msgs[idx]));
-        renew = true;   /* 新条目必然是新发生 */
-    } else if(g_msgs[idx].dismissed) {
-        renew = true;   /* 被 × 掉后再触发：重新露面并回未读 */
-    }
-
-    ui_message_t &m = g_msgs[idx];
-    m.code      = code;
-    m.severity  = severity;
-    m.title     = title;
-    m.body      = body ? body : "";
-    m.ts_ms     = ts_ms;
-    m.dismissed = false;
-    if(renew) {
-        m.seq    = ++g_seq;
-        m.unread = true;
-    }
-    /* 非 renew 也要重排通知：title/body 指向调用方缓冲，内容可能已原位变化 */
-    notify_observers();
+    ui_message_emit_ex(code, cat->severity, slots[s], cat->body, 0);
 }
 
 void ui_message_retract(uint16_t code)
@@ -417,12 +470,23 @@ bool ui_message_dismiss(uint16_t code)
 {
     const int idx = find_index(code);
     if(idx < 0 || g_msgs[idx].severity != UI_MSG_SEV_INFO) {
-        return false;   /* 告警不给关：稿上红卡没有 × */
+        return false;   /* 告警不给关：稿上只有信息卡带关闭钮 */
     }
-    if(g_msgs[idx].dismissed) {
+    if(g_msgs[idx].visual != UI_MSG_SHOWN) {
         return false;
     }
-    g_msgs[idx].dismissed = true;
+    g_msgs[idx].visual = UI_MSG_CLOSED_BY_USER;
+    notify_observers();
+    return true;
+}
+
+bool ui_message_collapse(uint16_t code)
+{
+    const int idx = find_index(code);
+    if(idx < 0 || g_msgs[idx].visual != UI_MSG_SHOWN) {
+        return false;
+    }
+    g_msgs[idx].visual = UI_MSG_AUTO_COLLAPSED;
     notify_observers();
     return true;
 }
@@ -438,6 +502,57 @@ const ui_message_t *ui_message_visible_at(int idx)
         return nullptr;
     }
     return &g_msgs[g_order[idx]];
+}
+
+int ui_message_attention_count(void)
+{
+    int n = 0;
+    for(int i = 0; i < g_count; i++) {
+        if(needs_attention(g_msgs[i])) {
+            n++;
+        }
+    }
+    return n;
+}
+
+const ui_message_t *ui_message_attention_at(int idx)
+{
+    if(idx < 0) {
+        return nullptr;
+    }
+    /* 按 seq 降序取第 idx 个。面板最多要三条，全表也才 24 个，选择法足够，
+     * 也省得再维护一张随每次变更重排的下标表（浮层那张 g_order 是另一套顺序：
+     * 它按等级排、且只收 SHOWN 的，两者不能共用）。 */
+    uint32_t upper = 0xFFFFFFFFu;
+    for(int rank = 0; rank <= idx; rank++) {
+        int best = -1;
+        for(int i = 0; i < g_count; i++) {
+            if(!needs_attention(g_msgs[i]) || g_msgs[i].seq >= upper) {
+                continue;
+            }
+            if(best < 0 || g_msgs[i].seq > g_msgs[best].seq) {
+                best = i;
+            }
+        }
+        if(best < 0) {
+            return nullptr;   /* 不足 idx+1 条 */
+        }
+        if(rank == idx) {
+            return &g_msgs[best];
+        }
+        upper = g_msgs[best].seq;
+    }
+    return nullptr;
+}
+
+bool ui_message_needs_attention(void)
+{
+    for(int i = 0; i < g_count; i++) {
+        if(needs_attention(g_msgs[i])) {
+            return true;
+        }
+    }
+    return false;
 }
 
 int ui_message_total_count(void)

@@ -152,19 +152,23 @@ const char *ui_device_status_text(ui_device_status_t s)
     }
 }
 
+/* 唯一的消费者是 ui_device_bar（状态点与状态字两处），而那条已经整体走浅色，
+ * 所以这里给的也是浅色档的值。**绿的那档尤其不能用 user_color_status_ok**：
+ * 那个 #52ff92 是给深底调的亮薄荷绿，压在 #f5f5f5 上几乎看不见。
+ * 两档红（#f85149 / #ff4d4d）深浅底都够，沿用。 */
 lv_color_t ui_device_status_color(ui_device_status_t s)
 {
     switch(s) {
-    case UI_DEVICE_STATUS_PRINTING: return user_color_accent;
+    case UI_DEVICE_STATUS_PRINTING: return user_light_accent;
     case UI_DEVICE_STATUS_ERROR:    return ui_color_danger;
-    case UI_DEVICE_STATUS_READY:    return user_color_status_ok;
-    case UI_DEVICE_STATUS_PRINT_DONE:       return user_color_status_ok;
+    case UI_DEVICE_STATUS_READY:    return user_light_ok;
+    case UI_DEVICE_STATUS_PRINT_DONE:       return user_light_ok;
     case UI_DEVICE_STATUS_PRINT_TERMINATED: return user_color_status_err;
     /* 暂停与吹粉都属于"设备还在这单活儿里"，跟 Printing 同用主色蓝 */
     case UI_DEVICE_STATUS_PAUSED:
     case UI_DEVICE_STATUS_PURIFYING:
-    case UI_DEVICE_STATUS_PURIFY_DONE:      return user_color_accent;
+    case UI_DEVICE_STATUS_PURIFY_DONE:      return user_light_accent;
     case UI_DEVICE_STATUS_IDLE:
-    default:                        return user_color_text_dim;
+    default:                        return user_light_icon_off;
     }
 }

@@ -2009,6 +2009,8 @@ void GlavoService::handle_parser_exit(const middleware::Message& msg)
  */
 void GlavoService::launch_print_from_prepared(const std::string& full_path)
 {
+    /* 门/光路/测高可能异步挂起；真正 open/parse 走 prepared_local_path_。 */
+    (void)full_path;
     ignore_powder_low_for_current_print_ = false;
     o2_auto_paused_ = false;
     outer_door_confirm_waiting_ = false;
@@ -2564,7 +2566,13 @@ void GlavoService::send_print_progress(bool force_complete)
     p.remaining_minutes = 0;
     p.pm25_indoor       = env.valid ? env.pm25_indoor : 0.f;
     p.pm25_cabin        = env.valid ? env.pm25_cabin : 0.f;
-    p.temperature_c     = env.valid ? env.temperature_c : 0.f;
+    /* 舱温优先 SOC AHT20（未采过是 -1）。旧路径把 -1 当成有效值写进进度，
+     * Xfr 的 chamber_temp 变成负数/0，Snowpath 画 N/A。 */
+    {
+        const float soc_t = SocSensors::instance().snapshot().temperature_c;
+        const float t = (soc_t >= 0.f && soc_t < 200.f) ? soc_t : env.temperature_c;
+        p.temperature_c = (t >= 0.f && t < 200.f) ? t : 0.f;
+    }
     p.oxygen_percent    = env.valid ? env.oxygen_percent : 0.f;
     p.cmd_cache_rate    = job.cmd_cache_rate;
     p.data_cache_rate   = job.data_cache_rate;

@@ -847,19 +847,42 @@ void MediaService::on_print_h264_storage_exhausted()
 
 void MediaService::handle_storage_usage_req(const middleware::Message& msg) const
 {
-    struct statvfs vfs {};
+    middleware::StorageUsageReqPayload req{};
+    if(msg.payload.type == middleware::MsgPayload::Type::Inline &&
+       msg.payload.length >= sizeof(req)) {
+        (void)std::memcpy(&req, msg.payload.data.bytes.data(), sizeof(req));
+    }
+
     middleware::StorageUsagePayload rsp{};
+    rsp.volume = req.volume;
+
+    /* 现只认内置 userdata；SD / U 盘回 present=0，设置页画「未插入」。 */
+    if(req.volume != static_cast<uint8_t>(middleware::StorageVolume::Internal)) {
+        rsp.present = 0;
+        middleware::Message ntf(
+            middleware::MsgType::APP_Storage_Usage_Rsp,
+            middleware::ModuleId::APP_MEDIA,
+            msg.sender_id);
+        ntf.payload = middleware::MsgPayload::from_bytes(
+            reinterpret_cast<const uint8_t*>(&rsp), sizeof(rsp));
+        middleware::MsgPort::instance().publish_async(ntf);
+        return;
+    }
+
+    struct statvfs vfs {};
     if(::statvfs(UPC_MEDIA_ROOT, &vfs) == 0) {
         const uint64_t block_size = static_cast<uint64_t>(vfs.f_frsize);
         const uint64_t total = static_cast<uint64_t>(vfs.f_blocks) * block_size;
         const uint64_t free_bytes = static_cast<uint64_t>(vfs.f_bavail) * block_size;
         rsp.total_bytes = total;
         rsp.used_bytes = (total > free_bytes) ? (total - free_bytes) : 0u;
+        rsp.present = 1;
     } else {
         UPC_LOG_MEDIA_SERVICE_TO(StorageUsage, Warn, "storage statvfs failed path=%s err=%d",
                               UPC_MEDIA_ROOT, errno);
         rsp.total_bytes = 0;
         rsp.used_bytes = 0;
+        rsp.present = 0;
     }
 
     middleware::Message ntf(

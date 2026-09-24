@@ -57,10 +57,14 @@ bool read_inline_pod_bytes(const middleware::MsgPayload& payload,
 {
     if (!out ||
         payload.type != middleware::MsgPayload::Type::Inline ||
-        payload.length < size) {
+        payload.length == 0) {
         return false;
     }
-    std::memcpy(out, payload.data.bytes.data(), size);
+    /* 只要求有 Inline 数据：旧 Glavo 进度包比当前 struct 短时，多出来的字段保持 0，
+     * 不能整包丢掉，否则 /print/status 永远没有层高/舱温，只能靠 State 边沿跳 0↔100。 */
+    std::memset(out, 0, size);
+    const std::size_t n = payload.length < size ? payload.length : size;
+    std::memcpy(out, payload.data.bytes.data(), n);
     return true;
 }
 
@@ -708,8 +712,7 @@ HttpResponse XfrService::handle_print_status(const HttpRequest& req)
         layer = glavo_layer;
         layer_total = glavo_total;
         remaining_s = static_cast<uint64_t>(remaining_minutes) * 60ULL;
-        if (since_ms > 0 &&
-            (glavo_phase == GlavoPhase::Printing || glavo_phase == GlavoPhase::Paused)) {
+        if (since_ms > 0) {
             const uint64_t now_ms = static_cast<uint64_t>(
                 std::chrono::duration_cast<std::chrono::milliseconds>(
                     std::chrono::system_clock::now().time_since_epoch())
@@ -1191,8 +1194,8 @@ void XfrService::on_print_ipc(const middleware::Message& msg)
             if (!read_inline_pod_bytes(msg.payload, &p, sizeof(p))) {
                 return;
             }
-            glavo_since_ms_ = p.since_ms;
             if (p.mode == static_cast<uint32_t>(middleware::UserHomeStatus::Printing)) {
+                glavo_since_ms_ = p.since_ms;
                 glavo_phase_ = GlavoPhase::Printing;
                 print_session_active_ = true;
                 glavo_error_.clear();
@@ -1232,20 +1235,14 @@ void XfrService::on_print_ipc(const middleware::Message& msg)
             if (!read_inline_pod_bytes(msg.payload, &p, sizeof(p))) {
                 return;
             }
+            /* 清单只绑定 job_id。has_entry 会在开打落盘、结果页、finalize 多次出现，
+             * 不能当成打印结束，否则 Snowpath 会从 0% 直接 finished/100%。 */
             if (p.has_entry != 0 && p.frames_dir[0] != '\0') {
                 active_frames_dir_ = p.frames_dir;
                 print_job_id_ = active_frames_dir_;
             }
             if (p.aborted != 0) {
                 glavo_phase_ = GlavoPhase::Canceled;
-                print_session_active_ = false;
-            } else if (p.has_entry != 0) {
-                if (glavo_phase_ == GlavoPhase::Printing ||
-                    glavo_phase_ == GlavoPhase::Paused ||
-                    print_session_active_) {
-                    glavo_phase_ = GlavoPhase::Finished;
-                    glavo_progress_percent_ = 100;
-                }
                 print_session_active_ = false;
             }
             break;
@@ -1585,7 +1582,7 @@ std::vector<uint32_t> XfrService::list_timelapse_png_indices(const std::string& 
         return out;
     }
     while (struct dirent* ent = ::readdir(dir)) {
-        if (!ent->d_name) {
+        if (ent->d_name[0] == '\0') {
             continue;
         }
         uint32_t idx = 0;
