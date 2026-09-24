@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "reference_size": [1080, 1280],
+  "search_roi": [0.29259259259259257, 0.31015625, 0.7657407407407407, 0.715625],
+  "markers": [
+    {"name": "marker_01", "roi": [0.40370370370370373, 0.41015625, 0.45555555555555555, 0.4484375], "template": "station_172_17_101_78_zminus20_candidate_templates/marker_01.png"},
+    {"name": "marker_02", "roi": [0.6101851851851852, 0.4125, 0.6601851851851852, 0.45078125], "template": "station_172_17_101_78_zminus20_candidate_templates/marker_02.png"},
+    {"name": "marker_03", "roi": [0.5055555555555555, 0.48984375, 0.5574074074074075, 0.5296875], "template": "station_172_17_101_78_zminus20_candidate_templates/marker_03.png"},
+    {"name": "marker_04", "roi": [0.3925925925925926, 0.57109375, 0.44814814814814813, 0.61328125], "template": "station_172_17_101_78_zminus20_candidate_templates/marker_04.png"},
+    {"name": "marker_05", "roi": [0.6129629629629629, 0.5734375, 0.6657407407407407, 0.615625], "template": "station_172_17_101_78_zminus20_candidate_templates/marker_05.png"}
+  ],
+  "search_margin": 0.35,
+  "template_gray_weight": 0.7,
+  "high_confidence_threshold": 0.78,
+  "medium_confidence_threshold": 0.58,
+  "min_medium_markers": 2,
+  "hidden_max_confidence": 0.42,
+  "min_blur_variance": 15.0,
+  "min_dynamic_range": 35.0,
+  "max_overexposed_fraction": 0.35,
+  "max_underexposed_fraction": 0.35
+}

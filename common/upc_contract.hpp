@@ -558,6 +558,14 @@ enum class MsgType : uint32_t {
     UI_Alarm_Snapshot_Ntf,           /**< Empty：请求 MCU 回一轮报警快照（Cmd 0x81 TLV 0x05 len=0） */
     GLAVO_Alarm_Reset_Result_Ntf,    /**< AlarmResetResultPayload：复位失败回执（Cmd 0x82 TLV 0x04） */
 
+    // Cabin inspection proposal: six dedicated append-only IDs; SOC review pending.
+    // No UI, actuator, or print-control semantics are added by these messages.
+    GLAVO_Visual_Cabin_Session_Start_Ntf = 0x1720, /**< VisualCabinSessionPayload; explicit warm-up */
+    GLAVO_Visual_Cabin_Session_Stop_Ntf  = 0x1721, /**< VisualCabinSessionPayload; matching-session cancel */
+    GLAVO_Visual_InnerDoor_Occlusion_Req = 0x1722, /**< VisualCabinCheckReqPayload; Snapshot or WaitOpen */
+    APP_Visual_InnerDoor_Occlusion_Rsp   = 0x1723, /**< VisualCabinCheckRspPayload; InnerDoorOcclusionResult */
+    GLAVO_Visual_Plate_Present_Req       = 0x1724, /**< VisualCabinCheckReqPayload; Snapshot only */
+    APP_Visual_Plate_Present_Rsp         = 0x1725, /**< VisualCabinCheckRspPayload; PlatePresentResult */
 };
 
 enum class MsgPriority : uint8_t {
@@ -577,6 +585,14 @@ enum class MsgPriority : uint8_t {
 inline constexpr bool is_ipc_reliable_msg_type(MsgType type) noexcept
 {
     switch(type) {
+    // Explicit requests/results, not periodic status. IDs reject delayed/replayed work.
+    case MsgType::GLAVO_Visual_Cabin_Session_Start_Ntf:
+    case MsgType::GLAVO_Visual_Cabin_Session_Stop_Ntf:
+    case MsgType::GLAVO_Visual_InnerDoor_Occlusion_Req:
+    case MsgType::APP_Visual_InnerDoor_Occlusion_Rsp:
+    case MsgType::GLAVO_Visual_Plate_Present_Req:
+    case MsgType::APP_Visual_Plate_Present_Rsp:
+        return true;
     // OTA / 告警：终态与关键事件
     case MsgType::APP_Mcu_Ota_Status_Ntf:
     case MsgType::APP_Mqtt_Ota_Progress_Ntf:
@@ -957,6 +973,54 @@ struct VisualOpticalPathCheckRspPayload {
     uint16_t confidence_q8;    /**< 置信度 ×256（0..256）；未识别到为 0 */
     uint16_t reserved2;
 };
+
+/** Cabin IPC proposal; see doc/CABIN_IPC_INTEGRATION.md for the sender contract.
+ * Values describe image evidence only; Visual never commands lamps, doors, or axes. */
+enum class CabinCheckMode : uint8_t { Snapshot = 0, WaitOpen = 1 };
+enum class InnerDoorOcclusionResult : uint8_t { Unknown = 0, Occluded = 1, Clear = 2 };
+enum class PlatePresentResult : uint8_t { Unknown = 0, QrFound = 1, QrAbsentSceneOk = 2 };
+
+/** Start/Stop are Inline (not Empty). Only a matching Stop cancels the session.
+ * IDs are nonzero; newer session IDs use uint32 serial ordering. Duplicate Start
+ * does not reset a running window; Stop suppresses an unfinished request's reply. */
+struct VisualCabinSessionPayload {
+    uint32_t session_id;
+};
+
+/** One explicit request starts one bounded detection window; no automatic retries.
+ * GLAVO -> VISUAL only. Both IDs must be nonzero; request_id increases per session
+ * across both check types. Exact retransmissions do not restart the same window.
+ * Invalid usable payloads return Unknown; wrong sender/target/size are ignored.
+ * Caller owns lighting/view timing and must exclude legacy visual sessions. */
+struct VisualCabinCheckReqPayload {
+    uint32_t session_id;     /**< Matches the explicit Session_Start */
+    uint32_t request_id;     /**< New ID for each new check; immutable on retransmission */
+    uint32_t timeout_ms;     /**< 250..60000 inclusive; starts when Visual accepts Req */
+    uint8_t cabin_led_mask;  /**< Actual six SOC lamps; exactly 0x3f is required */
+    uint8_t mode;            /**< CabinCheckMode; Plate requires Snapshot */
+    uint8_t reserved[2];     /**< Must be zero */
+};
+
+/** VISUAL -> GLAVO. One terminal result per accepted request, except cancelled work.
+ * A cached Rsp may be resent for an exact duplicate; sender must deduplicate IDs.
+ * Only fresh, distinct frames may support a positive result. Unknown is never a
+ * plate-present or door-open assertion. Result stops detection before publishing. */
+struct VisualCabinCheckRspPayload {
+    uint32_t session_id;     /**< Exact echo; discard if not the pending session */
+    uint32_t request_id;     /**< Exact echo; discard if not the pending request */
+    uint32_t frame_seq;      /**< Last evaluated frame, 0 when no frame was evaluated */
+    uint8_t result;          /**< InnerDoorOcclusionResult or PlatePresentResult by MsgType */
+    uint8_t reserved[3];     /**< Always zero */
+};
+
+static_assert(sizeof(VisualCabinSessionPayload) == 4, "cabin session ABI");
+static_assert(sizeof(VisualCabinCheckReqPayload) == 16, "cabin request ABI");
+static_assert(offsetof(VisualCabinCheckReqPayload, timeout_ms) == 8, "cabin timeout offset");
+static_assert(offsetof(VisualCabinCheckReqPayload, cabin_led_mask) == 12, "cabin LED offset");
+static_assert(offsetof(VisualCabinCheckReqPayload, mode) == 13, "cabin mode offset");
+static_assert(sizeof(VisualCabinCheckRspPayload) == 16, "cabin response ABI");
+static_assert(offsetof(VisualCabinCheckRspPayload, frame_seq) == 8, "cabin frame offset");
+static_assert(offsetof(VisualCabinCheckRspPayload, result) == 12, "cabin result offset");
 
 /** 光路检测阶段状态：驱动 UI 打印卡徽标行文案。 */
 enum class OpticalPathPointState : uint8_t {

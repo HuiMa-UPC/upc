@@ -209,9 +209,15 @@ scripts/rongsu.sh start   # glavo + rongsu_camera → ui
 | `GLAVO_Visual_FirstLayer_Check_Req` | `0x1423` | Glavo→Visual | `VisualFirstLayerCheckReqPayload` | — | 触发首层视觉检测（检测前允许从 Camera 最新帧做拷贝/处理） |
 | `APP_Visual_FirstLayer_Check_Rsp` | `0x1424` | Visual→Glavo | `VisualFirstLayerCheckRspPayload` | — | 首层检测结果：`result=1` 继续打印，`result=0` 继续铺粉 |
 | `GLAVO_Visual_OpticalPath_Session_Start_Ntf` | `0x1428` | Glavo→Visual | Empty | — | 打印前光路检测开始，Visual 起流（与首层会话共用一路流） |
-| `GLAVO_Visual_OpticalPath_Session_Stop_Ntf` | — | Glavo→Visual | Empty | — | 光路检测结束；两类会话都停才拆流 |
+| `GLAVO_Visual_OpticalPath_Session_Stop_Ntf` | — | Glavo→Visual | Empty | — | 光路检测结束；首层、光路、舱检三类会话都停才拆流 |
 | `GLAVO_Visual_OpticalPath_Point_Check_Req` | — | Glavo→Visual | `VisualOpticalPathCheckReqPayload` | — | 单点红光识别；`timeout_ms` 内 Visual 轮询最新帧后单次回包 |
 | `APP_Visual_OpticalPath_Point_Check_Rsp` | — | Visual→Glavo | `VisualOpticalPathCheckRspPayload` | — | `result=1` 该点通过；`session_id`/`point_index` 必须回显 |
+| `GLAVO_Visual_Cabin_Session_Start_Ntf` | `0x1720` | Glavo→Visual | `VisualCabinSessionPayload` (4 B) | — | **新增待 SOC 评审**：指定非零 `session_id`，准备舱检取流；不自动开始算法 |
+| `GLAVO_Visual_Cabin_Session_Stop_Ntf` | `0x1721` | Glavo→Visual | `VisualCabinSessionPayload` (4 B) | — | 停止匹配会话；取消中的请求不回包 |
+| `GLAVO_Visual_InnerDoor_Occlusion_Req` | `0x1722` | Glavo→Visual | `VisualCabinCheckReqPayload` (16 B) | — | `mode=0` 快照窗口，`mode=1` 等待稳定近黑；均有超时 |
+| `APP_Visual_InnerDoor_Occlusion_Rsp` | `0x1723` | Visual→Glavo | `VisualCabinCheckRspPayload` (16 B) | — | 回显两级 ID；`0=unknown, 1=occluded, 2=clear`；不代表关到位 |
+| `GLAVO_Visual_Plate_Present_Req` | `0x1724` | Glavo→Visual | `VisualCabinCheckReqPayload` (16 B) | — | 仅 `mode=0`；一次指令一次检测，返回后停检，不自动等待放板 |
+| `APP_Visual_Plate_Present_Rsp` | `0x1725` | Visual→Glavo | `VisualCabinCheckRspPayload` (16 B) | — | `0=unknown, 1=qr_found, 2=qr_absent_scene_ok`；有码对应无板，由 SOC 解释 |
 | `APP_Print_Video_Session_Start_Ntf` | — | Glavo→Media（Hub FWD） | `PrintVideoSessionPayload`（含 `h264_bitrate`，0=Media 默认中等码率 / cal `PRINT_H264_BITRATE`） | — | `PrintVideoNotify` / `MediaService` |
 | `APP_Print_Layer_Snap_Ntf` | — | Glavo→Media（Hub FWD） | `PrintVideoLayerSnapPayload` | — | 换层 Snap |
 | `APP_Print_Video_Session_Finish_Ntf` | — | Glavo→Media（Hub FWD） | `PrintVideoSessionPayload` | — | 保存 `/userdata/media/video/{job}/1.png...N.png` + `thumb.rthm` + config 快路径（`video_pending`） |
@@ -330,6 +336,8 @@ scripts/rongsu.sh start   # glavo + rongsu_camera → ui
 2. **发送侧进程** — `subscribe` + `handle_*` 或 `publish_*`（Glavo / Camera / UI 各自实现）
 3. **UI 侧** — 若需界面交互：`ui_msg_proxy.*` 或 `camera_msg_proxy.*` 的 `send_*` + `register_*`（纯后端互访可跳过）
 4. **Broker 转发** — `target_id` 指向其它 ModuleId 时由 Broker 转发；业务侧一般无需改 `ipc_wire`
+
+本次内门／基板舱检仅新增 `0x1720..0x1725` 六条消息及 Visual 接收端，不改 Glavo/UI 的打印、门、轴逻辑；**SOC 发送侧仍待同事接入和评审**。消息名日志同步 `debug/rs_msg_format.cpp`，六条都登记 `is_ipc_reliable_msg_type`，不放进 latest-only 合并队列。完整字段、去重、超时、取消、调用示例及已知算法限制见 [舱检 IPC 接入约定](../doc/CABIN_IPC_INTEGRATION.md)。历史需求文档中的 Empty Session 已由带 `session_id` 的 4 字节 POD 细化；不得混用。
 
 Wire 协议版本：`WIRE_VERSION`（[`ipc_wire.hpp`](../ipc/ipc_wire.hpp)）。仅当帧格式变更时递增。
 

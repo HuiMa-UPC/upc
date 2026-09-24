@@ -1,0 +1,35 @@
+cmake_minimum_required(VERSION 3.16)
+project(cabin_detector_tests LANGUAGES CXX)
+enable_testing()
+add_executable(cabin_contract_tests cabin_contract_tests.cpp)
+target_compile_features(cabin_contract_tests PRIVATE cxx_std_17)
+target_include_directories(cabin_contract_tests PRIVATE ../../../common)
+target_compile_options(cabin_contract_tests PRIVATE -Wall -Wextra -Werror)
+add_test(NAME cabin_contract_tests COMMAND cabin_contract_tests)
+find_package(OpenCV REQUIRED COMPONENTS core imgproc imgcodecs)
+add_executable(cabin_detector_tests cabin_detector_tests.cpp ../lib/cabin_detector.cpp)
+target_compile_features(cabin_detector_tests PRIVATE cxx_std_17)
+target_include_directories(cabin_detector_tests PRIVATE ../lib ${OpenCV_INCLUDE_DIRS} ../../../common)
+target_link_libraries(cabin_detector_tests PRIVATE ${OpenCV_LIBS})
+target_compile_options(cabin_detector_tests PRIVATE -Wall -Wextra -Werror)
+add_test(NAME cabin_detector_tests COMMAND cabin_detector_tests)
+add_executable(cabin_frame_check cabin_frame_check.cpp ../lib/cabin_detector.cpp)
+target_compile_features(cabin_frame_check PRIVATE cxx_std_17)
+target_include_directories(cabin_frame_check PRIVATE ../lib ${OpenCV_INCLUDE_DIRS})
+target_link_libraries(cabin_frame_check PRIVATE ${OpenCV_LIBS})
+
+# Host-only integration harness: actual broker/client processes and SCM_RIGHTS
+# frames; it never starts the hardware Camera or Glavo services.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    add_subdirectory(../../../common ${CMAKE_CURRENT_BINARY_DIR}/common)
+    add_executable(cabin_ipc_test cabin_ipc_test.cpp
+        ../lib/first_layer_detector.cpp ../lib/red_dot_detector.cpp
+        ../lib/cabin_detector.cpp
+        ../lib/visual_cabin_service.cpp ../lib/visual_service.cpp)
+    target_compile_features(cabin_ipc_test PRIVATE cxx_std_17)
+    target_include_directories(cabin_ipc_test PRIVATE ../lib ${OpenCV_INCLUDE_DIRS})
+    target_link_libraries(cabin_ipc_test PRIVATE upc::common ${OpenCV_LIBS} ${CMAKE_DL_LIBS})
+    target_compile_options(cabin_ipc_test PRIVATE -Wall -Wextra)
+    add_test(NAME cabin_ipc_test COMMAND cabin_ipc_test)
+    set_tests_properties(cabin_ipc_test PROPERTIES TIMEOUT 45)
+endif()
