@@ -41,13 +41,13 @@
   `printing`；恢复仅 `paused`（氧未落下仍暂停则 `409`）。
 - `GET /print/history?year=&month=&day=`：按打印机本地日期返回当天 `job_ids`
   （= `/userdata/media/video/config.json` 的 `frames_dir`，升序）
-- `GET /print/{job_id}/timelapse/images`：分页返回该任务延时摄影 PNG URL 列表
-- `GET /timelapse/{job_id}/{n}.png`：匿名下载已落盘帧（列表接口已鉴权后的产物）
+- `GET /print/{job_id}/timelapse/images`：分页返回该任务延时摄影 JPEG URL 列表
+- `GET /timelapse/{job_id}/{n}.jpg`：匿名下载已落盘帧（列表接口已鉴权后的产物）
 
 ### 打印状态 / 延时摄影（板端约定）
 
 - 历史与延时摄影的 `job_id` 使用清单主键 `frames_dir`，不是协议示例里的 `j_9001`。
-- 帧文件在 `/userdata/media/video/{frames_dir}/N.png`；URL 扩展名为 `.png`。
+- 帧文件在 `/userdata/media/video/{frames_dir}/N.jpg`；URL 扩展名为 `.jpg`（与 new-ui 静图一致）。
 - `/print/status` 中 `chamber_temp` 来自 Glavo 进度载荷的舱温（0.1℃）；
   `layer_height` 来自进度载荷 `layer_height_um`（毫米，打印中有值，空闲为 `0`）；
   `nozzle_temp` / `bed_temp` / `laser_power` / `blower_*` / `filament_*`

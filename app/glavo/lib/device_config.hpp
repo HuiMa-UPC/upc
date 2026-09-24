@@ -168,7 +168,7 @@
 #endif
 
 /* -------------------------------------------------------------------------- */
-/* SOC 本地传感器（MCU≥V4；背光在 UI，不经本配置）                              */
+/* SOC 本地传感器（背光在 UI，不经本配置）                              */
 /* -------------------------------------------------------------------------- */
 /** 舱内 PMSA003-A */
 #ifndef GLAVO_PM_CABIN_UART
@@ -185,7 +185,7 @@
 #ifndef GLAVO_PM_VALVE_SYSFS
 #define GLAVO_PM_VALVE_SYSFS  "/sys/class/leds/fa_valve/brightness"
 #endif
-/** 六路舱灯（调试页单独开关；不看 MCU 版本） */
+/** 六路舱灯（调试页单独开关） */
 #ifndef GLAVO_SOC_LED_LGT1L_SYSFS
 #define GLAVO_SOC_LED_LGT1L_SYSFS  "/sys/class/leds/lgt1l/brightness"
 #endif
@@ -278,7 +278,7 @@
 #ifndef GLAVO_ALARM_CODE_CHAMBER_OXYGEN_HIGH
 #define GLAVO_ALARM_CODE_CHAMBER_OXYGEN_HIGH  1120u
 #endif
-/** SPI 灯效板（WS，40 颗）；仅 MCU≥V4 打开 */
+/** SPI 灯效板（WS，40 颗） */
 #ifndef GLAVO_SPI_STATUS_LED_DEV
 #define GLAVO_SPI_STATUS_LED_DEV  "/dev/spidev1.0"
 #endif

@@ -739,16 +739,6 @@ void SocSensors::stop()
     set_pm_valve(false);
 }
 
-bool SocSensors::set_v4_mode(bool enabled)
-{
-    const bool was = v4_mode_.exchange(enabled);
-    if(!enabled) {
-        /* 退出 V4 后允许再次确认版本时重做默认全开 */
-        cabin_leds_default_applied_.store(false);
-    }
-    return enabled && !was;
-}
-
 bool SocSensors::ensure_cabin_leds_default_on()
 {
     bool expected = false;
@@ -756,7 +746,7 @@ bool SocSensors::ensure_cabin_leds_default_on()
         return false;
     }
     const bool ok = set_all_cabin_leds(true);
-    UPC_LOG_GLAVO_SERVICE(Info, "V4: cabin LEDs all on (MCU≥4) ok=%d mask=0x%02X",
+    UPC_LOG_GLAVO_SERVICE(Info, "cabin LEDs all on ok=%d mask=0x%02X",
                           ok ? 1 : 0,
                           static_cast<unsigned>(cabin_led_mask()));
     return true;
@@ -971,9 +961,7 @@ void SocSensors::thread_fn()
 {
     UPC_LOG_GLAVO_SERVICE(Info, "SocSensors thread started");
     while(running_.load()) {
-        if(v4_mode_.load()) {
-            poll_once();
-        }
+        poll_once();
         std::this_thread::sleep_for(std::chrono::milliseconds(200));
     }
     UPC_LOG_GLAVO_SERVICE(Info, "SocSensors thread stopped");

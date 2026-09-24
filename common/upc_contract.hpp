@@ -570,7 +570,7 @@ enum class MsgType : uint32_t {
     UI_Clean_Test_Close_Req,     /**< Empty：返回首页时强制 clean_test_close */
     UI_Print_Video_Finalize_Req, /**< PrintVideoFinalizeReqPayload：结果页退出后触发统一 MP4 合成 */
     APP_Clean_Test_Close_Rsp,    /**< Empty：close 已受理 */
-    UI_Storage_Usage_Req,        /**< StorageUsageReqPayload：按卷请求容量 */
+    UI_Storage_Usage_Req,        /**< StorageUsageReqPayload：按卷请求存储占用 */
     APP_Storage_Usage_Rsp,       /**< StorageUsagePayload：存储占用回执 */
 
     // ---- UI ↔ GLAVO：转运盒自动转运（串口 A2/0x41） ----
@@ -649,15 +649,22 @@ enum class MsgType : uint32_t {
     // ---- GLAVO → UI：制氮机 BLE 状态（v1 UI 可不订阅） ----
     APP_N2_Status_Ntf = 0x1620, /**< N2StatusPayload：在线/浓度/STATE/seq；变化立即推，否则最多 1Hz */
 
-    // ---- UI ↔ MEDIA：按卷格式化（后端待实现，见 doc/STORAGE_BACKEND_API.md） ----
+    /* ---- 设置页存储管理（稿 6251:94362）----
+     *
+     * **新消息一律追加在末尾、并自带显式锚点**，别插进上面任何一段：这个枚举的值就是
+     * 跨进程线上的消息号，往中间插会把其后所有消息整体改号，已部署的后端二进制会全部
+     * 对不上（本段就是先插中间、撞上 0x1423 那个锚点才发现的）。
+     *
+     * 容量那对（UI_Storage_Usage_Req / APP_Storage_Usage_Rsp）仍在上面原位，只是载荷
+     * 扩了字段；格式化这三条是全新的。**格式化后端尚未实现**，见
+     * doc/STORAGE_BACKEND_API.md。格式化耗时可达几十秒，故 Req → 多条 Progress → 终态 Rsp。 */
     UI_Storage_Format_Req = 0x1700,  /**< StorageFormatReqPayload：格式化指定卷 */
     APP_Storage_Format_Progress_Ntf, /**< StorageFormatProgressPayload：格式化进度 */
     APP_Storage_Format_Rsp,          /**< StorageFormatRspPayload：格式化终态 */
-    /** UsbHotplugPayload：SD 卡挂载状态变化。*契约预留，后端待实现*——设置页存储
+    /** UsbHotplugPayload：SD 卡挂载状态变化。**契约预留，后端待实现**——设置页存储
      *  概览要靠它决定「SD 卡内存」那张卡显示容量还是显示未插入。挂载点尚未确定。
      *  载荷形状与 USB 那条完全一致，故复用同一个 POD，但**是两个不同的卷**。 */
     GLAVO_SdCard_Hotplug_Ntf,
-
 };
 
 enum class MsgPriority : uint8_t {
@@ -797,7 +804,7 @@ struct EnvSnapshotPayload {
     float    pressure_kpa;      /**< 舱内气压 kPa；无效填 <0 */
     float    baseplate_temp_c;  /**< 基板温度 ℃；无效填 <0 */
     uint8_t  powder_bits;       /**< 粉量位：取 bit0/bit1（0=缺粉；>=1 允许继续打印） */
-    uint8_t  sensor_v4;         /**< 1=MCU V4：舱氧/PM/温湿/气压以 SOC 为准 */
+    uint8_t  sensor_v4;         /**< 固定 1：舱氧/PM/温湿/气压以 SOC 为准（ABI 保留） */
     float    pm1_cabin;         /**< 舱内 PM1.0；无效填 <0（V4 SOC） */
     float    pm10_cabin;        /**< 舱内 PM10；无效填 <0（V4 SOC） */
     uint8_t  outer_door_open;   /**< 1=外门开 0=关；仅 door_state_valid=1 时有效 */
@@ -1288,7 +1295,7 @@ struct CleanTestStartRspPayload {
  * 有清粉录像时由 Media 在清粉抽帧停止后发送；最终 MP4 在结果页退出后统一合成。 */
 struct CleanTestDonePayload {
     uint8_t result_code;   /**< 结束类型：00/01/02 都表示清粉结束 */
-    uint8_t raw_retained;  /**< 兼容字段；PNG 路径下恒为 0 */
+    uint8_t raw_retained;  /**< 兼容字段；JPEG 静图路径下恒为 0 */
     uint8_t has_mp4;       /**< 1=期望存在合并后的 timelapse.mp4 */
     uint8_t reserved;
     char    mp4_rel_path[96]; /**< 相对 /userdata/media/video 的路径，如 job/timelapse.mp4 */
@@ -1299,9 +1306,13 @@ struct PrintVideoFinalizeReqPayload {
     char frames_dir[96]; /**< 对应 /userdata/media/video/{frames_dir}/ */
 };
 
+/**
+ * 存储卷标识。设置页「存储管理」涉及三个互不相同的卷（稿 6251:94362）：
+ * 概览两张卡是主机与 SD 卡，格式化两行是主机与 U 盘。
+ */
 enum class StorageVolume : uint8_t {
-    Internal = 0,  /**< 主机内置（userdata 所在分区） */
-    SdCard   = 1,  /**< SD 卡（*挂载点待定*，见 doc/STORAGE_BACKEND_API.md） */
+    Internal = 0,  /**< 主机内置（/userdata 所在分区） */
+    SdCard   = 1,  /**< SD 卡。**挂载点待定**，见 doc/STORAGE_BACKEND_API.md */
     UsbDisk  = 2,  /**< U 盘，挂载点由 GLAVO_USB_Hotplug_Ntf 的 mount_path 给出 */
 };
 
@@ -1325,23 +1336,23 @@ struct StorageUsagePayload {
     uint8_t  reserved[6];
 };
 
-/** UI_Storage_Format_Req：格式化指定卷。*后端待实现*。 */
+/** UI_Storage_Format_Req：格式化指定卷。**后端待实现**。 */
 struct StorageFormatReqPayload {
     uint8_t volume;        /**< StorageVolume */
     uint8_t reserved[3];
 };
 
-/** APP_Storage_Format_Progress_Ntf：格式化进度。*后端待实现*。 */
+/** APP_Storage_Format_Progress_Ntf：格式化进度。**后端待实现**。 */
 struct StorageFormatProgressPayload {
     uint8_t volume;        /**< StorageVolume */
     uint8_t percent;       /**< 0..100 */
     uint8_t reserved[2];
 };
 
-/** APP_Storage_Format_Rsp：格式化终态。*后端待实现*。 */
+/** APP_Storage_Format_Rsp：格式化终态。**后端待实现**。 */
 struct StorageFormatRspPayload {
     uint8_t volume;        /**< StorageVolume */
-    uint8_t result;        /**< 0=成功 1=失败 2=忙（另一次格式化在跑） 3=卷不存在 */
+    uint8_t result;        /**< 0=成功 1=失败 2=忙（另一次格式化在跑）3=卷不存在 */
     uint8_t reserved[2];
 };
 
@@ -1351,7 +1362,7 @@ struct TransportResultPayload {
     uint8_t reserved[3];
 };
 
-/** GLAVO→MEDIA：清粉延时抽帧会话开始（接续打印 PNG，按 fps 定时采样） */
+/** GLAVO→MEDIA：清粉延时抽帧会话开始（接续打印 JPEG，按 fps 定时采样） */
 struct CleanVideoSessionStartPayload {
     char     session_id[32];
     char     job_name[64];
@@ -1364,7 +1375,7 @@ struct CleanVideoSessionStartPayload {
 struct CleanVideoSessionStopPayload {
     char    session_id[32];
     uint8_t result_code;  /**< 结束类型：00/01/02=MCU清粉结束；0xfe=用户关闭；0xff=内部收尾 */
-    uint8_t keep_raw;     /**< 兼容字段；PNG 路径下忽略 */
+    uint8_t keep_raw;     /**< 兼容字段；JPEG 静图路径下忽略 */
     uint8_t reserved[2];
 };
 
@@ -1557,6 +1568,7 @@ enum class DebugSocLedChannel: uint8_t {
     Lgt1L = 0, Lgt1R = 1, Lgt2L = 2, Lgt2R = 3, Lgt3L = 4, Lgt3R = 5
 };
 constexpr uint8_t kDebugSocLedCount = 6;
+/** 调试页灯板验色；Blue/Orange/Red 与 glavo::SpiStatusLed::Color 同序，Raw 用 payload 里的 rgb */
 enum class DebugStatusLedColor: uint8_t { Blue = 0, Orange = 1, Red = 2, Raw = 3 };
 
 /** UI_Debug_Axis_Jog_Ntf：轴点动 / 长按点动 */
@@ -1682,7 +1694,8 @@ struct DebugSocLedStatePayload {
     uint8_t reserved[3];
 };
 
-/** UI_Debug_Status_Led_Set_Ntf / GLAVO_Debug_Status_Led_Ntf：SPI 灯板强制色 */
+/** UI_Debug_Status_Led_Set_Ntf / GLAVO_Debug_Status_Led_Ntf：
+ *  强制 SPI 灯板单色，验证/调试 kBlue/kOrange/kRed（仅本次运行）。 */
 struct DebugStatusLedPayload {
     uint8_t force;      /**< 0=释放接管回自动推导，1=强制 */
     uint8_t color;      /**< DebugStatusLedColor；force=0 时忽略 */
@@ -1715,14 +1728,14 @@ struct DebugLaserStatePayload {
 
 /** GLAVO_Debug_Sensor_Ntf：顶部传感器快照（舱外/舱内 PM 分列，便于联调读数） */
 struct DebugSensorPayload {
-    float   oxygen_percent;          /**< 舱内氧 %（V4=SOC IIO；旧=MCU 1ST）；无效 <0 */
+    float   oxygen_percent;          /**< 舱内氧 %（SOC IIO）；无效 <0 */
     float   pressure_kpa;
-    float   pm25;                    /**< 舱外/常显 PM2.5；旧固件与舱内同源；无效 <0 */
+    float   pm25;                    /**< 舱外/常显 PM2.5；无效 <0 */
     float   humidity_pct;
     float   cabin_temp_c;
     float   baseplate_temp_c;
-    float   pm25_cabin;              /**< 舱内 PM2.5（V4=SOC 舱内 UART，阀关时可能无效）；无效 <0 */
-    float   filter_oxygen_percent;   /**< 滤芯氧 %（V4 MCU 1ST value[0..1]）；旧固件无此路，无效 <0 */
+    float   pm25_cabin;              /**< 舱内 PM2.5（SOC 舱内 UART，阀关时可能无效）；无效 <0 */
+    float   filter_oxygen_percent;   /**< 滤芯氧 %（MCU 1ST value[0..1]）；无效 <0 */
     uint8_t powder_status;           /**< DebugPowderStatus；0xFF=无效显示 "--" */
     uint8_t reserved[3];
 };
@@ -1765,6 +1778,8 @@ struct DebugRecycleMotorStatePayload {
     uint8_t reserved[3];
 };
 
+/** GLAVO_Debug_Fan_Ntf：风机实测（MCU V4 EXT 帧 TLV 0x06）；valid=0 时其余值无意义。
+ *  不含 on/duty：Glavo 只组帧下发不留状态，那两个值无处可取。 */
 struct DebugFanStatePayload {
     uint8_t  valid;      /**< fan_status_bits bit7：驱动链路正常 */
     uint8_t  fault;      /**< 0无 1Hall非法 2Hall错序 3堵转 4过流 5欠压 6过压 7超速 */

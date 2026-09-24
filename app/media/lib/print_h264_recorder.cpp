@@ -487,7 +487,7 @@ void PrintH264Recorder::on_session_start(const middleware::PrintVideoSessionPayl
                                          : CAMERA_PRINT_H264_BITRATE;
     storage_exhausted_reported_ = false;
 
-    // 与 PrintVideoRecorder 共用 tmp/ 目录：这里不做 remove_all，避免误删层间 PNG。
+    // 与 PrintVideoRecorder 共用 tmp/ 目录：这里不做 remove_all，避免误删层间 JPEG。
     // Media 模块已在 Session Start 前完成 recover 和清空 tmp。
     std::error_code ec;
     std::filesystem::create_directories(session_dir_, ec);

@@ -86,10 +86,10 @@ private:
     static std::string request_query(const std::string& raw_path);
     static bool query_get_int(const std::string& query, const std::string& key, int* out);
     static bool is_safe_job_id(const std::string& job_id);
-    static bool is_png_frame_name(const std::string& name, uint32_t* index_out);
+    static bool is_jpg_frame_name(const std::string& name, uint32_t* index_out);
     static bool calendar_date_valid(int year, int month, int day);
     static bool entry_on_local_date(int64_t start_unix, int year, int month, int day);
-    static std::vector<uint32_t> list_timelapse_png_indices(const std::string& job_dir);
+    static std::vector<uint32_t> list_timelapse_jpg_indices(const std::string& job_dir);
     static std::string public_base_url(const HttpRequest& req, uint16_t http_port);
 
     XfrConfig cfg_;

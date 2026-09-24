@@ -59,7 +59,7 @@ private:
         float pm25 = 0.0f;
         float pm1_0 = -1.0f;
         float pm10 = -1.0f;
-        float pm25_outdoor = -1.0f; /**< V4 舱外 PM2.5 → chamber_ext */
+        float pm25_outdoor = -1.0f; /**< 舱外 PM2.5 → chamber_ext */
         float oxygen_percent = 0.0f;
         float temperature_c = 0.0f;
         float humidity_percent = -1.0f;
@@ -68,7 +68,6 @@ private:
         uint32_t status = 0;
         bool wifi_connected = false;
         int signal_bars = -1;
-        bool sensor_v4 = false;
         bool has_value = false;
     };
 

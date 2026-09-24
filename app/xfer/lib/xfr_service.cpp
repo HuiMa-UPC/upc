@@ -1543,7 +1543,7 @@ HttpResponse XfrService::handle_timelapse_images(const HttpRequest& req,
     }
 
     const std::string job_dir = std::string(UPC_VIDEO_DIR) + "/" + job_id;
-    const std::vector<uint32_t> indices = list_timelapse_png_indices(job_dir);
+    const std::vector<uint32_t> indices = list_timelapse_jpg_indices(job_dir);
     const int total = static_cast<int>(indices.size());
     std::string state = "ready";
     if (total == 0) {
@@ -1572,7 +1572,7 @@ HttpResponse XfrService::handle_timelapse_images(const HttpRequest& req,
             first = false;
             oss << "\"" << json_escape(
                 base + "/timelapse/" + job_id + "/" +
-                std::to_string(indices[static_cast<std::size_t>(i)]) + ".png")
+                std::to_string(indices[static_cast<std::size_t>(i)]) + ".jpg")
                 << "\"";
         }
     }
@@ -1592,12 +1592,12 @@ HttpResponse XfrService::handle_timelapse_file(const HttpRequest& req,
         return err(404, "NOT_FOUND", "file not found");
     }
     uint32_t idx = 0;
-    if (!is_png_frame_name(file_name, &idx)) {
+    if (!is_jpg_frame_name(file_name, &idx)) {
         return err(404, "NOT_FOUND", "file not found");
     }
 
     const std::string path =
-        std::string(UPC_VIDEO_DIR) + "/" + job_id + "/" + std::to_string(idx) + ".png";
+        std::string(UPC_VIDEO_DIR) + "/" + job_id + "/" + std::to_string(idx) + ".jpg";
     std::ifstream in(path, std::ios::binary);
     if (!in) {
         return err(404, "NOT_FOUND", "file not found");
@@ -1606,7 +1606,7 @@ HttpResponse XfrService::handle_timelapse_file(const HttpRequest& req,
     ss << in.rdbuf();
     HttpResponse rsp;
     rsp.status = 200;
-    rsp.content_type = "image/png";
+    rsp.content_type = "image/jpeg";
     rsp.body = ss.str();
     return rsp;
 }
@@ -1678,9 +1678,9 @@ bool XfrService::is_safe_job_id(const std::string& job_id)
     return true;
 }
 
-bool XfrService::is_png_frame_name(const std::string& name, uint32_t* index_out)
+bool XfrService::is_jpg_frame_name(const std::string& name, uint32_t* index_out)
 {
-    if (name.size() < 5 || name.compare(name.size() - 4, 4, ".png") != 0) {
+    if (name.size() < 5 || name.compare(name.size() - 4, 4, ".jpg") != 0) {
         return false;
     }
     const std::string num = name.substr(0, name.size() - 4);
@@ -1740,7 +1740,7 @@ bool XfrService::entry_on_local_date(int64_t start_unix, int year, int month, in
     return (tm.tm_year + 1900) == year && (tm.tm_mon + 1) == month && tm.tm_mday == day;
 }
 
-std::vector<uint32_t> XfrService::list_timelapse_png_indices(const std::string& job_dir)
+std::vector<uint32_t> XfrService::list_timelapse_jpg_indices(const std::string& job_dir)
 {
     std::vector<uint32_t> out;
     DIR* dir = ::opendir(job_dir.c_str());
@@ -1752,7 +1752,7 @@ std::vector<uint32_t> XfrService::list_timelapse_png_indices(const std::string& 
             continue;
         }
         uint32_t idx = 0;
-        if (!is_png_frame_name(ent->d_name, &idx)) {
+        if (!is_jpg_frame_name(ent->d_name, &idx)) {
             continue;
         }
         out.push_back(idx);

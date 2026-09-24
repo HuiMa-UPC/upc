@@ -138,7 +138,7 @@ void PrintVideoRecorder::on_session_start(
     }
 
     /*
-     * 先落一个不可见的中断态条目。断电时 Media 可据此保留已经写好的 PNG，
+     * 先落一个不可见的中断态条目。断电时 Media 可据此保留已经写好的 JPEG，
      * 丢弃 H264，并把历史显示为 Interrupted；正常 Finish 会覆盖为真实状态。
      */
     (void)upsert_print_history(true, UPC_VIDEO_TMP_NAME, std::string{},
@@ -324,54 +324,19 @@ int PrintVideoRecorder::run_shell_cmd(const char* cmd, const char* log_tag)
     return rc;
 }
 
-std::string PrintVideoRecorder::frame_png_path(uint32_t frame_index) const
+std::string PrintVideoRecorder::frame_jpeg_path(uint32_t frame_index) const
 {
     char name[64];
-    std::snprintf(name, sizeof(name), "%u.png", frame_index);
+    std::snprintf(name, sizeof(name), "%u.jpg", frame_index);
     return session_dir_ + "/" + name;
 }
 
-bool PrintVideoRecorder::encode_nv12_to_png(const uint8_t* nv12,
+bool PrintVideoRecorder::encode_nv12_to_jpeg(const uint8_t* nv12,
                                             size_t bytes,
                                             uint32_t frame_index)
 {
-    if(!nv12 || session_dir_.empty()) {
-        return false;
-    }
-    const size_t need =
-        static_cast<size_t>(stream_width_) * stream_height_ * 3u / 2u;
-    if(bytes < need) {
-        return false;
-    }
-
-    const std::string png_path = frame_png_path(frame_index);
-    char cmd[1280];
-    std::snprintf(
-        cmd, sizeof(cmd),
-        "%s -y -loglevel error -f rawvideo -pix_fmt nv12 -s %ux%u -i - "
-        "-frames:v 1 -c:v png '%s'",
-        CAMERA_FFMPEG_BIN, stream_width_, stream_height_, png_path.c_str());
-
-    FILE* ff = ::popen(cmd, "w");
-    if(!ff) {
-        UPC_LOG_MEDIA_SERVICE(Error, "print_video open ffmpeg pipe fail frame=%u",
-                               frame_index);
-        return false;
-    }
-    const bool write_ok = (std::fwrite(nv12, 1, need, ff) == need);
-    const int rc = ::pclose(ff);
-    const bool ok = write_ok && (rc == 0);
-    if(!ok) {
-        if(!write_ok) {
-            UPC_LOG_MEDIA_SERVICE(Error, "print_video write frame to ffmpeg fail frame=%u",
-                                   frame_index);
-        } else {
-            UPC_LOG_MEDIA_SERVICE(Error, "print_video ffmpeg png failed rc=%d frame=%u",
-                                   rc, frame_index);
-        }
-        (void)std::remove(png_path.c_str());
-    }
-    return ok;
+    return timelapse_util::encode_nv12_to_jpeg(
+        nv12, bytes, stream_width_, stream_height_, session_dir_, frame_index);
 }
 
 bool PrintVideoRecorder::handle_layer_snap(const PrintVideoJob& job)
@@ -384,7 +349,7 @@ bool PrintVideoRecorder::handle_layer_snap(const PrintVideoJob& job)
     if(guard && !guard()) {
         UPC_LOG_MEDIA_SERVICE(
             Warn,
-            "STORCHK_SKIP_WRITE kind=timelapse_png reason=budget_unavailable session=%s layer=%u",
+            "STORCHK_SKIP_WRITE kind=timelapse_jpeg reason=budget_unavailable session=%s layer=%u",
             session_id_.c_str(), job.layer_index);
         return false;
     }
@@ -398,9 +363,9 @@ bool PrintVideoRecorder::handle_layer_snap(const PrintVideoJob& job)
     }
 
     const uint32_t frame_index = frame_count_ + 1u;
-    if(!encode_nv12_to_png(nv12.data(), nv12.size(), frame_index)) {
+    if(!encode_nv12_to_jpeg(nv12.data(), nv12.size(), frame_index)) {
         UPC_LOG_MEDIA_SERVICE(Warn,
-            "print_video png encode fail session=%s layer=%u frame=%u",
+            "print_video jpeg encode fail session=%s layer=%u frame=%u",
             session_id_.c_str(), job.layer_index, frame_index);
         return false;
     }
@@ -415,7 +380,7 @@ bool PrintVideoRecorder::handle_layer_snap(const PrintVideoJob& job)
         frame_index,
         static_cast<unsigned>(job.layer_height_um),
         nv12_bytes,
-        frame_png_path(frame_index).c_str());
+        frame_jpeg_path(frame_index).c_str());
     return true;
 }
 
@@ -577,10 +542,10 @@ bool PrintVideoRecorder::commit_after_exit(const char* frames_dir)
 
     const bool aborted = (hit->status == upc::PrintHistoryStatus::Terminated);
 #if UPC_TIMELAPSE_PLAYBACK_PNG
-    /* PNG 模式无 video 字段；以目录内是否有层间帧为准。 */
+    /* 序列播放模式无 video 字段；以目录内是否有层间 JPEG 为准。 */
     const std::string session_dir =
         std::string(CAMERA_PRINT_VIDEO_OUT_DIR) + "/" + hit->frames_dir;
-    const bool has_video = timelapse_util::scan_max_png_index(session_dir) >= 1u;
+    const bool has_video = timelapse_util::scan_max_jpeg_index(session_dir) >= 1u;
 #else
     const bool has_video = !hit->video.empty();
 #endif
@@ -650,13 +615,13 @@ void PrintVideoRecorder::finalize_after_exit(const char* frames_dir,
             }
         }
     }
-    const uint32_t frame_count = timelapse_util::scan_max_png_index(session_dir);
+    const uint32_t frame_count = timelapse_util::scan_max_jpeg_index(session_dir);
     /* 延时成片用 layer_fps；打印录像 MP4 按相机流帧率（编码一致）处理。 */
     const uint32_t timelapse_fps = layer_fps_ > 0 ? layer_fps_ : 1u;
     const uint32_t print_fps =
         stream_fps_ > 0 ? stream_fps_ : CAMERA_FPS_DEFAULT;
 
-    /* 延时摄影成片：PNG 模式只认帧在、不编 mp4、不删 PNG；MP4 模式才 encode。
+    /* 延时摄影成片：序列模式只认 JPEG 在、不编 mp4、不删帧；MP4 模式才 encode。
      * 打印录像 MP4 不受此开关影响（见下方 h264 分支）。 */
     bool video_ok = false;
 #if UPC_TIMELAPSE_PLAYBACK_PNG
@@ -665,14 +630,14 @@ void PrintVideoRecorder::finalize_after_exit(const char* frames_dir,
     (void)std::remove((session_dir + "/timelapse.mp4").c_str()); /* 避免残留旧 mp4 误导 UI */
     UPC_LOG_MEDIA_SERVICE(
         Info,
-        "print_video finalize PNG mode: skip timelapse mp4 frames=%u dir=%s",
+        "print_video finalize JPEG mode: skip timelapse mp4 frames=%u dir=%s",
         frame_count, session_dir.c_str());
 #else
     const std::string mp4_path = session_dir + "/timelapse.mp4";
     const std::string mp4_rel = hit->frames_dir + "/timelapse.mp4";
     if(frame_count >= 1u) {
         (void)std::remove(mp4_path.c_str());
-        video_ok = timelapse_util::encode_png_sequence_to_mp4(
+        video_ok = timelapse_util::encode_jpeg_sequence_to_mp4(
             session_dir, frame_count, timelapse_fps, mp4_path.c_str());
         if(!video_ok) {
             UPC_LOG_MEDIA_SERVICE(Warn,
@@ -689,7 +654,7 @@ void PrintVideoRecorder::finalize_after_exit(const char* frames_dir,
         hit->video = mp4_rel;
         if(hit->clean_first_png > 0 &&
            hit->clean_last_png >= hit->clean_first_png) {
-            timelapse_util::remove_png_range(
+            timelapse_util::remove_jpeg_range(
                 session_dir, hit->clean_first_png, hit->clean_last_png);
         }
     }
@@ -756,7 +721,7 @@ void PrintVideoRecorder::finalize_after_exit(const char* frames_dir,
          * 开机恢复时更是早已无会话在跑），不存在"稍后再来一次"的机会。
          * 所以这里无论 mp4 是否可用都必须清 pending：留着 1 会让该条目被
          * reclaim_orphan_or_stale_pending_for_budget() 当成陈旧 pending，
-         * 超过 30min 后整个会话目录被删，连延时 PNG 一起赔进去。
+         * 超过 30min 后整个会话目录被删，连延时 JPEG 一起赔进去。
          * mp4 不可用时 print_video 保持为空，UI 自然不展示录像即可。 */
         hit->print_video_pending = false;
     }
@@ -974,7 +939,6 @@ void PrintVideoRecorder::notify_manifest_ready(const std::string& frames_dir_nam
     ntf.aborted   = aborted ? 1 : 0;
     ntf.has_video = has_video ? 1 : 0;
 
-    /* 双发 UI + Xfr：WiFi 协议 /print/status 与延时摄影 job_id 绑定 frames_dir */
     auto send_to = [&](middleware::ModuleId target) {
         middleware::Message msg(
             middleware::MsgType::APP_Print_Video_Manifest_Ntf,
