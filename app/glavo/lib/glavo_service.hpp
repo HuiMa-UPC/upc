@@ -11,6 +11,7 @@
 #include "wifi_manager.hpp"
 #include "msg_port.hpp"
 #include "msg_runtime.hpp"
+#include "cabin_visual_exchange.hpp"
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -254,9 +255,6 @@ private:
     [[nodiscard]] std::optional<bool> read_fully_open_fused();
     /** @brief 舱检会话 Start/Stop；载荷为 VisualCabinSessionPayload。 */
     void publish_cabin_visual_session(uint32_t session_id, bool active);
-    /** @return true=收到匹配 session+request 的回包；false=超时/中止（按 unknown） */
-    bool wait_occlusion_rsp(uint32_t session_id, uint32_t request_id,
-                            uint32_t timeout_ms, uint8_t& out_result);
     /**
      * @brief 关内门套件（Skip Outer Door 时直接成功）。
      * @param blocking true=起印路径阻塞等锁；false=边沿路径 try_lock，忙则跳过
@@ -284,8 +282,6 @@ private:
     bool begin_plate_present_gate();
     /** @brief 跑一轮 Plate Present；回包/超时。 */
     middleware::PlatePresentResult run_plate_present_round();
-    bool wait_plate_present_rsp(uint32_t session_id, uint32_t request_id,
-                                uint32_t timeout_ms, uint8_t& out_result);
     /** @brief 无板 Confirm 后再检：外门已关 → 内门决策 → 再读码。 */
     void continue_print_after_plate_place_confirm();
     /**
@@ -526,24 +522,12 @@ private:
     /** 用户终止：IPC 线程先置位，打断 worker 上阻塞的关内门套件 / wait_z */
     std::atomic<bool> print_prep_abort_{false};
     /* ---- 舱检挡门：worker 等 Rsp，IPC 回调直接 notify（勿入 worker 队列） ---- */
-    std::mutex occlusion_mtx_;
-    std::condition_variable occlusion_cv_;
-    bool occlusion_waiting_ = false;
-    bool occlusion_arrived_ = false;
-    uint32_t occlusion_wait_session_ = 0;
-    uint32_t occlusion_wait_request_ = 0;
-    uint8_t occlusion_result_ = 0;
-    std::atomic<uint32_t> occlusion_session_seq_{1};
+    // Visual orders both check types in the same cabin session stream.
+    std::atomic<uint32_t> cabin_session_seq_{1};
+    CabinVisualExchange occlusion_exchange_;
     std::atomic<uint32_t> occlusion_request_seq_{1};
     /* ---- 舱检读码：同挡门，Rsp 在 IPC 回调直投 ---- */
-    std::mutex plate_present_mtx_;
-    std::condition_variable plate_present_cv_;
-    bool plate_present_waiting_ = false;
-    bool plate_present_arrived_ = false;
-    uint32_t plate_present_wait_session_ = 0;
-    uint32_t plate_present_wait_request_ = 0;
-    uint8_t plate_present_result_ = 0;
-    std::atomic<uint32_t> plate_present_session_seq_{1};
+    CabinVisualExchange plate_present_exchange_;
     std::atomic<uint32_t> plate_present_request_seq_{1};
     /** 起印环境检查进度：本趟总步数 / 当前已进入步序号 / 上一次推送的 step */
     uint8_t prep_step_total_ = 0;

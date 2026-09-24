@@ -1019,8 +1019,8 @@ void GlavoService::on_message(const middleware::Message& msg)
     /* 终止须立刻打断 worker 上阻塞的关内门套件；等入队后再处理会卡数秒。 */
     if(msg.type == middleware::MsgType::UI_Print_Terminate_Req) {
         print_prep_abort_.store(true);
-        occlusion_cv_.notify_all();
-        plate_present_cv_.notify_all();
+        occlusion_exchange_.notify_abort();
+        plate_present_exchange_.notify_abort();
     }
 
     /* 舱检 Rsp 必须在 IPC 回调线程投递：内门套件/读码跑在 worker 上等 CV，
@@ -6014,69 +6014,24 @@ void GlavoService::publish_plate_place_confirm_req()
 void GlavoService::handle_visual_plate_present_rsp(const middleware::Message& msg)
 {
     middleware::VisualCabinCheckRspPayload rsp{};
-    if(msg.payload.type != middleware::MsgPayload::Type::Inline ||
-       msg.payload.length < sizeof(rsp)) {
+    if(!read_cabin_reply(msg, middleware::MsgType::APP_Visual_Plate_Present_Rsp, rsp)) {
         UPC_LOG_GLAVO_SERVICE(Warn, "plate present rsp invalid payload");
         return;
     }
-    std::memcpy(&rsp, msg.payload.data.bytes.data(), sizeof(rsp));
-
-    std::lock_guard<std::mutex> lock(plate_present_mtx_);
-    if(!plate_present_waiting_ ||
-       rsp.session_id != plate_present_wait_session_ ||
-       rsp.request_id != plate_present_wait_request_) {
+    if(!plate_present_exchange_.accept(rsp)) {
         UPC_LOG_GLAVO_SERVICE(Warn,
-            "plate present rsp dropped waiting=%d session=%u/%u req=%u/%u result=%u",
-            plate_present_waiting_ ? 1 : 0,
-            static_cast<unsigned>(plate_present_wait_session_),
+            "plate present stale/duplicate rsp dropped session=%u req=%u result=%u",
             static_cast<unsigned>(rsp.session_id),
-            static_cast<unsigned>(plate_present_wait_request_),
             static_cast<unsigned>(rsp.request_id),
             static_cast<unsigned>(rsp.result));
         return;
     }
-    plate_present_arrived_ = true;
-    plate_present_result_ = rsp.result;
     UPC_LOG_GLAVO_SERVICE(Info,
         "plate present rsp session=%u req=%u result=%u frame=%u",
         static_cast<unsigned>(rsp.session_id),
         static_cast<unsigned>(rsp.request_id),
         static_cast<unsigned>(rsp.result),
         static_cast<unsigned>(rsp.frame_seq));
-    plate_present_cv_.notify_all();
-}
-
-bool GlavoService::wait_plate_present_rsp(uint32_t session_id, uint32_t request_id,
-                                          uint32_t timeout_ms, uint8_t& out_result)
-{
-    {
-        std::lock_guard<std::mutex> lock(plate_present_mtx_);
-        plate_present_waiting_ = true;
-        plate_present_arrived_ = false;
-        plate_present_wait_session_ = session_id;
-        plate_present_wait_request_ = request_id;
-        plate_present_result_ = static_cast<uint8_t>(
-            middleware::PlatePresentResult::Unknown);
-    }
-
-    constexpr auto kGrace = std::chrono::milliseconds(2000);
-    const auto budget =
-        std::chrono::milliseconds(timeout_ms == 0u ? 3000u : timeout_ms) + kGrace;
-    std::unique_lock<std::mutex> lock(plate_present_mtx_);
-    (void)plate_present_cv_.wait_for(lock, budget, [this]() {
-        return plate_present_arrived_ || print_prep_abort_.load();
-    });
-    plate_present_waiting_ = false;
-    if(print_prep_abort_.load()) {
-        return false;
-    }
-    if(!plate_present_arrived_) {
-        out_result = static_cast<uint8_t>(
-            middleware::PlatePresentResult::Unknown);
-        return false;
-    }
-    out_result = plate_present_result_;
-    return true;
 }
 
 middleware::PlatePresentResult GlavoService::run_plate_present_round()
@@ -6084,10 +6039,7 @@ middleware::PlatePresentResult GlavoService::run_plate_present_round()
     set_cabin_light(true);
     const uint8_t led_mask = SocSensors::instance().cabin_led_mask();
 
-    uint32_t session_id = plate_present_session_seq_.fetch_add(1);
-    if(session_id == 0u) {
-        session_id = plate_present_session_seq_.fetch_add(1);
-    }
+    const uint32_t session_id = next_cabin_id(cabin_session_seq_);
     publish_cabin_visual_session(session_id, true);
 
     constexpr auto kWarmup = std::chrono::milliseconds(1500);
@@ -6106,10 +6058,7 @@ middleware::PlatePresentResult GlavoService::run_plate_present_round()
         }
     }
 
-    uint32_t request_id = plate_present_request_seq_.fetch_add(1);
-    if(request_id == 0u) {
-        request_id = plate_present_request_seq_.fetch_add(1);
-    }
+    const uint32_t request_id = next_cabin_id(plate_present_request_seq_);
     middleware::VisualCabinCheckReqPayload req{};
     req.session_id = session_id;
     req.request_id = request_id;
@@ -6125,13 +6074,14 @@ middleware::PlatePresentResult GlavoService::run_plate_present_round()
         reinterpret_cast<const uint8_t*>(&req), sizeof(req));
     uint8_t result = static_cast<uint8_t>(
         middleware::PlatePresentResult::Unknown);
-    if(!publish_async(out)) {
+    const auto status = plate_present_exchange_.request(
+        session_id, request_id, std::chrono::milliseconds(kWindowMs + 2000u),
+        print_prep_abort_, [this, &out]() { return publish_async(out); }, result);
+    if(status == CabinExchangeStatus::PublishFailed) {
         UPC_LOG_GLAVO_SERVICE(Warn,
             "plate present req publish failed session=%u req=%u",
             static_cast<unsigned>(session_id),
             static_cast<unsigned>(request_id));
-    } else {
-        (void)wait_plate_present_rsp(session_id, request_id, kWindowMs, result);
     }
     publish_cabin_visual_session(session_id, false);
 
@@ -6232,9 +6182,12 @@ void GlavoService::handle_plate_place_confirm_rsp(const middleware::Message& msg
         UPC_LOG_GLAVO_SERVICE(Warn, "plate place confirm rsp ignored: print stopped");
         return;
     }
-    middleware::PlatePlaceConfirmRspPayload p{};
-    const bool cancel = read_inline_pod(msg.payload, p) && p.cancel != 0;
-    if(cancel) {
+    const auto cancel = read_plate_place_confirmation(msg);
+    if(!cancel.has_value()) {
+        UPC_LOG_GLAVO_SERVICE(Warn, "plate place confirm rsp ignored: invalid packet");
+        return;
+    }
+    if(*cancel) {
         plate_place_confirm_waiting_ = false;
         UPC_LOG_GLAVO_SERVICE(Info, "plate place confirm cancelled; abort print");
         abort_print_start(middleware::PrintStartRejectReason::PlateAbsentCancel, 0);
@@ -6290,69 +6243,24 @@ void GlavoService::publish_cabin_visual_session(uint32_t session_id, bool active
 void GlavoService::handle_visual_occlusion_rsp(const middleware::Message& msg)
 {
     middleware::VisualCabinCheckRspPayload rsp{};
-    if(msg.payload.type != middleware::MsgPayload::Type::Inline ||
-       msg.payload.length < sizeof(rsp)) {
+    if(!read_cabin_reply(msg, middleware::MsgType::APP_Visual_InnerDoor_Occlusion_Rsp, rsp)) {
         UPC_LOG_GLAVO_SERVICE(Warn, "inner door occl rsp invalid payload");
         return;
     }
-    std::memcpy(&rsp, msg.payload.data.bytes.data(), sizeof(rsp));
-
-    std::lock_guard<std::mutex> lock(occlusion_mtx_);
-    if(!occlusion_waiting_ ||
-       rsp.session_id != occlusion_wait_session_ ||
-       rsp.request_id != occlusion_wait_request_) {
+    if(!occlusion_exchange_.accept(rsp)) {
         UPC_LOG_GLAVO_SERVICE(Warn,
-            "inner door occl rsp dropped waiting=%d session=%u/%u req=%u/%u result=%u",
-            occlusion_waiting_ ? 1 : 0,
-            static_cast<unsigned>(occlusion_wait_session_),
+            "inner door occl stale/duplicate rsp dropped session=%u req=%u result=%u",
             static_cast<unsigned>(rsp.session_id),
-            static_cast<unsigned>(occlusion_wait_request_),
             static_cast<unsigned>(rsp.request_id),
             static_cast<unsigned>(rsp.result));
         return;
     }
-    occlusion_arrived_ = true;
-    occlusion_result_ = rsp.result;
     UPC_LOG_GLAVO_SERVICE(Info,
         "inner door occl rsp session=%u req=%u result=%u frame=%u",
         static_cast<unsigned>(rsp.session_id),
         static_cast<unsigned>(rsp.request_id),
         static_cast<unsigned>(rsp.result),
         static_cast<unsigned>(rsp.frame_seq));
-    occlusion_cv_.notify_all();
-}
-
-bool GlavoService::wait_occlusion_rsp(uint32_t session_id, uint32_t request_id,
-                                      uint32_t timeout_ms, uint8_t& out_result)
-{
-    {
-        std::lock_guard<std::mutex> lock(occlusion_mtx_);
-        occlusion_waiting_ = true;
-        occlusion_arrived_ = false;
-        occlusion_wait_session_ = session_id;
-        occlusion_wait_request_ = request_id;
-        occlusion_result_ = static_cast<uint8_t>(
-            middleware::InnerDoorOcclusionResult::Unknown);
-    }
-
-    constexpr auto kGrace = std::chrono::milliseconds(2000);
-    const auto budget =
-        std::chrono::milliseconds(timeout_ms == 0u ? 3000u : timeout_ms) + kGrace;
-    std::unique_lock<std::mutex> lock(occlusion_mtx_);
-    (void)occlusion_cv_.wait_for(lock, budget, [this]() {
-        return occlusion_arrived_ || print_prep_abort_.load();
-    });
-    occlusion_waiting_ = false;
-    if(print_prep_abort_.load()) {
-        return false;
-    }
-    if(!occlusion_arrived_) {
-        out_result = static_cast<uint8_t>(
-            middleware::InnerDoorOcclusionResult::Unknown);
-        return false;
-    }
-    out_result = occlusion_result_;
-    return true;
 }
 
 std::optional<bool> GlavoService::read_fully_open_fused()
@@ -6366,10 +6274,7 @@ std::optional<bool> GlavoService::read_fully_open_fused()
     set_cabin_light(true);
     const uint8_t led_mask = SocSensors::instance().cabin_led_mask();
 
-    uint32_t session_id = occlusion_session_seq_.fetch_add(1);
-    if(session_id == 0u) {
-        session_id = occlusion_session_seq_.fetch_add(1);
-    }
+    const uint32_t session_id = next_cabin_id(cabin_session_seq_);
     publish_cabin_visual_session(session_id, true);
 
     constexpr auto kWarmup = std::chrono::milliseconds(1500);
@@ -6389,10 +6294,7 @@ std::optional<bool> GlavoService::read_fully_open_fused()
         }
     }
 
-    uint32_t request_id = occlusion_request_seq_.fetch_add(1);
-    if(request_id == 0u) {
-        request_id = occlusion_request_seq_.fetch_add(1);
-    }
+    const uint32_t request_id = next_cabin_id(occlusion_request_seq_);
     middleware::VisualCabinCheckReqPayload req{};
     req.session_id = session_id;
     req.request_id = request_id;
@@ -6408,13 +6310,14 @@ std::optional<bool> GlavoService::read_fully_open_fused()
         reinterpret_cast<const uint8_t*>(&req), sizeof(req));
     uint8_t occl_result = static_cast<uint8_t>(
         middleware::InnerDoorOcclusionResult::Unknown);
-    if(!publish_async(out)) {
+    const auto status = occlusion_exchange_.request(
+        session_id, request_id, std::chrono::milliseconds(kWindowMs + 2000u),
+        print_prep_abort_, [this, &out]() { return publish_async(out); }, occl_result);
+    if(status == CabinExchangeStatus::PublishFailed) {
         UPC_LOG_GLAVO_SERVICE(Warn,
             "inner door occl req publish failed session=%u req=%u",
             static_cast<unsigned>(session_id),
             static_cast<unsigned>(request_id));
-    } else {
-        (void)wait_occlusion_rsp(session_id, request_id, kWindowMs, occl_result);
     }
     publish_cabin_visual_session(session_id, false);
 
