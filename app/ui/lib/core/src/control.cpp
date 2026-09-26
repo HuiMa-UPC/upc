@@ -95,6 +95,10 @@ DoorFlowOrigin g_door_origin = DoorFlowOrigin::PrintPrep;
  * 打开后取件分支才插入 TRANSFER_BOX 三步。纯 UI 本地标志，不发消息也不落盘。 */
 bool g_transfer_box_flow = false;
 
+/* 跳过放版预确认开关（调试页 Other → Print Gates → Skip Plate Prompt）。默认关：打印入口先弹
+ * 「是否已放入打印版」。打开后 control_start() 直接进选文件页。纯 UI 本地标志，不发消息也不落盘。 */
+bool g_skip_plate_prompt = false;
+
 /** 转运盒流程是否对当前这趟门流程生效（只认取件分支） */
 bool transfer_box_flow_active(void)
 {
@@ -2926,6 +2930,11 @@ void control_start(void)
     if(g_state != CONTROL_STATE_IDLE) {
         return;
     }
+    /* 调试开关打开：等同在预确认里选「已放入 → 选择打印任务」，不经未放入的开门分支 */
+    if(g_skip_plate_prompt) {
+        goto_file_selection();
+        return;
+    }
     /* Figma 入口：先弹「是否已放入打印版」两卡片预确认，再进入文件选择 */
     g_door_origin = DoorFlowOrigin::PrintPrep;
     enter_state(CONTROL_STATE_PLATE_PROMPT);
@@ -2991,6 +3000,16 @@ void control_set_transfer_box_flow(bool on)
 bool control_transfer_box_flow_enabled(void)
 {
     return g_transfer_box_flow;
+}
+
+void control_set_skip_plate_prompt(bool on)
+{
+    g_skip_plate_prompt = on;
+}
+
+bool control_skip_plate_prompt_enabled(void)
+{
+    return g_skip_plate_prompt;
 }
 
 const control_supply_t *control_supply_get(void)

@@ -1353,7 +1353,7 @@ struct DbgToggleCtx {
     lv_obj_t   *state_lbl;
     const char *on_txt;
     const char *off_txt;
-    uint8_t     kind;   /**< 0 粉桶 / 1 推粉 / 2 风扇 / 3 其他开关 / 4 清粉 / 5 打印H264 / 6 清粉录像 / 7 环境模拟 / 8 环境模拟缺粉 / 9 转运盒流程 / 10 首层视觉检测 / 11 消息注入 / 12 报警注入 / 13 本地RTSP / 14 光路检测 / 15 基板测高 / 16 SOC舱灯 / 17 舱内PM阀 / 18 跳过氧门 / 19 Sys HUD */
+    uint8_t     kind;   /**< 0 粉桶 / 1 推粉 / 2 风扇 / 3 其他开关 / 4 清粉 / 5 打印H264 / 6 清粉录像 / 7 环境模拟 / 8 环境模拟缺粉 / 9 转运盒流程 / 10 首层视觉检测 / 11 消息注入 / 12 报警注入 / 13 本地RTSP / 14 光路检测 / 15 基板测高 / 16 SOC舱灯 / 17 舱内PM阀 / 18 跳过氧门 / 19 Sys HUD / 20 SPI小屏测试 / 21 跳过外门 / 22 内门视觉挡门 / 23 基板在位读码 / 24 跳过放版预确认 */
     uint8_t     arg;    /**< 粉桶号 / DebugSwitchTarget / SOC LED channel */
 };
 
@@ -1450,6 +1450,9 @@ void on_dbg_toggle(lv_event_t *e)
         /* 取件流程是否插入转运盒三步。纯 UI 本地标志，不下发任何命令（仅本次运行）。 */
         case 9: control_set_transfer_box_flow(on);
                 break;
+        /* 打印入口跳过「是否已放入打印版」预确认，直接进选文件页。纯 UI 本地标志（仅本次运行）。 */
+        case 24: control_set_skip_plate_prompt(on);
+                 break;
         case 10: proxy.send_first_layer_visual_check_set(on);  /* 首层视觉检测（仅本次运行） */
                  break;
         case 14: proxy.send_optical_path_check_set(on);        /* 打印前光路检测（仅本次运行，默认关） */
@@ -2270,6 +2273,8 @@ void build_other_switches_column(lv_obj_t *parent)
                     22, 0, true, 0, &g_inner_door_occlusion_btn, &g_inner_door_occlusion_state_lbl);
     make_dbg_toggle(rowG2, "Plate Present", "On", "Off", LV_SYMBOL_OK, false,
                     23, 0, true, 0, &g_plate_present_btn, &g_plate_present_state_lbl);
+    make_dbg_toggle(rowG2, "Skip Plate Prompt", "On", "Off", LV_SYMBOL_NEXT,
+                    control_skip_plate_prompt_enabled(), 24, 0);
     lv_obj_t *rowG3 = make_switch_grid_row(gate);
     make_one_shot_action(rowG3, "Galvo Point Test", "Idle", LV_SYMBOL_PLAY,
                          on_galvo_point_test_click,

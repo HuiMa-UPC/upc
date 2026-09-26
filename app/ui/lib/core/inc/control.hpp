@@ -16,6 +16,7 @@ extern "C" {
  *   My Files → PLATE_PROMPT（是否已放入打印版：两卡片入口）
  *     ├─ 已放入 → 选择打印任务 → 选文件页
  *     └─ 未放入 → 滑动开门 → DOOR_OPENING（PM2.5/清粉/开门 loading）→ 选文件页
+ *     （调试页 Skip Plate Prompt 打开时不弹 PLATE_PROMPT，直接进选文件页）
  *   选文件页 → Start Print → PREPARE → PRINTING（预览 + Print Start）
  *              → PRINT_DONE（打印结束，预览保活等 Camera 出片）→ 结果页
  *                → 滑动取件 → DOOR_OPENING →〔TRANSFER_BOX 转运盒三步〕→ IDLE
@@ -158,6 +159,13 @@ void control_terminate_request(void);
  * 纯 UI 本地标志（不发消息、不落盘），重启回到关闭。 */
 void control_set_transfer_box_flow(bool on);
 bool control_transfer_box_flow_enabled(void);
+
+/* ---- 跳过放版预确认开关（调试页 Other → Print Gates） ----
+ * 打开后，control_start() 不弹「是否已放入打印版」，直接进选文件页（等同选「已放入」）。
+ * 只管这张入口弹窗；打印准备阶段 Glavo 的放板确认窗归 Plate Present 开关管。
+ * 纯 UI 本地标志（不发消息、不落盘），重启回到关闭。 */
+void control_set_skip_plate_prompt(bool on);
+bool control_skip_plate_prompt_enabled(void);
 
 /* ---- 供应度（耗材/滤芯）：control.cpp 是这份数据的唯一持有者 ----
  * `UiMsgProxy::register_supply_status` 是**单槽**的，页面里千万别再注册一次——

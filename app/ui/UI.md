@@ -1684,6 +1684,11 @@ Glavo Print_Terminate_Rsp / 进度 100% → control.cpp finish_printing()
   的旋钮本来就是稿要的 `#333145` 实底 + `USER_LIGHT_RADIUS` 圆角 + 无玻璃高光，轨道 360×94、
   旋钮 84 也正是 `plate_right_col_w()` / `USER_HOME_SLIDE_H` / `USER_ACTION_BTN_SZ`。
   改稿前它给的是 `custom_accent` + 红色，那是深色档的样子。
+- **调试页可整张跳过**：`Other` → `Print Gates` → `Skip Plate Prompt` 打开后
+  （`control_set_skip_plate_prompt()`，纯 UI 本地标志，不发消息也不落盘，重启回到关闭），
+  `control_start()` 不进 `PLATE_PROMPT`，直接 `goto_file_selection()`，等同选「已放入 → 选择
+  打印任务」。它只管这张选文件前的入口弹窗；起印后打印准备阶段 Glavo 发来的
+  `Place the build plate` 确认窗（`GLAVO_Plate_Place_Confirm_Req`）归 `Plate Present` 开关管。
 
 ### 转运盒流程（稿 6357:39444 / 39504 / 39470）
 
