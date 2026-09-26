@@ -1468,15 +1468,54 @@ Device/Light**。进页 `request_soc_led_state()`：mask≠0 钮亮，全 0 钮�
 - 右侧数字是 **Z 轴当前位置（mm）**，来自 `DebugAxisStatePayload::z_pos_mm`，格式 `%.1f`
   （未带单位；下方 Powder Scraper 的 S 轴读数带 `mm`）。
 - **预置**：`Top` → 绝对到位 **1 mm**，`Bottom` → **-10 mm**（`send_axis_goto` →
-  Axis_Jog `dir=0`；Glavo 读当前 MCU Z 后发 μm AXIS_INC）；`Level` 暂不动作。
-- **上下箭头**：每点相对 ±1 mm（同 Z Click 路径）。此前误用 int16/Len=2 帧，MCU 不认 Z
+  Axis_Jog `dir=0`；Glavo 读当前 MCU Z 后发 μm AXIS_INC）。这是一段**相对位移**，MCU 会
+  跑完整段；再发一条相对位移（单击方向键）不会打断它。`Level` 发 Z 点动停止
+  （`send_axis_hold_stop(Z)`），用来打断还在跑的 Top/Bottom 位移；点已选中项不发事件，
+  所以只有高亮在 Top/Bottom 时点 Level 才有动作。
+- **高亮兼作状态显示**：`Top` / `Bottom` 高亮表示「已发往该预置位」。之后**任何方向**的
+  Z 点按或长按（`on_manual_jog()` 里真正发出运动命令的 `SHORT_CLICKED` / `LONG_PRESSED`）
+  在发点动命令**之前**调 `plate_leave_preset()`：高亮还在 Top/Bottom 时先发 Z 点动停止打断
+  那段位移，再把高亮退回 `Level`。只有这第一次会发停止，之后连续点按不会互相打断；已到位
+  时这条停止对静止的轴无害，所以不用判断是否已到位。S 轴 −/+ 不影响。
+  切高亮走 `ui_segmented_set_active()`，**不触发回调**，不会误发 goto。页面创建时默认高亮
+  `Level`——启动时不知道 Z 在哪，不冒充停在 Top。分段控件忽略对已选中项的点击，所以高亮
+  必须退回 Level，点动之后再点 `Top` / `Bottom` 才能重新触发到位。
+- **待上机确认**：协议表没写「Z 轴点动停止」（TLV 0x03）单独发能否打断相对位移。长按能停，
+  只证明「速度点动 + 点动停止」组合有效。若单发停止停不住，应请 MCU 让点动停止能停下 Z 轴
+  的任何运动；临时办法是模仿长按，先发一条很慢的速度点动再立即发停止。
+- **上下箭头**：点按每次相对 ±0.3 mm（`kManualZStepMm`，同 Z Click 路径）；按住满 400 ms 转速度点动、松手停，
+  规则见下「Manual · 点动与 S 轴复位」。此前误用 int16/Len=2 帧，MCU 不认 Z
   相对位移（协议要求 Len=4、μm），已改为 `serial_debug_build_z_inc_um`。
+
+#### Manual · 点动与 S 轴复位
+
+Z 上下箭头与 S 轴 −/+ 共用一套事件（`attach_jog_events()` → `on_manual_jog()`）：
+
+- **点按**（松手时没到长按时间）走一步，`DebugJogMode::Click`：Z 0.3 mm（`kManualZStepMm`，
+  按 μm 下发）、S 1 mm（`kManualSStepMm`，协议 int16 只收整数 mm）。挂的是 `SHORT_CLICKED`，
+  **不是 `CLICKED`**——LVGL 长按松手后照样发 `CLICKED`，用它会在停车后再多走一步。
+- **长按**（按住满 400 ms，LVGL 默认值，项目未改）转速度点动，`DebugJogMode::Hold`：
+  Z 取 `kManualZHoldSpeed`、S 取 `kManualSHoldSpeed`（协议 int16，mm/s），当前 Z 2 mm/s、
+  S 30 mm/s。
+- **松手停**：`RELEASED` / `PRESS_LOST` 时发 `send_axis_hold_stop`，且只在长按中
+  （`g_hold_axis >= 0`）才发；点按后补停可能把那一步增量打断。
+- **兜底停车**：`apply_view()` 发现已不在 Manual（切 Tab、进打印态强制回 Job、Manual 被禁用
+  退位）以及 `page_user_monitor_exit()` 都会调 `manual_hold_stop()`，不等松手。
+  `UI_Debug_Axis_Hold_Stop_Ntf` 已入 IPC 可靠补发白名单；开始那条 `UI_Debug_Axis_Jog_Ntf`
+  刻意不入（晚到的「开始走」比丢弃更危险）。
+- **S 轴复位 = 回 Home**（`send_axis_home(S)`，与调试页 S 卡复位钮同路径）。**别改回设零**：
+  MCU 只有 Z 轴有工作零点，S 轴的 `UI_Debug_Axis_SetZero_Ntf` 会被 Glavo 静默丢掉，
+  表现就是「点了没反应」。
 
 #### Manual 页几处待补
 
 - **控制页那条「舱内 PM2.5 过高 → Too poor to open the gate」预警随控制页退役丢了。**
   门限判定本身在后端（`pm25_clean_threshold_`，可被 `cal.csv` 的 `PM2.5Clean` 覆盖），开门
   仍会被拦，只是拦之前用户看不到预警。补救留到后续：在 `OPEN` 按钮上加置灰态 + 一句提示。
+- **Top / Bottom 途中互切可能停错位置。** Glavo 用 MCU 周期上报的缓存 Z 算差值，第一段还没
+  跑完又发一条相对位移，最终位置取决于固件怎么处理运动中的新位移，高亮却已显示在新预置位。
+  协议表里有代码没用上的「Z 轴绝对位置移动」（TLV 0x04，目标为整数 mm，1 与 -10 都能表示），
+  改用它就不必拿缓存 Z 算差值；新的绝对移动能否覆盖进行中的运动，需先与 MCU 确认。
 
 ### 打印结束与结果页
 

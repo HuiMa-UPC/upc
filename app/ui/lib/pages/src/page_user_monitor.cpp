@@ -78,6 +78,14 @@ constexpr uint32_t kLightOnIcon = 0xffffff;
 /* Manual 的 Plate Position 选中档（稿 6307:40977）。 */
 constexpr uint32_t kPlateOn = 0x485dff;
 
+/* Manual 点按步距（mm）。Z 按 μm 下发，可以取小数；S 协议是 int16，只能是整数 mm。 */
+constexpr float kManualZStepMm = 0.3f;
+constexpr float kManualSStepMm = 1.0f;
+
+/* Manual 长按点动速度（协议 int16，mm/s）。 */
+constexpr float kManualZHoldSpeed = 2.0f;
+constexpr float kManualSHoldSpeed = 30.0f;
+
 /* Status 页 PM 色条四段（稿 6338:28064）。 */
 constexpr uint32_t kBarColors[4] = { 0x55d273, 0xf3cd3a, 0xf5803b, 0xea4948 };
 
@@ -187,6 +195,8 @@ bool      g_pending_inner_want_open = true;
 bool      g_inner_door_busy = false;
 /** Manual 吹粉：外门未关时记下意图，关到位后再开清粉。 */
 bool      g_pending_purify = false;
+/** 正在长按点动的轴（DebugAxis 数值），-1 = 没有。 */
+int       g_hold_axis = -1;
 
 /* 底部按钮组 */
 lv_obj_t *g_bottom      = nullptr;
@@ -1335,35 +1345,101 @@ void on_plate_changed(lv_event_t *e)
     if(idx == UI_SEGMENTED_NONE) {
         return;
     }
-    /* Top→Z=1mm，Bottom→Z=-10mm；Level 暂不动作。绝对到位由 Glavo 按当前 Z 算增量。 */
+    /* Top→Z=1mm，Bottom→Z=-10mm，绝对到位由 Glavo 按当前 Z 算增量。
+     * Level 发 Z 点动停止，打断还在跑的 Top/Bottom 位移。点已选中项不发事件，所以只有
+     * 高亮在 Top/Bottom 时才会走到 Level 这一支。 */
     auto &proxy = ui::DebugMsgProxy::instance();
     if(idx == 0) {
         proxy.send_axis_goto(middleware::DebugAxis::Z, 1.0f);
+    } else if(idx == 1) {
+        proxy.send_axis_hold_stop(middleware::DebugAxis::Z);
     } else if(idx == 2) {
         proxy.send_axis_goto(middleware::DebugAxis::Z, -10.0f);
     }
 }
 
-void on_jog(lv_event_t *e)
+/** 停掉长按点动。没在长按就什么都不发：点按之后补停可能把那一步增量打断。 */
+void manual_hold_stop(void)
 {
-    const auto dir = static_cast<int>(
-        reinterpret_cast<intptr_t>(lv_event_get_user_data(e)));
-    /* 每点 1mm；Z 走 μm AXIS_INC（见 Glavo handle_debug_axis_jog）。 */
-    ui::DebugMsgProxy::instance().send_axis_jog(
-        middleware::DebugAxis::Z, middleware::DebugJogMode::Click, dir, 1.0f);
+    if(g_hold_axis < 0) {
+        return;
+    }
+    ui::DebugMsgProxy::instance().send_axis_hold_stop(
+        static_cast<middleware::DebugAxis>(g_hold_axis));
+    g_hold_axis = -1;
 }
 
-void on_s_axis(lv_event_t *e)
+/** Z 点动接手前调用。高亮在 Top/Bottom = 上一条 Z 命令是到位、之后没点动过，那段位移
+ *  可能还在跑：先发点动停止再接手，高亮退回 Level。只有这时才发停止，连续点按不会
+ *  互相打断；已到位时这条停止对静止的轴无害。下标 0/1/2 = Top/Level/Bottom。 */
+void plate_leave_preset(void)
 {
-    const auto dir = static_cast<int>(
-        reinterpret_cast<intptr_t>(lv_event_get_user_data(e)));
-    auto &proxy = ui::DebugMsgProxy::instance();
-    if(dir == 0) {
-        proxy.send_axis_set_zero(middleware::DebugAxis::S);
-    } else {
-        proxy.send_axis_jog(middleware::DebugAxis::S,
-                            middleware::DebugJogMode::Click, dir, 1.0f);
+    const uint8_t cur = ui_segmented_get_active(g_plate_seg);
+    if(cur != 0 && cur != 2) {
+        return;
     }
+    ui::DebugMsgProxy::instance().send_axis_hold_stop(middleware::DebugAxis::Z);
+    ui_segmented_set_active(g_plate_seg, 1);
+}
+
+/**
+ * Manual 点动钮（Z 上下、S −/+）：点按走一步（kManualZStepMm / kManualSStepMm），
+ * 按住满长按时间转速度点动、松手停。
+ * user_data = axis * 4 + (dir + 1)，见 attach_jog_events()。
+ *
+ * 点按挂 SHORT_CLICKED 而不是 CLICKED：LVGL 长按松手后照样发 CLICKED，
+ * 用它会在停车之后再多走一步。
+ */
+void on_manual_jog(lv_event_t *e)
+{
+    const auto ud = reinterpret_cast<intptr_t>(lv_event_get_user_data(e));
+    const auto axis = static_cast<middleware::DebugAxis>(ud / 4);
+    const int dir = static_cast<int>(ud % 4) - 1;
+    auto &proxy = ui::DebugMsgProxy::instance();
+    switch(lv_event_get_code(e)) {
+    case LV_EVENT_SHORT_CLICKED:
+        if(axis == middleware::DebugAxis::Z) {
+            plate_leave_preset();
+        }
+        /* Z 走 μm AXIS_INC（见 Glavo handle_debug_axis_jog），S 走 int16 mm。 */
+        proxy.send_axis_jog(axis, middleware::DebugJogMode::Click, dir,
+                            axis == middleware::DebugAxis::Z ? kManualZStepMm
+                                                             : kManualSStepMm);
+        break;
+    case LV_EVENT_LONG_PRESSED:
+        manual_hold_stop();
+        if(axis == middleware::DebugAxis::Z) {
+            plate_leave_preset();
+        }
+        proxy.send_axis_jog(axis, middleware::DebugJogMode::Hold, dir,
+                            axis == middleware::DebugAxis::Z ? kManualZHoldSpeed
+                                                             : kManualSHoldSpeed);
+        g_hold_axis = static_cast<int>(axis);
+        break;
+    case LV_EVENT_RELEASED:
+    case LV_EVENT_PRESS_LOST:
+        manual_hold_stop();
+        break;
+    default:
+        break;
+    }
+}
+
+/** 给点动钮挂上点按 + 长按四个事件。 */
+void attach_jog_events(lv_obj_t *btn, middleware::DebugAxis axis, int dir)
+{
+    void *ud = reinterpret_cast<void *>(static_cast<intptr_t>(
+        static_cast<int>(axis) * 4 + (dir < 0 ? 0 : 2)));
+    lv_obj_add_event_cb(btn, on_manual_jog, LV_EVENT_SHORT_CLICKED, ud);
+    lv_obj_add_event_cb(btn, on_manual_jog, LV_EVENT_LONG_PRESSED,  ud);
+    lv_obj_add_event_cb(btn, on_manual_jog, LV_EVENT_RELEASED,      ud);
+    lv_obj_add_event_cb(btn, on_manual_jog, LV_EVENT_PRESS_LOST,    ud);
+}
+
+/** S 轴复位 = 回 Home。别改成设零：MCU 只有 Z 轴有工作零点，S 轴的设零会被 Glavo 丢掉。 */
+void on_s_home(lv_event_t * /*e*/)
+{
+    ui::DebugMsgProxy::instance().send_axis_home(middleware::DebugAxis::S);
 }
 
 void on_inner_door(lv_event_t * /*e*/)
@@ -1410,9 +1486,9 @@ lv_obj_t *manual_card_head(lv_obj_t *card, const char *title, lv_obj_t **out_val
     return row;
 }
 
-/** Manual 里那种浅底圆角钮（上/下 jog）。 */
+/** Manual 里那种浅底圆角钮（上/下 jog），点按 / 长按事件见 attach_jog_events()。 */
 lv_obj_t *make_jog_btn(lv_obj_t *parent, const lv_image_dsc_t *const *icon,
-                       lv_event_cb_t cb, int dir)
+                       middleware::DebugAxis axis, int dir)
 {
     lv_obj_t *b = lv_button_create(parent);
     lv_obj_remove_style_all(b);
@@ -1423,15 +1499,15 @@ lv_obj_t *make_jog_btn(lv_obj_t *parent, const lv_image_dsc_t *const *icon,
     lv_obj_set_style_bg_opa(b, 13, 0);
     lv_obj_set_style_bg_opa(b, 40, LV_STATE_PRESSED);
     lv_obj_clear_flag(b, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_add_event_cb(b, cb, LV_EVENT_CLICKED,
-                        reinterpret_cast<void *>(static_cast<intptr_t>(dir)));
+    attach_jog_events(b, axis, dir);
     lv_obj_center(make_icon(b, icon, USER_METRIC_ICON_SZ * 3 / 4, user_light_text));
     return b;
 }
 
-/** Manual 里那种 64 圆钮（S 轴的 −/+/复位、Inner Door 的电源）。 */
+/** Manual 里那种 64 圆钮（S 轴的 −/+/复位、Inner Door 的电源）。
+ *  cb 为空时不挂 CLICKED：S 轴 −/+ 由调用方另挂 attach_jog_events()。 */
 lv_obj_t *make_round_btn(lv_obj_t *parent, const lv_image_dsc_t *const *icon,
-                         lv_event_cb_t cb, int dir)
+                         lv_event_cb_t cb)
 {
     lv_obj_t *b = lv_button_create(parent);
     lv_obj_remove_style_all(b);
@@ -1441,8 +1517,9 @@ lv_obj_t *make_round_btn(lv_obj_t *parent, const lv_image_dsc_t *const *icon,
     lv_obj_set_style_bg_opa(b, 10, 0);
     lv_obj_set_style_bg_opa(b, 30, LV_STATE_PRESSED);
     lv_obj_clear_flag(b, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_add_event_cb(b, cb, LV_EVENT_CLICKED,
-                        reinterpret_cast<void *>(static_cast<intptr_t>(dir)));
+    if(cb) {
+        lv_obj_add_event_cb(b, cb, LV_EVENT_CLICKED, nullptr);
+    }
     lv_obj_center(make_icon(b, icon, USER_METRIC_ICON_SZ * 3 / 4, user_light_text));
     return b;
 }
@@ -1492,7 +1569,7 @@ lv_obj_t *build_view_manual(lv_obj_t *parent)
     pc.font           = user_font_text_sm();
     pc.icon_sz        = USER_METRIC_ICON_SZ;
     pc.icon_gap       = USER_PAD_SM / 4;
-    pc.selected       = 0;
+    pc.selected       = 1;                       /* Level：启动时不知道 Z 在哪，不冒充停在 Top */
     g_plate_seg = ui_segmented_create(c1, &pc);
     lv_obj_add_event_cb(g_plate_seg, on_plate_changed, LV_EVENT_VALUE_CHANGED, nullptr);
 
@@ -1504,8 +1581,8 @@ lv_obj_t *build_view_manual(lv_obj_t *parent)
     lv_obj_set_style_pad_column(jog, USER_PAD_SM / 2, 0);
     lv_obj_set_style_bg_opa(jog, LV_OPA_TRANSP, 0);
     lv_obj_clear_flag(jog, LV_OBJ_FLAG_SCROLLABLE);
-    g_jog_up   = make_jog_btn(jog, ic_chevron_up_set,   on_jog,  1);
-    g_jog_down = make_jog_btn(jog, ic_chevron_down_set, on_jog, -1);
+    g_jog_up   = make_jog_btn(jog, ic_chevron_up_set,   middleware::DebugAxis::Z,  1);
+    g_jog_down = make_jog_btn(jog, ic_chevron_down_set, middleware::DebugAxis::Z, -1);
 
     /* ---- 铺粉刮刀 S 轴（稿 (892,394) 356×154）----
      * 稿上标题写的是「打印平面高度（S轴）」，那是把 Z 卡标题复制过去忘改了；S 轴
@@ -1527,9 +1604,11 @@ lv_obj_t *build_view_manual(lv_obj_t *parent)
                           LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_set_style_bg_opa(srow, LV_OPA_TRANSP, 0);
     lv_obj_clear_flag(srow, LV_OBJ_FLAG_SCROLLABLE);
-    make_round_btn(srow, ic_minus_set, on_s_axis, -1);
-    make_round_btn(srow, ic_plus_set,  on_s_axis,  1);
-    make_round_btn(srow, ic_reset_set, on_s_axis,  0);
+    attach_jog_events(make_round_btn(srow, ic_minus_set, nullptr),
+                      middleware::DebugAxis::S, -1);
+    attach_jog_events(make_round_btn(srow, ic_plus_set, nullptr),
+                      middleware::DebugAxis::S, 1);
+    make_round_btn(srow, ic_reset_set, on_s_home);
 
     /* ---- Inner Door（稿 (892,564) 356×98）---- */
     lv_obj_t *c3 = make_card(v, LV_SIZE_CONTENT);
@@ -1543,7 +1622,7 @@ lv_obj_t *build_view_manual(lv_obj_t *parent)
     lv_obj_set_style_text_color(dl, user_light_text, 0);
     lv_obj_set_style_text_font(dl, user_font_text_sm(), 0);
 
-    g_door_btn = make_round_btn(c3, ic_power_set, on_inner_door, 0);
+    g_door_btn = make_round_btn(c3, ic_power_set, on_inner_door);
     return v;
 }
 
@@ -2029,6 +2108,11 @@ void apply_view(void)
     show(g_view_job,    g_tab == TAB_JOB);
     show(g_view_status, g_tab == TAB_STATUS);
     show(g_view_manual, g_tab == TAB_MANUAL);
+    /* 切 Tab、进打印态强制回 Job、Manual 被禁用退位都走这里：点动钮已经看不见了，
+     * 长按中的轴立刻停，不等松手。 */
+    if(g_tab != TAB_MANUAL) {
+        manual_hold_stop();
+    }
     apply_bottom();
     if(g_tab == TAB_STATUS) {
         status_update();
@@ -2291,6 +2375,7 @@ void page_user_monitor_exit(void)
     g_page_visible = false;
     g_pending_inner_door = false;
     g_pending_purify = false;
+    manual_hold_stop();
     wire_debug_proxy(false);
     close_outer_door_dlg();
     close_purify_door_dlg();

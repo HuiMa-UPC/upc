@@ -737,6 +737,13 @@ inline constexpr bool is_ipc_reliable_msg_type(MsgType type) noexcept
     case MsgType::UI_Print_Terminate_Req:
         return true;
 
+    /* 长按点动的松手停同样是幂等命令：丢一条轴就按速度一直走下去，必须补发；
+     * 晚到最多多停一次。开始那条 UI_Debug_Axis_Jog_Ntf 刻意**不**入表——晚到的
+     * 「开始走」比丢弃更危险，道理同 Pause/Resume。也**不能**进 latest-only：
+     * payload 带轴号，按类型合并会吞掉另一根轴的停止。 */
+    case MsgType::UI_Debug_Axis_Hold_Stop_Ntf:
+        return true;
+
     // 调试氧单点标定：控制类 Req/Rsp，丢一条 UI 会以为没点到
     case MsgType::UI_Debug_O2_Calib_Req:
     case MsgType::GLAVO_Debug_O2_Calib_Rsp:

@@ -256,7 +256,7 @@ scripts/rongsu.sh start   # glavo + rongsu_camera → ui
 | `UI_Mcu_Ota_Start_Req` / `UI_Mcu_Ota_Cancel_Ntf` / `APP_Mcu_Ota_Status_Ntf` | — | UI/MQTT↔Glavo | `McuOtaStatusPayload` | `send_mcu_ota_start` / `send_mcu_ota_cancel` / `register_mcu_ota_status` | Galvo 以太网 OTA（`/userdata/image/galvo`，AB 对规则见 [OTA_IMAGE.md](fs_manifest/OTA_IMAGE.md)）。状态 Glavo 双发 UI 与 MQTT |
 | `UI_Serial_Mcu_Ota_Start_Req` / `UI_Serial_Mcu_Ota_Cancel_Ntf` / `APP_Serial_Mcu_Ota_Status_Ntf` | — | UI/MQTT↔Glavo | `McuOtaStatusPayload` | `send_serial_mcu_ota_start` / `send_serial_mcu_ota_cancel` / `register_serial_mcu_ota_status` | MCU 串口 OTA（`/userdata/image/mcu`，AB 对规则见 [OTA_IMAGE.md](fs_manifest/OTA_IMAGE.md)）。云端落盘后 MQTT 发 Start；状态双发 UI 与 MQTT |
 | `UI_Debug_Axis_Jog_Ntf` | — | UI→Glavo | `DebugAxisJogPayload` | `DebugMsgProxy::send_axis_jog` | **后端待实现** |
-| `UI_Debug_Axis_Hold_Stop_Ntf` | — | UI→Glavo | `DebugAxisPayload` | `send_axis_hold_stop` | 长按松手停 |
+| `UI_Debug_Axis_Hold_Stop_Ntf` | — | UI→Glavo | `DebugAxisPayload` | `send_axis_hold_stop` | 长按松手停。入可靠补发白名单（幂等命令）；开始那条 `UI_Debug_Axis_Jog_Ntf` 不入，也不进 latest-only（payload 带轴号） |
 | `UI_Debug_Axis_SetZero_Ntf` | — | UI→Glavo | `DebugAxisPayload` | `send_axis_set_zero` | Z 工作零点 |
 | `UI_Debug_Axis_Home_Ntf` | — | UI→Glavo | `DebugAxisPayload` | `send_axis_home` | 轴回 Home（Z 0x11 / S 0x10） |
 | `UI_Debug_Galvo_Move_Ntf` | — | 契约预留 | `DebugGalvoMovePayload` | — | 振镜步进；调试页方向键不再发送 |
@@ -579,7 +579,7 @@ rongsu_broker ──listen──► /tmp/upc_broker.sock ◄── rongsu_ui / r
 |------|------|-----|
 | 高频状态流 | 不入表，丢就丢 | `GLAVO_Debug_Sensor_Ntf` |
 | 状态终值 | 入表 + `is_ipc_latest_only_msg_type`（队列只留最新） | `APP_Print_Progress_Ntf` |
-| 幂等命令 | 入表 | `UI_Print_Terminate_Req` |
+| 幂等命令 | 入表 | `UI_Print_Terminate_Req`、`UI_Debug_Axis_Hold_Stop_Ntf` |
 | 成对瞬时状态 | **不入表**，由发起方按返回值回滚 UI | `UI_Print_Pause_Req` / `UI_Print_Resume_Req` |
 
 最后一类要特别注意：Pause/Resume 补发是**有害**的——断连期间攒下的暂停在几秒后补发，会在用户已不想暂停时突然生效，比丢弃更糟。所以 `UiMsgProxy::send_print_pause` / `send_print_resume` 返回 `bool` 且标了 `[[nodiscard]]`，调用方拿到 `false` 必须回滚乐观切换的图标并提示重试（见 `page_user_home.cpp::on_pause_click`）。
