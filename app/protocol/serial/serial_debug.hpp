@@ -47,6 +47,7 @@ int serial_debug_build_axis_jog_stop(uint8_t axis, uint8_t* out, size_t out_size
 /**
  * 轴点击增量移动（相对位置）。axis: 0=Z 1=S 2=D。
  * delta 为有符号 int16（mm，D 为 °），符号即方向。
+ * Z 轴 MCU 只受理 Tlv-Len=4 的相对位移，Z 改用 serial_debug_build_z_inc_um。
  */
 int serial_debug_build_axis_inc(uint8_t axis, int16_t delta,
                                 uint8_t* out, size_t out_size);
@@ -54,7 +55,7 @@ int serial_debug_build_axis_inc(uint8_t axis, int16_t delta,
 /**
  * Z 轴相对步进。TLV 0x02，Value = INT32 LE，单位 μm（协议规定 Tlv-Len=4）。
  * 例：+500 = 上升 0.5mm，-7263 = 下降 7.263mm。
- * 仅校准/测高使用；调试页 Z jog 仍走 INT16 mm 的 axis_inc。
+ * 校准/测高与所有 Z 点击移动（调试页 Move/Test、监控页 Manual）共用。
  */
 int serial_debug_build_z_inc_um(int32_t delta_um, uint8_t* out, size_t out_size);
 

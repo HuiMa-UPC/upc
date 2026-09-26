@@ -53,18 +53,19 @@ struct AxisCfg {
     const char *title;
     const char *unit;        /**< 距离单位（位置显示） */
     const char *step_unit;   /**< 点击移动(增量)输入单位；Z 为 um */
+    float       step_scale;  /**< 点击输入 × step_scale = 契约 value（mm/°）；Z 为 um→mm */
     const char *speed_unit;  /**< 速度单位 */
     bool        has_zero;    /**< Z 轴有"工作零点" */
     bool        rotational;  /**< D 轴用旋转箭头 */
 };
 
 const AxisCfg kAxes[3] = {
-    { DebugAxis::Z, "Print Plane Height (Z)", "mm", "um", "mm/s", true,  false },
-    { DebugAxis::S, "Powder Scraper (S)",     "mm", "mm", "mm/s", false, false },
-    { DebugAxis::D, "Powder Bucket Rod (D)",  "\xC2\xB0", "\xC2\xB0", "\xC2\xB0/s", false, true },
+    { DebugAxis::Z, "Print Plane Height (Z)", "mm", "um", 0.001f, "mm/s", true,  false },
+    { DebugAxis::S, "Powder Scraper (S)",     "mm", "mm", 1.0f,   "mm/s", false, false },
+    { DebugAxis::D, "Powder Bucket Rod (D)",  "\xC2\xB0", "\xC2\xB0", 1.0f, "\xC2\xB0/s", false, true },
 };
 
-/* 协议 INC/JOG 为 int16 整数（mm·°/mm·°·s），步距/速度默认 0 */
+/* 协议 S/D 的 INC 与三轴 JOG 为 int16 整数（mm·°/mm·°·s），Z 的 INC 为 int32 μm；步距/速度默认 0 */
 constexpr float kAxisDefaultStep = 0.0f;
 
 /* 振镜单次步长候选 */
@@ -357,7 +358,7 @@ void on_jog_click(lv_event_t *e)
     jog_decode(lv_event_get_user_data(e), axis, dir, mode);
     ui::DebugMsgProxy::instance().send_axis_jog(
         static_cast<DebugAxis>(axis), DebugJogMode::Click, dir,
-        read_ta_float(g_axis_step[axis]));
+        read_ta_float(g_axis_step[axis]) * kAxes[axis].step_scale);
 }
 
 void on_jog_hold(lv_event_t *e)
