@@ -1278,7 +1278,7 @@ void plate_show_notinserted(void)
     /* 稿 6388:48910 的滑块：轨道 360×94 贴满右列，旋钮 84 的圆角方块（rx20）上下内缩 5。
      * 这三个数正是浅色档的 USER_HOME_SLIDE_H / USER_ACTION_BTN_SZ ——控件的 light 档本身
      * 就是这套稿（深墨实底 user_light_nav_on、圆角 USER_LIGHT_RADIUS、无玻璃高光），
-     * 所以这里只要打开 light_theme，不需要再给 custom_accent。 */
+     * 所以这里只要选 UI_SLIDE_THEME_LIGHT，不需要再给 custom_accent。 */
     ui_slide_unlock_cfg_t slide_cfg = {};
     slide_cfg.hint_text    = "SLIDE TO UNLOCK";   /* 箭头由控件绘制 3 个 chevron */
     slide_cfg.on_unlocked  = on_plate_swipe_open;
@@ -1286,7 +1286,7 @@ void plate_show_notinserted(void)
     slide_cfg.track_w      = plate_right_col_w();
     slide_cfg.track_h      = USER_HOME_SLIDE_H;
     slide_cfg.knob_sz      = USER_ACTION_BTN_SZ;
-    slide_cfg.light_theme  = true;
+    slide_cfg.theme        = UI_SLIDE_THEME_LIGHT;
     slide_cfg.knob_icon    = ui_user_pick_icon(ic_door_panel_set,
                                                USER_ACTION_BTN_SZ * 8 / 21);
     ui_slide_unlock_create(col, &slide_cfg);

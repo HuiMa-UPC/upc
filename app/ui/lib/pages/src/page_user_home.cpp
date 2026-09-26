@@ -676,7 +676,7 @@ lv_obj_t *build_door_floating(lv_obj_t *parent)
     cfg.track_w    = USER_HOME_SLIDE_W;
     cfg.track_h    = USER_HOME_SLIDE_H;
     cfg.knob_sz    = USER_ACTION_BTN_SZ;
-    cfg.light_theme = true;                  /* 待机态是浅色底，见 ui_slide_unlock.hpp */
+    cfg.theme      = UI_SLIDE_THEME_LIGHT;   /* 待机态是浅色底，见 ui_slide_unlock.hpp */
     /* 旋钮里那枚门（稿 6230:89954 的 x 815..836）。上一版浅色稿（6201:85974）画的是
      * 右箭头，新稿换回了门——与监控页 Manual 底部那颗 OPEN 是**逐点相同的同一枚**
      * 图标（只差整体平移），所以共用 ic_door_panel_set，`ic_arrow_right_set` 随之
