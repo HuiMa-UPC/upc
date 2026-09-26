@@ -56,7 +56,8 @@ rongsu_visual
 
 - 舱检算法是 `lib/cabin_detector.*`，仅接紧凑 NV12 并返回单帧结果；`lib/visual_cabin_service.cpp` 管理请求窗口、新帧连续证据、超时和回包。
 - 不使用 RTSP 或 UI 预览作为产品算法输入，不控制机构、舱灯、Z 或打印。
-- 两类算法均须加载有效标定，缺少或格式错误返回 unknown。部署路径及候选样本限制见 [calibration/README.md](calibration/README.md)。
+- 两类算法的同型号候选参数及五张模板已嵌入 `rongsu_visual`，新机无需手工复制舱检 JSON／模板。非空环境变量指定的工程配置优先，其次为已存在的 `/userdata/visual/cabin_*_config.json`，否则使用内置参数。选中的外部配置无效时返回 unknown，不悄悄回退；工程覆盖不会被升级覆盖。部署规则、候选精度和同型号验收限制见 [calibration/README.md](calibration/README.md)。
+- 内置参数随程序及现有应用升级包交付，不写入设备文件系统；检测仍由现有 SOC/UI 业务流程的请求触发。
 - 隔离测试见 [tests/README.md](tests/README.md)，使用独立 Broker 与模拟 Camera，不连接运行中的设备服务。
 
 - 视觉 demo 的检测目标为最大凸四边形（轮廓近似）。

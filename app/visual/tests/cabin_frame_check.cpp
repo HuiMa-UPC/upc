@@ -2,14 +2,25 @@
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
 #include <iostream>
+#include <string>
 #include <vector>
 int main(int argc, char** argv) {
-    if(argc < 4) { std::cerr << "Usage: cabin_frame_check PLATE_CONFIG DOOR_CONFIG IMAGE...\n"; return 2; }
+    const bool bundled = argc > 1 && std::string(argv[1]) == "--bundled";
+    if(argc < (bundled ? 3 : 4)) {
+        std::cerr << "Usage: cabin_frame_check --bundled IMAGE...\n"
+                     "   or: cabin_frame_check PLATE_CONFIG DOOR_CONFIG IMAGE...\n";
+        return 2;
+    }
     cv::setNumThreads(1);
     upc::visual::CabinDetector d; std::string error;
-    if(!d.load_plate_config(argv[1],error)) { std::cerr << error << '\n'; return 1; }
-    if(!d.load_door_config(argv[2],error)) { std::cerr << error << '\n'; return 1; }
-    for(int i=3;i<argc;++i) {
+    if(!(bundled ? d.load_bundled_plate_config(error) : d.load_plate_config(argv[1],error))) {
+        std::cerr << error << '\n'; return 1;
+    }
+    if(!(bundled ? d.load_bundled_door_config(error) : d.load_door_config(argv[2],error))) {
+        std::cerr << error << '\n'; return 1;
+    }
+    if(bundled) std::cout << "Bundled profile: " << upc::visual::cabin_bundled_profile_id() << '\n';
+    for(int i=(bundled ? 2 : 3);i<argc;++i) {
         const cv::Mat bgr=cv::imread(argv[i]);
         if(bgr.empty() || (bgr.cols&1) || (bgr.rows&1)) return 1;
         cv::Mat i420; cv::cvtColor(bgr,i420,cv::COLOR_BGR2YUV_I420);

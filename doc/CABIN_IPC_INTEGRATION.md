@@ -1,17 +1,18 @@
 # 舱检算法 IPC 接入约定（SOC 评审稿）
 
-基于 `gsx` 的 `7c01d22`（协议修复）。本次补齐算法模块、Visual 收发适配与下面六条契约，**不是 SOC 已确认的协议，也不是整机起印流程已接通**。SOC 同事评审后再接发送端。唯一可编译契约是 `common/upc_contract.hpp`；本文解释调用方法。
+临时完整流程分支基于 `gsx` 的 `860e4a1`（合并视觉），继承 `01f27d3` 的算法／Visual IPC 和 SOC 同事新增的 Glavo/UI 起印检查、无板弹窗及复检。另合入内门／基板共用的内置候选参数，操作人员无需单独部署舱检 JSON／模板。测试包后来已部署并进行部分现场场景测试，**代码接入和局部测试不等于整机验收通过**。唯一可编译契约是 `common/upc_contract.hpp`；本文解释调用方法，测试边界见 [PLATE_FULLFLOW_TEST.md](PLATE_FULLFLOW_TEST.md)。
 
 ## 1. 工作边界
 
 - Visual：接指令、从现有 Camera DMA + SHM 取得紧凑 NV12、调用算法、稳定判断、回复、结束本轮。
-- SOC / Glavo：何时检测、灯和机构准备、收到结果后的业务动作。此改动不增加开门、关门、Z 轴、打印、UI 弹窗或传感器融合代码。
+- SOC / Glavo：何时检测、灯和机构准备、收到结果后的业务动作。上述动作由 `860e4a1` 的 SOC/UI 代码实现，算法本身仍不控制机构；本次参数打包不新增机械策略。
 - 没有请求就不跑检测。基板检测返回任意结果后停止；放板期间不自行重检，下一次检测必须由 SOC 发新请求。
 - 内门是独立能力：SOC 可发一次有时限的 `WaitOpen`，Visual 在窗口内持续等稳定近黑，成功或超时后只给一个终态。不是永远运行的状态订阅。
+- 当前 SOC 内门融合实际使用 `Snapshot`，在套件决策点读一次图；没有在门运动过程中自动调用 `WaitOpen`。Visual 支持该模式不代表现有 SOC 已使用它。
 
 ## 2. 六条消息
 
-| MsgType | 数值（新增，待评审） | 方向 | Inline 载荷 |
+| MsgType | 数值（已进入源码） | 方向 | Inline 载荷 |
 |---|---|---|---|
 | `GLAVO_Visual_Cabin_Session_Start_Ntf` | `0x1720` | APP_GLAVO → APP_VISUAL | `VisualCabinSessionPayload`，4 B |
 | `GLAVO_Visual_Cabin_Session_Stop_Ntf` | `0x1721` | APP_GLAVO → APP_VISUAL | 同上，4 B |
@@ -120,7 +121,7 @@ bool end_cabin_session(uint32_t session_id) {
 
 以上只提供可调用的发送函数，省略 SOC 的订阅、定时器和业务状态机。回复订阅必须校验 sender、target、载荷长度、MsgType 和两级 ID；错误／迟到回复丢弃，匹配回复只消费一次。放板完成后若需再检，生成新的会话 ID，再次启动流程；检门时改用门 Req/Rsp 与 `WaitOpen`、相应有限超时。
 
-`publish_async=true` 只说明本地接受发送，不能显示成“检测成功”；任何发送失败都应由 SOC 结束该次等待，不自动进入下一步。实际 SOC 自动发起的位置、英文状态提示、结果处理由 SOC 同事选择并评审。
+`publish_async=true` 只说明本地接受发送，不能显示成“检测成功”；任何发送失败都应由 SOC 结束该次等待，不自动进入下一步。当前调用点在 `GlavoService::run_plate_present_round()`／`read_fully_open_fused()`，放板确认在 `handle_plate_place_confirm_rsp()`；UI 提示与触发流程仍需现场评审。
 
 ## 5. 相对原需求草稿的明确变化
 
@@ -129,19 +130,26 @@ bool end_cabin_session(uint32_t session_id) {
 - Empty Start/Stop 改为 4 B session POD，避免旧 Stop 取消新任务。
 - Req/Rsp 增加 `request_id`，支持一次会话多次显式检测及可靠消息去重。
 - 增加门 `WaitOpen`，符合“收到门检测命令后可等待画面变黑”的逻辑；它不意味着 Visual 控制开门或全时监听。
-- 只实现视觉和通信，不引入原稿中的 Z 动作、打印步骤、UI 开关、无板弹窗与 bit1 融合。它们不是本改动的附带承诺。
-- 只追加六个 MsgType，不照搬其他工作区的 UI／Glavo 修改；原有数值保持。
+- `01f27d3` 当时只实现视觉和通信；后续 `860e4a1` 已加入 SOC 的 Z／门动作、打印步骤、UI 开关、无板弹窗与 bit1 融合。本分支以该完整流程为基线，不合并用户未完成的本地 dtx 功能。
+- Visual 的六个 MsgType 保持不变；SOC 后续在末尾追加八条 UI 开关／放板确认消息，见 `common/upc_contract.hpp` 和 `common/COMMON.md`。本轮不再变更 IPC 数值或载荷。
 
 ## 6. 算法与上线限制（必须一同评审）
 
 - 当前 `QrFound` 是对标定的底座码图形做模板／特征判定，不是二维码 payload 解码；该命名保留协议映射，不应宣传为任意二维码识读器。
-- 基板需对应机器的 ROI、模板和参考分辨率配置；缺失／无效配置必须 Unknown。默认读取 `/userdata/visual/cabin_plate_config.json`，可由 `UPC_CABIN_PLATE_CONFIG` 覆盖。门同样必须有有效标定配置：默认 `/userdata/visual/cabin_door_config.json`，可由 `UPC_CABIN_DOOR_CONFIG` 覆盖；缺失／无效不使用隐式默认阈值猜测，而是 Unknown。候选门配置必须经过实机校准、明确配置／部署后才使用。
+- 门阈值、基板 ROI／参考分辨率及五张模板已经编入 `rongsu_visual`。无工程覆盖的同型号机器自动加载内置候选参数，不需要操作人员逐台管理文件。参数来自 172.17.101.78，仍需跨机效果验收，不是通用自标定。
+- 非空 `UPC_CABIN_PLATE_CONFIG`／`UPC_CABIN_DOOR_CONFIG` 优先；其次使用已存在的 `/userdata/visual/cabin_plate_config.json`／`cabin_door_config.json`；仅没有覆盖时使用内置参数。所选外部文件缺失、损坏或模板不可读则 Unknown，不悄悄回退。已有工程配置不删除、不覆盖，运行时不写出内置文件。
 - 新鲜连续帧与质量门只能降低风险，**不能证明任意遮挡都是基板**。粉尘盖码、工具挡码、门局部遮挡均可能产生误判；已有现场单帧检查出现过半开门被判为有板，不能宣称该风险已解决。SOC 必须在场景恢复可用后发基板请求，量产前必须专门验证这些负样本。
 - 黑画面仅在确认灯正常且相机正常的假设下支持门遮挡判断；相机输出有效但实际故障黑帧等情况仍需现场验证和安全设计。
-- 算法不负责 Z 运动；工作距离变化会影响已有标定，不等于可以不校准。
+- 算法不负责 Z 运动；相机位置、方向、码布局及工作距离变化可能需要工程更新参数，不是每次操作都重新标定。
 - `gsx` 的 UPDF SCM_RIGHTS 头含 `fd_count`，相关 Broker/Camera/Visual/UI/Media 传输版本必须一致。不要把旧 `new-ui` 二进制混入这套运行环境。
 - 集成测试必须使用独立 Broker socket / SHM 与模拟 Camera；不要在生产 Broker 上再注册 APP_GLAVO 或 APP_VISUAL，同 ModuleId 会挤掉正在运行的真实进程。
 
-SOC 评审重点：确认六个消息号未被其它并行开发占用；确认字段与结果映射、WaitOpen 窗口、超时策略、会话去重规则；确认真实场景标定和负样本验收；最后才选择发送端挂载点并进行整机联调。
+SOC 评审重点：核对同版本契约、超时／终止／会话去重；核对实际机构流程与产品意图；确认场景条件和负样本验收后进行整机联调。`Plate Present` 是起印开关，检测有板后会继续后续准备和打印，不能当作无机构动作的单次测试按钮。
 
 本次编译、自动测试以及保留的现场失败样本见 [CABIN_TEST_REPORT.md](CABIN_TEST_REPORT.md)。
+
+## 7. 临时分支与交付
+
+临时分支 `test/plate-fullflow-20260924`，工作目录 `C:\Users\A\upc-plate-test`，历史测试包版本 `V4.2.0.2-plate-test1`。它基于 `gsx/860e4a1`，并非将本地未完成的 dtx 整支合入。包中包含同一源码构建的八进程和内置候选参数，不是完整系统镜像；只用于支持匹配 gsx A/B 应用升级机制的测试机。旧 dtx 固件不可混用。合入 `gsx` 时源码产品版号恢复为原值，正式发布须另定版本；云端下发版本也须与实际包和设备程序一致。
+
+完整流程的软件测试和现场验收是两件事。2026-09-24 的软件测试未连接生产 Broker、未部署或操作机构；后续授权部署和部分现场测试另见 [PLATE_FULLFLOW_TEST.md](PLATE_FULLFLOW_TEST.md)。保存完整验收证据并确认设备状态后，才清理临时工作树和临时分支。

@@ -1,4 +1,4 @@
-# Cabin inspection calibration
+# Cabin inspection profiles (included in the application)
 
 These files are **field-test candidates**, not production acceptance records.
 
@@ -6,16 +6,26 @@ These files are **field-test candidates**, not production acceptance records.
 - `cabin_door_candidate.json` contains near-black NV12 Y thresholds. Limited-range NV12 black has Y near 16. A non-black frame does not prove that the door is closed.
 - The historical partially blocked frame can still appear as no-code to the plate detector. SOC must request plate inspection only after door motion is complete and the work area is visible.
 
-Use the production camera's NV12 path to verify resolution, orientation, exposure and the inspection position before SOC sends requests. Camera movement or a changed inspection position requires recalibration. Z control and readiness belong to SOC. This module does not add UI switches or alter machine-control logic.
+The build embeds the candidate door JSON, plate JSON and all five PNG templates into `rongsu_visual`. A clean same-model installation needs **no cabin JSON/template files in `/userdata` and no operator calibration step**. The embedded profile is versioned with the executable; it follows an application upgrade or A/B rollback without a separate asset copy. This is packaging of the existing candidate, not an automatically calibrated or production-qualified detector.
 
-The Visual process reads `UPC_CABIN_PLATE_CONFIG`, defaulting to `/userdata/visual/cabin_plate_config.json`. Copy a validated configuration **together with its template directory**, preserving their relative paths. Alternatively set the variable to the candidate JSON only for supervised testing. Missing or invalid calibration returns Unknown.
+Use the production camera's NV12 path to verify resolution, orientation, exposure and the inspection position before SOC sends requests. Machines of the same model and camera/base layout can use the same built-in profile; acceptance still needs to cover manufacturing/install variation and abnormal scenes. Camera movement or a changed inspection position can require an engineering profile update, not an operator step before every detection. Z control and readiness belong to SOC. This module does not add UI switches or alter machine-control logic.
 
-`UPC_CABIN_DOOR_CONFIG` points to the door JSON, defaulting to `/userdata/visual/cabin_door_config.json`. Both detectors require explicitly loaded, valid calibration. No built-in thresholds are enabled as a fallback: missing/invalid configuration or a failed reload returns Unknown. Every numeric field in these candidate JSON files is required; `min_medium_markers` must be an integer not exceeding the marker count. Marker ROIs must be inside the scene-quality search ROI and be at least 12 pixels wide/high at the reference resolution.
+## Optional engineering overrides
+
+Each detector selects its profile independently, in this order:
+
+1. A non-empty `UPC_CABIN_PLATE_CONFIG` / `UPC_CABIN_DOOR_CONFIG` environment variable explicitly selects an external file.
+2. Otherwise, an existing `/userdata/visual/cabin_plate_config.json` / `/userdata/visual/cabin_door_config.json` selects the previously deployed engineering override.
+3. Only when neither override is selected, use the embedded candidate profile.
+
+An explicit path that is missing, an unreadable/invalid selected external file, missing external templates, or a failed reload returns Unknown. It does **not** silently switch to the embedded profile. Existing device overrides are not overwritten or deleted by an application upgrade; engineers must track them when comparing results across devices or versions. The default application does not create configuration files in `/userdata`. For an intentional external plate override, deploy the JSON **together with its template directory**, preserving relative paths. Normal operators do not need to manage any of these files.
+
+Both external and embedded profiles go through the same validity checks. Every numeric field in these candidate JSON files is required; `min_medium_markers` must be an integer not exceeding the marker count. Marker ROIs must be inside the scene-quality search ROI and be at least 12 pixels wide/high at the reference resolution.
 
 The plate detector matches calibrated laser-code image templates; it does not decode QR payloads. A single high-confidence marker or enough medium-confidence markers means code visible. Absence requires usable scene quality and all marker confidences below the hidden threshold; temporal confirmation is handled separately. Dust, reflections, tools, partial door obstruction, wrong positioning, or a covered code can still produce a false no-code result. The existing partial-door sample is a known failure, not a passed safety test. SOC must not treat this detector as door-closed feedback or request plate inspection during door motion.
 
 Input buffers must be compact NV12 with even dimensions, at least 160 x 120, at most 8192 on either axis, and at most 16 megapixels total. Padded/strided buffers must be copied compactly by the caller. At most 32 templates and 16 megapixels of retained template data are allowed. Calibration files/assets are trusted local deployment inputs, not uploads from untrusted users. Frame sequence freshness, exposure warmup, cancellation, and request timeout are the service's responsibility, not the single-frame detector's.
 
-`cabin_frame_check PLATE_CONFIG DOOR_CONFIG IMAGE...` converts offline images to compact NV12 and prints both results. This is a diagnostic harness, not real camera/IPC or hardware acceptance. Synthetic unit tests validate input handling and evidence logic only. Calibrate and accept with normal/abnormal production NV12 samples before enabling machine-side actions.
+`cabin_frame_check --bundled IMAGE...` converts offline images to compact NV12 and prints both results using compiled-in data only. The explicit-file mode `cabin_frame_check PLATE_CONFIG DOOR_CONFIG IMAGE...` remains available. This is a diagnostic harness, not real camera/IPC or hardware acceptance. Synthetic unit tests validate input handling and evidence logic only. Validate with normal/abnormal production NV12 samples before enabling machine-side actions.
 
-No build step copies these candidates into the device's active calibration or enables detection. Deployment and actual sensor-fault/door-motion tests remain field operations.
+The embedded default is available after installing the matching application version, but detection still starts only on an IPC request; the existing Glavo/UI business flow owns when to send requests and act on the result. The `gsx` application OTA package already carries `rongsu_visual`, so its existing flat archive/manifest and installer need no additional calibration entries. Do not install a Visual-only binary into a machine with an incompatible IPC transport. Deployment and actual sensor-fault/door-motion tests remain field operations.

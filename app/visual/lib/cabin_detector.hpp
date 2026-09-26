@@ -24,6 +24,10 @@ struct CabinDetection {
     std::string reason = "unknown";
 };
 
+// Versioned factory profile embedded at build time, not a universal calibration.
+const char* cabin_bundled_profile_id();
+const char* cabin_bundled_profile_sha256();
+
 /** Single-frame compact-NV12 detectors. No motion, IPC, Z, or UI ownership. */
 class CabinDetector {
 public:
@@ -35,12 +39,16 @@ public:
     // invalidates the respective detector instead of retaining stale settings.
     bool load_plate_config(const std::string& path, std::string& error);
     bool load_door_config(const std::string& path, std::string& error);
+    bool load_bundled_plate_config(std::string& error);
+    bool load_bundled_door_config(std::string& error);
     CabinDetection door(const uint8_t* nv12, size_t bytes, uint32_t width,
                         uint32_t height, uint8_t led_mask) const;
     CabinDetection plate(const uint8_t* nv12, size_t bytes, uint32_t width,
                          uint32_t height, uint8_t led_mask) const;
 private:
     struct Impl;
+    bool load_plate_source(const std::string& source, bool bundled, std::string& error);
+    bool load_door_source(const std::string& source, bool bundled, std::string& error);
     std::unique_ptr<Impl> impl_;
     bool door_calibrated_ = false;
     double door_max_mean_ = 24, door_max_p95_ = 32, door_dark_threshold_ = 40,
