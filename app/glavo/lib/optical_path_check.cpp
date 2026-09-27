@@ -40,6 +40,9 @@ constexpr uint32_t kOpticalNoFrameWaitMs = 8000;
  */
 constexpr auto kPointReplyGrace = std::chrono::milliseconds(700);
 
+/** no_frame 后拆旧 peer、再起新 generation 前的控制面余量。 */
+constexpr auto kStreamRebuildSettle = std::chrono::milliseconds(100);
+
 } // namespace
 
 OpticalPathCheck::~OpticalPathCheck()
@@ -245,6 +248,7 @@ void OpticalPathCheck::run(GalvoMotionCalibration cal, uint32_t generation)
     }
 
     const auto point_count = static_cast<uint8_t>(kGalvoTestPoints.size());
+    bool stream_rebuild_attempted = false;
     for(uint8_t i = 0; ok && i < point_count; ++i) {
         if(round_cancelled(generation)) {
             ok = false;
@@ -276,7 +280,29 @@ void OpticalPathCheck::run(GalvoMotionCalibration cal, uint32_t generation)
             break;
         }
 
-        const PointOutcome outcome = wait_point(i, generation);
+        PointOutcome outcome = wait_point(i, generation);
+        if(outcome == PointOutcome::NoFrame && !stream_rebuild_attempted &&
+           publish_session_) {
+            stream_rebuild_attempted = true;
+            UPC_LOG_GLAVO_SERVICE(Warn,
+                "optical path no_frame point=%u: rebuild camera stream once",
+                static_cast<unsigned>(i));
+            publish_session_(false);
+            if(sleep_interruptible(kStreamRebuildSettle, generation)) {
+                outcome = PointOutcome::Aborted;
+            } else {
+                publish_session_(true);
+                if(sleep_interruptible(kStreamRebuildSettle, generation)) {
+                    outcome = PointOutcome::Aborted;
+                } else {
+                    outcome = wait_point(i, generation);
+                    UPC_LOG_GLAVO_SERVICE(Warn,
+                        "optical path retry after stream rebuild point=%u outcome=%u",
+                        static_cast<unsigned>(i),
+                        static_cast<unsigned>(outcome));
+                }
+            }
+        }
         if(outcome == PointOutcome::Passed) {
             publish_progress(i, middleware::OpticalPathPointState::Passed);
             continue;

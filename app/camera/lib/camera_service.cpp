@@ -23,6 +23,7 @@ namespace {
 constexpr const char* kUiShmName = CAMERA_SHM_NAME_DEFAULT;
 constexpr const char* kVisualShmName = "/upc_camera_preview_visual";
 constexpr const char* kMediaShmName = "/upc_camera_preview_media";
+constexpr const char* kForceRecreateStreamToken = "__recreate_stream__";
 
 /**
  * 在飞窗口耗尽时，等待落后消费者归还槽位的上限（帧周期个数）。
@@ -61,6 +62,18 @@ uint64_t monotonic_us()
         std::chrono::duration_cast<std::chrono::microseconds>(
             clock::now().time_since_epoch())
             .count());
+}
+
+bool request_forces_peer_recreate(const middleware::Message& msg)
+{
+    if(msg.payload.type != middleware::MsgPayload::Type::Inline ||
+       msg.payload.length < sizeof(middleware::CameraStreamStartReqPayload)) {
+        return false;
+    }
+    middleware::CameraStreamStartReqPayload req{};
+    std::memcpy(&req, msg.payload.data.bytes.data(), sizeof(req));
+    req.video_name[sizeof(req.video_name) - 1] = '\0';
+    return std::strcmp(req.video_name, kForceRecreateStreamToken) == 0;
 }
 
 const char* env_or_default(const char* name, const char* fallback)
@@ -224,13 +237,12 @@ void CameraService::handle_stream_start(const middleware::Message& msg)
             dma_source_.capture_stride_aligned() ? 1 : 0);
     }
 
+    std::string actual_shm_name = kUiShmName;
     const bool ok = ensure_stream_peer(
-        msg, kUiShmName, middleware::MsgType::APP_Camera_Stream_Start_Rsp);
-    if(!ok) {
-        send_stream_start_rsp(msg, false);
-    } else {
-        send_stream_start_rsp(msg, true);
-    }
+        msg, kUiShmName, middleware::MsgType::APP_Camera_Stream_Start_Rsp,
+        false, actual_shm_name);
+    send_stream_start_rsp_with_type(msg, ok,
+        middleware::MsgType::APP_Camera_Stream_Start_Rsp, actual_shm_name.c_str());
 }
 
 void CameraService::handle_visual_stream_start(const middleware::Message& msg)
@@ -256,11 +268,14 @@ void CameraService::handle_visual_stream_start(const middleware::Message& msg)
             dma_source_.capture_stride_aligned() ? 1 : 0);
     }
 
+    std::string actual_shm_name = kVisualShmName;
+    const bool force_recreate = request_forces_peer_recreate(msg);
     const bool ok = ensure_stream_peer(
-        msg, kVisualShmName, middleware::MsgType::APP_Visual_Camera_Stream_Start_Rsp);
+        msg, kVisualShmName, middleware::MsgType::APP_Visual_Camera_Stream_Start_Rsp,
+        force_recreate, actual_shm_name);
     send_stream_start_rsp_with_type(
         msg, ok, middleware::MsgType::APP_Visual_Camera_Stream_Start_Rsp,
-        kVisualShmName);
+        actual_shm_name.c_str());
 }
 
 void CameraService::handle_stream_stop(const middleware::Message& msg)
@@ -309,11 +324,13 @@ void CameraService::handle_media_stream_start(const middleware::Message& msg)
             dma_source_.capture_stride_aligned() ? 1 : 0);
     }
 
+    std::string actual_shm_name = kMediaShmName;
     const bool ok = ensure_stream_peer(
-        msg, kMediaShmName, middleware::MsgType::APP_Media_Camera_Stream_Start_Rsp);
+        msg, kMediaShmName, middleware::MsgType::APP_Media_Camera_Stream_Start_Rsp,
+        false, actual_shm_name);
     send_stream_start_rsp_with_type(
         msg, ok, middleware::MsgType::APP_Media_Camera_Stream_Start_Rsp,
-        kMediaShmName);
+        actual_shm_name.c_str());
 }
 
 void CameraService::handle_media_stream_stop(const middleware::Message& msg)
@@ -381,11 +398,29 @@ void CameraService::stop_streaming()
     capture_.close();
 }
 
-bool CameraService::ensure_stream_peer(const middleware::Message& req,
-                                       const char* shm_name,
-                                       middleware::MsgType rsp_type)
+std::string CameraService::next_stream_shm_name(const char* shm_name_base)
 {
-    if(!shm_name || !shm_name[0]) {
+    char name[64]{};
+    const unsigned long long generation =
+        static_cast<unsigned long long>(++stream_shm_generation_);
+    const int written = std::snprintf(
+        name, sizeof(name), "%s_%ld_g%llu", shm_name_base,
+        static_cast<long>(::getpid()), generation);
+    if(written <= 0 || static_cast<size_t>(written) >= sizeof(name)) {
+        UPC_LOG_CAMERA_SERVICE(Error, "peer shm generated name too long base=%s",
+                               shm_name_base ? shm_name_base : "?");
+        return {};
+    }
+    return name;
+}
+
+bool CameraService::ensure_stream_peer(const middleware::Message& req,
+                                       const char* shm_name_base,
+                                       middleware::MsgType rsp_type,
+                                       bool force_recreate,
+                                       std::string& actual_shm_name)
+{
+    if(!shm_name_base || !shm_name_base[0]) {
         return false;
     }
     const uint32_t key = static_cast<uint32_t>(req.sender_id);
@@ -393,49 +428,27 @@ bool CameraService::ensure_stream_peer(const middleware::Message& req,
     auto it = stream_peers_.find(key);
     if(it != stream_peers_.end() && it->second) {
         auto& peer = *it->second;
-        /*
-         * peer 仍在且环仍挂着：复用（UI 正常重入 / Visual 二次 Start）。
-         * 环已死或不符：就地 destroy+create，避免「Rsp ok 但 shm_open ENOENT」。
-         * UI 失败恢复路径会先 Stop 再 Start，多数情况走新建分支。
-         */
-        if(peer.producer.is_open() && peer.shm_name == shm_name) {
+        /* 重入只复用同一代；重建必须换名称，旧会话稍后析构也只会 unlink 旧代。 */
+        if(!force_recreate && peer.producer.is_open() &&
+           peer.shm_name_base == shm_name_base) {
             peer.rsp_type = rsp_type;
+            actual_shm_name = peer.shm_name;
             return true;
         }
         peer.active.store(false, std::memory_order_release);
-        peer.producer.destroy();
-        peer.peer_id = req.sender_id;
-        peer.rsp_type = rsp_type;
-        peer.shm_name = shm_name;
-        const upc_ipc::IpcShmError err = peer.producer.create(
-            peer.shm_name.c_str(),
-            stream_width_,
-            stream_height_,
-            dma_source_.dma_stride_y(),
-            upc_ipc::kDmaFrameFormatNv12,
-            CAMERA_SHM_SLOT_COUNT);
-        if(err != upc_ipc::IpcShmError::OK) {
-            UPC_LOG_CAMERA_SERVICE(Error,
-                "peer shm refresh fail type=%u sender=%u name=%s err=%d",
-                static_cast<unsigned>(rsp_type),
-                key,
-                peer.shm_name.c_str(),
-                static_cast<int>(err));
-            stream_peers_.erase(it);
-            return false;
-        }
-        peer.active.store(true, std::memory_order_release);
-        UPC_LOG_CAMERA_SERVICE(Info,
-            "peer shm refreshed sender=%u name=%s %ux%u stride_y=%u slots=%u",
-            key, peer.shm_name.c_str(), stream_width_, stream_height_,
-            dma_source_.dma_stride_y(), CAMERA_SHM_SLOT_COUNT);
-        return true;
     }
 
     auto peer = std::make_shared<StreamPeerSession>();
     peer->peer_id = req.sender_id;
     peer->rsp_type = rsp_type;
-    peer->shm_name = shm_name;
+    peer->shm_name_base = shm_name_base;
+    peer->shm_name = next_stream_shm_name(shm_name_base);
+    if(peer->shm_name.empty()) {
+        if(it != stream_peers_.end()) {
+            stream_peers_.erase(it);
+        }
+        return false;
+    }
     const upc_ipc::IpcShmError err = peer->producer.create(
         peer->shm_name.c_str(),
         stream_width_,
@@ -445,17 +458,22 @@ bool CameraService::ensure_stream_peer(const middleware::Message& req,
         CAMERA_SHM_SLOT_COUNT);
     if(err != upc_ipc::IpcShmError::OK) {
         UPC_LOG_CAMERA_SERVICE(Error,
-            "peer shm create fail type=%u sender=%u name=%s err=%d",
+            "peer shm generation create fail type=%u sender=%u name=%s err=%d",
             static_cast<unsigned>(rsp_type),
             key,
             peer->shm_name.c_str(),
             static_cast<int>(err));
+        if(it != stream_peers_.end()) {
+            stream_peers_.erase(it);
+        }
         return false;
     }
     stream_peers_[key] = peer;
+    actual_shm_name = peer->shm_name;
     UPC_LOG_CAMERA_SERVICE(Info,
-        "peer shm ready sender=%u name=%s %ux%u stride_y=%u slots=%u",
-        key, peer->shm_name.c_str(), stream_width_, stream_height_,
+        "peer shm generation ready sender=%u name=%s force=%d %ux%u stride_y=%u slots=%u",
+        key, peer->shm_name.c_str(), force_recreate ? 1 : 0,
+        stream_width_, stream_height_,
         dma_source_.dma_stride_y(), CAMERA_SHM_SLOT_COUNT);
     return true;
 }
@@ -983,11 +1001,23 @@ bool CameraService::restart_capture_keep_peers()
             if(!kv.second) {
                 continue;
             }
-            auto& peer = *kv.second;
+            auto peer = kv.second;
             if(peer_shm_layout_changed) {
-                peer.producer.destroy();
-                const upc_ipc::IpcShmError err = peer.producer.create(
-                    peer.shm_name.c_str(),
+                peer->active.store(false, std::memory_order_release);
+                auto replacement = std::make_shared<StreamPeerSession>();
+                replacement->peer_id = peer->peer_id;
+                replacement->rsp_type = peer->rsp_type;
+                replacement->shm_name_base = peer->shm_name_base;
+                replacement->shm_name = next_stream_shm_name(
+                    replacement->shm_name_base.c_str());
+                if(replacement->shm_name.empty()) {
+                    UPC_LOG_CAMERA_SERVICE(Error,
+                        "stream watchdog: peer shm name generation failed sender=%u",
+                        kv.first);
+                    continue;
+                }
+                const upc_ipc::IpcShmError err = replacement->producer.create(
+                    replacement->shm_name.c_str(),
                     stream_width_,
                     stream_height_,
                     new_stride_y,
@@ -996,12 +1026,18 @@ bool CameraService::restart_capture_keep_peers()
                 if(err != upc_ipc::IpcShmError::OK) {
                     UPC_LOG_CAMERA_SERVICE(Error,
                         "stream watchdog: peer shm recreate fail sender=%u name=%s err=%d",
-                        kv.first, peer.shm_name.c_str(), static_cast<int>(err));
+                        kv.first, replacement->shm_name.c_str(),
+                        static_cast<int>(err));
                     continue;
                 }
+                kv.second = replacement;
+                peer = replacement;
+                UPC_LOG_CAMERA_SERVICE(Info,
+                    "stream watchdog: peer shm generation replaced sender=%u name=%s",
+                    kv.first, peer->shm_name.c_str());
             }
             peers.push_back(PeerResync{
-                peer.peer_id, peer.rsp_type, peer.shm_name});
+                peer->peer_id, peer->rsp_type, peer->shm_name});
         }
     }
 

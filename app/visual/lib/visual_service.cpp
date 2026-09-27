@@ -33,6 +33,8 @@ namespace {
 
 /* 起流重试间隔（ms）：避免 Camera 未就绪时高频打消息。 */
 constexpr uint64_t kStartRetryMs = 1000;
+/* 强制重建请求通过 CameraStreamStartReqPayload 的内部标记传递。 */
+constexpr const char* kForceRecreateStreamToken = "__recreate_stream__";
 /**
  * 光路单点：先等快照就绪，再开 timeout_ms 的红点判定。
  * 这段不计入「没找到红点」——流还没稳住时空等 3 秒会把好光路误判成异常。
@@ -336,6 +338,8 @@ void VisualService::release_stream_if_idle(const char* reason)
          * 都已清掉，但 Camera 侧 peer 还在。漏掉它就不会发 Stop。 */
         had_activity = stream_up_ || start_req_sent_ || camera_peer_requested_;
         start_req_sent_ = false;
+        stream_rebuild_pending_ = false;
+        stream_rebuild_due_ms_ = 0;
     }
 
     if(had_activity) {
@@ -430,13 +434,21 @@ void VisualService::subscribe_messages()
 void VisualService::send_stream_start_req()
 {
     const uint64_t now = monotonic_ms();
+    bool force_recreate = false;
     {
         std::lock_guard<std::mutex> lock(state_mtx_);
         /* 首层检测与光路检测共用这一路流：任一会话激活就该起流。 */
         if(!any_session_active_locked() || stream_up_) {
             return;
         }
-        if(start_req_sent_ && now - last_start_req_ms_ < kStartRetryMs) {
+        if(stream_rebuild_pending_) {
+            if(now < stream_rebuild_due_ms_) {
+                return;
+            }
+            stream_rebuild_pending_ = false;
+            stream_rebuild_due_ms_ = 0;
+            force_recreate = true;
+        } else if(start_req_sent_ && now - last_start_req_ms_ < kStartRetryMs) {
             return;
         }
         start_req_sent_ = true;
@@ -447,11 +459,23 @@ void VisualService::send_stream_start_req()
         middleware::MsgType::VISUAL_Camera_Stream_Start_Req,
         middleware::ModuleId::APP_VISUAL,
         middleware::ModuleId::APP_CAMERA);
+    if(force_recreate) {
+        middleware::CameraStreamStartReqPayload req{};
+        std::snprintf(req.video_name, sizeof(req.video_name), "%s",
+                      kForceRecreateStreamToken);
+        msg.payload = middleware::MsgPayload::from_bytes(
+            reinterpret_cast<const uint8_t*>(&req), sizeof(req));
+    }
     if(!middleware::MsgPort::instance().publish_async(msg)) {
         std::lock_guard<std::mutex> lock(state_mtx_);
         start_req_sent_ = false;
+        if(force_recreate) {
+            stream_rebuild_pending_ = true;
+            stream_rebuild_due_ms_ = now + kStartRetryMs;
+        }
         UPC_LOG_VISUAL_SERVICE(Warn,
-            "first layer camera stream start publish failed");
+            "visual camera stream start publish failed force=%d",
+            force_recreate ? 1 : 0);
         return;
     }
     std::lock_guard<std::mutex> lock(state_mtx_);
@@ -1126,7 +1150,37 @@ void VisualService::note_stream_attach_failed(const char* why)
                            why ? why : "?");
     std::lock_guard<std::mutex> lock(state_mtx_);
     stream_up_ = false;
-    start_req_sent_ = false;
+    /* 保留 sent 标志，让 tick 服从 kStartRetryMs，禁止约 6ms 的空转重发。 */
+    start_req_sent_ = true;
+    last_start_req_ms_ = monotonic_ms();
+}
+
+void VisualService::request_camera_stream_rebuild(const char* reason,
+                                                  uint64_t retry_delay_ms)
+{
+    const uint64_t now = monotonic_ms();
+    {
+        std::lock_guard<std::mutex> lock(state_mtx_);
+        if(!any_session_active_locked()) {
+            return;
+        }
+        stream_up_ = false;
+        start_req_sent_ = true;
+        last_start_req_ms_ = now;
+        stream_rebuild_pending_ = true;
+        stream_rebuild_due_ms_ = now + retry_delay_ms;
+    }
+
+    stop_worker();
+    unmap_dma_views();
+    consumer_.close();
+    close_dma_fds(dma_fds_);
+    clear_latest_snapshot();
+    send_stream_stop_req();
+    UPC_LOG_VISUAL_SERVICE(Warn,
+        "visual camera stream rebuild requested reason=%s retry_ms=%llu",
+        reason ? reason : "?",
+        static_cast<unsigned long long>(retry_delay_ms));
 }
 
 bool VisualService::stream_is_serving()
@@ -1249,9 +1303,13 @@ void VisualService::on_stream_start_rsp(const middleware::Message& msg)
     consumer_.close();
     close_dma_fds(dma_fds_);
 
-    if(consumer_.open(info.shm_name) != upc_ipc::IpcShmError::OK) {
+    const upc_ipc::IpcShmError open_err = consumer_.open(info.shm_name);
+    if(open_err != upc_ipc::IpcShmError::OK) {
         close_dma_fds(fds);
-        note_stream_attach_failed("open shm failed");
+        UPC_LOG_VISUAL_SERVICE(Error,
+            "visual stream attach failed: open shm failed name=%s err=%d",
+            info.shm_name, static_cast<int>(open_err));
+        request_camera_stream_rebuild("open_shm_failed", kStartRetryMs);
         return;
     }
 
@@ -1262,6 +1320,8 @@ void VisualService::on_stream_start_rsp(const middleware::Message& msg)
         start_req_sent_ = false;
         pending_start_rsp_ = info;
         pending_start_rsp_valid_ = true;
+        stream_rebuild_pending_ = false;
+        stream_rebuild_due_ms_ = 0;
     }
     /* 起流成功后拉起后台取帧线程。 */
     stop_worker_.store(false);
