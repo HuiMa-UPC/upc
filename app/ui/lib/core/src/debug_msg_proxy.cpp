@@ -205,6 +205,15 @@ void DebugMsgProxy::init()
         }));
 
     subs_.push_back(bus.subscribe(
+        middleware::MsgType::GLAVO_Debug_Plate_Work_Z_Ntf, middleware::ModuleId::UI,
+        [this](const middleware::Message& msg) {
+            middleware::DebugPlateWorkZPayload p{};
+            if(plate_work_z_cb_ && read_inline_pod(msg, p)) {
+                plate_work_z_cb_(p.target_mm);
+            }
+        }));
+
+    subs_.push_back(bus.subscribe(
         middleware::MsgType::GLAVO_Debug_Hold_Prep_Z_Ntf, middleware::ModuleId::UI,
         [this](const middleware::Message& msg) {
             middleware::DebugOnOffPayload p{};
@@ -725,6 +734,23 @@ void DebugMsgProxy::send_plate_height_adj_set(bool on)
 void DebugMsgProxy::request_plate_height_adj_state()
 {
     publish_empty(middleware::MsgType::UI_Debug_PlateHeight_Adj_Get_Ntf);
+}
+
+void DebugMsgProxy::send_plate_work_z_set(float target_mm)
+{
+    middleware::DebugPlateWorkZPayload p{};
+    p.target_mm = target_mm;
+    publish_pod(middleware::MsgType::UI_Debug_Plate_Work_Z_Set_Ntf, p);
+}
+
+void DebugMsgProxy::request_plate_work_z_state()
+{
+    publish_empty(middleware::MsgType::UI_Debug_Plate_Work_Z_Get_Ntf);
+}
+
+void DebugMsgProxy::register_plate_work_z(DebugPlateWorkZCb cb)
+{
+    plate_work_z_cb_ = std::move(cb);
 }
 
 void DebugMsgProxy::send_hold_prep_z_set(bool on)

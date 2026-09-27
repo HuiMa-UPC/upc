@@ -284,6 +284,9 @@ const char* upc_msg_type_name(MsgType type) {
         case MsgType::UI_Debug_Hold_Prep_Z_Set_Ntf: return "UI_Debug_Hold_Prep_Z_Set_Ntf";
         case MsgType::UI_Debug_Hold_Prep_Z_Get_Ntf: return "UI_Debug_Hold_Prep_Z_Get_Ntf";
         case MsgType::GLAVO_Debug_Hold_Prep_Z_Ntf: return "GLAVO_Debug_Hold_Prep_Z_Ntf";
+        case MsgType::UI_Debug_Plate_Work_Z_Set_Ntf: return "UI_Debug_Plate_Work_Z_Set_Ntf";
+        case MsgType::UI_Debug_Plate_Work_Z_Get_Ntf: return "UI_Debug_Plate_Work_Z_Get_Ntf";
+        case MsgType::GLAVO_Debug_Plate_Work_Z_Ntf: return "GLAVO_Debug_Plate_Work_Z_Ntf";
         default: return "Msg";
     }
 }

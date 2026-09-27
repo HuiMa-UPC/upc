@@ -39,6 +39,7 @@ using DebugO2CalibCb =
 using DebugFirstLayerVisualCheckCb = std::function<void(bool)>;
 using DebugOpticalPathCheckCb = std::function<void(bool)>;
 using DebugPlateHeightAdjCb = std::function<void(bool)>;
+using DebugPlateWorkZCb = std::function<void(float)>;
 using DebugHoldPrepZCb = std::function<void(bool)>;
 using DebugInnerDoorOcclusionCb = std::function<void(bool)>;
 using DebugPlatePresentCb = std::function<void(bool)>;
@@ -126,6 +127,10 @@ public:
     void request_optical_path_check_state();
     void send_plate_height_adj_set(bool on);
     void request_plate_height_adj_state();
+    /** 测高收到约 1mm 后的目标高度。默认 1 不额外移动。 */
+    void send_plate_work_z_set(float target_mm);
+    void request_plate_work_z_state();
+    void register_plate_work_z(DebugPlateWorkZCb cb);
     /** on=1：打印准备不改 Z（默认关）。基板测高仍动 Z。 */
     void send_hold_prep_z_set(bool on);
     void request_hold_prep_z_state();
@@ -272,6 +277,7 @@ private:
     DebugFirstLayerVisualCheckCb first_layer_visual_check_cb_;
     DebugOpticalPathCheckCb optical_path_check_cb_;
     DebugPlateHeightAdjCb plate_height_adj_cb_;
+    DebugPlateWorkZCb plate_work_z_cb_;
     DebugInnerDoorOcclusionCb inner_door_occlusion_cb_;
     DebugPlatePresentCb plate_present_cb_;
     /** 设置页 Advanced Print，与上面的调试页回调并列，互不覆盖。 */

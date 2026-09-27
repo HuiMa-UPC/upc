@@ -15,6 +15,7 @@
 
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <string>
 
@@ -41,6 +42,7 @@
  *   - 软件版本号迁至 About 子页。
  *   - Display & Sound：LCD 背光滑条（sysfs `/sys/class/backlight`，1~100%）。
  *   - Advanced Print：打印前门控，默认开，与调试页同一套 Glavo 开关；
+ *     Calibration 内的 Work Height 是测高收到约 1mm 后再向上补的目标高度；
  *     Height Calibration 的 Start 与调试页 Laser 卡相同。
  *   - 子导航图标暂用 LV_SYMBOL 占位，待 SVG 资源到位再替换。
  *   - 软件版本 UPC_SW_VERSION：根 CMakeLists.txt 的 UPC_PRODUCT_VERSION。
@@ -362,6 +364,7 @@ lv_obj_t *g_gate_height = nullptr;
 lv_obj_t *g_gate_o2 = nullptr;
 lv_obj_t *g_gate_hold_z = nullptr;
 lv_obj_t *g_height_calib_lbl = nullptr;
+lv_obj_t *g_plate_work_z_ta = nullptr;
 /** 回读改开关时挡住 VALUE_CHANGED，避免再发一帧 Set。 */
 bool g_gate_applying = false;
 
@@ -1981,6 +1984,39 @@ void clear_print_gate_observers(void)
 {
     ui::DebugMsgProxy::instance().set_settings_print_gate_observers(
         {}, {}, {}, {}, {}, {}, {}, {});
+    ui::DebugMsgProxy::instance().register_plate_work_z(nullptr);
+}
+
+void apply_plate_work_z_text(float mm)
+{
+    if(!g_plate_work_z_ta || lv_obj_has_state(g_plate_work_z_ta, LV_STATE_FOCUSED)) {
+        return;
+    }
+    char buf[16];
+    std::snprintf(buf, sizeof(buf), "%.2f", static_cast<double>(mm));
+    lv_textarea_set_text(g_plate_work_z_ta, buf);
+}
+
+void send_plate_work_z_from_ta(void)
+{
+    if(!g_plate_work_z_ta) {
+        return;
+    }
+    const char *s = lv_textarea_get_text(g_plate_work_z_ta);
+    if(!s || s[0] == '\0') {
+        return;
+    }
+    char *end = nullptr;
+    const float v = std::strtof(s, &end);
+    if(end == s) {
+        return;
+    }
+    ui::DebugMsgProxy::instance().send_plate_work_z_set(v);
+}
+
+void on_plate_work_z_ready(lv_event_t * /*e*/)
+{
+    send_plate_work_z_from_ta();
 }
 
 void bind_print_gate_observers(void)
@@ -2011,6 +2047,7 @@ void bind_print_gate_observers(void)
             lv_label_set_text(g_height_calib_lbl, buf);
         },
         [](bool on) { set_gate_switch(g_gate_hold_z, on); });
+    ui::DebugMsgProxy::instance().register_plate_work_z(apply_plate_work_z_text);
 }
 
 void request_print_gate_state(void)
@@ -2023,6 +2060,7 @@ void request_print_gate_state(void)
     proxy.request_plate_height_adj_state();
     proxy.request_skip_o2_gate_state();
     proxy.request_hold_prep_z_state();
+    proxy.request_plate_work_z_state();
 }
 
 void on_print_gate_changed(lv_event_t *e)
@@ -2096,6 +2134,7 @@ void build_print_detail(lv_obj_t *parent)
     g_gate_outer = g_gate_inner = g_gate_plate = nullptr;
     g_gate_optical = g_gate_height = g_gate_o2 = g_gate_hold_z = nullptr;
     g_height_calib_lbl = nullptr;
+    g_plate_work_z_ta = nullptr;
 
     lv_obj_add_flag(parent, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_scroll_dir(parent, LV_DIR_VER);
@@ -2136,6 +2175,40 @@ void build_print_detail(lv_obj_t *parent)
     lv_obj_set_style_bg_opa(sec2, LV_OPA_TRANSP, 0);
     lv_obj_clear_flag(sec2, LV_OBJ_FLAG_SCROLLABLE);
     make_caption(sec2, "Calibration");
+
+    /* Calibration 内：测高收到约 1mm 之后的目标高度。填 3 则再向上 2mm。 */
+    lv_obj_t *zcard = lv_obj_create(sec2);
+    lv_obj_remove_style_all(zcard);
+    lv_obj_set_width(zcard, LV_PCT(100));
+    lv_obj_set_height(zcard, LV_SIZE_CONTENT);
+    apply_card_style(zcard);
+    lv_obj_set_flex_flow(zcard, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(zcard, LV_FLEX_ALIGN_SPACE_BETWEEN,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_clear_flag(zcard, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *zlabel = lv_label_create(zcard);
+    lv_label_set_text(zlabel, "Work Height (mm)");
+    lv_obj_set_style_text_font(zlabel, user_font_title(), 0);
+    lv_obj_set_style_text_color(zlabel, user_light_text, 0);
+    lv_obj_set_flex_grow(zlabel, 1);
+
+    g_plate_work_z_ta = lv_textarea_create(zcard);
+    lv_textarea_set_one_line(g_plate_work_z_ta, true);
+    lv_textarea_set_accepted_chars(g_plate_work_z_ta, "0123456789.-");
+    lv_textarea_set_text(g_plate_work_z_ta, "1");
+    lv_obj_set_width(g_plate_work_z_ta, 120);
+    lv_obj_set_height(g_plate_work_z_ta, UI_INPUT_H);
+    lv_obj_set_style_text_font(g_plate_work_z_ta, user_font_text(), 0);
+    lv_obj_set_style_text_align(g_plate_work_z_ta, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_radius(g_plate_work_z_ta, USER_LIGHT_RADIUS * 7 / 12, 0);
+    lv_obj_set_style_bg_color(g_plate_work_z_ta, user_light_nav_on, 0);
+    lv_obj_set_style_bg_opa(g_plate_work_z_ta, 13, 0);
+    lv_obj_set_style_border_width(g_plate_work_z_ta, 0, 0);
+    lv_obj_set_style_text_color(g_plate_work_z_ta, user_light_text, 0);
+    ui_keyboard_attach(g_plate_work_z_ta, LV_KEYBOARD_MODE_NUMBER);
+    lv_obj_add_event_cb(g_plate_work_z_ta, on_plate_work_z_ready, LV_EVENT_READY, nullptr);
+    lv_obj_add_event_cb(g_plate_work_z_ta, on_plate_work_z_ready, LV_EVENT_DEFOCUSED, nullptr);
 
     lv_obj_t *cal = lv_obj_create(sec2);
     lv_obj_remove_style_all(cal);
@@ -2209,6 +2282,7 @@ void show_detail(NavId id)
     g_gate_outer = g_gate_inner = g_gate_plate = nullptr;
     g_gate_optical = g_gate_height = g_gate_o2 = g_gate_hold_z = nullptr;
     g_height_calib_lbl = nullptr;
+    g_plate_work_z_ta = nullptr;
     clear_print_gate_observers();
     mcu_ver_stop_timer();
     lv_obj_clean(g_detail);
@@ -2473,6 +2547,7 @@ lv_obj_t *page_user_settings_create(lv_obj_t *parent)
     g_gate_outer = g_gate_inner = g_gate_plate = nullptr;
     g_gate_optical = g_gate_height = g_gate_o2 = g_gate_hold_z = nullptr;
     g_height_calib_lbl = nullptr;
+    g_plate_work_z_ta = nullptr;
     clear_print_gate_observers();
     for(int i = 0; i < NAV_COUNT; i++) {
         g_nav_btns[i]  = nullptr;

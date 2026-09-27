@@ -13,7 +13,6 @@
 #include "ui_arc_spinner.hpp"
 #include "ui_xfr_dialog.hpp"
 #include "ui_device_state.hpp"
-#include "ui_clean_state.hpp"
 #include "ui_alarm_state.hpp"
 #include "popup_dialog_img.h"
 #include "powder_dialog_img.h"
@@ -2467,9 +2466,7 @@ void finish_after_door_open(void)
     }
     if(g_door_origin == DoorFlowOrigin::HomeStandalone ||
        g_door_origin == DoorFlowOrigin::PrintCollect) {
-        if(g_door_origin == DoorFlowOrigin::PrintCollect) {
-            ui_clean_state_stop();
-        }
+        /* 回 IDLE 由 exit_printing_mode 关掉还在跑的吹粉。 */
         enter_state(CONTROL_STATE_IDLE);
     } else {
         goto_file_selection();
