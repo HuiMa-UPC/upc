@@ -1126,7 +1126,7 @@ struct VisualOpticalPathCheckReqPayload {
 struct VisualOpticalPathCheckRspPayload {
     uint8_t  result;           /**< 1=识别到红点，0=未识别到 */
     uint8_t  point_index;      /**< 回显请求点位，用于与 Glavo 侧等待配对 */
-    uint8_t  reserved[2];
+    uint8_t  reserved[2];      /**< result=0 时 reserved[0]：1=整段无快照(no_frame)，0=有帧未找到 */
     uint32_t session_id;       /**< 回显请求会话号 */
     int16_t  detected_x_px;    /**< 识别到的像素中心 X；未识别到填 -1 */
     int16_t  detected_y_px;    /**< 识别到的像素中心 Y；未识别到填 -1 */

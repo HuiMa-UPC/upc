@@ -23,13 +23,16 @@ constexpr auto kPointSettle = std::chrono::milliseconds(250);
 constexpr uint32_t kPointWindowMs = 3000;
 
 /**
- * 整轮开始前的一次性取流预热。
- * 会话通知发出后 Visual 还要走完「请求 Camera 起流 → 分配 dma-buf → 回执 →
- * mmap → 拉起取帧线程 → 攒出第一帧」，冷启动下这条链路要几百毫秒到一秒多。
- * 不预热就等于让第 0 点用自己的 3 秒窗口替相机买单，链路慢一点就会把好光路
- * 误判成异常 —— 这类误报比多等一秒的代价大得多。
+ * 整轮开始后红光常亮的短暂稳定（不再替相机买单）。
+ * 取流就绪改由 Visual 在单点窗口里等第一帧（最多 kOpticalNoFrameWaitMs）。
  */
-constexpr auto kStreamWarmup = std::chrono::milliseconds(1500);
+constexpr auto kRedAlwaysSettle = std::chrono::milliseconds(200);
+
+/**
+ * Visual 等第一帧的上限（与 visual_service.cpp kOpticalNoFrameWaitMs 对齐）。
+ * Glavo 兜底预算 = 本值 + 判定窗口 + grace，避免 Visual 还在等帧时 Glavo 先超时。
+ */
+constexpr uint32_t kOpticalNoFrameWaitMs = 8000;
 
 /**
  * Glavo 侧兜底等待相对判定窗口的余量：覆盖 IPC 往返与视觉收尾。
@@ -89,6 +92,7 @@ bool OpticalPathCheck::start(const GalvoMotionCalibration& cal)
         rsp_pending_ = false;
         rsp_arrived_ = false;
         rsp_result_ = 0;
+        rsp_fail_code_ = 0;
         rsp_point_index_ = kNoFailedPoint;
     }
 
@@ -141,6 +145,7 @@ OpticalPathCheck::PointOutcome OpticalPathCheck::wait_point(uint8_t point_index,
         rsp_pending_ = true;
         rsp_arrived_ = false;
         rsp_result_ = 0;
+        rsp_fail_code_ = 0;
         rsp_point_index_ = point_index;
     }
 
@@ -161,7 +166,10 @@ OpticalPathCheck::PointOutcome OpticalPathCheck::wait_point(uint8_t point_index,
         return PointOutcome::Timeout;
     }
 
-    const auto budget = std::chrono::milliseconds(kPointWindowMs) + kPointReplyGrace;
+    /* Visual：最多等 kOpticalNoFrameWaitMs 出帧，再跑 timeout_ms 认红点。 */
+    const auto budget =
+        std::chrono::milliseconds(kOpticalNoFrameWaitMs) +
+        std::chrono::milliseconds(kPointWindowMs) + kPointReplyGrace;
     std::unique_lock<std::mutex> lock(wait_mtx_);
     (void)wait_cv_.wait_for(lock, budget, [this, generation]() {
         return rsp_arrived_ || abort_requested_.load() ||
@@ -177,7 +185,10 @@ OpticalPathCheck::PointOutcome OpticalPathCheck::wait_point(uint8_t point_index,
     if(!rsp_arrived_) {
         return PointOutcome::Timeout;
     }
-    return (rsp_result_ != 0) ? PointOutcome::Passed : PointOutcome::NotFound;
+    if(rsp_result_ != 0) {
+        return PointOutcome::Passed;
+    }
+    return (rsp_fail_code_ == 1) ? PointOutcome::NoFrame : PointOutcome::NotFound;
 }
 
 void OpticalPathCheck::on_point_rsp(
@@ -197,10 +208,12 @@ void OpticalPathCheck::on_point_rsp(
     }
     rsp_arrived_ = true;
     rsp_result_ = rsp.result ? 1u : 0u;
+    rsp_fail_code_ = rsp.reserved[0];
     UPC_LOG_GLAVO_SERVICE(Info,
-        "optical path rsp point=%u result=%u conf=%u px=%d,%d",
+        "optical path rsp point=%u result=%u fail_code=%u conf=%u px=%d,%d",
         static_cast<unsigned>(rsp.point_index),
         static_cast<unsigned>(rsp.result),
+        static_cast<unsigned>(rsp.reserved[0]),
         static_cast<unsigned>(rsp.confidence_q8),
         static_cast<int>(rsp.detected_x_px),
         static_cast<int>(rsp.detected_y_px));
@@ -225,9 +238,8 @@ void OpticalPathCheck::run(GalvoMotionCalibration cal, uint32_t generation)
         UPC_LOG_GLAVO_SERVICE(Warn, "optical path aborted: red-always switch failed");
     }
 
-    /* 等 Visual 那一路取流就绪再开第一个判定窗口（理由见 kStreamWarmup）。
-     * 放在红光切换之后：切换失败时不必白等这一秒半。 */
-    if(ok && sleep_interruptible(kStreamWarmup, generation)) {
+    /* 红光常亮后短暂稳定。取流就绪由 Visual 在单点窗口里等第一帧，不再盲等 1.5s。 */
+    if(ok && sleep_interruptible(kRedAlwaysSettle, generation)) {
         ok = false;
         result.reason = "aborted";
     }
@@ -274,6 +286,7 @@ void OpticalPathCheck::run(GalvoMotionCalibration cal, uint32_t generation)
         result.failed_point_index = i;
         switch(outcome) {
         case PointOutcome::NotFound: result.reason = "not_found"; break;
+        case PointOutcome::NoFrame:  result.reason = "no_frame";  break;
         case PointOutcome::Timeout:  result.reason = "timeout";   break;
         case PointOutcome::Aborted:  result.reason = "aborted";   break;
         case PointOutcome::Passed:   break; /* 上面已 continue */

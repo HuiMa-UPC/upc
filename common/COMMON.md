@@ -216,8 +216,8 @@ scripts/rongsu.sh start   # glavo + rongsu_camera → ui
 | `APP_Visual_FirstLayer_Check_Rsp` | `0x1424` | Visual→Glavo | `VisualFirstLayerCheckRspPayload` | — | 首层检测结果：`result=1` 继续打印，`result=0` 继续铺粉 |
 | `GLAVO_Visual_OpticalPath_Session_Start_Ntf` | `0x1428` | Glavo→Visual | Empty | — | 打印前光路检测开始，Visual 起流（与首层会话共用一路流） |
 | `GLAVO_Visual_OpticalPath_Session_Stop_Ntf` | `0x1429` | Glavo→Visual | Empty | — | 光路检测结束；三类会话都停才拆流 |
-| `GLAVO_Visual_OpticalPath_Point_Check_Req` | `0x142A` | Glavo→Visual | `VisualOpticalPathCheckReqPayload` | — | 单点红光识别；`timeout_ms` 内 Visual 轮询最新帧后单次回包 |
-| `APP_Visual_OpticalPath_Point_Check_Rsp` | `0x142B` | Visual→Glavo | `VisualOpticalPathCheckRspPayload` | — | `result=1` 该点通过；`session_id`/`point_index` 必须回显 |
+| `GLAVO_Visual_OpticalPath_Point_Check_Req` | `0x142A` | Glavo→Visual | `VisualOpticalPathCheckReqPayload` | — | 单点红光识别；Visual 先等帧再在 `timeout_ms` 内认红点 |
+| `APP_Visual_OpticalPath_Point_Check_Rsp` | `0x142B` | Visual→Glavo | `VisualOpticalPathCheckRspPayload` | — | `result=1` 通过；`result=0` 且 `reserved[0]=1` 为无帧；`session_id`/`point_index` 须回显 |
 | `GLAVO_Visual_PlateHeight_Session_Start_Ntf` | `0x142C` | Glavo→Visual | Empty | — | 打印前测高 / 高度校准开始，Visual 起流（与首层、光路共用一路） |
 | `GLAVO_Visual_PlateHeight_Session_Stop_Ntf` | `0x142D` | Glavo→Visual | Empty | — | 测高/校准结束；三类会话都停才拆流 |
 | `GLAVO_Visual_Laser_Spot_Measure_Req` | `0x142E` | Glavo→Visual | Empty | — | 请求当前帧激光质心（校准与测高）；Visual 不查 LUT |

@@ -107,15 +107,20 @@ private:
     void on_optical_path_point_check_req(const middleware::Message& msg);
     /**
      * 单点判定窗口轮询体（跑在 optical_point_thread_ 上）。
-     * 逐帧调 RedDotDetector，命中即回包；窗口耗尽回 result=0。
+     * 先等快照就绪（最多约 8s），再在 timeout_ms 内逐帧调 RedDotDetector。
+     * 空快照不计入「没找到红点」。命中即回包；无帧回 fail_code=1，有帧未找到回 0。
      * 必须另起线程：消息分发跑在 main.cpp 的主循环里（port.process + tick），
-     * 在回调里阻塞 3 秒会连 tick 与起流应答一起卡住。
+     * 在回调里阻塞会连 tick 与起流应答一起卡住。
      */
     void run_optical_point_window(
         const middleware::VisualOpticalPathCheckReqPayload& req);
+    /**
+     * @param fail_code result=0 时写入 reserved[0]：1=整段无快照，0=检测器已跑仍未找到。
+     */
     void send_optical_path_point_rsp(
         const middleware::VisualOpticalPathCheckReqPayload& req,
-        const RedDotDetection& detection);
+        const RedDotDetection& detection,
+        uint8_t fail_code);
     /** 回收取点线程。 */
     void stop_optical_point_thread();
 

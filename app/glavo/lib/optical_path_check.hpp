@@ -51,7 +51,7 @@ struct OpticalPathCheckResult {
     bool     passed = false;
     /** 首个失败点位索引；passed 时为 kNoFailedPoint。 */
     uint8_t  failed_point_index = 0xff;
-    /** 失败归因，仅进日志与告警文案：not_found / timeout / send_failed / aborted。 */
+    /** 失败归因，仅进日志与告警文案：not_found / no_frame / timeout / send_failed / aborted。 */
     const char* reason = "";
 };
 
@@ -119,7 +119,8 @@ private:
     /** 单点判定结果，区分开来只为让告警文案能说清是"没找到"还是"视觉没回话"。 */
     enum class PointOutcome {
         Passed,   /**< 视觉回 result=1 */
-        NotFound, /**< 视觉回 result=0，窗口内确实没找到红点 */
+        NotFound, /**< 视觉回 result=0，窗口内确实有帧但没找到红点 */
+        NoFrame,  /**< 视觉回 result=0 且 reserved[0]=1：整段没有快照 */
         Timeout,  /**< 视觉没回包，Glavo 兜底超时（fail-closed） */
         Aborted,  /**< 被 abort() 打断 */
     };
@@ -153,6 +154,7 @@ private:
     bool    rsp_pending_ = false;   /**< true=已发 Req 正在等回包 */
     bool    rsp_arrived_ = false;
     uint8_t rsp_result_ = 0;
+    uint8_t rsp_fail_code_ = 0;     /**< result=0 时 reserved[0]：1=no_frame */
     uint8_t rsp_point_index_ = 0xff;
 };
 
