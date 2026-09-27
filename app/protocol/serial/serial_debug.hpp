@@ -14,7 +14,7 @@ extern "C" {
  *
  * 仅做编解码、无 I/O；对应 doc/MCU串口通信协议文档_new.md 中调试页会用到的命令。
  * 帧格式复用 serial_frame：5A A5 AA Port Cmd Seq Len Payload(单条 TLV) Sum。
- * 振镜（以太网 TCP）、回粉电机 当前无串口命令，故本文件不提供其 build_*。
+ * 振镜（以太网 TCP）当前无串口命令，故本文件不提供其 build_*。
  *
  * 所有 build_* 成功返回整帧字节数，缓冲不足/参数非法返回 -1。
  * 单帧最大 = 8 + (2 + 2) = 12 字节，建议 out 缓冲 SERIAL_DEBUG_MAX_FRAME。
@@ -84,7 +84,7 @@ int serial_debug_build_motor_enable(bool enable, uint8_t* out, size_t out_size);
 int serial_debug_build_light(bool on, uint8_t* out, size_t out_size);
 
 /* ====================================================================== */
-/*  Tab2 其他控制：粉桶 / 三通推粉 / 风扇 / 激光·洗气·基板加热 / 清粉      */
+/*  Tab2 其他控制：粉桶 / 筛粉 / 回粉 / 风扇 / 激光·洗气·基板加热 / 清粉   */
 /* ====================================================================== */
 
 /** 粉桶开/关。bucket_id: 1 或 2。Port=POWDER，Cmd=0x8A，TLV=0x01/0x02。 */
@@ -104,6 +104,14 @@ int serial_debug_build_sieve_motor(uint8_t action, uint8_t* out, size_t out_size
  */
 int serial_debug_build_inner_door(uint8_t action, uint8_t* out, size_t out_size);
 
+/**
+ * 回粉电机手动送瓶（工厂调试，绕过 A/B 满瓶自动选瓶）。action 与 DebugMotorAction 对齐：
+ * 0=停止并恢复自动(TLV 0x18) / 1=送往 B 瓶(0x17) / 2=送往 A 瓶(0x16)。
+ * Port=SENSORS，Cmd=0x9A，无 Value；TO_A/TO_B 可互相切换，可与筛粉手动同时运行。
+ * MCU 回 FrameType=0xBA 的 ACK 仅表示已入队，无独立执行结果上报。
+ */
+int serial_debug_build_return_motor(uint8_t action, uint8_t* out, size_t out_size);
+
 /** 风扇开/关。Port=SENSORS，TLV=0x02/0x03。 */
 int serial_debug_build_fan_switch(bool on, uint8_t* out, size_t out_size);
 
@@ -114,10 +122,18 @@ int serial_debug_build_fan_duty(uint8_t duty, uint8_t* out, size_t out_size);
 int serial_debug_build_switch(uint8_t target, bool on,
                               uint8_t* out, size_t out_size);
 
-/** 清粉请求开启。Port=GENERAL(0xA2)，Cmd=0x42，TLV=0x01。 */
+/**
+ * 清粉请求开启。Port=GENERAL(0xA2)，Cmd=CMD_REQUEST_DEPOWDERING(0x42)，TLV=0x01（TLV_DUST_CLEAN_REQ）。
+ * 获批时受理：MCU 临时接管 Z 轴，开风机，按 5mm 步进上升到记录高度再降回，循环 3 轮后停风机。
+ * 结束由 TLV_DUST_CLEAN_FINISHED(0x03) 回执，见 serial_parse_clean_test_result()。
+ */
 int serial_debug_build_clean_test_start(uint8_t* out, size_t out_size);
 
-/** 清粉中止。Port=GENERAL(0xA2)，Cmd=0x42，TLV=0x02（TLV_DUST_CLEAN_STOP）。 */
+/**
+ * 清粉中止。Port=GENERAL(0xA2)，Cmd=0x42，TLV=0x02（TLV_DUST_CLEAN_STOP）。
+ * 任意整机状态均受理；终止后回 TLV_DUST_CLEAN_FINISHED result=2。清粉未在运行时无副作用、不回执。
+ * 不撤销已下发的 Z 轴运动，正在执行的单步可能仍会走完。
+ */
 int serial_debug_build_clean_test_close(uint8_t* out, size_t out_size);
 
 /**

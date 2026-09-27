@@ -37,6 +37,10 @@
 #define SDBG_TLV_SIEVE_RUN      0x13  /* TLV_POWDER_STRAINER_ENABLE：筛粉运行(正转) */
 #define SDBG_TLV_SIEVE_REVERSE  0x14  /* TLV_POWDER_STRAINER_DISABLE：反转倒渣 */
 #define SDBG_TLV_SIEVE_STOP     0x15  /* TLV_POWDER_MOTOR_STOP：筛粉停止 */
+/* 回粉电机手动送瓶（Cmd 0x9A，无 Value） */
+#define SDBG_TLV_RETURN_TO_A    0x16  /* TLV_RETURN_POWDER_TO_A：手动送往 A 瓶 */
+#define SDBG_TLV_RETURN_TO_B    0x17  /* TLV_RETURN_POWDER_TO_B：手动送往 B 瓶 */
+#define SDBG_TLV_RETURN_STOP    0x18  /* TLV_RETURN_POWDER_STOP：停止并恢复自动 */
 
 /* 粉桶（Cmd 0x8A） */
 #define SDBG_TLV_POWDER_ON      0x01
@@ -44,8 +48,9 @@
 /* 洗气（Cmd 0x86） */
 #define SDBG_TLV_GAS_ON         0x01
 #define SDBG_TLV_GAS_OFF        0x02
-/* 清粉请求（Port 0xA2 + Cmd 0x42） */
-#define SDBG_TLV_CLEAN_START    0x01
+/* 清粉请求（Port 0xA2 + Cmd 0x42 CMD_REQUEST_DEPOWDERING） */
+#define SDBG_CMD_DEPOWDERING    0x42
+#define SDBG_TLV_CLEAN_START    0x01  /* TLV_DUST_CLEAN_REQ */
 #define SDBG_TLV_CLEAN_CLOSE    0x02  /* TLV_DUST_CLEAN_STOP，与 Start 同 Port/Cmd */
 /* 打印层参数（Cmd 0xB5） */
 #define SDBG_TLV_PRINT_LAYER    0x01
@@ -240,6 +245,19 @@ int serial_debug_build_inner_door(uint8_t action, uint8_t* out, size_t out_size)
                                  tlv, 0, nullptr, out, out_size);
 }
 
+int serial_debug_build_return_motor(uint8_t action, uint8_t* out, size_t out_size)
+{
+    /* action 与 DebugMotorAction 对齐：0=停止并恢复自动 1=送往 B 瓶 2=送往 A 瓶 */
+    uint8_t tlv;
+    switch(action) {
+        case 1:  tlv = SDBG_TLV_RETURN_TO_B; break;
+        case 2:  tlv = SDBG_TLV_RETURN_TO_A; break;
+        default: tlv = SDBG_TLV_RETURN_STOP; break;
+    }
+    return serial_build_aa_frame(SDBG_PORT_SENSORS, SDBG_CMD_SENSOR_SET,
+                                 tlv, 0, nullptr, out, out_size);
+}
+
 int serial_debug_build_fan_switch(bool on, uint8_t* out, size_t out_size)
 {
     return serial_build_aa_frame(SDBG_PORT_SENSORS, SDBG_CMD_SENSOR_SET,
@@ -276,13 +294,13 @@ int serial_debug_build_switch(uint8_t target, bool on,
 
 int serial_debug_build_clean_test_start(uint8_t* out, size_t out_size)
 {
-    return serial_build_aa_frame(SDBG_PORT_GENERAL, 0x42,
+    return serial_build_aa_frame(SDBG_PORT_GENERAL, SDBG_CMD_DEPOWDERING,
                                  SDBG_TLV_CLEAN_START, 0, nullptr, out, out_size);
 }
 
 int serial_debug_build_clean_test_close(uint8_t* out, size_t out_size)
 {
-    return serial_build_aa_frame(SDBG_PORT_GENERAL, 0x42,
+    return serial_build_aa_frame(SDBG_PORT_GENERAL, SDBG_CMD_DEPOWDERING,
                                  SDBG_TLV_CLEAN_CLOSE, 0, nullptr, out, out_size);
 }
 

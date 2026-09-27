@@ -260,6 +260,15 @@ void DebugMsgProxy::init()
         }));
 
     subs_.push_back(bus.subscribe(
+        middleware::MsgType::GLAVO_Debug_Clean_Test_Ntf, middleware::ModuleId::UI,
+        [this](const middleware::Message& msg) {
+            middleware::DebugCleanTestPayload p{};
+            if(clean_test_result_cb_ && read_inline_pod(msg, p)) {
+                clean_test_result_cb_(p.result);
+            }
+        }));
+
+    subs_.push_back(bus.subscribe(
         middleware::MsgType::GLAVO_Debug_Fan_Ntf, middleware::ModuleId::UI,
         [this](const middleware::Message& msg) {
             middleware::DebugFanStatePayload p{};
@@ -450,6 +459,13 @@ void DebugMsgProxy::send_inner_door(middleware::DebugMotorAction action)
     middleware::DebugMotorPayload p{};
     p.action = static_cast<uint8_t>(action);
     publish_pod(middleware::MsgType::UI_Debug_Recycle_Motor_Ntf, p);
+}
+
+void DebugMsgProxy::send_return_motor(middleware::DebugMotorAction action)
+{
+    middleware::DebugMotorPayload p{};
+    p.action = static_cast<uint8_t>(action);
+    publish_pod(middleware::MsgType::UI_Debug_Return_Motor_Ntf, p);
 }
 
 void DebugMsgProxy::send_fan(bool on)
@@ -788,6 +804,11 @@ void DebugMsgProxy::register_print_h264_record(DebugPrintH264RecordCb cb)
 void DebugMsgProxy::register_clean_record(DebugCleanRecordCb cb)
 {
     clean_record_cb_ = std::move(cb);
+}
+
+void DebugMsgProxy::register_clean_test_result(DebugCleanTestResultCb cb)
+{
+    clean_test_result_cb_ = std::move(cb);
 }
 
 void DebugMsgProxy::register_env_sim(DebugEnvSimCb cb)

@@ -122,9 +122,9 @@ int serial_parse_clean_test_result(const uint8_t* data, size_t len, uint8_t* res
         return -1;
     }
 
-    /* 清粉测试完成结果：
-     * PORT_GENERAL_TASK(0xA2) + CMD_REQUEST_DEPOWDERING(0x42) + TLV(0x03)
-     * Value: result_code（由上层决定语义，解析层仅透传）。 */
+    /* 清粉结果上报：
+     * PORT_GENERAL_TASK(0xA2) + CMD_REQUEST_DEPOWDERING(0x42) + TLV_DUST_CLEAN_FINISHED(0x03)
+     * Value: result 0=正常结束 1=失败 2=中止（SERIAL_CLEAN_RESULT_*），解析层原值透传。 */
     const uint8_t port = data[3];
     const uint8_t cmd  = data[4];
     const uint8_t payload_len = data[6];
