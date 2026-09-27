@@ -312,10 +312,10 @@ scripts/rongsu.sh start   # glavo + rongsu_camera → ui
 | `UI_Debug_FirstLayer_Visual_Check_Get_Ntf` | — | UI→Glavo | Empty | `request_first_layer_visual_check_state` | 查询当前“首层视觉检测”开关状态 |
 | `UI_Debug_OpticalPath_Check_Set_Ntf` | — | UI→Glavo | `DebugOnOffPayload` | `send_optical_path_check_set` | 调试页开关：打印前光路检测（仅本次运行，默认关） |
 | `UI_Debug_OpticalPath_Check_Get_Ntf` | — | UI→Glavo | Empty | `request_optical_path_check_state` | 查询当前“打印前光路检测”开关状态 |
-| `UI_Debug_InnerDoor_Occlusion_Set_Ntf` | — | UI→Glavo | `DebugOnOffPayload` | `send_inner_door_occlusion_set` | 调试页开关：内门视觉挡门（仅本次运行，默认关） |
-| `UI_Debug_InnerDoor_Occlusion_Get_Ntf` | — | UI→Glavo | Empty | `request_inner_door_occlusion_state` | 查询内门视觉挡门开关 |
-| `UI_Debug_Plate_Present_Set_Ntf` | — | UI→Glavo | `DebugOnOffPayload` | `send_plate_present_set` | 调试页开关：基板在位读码（仅本次运行，默认关） |
-| `UI_Debug_Plate_Present_Get_Ntf` | — | UI→Glavo | Empty | `request_plate_present_state` | 查询基板在位开关 |
+| `UI_Debug_InnerDoor_Occlusion_Set_Ntf` | — | UI→Glavo | `DebugOnOffPayload` | `send_inner_door_occlusion_set` | 内门挡门融合：`on=1` 执行（仅本次运行，**默认开**）。调试页按钮是 **Skip Inner Door Occl**，按下发 `on=0` |
+| `UI_Debug_InnerDoor_Occlusion_Get_Ntf` | — | UI→Glavo | Empty | `request_inner_door_occlusion_state` | 查询内门挡门融合是否执行 |
+| `UI_Debug_Plate_Present_Set_Ntf` | — | UI→Glavo | `DebugOnOffPayload` | `send_plate_present_set` | 基板在位读码：`on=1` 执行（仅本次运行，**默认开**）。调试页按钮是 **Skip Plate Present**，按下发 `on=0` |
+| `UI_Debug_Plate_Present_Get_Ntf` | — | UI→Glavo | Empty | `request_plate_present_state` | 查询基板读码是否执行 |
 | `UI_Debug_TestImage_Set_Ntf` | — | UI→Glavo | `DebugOnOffPayload` | `send_test_image_set` | 调试页 Test image：红光模式循环打印 `/userdata/test/test.gcode`；Off 仅 Stop，不切激光；无录像/延时/换层握手/首页打印态 |
 | `UI_Debug_TestImage_Get_Ntf` | — | UI→Glavo | Empty | `request_test_image_state` | 查询测试图循环打印实际状态 |
 | `GLAVO_Debug_Laser_Ntf` | — | Glavo→UI | `DebugLaserStatePayload` | `register_laser` | 激光器状态/报警/功率/温度 |
@@ -331,8 +331,8 @@ scripts/rongsu.sh start   # glavo + rongsu_camera → ui
 | `GLAVO_Debug_FirstLayer_Visual_Check_Ntf` | — | Glavo→UI | `DebugOnOffPayload` | `register_first_layer_visual_check` | 回读当前“首层视觉检测”开关状态 |
 | `GLAVO_Debug_OpticalPath_Check_Ntf` | — | Glavo→UI | `DebugOnOffPayload` | `register_optical_path_check` | 回读当前“打印前光路检测”开关状态 |
 | `GLAVO_Debug_PlateHeight_Adj_Ntf` | — | Glavo→UI | `DebugOnOffPayload` | `register_plate_height_adj` | 回读当前“打印前基板测高”开关状态 |
-| `GLAVO_Debug_InnerDoor_Occlusion_Ntf` | — | Glavo→UI | `DebugOnOffPayload` | `register_inner_door_occlusion` | 回读内门视觉挡门开关状态 |
-| `GLAVO_Debug_Plate_Present_Ntf` | — | Glavo→UI | `DebugOnOffPayload` | `register_plate_present` | 回读基板在位开关状态 |
+| `GLAVO_Debug_InnerDoor_Occlusion_Ntf` | — | Glavo→UI | `DebugOnOffPayload` | `register_inner_door_occlusion` | 回读挡门融合是否执行（`on=1` 执行）；UI 把 `on=0` 显示成 Skip 按下 |
+| `GLAVO_Debug_Plate_Present_Ntf` | — | Glavo→UI | `DebugOnOffPayload` | `register_plate_present` | 回读读码是否执行（`on=1` 执行）；UI 把 `on=0` 显示成 Skip 按下 |
 | `GLAVO_Plate_Place_Confirm_Req` | — | Glavo→UI | Empty | `register_plate_place_confirm_req` | 读码=无板：先自动开内门再开外门，再弹「放入基板并关好外门」；Cancel=`cancel=1` 阻断起印 |
 | `UI_Plate_Place_Confirm_Rsp` | — | UI→Glavo | `PlatePlaceConfirmRspPayload` | `send_plate_place_confirm` | Confirm：`cancel=0`，再检外门+内门+读码；Cancel：`cancel=1` 阻断 |
 | `GLAVO_Debug_Soc_Led_Ntf` | — | Glavo→UI | `DebugSocLedStatePayload` | `register_soc_led` | 回读六路舱灯开关位图（bit0=`lgt1l`…bit5=`lgt3r`） |
@@ -341,7 +341,7 @@ scripts/rongsu.sh start   # glavo + rongsu_camera → ui
 | `GLAVO_Debug_Galvo_PointTest_Ntf` | — | Glavo→UI | `DebugOnOffPayload` | `register_galvo_point_test` | 回读红光点位测试运行状态；用于按钮、Test image 与正式打印的双向互斥 |
 | `UI_Debug_Fan_Duty_Ntf` | — | UI→Glavo | `DebugFanPayload` | `send_fan_duty` | 仅设风扇占空比（0–100） |
 | `UI_Debug_PrintParam_Set_Ntf` | — | UI→Glavo | `DebugPrintParamPayload` | `send_print_layer_param` | 打印层参数（层厚 + 平衡×1000） |
-| `GLAVO_Debug_Sensor_Ntf` | — | Glavo→UI | `DebugSensorPayload` | `register_sensor` | 调试页顶栏：舱内O2/滤芯O2/气压/舱外PM/湿度/舱温/基板温/舱内PM/粉量 |
+| `GLAVO_Debug_Sensor_Ntf` | — | Glavo→UI | `DebugSensorPayload` | `register_sensor` | 调试页顶栏：舱内O2/滤芯O2/气压/舱外PM/湿度/舱温/基板温/舱内PM/粉量；另带 `powder_ir_bits` 八路料位红外（A1/A2/A3/B1/B2/B3/OUTL/OUTR，1=无粉/受光） |
 | `GLAVO_Debug_Axis_Ntf` | — | Glavo→UI | `DebugAxisStatePayload` | `register_axis` | Z/S/D + Z 工作坐标 |
 | `GLAVO_Debug_Device_Ntf` | — | Glavo→UI | `DebugDeviceStatePayload` | `register_device` | 设备行状态 |
 | `GLAVO_Debug_Galvo_Ntf` | — | Glavo→UI | `DebugGalvoStatePayload` | `register_galvo` | 振镜 X/Y |

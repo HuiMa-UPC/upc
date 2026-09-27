@@ -1030,7 +1030,7 @@ pending 自动解除——正好顺带验超时路径。
 | `user_history` | `page_user_history.*` | 打印历史：三 Tab + Storage 条 + 日期分组卡片 + 管理态批量删除 + 左滑删除 |
 | `user_settings` | `page_user_settings.*` | 设置（浅色档）：8 项左导航 + 右栏白卡版式。Network（Wi-Fi 开关/列表/子页）、Display & Brightness（背光滑条 + 熄屏选择子页，占位）、Storage（容量 + 格式化 + 文件管理，仅前端）、About（版本 + Galvo/MCU OTA）、Debug 密码弹窗。按稿 6089:11322 / 6235:91450 / 6240:92007 / 6251:94362 实现 |
 | `user_message` | `page_user_message.*` | 消息中心（浅色档）：四 Tab（含临时的 Unresolved，按到达序汇总未处理报警）+ All read 浮层顶栏 + 日期分组混排列表（MCU 报警 + 设备事件）+ 初始 10 条与底部 Load More + 左滑删除历史 + 右侧 632 详情抽屉（Reset 三态）。按稿 6230:89616 / 6091:13405 / 6091:13612 / 6091:13847 实现 |
-| `user_debug` | `page_user_debug.*` | 调试控制台；Move 页 Z 卡点击步距按 **μm** 输入，`on_jog_click` 乘 `AxisCfg::step_scale`（Z=0.001）转 mm 再发 `send_axis_jog`（契约 value 为 mm；Test 页与监控页 Manual 直接传 mm，不经此换算）；Move 页振镜卡 Abs X/Y + Move 走 `send_galvo_abs_pos`；Other 页按 Process / Cabin / Print Gates / Media & Sim / Inject 分组。`Galvo Point Test` 在 Print Gates，按当前校准表依次显示中心和四角红光点，与正式打印及 Test image 双向互斥。O2 Calib 在左列：输入参考浓度后点圆钮写 `/userdata/CAL/o2_cal.json`；失败 toast 提示、标签仍显示原 K。Media & Sim 的 **Sys HUD** 打开后，`ui_sys_hud` 在 `lv_layer_sys` 右上角红字显示 CPU 温 / 整机与本进程占用 / 内存（`upc_sys_monitor_sample` 读本机 `/proc` 与 thermal sysfs，不经 IPC），不进布局、不可点，仅本次运行。顶部传感器条末格 **Zone4** 进页后约 1Hz 读 `thermal_zone4`（同 `sample().zone4_temp_c`），退页停定时器 |
+| `user_debug` | `page_user_debug.*` | 调试控制台；Move 页 Z 卡点击步距按 **μm** 输入，`on_jog_click` 乘 `AxisCfg::step_scale`（Z=0.001）转 mm 再发 `send_axis_jog`（契约 value 为 mm；Test 页与监控页 Manual 直接传 mm，不经此换算）；Move 页振镜卡 Abs X/Y + Move 走 `send_galvo_abs_pos`；Other 页按 Process / Cabin / Print Gates / Media & Sim / Inject 分组。`Galvo Point Test` 在 Print Gates，按当前校准表依次显示中心和四角红光点，与正式打印及 Test image 双向互斥。O2 Calib 在左列：输入参考浓度后点圆钮写 `/userdata/CAL/o2_cal.json`；失败 toast 提示、标签仍显示原 K。Media & Sim 的 **Sys HUD** 打开后，`ui_sys_hud` 在 `lv_layer_sys` 右上角红字显示 CPU 温 / 整机与本进程占用 / 内存（`upc_sys_monitor_sample` 读本机 `/proc` 与 thermal sysfs，不经 IPC），不进布局、不可点，仅本次运行。顶部传感器条末格 **Zone4** 进页后约 1Hz 读 `thermal_zone4`（同 `sample().zone4_temp_c`），退页停定时器；传感器条下方另有 **Powder IR** 八路料位红外（A1/A2/A3/B1/B2/B3/L/R，`powder_ir_bits`：Blk=遮挡有粉、Clr=受光无粉） |
 | `user_timelapse` | `page_user_timelapse.*` | 延时摄影播放器（隐藏页，历史缩略图进入；全屏 `lv_layer_top`） |
 
 注册仅在 `ui_app.cpp`；打印流程走 `control_*`，pages 不直接订阅 MsgBus。详见 `lib/pages/README.md`。
@@ -1510,17 +1510,18 @@ Confirm 再检门，关到位才开清粉，或传感器开→关边沿自动续
   → 外门未关：`GLAVO_Outer_Door_Confirm_Req` → 弹窗 Confirm / Cancel
        Confirm：`UI_Outer_Door_Confirm_Rsp` skip=0，Glavo 再读门，仍开再弹
        Cancel：skip=1，不检门，直接进关内门套件（与调试 Skip Outer Door 不同，内门仍跑）
-  → 关内门套件（记当前 Z → 降 20 mm / 关内门 / 等 2s / 回到降前 Z；静止 bit1=0
-       跳过且不推 Closing inner door；调试 Skip Outer Door 可跳过外门+内门）
-       Manual/调试开内门同样：降 20 mm → 开 → 等 2s → 回到降前 Z（仅全开时跳过开套件）
+  → 关内门套件（打印中不动 Z；非打印：记当前 Z → 降 20 mm / 门动作 / 等 2s / 回到降前 Z；
+       静止 bit1=0 跳过且不推 Closing inner door；调试 Skip Outer Door 可跳过外门+内门）
+       Manual/调试开内门同样：非打印时降 20 mm → 开 → 等 2s → 回到降前 Z（仅全开时跳过开套件）
        上电不自动关内门
+  → 准备阶段（含尚未 Ready 的氧门/首层）点终止：Z 绝对回到 1.00 mm；已 Ready 出光后的终止不抬 Z
   → 光路：prep 标题 + `page_user_monitor_optical_path_update()` 右侧 n/5
   → 测高（失败/无 LUT 起印拒绝）
   → Camera manifest → page_user_monitor_enter_print_result()
   → RETRIEVE → 取件弹窗滑到底 → control_print_result_collect() → 开门流程
 ```
 
-调试页 Other→Cabin 另有 **Skip Outer Door**（默认 Off=要做外门+关内门套件）。
+调试页 Other→Print Gates 另有 **Skip Outer Door**（默认 Off=要做外门+关内门套件）和 **Skip O2 Gate**。
 
 **取件从「一条常驻滑块」改成了「按钮 + 弹窗」**（稿 6338:27929）：点 `RETRIEVE` 开弹窗，
 里面是 `SLIDE TO RETRIEVE` + `Cancel`，滑到底才调 `control_print_result_collect()`。后面的
@@ -1688,7 +1689,7 @@ Glavo Print_Terminate_Rsp / 进度 100% → control.cpp finish_printing()
   （`control_set_skip_plate_prompt()`，纯 UI 本地标志，不发消息也不落盘，重启回到关闭），
   `control_start()` 不进 `PLATE_PROMPT`，直接 `goto_file_selection()`，等同选「已放入 → 选择
   打印任务」。它只管这张选文件前的入口弹窗；起印后打印准备阶段 Glavo 发来的
-  `Place the build plate` 确认窗（`GLAVO_Plate_Place_Confirm_Req`）归 `Plate Present` 开关管。
+  `Place the build plate` 确认窗（`GLAVO_Plate_Place_Confirm_Req`）归基板读码：默认执行；`Skip Plate Present` 按下后跳过。
 
 ### 转运盒流程（稿 6357:39444 / 39504 / 39470）
 

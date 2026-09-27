@@ -23,7 +23,7 @@
  * @file page_user_debug.cpp
  * @brief 调试页（开发者/工厂手动控制台）—— "移动控制" Tab。
  *
- * 顶部传感器条（含 Zone4 本机 thermal）+ 设备快捷行（设备/门/电机/照明）+ Tab（Move/Other/Laser/Test）。
+ * 顶部传感器条（含 Zone4 本机 thermal）+ 八路料位红外条（A1..OUTR）+ 设备快捷行 + Tab（Move/Other/Laser/Test）。
  * Test（测试）Tab 为自动化用例表，实现见 page_user_debug_test.cpp（中文界面）。
  * 移动控制：左列 Z/S/D 三轴卡（点击移动/长按移动），右列 振镜坐标卡 + 振镜标定卡。
  * 振镜方向盘（X/-X/Y/-Y）按 Step 本地增减中心偏移；复位回上次 Save/读盘值。
@@ -90,6 +90,8 @@ lv_obj_t *g_laser_current_lbl   = nullptr;      /**< 电流读数 */
 uint8_t   g_laser_type_code     = 0;            /**< 最近一次上报的激光器型号（0=未知 1=JFSC 2=AL） */
 
 lv_obj_t *g_sensor_val[10] = { nullptr }; /**< [9]=Zone4（本机 thermal_zone4） */
+/** 主板 8 路料位红外指示：A1/A2/A3/B1/B2/B3/OUTL/OUTR */
+lv_obj_t *g_powder_ir_val[8] = { nullptr };
 lv_timer_t *g_zone4_timer = nullptr;      /**< 顶部条 Zone4 约 1Hz 刷新 */
 lv_obj_t *g_axis_pos[3]   = { nullptr };
 lv_obj_t *g_axis_step[3]  = { nullptr };   /**< 点击距离/速度输入（按 tab 复用） */
@@ -146,9 +148,9 @@ lv_obj_t *g_optical_path_check_btn = nullptr; /**< 其他控制：打印前光�
 lv_obj_t *g_optical_path_check_state_lbl = nullptr; /**< 其他控制：打印前光路检测状态文本 */
 lv_obj_t *g_plate_height_adj_btn = nullptr; /**< 其他控制：打印前基板测高开关按钮 */
 lv_obj_t *g_plate_height_adj_state_lbl = nullptr; /**< 其他控制：打印前基板测高状态文本 */
-lv_obj_t *g_inner_door_occlusion_btn = nullptr; /**< 其他控制：内门视觉挡门 */
+lv_obj_t *g_inner_door_occlusion_btn = nullptr; /**< 其他控制：跳过内门视觉挡门 */
 lv_obj_t *g_inner_door_occlusion_state_lbl = nullptr;
-lv_obj_t *g_plate_present_btn = nullptr; /**< 其他控制：基板在位读码 */
+lv_obj_t *g_plate_present_btn = nullptr; /**< 其他控制：跳过基板在位读码 */
 lv_obj_t *g_plate_present_state_lbl = nullptr;
 lv_obj_t *g_soc_led_btn[middleware::kDebugSocLedCount] = {};
 lv_obj_t *g_soc_led_state_lbl[middleware::kDebugSocLedCount] = {};
@@ -477,6 +479,74 @@ lv_obj_t *build_sensor_strip(lv_obj_t *parent)
         make_sensor_cell(strip, caps[i], i);
     }
     return strip;
+}
+
+/**
+ * 主板 8 路料位红外（1ST powder_ir_bits）。
+ * 协议：1=受光/无粉，0=遮挡有粉。有粉用 accent 标 "Blk"，无粉用 dim 标 "Clr"。
+ */
+lv_obj_t *build_powder_ir_strip(lv_obj_t *parent)
+{
+    lv_obj_t *strip = ui_user_make_frosted_card(parent, false);
+    lv_obj_set_width(strip, LV_PCT(100));
+    lv_obj_set_height(strip, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(strip, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(strip, LV_FLEX_ALIGN_SPACE_BETWEEN,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_ver(strip, USER_PAD_SM / 2, 0);
+    lv_obj_set_style_pad_hor(strip, USER_PAD_SM, 0);
+
+    lv_obj_t *title = lv_label_create(strip);
+    lv_label_set_text(title, "Powder IR");
+    lv_obj_set_style_text_color(title, user_color_text_dim, 0);
+    lv_obj_set_style_text_font(title, user_font_caption(), 0);
+
+    static const char *const kIrCaps[8] = {
+        "A1", "A2", "A3", "B1", "B2", "B3", "L", "R",
+    };
+    for(int i = 0; i < 8; ++i) {
+        lv_obj_t *cell = lv_obj_create(strip);
+        lv_obj_remove_style_all(cell);
+        lv_obj_set_size(cell, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+        lv_obj_set_flex_flow(cell, LV_FLEX_FLOW_COLUMN);
+        lv_obj_set_flex_align(cell, LV_FLEX_ALIGN_CENTER,
+                              LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+        lv_obj_set_style_pad_row(cell, 2, 0);
+        lv_obj_set_style_bg_opa(cell, LV_OPA_TRANSP, 0);
+        lv_obj_clear_flag(cell, LV_OBJ_FLAG_SCROLLABLE);
+
+        lv_obj_t *cap = lv_label_create(cell);
+        lv_label_set_text(cap, kIrCaps[i]);
+        lv_obj_set_style_text_color(cap, user_color_text_dim, 0);
+        lv_obj_set_style_text_font(cap, user_font_caption(), 0);
+
+        lv_obj_t *val = lv_label_create(cell);
+        lv_label_set_text(val, "--");
+        lv_obj_set_style_text_color(val, user_color_text, 0);
+        lv_obj_set_style_text_font(val, user_font_text(), 0);
+        g_powder_ir_val[i] = val;
+    }
+    return strip;
+}
+
+void apply_powder_ir_bits(uint8_t bits, bool valid)
+{
+    for(int i = 0; i < 8; ++i) {
+        lv_obj_t *lbl = g_powder_ir_val[i];
+        if(!lbl) {
+            continue;
+        }
+        if(!valid) {
+            lv_label_set_text(lbl, "--");
+            lv_obj_set_style_text_color(lbl, user_color_text_dim, 0);
+            continue;
+        }
+        /* bit=0 遮挡有粉 → Blk；bit=1 受光无粉 → Clr */
+        const bool clear = (bits & static_cast<uint8_t>(1u << i)) != 0;
+        lv_label_set_text(lbl, clear ? "Clr" : "Blk");
+        lv_obj_set_style_text_color(lbl,
+            clear ? user_color_text_dim : user_color_accent, 0);
+    }
 }
 
 /* ---- 设备快捷行 ---- */
@@ -1353,7 +1423,7 @@ struct DbgToggleCtx {
     lv_obj_t   *state_lbl;
     const char *on_txt;
     const char *off_txt;
-    uint8_t     kind;   /**< 0 粉桶 / 1 推粉 / 2 风扇 / 3 其他开关 / 4 清粉 / 5 打印H264 / 6 清粉录像 / 7 环境模拟 / 8 环境模拟缺粉 / 9 转运盒流程 / 10 首层视觉检测 / 11 消息注入 / 12 报警注入 / 13 本地RTSP / 14 光路检测 / 15 基板测高 / 16 SOC舱灯 / 17 舱内PM阀 / 18 跳过氧门 / 19 Sys HUD / 20 SPI小屏测试 / 21 跳过外门 / 22 内门视觉挡门 / 23 基板在位读码 / 24 跳过放版预确认 */
+    uint8_t     kind;   /**< 0 粉桶 / 1 推粉 / 2 风扇 / 3 其他开关 / 4 清粉 / 5 打印H264 / 6 清粉录像 / 7 环境模拟 / 8 环境模拟缺粉 / 9 转运盒流程 / 10 首层视觉检测 / 11 消息注入 / 12 报警注入 / 13 本地RTSP / 14 光路检测 / 15 基板测高 / 16 SOC舱灯 / 17 舱内PM阀 / 18 跳过氧门 / 19 Sys HUD / 20 SPI小屏测试 / 21 跳过外门 / 22 跳过内门视觉挡门 / 23 跳过基板在位读码 / 24 跳过放版预确认 */
     uint8_t     arg;    /**< 粉桶号 / DebugSwitchTarget / SOC LED channel */
 };
 
@@ -1459,9 +1529,9 @@ void on_dbg_toggle(lv_event_t *e)
                  break;
         case 15: proxy.send_plate_height_adj_set(on);          /* 打印前基板测高调 Z（仅本次运行，默认关） */
                  break;
-        case 22: proxy.send_inner_door_occlusion_set(on);      /* 内门视觉挡门（仅本次运行，默认关） */
+        case 22: proxy.send_inner_door_occlusion_set(!on);    /* Skip Inner Door Occl：按下跳过挡门融合；载荷 on=1 仍表示执行（默认执行） */
                  break;
-        case 23: proxy.send_plate_present_set(on);             /* 基板在位读码开关（仅本次运行，默认关；起印闸门待后续） */
+        case 23: proxy.send_plate_present_set(!on);            /* Skip Plate Present：按下跳过读码；载荷 on=1 仍表示执行（默认执行） */
                  break;
         /* SOC 六路舱灯 / 舱内 PM 阀：sysfs 直控，不看 MCU 版本 */
         case 16: proxy.send_soc_led_set(c->arg, on);
@@ -2225,7 +2295,7 @@ void build_other_switches_column(lv_obj_t *parent)
                     static_cast<uint8_t>(DebugSwitchTarget::BaseHeat));
     build_moment_motor_controls(rowB, "Inner Door", 1);
 
-    /* ---- 舱内灯 / 阀 / 氧门 ---- */
+    /* ---- 舱内灯 / 阀 ---- */
     lv_obj_t *cabin = make_section_card(col, "Cabin");
     lv_obj_t *rowLed = make_switch_grid_row(cabin);
     for(uint8_t i = 0; i < middleware::kDebugSocLedCount; ++i) {
@@ -2235,10 +2305,6 @@ void build_other_switches_column(lv_obj_t *parent)
     lv_obj_t *rowCab = make_switch_grid_row(cabin);
     make_dbg_toggle(rowCab, "Cabin PM Valve", "On", "Off", LV_SYMBOL_POWER, false,
                     17, 0, true, 0, &g_cabin_pm_valve_btn, &g_cabin_pm_valve_state_lbl);
-    make_dbg_toggle(rowCab, "Skip O2 Gate", "On", "Off", LV_SYMBOL_OK, false,
-                    18, 0, true, 0, &g_skip_o2_gate_btn, &g_skip_o2_gate_state_lbl);
-    make_dbg_toggle(rowCab, "Skip Outer Door", "On", "Off", LV_SYMBOL_OK, false,
-                    21, 0, true, 0, &g_skip_outer_door_btn, &g_skip_outer_door_state_lbl);
 
     /* ---- SPI 灯板验色：强制 kBlue / kOrange / kRed ---- */
     lv_obj_t *sled = make_section_card(col, "Status LED");
@@ -2269,13 +2335,17 @@ void build_other_switches_column(lv_obj_t *parent)
     make_dbg_toggle(rowG1, "Plate Height Adj", "On", "Off", LV_SYMBOL_UP, false,
                     15, 0, true, 0, &g_plate_height_adj_btn, &g_plate_height_adj_state_lbl);
     lv_obj_t *rowG2 = make_switch_grid_row(gate);
-    make_dbg_toggle(rowG2, "Inner Door Occl", "On", "Off", LV_SYMBOL_EYE_CLOSE, false,
+    make_dbg_toggle(rowG2, "Skip Inner Door Occl", "On", "Off", LV_SYMBOL_EYE_CLOSE, false,
                     22, 0, true, 0, &g_inner_door_occlusion_btn, &g_inner_door_occlusion_state_lbl);
-    make_dbg_toggle(rowG2, "Plate Present", "On", "Off", LV_SYMBOL_OK, false,
+    make_dbg_toggle(rowG2, "Skip Plate Present", "On", "Off", LV_SYMBOL_OK, false,
                     23, 0, true, 0, &g_plate_present_btn, &g_plate_present_state_lbl);
     make_dbg_toggle(rowG2, "Skip Plate Prompt", "On", "Off", LV_SYMBOL_NEXT,
                     control_skip_plate_prompt_enabled(), 24, 0);
     lv_obj_t *rowG3 = make_switch_grid_row(gate);
+    make_dbg_toggle(rowG3, "Skip O2 Gate", "On", "Off", LV_SYMBOL_OK, false,
+                    18, 0, true, 0, &g_skip_o2_gate_btn, &g_skip_o2_gate_state_lbl);
+    make_dbg_toggle(rowG3, "Skip Outer Door", "On", "Off", LV_SYMBOL_OK, false,
+                    21, 0, true, 0, &g_skip_outer_door_btn, &g_skip_outer_door_state_lbl);
     make_one_shot_action(rowG3, "Galvo Point Test", "Idle", LV_SYMBOL_PLAY,
                          on_galvo_point_test_click,
                          &g_galvo_point_test_btn, &g_galvo_point_test_lbl);
@@ -2733,6 +2803,7 @@ void bind_debug_callbacks()
                 lv_label_set_text(g_sensor_val[8], txt);
             }
         }
+        apply_powder_ir_bits(p.powder_ir_bits, p.powder_ir_valid != 0);
     });
 
     proxy.register_axis([](const middleware::DebugAxisStatePayload &p) {
@@ -3027,33 +3098,37 @@ void bind_debug_callbacks()
         }
     });
 
-    proxy.register_inner_door_occlusion([](bool on) {
+    /* 载荷 on=1 表示做挡门融合。按钮是 Skip，回读时取反。 */
+    proxy.register_inner_door_occlusion([](bool detect_on) {
+        const bool skip = !detect_on;
         if(g_inner_door_occlusion_btn) {
-            if(on) {
+            if(skip) {
                 lv_obj_add_state(g_inner_door_occlusion_btn, LV_STATE_CHECKED);
             } else {
                 lv_obj_clear_state(g_inner_door_occlusion_btn, LV_STATE_CHECKED);
             }
         }
         if(g_inner_door_occlusion_state_lbl) {
-            lv_label_set_text(g_inner_door_occlusion_state_lbl, on ? "On" : "Off");
+            lv_label_set_text(g_inner_door_occlusion_state_lbl, skip ? "On" : "Off");
             lv_obj_set_style_text_color(g_inner_door_occlusion_state_lbl,
-                                        on ? user_color_accent : user_color_text_dim, 0);
+                                        skip ? user_color_accent : user_color_text_dim, 0);
         }
     });
 
-    proxy.register_plate_present([](bool on) {
+    /* 载荷 on=1 表示执行读码。按钮是 Skip，回读时取反。 */
+    proxy.register_plate_present([](bool detect_on) {
+        const bool skip = !detect_on;
         if(g_plate_present_btn) {
-            if(on) {
+            if(skip) {
                 lv_obj_add_state(g_plate_present_btn, LV_STATE_CHECKED);
             } else {
                 lv_obj_clear_state(g_plate_present_btn, LV_STATE_CHECKED);
             }
         }
         if(g_plate_present_state_lbl) {
-            lv_label_set_text(g_plate_present_state_lbl, on ? "On" : "Off");
+            lv_label_set_text(g_plate_present_state_lbl, skip ? "On" : "Off");
             lv_obj_set_style_text_color(g_plate_present_state_lbl,
-                                        on ? user_color_accent : user_color_text_dim, 0);
+                                        skip ? user_color_accent : user_color_text_dim, 0);
         }
     });
 
@@ -3197,6 +3272,7 @@ void reset_globals()
     g_galvo_saved_x = 0.0;
     g_galvo_saved_y = 0.0;
     for(int i = 0; i < 10; i++) g_sensor_val[i] = nullptr;
+    for(int i = 0; i < 8; i++) g_powder_ir_val[i] = nullptr;
     g_zone4_timer = nullptr;
     for(int i = 0; i < 3; i++) {
         g_axis_pos[i] = g_axis_step[i] = g_axis_ctrl[i] = nullptr;
@@ -3362,6 +3438,9 @@ lv_obj_t *page_user_debug_create(lv_obj_t *parent)
     make_circle_btn(toprow, USER_BACK_BTN_H, LV_SYMBOL_LEFT, on_back_click, nullptr);
     lv_obj_t *strip = build_sensor_strip(toprow);
     lv_obj_set_flex_grow(strip, 1);   /* 占满返回钮右侧剩余宽度，避免 100% 宽越界裁剪 */
+
+    /* 主板 8 路料位红外：看哪一路被遮挡（有粉） */
+    build_powder_ir_strip(page);
 
     /* Tab + 设备行 */
     build_control_row(page);

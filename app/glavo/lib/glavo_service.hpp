@@ -238,9 +238,9 @@ private:
     /** @brief 外门闸通过后：关内门套件 → 光路/测高 → 起印后半段。 */
     void continue_print_after_outer_door_ready();
     /**
-     * @brief 内门开/关套件：记当前 Z → 降 20mm → 开或关内门 → 等 2s → Z 回到降前高度。
-     *        进套件前读全开：挡门开关关时只信 bit1；开时一轮 Occlusion 后 OR。
-     *        套件运动中不再问视觉。决策等待也算 busy。
+     * @brief 内门开/关套件。打印中（含 Prep）不动 Z；Manual/调试：记当前 Z → 降 20mm →
+     *        门动作 → 等 2s → 回降前高度。进套件前读全开：挡门开关关时只信 bit1；
+     *        开时一轮 Occlusion 后 OR。套件运动中不再问视觉，也不再问基板读码决定 Z。
      * @param opening true=开内门；false=关内门
      * @param blocking true=阻塞等锁；false=try_lock，忙则跳过
      * @return false 仅 blocking 且套件失败时
@@ -274,6 +274,8 @@ private:
      */
     bool ensure_z_at_plate_safe();
     void send_z_goto_abs(float target_mm);
+    /** @brief 准备阶段用户终止：Z 绝对回到 MCU Home 1.00 mm（已在附近则不动）。 */
+    void return_z_home_on_prep_terminate(const char* reason);
     /**
      * @brief 关内门后读码闸门。
      * @return true=已弹无板窗挂起，调用方须 return；false=跳过或有板可继续；
@@ -481,8 +483,8 @@ private:
     /* ---- 打印前光路检测 ---- */
     bool optical_path_check_on_ = false; /**< 光路检测开关（仅本次运行，默认关） */
     bool plate_height_adj_on_ = false; /**< 打印前测高调 Z（仅本次运行，默认关） */
-    bool inner_door_occlusion_on_ = false; /**< 内门视觉挡门（仅本次运行，默认关） */
-    bool plate_present_on_ = false; /**< 基板在位读码（仅本次运行，默认关；本刀仅开关，起印闸门待后续） */
+    bool inner_door_occlusion_on_ = true; /**< 内门视觉挡门（仅本次运行，默认开；调试页 Skip Inner Door Occl 按下后关） */
+    bool plate_present_on_ = true; /**< 基板在位读码（仅本次运行，默认开；调试页 Skip Plate Present 按下后关） */
     OpticalPathCheck optical_path_check_;
     /**
      * 检测线程结果回灌 worker 的 pending 位（与 clean_test_done_pending_ 同款）。

@@ -1833,6 +1833,8 @@ void McuLink::publish_debug_sensor_ntf(const serial_sensor_report_t& report)
     p.powder_status    = report.powder_present
         ? static_cast<uint8_t>(middleware::DebugPowderStatus::Available)
         : static_cast<uint8_t>(middleware::DebugPowderStatus::Fault);
+    p.powder_ir_bits = report.powder_ir_bits;
+    p.powder_ir_valid = (report.validity_bits & 0x80u) ? 1u : 0u;
     /* 1ST 的 oxygen 即滤芯氧；舱内氧改用 SOC */
     p.filter_oxygen_percent = report.oxygen_percent;
     const SocEnvSample soc = SocSensors::instance().snapshot();
@@ -1867,6 +1869,8 @@ void McuLink::publish_debug_sensor_invalid_ntf()
     p.pm25_cabin       = -1.0f;
     /* 与数值哨兵配套：UI 对 powder_status==0xFF 显示 "--" */
     p.powder_status    = 0xFF;
+    p.powder_ir_bits   = 0;
+    p.powder_ir_valid  = 0;
 
     middleware::Message ntf(middleware::MsgType::GLAVO_Debug_Sensor_Ntf,
         middleware::ModuleId::APP_GLAVO, middleware::ModuleId::UI);
@@ -1899,9 +1903,13 @@ void McuLink::publish_debug_sensor_from_soc_and_cache()
         p.powder_status = ((snap.powder_bits & 0x03u) == 0x03u)
             ? static_cast<uint8_t>(middleware::DebugPowderStatus::Available)
             : static_cast<uint8_t>(middleware::DebugPowderStatus::Fault);
+        p.powder_ir_bits = snap.powder_ir_bits;
+        p.powder_ir_valid = 1;
     } else {
         p.baseplate_temp_c = -1.0f;
         p.powder_status    = 0xFF;
+        p.powder_ir_bits   = 0;
+        p.powder_ir_valid  = 0;
     }
 
     p.pm25 = (soc.pm25_outdoor >= 0.f) ? soc.pm25_outdoor : -1.f;
@@ -2038,6 +2046,7 @@ void McuLink::poll_env_sim_tick()
         env_cache_.pressure_kpa     = pressure_kpa;
         env_cache_.baseplate_temp_c = baseplate;
         env_cache_.powder_bits      = powder_bits;
+        env_cache_.powder_ir_bits   = (powder_bits == 0x03u) ? 0x00u : 0xC0u;
         env_cache_.outer_door_open  = (door_open != 0);
         /* Env Sim 无内门传感器：默认关，避免误跑关套件。 */
         env_cache_.inner_door_open  = false;
@@ -2066,6 +2075,9 @@ void McuLink::poll_env_sim_tick()
     dbg.powder_status = (powder_bits == 0x03u)
         ? static_cast<uint8_t>(middleware::DebugPowderStatus::Available)
         : static_cast<uint8_t>(middleware::DebugPowderStatus::Fault);
+    /* Env Sim：有粉 → OUTL/OUTR 遮挡(0)；缺粉 → 受光(1)。A1..B3 置 0。 */
+    dbg.powder_ir_bits = (powder_bits == 0x03u) ? 0x00u : 0xC0u;
+    dbg.powder_ir_valid = 1;
     middleware::Message ntf(middleware::MsgType::GLAVO_Debug_Sensor_Ntf,
         middleware::ModuleId::APP_GLAVO, middleware::ModuleId::UI);
     ntf.payload = middleware::MsgPayload::from_bytes(

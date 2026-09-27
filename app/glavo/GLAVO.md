@@ -53,7 +53,7 @@ UI → GlavoService（工作线程）→ ParserManager → RingBuffer → McuLin
 | `UI_Parser_Exit_Ntf` | 取消解析（stop_parse + 清会话） |
 | `UI_Print_Start_Req` | 置打印态 → 外门闸门（未关则 `GLAVO_Outer_Door_Confirm_Req`；UI Confirm 再读门、Cancel=`skip=1` 不检门）→ 关内门套件（**静止全开或未知才跑**；bit1=0 跳过且不占 Prepare 步）→ 光路 → 测高 → 正式解析 + 首层参考图 + `begin_sending` → 串口氧门（洗气+等氧）→ 首层视觉比对 → 以上未跳过的步骤均推 `APP_Print_Prep_Progress_Ntf`；全部结束后才 `Ready` 进 Printing。TCP 未连则 `TcpOffline` 拒绝 |
 | ↑ 起印失败 | 打印态在 `launch_print_from_prepared` 最前面就置（检测那十几秒 UI 已在打印页），所以「运动还没开始就失败」的分支**一律走 `abort_print_start()`** 回滚，否则 UI 停在打印页 0%；失败时 SOC 舱灯全开 |
-| `UI_Print_Terminate_Req` | 外门确认/关内门套件/光路/测高/开扫前 Prepare：打断对应挂起并回红光安全态（关内门阻塞可被 `print_prep_abort_` 立刻打断）；已开扫则 `stop_parse` + `request_terminate` + `on_print_abort`；终止时内门保持当前态 |
+| `UI_Print_Terminate_Req` | 外门确认/关内门套件/光路/测高/开扫前 Prepare，以及尚未 `Ready` 的氧门/首层：打断挂起、回红光安全态，并把 Z 绝对回到 **1.00 mm**（MCU Home）；关内门阻塞可被 `print_prep_abort_` 立刻打断。已 `Ready` 出光后则 `stop_parse` + `request_terminate` + `on_print_abort`，不再抬 Z。终止时内门保持当前态 |
 | `UI_Print_Pause_Req` | `set_user_dispatch_paused(true)`，仅停 TCP 运动下发 |
 | `UI_Print_Resume_Req` | `set_user_dispatch_paused(false)`，恢复 TCP 运动下发 |
 | `UI_Debug_TestImage_Set_Ntf` | 红光循环打印 `GLAVO_TEST_GCODE_PATH`（默认 `/userdata/test/test.gcode`）；无录像/延时/换层握手/首页打印态；Off 仅 `request_terminate`，不切激光 |

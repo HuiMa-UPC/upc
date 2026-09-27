@@ -162,7 +162,7 @@ bool control_transfer_box_flow_enabled(void);
 
 /* ---- 跳过放版预确认开关（调试页 Other → Print Gates） ----
  * 打开后，control_start() 不弹「是否已放入打印版」，直接进选文件页（等同选「已放入」）。
- * 只管这张入口弹窗；打印准备阶段 Glavo 的放板确认窗归 Plate Present 开关管。
+ * 只管这张入口弹窗；打印准备阶段 Glavo 的放板确认窗归 Skip Plate Present（默认不跳过，读码开着）。
  * 纯 UI 本地标志（不发消息、不落盘），重启回到关闭。 */
 void control_set_skip_plate_prompt(bool on);
 bool control_skip_plate_prompt_enabled(void);

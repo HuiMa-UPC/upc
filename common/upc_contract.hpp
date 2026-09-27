@@ -672,12 +672,12 @@ enum class MsgType : uint32_t {
     GLAVO_Visual_Plate_Present_Req       = 0x1724, /**< VisualCabinCheckReqPayload; Snapshot only */
     APP_Visual_Plate_Present_Rsp         = 0x1725, /**< VisualCabinCheckRspPayload; PlatePresentResult */
     /* Glavo↔UI：舱检业务开关 / 无板弹窗（枚举只准末尾追加，接在 0x1725 之后） */
-    UI_Debug_InnerDoor_Occlusion_Set_Ntf, /**< DebugOnOffPayload：内门视觉挡门（仅本次运行，默认关） */
-    UI_Debug_InnerDoor_Occlusion_Get_Ntf, /**< Empty：查询内门视觉挡门开关 */
-    UI_Debug_Plate_Present_Set_Ntf,       /**< DebugOnOffPayload：基板在位读码（仅本次运行，默认关） */
-    UI_Debug_Plate_Present_Get_Ntf,       /**< Empty：查询基板在位开关 */
-    GLAVO_Debug_InnerDoor_Occlusion_Ntf,  /**< DebugOnOffPayload：内门视觉挡门开关状态 */
-    GLAVO_Debug_Plate_Present_Ntf,        /**< DebugOnOffPayload：基板在位开关状态 */
+    UI_Debug_InnerDoor_Occlusion_Set_Ntf, /**< DebugOnOffPayload：on=1 做内门挡门融合（仅本次运行，默认开；UI Skip 按下发 0） */
+    UI_Debug_InnerDoor_Occlusion_Get_Ntf, /**< Empty：查询内门挡门融合是否执行 */
+    UI_Debug_Plate_Present_Set_Ntf,       /**< DebugOnOffPayload：on=1 执行基板读码（仅本次运行，默认开；UI Skip 按下发 0） */
+    UI_Debug_Plate_Present_Get_Ntf,       /**< Empty：查询基板读码是否执行 */
+    GLAVO_Debug_InnerDoor_Occlusion_Ntf,  /**< DebugOnOffPayload：on=1 表示正在做内门挡门融合 */
+    GLAVO_Debug_Plate_Present_Ntf,        /**< DebugOnOffPayload：on=1 表示正在执行基板读码 */
     /** 无基板：放入基板并关外门（Cancel=阻断起印，勿复用外门 skip=1 继续 Prep） */
     GLAVO_Plate_Place_Confirm_Req,        /**< Empty */
     UI_Plate_Place_Confirm_Rsp,           /**< PlatePlaceConfirmRspPayload */
@@ -1811,7 +1811,10 @@ struct DebugSensorPayload {
     float   pm25_cabin;              /**< 舱内 PM2.5（SOC 舱内 UART，阀关时可能无效）；无效 <0 */
     float   filter_oxygen_percent;   /**< 滤芯氧 %（MCU 1ST value[0..1]）；无效 <0 */
     uint8_t powder_status;           /**< DebugPowderStatus；0xFF=无效显示 "--" */
-    uint8_t reserved[3];
+    /** 主板 8 路料位红外：bit0..7=A1/A2/A3/B1/B2/B3/OUTL/OUTR；1=受光无粉，0=遮挡有粉 */
+    uint8_t powder_ir_bits;
+    uint8_t powder_ir_valid;         /**< 1=红外位有效；0=未收到/无效，UI 显示 "--" */
+    uint8_t reserved;
 };
 
 /** GLAVO_Debug_Axis_Ntf：Z/S/D 实际位置 + Z 工作坐标 */

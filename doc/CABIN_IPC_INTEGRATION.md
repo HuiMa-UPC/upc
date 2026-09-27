@@ -144,7 +144,7 @@ bool end_cabin_session(uint32_t session_id) {
 - `gsx` 的 UPDF SCM_RIGHTS 头含 `fd_count`，相关 Broker/Camera/Visual/UI/Media 传输版本必须一致。不要把旧 `new-ui` 二进制混入这套运行环境。
 - 集成测试必须使用独立 Broker socket / SHM 与模拟 Camera；不要在生产 Broker 上再注册 APP_GLAVO 或 APP_VISUAL，同 ModuleId 会挤掉正在运行的真实进程。
 
-SOC 评审重点：核对同版本契约、超时／终止／会话去重；核对实际机构流程与产品意图；确认场景条件和负样本验收后进行整机联调。`Plate Present` 是起印开关，检测有板后会继续后续准备和打印，不能当作无机构动作的单次测试按钮。
+SOC 评审重点：核对同版本契约、超时／终止／会话去重；核对实际机构流程与产品意图；确认场景条件和负样本验收后进行整机联调。基板读码默认执行。调试页 `Skip Plate Present` 按下后本次运行跳过。检测有板后会继续后续准备和打印，不能当作无机构动作的单次测试按钮。
 
 本次编译、自动测试以及保留的现场失败样本见 [CABIN_TEST_REPORT.md](CABIN_TEST_REPORT.md)。
 

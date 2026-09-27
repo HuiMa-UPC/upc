@@ -2257,6 +2257,7 @@ void GlavoService::handle_print_terminate(const middleware::Message& msg)
         deferred_print_start_ = false;
         (void)apply_red_laser_mode(true, "user_terminate_during_outer_door");
         set_cabin_light(true);
+        return_z_home_on_prep_terminate("outer_door");
         set_print_running(false);
         McuLink::instance().set_print_task_flow_active(false);
         parser::ParserManager::instance().stop_parse();
@@ -2275,6 +2276,7 @@ void GlavoService::handle_print_terminate(const middleware::Message& msg)
         deferred_print_start_ = false;
         (void)apply_red_laser_mode(true, "user_terminate_during_plate_place");
         set_cabin_light(true);
+        return_z_home_on_prep_terminate("plate_place");
         set_print_running(false);
         McuLink::instance().set_print_task_flow_active(false);
         parser::ParserManager::instance().stop_parse();
@@ -2297,6 +2299,7 @@ void GlavoService::handle_print_terminate(const middleware::Message& msg)
         plate_height_done_pending_.store(false);
         (void)apply_red_laser_mode(true, "user_terminate_during_height");
         set_cabin_light(true);
+        return_z_home_on_prep_terminate("plate_height");
         set_print_running(false);
         McuLink::instance().set_print_task_flow_active(false);
         parser::ParserManager::instance().stop_parse();
@@ -2316,6 +2319,7 @@ void GlavoService::handle_print_terminate(const middleware::Message& msg)
         optical_path_done_pending_.store(false);
         (void)apply_red_laser_mode(true, "user_terminate_during_optical");
         set_cabin_light(true);
+        return_z_home_on_prep_terminate("optical");
         set_print_running(false);
         McuLink::instance().set_print_task_flow_active(false);
         parser::ParserManager::instance().stop_parse();
@@ -2338,6 +2342,7 @@ void GlavoService::handle_print_terminate(const middleware::Message& msg)
             inner_door_close_pending_outer_.store(false);
             (void)apply_red_laser_mode(true, "user_terminate_during_prep");
             set_cabin_light(true);
+            return_z_home_on_prep_terminate("pre_motion");
             set_print_running(false);
             link.set_print_task_flow_active(false);
             parser::ParserManager::instance().stop_parse();
@@ -2370,6 +2375,10 @@ void GlavoService::handle_print_terminate(const middleware::Message& msg)
     }
     deferred_print_start_ = false;
     first_layer_reference_waiting_ = false;
+    /* 氧门/首层仍算 Prepare（尚未 Ready）。正式出光后的终止不抬 Z。 */
+    if(prep_last_step_ != static_cast<uint8_t>(middleware::PrintPrepStep::Ready)) {
+        return_z_home_on_prep_terminate("prep_before_ready");
+    }
     set_print_running(false);
     {
         std::lock_guard<std::mutex> lock(first_layer_visual_mtx_);
@@ -5950,6 +5959,22 @@ void GlavoService::handle_outer_door_confirm_rsp(const middleware::Message& msg)
     continue_print_after_outer_door_ready();
 }
 
+void GlavoService::return_z_home_on_prep_terminate(const char* reason)
+{
+    /* on_message 已置 print_prep_abort_，wait_z 会立刻放弃。套件/测高此时已退出，清掉再等到位。 */
+    print_prep_abort_.store(false);
+    UPC_LOG_GLAVO_SERVICE(Info, "prep terminate: return Z to %.2f (%s)",
+                          static_cast<double>(kHeightZHomeMm),
+                          reason ? reason : "");
+    send_z_goto_abs(kHeightZHomeMm);
+    if(!wait_z_settled(kHeightZHomeMm, 0.15f, kPlateSafeZSettleMs)) {
+        UPC_LOG_GLAVO_SERVICE(Warn,
+            "prep terminate: Z return timeout target=%.2f actual=%.2f",
+            static_cast<double>(kHeightZHomeMm),
+            static_cast<double>(McuLink::instance().get_z_pos_mm()));
+    }
+}
+
 void GlavoService::send_z_goto_abs(float target_mm)
 {
     const float z0 = McuLink::instance().get_z_pos_mm();
@@ -6111,7 +6136,8 @@ bool GlavoService::begin_plate_present_gate()
     if(result == middleware::PlatePresentResult::QrFound) {
         /*
          * 无板：先自动开内门再开外门，方便进舱放板；勿只弹模态挡死 Manual 开门。
-         * 套件在 print+基板开时 skip_z（Z 已在 −20）。Skip Outer Door 时不开外门。
+         * 打印中内门套件 skip_z（进印已到 −20 或不降 Z，与读码开关无关）。
+         * Skip Outer Door 时不开外门。
          * waiting 先置位：自动开门期间关外门边沿不得补关内门。
          */
         plate_place_confirm_waiting_ = true;
@@ -6445,8 +6471,10 @@ bool GlavoService::run_inner_door_motion_kit(bool opening, bool blocking)
     const uint8_t door_action = opening
         ? static_cast<uint8_t>(middleware::DebugMotorAction::Forward)
         : static_cast<uint8_t>(middleware::DebugMotorAction::Reverse);
-    /* 打印路径且基板开：进印已到 −20，套件不再相对降、不回 z0。 */
-    const bool skip_z = plate_present_on_ && print_running_.load();
+    /* 打印中（含 Prep）：进印已强制 −20 或 Skip Plate Present 不降；
+     * 内门开/关都不再相对降、不回 z0，也不再问基板读码决定要不要动 Z。
+     * Manual/调试（非打印）仍走相对降 + 回 z0。 */
+    const bool skip_z = print_running_.load();
     UPC_LOG_GLAVO_SERVICE(Info,
         "inner door kit: %s z0=%.2f drop=%.1f wait=%d ms skip_z=%d",
         opening ? "open" : "close",

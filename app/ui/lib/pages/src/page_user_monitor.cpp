@@ -79,7 +79,7 @@ constexpr uint32_t kLightOnIcon = 0xffffff;
 constexpr uint32_t kPlateOn = 0x485dff;
 
 /* Manual 点按步距（mm）。Z 按 μm 下发，可以取小数；S 协议是 int16，只能是整数 mm。 */
-constexpr float kManualZStepMm = 0.3f;
+constexpr float kManualZStepMm = 0.1f;
 constexpr float kManualSStepMm = 1.0f;
 
 /* Manual 长按点动速度（协议 int16，mm/s）。 */
