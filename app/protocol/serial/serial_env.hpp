@@ -26,24 +26,17 @@ typedef struct {
     uint8_t powder_right_low;    /**< 1=右匣缺粉（OUTR 无粉） */
 } serial_sensor_report_t;
 
-/** TLV 0x06 EXT：电气量 + 风机 */
+/** TLV 0x08 FANBOARD：风机遥测（替代已停用的 EXT 0x06 后半段） */
 typedef struct {
-    uint16_t sieve_current_ma;
-    uint16_t door_coil_ma;
-    uint16_t inner_door_step_ma;
-    uint16_t ptc_heat_ma;
-    uint16_t drop_powder_ma;
-    uint16_t soc_supply_ma;
-    uint16_t cool_fan_ma;
-    uint16_t soc_24v_mv;
-    uint8_t  elec_valid_bits;
     uint16_t fan_rpm;
     uint16_t fan_bus_v_x10;   /**< 0.1V */
     uint16_t fan_bus_i_ma;
     uint8_t  fan_fault;
     uint8_t  fan_state;
-    uint8_t  fan_status_bits; /**< bit7=链路正常 */
-} serial_sensor_ext_t;
+    uint8_t  fan_status_bits; /**< bit7=风机板链路正常 */
+    int16_t  ldo_temp_x10_c;  /**< 0.1℃；tlv 不足或 bit2=0 时为 0 */
+    int16_t  mcu_temp_x10_c;
+} serial_sensor_fanboard_t;
 
 typedef enum {
     SERIAL_SENSOR_ERR_NONE = 0,
@@ -68,10 +61,13 @@ int serial_parse_sensor_report_detail(const uint8_t* data, size_t len,
 int serial_parse_sensor_report(const uint8_t* data, size_t len,
                                serial_sensor_report_t* out);
 
-/** 解析 TLV 0x06 EXT（电气量 + 风机） */
-int serial_parse_sensor_ext_detail(const uint8_t* data, size_t len,
-                                   serial_sensor_ext_t* out,
-                                   serial_sensor_err_t* err_out);
+/** 解析 TLV 0x08 FANBOARD（风机转速/状态/母线；Tlv-Len 按字段是否存在判定，最短 9） */
+int serial_parse_sensor_fanboard_detail(const uint8_t* data, size_t len,
+                                        serial_sensor_fanboard_t* out,
+                                        serial_sensor_err_t* err_out);
+
+/** 识别 TLV 0x07 ADC 电气量帧（避免当 SENSOR FAIL）。成功返回 0。 */
+int serial_parse_sensor_adc_frame(const uint8_t* data, size_t len);
 
 const char* serial_sensor_err_string(serial_sensor_err_t err);
 

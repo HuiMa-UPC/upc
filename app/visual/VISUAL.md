@@ -10,7 +10,7 @@
 - 保留首层检测请求/应答链路（`GLAVO_Visual_FirstLayer_Check_Req` / `APP_Visual_FirstLayer_Check_Rsp`）
 - 打印前光路检测：红点识别桩 `RedDotDetector`，窗口轮询最新 NV12；算法接入见 [doc/视觉协作-光路检测.md](../../doc/视觉协作-光路检测.md)
 - 基板测高 / 高度校准：`plate_height_pipeline` 只回光斑质心；LUT 在 Glavo。见 [doc/视觉协作-基板测高.md](../../doc/视觉协作-基板测高.md)
-- 内门挡镜头 / 平台二维码基板在位（需求，IPC 待合入）：[doc/视觉协作-内门遮挡与基板在位.md](../../doc/视觉协作-内门遮挡与基板在位.md)
+- 内门挡镜头 / 平台码标记检测：算法与 Visual 收发以 [CABIN_IPC_INTEGRATION.md](../../doc/CABIN_IPC_INTEGRATION.md) 为准（`cabin_detector` + `visual_cabin_service`）。Glavo/UI 起印闸门、挡门融合与调试开关见 [原需求](../../doc/视觉协作-内门遮挡与基板在位.md)。
 
 ## IPC
 
@@ -22,7 +22,14 @@
 - 测高会话：`GLAVO_Visual_PlateHeight_Session_Start_Ntf` / `_Stop_Ntf`
 - 质心：`GLAVO_Visual_Laser_Spot_Measure_Req` / `APP_Visual_Laser_Spot_Measure_Rsp`
 
-首层、光路与测高共用一路 Camera 取流，会话独立开关。取流生命周期按「引用计数」处理，
+- 舱检会话：`GLAVO_Visual_Cabin_Session_Start_Ntf` / `_Stop_Ntf`
+- 内门：`GLAVO_Visual_InnerDoor_Occlusion_Req` / `APP_Visual_InnerDoor_Occlusion_Rsp`
+- 基板：`GLAVO_Visual_Plate_Present_Req` / `APP_Visual_Plate_Present_Rsp`
+
+首层、光路、测高及舱检共用一路 Camera 取流。舱检与前三者互斥，已有功能优先，
+舱检自身的门检测与基板检测也禁止并行。不影响已有功能之间的会话关系。
+舱检得出一轮结果后停止检测并释放取流需求，等下一条显式请求，不在放板过程中自动再检。
+取流生命周期按「引用计数」处理，
 判据统一走 `any_session_active_locked()`，**下列三处都必须用它，漏一处就会静默失效**：
 
 | 位置 | 作用 | 漏用后果 |
@@ -46,6 +53,12 @@ rongsu_visual
 ```
 
 ## 说明
+
+- 舱检算法是 `lib/cabin_detector.*`，仅接紧凑 NV12 并返回单帧结果；`lib/visual_cabin_service.cpp` 管理请求窗口、新帧连续证据、超时和回包。
+- 不使用 RTSP 或 UI 预览作为产品算法输入，不控制机构、舱灯、Z 或打印。
+- 两类算法的同型号候选参数及五张模板已嵌入 `rongsu_visual`，新机无需手工复制舱检 JSON／模板。非空环境变量指定的工程配置优先，其次为已存在的 `/userdata/visual/cabin_*_config.json`，否则使用内置参数。选中的外部配置无效时返回 unknown，不悄悄回退；工程覆盖不会被升级覆盖。部署规则、候选精度和同型号验收限制见 [calibration/README.md](calibration/README.md)。
+- 内置参数随程序及现有应用升级包交付，不写入设备文件系统；检测仍由现有 SOC/UI 业务流程的请求触发。
+- 隔离测试见 [tests/README.md](tests/README.md)，使用独立 Broker 与模拟 Camera，不连接运行中的设备服务。
 
 - 视觉 demo 的检测目标为最大凸四边形（轮廓近似）。
 - 若当前工具链没有 OpenCV，会编译通过但不会启用识别路径（仅推送 `valid=0`）。

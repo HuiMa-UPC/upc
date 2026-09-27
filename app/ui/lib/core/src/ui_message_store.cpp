@@ -113,6 +113,10 @@ const CatalogEntry kCatalog[] = {
       "Inner door sequence failed", "Z drop / close inner door / restore Z did not complete" },
     { (uint16_t)DeviceEventCode::PlateHeightBlocked, UI_MSG_SEV_ERROR,
       "Plate height blocked", "LUT missing or measure failed; print start aborted" },
+    { (uint16_t)DeviceEventCode::PlatePresentFail, UI_MSG_SEV_ERROR,
+      "Build plate check failed", "Plate QR unknown or Visual timeout; print start aborted" },
+    { (uint16_t)DeviceEventCode::PlateAbsentNeedPlace, UI_MSG_SEV_INFO,
+      "Place build plate", "Put the plate in and close the outer door" },
     /* ---- UI 本地 ---- */
     { (uint16_t)DeviceEventCode::UiWearMask, UI_MSG_SEV_CRITICAL,
       "Wear a mask before opening", "Cabin powder may become airborne" },

@@ -1030,7 +1030,7 @@ pending 自动解除——正好顺带验超时路径。
 | `user_history` | `page_user_history.*` | 打印历史：三 Tab + Storage 条 + 日期分组卡片 + 管理态批量删除 + 左滑删除 |
 | `user_settings` | `page_user_settings.*` | 设置（浅色档）：8 项左导航 + 右栏白卡版式。Network（Wi-Fi 开关/列表/子页）、Display & Brightness（背光滑条 + 熄屏选择子页，占位）、Storage（容量 + 格式化 + 文件管理，仅前端）、About（版本 + Galvo/MCU OTA）、Debug 密码弹窗。按稿 6089:11322 / 6235:91450 / 6240:92007 / 6251:94362 实现 |
 | `user_message` | `page_user_message.*` | 消息中心（浅色档）：四 Tab（含临时的 Unresolved，按到达序汇总未处理报警）+ All read 浮层顶栏 + 日期分组混排列表（MCU 报警 + 设备事件）+ 初始 10 条与底部 Load More + 左滑删除历史 + 右侧 632 详情抽屉（Reset 三态）。按稿 6230:89616 / 6091:13405 / 6091:13612 / 6091:13847 实现 |
-| `user_debug` | `page_user_debug.*` | 调试控制台；Move 页振镜卡 Abs X/Y + Move 走 `send_galvo_abs_pos`；Other 页按 Process / Cabin / Print Gates / Media & Sim / Inject 分组。`Galvo Point Test` 在 Print Gates，按当前校准表依次显示中心和四角红光点，与正式打印及 Test image 双向互斥。O2 Calib 在左列：输入参考浓度后点圆钮写 `/userdata/CAL/o2_cal.json`；失败 toast 提示、标签仍显示原 K。Media & Sim 的 **Sys HUD** 打开后，`ui_sys_hud` 在 `lv_layer_sys` 右上角红字显示 CPU 温 / 整机与本进程占用 / 内存（`upc_sys_monitor_sample` 读本机 `/proc` 与 thermal sysfs，不经 IPC），不进布局、不可点，仅本次运行。顶部传感器条末格 **Zone4** 进页后约 1Hz 读 `thermal_zone4`（同 `sample().zone4_temp_c`），退页停定时器 |
+| `user_debug` | `page_user_debug.*` | 调试控制台；Move 页 Z 卡点击步距按 **μm** 输入，`on_jog_click` 乘 `AxisCfg::step_scale`（Z=0.001）转 mm 再发 `send_axis_jog`（契约 value 为 mm；Test 页与监控页 Manual 直接传 mm，不经此换算）；Move 页振镜卡 Abs X/Y + Move 走 `send_galvo_abs_pos`；Other 页按 Process / Cabin / Print Gates / Media & Sim / Inject 分组。`Galvo Point Test` 在 Print Gates，按当前校准表依次显示中心和四角红光点，与正式打印及 Test image 双向互斥。O2 Calib 在左列：输入参考浓度后点圆钮写 `/userdata/CAL/o2_cal.json`；失败 toast 提示、标签仍显示原 K。Media & Sim 的 **Sys HUD** 打开后，`ui_sys_hud` 在 `lv_layer_sys` 右上角红字显示 CPU 温 / 整机与本进程占用 / 内存（`upc_sys_monitor_sample` 读本机 `/proc` 与 thermal sysfs，不经 IPC），不进布局、不可点，仅本次运行。顶部传感器条末格 **Zone4** 进页后约 1Hz 读 `thermal_zone4`（同 `sample().zone4_temp_c`），退页停定时器；传感器条下方另有 **Powder IR** 八路料位红外（A1/A2/A3/B1/B2/B3/L/R，`powder_ir_bits`：Blk=遮挡有粉、Clr=受光无粉） |
 | `user_timelapse` | `page_user_timelapse.*` | 延时摄影播放器（隐藏页，历史缩略图进入；全屏 `lv_layer_top`） |
 
 注册仅在 `ui_app.cpp`；打印流程走 `control_*`，pages 不直接订阅 MsgBus。详见 `lib/pages/README.md`。
@@ -1050,16 +1050,72 @@ pending 自动解除——正好顺带验超时路径。
 | 设备图上 | 余量胶囊 `make_supply_pill()` | 两颗白胶囊（主色料桶图标 + 桶号），坐标换算成相对设备图左上角的比例，换档位时跟着图一起缩放、不会飘离料盒。第二颗的取值还借着 `filter_pct`，见下 |
 | 左下 | PRINT `build_action_tiles()` | `USER_HOME_PRINT_BTN_W`×84（稿 216×84）的深色圆角钮，见下。**摄像机方钮新稿删了**（监控独立成页、入口在侧栏），整行只剩它一枚 |
 | 右上 | 通知三态 | 不属于本页，是 `ui_notice_stack` 的全局对象，见「消息中心与通知三态」 |
-| 右下 | 开门滑块 `build_door_floating()` | `SLIDE TO UNLOCK`（三处开门滑块统一同一个串：首页、监控页、放版弹窗，控件的默认兜底值也是它；取件那条仍是 `SWIPE TO COLLECT`）。到底那帧的 `RELEASE TO OPEN` 是控件内写死的，四条滑块共用。轨道走 `USER_HOME_SLIDE_W`×`USER_HOME_SLIDE_H`（稿 453×94）、旋钮 `USER_ACTION_BTN_SZ`（稿 84，上下各内缩 5） |
+| 右下 | 开门滑块 `build_door_floating()` | `SLIDE TO UNLOCK`（三处开门滑块统一同一个串：首页、监控页「请先开外门」弹窗、放版弹窗，控件的默认兜底值也是它；监控页取件弹窗那条是 `SLIDE TO RETRIEVE`）。到底那帧的 `RELEASE TO OPEN` 是控件内写死的，四条滑块共用；提示字随拖动只淡出、不移动，见下文「两行提示是随拖动量连续叠化的」。轨道走 `USER_HOME_SLIDE_W`×`USER_HOME_SLIDE_H`（稿 453×94）、旋钮 `USER_ACTION_BTN_SZ`（稿 84，四边离外框 5、离 1px 白描边内侧 4） |
 
 **底部那一行的退让量是不对称的**：横向仍是 `USER_PAD_LG`（稿 32，与上方卡片同一条竖线），
 纵向是 `USER_HOME_EDGE_GAP`（稿 48）。稿上那 48 落不回现有的内距梯度（1024 档的
 `USER_PAD_LG` 反而比 1280 的大），所以单开了一个字段。滑块的底距还要再减掉旋钮的内缩：
 稿上与左下按钮上下对齐的是**旋钮**（两者顶都在 668、底都在 752），轨道比旋钮上下各高出 5。
 
-**开门滑块走控件的浅色档**（`ui_slide_unlock_cfg_t::light_theme`）：白 90% 轨道、深色
-`#333145` 滑块、深色提示字，轨道与滑块都从全圆改成圆角矩形（稿 28 / 24）。差异集中在配色与
-圆角、**结构一模一样**，所以做成一个开关而不是另起一套控件；其余三处调用不设它，观感不变。
+**开门滑块走控件的浅色档**（`ui_slide_unlock_cfg_t::theme = UI_SLIDE_THEME_LIGHT`）：白 90%
+轨道、深色 `#333145` 滑块、深色提示字，轨道与滑块都从全圆改成圆角矩形（稿 28 / 24）。差异
+集中在配色与圆角、**结构一模一样**，所以做成档位而不是另起一套控件。
+
+控件现在一共三档（`ui_slide_theme_t`），**0 值是深色玻璃档**——调用点都是 `= {}` 零初始化，
+不设就落在原样上：
+
+| 档 | 轨道 | 滑块 / 图标 | 提示字 | 用在 |
+|---|---|---|---|---|
+| `GLASS`（0） | 黑 50% 全圆 + 白 10% 描边 | 红渐变全圆 + 玻璃高光，白图标 | 白 70%，带三个 chevron | 目前没有调用点 |
+| `LIGHT` | 白 90% 圆角 28 + 白描边 + 淡投影 | `#333145` 圆角 24，白图标 | `#333145` 70%，`user_font_body()` + 字距 2 | 首页开门、放版弹窗「未放入」 |
+| `INK` | `#5A5872`→`#333145` 横向渐变，圆角 24；白边是深色区内缩 1px 露出的白卡（不是 border） | **白**圆角 20 + 偏下的淡白光，`#333145` 图标 | **满白**，`user_font_title()`、无字距 | 监控页取件 / 请先开外门两个弹窗 |
+
+`LIGHT` 与 `INK` 版式相同（提示字右偏 `hint_off`、没有 chevron），控件里由同一个 `light` 标志
+管版式、`ink` 再分配色与提示字字号。早先这里是一个 `bool light_theme`，加第三档时换成了枚举，
+免得再叠一个互斥的 bool。
+
+**两档提示字字号不同**，两张稿本来就不是一个字号。按 1280 档逐像素量：首页 `SLIDE TO UNLOCK`
+大写高 18、宽 233；取件弹窗 `SLIDE TO RETRIEVE` 大写高 15.5、宽 190。Montserrat 的大写又比稿面
+字体宽，墨色档最初照搬浅色档的 `user_font_body()` + 字距 2，宽出一半（1024 屏上 233 对 152），
+旋钮右边那段几乎被字顶满。宽度与字高没法同时对上，这条滑条窄、宽度更显眼，按宽度取
+`user_font_title()`、不加字距：1280 / 1024 档宽 199 / 159（稿 190 / 152），大写高 14 / 12
+（稿 15.5 / 12.4）。`RELEASE TO OPEN` 与提示字同字号同字距。浅色档没动：首页那条比稿宽约
+9%（1280）/ 17%（1024），字高基本一致。
+
+**旋钮间隙的口径是「外框 5、描边内侧 4」**（1280 档，四边相同）。两档轨道都有一圈 1px 白
+描边：浅色档压在白玻璃上、墨色档压在白卡上，都看不出来，但它把可见的轨道区每边收进 1px。
+墨色档最初漏了这圈描边，可见间隙成了 5，1024 屏上宽出四分之一，实机一眼能看出来。逐像素量的
+稿值：取件弹窗 Cancel 占 x 24..424，深色区只有 25..423 / y 136..228，旋钮 (29,140)；首页
+那条 y=663 是纯白描边、旋钮从 668 起。
+
+**墨色档的白边不能用 LVGL 的 border 画**，否则四个圆角外沿起毛边（实机上看得出来）。LVGL 画
+「圆角 bg + 描边」时两者各自抗锯齿再叠加，只有 `border_width > 1` 才会把 bg 缩进描边底下
+（`lv_draw_rect.c`）；1px 描边时 bg 铺到最外沿，圆角上覆盖一半的像素先被 bg 染一半深色、再被
+描边盖一半白，最多剩 25% 的深色漏在白卡上，连成一圈灰点。直边像素要么全盖要么不盖，所以只有
+拐角出问题。现在的做法：轨道对象本身不画 bg 也不画 border，深色渐变放在第一个子对象 `well`
+上，内缩 1px、圆角 `track_r - 1`（与外框同心），外圈露出底下的白卡——看上去就是稿上那圈白边。
+代价是墨色档只适合放在白底上。浅色档仍是「90% 白 bg + 1px 白描边」，漏出来的是近白色，看不见，
+没改；也不改成 2px 描边，那样深色区又会再小 1px，间隙变回 3。
+
+**描边会让 LVGL 的子对象整体错 1px**：子对象的坐标和对齐都从父对象描边内侧算起
+（`lv_obj_get_style_space_left()` = pad + border）。旋钮竖直居中本来就在描边内侧做，落点正好
+离外框 `inset`；横向偏移却会被再加一个描边宽，所以 `fill` 的偏移是 `inset - border_w`
+（`border_w` 从轨道样式读回；透明轨道和墨色档都没有 border，读到 0）。改之前浅色档一直是
+「左 6、上下 5」，首页开门滑块与放版弹窗的旋钮随这次修正左移了 1px。末端红色叠层 `tint` 也只盖
+可见轨道区（扣描边或 well 外圈），不然到底那一下露白的那圈会被染出淡红边。
+
+**圆角决定拐角处的间隙**：两段圆弧只有同心（旋钮圆角 = 轨道可见圆角 − 间隙）才处处等宽，
+否则拐角 45° 处的间隙是 d·√2 − (R − r)·(√2 − 1)（R 轨道可见圆角、r 旋钮圆角、d 直边间隙）。
+两档的稿都是「旋钮比同心值大 1」——浅色 27 / 24、墨色 23 / 20，间隙 4——拐角 ≈4.4，比直边
+略宽一点。所以两档圆角**不相同**：墨色档整体比浅色档小 4（轨道 `USER_LIGHT_RADIUS`、旋钮
+`(USER_LIGHT_RADIUS * 5 + 3) / 6`，三档 36/30、24/20、19/16）。墨色档最初照搬浅色档的 28，
+可见圆角 27 配旋钮 20，拐角被挤到 ≈2.8，1024 屏上只剩 1.8，直边却是 3——实机上拐角明显
+发紧。数值是逐行拟合稿面得到的：取件弹窗深色区拐角 22.6、旋钮 20.1；首页滑道外框 28、
+旋钮 24.1。旋钮那个 5/6 要四舍五入：1024 档截断得 15，稿 ×0.8 是 16。
+
+墨色档旋钮外的光晕按稿逐点量过衰减曲线（离旋钮边 0.25px：左右 9.7%、下方 17.1%、上方
+2.9%；左右约 8px 归零），对应 LVGL 阴影 blur 16 / 下移 4 / 20% 白，blur 与下移按
+`knob_sz / 84` 缩放。
 
 浅色档还另外分了两处，都是稿上与深色那三条不同的地方：
 
@@ -1071,11 +1127,11 @@ pending 自动解除——正好顺带验超时路径。
   **这枚与监控页 Manual 底部那颗 OPEN 是同一枚**：稿上两条路径逐点相同、只差整体平移。
 - **没有那三个 chevron**。`build_chevrons()` 只在深色档建。
 
-**两行提示是随拖动量连续叠化的**（`apply_progress()`，五条滑块都生效）：
+**两行提示是随拖动量连续叠化的**（`apply_progress()`，所有滑块都生效），**但位置都不动**：
 
 | 元素 | 静止 → 到底 |
 |---|---|
-| `hint`（`SLIDE TO UNLOCK`） | `text_opa` `LV_OPA_70` → 0，同时 `translate_x` 由 `hint_off` 归零（边淡出边左移到轨心） |
+| `hint`（`SLIDE TO UNLOCK` 等） | `text_opa` 静止值 → 0，位置固定（浅色 / 墨色档右偏 `hint_off`）。静止值存在 `hint_opa`：深色 / 浅色档 `LV_OPA_70`，墨色档稿上是满白 `LV_OPA_COVER` |
 | chevron（仅深色档） | `line_opa` `LV_OPA_50` → 0，跟着上面那行走 |
 | `release`（`RELEASE TO OPEN`） | `text_opa` 0 → `LV_OPA_COVER`，位置恒定在轨心 |
 
@@ -1085,21 +1141,28 @@ pending 自动解除——正好顺带验超时路径。
   `HIDDEN`，那样做不出叠化——同一个标签没法和自己交叉淡入淡出。
 - **进度的分母是 `threshold_w` 不是 `max_w`**：到阈值就是「可松手解锁」那一刻，那时
   `RELEASE TO OPEN` 必须已经完全显出来，再往后拖不该还有变化。
-- **两条斜坡错开、各占一半行程**，不是同步对冲。两行字最终都落在轨心、长度又接近，
+- **两条斜坡错开、各占一半行程**，不是同步对冲。两行字长度接近、中心只差 `hint_off`，
   同步淡入淡出的话中段是两行半透明的字直接叠在一起、糊成一片；错开之后任一时刻至多
   一行可见（行程 50% 处两行都为 0，是一次干净的交接）。
 - 用 `text_opa` / `line_opa` 而**不是**对象级的 `lv_obj_set_style_opa()`：后者一旦小于
   255，LVGL 会把对象先渲染到独立图层再合成，而 `apply_progress()` 是拖动期间每帧都跑的。
 - 回弹不必另写：`return_fill()` 的动画走的也是 `set_fill_w()`，叠化自动倒放。
 - `apply_state()` 因此只剩末端红色氛围层（`tint`）与 `at_end` 标志，不再碰文字。
+- **静止态那行不再移动**：原先它边淡出边用 `translate_x` 左移到轨心，按需求取消了，现在只
+  淡出、停在原位。
+- **两行字分在滑块上下两层**：提示行在 `fill` 之前创建、垫在下面；`RELEASE TO OPEN` 在 `fill`
+  之后创建、压在上面。提示行不再往轨心躲，旋钮会在它还没淡完时就碰到它的左缘（1280 档取件
+  弹窗约 1/5 行程、字还剩一半多；首页那条约 3/10 行程、还剩四成），压在上层的话半透明的字会
+  叠在旋钮的门图标上。`RELEASE TO OPEN` 则必须在上层：到底时滑条几乎盖满整条轨道。
 
 - **静止态的提示文字居中在「旋钮右边那段白区」**，不是整条轨道。稿实测文字中心 1048.5，
   轨道（779..1232）中心 1005.5、旋钮右侧区间（868..1232）中心 1050。
 
-  落地方式是 `lv_obj_center(hint_row)` 保持整轨居中、再用 `translate_x` 右偏
+  落地方式是创建时 `lv_obj_align(hint_row, LV_ALIGN_CENTER, hint_off, 0)`，
   `hint_off = (inset + knob_sz) / 2`——这是白区中心减轨心的闭式解，三档算出
-  66.5 / 44.5 / 35.5，1280 档与稿实测的 44.5 分毫不差。**只有浅色档非零**，深色那四条
-  滑块没有同口径的稿，`hint_off = 0` 维持整轨居中。
+  66.5 / 44.5 / 35.5，1280 档与稿实测的 44.5 分毫不差。**只有浅色 / 墨色档非零**，深色玻璃档
+  没有同口径的稿，`hint_off = 0` 维持整轨居中。文字不随拖动移动（只淡出），这个偏量从创建起
+  就不变。
 
   早先这里按整条轨道居中（与稿差 45px），当时注释里担心「1024 档文字左缘距旋钮右缘只剩
   个位数像素」——**按现在的字号复核过是多虑了**，三档余量分别是 108 / 54.4 / 36.9px；
@@ -1284,14 +1347,40 @@ x=260 挪回 x=160、宽度从 202 涨到 216，`make_light_square_btn()` 与 `i
 | Job 两张数据卡 | `(892,480)` / `(1078,480)` 各 `170×98 rx16` 白 | `USER_MON_STAT_H`，两张 `flex_grow=1` 等分 |
 | Status PM 卡 | `(892,114) 356×210 rx16` 白 | `USER_MON_PM_H`，**定高**，见下 |
 | Status 指标卡 | `170×113 rx16` 白，两行两列缝均 16 | `USER_MON_CELL_H` |
+| Manual 三张卡 | `(892,120) 356×258`、`(892,394) 356×154`、`(892,564) 356×98`，rx16 白，卡间 16 | 内容撑高：内距 `USER_PAD_SM`、表头定高 `USER_MON_ROW_H / 2`（32）、卡内行距 `USER_MON_ROW_H * 3 / 8`（24），见下 |
+| Manual 控件 | 分段 `(909,193) 322×88`；上下钮各 `157×56`、缝 8；圆钮 `64`（S 轴三枚等分，Inner Door 一枚） | `USER_MON_ROW_H * 11/8`、`USER_MON_ROW_H * 7/8`、`USER_PRINT_CTL_BTN` |
 | 底部按钮 | 统一 `y=684 h=84 rx24` | `USER_ACTION_BTN_SZ` / `USER_LIGHT_RADIUS`，四档见下 |
 | 摄像头浮钮 | `72×72 rx20` 白 15%：照明 `(160,690)`、拍照 `(662,690)`、全屏 `(750,690)`；全屏档后两枚挪到 `(1072,690)` / `(1160,690)` | `USER_LIGHT_BTN_SZ` |
 | 状态胶囊 | `(160,32) 102×46 rx12` 白 70% + `r=4` 圆点 | `chip_set()`，目前只有吹粉中一档 |
+| 取件 / 外门弹窗 | 卡 `448×341`（外门 `448×253`）`rx24`，滑条 `400×94 rx24`（含 1px 白描边，深色区 `398×92`）、旋钮 `84 rx20`，到深色区四边 4 | `USER_MON_DLG_W`，墨色滑条档，见下文 `open_ink_slide_dlg()` 那段 |
 
 右栏内所有纵向间距（Tab→PM 卡、PM 卡→网格、网格两行之间）稿上都是 16，横向两列也是 16。
 
 几处刻意与稿一致、**没有归一**的数：浮钮距视口右缘非全屏是 38、全屏是 48，而左边照明钮
 两档都是 32；右栏底色是 `#F5F5F5` 而不是其余浅色页那个 `#FAFAFA`。稿上就是这样。
+
+#### Manual 三张卡的纵向尺寸
+
+卡片按内容撑高，所以**卡里每一道间距都直接决定卡有多高**。稿上（1280 档）：
+
+| 卡 | 纵向构成 | 稿高 |
+|---|---|---|
+| Plate Position | 内距 17 + 表头 32 + 24 + 分段 88 + 24 + 上下钮 56 + 内距 17 | 258 |
+| Powder Scraper (S) | 内距 17 + 表头 32 + 24 + 圆钮 64 + 内距 17 | 154 |
+| Inner Door | 内距 17 + 圆钮 64 + 内距 17（标题与圆钮都竖直居中） | 98 |
+
+- **表头是定高 32**，文字竖直居中（「Plate Position」墨迹中心 152.5，正好是 137..169 的行心），
+  不是字体行高撑出来的 18。
+- **卡内两道间隙都是 24**（表头 169 → 分段 193、分段 281 → 上下钮 305），同一个 `pad_row`。
+- 内距我们用 `USER_PAD_SM`（1280 档 16），比稿的 17 少 1，三张卡各矮 2，不单开字段。
+- 表头标题与读数都是 20 号（`user_font_title()`，1024 档 16），读数 `#333145` @ 50%。
+
+第一版表头按内容撑（18）、卡内行距给了 `USER_PAD_SM / 2`（8），三张卡在 1024 档只有
+164 / 96 / 73（稿折 206 / 123 / 78），底部按钮上方空出约 90px。现在是 199 / 117 / 73，剩下
+几个像素来自 1024 档 `USER_PAD_SM` 取 11（按比例应是 12.8），属于档位取整。
+
+稿上选中 `Top` 时「上」钮是置灰的，本页没做：高亮只表示「已发往该预置位」，一点动就退回 `Level`，
+不代表板子真实位置，按选中档禁用会误导（见下文「Manual · Plate Position」）。
 
 #### Status 页的字号与首页四宫格是同一套
 
@@ -1421,21 +1510,41 @@ Confirm 再检门，关到位才开清粉，或传感器开→关边沿自动续
   → 外门未关：`GLAVO_Outer_Door_Confirm_Req` → 弹窗 Confirm / Cancel
        Confirm：`UI_Outer_Door_Confirm_Rsp` skip=0，Glavo 再读门，仍开再弹
        Cancel：skip=1，不检门，直接进关内门套件（与调试 Skip Outer Door 不同，内门仍跑）
-  → 关内门套件（记当前 Z → 降 20 mm / 关内门 / 等 2s / 回到降前 Z；静止 bit1=0
-       跳过且不推 Closing inner door；调试 Skip Outer Door 可跳过外门+内门）
-       Manual/调试开内门同样：降 20 mm → 开 → 等 2s → 回到降前 Z（仅全开时跳过开套件）
+  → 关内门套件（打印中不动 Z；非打印：记当前 Z → 降 20 mm / 门动作 / 等 2s / 回到降前 Z；
+       静止 bit1=0 跳过且不推 Closing inner door；调试 Skip Outer Door 可跳过外门+内门）
+       Manual/调试开内门同样：非打印时降 20 mm → 开 → 等 2s → 回到降前 Z（仅全开时跳过开套件）
        上电不自动关内门
+  → 准备阶段（含尚未 Ready 的氧门/首层）点终止：Z 绝对回到 1.00 mm；已 Ready 出光后的终止不抬 Z
   → 光路：prep 标题 + `page_user_monitor_optical_path_update()` 右侧 n/5
   → 测高（失败/无 LUT 起印拒绝）
   → Camera manifest → page_user_monitor_enter_print_result()
   → RETRIEVE → 取件弹窗滑到底 → control_print_result_collect() → 开门流程
 ```
 
-调试页 Other→Cabin 另有 **Skip Outer Door**（默认 Off=要做外门+关内门套件）。
+调试页 Other→Print Gates 另有 **Skip Outer Door**（默认 Off=要做外门+关内门套件）和 **Skip O2 Gate**。
 
 **取件从「一条常驻滑块」改成了「按钮 + 弹窗」**（稿 6338:27929）：点 `RETRIEVE` 开弹窗，
 里面是 `SLIDE TO RETRIEVE` + `Cancel`，滑到底才调 `control_print_result_collect()`。后面的
 `DOOR_OPENING` / `TRANSFER_BOX` 一行没动，转运盒开关仍默认关；开门成功即收，不再等关门。
+
+**取件弹窗与「请先开外门」弹窗（稿 6339:28971）是同一副骨架**，由 `open_ink_slide_dlg()`
+建（1280 档稿值）：
+
+| 部件 | 取值 |
+|---|---|
+| 卡 | `USER_MON_DLG_W`（448）白卡，内距 `USER_PAD`（24）。**不借 `USER_DLG_W`**：那是 496 的确认弹窗 |
+| 副标题 | `ui_user_make_body_label()` + **居中**（该函数本身不设对齐，默认靠左） |
+| 滑条 | 墨色档 `UI_SLIDE_THEME_INK`，400×94（卡宽 − 2×24）、旋钮 84——尺寸与首页开门滑块相同，直接用 `USER_HOME_SLIDE_H` / `USER_ACTION_BTN_SZ`；圆角 24 / 20 比首页小一圈，由控件的墨色档给 |
+| Cancel | 仅取件弹窗有；满宽 400×72、圆角 16（`USER_LIGHT_RADIUS * 2/3`），配色字号借页脚按钮 |
+| 间距 | 副标题 → 滑条 36、滑条 → Cancel 16：body 行距压成 `USER_PAD_SM`，滑条再加 `margin_top` 补 20 |
+
+Cancel **放在 body 里而不是 footer**：footer 自带 `USER_PAD_SM` 的 pad_top，叠上卡片行距后
+滑条到 Cancel 会变成 32，比稿多一倍。外门弹窗稿上没有 Cancel，副标题稿里还是占位文案，
+暂写 `Slide to unlock and open the outer door.`。
+
+**取件弹窗的标题跟着结束态走**：`RETRIEVE` 在完成与终止两态都会出（`phase_finished()`），稿只
+画了完成态。终止态沿用同一张卡，标题换 `Print terminated`、副标题换 `Job stopped. …`——不然
+Job 卡写着 Print Terminated，弹窗却说 complete。
 
 **Job 卡两个数字沿用原口径**，不按稿上的示例数字改：打印中是剩余时间 + 耗材 `--`（打印中
 拿不到用量），结束后才换成实际耗时（H:MM:SS）与 manifest 的 `material_g`。caption 照稿写
@@ -1468,15 +1577,54 @@ Device/Light**。进页 `request_soc_led_state()`：mask≠0 钮亮，全 0 钮�
 - 右侧数字是 **Z 轴当前位置（mm）**，来自 `DebugAxisStatePayload::z_pos_mm`，格式 `%.1f`
   （未带单位；下方 Powder Scraper 的 S 轴读数带 `mm`）。
 - **预置**：`Top` → 绝对到位 **1 mm**，`Bottom` → **-10 mm**（`send_axis_goto` →
-  Axis_Jog `dir=0`；Glavo 读当前 MCU Z 后发 μm AXIS_INC）；`Level` 暂不动作。
-- **上下箭头**：每点相对 ±1 mm（同 Z Click 路径）。此前误用 int16/Len=2 帧，MCU 不认 Z
+  Axis_Jog `dir=0`；Glavo 读当前 MCU Z 后发 μm AXIS_INC）。这是一段**相对位移**，MCU 会
+  跑完整段；再发一条相对位移（单击方向键）不会打断它。`Level` 发 Z 点动停止
+  （`send_axis_hold_stop(Z)`），用来打断还在跑的 Top/Bottom 位移；点已选中项不发事件，
+  所以只有高亮在 Top/Bottom 时点 Level 才有动作。
+- **高亮兼作状态显示**：`Top` / `Bottom` 高亮表示「已发往该预置位」。之后**任何方向**的
+  Z 点按或长按（`on_manual_jog()` 里真正发出运动命令的 `SHORT_CLICKED` / `LONG_PRESSED`）
+  在发点动命令**之前**调 `plate_leave_preset()`：高亮还在 Top/Bottom 时先发 Z 点动停止打断
+  那段位移，再把高亮退回 `Level`。只有这第一次会发停止，之后连续点按不会互相打断；已到位
+  时这条停止对静止的轴无害，所以不用判断是否已到位。S 轴 −/+ 不影响。
+  切高亮走 `ui_segmented_set_active()`，**不触发回调**，不会误发 goto。页面创建时默认高亮
+  `Level`——启动时不知道 Z 在哪，不冒充停在 Top。分段控件忽略对已选中项的点击，所以高亮
+  必须退回 Level，点动之后再点 `Top` / `Bottom` 才能重新触发到位。
+- **待上机确认**：协议表没写「Z 轴点动停止」（TLV 0x03）单独发能否打断相对位移。长按能停，
+  只证明「速度点动 + 点动停止」组合有效。若单发停止停不住，应请 MCU 让点动停止能停下 Z 轴
+  的任何运动；临时办法是模仿长按，先发一条很慢的速度点动再立即发停止。
+- **上下箭头**：点按每次相对 ±0.3 mm（`kManualZStepMm`，同 Z Click 路径）；按住满 400 ms 转速度点动、松手停，
+  规则见下「Manual · 点动与 S 轴复位」。此前误用 int16/Len=2 帧，MCU 不认 Z
   相对位移（协议要求 Len=4、μm），已改为 `serial_debug_build_z_inc_um`。
+
+#### Manual · 点动与 S 轴复位
+
+Z 上下箭头与 S 轴 −/+ 共用一套事件（`attach_jog_events()` → `on_manual_jog()`）：
+
+- **点按**（松手时没到长按时间）走一步，`DebugJogMode::Click`：Z 0.3 mm（`kManualZStepMm`，
+  按 μm 下发）、S 1 mm（`kManualSStepMm`，协议 int16 只收整数 mm）。挂的是 `SHORT_CLICKED`，
+  **不是 `CLICKED`**——LVGL 长按松手后照样发 `CLICKED`，用它会在停车后再多走一步。
+- **长按**（按住满 400 ms，LVGL 默认值，项目未改）转速度点动，`DebugJogMode::Hold`：
+  Z 取 `kManualZHoldSpeed`、S 取 `kManualSHoldSpeed`（协议 int16，mm/s），当前 Z 2 mm/s、
+  S 30 mm/s。
+- **松手停**：`RELEASED` / `PRESS_LOST` 时发 `send_axis_hold_stop`，且只在长按中
+  （`g_hold_axis >= 0`）才发；点按后补停可能把那一步增量打断。
+- **兜底停车**：`apply_view()` 发现已不在 Manual（切 Tab、进打印态强制回 Job、Manual 被禁用
+  退位）以及 `page_user_monitor_exit()` 都会调 `manual_hold_stop()`，不等松手。
+  `UI_Debug_Axis_Hold_Stop_Ntf` 已入 IPC 可靠补发白名单；开始那条 `UI_Debug_Axis_Jog_Ntf`
+  刻意不入（晚到的「开始走」比丢弃更危险）。
+- **S 轴复位 = 回 Home**（`send_axis_home(S)`，与调试页 S 卡复位钮同路径）。**别改回设零**：
+  MCU 只有 Z 轴有工作零点，S 轴的 `UI_Debug_Axis_SetZero_Ntf` 会被 Glavo 静默丢掉，
+  表现就是「点了没反应」。
 
 #### Manual 页几处待补
 
 - **控制页那条「舱内 PM2.5 过高 → Too poor to open the gate」预警随控制页退役丢了。**
   门限判定本身在后端（`pm25_clean_threshold_`，可被 `cal.csv` 的 `PM2.5Clean` 覆盖），开门
   仍会被拦，只是拦之前用户看不到预警。补救留到后续：在 `OPEN` 按钮上加置灰态 + 一句提示。
+- **Top / Bottom 途中互切可能停错位置。** Glavo 用 MCU 周期上报的缓存 Z 算差值，第一段还没
+  跑完又发一条相对位移，最终位置取决于固件怎么处理运动中的新位移，高亮却已显示在新预置位。
+  协议表里有代码没用上的「Z 轴绝对位置移动」（TLV 0x04，目标为整数 mm，1 与 -10 都能表示），
+  改用它就不必拿缓存 Z 算差值；新的绝对移动能否覆盖进行中的运动，需先与 MCU 确认。
 
 ### 打印结束与结果页
 
@@ -1533,10 +1681,15 @@ Glavo Print_Terminate_Rsp / 进度 100% → control.cpp finish_printing()
 
 - header 那两枚图标钮**底透明只留字形**——稿上它们是填白的 32×32 圆角矩形，压在白卡上就是
   纯触摸目标。改稿前那套「深灰实心圆 + 白字形」翻白卡后会变成两颗突兀的黑扣子。
-- 「未放入」那条滑块直接开 `ui_slide_unlock_cfg_t::light_theme`，**控件一行不用改**：浅色档
+- 「未放入」那条滑块直接选 `UI_SLIDE_THEME_LIGHT`，**控件一行不用改**：浅色档
   的旋钮本来就是稿要的 `#333145` 实底 + `USER_LIGHT_RADIUS` 圆角 + 无玻璃高光，轨道 360×94、
   旋钮 84 也正是 `plate_right_col_w()` / `USER_HOME_SLIDE_H` / `USER_ACTION_BTN_SZ`。
   改稿前它给的是 `custom_accent` + 红色，那是深色档的样子。
+- **调试页可整张跳过**：`Other` → `Print Gates` → `Skip Plate Prompt` 打开后
+  （`control_set_skip_plate_prompt()`，纯 UI 本地标志，不发消息也不落盘，重启回到关闭），
+  `control_start()` 不进 `PLATE_PROMPT`，直接 `goto_file_selection()`，等同选「已放入 → 选择
+  打印任务」。它只管这张选文件前的入口弹窗；起印后打印准备阶段 Glavo 发来的
+  `Place the build plate` 确认窗（`GLAVO_Plate_Place_Confirm_Req`）归基板读码：默认执行；`Skip Plate Present` 按下后跳过。
 
 ### 转运盒流程（稿 6357:39444 / 39504 / 39470）
 
@@ -1667,9 +1820,11 @@ rongsu_camera 经主 IPC（/tmp/upc_camera.sock）SCM_RIGHTS 附带隔离 pool �
 
 `CameraStreamInfoPayload.dma_socket_path` 为 ABI 保留字段；fd 不经独立 socket 传递。源 fd 来自 Camera 隔离 pool（dma32/CMA），不是 ISP 的 V4L2 buf，见 [camera/CAMERA.md](../camera/CAMERA.md) 「ISP IOMMU 与 dma-buf 所有权」。
 
-- **开流**：`page_user_home` 打印模式 → `CameraPreviewPlayer::start()` → IPC Start → `apply_stream_start_ui` 开 SHM 元数据环 + `take_peer_dma_fds` + `setup_frame_buffers` + 解码线程。
+- **开流**：监控页 `cam_ensure_running()` → `CameraPreviewPlayer::ensure_running()`：已出帧则只 `reattach`；半死（active 未出帧 / 上次失败残留）则先 `Stop` 再 `start()` → IPC Start → `apply_stream_start_ui` 开 SHM 元数据环 + `take_peer_dma_fds` + `setup_frame_buffers` + 解码线程。
 - **关流/换流**：UI 仅请求解码线程退役；后台回收线程等待退出，LVGL 定时器确认退出后才关闭旧 SHM、DMA fd 与显示缓冲，因此主线程不阻塞在 `join()`。
-- **恢复职责**：Camera 侧采集看门狗是唯一的自动重连发起者；UI 只检测并记录预览卡帧，等待 Camera 重建 SHM 与重推 `Stream_Start_Rsp`，不再自行 Stop/Start 流。
+- **离页**：监控页 `detach_widgets()` 只卸 LVGL 指针，**不**发 Stop——避免短时间 Stop/Start 叠两封带 fd 的 `Start_Rsp`（曾与 UPDF 粘包叠加成 `DMA fd mismatch` 黑屏）。`ui_timer` 在 `image_==nullptr` 时自然空转。
+- **开流落地失败硬恢复**：`apply_stream_start_ui` 遇 fd/SHM 失败走 `recover_stream_start()`：**先 Stop 拆 Camera peer/SHM，再 Start**（与看门狗超时共用；重试上限 5）。give-up / 超时同样先 Stop 再清 `active_`，避免僵尸环导致「SHM open failed」且切页无法恢复。
+- **恢复职责**：采集卡死仍由 Camera 看门狗重开 ISP；UI 对开流落地失败与进页半死会话主动 Stop→Start。已出帧后的卡帧仍只记日志，等 Camera 重推 `Stream_Start_Rsp`。
 - **交互降频只降转换，不降取帧**：按压 / 有动画时 `decode_target_fps_override_` 置 `kInteractiveDecodeFps`(12)，解码线程据此**跳过 RGA/SW 转换**，但 `acquire_latest_frame` + `release_slot` 始终按相机帧率跑。若连取帧一起降频，滞留的槽位会占满 Camera 的在飞窗口并反压采集线程，把 Visual 与直播一起拖到 12fps（见 [camera/CAMERA.md](../camera/CAMERA.md) 「在飞窗口」）。5s 诊断里 `skip=` 即这类跳过的帧。
 - **解码线程不按帧周期补睡**：限速由 `acquire_latest_frame` 天然承担（没有比 `last_seq` 更新的帧就返回 `nullopt`），所以循环末尾**不再**睡到一个相机帧周期。补睡会把 SHM 的轮询粒度从 `kNoFrameNapMs`(5ms) 拉到整整一帧（无帧那圈只耗 5ms，末尾要再睡 28ms），凭空给预览加上平均半帧的等待。无帧时只睡 `kNoFrameNapMs`。
 - **`lv_timer` 周期 16ms**（`kUiRefreshPeriodMs`，与 `LV_DEF_REFR_PERIOD` 对齐）：这一拍等的是"转换好的帧什么时候被切上屏"，周期越长平均多等半个周期。交互期仍降到 `kUiRefreshInteractPeriodMs`(66) 让位给触摸响应。

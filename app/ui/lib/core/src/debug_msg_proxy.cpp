@@ -161,6 +161,24 @@ void DebugMsgProxy::init()
         }));
 
     subs_.push_back(bus.subscribe(
+        middleware::MsgType::GLAVO_Debug_InnerDoor_Occlusion_Ntf, middleware::ModuleId::UI,
+        [this](const middleware::Message& msg) {
+            middleware::DebugOnOffPayload p{};
+            if(inner_door_occlusion_cb_ && read_inline_pod(msg, p)) {
+                inner_door_occlusion_cb_(p.on != 0);
+            }
+        }));
+
+    subs_.push_back(bus.subscribe(
+        middleware::MsgType::GLAVO_Debug_Plate_Present_Ntf, middleware::ModuleId::UI,
+        [this](const middleware::Message& msg) {
+            middleware::DebugOnOffPayload p{};
+            if(plate_present_cb_ && read_inline_pod(msg, p)) {
+                plate_present_cb_(p.on != 0);
+            }
+        }));
+
+    subs_.push_back(bus.subscribe(
         middleware::MsgType::GLAVO_Debug_Soc_Led_Ntf, middleware::ModuleId::UI,
         [this](const middleware::Message& msg) {
             middleware::DebugSocLedStatePayload p{};
@@ -571,6 +589,30 @@ void DebugMsgProxy::request_plate_height_adj_state()
     publish_empty(middleware::MsgType::UI_Debug_PlateHeight_Adj_Get_Ntf);
 }
 
+void DebugMsgProxy::send_inner_door_occlusion_set(bool on)
+{
+    middleware::DebugOnOffPayload p{};
+    p.on = on ? 1 : 0;
+    publish_pod(middleware::MsgType::UI_Debug_InnerDoor_Occlusion_Set_Ntf, p);
+}
+
+void DebugMsgProxy::request_inner_door_occlusion_state()
+{
+    publish_empty(middleware::MsgType::UI_Debug_InnerDoor_Occlusion_Get_Ntf);
+}
+
+void DebugMsgProxy::send_plate_present_set(bool on)
+{
+    middleware::DebugOnOffPayload p{};
+    p.on = on ? 1 : 0;
+    publish_pod(middleware::MsgType::UI_Debug_Plate_Present_Set_Ntf, p);
+}
+
+void DebugMsgProxy::request_plate_present_state()
+{
+    publish_empty(middleware::MsgType::UI_Debug_Plate_Present_Get_Ntf);
+}
+
 void DebugMsgProxy::send_soc_led_set(uint8_t channel, bool on)
 {
     middleware::DebugSocLedPayload p{};
@@ -729,6 +771,16 @@ void DebugMsgProxy::register_optical_path_check(DebugOpticalPathCheckCb cb)
 void DebugMsgProxy::register_plate_height_adj(DebugPlateHeightAdjCb cb)
 {
     plate_height_adj_cb_ = std::move(cb);
+}
+
+void DebugMsgProxy::register_inner_door_occlusion(DebugInnerDoorOcclusionCb cb)
+{
+    inner_door_occlusion_cb_ = std::move(cb);
+}
+
+void DebugMsgProxy::register_plate_present(DebugPlatePresentCb cb)
+{
+    plate_present_cb_ = std::move(cb);
 }
 
 void DebugMsgProxy::register_soc_led(DebugSocLedCb cb)

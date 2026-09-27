@@ -1,0 +1,8 @@
+{
+  "max_mean_luma": 24,
+  "max_p95_luma": 32,
+  "dark_pixel_threshold": 40,
+  "min_dark_fraction": 0.98,
+  "clear_min_mean_luma": 40,
+  "clear_min_p95_luma": 60
+}

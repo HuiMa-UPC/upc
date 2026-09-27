@@ -95,6 +95,10 @@ DoorFlowOrigin g_door_origin = DoorFlowOrigin::PrintPrep;
  * 打开后取件分支才插入 TRANSFER_BOX 三步。纯 UI 本地标志，不发消息也不落盘。 */
 bool g_transfer_box_flow = false;
 
+/* 跳过放版预确认开关（调试页 Other → Print Gates → Skip Plate Prompt）。默认关：打印入口先弹
+ * 「是否已放入打印版」。打开后 control_start() 直接进选文件页。纯 UI 本地标志，不发消息也不落盘。 */
+bool g_skip_plate_prompt = false;
+
 /** 转运盒流程是否对当前这趟门流程生效（只认取件分支） */
 bool transfer_box_flow_active(void)
 {
@@ -303,8 +307,10 @@ lv_obj_t *make_round_icon_btn(lv_obj_t *parent, const char *symbol, lv_event_cb_
 void on_powder_low_async(void *user);
 void on_print_start_rejected_async(void *user);
 void on_outer_door_confirm_req_async(void *user);
+void on_plate_place_confirm_req_async(void *user);
 void close_powder_dlg(void);
 void close_outer_door_confirm_dlg(void);
+void close_plate_place_confirm_dlg(void);
 void stop_print_watchdogs(void);
 void start_print_peer_watch(void);
 void finish_printing(bool notify_complete);
@@ -446,6 +452,7 @@ void finish_printing(bool notify_complete)
     /* 缺粉窗可能还开着（用户既没补粉也没取消，作业已被终止/跑完） */
     close_powder_dlg();
     close_outer_door_confirm_dlg();
+    close_plate_place_confirm_dlg();
 
     if(notify_complete && g_job_done_cb) {
         DoneCb done_cb = g_job_done_cb;
@@ -711,6 +718,10 @@ void wire_msg_proxy()
 
     proxy.register_outer_door_confirm_req([]() {
         lv_async_call(on_outer_door_confirm_req_async, nullptr);
+    });
+
+    proxy.register_plate_place_confirm_req([]() {
+        lv_async_call(on_plate_place_confirm_req_async, nullptr);
     });
 
     proxy.register_print_terminate_done([]() {
@@ -1271,7 +1282,7 @@ void plate_show_notinserted(void)
     /* 稿 6388:48910 的滑块：轨道 360×94 贴满右列，旋钮 84 的圆角方块（rx20）上下内缩 5。
      * 这三个数正是浅色档的 USER_HOME_SLIDE_H / USER_ACTION_BTN_SZ ——控件的 light 档本身
      * 就是这套稿（深墨实底 user_light_nav_on、圆角 USER_LIGHT_RADIUS、无玻璃高光），
-     * 所以这里只要打开 light_theme，不需要再给 custom_accent。 */
+     * 所以这里只要选 UI_SLIDE_THEME_LIGHT，不需要再给 custom_accent。 */
     ui_slide_unlock_cfg_t slide_cfg = {};
     slide_cfg.hint_text    = "SLIDE TO UNLOCK";   /* 箭头由控件绘制 3 个 chevron */
     slide_cfg.on_unlocked  = on_plate_swipe_open;
@@ -1279,7 +1290,7 @@ void plate_show_notinserted(void)
     slide_cfg.track_w      = plate_right_col_w();
     slide_cfg.track_h      = USER_HOME_SLIDE_H;
     slide_cfg.knob_sz      = USER_ACTION_BTN_SZ;
-    slide_cfg.light_theme  = true;
+    slide_cfg.theme        = UI_SLIDE_THEME_LIGHT;
     slide_cfg.knob_icon    = ui_user_pick_icon(ic_door_panel_set,
                                                USER_ACTION_BTN_SZ * 8 / 21);
     ui_slide_unlock_create(col, &slide_cfg);
@@ -1968,6 +1979,74 @@ void on_outer_door_confirm_req_async(void * /*user*/)
         return;
     }
     show_outer_door_confirm_dlg();
+}
+
+/* ---- 无基板：放入基板并关外门（Cancel=阻断，勿复用外门 skip 继续） ---- */
+ui_modal_dialog_t *g_plate_place_confirm_dlg = nullptr;
+
+void close_plate_place_confirm_dlg(void)
+{
+    if(g_plate_place_confirm_dlg) {
+        ui_modal_dialog_close(g_plate_place_confirm_dlg);
+        g_plate_place_confirm_dlg = nullptr;
+    }
+}
+
+void on_plate_place_confirm_ok(lv_event_t * /*e*/)
+{
+    close_plate_place_confirm_dlg();
+    ui::UiMsgProxy::instance().send_plate_place_confirm(false);
+}
+
+void on_plate_place_confirm_cancel(lv_event_t * /*e*/)
+{
+    close_plate_place_confirm_dlg();
+    ui::UiMsgProxy::instance().send_plate_place_confirm(true);
+}
+
+void show_plate_place_confirm_dlg(void)
+{
+    if(g_plate_place_confirm_dlg) {
+        return;
+    }
+    ui_modal_dialog_cfg_t cfg =
+        ui_modal_dialog_cfg_user("Place the build plate", USER_DLG_W, true);
+    cfg.light_theme = true;
+    cfg.with_close_btn = false;
+    g_plate_place_confirm_dlg = ui_modal_dialog_open(lv_layer_top(), &cfg);
+    if(!g_plate_place_confirm_dlg) {
+        return;
+    }
+    lv_obj_t *sub = ui_user_make_body_label(
+        g_plate_place_confirm_dlg->body,
+        "Doors are opening. Place the build plate, close the outer door, then confirm.");
+    lv_label_set_long_mode(sub, LV_LABEL_LONG_MODE_WRAP);
+    lv_obj_set_width(sub, LV_PCT(100));
+    lv_obj_set_style_text_align(sub, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_flex_flow(g_plate_place_confirm_dlg->footer, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_row(g_plate_place_confirm_dlg->footer, USER_PAD, 0);
+    lv_obj_set_flex_align(g_plate_place_confirm_dlg->footer, LV_FLEX_ALIGN_START,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_t *ok = ui_user_make_confirm_footer_btn(
+        g_plate_place_confirm_dlg->footer, "Confirm",
+        true, user_light_nav_on, true,
+        on_plate_place_confirm_ok, nullptr);
+    lv_obj_set_flex_grow(ok, 0);
+    lv_obj_set_width(ok, LV_PCT(100));
+    lv_obj_t *cancel = ui_user_make_confirm_footer_btn(
+        g_plate_place_confirm_dlg->footer, "Cancel",
+        false, user_light_nav_on, true,
+        on_plate_place_confirm_cancel, nullptr);
+    lv_obj_set_flex_grow(cancel, 0);
+    lv_obj_set_width(cancel, LV_PCT(100));
+}
+
+void on_plate_place_confirm_req_async(void * /*user*/)
+{
+    if(g_state != CONTROL_STATE_PRINTING) {
+        return;
+    }
+    show_plate_place_confirm_dlg();
 }
 
 
@@ -2851,6 +2930,11 @@ void control_start(void)
     if(g_state != CONTROL_STATE_IDLE) {
         return;
     }
+    /* 调试开关打开：等同在预确认里选「已放入 → 选择打印任务」，不经未放入的开门分支 */
+    if(g_skip_plate_prompt) {
+        goto_file_selection();
+        return;
+    }
     /* Figma 入口：先弹「是否已放入打印版」两卡片预确认，再进入文件选择 */
     g_door_origin = DoorFlowOrigin::PrintPrep;
     enter_state(CONTROL_STATE_PLATE_PROMPT);
@@ -2916,6 +3000,16 @@ void control_set_transfer_box_flow(bool on)
 bool control_transfer_box_flow_enabled(void)
 {
     return g_transfer_box_flow;
+}
+
+void control_set_skip_plate_prompt(bool on)
+{
+    g_skip_plate_prompt = on;
+}
+
+bool control_skip_plate_prompt_enabled(void)
+{
+    return g_skip_plate_prompt;
 }
 
 const control_supply_t *control_supply_get(void)

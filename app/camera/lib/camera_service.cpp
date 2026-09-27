@@ -391,6 +391,43 @@ bool CameraService::ensure_stream_peer(const middleware::Message& req,
     std::lock_guard<std::mutex> lock(stream_peers_mtx_);
     auto it = stream_peers_.find(key);
     if(it != stream_peers_.end() && it->second) {
+        auto& peer = *it->second;
+        /*
+         * peer 仍在且环仍挂着：复用（UI 正常重入 / Visual 二次 Start）。
+         * 环已死或不符：就地 destroy+create，避免「Rsp ok 但 shm_open ENOENT」。
+         * UI 失败恢复路径会先 Stop 再 Start，多数情况走新建分支。
+         */
+        if(peer.producer.is_open() && peer.shm_name == shm_name) {
+            peer.rsp_type = rsp_type;
+            return true;
+        }
+        peer.active.store(false, std::memory_order_release);
+        peer.producer.destroy();
+        peer.peer_id = req.sender_id;
+        peer.rsp_type = rsp_type;
+        peer.shm_name = shm_name;
+        const upc_ipc::IpcShmError err = peer.producer.create(
+            peer.shm_name.c_str(),
+            stream_width_,
+            stream_height_,
+            dma_source_.dma_stride_y(),
+            upc_ipc::kDmaFrameFormatNv12,
+            CAMERA_SHM_SLOT_COUNT);
+        if(err != upc_ipc::IpcShmError::OK) {
+            UPC_LOG_CAMERA_SERVICE(Error,
+                "peer shm refresh fail type=%u sender=%u name=%s err=%d",
+                static_cast<unsigned>(rsp_type),
+                key,
+                peer.shm_name.c_str(),
+                static_cast<int>(err));
+            stream_peers_.erase(it);
+            return false;
+        }
+        peer.active.store(true, std::memory_order_release);
+        UPC_LOG_CAMERA_SERVICE(Info,
+            "peer shm refreshed sender=%u name=%s %ux%u stride_y=%u slots=%u",
+            key, peer.shm_name.c_str(), stream_width_, stream_height_,
+            dma_source_.dma_stride_y(), CAMERA_SHM_SLOT_COUNT);
         return true;
     }
 

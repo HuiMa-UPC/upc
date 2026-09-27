@@ -36,6 +36,26 @@ public:
     void start(lv_obj_t* image_widget, lv_obj_t* hint_widget,
                const char* scene = nullptr);
 
+    /**
+     * @brief 离页时只卸掉 LVGL 控件指针，保持 Camera 会话与解码线程。
+     *        避免待机 stop→再进 start 叠两封带 fd 的 Start_Rsp。
+     */
+    void detach_widgets();
+
+    /**
+     * @brief 回页时重新绑定控件；已在跑则不发 Stop/Start。
+     * @return true=已接管（含仍在 connecting）；false=未 active，调用方应 start()
+     */
+    bool reattach(lv_obj_t* image_widget, lv_obj_t* hint_widget,
+                  const char* scene = nullptr);
+
+    /**
+     * @brief 回页保证有预览：流已通则只 reattach；否则 Stop 清干净再 Start。
+     *        根治「SHM open failed 后切页仍黑屏」（半死 active / 僵尸 peer）。
+     */
+    void ensure_running(lv_obj_t* image_widget, lv_obj_t* hint_widget,
+                        const char* scene = nullptr);
+
     /** 退出打印 / 终止任务：停线程、关资源、发 Stop_Req */
     void stop();
 
@@ -83,6 +103,16 @@ private:
 
     void on_stream_start_rsp(const middleware::CameraStreamInfoPayload& info);
     void apply_stream_start_ui(const middleware::CameraStreamInfoPayload& info);
+    /**
+     * apply 失败（fd/SHM 等）时：先 Stop 拆 Camera peer/SHM，再 Start；
+     * 用尽重试才黑屏提示（give-up 同样先 Stop，避免僵尸环）。
+     */
+    void recover_stream_start(const char* reason_hint);
+    /** 仅发 Stop_Req（不断本地 active），供 recover / give-up 清对端环。 */
+    void tear_down_camera_peer();
+    /** Stop 后发 Start_Req 并开看门狗（recover / watchdog 共用）。 */
+    void request_stream_start_after_peer_teardown(const char* reason_hint);
+    void set_scene_tag(const char* scene);
     bool begin_decode_thread();
     void decode_thread_fn();
     void reset_ui();

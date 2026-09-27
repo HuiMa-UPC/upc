@@ -148,6 +148,12 @@ const char* upc_msg_type_name(MsgType type) {
         case MsgType::GLAVO_Visual_OpticalPath_Session_Stop_Ntf: return "GLAVO_Visual_OpticalPath_Session_Stop_Ntf";
         case MsgType::GLAVO_Visual_OpticalPath_Point_Check_Req: return "GLAVO_Visual_OpticalPath_Point_Check_Req";
         case MsgType::APP_Visual_OpticalPath_Point_Check_Rsp: return "APP_Visual_OpticalPath_Point_Check_Rsp";
+        case MsgType::GLAVO_Visual_Cabin_Session_Start_Ntf: return "GLAVO_Visual_Cabin_Session_Start_Ntf";
+        case MsgType::GLAVO_Visual_Cabin_Session_Stop_Ntf: return "GLAVO_Visual_Cabin_Session_Stop_Ntf";
+        case MsgType::GLAVO_Visual_InnerDoor_Occlusion_Req: return "GLAVO_Visual_InnerDoor_Occlusion_Req";
+        case MsgType::APP_Visual_InnerDoor_Occlusion_Rsp: return "APP_Visual_InnerDoor_Occlusion_Rsp";
+        case MsgType::GLAVO_Visual_Plate_Present_Req: return "GLAVO_Visual_Plate_Present_Req";
+        case MsgType::APP_Visual_Plate_Present_Rsp: return "APP_Visual_Plate_Present_Rsp";
         case MsgType::GLAVO_Visual_PlateHeight_Session_Start_Ntf: return "GLAVO_Visual_PlateHeight_Session_Start_Ntf";
         case MsgType::GLAVO_Visual_PlateHeight_Session_Stop_Ntf: return "GLAVO_Visual_PlateHeight_Session_Stop_Ntf";
         case MsgType::GLAVO_Visual_Laser_Spot_Measure_Req: return "GLAVO_Visual_Laser_Spot_Measure_Req";
@@ -265,6 +271,14 @@ const char* upc_msg_type_name(MsgType type) {
         case MsgType::MQTT_Ota_Notify_Ntf: return "MQTT_Ota_Notify_Ntf";
         case MsgType::UI_Ota_User_Decision_Req: return "UI_Ota_User_Decision_Req";
         case MsgType::APP_Mqtt_Ota_Progress_Ntf: return "APP_Mqtt_Ota_Progress_Ntf";
+        case MsgType::UI_Debug_InnerDoor_Occlusion_Set_Ntf: return "UI_Debug_InnerDoor_Occlusion_Set_Ntf";
+        case MsgType::UI_Debug_InnerDoor_Occlusion_Get_Ntf: return "UI_Debug_InnerDoor_Occlusion_Get_Ntf";
+        case MsgType::UI_Debug_Plate_Present_Set_Ntf: return "UI_Debug_Plate_Present_Set_Ntf";
+        case MsgType::UI_Debug_Plate_Present_Get_Ntf: return "UI_Debug_Plate_Present_Get_Ntf";
+        case MsgType::GLAVO_Debug_InnerDoor_Occlusion_Ntf: return "GLAVO_Debug_InnerDoor_Occlusion_Ntf";
+        case MsgType::GLAVO_Debug_Plate_Present_Ntf: return "GLAVO_Debug_Plate_Present_Ntf";
+        case MsgType::GLAVO_Plate_Place_Confirm_Req: return "GLAVO_Plate_Place_Confirm_Req";
+        case MsgType::UI_Plate_Place_Confirm_Rsp: return "UI_Plate_Place_Confirm_Rsp";
         default: return "Msg";
     }
 }

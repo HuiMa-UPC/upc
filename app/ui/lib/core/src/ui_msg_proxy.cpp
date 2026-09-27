@@ -221,6 +221,14 @@ void UiMsgProxy::init()
         }));
 
     subs_.push_back(bus.subscribe(
+        middleware::MsgType::GLAVO_Plate_Place_Confirm_Req, middleware::ModuleId::UI,
+        [this](const middleware::Message&) {
+            if(plate_place_confirm_req_cb_) {
+                plate_place_confirm_req_cb_();
+            }
+        }));
+
+    subs_.push_back(bus.subscribe(
         middleware::MsgType::APP_Supply_Status_Rsp, middleware::ModuleId::UI,
         [this](const middleware::Message& msg) {
             middleware::SupplyStatusPayload p{};
@@ -1030,6 +1038,19 @@ void UiMsgProxy::send_outer_door_confirm(bool skip)
     middleware::OuterDoorConfirmRspPayload payload{};
     payload.skip = skip ? uint8_t(1) : uint8_t(0);
     publish_pod(middleware::MsgType::UI_Outer_Door_Confirm_Rsp,
+                middleware::ModuleId::APP_GLAVO, payload);
+}
+
+void UiMsgProxy::register_plate_place_confirm_req(PlatePlaceConfirmReqCb cb)
+{
+    plate_place_confirm_req_cb_ = std::move(cb);
+}
+
+void UiMsgProxy::send_plate_place_confirm(bool cancel)
+{
+    middleware::PlatePlaceConfirmRspPayload payload{};
+    payload.cancel = cancel ? uint8_t(1) : uint8_t(0);
+    publish_pod(middleware::MsgType::UI_Plate_Place_Confirm_Rsp,
                 middleware::ModuleId::APP_GLAVO, payload);
 }
 

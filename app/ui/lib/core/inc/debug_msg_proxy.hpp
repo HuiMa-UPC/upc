@@ -34,6 +34,8 @@ using DebugO2CalibCb =
 using DebugFirstLayerVisualCheckCb = std::function<void(bool)>;
 using DebugOpticalPathCheckCb = std::function<void(bool)>;
 using DebugPlateHeightAdjCb = std::function<void(bool)>;
+using DebugInnerDoorOcclusionCb = std::function<void(bool)>;
+using DebugPlatePresentCb = std::function<void(bool)>;
 using DebugSocLedCb = std::function<void(uint8_t mask)>;
 using DebugCabinPmValveCb = std::function<void(bool)>;
 using DebugStatusLedCb =
@@ -117,6 +119,10 @@ public:
     void request_optical_path_check_state();
     void send_plate_height_adj_set(bool on);
     void request_plate_height_adj_state();
+    void send_inner_door_occlusion_set(bool on);
+    void request_inner_door_occlusion_state();
+    void send_plate_present_set(bool on);
+    void request_plate_present_state();
     /** 六路舱灯 / 舱内 PM 阀：sysfs 直控，不看 MCU 版本 */
     void send_soc_led_set(uint8_t channel, bool on);
     void request_soc_led_state();
@@ -154,6 +160,8 @@ public:
     void register_first_layer_visual_check(DebugFirstLayerVisualCheckCb cb);
     void register_optical_path_check(DebugOpticalPathCheckCb cb);
     void register_plate_height_adj(DebugPlateHeightAdjCb cb);
+    void register_inner_door_occlusion(DebugInnerDoorOcclusionCb cb);
+    void register_plate_present(DebugPlatePresentCb cb);
     void register_soc_led(DebugSocLedCb cb);
     void register_cabin_pm_valve(DebugCabinPmValveCb cb);
     void register_status_led(DebugStatusLedCb cb);
@@ -218,6 +226,8 @@ private:
     DebugFirstLayerVisualCheckCb first_layer_visual_check_cb_;
     DebugOpticalPathCheckCb optical_path_check_cb_;
     DebugPlateHeightAdjCb plate_height_adj_cb_;
+    DebugInnerDoorOcclusionCb inner_door_occlusion_cb_;
+    DebugPlatePresentCb plate_present_cb_;
     DebugSocLedCb soc_led_cb_;
     DebugCabinPmValveCb cabin_pm_valve_cb_;
     DebugStatusLedCb status_led_cb_;
