@@ -1656,6 +1656,8 @@ Glavo Print_Terminate_Rsp / 进度 100% → control.cpp finish_printing()
   停风扇/停粉（`UI_CLEAN_EVT_STOPPED`）；再点又 Start。MCU 完成帧仍走
   `APP_Clean_Test_Result_Ntf` → `UI_CLEAN_EVT_DONE`。吹粉进行中点 `RETRIEVE` 会被挡下
   并 toast 提示，但稿上「吹粉完成前 RETRIEVE 置灰」那道门禁还没做，按钮本身一直是亮的。
+  回到待机（含首页 / Manual 开门 Cancel）若按钮还在转，一并发 `UI_Clean_Test_Close_Req`，
+  避免动画已停、后端 `clean_test_active_` 仍占着，再点 toast「Powder cleaning is busy」。
 - **Print Terminated**：右侧不显示进度百分数，缩略图不挂进度蒙版（完整露出）。
 
 ### 门弹窗与放版弹窗（稿 6388:49816 / 49425 / 50202 与 6382:48451 / 48694 / 6388:48910）

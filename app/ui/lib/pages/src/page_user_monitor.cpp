@@ -2517,6 +2517,13 @@ void page_user_monitor_exit_printing_mode(void)
     if(!g_page_visible) {
         ui::CameraPreviewPlayer::instance().detach_widgets();
     }
+    /* 下面会把吹粉按钮收成空闲、转圈停掉。若不清后端 clean_test，
+     * Glavo 的 clean_test_active_ 还占着，再点会被拒成
+     * "Powder cleaning is busy"。首页 / Manual 开门 Cancel 回 IDLE 走这里。 */
+    if(g_purify == PURIFY_RUNNING || g_purify_busy ||
+       ui_clean_state_active_owner() != UI_CLEAN_OWNER_NONE) {
+        ui_clean_state_stop();
+    }
     g_printing    = false;
     g_purify_busy = false;
     g_purify_done = false;

@@ -1248,13 +1248,15 @@ void McuLink::merge_soc_env_into_cache_locked()
 void McuLink::on_sensor_fanboard_report(const serial_sensor_fanboard_t& fan)
 {
     UPC_LOG_MCU_LINK_TO(SerialSensor, Info,
-        "fanboard: rpm=%u fault=%u state=%u link=%u v=%u i=%umA",
+        "fanboard: rpm=%u fault=%u state=%u link=%u v=%u i=%umA ldo=%.1fC mcu=%.1fC",
         static_cast<unsigned>(fan.fan_rpm),
         static_cast<unsigned>(fan.fan_fault),
         static_cast<unsigned>(fan.fan_state),
         static_cast<unsigned>((fan.fan_status_bits >> 7) & 1u),
         static_cast<unsigned>(fan.fan_bus_v_x10),
-        static_cast<unsigned>(fan.fan_bus_i_ma));
+        static_cast<unsigned>(fan.fan_bus_i_ma),
+        static_cast<double>(fan.ldo_temp_x10_c) / 10.0,
+        static_cast<double>(fan.mcu_temp_x10_c) / 10.0);
     publish_debug_fan_ntf(fan);
 }
 
@@ -1332,9 +1334,12 @@ void McuLink::on_sensor_report(const serial_sensor_report_t& report)
         powder_low_latched_ = false;
     }
 
+    /* filterO2 是滤芯氧，不是打印氧门用的舱内氧。舱内氧在 soc: 行。
+     * valid 是 1ST value[14]：对应位为 0 时该字段是哨兵（氧/温度为 -1）。 */
     UPC_LOG_MCU_LINK_TO(SerialSensor, Info,
-        "sensor: O2=%.1f%% SCfilter=%.1fkPa base=%.1fC envNTC=%.1fC "
-        "filterNTC=%.1fC sw=0x%02X ir=0x%02X door_open=%d powder_L/R_low=%d/%d",
+        "sensor: filterO2=%.1f%% SCfilter=%.1fkPa base=%.1fC envNTC=%.1fC "
+        "filterNTC=%.1fC sw=0x%02X ir=0x%02X adapter=0x%04X "
+        "outer_door=%d inner_door=%d powder_L/R_low=%d/%d valid=0x%02X",
         static_cast<double>(report.oxygen_percent),
         static_cast<double>(report.filter_pressure_x10_kpa) / 10.0,
         static_cast<double>(report.substrate_temp_c),
@@ -1342,9 +1347,12 @@ void McuLink::on_sensor_report(const serial_sensor_report_t& report)
         static_cast<double>(report.filter_ntc_c),
         static_cast<unsigned>(report.local_switch_bits),
         static_cast<unsigned>(report.powder_ir_bits),
+        static_cast<unsigned>(report.adapter_input_bits),
         report.outer_door_open ? 1 : 0,
+        report.inner_door_open ? 1 : 0,
         report.powder_left_low ? 1 : 0,
-        report.powder_right_low ? 1 : 0);
+        report.powder_right_low ? 1 : 0,
+        static_cast<unsigned>(report.validity_bits));
 }
 
 bool McuLink::request_open_door_and_wait(uint32_t timeout_ms, bool* opened_out)
@@ -1966,15 +1974,26 @@ void McuLink::poll_soc_env_tick()
     publish_env_update_ntf();
     publish_debug_sensor_from_soc_and_cache();
 
-    /* 舱外 PM 即首页 pm25_indoor；<0 显示 "--"。5s 一条，避免 500ms 刷屏。 */
+    /* 舱内氧/温湿/气压/PM 以 SOC 为准，不再出现在 MCU 1ST。5s 一条，避免 500ms 刷屏。
+     * pm 顺序为 PM1.0/PM2.5/PM10；首页 pm25 用舱外。<0 为无效（界面 "--"）。 */
     static std::chrono::steady_clock::time_point last_pm_log{};
     if(last_pm_log.time_since_epoch().count() == 0 ||
        now - last_pm_log >= std::chrono::seconds(5)) {
         last_pm_log = now;
         UPC_LOG_MCU_LINK_TO(SerialSensor, Info,
-            "soc_pm: outdoor=%.1f cabin=%.1f (home uses outdoor; <0 is --)",
+            "soc: O2=%.1f%% T=%.1fC RH=%.1f%% P1=%.1fkPa P2=%.1fkPa "
+            "pm_out=%.1f/%.1f/%.1f pm_cabin=%.1f/%.1f/%.1f",
+            static_cast<double>(soc.oxygen_percent),
+            static_cast<double>(soc.temperature_c),
+            static_cast<double>(soc.humidity_percent),
+            static_cast<double>(soc.pressure1_kpa),
+            static_cast<double>(soc.pressure2_kpa),
+            static_cast<double>(soc.pm1_outdoor),
             static_cast<double>(soc.pm25_outdoor),
-            static_cast<double>(soc.pm25_cabin));
+            static_cast<double>(soc.pm10_outdoor),
+            static_cast<double>(soc.pm1_cabin),
+            static_cast<double>(soc.pm25_cabin),
+            static_cast<double>(soc.pm10_cabin));
     }
 
     /* SPI 小屏常显舱外 PM；模块内同值去重，约 1Hz 量级即可 */

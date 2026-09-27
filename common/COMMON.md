@@ -168,7 +168,7 @@ scripts/rongsu.sh start   # glavo + rongsu_camera → ui
 | `UI_Clean_Test_Start_Req` | — | UI→Glavo | `CleanTestStartReqPayload` | `ui_clean_state_request` / `send_clean_test_start` | 启动清粉。监控页结果态（Complete/Terminated 自动开 + 钮再开）`record_video=1` 通知 Media 仅在清粉窗口按延时帧率抽帧；Manual `=0` 不开录像、结束由 Glavo 直接发 Done |
 | `APP_Clean_Test_Start_Rsp` | — | Glavo→UI | `CleanTestStartRspPayload` | `register_clean_test_start_rsp` | 请求受理状态（避免并发启动） |
 | `APP_Clean_Test_Result_Ntf` | — | Media→UI（有录像）/ Glavo→UI（无录像） | `CleanTestDonePayload` | `register_clean_test_done` | MCU 清粉完成上报（A2/42 TLV 0x03）后：Media 停止清粉抽帧并回执；`result_code` 00/01/02 均表示结束；最终 MP4 在结果页退出后统一合成 |
-| `UI_Clean_Test_Close_Req` | — | UI→Glavo | Empty | `ui_clean_state_stop` / `send_clean_test_close` | 中止清粉（结果页吹粉钮再点、取件回 IDLE 等）：下发 MCU close、停风扇；有录像时 Media 对 `0xfe` 不发 Result_Ntf，UI 靠 Close_Rsp → `UI_CLEAN_EVT_STOPPED` |
+| `UI_Clean_Test_Close_Req` | — | UI→Glavo | Empty | `ui_clean_state_stop` / `send_clean_test_close` | 中止清粉（结果页吹粉钮再点、回 IDLE：取件成功或开门 Cancel）：下发 MCU close、停风扇；有录像时 Media 对 `0xfe` 不发 Result_Ntf，UI 靠 Close_Rsp → `UI_CLEAN_EVT_STOPPED` |
 | `UI_Print_Video_Finalize_Req` | — | UI→Media | `PrintVideoFinalizeReqPayload` | `send_print_video_finalize` | 开门取件后触发：promote 目录 + 清 pending；延时成片受 `UPC_TIMELAPSE_PLAYBACK_PNG` 控制（默认跳过 `timelapse.mp4`），打印录像仍可 remux `print_h264.mp4` |
 | `APP_Clean_Test_Close_Rsp` | — | Glavo→UI | Empty | `register_clean_test_close_rsp`（`ui_clean_state`） | close 已受理 → 扇出 `UI_CLEAN_EVT_STOPPED` |
 | `UI_Transport_Req` | — | UI→Glavo | Empty | `send_transport_request` | 转运盒 Ready：发串口自动转运请求（A2/0x41 TLV 0x02） |
@@ -845,7 +845,7 @@ topic_<大类>_<子类>.log        # 兜底文件例外：topic_misc.log
 | `topic_mqtt_ota.log` | `MqttService` | `MqttOta` | 云端 OTA 通知、下载与校验进度 |
 | `topic_mqtt_command.log` | `MqttService` | `MqttCommand`（`UPC_LOG_MQTT_SERVICE` 默认） | 云端下行命令与 `cmd/ack`、订阅与激活 |
 | `topic_xfr_upload.log` | `XfrService` | `XfrUpload` | WiFi 发现、PIN 配对、HTTP 文件上传（仅收 `.json` / `.svg`） |
-| `topic_serial_sensor.log` | `McuLink` | `SerialSensor` | 环境量周期上报（O2 / 温湿度 / PM / 压力 / 粉量位 / 门状态），含调试页模拟数据；SOC `soc_pm:` 舱外/舱内缓存（首页用舱外，`<0` 为 `--`） |
+| `topic_serial_sensor.log` | `McuLink` | `SerialSensor` | MCU `sensor:`（滤芯氧/滤芯气压/基板/NTC/开关/红外/转接板/外门/内门全开，`valid` 为有效位图）与 `fanboard:`（含 LDO/MCU 温度）；SOC `soc:` 每 5s（舱内氧、温湿、P1/P2、舱外与舱内 PM1.0/PM2.5/PM10，`<0` 无效，首页 PM2.5 用舱外）；另含调试页 `env_sim:` |
 | `topic_serial_alarm.log` | `McuLink` | `SerialAlarm` | MCU 报警与事件单条上报、快照、复位回执 |
 | `topic_serial_layer.log` | `McuLink` | `SerialLayer` | 换层握手：串口层指令下发与层事件回报 |
 | `topic_tcp_motion_tx.log` | `McuLink` | `TcpMotionTx` | 振镜运动数据包与紧急指令（急停 / 暂停 / 红光） |
