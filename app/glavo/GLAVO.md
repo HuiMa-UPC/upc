@@ -21,7 +21,8 @@
 | `lib/soc_sensors.*` | SOC 本地：舱内外 PMSA UART、AHT20（≥2s）、双路 CPM121、IIO 氧气（须 `/run/o2_ready`；V=raw×3.3/2^31，100Ω；K 读 `/userdata/CAL/o2_cal.json` 缺省≈655）。链路启动即周期采集。六路舱灯进程启动即默认全开。六路舱灯/`fa_valve` sysfs 调试可随时写；业务采样结束强制关阀。背光不在本模块。 |
 | `lib/spi_status_led.*` | SPI 灯效板：`/dev/spidev1.0` 40 颗 WS 单色。CONDITION+ACTIVE 红，`print_running_` 橙，空闲蓝。进程启动即打开（不等串口）。业务路径只改状态排队；专用 led 线程做 open/ioctl，避免堵 McuLink 串口线程。 |
 | `lib/spi_pm25_lcd.*` | ST7735 SPI 小屏：按 fbdev name `st7735rdrmfb` 打开，常显舱外 PM2.5（布局自 `doc/spilcd`）。`arm_soc_peripherals` 启动；`poll_soc_env_tick` 刷值；无效显示 `--`。 |
-| `lib/device_config.hpp` | TCP/串口默认、换层/Layer Snap 开关、`GLAVO_TEST_GCODE_PATH`、PM UART/`fa_valve`/`lgt*` 路径宏 |
+| `lib/n2_ble_client.*` / `n2_ble_transport.*` / `n2_ble_parse.*` | 制氮机 BLE：BlueZ GATT Client + ASCII 解析；推 `APP_N2_Status_Ntf`（v1 UI 不订阅） |
+| `lib/device_config.hpp` | TCP/串口默认、换层/Layer Snap 开关、`GLAVO_TEST_GCODE_PATH`、PM UART/`fa_valve`/`lgt*` 路径宏、`GLAVO_N2_BLE_ENABLE` |
 | `lib/mcu_ota_session.*` | Galvo 以太网 OTA：扫描 `/userdata/image/galvo` 最高版本 AB 对 |
 | `lib/mcu_serial_ota_session.*` | MCU 串口 OTA：扫描 `/userdata/image/mcu` 最高版本 AB 对；停等重传 + 阶段四版本确认 |
 | `common/fs_manifest/gcode_manifest.*` | Local `config.json` 读写（与 UI 共用；Prepare/Delete 时更新） |
@@ -73,6 +74,11 @@ UI → GlavoService（工作线程）→ ParserManager → RingBuffer → McuLin
 | `UI_Debug_Spi_Pm25_Lcd_Set_Ntf` / `Get` | SPI 小屏测试刷屏：开则约 500ms 整屏轮换纯色并 `pwrite` fb；关则恢复舱外 PM 布局 |
 | `UI_Alarm_Reset_Ntf` | `serial_build_alarm_reset` 组 0xA3/0x82 帧直发串口；结果不回 Rsp，以 MCU 后续单条上报为准 |
 | `UI_Debug_Alarm_Inject_Ntf` | 调试页 Alarm Inject：转 `GLAVO_Alarm_Report_Ntf` **只发 MQTT**（不上 UI、不改快照/灯效） |
+| `APP_N2_Status_Ntf` | `N2BleClient` 后台线程 `publish_async` 到 UI（v1 UI 不订阅） |
+
+### 制氮机 BLE
+
+- 广播名 `N2_Machine`，特征 `0x1B9A` Notify ASCII。无 libdbus 时 `UPC_GLAVO_HAS_BLUEZ=0` 空跑。`GLAVO_N2_BLE_ENABLE=0` 不启线程。
 
 内门 **1ST bit1（UP_SWPD）只表示全开**（1=全开，0=不在全开位）。**上电不自动关内门**。进套件前读静止位：开仅全开跳过；关仅非全开跳过（关到位未装，静止 0 不当成必须再关）。未知则开/关都跑。真正开/关前 Z **绝对到位 −10 mm**（±1，最多 8 s）再发门指令，等 **2 s**，不回原高度；挡门和基板视觉都不决定这次位移。**Keep Z Position** 开则跳过这次 −10，门指令照发。套件进行中推 `GLAVO_Debug_Inner_Door_Busy_Ntf`（Manual / 调试 Inner Door 禁钮，含停止）；连点开/关在入队时去重。起印与外门开→关边沿按静止位决定是否关；边沿当时套件忙 / 打印发送中 / 预检中则记下，事后补关。与转运盒流程无共享状态。
 
@@ -119,7 +125,10 @@ MCU 串口 OTA 是停等协议（规则 [MCU_OTA丢包重传机制.md](../../doc
 
 ### 打印进度（`APP_Print_Progress_Ntf`）
 
-`GlavoService::send_print_progress`，打印中按作业类型二选一：
+`GlavoService::send_print_progress`，打印中按作业类型二选一；消息**双发 UI 与
+`APP_XFR`**（桌面端 `GET /print/status` 轮询缓存）。载荷含百分比、环境读数、
+当前层/总层，以及 `layer_height_um`（当前铺粉高度）。暂停回执、终止回执、起印拒绝
+同样双发；`GLAVO_Print_State_Ntf` 双发 MQTT 与 Xfr。
 
 | 策略 | 适用 | 打印中区间 | 说明 |
 |------|------|-----------|------|

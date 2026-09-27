@@ -256,6 +256,9 @@ public:
     /** @brief 读取最新环境传感器快照（线程安全） */
     [[nodiscard]] EnvSnapshotCache env_snapshot() const;
 
+    /** 当前铺粉层高（微米），供进度包 layer_height_um / Snowpath 6.3 */
+    [[nodiscard]] uint16_t active_layer_height_um() const;
+
     /** @brief 读 MCU 版本缓存（About / MQTT / OTA） */
     [[nodiscard]] middleware::McuVersionPayload mcu_version_cached() const;
 

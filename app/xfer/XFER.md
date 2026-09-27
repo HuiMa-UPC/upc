@@ -27,6 +27,35 @@
 - `POST /upload/{id}/complete`：整文件 SHA-256 校验后按扩展名分流：
   `.ovf` 走 snowslice/OVF 预处理；`.3mf` 解出单个 `.gcode`；最后写入 `config.json`
 - `GET /upload/{id}/status`：查询断点续传进度
+- `GET /print/status`：桌面端轮询打印机状态/进度（传输态本地维护；打印态订阅
+  Glavo/Media IPC 缓存）。传输完成对外为 `idle`；`finished` 仅表示打印完成。
+  打印中 `job_id` 优先为延时摄影 `frames_dir`（打印中多为 `tmp`）。
+- `POST /print/start`：本期不代发起印（仍由板端 UI 点 Confirm）。回包 `state`
+  只看 Glavo 打印态，**不**回传上传线内部的 `finished`（否则 Snowpath 会当成
+  打印已结束，6.3 不再刷层高/进度/舱温）。已在打印中回 `409 PRINTER_BUSY`。
+- `POST /print/cancel` / `/print/pause` / `/print/resume`：body 仅 `job_id`
+  （与 6.3 相同：优先 `frames_dir`，打印中多为 `tmp`，也认 6.2 的 `j_*`）。
+  校验后向 Glavo 发与 UI 相同的 Terminate/Pause/Resume，等回包再 `200`。
+  `job_id` 对不上 `404 JOB_NOT_FOUND`；态不对 `409 JOB_NOT_PRINTING`；
+  3s 无回包 `504 GLAVO_TIMEOUT`。取消允许 `printing`/`paused`；暂停仅
+  `printing`；恢复仅 `paused`（氧未落下仍暂停则 `409`）。
+- `GET /print/history?year=&month=&day=`：按打印机本地日期返回当天 `job_ids`
+  （= `/userdata/media/video/config.json` 的 `frames_dir`，升序）
+- `GET /print/{job_id}/timelapse/images`：分页返回该任务延时摄影 JPEG URL 列表
+- `GET /timelapse/{job_id}/{n}.jpg`：匿名下载已落盘帧（列表接口已鉴权后的产物）
+
+### 打印状态 / 延时摄影（板端约定）
+
+- 历史与延时摄影的 `job_id` 使用清单主键 `frames_dir`，不是协议示例里的 `j_9001`。
+- 帧文件在 `/userdata/media/video/{frames_dir}/N.jpg`；URL 扩展名为 `.jpg`（与 new-ui 静图一致）。
+- `/print/status` 中 `chamber_temp` 来自 Glavo 进度载荷的舱温（0.1℃）；
+  `layer_height` 来自进度载荷 `layer_height_um`（毫米，打印中有值，空闲为 `0`）；
+  `nozzle_temp` / `bed_temp` / `laser_power` / `blower_*` / `filament_*`
+  本期固定为 `0`。
+- 数据源：`APP_Print_Progress_Ntf` / `APP_Print_Pause_Rsp` /
+  `GLAVO_Print_State_Ntf` / `APP_Print_Terminate_Rsp` /
+  `APP_Print_Start_Rejected_Ntf` / `APP_Print_Video_Manifest_Ntf`（Glavo/Media
+  双发 UI 与 `APP_XFR`）。
 
 ## 运行参数（环境变量）
 

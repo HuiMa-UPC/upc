@@ -939,17 +939,21 @@ void PrintVideoRecorder::notify_manifest_ready(const std::string& frames_dir_nam
     ntf.aborted   = aborted ? 1 : 0;
     ntf.has_video = has_video ? 1 : 0;
 
-    middleware::Message msg(
-        middleware::MsgType::APP_Print_Video_Manifest_Ntf,
-        sender_module_id_,
-        middleware::ModuleId::UI);
-    msg.payload = middleware::MsgPayload::from_bytes(
-        reinterpret_cast<const uint8_t*>(&ntf), sizeof(ntf));
-    middleware::MsgPort::instance().publish_async(msg);
+    auto send_to = [&](middleware::ModuleId target) {
+        middleware::Message msg(
+            middleware::MsgType::APP_Print_Video_Manifest_Ntf,
+            sender_module_id_,
+            target);
+        msg.payload = middleware::MsgPayload::from_bytes(
+            reinterpret_cast<const uint8_t*>(&ntf), sizeof(ntf));
+        middleware::MsgPort::instance().publish_async(msg);
+    };
+    send_to(middleware::ModuleId::UI);
+    send_to(middleware::ModuleId::APP_XFR);
 
     UPC_LOG_MEDIA_SERVICE(
         Info,
-        "print_video manifest ntf -> UI frames_dir=%s entry=%d aborted=%d video=%d",
+        "print_video manifest ntf -> UI/Xfr frames_dir=%s entry=%d aborted=%d video=%d",
         ntf.frames_dir[0] ? ntf.frames_dir : "(none)",
         ntf.has_entry, ntf.aborted, ntf.has_video);
 }

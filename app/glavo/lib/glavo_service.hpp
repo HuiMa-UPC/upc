@@ -9,6 +9,7 @@
 #include "height_calibration.hpp"
 #include "plate_height_measure.hpp"
 #include "wifi_manager.hpp"
+#include "n2_ble_client.hpp"
 #include "msg_port.hpp"
 #include "msg_runtime.hpp"
 #include "cabin_visual_exchange.hpp"
@@ -127,6 +128,7 @@ private:
     void handle_wifi_info(const middleware::Message& msg);
     void handle_wifi_saved(const middleware::Message& msg);
     void publish_wifi_state(const WifiSnapshot& snap);
+    void publish_n2_status(const N2BleSnapshot& snap);
     void publish_wifi_list(WifiListKind kind, const std::vector<WifiEntry>& entries);
     void publish_wifi_connect_result(bool ok, const std::string& ssid);
     void publish_usb_hotplug(bool mounted);
