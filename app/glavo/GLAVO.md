@@ -61,7 +61,7 @@ UI → GlavoService（工作线程）→ ParserManager → RingBuffer → McuLin
 | `UI_Debug_TestImage_Set_Ntf` | 红光循环打印 `GLAVO_TEST_GCODE_PATH`（默认 `/userdata/test/test.gcode`）；无录像/延时/换层握手/首页打印态；Off 仅 `request_terminate`，不切激光 |
 | `UI_Debug_Galvo_AbsMove_Ntf` | 调试页 Abs X/Y + Move：snowx 口径单点 TCP 运动包（`send_galvo_abs_pos`）；打印中拒绝 |
 | `UI_Debug_OpticalPath_Check_Set_Ntf` | 打印前光路检测开关（仅本次运行，**默认开**；调试页 **Skip Optical Path Chk** 按下后关）。开则 Confirm Print 后、出光前逐点等视觉识别；失败阻断并 `APP_Print_Start_Rejected_Ntf`；期间 SOC 舱灯全关，通过后全开 |
-| `UI_Debug_PlateHeight_Adj_Set_Ntf` | 打印前基板测高调 Z（仅本次运行，默认开）。开则光路之后测 8 点并 AXIS_INC；**无 LUT 或失败阻断起印**（`PlateHeightFail`）。设置页 Advanced Print 与调试页共用这一开关 |
+| `UI_Debug_PlateHeight_Adj_Set_Ntf` | 打印前基板测高调 Z（仅本次运行，默认开）。开则光路之后测 8 点并 AXIS_INC；**无 LUT 或失败阻断起印**（`PlateHeightFail`）。设置页 Advanced Print 与调试页共用这一开关。测高成功、Z 收到约 1mm 之后，再按 `UI_Debug_Plate_Work_Z_Set_Ntf` 的目标补 `(target-1)` mm（正值向上，默认 1 不补） |
 | `UI_Debug_Skip_Outer_Door_Set_Ntf` | 跳过外门检测+关内门套件（仅本次运行，**默认关=要做**）；开则不检门、不开→关边沿也不跑套件 |
 | `UI_Debug_Hold_Prep_Z_Set_Ntf` | 准备阶段保持当前 Z（仅本次运行，**默认关**）。开则不起印降到 −10、内门套件前不降 Z、准备终止与起印失败收尾也不改 Z；基板测高的回零和步进仍执行。Manual Top / Bottom 不受影响 |
 | `UI_Debug_Galvo_Param_Save_Ntf` | 写 `cal.csv` 第 4 行中心偏移 + `ParserContext::load_calibration`；打印/任一振镜测试进行中拒绝 |
