@@ -42,7 +42,7 @@
  *   - 软件版本号迁至 About 子页。
  *   - Display & Sound：LCD 背光滑条（sysfs `/sys/class/backlight`，1~100%）。
  *   - Advanced Print：打印前门控，默认开，与调试页同一套 Glavo 开关；
- *     Calibration 上方的 Work Height 是测高收到约 1mm 后再向上补的目标高度；
+ *     Calibration 内的 Work Height 是测高收到约 1mm 后再向上补的目标高度；
  *     Height Calibration 的 Start 与调试页 Laser 卡相同。
  *   - 子导航图标暂用 LV_SYMBOL 占位，待 SVG 资源到位再替换。
  *   - 软件版本 UPC_SW_VERSION：根 CMakeLists.txt 的 UPC_PRODUCT_VERSION。
@@ -2166,8 +2166,18 @@ void build_print_detail(lv_obj_t *parent)
     g_gate_o2 = make_gate_row(card, "Oxygen Check", PrintGate::Oxygen, false);
     g_gate_hold_z = make_gate_row(card, "Keep Z Position", PrintGate::HoldPrepZ, true, false);
 
-    /* Calibration 上方：测高收到约 1mm 之后的目标高度。填 3 则再向上 2mm。 */
-    lv_obj_t *zcard = lv_obj_create(parent);
+    lv_obj_t *sec2 = lv_obj_create(parent);
+    lv_obj_remove_style_all(sec2);
+    lv_obj_set_width(sec2, LV_PCT(100));
+    lv_obj_set_height(sec2, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(sec2, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_row(sec2, USER_PAD_SM, 0);
+    lv_obj_set_style_bg_opa(sec2, LV_OPA_TRANSP, 0);
+    lv_obj_clear_flag(sec2, LV_OBJ_FLAG_SCROLLABLE);
+    make_caption(sec2, "Calibration");
+
+    /* Calibration 内：测高收到约 1mm 之后的目标高度。填 3 则再向上 2mm。 */
+    lv_obj_t *zcard = lv_obj_create(sec2);
     lv_obj_remove_style_all(zcard);
     lv_obj_set_width(zcard, LV_PCT(100));
     lv_obj_set_height(zcard, LV_SIZE_CONTENT);
@@ -2199,16 +2209,6 @@ void build_print_detail(lv_obj_t *parent)
     ui_keyboard_attach(g_plate_work_z_ta, LV_KEYBOARD_MODE_NUMBER);
     lv_obj_add_event_cb(g_plate_work_z_ta, on_plate_work_z_ready, LV_EVENT_READY, nullptr);
     lv_obj_add_event_cb(g_plate_work_z_ta, on_plate_work_z_ready, LV_EVENT_DEFOCUSED, nullptr);
-
-    lv_obj_t *sec2 = lv_obj_create(parent);
-    lv_obj_remove_style_all(sec2);
-    lv_obj_set_width(sec2, LV_PCT(100));
-    lv_obj_set_height(sec2, LV_SIZE_CONTENT);
-    lv_obj_set_flex_flow(sec2, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_style_pad_row(sec2, USER_PAD_SM, 0);
-    lv_obj_set_style_bg_opa(sec2, LV_OPA_TRANSP, 0);
-    lv_obj_clear_flag(sec2, LV_OBJ_FLAG_SCROLLABLE);
-    make_caption(sec2, "Calibration");
 
     lv_obj_t *cal = lv_obj_create(sec2);
     lv_obj_remove_style_all(cal);
