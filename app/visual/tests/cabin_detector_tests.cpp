@@ -61,12 +61,13 @@ int main() {
     cv::Mat marker(40,40,CV_8UC1);
     cv::RNG rng(42); rng.fill(marker,cv::RNG::UNIFORM,70,240);
     CHECK(cv::imwrite((directory/"marker.png").string(),marker));
-    const auto write_plate = [&](int invalid_case = 0) {
+    const auto write_plate = [&](int invalid_case = 0, bool small_roi = false) {
         cv::FileStorage fs((directory/"plate.json").string(),cv::FileStorage::WRITE|cv::FileStorage::FORMAT_JSON);
         fs << "version" << (invalid_case == 1 ? 1.5 : 1.0);
         fs << "reference_size" << "[" << (invalid_case == 8 ? 8192 : 320) << (invalid_case == 8 ? 8192 : 240) << "]";
         fs << "search_roi" << "[" << .1 << .1 << .9 << .9 << "]";
-        fs << "markers" << "[" << "{" << "roi" << "[" << (invalid_case == 3 ? .05 : .375) << (80./240.) << .5 << .5 << "]";
+        fs << "markers" << "[" << "{" << "roi" << "[" << (invalid_case == 3 ? .05 : .375) << (80./240.)
+           << (small_roi ? .425 : .5) << (small_roi ? .425 : .5) << "]";
         fs << "template" << "marker.png" << "}" << "]";
         fs << "search_margin" << .35 << "template_gray_weight" << .7;
         fs << "high_confidence_threshold" << .78 << "medium_confidence_threshold" << .58;
@@ -87,6 +88,7 @@ int main() {
     CHECK(detector.plate(black.data(),black.size(),0xffffffff,0xffffffff,0x3f).result == 0);
     cv::Mat scene(240,320,CV_8UC1);
     rng.fill(scene,cv::RNG::UNIFORM,50,170);
+    const cv::Mat empty_scene = scene.clone();
     marker.copyTo(scene(cv::Rect(120,80,40,40)));
     cv::Mat bgr, i420; cv::cvtColor(scene,bgr,cv::COLOR_GRAY2BGR);
     cv::cvtColor(bgr,i420,cv::COLOR_BGR2YUV_I420);
@@ -96,6 +98,33 @@ int main() {
         nv12[scene.total()+2*j+1]=i420.data[scene.total()+scene.total()/4+j];
     }
     CHECK(detector.plate(nv12.data(),nv12.size(),320,240,0x3f).result == 1);
+    const auto as_nv12 = [](const cv::Mat& mono) {
+        cv::Mat color, planar;
+        cv::cvtColor(mono,color,cv::COLOR_GRAY2BGR);
+        cv::cvtColor(color,planar,cv::COLOR_BGR2YUV_I420);
+        std::vector<uint8_t> bytes(planar.data,planar.data+mono.total()*3/2);
+        for(size_t j=0;j<mono.total()/4;++j) {
+            bytes[mono.total()+2*j]=planar.data[mono.total()+j];
+            bytes[mono.total()+2*j+1]=planar.data[mono.total()+mono.total()/4+j];
+        }
+        return bytes;
+    };
+    // Wider search must not treat a plain bright square as the etched glyph.
+    cv::Mat blank = empty_scene.clone();
+    cv::rectangle(blank,cv::Rect(190,145,30,30),cv::Scalar(230),cv::FILLED);
+    const auto blank_nv12 = as_nv12(blank);
+    CHECK(detector.plate(blank_nv12.data(),blank_nv12.size(),320,240,0x3f).result != 1);
+    const auto empty_nv12 = as_nv12(empty_scene);
+    CHECK(detector.plate(empty_nv12.data(),empty_nv12.size(),320,240,0x3f).result != 1);
+    // A valid but tiny external marker profile cannot be searched reliably at
+    // half resolution. When no local code is seen, return Unknown, not plate.
+    write_plate(0,true);
+    CHECK(detector.load_plate_config((directory/"plate.json").string(),error));
+    const auto tiny_result=detector.plate(empty_nv12.data(),empty_nv12.size(),320,240,0x3f);
+    CHECK(tiny_result.result == 0);
+    CHECK(tiny_result.reason == "marker_too_small_for_wide_search");
+    write_plate();
+    CHECK(detector.load_plate_config((directory/"plate.json").string(),error));
     CHECK(detector.plate(nv12.data(),nv12.size(),240,320,0x3f).result == 0);
     for(int invalid_case = 1; invalid_case <= 8; ++invalid_case) {
         write_plate(invalid_case);

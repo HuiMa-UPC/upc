@@ -148,6 +148,7 @@ void VisualService::run_cabin_window(middleware::VisualCabinCheckReqPayload req,
     middleware::VisualCabinCheckRspPayload rsp{};
     rsp.session_id = req.session_id; rsp.request_id = req.request_id;
     std::string reason = "timeout_or_no_fresh_frame";
+    double score = 0;
     std::string profile_source;
     const bool config_ok = load_cabin_profile(cabin_detector_,door,
         std::getenv(door ? "UPC_CABIN_DOOR_CONFIG" : "UPC_CABIN_PLATE_CONFIG"),
@@ -203,6 +204,7 @@ void VisualService::run_cabin_window(middleware::VisualCabinCheckReqPayload req,
                                           : cabin_detector_.plate(nv12.data(),nv12.size(),w,h,req.cabin_led_mask);
             const uint64_t now = monotonic_ms();
             reason = d.reason;
+            score = d.score;
             if(now < deadline) rsp.result = evidence.observe(d.result,seq,now);
             rsp.frame_seq = seq;
             if(rsp.result != 0) break;
@@ -215,9 +217,9 @@ void VisualService::run_cabin_window(middleware::VisualCabinCheckReqPayload req,
         std::lock_guard<std::mutex> lock(cabin_result_mtx_);
         cabin_pending_rsp_ = rsp; cabin_result_pending_ = true;
     }
-    UPC_LOG_VISUAL_SERVICE(Info,"cabin inspect %s session=%u request=%u result=%u seq=%u reason=%s",
+    UPC_LOG_VISUAL_SERVICE(Info,"cabin inspect %s session=%u request=%u result=%u seq=%u score=%.3f reason=%s",
         door ? "inner door occl" : "plate qr",req.session_id,req.request_id,
-        static_cast<unsigned>(rsp.result),rsp.frame_seq,reason.c_str());
+        static_cast<unsigned>(rsp.result),rsp.frame_seq,score,reason.c_str());
 }
 
 void VisualService::drain_cabin_result() {
