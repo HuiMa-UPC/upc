@@ -694,6 +694,10 @@ enum class MsgType : uint32_t {
     UI_Debug_Hold_Prep_Z_Set_Ntf,         /**< DebugOnOffPayload：on=1 准备阶段不改 Z（仅本次运行，默认关；基板测高仍动 Z） */
     UI_Debug_Hold_Prep_Z_Get_Ntf,         /**< Empty：查询保持 Z 开关 */
     GLAVO_Debug_Hold_Prep_Z_Ntf,          /**< DebugOnOffPayload：on=1 表示准备阶段保持当前 Z */
+    /* 测高收尾后的工作高度（枚举只准末尾追加） */
+    UI_Debug_Plate_Work_Z_Set_Ntf,        /**< DebugPlateWorkZPayload：目标高度 mm，仅本次运行，默认 1 */
+    UI_Debug_Plate_Work_Z_Get_Ntf,        /**< Empty：查询当前工作高度 */
+    GLAVO_Debug_Plate_Work_Z_Ntf,         /**< DebugPlateWorkZPayload：回读目标高度 */
 };
 
 enum class MsgPriority : uint8_t {
@@ -760,6 +764,10 @@ inline constexpr bool is_ipc_reliable_msg_type(MsgType type) noexcept
     // 调试氧单点标定：控制类 Req/Rsp，丢一条 UI 会以为没点到
     case MsgType::UI_Debug_O2_Calib_Req:
     case MsgType::GLAVO_Debug_O2_Calib_Rsp:
+        return true;
+
+    /* 测高后的工作高度：丢一条则起印仍停在约 1mm，和用户设的目标不一致。 */
+    case MsgType::UI_Debug_Plate_Work_Z_Set_Ntf:
         return true;
 
     /* 调试页 Alarm Inject：点了却丢包则云端收不到单报，联调会误判 MQTT 没接上。 */
@@ -1709,6 +1717,15 @@ struct DebugGalvoAbsMovePayload {
     float speed_mm_min; /**< 扫描速度，<=0 用默认 1000mm/min */
     uint8_t laser_on;   /**< 0=关光移动，1=开光（测高配红光时传 0） */
     uint8_t reserved[3];
+};
+
+/**
+ * UI_Debug_Plate_Work_Z_Set_Ntf / GLAVO_Debug_Plate_Work_Z_Ntf。
+ * 基板测高把 Z 收到回零停点（约 1mm）之后，再补 (target_mm - 1) mm，正值向上。
+ * 默认 1：不额外移动。
+ */
+struct DebugPlateWorkZPayload {
+    float target_mm;
 };
 
 /** 通用开关：UI_Debug_Galvo_RedLight_Ntf / UI_Debug_Pusher_Ntf */
