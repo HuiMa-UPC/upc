@@ -34,6 +34,7 @@ using DebugO2CalibCb =
 using DebugFirstLayerVisualCheckCb = std::function<void(bool)>;
 using DebugOpticalPathCheckCb = std::function<void(bool)>;
 using DebugPlateHeightAdjCb = std::function<void(bool)>;
+using DebugHoldPrepZCb = std::function<void(bool)>;
 using DebugInnerDoorOcclusionCb = std::function<void(bool)>;
 using DebugPlatePresentCb = std::function<void(bool)>;
 using DebugSocLedCb = std::function<void(uint8_t mask)>;
@@ -119,6 +120,9 @@ public:
     void request_optical_path_check_state();
     void send_plate_height_adj_set(bool on);
     void request_plate_height_adj_state();
+    /** on=1：打印准备不改 Z（默认关）。基板测高仍动 Z。 */
+    void send_hold_prep_z_set(bool on);
+    void request_hold_prep_z_state();
     void send_inner_door_occlusion_set(bool on);
     void request_inner_door_occlusion_state();
     void send_plate_present_set(bool on);
@@ -172,6 +176,19 @@ public:
     void register_galvo_point_test(DebugGalvoPointTestCb cb);
     void register_local_rtsp(DebugLocalRtspCb cb);
     void register_height_calib_progress(DebugHeightCalibProgressCb cb);
+    /**
+     * 设置页 Advanced Print 的第二路观察者。调试页仍走 register_*，
+     * 两页可以同时活着，通知会两边都送到。传空函数即卸下设置页这一路。
+     */
+    void set_settings_print_gate_observers(
+        DebugSkipOuterDoorCb skip_outer,
+        DebugInnerDoorOcclusionCb inner_occlusion,
+        DebugPlatePresentCb plate_present,
+        DebugOpticalPathCheckCb optical_path,
+        DebugPlateHeightAdjCb plate_height,
+        DebugSkipO2GateCb skip_o2,
+        DebugHeightCalibProgressCb height_calib,
+        DebugHoldPrepZCb hold_prep_z);
 
     /** Confirm Print 互斥：Glavo 回报的测试图实际运行态 */
     [[nodiscard]] bool test_image_active() const noexcept { return test_image_active_; }
@@ -228,6 +245,15 @@ private:
     DebugPlateHeightAdjCb plate_height_adj_cb_;
     DebugInnerDoorOcclusionCb inner_door_occlusion_cb_;
     DebugPlatePresentCb plate_present_cb_;
+    /** 设置页 Advanced Print，与上面的调试页回调并列，互不覆盖。 */
+    DebugSkipO2GateCb settings_skip_o2_cb_;
+    DebugSkipOuterDoorCb settings_skip_outer_cb_;
+    DebugOpticalPathCheckCb settings_optical_cb_;
+    DebugPlateHeightAdjCb settings_plate_height_cb_;
+    DebugHoldPrepZCb settings_hold_prep_z_cb_;
+    DebugInnerDoorOcclusionCb settings_inner_occl_cb_;
+    DebugPlatePresentCb settings_plate_present_cb_;
+    DebugHeightCalibProgressCb settings_height_calib_cb_;
     DebugSocLedCb soc_led_cb_;
     DebugCabinPmValveCb cabin_pm_valve_cb_;
     DebugStatusLedCb status_led_cb_;

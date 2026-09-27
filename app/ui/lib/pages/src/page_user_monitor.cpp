@@ -1208,7 +1208,9 @@ void close_purify_door_dlg(void)
     }
 }
 
-/** 跟 env 快照对齐外门开合；进页期间可能还没走过 observer。 */
+/** 跟 env 快照对齐外门开合；进页期间可能还没走过 observer。
+ *  快照门状态无效时保留本页记忆（含开门 Rsp 乐观置位），避免 valid=0 把已开外门清掉
+ *  导致 Inner Door 一直弹「请先开外门」。 */
 void sync_outer_door_from_snap(void)
 {
     const ui_device_snapshot_t *snap = ui_device_state_get();

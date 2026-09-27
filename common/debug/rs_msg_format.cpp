@@ -279,6 +279,9 @@ const char* upc_msg_type_name(MsgType type) {
         case MsgType::GLAVO_Debug_Plate_Present_Ntf: return "GLAVO_Debug_Plate_Present_Ntf";
         case MsgType::GLAVO_Plate_Place_Confirm_Req: return "GLAVO_Plate_Place_Confirm_Req";
         case MsgType::UI_Plate_Place_Confirm_Rsp: return "UI_Plate_Place_Confirm_Rsp";
+        case MsgType::UI_Debug_Hold_Prep_Z_Set_Ntf: return "UI_Debug_Hold_Prep_Z_Set_Ntf";
+        case MsgType::UI_Debug_Hold_Prep_Z_Get_Ntf: return "UI_Debug_Hold_Prep_Z_Get_Ntf";
+        case MsgType::GLAVO_Debug_Hold_Prep_Z_Ntf: return "GLAVO_Debug_Hold_Prep_Z_Ntf";
         default: return "Msg";
     }
 }

@@ -386,7 +386,7 @@ void app_init(lv_obj_t* screen) {
         "user_home");
 
     /* 调试页：隐藏页（无侧边栏图标），归属设置页菜单按钮；
-     * 由 Settings → Debug（密码 "888"）进入 */
+     * 由 Settings → About 连点 Software Version 三次并输密码 "888" 后，再点 Debug 进入 */
     PageManager::instance().register_hidden_page(
         std::make_unique<SimplePage>("user_debug",
                                      page_user_debug_create,

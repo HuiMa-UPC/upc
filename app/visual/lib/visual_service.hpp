@@ -61,6 +61,13 @@ private:
     void send_stream_stop_req();
     /** 处理 APP_Visual_Camera_Stream_Start_Rsp，并拉起 worker。 */
     void on_stream_start_rsp(const middleware::Message& msg);
+    /**
+     * 起流回执没接上。Camera 侧 peer 可能已经在提交帧，这里只清本地标志让
+     * tick 重试，peer 留到会话结束由 release_stream_if_idle 发 Stop。
+     */
+    void note_stream_attach_failed(const char* why);
+    /** 取帧线程已在跑且流标记为就绪。调用方不得持有 state_mtx_。 */
+    bool stream_is_serving();
     /** 打印开始：起流并预热定位缓存；重复通知保持幂等。 */
     void on_first_layer_session_start(const middleware::Message& msg);
     /** 首层通过/打印结束：停流并释放 Camera 资源，保留 RKNN 上下文。 */
@@ -74,6 +81,13 @@ private:
     void start_plate_height_session(const char* reason);
     void stop_plate_height_session(const char* reason);
     void on_laser_spot_measure_req(const middleware::Message& msg);
+    /**
+     * 光斑取样窗口（跑在 laser_spot_thread_ 上）。
+     * 快照还没来时轮询，有帧再测一次；不能在消息回调里空等，
+     * 否则起流回执进不来，快照会一直是空的。
+     */
+    void run_laser_spot_window();
+    void stop_laser_spot_thread();
     void send_laser_spot_measure_rsp(bool ok, float x, float y);
     /** 所有会话都不再需要流时才拆流。 */
     void release_stream_if_idle(const char* reason);
@@ -93,15 +107,20 @@ private:
     void on_optical_path_point_check_req(const middleware::Message& msg);
     /**
      * 单点判定窗口轮询体（跑在 optical_point_thread_ 上）。
-     * 逐帧调 RedDotDetector，命中即回包；窗口耗尽回 result=0。
+     * 先等快照就绪（最多约 8s），再在 timeout_ms 内逐帧调 RedDotDetector。
+     * 空快照不计入「没找到红点」。命中即回包；无帧回 fail_code=1，有帧未找到回 0。
      * 必须另起线程：消息分发跑在 main.cpp 的主循环里（port.process + tick），
-     * 在回调里阻塞 3 秒会连 tick 与起流应答一起卡住。
+     * 在回调里阻塞会连 tick 与起流应答一起卡住。
      */
     void run_optical_point_window(
         const middleware::VisualOpticalPathCheckReqPayload& req);
+    /**
+     * @param fail_code result=0 时写入 reserved[0]：1=整段无快照，0=检测器已跑仍未找到。
+     */
     void send_optical_path_point_rsp(
         const middleware::VisualOpticalPathCheckReqPayload& req,
-        const RedDotDetection& detection);
+        const RedDotDetection& detection,
+        uint8_t fail_code);
     /** 回收取点线程。 */
     void stop_optical_point_thread();
 
@@ -160,6 +179,12 @@ private:
     uint64_t cabin_idle_deadline_ms_ = 0;
     uint64_t cabin_stopped_ms_ = 0;
     bool start_req_sent_ = false;
+    /**
+     * 已经向 Camera 要过 visual peer。起流回执失败时 peer 仍在提交帧，
+     * 只清 stream_up_ / start_req_sent_ 的话，会话结束不会发 Stop，
+     * 没人 release 的槽会把 UI 预览一起卡住。
+     */
+    bool camera_peer_requested_ = false;
     bool stream_up_ = false;
     bool pending_start_rsp_valid_ = false;
     middleware::CameraStreamInfoPayload pending_start_rsp_{};
@@ -192,6 +217,9 @@ private:
 
     /** 红点识别器（算法桩，见 red_dot_detector.hpp）。 */
     RedDotDetector red_dot_detector_;
+    /** 测高/校准光斑取样线程。Glavo 逐点串行，同一时刻只有一条。 */
+    std::thread laser_spot_thread_;
+    std::atomic<bool> laser_spot_abort_{false};
     /** 单点判定窗口轮询线程；Glavo 逐点串行，同一时刻只有一条。 */
     std::thread optical_point_thread_;
     std::atomic<bool> optical_point_abort_{false};

@@ -186,6 +186,18 @@ bool IpcDmaFrameRingProducer::slot_is_empty(uint32_t idx) const
     return slots_[idx].state.load(std::memory_order_acquire) == kStateEmpty;
 }
 
+bool IpcDmaFrameRingProducer::abandon_unread_slot(uint32_t idx)
+{
+    if(!slots_ || idx >= global_->slot_count) {
+        return false;
+    }
+    uint32_t expected = kStateReady;
+    return slots_[idx].state.compare_exchange_strong(
+        expected, kStateEmpty,
+        std::memory_order_acq_rel,
+        std::memory_order_relaxed);
+}
+
 bool IpcDmaFrameRingProducer::wait_slot_empty(uint32_t idx,
                                               int timeout_ms) const
 {

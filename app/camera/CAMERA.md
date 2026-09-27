@@ -45,8 +45,8 @@ UPDF 帧头含 `fd_count`（见 `common/upc_contract.hpp` `IPC_FD_FRAME_HDR_SIZE
 - 状态机：后端拷进 isolation buf 后把 `buffer_idx` 写入 `EMPTY` slot 并 `commit` 为 `READY`；消费者 `acquire_latest_frame` 取到 `buffer_idx` 后查 fd 表，用完 `release_slot` 置 `EMPTY`；isolation buf 要等所有 peer 都归还槽位后才还回 pool。
 - **`dequeue_frame` 排空到最新帧**：V4L2 是 FIFO，一次 `DQBUF` 拿到的是队列里最老的一帧。采集线程按固定帧周期"取一还一"，而 `sleep_for` 的过冲让它比 sensor 慢约 0.1ms/帧——这点差额只能累积、永远排不掉，实测 40 秒内把画面延迟从 20ms 顶到 141ms 并让驱动开始丢帧。所以首帧之后要继续非阻塞 `DQBUF` 直到 `EAGAIN`，把过期帧立即 `QBUF` 还回去，只交付最新一帧（fd 以 `O_NONBLOCK` 打开，队列空时立即返回，不会阻塞）。
   代价是消费者卡顿期间过期帧被丢弃而不是排队，**打印录像在卡顿瞬间会少几帧**；稳态 30fps 进 30fps 出时每轮通常一帧都排不出来，可忽略。排掉的帧数记在 `drv_drained`。
-- **在飞窗口（不锁步，不抢还）**：采集线程 commit 后不逐帧等待，而是把该帧挂进在飞队列，每轮用 `slot_is_empty` 非阻塞回收已完成的帧。窗口满时短等最老一帧（`peer_wait_slot_empty_ms`）；仍满则**丢弃本帧**（isolation 槽立刻还池），**绝不**把仍被消费者持有的 buffer 提前 release——对齐 V4L2/libcamera 所有权。慢消费者只让自己掉帧，不再撕开 ISP/隔离 buf 的所有权。窗口取 `min(CAMERA_MAX_FRAMES_IN_FLIGHT, buffer 数-2, 槽位数-1)`。
-- **等待上限按帧率推导，不能写死**：`wait_slot_empty` 的超时由 `peer_wait_slot_empty_ms(stream_fps_)` 算出 `kPeerWaitSlotEmptyFramePeriods`（2）个帧周期，@30fps 约 66ms。这个等待只为「让消费者用完当前帧再复用 buffer」争取时间；超时后改丢新帧，所以上限只需覆盖消费者处理一帧的正常耗时（UI 侧实测单帧 RGA 转换约 7ms）。
+- **在飞窗口（不锁步，不抢还正在读的帧）**：采集线程 commit 后不逐帧等待，而是把该帧挂进在飞队列，每轮用 `slot_is_empty` 非阻塞回收已完成的帧。窗口满时短等最老一帧（`peer_wait_slot_empty_ms`）。等完后槽仍是 `READY`（消费者还没 `acquire`）就 `abandon_unread_slot` 收成 `EMPTY`，让这一路自己掉帧，不能把共享 isolation buf 钉死、UI 预览一起停更。槽已是 `READING` 则**丢弃新帧**，**绝不**把消费者还在读的 buffer 提前 release。窗口取 `min(CAMERA_MAX_FRAMES_IN_FLIGHT, buffer 数-2, 槽位数-1)`。
+- **等待上限按帧率推导，不能写死**：`wait_slot_empty` 的超时由 `peer_wait_slot_empty_ms(stream_fps_)` 算出 `kPeerWaitSlotEmptyFramePeriods`（2）个帧周期，@30fps 约 66ms。这个等待只为「让消费者用完当前帧再复用 buffer」争取时间；超时后没人读的槽收回，正在读的才改丢新帧。上限只需覆盖消费者处理一帧的正常耗时（UI 侧实测单帧 RGA 转换约 7ms）。
   **曾写死 1000ms，是一个真实故障的根因**：任一消费者卡住，采集线程就每帧白等整整 1 秒，把整条采集链路（含直播编码与打印逐层快照）一起拖到 1fps 且不自行恢复——现场复现出连续 48 分钟、间隔精确 1.037 秒（1000ms 超时 + 约 37ms 真实工作）的预览塌陷，`slot release timeout` WARN 同频刷屏。按帧率推导后，最坏退化被限制成「该消费者掉几帧」，不再扩散到其它消费者。
   **曾超时后强制 QBUF/release**：对齐零拷贝时会让 ISP 写与 UI RGA 读同一 sg，存在 `rk_iommu`/`dma_resv` 交叉卡死风险；现已改为丢新帧。
 - **采集看门狗**：`stream_thread` 若超过 `CAMERA_STREAM_WATCHDOG_STALL_MS`（默认 3s）无成功 dequeue，则先尽量排空在飞帧，再原地重启 ISP/V4L2 与隔离 pool（不清 peer 表），重建各 peer SHM 并重推 `*_Stream_Start_Rsp` + 新 dma fd；两次重启间隔至少 `CAMERA_STREAM_WATCHDOG_COOLDOWN_MS`（默认 8s）。Media 据此重绑 fd，并按 `local_rtsp_desired_` 决定是否重建本地 RTSP。消费者握的是隔离 heap fd：Camera 关掉自己的 fd 后内存仍由消费者 fd 引用撑着，直到它们换新 fd。
@@ -61,7 +61,7 @@ RK3568 上 **RGA2 不走 IOMMU**（板端核对与堆约束见 [common/COMMON.md
 | V4L2 EXPBUF | 仅 Camera：DQBUF → memcpy → 立刻 QBUF | ISP 周期 map；消费者永不 import/mmap |
 | 隔离 pool（dma32/CMA，`RgaDevice`） | 在飞期间给 UI/Media/Visual | 与 ISP 无共享 sg |
 
-不变量：仍被 peer 持有的 isolation buf **禁止**提前还池；窗口满时丢新帧。看门狗拆设备前尽量等在飞排空；排不空也只 abandon 记录（pool 整池释放），不强行把持有中的 buf 标 free 再给下一帧覆盖。
+不变量：消费者已经 `acquire`（槽为 `READING`）的 isolation buf **禁止**提前还池；窗口满且对方还在读时丢新帧。槽停在 `READY`、等待后仍无人读，可以收成 `EMPTY` 再还池——这时没有消费者持有这块 buffer。看门狗拆设备前尽量等在飞排空；排不空也只 abandon 记录（pool 整池释放），不强行把持有中的 buf 标 free 再给下一帧覆盖。
 
 Media 直播/打印 H264 与 RTHM 缩略图都是先拷到私有缓冲再进 MPP/RGA，**不**长期占用 isolation 槽做重活。
 

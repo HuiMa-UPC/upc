@@ -144,8 +144,8 @@ lv_obj_t *g_o2_calib_ref_ta = nullptr;      /**< 标定时参考氧浓度 % */
 bool      g_o2_calib_pending = false;       /**< 点击后等待 Rsp */
 lv_obj_t *g_first_layer_visual_btn = nullptr; /**< 其他控制：首层视觉检测开关按钮 */
 lv_obj_t *g_first_layer_visual_state_lbl = nullptr; /**< 其他控制：首层视觉检测状态文本 */
-lv_obj_t *g_optical_path_check_btn = nullptr; /**< 其他控制：打印前光路检测开关按钮 */
-lv_obj_t *g_optical_path_check_state_lbl = nullptr; /**< 其他控制：打印前光路检测状态文本 */
+lv_obj_t *g_optical_path_check_btn = nullptr; /**< 其他控制：Skip Optical Path Chk（按下=跳过光路） */
+lv_obj_t *g_optical_path_check_state_lbl = nullptr; /**< 其他控制：Skip Optical Path Chk 状态字 */
 lv_obj_t *g_plate_height_adj_btn = nullptr; /**< 其他控制：打印前基板测高开关按钮 */
 lv_obj_t *g_plate_height_adj_state_lbl = nullptr; /**< 其他控制：打印前基板测高状态文本 */
 lv_obj_t *g_inner_door_occlusion_btn = nullptr; /**< 其他控制：跳过内门视觉挡门 */
@@ -299,7 +299,7 @@ void update_galvo_test_controls()
         lv_label_set_text(g_galvo_point_test_lbl,
                           point_test_busy ? "Running" : "Idle");
         lv_obj_set_style_text_color(g_galvo_point_test_lbl,
-            point_test_busy ? user_color_accent : user_color_text_dim, 0);
+            point_test_busy ? user_light_accent : user_light_icon_off, 0);
     }
 }
 
@@ -321,31 +321,60 @@ lv_obj_t *make_circle_btn(lv_obj_t *parent, int32_t sz, const char *sym,
     lv_obj_remove_style_all(btn);
     lv_obj_set_size(btn, sz, sz);
     lv_obj_set_style_radius(btn, LV_RADIUS_CIRCLE, 0);
-    /* 常态白色描边：标出可点击范围（对齐展示图） */
+    /* 常态主色描边：标出可点击范围（浅色档） */
     lv_obj_set_style_border_width(btn, 1, 0);
-    lv_obj_set_style_border_color(btn, user_color_accent, 0);
+    lv_obj_set_style_border_color(btn, user_light_accent, 0);
     lv_obj_set_style_border_opa(btn, LV_OPA_COVER, 0);
     if(accent) {
-        lv_obj_set_style_bg_color(btn, user_color_accent, 0);
+        lv_obj_set_style_bg_color(btn, user_light_accent, 0);
         lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, 0);
     } else {
-        /* 更浅的填充，与背景拉开区分度 */
-        lv_obj_set_style_bg_color(btn, user_color_text, 0);
-        lv_obj_set_style_bg_opa(btn, LV_OPA_20, 0);
+        /* 浅墨填充，与白卡拉开区分（对齐 Manual jog） */
+        lv_obj_set_style_bg_color(btn, user_light_text, 0);
+        lv_obj_set_style_bg_opa(btn, 13, 0);
     }
     /* 点击反馈：蓝底 + 蓝边 */
-    lv_obj_set_style_bg_color(btn, user_color_accent, LV_STATE_PRESSED);
+    lv_obj_set_style_bg_color(btn, user_light_accent, LV_STATE_PRESSED);
     lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, LV_STATE_PRESSED);
-    lv_obj_set_style_border_color(btn, user_color_accent, LV_STATE_PRESSED);
+    lv_obj_set_style_border_color(btn, user_light_accent, LV_STATE_PRESSED);
     if(cb) {
         lv_obj_add_event_cb(btn, cb, LV_EVENT_CLICKED, ud);
     }
     lv_obj_t *l = lv_label_create(btn);
     lv_label_set_text(l, sym);
-    lv_obj_set_style_text_color(l, user_color_text, 0);
+    /* 蓝底用白字，浅墨底用深字 */
+    lv_obj_set_style_text_color(l, accent ? lv_color_white() : user_light_text, 0);
     lv_obj_set_style_text_font(l, user_font_text(), 0);
     lv_obj_center(l);
     return btn;
+}
+
+/** 调试页浅色白卡：替掉深色磨砂卡，与设置/首页卡片同款。 */
+lv_obj_t *make_dbg_light_card(lv_obj_t *parent, bool flex_grow)
+{
+    lv_obj_t *card = lv_obj_create(parent);
+    lv_obj_remove_style_all(card);
+    lv_obj_set_width(card, LV_PCT(100));
+    if(flex_grow) {
+        lv_obj_set_flex_grow(card, 1);
+        lv_obj_set_height(card, LV_PCT(100));
+    } else {
+        lv_obj_set_height(card, LV_SIZE_CONTENT);
+    }
+    lv_obj_set_style_radius(card, USER_HIST_CARD_RADIUS, 0);
+    lv_obj_set_style_bg_color(card, user_light_card, 0);
+    lv_obj_set_style_bg_opa(card, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(card, 1, 0);
+    lv_obj_set_style_border_color(card, lv_color_white(), 0);
+    lv_obj_set_style_border_opa(card, 26, 0);
+    lv_obj_set_style_shadow_width(card, 6, 0);
+    lv_obj_set_style_shadow_ofs_y(card, 2, 0);
+    lv_obj_set_style_shadow_color(card, lv_color_black(), 0);
+    lv_obj_set_style_shadow_opa(card, 10, 0);
+    lv_obj_set_style_pad_all(card, USER_PAD, 0);
+    lv_obj_set_style_text_color(card, user_light_text, 0);
+    lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
+    return card;
 }
 
 void on_back_click(lv_event_t *)
@@ -393,7 +422,7 @@ void on_set_zero(lv_event_t *e)
     const uint8_t axis = static_cast<uint8_t>(
         reinterpret_cast<uintptr_t>(lv_event_get_user_data(e)));
     ui::DebugMsgProxy::instance().send_axis_set_zero(static_cast<DebugAxis>(axis));
-    ui_toast_show("Work zero set", user_color_accent, 1200);
+    ui_toast_show("Work zero set", user_light_accent, 1200);
 }
 
 /* ---- 顶部传感器条 ---- */
@@ -412,17 +441,17 @@ lv_obj_t *make_sensor_cell(lv_obj_t *parent, const char *caption, int idx)
     /* 左侧分隔线 */
     if(idx > 0) {
         lv_obj_set_style_border_width(cell, 1, 0);
-        lv_obj_set_style_border_color(cell, user_color_divider, 0);
+        lv_obj_set_style_border_color(cell, user_light_divider, 0);
         lv_obj_set_style_border_side(cell, LV_BORDER_SIDE_LEFT, 0);
     }
     lv_obj_t *cap = lv_label_create(cell);
     lv_label_set_text(cap, caption);
-    lv_obj_set_style_text_color(cap, user_color_text_dim, 0);
+    lv_obj_set_style_text_color(cap, user_light_icon_off, 0);
     lv_obj_set_style_text_font(cap, user_font_caption(), 0);
 
     lv_obj_t *val = lv_label_create(cell);
     lv_label_set_text(val, "--");
-    lv_obj_set_style_text_color(val, user_color_text, 0);
+    lv_obj_set_style_text_color(val, user_light_text, 0);
     lv_obj_set_style_text_font(val, user_font_text(), 0);
     if(idx >= 0 && idx < 10) {
         g_sensor_val[idx] = val;
@@ -462,7 +491,7 @@ void stop_zone4_timer(void)
 
 lv_obj_t *build_sensor_strip(lv_obj_t *parent)
 {
-    lv_obj_t *strip = ui_user_make_frosted_card(parent, false);
+    lv_obj_t *strip = make_dbg_light_card(parent, false);
     /* 本页不显示常驻状态栏，卡高与 USER_TOPBAR_H 脱钩（后者已按稿抬到屏高 16%）。 */
     lv_obj_set_height(strip, USER_SENSOR_STRIP_H);
     lv_obj_set_flex_flow(strip, LV_FLEX_FLOW_ROW);
@@ -487,7 +516,7 @@ lv_obj_t *build_sensor_strip(lv_obj_t *parent)
  */
 lv_obj_t *build_powder_ir_strip(lv_obj_t *parent)
 {
-    lv_obj_t *strip = ui_user_make_frosted_card(parent, false);
+    lv_obj_t *strip = make_dbg_light_card(parent, false);
     lv_obj_set_width(strip, LV_PCT(100));
     lv_obj_set_height(strip, LV_SIZE_CONTENT);
     lv_obj_set_flex_flow(strip, LV_FLEX_FLOW_ROW);
@@ -498,7 +527,7 @@ lv_obj_t *build_powder_ir_strip(lv_obj_t *parent)
 
     lv_obj_t *title = lv_label_create(strip);
     lv_label_set_text(title, "Powder IR");
-    lv_obj_set_style_text_color(title, user_color_text_dim, 0);
+    lv_obj_set_style_text_color(title, user_light_icon_off, 0);
     lv_obj_set_style_text_font(title, user_font_caption(), 0);
 
     static const char *const kIrCaps[8] = {
@@ -517,12 +546,12 @@ lv_obj_t *build_powder_ir_strip(lv_obj_t *parent)
 
         lv_obj_t *cap = lv_label_create(cell);
         lv_label_set_text(cap, kIrCaps[i]);
-        lv_obj_set_style_text_color(cap, user_color_text_dim, 0);
+        lv_obj_set_style_text_color(cap, user_light_icon_off, 0);
         lv_obj_set_style_text_font(cap, user_font_caption(), 0);
 
         lv_obj_t *val = lv_label_create(cell);
         lv_label_set_text(val, "--");
-        lv_obj_set_style_text_color(val, user_color_text, 0);
+        lv_obj_set_style_text_color(val, user_light_text, 0);
         lv_obj_set_style_text_font(val, user_font_text(), 0);
         g_powder_ir_val[i] = val;
     }
@@ -538,14 +567,14 @@ void apply_powder_ir_bits(uint8_t bits, bool valid)
         }
         if(!valid) {
             lv_label_set_text(lbl, "--");
-            lv_obj_set_style_text_color(lbl, user_color_text_dim, 0);
+            lv_obj_set_style_text_color(lbl, user_light_icon_off, 0);
             continue;
         }
         /* bit=0 遮挡有粉 → Blk；bit=1 受光无粉 → Clr */
         const bool clear = (bits & static_cast<uint8_t>(1u << i)) != 0;
         lv_label_set_text(lbl, clear ? "Clr" : "Blk");
         lv_obj_set_style_text_color(lbl,
-            clear ? user_color_text_dim : user_color_accent, 0);
+            clear ? user_light_icon_off : user_light_accent, 0);
     }
 }
 
@@ -559,7 +588,7 @@ void on_device_toggle(lv_event_t *e)
     if(target < 4 && g_dev_state[target]) {
         lv_label_set_text(g_dev_state[target], on ? kDevOn[target] : kDevOff[target]);
         lv_obj_set_style_text_color(g_dev_state[target],
-                                    on ? user_color_accent : user_color_text_dim, 0);
+                                    on ? user_light_accent : user_light_icon_off, 0);
     }
     ui::DebugMsgProxy::instance().send_device(
         static_cast<DebugDeviceTarget>(target), on);
@@ -590,13 +619,13 @@ lv_obj_t *make_device_toggle(lv_obj_t *parent, DebugDeviceTarget target,
 
     lv_obj_t *lbl = lv_label_create(col);
     lv_label_set_text(lbl, name);
-    lv_obj_set_style_text_color(lbl, user_color_text_dim, 0);
+    lv_obj_set_style_text_color(lbl, user_light_icon_off, 0);
     lv_obj_set_style_text_font(lbl, user_font_caption(), 0);
 
     const uint8_t ti = static_cast<uint8_t>(target);
     lv_obj_t *state = lv_label_create(col);
     lv_label_set_text(state, ti < 4 ? kDevOff[ti] : "");
-    lv_obj_set_style_text_color(state, user_color_text_dim, 0);
+    lv_obj_set_style_text_color(state, user_light_icon_off, 0);
     lv_obj_set_style_text_font(state, user_font_text(), 0);
     if(ti < 4) {
         g_dev_state[ti] = state;
@@ -608,15 +637,15 @@ lv_obj_t *make_device_toggle(lv_obj_t *parent, DebugDeviceTarget target,
     lv_obj_set_style_radius(btn, LV_RADIUS_CIRCLE, 0);
     lv_obj_add_flag(btn, LV_OBJ_FLAG_CHECKABLE);
     lv_obj_set_style_border_width(btn, 1, 0);
-    lv_obj_set_style_border_color(btn, user_color_accent, 0);
-    lv_obj_set_style_bg_color(btn, user_color_text, 0);
-    lv_obj_set_style_bg_opa(btn, LV_OPA_20, 0);
-    lv_obj_set_style_bg_color(btn, user_color_accent, LV_STATE_CHECKED);
+    lv_obj_set_style_border_color(btn, user_light_accent, 0);
+    lv_obj_set_style_bg_color(btn, user_light_text, 0);
+    lv_obj_set_style_bg_opa(btn, 13, 0);
+    lv_obj_set_style_bg_color(btn, user_light_accent, LV_STATE_CHECKED);
     lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, LV_STATE_CHECKED);
-    lv_obj_set_style_bg_color(btn, user_color_accent, LV_STATE_PRESSED);
+    lv_obj_set_style_bg_color(btn, user_light_accent, LV_STATE_PRESSED);
     lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, LV_STATE_PRESSED);
-    lv_obj_set_style_border_color(btn, user_color_accent, LV_STATE_CHECKED);
-    lv_obj_set_style_border_color(btn, user_color_accent, LV_STATE_PRESSED);
+    lv_obj_set_style_border_color(btn, user_light_accent, LV_STATE_CHECKED);
+    lv_obj_set_style_border_color(btn, user_light_accent, LV_STATE_PRESSED);
     lv_obj_add_event_cb(btn, on_device_toggle, LV_EVENT_VALUE_CHANGED,
                         reinterpret_cast<void *>(static_cast<uintptr_t>(
                             static_cast<uint8_t>(target))));
@@ -625,7 +654,7 @@ lv_obj_t *make_device_toggle(lv_obj_t *parent, DebugDeviceTarget target,
     }
     lv_obj_t *ic = lv_label_create(btn);
     lv_label_set_text(ic, sym);
-    lv_obj_set_style_text_color(ic, user_color_text, 0);
+    lv_obj_set_style_text_color(ic, user_light_text, 0);
     lv_obj_set_style_text_font(ic, user_font_icon(), 0);
     lv_obj_center(ic);
     return grp;
@@ -674,15 +703,20 @@ void style_debug_seg(lv_obj_t *seg)
     if(!seg) {
         return;
     }
+    /* 浅底上的轨：淡墨条，不再用深色档的近黑半透明 */
+    lv_obj_set_style_bg_color(seg, user_light_text, 0);
+    lv_obj_set_style_bg_opa(seg, 13, 0);
     lv_obj_set_style_pad_column(seg, 2, 0);   /* 段间距缩小 */
     for(uint32_t i = 0; i < lv_obj_get_child_count(seg); i++) {
         lv_obj_t *b = lv_obj_get_child(seg, i);
         /* 每段蓝色边框 */
         lv_obj_set_style_border_width(b, 1, 0);
-        lv_obj_set_style_border_color(b, user_color_accent, 0);
+        lv_obj_set_style_border_color(b, user_light_accent, 0);
         lv_obj_set_style_border_opa(b, LV_OPA_COVER, 0);
-        /* 选中段：蓝底白字 */
-        lv_obj_set_style_bg_color(b, user_color_accent, LV_STATE_CHECKED);
+        /* 未选：深字；选中：蓝底白字 */
+        lv_obj_set_style_text_color(b, user_light_text, 0);
+        lv_obj_set_style_text_color(b, lv_color_white(), LV_STATE_CHECKED);
+        lv_obj_set_style_bg_color(b, user_light_accent, LV_STATE_CHECKED);
         lv_obj_set_style_bg_opa(b, LV_OPA_COVER, LV_STATE_CHECKED);
     }
 }
@@ -732,11 +766,11 @@ lv_obj_t *make_value_input(lv_obj_t *parent, float value, bool integer = false)
     lv_obj_set_width(ta, UI_TA_SHORT_W);
     lv_obj_set_height(ta, UI_INPUT_H);
     lv_obj_set_style_text_font(ta, user_font_text(), 0);
-    lv_obj_set_style_bg_color(ta, user_color_bg, 0);
+    lv_obj_set_style_bg_color(ta, user_light_more_bg, 0);
     /* 蓝色加粗边框 */
     lv_obj_set_style_border_width(ta, 2, 0);
-    lv_obj_set_style_border_color(ta, user_color_accent, 0);
-    lv_obj_set_style_text_color(ta, user_color_text, 0);
+    lv_obj_set_style_border_color(ta, user_light_accent, 0);
+    lv_obj_set_style_text_color(ta, user_light_text, 0);
     ui_keyboard_attach(ta, LV_KEYBOARD_MODE_NUMBER);
     return ta;
 }
@@ -756,7 +790,7 @@ void rebuild_axis_ctrl(int idx)
 
     lv_obj_t *cap = lv_label_create(box);
     lv_label_set_text(cap, hold ? "Speed" : "Step");
-    lv_obj_set_style_text_color(cap, user_color_text_dim, 0);
+    lv_obj_set_style_text_color(cap, user_light_icon_off, 0);
     lv_obj_set_style_text_font(cap, user_font_caption(), 0);
 
     g_axis_step[idx] = make_value_input(box, g_axis_step_saved[idx][g_axis_mode[idx]], true);
@@ -765,7 +799,7 @@ void rebuild_axis_ctrl(int idx)
 
     lv_obj_t *unit = lv_label_create(box);
     lv_label_set_text(unit, hold ? cfg.speed_unit : cfg.step_unit);
-    lv_obj_set_style_text_color(unit, user_color_text_dim, 0);
+    lv_obj_set_style_text_color(unit, user_light_icon_off, 0);
     lv_obj_set_style_text_font(unit, user_font_caption(), 0);
 
     lv_obj_t *spacer = lv_obj_create(box);
@@ -823,7 +857,7 @@ void on_axis_subtab_changed(lv_event_t *e)
 lv_obj_t *build_axis_card(lv_obj_t *parent, int idx)
 {
     const AxisCfg &cfg = kAxes[idx];
-    lv_obj_t *card = ui_user_make_frosted_card(parent, false);
+    lv_obj_t *card = make_dbg_light_card(parent, false);
     lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_style_pad_row(card, USER_PAD_SM, 0);
 
@@ -839,12 +873,12 @@ lv_obj_t *build_axis_card(lv_obj_t *parent, int idx)
 
     lv_obj_t *title = lv_label_create(head);
     lv_label_set_text(title, cfg.title);
-    lv_obj_set_style_text_color(title, user_color_accent, 0);
+    lv_obj_set_style_text_color(title, user_light_accent, 0);
     lv_obj_set_style_text_font(title, user_font_text(), 0);
 
     lv_obj_t *pos = lv_label_create(head);
     lv_label_set_text_fmt(pos, "Pos 0.000 %s", cfg.unit);
-    lv_obj_set_style_text_color(pos, user_color_text, 0);
+    lv_obj_set_style_text_color(pos, user_light_text, 0);
     lv_obj_set_style_text_font(pos, user_font_text(), 0);
     g_axis_pos[idx] = pos;
 
@@ -861,7 +895,7 @@ lv_obj_t *build_axis_card(lv_obj_t *parent, int idx)
 
         g_z_zero_lbl = lv_label_create(zrow);
         lv_label_set_text(g_z_zero_lbl, "Work zero 0.000 mm");
-        lv_obj_set_style_text_color(g_z_zero_lbl, user_color_text_dim, 0);
+        lv_obj_set_style_text_color(g_z_zero_lbl, user_light_icon_off, 0);
         lv_obj_set_style_text_font(g_z_zero_lbl, user_font_caption(), 0);
 
         lv_obj_t *zbtn = lv_button_create(zrow);
@@ -871,11 +905,11 @@ lv_obj_t *build_axis_card(lv_obj_t *parent, int idx)
         lv_obj_set_style_radius(zbtn, USER_RADIUS, 0);
         lv_obj_set_style_pad_hor(zbtn, USER_PAD, 0);
         /* 底色蓝，按下反馈红 */
-        lv_obj_set_style_bg_color(zbtn, user_color_accent, 0);
+        lv_obj_set_style_bg_color(zbtn, user_light_accent, 0);
         lv_obj_set_style_bg_opa(zbtn, LV_OPA_COVER, 0);
         lv_obj_set_style_bg_color(zbtn, ui_color_danger, LV_STATE_PRESSED);
         lv_obj_set_style_bg_opa(zbtn, LV_OPA_COVER, LV_STATE_PRESSED);
-        lv_obj_set_style_text_color(zbtn, user_color_text, 0);
+        lv_obj_set_style_text_color(zbtn, user_light_text, 0);
         lv_obj_add_event_cb(zbtn, on_set_zero, LV_EVENT_CLICKED,
                             reinterpret_cast<void *>(static_cast<uintptr_t>(
                                 static_cast<uint8_t>(cfg.axis))));
@@ -902,8 +936,8 @@ lv_obj_t *build_axis_card(lv_obj_t *parent, int idx)
     lv_obj_set_flex_align(box, LV_FLEX_ALIGN_START,
                           LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_set_style_pad_column(box, USER_PAD_SM / 2, 0);   /* 缩小列间距，给按钮更多横向空间 */
-    lv_obj_set_style_bg_color(box, lv_color_hex(0x08080B), 0);
-    lv_obj_set_style_bg_opa(box, LV_OPA_20, 0);
+    lv_obj_set_style_bg_color(box, user_light_more_bg, 0);
+    lv_obj_set_style_bg_opa(box, LV_OPA_COVER, 0);
     lv_obj_set_style_radius(box, USER_RADIUS, 0);
     lv_obj_set_style_pad_all(box, USER_PAD_SM, 0);
     lv_obj_clear_flag(box, LV_OBJ_FLAG_SCROLLABLE);
@@ -967,12 +1001,12 @@ void on_red_always_click(lv_event_t *)
 void on_galvo_save(lv_event_t *)
 {
     if(galvo_save_busy()) {
-        ui_toast_show("Cannot save while printing", user_color_status_err, 1800);
+        ui_toast_show("Cannot save while printing", user_light_notice_dot, 1800);
         update_galvo_save_enabled();
         return;
     }
     if(!g_galvo_center_valid) {
-        ui_toast_show("No center offset loaded", user_color_status_err, 1500);
+        ui_toast_show("No center offset loaded", user_light_notice_dot, 1500);
         return;
     }
     ui::DebugMsgProxy::instance().send_galvo_param_save(
@@ -982,7 +1016,7 @@ void on_galvo_save(lv_event_t *)
     /* Save 成功后以当前编辑值为“已保存”，供复位键回退 */
     g_galvo_saved_x = g_galvo_center_x;
     g_galvo_saved_y = g_galvo_center_y;
-    ui_toast_show("Saved", user_color_accent, 1200);
+    ui_toast_show("Saved", user_light_accent, 1200);
 }
 
 void on_test_image_changed(lv_event_t *e)
@@ -997,7 +1031,7 @@ void on_test_image_changed(lv_event_t *e)
 void on_calib_click(lv_event_t *)
 {
     ui::DebugMsgProxy::instance().send_galvo_calib();
-    ui_toast_show("Calibration started", user_color_accent, 1500);
+    ui_toast_show("Calibration started", user_light_accent, 1500);
 }
 
 void on_height_calib_click(lv_event_t *)
@@ -1007,7 +1041,7 @@ void on_height_calib_click(lv_event_t *)
     if(g_height_calib_lbl) {
         lv_label_set_text(g_height_calib_lbl, "Starting...");
     }
-    ui_toast_show("Height calibration started", user_color_accent, 1500);
+    ui_toast_show("Height calibration started", user_light_accent, 1500);
 }
 
 /** @brief 振镜绝对坐标移动：读 Abs X/Y，发 UI_Debug_Galvo_AbsMove_Ntf。
@@ -1017,7 +1051,7 @@ void on_galvo_abs_move(lv_event_t *)
     const float x = read_ta_float(g_galvo_abs_x_ta);
     const float y = read_ta_float(g_galvo_abs_y_ta);
     ui::DebugMsgProxy::instance().send_galvo_abs_move(x, y, 0.0f, 1);
-    ui_toast_show("Galvo move sent", user_color_accent, 1200);
+    ui_toast_show("Galvo move sent", user_light_accent, 1200);
 }
 
 void on_galvo_point_test_click(lv_event_t *)
@@ -1030,14 +1064,14 @@ void on_galvo_point_test_click(lv_event_t *)
     if(control_is_printing() || test_image_on ||
        proxy.galvo_point_test_active() || g_galvo_point_test_pending) {
         ui_toast_show("Print or test mode active",
-                      user_color_status_err, 1800);
+                      user_light_notice_dot, 1800);
         return;
     }
 
     g_galvo_point_test_pending = true;
     update_galvo_test_controls();
     ui::DebugMsgProxy::instance().start_galvo_point_test();
-    ui_toast_show("Galvo point test started", user_color_accent, 1500);
+    ui_toast_show("Galvo point test started", user_light_accent, 1500);
 }
 
 const char *o2_calib_err_text(uint8_t err)
@@ -1070,8 +1104,8 @@ void apply_o2_calib_label(const middleware::DebugO2CalibRspPayload& p, bool from
     }
     lv_label_set_text(g_o2_calib_lbl, buf);
     lv_obj_set_style_text_color(g_o2_calib_lbl,
-                                from_rsp && p.ok ? user_color_accent
-                                                 : user_color_text_dim, 0);
+                                from_rsp && p.ok ? user_light_accent
+                                                 : user_light_icon_off, 0);
 }
 
 void on_o2_calib_click(lv_event_t *)
@@ -1081,26 +1115,26 @@ void on_o2_calib_click(lv_event_t *)
     }
     if(control_is_printing()) {
         ui_toast_show("Cannot calib while printing",
-                      user_color_status_err, 1800);
+                      user_light_notice_dot, 1800);
         return;
     }
     float ref = g_o2_calib_ref_ta ? read_ta_float(g_o2_calib_ref_ta) : 20.9f;
     if(!(ref > 0.f && ref < 100.f)) {
         ui_toast_show("Ref O2 must be 0–100%",
-                      user_color_status_err, 1800);
+                      user_light_notice_dot, 1800);
         return;
     }
     g_o2_calib_pending = true;
     if(g_o2_calib_lbl) {
         lv_label_set_text(g_o2_calib_lbl, "Calibrating...");
-        lv_obj_set_style_text_color(g_o2_calib_lbl, user_color_accent, 0);
+        lv_obj_set_style_text_color(g_o2_calib_lbl, user_light_accent, 0);
     }
     if(g_o2_calib_btn) {
         lv_obj_clear_flag(g_o2_calib_btn, LV_OBJ_FLAG_CLICKABLE);
         lv_obj_add_state(g_o2_calib_btn, LV_STATE_DISABLED);
     }
     ui::DebugMsgProxy::instance().send_o2_calib(ref);
-    ui_toast_show("O2 calib started", user_color_accent, 1200);
+    ui_toast_show("O2 calib started", user_light_accent, 1200);
 }
 
 lv_obj_t *make_galvo_readout(lv_obj_t *parent, const char *axis_name, lv_obj_t **out)
@@ -1114,12 +1148,12 @@ lv_obj_t *make_galvo_readout(lv_obj_t *parent, const char *axis_name, lv_obj_t *
 
     lv_obj_t *n = lv_label_create(row);
     lv_label_set_text(n, axis_name);
-    lv_obj_set_style_text_color(n, user_color_text_dim, 0);
+    lv_obj_set_style_text_color(n, user_light_icon_off, 0);
     lv_obj_set_style_text_font(n, user_font_text(), 0);
 
     lv_obj_t *v = lv_label_create(row);
     lv_label_set_text(v, "0.000");
-    lv_obj_set_style_text_color(v, user_color_text, 0);
+    lv_obj_set_style_text_color(v, user_light_text, 0);
     lv_obj_set_style_text_font(v, user_font_text(), 0);
     if(out) *out = v;
     return row;
@@ -1166,13 +1200,13 @@ lv_obj_t *build_dpad(lv_obj_t *parent)
 
 lv_obj_t *build_galvo_card(lv_obj_t *parent)
 {
-    lv_obj_t *card = ui_user_make_frosted_card(parent, false);
+    lv_obj_t *card = make_dbg_light_card(parent, false);
     lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_style_pad_row(card, USER_PAD_SM, 0);
 
     lv_obj_t *title = lv_label_create(card);
     lv_label_set_text(title, "Galvo Coordinate");
-    lv_obj_set_style_text_color(title, user_color_accent, 0);
+    lv_obj_set_style_text_color(title, user_light_accent, 0);
     lv_obj_set_style_text_font(title, user_font_text(), 0);
 
     /* 主行：左信息 + 右方向盘 */
@@ -1214,7 +1248,7 @@ lv_obj_t *build_galvo_card(lv_obj_t *parent)
     lv_obj_clear_flag(scale_row, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_t *scap = lv_label_create(scale_row);
     lv_label_set_text(scap, "Scale");
-    lv_obj_set_style_text_color(scap, user_color_text_dim, 0);
+    lv_obj_set_style_text_color(scap, user_light_icon_off, 0);
     lv_obj_set_style_text_font(scap, user_font_caption(), 0);
     g_galvo_scale_ta = make_value_input(scale_row, 0.01f);
 
@@ -1230,7 +1264,7 @@ lv_obj_t *build_galvo_card(lv_obj_t *parent)
     lv_obj_clear_flag(rl_row, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_t *rlcap = lv_label_create(rl_row);
     lv_label_set_text(rlcap, "Test image");
-    lv_obj_set_style_text_color(rlcap, user_color_text_dim, 0);
+    lv_obj_set_style_text_color(rlcap, user_light_icon_off, 0);
     lv_obj_set_style_text_font(rlcap, user_font_caption(), 0);
     const char *onoff[2] = { "On", "Off" };
     g_test_image_seg = ui_user_make_segmented(rl_row, onoff, 2, 1);
@@ -1252,12 +1286,12 @@ lv_obj_t *build_galvo_card(lv_obj_t *parent)
     lv_obj_clear_flag(abs_row, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_t *axcap = lv_label_create(abs_row);
     lv_label_set_text(axcap, "Abs X");
-    lv_obj_set_style_text_color(axcap, user_color_text_dim, 0);
+    lv_obj_set_style_text_color(axcap, user_light_icon_off, 0);
     lv_obj_set_style_text_font(axcap, user_font_caption(), 0);
     g_galvo_abs_x_ta = make_value_input(abs_row, 0.0f);
     lv_obj_t *aycap = lv_label_create(abs_row);
     lv_label_set_text(aycap, "Y");
-    lv_obj_set_style_text_color(aycap, user_color_text_dim, 0);
+    lv_obj_set_style_text_color(aycap, user_light_icon_off, 0);
     lv_obj_set_style_text_font(aycap, user_font_caption(), 0);
     g_galvo_abs_y_ta = make_value_input(abs_row, 0.0f);
     lv_obj_t *abs_spacer = lv_obj_create(abs_row);
@@ -1286,7 +1320,7 @@ lv_obj_t *build_galvo_card(lv_obj_t *parent)
 
     lv_obj_t *stepcap = lv_label_create(foot);
     lv_label_set_text(stepcap, "Step(mm)");
-    lv_obj_set_style_text_color(stepcap, user_color_text_dim, 0);
+    lv_obj_set_style_text_color(stepcap, user_light_icon_off, 0);
     lv_obj_set_style_text_font(stepcap, user_font_caption(), 0);
     const char *steps[4] = { "0.01", "0.1", "1", "10" };
     g_galvo_step_seg = ui_user_make_segmented(foot, steps, 4, 2);
@@ -1313,7 +1347,7 @@ lv_obj_t *build_galvo_card(lv_obj_t *parent)
 
 lv_obj_t *build_calib_card(lv_obj_t *parent)
 {
-    lv_obj_t *card = ui_user_make_frosted_card(parent, false);
+    lv_obj_t *card = make_dbg_light_card(parent, false);
     lv_obj_set_flex_flow(card, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(card, LV_FLEX_ALIGN_SPACE_BETWEEN,
                           LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
@@ -1328,11 +1362,11 @@ lv_obj_t *build_calib_card(lv_obj_t *parent)
 
     lv_obj_t *title = lv_label_create(info);
     lv_label_set_text(title, "Galvo Calibration");
-    lv_obj_set_style_text_color(title, user_color_accent, 0);
+    lv_obj_set_style_text_color(title, user_light_accent, 0);
     lv_obj_set_style_text_font(title, user_font_text(), 0);
     lv_obj_t *hint = lv_label_create(info);
     lv_label_set_text(hint, "Insert photo paper and close the door first");
-    lv_obj_set_style_text_color(hint, user_color_text_dim, 0);
+    lv_obj_set_style_text_color(hint, user_light_icon_off, 0);
     lv_obj_set_style_text_font(hint, user_font_caption(), 0);
 
     lv_obj_t *btn = lv_button_create(card);
@@ -1346,7 +1380,7 @@ lv_obj_t *build_calib_card(lv_obj_t *parent)
     lv_obj_add_event_cb(btn, on_calib_click, LV_EVENT_CLICKED, nullptr);
     lv_obj_t *bl = lv_label_create(btn);
     lv_label_set_text(bl, "Start calibration");
-    lv_obj_set_style_text_color(bl, user_color_text, 0);
+    lv_obj_set_style_text_color(bl, lv_color_white(), 0);
     lv_obj_set_style_text_font(bl, user_font_text(), 0);
     lv_obj_center(bl);
     return card;
@@ -1354,7 +1388,7 @@ lv_obj_t *build_calib_card(lv_obj_t *parent)
 
 lv_obj_t *build_height_calib_card(lv_obj_t *parent)
 {
-    lv_obj_t *card = ui_user_make_frosted_card(parent, false);
+    lv_obj_t *card = make_dbg_light_card(parent, false);
     lv_obj_set_flex_flow(card, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(card, LV_FLEX_ALIGN_SPACE_BETWEEN,
                           LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
@@ -1369,11 +1403,11 @@ lv_obj_t *build_height_calib_card(lv_obj_t *parent)
 
     lv_obj_t *title = lv_label_create(info);
     lv_label_set_text(title, "Height Calibration");
-    lv_obj_set_style_text_color(title, user_color_accent, 0);
+    lv_obj_set_style_text_color(title, user_light_accent, 0);
     lv_obj_set_style_text_font(title, user_font_text(), 0);
     g_height_calib_lbl = lv_label_create(info);
     lv_label_set_text(g_height_calib_lbl, "Idle");
-    lv_obj_set_style_text_color(g_height_calib_lbl, user_color_text_dim, 0);
+    lv_obj_set_style_text_color(g_height_calib_lbl, user_light_icon_off, 0);
     lv_obj_set_style_text_font(g_height_calib_lbl, user_font_caption(), 0);
 
     lv_obj_t *btn = lv_button_create(card);
@@ -1387,7 +1421,7 @@ lv_obj_t *build_height_calib_card(lv_obj_t *parent)
     lv_obj_add_event_cb(btn, on_height_calib_click, LV_EVENT_CLICKED, nullptr);
     lv_obj_t *bl = lv_label_create(btn);
     lv_label_set_text(bl, "Start");
-    lv_obj_set_style_text_color(bl, user_color_text, 0);
+    lv_obj_set_style_text_color(bl, lv_color_white(), 0);
     lv_obj_set_style_text_font(bl, user_font_text(), 0);
     lv_obj_center(bl);
     return card;
@@ -1499,7 +1533,7 @@ void on_dbg_toggle(lv_event_t *e)
     if(c->state_lbl) {
         lv_label_set_text(c->state_lbl, on ? c->on_txt : c->off_txt);
         lv_obj_set_style_text_color(c->state_lbl,
-                                    on ? user_color_accent : user_color_text_dim, 0);
+                                    on ? user_light_accent : user_light_icon_off, 0);
     }
     auto &proxy = ui::DebugMsgProxy::instance();
     switch(c->kind) {
@@ -1525,9 +1559,9 @@ void on_dbg_toggle(lv_event_t *e)
                  break;
         case 10: proxy.send_first_layer_visual_check_set(on);  /* 首层视觉检测（仅本次运行） */
                  break;
-        case 14: proxy.send_optical_path_check_set(on);        /* 打印前光路检测（仅本次运行，默认关） */
+        case 14: proxy.send_optical_path_check_set(!on);      /* Skip Optical Path Chk：按下跳过光路；载荷 on=1 仍表示执行（默认执行） */
                  break;
-        case 15: proxy.send_plate_height_adj_set(on);          /* 打印前基板测高调 Z（仅本次运行，默认关） */
+        case 15: proxy.send_plate_height_adj_set(on);          /* 打印前基板测高调 Z（仅本次运行，默认开） */
                  break;
         case 22: proxy.send_inner_door_occlusion_set(!on);    /* Skip Inner Door Occl：按下跳过挡门融合；载荷 on=1 仍表示执行（默认执行） */
                  break;
@@ -1629,13 +1663,13 @@ lv_obj_t *make_dbg_toggle(lv_obj_t *parent, const char *name,
 
     lv_obj_t *lbl = lv_label_create(lblbox);
     lv_label_set_text(lbl, name);
-    lv_obj_set_style_text_color(lbl, user_color_text_dim, 0);
+    lv_obj_set_style_text_color(lbl, user_light_icon_off, 0);
     lv_obj_set_style_text_font(lbl, user_font_caption(), 0);
 
     lv_obj_t *state = lv_label_create(lblbox);
     lv_label_set_text(state, initial_on ? on_txt : off_txt);
     lv_obj_set_style_text_color(state,
-                                initial_on ? user_color_accent : user_color_text_dim, 0);
+                                initial_on ? user_light_accent : user_light_icon_off, 0);
     lv_obj_set_style_text_font(state, user_font_text(), 0);
 
     lv_obj_t *btn = lv_button_create(grp);
@@ -1644,15 +1678,15 @@ lv_obj_t *make_dbg_toggle(lv_obj_t *parent, const char *name,
     lv_obj_set_style_radius(btn, LV_RADIUS_CIRCLE, 0);
     lv_obj_add_flag(btn, LV_OBJ_FLAG_CHECKABLE);
     lv_obj_set_style_border_width(btn, 1, 0);
-    lv_obj_set_style_border_color(btn, user_color_accent, 0);
-    lv_obj_set_style_bg_color(btn, user_color_text, 0);
-    lv_obj_set_style_bg_opa(btn, LV_OPA_20, 0);
-    lv_obj_set_style_bg_color(btn, user_color_accent, LV_STATE_CHECKED);
+    lv_obj_set_style_border_color(btn, user_light_accent, 0);
+    lv_obj_set_style_bg_color(btn, user_light_text, 0);
+    lv_obj_set_style_bg_opa(btn, 13, 0);
+    lv_obj_set_style_bg_color(btn, user_light_accent, LV_STATE_CHECKED);
     lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, LV_STATE_CHECKED);
-    lv_obj_set_style_bg_color(btn, user_color_accent, LV_STATE_PRESSED);
+    lv_obj_set_style_bg_color(btn, user_light_accent, LV_STATE_PRESSED);
     lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, LV_STATE_PRESSED);
-    lv_obj_set_style_border_color(btn, user_color_accent, LV_STATE_CHECKED);
-    lv_obj_set_style_border_color(btn, user_color_accent, LV_STATE_PRESSED);
+    lv_obj_set_style_border_color(btn, user_light_accent, LV_STATE_CHECKED);
+    lv_obj_set_style_border_color(btn, user_light_accent, LV_STATE_PRESSED);
     if(vertical) {
         lv_obj_set_style_margin_top(btn, USER_PAD_SM, 0);   /* 竖排时按钮与标签拉开间距 */
     }
@@ -1672,7 +1706,9 @@ lv_obj_t *make_dbg_toggle(lv_obj_t *parent, const char *name,
 
     lv_obj_t *ic = lv_label_create(btn);
     lv_label_set_text(ic, sym);
-    lv_obj_set_style_text_color(ic, user_color_text, 0);
+    /* 选中蓝底时偏白更清晰；未选中浅墨底用深字。LVGL 子控件不继承父 CHECKED，
+     * 这里在 VALUE_CHANGED 里同步太重，统一用深字——蓝底上仍可读。 */
+    lv_obj_set_style_text_color(ic, user_light_text, 0);
     lv_obj_set_style_text_font(ic, user_font_icon(), 0);
     lv_obj_center(ic);
     return grp;
@@ -1700,10 +1736,10 @@ void apply_inner_door_debug_busy(bool busy)
     if(g_inner_door_state_lbl) {
         if(busy) {
             lv_label_set_text(g_inner_door_state_lbl, "Moving");
-            lv_obj_set_style_text_color(g_inner_door_state_lbl, user_color_accent, 0);
+            lv_obj_set_style_text_color(g_inner_door_state_lbl, user_light_accent, 0);
         } else {
             lv_label_set_text(g_inner_door_state_lbl, "Idle");
-            lv_obj_set_style_text_color(g_inner_door_state_lbl, user_color_text_dim, 0);
+            lv_obj_set_style_text_color(g_inner_door_state_lbl, user_light_icon_off, 0);
         }
     }
 }
@@ -1737,7 +1773,7 @@ void on_moment_btn(lv_event_t *e)
     if(c->state_lbl) {
         lv_label_set_text(c->state_lbl, txt);
         lv_obj_set_style_text_color(c->state_lbl,
-            (act != DebugMotorAction::Stop) ? user_color_accent : user_color_text_dim, 0);
+            (act != DebugMotorAction::Stop) ? user_light_accent : user_light_icon_off, 0);
     }
 }
 
@@ -1767,11 +1803,11 @@ void build_moment_motor_controls(lv_obj_t *parent, const char *name, uint8_t dev
 
     lv_obj_t *nm = lv_label_create(grp);
     lv_label_set_text(nm, name);
-    lv_obj_set_style_text_color(nm, user_color_text_dim, 0);
+    lv_obj_set_style_text_color(nm, user_light_icon_off, 0);
     lv_obj_set_style_text_font(nm, user_font_caption(), 0);
     lv_obj_t *st = lv_label_create(grp);
     lv_label_set_text(st, "Stopped");
-    lv_obj_set_style_text_color(st, user_color_text_dim, 0);
+    lv_obj_set_style_text_color(st, user_light_icon_off, 0);
     lv_obj_set_style_text_font(st, user_font_text(), 0);
 
     lv_obj_t *btnrow = lv_obj_create(grp);
@@ -1818,7 +1854,7 @@ void add_card_title(lv_obj_t *card, const char *title)
 {
     lv_obj_t *t = lv_label_create(card);
     lv_label_set_text(t, title);
-    lv_obj_set_style_text_color(t, user_color_accent, 0);
+    lv_obj_set_style_text_color(t, user_light_accent, 0);
     lv_obj_set_style_text_font(t, user_font_text(), 0);
 }
 
@@ -1826,7 +1862,7 @@ void add_caption(lv_obj_t *parent, const char *txt)
 {
     lv_obj_t *l = lv_label_create(parent);
     lv_label_set_text(l, txt);
-    lv_obj_set_style_text_color(l, user_color_text_dim, 0);
+    lv_obj_set_style_text_color(l, user_light_icon_off, 0);
     lv_obj_set_style_text_font(l, user_font_caption(), 0);
 }
 
@@ -1872,7 +1908,7 @@ lv_obj_t *make_send_button(lv_obj_t *parent, lv_event_cb_t cb, bool full_width)
 /* 打印参数卡：层厚 + 平衡系数 两个整数输入 + 整宽 Send */
 void build_print_params_card(lv_obj_t *parent)
 {
-    lv_obj_t *card = ui_user_make_frosted_card(parent, false);
+    lv_obj_t *card = make_dbg_light_card(parent, false);
     lv_obj_set_width(card, LV_PCT(100));
     lv_obj_set_height(card, LV_SIZE_CONTENT);   /* 按内容高度，避免 Send 被裁 */
     lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
@@ -1925,8 +1961,8 @@ void apply_fan_state(const middleware::DebugFanStatePayload &p)
     if(p.valid == 0) {
         lv_label_set_text(g_fan_rpm_lbl, "--");
         lv_label_set_text(g_fan_state_lbl, "--");
-        lv_obj_set_style_text_color(g_fan_rpm_lbl, user_color_text_dim, 0);
-        lv_obj_set_style_text_color(g_fan_state_lbl, user_color_text_dim, 0);
+        lv_obj_set_style_text_color(g_fan_rpm_lbl, user_light_icon_off, 0);
+        lv_obj_set_style_text_color(g_fan_state_lbl, user_light_icon_off, 0);
         return;
     }
     const bool bad = (p.fault != 0);
@@ -1936,7 +1972,7 @@ void apply_fan_state(const middleware::DebugFanStatePayload &p)
     lv_label_set_text(g_fan_state_lbl,
                       bad ? ((p.fault < 10) ? kFanFaultNames[p.fault] : "Unknown")
                           : ((p.state < 6) ? kFanStateNames[p.state] : "Unknown"));
-    const lv_color_t c = bad ? user_color_status_err : user_color_text;
+    const lv_color_t c = bad ? user_light_notice_dot : user_light_text;
     lv_obj_set_style_text_color(g_fan_rpm_lbl, c, 0);
     lv_obj_set_style_text_color(g_fan_state_lbl, c, 0);
 }
@@ -1944,7 +1980,7 @@ void apply_fan_state(const middleware::DebugFanStatePayload &p)
 /* 风扇卡：Duty+实测 RPM 行 + 风机状态行 + Send(发占空比) 与 开关，上下排列 */
 void build_fan_card(lv_obj_t *parent)
 {
-    lv_obj_t *card = ui_user_make_frosted_card(parent, false);
+    lv_obj_t *card = make_dbg_light_card(parent, false);
     lv_obj_set_width(card, LV_PCT(100));
     lv_obj_set_height(card, LV_SIZE_CONTENT);   /* 按内容高度，避免 Send/开关被裁 */
     lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
@@ -1971,7 +2007,7 @@ void build_fan_card(lv_obj_t *parent)
     add_caption(drow, "RPM");
     g_fan_rpm_lbl = lv_label_create(drow);
     lv_label_set_text(g_fan_rpm_lbl, "--");
-    lv_obj_set_style_text_color(g_fan_rpm_lbl, user_color_text_dim, 0);
+    lv_obj_set_style_text_color(g_fan_rpm_lbl, user_light_icon_off, 0);
     lv_obj_set_style_text_font(g_fan_rpm_lbl, user_font_text(), 0);
 
     /* 状态行（只读）：MCU V4 EXT 帧约 1s 一次；旧固件不发该帧，恒 "--" */
@@ -1988,7 +2024,7 @@ void build_fan_card(lv_obj_t *parent)
     add_caption(rrow, "State");
     g_fan_state_lbl = lv_label_create(rrow);
     lv_label_set_text(g_fan_state_lbl, "--");
-    lv_obj_set_style_text_color(g_fan_state_lbl, user_color_text_dim, 0);
+    lv_obj_set_style_text_color(g_fan_state_lbl, user_light_icon_off, 0);
     lv_obj_set_style_text_font(g_fan_state_lbl, user_font_text(), 0);
 
     /* Send（发占空比）与 开关 并排：Send 左，开关右 */
@@ -2027,7 +2063,7 @@ lv_obj_t *make_switch_grid_row(lv_obj_t *parent)
 /** 分类小卡：标题 + 内容列；高度随内容，由外层滚动。 */
 lv_obj_t *make_section_card(lv_obj_t *parent, const char *title)
 {
-    lv_obj_t *card = ui_user_make_frosted_card(parent, false);
+    lv_obj_t *card = make_dbg_light_card(parent, false);
     lv_obj_set_width(card, LV_PCT(100));
     lv_obj_set_height(card, LV_SIZE_CONTENT);
     lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
@@ -2066,12 +2102,12 @@ lv_obj_t *make_one_shot_action(lv_obj_t *parent, const char *name,
 
     lv_obj_t *nm = lv_label_create(grp);
     lv_label_set_text(nm, name);
-    lv_obj_set_style_text_color(nm, user_color_text_dim, 0);
+    lv_obj_set_style_text_color(nm, user_light_icon_off, 0);
     lv_obj_set_style_text_font(nm, user_font_caption(), 0);
 
     lv_obj_t *st = lv_label_create(grp);
     lv_label_set_text(st, idle_txt);
-    lv_obj_set_style_text_color(st, user_color_text_dim, 0);
+    lv_obj_set_style_text_color(st, user_light_icon_off, 0);
     lv_obj_set_style_text_font(st, user_font_text(), 0);
 
     lv_obj_t *btn = make_circle_btn(grp, dbg_round_btn_sz(), sym, cb, ud);
@@ -2087,7 +2123,7 @@ lv_obj_t *make_one_shot_action(lv_obj_t *parent, const char *name,
 
 void build_o2_calib_card(lv_obj_t *parent)
 {
-    lv_obj_t *card = ui_user_make_frosted_card(parent, false);
+    lv_obj_t *card = make_dbg_light_card(parent, false);
     lv_obj_set_width(card, LV_PCT(100));
     lv_obj_set_height(card, LV_SIZE_CONTENT);
     lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
@@ -2128,7 +2164,7 @@ void build_o2_calib_card(lv_obj_t *parent)
     add_caption(kcol, "Current K");
     g_o2_calib_lbl = lv_label_create(kcol);
     lv_label_set_text(g_o2_calib_lbl, "K=--");
-    lv_obj_set_style_text_color(g_o2_calib_lbl, user_color_text_dim, 0);
+    lv_obj_set_style_text_color(g_o2_calib_lbl, user_light_icon_off, 0);
     lv_obj_set_style_text_font(g_o2_calib_lbl, user_font_text(), 0);
 
     g_o2_calib_btn = make_circle_btn(krow, dbg_round_btn_sz(),
@@ -2160,7 +2196,7 @@ void apply_status_led_labels()
                             g_status_led_color == static_cast<uint8_t>(kStatusLedBtns[i]);
         lv_label_set_text(g_status_led_state_lbl[i], forced ? "Forced" : "Auto");
         lv_obj_set_style_text_color(g_status_led_state_lbl[i],
-                                    forced ? user_color_accent : user_color_text_dim, 0);
+                                    forced ? user_light_accent : user_light_icon_off, 0);
     }
     if(g_status_led_rgb_lbl) {
         const bool raw = g_status_led_force &&
@@ -2168,15 +2204,15 @@ void apply_status_led_labels()
                              static_cast<uint8_t>(middleware::DebugStatusLedColor::Raw);
         lv_label_set_text(g_status_led_rgb_lbl, raw ? "Forced" : "Auto");
         lv_obj_set_style_text_color(g_status_led_rgb_lbl,
-                                    raw ? user_color_accent : user_color_text_dim, 0);
+                                    raw ? user_light_accent : user_light_icon_off, 0);
     }
     /* Auto 键与三色键相反：没有任何强制时它才是生效的那个。这里不能写 Forced，
      * 否则会被读成"Auto 被强制了"。 */
     if(g_status_led_auto_lbl) {
         lv_label_set_text(g_status_led_auto_lbl, g_status_led_force ? "Idle" : "Active");
         lv_obj_set_style_text_color(g_status_led_auto_lbl,
-                                    g_status_led_force ? user_color_text_dim
-                                                       : user_color_accent, 0);
+                                    g_status_led_force ? user_light_icon_off
+                                                       : user_light_accent, 0);
     }
 }
 
@@ -2219,7 +2255,7 @@ void on_status_led_rgb_send(lv_event_t *)
 /** 裸 RGB 调色卡：三个 0-255 输入框 + Send，直发到灯板（不经三色常量）。 */
 void build_status_led_rgb_card(lv_obj_t *parent)
 {
-    lv_obj_t *card = ui_user_make_frosted_card(parent, false);
+    lv_obj_t *card = make_dbg_light_card(parent, false);
     lv_obj_set_width(card, LV_PCT(100));
     lv_obj_set_height(card, LV_SIZE_CONTENT);
     lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
@@ -2259,7 +2295,7 @@ void build_status_led_rgb_card(lv_obj_t *parent)
 
     g_status_led_rgb_lbl = lv_label_create(srow);
     lv_label_set_text(g_status_led_rgb_lbl, "Auto");
-    lv_obj_set_style_text_color(g_status_led_rgb_lbl, user_color_text_dim, 0);
+    lv_obj_set_style_text_color(g_status_led_rgb_lbl, user_light_icon_off, 0);
     lv_obj_set_style_text_font(g_status_led_rgb_lbl, user_font_text(), 0);
 
     make_send_button(srow, on_status_led_rgb_send, false);
@@ -2330,11 +2366,11 @@ void build_other_switches_column(lv_obj_t *parent)
                     control_transfer_box_flow_enabled(), 9, 0);
     make_dbg_toggle(rowG1, "1st Layer Visual", "On", "Off", LV_SYMBOL_PLAY, false,
                     10, 0, true, 0, &g_first_layer_visual_btn, &g_first_layer_visual_state_lbl);
-    make_dbg_toggle(rowG1, "Optical Path Chk", "On", "Off", LV_SYMBOL_EYE_OPEN, false,
-                    14, 0, true, 0, &g_optical_path_check_btn, &g_optical_path_check_state_lbl);
-    make_dbg_toggle(rowG1, "Plate Height Adj", "On", "Off", LV_SYMBOL_UP, false,
+    make_dbg_toggle(rowG1, "Plate Height Adj", "On", "Off", LV_SYMBOL_UP, true,
                     15, 0, true, 0, &g_plate_height_adj_btn, &g_plate_height_adj_state_lbl);
     lv_obj_t *rowG2 = make_switch_grid_row(gate);
+    make_dbg_toggle(rowG2, "Skip Optical Path Chk", "On", "Off", LV_SYMBOL_EYE_OPEN, false,
+                    14, 0, true, 0, &g_optical_path_check_btn, &g_optical_path_check_state_lbl);
     make_dbg_toggle(rowG2, "Skip Inner Door Occl", "On", "Off", LV_SYMBOL_EYE_CLOSE, false,
                     22, 0, true, 0, &g_inner_door_occlusion_btn, &g_inner_door_occlusion_state_lbl);
     make_dbg_toggle(rowG2, "Skip Plate Present", "On", "Off", LV_SYMBOL_OK, false,
@@ -2523,14 +2559,14 @@ void on_laser_power_send(lv_event_t *)
 void on_laser_power_cancel(lv_event_t *)
 {
     ui::DebugMsgProxy::instance().send_laser_power_reset();
-    ui_toast_show("Power to external", user_color_accent, 1200);
+    ui_toast_show("Power to external", user_light_accent, 1200);
 }
 
 void on_laser_alarm_reset(lv_event_t *)
 {
     ui::DebugMsgProxy::instance().send_laser_alarm_reset();
     update_laser_alarms(0, g_laser_type_code);   /* 本地立即清空 Alarm 列表，后续以 MCU 上报为准 */
-    ui_toast_show("Alarm reset sent", user_color_accent, 1200);
+    ui_toast_show("Alarm reset sent", user_light_accent, 1200);
 }
 
 /* 值行：左标题 + 弹性留白 + 右白值 */
@@ -2548,7 +2584,7 @@ lv_obj_t *make_value_row(lv_obj_t *parent, const char *cap, lv_obj_t **out_val)
     add_caption(row, cap);
     lv_obj_t *v = lv_label_create(row);
     lv_label_set_text(v, "--");
-    lv_obj_set_style_text_color(v, user_color_text, 0);
+    lv_obj_set_style_text_color(v, user_light_text, 0);
     lv_obj_set_style_text_font(v, user_font_text(), 0);
     if(out_val) {
         *out_val = v;
@@ -2574,13 +2610,13 @@ void make_laser_status_row(lv_obj_t *parent, int idx)
     lv_obj_remove_style_all(dot);
     lv_obj_set_size(dot, USER_STATUS_DOT_SZ, USER_STATUS_DOT_SZ);
     lv_obj_set_style_radius(dot, LV_RADIUS_CIRCLE, 0);
-    lv_obj_set_style_bg_color(dot, user_color_icon_off, 0);
+    lv_obj_set_style_bg_color(dot, user_light_icon_off, 0);
     lv_obj_set_style_bg_opa(dot, LV_OPA_COVER, 0);
     lv_obj_clear_flag(dot, LV_OBJ_FLAG_SCROLLABLE);
 
     lv_obj_t *lbl = lv_label_create(row);
     lv_label_set_text(lbl, kLaserStatusOff[idx]);
-    lv_obj_set_style_text_color(lbl, user_color_text_dim, 0);
+    lv_obj_set_style_text_color(lbl, user_light_icon_off, 0);
     lv_obj_set_style_text_font(lbl, user_font_text(), 0);
 
     g_laser_status_dot[idx] = dot;
@@ -2620,7 +2656,7 @@ lv_obj_t *make_action_row(lv_obj_t *parent, const char *cap)
 /* 列容器内的 frosted 卡（内容高度、纵向） */
 lv_obj_t *make_laser_card(lv_obj_t *parent, const char *title)
 {
-    lv_obj_t *card = ui_user_make_frosted_card(parent, false);
+    lv_obj_t *card = make_dbg_light_card(parent, false);
     lv_obj_set_width(card, LV_PCT(100));
     lv_obj_set_height(card, LV_SIZE_CONTENT);
     lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
@@ -2645,7 +2681,7 @@ lv_obj_t *build_laser_tab(lv_obj_t *body)
     lv_obj_clear_flag(tab, LV_OBJ_FLAG_SCROLLABLE);
 
     /* 左：Alarm */
-    lv_obj_t *alarm_card = ui_user_make_frosted_card(tab, false);
+    lv_obj_t *alarm_card = make_dbg_light_card(tab, false);
     lv_obj_set_width(alarm_card, 1);
     lv_obj_set_flex_grow(alarm_card, 3);
     lv_obj_set_height(alarm_card, LV_PCT(100));
@@ -2674,7 +2710,7 @@ lv_obj_t *build_laser_tab(lv_obj_t *body)
     lv_obj_clear_flag(mid, LV_OBJ_FLAG_SCROLLABLE);
 
     /* Status：高度改为按内容收缩，下边界上移，给 Laser Type 让出空间 */
-    lv_obj_t *status_card = ui_user_make_frosted_card(mid, false);
+    lv_obj_t *status_card = make_dbg_light_card(mid, false);
     lv_obj_set_width(status_card, LV_PCT(100));
     lv_obj_set_height(status_card, LV_SIZE_CONTENT);
     lv_obj_set_flex_flow(status_card, LV_FLEX_FLOW_COLUMN);
@@ -2689,7 +2725,7 @@ lv_obj_t *build_laser_tab(lv_obj_t *body)
     lv_obj_set_flex_grow(type_card, 1);
     g_laser_type_lbl = lv_label_create(type_card);
     lv_label_set_text(g_laser_type_lbl, "--");
-    lv_obj_set_style_text_color(g_laser_type_lbl, user_color_text, 0);
+    lv_obj_set_style_text_color(g_laser_type_lbl, user_light_text, 0);
     lv_obj_set_style_text_font(g_laser_type_lbl, user_font_value(), 0);
 
     /* 右：Laser Data + Power Control + Alarm Ops */
@@ -2831,7 +2867,7 @@ void bind_debug_callbacks()
             if(g_dev_state[i]) {
                 lv_label_set_text(g_dev_state[i], on[i] ? kDevOn[i] : kDevOff[i]);
                 lv_obj_set_style_text_color(g_dev_state[i],
-                    on[i] ? user_color_accent : user_color_text_dim, 0);
+                    on[i] ? user_light_accent : user_light_icon_off, 0);
             }
         }
     });
@@ -2863,10 +2899,10 @@ void bind_debug_callbacks()
             const bool on = (p.status & (1u << i)) != 0;
             lv_label_set_text(lbl, on ? on_txt[i] : off_txt[i]);
             lv_obj_set_style_text_color(lbl,
-                on ? user_color_accent : user_color_text_dim, 0);
+                on ? user_light_accent : user_light_icon_off, 0);
             if(g_laser_status_dot[i]) {
                 lv_obj_set_style_bg_color(g_laser_status_dot[i],
-                    on ? user_color_status_ok : user_color_icon_off, 0);
+                    on ? user_light_ok : user_light_icon_off, 0);
             }
         }
         /* 温度：JFSC 原始整数℃；AL 单位 0.1℃ */
@@ -2916,7 +2952,7 @@ void bind_debug_callbacks()
         if(g_print_h264_state_lbl) {
             lv_label_set_text(g_print_h264_state_lbl, on ? "On" : "Off");
             lv_obj_set_style_text_color(g_print_h264_state_lbl,
-                                        on ? user_color_accent : user_color_text_dim, 0);
+                                        on ? user_light_accent : user_light_icon_off, 0);
         }
     });
 
@@ -2931,7 +2967,7 @@ void bind_debug_callbacks()
         if(g_clean_record_state_lbl) {
             lv_label_set_text(g_clean_record_state_lbl, on ? "On" : "Off");
             lv_obj_set_style_text_color(g_clean_record_state_lbl,
-                                        on ? user_color_accent : user_color_text_dim, 0);
+                                        on ? user_light_accent : user_light_icon_off, 0);
         }
     });
 
@@ -2947,7 +2983,7 @@ void bind_debug_callbacks()
         if(g_env_sim_state_lbl) {
             lv_label_set_text(g_env_sim_state_lbl, on ? "On" : "Off");
             lv_obj_set_style_text_color(g_env_sim_state_lbl,
-                                        on ? user_color_accent : user_color_text_dim, 0);
+                                        on ? user_light_accent : user_light_icon_off, 0);
         }
         set_dbg_toggle_enabled(g_env_sim_powder_btn, on);
     });
@@ -2963,7 +2999,7 @@ void bind_debug_callbacks()
         if(g_env_sim_powder_state_lbl) {
             lv_label_set_text(g_env_sim_powder_state_lbl, on ? "Low" : "Full");
             lv_obj_set_style_text_color(g_env_sim_powder_state_lbl,
-                                        on ? user_color_accent : user_color_text_dim, 0);
+                                        on ? user_light_accent : user_light_icon_off, 0);
         }
         set_dbg_toggle_enabled(g_env_sim_powder_btn, g_env_sim_on);
     });
@@ -2979,7 +3015,7 @@ void bind_debug_callbacks()
         if(g_skip_o2_gate_state_lbl) {
             lv_label_set_text(g_skip_o2_gate_state_lbl, on ? "On" : "Off");
             lv_obj_set_style_text_color(g_skip_o2_gate_state_lbl,
-                                        on ? user_color_accent : user_color_text_dim, 0);
+                                        on ? user_light_accent : user_light_icon_off, 0);
         }
     });
 
@@ -2994,7 +3030,7 @@ void bind_debug_callbacks()
         if(g_skip_outer_door_state_lbl) {
             lv_label_set_text(g_skip_outer_door_state_lbl, on ? "On" : "Off");
             lv_obj_set_style_text_color(g_skip_outer_door_state_lbl,
-                on ? user_color_accent : user_color_text_dim, 0);
+                on ? user_light_accent : user_light_icon_off, 0);
         }
     });
     proxy.register_inner_door_busy([](bool busy) {
@@ -3026,10 +3062,10 @@ void bind_debug_callbacks()
                 char buf[64];
                 std::snprintf(buf, sizeof(buf), "O2 calib OK K=%.1f",
                               static_cast<double>(p.k));
-                ui_toast_show(buf, user_color_accent, 1800);
+                ui_toast_show(buf, user_light_accent, 1800);
             } else {
                 ui_toast_show(o2_calib_err_text(p.err),
-                              user_color_status_err, 2000);
+                              user_light_notice_dot, 2000);
             }
         }
     });
@@ -3045,7 +3081,7 @@ void bind_debug_callbacks()
         if(g_first_layer_visual_state_lbl) {
             lv_label_set_text(g_first_layer_visual_state_lbl, on ? "On" : "Off");
             lv_obj_set_style_text_color(g_first_layer_visual_state_lbl,
-                                        on ? user_color_accent : user_color_text_dim, 0);
+                                        on ? user_light_accent : user_light_icon_off, 0);
         }
     });
 
@@ -3068,18 +3104,20 @@ void bind_debug_callbacks()
         lv_label_set_text(g_height_calib_lbl, buf);
     });
 
-    proxy.register_optical_path_check([](bool on) {
+    /* 载荷 on=1 表示执行光路。按钮是 Skip，回读时取反。 */
+    proxy.register_optical_path_check([](bool detect_on) {
+        const bool skip = !detect_on;
         if(g_optical_path_check_btn) {
-            if(on) {
+            if(skip) {
                 lv_obj_add_state(g_optical_path_check_btn, LV_STATE_CHECKED);
             } else {
                 lv_obj_clear_state(g_optical_path_check_btn, LV_STATE_CHECKED);
             }
         }
         if(g_optical_path_check_state_lbl) {
-            lv_label_set_text(g_optical_path_check_state_lbl, on ? "On" : "Off");
+            lv_label_set_text(g_optical_path_check_state_lbl, skip ? "On" : "Off");
             lv_obj_set_style_text_color(g_optical_path_check_state_lbl,
-                                        on ? user_color_accent : user_color_text_dim, 0);
+                                        skip ? user_light_accent : user_light_icon_off, 0);
         }
     });
 
@@ -3094,7 +3132,7 @@ void bind_debug_callbacks()
         if(g_plate_height_adj_state_lbl) {
             lv_label_set_text(g_plate_height_adj_state_lbl, on ? "On" : "Off");
             lv_obj_set_style_text_color(g_plate_height_adj_state_lbl,
-                                        on ? user_color_accent : user_color_text_dim, 0);
+                                        on ? user_light_accent : user_light_icon_off, 0);
         }
     });
 
@@ -3111,7 +3149,7 @@ void bind_debug_callbacks()
         if(g_inner_door_occlusion_state_lbl) {
             lv_label_set_text(g_inner_door_occlusion_state_lbl, skip ? "On" : "Off");
             lv_obj_set_style_text_color(g_inner_door_occlusion_state_lbl,
-                                        skip ? user_color_accent : user_color_text_dim, 0);
+                                        skip ? user_light_accent : user_light_icon_off, 0);
         }
     });
 
@@ -3128,7 +3166,7 @@ void bind_debug_callbacks()
         if(g_plate_present_state_lbl) {
             lv_label_set_text(g_plate_present_state_lbl, skip ? "On" : "Off");
             lv_obj_set_style_text_color(g_plate_present_state_lbl,
-                                        skip ? user_color_accent : user_color_text_dim, 0);
+                                        skip ? user_light_accent : user_light_icon_off, 0);
         }
     });
 
@@ -3145,7 +3183,7 @@ void bind_debug_callbacks()
             if(g_soc_led_state_lbl[i]) {
                 lv_label_set_text(g_soc_led_state_lbl[i], on ? "On" : "Off");
                 lv_obj_set_style_text_color(g_soc_led_state_lbl[i],
-                                            on ? user_color_accent : user_color_text_dim, 0);
+                                            on ? user_light_accent : user_light_icon_off, 0);
             }
         }
     });
@@ -3161,7 +3199,7 @@ void bind_debug_callbacks()
         if(g_cabin_pm_valve_state_lbl) {
             lv_label_set_text(g_cabin_pm_valve_state_lbl, on ? "On" : "Off");
             lv_obj_set_style_text_color(g_cabin_pm_valve_state_lbl,
-                                        on ? user_color_accent : user_color_text_dim, 0);
+                                        on ? user_light_accent : user_light_icon_off, 0);
         }
     });
 
@@ -3198,7 +3236,7 @@ void bind_debug_callbacks()
         if(g_spi_pm25_lcd_state_lbl) {
             lv_label_set_text(g_spi_pm25_lcd_state_lbl, on ? "On" : "Off");
             lv_obj_set_style_text_color(g_spi_pm25_lcd_state_lbl,
-                                        on ? user_color_accent : user_color_text_dim, 0);
+                                        on ? user_light_accent : user_light_icon_off, 0);
         }
     });
 
@@ -3219,7 +3257,7 @@ void bind_debug_callbacks()
         if(g_local_rtsp_state_lbl) {
             lv_label_set_text(g_local_rtsp_state_lbl, on ? "On" : "Off");
             lv_obj_set_style_text_color(g_local_rtsp_state_lbl,
-                                        on ? user_color_accent : user_color_text_dim, 0);
+                                        on ? user_light_accent : user_light_icon_off, 0);
         }
     });
 
@@ -3231,7 +3269,7 @@ void bind_debug_callbacks()
                 ui_user_segmented_set_selected(g_test_image_seg, want);
                 if(!on) {
                     ui_toast_show("Test file missing or busy",
-                                  user_color_status_err, 1800);
+                                  user_light_notice_dot, 1800);
                 }
             }
         }
@@ -3244,7 +3282,7 @@ void bind_debug_callbacks()
         update_galvo_test_controls();
         if(!on && was_pending) {
             ui_toast_show("Point test unavailable",
-                          user_color_status_err, 1800);
+                          user_light_notice_dot, 1800);
         }
     });
 }

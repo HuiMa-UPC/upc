@@ -181,7 +181,14 @@ void PlateHeightMeasure::run(GalvoMotionCalibration cal)
         const float delta1 = -coarse.h_med;
         height_send_z_inc(send_z_inc_, delta1);
         float z_now = height_mcu_z(delta1);
-        (void)wait_z_(z_now, 0.15f, kHeightZHomeTimeoutMs);
+        if(!wait_z_(z_now, 0.15f, kHeightZHomeTimeoutMs)) {
+            if(!abort_requested_.load()) {
+                UPC_LOG_GLAVO_SERVICE(Warn,
+                    "measure_plate_height: coarse z settle failed target=%.2f",
+                    static_cast<double>(z_now));
+            }
+            break;
+        }
         if(abort_requested_.load()) {
             break;
         }
@@ -190,12 +197,21 @@ void PlateHeightMeasure::run(GalvoMotionCalibration cal)
         float last_h = std::nanf("");
         float pending = std::nanf("");
         bool agree = false;
-        auto apply_inc = [&](float h_med) {
+        bool z_failed = false;
+        auto apply_inc = [&](float h_med) -> bool {
             const float d = -h_med;
             height_send_z_inc(send_z_inc_, d);
             z_now += d;
-            (void)wait_z_(z_now, 0.15f, kHeightZHomeTimeoutMs);
-            return d;
+            if(!wait_z_(z_now, 0.15f, kHeightZHomeTimeoutMs)) {
+                if(!abort_requested_.load()) {
+                    UPC_LOG_GLAVO_SERVICE(Warn,
+                        "measure_plate_height: fine z settle failed target=%.2f d=%.3f",
+                        static_cast<double>(z_now), static_cast<double>(d));
+                }
+                z_failed = true;
+                return false;
+            }
+            return true;
         };
 
         for(int round = 1; round <= kHeightAgreeMaxRounds; ++round) {
@@ -220,7 +236,10 @@ void PlateHeightMeasure::run(GalvoMotionCalibration cal)
             const bool aligned = (s.n == kHeightMeasureCount && !std::isnan(s.max_dev)
                                   && s.max_dev <= kHeightAgreeMm);
             if(!close) {
-                const float d = apply_inc(pending);
+                const float d = -pending;
+                if(!apply_inc(pending)) {
+                    break;
+                }
                 UPC_LOG_GLAVO_SERVICE(Info,
                     "measure[fine]: round=%d/%d |h|=%.3f mm max_dev=%.3f mm nudge d=%.3f",
                     round, kHeightAgreeMaxRounds,
@@ -231,7 +250,10 @@ void PlateHeightMeasure::run(GalvoMotionCalibration cal)
                 continue;
             }
             if(aligned) {
-                const float d = apply_inc(pending);
+                const float d = -pending;
+                if(!apply_inc(pending)) {
+                    break;
+                }
                 UPC_LOG_GLAVO_SERVICE(Info,
                     "measure[fine]: round=%d/%d |h|=%.3f mm max_dev=%.3f mm pass d=%.3f",
                     round, kHeightAgreeMaxRounds,
@@ -249,14 +271,16 @@ void PlateHeightMeasure::run(GalvoMotionCalibration cal)
                 static_cast<double>(s.max_dev), s.n, kHeightMeasureCount);
         }
 
-        if(abort_requested_.load()) {
+        if(abort_requested_.load() || z_failed) {
             break;
         }
         if(!agree) {
             UPC_LOG_GLAVO_SERVICE(Warn, "五次未通过，基板平整度需要检查");
             result.flatness_warn = true;
             if(!std::isnan(pending)) {
-                apply_inc(pending);
+                if(!apply_inc(pending)) {
+                    break;
+                }
                 pending = std::nanf("");
             }
         }

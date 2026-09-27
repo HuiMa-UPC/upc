@@ -12,10 +12,11 @@
 | `lib/mcu_link.*` | TCP 运动下发 + 串口握手/传感器/换层 Snap 触发；RX 侧解析 MCU 报警单条上报（0xA3/0x20）与快照分片（0xA3/0x81），攒齐后并入 SOC 1120：slot 分片 `GLAVO_Alarm_Snapshot_Ntf`→UI，完整位图 `GLAVO_Alarm_Cloud_Snapshot_Ntf`→MQTT；单报 `GLAVO_Alarm_Report_Ntf` 双发 UI+MQTT。调试页 Alarm Inject 只向 MQTT 补单报。MCU 同源 1120 丢弃（SOC 氧门独占） |
 | `lib/print_video_notify.*` | 换层 Snap / 录像会话 → Media（经 UI Hub） |
 | `lib/optical_path_check.*` | 打印前光路检测状态机（独立线程，结果回灌 worker） |
+| `lib/glavo_service.*`（early print prep） | 起印前半段 Z/外门/内门/读码独立线程，结果回灌 worker；开门与 Manual Z 不再被舱检等待堵住 |
 | `lib/height_points.hpp` | 测高/校准共用 8 点、Z 零点偏置、门限、单点采样 |
 | `lib/height_lut_2d.*` | 8 点二维高度 LUT |
 | `lib/height_calibration.*` | 调试页高度校准（关舱灯 + Red_On → 回零先下降 20mm → 写 LUT → 开舱灯，红光保持） |
-| `lib/plate_height_measure.*` | 打印前两步测高调 Z（开关默认关；光路之后；回零先下降 20mm；期间 SOC 舱灯全关，结束由 Glavo 全开） |
+| `lib/plate_height_measure.*` | 打印前两步测高调 Z（开关默认开；光路之后；回零先下降 20mm；期间 SOC 舱灯全关，测高结束保持关；失败阻断起印） |
 | `lib/galvo_motion_encode.*` | 调试运动包编码 + 五点坐标（点位测试与光路检测共用） |
 | `lib/soc_sensors.*` | SOC 本地：舱内外 PMSA UART、AHT20（≥2s）、双路 CPM121、IIO 氧气（须 `/run/o2_ready`；V=raw×3.3/2^31，100Ω；K 读 `/userdata/CAL/o2_cal.json` 缺省≈655）。链路启动即周期采集。六路舱灯进程启动即默认全开。六路舱灯/`fa_valve` sysfs 调试可随时写；业务采样结束强制关阀。背光不在本模块。 |
 | `lib/spi_status_led.*` | SPI 灯效板：`/dev/spidev1.0` 40 颗 WS 单色。CONDITION+ACTIVE 红，`print_running_` 橙，空闲蓝。进程启动即打开（不等串口）。业务路径只改状态排队；专用 led 线程做 open/ioctl，避免堵 McuLink 串口线程。 |
@@ -52,19 +53,20 @@ UI → GlavoService（工作线程）→ ParserManager → RingBuffer → McuLin
 | `Fs_Delete_Ntf` | 删除 Local 文件（磁盘 + config.json） |
 | `UI_Print_Prepare_Req` | 轻量预处理（USB 复制；清单无 `layer_count` 时才单趟扫 `M3000`；打开解析器并写 config.json）。已有总层数时不数行、不把 `get_total_lines()` 写回 `line_count`；Start 不再补扫 |
 | `UI_Parser_Exit_Ntf` | 取消解析（stop_parse + 清会话） |
-| `UI_Print_Start_Req` | 置打印态 → 外门闸门（未关则 `GLAVO_Outer_Door_Confirm_Req`；UI Confirm 再读门、Cancel=`skip=1` 不检门）→ 关内门套件（**静止全开或未知才跑**；bit1=0 跳过且不占 Prepare 步）→ 光路 → 测高 → 正式解析 + 首层参考图 + `begin_sending` → 串口氧门（洗气+等氧）→ 首层视觉比对 → 以上未跳过的步骤均推 `APP_Print_Prep_Progress_Ntf`；全部结束后才 `Ready` 进 Printing。TCP 未连则 `TcpOffline` 拒绝 |
-| ↑ 起印失败 | 打印态在 `launch_print_from_prepared` 最前面就置（检测那十几秒 UI 已在打印页），所以「运动还没开始就失败」的分支**一律走 `abort_print_start()`** 回滚，否则 UI 停在打印页 0%；失败时 SOC 舱灯全开 |
-| `UI_Print_Terminate_Req` | 外门确认/关内门套件/光路/测高/开扫前 Prepare，以及尚未 `Ready` 的氧门/首层：打断挂起、回红光安全态，并把 Z 绝对回到 **1.00 mm**（MCU Home）；关内门阻塞可被 `print_prep_abort_` 立刻打断。已 `Ready` 出光后则 `stop_parse` + `request_terminate` + `on_print_abort`，不再抬 Z。终止时内门保持当前态 |
+| `UI_Print_Start_Req` | 置打印态 → **起印前半段独立线程**（默认 Z→−10；**Keep Z Position** 开则保持当前高度 → 外门闸门 → 关内门套件 → 基板读码；不堵 worker）→ 光路（独立线程）→ 测高（独立线程，即使 Keep Z 也仍调 Z）→ 正式解析 + 首层参考图 + `begin_sending` → 串口氧门 → 首层视觉比对 → 以上未跳过的步骤均推 `APP_Print_Prep_Progress_Ntf`；全部结束后才 `Ready` 进 Printing。TCP 未连则 `TcpOffline` 拒绝 |
+| ↑ 起印失败 | 打印态在 `launch_print_from_prepared` 最前面就置（检测那十几秒 UI 已在打印页），所以「运动还没开始就失败」的分支**一律走 `abort_print_start()`** 回滚，否则 UI 停在打印页 0%；失败时 SOC 舱灯全开，并按 Manual Top 路径把 Z 绝对回 **1.00 mm**（已在 Home 则空操作）。**Keep Z Position** 开则不发这次回零 |
+| `UI_Print_Terminate_Req` | 外门确认/起印前半段线程/关内门套件/光路/测高/开扫前 Prepare，以及尚未 `Ready` 的氧门/首层：打断挂起、回红光安全态，**先** `TerminateDone` 让 UI 进结束页，再发 Z 绝对到 **−10 mm**（`send_z_goto_abs`，不等到位）。**Keep Z Position** 开则这一步不发。准备线程等待可被 `print_prep_abort_` 立刻打断。已 `Ready` 出光后则 `stop_parse` + `request_terminate` + `on_print_abort`，不再动 Z。终止时内门保持当前态 |
 | `UI_Print_Pause_Req` | `set_user_dispatch_paused(true)`，仅停 TCP 运动下发 |
 | `UI_Print_Resume_Req` | `set_user_dispatch_paused(false)`，恢复 TCP 运动下发 |
 | `UI_Debug_TestImage_Set_Ntf` | 红光循环打印 `GLAVO_TEST_GCODE_PATH`（默认 `/userdata/test/test.gcode`）；无录像/延时/换层握手/首页打印态；Off 仅 `request_terminate`，不切激光 |
 | `UI_Debug_Galvo_AbsMove_Ntf` | 调试页 Abs X/Y + Move：snowx 口径单点 TCP 运动包（`send_galvo_abs_pos`）；打印中拒绝 |
-| `UI_Debug_OpticalPath_Check_Set_Ntf` | 打印前光路检测开关（仅本次运行，默认关）。开则 Confirm Print 后、出光前逐点等视觉识别；失败阻断并 `APP_Print_Start_Rejected_Ntf`；期间 SOC 舱灯全关，通过后全开 |
-| `UI_Debug_PlateHeight_Adj_Set_Ntf` | 打印前基板测高调 Z（仅本次运行，默认关）。开则光路之后测 8 点并 AXIS_INC；**无 LUT 或失败阻断起印**（`PlateHeightFail`） |
+| `UI_Debug_OpticalPath_Check_Set_Ntf` | 打印前光路检测开关（仅本次运行，**默认开**；调试页 **Skip Optical Path Chk** 按下后关）。开则 Confirm Print 后、出光前逐点等视觉识别；失败阻断并 `APP_Print_Start_Rejected_Ntf`；期间 SOC 舱灯全关，通过后全开 |
+| `UI_Debug_PlateHeight_Adj_Set_Ntf` | 打印前基板测高调 Z（仅本次运行，默认开）。开则光路之后测 8 点并 AXIS_INC；**无 LUT 或失败阻断起印**（`PlateHeightFail`）。设置页 Advanced Print 与调试页共用这一开关 |
 | `UI_Debug_Skip_Outer_Door_Set_Ntf` | 跳过外门检测+关内门套件（仅本次运行，**默认关=要做**）；开则不检门、不开→关边沿也不跑套件 |
+| `UI_Debug_Hold_Prep_Z_Set_Ntf` | 准备阶段保持当前 Z（仅本次运行，**默认关**）。开则不起印降到 −10、内门套件前不降 Z、准备终止与起印失败收尾也不改 Z；基板测高的回零和步进仍执行。Manual Top / Bottom 不受影响 |
 | `UI_Debug_Galvo_Param_Save_Ntf` | 写 `cal.csv` 第 4 行中心偏移 + `ParserContext::load_calibration`；打印/任一振镜测试进行中拒绝 |
 | `UI_PM25_Req` / 门控 Req | 独立线程开 `fa_valve` 采 3s 舱内平均后回 `APP_PM25_Rsp`（不堵 worker）。门控关则跳过、直接判合格 |
-| `UI_OpenDoor_Req` | 真实门控：worker 发开门指令后由 `door_open_worker_` 轮询传感器（最长 `GLAVO_DOOR_OPEN_TIMEOUT_MS`），线程内 `publish_async` Rsp；重复请求直接拒；占位模式立即成功 |
+| `UI_OpenDoor_Req` | 真实门控：worker 发开门指令后由 `door_open_worker_` 轮询传感器（默认最长 `GLAVO_DOOR_OPEN_TIMEOUT_MS`=1s，传感器报开即返回），线程内 `publish_async` Rsp；重复请求直接拒；占位模式立即成功。UI 失败后隔 300ms 最多再试 2 次，仍失败 toast 并收 overlay |
 | `UI_Debug_Soc_Led_Set_Ntf` / `Get` | 六路舱灯 `lgt1l`…`lgt3r` sysfs，不看 MCU 版本 |
 | `UI_Debug_Cabin_Pm_Valve_Set_Ntf` / `Get` | 舱内 PM `fa_valve`，不看 MCU 版本；业务采样结束**强制关阀**并回读 Off |
 | `UI_Debug_O2_Calib_Req` / `Get_Ntf` | 单点标定 K（参考浓度由 UI 输入）→ `/userdata/CAL/o2_cal.json`；Req 只回 `GLAVO_Debug_O2_Calib_Rsp`（SocSensors 独立线程采样，不堵 worker）；Get 回 `Ntf`；打印/测高/测试中拒绝 |
@@ -78,7 +80,7 @@ UI → GlavoService（工作线程）→ ParserManager → RingBuffer → McuLin
 
 - 广播名 `N2_Machine`，特征 `0x1B9A` Notify ASCII。无 libdbus 时 `UPC_GLAVO_HAS_BLUEZ=0` 空跑。`GLAVO_N2_BLE_ENABLE=0` 不启线程。
 
-内门 **1ST bit1（UP_SWPD）只表示全开**（1=全开，0=不在全开位）。**上电不自动关内门**。进套件前读静止位：开仅全开跳过；关仅非全开跳过（关到位未装，静止 0 不当成必须再关）。未知则开/关都跑。手动/调试同一套件（降 **20 mm** → 门动作 → 等 **2 s** → 回降前 Z）。套件进行中推 `GLAVO_Debug_Inner_Door_Busy_Ntf`（Manual / 调试 Inner Door 禁钮，含停止）；连点开/关在入队时去重。起印与外门开→关边沿按静止位决定是否关；边沿当时套件忙 / 打印发送中 / 预检中则记下，事后补关。与转运盒流程无共享状态。
+内门 **1ST bit1（UP_SWPD）只表示全开**（1=全开，0=不在全开位）。**上电不自动关内门**。进套件前读静止位：开仅全开跳过；关仅非全开跳过（关到位未装，静止 0 不当成必须再关）。未知则开/关都跑。真正开/关前 Z **绝对到位 −10 mm**（±1，最多 8 s）再发门指令，等 **2 s**，不回原高度；挡门和基板视觉都不决定这次位移。**Keep Z Position** 开则跳过这次 −10，门指令照发。套件进行中推 `GLAVO_Debug_Inner_Door_Busy_Ntf`（Manual / 调试 Inner Door 禁钮，含停止）；连点开/关在入队时去重。起印与外门开→关边沿按静止位决定是否关；边沿当时套件忙 / 打印发送中 / 预检中则记下，事后补关。与转运盒流程无共享状态。
 
 ### 传感器
 

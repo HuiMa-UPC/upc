@@ -27,6 +27,23 @@
 
 namespace upc::glavo {
 
+/** 起印前半段（Z→−10 / 外门 / 关内门 / 读码）跑在独立线程，结果回灌 worker。 */
+enum class EarlyPrintPrepPhase : uint8_t {
+    FromLaunch = 0,      /**< Z + 外门 + 内门 + 读码 */
+    AfterOuterDoor = 1,  /**< 外门确认后：内门 + 读码 */
+    AfterPlatePlace = 2, /**< 放板确认后再检：内门 + 读码 */
+};
+
+enum class EarlyPrintPrepResult : uint8_t {
+    Continue = 0,         /**< 可进光路/测高 */
+    WaitOuterDoor = 1,    /**< 已挂起等 UI 外门确认 */
+    WaitPlatePlace = 2,   /**< 已挂起等 UI 放板确认 */
+    FailZ = 3,            /**< Z 未到 −10 */
+    FailInnerDoor = 4,    /**< 关内门套件失败 */
+    FailPlatePresent = 5, /**< 读码 unknown/超时 */
+    Aborted = 6,          /**< 用户终止打断 */
+};
+
 class GlavoService {
 public:
     GlavoService();
@@ -85,6 +102,8 @@ private:
     void stop_clean_worker();
     /** @brief 回收真实开门轮询线程（stop / 析构前调用）。 */
     void stop_door_open_worker();
+    /** @brief join 起印前半段准备线程；终止路径先 abort 再调。 */
+    void stop_early_print_prep_worker();
     void publish_clean_rsp(middleware::MsgType type, uint32_t target_id);
     void publish_clean_test_start_rsp(uint32_t target_id, bool accepted);
     void publish_clean_test_done(uint8_t result_code, bool raw_retained,
@@ -169,6 +188,8 @@ private:
     void handle_debug_optical_path_check_get(const middleware::Message& msg);
     void handle_debug_plate_height_adj_set(const middleware::Message& msg);
     void handle_debug_plate_height_adj_get(const middleware::Message& msg);
+    void handle_debug_hold_prep_z_set(const middleware::Message& msg);
+    void handle_debug_hold_prep_z_get(const middleware::Message& msg);
     void handle_debug_inner_door_occlusion_set(const middleware::Message& msg);
     void handle_debug_inner_door_occlusion_get(const middleware::Message& msg);
     void handle_debug_plate_present_set(const middleware::Message& msg);
@@ -201,6 +222,7 @@ private:
     void publish_debug_galvo_point_test_state();
     void publish_debug_optical_path_check_state();
     void publish_debug_plate_height_adj_state();
+    void publish_debug_hold_prep_z_state();
     void publish_debug_inner_door_occlusion_state();
     void publish_debug_plate_present_state();
     void publish_debug_soc_led_state();
@@ -240,12 +262,12 @@ private:
     /** @brief 外门闸通过后：关内门套件 → 光路/测高 → 起印后半段。 */
     void continue_print_after_outer_door_ready();
     /**
-     * @brief 内门开/关套件。打印中（含 Prep）不动 Z；Manual/调试：记当前 Z → 降 20mm →
-     *        门动作 → 等 2s → 回降前高度。进套件前读全开：挡门开关关时只信 bit1；
-     *        开时一轮 Occlusion 后 OR。套件运动中不再问视觉，也不再问基板读码决定 Z。
+     * @brief 内门开/关套件。发门指令前 Z 绝对到位 −10 mm（±1），再开/关，不回原高度。
+     *        不读基板视觉、也不用挡门结果决定是否动 Z。进套件前读全开：挡门关时只信
+     *        bit1；开时一轮 Occlusion 后 OR，仅用于「已在目标位则跳过整套」。
      * @param opening true=开内门；false=关内门
      * @param blocking true=阻塞等锁；false=try_lock，忙则跳过
-     * @return false 仅 blocking 且套件失败时
+     * @return false 仅 Z 未到位、终止或 blocking 且套件失败时
      */
     bool run_inner_door_motion_kit(bool opening, bool blocking);
     /** @brief 读 1ST bit1：valid 时 true=全开；false=非全开；无效 nullopt。 */
@@ -262,7 +284,7 @@ private:
      * @param blocking true=起印路径阻塞等锁；false=边沿路径 try_lock，忙则跳过
      */
     bool run_inner_door_close_kit(bool blocking);
-    /** @brief 起印路径：静止全开或未知才跑关套件；失败则 abort + 告警。 */
+    /** @brief 起印路径：静止全开或未知才跑关套件；失败返回 false（不 abort）。 */
     bool ensure_inner_door_kit_for_print();
     /** @brief 外门开→关边沿：内门静止全开或未知才跑关套件；忙/发送中/预检则记 pending 补做。无板弹窗等待中跳过。 */
     void on_outer_door_closed_edge();
@@ -271,19 +293,35 @@ private:
     void publish_outer_door_confirm_req();
     void publish_plate_place_confirm_req();
     /**
-     * @brief 基板开关开：Z 绝对到位 −20 mm（公差 ±1；偏低也抬回；超时加长）。
-     * @return false=终止/失败已 abort
+     * @brief 每次起印：Z 绝对到位 −10 mm（公差 ±1；偏低也抬回）。与基板读码开关无关。
+     * @return false=终止或到位失败（不在此 abort；由 early prep 回灌 worker 处理）
      */
     bool ensure_z_at_plate_safe();
     void send_z_goto_abs(float target_mm);
-    /** @brief 准备阶段用户终止：Z 绝对回到 MCU Home 1.00 mm（已在附近则不动）。 */
+    /**
+     * @brief 准备阶段用户终止：Z 绝对到 −10 mm，只发指令不等到位
+     *        （TerminateDone 已先回 UI）。不是 Manual Top 的 1.00 mm。
+     */
     void return_z_home_on_prep_terminate(const char* reason);
     /**
-     * @brief 关内门后读码闸门。
-     * @return true=已弹无板窗挂起，调用方须 return；false=跳过或有板可继续；
-     *         失败路径内部 abort 后仍返回 true 使调用方 return。
+     * @brief Ready 前用户终止公共收尾：红光+舱灯+清会话+TerminateDone+Z −10。
+     * @param red_reason apply_red_laser_mode 日志标签
+     * @param z_reason return_z_home_on_prep_terminate 日志标签
      */
-    bool begin_plate_present_gate();
+    void finish_prep_user_terminate(const char* red_reason, const char* z_reason);
+    /**
+     * @brief 启动起印前半段线程（Z/外门/内门/读码）；立即返回，结果经 pending 回灌。
+     * @return 恒为 true（异步挂起；调用方须 return）
+     */
+    bool begin_early_print_prep(EarlyPrintPrepPhase phase);
+    /** @brief 准备线程体内：按 phase 串行跑阻塞步骤，不碰 abort_print_start。 */
+    EarlyPrintPrepResult run_early_print_prep(EarlyPrintPrepPhase phase);
+    /** @brief 准备线程结果回灌 worker：续跑光路/测高，或 abort / 保持 UI 挂起。 */
+    void on_early_print_prep_done();
+    /**
+     * @brief 关内门后读码闸门（可在准备线程调用；失败不 abort）。
+     */
+    EarlyPrintPrepResult begin_plate_present_gate();
     /** @brief 跑一轮 Plate Present；回包/超时。 */
     middleware::PlatePresentResult run_plate_present_round();
     /** @brief 无板 Confirm 后再检：外门已关 → 内门决策 → 再读码。 */
@@ -466,6 +504,15 @@ private:
     /** 真实开门：传感器轮询放独立线程，避免堵 worker 最长 GLAVO_DOOR_OPEN_TIMEOUT_MS。 */
     std::thread door_open_worker_;
     std::atomic<bool> door_open_busy_{false};
+    /**
+     * 起印前半段（Z settle / 挡门视觉 / 读码视觉）独立线程，仿光路/测高：
+     * 线程侧只置 early_print_prep_done_pending_，abort/续跑一律回 worker。
+     */
+    std::thread early_print_prep_thread_;
+    std::atomic<bool> early_print_prep_active_{false};
+    std::atomic<bool> early_print_prep_done_pending_{false};
+    std::atomic<uint8_t> early_print_prep_result_{
+        static_cast<uint8_t>(EarlyPrintPrepResult::Aborted)};
     std::atomic<bool> clean_cancel_requested_{false};
     std::atomic<bool> clean_stop_rsp_pending_{false};
     std::atomic<uint32_t> clean_stop_rsp_target_{0};
@@ -483,8 +530,10 @@ private:
     bool first_layer_visual_session_active_ = false; /**< Visual Camera/定位预热会话状态 */
     bool first_layer_reference_waiting_ = false; /**< 等待Visual锁定本次打印裸板B0 */
     /* ---- 打印前光路检测 ---- */
-    bool optical_path_check_on_ = false; /**< 光路检测开关（仅本次运行，默认关） */
-    bool plate_height_adj_on_ = false; /**< 打印前测高调 Z（仅本次运行，默认关） */
+    bool optical_path_check_on_ = true; /**< 光路检测开关（仅本次运行，默认开；调试页 Skip Optical Path Chk 按下后关） */
+    bool plate_height_adj_on_ = true; /**< 打印前测高调 Z（仅本次运行，默认开） */
+    /** 准备阶段保持当前 Z（仅本次运行，默认关）。开则不起印降到 −10、内门前不降 Z、终止/失败收尾也不改 Z；基板测高仍动 Z。 */
+    bool hold_prep_z_on_ = false;
     bool inner_door_occlusion_on_ = true; /**< 内门视觉挡门（仅本次运行，默认开；调试页 Skip Inner Door Occl 按下后关） */
     bool plate_present_on_ = true; /**< 基板在位读码（仅本次运行，默认开；调试页 Skip Plate Present 按下后关） */
     OpticalPathCheck optical_path_check_;

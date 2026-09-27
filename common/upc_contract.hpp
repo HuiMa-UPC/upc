@@ -497,7 +497,7 @@ enum class MsgType : uint32_t {
     UI_Debug_OpticalPath_Check_Set_Ntf, /**< DebugOnOffPayload：打印前光路检测开关（仅本次运行，默认关） */
     UI_Debug_OpticalPath_Check_Get_Ntf, /**< Empty：查询当前打印前光路检测开关状态 */
     UI_Debug_Galvo_AbsMove_Ntf,         /**< DebugGalvoAbsMovePayload：振镜绝对坐标移动（手动控制/测高扫描） */
-    UI_Debug_PlateHeight_Adj_Set_Ntf,   /**< DebugOnOffPayload：打印前基板测高调 Z（仅本次运行，默认关） */
+    UI_Debug_PlateHeight_Adj_Set_Ntf,   /**< DebugOnOffPayload：打印前基板测高调 Z（仅本次运行，默认开） */
     UI_Debug_PlateHeight_Adj_Get_Ntf,   /**< Empty：查询当前打印前基板测高开关状态 */
     UI_Debug_Soc_Led_Set_Ntf,           /**< DebugSocLedPayload：六路舱灯 sysfs（lgt*），不看 MCU 版本 */
     UI_Debug_Soc_Led_Get_Ntf,           /**< Empty：查询六路舱灯开关状态 */
@@ -688,6 +688,10 @@ enum class MsgType : uint32_t {
     /** 无基板：放入基板并关外门（Cancel=阻断起印，勿复用外门 skip=1 继续 Prep） */
     GLAVO_Plate_Place_Confirm_Req,        /**< Empty */
     UI_Plate_Place_Confirm_Rsp,           /**< PlatePlaceConfirmRspPayload */
+    /* 打印准备保持当前 Z（枚举只准末尾追加） */
+    UI_Debug_Hold_Prep_Z_Set_Ntf,         /**< DebugOnOffPayload：on=1 准备阶段不改 Z（仅本次运行，默认关；基板测高仍动 Z） */
+    UI_Debug_Hold_Prep_Z_Get_Ntf,         /**< Empty：查询保持 Z 开关 */
+    GLAVO_Debug_Hold_Prep_Z_Ntf,          /**< DebugOnOffPayload：on=1 表示准备阶段保持当前 Z */
 };
 
 enum class MsgPriority : uint8_t {
@@ -1148,7 +1152,7 @@ struct VisualOpticalPathCheckReqPayload {
 struct VisualOpticalPathCheckRspPayload {
     uint8_t  result;           /**< 1=识别到红点，0=未识别到 */
     uint8_t  point_index;      /**< 回显请求点位，用于与 Glavo 侧等待配对 */
-    uint8_t  reserved[2];
+    uint8_t  reserved[2];      /**< result=0 时 reserved[0]：1=整段无快照(no_frame)，0=有帧未找到 */
     uint32_t session_id;       /**< 回显请求会话号 */
     int16_t  detected_x_px;    /**< 识别到的像素中心 X；未识别到填 -1 */
     int16_t  detected_y_px;    /**< 识别到的像素中心 Y；未识别到填 -1 */
@@ -1258,6 +1262,7 @@ enum class PrintStartRejectReason : uint8_t {
     InnerDoorSeqFail = 5,  /**< 关内门套件（降 Z/关内门/回 Z）失败 */
     PlatePresentFail = 6,  /**< 基板读码 unknown/超时/Visual 无应答 */
     PlateAbsentCancel = 7, /**< 无基板弹窗 Cancel，阻断起印 */
+    PlateSafeZFail   = 8,  /**< 起印 Z 未绝对到 −10 mm（与读码开关无关） */
 };
 
 /** APP_Print_Start_Rejected_Ntf：起印被后端拒绝（Inline）
@@ -1956,6 +1961,7 @@ enum class DeviceEventCode : uint16_t {
     PlateHeightBlocked      = 38, /**< 测高无 LUT 或失败，已阻断起印（one_shot，severity=error） */
     PlatePresentFail        = 39, /**< 基板读码失败/未知，已阻断起印（one_shot，severity=error） */
     PlateAbsentNeedPlace    = 40, /**< 读码=无板，需放入基板并关外门（one_shot，severity=info；弹窗另走 Confirm_Req） */
+    PlateSafeZFail          = 41, /**< 起印 Z 未到 −10 mm，已阻断（one_shot，severity=error） */
 
     /* ---- 以下为 UI 本地事件：不走总线，由前端自己 push，占同一码空间以便
      *      消息中心统一排序去重。后端不应发送这些码。 ---- */

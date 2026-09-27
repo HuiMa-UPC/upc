@@ -27,8 +27,9 @@ constexpr const char* kMediaShmName = "/upc_camera_preview_media";
 /**
  * 在飞窗口耗尽时，等待落后消费者归还槽位的上限（帧周期个数）。
  *
- * 这个等待只为「让消费者用完当前帧、再复用底层 buffer」争取时间；超时后无论
- * 归还与否都会把 buffer 还回去（见 stream_thread_fn 窗口收尾处的注释）。所以
+ * 这个等待只为「让消费者用完当前帧、再复用底层 buffer」争取时间。超时后：
+ * 槽还停在 Ready（消费者根本没来读）就收成 Empty，让其它 peer 继续走；
+ * 槽已是 Reading（消费者正拿着 buffer）则保留，只丢新帧。所以
  * 上限只需覆盖消费者正常处理一帧的耗时——UI 侧实测单帧 RGA 转换约 7ms、解码
  * 线程整圈约 5ms，两个帧周期（@30fps 约 66ms）已是十倍余量。
  *
@@ -574,8 +575,9 @@ void CameraService::stream_thread_fn()
 
     /*
      * 等最老在飞帧的各 peer 槽变空（最多 peer_wait_ms）。
-     * 超时只打日志，绝不强行 release——对齐 libcamera/GStreamer：
-     * 宁可丢新帧，也不把消费者还在读的 buffer 塞回去。
+     * 超时且槽仍是 Ready：消费者还没 acquire，收成 Empty，避免这一路
+     * 把共享 isolation buf 钉死、其它 peer（预览）一起停更。
+     * 已经是 Reading 的不抢还：宁可丢新帧，也不覆盖消费者正在读的 buffer。
      */
     auto wait_oldest_peers = [&](int wait_ms) {
         if(in_flight.empty()) {
@@ -589,10 +591,19 @@ void CameraService::stream_thread_fn()
             if(c.peer->producer.wait_slot_empty(c.slot_idx, wait_ms)) {
                 continue;
             }
+            if(c.peer->producer.abandon_unread_slot(c.slot_idx)) {
+                ++timeout_1s;
+                UPC_LOG_CAMERA_SERVICE(Warn,
+                    "slot unread, released for other peers sender=%u slot=%u "
+                    "seq=%u buf_idx=%u",
+                    static_cast<unsigned>(c.peer->peer_id),
+                    c.slot_idx, c.seq, oldest.buf_idx);
+                continue;
+            }
             ++timeout_1s;
             UPC_LOG_CAMERA_SERVICE(Warn,
                 "slot release slow sender=%u slot=%u seq=%u buf_idx=%u "
-                "(drop new frames, keep buffer)",
+                "(consumer reading, drop new frames, keep buffer)",
                 static_cast<unsigned>(c.peer->peer_id),
                 c.slot_idx, c.seq, oldest.buf_idx);
         }
