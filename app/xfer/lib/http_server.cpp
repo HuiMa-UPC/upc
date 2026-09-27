@@ -11,6 +11,7 @@
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
+#include <sys/time.h>
 #include <sys/types.h>
 #include <unistd.h>
 
@@ -85,16 +86,8 @@ void HttpServer::stop()
     if (accept_thread_.joinable()) {
         accept_thread_.join();
     }
-    std::vector<std::thread> clients;
-    {
-        std::lock_guard<std::mutex> lock(client_threads_mtx_);
-        clients.swap(client_threads_);
-    }
-    for (auto& t : clients) {
-        if (t.joinable()) {
-            t.join();
-        }
-    }
+    std::unique_lock<std::mutex> lock(stop_mu_);
+    stop_cv_.wait(lock, [this] { return inflight_.load() == 0; });
 }
 
 void HttpServer::run_accept()
@@ -110,28 +103,50 @@ void HttpServer::run_accept()
             }
             continue;
         }
-        std::thread t(&HttpServer::handle_client, this, fd);
-        std::lock_guard<std::mutex> lock(client_threads_mtx_);
-        client_threads_.push_back(std::move(t));
+        /* detach：每个 GET /print/status 若把 std::thread 堆进 vector 不 join，
+         * 已结束线程的栈不释放，Snowpath 轮询几分钟就能把板子打到 OOM。 */
+        std::thread(&HttpServer::handle_client, this, fd).detach();
     }
+}
+
+bool HttpServer::should_keep_alive(const HttpRequest& req) const
+{
+    if (!running_.load()) {
+        return false;
+    }
+    const std::string conn = to_lower(req.header("connection"));
+    if (req.version == "HTTP/1.0") {
+        return conn == "keep-alive";
+    }
+    return conn != "close";
 }
 
 void HttpServer::handle_client(int fd)
 {
-    HttpRequest req;
-    if (!read_request(fd, &req)) {
-        ::close(fd);
-        return;
+    inflight_.fetch_add(1);
+    timeval tv{};
+    tv.tv_sec = 30;
+    (void)setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    while (running_.load()) {
+        HttpRequest req;
+        if (!read_request(fd, &req)) {
+            break;
+        }
+        HttpResponse rsp;
+        if (handler_) {
+            rsp = handler_(req);
+        } else {
+            rsp.status = 500;
+            rsp.body = "{\"code\":\"NO_HANDLER\",\"message\":\"no http handler\"}";
+        }
+        const bool keep = should_keep_alive(req);
+        if (!send_response(fd, rsp, keep) || !keep) {
+            break;
+        }
     }
-    HttpResponse rsp;
-    if (handler_) {
-        rsp = handler_(req);
-    } else {
-        rsp.status = 500;
-        rsp.body = "{\"code\":\"NO_HANDLER\",\"message\":\"no http handler\"}";
-    }
-    send_response(fd, rsp);
     ::close(fd);
+    inflight_.fetch_sub(1);
+    stop_cv_.notify_all();
 }
 
 bool HttpServer::read_request(int fd, HttpRequest* out)
@@ -171,8 +186,7 @@ bool HttpServer::read_request(int fd, HttpRequest* out)
         std::istringstream ls(line);
         ls >> out->method;
         ls >> out->path;
-        std::string version;
-        ls >> version;
+        ls >> out->version;
         if (out->method.empty() || out->path.empty()) {
             return false;
         }
@@ -217,7 +231,7 @@ bool HttpServer::read_request(int fd, HttpRequest* out)
     return true;
 }
 
-bool HttpServer::send_response(int fd, const HttpResponse& rsp)
+bool HttpServer::send_response(int fd, const HttpResponse& rsp, bool keep_alive)
 {
     std::ostringstream oss;
     oss << "HTTP/1.1 " << rsp.status << " ";
@@ -237,7 +251,8 @@ bool HttpServer::send_response(int fd, const HttpResponse& rsp)
     oss << "\r\n";
     oss << "Content-Type: " << rsp.content_type << "\r\n";
     oss << "Content-Length: " << rsp.body.size() << "\r\n";
-    oss << "Connection: close\r\n\r\n";
+    oss << (keep_alive ? "Connection: keep-alive\r\n\r\n"
+                       : "Connection: close\r\n\r\n");
     const std::string head = oss.str();
 
     auto send_all = [fd](const char* p, std::size_t left) -> bool {

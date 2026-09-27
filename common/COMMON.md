@@ -173,10 +173,10 @@ scripts/rongsu.sh start   # glavo + rongsu_camera → ui
 | `APP_Clean_Test_Close_Rsp` | — | Glavo→UI | Empty | `register_clean_test_close_rsp`（`ui_clean_state`） | close 已受理 → 扇出 `UI_CLEAN_EVT_STOPPED` |
 | `UI_Transport_Req` | — | UI→Glavo | Empty | `send_transport_request` | 转运盒 Ready：发串口自动转运请求（A2/0x41 TLV 0x02） |
 | `APP_Transport_Result_Ntf` | — | Glavo→UI | `TransportResultPayload` | `register_transport_result` | MCU TLV 0x04：`0`=完成→BoxShutter；`1/2` 失败/中止→停留转圈页（无超时） |
-| `UI_Print_Prepare_Req` | — | UI→Glavo | `PrintPrepareReqPayload` | `send_print_prepare` | USB 复制+轻量扫描+config |
-| `APP_Print_Prepare_Rsp` | — | Glavo→UI | `PrintPrepareRspPayload` | `register_print_prepare_done` | — |
+| `UI_Print_Prepare_Req` | — | UI **或** Xfr→Glavo | `PrintPrepareReqPayload` | `send_print_prepare` | USB 复制+轻量扫描+config；Xfr 在 `POST /print/start` 对刚导入 Local 文件发 |
+| `APP_Print_Prepare_Rsp` | — | Glavo→请求方（UI 或 Xfr） | `PrintPrepareRspPayload` | `register_print_prepare_done` | 回给 `sender_id` |
 | `UI_Parser_Exit_Ntf` | — | UI→Glavo | Empty | `send_parser_exit` | 取消解析 |
-| `UI_Print_Start_Req` | — | UI→Glavo | `PrintStartReqPayload` | `send_print_start` | 正式解析+下发 |
+| `UI_Print_Start_Req` | — | UI **或** Xfr→Glavo | `PrintStartReqPayload` | `send_print_start` | 正式解析+下发；Xfr 在 Prepare 成功后发 |
 | `APP_Print_Progress_Ntf` | `GLAVO_Print_Progress_Ntf` | Glavo→UI **与** Xfr | `PrintProgressPayload` | `register_print_progress` | 进度推送（百分比 + 环境读数 + 当前层/总层 + `layer_height_um`）；Xfr 缓存供桌面端 `GET /print/status` |
 | `UI_Print_Terminate_Req` | — | UI→Glavo | Empty | `send_print_terminate` | 终止作业 |
 | `UI_Print_Pause_Req` | — | UI→Glavo | Empty | `send_print_pause` | 暂停 TCP 运动下发（解析继续） |

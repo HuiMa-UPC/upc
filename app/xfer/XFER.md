@@ -18,6 +18,8 @@
 
 ## API（`/api/v1`）
 
+- HTTP：支持 HTTP/1.1 keep-alive（Snowpath 在 `complete` 后复用同一条连接发
+  `print/start`）。每个连接线程 `detach`，避免状态轮询堆积未 join 的线程把板打挂。
 - `GET /info`：返回 `sn/model/api_version/need_pair/state`
 - `POST /pair/start`：生成 PIN 与配对会话
 - `POST /pair/verify`：校验 PIN 并签发 token
@@ -30,9 +32,12 @@
 - `GET /print/status`：桌面端轮询打印机状态/进度（传输态本地维护；打印态订阅
   Glavo/Media IPC 缓存）。传输完成对外为 `idle`；`finished` 仅表示打印完成。
   打印中 `job_id` 优先为延时摄影 `frames_dir`（打印中多为 `tmp`）。
-- `POST /print/start`：本期不代发起印（仍由板端 UI 点 Confirm）。回包 `state`
-  只看 Glavo 打印态，**不**回传上传线内部的 `finished`（否则 Snowpath 会当成
-  打印已结束，6.3 不再刷层高/进度/舱温）。已在打印中回 `409 PRINTER_BUSY`。
+- `POST /print/start`：对刚导入的 Local 文件发与 UI 相同的
+  `UI_Print_Prepare_Req` → `UI_Print_Start_Req`（等 Prepare 回包，最多 5s）。
+  成功回 `200 {"state":"printing"}`。已在打印中 `409 PRINTER_BUSY`；
+  清单对不上 `404 FILE_NOT_FOUND`；Prepare 失败 `500` / 超时 `504`。
+  板端 Skip / Keep Z / 外门确认仍走 Glavo 原门控。`GET /print/status` 仍以
+  Glavo 打印态为准。
 - `POST /print/cancel` / `/print/pause` / `/print/resume`：body 仅 `job_id`
   （与 6.3 相同：优先 `frames_dir`，打印中多为 `tmp`，也认 6.2 的 `j_*`）。
   校验后向 Glavo 发与 UI 相同的 Terminate/Pause/Resume，等回包再 `200`。
