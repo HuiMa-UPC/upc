@@ -110,6 +110,8 @@ private:
                                  bool has_mp4, const std::string& mp4_rel_path);
     void publish_clean_test_close_rsp(uint32_t target_id);
     void on_clean_test_done(uint8_t result_code);
+    /** @brief MCU 清粉结束 → GLAVO_Debug_Clean_Test_Ntf（不论发起方，调试页据此复位） */
+    void publish_debug_clean_test_result(uint8_t result_code);
     void notify_clean_video_start(const middleware::CleanTestStartReqPayload& req);
     void notify_clean_video_stop(uint8_t result_code, bool keep_raw);
     void handle_mcu_ota_start(const middleware::Message& msg);
@@ -137,7 +139,7 @@ private:
     void usb_hotplug_loop();
 
     /* ---- 调试页手动控制：UI_Debug_* → serial_debug 组帧 → McuLink 串口下发 ----
-     * 振镜（以太网 TCP）、回粉电机 后端逻辑预留，故不订阅、不下发。 */
+     * 振镜（以太网 TCP）后端逻辑预留，故不订阅、不下发。 */
     void handle_debug_axis_jog(const middleware::Message& msg);
     void handle_debug_axis_hold_stop(const middleware::Message& msg);
     void handle_debug_axis_set_zero(const middleware::Message& msg);
@@ -146,6 +148,7 @@ private:
     void handle_debug_powder_bucket(const middleware::Message& msg);
     void handle_debug_pusher(const middleware::Message& msg);
     void handle_debug_inner_door(const middleware::Message& msg);
+    void handle_debug_return_motor(const middleware::Message& msg);
     void handle_debug_fan(const middleware::Message& msg);
     void handle_debug_fan_duty(const middleware::Message& msg);
     void handle_debug_switch(const middleware::Message& msg);

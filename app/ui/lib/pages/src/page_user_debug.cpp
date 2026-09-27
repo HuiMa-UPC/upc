@@ -32,6 +32,8 @@
  * Test image 开关：红光循环打印 /userdata/test/test.gcode（经 DebugMsgProxy）。
  * Other 点位测试：按校准表显示中心 + 四角，每点 3 秒，与打印/Test image 互斥。
  * Other 页按 Process / Cabin / Print Gates / Media & Sim / Inject 分组；
+ * Process 首行为回粉电机 + 筛粉电机点动（粉桶按钮已撤），Powder Clean 在 Print Gates 末行，
+ * MCU 清粉结束（GLAVO_Debug_Clean_Test_Ntf）时自动复位为 Off 并显示结果；
  * Media & Sim 含 Sys HUD：开则右上角 lv_layer_sys 红字蒙版显示 CPU 温/占用/内存。
  * Zone4 温度在顶部传感器条常显（本机 thermal_zone4，不经 IPC）。
  * 左侧 Print Params + Fan + O2 Calib（参考浓度输入后点圆钮标定）。
@@ -125,6 +127,8 @@ lv_obj_t *g_print_layer_ta   = nullptr;     /**< 其他控制：打印层厚输�
 lv_obj_t *g_print_balance_ta = nullptr;     /**< 其他控制：打印平衡系数×1000 输入 */
 lv_obj_t *g_print_h264_btn   = nullptr;     /**< 其他控制：打印期 H264 开关按钮 */
 lv_obj_t *g_print_h264_state_lbl = nullptr; /**< 其他控制：打印期 H264 状态文本 */
+lv_obj_t *g_powder_clean_btn = nullptr;     /**< Print Gates：清粉开关按钮（MCU 结束回执复位） */
+lv_obj_t *g_powder_clean_state_lbl = nullptr; /**< Print Gates：清粉状态文本 */
 lv_obj_t *g_clean_record_btn = nullptr;     /**< 其他控制：清粉录像开关按钮 */
 lv_obj_t *g_clean_record_state_lbl = nullptr; /**< 其他控制：清粉录像状态文本 */
 lv_obj_t *g_env_sim_btn = nullptr;          /**< 其他控制：环境上报模拟开关按钮 */
@@ -1714,8 +1718,9 @@ lv_obj_t *make_dbg_toggle(lv_obj_t *parent, const char *name,
     return grp;
 }
 
-/* 点动电机类控件（筛粉电机 / 内门）：3 个点动键 [< 停止▶ >] + 共享状态字。
- * device：0=筛粉电机 1=内门。action 与 DebugMotorAction 对齐：0=停止 1=正转/开 2=反转/关。 */
+/* 点动电机类控件（筛粉电机 / 内门 / 回粉电机）：3 个点动键 [< 停止▶ >] + 共享状态字。
+ * device：0=筛粉电机 1=内门 2=回粉电机。action 与 DebugMotorAction 对齐：
+ * 0=停止 1=正转/开/送往 B 瓶 2=反转/关/送往 A 瓶。 */
 struct MomentBtnCtx {
     lv_obj_t *state_lbl;
     uint8_t   device;
@@ -1757,6 +1762,10 @@ void on_moment_btn(lv_event_t *e)
         ui::DebugMsgProxy::instance().send_sieve(act);
         txt = (act == DebugMotorAction::Forward) ? "Running"
             : (act == DebugMotorAction::Reverse) ? "Reversing" : "Stopped";
+    } else if(c->device == 2) {   /* 回粉电机：送往 B 瓶0x17 / 停止并恢复自动0x18 / 送往 A 瓶0x16 */
+        ui::DebugMsgProxy::instance().send_return_motor(act);
+        txt = (act == DebugMotorAction::Forward) ? "To B"
+            : (act == DebugMotorAction::Reverse) ? "To A" : "Auto";
     } else {                      /* 内门：开0x0C / 停止0x0E / 关0x0D */
         if(g_inner_door_busy) {
             return;
@@ -1788,9 +1797,11 @@ lv_obj_t *make_moment_btn(lv_obj_t *parent, const char *sym,
 }
 
 /* 点动电机单元：名称+状态在上，[< 停止▶ >] 三键在下一行（与标签留出间距）。
- * 左 < = 反转/关，中 ▶ = 停止，右 > = 正转/开。 */
+ * 左 < = 反转/关/送往 A 瓶，中 ▶ = 停止，右 > = 正转/开/送往 B 瓶。
+ * 回粉电机(device=2) 初始状态为 Auto，并在三键下方加 To A / Stop·Auto / To B 小字说明。 */
 void build_moment_motor_controls(lv_obj_t *parent, const char *name, uint8_t device)
 {
+    const int32_t btn_sz = dbg_round_btn_sz();
     lv_obj_t *grp = lv_obj_create(parent);
     lv_obj_remove_style_all(grp);
     lv_obj_set_size(grp, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
@@ -1806,7 +1817,7 @@ void build_moment_motor_controls(lv_obj_t *parent, const char *name, uint8_t dev
     lv_obj_set_style_text_color(nm, user_light_icon_off, 0);
     lv_obj_set_style_text_font(nm, user_font_caption(), 0);
     lv_obj_t *st = lv_label_create(grp);
-    lv_label_set_text(st, "Stopped");
+    lv_label_set_text(st, (device == 2) ? "Auto" : "Stopped");
     lv_obj_set_style_text_color(st, user_light_icon_off, 0);
     lv_obj_set_style_text_font(st, user_font_text(), 0);
 
@@ -1830,6 +1841,26 @@ void build_moment_motor_controls(lv_obj_t *parent, const char *name, uint8_t dev
         g_inner_door_btns[1] = b_stop;
         g_inner_door_btns[2] = b_fwd;
         g_inner_door_state_lbl = st;
+    }
+
+    if(device == 2) {
+        /* 每格与圆钮同宽、同列距，保证小字正对各自按钮 */
+        lv_obj_t *caprow = lv_obj_create(grp);
+        lv_obj_remove_style_all(caprow);
+        lv_obj_set_size(caprow, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+        lv_obj_set_flex_flow(caprow, LV_FLEX_FLOW_ROW);
+        lv_obj_set_style_pad_column(caprow, USER_PAD_SM, 0);
+        lv_obj_set_style_bg_opa(caprow, LV_OPA_TRANSP, 0);
+        lv_obj_clear_flag(caprow, LV_OBJ_FLAG_SCROLLABLE);
+        const char *const kCaps[3] = { "To A", "Stop/Auto", "To B" };
+        for(const char *cap : kCaps) {
+            lv_obj_t *l = lv_label_create(caprow);
+            lv_label_set_text(l, cap);
+            lv_obj_set_width(l, btn_sz);
+            lv_obj_set_style_text_align(l, LV_TEXT_ALIGN_CENTER, 0);
+            lv_obj_set_style_text_color(l, user_light_icon_off, 0);
+            lv_obj_set_style_text_font(l, user_font_caption(), 0);
+        }
     }
 }
 
@@ -2317,10 +2348,8 @@ void build_other_switches_column(lv_obj_t *parent)
     /* ---- 机构 / 工艺 ---- */
     lv_obj_t *proc = make_section_card(col, "Process");
     lv_obj_t *rowA = make_switch_grid_row(proc);
-    make_dbg_toggle(rowA, "Bucket 1", "Open", "Closed", LV_SYMBOL_POWER, false, 0, 1);
-    make_dbg_toggle(rowA, "Bucket 2", "Open", "Closed", LV_SYMBOL_POWER, false, 0, 2);
+    build_moment_motor_controls(rowA, "Return Motor", 2);
     build_moment_motor_controls(rowA, "Sieve Motor", 0);
-    make_dbg_toggle(rowA, "Powder Clean", "On", "Off", LV_SYMBOL_POWER, false, 4, 0);
 
     lv_obj_t *rowB = make_switch_grid_row(proc);
     make_dbg_toggle(rowB, "Laser", "On", "Off", LV_SYMBOL_POWER, false, 3,
@@ -2385,6 +2414,8 @@ void build_other_switches_column(lv_obj_t *parent)
     make_one_shot_action(rowG3, "Galvo Point Test", "Idle", LV_SYMBOL_PLAY,
                          on_galvo_point_test_click,
                          &g_galvo_point_test_btn, &g_galvo_point_test_lbl);
+    make_dbg_toggle(rowG3, "Powder Clean", "On", "Off", LV_SYMBOL_POWER, false,
+                    4, 0, true, 0, &g_powder_clean_btn, &g_powder_clean_state_lbl);
     update_galvo_test_controls();
 
     /* ---- 录像 / 模拟 ---- */
@@ -2956,6 +2987,22 @@ void bind_debug_callbacks()
         }
     });
 
+    /* MCU 清粉结束：按钮弹回 Off，状态字显示结果；下次点击重新开始 */
+    proxy.register_clean_test_result([](uint8_t result) {
+        if(g_powder_clean_btn) {
+            lv_obj_clear_state(g_powder_clean_btn, LV_STATE_CHECKED);
+        }
+        if(g_powder_clean_state_lbl) {
+            const auto r = static_cast<middleware::DebugCleanTestResult>(result);
+            const char *txt = (r == middleware::DebugCleanTestResult::Done)    ? "Done"
+                            : (r == middleware::DebugCleanTestResult::Failed)  ? "Failed"
+                            : (r == middleware::DebugCleanTestResult::Aborted) ? "Aborted"
+                                                                               : "Off";
+            lv_label_set_text(g_powder_clean_state_lbl, txt);
+            lv_obj_set_style_text_color(g_powder_clean_state_lbl, user_light_icon_off, 0);
+        }
+    });
+
     proxy.register_clean_record([](bool on) {
         if(g_clean_record_btn) {
             if(on) {
@@ -3326,6 +3373,8 @@ void reset_globals()
     g_print_balance_ta = nullptr;
     g_print_h264_btn = nullptr;
     g_print_h264_state_lbl = nullptr;
+    g_powder_clean_btn = nullptr;
+    g_powder_clean_state_lbl = nullptr;
     g_clean_record_btn = nullptr;
     g_clean_record_state_lbl = nullptr;
     g_env_sim_btn = nullptr;
@@ -3426,6 +3475,7 @@ void page_user_debug_exit(void)
     proxy.register_laser(nullptr);
     proxy.register_print_h264_record(nullptr);
     proxy.register_clean_record(nullptr);
+    proxy.register_clean_test_result(nullptr);
     proxy.register_env_sim(nullptr);
     proxy.register_env_sim_powder(nullptr);
     proxy.register_skip_o2_gate(nullptr);
