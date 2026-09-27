@@ -313,8 +313,9 @@ int main() {
         request(8,false,3000); auto present=response(8,false); CHECK(present.result==2 && present.frame_seq>code.frame_seq);
 
         // Repeated cached snapshots are not fresh frames and cannot pass.
+        // Plate waits up to ~8s for a new frame before the 500ms window.
         h.shared->mode=0; pump_for(100);
-        request(9,false,500); CHECK(response(9,false).result==0);
+        request(9,false,500); CHECK(response(9,false,10000).result==0);
 
         // Matching Stop cancels without late reply; replayed Start is not a new session.
         request(10,true,400); pump_for(40);

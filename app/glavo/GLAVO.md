@@ -12,8 +12,8 @@
 | `lib/mcu_link.*` | TCP 运动下发 + 串口握手/传感器/换层 Snap 触发；RX 侧解析 MCU 报警单条上报（0xA3/0x20）与快照分片（0xA3/0x81），攒齐后并入 SOC 1120：slot 分片 `GLAVO_Alarm_Snapshot_Ntf`→UI，完整位图 `GLAVO_Alarm_Cloud_Snapshot_Ntf`→MQTT；单报 `GLAVO_Alarm_Report_Ntf` 双发 UI+MQTT。调试页 Alarm Inject 只向 MQTT 补单报。MCU 同源 1120 丢弃（SOC 氧门独占） |
 | `lib/print_video_notify.*` | 换层 Snap / 录像会话 → Media（经 UI Hub） |
 | `lib/optical_path_check.*` | 打印前光路检测状态机（独立线程，结果回灌 worker） |
-| `lib/glavo_service.*`（early print prep） | 起印前半段 Z/外门/内门/读码独立线程，结果回灌 worker；开门与 Manual Z 不再被舱检等待堵住 |
-| `lib/height_points.hpp` | 测高/校准共用 8 点、Z 零点偏置、门限、单点采样 |
+| `lib/glavo_service.*`（early print prep） | 起印前半段 Z/外门/内门/读码独立线程，结果回灌 worker；开门与 Manual Z 不再被舱检等待堵住。基板读码：Visual 先等新帧最多约 8s（不占 5s 窗口），Glavo 外等 `8s+5s+2s` |
+| `lib/height_points.hpp` | 测高/校准共用 8 点、Z 零点偏置、门限、单点采样。单点等光斑盖住 Visual 的 8s 等新帧 + 1.5s 认斑 |
 | `lib/height_lut_2d.*` | 8 点二维高度 LUT |
 | `lib/height_calibration.*` | 调试页高度校准（关舱灯 + Red_On → 回零先下降 20mm → 写 LUT → 开舱灯，红光保持） |
 | `lib/plate_height_measure.*` | 打印前两步测高调 Z（开关默认开；光路之后；回零先下降 20mm；期间 SOC 舱灯全关，测高结束保持关；失败阻断起印） |

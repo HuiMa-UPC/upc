@@ -6266,6 +6266,8 @@ middleware::PlatePresentResult GlavoService::run_plate_present_round()
 
     constexpr auto kWarmup = std::chrono::milliseconds(1500);
     constexpr uint32_t kWindowMs = 5000;
+    /* 与 visual_cabin_service.cpp kCabinPlateNoFrameWaitMs 对齐：先等帧，再跑窗口。 */
+    constexpr uint32_t kPlateNoFrameWaitMs = 8000;
     {
         int left_ms = static_cast<int>(kWarmup.count());
         constexpr int kSliceMs = 50;
@@ -6297,7 +6299,8 @@ middleware::PlatePresentResult GlavoService::run_plate_present_round()
     uint8_t result = static_cast<uint8_t>(
         middleware::PlatePresentResult::Unknown);
     const auto status = plate_present_exchange_.request(
-        session_id, request_id, std::chrono::milliseconds(kWindowMs + 2000u),
+        session_id, request_id,
+        std::chrono::milliseconds(kPlateNoFrameWaitMs + kWindowMs + 2000u),
         print_prep_abort_, [this, &out]() { return publish_async(out); }, result);
     if(status == CabinExchangeStatus::PublishFailed) {
         UPC_LOG_GLAVO_SERVICE(Warn,

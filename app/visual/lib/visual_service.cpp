@@ -39,8 +39,13 @@ constexpr uint64_t kStartRetryMs = 1000;
  * 与 Glavo wait_point 预算（本值 + timeout_ms + grace）必须对齐。
  */
 constexpr uint64_t kOpticalNoFrameWaitMs = 8000;
-/** 测高光斑：快照为空时最多再等这么久。有帧后只测一次，不把每个点都拖满窗口。 */
-constexpr uint64_t kLaserSpotNoFrameWaitMs = 1500;
+/**
+ * 测高光斑：先等一帧新快照（与光路 kOpticalNoFrameWaitMs 同量级）。
+ * 空快照 / 上一点残留帧不算「没光斑」。有新帧后再测 kLaserSpotDetectMs。
+ * Glavo 单点等待须 ≥ 本值 + kLaserSpotDetectMs + 余量。
+ */
+constexpr uint64_t kLaserSpotNoFrameWaitMs = 8000;
+constexpr uint64_t kLaserSpotDetectMs = 1500;
 constexpr std::size_t kTemporalFrameCount = 5;
 constexpr uint32_t kTemporalFrameStride = 3;
 constexpr double kTemporalDirectRejectProbability = 0.45;
@@ -725,18 +730,61 @@ void VisualService::on_laser_spot_measure_req(const middleware::Message& msg)
 
 void VisualService::run_laser_spot_window()
 {
-    const uint64_t deadline = monotonic_ms() + kLaserSpotNoFrameWaitMs;
-    while(!laser_spot_abort_.load() && monotonic_ms() < deadline) {
+    uint32_t baseline = 0;
+    {
+        std::lock_guard<std::mutex> lock(frame_mtx_);
+        baseline = latest_frame_seq_;
+    }
+
+    /* 阶段一：等到本点之后的新帧。旧快照是上一点的画面，不能拿来判光斑。 */
+    const uint64_t frame_deadline = monotonic_ms() + kLaserSpotNoFrameWaitMs;
+    bool saw_fresh = false;
+    uint64_t last_nudge_ms = 0;
+    while(!laser_spot_abort_.load() && monotonic_ms() < frame_deadline) {
+        std::vector<uint8_t> nv12;
+        uint32_t width = 0;
+        uint32_t height = 0;
+        uint32_t frame_seq = 0;
+        if(copy_latest_snapshot(nv12, width, height, frame_seq) &&
+           frame_seq != 0 && frame_seq != baseline &&
+           width > 0 && height > 0 &&
+           nv12.size() >= static_cast<size_t>(width) * height) {
+            saw_fresh = true;
+            break;
+        }
+        const uint64_t now = monotonic_ms();
+        if(!stream_is_serving() &&
+           (last_nudge_ms == 0 || now - last_nudge_ms >= 500)) {
+            last_nudge_ms = now;
+            send_stream_start_req();
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(33));
+    }
+    if(laser_spot_abort_.load()) {
+        return;
+    }
+    if(!saw_fresh) {
+        UPC_LOG_VISUAL_SERVICE(Warn, "laser spot: no frame");
+        send_laser_spot_measure_rsp(false, 0.0f, 0.0f);
+        return;
+    }
+
+    /* 阶段二：已有新帧，这段只认光斑。同一帧不重复测；没斑就等下一帧。 */
+    const uint64_t detect_deadline = monotonic_ms() + kLaserSpotDetectMs;
+    uint32_t last_tried = baseline;
+    while(!laser_spot_abort_.load() && monotonic_ms() < detect_deadline) {
         std::vector<uint8_t> nv12;
         uint32_t width = 0;
         uint32_t height = 0;
         uint32_t frame_seq = 0;
         if(!copy_latest_snapshot(nv12, width, height, frame_seq) ||
+           frame_seq == 0 || frame_seq == last_tried ||
+           width == 0 || height == 0 ||
            nv12.size() < static_cast<size_t>(width) * height) {
             std::this_thread::sleep_for(std::chrono::milliseconds(33));
             continue;
         }
-
+        last_tried = frame_seq;
         cv::Mat gray(static_cast<int>(height), static_cast<int>(width), CV_8UC1,
                      nv12.data());
         const LaserSpot spot = detect_laser_spot(
@@ -744,24 +792,21 @@ void VisualService::run_laser_spot_window()
         if(laser_spot_abort_.load()) {
             return;
         }
-        if(!spot.valid) {
-            UPC_LOG_VISUAL_SERVICE(Warn, "laser spot: no valid blob frame=%u",
+        if(spot.valid) {
+            UPC_LOG_VISUAL_SERVICE(Info, "laser spot: x=%.3f y=%.3f frame=%u",
+                                   static_cast<double>(spot.center_x),
+                                   static_cast<double>(spot.center_y),
                                    static_cast<unsigned>(frame_seq));
-            send_laser_spot_measure_rsp(false, 0.0f, 0.0f);
+            send_laser_spot_measure_rsp(true, spot.center_x, spot.center_y);
             return;
         }
-        UPC_LOG_VISUAL_SERVICE(Info, "laser spot: x=%.3f y=%.3f frame=%u",
-                               static_cast<double>(spot.center_x),
-                               static_cast<double>(spot.center_y),
-                               static_cast<unsigned>(frame_seq));
-        send_laser_spot_measure_rsp(true, spot.center_x, spot.center_y);
-        return;
+        std::this_thread::sleep_for(std::chrono::milliseconds(33));
     }
 
     if(laser_spot_abort_.load()) {
         return;
     }
-    UPC_LOG_VISUAL_SERVICE(Warn, "laser spot: no frame");
+    UPC_LOG_VISUAL_SERVICE(Warn, "laser spot: no valid blob");
     send_laser_spot_measure_rsp(false, 0.0f, 0.0f);
 }
 

@@ -83,7 +83,8 @@ private:
     void on_laser_spot_measure_req(const middleware::Message& msg);
     /**
      * 光斑取样窗口（跑在 laser_spot_thread_ 上）。
-     * 快照还没来时轮询，有帧再测一次；不能在消息回调里空等，
+     * 先等本点之后的新快照（最多约 8s，旧帧和空快照不算没光斑），
+     * 再在约 1.5s 内认质心。不能在消息回调里空等，
      * 否则起流回执进不来，快照会一直是空的。
      */
     void run_laser_spot_window();
