@@ -2,6 +2,26 @@
 
 namespace ui {
 
+namespace {
+
+/** send_fan() 之后这段时间里，与目标相反的风机上报不覆盖开关判定（上报约 1 s 一帧）。 */
+constexpr auto kFanCmdGrace = std::chrono::seconds(3);
+/** 超过这个时长没收到新的风机上报，fan_state() 就当作没有数据。 */
+constexpr auto kFanStateStale = std::chrono::seconds(5);
+
+/* 风机故障码 / 状态机文字，取自 doc/主控板串口通信协议 - 传感器上报命令.csv FANBOARD */
+const char *const kFanFaultNames[10] = {
+    "OK", "Hall Invalid", "Hall Disorder", "Stalled",
+    "Overcurrent", "Undervoltage", "Overvoltage", "Overspeed",
+    "Board Overheat", "NTC Fault" };
+const char *const kFanStateNames[6] = {
+    "Stopped", "Starting", "Running", "Retry Wait", "Fault Lock", "Precharge" };
+
+/** 板温过热：风机已停（state=0），降温后自动重起，按「仍要求开着」算。 */
+constexpr uint8_t kFanFaultOverheat = 8;
+
+} // namespace
+
 DebugMsgProxy& DebugMsgProxy::instance()
 {
     static DebugMsgProxy inst;
@@ -277,11 +297,17 @@ void DebugMsgProxy::init()
             }
         }));
 
+    /* 每帧都先进缓存再转给回调：回调是单槽、离页即注销，只转发的话离页期间的帧就丢了，
+     * 回来要等下一帧按钮才对得上。 */
     subs_.push_back(bus.subscribe(
         middleware::MsgType::GLAVO_Debug_Fan_Ntf, middleware::ModuleId::UI,
         [this](const middleware::Message& msg) {
             middleware::DebugFanStatePayload p{};
-            if(fan_state_cb_ && read_inline_pod(msg, p)) {
+            if(!read_inline_pod(msg, p)) {
+                return;
+            }
+            apply_fan_report(p);
+            if(fan_state_cb_) {
                 fan_state_cb_(p);
             }
         }));
@@ -482,6 +508,52 @@ void DebugMsgProxy::send_fan(bool on)
     middleware::DebugFanPayload p{};
     p.on = on ? 1 : 0;
     publish_pod(middleware::MsgType::UI_Debug_Fan_Ntf, p);
+    /* 乐观置位 + 开防闪窗口，见 fan_on()。 */
+    fan_on_ = on;
+    fan_cmd_pending_ = true;
+    fan_cmd_at_ = std::chrono::steady_clock::now();
+}
+
+void DebugMsgProxy::apply_fan_report(const middleware::DebugFanStatePayload& p)
+{
+    const auto now = std::chrono::steady_clock::now();
+    fan_state_ = p;
+    fan_state_at_ = now;
+    has_fan_state_ = true;
+    if(p.valid == 0) {
+        return;   /* 风机板链路断：数值无意义，开关判定保持原样 */
+    }
+    const bool rep_on = (p.state != 0) || (p.fault == kFanFaultOverheat);
+    const bool in_grace = fan_cmd_pending_ && (now - fan_cmd_at_ < kFanCmdGrace);
+    if(rep_on == fan_on_ || !in_grace) {
+        fan_on_ = rep_on;
+        fan_cmd_pending_ = false;
+    }
+}
+
+const middleware::DebugFanStatePayload* DebugMsgProxy::fan_state() const noexcept
+{
+    if(!has_fan_state_ ||
+       std::chrono::steady_clock::now() - fan_state_at_ > kFanStateStale) {
+        return nullptr;
+    }
+    return &fan_state_;
+}
+
+const char* DebugMsgProxy::fan_status_text(const middleware::DebugFanStatePayload& p,
+                                           bool* is_fault)
+{
+    const bool bad = (p.valid != 0) && (p.fault != 0);
+    if(is_fault) {
+        *is_fault = bad;
+    }
+    if(p.valid == 0) {
+        return "--";
+    }
+    if(bad) {
+        return (p.fault < 10) ? kFanFaultNames[p.fault] : "Unknown";
+    }
+    return (p.state < 6) ? kFanStateNames[p.state] : "Unknown";
 }
 
 void DebugMsgProxy::send_fan_duty(float duty)

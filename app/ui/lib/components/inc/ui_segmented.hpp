@@ -77,7 +77,7 @@ typedef struct {
  *   lv_obj_t *seg = ui_segmented_create(parent, &cfg);
  *   lv_obj_add_event_cb(seg, on_tab, LV_EVENT_VALUE_CHANGED, nullptr);
  *
- * 点已选中的那段不重复发事件；点禁用段什么都不发。
+ * 点已选中的那段不重复发事件；点禁用段、整体锁定时点任何段都什么都不发。
  */
 lv_obj_t *ui_segmented_create(lv_obj_t *parent, const ui_segmented_cfg_t *cfg);
 
@@ -91,14 +91,23 @@ uint8_t ui_segmented_get_active(const lv_obj_t *seg);
  * 逐项启用/禁用。禁用项走 `color_disabled` 并摘掉 `LV_OBJ_FLAG_CLICKABLE`，
  * 点它没有任何反应（连按压反馈都没有）。
  *
- * 用在打印态的 Manual Tab：打印中（含 Preparing / Pause）不允许手动操作。
+ * 最早给打印态的 Manual Tab 用；打印中 Manual 改为可进之后暂时没有调用方，留作通用能力。
  * **禁用当前选中项时会自动退到第一个可用项**并发一次 `LV_EVENT_VALUE_CHANGED`——
- * 不退的话页面会停在一个点不回来的视图上。
+ * 不退的话页面会停在一个点不回来的视图上。所以**别拿它锁「选中项有副作用」的控件**
+ * （Manual 的 Plate Position 选中即发 Z 运动命令），那种用 ui_segmented_set_locked()。
  */
 void ui_segmented_set_item_enabled(lv_obj_t *seg, uint8_t index, bool enabled);
 
 /** 某项当前是否可点。越界返回 false。 */
 bool ui_segmented_item_enabled(const lv_obj_t *seg, uint8_t index);
+
+/**
+ * 整体锁定 / 解锁：锁定时摘掉全部项的 `LV_OBJ_FLAG_CLICKABLE`，解锁时只给 enabled 的项加回。
+ * **不改选中项、不发事件、不动配色**——与 ui_segmented_set_item_enabled() 不同，后者禁掉选中项
+ * 会退位并发 VALUE_CHANGED。锁住的样子由调用方给（例如整体 opa）。
+ * 用在打印中的 Manual：Plate Position 选中即发 Z 运动，锁的时候不能有任何事件冒出来。
+ */
+void ui_segmented_set_locked(lv_obj_t *seg, bool locked);
 
 #ifdef __cplusplus
 }

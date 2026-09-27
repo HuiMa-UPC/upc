@@ -18,6 +18,7 @@ struct SegItem {
 struct SegCtx {
     uint8_t    count  = 0;
     uint8_t    active = UI_SEGMENTED_NONE;
+    bool       locked = false;   /**< 整体锁定，见 ui_segmented_set_locked() */
     lv_color_t color_on{};
     lv_color_t color_off{};
     lv_color_t color_dis{};
@@ -74,7 +75,7 @@ void seg_clicked(lv_event_t *e)
     }
     const auto idx = static_cast<uint8_t>(
         reinterpret_cast<intptr_t>(lv_obj_get_user_data(btn)));
-    if(idx >= c->count || !c->items[idx].enabled || idx == c->active) {
+    if(c->locked || idx >= c->count || !c->items[idx].enabled || idx == c->active) {
         return;
     }
     c->active = idx;
@@ -196,7 +197,8 @@ void ui_segmented_set_item_enabled(lv_obj_t *seg, uint8_t index, bool enabled)
     SegItem &it = c->items[index];
     it.enabled  = enabled;
     if(it.btn) {
-        if(enabled) {
+        /* 整体锁定期间不把可点加回来，解锁时由 ui_segmented_set_locked() 按 enabled 还原 */
+        if(enabled && !c->locked) {
             lv_obj_add_flag(it.btn, LV_OBJ_FLAG_CLICKABLE);
         }
         else {
@@ -227,4 +229,25 @@ bool ui_segmented_item_enabled(const lv_obj_t *seg, uint8_t index)
 {
     const SegCtx *c = ctx_of(seg);
     return c && index < c->count && c->items[index].enabled;
+}
+
+void ui_segmented_set_locked(lv_obj_t *seg, bool locked)
+{
+    SegCtx *c = ctx_of(seg);
+    if(!c) {
+        return;
+    }
+    c->locked = locked;
+    for(uint8_t i = 0; i < c->count; i++) {
+        lv_obj_t *btn = c->items[i].btn;
+        if(!btn) {
+            continue;
+        }
+        if(!locked && c->items[i].enabled) {
+            lv_obj_add_flag(btn, LV_OBJ_FLAG_CLICKABLE);
+        }
+        else {
+            lv_obj_remove_flag(btn, LV_OBJ_FLAG_CLICKABLE);
+        }
+    }
 }

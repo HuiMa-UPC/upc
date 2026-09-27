@@ -144,7 +144,7 @@ static const ui_theme_t s_theme_1920 = {
     /* user_nav_item_h        */ 96,
     /* user_settings_nav_w    */ 0,    /* 0 = 沿用旧式，本档观感不变 */
     /* user_settings_seg_h    */ 0,
-    /* user_nav_icon_sz       */ 52,   /* 让上屏字形保持改版前的 49：49 ÷ (30/32) */
+    /* user_nav_icon_sz       */ 58,   /* 图标盒 52 × 36/32 = 58.5 取偶差 58；盒 52 让上屏字形保持改版前的 49：49 ÷ (30/32) */
     /* user_nav_icon_pad      */ 12,
     /* user_topbar_h          */ 192,
     /* user_content_top       */ 168,  /* 稿 112@1280 × 1.5 */
@@ -334,7 +334,7 @@ static const ui_theme_t s_theme_1280 = {
     /* user_nav_item_h        */ 80,   /* 稿 24(padding) + 32(图标) + 24 */
     /* user_settings_nav_w    */ 300,  /* 稿值 */
     /* user_settings_seg_h    */ 72,   /* 稿值 */
-    /* user_nav_icon_sz       */ 32,   /* 稿值（图标盒边长，字形在里面占 30） */
+    /* user_nav_icon_sz       */ 36,   /* 画布 = 稿上 32 的图标盒每边 +2 余量（字形在盒里占 30） */
     /* user_nav_icon_pad      */ 8,
     /* user_topbar_h          */ 128,
     /* user_content_top       */ 112,  /* 稿值：Tab 文字顶 y=112 */
@@ -534,7 +534,7 @@ static const ui_theme_t s_theme_1024 = {
     /* user_nav_item_h        */ 72,
     /* user_settings_nav_w    */ 0,    /* 0 = 沿用旧式，本档观感不变 */
     /* user_settings_seg_h    */ 0,
-    /* user_nav_icon_sz       */ 50,   /* 让上屏字形保持改版前的 47：47 ÷ (30/32) */
+    /* user_nav_icon_sz       */ 56,   /* 图标盒 50 × 36/32 = 56.25 取偶差 56；盒 50 让上屏字形保持改版前的 47：47 ÷ (30/32) */
     /* user_nav_icon_pad      */ 8,
     /* user_topbar_h          */ 96,
     /* user_content_top       */ 84,   /* 稿 112@1280 × 600/800 */
