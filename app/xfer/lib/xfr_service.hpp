@@ -49,6 +49,9 @@ private:
     bool job_id_matches_locked(const std::string& job_id) const;
     bool publish_print_ctrl(PrintCtrlKind kind) const;
     bool wait_print_ctrl_done(std::chrono::milliseconds timeout);
+    bool publish_print_prepare(uint32_t file_index) const;
+    bool publish_print_start_req(uint32_t file_index) const;
+    bool find_local_file_index(const std::string& name, uint32_t* index_out) const;
     HttpResponse handle_timelapse_images(const HttpRequest& req, const std::string& job_id);
     HttpResponse handle_timelapse_file(const HttpRequest& req,
                                        const std::string& job_id,
@@ -137,11 +140,14 @@ private:
     std::string active_frames_dir_;
     bool print_session_active_ = false;
 
-    /** HTTP 线程等 Glavo 暂停/恢复/终止回包（主循环 process 后 notify） */
-    enum class PrintCtrlWait : uint8_t { None, PauseOn, PauseOff, Canceled };
+    /** HTTP 线程等 Glavo 暂停/恢复/终止/Prepare 回包（主循环 process 后 notify） */
+    enum class PrintCtrlWait : uint8_t { None, PauseOn, PauseOff, Canceled, Prepare };
     std::condition_variable print_ctrl_cv_;
     PrintCtrlWait print_ctrl_wait_ = PrintCtrlWait::None;
     bool print_ctrl_got_ = false;
+    bool prepare_ok_ = false;
+    std::string last_file_id_;
+    std::string last_printable_name_;
 };
 
 } // namespace upc::xfr

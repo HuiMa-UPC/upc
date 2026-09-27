@@ -288,6 +288,16 @@ HttpResponse XfrService::handle_upload_init(const HttpRequest& req)
         slice_progress_pct_ = 0;
         print_state_ = "uploading";
         transfer_name_ = filename;
+        /* 新传输开始：清掉上一趟打印的 finished/canceled/error，避免
+         * GET /print/status 在上传期间仍回 canceled，Snowpath 弹「打印已取消」。 */
+        if (glavo_phase_ != GlavoPhase::Printing &&
+            glavo_phase_ != GlavoPhase::Paused) {
+            glavo_phase_ = GlavoPhase::Idle;
+            print_session_active_ = false;
+            active_frames_dir_.clear();
+            glavo_error_.clear();
+            glavo_since_ms_ = 0;
+        }
     }
     std::ostringstream oss;
     oss << "{"
@@ -397,6 +407,8 @@ HttpResponse XfrService::handle_upload_complete(const HttpRequest& req, const st
             slice_progress_pct_ = 100;
             print_state_ = "finished";
             transfer_name_ = imported.printable_name;
+            last_file_id_ = r.file_id;
+            last_printable_name_ = imported.printable_name;
         }
         notify_file_received(imported.printable_name, imported.printable_size);
         UPC_LOG_XFR_SERVICE(Info,
@@ -466,6 +478,8 @@ HttpResponse XfrService::handle_upload_complete(const HttpRequest& req, const st
         slice_progress_pct_ = 100;
         print_state_ = "finished";
         transfer_name_ = output_name;
+        last_file_id_ = r.file_id;
+        last_printable_name_ = output_name;
     }
     notify_file_received(output_name, file_size);
     UPC_LOG_XFR_SERVICE(Info, "upload complete accepted in=%s out=%s size=%llu",
@@ -494,30 +508,21 @@ HttpResponse XfrService::handle_print_start(const HttpRequest& req)
     uint64_t plate_id_u64 = 1;
     (void)json_get_u64(body, "plate_id", &plate_id_u64);
     const uint32_t plate_id = static_cast<uint32_t>(plate_id_u64);
+    std::string file_id;
+    (void)json_get_string(body, "file_id", &file_id);
 
     const uint64_t now_ms = static_cast<uint64_t>(
         std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::steady_clock::now().time_since_epoch())
             .count());
     std::string job_id;
-    std::string state = "idle";
+    std::string printable;
     {
         std::lock_guard<std::mutex> lk(print_state_mu_);
         if (print_job_id_.empty()) {
             print_job_id_ = "j_" + std::to_string(now_ms);
         }
         job_id = print_job_id_;
-        /* print_state_ 是上传/切片线，导入完成后会停在 finished。
-         * 6.2 必须报打印态：否则 Snowpath 会把「文件导入完」当成「打印结束」，
-         * 后面 6.3 层高/进度/舱温全部不再刷。真正开打仍由板端 UI 发起。 */
-        switch (glavo_phase_) {
-            case GlavoPhase::Printing: state = "printing"; break;
-            case GlavoPhase::Paused:   state = "paused"; break;
-            case GlavoPhase::Finished: state = "finished"; break;
-            case GlavoPhase::Canceled: state = "canceled"; break;
-            case GlavoPhase::Error:    state = "error"; break;
-            default:                   state = "idle"; break;
-        }
         if (!active_frames_dir_.empty()) {
             job_id = active_frames_dir_;
         } else if (print_session_active_) {
@@ -527,12 +532,80 @@ HttpResponse XfrService::handle_print_start(const HttpRequest& req)
             glavo_phase_ == GlavoPhase::Paused) {
             return err(409, "PRINTER_BUSY", "print already running");
         }
+        if (!file_id.empty() && !last_file_id_.empty() && file_id != last_file_id_) {
+            return err(404, "FILE_NOT_FOUND", "file_id does not match last upload");
+        }
+        printable = last_printable_name_;
+        if (printable.empty()) {
+            printable = transfer_name_;
+        }
     }
+
+    if (printable.empty()) {
+        return err(404, "FILE_NOT_FOUND", "no uploaded printable file");
+    }
+
+    uint32_t file_index = 0;
+    if (!find_local_file_index(printable, &file_index)) {
+        UPC_LOG_XFR_SERVICE(Warn, "print/start: %s not in local manifest",
+                            printable.c_str());
+        return err(404, "FILE_NOT_FOUND", "uploaded file is not in local list");
+    }
+
+    {
+        std::lock_guard<std::mutex> lk(print_state_mu_);
+        print_ctrl_wait_ = PrintCtrlWait::Prepare;
+        print_ctrl_got_ = false;
+        prepare_ok_ = false;
+    }
+    if (!publish_print_prepare(file_index)) {
+        std::lock_guard<std::mutex> lk(print_state_mu_);
+        print_ctrl_wait_ = PrintCtrlWait::None;
+        return err(500, "INTERNAL", "publish print prepare failed");
+    }
+
+    constexpr auto kPrepareTimeout = std::chrono::milliseconds(5000);
+    const bool got = wait_print_ctrl_done(kPrepareTimeout);
+    bool prepare_ok = false;
+    {
+        std::lock_guard<std::mutex> lk(print_state_mu_);
+        print_ctrl_wait_ = PrintCtrlWait::None;
+        prepare_ok = got && prepare_ok_;
+    }
+    if (!prepare_ok) {
+        UPC_LOG_XFR_SERVICE(Error, "print/start prepare failed file=%s idx=%u got=%d",
+                            printable.c_str(), static_cast<unsigned>(file_index),
+                            got ? 1 : 0);
+        return err(got ? 500 : 504, got ? "PREPARE_FAILED" : "GLAVO_TIMEOUT",
+                   "print prepare failed");
+    }
+
+    if (!publish_print_start_req(file_index)) {
+        return err(500, "INTERNAL", "publish print start failed");
+    }
+
+    {
+        std::lock_guard<std::mutex> lk(print_state_mu_);
+        if (glavo_phase_ != GlavoPhase::Paused) {
+            glavo_phase_ = GlavoPhase::Printing;
+        }
+        print_session_active_ = true;
+        if (active_frames_dir_.empty()) {
+            active_frames_dir_ = UPC_VIDEO_TMP_NAME;
+        }
+        if (!active_frames_dir_.empty()) {
+            job_id = active_frames_dir_;
+        }
+    }
+
+    UPC_LOG_XFR_SERVICE(Info, "print/start file=%s idx=%u job=%s plate=%u",
+                        printable.c_str(), static_cast<unsigned>(file_index),
+                        job_id.c_str(), static_cast<unsigned>(plate_id));
 
     std::ostringstream oss;
     oss << "{"
         << "\"job_id\":\"" << json_escape(job_id) << "\","
-        << "\"state\":\"" << json_escape(state) << "\","
+        << "\"state\":\"printing\","
         << "\"plate_id\":" << plate_id
         << "}";
     HttpResponse rsp;
@@ -701,12 +774,18 @@ HttpResponse XfrService::handle_print_status(const HttpRequest& req)
     const char* error_json = "null";
     std::string error_escaped;
 
-    const bool glavo_active =
+    const bool transfer_busy =
+        transfer_state == "uploading" || transfer_state == "slicing";
+    const bool glavo_live =
         glavo_phase == GlavoPhase::Printing ||
-        glavo_phase == GlavoPhase::Paused ||
-        glavo_phase == GlavoPhase::Finished ||
-        glavo_phase == GlavoPhase::Canceled ||
-        glavo_phase == GlavoPhase::Error;
+        glavo_phase == GlavoPhase::Paused;
+    /* 传输进行中不要被上一趟 canceled/finished 盖住。 */
+    const bool glavo_active =
+        glavo_live ||
+        (!transfer_busy &&
+         (glavo_phase == GlavoPhase::Finished ||
+          glavo_phase == GlavoPhase::Canceled ||
+          glavo_phase == GlavoPhase::Error));
 
     if (glavo_active) {
         switch (glavo_phase) {
@@ -846,6 +925,50 @@ bool XfrService::publish_print_ctrl(PrintCtrlKind kind) const
                             middleware::ModuleId::APP_XFR,
                             middleware::ModuleId::APP_GLAVO);
     return middleware::MsgPort::instance().publish_async(msg);
+}
+
+bool XfrService::publish_print_prepare(uint32_t file_index) const
+{
+    middleware::PrintPrepareReqPayload p{};
+    p.file_index = file_index;
+    p.file_source = middleware::PrintFileSource::Local;
+    middleware::Message msg(middleware::MsgType::UI_Print_Prepare_Req,
+                            middleware::ModuleId::APP_XFR,
+                            middleware::ModuleId::APP_GLAVO);
+    msg.payload = middleware::MsgPayload::from_bytes(
+        reinterpret_cast<const uint8_t*>(&p), sizeof(p));
+    return middleware::MsgPort::instance().publish_async(msg);
+}
+
+bool XfrService::publish_print_start_req(uint32_t file_index) const
+{
+    middleware::PrintStartReqPayload p{};
+    p.file_index = file_index;
+    p.file_source = middleware::PrintFileSource::Local;
+    middleware::Message msg(middleware::MsgType::UI_Print_Start_Req,
+                            middleware::ModuleId::APP_XFR,
+                            middleware::ModuleId::APP_GLAVO);
+    msg.payload = middleware::MsgPayload::from_bytes(
+        reinterpret_cast<const uint8_t*>(&p), sizeof(p));
+    return middleware::MsgPort::instance().publish_async(msg);
+}
+
+bool XfrService::find_local_file_index(const std::string& name, uint32_t* index_out) const
+{
+    if (!index_out || name.empty()) {
+        return false;
+    }
+    std::vector<GcodeManifestEntry> entries;
+    if (!gcode_manifest_load(UPC_LOCAL_GCODE_CONFIG, entries)) {
+        return false;
+    }
+    for (size_t i = 0; i < entries.size(); ++i) {
+        if (entries[i].name == name) {
+            *index_out = static_cast<uint32_t>(i);
+            return true;
+        }
+    }
+    return false;
 }
 
 bool XfrService::wait_print_ctrl_done(std::chrono::milliseconds timeout)
@@ -1289,6 +1412,7 @@ void XfrService::subscribe_print_ipc()
     add(middleware::MsgType::APP_Print_Terminate_Rsp);
     add(middleware::MsgType::APP_Print_Start_Rejected_Ntf);
     add(middleware::MsgType::APP_Print_Video_Manifest_Ntf);
+    add(middleware::MsgType::APP_Print_Prepare_Rsp);
 }
 
 void XfrService::on_print_ipc(const middleware::Message& msg)
@@ -1388,6 +1512,17 @@ void XfrService::on_print_ipc(const middleware::Message& msg)
             glavo_phase_ = GlavoPhase::Error;
             print_session_active_ = false;
             glavo_error_ = "print start rejected";
+            break;
+        }
+        case middleware::MsgType::APP_Print_Prepare_Rsp: {
+            middleware::PrintPrepareRspPayload p{};
+            if (!read_inline_pod_bytes(msg.payload, &p, sizeof(p))) {
+                return;
+            }
+            if (print_ctrl_wait_ == PrintCtrlWait::Prepare) {
+                prepare_ok_ = (p.ok != 0);
+                print_ctrl_got_ = true;
+            }
             break;
         }
         case middleware::MsgType::APP_Print_Video_Manifest_Ntf: {
