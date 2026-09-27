@@ -8,6 +8,13 @@
 
 namespace upc::visual {
 namespace {
+/**
+ * 基板读码：先等一帧新快照，再开 timeout_ms 的证据窗口。
+ * 空快照不计入「无法判断」。与 Glavo 基板等待（本值 + timeout_ms + 2s）对齐。
+ * 内门挡镜头仍从接受请求起按 timeout_ms 计，不走这段。
+ */
+constexpr uint64_t kCabinPlateNoFrameWaitMs = 8000;
+
 template<class T> bool read_cabin_payload(const middleware::Message& msg, T& out) {
     if(msg.sender_id != middleware::ModuleId::APP_GLAVO ||
        msg.target_id != middleware::ModuleId::APP_VISUAL ||
@@ -136,8 +143,8 @@ void VisualService::on_cabin_check_req(const middleware::Message& msg, bool door
 
 void VisualService::run_cabin_window(middleware::VisualCabinCheckReqPayload req,
                                     bool door, uint32_t baseline) {
-    const uint64_t start = monotonic_ms(), deadline = start + req.timeout_ms;
-    CabinEvidence evidence(door,req.mode == 1,baseline,start);
+    const uint64_t start = monotonic_ms();
+    uint64_t deadline = start + req.timeout_ms;
     middleware::VisualCabinCheckRspPayload rsp{};
     rsp.session_id = req.session_id; rsp.request_id = req.request_id;
     std::string reason = "timeout_or_no_fresh_frame";
@@ -150,6 +157,44 @@ void VisualService::run_cabin_window(middleware::VisualCabinCheckReqPayload req,
         req.session_id,req.request_id,profile_source.c_str(),static_cast<unsigned>(config_ok));
     if(config_ok) reason = "timeout_or_no_fresh_frame";
     uint32_t last_seq = baseline;
+    uint64_t evidence_start = start;
+    /* 基板：出第一帧之前不跑证据、不消耗 timeout_ms。整段无新帧直接 Unknown。 */
+    if(config_ok && !door) {
+        const uint64_t frame_deadline = monotonic_ms() + kCabinPlateNoFrameWaitMs;
+        bool saw_fresh = false;
+        uint64_t last_nudge_ms = 0;
+        while(!cabin_abort_.load() && monotonic_ms() < frame_deadline) {
+            std::vector<uint8_t> nv12;
+            uint32_t w = 0, h = 0, seq = 0;
+            if(copy_latest_snapshot(nv12, w, h, seq) && seq != 0 && seq != baseline) {
+                saw_fresh = true;
+                break;
+            }
+            const uint64_t now = monotonic_ms();
+            if(!stream_is_serving() &&
+               (last_nudge_ms == 0 || now - last_nudge_ms >= 500)) {
+                last_nudge_ms = now;
+                send_stream_start_req();
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        }
+        if(cabin_abort_.load()) return;
+        if(!saw_fresh) {
+            reason = "no_frame";
+            {
+                std::lock_guard<std::mutex> lock(cabin_result_mtx_);
+                cabin_pending_rsp_ = rsp;
+                cabin_result_pending_ = true;
+            }
+            UPC_LOG_VISUAL_SERVICE(Warn,
+                "cabin inspect plate qr session=%u request=%u result=0 seq=0 reason=no_frame",
+                req.session_id, req.request_id);
+            return;
+        }
+        evidence_start = monotonic_ms();
+        deadline = evidence_start + req.timeout_ms;
+    }
+    CabinEvidence evidence(door, req.mode == 1, baseline, evidence_start);
     while(config_ok && !cabin_abort_.load() && monotonic_ms() < deadline) {
         std::vector<uint8_t> nv12; uint32_t w = 0, h = 0, seq = 0;
         if(copy_latest_snapshot(nv12,w,h,seq) && seq != last_seq) {

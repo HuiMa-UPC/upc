@@ -854,6 +854,7 @@ bool GlavoService::start()
         middleware::MsgType::UI_Debug_Powder_Bucket_Ntf,
         middleware::MsgType::UI_Debug_Pusher_Ntf,
         middleware::MsgType::UI_Debug_Recycle_Motor_Ntf,   /* 内门（原回粉电机块） */
+        middleware::MsgType::UI_Debug_Return_Motor_Ntf,    /* 回粉电机手动送瓶 */
         middleware::MsgType::UI_Debug_Fan_Ntf,
         middleware::MsgType::UI_Debug_Fan_Duty_Ntf,
         middleware::MsgType::UI_Debug_Switch_Ntf,
@@ -1406,6 +1407,9 @@ void GlavoService::handle_message(const middleware::Message& msg)
             break;
         case middleware::MsgType::UI_Debug_Recycle_Motor_Ntf:
             handle_debug_inner_door(msg);
+            break;
+        case middleware::MsgType::UI_Debug_Return_Motor_Ntf:
+            handle_debug_return_motor(msg);
             break;
         case middleware::MsgType::UI_Debug_Fan_Ntf:
             handle_debug_fan(msg);
@@ -4508,6 +4512,20 @@ void GlavoService::publish_clean_test_done(uint8_t result_code, bool raw_retaine
     (void)publish_async(out);
 }
 
+void GlavoService::publish_debug_clean_test_result(uint8_t result_code)
+{
+    middleware::DebugCleanTestPayload p{};
+    p.result = result_code;
+    middleware::Message ntf(middleware::MsgType::GLAVO_Debug_Clean_Test_Ntf,
+        middleware::ModuleId::APP_GLAVO,
+        middleware::ModuleId::UI);
+    ntf.payload = middleware::MsgPayload::from_bytes(
+        reinterpret_cast<const uint8_t*>(&p), sizeof(p));
+    if(!publish_async(ntf)) {
+        UPC_LOG_GLAVO_SERVICE(Warn, "debug clean test result publish failed");
+    }
+}
+
 void GlavoService::publish_clean_test_close_rsp(uint32_t target_id)
 {
     middleware::Message rsp(middleware::MsgType::APP_Clean_Test_Close_Rsp,
@@ -4559,6 +4577,8 @@ void GlavoService::notify_clean_video_stop(uint8_t result_code, bool keep_raw)
  */
 void GlavoService::on_clean_test_done(uint8_t result_code)
 {
+    /* 调试页发起的清粉不置 clean_test_active_，只能靠这条复位 Powder Clean */
+    publish_debug_clean_test_result(result_code);
     if(!clean_test_active_) {
         return;
     }
@@ -5196,6 +5216,17 @@ void GlavoService::handle_debug_pusher(const middleware::Message& msg)
     }
     uint8_t buf[SERIAL_DEBUG_MAX_FRAME];
     debug_tx(buf, serial_debug_build_sieve_motor(p.action, buf, sizeof(buf)));
+}
+
+/** @brief 回粉电机手动送瓶：action 0=停止并恢复自动 1=送往 B 瓶 2=送往 A 瓶 */
+void GlavoService::handle_debug_return_motor(const middleware::Message& msg)
+{
+    middleware::DebugMotorPayload p{};
+    if(!read_inline_pod(msg.payload, p)) {
+        return;
+    }
+    uint8_t buf[SERIAL_DEBUG_MAX_FRAME];
+    debug_tx(buf, serial_debug_build_return_motor(p.action, buf, sizeof(buf)));
 }
 
 /** @brief 内门：action 0=停止 1=开 2=关（原回粉电机块改为内门） */
@@ -6266,6 +6297,8 @@ middleware::PlatePresentResult GlavoService::run_plate_present_round()
 
     constexpr auto kWarmup = std::chrono::milliseconds(1500);
     constexpr uint32_t kWindowMs = 5000;
+    /* 与 visual_cabin_service.cpp kCabinPlateNoFrameWaitMs 对齐：先等帧，再跑窗口。 */
+    constexpr uint32_t kPlateNoFrameWaitMs = 8000;
     {
         int left_ms = static_cast<int>(kWarmup.count());
         constexpr int kSliceMs = 50;
@@ -6297,7 +6330,8 @@ middleware::PlatePresentResult GlavoService::run_plate_present_round()
     uint8_t result = static_cast<uint8_t>(
         middleware::PlatePresentResult::Unknown);
     const auto status = plate_present_exchange_.request(
-        session_id, request_id, std::chrono::milliseconds(kWindowMs + 2000u),
+        session_id, request_id,
+        std::chrono::milliseconds(kPlateNoFrameWaitMs + kWindowMs + 2000u),
         print_prep_abort_, [this, &out]() { return publish_async(out); }, result);
     if(status == CabinExchangeStatus::PublishFailed) {
         UPC_LOG_GLAVO_SERVICE(Warn,
