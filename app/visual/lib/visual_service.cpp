@@ -292,6 +292,7 @@ bool VisualService::init()
 
 void VisualService::shutdown()
 {
+    stop_cabin_session("shutdown");
     stop_optical_path_session("shutdown");
     stop_plate_height_session("shutdown");
     stop_first_layer_session("shutdown");
@@ -301,11 +302,11 @@ void VisualService::shutdown()
 bool VisualService::any_session_active_locked() const
 {
     return first_layer_session_active_ || optical_path_session_active_ ||
-           plate_height_session_active_;
+           plate_height_session_active_ || (cabin_session_active_ && cabin_stream_needed_);
 }
 
 /**
- * @brief 三类会话都停了才真正拆流
+ * @brief 所有会话都不再需要流时才真正拆流
  *
  * 单独给某一类会话调 send_stream_stop_req + stop_worker 会把另一类正要用的流
  * 一起拆掉（并清掉帧快照缓存），所以拆流动作统一收敛到这里。
@@ -337,6 +338,7 @@ void VisualService::release_stream_if_idle(const char* reason)
 
 void VisualService::tick()
 {
+    drain_cabin_result();
     /* 空闲时此函数不会发起任何 Camera 请求。 */
     send_stream_start_req();
 }
@@ -344,6 +346,14 @@ void VisualService::tick()
 void VisualService::subscribe_messages()
 {
     auto& bus = middleware::MsgPort::instance();
+    subs_.push_back(bus.subscribe(middleware::MsgType::GLAVO_Visual_Cabin_Session_Start_Ntf,
+        middleware::ModuleId::APP_VISUAL, [this](const middleware::Message& msg) { on_cabin_session_start(msg); }));
+    subs_.push_back(bus.subscribe(middleware::MsgType::GLAVO_Visual_Cabin_Session_Stop_Ntf,
+        middleware::ModuleId::APP_VISUAL, [this](const middleware::Message& msg) { on_cabin_session_stop(msg); }));
+    subs_.push_back(bus.subscribe(middleware::MsgType::GLAVO_Visual_InnerDoor_Occlusion_Req,
+        middleware::ModuleId::APP_VISUAL, [this](const middleware::Message& msg) { on_cabin_check_req(msg, true); }));
+    subs_.push_back(bus.subscribe(middleware::MsgType::GLAVO_Visual_Plate_Present_Req,
+        middleware::ModuleId::APP_VISUAL, [this](const middleware::Message& msg) { on_cabin_check_req(msg, false); }));
     subs_.push_back(bus.subscribe(
         middleware::MsgType::APP_Visual_Camera_Stream_Start_Rsp,
         middleware::ModuleId::APP_VISUAL,
@@ -453,6 +463,7 @@ void VisualService::on_first_layer_session_stop(const middleware::Message& msg)
 
 void VisualService::start_first_layer_session(const char* reason)
 {
+    interrupt_cabin_for_legacy();
     bool newly_active = false;
     uint64_t session_id = 0;
     {
@@ -554,6 +565,7 @@ void VisualService::on_optical_path_session_stop(const middleware::Message& msg)
 
 void VisualService::start_optical_path_session(const char* reason)
 {
+    interrupt_cabin_for_legacy();
     bool newly_active = false;
     uint64_t session_id = 0;
     {
@@ -609,6 +621,7 @@ void VisualService::on_plate_height_session_stop(const middleware::Message& msg)
 
 void VisualService::start_plate_height_session(const char* reason)
 {
+    interrupt_cabin_for_legacy();
     bool newly_active = false;
     uint64_t session_id = 0;
     {
@@ -1066,6 +1079,14 @@ void VisualService::worker_thread_fn()
         }
         consumer_.release_slot(frame->slot_index);
 
+        // Cabin-only collection does not initialize the unrelated RKNN detector.
+        // Keep existing non-cabin session behavior unchanged.
+        {
+            std::lock_guard<std::mutex> lock(state_mtx_);
+            if(!first_layer_session_active_ && !optical_path_session_active_ &&
+               !plate_height_session_active_) continue;
+        }
+
         /* 分割只在缓存初始化/周期审计到期时运行，且必须先释放 Camera 槽位。 */
         bool geometry_due = false;
         {
@@ -1175,7 +1196,9 @@ void VisualService::update_latest_snapshot(const upc_ipc::IpcDmaFrameView& frame
     const uint32_t width = frame.width();
     const uint32_t height = frame.height();
     const uint32_t stride = frame.stride_y();
-    if(width == 0 || height == 0 || stride == 0) {
+    if(width == 0 || height == 0 || width > 8192 || height > 8192 ||
+       (width & 1) || (height & 1) || stride < width ||
+       static_cast<size_t>(stride) * height * 3u / 2u > dma_map_size_) {
         return;
     }
     const uint8_t* src = dma_maps_[idx];

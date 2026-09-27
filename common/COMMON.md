@@ -223,6 +223,12 @@ scripts/rongsu.sh start   # glavo + rongsu_camera → ui
 | `GLAVO_Visual_PlateHeight_Session_Stop_Ntf` | `0x142D` | Glavo→Visual | Empty | — | 测高/校准结束；三类会话都停才拆流 |
 | `GLAVO_Visual_Laser_Spot_Measure_Req` | `0x142E` | Glavo→Visual | Empty | — | 请求当前帧激光质心（校准与测高）；Visual 不查 LUT |
 | `APP_Visual_Laser_Spot_Measure_Rsp` | `0x142F` | Visual→Glavo | `LaserSpotMeasureRspPayload` | — | `ok` + `laser_x/y` 像素质心 |
+| `GLAVO_Visual_Cabin_Session_Start_Ntf` | `0x1720` | Glavo→Visual | `VisualCabinSessionPayload` (4 B) | — | 指定非零 `session_id`，准备舱检取流；不自动开始算法（见 [CABIN_IPC_INTEGRATION.md](../doc/CABIN_IPC_INTEGRATION.md)） |
+| `GLAVO_Visual_Cabin_Session_Stop_Ntf` | `0x1721` | Glavo→Visual | `VisualCabinSessionPayload` (4 B) | — | 停止匹配会话；取消中的请求不回包 |
+| `GLAVO_Visual_InnerDoor_Occlusion_Req` | `0x1722` | Glavo→Visual | `VisualCabinCheckReqPayload` (16 B) | — | `mode=0` 快照窗口，`mode=1` 等待稳定近黑；均有超时 |
+| `APP_Visual_InnerDoor_Occlusion_Rsp` | `0x1723` | Visual→Glavo | `VisualCabinCheckRspPayload` (16 B) | — | 回显两级 ID；`0=unknown, 1=occluded, 2=clear`；不代表关到位 |
+| `GLAVO_Visual_Plate_Present_Req` | `0x1724` | Glavo→Visual | `VisualCabinCheckReqPayload` (16 B) | — | 仅 `mode=0`；一次指令一次检测，返回后停检，不自动等待放板 |
+| `APP_Visual_Plate_Present_Rsp` | `0x1725` | Visual→Glavo | `VisualCabinCheckRspPayload` (16 B) | — | `0=unknown, 1=qr_found, 2=qr_absent_scene_ok`；有码对应无板，由 SOC 解释 |
 | `UI_Glavo_Height_Calib_Start_Req` | `0x1430` | UI→Glavo | `HeightCalibStartReqPayload` | `send_height_calib_start` | 调试页高度校准（关舱灯 + Red_On → 先下降 20mm 再 Home → 写 LUT；结束开舱灯） |
 | `APP_Glavo_Height_Calib_Start_Rsp` | `0x1432` | Glavo→UI | `HeightCalibStartRspPayload` | — | 是否已启动后台校准；`ok=0` 时仍会推 `Progress stage=3` |
 | `GLAVO_UI_Height_Calib_Progress_Ntf` | `0x1431` | Glavo→UI | `HeightCalibProgressPayload` | `register_height_calib_progress` | stage 0 开始 / 1 采集 / 2 完成 / 3 失败 |
@@ -251,7 +257,7 @@ scripts/rongsu.sh start   # glavo + rongsu_camera → ui
 | `UI_Mcu_Ota_Start_Req` / `UI_Mcu_Ota_Cancel_Ntf` / `APP_Mcu_Ota_Status_Ntf` | — | UI/MQTT↔Glavo | `McuOtaStatusPayload` | `send_mcu_ota_start` / `send_mcu_ota_cancel` / `register_mcu_ota_status` | Galvo 以太网 OTA（`/userdata/image/galvo`，AB 对规则见 [OTA_IMAGE.md](fs_manifest/OTA_IMAGE.md)）。状态 Glavo 双发 UI 与 MQTT |
 | `UI_Serial_Mcu_Ota_Start_Req` / `UI_Serial_Mcu_Ota_Cancel_Ntf` / `APP_Serial_Mcu_Ota_Status_Ntf` | — | UI/MQTT↔Glavo | `McuOtaStatusPayload` | `send_serial_mcu_ota_start` / `send_serial_mcu_ota_cancel` / `register_serial_mcu_ota_status` | MCU 串口 OTA（`/userdata/image/mcu`，AB 对规则见 [OTA_IMAGE.md](fs_manifest/OTA_IMAGE.md)）。云端落盘后 MQTT 发 Start；状态双发 UI 与 MQTT |
 | `UI_Debug_Axis_Jog_Ntf` | — | UI→Glavo | `DebugAxisJogPayload` | `DebugMsgProxy::send_axis_jog` | **后端待实现** |
-| `UI_Debug_Axis_Hold_Stop_Ntf` | — | UI→Glavo | `DebugAxisPayload` | `send_axis_hold_stop` | 长按松手停 |
+| `UI_Debug_Axis_Hold_Stop_Ntf` | — | UI→Glavo | `DebugAxisPayload` | `send_axis_hold_stop` | 长按松手停。入可靠补发白名单（幂等命令）；开始那条 `UI_Debug_Axis_Jog_Ntf` 不入，也不进 latest-only（payload 带轴号） |
 | `UI_Debug_Axis_SetZero_Ntf` | — | UI→Glavo | `DebugAxisPayload` | `send_axis_set_zero` | Z 工作零点 |
 | `UI_Debug_Axis_Home_Ntf` | — | UI→Glavo | `DebugAxisPayload` | `send_axis_home` | 轴回 Home（Z 0x11 / S 0x10） |
 | `UI_Debug_Galvo_Move_Ntf` | — | 契约预留 | `DebugGalvoMovePayload` | — | 振镜步进；调试页方向键不再发送 |
@@ -301,12 +307,16 @@ scripts/rongsu.sh start   # glavo + rongsu_camera → ui
 | `UI_Debug_Spi_Pm25_Lcd_Set_Ntf` | — | UI→Glavo | `DebugOnOffPayload` | `send_spi_pm25_lcd_test_set` | 调试页：SPI 小屏周期整屏刷测试色（红/绿/蓝/白/黑，约 500ms，走 fbdev `pwrite`）；仅本次运行，默认关 |
 | `UI_Debug_Spi_Pm25_Lcd_Get_Ntf` | — | UI→Glavo | Empty | `request_spi_pm25_lcd_test_state` | 查询 SPI 小屏测试刷屏开关 |
 | `GLAVO_Debug_Spi_Pm25_Lcd_Ntf` | — | Glavo→UI | `DebugOnOffPayload` | `register_spi_pm25_lcd_test` | 回读 SPI 小屏测试刷屏开关 |
-| `GLAVO_Debug_Fan_Ntf` | — | Glavo→UI | `DebugFanStatePayload` | `register_fan_state` | 风机实测转速/母线电压电流/故障码/状态机；MCU V4 EXT 帧（TLV 0x06，默认 1000ms）驱动，**仅固件 major≥4**；`valid=0`（链路异常）时各值无意义，UI 显示 `--` |
+| `GLAVO_Debug_Fan_Ntf` | — | Glavo→UI | `DebugFanStatePayload` | `register_fan_state` | 风机实测转速/母线电压电流/故障码/状态机；MCU FANBOARD 帧（TLV 0x08）驱动；`valid=0`（链路异常）时各值无意义，UI 显示 `--` |
 | `UI_Debug_Alarm_Inject_Ntf` | — | UI→Glavo | `AlarmReportPayload` | `send_alarm_inject` | 调试页 **Alarm Inject**：Glavo 转成 `GLAVO_Alarm_Report_Ntf` **只发 MQTT**（不上 UI，避免与本地 `[SIM]` 双弹；不改 MCU 快照）。关开关对 CONDITION 发 `state_mask=0` 模拟解除 |
 | `UI_Debug_FirstLayer_Visual_Check_Set_Ntf` | — | UI→Glavo | `DebugOnOffPayload` | `send_first_layer_visual_check_set` | 调试页开关：首层视觉检测（仅本次运行，默认关） |
 | `UI_Debug_FirstLayer_Visual_Check_Get_Ntf` | — | UI→Glavo | Empty | `request_first_layer_visual_check_state` | 查询当前“首层视觉检测”开关状态 |
 | `UI_Debug_OpticalPath_Check_Set_Ntf` | — | UI→Glavo | `DebugOnOffPayload` | `send_optical_path_check_set` | 调试页开关：打印前光路检测（仅本次运行，默认关） |
 | `UI_Debug_OpticalPath_Check_Get_Ntf` | — | UI→Glavo | Empty | `request_optical_path_check_state` | 查询当前“打印前光路检测”开关状态 |
+| `UI_Debug_InnerDoor_Occlusion_Set_Ntf` | — | UI→Glavo | `DebugOnOffPayload` | `send_inner_door_occlusion_set` | 内门挡门融合：`on=1` 执行（仅本次运行，**默认开**）。调试页按钮是 **Skip Inner Door Occl**，按下发 `on=0` |
+| `UI_Debug_InnerDoor_Occlusion_Get_Ntf` | — | UI→Glavo | Empty | `request_inner_door_occlusion_state` | 查询内门挡门融合是否执行 |
+| `UI_Debug_Plate_Present_Set_Ntf` | — | UI→Glavo | `DebugOnOffPayload` | `send_plate_present_set` | 基板在位读码：`on=1` 执行（仅本次运行，**默认开**）。调试页按钮是 **Skip Plate Present**，按下发 `on=0` |
+| `UI_Debug_Plate_Present_Get_Ntf` | — | UI→Glavo | Empty | `request_plate_present_state` | 查询基板读码是否执行 |
 | `UI_Debug_TestImage_Set_Ntf` | — | UI→Glavo | `DebugOnOffPayload` | `send_test_image_set` | 调试页 Test image：红光模式循环打印 `/userdata/test/test.gcode`；Off 仅 Stop，不切激光；无录像/延时/换层握手/首页打印态 |
 | `UI_Debug_TestImage_Get_Ntf` | — | UI→Glavo | Empty | `request_test_image_state` | 查询测试图循环打印实际状态 |
 | `GLAVO_Debug_Laser_Ntf` | — | Glavo→UI | `DebugLaserStatePayload` | `register_laser` | 激光器状态/报警/功率/温度 |
@@ -322,13 +332,17 @@ scripts/rongsu.sh start   # glavo + rongsu_camera → ui
 | `GLAVO_Debug_FirstLayer_Visual_Check_Ntf` | — | Glavo→UI | `DebugOnOffPayload` | `register_first_layer_visual_check` | 回读当前“首层视觉检测”开关状态 |
 | `GLAVO_Debug_OpticalPath_Check_Ntf` | — | Glavo→UI | `DebugOnOffPayload` | `register_optical_path_check` | 回读当前“打印前光路检测”开关状态 |
 | `GLAVO_Debug_PlateHeight_Adj_Ntf` | — | Glavo→UI | `DebugOnOffPayload` | `register_plate_height_adj` | 回读当前“打印前基板测高”开关状态 |
+| `GLAVO_Debug_InnerDoor_Occlusion_Ntf` | — | Glavo→UI | `DebugOnOffPayload` | `register_inner_door_occlusion` | 回读挡门融合是否执行（`on=1` 执行）；UI 把 `on=0` 显示成 Skip 按下 |
+| `GLAVO_Debug_Plate_Present_Ntf` | — | Glavo→UI | `DebugOnOffPayload` | `register_plate_present` | 回读读码是否执行（`on=1` 执行）；UI 把 `on=0` 显示成 Skip 按下 |
+| `GLAVO_Plate_Place_Confirm_Req` | — | Glavo→UI | Empty | `register_plate_place_confirm_req` | 读码=无板：先自动开内门再开外门，再弹「放入基板并关好外门」；Cancel=`cancel=1` 阻断起印 |
+| `UI_Plate_Place_Confirm_Rsp` | — | UI→Glavo | `PlatePlaceConfirmRspPayload` | `send_plate_place_confirm` | Confirm：`cancel=0`，再检外门+内门+读码；Cancel：`cancel=1` 阻断 |
 | `GLAVO_Debug_Soc_Led_Ntf` | — | Glavo→UI | `DebugSocLedStatePayload` | `register_soc_led` | 回读六路舱灯开关位图（bit0=`lgt1l`…bit5=`lgt3r`） |
 | `GLAVO_Debug_Cabin_Pm_Valve_Ntf` | — | Glavo→UI | `DebugOnOffPayload` | `register_cabin_pm_valve` | 回读舱内 PM `fa_valve` 开关状态 |
 | `GLAVO_Debug_TestImage_Ntf` | — | Glavo→UI | `DebugOnOffPayload` | `register_test_image` | 回读测试图循环实际状态；文件缺失/与正式打印互斥失败时回 `on=0` |
 | `GLAVO_Debug_Galvo_PointTest_Ntf` | — | Glavo→UI | `DebugOnOffPayload` | `register_galvo_point_test` | 回读红光点位测试运行状态；用于按钮、Test image 与正式打印的双向互斥 |
 | `UI_Debug_Fan_Duty_Ntf` | — | UI→Glavo | `DebugFanPayload` | `send_fan_duty` | 仅设风扇占空比（0–100） |
 | `UI_Debug_PrintParam_Set_Ntf` | — | UI→Glavo | `DebugPrintParamPayload` | `send_print_layer_param` | 打印层参数（层厚 + 平衡×1000） |
-| `GLAVO_Debug_Sensor_Ntf` | — | Glavo→UI | `DebugSensorPayload` | `register_sensor` | 调试页顶栏：舱内O2/滤芯O2/气压/舱外PM/湿度/舱温/基板温/舱内PM/粉量 |
+| `GLAVO_Debug_Sensor_Ntf` | — | Glavo→UI | `DebugSensorPayload` | `register_sensor` | 调试页顶栏：舱内O2/滤芯O2/气压/舱外PM/湿度/舱温/基板温/舱内PM/粉量；另带 `powder_ir_bits` 八路料位红外（A1/A2/A3/B1/B2/B3/OUTL/OUTR，1=无粉/受光） |
 | `GLAVO_Debug_Axis_Ntf` | — | Glavo→UI | `DebugAxisStatePayload` | `register_axis` | Z/S/D + Z 工作坐标 |
 | `GLAVO_Debug_Device_Ntf` | — | Glavo→UI | `DebugDeviceStatePayload` | `register_device` | 设备行状态 |
 | `GLAVO_Debug_Galvo_Ntf` | — | Glavo→UI | `DebugGalvoStatePayload` | `register_galvo` | 振镜 X/Y |
@@ -339,11 +353,11 @@ scripts/rongsu.sh start   # glavo + rongsu_camera → ui
 | `UI_Galvo_Version_Ntf` | — | UI→Glavo | Empty | `send_galvo_version_query` | 进入 Settings/About 页读取振镜控制板版本缓存（TCP 0x0F 首包，非实时查询下位机） |
 | `GLAVO_Galvo_Version_Ntf` | — | Glavo→UI | `GalvoVersionPayload` | `register_galvo_version` | 振镜板版本：TCP 连上后首包主动推一次；About 进页 Req 再回缓存。显示 `V<(v>>16)>.<(v>>8)&0xff>.<(v&0xff)>` |
 | `GLAVO_Device_Event_Ntf` | — | Glavo→UI | `DeviceEventPayload` | `register_device_event` | 设备事件/告警上报，喂消息中心。只发数值码 + 等级 + 触发时刻，文案在 UI 侧码表（`ui_message_store`）。码表见 [`doc/设备通信协议-数据结构定义（v0.9）.md`](../doc/设备通信协议-数据结构定义（v0.9）.md) 第五节。**Glavo 侧尚未实现**，当前只有 UI 侧接好了订阅 |
-| `GLAVO_Alarm_Report_Ntf` | — | Glavo→UI/MQTT | `AlarmReportPayload` | `register_alarm_report` | 单条报警/EVENT：MCU 串口 0xA3/0x20 原样透传，或 SOC 合成舱氧 **1120**。Glavo **双发** UI 与 MQTT；MCU 同源 1120 丢弃（由 SOC 氧门独占）。调试页 Alarm Inject 经 `UI_Debug_Alarm_Inject_Ntf` 只向 MQTT 再发一份（不上 UI）。UI 侧 `ui_alarm_state` 按 state_mask 推导生命周期；MQTT 映射 `alarm.single`（契约 [soc-alarm-contract-v1.md](../doc/soc-alarm-contract-v1.md)）。字典见 `doc/主控板串口通信协议 - 报警&事件表.csv` |
+| `GLAVO_Alarm_Report_Ntf` | — | Glavo→UI/MQTT | `AlarmReportPayload` | `register_alarm_report` | 单条报警/EVENT：MCU 串口 0xA3/0x20 原样透传，或 SOC 合成舱氧 **1120**。Glavo **双发** UI 与 MQTT；MCU 同源 1120 丢弃（由 SOC 氧门独占）。调试页 Alarm Inject 经 `UI_Debug_Alarm_Inject_Ntf` 只向 MQTT 再发一份（不上 UI）。UI 侧 `ui_alarm_state` 按 state_mask 推导生命周期；MQTT 映射 `alarm.single`（契约 [soc-alarm-contract-v2.md](../doc/soc-alarm-contract-v2.md)）。字典见 `doc/主控板串口通信协议 - 报警&事件表.csv` |
 | `UI_Alarm_Reset_Ntf` | — | UI→Glavo | `AlarmResetReqPayload` | `send_alarm_reset` | 请求复位某条 CONDITION 报警（串口 0xA3/0x82 TLV 0x01，alarm_code 小端）。ACK 不代表复位成功，最终状态以后续 `GLAVO_Alarm_Report_Ntf` 为准 |
 | `UI_Alarm_Snapshot_Ntf` | — | UI/MQTT→Glavo | Empty | `send_alarm_snapshot_req` | 请求 MCU 回一轮报警快照（串口 0xA3/0x81 TLV 0x05 len=0）。MCU **不会主动推**快照；触发点：UI 启动、串口重连、进消息中心、30s 轮询、开始打印前；MQTT 连云后也可发以补全量 |
 | `GLAVO_Alarm_Snapshot_Ntf` | — | Glavo→UI | `AlarmSnapshotPayload` | `register_alarm_snapshot` | 报警快照的**一个 slot**（串口 0xA3/0x81 TLV 0x04 原样透传）。响应**稀疏**：只回 `(active｜latched)!=0` 的 slot，没回的按全零处理；`nonzero_slot_count=0` 表示当前无报警。槽位→报警号用固定公式 `alarm_snapshot_code_of()` 不查表。攒帧与原子对齐在 UI 侧 `ui_alarm_state` 做。用于重启/重连后补齐——单条上报只在状态变化时发，错过就再也收不到 |
-| `GLAVO_Alarm_Cloud_Snapshot_Ntf` | — | Glavo→MQTT | `AlarmCloudSnapshotPayload` | — | Glavo 攒齐 MCU 一轮并可并入 SOC 1120 后的**完整** CONDITION 位图（12 slot active/latched）。MQTT 展开为一条 `alarm.snapshot`（coverage=`condition_slots_v1`）；方案 A 条目元数据一律 unknown。含 `mcu_link` 供 `alarm.status` |
+| `GLAVO_Alarm_Cloud_Snapshot_Ntf` | — | Glavo→MQTT | `AlarmCloudSnapshotPayload` | — | Glavo 攒齐 MCU 一轮并可并入 SOC 1120 后的**完整** CONDITION 位图（12 slot active/latched）。MQTT 展开为一条 `alarm.snapshot`（coverage=`condition_slots_v1`）；条目元数据一律 unknown。含 `mcu_link` 供 `alarm.status` |
 | `GLAVO_Alarm_Reset_Result_Ntf` | — | Glavo→UI | `AlarmResetResultPayload` | `register_alarm_reset_result` | 复位**失败**回执（串口 0xA3/0x82 TLV 0x04）。只在失败时发，成功仍以后续 NORMAL 单报为准；Seq 固定 0，按 alarm_code 关联。UI 收到即解除 `reset_pending`，不用干等 10s 超时 |
 
 `CameraStreamInfoPayload.dma_mode` 当前固定为 `1`：
@@ -378,6 +392,8 @@ scripts/rongsu.sh start   # glavo + rongsu_camera → ui
 2. **发送侧进程** — `subscribe` + `handle_*` 或 `publish_*`（Glavo / Camera / UI 各自实现）
 3. **UI 侧** — 若需界面交互：`ui_msg_proxy.*` 或 `camera_msg_proxy.*` 的 `send_*` + `register_*`（纯后端互访可跳过）
 4. **Broker 转发** — `target_id` 指向其它 ModuleId 时由 Broker 转发；业务侧一般无需改 `ipc_wire`
+
+本次内门／基板舱检仅新增 `0x1720..0x1725` 六条消息及 Visual 接收端，不改 Glavo/UI 的打印、门、轴逻辑；**SOC 发送侧仍待同事接入和评审**。消息名日志同步 `debug/rs_msg_format.cpp`，六条都登记 `is_ipc_reliable_msg_type`，不放进 latest-only 合并队列。完整字段、去重、超时、取消、调用示例及已知算法限制见 [舱检 IPC 接入约定](../doc/CABIN_IPC_INTEGRATION.md)。历史需求文档中的 Empty Session 已由带 `session_id` 的 4 字节 POD 细化；不得混用。
 
 Wire 协议版本：`WIRE_VERSION`（[`ipc_wire.hpp`](../ipc/ipc_wire.hpp)）。仅当帧格式变更时递增。
 
@@ -564,7 +580,7 @@ rongsu_broker ──listen──► /tmp/upc_broker.sock ◄── rongsu_ui / r
 |------|------|-----|
 | 高频状态流 | 不入表，丢就丢 | `GLAVO_Debug_Sensor_Ntf` |
 | 状态终值 | 入表 + `is_ipc_latest_only_msg_type`（队列只留最新） | `APP_Print_Progress_Ntf` |
-| 幂等命令 | 入表 | `UI_Print_Terminate_Req` |
+| 幂等命令 | 入表 | `UI_Print_Terminate_Req`、`UI_Debug_Axis_Hold_Stop_Ntf` |
 | 成对瞬时状态 | **不入表**，由发起方按返回值回滚 UI | `UI_Print_Pause_Req` / `UI_Print_Resume_Req` |
 
 最后一类要特别注意：Pause/Resume 补发是**有害**的——断连期间攒下的暂停在几秒后补发，会在用户已不想暂停时突然生效，比丢弃更糟。所以 `UiMsgProxy::send_print_pause` / `send_print_resume` 返回 `bool` 且标了 `[[nodiscard]]`，调用方拿到 `false` 必须回滚乐观切换的图标并提示重试（见 `page_user_home.cpp::on_pause_click`）。
@@ -587,6 +603,7 @@ rongsu_broker ──listen──► /tmp/upc_broker.sock ◄── rongsu_ui / r
 - **入站 fd 的所有权按路径区分**：broker 只转发，`send_frame_with_fds` 后自己那份必须关（`handle_broker_client_io` 的 `InboundFdGuard`）；client 则把 fd 移交 `pending_dma_fds_`，由消费者 `take_pending_dma_fds` 之后负责关。两条路径不能共用析构器，否则 client 侧会双重 close。丢弃报文（解码失败）的路径要自己关。
 - **`pending_dma_fds_` 只留最新一批**：消费者停止取用（预览关闭 / 看门狗重启）时旧批次永远不会被取走，必须就地 close，否则长跑必然 EMFILE，届时 `accept`/`recvmsg` 全部失败、整条总线瘫痪。`shutdown()` 同样要 close 而不是 `clear()`。
 - **字节流收包必须用 `recvmsg`**：`read()` 不带 control buffer，内核会**丢弃**随行的 `SCM_RIGHTS`。`rx_accum_` 里残留半帧时 `peek_fd_frame_magic()` 一律返回 `false`，紧随其后的 UPDF 帧就会走普通字节流这条路，用 `read()` 就只剩字节没有 fd，解析必然报 `UPDF missing SCM_RIGHTS` 丢整帧。两条收包路径共用 `recv_stream_chunk_locked`。
+- **UPDF 头带 `fd_count`**：线上为 `[magic][wire_len][fd_count][wire…]` + 同包 SCM_RIGHTS。接收端按 `fd_count` 从 `fd_rx_fds_` **切走本帧份数**，余下留给下一帧。否则 unix stream 粘包会把相邻两封 `Start_Rsp` 的 dma fd 全挂到第一帧，UI 侧出现 `DMA fd mismatch`（`got=8 expected=4`）并黑屏。Broker / Camera / UI / Visual / Media 须同版本部署。
 
 ## Broker 转发（后端互访）
 

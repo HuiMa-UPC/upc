@@ -21,11 +21,12 @@ inline constexpr uint64_t kTelemetryIdleIntervalMs = 30000;
 inline constexpr uint64_t kTelemetryChamberExtIntervalMs = 8000;
 inline constexpr uint64_t kFirmwareQueryIntervalMs = 10000;
 
-/** 报警上云（doc/soc-alarm-contract-v1.md，方案 A）。 */
+/** 报警上云（doc/soc-alarm-contract-v2.md）。 */
 inline constexpr const char* kAlarmOutboxDir = "/userdata/snowpod/alarm-outbox";
 inline constexpr const char* kAlarmStreamFile = "/userdata/snowpod/alarm-stream.json";
 inline constexpr const char* kAlarmDefinitionVersion = "1.0.0";
 inline constexpr size_t kAlarmOutboxMaxItems = 512;
+inline constexpr size_t kAlarmLostRangesMax = 64;
 inline constexpr uint64_t kAlarmStatusIntervalMs = 30000;
 inline constexpr uint64_t kAlarmOutboxRetryIntervalMs = 5000;
 

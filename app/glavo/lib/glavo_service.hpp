@@ -12,6 +12,7 @@
 #include "n2_ble_client.hpp"
 #include "msg_port.hpp"
 #include "msg_runtime.hpp"
+#include "cabin_visual_exchange.hpp"
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -158,6 +159,7 @@ private:
     void handle_debug_skip_outer_door_get(const middleware::Message& msg);
     void handle_debug_inner_door_busy_get(const middleware::Message& msg);
     void handle_outer_door_confirm_rsp(const middleware::Message& msg);
+    void handle_plate_place_confirm_rsp(const middleware::Message& msg);
     void handle_debug_o2_calib_req(const middleware::Message& msg);
     void handle_debug_o2_calib_get(const middleware::Message& msg);
     void handle_debug_alarm_inject(const middleware::Message& msg);
@@ -167,6 +169,10 @@ private:
     void handle_debug_optical_path_check_get(const middleware::Message& msg);
     void handle_debug_plate_height_adj_set(const middleware::Message& msg);
     void handle_debug_plate_height_adj_get(const middleware::Message& msg);
+    void handle_debug_inner_door_occlusion_set(const middleware::Message& msg);
+    void handle_debug_inner_door_occlusion_get(const middleware::Message& msg);
+    void handle_debug_plate_present_set(const middleware::Message& msg);
+    void handle_debug_plate_present_get(const middleware::Message& msg);
     void handle_debug_soc_led_set(const middleware::Message& msg);
     void handle_debug_soc_led_get(const middleware::Message& msg);
     void handle_debug_cabin_pm_valve_set(const middleware::Message& msg);
@@ -176,6 +182,9 @@ private:
     void handle_debug_spi_pm25_lcd_set(const middleware::Message& msg);
     void handle_debug_spi_pm25_lcd_get(const middleware::Message& msg);
     void handle_visual_optical_path_point_rsp(const middleware::Message& msg);
+    /** @brief 舱检挡门 Rsp：在 on_message 里直接投递，避免套件阻塞 worker 时死锁。 */
+    void handle_visual_occlusion_rsp(const middleware::Message& msg);
+    void handle_visual_plate_present_rsp(const middleware::Message& msg);
     void handle_height_calib_start_req(const middleware::Message& msg);
     void handle_laser_spot_measure_rsp(const middleware::Message& msg);
     void publish_debug_print_h264_record_state();
@@ -192,6 +201,8 @@ private:
     void publish_debug_galvo_point_test_state();
     void publish_debug_optical_path_check_state();
     void publish_debug_plate_height_adj_state();
+    void publish_debug_inner_door_occlusion_state();
+    void publish_debug_plate_present_state();
     void publish_debug_soc_led_state();
     void publish_debug_cabin_pm_valve_state();
     void publish_debug_status_led_state();
@@ -229,9 +240,9 @@ private:
     /** @brief 外门闸通过后：关内门套件 → 光路/测高 → 起印后半段。 */
     void continue_print_after_outer_door_ready();
     /**
-     * @brief 内门开/关套件：记当前 Z → 降 20mm → 开或关内门 → 等 2s → Z 回到降前高度。
-     *        进套件前读 1ST bit1（静止位）：开仅全开跳过；关仅非全开跳过
-     *        （0=不在全开位，关到位未装，静止时不当成必须再关）。未知则开/关都跑。
+     * @brief 内门开/关套件。打印中（含 Prep）不动 Z；Manual/调试：记当前 Z → 降 20mm →
+     *        门动作 → 等 2s → 回降前高度。进套件前读全开：挡门开关关时只信 bit1；
+     *        开时一轮 Occlusion 后 OR。套件运动中不再问视觉，也不再问基板读码决定 Z。
      * @param opening true=开内门；false=关内门
      * @param blocking true=阻塞等锁；false=try_lock，忙则跳过
      * @return false 仅 blocking 且套件失败时
@@ -240,17 +251,43 @@ private:
     /** @brief 读 1ST bit1：valid 时 true=全开；false=非全开；无效 nullopt。 */
     [[nodiscard]] static std::optional<bool> read_inner_door_open_sensor();
     /**
+     * @brief 决策点全开融合：开关关→只读 bit1；开→灯全开+舱检一轮 Occlusion 后 OR。
+     *        同一决策只调用一次（套件锁前）；超时/unknown 退回只信 bit1。
+     */
+    [[nodiscard]] std::optional<bool> read_fully_open_fused();
+    /** @brief 舱检会话 Start/Stop；载荷为 VisualCabinSessionPayload。 */
+    void publish_cabin_visual_session(uint32_t session_id, bool active);
+    /**
      * @brief 关内门套件（Skip Outer Door 时直接成功）。
      * @param blocking true=起印路径阻塞等锁；false=边沿路径 try_lock，忙则跳过
      */
     bool run_inner_door_close_kit(bool blocking);
     /** @brief 起印路径：静止全开或未知才跑关套件；失败则 abort + 告警。 */
     bool ensure_inner_door_kit_for_print();
-    /** @brief 外门开→关边沿：内门静止全开或未知才跑关套件；忙/发送中/预检则记 pending 补做。 */
+    /** @brief 外门开→关边沿：内门静止全开或未知才跑关套件；忙/发送中/预检则记 pending 补做。无板弹窗等待中跳过。 */
     void on_outer_door_closed_edge();
     /** @brief 套件/发送结束后：若仍记着外门已关，再尝试关内门。 */
     void try_pending_inner_close_after_outer();
     void publish_outer_door_confirm_req();
+    void publish_plate_place_confirm_req();
+    /**
+     * @brief 基板开关开：Z 绝对到位 −20 mm（公差 ±1；偏低也抬回；超时加长）。
+     * @return false=终止/失败已 abort
+     */
+    bool ensure_z_at_plate_safe();
+    void send_z_goto_abs(float target_mm);
+    /** @brief 准备阶段用户终止：Z 绝对回到 MCU Home 1.00 mm（已在附近则不动）。 */
+    void return_z_home_on_prep_terminate(const char* reason);
+    /**
+     * @brief 关内门后读码闸门。
+     * @return true=已弹无板窗挂起，调用方须 return；false=跳过或有板可继续；
+     *         失败路径内部 abort 后仍返回 true 使调用方 return。
+     */
+    bool begin_plate_present_gate();
+    /** @brief 跑一轮 Plate Present；回包/超时。 */
+    middleware::PlatePresentResult run_plate_present_round();
+    /** @brief 无板 Confirm 后再检：外门已关 → 内门决策 → 再读码。 */
+    void continue_print_after_plate_place_confirm();
     /**
      * @brief 起印前的光路检测 gate
      * @return true=已起一轮检测，调用方须立即 return 等回灌；false=无需检测，继续测高/起印
@@ -448,6 +485,8 @@ private:
     /* ---- 打印前光路检测 ---- */
     bool optical_path_check_on_ = false; /**< 光路检测开关（仅本次运行，默认关） */
     bool plate_height_adj_on_ = false; /**< 打印前测高调 Z（仅本次运行，默认关） */
+    bool inner_door_occlusion_on_ = true; /**< 内门视觉挡门（仅本次运行，默认开；调试页 Skip Inner Door Occl 按下后关） */
+    bool plate_present_on_ = true; /**< 基板在位读码（仅本次运行，默认开；调试页 Skip Plate Present 按下后关） */
     OpticalPathCheck optical_path_check_;
     /**
      * 检测线程结果回灌 worker 的 pending 位（与 clean_test_done_pending_ 同款）。
@@ -477,6 +516,7 @@ private:
     bool skip_o2_print_gate_on_ = false; /**< 跳过 SOC 氧打印门（仅本次运行，默认关） */
     bool skip_outer_door_on_ = false; /**< 跳过外门检测+关内门套件（仅本次运行，默认关=要做） */
     bool outer_door_confirm_waiting_ = false; /**< 已发 Confirm_Req，等 UI Rsp */
+    bool plate_place_confirm_waiting_ = false; /**< 无基板弹窗等 UI Rsp */
     std::mutex inner_door_seq_mtx_; /**< 内门开/关套件互斥（手动 / 起印 / 开→关边沿） */
     std::atomic<bool> inner_door_kit_busy_{false}; /**< 套件进行中；供 UI 禁钮 + 入队去重 */
     /** Manual/调试开或关已入队未处理完；防止连点排队第二次套件 */
@@ -485,6 +525,14 @@ private:
     std::atomic<bool> inner_door_close_pending_outer_{false};
     /** 用户终止：IPC 线程先置位，打断 worker 上阻塞的关内门套件 / wait_z */
     std::atomic<bool> print_prep_abort_{false};
+    /* ---- 舱检挡门：worker 等 Rsp，IPC 回调直接 notify（勿入 worker 队列） ---- */
+    // Visual orders both check types in the same cabin session stream.
+    std::atomic<uint32_t> cabin_session_seq_{1};
+    CabinVisualExchange occlusion_exchange_;
+    std::atomic<uint32_t> occlusion_request_seq_{1};
+    /* ---- 舱检读码：同挡门，Rsp 在 IPC 回调直投 ---- */
+    CabinVisualExchange plate_present_exchange_;
+    std::atomic<uint32_t> plate_present_request_seq_{1};
     /** 起印环境检查进度：本趟总步数 / 当前已进入步序号 / 上一次推送的 step */
     uint8_t prep_step_total_ = 0;
     uint8_t prep_step_index_ = 0;

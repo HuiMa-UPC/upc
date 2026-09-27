@@ -258,6 +258,7 @@ static const ui_theme_t s_theme_1920 = {
     /* user_mon_pm_h          */ 315,
     /* user_mon_cell_h        */ 170,
     /* user_mon_bar_h         */ 36,
+    /* user_mon_dlg_w         */ 672,
 
     /* 字体（dev） */
     /* font_body          */ &lv_font_montserrat_32,
@@ -451,6 +452,7 @@ static const ui_theme_t s_theme_1280 = {
     /* user_mon_pm_h          */ 210,  /* 稿值 */
     /* user_mon_cell_h        */ 113,  /* 稿值 */
     /* user_mon_bar_h         */ 24,
+    /* user_mon_dlg_w         */ 448,  /* 稿值，滑条 448−2×24 = 400 */
 
     /* 字体（dev） */
     /* font_body          */ &lv_font_montserrat_24,
@@ -650,6 +652,7 @@ static const ui_theme_t s_theme_1024 = {
     /* user_mon_pm_h          */ 168,
     /* user_mon_cell_h        */ 90,
     /* user_mon_bar_h         */ 19,
+    /* user_mon_dlg_w         */ 358,
 
     /* 字体（dev） */
     /* font_body          */ &lv_font_montserrat_20,

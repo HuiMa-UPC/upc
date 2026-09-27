@@ -78,6 +78,14 @@ constexpr uint32_t kLightOnIcon = 0xffffff;
 /* Manual 的 Plate Position 选中档（稿 6307:40977）。 */
 constexpr uint32_t kPlateOn = 0x485dff;
 
+/* Manual 点按步距（mm）。Z 按 μm 下发，可以取小数；S 协议是 int16，只能是整数 mm。 */
+constexpr float kManualZStepMm = 0.1f;
+constexpr float kManualSStepMm = 1.0f;
+
+/* Manual 长按点动速度（协议 int16，mm/s）。 */
+constexpr float kManualZHoldSpeed = 2.0f;
+constexpr float kManualSHoldSpeed = 30.0f;
+
 /* Status 页 PM 色条四段（稿 6338:28064）。 */
 constexpr uint32_t kBarColors[4] = { 0x55d273, 0xf3cd3a, 0xf5803b, 0xea4948 };
 
@@ -187,6 +195,8 @@ bool      g_pending_inner_want_open = true;
 bool      g_inner_door_busy = false;
 /** Manual 吹粉：外门未关时记下意图，关到位后再开清粉。 */
 bool      g_pending_purify = false;
+/** 正在长按点动的轴（DebugAxis 数值），-1 = 没有。 */
+int       g_hold_axis = -1;
 
 /* 底部按钮组 */
 lv_obj_t *g_bottom      = nullptr;
@@ -453,24 +463,12 @@ void on_snapshot_click(lv_event_t * /*e*/)
     ui_toast_show("Capturing photo...", user_color_accent, 1200);
 }
 
-void deferred_cam_start(void * /*u*/)
-{
-    if(!g_page_visible || !g_cam_image) {
-        return;
-    }
-    ui::CameraPreviewPlayer::instance().start(g_cam_image, g_cam_hint, "monitor");
-}
-
-/** 开流。已经在跑（含 Connecting）只重算几何；未 active 才异步 start。
- *  Start 超时会把 active 清掉，下次进页 / ensure 可再开。 */
+/** 开流。已出帧则只 reattach；半死/失败则 Stop→Start（见 ensure_running）。 */
 void cam_ensure_running(void)
 {
-    if(ui::CameraPreviewPlayer::instance().active()) {
-        cam_apply_layout(UPC_CAMERA_STREAM_WIDTH, 0u);
-        return;
-    }
+    auto& player = ui::CameraPreviewPlayer::instance();
+    player.ensure_running(g_cam_image, g_cam_hint, "monitor");
     cam_apply_layout(UPC_CAMERA_STREAM_WIDTH, 0u);
-    lv_async_call(deferred_cam_start, nullptr);
 }
 
 /** 画面左上那枚状态胶囊（稿 6339:30346 的「吹粉中」）。text=nullptr 收起。 */
@@ -1126,6 +1124,70 @@ void status_update(void)
 }
 
 /* ========================================================================== *
+ *  墨色滑块弹窗（取件 6338:27929 / 请先开外门 6339:28971）
+ * ========================================================================== */
+
+/**
+ * 两个弹窗是同一副骨架：448 白卡 + 标题 + 居中副标题 + 400×94 的墨色滑条，取件那个
+ * 底下再多一枚满宽 Cancel。滑条的尺寸与首页开门滑块相同（94 高、84 旋钮、内缩 5），
+ * 所以直接复用 USER_HOME_SLIDE_H / USER_ACTION_BTN_SZ；配色与圆角（24 / 20，比首页
+ * 小一圈）由控件的 INK 档自己给。
+ *
+ * 间距按稿（1280 档）：副标题 → 滑条 36、滑条 → Cancel 16。弹窗外壳的 body 默认行距
+ * 是 USER_PAD（24），这里压回 USER_PAD_SM（16），副标题那段再用滑条的 margin_top 补
+ * 到 36。Cancel 不进 footer：footer 自带 USER_PAD_SM 的 pad_top，叠上卡片行距会变成 32。
+ *
+ * @param on_cancel  非空才加 Cancel（外门弹窗稿上没有）
+ * @param out_slide  可空；弹窗存续期间要拿滑条句柄（例如复位）时传入
+ * @return 弹窗句柄；打开失败返回 nullptr
+ */
+ui_modal_dialog_t *open_ink_slide_dlg(const char *title, const char *sub_text,
+                                      const char *hint, ui_slide_unlock_cb_t on_slide,
+                                      lv_event_cb_t on_cancel,
+                                      ui_slide_unlock_t **out_slide)
+{
+    ui_modal_dialog_cfg_t cfg = ui_modal_dialog_cfg_user(title, USER_MON_DLG_W, false);
+    cfg.light_theme = true;
+    ui_modal_dialog_t *dlg = ui_modal_dialog_open(lv_layer_top(), &cfg);
+    if(!dlg) {
+        return nullptr;
+    }
+    lv_obj_set_style_pad_row(dlg->body, USER_PAD_SM, 0);
+
+    lv_obj_t *sub = ui_user_make_body_label(dlg->body, sub_text);
+    lv_obj_set_width(sub, LV_PCT(100));
+    lv_obj_set_style_text_align(sub, LV_TEXT_ALIGN_CENTER, 0);
+
+    ui_slide_unlock_cfg_t sc = {};
+    sc.hint_text   = hint;
+    sc.on_unlocked = on_slide;
+    sc.track_w     = USER_MON_DLG_W - USER_PAD * 2;
+    sc.track_h     = USER_HOME_SLIDE_H;
+    sc.knob_sz     = USER_ACTION_BTN_SZ;
+    sc.theme       = UI_SLIDE_THEME_INK;
+    sc.knob_icon   = ui_user_pick_icon(ic_door_panel_set, USER_ACTION_BTN_SZ * 8 / 21);
+    ui_slide_unlock_t *slide = ui_slide_unlock_create(dlg->body, &sc);
+    if(slide) {
+        lv_obj_set_style_margin_top(ui_slide_unlock_get_root(slide), USER_PAD_SM * 5 / 4, 0);
+    }
+    if(out_slide) {
+        *out_slide = slide;
+    }
+
+    if(on_cancel) {
+        /* 借页脚按钮的配色 / 字号 / 高（#333145@10%、22 号、72），几何按稿改：满宽、
+         * 圆角 16（页脚那套是 12，这张卡稿上就是 16）。 */
+        lv_obj_t *cancel = ui_user_make_confirm_footer_btn(dlg->body, "Cancel", false,
+                                                           lv_color_white(), true,
+                                                           on_cancel, nullptr);
+        lv_obj_set_flex_grow(cancel, 0);
+        lv_obj_set_width(cancel, LV_PCT(100));
+        lv_obj_set_style_radius(cancel, USER_LIGHT_RADIUS * 2 / 3, 0);
+    }
+    return dlg;
+}
+
+/* ========================================================================== *
  *  Manual 页
  * ========================================================================== */
 
@@ -1303,31 +1365,18 @@ void on_outer_door_slide(void * /*u*/)
     control_open_door_request();
 }
 
+/** 请先开外门（稿 6339:28971）。稿上只有标题 + 副标题 + 滑条，没有 Cancel。
+ *  副标题稿里还是占位文案（「打开外门，文案不知道」），这里先写成一句动作提示，
+ *  控制在 1280 档一行放得下。 */
 void show_outer_door_dlg(void)
 {
     if(g_outer_door_dlg) {
         return;
     }
-    ui_modal_dialog_cfg_t cfg = ui_modal_dialog_cfg_user("Open the outer door first",
-                                                         USER_DLG_W, false);
-    cfg.light_theme = true;
-    g_outer_door_dlg = ui_modal_dialog_open(lv_layer_top(), &cfg);
-    if(!g_outer_door_dlg) {
-        return;
-    }
-    lv_obj_t *sub = ui_user_make_body_label(g_outer_door_dlg->body,
-        "Inner door and powder blowing need the outer door open.");
-    lv_obj_set_width(sub, LV_PCT(100));
-
-    ui_slide_unlock_cfg_t sc = {};
-    sc.hint_text   = "SLIDE TO UNLOCK";
-    sc.on_unlocked = on_outer_door_slide;
-    sc.track_w     = USER_DLG_W - USER_DLG_PAD * 2;
-    sc.track_h     = USER_DLG_FOOTER_BTN_H;
-    sc.knob_sz     = USER_DLG_FOOTER_BTN_H - USER_PAD_SM / 2;
-    sc.light_theme = true;
-    sc.knob_icon   = ui_user_pick_icon(ic_door_panel_set, USER_METRIC_ICON_SZ);
-    ui_slide_unlock_create(g_outer_door_dlg->body, &sc);
+    g_outer_door_dlg = open_ink_slide_dlg("Open the outer door first",
+                                          "Slide to unlock and open the outer door.",
+                                          "SLIDE TO UNLOCK", on_outer_door_slide,
+                                          nullptr, nullptr);
 }
 
 /** 外门没开就拦下并弹提示。返回 true 表示可以继续。 */
@@ -1347,35 +1396,101 @@ void on_plate_changed(lv_event_t *e)
     if(idx == UI_SEGMENTED_NONE) {
         return;
     }
-    /* Top→Z=1mm，Bottom→Z=-10mm；Level 暂不动作。绝对到位由 Glavo 按当前 Z 算增量。 */
+    /* Top→Z=1mm，Bottom→Z=-10mm，绝对到位由 Glavo 按当前 Z 算增量。
+     * Level 发 Z 点动停止，打断还在跑的 Top/Bottom 位移。点已选中项不发事件，所以只有
+     * 高亮在 Top/Bottom 时才会走到 Level 这一支。 */
     auto &proxy = ui::DebugMsgProxy::instance();
     if(idx == 0) {
         proxy.send_axis_goto(middleware::DebugAxis::Z, 1.0f);
+    } else if(idx == 1) {
+        proxy.send_axis_hold_stop(middleware::DebugAxis::Z);
     } else if(idx == 2) {
         proxy.send_axis_goto(middleware::DebugAxis::Z, -10.0f);
     }
 }
 
-void on_jog(lv_event_t *e)
+/** 停掉长按点动。没在长按就什么都不发：点按之后补停可能把那一步增量打断。 */
+void manual_hold_stop(void)
 {
-    const auto dir = static_cast<int>(
-        reinterpret_cast<intptr_t>(lv_event_get_user_data(e)));
-    /* 每点 1mm；Z 走 μm AXIS_INC（见 Glavo handle_debug_axis_jog）。 */
-    ui::DebugMsgProxy::instance().send_axis_jog(
-        middleware::DebugAxis::Z, middleware::DebugJogMode::Click, dir, 1.0f);
+    if(g_hold_axis < 0) {
+        return;
+    }
+    ui::DebugMsgProxy::instance().send_axis_hold_stop(
+        static_cast<middleware::DebugAxis>(g_hold_axis));
+    g_hold_axis = -1;
 }
 
-void on_s_axis(lv_event_t *e)
+/** Z 点动接手前调用。高亮在 Top/Bottom = 上一条 Z 命令是到位、之后没点动过，那段位移
+ *  可能还在跑：先发点动停止再接手，高亮退回 Level。只有这时才发停止，连续点按不会
+ *  互相打断；已到位时这条停止对静止的轴无害。下标 0/1/2 = Top/Level/Bottom。 */
+void plate_leave_preset(void)
 {
-    const auto dir = static_cast<int>(
-        reinterpret_cast<intptr_t>(lv_event_get_user_data(e)));
-    auto &proxy = ui::DebugMsgProxy::instance();
-    if(dir == 0) {
-        proxy.send_axis_set_zero(middleware::DebugAxis::S);
-    } else {
-        proxy.send_axis_jog(middleware::DebugAxis::S,
-                            middleware::DebugJogMode::Click, dir, 1.0f);
+    const uint8_t cur = ui_segmented_get_active(g_plate_seg);
+    if(cur != 0 && cur != 2) {
+        return;
     }
+    ui::DebugMsgProxy::instance().send_axis_hold_stop(middleware::DebugAxis::Z);
+    ui_segmented_set_active(g_plate_seg, 1);
+}
+
+/**
+ * Manual 点动钮（Z 上下、S −/+）：点按走一步（kManualZStepMm / kManualSStepMm），
+ * 按住满长按时间转速度点动、松手停。
+ * user_data = axis * 4 + (dir + 1)，见 attach_jog_events()。
+ *
+ * 点按挂 SHORT_CLICKED 而不是 CLICKED：LVGL 长按松手后照样发 CLICKED，
+ * 用它会在停车之后再多走一步。
+ */
+void on_manual_jog(lv_event_t *e)
+{
+    const auto ud = reinterpret_cast<intptr_t>(lv_event_get_user_data(e));
+    const auto axis = static_cast<middleware::DebugAxis>(ud / 4);
+    const int dir = static_cast<int>(ud % 4) - 1;
+    auto &proxy = ui::DebugMsgProxy::instance();
+    switch(lv_event_get_code(e)) {
+    case LV_EVENT_SHORT_CLICKED:
+        if(axis == middleware::DebugAxis::Z) {
+            plate_leave_preset();
+        }
+        /* Z 走 μm AXIS_INC（见 Glavo handle_debug_axis_jog），S 走 int16 mm。 */
+        proxy.send_axis_jog(axis, middleware::DebugJogMode::Click, dir,
+                            axis == middleware::DebugAxis::Z ? kManualZStepMm
+                                                             : kManualSStepMm);
+        break;
+    case LV_EVENT_LONG_PRESSED:
+        manual_hold_stop();
+        if(axis == middleware::DebugAxis::Z) {
+            plate_leave_preset();
+        }
+        proxy.send_axis_jog(axis, middleware::DebugJogMode::Hold, dir,
+                            axis == middleware::DebugAxis::Z ? kManualZHoldSpeed
+                                                             : kManualSHoldSpeed);
+        g_hold_axis = static_cast<int>(axis);
+        break;
+    case LV_EVENT_RELEASED:
+    case LV_EVENT_PRESS_LOST:
+        manual_hold_stop();
+        break;
+    default:
+        break;
+    }
+}
+
+/** 给点动钮挂上点按 + 长按四个事件。 */
+void attach_jog_events(lv_obj_t *btn, middleware::DebugAxis axis, int dir)
+{
+    void *ud = reinterpret_cast<void *>(static_cast<intptr_t>(
+        static_cast<int>(axis) * 4 + (dir < 0 ? 0 : 2)));
+    lv_obj_add_event_cb(btn, on_manual_jog, LV_EVENT_SHORT_CLICKED, ud);
+    lv_obj_add_event_cb(btn, on_manual_jog, LV_EVENT_LONG_PRESSED,  ud);
+    lv_obj_add_event_cb(btn, on_manual_jog, LV_EVENT_RELEASED,      ud);
+    lv_obj_add_event_cb(btn, on_manual_jog, LV_EVENT_PRESS_LOST,    ud);
+}
+
+/** S 轴复位 = 回 Home。别改成设零：MCU 只有 Z 轴有工作零点，S 轴的设零会被 Glavo 丢掉。 */
+void on_s_home(lv_event_t * /*e*/)
+{
+    ui::DebugMsgProxy::instance().send_axis_home(middleware::DebugAxis::S);
 }
 
 void on_inner_door(lv_event_t * /*e*/)
@@ -1395,13 +1510,16 @@ void on_inner_door(lv_event_t * /*e*/)
     request_inner_door_toggle();
 }
 
-/** Manual 卡里那种「标题 + 右侧读数」的表头。 */
+/** Manual 卡里那种「标题 + 右侧读数」的表头。
+ *  稿上这一行是**定高 32**（1280 档）、文字竖直居中：卡顶 120 + 内距 17 → 行 137..169，
+ *  「Plate Position」的墨迹中心 152.5 正在行心。按内容撑只有字体行高 18（montserrat_16），
+ *  卡会矮一截。标题与读数都是 20 号（1024 档折 16），读数 #333145 @ 50%（稿面实测 148,148,162）。 */
 lv_obj_t *manual_card_head(lv_obj_t *card, const char *title, lv_obj_t **out_val)
 {
     lv_obj_t *row = lv_obj_create(card);
     lv_obj_remove_style_all(row);
     lv_obj_set_width(row, LV_PCT(100));
-    lv_obj_set_height(row, LV_SIZE_CONTENT);
+    lv_obj_set_height(row, USER_MON_ROW_H / 2);
     lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(row, LV_FLEX_ALIGN_SPACE_BETWEEN,
                           LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
@@ -1411,20 +1529,20 @@ lv_obj_t *manual_card_head(lv_obj_t *card, const char *title, lv_obj_t **out_val
     lv_obj_t *t = lv_label_create(row);
     lv_label_set_text(t, title);
     lv_obj_set_style_text_color(t, user_light_text, 0);
-    lv_obj_set_style_text_font(t, user_font_text_sm(), 0);
+    lv_obj_set_style_text_font(t, user_font_title(), 0);
 
     lv_obj_t *val = lv_label_create(row);
     lv_label_set_text(val, "0");
     lv_obj_set_style_text_color(val, user_light_text, 0);
-    lv_obj_set_style_text_opa(val, LV_OPA_40, 0);
-    lv_obj_set_style_text_font(val, user_font_text_sm(), 0);
+    lv_obj_set_style_text_opa(val, LV_OPA_50, 0);
+    lv_obj_set_style_text_font(val, user_font_title(), 0);
     if(out_val) *out_val = val;
     return row;
 }
 
-/** Manual 里那种浅底圆角钮（上/下 jog）。 */
+/** Manual 里那种浅底圆角钮（上/下 jog），点按 / 长按事件见 attach_jog_events()。 */
 lv_obj_t *make_jog_btn(lv_obj_t *parent, const lv_image_dsc_t *const *icon,
-                       lv_event_cb_t cb, int dir)
+                       middleware::DebugAxis axis, int dir)
 {
     lv_obj_t *b = lv_button_create(parent);
     lv_obj_remove_style_all(b);
@@ -1435,15 +1553,15 @@ lv_obj_t *make_jog_btn(lv_obj_t *parent, const lv_image_dsc_t *const *icon,
     lv_obj_set_style_bg_opa(b, 13, 0);
     lv_obj_set_style_bg_opa(b, 40, LV_STATE_PRESSED);
     lv_obj_clear_flag(b, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_add_event_cb(b, cb, LV_EVENT_CLICKED,
-                        reinterpret_cast<void *>(static_cast<intptr_t>(dir)));
+    attach_jog_events(b, axis, dir);
     lv_obj_center(make_icon(b, icon, USER_METRIC_ICON_SZ * 3 / 4, user_light_text));
     return b;
 }
 
-/** Manual 里那种 64 圆钮（S 轴的 −/+/复位、Inner Door 的电源）。 */
+/** Manual 里那种 64 圆钮（S 轴的 −/+/复位、Inner Door 的电源）。
+ *  cb 为空时不挂 CLICKED：S 轴 −/+ 由调用方另挂 attach_jog_events()。 */
 lv_obj_t *make_round_btn(lv_obj_t *parent, const lv_image_dsc_t *const *icon,
-                         lv_event_cb_t cb, int dir)
+                         lv_event_cb_t cb)
 {
     lv_obj_t *b = lv_button_create(parent);
     lv_obj_remove_style_all(b);
@@ -1453,8 +1571,9 @@ lv_obj_t *make_round_btn(lv_obj_t *parent, const lv_image_dsc_t *const *icon,
     lv_obj_set_style_bg_opa(b, 10, 0);
     lv_obj_set_style_bg_opa(b, 30, LV_STATE_PRESSED);
     lv_obj_clear_flag(b, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_add_event_cb(b, cb, LV_EVENT_CLICKED,
-                        reinterpret_cast<void *>(static_cast<intptr_t>(dir)));
+    if(cb) {
+        lv_obj_add_event_cb(b, cb, LV_EVENT_CLICKED, nullptr);
+    }
     lv_obj_center(make_icon(b, icon, USER_METRIC_ICON_SZ * 3 / 4, user_light_text));
     return b;
 }
@@ -1472,11 +1591,14 @@ lv_obj_t *build_view_manual(lv_obj_t *parent)
     lv_obj_set_style_bg_opa(v, LV_OPA_TRANSP, 0);
     lv_obj_clear_flag(v, LV_OBJ_FLAG_SCROLLABLE);
 
-    /* ---- Plate Position（稿 6307:40977 的 (892,120) 356×258）---- */
+    /* ---- Plate Position（稿 6307:40977 的 (892,120) 356×258）----
+     * 卡内纵向：内距 16 + 表头 32 + 24 + 分段 88 + 24 + 上下钮 56 + 内距 16（稿 17，差 1）。
+     * 两道 24 稿上一样（表头 169 → 分段 193、分段 281 → 上下钮 305），用同一个 pad_row；
+     * 早先给的 USER_PAD_SM / 2（8）让卡矮了 48，底部按钮上方空出一大块。 */
     lv_obj_t *c1 = make_card(v, LV_SIZE_CONTENT);
     lv_obj_set_style_pad_all(c1, USER_PAD_SM, 0);
     lv_obj_set_flex_flow(c1, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_style_pad_row(c1, USER_PAD_SM / 2, 0);
+    lv_obj_set_style_pad_row(c1, USER_MON_ROW_H * 3 / 8, 0);
 
     manual_card_head(c1, "Plate Position", &g_plate_val);
 
@@ -1504,7 +1626,7 @@ lv_obj_t *build_view_manual(lv_obj_t *parent)
     pc.font           = user_font_text_sm();
     pc.icon_sz        = USER_METRIC_ICON_SZ;
     pc.icon_gap       = USER_PAD_SM / 4;
-    pc.selected       = 0;
+    pc.selected       = 1;                       /* Level：启动时不知道 Z 在哪，不冒充停在 Top */
     g_plate_seg = ui_segmented_create(c1, &pc);
     lv_obj_add_event_cb(g_plate_seg, on_plate_changed, LV_EVENT_VALUE_CHANGED, nullptr);
 
@@ -1516,16 +1638,17 @@ lv_obj_t *build_view_manual(lv_obj_t *parent)
     lv_obj_set_style_pad_column(jog, USER_PAD_SM / 2, 0);
     lv_obj_set_style_bg_opa(jog, LV_OPA_TRANSP, 0);
     lv_obj_clear_flag(jog, LV_OBJ_FLAG_SCROLLABLE);
-    g_jog_up   = make_jog_btn(jog, ic_chevron_up_set,   on_jog,  1);
-    g_jog_down = make_jog_btn(jog, ic_chevron_down_set, on_jog, -1);
+    g_jog_up   = make_jog_btn(jog, ic_chevron_up_set,   middleware::DebugAxis::Z,  1);
+    g_jog_down = make_jog_btn(jog, ic_chevron_down_set, middleware::DebugAxis::Z, -1);
 
     /* ---- 铺粉刮刀 S 轴（稿 (892,394) 356×154）----
      * 稿上标题写的是「打印平面高度（S轴）」，那是把 Z 卡标题复制过去忘改了；S 轴
      * 实际是铺粉刮刀，沿用调试页与旧控制页的 `Powder Scraper (S)`，别照稿改回去。 */
+    /* 卡内纵向：内距 16 + 表头 32 + 24 + 圆钮 64 + 内距 16（稿 154，差 2）。 */
     lv_obj_t *c2 = make_card(v, LV_SIZE_CONTENT);
     lv_obj_set_style_pad_all(c2, USER_PAD_SM, 0);
     lv_obj_set_flex_flow(c2, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_style_pad_row(c2, USER_PAD_SM / 2, 0);
+    lv_obj_set_style_pad_row(c2, USER_MON_ROW_H * 3 / 8, 0);
 
     manual_card_head(c2, "Powder Scraper (S)", &g_s_val);
     lv_label_set_text(g_s_val, "0.000 mm");
@@ -1539,9 +1662,11 @@ lv_obj_t *build_view_manual(lv_obj_t *parent)
                           LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_set_style_bg_opa(srow, LV_OPA_TRANSP, 0);
     lv_obj_clear_flag(srow, LV_OBJ_FLAG_SCROLLABLE);
-    make_round_btn(srow, ic_minus_set, on_s_axis, -1);
-    make_round_btn(srow, ic_plus_set,  on_s_axis,  1);
-    make_round_btn(srow, ic_reset_set, on_s_axis,  0);
+    attach_jog_events(make_round_btn(srow, ic_minus_set, nullptr),
+                      middleware::DebugAxis::S, -1);
+    attach_jog_events(make_round_btn(srow, ic_plus_set, nullptr),
+                      middleware::DebugAxis::S, 1);
+    make_round_btn(srow, ic_reset_set, on_s_home);
 
     /* ---- Inner Door（稿 (892,564) 356×98）---- */
     lv_obj_t *c3 = make_card(v, LV_SIZE_CONTENT);
@@ -1553,9 +1678,9 @@ lv_obj_t *build_view_manual(lv_obj_t *parent)
     lv_obj_t *dl = lv_label_create(c3);
     lv_label_set_text(dl, "Inner Door");
     lv_obj_set_style_text_color(dl, user_light_text, 0);
-    lv_obj_set_style_text_font(dl, user_font_text_sm(), 0);
+    lv_obj_set_style_text_font(dl, user_font_title(), 0);   /* 与前两张卡的表头同号 */
 
-    g_door_btn = make_round_btn(c3, ic_power_set, on_inner_door, 0);
+    g_door_btn = make_round_btn(c3, ic_power_set, on_inner_door);
     return v;
 }
 
@@ -1650,7 +1775,10 @@ void on_retrieve_slide(void * /*u*/)
 }
 
 /** 取件弹窗（稿 6338:27929）：标题 + 说明 + SLIDE TO RETRIEVE + Cancel。
- *  改版前这是浮层里一条常驻的 `SWIPE TO COLLECT`，新稿收成「按钮 → 弹窗」两步。 */
+ *  改版前这是浮层里一条常驻的 `SWIPE TO COLLECT`，新稿收成「按钮 → 弹窗」两步。
+ *
+ *  RETRIEVE 在完成与终止两态都会出（phase_finished()），稿只画了完成态那一版。终止态
+ *  沿用同一张卡，只换标题和副标题——不然 Job 卡写着 Print Terminated，弹窗却说 complete。 */
 void show_retrieve_dlg(void)
 {
     if(g_retrieve_dlg) {
@@ -1660,30 +1788,12 @@ void show_retrieve_dlg(void)
         ui_toast_show("Air purifying, please wait", user_color_accent, 1200);
         return;
     }
-    ui_modal_dialog_cfg_t cfg = ui_modal_dialog_cfg_user("Print complete",
-                                                         USER_DLG_W, true);
-    cfg.light_theme = true;
-    g_retrieve_dlg = ui_modal_dialog_open(lv_layer_top(), &cfg);
-    if(!g_retrieve_dlg) {
-        return;
-    }
-    lv_obj_t *sub = ui_user_make_body_label(g_retrieve_dlg->body,
-        "The job has finished. Slide to open the door and collect the part.");
-    lv_obj_set_width(sub, LV_PCT(100));
-
-    ui_slide_unlock_cfg_t sc = {};
-    sc.hint_text   = "SLIDE TO RETRIEVE";
-    sc.on_unlocked = on_retrieve_slide;
-    sc.track_w     = USER_DLG_W - USER_DLG_PAD * 2;
-    sc.track_h     = USER_DLG_FOOTER_BTN_H;
-    sc.knob_sz     = USER_DLG_FOOTER_BTN_H - USER_PAD_SM / 2;
-    sc.light_theme = true;
-    sc.knob_icon   = ui_user_pick_icon(ic_door_panel_set, USER_METRIC_ICON_SZ);
-    g_retrieve_slide = ui_slide_unlock_create(g_retrieve_dlg->body, &sc);
-
-    ui_user_make_confirm_footer_btn(g_retrieve_dlg->footer, "Cancel", false,
-                                    lv_color_white(), true,
-                                    on_retrieve_cancel, nullptr);
+    const bool stopped = (g_phase == PHASE_TERMINATED);
+    g_retrieve_dlg = open_ink_slide_dlg(
+        stopped ? "Print terminated" : "Print complete",
+        stopped ? "Job stopped. Slide to retrieve the part."
+                : "Job complete. Slide to retrieve the part.",
+        "SLIDE TO RETRIEVE", on_retrieve_slide, on_retrieve_cancel, &g_retrieve_slide);
 }
 
 void on_wide_click(lv_event_t * /*e*/)
@@ -2041,6 +2151,11 @@ void apply_view(void)
     show(g_view_job,    g_tab == TAB_JOB);
     show(g_view_status, g_tab == TAB_STATUS);
     show(g_view_manual, g_tab == TAB_MANUAL);
+    /* 切 Tab、进打印态强制回 Job、Manual 被禁用退位都走这里：点动钮已经看不见了，
+     * 长按中的轴立刻停，不等松手。 */
+    if(g_tab != TAB_MANUAL) {
+        manual_hold_stop();
+    }
     apply_bottom();
     if(g_tab == TAB_STATUS) {
         status_update();
@@ -2303,14 +2418,15 @@ void page_user_monitor_exit(void)
     g_page_visible = false;
     g_pending_inner_door = false;
     g_pending_purify = false;
+    manual_hold_stop();
     wire_debug_proxy(false);
     close_outer_door_dlg();
     close_purify_door_dlg();
     /* 打印态不停流：用户可能只是切去看一眼消息，回来不该黑一下；结果页也要停在
-     * 最后一帧上。待机态才停，省掉没人看时的解码开销。 */
-    if(!g_printing) {
-        ui::CameraPreviewPlayer::instance().stop();
-    }
+     * 最后一帧上。待机离页同样只 detach 控件、保持 Camera 会话——若 stop→再进
+     * start，短时间会叠两封带 SCM_RIGHTS 的 Start_Rsp，曾触发 DMA fd mismatch
+     * 黑屏；无 widget 时 ui_timer 自然空转，解码开销可接受。 */
+    ui::CameraPreviewPlayer::instance().detach_widgets();
 }
 
 void page_user_monitor_update_camera_preview_layout(uint32_t src_w, uint32_t src_h)
@@ -2394,9 +2510,10 @@ void page_user_monitor_enter_printing_mode(const control_file_t *file)
 void page_user_monitor_exit_printing_mode(void)
 {
     /* 人还在监控页：预览本来就要接着当待机直播，stop 再 start 会黑一下
-     * （Manual OPEN 回 IDLE、打印结束回待机都走这里）。切走了才停流。 */
+     * （Manual OPEN 回 IDLE、打印结束回待机都走这里）。切走了只卸控件，
+     * 会话由 detach 保留；真正关流留给进程退出或其它显式 stop。 */
     if(!g_page_visible) {
-        ui::CameraPreviewPlayer::instance().stop();
+        ui::CameraPreviewPlayer::instance().detach_widgets();
     }
     g_printing    = false;
     g_purify_busy = false;
@@ -2522,6 +2639,9 @@ void page_user_monitor_print_prep_update(uint8_t step, uint8_t step_index, uint8
         break;
     case middleware::PrintPrepStep::FirstLayer:
         title = "First layer check...";
+        break;
+    case middleware::PrintPrepStep::PlatePresent:
+        title = "Checking build plate...";
         break;
     default:
         break;

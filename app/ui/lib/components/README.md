@@ -10,7 +10,7 @@
 | `ui_user_widgets` | 用户风通用块：磨砂卡片、数值块、耗材行、分段控件、文件 meta 格式化等 |
 | `ui_user_skeleton` | Tab 占位页（标题 + 卡片 + 提示文案） |
 | `ui_modal_dialog` | 标准弹窗壳（标题、body、footer） |
-| `ui_slide_unlock` | 滑动解锁条（可配 knob 图标 / 透明轨道 / 浅色档 `light_theme`；`ui_slide_unlock_set_hint()` 换提示文案） |
+| `ui_slide_unlock` | 滑动解锁条（可配 knob 图标 / 透明轨道 / 配色档 `theme`：深色玻璃 `GLASS`（默认 0）、浅色 `LIGHT`、墨色 `INK`；`ui_slide_unlock_set_hint()` 换提示文案） |
 | `ui_board_anim` | 打印板插入动画 |
 | `ui_arc_spinner` | 圆弧加载动画 |
 | `ui_keyboard` | 全局软键盘 |

@@ -446,6 +446,10 @@ typedef struct {
     int32_t user_mon_cell_h;
     /** Job 卡进度条的高（稿 24@1280，圆角取其 1/3 = 稿的 8）。 */
     int32_t user_mon_bar_h;
+    /** 监控页两个墨色滑块弹窗（取件 6338:27929、请先开外门 6339:28971）的卡宽，稿 448@1280。
+     *  **不能复用 user_dlg_w**：那是 496 的确认弹窗。卡内距走 USER_PAD，于是滑条宽 =
+     *  本值 − 2×USER_PAD（1280 档 448−48 = 400，正是稿上轨道宽）。 */
+    int32_t user_mon_dlg_w;
 
     /* ---- 字体（开发者 Shell） ---- */
     const lv_font_t *font_body;
@@ -671,6 +675,7 @@ int32_t user_media_play_size(void);
 #define USER_MON_PM_H               (g_ui->user_mon_pm_h)
 #define USER_MON_CELL_H             (g_ui->user_mon_cell_h)
 #define USER_MON_BAR_H              (g_ui->user_mon_bar_h)
+#define USER_MON_DLG_W              (g_ui->user_mon_dlg_w)
 
 /**
  * 初始化主题：根据当前 lv_display 实际分辨率挑选 profile，再初始化所有 lv_style。

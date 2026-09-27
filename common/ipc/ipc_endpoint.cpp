@@ -326,23 +326,26 @@ bool IpcEndpoint::send_frame_with_fds(const std::vector<uint8_t>& frame,
         return false;
     }
 
-    const uint32_t magic = IPC_FD_FRAME_MAGIC;
-    const uint32_t len   = static_cast<uint32_t>(frame.size());
+    const uint32_t magic    = IPC_FD_FRAME_MAGIC;
+    const uint32_t len      = static_cast<uint32_t>(frame.size());
+    const uint32_t fd_count = static_cast<uint32_t>(fds.size());
 
-    struct iovec iov[3] {};
+    struct iovec iov[4] {};
     iov[0].iov_base = const_cast<uint32_t*>(&magic);
     iov[0].iov_len  = sizeof(magic);
     iov[1].iov_base = const_cast<uint32_t*>(&len);
     iov[1].iov_len  = sizeof(len);
-    iov[2].iov_base = const_cast<uint8_t*>(frame.data());
-    iov[2].iov_len  = frame.size();
+    iov[2].iov_base = const_cast<uint32_t*>(&fd_count);
+    iov[2].iov_len  = sizeof(fd_count);
+    iov[3].iov_base = const_cast<uint8_t*>(frame.data());
+    iov[3].iov_len  = frame.size();
 
     const size_t cmsg_len = CMSG_LEN(sizeof(int) * fds.size());
     std::vector<uint8_t> cmsg_buf(CMSG_SPACE(sizeof(int) * fds.size()));
 
     struct msghdr msg {};
     msg.msg_iov        = iov;
-    msg.msg_iovlen     = 3;
+    msg.msg_iovlen     = 4;
     msg.msg_control    = cmsg_buf.data();
     msg.msg_controllen = cmsg_buf.size();
 
@@ -359,7 +362,7 @@ bool IpcEndpoint::send_frame_with_fds(const std::vector<uint8_t>& frame,
         const ssize_t w = ::sendmsg(conn_fd_, &msg, MSG_NOSIGNAL);
         if(w > 0) {
             const size_t total =
-                sizeof(magic) + sizeof(len) + frame.size();
+                IPC_FD_FRAME_HDR_SIZE + frame.size();
             if(static_cast<size_t>(w) != total) {
                 UPC_LOG_IPC(Error,
                             "UPDF partial send bytes=%zd total=%zu, close conn",
@@ -530,32 +533,49 @@ bool IpcEndpoint::recv_fd_frame_unit(InboundWireUnit& out)
             }
         }
 
-        if(fd_rx_accum_.size() >= sizeof(uint32_t) * 2u) {
-            uint32_t magic = 0;
+        if(fd_rx_accum_.size() >= IPC_FD_FRAME_HDR_SIZE) {
+            uint32_t magic    = 0;
             uint32_t wire_len = 0;
+            uint32_t fd_count = 0;
             std::memcpy(&magic, fd_rx_accum_.data(), sizeof(magic));
             std::memcpy(&wire_len, fd_rx_accum_.data() + sizeof(magic),
                         sizeof(wire_len));
+            std::memcpy(&fd_count,
+                        fd_rx_accum_.data() + sizeof(magic) + sizeof(wire_len),
+                        sizeof(fd_count));
 
             if(magic != IPC_FD_FRAME_MAGIC || wire_len == 0 ||
-               wire_len > max_wire_len) {
-                UPC_LOG_IPC(Error, "UPDF invalid header magic=0x%x len=%u",
-                            magic, wire_len);
+               wire_len > max_wire_len ||
+               fd_count == 0 || fd_count > IPC_FD_FRAME_MAX_FDS) {
+                UPC_LOG_IPC(Error,
+                            "UPDF invalid header magic=0x%x len=%u fd_count=%u",
+                            magic, wire_len, fd_count);
                 clear_fd_rx_state_locked();
                 return false;
             }
 
-            const size_t total_need = sizeof(uint32_t) * 2u + wire_len;
+            const size_t total_need =
+                static_cast<size_t>(IPC_FD_FRAME_HDR_SIZE) + wire_len;
             if(fd_rx_accum_.size() >= total_need) {
-                if(fd_rx_fds_.empty()) {
-                    UPC_LOG_IPC(Error, "UPDF missing SCM_RIGHTS");
+                /* 粘包时一次 recvmsg 可能攒到多帧的 SCM_RIGHTS：只切走本帧
+                 * 声明的 fd_count，余下留给后续 UPDF。字节已齐而 fd 仍不足，
+                 * 视为本帧 SCM_RIGHTS 丢失/截断（同 sendmsg 的 control 应随
+                 * 数据首段到达），不能空等拖死解析。 */
+                if(fd_rx_fds_.size() < fd_count) {
+                    UPC_LOG_IPC(Error,
+                                "UPDF missing SCM_RIGHTS need=%u have=%zu",
+                                fd_count, fd_rx_fds_.size());
                     clear_fd_rx_state_locked();
                     return false;
                 }
-                out.frame.assign(fd_rx_accum_.data() + sizeof(uint32_t) * 2u,
+                out.frame.assign(fd_rx_accum_.data() + IPC_FD_FRAME_HDR_SIZE,
                                  fd_rx_accum_.data() + total_need);
-                out.fds = std::move(fd_rx_fds_);
-                fd_rx_fds_.clear();
+                out.fds.assign(fd_rx_fds_.begin(),
+                               fd_rx_fds_.begin() +
+                                   static_cast<std::ptrdiff_t>(fd_count));
+                fd_rx_fds_.erase(fd_rx_fds_.begin(),
+                                 fd_rx_fds_.begin() +
+                                     static_cast<std::ptrdiff_t>(fd_count));
                 fd_rx_accum_.erase(fd_rx_accum_.begin(),
                                    fd_rx_accum_.begin() +
                                        static_cast<std::ptrdiff_t>(total_need));
@@ -571,7 +591,7 @@ bool IpcEndpoint::recv_fd_frame_unit(InboundWireUnit& out)
         }
 
         fd_rx_accum_.insert(fd_rx_accum_.end(), chunk, chunk + n);
-        if(fd_rx_accum_.size() > max_wire_len + sizeof(uint32_t) * 2u) {
+        if(fd_rx_accum_.size() > max_wire_len + IPC_FD_FRAME_HDR_SIZE) {
             UPC_LOG_IPC(Error, "UPDF oversized stream bytes=%zu",
                         fd_rx_accum_.size());
             clear_fd_rx_state_locked();

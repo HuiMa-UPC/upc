@@ -322,9 +322,14 @@ constexpr uint32_t WIRE_MAGIC   = 0x31504355u;
 constexpr uint32_t WIRE_VERSION = 1u;
 constexpr std::size_t WIRE_MAX_PAYLOAD = 65536u;
 
-/** wire 帧 + SCM_RIGHTS 复合包魔数（小端 "UPDF"），与 [len][body] 普通帧区分 */
+/** wire 帧 + SCM_RIGHTS 复合包魔数（小端 "UPDF"），与 [len][body] 普通帧区分。
+ *  线上布局：`[magic:u32][wire_len:u32][fd_count:u32][wire…]` + 同包 SCM_RIGHTS。
+ *  `fd_count` 必须与 SCM_RIGHTS 个数一致；接收端按该字段切 fd，避免 stream 粘包把
+ *  相邻两帧的 dma fd 全挂到第一帧（曾导致 UI「DMA fd mismatch」黑屏）。 */
 constexpr uint32_t IPC_FD_FRAME_MAGIC    = 0x46445055u;
 constexpr uint32_t IPC_FD_FRAME_MAX_FDS  = 32u;
+/** UPDF 头字节数：magic + wire_len + fd_count */
+constexpr uint32_t IPC_FD_FRAME_HDR_SIZE = 12u;
 
 /** connect 后首帧 reg（不进 MsgType）；小端 "UPRG" */
 constexpr uint32_t IPC_REG_MAGIC         = 0x47525055u;
@@ -537,7 +542,7 @@ enum class MsgType : uint32_t {
     GLAVO_Debug_O2_Calib_Rsp,           /**< DebugO2CalibRspPayload：氧标定结果（Req 应答） */
     GLAVO_Debug_O2_Calib_Ntf,           /**< DebugO2CalibRspPayload：当前 K 回读（Get，ok=1 且未改盘） */
     GLAVO_Debug_Status_Led_Ntf,         /**< DebugStatusLedPayload：灯板强制态回读 */
-    GLAVO_Debug_Fan_Ntf,                /**< DebugFanStatePayload：风机实测转速/故障/状态（V4 EXT 帧，约 1s） */
+    GLAVO_Debug_Fan_Ntf,                /**< DebugFanStatePayload：风机实测转速/故障/状态（FANBOARD TLV 0x08） */
     GLAVO_Debug_Spi_Pm25_Lcd_Ntf,       /**< DebugOnOffPayload：SPI 小屏测试刷屏开关状态 */
 
     // ---- UI ↔ GLAVO：网络 / WiFi（ConnMan 后端） ----
@@ -643,7 +648,7 @@ enum class MsgType : uint32_t {
     UI_Alarm_Snapshot_Ntf,           /**< Empty：请求 MCU 回一轮报警快照（Cmd 0x81 TLV 0x05 len=0） */
     GLAVO_Alarm_Reset_Result_Ntf,    /**< AlarmResetResultPayload：复位失败回执（Cmd 0x82 TLV 0x04） */
     /** AlarmCloudSnapshotPayload：Glavo 攒齐一轮（可并入 SOC 1120）后的完整 CONDITION 位图 → MQTT 上云。
-     *  云端契约见 doc/soc-alarm-contract-v1.md（alarm.snapshot）；不发串口分片。 */
+     *  云端契约见 doc/soc-alarm-contract-v2.md（alarm.snapshot）；不发串口分片。 */
     GLAVO_Alarm_Cloud_Snapshot_Ntf,
 
     // ---- GLAVO → UI：制氮机 BLE 状态（v1 UI 可不订阅） ----
@@ -665,6 +670,24 @@ enum class MsgType : uint32_t {
      *  概览要靠它决定「SD 卡内存」那张卡显示容量还是显示未插入。挂载点尚未确定。
      *  载荷形状与 USB 那条完全一致，故复用同一个 POD，但**是两个不同的卷**。 */
     GLAVO_SdCard_Hotplug_Ntf,
+
+    // Cabin inspection: six dedicated append-only IDs (see doc/CABIN_IPC_INTEGRATION.md).
+    GLAVO_Visual_Cabin_Session_Start_Ntf = 0x1720, /**< VisualCabinSessionPayload; explicit warm-up */
+    GLAVO_Visual_Cabin_Session_Stop_Ntf  = 0x1721, /**< VisualCabinSessionPayload; matching-session cancel */
+    GLAVO_Visual_InnerDoor_Occlusion_Req = 0x1722, /**< VisualCabinCheckReqPayload; Snapshot or WaitOpen */
+    APP_Visual_InnerDoor_Occlusion_Rsp   = 0x1723, /**< VisualCabinCheckRspPayload; InnerDoorOcclusionResult */
+    GLAVO_Visual_Plate_Present_Req       = 0x1724, /**< VisualCabinCheckReqPayload; Snapshot only */
+    APP_Visual_Plate_Present_Rsp         = 0x1725, /**< VisualCabinCheckRspPayload; PlatePresentResult */
+    /* Glavo↔UI：舱检业务开关 / 无板弹窗（枚举只准末尾追加，接在 0x1725 之后） */
+    UI_Debug_InnerDoor_Occlusion_Set_Ntf, /**< DebugOnOffPayload：on=1 做内门挡门融合（仅本次运行，默认开；UI Skip 按下发 0） */
+    UI_Debug_InnerDoor_Occlusion_Get_Ntf, /**< Empty：查询内门挡门融合是否执行 */
+    UI_Debug_Plate_Present_Set_Ntf,       /**< DebugOnOffPayload：on=1 执行基板读码（仅本次运行，默认开；UI Skip 按下发 0） */
+    UI_Debug_Plate_Present_Get_Ntf,       /**< Empty：查询基板读码是否执行 */
+    GLAVO_Debug_InnerDoor_Occlusion_Ntf,  /**< DebugOnOffPayload：on=1 表示正在做内门挡门融合 */
+    GLAVO_Debug_Plate_Present_Ntf,        /**< DebugOnOffPayload：on=1 表示正在执行基板读码 */
+    /** 无基板：放入基板并关外门（Cancel=阻断起印，勿复用外门 skip=1 继续 Prep） */
+    GLAVO_Plate_Place_Confirm_Req,        /**< Empty */
+    UI_Plate_Place_Confirm_Rsp,           /**< PlatePlaceConfirmRspPayload */
 };
 
 enum class MsgPriority : uint8_t {
@@ -684,6 +707,16 @@ enum class MsgPriority : uint8_t {
 inline constexpr bool is_ipc_reliable_msg_type(MsgType type) noexcept
 {
     switch(type) {
+    // Explicit requests/results, not periodic status. IDs reject delayed/replayed work.
+    case MsgType::GLAVO_Visual_Cabin_Session_Start_Ntf:
+    case MsgType::GLAVO_Visual_Cabin_Session_Stop_Ntf:
+    case MsgType::GLAVO_Visual_InnerDoor_Occlusion_Req:
+    case MsgType::APP_Visual_InnerDoor_Occlusion_Rsp:
+    case MsgType::GLAVO_Visual_Plate_Present_Req:
+    case MsgType::APP_Visual_Plate_Present_Rsp:
+    case MsgType::GLAVO_Plate_Place_Confirm_Req:
+    case MsgType::UI_Plate_Place_Confirm_Rsp:
+        return true;
     // OTA / 告警：终态与关键事件
     case MsgType::APP_Mcu_Ota_Status_Ntf:
     case MsgType::APP_Mqtt_Ota_Progress_Ntf:
@@ -709,6 +742,13 @@ inline constexpr bool is_ipc_reliable_msg_type(MsgType type) noexcept
      * 暂停在几秒后补发会在用户已不想暂停时突然生效，比丢弃更危险；那一对
      * 改由 UI 侧根据 publish 返回值回滚图标并提示重试。 */
     case MsgType::UI_Print_Terminate_Req:
+        return true;
+
+    /* 长按点动的松手停同样是幂等命令：丢一条轴就按速度一直走下去，必须补发；
+     * 晚到最多多停一次。开始那条 UI_Debug_Axis_Jog_Ntf 刻意**不**入表——晚到的
+     * 「开始走」比丢弃更危险，道理同 Pause/Resume。也**不能**进 latest-only：
+     * payload 带轴号，按类型合并会吞掉另一根轴的停止。 */
+    case MsgType::UI_Debug_Axis_Hold_Stop_Ntf:
         return true;
 
     // 调试氧单点标定：控制类 Req/Rsp，丢一条 UI 会以为没点到
@@ -1116,6 +1156,54 @@ struct VisualOpticalPathCheckRspPayload {
     uint16_t reserved2;
 };
 
+/** Cabin IPC proposal; see doc/CABIN_IPC_INTEGRATION.md for the sender contract.
+ * Values describe image evidence only; Visual never commands lamps, doors, or axes. */
+enum class CabinCheckMode : uint8_t { Snapshot = 0, WaitOpen = 1 };
+enum class InnerDoorOcclusionResult : uint8_t { Unknown = 0, Occluded = 1, Clear = 2 };
+enum class PlatePresentResult : uint8_t { Unknown = 0, QrFound = 1, QrAbsentSceneOk = 2 };
+
+/** Start/Stop are Inline (not Empty). Only a matching Stop cancels the session.
+ * IDs are nonzero; newer session IDs use uint32 serial ordering. Duplicate Start
+ * does not reset a running window; Stop suppresses an unfinished request's reply. */
+struct VisualCabinSessionPayload {
+    uint32_t session_id;
+};
+
+/** One explicit request starts one bounded detection window; no automatic retries.
+ * GLAVO -> VISUAL only. Both IDs must be nonzero; request_id increases per session
+ * across both check types. Exact retransmissions do not restart the same window.
+ * Invalid usable payloads return Unknown; wrong sender/target/size are ignored.
+ * Caller owns lighting/view timing and must exclude legacy visual sessions. */
+struct VisualCabinCheckReqPayload {
+    uint32_t session_id;     /**< Matches the explicit Session_Start */
+    uint32_t request_id;     /**< New ID for each new check; immutable on retransmission */
+    uint32_t timeout_ms;     /**< 250..60000 inclusive; starts when Visual accepts Req */
+    uint8_t cabin_led_mask;  /**< Actual six SOC lamps; exactly 0x3f is required */
+    uint8_t mode;            /**< CabinCheckMode; Plate requires Snapshot */
+    uint8_t reserved[2];     /**< Must be zero */
+};
+
+/** VISUAL -> GLAVO. One terminal result per accepted request, except cancelled work.
+ * A cached Rsp may be resent for an exact duplicate; sender must deduplicate IDs.
+ * Only fresh, distinct frames may support a positive result. Unknown is never a
+ * plate-present or door-open assertion. Result stops detection before publishing. */
+struct VisualCabinCheckRspPayload {
+    uint32_t session_id;     /**< Exact echo; discard if not the pending session */
+    uint32_t request_id;     /**< Exact echo; discard if not the pending request */
+    uint32_t frame_seq;      /**< Last evaluated frame, 0 when no frame was evaluated */
+    uint8_t result;          /**< InnerDoorOcclusionResult or PlatePresentResult by MsgType */
+    uint8_t reserved[3];     /**< Always zero */
+};
+
+static_assert(sizeof(VisualCabinSessionPayload) == 4, "cabin session ABI");
+static_assert(sizeof(VisualCabinCheckReqPayload) == 16, "cabin request ABI");
+static_assert(offsetof(VisualCabinCheckReqPayload, timeout_ms) == 8, "cabin timeout offset");
+static_assert(offsetof(VisualCabinCheckReqPayload, cabin_led_mask) == 12, "cabin LED offset");
+static_assert(offsetof(VisualCabinCheckReqPayload, mode) == 13, "cabin mode offset");
+static_assert(sizeof(VisualCabinCheckRspPayload) == 16, "cabin response ABI");
+static_assert(offsetof(VisualCabinCheckRspPayload, frame_seq) == 8, "cabin frame offset");
+static_assert(offsetof(VisualCabinCheckRspPayload, result) == 12, "cabin result offset");
+
 /** 光路检测阶段状态：驱动 UI 打印卡徽标行文案。 */
 enum class OpticalPathPointState : uint8_t {
     Moving   = 0,  /**< 红光已下发，正在等待视觉识别 */
@@ -1143,6 +1231,8 @@ enum class PrintPrepStep : uint8_t {
     Oxygen      = 5,
     /** 首层视觉：采参考图 + PRINT_READY 后比对（调试开关关则不计） */
     FirstLayer  = 6,
+    /** 基板在位读码（调试开关关则不计；执行在关内门之后、光路之前） */
+    PlatePresent = 7,
 };
 
 /** APP_Print_Prep_Progress_Ntf：起印环境检查进度（Inline）
@@ -1166,6 +1256,8 @@ enum class PrintStartRejectReason : uint8_t {
     PlateHeightFail  = 3,  /**< 打印前基板测高失败或无 LUT */
     TcpOffline       = 4,  /**< 振镜 TCP 未连接，无法 begin_sending */
     InnerDoorSeqFail = 5,  /**< 关内门套件（降 Z/关内门/回 Z）失败 */
+    PlatePresentFail = 6,  /**< 基板读码 unknown/超时/Visual 无应答 */
+    PlateAbsentCancel = 7, /**< 无基板弹窗 Cancel，阻断起印 */
 };
 
 /** APP_Print_Start_Rejected_Ntf：起印被后端拒绝（Inline）
@@ -1181,6 +1273,14 @@ struct PrintStartRejectedPayload {
  *  skip=1：Cancel，不检门，直接 continue 内门/光路/测高。 */
 struct OuterDoorConfirmRspPayload {
     uint8_t skip;        /**< 0=确认后再检门，1=跳过外门检测 */
+    uint8_t reserved[3];
+};
+
+/** UI_Plate_Place_Confirm_Rsp：无基板弹窗回复（Inline）
+ *  cancel=0：Confirm，Glavo 再检外门已关 + 内门决策 + 再读码。
+ *  cancel=1：Cancel，阻断起印（与光路失败同类回滚）。 */
+struct PlatePlaceConfirmRspPayload {
+    uint8_t cancel;      /**< 0=Confirm 再检，1=Cancel 阻断 */
     uint8_t reserved[3];
 };
 
@@ -1737,7 +1837,10 @@ struct DebugSensorPayload {
     float   pm25_cabin;              /**< 舱内 PM2.5（SOC 舱内 UART，阀关时可能无效）；无效 <0 */
     float   filter_oxygen_percent;   /**< 滤芯氧 %（MCU 1ST value[0..1]）；无效 <0 */
     uint8_t powder_status;           /**< DebugPowderStatus；0xFF=无效显示 "--" */
-    uint8_t reserved[3];
+    /** 主板 8 路料位红外：bit0..7=A1/A2/A3/B1/B2/B3/OUTL/OUTR；1=受光无粉，0=遮挡有粉 */
+    uint8_t powder_ir_bits;
+    uint8_t powder_ir_valid;         /**< 1=红外位有效；0=未收到/无效，UI 显示 "--" */
+    uint8_t reserved;
 };
 
 /** GLAVO_Debug_Axis_Ntf：Z/S/D 实际位置 + Z 工作坐标 */
@@ -1778,12 +1881,12 @@ struct DebugRecycleMotorStatePayload {
     uint8_t reserved[3];
 };
 
-/** GLAVO_Debug_Fan_Ntf：风机实测（MCU V4 EXT 帧 TLV 0x06）；valid=0 时其余值无意义。
+/** GLAVO_Debug_Fan_Ntf：风机实测（MCU FANBOARD 帧 TLV 0x08）；valid=0 时其余值无意义。
  *  不含 on/duty：Glavo 只组帧下发不留状态，那两个值无处可取。 */
 struct DebugFanStatePayload {
     uint8_t  valid;      /**< fan_status_bits bit7：驱动链路正常 */
-    uint8_t  fault;      /**< 0无 1Hall非法 2Hall错序 3堵转 4过流 5欠压 6过压 7超速 */
-    uint8_t  state;      /**< 0停 1启动 2运行 3重试等待 4故障锁定 */
+    uint8_t  fault;      /**< 0无 1Hall非法 2Hall错序 3堵转 4过流 5欠压 6过压 7超速 8板温过热 9NTC */
+    uint8_t  state;      /**< 0停 1启动 2运行 3重试等待 4故障锁定 5预充电 */
     uint8_t  reserved;
     uint16_t rpm;
     uint16_t bus_v_x10;  /**< 0.1V */
@@ -1851,6 +1954,8 @@ enum class DeviceEventCode : uint16_t {
     OuterDoorNeedClose      = 36, /**< 起印需关外门（one_shot，severity=info；弹窗另走 Confirm_Req） */
     InnerDoorSeqFail        = 37, /**< 关内门套件失败（one_shot，severity=error） */
     PlateHeightBlocked      = 38, /**< 测高无 LUT 或失败，已阻断起印（one_shot，severity=error） */
+    PlatePresentFail        = 39, /**< 基板读码失败/未知，已阻断起印（one_shot，severity=error） */
+    PlateAbsentNeedPlace    = 40, /**< 读码=无板，需放入基板并关外门（one_shot，severity=info；弹窗另走 Confirm_Req） */
 
     /* ---- 以下为 UI 本地事件：不走总线，由前端自己 push，占同一码空间以便
      *      消息中心统一排序去重。后端不应发送这些码。 ---- */
@@ -1984,7 +2089,7 @@ enum class AlarmMcuLink : uint8_t {
  * Glavo 在串口快照攒齐并并入 SOC 1120 后发给 MQTT；MQTT 展开为
  * alarm.snapshot entries（coverage=condition_slots_v1）。未收到的 slot 按全零。
  * 空快照（全 NORMAL）合法：highest_severity=0 且全部 mask=0。
- * 元数据（severity/clear_mode/detail）不在本载荷——方案 A 上云一律 unknown。
+ * 元数据（severity/clear_mode/detail）不在本载荷——上云一律 unknown。
  */
 struct AlarmCloudSnapshotPayload {
     uint8_t  highest_severity; /**< 本轮最高等级；0=无有效 CONDITION */

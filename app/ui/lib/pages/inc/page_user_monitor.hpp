@@ -23,7 +23,8 @@ extern "C" {
 lv_obj_t *page_user_monitor_create(lv_obj_t *parent);
 void page_user_monitor_refresh(bool force);
 /**
- * 离页收尾。两件事：
+ * 离页收尾。三件事：
+ *  - Manual 若正在长按点动，先发松手停，不等松手事件；
  *  - 清掉 `DebugMsgProxy` 的 axis / device / soc_led **单槽**回调（Manual 照明与轴
  *    读数在用，调试页也在用同一组）。不清的话从本页切去调试页，那边会静默失联；
  *  - 待机态停掉摄像头预览。**打印态不停**——打印中用户可能切去别的页看消息，

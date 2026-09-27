@@ -138,9 +138,9 @@ int serial_parse_sensor_report(const uint8_t* data, size_t len,
     return serial_parse_sensor_report_detail(data, len, out, nullptr);
 }
 
-int serial_parse_sensor_ext_detail(const uint8_t* data, size_t len,
-                                   serial_sensor_ext_t* out,
-                                   serial_sensor_err_t* err_out)
+int serial_parse_sensor_fanboard_detail(const uint8_t* data, size_t len,
+                                        serial_sensor_fanboard_t* out,
+                                        serial_sensor_err_t* err_out)
 {
     auto fail = [err_out](serial_sensor_err_t e) -> int {
         if(err_out) {
@@ -152,8 +152,8 @@ int serial_parse_sensor_ext_detail(const uint8_t* data, size_t len,
     if(!data || !out) {
         return fail(SERIAL_SENSOR_ERR_PARAM);
     }
-    /* 8 + (2+26) = 36 */
-    if(len < 36) {
+    /* 最短：Type+Len+value[0..8] → payload≥11，整帧 ≥ 19 */
+    if(len < 19) {
         return fail(SERIAL_SENSOR_ERR_TOO_SHORT);
     }
     if(data[0] != SERIAL_SOF0 || data[1] != SERIAL_SOF1 ||
@@ -167,7 +167,8 @@ int serial_parse_sensor_ext_detail(const uint8_t* data, size_t len,
     const uint8_t payload_len = data[6];
     const uint8_t tlv_type = data[7];
     const uint8_t tlv_len = data[8];
-    if(tlv_type != 0x06 || tlv_len < 26 || payload_len < static_cast<uint8_t>(tlv_len + 2)) {
+    if(tlv_type != 0x08 || tlv_len < 9 ||
+       payload_len < static_cast<uint8_t>(tlv_len + 2)) {
         return fail(SERIAL_SENSOR_ERR_TLV);
     }
     if(len < (size_t)(8 + payload_len)) {
@@ -178,24 +179,48 @@ int serial_parse_sensor_ext_detail(const uint8_t* data, size_t len,
     }
 
     const uint8_t* v = &data[9];
-    out->sieve_current_ma    = serial_read_le16u(v + 0);
-    out->door_coil_ma        = serial_read_le16u(v + 2);
-    out->inner_door_step_ma  = serial_read_le16u(v + 4);
-    out->ptc_heat_ma         = serial_read_le16u(v + 6);
-    out->drop_powder_ma      = serial_read_le16u(v + 8);
-    out->soc_supply_ma       = serial_read_le16u(v + 10);
-    out->cool_fan_ma         = serial_read_le16u(v + 12);
-    out->soc_24v_mv          = serial_read_le16u(v + 14);
-    out->elec_valid_bits     = v[16];
-    out->fan_rpm             = serial_read_le16u(v + 17);
-    out->fan_bus_v_x10       = serial_read_le16u(v + 19);
-    out->fan_bus_i_ma        = serial_read_le16u(v + 21);
-    out->fan_fault           = v[23];
-    out->fan_state           = v[24];
-    out->fan_status_bits     = v[25];
+    *out = {};
+    out->fan_status_bits = v[0];
+    out->fan_fault       = v[1];
+    out->fan_state       = v[2];
+    out->fan_rpm         = serial_read_le16u(v + 3);
+    out->fan_bus_v_x10   = serial_read_le16u(v + 5);
+    out->fan_bus_i_ma    = serial_read_le16u(v + 7);
+    if(tlv_len >= 13) {
+        out->ldo_temp_x10_c = serial_read_le16(v + 9);
+        out->mcu_temp_x10_c = serial_read_le16(v + 11);
+    }
 
     if(err_out) {
         *err_out = SERIAL_SENSOR_ERR_NONE;
+    }
+    return 0;
+}
+
+int serial_parse_sensor_adc_frame(const uint8_t* data, size_t len)
+{
+    if(!data || len < 12) {
+        return -1;
+    }
+    if(data[0] != SERIAL_SOF0 || data[1] != SERIAL_SOF1 ||
+       data[2] != SERIAL_FT_MCU_TO_SOC) {
+        return -1;
+    }
+    if(data[3] != 0xA5 || data[4] != 0x9B) {
+        return -1;
+    }
+    const uint8_t payload_len = data[6];
+    const uint8_t tlv_type = data[7];
+    const uint8_t tlv_len = data[8];
+    if(tlv_type != 0x07 || tlv_len < 2 ||
+       payload_len < static_cast<uint8_t>(tlv_len + 2)) {
+        return -1;
+    }
+    if(len < (size_t)(8 + payload_len)) {
+        return -1;
+    }
+    if(serial_frame_checksum_check(data, len, nullptr, nullptr) != 0) {
+        return -1;
     }
     return 0;
 }

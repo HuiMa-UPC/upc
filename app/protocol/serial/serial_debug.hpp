@@ -26,7 +26,7 @@ extern "C" {
 #define SDBG_PORT_SENSORS   0xA5  /* PORT_SENSORS_TASK：门/照明/风扇/三通/激光使能/基板加热 */
 #define SDBG_PORT_POWDER    0xA9  /* PORT_POWDER_TASK：粉桶 */
 #define SDBG_PORT_GAS       0xA1  /* PORT_GAS_TASK：洗气 */
-#define SDBG_PORT_PRINTING  0xA4  /* PORT_PRINTING_TASK：清粉测试/打印层参数 */
+#define SDBG_PORT_PRINTING  0xA4  /* PORT_PRINTING_TASK：打印层参数等 */
 #define SDBG_PORT_LASER     0xAA  /* PORT_LASER_TASK：激光器手动功率 */
 #define SDBG_PORT_ALARM     0xA3  /* PORT_ALARM_TASK：报警复位 */
 
@@ -47,6 +47,7 @@ int serial_debug_build_axis_jog_stop(uint8_t axis, uint8_t* out, size_t out_size
 /**
  * 轴点击增量移动（相对位置）。axis: 0=Z 1=S 2=D。
  * delta 为有符号 int16（mm，D 为 °），符号即方向。
+ * Z 轴 MCU 只受理 Tlv-Len=4 的相对位移，Z 改用 serial_debug_build_z_inc_um。
  */
 int serial_debug_build_axis_inc(uint8_t axis, int16_t delta,
                                 uint8_t* out, size_t out_size);
@@ -54,7 +55,7 @@ int serial_debug_build_axis_inc(uint8_t axis, int16_t delta,
 /**
  * Z 轴相对步进。TLV 0x02，Value = INT32 LE，单位 μm（协议规定 Tlv-Len=4）。
  * 例：+500 = 上升 0.5mm，-7263 = 下降 7.263mm。
- * 仅校准/测高使用；调试页 Z jog 仍走 INT16 mm 的 axis_inc。
+ * 校准/测高与所有 Z 点击移动（调试页 Move/Test、监控页 Manual）共用。
  */
 int serial_debug_build_z_inc_um(int32_t delta_um, uint8_t* out, size_t out_size);
 
@@ -116,7 +117,7 @@ int serial_debug_build_switch(uint8_t target, bool on,
 /** 清粉请求开启。Port=GENERAL(0xA2)，Cmd=0x42，TLV=0x01。 */
 int serial_debug_build_clean_test_start(uint8_t* out, size_t out_size);
 
-/** 清粉测试关闭/中止。Port=PRINTING，Cmd=0x81，TLV=0x21。 */
+/** 清粉中止。Port=GENERAL(0xA2)，Cmd=0x42，TLV=0x02（TLV_DUST_CLEAN_STOP）。 */
 int serial_debug_build_clean_test_close(uint8_t* out, size_t out_size);
 
 /**
