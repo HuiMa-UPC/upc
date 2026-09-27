@@ -24,6 +24,8 @@ using DebugGalvoCb   = std::function<void(const middleware::DebugGalvoStatePaylo
 using DebugLaserCb   = std::function<void(const middleware::DebugLaserStatePayload&)>;
 using DebugPrintH264RecordCb = std::function<void(bool)>;
 using DebugCleanRecordCb = std::function<void(bool)>;
+/** result 为 middleware::DebugCleanTestResult 原值（未知值原样透传） */
+using DebugCleanTestResultCb = std::function<void(uint8_t result)>;
 using DebugEnvSimCb = std::function<void(bool)>;
 using DebugEnvSimPowderCb = std::function<void(bool)>;
 using DebugSkipO2GateCb = std::function<void(bool)>;
@@ -85,6 +87,7 @@ public:
     void send_powder_bucket(uint8_t bucket_id, bool on);
     void send_sieve(middleware::DebugMotorAction action);   /**< 筛粉电机：停止/运行/反转倒渣 */
     void send_inner_door(middleware::DebugMotorAction action);   /**< 内门：停止/开/关 */
+    void send_return_motor(middleware::DebugMotorAction action); /**< 回粉电机：停止并恢复自动/送往 B 瓶/送往 A 瓶 */
     void send_fan(bool on);               /**< 风扇开/关 */
     void send_fan_duty(float duty);       /**< 仅设占空比 */
     void send_switch(middleware::DebugSwitchTarget target, bool on);
@@ -155,6 +158,8 @@ public:
     void register_laser(DebugLaserCb cb);
     void register_print_h264_record(DebugPrintH264RecordCb cb);
     void register_clean_record(DebugCleanRecordCb cb);
+    /** MCU 清粉结束（GLAVO_Debug_Clean_Test_Ntf），无查询语义（不配 request_） */
+    void register_clean_test_result(DebugCleanTestResultCb cb);
     void register_env_sim(DebugEnvSimCb cb);
     void register_env_sim_powder(DebugEnvSimPowderCb cb);
     void register_skip_o2_gate(DebugSkipO2GateCb cb);
@@ -234,6 +239,7 @@ private:
     DebugLaserCb  laser_cb_;
     DebugPrintH264RecordCb print_h264_record_cb_;
     DebugCleanRecordCb clean_record_cb_;
+    DebugCleanTestResultCb clean_test_result_cb_;
     DebugEnvSimCb env_sim_cb_;
     DebugEnvSimPowderCb env_sim_powder_cb_;
     DebugSkipO2GateCb skip_o2_gate_cb_;

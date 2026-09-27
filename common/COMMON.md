@@ -279,9 +279,10 @@ scripts/rongsu.sh start   # glavo + rongsu_camera → ui
 | `UI_Debug_Cabin_Pm_Valve_Set_Ntf` | — | UI→Glavo | `DebugOnOffPayload` | `send_cabin_pm_valve_set` | 调试页：舱内 PM2.5 电磁阀 `fa_valve`；**不看 MCU 版本** |
 | `UI_Debug_Cabin_Pm_Valve_Get_Ntf` | — | UI→Glavo | Empty | `request_cabin_pm_valve_state` | 查询舱内 PM 阀开关状态 |
 | `UI_Debug_Device_Ntf` | — | UI→Glavo | `DebugDevicePayload` | `send_device` | 设备/门/电机/照明 |
-| `UI_Debug_Powder_Bucket_Ntf` | — | UI→Glavo | `DebugBucketPayload` | `send_powder_bucket` | 粉桶 |
+| `UI_Debug_Powder_Bucket_Ntf` | — | UI→Glavo | `DebugBucketPayload` | `send_powder_bucket` | 粉桶（调试页已撤掉按钮，消息保留） |
 | `UI_Debug_Pusher_Ntf` | — | UI→Glavo | `DebugMotorPayload` | `send_sieve` | 筛粉电机（0=停止/1=筛粉运行/2=反转倒渣） |
 | `UI_Debug_Recycle_Motor_Ntf` | — | UI→Glavo | `DebugMotorPayload` | `send_inner_door` | 内门（0=停止/1=开/2=关；原回粉电机块改为内门） |
+| `UI_Debug_Return_Motor_Ntf` | — | UI→Glavo | `DebugMotorPayload` | `send_return_motor` | 回粉电机手动送瓶（0=停止并恢复自动 TLV 0x18/1=送往 B 瓶 0x17/2=送往 A 瓶 0x16；A5/9A 无 Value，绕过满瓶自动选瓶）；不入可靠补发，晚到的送瓶比丢弃更危险 |
 | `UI_Debug_Fan_Ntf` | — | UI→Glavo | `DebugFanPayload` | `send_fan` | 风扇开/关（占空比走 Fan_Duty_Ntf） |
 | `UI_Debug_Switch_Ntf` | — | UI→Glavo | `DebugSwitchPayload` | `send_switch` | 激光/洗气/底板加热 |
 | `UI_Debug_CleanTest_Start_Ntf` | — | UI→Glavo | Empty | `send_clean_test_start` | 清粉测试开启（关闭暂不使用） |
@@ -310,6 +311,7 @@ scripts/rongsu.sh start   # glavo + rongsu_camera → ui
 | `UI_Debug_Spi_Pm25_Lcd_Set_Ntf` | — | UI→Glavo | `DebugOnOffPayload` | `send_spi_pm25_lcd_test_set` | 调试页：SPI 小屏周期整屏刷测试色（红/绿/蓝/白/黑，约 500ms，走 fbdev `pwrite`）；仅本次运行，默认关 |
 | `UI_Debug_Spi_Pm25_Lcd_Get_Ntf` | — | UI→Glavo | Empty | `request_spi_pm25_lcd_test_state` | 查询 SPI 小屏测试刷屏开关 |
 | `GLAVO_Debug_Spi_Pm25_Lcd_Ntf` | — | Glavo→UI | `DebugOnOffPayload` | `register_spi_pm25_lcd_test` | 回读 SPI 小屏测试刷屏开关 |
+| `GLAVO_Debug_Clean_Test_Ntf` | — | Glavo→UI | `DebugCleanTestPayload` | `register_clean_test_result` | MCU 清粉结束（A2/42 TLV 0x03，`result` 0=正常结束/1=失败/2=中止）；不论调试页还是业务发起都推，调试页据此把 Powder Clean 复位为 Off 并显示结果。业务流程仍以 `APP_Clean_Test_Result_Ntf` 为准 |
 | `GLAVO_Debug_Fan_Ntf` | — | Glavo→UI | `DebugFanStatePayload` | `register_fan_state` | 风机实测转速/母线电压电流/故障码/状态机；MCU FANBOARD 帧（TLV 0x08）驱动；`valid=0`（链路异常）时各值无意义，UI 显示 `--` |
 | `UI_Debug_Alarm_Inject_Ntf` | — | UI→Glavo | `AlarmReportPayload` | `send_alarm_inject` | 调试页 **Alarm Inject**：Glavo 转成 `GLAVO_Alarm_Report_Ntf` **只发 MQTT**（不上 UI，避免与本地 `[SIM]` 双弹；不改 MCU 快照）。关开关对 CONDITION 发 `state_mask=0` 模拟解除 |
 | `UI_Debug_FirstLayer_Visual_Check_Set_Ntf` | — | UI→Glavo | `DebugOnOffPayload` | `send_first_layer_visual_check_set` | 调试页开关：首层视觉检测（仅本次运行，默认关） |
