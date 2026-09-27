@@ -34,7 +34,12 @@ constexpr int kHeightMeasureCount =
     static_cast<int>(kHeightMeasurePoints.size());
 
 constexpr int kHeightGalvoSettleMs = 300;
-constexpr int kHeightSpotTimeoutMs = 5000;
+/**
+ * 单点等 Visual 光斑回包。
+ * Visual 先等新帧最多 8s（visual_service.cpp kLaserSpotNoFrameWaitMs），
+ * 再测 1.5s（kLaserSpotDetectMs）。这里加上 IPC 余量，避免还在等帧时 Glavo 先超时。
+ */
+constexpr int kHeightSpotTimeoutMs = 8000 + 1500 + 700;
 constexpr int kHeightRedSettleMs = 500;
 constexpr int kHeightZHomeTimeoutMs = 30000;
 
