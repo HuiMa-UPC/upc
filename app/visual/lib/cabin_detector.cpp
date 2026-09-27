@@ -135,6 +135,39 @@ double marker_confidence(double match, double structure) {
 const char* cabin_bundled_profile_id() { return bundled_profile::kId; }
 const char* cabin_bundled_profile_sha256() { return bundled_profile::kSha256; }
 
+bool CabinPlateSceneHold::capture(const uint8_t* nv12, size_t bytes,
+                                  uint32_t width, uint32_t height) {
+    clear();
+    if(!valid_nv12(nv12, bytes, width, height)) return false;
+    width_ = width; height_ = height;
+    samples_.reserve(((width + 3u) / 4u) * ((height + 3u) / 4u));
+    for(uint32_t y = 0; y < height; y += 4)
+        for(uint32_t x = 0; x < width; x += 4)
+            samples_.push_back(nv12[static_cast<size_t>(y) * width + x]);
+    return true;
+}
+
+bool CabinPlateSceneHold::stable(const uint8_t* nv12, size_t bytes,
+                                 uint32_t width, uint32_t height) const {
+    if(!active() || width != width_ || height != height_ ||
+       !valid_nv12(nv12, bytes, width, height)) return false;
+    const uint32_t tiles_x = (width + 63u) / 64u;
+    const uint32_t tiles_y = (height + 63u) / 64u;
+    std::vector<uint8_t> changed(tiles_x * tiles_y, 0);
+    size_t index = 0;
+    uint64_t total_delta = 0;
+    for(uint32_t y = 0; y < height; y += 4) {
+        for(uint32_t x = 0; x < width; x += 4) {
+            const int delta = std::abs(static_cast<int>(nv12[static_cast<size_t>(y) * width + x]) -
+                                       static_cast<int>(samples_[index++]));
+            total_delta += static_cast<unsigned>(delta);
+            if(delta >= 20 && ++changed[(y / 64u) * tiles_x + x / 64u] >= 6)
+                return false;
+        }
+    }
+    return total_delta <= samples_.size() * 8u;
+}
+
 struct CabinDetector::Impl {
     struct CoarseTemplate { cv::Size size; cv::Mat image; };
     struct Marker { Box roi; cv::Mat image; std::vector<CoarseTemplate> coarse_templates; };

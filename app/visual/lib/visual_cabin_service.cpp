@@ -196,15 +196,34 @@ void VisualService::run_cabin_window(middleware::VisualCabinCheckReqPayload req,
         deadline = evidence_start + req.timeout_ms;
     }
     CabinEvidence evidence(door, req.mode == 1, baseline, evidence_start);
+    CabinPlateSceneHold plate_hold;
+    uint8_t raw_candidate = 0;
+    uint64_t last_inference_ms = 0;
     while(config_ok && !cabin_abort_.load() && monotonic_ms() < deadline) {
         std::vector<uint8_t> nv12; uint32_t w = 0, h = 0, seq = 0;
         if(copy_latest_snapshot(nv12,w,h,seq) && seq != last_seq) {
             last_seq = seq;
-            const CabinDetection d = door ? cabin_detector_.door(nv12.data(),nv12.size(),w,h,req.cabin_led_mask)
-                                          : cabin_detector_.plate(nv12.data(),nv12.size(),w,h,req.cabin_led_mask);
+            CabinDetection d;
+            if(!door && plate_hold.active() &&
+               plate_hold.stable(nv12.data(),nv12.size(),w,h)) {
+                d = {2,score,"codes_absent_scene_stable"};
+                last_inference_ms = 0;
+            } else {
+                if(plate_hold.active()) {
+                    plate_hold.clear();
+                    evidence.break_streak();
+                }
+                const uint64_t inference_start = monotonic_ms();
+                d = door ? cabin_detector_.door(nv12.data(),nv12.size(),w,h,req.cabin_led_mask)
+                         : cabin_detector_.plate(nv12.data(),nv12.size(),w,h,req.cabin_led_mask);
+                last_inference_ms = monotonic_ms() - inference_start;
+                if(!door && d.result == 2)
+                    plate_hold.capture(nv12.data(),nv12.size(),w,h);
+            }
             const uint64_t now = monotonic_ms();
             reason = d.reason;
             score = d.score;
+            raw_candidate = d.result;
             if(now < deadline) rsp.result = evidence.observe(d.result,seq,now);
             rsp.frame_seq = seq;
             if(rsp.result != 0) break;
@@ -217,9 +236,11 @@ void VisualService::run_cabin_window(middleware::VisualCabinCheckReqPayload req,
         std::lock_guard<std::mutex> lock(cabin_result_mtx_);
         cabin_pending_rsp_ = rsp; cabin_result_pending_ = true;
     }
-    UPC_LOG_VISUAL_SERVICE(Info,"cabin inspect %s session=%u request=%u result=%u seq=%u score=%.3f reason=%s",
+    UPC_LOG_VISUAL_SERVICE(Info,"cabin inspect %s session=%u request=%u result=%u raw=%u seq=%u score=%.3f inference_ms=%llu elapsed_ms=%llu reason=%s",
         door ? "inner door occl" : "plate qr",req.session_id,req.request_id,
-        static_cast<unsigned>(rsp.result),rsp.frame_seq,score,reason.c_str());
+        static_cast<unsigned>(rsp.result),static_cast<unsigned>(raw_candidate),rsp.frame_seq,score,
+        static_cast<unsigned long long>(last_inference_ms),
+        static_cast<unsigned long long>(monotonic_ms()-start),reason.c_str());
 }
 
 void VisualService::drain_cabin_result() {

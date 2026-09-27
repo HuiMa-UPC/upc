@@ -13,7 +13,7 @@ project(rongsu_upc
 )
 
 # 产品发布版本（UI About 等展示；与 project VERSION 独立）
-set(UPC_PRODUCT_VERSION "V4.2.2.2" CACHE STRING "Product release version string")
+set(UPC_PRODUCT_VERSION "V4.2.2.2-jbjc-fix1" CACHE STRING "Product release version string")
 
 set(CMAKE_C_STANDARD 99)
 set(CMAKE_C_STANDARD_REQUIRED ON)
@@ -29,4 +29,3 @@ option(UPC_DEBUG "Enable unified debug logging (middleware+services)" ON)
 add_subdirectory(common)
 add_subdirectory(3rdparty/lv_port_linux-release-v9.5)
 add_subdirectory(app)
-

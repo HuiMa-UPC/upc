@@ -153,8 +153,9 @@ int main() {
     for(uint32_t n=112;n<123;++n) CHECK(plate.observe(2,n,5200+(n-112)*100) == 0);
     CHECK(plate.observe(2,123,6300) == 2);
     CabinEvidence code(false,false,0,0,0);
-    CHECK(code.observe(1,1,0) == 0);
-    CHECK(code.observe(1,2,50) == 0);
+    CHECK(code.observe(1,1,0) == 1); // one confidently visible code blocks printing
+    CHECK(code.observe(1,1,25) == 0); // duplicate is not evidence
+    CHECK(code.observe(1,2,50) == 1);
     CHECK(code.observe(1,3,100) == 1);
     CabinEvidence warmup(true,false,0,0,200);
     for(uint32_t n=1;n<=5;++n) CHECK(warmup.observe(1,n,n*30) == 0);
@@ -165,28 +166,32 @@ int main() {
     CHECK(warmup.observe(1,9,320) == 0);
     CHECK(warmup.observe(1,10,360) == 1);
     CabinEvidence sequence_wrap(false,false,0xfffffffdu,0,0);
-    CHECK(sequence_wrap.observe(1,0xfffffffeu,0) == 0);
-    CHECK(sequence_wrap.observe(1,0xffffffffu,50) == 0);
+    CHECK(sequence_wrap.observe(1,0xfffffffeu,0) == 1);
+    CHECK(sequence_wrap.observe(1,0xffffffffu,50) == 1);
     CHECK(sequence_wrap.observe(1,0,100) == 0); // reserved invalid frame sequence
     CHECK(sequence_wrap.observe(1,1,100) == 1);
     CabinEvidence stale(false,false,10,0,0);
-    CHECK(stale.observe(1,11,0) == 0);
-    CHECK(stale.observe(1,12,50) == 0);
+    CHECK(stale.observe(1,11,0) == 1);
+    CHECK(stale.observe(1,12,50) == 1);
     CHECK(stale.observe(1,11,100) == 0);
     CHECK(stale.observe(1,12,100) == 0);
     CHECK(stale.observe(1,13,100) == 1);
-    CabinEvidence gap(false,false,0,0,0);
+    CabinEvidence gap(true,false,0,0,0);
     CHECK(gap.observe(1,1,0) == 0);
     CHECK(gap.observe(1,2,50) == 0);
     CHECK(gap.observe(1,3,600) == 0);
     CHECK(gap.observe(1,4,650) == 0);
-    CHECK(gap.observe(1,5,700) == 1);
-    CabinEvidence backward(false,false,0,100,0);
+    CHECK(gap.observe(1,5,700) == 0);
+    CHECK(gap.observe(1,6,750) == 0);
+    CHECK(gap.observe(1,7,800) == 1);
+    CabinEvidence backward(true,false,0,100,0);
     CHECK(backward.observe(1,1,100) == 0);
     CHECK(backward.observe(1,2,150) == 0);
     CHECK(backward.observe(1,3,120) == 0);
     CHECK(backward.observe(1,4,170) == 0);
-    CHECK(backward.observe(1,5,220) == 1);
+    CHECK(backward.observe(1,5,220) == 0);
+    CHECK(backward.observe(1,6,270) == 0);
+    CHECK(backward.observe(1,7,320) == 1);
     CabinEvidence overflow(false,false,0,UINT64_MAX-100,200);
     CHECK(overflow.observe(1,1,UINT64_MAX-50) == 0);
     CHECK(overflow.observe(1,2,UINT64_MAX-25) == 0);
@@ -200,5 +205,15 @@ int main() {
     CHECK(!cabin_session_start_allowed(100,true,1000,0x90000000,9000000000ULL));
     CHECK(cabin_session_start_allowed(0xfffffff0,true,0,10,1000));
     CHECK(!cabin_session_start_allowed(10,false,0,0,90000));
+    CabinPlateSceneHold scene_hold;
+    CHECK(!scene_hold.capture(nullptr,black.size(),320,240));
+    CHECK(scene_hold.capture(black.data(),black.size(),320,240));
+    CHECK(scene_hold.stable(black.data(),black.size(),320,240));
+    auto changed = black;
+    changed[100*320+100] = 200;
+    CHECK(scene_hold.stable(changed.data(),changed.size(),320,240));
+    for(int y=80;y<120;++y) for(int x=100;x<140;++x) changed[y*320+x] = 200;
+    CHECK(!scene_hold.stable(changed.data(),changed.size(),320,240));
+    CHECK(!scene_hold.stable(black.data(),black.size()-1,320,240));
     std::cout << "cabin detector/evidence tests passed\n";
 }
