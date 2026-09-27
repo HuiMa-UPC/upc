@@ -6,6 +6,7 @@
 #include "ui_feedback.hpp"
 #include "ui_slide_unlock.hpp"
 #include "ui_modal_dialog.hpp"
+#include "ui_keyboard.hpp"
 #include "ui_msg_proxy.hpp"
 #include "debug_msg_proxy.hpp"
 #include "camera_msg_proxy.hpp"
@@ -21,6 +22,8 @@
 
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
+#include <cstring>
 
 /**
  * @file page_user_monitor.cpp
@@ -48,9 +51,11 @@
  * 1. **本页不显示常驻设备条**（`apply_device_bar()` 里按页名排除），所以页根只要跨过
  *    `pad_left` 出血到屏幕左边缘，纵向不用抵消 `pad_top`——那个值此时已经是 0。
  * 2. **摄像头输出几何恒按全屏宽算**，见 `cam_apply_layout()`。
- * 3. **Manual 页用的是 `DebugMsgProxy` 的单槽回调**（axis / device / soc_led），调试页
- *    也在用同一组，所以进页注册、离页清空（`page_user_monitor_exit()`），与
- *    `page_user_debug_exit()` 对称。照明钮控 SOC 六路舱灯，进页 Get mask 对齐。
+ * 3. **Manual 页用的是 `DebugMsgProxy` 的单槽回调**（axis / device / soc_led /
+ *    inner_door_busy / fan_state），调试页也在用同一组，所以进页注册、离页清空
+ *    （`page_user_monitor_exit()`），与 `page_user_debug_exit()` 对称。照明钮控 SOC
+ *    六路舱灯，进页 Get mask 对齐。风扇开关态另有 proxy 常驻缓存（`fan_on()` /
+ *    `fan_state()`），与调试页 Fan 开关共用一份，进页即对齐、不等下一帧。
  */
 
 namespace {
@@ -78,9 +83,21 @@ constexpr uint32_t kLightOnIcon = 0xffffff;
 /* Manual 的 Plate Position 选中档（稿 6307:40977）。 */
 constexpr uint32_t kPlateOn = 0x485dff;
 
-/* Manual 点按步距（mm）。Z 按 μm 下发，可以取小数；S 协议是 int16，只能是整数 mm。 */
+/* Manual Z 点按步距（mm）。Z 按 μm 下发，可以取小数。S / D 的步距取卡里的 Step 输入框：
+ * 协议 INC 是 int16（mm / °），只能是整数，见 read_int_ta()。 */
 constexpr float kManualZStepMm = 0.1f;
-constexpr float kManualSStepMm = 1.0f;
+/** S / D 的 Step 默认值（mm / °）。稿上写的 0.01 取整后是 0，电机不会动。 */
+constexpr int kManualStepDefault = 1;
+/** S / D 的 Step 上限：协议 INC 是 int16。 */
+constexpr long kManualStepMax = 32767;
+/** Print Params 两个输入框的默认值，与调试页一致：层厚 μm、平衡系数 ×1000。 */
+constexpr int kParamLayerUmDefault = 50;
+constexpr int kParamBalanceDefault = 1000;
+/** Fan 卡里那条分隔线（稿 6534:35742）。 */
+constexpr uint32_t kDividerColor = 0xeaeaea;
+/** 惯性点停：Manual 滚动区在这么久（ms）之内还在动，落下的那一下只用来停住滚动。
+ *  惯性阶段每帧都有一步位移，100 覆盖得住；手指停稳后再点不会被误吞。 */
+constexpr uint32_t kFlingTapMs = 100;
 
 /* Manual 长按点动速度（协议 int16，mm/s）。 */
 constexpr float kManualZHoldSpeed = 2.0f;
@@ -127,7 +144,14 @@ enum bottom_mode_t {
     BOTTOM_PRINT = 0,   /**< 整条 PRINT：待机且非 Manual 页 */
     BOTTOM_RUN,         /**< 暂停/恢复 + 终止：打印中 */
     BOTTOM_RETRIEVE,    /**< 吹粉 + RETRIEVE：打印结束 */
-    BOTTOM_MANUAL,      /**< 吹粉 + OPEN：Manual 页 */
+    BOTTOM_MANUAL,      /**< 吹粉 + OPEN：待机停在 Manual 页（打印会话里 Manual 页跟 phase 走） */
+};
+
+/** Manual 回粉电机三态。协议没有回读，按本页最后一次发出的命令记。 */
+enum return_mode_t {
+    RETURN_AUTO = 0,    /**< 停止并恢复自动（上电即此态） */
+    RETURN_TO_A,        /**< 手动送往 A 瓶 */
+    RETURN_TO_B,        /**< 手动送往 B 瓶 */
 };
 
 lv_obj_t *g_root        = nullptr;
@@ -184,6 +208,23 @@ lv_obj_t *g_plate_val   = nullptr;
 lv_obj_t *g_jog_up      = nullptr;
 lv_obj_t *g_jog_down    = nullptr;
 lv_obj_t *g_s_val       = nullptr;
+lv_obj_t *g_s_step_ta   = nullptr;  /**< S 轴 Step 输入框（整数 mm，方向看 −/+ 钮） */
+lv_obj_t *g_s_minus     = nullptr;  /**< S 轴 − / + / 复位三钮，打印中锁住，见 apply_manual_lock() */
+lv_obj_t *g_s_plus      = nullptr;
+lv_obj_t *g_s_home      = nullptr;
+lv_obj_t *g_d_val       = nullptr;
+lv_obj_t *g_d_step_ta   = nullptr;  /**< D 轴 Step 输入框（整数 °，负数反转） */
+lv_obj_t *g_d_send      = nullptr;  /**< D 轴 Send，打印中锁住 */
+lv_obj_t *g_fan_btn     = nullptr;  /**< 风扇电源钮，亮灭跟 DebugMsgProxy::fan_on() */
+lv_obj_t *g_fan_state   = nullptr;  /**< 风机状态机 / 故障名 */
+lv_obj_t *g_fan_rpm     = nullptr;  /**< 风机实测转速 */
+lv_obj_t *g_fan_duty_ta = nullptr;
+lv_obj_t *g_fan_send    = nullptr;  /**< 占空比 Send；吹粉期间与电源钮一起锁住 */
+lv_obj_t *g_param_layer_ta   = nullptr;
+lv_obj_t *g_param_balance_ta = nullptr;
+lv_obj_t *g_ret_state   = nullptr;  /**< 回粉电机状态字 Auto / To A / To B */
+lv_obj_t *g_ret_mid     = nullptr;  /**< 回粉电机中间钮：自动时 ▷、送瓶期间 II */
+lv_obj_t *g_door_card   = nullptr;  /**< Inner Door 卡：打印进行中隐藏，出结果后显示但锁住 */
 lv_obj_t *g_door_btn    = nullptr;  /**< Inner Door 电源钮 */
 bool      g_inner_door_open = false; /**< env bit1 全开；亮=全开，灭=非全开 */
 bool      g_outer_door_open = false; /**< 由 env 快照 / 开门 Rsp 乐观置位同步 */
@@ -197,6 +238,12 @@ bool      g_inner_door_busy = false;
 bool      g_pending_purify = false;
 /** 正在长按点动的轴（DebugAxis 数值），-1 = 没有。 */
 int       g_hold_axis = -1;
+return_mode_t g_return_mode = RETURN_AUTO;
+/** apply_manual_lock() 上次落地的状态（bit0 = 锁住，bit1 = Inner Door 卡隐藏），-1 = 还没落过。 */
+int       g_manual_lock_sig = -1;
+lv_obj_t *g_manual_body = nullptr;   /**< Manual 滚动区，惯性点停按它判定落点 */
+uint32_t  g_manual_scroll_tick = 0;  /**< 滚动区最近一次位移的时刻（拖动与惯性阶段都算） */
+bool      g_fling_tap = false;       /**< 本次触摸落在惯性滚动上，见 on_indev_touch() */
 
 /* 底部按钮组 */
 lv_obj_t *g_bottom      = nullptr;
@@ -238,6 +285,7 @@ void status_update(void);
 void cam_apply_layout(uint32_t src_w, uint32_t src_h);
 void chip_set(const char *text);
 ui_clean_owner_t purify_owner(void);
+bottom_mode_t bottom_mode(void);
 
 /* ========================================================================== *
  *  小工具
@@ -1294,29 +1342,54 @@ void show_purify_door_dlg(void)
     lv_obj_set_width(cancel, LV_PCT(100));
 }
 
-void apply_inner_door_btn(void)
+/** 圆钮里那枚图标：make_round_btn() 建的是「按钮 → 图标盒 → 图」三层。 */
+lv_obj_t *round_btn_img(lv_obj_t *btn)
 {
-    if(!g_door_btn) {
+    lv_obj_t *ic = btn ? lv_obj_get_child(btn, 0) : nullptr;
+    return ic ? lv_obj_get_child(ic, 0) : nullptr;
+}
+
+/** 圆钮里图标的边长：稿 72 钮配 24 图标，即 USER_METRIC_ICON_SZ 的 3/4（三档 36/24/19）。 */
+int32_t round_icon_sz(void) { return USER_METRIC_ICON_SZ * 3 / 4; }
+
+/** 圆钮亮灭两态：亮 = 蓝底白图标，灭 = 淡墨底深图标。Inner Door 与风扇电源共用。 */
+void set_round_btn_lit(lv_obj_t *btn, bool on)
+{
+    if(!btn) {
         return;
     }
-    lv_obj_set_style_bg_color(g_door_btn,
-        g_inner_door_open ? lv_color_hex(kBtnBlue) : user_light_text, 0);
-    lv_obj_set_style_bg_opa(g_door_btn, g_inner_door_open ? LV_OPA_COVER : 10, 0);
-    lv_obj_t *ic = lv_obj_get_child(g_door_btn, 0);
-    lv_obj_t *img = ic ? lv_obj_get_child(ic, 0) : nullptr;
+    lv_obj_set_style_bg_color(btn, on ? lv_color_hex(kBtnBlue) : user_light_text, 0);
+    lv_obj_set_style_bg_opa(btn, on ? LV_OPA_COVER : 10, 0);
+    lv_obj_t *img = round_btn_img(btn);
     if(img) {
-        lv_obj_set_style_image_recolor(
-            img, g_inner_door_open ? lv_color_white() : user_light_text, 0);
+        lv_obj_set_style_image_recolor(img, on ? lv_color_white() : user_light_text, 0);
     }
-    if(g_inner_door_busy) {
-        lv_obj_add_state(g_door_btn, LV_STATE_DISABLED);
-        lv_obj_clear_flag(g_door_btn, LV_OBJ_FLAG_CLICKABLE);
-        lv_obj_set_style_opa(g_door_btn, LV_OPA_50, 0);
+}
+
+/** 半透明不可点 ⇄ 正常。Inner Door 套件进行中、吹粉期间的风扇两钮都走这里，
+ *  打印中锁住的 Manual 按钮与输入框也是（输入框带上 DISABLED 后 ui_keyboard 不再弹）。 */
+void set_btn_enabled(lv_obj_t *btn, bool enabled)
+{
+    if(!btn) {
+        return;
+    }
+    if(enabled) {
+        lv_obj_clear_state(btn, LV_STATE_DISABLED);
+        lv_obj_add_flag(btn, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_set_style_opa(btn, LV_OPA_COVER, 0);
     } else {
-        lv_obj_clear_state(g_door_btn, LV_STATE_DISABLED);
-        lv_obj_add_flag(g_door_btn, LV_OBJ_FLAG_CLICKABLE);
-        lv_obj_set_style_opa(g_door_btn, LV_OPA_COVER, 0);
+        lv_obj_add_state(btn, LV_STATE_DISABLED);
+        lv_obj_clear_flag(btn, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_set_style_opa(btn, LV_OPA_50, 0);
     }
+}
+
+/** 可点 = 套件不忙且不在打印会话。打印锁要合在这里判：忙态解除时 set_inner_door_busy()
+ *  也走这里，只看忙态的话会在打印中把钮重新打开。 */
+void apply_inner_door_btn(void)
+{
+    set_round_btn_lit(g_door_btn, g_inner_door_open);
+    set_btn_enabled(g_door_btn, !g_inner_door_busy && !g_printing);
 }
 
 void set_inner_door_busy(bool busy)
@@ -1436,7 +1509,27 @@ void plate_leave_preset(void)
 }
 
 /**
- * Manual 点动钮（Z 上下、S −/+）：点按走一步（kManualZStepMm / kManualSStepMm），
+ * 读整数输入框：四舍五入到整数再限幅，并把规整后的值写回框里，让人看到实际发出去的数。
+ * S / D 的 INC（int16 mm / °）、风扇占空比、打印参数在协议里都是整数。
+ */
+long read_int_ta(lv_obj_t *ta, long lo, long hi)
+{
+    const char *s = ta ? lv_textarea_get_text(ta) : nullptr;
+    long n = std::lround(s ? std::atof(s) : 0.0);
+    if(n < lo) n = lo;
+    if(n > hi) n = hi;
+    if(ta) {
+        char buf[16];
+        std::snprintf(buf, sizeof(buf), "%ld", n);
+        if(!s || std::strcmp(buf, s) != 0) {
+            lv_textarea_set_text(ta, buf);
+        }
+    }
+    return n;
+}
+
+/**
+ * Manual 点动钮（Z 上下、S −/+）：点按走一步（Z 固定 kManualZStepMm，S 取 Step 输入框），
  * 按住满长按时间转速度点动、松手停。
  * user_data = axis * 4 + (dir + 1)，见 attach_jog_events()。
  *
@@ -1453,11 +1546,19 @@ void on_manual_jog(lv_event_t *e)
     case LV_EVENT_SHORT_CLICKED:
         if(axis == middleware::DebugAxis::Z) {
             plate_leave_preset();
+            /* Z 走 μm AXIS_INC（见 Glavo handle_debug_axis_jog） */
+            proxy.send_axis_jog(axis, middleware::DebugJogMode::Click, dir, kManualZStepMm);
+        } else {
+            /* S 走 int16 mm：步距取 Step 输入框的绝对值，方向只看按的是 − 还是 + */
+            const long step = std::labs(read_int_ta(g_s_step_ta, -kManualStepMax,
+                                                    kManualStepMax));
+            if(step == 0) {
+                ui_toast_show("Step must be at least 1 mm", ui_color_danger, 1800);
+                break;
+            }
+            proxy.send_axis_jog(axis, middleware::DebugJogMode::Click, dir,
+                                static_cast<float>(step));
         }
-        /* Z 走 μm AXIS_INC（见 Glavo handle_debug_axis_jog），S 走 int16 mm。 */
-        proxy.send_axis_jog(axis, middleware::DebugJogMode::Click, dir,
-                            axis == middleware::DebugAxis::Z ? kManualZStepMm
-                                                             : kManualSStepMm);
         break;
     case LV_EVENT_LONG_PRESSED:
         manual_hold_stop();
@@ -1468,6 +1569,10 @@ void on_manual_jog(lv_event_t *e)
                             axis == middleware::DebugAxis::Z ? kManualZHoldSpeed
                                                              : kManualSHoldSpeed);
         g_hold_axis = static_cast<int>(axis);
+        /* 点动已开始：锁住本次触摸。LVGL 9.5 长按之后照样能开始滚动，而滚动开始时只清掉
+         * 按下态、不发 PRESS_LOST——不锁的话手指一挪，页面在滚、电机却一直跑到松手。
+         * 锁住后松手时 LVGL 发 PRESS_LOST（不发 RELEASED），同样走下面的停车。 */
+        lv_indev_wait_release(lv_indev_active());
         break;
     case LV_EVENT_RELEASED:
     case LV_EVENT_PRESS_LOST:
@@ -1478,7 +1583,17 @@ void on_manual_jog(lv_event_t *e)
     }
 }
 
-/** 给点动钮挂上点按 + 长按四个事件。 */
+/**
+ * 给点动钮挂上点按 + 长按四个事件。
+ *
+ * 点动钮在 Manual 的滚动区里，「滑动」与「按」按 LVGL 的判定区分：按下后 400 ms 内移动超过
+ * 10 px 就是滑动——页面滚动，LVGL 不再发 SHORT_CLICKED / LONG_PRESSED，电机不动；没怎么动
+ * 就松手是点按（走一步）；按住满 400 ms 是长按点动，点动一开始就锁住这次触摸（见
+ * on_manual_jog()），之后手指再动也不滚页面。
+ *
+ * **别给点动钮关 scroll chain**：那样从钮上起手的滑动不滚页面，松手时反而照发
+ * SHORT_CLICKED（走一步），滑过 400 ms 还会变成长按点动。
+ */
 void attach_jog_events(lv_obj_t *btn, middleware::DebugAxis axis, int dir)
 {
     void *ud = reinterpret_cast<void *>(static_cast<intptr_t>(
@@ -1512,10 +1627,148 @@ void on_inner_door(lv_event_t * /*e*/)
     request_inner_door_toggle();
 }
 
-/** Manual 卡里那种「标题 + 右侧读数」的表头。
+/** D 轴 Send：按 Step 相对转一次。dir 固定 +1，Glavo 按 dir × round(value) 发 INC，
+ *  负的 Step 自然反转。D 轴没有回零。 */
+void on_d_send(lv_event_t * /*e*/)
+{
+    const long step = read_int_ta(g_d_step_ta, -kManualStepMax, kManualStepMax);
+    if(step == 0) {
+        ui_toast_show("Step must be a non-zero whole number", ui_color_danger, 1800);
+        return;
+    }
+    ui::DebugMsgProxy::instance().send_axis_jog(middleware::DebugAxis::D,
+                                                middleware::DebugJogMode::Click, 1,
+                                                static_cast<float>(step));
+}
+
+/** 风扇卡：电源钮亮灭、状态字、转速。都取 DebugMsgProxy 的常驻缓存（调试页 Fan 开关
+ *  用的是同一份），进页先刷一次，之后每帧上报经 register_fan_state 回调再刷。 */
+void apply_fan_ui(void)
+{
+    auto &proxy = ui::DebugMsgProxy::instance();
+    set_round_btn_lit(g_fan_btn, proxy.fan_on());
+    const middleware::DebugFanStatePayload *p = proxy.fan_state();
+    bool bad = false;
+    const char *txt = p ? ui::DebugMsgProxy::fan_status_text(*p, &bad) : "--";
+    if(g_fan_state) {
+        lv_label_set_text(g_fan_state, txt);
+        lv_obj_set_style_text_color(g_fan_state,
+                                    bad ? user_light_notice_dot : user_light_text, 0);
+    }
+    if(g_fan_rpm) {
+        /* 链路异常（valid=0）时 MCU 把转速填 0，显示成 0 会被当成「风机停了」 */
+        if(p && p->valid) {
+            lv_label_set_text_fmt(g_fan_rpm, "%u RPM", static_cast<unsigned>(p->rpm));
+        } else {
+            lv_label_set_text(g_fan_rpm, "-- RPM");
+        }
+    }
+}
+
+void on_fan_power(lv_event_t * /*e*/)
+{
+    auto &proxy = ui::DebugMsgProxy::instance();
+    proxy.send_fan(!proxy.fan_on());
+    apply_fan_ui();
+}
+
+void on_fan_send(lv_event_t * /*e*/)
+{
+    ui::DebugMsgProxy::instance().send_fan_duty(
+        static_cast<float>(read_int_ta(g_fan_duty_ta, 0, 100)));
+}
+
+/** 吹粉流程自己会开关风扇：进行中把风扇电源钮与占空比 Send 锁住，免得手动关掉打断清粉。 */
+void apply_fan_enabled(void)
+{
+    const bool purifying = (g_purify == PURIFY_RUNNING) || g_purify_busy;
+    set_btn_enabled(g_fan_btn, !purifying);
+    set_btn_enabled(g_fan_send, !purifying);
+}
+
+/**
+ * 打印会话（g_printing，Preparing → 出结果、取件前）里 Manual 可进，但只开放风扇（另受吹粉锁，
+ * 见 apply_fan_enabled()）、打印参数、回粉电机。其余锁住：Plate / S / D 的按钮与输入框半透明
+ * 不可点，标题与 Z/S/D 读数照常；Inner Door 卡打印进行中隐藏，出结果后显示但仍锁住，
+ * RETRIEVE 取件回待机后解锁（锁判定合在 apply_inner_door_btn() 里）。
+ *
+ * Plate 的分段用 ui_segmented_set_locked()，**别用 set_item_enabled**：禁掉选中项会退位并发
+ * VALUE_CHANGED，on_plate_changed() 就发出一条 Z 运动命令（退到 Bottom 即 Z 绝对到 −10 mm）。
+ * 锁住的控件摘掉了 CLICKABLE，按压落到所在卡片上，照样沿 scroll chain 滚页面。
+ */
+void apply_manual_lock(void)
+{
+    const bool locked    = g_printing;
+    const bool hide_door = phase_running();
+    if(locked) {
+        manual_hold_stop();   /* 万一还有长按点动在跑 */
+    }
+    /* apply_phase() 打印中每秒好几次：状态没变就不重设样式，免得这几颗钮反复失效重绘 */
+    const int sig = (locked ? 1 : 0) | (hide_door ? 2 : 0);
+    if(sig == g_manual_lock_sig) {
+        return;
+    }
+    g_manual_lock_sig = sig;
+    if(g_plate_seg) {
+        ui_segmented_set_locked(g_plate_seg, locked);
+        lv_obj_set_style_opa(g_plate_seg, locked ? LV_OPA_50 : LV_OPA_COVER, 0);
+    }
+    lv_obj_t *const ctrls[] = { g_jog_up, g_jog_down, g_s_step_ta, g_s_minus, g_s_plus,
+                                g_s_home, g_d_step_ta, g_d_send };
+    for(lv_obj_t *o : ctrls) {
+        set_btn_enabled(o, !locked);
+    }
+    if(g_door_card) {
+        if(hide_door) {
+            lv_obj_add_flag(g_door_card, LV_OBJ_FLAG_HIDDEN);
+        } else {
+            lv_obj_remove_flag(g_door_card, LV_OBJ_FLAG_HIDDEN);
+        }
+    }
+    apply_inner_door_btn();
+}
+
+/** Print Params：层厚 μm + 平衡系数 ×1000 一次下发，与调试页同一条消息。 */
+void on_param_send(lv_event_t * /*e*/)
+{
+    ui::DebugMsgProxy::instance().send_print_layer_param(
+        static_cast<uint16_t>(read_int_ta(g_param_layer_ta, 0, 65535)),
+        static_cast<uint16_t>(read_int_ta(g_param_balance_ta, 0, 65535)));
+}
+
+/** 回粉电机状态字与中间钮图标：自动时 ▷（点了再恢复一次自动，无副作用），送瓶期间 II。 */
+void apply_return_ui(void)
+{
+    static const char *const kText[3] = { "Auto", "To A", "To B" };
+    if(g_ret_state) {
+        lv_label_set_text(g_ret_state, kText[g_return_mode]);
+    }
+    lv_obj_t *img = round_btn_img(g_ret_mid);
+    if(img) {
+        lv_image_set_src(img, ui_user_pick_icon(
+            g_return_mode == RETURN_AUTO ? ic_play_outline_set : ic_pause_set,
+            round_icon_sz()));
+    }
+}
+
+/** 回粉电机三钮，user_data 是 DebugMotorAction：Reverse = 送往 A 瓶、Stop = 停止并恢复
+ *  自动、Forward = 送往 B 瓶（与调试页 Return Motor 同一套，见 serial_debug_build_return_motor）。 */
+void on_return_btn(lv_event_t *e)
+{
+    const auto act = static_cast<middleware::DebugMotorAction>(
+        reinterpret_cast<intptr_t>(lv_event_get_user_data(e)));
+    ui::DebugMsgProxy::instance().send_return_motor(act);
+    g_return_mode = act == middleware::DebugMotorAction::Reverse ? RETURN_TO_A
+                  : act == middleware::DebugMotorAction::Forward ? RETURN_TO_B
+                                                                 : RETURN_AUTO;
+    apply_return_ui();
+}
+
+/** Manual 卡里那种「标题 + 右侧读数」的表头；out_val 为空时只出标题（Fan / Print Params）。
  *  稿上这一行是**定高 32**（1280 档）、文字竖直居中：卡顶 120 + 内距 17 → 行 137..169，
  *  「Plate Position」的墨迹中心 152.5 正在行心。按内容撑只有字体行高 18（montserrat_16），
- *  卡会矮一截。标题与读数都是 20 号（1024 档折 16），读数 #333145 @ 50%（稿面实测 148,148,162）。 */
+ *  卡会矮一截。标题与读数都是 20 号（1024 档折 16），读数 #333145 @ 50%（稿面实测 148,148,162）。
+ *  新稿里 S / D 的读数是 18、回粉电机状态字是 16，由调用方另设字号。 */
 lv_obj_t *manual_card_head(lv_obj_t *card, const char *title, lv_obj_t **out_val)
 {
     lv_obj_t *row = lv_obj_create(card);
@@ -1533,12 +1786,14 @@ lv_obj_t *manual_card_head(lv_obj_t *card, const char *title, lv_obj_t **out_val
     lv_obj_set_style_text_color(t, user_light_text, 0);
     lv_obj_set_style_text_font(t, user_font_title(), 0);
 
-    lv_obj_t *val = lv_label_create(row);
-    lv_label_set_text(val, "0");
-    lv_obj_set_style_text_color(val, user_light_text, 0);
-    lv_obj_set_style_text_opa(val, LV_OPA_50, 0);
-    lv_obj_set_style_text_font(val, user_font_title(), 0);
-    if(out_val) *out_val = val;
+    if(out_val) {
+        lv_obj_t *val = lv_label_create(row);
+        lv_label_set_text(val, "0");
+        lv_obj_set_style_text_color(val, user_light_text, 0);
+        lv_obj_set_style_text_opa(val, LV_OPA_50, 0);
+        lv_obj_set_style_text_font(val, user_font_title(), 0);
+        *out_val = val;
+    }
     return row;
 }
 
@@ -1560,47 +1815,158 @@ lv_obj_t *make_jog_btn(lv_obj_t *parent, const lv_image_dsc_t *const *icon,
     return b;
 }
 
-/** Manual 里那种 64 圆钮（S 轴的 −/+/复位、Inner Door 的电源）。
- *  cb 为空时不挂 CLICKED：S 轴 −/+ 由调用方另挂 attach_jog_events()。 */
+/** Manual 里那种 72 圆钮（S 轴的 −/+/复位、风扇与 Inner Door 的电源、回粉电机三颗）。
+ *  新稿从 64 改成 72，与摄像头浮钮同尺寸，直接用 USER_LIGHT_BTN_SZ（三档 108/72/58）。
+ *  cb 为空时不挂 CLICKED：S 轴 −/+ 由调用方另挂 attach_jog_events()。ud 原样传给 cb。 */
 lv_obj_t *make_round_btn(lv_obj_t *parent, const lv_image_dsc_t *const *icon,
-                         lv_event_cb_t cb)
+                         lv_event_cb_t cb, void *ud = nullptr)
 {
     lv_obj_t *b = lv_button_create(parent);
     lv_obj_remove_style_all(b);
-    lv_obj_set_size(b, USER_PRINT_CTL_BTN, USER_PRINT_CTL_BTN);
+    lv_obj_set_size(b, USER_LIGHT_BTN_SZ, USER_LIGHT_BTN_SZ);
     lv_obj_set_style_radius(b, LV_RADIUS_CIRCLE, 0);
     lv_obj_set_style_bg_color(b, user_light_text, 0);
     lv_obj_set_style_bg_opa(b, 10, 0);
     lv_obj_set_style_bg_opa(b, 30, LV_STATE_PRESSED);
     lv_obj_clear_flag(b, LV_OBJ_FLAG_SCROLLABLE);
     if(cb) {
-        lv_obj_add_event_cb(b, cb, LV_EVENT_CLICKED, nullptr);
+        lv_obj_add_event_cb(b, cb, LV_EVENT_CLICKED, ud);
     }
-    lv_obj_center(make_icon(b, icon, USER_METRIC_ICON_SZ * 3 / 4, user_light_text));
+    lv_obj_center(make_icon(b, icon, round_icon_sz(), user_light_text));
     return b;
 }
 
-lv_obj_t *build_view_manual(lv_obj_t *parent)
+/** 卡里的一行：透明、横排、竖直居中，宽铺满、高按内容。 */
+lv_obj_t *make_row(lv_obj_t *parent, lv_flex_align_t main_align)
 {
-    lv_obj_t *v = lv_obj_create(parent);
-    lv_obj_remove_style_all(v);
-    lv_obj_set_width(v, LV_PCT(100));
-    lv_obj_set_flex_grow(v, 1);
-    lv_obj_set_flex_flow(v, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_flex_align(v, LV_FLEX_ALIGN_START,
-                          LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
-    lv_obj_set_style_pad_row(v, USER_PAD_SM, 0);
-    lv_obj_set_style_bg_opa(v, LV_OPA_TRANSP, 0);
-    lv_obj_clear_flag(v, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_t *row = lv_obj_create(parent);
+    lv_obj_remove_style_all(row);
+    lv_obj_set_width(row, LV_PCT(100));
+    lv_obj_set_height(row, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(row, main_align, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, 0);
+    lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
+    return row;
+}
 
-    /* ---- Plate Position（稿 6307:40977 的 (892,120) 356×258）----
-     * 卡内纵向：内距 16 + 表头 32 + 24 + 分段 88 + 24 + 上下钮 56 + 内距 16（稿 17，差 1）。
-     * 两道 24 稿上一样（表头 169 → 分段 193、分段 281 → 上下钮 305），用同一个 pad_row；
-     * 早先给的 USER_PAD_SM / 2（8）让卡矮了 48，底部按钮上方空出一大块。 */
-    lv_obj_t *c1 = make_card(v, LV_SIZE_CONTENT);
-    lv_obj_set_style_pad_all(c1, USER_PAD_SM, 0);
-    lv_obj_set_flex_flow(c1, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_style_pad_row(c1, USER_MON_ROW_H * 3 / 8, 0);
+/** 卡里一组纵向排的行。组内间距比卡的块间距（24）小，稿上是 16 或 8。 */
+lv_obj_t *make_col(lv_obj_t *parent, int32_t gap)
+{
+    lv_obj_t *col = lv_obj_create(parent);
+    lv_obj_remove_style_all(col);
+    lv_obj_set_width(col, LV_PCT(100));
+    lv_obj_set_height(col, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(col, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_row(col, gap, 0);
+    lv_obj_set_style_bg_opa(col, LV_OPA_TRANSP, 0);
+    lv_obj_clear_flag(col, LV_OBJ_FLAG_SCROLLABLE);
+    return col;
+}
+
+/** 卡里那种 16 号、墨色 50% 的小字（Step / 单位 / Fan switch / 回粉电机钮下的说明）。
+ *  稿上 Step 与单位是 #8C8C87，统一成墨色 50%，与各表头读数同一个灰。 */
+lv_obj_t *make_caption(lv_obj_t *parent, const char *text)
+{
+    lv_obj_t *l = lv_label_create(parent);
+    lv_label_set_text(l, text);
+    lv_obj_set_style_text_font(l, user_font_text_sm(), 0);
+    lv_obj_set_style_text_color(l, user_light_text, 0);
+    lv_obj_set_style_text_opa(l, LV_OPA_50, 0);
+    return l;
+}
+
+/** Manual 的白卡：内距 USER_PAD_SM、纵向排，块与块之间 24（稿上各卡表头 → 内容都是 24）。 */
+lv_obj_t *make_manual_card(lv_obj_t *parent)
+{
+    lv_obj_t *c = make_card(parent, LV_SIZE_CONTENT);
+    lv_obj_set_style_pad_all(c, USER_PAD_SM, 0);
+    lv_obj_set_flex_flow(c, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_row(c, USER_MON_ROW_H * 3 / 8, 0);
+    return c;
+}
+
+/** Manual 里那种浅底数字输入框（稿：底 #333145 @5%、高 48、圆角 8、20 号字居中），点开弹
+ *  数字键盘。高度与字号须在 ui_keyboard_attach() 之前定好：那里按两者算上下内距把字竖直居中。 */
+lv_obj_t *make_value_ta(lv_obj_t *parent, int value)
+{
+    lv_obj_t *ta = lv_textarea_create(parent);
+    lv_textarea_set_one_line(ta, true);
+    char buf[16];
+    std::snprintf(buf, sizeof(buf), "%d", value);
+    lv_textarea_set_text(ta, buf);
+    lv_obj_set_height(ta, USER_MON_ROW_H * 3 / 4);
+    lv_obj_set_style_radius(ta, USER_MON_RADIUS / 2, 0);
+    lv_obj_set_style_bg_color(ta, user_light_text, 0);
+    lv_obj_set_style_bg_opa(ta, 13, 0);
+    lv_obj_set_style_border_width(ta, 0, 0);
+    lv_obj_set_style_pad_hor(ta, USER_PAD_SM / 2, 0);
+    lv_obj_set_style_text_font(ta, user_font_title(), 0);
+    lv_obj_set_style_text_color(ta, user_light_text, 0);
+    /* 单行模式下 label 最小宽 100%，text_align 居中才对整框生效 */
+    lv_obj_set_style_text_align(ta, LV_TEXT_ALIGN_CENTER, 0);
+    /* LVGL 在按下瞬间就聚焦（不等松手），从框上起手的滑动会留下一个闪烁光标，看着像被选中。
+     * 去掉点击聚焦；键盘仍在 CLICKED 时弹，数字键盘有自己的大号读数，框里没光标不影响输入。 */
+    lv_obj_remove_flag(ta, LV_OBJ_FLAG_CLICK_FOCUSABLE);
+    ui_keyboard_attach(ta, LV_KEYBOARD_MODE_NUMBER);
+    return ta;
+}
+
+/** 稿上那种蓝底 Send 钮（高 48、圆角 8、16 号白字）。宽由调用方定。 */
+lv_obj_t *make_send_btn(lv_obj_t *parent, lv_event_cb_t cb)
+{
+    lv_obj_t *b = lv_button_create(parent);
+    lv_obj_remove_style_all(b);
+    lv_obj_set_height(b, USER_MON_ROW_H * 3 / 4);
+    lv_obj_set_style_radius(b, USER_MON_RADIUS / 2, 0);
+    lv_obj_set_style_bg_color(b, user_light_accent, 0);
+    lv_obj_set_style_bg_opa(b, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_opa(b, LV_OPA_80, LV_STATE_PRESSED);
+    lv_obj_clear_flag(b, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_event_cb(b, cb, LV_EVENT_CLICKED, nullptr);
+    lv_obj_t *l = lv_label_create(b);
+    lv_label_set_text(l, "Send");
+    lv_obj_set_style_text_font(l, user_font_text_sm(), 0);
+    lv_obj_set_style_text_color(l, lv_color_white(), 0);
+    lv_obj_center(l);
+    return b;
+}
+
+/**
+ * S / D 卡里那行「Step [输入] 单位」，返回输入框。单位标签定宽成 "mm" 的字宽：S 卡的 mm
+ * 与 D 卡的 ° 宽度不同，不定宽两张卡的输入框就左右错开了（稿上两框同在 x 102..321）。
+ */
+lv_obj_t *make_step_row(lv_obj_t *card, const char *unit)
+{
+    lv_obj_t *row = make_row(card, LV_FLEX_ALIGN_START);
+    lv_obj_set_style_pad_column(row, USER_PAD_SM, 0);
+    make_caption(row, "Step");
+    lv_obj_t *ta = make_value_ta(row, kManualStepDefault);
+    lv_obj_set_flex_grow(ta, 1);
+    lv_obj_t *u = make_caption(row, unit);
+    lv_point_t sz;
+    lv_text_get_size(&sz, "mm", user_font_text_sm(), 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+    lv_obj_set_width(u, sz.x);
+    return ta;
+}
+
+/** Fan 卡里那条 1px 分隔线（稿 #EAEAEA，满内容宽）。 */
+void make_divider(lv_obj_t *parent)
+{
+    lv_obj_t *d = lv_obj_create(parent);
+    lv_obj_remove_style_all(d);
+    lv_obj_set_size(d, LV_PCT(100), 1);
+    lv_obj_set_style_bg_color(d, lv_color_hex(kDividerColor), 0);
+    lv_obj_set_style_bg_opa(d, LV_OPA_COVER, 0);
+}
+
+/* ---- Plate Position（稿 6534:35742 的 (892,120) 356×258，与旧稿 6307:40977 同）----
+ * 卡内纵向：内距 16 + 表头 32 + 24 + 分段 88 + 24 + 上下钮 56 + 内距 16（稿 17，差 1）。
+ * 两道 24 稿上一样（表头 169 → 分段 193、分段 281 → 上下钮 305），用同一个 pad_row；
+ * 早先给的 USER_PAD_SM / 2（8）让卡矮了 48，底部按钮上方空出一大块。 */
+void build_plate_card(lv_obj_t *parent)
+{
+    lv_obj_t *c1 = make_manual_card(parent);
 
     manual_card_head(c1, "Plate Position", &g_plate_val);
 
@@ -1625,53 +1991,165 @@ lv_obj_t *build_view_manual(lv_obj_t *parent)
     pc.color_on       = lv_color_white();
     pc.color_off      = user_light_text;
     pc.color_disabled = user_light_text;
-    pc.font           = user_font_text_sm();
+    pc.font           = user_font_text();         /* 稿 18 */
     pc.icon_sz        = USER_METRIC_ICON_SZ;
     pc.icon_gap       = USER_PAD_SM / 4;
     pc.selected       = 1;                       /* Level：启动时不知道 Z 在哪，不冒充停在 Top */
     g_plate_seg = ui_segmented_create(c1, &pc);
     lv_obj_add_event_cb(g_plate_seg, on_plate_changed, LV_EVENT_VALUE_CHANGED, nullptr);
 
-    lv_obj_t *jog = lv_obj_create(c1);
-    lv_obj_remove_style_all(jog);
-    lv_obj_set_width(jog, LV_PCT(100));
-    lv_obj_set_height(jog, LV_SIZE_CONTENT);
-    lv_obj_set_flex_flow(jog, LV_FLEX_FLOW_ROW);
+    lv_obj_t *jog = make_row(c1, LV_FLEX_ALIGN_START);
     lv_obj_set_style_pad_column(jog, USER_PAD_SM / 2, 0);
-    lv_obj_set_style_bg_opa(jog, LV_OPA_TRANSP, 0);
-    lv_obj_clear_flag(jog, LV_OBJ_FLAG_SCROLLABLE);
     g_jog_up   = make_jog_btn(jog, ic_chevron_up_set,   middleware::DebugAxis::Z,  1);
     g_jog_down = make_jog_btn(jog, ic_chevron_down_set, middleware::DebugAxis::Z, -1);
+}
 
-    /* ---- 铺粉刮刀 S 轴（稿 (892,394) 356×154）----
-     * 稿上标题写的是「打印平面高度（S轴）」，那是把 Z 卡标题复制过去忘改了；S 轴
-     * 实际是铺粉刮刀，沿用调试页与旧控制页的 `Powder Scraper (S)`，别照稿改回去。 */
-    /* 卡内纵向：内距 16 + 表头 32 + 24 + 圆钮 64 + 内距 16（稿 154，差 2）。 */
-    lv_obj_t *c2 = make_card(v, LV_SIZE_CONTENT);
-    lv_obj_set_style_pad_all(c2, USER_PAD_SM, 0);
-    lv_obj_set_flex_flow(c2, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_style_pad_row(c2, USER_MON_ROW_H * 3 / 8, 0);
+/* ---- 铺粉刮刀 S 轴（稿 6534:35742 的 (892,394) 356×234）----
+ * 新稿标题是「推粉刮刀(S)」，与调试页的 `Powder Scraper (S)` 同义，文案按工程约定用英文。
+ * （旧稿 6307:40977 这里写的是「打印平面高度（S轴）」，是把 Z 卡标题复制过去忘改了。）
+ * 卡内纵向：内距 16 + 表头 32 + 24 + Step 行 48 + 24 + 圆钮 72 + 内距 16（稿 234，内距是 17）。 */
+void build_s_card(lv_obj_t *parent)
+{
+    lv_obj_t *c2 = make_manual_card(parent);
 
     manual_card_head(c2, "Powder Scraper (S)", &g_s_val);
     lv_label_set_text(g_s_val, "0.000 mm");
+    lv_obj_set_style_text_font(g_s_val, user_font_text(), 0);   /* 稿 18 */
 
-    lv_obj_t *srow = lv_obj_create(c2);
-    lv_obj_remove_style_all(srow);
-    lv_obj_set_width(srow, LV_PCT(100));
-    lv_obj_set_height(srow, LV_SIZE_CONTENT);
-    lv_obj_set_flex_flow(srow, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(srow, LV_FLEX_ALIGN_SPACE_BETWEEN,
-                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_bg_opa(srow, LV_OPA_TRANSP, 0);
-    lv_obj_clear_flag(srow, LV_OBJ_FLAG_SCROLLABLE);
-    attach_jog_events(make_round_btn(srow, ic_minus_set, nullptr),
-                      middleware::DebugAxis::S, -1);
-    attach_jog_events(make_round_btn(srow, ic_plus_set, nullptr),
-                      middleware::DebugAxis::S, 1);
-    make_round_btn(srow, ic_reset_set, on_s_home);
+    g_s_step_ta = make_step_row(c2, "mm");
 
-    /* ---- Inner Door（稿 (892,564) 356×98）---- */
-    lv_obj_t *c3 = make_card(v, LV_SIZE_CONTENT);
+    lv_obj_t *srow = make_row(c2, LV_FLEX_ALIGN_SPACE_BETWEEN);
+    g_s_minus = make_round_btn(srow, ic_minus_set, nullptr);
+    attach_jog_events(g_s_minus, middleware::DebugAxis::S, -1);
+    g_s_plus = make_round_btn(srow, ic_plus_set, nullptr);
+    attach_jog_events(g_s_plus, middleware::DebugAxis::S, 1);
+    g_s_home = make_round_btn(srow, ic_reset_set, on_s_home);
+}
+
+/* ---- 粉桶推杆 D 轴（稿 (892,644) 356×210，稿标题「粉桶推杆(D)」，命名沿用调试页）----
+ * 稿上没有方向键：Send 按 Step 相对转一次，负数反转，见 on_d_send()。
+ * 卡内纵向：内距 16 + 表头 32 + 24 + Step 行 48 + 24 + Send 48 + 内距 16。 */
+void build_d_card(lv_obj_t *parent)
+{
+    lv_obj_t *c = make_manual_card(parent);
+
+    manual_card_head(c, "Powder Bucket Rod (D)", &g_d_val);
+    lv_label_set_text(g_d_val, "0.000 \xC2\xB0");
+    lv_obj_set_style_text_font(g_d_val, user_font_text(), 0);   /* 稿 18 */
+
+    g_d_step_ta = make_step_row(c, "\xC2\xB0");
+    g_d_send = make_send_btn(c, on_d_send);
+    lv_obj_set_width(g_d_send, LV_PCT(100));
+}
+
+/* ---- 风扇（稿 (892,878) 356×321，稿标题「风扇」）----
+ * 稿上开关那一行的小字是「风扇开关」、大字「开启中」：小字落成 Fan switch，大字给 MCU
+ * 风机状态机名（同调试页）。状态、转速与电源钮亮灭见 apply_fan_ui()，吹粉期间锁钮见
+ * apply_fan_enabled()。稿上占空比那一组（标题行 → 输入行）内距 16，比卡的 24 小。 */
+void build_fan_card(lv_obj_t *parent)
+{
+    lv_obj_t *c = make_manual_card(parent);
+    manual_card_head(c, "Fan", nullptr);
+
+    lv_obj_t *srow = make_row(c, LV_FLEX_ALIGN_SPACE_BETWEEN);
+    lv_obj_t *scol = make_col(srow, 0);
+    lv_obj_set_width(scol, LV_SIZE_CONTENT);
+    make_caption(scol, "Fan switch");
+    g_fan_state = lv_label_create(scol);
+    lv_label_set_text(g_fan_state, "--");
+    lv_obj_set_style_text_font(g_fan_state, user_font_body(), 0);   /* 稿 24 */
+    lv_obj_set_style_text_color(g_fan_state, user_light_text, 0);
+    g_fan_btn = make_round_btn(srow, ic_power_set, on_fan_power);
+
+    make_divider(c);
+
+    lv_obj_t *duty = make_col(c, USER_PAD_SM);
+    lv_obj_t *dhead = make_row(duty, LV_FLEX_ALIGN_SPACE_BETWEEN);
+    lv_obj_set_height(dhead, USER_MON_ROW_H / 2);                   /* 稿 32，同卡头 */
+    lv_obj_t *dt = lv_label_create(dhead);
+    lv_label_set_text(dt, "Duty");
+    lv_obj_set_style_text_font(dt, user_font_text(), 0);            /* 稿 18 */
+    lv_obj_set_style_text_color(dt, user_light_text, 0);
+    g_fan_rpm = lv_label_create(dhead);
+    lv_label_set_text(g_fan_rpm, "-- RPM");
+    lv_obj_set_style_text_font(g_fan_rpm, user_font_text(), 0);
+    lv_obj_set_style_text_color(g_fan_rpm, user_light_text, 0);
+    lv_obj_set_style_text_opa(g_fan_rpm, LV_OPA_50, 0);
+
+    lv_obj_t *drow = make_row(duty, LV_FLEX_ALIGN_SPACE_BETWEEN);
+    lv_obj_t *din = make_row(drow, LV_FLEX_ALIGN_START);
+    lv_obj_set_width(din, LV_SIZE_CONTENT);
+    lv_obj_set_style_pad_column(din, USER_PAD_SM / 2, 0);           /* 稿 8 */
+    g_fan_duty_ta = make_value_ta(din, 0);
+    lv_obj_set_width(g_fan_duty_ta, USER_MON_ROW_H * 15 / 8);       /* 稿 120 */
+    make_caption(din, "%");
+    g_fan_send = make_send_btn(drow, on_fan_send);
+    lv_obj_set_width(g_fan_send, USER_MON_ROW_H * 15 / 8);          /* 稿 120 */
+}
+
+/* ---- 打印参数（稿 (892,1223) 356×280，稿标题「打印参数」）----
+ * 层厚（μm）+ 平衡系数 ×1000，Send 一次下发两项。后端没有回读，框里是本页最后输入的值。
+ * 稿上标题 → 两行 → 两行之间都是 16，最后一行 → Send 是 24，所以标题和两行套一组。 */
+void build_param_card(lv_obj_t *parent)
+{
+    lv_obj_t *c = make_manual_card(parent);
+    lv_obj_t *rows = make_col(c, USER_PAD_SM);
+    manual_card_head(rows, "Print Params", nullptr);
+
+    auto param_row = [rows](const char *label, int value) -> lv_obj_t * {
+        lv_obj_t *row = make_row(rows, LV_FLEX_ALIGN_SPACE_BETWEEN);
+        lv_obj_t *l = lv_label_create(row);
+        lv_label_set_text(l, label);
+        lv_obj_set_style_text_font(l, user_font_text_sm(), 0);      /* 稿 16 */
+        lv_obj_set_style_text_color(l, user_light_text, 0);
+        lv_obj_t *ta = make_value_ta(row, value);
+        lv_obj_set_width(ta, USER_MON_ROW_H * 2);                   /* 稿 128 */
+        return ta;
+    };
+    g_param_layer_ta   = param_row("Layer (um)", kParamLayerUmDefault);
+    g_param_balance_ta = param_row("Balance", kParamBalanceDefault);
+
+    lv_obj_set_width(make_send_btn(c, on_param_send), LV_PCT(100));
+}
+
+/* ---- 回粉电机（稿 (892,1527) 356×144 那张 Sieve Motor 卡的位置）----
+ * 稿上画的是筛粉电机（< ▷ >，运行中中间变 II），按需求换成调试页的 Return Motor：三钮
+ * 语义见 on_return_btn()。按钮下那行 To A / Auto / To B 是稿外加的——光看 < > 分不出哪边
+ * 是 A 瓶。状态字按本页最后发出的命令记（协议没有回读）。 */
+void build_return_card(lv_obj_t *parent)
+{
+    lv_obj_t *c = make_manual_card(parent);
+    manual_card_head(c, "Return Motor", &g_ret_state);
+    lv_obj_set_style_text_font(g_ret_state, user_font_text_sm(), 0);   /* 稿 16 */
+
+    lv_obj_t *grp = make_col(c, USER_PAD_SM / 2);
+    lv_obj_t *brow = make_row(grp, LV_FLEX_ALIGN_SPACE_BETWEEN);
+    auto act_ud = [](middleware::DebugMotorAction a) {
+        return reinterpret_cast<void *>(static_cast<intptr_t>(a));
+    };
+    make_round_btn(brow, ic_chevron_left_set, on_return_btn,
+                   act_ud(middleware::DebugMotorAction::Reverse));
+    g_ret_mid = make_round_btn(brow, ic_play_outline_set, on_return_btn,
+                               act_ud(middleware::DebugMotorAction::Stop));
+    make_round_btn(brow, ic_chevron_right_set, on_return_btn,
+                   act_ud(middleware::DebugMotorAction::Forward));
+
+    static const char *const kCaps[3] = { "To A", "Auto", "To B" };
+    lv_obj_t *crow = make_row(grp, LV_FLEX_ALIGN_SPACE_BETWEEN);
+    for(const char *cap : kCaps) {
+        lv_obj_t *l = make_caption(crow, cap);
+        lv_obj_set_width(l, USER_LIGHT_BTN_SZ);   /* 与圆钮同宽，小字正对各自的钮 */
+        lv_obj_set_style_text_align(l, LV_TEXT_ALIGN_CENTER, 0);
+    }
+    apply_return_ui();
+}
+
+/* ---- Inner Door（稿 6534:35742 的 (892,1695) 356×106）----
+ * 稿上它和吹粉 / OPEN 同在一块 #F5F5F5 底的吸底区里，所以建在滚动区外面。 */
+void build_inner_door_card(lv_obj_t *parent)
+{
+    lv_obj_t *c3 = make_card(parent, LV_SIZE_CONTENT);
+    g_door_card = c3;
     lv_obj_set_style_pad_all(c3, USER_PAD_SM, 0);
     lv_obj_set_flex_flow(c3, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(c3, LV_FLEX_ALIGN_SPACE_BETWEEN,
@@ -1680,9 +2158,112 @@ lv_obj_t *build_view_manual(lv_obj_t *parent)
     lv_obj_t *dl = lv_label_create(c3);
     lv_label_set_text(dl, "Inner Door");
     lv_obj_set_style_text_color(dl, user_light_text, 0);
-    lv_obj_set_style_text_font(dl, user_font_title(), 0);   /* 与前两张卡的表头同号 */
+    lv_obj_set_style_text_font(dl, user_font_title(), 0);   /* 与其余卡的表头同号 */
 
     g_door_btn = make_round_btn(c3, ic_power_set, on_inner_door);
+}
+
+/** 滚动区每移动一步都记下时刻：手指拖动与松手后的惯性阶段都会发 LV_EVENT_SCROLL。 */
+void on_manual_scroll(lv_event_t * /*e*/)
+{
+    g_manual_scroll_tick = lv_tick_get();
+}
+
+/**
+ * indev 级回调：惯性滚动时点一下只停住滚动、不触发控件。
+ *
+ * LVGL 在惯性阶段被按下时只停掉惯性动画，这一下照常走 PRESSED → CLICKED，按到哪颗钮就
+ * 触发哪颗。LVGL 9.5 先把 PRESSED / CLICKED 等发给 indev、再发给控件，所以在 PRESSED 时
+ * 判定：落点在 Manual 滚动区里、且滚动区 kFlingTapMs 内还在动，就把本次触摸的 PRESSED
+ * （按下态）与之后的 SHORT_CLICKED / CLICKED / LONG_PRESSED(_REPEAT) 都截下。
+ * RELEASED 照常放行；也**不用 lv_indev_wait_release()**——那会把整次触摸挂起、连滚动一起
+ * 挡掉，惯性没停时紧接着再甩一下就滚不动了。
+ */
+void on_indev_touch(lv_event_t *e)
+{
+    if(lv_event_get_code(e) == LV_EVENT_PRESSED) {
+        g_fling_tap = false;
+        if(g_manual_body && lv_tick_elaps(g_manual_scroll_tick) <= kFlingTapMs) {
+            for(auto *o = static_cast<lv_obj_t *>(lv_event_get_param(e)); o;
+                o = lv_obj_get_parent(o)) {
+                if(o == g_manual_body) {
+                    g_fling_tap = true;
+                    break;
+                }
+            }
+        }
+    }
+    if(g_fling_tap) {
+        lv_indev_stop_processing(lv_indev_active());
+    }
+}
+
+/** 给每个触摸类 indev 挂一次 on_indev_touch()。indev 在 platform_init() 里就建好了，
+ *  早于任何页面创建；页面若被重建，靠 static 标志不重复挂。 */
+void hook_fling_tap_guard(void)
+{
+    static bool hooked = false;
+    if(hooked) {
+        return;
+    }
+    hooked = true;
+    static const lv_event_code_t kCodes[] = {
+        LV_EVENT_PRESSED, LV_EVENT_SHORT_CLICKED, LV_EVENT_CLICKED,
+        LV_EVENT_LONG_PRESSED, LV_EVENT_LONG_PRESSED_REPEAT,
+    };
+    for(lv_indev_t *indev = lv_indev_get_next(nullptr); indev;
+        indev = lv_indev_get_next(indev)) {
+        if(lv_indev_get_type(indev) != LV_INDEV_TYPE_POINTER) {
+            continue;
+        }
+        for(lv_event_code_t code : kCodes) {
+            lv_indev_add_event_cb(indev, on_indev_touch, code, nullptr);
+        }
+    }
+}
+
+/**
+ * Manual 页 = 滚动区（六张卡）+ 吸底的 Inner Door 卡。底部吹粉 / OPEN 在 g_bottom 里，
+ * 本来就排在各 view 之后、不随 view 滚动，所以只要 Inner Door 建在滚动区外面，就是稿上
+ * 那块吸底区（稿 6534:35742 里 y1671 起，折回 800 屏正好是 530..800）。
+ * 卡间距统一 16：稿上前三张之间 16、其后 24，按决策归一。
+ */
+lv_obj_t *build_view_manual(lv_obj_t *parent)
+{
+    lv_obj_t *v = lv_obj_create(parent);
+    lv_obj_remove_style_all(v);
+    lv_obj_set_width(v, LV_PCT(100));
+    lv_obj_set_flex_grow(v, 1);
+    lv_obj_set_flex_flow(v, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(v, LV_FLEX_ALIGN_START,
+                          LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
+    lv_obj_set_style_pad_row(v, USER_PAD_SM, 0);
+    lv_obj_set_style_bg_opa(v, LV_OPA_TRANSP, 0);
+    lv_obj_clear_flag(v, LV_OBJ_FLAG_SCROLLABLE);
+
+    /* 滚动区：占掉 Inner Door 以外的全部高度，内容超出即竖向滚动，不显示滚动条。 */
+    lv_obj_t *body = lv_obj_create(v);
+    lv_obj_remove_style_all(body);
+    lv_obj_set_width(body, LV_PCT(100));
+    lv_obj_set_flex_grow(body, 1);
+    lv_obj_set_flex_flow(body, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_row(body, USER_PAD_SM, 0);
+    lv_obj_set_style_bg_opa(body, LV_OPA_TRANSP, 0);
+    lv_obj_add_flag(body, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scroll_dir(body, LV_DIR_VER);
+    lv_obj_set_scrollbar_mode(body, LV_SCROLLBAR_MODE_OFF);
+    lv_obj_add_event_cb(body, on_manual_scroll, LV_EVENT_SCROLL, nullptr);
+    g_manual_body = body;
+
+    build_plate_card(body);
+    build_s_card(body);
+    build_d_card(body);
+    build_fan_card(body);
+    build_param_card(body);
+    build_return_card(body);
+
+    build_inner_door_card(v);
+    g_manual_lock_sig = -1;   /* 新建的控件还没按打印锁落过样式 */
     return v;
 }
 
@@ -1730,10 +2311,12 @@ void on_stop_click(lv_event_t * /*e*/)
 /** 本次吹粉算谁发起的。两档语义不同，**别混**：
  *  - 打印结束后那次走 `PRINT_RESULT`，带清粉录像、接进同一条 timelapse、进打印历史；
  *  - Manual 页那次走 `MANUAL`，纯手动清一遍，不录像不落盘（须外门关）。
- *  判据就是当前在哪个 Tab——Manual 在打印态是禁用的，两者不会重叠。 */
+ *  判据是底部当前是不是 Manual 档（bottom_mode()），**不是看在哪个 Tab**：打印中 Manual
+ *  也能进，结果页停在 Manual 上时底部仍是吹粉 + RETRIEVE，那次吹粉要算打印结果。 */
 ui_clean_owner_t purify_owner(void)
 {
-    return g_tab == TAB_MANUAL ? UI_CLEAN_OWNER_MANUAL : UI_CLEAN_OWNER_PRINT_RESULT;
+    return bottom_mode() == BOTTOM_MANUAL ? UI_CLEAN_OWNER_MANUAL
+                                          : UI_CLEAN_OWNER_PRINT_RESULT;
 }
 
 void on_purify_click(lv_event_t * /*e*/)
@@ -1743,8 +2326,8 @@ void on_purify_click(lv_event_t * /*e*/)
         ui_clean_state_stop();
         return;
     }
-    /* Manual：须外门关。未关弹确认，关到位后（Confirm 或传感器关边沿）再开。 */
-    if(g_tab == TAB_MANUAL) {
+    /* Manual 档（待机停在 Manual）：须外门关。未关弹确认，关到位后（Confirm 或传感器关边沿）再开。 */
+    if(bottom_mode() == BOTTOM_MANUAL) {
         sync_outer_door_from_snap();
         if(g_outer_door_open) {
             g_pending_purify = true;
@@ -1798,9 +2381,11 @@ void show_retrieve_dlg(void)
         "SLIDE TO RETRIEVE", on_retrieve_slide, on_retrieve_cancel, &g_retrieve_slide);
 }
 
+/** OPEN / RETRIEVE 共用那枚钮：按底部档位分流，**别按 Tab**——结果页停在 Manual 上时
+ *  这枚是 RETRIEVE，按 Tab 判会跳过取件弹窗直接发开门请求。 */
 void on_wide_click(lv_event_t * /*e*/)
 {
-    if(g_tab == TAB_MANUAL) {
+    if(bottom_mode() == BOTTOM_MANUAL) {
         control_open_door_request();
     } else {
         show_retrieve_dlg();
@@ -1960,10 +2545,12 @@ lv_obj_t *build_bottom(lv_obj_t *parent)
     return row;
 }
 
-/** 底部四档按哪个 Tab + 哪个 phase 决定，见 bottom_mode_t。 */
+/** 底部四档按哪个 Tab + 哪个 phase 决定，见 bottom_mode_t。
+ *  打印会话里 Manual 也能进，但底部仍跟着打印阶段走（暂停/终止、吹粉 + RETRIEVE），
+ *  只有待机停在 Manual 上才是吹粉 + OPEN。 */
 bottom_mode_t bottom_mode(void)
 {
-    if(g_tab == TAB_MANUAL)  return BOTTOM_MANUAL;
+    if(g_tab == TAB_MANUAL && !g_printing) return BOTTOM_MANUAL;
     if(phase_running())      return BOTTOM_RUN;
     if(phase_finished())     return BOTTOM_RETRIEVE;
     return BOTTOM_PRINT;
@@ -2098,14 +2685,10 @@ void apply_phase(void)
         }
     }
 
-    /* 整个打印会话（含 Preparing / 结果页）禁用 Manual，避免轴/门误操作。
-     * 置灰当前选中项时控件会自己退到第一个可用项并发一次 VALUE_CHANGED。 */
-    if(g_tabs) {
-        ui_segmented_set_item_enabled(g_tabs, TAB_MANUAL, !g_printing);
-    }
-
     apply_bottom();
     apply_light_btn_interactive();
+    apply_fan_enabled();
+    apply_manual_lock();
 
     /* 两条提示走全局消息中心而不是本页自己的一条 bar：离开本页也看得到，且与后端
      * 上报的告警排在同一摞里。**必须是 sync 不能是 emit**——本函数打印期间每秒好
@@ -2153,8 +2736,8 @@ void apply_view(void)
     show(g_view_job,    g_tab == TAB_JOB);
     show(g_view_status, g_tab == TAB_STATUS);
     show(g_view_manual, g_tab == TAB_MANUAL);
-    /* 切 Tab、进打印态强制回 Job、Manual 被禁用退位都走这里：点动钮已经看不见了，
-     * 长按中的轴立刻停，不等松手。 */
+    /* 切 Tab、进打印态 / 出结果强制回 Job 都走这里：点动钮已经看不见了，长按中的轴立刻停，
+     * 不等松手。打印中停在 Manual 上的情形由 apply_manual_lock() 停车并锁钮。 */
     if(g_tab != TAB_MANUAL) {
         manual_hold_stop();
     }
@@ -2248,12 +2831,19 @@ void wire_debug_proxy(bool on)
         proxy.register_device(nullptr);
         proxy.register_soc_led(nullptr);
         proxy.register_inner_door_busy(nullptr);
+        proxy.register_fan_state(nullptr);
         return;
     }
     proxy.register_axis([](const middleware::DebugAxisStatePayload &p) {
         if(g_plate_val) lv_label_set_text_fmt(g_plate_val, "%.1f", static_cast<double>(p.z_pos_mm));
         if(g_s_val)     lv_label_set_text_fmt(g_s_val, "%.3f mm", static_cast<double>(p.s_pos_mm));
+        if(g_d_val)     lv_label_set_text_fmt(g_d_val, "%.3f \xC2\xB0", static_cast<double>(p.d_pos_deg));
     });
+    /* 风扇：DebugMsgProxy 常驻缓存每一帧，这里只管刷界面。进页先用缓存画一次，不等下一帧。 */
+    proxy.register_fan_state([](const middleware::DebugFanStatePayload & /*p*/) {
+        apply_fan_ui();
+    });
+    apply_fan_ui();
     /* 外门态主路径走 env 快照（on_device_state）；Device_Ntf 若将来有回读仍可覆盖。 */
     proxy.register_device([](const middleware::DebugDeviceStatePayload &p) {
         const bool was_outer_open = g_outer_door_open;
@@ -2382,7 +2972,7 @@ lv_obj_t *page_user_monitor_create(lv_obj_t *parent)
     tc.color_on       = user_light_text;
     /* 未选中 / 禁用两档稿上是同色不同不透明度（60% / 20%），而分段控件只吃颜色，
      * 所以把不透明度先折进颜色里——白底上的 #333145 按 alpha 混一遍即可。
-     * 禁用那档就是打印中的 Manual。 */
+     * 禁用那档原先给打印中的 Manual，打印中 Manual 改为可进之后目前没有用到。 */
     tc.color_off      = lv_color_mix(user_light_text, lv_color_hex(0xf5f5f5), 153);
     tc.color_disabled = lv_color_mix(user_light_text, lv_color_hex(0xf5f5f5), 51);
     tc.font           = user_font_title();
@@ -2396,6 +2986,7 @@ lv_obj_t *page_user_monitor_create(lv_obj_t *parent)
     g_bottom      = build_bottom(g_panel);
 
     monitor_backend_init();
+    hook_fling_tap_guard();
     apply_view();
     apply_phase();
     apply_fullscreen();
@@ -2420,6 +3011,7 @@ void page_user_monitor_exit(void)
     g_page_visible = false;
     g_pending_inner_door = false;
     g_pending_purify = false;
+    ui_keyboard_hide();   /* Manual 的 Step / 占空比 / 打印参数输入框可能还开着数字键盘 */
     manual_hold_stop();
     wire_debug_proxy(false);
     close_outer_door_dlg();
@@ -2456,8 +3048,11 @@ void page_user_monitor_enter_printing_mode(const control_file_t *file)
     g_percent      = 0;
     g_snap_pending = false;
     g_prep_title[0] = '\0';
+    /* Manual 的 Step / 占空比 / 打印参数框可能还开着数字键盘（例如远程发起打印），先收掉。 */
+    ui_keyboard_hide();
 
-    /* 打印态强制回 Job 页：Manual 这时要禁用，停在它上面会看到一个点不动的界面。 */
+    /* 开始打印先回 Job 看进度。Manual 打印中仍可进，只开放风扇 / 打印参数 / 回粉电机，
+     * 见 apply_manual_lock()。 */
     g_tab = TAB_JOB;
     if(g_tabs) {
         ui_segmented_set_active(g_tabs, TAB_JOB);

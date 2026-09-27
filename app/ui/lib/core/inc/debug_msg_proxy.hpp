@@ -2,6 +2,7 @@
 #define DEBUG_MSG_PROXY_HPP
 
 #include "msg_port.hpp"
+#include <chrono>
 #include <functional>
 #include <vector>
 #include <cstring>
@@ -15,6 +16,8 @@ namespace ui {
  * send_*：UI → APP_GLAVO（命令）。后端未实现时为无害发送。
  *         少数开关直连其它进程（如本地 RTSP Server → APP_MEDIA），由 target 参数指定。
  * register_*：后端 → UI 状态回读回调（按模块拆分，见 upc_contract.hpp）。
+ * 风扇状态另有常驻缓存（fan_on / fan_state），不随单槽回调注销而丢帧，
+ * 监控页 Manual 与调试页进页即可对齐。
  */
 
 using DebugSensorCb  = std::function<void(const middleware::DebugSensorPayload&)>;
@@ -202,8 +205,28 @@ public:
         return galvo_point_test_active_;
     }
 
+    /**
+     * 风扇当前算开还是关（监控页 Manual 与调试页共用这一份）。
+     * send_fan() 先乐观置位；之后以 MCU FANBOARD 上报为准：state≠0，或 fault=8
+     * （板温过热停机、降温后自动重启）算开。valid=0 的帧不改判定，旧固件不发该帧时
+     * 就停在最后一次 send_fan() 的值上。send_fan() 后约 3 s 内与目标相反的上报不覆盖——
+     * 那一帧可能是命令生效前采的，照收会让按钮闪一下。
+     */
+    [[nodiscard]] bool fan_on() const noexcept { return fan_on_; }
+    /** 最近一帧风机上报；还没收到过、或超过约 5 s 没再更新时返回 nullptr（界面显示 "--"）。 */
+    [[nodiscard]] const middleware::DebugFanStatePayload* fan_state() const noexcept;
+    /**
+     * 风机状态文字：valid=0 给 "--"，有故障码给故障名，否则给状态机名。
+     * @param is_fault 可空；有故障码时置 true，调用方据此标红
+     */
+    static const char* fan_status_text(const middleware::DebugFanStatePayload& p,
+                                       bool* is_fault = nullptr);
+
 private:
     DebugMsgProxy() = default;
+
+    /** 每帧风机上报都走这里：更新缓存与 fan_on_，与是否注册了回调无关。 */
+    void apply_fan_report(const middleware::DebugFanStatePayload& p);
 
     template <typename T>
     static bool read_inline_pod(const middleware::Message& msg, T& out) {
@@ -271,6 +294,13 @@ private:
     DebugHeightCalibProgressCb height_calib_progress_cb_;
     bool test_image_active_ = false;
     bool galvo_point_test_active_ = false;
+    /* 风扇状态缓存，见 fan_on() / fan_state()。IPC 回调与 LVGL 同线程，不加锁。 */
+    middleware::DebugFanStatePayload fan_state_{};
+    std::chrono::steady_clock::time_point fan_state_at_{};
+    std::chrono::steady_clock::time_point fan_cmd_at_{};
+    bool has_fan_state_ = false;
+    bool fan_on_ = false;
+    bool fan_cmd_pending_ = false;   /**< send_fan() 之后、上报尚未跟上的防闪窗口 */
 };
 
 } // namespace ui

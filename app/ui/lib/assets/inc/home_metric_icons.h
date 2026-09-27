@@ -67,34 +67,34 @@ extern const lv_image_dsc_t *const ic_pressure_set[];
 extern const lv_image_dsc_t ic_info;
 extern const lv_image_dsc_t ic_clock;
 extern const lv_image_dsc_t ic_cube;
-extern const lv_image_dsc_t ic_nav_home_52;
-extern const lv_image_dsc_t ic_nav_home_32;
-extern const lv_image_dsc_t ic_nav_home_50;
+extern const lv_image_dsc_t ic_nav_home_58;
+extern const lv_image_dsc_t ic_nav_home_36;
+extern const lv_image_dsc_t ic_nav_home_56;
 extern const lv_image_dsc_t *const ic_nav_home_set[];
 
-extern const lv_image_dsc_t ic_nav_monitor_52;
-extern const lv_image_dsc_t ic_nav_monitor_32;
-extern const lv_image_dsc_t ic_nav_monitor_50;
+extern const lv_image_dsc_t ic_nav_monitor_58;
+extern const lv_image_dsc_t ic_nav_monitor_36;
+extern const lv_image_dsc_t ic_nav_monitor_56;
 extern const lv_image_dsc_t *const ic_nav_monitor_set[];
 
-extern const lv_image_dsc_t ic_nav_history_52;
-extern const lv_image_dsc_t ic_nav_history_32;
-extern const lv_image_dsc_t ic_nav_history_50;
+extern const lv_image_dsc_t ic_nav_history_58;
+extern const lv_image_dsc_t ic_nav_history_36;
+extern const lv_image_dsc_t ic_nav_history_56;
 extern const lv_image_dsc_t *const ic_nav_history_set[];
 
-extern const lv_image_dsc_t ic_nav_settings_52;
-extern const lv_image_dsc_t ic_nav_settings_32;
-extern const lv_image_dsc_t ic_nav_settings_50;
+extern const lv_image_dsc_t ic_nav_settings_58;
+extern const lv_image_dsc_t ic_nav_settings_36;
+extern const lv_image_dsc_t ic_nav_settings_56;
 extern const lv_image_dsc_t *const ic_nav_settings_set[];
 
-extern const lv_image_dsc_t ic_nav_message_52;
-extern const lv_image_dsc_t ic_nav_message_32;
-extern const lv_image_dsc_t ic_nav_message_50;
+extern const lv_image_dsc_t ic_nav_message_58;
+extern const lv_image_dsc_t ic_nav_message_36;
+extern const lv_image_dsc_t ic_nav_message_56;
 extern const lv_image_dsc_t *const ic_nav_message_set[];
 
-extern const lv_image_dsc_t ic_nav_message_dot_52;
-extern const lv_image_dsc_t ic_nav_message_dot_32;
-extern const lv_image_dsc_t ic_nav_message_dot_50;
+extern const lv_image_dsc_t ic_nav_message_dot_58;
+extern const lv_image_dsc_t ic_nav_message_dot_36;
+extern const lv_image_dsc_t ic_nav_message_dot_56;
 extern const lv_image_dsc_t *const ic_nav_message_dot_set[];
 
 extern const lv_image_dsc_t ic_bell_60;
@@ -221,6 +221,26 @@ extern const lv_image_dsc_t ic_check_bold_36;
 extern const lv_image_dsc_t ic_check_bold_24;
 extern const lv_image_dsc_t ic_check_bold_19;
 extern const lv_image_dsc_t *const ic_check_bold_set[];
+
+extern const lv_image_dsc_t ic_chevron_left_36;
+extern const lv_image_dsc_t ic_chevron_left_24;
+extern const lv_image_dsc_t ic_chevron_left_19;
+extern const lv_image_dsc_t *const ic_chevron_left_set[];
+
+extern const lv_image_dsc_t ic_chevron_right_36;
+extern const lv_image_dsc_t ic_chevron_right_24;
+extern const lv_image_dsc_t ic_chevron_right_19;
+extern const lv_image_dsc_t *const ic_chevron_right_set[];
+
+extern const lv_image_dsc_t ic_play_outline_36;
+extern const lv_image_dsc_t ic_play_outline_24;
+extern const lv_image_dsc_t ic_play_outline_19;
+extern const lv_image_dsc_t *const ic_play_outline_set[];
+
+extern const lv_image_dsc_t ic_pause_36;
+extern const lv_image_dsc_t ic_pause_24;
+extern const lv_image_dsc_t ic_pause_19;
+extern const lv_image_dsc_t *const ic_pause_set[];
 
 /* 手维护图标（源矢量已丢失） */
 extern const lv_image_dsc_t ic_warning;

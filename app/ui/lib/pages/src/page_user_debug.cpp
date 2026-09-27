@@ -123,6 +123,8 @@ lv_obj_t *g_dev_state[4]   = { nullptr };   /**< 设备快捷行状态字（已�
 lv_obj_t *g_fan_duty_ta      = nullptr;     /**< 其他控制：风扇占空比输入 */
 lv_obj_t *g_fan_rpm_lbl      = nullptr;     /**< 风扇卡：MCU 实测转速（与 Duty 同行便于对照） */
 lv_obj_t *g_fan_state_lbl    = nullptr;     /**< 风扇卡：风机状态机 / 故障名 */
+lv_obj_t *g_fan_toggle_btn   = nullptr;     /**< 风扇卡：开关按钮，勾选态跟 DebugMsgProxy::fan_on() */
+lv_obj_t *g_fan_toggle_lbl   = nullptr;     /**< 风扇卡：开关的 On/Off 状态字 */
 lv_obj_t *g_print_layer_ta   = nullptr;     /**< 其他控制：打印层厚输入 */
 lv_obj_t *g_print_balance_ta = nullptr;     /**< 其他控制：打印平衡系数×1000 输入 */
 lv_obj_t *g_print_h264_btn   = nullptr;     /**< 其他控制：打印期 H264 开关按钮 */
@@ -1971,18 +1973,11 @@ void build_print_params_card(lv_obj_t *parent)
     make_send_button(card, on_print_param_send, true);
 }
 
-/* 风机故障码 / 状态机文字，取自 doc/主控板串口通信协议 - 传感器上报命令.csv FANBOARD */
-const char *const kFanFaultNames[10] = {
-    "OK", "Hall Invalid", "Hall Disorder", "Stalled",
-    "Overcurrent", "Undervoltage", "Overvoltage", "Overspeed",
-    "Board Overheat", "NTC Fault" };
-const char *const kFanStateNames[6] = {
-    "Stopped", "Starting", "Running", "Retry Wait", "Fault Lock", "Precharge" };
-
 /**
  * 刷风扇实测：转速与 Duty 同行（便于对照下发值），状态/故障单独一行。
  * 链路异常(valid=0)时 MCU 把转速填 0，必须显示 "--"，否则 0 会被当成"风机停了"。
  * 有故障码时两个 label 一起标红——只红一个看着像单独某项出了问题。
+ * 故障码 / 状态机文字与监控页 Manual 共用 DebugMsgProxy::fan_status_text()。
  */
 void apply_fan_state(const middleware::DebugFanStatePayload &p)
 {
@@ -1996,16 +1991,45 @@ void apply_fan_state(const middleware::DebugFanStatePayload &p)
         lv_obj_set_style_text_color(g_fan_state_lbl, user_light_icon_off, 0);
         return;
     }
-    const bool bad = (p.fault != 0);
+    bool bad = false;
+    const char *txt = ui::DebugMsgProxy::fan_status_text(p, &bad);
     char buf[8];    /* rpm 为 uint16_t，最大 65535 共 5 位 */
     std::snprintf(buf, sizeof(buf), "%u", static_cast<unsigned>(p.rpm));
     lv_label_set_text(g_fan_rpm_lbl, buf);
-    lv_label_set_text(g_fan_state_lbl,
-                      bad ? ((p.fault < 10) ? kFanFaultNames[p.fault] : "Unknown")
-                          : ((p.state < 6) ? kFanStateNames[p.state] : "Unknown"));
+    lv_label_set_text(g_fan_state_lbl, txt);
     const lv_color_t c = bad ? user_light_notice_dot : user_light_text;
     lv_obj_set_style_text_color(g_fan_rpm_lbl, c, 0);
     lv_obj_set_style_text_color(g_fan_state_lbl, c, 0);
+}
+
+/**
+ * 风扇开关的勾选态与 On/Off 字跟 DebugMsgProxy::fan_on() 走（与监控页 Manual 同一份）：
+ * 在别处开关过风扇、或吹粉流程自己开了风扇，这里也对得上。直接设 CHECKED 态不会触发
+ * VALUE_CHANGED，所以不会反过来再发一次开关命令。
+ */
+void apply_fan_toggle(bool on)
+{
+    if(g_fan_toggle_btn) {
+        if(on) {
+            lv_obj_add_state(g_fan_toggle_btn, LV_STATE_CHECKED);
+        } else {
+            lv_obj_clear_state(g_fan_toggle_btn, LV_STATE_CHECKED);
+        }
+    }
+    if(g_fan_toggle_lbl) {
+        lv_label_set_text(g_fan_toggle_lbl, on ? "On" : "Off");
+        lv_obj_set_style_text_color(g_fan_toggle_lbl,
+                                    on ? user_light_accent : user_light_icon_off, 0);
+    }
+}
+
+/** 进页先用 DebugMsgProxy 缓存里最近一帧对齐风扇卡，不等下一帧；缓存为空或已过期显示 "--"。 */
+void apply_fan_from_cache(void)
+{
+    auto &proxy = ui::DebugMsgProxy::instance();
+    const middleware::DebugFanStatePayload *p = proxy.fan_state();
+    apply_fan_state(p ? *p : middleware::DebugFanStatePayload{});   /* 全零即 valid=0 */
+    apply_fan_toggle(proxy.fan_on());
 }
 
 /* 风扇卡：Duty+实测 RPM 行 + 风机状态行 + Send(发占空比) 与 开关，上下排列 */
@@ -2071,8 +2095,9 @@ void build_fan_card(lv_obj_t *parent)
     lv_obj_clear_flag(frow, LV_OBJ_FLAG_SCROLLABLE);
     make_send_button(frow, on_fan_send_click, false);
     /* Fan 开关与 Send 同一横排，空间紧张：用原始（较小）尺寸避免显示不全 */
-    make_dbg_toggle(frow, "Fan", "On", "Off", LV_SYMBOL_POWER, false, 2, 0, false,
-                    USER_BTN_DOOR_ICON_SZ);
+    make_dbg_toggle(frow, "Fan", "On", "Off", LV_SYMBOL_POWER,
+                    ui::DebugMsgProxy::instance().fan_on(), 2, 0, false,
+                    USER_BTN_DOOR_ICON_SZ, &g_fan_toggle_btn, &g_fan_toggle_lbl);
 }
 
 /* 网格行：横向 flex、均匀分布。高度按内容自适应（不再 flex_grow 撑满），
@@ -3287,9 +3312,11 @@ void bind_debug_callbacks()
         }
     });
 
-    /* 风机实测：MCU V4 EXT 帧驱动（约 1s），旧固件不发该帧，行保持 "--" */
+    /* 风机实测：MCU FANBOARD 帧（TLV 0x08）驱动（约 1s），旧固件不发该帧，行保持 "--"。
+     * 开关勾选态同时按 DebugMsgProxy::fan_on() 对齐（上报在 proxy 里已先更新判定）。 */
     proxy.register_fan_state([](const middleware::DebugFanStatePayload &p) {
         apply_fan_state(p);
+        apply_fan_toggle(ui::DebugMsgProxy::instance().fan_on());
     });
 
     /* Media 回报的是实际状态：相机未就绪 / 编码器打不开时会回 Off，按钮随之弹回。 */
@@ -3369,6 +3396,8 @@ void reset_globals()
     g_fan_duty_ta = nullptr;
     g_fan_rpm_lbl = nullptr;
     g_fan_state_lbl = nullptr;
+    g_fan_toggle_btn = nullptr;
+    g_fan_toggle_lbl = nullptr;
     g_print_layer_ta = nullptr;
     g_print_balance_ta = nullptr;
     g_print_h264_btn = nullptr;
@@ -3436,6 +3465,7 @@ void page_user_debug_refresh(bool /*force*/)
      * 重新挂载回调，否则「返回后再进入」将因回调为空而不再刷新读数。g_* 指针在缓存的
      * 页面对象上始终有效，可安全重挂。 */
     bind_debug_callbacks();
+    apply_fan_from_cache();
     start_zone4_timer();
     update_galvo_save_enabled();
     ui::DebugMsgProxy::instance().request_print_h264_record_state();
