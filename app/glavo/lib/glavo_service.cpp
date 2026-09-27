@@ -901,6 +901,8 @@ bool GlavoService::start()
         middleware::MsgType::UI_Debug_PlateHeight_Adj_Get_Ntf,
         middleware::MsgType::UI_Debug_Hold_Prep_Z_Set_Ntf,
         middleware::MsgType::UI_Debug_Hold_Prep_Z_Get_Ntf,
+        middleware::MsgType::UI_Debug_Plate_Work_Z_Set_Ntf,
+        middleware::MsgType::UI_Debug_Plate_Work_Z_Get_Ntf,
         middleware::MsgType::UI_Debug_InnerDoor_Occlusion_Set_Ntf,
         middleware::MsgType::UI_Debug_InnerDoor_Occlusion_Get_Ntf,
         middleware::MsgType::UI_Debug_Plate_Present_Set_Ntf,
@@ -1545,6 +1547,12 @@ void GlavoService::handle_message(const middleware::Message& msg)
             break;
         case middleware::MsgType::UI_Debug_Hold_Prep_Z_Get_Ntf:
             handle_debug_hold_prep_z_get(msg);
+            break;
+        case middleware::MsgType::UI_Debug_Plate_Work_Z_Set_Ntf:
+            handle_debug_plate_work_z_set(msg);
+            break;
+        case middleware::MsgType::UI_Debug_Plate_Work_Z_Get_Ntf:
+            handle_debug_plate_work_z_get(msg);
             break;
         case middleware::MsgType::UI_Debug_InnerDoor_Occlusion_Set_Ntf:
             handle_debug_inner_door_occlusion_set(msg);
@@ -3469,7 +3477,12 @@ void GlavoService::configure_plate_height()
         move_galvo, keep_cabin_dark, z_home_retract, z_inc, wait_z, spot,
         [this](bool active) { publish_plate_height_visual_session(active); },
         [this](const PlateHeightMeasureResult& result) {
-            plate_height_done_ok_.store(result.ok);
+            bool ok = result.ok;
+            /* 现有测高已把 Z 收到约 1mm。这一步只在成功之后补 (目标-1) mm，不改测高本身。 */
+            if(ok && !apply_plate_work_z_lift()) {
+                ok = false;
+            }
+            plate_height_done_ok_.store(ok);
             plate_height_flatness_warn_.store(result.flatness_warn);
             plate_height_done_pending_.store(true);
             worker_cv_.notify_one();
@@ -3772,6 +3785,67 @@ void GlavoService::handle_debug_hold_prep_z_get(const middleware::Message& msg)
 {
     (void)msg;
     publish_debug_hold_prep_z_state();
+}
+
+void GlavoService::publish_debug_plate_work_z_state()
+{
+    middleware::DebugPlateWorkZPayload p{};
+    p.target_mm = plate_work_z_mm_;
+    middleware::Message ntf(
+        middleware::MsgType::GLAVO_Debug_Plate_Work_Z_Ntf,
+        middleware::ModuleId::APP_GLAVO,
+        middleware::ModuleId::UI);
+    ntf.payload = middleware::MsgPayload::from_bytes(
+        reinterpret_cast<const uint8_t*>(&p), sizeof(p));
+    if(!publish_async(ntf)) {
+        UPC_LOG_GLAVO_SERVICE(Warn, "GLAVO_Debug_Plate_Work_Z_Ntf publish_async failed");
+    }
+}
+
+void GlavoService::handle_debug_plate_work_z_set(const middleware::Message& msg)
+{
+    middleware::DebugPlateWorkZPayload p{};
+    if(!read_inline_pod(msg.payload, p) || !std::isfinite(p.target_mm)) {
+        UPC_LOG_GLAVO_SERVICE(Warn, "plate work z ignored: bad payload");
+        return;
+    }
+    plate_work_z_mm_ = p.target_mm;
+    UPC_LOG_GLAVO_SERVICE(Info, "plate work z target=%.3f mm (extra %.3f mm)",
+                          static_cast<double>(plate_work_z_mm_),
+                          static_cast<double>(plate_work_z_mm_ - kHeightZHomeMm));
+    publish_debug_plate_work_z_state();
+}
+
+void GlavoService::handle_debug_plate_work_z_get(const middleware::Message& msg)
+{
+    (void)msg;
+    publish_debug_plate_work_z_state();
+}
+
+bool GlavoService::apply_plate_work_z_lift()
+{
+    const float extra = plate_work_z_mm_ - kHeightZHomeMm;
+    if(std::fabs(extra) < 0.01f) {
+        return true;
+    }
+    if(print_prep_abort_.load() || plate_height_.cancel_requested()) {
+        return false;
+    }
+    const float z0 = McuLink::instance().get_z_pos_mm();
+    const float target = z0 + extra;
+    UPC_LOG_GLAVO_SERVICE(Info,
+        "plate work z lift: target=%.3f home=%.3f extra=%.3f from z=%.3f to %.3f",
+        static_cast<double>(plate_work_z_mm_),
+        static_cast<double>(kHeightZHomeMm),
+        static_cast<double>(extra),
+        static_cast<double>(z0),
+        static_cast<double>(target));
+    send_z_inc(extra);
+    if(!wait_z_settled(target, 0.15f, kHeightZHomeTimeoutMs)) {
+        UPC_LOG_GLAVO_SERVICE(Error, "plate work z lift failed");
+        return false;
+    }
+    return true;
 }
 
 void GlavoService::publish_debug_inner_door_occlusion_state()

@@ -337,6 +337,9 @@ scripts/rongsu.sh start   # glavo + rongsu_camera → ui
 | `GLAVO_Debug_FirstLayer_Visual_Check_Ntf` | — | Glavo→UI | `DebugOnOffPayload` | `register_first_layer_visual_check` | 回读当前“首层视觉检测”开关状态 |
 | `GLAVO_Debug_OpticalPath_Check_Ntf` | — | Glavo→UI | `DebugOnOffPayload` | `register_optical_path_check` | 回读当前“打印前光路检测”开关状态 |
 | `GLAVO_Debug_PlateHeight_Adj_Ntf` | — | Glavo→UI | `DebugOnOffPayload` | `register_plate_height_adj` | 回读当前“打印前基板测高”开关状态 |
+| `UI_Debug_Plate_Work_Z_Set_Ntf` | — | UI→Glavo | `DebugPlateWorkZPayload` | `send_plate_work_z_set` | 测高收到约 1mm 后再补 `(target_mm-1)` mm，正值向上。设置页 Calibration 上方输入框。仅本次运行，默认 1（不额外移动） |
+| `UI_Debug_Plate_Work_Z_Get_Ntf` | — | UI→Glavo | Empty | `request_plate_work_z_state` | 查询当前工作高度 |
+| `GLAVO_Debug_Plate_Work_Z_Ntf` | — | Glavo→UI | `DebugPlateWorkZPayload` | `register_plate_work_z` | 回读工作高度 |
 | `GLAVO_Debug_InnerDoor_Occlusion_Ntf` | — | Glavo→UI | `DebugOnOffPayload` | `register_inner_door_occlusion` | 回读挡门融合是否执行（`on=1` 执行）；UI 把 `on=0` 显示成 Skip 按下 |
 | `GLAVO_Debug_Plate_Present_Ntf` | — | Glavo→UI | `DebugOnOffPayload` | `register_plate_present` | 回读读码是否执行（`on=1` 执行）；UI 把 `on=0` 显示成 Skip 按下 |
 | `GLAVO_Plate_Place_Confirm_Req` | — | Glavo→UI | Empty | `register_plate_place_confirm_req` | 读码=无板：先自动开内门再开外门，再弹「放入基板并关好外门」；Cancel=`cancel=1` 阻断起印 |

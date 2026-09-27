@@ -193,6 +193,11 @@ private:
     void handle_debug_plate_height_adj_get(const middleware::Message& msg);
     void handle_debug_hold_prep_z_set(const middleware::Message& msg);
     void handle_debug_hold_prep_z_get(const middleware::Message& msg);
+    void handle_debug_plate_work_z_set(const middleware::Message& msg);
+    void handle_debug_plate_work_z_get(const middleware::Message& msg);
+    void publish_debug_plate_work_z_state();
+    /** 测高已收到约 1mm 之后补 (target-1) mm。成功或无需移动返回 true。 */
+    bool apply_plate_work_z_lift();
     void handle_debug_inner_door_occlusion_set(const middleware::Message& msg);
     void handle_debug_inner_door_occlusion_get(const middleware::Message& msg);
     void handle_debug_plate_present_set(const middleware::Message& msg);
@@ -535,6 +540,8 @@ private:
     /* ---- 打印前光路检测 ---- */
     bool optical_path_check_on_ = true; /**< 光路检测开关（仅本次运行，默认开；调试页 Skip Optical Path Chk 按下后关） */
     bool plate_height_adj_on_ = true; /**< 打印前测高调 Z（仅本次运行，默认开） */
+    /** 测高收尾后的目标高度 mm。相对回零停点 1mm 再向上补差值。默认 1：不额外移动。 */
+    float plate_work_z_mm_ = 1.0f;
     /** 准备阶段保持当前 Z（仅本次运行，默认关）。开则不起印降到 −10、内门前不降 Z、终止/失败收尾也不改 Z；基板测高仍动 Z。 */
     bool hold_prep_z_on_ = false;
     bool inner_door_occlusion_on_ = true; /**< 内门视觉挡门（仅本次运行，默认开；调试页 Skip Inner Door Occl 按下后关） */
