@@ -33,6 +33,8 @@ namespace {
 
 /* 起流重试间隔（ms）：避免 Camera 未就绪时高频打消息。 */
 constexpr uint64_t kStartRetryMs = 1000;
+/** 测高光斑：快照为空时最多再等这么久。有帧后只测一次，不把每个点都拖满窗口。 */
+constexpr uint64_t kLaserSpotNoFrameWaitMs = 1500;
 constexpr std::size_t kTemporalFrameCount = 5;
 constexpr uint32_t kTemporalFrameStride = 3;
 constexpr double kTemporalDirectRejectProbability = 0.45;
@@ -319,7 +321,9 @@ void VisualService::release_stream_if_idle(const char* reason)
         if(any_session_active_locked()) {
             return;
         }
-        had_activity = stream_up_ || start_req_sent_;
+        /* camera_peer_requested_：回执失败时 stream_up_ 和 start_req_sent_
+         * 都已清掉，但 Camera 侧 peer 还在。漏掉它就不会发 Stop。 */
+        had_activity = stream_up_ || start_req_sent_ || camera_peer_requested_;
         start_req_sent_ = false;
     }
 
@@ -437,11 +441,18 @@ void VisualService::send_stream_start_req()
         start_req_sent_ = false;
         UPC_LOG_VISUAL_SERVICE(Warn,
             "first layer camera stream start publish failed");
+        return;
     }
+    std::lock_guard<std::mutex> lock(state_mtx_);
+    camera_peer_requested_ = true;
 }
 
 void VisualService::send_stream_stop_req()
 {
+    {
+        std::lock_guard<std::mutex> lock(state_mtx_);
+        camera_peer_requested_ = false;
+    }
     middleware::Message msg(
         middleware::MsgType::VISUAL_Camera_Stream_Stop_Req,
         middleware::ModuleId::APP_VISUAL,
@@ -653,6 +664,8 @@ void VisualService::stop_plate_height_session(const char* reason)
         session_id = plate_height_session_id_;
         plate_height_session_active_ = false;
     }
+    /* 先停取样线程再拆流，避免拆快照时线程还在 copy。 */
+    stop_laser_spot_thread();
     release_stream_if_idle(reason);
     if(was_active) {
         UPC_LOG_VISUAL_SERVICE(Info,
@@ -678,6 +691,15 @@ void VisualService::send_laser_spot_measure_rsp(bool ok, float x, float y)
     }
 }
 
+void VisualService::stop_laser_spot_thread()
+{
+    laser_spot_abort_.store(true);
+    if(laser_spot_thread_.joinable()) {
+        laser_spot_thread_.join();
+    }
+    laser_spot_abort_.store(false);
+}
+
 void VisualService::on_laser_spot_measure_req(const middleware::Message& msg)
 {
     (void)msg;
@@ -690,30 +712,51 @@ void VisualService::on_laser_spot_measure_req(const middleware::Message& msg)
         start_plate_height_session("check_without_start");
     }
 
-    std::vector<uint8_t> nv12;
-    uint32_t width = 0, height = 0, frame_seq = 0;
-    if(!copy_latest_snapshot(nv12, width, height, frame_seq) ||
-       nv12.size() < static_cast<size_t>(width) * height) {
-        UPC_LOG_VISUAL_SERVICE(Warn, "laser spot: no frame");
-        send_laser_spot_measure_rsp(false, 0.0f, 0.0f);
+    /* 上一点理论上已经结束（Glavo 逐点等待）。abort 时不回包。 */
+    stop_laser_spot_thread();
+    laser_spot_thread_ = std::thread([this]() { run_laser_spot_window(); });
+}
+
+void VisualService::run_laser_spot_window()
+{
+    const uint64_t deadline = monotonic_ms() + kLaserSpotNoFrameWaitMs;
+    while(!laser_spot_abort_.load() && monotonic_ms() < deadline) {
+        std::vector<uint8_t> nv12;
+        uint32_t width = 0;
+        uint32_t height = 0;
+        uint32_t frame_seq = 0;
+        if(!copy_latest_snapshot(nv12, width, height, frame_seq) ||
+           nv12.size() < static_cast<size_t>(width) * height) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(33));
+            continue;
+        }
+
+        cv::Mat gray(static_cast<int>(height), static_cast<int>(width), CV_8UC1,
+                     nv12.data());
+        const LaserSpot spot = detect_laser_spot(
+            gray, "/userdata/visual/plate_height_config.json");
+        if(laser_spot_abort_.load()) {
+            return;
+        }
+        if(!spot.valid) {
+            UPC_LOG_VISUAL_SERVICE(Warn, "laser spot: no valid blob frame=%u",
+                                   static_cast<unsigned>(frame_seq));
+            send_laser_spot_measure_rsp(false, 0.0f, 0.0f);
+            return;
+        }
+        UPC_LOG_VISUAL_SERVICE(Info, "laser spot: x=%.3f y=%.3f frame=%u",
+                               static_cast<double>(spot.center_x),
+                               static_cast<double>(spot.center_y),
+                               static_cast<unsigned>(frame_seq));
+        send_laser_spot_measure_rsp(true, spot.center_x, spot.center_y);
         return;
     }
 
-    cv::Mat gray(static_cast<int>(height), static_cast<int>(width), CV_8UC1,
-                 nv12.data());
-    const LaserSpot spot = detect_laser_spot(
-        gray, "/userdata/visual/plate_height_config.json");
-    if(!spot.valid) {
-        UPC_LOG_VISUAL_SERVICE(Warn, "laser spot: no valid blob frame=%u",
-                               static_cast<unsigned>(frame_seq));
-        send_laser_spot_measure_rsp(false, 0.0f, 0.0f);
+    if(laser_spot_abort_.load()) {
         return;
     }
-    UPC_LOG_VISUAL_SERVICE(Info, "laser spot: x=%.3f y=%.3f frame=%u",
-                           static_cast<double>(spot.center_x),
-                           static_cast<double>(spot.center_y),
-                           static_cast<unsigned>(frame_seq));
-    send_laser_spot_measure_rsp(true, spot.center_x, spot.center_y);
+    UPC_LOG_VISUAL_SERVICE(Warn, "laser spot: no frame");
+    send_laser_spot_measure_rsp(false, 0.0f, 0.0f);
 }
 
 void VisualService::stop_optical_point_thread()
@@ -967,6 +1010,21 @@ bool VisualService::read_inline_start_rsp(const middleware::Message& msg,
     return true;
 }
 
+void VisualService::note_stream_attach_failed(const char* why)
+{
+    UPC_LOG_VISUAL_SERVICE(Error, "visual stream attach failed: %s",
+                           why ? why : "?");
+    std::lock_guard<std::mutex> lock(state_mtx_);
+    stream_up_ = false;
+    start_req_sent_ = false;
+}
+
+bool VisualService::stream_is_serving()
+{
+    std::lock_guard<std::mutex> lock(state_mtx_);
+    return stream_up_ && worker_.joinable();
+}
+
 void VisualService::on_stream_start_rsp(const middleware::Message& msg)
 {
     middleware::CameraStreamInfoPayload info{};
@@ -998,44 +1056,64 @@ void VisualService::on_stream_start_rsp(const middleware::Message& msg)
         return;
     }
 
-    /* 收到新起流响应时，先清理旧会话，保证 fd/ring 一致。 */
+    if(info.ok == 0 || info.dma_mode == 0) {
+        /* Camera 失败时不会留下 peer（ensure 失败会摘掉）。先拆掉本地旧流。 */
+        stop_worker();
+        unmap_dma_views();
+        consumer_.close();
+        close_dma_fds(dma_fds_);
+        {
+            std::lock_guard<std::mutex> lock(state_mtx_);
+            stream_up_ = false;
+            start_req_sent_ = false;
+            camera_peer_requested_ = false;
+        }
+        UPC_LOG_VISUAL_SERVICE(Error,
+            "visual stream start rsp not ok dma_mode=%u", info.dma_mode);
+        return;
+    }
+
+    /*
+     * 先取 fd，再拆旧流。后到的 Start_Rsp 会把前一批 fd 冲掉，若先 stop_worker
+     * 再 take 失败，取帧线程已经没了，Camera 侧 peer 还在提交，预览会被钉死。
+     * 已有流且这次没有 fd：说明 fd 被上一条回执用掉了，保持现有 worker。
+     */
+    std::vector<int> fds;
+    if(!middleware::MsgPort::instance().take_peer_dma_fds(
+           middleware::ModuleId::APP_CAMERA, fds)) {
+        if(stream_is_serving()) {
+            UPC_LOG_VISUAL_SERVICE(Warn,
+                "start rsp without dma fds, keep existing visual stream");
+            return;
+        }
+        note_stream_attach_failed("take dma fds failed");
+        return;
+    }
+    if(fds.size() != info.dma_buf_count) {
+        const size_t got = fds.size();
+        close_dma_fds(fds);
+        if(stream_is_serving()) {
+            UPC_LOG_VISUAL_SERVICE(Error,
+                "visual dma fd count mismatch got=%zu expected=%u, keep existing stream",
+                got, info.dma_buf_count);
+            return;
+        }
+        UPC_LOG_VISUAL_SERVICE(Error,
+            "visual dma fd count mismatch got=%zu expected=%u",
+            got, info.dma_buf_count);
+        note_stream_attach_failed("dma fd count mismatch");
+        return;
+    }
+
+    /* 拿到新 fd 后才替换旧会话，保证 fd/ring 一致。 */
     stop_worker();
     unmap_dma_views();
     consumer_.close();
     close_dma_fds(dma_fds_);
 
-    if(info.ok == 0 || info.dma_mode == 0) {
-        std::lock_guard<std::mutex> lock(state_mtx_);
-        stream_up_ = false;
-        start_req_sent_ = false;
-        return;
-    }
-
-    std::vector<int> fds;
-    if(!middleware::MsgPort::instance().take_peer_dma_fds(
-           middleware::ModuleId::APP_CAMERA, fds)) {
-        UPC_LOG_VISUAL_SERVICE(Error, "take dma fds failed");
-        std::lock_guard<std::mutex> lock(state_mtx_);
-        stream_up_ = false;
-        start_req_sent_ = false;
-        return;
-    }
-    if(fds.size() != info.dma_buf_count) {
-        close_dma_fds(fds);
-        UPC_LOG_VISUAL_SERVICE(Error,
-            "visual dma fd count mismatch got=%zu expected=%u",
-            fds.size(), info.dma_buf_count);
-        std::lock_guard<std::mutex> lock(state_mtx_);
-        stream_up_ = false;
-        start_req_sent_ = false;
-        return;
-    }
     if(consumer_.open(info.shm_name) != upc_ipc::IpcShmError::OK) {
         close_dma_fds(fds);
-        UPC_LOG_VISUAL_SERVICE(Error, "open shm failed %s", info.shm_name);
-        std::lock_guard<std::mutex> lock(state_mtx_);
-        stream_up_ = false;
-        start_req_sent_ = false;
+        note_stream_attach_failed("open shm failed");
         return;
     }
 

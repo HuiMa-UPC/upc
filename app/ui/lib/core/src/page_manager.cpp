@@ -382,11 +382,11 @@ void PageManager::apply_device_bar(const PageEntry& entry) {
     set_sidebar_video_mode(false);
     /* 整屏底色：**已按浅色稿改过的页面**才给浅底。控制页还是深色内容，翻成浅底
      * 白字会当场看不见；那一页改稿时把页名加进来即可。
-     * 隐藏页（选文件 / 调试 / 延时摄影 / 相册全屏）不在名单里，一律走深色——它们本就
-     * 是深底的整屏媒体/表单。 */
+     * 隐藏页里延时摄影 / 相册全屏仍走深色；调试页已翻浅。 */
     set_shell_light(page == "user_home" || page == "user_monitor" ||
                     page == "user_history" || page == "user_message" ||
-                    page == "user_settings" || page == "user_files");
+                    page == "user_settings" || page == "user_files" ||
+                    page == "user_debug");
 }
 
 void PageManager::set_menu_badge(const std::string& page_name, bool on) {

@@ -3,7 +3,7 @@
 
 /**
  * @file plate_height_measure.hpp
- * @brief 打印前两步测高：粗 LUT → AXIS_INC → 精测 30μm/200μm 门。失败不阻断打印。
+ * @brief 打印前两步测高：粗 LUT → AXIS_INC → 精测 30μm/200μm 门。失败阻断起印。
  *        回零先下降 20mm 再 Home；开始关灯；结束不开舱灯。
  */
 

@@ -38,6 +38,8 @@
 | `on_stream_start_rsp()` | 判断这份起流回执是否还有人要 | 把自己请来的 fd 当野包关掉，不 mmap、取帧线程起不来，检测必失败 |
 | `release_stream_if_idle()` | 所有会话都停了才拆流 | 一类会话的 Stop 拆掉另一类正在用的流 |
 
+起流回执若拿不到 dma fd、fd 数量不对或 SHM 打不开：已有取帧线程则保持它（后到的 `Start_Rsp` 会把前一批 fd 冲掉，不能先停线程再发现没 fd）。还没有线程时只清本地标志让 `tick()` 重试，**不**立刻 `Stop`——Camera 侧 peer 已经在提交帧，立刻 Stop 再 Start 会交叉。`camera_peer_requested_` 记着这路 peer，会话全部结束后 `release_stream_if_idle()` 仍会发 Stop。漏发 Stop 时，没人 `release_slot` 的视觉槽会把 UI 预览停在最后一帧。光路判定和测高光斑取样都在独立线程里等快照，不占用这条消息循环。
+
 ## 数据链路
 
 ```text

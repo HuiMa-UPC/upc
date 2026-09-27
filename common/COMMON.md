@@ -186,7 +186,7 @@ scripts/rongsu.sh start   # glavo + rongsu_camera → ui
 | `APP_Print_Powder_Low_Ntf` | — | Glavo→UI | Empty | `register_print_powder_low` | 打印中粉量位 bit0/bit1 同时为 0 时仅通知一次；UI 弹补粉弹窗 |
 | `APP_OpticalPath_Progress_Ntf` | — | Glavo→UI | `OpticalPathProgressPayload` | `register_optical_path_progress` | 打印前光路逐点（Job 卡右侧 n/5）；标题/总进度条由 `APP_Print_Prep_Progress_Ntf` 驱动；`state=3` Complete 只清 n/5，不切 Printing |
 | `APP_Print_Prep_Progress_Ntf` | — | Glavo→UI | `PrintPrepProgressPayload` | `register_print_prep_progress` | 起印环境检查进度：Job 卡标题（外门/内门/光路/测高/氧门/首层）+ 进度条；跳过的步骤不推、直接进下一步；氧门与首层在开扫握手阶段仍属 Prepare；`step=Ready` 后切 Printing 并从 0% 计打印进度 |
-| `APP_Print_Start_Rejected_Ntf` | — | Glavo→UI | `PrintStartRejectedPayload` | `register_print_start_rejected` | 起印被拒（光路/测高失败、本地副本打不开、TCP 未连、关内门套件失败等）；UI 跳转 manifest 终止结果页。不可用 `APP_Print_Terminate_Rsp` 代替：0% 进度会被 UI 的 `print_ready_to_exit` 挡住 |
+| `APP_Print_Start_Rejected_Ntf` | — | Glavo→UI | `PrintStartRejectedPayload` | `register_print_start_rejected` | 起印被拒（光路/测高失败、本地副本打不开、TCP 未连、关内门套件失败、Z 未到 −10、基板读码失败等）；UI 跳转 manifest 终止结果页。不可用 `APP_Print_Terminate_Rsp` 代替：0% 进度会被 UI 的 `print_ready_to_exit` 挡住 |
 | `GLAVO_Outer_Door_Confirm_Req` | — | Glavo→UI | Empty | `register_outer_door_confirm_req` | 起印前外门未关：弹窗 Confirm / Cancel（无超时） |
 | `UI_Outer_Door_Confirm_Rsp` | — | UI→Glavo | `OuterDoorConfirmRspPayload` | `send_outer_door_confirm` | Confirm：`skip=0`，Glavo 再读门，仍开则再次 Req；Cancel：`skip=1`，不检门，直接进内门套件 |
 | `APP_Print_Terminate_Rsp` | `GLAVO_Print_Terminate_Rsp` | Glavo→UI | Empty | `register_print_terminate_done` | — |
@@ -268,8 +268,11 @@ scripts/rongsu.sh start   # glavo + rongsu_camera → ui
 | `UI_Debug_Galvo_PointTest_Start_Ntf` | — | UI→Glavo | Empty | `start_galvo_point_test` | Other 页一次性红光点位测试：常亮模式下中心及四角各停 3 秒，末尾回中心并切普通红光；坐标走当前校准表 |
 | `UI_Debug_Galvo_PointTest_Get_Ntf` | — | UI→Glavo | Empty | `request_galvo_point_test_state` | 查询红光点位测试运行状态 |
 | `UI_Debug_Galvo_AbsMove_Ntf` | — | UI→Glavo | `DebugGalvoAbsMovePayload` | `send_galvo_abs_move` | 振镜绝对坐标移动（snowx 口径：`McuLink::send_galvo_abs_pos`；打印中互斥） |
-| `UI_Debug_PlateHeight_Adj_Set_Ntf` | — | UI→Glavo | `DebugOnOffPayload` | `send_plate_height_adj_set` | 调试页开关：打印前基板测高并调 Z（仅本次运行，默认关） |
+| `UI_Debug_PlateHeight_Adj_Set_Ntf` | — | UI→Glavo | `DebugOnOffPayload` | `send_plate_height_adj_set` | 设置页 Advanced Print / 调试页：打印前基板测高并调 Z（仅本次运行，默认开） |
 | `UI_Debug_PlateHeight_Adj_Get_Ntf` | — | UI→Glavo | Empty | `request_plate_height_adj_state` | 查询当前“打印前基板测高”开关状态 |
+| `UI_Debug_Hold_Prep_Z_Set_Ntf` | — | UI→Glavo | `DebugOnOffPayload` | `send_hold_prep_z_set` | 设置页 Advanced Print：准备阶段不改 Z（仅本次运行，默认关）。开则不起印降到 −10、内门开关前不降 Z、终止/失败收尾也不改 Z；基板测高的回零和 AXIS_INC 仍执行 |
+| `UI_Debug_Hold_Prep_Z_Get_Ntf` | — | UI→Glavo | Empty | `request_hold_prep_z_state` | 查询保持 Z 开关 |
+| `GLAVO_Debug_Hold_Prep_Z_Ntf` | — | Glavo→UI | `DebugOnOffPayload` | 设置页观察者 | on=1 表示准备阶段保持当前 Z |
 | `UI_Debug_Soc_Led_Set_Ntf` | — | UI→Glavo | `DebugSocLedPayload` | `send_soc_led_set` | 调试页：六路舱灯 `lgt1l`…`lgt3r` sysfs 单独开关；**不看 MCU 版本**（与 Device/Light 串口舱灯无关） |
 | `UI_Debug_Soc_Led_Get_Ntf` | — | UI→Glavo | Empty | `request_soc_led_state` | 查询六路舱灯开关位图 |
 | `UI_Debug_Cabin_Pm_Valve_Set_Ntf` | — | UI→Glavo | `DebugOnOffPayload` | `send_cabin_pm_valve_set` | 调试页：舱内 PM2.5 电磁阀 `fa_valve`；**不看 MCU 版本** |

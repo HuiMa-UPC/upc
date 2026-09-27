@@ -105,6 +105,15 @@ public:
      */
     bool wait_slot_empty(uint32_t idx, int timeout_ms) const;
 
+    /**
+     * @brief 把仍停在 Ready、还没有消费者读的槽收成 Empty。
+     *
+     * 只 CAS Ready→Empty。已经是 Reading 的槽表示消费者正拿着这块
+     * isolation buffer，失败并留给调用方继续等，不能提前还池。
+     * @return true 槽已收成 Empty；false 槽不是 Ready 或索引非法。
+     */
+    bool abandon_unread_slot(uint32_t idx);
+
     uint32_t slot_count() const;
 
 private:

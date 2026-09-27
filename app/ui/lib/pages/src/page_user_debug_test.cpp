@@ -367,14 +367,14 @@ bool collect_snapshot() {
         const float param = read_ta_float(r->param_ta);
 
         if(is_jog_kind(kind) && read_ta_int(r->run_ta) <= 0) {
-            ui_toast_show("点动任务需填写>0的运行时间", user_color_status_err, 1800);
+            ui_toast_show("点动任务需填写>0的运行时间", user_light_notice_dot, 1800);
             return false;
         }
         g_snap.push_back(TaskSnap{ kind, param, read_ta_int(r->delay_ta),
                                    read_ta_int(r->run_ta), row });
     }
     if(g_snap.empty()) {
-        ui_toast_show("任务表为空，请先新增任务", user_color_status_err, 1800);
+        ui_toast_show("任务表为空，请先新增任务", user_light_notice_dot, 1800);
         return false;
     }
     return true;
@@ -385,7 +385,7 @@ void apply_selection() {
     for(auto *r : g_rows) {
         if(!r->cont) continue;
         const bool sel = (r == g_sel);
-        lv_obj_set_style_border_color(r->cont, sel ? user_color_accent : user_color_divider, 0);
+        lv_obj_set_style_border_color(r->cont, sel ? user_light_accent : user_light_divider, 0);
         lv_obj_set_style_border_opa(r->cont, sel ? LV_OPA_COVER : LV_OPA_40, 0);
     }
 }
@@ -411,9 +411,9 @@ void on_row_clicked(lv_event_t *e) {
 /* ---- 构建：中文下拉 ---- */
 void style_cjk_dropdown(lv_obj_t *dd) {
     lv_obj_set_style_text_font(dd, user_font_cjk(), 0);
-    lv_obj_set_style_bg_color(dd, user_color_bg, 0);
+    lv_obj_set_style_bg_color(dd, user_light_more_bg, 0);
     lv_obj_set_style_border_width(dd, 2, 0);
-    lv_obj_set_style_border_color(dd, user_color_accent, 0);
+    lv_obj_set_style_border_color(dd, user_light_accent, 0);
     lv_obj_set_style_text_color(dd, lv_color_white(), 0);
     /* 默认下拉箭头用的是 FontAwesome 符号，子集字体没有→显示方块；
      * 改用子集字体内含的 ▼(U+25BC) 作为下拉箭头 */
@@ -422,9 +422,9 @@ void style_cjk_dropdown(lv_obj_t *dd) {
     lv_obj_t *list = lv_dropdown_get_list(dd);
     if(list) {
         lv_obj_set_style_text_font(list, user_font_cjk(), 0);
-        lv_obj_set_style_bg_color(list, user_color_panel, 0);
+        lv_obj_set_style_bg_color(list, user_light_card, 0);
         lv_obj_set_style_text_color(list, lv_color_white(), 0);
-        lv_obj_set_style_border_color(list, user_color_accent, 0);
+        lv_obj_set_style_border_color(list, user_light_accent, 0);
     }
 }
 
@@ -436,9 +436,9 @@ lv_obj_t *make_num_ta(lv_obj_t *parent, const char *init, int32_t w) {
     lv_obj_set_width(ta, w);
     lv_obj_set_height(ta, UI_INPUT_H);
     lv_obj_set_style_text_font(ta, user_font_cjk(), 0);
-    lv_obj_set_style_bg_color(ta, user_color_bg, 0);
+    lv_obj_set_style_bg_color(ta, user_light_more_bg, 0);
     lv_obj_set_style_border_width(ta, 2, 0);
-    lv_obj_set_style_border_color(ta, user_color_accent, 0);
+    lv_obj_set_style_border_color(ta, user_light_accent, 0);
     lv_obj_set_style_text_color(ta, lv_color_white(), 0);
     lv_obj_set_style_pad_ver(ta, USER_PAD_SM / 2, 0);
     ui_keyboard_attach(ta, LV_KEYBOARD_MODE_NUMBER);
@@ -482,12 +482,12 @@ TestRow *add_task_row(Kind kind, const char *param, int delay_ms, int run_ms, bo
     TestRow *r = new TestRow();
     r->cont = make_table_row_container(g_rows_box);
     lv_obj_set_style_border_width(r->cont, 1, 0);
-    lv_obj_set_style_border_color(r->cont, user_color_divider, 0);
+    lv_obj_set_style_border_color(r->cont, user_light_divider, 0);
     lv_obj_set_style_border_opa(r->cont, LV_OPA_40, 0);
     lv_obj_add_flag(r->cont, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_event_cb(r->cont, on_row_clicked, LV_EVENT_CLICKED, r);
 
-    r->index_lbl = make_cjk_label(r->cont, "0", user_color_text_dim);
+    r->index_lbl = make_cjk_label(r->cont, "0", user_light_icon_off);
     lv_obj_set_width(r->index_lbl, kColIndexW);
 
     r->dd = lv_dropdown_create(r->cont);
@@ -524,7 +524,7 @@ TestRow *add_task_row(Kind kind, const char *param, int delay_ms, int run_ms, bo
     r->run_ta = make_num_ta(r->cont, buf, kColRunW);
     lv_obj_add_event_cb(r->run_ta, on_row_clicked, LV_EVENT_CLICKED, r);
 
-    r->status_lbl = make_cjk_label(r->cont, "未执行", user_color_text_dim);
+    r->status_lbl = make_cjk_label(r->cont, "未执行", user_light_icon_off);
     lv_obj_set_width(r->status_lbl, 0);
     lv_obj_set_flex_grow(r->status_lbl, kColStatGrow);
 
@@ -652,17 +652,17 @@ void build_table_header(lv_obj_t *parent) {
     lv_obj_t *row = make_table_row_container(parent);
     lv_obj_set_style_border_width(row, 0, 0);
 
-    lv_obj_t *idx = make_cjk_label(row, "", user_color_text_dim);
+    lv_obj_t *idx = make_cjk_label(row, "", user_light_icon_off);
     lv_obj_set_width(idx, kColIndexW);
-    lv_obj_t *fn = make_cjk_label(row, "功能", user_color_accent);
+    lv_obj_t *fn = make_cjk_label(row, "功能", user_light_accent);
     lv_obj_set_width(fn, 0); lv_obj_set_flex_grow(fn, kColFuncGrow);
-    lv_obj_t *pa = make_cjk_label(row, "参数", user_color_accent);
+    lv_obj_t *pa = make_cjk_label(row, "参数", user_light_accent);
     lv_obj_set_width(pa, kColParamW);
-    lv_obj_t *de = make_cjk_label(row, "延迟(ms)", user_color_accent);
+    lv_obj_t *de = make_cjk_label(row, "延迟(ms)", user_light_accent);
     lv_obj_set_width(de, kColDelayW);
-    lv_obj_t *rn = make_cjk_label(row, "运行时间(ms)", user_color_accent);
+    lv_obj_t *rn = make_cjk_label(row, "运行时间(ms)", user_light_accent);
     lv_obj_set_width(rn, kColRunW);
-    lv_obj_t *stt = make_cjk_label(row, "状态", user_color_accent);
+    lv_obj_t *stt = make_cjk_label(row, "状态", user_light_accent);
     lv_obj_set_width(stt, 0); lv_obj_set_flex_grow(stt, kColStatGrow);
 }
 
@@ -684,7 +684,7 @@ lv_obj_t *build_debug_test_tab(lv_obj_t *body) {
 
     /* 顶部说明 */
     make_cjk_label(g_tab, "任务表按行顺序执行，可设置每行运行时间和完成后的延迟时间。",
-                   user_color_text_dim);
+                   user_light_icon_off);
 
     /* 信息条：循环次数 + 当前循环 + 状态 */
     lv_obj_t *info = lv_obj_create(g_tab);
@@ -696,11 +696,11 @@ lv_obj_t *build_debug_test_tab(lv_obj_t *body) {
     lv_obj_set_style_pad_column(info, USER_PAD, 0);
     lv_obj_set_style_bg_opa(info, LV_OPA_TRANSP, 0);
     lv_obj_clear_flag(info, LV_OBJ_FLAG_SCROLLABLE);
-    make_cjk_label(info, "循环次数：", user_color_text);
+    make_cjk_label(info, "循环次数：", user_light_text);
     g_loop_ta = make_num_ta(info, "100", 90);
-    g_loop_status = make_cjk_label(info, "当前循环：0/0", user_color_text);
+    g_loop_status = make_cjk_label(info, "当前循环：0/0", user_light_text);
     make_spacer(info);
-    g_task_status = make_cjk_label(info, "状态：空闲", user_color_text);
+    g_task_status = make_cjk_label(info, "状态：空闲", user_light_text);
 
     /* 操作按钮行 */
     lv_obj_t *btns = lv_obj_create(g_tab);
@@ -712,7 +712,7 @@ lv_obj_t *build_debug_test_tab(lv_obj_t *body) {
     lv_obj_set_style_pad_column(btns, USER_PAD_SM, 0);
     lv_obj_set_style_bg_opa(btns, LV_OPA_TRANSP, 0);
     lv_obj_clear_flag(btns, LV_OBJ_FLAG_SCROLLABLE);
-    const lv_color_t kBlue = user_color_accent;
+    const lv_color_t kBlue = user_light_accent;
     const lv_color_t kRed  = lv_palette_main(LV_PALETTE_RED);
     g_btn_add     = make_action_btn(btns, "新增任务", on_add, kBlue);
     g_btn_del     = make_action_btn(btns, "删除任务", on_remove, kBlue);

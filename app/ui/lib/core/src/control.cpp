@@ -95,9 +95,15 @@ DoorFlowOrigin g_door_origin = DoorFlowOrigin::PrintPrep;
  * 打开后取件分支才插入 TRANSFER_BOX 三步。纯 UI 本地标志，不发消息也不落盘。 */
 bool g_transfer_box_flow = false;
 
-/* 跳过放版预确认开关（调试页 Other → Print Gates → Skip Plate Prompt）。默认关：打印入口先弹
- * 「是否已放入打印版」。打开后 control_start() 直接进选文件页。纯 UI 本地标志，不发消息也不落盘。 */
-bool g_skip_plate_prompt = false;
+/* 跳过放版预确认开关（调试页 Other → Print Gates → Skip Plate Prompt）。默认开：打印入口
+ * 直接进选文件页。关掉后 control_start() 先弹「是否已放入打印版」。纯 UI 本地标志，不发消息也不落盘。 */
+bool g_skip_plate_prompt = true;
+
+/** 真实开门失败后最多再试几次（含首次共 DOOR_OPEN_MAX_ATTEMPTS 次）。
+ *  须在 wire_msg_proxy 之前声明：开门 Rsp 回调 lambda 会捕获这些名字。 */
+constexpr uint32_t DOOR_OPEN_MAX_RETRIES = 2u;
+constexpr uint32_t DOOR_OPEN_MAX_ATTEMPTS = DOOR_OPEN_MAX_RETRIES + 1u;
+uint32_t g_door_open_fail_count = 0; /**< 本轮开门失败次数（Rsp ok=0） */
 
 /** 转运盒流程是否对当前这趟门流程生效（只认取件分支） */
 bool transfer_box_flow_active(void)
@@ -323,6 +329,7 @@ void on_print_drain_fallback(lv_timer_t *timer);
 void on_offline_exit(lv_timer_t *timer);
 void on_terminate_timeout(lv_timer_t *timer);
 void arm_door_open_retry_timer(void);
+void stop_door_timers(void);
 void pf_on_clean_stop_done(void *u);
 void on_print_video_manifest(const middleware::PrintVideoManifestPayload &p);
 
@@ -595,9 +602,26 @@ void wire_msg_proxy()
             return;
         }
         if(!p.ok) {
-            arm_door_open_retry_timer();
+            ++g_door_open_fail_count;
+            if(g_door_open_fail_count < DOOR_OPEN_MAX_ATTEMPTS) {
+                arm_door_open_retry_timer();
+                return;
+            }
+            /* 传感器无效或门一直未开：停转圈，回退入口态，避免无限轮询。 */
+            g_door_open_fail_count = 0;
+            stop_door_timers();
+            ui_toast_show("Door did not open", user_color_status_err, 3000);
+            if(g_door_origin == DoorFlowOrigin::PrintCollect) {
+                enter_state(CONTROL_STATE_PRINT_DONE);
+                page_user_monitor_reset_result_slide();
+            } else if(g_door_origin == DoorFlowOrigin::PrintPrep) {
+                goto_file_selection();
+            } else {
+                enter_state(CONTROL_STATE_IDLE);
+            }
             return;
         }
+        g_door_open_fail_count = 0;
         /* 开门成功：乐观记下外门已开，Manual 内门/吹粉不必再等下一帧 env */
         ui_device_state_set_outer_door_open(true);
         if(cb) {
@@ -945,7 +969,7 @@ ui_arc_spinner_t *g_door_spinner = nullptr;
  *   - Opening / Cleaning：最短停留后再前进；开门成功即结束，不再等关门。 */
 constexpr uint32_t DOOR_OPENING_MIN_MS = 300u;    /**< "正在准备开门"最短显示 */
 constexpr uint32_t CLEAN_MIN_MS        = 300u;    /**< "正在清粉中"最短显示 */
-constexpr uint32_t DOOR_OPEN_RETRY_MS  = 800u;    /**< 开门失败重试间隔 */
+constexpr uint32_t DOOR_OPEN_RETRY_MS  = 300u;    /**< 开门失败重试间隔 */
 /* 转运盒：装盒到位仍用 BOX_READY_MS 占位；转移完成等 APP_Transport_Result_Ntf（result=0），
  * 失败(1/2)停留转圈页、无超时。闸门那步稿上本就没有到位检测，一直是用户自己点。 */
 constexpr uint32_t BOX_READY_MS        = 1500u;   /**< 「转运盒未到位」翻可点的占位时长 */
@@ -2774,6 +2798,7 @@ void enter_state(control_state_t s)
         overlay_show();
         g_current_dlg = show_door_dialog(g_overlay, DoorVariant::Opening);
         g_door_opening_since = lv_tick_get();   /* 计"正在准备开门"最短停留 */
+        g_door_open_fail_count = 0;
         backend_start_pm25(pf_on_pm25_check_done, nullptr);
         break;
 

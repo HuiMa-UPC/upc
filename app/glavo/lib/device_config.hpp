@@ -157,9 +157,9 @@
 #define GLAVO_DOOR_REAL_OPEN_ENABLE  0
 #endif
 
-/** 真实开门请求等待 MCU 结果超时（毫秒） */
+/** 真实开门请求等待 MCU 结果超时（毫秒）；单次轮询上限，UI 另有限次重试 */
 #ifndef GLAVO_DOOR_OPEN_TIMEOUT_MS
-#define GLAVO_DOOR_OPEN_TIMEOUT_MS  5000
+#define GLAVO_DOOR_OPEN_TIMEOUT_MS  1000
 #endif
 
 /* -------------------------------------------------------------------------- */

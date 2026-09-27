@@ -9,6 +9,7 @@
 #include "page_manager.hpp"
 #include "settings_icons.h"
 #include "ui_msg_proxy.hpp"
+#include "debug_msg_proxy.hpp"
 #include "msg_runtime.hpp"
 #include "config/cal_config.hpp"
 
@@ -35,9 +36,12 @@
  *
  * 前端阶段说明（后端由同事接）：
  *   - Wi-Fi 列表来自后端扫描推送（GLAVO_Wifi_Scan_Rsp），首次结果到达前显示 Searching。
- *   - Debug 行点击 → 开发者密码框（"888"）→ switch_to("user_debug")。
+ *   - Debug 行与 About 里的 Galvo/MCU OTA 默认隐藏。About 里连点 Software Version
+ *     右侧版本号三次 → 开发者密码框（"888"）→ 本次运行内显示这两处；再点 Debug 进调试页。
  *   - 软件版本号迁至 About 子页。
  *   - Display & Sound：LCD 背光滑条（sysfs `/sys/class/backlight`，1~100%）。
+ *   - Advanced Print：打印前门控，默认开，与调试页同一套 Glavo 开关；
+ *     Height Calibration 的 Start 与调试页 Laser 卡相同。
  *   - 子导航图标暂用 LV_SYMBOL 占位，待 SVG 资源到位再替换。
  *   - 软件版本 UPC_SW_VERSION：根 CMakeLists.txt 的 UPC_PRODUCT_VERSION。
  */
@@ -340,9 +344,42 @@ ui_modal_dialog_t *g_dlg     = nullptr;
 lv_obj_t          *g_pwd_ta  = nullptr;
 lv_obj_t          *g_pwd_err = nullptr;
 
-/* 开发者密码进程级解锁标记：本次 App 运行期间输对一次即置位，后续进 Debug
- * 免密；进程(重启 App)后静态量复位，需重新输入。 */
+/* 开发者入口进程级解锁：连点 Software Version 三次并输对密码后置位。
+ * 置位后左栏 Debug 与 About 的两枚 OTA 才出现；再点 Debug 直接进调试页。
+ * 进程(重启 App)后静态量复位，需重新连点并输密码。 */
 bool g_dev_unlocked = false;
+/** 连点版本号的间隔上限（ms）；超时重新计数，避免零散点击攒满三次。 */
+constexpr uint32_t kDevTapGapMs = 2000;
+uint8_t  g_sw_ver_taps = 0;
+uint32_t g_sw_ver_tap_tick = 0;
+
+/** Advanced Print 门控。开=执行该项检测，和调试页同一条 Glavo 开关。 */
+lv_obj_t *g_gate_outer = nullptr;
+lv_obj_t *g_gate_inner = nullptr;
+lv_obj_t *g_gate_plate = nullptr;
+lv_obj_t *g_gate_optical = nullptr;
+lv_obj_t *g_gate_height = nullptr;
+lv_obj_t *g_gate_o2 = nullptr;
+lv_obj_t *g_gate_hold_z = nullptr;
+lv_obj_t *g_height_calib_lbl = nullptr;
+/** 回读改开关时挡住 VALUE_CHANGED，避免再发一帧 Set。 */
+bool g_gate_applying = false;
+
+enum class PrintGate : uint8_t {
+    OuterDoor = 0,
+    InnerVision,
+    PlatePresent,
+    OpticalPath,
+    PlateHeight,
+    Oxygen,
+    HoldPrepZ,
+};
+
+void apply_dev_entry_visibility(void);
+void show_detail(NavId id);
+void bind_print_gate_observers(void);
+void clear_print_gate_observers(void);
+void request_print_gate_state(void);
 
 struct OtaDialogState {
     ui_modal_dialog_t *dlg = nullptr;
@@ -653,9 +690,14 @@ void on_dev_confirm(lv_event_t *)
     }
     const char *input = lv_textarea_get_text(g_pwd_ta);
     if(input && std::strcmp(input, kDevPassword) == 0) {
-        g_dev_unlocked = true;   /* 本次运行期间免密 */
+        g_dev_unlocked = true;
+        g_sw_ver_taps = 0;
         dlg_close();
-        ui::PageManager::instance().switch_to("user_debug");
+        apply_dev_entry_visibility();
+        /* 密码是在 About 里连点版本号呼出的：解锁后留在本页，OTA 行随详情重建出现。 */
+        if(g_selected == NAV_ABOUT) {
+            show_detail(NAV_ABOUT);
+        }
         return;
     }
     if(g_pwd_err) {
@@ -792,7 +834,7 @@ void apply_card_style(lv_obj_t *obj)
  *
  * 替掉本页原先各处的 `ui_user_make_frosted_card()`——那是深色档的磨砂卡
  * （半透明白 + 白字），整屏翻浅之后压在 #FAFAFA 上就只剩一片白。
- * 那个 helper 本身没动，调试页还在用。
+ * 调试页已改用自有 `make_dbg_light_card()`。
  */
 lv_obj_t *make_light_card(lv_obj_t *parent)
 {
@@ -1341,6 +1383,25 @@ void net_show_saved(void)       { g_net_subpage = NET_SAVED;    net_reset(); bui
 void net_show_wifi_detail(void) { g_net_subpage = NET_DETAIL;   net_reset(); build_wifi_connected_detail(g_detail); }
 void net_show_empty(void)       { g_net_subpage = NET_EMPTY;    net_reset(); build_wifi_empty(g_detail); }
 
+/** 连点 Software Version 右侧版本号三次，呼出开发者密码。已解锁则忽略。 */
+void on_sw_version_click(lv_event_t * /*e*/)
+{
+    if(g_dev_unlocked) {
+        return;
+    }
+    const uint32_t now = lv_tick_get();
+    if(g_sw_ver_taps == 0 || lv_tick_elaps(g_sw_ver_tap_tick) > kDevTapGapMs) {
+        g_sw_ver_taps = 1;
+    } else {
+        ++g_sw_ver_taps;
+    }
+    g_sw_ver_tap_tick = now;
+    if(g_sw_ver_taps >= 3) {
+        g_sw_ver_taps = 0;
+        open_dev_password_dialog();
+    }
+}
+
 /** About 只读行：[标题 ... 值(dim)]，返回值标签供异步刷新用 */
 lv_obj_t *about_add_row(lv_obj_t *card, const char *label, const char *value)
 {
@@ -1358,17 +1419,23 @@ void build_about_detail(lv_obj_t *parent)
     lv_obj_t *card = make_light_card(parent);
     lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
 
-    about_add_row(card, "Software Version", UPC_SW_VERSION);
+    lv_obj_t *sw_ver = about_add_row(card, "Software Version", UPC_SW_VERSION);
+    /* 版本号本身可点：连点三次呼出开发者密码。行标题不响应。 */
+    lv_obj_add_flag(sw_ver, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_ext_click_area(sw_ver, 16);
+    lv_obj_add_event_cb(sw_ver, on_sw_version_click, LV_EVENT_CLICKED, nullptr);
     about_add_row(card, "Device Model",     about_device_model_text());
     /* MCU 版本由串口异步返回：先填缓存（首次为 "--"），应答/超时后由 mcu_ver_* 刷新 */
     g_mcu_ver_lbl = about_add_row(card, "MCU Version", g_mcu_ver_text);
     /* 振镜板版本来自 TCP 0x0F 首包缓存：先填缓存，进页 Req 后由 galvo_ver_* 刷新 */
     g_galvo_ver_lbl = about_add_row(card, "Galvo Version", g_galvo_ver_text);
 
-    /* 两枚 OTA 入口原本挂在「Device & Account」下，新稿去掉了那一项——它装的是
-     * 固件升级、与账号无关。挪到 About：版本号就在上面几行，语义上最近。 */
-    ui_user_make_setting_row(card, "Galvo OTA", "Start", on_glavo_ota_entry_click);
-    ui_user_make_setting_row(card, "MCU OTA", "Start", on_mcu_ota_entry_click);
+    /* 两枚 OTA 入口原本挂在「Device & Account」下。日常隐藏，与左栏 Debug 一起
+     * 在连点版本号并输对密码后才出现。 */
+    if(g_dev_unlocked) {
+        ui_user_make_setting_row(card, "Galvo OTA", "Start", on_glavo_ota_entry_click);
+        ui_user_make_setting_row(card, "MCU OTA", "Start", on_mcu_ota_entry_click);
+    }
 }
 
 lv_obj_t *g_bl_pct_lbl = nullptr;
@@ -1896,6 +1963,228 @@ void build_placeholder_detail(lv_obj_t *parent, const char *title)
     lv_obj_center(l);
 }
 
+void set_gate_switch(lv_obj_t *sw, bool on)
+{
+    if(!sw) {
+        return;
+    }
+    g_gate_applying = true;
+    if(on) {
+        lv_obj_add_state(sw, LV_STATE_CHECKED);
+    } else {
+        lv_obj_clear_state(sw, LV_STATE_CHECKED);
+    }
+    g_gate_applying = false;
+}
+
+void clear_print_gate_observers(void)
+{
+    ui::DebugMsgProxy::instance().set_settings_print_gate_observers(
+        {}, {}, {}, {}, {}, {}, {}, {});
+}
+
+void bind_print_gate_observers(void)
+{
+    ui::DebugMsgProxy::instance().set_settings_print_gate_observers(
+        [](bool skip_on) { set_gate_switch(g_gate_outer, !skip_on); },
+        [](bool detect_on) { set_gate_switch(g_gate_inner, detect_on); },
+        [](bool detect_on) { set_gate_switch(g_gate_plate, detect_on); },
+        [](bool detect_on) { set_gate_switch(g_gate_optical, detect_on); },
+        [](bool on) { set_gate_switch(g_gate_height, on); },
+        [](bool skip_on) { set_gate_switch(g_gate_o2, !skip_on); },
+        [](const middleware::HeightCalibProgressPayload& p) {
+            if(!g_height_calib_lbl) {
+                return;
+            }
+            char buf[64];
+            if(p.stage == 0) {
+                std::snprintf(buf, sizeof(buf), "Starting %u pts", p.total_count);
+            } else if(p.stage == 1) {
+                std::snprintf(buf, sizeof(buf), "h=%.2f (%u/%u)",
+                              static_cast<double>(p.current_height_mm),
+                              p.collected_count, p.total_count);
+            } else if(p.stage == 2) {
+                std::snprintf(buf, sizeof(buf), "Done");
+            } else {
+                std::snprintf(buf, sizeof(buf), "Failed");
+            }
+            lv_label_set_text(g_height_calib_lbl, buf);
+        },
+        [](bool on) { set_gate_switch(g_gate_hold_z, on); });
+}
+
+void request_print_gate_state(void)
+{
+    auto& proxy = ui::DebugMsgProxy::instance();
+    proxy.request_skip_outer_door_state();
+    proxy.request_inner_door_occlusion_state();
+    proxy.request_plate_present_state();
+    proxy.request_optical_path_check_state();
+    proxy.request_plate_height_adj_state();
+    proxy.request_skip_o2_gate_state();
+    proxy.request_hold_prep_z_state();
+}
+
+void on_print_gate_changed(lv_event_t *e)
+{
+    if(g_gate_applying) {
+        return;
+    }
+    lv_obj_t *sw = lv_event_get_target_obj(e);
+    const bool on = lv_obj_has_state(sw, LV_STATE_CHECKED);
+    const auto gate = static_cast<PrintGate>(
+        reinterpret_cast<uintptr_t>(lv_event_get_user_data(e)));
+    auto& proxy = ui::DebugMsgProxy::instance();
+    switch(gate) {
+    case PrintGate::OuterDoor:    proxy.send_skip_outer_door_set(!on); break;
+    case PrintGate::InnerVision:  proxy.send_inner_door_occlusion_set(on); break;
+    case PrintGate::PlatePresent: proxy.send_plate_present_set(on); break;
+    case PrintGate::OpticalPath:  proxy.send_optical_path_check_set(on); break;
+    case PrintGate::PlateHeight:  proxy.send_plate_height_adj_set(on); break;
+    case PrintGate::Oxygen:       proxy.send_skip_o2_gate_set(!on); break;
+    case PrintGate::HoldPrepZ:    proxy.send_hold_prep_z_set(on); break;
+    }
+}
+
+void on_settings_height_calib_click(lv_event_t *)
+{
+    ui::DebugMsgProxy::instance().send_height_calib_start(
+        -5.0f, 12.0f, 1.0f, "/userdata/visual/height_lut.txt");
+    if(g_height_calib_lbl) {
+        lv_label_set_text(g_height_calib_lbl, "Starting...");
+    }
+    ui_toast_show("Height calibration started", user_light_accent, 1500);
+}
+
+lv_obj_t *make_gate_row(lv_obj_t *card, const char *label, PrintGate gate,
+                        bool last, bool checked = true)
+{
+    lv_obj_t *row = lv_obj_create(card);
+    lv_obj_remove_style_all(row);
+    lv_obj_set_width(row, LV_PCT(100));
+    lv_obj_set_height(row, LV_SIZE_CONTENT);
+    lv_obj_set_style_pad_all(row, USER_PAD, 0);
+    lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(row, LV_FLEX_ALIGN_START,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
+    if(!last) {
+        lv_obj_set_style_border_side(row, LV_BORDER_SIDE_BOTTOM, 0);
+        lv_obj_set_style_border_width(row, 1, 0);
+        lv_obj_set_style_border_color(row, user_light_divider, 0);
+        lv_obj_set_style_border_opa(row, LV_OPA_20, 0);
+    }
+
+    lv_obj_t *lbl = lv_label_create(row);
+    lv_label_set_text(lbl, label);
+    lv_obj_set_style_text_font(lbl, user_font_title(), 0);
+    lv_obj_set_style_text_color(lbl, user_light_text, 0);
+    lv_obj_set_flex_grow(lbl, 1);
+
+    lv_obj_t *sw = lv_switch_create(row);
+    if(checked) {
+        lv_obj_add_state(sw, LV_STATE_CHECKED);
+    }
+    lv_obj_set_style_bg_color(sw, user_light_accent, LV_PART_INDICATOR | LV_STATE_CHECKED);
+    lv_obj_add_event_cb(sw, on_print_gate_changed, LV_EVENT_VALUE_CHANGED,
+                        reinterpret_cast<void *>(static_cast<uintptr_t>(gate)));
+    return sw;
+}
+
+void build_print_detail(lv_obj_t *parent)
+{
+    g_gate_outer = g_gate_inner = g_gate_plate = nullptr;
+    g_gate_optical = g_gate_height = g_gate_o2 = g_gate_hold_z = nullptr;
+    g_height_calib_lbl = nullptr;
+
+    lv_obj_add_flag(parent, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scroll_dir(parent, LV_DIR_VER);
+
+    lv_obj_t *sec = lv_obj_create(parent);
+    lv_obj_remove_style_all(sec);
+    lv_obj_set_width(sec, LV_PCT(100));
+    lv_obj_set_height(sec, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(sec, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_row(sec, USER_PAD_SM, 0);
+    lv_obj_set_style_bg_opa(sec, LV_OPA_TRANSP, 0);
+    lv_obj_clear_flag(sec, LV_OBJ_FLAG_SCROLLABLE);
+    make_caption(sec, "Print Checks");
+
+    lv_obj_t *card = lv_obj_create(sec);
+    lv_obj_remove_style_all(card);
+    lv_obj_set_width(card, LV_PCT(100));
+    lv_obj_set_height(card, LV_SIZE_CONTENT);
+    apply_card_style(card);
+    lv_obj_set_style_pad_all(card, 0, 0);
+    lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
+    lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
+
+    g_gate_outer = make_gate_row(card, "Outer Door Check", PrintGate::OuterDoor, false);
+    g_gate_inner = make_gate_row(card, "Inner Door Vision", PrintGate::InnerVision, false);
+    g_gate_plate = make_gate_row(card, "Plate Present", PrintGate::PlatePresent, false);
+    g_gate_optical = make_gate_row(card, "Optical Path Check", PrintGate::OpticalPath, false);
+    g_gate_height = make_gate_row(card, "Plate Height Adj", PrintGate::PlateHeight, false);
+    g_gate_o2 = make_gate_row(card, "Oxygen Check", PrintGate::Oxygen, false);
+    g_gate_hold_z = make_gate_row(card, "Keep Z Position", PrintGate::HoldPrepZ, true, false);
+
+    lv_obj_t *sec2 = lv_obj_create(parent);
+    lv_obj_remove_style_all(sec2);
+    lv_obj_set_width(sec2, LV_PCT(100));
+    lv_obj_set_height(sec2, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(sec2, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_row(sec2, USER_PAD_SM, 0);
+    lv_obj_set_style_bg_opa(sec2, LV_OPA_TRANSP, 0);
+    lv_obj_clear_flag(sec2, LV_OBJ_FLAG_SCROLLABLE);
+    make_caption(sec2, "Calibration");
+
+    lv_obj_t *cal = lv_obj_create(sec2);
+    lv_obj_remove_style_all(cal);
+    lv_obj_set_width(cal, LV_PCT(100));
+    lv_obj_set_height(cal, LV_SIZE_CONTENT);
+    apply_card_style(cal);
+    lv_obj_set_flex_flow(cal, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(cal, LV_FLEX_ALIGN_SPACE_BETWEEN,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_clear_flag(cal, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *info = lv_obj_create(cal);
+    lv_obj_remove_style_all(info);
+    lv_obj_set_flex_grow(info, 1);
+    lv_obj_set_height(info, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(info, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_row(info, USER_PAD_SM / 2, 0);
+    lv_obj_set_style_bg_opa(info, LV_OPA_TRANSP, 0);
+    lv_obj_clear_flag(info, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *title = lv_label_create(info);
+    lv_label_set_text(title, "Height Calibration");
+    lv_obj_set_style_text_font(title, user_font_title(), 0);
+    lv_obj_set_style_text_color(title, user_light_text, 0);
+    g_height_calib_lbl = lv_label_create(info);
+    lv_label_set_text(g_height_calib_lbl, "Idle");
+    lv_obj_set_style_text_font(g_height_calib_lbl, user_font_caption(), 0);
+    lv_obj_set_style_text_color(g_height_calib_lbl, user_light_text, 0);
+    lv_obj_set_style_text_opa(g_height_calib_lbl, LV_OPA_50, 0);
+
+    lv_obj_t *btn = lv_button_create(cal);
+    lv_obj_remove_style_all(btn);
+    lv_obj_set_height(btn, USER_BTN_PRIMARY_H);
+    lv_obj_set_style_bg_color(btn, user_light_accent, 0);
+    lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_opa(btn, LV_OPA_80, LV_STATE_PRESSED);
+    lv_obj_set_style_radius(btn, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_pad_hor(btn, USER_PAD, 0);
+    lv_obj_add_event_cb(btn, on_settings_height_calib_click, LV_EVENT_CLICKED, nullptr);
+    lv_obj_t *bl = lv_label_create(btn);
+    lv_label_set_text(bl, "Start");
+    lv_obj_set_style_text_color(bl, lv_color_white(), 0);
+    lv_obj_set_style_text_font(bl, user_font_text(), 0);
+    lv_obj_center(bl);
+
+    bind_print_gate_observers();
+    request_print_gate_state();
+}
+
 void show_detail(NavId id)
 {
     if(!g_detail) {
@@ -1917,6 +2206,10 @@ void show_detail(NavId id)
     g_mcu_ver_lbl = nullptr;
     g_galvo_ver_lbl = nullptr;
     g_bl_pct_lbl = nullptr;
+    g_gate_outer = g_gate_inner = g_gate_plate = nullptr;
+    g_gate_optical = g_gate_height = g_gate_o2 = g_gate_hold_z = nullptr;
+    g_height_calib_lbl = nullptr;
+    clear_print_gate_observers();
     mcu_ver_stop_timer();
     lv_obj_clean(g_detail);
     /* 复位详情容器：默认不滚动（网络详情会按需开启）。
@@ -1938,6 +2231,7 @@ void show_detail(NavId id)
         break;
     case NAV_DISPLAY: build_display_detail(g_detail); break;
     case NAV_STORAGE: build_storage_detail(g_detail); break;
+    case NAV_PRINT:   build_print_detail(g_detail); break;
     case NAV_ABOUT:
         build_about_detail(g_detail);
         /* 进入 About：向 MCU 查询一次固件版本；向 Glavo 读振镜板 TCP 首包缓存 */
@@ -1973,15 +2267,25 @@ void update_nav_highlight(void)
     }
 }
 
+void apply_dev_entry_visibility(void)
+{
+    if(!g_nav_btns[NAV_DEBUG]) {
+        return;
+    }
+    if(g_dev_unlocked) {
+        lv_obj_remove_flag(g_nav_btns[NAV_DEBUG], LV_OBJ_FLAG_HIDDEN);
+    } else {
+        lv_obj_add_flag(g_nav_btns[NAV_DEBUG], LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
 void on_nav_click(lv_event_t *e)
 {
     const int id = static_cast<int>(reinterpret_cast<intptr_t>(lv_event_get_user_data(e)));
-    /* Debug：首次需密码门，本次运行已解锁则直接进调试页（不切换右侧详情） */
+    /* Debug 仅解锁后可见；点进去不再要第二次密码。 */
     if(id == NAV_DEBUG) {
         if(g_dev_unlocked) {
             ui::PageManager::instance().switch_to("user_debug");
-        } else {
-            open_dev_password_dialog();
         }
         return;
     }
@@ -2126,6 +2430,7 @@ lv_obj_t *build_subnav(lv_obj_t *parent)
     for(int i = 0; i < NAV_COUNT; i++) {
         make_nav_item(nav, static_cast<NavId>(i));
     }
+    apply_dev_entry_visibility();
     return band;
 }
 
@@ -2139,6 +2444,9 @@ void page_user_settings_refresh(bool /*force*/)
         ui::UiMsgProxy::instance().send_wifi_info();
         ui::UiMsgProxy::instance().send_wifi_scan();
         wifi_rescan_start();
+    } else if(g_selected == NAV_PRINT && g_gate_outer) {
+        bind_print_gate_observers();
+        request_print_gate_state();
     }
 }
 
@@ -2162,6 +2470,10 @@ lv_obj_t *page_user_settings_create(lv_obj_t *parent)
     g_page       = nullptr;
     g_float_back = nullptr;
     g_mcu_ver_lbl = nullptr;
+    g_gate_outer = g_gate_inner = g_gate_plate = nullptr;
+    g_gate_optical = g_gate_height = g_gate_o2 = g_gate_hold_z = nullptr;
+    g_height_calib_lbl = nullptr;
+    clear_print_gate_observers();
     for(int i = 0; i < NAV_COUNT; i++) {
         g_nav_btns[i]  = nullptr;
         g_nav_icons[i] = nullptr;

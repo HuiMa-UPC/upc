@@ -97,8 +97,14 @@ void DebugMsgProxy::init()
         middleware::MsgType::GLAVO_Debug_Skip_O2_Gate_Ntf, middleware::ModuleId::UI,
         [this](const middleware::Message& msg) {
             middleware::DebugOnOffPayload p{};
-            if(skip_o2_gate_cb_ && read_inline_pod(msg, p)) {
-                skip_o2_gate_cb_(p.on != 0);
+            if(read_inline_pod(msg, p)) {
+                const bool on = p.on != 0;
+                if(skip_o2_gate_cb_) {
+                    skip_o2_gate_cb_(on);
+                }
+                if(settings_skip_o2_cb_) {
+                    settings_skip_o2_cb_(on);
+                }
             }
         }));
 
@@ -106,8 +112,14 @@ void DebugMsgProxy::init()
         middleware::MsgType::GLAVO_Debug_Skip_Outer_Door_Ntf, middleware::ModuleId::UI,
         [this](const middleware::Message& msg) {
             middleware::DebugOnOffPayload p{};
-            if(skip_outer_door_cb_ && read_inline_pod(msg, p)) {
-                skip_outer_door_cb_(p.on != 0);
+            if(read_inline_pod(msg, p)) {
+                const bool on = p.on != 0;
+                if(skip_outer_door_cb_) {
+                    skip_outer_door_cb_(on);
+                }
+                if(settings_skip_outer_cb_) {
+                    settings_skip_outer_cb_(on);
+                }
             }
         }));
 
@@ -146,8 +158,14 @@ void DebugMsgProxy::init()
         middleware::MsgType::GLAVO_Debug_OpticalPath_Check_Ntf, middleware::ModuleId::UI,
         [this](const middleware::Message& msg) {
             middleware::DebugOnOffPayload p{};
-            if(optical_path_check_cb_ && read_inline_pod(msg, p)) {
-                optical_path_check_cb_(p.on != 0);
+            if(read_inline_pod(msg, p)) {
+                const bool on = p.on != 0;
+                if(optical_path_check_cb_) {
+                    optical_path_check_cb_(on);
+                }
+                if(settings_optical_cb_) {
+                    settings_optical_cb_(on);
+                }
             }
         }));
 
@@ -155,8 +173,23 @@ void DebugMsgProxy::init()
         middleware::MsgType::GLAVO_Debug_PlateHeight_Adj_Ntf, middleware::ModuleId::UI,
         [this](const middleware::Message& msg) {
             middleware::DebugOnOffPayload p{};
-            if(plate_height_adj_cb_ && read_inline_pod(msg, p)) {
-                plate_height_adj_cb_(p.on != 0);
+            if(read_inline_pod(msg, p)) {
+                const bool on = p.on != 0;
+                if(plate_height_adj_cb_) {
+                    plate_height_adj_cb_(on);
+                }
+                if(settings_plate_height_cb_) {
+                    settings_plate_height_cb_(on);
+                }
+            }
+        }));
+
+    subs_.push_back(bus.subscribe(
+        middleware::MsgType::GLAVO_Debug_Hold_Prep_Z_Ntf, middleware::ModuleId::UI,
+        [this](const middleware::Message& msg) {
+            middleware::DebugOnOffPayload p{};
+            if(read_inline_pod(msg, p) && settings_hold_prep_z_cb_) {
+                settings_hold_prep_z_cb_(p.on != 0);
             }
         }));
 
@@ -164,8 +197,14 @@ void DebugMsgProxy::init()
         middleware::MsgType::GLAVO_Debug_InnerDoor_Occlusion_Ntf, middleware::ModuleId::UI,
         [this](const middleware::Message& msg) {
             middleware::DebugOnOffPayload p{};
-            if(inner_door_occlusion_cb_ && read_inline_pod(msg, p)) {
-                inner_door_occlusion_cb_(p.on != 0);
+            if(read_inline_pod(msg, p)) {
+                const bool on = p.on != 0;
+                if(inner_door_occlusion_cb_) {
+                    inner_door_occlusion_cb_(on);
+                }
+                if(settings_inner_occl_cb_) {
+                    settings_inner_occl_cb_(on);
+                }
             }
         }));
 
@@ -173,8 +212,14 @@ void DebugMsgProxy::init()
         middleware::MsgType::GLAVO_Debug_Plate_Present_Ntf, middleware::ModuleId::UI,
         [this](const middleware::Message& msg) {
             middleware::DebugOnOffPayload p{};
-            if(plate_present_cb_ && read_inline_pod(msg, p)) {
-                plate_present_cb_(p.on != 0);
+            if(read_inline_pod(msg, p)) {
+                const bool on = p.on != 0;
+                if(plate_present_cb_) {
+                    plate_present_cb_(on);
+                }
+                if(settings_plate_present_cb_) {
+                    settings_plate_present_cb_(on);
+                }
             }
         }));
 
@@ -264,8 +309,13 @@ void DebugMsgProxy::init()
         middleware::MsgType::GLAVO_UI_Height_Calib_Progress_Ntf, middleware::ModuleId::UI,
         [this](const middleware::Message& msg) {
             middleware::HeightCalibProgressPayload p{};
-            if(height_calib_progress_cb_ && read_inline_pod(msg, p)) {
-                height_calib_progress_cb_(p);
+            if(read_inline_pod(msg, p)) {
+                if(height_calib_progress_cb_) {
+                    height_calib_progress_cb_(p);
+                }
+                if(settings_height_calib_cb_) {
+                    settings_height_calib_cb_(p);
+                }
             }
         }));
 
@@ -589,6 +639,18 @@ void DebugMsgProxy::request_plate_height_adj_state()
     publish_empty(middleware::MsgType::UI_Debug_PlateHeight_Adj_Get_Ntf);
 }
 
+void DebugMsgProxy::send_hold_prep_z_set(bool on)
+{
+    middleware::DebugOnOffPayload p{};
+    p.on = on ? 1 : 0;
+    publish_pod(middleware::MsgType::UI_Debug_Hold_Prep_Z_Set_Ntf, p);
+}
+
+void DebugMsgProxy::request_hold_prep_z_state()
+{
+    publish_empty(middleware::MsgType::UI_Debug_Hold_Prep_Z_Get_Ntf);
+}
+
 void DebugMsgProxy::send_inner_door_occlusion_set(bool on)
 {
     middleware::DebugOnOffPayload p{};
@@ -821,6 +883,26 @@ void DebugMsgProxy::register_galvo_point_test(DebugGalvoPointTestCb cb)
 void DebugMsgProxy::register_height_calib_progress(DebugHeightCalibProgressCb cb)
 {
     height_calib_progress_cb_ = std::move(cb);
+}
+
+void DebugMsgProxy::set_settings_print_gate_observers(
+    DebugSkipOuterDoorCb skip_outer,
+    DebugInnerDoorOcclusionCb inner_occlusion,
+    DebugPlatePresentCb plate_present,
+    DebugOpticalPathCheckCb optical_path,
+    DebugPlateHeightAdjCb plate_height,
+    DebugSkipO2GateCb skip_o2,
+    DebugHeightCalibProgressCb height_calib,
+    DebugHoldPrepZCb hold_prep_z)
+{
+    settings_skip_outer_cb_ = std::move(skip_outer);
+    settings_inner_occl_cb_ = std::move(inner_occlusion);
+    settings_plate_present_cb_ = std::move(plate_present);
+    settings_optical_cb_ = std::move(optical_path);
+    settings_plate_height_cb_ = std::move(plate_height);
+    settings_skip_o2_cb_ = std::move(skip_o2);
+    settings_height_calib_cb_ = std::move(height_calib);
+    settings_hold_prep_z_cb_ = std::move(hold_prep_z);
 }
 
 void DebugMsgProxy::register_local_rtsp(DebugLocalRtspCb cb)
