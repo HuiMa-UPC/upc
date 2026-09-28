@@ -10,6 +10,7 @@
 #include "settings_icons.h"
 #include "ui_msg_proxy.hpp"
 #include "debug_msg_proxy.hpp"
+#include "control.hpp"
 #include "msg_runtime.hpp"
 #include "config/cal_config.hpp"
 
@@ -42,6 +43,7 @@
  *   - 软件版本号迁至 About 子页。
  *   - Display & Sound：LCD 背光滑条（sysfs `/sys/class/backlight`，1~100%）。
  *   - Advanced Print：打印前门控，默认开，与调试页同一套 Glavo 开关；
+ *     Transfer Box 与调试页同一枚本地开关，默认开（取件后走转运盒三步）；
  *     Calibration 内的 Work Height 是测高收到约 1mm 后再向上补的目标高度；
  *     Height Calibration 的 Start 与调试页 Laser 卡相同。
  *   - 子导航图标暂用 LV_SYMBOL 占位，待 SVG 资源到位再替换。
@@ -363,6 +365,7 @@ lv_obj_t *g_gate_optical = nullptr;
 lv_obj_t *g_gate_height = nullptr;
 lv_obj_t *g_gate_o2 = nullptr;
 lv_obj_t *g_gate_hold_z = nullptr;
+lv_obj_t *g_gate_transfer = nullptr;
 lv_obj_t *g_height_calib_lbl = nullptr;
 lv_obj_t *g_plate_work_z_ta = nullptr;
 /** 回读改开关时挡住 VALUE_CHANGED，避免再发一帧 Set。 */
@@ -376,6 +379,7 @@ enum class PrintGate : uint8_t {
     PlateHeight,
     Oxygen,
     HoldPrepZ,
+    TransferBox,
 };
 
 void apply_dev_entry_visibility(void);
@@ -2081,6 +2085,7 @@ void on_print_gate_changed(lv_event_t *e)
     case PrintGate::PlateHeight:  proxy.send_plate_height_adj_set(on); break;
     case PrintGate::Oxygen:       proxy.send_skip_o2_gate_set(!on); break;
     case PrintGate::HoldPrepZ:    proxy.send_hold_prep_z_set(on); break;
+    case PrintGate::TransferBox:  control_set_transfer_box_flow(on); break;
     }
 }
 
@@ -2133,6 +2138,7 @@ void build_print_detail(lv_obj_t *parent)
 {
     g_gate_outer = g_gate_inner = g_gate_plate = nullptr;
     g_gate_optical = g_gate_height = g_gate_o2 = g_gate_hold_z = nullptr;
+    g_gate_transfer = nullptr;
     g_height_calib_lbl = nullptr;
     g_plate_work_z_ta = nullptr;
 
@@ -2164,7 +2170,9 @@ void build_print_detail(lv_obj_t *parent)
     g_gate_optical = make_gate_row(card, "Optical Path Check", PrintGate::OpticalPath, false);
     g_gate_height = make_gate_row(card, "Plate Height Adj", PrintGate::PlateHeight, false);
     g_gate_o2 = make_gate_row(card, "Oxygen Check", PrintGate::Oxygen, false);
-    g_gate_hold_z = make_gate_row(card, "Keep Z Position", PrintGate::HoldPrepZ, true, false);
+    g_gate_hold_z = make_gate_row(card, "Keep Z Position", PrintGate::HoldPrepZ, false, false);
+    g_gate_transfer = make_gate_row(card, "Transfer Box", PrintGate::TransferBox, true,
+                                    control_transfer_box_flow_enabled());
 
     lv_obj_t *sec2 = lv_obj_create(parent);
     lv_obj_remove_style_all(sec2);
@@ -2281,6 +2289,7 @@ void show_detail(NavId id)
     g_bl_pct_lbl = nullptr;
     g_gate_outer = g_gate_inner = g_gate_plate = nullptr;
     g_gate_optical = g_gate_height = g_gate_o2 = g_gate_hold_z = nullptr;
+    g_gate_transfer = nullptr;
     g_height_calib_lbl = nullptr;
     g_plate_work_z_ta = nullptr;
     clear_print_gate_observers();
@@ -2521,6 +2530,7 @@ void page_user_settings_refresh(bool /*force*/)
     } else if(g_selected == NAV_PRINT && g_gate_outer) {
         bind_print_gate_observers();
         request_print_gate_state();
+        set_gate_switch(g_gate_transfer, control_transfer_box_flow_enabled());
     }
 }
 
@@ -2546,6 +2556,7 @@ lv_obj_t *page_user_settings_create(lv_obj_t *parent)
     g_mcu_ver_lbl = nullptr;
     g_gate_outer = g_gate_inner = g_gate_plate = nullptr;
     g_gate_optical = g_gate_height = g_gate_o2 = g_gate_hold_z = nullptr;
+    g_gate_transfer = nullptr;
     g_height_calib_lbl = nullptr;
     g_plate_work_z_ta = nullptr;
     clear_print_gate_observers();

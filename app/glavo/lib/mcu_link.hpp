@@ -284,7 +284,9 @@ public:
     [[nodiscard]] bool env_sim_powder_low() const noexcept;
 
     /**
-     * @brief 发送“打印前开门请求”并等待 MCU 结果（TLV_REQ_OPEN_DOOR / TLV_REQ_DOOR_OPEN_RESULT）
+     * @brief 发送调试页开门指令并等待 MCU 结果
+     * @note 帧为 Port=SENSORS(0xA5) + Cmd=0x9A + TLV_DOOR_OPEN(0x08)。
+     *       结果仍按 TLV_REQ_DOOR_OPEN_RESULT(0x11) 解析。
      * @param timeout_ms 等待上限（毫秒）
      * @param opened_out 可选输出：true=门已开（door_state=0），false=拒绝/失败
      * @return true=收到结果；false=超时或发送失败
@@ -292,7 +294,7 @@ public:
     bool request_open_door_and_wait(uint32_t timeout_ms, bool* opened_out);
 
     /**
-     * @brief 仅发送一次开门指令（TLV_REQ_OPEN_DOOR），不等待 0x11 结果回包
+     * @brief 仅发送一次调试页开门指令（TLV_DOOR_OPEN 0x08），不等待 0x11 结果回包
      * @return true=已成功入串口发送队列；false=串口未就绪或组帧失败
      */
     bool request_open_door_once();

@@ -97,6 +97,11 @@ private:
     void handle_clean_test_start_request(const middleware::Message& msg);
     void handle_clean_test_close_request(const middleware::Message& msg);
     void handle_transport_request(const middleware::Message& msg);
+    void handle_transfer_demo_prep(const middleware::Message& msg);
+    void handle_transfer_demo_confirm(const middleware::Message& msg);
+    void stop_transfer_demo_worker();
+    /** @brief 演示前半段：Z 到 −10 再开外门。true=外门传感器已报开。 */
+    bool transfer_demo_lower_z_and_open_outer();
     void publish_transport_result(uint8_t result);
     void on_transport_result(uint8_t result);
     void stop_clean_worker();
@@ -270,14 +275,33 @@ private:
     /** @brief 外门闸通过后：关内门套件 → 光路/测高 → 起印后半段。 */
     void continue_print_after_outer_door_ready();
     /**
-     * @brief 内门开/关套件。发门指令前 Z 绝对到位 −10 mm（±1），再开/关，不回原高度。
-     *        不读基板视觉、也不用挡门结果决定是否动 Z。进套件前读全开：挡门关时只信
-     *        bit1；开时一轮 Occlusion 后 OR，仅用于「已在目标位则跳过整套」。
+     * @brief 内门套件动 Z 的方式。挡门只决定是否跳过整套，不决定动不动 Z。
+     *        Keep Z Position 打开时三种都不动 Z，门指令照发。
+     */
+    enum class InnerDoorZMotion : uint8_t {
+        /** Manual / 调试点击：只开关门，不联动 Z。 */
+        None = 0,
+        /** 起印关/开内门：绝对到 −10 mm，不回原高度。 */
+        PlateSafeStay,
+        /** 外门开→关补关：先到 −100 mm，关门后再回到进入前高度。 */
+        ClearanceReturn,
+    };
+    /**
+     * @brief 内门开/关套件。不读基板视觉。进套件前读全开：挡门关时只信 bit1；
+     *        开时一轮 Occlusion 后 OR，仅用于「已在目标位则跳过整套」。
      * @param opening true=开内门；false=关内门
      * @param blocking true=阻塞等锁；false=try_lock，忙则跳过
+     * @param z_motion 见 InnerDoorZMotion
      * @return false 仅 Z 未到位、终止或 blocking 且套件失败时
      */
-    bool run_inner_door_motion_kit(bool opening, bool blocking);
+    bool run_inner_door_motion_kit(bool opening, bool blocking,
+                                   InnerDoorZMotion z_motion);
+    /**
+     * @brief 关内门套件（Skip Outer Door 时直接成功）。
+     * @param blocking true=起印路径阻塞等锁；false=边沿路径 try_lock，忙则跳过
+     * @param z_motion 起印用 PlateSafeStay；外门开→关补关用 ClearanceReturn
+     */
+    bool run_inner_door_close_kit(bool blocking, InnerDoorZMotion z_motion);
     /** @brief 读 1ST bit1：valid 时 true=全开；false=非全开；无效 nullopt。 */
     [[nodiscard]] static std::optional<bool> read_inner_door_open_sensor();
     /**
@@ -287,11 +311,6 @@ private:
     [[nodiscard]] std::optional<bool> read_fully_open_fused();
     /** @brief 舱检会话 Start/Stop；载荷为 VisualCabinSessionPayload。 */
     void publish_cabin_visual_session(uint32_t session_id, bool active);
-    /**
-     * @brief 关内门套件（Skip Outer Door 时直接成功）。
-     * @param blocking true=起印路径阻塞等锁；false=边沿路径 try_lock，忙则跳过
-     */
-    bool run_inner_door_close_kit(bool blocking);
     /** @brief 起印路径：静止全开或未知才跑关套件；失败返回 false（不 abort）。 */
     bool ensure_inner_door_kit_for_print();
     /** @brief 外门开→关边沿：内门静止全开或未知才跑关套件；忙/发送中/预检则记 pending 补做。无板弹窗等待中跳过。 */
@@ -305,6 +324,8 @@ private:
      * @return false=终止或到位失败（不在此 abort；由 early prep 回灌 worker 处理）
      */
     bool ensure_z_at_plate_safe();
+    /** Keep Z 且打印会话中：禁止任何 Z 串口运动（测高/点动/Home/绝对到位一律丢弃）。 */
+    [[nodiscard]] bool z_hold_blocks_motion() const noexcept;
     void send_z_goto_abs(float target_mm);
     /**
      * @brief 准备阶段用户终止：Z 绝对到 −10 mm，只发指令不等到位
@@ -418,8 +439,23 @@ private:
     void publish_print_pause_done(bool paused);
     void publish_print_h264_record_pause(bool paused);
     void publish_print_powder_low_ntf();
-    /** @brief 向 MQTT 推送 GLAVO_Print_State_Ntf（开始打印/打印结束状态边沿） */
+    /** @brief 向 Xfr 推送 GLAVO_Print_State_Ntf（开始打印/打印结束状态边沿） */
     void publish_print_state_ntf(uint32_t mode);
+    /** 云端 state：起印时按准备计划发第一个 printing 子状态。 */
+    void cloud_begin_print(const std::string& path);
+    /** 准备步或送层阶段切换云端子状态。结果页挂起后忽略。 */
+    void cloud_set_substate(const char* substate);
+    /** 送层中层号或进度跨过 5% 时刷新 job。 */
+    void cloud_note_layer(uint32_t done_layers, uint32_t total_layers, int progress_pct);
+    /** 正式送层之后的暂停/恢复。准备阶段不改子状态。 */
+    void cloud_sync_run_pause(bool paused);
+    /** 作业结束但结果页还在：finished / canceled / aborted。 */
+    void cloud_hold_result(const char* substate);
+    /** 结果页收掉，回到 idle ready 或 not_ready。 */
+    void cloud_release_to_idle();
+    void cloud_publish();
+    [[nodiscard]] const char* cloud_first_substate() const;
+    void handle_cloud_result_dismiss(const middleware::Message& msg);
     void set_print_running(bool on);
     void publish_device_event(middleware::DeviceEventCode code,
                               middleware::DeviceEventSeverity severity,
@@ -512,6 +548,9 @@ private:
     /** 真实开门：传感器轮询放独立线程，避免堵 worker 最长 GLAVO_DOOR_OPEN_TIMEOUT_MS。 */
     std::thread door_open_worker_;
     std::atomic<bool> door_open_busy_{false};
+    /** 转运盒一键演示（Z→外门，确认后再开内门+转运串口），不堵 worker。 */
+    std::thread transfer_demo_worker_;
+    std::atomic<bool> transfer_demo_busy_{false};
     /**
      * 起印前半段（Z settle / 挡门视觉 / 读码视觉）独立线程，仿光路/测高：
      * 线程侧只置 early_print_prep_done_pending_，abort/续跑一律回 worker。
@@ -598,6 +637,22 @@ private:
     uint8_t prep_last_step_ = 0xff;
     bool ignore_powder_low_for_current_print_ = false; /**< 本次打印是否忽略缺粉检测（Cancel 后置位） */
     bool o2_auto_paused_ = false; /**< 本次因 SOC 氧过高由本层自动暂停（恢复时只清这类暂停） */
+    /* 云端 state。mode 只在 idle/printing 之间切；子状态见 CloudStateNtfPayload。 */
+    char cloud_mode_[16] = "idle";
+    char cloud_substate_[32] = "not_ready";
+    char cloud_job_id_[64] = {};
+    bool cloud_job_valid_ = false;
+    bool cloud_result_hold_ = false;
+    /** UI 已离开打印占用，但终态还没到：到了就直接回 idle，不再挂结果页。 */
+    bool cloud_dismiss_pending_ = false;
+    uint32_t cloud_layer_ = 0;
+    uint32_t cloud_total_layers_ = 0;
+    int32_t cloud_progress_pct_ = 0;
+    int32_t cloud_sent_pct_ = -1;
+    uint32_t cloud_sent_layer_ = 0xffffffffu;
+    uint64_t cloud_since_ms_ = 0;
+    uint64_t cloud_started_ms_ = 0;
+    std::string cloud_fp_;
     std::mutex first_layer_visual_mtx_;
     std::condition_variable first_layer_visual_cv_;
     bool first_layer_visual_waiting_ = false;

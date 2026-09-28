@@ -154,7 +154,7 @@ private:
     void on_serial_mcu_ota_status(const middleware::Message& msg);
     void on_galvo_version(const middleware::Message& msg);
     void on_env_sim_state(const middleware::Message& msg);
-    void on_print_state(const middleware::Message& msg);
+    void on_cloud_state(const middleware::Message& msg);
     void on_alarm_report(const middleware::Message& msg);
     void on_alarm_cloud_snapshot(const middleware::Message& msg);
     void on_ota_user_decision(const middleware::Message& msg);
@@ -187,7 +187,9 @@ private:
     bool publish_chamber_telemetry();
     bool publish_chamber_ext_telemetry();
     bool publish_heartbeat();
-    bool publish_state(uint32_t mode, uint64_t since_ms);
+    bool publish_cloud_state(bool force);
+    void note_ota_cloud_state(const char* ota_state);
+    void note_tcp_ready(bool ready);
     bool publish_cmd_ack(const std::string& req_id,
                          const std::string& cmd,
                          const std::string& result,
@@ -512,6 +514,27 @@ private:
     uint64_t last_log_collect_attempt_ms_ = 0;
 
     std::atomic<uint32_t> seq_{0};
+
+    /* 云端 state。Glavo 报 idle/printing；OTA 期间用 updating 盖住。 */
+    struct DeviceCloudState {
+        char mode[16] = "idle";
+        char substate[32] = "not_ready";
+        bool job_valid = false;
+        uint32_t layer = 0;
+        uint32_t total_layers = 0;
+        int32_t progress_pct = 0;
+        int32_t eta_s = -1;
+        uint64_t since_ms = 0;
+        uint64_t started_at_ms = 0;
+        char job_id[64] = {};
+    };
+    DeviceCloudState device_cloud_{};
+    bool tcp_ready_ = false;
+    bool tcp_ready_known_ = false;
+    bool ota_overlay_ = false;
+    char ota_sub_[32] = {};
+    uint64_t ota_since_ms_ = 0;
+    char cloud_pub_fp_[192] = {};
 };
 
 } // namespace upc::mqtt
