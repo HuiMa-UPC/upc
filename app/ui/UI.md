@@ -1039,7 +1039,7 @@ pending 自动解除——正好顺带验超时路径。
 | `user_history` | `page_user_history.*` | 打印历史：三 Tab + Storage 条 + 日期分组卡片 + 管理态批量删除 + 左滑删除 |
 | `user_settings` | `page_user_settings.*` | 设置（浅色档）：8 项左导航 + 右栏白卡版式。Network（Wi-Fi 开关/列表/子页）、Display & Brightness（背光滑条 + 熄屏选择子页，占位）、Storage（容量 + 格式化 + 文件管理，仅前端）、About（版本 + Galvo/MCU OTA）、Debug 密码弹窗。按稿 6089:11322 / 6235:91450 / 6240:92007 / 6251:94362 实现 |
 | `user_message` | `page_user_message.*` | 消息中心（浅色档）：四 Tab（含临时的 Unresolved，按到达序汇总未处理报警）+ All read 浮层顶栏 + 日期分组混排列表（MCU 报警 + 设备事件）+ 初始 10 条与底部 Load More + 左滑删除历史 + 右侧 632 详情抽屉（Reset 三态）。按稿 6230:89616 / 6091:13405 / 6091:13612 / 6091:13847 实现 |
-| `user_debug` | `page_user_debug.*` | 调试控制台（浅色档，与主页同白/淡色）；Move 页 Z 卡点击步距按 **μm** 输入，`on_jog_click` 乘 `AxisCfg::step_scale`（Z=0.001）转 mm 再发 `send_axis_jog`（契约 value 为 mm；Test 页与监控页 Manual 直接传 mm，不经此换算）；Move 页振镜卡 Abs X/Y + Move 走 `send_galvo_abs_pos`；Other 页按 Process / Cabin / Print Gates / Media & Sim / Inject 分组。Print Gates 含 **Skip Optical Path Chk**（默认关=要做光路）、**Skip Plate Prompt**（默认开）。`Galvo Point Test` 在 Print Gates，按当前校准表依次显示中心和四角红光点，与正式打印及 Test image 双向互斥。O2 Calib 在左列：输入参考浓度后点圆钮写 `/userdata/CAL/o2_cal.json`；失败 toast 提示、标签仍显示原 K。左列 Fan 开关的勾选态跟 `DebugMsgProxy::fan_on()` 走（与监控页 Manual 共用一份，见「风扇开关态：proxy 常驻缓存，两页共用」），进页先按缓存对齐。Media & Sim 的 **Sys HUD** 打开后，`ui_sys_hud` 在 `lv_layer_sys` 右上角红字显示 CPU 温 / 整机与本进程占用 / 内存（`upc_sys_monitor_sample` 读本机 `/proc` 与 thermal sysfs，不经 IPC），不进布局、不可点，仅本次运行。同组 **Chroma Green** 打开后，`ui_chroma_green` 在 `lv_layer_sys` 铺满纯绿 `#00FF00`（压住业务 UI 与 Sys HUD），中心与四角各一黑色十字作对齐参考，便于后期抠图；再点绿幕任意处关闭并把开关弹回 Off，仅本次运行。顶部传感器条末格 **Zone4** 进页后约 1Hz 读 `thermal_zone4`（同 `sample().zone4_temp_c`），退页停定时器；传感器条下方另有 **Powder IR** 八路料位红外（A1/A2/A3/B1/B2/B3/L/R，`powder_ir_bits`：Blk=遮挡有粉、Clr=受光无粉） |
+| `user_debug` | `page_user_debug.*` | 调试控制台（浅色档，与主页同白/淡色）；Move 页 Z 卡点击步距按 **μm** 输入，`on_jog_click` 乘 `AxisCfg::step_scale`（Z=0.001）转 mm 再发 `send_axis_jog`（契约 value 为 mm；Test 页与监控页 Manual 直接传 mm，不经此换算）；Move 页振镜卡 Abs X/Y + Move 走 `send_galvo_abs_pos`；Other 页按 Process / Cabin / Print Gates / Media & Sim / Inject 分组。Print Gates 含 **Skip Optical Path Chk**（默认关=要做光路）、**Skip Plate Prompt**（默认开）、**Clearance Mask**（默认开：外门补关时监控页盖遮罩，纯本地、不落盘，见「外门补关遮罩」）。`Galvo Point Test` 在 Print Gates，按当前校准表依次显示中心和四角红光点，与正式打印及 Test image 双向互斥。O2 Calib 在左列：输入参考浓度后点圆钮写 `/userdata/CAL/o2_cal.json`；失败 toast 提示、标签仍显示原 K。左列 Fan 开关的勾选态跟 `DebugMsgProxy::fan_on()` 走（与监控页 Manual 共用一份，见「风扇开关态：proxy 常驻缓存，两页共用」），进页先按缓存对齐。Media & Sim 的 **Sys HUD** 打开后，`ui_sys_hud` 在 `lv_layer_sys` 右上角红字显示 CPU 温 / 整机与本进程占用 / 内存（`upc_sys_monitor_sample` 读本机 `/proc` 与 thermal sysfs，不经 IPC），不进布局、不可点，仅本次运行。同组 **Chroma Green** 打开后，`ui_chroma_green` 在 `lv_layer_sys` 铺满纯绿 `#00FF00`（压住业务 UI 与 Sys HUD），中心与四角各一黑色十字作对齐参考，便于后期抠图；再点绿幕任意处关闭并把开关弹回 Off，仅本次运行。顶部传感器条末格 **Zone4** 进页后约 1Hz 读 `thermal_zone4`（同 `sample().zone4_temp_c`），退页停定时器；传感器条下方另有 **Powder IR** 八路料位红外（A1/A2/A3/B1/B2/B3/L/R，`powder_ir_bits`：Blk=遮挡有粉、Clr=受光无粉） |
 | `user_timelapse` | `page_user_timelapse.*` | 延时摄影播放器（隐藏页，历史缩略图进入；全屏 `lv_layer_top`） |
 
 注册仅在 `ui_app.cpp`；打印流程走 `control_*`，pages 不直接订阅 MsgBus。详见 `lib/pages/README.md`。
@@ -1382,12 +1382,13 @@ PM2.5 / PM10，稿 6578:40613 / 40816（首页）、6578:40868 / 40958（监控�
 | Job 两张数据卡 | `(892,480)` / `(1078,480)` 各 `170×98 rx16` 白 | `USER_MON_STAT_H`，两张 `flex_grow=1` 等分 |
 | Status PM 卡 | `(892,114) 356×210 rx16` 白 | `USER_MON_PM_H`，**定高**，见下 |
 | Status 指标卡 | `170×113 rx16` 白，两行两列缝均 16 | `USER_MON_CELL_H` |
-| Manual 卡片 | 稿是 420×1941 长图：Plate `356×258`、S `356×234`、D `356×210`、风扇 `356×321`、打印参数 `356×280`、Sieve（落成回粉电机）`356×144` 从 y=120 往下排；Inner Door `356×106` 与底部按钮在 y=1671 起那块 `#F5F5F5` 吸底区里；rx16 白 | 稿上六张进滚动区，另加稿外 Transfer 卡；Inner Door 吸底；卡间与内距统一 `USER_PAD_SM`、表头定高 `USER_MON_ROW_H / 2`（32）、卡内块距 `USER_MON_ROW_H * 3 / 8`（24），见下 |
-| Manual 控件 | 分段 `(909,193) 322×88`；上下钮各 `157×56`、缝 8；圆钮 `72`；输入框 / Send 高 48 rx8；风扇占空比框与 Send 宽 120、打印参数框宽 128 | `USER_MON_ROW_H * 11/8`、`* 7/8`（上下钮同行多一颗稿外的 Z 复位钮，三颗 `flex_grow` 均分，1280 档各约 102 宽）、`USER_LIGHT_BTN_SZ`、`USER_MON_ROW_H * 3/4` 与 `USER_MON_RADIUS / 2`、`* 15/8`、`* 2` |
+| Manual 卡片 | 稿是 420×1975 长图：Plate `356×258`、S `356×162`（新稿去掉了 Step 行）、D `356×210`、风扇 `356×321`、打印参数 `356×280`、Sieve（落成回粉电机）`356×144`、Retrieve `356×82` 从 y=120 往下排；Inner Door `356×106` 与底部按钮在 y=1705 起那块 `#F5F5F5` 吸底区里；rx16 白 | 稿上七张进滚动区（Retrieve 替掉了早先稿外的 Transfer 卡），S 卡按决策保留 Step 行；Inner Door 吸底；卡间与内距统一 `USER_PAD_SM`、表头定高 `USER_MON_ROW_H / 2`（32）、卡内块距 `USER_MON_ROW_H * 3 / 8`（24），见下 |
+| Manual 控件 | Top / Bottom `(909,193)` / `(1075,193)` 各 `156×88`、缝 10（没有底轨）；上下 / 复位钮各 `102×56`、缝 8；圆钮 `72`；输入框 / Send 高 48 rx8；风扇占空比框与 Send、Retrieve 的 Run 宽 120，打印参数框宽 128 | `USER_MON_ROW_H * 11/8`、`* 7/8`（上下 / 复位三颗 `flex_grow` 均分）、`USER_LIGHT_BTN_SZ`、`USER_MON_ROW_H * 3/4` 与 `USER_MON_RADIUS / 2`、`* 15/8`、`* 2` |
 | 底部按钮 | 统一 `y=684 h=84 rx24` | `USER_ACTION_BTN_SZ` / `USER_LIGHT_RADIUS`，四档见下 |
 | 摄像头浮钮 | `72×72 rx20` 白 15%：照明 `(160,690)`、拍照 `(662,690)`、全屏 `(750,690)`；全屏档后两枚挪到 `(1072,690)` / `(1160,690)` | `USER_LIGHT_BTN_SZ` |
 | 状态胶囊 | `(160,32) 102×46 rx12` 白 70% + `r=4` 圆点 | `chip_set()`，目前只有吹粉中一档 |
-| 取件 / 外门弹窗 | 卡 `448×341`（外门 `448×253`）`rx24`，滑条 `400×94 rx24`（含 1px 白描边，深色区 `398×92`）、旋钮 `84 rx20`，到深色区四边 4 | `USER_MON_DLG_W`，墨色滑条档，见下文 `open_ink_slide_dlg()` 那段 |
+| 取件 / 外门 / OPEN 弹窗 | 卡 `448×341`（外门与 OPEN `448×350`，稿 6578:41392）`rx24`，滑条 `400×94 rx24`（含 1px 白描边，深色区 `398×92`）、旋钮 `84 rx20`，到深色区四边 4；三张都有满宽 Cancel `400×72 rx16`，距滑条 16 | `USER_MON_DLG_W`，墨色滑条档，见下文 `open_ink_slide_dlg()` 那段 |
+| 外门补关遮罩 | 稿 6578:41062 只盖摄像头视口 `(128,0) 732×800` 黑 50%；转圈 `64` 白弧线宽 4、中心 `(494,371)`；白字 24 号 `Building Plate Resetting...` 在 y≈434..457 | 按需求扩到除侧栏外的整块 `128..1280`，转圈 `USER_MON_ROW_H`、文字 `user_font_body()`，整列仍居中在摄像头视口里，见「外门补关遮罩」 |
 
 右栏内所有纵向间距（Tab→PM 卡、PM 卡→网格、网格两行之间）稿上都是 16，横向两列也是 16。
 
@@ -1396,19 +1397,19 @@ PM2.5 / PM10，稿 6578:40613 / 40816（首页）、6578:40868 / 40958（监控�
 
 #### Manual：滚动区 + 吸底区
 
-新稿（6534:35742）是一张 420×1941 的长图，屏只有 800 高，所以 Manual 分成两块：
+新稿（6534:35742）是一张 420×1975 的长图，屏只有 800 高，所以 Manual 分成两块：
 
 ```
 g_panel（固定列）
 ├── g_tabs                    ← Tab 行，固定在顶
 ├── g_view_manual（flex_grow）
 │   ├── 滚动区（flex_grow，LV_DIR_VER，无滚动条）
-│   │   └── Plate / S / D / Fan / Print Params / Return Motor / Transfer
+│   │   └── Plate / S / D / Fan / Print Params / Return Motor / Retrieve
 │   └── Inner Door 卡          ← 吸底
 └── g_bottom                  ← 吹粉 + OPEN，本来就排在 view 之后，天然固定
 ```
 
-- 稿上 y=1671 起有一块 `#F5F5F5` 底、高 270 的区域，装着 Inner Door 卡和吹粉 / OPEN。折回
+- 稿上 y=1705 起有一块 `#F5F5F5` 底、高 270 的区域，装着 Inner Door 卡和吹粉 / OPEN。折回
   800 屏正好是 530..800，按钮仍落在 y=684，与其余三档底部按钮一致——所以它是吸底区，
   Inner Door 建在滚动区外面即可，不用浮层。打印进行中 Inner Door 卡隐藏、滚动区随之变高，
   见「打印中的 Manual」。
@@ -1424,17 +1425,18 @@ g_panel（固定列）
 
 | 卡 | 纵向构成 | 稿高 |
 |---|---|---|
-| Plate Position | 内距 17 + 表头 32 + 24 + 分段 88 + 24 + 上下钮 56 + 内距 17 | 258 |
-| Powder Scraper (S) | 内距 17 + 表头 32 + 24 + Step 行 48 + 24 + 圆钮 72 + 内距 17 | 234 |
+| Plate Position | 内距 17 + 表头 32 + 24 + Top/Bottom 88 + 24 + 上下 / 复位钮 56 + 内距 17 | 258 |
+| Powder Scraper (S) | 内距 17 + 表头 32 + 24 + 圆钮 72 + 内距 17（新稿去掉了 Step 行；本页按决策保留，多出 Step 行 48 + 24） | 162 |
 | Powder Bucket Rod (D) | 内距 17 + 表头 32 + 24 + Step 行 48 + 24 + Send 48 + 内距 17 | 210 |
 | Fan | 内距 24 + 表头 32 + 24 + 开关行 72 + 24 + 分隔线 1 + 24 + 占空比组（32 + 16 + 48）+ 内距 24 | 321 |
 | Print Params | 内距 24 + 表头 32 + 16 + 两行（48 + 16 + 48）+ 24 + Send 48 + 内距 24 | 280 |
 | Return Motor（稿为 Sieve Motor） | 内距 15 + 表头 30 + 12 + 圆钮 72 + 内距 15 | 144 |
+| Retrieve | 内距 17 + Run 48 + 内距 17（标题与 Run 都竖直居中） | 82 |
 | Inner Door | 内距 17 + 圆钮 72 + 内距 17（标题与圆钮都竖直居中） | 106 |
 
 - **表头是定高 32**，文字竖直居中（「Plate Position」墨迹中心 152.5，正好是 137..169 的行心），
   不是字体行高撑出来的 18。
-- **卡内块距都是 24**（表头 169 → 分段 193、分段 281 → 上下钮 305），同一个 `pad_row`。
+- **卡内块距都是 24**（表头 169 → Top/Bottom 193、Top/Bottom 281 → 上下钮 305），同一个 `pad_row`。
   组内更紧的几处套一层 `make_col()`：风扇占空比标题 → 输入行 16、打印参数标题与两行之间 16、
   回粉电机圆钮 → 下方小字 8。
 - 内距统一 `USER_PAD_SM`（1280 档 16），不单开字段；风扇 / 打印参数 / 回粉电机因此比稿矮一些，
@@ -1447,8 +1449,7 @@ g_panel（固定列）
 164 / 96 / 73（稿折 206 / 123 / 78），底部按钮上方空出约 90px。当时三张卡改成 199 / 117 / 73，剩下
 几个像素来自 1024 档 `USER_PAD_SM` 取 11（按比例应是 12.8），属于档位取整。
 
-稿上选中 `Top` 时「上」钮是置灰的，本页没做：高亮只表示「已发往该预置位」，一点动就退回 `Level`，
-不代表板子真实位置，按选中档禁用会误导（见下文「Manual · Plate Position」）。
+Top / Bottom 到位后的置灰（稿上 Top 那档「上」钮是灰的）按实时 Z 判，见下文「Manual · Plate Position」。
 
 #### Status 页的字号与首页四宫格是同一套
 
@@ -1510,17 +1511,15 @@ g_cam_layer（视口，随全屏档改宽，负责裁剪）
 
 #### 三个 Tab 与底部四档按钮
 
-Tab 行与 Manual 的 Plate Position 共用新组件 `ui_segmented`（`lib/components/`）：圆角轨道 +
-一枚跟着选中项走的实色胶囊，支持逐项置灰（`ui_segmented_set_item_enabled()`）与整体锁定
-（`ui_segmented_set_locked()`）。两者别混：逐项置灰禁掉**当前选中项**时会退到第一个可用项并发
-`VALUE_CHANGED`；整体锁定只摘可点、不改选中、不发事件。Plate Position 选中即发 Z 运动命令，
-打印中锁它只能用后者，见「打印中的 Manual」。**与 `ui_user_make_segmented()` 不是一回事**，
-那枚是深色档、写死几何、只有文字、没有逐项禁用，调用方全在调试页（14 处），改成通吃要给
-那 14 处都补参数，不值当。
+Tab 行用组件 `ui_segmented`（`lib/components/`）：圆角轨道 + 一枚跟着选中项走的实色胶囊，
+支持逐项置灰（`ui_segmented_set_item_enabled()`）与整体锁定（`ui_segmented_set_locked()`）。两者别混：
+逐项置灰禁掉**当前选中项**时会退到第一个可用项并发 `VALUE_CHANGED`；整体锁定只摘可点、不改选中、
+不发事件。Manual 的 Plate Position 早先也用它，新稿去掉 Level、要「再点一次停车」之后改成了两颗
+独立按钮（这个控件点已选中项不发事件），见「Manual · Plate Position」。**与 `ui_user_make_segmented()`
+不是一回事**，那枚是深色档、写死几何、只有文字、没有逐项禁用，调用方全在调试页（14 处），改成通吃
+要给那 14 处都补参数，不值当。
 
-两处的 cfg 差异：Tab 行 `inset=2 / gap=4`（由稿的胶囊宽 114.667 反推：2+114.667+4+…+2=356），
-Plate Position `inset=0 / gap=10`（322−3×100.667=20，两道缝各 10），胶囊色一个白一个
-`#485DFF`，后者还多一枚图标。
+Tab 行的 cfg：`inset=2 / gap=4`（由稿的胶囊宽 114.667 反推：2+114.667+4+…+2=356），胶囊白色。
 
 未选中与禁用两档稿上是同色不同不透明度（60% / 20%），而控件只吃颜色，所以在调用点先把
 不透明度折进颜色里（`lv_color_mix` 到 `#f5f5f5` 上）。
@@ -1535,6 +1534,8 @@ Plate Position `inset=0 / gap=10`（322−3×100.667=20，两道缝各 10），�
 | `BOTTOM_PRINT` | 其余（待机无任务） | 整条 `PRINT` 356 |
 
 `RETRIEVE` 与 `OPEN` 是**同一枚按钮**换文案（稿上两态都是 256 宽深色钮，只差图标与字）。
+两条路都先弹墨色滑块弹窗：`OPEN` 弹「Open the outer door」（滑到底才 `control_open_door_request()`），
+`RETRIEVE` 弹取件弹窗，见下文 `open_ink_slide_dlg()` 那段。
 这枚钮点下去走哪条路（`on_wide_click()`）、吹粉算谁发起（`purify_owner()`）、吹粉要不要先检外门
 （`on_purify_click()`），**都按 `bottom_mode() == BOTTOM_MANUAL` 判，别按 Tab**：打印会话里 Manual
 也能进，结果页停在 Manual 上时这枚是 `RETRIEVE`，按 Tab 判会跳过取件弹窗直接发开门请求，吹粉也会
@@ -1548,15 +1549,15 @@ Manual Tab **可进**，但只开放一部分（`apply_manual_lock()`，挂在 `
 | 部分 | 打印进行中（`phase_running()`） | 出结果后、取件前 |
 |---|---|---|
 | Fan（电源、占空比、Send）、Print Params、Return Motor | 可用；风扇仍受吹粉锁（`apply_fan_enabled()`） | 同左 |
-| Plate（分段 + 上下点动钮）、S（Step + −/+/复位）、D（Step + Send）、Transfer（Run） | 锁住 | 锁住 |
+| Plate（Top / Bottom + 上下 / 复位钮）、S（Step + −/+/复位）、D（Step + Send）、Retrieve（Run） | 锁住 | 锁住 |
 | Inner Door 卡 | **不显示** | 显示，但锁住 |
 | 底部按钮 | 暂停 / 终止（`BOTTOM_RUN`） | 吹粉 + `RETRIEVE`（`BOTTOM_RETRIEVE`） |
 
 - **锁住 = 按钮与输入框 50% 透明且不可点**（`set_btn_enabled()`；输入框带 `DISABLED` 后 `ui_keyboard`
   不再弹），标题与 Z/S/D 读数照常刷新。锁住的控件摘掉了可点，按压落到所在卡片上，照样能滚页面。
-- **Plate 的分段用 `ui_segmented_set_locked()` + 整体半透明**。别用 `ui_segmented_set_item_enabled()`：
-  禁掉选中项会退位并发 `VALUE_CHANGED`，`on_plate_changed()` 就发出一条 Z 运动命令（退到 Bottom 即
-  Z 绝对到 −10 mm）。
+- **Plate 卡五颗钮与 Retrieve 的 Run 归 `apply_plate_ui()`**：除打印锁外还跟外门补关 Z 锁、一键取件
+  准备中、每帧 Z（到位置灰）走，有自己的签名（`g_plate_ui_sig`），`apply_manual_lock()` 在自己的早退
+  之前调它。锁住时顺手清掉 Top / Bottom 高亮但不发停止：打印与外门补关由 Glavo 接管 Z。
 - **Inner Door 的可点条件是「套件不忙且不在打印会话」**，合在 `apply_inner_door_btn()` 里判：忙态解除时
   `set_inner_door_busy()` 也走这里，只看忙态会在打印中把钮重新打开。出结果后仍锁住，是因为这时外门
   关着、点它只会弹「先开外门」滑块，而 `control_open_door_request()` 只在待机态生效，滑到底也打不开；
@@ -1592,14 +1593,17 @@ Manual 页的三轴位置、照明钮、内门忙态与风扇取自 `DebugMsgPro
 `require_outer_door()` 读这份状态（门状态无效时保留本页记忆，不清已开外门）。外门未开时点 Inner Door：弹窗 + `g_pending_inner_door`，
 滑开后走 `control_open_door_for_inner()`（流程与首页开门相同，转圈标题是 `Opening the door...`，不是 `Checking PM2.5...`）。
 外门开到位后按点按时意图续跑开/关；等待滑开期间 env 仍报外门关时**不**清 pending，
-仅外门开→关边沿才取消。按钮跟 `EnvSnapshot.inner_door_open`（1ST bit1 **全开**）：
+仅外门开→关边沿、弹窗点 Cancel、进打印态才取消。按钮跟 `EnvSnapshot.inner_door_open`（1ST bit1 **全开**）：
 亮=全开、灭=非全开；点一下全开则关、非全开则开（暂时关也会去开）。
 开/关套件进行中 `GLAVO_Debug_Inner_Door_Busy_Ntf`（`on=1`）禁钮（半透明不可点），结束或跳过才解禁。同一条的 `reserved[0]=1` 只在外门关上后 Z 降到 −100、以及内门关完 Z 回到下降前高度这两段：Manual 的 Top/Bottom 与 Z 上升、下降、复位置灰，S/D 不动。期间若收到 Z axis motion error（1204），立刻解禁，便于手动复位。
+同一条的 `reserved[1]=1` 是外门补关**整段**（中间关门那 2 s 也保持），给「外门补关遮罩」用；它走 proxy 的
+常驻槽 `register_clearance_state()`，**不在**下面这组进页注册、离页清空的单槽里，切走期间也照收。
 调试页 Inner Door 三键同样禁（含停止）。连点由 Glavo 入队去重丢弃。
 外门关边沿：静止全开才关；当时忙/发送中/预检则事后补关。
 挡门视觉只决定内门是否已在目标位（已在则跳过整套）。Manual 点 Inner Door 只开关门，不联动 Z，也不读基板视觉。
 Manual 底部吹粉钮在不打印时可直接吹粉，不要求外门先关；清粉中再点可停，与结果页同一套。
-外门已经开着时，同一条底部的 **OPEN** 置灰不可再点；门关上后恢复。
+外门已经开着时，同一条底部的 **OPEN** 置灰不可再点；门关上后恢复。一键取件准备中（`control_transfer_demo_pending()`）
+OPEN 同样置灰：取件自己会开外门，这时再走 OPEN 会把控制层的门流程来源覆盖掉。
 `register_device`
 仍保留作兼容（Glavo 目前不发 Device_Ntf）。`page_user_monitor_refresh()` 里注册、
 `page_user_monitor_exit()` 里置 `nullptr`，与 `page_user_debug_exit()` 对称。不清的话从
@@ -1660,20 +1664,29 @@ Manual 的电源钮与调试页 Fan 开关都读它，所以在哪边开关、�
 里面是 `SLIDE TO RETRIEVE` + `Cancel`，滑到底才调 `control_print_result_collect()`。后面的
 `DOOR_OPENING` / `TRANSFER_BOX` 一行没动，转运盒开关仍默认关；开门成功即收，不再等关门。
 
-**取件弹窗与「请先开外门」弹窗（稿 6339:28971）是同一副骨架**，由 `open_ink_slide_dlg()`
-建（1280 档稿值）：
+**取件弹窗、「请先开外门」弹窗与待机 OPEN 弹窗（后两者稿 6578:41392）是同一副骨架**，由
+`open_ink_slide_dlg()` 建（1280 档稿值）：
 
 | 部件 | 取值 |
 |---|---|
 | 卡 | `USER_MON_DLG_W`（448）白卡，内距 `USER_PAD`（24）。**不借 `USER_DLG_W`**：那是 496 的确认弹窗 |
 | 副标题 | `ui_user_make_body_label()` + **居中**（该函数本身不设对齐，默认靠左） |
 | 滑条 | 墨色档 `UI_SLIDE_THEME_INK`，400×94（卡宽 − 2×24）、旋钮 84——尺寸与首页开门滑块相同，直接用 `USER_HOME_SLIDE_H` / `USER_ACTION_BTN_SZ`；圆角 24 / 20 比首页小一圈，由控件的墨色档给 |
-| Cancel | 仅取件弹窗有；满宽 400×72、圆角 16（`USER_LIGHT_RADIUS * 2/3`），配色字号借页脚按钮 |
+| Cancel | 三张都有；满宽 400×72、圆角 16（`USER_LIGHT_RADIUS * 2/3`），配色字号借页脚按钮 |
 | 间距 | 副标题 → 滑条 36、滑条 → Cancel 16：body 行距压成 `USER_PAD_SM`，滑条再加 `margin_top` 补 20 |
 
 Cancel **放在 body 里而不是 footer**：footer 自带 `USER_PAD_SM` 的 pad_top，叠上卡片行距后
-滑条到 Cancel 会变成 32，比稿多一倍。外门弹窗稿上没有 Cancel，副标题稿里还是占位文案，
-暂写 `Slide to unlock and open the outer door.`。
+滑条到 Cancel 会变成 32，比稿多一倍。旧外门稿（6339:28971）没有 Cancel，新稿补上了。
+
+外门与 OPEN 两张的文案：稿上标题「请先打开外门」、副标题还是占位（「打开外门，文案不知道」）。
+
+| 弹窗 | 标题 / 副标题 / 滑条字 | 滑到底 | Cancel |
+|---|---|---|---|
+| 请先开外门（Inner Door 触发） | `Open the outer door first` / `Slide to unlock and open the outer door.` / `SLIDE TO UNLOCK` | `control_open_door_for_inner()` | 关弹窗并清 `g_pending_inner_door`，否则之后外门一开内门还会自己动 |
+| OPEN（待机 Manual 底部） | `Open the outer door`（用户主动开门，标题不带 first）/ 副标题与滑条字同上 | `control_open_door_request()` | 只关弹窗 |
+
+两张都在外门变为已开、离页、进打印态时自动关；进打印态同时清掉 `g_pending_inner_door`
+（`try_resume_pending_inner_door()` 不看打印态）。
 
 **取件弹窗的标题跟着结束态走**：`RETRIEVE` 在完成与终止两态都会出（`phase_finished()`），稿只
 画了完成态。终止态沿用同一张卡，标题换 `Print terminated`、副标题换 `Job stopped. …`——不然
@@ -1708,32 +1721,46 @@ Device/Light**。进页 `request_soc_led_state()`：mask≠0 钮亮，全 0 钮�
 
 #### Manual · Plate Position
 
-- 右侧数字是 **Z 轴当前位置（mm）**，来自 `DebugAxisStatePayload::z_pos_mm`，格式 `%.1f`
-  （未带单位；下方 Powder Scraper 的 S 轴读数带 `mm`）。
-- **预置**：`Top` → 绝对到位 **1 mm**，`Bottom` → **-100 mm**（`send_axis_goto` →
-  Axis_Jog `dir=0`；Glavo 读当前 MCU Z 后发 μm AXIS_INC）。这是一段**相对位移**，MCU 会
-  跑完整段；再发一条相对位移（单击方向键）不会打断它。`Level` 发 Z 点动停止
-  （`send_axis_hold_stop(Z)`），用来打断还在跑的 Top/Bottom 位移；点已选中项不发事件，
-  所以只有高亮在 Top/Bottom 时点 Level 才有动作。
-- **高亮兼作状态显示**：`Top` / `Bottom` 高亮表示「已发往该预置位」。之后**任何方向**的
-  Z 点按或长按（`on_manual_jog()` 里真正发出运动命令的 `SHORT_CLICKED` / `LONG_PRESSED`）
-  在发点动命令**之前**调 `plate_leave_preset()`：高亮还在 Top/Bottom 时先发 Z 点动停止打断
-  那段位移，再把高亮退回 `Level`。只有这第一次会发停止，之后连续点按不会互相打断；已到位
-  时这条停止对静止的轴无害，所以不用判断是否已到位。S 轴 −/+ 不影响。
-  切高亮走 `ui_segmented_set_active()`，**不触发回调**，不会误发 goto。页面创建时默认高亮
-  `Level`——启动时不知道 Z 在哪，不冒充停在 Top。分段控件忽略对已选中项的点击，所以高亮
-  必须退回 Level，点动之后再点 `Top` / `Bottom` 才能重新触发到位。
+- 右侧数字是 **Z 轴当前位置（mm）**，来自 `DebugAxisStatePayload::z_pos_mm`，格式 `%.1f mm`
+  （新稿带单位，与下方 Powder Scraper 的 S 轴读数一致）。
+- **Top / Bottom 是两颗独立按钮**（稿各 156×88、缝 10，缝里是卡的白底），`make_plate_btn()` 只建
+  结构，底色、内容色与可点全由 `apply_plate_ui()` 落。新稿去掉了 `Level`。**不再用 `ui_segmented`**：
+  它点已选中项不发事件，做不了「再点一次停车」；逐项置灰禁到选中项还会退位并发 `VALUE_CHANGED`，
+  等于误发一条 Z 运动。
+- **预置**：`Top` → 绝对到位 **1 mm**（与 Z Home 停点重合），`Bottom` → **−100 mm**（`send_axis_goto`
+  → Axis_Jog `dir=0`；Glavo 读当前 MCU Z 后发 μm AXIS_INC，差值不到 0.05 mm 就不发）。这是一段
+  **相对位移**，MCU 会跑完整段；再发一条相对位移（单击方向键）不会打断它。
+- **高亮 = 还在走**：点 Top / Bottom 即高亮（`#485DFF` 底 + 白色内容），一直留到到位、停住、被打断或
+  锁住。进页不高亮。常态是墨色 5% 底 + 墨色 50% 内容（稿 `#F5F4F5` / `#9494A2`）。
+- **一键打断**（`plate_stop_if_moving()`）：高亮期间卡内五颗钮（Top、Bottom、上升、下降、复位）点一下
+  都**只**发一次 Z 点动停止（`send_axis_hold_stop(Z)`）并取消高亮，**不执行自己的动作**，要再点一次。
+  上升 / 下降长按也一样只停车，并 `lv_indev_wait_release()` 锁住这次触摸，不起点动。不当场改道：
+  Glavo 按缓存 Z 算差值，停车后马上发新的到位会拿减速中的位置算，容易停错。高亮期间五颗钮都不置灰，
+  保证随时能停。S 轴 −/+ 不受影响。
+- **到位与停住**（`plate_on_z()`，每帧轴上报调一次）：轴状态里没有「运动中 / 到位」标志，只能靠位置判。
+  连续 3 帧（`kPlateArriveNeed`，同 Glavo `wait_z_settled()`）与目标相差 ≤ 0.05 mm（`kPlateArriveTolMm`）
+  算到位；高亮期间约 3 s（`kPlateStallMs`）位置不变（两帧差 < 0.01 mm）又没到位，视为已停（撞限位、
+  1204 报错、被别处停下），只取消高亮。离页期间收不到上报（单槽回调离页即注销），回来后按新帧照样判。
+- **按实时 Z 置灰**（不看是不是点 Top / Bottom 走过去的）：Z ≥ 0.95 mm 时 Top 与上升置灰，
+  Z ≤ −99.95 mm 时 Bottom 与下降置灰，离开即恢复；复位回 Home（也是 +1 mm）之后、进页时本来就在
+  顶部，同样置灰。0.05 与 Glavo `send_z_goto_abs()` 的死区相同，也小于点动一步 0.1 mm——点一下下降
+  就离开 Top 区间。复位钮不置灰；没收到过轴上报时都不置灰。置灰样式按稿（上升钮 stroke-opacity 0.3）：
+  上下钮图标压到墨色 30%、Top / Bottom 内容压到 20%，底色不动，摘掉 `CLICKABLE`，与下面「锁住」的
+  整体半透明区分开。
+- **锁住**（`plate_z_locked()`）：打印会话、外门补关 Z 下降 / 回位（`reserved[0]=1`）、一键取件准备中
+  （`control_transfer_demo_pending()`）。五颗钮整体半透明不可点，顺手清高亮但不发停止（这几种情形
+  都是 Glavo 在管 Z）。签名 `g_plate_ui_sig`，状态没变不重设样式（轴上报很密）。
 - **待上机确认**：协议表没写「Z 轴点动停止」（TLV 0x03）单独发能否打断相对位移。长按能停，
-  只证明「速度点动 + 点动停止」组合有效。若单发停止停不住，应请 MCU 让点动停止能停下 Z 轴
-  的任何运动；临时办法是模仿长按，先发一条很慢的速度点动再立即发停止。
+  只证明「速度点动 + 点动停止」组合有效，一键打断完全建立在它上面。若单发停止停不住，应请 MCU
+  让点动停止能停下 Z 轴的任何运动；临时办法是模仿长按，先发一条很慢的速度点动再立即发停止——
+  所有停车都走 `plate_stop_if_moving()`，只改这一处。
 - **上下箭头**：点按每次相对 ±0.1 mm（`kManualZStepMm`，同 Z Click 路径）；按住满 400 ms 转速度点动、松手停，
   规则见下「Manual · 点动与 S 轴复位」。此前误用 int16/Len=2 帧，MCU 不认 Z
   相对位移（协议要求 Len=4、μm），已改为 `serial_debug_build_z_inc_um`。
-- **复位钮**（上下箭头同行最右，稿外新增，三颗 `flex_grow` 均分）：Z 回 Home，`on_z_home()` →
+- **复位钮**（上下箭头同行最右，新稿已画进来，三颗 `flex_grow` 均分）：Z 回 Home，`on_z_home()` →
   `send_axis_home(Z)`，与调试页 Z 卡归零钮同一条 `UI_Debug_Axis_Home_Ntf`（Glavo 转串口 Home 0x11）。
-  发之前先调 `plate_leave_preset()`，规则同上文「高亮兼作状态显示」：高亮不退回 Level 的话，复位后
-  再点同一档不会触发。挂 `CLICKED`，打印会话里与上下箭头一起锁住（`apply_manual_lock()`）。
-  **这把锁只能在 UI 做**：Glavo 只在起印前半段（`early_print_prep_active_`）丢弃 Z Home，正式打印中照发。
+  挂 `CLICKED`，锁住条件同 Top / Bottom。
+  **打印中那把锁只能在 UI 做**：Glavo 只在起印前半段（`early_print_prep_active_`）丢弃 Z Home，正式打印中照发。
   Glavo 在串口 MCU 真实版本首次上报后也会自动发同一条 0x11（与上电关激光同机；打印中挂起，空闲再发；Env Sim 假版本不发）。
 
 #### Manual · 点动与 S 轴复位
@@ -1768,7 +1795,7 @@ Manual 的卡片在滚动区里，手指落在按钮、分段、输入框上再�
 
 | 情形 | 判定 | 落地 |
 |---|---|---|
-| 按下后 400 ms 内移动超过 10 px | 滑动：页面滚动，不点击 | LVGL 自带：滚动一开始就不再发 `SHORT_CLICKED` / `CLICKED` / `LONG_PRESSED`。所有控件都只挂这些事件（S / Z 复位、风扇电源、各 Send、回粉电机、Top/Level/Bottom 用 `CLICKED`，点动钮用 `SHORT_CLICKED` / `LONG_PRESSED`），所以都不会误触发 |
+| 按下后 400 ms 内移动超过 10 px | 滑动：页面滚动，不点击 | LVGL 自带：滚动一开始就不再发 `SHORT_CLICKED` / `CLICKED` / `LONG_PRESSED`。所有控件都只挂这些事件（S / Z 复位、风扇电源、各 Send、回粉电机、Top/Bottom、Retrieve 的 Run 用 `CLICKED`，点动钮用 `SHORT_CLICKED` / `LONG_PRESSED`），所以都不会误触发 |
 | 没怎么动就松手 | 点按 | 同上，LVGL 默认 |
 | 点动钮按住满 400 ms | 长按点动，**锁住本次触摸** | `on_manual_jog()` 的 `LONG_PRESSED` 里 `lv_indev_wait_release()`：LVGL 9.5 长按后照样能开始滚动，且滚动开始时只清按下态、**不发 `PRESS_LOST`**，不锁的话页面在滚、电机一直跑到松手。锁住后手指再动也不滚，松手时 LVGL 发 `PRESS_LOST`（不发 `RELEASED`），同样停车 |
 | 惯性滚动中点一下 | 只停住滚动，不触发控件 | 见下 |
@@ -1814,19 +1841,61 @@ Manual 的卡片在滚动区里，手指落在按钮、分段、输入框上再�
 - 圆钮图标 `ic_chevron_left/right_set`、`ic_play_outline_set`、`ic_pause_set` 由
   `tools/gen_home_metric_icons.py` 从稿里抠出（24 组，描边 2.5），**不是**把 Plate 的上下 chevron
   转 90° 复用（那两枚描边 3.33333），也不复用实心的手维护 `ic_play`。
-- **Transfer**（稿外，排在 Return Motor 下面）：满宽 `Run`，与调试页 Other → Print Gates →
-  Transfer Demo 同一条 `control_transfer_demo_start()`。非空闲 toast「Transfer demo unavailable」。
-  打印会话里与 Plate / S / D 一起锁住。
+- **Retrieve**（稿 6534:35742 的 `356×82`，排在 Return Motor 下面，替掉了早先稿外的 Transfer 卡）：
+  左标题、右一枚 120×48 蓝钮 `Run`（稿写「取件」），与 Inner Door 卡同一种横排。与调试页 Other →
+  Print Gates → Transfer Demo 同一条 `control_transfer_demo_start()`：后台 Z→−100 → 关内门 → 开外门
+  （无 loading），Rsp 成功再弹装盒三步。非空闲 toast「Retrieve unavailable」。句柄与回调沿用
+  `g_transfer_btn` / `on_transfer_demo()`，免得和结果页取件弹窗那组混名。
+  **Run 不可点的三种情形**（都在 `apply_plate_ui()` 里判）：
+  - 打印会话里（与 Plate / S / D 一起锁住）。
+  - 准备阶段进行中（`control_transfer_demo_pending()`）：control 在 pending 变化时调
+    `page_user_monitor_transfer_demo_changed()`，这期间 Plate 五颗钮与底部 OPEN 也置灰；调试页发起的也算。
+  - Top / Bottom 还在走：Glavo 按缓存 Z 算到 −100 的差值，Z 在动时会偏，多半以 `Z did not reach` 失败。
+
+  Glavo 迟迟不回 Rsp 时，control 90 s 后自行清 pending 并 toast `Transfer demo timed out`（Glavo 最坏约
+  66 s）；不兜底的话 Run 一直灰、`control_is_printing()` 也一直挡着文件页。失败 toast
+  `Transfer demo failed` 与调试页共用，没改。
 
 #### Manual 页几处待补
 
 - **控制页那条「舱内 PM2.5 过高 → Too poor to open the gate」预警随控制页退役丢了。**
   门限判定本身在后端（`pm25_clean_threshold_`，可被 `cal.csv` 的 `PM2.5Clean` 覆盖），开门
   仍会被拦，只是拦之前用户看不到预警。补救留到后续：在 `OPEN` 按钮上加置灰态 + 一句提示。
-- **Top / Bottom 途中互切可能停错位置。** Glavo 用 MCU 周期上报的缓存 Z 算差值，第一段还没
-  跑完又发一条相对位移，最终位置取决于固件怎么处理运动中的新位移，高亮却已显示在新预置位。
-  协议表里有代码没用上的「Z 轴绝对位置移动」（TLV 0x04，目标为整数 mm，1 与 -10 都能表示），
-  改用它就不必拿缓存 Z 算差值；新的绝对移动能否覆盖进行中的运动，需先与 MCU 确认。
+- **Top / Bottom 的终点仍按缓存 Z 算。** 运动中点另一档现在只停车（见「Manual · Plate Position」），
+  不会再「第一段没跑完又发一条相对位移」。剩下的小口子：停车后立刻再点，Glavo 用的缓存 Z 可能还是
+  减速前那一帧，终点会偏一点——到位判定落空、按停住收尾、不置灰，再点一次即校正。根治是改用协议表里
+  代码没用上的「Z 轴绝对位置移动」（TLV 0x04，目标为整数 mm，1 与 -100 都能表示），就不必拿缓存 Z
+  算差值；新的绝对移动能否覆盖进行中的运动，需先与 MCU 确认。
+
+#### 外门补关遮罩（稿 6578:41062）
+
+内门开着时关外门，Glavo 会跑「Z 降到 −100 → 关内门（约 2 s）→ 回到下降前高度」（外门补关，见
+`GLAVO.md`）。整段期间本页盖一层遮罩：黑 50% + 白色转圈 + `Building Plate Resetting...`。
+
+- **范围**：稿上只盖摄像头视口（`128..860`），按需求扩到右栏——除侧栏外的整块 `128..1280`（全屏档也是这块），
+  吃掉触摸，Tab、Manual 各卡、底部按钮都点不到。遮罩是页根的最后一个子节点、从 `x=USER_SIDEBAR_W` 铺到右缘
+  （页根自己出血到屏幕左缘）；侧栏在外壳里浮在整页之上，天然不被盖，照常可以切走。只在本页：切到别的页正常显示，
+  切回来若流程还在跑，遮罩仍在。
+- **转圈与文字**：照稿居中在摄像头视口里（非全屏中心约 494，全屏跟着居中），不随遮罩扩到右栏而挪到整块中间。
+  转圈 `USER_MON_ROW_H`（1280 档 64），`ui_arc_spinner` 改成白弧、线宽 `USER_PAD_SM / 4`、不画底环；只在遮罩
+  显示时建，隐藏期间不空转动画。文字 `user_font_body()`（稿 24）。
+- **信号**：`GLAVO_Debug_Inner_Door_Busy_Ntf.reserved[1]`（Glavo `clearance_kit_active_`：补关过了跳过判断、
+  确定要跑时置 1，套件结束与 `on=0` 同一帧清零）。**别拿 `reserved[0]` 当条件**：它只在降 Z、回 Z 两段为 1，
+  中间关门那 2 s 是 0，遮罩会闪一下；**也别拿 `on`**：手动开关内门、起印关内门同样会置 1。走 proxy 常驻槽
+  `register_clearance_state()`（`monitor_backend_init()` 注册一次），切走期间补关起止也记得上；进页的
+  `request_inner_door_busy()` 回包同样送到这一槽。Keep Z Position 开时不降 Z，遮罩只在关门那 2 s 出现。
+- **报警撤遮罩**：`ui_alarm_add_observer()` 常驻（第 3 个，上限 4）。补关开始时记下当时已经 ACTIVE 的报警，
+  本轮不算它们；之后新出现、或由待复位（RTN_LATCHED）重新变 ACTIVE 的 **warning 及以上**报警记进本轮组，
+  组非空就撤遮罩。组里的报警**卡消失**（离开当前报警表；要复位的等复位成功，光是条件恢复成待复位不算）
+  就移出，组空了而流程还在跑，遮罩重新盖上。字典里 CONDITION 全在 warning 以上、10 条 EVENT 全是
+  information，所以实际等于「状态型报警」，EVENT 不参与（它也没有「解除」）。报警 toast 挂 `lv_layer_top`
+  且每次显示 `move_foreground`，不会被遮罩压住。
+- **盖上时顺手收尾**（人在本页时）：停长按点动、收数字键盘、关 OPEN 与「请先开外门」两张滑块弹窗并清
+  `g_pending_inner_door`——它们挂 `lv_layer_top`，遮罩压不住。不在本页时不动，别去收别的页的键盘。
+- **开关**：调试页 Other → Print Gates → **Clearance Mask**，默认开，纯本地、不落盘，重启回到开
+  （`page_user_monitor_set_clearance_mask_enabled()`）。关掉立即撤下；打开时若补关还在跑、本轮也没有未解除的
+  报警，立即盖上。补关状态与报警跟踪不受开关影响。
+- 已知小口子：开机后从没进过监控页、第一次进来恰好在补关中途，此前已出现的报警会被当成「开始前就有」。
 
 ### 打印结束与结果页
 

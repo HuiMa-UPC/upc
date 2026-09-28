@@ -105,6 +105,12 @@ void control_open_door_for_inner(void);
  */
 bool control_transfer_demo_start(void);
 
+/**
+ * 一键转运的准备阶段（后台降 Z / 关内门 / 开外门，还没进装盒页）是否在跑。
+ * 变化时会调 page_user_monitor_transfer_demo_changed()；Glavo 迟迟不回 Rsp 时 90 s 后自行清掉。
+ */
+bool control_transfer_demo_pending(void);
+
 /* ---- 打印中的三个粉料阻塞弹窗（稿 6345:31129 / 6343:30738 / 6343:30854）---- */
 typedef enum {
     CONTROL_SUPPLY_DLG_POWDER_EMPTY = 0, /**< 粉舱已空 */

@@ -1,5 +1,6 @@
 #include "page_user_debug.hpp"
 #include "page_user_debug_test.hpp"
+#include "page_user_monitor.hpp"
 #include "ui_theme.hpp"
 #include "ui_user_widgets.hpp"
 #include "ui_keyboard.hpp"
@@ -1632,6 +1633,9 @@ void on_dbg_toggle(lv_event_t *e)
         /* 全屏绿幕抠图（纯 UI，仅本次运行；开后点绿幕任意处关闭）。 */
         case 25: ui_chroma_green_set_enabled(on);
                  break;
+        /* 外门补关时监控页的遮罩。纯 UI 本地标志，不下发任何命令（仅本次运行，默认开）。 */
+        case 26: page_user_monitor_set_clearance_mask_enabled(on);
+                 break;
         default: break;
     }
 }
@@ -2458,6 +2462,10 @@ void build_other_switches_column(lv_obj_t *parent)
                          &g_galvo_point_test_btn, &g_galvo_point_test_lbl);
     make_dbg_toggle(rowG3, "Powder Clean", "On", "Off", LV_SYMBOL_POWER, false,
                     4, 0, true, 0, &g_powder_clean_btn, &g_powder_clean_state_lbl);
+    /* 前三行各已 4 颗、行是不换行的横排，挤第 5 颗会压扁，所以另起一行 */
+    lv_obj_t *rowG4 = make_switch_grid_row(gate);
+    make_dbg_toggle(rowG4, "Clearance Mask", "On", "Off", LV_SYMBOL_EYE_CLOSE,
+                    page_user_monitor_clearance_mask_enabled(), 26, 0);
     update_galvo_test_controls();
 
     /* ---- 录像 / 模拟 ---- */

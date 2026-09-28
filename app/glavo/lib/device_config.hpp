@@ -172,15 +172,15 @@
 /* -------------------------------------------------------------------------- */
 /** 舱内 PMSA003-A */
 #ifndef GLAVO_PM_CABIN_UART
-// #define GLAVO_PM_CABIN_UART  "/dev/ttyS0"
-#define GLAVO_PM_CABIN_UART  "/dev/ttyS5"
+#define GLAVO_PM_CABIN_UART  "/dev/ttyS0"
+// #define GLAVO_PM_CABIN_UART  "/dev/ttyS5"
 #endif
 /**
  * 舱外 PMSA003-A
  */
 #ifndef GLAVO_PM_OUTDOOR_UART
-// #define GLAVO_PM_OUTDOOR_UART  "/dev/ttyS5"
-#define GLAVO_PM_OUTDOOR_UART  "/dev/ttyS0"
+#define GLAVO_PM_OUTDOOR_UART  "/dev/ttyS5"
+// #define GLAVO_PM_OUTDOOR_UART  "/dev/ttyS0"
 #endif
 #ifndef GLAVO_PM_VALVE_SYSFS
 #define GLAVO_PM_VALVE_SYSFS  "/sys/class/leds/fa_valve/brightness"

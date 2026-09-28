@@ -64,6 +64,21 @@ void page_user_monitor_enter_print_result(const control_print_result_t *result);
  */
 void page_user_monitor_reset_result_slide(void);
 
+/**
+ * 一键转运（Manual 的 Retrieve / 调试页 Transfer Demo，`control_transfer_demo_start()`）的准备阶段
+ * 开始或结束时由 control.cpp 调用。准备期间 Glavo 在降 Z、开外门：Manual 的 Run、Plate 卡五颗钮与
+ * 底部 OPEN 置灰，结束后按 `control_transfer_demo_pending()` 恢复。页面还没建时什么也不做。
+ */
+void page_user_monitor_transfer_demo_changed(void);
+
+/**
+ * 外门补关遮罩开关（调试页 Other → Print Gates → Clearance Mask）。纯 UI 本地标志，
+ * 不发消息也不落盘，重启回到默认开。关掉立即撤下正在显示的遮罩；打开时若补关还在跑、
+ * 本轮也没有未解除的报警，立即盖上。补关状态与报警照常记录，不受开关影响。
+ */
+void page_user_monitor_set_clearance_mask_enabled(bool on);
+bool page_user_monitor_clearance_mask_enabled(void);
+
 /** 按 viewport 缩放预览。几何固定按**全屏宽**算，见 .cpp 里 cam_apply_layout 的说明。 */
 void page_user_monitor_update_camera_preview_layout(uint32_t src_w, uint32_t src_h);
 /** 摄像头层根容器（供 control.cpp 在预览区域内挂局部弹窗）；不可用时返回 nullptr。 */

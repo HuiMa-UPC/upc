@@ -544,7 +544,7 @@ enum class MsgType : uint32_t {
     GLAVO_Debug_Cabin_Pm_Valve_Ntf,     /**< DebugOnOffPayload：舱内 PM 阀开关状态 */
     GLAVO_Debug_Skip_O2_Gate_Ntf,       /**< DebugOnOffPayload：跳过 SOC 氧打印门开关状态 */
     GLAVO_Debug_Skip_Outer_Door_Ntf,    /**< DebugOnOffPayload：跳过外门检测+关内门套件开关状态 */
-    GLAVO_Debug_Inner_Door_Busy_Ntf,    /**< DebugOnOffPayload：on=1 套件忙禁内门钮；reserved[0]=1 外门补关 Z 运动中，Manual Top/Bottom 与 Z 升降复位置灰（1204 active/latched 立刻解禁） */
+    GLAVO_Debug_Inner_Door_Busy_Ntf,    /**< DebugOnOffPayload：on=1 套件忙禁内门钮；reserved[0]=1 外门补关 Z 运动中，Manual Top/Bottom 与 Z 升降复位置灰（1204 active/latched 立刻解禁）；reserved[1]=1 外门补关套件整段（降 Z → 关内门 → 回 Z，关门那 2 s 也算）进行中，监控页盖遮罩 */
     GLAVO_Debug_O2_Calib_Rsp,           /**< DebugO2CalibRspPayload：氧标定结果（Req 应答） */
     GLAVO_Debug_O2_Calib_Ntf,           /**< DebugO2CalibRspPayload：当前 K 回读（Get，ok=1 且未改盘） */
     GLAVO_Debug_Status_Led_Ntf,         /**< DebugStatusLedPayload：灯板强制态回读 */

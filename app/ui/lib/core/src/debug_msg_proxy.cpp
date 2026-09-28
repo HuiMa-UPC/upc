@@ -147,8 +147,14 @@ void DebugMsgProxy::init()
         middleware::MsgType::GLAVO_Debug_Inner_Door_Busy_Ntf, middleware::ModuleId::UI,
         [this](const middleware::Message& msg) {
             middleware::DebugOnOffPayload p{};
-            if(inner_door_busy_cb_ && read_inline_pod(msg, p)) {
+            if(!read_inline_pod(msg, p)) {
+                return;
+            }
+            if(inner_door_busy_cb_) {
                 inner_door_busy_cb_(p.on != 0, p.reserved[0] != 0);
+            }
+            if(clearance_cb_) {
+                clearance_cb_(p.reserved[1] != 0);
             }
         }));
 
@@ -932,6 +938,11 @@ void DebugMsgProxy::register_skip_outer_door(DebugSkipOuterDoorCb cb)
 void DebugMsgProxy::register_inner_door_busy(DebugInnerDoorBusyCb cb)
 {
     inner_door_busy_cb_ = std::move(cb);
+}
+
+void DebugMsgProxy::register_clearance_state(DebugClearanceCb cb)
+{
+    clearance_cb_ = std::move(cb);
 }
 
 void DebugMsgProxy::register_o2_calib(DebugO2CalibCb cb)

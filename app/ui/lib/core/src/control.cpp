@@ -92,8 +92,12 @@ enum class DoorFlowOrigin { PrintPrep, HomeStandalone, PrintCollect, TransferDem
 DoorFlowOrigin g_door_origin = DoorFlowOrigin::PrintPrep;
 /** 外门关着去开内门：转圈标题用 Opening the door...，其余开门入口仍是 Checking PM2.5...。 */
 bool g_door_plain_opening_title = false;
-/** 演示 Prep 在后台跑（无 overlay）；Rsp 到才进装盒页。 */
+/** 演示 Prep 在后台跑（无 overlay）；Rsp 到才进装盒页。只经 set_transfer_demo_pending() 改。 */
 bool g_transfer_demo_prep_pending = false;
+/** Prep 超时兜底。Glavo 最坏约 66 s（Z 到 −100 settle 60 s + 关内门 2 s + 开外门 3 次各 1 s 与间隔）；
+ *  Rsp 丢了 pending 就永远不清——Manual 的 Run 一直灰，control_is_printing() 也一直挡着文件页。 */
+constexpr uint32_t TRANSFER_DEMO_PREP_TIMEOUT_MS = 90000u;
+lv_timer_t *g_transfer_demo_timer = nullptr;
 
 /* 转运盒流程总开关（设置页 Advanced Print，调试页 Other → Print Gates 同一枚）。
  * 默认开：取件分支插入 TRANSFER_BOX 三步。关掉则取件开门成功即回 IDLE。
@@ -114,6 +118,40 @@ uint32_t g_door_open_fail_count = 0; /**< 本轮开门失败次数（Rsp ok=0）
 bool transfer_box_flow_active(void)
 {
     return g_transfer_box_flow && g_door_origin == DoorFlowOrigin::PrintCollect;
+}
+
+void on_transfer_demo_timeout(lv_timer_t *timer);
+
+/** 改 g_transfer_demo_prep_pending 的唯一入口：起停超时定时器，值变了再通知监控页
+ *  （Manual 的 Run、Plate 卡与 OPEN 按它置灰）。enter_state() 每次都会清一遍，不变就不通知。 */
+void set_transfer_demo_pending(bool on)
+{
+    if(g_transfer_demo_timer) {
+        lv_timer_delete(g_transfer_demo_timer);
+        g_transfer_demo_timer = nullptr;
+    }
+    if(on) {
+        g_transfer_demo_timer = lv_timer_create(on_transfer_demo_timeout,
+                                                TRANSFER_DEMO_PREP_TIMEOUT_MS, nullptr);
+        lv_timer_set_repeat_count(g_transfer_demo_timer, 1);
+    }
+    if(g_transfer_demo_prep_pending == on) {
+        return;
+    }
+    g_transfer_demo_prep_pending = on;
+    page_user_monitor_transfer_demo_changed();
+}
+
+/** Prep 超时：按失败收尾（同 Rsp ok=0 那支）。晚到的 Rsp 会因 pending 已清被忽略。 */
+void on_transfer_demo_timeout(lv_timer_t * /*timer*/)
+{
+    g_transfer_demo_timer = nullptr;
+    if(!g_transfer_demo_prep_pending) {
+        return;
+    }
+    set_transfer_demo_pending(false);
+    g_door_origin = DoorFlowOrigin::PrintPrep;
+    ui_toast_show("Transfer demo timed out", user_color_status_err, 3000);
 }
 
 /* 选择文件页的视图代码已拆到 page_user_files.cpp，这里只留数据与流程。
@@ -660,7 +698,7 @@ void wire_msg_proxy()
            g_door_origin != DoorFlowOrigin::TransferDemo) {
             return;
         }
-        g_transfer_demo_prep_pending = false;
+        set_transfer_demo_pending(false);
         if(!p.ok) {
             g_door_origin = DoorFlowOrigin::PrintPrep;
             ui_toast_show("Transfer demo failed", user_color_status_err, 3000);
@@ -2815,7 +2853,7 @@ void enter_state(control_state_t s)
     g_clean_stop_pending = false;
     g_box_ready        = false;
     if(s != CONTROL_STATE_TRANSFER_BOX) {
-        g_transfer_demo_prep_pending = false;
+        set_transfer_demo_pending(false);
     }
     if(s != CONTROL_STATE_DOOR_OPENING) {
         g_door_plain_opening_title = false;
@@ -3046,9 +3084,14 @@ bool control_transfer_demo_start(void)
     }
     /* 不进开门 loading：后台降 Z / 关内门 / 开外门，Rsp 到再弹正式装盒页。 */
     g_door_origin = DoorFlowOrigin::TransferDemo;
-    g_transfer_demo_prep_pending = true;
+    set_transfer_demo_pending(true);
     ui::UiMsgProxy::instance().send_transfer_demo_prep();
     return true;
+}
+
+bool control_transfer_demo_pending(void)
+{
+    return g_transfer_demo_prep_pending;
 }
 
 const char *control_home_section_target(void)

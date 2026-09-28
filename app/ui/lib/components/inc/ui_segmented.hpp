@@ -18,8 +18,9 @@ extern "C" {
  *   │ ╰────────╯                           │
  *   └──────────────────────────────────────┘
  *
- * 监控页两处共用一份：顶部三 Tab（Job/Status/Manual）与 Manual 里的 Plate Position
- * （Top/Level/Bottom，多一枚图标、胶囊改主色蓝、内缩为 0）。差别全在 cfg 里。
+ * 现在只有监控页顶部三 Tab（Job/Status/Manual）在用。图标 + 文字竖排、主色胶囊、内缩为 0
+ * 这些 cfg 是 Manual 的 Plate Position 用过的；新稿去掉 Level、要「再点一次停车」之后它改成了
+ * 两颗独立按钮——本控件点已选中项不发事件，做不到。
  *
  * **与 `ui_user_make_segmented()` 不是一回事，别合并**（`ui_user_widgets.hpp`）：
  * 那枚是深色档、写死几何、只有文字、没有逐项禁用，调用方全在调试页（14 处）。
@@ -27,7 +28,7 @@ extern "C" {
  * 圆角。把它改成通吃要给那 14 处都补参数，得不偿失。
  */
 
-/** 单段最多几项。当前用到 3（Tab 行 / Plate Position），留点余量。 */
+/** 单段最多几项。当前用到 3（Tab 行），留点余量。 */
 #define UI_SEGMENTED_MAX_ITEMS 6
 
 /** 「无选中」哨兵：`ui_segmented_get_active()` 在没有任何一项选中时返回它。 */
@@ -49,9 +50,9 @@ typedef struct {
     int32_t      track_h;                   /**< 轨道高，<=0 = LV_SIZE_CONTENT */
     int32_t      track_radius;
     int32_t      pill_radius;
-    /** 胶囊相对轨道四周内缩。Tab 行是 2（稿 892→894），Plate Position 是 0。 */
+    /** 胶囊相对轨道四周内缩。Tab 行是 2（稿 892→894）。 */
     int32_t      inset;
-    /** 相邻两段之间的缝。Tab 行 4、Plate Position 10（都由稿的胶囊宽反推）。 */
+    /** 相邻两段之间的缝。Tab 行 4（由稿的胶囊宽反推）。 */
     int32_t      gap;
 
     lv_color_t   track_color;
@@ -94,7 +95,7 @@ uint8_t ui_segmented_get_active(const lv_obj_t *seg);
  * 最早给打印态的 Manual Tab 用；打印中 Manual 改为可进之后暂时没有调用方，留作通用能力。
  * **禁用当前选中项时会自动退到第一个可用项**并发一次 `LV_EVENT_VALUE_CHANGED`——
  * 不退的话页面会停在一个点不回来的视图上。所以**别拿它锁「选中项有副作用」的控件**
- * （Manual 的 Plate Position 选中即发 Z 运动命令），那种用 ui_segmented_set_locked()。
+ * （选中即发命令的那种，早先 Manual 的 Plate Position 选中即发 Z 运动），那种用 ui_segmented_set_locked()。
  */
 void ui_segmented_set_item_enabled(lv_obj_t *seg, uint8_t index, bool enabled);
 
@@ -105,7 +106,8 @@ bool ui_segmented_item_enabled(const lv_obj_t *seg, uint8_t index);
  * 整体锁定 / 解锁：锁定时摘掉全部项的 `LV_OBJ_FLAG_CLICKABLE`，解锁时只给 enabled 的项加回。
  * **不改选中项、不发事件、不动配色**——与 ui_segmented_set_item_enabled() 不同，后者禁掉选中项
  * 会退位并发 VALUE_CHANGED。锁住的样子由调用方给（例如整体 opa）。
- * 用在打印中的 Manual：Plate Position 选中即发 Z 运动，锁的时候不能有任何事件冒出来。
+ * 给「选中项有副作用」的控件用：锁的时候不能有任何事件冒出来。早先打印中的 Manual 拿它锁
+ * Plate Position，Plate 改成独立按钮后暂时没有调用方，留作通用能力。
  */
 void ui_segmented_set_locked(lv_obj_t *seg, bool locked);
 

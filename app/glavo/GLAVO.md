@@ -82,7 +82,7 @@ UI → GlavoService（工作线程）→ ParserManager → RingBuffer → McuLin
 
 - 广播名 `N2_Machine`，特征 `0x1B9A` Notify ASCII。无 libdbus 时 `UPC_GLAVO_HAS_BLUEZ=0` 空跑。`GLAVO_N2_BLE_ENABLE=0` 不启线程。
 
-内门 **1ST bit1（UP_SWPD）只表示全开**（1=全开，0=不在全开位）。**上电不自动关内门**。进套件前读静止位：开仅全开跳过；关仅非全开跳过（关到位未装，静止 0 不当成必须再关）。未知则开/关都跑。Manual / 调试页点击只开关门，不联动 Z。起印关/开内门仍绝对到 **−10 mm** 后发门指令，不回原高度。外门开→关自动补关：先绝对到 **−100 mm**（±1，最多 60 s），等 **2 s**，再回到下降前的高度。这两段 Z 运动期间 `GLAVO_Debug_Inner_Door_Busy_Ntf.reserved[0]=1`，Manual 的 Top/Bottom 与 Z 升降、复位置灰；若收到报警 **1204**（Z axis motion error，active/latched）则立刻解锁并中止本次等待，且不再自动回位。挡门和基板视觉都不决定这次位移。**Keep Z Position** 开则跳过下降和回位，门指令照发。套件进行中推 `GLAVO_Debug_Inner_Door_Busy_Ntf`（Manual / 调试 Inner Door 禁钮，含停止）；连点开/关在入队时去重。起印与外门开→关边沿按静止位决定是否关；边沿当时套件忙 / 打印发送中 / 预检中则记下，事后补关。与转运盒流程无共享状态。
+内门 **1ST bit1（UP_SWPD）只表示全开**（1=全开，0=不在全开位）。**上电不自动关内门**。进套件前读静止位：开仅全开跳过；关仅非全开跳过（关到位未装，静止 0 不当成必须再关）。未知则开/关都跑。Manual / 调试页点击只开关门，不联动 Z。起印关/开内门仍绝对到 **−10 mm** 后发门指令，不回原高度。外门开→关自动补关：先绝对到 **−100 mm**（±1，最多 60 s），等 **2 s**，再回到下降前的高度。这两段 Z 运动期间 `GLAVO_Debug_Inner_Door_Busy_Ntf.reserved[0]=1`，Manual 的 Top/Bottom 与 Z 升降、复位置灰；若收到报警 **1204**（Z axis motion error，active/latched）则立刻解锁并中止本次等待，且不再自动回位。补关套件确定要跑（过了跳过判断）起到结束，同一条的 `reserved[1]=1`（`clearance_kit_active_`，中间关门那 2 s 也保持），UI 据此盖监控页遮罩；结束时与 `on=0` 同一帧清零。挡门和基板视觉都不决定这次位移。**Keep Z Position** 开则跳过下降和回位，门指令照发。套件进行中推 `GLAVO_Debug_Inner_Door_Busy_Ntf`（Manual / 调试 Inner Door 禁钮，含停止）；连点开/关在入队时去重。起印与外门开→关边沿按静止位决定是否关；边沿当时套件忙 / 打印发送中 / 预检中则记下，事后补关。与转运盒流程无共享状态。
 
 ### 传感器
 
