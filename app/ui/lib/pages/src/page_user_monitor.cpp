@@ -207,6 +207,7 @@ lv_obj_t *g_plate_seg   = nullptr;
 lv_obj_t *g_plate_val   = nullptr;
 lv_obj_t *g_jog_up      = nullptr;
 lv_obj_t *g_jog_down    = nullptr;
+lv_obj_t *g_z_home      = nullptr;  /**< Z 轴复位钮（与上下钮同行），打印中锁住，见 apply_manual_lock() */
 lv_obj_t *g_s_val       = nullptr;
 lv_obj_t *g_s_step_ta   = nullptr;  /**< S 轴 Step 输入框（整数 mm，方向看 −/+ 钮） */
 lv_obj_t *g_s_minus     = nullptr;  /**< S 轴 − / + / 复位三钮，打印中锁住，见 apply_manual_lock() */
@@ -1604,6 +1605,14 @@ void attach_jog_events(lv_obj_t *btn, middleware::DebugAxis axis, int dir)
     lv_obj_add_event_cb(btn, on_manual_jog, LV_EVENT_PRESS_LOST,    ud);
 }
 
+/** Z 轴复位 = 回 Home，与调试页 Z 卡归零钮同一条消息。先走 plate_leave_preset()：
+ *  高亮还在 Top/Bottom 时打断那段位移并退回 Level，否则复位后再点同一档不会触发。 */
+void on_z_home(lv_event_t * /*e*/)
+{
+    plate_leave_preset();
+    ui::DebugMsgProxy::instance().send_axis_home(middleware::DebugAxis::Z);
+}
+
 /** S 轴复位 = 回 Home。别改成设零：MCU 只有 Z 轴有工作零点，S 轴的设零会被 Glavo 丢掉。 */
 void on_s_home(lv_event_t * /*e*/)
 {
@@ -1713,8 +1722,8 @@ void apply_manual_lock(void)
         ui_segmented_set_locked(g_plate_seg, locked);
         lv_obj_set_style_opa(g_plate_seg, locked ? LV_OPA_50 : LV_OPA_COVER, 0);
     }
-    lv_obj_t *const ctrls[] = { g_jog_up, g_jog_down, g_s_step_ta, g_s_minus, g_s_plus,
-                                g_s_home, g_d_step_ta, g_d_send };
+    lv_obj_t *const ctrls[] = { g_jog_up, g_jog_down, g_z_home, g_s_step_ta, g_s_minus,
+                                g_s_plus, g_s_home, g_d_step_ta, g_d_send };
     for(lv_obj_t *o : ctrls) {
         set_btn_enabled(o, !locked);
     }
@@ -1797,9 +1806,10 @@ lv_obj_t *manual_card_head(lv_obj_t *card, const char *title, lv_obj_t **out_val
     return row;
 }
 
-/** Manual 里那种浅底圆角钮（上/下 jog），点按 / 长按事件见 attach_jog_events()。 */
-lv_obj_t *make_jog_btn(lv_obj_t *parent, const lv_image_dsc_t *const *icon,
-                       middleware::DebugAxis axis, int dir)
+/** Plate 卡那种浅底圆角钮（上/下 jog、复位），同一行里按 flex_grow 均分宽度。
+ *  cb 为空时不挂 CLICKED：上/下钮由 make_jog_btn() 另挂 attach_jog_events()。 */
+lv_obj_t *make_flat_btn(lv_obj_t *parent, const lv_image_dsc_t *const *icon,
+                        lv_event_cb_t cb)
 {
     lv_obj_t *b = lv_button_create(parent);
     lv_obj_remove_style_all(b);
@@ -1810,8 +1820,19 @@ lv_obj_t *make_jog_btn(lv_obj_t *parent, const lv_image_dsc_t *const *icon,
     lv_obj_set_style_bg_opa(b, 13, 0);
     lv_obj_set_style_bg_opa(b, 40, LV_STATE_PRESSED);
     lv_obj_clear_flag(b, LV_OBJ_FLAG_SCROLLABLE);
-    attach_jog_events(b, axis, dir);
+    if(cb) {
+        lv_obj_add_event_cb(b, cb, LV_EVENT_CLICKED, nullptr);
+    }
     lv_obj_center(make_icon(b, icon, USER_METRIC_ICON_SZ * 3 / 4, user_light_text));
+    return b;
+}
+
+/** Manual 里那种浅底圆角钮（上/下 jog），点按 / 长按事件见 attach_jog_events()。 */
+lv_obj_t *make_jog_btn(lv_obj_t *parent, const lv_image_dsc_t *const *icon,
+                       middleware::DebugAxis axis, int dir)
+{
+    lv_obj_t *b = make_flat_btn(parent, icon, nullptr);
+    attach_jog_events(b, axis, dir);
     return b;
 }
 
@@ -1961,7 +1982,7 @@ void make_divider(lv_obj_t *parent)
 }
 
 /* ---- Plate Position（稿 6534:35742 的 (892,120) 356×258，与旧稿 6307:40977 同）----
- * 卡内纵向：内距 16 + 表头 32 + 24 + 分段 88 + 24 + 上下钮 56 + 内距 16（稿 17，差 1）。
+ * 卡内纵向：内距 16 + 表头 32 + 24 + 分段 88 + 24 + 上下 / 复位钮 56 + 内距 16（稿 17，差 1）。
  * 两道 24 稿上一样（表头 169 → 分段 193、分段 281 → 上下钮 305），用同一个 pad_row；
  * 早先给的 USER_PAD_SM / 2（8）让卡矮了 48，底部按钮上方空出一大块。 */
 void build_plate_card(lv_obj_t *parent)
@@ -2002,6 +2023,7 @@ void build_plate_card(lv_obj_t *parent)
     lv_obj_set_style_pad_column(jog, USER_PAD_SM / 2, 0);
     g_jog_up   = make_jog_btn(jog, ic_chevron_up_set,   middleware::DebugAxis::Z,  1);
     g_jog_down = make_jog_btn(jog, ic_chevron_down_set, middleware::DebugAxis::Z, -1);
+    g_z_home   = make_flat_btn(jog, ic_reset_set, on_z_home);
 }
 
 /* ---- 铺粉刮刀 S 轴（稿 6534:35742 的 (892,394) 356×234）----

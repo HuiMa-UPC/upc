@@ -66,6 +66,9 @@ private:
      * tick 重试，peer 留到会话结束由 release_stream_if_idle 发 Stop。
      */
     void note_stream_attach_failed(const char* why);
+    /** 停旧 peer，并在节流时间到后请求 Camera 用新 generation 重建流。 */
+    void request_camera_stream_rebuild(const char* reason,
+                                       uint64_t retry_delay_ms);
     /** 取帧线程已在跑且流标记为就绪。调用方不得持有 state_mtx_。 */
     bool stream_is_serving();
     /** 打印开始：起流并预热定位缓存；重复通知保持幂等。 */
@@ -187,6 +190,8 @@ private:
      */
     bool camera_peer_requested_ = false;
     bool stream_up_ = false;
+    bool stream_rebuild_pending_ = false;
+    uint64_t stream_rebuild_due_ms_ = 0;
     bool pending_start_rsp_valid_ = false;
     middleware::CameraStreamInfoPayload pending_start_rsp_{};
     std::mutex frame_mtx_;

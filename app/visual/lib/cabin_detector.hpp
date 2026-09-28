@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace upc::visual {
 /** Reject recent retransmissions, but do not retain a 32-bit millisecond ordering
@@ -77,16 +78,34 @@ public:
             count_ = 0; streak_ms_ = now_ms;
         }
         last_result_ = result; last_ms_ = now_ms; ++count_;
-        const uint32_t frames = door_ ? 5 : (result == 1 ? 3 : 12);
-        const uint32_t duration = door_ ? 150 : (result == 1 ? 100 : 1000);
+        // A recognized etched code is conservative evidence of an empty base.
+        // Requiring three expensive wide searches can never fit an IPC round.
+        const uint32_t frames = door_ ? 5 : (result == 1 ? 1 : 12);
+        const uint32_t duration = door_ ? 150 : (result == 1 ? 0 : 1000);
         return count_ >= frames && now_ms - streak_ms_ >= duration ? result : 0;
     }
+    void break_streak() { count_ = 0; last_result_ = 0; }
 private:
     bool door_, wait_open_;
     uint32_t last_seq_;
     uint64_t start_ms_, streak_ms_ = 0, last_ms_ = 0;
     uint32_t warmup_ms_, count_ = 0;
     uint8_t last_result_ = 0;
+};
+
+/** After a full no-code scan, confirm subsequent fresh frames still show the
+ * same scene without repeating the expensive wide search for every frame.
+ * Localized changes (a code, hand, plate or door motion) invalidate the hold.
+ */
+class CabinPlateSceneHold {
+public:
+    bool capture(const uint8_t* nv12, size_t bytes, uint32_t width, uint32_t height);
+    bool stable(const uint8_t* nv12, size_t bytes, uint32_t width, uint32_t height) const;
+    void clear() { samples_.clear(); width_ = height_ = 0; }
+    bool active() const { return !samples_.empty(); }
+private:
+    uint32_t width_ = 0, height_ = 0;
+    std::vector<uint8_t> samples_;
 };
 } // namespace upc::visual
 #endif

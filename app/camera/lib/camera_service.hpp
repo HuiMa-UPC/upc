@@ -8,6 +8,7 @@
 #include "vi_capture.hpp"
 
 #include <atomic>
+#include <cstdint>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -52,8 +53,11 @@ private:
                                       const char* shm_name,
                                       bool ok);
     bool ensure_stream_peer(const middleware::Message& req,
-                            const char* shm_name,
-                            middleware::MsgType rsp_type);
+                            const char* shm_name_base,
+                            middleware::MsgType rsp_type,
+                            bool force_recreate,
+                            std::string& actual_shm_name);
+    std::string next_stream_shm_name(const char* shm_name_base);
     void remove_stream_peer(middleware::ModuleId peer);
     bool has_stream_peers() const;
     void stream_thread_fn();
@@ -76,6 +80,7 @@ private:
     struct StreamPeerSession {
         middleware::ModuleId peer_id{middleware::ModuleId{0}};
         middleware::MsgType rsp_type{middleware::MsgType::APP_Camera_Stream_Start_Rsp};
+        std::string shm_name_base;
         std::string shm_name;
         upc_ipc::IpcDmaFrameRingProducer producer;
         /**
@@ -88,6 +93,7 @@ private:
 
     mutable std::mutex stream_peers_mtx_;
     std::unordered_map<uint32_t, std::shared_ptr<StreamPeerSession>> stream_peers_;
+    uint64_t stream_shm_generation_ = 0;
 
     ViCapture capture_;
     CameraDmaFrameSource dma_source_;

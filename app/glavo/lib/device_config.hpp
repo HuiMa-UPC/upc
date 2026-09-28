@@ -159,7 +159,7 @@
 /* -------------------------------------------------------------------------- */
 /** 门控：0=保持旧占位（直接通过）；1=走真实串口开门 + PM2.5/清粉流程 */
 #ifndef GLAVO_DOOR_REAL_OPEN_ENABLE
-#define GLAVO_DOOR_REAL_OPEN_ENABLE  0
+#define GLAVO_DOOR_REAL_OPEN_ENABLE  1
 #endif
 
 /** 真实开门请求等待 MCU 结果超时（毫秒）；单次轮询上限，UI 另有限次重试 */
