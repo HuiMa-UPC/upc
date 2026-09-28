@@ -185,6 +185,8 @@ bool MqttService::publish_ota_progress_cloud(const middleware::OtaProgressPayloa
     case middleware::OtaProgressState::Downloading:
     default: break;
     }
+    /* state topic 同步一份。rolled_back 在那边记成 failed。 */
+    note_ota_cloud_state(state);
     char payload[1024];
     std::snprintf(payload, sizeof(payload),
         "{"

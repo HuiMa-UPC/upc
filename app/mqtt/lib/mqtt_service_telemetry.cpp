@@ -26,6 +26,10 @@ void MqttService::on_env_update(const middleware::Message& msg)
         static_cast<double>(p.humidity_percent),
         static_cast<double>(p.pressure_kpa));
     cache_telemetry(p);
+    if(p.status == static_cast<uint32_t>(middleware::UserHomeStatus::Ready) ||
+       p.status == static_cast<uint32_t>(middleware::UserHomeStatus::Idle)) {
+        note_tcp_ready(p.status == static_cast<uint32_t>(middleware::UserHomeStatus::Ready));
+    }
 }
 
 void MqttService::on_mcu_version(const middleware::Message& msg)
@@ -93,17 +97,89 @@ void MqttService::on_env_sim_state(const middleware::Message& msg)
     env_sim_on_ = (p.on != 0);
 }
 
-void MqttService::on_print_state(const middleware::Message& msg)
+void MqttService::on_cloud_state(const middleware::Message& msg)
 {
-    middleware::PrintStateNtfPayload p{};
+    middleware::CloudStateNtfPayload p{};
     if(!read_inline_pod(msg.payload, p)) {
-        UPC_LOG_MQTT_SERVICE_TO(MqttState, Warn, "invalid GLAVO_Print_State_Ntf payload");
+        UPC_LOG_MQTT_SERVICE_TO(MqttState, Warn, "invalid GLAVO_Cloud_State_Ntf payload");
         return;
     }
-    UPC_LOG_MQTT_SERVICE_TO(MqttState, Debug, "IPC RX GLAVO_Print_State_Ntf mode=%u since=%llu",
-        static_cast<unsigned>(p.mode),
-        static_cast<unsigned long long>(p.since_ms));
-    (void)publish_state(p.mode, p.since_ms);
+    p.mode[sizeof(p.mode) - 1] = '\0';
+    p.substate[sizeof(p.substate) - 1] = '\0';
+    p.job_id[sizeof(p.job_id) - 1] = '\0';
+    UPC_LOG_MQTT_SERVICE_TO(MqttState, Debug,
+        "IPC RX GLAVO_Cloud_State_Ntf %s/%s layer=%u pct=%d",
+        p.mode, p.substate, p.layer, p.progress_pct);
+    {
+        std::lock_guard<std::mutex> lock(data_mtx_);
+        std::snprintf(device_cloud_.mode, sizeof(device_cloud_.mode), "%s", p.mode);
+        std::snprintf(device_cloud_.substate, sizeof(device_cloud_.substate), "%s", p.substate);
+        device_cloud_.job_valid = p.job_valid != 0;
+        device_cloud_.layer = p.layer;
+        device_cloud_.total_layers = p.total_layers;
+        device_cloud_.progress_pct = p.progress_pct;
+        device_cloud_.eta_s = p.eta_s;
+        device_cloud_.since_ms = p.since_ms;
+        device_cloud_.started_at_ms = p.started_at_ms;
+        std::snprintf(device_cloud_.job_id, sizeof(device_cloud_.job_id), "%s", p.job_id);
+        if(std::strcmp(p.mode, "idle") == 0) {
+            tcp_ready_known_ = true;
+            tcp_ready_ = std::strcmp(p.substate, "ready") == 0;
+        }
+    }
+    (void)publish_cloud_state(false);
+}
+
+void MqttService::note_tcp_ready(bool ready)
+{
+    bool publish = false;
+    {
+        std::lock_guard<std::mutex> lock(data_mtx_);
+        if(tcp_ready_known_ && tcp_ready_ == ready) {
+            return;
+        }
+        tcp_ready_known_ = true;
+        tcp_ready_ = ready;
+        publish = !ota_overlay_ && std::strcmp(device_cloud_.mode, "idle") == 0;
+    }
+    if(publish) {
+        (void)publish_cloud_state(false);
+    }
+}
+
+void MqttService::note_ota_cloud_state(const char* ota_state)
+{
+    const char* sub = (ota_state && ota_state[0] != '\0') ? ota_state : "downloading";
+    if(std::strcmp(sub, "rolled_back") == 0) {
+        sub = "failed";
+    }
+    const bool terminal =
+        std::strcmp(sub, "completed") == 0 || std::strcmp(sub, "failed") == 0;
+    bool publish_overlay = false;
+    bool publish_device = false;
+    {
+        std::lock_guard<std::mutex> lock(data_mtx_);
+        if(std::strcmp(ota_sub_, sub) == 0 && (ota_overlay_ || terminal)) {
+            return;
+        }
+        if(!ota_overlay_) {
+            ota_since_ms_ = static_cast<uint64_t>(unix_ms());
+        }
+        ota_overlay_ = true;
+        std::snprintf(ota_sub_, sizeof(ota_sub_), "%s", sub);
+        publish_overlay = true;
+        publish_device = terminal;
+    }
+    if(publish_overlay) {
+        (void)publish_cloud_state(false);
+    }
+    if(publish_device) {
+        {
+            std::lock_guard<std::mutex> lock(data_mtx_);
+            ota_overlay_ = false;
+        }
+        (void)publish_cloud_state(true);
+    }
 }
 
 void MqttService::cache_telemetry(const middleware::EnvSnapshotPayload& p)
@@ -388,36 +464,102 @@ bool MqttService::publish_chamber_ext_telemetry()
     return true;
 }
 
-bool MqttService::publish_state(uint32_t mode, uint64_t since_ms)
+bool MqttService::publish_cloud_state(bool force)
 {
-    /* mode 取值复用 UserHomeStatus；此处仅处理本阶段上报的两个状态边沿：
-     *   Printing=2（开始打印）→ 携带 job 子对象（占位值，后续补全）
-     *   Idle=0（打印结束）   → 不带 job
-     * substate 当前固定 idle；health 各子系统当前固定 ok。 */
-    const bool printing =
-        (mode == static_cast<uint32_t>(middleware::UserHomeStatus::Printing));
-    const char* mode_str = printing ? "printing" : "idle";
+    /* updating 盖住 Glavo 的 idle/printing。idle 的 ready/not_ready 跟振镜 TCP。
+     * health 仍是占位 ok。job 只在 printing 时带；eta 未知写 null。 */
+    char mode[16];
+    char substate[32];
+    bool job_valid = false;
+    uint32_t layer = 0;
+    uint32_t total_layers = 0;
+    int32_t progress_pct = 0;
+    int32_t eta_s = -1;
+    uint64_t since_ms = 0;
+    uint64_t started_at_ms = 0;
+    char job_id[64];
+    job_id[0] = '\0';
+
+    {
+        std::lock_guard<std::mutex> lock(data_mtx_);
+        if(ota_overlay_) {
+            std::snprintf(mode, sizeof(mode), "updating");
+            std::snprintf(substate, sizeof(substate), "%s",
+                          ota_sub_[0] ? ota_sub_ : "downloading");
+            since_ms = ota_since_ms_;
+        } else {
+            std::snprintf(mode, sizeof(mode), "%s", device_cloud_.mode);
+            std::snprintf(substate, sizeof(substate), "%s", device_cloud_.substate);
+            if(std::strcmp(mode, "idle") == 0 && tcp_ready_known_) {
+                std::snprintf(substate, sizeof(substate), "%s",
+                              tcp_ready_ ? "ready" : "not_ready");
+            }
+            job_valid = device_cloud_.job_valid && std::strcmp(mode, "printing") == 0;
+            layer = device_cloud_.layer;
+            total_layers = device_cloud_.total_layers;
+            progress_pct = device_cloud_.progress_pct;
+            eta_s = device_cloud_.eta_s;
+            since_ms = device_cloud_.since_ms;
+            started_at_ms = device_cloud_.started_at_ms;
+            std::snprintf(job_id, sizeof(job_id), "%s", device_cloud_.job_id);
+        }
+        if(since_ms == 0) {
+            since_ms = static_cast<uint64_t>(unix_ms());
+            if(!ota_overlay_ && std::strcmp(mode, "idle") == 0) {
+                device_cloud_.since_ms = since_ms;
+            }
+        }
+        char fp[192];
+        std::snprintf(fp, sizeof(fp), "%s|%s|%u|%d|%u|%s",
+                      mode, substate, layer, progress_pct,
+                      job_valid ? 1u : 0u, job_valid ? job_id : "");
+        if(!force && std::strcmp(cloud_pub_fp_, fp) == 0) {
+            return true;
+        }
+        std::snprintf(cloud_pub_fp_, sizeof(cloud_pub_fp_), "%s", fp);
+    }
 
     const uint32_t seq = ++seq_;
     const long long ts = static_cast<long long>(unix_ms());
-    const long long since = (since_ms != 0)
-        ? static_cast<long long>(since_ms)
-        : ts;
     const std::string escaped_device = json_escape(cfg_.device_id);
 
-    /* job 子对象仅在 printing mode 下携带；字段先按协议占位，后续接作业信息补全 */
-    const char* job_json = printing
-        ? "\"job\":{"
-            "\"job_id\":\"\","
-            "\"layer\":0,"
-            "\"total_layers\":0,"
-            "\"progress_pct\":0,"
+    char job_json[512];
+    if(!job_valid) {
+        std::snprintf(job_json, sizeof(job_json), "\"job\":null");
+    } else if(eta_s < 0) {
+        std::snprintf(job_json, sizeof(job_json),
+            "\"job\":{"
+            "\"job_id\":\"%s\","
+            "\"layer\":%u,"
+            "\"total_layers\":%u,"
+            "\"progress_pct\":%d,"
             "\"eta_s\":null,"
-            "\"started_at\":0"
-          "}"
-        : "\"job\":null";
+            "\"started_at\":%llu"
+            "}",
+            json_escape(job_id).c_str(),
+            layer,
+            total_layers,
+            progress_pct,
+            static_cast<unsigned long long>(started_at_ms));
+    } else {
+        std::snprintf(job_json, sizeof(job_json),
+            "\"job\":{"
+            "\"job_id\":\"%s\","
+            "\"layer\":%u,"
+            "\"total_layers\":%u,"
+            "\"progress_pct\":%d,"
+            "\"eta_s\":%d,"
+            "\"started_at\":%llu"
+            "}",
+            json_escape(job_id).c_str(),
+            layer,
+            total_layers,
+            progress_pct,
+            eta_s,
+            static_cast<unsigned long long>(started_at_ms));
+    }
 
-    char payload[1024];
+    char payload[1280];
     std::snprintf(payload, sizeof(payload),
         "{"
         "\"v\":1,"
@@ -427,7 +569,7 @@ bool MqttService::publish_state(uint32_t mode, uint64_t since_ms)
         "\"seq\":%u,"
         "\"data\":{"
             "\"mode\":\"%s\","
-            "\"substate\":\"idle\","
+            "\"substate\":\"%s\","
             "\"since\":%lld,"
             "%s,"
             "\"health\":{"
@@ -442,8 +584,9 @@ bool MqttService::publish_state(uint32_t mode, uint64_t since_ms)
         escaped_device.c_str(),
         ts,
         seq,
-        mode_str,
-        since,
+        mode,
+        substate,
+        static_cast<long long>(since_ms),
         job_json);
 
     const std::string topic = cfg_.topic_state();
@@ -464,6 +607,10 @@ bool MqttService::publish_state(uint32_t mode, uint64_t since_ms)
                              rc, topic.c_str());
         mqtt_connected_ = false;
         cmd_subscribed_ = false;
+        {
+            std::lock_guard<std::mutex> lock(data_mtx_);
+            cloud_pub_fp_[0] = '\0';
+        }
         return false;
     }
     UPC_LOG_MQTT_SERVICE_TO(MqttState, Debug,

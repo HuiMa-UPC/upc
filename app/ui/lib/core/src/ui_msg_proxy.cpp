@@ -110,6 +110,24 @@ void UiMsgProxy::init()
         }));
 
     subs_.push_back(bus.subscribe(
+        middleware::MsgType::APP_Transfer_Demo_Prep_Rsp, middleware::ModuleId::UI,
+        [this](const middleware::Message& msg) {
+            middleware::DoorResultPayload p{};
+            if (transfer_demo_prep_cb_ && read_inline_pod(msg, p)) {
+                transfer_demo_prep_cb_(p);
+            }
+        }));
+
+    subs_.push_back(bus.subscribe(
+        middleware::MsgType::APP_Transfer_Demo_Confirm_Rsp, middleware::ModuleId::UI,
+        [this](const middleware::Message& msg) {
+            middleware::DoorResultPayload p{};
+            if (transfer_demo_confirm_cb_ && read_inline_pod(msg, p)) {
+                transfer_demo_confirm_cb_(p);
+            }
+        }));
+
+    subs_.push_back(bus.subscribe(
         middleware::MsgType::APP_Fs_Delete_Rsp, middleware::ModuleId::UI,
         [this](const middleware::Message& msg) {
             middleware::FsDeleteRspPayload p{};
@@ -901,6 +919,32 @@ void UiMsgProxy::register_transport_result(TransportResultCb cb)
     transport_result_cb_ = std::move(cb);
 }
 
+void UiMsgProxy::send_transfer_demo_prep()
+{
+    middleware::Message msg(middleware::MsgType::UI_Transfer_Demo_Prep_Req,
+                            middleware::ModuleId::UI,
+                            middleware::ModuleId::APP_GLAVO);
+    middleware::MsgPort::instance().publish_async(msg);
+}
+
+void UiMsgProxy::register_transfer_demo_prep(DoorResultCb cb)
+{
+    transfer_demo_prep_cb_ = std::move(cb);
+}
+
+void UiMsgProxy::send_transfer_demo_confirm()
+{
+    middleware::Message msg(middleware::MsgType::UI_Transfer_Demo_Confirm_Req,
+                            middleware::ModuleId::UI,
+                            middleware::ModuleId::APP_GLAVO);
+    middleware::MsgPort::instance().publish_async(msg);
+}
+
+void UiMsgProxy::register_transfer_demo_confirm(DoorResultCb cb)
+{
+    transfer_demo_confirm_cb_ = std::move(cb);
+}
+
 void UiMsgProxy::send_fs_dir_open(middleware::PrintFileSource source)
 {
     /* Local 列表由 UI 读 config.json；DirOpen 仅 USB */
@@ -974,6 +1018,14 @@ void UiMsgProxy::register_print_terminate_done(PrintTerminateDoneCb cb)
 void UiMsgProxy::send_print_terminate()
 {
     middleware::Message msg(middleware::MsgType::UI_Print_Terminate_Req,
+                            middleware::ModuleId::UI,
+                            middleware::ModuleId::APP_GLAVO);
+    middleware::MsgPort::instance().publish_async(msg);
+}
+
+void UiMsgProxy::send_cloud_result_dismiss()
+{
+    middleware::Message msg(middleware::MsgType::UI_Cloud_Result_Dismiss_Ntf,
                             middleware::ModuleId::UI,
                             middleware::ModuleId::APP_GLAVO);
     middleware::MsgPort::instance().publish_async(msg);

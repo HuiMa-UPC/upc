@@ -1020,9 +1020,9 @@ void MqttService::subscribe_messages()
         middleware::ModuleId::APP_MQTT,
         [this](const middleware::Message& msg) { on_env_sim_state(msg); }));
     subs_.push_back(bus.subscribe(
-        middleware::MsgType::GLAVO_Print_State_Ntf,
+        middleware::MsgType::GLAVO_Cloud_State_Ntf,
         middleware::ModuleId::APP_MQTT,
-        [this](const middleware::Message& msg) { on_print_state(msg); }));
+        [this](const middleware::Message& msg) { on_cloud_state(msg); }));
     subs_.push_back(bus.subscribe(
         middleware::MsgType::GLAVO_Alarm_Report_Ntf,
         middleware::ModuleId::APP_MQTT,
@@ -1253,8 +1253,8 @@ bool MqttService::connect_mqtt()
 
     UPC_LOG_MQTT_SERVICE(Info, "MQTT connected uri=%s", cfg_.broker_uri.c_str());
 
-    /* 设备上线后主动上报一次完整状态（协议 §四）：mode 默认 idle，since 取当前时刻 */
-    (void)publish_state(static_cast<uint32_t>(middleware::UserHomeStatus::Idle), 0);
+    /* 设备上线后主动上报一次完整状态。优先用已经收到的 Glavo/OTA 快照。 */
+    (void)publish_cloud_state(true);
 
     /* 报警：重发未 ack outbox；向 Glavo 要一轮完整快照；发 alarm.status */
     alarm_flush_outbox();

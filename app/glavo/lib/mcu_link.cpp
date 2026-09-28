@@ -1363,7 +1363,7 @@ bool McuLink::request_open_door_and_wait(uint32_t timeout_ms, bool* opened_out)
     }
 
     uint8_t frame[32];
-    const int n = serial_build_door_open_request(frame, sizeof(frame));
+    const int n = serial_debug_build_door_open(frame, sizeof(frame));
     if(n <= 0) {
         UPC_LOG_MCU_LINK(Warn, "request_open_door: build frame failed");
         return false;
@@ -1409,7 +1409,7 @@ bool McuLink::request_open_door_once()
     }
 
     uint8_t frame[32];
-    const int n = serial_build_door_open_request(frame, sizeof(frame));
+    const int n = serial_debug_build_door_open(frame, sizeof(frame));
     if(n <= 0) {
         UPC_LOG_MCU_LINK(Warn, "request_open_door_once: build frame failed");
         return false;

@@ -412,7 +412,7 @@ enum class MsgType : uint32_t {
     UI_Print_Powder_Low_Ignore_Req, /**< Empty：本次打印忽略缺粉自动暂停与缺粉通知 */
     APP_Print_Pause_Rsp,      /**< [GLAVO_Print_Pause_Rsp] PrintPauseStatePayload：暂停/恢复响应（Pause/Resume Req 共用） */
     APP_Print_Powder_Low_Ntf, /**< Empty：粉量传感器 bit0/bit1 同时为 0，触发一次缺粉通知 */
-    GLAVO_Print_State_Ntf = 0x104C, /**< [GLAVO→MQTT] PrintStateNtfPayload：开始打印/打印结束状态边沿（触发一次 state 上报） */
+    GLAVO_Print_State_Ntf = 0x104C, /**< [GLAVO→Xfr] PrintStateNtfPayload：开始打印/打印结束状态边沿（桌面 /print/status） */
     /* 打印前光路检测（优先级高于首层检测）：UI 已进打印页，运动尚未开始。
      * 追加在 GLAVO_Print_State_Ntf 之后，避免挪动上面那段的隐式编号。 */
     APP_OpticalPath_Progress_Ntf,   /**< OpticalPathProgressPayload：光路检测逐点进度（打印卡徽标行） */
@@ -423,6 +423,11 @@ enum class MsgType : uint32_t {
     UI_Outer_Door_Confirm_Rsp,
     /** Glavo→UI：起印环境检查进度（Job 卡标题+进度条；跳过的步骤不推） */
     APP_Print_Prep_Progress_Ntf,
+    /** UI→Glavo：结果页收掉、打印占用结束。Glavo 才把云端 state 从
+     *  finished/canceled/aborted 收回 idle。空载荷。 */
+    UI_Cloud_Result_Dismiss_Ntf,
+    /** Glavo→MQTT：云端 state 快照（mode/substate/job）。只在子状态或层进度变化时发。 */
+    GLAVO_Cloud_State_Ntf,
 
     // ---- UI ↔ GLAVO：耗材/滤芯 ----
     UI_Supply_Status_Req = 0x1060, /**< Empty */
@@ -698,6 +703,11 @@ enum class MsgType : uint32_t {
     UI_Debug_Plate_Work_Z_Set_Ntf,        /**< DebugPlateWorkZPayload：目标高度 mm，仅本次运行，默认 1 */
     UI_Debug_Plate_Work_Z_Get_Ntf,        /**< Empty：查询当前工作高度 */
     GLAVO_Debug_Plate_Work_Z_Ntf,         /**< DebugPlateWorkZPayload：回读目标高度 */
+    /* 转运盒一键演示（与 Transfer Box 取件开关无关；枚举只准末尾追加） */
+    UI_Transfer_Demo_Prep_Req,            /**< Empty：Z 降到 −10 再开外门 */
+    APP_Transfer_Demo_Prep_Rsp,           /**< DoorResultPayload：外门已开才 ok=1 */
+    UI_Transfer_Demo_Confirm_Req,         /**< Empty：确认放入后开内门，再发转运串口 */
+    APP_Transfer_Demo_Confirm_Rsp,        /**< DoorResultPayload：内门已开且串口已发出才 ok=1 */
 };
 
 enum class MsgPriority : uint8_t {
@@ -770,6 +780,13 @@ inline constexpr bool is_ipc_reliable_msg_type(MsgType type) noexcept
     case MsgType::UI_Debug_Plate_Work_Z_Set_Ntf:
         return true;
 
+    /* 转运盒演示：丢一条则界面停在准备/转圈，客户会以为没点到。 */
+    case MsgType::UI_Transfer_Demo_Prep_Req:
+    case MsgType::APP_Transfer_Demo_Prep_Rsp:
+    case MsgType::UI_Transfer_Demo_Confirm_Req:
+    case MsgType::APP_Transfer_Demo_Confirm_Rsp:
+        return true;
+
     /* 调试页 Alarm Inject：点了却丢包则云端收不到单报，联调会误判 MQTT 没接上。 */
     case MsgType::UI_Debug_Alarm_Inject_Ntf:
         return true;
@@ -801,6 +818,8 @@ inline constexpr bool is_ipc_reliable_msg_type(MsgType type) noexcept
     case MsgType::APP_Print_Start_Rejected_Ntf:
     case MsgType::GLAVO_Outer_Door_Confirm_Req:
     case MsgType::UI_Outer_Door_Confirm_Rsp:
+    case MsgType::UI_Cloud_Result_Dismiss_Ntf:
+    case MsgType::GLAVO_Cloud_State_Ntf:
         return true;
 
     default:
@@ -824,6 +843,7 @@ inline constexpr bool is_ipc_latest_only_msg_type(MsgType type) noexcept
     case MsgType::APP_Visual_FirstLayer_Reference_Ready_Rsp:
     case MsgType::APP_OpticalPath_Progress_Ntf:
     case MsgType::APP_Print_Prep_Progress_Ntf:
+    case MsgType::GLAVO_Cloud_State_Ntf:
         return true;
     default:
         return false;
@@ -1069,12 +1089,37 @@ struct PrintProgressPayload {
 
 /** GLAVO_Print_State_Ntf 载荷：开始打印/打印结束状态边沿（Inline）。
  *  mode 取值复用 UserHomeStatus：Printing=2 表示开始打印，Idle=0 表示打印结束。
- *  since_ms 为进入该 mode 的 Unix 毫秒时间戳（Glavo 侧填写）。 */
+ *  since_ms 为进入该 mode 的 Unix 毫秒时间戳（Glavo 侧填写）。
+ *  只给 Xfr 的 /print/status。云端 state 走 GLAVO_Cloud_State_Ntf。 */
 struct PrintStateNtfPayload {
     uint32_t mode;       /**< UserHomeStatus：2=Printing 开始打印 / 0=Idle 打印结束 */
     uint32_t reserved;
     uint64_t since_ms;   /**< 进入当前 mode 的 Unix 毫秒时间戳 */
 };
+
+/** GLAVO_Cloud_State_Ntf：云端 state topic 的一次快照（Inline，≤256）。
+ *  mode：idle / printing。updating 由 MQTT 自己在 OTA 期间覆盖，不经本载荷。
+ *  idle 的 substate：ready（振镜 TCP 已连）/ not_ready。
+ *  printing 的 substate：checking_outer_door、closing_inner_door、
+ *  checking_build_plate、optical_path、plate_leveling、checking_oxygen、
+ *  first_layer、layer_printing、paused、paused_oxygen、finished、canceled、aborted。
+ *  job_valid=0 时 job 字段无意义，MQTT 报 job:null。
+ *  layer 是已完成层（不是正在打的层）。eta_s<0 表示未知，JSON 写 null。
+ *  since_ms 是进入当前 mode 的时刻，子状态变化不重置。 */
+struct CloudStateNtfPayload {
+    char     mode[16];
+    char     substate[32];
+    uint8_t  job_valid;
+    uint8_t  reserved[7];
+    uint32_t layer;
+    uint32_t total_layers;
+    int32_t  progress_pct;
+    int32_t  eta_s;
+    uint64_t since_ms;
+    uint64_t started_at_ms;
+    char     job_id[64];
+};
+static_assert(sizeof(CloudStateNtfPayload) <= 256, "CloudStateNtfPayload inline");
 
 /** APP_N2_Status_Ntf：制氮机 ESP BLE ASCII 解析后的快照（Inline）。
  *  state：0=UNKNOWN 1=WARMUP 2=BUILD 3=RUN 4=SAFE。

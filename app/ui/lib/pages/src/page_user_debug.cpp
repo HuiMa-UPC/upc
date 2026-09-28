@@ -10,6 +10,7 @@
 #include "ui_message_store.hpp"
 #include "ui_alarm_state.hpp"
 #include "ui_sys_hud.hpp"
+#include "ui_chroma_green.hpp"
 #include "upc_sys_monitor.hpp"
 #include "config/cal_config.hpp"
 
@@ -34,7 +35,8 @@
  * Other 页按 Process / Cabin / Print Gates / Media & Sim / Inject 分组；
  * Process 首行为回粉电机 + 筛粉电机点动（粉桶按钮已撤），Powder Clean 在 Print Gates 末行，
  * MCU 清粉结束（GLAVO_Debug_Clean_Test_Ntf）时自动复位为 Off 并显示结果；
- * Media & Sim 含 Sys HUD：开则右上角 lv_layer_sys 红字蒙版显示 CPU 温/占用/内存。
+ * Media & Sim 含 Sys HUD：开则右上角 lv_layer_sys 红字蒙版显示 CPU 温/占用/内存；
+ * 含 Chroma Green：开则 lv_layer_sys 全屏纯绿（#00FF00）+ 中心/四角黑十字，再点绿幕退出。
  * Zone4 温度在顶部传感器条常显（本机 thermal_zone4，不经 IPC）。
  * 左侧 Print Params + Fan + O2 Calib（参考浓度输入后点圆钮标定）。
  * 其余命令经 DebugMsgProxy → APP_GLAVO（后端待实现）；图标暂用 LV_SYMBOL/文字占位。
@@ -174,6 +176,8 @@ lv_obj_t *g_spi_pm25_lcd_btn = nullptr;     /**< SPI 小屏测试刷屏 */
 lv_obj_t *g_spi_pm25_lcd_state_lbl = nullptr;
 lv_obj_t *g_local_rtsp_btn = nullptr;       /**< 其他控制：本地 RTSP Server 开关按钮 */
 lv_obj_t *g_local_rtsp_state_lbl = nullptr; /**< 其他控制：本地 RTSP Server 状态文本 */
+lv_obj_t *g_chroma_green_btn = nullptr;     /**< Media & Sim：全屏绿幕开关 */
+lv_obj_t *g_chroma_green_state_lbl = nullptr;
 bool g_env_sim_on = false;                  /**< 缓存 Env Sim 回读状态，用于门控 Powder Sim 按钮 */
 
 /* 六路舱灯名称（sysfs lgt*；与 Device/Light 串口舱灯无关） */
@@ -1463,7 +1467,7 @@ struct DbgToggleCtx {
     lv_obj_t   *state_lbl;
     const char *on_txt;
     const char *off_txt;
-    uint8_t     kind;   /**< 0 粉桶 / 1 推粉 / 2 风扇 / 3 其他开关 / 4 清粉 / 5 打印H264 / 6 清粉录像 / 7 环境模拟 / 8 环境模拟缺粉 / 9 转运盒流程 / 10 首层视觉检测 / 11 消息注入 / 12 报警注入 / 13 本地RTSP / 14 光路检测 / 15 基板测高 / 16 SOC舱灯 / 17 舱内PM阀 / 18 跳过氧门 / 19 Sys HUD / 20 SPI小屏测试 / 21 跳过外门 / 22 跳过内门视觉挡门 / 23 跳过基板在位读码 / 24 跳过放版预确认 */
+    uint8_t     kind;   /**< 0 粉桶 / 1 推粉 / 2 风扇 / 3 其他开关 / 4 清粉 / 5 打印H264 / 6 清粉录像 / 7 环境模拟 / 8 环境模拟缺粉 / 9 转运盒流程 / 10 首层视觉检测 / 11 消息注入 / 12 报警注入 / 13 本地RTSP / 14 光路检测 / 15 基板测高 / 16 SOC舱灯 / 17 舱内PM阀 / 18 跳过氧门 / 19 Sys HUD / 20 SPI小屏测试 / 21 跳过外门 / 22 跳过内门视觉挡门 / 23 跳过基板在位读码 / 24 跳过放版预确认 / 25 全屏绿幕 */
     uint8_t     arg;    /**< 粉桶号 / DebugSwitchTarget / SOC LED channel */
 };
 
@@ -1624,6 +1628,9 @@ void on_dbg_toggle(lv_event_t *e)
         case 19: ui_sys_hud_set_enabled(on);
                  break;
         case 20: proxy.send_spi_pm25_lcd_test_set(on); /* SPI 小屏周期刷测试色 */
+                 break;
+        /* 全屏绿幕抠图（纯 UI，仅本次运行；开后点绿幕任意处关闭）。 */
+        case 25: ui_chroma_green_set_enabled(on);
                  break;
         default: break;
     }
@@ -2357,6 +2364,14 @@ void build_status_led_rgb_card(lv_obj_t *parent)
     make_send_button(srow, on_status_led_rgb_send, false);
 }
 
+/** 一键转运演示：与 Transfer Box 取件开关无关。 */
+void on_transfer_demo_click(lv_event_t * /*e*/)
+{
+    if(!control_transfer_demo_start()) {
+        ui_toast_show("Transfer demo unavailable", user_color_status_err, 1800);
+    }
+}
+
 void build_other_switches_column(lv_obj_t *parent)
 {
     lv_obj_t *col = lv_obj_create(parent);
@@ -2418,6 +2433,8 @@ void build_other_switches_column(lv_obj_t *parent)
     lv_obj_t *rowG1 = make_switch_grid_row(gate);
     make_dbg_toggle(rowG1, "Transfer Box", "On", "Off", LV_SYMBOL_DOWNLOAD,
                     control_transfer_box_flow_enabled(), 9, 0);
+    make_one_shot_action(rowG1, "Transfer Demo", "Run", LV_SYMBOL_PLAY,
+                         on_transfer_demo_click, nullptr, nullptr);
     make_dbg_toggle(rowG1, "1st Layer Visual", "On", "Off", LV_SYMBOL_PLAY, false,
                     10, 0, true, 0, &g_first_layer_visual_btn, &g_first_layer_visual_state_lbl);
     make_dbg_toggle(rowG1, "Plate Height Adj", "On", "Off", LV_SYMBOL_UP, true,
@@ -2460,6 +2477,9 @@ void build_other_switches_column(lv_obj_t *parent)
                     13, 0, true, 0, &g_local_rtsp_btn, &g_local_rtsp_state_lbl);
     make_dbg_toggle(rowM2, "Sys HUD", "On", "Off", LV_SYMBOL_LIST,
                     ui_sys_hud_enabled(), 19, 0);
+    make_dbg_toggle(rowM2, "Chroma Green", "On", "Off", LV_SYMBOL_IMAGE,
+                    ui_chroma_green_enabled(), 25, 0, true, 0,
+                    &g_chroma_green_btn, &g_chroma_green_state_lbl);
 
     /* ---- 注入联调 ---- */
     lv_obj_t *inj = make_section_card(col, "Inject");
@@ -3335,6 +3355,22 @@ void bind_debug_callbacks()
         }
     });
 
+    /* 点绿幕退出时把开关弹回 Off（开绿幕后底下按钮被挡住）。 */
+    ui_chroma_green_set_changed_cb([](bool on) {
+        if(g_chroma_green_btn) {
+            if(on) {
+                lv_obj_add_state(g_chroma_green_btn, LV_STATE_CHECKED);
+            } else {
+                lv_obj_clear_state(g_chroma_green_btn, LV_STATE_CHECKED);
+            }
+        }
+        if(g_chroma_green_state_lbl) {
+            lv_label_set_text(g_chroma_green_state_lbl, on ? "On" : "Off");
+            lv_obj_set_style_text_color(g_chroma_green_state_lbl,
+                                        on ? user_light_accent : user_light_icon_off, 0);
+        }
+    });
+
     /* Glavo 回报实际状态：文件缺失 / 正式打印互斥失败时回 Off，开关弹回。 */
     proxy.register_test_image([](bool on) {
         if(g_test_image_seg) {
@@ -3449,6 +3485,8 @@ void reset_globals()
     g_height_calib_lbl = nullptr;
     g_local_rtsp_btn = nullptr;
     g_local_rtsp_state_lbl = nullptr;
+    g_chroma_green_btn = nullptr;
+    g_chroma_green_state_lbl = nullptr;
     g_env_sim_on = false;
 }
 
@@ -3526,6 +3564,7 @@ void page_user_debug_exit(void)
     proxy.register_test_image(nullptr);
     proxy.register_galvo_point_test(nullptr);
     proxy.register_local_rtsp(nullptr);
+    ui_chroma_green_set_changed_cb(nullptr);
 }
 
 lv_obj_t *page_user_debug_create(lv_obj_t *parent)

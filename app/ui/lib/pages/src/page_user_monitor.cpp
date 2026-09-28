@@ -1472,7 +1472,7 @@ void on_plate_changed(lv_event_t *e)
     if(idx == UI_SEGMENTED_NONE) {
         return;
     }
-    /* Top→Z=1mm，Bottom→Z=-10mm，绝对到位由 Glavo 按当前 Z 算增量。
+    /* Top→Z=1mm，Bottom→Z=-100mm，绝对到位由 Glavo 按当前 Z 算增量。
      * Level 发 Z 点动停止，打断还在跑的 Top/Bottom 位移。点已选中项不发事件，所以只有
      * 高亮在 Top/Bottom 时才会走到 Level 这一支。 */
     auto &proxy = ui::DebugMsgProxy::instance();
@@ -1481,7 +1481,7 @@ void on_plate_changed(lv_event_t *e)
     } else if(idx == 1) {
         proxy.send_axis_hold_stop(middleware::DebugAxis::Z);
     } else if(idx == 2) {
-        proxy.send_axis_goto(middleware::DebugAxis::Z, -10.0f);
+        proxy.send_axis_goto(middleware::DebugAxis::Z, -100.0f);
     }
 }
 
@@ -1702,7 +1702,7 @@ void apply_fan_enabled(void)
  * RETRIEVE 取件回待机后解锁（锁判定合在 apply_inner_door_btn() 里）。
  *
  * Plate 的分段用 ui_segmented_set_locked()，**别用 set_item_enabled**：禁掉选中项会退位并发
- * VALUE_CHANGED，on_plate_changed() 就发出一条 Z 运动命令（退到 Bottom 即 Z 绝对到 −10 mm）。
+ * VALUE_CHANGED，on_plate_changed() 就发出一条 Z 运动命令（退到 Bottom 即 Z 绝对到 −100 mm）。
  * 锁住的控件摘掉了 CLICKABLE，按压落到所在卡片上，照样沿 scroll chain 滚页面。
  */
 void apply_manual_lock(void)
@@ -2348,16 +2348,8 @@ void on_purify_click(lv_event_t * /*e*/)
         ui_clean_state_stop();
         return;
     }
-    /* Manual 档（待机停在 Manual）：须外门关。未关弹确认，关到位后（Confirm 或传感器关边沿）再开。 */
-    if(bottom_mode() == BOTTOM_MANUAL) {
-        sync_outer_door_from_snap();
-        if(g_outer_door_open) {
-            g_pending_purify = true;
-            show_purify_door_dlg();
-            return;
-        }
-        g_pending_purify = false;
-    }
+    /* 待机停在 Manual：直接吹粉，不要求外门先关。打印结果页仍走同一套可终止清粉。 */
+    g_pending_purify = false;
     start_purify_now();
 }
 
@@ -2408,6 +2400,11 @@ void show_retrieve_dlg(void)
 void on_wide_click(lv_event_t * /*e*/)
 {
     if(bottom_mode() == BOTTOM_MANUAL) {
+        sync_outer_door_from_snap();
+        if(g_outer_door_open) {
+            apply_bottom();
+            return;
+        }
         control_open_door_request();
     } else {
         show_retrieve_dlg();
@@ -2597,6 +2594,16 @@ void apply_bottom(void)
 
     if(g_btn_wide_lbl) {
         lv_label_set_text(g_btn_wide_lbl, m == BOTTOM_MANUAL ? "OPEN" : "RETRIEVE");
+    }
+    /* 外门已开：Manual 的 OPEN 置灰不可再点。RETRIEVE 不受这条件影响。
+     * 不打印时底部吹粉钮保持可点，点下去就吹粉。 */
+    sync_outer_door_from_snap();
+    if(g_btn_wide) {
+        const bool open_blocked = (m == BOTTOM_MANUAL && g_outer_door_open);
+        set_btn_enabled(g_btn_wide, !open_blocked);
+    }
+    if(g_btn_purify && (m == BOTTOM_MANUAL || m == BOTTOM_RETRIEVE)) {
+        set_btn_enabled(g_btn_purify, true);
     }
     /* 光路检测期间暂停没有意义（运动包还没开始），灰掉；终止钮保持可点。 */
     if(g_btn_pause) {
@@ -2793,6 +2800,7 @@ void on_device_state(const ui_device_snapshot_t *snap)
             g_inner_door_open = snap->inner_door_open;
         }
         apply_inner_door_btn();
+        apply_bottom();
         if(g_outer_door_open) {
             close_outer_door_dlg();
             try_resume_pending_inner_door();
@@ -2871,6 +2879,7 @@ void wire_debug_proxy(bool on)
         const bool was_outer_open = g_outer_door_open;
         g_outer_door_open = (p.door_open != 0);
         ui_device_state_set_outer_door_open(g_outer_door_open);
+        apply_bottom();
         if(g_outer_door_open) {
             close_outer_door_dlg();
             try_resume_pending_inner_door();

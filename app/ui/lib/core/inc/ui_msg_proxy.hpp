@@ -107,6 +107,13 @@ public:
     void send_transport_request();
     void register_transport_result(TransportResultCb cb);
 
+    /** 转运盒一键演示：Z→−10 再开外门。与 Transfer Box 取件开关无关。 */
+    void send_transfer_demo_prep();
+    void register_transfer_demo_prep(DoorResultCb cb);
+    /** 确认放入后：开内门，成功再发转运串口。 */
+    void send_transfer_demo_confirm();
+    void register_transfer_demo_confirm(DoorResultCb cb);
+
     /** 列目录：当前 UI 仅对 USB 调用；Local 由 control 直读 config.json */
     void send_fs_dir_open(middleware::PrintFileSource source);
 
@@ -120,6 +127,8 @@ public:
     void register_print_progress(PrintProgressCb cb);
 
     void send_print_terminate();
+    /** 打印占用结束：通知 Glavo 把云端 state 从结果子状态收回 idle。 */
+    void send_cloud_result_dismiss();
     void register_print_terminate_done(PrintTerminateDoneCb cb);
 
     /**
@@ -277,6 +286,8 @@ private:
     CleanTestDoneCb clean_test_done_cb_;
     CleanTestCloseRspCb clean_test_close_rsp_cb_;
     TransportResultCb transport_result_cb_;
+    DoorResultCb     transfer_demo_prep_cb_;
+    DoorResultCb     transfer_demo_confirm_cb_;
     FsDeleteRspCb     fs_delete_rsp_cb_;
     FsDirCb          fs_dir_cb_;
     PrintProgressCb  print_progress_cb_;

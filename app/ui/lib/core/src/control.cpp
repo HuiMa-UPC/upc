@@ -86,13 +86,15 @@ void schedule_commit_print_result_history()
 /* 门流程来源：区分同一套门弹窗（DOOR_OPENING〔→TRANSFER_BOX〕）的入口与终态。
  *   PrintPrep      —— 打印前置流程，开门成功后进入选文件页；
  *   HomeStandalone —— 首页独立开门，开门成功后返回首页；
- *   PrintCollect   —— 打印结果页滑动取件，取消要退回结果页而不是待机首页。 */
-enum class DoorFlowOrigin { PrintPrep, HomeStandalone, PrintCollect };
+ *   PrintCollect   —— 打印结果页滑动取件，取消要退回结果页而不是待机首页。
+ *   TransferDemo   —— 调试页一键演示：降 Z、开外门后进装盒页；确认后再开内门并发转运。 */
+enum class DoorFlowOrigin { PrintPrep, HomeStandalone, PrintCollect, TransferDemo };
 DoorFlowOrigin g_door_origin = DoorFlowOrigin::PrintPrep;
 
-/* 转运盒流程总开关（调试页 Other → Print Gates → Transfer Box）。默认关：取件开门成功即回 IDLE。
- * 打开后取件分支才插入 TRANSFER_BOX 三步。纯 UI 本地标志，不发消息也不落盘。 */
-bool g_transfer_box_flow = false;
+/* 转运盒流程总开关（设置页 Advanced Print，调试页 Other → Print Gates 同一枚）。
+ * 默认开：取件分支插入 TRANSFER_BOX 三步。关掉则取件开门成功即回 IDLE。
+ * 纯 UI 本地标志，不发消息也不落盘，重启回到开。 */
+bool g_transfer_box_flow = true;
 
 /* 跳过放版预确认开关（调试页 Other → Print Gates → Skip Plate Prompt）。默认开：打印入口
  * 直接进选文件页。关掉后 control_start() 先弹「是否已放入打印版」。纯 UI 本地标志，不发消息也不落盘。 */
@@ -264,6 +266,7 @@ void request_fs_dir_open(FileTab tab)
 }
 
 void enter_state(control_state_t s);
+void transfer_demo_restore_install();
 void refresh_supply_bars(void);
 void apply_supply(const middleware::SupplyStatusPayload &p);
 void close_confirm_dlg(void);
@@ -647,6 +650,31 @@ void wire_msg_proxy()
 
     /* 自动转运：result=0 → BoxShutter；非 0 停留 BoxMoving（无超时） */
     proxy.register_transport_result(on_transport_result);
+
+    proxy.register_transfer_demo_prep([](const middleware::DoorResultPayload &p) {
+        if(g_door_origin != DoorFlowOrigin::TransferDemo ||
+           g_state != CONTROL_STATE_DOOR_OPENING) {
+            return;
+        }
+        if(!p.ok) {
+            ui_toast_show("Transfer demo failed", user_color_status_err, 3000);
+            enter_state(CONTROL_STATE_IDLE);
+            return;
+        }
+        enter_state(CONTROL_STATE_TRANSFER_BOX);
+    });
+
+    proxy.register_transfer_demo_confirm([](const middleware::DoorResultPayload &p) {
+        if(g_door_origin != DoorFlowOrigin::TransferDemo ||
+           g_state != CONTROL_STATE_TRANSFER_BOX) {
+            return;
+        }
+        if(p.ok) {
+            return; /* 串口已发出，等 APP_Transport_Result_Ntf */
+        }
+        ui_toast_show("Inner door did not open", user_color_status_err, 3000);
+        transfer_demo_restore_install();
+    });
 
     /* USB 列表经 Fs_DirOpen IPC；Local 由 load_local_files_from_config 直读盘 */
     proxy.register_fs_dir([](const middleware::FileEntryPayload *files, uint32_t count) {
@@ -1661,6 +1689,13 @@ void door_apply_variant(DoorVariant v)
     }
 }
 
+/** 演示确认失败：回到装盒页，Done 可再点。 */
+void transfer_demo_restore_install()
+{
+    g_box_ready = true;
+    door_apply_variant(DoorVariant::BoxInstall);
+}
+
 /* -------------------- 缺粉弹窗（Figma 4273:5892） -------------------- */
 
 /* 稿上是「顶部满宽示意图 + 标题 + 副标题 + 主按钮 + 副按钮」，几何与门弹窗同一套
@@ -2465,7 +2500,8 @@ void finish_after_door_open(void)
         return;
     }
     if(g_door_origin == DoorFlowOrigin::HomeStandalone ||
-       g_door_origin == DoorFlowOrigin::PrintCollect) {
+       g_door_origin == DoorFlowOrigin::PrintCollect ||
+       g_door_origin == DoorFlowOrigin::TransferDemo) {
         /* 回 IDLE 由 exit_printing_mode 关掉还在跑的吹粉。 */
         enter_state(CONTROL_STATE_IDLE);
     } else {
@@ -2510,7 +2546,12 @@ void on_box_install_confirm(lv_event_t * /*e*/)
     if(g_state != CONTROL_STATE_TRANSFER_BOX) {
         return;
     }
-    ui::UiMsgProxy::instance().send_transport_request();
+    /* 演示：确认放入后才开内门，成功再发转运串口。取件路径仍直接发串口。 */
+    if(g_door_origin == DoorFlowOrigin::TransferDemo) {
+        ui::UiMsgProxy::instance().send_transfer_demo_confirm();
+    } else {
+        ui::UiMsgProxy::instance().send_transport_request();
+    }
     door_apply_variant(DoorVariant::BoxMoving);
 }
 
@@ -2760,6 +2801,15 @@ void on_backend_action_fail(const char *message)
  *  状态机
  * ============================================================================ */
 
+bool cloud_print_occupied(control_state_t st)
+{
+    if(st == CONTROL_STATE_PRINTING || st == CONTROL_STATE_PRINT_DONE) {
+        return true;
+    }
+    return g_door_origin == DoorFlowOrigin::PrintCollect &&
+           (st == CONTROL_STATE_DOOR_OPENING || st == CONTROL_STATE_TRANSFER_BOX);
+}
+
 void enter_state(control_state_t s)
 {
     close_current_dialog();
@@ -2775,7 +2825,12 @@ void enter_state(control_state_t s)
     g_clean_stop_pending = false;
     g_box_ready        = false;
 
+    const control_state_t prev = g_state;
     g_state = s;
+    /* 云端 finished/canceled/aborted 要挂到打印占用结束。取件开门不算结束。 */
+    if(s == CONTROL_STATE_IDLE && cloud_print_occupied(prev)) {
+        ui::UiMsgProxy::instance().send_cloud_result_dismiss();
+    }
 
     switch(s) {
     case CONTROL_STATE_IDLE:
@@ -2796,7 +2851,15 @@ void enter_state(control_state_t s)
         g_current_dlg = show_door_dialog(g_overlay, DoorVariant::Opening);
         g_door_opening_since = lv_tick_get();   /* 计"正在准备开门"最短停留 */
         g_door_open_fail_count = 0;
-        backend_start_pm25(pf_on_pm25_check_done, nullptr);
+        if(g_door_origin == DoorFlowOrigin::TransferDemo) {
+            /* 演示不走 PM2.5/吹粉：先降 Z 再开外门，成功后才进装盒页。 */
+            if(g_door_title) {
+                lv_label_set_text(g_door_title, "Lowering the plate...");
+            }
+            ui::UiMsgProxy::instance().send_transfer_demo_prep();
+        } else {
+            backend_start_pm25(pf_on_pm25_check_done, nullptr);
+        }
         break;
 
     case CONTROL_STATE_TRANSFER_BOX:
@@ -2976,6 +3039,16 @@ void control_open_door_request(void)
     enter_state(CONTROL_STATE_DOOR_OPENING);
 }
 
+bool control_transfer_demo_start(void)
+{
+    if(g_state != CONTROL_STATE_IDLE) {
+        return false;
+    }
+    g_door_origin = DoorFlowOrigin::TransferDemo;
+    enter_state(CONTROL_STATE_DOOR_OPENING);
+    return true;
+}
+
 const char *control_home_section_target(void)
 {
     return g_home_section_view;
@@ -2995,7 +3068,8 @@ bool control_is_printing(void)
      * 取件的开门流程同样算打印中——此时结果页浮层还在弹窗背后没收起。 */
     return g_state == CONTROL_STATE_PRINTING ||
            g_state == CONTROL_STATE_PRINT_DONE ||
-           (g_door_origin == DoorFlowOrigin::PrintCollect &&
+           ((g_door_origin == DoorFlowOrigin::PrintCollect ||
+             g_door_origin == DoorFlowOrigin::TransferDemo) &&
             (g_state == CONTROL_STATE_DOOR_OPENING ||
              g_state == CONTROL_STATE_TRANSFER_BOX));
 }
