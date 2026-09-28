@@ -1357,7 +1357,7 @@ x=260 挪回 x=160、宽度从 202 涨到 216，`make_light_square_btn()` 与 `i
 | Status PM 卡 | `(892,114) 356×210 rx16` 白 | `USER_MON_PM_H`，**定高**，见下 |
 | Status 指标卡 | `170×113 rx16` 白，两行两列缝均 16 | `USER_MON_CELL_H` |
 | Manual 卡片 | 稿是 420×1941 长图：Plate `356×258`、S `356×234`、D `356×210`、风扇 `356×321`、打印参数 `356×280`、Sieve（落成回粉电机）`356×144` 从 y=120 往下排；Inner Door `356×106` 与底部按钮在 y=1671 起那块 `#F5F5F5` 吸底区里；rx16 白 | 中间六张进滚动区、Inner Door 吸底；卡间与内距统一 `USER_PAD_SM`、表头定高 `USER_MON_ROW_H / 2`（32）、卡内块距 `USER_MON_ROW_H * 3 / 8`（24），见下 |
-| Manual 控件 | 分段 `(909,193) 322×88`；上下钮各 `157×56`、缝 8；圆钮 `72`；输入框 / Send 高 48 rx8；风扇占空比框与 Send 宽 120、打印参数框宽 128 | `USER_MON_ROW_H * 11/8`、`* 7/8`、`USER_LIGHT_BTN_SZ`、`USER_MON_ROW_H * 3/4` 与 `USER_MON_RADIUS / 2`、`* 15/8`、`* 2` |
+| Manual 控件 | 分段 `(909,193) 322×88`；上下钮各 `157×56`、缝 8；圆钮 `72`；输入框 / Send 高 48 rx8；风扇占空比框与 Send 宽 120、打印参数框宽 128 | `USER_MON_ROW_H * 11/8`、`* 7/8`（上下钮同行多一颗稿外的 Z 复位钮，三颗 `flex_grow` 均分，1280 档各约 102 宽）、`USER_LIGHT_BTN_SZ`、`USER_MON_ROW_H * 3/4` 与 `USER_MON_RADIUS / 2`、`* 15/8`、`* 2` |
 | 底部按钮 | 统一 `y=684 h=84 rx24` | `USER_ACTION_BTN_SZ` / `USER_LIGHT_RADIUS`，四档见下 |
 | 摄像头浮钮 | `72×72 rx20` 白 15%：照明 `(160,690)`、拍照 `(662,690)`、全屏 `(750,690)`；全屏档后两枚挪到 `(1072,690)` / `(1160,690)` | `USER_LIGHT_BTN_SZ` |
 | 状态胶囊 | `(160,32) 102×46 rx12` 白 70% + `r=4` 圆点 | `chip_set()`，目前只有吹粉中一档 |
@@ -1686,15 +1686,20 @@ Device/Light**。进页 `request_soc_led_state()`：mask≠0 钮亮，全 0 钮�
 - **待上机确认**：协议表没写「Z 轴点动停止」（TLV 0x03）单独发能否打断相对位移。长按能停，
   只证明「速度点动 + 点动停止」组合有效。若单发停止停不住，应请 MCU 让点动停止能停下 Z 轴
   的任何运动；临时办法是模仿长按，先发一条很慢的速度点动再立即发停止。
-- **上下箭头**：点按每次相对 ±0.3 mm（`kManualZStepMm`，同 Z Click 路径）；按住满 400 ms 转速度点动、松手停，
+- **上下箭头**：点按每次相对 ±0.1 mm（`kManualZStepMm`，同 Z Click 路径）；按住满 400 ms 转速度点动、松手停，
   规则见下「Manual · 点动与 S 轴复位」。此前误用 int16/Len=2 帧，MCU 不认 Z
   相对位移（协议要求 Len=4、μm），已改为 `serial_debug_build_z_inc_um`。
+- **复位钮**（上下箭头同行最右，稿外新增，三颗 `flex_grow` 均分）：Z 回 Home，`on_z_home()` →
+  `send_axis_home(Z)`，与调试页 Z 卡归零钮同一条 `UI_Debug_Axis_Home_Ntf`（Glavo 转串口 Home 0x11）。
+  发之前先调 `plate_leave_preset()`，规则同上文「高亮兼作状态显示」：高亮不退回 Level 的话，复位后
+  再点同一档不会触发。挂 `CLICKED`，打印会话里与上下箭头一起锁住（`apply_manual_lock()`）。
+  **这把锁只能在 UI 做**：Glavo 只在起印前半段（`early_print_prep_active_`）丢弃 Z Home，正式打印中照发。
 
 #### Manual · 点动与 S 轴复位
 
 Z 上下箭头与 S 轴 −/+ 共用一套事件（`attach_jog_events()` → `on_manual_jog()`）：
 
-- **点按**（松手时没到长按时间）走一步，`DebugJogMode::Click`：Z 0.3 mm（`kManualZStepMm`，
+- **点按**（松手时没到长按时间）走一步，`DebugJogMode::Click`：Z 0.1 mm（`kManualZStepMm`，
   按 μm 下发）、S 取卡里 Step 输入框的绝对值（整数 mm，协议 int16；默认 1，小数四舍五入并写回
   框里，取整后为 0 则拦下并 toast），方向只看按的是 − 还是 +。挂的是 `SHORT_CLICKED`，
   **不是 `CLICKED`**——LVGL 长按松手后照样发 `CLICKED`，用它会在停车后再多走一步。
@@ -1722,7 +1727,7 @@ Manual 的卡片在滚动区里，手指落在按钮、分段、输入框上再�
 
 | 情形 | 判定 | 落地 |
 |---|---|---|
-| 按下后 400 ms 内移动超过 10 px | 滑动：页面滚动，不点击 | LVGL 自带：滚动一开始就不再发 `SHORT_CLICKED` / `CLICKED` / `LONG_PRESSED`。所有控件都只挂这些事件（S 复位、风扇电源、各 Send、回粉电机、Top/Level/Bottom 用 `CLICKED`，点动钮用 `SHORT_CLICKED` / `LONG_PRESSED`），所以都不会误触发 |
+| 按下后 400 ms 内移动超过 10 px | 滑动：页面滚动，不点击 | LVGL 自带：滚动一开始就不再发 `SHORT_CLICKED` / `CLICKED` / `LONG_PRESSED`。所有控件都只挂这些事件（S / Z 复位、风扇电源、各 Send、回粉电机、Top/Level/Bottom 用 `CLICKED`，点动钮用 `SHORT_CLICKED` / `LONG_PRESSED`），所以都不会误触发 |
 | 没怎么动就松手 | 点按 | 同上，LVGL 默认 |
 | 点动钮按住满 400 ms | 长按点动，**锁住本次触摸** | `on_manual_jog()` 的 `LONG_PRESSED` 里 `lv_indev_wait_release()`：LVGL 9.5 长按后照样能开始滚动，且滚动开始时只清按下态、**不发 `PRESS_LOST`**，不锁的话页面在滚、电机一直跑到松手。锁住后手指再动也不滚，松手时 LVGL 发 `PRESS_LOST`（不发 `RELEASED`），同样停车 |
 | 惯性滚动中点一下 | 只停住滚动，不触发控件 | 见下 |

@@ -14,6 +14,11 @@ namespace upc::visual {
 namespace {
 using Box = std::array<double, 4>;
 constexpr size_t kMaxPixels = 4096u * 4096u;
+// A code is searchable as long as its strokes remain resolvable in the
+// coarse image. Search sizes are derived from the image, not a calibrated Z
+// position or a fixed multiplier of the reference template.
+constexpr int kMinCoarseGlyphSide = 10;
+constexpr double kCoarseSizeStep = 1.12;
 bool valid_nv12(const uint8_t* p, size_t bytes, uint32_t w, uint32_t h) {
     return p && w >= 160 && h >= 120 && w <= 8192 && h <= 8192 &&
            static_cast<size_t>(w) * h <= kMaxPixels &&
@@ -71,6 +76,22 @@ double number(const cv::FileStorage& fs, const char* key, double lo, double hi) 
 cv::Mat normalized(const cv::Mat& in) {
     cv::Mat out; cv::createCLAHE(2.0, cv::Size(4,4))->apply(in, out); return out;
 }
+std::vector<cv::Size> searchable_sizes(double nominal_width, double nominal_height,
+                                       cv::Size search) {
+    std::vector<cv::Size> sizes;
+    const auto add = [&](double factor) {
+        const cv::Size size(static_cast<int>(std::nearbyint(nominal_width*factor)),
+                            static_cast<int>(std::nearbyint(nominal_height*factor)));
+        if(size.width < kMinCoarseGlyphSide || size.height < kMinCoarseGlyphSide ||
+           size.width > search.width || size.height > search.height) return false;
+        if(std::find(sizes.begin(),sizes.end(),size) == sizes.end()) sizes.push_back(size);
+        return true;
+    };
+    add(1.0);
+    for(double factor=1.0/kCoarseSizeStep;add(factor);factor/=kCoarseSizeStep) {}
+    for(double factor=kCoarseSizeStep;add(factor);factor*=kCoarseSizeStep) {}
+    return sizes;
+}
 cv::Mat bundled_template(const std::string& name) {
     for(const auto& asset : bundled_profile::kTemplates) {
         if(name == asset.name) {
@@ -81,15 +102,78 @@ cv::Mat bundled_template(const std::string& name) {
     }
     throw std::runtime_error("unknown bundled marker template: " + name);
 }
+
+// The etched marks have a bright square and dark internal strokes. Keep this
+// check independent of where a mark was found so a wider search does not turn
+// every high template correlation on chamber texture into a visible code.
+double marker_structure(const cv::Mat& gray, const cv::Rect& best_rect) {
+    const cv::Mat patch = gray(best_rect);
+    const cv::Rect surround_rect = expand(best_rect,.35,gray.size());
+    const cv::Mat surround = gray(surround_rect);
+    std::array<size_t,256> ring_hist{};
+    size_t ring_size = 0;
+    for(int y=0;y<surround.rows;++y) for(int x=0;x<surround.cols;++x)
+        if(!best_rect.contains(cv::Point(x+surround_rect.x,y+surround_rect.y))) {
+            ++ring_hist[surround.at<uint8_t>(y,x)]; ++ring_size;
+        }
+    const double ring_median = ring_size == 0 ? percentile(surround,50) : percentile_hist(ring_hist,ring_size,50);
+    cv::Mat pe; cv::Canny(normalized(patch),pe,50,150);
+    const double density = static_cast<double>(cv::countNonZero(pe))/patch.total();
+    double edge_component = clip((density-.02)/.08);
+    if(density > .28) edge_component *= clip((.42-density)/.14);
+    const double bright = static_cast<double>(cv::countNonZero(patch >= std::min(255.,ring_median+20)))/patch.total();
+    return (clip((percentile(patch,50)-ring_median-8)/25) +
+        clip((percentile(patch,90)-percentile(patch,10)-25)/45) +
+        edge_component + clip((bright-.18)/.45))/4;
+}
+
+double marker_confidence(double match, double structure) {
+    return clip(.72*clip((match-.25)/.65)+.28*structure);
+}
 }
 
 const char* cabin_bundled_profile_id() { return bundled_profile::kId; }
 const char* cabin_bundled_profile_sha256() { return bundled_profile::kSha256; }
 
+bool CabinPlateSceneHold::capture(const uint8_t* nv12, size_t bytes,
+                                  uint32_t width, uint32_t height) {
+    clear();
+    if(!valid_nv12(nv12, bytes, width, height)) return false;
+    width_ = width; height_ = height;
+    samples_.reserve(((width + 3u) / 4u) * ((height + 3u) / 4u));
+    for(uint32_t y = 0; y < height; y += 4)
+        for(uint32_t x = 0; x < width; x += 4)
+            samples_.push_back(nv12[static_cast<size_t>(y) * width + x]);
+    return true;
+}
+
+bool CabinPlateSceneHold::stable(const uint8_t* nv12, size_t bytes,
+                                 uint32_t width, uint32_t height) const {
+    if(!active() || width != width_ || height != height_ ||
+       !valid_nv12(nv12, bytes, width, height)) return false;
+    const uint32_t tiles_x = (width + 63u) / 64u;
+    const uint32_t tiles_y = (height + 63u) / 64u;
+    std::vector<uint8_t> changed(tiles_x * tiles_y, 0);
+    size_t index = 0;
+    uint64_t total_delta = 0;
+    for(uint32_t y = 0; y < height; y += 4) {
+        for(uint32_t x = 0; x < width; x += 4) {
+            const int delta = std::abs(static_cast<int>(nv12[static_cast<size_t>(y) * width + x]) -
+                                       static_cast<int>(samples_[index++]));
+            total_delta += static_cast<unsigned>(delta);
+            if(delta >= 20 && ++changed[(y / 64u) * tiles_x + x / 64u] >= 6)
+                return false;
+        }
+    }
+    return total_delta <= samples_.size() * 8u;
+}
+
 struct CabinDetector::Impl {
-    struct Marker { Box roi; cv::Mat image; };
+    struct CoarseTemplate { cv::Size size; cv::Mat image; };
+    struct Marker { Box roi; cv::Mat image; std::vector<CoarseTemplate> coarse_templates; };
     std::vector<Marker> markers;
     Box roi{};
+    int reference_width = 0, reference_height = 0;
     double aspect = 0, margin = .35, gray_weight = .7, high = .78, medium = .58,
            hidden = .42, blur = 15, dynamic = 35, over = .35, under = .35;
     int min_medium = 2;
@@ -146,7 +230,12 @@ bool CabinDetector::load_plate_source(const std::string& source, bool bundled, s
         if(!std::isfinite(w) || !std::isfinite(h) || w < 160 || h < 120 || w > 8192 || h > 8192 || w*h > kMaxPixels ||
            std::floor(w) != w || std::floor(h) != h || static_cast<int>(w)%2 || static_cast<int>(h)%2)
             throw std::runtime_error("invalid reference size");
+        c->reference_width = static_cast<int>(w);
+        c->reference_height = static_cast<int>(h);
         c->aspect = w / h;
+        const cv::Rect reference_base = rect(c->roi,c->reference_width,c->reference_height);
+        const cv::Size reference_coarse(std::min(512,reference_base.width/2),
+                                        std::min(512,reference_base.height/2));
         c->margin = number(fs,"search_margin",0,2);
         c->gray_weight = number(fs,"template_gray_weight",0,1);
         c->high = number(fs,"high_confidence_threshold",0,1);
@@ -183,6 +272,21 @@ bool CabinDetector::load_plate_source(const std::string& source, bool bundled, s
             template_pixels += marker.image.total();
             cv::Scalar mean, dev; cv::meanStdDev(marker.image, mean, dev);
             if(dev[0] < 5) throw std::runtime_error("marker template lacks contrast");
+            // At the reference resolution these images are reused for every
+            // fresh frame in a request; do the resize/CLAHE work only on load.
+            if(reference_base.width >= 64 && reference_base.height >= 64 &&
+               expected.width >= 40 && expected.height >= 40) {
+                const double nominal_width = expected.width*static_cast<double>(reference_coarse.width)/
+                    reference_base.width;
+                const double nominal_height = expected.height*static_cast<double>(reference_coarse.height)/
+                    reference_base.height;
+                for(const cv::Size& coarse_size : searchable_sizes(
+                    nominal_width,nominal_height,reference_coarse)) {
+                    cv::Mat scaled;
+                    cv::resize(marker.image,scaled,coarse_size,0,0,cv::INTER_AREA);
+                    marker.coarse_templates.push_back({coarse_size,normalized(scaled)});
+                }
+            }
             c->markers.push_back(std::move(marker));
         }
         impl_ = std::move(c); error.clear(); return true;
@@ -249,29 +353,152 @@ CabinDetection CabinDetector::plate(const uint8_t* nv12, size_t bytes, uint32_t 
                 }
             }
             if(best < -0.999) return {0,0,"template_search_unavailable"};
-            const cv::Mat patch = gray(best_rect);
-            const cv::Rect surround_rect = expand(best_rect,.35,gray.size());
-            const cv::Mat surround = gray(surround_rect);
-            std::array<size_t,256> ring_hist{};
-            size_t ring_size = 0;
-            for(int y=0;y<surround.rows;++y) for(int x=0;x<surround.cols;++x)
-                if(!best_rect.contains(cv::Point(x+surround_rect.x,y+surround_rect.y))) {
-                    ++ring_hist[surround.at<uint8_t>(y,x)]; ++ring_size;
-                }
-            const double ring_median = ring_size == 0 ? percentile(surround,50) : percentile_hist(ring_hist,ring_size,50);
-            cv::Mat pe; cv::Canny(normalized(patch),pe,50,150);
-            const double density = static_cast<double>(cv::countNonZero(pe))/patch.total();
-            double edge_component = clip((density-.02)/.08);
-            if(density > .28) edge_component *= clip((.42-density)/.14);
-            const double bright = static_cast<double>(cv::countNonZero(patch >= std::min(255.,ring_median+20)))/patch.total();
-            const double structure = (clip((percentile(patch,50)-ring_median-8)/25) +
-                clip((percentile(patch,90)-percentile(patch,10)-25)/45) +
-                edge_component + clip((bright-.18)/.45))/4;
-            const double confidence = clip(.72*clip((best-.25)/.65)+.28*structure);
+            const double confidence = marker_confidence(best,marker_structure(gray,best_rect));
             maximum = std::max(maximum,confidence);
             highs += confidence >= c.high; mediums += confidence >= c.medium;
         }
         if(highs || mediums >= c.min_medium) return {1,maximum,"calibrated_code_visible"};
+
+        // Positive-only fallback: look for any of the known etched glyphs
+        // anywhere on the base. Coarse half-size proposals keep the wider
+        // position/scale search bounded; only the best few are verified at
+        // native resolution. No QR payload or exact Z position is involved.
+        const cv::Rect base = rect(c.roi,w,h);
+        if(base.width < 64 || base.height < 64)
+            return {0,maximum,"wide_search_roi_too_small"};
+        cv::Mat small;
+        cv::resize(gray(base),small,cv::Size(std::min(512,base.width/2),
+                                            std::min(512,base.height/2)),0,0,cv::INTER_AREA);
+        const cv::Mat coarse = normalized(small);
+        struct Candidate { double score; cv::Point location; cv::Size size; };
+        bool undersized_marker = false;
+        for(const auto& marker : c.markers) {
+            const cv::Rect expected = rect(marker.roi,w,h);
+            if(expected.width < 40 || expected.height < 40) {
+                undersized_marker = true;
+                continue; // half-resolution proposals cannot represent this glyph reliably
+            }
+            std::vector<Candidate> candidates;
+            const double nominal_width = expected.width*static_cast<double>(small.cols)/base.width;
+            const double nominal_height = expected.height*static_cast<double>(small.rows)/base.height;
+            const auto sizes = searchable_sizes(nominal_width,nominal_height,coarse.size());
+            for(size_t size_index=0;size_index<sizes.size();++size_index) {
+                const cv::Size size = sizes[size_index];
+                cv::Mat scaled, normalized_scaled, match;
+                if(static_cast<int>(w) == c.reference_width &&
+                   static_cast<int>(h) == c.reference_height &&
+                   size_index < marker.coarse_templates.size() &&
+                   marker.coarse_templates[size_index].size == size) {
+                    normalized_scaled = marker.coarse_templates[size_index].image;
+                } else {
+                    cv::resize(marker.image,scaled,size,0,0,cv::INTER_AREA);
+                    normalized_scaled = normalized(scaled);
+                }
+                cv::matchTemplate(coarse,normalized_scaled,match,cv::TM_CCOEFF_NORMED);
+                cv::patchNaNs(match,-1);
+                // A bright screw or reflection can outrank the real code in
+                // the coarse pass. Retain separate peaks, not only the maximum.
+                for(int peak=0;peak<3;++peak) {
+                    double score; cv::Point location;
+                    cv::minMaxLoc(match,nullptr,&score,nullptr,&location);
+                    if(!std::isfinite(score) || score < .45) break;
+                    candidates.push_back({score,location,size});
+                    const cv::Rect suppressed(cv::Rect(location.x-size.width/2,
+                        location.y-size.height/2,size.width,size.height) &
+                        cv::Rect(0,0,match.cols,match.rows));
+                    match(suppressed).setTo(-1);
+                }
+            }
+            std::sort(candidates.begin(),candidates.end(),[](const Candidate& a,const Candidate& b) {
+                return a.score > b.score;
+            });
+            struct Region { cv::Point center; cv::Size size; int checked; };
+            std::vector<Region> regions;
+            std::array<int,16> refined_by_size{};
+            for(const Candidate& candidate : candidates) {
+                int size_bucket = 0;
+                for(int side=candidate.size.width;side>1;side/=2) ++size_bucket;
+                if(size_bucket >= static_cast<int>(refined_by_size.size()) ||
+                   refined_by_size[size_bucket] >= 4) continue;
+                const int x = base.x + static_cast<int>(std::nearbyint(
+                    candidate.location.x * static_cast<double>(base.width)/small.cols));
+                const int y = base.y + static_cast<int>(std::nearbyint(
+                    candidate.location.y * static_cast<double>(base.height)/small.rows));
+                const cv::Size size(std::max(12,static_cast<int>(std::nearbyint(
+                    candidate.size.width * static_cast<double>(base.width)/small.cols))),
+                                    std::max(12,static_cast<int>(std::nearbyint(
+                    candidate.size.height * static_cast<double>(base.height)/small.rows))));
+                const cv::Point center(x+size.width/2,y+size.height/2);
+                auto region = std::find_if(regions.begin(),regions.end(),[&](const Region& r) {
+                    return std::abs(r.center.x-center.x) < std::max(12,size.width/2) &&
+                           std::abs(r.center.y-center.y) < std::max(12,size.height/2) &&
+                           std::abs(r.size.width-size.width) <= std::max(2,size.width/5) &&
+                           std::abs(r.size.height-size.height) <= std::max(2,size.height/5);
+                });
+                if(region != regions.end()) {
+                    if(region->checked >= 2) continue;
+                    ++region->checked;
+                } else {
+                    regions.push_back({center,size,1});
+                }
+                ++refined_by_size[size_bucket];
+                // The half-size proposal rounds a glyph by several native
+                // pixels. Refine its size locally before applying the edge
+                // test, which is intentionally strict against reflections.
+                for(const double fine : {.94,.97,1.,1.03,1.06}) {
+                    const cv::Size precise(std::max(12,static_cast<int>(std::nearbyint(size.width*fine))),
+                                           std::max(12,static_cast<int>(std::nearbyint(size.height*fine))));
+                    const int padding = std::max(4,std::max(precise.width,precise.height)/10);
+                    const cv::Rect search_rect = (cv::Rect(x-padding,y-padding,
+                        precise.width+2*padding,precise.height+2*padding) & base);
+                    if(search_rect.width < precise.width || search_rect.height < precise.height) continue;
+                    cv::Mat scaled, gray_match, edge_match, edges, template_edges;
+                    cv::resize(marker.image,scaled,precise,0,0,
+                        precise.width > marker.image.cols ? cv::INTER_LINEAR : cv::INTER_AREA);
+                    const cv::Mat search = normalized(gray(search_rect));
+                    const cv::Mat templ = normalized(scaled);
+                    cv::Canny(search,edges,50,150);
+                    cv::Canny(templ,template_edges,50,150);
+                    cv::matchTemplate(search,templ,gray_match,cv::TM_CCOEFF_NORMED);
+                    cv::matchTemplate(edges,template_edges,edge_match,cv::TM_CCOEFF_NORMED);
+                    cv::Mat combined = c.gray_weight*gray_match+(1-c.gray_weight)*edge_match;
+                    cv::patchNaNs(combined,-1);
+                    double best; cv::Point point;
+                    cv::minMaxLoc(combined,nullptr,&best,nullptr,&point);
+                    const double gray_score = gray_match.at<float>(point);
+                    const double edge_score = edge_match.at<float>(point);
+                    const cv::Rect found(search_rect.tl()+point,precise);
+                    const double confidence = marker_confidence(best,marker_structure(gray,found));
+                    if(gray_score >= .65 && edge_score >= .45 && confidence >= c.high)
+                        return {1,confidence,"code_visible_wide_search"};
+                    // Native-resolution Canny edges drift by a few pixels
+                    // when a glyph is enlarged. Compare its internal strokes
+                    // again at the template's canonical resolution.
+                    cv::Mat canonical_patch, canonical_gray_match, canonical_edge_match;
+                    cv::resize(gray(found),canonical_patch,marker.image.size(),0,0,
+                        found.width > marker.image.cols ? cv::INTER_AREA : cv::INTER_LINEAR);
+                    const cv::Mat canonical_scene = normalized(canonical_patch);
+                    const cv::Mat canonical_template = normalized(marker.image);
+                    cv::Mat canonical_scene_edges, canonical_template_edges;
+                    cv::Canny(canonical_scene,canonical_scene_edges,50,150);
+                    cv::Canny(canonical_template,canonical_template_edges,50,150);
+                    cv::matchTemplate(canonical_scene,canonical_template,
+                        canonical_gray_match,cv::TM_CCOEFF_NORMED);
+                    cv::matchTemplate(canonical_scene_edges,canonical_template_edges,
+                        canonical_edge_match,cv::TM_CCOEFF_NORMED);
+                    const double canonical_gray = canonical_gray_match.at<float>(0,0);
+                    const double canonical_edge = canonical_edge_match.at<float>(0,0);
+                    const double canonical_combined = c.gray_weight*canonical_gray+
+                        (1-c.gray_weight)*canonical_edge;
+                    const double canonical_confidence = marker_confidence(canonical_combined,
+                        marker_structure(gray,found));
+                    if(canonical_gray >= .65 && canonical_edge >= .45 &&
+                       canonical_confidence >= c.high)
+                        return {1,canonical_confidence,"code_visible_wide_search"};
+                }
+            }
+        }
+        if(undersized_marker) return {0,maximum,"marker_too_small_for_wide_search"};
         if(maximum <= c.hidden) return {2,maximum,"codes_absent_scene_ok"};
         return {0,maximum,"marker_hysteresis"};
     } catch(const std::exception& e) { return {0,0,e.what()}; }

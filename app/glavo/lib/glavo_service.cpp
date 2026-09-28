@@ -6370,7 +6370,9 @@ middleware::PlatePresentResult GlavoService::run_plate_present_round()
     publish_cabin_visual_session(session_id, true);
 
     constexpr auto kWarmup = std::chrono::milliseconds(1500);
-    constexpr uint32_t kWindowMs = 5000;
+    // The first broad plate search can take ~10 s on RK3568. Subsequent
+    // scene-stability frames are cheap, but the IPC window must cover both.
+    constexpr uint32_t kWindowMs = 25000;
     /* 与 visual_cabin_service.cpp kCabinPlateNoFrameWaitMs 对齐：先等帧，再跑窗口。 */
     constexpr uint32_t kPlateNoFrameWaitMs = 8000;
     {
