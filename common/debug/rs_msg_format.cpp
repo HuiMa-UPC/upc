@@ -103,6 +103,8 @@ const char* upc_msg_type_name(MsgType type) {
         case MsgType::APP_Print_Powder_Low_Ntf: return "APP_Print_Powder_Low_Ntf";
         case MsgType::APP_OpticalPath_Progress_Ntf: return "APP_OpticalPath_Progress_Ntf";
         case MsgType::APP_Print_Prep_Progress_Ntf: return "APP_Print_Prep_Progress_Ntf";
+        case MsgType::UI_Cloud_Result_Dismiss_Ntf: return "UI_Cloud_Result_Dismiss_Ntf";
+        case MsgType::GLAVO_Cloud_State_Ntf: return "GLAVO_Cloud_State_Ntf";
         case MsgType::APP_Print_Start_Rejected_Ntf: return "APP_Print_Start_Rejected_Ntf";
         case MsgType::GLAVO_Outer_Door_Confirm_Req: return "GLAVO_Outer_Door_Confirm_Req";
         case MsgType::UI_Outer_Door_Confirm_Rsp: return "UI_Outer_Door_Confirm_Rsp";
@@ -131,6 +133,10 @@ const char* upc_msg_type_name(MsgType type) {
         case MsgType::UI_Clean_Test_Close_Req: return "UI_Clean_Test_Close_Req";
         case MsgType::UI_Print_Video_Finalize_Req: return "UI_Print_Video_Finalize_Req";
         case MsgType::APP_Clean_Test_Close_Rsp: return "APP_Clean_Test_Close_Rsp";
+        case MsgType::UI_Transfer_Demo_Prep_Req: return "UI_Transfer_Demo_Prep_Req";
+        case MsgType::APP_Transfer_Demo_Prep_Rsp: return "APP_Transfer_Demo_Prep_Rsp";
+        case MsgType::UI_Transfer_Demo_Confirm_Req: return "UI_Transfer_Demo_Confirm_Req";
+        case MsgType::APP_Transfer_Demo_Confirm_Rsp: return "APP_Transfer_Demo_Confirm_Rsp";
         case MsgType::UI_Storage_Usage_Req: return "UI_Storage_Usage_Req";
         case MsgType::APP_Storage_Usage_Rsp: return "APP_Storage_Usage_Rsp";
         case MsgType::APP_Clean_Video_Session_Start_Ntf: return "APP_Clean_Video_Session_Start_Ntf";

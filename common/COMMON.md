@@ -171,8 +171,12 @@ scripts/rongsu.sh start   # glavo + rongsu_camera → ui
 | `UI_Clean_Test_Close_Req` | — | UI→Glavo | Empty | `ui_clean_state_stop` / `send_clean_test_close` | 中止清粉（结果页吹粉钮再点、回 IDLE：取件成功或开门 Cancel）：下发 MCU close、停风扇；有录像时 Media 对 `0xfe` 不发 Result_Ntf，UI 靠 Close_Rsp → `UI_CLEAN_EVT_STOPPED` |
 | `UI_Print_Video_Finalize_Req` | — | UI→Media | `PrintVideoFinalizeReqPayload` | `send_print_video_finalize` | 开门取件后触发：promote 目录 + 清 pending；延时成片受 `UPC_TIMELAPSE_PLAYBACK_PNG` 控制（默认跳过 `timelapse.mp4`），打印录像仍可 remux `print_h264.mp4` |
 | `APP_Clean_Test_Close_Rsp` | — | Glavo→UI | Empty | `register_clean_test_close_rsp`（`ui_clean_state`） | close 已受理 → 扇出 `UI_CLEAN_EVT_STOPPED` |
-| `UI_Transport_Req` | — | UI→Glavo | Empty | `send_transport_request` | 转运盒 Ready：发串口自动转运请求（A2/0x41 TLV 0x02） |
+| `UI_Transport_Req` | — | UI→Glavo | Empty | `send_transport_request` | 转运盒 Ready：发串口自动转运请求（A2/0x41 TLV 0x02）。仅打印结束取件路径；演示确认不走这条 |
 | `APP_Transport_Result_Ntf` | — | Glavo→UI | `TransportResultPayload` | `register_transport_result` | MCU TLV 0x04：`0`=完成→BoxShutter；`1/2` 失败/中止→停留转圈页（无超时） |
+| `UI_Transfer_Demo_Prep_Req` | — | UI→Glavo | Empty | `send_transfer_demo_prep` | 一键演示前半段：Z 绝对到 −10，再开外门并轮询传感器 |
+| `APP_Transfer_Demo_Prep_Rsp` | — | Glavo→UI | `DoorResultPayload` | `register_transfer_demo_prep` | ok=1 外门已开，UI 进装盒页 |
+| `UI_Transfer_Demo_Confirm_Req` | — | UI→Glavo | Empty | `send_transfer_demo_confirm` | 确认放入后：开内门，成功再发转运串口（A2/0x41 TLV 0x02） |
+| `APP_Transfer_Demo_Confirm_Rsp` | — | Glavo→UI | `DoorResultPayload` | `register_transfer_demo_confirm` | ok=1 串口已发出（结果仍走 `APP_Transport_Result_Ntf`）；ok=0 内门或发送失败 |
 | `UI_Print_Prepare_Req` | — | UI **或** Xfr→Glavo | `PrintPrepareReqPayload` | `send_print_prepare` | USB 复制+轻量扫描+config；Xfr 在 `POST /print/start` 对刚导入 Local 文件发 |
 | `APP_Print_Prepare_Rsp` | — | Glavo→请求方（UI 或 Xfr） | `PrintPrepareRspPayload` | `register_print_prepare_done` | 回给 `sender_id` |
 | `UI_Parser_Exit_Ntf` | — | UI→Glavo | Empty | `send_parser_exit` | 取消解析 |
@@ -190,7 +194,9 @@ scripts/rongsu.sh start   # glavo + rongsu_camera → ui
 | `GLAVO_Outer_Door_Confirm_Req` | — | Glavo→UI | Empty | `register_outer_door_confirm_req` | 起印前外门未关：弹窗 Confirm / Cancel（无超时） |
 | `UI_Outer_Door_Confirm_Rsp` | — | UI→Glavo | `OuterDoorConfirmRspPayload` | `send_outer_door_confirm` | Confirm：`skip=0`，Glavo 再读门，仍开则再次 Req；Cancel：`skip=1`，不检门，直接进内门套件 |
 | `APP_Print_Terminate_Rsp` | `GLAVO_Print_Terminate_Rsp` | Glavo→UI **与** Xfr | Empty | `register_print_terminate_done` | — |
-| `GLAVO_Print_State_Ntf` | — | Glavo→MQTT **与** Xfr | `PrintStateNtfPayload`（`mode` 复用 `UserHomeStatus`：`2`=开始打印 / `0`=打印结束；`since_ms`=进入该 mode 的 Unix ms） | — | 打印状态边沿：开始打印/打印结束空闲时推一次，触发 MQTT 上报 `state` 消息；Xfr 同步 `/print/status` |
+| `GLAVO_Print_State_Ntf` | — | Glavo→Xfr | `PrintStateNtfPayload`（`mode` 复用 `UserHomeStatus`：`2`=开始打印 / `0`=打印结束；`since_ms`=进入该 mode 的 Unix ms） | — | 打印状态边沿：开始打印/打印结束各推一次，只同步桌面端 `/print/status`。云端 `state` 不看这条 |
+| `GLAVO_Cloud_State_Ntf` | — | Glavo→MQTT | `CloudStateNtfPayload` | — | 云端 `state`：`idle`（`ready`/`not_ready`）与 `printing` 子状态（准备各步、`layer_printing`、`paused`/`paused_oxygen`、`finished`/`canceled`/`aborted`）。`job` 只在 printing 时带；`layer` 为已完成层。结果页未收掉前停在终态子状态 |
+| `UI_Cloud_Result_Dismiss_Ntf` | — | UI→Glavo | Empty | `send_cloud_result_dismiss` | 打印占用结束（结果页取件回待机，或结果页还没出就已经离开）时发。Glavo 把云端 state 从 `finished`/`canceled`/`aborted` 收回 `idle` |
 | `APP_N2_Status_Ntf` | `0x1620` | Glavo→UI | `N2StatusPayload` | v1 不订阅 | 制氮机 BLE 快照（在线/浓度/STATE/seq）；无 BlueZ 时空跑 |
 | `UI_Supply_Status_Req` | — | UI→Glavo | Empty | `send_supply_status` | stub |
 | `APP_Supply_Status_Rsp` | `GLAVO_Supply_Status_Rsp` | Glavo→UI | `SupplyStatusPayload` | `register_supply_status` | — |

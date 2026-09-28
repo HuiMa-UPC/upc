@@ -94,6 +94,13 @@ void control_print_result_collect(void);
  * 开完即回首页。仅 IDLE 态生效。 */
 void control_open_door_request(void);
 
+/**
+ * 调试页一键转运演示（与 Transfer Box 取件开关无关）。
+ * 仅 IDLE：弹准备页 → Z 到底并开外门 → 装盒确认 → 开内门 → 发转运串口。
+ * @return false 表示当前不在空闲态，未启动。
+ */
+bool control_transfer_demo_start(void);
+
 /* ---- 打印中的三个粉料阻塞弹窗（稿 6345:31129 / 6343:30738 / 6343:30854）---- */
 typedef enum {
     CONTROL_SUPPLY_DLG_POWDER_EMPTY = 0, /**< 粉舱已空 */
@@ -154,9 +161,9 @@ const char *control_home_section_target(void);
 
 void control_terminate_request(void);
 
-/* ---- 转运盒流程开关（调试页 Other → Print Gates） ----
- * 打开后，取件分支在门开之后插入转运盒三步；关闭则开门成功即回 IDLE。
- * 纯 UI 本地标志（不发消息、不落盘），重启回到关闭。 */
+/* ---- 转运盒流程开关（设置页 Advanced Print / 调试页 Other → Print Gates） ----
+ * 默认开：取件分支在门开之后插入转运盒三步；关闭则开门成功即回 IDLE。
+ * 纯 UI 本地标志（不发消息、不落盘），重启回到开。 */
 void control_set_transfer_box_flow(bool on);
 bool control_transfer_box_flow_enabled(void);
 
