@@ -36,8 +36,9 @@ void PlateHeightMeasure::configure(HeightMoveGalvoFn move_galvo,
     on_done_ = std::move(on_done);
 }
 
-bool PlateHeightMeasure::start(const GalvoMotionCalibration& cal)
+bool PlateHeightMeasure::start(const GalvoMotionCalibration& cal, bool check_presence)
 {
+    check_presence_ = check_presence;
     if(!move_galvo_ || !set_session_light_ || !send_z_home_ || !send_z_inc_ ||
        !wait_z_ || !request_spot_ || !publish_session_ || !on_done_) {
         UPC_LOG_GLAVO_SERVICE(Error, "plate height start rejected: not configured");
@@ -177,6 +178,20 @@ void PlateHeightMeasure::run(GalvoMotionCalibration cal)
         const Scan coarse = scan(lut_coarse, "coarse");
         if(abort_requested_.load() || std::isnan(coarse.h_med)) {
             break;
+        }
+        /* H 是回零后的粗测高度。H-1 大于门限才当有基板，否则停在这里通知 UI。 */
+        if(check_presence_) {
+            const float above_home = coarse.h_med - kHeightZHomeMm;
+            UPC_LOG_GLAVO_SERVICE(Info,
+                "plate present from coarse H=%.3f H-1=%.3f threshold=%.3f",
+                static_cast<double>(coarse.h_med),
+                static_cast<double>(above_home),
+                static_cast<double>(kPlatePresentMinAboveHomeMm));
+            if(!(above_home > kPlatePresentMinAboveHomeMm)) {
+                result.plate_absent = true;
+                result.h_med_mm = coarse.h_med;
+                break;
+            }
         }
         const float delta1 = -coarse.h_med;
         height_send_z_inc(send_z_inc_, delta1);
