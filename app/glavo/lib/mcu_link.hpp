@@ -52,7 +52,7 @@ using McuLinkFirstLayerCheckCb = std::function<bool(uint16_t)>;
 
 /** @brief 环境传感器缓存（串口 0x9B + SOC 本地采集合并，供 UI/打印进度读取） */
 struct EnvSnapshotCache {
-    float pm25_indoor     = 0.f;   /**< 舱外/室内常显 PM2.5（SOC UART 舱外） */
+    float pm25_indoor     = 0.f;   /**< 舱外 PM2.5：与 SPI 小屏同一个显示值（见 outdoor_pm25_display_，不是舱外 PMSA 实测）；Env Sim 时为模拟值 */
     float pm25_cabin      = 0.f;   /**< 舱内 PM2.5（SOC UART 舱内，阀关时可能无效） */
     float pm1_indoor      = -1.f;  /**< 舱外 PM1.0；无源时 <0 */
     float pm10_indoor     = -1.f;  /**< 舱外 PM10；无源时 <0 */
@@ -357,6 +357,13 @@ public:
      * @note Env Sim 开启时跳过。与 MCU 1ST 解耦，避免无 1ST 时顶栏/首页一直 "--"。
      */
     void poll_soc_env_tick();
+    /**
+     * @brief 推进舱外 PM2.5 显示值（3~5 µg/m³ 缓变模拟，约 2.5 min/周期）
+     * @note 舱外 PMSA 暂不可靠时的权宜：SPI 小屏与 APP_Update_Ntf.pm25_indoor（首页/监控页
+     *       Home PM2.5、MQTT chamber_ext）都用这个值。只在 poll_soc_env_tick 每拍调一次，且须在
+     *       publish_env_update_ntf 之前——同一拍推给 UI 的与小屏上显示的才是同一个数。
+     */
+    void advance_outdoor_pm25_display();
     /** @brief 关闭模拟后清缓存并推送无效哨兵，等待真实 0x9B 再恢复 */
     void clear_env_after_sim_disable();
 
@@ -689,6 +696,9 @@ private:
     std::chrono::steady_clock::time_point next_env_sim_tick_{};
     std::chrono::steady_clock::time_point next_soc_env_tick_{};
     float env_sim_phase_ = 0.f;
+    float outdoor_pm25_phase_ = 0.f; /**< 舱外 PM2.5 显示值的正弦相位（仅链路线程读写） */
+    /** 舱外 PM2.5 显示值（SPI 小屏与 pm25_indoor 共用）；<0=尚未推进过。env_snapshot() 会跨线程读 */
+    std::atomic<float> outdoor_pm25_display_{-1.f};
     std::atomic<int64_t> last_env_mqtt_publish_ms_{0}; /**< Glavo→MQTT 环境 IPC 最近发送时刻 */
     bool laser_power_log_valid_ = false; /**< 功率包日志去重：最近一次已打印的功率值是否有效 */
     uint16_t last_laser_power_raw_ = 0;  /**< 功率包日志去重：最近一次已打印的功率原始值 */

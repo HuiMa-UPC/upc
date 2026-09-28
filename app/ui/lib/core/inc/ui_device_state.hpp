@@ -42,11 +42,10 @@ typedef struct {
     ui_device_status_t status;
     bool               wifi_connected;
     int                signal_bars;
-    float              pm25_indoor;
-    float              pm25_cabin;
+    float              pm25_indoor;      /**< 舱外 PM2.5：与 SPI 小屏同一个显示值（<0/NaN=无数据） */
+    float              pm25_cabin;       /**< 舱内 PM2.5：舱内 PMSA 实时值（<0/NaN=无数据） */
     float              temperature_c;
     float              oxygen_percent;
-    float              pm10_indoor;      /**< 室内 PM10（<0/NaN=无数据） */
     float              humidity_percent; /**< 舱内湿度（<0/NaN=无数据） */
     float              pressure_kpa;     /**< 舱内气压（<0/NaN=无数据） */
     uint8_t            powder_bits;      /**< 粉量位 bit0/bit1（0=缺粉；>=1 允许继续） */

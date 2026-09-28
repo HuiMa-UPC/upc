@@ -868,12 +868,12 @@ struct EnvSnapshotPayload {
     uint32_t status;            /**< UserHomeStatus */
     uint8_t  wifi_connected;
     int32_t  signal_bars;       /**< 信号格数 0..3（图标三格） */
-    float    pm25_indoor;
-    float    pm25_cabin;
+    float    pm25_indoor;       /**< 舱外 PM2.5：与 SPI 小屏同一个显示值（舱外 PMSA 暂不可靠，现为 3~5 缓变模拟、非实测）；首页/监控页 Home PM2.5、MQTT chamber_ext 用；无效填 <0 */
+    float    pm25_cabin;        /**< 舱内 PM2.5：舱内 PMSA 实时值；首页/监控页 Cabin PM2.5、开门前检测、MQTT chamber 用；无效填 <0 */
     float    temperature_c;
     float    oxygen_percent;
     float    pm1_indoor;        /**< 室内 PM1.0 (μg/m³)；无效填 <0 */
-    float    pm10_indoor;       /**< 室内 PM10 (μg/m³)；无效填 <0（HOME 卡切换指标用） */
+    float    pm10_indoor;       /**< 室内 PM10 (μg/m³)；无效填 <0（舱外 PMSA 实测；UI 目前不显示） */
     float    humidity_percent;  /**< 舱内湿度 %；无效填 <0 */
     float    pressure_kpa;      /**< 舱内气压 kPa；无效填 <0 */
     float    baseplate_temp_c;  /**< 基板温度 ℃；无效填 <0 */

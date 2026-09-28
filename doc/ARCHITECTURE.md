@@ -57,7 +57,7 @@
 | `McuLink` | `mcu_link.*` | TCP 运动 + 串口握手/传感器；环境量合并 `SocSensors` 本地采集 |
 | `SocSensors` | `soc_sensors.*` | 舱内外 PMSA UART、AHT20、CPM121、IIO 氧气周期采集；六路舱灯/`fa_valve` sysfs 随时可写（调试页）；与 UI 背光无关 |
 | `SpiStatusLed` | `spi_status_led.*` | SPI 灯效板状态色（空闲蓝 / 打印橙 / CONDITION 红） |
-| `SpiPm25Lcd` | `spi_pm25_lcd.*` | ST7735 SPI 小屏（fbdev `st7735rdrmfb`）常显舱外 PM2.5 |
+| `SpiPm25Lcd` | `spi_pm25_lcd.*` | ST7735 SPI 小屏（fbdev `st7735rdrmfb`）常显舱外 PM2.5（显示值由 `McuLink` 生成，同值经 `pm25_indoor` 推首页/监控页与 MQTT） |
 | `PrintJobState` | `print_job_state.*` | 打印任务计数/状态 |
 | `PrintVideoNotify` | `print_video_notify.*` | 换层 Snap / 录像会话 IPC → Media |
 | `device_config.hpp` | 头文件 | TCP/串口默认、`GLAVO_ENABLE_LAYER_SNAP` 等 |
@@ -94,6 +94,7 @@
 | `RgaDmaBuf` | `rga_dma_buf.*` | dma32 heap 缓冲（RGA fd 导入） |
 | `PageManager` / `SimplePage` | `page_manager.*` / `ui_simple_page.*` | 侧边栏 + 页面路由 + 常驻设备信息条/通知浮层显隐 + 侧栏红点 |
 | `ui_device_state_*` | `ui_device_state.*` | 设备名/联网/运行状态/环境快照的唯一来源（env 单槽订阅 + 观察者扇出） |
+| `ui_air_*` | `ui_air_quality.*` | PM2.5 空气质量卡的内容与舱内/舱外切换态（首页左卡与监控页 Status 卡共用、两页联动）：舱内读 `pm25_cabin`，舱外读 `pm25_indoor`（= SPI 小屏同值）；分级、游标比例、与小屏逐位一致的读数文本 |
 | `ui_device_bar_*` | `ui_device_bar.*` | 常驻设备信息条（WiFi + 设备名 + 状态点/字），PageManager 持有 |
 | `ui_message_*` | `ui_message_store.*` | 消息中心：设备事件去重/排序/未读计数 + 码→文案表（`GLAVO_Device_Event_Ntf`）+ 按等级自动收起；写入分 `sync`（状态同步、不重弹）与 `emit`（又发生一次、重弹）两种语义，各带一个 `_ex` 版本供报警等外部文案接入 |
 | `ui_alarm_*` | `ui_alarm_state.*` | MCU 报警唯一数据源：生命周期缓存 + 复位在途/失败回执 + 历史落盘 + 快照请求与稀疏攒帧 + 打印阻断/会话抑制 |
@@ -114,7 +115,7 @@
 
 | Page ID | 文件 | 状态 |
 |---------|------|------|
-| `user_home` | `page_user_home.*` | 首页待机：设备图、问候语、HOME 空气质量卡 + 四宫格、余量胶囊、左下 PRINT、右下开门滑块。**打印态浮层与待机监控层已搬到 `user_monitor`**，本文件里那两层留作存档、无调用方 |
+| `user_home` | `page_user_home.*` | 首页待机：设备图、问候语、HOME 空气质量卡（舱内/舱外 PM2.5）+ 四宫格、余量胶囊、左下 PRINT、右下开门滑块。**打印态浮层与待机监控层已搬到 `user_monitor`**，本文件里那两层留作存档、无调用方 |
 | `user_monitor` | `page_user_monitor.*` | 监控页（侧栏第 2 格）：左摄像头 + 右栏三 Tab（Job 打印任务 / Status 环境 / Manual 手动）+ 全屏切换 + 取件弹窗。**打印流程的落点**——选文件确认后 `control.cpp` 直接切到这里 |
 | `user_history` | `page_user_history.*` | 打印历史：三 Tab（Timelapse/Video/Photo）+ 按月分组的三列缩略图网格 + 长按多选批量删除 |
 | `user_settings` | `page_user_settings.*` | 设置列表 + 开发者密码弹窗 |

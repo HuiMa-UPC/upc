@@ -12,6 +12,7 @@
 #include "camera_msg_proxy.hpp"
 #include "camera_preview.hpp"
 #include "ui_device_state.hpp"
+#include "ui_air_quality.hpp"
 #include "ui_clean_state.hpp"
 #include "ui_message_store.hpp"
 #include "control.hpp"
@@ -200,7 +201,7 @@ lv_obj_t *g_st_temp   = nullptr;
 lv_obj_t *g_st_o2     = nullptr;
 lv_obj_t *g_st_hum    = nullptr;
 lv_obj_t *g_st_prs    = nullptr;
-uint8_t   g_pm_metric = 0;         /**< 0 = PM2.5，1 = PM10 */
+/* PM 卡的舱内/舱外档不在本页存：与首页左卡共用 core/ui_air_quality 里那一份（两页联动）。 */
 
 /* Manual 页 */
 lv_obj_t *g_plate_seg   = nullptr;
@@ -849,36 +850,13 @@ lv_obj_t *build_view_job(lv_obj_t *parent)
  *  Status 页
  * ========================================================================== */
 
-struct AirMetric {
-    const char *title;
-    float b_good, b_fair, b_poor, pseudo_max;
-};
+/* PM 卡的标题、分级阈值（与首页 HOME 卡同一张表：PM2.5 35/75/150）、档名、游标比例与
+ * 读数文本都在 core/ui_air_quality，本页只管画。 */
 
-/* 阈值与首页 HOME 卡同一张表（稿分级表：PM2.5 35/75/150，PM10 50/150/350）。 */
-const AirMetric kAirMetrics[2] = {
-    { "PM2.5", 35.0f,  75.0f, 150.0f, 300.0f },
-    { "PM10",  50.0f, 150.0f, 350.0f, 700.0f },
-};
-const char *const kLevelName[4] = { "Good", "Fair", "Poor", "Very Poor" };
-
-int air_classify(const AirMetric &m, float v, float *frac_global)
-{
-    int   level;
-    float lo, hi;
-    if(v <= m.b_good)      { level = 0; lo = 0;        hi = m.b_good; }
-    else if(v <= m.b_fair) { level = 1; lo = m.b_good; hi = m.b_fair; }
-    else if(v <= m.b_poor) { level = 2; lo = m.b_fair; hi = m.b_poor; }
-    else                   { level = 3; lo = m.b_poor; hi = m.pseudo_max; }
-    float fin = (hi > lo) ? (v - lo) / (hi - lo) : 0.5f;
-    if(fin < 0.0f) fin = 0.0f;
-    if(fin > 1.0f) fin = 1.0f;
-    if(frac_global) *frac_global = (static_cast<float>(level) + fin) / 4.0f;
-    return level;
-}
-
+/** PM 卡切换钮：舱内 ⇄ 舱外循环，与首页左卡共用同一份状态。 */
 void on_pm_toggle(lv_event_t * /*e*/)
 {
-    g_pm_metric = (g_pm_metric + 1) % 2;
+    ui_air_source_toggle();
     status_update();
 }
 
@@ -985,11 +963,13 @@ lv_obj_t *build_view_status(lv_obj_t *parent)
     lv_obj_set_style_bg_opa(v, LV_OPA_TRANSP, 0);
     lv_obj_clear_flag(v, LV_OBJ_FLAG_SCROLLABLE);
 
-    /* ---- PM 卡（稿 6338:28064，356×210）：标题行 + 分级大字 + 读数 + 四段色条 ----
+    /* ---- PM 卡（稿 6338:28064，356×210；舱内/舱外两档见稿 6578:40868 / 6578:40958）：
+     *      标题行 + 分级大字 + 读数 + 四段色条 ----
      *
      * **定高不靠内容撑**：稿上色条与卡底之间留了 24 的空，内容自适应会把卡收矮一圈。
      * 横向内距取稿的 24（色条左缘 916 − 卡左缘 892），纵向上 16 下 24——稿上就是
-     * 不对称的。三段之间只留 4，段与色条之间由色条自己的 margin_top 拉开。 */
+     * 不对称的。三段之间只留 4（读数那行另有一道上外边距，见下），段与色条之间由下面
+     * 那个 flex_grow 占位拉开。 */
     lv_obj_t *card = make_card(v, USER_MON_PM_H);
     lv_obj_set_style_pad_hor(card, USER_PAD, 0);     /* 稿 24（色条左缘 916 − 卡左 892）*/
     lv_obj_set_style_pad_top(card, USER_PAD_SM, 0);  /* 稿 16 */
@@ -999,44 +979,42 @@ lv_obj_t *build_view_status(lv_obj_t *parent)
                           LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
     lv_obj_set_style_pad_row(card, USER_PAD_SM / 4, 0);
 
+    /* 标题行。新稿去掉了标题前的房子图标；切换钮从 48 放大到 56，而标题与分级大字的
+     * 墨迹高度都没跟着变。所以这一行**定高 48**（旧切换钮的边长）、标题在行内竖直居中，
+     * 切换钮挪到行外（见下）——留在行里的话，56 的钮会把整行撑高 8，Good 与读数一起往下掉。
+     * 标题文字由 status_update() 按当前档填。 */
     lv_obj_t *head = lv_obj_create(card);
     lv_obj_remove_style_all(head);
     lv_obj_set_width(head, LV_PCT(100));
-    lv_obj_set_height(head, LV_SIZE_CONTENT);
+    lv_obj_set_height(head, USER_METRIC_ICON_SZ * 3 / 2);
     lv_obj_set_flex_flow(head, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(head, LV_FLEX_ALIGN_SPACE_BETWEEN,
+    lv_obj_set_flex_align(head, LV_FLEX_ALIGN_START,
                           LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_set_style_bg_opa(head, LV_OPA_TRANSP, 0);
     lv_obj_clear_flag(head, LV_OBJ_FLAG_SCROLLABLE);
 
-    lv_obj_t *hl = lv_obj_create(head);
-    lv_obj_remove_style_all(hl);
-    lv_obj_set_size(hl, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
-    lv_obj_set_flex_flow(hl, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(hl, LV_FLEX_ALIGN_START,
-                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_column(hl, USER_PAD_SM / 2, 0);
-    lv_obj_set_style_bg_opa(hl, LV_OPA_TRANSP, 0);
-    lv_obj_clear_flag(hl, LV_OBJ_FLAG_SCROLLABLE);
-
-    make_icon(hl, ic_home_set, USER_METRIC_ICON_SZ * 3 / 4, user_light_text);
-    g_pm_title = lv_label_create(hl);
-    lv_label_set_text(g_pm_title, kAirMetrics[0].title);
+    g_pm_title = lv_label_create(head);
+    lv_label_set_text(g_pm_title, "");
     lv_obj_set_style_text_color(g_pm_title, user_light_text, 0);
     lv_obj_set_style_text_opa(g_pm_title, LV_OPA_60, 0);
     lv_obj_set_style_text_font(g_pm_title, user_font_title(), 0);   /* 稿 20 */
 
-    /* 切换钮：稿 (1188,124) 48×48 rx16，#333145@4% */
-    lv_obj_t *sw = lv_button_create(head);
+    /* 切换钮：稿 (284,16) 56×56 rx16，#333145@4%，箭头图标 32（旧稿 48 钮配 24）。
+     * **挂在卡上、FLOATING**，不挂标题行：它比行高多出 8，挂在行里会被行框裁掉下沿
+     * （LVGL 按父框裁子对象，同色条游标那个坑）。FLOATING 的 align 仍以卡的内容区为基准，
+     * 内容区左右各缩进 24，所以再往右补 USER_PAD - USER_PAD_SM，落到离右缘 16；顶贴
+     * pad_top，正好是稿上的 16。 */
+    lv_obj_t *sw = lv_button_create(card);
     lv_obj_remove_style_all(sw);
-    lv_obj_set_size(sw, USER_METRIC_ICON_SZ * 3 / 2, USER_METRIC_ICON_SZ * 3 / 2);
+    lv_obj_add_flag(sw, LV_OBJ_FLAG_FLOATING);
+    lv_obj_set_size(sw, USER_METRIC_ICON_SZ * 7 / 4, USER_METRIC_ICON_SZ * 7 / 4);
+    lv_obj_align(sw, LV_ALIGN_TOP_RIGHT, USER_PAD - USER_PAD_SM, 0);
     lv_obj_set_style_radius(sw, USER_MON_RADIUS, 0);
     lv_obj_set_style_bg_color(sw, user_light_text, 0);
     lv_obj_set_style_bg_opa(sw, 10, 0);
     lv_obj_set_style_bg_opa(sw, 30, LV_STATE_PRESSED);
     lv_obj_add_event_cb(sw, on_pm_toggle, LV_EVENT_CLICKED, nullptr);
-    lv_obj_center(make_icon(sw, ic_switch_set, USER_METRIC_ICON_SZ * 3 / 4,
-                            user_light_text));
+    lv_obj_center(make_icon(sw, ic_switch_set, USER_METRIC_ICON_SZ, user_light_text));
 
     g_pm_level = lv_label_create(card);
     lv_label_set_text(g_pm_level, "--");
@@ -1048,6 +1026,10 @@ lv_obj_t *build_view_status(lv_obj_t *parent)
     lv_obj_set_style_text_color(g_pm_value, user_light_text, 0);
     lv_obj_set_style_text_opa(g_pm_value, LV_OPA_60, 0);
     lv_obj_set_style_text_font(g_pm_value, user_font_body(), 0);     /* 稿 24 */
+    /* 新稿读数比旧稿下移约 12（标题与 Good 没动），与 Good 之间拉得比首页卡那两行还开。
+     * 只给读数补上外边距，不改整卡的 pad_row——色条那一行也吃同一个 pad_row。
+     * 这 12 从色条上方的占位里扣，三档都还有余量。 */
+    lv_obj_set_style_margin_top(g_pm_value, USER_PAD_SM * 3 / 4, 0);
 
     /* 四段色条 + 游标。**这里的四段是彩色的**（稿 #55D273/#F3CD3A/#F5803B/#EA4948），
      * 与首页 HOME 卡那条「白色四段、不透明度递增」不是一回事——那张卡是蓝底，白段
@@ -1127,30 +1109,25 @@ void status_update(void)
     if(!g_pm_title) {
         return;
     }
-    const AirMetric &m = kAirMetrics[g_pm_metric];
     const ui_device_snapshot_t &snap = *ui_device_state_get();
-    const float v = (g_pm_metric == 0) ? snap.pm25_indoor : snap.pm10_indoor;
 
-    lv_label_set_text(g_pm_title, m.title);
-    if(metric_invalid(v)) {
-        lv_label_set_text(g_pm_level, "--");
-        lv_label_set_text(g_pm_value, "");
+    /* PM 卡：内容与首页左卡同源（舱内/舱外档、分级、一位小数读数），见 ui_air_quality。 */
+    ui_air_view_t view;
+    ui_air_view_get(&view);
+    lv_label_set_text(g_pm_title, view.title);
+    lv_label_set_text(g_pm_level, view.level_name);
+    lv_label_set_text(g_pm_value, view.value_text);
+    if(!view.valid) {
         if(g_pm_dot) lv_obj_add_flag(g_pm_dot, LV_OBJ_FLAG_HIDDEN);
-    } else {
-        float frac = 0.0f;
-        const int level = air_classify(m, v, &frac);
-        lv_label_set_text(g_pm_level, kLevelName[level]);
-        lv_label_set_text_fmt(g_pm_value, "%.0f ug/m3", static_cast<double>(v));
-        if(g_pm_dot && g_pm_track) {
-            lv_obj_remove_flag(g_pm_dot, LV_OBJ_FLAG_HIDDEN);
-            lv_obj_update_layout(g_pm_track);
-            const int32_t tw  = lv_obj_get_width(g_pm_track);
-            const int32_t dot = lv_obj_get_width(g_pm_dot);
-            int32_t dx = static_cast<int32_t>(frac * static_cast<float>(tw)) - dot / 2;
-            if(dx < 0)          dx = 0;
-            if(dx > tw - dot)   dx = tw - dot;
-            lv_obj_align(g_pm_dot, LV_ALIGN_LEFT_MID, dx, 0);
-        }
+    } else if(g_pm_dot && g_pm_track) {
+        lv_obj_remove_flag(g_pm_dot, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_update_layout(g_pm_track);
+        const int32_t tw  = lv_obj_get_width(g_pm_track);
+        const int32_t dot = lv_obj_get_width(g_pm_dot);
+        int32_t dx = static_cast<int32_t>(view.frac * static_cast<float>(tw)) - dot / 2;
+        if(dx < 0)          dx = 0;
+        if(dx > tw - dot)   dx = tw - dot;
+        lv_obj_align(g_pm_dot, LV_ALIGN_LEFT_MID, dx, 0);
     }
 
     struct { lv_obj_t *val; float v; } kCells[4] = {
