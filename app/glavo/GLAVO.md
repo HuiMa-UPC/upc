@@ -18,7 +18,7 @@
 | `lib/height_calibration.*` | 调试页高度校准（关舱灯 + Red_On → 回零先下降 20mm → 写 LUT → 开舱灯，红光保持） |
 | `lib/plate_height_measure.*` | 打印前两步测高调 Z（开关默认开；光路之后；回零先下降 20mm；期间 SOC 舱灯全关，测高结束保持关；失败阻断起印） |
 | `lib/galvo_motion_encode.*` | 调试运动包编码 + 五点坐标（点位测试与光路检测共用） |
-| `lib/soc_sensors.*` | SOC 本地：舱内外 PMSA UART、AHT20（≥2s）、双路 CPM121、IIO 氧气（须 `/run/o2_ready`；V=raw×3.3/2^31，100Ω；K 读 `/userdata/CAL/o2_cal.json` 缺省≈655）。链路启动即周期采集。六路舱灯进程启动即默认全开。六路舱灯/`fa_valve` sysfs 调试可随时写；业务采样结束强制关阀。背光不在本模块。 |
+| `lib/soc_sensors.*` | SOC 本地：舱内外 PMSA UART、AHT20（≥2s）、双路 CPM121、IIO 氧气（须 `/run/o2_ready`；V=raw×3.3/2^31，100Ω；K 读 `/userdata/CAL/o2_cal.json` 缺省≈655）。链路启动即周期采集。六路舱灯进程启动即默认全开。六路舱灯/`fa_valve` sysfs 调试可随时写。开门前 PM 判定与持续吹风不开关阀。背光不在本模块。 |
 | `lib/spi_status_led.*` | SPI 灯效板：`/dev/spidev1.0` 40 颗 WS 单色。CONDITION+ACTIVE 红，`print_running_` 橙，空闲蓝。进程启动即打开（不等串口）。业务路径只改状态排队；专用 led 线程做 open/ioctl，避免堵 McuLink 串口线程。 |
 | `lib/spi_pm25_lcd.*` | ST7735 SPI 小屏：按 fbdev name `st7735rdrmfb` 打开，常显 3~5 µg/m³ 缓变模拟 PM2.5（舱外 PMSA 暂不可靠；布局自 `doc/spilcd`）。`arm_soc_peripherals` 启动；`poll_soc_env_tick` 刷值；无效显示 `--`。 |
 | `lib/n2_ble_client.*` / `n2_ble_transport.*` / `n2_ble_parse.*` | 制氮机 BLE：BlueZ GATT Client + ASCII 解析；推 `APP_N2_Status_Ntf`（v1 UI 不订阅） |
@@ -65,7 +65,7 @@ UI → GlavoService（工作线程）→ ParserManager → RingBuffer → McuLin
 | `UI_Debug_Skip_Outer_Door_Set_Ntf` | 跳过外门检测+关内门套件（仅本次运行，**默认关=要做**）；开则不检门、不开→关边沿也不跑套件 |
 | `UI_Debug_Hold_Prep_Z_Set_Ntf` | 保持当前 Z（仅本次运行，**默认关**）。开则整个打印会话（`print_running_`）内绝对不动 Z：不起印 −10、跳过测高与工作高度抬升、内门套件前不降 Z、准备终止/起印失败不回 Z，Manual/调试 Z 点动与 Home 一律丢弃。会话结束后可再动 Z |
 | `UI_Debug_Galvo_Param_Save_Ntf` | 写 `cal.csv` 第 4 行中心偏移 + `ParserContext::load_calibration`；打印/任一振镜测试进行中拒绝 |
-| `UI_PM25_Req` / 门控 Req | 独立线程开 `fa_valve` 采 3s 舱内平均后回 `APP_PM25_Rsp`（不堵 worker）。门控关则跳过、直接判合格 |
+| `UI_PM25_Req` / 门控 Req | 直接读舱内 PM2.5 缓存后回 `APP_PM25_Rsp`（不开阀、不平均）。≥ 阈值则 UI 再发持续吹风；无效或低于阈值直接开门。门控关则跳过、直接判合格 |
 | `UI_OpenDoor_Req` | worker 发开门指令后由 `door_open_worker_` 轮询传感器（默认最长 `GLAVO_DOOR_OPEN_TIMEOUT_MS`=1s，传感器报开即返回），线程内 `publish_async` Rsp；重复请求直接拒。门控关时同样下发，只是前面的 PM2.5/吹粉已跳过。UI 失败后隔 300ms 最多再试 2 次，仍失败 toast 并收 overlay |
 | `UI_Transfer_Demo_Prep_Req` | 一键演示（与 Transfer Box 取件开关无关）：独立线程 Z 绝对到 −10，再开外门并最多等 8s 传感器。打印中/准备中/门轮询中拒绝 |
 | `UI_Transfer_Demo_Confirm_Req` | 装盒确认后：开内门套件，成功再发转运串口 A2/0x41 TLV 0x02。结果仍走 `APP_Transport_Result_Ntf` |
@@ -95,7 +95,7 @@ UI → GlavoService（工作线程）→ ParserManager → RingBuffer → McuLin
 - **SPI PM2.5 小屏**：`SpiPm25Lcd` 按 `/sys/class/graphics/fb*/name == st7735rdrmfb` 打开（勿写死 fb0）。UI 逻辑 160×80，shadow 逆时针 90° 后 `pwrite` 到 80×160 fb（相对旧顺时针再转 180°，适配装配朝向）。**暂不接舱外实测**：`poll_soc_env_tick` 喂 3~5 µg/m³ 缓变模拟值（舱外 PMSA 不可靠时的权宜）；首页 / MQTT 仍用真实 `pm25_outdoor`。与灯效板/主屏 DRM 无关。调试页 **SPI LCD Test** 开则忽略 PM、周期整屏刷红/绿/蓝/白/黑（测 fb 提交；本板 `modetest` 亦可能仅背光）。
 - **SOC→UI 推送**：`poll_soc_env_tick` 每 500ms 独立 `publish_async` `APP_Update_Ntf` + `GLAVO_Debug_Sensor_Ntf`，**不依赖** MCU 1ST。MCU 仍负责基板/粉量/门等；未收到 1ST 前这些字段顶栏显示 `--`。MQTT `telemetry/chamber` 用 SOC 舱内 PM/温湿/气压/氧，`telemetry/chamber_ext` 上报舱外 PM；无效氧发 `null` 不夹成 0。`sensor_v4` 固定填 1（ABI 保留，不再表示版本切换）。
 - **报警上云**：单报与完整快照经 IPC 进 `rongsu_mqtt`，映射 `snowpod/.../alarm/report`，订 `alarm/ack`；落盘 outbox `/userdata/snowpod/alarm-outbox`，流序号与 `lost_report_ranges` `/userdata/snowpod/alarm-stream.json`。快照条目元数据 unknown。调试页 **Alarm Inject** 只补单报 MQTT（不改快照）。契约 [doc/soc-alarm-contract-v2.md](../../doc/soc-alarm-contract-v2.md)。
-- **开门前清粉（真实门控开时 UI 才会发；收到即执行）**：风机固定吹 10s → 关风机 → 开阀 3s 平均后关阀；仍超标则循环。
+- **开门前吹风（真实门控开且舱内 PM ≥ 阈值时 UI 才会发；收到即执行）**：占空比 60% 开风机并持续吹，每 200ms 读舱内 PM 缓存；有效值低于阈值则关风机，UI 再开门。不开电磁阀。取消则关风机。
 
 跨进程回复 UI：**必须** `publish_async`（`GlavoService` 工作线程内禁止 `MsgPort::publish` 同步路径）。
 

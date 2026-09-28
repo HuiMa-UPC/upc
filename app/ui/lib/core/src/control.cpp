@@ -1638,9 +1638,11 @@ void door_apply_variant(DoorVariant v)
         door_set_image(&img_door_opening);
 
         g_door_title = door_make_title(g_door_content);
+        /* 开门等待和 PM2.5 检测共用这一态。标题写成空气检测，避免把停留看成门开得慢。
+         * 超标清粉仍走 Cleaning；清完回到本态时门已经在开，文案保持不变。 */
         lv_label_set_text(g_door_title,
                           v == DoorVariant::Cleaning ? "Cleaning powder..."
-                                                     : "Opening the door...");
+                                                     : "Checking PM2.5...");
 
         door_make_spinner(g_door_content);
 
