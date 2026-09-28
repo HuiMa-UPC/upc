@@ -1290,7 +1290,7 @@ enum class PrintPrepStep : uint8_t {
     Oxygen      = 5,
     /** 首层视觉：采参考图 + PRINT_READY 后比对（调试开关关则不计） */
     FirstLayer  = 6,
-    /** 基板在位读码（调试开关关则不计；执行在关内门之后、光路之前） */
+    /** 粗测判定无基板、等待放板（在光路之后；图案检测已删除） */
     PlatePresent = 7,
 };
 

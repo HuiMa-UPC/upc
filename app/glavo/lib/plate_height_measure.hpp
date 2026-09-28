@@ -21,6 +21,8 @@ struct PlateHeightMeasureResult {
     bool   ran = false;
     bool   ok = false;
     bool   flatness_warn = false;
+    /** 开关打开且粗测 H-1 不超过门限：没放基板。此时未做粗调 AXIS_INC。 */
+    bool   plate_absent = false;
     float  h_med_mm = 0.0f;
 };
 
@@ -44,8 +46,12 @@ public:
                    PublishSessionFn publish_session,
                    DoneFn on_done);
 
-    /** 调用前须已确认 LUT 可读。@return false=已在跑或未配置 */
-    bool start(const GalvoMotionCalibration& cal);
+    /**
+     * 调用前须已确认 LUT 可读。
+     * @param check_presence 为真时，回零后的粗测用 H-1 判断有没有基板
+     * @return false=已在跑或未配置
+     */
+    bool start(const GalvoMotionCalibration& cal, bool check_presence);
 
     void abort();
     [[nodiscard]] bool active() const noexcept { return active_.load(); }
@@ -75,6 +81,7 @@ private:
     std::thread worker_;
     std::atomic<bool> active_{false};
     std::atomic<bool> abort_requested_{false};
+    bool check_presence_ = false;
 };
 
 } // namespace upc::glavo
