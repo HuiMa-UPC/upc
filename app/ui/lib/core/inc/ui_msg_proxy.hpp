@@ -107,10 +107,10 @@ public:
     void send_transport_request();
     void register_transport_result(TransportResultCb cb);
 
-    /** 转运盒一键演示：Z→−10 再开外门。与 Transfer Box 取件开关无关。 */
+    /** 转运盒一键演示前半段：Z→−100 → 关内门 → 开外门。装盒 Done 后再 send_transport_request。 */
     void send_transfer_demo_prep();
     void register_transfer_demo_prep(DoorResultCb cb);
-    /** 确认放入后：开内门，成功再发转运串口。 */
+    /** 保留兼容；演示已改成 Prep 一键，UI 不再发送。 */
     void send_transfer_demo_confirm();
     void register_transfer_demo_confirm(DoorResultCb cb);
 

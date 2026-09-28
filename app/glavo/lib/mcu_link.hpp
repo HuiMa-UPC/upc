@@ -45,6 +45,8 @@ using McuLinkProgressCb = std::function<void()>;
 /** @brief 清粉测试完成回调：参数为清粉完成上报 result_code（A2/42/0x03）。 */
 using McuLinkCleanTestDoneCb = std::function<void(uint8_t)>;
 using McuLinkTransportResultCb = std::function<void(uint8_t)>;
+/** @brief Z 轴运动错误（报警 1204，active/latched）回调，供外门补关解开 Z 锁。 */
+using McuLinkZMotionFaultCb = std::function<void()>;
 /** @brief 首层视觉检测回调：true=通过，false=不通过（继续铺粉）。 */
 using McuLinkFirstLayerCheckCb = std::function<bool(uint16_t)>;
 
@@ -103,6 +105,7 @@ public:
     void set_progress_callback(McuLinkProgressCb cb);
     void set_clean_test_done_callback(McuLinkCleanTestDoneCb cb);
     void set_transport_result_callback(McuLinkTransportResultCb cb);
+    void set_z_motion_fault_callback(McuLinkZMotionFaultCb cb);
     void set_first_layer_check_callback(McuLinkFirstLayerCheckCb cb);
 
     /** @brief 运行时设置串口 ACK 可靠发送开关（默认值来自编译宏）。 */
@@ -561,6 +564,8 @@ private:
     void force_switch_to_red_mode_on_tcp_connect();
     /** @brief 串口 MCU 真实版本上报后：关激光使能；下一轮 drain 后再补 TCP 红光。 */
     void apply_serial_laser_off_after_mcu_ready();
+    /** @brief 串口 MCU 真实版本上报后：发一次 Z Home（与 Manual 复位同指令）。 */
+    void apply_serial_z_home_after_mcu_ready();
     /** @brief 0x12 出队后再补 TCP 红光，避免关使能把瞄准红光掐灭。 */
     void maybe_reassert_red_after_serial_laser_off();
 
@@ -570,6 +575,7 @@ private:
     McuLinkProgressCb progress_cb_;         /**< 进度更新回调 */
     McuLinkCleanTestDoneCb clean_test_done_cb_; /**< 清粉测试完成回调 */
     McuLinkTransportResultCb transport_result_cb_; /**< 自动转运结果回调 */
+    McuLinkZMotionFaultCb z_motion_fault_cb_; /**< 报警 1204 有效时通知上层 */
     McuLinkFirstLayerCheckCb first_layer_check_cb_; /**< 首层视觉检测回调 */
 
     /* ---------- 文件描述符 ---------- */
@@ -609,6 +615,8 @@ private:
     mutable std::mutex mcu_fw_mtx_;
     std::atomic<bool> serial_laser_off_applied_{false}; /**< 本串口会话已发过上电 0x12 */
     std::atomic<bool> serial_laser_off_pending_{false}; /**< 版本已到但当时在打印，待空闲再发 */
+    std::atomic<bool> serial_z_home_applied_{false}; /**< 本串口会话已发过上电 Z Home */
+    std::atomic<bool> serial_z_home_pending_{false}; /**< 版本已到但当时在打印，待空闲再发 */
     std::atomic<bool> reassert_red_after_laser_off_{false}; /**< 等串口 0x12 出队后再发 TCP 红光 */
     std::atomic<uint8_t> reassert_red_code_{1}; /**< 补发的 DATA[3]：1=红光，3=红光常亮 */
     std::atomic<uint8_t> last_requested_red_code_{0}; /**< 最近一次意图：1/2/3；2=激光，补发必须让路 */

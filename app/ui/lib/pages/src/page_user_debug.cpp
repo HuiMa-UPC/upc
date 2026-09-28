@@ -3125,7 +3125,7 @@ void bind_debug_callbacks()
                 on ? user_light_accent : user_light_icon_off, 0);
         }
     });
-    proxy.register_inner_door_busy([](bool busy) {
+    proxy.register_inner_door_busy([](bool busy, bool /*z_locked*/) {
         apply_inner_door_debug_busy(busy);
     });
 

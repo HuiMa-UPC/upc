@@ -544,7 +544,7 @@ enum class MsgType : uint32_t {
     GLAVO_Debug_Cabin_Pm_Valve_Ntf,     /**< DebugOnOffPayload：舱内 PM 阀开关状态 */
     GLAVO_Debug_Skip_O2_Gate_Ntf,       /**< DebugOnOffPayload：跳过 SOC 氧打印门开关状态 */
     GLAVO_Debug_Skip_Outer_Door_Ntf,    /**< DebugOnOffPayload：跳过外门检测+关内门套件开关状态 */
-    GLAVO_Debug_Inner_Door_Busy_Ntf,    /**< DebugOnOffPayload：内门开/关套件进行中（on=1 禁 Manual 钮） */
+    GLAVO_Debug_Inner_Door_Busy_Ntf,    /**< DebugOnOffPayload：on=1 套件忙禁内门钮；reserved[0]=1 外门补关 Z 运动中，Manual Top/Bottom 与 Z 升降复位置灰（1204 active/latched 立刻解禁） */
     GLAVO_Debug_O2_Calib_Rsp,           /**< DebugO2CalibRspPayload：氧标定结果（Req 应答） */
     GLAVO_Debug_O2_Calib_Ntf,           /**< DebugO2CalibRspPayload：当前 K 回读（Get，ok=1 且未改盘） */
     GLAVO_Debug_Status_Led_Ntf,         /**< DebugStatusLedPayload：灯板强制态回读 */
@@ -704,10 +704,10 @@ enum class MsgType : uint32_t {
     UI_Debug_Plate_Work_Z_Get_Ntf,        /**< Empty：查询当前工作高度 */
     GLAVO_Debug_Plate_Work_Z_Ntf,         /**< DebugPlateWorkZPayload：回读目标高度 */
     /* 转运盒一键演示（与 Transfer Box 取件开关无关；枚举只准末尾追加） */
-    UI_Transfer_Demo_Prep_Req,            /**< Empty：Z 降到 −10 再开外门 */
+    UI_Transfer_Demo_Prep_Req,            /**< Empty：Z→−100 → 关内门 → 开外门 */
     APP_Transfer_Demo_Prep_Rsp,           /**< DoorResultPayload：外门已开才 ok=1 */
-    UI_Transfer_Demo_Confirm_Req,         /**< Empty：确认放入后开内门，再发转运串口 */
-    APP_Transfer_Demo_Confirm_Rsp,        /**< DoorResultPayload：内门已开且串口已发出才 ok=1 */
+    UI_Transfer_Demo_Confirm_Req,         /**< Empty：保留兼容；装盒 Done 走 UI_Transport_Req */
+    APP_Transfer_Demo_Confirm_Rsp,        /**< DoorResultPayload：现恒 ok=0 */
 };
 
 enum class MsgPriority : uint8_t {

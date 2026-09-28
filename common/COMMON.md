@@ -171,12 +171,12 @@ scripts/rongsu.sh start   # glavo + rongsu_camera → ui
 | `UI_Clean_Test_Close_Req` | — | UI→Glavo | Empty | `ui_clean_state_stop` / `send_clean_test_close` | 中止清粉（结果页吹粉钮再点、回 IDLE：取件成功或开门 Cancel）：下发 MCU close、停风扇；有录像时 Media 对 `0xfe` 不发 Result_Ntf，UI 靠 Close_Rsp → `UI_CLEAN_EVT_STOPPED` |
 | `UI_Print_Video_Finalize_Req` | — | UI→Media | `PrintVideoFinalizeReqPayload` | `send_print_video_finalize` | 开门取件后触发：promote 目录 + 清 pending；延时成片受 `UPC_TIMELAPSE_PLAYBACK_PNG` 控制（默认跳过 `timelapse.mp4`），打印录像仍可 remux `print_h264.mp4` |
 | `APP_Clean_Test_Close_Rsp` | — | Glavo→UI | Empty | `register_clean_test_close_rsp`（`ui_clean_state`） | close 已受理 → 扇出 `UI_CLEAN_EVT_STOPPED` |
-| `UI_Transport_Req` | — | UI→Glavo | Empty | `send_transport_request` | 转运盒 Ready：发串口自动转运请求（A2/0x41 TLV 0x02）。仅打印结束取件路径；演示确认不走这条 |
+| `UI_Transport_Req` | — | UI→Glavo | Empty | `send_transport_request` | 转运盒 Ready：发串口自动转运请求（A2/0x41 TLV 0x02）。取件与一键演示都在装盒 Done 后发 |
 | `APP_Transport_Result_Ntf` | — | Glavo→UI | `TransportResultPayload` | `register_transport_result` | MCU TLV 0x04：`0`=完成→BoxShutter；`1/2` 失败/中止→停留转圈页（无超时） |
-| `UI_Transfer_Demo_Prep_Req` | — | UI→Glavo | Empty | `send_transfer_demo_prep` | 一键演示前半段：Z 绝对到 −10，再开外门并轮询传感器 |
-| `APP_Transfer_Demo_Prep_Rsp` | — | Glavo→UI | `DoorResultPayload` | `register_transfer_demo_prep` | ok=1 外门已开，UI 进装盒页 |
-| `UI_Transfer_Demo_Confirm_Req` | — | UI→Glavo | Empty | `send_transfer_demo_confirm` | 确认放入后：开内门，成功再发转运串口（A2/0x41 TLV 0x02） |
-| `APP_Transfer_Demo_Confirm_Rsp` | — | Glavo→UI | `DoorResultPayload` | `register_transfer_demo_confirm` | ok=1 串口已发出（结果仍走 `APP_Transport_Result_Ntf`）；ok=0 内门或发送失败 |
+| `UI_Transfer_Demo_Prep_Req` | — | UI→Glavo | Empty | `send_transfer_demo_prep` | 一键演示前半段：Z→−100 → 固定关内门 → 开外门（传感器确认）。不发转运 |
+| `APP_Transfer_Demo_Prep_Rsp` | — | Glavo→UI | `DoorResultPayload` | `register_transfer_demo_prep` | ok=1 外门已开，UI 弹正式装盒页 |
+| `UI_Transfer_Demo_Confirm_Req` | — | UI→Glavo | Empty | `send_transfer_demo_confirm` | **保留兼容，演示已不用**：装盒 Done 走 `UI_Transport_Req` |
+| `APP_Transfer_Demo_Confirm_Rsp` | — | Glavo→UI | `DoorResultPayload` | `register_transfer_demo_confirm` | 现恒 ok=0 |
 | `UI_Print_Prepare_Req` | — | UI **或** Xfr→Glavo | `PrintPrepareReqPayload` | `send_print_prepare` | USB 复制+轻量扫描+config；Xfr 在 `POST /print/start` 对刚导入 Local 文件发 |
 | `APP_Print_Prepare_Rsp` | — | Glavo→请求方（UI 或 Xfr） | `PrintPrepareRspPayload` | `register_print_prepare_done` | 回给 `sender_id` |
 | `UI_Parser_Exit_Ntf` | — | UI→Glavo | Empty | `send_parser_exit` | 取消解析 |
@@ -337,7 +337,7 @@ scripts/rongsu.sh start   # glavo + rongsu_camera → ui
 | `GLAVO_Debug_Env_Sim_Powder_Ntf` | — | Glavo→UI | `DebugOnOffPayload` | `register_env_sim_powder` | 回读当前“环境模拟粉量缺粉”开关状态 |
 | `GLAVO_Debug_Skip_O2_Gate_Ntf` | — | Glavo→UI | `DebugOnOffPayload` | `register_skip_o2_gate` | 回读当前“跳过 SOC 氧打印门”开关状态 |
 | `GLAVO_Debug_Skip_Outer_Door_Ntf` | — | Glavo→UI | `DebugOnOffPayload` | `register_skip_outer_door` | 回读当前“跳过外门检测”开关状态 |
-| `GLAVO_Debug_Inner_Door_Busy_Ntf` | — | Glavo→UI | `DebugOnOffPayload` | `register_inner_door_busy` | 内门开/关套件进行中（`on=1`）；Manual Inner Door 据此禁钮；跳过/结束发 `on=0` |
+| `GLAVO_Debug_Inner_Door_Busy_Ntf` | — | Glavo→UI | `DebugOnOffPayload` | `register_inner_door_busy` | `on=1` 内门套件进行中，Manual / 调试 Inner Door 禁钮；`reserved[0]=1` 仅外门补关的 Z 下降到 −100 或回到下降前高度，Manual 的 Top/Bottom 与 Z 升降、复位置灰（期间 1204 active/latched 立刻解禁）。跳过/结束 `on=0` |
 | `GLAVO_Debug_O2_Calib_Rsp` | — | Glavo→UI | `DebugO2CalibRspPayload` | `register_o2_calib` | 氧标定 Req 应答（ok/err/k/i_ua/o2）；成功不再另推 Ntf |
 | `GLAVO_Debug_O2_Calib_Ntf` | — | Glavo→UI | `DebugO2CalibRspPayload` | `register_o2_calib` | 进页 Get 回读当前 K（不改盘；i_ua=0；与 Rsp 同结构） |
 | `GLAVO_Debug_FirstLayer_Visual_Check_Ntf` | — | Glavo→UI | `DebugOnOffPayload` | `register_first_layer_visual_check` | 回读当前“首层视觉检测”开关状态 |
