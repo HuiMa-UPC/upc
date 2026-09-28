@@ -757,6 +757,9 @@ bool GlavoService::init()
         transport_result_pending_.store(true);
         worker_cv_.notify_one();
     });
+    McuLink::instance().set_z_motion_fault_callback([this]() {
+        note_z_axis_motion_fault();
+    });
     McuLink::instance().set_first_layer_check_callback([this](uint16_t layer_height_um) {
         if(print_prep_needs_first_layer()) {
             publish_print_prep_progress(middleware::PrintPrepStep::FirstLayer);
@@ -3615,6 +3618,10 @@ bool GlavoService::wait_z_settled(float target_mm, float tolerance_mm, int timeo
             UPC_LOG_GLAVO_SERVICE(Info, "wait_z_settled cancelled");
             return false;
         }
+        if(clearance_z_fault_.load()) {
+            UPC_LOG_GLAVO_SERVICE(Warn, "wait_z_settled aborted: Z axis motion error");
+            return false;
+        }
         const float z = McuLink::instance().get_z_pos_mm();
         if(std::fabs(z - target_mm) <= tolerance_mm) {
             ++settled_count;
@@ -5006,31 +5013,77 @@ void GlavoService::handle_transport_request(const middleware::Message& /*msg*/)
     }
 }
 
-bool GlavoService::transfer_demo_lower_z_and_open_outer()
+bool GlavoService::transfer_demo_z_close_inner_and_open_outer()
 {
-    /* 演示明确要降到底，不看 Keep Z Position。 */
-    send_z_goto_abs(kPlateSafeZMm);
-    if(!wait_z_settled(kPlateSafeZMm, kPlateSafeZTolMm, kPlateSafeZSettleMs)) {
+    /* 演示固定降到补关高度，不看 Keep Z Position；关完也不回位。 */
+    send_z_goto_abs(kInnerDoorZMm);
+    if(!wait_z_settled(kInnerDoorZMm, kPlateSafeZTolMm, kInnerDoorZSettleMs)) {
         UPC_LOG_GLAVO_SERVICE(Warn, "transfer demo: Z did not reach %.1f",
-                              static_cast<double>(kPlateSafeZMm));
+                              static_cast<double>(kInnerDoorZMm));
         return false;
     }
-    if(!McuLink::instance().request_open_door_once()) {
-        UPC_LOG_GLAVO_SERVICE(Warn, "transfer demo: outer door send failed");
-        return false;
+
+    /* 视觉无法确认关到位；本演示不跳过，固定发一次关门再等套件同款时长。 */
+    {
+        std::unique_lock<std::mutex> lock(inner_door_seq_mtx_);
+        publish_inner_door_busy(true);
+        uint8_t buf[SERIAL_DEBUG_MAX_FRAME];
+        const int n = serial_debug_build_inner_door(
+            static_cast<uint8_t>(middleware::DebugMotorAction::Reverse),
+            buf, sizeof(buf));
+        if(n <= 0) {
+            publish_inner_door_busy(false);
+            UPC_LOG_GLAVO_SERVICE(Warn, "transfer demo: inner door close build failed");
+            return false;
+        }
+        debug_tx(buf, n);
+        UPC_LOG_GLAVO_SERVICE(Info,
+            "transfer demo: forced inner door close at Z=%.1f",
+            static_cast<double>(kInnerDoorZMm));
+        int left_ms = kInnerDoorCloseWaitMs;
+        constexpr int kSliceMs = 100;
+        while(left_ms > 0) {
+            const int slice = left_ms > kSliceMs ? kSliceMs : left_ms;
+            std::this_thread::sleep_for(std::chrono::milliseconds(slice));
+            left_ms -= slice;
+        }
+        publish_inner_door_busy(false);
     }
-    constexpr int kDoorWaitMs = 8000;
-    const auto deadline = std::chrono::steady_clock::now() +
-                          std::chrono::milliseconds(kDoorWaitMs);
-    do {
-        const auto env = McuLink::instance().env_snapshot();
-        if(env.valid && env.door_state_valid && env.outer_door_open) {
+
+    /* 与 UI_OpenDoor_Req 同口径：发开门 + 传感器轮询；演示侧自带限次重试。 */
+    constexpr int kOpenAttempts = 3;
+    constexpr int kRetryGapMs = 300;
+    const uint32_t wait_ms = GLAVO_DOOR_OPEN_TIMEOUT_MS > 0
+                                 ? GLAVO_DOOR_OPEN_TIMEOUT_MS : 1u;
+    for(int attempt = 0; attempt < kOpenAttempts; ++attempt) {
+        if(!McuLink::instance().request_open_door_once()) {
+            UPC_LOG_GLAVO_SERVICE(Warn, "transfer demo: outer door send failed");
+            return false;
+        }
+        bool opened = false;
+        const auto deadline = std::chrono::steady_clock::now() +
+                              std::chrono::milliseconds(wait_ms);
+        do {
+            const auto env = McuLink::instance().env_snapshot();
+            if(env.valid && env.door_state_valid && env.outer_door_open) {
+                opened = true;
+                break;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        } while(std::chrono::steady_clock::now() < deadline);
+        if(opened) {
+            McuLink::instance().set_print_task_flow_active(false);
+            UPC_LOG_GLAVO_SERVICE(Info,
+                "transfer demo: outer door open attempt=%d", attempt + 1);
             return true;
         }
-        std::this_thread::sleep_for(std::chrono::milliseconds(50));
-    } while(std::chrono::steady_clock::now() < deadline);
-    UPC_LOG_GLAVO_SERVICE(Warn, "transfer demo: outer door not open in %d ms",
-                          kDoorWaitMs);
+        UPC_LOG_GLAVO_SERVICE(Warn,
+            "transfer demo: outer door not open attempt=%d/%d timeout_ms=%u",
+            attempt + 1, kOpenAttempts, static_cast<unsigned>(wait_ms));
+        if(attempt + 1 < kOpenAttempts) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(kRetryGapMs));
+        }
+    }
     return false;
 }
 
@@ -5048,7 +5101,7 @@ void GlavoService::handle_transfer_demo_prep(const middleware::Message& msg)
     }
     transfer_demo_busy_.store(true);
     transfer_demo_worker_ = std::thread([this, target]() {
-        const bool ok = transfer_demo_lower_z_and_open_outer();
+        const bool ok = transfer_demo_z_close_inner_and_open_outer();
         send_door_rsp_to(target, middleware::MsgType::APP_Transfer_Demo_Prep_Rsp, ok);
         transfer_demo_busy_.store(false);
     });
@@ -5056,28 +5109,10 @@ void GlavoService::handle_transfer_demo_prep(const middleware::Message& msg)
 
 void GlavoService::handle_transfer_demo_confirm(const middleware::Message& msg)
 {
+    /* 装盒 Done 后走 UI_Transport_Req；Confirm 保留 MsgType 兼容，不再执行。 */
     const uint32_t target = static_cast<uint32_t>(msg.sender_id);
-    if(print_running_.load() || transfer_demo_busy_.load()) {
-        UPC_LOG_GLAVO_SERVICE(Warn, "transfer demo confirm rejected: busy");
-        send_door_rsp_to(target, middleware::MsgType::APP_Transfer_Demo_Confirm_Rsp, false);
-        return;
-    }
-    if(transfer_demo_worker_.joinable()) {
-        transfer_demo_worker_.join();
-    }
-    transfer_demo_busy_.store(true);
-    transfer_demo_worker_ = std::thread([this, target]() {
-        const bool opened = run_inner_door_motion_kit(
-            true, true, InnerDoorZMotion::None);
-        const bool sent = opened && McuLink::instance().request_transport_once();
-        if(!sent) {
-            UPC_LOG_GLAVO_SERVICE(Warn,
-                "transfer demo confirm failed: inner=%d", opened ? 1 : 0);
-        }
-        send_door_rsp_to(target,
-                         middleware::MsgType::APP_Transfer_Demo_Confirm_Rsp, sent);
-        transfer_demo_busy_.store(false);
-    });
+    UPC_LOG_GLAVO_SERVICE(Warn, "transfer demo confirm unused: Done uses Transport_Req");
+    send_door_rsp_to(target, middleware::MsgType::APP_Transfer_Demo_Confirm_Rsp, false);
 }
 
 void GlavoService::publish_transport_result(uint8_t result)
@@ -5509,6 +5544,12 @@ void GlavoService::handle_debug_axis_jog(const middleware::Message& msg)
             "debug axis jog Z dropped: early print prep active");
         return;
     }
+    if(manual_z_lock_.load() &&
+       p.axis == static_cast<uint8_t>(middleware::DebugAxis::Z)) {
+        UPC_LOG_GLAVO_SERVICE(Info,
+            "debug axis jog Z dropped: outer-door clearance Z moving");
+        return;
+    }
     uint8_t buf[SERIAL_DEBUG_MAX_FRAME];
     int n;
 
@@ -5549,6 +5590,12 @@ void GlavoService::handle_debug_axis_hold_stop(const middleware::Message& msg)
     if(!read_inline_pod(msg.payload, p)) {
         return;
     }
+    if(manual_z_lock_.load() &&
+       p.axis == static_cast<uint8_t>(middleware::DebugAxis::Z)) {
+        UPC_LOG_GLAVO_SERVICE(Info,
+            "debug axis hold-stop Z dropped: outer-door clearance Z moving");
+        return;
+    }
     uint8_t buf[SERIAL_DEBUG_MAX_FRAME];
     debug_tx(buf, serial_debug_build_axis_jog_stop(p.axis, buf, sizeof(buf)));
 }
@@ -5575,9 +5622,11 @@ void GlavoService::handle_debug_axis_home(const middleware::Message& msg)
         return;
     }
     if(p.axis == static_cast<uint8_t>(middleware::DebugAxis::Z) &&
-       z_hold_blocks_motion()) {
+       (z_hold_blocks_motion() || manual_z_lock_.load())) {
         UPC_LOG_GLAVO_SERVICE(Info,
-            "debug axis home Z dropped: hold prep z (print session)");
+            "debug axis home Z dropped: hold=%d clearance=%d",
+            z_hold_blocks_motion() ? 1 : 0,
+            manual_z_lock_.load() ? 1 : 0);
         return;
     }
     if(early_print_prep_active_.load() &&
@@ -6394,17 +6443,11 @@ void GlavoService::handle_debug_skip_outer_door_get(const middleware::Message& m
     publish_debug_skip_outer_door_state();
 }
 
-void GlavoService::publish_inner_door_busy(bool busy)
+void GlavoService::publish_inner_door_busy_payload()
 {
-    const bool prev = inner_door_kit_busy_.exchange(busy);
-    if(prev == busy) {
-        /* 状态未变也推一次 false：Manual 乐观禁钮后套件跳过时需立刻解禁。 */
-        if(busy) {
-            return;
-        }
-    }
     middleware::DebugOnOffPayload p{};
-    p.on = busy ? 1 : 0;
+    p.on = inner_door_kit_busy_.load() ? 1 : 0;
+    p.reserved[0] = manual_z_lock_.load() ? 1 : 0;
     middleware::Message ntf(
         middleware::MsgType::GLAVO_Debug_Inner_Door_Busy_Ntf,
         middleware::ModuleId::APP_GLAVO,
@@ -6416,20 +6459,43 @@ void GlavoService::publish_inner_door_busy(bool busy)
     }
 }
 
+void GlavoService::publish_inner_door_busy(bool busy)
+{
+    const bool prev = inner_door_kit_busy_.exchange(busy);
+    if(prev == busy) {
+        /* 状态未变也推一次 false：Manual 乐观禁钮后套件跳过时需立刻解禁。 */
+        if(busy) {
+            return;
+        }
+    }
+    publish_inner_door_busy_payload();
+}
+
+void GlavoService::set_manual_z_lock(bool lock)
+{
+    const bool prev = manual_z_lock_.exchange(lock);
+    if(prev == lock) {
+        return;
+    }
+    publish_inner_door_busy_payload();
+}
+
+void GlavoService::note_z_axis_motion_fault()
+{
+    /* 只打断正在锁着 Manual Z 的外门补关位移。其它时候的 1204 不改锁。 */
+    if(!manual_z_lock_.load()) {
+        return;
+    }
+    clearance_z_fault_.store(true);
+    set_manual_z_lock(false);
+    UPC_LOG_GLAVO_SERVICE(Warn,
+        "Z axis motion error during clearance move; manual Z unlocked");
+}
+
 void GlavoService::handle_debug_inner_door_busy_get(const middleware::Message& msg)
 {
     (void)msg;
-    middleware::DebugOnOffPayload p{};
-    p.on = inner_door_kit_busy_.load() ? 1 : 0;
-    middleware::Message ntf(
-        middleware::MsgType::GLAVO_Debug_Inner_Door_Busy_Ntf,
-        middleware::ModuleId::APP_GLAVO,
-        middleware::ModuleId::UI);
-    ntf.payload = middleware::MsgPayload::from_bytes(
-        reinterpret_cast<const uint8_t*>(&p), sizeof(p));
-    if(!publish_async(ntf)) {
-        UPC_LOG_GLAVO_SERVICE(Warn, "inner door busy get publish_async failed");
-    }
+    publish_inner_door_busy_payload();
 }
 
 void GlavoService::publish_outer_door_confirm_req()
@@ -7130,6 +7196,9 @@ bool GlavoService::run_inner_door_motion_kit(bool opening, bool blocking,
      * Keep Z Position 打开时跳过下降和回位，门指令照发。 */
     const float z_now = McuLink::instance().get_z_pos_mm();
     const bool clearance = z_motion == InnerDoorZMotion::ClearanceReturn;
+    if(clearance) {
+        clearance_z_fault_.store(false);
+    }
     const float z_target = clearance ? kInnerDoorZMm : kPlateSafeZMm;
     const int z_settle_ms = clearance ? kInnerDoorZSettleMs : kPlateSafeZSettleMs;
     const bool skip_z = z_motion == InnerDoorZMotion::None || hold_prep_z_on_;
@@ -7139,12 +7208,36 @@ bool GlavoService::run_inner_door_motion_kit(bool opening, bool blocking,
         static_cast<double>(z_now), static_cast<int>(z_motion),
         static_cast<double>(skip_z ? z_now : z_target),
         hold_prep_z_on_ ? 1 : 0);
-    auto goto_z = [this](float target_mm, int timeout_ms) -> bool {
+    auto goto_z = [this, clearance](float target_mm, int timeout_ms) -> bool {
         if(std::fabs(McuLink::instance().get_z_pos_mm() - target_mm) <= kPlateSafeZTolMm) {
             return true;
         }
+        /* 外门补关的下降与回位：期间 Manual 的 Z 键置灰，避免和绝对位移抢轴。 */
+        struct ZLock {
+            GlavoService *self;
+            bool armed = false;
+            ~ZLock()
+            {
+                if(armed) {
+                    self->set_manual_z_lock(false);
+                }
+            }
+        } z_lock{this};
+        if(clearance) {
+            clearance_z_fault_.store(false);
+            set_manual_z_lock(true);
+            z_lock.armed = true;
+        }
         send_z_goto_abs(target_mm);
         return wait_z_settled(target_mm, kPlateSafeZTolMm, timeout_ms);
+    };
+    /* 1204 已解开 Manual Z：不再自动回位，否则会立刻重新上锁。 */
+    auto return_after_clearance = [this, clearance, hold = hold_prep_z_on_, z_now,
+                                   z_settle_ms, &goto_z]() {
+        if(!clearance || hold || clearance_z_fault_.load()) {
+            return;
+        }
+        (void)goto_z(z_now, z_settle_ms);
     };
     if(hold_prep_z_on_) {
         UPC_LOG_GLAVO_SERVICE(Info, "inner door kit: hold Z, door command without move");
@@ -7156,17 +7249,13 @@ bool GlavoService::run_inner_door_motion_kit(bool opening, bool blocking,
         UPC_LOG_GLAVO_SERVICE(Error,
             "inner door kit: Z not at %.1f, door command withheld",
             static_cast<double>(z_target));
-        if(clearance) {
-            (void)goto_z(z_now, z_settle_ms);
-        }
+        return_after_clearance();
         return false;
     }
 
     if(print_prep_abort_.load()) {
         UPC_LOG_GLAVO_SERVICE(Info, "inner door kit aborted before door cmd");
-        if(clearance && !hold_prep_z_on_) {
-            (void)goto_z(z_now, z_settle_ms);
-        }
+        return_after_clearance();
         return false;
     }
 
@@ -7179,9 +7268,7 @@ bool GlavoService::run_inner_door_motion_kit(bool opening, bool blocking,
         while(left_ms > 0) {
             if(print_prep_abort_.load()) {
                 UPC_LOG_GLAVO_SERVICE(Info, "inner door kit aborted during door wait");
-                if(clearance && !hold_prep_z_on_) {
-                    (void)goto_z(z_now, z_settle_ms);
-                }
+                return_after_clearance();
                 return false;
             }
             const int slice = left_ms > kSliceMs ? kSliceMs : left_ms;
@@ -7192,12 +7279,11 @@ bool GlavoService::run_inner_door_motion_kit(bool opening, bool blocking,
 
     if(print_prep_abort_.load()) {
         UPC_LOG_GLAVO_SERVICE(Info, "inner door kit aborted during door wait");
-        if(clearance && !hold_prep_z_on_) {
-            (void)goto_z(z_now, z_settle_ms);
-        }
+        return_after_clearance();
         return false;
     }
-    if(clearance && !hold_prep_z_on_ && !goto_z(z_now, z_settle_ms)) {
+    if(clearance && !hold_prep_z_on_ && !clearance_z_fault_.load() &&
+       !goto_z(z_now, z_settle_ms)) {
         if(print_prep_abort_.load()) {
             UPC_LOG_GLAVO_SERVICE(Info, "inner door kit aborted during Z return");
             return false;

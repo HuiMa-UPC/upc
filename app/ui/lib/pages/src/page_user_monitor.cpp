@@ -225,6 +225,7 @@ lv_obj_t *g_param_layer_ta   = nullptr;
 lv_obj_t *g_param_balance_ta = nullptr;
 lv_obj_t *g_ret_state   = nullptr;  /**< 回粉电机状态字 Auto / To A / To B */
 lv_obj_t *g_ret_mid     = nullptr;  /**< 回粉电机中间钮：自动时 ▷、送瓶期间 II */
+lv_obj_t *g_transfer_btn = nullptr; /**< 一键转运，与调试页 Transfer Demo 同一条；打印中锁住 */
 lv_obj_t *g_door_card   = nullptr;  /**< Inner Door 卡：打印进行中隐藏，出结果后显示但锁住 */
 lv_obj_t *g_door_btn    = nullptr;  /**< Inner Door 电源钮 */
 bool      g_inner_door_open = false; /**< env bit1 全开；亮=全开，灭=非全开 */
@@ -235,12 +236,13 @@ bool      g_pending_inner_door = false;
 bool      g_pending_inner_want_open = true;
 /** 内门套件进行中：禁钮，防连点排队第二次开/关。 */
 bool      g_inner_door_busy = false;
+bool      g_clearance_z_lock = false; /**< 外门补关 Z 下降/回位：Top/Bottom 与 Z 键置灰 */
 /** Manual 吹粉：外门未关时记下意图，关到位后再开清粉。 */
 bool      g_pending_purify = false;
 /** 正在长按点动的轴（DebugAxis 数值），-1 = 没有。 */
 int       g_hold_axis = -1;
 return_mode_t g_return_mode = RETURN_AUTO;
-/** apply_manual_lock() 上次落地的状态（bit0 = 锁住，bit1 = Inner Door 卡隐藏），-1 = 还没落过。 */
+/** apply_manual_lock() 上次落地的状态（bit0 = 打印锁，bit1 = Inner Door 卡隐藏，bit2 = 外门补关 Z 锁），-1 = 还没落过。 */
 int       g_manual_lock_sig = -1;
 lv_obj_t *g_manual_body = nullptr;   /**< Manual 滚动区，惯性点停按它判定落点 */
 uint32_t  g_manual_scroll_tick = 0;  /**< 滚动区最近一次位移的时刻（拖动与惯性阶段都算） */
@@ -1438,7 +1440,7 @@ void try_resume_pending_inner_door(void)
 void on_outer_door_slide(void * /*u*/)
 {
     close_outer_door_dlg();
-    control_open_door_request();
+    control_open_door_for_inner();
 }
 
 /** 请先开外门（稿 6339:28971）。稿上只有标题 + 副标题 + 滑条，没有 Cancel。
@@ -1468,6 +1470,9 @@ bool require_outer_door(void)
 
 void on_plate_changed(lv_event_t *e)
 {
+    if(g_clearance_z_lock) {
+        return;
+    }
     const uint8_t idx = ui_segmented_get_active(lv_event_get_target_obj(e));
     if(idx == UI_SEGMENTED_NONE) {
         return;
@@ -1545,6 +1550,9 @@ void on_manual_jog(lv_event_t *e)
     auto &proxy = ui::DebugMsgProxy::instance();
     switch(lv_event_get_code(e)) {
     case LV_EVENT_SHORT_CLICKED:
+        if(axis == middleware::DebugAxis::Z && g_clearance_z_lock) {
+            break;
+        }
         if(axis == middleware::DebugAxis::Z) {
             plate_leave_preset();
             /* Z 走 μm AXIS_INC（见 Glavo handle_debug_axis_jog） */
@@ -1562,6 +1570,9 @@ void on_manual_jog(lv_event_t *e)
         }
         break;
     case LV_EVENT_LONG_PRESSED:
+        if(axis == middleware::DebugAxis::Z && g_clearance_z_lock) {
+            break;
+        }
         manual_hold_stop();
         if(axis == middleware::DebugAxis::Z) {
             plate_leave_preset();
@@ -1609,6 +1620,9 @@ void attach_jog_events(lv_obj_t *btn, middleware::DebugAxis axis, int dir)
  *  高亮还在 Top/Bottom 时打断那段位移并退回 Level，否则复位后再点同一档不会触发。 */
 void on_z_home(lv_event_t * /*e*/)
 {
+    if(g_clearance_z_lock) {
+        return;
+    }
     plate_leave_preset();
     ui::DebugMsgProxy::instance().send_axis_home(middleware::DebugAxis::Z);
 }
@@ -1697,7 +1711,7 @@ void apply_fan_enabled(void)
 
 /**
  * 打印会话（g_printing，Preparing → 出结果、取件前）里 Manual 可进，但只开放风扇（另受吹粉锁，
- * 见 apply_fan_enabled()）、打印参数、回粉电机。其余锁住：Plate / S / D 的按钮与输入框半透明
+ * 见 apply_fan_enabled()）、打印参数、回粉电机。其余锁住：Plate / S / D / 一键转运的按钮与输入框半透明
  * 不可点，标题与 Z/S/D 读数照常；Inner Door 卡打印进行中隐藏，出结果后显示但仍锁住，
  * RETRIEVE 取件回待机后解锁（锁判定合在 apply_inner_door_btn() 里）。
  *
@@ -1709,21 +1723,26 @@ void apply_manual_lock(void)
 {
     const bool locked    = g_printing;
     const bool hide_door = phase_running();
+    /* 打印锁整组；外门补关只锁 Z（Top/Bottom、升降、复位），S/D 仍可点。 */
+    const bool z_locked  = locked || g_clearance_z_lock;
     if(locked) {
         manual_hold_stop();   /* 万一还有长按点动在跑 */
     }
     /* apply_phase() 打印中每秒好几次：状态没变就不重设样式，免得这几颗钮反复失效重绘 */
-    const int sig = (locked ? 1 : 0) | (hide_door ? 2 : 0);
+    const int sig = (locked ? 1 : 0) | (hide_door ? 2 : 0) | (g_clearance_z_lock ? 4 : 0);
     if(sig == g_manual_lock_sig) {
         return;
     }
     g_manual_lock_sig = sig;
     if(g_plate_seg) {
-        ui_segmented_set_locked(g_plate_seg, locked);
-        lv_obj_set_style_opa(g_plate_seg, locked ? LV_OPA_50 : LV_OPA_COVER, 0);
+        ui_segmented_set_locked(g_plate_seg, z_locked);
+        lv_obj_set_style_opa(g_plate_seg, z_locked ? LV_OPA_50 : LV_OPA_COVER, 0);
     }
-    lv_obj_t *const ctrls[] = { g_jog_up, g_jog_down, g_z_home, g_s_step_ta, g_s_minus,
-                                g_s_plus, g_s_home, g_d_step_ta, g_d_send };
+    set_btn_enabled(g_jog_up, !z_locked);
+    set_btn_enabled(g_jog_down, !z_locked);
+    set_btn_enabled(g_z_home, !z_locked);
+    lv_obj_t *const ctrls[] = { g_s_step_ta, g_s_minus, g_s_plus, g_s_home,
+                                g_d_step_ta, g_d_send, g_transfer_btn };
     for(lv_obj_t *o : ctrls) {
         set_btn_enabled(o, !locked);
     }
@@ -1933,8 +1952,8 @@ lv_obj_t *make_value_ta(lv_obj_t *parent, int value)
     return ta;
 }
 
-/** 稿上那种蓝底 Send 钮（高 48、圆角 8、16 号白字）。宽由调用方定。 */
-lv_obj_t *make_send_btn(lv_obj_t *parent, lv_event_cb_t cb)
+/** 稿上那种蓝底 Send 钮（高 48、圆角 8、16 号白字）。宽由调用方定。text 默认 Send。 */
+lv_obj_t *make_send_btn(lv_obj_t *parent, lv_event_cb_t cb, const char *text = "Send")
 {
     lv_obj_t *b = lv_button_create(parent);
     lv_obj_remove_style_all(b);
@@ -1946,7 +1965,7 @@ lv_obj_t *make_send_btn(lv_obj_t *parent, lv_event_cb_t cb)
     lv_obj_clear_flag(b, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_event_cb(b, cb, LV_EVENT_CLICKED, nullptr);
     lv_obj_t *l = lv_label_create(b);
-    lv_label_set_text(l, "Send");
+    lv_label_set_text(l, text ? text : "Send");
     lv_obj_set_style_text_font(l, user_font_text_sm(), 0);
     lv_obj_set_style_text_color(l, lv_color_white(), 0);
     lv_obj_center(l);
@@ -2166,6 +2185,24 @@ void build_return_card(lv_obj_t *parent)
     apply_return_ui();
 }
 
+/** 一键转运：与调试页 Transfer Demo 同一条 control_transfer_demo_start()。
+ *  非空闲时函数自己拒绝，这里补一句 toast。 */
+void on_transfer_demo(lv_event_t * /*e*/)
+{
+    if(!control_transfer_demo_start()) {
+        ui_toast_show("Transfer demo unavailable", ui_color_danger, 1800);
+    }
+}
+
+/* ---- Transfer（稿外）：回粉电机下面一张卡，满宽 Run。打印中锁住。 ---- */
+void build_transfer_card(lv_obj_t *parent)
+{
+    lv_obj_t *c = make_manual_card(parent);
+    manual_card_head(c, "Transfer", nullptr);
+    g_transfer_btn = make_send_btn(c, on_transfer_demo, "Run");
+    lv_obj_set_width(g_transfer_btn, LV_PCT(100));
+}
+
 /* ---- Inner Door（稿 6534:35742 的 (892,1695) 356×106）----
  * 稿上它和吹粉 / OPEN 同在一块 #F5F5F5 底的吸底区里，所以建在滚动区外面。 */
 void build_inner_door_card(lv_obj_t *parent)
@@ -2245,7 +2282,7 @@ void hook_fling_tap_guard(void)
 }
 
 /**
- * Manual 页 = 滚动区（六张卡）+ 吸底的 Inner Door 卡。底部吹粉 / OPEN 在 g_bottom 里，
+ * Manual 页 = 滚动区（六张稿卡 + Transfer）+ 吸底的 Inner Door 卡。底部吹粉 / OPEN 在 g_bottom 里，
  * 本来就排在各 view 之后、不随 view 滚动，所以只要 Inner Door 建在滚动区外面，就是稿上
  * 那块吸底区（稿 6534:35742 里 y1671 起，折回 800 屏正好是 530..800）。
  * 卡间距统一 16：稿上前三张之间 16、其后 24，按决策归一。
@@ -2283,6 +2320,7 @@ lv_obj_t *build_view_manual(lv_obj_t *parent)
     build_fan_card(body);
     build_param_card(body);
     build_return_card(body);
+    build_transfer_card(body);
 
     build_inner_door_card(v);
     g_manual_lock_sig = -1;   /* 新建的控件还没按打印锁落过样式 */
@@ -2891,8 +2929,13 @@ void wire_debug_proxy(bool on)
     proxy.register_soc_led([](uint8_t mask) {
         apply_light_btn_from_mask(mask);
     });
-    proxy.register_inner_door_busy([](bool busy) {
+    proxy.register_inner_door_busy([](bool busy, bool z_locked) {
         set_inner_door_busy(busy);
+        if(g_clearance_z_lock != z_locked) {
+            g_clearance_z_lock = z_locked;
+            g_manual_lock_sig = -1;
+            apply_manual_lock();
+        }
         if(!busy) {
             /* 套件结束：用传感器校正按钮亮灭。 */
             const ui_device_snapshot_t *snap = ui_device_state_get();

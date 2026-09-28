@@ -100,8 +100,11 @@ private:
     void handle_transfer_demo_prep(const middleware::Message& msg);
     void handle_transfer_demo_confirm(const middleware::Message& msg);
     void stop_transfer_demo_worker();
-    /** @brief 演示前半段：Z 到 −10 再开外门。true=外门传感器已报开。 */
-    bool transfer_demo_lower_z_and_open_outer();
+    /**
+     * @brief 一键演示前半段：Z→−100 → 固定关内门 → 开外门（传感器确认）。
+     *        不看 Keep Z / 挡门视觉。true=外门已开；转运等装盒 Done 后再发。
+     */
+    bool transfer_demo_z_close_inner_and_open_outer();
     void publish_transport_result(uint8_t result);
     void on_transport_result(uint8_t result);
     void stop_clean_worker();
@@ -229,6 +232,11 @@ private:
     void publish_debug_skip_outer_door_state();
     /** @brief 推送内门套件忙闲（Manual 禁钮）；值变化才发。 */
     void publish_inner_door_busy(bool busy);
+    /** @brief 外门补关的 Z 下降/回位：置灰 Manual 的 Top/Bottom 与 Z 升降复位。 */
+    void set_manual_z_lock(bool lock);
+    /** @brief 外门补关 Z 运动中收到 1204：立刻解锁，并让本次等待失败、不再自动回位。 */
+    void note_z_axis_motion_fault();
+    void publish_inner_door_busy_payload();
     void publish_debug_o2_calib_state();
     void publish_debug_first_layer_visual_check_state();
     void publish_debug_test_image_state();
@@ -617,6 +625,10 @@ private:
     bool plate_place_confirm_waiting_ = false; /**< 无基板弹窗等 UI Rsp */
     std::mutex inner_door_seq_mtx_; /**< 内门开/关套件互斥（手动 / 起印 / 开→关边沿） */
     std::atomic<bool> inner_door_kit_busy_{false}; /**< 套件进行中；供 UI 禁钮 + 入队去重 */
+    /** 外门补关 Z 正在下降到 −100 或回到下降前高度；Manual Z 键置灰。 */
+    std::atomic<bool> manual_z_lock_{false};
+    /** 外门补关 Z 运动中收到 1204：等待立刻失败，且不再自动回位重新上锁。 */
+    std::atomic<bool> clearance_z_fault_{false};
     /** Manual/调试开或关已入队未处理完；防止连点排队第二次套件 */
     std::atomic<bool> inner_door_cmd_queued_{false};
     /** 外门已关但当时不能跑关内门（套件忙 / 发送中 / 预检）；稍后补做 */

@@ -33,7 +33,8 @@ using DebugEnvSimCb = std::function<void(bool)>;
 using DebugEnvSimPowderCb = std::function<void(bool)>;
 using DebugSkipO2GateCb = std::function<void(bool)>;
 using DebugSkipOuterDoorCb = std::function<void(bool)>;
-using DebugInnerDoorBusyCb = std::function<void(bool)>;
+/** busy=套件进行中；z_locked=外门补关的 Z 下降或回位中。 */
+using DebugInnerDoorBusyCb = std::function<void(bool busy, bool z_locked)>;
 using DebugO2CalibCb =
     std::function<void(const middleware::DebugO2CalibRspPayload&)>;
 using DebugFirstLayerVisualCheckCb = std::function<void(bool)>;

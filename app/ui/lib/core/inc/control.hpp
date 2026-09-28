@@ -91,12 +91,16 @@ bool control_is_printing(void);
 void control_print_result_collect(void);
 
 /* 首页/监控「SLIDE TO UNLOCK」独立开门入口：走门弹窗流程（PM2.5/清粉/开门），
- * 开完即回首页。仅 IDLE 态生效。 */
+ * 开完即回首页。仅 IDLE 态生效。转圈标题是 Checking PM2.5...。 */
 void control_open_door_request(void);
 
+/** 外门关着去开内门：同一套开门流程，转圈标题是 Opening the door...。仅 IDLE。 */
+void control_open_door_for_inner(void);
+
 /**
- * 调试页一键转运演示（与 Transfer Box 取件开关无关）。
- * 仅 IDLE：弹准备页 → Z 到底并开外门 → 装盒确认 → 开内门 → 发转运串口。
+ * 调试页 / Manual 一键转运演示（与 Transfer Box 取件开关无关）。
+ * 仅 IDLE：后台 Z→−100 → 关内门 → 开外门（无 loading 弹窗），再走与取件相同的
+ * 装盒 Done → 转运 → 拆盒。
  * @return false 表示当前不在空闲态，未启动。
  */
 bool control_transfer_demo_start(void);
