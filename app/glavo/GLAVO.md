@@ -42,7 +42,7 @@ UI → GlavoService（工作线程）→ ParserManager → RingBuffer → McuLin
 3. `McuLink::arm_soc_peripherals()`：六路舱灯全开 + SPI 灯效空闲蓝 + SPI PM2.5 小屏布局（不等串口）
 4. `McuLink::connect_tcp` + `open_serial` + `start_link_thread`，然后 `GlavoService::start`
    - TCP 刚连上：只发 `CMD=0x0A` `Red=1`（普通红光）
-   - 串口 MCU 工程版本上报成功后：再发 `0x12` 关激光使能；出队后再补一次 `Red=1`（避免 `0x12` 掐瞄准红光）。Env Sim 假版本不走这条
+   - 串口 MCU 工程版本上报成功后：再发 `0x12` 关激光使能；出队后再补一次 `Red=1`（避免 `0x12` 掐瞄准红光）；同一次再发 Z Home（与 Manual 复位同指令 0x11）。打印中则挂起，空闲后再发。Env Sim 假版本不走这两条
 5. 主循环 `port.process(2)`
 
 ## IPC 处理
@@ -67,8 +67,8 @@ UI → GlavoService（工作线程）→ ParserManager → RingBuffer → McuLin
 | `UI_Debug_Galvo_Param_Save_Ntf` | 写 `cal.csv` 第 4 行中心偏移 + `ParserContext::load_calibration`；打印/任一振镜测试进行中拒绝 |
 | `UI_PM25_Req` / 门控 Req | 直接读舱内 PM2.5 缓存后回 `APP_PM25_Rsp`（不开阀、不平均）。≥ 阈值则 UI 再发持续吹风；无效或低于阈值直接开门。门控关则跳过、直接判合格 |
 | `UI_OpenDoor_Req` | worker 发开门指令后由 `door_open_worker_` 轮询传感器（默认最长 `GLAVO_DOOR_OPEN_TIMEOUT_MS`=1s，传感器报开即返回），线程内 `publish_async` Rsp；重复请求直接拒。门控关时同样下发，只是前面的 PM2.5/吹粉已跳过。UI 失败后隔 300ms 最多再试 2 次，仍失败 toast 并收 overlay |
-| `UI_Transfer_Demo_Prep_Req` | 一键演示（与 Transfer Box 取件开关无关）：独立线程 Z 绝对到 −10，再开外门并最多等 8s 传感器。打印中/准备中/门轮询中拒绝 |
-| `UI_Transfer_Demo_Confirm_Req` | 装盒确认后：开内门套件，成功再发转运串口 A2/0x41 TLV 0x02。结果仍走 `APP_Transport_Result_Ntf` |
+| `UI_Transfer_Demo_Prep_Req` | 一键演示前半段（与 Transfer Box 取件开关无关）：独立线程 Z 绝对到 −100 → 固定关一次内门 → 开外门（同 `UI_OpenDoor_Req` 传感器轮询，演示侧最多 3 次）。**不发转运**。打印中/准备中/门轮询中拒绝。UI 成功后弹装盒页，Done 走 `UI_Transport_Req` |
+| `UI_Transfer_Demo_Confirm_Req` | **已不用**：装盒 Done 走 `UI_Transport_Req`；收到回 `ok=0` |
 | `UI_Debug_Soc_Led_Set_Ntf` / `Get` | 六路舱灯 `lgt1l`…`lgt3r` sysfs，不看 MCU 版本 |
 | `UI_Debug_Cabin_Pm_Valve_Set_Ntf` / `Get` | 舱内 PM `fa_valve`，不看 MCU 版本；业务采样结束**强制关阀**并回读 Off |
 | `UI_Debug_O2_Calib_Req` / `Get_Ntf` | 单点标定 K（参考浓度由 UI 输入）→ `/userdata/CAL/o2_cal.json`；Req 只回 `GLAVO_Debug_O2_Calib_Rsp`（SocSensors 独立线程采样，不堵 worker）；Get 回 `Ntf`；打印/测高/测试中拒绝 |
@@ -82,7 +82,7 @@ UI → GlavoService（工作线程）→ ParserManager → RingBuffer → McuLin
 
 - 广播名 `N2_Machine`，特征 `0x1B9A` Notify ASCII。无 libdbus 时 `UPC_GLAVO_HAS_BLUEZ=0` 空跑。`GLAVO_N2_BLE_ENABLE=0` 不启线程。
 
-内门 **1ST bit1（UP_SWPD）只表示全开**（1=全开，0=不在全开位）。**上电不自动关内门**。进套件前读静止位：开仅全开跳过；关仅非全开跳过（关到位未装，静止 0 不当成必须再关）。未知则开/关都跑。Manual / 调试页点击只开关门，不联动 Z。起印关/开内门仍绝对到 **−10 mm** 后发门指令，不回原高度。外门开→关自动补关：先绝对到 **−100 mm**（±1，最多 60 s），等 **2 s**，再回到下降前的高度。挡门和基板视觉都不决定这次位移。**Keep Z Position** 开则跳过下降和回位，门指令照发。套件进行中推 `GLAVO_Debug_Inner_Door_Busy_Ntf`（Manual / 调试 Inner Door 禁钮，含停止）；连点开/关在入队时去重。起印与外门开→关边沿按静止位决定是否关；边沿当时套件忙 / 打印发送中 / 预检中则记下，事后补关。与转运盒流程无共享状态。
+内门 **1ST bit1（UP_SWPD）只表示全开**（1=全开，0=不在全开位）。**上电不自动关内门**。进套件前读静止位：开仅全开跳过；关仅非全开跳过（关到位未装，静止 0 不当成必须再关）。未知则开/关都跑。Manual / 调试页点击只开关门，不联动 Z。起印关/开内门仍绝对到 **−10 mm** 后发门指令，不回原高度。外门开→关自动补关：先绝对到 **−100 mm**（±1，最多 60 s），等 **2 s**，再回到下降前的高度。这两段 Z 运动期间 `GLAVO_Debug_Inner_Door_Busy_Ntf.reserved[0]=1`，Manual 的 Top/Bottom 与 Z 升降、复位置灰；若收到报警 **1204**（Z axis motion error，active/latched）则立刻解锁并中止本次等待，且不再自动回位。挡门和基板视觉都不决定这次位移。**Keep Z Position** 开则跳过下降和回位，门指令照发。套件进行中推 `GLAVO_Debug_Inner_Door_Busy_Ntf`（Manual / 调试 Inner Door 禁钮，含停止）；连点开/关在入队时去重。起印与外门开→关边沿按静止位决定是否关；边沿当时套件忙 / 打印发送中 / 预检中则记下，事后补关。与转运盒流程无共享状态。
 
 ### 传感器
 

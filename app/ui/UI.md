@@ -1356,7 +1356,7 @@ x=260 挪回 x=160、宽度从 202 涨到 216，`make_light_square_btn()` 与 `i
 | Job 两张数据卡 | `(892,480)` / `(1078,480)` 各 `170×98 rx16` 白 | `USER_MON_STAT_H`，两张 `flex_grow=1` 等分 |
 | Status PM 卡 | `(892,114) 356×210 rx16` 白 | `USER_MON_PM_H`，**定高**，见下 |
 | Status 指标卡 | `170×113 rx16` 白，两行两列缝均 16 | `USER_MON_CELL_H` |
-| Manual 卡片 | 稿是 420×1941 长图：Plate `356×258`、S `356×234`、D `356×210`、风扇 `356×321`、打印参数 `356×280`、Sieve（落成回粉电机）`356×144` 从 y=120 往下排；Inner Door `356×106` 与底部按钮在 y=1671 起那块 `#F5F5F5` 吸底区里；rx16 白 | 中间六张进滚动区、Inner Door 吸底；卡间与内距统一 `USER_PAD_SM`、表头定高 `USER_MON_ROW_H / 2`（32）、卡内块距 `USER_MON_ROW_H * 3 / 8`（24），见下 |
+| Manual 卡片 | 稿是 420×1941 长图：Plate `356×258`、S `356×234`、D `356×210`、风扇 `356×321`、打印参数 `356×280`、Sieve（落成回粉电机）`356×144` 从 y=120 往下排；Inner Door `356×106` 与底部按钮在 y=1671 起那块 `#F5F5F5` 吸底区里；rx16 白 | 稿上六张进滚动区，另加稿外 Transfer 卡；Inner Door 吸底；卡间与内距统一 `USER_PAD_SM`、表头定高 `USER_MON_ROW_H / 2`（32）、卡内块距 `USER_MON_ROW_H * 3 / 8`（24），见下 |
 | Manual 控件 | 分段 `(909,193) 322×88`；上下钮各 `157×56`、缝 8；圆钮 `72`；输入框 / Send 高 48 rx8；风扇占空比框与 Send 宽 120、打印参数框宽 128 | `USER_MON_ROW_H * 11/8`、`* 7/8`（上下钮同行多一颗稿外的 Z 复位钮，三颗 `flex_grow` 均分，1280 档各约 102 宽）、`USER_LIGHT_BTN_SZ`、`USER_MON_ROW_H * 3/4` 与 `USER_MON_RADIUS / 2`、`* 15/8`、`* 2` |
 | 底部按钮 | 统一 `y=684 h=84 rx24` | `USER_ACTION_BTN_SZ` / `USER_LIGHT_RADIUS`，四档见下 |
 | 摄像头浮钮 | `72×72 rx20` 白 15%：照明 `(160,690)`、拍照 `(662,690)`、全屏 `(750,690)`；全屏档后两枚挪到 `(1072,690)` / `(1160,690)` | `USER_LIGHT_BTN_SZ` |
@@ -1377,7 +1377,7 @@ g_panel（固定列）
 ├── g_tabs                    ← Tab 行，固定在顶
 ├── g_view_manual（flex_grow）
 │   ├── 滚动区（flex_grow，LV_DIR_VER，无滚动条）
-│   │   └── Plate / S / D / Fan / Print Params / Return Motor
+│   │   └── Plate / S / D / Fan / Print Params / Return Motor / Transfer
 │   └── Inner Door 卡          ← 吸底
 └── g_bottom                  ← 吹粉 + OPEN，本来就排在 view 之后，天然固定
 ```
@@ -1510,7 +1510,7 @@ Manual Tab **可进**，但只开放一部分（`apply_manual_lock()`，挂在 `
 | 部分 | 打印进行中（`phase_running()`） | 出结果后、取件前 |
 |---|---|---|
 | Fan（电源、占空比、Send）、Print Params、Return Motor | 可用；风扇仍受吹粉锁（`apply_fan_enabled()`） | 同左 |
-| Plate（分段 + 上下点动钮）、S（Step + −/+/复位）、D（Step + Send） | 锁住 | 锁住 |
+| Plate（分段 + 上下点动钮）、S（Step + −/+/复位）、D（Step + Send）、Transfer（Run） | 锁住 | 锁住 |
 | Inner Door 卡 | **不显示** | 显示，但锁住 |
 | 底部按钮 | 暂停 / 终止（`BOTTOM_RUN`） | 吹粉 + `RETRIEVE`（`BOTTOM_RETRIEVE`） |
 
@@ -1552,10 +1552,11 @@ Manual 页的三轴位置、照明钮、内门忙态与风扇取自 `DebugMsgPro
 `register_soc_led` / `register_inner_door_busy` / `register_fan_state`（**单槽，调试页也在用**）。外门开合记忆走 `APP_Update_Ntf` →
 `ui_device_state`（`outer_door_open`/`door_state_valid`），开门 Rsp 成功还会乐观置位；
 `require_outer_door()` 读这份状态（门状态无效时保留本页记忆，不清已开外门）。外门未开时点 Inner Door：弹窗 + `g_pending_inner_door`，
+滑开后走 `control_open_door_for_inner()`（流程与首页开门相同，转圈标题是 `Opening the door...`，不是 `Checking PM2.5...`）。
 外门开到位后按点按时意图续跑开/关；等待滑开期间 env 仍报外门关时**不**清 pending，
 仅外门开→关边沿才取消。按钮跟 `EnvSnapshot.inner_door_open`（1ST bit1 **全开**）：
 亮=全开、灭=非全开；点一下全开则关、非全开则开（暂时关也会去开）。
-开/关套件进行中 `GLAVO_Debug_Inner_Door_Busy_Ntf` 禁钮（半透明不可点），结束或跳过才解禁；
+开/关套件进行中 `GLAVO_Debug_Inner_Door_Busy_Ntf`（`on=1`）禁钮（半透明不可点），结束或跳过才解禁。同一条的 `reserved[0]=1` 只在外门关上后 Z 降到 −100、以及内门关完 Z 回到下降前高度这两段：Manual 的 Top/Bottom 与 Z 上升、下降、复位置灰，S/D 不动。期间若收到 Z axis motion error（1204），立刻解禁，便于手动复位。
 调试页 Inner Door 三键同样禁（含停止）。连点由 Glavo 入队去重丢弃。
 外门关边沿：静止全开才关；当时忙/发送中/预检则事后补关。
 挡门视觉只决定内门是否已在目标位（已在则跳过整套）。Manual 点 Inner Door 只开关门，不联动 Z，也不读基板视觉。
@@ -1695,6 +1696,7 @@ Device/Light**。进页 `request_soc_led_state()`：mask≠0 钮亮，全 0 钮�
   发之前先调 `plate_leave_preset()`，规则同上文「高亮兼作状态显示」：高亮不退回 Level 的话，复位后
   再点同一档不会触发。挂 `CLICKED`，打印会话里与上下箭头一起锁住（`apply_manual_lock()`）。
   **这把锁只能在 UI 做**：Glavo 只在起印前半段（`early_print_prep_active_`）丢弃 Z Home，正式打印中照发。
+  Glavo 在串口 MCU 真实版本首次上报后也会自动发同一条 0x11（与上电关激光同机；打印中挂起，空闲再发；Env Sim 假版本不发）。
 
 #### Manual · 点动与 S 轴复位
 
@@ -1774,6 +1776,9 @@ Manual 的卡片在滚动区里，手指落在按钮、分段、输入框上再�
 - 圆钮图标 `ic_chevron_left/right_set`、`ic_play_outline_set`、`ic_pause_set` 由
   `tools/gen_home_metric_icons.py` 从稿里抠出（24 组，描边 2.5），**不是**把 Plate 的上下 chevron
   转 90° 复用（那两枚描边 3.33333），也不复用实心的手维护 `ic_play`。
+- **Transfer**（稿外，排在 Return Motor 下面）：满宽 `Run`，与调试页 Other → Print Gates →
+  Transfer Demo 同一条 `control_transfer_demo_start()`。非空闲 toast「Transfer demo unavailable」。
+  打印会话里与 Plate / S / D 一起锁住。
 
 #### Manual 页几处待补
 
@@ -1832,8 +1837,10 @@ Glavo Print_Terminate_Rsp / 进度 100% → control.cpp finish_printing()
   本来就不给退出口。
 - **净化态没有单独的稿**。稿只画了「正在准备开门」，而 `DOOR_OPENING` 进来先看 PM2.5：
   超标就切 `Cleaning`、开风扇、跑满 `CLEAN_MIN_MS` 再开门。两态共用同一张顶图与转圈，只换
-  标题。开门态标题是 `Checking PM2.5...`（清粉态仍是 `Cleaning powder...`）：检测和随后的
-  开门等待都停在这一态，文案按空气检测来写。标题下那行灰字（`g_door_body`）平时是空的，
+  标题。开门态标题默认是 `Checking PM2.5...`（清粉态仍是 `Cleaning powder...`）：检测和随后的
+  开门等待都停在这一态，文案按空气检测来写。例外：外门关着去开内门，滑开后的转圈标题是
+  `Opening the door...`（`control_open_door_for_inner()`）；清粉仍换 `Cleaning powder...`，清完回到
+  Opening 时继续用 `Opening the door...`。标题下那行灰字（`g_door_body`）平时是空的，
   只在净化中点取消时显示 `Stopping fan...`。
   开门成功即收 overlay，不再进 DoorOpened / 关门等待。
   真实开门失败时 UI 最多共试 3 次（单次 Glavo 轮询默认 1s，失败隔 300ms）；仍失败 toast
@@ -1866,7 +1873,9 @@ Glavo Print_Terminate_Rsp / 进度 100% → control.cpp finish_printing()
 设置页 **Advanced Print → Transfer Box** 与调试页 `Other` → `Print Gates` → `Transfer Box`
 是同一枚开关（`control_set_transfer_box_flow()`，纯 UI 本地标志，不发消息也不落盘，重启回到开）。
 关掉后取件开门成功即回 IDLE。旁边的 **Transfer Demo** 是另一件事：空闲时一键演示，不看这个开关。
-顺序是 Z 降到 −10 → 开外门 → 装盒页确认放入 → 开内门 → 发转运串口。
+点击后**不弹**开门 / Preparing 转圈：后台 Z 绝对到 −100 → 固定关一次内门 → 按正式口径开外门
+（传感器确认，失败限次重试）。Prep 成功后乐观记下外门已开，再走与取件相同的转运盒三步
+（装盒 Done → 转运转圈 → 拆盒）。不做 PM2.5。
 
 ```
 RETRIEVE → 取件弹窗滑到底 → DOOR_OPENING（PM2.5/清粉 → 开门）

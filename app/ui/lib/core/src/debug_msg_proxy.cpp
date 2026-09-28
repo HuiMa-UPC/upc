@@ -148,7 +148,7 @@ void DebugMsgProxy::init()
         [this](const middleware::Message& msg) {
             middleware::DebugOnOffPayload p{};
             if(inner_door_busy_cb_ && read_inline_pod(msg, p)) {
-                inner_door_busy_cb_(p.on != 0);
+                inner_door_busy_cb_(p.on != 0, p.reserved[0] != 0);
             }
         }));
 

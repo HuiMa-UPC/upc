@@ -87,9 +87,13 @@ void schedule_commit_print_result_history()
  *   PrintPrep      —— 打印前置流程，开门成功后进入选文件页；
  *   HomeStandalone —— 首页独立开门，开门成功后返回首页；
  *   PrintCollect   —— 打印结果页滑动取件，取消要退回结果页而不是待机首页。
- *   TransferDemo   —— 调试页一键演示：降 Z、开外门后进装盒页；确认后再开内门并发转运。 */
+ *   TransferDemo   —— 调试页一键演示：后台 Z→−100、关内门、开外门，再走与取件相同的转运盒三步。 */
 enum class DoorFlowOrigin { PrintPrep, HomeStandalone, PrintCollect, TransferDemo };
 DoorFlowOrigin g_door_origin = DoorFlowOrigin::PrintPrep;
+/** 外门关着去开内门：转圈标题用 Opening the door...，其余开门入口仍是 Checking PM2.5...。 */
+bool g_door_plain_opening_title = false;
+/** 演示 Prep 在后台跑（无 overlay）；Rsp 到才进装盒页。 */
+bool g_transfer_demo_prep_pending = false;
 
 /* 转运盒流程总开关（设置页 Advanced Print，调试页 Other → Print Gates 同一枚）。
  * 默认开：取件分支插入 TRANSFER_BOX 三步。关掉则取件开门成功即回 IDLE。
@@ -266,7 +270,6 @@ void request_fs_dir_open(FileTab tab)
 }
 
 void enter_state(control_state_t s);
-void transfer_demo_restore_install();
 void refresh_supply_bars(void);
 void apply_supply(const middleware::SupplyStatusPayload &p);
 void close_confirm_dlg(void);
@@ -651,29 +654,20 @@ void wire_msg_proxy()
     /* 自动转运：result=0 → BoxShutter；非 0 停留 BoxMoving（无超时） */
     proxy.register_transport_result(on_transport_result);
 
+    /* Prep：后台 Z→−100 → 关内门 → 开外门。成功才弹装盒页；Done 后再发转运。 */
     proxy.register_transfer_demo_prep([](const middleware::DoorResultPayload &p) {
-        if(g_door_origin != DoorFlowOrigin::TransferDemo ||
-           g_state != CONTROL_STATE_DOOR_OPENING) {
+        if(!g_transfer_demo_prep_pending ||
+           g_door_origin != DoorFlowOrigin::TransferDemo) {
             return;
         }
+        g_transfer_demo_prep_pending = false;
         if(!p.ok) {
+            g_door_origin = DoorFlowOrigin::PrintPrep;
             ui_toast_show("Transfer demo failed", user_color_status_err, 3000);
-            enter_state(CONTROL_STATE_IDLE);
             return;
         }
+        ui_device_state_set_outer_door_open(true);
         enter_state(CONTROL_STATE_TRANSFER_BOX);
-    });
-
-    proxy.register_transfer_demo_confirm([](const middleware::DoorResultPayload &p) {
-        if(g_door_origin != DoorFlowOrigin::TransferDemo ||
-           g_state != CONTROL_STATE_TRANSFER_BOX) {
-            return;
-        }
-        if(p.ok) {
-            return; /* 串口已发出，等 APP_Transport_Result_Ntf */
-        }
-        ui_toast_show("Inner door did not open", user_color_status_err, 3000);
-        transfer_demo_restore_install();
     });
 
     /* USB 列表经 Fs_DirOpen IPC；Local 由 load_local_files_from_config 直读盘 */
@@ -1098,6 +1092,7 @@ void on_plate_swipe_open(void * /*u*/)
 {
     if(g_state == CONTROL_STATE_PLATE_PROMPT) {
         g_door_origin = DoorFlowOrigin::PrintPrep;
+        g_door_plain_opening_title = false;
         enter_state(CONTROL_STATE_DOOR_OPENING);
     }
 }
@@ -1638,11 +1633,15 @@ void door_apply_variant(DoorVariant v)
         door_set_image(&img_door_opening);
 
         g_door_title = door_make_title(g_door_content);
-        /* 开门等待和 PM2.5 检测共用这一态。标题写成空气检测，避免把停留看成门开得慢。
-         * 超标清粉仍走 Cleaning；清完回到本态时门已经在开，文案保持不变。 */
+        /* 开门等待和 PM2.5 检测共用这一态。首页 / 取件 / 放版标题写成空气检测，
+         * 避免把停留看成门开得慢。外门关着去开内门时改回 Opening the door...。
+         * 超标清粉仍走 Cleaning；清完回到本态时沿用进入时的那句。 */
+        const char *opening_title = g_door_plain_opening_title
+                                        ? "Opening the door..."
+                                        : "Checking PM2.5...";
         lv_label_set_text(g_door_title,
                           v == DoorVariant::Cleaning ? "Cleaning powder..."
-                                                     : "Checking PM2.5...");
+                                                     : opening_title);
 
         door_make_spinner(g_door_content);
 
@@ -1689,13 +1688,6 @@ void door_apply_variant(DoorVariant v)
         make_dlg_wide_button(g_door_content, "Unlock and Remove the Box",
                              true, on_box_shutter_done);
     }
-}
-
-/** 演示确认失败：回到装盒页，Done 可再点。 */
-void transfer_demo_restore_install()
-{
-    g_box_ready = true;
-    door_apply_variant(DoorVariant::BoxInstall);
 }
 
 /* -------------------- 缺粉弹窗（Figma 4273:5892） -------------------- */
@@ -2548,12 +2540,8 @@ void on_box_install_confirm(lv_event_t * /*e*/)
     if(g_state != CONTROL_STATE_TRANSFER_BOX) {
         return;
     }
-    /* 演示：确认放入后才开内门，成功再发转运串口。取件路径仍直接发串口。 */
-    if(g_door_origin == DoorFlowOrigin::TransferDemo) {
-        ui::UiMsgProxy::instance().send_transfer_demo_confirm();
-    } else {
-        ui::UiMsgProxy::instance().send_transport_request();
-    }
+    /* 取件与演示：Done 后才发转运串口。 */
+    ui::UiMsgProxy::instance().send_transport_request();
     door_apply_variant(DoorVariant::BoxMoving);
 }
 
@@ -2826,6 +2814,12 @@ void enter_state(control_state_t s)
     g_cleaning_active  = false;
     g_clean_stop_pending = false;
     g_box_ready        = false;
+    if(s != CONTROL_STATE_TRANSFER_BOX) {
+        g_transfer_demo_prep_pending = false;
+    }
+    if(s != CONTROL_STATE_DOOR_OPENING) {
+        g_door_plain_opening_title = false;
+    }
 
     const control_state_t prev = g_state;
     g_state = s;
@@ -2853,15 +2847,7 @@ void enter_state(control_state_t s)
         g_current_dlg = show_door_dialog(g_overlay, DoorVariant::Opening);
         g_door_opening_since = lv_tick_get();   /* 计"正在准备开门"最短停留 */
         g_door_open_fail_count = 0;
-        if(g_door_origin == DoorFlowOrigin::TransferDemo) {
-            /* 演示不走 PM2.5/吹粉：先降 Z 再开外门，成功后才进装盒页。 */
-            if(g_door_title) {
-                lv_label_set_text(g_door_title, "Lowering the plate...");
-            }
-            ui::UiMsgProxy::instance().send_transfer_demo_prep();
-        } else {
-            backend_start_pm25(pf_on_pm25_check_done, nullptr);
-        }
+        backend_start_pm25(pf_on_pm25_check_done, nullptr);
         break;
 
     case CONTROL_STATE_TRANSFER_BOX:
@@ -3038,16 +3024,30 @@ void control_open_door_request(void)
         return;
     }
     g_door_origin = DoorFlowOrigin::HomeStandalone;
+    g_door_plain_opening_title = false;
+    enter_state(CONTROL_STATE_DOOR_OPENING);
+}
+
+void control_open_door_for_inner(void)
+{
+    if(g_state != CONTROL_STATE_IDLE) {
+        return;
+    }
+    /* 终态与首页开门相同（回待机），只换转圈标题。 */
+    g_door_origin = DoorFlowOrigin::HomeStandalone;
+    g_door_plain_opening_title = true;
     enter_state(CONTROL_STATE_DOOR_OPENING);
 }
 
 bool control_transfer_demo_start(void)
 {
-    if(g_state != CONTROL_STATE_IDLE) {
+    if(g_state != CONTROL_STATE_IDLE || g_transfer_demo_prep_pending) {
         return false;
     }
+    /* 不进开门 loading：后台降 Z / 关内门 / 开外门，Rsp 到再弹正式装盒页。 */
     g_door_origin = DoorFlowOrigin::TransferDemo;
-    enter_state(CONTROL_STATE_DOOR_OPENING);
+    g_transfer_demo_prep_pending = true;
+    ui::UiMsgProxy::instance().send_transfer_demo_prep();
     return true;
 }
 
@@ -3070,6 +3070,7 @@ bool control_is_printing(void)
      * 取件的开门流程同样算打印中——此时结果页浮层还在弹窗背后没收起。 */
     return g_state == CONTROL_STATE_PRINTING ||
            g_state == CONTROL_STATE_PRINT_DONE ||
+           g_transfer_demo_prep_pending ||
            ((g_door_origin == DoorFlowOrigin::PrintCollect ||
              g_door_origin == DoorFlowOrigin::TransferDemo) &&
             (g_state == CONTROL_STATE_DOOR_OPENING ||
@@ -3087,6 +3088,7 @@ void control_print_result_collect(void)
      * 收起结果页浮层，弹窗就浮在待机 Job 空态上了。直接进开门态，
      * 结果页与预览原样留在弹窗背后；开门成功后由 PrintCollect 分支回 IDLE。 */
     g_door_origin = DoorFlowOrigin::PrintCollect;
+    g_door_plain_opening_title = false;
     enter_state(CONTROL_STATE_DOOR_OPENING);
 }
 

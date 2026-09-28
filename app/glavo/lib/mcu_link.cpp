@@ -502,6 +502,11 @@ void McuLink::set_transport_result_callback(McuLinkTransportResultCb cb)
     transport_result_cb_ = std::move(cb);
 }
 
+void McuLink::set_z_motion_fault_callback(McuLinkZMotionFaultCb cb)
+{
+    z_motion_fault_cb_ = std::move(cb);
+}
+
 void McuLink::set_first_layer_check_callback(McuLinkFirstLayerCheckCb cb)
 {
     first_layer_check_cb_ = std::move(cb);
@@ -763,6 +768,8 @@ int McuLink::open_serial(const char* device, int baud)
     UPC_LOG_MCU_LINK(Info, "serial open %s @ %d", device, baud);
     serial_laser_off_applied_.store(false);
     serial_laser_off_pending_.store(false);
+    serial_z_home_applied_.store(false);
+    serial_z_home_pending_.store(false);
 
     /* 串口刚通就补一次报警快照：单条上报只在状态变化时发，断连期间发生的变化
      * 我们全错过了，不主动问就再也拿不到。UI 侧也会在启动/进消息页等时机请求，
@@ -2179,6 +2186,7 @@ void McuLink::on_mcu_version_report(const serial_project_info_t& info)
     mcu_fw_valid_.store(true);
     publish_mcu_version_ntf();
     apply_serial_laser_off_after_mcu_ready();
+    apply_serial_z_home_after_mcu_ready();
 }
 
 void McuLink::publish_mcu_version_ntf()
@@ -2303,6 +2311,14 @@ void McuLink::handle_serial_rx_frame(const uint8_t* frame, size_t len)
             static_cast<unsigned>(alarm.detail));
         publish_alarm_report_ntf(alarm);
         SpiStatusLed::instance().on_alarm_report(alarm);
+        /* 1204 Z axis motion error：只在故障仍在（active/latched）时通知。
+         * 解除帧不解锁、也不打断正在等的 Z。 */
+        constexpr uint16_t kZAxisMotionFault = 1204;
+        if(alarm.alarm_code == kZAxisMotionFault &&
+           (alarm.state_mask & (SERIAL_ALARM_STATE_ACTIVE | SERIAL_ALARM_STATE_LATCHED)) != 0 &&
+           z_motion_fault_cb_) {
+            z_motion_fault_cb_();
+        }
         return;
     }
 
@@ -3327,6 +3343,36 @@ void McuLink::apply_serial_laser_off_after_mcu_ready()
     UPC_LOG_MCU_LINK(Info, "mcu version failsafe: serial laser-off queued");
 }
 
+void McuLink::apply_serial_z_home_after_mcu_ready()
+{
+    if(serial_z_home_applied_.load()) {
+        return;
+    }
+    if(serial_fd_ < 0 || serial_ota_session_.is_active()) {
+        return;
+    }
+    /* 打印中回零会打断作业；记 pending，空闲后再发。 */
+    if(is_sending_.load() || print_task_flow_active_.load()) {
+        if(!serial_z_home_pending_.exchange(true)) {
+            UPC_LOG_MCU_LINK(Info,
+                "mcu version failsafe: serial z-home deferred (print active)");
+        }
+        return;
+    }
+
+    uint8_t sbuf[SERIAL_DEBUG_MAX_FRAME];
+    /* axis=0 → Z Home 0x11，与 Manual / 调试页复位钮同一帧。 */
+    const int slen = serial_debug_build_axis_home(0u, sbuf, sizeof(sbuf));
+    if(slen <= 0) {
+        UPC_LOG_MCU_LINK(Warn, "mcu version failsafe: build serial z-home failed");
+        return;
+    }
+    enqueue_serial_tx(sbuf, static_cast<size_t>(slen), false);
+    serial_z_home_applied_.store(true);
+    serial_z_home_pending_.store(false);
+    UPC_LOG_MCU_LINK(Info, "mcu version failsafe: serial z-home queued");
+}
+
 void McuLink::maybe_reassert_red_after_serial_laser_off()
 {
     if(!reassert_red_after_laser_off_.load()) {
@@ -4229,9 +4275,11 @@ bool McuLink::start_serial_mcu_ota(const char* image_dir)
     if(!serial_ota_session_.start(image_dir)) {
         return false;
     }
-    /* MCU 升级后会复位，下一份真实版本上报再发一次上电 0x12。 */
+    /* MCU 升级后会复位，下一份真实版本上报再发一次上电 0x12 与 Z Home。 */
     serial_laser_off_applied_.store(false);
     serial_laser_off_pending_.store(false);
+    serial_z_home_applied_.store(false);
+    serial_z_home_pending_.store(false);
     reassert_red_after_laser_off_.store(false);
     {
         std::lock_guard<std::mutex> lock(serial_tx_mtx_);
@@ -4575,6 +4623,9 @@ void McuLink::link_thread_fn()
         maybe_reassert_red_after_serial_laser_off();
         if(serial_laser_off_pending_.load()) {
             apply_serial_laser_off_after_mcu_ready();
+        }
+        if(serial_z_home_pending_.load()) {
+            apply_serial_z_home_after_mcu_ready();
         }
         serial_drain_rx();
         link_process_serial_reliable_tx();
