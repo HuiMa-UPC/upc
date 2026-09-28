@@ -708,6 +708,10 @@ enum class MsgType : uint32_t {
     APP_Transfer_Demo_Prep_Rsp,           /**< DoorResultPayload：外门已开才 ok=1 */
     UI_Transfer_Demo_Confirm_Req,         /**< Empty：保留兼容；装盒 Done 走 UI_Transport_Req */
     APP_Transfer_Demo_Confirm_Rsp,        /**< DoorResultPayload：现恒 ok=0 */
+    /* 光路后用粗测高度判断基板在位（与图案判断互斥；枚举只准末尾追加） */
+    UI_Debug_Plate_By_Height_Set_Ntf,     /**< DebugOnOffPayload：on=1 粗测 H-1>3 判断在位（默认关） */
+    UI_Debug_Plate_By_Height_Get_Ntf,     /**< Empty：查询高度在位判断开关 */
+    GLAVO_Debug_Plate_By_Height_Ntf,      /**< DebugOnOffPayload：回读高度在位判断开关 */
 };
 
 enum class MsgPriority : uint8_t {
@@ -1290,7 +1294,7 @@ enum class PrintPrepStep : uint8_t {
     Oxygen      = 5,
     /** 首层视觉：采参考图 + PRINT_READY 后比对（调试开关关则不计） */
     FirstLayer  = 6,
-    /** 基板在位读码（调试开关关则不计；执行在关内门之后、光路之前） */
+    /** 粗测判定无基板、等待放板（在光路之后；图案检测已删除） */
     PlatePresent = 7,
 };
 

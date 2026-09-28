@@ -139,6 +139,10 @@ public:
     void request_inner_door_occlusion_state();
     void send_plate_present_set(bool on);
     void request_plate_present_state();
+    /** 光路后用粗测高度判断基板在位。与图案判断互斥。 */
+    void send_plate_by_height_set(bool on);
+    void request_plate_by_height_state();
+    void register_plate_by_height(DebugPlatePresentCb cb);
     /** 六路舱灯 / 舱内 PM 阀：sysfs 直控，不看 MCU 版本 */
     void send_soc_led_set(uint8_t channel, bool on);
     void request_soc_led_state();
@@ -289,6 +293,7 @@ private:
     DebugHoldPrepZCb settings_hold_prep_z_cb_;
     DebugInnerDoorOcclusionCb settings_inner_occl_cb_;
     DebugPlatePresentCb settings_plate_present_cb_;
+    DebugPlatePresentCb plate_by_height_cb_;
     DebugHeightCalibProgressCb settings_height_calib_cb_;
     DebugSocLedCb soc_led_cb_;
     DebugCabinPmValveCb cabin_pm_valve_cb_;

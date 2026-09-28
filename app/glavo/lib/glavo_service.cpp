@@ -916,6 +916,8 @@ bool GlavoService::start()
         middleware::MsgType::UI_Debug_InnerDoor_Occlusion_Get_Ntf,
         middleware::MsgType::UI_Debug_Plate_Present_Set_Ntf,
         middleware::MsgType::UI_Debug_Plate_Present_Get_Ntf,
+        middleware::MsgType::UI_Debug_Plate_By_Height_Set_Ntf,
+        middleware::MsgType::UI_Debug_Plate_By_Height_Get_Ntf,
         middleware::MsgType::UI_Debug_Soc_Led_Set_Ntf,
         middleware::MsgType::UI_Debug_Soc_Led_Get_Ntf,
         middleware::MsgType::UI_Debug_Cabin_Pm_Valve_Set_Ntf,
@@ -958,6 +960,7 @@ bool GlavoService::start()
     publish_debug_hold_prep_z_state();
     publish_debug_inner_door_occlusion_state();
     publish_debug_plate_present_state();
+    publish_debug_plate_by_height_state();
     publish_debug_soc_led_state();
     publish_debug_cabin_pm_valve_state();
     publish_debug_test_image_state();
@@ -1592,6 +1595,12 @@ void GlavoService::handle_message(const middleware::Message& msg)
             break;
         case middleware::MsgType::UI_Debug_Plate_Present_Get_Ntf:
             handle_debug_plate_present_get(msg);
+            break;
+        case middleware::MsgType::UI_Debug_Plate_By_Height_Set_Ntf:
+            handle_debug_plate_by_height_set(msg);
+            break;
+        case middleware::MsgType::UI_Debug_Plate_By_Height_Get_Ntf:
+            handle_debug_plate_by_height_get(msg);
             break;
         case middleware::MsgType::UI_Debug_Soc_Led_Set_Ntf:
             handle_debug_soc_led_set(msg);
@@ -2819,7 +2828,7 @@ const char* cloud_substate_for_prep(middleware::PrintPrepStep step)
 
 const char* GlavoService::cloud_first_substate() const
 {
-    /* 与起印实际顺序一致：外门 → 内门 → 读码 → 光路 → 测高 → 氧门 → 首层。
+    /* 与起印实际顺序一致：外门 → 内门 → 图案在位（若开）→ 光路 → 测高（若开则粗测判断在位）→ 氧门 → 首层。
      * 调试开关跳过的步不报。全跳过则直接送层。 */
     if(!skip_outer_door_on_) {
         const EnvSnapshotCache env = McuLink::instance().env_snapshot();
@@ -3402,14 +3411,14 @@ void GlavoService::reset_print_prep_plan()
             ++prep_step_total_; /* InnerDoor */
         }
     }
+    if(plate_present_on_) {
+        ++prep_step_total_; /* 光路前的图案在位 */
+    }
     if(optical_path_check_on_ && !optical_path_check_.passed()) {
         ++prep_step_total_;
     }
     if(plate_height_adj_on_) {
-        ++prep_step_total_;
-    }
-    if(plate_present_on_) {
-        ++prep_step_total_; /* PlatePresent：关内门后读码 */
+        ++prep_step_total_; /* 测高；plate_by_height_on_ 时粗测顺带判断有没有基板 */
     }
     if(print_prep_needs_oxygen()) {
         ++prep_step_total_; /* Oxygen：开扫后 CONDITION_OK→等氧 */
@@ -3418,12 +3427,13 @@ void GlavoService::reset_print_prep_plan()
         ++prep_step_total_; /* FirstLayer：参考图 + 首层比对 */
     }
     UPC_LOG_GLAVO_SERVICE(Info,
-        "print prep plan steps=%u skip_outer=%d optical=%d plate_h=%d plate_qr=%d oxygen=%d first_layer=%d",
+        "print prep plan steps=%u skip_outer=%d optical=%d plate_h=%d pattern=%d by_height=%d oxygen=%d first_layer=%d",
         static_cast<unsigned>(prep_step_total_),
         skip_outer_door_on_ ? 1 : 0,
         (optical_path_check_on_ && !optical_path_check_.passed()) ? 1 : 0,
         plate_height_adj_on_ ? 1 : 0,
         plate_present_on_ ? 1 : 0,
+        plate_by_height_on_ ? 1 : 0,
         print_prep_needs_oxygen() ? 1 : 0,
         print_prep_needs_first_layer() ? 1 : 0);
 }
@@ -3775,8 +3785,9 @@ void GlavoService::configure_plate_height()
         [this](bool active) { publish_plate_height_visual_session(active); },
         [this](const PlateHeightMeasureResult& result) {
             bool ok = result.ok;
+            plate_height_absent_.store(result.plate_absent);
             /* 现有测高已把 Z 收到约 1mm。这一步只在成功之后补 (目标-1) mm，不改测高本身。 */
-            if(ok && !apply_plate_work_z_lift()) {
+            if(ok && !result.plate_absent && !apply_plate_work_z_lift()) {
                 ok = false;
             }
             plate_height_done_ok_.store(ok);
@@ -3829,7 +3840,8 @@ bool GlavoService::begin_plate_height_gate()
     plate_height_resume_path_ = prepared_local_path_;
     publish_print_prep_progress(middleware::PrintPrepStep::PlateHeight);
     set_cabin_light(false);
-    if(!plate_height_.start(galvo_motion_calibration_snapshot())) {
+    plate_height_absent_.store(false);
+    if(!plate_height_.start(galvo_motion_calibration_snapshot(), plate_by_height_on_)) {
         UPC_LOG_GLAVO_SERVICE(Error, "plate height start failed; blocking print");
         publish_device_event(middleware::DeviceEventCode::PlateHeightBlocked,
                              middleware::DeviceEventSeverity::Error, true);
@@ -3845,6 +3857,12 @@ void GlavoService::on_plate_height_done()
     if(!print_running_.load()) {
         UPC_LOG_GLAVO_SERVICE(Warn,
             "plate height result dropped: print no longer active");
+        return;
+    }
+    if(plate_height_absent_.load()) {
+        UPC_LOG_GLAVO_SERVICE(Info,
+            "coarse height says no build plate; prompt place");
+        (void)begin_early_print_prep(EarlyPrintPrepPhase::PromptAbsent);
         return;
     }
     if(plate_height_flatness_warn_.load()) {
@@ -4219,9 +4237,14 @@ void GlavoService::handle_debug_plate_present_set(
         return;
     }
     plate_present_on_ = (p.on != 0);
-    UPC_LOG_GLAVO_SERVICE(Info, "debug plate_present=%d",
-                          plate_present_on_ ? 1 : 0);
+    if(plate_present_on_) {
+        plate_by_height_on_ = false;
+    }
+    UPC_LOG_GLAVO_SERVICE(Info, "plate by pattern=%d by height=%d",
+                          plate_present_on_ ? 1 : 0,
+                          plate_by_height_on_ ? 1 : 0);
     publish_debug_plate_present_state();
+    publish_debug_plate_by_height_state();
 }
 
 void GlavoService::handle_debug_plate_present_get(
@@ -4229,6 +4252,47 @@ void GlavoService::handle_debug_plate_present_get(
 {
     (void)msg;
     publish_debug_plate_present_state();
+}
+
+void GlavoService::publish_debug_plate_by_height_state()
+{
+    middleware::DebugOnOffPayload p{};
+    p.on = plate_by_height_on_ ? 1 : 0;
+    middleware::Message ntf(
+        middleware::MsgType::GLAVO_Debug_Plate_By_Height_Ntf,
+        middleware::ModuleId::APP_GLAVO,
+        middleware::ModuleId::UI);
+    ntf.payload = middleware::MsgPayload::from_bytes(
+        reinterpret_cast<const uint8_t*>(&p), sizeof(p));
+    if(!publish_async(ntf)) {
+        UPC_LOG_GLAVO_SERVICE(Warn,
+            "GLAVO_Debug_Plate_By_Height_Ntf publish_async failed");
+    }
+}
+
+void GlavoService::handle_debug_plate_by_height_set(
+    const middleware::Message& msg)
+{
+    middleware::DebugOnOffPayload p{};
+    if(!read_inline_pod(msg.payload, p)) {
+        return;
+    }
+    plate_by_height_on_ = (p.on != 0);
+    if(plate_by_height_on_) {
+        plate_present_on_ = false;
+    }
+    UPC_LOG_GLAVO_SERVICE(Info, "plate by pattern=%d by height=%d",
+                          plate_present_on_ ? 1 : 0,
+                          plate_by_height_on_ ? 1 : 0);
+    publish_debug_plate_by_height_state();
+    publish_debug_plate_present_state();
+}
+
+void GlavoService::handle_debug_plate_by_height_get(
+    const middleware::Message& msg)
+{
+    (void)msg;
+    publish_debug_plate_by_height_state();
 }
 
 void GlavoService::publish_debug_soc_led_state()
@@ -6567,6 +6631,11 @@ EarlyPrintPrepResult GlavoService::run_early_print_prep(EarlyPrintPrepPhase phas
     if(print_prep_abort_.load() || !print_running_.load()) {
         return EarlyPrintPrepResult::Aborted;
     }
+    if(phase == EarlyPrintPrepPhase::PromptAbsent) {
+        prompt_absent_plate();
+        return print_prep_abort_.load() ? EarlyPrintPrepResult::Aborted
+                                        : EarlyPrintPrepResult::WaitPlatePlace;
+    }
 
     if(phase == EarlyPrintPrepPhase::FromLaunch) {
         if(!ensure_z_at_plate_safe()) {
@@ -6787,6 +6856,41 @@ void GlavoService::handle_visual_plate_present_rsp(const middleware::Message& ms
         static_cast<unsigned>(rsp.frame_seq));
 }
 
+void GlavoService::prompt_absent_plate()
+{
+    /*
+     * 无板：先自动开内门再开外门，方便进舱放板。
+     * Skip Outer Door 时不开外门。
+     * waiting 先置位：自动开门期间关外门边沿不得补关内门。
+     */
+    plate_place_confirm_waiting_ = true;
+    inner_door_close_pending_outer_.store(false);
+    UPC_LOG_GLAVO_SERVICE(Info, "plate absent; auto-open inner then outer");
+    if(!run_inner_door_motion_kit(true, true, InnerDoorZMotion::PlateSafeStay)) {
+        if(print_prep_abort_.load()) {
+            return;
+        }
+        UPC_LOG_GLAVO_SERVICE(Warn,
+            "plate absent: auto open inner door failed; still prompt place");
+    }
+    if(print_prep_abort_.load()) {
+        return;
+    }
+    if(!skip_outer_door_on_) {
+        if(!McuLink::instance().request_open_door_once()) {
+            UPC_LOG_GLAVO_SERVICE(Warn,
+                "plate absent: auto open outer door send failed");
+        }
+    }
+    publish_print_prep_progress(middleware::PrintPrepStep::PlatePresent);
+    publish_device_event(middleware::DeviceEventCode::PlateAbsentNeedPlace,
+                         middleware::DeviceEventSeverity::Info, true);
+    publish_plate_place_confirm_req();
+    UPC_LOG_GLAVO_SERVICE(Info,
+        "plate absent: waiting UI place confirm after auto-open doors");
+}
+
+
 middleware::PlatePresentResult GlavoService::run_plate_present_round()
 {
     set_cabin_light(true);
@@ -6796,10 +6900,7 @@ middleware::PlatePresentResult GlavoService::run_plate_present_round()
     publish_cabin_visual_session(session_id, true);
 
     constexpr auto kWarmup = std::chrono::milliseconds(1500);
-    // The first broad plate search can take ~10 s on RK3568. Subsequent
-    // scene-stability frames are cheap, but the IPC window must cover both.
     constexpr uint32_t kWindowMs = 25000;
-    /* 与 visual_cabin_service.cpp kCabinPlateNoFrameWaitMs 对齐：先等帧，再跑窗口。 */
     constexpr uint32_t kPlateNoFrameWaitMs = 8000;
     {
         int left_ms = static_cast<int>(kWarmup.count());
@@ -6867,16 +6968,10 @@ EarlyPrintPrepResult GlavoService::begin_plate_present_gate()
         return EarlyPrintPrepResult::Continue;
     }
     if(result == middleware::PlatePresentResult::QrFound) {
-        /*
-         * 无板：先自动开内门再开外门，方便进舱放板；勿只弹模态挡死 Manual 开门。
-         * 打印中内门套件也会先绝对到 −10 再开门（不问基板视觉）。
-         * Skip Outer Door 时不开外门。
-         * waiting 先置位：自动开门期间关外门边沿不得补关内门。
-         */
         plate_place_confirm_waiting_ = true;
         inner_door_close_pending_outer_.store(false);
         UPC_LOG_GLAVO_SERVICE(Info,
-            "plate present: QR found (no plate); auto-open inner then outer");
+            "plate present: pattern found (no plate); auto-open inner then outer");
         if(!run_inner_door_motion_kit(true, true, InnerDoorZMotion::PlateSafeStay)) {
             if(print_prep_abort_.load()) {
                 return EarlyPrintPrepResult::Aborted;
@@ -6912,7 +7007,7 @@ void GlavoService::continue_print_after_plate_place_confirm()
             "plate place continue dropped: print no longer active");
         return;
     }
-    /* Confirm 后不得假设内门：再走决策点融合；全开则先关再读码。 */
+    /* Confirm 后关内门，再从光路（已通过则跳过）进入测高并重新粗测。 */
     (void)begin_early_print_prep(EarlyPrintPrepPhase::AfterPlatePlace);
 }
 
@@ -6949,7 +7044,7 @@ void GlavoService::handle_plate_place_confirm_rsp(const middleware::Message& msg
 
     plate_place_confirm_waiting_ = false;
     UPC_LOG_GLAVO_SERVICE(Info,
-        "plate place confirmed; recheck inner door + plate QR");
+        "plate place confirmed; recheck inner door then coarse height");
     continue_print_after_plate_place_confirm();
 }
 

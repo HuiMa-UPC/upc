@@ -31,7 +31,8 @@ namespace upc::glavo {
 enum class EarlyPrintPrepPhase : uint8_t {
     FromLaunch = 0,      /**< Z + 外门 + 内门 + 读码 */
     AfterOuterDoor = 1,  /**< 外门确认后：内门 + 读码 */
-    AfterPlatePlace = 2, /**< 放板确认后再检：内门 + 读码 */
+    AfterPlatePlace = 2, /**< 放板确认后：再关内门，然后重做测高判断 */
+    PromptAbsent = 3,    /**< 粗测无板：开门并弹放板窗，不堵 worker */
 };
 
 enum class EarlyPrintPrepResult : uint8_t {
@@ -210,6 +211,9 @@ private:
     void handle_debug_inner_door_occlusion_get(const middleware::Message& msg);
     void handle_debug_plate_present_set(const middleware::Message& msg);
     void handle_debug_plate_present_get(const middleware::Message& msg);
+    void handle_debug_plate_by_height_set(const middleware::Message& msg);
+    void handle_debug_plate_by_height_get(const middleware::Message& msg);
+    void publish_debug_plate_by_height_state();
     void handle_debug_soc_led_set(const middleware::Message& msg);
     void handle_debug_soc_led_get(const middleware::Message& msg);
     void handle_debug_cabin_pm_valve_set(const middleware::Message& msg);
@@ -355,13 +359,12 @@ private:
     EarlyPrintPrepResult run_early_print_prep(EarlyPrintPrepPhase phase);
     /** @brief 准备线程结果回灌 worker：续跑光路/测高，或 abort / 保持 UI 挂起。 */
     void on_early_print_prep_done();
-    /**
-     * @brief 关内门后读码闸门（可在准备线程调用；失败不 abort）。
-     */
+    /** 光路前：底板图案判断有没有基板。关则直接继续。 */
     EarlyPrintPrepResult begin_plate_present_gate();
-    /** @brief 跑一轮 Plate Present；回包/超时。 */
     middleware::PlatePresentResult run_plate_present_round();
-    /** @brief 无板 Confirm 后再检：外门已关 → 内门决策 → 再读码。 */
+    /** 粗测判定无基板：开门并弹现有放板窗。 */
+    void prompt_absent_plate();
+    /** @brief 无板 Confirm 后再检：外门已关 → 关内门 → 重做测高。 */
     void continue_print_after_plate_place_confirm();
     /**
      * @brief 起印前的光路检测 gate
@@ -592,7 +595,10 @@ private:
     /** 准备阶段保持当前 Z（仅本次运行，默认关）。开则不起印降到 −10、内门前不降 Z、终止/失败收尾也不改 Z；基板测高仍动 Z。 */
     bool hold_prep_z_on_ = false;
     bool inner_door_occlusion_on_ = true; /**< 内门视觉挡门（仅本次运行，默认开；调试页 Skip Inner Door Occl 按下后关） */
-    bool plate_present_on_ = true; /**< 基板在位读码（仅本次运行，默认开；调试页 Skip Plate Present 按下后关） */
+    /** 光路前用底板图案判断有没有基板（仅本次运行，默认开）。与高度判断互斥。 */
+    bool plate_present_on_ = true;
+    /** 光路后用粗测 H-1>3 判断有没有基板（仅本次运行，默认关）。与图案判断互斥。 */
+    bool plate_by_height_on_ = false;
     OpticalPathCheck optical_path_check_;
     /**
      * 检测线程结果回灌 worker 的 pending 位（与 clean_test_done_pending_ 同款）。
@@ -614,6 +620,7 @@ private:
     middleware::LaserSpotMeasureRspPayload laser_spot_result_{};
     std::atomic<bool> plate_height_done_pending_{false};
     std::atomic<bool> plate_height_done_ok_{false};
+    std::atomic<bool> plate_height_absent_{false};
     std::atomic<bool> plate_height_flatness_warn_{false};
     bool deferred_plate_height_ = false;
     std::string plate_height_resume_path_;
