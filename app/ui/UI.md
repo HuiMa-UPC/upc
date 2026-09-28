@@ -1832,7 +1832,9 @@ Glavo Print_Terminate_Rsp / 进度 100% → control.cpp finish_printing()
   本来就不给退出口。
 - **净化态没有单独的稿**。稿只画了「正在准备开门」，而 `DOOR_OPENING` 进来先看 PM2.5：
   超标就切 `Cleaning`、开风扇、跑满 `CLEAN_MIN_MS` 再开门。两态共用同一张顶图与转圈，只换
-  标题。标题下那行灰字（`g_door_body`）平时是空的，只在净化中点取消时显示 `Stopping fan...`。
+  标题。开门态标题是 `Checking PM2.5...`（清粉态仍是 `Cleaning powder...`）：检测和随后的
+  开门等待都停在这一态，文案按空气检测来写。标题下那行灰字（`g_door_body`）平时是空的，
+  只在净化中点取消时显示 `Stopping fan...`。
   开门成功即收 overlay，不再进 DoorOpened / 关门等待。
   真实开门失败时 UI 最多共试 3 次（单次 Glavo 轮询默认 1s，失败隔 300ms）；仍失败 toast
   `Door did not open` 并按入口回 IDLE / 结果页 / 选文件，不再无限重试。

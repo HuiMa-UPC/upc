@@ -25,8 +25,8 @@
  *     2) 清粉测试完成 / 转运结果（来自 link 回调置位的 pending）
  *     3) 一条 UI IPC 消息 → handle_message()
  * - usb_hotplug_thread_：轮询 /proc/mounts，变化时发 GLAVO_USB_Hotplug_Ntf。
- * - clean_worker_：开门前清粉（风机 + 轮询/阀采样 PM2.5）；完成后经 publish 回 UI。
- * - pm25_sample_worker_：V4 开门前舱内 PM 阀采样（3s），避免堵 worker。
+ * - clean_worker_：舱内 PM 超标时占空比开风机持续吹，读缓存达标后关风机并 publish 回 UI。
+ * - pm25_sample_worker_：保留停机 join；开门前判定已改为直接读舱内缓存，不再启动。
  * - door_open_worker_：真实开门传感器轮询（最长 GLAVO_DOOR_OPEN_TIMEOUT_MS），Rsp 由该线程 publish。
  * - SocSensors o2_calib 线程：调试页单点标定约 0.7s 采样，Rsp 由该线程 publish_async。
  * - WifiManager / McuLink / Parser 线程不在本文件创建，但通过回调/队列与 worker 汇合。
@@ -4587,7 +4587,7 @@ void GlavoService::handle_supply_status_req(const middleware::Message& msg)
     }
 }
 
-/** @brief 回复舱内 PM2.5（旧：MCU 快照；SOC 路径：独立线程开阀采样 3s 平均） */
+/** @brief 回复舱内 PM2.5（当前缓存与阈值的比较结果，不开阀、不等待）。 */
 void GlavoService::publish_pm25_rsp(uint32_t target_id, bool is_high, float pm25_cabin)
 {
     middleware::Pm25ResultPayload p{};
@@ -4605,42 +4605,25 @@ void GlavoService::publish_pm25_rsp(uint32_t target_id, bool is_high, float pm25
 
 void GlavoService::handle_pm25_request(const middleware::Message& msg)
 {
-    /* 阈值判定归后端：舱内 PM2.5 ≥ 阈值 判不合格（is_high=1）→ 触发开门前清粉。
-     * 阈值默认 50，可由 cal.csv Config 段 PM2.5Clean 覆盖。 */
+    /* 阈值判定归后端：直接读舱内 PM2.5 缓存，≥ 阈值判不合格（is_high=1）→ UI 再开风机。
+     * 不开电磁阀、不等待平均。阈值默认 50，可由 cal.csv Config 段 PM2.5Clean 覆盖。
+     * 无效值（<0）当合格，UI 直接开门。 */
     const uint32_t target = static_cast<uint32_t>(msg.sender_id);
 
     if(!door_real_open_enabled_) {
-        /* 门控关闭：跳过舱内 PM 检测与吹粉，直接判合格，UI 随后只发开门指令 */
+        /* 门控关闭：跳过舱内 PM 检测与吹风，直接判合格，UI 随后只发开门指令 */
         UPC_LOG_GLAVO_SERVICE(Info, "pm25_req: door gate off, skip cabin PM check");
         publish_pm25_rsp(target, false, 0.f);
         return;
     }
 
-    if(pm25_sample_busy_.load()) {
-        /* 已在采：不堵 worker，用当前舱内缓存立刻回 */
-        const auto env = McuLink::instance().env_snapshot();
-        const bool high = env.valid && env.pm25_cabin >= pm25_clean_threshold_;
-        UPC_LOG_GLAVO_SERVICE(Info, "pm25_req: sample busy, use snapshot");
-        publish_pm25_rsp(target, high, env.valid ? env.pm25_cabin : 0.f);
-        return;
-    }
-    pm25_sample_busy_.store(true);
-    if(pm25_sample_worker_.joinable()) {
-        pm25_sample_worker_.join();
-    }
-    const float threshold = pm25_clean_threshold_;
-    pm25_sample_worker_ = std::thread([this, target, threshold]() {
-        constexpr uint32_t kSampleMs = 3000;
-        const float avg = SocSensors::instance().sample_cabin_pm25_avg(kSampleMs);
-        const bool high = (avg >= 0.f && avg >= threshold);
-        UPC_LOG_GLAVO_SERVICE(Info,
-            "pm25_req(soc valve sample): avg=%.1f threshold=%.1f is_high=%u",
-            static_cast<double>(avg), static_cast<double>(threshold),
-            high ? 1u : 0u);
-        publish_pm25_rsp(target, high, (avg >= 0.f) ? avg : 0.f);
-        publish_debug_cabin_pm_valve_state();
-        pm25_sample_busy_.store(false);
-    });
+    const float pm = McuLink::instance().env_snapshot().pm25_cabin;
+    const bool high = (pm >= 0.f && pm >= pm25_clean_threshold_);
+    UPC_LOG_GLAVO_SERVICE(Info,
+        "pm25_req(cabin snapshot): pm=%.1f threshold=%.1f is_high=%u",
+        static_cast<double>(pm), static_cast<double>(pm25_clean_threshold_),
+        high ? 1u : 0u);
+    publish_pm25_rsp(target, high, (pm >= 0.f) ? pm : 0.f);
 }
 
 /** @brief 发送门控操作结果 Rsp */
@@ -4744,11 +4727,11 @@ void GlavoService::handle_purify_request(const middleware::Message& msg)
 
 
 /**
- * @brief 处理 UI_Clean_Start_Req（开门前清粉）
+ * @brief 处理 UI_Clean_Start_Req（舱内 PM 超标后的持续吹风）
  *
- * 风机固定吹 10s（不中途看 PM）→ 关风机 → 再开阀采样 3s 平均；
- * 仍超标则循环；≤阈值则回 Start_Rsp（UI 再开门）。
- * 门控关闭时 UI 侧通常不发 Clean；若仍收到，同样走开阀采样。
+ * 占空比 60% 开风机并一直吹，循环读舱内 PM2.5 缓存（不开电磁阀）。
+ * 有效值低于阈值则关风机并回 Start_Rsp（UI 再开门）；无效值（<0）继续吹。
+ * 取消则关风机。门控关闭时 UI 通常不发本请求。
  */
 void GlavoService::handle_clean_start_request(const middleware::Message& msg)
 {
@@ -4761,16 +4744,13 @@ void GlavoService::handle_clean_start_request(const middleware::Message& msg)
     }
 
     constexpr uint8_t kCleanFanDutyPercent = 60u;
-    constexpr auto kCleanFixedBlow = std::chrono::seconds(10);
-    constexpr uint32_t kValveSampleMs = 3000;
     const uint32_t reply_target = static_cast<uint32_t>(msg.sender_id);
     clean_cancel_requested_.store(false);
     clean_stop_rsp_pending_.store(false);
     clean_stop_rsp_target_.store(0);
     clean_running_.store(true);
 
-    clean_worker_ = std::thread([this, reply_target, kCleanFanDutyPercent,
-                                 kCleanFixedBlow, kValveSampleMs]() {
+    clean_worker_ = std::thread([this, reply_target, kCleanFanDutyPercent]() {
         bool cancelled = false;
         uint8_t buf[SERIAL_DEBUG_MAX_FRAME];
 
@@ -4792,35 +4772,25 @@ void GlavoService::handle_clean_start_request(const middleware::Message& msg)
         };
 
         UPC_LOG_GLAVO_SERVICE(Info,
-            "clean_start_req: fixed %lld s blow + valve resample, threshold=%.1f",
-            static_cast<long long>(kCleanFixedBlow.count()),
+            "clean_start_req: fan duty=%u continuous, threshold=%.1f",
+            static_cast<unsigned>(kCleanFanDutyPercent),
             static_cast<double>(pm25_clean_threshold_));
+        fan_on();
         for(;;) {
             if(clean_cancel_requested_.load()) {
                 cancelled = true;
                 break;
             }
-            fan_on();
-            const auto blow_deadline = std::chrono::steady_clock::now() + kCleanFixedBlow;
-            while(std::chrono::steady_clock::now() < blow_deadline) {
-                if(clean_cancel_requested_.load()) {
-                    cancelled = true;
-                    break;
-                }
-                std::this_thread::sleep_for(std::chrono::milliseconds(200));
-            }
-            fan_off();
-            if(cancelled) {
+            const float pm = McuLink::instance().env_snapshot().pm25_cabin;
+            if(pm >= 0.f && pm < pm25_clean_threshold_) {
+                UPC_LOG_GLAVO_SERVICE(Info,
+                    "clean_start_req: cabin pm=%.1f below threshold, stop fan",
+                    static_cast<double>(pm));
                 break;
             }
-            const float avg = SocSensors::instance().sample_cabin_pm25_avg(kValveSampleMs);
-            UPC_LOG_GLAVO_SERVICE(Info,
-                "clean_start_req: resample avg=%.1f", static_cast<double>(avg));
-            publish_debug_cabin_pm_valve_state();
-            if(avg < 0.f || avg < pm25_clean_threshold_) {
-                break;
-            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(200));
         }
+        fan_off();
 
         if(cancelled) {
             const uint32_t stop_target = clean_stop_rsp_target_.load();

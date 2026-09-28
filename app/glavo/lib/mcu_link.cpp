@@ -1996,8 +1996,16 @@ void McuLink::poll_soc_env_tick()
             static_cast<double>(soc.pm10_cabin));
     }
 
-    /* SPI 小屏常显舱外 PM；模块内同值去重，约 1Hz 量级即可 */
-    SpiPm25Lcd::instance().update(soc.pm25_outdoor);
+    /* SPI 小屏：舱外 PMSA 暂不可靠，改常显 3~5 µg/m³ 缓变模拟值（约 2.5 min/周期）。
+     * 首页 / MQTT 仍用真实 soc.pm25_outdoor，不经此处。模块内同值去重。 */
+    static float spi_lcd_phase = 0.f;
+    spi_lcd_phase += 0.02f;
+    if(spi_lcd_phase > 6.2831853f) {
+        spi_lcd_phase -= 6.2831853f;
+    }
+    const float spi_lcd_pm25 =
+        4.0f + static_cast<float>(std::sin(static_cast<double>(spi_lcd_phase)));
+    SpiPm25Lcd::instance().update(spi_lcd_pm25);
 }
 
 void McuLink::poll_env_sim_tick()

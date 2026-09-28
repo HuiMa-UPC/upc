@@ -3,11 +3,12 @@
 
 /**
  * @file spi_pm25_lcd.hpp
- * @brief ST7735 SPI 小屏（fbdev `st7735rdrmfb`）常显舱外 PM2.5。
+ * @brief ST7735 SPI 小屏（fbdev `st7735rdrmfb`）常显 PM2.5。
  *
  * 内核 DRM tiny 已完成初始化/offset/背光；本模块只写 shadow + pwrite。
- * UI 布局移植自 doc/spilcd/ui_pm25.*（160×80 逻辑横屏，用户态顺时针 90°→80×160 fb）。
- * 无效值（传感器未就绪 / <0）显示 "--"。节点缺失只 Warn 一次。
+ * UI 布局移植自 doc/spilcd/ui_pm25.*（160×80 逻辑横屏，用户态逆时针 90°→80×160 fb）。
+ * 调用方当前喂 3~5 µg/m³ 缓变模拟值（舱外 PMSA 暂不可靠）；无效值（&lt;0）显示 "--"。
+ * 节点缺失只 Warn 一次。
  */
 
 #include <cstddef>
@@ -25,7 +26,7 @@ public:
     void start();
 
     /**
-     * @brief 刷新舱外 PM2.5 数值。
+     * @brief 刷新 PM2.5 数值（当前由调用方喂模拟缓变值）。
      * @param pm25_ug_m3 浓度 ug/m³；&lt;0 或 NaN 显示 "--"
      */
     void update(float pm25_ug_m3);
