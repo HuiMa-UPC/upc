@@ -2557,7 +2557,7 @@ lv_obj_t *build_view_manual(lv_obj_t *parent)
 
 void on_print_click(lv_event_t * /*e*/)
 {
-    control_start();
+    control_start("user_monitor");
 }
 
 /** 暂停/恢复：乐观切换图标并发请求，后端回执经 register_print_pause_done 校正。

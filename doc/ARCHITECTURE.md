@@ -120,7 +120,7 @@
 | `user_history` | `page_user_history.*` | 打印历史：三 Tab（Timelapse/Video/Photo）+ 按月分组的三列缩略图网格 + 长按多选批量删除 |
 | `user_settings` | `page_user_settings.*` | 设置列表 + 开发者密码弹窗 |
 | `user_message` | `page_user_message.*` | 消息中心：日期分组混排列表（MCU 报警 + 设备事件）+ 左滑删除历史 + 详情抽屉（Reset 三态） |
-| `user_files` | `page_user_files.*` | 选文件页（隐藏页，首页「My Files」进入）：本机/USB 页签 + 文件列表 + 右栏预览/信息/确认打印·删除。**只做视图**，数据与打印流程在 `control.*` |
+| `user_files` | `page_user_files.*` | 选文件页（隐藏页，首页 / 监控页的 PRINT 进入，侧栏高亮与返回键跟着入口分区走）：本机/USB 页签 + 文件列表 + 右栏预览/信息/确认打印·删除。**只做视图**，数据与打印流程在 `control.*` |
 | `user_timelapse` | `page_user_timelapse.*` | 延时摄影播放器（隐藏页，历史缩略图进入；全屏 `lv_layer_top`） |
 | `user_photo` | `page_user_photo.*` | 相册全屏浏览器（隐藏页，历史页 Photo 页签的缩略图进入；滑动/箭头翻页 + 首末回绕 + 窗口化 filmstrip；翻页判据「距离 or 轻扫」+ 滑入动画） |
 

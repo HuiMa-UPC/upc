@@ -96,19 +96,30 @@ public:
     /**
      * @brief 注册「隐藏页」：有页面、但不在侧边栏生成菜单按钮。
      *
-     * 用于非顶层导航目的地（如从首页「My Files」进入的选择文件页）：
+     * 用于非顶层导航目的地（如从首页 / 监控页 PRINT 进入的选择文件页）：
      * 只能通过 switch_to(name) 编程切换，享受 PageManager 的创建一次/隐藏显示/状态保留。
      *
      * @param owner_menu 归属菜单页名：该隐藏页激活时，用此页的菜单按钮表示高亮
-     *                   （如选择文件页归属 "user_home"，使首页图标保持高亮）。空=不映射。
+     *                   （如调试页归属 "user_settings"，使设置图标保持高亮）。空=不映射。
+     *                   有多个入口的隐藏页可在运行时用 set_hidden_page_owner() 改写。
      */
     void register_hidden_page(PagePtr page, std::string owner_menu = std::string());
+
+    /**
+     * @brief 运行时改写隐藏页的归属菜单页（激活时高亮哪枚侧栏按钮）。
+     *
+     * 给有多个入口的隐藏页用：选择文件页从首页进就高亮首页、从监控页进就高亮监控页。
+     * 该页正是当前页时立即重刷高亮，否则在下次 switch_to() 进入时生效。
+     * 有菜单按钮的页面高亮的永远是自己，对它调用会被忽略。
+     */
+    void set_hidden_page_owner(const std::string& page_name, std::string owner_menu);
 
     /**
      * @brief 为某菜单页设置「动态目标解析器」。
      *
      * 设置后，点击该页的侧边栏按钮不再固定切到本页，而是切到 resolver() 返回的页名。
-     * 用于把首页图标做成「首页区」入口：返回首页区当前视图（仪表盘 / 选择文件页）。
+     * 用于把首页 / 监控页图标做成分区入口：返回该分区当前视图（分区本页 / 挂在该分区下的
+     * 选择文件页）。
      */
     void set_menu_target_resolver(const std::string& page_name,
                                   std::function<std::string()> resolver);

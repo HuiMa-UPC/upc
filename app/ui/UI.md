@@ -53,6 +53,10 @@ while (!g_shutdown_requested) {
 - `Page::name()` 返回唯一 ID（如 `"demo"`），与 `switch_to("demo")` **完全一致**
 - `register_page` 只登记；`switch_to` 首次触发 `on_create`
 - 离页时在 `on_exit` 里 `register_*(nullptr)` 取消 Proxy 回调
+- 隐藏页（无侧栏按钮）用 `register_hidden_page(page, owner_menu)` 登记归属菜单页，激活时高亮归属页的按钮；
+  有多个入口的隐藏页（目前只有 `user_files`）进页前用 `set_hidden_page_owner()` 按入口改写。
+  `set_menu_target_resolver()` 让侧栏按钮切到动态目标，首页 / 监控页两枚图标靠它「回到分区上次视图」，
+  见「选文件页的入口与侧栏归属」
 
 ### 外壳布局：侧栏是浮层
 
@@ -904,6 +908,29 @@ pending 自动解除——正好顺带验超时路径。
 `register_*` 回调在总线线程上跑，**要建/毁 LVGL 对象就得先 `lv_async_call` 回主线程**
 （例：`control.cpp` 的 `on_powder_low_async`）。
 只改现成 label / 显隐的回调沿用直调。
+
+### 选文件页的入口与侧栏归属
+
+选文件页有两个入口：首页左下 PRINT、监控页底部 PRINT，都走 `control_start(origin)`，`origin`
+传入口分区页名。页面只有一个实例，同一时间只挂在一个分区下（`control.cpp` 的 `g_files_owner`），
+挂在谁下面：
+
+- **侧栏高亮谁**：`goto_file_selection()` 进页前用 `set_hidden_page_owner("user_files", …)` 改归属。
+- **返回键回谁**：`control_files_close()` 切回该分区，同时把选文件页摘下。
+- **中途切走再点谁的图标仍回选文件页**：首页 / 监控页两枚图标的目标解析器都走
+  `control_section_target(section)`。人在文件页时再点亮着的那枚图标没反应（目标就是当前页），
+  离开靠返回键或切别的标签——与改动前首页那枚的表现一致。
+
+几条容易漏的规则：
+
+- **入口分两步记**：`control_start()` 只记 `g_files_entry`，页面真正打开才提升为 `g_files_owner`。
+  关掉放版预确认弹窗（`on_plate_close` → IDLE）不动挂载，否则分区图标会指向从没打开过的文件页。
+- **后一个入口会把选文件页抢过去**：先从首页进、切到监控页再点 PRINT，文件页改挂监控页，
+  Home 图标此后回仪表盘。
+- **开始打印摘掉挂载**（`CONTROL_STATE_PRINTING`），打完点分区图标不会又落回文件页。
+- **打印占用期间不挂、也不解析到文件页**：`control_is_printing()` 含一键转运准备，那段时间
+  `g_state` 仍是 IDLE、监控页 Job 页签的 PRINT 点得到，但 `switch_to("user_files")` 会被挡住只弹
+  toast。所以 `goto_file_selection()` 此时不挂，`control_section_target()` 此时一律回分区本页。
 
 ### 选文件页目录数据
 

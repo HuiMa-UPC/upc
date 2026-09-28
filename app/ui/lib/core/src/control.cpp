@@ -155,8 +155,15 @@ void on_transfer_demo_timeout(lv_timer_t * /*timer*/)
 }
 
 /* 选择文件页的视图代码已拆到 page_user_files.cpp，这里只留数据与流程。
- * 页面当前的选中/页签经 page_user_files_sel_index() / _source() 查询。 */
-const char *g_home_section_view = "user_home"; /**< 首页区当前视图："user_home" 或 "user_files" */
+ * 页面当前的选中/页签经 page_user_files_sel_index() / _source() 查询。
+ *
+ * 选文件页只有一个实例，入口却有两个（首页 / 监控页的 PRINT），同一时间只挂在一个
+ * 侧栏分区下：侧栏高亮该分区、返回键回该分区、中途切走再点该分区图标仍回选文件页。
+ * 入口分两步记：control_start() 先记 g_files_entry，页面真正打开时
+ * （goto_file_selection）才提升为 g_files_owner——关掉放版预确认弹窗不该让分区图标
+ * 指向一个从没打开过的选文件页。 */
+std::string g_files_entry = "user_home"; /**< 本次选文件流程的入口分区 */
+std::string g_files_owner;               /**< 当前挂着选文件页的分区；空 = 没挂 */
 
 ui_modal_dialog_t *g_confirm_dlg = nullptr;
 ui_modal_dialog_t *g_prepare_dlg = nullptr;
@@ -2904,9 +2911,9 @@ void enter_state(control_state_t s)
         overlay_hide();
         g_print_result_pending = false;      /* 丢掉上一单可能残留的结果 */
         g_print_result_shown = false;
-        /* 首页图标回仪表盘：开始打印时用户正停在选文件页，那是首页区的一个视图，
-         * 不复位的话打完回首页会又落回选文件页。 */
-        g_home_section_view = "user_home";
+        /* 选文件页从分区上摘下：开始打印时用户正停在选文件页，那是首页 / 监控页分区的
+         * 一个视图，不摘的话打完再点该分区图标会又落回选文件页。 */
+        g_files_owner.clear();
         /* **打印界面在监控页**（稿 6338:27240 一族），不是首页。改版前这里切的是
          * "user_home"，浮层挂在首页上；现在整套搬到了监控页，所以直接切过去。 */
         ui::PageManager::instance().switch_to("user_monitor");
@@ -2934,14 +2941,20 @@ void enter_state(control_state_t s)
 }
 
 /* 预确认完成 → 进入文件选择页（PageManager 隐藏页 "user_files"，状态保留）。
- * 关闭当前 overlay 弹窗并回到 IDLE，让文件页在空闲态下正常工作。 */
+ * 关闭当前 overlay 弹窗并回到 IDLE，让文件页在空闲态下正常工作。
+ * 选文件页挂到本次入口分区下；另一个分区之前若挂着它就此让出，点那边的图标回分区本页。 */
 void goto_file_selection(void)
 {
     close_current_dialog();
     backend_cancel_pending();
     g_state = CONTROL_STATE_IDLE;
     overlay_hide();
-    g_home_section_view = "user_files";
+    /* 一键转运准备期间 g_state 仍是 IDLE、监控页 Job 页签的 PRINT 也点得到，但 switch_to()
+     * 会挡住选文件页。没进去就别挂到分区上，否则之后点分区图标会进一个从没打开过的文件页。 */
+    if(!control_is_printing()) {
+        g_files_owner = g_files_entry;
+        ui::PageManager::instance().set_hidden_page_owner("user_files", g_files_owner);
+    }
     ui::PageManager::instance().switch_to("user_files");
 }
 
@@ -2985,8 +2998,9 @@ void control_files_clear(void)
 
 void control_files_close(void)
 {
-    g_home_section_view = "user_home";
-    ui::PageManager::instance().switch_to("user_home");
+    const std::string back = g_files_owner.empty() ? std::string("user_home") : g_files_owner;
+    g_files_owner.clear();
+    ui::PageManager::instance().switch_to(back);
 }
 
 void control_files_show_print_confirm(void)
@@ -3036,11 +3050,12 @@ void control_init(lv_obj_t *parent)
     lv_obj_clear_flag(g_overlay, LV_OBJ_FLAG_CLICKABLE);
 }
 
-void control_start(void)
+void control_start(const char *origin)
 {
     if(g_state != CONTROL_STATE_IDLE) {
         return;
     }
+    g_files_entry = origin ? origin : "user_home";
     /* 调试开关打开：等同在预确认里选「已放入 → 选择打印任务」，不经未放入的开门分支 */
     if(g_skip_plate_prompt) {
         goto_file_selection();
@@ -3094,9 +3109,10 @@ bool control_transfer_demo_pending(void)
     return g_transfer_demo_prep_pending;
 }
 
-const char *control_home_section_target(void)
+const char *control_section_target(const char *section)
 {
-    return g_home_section_view;
+    const bool holds_files = g_files_owner == section;
+    return (holds_files && !control_is_printing()) ? "user_files" : section;
 }
 
 
