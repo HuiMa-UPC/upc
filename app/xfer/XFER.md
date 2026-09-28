@@ -60,7 +60,8 @@
 - 数据源：`APP_Print_Progress_Ntf` / `APP_Print_Pause_Rsp` /
   `GLAVO_Print_State_Ntf` / `APP_Print_Terminate_Rsp` /
   `APP_Print_Start_Rejected_Ntf` / `APP_Print_Video_Manifest_Ntf`（Glavo/Media
-  双发 UI 与 `APP_XFR`）。
+  双发 UI 与 `APP_XFR`）。新任务已在 `printing`/`paused` 时，上一趟取消的
+  Manifest `aborted` 与迟到 `Terminate_Rsp` 不得把对外 state 写回 `canceled`。
 
 ## 运行参数（环境变量）
 
