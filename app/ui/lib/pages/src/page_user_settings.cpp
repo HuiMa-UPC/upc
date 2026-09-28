@@ -881,8 +881,8 @@ void on_wifi_arrow_empty(lv_event_t *)
 }
 
 /** Wi-Fi 列表项卡片：图标 + SSID + 右箭头。
- *  未连接：点整条连接（已保存免密直连 / 否则弹密码框）。
- *  已连接：整条不响应，断开/忘记/IP 走右箭头详情页。 */
+ *  未连接：点整条连接（已保存免密直连 / 否则弹密码框）；右箭头进空页占位。
+ *  已连接：点整条或右箭头均进详情（忘记网络 / IP）；不在本行做断开。 */
 lv_obj_t *make_wifi_item(lv_obj_t *parent, const char *ssid, bool connected)
 {
     lv_obj_t *btn = lv_button_create(parent);
@@ -894,9 +894,10 @@ lv_obj_t *make_wifi_item(lv_obj_t *parent, const char *ssid, bool connected)
     lv_obj_set_flex_align(btn, LV_FLEX_ALIGN_START,
                           LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_set_style_text_color(btn, user_light_text, 0);
-    /* 未连接=点整条连接（弹密码框/免密直连）；已连接项整条不响应，
-     * 断开请走右箭头详情页的 Disconnect。 */
-    if(!connected) {
+    if(connected) {
+        /* 整行可进详情：箭头视觉区小，靠行宽命中更顺手 */
+        lv_obj_add_event_cb(btn, on_connected_wifi_click, LV_EVENT_CLICKED, nullptr);
+    } else {
         lv_obj_add_event_cb(btn, on_wifi_item_click,
                             LV_EVENT_CLICKED, const_cast<char *>(ssid));
     }
@@ -918,15 +919,22 @@ lv_obj_t *make_wifi_item(lv_obj_t *parent, const char *ssid, bool connected)
         lv_obj_set_style_text_color(tag, user_color_status_ok, 0);
     }
 
-    /* 右箭头独立按钮：已连接=详情子页；未连接=空页面。落在此区域的点击不触发整条行。
-     * 卡片内距已是 24，钮本身只要够大即可，故取行高档的 USER_NAV_ITEM_H 见方。 */
+    /* 右箭头独立钮：视觉约半行高见方；命中区外扩到行高见方，避免只点到 › 才灵。
+     * 已连接与整行同进详情；未连接进空页，落在箭头上不触发整行连接。 */
+    const int32_t arrow_vis = USER_NAV_ITEM_H / 2;
     lv_obj_t *arrow_btn = lv_button_create(btn);
     lv_obj_remove_style_all(arrow_btn);
-    lv_obj_set_size(arrow_btn, USER_NAV_ITEM_H / 2, USER_NAV_ITEM_H / 2);
+    lv_obj_set_size(arrow_btn, arrow_vis, arrow_vis);
     lv_obj_set_style_radius(arrow_btn, LV_RADIUS_CIRCLE, 0);
     lv_obj_set_style_bg_color(arrow_btn, user_light_text, 0);
     lv_obj_set_style_bg_opa(arrow_btn, LV_OPA_TRANSP, 0);
     lv_obj_set_style_bg_opa(arrow_btn, 26, LV_STATE_PRESSED);
+    /* 四边等量外扩到约 USER_NAV_ITEM_H；不够 UI_USER_MIN_TOUCH 时再补足 */
+    int32_t ext = (USER_NAV_ITEM_H - arrow_vis + 1) / 2;
+    if(arrow_vis + 2 * ext < UI_USER_MIN_TOUCH) {
+        ext = (UI_USER_MIN_TOUCH - arrow_vis + 1) / 2;
+    }
+    lv_obj_set_ext_click_area(arrow_btn, ext);
     lv_obj_add_event_cb(arrow_btn,
                         connected ? on_connected_wifi_click : on_wifi_arrow_empty,
                         LV_EVENT_CLICKED, const_cast<char *>(ssid));

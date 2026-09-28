@@ -24,7 +24,7 @@ namespace {
 
 using pm25_font::FontRany_GetGlyph;
 
-/* 逻辑横屏（与 MCU UI 一致）；fb 为竖屏 80×160，写 shadow 时顺时针 90° */
+/* 逻辑横屏（与 MCU UI 一致）；fb 为竖屏 80×160，写 shadow 时逆时针 90° */
 constexpr uint16_t kUiW = 160U;
 constexpr uint16_t kUiH = 80U;
 constexpr uint16_t kColorBlack = 0x0000U;
@@ -189,13 +189,13 @@ bool find_fb_by_name(const char* want_name, char* out, size_t out_sz)
     return ok;
 }
 
-/* UI→fb：顺时针 90°。朝向反了改成 (kUiW-1-x)*stride + y */
+/* UI→fb：逆时针 90°（相对旧顺时针 90° 再转 180°，适配当前装配朝向） */
 void draw_point(DrawCtx& c, uint16_t x, uint16_t y, uint16_t color)
 {
     if((x >= kUiW) || (y >= kUiH) || !c.shadow || c.fb_w == 0) {
         return;
     }
-    const uint32_t idx = static_cast<uint32_t>(x) * c.stride_px + (c.fb_w - 1U - y);
+    const uint32_t idx = static_cast<uint32_t>(kUiW - 1U - x) * c.stride_px + y;
     if(idx < c.shadow_words) {
         c.shadow[idx] = color;
     }
