@@ -62,6 +62,15 @@
 #define CAMERA_PRINT_H264_BITRATE  2048000u
 #endif
 
+/**
+ * 直播（局域网 RTSP / 云端推流）目标码率（bps）。
+ * 与打印录像分开：1080×1280@30 用 2Mbps 且 GOP=0.5s 时 I 帧会吃光预算，
+ * 运动发糊、播放器为抹时间戳抖动又加缓冲，观感就是「不流畅」。
+ */
+#ifndef UPC_LIVE_H264_BITRATE
+#define UPC_LIVE_H264_BITRATE  4096000u
+#endif
+
 /** 层帧率：UI 延时摄影序列播放默认帧率；合成默认亦为此值（可被 cal.csv TIMELAPSE_VIDEO_FPS 覆盖） */
 #ifndef CAMERA_PRINT_VIDEO_LAYER_FPS
 #define CAMERA_PRINT_VIDEO_LAYER_FPS  5u

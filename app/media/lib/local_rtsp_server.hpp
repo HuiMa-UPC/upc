@@ -30,9 +30,13 @@
 #define UPC_LOCAL_RTSP_AUTO_START 1
 #endif
 
-/** NAL 队列上限（个）：超出丢最旧，保实时优先。 */
+/**
+ * NAL 队列上限（个）。超出时整段丢到下一个 IDR，不丢单个 NAL：
+ * 半个 AU / 半个 GOP 会让解码器灰屏，误差沿 P 帧传到下一个关键帧。
+ * 约 1s（30fps、每帧 1～2 个 NAL）；再长只增加端到端延迟。
+ */
 #ifndef UPC_LOCAL_RTSP_QUEUE_MAX
-#define UPC_LOCAL_RTSP_QUEUE_MAX 128u
+#define UPC_LOCAL_RTSP_QUEUE_MAX 48u
 #endif
 
 /**
@@ -89,7 +93,8 @@ public:
 
     /**
      * 建立 RTSPServer 并启动常驻事件循环线程（进程内只需一次）。
-     * 未编译 live555 支持或端口占用时返回 false。
+     * 必须成功绑定 IPv4；仅 IPv6 不算起来（Windows/Snowpath 走 IPv4）。
+     * 未编译 live555 支持或 IPv4 端口占用时返回 false，调用方可稍后重试。
      */
     bool init(uint16_t port = UPC_LOCAL_RTSP_PORT_DEFAULT);
 
@@ -132,6 +137,8 @@ public:
     [[nodiscard]] void* current_source() const;
     /** 取编码器缓存的参数集，用于填 SDP 的 sprop-parameter-sets。 */
     bool copy_sps_pps(std::vector<uint8_t>& sps, std::vector<uint8_t>& pps) const;
+    /** 一帧的 RTP duration（微秒），给 DiscreteFramer 垫平节奏。 */
+    [[nodiscard]] unsigned frame_duration_us() const;
     /** 事件循环线程（trigger 回调）：执行命令队列中的全部命令。 */
     void run_pending_cmds();
     /** 事件循环线程（trigger 回调）：把队列中的 NAL 交给当前 source。 */
@@ -146,9 +153,11 @@ private:
 
     /**
      * 编码器 sink 回调：拆包入队并唤醒事件循环。
+     * @param keyframe 本包是否含 IDR（积压恢复必须从关键帧接着传）。
      * @param pts_us 采帧时刻，本帧所有 NAL 共用（AU 边界判定依赖于此）。
      */
-    bool on_encoded_packet(const uint8_t* annexb, size_t len, int64_t pts_us);
+    bool on_encoded_packet(const uint8_t* annexb, size_t len, bool keyframe,
+                           int64_t pts_us);
     /** 编码器摘除本路 sink 后的通知。 */
     void on_sink_dropped();
     /** 入队一条命令并触发事件循环处理。 */
@@ -173,9 +182,12 @@ private:
     int sink_id_ = -1;                    /**< 编码器 sink 句柄；<0 表示未注册。 */
     bool active_ = false;                 /**< 开关状态。 */
     uint16_t port_ = UPC_LOCAL_RTSP_PORT_DEFAULT;
+    unsigned frame_duration_us_ = 33333;  /**< 默认 30fps；start() 时按编码器帧率改。 */
 
     std::deque<NalUnit> nal_queue_;
-    uint32_t dropped_ = 0;                /**< 队列溢出丢弃的 NAL 计数。 */
+    uint32_t dropped_ = 0;                /**< 因无人拉流/积压/对齐 IDR 丢弃的包计数。 */
+    uint32_t drop_events_ = 0;            /**< 触发「丢到下个 IDR」的次数。 */
+    bool drop_until_idr_ = false;         /**< 积压或新客户端接入后，等到下一个 IDR 再送。 */
     std::deque<Cmd> cmd_queue_;
 
     /* 运行期心跳统计：队列深度持续贴近上限即说明 live555 取不赢，延迟会顶到
