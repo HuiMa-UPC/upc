@@ -6,15 +6,19 @@
 #include <png.h>
 
 #if defined(UPC_XFR_HAS_RGA) && UPC_XFR_HAS_RGA
+#include "dma_heap_buffer.hpp"
+#include <linux/dma-buf.h>
 #include <rga/im2d.hpp>
+#include <rga/rga.h>
+#include <sys/ioctl.h>
 #endif
 
 #include <algorithm>
 #include <array>
+#include <climits>
 #include <cstdio>
 #include <cstring>
 #include <fstream>
-#include <limits>
 #include <vector>
 
 namespace upc::xfr {
@@ -30,7 +34,8 @@ struct DecodedPng {
     std::vector<uint8_t> rgba;
 };
 
-bool decode_png_rgba(const std::string& path, DecodedPng* decoded, std::string* error)
+bool decode_png_rgba(const std::string& path, uint32_t max_edge,
+                     DecodedPng* decoded, std::string* error)
 {
     FILE* fp = std::fopen(path.c_str(), "rb");
     if(!fp) {
@@ -94,15 +99,48 @@ bool decode_png_rgba(const std::string& path, DecodedPng* decoded, std::string* 
         png_error(png, "unexpected decoded PNG row size");
     }
 
-    decoded->rgba.assign(static_cast<size_t>(width) * height * 4u, 0);
-    for(uint32_t y = 0; y < height; ++y) {
-        png_bytep row =
-            decoded->rgba.data() + static_cast<size_t>(y) * width * 4u;
-        png_read_row(png, row, nullptr);
+    uint32_t step = 1;
+    const uint32_t long_edge = std::max(width, height);
+    const uint32_t decode_edge = std::max(1u, max_edge);
+    if(long_edge > decode_edge) {
+        step = (long_edge + decode_edge - 1u) / decode_edge;
+    }
+    const uint32_t out_w = (width + step - 1u) / step;
+    const uint32_t out_h = (height + step - 1u) / step;
+    decoded->rgba.assign(static_cast<size_t>(out_w) * out_h * 4u, 0);
+
+    if(step == 1u) {
+        for(uint32_t y = 0; y < height; ++y) {
+            png_bytep row =
+                decoded->rgba.data() + static_cast<size_t>(y) * width * 4u;
+            png_read_row(png, row, nullptr);
+        }
+    } else {
+        std::vector<uint8_t> row(static_cast<size_t>(width) * 4u);
+        uint32_t oy = 0;
+        for(uint32_t y = 0; y < height; ++y) {
+            png_read_row(png, row.data(), nullptr);
+            if((y % step) != 0u) {
+                continue;
+            }
+            uint8_t* dst = decoded->rgba.data() +
+                           static_cast<size_t>(oy) * out_w * 4u;
+            for(uint32_t ox = 0; ox < out_w; ++ox) {
+                const uint32_t sx = std::min(ox * step, width - 1u);
+                std::memcpy(dst + static_cast<size_t>(ox) * 4u,
+                            row.data() + static_cast<size_t>(sx) * 4u, 4u);
+            }
+            ++oy;
+        }
+        UPC_LOG_XFR_SERVICE(Info,
+            "3mf thumbnail decode downsample %ux%u -> %ux%u step=%u",
+            static_cast<unsigned>(width), static_cast<unsigned>(height),
+            static_cast<unsigned>(out_w), static_cast<unsigned>(out_h),
+            static_cast<unsigned>(step));
     }
     png_read_end(png, nullptr);
-    decoded->width = width;
-    decoded->height = height;
+    decoded->width = out_w;
+    decoded->height = out_h;
     png_destroy_read_struct(&png, &info, nullptr);
     std::fclose(fp);
     return true;
@@ -126,6 +164,246 @@ void cover_rect(uint32_t src_w, uint32_t src_h, uint32_t dst_w, uint32_t dst_h,
         *y = (src_h - *h) / 2u;
     }
 }
+
+#if defined(UPC_XFR_HAS_RGA) && UPC_XFR_HAS_RGA
+constexpr int kRgaSrcFormat = RK_FORMAT_RGBA_8888;
+constexpr int kRgaDstFormat = RK_FORMAT_RGB_565;
+/** RGA2 单趟缩放区间 1/8～8；72×72 相对 2048 源要先落到中间尺寸。 */
+constexpr uint32_t kRgaMaxScale = 8;
+
+bool rga_status_ok(IM_STATUS status)
+{
+    return status == IM_STATUS_SUCCESS || status == IM_STATUS_NOERROR;
+}
+
+void dma_buf_sync(int fd, uint64_t flags)
+{
+    if(fd < 0) {
+        return;
+    }
+    struct dma_buf_sync sync {};
+    sync.flags = flags;
+    (void)ioctl(fd, DMA_BUF_IOCTL_SYNC, &sync);
+}
+
+void align_even_rect(uint32_t src_w, uint32_t src_h,
+                     uint32_t* x, uint32_t* y, uint32_t* w, uint32_t* h)
+{
+    *x &= ~1u;
+    *y &= ~1u;
+    *w = (*w + 1u) & ~1u;
+    *h = (*h + 1u) & ~1u;
+    if(*x + *w > src_w) {
+        *w = (src_w - *x) & ~1u;
+    }
+    if(*y + *h > src_h) {
+        *h = (src_h - *y) & ~1u;
+    }
+}
+
+bool rga_process(rga_buffer_handle_t src_handle, int src_w, int src_hgt,
+                 int src_fmt, const im_rect& src_rect,
+                 rga_buffer_handle_t dst_handle, int dst_w, int dst_hgt,
+                 int dst_fmt)
+{
+    rga_buffer_t src = wrapbuffer_handle(
+        src_handle, src_w, src_hgt, src_fmt, src_w, src_hgt);
+    rga_buffer_t dst = wrapbuffer_handle(
+        dst_handle, dst_w, dst_hgt, dst_fmt, dst_w, dst_hgt);
+    rga_buffer_t pat{};
+    const im_rect dst_rect{0, 0, dst_w, dst_hgt};
+    const im_rect pat_rect{};
+    IM_STATUS st = imcheck(src, dst, src_rect, dst_rect);
+    if(!rga_status_ok(st)) {
+        UPC_LOG_XFR_SERVICE(Warn,
+            "3mf thumbnail rga imcheck failed st=%d (%s) src=%dx%d crop=%d,%d %dx%d dst=%dx%d",
+            st, imStrError(st), src_w, src_hgt,
+            src_rect.x, src_rect.y, src_rect.width, src_rect.height,
+            dst_w, dst_hgt);
+        return false;
+    }
+    st = improcess(src, dst, pat, src_rect, dst_rect, pat_rect, IM_SYNC);
+    if(!rga_status_ok(st)) {
+        UPC_LOG_XFR_SERVICE(Warn,
+            "3mf thumbnail rga improcess failed st=%d (%s) src=%dx%d dst=%dx%d",
+            st, imStrError(st), src_w, src_hgt, dst_w, dst_hgt);
+        return false;
+    }
+    return true;
+}
+
+/**
+ * 抽点后的 RGBA 拷进 dma32，用 importbuffer_fd 交给 RGA。
+ * 禁止 wrapbuffer_virtualaddr：RGA2 无 IOMMU，普通堆虚地址会整进程退出。
+ */
+struct RgaThumbSource {
+    upc_ipc::DmaHeapBuffer dma{};
+    rga_buffer_handle_t handle = 0;
+    uint32_t width = 0;
+    uint32_t height = 0;
+
+    ~RgaThumbSource()
+    {
+        close();
+    }
+
+    void close()
+    {
+        if(handle != 0) {
+            releasebuffer_handle(handle);
+            handle = 0;
+        }
+        upc_ipc::dma_heap_free(dma);
+        width = 0;
+        height = 0;
+    }
+
+    bool import(const DecodedPng& src)
+    {
+        close();
+        if(src.width == 0 || src.height == 0 ||
+           src.width > static_cast<uint32_t>(INT_MAX) ||
+           src.height > static_cast<uint32_t>(INT_MAX)) {
+            return false;
+        }
+        const size_t bytes = static_cast<size_t>(src.width) * src.height * 4u;
+        if(src.rgba.size() < bytes) {
+            return false;
+        }
+        if(!upc_ipc::dma_heap_alloc(bytes, dma, upc_ipc::DmaHeapUsage::RgaDevice)) {
+            UPC_LOG_XFR_SERVICE(Warn,
+                "3mf thumbnail rga src dma_heap alloc failed bytes=%zu (no RGA-safe heap)",
+                bytes);
+            return false;
+        }
+        dma_buf_sync(dma.fd, DMA_BUF_SYNC_START | DMA_BUF_SYNC_WRITE);
+        std::memcpy(dma.va, src.rgba.data(), bytes);
+        dma_buf_sync(dma.fd, DMA_BUF_SYNC_END | DMA_BUF_SYNC_WRITE);
+
+        handle = importbuffer_fd(dma.fd, static_cast<int>(bytes));
+        if(handle == 0) {
+            UPC_LOG_XFR_SERVICE(Warn,
+                "3mf thumbnail importbuffer_fd failed bytes=%zu heap=%s",
+                bytes, dma.heap_path ? dma.heap_path : "?");
+            close();
+            return false;
+        }
+        width = src.width;
+        height = src.height;
+        UPC_LOG_XFR_SERVICE(Info,
+            "3mf thumbnail RGA src %ux%u heap=%s",
+            static_cast<unsigned>(width), static_cast<unsigned>(height),
+            dma.heap_path ? dma.heap_path : "?");
+        return true;
+    }
+
+    bool render(uint32_t dst_w, uint32_t dst_h, std::vector<uint8_t>* rgb565)
+    {
+        if(handle == 0 || dst_w == 0 || dst_h == 0 ||
+           dst_w > static_cast<uint32_t>(INT_MAX) ||
+           dst_h > static_cast<uint32_t>(INT_MAX)) {
+            return false;
+        }
+        uint32_t crop_x = 0;
+        uint32_t crop_y = 0;
+        uint32_t crop_w = 0;
+        uint32_t crop_h = 0;
+        cover_rect(width, height, dst_w, dst_h,
+                   &crop_x, &crop_y, &crop_w, &crop_h);
+        align_even_rect(width, height, &crop_x, &crop_y, &crop_w, &crop_h);
+        if(crop_w < 2u || crop_h < 2u) {
+            return false;
+        }
+
+        const size_t dst_bytes = static_cast<size_t>(dst_w) * dst_h * 2u;
+        upc_ipc::DmaHeapBuffer dst_dma{};
+        if(!upc_ipc::dma_heap_alloc(dst_bytes, dst_dma,
+                                    upc_ipc::DmaHeapUsage::RgaDevice)) {
+            UPC_LOG_XFR_SERVICE(Warn,
+                "3mf thumbnail rga dst dma_heap alloc failed bytes=%zu",
+                dst_bytes);
+            return false;
+        }
+        rga_buffer_handle_t dst_hnd =
+            importbuffer_fd(dst_dma.fd, static_cast<int>(dst_bytes));
+        if(dst_hnd == 0) {
+            UPC_LOG_XFR_SERVICE(Warn,
+                "3mf thumbnail dest importbuffer_fd failed bytes=%zu heap=%s",
+                dst_bytes, dst_dma.heap_path ? dst_dma.heap_path : "?");
+            upc_ipc::dma_heap_free(dst_dma);
+            return false;
+        }
+
+        const im_rect crop{
+            static_cast<int>(crop_x), static_cast<int>(crop_y),
+            static_cast<int>(crop_w), static_cast<int>(crop_h)};
+        const bool two_pass =
+            crop_w > dst_w * kRgaMaxScale || crop_h > dst_h * kRgaMaxScale;
+        bool ok = false;
+        if(!two_pass) {
+            ok = rga_process(handle,
+                             static_cast<int>(width), static_cast<int>(height),
+                             kRgaSrcFormat, crop,
+                             dst_hnd,
+                             static_cast<int>(dst_w), static_cast<int>(dst_h),
+                             kRgaDstFormat);
+        } else {
+            uint32_t mid_w = (crop_w + kRgaMaxScale - 1u) / kRgaMaxScale;
+            uint32_t mid_h = (crop_h + kRgaMaxScale - 1u) / kRgaMaxScale;
+            mid_w = std::max(dst_w, (mid_w + 1u) & ~1u);
+            mid_h = std::max(dst_h, (mid_h + 1u) & ~1u);
+            const size_t mid_bytes = static_cast<size_t>(mid_w) * mid_h * 2u;
+            upc_ipc::DmaHeapBuffer mid_dma{};
+            if(!upc_ipc::dma_heap_alloc(mid_bytes, mid_dma,
+                                        upc_ipc::DmaHeapUsage::RgaDevice)) {
+                UPC_LOG_XFR_SERVICE(Warn,
+                    "3mf thumbnail rga mid dma_heap alloc failed bytes=%zu",
+                    mid_bytes);
+            } else {
+                rga_buffer_handle_t mid_hnd =
+                    importbuffer_fd(mid_dma.fd, static_cast<int>(mid_bytes));
+                if(mid_hnd == 0) {
+                    UPC_LOG_XFR_SERVICE(Warn,
+                        "3mf thumbnail mid importbuffer_fd failed bytes=%zu heap=%s",
+                        mid_bytes, mid_dma.heap_path ? mid_dma.heap_path : "?");
+                } else {
+                    const im_rect mid_full{
+                        0, 0,
+                        static_cast<int>(mid_w), static_cast<int>(mid_h)};
+                    ok = rga_process(handle,
+                                     static_cast<int>(width),
+                                     static_cast<int>(height),
+                                     kRgaSrcFormat, crop,
+                                     mid_hnd,
+                                     static_cast<int>(mid_w),
+                                     static_cast<int>(mid_h),
+                                     kRgaDstFormat) &&
+                         rga_process(mid_hnd,
+                                     static_cast<int>(mid_w),
+                                     static_cast<int>(mid_h),
+                                     kRgaDstFormat, mid_full,
+                                     dst_hnd,
+                                     static_cast<int>(dst_w),
+                                     static_cast<int>(dst_h),
+                                     kRgaDstFormat);
+                    releasebuffer_handle(mid_hnd);
+                }
+                upc_ipc::dma_heap_free(mid_dma);
+            }
+        }
+
+        if(ok) {
+            dma_buf_sync(dst_dma.fd, DMA_BUF_SYNC_START | DMA_BUF_SYNC_READ);
+            rgb565->assign(static_cast<const uint8_t*>(dst_dma.va),
+                           static_cast<const uint8_t*>(dst_dma.va) + dst_bytes);
+            dma_buf_sync(dst_dma.fd, DMA_BUF_SYNC_END | DMA_BUF_SYNC_READ);
+        }
+        releasebuffer_handle(dst_hnd);
+        upc_ipc::dma_heap_free(dst_dma);
+        return ok;
+    }
+};
+#endif
 
 void render_cpu(const DecodedPng& src, uint32_t dst_w, uint32_t dst_h,
                 std::vector<uint8_t>* rgb565)
@@ -184,51 +462,6 @@ void render_cpu(const DecodedPng& src, uint32_t dst_w, uint32_t dst_h,
     }
 }
 
-#if defined(UPC_XFR_HAS_RGA) && UPC_XFR_HAS_RGA
-bool rga_status_ok(IM_STATUS status)
-{
-    return status == IM_STATUS_SUCCESS || status == IM_STATUS_NOERROR;
-}
-
-bool render_rga(const DecodedPng& src, uint32_t dst_w, uint32_t dst_h,
-                std::vector<uint8_t>* rgb565)
-{
-    if(src.width > static_cast<uint32_t>(std::numeric_limits<int>::max()) ||
-       src.height > static_cast<uint32_t>(std::numeric_limits<int>::max()) ||
-       dst_w > static_cast<uint32_t>(std::numeric_limits<int>::max()) ||
-       dst_h > static_cast<uint32_t>(std::numeric_limits<int>::max())) {
-        return false;
-    }
-    uint32_t crop_x = 0;
-    uint32_t crop_y = 0;
-    uint32_t crop_w = 0;
-    uint32_t crop_h = 0;
-    cover_rect(src.width, src.height, dst_w, dst_h,
-               &crop_x, &crop_y, &crop_w, &crop_h);
-    rgb565->assign(static_cast<size_t>(dst_w) * dst_h * 2u, 0);
-
-    rga_buffer_t src_buf = wrapbuffer_virtualaddr(
-        const_cast<uint8_t*>(src.rgba.data()),
-        static_cast<int>(src.width), static_cast<int>(src.height),
-        RK_FORMAT_RGBA_8888);
-    rga_buffer_t dst_buf = wrapbuffer_virtualaddr(
-        rgb565->data(), static_cast<int>(dst_w), static_cast<int>(dst_h),
-        RK_FORMAT_RGB_565);
-    rga_buffer_t pat{};
-    const im_rect src_rect{
-        static_cast<int>(crop_x), static_cast<int>(crop_y),
-        static_cast<int>(crop_w), static_cast<int>(crop_h)};
-    const im_rect dst_rect{0, 0, static_cast<int>(dst_w), static_cast<int>(dst_h)};
-    const im_rect pat_rect{};
-    const IM_STATUS checked = imcheck(src_buf, dst_buf, src_rect, dst_rect);
-    if(!rga_status_ok(checked)) {
-        return false;
-    }
-    return rga_status_ok(
-        improcess(src_buf, dst_buf, pat, src_rect, dst_rect, pat_rect, IM_SYNC));
-}
-#endif
-
 bool write_rthm(const TransferThumbnailTarget& target,
                 const std::vector<uint8_t>& pixels,
                 std::string* error)
@@ -274,22 +507,56 @@ bool generate_transfer_thumbnail_triplet(
     if(!error) {
         return false;
     }
+    uint32_t decode_edge = 0;
+    for(const TransferThumbnailTarget& target : targets) {
+        decode_edge = std::max(decode_edge, std::max(target.width, target.height));
+    }
+    if(decode_edge == 0) {
+        *error = "invalid thumbnail target geometry";
+        return false;
+    }
+
     DecodedPng decoded;
-    if(!decode_png_rgba(png_path, &decoded, error)) {
+    if(!decode_png_rgba(png_path, decode_edge, &decoded, error)) {
         return false;
     }
 
     std::vector<std::string> created;
+#if defined(UPC_XFR_HAS_RGA) && UPC_XFR_HAS_RGA
+    /* 抽点后的图可以给 RGA，但必须走 dma32 + importbuffer_fd。
+     * wrapbuffer_virtualaddr 喂普通堆会整进程退出，与图大不大无关。 */
+    RgaThumbSource rga_src;
+    const bool rga_ready = rga_src.import(decoded);
+    if(!rga_ready) {
+        UPC_LOG_XFR_SERVICE(Warn,
+            "3mf thumbnail RGA src unavailable, CPU for all sizes png=%s src=%ux%u",
+            png_path.c_str(),
+            static_cast<unsigned>(decoded.width),
+            static_cast<unsigned>(decoded.height));
+    }
+#else
+    UPC_LOG_XFR_SERVICE(Info, "3mf thumbnail CPU png=%s src=%ux%u",
+                        png_path.c_str(),
+                        static_cast<unsigned>(decoded.width),
+                        static_cast<unsigned>(decoded.height));
+#endif
     for(const TransferThumbnailTarget& target : targets) {
         std::vector<uint8_t> pixels;
         bool rendered = false;
 #if defined(UPC_XFR_HAS_RGA) && UPC_XFR_HAS_RGA
-        rendered = render_rga(decoded, target.width, target.height, &pixels);
-        if(!rendered) {
-            UPC_LOG_XFR_SERVICE(Warn,
-                "3mf thumbnail RGA failed, fallback CPU png=%s dst=%ux%u",
-                png_path.c_str(), static_cast<unsigned>(target.width),
-                static_cast<unsigned>(target.height));
+        if(rga_ready) {
+            rendered = rga_src.render(target.width, target.height, &pixels);
+            if(rendered) {
+                UPC_LOG_XFR_SERVICE(Info,
+                    "3mf thumbnail RGA dst=%ux%u",
+                    static_cast<unsigned>(target.width),
+                    static_cast<unsigned>(target.height));
+            } else {
+                UPC_LOG_XFR_SERVICE(Warn,
+                    "3mf thumbnail RGA failed, CPU dst=%ux%u",
+                    static_cast<unsigned>(target.width),
+                    static_cast<unsigned>(target.height));
+            }
         }
 #endif
         if(!rendered) {

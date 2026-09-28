@@ -101,9 +101,13 @@
   `/userdata/Gcode/thumb/*_small.rthm`（72×72）、
   `*_large.rthm`（320×180）、`*_print.rthm`（100×100），绝对路径分别写入
   manifest 的 `thumb_small` / `thumb_large` / `thumb_print`。
-- PNG 解码使用 libpng，按 COVER 居中裁剪；有 librga 时优先由 RGA
-  缩放并转 RGB565，失败自动走 CPU。缺图、图片损坏或转换失败只记录告警，
-  G-code 仍正常导入，三个 manifest 字段留空。
+- PNG 解码使用 libpng，长边只抽到最大目标边（当前 320）。UI 只要
+  72 / 320×180 / 100，不保留源 PNG，也不按预览原图清晰度解码。
+  COVER 居中裁剪后优先走 RGA（dma32 + `importbuffer_fd`，禁止
+  `wrapbuffer_virtualaddr`：RK3568 RGA2 无 IOMMU，普通堆虚地址会整进程
+  退出）。超过 RGA2 的 8 倍缩放时先落到中间尺寸再出目标图；dma-heap /
+  导入 / 硬件失败回退 CPU。缺图、图片损坏或转换失败只记录告警，G-code
+  仍正常导入，三个 manifest 字段留空。
 - G-code、三份 RTHM 与 manifest 通过临时文件 + rename 提交；
   同名重传会替换旧资产。删除 Local 文件时同步删除对应 RTHM，
   删除范围仅开放 `/userdata/Gcode/thumb`。
