@@ -95,17 +95,6 @@ void VisualService::interrupt_cabin_for_legacy() {
 void VisualService::on_cabin_check_req(const middleware::Message& msg, bool door) {
     middleware::VisualCabinCheckReqPayload req{};
     if(!read_cabin_payload(msg,req)) return;
-    /* 底板图案在位检测已删除。基板有无改由 Glavo 粗测高度判断。 */
-    if(!door) {
-        middleware::VisualCabinCheckRspPayload unknown{};
-        unknown.session_id = req.session_id;
-        unknown.request_id = req.request_id;
-        UPC_LOG_VISUAL_SERVICE(Info,
-            "plate pattern inspect removed session=%u request=%u",
-            req.session_id, req.request_id);
-        send_cabin_rsp(false, unknown);
-        return;
-    }
     // Complete the previous pending reply before deciding whether this is a duplicate.
     drain_cabin_result();
     bool active;

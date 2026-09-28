@@ -12,7 +12,7 @@
 | `lib/mcu_link.*` | TCP 运动下发 + 串口握手/传感器/换层 Snap 触发；RX 侧解析 MCU 报警单条上报（0xA3/0x20）与快照分片（0xA3/0x81），攒齐后并入 SOC 1120：slot 分片 `GLAVO_Alarm_Snapshot_Ntf`→UI，完整位图 `GLAVO_Alarm_Cloud_Snapshot_Ntf`→MQTT；单报 `GLAVO_Alarm_Report_Ntf` 双发 UI+MQTT。调试页 Alarm Inject 只向 MQTT 补单报。MCU 同源 1120 丢弃（SOC 氧门独占） |
 | `lib/print_video_notify.*` | 换层 Snap / 录像会话 → Media（经 UI Hub） |
 | `lib/optical_path_check.*` | 打印前光路检测状态机（独立线程，结果回灌 worker） |
-| `lib/glavo_service.*`（early print prep） | 起印前半段 Z/外门/内门独立线程，结果回灌 worker。底板图案在位检测已删除。有没有基板改在光路之后的测高粗测：`H-1 > 3` 为有板；否则开门并弹放板窗 |
+| `lib/glavo_service.*`（early print prep） | 起印前半段 Z/外门/内门独立线程。基板在位二选一：图案检测在光路前（默认开）；粗测 `H-1>3` 在光路后（默认关）。无板都弹放板窗 |
 | `lib/height_points.hpp` | 测高/校准共用 8 点、Z 零点偏置、门限、单点采样。单点等光斑盖住 Visual 的 8s 等新帧 + 1.5s 认斑 |
 | `lib/height_lut_2d.*` | 8 点二维高度 LUT |
 | `lib/height_calibration.*` | 调试页高度校准（关舱灯 + Red_On → 回零先下降 20mm → 写 LUT → 开舱灯，红光保持） |
@@ -53,7 +53,7 @@ UI → GlavoService（工作线程）→ ParserManager → RingBuffer → McuLin
 | `Fs_Delete_Ntf` | 删除 Local 文件（磁盘 + config.json） |
 | `UI_Print_Prepare_Req` | 轻量预处理（USB 复制；清单无 `layer_count` 时才单趟扫 `M3000`；打开解析器并写 config.json）。已有总层数时不数行、不把 `get_total_lines()` 写回 `line_count`；Start 不再补扫 |
 | `UI_Parser_Exit_Ntf` | 取消解析（stop_parse + 清会话） |
-| `UI_Print_Start_Req` | 置打印态 → **起印前半段独立线程**（默认 Z→−10；**Keep Z Position** 开则保持当前高度 → 外门闸门 → 关内门套件；不堵 worker）→ 光路（独立线程）→ 测高（独立线程；**Keep Z 开则整段跳过**）。测高回零后的粗测在 `plate_present_on_` 开时判断有没有基板：`H-1 > 3` 继续调平，否则弹放板窗，确认后再测一次。然后正式解析 + 首层参考图 + `begin_sending` → 串口氧门 → 首层视觉比对。TCP 未连则 `TcpOffline` 拒绝。**Keep Z 开时：从置打印态到会话结束，任何 Z 串口运动一律丢弃** |
+| `UI_Print_Start_Req` | 置打印态 → **起印前半段**（Z→−10 / 外门 / 关内门 → **图案在位**，默认开）→ 光路 → 测高（**Plate by Height** 开时粗测 `H-1>3` 判断在位，默认关）。两种在位互斥，无板都弹放板窗。Keep Z 开则整段测高跳过。 |
 | ↑ 起印失败 | 打印态在 `launch_print_from_prepared` 最前面就置（检测那十几秒 UI 已在打印页），所以「运动还没开始就失败」的分支**一律走 `abort_print_start()`** 回滚，否则 UI 停在打印页 0%；失败时 SOC 舱灯全开，并按 Manual Top 路径把 Z 绝对回 **1.00 mm**（已在 Home 则空操作）。**Keep Z Position** 开则不发这次回零 |
 | `UI_Print_Terminate_Req` | 外门确认/起印前半段线程/关内门套件/光路/测高/开扫前 Prepare，以及尚未 `Ready` 的氧门/首层：打断挂起、回红光安全态，**先** `TerminateDone` 让 UI 进结束页，再发 Z 绝对到 **−10 mm**（`send_z_goto_abs`，不等到位）。**Keep Z Position** 开则这一步不发。准备线程等待可被 `print_prep_abort_` 立刻打断。已 `Ready` 出光后则 `stop_parse` + `request_terminate` + `on_print_abort`，不再动 Z。终止时内门保持当前态 |
 | `UI_Print_Pause_Req` | `set_user_dispatch_paused(true)`，仅停 TCP 运动下发 |

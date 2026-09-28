@@ -708,6 +708,10 @@ enum class MsgType : uint32_t {
     APP_Transfer_Demo_Prep_Rsp,           /**< DoorResultPayload：外门已开才 ok=1 */
     UI_Transfer_Demo_Confirm_Req,         /**< Empty：确认放入后开内门，再发转运串口 */
     APP_Transfer_Demo_Confirm_Rsp,        /**< DoorResultPayload：内门已开且串口已发出才 ok=1 */
+    /* 光路后用粗测高度判断基板在位（与图案判断互斥；枚举只准末尾追加） */
+    UI_Debug_Plate_By_Height_Set_Ntf,     /**< DebugOnOffPayload：on=1 粗测 H-1>3 判断在位（默认关） */
+    UI_Debug_Plate_By_Height_Get_Ntf,     /**< Empty：查询高度在位判断开关 */
+    GLAVO_Debug_Plate_By_Height_Ntf,      /**< DebugOnOffPayload：回读高度在位判断开关 */
 };
 
 enum class MsgPriority : uint8_t {

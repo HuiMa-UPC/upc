@@ -253,6 +253,15 @@ void DebugMsgProxy::init()
         }));
 
     subs_.push_back(bus.subscribe(
+        middleware::MsgType::GLAVO_Debug_Plate_By_Height_Ntf, middleware::ModuleId::UI,
+        [this](const middleware::Message& msg) {
+            middleware::DebugOnOffPayload p{};
+            if(plate_by_height_cb_ && read_inline_pod(msg, p)) {
+                plate_by_height_cb_(p.on != 0);
+            }
+        }));
+
+    subs_.push_back(bus.subscribe(
         middleware::MsgType::GLAVO_Debug_Soc_Led_Ntf, middleware::ModuleId::UI,
         [this](const middleware::Message& msg) {
             middleware::DebugSocLedStatePayload p{};
@@ -787,6 +796,23 @@ void DebugMsgProxy::send_plate_present_set(bool on)
 void DebugMsgProxy::request_plate_present_state()
 {
     publish_empty(middleware::MsgType::UI_Debug_Plate_Present_Get_Ntf);
+}
+
+void DebugMsgProxy::send_plate_by_height_set(bool on)
+{
+    middleware::DebugOnOffPayload p{};
+    p.on = on ? 1 : 0;
+    publish_pod(middleware::MsgType::UI_Debug_Plate_By_Height_Set_Ntf, p);
+}
+
+void DebugMsgProxy::request_plate_by_height_state()
+{
+    publish_empty(middleware::MsgType::UI_Debug_Plate_By_Height_Get_Ntf);
+}
+
+void DebugMsgProxy::register_plate_by_height(DebugPlatePresentCb cb)
+{
+    plate_by_height_cb_ = std::move(cb);
 }
 
 void DebugMsgProxy::send_soc_led_set(uint8_t channel, bool on)
