@@ -27,6 +27,7 @@ namespace upc::media {
 namespace {
 
 constexpr uint64_t kStartRetryMs = 1000;
+constexpr uint64_t kRtspListenRetryMs = 2000;
 constexpr int64_t kPendingReclaimTimeoutSec = 30 * 60;
 
 /** 初始化当前目录布局（不再兼容旧路径迁移）。 */
@@ -133,14 +134,22 @@ void MediaService::shutdown()
 void MediaService::tick()
 {
     const uint64_t now = monotonic_ms();
-    std::lock_guard<std::mutex> lock(state_mtx_);
-    if(stream_up_) {
-        return;
+    bool stream_up = false;
+    {
+        std::lock_guard<std::mutex> lock(state_mtx_);
+        stream_up = stream_up_;
+        if(!stream_up_) {
+            if(start_req_sent_ && now - last_start_req_ms_ < kStartRetryMs) {
+                return;
+            }
+            send_stream_start_req();
+            return;
+        }
     }
-    if(start_req_sent_ && now - last_start_req_ms_ < kStartRetryMs) {
-        return;
+    /* 相机已就绪：IPv4 8554 若因 TIME_WAIT 没听上，在这里重试，不必重启整机。 */
+    if(local_rtsp_desired_ && !local_rtsp_.active()) {
+        apply_local_rtsp_desired();
     }
-    send_stream_start_req();
 }
 
 void MediaService::subscribe_messages()
@@ -381,6 +390,18 @@ void MediaService::on_stream_start_rsp(const middleware::Message& msg)
 void MediaService::apply_local_rtsp_desired()
 {
     if(!local_rtsp_desired_ || local_rtsp_.active()) {
+        return;
+    }
+    const uint64_t now = monotonic_ms();
+    if(last_rtsp_listen_retry_ms_ != 0 &&
+       now - last_rtsp_listen_retry_ms_ < kRtspListenRetryMs) {
+        return;
+    }
+    last_rtsp_listen_retry_ms_ = now;
+    if(!local_rtsp_.init(local_rtsp_port())) {
+        UPC_LOG_MEDIA_SERVICE_TO(MediaRtsp, Warn,
+            "local_rtsp IPv4 listen not ready, will retry");
+        publish_local_rtsp_state();
         return;
     }
     if(!local_rtsp_.start()) {
@@ -970,9 +991,9 @@ void MediaService::handle_local_rtsp_set(const middleware::Message& msg)
             h264_encoder_.set_stream_geometry(
                 stream_width_, stream_height_, stream_fps_);
         }
-        if(!local_rtsp_.start()) {
-            UPC_LOG_MEDIA_SERVICE_TO(MediaRtsp, Warn, "local_rtsp on failed");
-        }
+        last_rtsp_listen_retry_ms_ = 0;
+        apply_local_rtsp_desired();
+        return;
     } else {
         local_rtsp_.stop();
     }

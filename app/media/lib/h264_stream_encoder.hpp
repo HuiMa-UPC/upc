@@ -38,10 +38,13 @@ public:
      * 返回 false 表示该路已失效（如管道断开），Encoder 会摘掉它并回调 ErrorCb。
      * 禁止在本回调内调用 remove_sink()（会自等死锁）。
      *
-     * pts_us 是**采帧时刻**的墙钟微秒，同一输入帧产生的所有包共用同一值：
-     * MPP 可能把一帧拆成多个包（EACH_IDR 下参数集常自成一包），若各包各自
-     * 取时刻，live555 会因 presentation time 不同而误判 AU 边界、marker bit
-     * 置错，客户端表现为 "missing picture in access unit"。
+     * pts_us 是本帧的 presentation time（墙钟微秒），同一输入帧产生的所有包
+     * 共用同一值：MPP 可能把一帧拆成多个包（EACH_IDR 下参数集常自成一包），
+     * 若各包各自取时刻，live555 会误判 AU 边界，客户端报
+     * "missing picture in access unit"。
+     *
+     * 时间轴按**已编码帧**以 1/fps 递增，而不是每帧墙钟。latest-wins 丢帧后
+     * 若把采帧时刻直接当 pts，播放器会空等缺口（几十到上百毫秒），观感卡顿。
      */
     using PacketCb = std::function<bool(const uint8_t* annexb, size_t len,
                                         bool keyframe, int64_t pts_us)>;
@@ -63,7 +66,7 @@ public:
 
     /**
      * 注册一路 sink。sink 数 0→1 时打开 MPP 并启动 worker。
-     * 码率固定为 CAMERA_PRINT_H264_BITRATE，不随 sink 变化。
+     * 码率固定为 UPC_LIVE_H264_BITRATE，不随 sink 变化。
      * @return sink 句柄；几何未知或 MPP 打不开返回 -1。
      */
     int add_sink(PacketCb on_packet, ErrorCb on_error, const SinkOptions& opt);
@@ -91,6 +94,9 @@ public:
 
     /** 当前是否已有 sink（即编码会话是否活跃）。 */
     [[nodiscard]] bool active() const;
+
+    /** 当前编码帧率（开流 IPC 写入）；给 RTSP 填一帧时长。 */
+    [[nodiscard]] uint32_t stream_fps() const;
 
     /**
      * 遍历 Annex-B 码流中的 NAL，回调收到的是**不含起始码**的裸 NAL。
@@ -123,7 +129,7 @@ private:
     /**
      * 编码一帧并分发给 snapshot 出来的 sink 列表。
      * 锁外执行：MPP put/get 与各 sink 回调都可能阻塞。
-     * @param pts_us 本帧采帧时刻，透传给所有 sink。
+     * @param pts_us 本帧 paced presentation time，透传给所有 sink。
      * @param failed 出参，收集投递失败的 sink。
      * @param out_bytes 出参，本帧编码输出的总字节数（心跳统计用）。
      * @return false 表示 MPP 自身失败（编码器级故障，应停整个会话）。
@@ -158,7 +164,8 @@ private:
     std::vector<uint8_t> pending_nv12_;   /**< 单槽最新帧（紧凑 NV12）。 */
     uint32_t pending_w_ = 0;
     uint32_t pending_h_ = 0;
-    int64_t  pending_pts_us_ = 0;         /**< 单槽帧的采帧时刻（墙钟微秒）。 */
+    int64_t  pending_pts_us_ = 0;         /**< 单槽帧的 paced pts（墙钟微秒）。 */
+    int64_t  emit_pts_us_ = 0;            /**< 上一帧已分配的 pts；0=尚未分配。 */
     uint32_t dropped_ = 0;                /**< 因单槽覆盖而丢弃的旧帧计数。 */
 
     /* 运行期心跳统计：故障时靠这几个计数是否还在涨定位断点。 */

@@ -59,6 +59,7 @@ private:
      * 按 local_rtsp_desired_ 拉起本地 RTSP。
      * 相机流就绪后调用：开流前编码几何未知，start() 必失败，故上电默认开启
      * 只能推迟到这里；已在运行则跳过（相机看门狗重启不会打断在连客户端）。
+     * IPv4 监听因 TIME_WAIT 失败时由 tick() 限频重试 init()。
      */
     void apply_local_rtsp_desired();
     /** 向 UI 回报本地 RTSP Server 实际开关状态（开启失败时为 0）。 */
@@ -189,6 +190,7 @@ private:
     /** 本地 RTSP 的期望状态：上电取 UPC_LOCAL_RTSP_AUTO_START，之后跟随调试页开关。
      *  与 active() 分开记，才能在相机流恢复后重建用户真正想要的状态。 */
     bool local_rtsp_desired_ = (UPC_LOCAL_RTSP_AUTO_START != 0);
+    uint64_t last_rtsp_listen_retry_ms_ = 0;
 };
 
 } // namespace upc::media

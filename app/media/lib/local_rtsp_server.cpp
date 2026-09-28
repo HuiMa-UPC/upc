@@ -13,6 +13,7 @@
 #include <ifaddrs.h>
 #include <net/if.h>
 #include <sys/socket.h>
+#include <unistd.h>
 
 #if defined(UPC_MEDIA_HAS_LIVE555) && UPC_MEDIA_HAS_LIVE555
 #include <liveMedia.hh>
@@ -23,10 +24,9 @@ namespace upc::media {
 
 namespace {
 
-#if UPC_MEDIA_LOG_STREAM_STAT
 /**
  * 墙钟微秒，仅供心跳日志计时。
- * 帧的 presentation time 由编码器在采帧时打好后透传，不在本文件取时刻。
+ * 帧的 presentation time 由编码器按 1/fps 打好后透传，不在本文件取时刻。
  */
 int64_t now_us()
 {
@@ -34,7 +34,6 @@ int64_t now_us()
         std::chrono::duration_cast<std::chrono::microseconds>(
             std::chrono::system_clock::now().time_since_epoch()).count());
 }
-#endif
 
 /** WiFi 接口名；与 `wifi_manager` 的 `UPC_WIFI_IFACE` 约定保持一致。 */
 const char* wifi_iface_name()
@@ -88,7 +87,7 @@ int iface_rank(const char* name)
 namespace {
 
 /** SDP 中声明的估计码率（kbps）；仅供客户端参考。 */
-constexpr unsigned kEstBitrateKbps = CAMERA_PRINT_H264_BITRATE / 1000u;
+constexpr unsigned kEstBitrateKbps = UPC_LIVE_H264_BITRATE / 1000u;
 
 /**
  * 把 live555 的诊断输出接进 rs_log。
@@ -209,7 +208,13 @@ public:
         std::memcpy(fTo, nal.data.data(), fFrameSize);
         fPresentationTime.tv_sec = static_cast<time_t>(nal.pts_us / 1000000);
         fPresentationTime.tv_usec = static_cast<suseconds_t>(nal.pts_us % 1000000);
-        fDurationInMicroseconds = 0;
+        /* 只给图像片填时长。SPS/PPS 填 0，避免 DiscreteFramer 把参数集
+         * 也按一帧间隔往外拖。 */
+        const uint8_t nal_type = nal.data.empty()
+            ? 0
+            : static_cast<uint8_t>(nal.data[0] & 0x1f);
+        fDurationInMicroseconds =
+            (nal_type == 1 || nal_type == 5) ? owner_->frame_duration_us() : 0;
         FramedSource::afterGetting(this);
     }
 
@@ -366,18 +371,49 @@ protected:
     }
 };
 
-/** 除了改用 TcpOnlyClientSession，其余行为与 RTSPServer 一致。 */
+/**
+ * 除了改用 TcpOnlyClientSession，其余行为与 RTSPServer 一致。
+ *
+ * Snowpath / VLC 走 IPv4。live555 默认「IPv4 或 IPv6 有一个成功就算起来」，
+ * 上一轮进程退出后 8554 会在 TIME_WAIT：IPv4 bind 失败、IPv6 仍成功，
+ * ss 只剩 *:8554，局域网直连被拒。因此 IPv4 是硬条件；IPv6 可有可无。
+ */
 class TcpOnlyRtspServer : public RTSPServer {
 public:
-    static TcpOnlyRtspServer* createNew(UsageEnvironment& env, Port port)
+    static TcpOnlyRtspServer* createNew(UsageEnvironment& env, uint16_t host_port)
     {
         /* setUpOurSocket 取 Port&（端口传 0 时会回填实际端口），故不能传临时量。 */
-        int socket_v4 = setUpOurSocket(env, port, AF_INET);
-        int socket_v6 = setUpOurSocket(env, port, AF_INET6);
-        if(socket_v4 < 0 && socket_v6 < 0) {
+        constexpr int kIpv4Tries = 8;
+        constexpr useconds_t kIpv4RetryUs = 250000;
+        const Port listen_port(host_port);
+        int socket_v4 = -1;
+        for(int i = 0; i < kIpv4Tries; ++i) {
+            Port bind_port(host_port);
+            socket_v4 = setUpOurSocket(env, bind_port, AF_INET);
+            if(socket_v4 >= 0) {
+                break;
+            }
+            UPC_LOG_MEDIA_SERVICE_TO(MediaRtsp, Warn,
+                "local_rtsp IPv4 listen :%u failed try=%d/%d — %s",
+                static_cast<unsigned>(host_port),
+                i + 1, kIpv4Tries, env.getResultMsg());
+            if(i + 1 < kIpv4Tries) {
+                usleep(kIpv4RetryUs);
+            }
+        }
+        if(socket_v4 < 0) {
+            UPC_LOG_MEDIA_SERVICE_TO(MediaRtsp, Error,
+                "local_rtsp IPv4 listen :%u required (LAN clients are IPv4)",
+                static_cast<unsigned>(host_port));
             return nullptr;
         }
-        return new TcpOnlyRtspServer(env, socket_v4, socket_v6, port);
+        Port v6_port(host_port);
+        const int socket_v6 = setUpOurSocket(env, v6_port, AF_INET6);
+        if(socket_v6 < 0) {
+            UPC_LOG_MEDIA_SERVICE_TO(MediaRtsp, Info,
+                "local_rtsp IPv6 listen skipped — %s", env.getResultMsg());
+        }
+        return new TcpOnlyRtspServer(env, socket_v4, socket_v6, listen_port);
     }
 
 protected:
@@ -393,8 +429,12 @@ protected:
     }
 
 private:
-    /** 与 RTSPServer::createNew 的默认值一致：超时无 RTSP/RTCP 交互则回收会话。 */
-    static constexpr unsigned kReclamationSeconds = 65;
+    /**
+     * 0 = 不按 RTCP RR 回收会话。
+     * 交织 TCP 上不少客户端（Snowpath）不规律发 RR，默认 65s 会被当成死连接拆掉。
+     * 本路强制 TCP，对端断开时 socket 可读到 EOF，不必靠 RR 探活。
+     */
+    static constexpr unsigned kReclamationSeconds = 0;
 };
 
 /** trigger 回调：有新帧待投递。 */
@@ -513,12 +553,28 @@ bool LocalRtspServer::pop_nal(NalUnit& out)
  *
  * reuseFirstSource=True 下 source 只在**首个**客户端 SETUP 时创建，
  * 故这条日志等价于"开始有人拉流"；后续客户端复用同一 source，不再打点。
+ *
+ * 上电后编码器一直在跑，队列里可能已经堆了数秒的半个 GOP。播放器若收到的
+ * 第一帧不是 IDR，会一直灰屏直到超时重连（板端日志里就是十几秒一对
+ * started/ended）。所以接入时清空队列、等下一个 IDR 再送。
  */
 void LocalRtspServer::attach_source(void* source)
 {
     current_source_ = source;
-    has_client_.store(true);
-    UPC_LOG_MEDIA_SERVICE_TO(MediaRtsp, Info, "local_rtsp client stream started");
+    H264StreamEncoder* encoder = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(mtx_);
+        nal_queue_.clear();
+        drop_until_idr_ = true;
+        encoder = encoder_;
+        /* 先对齐 IDR 再亮灯：避免 encoder 线程在窗口里塞进一帧 P。 */
+        has_client_.store(true);
+    }
+    if(encoder) {
+        encoder->request_idr();
+    }
+    UPC_LOG_MEDIA_SERVICE_TO(MediaRtsp, Info,
+        "local_rtsp client stream started — waiting for IDR");
 }
 
 /** source 析构时解绑（事件循环线程）：最后一个客户端离开或 session 被撤下。 */
@@ -527,6 +583,7 @@ void LocalRtspServer::detach_source(void* source)
     if(current_source_ == source) {
         current_source_ = nullptr;
         has_client_.store(false);
+        clear_queue();
         UPC_LOG_MEDIA_SERVICE_TO(MediaRtsp, Info, "local_rtsp client stream ended");
     }
 }
@@ -547,6 +604,12 @@ bool LocalRtspServer::copy_sps_pps(std::vector<uint8_t>& sps,
         encoder = encoder_;
     }
     return encoder && encoder->copy_sps_pps(sps, pps);
+}
+
+unsigned LocalRtspServer::frame_duration_us() const
+{
+    std::lock_guard<std::mutex> lock(mtx_);
+    return frame_duration_us_;
 }
 
 /** 清空 NAL 队列。 */
@@ -586,7 +649,7 @@ bool LocalRtspServer::init(uint16_t port)
         return false;
     }
     /* 强制 RTP-over-TCP：UDP 的 SETUP 会被回 461，客户端自行改用 TCP 重试。 */
-    RTSPServer* server = TcpOnlyRtspServer::createNew(*env, Port(port));
+    RTSPServer* server = TcpOnlyRtspServer::createNew(*env, port);
     if(!server) {
         UPC_LOG_MEDIA_SERVICE_TO(MediaRtsp, Error, "local_rtsp listen :%u fail — %s",
                               static_cast<unsigned>(port), env->getResultMsg());
@@ -806,12 +869,17 @@ bool LocalRtspServer::start()
         UPC_LOG_MEDIA_SERVICE_TO(MediaRtsp, Error, "local_rtsp start fail: encoder not bound");
         return false;
     }
+    {
+        const uint32_t fps = std::max(1u, encoder->stream_fps());
+        std::lock_guard<std::mutex> lock(mtx_);
+        frame_duration_us_ = 1000000u / fps;
+    }
 
     /* 码率不指定：与云端推流共用编码器时沿用既有参数，独占时用板端默认。 */
     H264StreamEncoder::SinkOptions opt{};
     const int sink_id = encoder->add_sink(
-        [this](const uint8_t* annexb, size_t len, bool, int64_t pts_us) {
-            return on_encoded_packet(annexb, len, pts_us);
+        [this](const uint8_t* annexb, size_t len, bool keyframe, int64_t pts_us) {
+            return on_encoded_packet(annexb, len, keyframe, pts_us);
         },
         [this] { on_sink_dropped(); },
         opt);
@@ -826,6 +894,8 @@ bool LocalRtspServer::start()
         active_ = true;
         nal_queue_.clear();
         dropped_ = 0;
+        drop_events_ = 0;
+        drop_until_idr_ = true;
         stat_nal_in_ = 0;
         stat_nal_out_ = 0;
         stat_last_log_us_ = 0;
@@ -885,30 +955,83 @@ void LocalRtspServer::stop()
 /**
  * 编码器 sink 回调：拆 Annex-B 为裸 NAL 入队并唤醒事件循环。
  *
- * 队列满时丢最旧（实时优先）。始终返回 true：本地投递不会像管道那样断开，
- * 停流由 stop() 主动摘 sink 完成。
+ * 无人拉流时不入队，避免 PLAY 时把数秒半个 GOP 一次性灌给解码器。
+ * 队列满时整段丢到下一个 IDR（与云端 LiveRtspPusher 相同），不丢单个 NAL。
+ * 始终返回 true：本地投递不会像管道那样断开，停流由 stop() 主动摘 sink 完成。
  *
  * pts_us 由编码器在采帧时统一打戳并透传，本帧全部 NAL 共用；不可在此处
  * 各自取时刻，否则同一 AU 的 NAL 会带不同 presentation time，live555 据此
  * 判定 AU 边界与 marker bit，客户端会报 "missing picture in access unit"。
  */
 bool LocalRtspServer::on_encoded_packet(const uint8_t* annexb, size_t len,
-                                        int64_t pts_us)
+                                        bool keyframe, int64_t pts_us)
 {
     bool queued = false;
     {
         std::lock_guard<std::mutex> lock(mtx_);
-        if(!active_) {
+        if(!active_ || !has_client_.load()) {
             return true;
         }
+
+        /* 积压恢复 / 新客户端：整段丢到下一个 IDR。丢单包会给解码器送残缺
+         * NAL，灰屏会持续到下一个关键帧；GOP≈2s，最多丢两秒就能干净续上。
+         * EACH_IDR 下 SPS/PPS 常单独成包且 keyframe=false，对齐期间仍收下，
+         * 这样恢复后的第一帧是自包含的。 */
+        if(drop_until_idr_) {
+            if(!keyframe) {
+                bool kept_param = false;
+                H264StreamEncoder::for_each_nal(annexb, len,
+                    [this, pts_us, &kept_param](const uint8_t* nal, size_t nal_len) {
+                        if(nal_len == 0) {
+                            return;
+                        }
+                        const uint8_t type = static_cast<uint8_t>(nal[0] & 0x1f);
+                        if(type != 7 && type != 8) { /* SPS / PPS */
+                            return;
+                        }
+                        NalUnit unit;
+                        unit.data.assign(nal, nal + nal_len);
+                        unit.pts_us = pts_us;
+                        nal_queue_.push_back(std::move(unit));
+                        ++stat_nal_in_;
+                        kept_param = true;
+                    });
+                if(!kept_param) {
+                    ++dropped_;
+                }
+                return true;
+            }
+            drop_until_idr_ = false;
+            UPC_LOG_MEDIA_SERVICE_TO(MediaRtsp, Info,
+                "local_rtsp resumed at IDR dropped=%u", dropped_);
+        }
+
+        size_t incoming = 0;
+        H264StreamEncoder::for_each_nal(annexb, len,
+            [&incoming](const uint8_t*, size_t nal_len) {
+                if(nal_len > 0) {
+                    ++incoming;
+                }
+            });
+        if(incoming > 0 &&
+           nal_queue_.size() + incoming > UPC_LOCAL_RTSP_QUEUE_MAX) {
+            nal_queue_.clear();
+            ++drop_events_;
+            ++dropped_;
+            UPC_LOG_MEDIA_SERVICE_TO(MediaRtsp, Warn,
+                "local_rtsp send queue full (%u) — dropping to next IDR events=%u",
+                UPC_LOCAL_RTSP_QUEUE_MAX, drop_events_);
+            if(!keyframe) {
+                drop_until_idr_ = true;
+                return true;
+            }
+            /* 本包就是 IDR，队列已空，直接接着送。 */
+        }
+
         H264StreamEncoder::for_each_nal(annexb, len,
             [this, pts_us, &queued](const uint8_t* nal, size_t nal_len) {
                 if(nal_len == 0) {
                     return;
-                }
-                if(nal_queue_.size() >= UPC_LOCAL_RTSP_QUEUE_MAX) {
-                    nal_queue_.pop_front();
-                    ++dropped_;
                 }
                 NalUnit unit;
                 unit.data.assign(nal, nal + nal_len);
@@ -929,14 +1052,17 @@ bool LocalRtspServer::on_encoded_packet(const uint8_t* annexb, size_t len,
  * 每 5 秒打一行本地直播心跳。
  *
  * queue 持续贴近上限说明 live555 取不赢，端到端延迟会顶到队列容量对应的
- * 时长（默认 128 个 NAL、30fps 下约 4s）；in 涨而 out 不涨说明事件循环
- * 或客户端连接卡住了。调用前必须持有 mtx_。
+ * 时长（默认 48 个 NAL、约 1s），随后会整段丢到下一个 IDR；in 涨而 out
+ * 不涨说明事件循环或客户端连接卡住了。调用前必须持有 mtx_。
  *
- * 由 UPC_MEDIA_LOG_STREAM_STAT 控制；关闭时本函数为空，计数照常累加。
+ * 有客户端拉流时始终打点（不再受 UPC_MEDIA_LOG_STREAM_STAT 关闭），
+ * 方便对照「看起来卡」是队列积压还是编码跟不上。
  */
 void LocalRtspServer::maybe_log_stats_locked()
 {
-#if UPC_MEDIA_LOG_STREAM_STAT
+    if(!has_client_.load()) {
+        return;
+    }
     const int64_t now = now_us();
     if(stat_last_log_us_ == 0) {
         stat_last_log_us_ = now;
@@ -963,7 +1089,6 @@ void LocalRtspServer::maybe_log_stats_locked()
     stat_last_log_us_ = now;
     stat_last_in_ = stat_nal_in_;
     stat_last_out_ = stat_nal_out_;
-#endif /* UPC_MEDIA_LOG_STREAM_STAT */
 }
 
 /** 编码器摘除本路 sink（编码器级故障）：撤下 session 并复位开关。 */

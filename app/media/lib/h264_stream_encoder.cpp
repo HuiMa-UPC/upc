@@ -25,8 +25,8 @@ constexpr uint8_t kNalTypeSps = 7;
 constexpr uint8_t kNalTypePps = 8;
 
 /**
- * 墙钟微秒。用作帧的 presentation time 基准：live555 的 RTCP SR 要拿它
- * 换算 NTP 时间戳，故必须是墙钟而非单调钟。
+ * 墙钟微秒。直播 pts 从此钟起步再按 1/fps 递增；live555 的 RTCP SR 也要
+ * 拿它换算 NTP，故必须是墙钟而非单调钟。
  */
 int64_t now_us()
 {
@@ -73,6 +73,13 @@ bool H264StreamEncoder::active() const
 {
     std::lock_guard<std::mutex> lock(mtx_);
     return !sinks_.empty();
+}
+
+/** 当前编码帧率。 */
+uint32_t H264StreamEncoder::stream_fps() const
+{
+    std::lock_guard<std::mutex> lock(mtx_);
+    return fps_;
 }
 
 /** 取最近一次 IDR 的参数集；首个 IDR 之前返回 false。 */
@@ -160,7 +167,7 @@ bool H264StreamEncoder::scan_packet(const uint8_t* annexb, size_t len)
  * 注册一路 sink。
  *
  * 首个 sink 打开 MPP，后续 sink 沿用同一路码流。
- * 码率固定取 CAMERA_PRINT_H264_BITRATE，不接受按 sink 指定：改码率需重开
+ * 码率固定取 UPC_LIVE_H264_BITRATE，不接受按 sink 指定：改码率需重开
  * MPP，会打断在途的另一路。
  */
 int H264StreamEncoder::add_sink(PacketCb on_packet, ErrorCb on_error,
@@ -181,6 +188,7 @@ int H264StreamEncoder::add_sink(PacketCb on_packet, ErrorCb on_error,
         sps_.clear();
         pps_.clear();
         has_pending_ = false;
+        emit_pts_us_ = 0;
         pending_nv12_.clear();
         dropped_ = 0;
         if(!open_encoder_locked()) {
@@ -204,7 +212,7 @@ int H264StreamEncoder::add_sink(PacketCb on_packet, ErrorCb on_error,
     const uint32_t log_w = width_;
     const uint32_t log_h = height_;
     const uint32_t log_fps = fps_;
-    const uint32_t log_bps = CAMERA_PRINT_H264_BITRATE;
+    const uint32_t log_bps = UPC_LIVE_H264_BITRATE;
     lock.unlock();
 
     if(opt.request_idr_on_join) {
@@ -289,9 +297,8 @@ void H264StreamEncoder::on_frame_nv12(const uint8_t* src_y, const uint8_t* src_u
         upc::copy_nv12_tight(pending_nv12_.data(), src_y, src_uv, stride_y, w, h);
         pending_w_ = w;
         pending_h_ = h;
-        /* 采帧时刻打戳，而非编码完成时刻：后者会把编码耗时的抖动直接
-         * 灌进 presentation time，客户端为抹平抖动会加大缓冲、拉高延迟。 */
-        pending_pts_us_ = now_us();
+        /* pts 在 worker 取走时按 1/fps 分配，这里不打墙钟：latest-wins
+         * 丢帧后若用采帧时刻，播放器会空等缺口。 */
         has_pending_ = true;
         ++stat_in_frames_;
     }
@@ -305,11 +312,10 @@ void H264StreamEncoder::on_frame_nv12(const uint8_t* src_y, const uint8_t* src_u
  * in 涨而 enc 不涨说明卡在 MPP 或某个 sink 的投递回调里，两者都涨
  * 则说明编码链路正常，问题在下游传输。调用前必须持有 mtx_。
  *
- * 由 UPC_MEDIA_LOG_STREAM_STAT 控制；关闭时本函数为空，计数照常累加。
+ * 编码会话期间始终打点：对照 in/enc 即可判断是相机没送帧还是 MPP 跟不上。
  */
 void H264StreamEncoder::maybe_log_stats_locked()
 {
-#if UPC_MEDIA_LOG_STREAM_STAT
     const int64_t now = now_us();
     if(stat_last_log_us_ == 0) {
         stat_last_log_us_ = now;
@@ -339,7 +345,6 @@ void H264StreamEncoder::maybe_log_stats_locked()
     stat_last_in_ = stat_in_frames_;
     stat_last_enc_ = stat_enc_frames_;
     stat_last_bytes_ = stat_enc_bytes_;
-#endif /* UPC_MEDIA_LOG_STREAM_STAT */
 }
 
 /** join worker 并清除 started 标志；仅析构路径调用。 */
@@ -383,7 +388,23 @@ void H264StreamEncoder::worker_fn()
             nv12.swap(pending_nv12_);
             w = pending_w_;
             h = pending_h_;
-            pts_us = pending_pts_us_;
+            /* 按已编码帧 1/fps 递增。落后墙钟超过 200ms 才跳一次，避免
+             * 编码偶发卡住后延迟无限堆；超前则钳回，防止快于实时。 */
+            const int64_t now = now_us();
+            const int64_t period =
+                1000000 / static_cast<int64_t>(std::max(1u, fps_));
+            if(emit_pts_us_ == 0) {
+                emit_pts_us_ = now;
+            } else {
+                emit_pts_us_ += period;
+                if(now - emit_pts_us_ > 200000) {
+                    emit_pts_us_ = now;
+                } else if(emit_pts_us_ > now + period) {
+                    emit_pts_us_ = now;
+                }
+            }
+            pts_us = emit_pts_us_;
+            pending_pts_us_ = pts_us;
             has_pending_ = false;
             sinks = sinks_;
             ctx = mpp_ctx_;
@@ -428,7 +449,9 @@ void H264StreamEncoder::worker_fn()
 
 /**
  * 打开 RKMPP H.264 编码器（CBR，NV12/YUV420SP）。
- * GOP≈1s（gop=fps）且每个 IDR 都带 SPS/PPS，保证客户端中途接入可解码。
+ * GOP=1s：比 0.5s 少一半 I 帧突发，比 2s 更快抹掉运动残差（马赛克最多挂 1s）。
+ * CBR 只设 target 时 I 帧/大运动会被掐到极低 QP 上限，画面糊成一块；
+ * 给 1.5× 峰值，局域网 TCP 吃得下。中途接入靠 request_idr / EACH_IDR。
  * 调用前必须持有 mtx_。
  */
 bool H264StreamEncoder::open_encoder_locked()
@@ -461,7 +484,7 @@ bool H264StreamEncoder::open_encoder_locked()
 
     (void)mpi->control(ctx, MPP_ENC_GET_CFG, cfg);
     const int fps = static_cast<int>(std::max(1u, fps_));
-    const int bps = static_cast<int>(CAMERA_PRINT_H264_BITRATE);
+    const int bps = static_cast<int>(UPC_LIVE_H264_BITRATE);
     mpp_enc_cfg_set_s32(cfg, "prep:width", static_cast<int>(width_));
     mpp_enc_cfg_set_s32(cfg, "prep:height", static_cast<int>(height_));
     mpp_enc_cfg_set_s32(cfg, "prep:hor_stride", static_cast<int>(width_));
@@ -469,11 +492,13 @@ bool H264StreamEncoder::open_encoder_locked()
     mpp_enc_cfg_set_s32(cfg, "prep:format", MPP_FMT_YUV420SP);
     mpp_enc_cfg_set_s32(cfg, "rc:mode", MPP_ENC_RC_MODE_CBR);
     mpp_enc_cfg_set_s32(cfg, "rc:bps_target", bps);
+    /* 峰值留给 I 帧和镜头晃动，避免 CBR 把单帧掐出马赛克。 */
+    mpp_enc_cfg_set_s32(cfg, "rc:bps_max", bps + bps / 2);
+    mpp_enc_cfg_set_s32(cfg, "rc:bps_min", bps - bps / 4);
     mpp_enc_cfg_set_s32(cfg, "rc:fps_in_num", fps);
     mpp_enc_cfg_set_s32(cfg, "rc:fps_out_num", fps);
-    /* ~0.5s IDR（每秒两个）：客户端中途 PLAY 起图更快，丢包后恢复也更快，
-     * 代价是同码率下 I 帧占比翻倍、P 帧预算被摊薄。 */
-    mpp_enc_cfg_set_s32(cfg, "rc:gop", std::max(1, fps / 2));
+    /* 1s GOP：运动残差最多挂一秒。 */
+    mpp_enc_cfg_set_s32(cfg, "rc:gop", std::max(1, fps));
     (void)mpi->control(ctx, MPP_ENC_SET_CFG, cfg);
 
     /* 每个 IDR 都重发 SPS/PPS：live555 客户端中途接入必须拿到参数集。 */

@@ -106,13 +106,13 @@ middleware::RtspPushRspPayload LiveRtspPusher::start(
     start_writer_locked();
 
     /* 云端 max_bitrate_kbps 不再参与编码配置：直播与录像共用一路 MPP，
-     * 码率固定取板端 CAMERA_PRINT_H264_BITRATE。仅在下发值不同时记一笔，
+     * 码率固定取板端 UPC_LIVE_H264_BITRATE。仅在下发值不同时记一笔，
      * 便于对账云端策略与板端实际码率的差异。 */
     if(req.max_bitrate_kbps > 0 &&
-       req.max_bitrate_kbps * 1000u != CAMERA_PRINT_H264_BITRATE) {
+       req.max_bitrate_kbps * 1000u != UPC_LIVE_H264_BITRATE) {
         UPC_LOG_MEDIA_SERVICE_TO(MediaRtsp, Info,
             "live_rtsp cloud max_bitrate=%ukbps ignored — encoder fixed at %ubps",
-            req.max_bitrate_kbps, CAMERA_PRINT_H264_BITRATE);
+            req.max_bitrate_kbps, UPC_LIVE_H264_BITRATE);
     }
     H264StreamEncoder::SinkOptions opt{};
     sink_id_ = encoder_->add_sink(

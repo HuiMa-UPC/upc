@@ -1500,6 +1500,14 @@ void XfrService::on_print_ipc(const middleware::Message& msg)
             break;
         }
         case middleware::MsgType::APP_Print_Terminate_Rsp: {
+            /* 上一趟取消的迟到回包：新上传已把 phase 清成 Idle，不能再写回 canceled。 */
+            if (glavo_phase_ == GlavoPhase::Idle ||
+                glavo_phase_ == GlavoPhase::Finished) {
+                if (print_ctrl_wait_ == PrintCtrlWait::Canceled) {
+                    print_ctrl_got_ = true;
+                }
+                break;
+            }
             glavo_phase_ = GlavoPhase::Canceled;
             print_session_active_ = false;
             glavo_error_.clear();
@@ -1531,7 +1539,18 @@ void XfrService::on_print_ipc(const middleware::Message& msg)
                 return;
             }
             /* 清单只绑定 job_id。has_entry 会在开打落盘、结果页、finalize 多次出现，
-             * 不能当成打印结束，否则 Snowpath 会从 0% 直接 finished/100%。 */
+             * 不能当成打印结束，否则 Snowpath 会从 0% 直接 finished/100%。
+             * aborted 是上一趟取消后的异步收尾：新任务已经 printing/paused 时
+             * 绝不能盖回 canceled，否则 Snowpath 进度在走、状态仍显示「打印已取消」。 */
+            const bool live_print =
+                glavo_phase_ == GlavoPhase::Printing ||
+                glavo_phase_ == GlavoPhase::Paused;
+            if (p.aborted != 0 && live_print) {
+                UPC_LOG_XFR_SERVICE(Info,
+                    "print manifest aborted ignored (live job) dir=%s",
+                    p.frames_dir[0] ? p.frames_dir : "(none)");
+                break;
+            }
             if (p.has_entry != 0 && p.frames_dir[0] != '\0') {
                 active_frames_dir_ = p.frames_dir;
                 print_job_id_ = active_frames_dir_;

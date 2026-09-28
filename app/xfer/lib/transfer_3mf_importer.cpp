@@ -770,6 +770,9 @@ Transfer3mfImportResult Transfer3mfImporter::import_file(
 {
     std::lock_guard<std::mutex> import_lock(import_mu_);
 
+    UPC_LOG_XFR_SERVICE(Info, "3mf import begin package=%s path=%s",
+                        package_name.c_str(), package_path.c_str());
+
     std::error_code ec;
     const uint64_t archive_size = std::filesystem::file_size(package_path, ec);
     if(ec || archive_size == 0) {
@@ -783,6 +786,8 @@ Transfer3mfImportResult Transfer3mfImporter::import_file(
 
     std::vector<ZipEntry> entries;
     std::string detail;
+    UPC_LOG_XFR_SERVICE(Info, "3mf import zip-dir archive_bytes=%llu",
+                        static_cast<unsigned long long>(archive_size));
     if(!read_zip_directory(archive, archive_size, &entries, &detail)) {
         return fail(422, "3MF_INVALID_ARCHIVE", detail);
     }
@@ -813,10 +818,13 @@ Transfer3mfImportResult Transfer3mfImporter::import_file(
     const std::filesystem::path gcode_staged = importing_path(gcode_final);
     std::filesystem::remove(gcode_staged, ec);
 
+    UPC_LOG_XFR_SERVICE(Info, "3mf import extract-gcode entry=%s",
+                        gcode_entries.front()->name.c_str());
     if(!extract_entry(archive, archive_size, *gcode_entries.front(),
                       gcode_staged.string(), max_gcode_bytes_, &detail)) {
         return fail(422, "3MF_GCODE_EXTRACT_FAILED", detail);
     }
+    UPC_LOG_XFR_SERVICE(Info, "3mf import extract-gcode done");
 
     const uint64_t gcode_size = std::filesystem::file_size(gcode_staged, ec);
     if(ec || gcode_size == 0 || gcode_size > std::numeric_limits<uint32_t>::max()) {
@@ -838,6 +846,7 @@ Transfer3mfImportResult Transfer3mfImporter::import_file(
                        (std::filesystem::path(printable_name).stem().string() +
                         ".meta.json"));
     std::filesystem::remove(meta_staged, ec);
+    UPC_LOG_XFR_SERVICE(Info, "3mf import extract-meta");
     if(!extract_entry(archive, archive_size, *metadata_entry,
                       meta_staged.string(), kMaxMetadataJsonBytes, &detail)) {
         std::filesystem::remove(gcode_staged, ec);
@@ -882,17 +891,21 @@ Transfer3mfImportResult Transfer3mfImporter::import_file(
             for(const TransferThumbnailTarget& target : thumbnail_targets) {
                 std::filesystem::remove(target.path, ec);
             }
+            UPC_LOG_XFR_SERVICE(Info, "3mf import extract-thumb");
             if(!extract_entry(archive, archive_size, *thumbnail_entry,
                               png_staged.string(), kMaxThumbnailPngBytes,
                               &thumbnail_reason)) {
                 std::filesystem::remove(png_staged, ec);
-            } else if(!generate_transfer_thumbnail_triplet(
-                          png_staged.string(), thumbnail_targets, &thumbnail_reason)) {
-                std::filesystem::remove(png_staged, ec);
             } else {
-                /* PNG 只作解码缓存，RTHM 生成后立即删除。 */
-                std::filesystem::remove(png_staged, ec);
-                thumbnails_ready = true;
+                UPC_LOG_XFR_SERVICE(Info, "3mf import thumb-generate");
+                if(!generate_transfer_thumbnail_triplet(
+                          png_staged.string(), thumbnail_targets, &thumbnail_reason)) {
+                    std::filesystem::remove(png_staged, ec);
+                } else {
+                    /* PNG 只作解码缓存，RTHM 生成后立即删除。 */
+                    std::filesystem::remove(png_staged, ec);
+                    thumbnails_ready = true;
+                }
             }
         }
     }
