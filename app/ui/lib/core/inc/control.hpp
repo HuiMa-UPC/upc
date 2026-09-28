@@ -29,7 +29,8 @@ typedef enum {
     CONTROL_STATE_DOOR_OPENING,     /**< 未放入分支：PM2.5 检测 + 开门 loading */
     /**
      * 取件分支专用：门开之后的转运盒三步（装盒并抽出隔断板 → 转移工件 → 推入闸门），
-     * 走完即回 IDLE。仅在调试开关打开时插入，见 control_set_transfer_box_flow()。
+     * 走完即回 IDLE。转运盒开关打开（默认开）且不是自检阶段终止时才插入，
+     * 见 control_set_transfer_box_flow()。
      */
     CONTROL_STATE_TRANSFER_BOX,
     CONTROL_STATE_PREPARE_WAIT,     /**< 选文件后：预处理 loading */
@@ -186,6 +187,7 @@ void control_terminate_request(void);
 
 /* ---- 转运盒流程开关（设置页 Advanced Print / 调试页 Other → Print Gates） ----
  * 默认开：取件分支在门开之后插入转运盒三步；关闭则开门成功即回 IDLE。
+ * 自检阶段（Ready 之前）终止的取件不管开关都不插入：没出过光，舱里没有工件，只开门。
  * 纯 UI 本地标志（不发消息、不落盘），重启回到开。 */
 void control_set_transfer_box_flow(bool on);
 bool control_transfer_box_flow_enabled(void);

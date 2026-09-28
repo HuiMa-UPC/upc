@@ -248,12 +248,12 @@ uint32_t  g_plate_move_tick = 0;
 int       g_plate_ui_sig  = -1;
 lv_obj_t *g_s_val       = nullptr;
 lv_obj_t *g_s_step_ta   = nullptr;  /**< S 轴 Step 输入框（整数 mm，方向看 −/+ 钮） */
-lv_obj_t *g_s_minus     = nullptr;  /**< S 轴 − / + / 复位三钮，打印中锁住，见 apply_manual_lock() */
+lv_obj_t *g_s_minus     = nullptr;  /**< S 轴 − / + / 复位三钮，打印进行中锁住（出结果后放开），见 apply_manual_lock() */
 lv_obj_t *g_s_plus      = nullptr;
 lv_obj_t *g_s_home      = nullptr;
 lv_obj_t *g_d_val       = nullptr;
 lv_obj_t *g_d_step_ta   = nullptr;  /**< D 轴 Step 输入框（整数 °，负数反转） */
-lv_obj_t *g_d_send      = nullptr;  /**< D 轴 Send，打印中锁住 */
+lv_obj_t *g_d_send      = nullptr;  /**< D 轴 Send，打印进行中锁住（出结果后放开） */
 lv_obj_t *g_fan_btn     = nullptr;  /**< 风扇电源钮，亮灭跟 DebugMsgProxy::fan_on() */
 lv_obj_t *g_fan_state   = nullptr;  /**< 风机状态机 / 故障名 */
 lv_obj_t *g_fan_rpm     = nullptr;  /**< 风机实测转速 */
@@ -264,7 +264,7 @@ lv_obj_t *g_param_balance_ta = nullptr;
 lv_obj_t *g_ret_state   = nullptr;  /**< 回粉电机状态字 Auto / To A / To B */
 lv_obj_t *g_ret_mid     = nullptr;  /**< 回粉电机中间钮：自动时 ▷、送瓶期间 II */
 lv_obj_t *g_transfer_btn = nullptr; /**< Retrieve 卡的 Run：一键取件，与调试页 Transfer Demo 同一条；可点条件见 apply_plate_ui() */
-lv_obj_t *g_door_card   = nullptr;  /**< Inner Door 卡：打印进行中隐藏，出结果后显示但锁住 */
+lv_obj_t *g_door_card   = nullptr;  /**< Inner Door 卡：打印进行中隐藏，出结果后显示、外门开着时可点 */
 lv_obj_t *g_door_btn    = nullptr;  /**< Inner Door 电源钮 */
 bool      g_inner_door_open = false; /**< env bit1 全开；亮=全开，灭=非全开 */
 bool      g_outer_door_open = false; /**< 由 env 快照 / 开门 Rsp 乐观置位同步 */
@@ -329,6 +329,9 @@ bool           g_snap_pending  = false;
 bool           g_purify_busy   = false;
 bool           g_purify_done   = false;
 bool           g_page_visible  = false;
+/** 当前结果是自检（Prepare，Ready 之前）阶段终止的：作业没出过光，不自动清粉、不提示先清粉，
+ *  取件也不走转运盒。进结果页时按 phase 记下，开始 / 退出打印态时清零。 */
+bool           g_result_aborted_in_prep = false;
 char           g_job_label[96] = {0};
 /** PREPARING 态自定义标题；空则回落到默认 "Preparing..."。由 print_prep 进度写入。 */
 char           g_prep_title[48] = {0};
@@ -1429,12 +1432,17 @@ void set_btn_enabled(lv_obj_t *btn, bool enabled)
     }
 }
 
-/** 可点 = 套件不忙且不在打印会话。打印锁要合在这里判：忙态解除时 set_inner_door_busy()
- *  也走这里，只看忙态的话会在打印中把钮重新打开。 */
+/** 可点 = 套件不忙、不在打印进行中，且出结果后外门开着。打印锁要合在这里判：忙态解除时
+ *  set_inner_door_busy() 也走这里，只看忙态的话会在打印中把钮重新打开。
+ *  出结果后外门关着仍锁：这时唯一的开门路径是 RETRIEVE，「先开外门」滑块走的
+ *  control_open_door_for_inner() 只在待机生效，滑到底也打不开，还会留下等外门的内门意图。
+ *  外门态变化经 on_device_state() / register_device 回调重判。 */
 void apply_inner_door_btn(void)
 {
     set_round_btn_lit(g_door_btn, g_inner_door_open);
-    set_btn_enabled(g_door_btn, !g_inner_door_busy && !g_printing);
+    const bool result_door_closed = phase_finished() && !g_outer_door_open;
+    set_btn_enabled(g_door_btn,
+                    !g_inner_door_busy && !phase_running() && !result_door_closed);
 }
 
 void set_inner_door_busy(bool busy)
@@ -1563,10 +1571,11 @@ bool plate_at_bottom(void)
     return g_plate_z_valid && g_plate_z <= kPlateBottomMm + kPlateArriveTolMm;
 }
 
-/** Plate 卡整组锁住：打印会话、外门补关 Z 下降 / 回位、一键取件准备中（后两者是 Glavo 在动 Z）。 */
+/** Plate 卡整组锁住：打印进行中（出结果后放开）、外门补关 Z 下降 / 回位、一键取件准备中
+ *  （后两者是 Glavo 在动 Z）。 */
 bool plate_z_locked(void)
 {
-    return g_printing || g_clearance_z_lock || control_transfer_demo_pending();
+    return phase_running() || g_clearance_z_lock || control_transfer_demo_pending();
 }
 
 /**
@@ -1622,6 +1631,8 @@ void paint_plate_flat_btn(lv_obj_t *btn, bool locked, bool greyed)
  *
  * 锁住时顺手清高亮但不发停止：打印与外门补关由 Glavo 接管 Z，取件准备也是 Glavo 自己在降 Z。
  * Run 在 Top / Bottom 还在走时也不可点：Glavo 按缓存 Z 算到 −100 的差值，Z 在动时算出来会偏。
+ * Run 的打印锁看 g_printing 而不是 phase_running()：出结果后 Plate 放开了，Run 仍锁到取件回待机——
+ * control_transfer_demo_start() 只在待机生效，而且它走完回待机不提交打印历史，取件只能走 RETRIEVE。
  */
 void apply_plate_ui(void)
 {
@@ -1850,6 +1861,15 @@ void on_inner_door(lv_event_t * /*e*/)
     if(g_inner_door_busy) {
         return;
     }
+    /* 出结果后外门在两帧快照之间刚关上：不弹「先开外门」滑块、不挂等外门的意图——这时开不了
+     * 外门（见 apply_inner_door_btn()），意图留着的话 RETRIEVE 一开外门内门就会自己动。 */
+    if(phase_finished()) {
+        sync_outer_door_from_snap();
+        if(!g_outer_door_open) {
+            apply_inner_door_btn();
+            return;
+        }
+    }
     if(!require_outer_door()) {
         const ui_device_snapshot_t *snap = ui_device_state_get();
         const bool open_now =
@@ -1922,10 +1942,13 @@ void apply_fan_enabled(void)
 }
 
 /**
- * 打印会话（g_printing，Preparing → 出结果、取件前）里 Manual 可进，但只开放风扇（另受吹粉锁，
+ * 打印进行中（phase_running()：Preparing / 打印 / 暂停）Manual 可进，但只开放风扇（另受吹粉锁，
  * 见 apply_fan_enabled()）、打印参数、回粉电机。其余锁住：Plate / S / D / Retrieve 的按钮与输入框半透明
- * 不可点，标题与 Z/S/D 读数照常；Inner Door 卡打印进行中隐藏，出结果后显示但仍锁住，
- * RETRIEVE 取件回待机后解锁（锁判定合在 apply_inner_door_btn() 里）。
+ * 不可点，标题与 Z/S/D 读数照常；Inner Door 卡隐藏。
+ *
+ * 出结果后（完成 / 终止，取件前）Plate / S / D 放开；Inner Door 卡显示，外门开着时才可点
+ * （判定在 apply_inner_door_btn()）；Retrieve 的 Run 仍锁到 RETRIEVE 取件回待机（判定在
+ * apply_plate_ui()）。
  *
  * Plate 卡五颗钮与 Retrieve 的 Run 归 apply_plate_ui()：它们还跟外门补关 Z 锁、取件准备、
  * 每帧 Z 走，有自己的签名。锁住的控件摘掉了 CLICKABLE，按压落到所在卡片上，照样沿
@@ -1933,7 +1956,7 @@ void apply_fan_enabled(void)
  */
 void apply_manual_lock(void)
 {
-    const bool locked    = g_printing;
+    const bool locked    = phase_running();
     const bool hide_door = phase_running();
     if(locked) {
         manual_hold_stop();   /* 万一还有长按点动在跑 */
@@ -2407,8 +2430,8 @@ void on_transfer_demo(lv_event_t * /*e*/)
 /* ---- Retrieve（稿 6534:35742 的 (892,1623) 356×82，回粉电机下面、滚动区最后一张）----
  * 稿上左标题、右一枚 120×48 蓝钮（稿写「取件」，落成 Run），与 Inner Door 卡同一种横排；
  * 卡高按本页统一内距 16 + 钮 48 + 16 = 80（稿内距 17）。句柄与回调沿用 transfer 的名字，
- * 免得和结果页取件弹窗（g_retrieve_dlg 那组）混。打印中、取件准备中、Top / Bottom 还在走时
- * Run 都不可点，见 apply_plate_ui()。 */
+ * 免得和结果页取件弹窗（g_retrieve_dlg 那组）混。打印会话里（含出结果后、取件前）、取件准备中、
+ * Top / Bottom 还在走时 Run 都不可点，见 apply_plate_ui()。 */
 void build_retrieve_card(lv_obj_t *parent)
 {
     lv_obj_t *c = make_card(parent, LV_SIZE_CONTENT);
@@ -2639,7 +2662,9 @@ void on_retrieve_slide(void * /*u*/)
  *  改版前这是浮层里一条常驻的 `SWIPE TO COLLECT`，新稿收成「按钮 → 弹窗」两步。
  *
  *  RETRIEVE 在完成与终止两态都会出（phase_finished()），稿只画了完成态那一版。终止态
- *  沿用同一张卡，只换标题和副标题——不然 Job 卡写着 Print Terminated，弹窗却说 complete。 */
+ *  沿用同一张卡，只换标题和副标题——不然 Job 卡写着 Print Terminated，弹窗却说 complete。
+ *  自检阶段终止的舱里没有工件、取件也不走转运盒（只开门），副标题与滑条提示改说开门，
+ *  提示词与另两张开门滑条弹窗一致。副标题都控制在 1280 档一行放得下。 */
 void show_retrieve_dlg(void)
 {
     if(g_retrieve_dlg) {
@@ -2650,11 +2675,13 @@ void show_retrieve_dlg(void)
         return;
     }
     const bool stopped = (g_phase == PHASE_TERMINATED);
+    const char *body = g_result_aborted_in_prep ? "No part printed. Slide to open the door."
+                     : stopped                  ? "Job stopped. Slide to retrieve the part."
+                                                : "Job complete. Slide to retrieve the part.";
     g_retrieve_dlg = open_ink_slide_dlg(
-        stopped ? "Print terminated" : "Print complete",
-        stopped ? "Job stopped. Slide to retrieve the part."
-                : "Job complete. Slide to retrieve the part.",
-        "SLIDE TO RETRIEVE", on_retrieve_slide, on_retrieve_cancel, &g_retrieve_slide);
+        stopped ? "Print terminated" : "Print complete", body,
+        g_result_aborted_in_prep ? "SLIDE TO UNLOCK" : "SLIDE TO RETRIEVE",
+        on_retrieve_slide, on_retrieve_cancel, &g_retrieve_slide);
 }
 
 /** OPEN / RETRIEVE 共用那枚钮：按底部档位分流，**别按 Tab**——结果页停在 Manual 上时
@@ -2992,7 +3019,9 @@ void apply_phase(void)
     } else {
         ui_message_retract((uint16_t)middleware::DeviceEventCode::UiWearMask);
     }
-    if(g_printing && finished && !masked) {
+    /* 自检阶段终止的不提示先清粉：没出过光，结果页也不自动清粉，取件只开门。
+     * 用户自己点了吹粉，吹完照样出上面那条戴口罩提醒。 */
+    if(g_printing && finished && !masked && !g_result_aborted_in_prep) {
         ui_message_sync((uint16_t)middleware::DeviceEventCode::UiPurifyBeforeOpen, 0);
     } else {
         ui_message_retract((uint16_t)middleware::DeviceEventCode::UiPurifyBeforeOpen);
@@ -3302,6 +3331,7 @@ void wire_debug_proxy(bool on)
         const bool was_outer_open = g_outer_door_open;
         g_outer_door_open = (p.door_open != 0);
         ui_device_state_set_outer_door_open(g_outer_door_open);
+        apply_inner_door_btn();
         apply_bottom();
         if(g_outer_door_open) {
             close_outer_door_dlg();
@@ -3509,6 +3539,7 @@ void page_user_monitor_enter_printing_mode(const control_file_t *file)
     g_purify       = PURIFY_IDLE;
     g_purify_busy  = false;
     g_purify_done  = false;
+    g_result_aborted_in_prep = false;
     g_pending_purify = false;
     close_purify_door_dlg();
     /* 两张滑动开门弹窗也收掉（远程发起打印时可能还开着），连同等外门的 Inner Door 意图：
@@ -3593,6 +3624,7 @@ void page_user_monitor_exit_printing_mode(void)
     g_printing    = false;
     g_purify_busy = false;
     g_purify_done = false;
+    g_result_aborted_in_prep = false;
     g_pending_purify = false;
     close_purify_door_dlg();
     g_phase       = PHASE_IDLE;
@@ -3774,9 +3806,11 @@ void page_user_monitor_enter_print_result(const control_print_result_t *result)
     if(!result || !g_printing) {
         return;
     }
-    /* 进结果页前记下是否还在 Prepare：终止时决定要不要自动清粉。 */
+    /* 进结果页前记下是否还在 Prepare：终止时决定要不要自动清粉、要不要提示先清粉、
+     * 取件走不走转运盒。必须赶在下面第一次 apply_phase() 之前落到 g_result_aborted_in_prep。 */
     const bool aborted_during_prep =
         result->terminated && (g_phase == PHASE_PREPARING);
+    g_result_aborted_in_prep = aborted_during_prep;
 
     g_snap_pending = false;
     g_purify_busy  = false;
@@ -3872,6 +3906,11 @@ void page_user_monitor_reset_result_slide(void)
     if(g_retrieve_slide) {
         ui_slide_unlock_reset(g_retrieve_slide);
     }
+}
+
+bool page_user_monitor_result_aborted_in_prep(void)
+{
+    return g_result_aborted_in_prep;
 }
 
 void page_user_monitor_transfer_demo_changed(void)

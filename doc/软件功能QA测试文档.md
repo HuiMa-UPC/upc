@@ -113,8 +113,10 @@
 | F-PRINT-08 | 结果页拍照 | 打印中、完成、终止三种状态分别点击拍照。 | Media 保存 PNG 至 `/userdata/media/photo`；有条件时生成同名 `.rthm`；UI 显示成功/失败反馈。 |
 | F-PRINT-09 | 取件与关门 | 结果页滑动 `SWIPE TO COLLECT`，完成开门、取件、关门确认。 | 正确经历清粉/开门/关门流程，最终回到 Idle；未确认关门前不得提前收掉结果上下文。 |
 | F-PRINT-10 | 清粉流程 | 在结果页点击吹粉，观察运行和完成状态。 | 状态依次为 `AIR PURIFYING...`、完成提醒；不会把主打印徽标错误改为其他状态。 |
-| F-PRINT-11 | 转运盒流程 | Transfer Box 默认开（设置页 Advanced Print 或调试页可关）。完成一次取件。 | 依次出现装盒、转运、推闸门及成功提示；收到成功结果才可进入推闸门。失败/中止会停在转圈页，记录为当前已知行为。关掉开关后取件开门成功即回 Idle。 |
+| F-PRINT-11 | 转运盒流程 | Transfer Box 默认开（设置页 Advanced Print 或调试页可关）。完成一次取件。 | 依次出现装盒、转运、推闸门及成功提示；收到成功结果才可进入推闸门。失败/中止会停在转圈页，记录为当前已知行为。关掉开关后取件开门成功即回 Idle。打印完成与打印中终止照常走转运盒；自检阶段终止的见 F-PRINT-13。 |
 | F-PRINT-12 | 0 层终止不误删历史 | 选择任意作业后点击开始，确保未发生层间拍照即终止；重复 3 次。每次终止后查看 Print History 总条目数与既有旧记录目录。 | 不应出现历史录像被批量删除；`print_video commit miss` 场景不得触发 `STORRCLM_SESSION_DEL` 连续删除。 |
+| F-PRINT-13 | 自检阶段终止取件只开门 | Transfer Box 保持默认开。起印后在自检阶段（Job 卡显示 `Checking outer door...` / `Optical path check...` 等检查文案）点终止并确认；另测让光路检测失败被动终止。进入结果页后点 `RETRIEVE` 并滑到底。对照组：打印中（自检结束、已开始走层）终止后同样取件。 | 自检阶段终止：结果页不自动吹粉，消息中心不出现 `Purify before collecting`；取件弹窗副标题为 `No part printed. Slide to open the door.`、滑条提示 `SLIDE TO UNLOCK`；开门成功后直接回 Idle，不出现装盒 / 转运 / 推闸门三步；打印历史照常新增该条。对照组照常走转运盒三步。 |
+| F-PRINT-14 | 结果态 Manual 可用范围 | 分别在打印完成、打印中终止两种结果下，切到监控页 Manual 页签逐一操作各卡片；Inner Door 在外门关着与开着各测一次（外门开着可在自检外门步骤、外门未关时终止来构造）。另在打印进行中切到 Manual 对照。 | 结果态：Plate（Top/Bottom、上下点动、Z 复位）、S、D 可用且读数随动；Retrieve 的 Run 置灰；外门关着时 Inner Door 置灰、点击无反应且之后开外门内门不会自己动，外门开着时可开关；Fan / Print Params / Return Motor 可用；底部仍为吹粉 + `RETRIEVE`。打印进行中：Plate / S / D / Run 锁住，Inner Door 卡隐藏。 |
 
 ### 4.4 相机预览、媒体与历史
 

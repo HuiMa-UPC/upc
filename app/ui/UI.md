@@ -423,7 +423,7 @@ EVENT 被两个时长各撤一次。而且它一直只对 INFO 生效——撤�
 |---|---|---|
 | TOAST | store 里有 `visual == SHOWN` 的消息 | 6201:86044：白卡 400 宽、圆角 8、内距 16、32 徽标 + 18 白图标；右侧 24 见方、圆角 8、底 `#333145` @ 5% 的关闭方块（**只有底板是稿上的，里面那个叉借的是 `LV_SYMBOL_CLOSE` 字形**）；最多两张 |
 | BELL | 没有 toast 时的常态 | 72 见方、圆角 24、白底 + 40 的实心铃铛（按钮 72 配图标 40，故按 `USER_LIGHT_BTN_SZ * 5/9` 挑档得 60/40/32）；有「还需留意的事」就带红点，见下 |
-| PANEL | 点铃铛展开 | 6201:86200：320 宽、圆角 24、内距 12；条目 48 高、圆角 12、左侧 4×32 等级色竖条；底部「查看剩余 N 条」 |
+| PANEL | 点铃铛展开 | 6578:41549：与 toast 同宽（铺满容器）、圆角 24、内距 12、行距 8，投影与 toast 同一套（0 2 6 `#0C1C61` @10%）；条目按内容撑、下限 56（`USER_PANEL_ROW_H`）、圆角 12、内距 8，左侧 4×32 等级色竖条；底部「查看剩余 N 条」四周内距 16、行尾是 `ic_panel_chevron`（稿上 16 量到矢量本身，位图盒比矢量宽，所以右内距扣掉盒宽的 2/7） |
 
 三者占同一块地方（稿上它们的右缘都在 1232），任一时刻只有一个可见——**稿里那几层图层
 互相重叠不是画错了**，就是这个意思。新消息到达时把展开的面板顶掉，回到 TOAST。
@@ -432,9 +432,9 @@ EVENT 被两个时长各撤一次。而且它一直只对 INFO 生效——撤�
 |---|---|
 | 位置 | `shell_` 上的 `FLOATING`，与常驻设备信息条同级 → 压在页面之上、弹窗层之下 |
 | 对齐 | 贴右上角，退一个 `USER_HOME_EDGE_GAP`（稿 48）→ 铃铛落在稿的 (1160, 48)。**这个值同时管三处**：铃铛/toast/面板的右缘、右下开门滑块的右缘（稿上都是 1232）、以及首页打印态右上那块环境区（`build_env_wrap`，本栈就叠在它下方）。早先三处退的是 `USER_PAD_LG`（32），实机上铃铛比滑块往外多出 16、顶也高 16。纵向让位量按态给，见 `sync_notice_offset()` |
-| 宽度 | `USER_NOTICE_CARD_W` = **400@1280**（toast 那张卡的宽）。铃铛 72、面板 320 都比它窄，靠容器的交叉轴 `FLEX_ALIGN_END` 右对齐，所以一个宽度够三态共用。**稿自己在两个 frame 里不一致**：待机 5339:27299/27310 是 400，打印态 4972:27560 的 5281:11797 是 416（与 stats-card 同宽）；本块是全局单例，只能取一个值，以待机 frame 为准 |
-| 标题 + 副标题字号 | toast 两行都取 `user_font_text_sm()`（1280 档 16）、面板两行都取 `user_font_caption_sm()`（12）。稿上每组二者**同号**、只靠字重（SemiBold / Regular）和 60% 透明度分层；Montserrat 只有一个字重，字重那半做不出来，只落地「同号 + 透明度」。面板正文稿上是 10，字体表最小到 12 |
-| 条数 | toast 最多两张；面板最多三条，多出来的收进「View remaining N messages」，点进消息页 |
+| 宽度 | `USER_NOTICE_CARD_W` = **400@1280**（toast 那张卡的宽）。面板新稿与它同宽、`LV_PCT(100)` 铺满；铃铛 72 比它窄，靠容器的交叉轴 `FLEX_ALIGN_END` 右对齐，所以一个宽度够三态共用。**稿自己在两个 frame 里不一致**：待机 5339:27299/27310 是 400，打印态 4972:27560 的 5281:11797 是 416（与 stats-card 同宽）；本块是全局单例，只能取一个值，以待机 frame 为准 |
+| 标题 + 副标题字号 | toast 与面板两行都取 `user_font_text_sm()`（1280 档 16，面板「查看剩余」那行同号）。稿上每组二者**同号**、只靠字重（SemiBold / Regular）和 60% 透明度分层；Montserrat 只有一个字重，字重那半做不出来，只落地「同号 + 透明度」。面板条目超长**单行截断出省略号**、不随文案变高——v9 的 DOTS 不锁高度只会换行，所以两行都锁成一行高 |
+| 条数 | toast 最多两张；面板最多三条（新稿只画了两条，条数不跟稿），多出来的收进「View remaining N messages」（N=1 时单数），点进消息页 |
 | 徽标 | 四档等级配色 + 图标，见下「通知徽标配色」；与消息页列表共用一份映射 |
 | 关闭钮 | **只有 INFO 有**（稿上只有信息卡带）。告警级靠自动收起离场 |
 | 铃铛红点 | 稿里它是铃铛那枚 SVG 的一部分：`circle(50.5, 34.5) r=4.5` 落在 72 的按钮里，即直径按钮的 1/8、圆心在按钮坐标 (44.5, 30.5)——**挂在字形右上方、在按钮内部**，不是骑在圆角外面。色 `#FE6868`。它没烤进 A8：一来颜色与字形不同，二来只在有未读时出现，所以仍是独立对象 |
@@ -1086,7 +1086,7 @@ pending 自动解除——正好顺带验超时路径。
 | 设备图上 | 余量胶囊 `make_supply_pill()` | 两颗白胶囊（主色料桶图标 + 桶号），坐标换算成相对设备图左上角的比例，换档位时跟着图一起缩放、不会飘离料盒。第二颗的取值还借着 `filter_pct`，见下 |
 | 左下 | PRINT `build_action_tiles()` | `USER_HOME_PRINT_BTN_W`×84（稿 216×84）的深色圆角钮，见下。**摄像机方钮新稿删了**（监控独立成页、入口在侧栏），整行只剩它一枚 |
 | 右上 | 通知三态 | 不属于本页，是 `ui_notice_stack` 的全局对象，见「消息中心与通知三态」 |
-| 右下 | 开门滑块 `build_door_floating()` | `SLIDE TO UNLOCK`（三处开门滑块统一同一个串：首页、监控页「请先开外门」弹窗、放版弹窗，控件的默认兜底值也是它；监控页取件弹窗那条是 `SLIDE TO RETRIEVE`）。到底那帧的 `RELEASE TO OPEN` 是控件内写死的，四条滑块共用；提示字随拖动只淡出、不移动，见下文「两行提示是随拖动量连续叠化的」。轨道走 `USER_HOME_SLIDE_W`×`USER_HOME_SLIDE_H`（稿 453×94）、旋钮 `USER_ACTION_BTN_SZ`（稿 84，四边离外框 5、离 1px 白描边内侧 4） |
+| 右下 | 开门滑块 `build_door_floating()` | `SLIDE TO UNLOCK`（三处开门滑块统一同一个串：首页、监控页「请先开外门」弹窗、放版弹窗，控件的默认兜底值也是它；监控页取件弹窗那条是 `SLIDE TO RETRIEVE`，自检阶段终止时同样换回 `SLIDE TO UNLOCK`）。到底那帧的 `RELEASE TO OPEN` 是控件内写死的，四条滑块共用；提示字随拖动只淡出、不移动，见下文「两行提示是随拖动量连续叠化的」。轨道走 `USER_HOME_SLIDE_W`×`USER_HOME_SLIDE_H`（稿 453×94）、旋钮 `USER_ACTION_BTN_SZ`（稿 84，四边离外框 5、离 1px 白描边内侧 4） |
 
 **底部那一行的退让量是不对称的**：横向仍是 `USER_PAD_LG`（稿 32，与上方卡片同一条竖线），
 纵向是 `USER_HOME_EDGE_GAP`（稿 48）。稿上那 48 落不回现有的内距梯度（1024 档的
@@ -1571,13 +1571,15 @@ Tab 行的 cfg：`inset=2 / gap=4`（由稿的胶囊宽 114.667 反推：2+114.6
 #### 打印中的 Manual
 
 打印会话（`g_printing==true`：Preparing → 打印 / 暂停 → 出结果，直到 `RETRIEVE` 取件回待机）里
-Manual Tab **可进**，但只开放一部分（`apply_manual_lock()`，挂在 `apply_phase()` 里）：
+Manual Tab **可进**。打印进行中只开放一部分，出结果后（完成 / 终止，取件前）大部分放开
+（`apply_manual_lock()`，挂在 `apply_phase()` 里；锁判据是 `phase_running()` 而不是 `g_printing`）：
 
 | 部分 | 打印进行中（`phase_running()`） | 出结果后、取件前 |
 |---|---|---|
 | Fan（电源、占空比、Send）、Print Params、Return Motor | 可用；风扇仍受吹粉锁（`apply_fan_enabled()`） | 同左 |
-| Plate（Top / Bottom + 上下 / 复位钮）、S（Step + −/+/复位）、D（Step + Send）、Retrieve（Run） | 锁住 | 锁住 |
-| Inner Door 卡 | **不显示** | 显示，但锁住 |
+| Plate（Top / Bottom + 上下 / 复位钮）、S（Step + −/+/复位）、D（Step + Send） | 锁住 | **可用** |
+| Retrieve（Run） | 锁住 | 锁住 |
+| Inner Door 卡 | **不显示** | 显示；外门开着时可点，外门关着仍锁 |
 | 底部按钮 | 暂停 / 终止（`BOTTOM_RUN`） | 吹粉 + `RETRIEVE`（`BOTTOM_RETRIEVE`） |
 
 - **锁住 = 按钮与输入框 50% 透明且不可点**（`set_btn_enabled()`；输入框带 `DISABLED` 后 `ui_keyboard`
@@ -1585,11 +1587,19 @@ Manual Tab **可进**，但只开放一部分（`apply_manual_lock()`，挂在 `
 - **Plate 卡五颗钮与 Retrieve 的 Run 归 `apply_plate_ui()`**：除打印锁外还跟外门补关 Z 锁、一键取件
   准备中、每帧 Z（到位置灰）走，有自己的签名（`g_plate_ui_sig`），`apply_manual_lock()` 在自己的早退
   之前调它。锁住时顺手清掉 Top / Bottom 高亮但不发停止：打印与外门补关由 Glavo 接管 Z。
-- **Inner Door 的可点条件是「套件不忙且不在打印会话」**，合在 `apply_inner_door_btn()` 里判：忙态解除时
-  `set_inner_door_busy()` 也走这里，只看忙态会在打印中把钮重新打开。出结果后仍锁住，是因为这时外门
-  关着、点它只会弹「先开外门」滑块，而 `control_open_door_request()` 只在待机态生效，滑到底也打不开；
-  结果页阶段唯一的开门路径是 `RETRIEVE`，取件后回待机即自然解锁。
-- 锁的时候顺手 `manual_hold_stop()`，防有长按点动在跑。`apply_phase()` 打印中每秒好几次，锁态没变就
+- **Run 出结果后仍锁**：它的打印锁看 `g_printing` 而不是 `phase_running()`。`control_transfer_demo_start()`
+  只在待机生效，而且一键转运走完回待机不提交打印历史，所以结果页阶段取件只能走 `RETRIEVE`。
+- **Inner Door 的可点条件是「套件不忙、不在打印进行中，且出结果后外门开着」**，合在
+  `apply_inner_door_btn()` 里判：忙态解除时 `set_inner_door_busy()` 也走这里，只看忙态会在打印中把钮重新
+  打开。出结果后外门关着仍锁，是因为点它只会弹「先开外门」滑块，而 `control_open_door_for_inner()` 只在
+  待机态生效，滑到底也打不开，还会留下「等外门」的内门意图——之后 `RETRIEVE` 一开外门内门就会自己动。
+  外门态变化经 `on_device_state()` / `register_device` 回调重判；`on_inner_door()` 另兜一次竞态（外门在两帧
+  快照之间刚关上时不弹滑块、不挂意图，直接把钮锁回去）。结果页阶段唯一的开门路径仍是 `RETRIEVE`。
+- **出结果后放开 Plate / S / D，后端照常执行**：Glavo 的调试轴处理与 `debug_tx` 不看打印态；Keep Z 的拦截
+  （`z_hold_blocks_motion()`）要求 `print_running_`，Glavo 在完成、终止、中止时都会清掉它。
+  **待确认**：取件前挪 Z / S / D 或开关内门，会不会影响随后的自动转运——一键转运演示在转运前会先把 Z
+  降到补关高度并关内门，真实取件的开门流程不做这些，Glavo 收到转运请求也只是转发 MCU。
+- 锁的时候顺手 `manual_hold_stop()`（只在打印进行中），防有长按点动在跑。`apply_phase()` 打印中每秒好几次，锁态没变就
   跳过（`g_manual_lock_sig`），免得那几颗钮反复失效重绘。
 - 开始打印、出结果时仍自动切回 Job（前者看进度、后者看取件），要调风扇等再手动切过来。开始打印时顺手
   `ui_keyboard_hide()`，防远程发起打印时数字键盘还开着。
@@ -1689,7 +1699,10 @@ Manual 的电源钮与调试页 Fan 开关都读它，所以在哪边开关、�
 
 **取件从「一条常驻滑块」改成了「按钮 + 弹窗」**（稿 6338:27929）：点 `RETRIEVE` 开弹窗，
 里面是 `SLIDE TO RETRIEVE` + `Cancel`，滑到底才调 `control_print_result_collect()`。后面的
-`DOOR_OPENING` / `TRANSFER_BOX` 一行没动，转运盒开关仍默认关；开门成功即收，不再等关门。
+`DOOR_OPENING` / `TRANSFER_BOX` 一行没动（转运盒开关现在默认开，见「转运盒流程」）；开门成功即收，不再等关门。
+**自检阶段终止**的结果（`page_user_monitor_result_aborted_in_prep()`）换一版文案：副标题
+`No part printed. Slide to open the door.`、滑条提示 `SLIDE TO UNLOCK`；滑到底同样走
+`control_print_result_collect()`，只是开门后不进转运盒。副标题与另两版一样控制在 1280 档一行放得下。
 
 **取件弹窗、「请先开外门」弹窗与待机 OPEN 弹窗（后两者稿 6578:41392）是同一副骨架**，由
 `open_ink_slide_dlg()` 建（1280 档稿值）：
@@ -1951,7 +1964,8 @@ Glavo Print_Terminate_Rsp / 进度 100% → control.cpp finish_printing()
   取件前不能开新任务。
 - 吹粉钮：进结果页 **Complete / 打印中终止** 自动下发 `UI_Clean_Test_Start_Req`
   （`record_video=1`，仅清粉窗口抽帧接续 JPEG）。**Prepare 阶段终止不自动清粉**
-  （作业未开扫）。钮再点 → `UI_Clean_Test_Close_Req`
+  （作业未开扫），也不往消息中心推「Purify before collecting」，取件开门后不走转运盒
+  （三处共用 `page_user_monitor_result_aborted_in_prep()`，进结果页时按 phase 记下）。钮再点 → `UI_Clean_Test_Close_Req`
   停风扇/停粉（`UI_CLEAN_EVT_STOPPED`）；再点又 Start。MCU 完成帧仍走
   `APP_Clean_Test_Result_Ntf` → `UI_CLEAN_EVT_DONE`。吹粉进行中点 `RETRIEVE` 会被挡下
   并 toast 提示，但稿上「吹粉完成前 RETRIEVE 置灰」那道门禁还没做，按钮本身一直是亮的。
@@ -2006,7 +2020,9 @@ Glavo Print_Terminate_Rsp / 进度 100% → control.cpp finish_printing()
 滑动取件开门之后、回 IDLE 之前的一段：把工件转移进转运盒再取下。默认**启用**。
 设置页 **Advanced Print → Transfer Box** 与调试页 `Other` → `Print Gates` → `Transfer Box`
 是同一枚开关（`control_set_transfer_box_flow()`，纯 UI 本地标志，不发消息也不落盘，重启回到开）。
-关掉后取件开门成功即回 IDLE。旁边的 **Transfer Demo** 是另一件事：空闲时一键演示，不看这个开关。
+关掉后取件开门成功即回 IDLE。**自检阶段（Ready 之前）终止的结果不管开关都不走转运盒**：那时还没
+出光，舱里没有工件，取件只开门（判据见结果页「Prepare 阶段终止」那条）；打印完成与打印中终止照常走。
+旁边的 **Transfer Demo** 是另一件事：空闲时一键演示，不看这个开关。
 点击后**不弹**开门 / Preparing 转圈：后台 Z 绝对到 −100 → 固定关一次内门 → 按正式口径开外门
 （传感器确认，失败限次重试）。Prep 成功后乐观记下外门已开，再走与取件相同的转运盒三步
 （装盒 Done → 转运转圈 → 拆盒）。不做 PM2.5。
@@ -2020,7 +2036,7 @@ RETRIEVE → 取件弹窗滑到底 → DOOR_OPENING（PM2.5/清粉 → 开门）
   → clean_test_close → IDLE
 ```
 
-未开转运盒时：`DOOR_OPENING` 开门成功即回 IDLE（首页独立开门同理；打印前置则进选文件页）。
+未开转运盒、或自检阶段终止的取件：`DOOR_OPENING` 开门成功即回 IDLE（首页独立开门同理；打印前置则进选文件页）。
 **不再做关门轮询 / DoorOpened 等待页。**
 
 - **共用门弹窗骨架**：`DoorVariant` 为 `Opening/Cleaning` + `BoxInstall/BoxMoving/BoxShutter`，
@@ -2029,7 +2045,8 @@ RETRIEVE → 取件弹窗滑到底 → DOOR_OPENING（PM2.5/清粉 → 开门）
   文案也合成了一句 `Install the box and pull out the divider`。别按旧稿拆回两档。
 - **开门即结束**：三个开门入口（打印前置、首页独立开门、取件）开完就收 overlay，不再等
   传感器报门关，也不再弹 `Confirm the door is closed`。`transfer_box_flow_active()` 仍只管
-  **流程**要不要插入转运盒三步（见 `proceed_after_door_open()`）。
+  **流程**要不要插入转运盒三步（见 `proceed_after_door_open()`）：取件分支 + 开关开 + 不是自检阶段终止
+  （`page_user_monitor_result_aborted_in_prep()`）。开门前后监控页一直停在结果态，门开时查到的一定是这一单的值。
 - **`control_is_printing()`** 把 `TRANSFER_BOX` 也算进打印占用，转运期间同样挡住 `user_files`。
 - **装盒到位占位**：① 仍靠 `BOX_READY_MS` 定时器翻 `g_box_ready`（复用 `g_door_advance_timer`）。
 - **自动转运**：Ready 确认 → `send_transport_request()`（串口 A2/0x41 TLV 0x02）并进
@@ -2334,7 +2351,7 @@ Storage / Advanced Print / Privacy & Security / About / Debug。
   默认全开，和调试页同一套 Glavo 开关（外门、内门视觉、基板在位、光路、基板测高、氧浓度），
   另有 **Keep Z Position**（默认关：打开后整个打印会话绝对不动 Z——不起印 −10、跳过测高与
   工作高度抬升、开关内门前不降 Z、终止/失败收尾不改 Z，Manual/调试 Z 点动与 Home 也丢弃），
-  以及 **Transfer Box**（默认开，与调试页同一枚本地开关：取件后走转运盒三步；关掉则开门即回 IDLE），
+  以及 **Transfer Box**（默认开，与调试页同一枚本地开关：取件后走转运盒三步，自检阶段终止的除外；关掉则开门即回 IDLE），
   以及 Height Calibration 的 Start，
   参数与调试页 Laser 卡相同（-5…12 mm，步长 1）。
   测高开关默认开，仅本次 Glavo 进程有效。

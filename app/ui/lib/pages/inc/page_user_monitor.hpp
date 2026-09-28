@@ -59,10 +59,18 @@ void page_user_monitor_print_prep_update(uint8_t step, uint8_t step_index, uint8
  */
 void page_user_monitor_enter_print_result(const control_print_result_t *result);
 /**
- * 把取件弹窗里那条 `SLIDE TO RETRIEVE` 推回起点。
+ * 把取件弹窗里那条滑条（`SLIDE TO RETRIEVE`，自检阶段终止时是 `SLIDE TO UNLOCK`）推回起点。
  * 取件开门流程被取消时用：结果页一直没收起，但滑块停在解锁位，不复位就滑不了第二次。
  */
 void page_user_monitor_reset_result_slide(void);
+
+/**
+ * 当前结果是否在自检（起印环境检查，Ready 之前）阶段终止：作业还没出光、舱里没有工件。
+ * 这种结果不自动清粉、不提示先清粉，取件开门后也不走转运盒三步（control.cpp 的
+ * transfer_box_flow_active()）。用户手动终止与自检失败被动终止都算。
+ * 进结果页时按当时的 phase 记下，开始 / 退出打印态时清零；不在结果态时恒为 false。
+ */
+bool page_user_monitor_result_aborted_in_prep(void);
 
 /**
  * 一键转运（Manual 的 Retrieve / 调试页 Transfer Demo，`control_transfer_demo_start()`）的准备阶段

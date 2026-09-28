@@ -242,6 +242,11 @@ extern const lv_image_dsc_t ic_pause_24;
 extern const lv_image_dsc_t ic_pause_19;
 extern const lv_image_dsc_t *const ic_pause_set[];
 
+extern const lv_image_dsc_t ic_panel_chevron_21;
+extern const lv_image_dsc_t ic_panel_chevron_14;
+extern const lv_image_dsc_t ic_panel_chevron_11;
+extern const lv_image_dsc_t *const ic_panel_chevron_set[];
+
 /* 手维护图标（源矢量已丢失） */
 extern const lv_image_dsc_t ic_warning;
 extern const lv_image_dsc_t ic_layers;

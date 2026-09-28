@@ -100,8 +100,8 @@ constexpr uint32_t TRANSFER_DEMO_PREP_TIMEOUT_MS = 90000u;
 lv_timer_t *g_transfer_demo_timer = nullptr;
 
 /* 转运盒流程总开关（设置页 Advanced Print，调试页 Other → Print Gates 同一枚）。
- * 默认开：取件分支插入 TRANSFER_BOX 三步。关掉则取件开门成功即回 IDLE。
- * 纯 UI 本地标志，不发消息也不落盘，重启回到开。 */
+ * 默认开：取件分支插入 TRANSFER_BOX 三步（自检阶段终止的除外，见 transfer_box_flow_active()）。
+ * 关掉则取件开门成功即回 IDLE。纯 UI 本地标志，不发消息也不落盘，重启回到开。 */
 bool g_transfer_box_flow = true;
 
 /* 跳过放版预确认开关（调试页 Other → Print Gates → Skip Plate Prompt）。默认开：打印入口
@@ -114,10 +114,13 @@ constexpr uint32_t DOOR_OPEN_MAX_RETRIES = 2u;
 constexpr uint32_t DOOR_OPEN_MAX_ATTEMPTS = DOOR_OPEN_MAX_RETRIES + 1u;
 uint32_t g_door_open_fail_count = 0; /**< 本轮开门失败次数（Rsp ok=0） */
 
-/** 转运盒流程是否对当前这趟门流程生效（只认取件分支） */
+/** 转运盒流程是否对当前这趟门流程生效：只认取件分支；自检阶段（Ready 之前）终止的不走——
+ *  那时还没出光，舱里没有工件，取件只开门。判据与结果页「不自动清粉」同一个，见
+ *  page_user_monitor_result_aborted_in_prep()。 */
 bool transfer_box_flow_active(void)
 {
-    return g_transfer_box_flow && g_door_origin == DoorFlowOrigin::PrintCollect;
+    return g_transfer_box_flow && g_door_origin == DoorFlowOrigin::PrintCollect &&
+           !page_user_monitor_result_aborted_in_prep();
 }
 
 void on_transfer_demo_timeout(lv_timer_t *timer);
@@ -2548,7 +2551,7 @@ void finish_after_door_open(void)
     }
 }
 
-/** 门开之后往哪走：取件且开了转运盒流程先走三步，否则直接结束。 */
+/** 门开之后往哪走：取件、开了转运盒流程且不是自检阶段终止的，先走三步；否则直接结束。 */
 void proceed_after_door_open(void)
 {
     if(transfer_box_flow_active()) {
