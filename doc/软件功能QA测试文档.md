@@ -83,6 +83,7 @@
 | F-HOME-02A | 0x9B 新旧环境帧兼容 | 注入两种 `Port=0xA5 Cmd=0x9B TLV=0x02`：场景 A `Tlv-Len=13`（旧版）；场景 B `Tlv-Len=21`（新版，含 PM1.0/PM10/滤芯气压/舱内2气压）。 | 两种帧均可解析且不报 `RX SENSOR FAIL ... TLV`；旧版仍更新 O2/舱内1气压/温湿度/PM2.5/粉位/基板温度；新版在此基础上新增解析 PM1.0、PM10、滤芯气压、舱内2气压。 |
 | F-HOME-03 | 状态锁定 | 开始打印、暂停、结束或清粉后观察状态条，再注入普通环境推送。 | `Printing`、`Paused`、`Print Complete`、`Print Terminated`、`Air Purifying`、`Purify Complete` 不被环境推送覆盖。 |
 | F-HOME-04 | 导航与页面缓存 | 在打印中切到设置页，再回首页。 | 可切换页面；首页打印浮层及进度保持，不被重建或丢失。 |
+| F-HOME-05 | PM2.5 卡舱内/舱外切换 | 开机后看首页左卡与监控页 Status 卡；点任一张卡右上角切换钮，再切到另一页；对照 SPI 小屏、调试页顶栏 PM Cabin、MQTT `telemetry/chamber_ext`。 | 开机默认两卡都是 `Cabin PM2.5`；切一张另一张跟着变为 `Home PM2.5`，重启回到 Cabin。Home 读数与 SPI 小屏逐位一致（一位小数，3~5 µg/m³ 缓变）、与 `chamber_ext.pm25` 同值；Cabin 读数与调试页 PM Cabin 一致。无数据时分级显示 `--`、读数留空、游标隐藏。 |
 
 ### 4.2 文件选择与打印准备
 
@@ -112,8 +113,10 @@
 | F-PRINT-08 | 结果页拍照 | 打印中、完成、终止三种状态分别点击拍照。 | Media 保存 PNG 至 `/userdata/media/photo`；有条件时生成同名 `.rthm`；UI 显示成功/失败反馈。 |
 | F-PRINT-09 | 取件与关门 | 结果页滑动 `SWIPE TO COLLECT`，完成开门、取件、关门确认。 | 正确经历清粉/开门/关门流程，最终回到 Idle；未确认关门前不得提前收掉结果上下文。 |
 | F-PRINT-10 | 清粉流程 | 在结果页点击吹粉，观察运行和完成状态。 | 状态依次为 `AIR PURIFYING...`、完成提醒；不会把主打印徽标错误改为其他状态。 |
-| F-PRINT-11 | 转运盒流程 | Transfer Box 默认开（设置页 Advanced Print 或调试页可关）。完成一次取件。 | 依次出现装盒、转运、推闸门及成功提示；收到成功结果才可进入推闸门。失败/中止会停在转圈页，记录为当前已知行为。关掉开关后取件开门成功即回 Idle。 |
+| F-PRINT-11 | 转运盒流程 | Transfer Box 默认开（设置页 Advanced Print 或调试页可关）。完成一次取件。 | 依次出现装盒、转运、推闸门及成功提示；收到成功结果才可进入推闸门。失败/中止会停在转圈页，记录为当前已知行为。关掉开关后取件开门成功即回 Idle。打印完成与打印中终止照常走转运盒；自检阶段终止的见 F-PRINT-13。 |
 | F-PRINT-12 | 0 层终止不误删历史 | 选择任意作业后点击开始，确保未发生层间拍照即终止；重复 3 次。每次终止后查看 Print History 总条目数与既有旧记录目录。 | 不应出现历史录像被批量删除；`print_video commit miss` 场景不得触发 `STORRCLM_SESSION_DEL` 连续删除。 |
+| F-PRINT-13 | 自检阶段终止取件只开门 | Transfer Box 保持默认开。起印后在自检阶段（Job 卡显示 `Checking outer door...` / `Optical path check...` 等检查文案）点终止并确认；另测让光路检测失败被动终止。进入结果页后点 `RETRIEVE` 并滑到底。对照组：打印中（自检结束、已开始走层）终止后同样取件。 | 自检阶段终止：结果页不自动吹粉，消息中心不出现 `Purify before collecting`；取件弹窗副标题为 `No part printed. Slide to open the door.`、滑条提示 `SLIDE TO UNLOCK`；开门成功后直接回 Idle，不出现装盒 / 转运 / 推闸门三步；打印历史照常新增该条。对照组照常走转运盒三步。 |
+| F-PRINT-14 | 结果态 Manual 可用范围 | 分别在打印完成、打印中终止两种结果下，切到监控页 Manual 页签逐一操作各卡片；Inner Door 在外门关着与开着各测一次（外门开着可在自检外门步骤、外门未关时终止来构造）。另在打印进行中切到 Manual 对照。 | 结果态：Plate（Top/Bottom、上下点动、Z 复位）、S、D 可用且读数随动；Retrieve 的 Run 置灰；外门关着时 Inner Door 置灰、点击无反应且之后开外门内门不会自己动，外门开着时可开关；Fan / Print Params / Return Motor 可用；底部仍为吹粉 + `RETRIEVE`。打印进行中：Plate / S / D / Run 锁住，Inner Door 卡隐藏。 |
 
 ### 4.4 相机预览、媒体与历史
 
@@ -167,7 +170,7 @@
 | F-MQTT-01A | 激活失败退避间隔 | 删除 MQTT 凭据并持续阻断激活服务，观察 `topic_mqtt_telemetry.log` 中 `device activation failed ... retry #N in Xms`；至少连续观察 4 次失败。 | 日志重试间隔符合：第 1 次失败后 5s、第 2 次后 10s、第 3 次后 30s、第 4 次及以后 60s。 |
 | F-MQTT-01B | 激活成功后失败计数清零 | 先制造连续激活失败（计数 >=2），随后恢复激活服务直至成功，再次阻断并观察下一次失败日志。 | 成功后应重置失败计数；再次失败应从 `retry #1 in 5000ms` 重新开始，而非延续之前的大间隔。 |
 | F-MQTT-02 | 环境遥测 | 分别在 Idle 和 Printing 注入环境快照，订阅 `telemetry/chamber`。 | 发布 JSON 含 device_id、ts、seq、pm25、o2_ppm、ntc_c；打印中发布频率高于待机；无快照时不发伪数据。 |
-| F-MQTT-02A | PM10 透传一致性 | 注入新版环境帧（含 PM10），同时观察 UI 首页与 MQTT 遥测。 | UI 的 `pm10_indoor` 显示与上报 PM10 一致；无 PM10 的旧版帧保持兼容，不导致 UI/MQTT 异常。 |
+| F-MQTT-02A | PM10 透传一致性 | 注入新版环境帧（含 PM10），同时观察 `soc:` 日志与 MQTT 遥测。 | 上报的 PM10 与日志一致（UI 首页已不显示 PM10，PM2.5 卡改为舱内/舱外两档，见 F-HOME-05）；无 PM10 的旧版帧保持兼容，不导致 UI/MQTT 异常。 |
 | F-MQTT-03 | 远程灯光控制 | 向命令主题发送有效 `set_light` 开/关与亮度命令。 | Glavo 收到对应设备控制；`cmd/ack` 返回 accepted 或 error，req_id 与 cmd 一致。 |
 | F-MQTT-04 | RTSP 推流控制 | 向命令主题发送有效 `start_rtsp_push`、`stop_rtsp_push`。 | MQTT 将请求转给 Media；Media 结果最终映射为 `cmd/ack`；开始后 RTSP 接收端可见画面，停止后流结束。 |
 | F-MQTT-05 | 非法命令 | 发送缺 req_id、未知 cmd、错误 type、字段不合法或重复 req_id。 | 有 req_id 时返回 rejected；无 req_id 不发无法关联的 ack；重复待处理 req_id 被拒绝，服务不崩溃。 |

@@ -377,7 +377,8 @@ void app_init(lv_obj_t* screen) {
         /* 第二个 set 是有未读时换上的那版：右上角咬掉一块给红点让位（稿 6255:95805） */
         ic_nav_message_set, ic_nav_message_dot_set);
 
-    /* 选择文件页：隐藏页（无侧边栏图标），归属首页菜单按钮，由「My Files」进入 */
+    /* 选择文件页：隐藏页（无侧边栏图标），由首页 / 监控页的 PRINT 进入。这里登记的归属
+     * 首页只是初值：每次进页 goto_file_selection() 会按入口改写，侧栏高亮跟着入口走。 */
     PageManager::instance().register_hidden_page(
         std::make_unique<SimplePage>("user_files",
                                      page_user_files_create,
@@ -419,10 +420,14 @@ void app_init(lv_obj_t* screen) {
     ui_alarm_add_observer(sync_message_badge);
     sync_message_badge();
 
-    /* 首页图标点击 → 首页区当前视图（仪表盘 / 选择文件页），实现“回到上次视图” */
+    /* 首页 / 监控页图标点击 → 该分区当前视图（分区本页 / 挂在该分区下的选择文件页），
+     * 实现“回到上次视图”。选文件页同一时间只挂在其中一个分区下，见 control_section_target()。 */
     PageManager::instance().set_menu_target_resolver(
         "user_home",
-        []() { return std::string(control_home_section_target()); });
+        []() { return std::string(control_section_target("user_home")); });
+    PageManager::instance().set_menu_target_resolver(
+        "user_monitor",
+        []() { return std::string(control_section_target("user_monitor")); });
 
     ui_keyboard_init(screen);
     control_init(screen);

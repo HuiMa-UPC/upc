@@ -544,7 +544,7 @@ enum class MsgType : uint32_t {
     GLAVO_Debug_Cabin_Pm_Valve_Ntf,     /**< DebugOnOffPayload：舱内 PM 阀开关状态 */
     GLAVO_Debug_Skip_O2_Gate_Ntf,       /**< DebugOnOffPayload：跳过 SOC 氧打印门开关状态 */
     GLAVO_Debug_Skip_Outer_Door_Ntf,    /**< DebugOnOffPayload：跳过外门检测+关内门套件开关状态 */
-    GLAVO_Debug_Inner_Door_Busy_Ntf,    /**< DebugOnOffPayload：on=1 套件忙禁内门钮；reserved[0]=1 外门补关 Z 运动中，Manual Top/Bottom 与 Z 升降复位置灰（1204 active/latched 立刻解禁） */
+    GLAVO_Debug_Inner_Door_Busy_Ntf,    /**< DebugOnOffPayload：on=1 套件忙禁内门钮；reserved[0]=1 外门补关 Z 运动中，Manual Top/Bottom 与 Z 升降复位置灰（1204 active/latched 立刻解禁）；reserved[1]=1 外门补关套件整段（降 Z → 关内门 → 回 Z，关门那 2 s 也算）进行中，监控页盖遮罩 */
     GLAVO_Debug_O2_Calib_Rsp,           /**< DebugO2CalibRspPayload：氧标定结果（Req 应答） */
     GLAVO_Debug_O2_Calib_Ntf,           /**< DebugO2CalibRspPayload：当前 K 回读（Get，ok=1 且未改盘） */
     GLAVO_Debug_Status_Led_Ntf,         /**< DebugStatusLedPayload：灯板强制态回读 */
@@ -872,12 +872,12 @@ struct EnvSnapshotPayload {
     uint32_t status;            /**< UserHomeStatus */
     uint8_t  wifi_connected;
     int32_t  signal_bars;       /**< 信号格数 0..3（图标三格） */
-    float    pm25_indoor;
-    float    pm25_cabin;
+    float    pm25_indoor;       /**< 舱外 PM2.5：与 SPI 小屏同一个显示值（舱外 PMSA 暂不可靠，现为 3~5 缓变模拟、非实测）；首页/监控页 Home PM2.5、MQTT chamber_ext 用；无效填 <0 */
+    float    pm25_cabin;        /**< 舱内 PM2.5：舱内 PMSA 实时值；首页/监控页 Cabin PM2.5、开门前检测、MQTT chamber 用；无效填 <0 */
     float    temperature_c;
     float    oxygen_percent;
     float    pm1_indoor;        /**< 室内 PM1.0 (μg/m³)；无效填 <0 */
-    float    pm10_indoor;       /**< 室内 PM10 (μg/m³)；无效填 <0（HOME 卡切换指标用） */
+    float    pm10_indoor;       /**< 室内 PM10 (μg/m³)；无效填 <0（舱外 PMSA 实测；UI 目前不显示） */
     float    humidity_percent;  /**< 舱内湿度 %；无效填 <0 */
     float    pressure_kpa;      /**< 舱内气压 kPa；无效填 <0 */
     float    baseplate_temp_c;  /**< 基板温度 ℃；无效填 <0 */

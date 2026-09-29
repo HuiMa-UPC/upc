@@ -182,7 +182,7 @@ void on_file_card_click(lv_event_t *e)
 
 void on_file_select_cancel(lv_event_t * /*e*/)
 {
-    /* 选择文件页的返回键：首页区视图切回仪表盘 */
+    /* 选择文件页的返回键：回到进来时的分区（首页仪表盘或监控页） */
     control_files_close();
 }
 

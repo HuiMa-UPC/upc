@@ -423,9 +423,11 @@ typedef struct {
      *  滑块自己的底距要再减掉旋钮的内缩：稿上是**旋钮**与左下按钮上下对齐的
      *  （两者顶都在 668、底都在 752），而轨道比旋钮高出上下各 5。 */
     int32_t user_home_edge_gap;
-    /** 铃铛面板宽（稿 320@1280）。高度由条目数撑，不定值。 */
-    int32_t user_panel_w;
-    /** 铃铛面板里单条消息的行高（稿 48@1280）。左侧等级色竖条高取本值的 2/3（稿 32）。 */
+    /** 铃铛面板里单条消息的行高下限（稿 6578:41549 是 56@1280）。条目按内容撑、这里只
+     *  兜底：1024 档字号没跟着缩（仍是 16），两行字撑出来比本值高。面板里另外几处小尺寸
+     *  也从本值折算（左侧等级色竖条 4×32、「查看剩余」行尾箭头 14），见 ui_notice_stack.cpp。
+     *
+     *  面板宽不单开字段：新稿与 toast 同为 400，直接铺满通知栈容器（USER_NOTICE_CARD_W）。 */
     int32_t user_panel_row_h;
 
     /* ---- 监控页（稿 6338:27240 打印态 / 6338:27049 待机态 / 6307:40977 Manual）---- */
@@ -669,7 +671,6 @@ int32_t user_media_play_size(void);
 #define USER_HOME_SLIDE_W           (g_ui->user_home_slide_w)
 #define USER_HOME_SLIDE_H           (g_ui->user_home_slide_h)
 #define USER_HOME_EDGE_GAP          (g_ui->user_home_edge_gap)
-#define USER_PANEL_W                (g_ui->user_panel_w)
 #define USER_PANEL_ROW_H            (g_ui->user_panel_row_h)
 #define USER_EMPTY_RING_SZ          (g_ui->user_empty_ring_sz)
 

@@ -238,6 +238,8 @@ private:
     void publish_inner_door_busy(bool busy);
     /** @brief 外门补关的 Z 下降/回位：置灰 Manual 的 Top/Bottom 与 Z 升降复位。 */
     void set_manual_z_lock(bool lock);
+    /** @brief 外门补关套件整段进行中（reserved[1]）；值变化才发。 */
+    void set_clearance_kit_active(bool active);
     /** @brief 外门补关 Z 运动中收到 1204：立刻解锁，并让本次等待失败、不再自动回位。 */
     void note_z_axis_motion_fault();
     void publish_inner_door_busy_payload();
@@ -636,6 +638,9 @@ private:
     std::atomic<bool> manual_z_lock_{false};
     /** 外门补关 Z 运动中收到 1204：等待立刻失败，且不再自动回位重新上锁。 */
     std::atomic<bool> clearance_z_fault_{false};
+    /** 外门补关套件整段（降 Z → 关内门 → 回 Z）进行中；推给 UI 盖监控页遮罩。
+     *  与 manual_z_lock_ 不同：关门那 2 s 也保持 1。 */
+    std::atomic<bool> clearance_kit_active_{false};
     /** Manual/调试开或关已入队未处理完；防止连点排队第二次套件 */
     std::atomic<bool> inner_door_cmd_queued_{false};
     /** 外门已关但当时不能跑关内门（套件忙 / 发送中 / 预检）；稍后补做 */

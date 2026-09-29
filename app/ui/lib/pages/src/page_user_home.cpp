@@ -6,6 +6,7 @@
 #include "home_metric_icons.h"
 #include "ui_slide_unlock.hpp"
 #include "ui_device_state.hpp"
+#include "ui_air_quality.hpp"
 #include "ui_notice_stack.hpp"
 #include "page_manager.hpp"
 
@@ -22,7 +23,7 @@
  * 视觉层次（对齐设计稿 5277:11571）：
  *   ┌────────────────────────────────────────────────┐
  *   │ (设备信息由外壳的常驻条画)      (通知浮层贴右上) │ ← topbar（空占位带）
- *   │ ┌ HOME PM2.5 ─────┐            ○─ Cabin condition
+ *   │ ┌ Cabin PM2.5 ────┐            ○─ Cabin condition
  *   │ │ Fair (36.5)     │  [Device]     TEMPERATURE  │
  *   │ │ ▂▂▂▂ ●         │               O2 CONC.     │
  *   │ └─────────────────┘               HUMIDITY     │
@@ -61,13 +62,14 @@ void home_trigger_door_open(void)
      control_open_door_request();
 }
 
-/* ---------- 首页左卡（HOME 空气质量·可切换 PM2.5/PM10） ---------- */
-lv_obj_t *g_home_card_title = nullptr;  /**< "HOME PM2.5" / "HOME PM10" */
+/* ---------- 首页左卡（PM2.5 空气质量·舱内/舱外可切换） ----------
+ * 切换状态不在本页：与监控页 Status 卡共用 core/ui_air_quality 里那一份（两页联动，
+ * 重启复位到舱内）。 */
+lv_obj_t *g_home_card_title = nullptr;  /**< "Cabin PM2.5" / "Home PM2.5" */
 lv_obj_t *g_home_card_level = nullptr;  /**< 分级大字 Good/Fair/Poor/Very Poor */
 lv_obj_t *g_home_card_value = nullptr;  /**< 分级大字下那行读数 "36.5 ug/m3" */
 lv_obj_t *g_home_seg_track  = nullptr;  /**< 4 段色条容器（用于计算游标 x） */
 lv_obj_t *g_home_seg_dot    = nullptr;  /**< 分级游标圆点 */
-int       g_home_metric_idx = 0;        /**< 0=PM2.5 1=PM10（切换按钮，重启复位） */
 
 /* ---------- 首页右侧四宫格（温度 / 氧浓度 / 湿度 / 气压） ----------
  * 浅色稿 6040:66164 把早先那个「悬浮文本 + 引线」的 CABIN 面板换成了 2×2 白卡，
@@ -94,7 +96,7 @@ void on_files_click(lv_event_t *)
     }
     /* 待机：设计稿右上角为 "我的文件" 入口。后端文件管理流程后续重建，
      * 暂复用现有打印编排作为占位，保证流程可达。 */
-    control_start();
+    control_start("user_home");
 }
 
 /* 滑动开门解锁后：触发开门 + 提示，并在短暂延时后把滑块弹回以便再次使用 */
@@ -158,47 +160,17 @@ lv_obj_t *build_topbar(lv_obj_t *parent)
 
 /* ============================================================================
  *  首页 normal 视图（对齐 Figma 5277:11571 待机中）
- *    左上：HOME 空气质量磨砂卡（PM2.5/PM10 可切换 + 四档色条 + 游标）
+ *    左上：PM2.5 空气质量磨砂卡（舱内/舱外可切换 + 四档色条 + 游标）
  *    右侧：Cabin condition 悬浮 4 行（TEMPERATURE/O2/HUMIDITY/PRESSURE）
  *    左下：两枚入口胶囊（Monitor / Start Print，稿 5339:27275）
  *    右下：滑动开门
  * ========================================================================== */
 
-/** 空气质量指标描述：标题 + 三档上界（Good/Fair/Poor 上限）+ Very Poor 插值伪上限。 */
-struct AirMetric {
-    const char *title;
-    float       b_good;     /**< ≤ b_good → Good */
-    float       b_fair;     /**< ≤ b_fair → Fair */
-    float       b_poor;     /**< ≤ b_poor → Poor；否则 Very Poor */
-    float       pseudo_max; /**< Very Poor 段游标插值用的伪上限 */
-};
-
-/* 阈值取自设计稿分级表：PM2.5 35/75/150，PM10 50/150/350（μg/m³）。 */
-const AirMetric kAirMetrics[2] = {
-    { "PM2.5", 35.0f,  75.0f, 150.0f, 300.0f },
-    { "PM10",  50.0f, 150.0f, 350.0f, 700.0f },
-};
-
-const char *const kLevelName[4] = { "Good", "Fair", "Poor", "Very Poor" };
+/* 空气质量卡的标题、分级阈值（PM2.5 35/75/150）、档名、游标比例与读数文本都在
+ * core/ui_air_quality，与监控页 Status 卡共用一份；本页只管画。 */
 
 /* 早先这里还有一枚 air_level_color()，给色条那四段上绿/黄/橙/红。浅色稿把四段改成了
  * 白色、不透明度递增（分级改由游标位置和分级大字表达），它就没有调用点了，已删。 */
-
-/** 由数值定档并给出色条全局比例（0..1）：档内按数值在区间内线性插值。 */
-int air_classify(const AirMetric &m, float v, float *frac_global)
-{
-    int   level;
-    float lo, hi;
-    if(v <= m.b_good)      { level = 0; lo = 0;        hi = m.b_good; }
-    else if(v <= m.b_fair) { level = 1; lo = m.b_good; hi = m.b_fair; }
-    else if(v <= m.b_poor) { level = 2; lo = m.b_fair; hi = m.b_poor; }
-    else                   { level = 3; lo = m.b_poor; hi = m.pseudo_max; }
-    float fin = (hi > lo) ? (v - lo) / (hi - lo) : 0.5f;
-    if(fin < 0.0f) fin = 0.0f;
-    if(fin > 1.0f) fin = 1.0f;
-    if(frac_global) *frac_global = (static_cast<float>(level) + fin) / 4.0f;
-    return level;
-}
 
 /** 多档 set 挑图，实现在 `ui_user_pick_icon()`（侧栏、控制页也在用同一份）。
  *  本页调用点多，留个短名转调。 */
@@ -236,10 +208,11 @@ lv_obj_t *make_tinted_icon(lv_obj_t *parent, const lv_image_dsc_t *const *set,
 
 void home_card_update(void);   /* 定义见下方数据刷新区 */
 
-/** 左卡右上角切换按钮：PM2.5 ⇄ PM10 循环（重启复位到 PM2.5）。 */
+/** 左卡右上角切换按钮：舱内 ⇄ 舱外循环。切换状态与监控页 Status 卡共用，
+ *  那边下次刷新（进页 / 环境推送）就跟到同一档。 */
 void on_home_metric_toggle(lv_event_t * /*e*/)
 {
-    g_home_metric_idx = (g_home_metric_idx + 1) % 2;
+    ui_air_source_toggle();
     home_card_update();
 }
 
@@ -251,8 +224,9 @@ int32_t card_px(int32_t design_v)
     return design_v * USER_HOME_CARD_W / 240;
 }
 
-/** 卡内那枚 dim 图标：浅色稿里 HOME 卡与四宫格的卡头图标都是 24@1280，
- *  即 USER_METRIC_ICON_SZ 的 3/4（三档整除成 36/24/19，生成脚本里都有原生尺寸）。 */
+/** 卡内那枚 dim 图标：浅色稿里左卡切换钮里的箭头是 24@1280（早先 HOME 卡与四宫格的
+ *  卡头图标也是这个尺寸，新稿都去掉了），即 USER_METRIC_ICON_SZ 的 3/4（三档整除成
+ *  36/24/19，生成脚本里都有原生尺寸）。 */
 int32_t light_icon_sz(void)
 {
     return USER_METRIC_ICON_SZ * 3 / 4;
@@ -260,7 +234,7 @@ int32_t light_icon_sz(void)
 
 const lv_image_dsc_t *home_card_bg_dsc(void);   /* 定义见下方背景挑图区 */
 
-/* 左卡：HOME 空气质量卡（浅色稿 6064:70631）。
+/* 左卡：PM2.5 空气质量卡（浅色稿 6064:70631；舱内 / 舱外两档见稿 6578:40613 / 6578:40816）。
  *
  * 底是预生成位图（径向渐变 + 点阵 + 底缘柔光，见 tools/gen_home_bg.py），卡内元素全是
  * 稿上的绝对定位，所以这里一律 FLOATING + align，不走 flex——稿本身就没有流式结构，
@@ -290,19 +264,17 @@ lv_obj_t *build_home_card(lv_obj_t *parent)
     lv_image_set_inner_align(bg, LV_IMAGE_ALIGN_COVER);
     lv_obj_center(bg);
 
-    /* 头部：房子图标 (24,24) + 标题，右上角一枚 48 的切换钮 (180,12)。
-     * 标题左缘 52 = 图标左 24 + 图标 24 + 间距 4；顶 24 是让它与 24 见方的图标居中对齐
-     * 后的视觉位置（稿上整组的 opacity 是 90%）。 */
-    lv_obj_t *hicon = make_tinted_icon(card, ic_home_set, light_icon_sz(),
-                                       lv_color_white());
-    lv_obj_align(hicon, LV_ALIGN_TOP_LEFT, card_px(24), card_px(24));
-
+    /* 头部：标题 (24,24)，右上角一枚 48 的切换钮 (180,12)。
+     * 新稿（6578:40613 / 40816）去掉了标题前的房子图标，标题左缘从 52（= 图标左 24 +
+     * 图标 24 + 间距 4）挪回 24，与下面的分级大字同一条竖线。顶 24 不变：原先是让它与
+     * 24 见方的图标居中对齐后的视觉位置，新稿标题墨迹的高度与旧稿一致（稿上整组的
+     * opacity 是 90%）。标题文字由 home_card_update() 按当前档填。 */
     g_home_card_title = lv_label_create(card);
-    lv_label_set_text(g_home_card_title, kAirMetrics[0].title);
+    lv_label_set_text(g_home_card_title, "");
     lv_obj_set_style_text_color(g_home_card_title, lv_color_white(), 0);
     lv_obj_set_style_text_opa(g_home_card_title, LV_OPA_90, 0);
     lv_obj_set_style_text_font(g_home_card_title, user_font_title(), 0);
-    lv_obj_align(g_home_card_title, LV_ALIGN_TOP_LEFT, card_px(52), card_px(24));
+    lv_obj_align(g_home_card_title, LV_ALIGN_TOP_LEFT, card_px(24), card_px(24));
 
     lv_obj_t *toggle = lv_button_create(card);
     lv_obj_remove_style_all(toggle);
@@ -318,20 +290,22 @@ lv_obj_t *build_home_card(lv_obj_t *parent)
                                          lv_color_white());
     lv_obj_center(tg_icon);
 
-    /* 分级大字与读数。稿上是一个 gap 4 的竖向块，顶在 136；"Good" 行高 52 而字号 40，
-     * 上下各有 6 的行内留白，所以标签自身的顶落在 142。左缘 24 与上面的图标对齐。 */
+    /* 分级大字与读数。旧稿（6064:70631）是一个 gap 4 的竖向块，顶在 136；"Good" 行高 52
+     * 而字号 40，上下各有 6 的行内留白，所以标签自身的顶落在 142、读数落在 198。新稿
+     * （6578:40613）这两行的墨迹各上移约 6 / 4，照这个差值取 136 / 194。左缘 24 与标题
+     * 同一条竖线。 */
     g_home_card_level = lv_label_create(card);
     lv_label_set_text(g_home_card_level, "--");
     lv_obj_set_style_text_color(g_home_card_level, lv_color_white(), 0);
     lv_obj_set_style_text_font(g_home_card_level, user_font_display(), 0);
-    lv_obj_align(g_home_card_level, LV_ALIGN_TOP_LEFT, card_px(24), card_px(142));
+    lv_obj_align(g_home_card_level, LV_ALIGN_TOP_LEFT, card_px(24), card_px(136));
 
     g_home_card_value = lv_label_create(card);
     lv_label_set_text(g_home_card_value, "");
     lv_obj_set_style_text_color(g_home_card_value, lv_color_white(), 0);
     lv_obj_set_style_text_opa(g_home_card_value, LV_OPA_70, 0);
     lv_obj_set_style_text_font(g_home_card_value, user_font_body(), 0);
-    lv_obj_align(g_home_card_value, LV_ALIGN_TOP_LEFT, card_px(24), card_px(198));
+    lv_obj_align(g_home_card_value, LV_ALIGN_TOP_LEFT, card_px(24), card_px(194));
 
     /* 四段色条 (24,262) 宽 192 高 8 间距 4，游标 20 居中骑在上面（外框按游标高取 20，
      * 顶因此比色条早 6，即 256——正好是稿上游标自己的顶）。
@@ -768,37 +742,32 @@ lv_obj_t *build_action_tiles(lv_obj_t *parent)
     return row;
 }
 
-/** 刷新左卡（HOME 空气质量）：按当前切换指标填 标题/分级/数值/游标位置。 */
+/** 刷新左卡（PM2.5 空气质量）：按当前档（舱内/舱外，见 ui_air_quality）填
+ *  标题/分级/数值/游标位置。 */
 void home_card_update(void)
 {
     if(!g_home_card_title) {
         return;
     }
-    const AirMetric &m = kAirMetrics[g_home_metric_idx];
-    lv_label_set_text(g_home_card_title, m.title);
+    ui_air_view_t view;
+    ui_air_view_get(&view);
+    lv_label_set_text(g_home_card_title, view.title);
 
-    const ui_device_snapshot_t &snap = *ui_device_state_get();
-    const float v = (g_home_metric_idx == 0) ? snap.pm25_indoor
-                                             : snap.pm10_indoor;
-    if(metric_invalid(v)) {
+    if(!view.valid) {
         /* 无数据：分级显示 "--"，清空数值、隐藏游标 */
-        lv_label_set_text(g_home_card_level, "--");
+        lv_label_set_text(g_home_card_level, view.level_name);
         lv_obj_set_style_text_color(g_home_card_level, user_color_text_dim, 0);
-        lv_label_set_text(g_home_card_value, "");
+        lv_label_set_text(g_home_card_value, view.value_text);
         if(g_home_seg_dot) {
             lv_obj_add_flag(g_home_seg_dot, LV_OBJ_FLAG_HIDDEN);
         }
         return;
     }
 
-    float frac = 0.0f;
-    const int level = air_classify(m, v, &frac);
-    lv_label_set_text(g_home_card_level, kLevelName[level]);
+    lv_label_set_text(g_home_card_level, view.level_name);
     lv_obj_set_style_text_color(g_home_card_level, user_color_text, 0);
-    /* 稿是 `35 μg/m³`，没有括号。**单位只能写成 ug/m3**：LVGL 的 Montserrat 字符集是
-     * `0x20-0x7F,0xB0,0x2022`（ASCII + 度号 + 圆点，`23.6°` 能显示就是靠那个 0xB0），
-     * `μ`(U+03BC) 与 `³`(U+00B3) 都不在里面。要上稿的写法得扩字符集重新生成整套字体。 */
-    lv_label_set_text_fmt(g_home_card_value, "%.1f ug/m3", v);
+    /* 读数文本（一位小数、单位写成 ug/m3 的缘由）见 ui_air_view_get()。 */
+    lv_label_set_text(g_home_card_value, view.value_text);
 
     /* 游标：档内插值得到全局比例 frac，落在色条对应位置。 */
     if(g_home_seg_dot && g_home_seg_track) {
@@ -806,7 +775,7 @@ void home_card_update(void)
         lv_obj_update_layout(g_home_seg_track);
         const int32_t tw = lv_obj_get_width(g_home_seg_track);
         const int32_t dot_sz = lv_obj_get_width(g_home_seg_dot);
-        int32_t dx = static_cast<int32_t>(frac * static_cast<float>(tw)) - dot_sz / 2;
+        int32_t dx = static_cast<int32_t>(view.frac * static_cast<float>(tw)) - dot_sz / 2;
         if(dx < 0) dx = 0;
         if(dx > tw - dot_sz) dx = tw - dot_sz;
         lv_obj_align(g_home_seg_dot, LV_ALIGN_LEFT_MID, dx, 0);

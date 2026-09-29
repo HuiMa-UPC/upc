@@ -8,6 +8,7 @@
  * 内核 DRM tiny 已完成初始化/offset/背光；本模块只写 shadow + pwrite。
  * UI 布局移植自 doc/spilcd/ui_pm25.*（160×80 逻辑横屏，用户态逆时针 90°→80×160 fb）。
  * 调用方当前喂 3~5 µg/m³ 缓变模拟值（舱外 PMSA 暂不可靠）；无效值（&lt;0）显示 "--"。
+ * 同一个值也经 APP_Update_Ntf.pm25_indoor 推给首页/监控页（Home PM2.5）与 MQTT chamber_ext。
  * 节点缺失只 Warn 一次。
  */
 

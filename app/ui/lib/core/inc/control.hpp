@@ -29,7 +29,8 @@ typedef enum {
     CONTROL_STATE_DOOR_OPENING,     /**< 未放入分支：PM2.5 检测 + 开门 loading */
     /**
      * 取件分支专用：门开之后的转运盒三步（装盒并抽出隔断板 → 转移工件 → 推入闸门），
-     * 走完即回 IDLE。仅在调试开关打开时插入，见 control_set_transfer_box_flow()。
+     * 走完即回 IDLE。转运盒开关打开（默认开）且不是自检阶段终止时才插入，
+     * 见 control_set_transfer_box_flow()。
      */
     CONTROL_STATE_TRANSFER_BOX,
     CONTROL_STATE_PREPARE_WAIT,     /**< 选文件后：预处理 loading */
@@ -81,7 +82,13 @@ typedef struct {
 
 void control_init(lv_obj_t *parent);
 
-void control_start(void);
+/**
+ * 打印入口（首页 / 监控页的 PRINT）：先走放版预确认，再进选文件页。仅 IDLE 态生效。
+ * @param origin 入口分区页名，"user_home" 或 "user_monitor"。选文件页挂到该分区下：
+ *               侧栏高亮它、返回键回它、中途切走再点它的图标仍回选文件页。
+ *               nullptr 按 "user_home"。
+ */
+void control_start(const char *origin);
 void control_cancel(void);
 /** 打印占用中（PRINTING 或 PRINT_DONE）：期间禁止进文件页开新任务 */
 bool control_is_printing(void);
@@ -104,6 +111,12 @@ void control_open_door_for_inner(void);
  * @return false 表示当前不在空闲态，未启动。
  */
 bool control_transfer_demo_start(void);
+
+/**
+ * 一键转运的准备阶段（后台降 Z / 关内门 / 开外门，还没进装盒页）是否在跑。
+ * 变化时会调 page_user_monitor_transfer_demo_changed()；Glavo 迟迟不回 Rsp 时 90 s 后自行清掉。
+ */
+bool control_transfer_demo_pending(void);
 
 /* ---- 打印中的三个粉料阻塞弹窗（稿 6345:31129 / 6343:30738 / 6343:30854）---- */
 typedef enum {
@@ -145,7 +158,7 @@ void control_files_reset_dir_pending(void);
 void control_files_set_active(const control_file_t *file);
 /** 清空文件列表（切页签时先清再拉，避免旧源的条目残留一帧）。 */
 void control_files_clear(void);
-/** 返回键：首页区视图归位到仪表盘并切页。 */
+/** 返回键：回到选文件页所挂的分区（首页仪表盘或监控页），并把它从分区上摘下。 */
 void control_files_close(void);
 
 /** 弹打印确认（报警预检在页面侧做完之后调用）。 */
@@ -161,12 +174,20 @@ void control_files_open_confirm(const char *title, const char *body,
                                 lv_event_cb_t cancel_cb, lv_event_cb_t confirm_cb);
 void control_files_close_dialog(void);
 
-const char *control_home_section_target(void);
+/**
+ * 侧栏分区图标（首页 / 监控页）的点击目标，供 PageManager 的目标解析器调用：
+ * 选文件页正挂在该分区下就返回 "user_files"（中途切走再回来仍停在文件页），
+ * 否则返回分区本页。打印占用期间一律返回分区本页——那时 switch_to() 会挡住
+ * user_files，解析到它等于图标点了进不去。
+ * @param section 分区页名，"user_home" 或 "user_monitor"
+ */
+const char *control_section_target(const char *section);
 
 void control_terminate_request(void);
 
 /* ---- 转运盒流程开关（设置页 Advanced Print / 调试页 Other → Print Gates） ----
  * 默认开：取件分支在门开之后插入转运盒三步；关闭则开门成功即回 IDLE。
+ * 自检阶段（Ready 之前）终止的取件不管开关都不插入：没出过光，舱里没有工件，只开门。
  * 纯 UI 本地标志（不发消息、不落盘），重启回到开。 */
 void control_set_transfer_box_flow(bool on);
 bool control_transfer_box_flow_enabled(void);

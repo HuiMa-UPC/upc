@@ -246,8 +246,7 @@ static const ui_theme_t s_theme_1920 = {
     /* user_home_slide_w      */ 680,
     /* user_home_slide_h      */ 141,
     /* user_home_edge_gap     */ 72,
-    /* user_panel_w           */ 480,
-    /* user_panel_row_h       */ 72,
+    /* user_panel_row_h       */ 84,
 
     /* 监控页：1280 档取稿值，本档按 ×1.5 折算 */
     /* user_mon_panel_w       */ 630,
@@ -440,8 +439,7 @@ static const ui_theme_t s_theme_1280 = {
     /* user_home_slide_w      */ 453,  /* 稿值 */
     /* user_home_slide_h      */ 94,   /* 稿值（旋钮 84 上下各内缩 5） */
     /* user_home_edge_gap     */ 48,   /* 稿值（横向仍是 USER_PAD_LG 的 32，稿就不对称） */
-    /* user_panel_w           */ 320,  /* 稿值 */
-    /* user_panel_row_h       */ 48,   /* 稿值 */
+    /* user_panel_row_h       */ 56,   /* 稿值（6578:41549） */
 
     /* 监控页（稿 6338:27240 一族），本档全取稿值 */
     /* user_mon_panel_w       */ 420,  /* 屏上 860..1280，内容区 420−2×32 = 356 */
@@ -638,8 +636,7 @@ static const ui_theme_t s_theme_1024 = {
     /* user_home_slide_w      */ 362,
     /* user_home_slide_h      */ 75,
     /* user_home_edge_gap     */ 38,
-    /* user_panel_w           */ 256,
-    /* user_panel_row_h       */ 38,
+    /* user_panel_row_h       */ 45,
 
     /* 监控页：1280 档取稿值，本档按 ×0.8 折算。
      * panel_w 特意留得比 336（420×0.8）宽一点：本档 USER_PAD_LG 是 36（比 1280 档的 32

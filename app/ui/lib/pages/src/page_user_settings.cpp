@@ -43,7 +43,7 @@
  *   - 软件版本号迁至 About 子页。
  *   - Display & Sound：LCD 背光滑条（sysfs `/sys/class/backlight`，1~100%）。
  *   - Advanced Print：打印前门控，默认开，与调试页同一套 Glavo 开关；
- *     Transfer Box 与调试页同一枚本地开关，默认开（取件后走转运盒三步）；
+ *     Transfer Box 与调试页同一枚本地开关，默认开（取件后走转运盒三步，自检阶段终止的除外）；
  *     Calibration 内的 Work Height 是测高收到约 1mm 后再向上补的目标高度；
  *     Height Calibration 的 Start 与调试页 Laser 卡相同。
  *   - 子导航图标暂用 LV_SYMBOL 占位，待 SVG 资源到位再替换。
