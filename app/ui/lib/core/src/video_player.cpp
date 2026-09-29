@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <climits>
 #include <condition_variable>
 #include <cstdint>
 #include <cstring>
@@ -588,6 +589,30 @@ struct VideoPlayer::Impl {
         return decode_one_video_frame_locked(for_preview, target_ms, preview_gen);
     }
 
+    /** 播完后 demuxer 常停在 EOF；单靠 av_seek_frame(0) 对部分 mp4（moov 在尾）会失败。 */
+    bool rewind_demuxer_locked()
+    {
+        if(!fmt || stream_index < 0) {
+            return false;
+        }
+        if(av_seek_frame(fmt, stream_index, 0, AVSEEK_FLAG_BACKWARD) >= 0) {
+            return true;
+        }
+        if(avformat_seek_file(fmt, stream_index, INT64_MIN, 0, 0, 0) >= 0) {
+            return true;
+        }
+        if(av_seek_frame(fmt, stream_index, 0, AVSEEK_FLAG_BYTE) >= 0) {
+            return true;
+        }
+        if(fmt->pb && avio_seek(fmt->pb, 0, SEEK_SET) >= 0) {
+#if LIBAVFORMAT_VERSION_MAJOR >= 58
+            avformat_flush(fmt);
+#endif
+            return true;
+        }
+        return false;
+    }
+
     bool seek_to_ms(int64_t pos_ms, bool preview_only, uint64_t preview_gen = 0)
     {
         std::lock_guard<std::mutex> decoder_lk(decoder_mtx);
@@ -602,14 +627,30 @@ struct VideoPlayer::Impl {
         const int64_t clamped_ms = duration_ms > 0
             ? std::clamp(clamp_non_negative(pos_ms), int64_t{0}, duration_ms)
             : clamp_non_negative(pos_ms);
-        const int64_t target_pts = ms_to_pts(clamped_ms, time_base);
-        if(av_seek_frame(fmt, stream_index, target_pts, AVSEEK_FLAG_BACKWARD) < 0) {
+        bool seek_ok = false;
+        if(clamped_ms <= 0) {
+            seek_ok = rewind_demuxer_locked();
+        } else {
+            const int64_t target_pts = ms_to_pts(clamped_ms, time_base);
+            seek_ok =
+                av_seek_frame(fmt, stream_index, target_pts, AVSEEK_FLAG_BACKWARD) >= 0;
+            if(!seek_ok) {
+                seek_ok = avformat_seek_file(
+                              fmt, stream_index, INT64_MIN, target_pts, target_pts, 0) >=
+                          0;
+            }
+        }
+        if(!seek_ok) {
             return false;
         }
         avcodec_flush_buffers(codec);
         eof.store(false, std::memory_order_relaxed);
         if(!decode_one_video_frame_locked(preview_only, clamped_ms, preview_gen)) {
             return false;
+        }
+        {
+            std::lock_guard<std::mutex> state_lk(mtx);
+            position_ms = clamped_ms;
         }
         return true;
     }
@@ -789,6 +830,11 @@ bool VideoPlayer::play()
     std::lock_guard<std::mutex> lk(impl_->mtx);
     if(!impl_->opened) {
         return false;
+    }
+    /* 停在 EOF 时先入队回绕，decode_loop 会先处理 Seek 再读帧，避免点播放立刻 ended。 */
+    if(impl_->eof.load(std::memory_order_relaxed) ||
+       (impl_->duration_ms > 0 && impl_->position_ms + 1 >= impl_->duration_ms)) {
+        impl_->push_command(Impl::CommandType::Seek, 0);
     }
     impl_->playing = true;
     impl_->cv.notify_all();
