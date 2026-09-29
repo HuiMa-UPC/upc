@@ -306,6 +306,8 @@ scripts/rongsu.sh start   # glavo + rongsu_camera → ui
 | `UI_Debug_Env_Sim_Powder_Get_Ntf` | — | UI→Glavo | Empty | `request_env_sim_powder_state` | 查询当前“环境模拟粉量缺粉”开关状态 |
 | `UI_Debug_Skip_O2_Gate_Set_Ntf` | — | UI→Glavo | `DebugOnOffPayload` | `send_skip_o2_gate_set` | 调试页开关：跳过 SOC 氧打印门（仅本次运行，默认关；开则起印不发洗气开、不等氧、打印中不因氧高暂停/1120） |
 | `UI_Debug_Skip_O2_Gate_Get_Ntf` | — | UI→Glavo | Empty | `request_skip_o2_gate_state` | 查询当前“跳过氧门”开关状态 |
+| `UI_Debug_Powder_Low_Check_Set_Ntf` | — | UI→Glavo | `DebugOnOffPayload` | `send_powder_low_check_set` | 设置页 Print Checks：缺粉检测（仅本次运行，**默认开**；`on=0` 不因缺粉暂停、不发 `APP_Print_Powder_Low_Ntf`） |
+| `UI_Debug_Powder_Low_Check_Get_Ntf` | — | UI→Glavo | Empty | `request_powder_low_check_state` | 查询缺粉检测开关 |
 | `UI_Debug_Skip_Outer_Door_Set_Ntf` | — | UI→Glavo | `DebugOnOffPayload` | `send_skip_outer_door_set` | 调试页开关：跳过外门检测+关内门套件（仅本次运行，**默认关=要做**；开则不检门、不开→关边沿也不跑套件） |
 | `UI_Debug_Skip_Outer_Door_Get_Ntf` | — | UI→Glavo | Empty | `request_skip_outer_door_state` | 查询跳过外门检测开关 |
 | `UI_Debug_Inner_Door_Busy_Get_Ntf` | — | UI→Glavo | Empty | `request_inner_door_busy` | 查询内门开/关套件是否进行中 |
@@ -336,6 +338,7 @@ scripts/rongsu.sh start   # glavo + rongsu_camera → ui
 | `GLAVO_Debug_Env_Sim_Ntf` | — | Glavo→UI | `DebugOnOffPayload` | `register_env_sim` | 回读当前“环境上报模拟”开关状态 |
 | `GLAVO_Debug_Env_Sim_Powder_Ntf` | — | Glavo→UI | `DebugOnOffPayload` | `register_env_sim_powder` | 回读当前“环境模拟粉量缺粉”开关状态 |
 | `GLAVO_Debug_Skip_O2_Gate_Ntf` | — | Glavo→UI | `DebugOnOffPayload` | `register_skip_o2_gate` | 回读当前“跳过 SOC 氧打印门”开关状态 |
+| `GLAVO_Debug_Powder_Low_Check_Ntf` | — | Glavo→UI | `DebugOnOffPayload` | `register_powder_low_check` | 回读缺粉检测开关（`on=1` 检测） |
 | `GLAVO_Debug_Skip_Outer_Door_Ntf` | — | Glavo→UI | `DebugOnOffPayload` | `register_skip_outer_door` | 回读当前“跳过外门检测”开关状态 |
 | `GLAVO_Debug_Inner_Door_Busy_Ntf` | — | Glavo→UI | `DebugOnOffPayload` | `register_inner_door_busy` | `on=1` 内门套件进行中，Manual / 调试 Inner Door 禁钮；`reserved[0]=1` 仅外门补关的 Z 下降到 −100 或回到下降前高度，Manual 的 Top/Bottom 与 Z 升降、复位置灰（期间 1204 active/latched 立刻解禁）；`reserved[1]=1` 外门补关套件整段进行中（降 Z → 关内门 → 回 Z，中间关门那 2 s 也保持 1；Keep Z Position 开时只剩关门），UI 据此盖监控页遮罩，套件结束与 `on=0` 同一帧清零。跳过/结束 `on=0` |
 | `GLAVO_Debug_O2_Calib_Rsp` | — | Glavo→UI | `DebugO2CalibRspPayload` | `register_o2_calib` | 氧标定 Req 应答（ok/err/k/i_ua/o2）；成功不再另推 Ntf |

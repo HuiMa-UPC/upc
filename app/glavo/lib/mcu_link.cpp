@@ -3026,6 +3026,7 @@ void McuLink::reset_motion_state(bool clear_start_pending)
     if(o2_alarm_active_) {
         publish_soc_chamber_oxygen_alarm(false);
     }
+    SpiStatusLed::instance().set_suppress_chamber_o2_lamp(false);
     sent_at_layer_ready_ = 0;
     current_layer_snapped_ = false;
     first_layer_check_passed_ = false;
@@ -3633,7 +3634,9 @@ void McuLink::link_process_serial_handshake()
             const bool o2_ok = read_print_o2_percent(&o2) &&
                                o2 < GLAVO_O2_PRINT_MAX_PERCENT;
             if(!o2_ok) {
-                /* 起印尚未开扫，不做 TCP 暂停；仍发 1120 让 UI 提示氧高。 */
+                /* 起印尚未开扫，不做 TCP 暂停；仍发 1120 让 UI 提示氧高。
+                 * 灯保持打印绿，不因这次 1120 切红。 */
+                SpiStatusLed::instance().set_suppress_chamber_o2_lamp(true);
                 publish_soc_chamber_oxygen_alarm(true);
                 emit_event(McuLinkEvent::OxygenGateWaiting);
                 const auto now = std::chrono::steady_clock::now();
@@ -3650,6 +3653,7 @@ void McuLink::link_process_serial_handshake()
             }
             last_o2_wait_log_ = {};
             publish_soc_chamber_oxygen_alarm(false);
+            SpiStatusLed::instance().set_suppress_chamber_o2_lamp(false);
             emit_event(McuLinkEvent::OxygenGatePassed);
             UPC_LOG_MCU_LINK_TO(SerialLayer, Info,
                 "SOC O2 gate pass: %.2f%% < %.2f%%, send PRINT_START",

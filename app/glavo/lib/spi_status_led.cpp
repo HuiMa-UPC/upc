@@ -134,10 +134,23 @@ void SpiStatusLed::queue_apply_locked(bool force_send)
     if(!enabled_ && !dbg_force_) {
         return;
     }
+    bool alarm_red = false;
+    if(!condition_active_.empty()) {
+        if(!suppress_chamber_o2_lamp_) {
+            alarm_red = true;
+        } else {
+            for(uint16_t code : condition_active_) {
+                if(code != static_cast<uint16_t>(GLAVO_ALARM_CODE_CHAMBER_OXYGEN_HIGH)) {
+                    alarm_red = true;
+                    break;
+                }
+            }
+        }
+    }
     Color c = Color::Blue;
     if(dbg_force_) {
         c = dbg_color_;
-    } else if(!condition_active_.empty()) {
+    } else if(alarm_red) {
         c = Color::Red;
     } else if(printing_) {
         c = Color::Orange;
@@ -208,6 +221,16 @@ void SpiStatusLed::set_printing(bool on)
 {
     std::lock_guard<std::mutex> lock(mtx_);
     printing_ = on;
+    queue_apply_locked();
+}
+
+void SpiStatusLed::set_suppress_chamber_o2_lamp(bool on)
+{
+    std::lock_guard<std::mutex> lock(mtx_);
+    if(suppress_chamber_o2_lamp_ == on) {
+        return;
+    }
+    suppress_chamber_o2_lamp_ = on;
     queue_apply_locked();
 }
 

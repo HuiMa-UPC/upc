@@ -249,6 +249,8 @@ const char* upc_msg_type_name(MsgType type) {
         case MsgType::UI_Debug_Spi_Pm25_Lcd_Set_Ntf: return "UI_Debug_Spi_Pm25_Lcd_Set_Ntf";
         case MsgType::UI_Debug_Spi_Pm25_Lcd_Get_Ntf: return "UI_Debug_Spi_Pm25_Lcd_Get_Ntf";
         case MsgType::UI_Debug_Return_Motor_Ntf: return "UI_Debug_Return_Motor_Ntf";
+        case MsgType::UI_Debug_Powder_Low_Check_Set_Ntf: return "UI_Debug_Powder_Low_Check_Set_Ntf";
+        case MsgType::UI_Debug_Powder_Low_Check_Get_Ntf: return "UI_Debug_Powder_Low_Check_Get_Ntf";
         case MsgType::APP_Media_Local_Rtsp_State_Ntf: return "APP_Media_Local_Rtsp_State_Ntf";
         case MsgType::GLAVO_Debug_Sensor_Ntf: return "GLAVO_Debug_Sensor_Ntf";
         case MsgType::GLAVO_Debug_Axis_Ntf: return "GLAVO_Debug_Axis_Ntf";
@@ -271,6 +273,7 @@ const char* upc_msg_type_name(MsgType type) {
         case MsgType::GLAVO_Debug_O2_Calib_Ntf: return "GLAVO_Debug_O2_Calib_Ntf";
         case MsgType::GLAVO_Debug_Spi_Pm25_Lcd_Ntf: return "GLAVO_Debug_Spi_Pm25_Lcd_Ntf";
         case MsgType::GLAVO_Debug_Clean_Test_Ntf: return "GLAVO_Debug_Clean_Test_Ntf";
+        case MsgType::GLAVO_Debug_Powder_Low_Check_Ntf: return "GLAVO_Debug_Powder_Low_Check_Ntf";
         case MsgType::UI_Mcu_Version_Ntf: return "UI_Mcu_Version_Ntf";
         case MsgType::GLAVO_Mcu_Version_Ntf: return "GLAVO_Mcu_Version_Ntf";
         case MsgType::APP_Fs_Delete_Rsp: return "APP_Fs_Delete_Rsp";

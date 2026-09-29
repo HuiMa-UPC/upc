@@ -722,6 +722,7 @@ bool GlavoService::init()
     env_sim_on_ = false;
     env_sim_powder_low_on_ = false;
     skip_o2_print_gate_on_ = false;
+    powder_low_check_on_ = true;
     skip_outer_door_on_ = false;
     outer_door_confirm_waiting_ = false;
     McuLink::instance().set_env_sim_enabled(false);
@@ -891,6 +892,8 @@ bool GlavoService::start()
         middleware::MsgType::UI_Debug_Env_Sim_Powder_Get_Ntf,
         middleware::MsgType::UI_Debug_Skip_O2_Gate_Set_Ntf,
         middleware::MsgType::UI_Debug_Skip_O2_Gate_Get_Ntf,
+        middleware::MsgType::UI_Debug_Powder_Low_Check_Set_Ntf,
+        middleware::MsgType::UI_Debug_Powder_Low_Check_Get_Ntf,
         middleware::MsgType::UI_Debug_Skip_Outer_Door_Set_Ntf,
         middleware::MsgType::UI_Debug_Skip_Outer_Door_Get_Ntf,
         middleware::MsgType::UI_Debug_Inner_Door_Busy_Get_Ntf,
@@ -952,6 +955,7 @@ bool GlavoService::start()
     publish_debug_env_sim_state();
     publish_debug_env_sim_powder_state();
     publish_debug_skip_o2_gate_state();
+    publish_debug_powder_low_check_state();
     publish_debug_skip_outer_door_state();
     publish_debug_o2_calib_state();
     publish_debug_first_layer_visual_check_state();
@@ -1523,6 +1527,12 @@ void GlavoService::handle_message(const middleware::Message& msg)
             break;
         case middleware::MsgType::UI_Debug_Skip_O2_Gate_Get_Ntf:
             handle_debug_skip_o2_gate_get(msg);
+            break;
+        case middleware::MsgType::UI_Debug_Powder_Low_Check_Set_Ntf:
+            handle_debug_powder_low_check_set(msg);
+            break;
+        case middleware::MsgType::UI_Debug_Powder_Low_Check_Get_Ntf:
+            handle_debug_powder_low_check_get(msg);
             break;
         case middleware::MsgType::UI_Debug_Skip_Outer_Door_Set_Ntf:
             handle_debug_skip_outer_door_set(msg);
@@ -4576,6 +4586,10 @@ void GlavoService::on_mcu_link_event(McuLinkEvent ev)
             if(!print_running_.load()) {
                 break;
             }
+            if(!powder_low_check_on_) {
+                UPC_LOG_GLAVO_SERVICE(Debug, "powder low ignored: check off");
+                break;
+            }
             if(ignore_powder_low_for_current_print_) {
                 UPC_LOG_GLAVO_SERVICE(Warn, "powder low ignored for current print");
                 break;
@@ -6471,6 +6485,39 @@ void GlavoService::handle_debug_skip_o2_gate_get(const middleware::Message& msg)
 {
     (void)msg;
     publish_debug_skip_o2_gate_state();
+}
+
+void GlavoService::publish_debug_powder_low_check_state()
+{
+    middleware::DebugOnOffPayload p{};
+    p.on = powder_low_check_on_ ? 1 : 0;
+    middleware::Message ntf(
+        middleware::MsgType::GLAVO_Debug_Powder_Low_Check_Ntf,
+        middleware::ModuleId::APP_GLAVO,
+        middleware::ModuleId::UI);
+    ntf.payload = middleware::MsgPayload::from_bytes(
+        reinterpret_cast<const uint8_t*>(&p), sizeof(p));
+    if(!publish_async(ntf)) {
+        UPC_LOG_GLAVO_SERVICE(Warn, "GLAVO_Debug_Powder_Low_Check_Ntf publish_async failed");
+    }
+}
+
+void GlavoService::handle_debug_powder_low_check_set(const middleware::Message& msg)
+{
+    middleware::DebugOnOffPayload p{};
+    if(!read_inline_pod(msg.payload, p)) {
+        UPC_LOG_GLAVO_SERVICE(Warn, "invalid UI_Debug_Powder_Low_Check_Set_Ntf payload");
+        return;
+    }
+    powder_low_check_on_ = (p.on != 0);
+    UPC_LOG_GLAVO_SERVICE(Info, "powder_low_check=%d", powder_low_check_on_ ? 1 : 0);
+    publish_debug_powder_low_check_state();
+}
+
+void GlavoService::handle_debug_powder_low_check_get(const middleware::Message& msg)
+{
+    (void)msg;
+    publish_debug_powder_low_check_state();
 }
 
 void GlavoService::publish_debug_skip_outer_door_state()

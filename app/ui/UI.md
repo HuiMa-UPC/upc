@@ -2072,7 +2072,7 @@ RETRIEVE → 取件弹窗滑到底 → DOOR_OPENING（PM2.5/清粉 → 开门）
 
 | 档 | 触发 | 主按钮门控 | 取消 |
 |---|---|---|---|
-| 粉舱已空 | `APP_Print_Powder_Low_Ntf`（Glavo 判空后先自行暂停送料，另发一条 `APP_Print_Pause_Rsp(paused=1)`，状态行因此自动翻到 Pause） | 实时粉量位 `bit0/bit1 >= 1` 才可点 | 关窗 + `send_print_powder_low_ignore()`（本次打印忽略后续缺粉检测） |
+| 粉舱已空 | `APP_Print_Powder_Low_Ntf`（Glavo 判空后先自行暂停送料，另发一条 `APP_Print_Pause_Rsp(paused=1)`，状态行因此自动翻到 Pause）。设置页 Print Checks「Powder Low Check」默认开；关掉后本进程不再暂停、不再发这条通知 | 实时粉量位 `bit0/bit1 >= 1` 才可点 | 关窗 + `send_print_powder_low_ignore()`（本次打印忽略后续缺粉检测） |
 | 回粉盒满 | **暂无协议**，调试页 Other → Inject 手动打 | 无（没有对应传感器位，只能信用户） | 只关窗 |
 | 废粉盒满 | **暂无协议**，同上 | 无 | 只关窗 |
 
