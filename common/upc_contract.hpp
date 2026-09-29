@@ -484,8 +484,8 @@ enum class MsgType : uint32_t {
     UI_Debug_Laser_AlarmReset_Ntf,  /**< Empty：激光器报警复位（固定 1301） */
     UI_Debug_Print_H264_Record_Set_Ntf, /**< DebugOnOffPayload：打印期连续 H264 录像开关（仅本次运行） */
     UI_Debug_Print_H264_Record_Get_Ntf, /**< Empty：查询当前打印期连续 H264 录像开关状态 */
-    UI_Debug_Clean_Record_Set_Ntf,      /**< DebugOnOffPayload：清粉录像开关（仅本次运行） */
-    UI_Debug_Clean_Record_Get_Ntf,      /**< Empty：查询当前清粉录像开关状态 */
+    UI_Debug_Clean_Record_Set_Ntf,      /**< 已移除调试钮；保留枚举勿挪位 */
+    UI_Debug_Clean_Record_Get_Ntf,      /**< 已移除调试钮；保留枚举勿挪位 */
     UI_Debug_Env_Sim_Set_Ntf,           /**< DebugOnOffPayload：环境上报模拟开关（仅本次运行，默认关） */
     UI_Debug_Env_Sim_Get_Ntf,           /**< Empty：查询当前环境上报模拟开关状态 */
     UI_Debug_Env_Sim_Powder_Set_Ntf,    /**< DebugOnOffPayload：环境模拟粉量缺粉开关（延迟 5s 生效） */
@@ -531,7 +531,7 @@ enum class MsgType : uint32_t {
     GLAVO_Debug_Galvo_Ntf,          /**< DebugGalvoStatePayload：振镜 X/Y */
     GLAVO_Debug_Laser_Ntf,          /**< DebugLaserStatePayload：激光器状态/报警/功率/温度 */
     GLAVO_Debug_Print_H264_Record_Ntf, /**< DebugOnOffPayload：打印期连续 H264 录像开关状态 */
-    GLAVO_Debug_Clean_Record_Ntf,      /**< DebugOnOffPayload：清粉录像开关状态 */
+    GLAVO_Debug_Clean_Record_Ntf,      /**< 已移除调试钮；保留枚举勿挪位 */
     GLAVO_Debug_Env_Sim_Ntf,           /**< DebugOnOffPayload：环境上报模拟开关状态 */
     GLAVO_Debug_Env_Sim_Powder_Ntf,    /**< DebugOnOffPayload：环境模拟粉量缺粉开关状态 */
     GLAVO_Debug_FirstLayer_Visual_Check_Ntf, /**< DebugOnOffPayload：首层视觉检测开关状态 */
@@ -1438,17 +1438,18 @@ struct PrintVideoManifestPayload {
 
 /** UI_Clean_Test_Start_Req：Purify / 手动清粉触发清粉测试（录像可选）
  *
- * `record_video=0` 时 Glavo 不开 Media 清粉录像会话，因此不写
- * `/data/media/video/{job_name}/`、也不进打印历史；MCU 清粉结束后由 Glavo 自己发
- * `APP_Clean_Test_Result_Ntf`（`on_clean_test_done()` 的 `!video_started` 分支）。
- * 控制页的手动清粉走这一档，`job_name` 随之无人读取。 */
+ * `record_video=0` 时 Glavo 不开 Media 清粉录像会话，MCU 结束后由 Glavo 自己发
+ * `APP_Clean_Test_Result_Ntf`。调试页 Powder Clean 仍可走这一档。
+ * `record_video=1` 时由 `record_kind` 决定形态：
+ *   0=结果页延时 JPEG 接续；1=空闲清粉连续 H264（进 Print History）。 */
 struct CleanTestStartReqPayload {
-    char job_name[64];   /**< 对应 /userdata/media/video/{job_name}/ */
+    char job_name[64];   /**< 对应 /userdata/media/video/{job_name}/；H264 空闲可空由 Glavo 生成 */
     uint32_t width;      /**< 0=跟随 Camera 当前预览宽 */
     uint32_t height;     /**< 0=跟随 Camera 当前预览高 */
-    uint32_t fps;        /**< 0=跟随 Camera 当前预览 fps */
-    uint8_t record_video; /**< 1=同时开清粉录像（结果页 Purify）；0=只清粉不录 */
-    uint8_t reserved[3];
+    uint32_t fps;        /**< 0=跟随 Camera 当前预览 fps / 延时帧率 */
+    uint8_t record_video; /**< 1=开录像；0=只清粉不录 */
+    uint8_t record_kind;  /**< 0=延时 JPEG（结果页）；1=连续 H264（空闲清粉） */
+    uint8_t reserved[2];
 };
 
 /** APP_Clean_Test_Start_Rsp：清粉测试请求是否被 Glavo 受理 */
@@ -1536,6 +1537,9 @@ struct CleanVideoSessionStartPayload {
     uint32_t width;      /**< 0=沿用 Camera 预览宽 */
     uint32_t height;     /**< 0=沿用 Camera 预览高 */
     uint32_t fps;        /**< 抽帧/合成帧率；0=Media 默认（cal TIMELAPSE_VIDEO_FPS） */
+    uint8_t  record_kind; /**< 0=延时 JPEG；1=连续 H264（复用 PrintH264Recorder） */
+    uint8_t  reserved[3];
+    uint32_t h264_bitrate; /**< record_kind=1 时有效；0=Media 默认 */
 };
 
 /** GLAVO→MEDIA：清粉延时抽帧会话停止 */

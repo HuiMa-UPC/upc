@@ -178,8 +178,6 @@ private:
     void handle_debug_laser_alarm_reset(const middleware::Message& msg);
     void handle_debug_print_h264_record_set(const middleware::Message& msg);
     void handle_debug_print_h264_record_get(const middleware::Message& msg);
-    void handle_debug_clean_record_set(const middleware::Message& msg);
-    void handle_debug_clean_record_get(const middleware::Message& msg);
     void handle_debug_env_sim_set(const middleware::Message& msg);
     void handle_debug_env_sim_get(const middleware::Message& msg);
     void handle_debug_env_sim_powder_set(const middleware::Message& msg);
@@ -231,7 +229,6 @@ private:
     void handle_height_calib_start_req(const middleware::Message& msg);
     void handle_laser_spot_measure_rsp(const middleware::Message& msg);
     void publish_debug_print_h264_record_state();
-    void publish_debug_clean_record_state();
     void publish_debug_env_sim_state();
     void publish_debug_env_sim_powder_state();
     void publish_debug_skip_o2_gate_state();
@@ -584,11 +581,10 @@ private:
     std::atomic<bool> transport_result_pending_{false};
     std::atomic<uint8_t> transport_result_code_{0};
     bool clean_test_active_ = false;
-    bool clean_video_record_on_ = true; /**< 仅调试页状态回读；Purify 录像不再受其门控 */
     bool clean_video_session_started_ = false;
     char clean_test_session_id_[32]{};
     char clean_test_job_name_[64]{};
-    bool print_h264_continuous_on_ = false;
+    bool print_h264_continuous_on_ = true;
     bool first_layer_visual_check_on_ = false; /**< 首层视觉检测开关（仅本次运行） */
     bool first_layer_visual_session_active_ = false; /**< Visual Camera/定位预热会话状态 */
     bool first_layer_reference_waiting_ = false; /**< 等待Visual锁定本次打印裸板B0 */

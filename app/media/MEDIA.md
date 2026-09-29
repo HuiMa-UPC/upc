@@ -180,9 +180,14 @@ mp4 是否可信。finalize 侧不再只看「文件非空」，而是用 `timel
 
 无 RKMPP 时该路径编译关闭。
 
-## 清粉延时
+## 清粉录像
 
-`APP_Clean_Video_Session_*`：接续打印目录已有 `1..N.jpg`，按 timelapse fps 写 `(N+1).jpg…`。N=0（无打印 JPEG）则清粉段不录。Stop 成功只更新末帧 thumb 与清粉范围；MP4 在 `UI_Print_Video_Finalize_Req` 与打印 JPEG 一起合成。Stop 失败/用户关：删清粉 JPEG。Finalize 会等清粉会话结束（`clean_video_active_` 栅栏）。JSON 字段名仍是 `clean_first_png` / `clean_last_png`（帧序号，不是格式）。
+`APP_Clean_Video_Session_*` 按 `record_kind` 分流：
+
+- **`record_kind=0`（结果页）**：接续打印目录已有 `1..N.jpg`，按 timelapse fps 写 `(N+1).jpg…`。N=0 则清粉段不录。Stop 成功只更新末帧 thumb 与清粉范围；MP4 在 `UI_Print_Video_Finalize_Req` 与打印 JPEG 一起合成。用户关（`0xfe`）删清粉 JPEG。Finalize 会等清粉会话结束（`clean_video_active_` 栅栏）。
+- **`record_kind=1`（空闲 Manual）**：复用 `PrintH264Recorder` 连续录 `print_h264.mp4`（强制开，不看调试页 Print H264 Rec）。Stop 后（MCU 完 / 失败 / 用户再点停）立刻 promote 进 Print History；0 帧不建可播条目。不走结果页开门 finalize。
+
+JSON 字段名仍是 `clean_first_png` / `clean_last_png`（帧序号，不是格式）。
 
 ## 直播（云端 + 局域网）
 

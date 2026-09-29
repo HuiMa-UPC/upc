@@ -85,6 +85,7 @@
 #include <algorithm>
 #include <cmath>
 #include <chrono>
+#include <ctime>
 #include <array>
 #include <cstdio>
 #include <cstring>
@@ -715,8 +716,7 @@ bool GlavoService::init()
             print_h264_bitrate_);
     }
 
-    print_h264_continuous_on_ = false; /* 上电默认关：调试页 Other → Print H264 Rec */
-    clean_video_record_on_ = true;
+    print_h264_continuous_on_ = true; /* 上电默认开：调试页 Media & Sim → Print H264 Rec */
     clean_video_session_started_ = false;
     first_layer_visual_check_on_ = false;
     env_sim_on_ = false;
@@ -731,9 +731,8 @@ bool GlavoService::init()
     PrintVideoNotify::instance().set_print_h264_continuous(print_h264_continuous_on_);
     PrintVideoNotify::instance().set_timelapse_fps(timelapse_video_fps_);
     PrintVideoNotify::instance().set_print_h264_bitrate(print_h264_bitrate_);
-    UPC_LOG_GLAVO_SERVICE(Info, "print h264 continuous=%d clean record(debug)=%d env_sim=%d",
+    UPC_LOG_GLAVO_SERVICE(Info, "print h264 continuous=%d env_sim=%d",
                           print_h264_continuous_on_ ? 1 : 0,
-                          clean_video_record_on_ ? 1 : 0,
                           env_sim_on_ ? 1 : 0);
 
     parser::ParserContext::instance().load_calibration(CAL_DEFAULT_FILE_PATH);
@@ -884,8 +883,6 @@ bool GlavoService::start()
         middleware::MsgType::UI_Debug_Laser_AlarmReset_Ntf,
         middleware::MsgType::UI_Debug_Print_H264_Record_Set_Ntf,
         middleware::MsgType::UI_Debug_Print_H264_Record_Get_Ntf,
-        middleware::MsgType::UI_Debug_Clean_Record_Set_Ntf,
-        middleware::MsgType::UI_Debug_Clean_Record_Get_Ntf,
         middleware::MsgType::UI_Debug_Env_Sim_Set_Ntf,
         middleware::MsgType::UI_Debug_Env_Sim_Get_Ntf,
         middleware::MsgType::UI_Debug_Env_Sim_Powder_Set_Ntf,
@@ -951,7 +948,6 @@ bool GlavoService::start()
     worker_thread_ = std::thread(&GlavoService::worker_loop, this);
     start_usb_hotplug_monitor();
     publish_debug_print_h264_record_state();
-    publish_debug_clean_record_state();
     publish_debug_env_sim_state();
     publish_debug_env_sim_powder_state();
     publish_debug_skip_o2_gate_state();
@@ -1503,12 +1499,6 @@ void GlavoService::handle_message(const middleware::Message& msg)
             break;
         case middleware::MsgType::UI_Debug_Print_H264_Record_Get_Ntf:
             handle_debug_print_h264_record_get(msg);
-            break;
-        case middleware::MsgType::UI_Debug_Clean_Record_Set_Ntf:
-            handle_debug_clean_record_set(msg);
-            break;
-        case middleware::MsgType::UI_Debug_Clean_Record_Get_Ntf:
-            handle_debug_clean_record_get(msg);
             break;
         case middleware::MsgType::UI_Debug_Env_Sim_Set_Ntf:
             handle_debug_env_sim_set(msg);
@@ -4972,6 +4962,8 @@ void GlavoService::notify_clean_video_start(const middleware::CleanTestStartReqP
     payload.height = req.height;
     /* 优先 UI 请求；否则用 cal.csv TIMELAPSE_VIDEO_FPS；0 则 Media 默认 */
     payload.fps = req.fps > 0 ? req.fps : timelapse_video_fps_;
+    payload.record_kind = req.record_kind;
+    payload.h264_bitrate = print_h264_bitrate_;
 
     middleware::Message msg(middleware::MsgType::APP_Clean_Video_Session_Start_Ntf,
         middleware::ModuleId::APP_GLAVO,
@@ -5024,10 +5016,10 @@ void GlavoService::on_clean_test_done(uint8_t result_code)
 }
 
 /**
- * @brief 启动清粉测试：串口下发 +（按请求）通知 Media 开始延时抽帧
+ * @brief 启动清粉测试：串口下发 +（按请求）通知 Media 开录像
  *
- * 是否录像由 `req.record_video` 决定，不再无条件开会话。
- * clean_video_record_on_ 仅供调试页状态回读，从来不门控是否录像。
+ * `record_video=1` 时：`record_kind=0` 结果页延时 JPEG；`=1` 空闲连续 H264。
+ * 两路都不看调试页开关。
  */
 void GlavoService::handle_clean_test_start_request(const middleware::Message& msg)
 {
@@ -5041,7 +5033,21 @@ void GlavoService::handle_clean_test_start_request(const middleware::Message& ms
         return;
     }
 
-    const std::string job_name = sanitize_job_name(req.job_name);
+    std::string job_name;
+    if(req.record_video && req.record_kind == 1) {
+        /* 空闲清粉 H264：独立作业名，避免蹭到上次打印目录。 */
+        const auto now = std::chrono::system_clock::now();
+        const std::time_t t = std::chrono::system_clock::to_time_t(now);
+        std::tm tm_buf{};
+        localtime_r(&t, &tm_buf);
+        char stamp[48]{};
+        std::snprintf(stamp, sizeof(stamp), "clean_%04d%02d%02d_%02d%02d%02d",
+                      tm_buf.tm_year + 1900, tm_buf.tm_mon + 1, tm_buf.tm_mday,
+                      tm_buf.tm_hour, tm_buf.tm_min, tm_buf.tm_sec);
+        job_name = stamp;
+    } else {
+        job_name = sanitize_job_name(req.job_name);
+    }
     std::snprintf(clean_test_job_name_, sizeof(clean_test_job_name_), "%s",
                   job_name.c_str());
     make_clean_test_session_id(clean_test_session_id_, sizeof(clean_test_session_id_));
@@ -5055,9 +5061,6 @@ void GlavoService::handle_clean_test_start_request(const middleware::Message& ms
 
     clean_test_active_ = true;
     debug_tx(frame, n);
-    /* 录像由请求方决定：Purify 路径带 record_video=1 照旧全程录；控制页手动清粉给 0，
-     * 于是不建会话、不写 config.json，结束回执改由 on_clean_test_done() 的
-     * !video_started 分支直接发。调试开关仅保留状态回读，不再门控。 */
     if(req.record_video) {
         notify_clean_video_start(req);
         clean_video_session_started_ = true;
@@ -5586,7 +5589,7 @@ void GlavoService::usb_hotplug_loop()
  * 调试页手动控制：UI_Debug_* → serial_debug 组帧 → McuLink 串口下发
  *
  * 模式统一：读 Inline POD → serial_debug_build_* → debug_tx（可靠串口队列）。
- * 另有一组“软件开关”不经串口：Print H264 连续录、清粉录像状态回读、环境模拟；
+ * 另有一组“软件开关”不经串口：Print H264 连续录（默认开）、环境模拟等；
  * 它们改成员变量 / McuLink / PrintVideoNotify，并 publish 状态给 UI。
  * 振镜（以太网 TCP）、回粉电机后端逻辑预留，故不订阅、不下发。
  * ============================================================================ */
@@ -6336,37 +6339,6 @@ void GlavoService::handle_debug_print_h264_record_get(const middleware::Message&
 {
     (void)msg;
     publish_debug_print_h264_record_state();
-}
-
-void GlavoService::publish_debug_clean_record_state()
-{
-    middleware::DebugOnOffPayload p{};
-    p.on = clean_video_record_on_ ? 1 : 0;
-    middleware::Message ntf(
-        middleware::MsgType::GLAVO_Debug_Clean_Record_Ntf,
-        middleware::ModuleId::APP_GLAVO,
-        middleware::ModuleId::UI);
-    ntf.payload = middleware::MsgPayload::from_bytes(
-        reinterpret_cast<const uint8_t*>(&p), sizeof(p));
-    (void)publish_async(ntf);
-}
-
-void GlavoService::handle_debug_clean_record_set(const middleware::Message& msg)
-{
-    middleware::DebugOnOffPayload p{};
-    if(!read_inline_pod(msg.payload, p)) {
-        return;
-    }
-    clean_video_record_on_ = (p.on != 0);
-    UPC_LOG_GLAVO_SERVICE(Info, "debug clean_video_record=%d",
-                          clean_video_record_on_ ? 1 : 0);
-    publish_debug_clean_record_state();
-}
-
-void GlavoService::handle_debug_clean_record_get(const middleware::Message& msg)
-{
-    (void)msg;
-    publish_debug_clean_record_state();
 }
 
 void GlavoService::publish_debug_env_sim_state()

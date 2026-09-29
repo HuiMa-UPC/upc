@@ -134,8 +134,6 @@ lv_obj_t *g_print_h264_btn   = nullptr;     /**< 其他控制：打印期 H264 �
 lv_obj_t *g_print_h264_state_lbl = nullptr; /**< 其他控制：打印期 H264 状态文本 */
 lv_obj_t *g_powder_clean_btn = nullptr;     /**< Print Gates：清粉开关按钮（MCU 结束回执复位） */
 lv_obj_t *g_powder_clean_state_lbl = nullptr; /**< Print Gates：清粉状态文本 */
-lv_obj_t *g_clean_record_btn = nullptr;     /**< 其他控制：清粉录像开关按钮 */
-lv_obj_t *g_clean_record_state_lbl = nullptr; /**< 其他控制：清粉录像状态文本 */
 lv_obj_t *g_env_sim_btn = nullptr;          /**< 其他控制：环境上报模拟开关按钮 */
 lv_obj_t *g_env_sim_state_lbl = nullptr;    /**< 其他控制：环境上报模拟状态文本 */
 lv_obj_t *g_env_sim_powder_btn = nullptr;   /**< 其他控制：环境模拟缺粉按钮 */
@@ -1468,7 +1466,7 @@ struct DbgToggleCtx {
     lv_obj_t   *state_lbl;
     const char *on_txt;
     const char *off_txt;
-    uint8_t     kind;   /**< 0 粉桶 / 1 推粉 / 2 风扇 / 3 其他开关 / 4 清粉 / 5 打印H264 / 6 清粉录像 / 7 环境模拟 / 8 环境模拟缺粉 / 9 转运盒流程 / 10 首层视觉检测 / 11 消息注入 / 12 报警注入 / 13 本地RTSP / 14 光路检测 / 15 基板测高 / 16 SOC舱灯 / 17 舱内PM阀 / 18 跳过氧门 / 19 Sys HUD / 20 SPI小屏测试 / 21 跳过外门 / 22 跳过内门视觉挡门 / 23 跳过基板在位读码 / 24 跳过放版预确认 / 25 全屏绿幕 */
+    uint8_t     kind;   /**< 0 粉桶 / 1 推粉 / 2 风扇 / 3 其他开关 / 4 清粉 / 5 打印H264(默认开) / 6 已移除 / 7 环境模拟 / 8 环境模拟缺粉 / 9 转运盒流程 / 10 首层视觉检测 / 11 消息注入 / 12 报警注入 / 13 本地RTSP / 14 光路检测 / 15 基板测高 / 16 SOC舱灯 / 17 舱内PM阀 / 18 跳过氧门 / 19 Sys HUD / 20 SPI小屏测试 / 21 跳过外门 / 22 跳过内门视觉挡门 / 23 跳过基板在位读码 / 24 跳过放版预确认 / 25 全屏绿幕 */
     uint8_t     arg;    /**< 粉桶号 / DebugSwitchTarget / SOC LED channel */
 };
 
@@ -1556,7 +1554,7 @@ void on_dbg_toggle(lv_event_t *e)
                 break;
         case 5: proxy.send_print_h264_record_set(on);          /* 打印期连续 H264 录像总开关（仅本次运行） */
                 break;
-        case 6: proxy.send_clean_record_set(on);               /* 清粉录像总开关（仅本次运行） */
+        case 6: break; /* Clean Video Rec 已移除 */
                 break;
         case 7: proxy.send_env_sim_set(on);                    /* 环境上报模拟（仅本次运行，供 MQTT 联调） */
                 break;
@@ -2471,10 +2469,8 @@ void build_other_switches_column(lv_obj_t *parent)
     /* ---- 录像 / 模拟 ---- */
     lv_obj_t *media = make_section_card(col, "Media & Sim");
     lv_obj_t *rowM = make_switch_grid_row(media);
-    make_dbg_toggle(rowM, "Print H264 Rec", "On", "Off", LV_SYMBOL_PLAY, false,
+    make_dbg_toggle(rowM, "Print H264 Rec", "On", "Off", LV_SYMBOL_PLAY, true,
                     5, 0, true, 0, &g_print_h264_btn, &g_print_h264_state_lbl);
-    make_dbg_toggle(rowM, "Clean Video Rec", "On", "Off", LV_SYMBOL_PLAY, true,
-                    6, 0, true, 0, &g_clean_record_btn, &g_clean_record_state_lbl);
     make_dbg_toggle(rowM, "Env Sim", "On", "Off", LV_SYMBOL_REFRESH, false,
                     7, 0, true, 0, &g_env_sim_btn, &g_env_sim_state_lbl);
     make_dbg_toggle(rowM, "Powder Sim", "Low", "Full", LV_SYMBOL_WARNING, false,
@@ -3056,21 +3052,6 @@ void bind_debug_callbacks()
         }
     });
 
-    proxy.register_clean_record([](bool on) {
-        if(g_clean_record_btn) {
-            if(on) {
-                lv_obj_add_state(g_clean_record_btn, LV_STATE_CHECKED);
-            } else {
-                lv_obj_clear_state(g_clean_record_btn, LV_STATE_CHECKED);
-            }
-        }
-        if(g_clean_record_state_lbl) {
-            lv_label_set_text(g_clean_record_state_lbl, on ? "On" : "Off");
-            lv_obj_set_style_text_color(g_clean_record_state_lbl,
-                                        on ? user_light_accent : user_light_icon_off, 0);
-        }
-    });
-
     proxy.register_env_sim([](bool on) {
         g_env_sim_on = on;
         if(g_env_sim_btn) {
@@ -3448,8 +3429,6 @@ void reset_globals()
     g_print_h264_state_lbl = nullptr;
     g_powder_clean_btn = nullptr;
     g_powder_clean_state_lbl = nullptr;
-    g_clean_record_btn = nullptr;
-    g_clean_record_state_lbl = nullptr;
     g_env_sim_btn = nullptr;
     g_env_sim_state_lbl = nullptr;
     g_env_sim_powder_btn = nullptr;
@@ -3515,7 +3494,6 @@ void page_user_debug_refresh(bool /*force*/)
     start_zone4_timer();
     update_galvo_save_enabled();
     ui::DebugMsgProxy::instance().request_print_h264_record_state();
-    ui::DebugMsgProxy::instance().request_clean_record_state();
     ui::DebugMsgProxy::instance().request_env_sim_state();
     ui::DebugMsgProxy::instance().request_env_sim_powder_state();
     ui::DebugMsgProxy::instance().request_skip_o2_gate_state();
@@ -3550,7 +3528,6 @@ void page_user_debug_exit(void)
     proxy.register_device(nullptr);
     proxy.register_laser(nullptr);
     proxy.register_print_h264_record(nullptr);
-    proxy.register_clean_record(nullptr);
     proxy.register_clean_test_result(nullptr);
     proxy.register_env_sim(nullptr);
     proxy.register_env_sim_powder(nullptr);

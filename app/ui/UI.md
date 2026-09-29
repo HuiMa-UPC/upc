@@ -1742,8 +1742,8 @@ Job 卡写着 Print Terminated，弹窗却说 complete。
 **只跟正式打印层进度**；起印 Prepare 阶段条会涨，蒙版保持全盖（0%）。
 
 **吹粉分两路 owner，别混**（`purify_owner()`）：打印结束后那次走 `UI_CLEAN_OWNER_PRINT_RESULT`
-（带清粉录像、接进同一条 timelapse、进打印历史；结果页自动开一轮，钮可停/再开），
-Manual 页那次走 `UI_CLEAN_OWNER_MANUAL`（纯手动清一遍，不录像不落盘；不打印时可直接吹，不要求外门关）。
+（延时 JPEG 接续进同一条 timelapse；结果页自动开一轮，钮可停/再开；永远抽帧，无调试开关），
+Manual / 空闲走 `UI_CLEAN_OWNER_MANUAL`（连续 H264，单独进 Print History；点开始录、MCU 完/再点停都保留可播）。
 判据是底部当前是不是 Manual 档（`bottom_mode() == BOTTOM_MANUAL`，即待机停在 Manual 上），**不看 Tab**：
 打印会话里 Manual 也能进，结果页停在 Manual 上点的吹粉仍算打印结果那一路。正常结束一律等 MCU 完成帧
 （`UI_CLEAN_EVT_DONE`）；用户点停走 Close → `UI_CLEAN_EVT_STOPPED`。
