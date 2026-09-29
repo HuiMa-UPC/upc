@@ -1572,7 +1572,7 @@ void on_dbg_toggle(lv_event_t *e)
                  break;
         case 15: proxy.send_plate_height_adj_set(on);          /* 打印前基板测高调 Z（仅本次运行，默认开） */
                  break;
-        case 22: proxy.send_inner_door_occlusion_set(!on);    /* Skip Inner Door Occl：按下跳过挡门融合；载荷 on=1 仍表示执行（默认执行） */
+        case 22: proxy.send_inner_door_occlusion_set(!on);    /* Skip Inner Door Occl：按下跳过挡门融合；载荷 on=1 仍表示执行（默认关=Skip 开） */
                  break;
         case 23: proxy.send_plate_present_set(!on);            /* Skip Plate Present：按下跳过读码；载荷 on=1 仍表示执行（默认执行） */
                  break;
@@ -2444,7 +2444,7 @@ void build_other_switches_column(lv_obj_t *parent)
     lv_obj_t *rowG2 = make_switch_grid_row(gate);
     make_dbg_toggle(rowG2, "Skip Optical Path Chk", "On", "Off", LV_SYMBOL_EYE_OPEN, false,
                     14, 0, true, 0, &g_optical_path_check_btn, &g_optical_path_check_state_lbl);
-    make_dbg_toggle(rowG2, "Skip Inner Door Occl", "On", "Off", LV_SYMBOL_EYE_CLOSE, false,
+    make_dbg_toggle(rowG2, "Skip Inner Door Occl", "On", "Off", LV_SYMBOL_EYE_CLOSE, true,
                     22, 0, true, 0, &g_inner_door_occlusion_btn, &g_inner_door_occlusion_state_lbl);
     make_dbg_toggle(rowG2, "Skip Plate Present", "On", "Off", LV_SYMBOL_OK, false,
                     23, 0, true, 0, &g_plate_present_btn, &g_plate_present_state_lbl);

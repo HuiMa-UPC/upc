@@ -185,22 +185,7 @@ bool load_cal_config_options(const char* path, CalConfigOptions* out)
             out->device_model = value;
             continue;
         }
-        if(key_upper == "TIMELAPSE_VIDEO_FPS") {
-            uint32_t v = 0;
-            if(parse_uint_like(value, &v) && v >= 1u && v <= 30u) {
-                out->has_timelapse_video_fps = true;
-                out->timelapse_video_fps = v;
-            }
-            continue;
-        }
-        if(key_upper == "PRINT_H264_BITRATE") {
-            uint32_t v = 0;
-            if(parse_uint_like(value, &v) && v >= 500000u && v <= 8000000u) {
-                out->has_print_h264_bitrate = true;
-                out->print_h264_bitrate = v;
-            }
-            continue;
-        }
+        /* TIMELAPSE_VIDEO_FPS、PRINT_H264_BITRATE 不再读取，文件里留着也忽略。 */
     }
 
     std::fclose(fp);

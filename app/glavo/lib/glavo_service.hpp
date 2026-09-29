@@ -186,6 +186,8 @@ private:
     void handle_debug_skip_o2_gate_get(const middleware::Message& msg);
     void handle_debug_powder_low_check_set(const middleware::Message& msg);
     void handle_debug_powder_low_check_get(const middleware::Message& msg);
+    void handle_debug_door_pm_check_set(const middleware::Message& msg);
+    void handle_debug_door_pm_check_get(const middleware::Message& msg);
     void handle_debug_skip_outer_door_set(const middleware::Message& msg);
     void handle_debug_skip_outer_door_get(const middleware::Message& msg);
     void handle_debug_inner_door_busy_get(const middleware::Message& msg);
@@ -233,6 +235,7 @@ private:
     void publish_debug_env_sim_powder_state();
     void publish_debug_skip_o2_gate_state();
     void publish_debug_powder_low_check_state();
+    void publish_debug_door_pm_check_state();
     void publish_debug_skip_outer_door_state();
     /** @brief 推送内门套件忙闲（Manual 禁钮）；值变化才发。 */
     void publish_inner_door_busy(bool busy);
@@ -550,10 +553,11 @@ private:
     /** 上次进度推送时刻；纯层段层内百分比不变时用于环境字段保活 */
     std::chrono::steady_clock::time_point last_progress_push_at_{};
     bool last_usb_mounted_ = false;
-    bool door_real_open_enabled_ = (GLAVO_DOOR_REAL_OPEN_ENABLE != 0);
+    /** 开门前舱内 PM2.5 检测。默认开；设置页可关。不再读 cal.csv。 */
+    bool door_real_open_enabled_ = true;
     float pm25_clean_threshold_ = 50.0f;
-    uint32_t timelapse_video_fps_ = 0; /**< 0=Media 默认；来自 cal.csv TIMELAPSE_VIDEO_FPS */
-    uint32_t print_h264_bitrate_ = 0; /**< 0=Media 默认中等；来自 cal.csv PRINT_H264_BITRATE */
+    uint32_t timelapse_video_fps_ = 0; /**< 固定 0：Media 用 CAMERA_PRINT_VIDEO_LAYER_FPS，不读 cal.csv */
+    uint32_t print_h264_bitrate_ = 0; /**< 固定 0：Media 用 CAMERA_PRINT_H264_BITRATE，不读 cal.csv */
     std::thread clean_worker_;
     std::atomic<bool> clean_running_{false};
     std::thread pm25_sample_worker_;
@@ -595,7 +599,7 @@ private:
     float plate_work_z_mm_ = 1.0f;
     /** 准备阶段保持当前 Z（仅本次运行，默认关）。开则不起印降到 −10、内门前不降 Z、终止/失败收尾也不改 Z；基板测高仍动 Z。 */
     bool hold_prep_z_on_ = false;
-    bool inner_door_occlusion_on_ = true; /**< 内门视觉挡门（仅本次运行，默认开；调试页 Skip Inner Door Occl 按下后关） */
+    bool inner_door_occlusion_on_ = false; /**< 内门视觉挡门（仅本次运行，默认关；设置页 Inner Door Vision / 调试页 Skip 可改） */
     /** 光路前用底板图案判断有没有基板（仅本次运行，默认开）。与高度判断互斥。 */
     bool plate_present_on_ = true;
     /** 光路后用粗测 H-1>3 判断有没有基板（仅本次运行，默认关）。与图案判断互斥。 */

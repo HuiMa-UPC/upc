@@ -22,7 +22,8 @@ public:
     bool play();
     void pause();
     bool seek(int64_t position_ms);
-    /** 拖动预览：后台解码到缩小预览缓冲，latest-wins；不更新主画面。 */
+    /** 拖动预览：后台解码到缩小预览缓冲，latest-wins；不更新主画面。
+     *  播放页对连续 H264（清粉/打印录像）拖动时不再调用，避免 seek 压垮 UI。 */
     void request_preview(int64_t position_ms);
     /** 进入/退出拖动：退出时丢弃未送达的预览回调，避免松手后闪一下旧预览。 */
     void set_scrubbing(bool scrubbing);

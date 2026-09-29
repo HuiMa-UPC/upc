@@ -33,6 +33,7 @@ using DebugEnvSimCb = std::function<void(bool)>;
 using DebugEnvSimPowderCb = std::function<void(bool)>;
 using DebugSkipO2GateCb = std::function<void(bool)>;
 using DebugPowderLowCheckCb = std::function<void(bool)>;
+using DebugDoorPmCheckCb = std::function<void(bool)>;
 using DebugSkipOuterDoorCb = std::function<void(bool)>;
 /** busy=套件进行中；z_locked=外门补关的 Z 下降或回位中。 */
 using DebugInnerDoorBusyCb = std::function<void(bool busy, bool z_locked)>;
@@ -120,6 +121,9 @@ public:
     /** on=1 检测缺粉（默认开）。关：不暂停、不弹补粉窗。 */
     void send_powder_low_check_set(bool on);
     void request_powder_low_check_state();
+    /** on=1 开门前查舱内 PM2.5（默认开）。关：跳过检测与吹风，直接开门。 */
+    void send_door_pm_check_set(bool on);
+    void request_door_pm_check_state();
     void send_skip_outer_door_set(bool on);
     void request_skip_outer_door_state();
     void request_inner_door_busy();
@@ -220,7 +224,8 @@ public:
         DebugSkipO2GateCb skip_o2,
         DebugHeightCalibProgressCb height_calib,
         DebugHoldPrepZCb hold_prep_z,
-        DebugPowderLowCheckCb powder_low_check);
+        DebugPowderLowCheckCb powder_low_check,
+        DebugDoorPmCheckCb door_pm_check);
 
     /** Confirm Print 互斥：Glavo 回报的测试图实际运行态 */
     [[nodiscard]] bool test_image_active() const noexcept { return test_image_active_; }
@@ -303,6 +308,7 @@ private:
     /** 设置页 Advanced Print，与上面的调试页回调并列，互不覆盖。 */
     DebugSkipO2GateCb settings_skip_o2_cb_;
     DebugPowderLowCheckCb settings_powder_low_cb_;
+    DebugDoorPmCheckCb settings_door_pm_cb_;
     DebugSkipOuterDoorCb settings_skip_outer_cb_;
     DebugOpticalPathCheckCb settings_optical_cb_;
     DebugPlateHeightAdjCb settings_plate_height_cb_;

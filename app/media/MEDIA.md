@@ -30,7 +30,7 @@
 3. `recover_pending_and_reset_tmp()`：尽力收尾 pending，再清空 `tmp/` 与遗留 `{job}.__work_*`
 4. 注入 snapshot / 存储预算 / H264 finalize 回调；`live_rtsp`/`local_rtsp` 绑同一 `H264StreamEncoder`
 5. `local_rtsp.init(port)`：live555 事件循环随进程常驻；**必须绑上 IPv4**，失败则后续 `tick()` 重试
-6. `cal.csv` Config `TIMELAPSE_VIDEO_FPS` 覆盖延时 fps
+6. 延时 fps 固定 `CAMERA_PRINT_VIDEO_LAYER_FPS`（5），不读 `cal.csv`
 7. 立即 `MEDIA_Camera_Stream_Start_Req`；流未就绪则 `tick()` 每 1s 重试
 
 ## 取流
@@ -175,7 +175,7 @@ Glavo PrintVideoNotify → APP_MEDIA
 体积照样几百 MB 但播放器打不开的文件**；超时与「退出码非 0」在日志里分开打，便于判断
 mp4 是否可信。finalize 侧不再只看「文件非空」，而是用 `timelapse_util::mp4_has_moov_box()`
 走一遍顶层 box 链确认索引存在；解析不出结论（截断在 box 中间、读失败）时保守当可用。  
-码率默认 `CAMERA_PRINT_H264_BITRATE`=2048kbps；`cal.csv` `PRINT_H264_BITRATE`（500000–8000000）经 `PrintVideoSessionPayload.h264_bitrate` 覆盖。  
+码率固定 `CAMERA_PRINT_H264_BITRATE`=2048kbps；不再读 `cal.csv`。会话里 `h264_bitrate=0` 时用该默认值。  
 `h264_continuous_on=0` 时 recorder 直接 return。暂停：`APP_Print_H264_Record_Pause_Ntf`。
 
 无 RKMPP 时该路径编译关闭。
@@ -263,7 +263,7 @@ JSON 字段名仍是 `clean_first_png` / `clean_last_png`（帧序号，不是�
 | 历史清单 | `/userdata/media/video/config.json` | `UPC_VIDEO_CONFIG` |
 | ffmpeg | `/usr/bin/ffmpeg` | `CAMERA_FFMPEG_BIN`（打印 H.264 封装 / 序列转 mp4；静图不走 ffmpeg） |
 | 静图 JPEG 质量 | 80 | `CAMERA_STILL_JPEG_QUALITY` |
-| 延时 fps | 5 | `CAMERA_PRINT_VIDEO_LAYER_FPS` / `cal.csv` `TIMELAPSE_VIDEO_FPS` |
+| 延时 fps | 5 | `CAMERA_PRINT_VIDEO_LAYER_FPS`（不读 cal.csv） |
 | 延时播放 | JPEG 序列（`1.jpg`…） | `UPC_TIMELAPSE_PLAYBACK_PNG`（默认 1；宏名保留） |
 | 录像配额 | 分区 80% / 余量 5% | `UPC_VIDEO_STORAGE_QUOTA_PCT` / `MIN_FREE_PCT` |
 | 预算检查缓存窗口 | 5 s（仅缓存「充足」） | `UPC_MEDIA_STORAGE_BUDGET_CACHE_MS` |
@@ -274,7 +274,7 @@ JSON 字段名仍是 `clean_first_png` / `clean_last_png`（帧序号，不是�
 | 本地 RTSP NAL 队列 | 48（满丢到下个 IDR；约 1s） | `UPC_LOCAL_RTSP_QUEUE_MAX` |
 | 本地 RTSP 单帧上限 | 1 MB | `UPC_LOCAL_RTSP_MAX_FRAME_BYTES` |
 | 云端发送队列 | 1 MB（满丢到下个 IDR） | `UPC_LIVE_PUSH_QUEUE_MAX_BYTES` |
-| 打印录像码率 | 2048 kbps | `CAMERA_PRINT_H264_BITRATE`（可被 cal 覆盖） |
+| 打印录像码率 | 2048 kbps | `CAMERA_PRINT_H264_BITRATE`（不读 cal.csv） |
 | 直播码率 | 4096 kbps | `UPC_LIVE_H264_BITRATE` |
 | 直播 GOP | `fps`≈1s | `h264_stream_encoder.cpp` `rc:gop` |
 | 直播码率峰值 | 1.5× 目标 | `rc:bps_max`（I 帧/大运动不掐死） |

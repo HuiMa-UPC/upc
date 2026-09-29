@@ -690,9 +690,6 @@ bool GlavoService::init()
         upc::config::CalConfigOptions cal_cfg{};
         if(upc::config::load_cal_config_options(upc::config::kCalDefaultPath, &cal_cfg) &&
            cal_cfg.has_config_section) {
-            if(cal_cfg.has_glavo_door_real_open_enable) {
-                door_real_open_enabled_ = cal_cfg.glavo_door_real_open_enable;
-            }
             if(cal_cfg.has_glavo_serial_ack_enable) {
                 McuLink::instance().set_serial_ack_enabled(
                     cal_cfg.glavo_serial_ack_enable);
@@ -700,12 +697,7 @@ bool GlavoService::init()
             if(cal_cfg.has_pm25_clean_threshold) {
                 pm25_clean_threshold_ = cal_cfg.pm25_clean_threshold;
             }
-            if(cal_cfg.has_timelapse_video_fps) {
-                timelapse_video_fps_ = cal_cfg.timelapse_video_fps;
-            }
-            if(cal_cfg.has_print_h264_bitrate) {
-                print_h264_bitrate_ = cal_cfg.print_h264_bitrate;
-            }
+            /* 延时 fps / 打印 H264 码率不再读 cal.csv，成员保持 0，由 Media 用编译默认值。 */
         }
         UPC_LOG_GLAVO_SERVICE(Info,
             "runtime cfg: door_open=%d serial_ack=%d pm25_clean=%.1f timelapse_fps=%u h264_bps=%u",
@@ -723,6 +715,7 @@ bool GlavoService::init()
     env_sim_powder_low_on_ = false;
     skip_o2_print_gate_on_ = false;
     powder_low_check_on_ = true;
+    door_real_open_enabled_ = true;
     skip_outer_door_on_ = false;
     outer_door_confirm_waiting_ = false;
     McuLink::instance().set_env_sim_enabled(false);
@@ -891,6 +884,8 @@ bool GlavoService::start()
         middleware::MsgType::UI_Debug_Skip_O2_Gate_Get_Ntf,
         middleware::MsgType::UI_Debug_Powder_Low_Check_Set_Ntf,
         middleware::MsgType::UI_Debug_Powder_Low_Check_Get_Ntf,
+        middleware::MsgType::UI_Debug_Door_Pm_Check_Set_Ntf,
+        middleware::MsgType::UI_Debug_Door_Pm_Check_Get_Ntf,
         middleware::MsgType::UI_Debug_Skip_Outer_Door_Set_Ntf,
         middleware::MsgType::UI_Debug_Skip_Outer_Door_Get_Ntf,
         middleware::MsgType::UI_Debug_Inner_Door_Busy_Get_Ntf,
@@ -952,6 +947,7 @@ bool GlavoService::start()
     publish_debug_env_sim_powder_state();
     publish_debug_skip_o2_gate_state();
     publish_debug_powder_low_check_state();
+    publish_debug_door_pm_check_state();
     publish_debug_skip_outer_door_state();
     publish_debug_o2_calib_state();
     publish_debug_first_layer_visual_check_state();
@@ -1523,6 +1519,12 @@ void GlavoService::handle_message(const middleware::Message& msg)
             break;
         case middleware::MsgType::UI_Debug_Powder_Low_Check_Get_Ntf:
             handle_debug_powder_low_check_get(msg);
+            break;
+        case middleware::MsgType::UI_Debug_Door_Pm_Check_Set_Ntf:
+            handle_debug_door_pm_check_set(msg);
+            break;
+        case middleware::MsgType::UI_Debug_Door_Pm_Check_Get_Ntf:
+            handle_debug_door_pm_check_get(msg);
             break;
         case middleware::MsgType::UI_Debug_Skip_Outer_Door_Set_Ntf:
             handle_debug_skip_outer_door_set(msg);
@@ -4639,7 +4641,7 @@ void GlavoService::on_mcu_link_event(McuLinkEvent ev)
 /* ============================================================================
  * UI 设备状态与控制（耗材 / 环境 / 门 / 净化 / 清粉 / 转运）
  *
- * 门控：cal.csv 关闭时跳过舱内 PM2.5 与吹粉，开门指令仍下发并轮询传感器。
+ * 门控：设置页 PM2.5 Check 关掉时跳过舱内 PM2.5 与吹粉，开门指令仍下发并轮询传感器。
  * 开门前清粉（UI_Clean_Start）：独立 clean_worker_，避免堵死 worker 数秒～数分钟。
  * 清粉测试（Clean_Test）：串口指令 + 同步通知 Media 延时录像；完成由 MCU 回调回灌。
  * ============================================================================ */
@@ -4686,8 +4688,8 @@ void GlavoService::handle_pm25_request(const middleware::Message& msg)
     const uint32_t target = static_cast<uint32_t>(msg.sender_id);
 
     if(!door_real_open_enabled_) {
-        /* 门控关闭：跳过舱内 PM 检测与吹风，直接判合格，UI 随后只发开门指令 */
-        UPC_LOG_GLAVO_SERVICE(Info, "pm25_req: door gate off, skip cabin PM check");
+        /* 设置页关掉 PM2.5 Check：跳过舱内 PM 检测与吹风，直接判合格，UI 随后只发开门指令 */
+        UPC_LOG_GLAVO_SERVICE(Info, "pm25_req: door pm check off, skip cabin PM check");
         publish_pm25_rsp(target, false, 0.f);
         return;
     }
@@ -4738,7 +4740,7 @@ void GlavoService::handle_close_door_request(const middleware::Message& msg)
  *
  * worker 只发开门指令并拉起短线程轮询传感器（最长
  * GLAVO_DOOR_OPEN_TIMEOUT_MS），Rsp 由该线程 publish_async，不堵 worker。
- * 门控关闭时同样下发；PM2.5 与吹粉在 handle_pm25_request 里跳过。
+ * PM2.5 Check 关掉时同样下发；检测与吹粉在 handle_pm25_request 里跳过。
  */
 void GlavoService::handle_open_door_request(const middleware::Message& msg)
 {
@@ -4960,7 +4962,7 @@ void GlavoService::notify_clean_video_start(const middleware::CleanTestStartReqP
                   clean_test_job_name_);
     payload.width = req.width;
     payload.height = req.height;
-    /* 优先 UI 请求；否则用 cal.csv TIMELAPSE_VIDEO_FPS；0 则 Media 默认 */
+    /* 优先 UI 请求；0 则 Media 用 CAMERA_PRINT_VIDEO_LAYER_FPS，不读 cal.csv */
     payload.fps = req.fps > 0 ? req.fps : timelapse_video_fps_;
     payload.record_kind = req.record_kind;
     payload.h264_bitrate = print_h264_bitrate_;
@@ -6490,6 +6492,39 @@ void GlavoService::handle_debug_powder_low_check_get(const middleware::Message& 
 {
     (void)msg;
     publish_debug_powder_low_check_state();
+}
+
+void GlavoService::publish_debug_door_pm_check_state()
+{
+    middleware::DebugOnOffPayload p{};
+    p.on = door_real_open_enabled_ ? 1 : 0;
+    middleware::Message ntf(
+        middleware::MsgType::GLAVO_Debug_Door_Pm_Check_Ntf,
+        middleware::ModuleId::APP_GLAVO,
+        middleware::ModuleId::UI);
+    ntf.payload = middleware::MsgPayload::from_bytes(
+        reinterpret_cast<const uint8_t*>(&p), sizeof(p));
+    if(!publish_async(ntf)) {
+        UPC_LOG_GLAVO_SERVICE(Warn, "GLAVO_Debug_Door_Pm_Check_Ntf publish_async failed");
+    }
+}
+
+void GlavoService::handle_debug_door_pm_check_set(const middleware::Message& msg)
+{
+    middleware::DebugOnOffPayload p{};
+    if(!read_inline_pod(msg.payload, p)) {
+        UPC_LOG_GLAVO_SERVICE(Warn, "invalid UI_Debug_Door_Pm_Check_Set_Ntf payload");
+        return;
+    }
+    door_real_open_enabled_ = (p.on != 0);
+    UPC_LOG_GLAVO_SERVICE(Info, "door_pm_check=%d", door_real_open_enabled_ ? 1 : 0);
+    publish_debug_door_pm_check_state();
+}
+
+void GlavoService::handle_debug_door_pm_check_get(const middleware::Message& msg)
+{
+    (void)msg;
+    publish_debug_door_pm_check_state();
 }
 
 void GlavoService::publish_debug_skip_outer_door_state()

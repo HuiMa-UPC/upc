@@ -1,7 +1,6 @@
 #include "media_service.hpp"
 
 #include "nv12_copy.hpp"
-#include "config/cal_config.hpp"
 #include "device_config.hpp"
 #include "media_paths.hpp"
 #include "print_history_manifest.hpp"
@@ -100,13 +99,8 @@ bool MediaService::init()
     /* live555 事件循环随本进程常驻；调试开关只控制 session 挂载与编码器 sink。 */
     (void)local_rtsp_.init(local_rtsp_port());
 
-    uint32_t timelapse_fps = CAMERA_PRINT_VIDEO_LAYER_FPS;
-    upc::config::CalConfigOptions cal_cfg{};
-    if(upc::config::load_cal_config_options(upc::config::kCalDefaultPath, &cal_cfg) &&
-       cal_cfg.has_config_section && cal_cfg.has_timelapse_video_fps &&
-       cal_cfg.timelapse_video_fps > 0) {
-        timelapse_fps = cal_cfg.timelapse_video_fps;
-    }
+    /* 不再读 cal.csv TIMELAPSE_VIDEO_FPS，固定编译默认帧率。 */
+    const uint32_t timelapse_fps = CAMERA_PRINT_VIDEO_LAYER_FPS;
     print_video_.set_timelapse_fps(timelapse_fps);
     clean_video_.set_timelapse_fps(timelapse_fps);
     UPC_LOG_MEDIA_SERVICE(Info, "timelapse_video_fps=%u", timelapse_fps);
