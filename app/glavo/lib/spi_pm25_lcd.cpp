@@ -598,6 +598,8 @@ void SpiPm25Lcd::set_value_locked(float pm25_ug_m3)
         return;
     }
 
+    /* 首页/监控页 Home PM2.5 与本屏同值，UI 侧（ui_air_quality.cpp）照抄这里的进位与拆位
+     * 做到逐位一致；改这里要同步改那边。 */
     const float scaled = (pm25_ug_m3 * 10.0f) + 0.5f;
     uint16_t ug_x10 = 0;
     if(scaled > static_cast<float>(kUgX10Max)) {

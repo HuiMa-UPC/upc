@@ -35,6 +35,8 @@ using DebugSkipO2GateCb = std::function<void(bool)>;
 using DebugSkipOuterDoorCb = std::function<void(bool)>;
 /** busy=套件进行中；z_locked=外门补关的 Z 下降或回位中。 */
 using DebugInnerDoorBusyCb = std::function<void(bool busy, bool z_locked)>;
+/** active=外门补关套件整段（降 Z → 关内门 → 回 Z）进行中。 */
+using DebugClearanceCb = std::function<void(bool active)>;
 using DebugO2CalibCb =
     std::function<void(const middleware::DebugO2CalibRspPayload&)>;
 using DebugFirstLayerVisualCheckCb = std::function<void(bool)>;
@@ -178,6 +180,13 @@ public:
     void register_skip_o2_gate(DebugSkipO2GateCb cb);
     void register_skip_outer_door(DebugSkipOuterDoorCb cb);
     void register_inner_door_busy(DebugInnerDoorBusyCb cb);
+    /**
+     * 外门补关整段（`GLAVO_Debug_Inner_Door_Busy_Ntf.reserved[1]`）的常驻一路。
+     * 与 register_inner_door_busy() 同源、每帧都送，但**不随离页清空**：那一槽监控页 / 调试页
+     * 进页注册、离页置空，离页期间的帧就丢了；监控页遮罩要在切走期间也跟上状态，所以单开一槽，
+     * 由监控页后端在 monitor_backend_init() 里注册一次。
+     */
+    void register_clearance_state(DebugClearanceCb cb);
     void register_o2_calib(DebugO2CalibCb cb);
     void register_first_layer_visual_check(DebugFirstLayerVisualCheckCb cb);
     void register_optical_path_check(DebugOpticalPathCheckCb cb);
@@ -278,6 +287,7 @@ private:
     DebugSkipO2GateCb skip_o2_gate_cb_;
     DebugSkipOuterDoorCb skip_outer_door_cb_;
     DebugInnerDoorBusyCb inner_door_busy_cb_;
+    DebugClearanceCb clearance_cb_;
     DebugO2CalibCb o2_calib_cb_;
     DebugFirstLayerVisualCheckCb first_layer_visual_check_cb_;
     DebugOpticalPathCheckCb optical_path_check_cb_;

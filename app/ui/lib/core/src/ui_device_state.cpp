@@ -37,7 +37,6 @@ void apply_env(const middleware::EnvSnapshotPayload &p)
     g_snap.pm25_cabin     = p.pm25_cabin;
     g_snap.temperature_c  = p.temperature_c;
     g_snap.oxygen_percent = p.oxygen_percent;
-    g_snap.pm10_indoor    = p.pm10_indoor;
     g_snap.humidity_percent = p.humidity_percent;
     g_snap.pressure_kpa   = p.pressure_kpa;
     g_snap.powder_bits    = p.powder_bits;
@@ -78,7 +77,6 @@ void ui_device_state_init(void)
         g_snap.pm25_cabin     = -1.0f;
         g_snap.temperature_c  = -1.0f;
         g_snap.oxygen_percent = -1.0f;
-        g_snap.pm10_indoor    = -1.0f;
         g_snap.humidity_percent = -1.0f;
         g_snap.pressure_kpa   = -1.0f;
         g_snap.powder_bits    = 0u;

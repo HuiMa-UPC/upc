@@ -147,7 +147,7 @@ scripts/rongsu.sh start   # glavo + rongsu_camera → ui
 
 | MsgType（当前枚举） | 规范名（新消息参照） | 方向 | Payload | UI API | Glavo 处理 |
 |---------------------|----------------------|------|---------|--------|------------|
-| `APP_Update_Ntf` | `GLAVO_Env_Update_Ntf` | Glavo→UI/MQTT | `EnvSnapshotPayload`（含 `pm1_indoor`/`pm10_indoor`/`humidity_percent`/`pressure_kpa`/`baseplate_temp_c`/`powder_bits`/`sensor_v4`/`pm1_cabin`/`pm10_cabin`/`outer_door_open`/`door_state_valid`/`inner_door_open`；环境指标无效填 <0→UI 显示 `--`；`powder_bits` 用于缺粉弹窗继续按钮门控；`sensor_v4` 固定 1；外门供 Manual 内门门闩；内门=1ST bit1 全开开关，1=全开 0=非全开（非关到位）。MQTT `telemetry/chamber` 用 SOC 舱内量，`telemetry/chamber_ext` 用舱外 PM） | `register_env_update` | `McuLink` 推送（UI 与 MQTT 双发） |
+| `APP_Update_Ntf` | `GLAVO_Env_Update_Ntf` | Glavo→UI/MQTT | `EnvSnapshotPayload`（含 `pm1_indoor`/`pm10_indoor`/`humidity_percent`/`pressure_kpa`/`baseplate_temp_c`/`powder_bits`/`sensor_v4`/`pm1_cabin`/`pm10_cabin`/`outer_door_open`/`door_state_valid`/`inner_door_open`；环境指标无效填 <0→UI 显示 `--`；`powder_bits` 用于缺粉弹窗继续按钮门控；`sensor_v4` 固定 1；外门供 Manual 内门门闩；内门=1ST bit1 全开开关，1=全开 0=非全开（非关到位）。`pm25_indoor`（舱外 PM2.5）与 SPI 小屏同一个显示值——舱外 PMSA 暂不可靠，现为 3~5 µg/m³ 缓变模拟、非实测；`pm25_cabin` 为舱内 PMSA 实时值。首页/监控页 PM2.5 卡的 Cabin / Home 两档分别读这两个字段。MQTT `telemetry/chamber` 用 SOC 舱内量，`telemetry/chamber_ext` 用 `pm25_indoor`（即小屏值）） | `register_env_update` | `McuLink` 推送（UI 与 MQTT 双发） |
 | `UI_PM25_Req` | — | UI→Glavo | Empty | `send_pm25_check` | 读当前舱内 PM2.5 缓存比阈值（不开阀）；超标 UI 再发 `UI_Clean_Start_Req` |
 | `APP_PM25_Rsp` | `GLAVO_PM25_Check_Rsp` | Glavo→UI | `Pm25ResultPayload` | `register_pm25_result` | PM2.5 流程 |
 | `UI_CLOSE_DOOR_Req` | — | UI→Glavo | Empty | （已停用） | 历史关门检测；滑动开门流程不再发送 |
@@ -337,7 +337,7 @@ scripts/rongsu.sh start   # glavo + rongsu_camera → ui
 | `GLAVO_Debug_Env_Sim_Powder_Ntf` | — | Glavo→UI | `DebugOnOffPayload` | `register_env_sim_powder` | 回读当前“环境模拟粉量缺粉”开关状态 |
 | `GLAVO_Debug_Skip_O2_Gate_Ntf` | — | Glavo→UI | `DebugOnOffPayload` | `register_skip_o2_gate` | 回读当前“跳过 SOC 氧打印门”开关状态 |
 | `GLAVO_Debug_Skip_Outer_Door_Ntf` | — | Glavo→UI | `DebugOnOffPayload` | `register_skip_outer_door` | 回读当前“跳过外门检测”开关状态 |
-| `GLAVO_Debug_Inner_Door_Busy_Ntf` | — | Glavo→UI | `DebugOnOffPayload` | `register_inner_door_busy` | `on=1` 内门套件进行中，Manual / 调试 Inner Door 禁钮；`reserved[0]=1` 仅外门补关的 Z 下降到 −100 或回到下降前高度，Manual 的 Top/Bottom 与 Z 升降、复位置灰（期间 1204 active/latched 立刻解禁）。跳过/结束 `on=0` |
+| `GLAVO_Debug_Inner_Door_Busy_Ntf` | — | Glavo→UI | `DebugOnOffPayload` | `register_inner_door_busy` | `on=1` 内门套件进行中，Manual / 调试 Inner Door 禁钮；`reserved[0]=1` 仅外门补关的 Z 下降到 −100 或回到下降前高度，Manual 的 Top/Bottom 与 Z 升降、复位置灰（期间 1204 active/latched 立刻解禁）；`reserved[1]=1` 外门补关套件整段进行中（降 Z → 关内门 → 回 Z，中间关门那 2 s 也保持 1；Keep Z Position 开时只剩关门），UI 据此盖监控页遮罩，套件结束与 `on=0` 同一帧清零。跳过/结束 `on=0` |
 | `GLAVO_Debug_O2_Calib_Rsp` | — | Glavo→UI | `DebugO2CalibRspPayload` | `register_o2_calib` | 氧标定 Req 应答（ok/err/k/i_ua/o2）；成功不再另推 Ntf |
 | `GLAVO_Debug_O2_Calib_Ntf` | — | Glavo→UI | `DebugO2CalibRspPayload` | `register_o2_calib` | 进页 Get 回读当前 K（不改盘；i_ua=0；与 Rsp 同结构） |
 | `GLAVO_Debug_FirstLayer_Visual_Check_Ntf` | — | Glavo→UI | `DebugOnOffPayload` | `register_first_layer_visual_check` | 回读当前“首层视觉检测”开关状态 |
@@ -856,7 +856,7 @@ topic_<大类>_<子类>.log        # 兜底文件例外：topic_misc.log
 | `topic_mqtt_ota.log` | `MqttService` | `MqttOta` | 云端 OTA 通知、下载与校验进度 |
 | `topic_mqtt_command.log` | `MqttService` | `MqttCommand`（`UPC_LOG_MQTT_SERVICE` 默认） | 云端下行命令与 `cmd/ack`、订阅与激活 |
 | `topic_xfr_upload.log` | `XfrService` | `XfrUpload` | WiFi 发现、PIN 配对、HTTP 文件上传（仅收 `.json` / `.svg`） |
-| `topic_serial_sensor.log` | `McuLink` | `SerialSensor` | MCU `sensor:`（滤芯氧/滤芯气压/基板/NTC/开关/红外/转接板/外门/内门全开，`valid` 为有效位图）与 `fanboard:`（含 LDO/MCU 温度）；SOC `soc:` 每 5s（舱内氧、温湿、P1/P2、舱外与舱内 PM1.0/PM2.5/PM10，`<0` 无效，首页 PM2.5 用舱外）；另含调试页 `env_sim:` |
+| `topic_serial_sensor.log` | `McuLink` | `SerialSensor` | MCU `sensor:`（滤芯氧/滤芯气压/基板/NTC/开关/红外/转接板/外门/内门全开，`valid` 为有效位图）与 `fanboard:`（含 LDO/MCU 温度）；SOC `soc:` 每 5s（舱内氧、温湿、P1/P2、舱外与舱内 PM1.0/PM2.5/PM10，`<0` 无效；`pm_out` 为舱外实测，`pm25_disp` 为首页/MQTT 的舱外 PM2.5，即 SPI 小屏显示值）；另含调试页 `env_sim:` |
 | `topic_serial_alarm.log` | `McuLink` | `SerialAlarm` | MCU 报警与事件单条上报、快照、复位回执 |
 | `topic_serial_layer.log` | `McuLink` | `SerialLayer` | 换层握手：串口层指令下发与层事件回报 |
 | `topic_tcp_motion_tx.log` | `McuLink` | `TcpMotionTx` | 振镜运动数据包与紧急指令（急停 / 暂停 / 红光） |

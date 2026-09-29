@@ -1131,8 +1131,13 @@ EnvSnapshotCache McuLink::env_snapshot() const
     }
     if(!env_sim_on_.load() && out.sensor_v4) {
         const SocEnvSample soc = SocSensors::instance().snapshot();
+        /* 舱外 PM2.5 跟 SPI 小屏用同一个显示值，不看舱外 PMSA 有没有出数（小屏也不看）；
+         * 舱外 PM1.0 / PM10 仍是实测。 */
+        const float pm25_display = outdoor_pm25_display_.load();
+        if(pm25_display >= 0.f) {
+            out.pm25_indoor = pm25_display;
+        }
         if(soc.pm25_outdoor >= 0.f) {
-            out.pm25_indoor = soc.pm25_outdoor;
             out.pm1_indoor = soc.pm1_outdoor;
             out.pm10_indoor = soc.pm10_outdoor;
         }
@@ -1224,8 +1229,12 @@ void McuLink::merge_soc_env_into_cache_locked()
         return;
     }
     const SocEnvSample soc = SocSensors::instance().snapshot();
+    /* 舱外 PM2.5 与 SPI 小屏同值，口径同 env_snapshot() */
+    const float pm25_display = outdoor_pm25_display_.load();
+    if(pm25_display >= 0.f) {
+        env_cache_.pm25_indoor = pm25_display;
+    }
     if(soc.pm25_outdoor >= 0.f) {
-        env_cache_.pm25_indoor = soc.pm25_outdoor;
         env_cache_.pm1_indoor = soc.pm1_outdoor;
         env_cache_.pm10_indoor = soc.pm10_outdoor;
     }
@@ -1954,6 +1963,17 @@ void McuLink::publish_debug_sensor_from_soc_and_cache()
     }
 }
 
+void McuLink::advance_outdoor_pm25_display()
+{
+    /* 舱外 PMSA 暂不可靠，常显 3~5 µg/m³ 缓变模拟值（约 2.5 min/周期）。 */
+    outdoor_pm25_phase_ += 0.02f;
+    if(outdoor_pm25_phase_ > 6.2831853f) {
+        outdoor_pm25_phase_ -= 6.2831853f;
+    }
+    outdoor_pm25_display_.store(
+        4.0f + static_cast<float>(std::sin(static_cast<double>(outdoor_pm25_phase_))));
+}
+
 void McuLink::poll_soc_env_tick()
 {
     if(env_sim_on_.load()) {
@@ -1965,6 +1985,9 @@ void McuLink::poll_soc_env_tick()
         return;
     }
     next_soc_env_tick_ = now + std::chrono::milliseconds(kSocEnvPublishIntervalMs);
+
+    /* 先推进舱外显示值，本拍并进缓存、推给 UI / MQTT、写进小屏的都是这一个数 */
+    advance_outdoor_pm25_display();
 
     {
         std::lock_guard<std::mutex> lock(env_mtx_);
@@ -1982,14 +2005,15 @@ void McuLink::poll_soc_env_tick()
     publish_debug_sensor_from_soc_and_cache();
 
     /* 舱内氧/温湿/气压/PM 以 SOC 为准，不再出现在 MCU 1ST。5s 一条，避免 500ms 刷屏。
-     * pm 顺序为 PM1.0/PM2.5/PM10；首页 pm25 用舱外。<0 为无效（界面 "--"）。 */
+     * pm 顺序为 PM1.0/PM2.5/PM10，pm_out 是舱外 PMSA 实测；首页/MQTT 的舱外 PM2.5
+     * 是 pm25_disp（与小屏同值）。<0 为无效（界面 "--"）。 */
     static std::chrono::steady_clock::time_point last_pm_log{};
     if(last_pm_log.time_since_epoch().count() == 0 ||
        now - last_pm_log >= std::chrono::seconds(5)) {
         last_pm_log = now;
         UPC_LOG_MCU_LINK_TO(SerialSensor, Info,
             "soc: O2=%.1f%% T=%.1fC RH=%.1f%% P1=%.1fkPa P2=%.1fkPa "
-            "pm_out=%.1f/%.1f/%.1f pm_cabin=%.1f/%.1f/%.1f",
+            "pm_out=%.1f/%.1f/%.1f pm25_disp=%.1f pm_cabin=%.1f/%.1f/%.1f",
             static_cast<double>(soc.oxygen_percent),
             static_cast<double>(soc.temperature_c),
             static_cast<double>(soc.humidity_percent),
@@ -1998,21 +2022,15 @@ void McuLink::poll_soc_env_tick()
             static_cast<double>(soc.pm1_outdoor),
             static_cast<double>(soc.pm25_outdoor),
             static_cast<double>(soc.pm10_outdoor),
+            static_cast<double>(outdoor_pm25_display_.load()),
             static_cast<double>(soc.pm1_cabin),
             static_cast<double>(soc.pm25_cabin),
             static_cast<double>(soc.pm10_cabin));
     }
 
-    /* SPI 小屏：舱外 PMSA 暂不可靠，改常显 3~5 µg/m³ 缓变模拟值（约 2.5 min/周期）。
-     * 首页 / MQTT 仍用真实 soc.pm25_outdoor，不经此处。模块内同值去重。 */
-    static float spi_lcd_phase = 0.f;
-    spi_lcd_phase += 0.02f;
-    if(spi_lcd_phase > 6.2831853f) {
-        spi_lcd_phase -= 6.2831853f;
-    }
-    const float spi_lcd_pm25 =
-        4.0f + static_cast<float>(std::sin(static_cast<double>(spi_lcd_phase)));
-    SpiPm25Lcd::instance().update(spi_lcd_pm25);
+    /* SPI 小屏：与本拍推给 UI / MQTT 的 pm25_indoor 同一个显示值（见
+     * advance_outdoor_pm25_display）。模块内同值去重。 */
+    SpiPm25Lcd::instance().update(outdoor_pm25_display_.load());
 }
 
 void McuLink::poll_env_sim_tick()

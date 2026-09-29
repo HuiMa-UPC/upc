@@ -288,6 +288,18 @@ void PageManager::register_hidden_page(PagePtr page, std::string owner_menu) {
     entries_.push_back(std::move(entry));
 }
 
+void PageManager::set_hidden_page_owner(const std::string& page_name,
+                                        std::string owner_menu) {
+    PageEntry* e = find_entry(page_name);
+    if (!e || e->menu_btn) {
+        return;
+    }
+    e->owner_menu = std::move(owner_menu);
+    if (current_ == e->page.get()) {
+        update_menu_highlight(page_name);
+    }
+}
+
 void PageManager::set_menu_target_resolver(const std::string& page_name,
                                            std::function<std::string()> resolver) {
     if (PageEntry* e = find_entry(page_name)) {
@@ -301,7 +313,7 @@ void PageManager::menu_btn_event_cb(lv_event_t* e) {
         return;
     }
     PageManager& mgr = PageManager::instance();
-    /* 有动态目标解析器则切到解析结果（如首页图标→首页区当前视图），否则切到本页 */
+    /* 有动态目标解析器则切到解析结果（如首页 / 监控页图标→该分区当前视图），否则切到本页 */
     PageEntry* entry = mgr.find_entry(page->name());
     const std::string target = (entry && entry->target_resolver)
                                ? entry->target_resolver() : page->name();

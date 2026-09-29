@@ -6512,6 +6512,7 @@ void GlavoService::publish_inner_door_busy_payload()
     middleware::DebugOnOffPayload p{};
     p.on = inner_door_kit_busy_.load() ? 1 : 0;
     p.reserved[0] = manual_z_lock_.load() ? 1 : 0;
+    p.reserved[1] = clearance_kit_active_.load() ? 1 : 0;
     middleware::Message ntf(
         middleware::MsgType::GLAVO_Debug_Inner_Door_Busy_Ntf,
         middleware::ModuleId::APP_GLAVO,
@@ -6539,6 +6540,15 @@ void GlavoService::set_manual_z_lock(bool lock)
 {
     const bool prev = manual_z_lock_.exchange(lock);
     if(prev == lock) {
+        return;
+    }
+    publish_inner_door_busy_payload();
+}
+
+void GlavoService::set_clearance_kit_active(bool active)
+{
+    const bool prev = clearance_kit_active_.exchange(active);
+    if(prev == active) {
         return;
     }
     publish_inner_door_busy_payload();
@@ -7206,6 +7216,8 @@ bool GlavoService::run_inner_door_motion_kit(bool opening, bool blocking,
     auto release_busy = [&]() {
         if(busy_armed) {
             busy_armed = false;
+            /* 补关标志只清不发，跟下面 busy=0 同一帧出去，UI 不会看到「补关中但不忙」 */
+            clearance_kit_active_.store(false);
             publish_inner_door_busy(false);
         }
     };
@@ -7293,6 +7305,9 @@ bool GlavoService::run_inner_door_motion_kit(bool opening, bool blocking,
     const bool clearance = z_motion == InnerDoorZMotion::ClearanceReturn;
     if(clearance) {
         clearance_z_fault_.store(false);
+        /* 跳过判断都过了、确定要跑：从这里到套件结束（BusyRelease 清零）整段报给 UI。
+         * Keep Z Position 开时只剩关门那 2 s。 */
+        set_clearance_kit_active(true);
     }
     const float z_target = clearance ? kInnerDoorZMm : kPlateSafeZMm;
     const int z_settle_ms = clearance ? kInnerDoorZSettleMs : kPlateSafeZSettleMs;

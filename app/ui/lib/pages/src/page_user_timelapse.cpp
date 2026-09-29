@@ -72,6 +72,8 @@ lv_timer_t* g_play_timer = nullptr;
 int32_t g_preview_box_w = 160;
 int32_t g_preview_box_h = 128;
 
+void play_timer_cb(lv_timer_t*);
+
 uint64_t monotonic_ms()
 {
     return static_cast<uint64_t>(
@@ -131,6 +133,14 @@ void set_slider_enabled(bool enabled)
         lv_obj_clear_state(g_slider, LV_STATE_DISABLED);
     } else {
         lv_obj_add_state(g_slider, LV_STATE_DISABLED);
+    }
+}
+
+/** 页面只 create 一次；exit 不得删 timer，否则再进只跑 refresh，序列再也走不动。 */
+void ensure_play_timer()
+{
+    if(!g_play_timer) {
+        g_play_timer = lv_timer_create(play_timer_cb, kPlayIntervalMs, nullptr);
     }
 }
 
@@ -480,9 +490,11 @@ void on_play_click(lv_event_t*)
             g_playing = false;
             set_play_icon(false);
         } else {
+            /* 播完后 position 已贴 duration；必须先 seek(0) 再 play，否则下一帧立刻 EOF。 */
             const int64_t dur_ms = g_mp4_dur_ms > 0 ? g_mp4_dur_ms : player.duration_ms();
             const int64_t pos_ms = player.position_ms();
-            if(dur_ms > 0 && pos_ms >= dur_ms) {
+            if(dur_ms > 0 && pos_ms + 1 >= dur_ms) {
+                g_mp4_pos_ms = 0;
                 (void)player.seek(0);
             }
             g_playing = player.play();
@@ -492,6 +504,7 @@ void on_play_click(lv_event_t*)
     }
 
     if(g_mode == PlaybackMode::PngSequence && !g_frames.empty()) {
+        ensure_play_timer();
         /* 停在末帧时重新点播放要先回到开头，否则 play_timer_cb 下一拍就撞上
          * 结束判定又把 g_playing 关掉，表现为点了没反应。与上面 MP4 分支到
          * 末尾先 seek(0) 同理。 */
@@ -566,7 +579,10 @@ void on_slider_released(lv_event_t*)
         g_mp4_pos_ms = target_ms;
         update_progress_ui_mp4(target_ms, dur_ms);
         (void)ui::VideoPlayer::instance().seek(target_ms);
-        if(g_resume_after_drag) {
+        /* 播完后拖回中间也应续播；停在终点则保持暂停。 */
+        const bool should_play =
+            g_resume_after_drag || (dur_ms > 0 && target_ms + 1 < dur_ms);
+        if(should_play) {
             g_playing = ui::VideoPlayer::instance().play();
             set_play_icon(g_playing);
         }
@@ -574,7 +590,11 @@ void on_slider_released(lv_event_t*)
         ui::PngScrubPreview::instance().set_scrubbing(false);
         g_cur_index = slider_to_png_index(lv_slider_get_value(g_slider));
         render_current_png_frame();
-        if(g_resume_after_drag) {
+        ensure_play_timer();
+        /* 同上：末帧拖回前面要接着播，否则只能再点一次播放键。 */
+        const bool should_play =
+            g_resume_after_drag || (g_cur_index + 1u < g_frames.size());
+        if(should_play) {
             g_playing = true;
             set_play_icon(true);
         }
@@ -617,6 +637,8 @@ void page_user_timelapse_refresh(bool)
     if(!g_page) {
         return;
     }
+    /* 隐藏页再进只走 refresh，不重跑 create：补建 timer，控件指针仍指向未销毁对象。 */
+    ensure_play_timer();
     set_controls_visible(true);
     g_dragging = false;
     g_resume_after_drag = false;
@@ -675,14 +697,12 @@ void page_user_timelapse_refresh(bool)
 
 void page_user_timelapse_exit(void)
 {
+    /* 页面只是 HIDDEN，控件与 play_timer 仍存活；清指针/删 timer 会导致下次
+     * refresh 无法刷主画面、JPEG 序列不再推进（点播放像没反应）。 */
     g_playing = false;
     g_dragging = false;
     g_mode = PlaybackMode::None;
     hide_preview_chrome();
-    if(g_play_timer) {
-        lv_timer_delete(g_play_timer);
-        g_play_timer = nullptr;
-    }
     ui::PngScrubPreview::instance().set_preview_cb(nullptr);
     ui::PngScrubPreview::instance().cancel();
     ui::VideoPlayer::instance().set_preview_cb(nullptr);
@@ -698,10 +718,6 @@ void page_user_timelapse_exit(void)
     g_last_preview_req_ms = -1;
     g_last_preview_req_idx = -1;
     g_last_preview_req_tick_ms = 0;
-    g_video_img = nullptr;
-    g_preview_img = nullptr;
-    g_preview_box = nullptr;
-    g_preview_time = nullptr;
 }
 
 lv_obj_t* page_user_timelapse_create(lv_obj_t* parent)
@@ -715,12 +731,14 @@ lv_obj_t* page_user_timelapse_create(lv_obj_t* parent)
     lv_obj_clear_flag(page, LV_OBJ_FLAG_SCROLLABLE);
     g_page = page;
 
-    /* 主画面 CONTAIN：竖构图（1080×1280）铺满横屏会裁上下；整图可见，左右留黑边。
-     * 与相册页一致，不用 COVER。 */
+    /* 主画面 1:1：原图像素不缩放（竖图 1080×1280 / 1024×1280）。
+     * CENTER 居中铺在全屏黑底上，左右留黑边；屏高不足时由控件裁到屏幕，
+     * 不把整图等比缩小（不再用 CONTAIN）。 */
     lv_obj_t* img = lv_image_create(page);
     lv_obj_set_size(img, LV_PCT(100), LV_PCT(100));
     lv_obj_center(img);
-    lv_image_set_inner_align(img, LV_IMAGE_ALIGN_CONTAIN);
+    lv_image_set_inner_align(img, LV_IMAGE_ALIGN_CENTER);
+    lv_image_set_scale(img, LV_SCALE_NONE);
     lv_obj_add_flag(img, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_event_cb(img, on_video_click, LV_EVENT_CLICKED, nullptr);
     g_video_img = img;
@@ -864,7 +882,7 @@ lv_obj_t* page_user_timelapse_create(lv_obj_t* parent)
     lv_obj_set_style_bg_opa(pimg, LV_OPA_COVER, 0);
     lv_obj_set_style_radius(pimg, USER_RADIUS / 2, 0);
     lv_obj_set_style_clip_corner(pimg, true, 0);
-    /* 与主画面同口径：小窗里也整图可见，不裁切。 */
+    /* 拖动预览小窗：整图等比塞进框（可缩），不裁切；主画面才是 1:1。 */
     lv_image_set_inner_align(pimg, LV_IMAGE_ALIGN_CONTAIN);
     g_preview_img = pimg;
 
@@ -877,9 +895,7 @@ lv_obj_t* page_user_timelapse_create(lv_obj_t* parent)
     ui::PngScrubPreview::instance().set_target_size(g_preview_box_w, g_preview_box_h);
     ui::PngScrubPreview::instance().set_preview_cb(on_png_scrub_preview);
 
-    if(!g_play_timer) {
-        g_play_timer = lv_timer_create(play_timer_cb, kPlayIntervalMs, nullptr);
-    }
+    ensure_play_timer();
 
     return page;
 }

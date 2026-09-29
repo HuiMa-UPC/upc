@@ -92,12 +92,16 @@ enum class DoorFlowOrigin { PrintPrep, HomeStandalone, PrintCollect, TransferDem
 DoorFlowOrigin g_door_origin = DoorFlowOrigin::PrintPrep;
 /** 外门关着去开内门：转圈标题用 Opening the door...，其余开门入口仍是 Checking PM2.5...。 */
 bool g_door_plain_opening_title = false;
-/** 演示 Prep 在后台跑（无 overlay）；Rsp 到才进装盒页。 */
+/** 演示 Prep 在后台跑（无 overlay）；Rsp 到才进装盒页。只经 set_transfer_demo_pending() 改。 */
 bool g_transfer_demo_prep_pending = false;
+/** Prep 超时兜底。Glavo 最坏约 66 s（Z 到 −100 settle 60 s + 关内门 2 s + 开外门 3 次各 1 s 与间隔）；
+ *  Rsp 丢了 pending 就永远不清——Manual 的 Run 一直灰，control_is_printing() 也一直挡着文件页。 */
+constexpr uint32_t TRANSFER_DEMO_PREP_TIMEOUT_MS = 90000u;
+lv_timer_t *g_transfer_demo_timer = nullptr;
 
 /* 转运盒流程总开关（设置页 Advanced Print，调试页 Other → Print Gates 同一枚）。
- * 默认开：取件分支插入 TRANSFER_BOX 三步。关掉则取件开门成功即回 IDLE。
- * 纯 UI 本地标志，不发消息也不落盘，重启回到开。 */
+ * 默认开：取件分支插入 TRANSFER_BOX 三步（自检阶段终止的除外，见 transfer_box_flow_active()）。
+ * 关掉则取件开门成功即回 IDLE。纯 UI 本地标志，不发消息也不落盘，重启回到开。 */
 bool g_transfer_box_flow = true;
 
 /* 跳过放版预确认开关（调试页 Other → Print Gates → Skip Plate Prompt）。默认开：打印入口
@@ -110,15 +114,59 @@ constexpr uint32_t DOOR_OPEN_MAX_RETRIES = 2u;
 constexpr uint32_t DOOR_OPEN_MAX_ATTEMPTS = DOOR_OPEN_MAX_RETRIES + 1u;
 uint32_t g_door_open_fail_count = 0; /**< 本轮开门失败次数（Rsp ok=0） */
 
-/** 转运盒流程是否对当前这趟门流程生效（只认取件分支） */
+/** 转运盒流程是否对当前这趟门流程生效：只认取件分支；自检阶段（Ready 之前）终止的不走——
+ *  那时还没出光，舱里没有工件，取件只开门。判据与结果页「不自动清粉」同一个，见
+ *  page_user_monitor_result_aborted_in_prep()。 */
 bool transfer_box_flow_active(void)
 {
-    return g_transfer_box_flow && g_door_origin == DoorFlowOrigin::PrintCollect;
+    return g_transfer_box_flow && g_door_origin == DoorFlowOrigin::PrintCollect &&
+           !page_user_monitor_result_aborted_in_prep();
+}
+
+void on_transfer_demo_timeout(lv_timer_t *timer);
+
+/** 改 g_transfer_demo_prep_pending 的唯一入口：起停超时定时器，值变了再通知监控页
+ *  （Manual 的 Run、Plate 卡与 OPEN 按它置灰）。enter_state() 每次都会清一遍，不变就不通知。 */
+void set_transfer_demo_pending(bool on)
+{
+    if(g_transfer_demo_timer) {
+        lv_timer_delete(g_transfer_demo_timer);
+        g_transfer_demo_timer = nullptr;
+    }
+    if(on) {
+        g_transfer_demo_timer = lv_timer_create(on_transfer_demo_timeout,
+                                                TRANSFER_DEMO_PREP_TIMEOUT_MS, nullptr);
+        lv_timer_set_repeat_count(g_transfer_demo_timer, 1);
+    }
+    if(g_transfer_demo_prep_pending == on) {
+        return;
+    }
+    g_transfer_demo_prep_pending = on;
+    page_user_monitor_transfer_demo_changed();
+}
+
+/** Prep 超时：按失败收尾（同 Rsp ok=0 那支）。晚到的 Rsp 会因 pending 已清被忽略。 */
+void on_transfer_demo_timeout(lv_timer_t * /*timer*/)
+{
+    g_transfer_demo_timer = nullptr;
+    if(!g_transfer_demo_prep_pending) {
+        return;
+    }
+    set_transfer_demo_pending(false);
+    g_door_origin = DoorFlowOrigin::PrintPrep;
+    ui_toast_show("Transfer demo timed out", user_color_status_err, 3000);
 }
 
 /* 选择文件页的视图代码已拆到 page_user_files.cpp，这里只留数据与流程。
- * 页面当前的选中/页签经 page_user_files_sel_index() / _source() 查询。 */
-const char *g_home_section_view = "user_home"; /**< 首页区当前视图："user_home" 或 "user_files" */
+ * 页面当前的选中/页签经 page_user_files_sel_index() / _source() 查询。
+ *
+ * 选文件页只有一个实例，入口却有两个（首页 / 监控页的 PRINT），同一时间只挂在一个
+ * 侧栏分区下：侧栏高亮该分区、返回键回该分区、中途切走再点该分区图标仍回选文件页。
+ * 入口分两步记：control_start() 先记 g_files_entry，页面真正打开时
+ * （goto_file_selection）才提升为 g_files_owner——关掉放版预确认弹窗不该让分区图标
+ * 指向一个从没打开过的选文件页。 */
+std::string g_files_entry = "user_home"; /**< 本次选文件流程的入口分区 */
+std::string g_files_owner;               /**< 当前挂着选文件页的分区；空 = 没挂 */
 
 ui_modal_dialog_t *g_confirm_dlg = nullptr;
 ui_modal_dialog_t *g_prepare_dlg = nullptr;
@@ -660,7 +708,7 @@ void wire_msg_proxy()
            g_door_origin != DoorFlowOrigin::TransferDemo) {
             return;
         }
-        g_transfer_demo_prep_pending = false;
+        set_transfer_demo_pending(false);
         if(!p.ok) {
             g_door_origin = DoorFlowOrigin::PrintPrep;
             ui_toast_show("Transfer demo failed", user_color_status_err, 3000);
@@ -2503,7 +2551,7 @@ void finish_after_door_open(void)
     }
 }
 
-/** 门开之后往哪走：取件且开了转运盒流程先走三步，否则直接结束。 */
+/** 门开之后往哪走：取件、开了转运盒流程且不是自检阶段终止的，先走三步；否则直接结束。 */
 void proceed_after_door_open(void)
 {
     if(transfer_box_flow_active()) {
@@ -2815,7 +2863,7 @@ void enter_state(control_state_t s)
     g_clean_stop_pending = false;
     g_box_ready        = false;
     if(s != CONTROL_STATE_TRANSFER_BOX) {
-        g_transfer_demo_prep_pending = false;
+        set_transfer_demo_pending(false);
     }
     if(s != CONTROL_STATE_DOOR_OPENING) {
         g_door_plain_opening_title = false;
@@ -2866,9 +2914,9 @@ void enter_state(control_state_t s)
         overlay_hide();
         g_print_result_pending = false;      /* 丢掉上一单可能残留的结果 */
         g_print_result_shown = false;
-        /* 首页图标回仪表盘：开始打印时用户正停在选文件页，那是首页区的一个视图，
-         * 不复位的话打完回首页会又落回选文件页。 */
-        g_home_section_view = "user_home";
+        /* 选文件页从分区上摘下：开始打印时用户正停在选文件页，那是首页 / 监控页分区的
+         * 一个视图，不摘的话打完再点该分区图标会又落回选文件页。 */
+        g_files_owner.clear();
         /* **打印界面在监控页**（稿 6338:27240 一族），不是首页。改版前这里切的是
          * "user_home"，浮层挂在首页上；现在整套搬到了监控页，所以直接切过去。 */
         ui::PageManager::instance().switch_to("user_monitor");
@@ -2896,14 +2944,20 @@ void enter_state(control_state_t s)
 }
 
 /* 预确认完成 → 进入文件选择页（PageManager 隐藏页 "user_files"，状态保留）。
- * 关闭当前 overlay 弹窗并回到 IDLE，让文件页在空闲态下正常工作。 */
+ * 关闭当前 overlay 弹窗并回到 IDLE，让文件页在空闲态下正常工作。
+ * 选文件页挂到本次入口分区下；另一个分区之前若挂着它就此让出，点那边的图标回分区本页。 */
 void goto_file_selection(void)
 {
     close_current_dialog();
     backend_cancel_pending();
     g_state = CONTROL_STATE_IDLE;
     overlay_hide();
-    g_home_section_view = "user_files";
+    /* 一键转运准备期间 g_state 仍是 IDLE、监控页 Job 页签的 PRINT 也点得到，但 switch_to()
+     * 会挡住选文件页。没进去就别挂到分区上，否则之后点分区图标会进一个从没打开过的文件页。 */
+    if(!control_is_printing()) {
+        g_files_owner = g_files_entry;
+        ui::PageManager::instance().set_hidden_page_owner("user_files", g_files_owner);
+    }
     ui::PageManager::instance().switch_to("user_files");
 }
 
@@ -2947,8 +3001,9 @@ void control_files_clear(void)
 
 void control_files_close(void)
 {
-    g_home_section_view = "user_home";
-    ui::PageManager::instance().switch_to("user_home");
+    const std::string back = g_files_owner.empty() ? std::string("user_home") : g_files_owner;
+    g_files_owner.clear();
+    ui::PageManager::instance().switch_to(back);
 }
 
 void control_files_show_print_confirm(void)
@@ -2998,11 +3053,12 @@ void control_init(lv_obj_t *parent)
     lv_obj_clear_flag(g_overlay, LV_OBJ_FLAG_CLICKABLE);
 }
 
-void control_start(void)
+void control_start(const char *origin)
 {
     if(g_state != CONTROL_STATE_IDLE) {
         return;
     }
+    g_files_entry = origin ? origin : "user_home";
     /* 调试开关打开：等同在预确认里选「已放入 → 选择打印任务」，不经未放入的开门分支 */
     if(g_skip_plate_prompt) {
         goto_file_selection();
@@ -3046,14 +3102,20 @@ bool control_transfer_demo_start(void)
     }
     /* 不进开门 loading：后台降 Z / 关内门 / 开外门，Rsp 到再弹正式装盒页。 */
     g_door_origin = DoorFlowOrigin::TransferDemo;
-    g_transfer_demo_prep_pending = true;
+    set_transfer_demo_pending(true);
     ui::UiMsgProxy::instance().send_transfer_demo_prep();
     return true;
 }
 
-const char *control_home_section_target(void)
+bool control_transfer_demo_pending(void)
 {
-    return g_home_section_view;
+    return g_transfer_demo_prep_pending;
+}
+
+const char *control_section_target(const char *section)
+{
+    const bool holds_files = g_files_owner == section;
+    return (holds_files && !control_is_printing()) ? "user_files" : section;
 }
 
 

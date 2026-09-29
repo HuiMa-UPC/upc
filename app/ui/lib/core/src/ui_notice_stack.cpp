@@ -10,7 +10,8 @@
 
 namespace {
 
-/** toast 最多摆两张卡，面板最多列三条——都是稿上的数，多出来的收进「查看剩余 N 条」。 */
+/** toast 最多摆两张卡（稿上的数），面板最多列三条，多出来的收进「查看剩余 N 条」。
+ *  面板新稿 6578:41549 只画了两条，条数按产品定的三条、不跟稿。 */
 constexpr int kMaxToast = 2;
 constexpr int kMaxRows  = 3;
 
@@ -233,8 +234,10 @@ void build_dark(void)
         build_dark_card(g_root, ui_message_visible_at(i));
     }
     if(total > shown) {
+        const int rest = total - shown;
         char text[64];
-        std::snprintf(text, sizeof(text), "View remaining %d messages", total - shown);
+        std::snprintf(text, sizeof(text), "View remaining %d message%s",
+                      rest, rest == 1 ? "" : "s");
         build_dark_more_row(g_root, text);
     }
 }
@@ -392,27 +395,43 @@ void build_bell(void)
     }
 }
 
-/** 面板里的一条（稿 6102:79753）：左侧等级色竖条 + 标题/正文两行小字。 */
+/** 面板里的一条（稿 6578:41551）：左侧等级色竖条 + 标题/正文两行。 */
 void build_panel_row(lv_obj_t *parent, const ui_message_t *m)
 {
+    const lv_font_t *font = user_font_text_sm();
+    const int32_t line_h = lv_font_get_line_height(font);
+    const bool has_body = m->body && m->body[0];
+    const int32_t pad = USER_PAD_SM / 2;                          /* 稿 8 */
+
     lv_obj_t *row = lv_obj_create(parent);
     lv_obj_remove_style_all(row);
     lv_obj_set_width(row, LV_PCT(100));
-    lv_obj_set_height(row, USER_PANEL_ROW_H);
+    /* 稿上条目是按内容撑的（8 + 19 + 2 + 19 + 8 = 56）。行高取内容与 USER_PANEL_ROW_H 的大者：
+     * Montserrat 16 行高 18，比稿上 Inter 的 19 矮，纯按内容只有 54；而 1024 档字号没跟着缩，
+     * 两行字撑出来 48，比按比例折的 45 还高，取小了会把第二行挤出去。
+     *
+     * **不能写成 LV_SIZE_CONTENT + min_height**：高度按内容时 LVGL 的 flex 把整行内容贴顶
+     * 排（lv_flex.c 里强制 track_cross_place = START），多出来的那截全堆在底下——竖条比稿
+     * 高一格，没有正文的单行条目更是顶在上面、下面空一大块。两行字都锁了一行高（见下），
+     * 内容高度算得出来，所以直接给定值。 */
+    const int32_t text_h = has_body ? line_h * 2 + 2 : line_h;
+    lv_obj_set_height(row, LV_MAX(USER_PANEL_ROW_H, text_h + pad * 2));   /* 稿 56 */
     lv_obj_set_style_radius(row, USER_LIGHT_RADIUS / 2, 0);   /* 稿 12 */
     lv_obj_set_style_bg_color(row, user_light_row_bg, 0);
     lv_obj_set_style_bg_opa(row, 13, 0);                      /* 稿 5% */
-    lv_obj_set_style_pad_all(row, USER_PAD_SM / 2, 0);        /* 稿 8 */
+    lv_obj_set_style_pad_all(row, pad, 0);
     lv_obj_set_style_pad_column(row, USER_PAD_SM * 3 / 4, 0); /* 稿 12 */
     lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(row, LV_FLEX_ALIGN_START,
                           LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
 
+    /* 竖条按行高折（56 的 1/14 与 4/7），三档得 6×48 / 4×32 / 3×25。稿上 rx=2 即
+     * 两端全圆，所以圆角给 CIRCLE、跟着条宽走。 */
     lv_obj_t *bar = lv_obj_create(row);
     lv_obj_remove_style_all(bar);
-    lv_obj_set_size(bar, USER_PANEL_ROW_H / 12, USER_PANEL_ROW_H * 2 / 3);  /* 稿 4×32 */
-    lv_obj_set_style_radius(bar, 2, 0);
+    lv_obj_set_size(bar, USER_PANEL_ROW_H / 14, USER_PANEL_ROW_H * 4 / 7);  /* 稿 4×32 */
+    lv_obj_set_style_radius(bar, LV_RADIUS_CIRCLE, 0);
     lv_obj_set_style_bg_color(bar, ui_message_severity_color(m->severity), 0);
     lv_obj_set_style_bg_opa(bar, LV_OPA_COVER, 0);
     lv_obj_clear_flag(bar, LV_OBJ_FLAG_SCROLLABLE);
@@ -425,39 +444,51 @@ void build_panel_row(lv_obj_t *parent, const ui_message_t *m)
     lv_obj_set_style_pad_row(texts, 2, 0);
     lv_obj_clear_flag(texts, LV_OBJ_FLAG_SCROLLABLE);
 
-    /* 稿上标题 12 / 正文 10，字体表最小只到 12，所以两行同取 caption_sm，
-     * 靠 60% 透明度分层（同 toast 那两行的处理）。 */
+    /* 稿上标题与正文**同为 16**，只靠字重（SemiBold / Regular）和 60% 透明度分层，
+     * 与 toast 那两行同一套处理：Montserrat 只有一个字重，落地的是「同号 + 透明度」。
+     *
+     * 超长一律单行截断出省略号，条目不随文案长短变高。v9 的 DOTS 是「先按宽度换行、
+     * 再截末行」，不锁高度就只会换行、出不来省略号，所以两行都锁成一行高。 */
     lv_obj_t *title = lv_label_create(texts);
     lv_label_set_text(title, m->title);
     lv_label_set_long_mode(title, LV_LABEL_LONG_DOT);
-    lv_obj_set_width(title, LV_PCT(100));
+    lv_obj_set_size(title, LV_PCT(100), line_h);
     lv_obj_set_style_text_color(title, user_light_text, 0);
-    lv_obj_set_style_text_font(title, user_font_caption_sm(), 0);
+    lv_obj_set_style_text_font(title, font, 0);
 
-    if(m->body && m->body[0]) {
+    if(has_body) {
         lv_obj_t *sub = lv_label_create(texts);
         lv_label_set_text(sub, m->body);
         lv_label_set_long_mode(sub, LV_LABEL_LONG_DOT);
-        lv_obj_set_width(sub, LV_PCT(100));
+        lv_obj_set_size(sub, LV_PCT(100), line_h);
         lv_obj_set_style_text_color(sub, user_light_text, 0);
         lv_obj_set_style_text_opa(sub, LV_OPA_60, 0);
-        lv_obj_set_style_text_font(sub, user_font_caption_sm(), 0);
+        lv_obj_set_style_text_font(sub, font, 0);
     }
 }
 
-/** 面板底部那行「查看剩余 N 条」（稿 6073:75641），点进消息中心。 */
+/** 面板底部那行「查看剩余 N 条」（稿 6578:41561），点进消息中心。 */
 void build_panel_more(lv_obj_t *parent, int rest)
 {
+    /* 行尾箭头的边长（稿 14），按行高折得三档 21 / 14 / 11，与生成脚本
+     * ICON_SIZES["panel_chevron"] 一一对应、上屏 1:1 不缩放。 */
+    const int32_t ic_sz = USER_PANEL_ROW_H / 4;
+
     lv_obj_t *btn = lv_obj_create(parent);
     lv_obj_remove_style_all(btn);
     lv_obj_set_width(btn, LV_PCT(100));
-    lv_obj_set_height(btn, USER_PANEL_ROW_H * 5 / 6);          /* 稿 40 */
+    /* 稿上同样按内容撑：16 + 一行字 19 + 16 = 51。Montserrat 行高 18，落地 50。 */
+    lv_obj_set_height(btn, LV_SIZE_CONTENT);
     lv_obj_set_style_radius(btn, USER_LIGHT_RADIUS / 2, 0);
     lv_obj_set_style_bg_color(btn, user_light_more_bg, 0);
     lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, 0);
     lv_obj_set_style_bg_color(btn, user_light_text, LV_STATE_PRESSED);
     lv_obj_set_style_bg_opa(btn, LV_OPA_10, LV_STATE_PRESSED);
-    lv_obj_set_style_pad_hor(btn, USER_PAD_SM, 0);             /* 稿 16 */
+    lv_obj_set_style_pad_all(btn, USER_PAD_SM, 0);             /* 稿 16 */
+    /* 稿上右边那个 16 是量到箭头矢量本身的，而位图盒子比矢量宽：矢量右缘离盒右缘还有
+     * 盒宽的 2/7（1280 档 4，裁窗见 gen_home_metric_icons.py 的 panel_chevron）。
+     * 这一截从右内距里扣掉，箭头才落在稿上的位置。 */
+    lv_obj_set_style_pad_right(btn, USER_PAD_SM - ic_sz * 2 / 7, 0);
     lv_obj_set_flex_flow(btn, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(btn, LV_FLEX_ALIGN_SPACE_BETWEEN,
                           LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
@@ -466,31 +497,31 @@ void build_panel_more(lv_obj_t *parent, int rest)
     lv_obj_add_event_cb(btn, on_more_click, LV_EVENT_CLICKED, nullptr);
 
     char text[64];
-    std::snprintf(text, sizeof(text), "View remaining %d messages", rest);
+    std::snprintf(text, sizeof(text), "View remaining %d message%s",
+                  rest, rest == 1 ? "" : "s");
     lv_obj_t *lbl = lv_label_create(btn);
     lv_label_set_text(lbl, text);
     lv_obj_set_style_text_color(lbl, user_light_text, 0);
-    lv_obj_set_style_text_font(lbl, user_font_caption_sm(), 0);
+    lv_obj_set_style_text_font(lbl, user_font_text_sm(), 0);   /* 稿 16 */
 
-    lv_obj_t *chevron = lv_label_create(btn);
-    lv_label_set_text(chevron, LV_SYMBOL_RIGHT);
-    lv_obj_set_style_text_color(chevron, user_light_text, 0);
-    lv_obj_set_style_text_opa(chevron, LV_OPA_60, 0);
-    lv_obj_set_style_text_font(chevron, user_font_caption_sm(), 0);
+    ui_user_make_icon_img(btn, ui_user_pick_icon(ic_panel_chevron_set, ic_sz),
+                          ic_sz, user_light_text);
 }
 
 void build_panel(void)
 {
     lv_obj_t *card = lv_obj_create(g_root);
     lv_obj_remove_style_all(card);
-    lv_obj_set_width(card, USER_PANEL_W);
+    /* 新稿面板与 toast 同宽（400@1280），直接铺满容器，两者在各档都对得齐。 */
+    lv_obj_set_width(card, LV_PCT(100));
     lv_obj_set_height(card, LV_SIZE_CONTENT);
     lv_obj_set_style_radius(card, USER_LIGHT_RADIUS, 0);
     lv_obj_set_style_bg_color(card, user_light_card, 0);
     lv_obj_set_style_bg_opa(card, LV_OPA_COVER, 0);
     lv_obj_set_style_pad_all(card, USER_PAD_SM * 3 / 4, 0);    /* 稿 12 */
-    lv_obj_set_style_pad_row(card, USER_PAD_SM / 4, 0);        /* 稿 4 */
-    lv_obj_set_style_shadow_width(card, 3, 0);
+    lv_obj_set_style_pad_row(card, USER_PAD_SM / 2, 0);        /* 稿 8 */
+    /* 投影与 toast 卡同一套（稿上两者引的是同一个 effect：0 2 6 #0C1C61 @10%） */
+    lv_obj_set_style_shadow_width(card, 6, 0);
     lv_obj_set_style_shadow_ofs_y(card, 2, 0);
     lv_obj_set_style_shadow_color(card, user_light_shadow, 0);
     lv_obj_set_style_shadow_opa(card, 26, 0);
@@ -617,15 +648,15 @@ lv_obj_t *ui_notice_stack_create(lv_obj_t *parent)
     lv_obj_remove_style_all(g_root);
     /* FLOATING：shell_ 是横向 flex，本块不能占格位（同 menu_panel_ / 设备信息条） */
     lv_obj_add_flag(g_root, LV_OBJ_FLAG_FLOATING);
-    /* 宽度按 toast 那张卡给（稿 400@1280）。铃铛与面板都比它窄，各自在容器里右对齐，
-     * 所以一个宽度够三态共用。**稿自己在两个 frame 里给了不同的值**：首页待机
-     * 5339:27299/27310 是 400，而打印态 4972:27560 的 5281:11797 是 416（与 stats-card
-     * 同宽）。本块是建在 shell_ 上的全局对象、两个态共用一个实例，只能取一个值——
-     * 这里以待机 frame 为准取 400。 */
+    /* 宽度按 toast 那张卡给（稿 400@1280）。面板新稿与它同宽、直接铺满；铃铛比它窄，
+     * 在容器里右对齐，所以一个宽度够三态共用。**稿自己在两个 frame 里给了不同的值**：
+     * 首页待机 5339:27299/27310 是 400，而打印态 4972:27560 的 5281:11797 是 416（与
+     * stats-card 同宽）。本块是建在 shell_ 上的全局对象、两个态共用一个实例，只能取
+     * 一个值——这里以待机 frame 为准取 400。 */
     lv_obj_set_width(g_root, USER_NOTICE_CARD_W);
     lv_obj_set_height(g_root, LV_SIZE_CONTENT);
     lv_obj_set_flex_flow(g_root, LV_FLEX_FLOW_COLUMN);
-    /* 交叉轴靠右：铃铛（72）和面板（320）都比 400 窄，要贴着右缘与 toast 对齐。 */
+    /* 交叉轴靠右：铃铛（72）比 400 窄，要贴着右缘与 toast 对齐。 */
     lv_obj_set_flex_align(g_root, LV_FLEX_ALIGN_START,
                           LV_FLEX_ALIGN_END, LV_FLEX_ALIGN_END);
     lv_obj_set_style_pad_row(g_root, USER_PAD_SM / 2, 0);
