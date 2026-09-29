@@ -86,7 +86,7 @@ UI → GlavoService（工作线程）→ ParserManager → RingBuffer → McuLin
 
 ### 传感器
 
-- **1ST（TLV 0x02）**：只认 Tlv-Len=15（滤芯氧/滤芯气压/基板/NTC/开关/红外）。粉量缺粉看 OUTL/OUTR；发给 UI 的 `powder_bits` 低 2 位为「左/右匣仍有粉」。设置页 Powder Low Check 默认开；关掉后仍上报粉量位，但不因缺粉暂停、不发 `APP_Print_Powder_Low_Ntf`（仅本次运行）。
+- **1ST（TLV 0x02）**：只认 Tlv-Len=15（滤芯氧/滤芯气压/基板/NTC/开关/红外）。粉量缺粉看 OUTL/OUTR；发给 UI 的 `powder_bits` 低 2 位为「左/右匣仍有粉」。设置页 Powder Low Check 默认关；关掉后仍上报粉量位，但不因缺粉暂停、不发 `APP_Print_Powder_Low_Ntf`（仅本次运行）。
 - **ADC（TLV 0x07）**：主板电气量，与 1ST/FANBOARD 分帧；当前只识别以免 SENSOR FAIL，不推 UI。
 - **FANBOARD（TLV 0x08）**：风机转速/母线电压电流/故障码/状态机（默认与 ADC 同节拍约 1000ms）。经 `GLAVO_Debug_Fan_Ntf` 推调试页风扇卡。`fan_status_bits` bit7=0 表示风机板链路异常，此时 MCU 把转速等字段填 0，UI 按无效显示 `--`。原 EXT TLV 0x06 已停发。
 - **SOC 采集**：舱外常显 PM、舱内 PM（阀开窗口可信）、AHT20 温湿度（最短 2s）、CPM121 气压、IIO 氧气（须 `/run/o2_ready` 后读 `in_voltage0_raw`；本板无 scale，V=raw×3.3/2^31，I[uA]=V/100×1e6，O2%=100×(1−e^(−I/K))）。**K** 优先读 `/userdata/CAL/o2_cal.json`（调试页 **O2 Calib**：输入参考浓度后一键标定，启动加载、标定后立即生效）；缺文件回退出厂默认 `GLAVO_O2_K`≈655。首页 `pm25_indoor` **不是**舱外 PMSA 实测，而是 SPI 小屏同一个显示值（见下「SPI PM2.5 小屏」）；`pm1_indoor` / `pm10_indoor` 仍是舱外实测。进程启动即六路舱灯 `lgt1l`…`lgt3r` 写 1 全开（不等串口；调试页仍可单独关）。PMSA：`pmsa outdoor|cabin` 开关口/解帧在 `topic_print_flow.log`（`GlavoService`）；推 UI 的环境量在 `topic_serial_sensor.log` 的 `soc:`（5s：舱内氧、温湿、两路气压、舱外/舱内 PM1.0/PM2.5/PM10，`<0` 无效；`pm_out` 是舱外实测，`pm25_disp` 是推给首页/MQTT、写进小屏的舱外 PM2.5 显示值）。MCU `sensor:` 的 `filterO2` 是滤芯氧。

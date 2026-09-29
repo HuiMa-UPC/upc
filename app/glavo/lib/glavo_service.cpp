@@ -714,7 +714,7 @@ bool GlavoService::init()
     env_sim_on_ = false;
     env_sim_powder_low_on_ = false;
     skip_o2_print_gate_on_ = false;
-    powder_low_check_on_ = true;
+    powder_low_check_on_ = false;
     door_real_open_enabled_ = true;
     skip_outer_door_on_ = false;
     outer_door_confirm_waiting_ = false;

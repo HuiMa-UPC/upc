@@ -306,7 +306,7 @@ scripts/rongsu.sh start   # glavo + rongsu_camera → ui
 | `UI_Debug_Env_Sim_Powder_Get_Ntf` | — | UI→Glavo | Empty | `request_env_sim_powder_state` | 查询当前“环境模拟粉量缺粉”开关状态 |
 | `UI_Debug_Skip_O2_Gate_Set_Ntf` | — | UI→Glavo | `DebugOnOffPayload` | `send_skip_o2_gate_set` | 调试页开关：跳过 SOC 氧打印门（仅本次运行，默认关；开则起印不发洗气开、不等氧、打印中不因氧高暂停/1120） |
 | `UI_Debug_Skip_O2_Gate_Get_Ntf` | — | UI→Glavo | Empty | `request_skip_o2_gate_state` | 查询当前“跳过氧门”开关状态 |
-| `UI_Debug_Powder_Low_Check_Set_Ntf` | — | UI→Glavo | `DebugOnOffPayload` | `send_powder_low_check_set` | 设置页 Print Checks：缺粉检测（仅本次运行，**默认开**；`on=0` 不因缺粉暂停、不发 `APP_Print_Powder_Low_Ntf`） |
+| `UI_Debug_Powder_Low_Check_Set_Ntf` | — | UI→Glavo | `DebugOnOffPayload` | `send_powder_low_check_set` | 设置页 Print Checks：缺粉检测（仅本次运行，**默认关**；`on=0` 不因缺粉暂停、不发 `APP_Print_Powder_Low_Ntf`） |
 | `UI_Debug_Powder_Low_Check_Get_Ntf` | — | UI→Glavo | Empty | `request_powder_low_check_state` | 查询缺粉检测开关 |
 | `UI_Debug_Door_Pm_Check_Set_Ntf` | — | UI→Glavo | `DebugOnOffPayload` | `send_door_pm_check_set` | 设置页 Print Checks：开门前舱内 PM2.5 检测（仅本次运行，**默认开**；`on=0` 跳过检测与吹风，直接开门）。不再读 `cal.csv` 的 `GLAVO_DOOR_REAL_OPEN_ENABLE` |
 | `UI_Debug_Door_Pm_Check_Get_Ntf` | — | UI→Glavo | Empty | `request_door_pm_check_state` | 查询开门前 PM2.5 检测开关 |

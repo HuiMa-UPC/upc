@@ -521,7 +521,7 @@ enum class MsgType : uint32_t {
     UI_Debug_Spi_Pm25_Lcd_Set_Ntf,      /**< DebugOnOffPayload：SPI 小屏周期刷测试色（仅本次运行，默认关） */
     UI_Debug_Spi_Pm25_Lcd_Get_Ntf,      /**< Empty：查询 SPI 小屏测试刷屏开关 */
     UI_Debug_Return_Motor_Ntf,          /**< DebugMotorPayload：回粉电机 停止并恢复自动/送往 B 瓶/送往 A 瓶 */
-    UI_Debug_Powder_Low_Check_Set_Ntf,  /**< DebugOnOffPayload：缺粉检测（仅本次运行，默认开；关则不暂停、不弹补粉窗） */
+    UI_Debug_Powder_Low_Check_Set_Ntf,  /**< DebugOnOffPayload：缺粉检测（仅本次运行，默认关；关则不暂停、不弹补粉窗） */
     UI_Debug_Powder_Low_Check_Get_Ntf,  /**< Empty：查询缺粉检测开关 */
     UI_Debug_Door_Pm_Check_Set_Ntf,     /**< DebugOnOffPayload：开门前舱内 PM2.5 检测（仅本次运行，默认开；on=0 跳过检测与吹风，直接开门） */
     UI_Debug_Door_Pm_Check_Get_Ntf,     /**< Empty：查询开门前 PM2.5 检测开关 */
