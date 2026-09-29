@@ -1156,11 +1156,15 @@ bool XfrService::read_progress_percent_file(const std::string& path, uint32_t* o
 
 std::string XfrService::output_ovf_name(const std::string& input_name)
 {
-    const std::size_t dot = input_name.rfind('.');
-    if (dot == std::string::npos) {
-        return input_name + "_out.ovf";
+    std::string base = std::filesystem::path(input_name).filename().string();
+    const std::size_t dot = base.rfind('.');
+    if (dot != std::string::npos) {
+        base.resize(dot);
     }
-    return input_name.substr(0, dot) + "_out" + input_name.substr(dot);
+    if (base.empty()) {
+        base = "transfer";
+    }
+    return ascii_safe_transfer_stem(base) + "_out.ovf";
 }
 
 bool XfrService::run_snowslice_build(const std::string& input_ovf_path,
