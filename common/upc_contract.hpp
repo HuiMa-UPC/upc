@@ -1072,6 +1072,7 @@ struct PrintPauseStatePayload {
 /** APP_Print_Progress_Ntf 载荷：打印进度推送（Inline） */
 struct PrintProgressPayload {
     int32_t  progress_percent;
+    /** 剩余分钟：清单 duration_sec × (100−进度)/100 向上取整；无预估或已 100% 为 0 */
     uint32_t remaining_minutes;
     float    pm25_indoor;
     float    pm25_cabin;

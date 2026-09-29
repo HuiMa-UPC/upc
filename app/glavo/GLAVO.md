@@ -128,7 +128,7 @@ MCU 串口 OTA 是停等协议（规则 [MCU_OTA丢包重传机制.md](../../doc
 ### 打印进度（`APP_Print_Progress_Ntf`）
 
 `GlavoService::send_print_progress`，打印中按作业类型二选一；消息**双发 UI 与
-`APP_XFR`**（桌面端 `GET /print/status` 轮询缓存）。载荷含百分比、环境读数、
+`APP_XFR`**（桌面端 `GET /print/status` 轮询缓存）。载荷含百分比、剩余分钟（清单 `duration_sec` × (100−进度)/100 向上取整；无预估为 0）、环境读数、
 当前层/总层，以及 `layer_height_um`（当前铺粉高度）。暂停回执、终止回执、起印拒绝
 同样双发。`GLAVO_Print_State_Ntf` 只发给 Xfr（桌面 `/print/status` 的开始/结束边沿）。云端 `state` 走 `GLAVO_Cloud_State_Ntf`：`idle` 的 `ready`/`not_ready` 看振镜 TCP，`printing` 跟准备步、送层、暂停和结果页终态（`finished`/`canceled`/`aborted`）。结果页收掉前不回 `idle`。`updating` 由 MQTT 在 OTA 进度变化时另写 `state`，不经过 Glavo。
 
