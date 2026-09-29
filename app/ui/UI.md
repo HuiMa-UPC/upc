@@ -1742,8 +1742,8 @@ Job 卡写着 Print Terminated，弹窗却说 complete。
 **只跟正式打印层进度**；起印 Prepare 阶段条会涨，蒙版保持全盖（0%）。
 
 **吹粉分两路 owner，别混**（`purify_owner()`）：打印结束后那次走 `UI_CLEAN_OWNER_PRINT_RESULT`
-（带清粉录像、接进同一条 timelapse、进打印历史；结果页自动开一轮，钮可停/再开），
-Manual 页那次走 `UI_CLEAN_OWNER_MANUAL`（纯手动清一遍，不录像不落盘；不打印时可直接吹，不要求外门关）。
+（延时 JPEG 接续进同一条 timelapse；结果页自动开一轮，钮可停/再开；永远抽帧，无调试开关），
+Manual / 空闲走 `UI_CLEAN_OWNER_MANUAL`（连续 H264，单独进 Print History；点开始录、MCU 完/再点停都保留可播）。
 判据是底部当前是不是 Manual 档（`bottom_mode() == BOTTOM_MANUAL`，即待机停在 Manual 上），**不看 Tab**：
 打印会话里 Manual 也能进，结果页停在 Manual 上点的吹粉仍算打印结果那一路。正常结束一律等 MCU 完成帧
 （`UI_CLEAN_EVT_DONE`）；用户点停走 Close → `UI_CLEAN_EVT_STOPPED`。
@@ -1899,8 +1899,7 @@ Manual 的卡片在滚动区里，手指落在按钮、分段、输入框上再�
 #### Manual 页几处待补
 
 - **控制页那条「舱内 PM2.5 过高 → Too poor to open the gate」预警随控制页退役丢了。**
-  门限判定本身在后端（`pm25_clean_threshold_`，可被 `cal.csv` 的 `PM2.5Clean` 覆盖），开门
-  仍会被拦，只是拦之前用户看不到预警。补救留到后续：在 `OPEN` 按钮上加置灰态 + 一句提示。
+  门限判定本身在后端（`pm25_clean_threshold_`，可被 `cal.csv` 的 `PM2.5Clean` 覆盖）。是否做这次检测由设置页 Print Checks「PM2.5 Check」决定（默认开，仅本次运行），不再读 `cal.csv` 的 `GLAVO_DOOR_REAL_OPEN_ENABLE`。关掉后开门跳过检测与吹风。开门仍会被拦（开关开着且超阈值时），只是拦之前用户看不到预警。补救留到后续：在 `OPEN` 按钮上加置灰态 + 一句提示。
 - **Top / Bottom 的终点仍按缓存 Z 算。** 运动中点另一档现在只停车（见「Manual · Plate Position」），
   不会再「第一段没跑完又发一条相对位移」。剩下的小口子：停车后立刻再点，Glavo 用的缓存 Z 可能还是
   减速前那一帧，终点会偏一点——到位判定落空、按停住收尾、不置灰，再点一次即校正。根治是改用协议表里
@@ -2072,7 +2071,7 @@ RETRIEVE → 取件弹窗滑到底 → DOOR_OPENING（PM2.5/清粉 → 开门）
 
 | 档 | 触发 | 主按钮门控 | 取消 |
 |---|---|---|---|
-| 粉舱已空 | `APP_Print_Powder_Low_Ntf`（Glavo 判空后先自行暂停送料，另发一条 `APP_Print_Pause_Rsp(paused=1)`，状态行因此自动翻到 Pause） | 实时粉量位 `bit0/bit1 >= 1` 才可点 | 关窗 + `send_print_powder_low_ignore()`（本次打印忽略后续缺粉检测） |
+| 粉舱已空 | `APP_Print_Powder_Low_Ntf`（Glavo 判空后先自行暂停送料，另发一条 `APP_Print_Pause_Rsp(paused=1)`，状态行因此自动翻到 Pause）。设置页 Print Checks「Powder Low Check」默认开；关掉后本进程不再暂停、不再发这条通知 | 实时粉量位 `bit0/bit1 >= 1` 才可点 | 关窗 + `send_print_powder_low_ignore()`（本次打印忽略后续缺粉检测） |
 | 回粉盒满 | **暂无协议**，调试页 Other → Inject 手动打 | 无（没有对应传感器位，只能信用户） | 只关窗 |
 | 废粉盒满 | **暂无协议**，同上 | 无 | 只关窗 |
 

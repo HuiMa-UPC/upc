@@ -2616,8 +2616,8 @@ void on_stop_click(lv_event_t * /*e*/)
 }
 
 /** 本次吹粉算谁发起的。两档语义不同，**别混**：
- *  - 打印结束后那次走 `PRINT_RESULT`，带清粉录像、接进同一条 timelapse、进打印历史；
- *  - Manual 页那次走 `MANUAL`，纯手动清一遍，不录像不落盘（须外门关）。
+ *  - 打印结束后那次走 `PRINT_RESULT`，延时 JPEG 接续进同一条 timelapse；
+ *  - Manual / 空闲走 `MANUAL`，连续 H264，单独进 Print History。
  *  判据是底部当前是不是 Manual 档（bottom_mode()），**不是看在哪个 Tab**：打印中 Manual
  *  也能进，结果页停在 Manual 上时底部仍是吹粉 + RETRIEVE，那次吹粉要算打印结果。 */
 ui_clean_owner_t purify_owner(void)

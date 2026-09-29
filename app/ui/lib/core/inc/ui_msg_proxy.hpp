@@ -91,10 +91,9 @@ public:
     void send_clean_stop();
     void register_clean_stop_result(CleanStopDoneCb cb);
     /** 触发 clean_test_start（新增契约，不复用 debug 消息）。
-     *  `record_video=true` 是打印结果页 Purify 的用法（带清粉录像）；控制页手动清粉
-     *  传 false，此时不落盘不进历史，`job_name` 无人读取。 */
+     *  `record_video=true` 开录像；`record_kind`：0=结果页延时 JPEG，1=空闲连续 H264。 */
     void send_clean_test_start(const char* job_name, uint32_t width, uint32_t height,
-                               uint32_t fps, bool record_video);
+                               uint32_t fps, bool record_video, uint8_t record_kind = 0);
     void register_clean_test_start_rsp(CleanTestStartRspCb cb);
     void register_clean_test_done(CleanTestDoneCb cb);
     /** 返回首页时强制 clean_test_close。 */

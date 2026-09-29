@@ -39,6 +39,11 @@ private:
     void handle_print_video(const middleware::Message& msg);
     void handle_clean_video(const middleware::Message& msg);
     void handle_print_video_finalize(const middleware::Message& msg);
+    /** 空闲清粉：连续 H264（不受 Print H264 Rec 影响）。 */
+    void start_clean_h264(const middleware::CleanVideoSessionStartPayload& req);
+    void stop_clean_h264(const middleware::CleanVideoSessionStopPayload& req);
+    void complete_clean_h264(uint8_t result_code);
+    void publish_clean_test_done_ntf(uint8_t result_code) const;
     /** H264 worker 关闭裸流后触发，解开开门最终化栅栏。 */
     void on_print_h264_finalize_done();
     /** H264 录制因空间耗尽提前收尾，通知 print_video 取消 print_h264 期待位。 */
@@ -175,6 +180,10 @@ private:
     mutable bool storage_budget_cached_ok_ = false;
     mutable uint64_t storage_budget_checked_ms_ = 0;
     bool clean_video_active_ = false;
+    /** 空闲清粉连续 H264 会话（与结果页 JPEG 清粉互斥）。 */
+    bool clean_h264_active_ = false;
+    uint8_t clean_h264_result_code_ = 0xff;
+    char clean_h264_session_id_[32]{};
     bool finalize_pending_ = false;
     std::string pending_finalize_frames_dir_;
     bool h264_finalize_pending_ = false;

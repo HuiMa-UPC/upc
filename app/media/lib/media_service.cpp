@@ -1,7 +1,6 @@
 #include "media_service.hpp"
 
 #include "nv12_copy.hpp"
-#include "config/cal_config.hpp"
 #include "device_config.hpp"
 #include "media_paths.hpp"
 #include "print_history_manifest.hpp"
@@ -100,13 +99,8 @@ bool MediaService::init()
     /* live555 事件循环随本进程常驻；调试开关只控制 session 挂载与编码器 sink。 */
     (void)local_rtsp_.init(local_rtsp_port());
 
-    uint32_t timelapse_fps = CAMERA_PRINT_VIDEO_LAYER_FPS;
-    upc::config::CalConfigOptions cal_cfg{};
-    if(upc::config::load_cal_config_options(upc::config::kCalDefaultPath, &cal_cfg) &&
-       cal_cfg.has_config_section && cal_cfg.has_timelapse_video_fps &&
-       cal_cfg.timelapse_video_fps > 0) {
-        timelapse_fps = cal_cfg.timelapse_video_fps;
-    }
+    /* 不再读 cal.csv TIMELAPSE_VIDEO_FPS，固定编译默认帧率。 */
+    const uint32_t timelapse_fps = CAMERA_PRINT_VIDEO_LAYER_FPS;
     print_video_.set_timelapse_fps(timelapse_fps);
     clean_video_.set_timelapse_fps(timelapse_fps);
     UPC_LOG_MEDIA_SERVICE(Info, "timelapse_video_fps=%u", timelapse_fps);
@@ -691,8 +685,19 @@ void MediaService::handle_clean_video(const middleware::Message& msg)
         if(!read_inline_pod(msg.payload, req)) {
             return;
         }
+        req.session_id[sizeof(req.session_id) - 1] = '\0';
+        req.job_name[sizeof(req.job_name) - 1] = '\0';
+        if(req.record_kind == 1) {
+            start_clean_h264(req);
+            return;
+        }
         {
             std::lock_guard<std::mutex> lock(finalize_mtx_);
+            if(clean_h264_active_) {
+                UPC_LOG_MEDIA_SERVICE(Warn,
+                    "clean_video jpeg start ignored: clean h264 still active");
+                return;
+            }
             clean_video_active_ = true;
         }
         clean_video_.set_stream_geometry(stream_width_, stream_height_, stream_fps_);
@@ -702,6 +707,22 @@ void MediaService::handle_clean_video(const middleware::Message& msg)
     if(msg.type == middleware::MsgType::APP_Clean_Video_Session_Stop_Ntf) {
         middleware::CleanVideoSessionStopPayload req{};
         if(!read_inline_pod(msg.payload, req)) {
+            return;
+        }
+        req.session_id[sizeof(req.session_id) - 1] = '\0';
+        bool h264 = false;
+        {
+            std::lock_guard<std::mutex> lock(finalize_mtx_);
+            h264 = clean_h264_active_;
+            if(!h264 && clean_h264_session_id_[0] != '\0' &&
+               (req.session_id[0] == '\0' ||
+                std::strcmp(req.session_id, clean_h264_session_id_) == 0)) {
+                /* Start 失败后仍用同一 session_id 收 Stop。 */
+                h264 = true;
+            }
+        }
+        if(h264) {
+            stop_clean_h264(req);
             return;
         }
         clean_video_.on_session_stop(req);
@@ -716,6 +737,162 @@ void MediaService::handle_clean_video(const middleware::Message& msg)
             finalize_print_video_by_stage(finalize_frames_dir);
         }
     }
+}
+
+void MediaService::start_clean_h264(
+    const middleware::CleanVideoSessionStartPayload& req)
+{
+    {
+        std::lock_guard<std::mutex> lock(finalize_mtx_);
+        if(clean_h264_active_ || clean_video_active_) {
+            UPC_LOG_MEDIA_SERVICE(Warn,
+                "clean_h264 start ignored: clean session already active");
+            return;
+        }
+        if(print_h264_.session_active()) {
+            UPC_LOG_MEDIA_SERVICE(Warn,
+                "clean_h264 start ignored: print h264 still active");
+            return;
+        }
+        clean_h264_active_ = true;
+        clean_h264_result_code_ = 0xff;
+        std::snprintf(clean_h264_session_id_, sizeof(clean_h264_session_id_), "%s",
+                      req.session_id);
+        latest_print_session_closed_ = false;
+        h264_finalize_pending_ = true;
+    }
+
+    (void)ensure_video_storage_budget();
+    recover_pending_and_reset_tmp();
+
+    middleware::PrintVideoSessionPayload info{};
+    std::snprintf(info.session_id, sizeof(info.session_id), "%s", req.session_id);
+    std::snprintf(info.job_name, sizeof(info.job_name), "%s", req.job_name);
+    info.width = req.width;
+    info.height = req.height;
+    info.h264_continuous_on = 1; /* 空闲清粉一律录，不看调试页 Print H264 Rec */
+    info.h264_bitrate = req.h264_bitrate;
+
+    print_video_.set_stream_geometry(stream_width_, stream_height_, stream_fps_);
+    print_h264_.set_stream_geometry(stream_width_, stream_height_, stream_fps_);
+    print_video_.on_session_start(info);
+    print_h264_.on_session_start(info);
+    if(!print_h264_.session_active()) {
+        UPC_LOG_MEDIA_SERVICE(Error,
+            "clean_h264 start failed id=%s job=%s", info.session_id, info.job_name);
+        print_video_.end_session_keep_files();
+        std::lock_guard<std::mutex> lock(finalize_mtx_);
+        /* 保留 session_id，便于后续 Stop 走 clean_h264 分支补发 Done。 */
+        clean_h264_active_ = false;
+        clean_h264_result_code_ = 0xff;
+        h264_finalize_pending_ = false;
+        return;
+    }
+    UPC_LOG_MEDIA_SERVICE(Info, "clean_h264 session start id=%s job=%s",
+                          info.session_id, info.job_name);
+}
+
+void MediaService::stop_clean_h264(
+    const middleware::CleanVideoSessionStopPayload& req)
+{
+    {
+        std::lock_guard<std::mutex> lock(finalize_mtx_);
+        if(!clean_h264_active_) {
+            /* Start 失败时 Glavo 仍会 Stop 并等 Done；这里补发，避免 UI 卡在吹粉中。 */
+            const uint8_t rc = req.result_code;
+            clean_h264_session_id_[0] = '\0';
+            if(rc != 0xfe && rc != 0xff) {
+                publish_clean_test_done_ntf(rc);
+            }
+            return;
+        }
+        clean_h264_result_code_ = req.result_code;
+        latest_print_session_closed_ = true;
+    }
+
+    middleware::PrintVideoSessionPayload info{};
+    std::snprintf(info.session_id, sizeof(info.session_id), "%s",
+                  req.session_id[0] ? req.session_id : clean_h264_session_id_);
+    /* 正常结束 / 失败 / 用户停：一律 finish，保留已编码帧（0 帧由 recorder 自清）。 */
+    print_h264_.on_session_finish(info);
+    UPC_LOG_MEDIA_SERVICE(Info, "clean_h264 session stop id=%s result=%u",
+                          info.session_id, static_cast<unsigned>(req.result_code));
+}
+
+void MediaService::complete_clean_h264(uint8_t result_code)
+{
+    /* 00=完成 → Complete；其余（失败/中止/用户停）→ Terminated，片子仍保留。 */
+    const bool terminated = (result_code != 0x00);
+    const bool user_stop = (result_code == 0xfe);
+    const bool internal_stop = (result_code == 0xff);
+
+    /* Start 时已 upsert 了 frames_dir=tmp 的条目；这里只改状态，避免异步 Finish 竞态。 */
+    {
+        std::vector<upc::PrintHistoryEntry> entries;
+        if(upc::print_history_manifest_load(UPC_PRINT_VIDEO_MANIFEST, entries)) {
+            bool touched = false;
+            for(auto& e : entries) {
+                if(e.frames_dir != UPC_VIDEO_TMP_NAME) {
+                    continue;
+                }
+                e.status = terminated ? upc::PrintHistoryStatus::Terminated
+                                      : upc::PrintHistoryStatus::Complete;
+                e.print_video_pending = true;
+                e.video_pending = false;
+                touched = true;
+                break;
+            }
+            if(touched) {
+                const std::string tmp_path =
+                    std::string(UPC_PRINT_VIDEO_MANIFEST) + ".tmp";
+                if(upc::print_history_manifest_save(tmp_path, entries) &&
+                   std::rename(tmp_path.c_str(), UPC_PRINT_VIDEO_MANIFEST) == 0) {
+                    /* ok */
+                } else {
+                    (void)std::remove(tmp_path.c_str());
+                    UPC_LOG_MEDIA_SERVICE(Warn,
+                        "clean_h264 status update save fail");
+                }
+            }
+        }
+    }
+
+    print_video_.end_session_keep_files();
+
+    (void)ensure_video_storage_budget();
+    /* 空闲无结果页开门 finalize：H264 收尾后立刻 promote 并清 pending。 */
+    print_video_.finalize_after_exit(UPC_VIDEO_TMP_NAME, true);
+
+    {
+        std::lock_guard<std::mutex> lock(finalize_mtx_);
+        clean_h264_active_ = false;
+        clean_h264_result_code_ = 0xff;
+        clean_h264_session_id_[0] = '\0';
+        h264_finalize_pending_ = false;
+    }
+
+    if(!user_stop && !internal_stop) {
+        publish_clean_test_done_ntf(result_code);
+    }
+    UPC_LOG_MEDIA_SERVICE(Info,
+        "clean_h264 complete result=%u terminated=%d user_stop=%d",
+        static_cast<unsigned>(result_code), terminated ? 1 : 0,
+        user_stop ? 1 : 0);
+}
+
+void MediaService::publish_clean_test_done_ntf(uint8_t result_code) const
+{
+    middleware::CleanTestDonePayload ntf{};
+    ntf.result_code = result_code;
+    ntf.raw_retained = 0;
+    ntf.has_mp4 = 0;
+    middleware::Message msg(
+        middleware::MsgType::APP_Clean_Test_Result_Ntf,
+        middleware::ModuleId::APP_MEDIA,
+        middleware::ModuleId::UI);
+    msg.payload = middleware::MsgPayload::from_bytes(
+        reinterpret_cast<const uint8_t*>(&ntf), sizeof(ntf));
+    middleware::MsgPort::instance().publish_async(msg);
 }
 
 void MediaService::handle_print_video_finalize(const middleware::Message& msg)
@@ -831,11 +1008,23 @@ void MediaService::finalize_print_video_stage2(const std::string& frames_dir)
 
 void MediaService::on_print_h264_finalize_done()
 {
+    uint8_t clean_result = 0xff;
+    bool clean = false;
     std::string finalize_frames_dir;
     {
         std::lock_guard<std::mutex> lock(finalize_mtx_);
-        h264_finalize_pending_ = false;
-        finalize_frames_dir = take_ready_finalize_locked();
+        if(clean_h264_active_) {
+            clean = true;
+            clean_result = clean_h264_result_code_;
+            h264_finalize_pending_ = false;
+        } else {
+            h264_finalize_pending_ = false;
+            finalize_frames_dir = take_ready_finalize_locked();
+        }
+    }
+    if(clean) {
+        complete_clean_h264(clean_result);
+        return;
     }
     if(!finalize_frames_dir.empty()) {
         finalize_print_video_stage2(finalize_frames_dir);
@@ -845,6 +1034,11 @@ void MediaService::on_print_h264_finalize_done()
 void MediaService::on_print_h264_storage_exhausted()
 {
     print_video_.disable_h264_expectation();
+    std::lock_guard<std::mutex> lock(finalize_mtx_);
+    if(clean_h264_active_) {
+        /* 空间耗尽提前停录：仍走 complete 收尾，保留已写出的片段。 */
+        UPC_LOG_MEDIA_SERVICE(Warn, "clean_h264 storage exhausted; keep partial");
+    }
 }
 
 /**

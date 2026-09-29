@@ -78,6 +78,11 @@ public:
     /** 当前会话目录（空=无活跃会话）。 */
     std::string current_session_dir() const;
     bool session_active() const;
+    /**
+     * 结束会话但不删 tmp、不入队 Finish/Abort。
+     * 空闲清粉 H264 在 encoder 收尾后立刻 finalize_after_exit 时用，避免异步 Finish 竞态。
+     */
+    void end_session_keep_files();
 
     /**
      * 设置 NV12 快照回调。回调返回紧凑 NV12（stride==width）帧数据。

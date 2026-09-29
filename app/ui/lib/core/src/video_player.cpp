@@ -482,6 +482,13 @@ struct VideoPlayer::Impl {
         if(!src || !preview_sws || preview_rgb565[0].empty() || preview_rgb565[1].empty()) {
             return false;
         }
+        /* UI 尚未取走上帧时丢掉本帧，避免写 LVGL 仍在引用的 front 缓冲。 */
+        {
+            std::lock_guard<std::mutex> lk(ui_payload_mtx);
+            if(pending_preview || preview_async_scheduled) {
+                return false;
+            }
+        }
         const int back_idx = preview_front_idx ^ 1;
         uint8_t* dst_data[4] = { preview_rgb565[back_idx].data(), nullptr, nullptr, nullptr };
         int dst_linesize[4] = { preview_w * 2, 0, 0, 0 };
@@ -492,6 +499,9 @@ struct VideoPlayer::Impl {
         }
         {
             std::lock_guard<std::mutex> lk(ui_payload_mtx);
+            if(pending_preview || preview_async_scheduled) {
+                return false;
+            }
             preview_front_idx = back_idx;
             preview_dsc.data = preview_rgb565[preview_front_idx].data();
             preview_dsc.data_size = preview_rgb565[preview_front_idx].size();
@@ -665,7 +675,9 @@ struct VideoPlayer::Impl {
                            commands.end());
         }
         commands.push_back(Command{type, ms, gen});
-        if(type == CommandType::Seek || type == CommandType::Preview) {
+        /* Preview 只覆盖队列、不打断正在进行的解码；Seek / pause 才置 interrupt。
+         * 拖动时若对每个 preview 都 interrupt，H264 长片会在 av_read_frame 里反复失败。 */
+        if(type == CommandType::Seek) {
             interrupt_requested.store(true, std::memory_order_relaxed);
         }
         cv.notify_all();

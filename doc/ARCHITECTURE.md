@@ -98,7 +98,7 @@
 | `ui_device_bar_*` | `ui_device_bar.*` | 常驻设备信息条（WiFi + 设备名 + 状态点/字），PageManager 持有 |
 | `ui_message_*` | `ui_message_store.*` | 消息中心：设备事件去重/排序/未读计数 + 码→文案表（`GLAVO_Device_Event_Ntf`）+ 按等级自动收起；写入分 `sync`（状态同步、不重弹）与 `emit`（又发生一次、重弹）两种语义，各带一个 `_ex` 版本供报警等外部文案接入 |
 | `ui_alarm_*` | `ui_alarm_state.*` | MCU 报警唯一数据源：生命周期缓存 + 复位在途/失败回执 + 历史落盘 + 快照请求与稀疏攒帧 + 打印阻断/会话抑制 |
-| `ui_clean_state_*` | `ui_clean_state.*` | 清粉（clean_test）发起与回执的唯一来源：接管两个单槽 Proxy 回调，按发起方（监控页结果态吹粉 / Manual 手动吹粉）扇出；`record_video` 决定是否连带清粉录像 |
+| `ui_clean_state_*` | `ui_clean_state.*` | 清粉（clean_test）发起与回执的唯一来源：按发起方扇出；结果页→延时 JPEG，空闲 Manual→连续 H264 |
 | `ui_alarm_catalog_*` | `ui_alarm_catalog.hpp` / `ui_alarm_catalog_gen.cpp` | 报警字典（生成物，改 `tools/gen_alarm_catalog.py` + `doc/alarm_catalog_en.csv`）；槽位映射不在此，是 `upc_contract.hpp` 里的固定公式 |
 | `ui_notice_stack_*` | `ui_notice_stack.*` | 右上通知三态：toast / 铃铛 / 面板互斥（**只在首页**；监控页不建铃铛与面板，靠画面左上的状态胶囊与阻塞弹窗，其余进消息中心），PageManager 持有 |
 | `ui_sys_hud_*` | `ui_sys_hud.*` | 调试红字蒙版（`lv_layer_sys` 右上角：CPU 温 / 整机与本进程占用 / 内存 used/total+rss；调试页 Media & Sim「Sys HUD」，`upc_sys_monitor_sample` 读本机 `/proc` 与 thermal sysfs，仅本次运行） |

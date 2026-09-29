@@ -13,10 +13,10 @@ extern "C" {
  *
  * `UiMsgProxy::register_clean_test_start_rsp` / `register_clean_test_done` /
  * `register_clean_test_close_rsp` 都是**单槽**的（`xxx_cb_ = std::move(cb)`），
- * 谁后注册谁把前一个静默顶掉。而清粉有两个发起方——监控页打印结果态的吹粉
- * （带清粉录像）和 Manual 页的手动吹粉（不录像）——各自注册必然互相顶掉。
- * 所以订阅在本模块做一次（`ui_clean_state_init()`，由 `ui_app.cpp` 调），再按
- * 「谁发起的」扇出给观察者。形态同 `ui_device_state`。
+ * 谁后注册谁把前一个静默顶掉。而清粉有两个发起方——结果页吹粉（延时 JPEG）和
+ * 空闲 Manual 吹粉（连续 H264）——各自注册必然互相顶掉。所以订阅在本模块做一次
+ * （`ui_clean_state_init()`，由 `ui_app.cpp` 调），再按「谁发起的」扇出给观察者。
+ * 形态同 `ui_device_state`。
  *
  * 发送也收在本模块（`ui_clean_state_request()` / `ui_clean_state_stop()`），不留
  * `send_clean_test_start()` / `send_clean_test_close()` 的旁路：owner 归属必须与
@@ -25,17 +25,17 @@ extern "C" {
  * MCU 同时只跑一路清粉（Glavo 侧 `clean_test_active_` 单例互斥），所以「正在跑的
  * 发起方」只有一个；期间别人发起会收到 `UI_CLEAN_EVT_REJECTED`。
  *
- * 用户中止走 `UI_Clean_Test_Close_Req`：风扇停、清粉停；有录像时 Media 不发 Done
- * （`result_code=0xfe`），UI 只靠 `APP_Clean_Test_Close_Rsp` → `UI_CLEAN_EVT_STOPPED`。
+ * 用户中止走 `UI_Clean_Test_Close_Req`：风扇停、清粉停；结果页 JPEG 路径 Media 对
+ * `0xfe` 不发 Done；空闲 H264 仍保留已录片段进历史，UI 靠 Close_Rsp → STOPPED。
  * MCU 正常结束仍是 `APP_Clean_Test_Result_Ntf` → `UI_CLEAN_EVT_DONE`。
  */
 
 /** 清粉发起方。 */
 typedef enum {
     UI_CLEAN_OWNER_NONE = 0,
-    UI_CLEAN_OWNER_PRINT_RESULT, /**< 监控页打印结果态的吹粉：带清粉录像、进打印历史 */
-    /** 监控页 Manual 的手动吹粉：不录像、不落盘、不进历史。
-     *  改版前这一档叫 `CONTROL`（控制页的手动清粉），控制页退役后语义原样搬过来。 */
+    /** 监控页打印结果态的吹粉：延时 JPEG 接续、进同一条打印历史。 */
+    UI_CLEAN_OWNER_PRINT_RESULT,
+    /** 监控页 Manual / 空闲吹粉：连续 H264，单独进 Print History。 */
     UI_CLEAN_OWNER_MANUAL,
 } ui_clean_owner_t;
 
@@ -64,9 +64,8 @@ void ui_clean_state_init(void);
 void ui_clean_state_add_observer(ui_clean_state_observer_t cb);
 
 /**
- * 发起清粉。`owner` 同时决定是否录像：`PRINT_RESULT` 录，`MANUAL` 不录。
- * `job_name` 只在录像那一档有意义（决定 `/data/media/video/{job_name}/`），
- * 不录像时后端根本不读它，传 nullptr 即可。
+ * 发起清粉。两路都开录像：`PRINT_RESULT`→延时 JPEG，`MANUAL`→连续 H264。
+ * `job_name` 结果页传打印作业名；空闲可传 nullptr（Glavo 生成 `clean_*`）。
  *
  * 本函数**不做本地忙判**，一律发出去让后端裁决：本地标志与后端
  * `clean_test_active_` 一旦drift（比如 DONE 丢了）就会把自己锁死，代价比多发一帧大。

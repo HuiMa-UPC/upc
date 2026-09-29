@@ -178,14 +178,16 @@ private:
     void handle_debug_laser_alarm_reset(const middleware::Message& msg);
     void handle_debug_print_h264_record_set(const middleware::Message& msg);
     void handle_debug_print_h264_record_get(const middleware::Message& msg);
-    void handle_debug_clean_record_set(const middleware::Message& msg);
-    void handle_debug_clean_record_get(const middleware::Message& msg);
     void handle_debug_env_sim_set(const middleware::Message& msg);
     void handle_debug_env_sim_get(const middleware::Message& msg);
     void handle_debug_env_sim_powder_set(const middleware::Message& msg);
     void handle_debug_env_sim_powder_get(const middleware::Message& msg);
     void handle_debug_skip_o2_gate_set(const middleware::Message& msg);
     void handle_debug_skip_o2_gate_get(const middleware::Message& msg);
+    void handle_debug_powder_low_check_set(const middleware::Message& msg);
+    void handle_debug_powder_low_check_get(const middleware::Message& msg);
+    void handle_debug_door_pm_check_set(const middleware::Message& msg);
+    void handle_debug_door_pm_check_get(const middleware::Message& msg);
     void handle_debug_skip_outer_door_set(const middleware::Message& msg);
     void handle_debug_skip_outer_door_get(const middleware::Message& msg);
     void handle_debug_inner_door_busy_get(const middleware::Message& msg);
@@ -229,10 +231,11 @@ private:
     void handle_height_calib_start_req(const middleware::Message& msg);
     void handle_laser_spot_measure_rsp(const middleware::Message& msg);
     void publish_debug_print_h264_record_state();
-    void publish_debug_clean_record_state();
     void publish_debug_env_sim_state();
     void publish_debug_env_sim_powder_state();
     void publish_debug_skip_o2_gate_state();
+    void publish_debug_powder_low_check_state();
+    void publish_debug_door_pm_check_state();
     void publish_debug_skip_outer_door_state();
     /** @brief 推送内门套件忙闲（Manual 禁钮）；值变化才发。 */
     void publish_inner_door_busy(bool busy);
@@ -550,10 +553,11 @@ private:
     /** 上次进度推送时刻；纯层段层内百分比不变时用于环境字段保活 */
     std::chrono::steady_clock::time_point last_progress_push_at_{};
     bool last_usb_mounted_ = false;
-    bool door_real_open_enabled_ = (GLAVO_DOOR_REAL_OPEN_ENABLE != 0);
+    /** 开门前舱内 PM2.5 检测。默认开；设置页可关。不再读 cal.csv。 */
+    bool door_real_open_enabled_ = true;
     float pm25_clean_threshold_ = 50.0f;
-    uint32_t timelapse_video_fps_ = 0; /**< 0=Media 默认；来自 cal.csv TIMELAPSE_VIDEO_FPS */
-    uint32_t print_h264_bitrate_ = 0; /**< 0=Media 默认中等；来自 cal.csv PRINT_H264_BITRATE */
+    uint32_t timelapse_video_fps_ = 0; /**< 固定 0：Media 用 CAMERA_PRINT_VIDEO_LAYER_FPS，不读 cal.csv */
+    uint32_t print_h264_bitrate_ = 0; /**< 固定 0：Media 用 CAMERA_PRINT_H264_BITRATE，不读 cal.csv */
     std::thread clean_worker_;
     std::atomic<bool> clean_running_{false};
     std::thread pm25_sample_worker_;
@@ -581,11 +585,10 @@ private:
     std::atomic<bool> transport_result_pending_{false};
     std::atomic<uint8_t> transport_result_code_{0};
     bool clean_test_active_ = false;
-    bool clean_video_record_on_ = true; /**< 仅调试页状态回读；Purify 录像不再受其门控 */
     bool clean_video_session_started_ = false;
     char clean_test_session_id_[32]{};
     char clean_test_job_name_[64]{};
-    bool print_h264_continuous_on_ = false;
+    bool print_h264_continuous_on_ = true;
     bool first_layer_visual_check_on_ = false; /**< 首层视觉检测开关（仅本次运行） */
     bool first_layer_visual_session_active_ = false; /**< Visual Camera/定位预热会话状态 */
     bool first_layer_reference_waiting_ = false; /**< 等待Visual锁定本次打印裸板B0 */
@@ -596,7 +599,7 @@ private:
     float plate_work_z_mm_ = 1.0f;
     /** 准备阶段保持当前 Z（仅本次运行，默认关）。开则不起印降到 −10、内门前不降 Z、终止/失败收尾也不改 Z；基板测高仍动 Z。 */
     bool hold_prep_z_on_ = false;
-    bool inner_door_occlusion_on_ = true; /**< 内门视觉挡门（仅本次运行，默认开；调试页 Skip Inner Door Occl 按下后关） */
+    bool inner_door_occlusion_on_ = false; /**< 内门视觉挡门（仅本次运行，默认关；设置页 Inner Door Vision / 调试页 Skip 可改） */
     /** 光路前用底板图案判断有没有基板（仅本次运行，默认开）。与高度判断互斥。 */
     bool plate_present_on_ = true;
     /** 光路后用粗测 H-1>3 判断有没有基板（仅本次运行，默认关）。与图案判断互斥。 */
@@ -629,6 +632,7 @@ private:
     bool env_sim_on_ = false;  /**< 环境上报模拟（仅本次运行，默认关） */
     bool env_sim_powder_low_on_ = false; /**< 环境模拟粉量缺粉开关（目标状态，延迟生效由 McuLink 管） */
     bool skip_o2_print_gate_on_ = false; /**< 跳过 SOC 氧打印门（仅本次运行，默认关） */
+    bool powder_low_check_on_ = true; /**< 缺粉检测（仅本次运行，默认开；关则不暂停、不弹窗） */
     bool skip_outer_door_on_ = false; /**< 跳过外门检测+关内门套件（仅本次运行，默认关=要做） */
     bool outer_door_confirm_waiting_ = false; /**< 已发 Confirm_Req，等 UI Rsp */
     bool plate_place_confirm_waiting_ = false; /**< 无基板弹窗等 UI Rsp */
