@@ -2209,7 +2209,8 @@ void build_print_detail(lv_obj_t *parent)
     g_gate_optical = make_gate_row(card, "Optical Path Check", PrintGate::OpticalPath, false);
     g_gate_height = make_gate_row(card, "Plate Height Adj", PrintGate::PlateHeight, false);
     g_gate_o2 = make_gate_row(card, "Oxygen Check", PrintGate::Oxygen, false);
-    g_gate_powder = make_gate_row(card, "Powder Low Check", PrintGate::PowderLow, false);
+    g_gate_powder = make_gate_row(card, "Powder Low Check", PrintGate::PowderLow,
+                                  false, false);
     g_gate_hold_z = make_gate_row(card, "Keep Z Position", PrintGate::HoldPrepZ, false, false);
     g_gate_transfer = make_gate_row(card, "Transfer Box", PrintGate::TransferBox, true,
                                     control_transfer_box_flow_enabled());

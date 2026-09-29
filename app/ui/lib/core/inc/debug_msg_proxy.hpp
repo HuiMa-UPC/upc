@@ -118,7 +118,7 @@ public:
     void request_env_sim_powder_state();
     void send_skip_o2_gate_set(bool on);
     void request_skip_o2_gate_state();
-    /** on=1 检测缺粉（默认开）。关：不暂停、不弹补粉窗。 */
+    /** on=1 检测缺粉（默认关）。关：不暂停、不弹补粉窗。 */
     void send_powder_low_check_set(bool on);
     void request_powder_low_check_state();
     /** on=1 开门前查舱内 PM2.5（默认开）。关：跳过检测与吹风，直接开门。 */

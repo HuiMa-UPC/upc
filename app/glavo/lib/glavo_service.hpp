@@ -632,7 +632,7 @@ private:
     bool env_sim_on_ = false;  /**< 环境上报模拟（仅本次运行，默认关） */
     bool env_sim_powder_low_on_ = false; /**< 环境模拟粉量缺粉开关（目标状态，延迟生效由 McuLink 管） */
     bool skip_o2_print_gate_on_ = false; /**< 跳过 SOC 氧打印门（仅本次运行，默认关） */
-    bool powder_low_check_on_ = true; /**< 缺粉检测（仅本次运行，默认开；关则不暂停、不弹窗） */
+    bool powder_low_check_on_ = false; /**< 缺粉检测（仅本次运行，默认关；开则缺粉时暂停并弹窗） */
     bool skip_outer_door_on_ = false; /**< 跳过外门检测+关内门套件（仅本次运行，默认关=要做） */
     bool outer_door_confirm_waiting_ = false; /**< 已发 Confirm_Req，等 UI Rsp */
     bool plate_place_confirm_waiting_ = false; /**< 无基板弹窗等 UI Rsp */
