@@ -5,7 +5,8 @@
  * @file spi_status_led.hpp
  * @brief SPI 灯效板（/dev/spidev1.0，40 颗 WS）按设备状态刷单色。
  *
- * 优先级：MCU CONDITION+ACTIVE 红 > print_running_ 橙 > 空闲蓝。
+ * 优先级：MCU CONDITION+ACTIVE 红 > print_running_ 橙（实为高绿）> 空闲蓝。
+ * 起印洗气等氧时 1120 仍上报，但不参与变红，灯保持打印绿。
  * 进程启动即打开；节点缺失只 Warn 一次。
  *
  * 线程：业务侧（含 McuLink 串口线程）只改状态并排队；专用 led 线程做
@@ -32,6 +33,12 @@ public:
 
     /** Confirm 打印会话（含测高/光路/暂停）。 */
     void set_printing(bool on);
+
+    /**
+     * 起印洗气等氧：1120 不把灯打成红，保持当前打印绿。
+     * 打印中氧高暂停不要开这个。
+     */
+    void set_suppress_chamber_o2_lamp(bool on);
 
     /**
      * @brief 调试页强制单色；force=false 释放接管回自动推导。
@@ -78,6 +85,8 @@ private:
 
     bool enabled_ = false;
     bool printing_ = false;
+    /** 为真时舱氧 1120 不计入红灯。 */
+    bool suppress_chamber_o2_lamp_ = false;
     bool open_warn_done_ = false;
     Color last_color_ = Color::Blue;
     bool last_sent_ = false;

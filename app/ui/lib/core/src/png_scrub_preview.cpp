@@ -3,6 +3,7 @@
 #include "png_decode_util.hpp"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <condition_variable>
 #include <cstring>
@@ -28,13 +29,16 @@ struct PngScrubPreview::Impl {
     std::string pending_path;
     uint64_t pending_gen = 0;
 
-    std::vector<uint8_t> rgb565;
+    std::array<std::vector<uint8_t>, 2> rgb565;
+    int display_idx = 0; /**< LVGL 当前引用的槽 */
+    int write_idx = 1;   /**< 下一帧写入槽 */
     lv_image_dsc_t dsc{};
 
     std::mutex ui_mtx;
     bool ui_pending = false;
     size_t ui_index = 0;
     uint64_t ui_gen = 0;
+    int ui_ready_idx = 0;
 
     PreviewCb preview_cb;
 
@@ -45,11 +49,12 @@ struct PngScrubPreview::Impl {
             return;
         }
         PreviewCb cb;
-        const lv_image_dsc_t* image = nullptr;
         size_t index = 0;
+        int ready_idx = 0;
         {
             std::lock_guard<std::mutex> lk(self->ui_mtx);
-            if(!self->ui_pending || !self->dsc.data) {
+            if(!self->ui_pending ||
+               self->rgb565[0].empty()) {
                 self->ui_pending = false;
                 return;
             }
@@ -60,16 +65,27 @@ struct PngScrubPreview::Impl {
                 return;
             }
             cb = self->preview_cb;
-            image = &self->dsc;
             index = self->ui_index;
+            ready_idx = self->ui_ready_idx;
             self->ui_pending = false;
+            self->display_idx = ready_idx;
+            self->write_idx = ready_idx ^ 1;
+            self->dsc.header.magic = LV_IMAGE_HEADER_MAGIC;
+            self->dsc.header.cf = LV_COLOR_FORMAT_RGB565;
+            self->dsc.header.w = self->target_w;
+            self->dsc.header.h = self->target_h;
+            self->dsc.header.stride = static_cast<uint32_t>(self->target_w * 2);
+            self->dsc.data = self->rgb565[ready_idx].data();
+            self->dsc.data_size = self->rgb565[ready_idx].size();
         }
-        if(cb && image) {
-            cb(image, index);
+        if(cb && self->dsc.data) {
+            cb(&self->dsc, index);
         }
+        /* 允许 worker 写另一槽 */
+        self->cv.notify_all();
     }
 
-    void notify_ui(size_t index, uint64_t gen)
+    void notify_ui(size_t index, uint64_t gen, int ready_idx)
     {
         if(gen != req_gen.load(std::memory_order_relaxed) ||
            !scrubbing.load(std::memory_order_relaxed)) {
@@ -79,12 +95,14 @@ struct PngScrubPreview::Impl {
         ui_pending = true;
         ui_index = index;
         ui_gen = gen;
+        ui_ready_idx = ready_idx;
         lv_async_call(async_apply, this);
     }
 
-    bool decode_to_preview(const std::string& path, int32_t dst_w, int32_t dst_h)
+    bool decode_to_slot(const std::string& path, int32_t dst_w, int32_t dst_h,
+                        int slot)
     {
-        if(path.empty() || dst_w <= 0 || dst_h <= 0) {
+        if(path.empty() || dst_w <= 0 || dst_h <= 0 || slot < 0 || slot > 1) {
             return false;
         }
         std::vector<uint8_t> rgba;
@@ -94,19 +112,12 @@ struct PngScrubPreview::Impl {
             return false;
         }
         const size_t need = static_cast<size_t>(dst_w) * dst_h * 2u;
-        if(rgb565.size() != need) {
-            rgb565.assign(need, 0);
+        if(rgb565[slot].size() != need) {
+            rgb565[slot].assign(need, 0);
         }
         /* 预览是一闪而过的小图，取最快的点采样；相册大图那边才用 box filter。 */
-        png_util::scale_to_rgb565_point(rgba.data(), src_w, src_h, rgb565.data(),
-                                        dst_w, dst_h);
-        dsc.header.magic = LV_IMAGE_HEADER_MAGIC;
-        dsc.header.cf = LV_COLOR_FORMAT_RGB565;
-        dsc.header.w = dst_w;
-        dsc.header.h = dst_h;
-        dsc.header.stride = static_cast<uint32_t>(dst_w * 2);
-        dsc.data = rgb565.data();
-        dsc.data_size = rgb565.size();
+        png_util::scale_to_rgb565_point(rgba.data(), src_w, src_h,
+                                        rgb565[slot].data(), dst_w, dst_h);
         return true;
     }
 
@@ -128,10 +139,24 @@ struct PngScrubPreview::Impl {
             pending = false;
             lk.unlock();
 
+            int slot = 0;
+            {
+                /* 不持 mtx 等 UI：否则 set_scrubbing 抢 mtx 清 ui_pending 会死锁。 */
+                std::unique_lock<std::mutex> ulk(ui_mtx);
+                cv.wait(ulk, [this] {
+                    return stop.load(std::memory_order_relaxed) || !ui_pending;
+                });
+                if(stop.load(std::memory_order_relaxed)) {
+                    lk.lock();
+                    break;
+                }
+                slot = write_idx;
+            }
+
             if(gen == req_gen.load(std::memory_order_relaxed) &&
                scrubbing.load(std::memory_order_relaxed) &&
-               decode_to_preview(path, tw, th)) {
-                notify_ui(index, gen);
+               decode_to_slot(path, tw, th, slot)) {
+                notify_ui(index, gen, slot);
             }
 
             lk.lock();
@@ -153,6 +178,11 @@ PngScrubPreview::~PngScrubPreview()
     {
         std::lock_guard<std::mutex> lk(impl_->mtx);
         impl_->stop = true;
+        impl_->cv.notify_all();
+    }
+    {
+        std::lock_guard<std::mutex> ulk(impl_->ui_mtx);
+        impl_->ui_pending = false;
         impl_->cv.notify_all();
     }
     if(impl_->worker.joinable()) {
@@ -217,10 +247,16 @@ void PngScrubPreview::set_scrubbing(bool scrubbing)
     impl_->scrubbing.store(scrubbing, std::memory_order_relaxed);
     if(!scrubbing) {
         impl_->req_gen.fetch_add(1, std::memory_order_relaxed);
-        std::lock_guard<std::mutex> lk(impl_->mtx);
-        impl_->pending = false;
-        std::lock_guard<std::mutex> ulk(impl_->ui_mtx);
-        impl_->ui_pending = false;
+        /* 先清 ui_pending 再抢 mtx，避免与 worker「持 mtx 等 UI」死锁。 */
+        {
+            std::lock_guard<std::mutex> ulk(impl_->ui_mtx);
+            impl_->ui_pending = false;
+        }
+        {
+            std::lock_guard<std::mutex> lk(impl_->mtx);
+            impl_->pending = false;
+        }
+        impl_->cv.notify_all();
     }
 }
 

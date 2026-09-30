@@ -365,6 +365,8 @@ lv_obj_t *g_gate_plate_height = nullptr;
 lv_obj_t *g_gate_optical = nullptr;
 lv_obj_t *g_gate_height = nullptr;
 lv_obj_t *g_gate_o2 = nullptr;
+lv_obj_t *g_gate_powder = nullptr;
+lv_obj_t *g_gate_pm25 = nullptr;
 lv_obj_t *g_gate_hold_z = nullptr;
 lv_obj_t *g_gate_transfer = nullptr;
 lv_obj_t *g_height_calib_lbl = nullptr;
@@ -380,6 +382,8 @@ enum class PrintGate : uint8_t {
     OpticalPath,
     PlateHeight,
     Oxygen,
+    PowderLow,
+    DoorPm,
     HoldPrepZ,
     TransferBox,
 };
@@ -1997,7 +2001,7 @@ void set_gate_switch(lv_obj_t *sw, bool on)
 void clear_print_gate_observers(void)
 {
     ui::DebugMsgProxy::instance().set_settings_print_gate_observers(
-        {}, {}, {}, {}, {}, {}, {}, {});
+        {}, {}, {}, {}, {}, {}, {}, {}, {}, {});
     ui::DebugMsgProxy::instance().register_plate_work_z(nullptr);
     ui::DebugMsgProxy::instance().register_plate_by_height(nullptr);
 }
@@ -2061,7 +2065,9 @@ void bind_print_gate_observers(void)
             }
             lv_label_set_text(g_height_calib_lbl, buf);
         },
-        [](bool on) { set_gate_switch(g_gate_hold_z, on); });
+        [](bool on) { set_gate_switch(g_gate_hold_z, on); },
+        [](bool on) { set_gate_switch(g_gate_powder, on); },
+        [](bool on) { set_gate_switch(g_gate_pm25, on); });
     ui::DebugMsgProxy::instance().register_plate_work_z(apply_plate_work_z_text);
     ui::DebugMsgProxy::instance().register_plate_by_height(
         [](bool on) { set_gate_switch(g_gate_plate_height, on); });
@@ -2077,6 +2083,8 @@ void request_print_gate_state(void)
     proxy.request_optical_path_check_state();
     proxy.request_plate_height_adj_state();
     proxy.request_skip_o2_gate_state();
+    proxy.request_powder_low_check_state();
+    proxy.request_door_pm_check_state();
     proxy.request_hold_prep_z_state();
     proxy.request_plate_work_z_state();
 }
@@ -2109,6 +2117,8 @@ void on_print_gate_changed(lv_event_t *e)
     case PrintGate::OpticalPath:  proxy.send_optical_path_check_set(on); break;
     case PrintGate::PlateHeight:  proxy.send_plate_height_adj_set(on); break;
     case PrintGate::Oxygen:       proxy.send_skip_o2_gate_set(!on); break;
+    case PrintGate::PowderLow:    proxy.send_powder_low_check_set(on); break;
+    case PrintGate::DoorPm:       proxy.send_door_pm_check_set(on); break;
     case PrintGate::HoldPrepZ:    proxy.send_hold_prep_z_set(on); break;
     case PrintGate::TransferBox:  control_set_transfer_box_flow(on); break;
     }
@@ -2162,7 +2172,7 @@ lv_obj_t *make_gate_row(lv_obj_t *card, const char *label, PrintGate gate,
 void build_print_detail(lv_obj_t *parent)
 {
     g_gate_outer = g_gate_inner = g_gate_plate = g_gate_plate_height = nullptr;
-    g_gate_optical = g_gate_height = g_gate_o2 = g_gate_hold_z = nullptr;
+    g_gate_optical = g_gate_height = g_gate_o2 = g_gate_powder = g_gate_pm25 = g_gate_hold_z = nullptr;
     g_gate_transfer = nullptr;
     g_height_calib_lbl = nullptr;
     g_plate_work_z_ta = nullptr;
@@ -2190,13 +2200,17 @@ void build_print_detail(lv_obj_t *parent)
     lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
 
     g_gate_outer = make_gate_row(card, "Outer Door Check", PrintGate::OuterDoor, false);
-    g_gate_inner = make_gate_row(card, "Inner Door Vision", PrintGate::InnerVision, false);
+    g_gate_pm25 = make_gate_row(card, "PM2.5 Check", PrintGate::DoorPm, false);
+    g_gate_inner = make_gate_row(card, "Inner Door Vision", PrintGate::InnerVision,
+                                 false, false);
     g_gate_plate = make_gate_row(card, "Plate by Pattern", PrintGate::PlatePresent, false);
     g_gate_plate_height = make_gate_row(card, "Plate by Height", PrintGate::PlateByHeight,
                                         false, false);
     g_gate_optical = make_gate_row(card, "Optical Path Check", PrintGate::OpticalPath, false);
     g_gate_height = make_gate_row(card, "Plate Height Adj", PrintGate::PlateHeight, false);
     g_gate_o2 = make_gate_row(card, "Oxygen Check", PrintGate::Oxygen, false);
+    g_gate_powder = make_gate_row(card, "Powder Low Check", PrintGate::PowderLow,
+                                  false, false);
     g_gate_hold_z = make_gate_row(card, "Keep Z Position", PrintGate::HoldPrepZ, false, false);
     g_gate_transfer = make_gate_row(card, "Transfer Box", PrintGate::TransferBox, true,
                                     control_transfer_box_flow_enabled());
@@ -2315,7 +2329,7 @@ void show_detail(NavId id)
     g_galvo_ver_lbl = nullptr;
     g_bl_pct_lbl = nullptr;
     g_gate_outer = g_gate_inner = g_gate_plate = g_gate_plate_height = nullptr;
-    g_gate_optical = g_gate_height = g_gate_o2 = g_gate_hold_z = nullptr;
+    g_gate_optical = g_gate_height = g_gate_o2 = g_gate_powder = g_gate_pm25 = g_gate_hold_z = nullptr;
     g_gate_transfer = nullptr;
     g_height_calib_lbl = nullptr;
     g_plate_work_z_ta = nullptr;
@@ -2582,7 +2596,7 @@ lv_obj_t *page_user_settings_create(lv_obj_t *parent)
     g_float_back = nullptr;
     g_mcu_ver_lbl = nullptr;
     g_gate_outer = g_gate_inner = g_gate_plate = g_gate_plate_height = nullptr;
-    g_gate_optical = g_gate_height = g_gate_o2 = g_gate_hold_z = nullptr;
+    g_gate_optical = g_gate_height = g_gate_o2 = g_gate_powder = g_gate_pm25 = g_gate_hold_z = nullptr;
     g_gate_transfer = nullptr;
     g_height_calib_lbl = nullptr;
     g_plate_work_z_ta = nullptr;

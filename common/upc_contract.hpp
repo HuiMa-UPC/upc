@@ -484,8 +484,8 @@ enum class MsgType : uint32_t {
     UI_Debug_Laser_AlarmReset_Ntf,  /**< Empty：激光器报警复位（固定 1301） */
     UI_Debug_Print_H264_Record_Set_Ntf, /**< DebugOnOffPayload：打印期连续 H264 录像开关（仅本次运行） */
     UI_Debug_Print_H264_Record_Get_Ntf, /**< Empty：查询当前打印期连续 H264 录像开关状态 */
-    UI_Debug_Clean_Record_Set_Ntf,      /**< DebugOnOffPayload：清粉录像开关（仅本次运行） */
-    UI_Debug_Clean_Record_Get_Ntf,      /**< Empty：查询当前清粉录像开关状态 */
+    UI_Debug_Clean_Record_Set_Ntf,      /**< 已移除调试钮；保留枚举勿挪位 */
+    UI_Debug_Clean_Record_Get_Ntf,      /**< 已移除调试钮；保留枚举勿挪位 */
     UI_Debug_Env_Sim_Set_Ntf,           /**< DebugOnOffPayload：环境上报模拟开关（仅本次运行，默认关） */
     UI_Debug_Env_Sim_Get_Ntf,           /**< Empty：查询当前环境上报模拟开关状态 */
     UI_Debug_Env_Sim_Powder_Set_Ntf,    /**< DebugOnOffPayload：环境模拟粉量缺粉开关（延迟 5s 生效） */
@@ -521,6 +521,10 @@ enum class MsgType : uint32_t {
     UI_Debug_Spi_Pm25_Lcd_Set_Ntf,      /**< DebugOnOffPayload：SPI 小屏周期刷测试色（仅本次运行，默认关） */
     UI_Debug_Spi_Pm25_Lcd_Get_Ntf,      /**< Empty：查询 SPI 小屏测试刷屏开关 */
     UI_Debug_Return_Motor_Ntf,          /**< DebugMotorPayload：回粉电机 停止并恢复自动/送往 B 瓶/送往 A 瓶 */
+    UI_Debug_Powder_Low_Check_Set_Ntf,  /**< DebugOnOffPayload：缺粉检测（仅本次运行，默认关；关则不暂停、不弹补粉窗） */
+    UI_Debug_Powder_Low_Check_Get_Ntf,  /**< Empty：查询缺粉检测开关 */
+    UI_Debug_Door_Pm_Check_Set_Ntf,     /**< DebugOnOffPayload：开门前舱内 PM2.5 检测（仅本次运行，默认开；on=0 跳过检测与吹风，直接开门） */
+    UI_Debug_Door_Pm_Check_Get_Ntf,     /**< Empty：查询开门前 PM2.5 检测开关 */
 
     // ---- GLAVO → UI：调试页状态回读（按模块拆分） ----
     GLAVO_Debug_Sensor_Ntf = 0x1200, /**< DebugSensorPayload：调试顶栏传感器（舱内/滤芯氧 + 舱外/舱内 PM） */
@@ -529,7 +533,7 @@ enum class MsgType : uint32_t {
     GLAVO_Debug_Galvo_Ntf,          /**< DebugGalvoStatePayload：振镜 X/Y */
     GLAVO_Debug_Laser_Ntf,          /**< DebugLaserStatePayload：激光器状态/报警/功率/温度 */
     GLAVO_Debug_Print_H264_Record_Ntf, /**< DebugOnOffPayload：打印期连续 H264 录像开关状态 */
-    GLAVO_Debug_Clean_Record_Ntf,      /**< DebugOnOffPayload：清粉录像开关状态 */
+    GLAVO_Debug_Clean_Record_Ntf,      /**< 已移除调试钮；保留枚举勿挪位 */
     GLAVO_Debug_Env_Sim_Ntf,           /**< DebugOnOffPayload：环境上报模拟开关状态 */
     GLAVO_Debug_Env_Sim_Powder_Ntf,    /**< DebugOnOffPayload：环境模拟粉量缺粉开关状态 */
     GLAVO_Debug_FirstLayer_Visual_Check_Ntf, /**< DebugOnOffPayload：首层视觉检测开关状态 */
@@ -551,6 +555,8 @@ enum class MsgType : uint32_t {
     GLAVO_Debug_Fan_Ntf,                /**< DebugFanStatePayload：风机实测转速/故障/状态（FANBOARD TLV 0x08） */
     GLAVO_Debug_Spi_Pm25_Lcd_Ntf,       /**< DebugOnOffPayload：SPI 小屏测试刷屏开关状态 */
     GLAVO_Debug_Clean_Test_Ntf,         /**< DebugCleanTestPayload：MCU 清粉结束（A2/42 TLV 0x03），调试页据此复位 Powder Clean */
+    GLAVO_Debug_Powder_Low_Check_Ntf,   /**< DebugOnOffPayload：缺粉检测开关状态（on=1 检测） */
+    GLAVO_Debug_Door_Pm_Check_Ntf,      /**< DebugOnOffPayload：开门前 PM2.5 检测开关（on=1 检测） */
 
     // ---- UI ↔ GLAVO：网络 / WiFi（ConnMan 后端） ----
     UI_Wifi_Enable_Req = 0x1300, /**< WifiEnableReqPayload：开/关 WiFi */
@@ -686,7 +692,7 @@ enum class MsgType : uint32_t {
     GLAVO_Visual_Plate_Present_Req       = 0x1724, /**< VisualCabinCheckReqPayload; Snapshot only */
     APP_Visual_Plate_Present_Rsp         = 0x1725, /**< VisualCabinCheckRspPayload; PlatePresentResult */
     /* Glavo↔UI：舱检业务开关 / 无板弹窗（枚举只准末尾追加，接在 0x1725 之后） */
-    UI_Debug_InnerDoor_Occlusion_Set_Ntf, /**< DebugOnOffPayload：on=1 做内门挡门融合（仅本次运行，默认开；UI Skip 按下发 0） */
+    UI_Debug_InnerDoor_Occlusion_Set_Ntf, /**< DebugOnOffPayload：on=1 做内门挡门融合（仅本次运行，默认关；设置页 Inner Door Vision / 调试页 Skip 可改） */
     UI_Debug_InnerDoor_Occlusion_Get_Ntf, /**< Empty：查询内门挡门融合是否执行 */
     UI_Debug_Plate_Present_Set_Ntf,       /**< DebugOnOffPayload：on=1 执行基板读码（仅本次运行，默认开；UI Skip 按下发 0） */
     UI_Debug_Plate_Present_Get_Ntf,       /**< Empty：查询基板读码是否执行 */
@@ -1399,7 +1405,7 @@ struct PrintVideoSessionPayload {
     uint32_t layer_fps;      /**< MP4 层帧率；0=默认 */
     uint8_t  h264_continuous_on; /**< 1=本次打印会话启用连续 H264 录制 */
     uint8_t  reserved[3];
-    uint32_t h264_bitrate;   /**< 连续 H264 CBR 码率（bps）；0=Media 默认（cal PRINT_H264_BITRATE / 中等） */
+    uint32_t h264_bitrate;   /**< 连续 H264 CBR 码率（bps）；0=Media 默认 CAMERA_PRINT_H264_BITRATE */
 };
 
 /** GLAVO→CAMERA 单层拍照（换层排空后、LAYER_DONE 前） */
@@ -1436,17 +1442,18 @@ struct PrintVideoManifestPayload {
 
 /** UI_Clean_Test_Start_Req：Purify / 手动清粉触发清粉测试（录像可选）
  *
- * `record_video=0` 时 Glavo 不开 Media 清粉录像会话，因此不写
- * `/data/media/video/{job_name}/`、也不进打印历史；MCU 清粉结束后由 Glavo 自己发
- * `APP_Clean_Test_Result_Ntf`（`on_clean_test_done()` 的 `!video_started` 分支）。
- * 控制页的手动清粉走这一档，`job_name` 随之无人读取。 */
+ * `record_video=0` 时 Glavo 不开 Media 清粉录像会话，MCU 结束后由 Glavo 自己发
+ * `APP_Clean_Test_Result_Ntf`。调试页 Powder Clean 仍可走这一档。
+ * `record_video=1` 时由 `record_kind` 决定形态：
+ *   0=结果页延时 JPEG 接续；1=空闲清粉连续 H264（进 Print History）。 */
 struct CleanTestStartReqPayload {
-    char job_name[64];   /**< 对应 /userdata/media/video/{job_name}/ */
+    char job_name[64];   /**< 对应 /userdata/media/video/{job_name}/；H264 空闲可空由 Glavo 生成 */
     uint32_t width;      /**< 0=跟随 Camera 当前预览宽 */
     uint32_t height;     /**< 0=跟随 Camera 当前预览高 */
-    uint32_t fps;        /**< 0=跟随 Camera 当前预览 fps */
-    uint8_t record_video; /**< 1=同时开清粉录像（结果页 Purify）；0=只清粉不录 */
-    uint8_t reserved[3];
+    uint32_t fps;        /**< 0=跟随 Camera 当前预览 fps / 延时帧率 */
+    uint8_t record_video; /**< 1=开录像；0=只清粉不录 */
+    uint8_t record_kind;  /**< 0=延时 JPEG（结果页）；1=连续 H264（空闲清粉） */
+    uint8_t reserved[2];
 };
 
 /** APP_Clean_Test_Start_Rsp：清粉测试请求是否被 Glavo 受理 */
@@ -1533,7 +1540,10 @@ struct CleanVideoSessionStartPayload {
     char     job_name[64];
     uint32_t width;      /**< 0=沿用 Camera 预览宽 */
     uint32_t height;     /**< 0=沿用 Camera 预览高 */
-    uint32_t fps;        /**< 抽帧/合成帧率；0=Media 默认（cal TIMELAPSE_VIDEO_FPS） */
+    uint32_t fps;        /**< 抽帧/合成帧率；0=Media 默认 CAMERA_PRINT_VIDEO_LAYER_FPS */
+    uint8_t  record_kind; /**< 0=延时 JPEG；1=连续 H264（复用 PrintH264Recorder） */
+    uint8_t  reserved[3];
+    uint32_t h264_bitrate; /**< record_kind=1 时有效；0=Media 默认 */
 };
 
 /** GLAVO→MEDIA：清粉延时抽帧会话停止 */

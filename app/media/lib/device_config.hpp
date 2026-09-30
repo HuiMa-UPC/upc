@@ -54,9 +54,8 @@
 #endif
 
 /**
- * H264 目标码率（bps）：打印期连续录像与直播共用。
- * 录像可被 cal.csv PRINT_H264_BITRATE 覆盖；直播固定用本值，
- * 不受云端 max_bitrate_kbps 影响。
+ * 打印期连续 H264 目标码率（bps）。固定用本值，不再读 cal.csv。
+ * 直播用 UPC_LIVE_H264_BITRATE，不受云端 max_bitrate_kbps 影响。
  */
 #ifndef CAMERA_PRINT_H264_BITRATE
 #define CAMERA_PRINT_H264_BITRATE  2048000u
@@ -71,7 +70,7 @@
 #define UPC_LIVE_H264_BITRATE  4096000u
 #endif
 
-/** 层帧率：UI 延时摄影序列播放默认帧率；合成默认亦为此值（可被 cal.csv TIMELAPSE_VIDEO_FPS 覆盖） */
+/** 层帧率：延时抽帧/合成与序列播放默认帧率；不再读 cal.csv TIMELAPSE_VIDEO_FPS */
 #ifndef CAMERA_PRINT_VIDEO_LAYER_FPS
 #define CAMERA_PRINT_VIDEO_LAYER_FPS  5u
 #endif

@@ -29,8 +29,8 @@ enum class PlaybackMode : uint8_t {
 
 constexpr uint32_t kPlayIntervalMs = 200u; /* 序列回放默认 5fps */
 constexpr const char* kFsDrive = "A:";
-constexpr uint64_t kPreviewReqMinIntervalMs = 80;
-constexpr int64_t kMp4PreviewJumpMs = 300;
+/** JPEG 序列拖动预览节流；MP4 拖动中不 seek，仅松手 settle。 */
+constexpr uint64_t kPreviewReqMinIntervalMs = 120;
 
 /* 进度条命中区向外扩多少（px）。轨道视觉上只有 24~40px 高（随 profile），
  * 全屏播放时它是唯一的定位手段，而且是拖动而非点击，起手落偏一点就丢事件。
@@ -53,9 +53,21 @@ bool g_resume_after_drag = false;
 PlaybackMode g_mode = PlaybackMode::None;
 int64_t g_mp4_pos_ms = 0;
 int64_t g_mp4_dur_ms = 0;
-int64_t g_last_preview_req_ms = -1;
 int64_t g_last_preview_req_idx = -1;
 uint64_t g_last_preview_req_tick_ms = 0;
+bool g_preview_chrome_shown = false;
+
+/** 按下时缓存轨道/预览框几何，拖动中禁止 update_layout / move_foreground。 */
+struct ScrubGeom {
+    bool valid = false;
+    int32_t slider_x1 = 0;
+    int32_t slider_w = 0;
+    int32_t box_w = 0;
+    int32_t box_h = 0;
+    int32_t box_y = 0;
+    int32_t page_w = 0;
+};
+ScrubGeom g_scrub_geom;
 
 lv_obj_t* g_page = nullptr;
 lv_obj_t* g_video_img = nullptr;
@@ -180,32 +192,53 @@ void format_png_frame_time(uint32_t frame_index, char* out, size_t n)
     format_ms(static_cast<int64_t>(total_sec) * 1000, out, n);
 }
 
-void position_preview_box(int32_t slider_value)
+void cache_scrub_geometry()
 {
+    g_scrub_geom.valid = false;
     if(!g_preview_box || !g_slider || !g_page) {
         return;
     }
     lv_obj_update_layout(g_slider);
     lv_area_t slider_area;
     lv_obj_get_coords(g_slider, &slider_area);
-    const int32_t slider_w = lv_area_get_width(&slider_area);
-    const int32_t knob_x = slider_area.x1 + static_cast<int32_t>(
-        static_cast<int64_t>(slider_w) * slider_value / 1000);
-
     lv_obj_update_layout(g_preview_box);
-    const int32_t box_w = lv_obj_get_width(g_preview_box);
-    const int32_t box_h = lv_obj_get_height(g_preview_box);
+    g_scrub_geom.slider_x1 = slider_area.x1;
+    g_scrub_geom.slider_w = lv_area_get_width(&slider_area);
+    g_scrub_geom.box_w = lv_obj_get_width(g_preview_box);
+    g_scrub_geom.box_h = lv_obj_get_height(g_preview_box);
+    g_scrub_geom.page_w = lv_obj_get_width(g_page);
+    g_scrub_geom.box_y =
+        slider_area.y1 - g_scrub_geom.box_h - USER_PAD_SM;
+    g_scrub_geom.valid = (g_scrub_geom.slider_w > 0 && g_scrub_geom.box_w > 0);
+}
 
-    int32_t x = knob_x - box_w / 2;
-    const int32_t max_x = lv_obj_get_width(g_page) - box_w;
+void position_preview_box(int32_t slider_value, bool allow_layout)
+{
+    if(!g_preview_box || !g_slider || !g_page) {
+        return;
+    }
+    if(allow_layout || !g_scrub_geom.valid) {
+        cache_scrub_geometry();
+    }
+    if(!g_scrub_geom.valid) {
+        return;
+    }
+    const int32_t knob_x = g_scrub_geom.slider_x1 + static_cast<int32_t>(
+        static_cast<int64_t>(g_scrub_geom.slider_w) * slider_value / 1000);
+    int32_t x = knob_x - g_scrub_geom.box_w / 2;
+    const int32_t max_x = g_scrub_geom.page_w - g_scrub_geom.box_w;
     if(x < 0) {
         x = 0;
     }
-    if(x > max_x) {
+    if(max_x >= 0 && x > max_x) {
         x = max_x;
     }
-    const int32_t y = slider_area.y1 - box_h - USER_PAD_SM;
-    lv_obj_set_pos(g_preview_box, x, y);
+    /* 拖动中只改 x：VALUE_CHANGED 里 update_layout / set_pos 全量改会重入布局。 */
+    if(allow_layout) {
+        lv_obj_set_pos(g_preview_box, x, g_scrub_geom.box_y);
+    } else {
+        lv_obj_set_x(g_preview_box, x);
+    }
 }
 
 void show_preview_chrome(int32_t slider_value, const char* time_text)
@@ -213,18 +246,31 @@ void show_preview_chrome(int32_t slider_value, const char* time_text)
     if(g_preview_time && time_text) {
         lv_label_set_text(g_preview_time, time_text);
     }
-    position_preview_box(slider_value);
+    const bool first_show = !g_preview_chrome_shown;
+    position_preview_box(slider_value, first_show);
     if(g_preview_box) {
-        lv_obj_remove_flag(g_preview_box, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_move_foreground(g_preview_box);
+        if(first_show) {
+            lv_obj_remove_flag(g_preview_box, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_move_foreground(g_preview_box);
+            g_preview_chrome_shown = true;
+        } else if(lv_obj_has_flag(g_preview_box, LV_OBJ_FLAG_HIDDEN)) {
+            lv_obj_remove_flag(g_preview_box, LV_OBJ_FLAG_HIDDEN);
+            g_preview_chrome_shown = true;
+        }
     }
 }
 
 void hide_preview_chrome()
 {
+    /* 先摘掉预览图源，再藏盒子：避免 LVGL 仍引用解码线程即将复用/释放的缓冲。 */
+    if(g_preview_img) {
+        lv_image_set_src(g_preview_img, nullptr);
+    }
     if(g_preview_box) {
         lv_obj_add_flag(g_preview_box, LV_OBJ_FLAG_HIDDEN);
     }
+    g_preview_chrome_shown = false;
+    g_scrub_geom.valid = false;
 }
 
 void update_progress_ui_png()
@@ -344,7 +390,7 @@ void request_drag_preview_png(int32_t slider_value, bool force_request = false)
 #endif
 }
 
-void request_drag_preview_mp4(int32_t slider_value, bool force_request = false)
+void request_drag_preview_mp4(int32_t slider_value, bool /*force_request*/ = false)
 {
     const int64_t dur_ms = g_mp4_dur_ms;
     if(dur_ms <= 0) {
@@ -352,19 +398,10 @@ void request_drag_preview_mp4(int32_t slider_value, bool force_request = false)
     }
     const int64_t target_ms = std::clamp<int64_t>(
         (static_cast<int64_t>(slider_value) * dur_ms) / 1000, 0, dur_ms);
+    /* 拖动只挪预览框与时间；连续 H264 seek 很重，且易与 LVGL 布局重入叠崩。
+     * 主画面定位留给松手时的 seek()。 */
     update_drag_time_mp4(slider_value, target_ms);
-
-    const uint64_t now_ms = monotonic_ms();
-    const bool first_req = g_last_preview_req_ms < 0;
-    const bool interval_ok =
-        now_ms - g_last_preview_req_tick_ms >= kPreviewReqMinIntervalMs;
-    const bool target_jump = !first_req &&
-        std::llabs(target_ms - g_last_preview_req_ms) >= kMp4PreviewJumpMs;
-    if(force_request || first_req || interval_ok || target_jump) {
-        ui::VideoPlayer::instance().request_preview(target_ms);
-        g_last_preview_req_ms = target_ms;
-        g_last_preview_req_tick_ms = now_ms;
-    }
+    (void)target_ms;
 }
 
 void render_current_png_frame()
@@ -528,9 +565,10 @@ void on_slider_pressed(lv_event_t*)
     g_resume_after_drag = g_playing;
     g_playing = false;
     set_play_icon(false);
-    g_last_preview_req_ms = -1;
     g_last_preview_req_idx = -1;
     g_last_preview_req_tick_ms = 0;
+    /* 按下时一次性量几何；后续 VALUE_CHANGED 复用，禁止再 update_layout。 */
+    cache_scrub_geometry();
 
     if(g_mode == PlaybackMode::Mp4) {
         auto& player = ui::VideoPlayer::instance();
@@ -646,9 +684,10 @@ void page_user_timelapse_refresh(bool)
     g_mode = PlaybackMode::None;
     g_mp4_pos_ms = 0;
     g_mp4_dur_ms = 0;
-    g_last_preview_req_ms = -1;
     g_last_preview_req_idx = -1;
     g_last_preview_req_tick_ms = 0;
+    g_preview_chrome_shown = false;
+    g_scrub_geom.valid = false;
     g_frames.clear();
     g_cur_index = 0;
 
@@ -715,9 +754,10 @@ void page_user_timelapse_exit(void)
     g_cur_index = 0;
     g_mp4_pos_ms = 0;
     g_mp4_dur_ms = 0;
-    g_last_preview_req_ms = -1;
     g_last_preview_req_idx = -1;
     g_last_preview_req_tick_ms = 0;
+    g_preview_chrome_shown = false;
+    g_scrub_geom.valid = false;
 }
 
 lv_obj_t* page_user_timelapse_create(lv_obj_t* parent)

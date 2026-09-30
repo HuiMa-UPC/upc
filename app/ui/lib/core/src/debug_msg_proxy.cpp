@@ -129,6 +129,24 @@ void DebugMsgProxy::init()
         }));
 
     subs_.push_back(bus.subscribe(
+        middleware::MsgType::GLAVO_Debug_Powder_Low_Check_Ntf, middleware::ModuleId::UI,
+        [this](const middleware::Message& msg) {
+            middleware::DebugOnOffPayload p{};
+            if(read_inline_pod(msg, p) && settings_powder_low_cb_) {
+                settings_powder_low_cb_(p.on != 0);
+            }
+        }));
+
+    subs_.push_back(bus.subscribe(
+        middleware::MsgType::GLAVO_Debug_Door_Pm_Check_Ntf, middleware::ModuleId::UI,
+        [this](const middleware::Message& msg) {
+            middleware::DebugOnOffPayload p{};
+            if(read_inline_pod(msg, p) && settings_door_pm_cb_) {
+                settings_door_pm_cb_(p.on != 0);
+            }
+        }));
+
+    subs_.push_back(bus.subscribe(
         middleware::MsgType::GLAVO_Debug_Skip_Outer_Door_Ntf, middleware::ModuleId::UI,
         [this](const middleware::Message& msg) {
             middleware::DebugOnOffPayload p{};
@@ -681,6 +699,30 @@ void DebugMsgProxy::request_skip_o2_gate_state()
     publish_empty(middleware::MsgType::UI_Debug_Skip_O2_Gate_Get_Ntf);
 }
 
+void DebugMsgProxy::send_powder_low_check_set(bool on)
+{
+    middleware::DebugOnOffPayload p{};
+    p.on = on ? 1 : 0;
+    publish_pod(middleware::MsgType::UI_Debug_Powder_Low_Check_Set_Ntf, p);
+}
+
+void DebugMsgProxy::request_powder_low_check_state()
+{
+    publish_empty(middleware::MsgType::UI_Debug_Powder_Low_Check_Get_Ntf);
+}
+
+void DebugMsgProxy::send_door_pm_check_set(bool on)
+{
+    middleware::DebugOnOffPayload p{};
+    p.on = on ? 1 : 0;
+    publish_pod(middleware::MsgType::UI_Debug_Door_Pm_Check_Set_Ntf, p);
+}
+
+void DebugMsgProxy::request_door_pm_check_state()
+{
+    publish_empty(middleware::MsgType::UI_Debug_Door_Pm_Check_Get_Ntf);
+}
+
 void DebugMsgProxy::send_skip_outer_door_set(bool on)
 {
     middleware::DebugOnOffPayload p{};
@@ -1049,7 +1091,9 @@ void DebugMsgProxy::set_settings_print_gate_observers(
     DebugPlateHeightAdjCb plate_height,
     DebugSkipO2GateCb skip_o2,
     DebugHeightCalibProgressCb height_calib,
-    DebugHoldPrepZCb hold_prep_z)
+    DebugHoldPrepZCb hold_prep_z,
+    DebugPowderLowCheckCb powder_low_check,
+    DebugDoorPmCheckCb door_pm_check)
 {
     settings_skip_outer_cb_ = std::move(skip_outer);
     settings_inner_occl_cb_ = std::move(inner_occlusion);
@@ -1059,6 +1103,8 @@ void DebugMsgProxy::set_settings_print_gate_observers(
     settings_skip_o2_cb_ = std::move(skip_o2);
     settings_height_calib_cb_ = std::move(height_calib);
     settings_hold_prep_z_cb_ = std::move(hold_prep_z);
+    settings_powder_low_cb_ = std::move(powder_low_check);
+    settings_door_pm_cb_ = std::move(door_pm_check);
 }
 
 void DebugMsgProxy::register_local_rtsp(DebugLocalRtspCb cb)

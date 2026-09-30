@@ -123,9 +123,10 @@ void ui_clean_state_request(ui_clean_owner_t owner, const char *job_name)
     }
     g_pending = owner;
     g_stop_owner = UI_CLEAN_OWNER_NONE;
-    const bool record = (owner == UI_CLEAN_OWNER_PRINT_RESULT);
+    /* 结果页延时 JPEG；空闲 Manual 连续 H264。两路都开录像。 */
+    const uint8_t kind = (owner == UI_CLEAN_OWNER_MANUAL) ? 1u : 0u;
     /* 宽/高/帧率一律 0 = 跟随 Camera 当前预览参数；两个发起方都没有自己的取值需求。 */
-    ui::UiMsgProxy::instance().send_clean_test_start(job_name, 0, 0, 0, record);
+    ui::UiMsgProxy::instance().send_clean_test_start(job_name, 0, 0, 0, true, kind);
 }
 
 void ui_clean_state_stop(void)

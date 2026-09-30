@@ -215,6 +215,18 @@ void PrintVideoRecorder::discard_current_session()
     (void)remove_session_dir();
 }
 
+void PrintVideoRecorder::end_session_keep_files()
+{
+    session_active_ = false;
+    discarded_ = false;
+    session_id_.clear();
+    session_name_.clear();
+    session_dir_.clear();
+    last_layer_nv12_.clear();
+    frame_count_ = 0;
+    h264_continuous_on_ = false;
+}
+
 void PrintVideoRecorder::set_sender_module_id(middleware::ModuleId module_id)
 {
     sender_module_id_ = module_id;

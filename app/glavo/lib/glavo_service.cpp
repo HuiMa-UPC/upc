@@ -85,6 +85,7 @@
 #include <algorithm>
 #include <cmath>
 #include <chrono>
+#include <ctime>
 #include <array>
 #include <cstdio>
 #include <cstring>
@@ -689,9 +690,6 @@ bool GlavoService::init()
         upc::config::CalConfigOptions cal_cfg{};
         if(upc::config::load_cal_config_options(upc::config::kCalDefaultPath, &cal_cfg) &&
            cal_cfg.has_config_section) {
-            if(cal_cfg.has_glavo_door_real_open_enable) {
-                door_real_open_enabled_ = cal_cfg.glavo_door_real_open_enable;
-            }
             if(cal_cfg.has_glavo_serial_ack_enable) {
                 McuLink::instance().set_serial_ack_enabled(
                     cal_cfg.glavo_serial_ack_enable);
@@ -699,12 +697,7 @@ bool GlavoService::init()
             if(cal_cfg.has_pm25_clean_threshold) {
                 pm25_clean_threshold_ = cal_cfg.pm25_clean_threshold;
             }
-            if(cal_cfg.has_timelapse_video_fps) {
-                timelapse_video_fps_ = cal_cfg.timelapse_video_fps;
-            }
-            if(cal_cfg.has_print_h264_bitrate) {
-                print_h264_bitrate_ = cal_cfg.print_h264_bitrate;
-            }
+            /* 延时 fps / 打印 H264 码率不再读 cal.csv，成员保持 0，由 Media 用编译默认值。 */
         }
         UPC_LOG_GLAVO_SERVICE(Info,
             "runtime cfg: door_open=%d serial_ack=%d pm25_clean=%.1f timelapse_fps=%u h264_bps=%u",
@@ -715,13 +708,14 @@ bool GlavoService::init()
             print_h264_bitrate_);
     }
 
-    print_h264_continuous_on_ = false; /* 上电默认关：调试页 Other → Print H264 Rec */
-    clean_video_record_on_ = true;
+    print_h264_continuous_on_ = true; /* 上电默认开：调试页 Media & Sim → Print H264 Rec */
     clean_video_session_started_ = false;
     first_layer_visual_check_on_ = false;
     env_sim_on_ = false;
     env_sim_powder_low_on_ = false;
     skip_o2_print_gate_on_ = false;
+    powder_low_check_on_ = false;
+    door_real_open_enabled_ = true;
     skip_outer_door_on_ = false;
     outer_door_confirm_waiting_ = false;
     McuLink::instance().set_env_sim_enabled(false);
@@ -730,9 +724,8 @@ bool GlavoService::init()
     PrintVideoNotify::instance().set_print_h264_continuous(print_h264_continuous_on_);
     PrintVideoNotify::instance().set_timelapse_fps(timelapse_video_fps_);
     PrintVideoNotify::instance().set_print_h264_bitrate(print_h264_bitrate_);
-    UPC_LOG_GLAVO_SERVICE(Info, "print h264 continuous=%d clean record(debug)=%d env_sim=%d",
+    UPC_LOG_GLAVO_SERVICE(Info, "print h264 continuous=%d env_sim=%d",
                           print_h264_continuous_on_ ? 1 : 0,
-                          clean_video_record_on_ ? 1 : 0,
                           env_sim_on_ ? 1 : 0);
 
     parser::ParserContext::instance().load_calibration(CAL_DEFAULT_FILE_PATH);
@@ -883,14 +876,16 @@ bool GlavoService::start()
         middleware::MsgType::UI_Debug_Laser_AlarmReset_Ntf,
         middleware::MsgType::UI_Debug_Print_H264_Record_Set_Ntf,
         middleware::MsgType::UI_Debug_Print_H264_Record_Get_Ntf,
-        middleware::MsgType::UI_Debug_Clean_Record_Set_Ntf,
-        middleware::MsgType::UI_Debug_Clean_Record_Get_Ntf,
         middleware::MsgType::UI_Debug_Env_Sim_Set_Ntf,
         middleware::MsgType::UI_Debug_Env_Sim_Get_Ntf,
         middleware::MsgType::UI_Debug_Env_Sim_Powder_Set_Ntf,
         middleware::MsgType::UI_Debug_Env_Sim_Powder_Get_Ntf,
         middleware::MsgType::UI_Debug_Skip_O2_Gate_Set_Ntf,
         middleware::MsgType::UI_Debug_Skip_O2_Gate_Get_Ntf,
+        middleware::MsgType::UI_Debug_Powder_Low_Check_Set_Ntf,
+        middleware::MsgType::UI_Debug_Powder_Low_Check_Get_Ntf,
+        middleware::MsgType::UI_Debug_Door_Pm_Check_Set_Ntf,
+        middleware::MsgType::UI_Debug_Door_Pm_Check_Get_Ntf,
         middleware::MsgType::UI_Debug_Skip_Outer_Door_Set_Ntf,
         middleware::MsgType::UI_Debug_Skip_Outer_Door_Get_Ntf,
         middleware::MsgType::UI_Debug_Inner_Door_Busy_Get_Ntf,
@@ -948,10 +943,11 @@ bool GlavoService::start()
     worker_thread_ = std::thread(&GlavoService::worker_loop, this);
     start_usb_hotplug_monitor();
     publish_debug_print_h264_record_state();
-    publish_debug_clean_record_state();
     publish_debug_env_sim_state();
     publish_debug_env_sim_powder_state();
     publish_debug_skip_o2_gate_state();
+    publish_debug_powder_low_check_state();
+    publish_debug_door_pm_check_state();
     publish_debug_skip_outer_door_state();
     publish_debug_o2_calib_state();
     publish_debug_first_layer_visual_check_state();
@@ -1500,12 +1496,6 @@ void GlavoService::handle_message(const middleware::Message& msg)
         case middleware::MsgType::UI_Debug_Print_H264_Record_Get_Ntf:
             handle_debug_print_h264_record_get(msg);
             break;
-        case middleware::MsgType::UI_Debug_Clean_Record_Set_Ntf:
-            handle_debug_clean_record_set(msg);
-            break;
-        case middleware::MsgType::UI_Debug_Clean_Record_Get_Ntf:
-            handle_debug_clean_record_get(msg);
-            break;
         case middleware::MsgType::UI_Debug_Env_Sim_Set_Ntf:
             handle_debug_env_sim_set(msg);
             break;
@@ -1523,6 +1513,18 @@ void GlavoService::handle_message(const middleware::Message& msg)
             break;
         case middleware::MsgType::UI_Debug_Skip_O2_Gate_Get_Ntf:
             handle_debug_skip_o2_gate_get(msg);
+            break;
+        case middleware::MsgType::UI_Debug_Powder_Low_Check_Set_Ntf:
+            handle_debug_powder_low_check_set(msg);
+            break;
+        case middleware::MsgType::UI_Debug_Powder_Low_Check_Get_Ntf:
+            handle_debug_powder_low_check_get(msg);
+            break;
+        case middleware::MsgType::UI_Debug_Door_Pm_Check_Set_Ntf:
+            handle_debug_door_pm_check_set(msg);
+            break;
+        case middleware::MsgType::UI_Debug_Door_Pm_Check_Get_Ntf:
+            handle_debug_door_pm_check_get(msg);
             break;
         case middleware::MsgType::UI_Debug_Skip_Outer_Door_Set_Ntf:
             handle_debug_skip_outer_door_set(msg);
@@ -4607,6 +4609,10 @@ void GlavoService::on_mcu_link_event(McuLinkEvent ev)
             if(!print_running_.load()) {
                 break;
             }
+            if(!powder_low_check_on_) {
+                UPC_LOG_GLAVO_SERVICE(Debug, "powder low ignored: check off");
+                break;
+            }
             if(ignore_powder_low_for_current_print_) {
                 UPC_LOG_GLAVO_SERVICE(Warn, "powder low ignored for current print");
                 break;
@@ -4666,7 +4672,7 @@ void GlavoService::on_mcu_link_event(McuLinkEvent ev)
 /* ============================================================================
  * UI 设备状态与控制（耗材 / 环境 / 门 / 净化 / 清粉 / 转运）
  *
- * 门控：cal.csv 关闭时跳过舱内 PM2.5 与吹粉，开门指令仍下发并轮询传感器。
+ * 门控：设置页 PM2.5 Check 关掉时跳过舱内 PM2.5 与吹粉，开门指令仍下发并轮询传感器。
  * 开门前清粉（UI_Clean_Start）：独立 clean_worker_，避免堵死 worker 数秒～数分钟。
  * 清粉测试（Clean_Test）：串口指令 + 同步通知 Media 延时录像；完成由 MCU 回调回灌。
  * ============================================================================ */
@@ -4713,8 +4719,8 @@ void GlavoService::handle_pm25_request(const middleware::Message& msg)
     const uint32_t target = static_cast<uint32_t>(msg.sender_id);
 
     if(!door_real_open_enabled_) {
-        /* 门控关闭：跳过舱内 PM 检测与吹风，直接判合格，UI 随后只发开门指令 */
-        UPC_LOG_GLAVO_SERVICE(Info, "pm25_req: door gate off, skip cabin PM check");
+        /* 设置页关掉 PM2.5 Check：跳过舱内 PM 检测与吹风，直接判合格，UI 随后只发开门指令 */
+        UPC_LOG_GLAVO_SERVICE(Info, "pm25_req: door pm check off, skip cabin PM check");
         publish_pm25_rsp(target, false, 0.f);
         return;
     }
@@ -4765,7 +4771,7 @@ void GlavoService::handle_close_door_request(const middleware::Message& msg)
  *
  * worker 只发开门指令并拉起短线程轮询传感器（最长
  * GLAVO_DOOR_OPEN_TIMEOUT_MS），Rsp 由该线程 publish_async，不堵 worker。
- * 门控关闭时同样下发；PM2.5 与吹粉在 handle_pm25_request 里跳过。
+ * PM2.5 Check 关掉时同样下发；检测与吹粉在 handle_pm25_request 里跳过。
  */
 void GlavoService::handle_open_door_request(const middleware::Message& msg)
 {
@@ -4987,8 +4993,10 @@ void GlavoService::notify_clean_video_start(const middleware::CleanTestStartReqP
                   clean_test_job_name_);
     payload.width = req.width;
     payload.height = req.height;
-    /* 优先 UI 请求；否则用 cal.csv TIMELAPSE_VIDEO_FPS；0 则 Media 默认 */
+    /* 优先 UI 请求；0 则 Media 用 CAMERA_PRINT_VIDEO_LAYER_FPS，不读 cal.csv */
     payload.fps = req.fps > 0 ? req.fps : timelapse_video_fps_;
+    payload.record_kind = req.record_kind;
+    payload.h264_bitrate = print_h264_bitrate_;
 
     middleware::Message msg(middleware::MsgType::APP_Clean_Video_Session_Start_Ntf,
         middleware::ModuleId::APP_GLAVO,
@@ -5041,10 +5049,10 @@ void GlavoService::on_clean_test_done(uint8_t result_code)
 }
 
 /**
- * @brief 启动清粉测试：串口下发 +（按请求）通知 Media 开始延时抽帧
+ * @brief 启动清粉测试：串口下发 +（按请求）通知 Media 开录像
  *
- * 是否录像由 `req.record_video` 决定，不再无条件开会话。
- * clean_video_record_on_ 仅供调试页状态回读，从来不门控是否录像。
+ * `record_video=1` 时：`record_kind=0` 结果页延时 JPEG；`=1` 空闲连续 H264。
+ * 两路都不看调试页开关。
  */
 void GlavoService::handle_clean_test_start_request(const middleware::Message& msg)
 {
@@ -5058,7 +5066,21 @@ void GlavoService::handle_clean_test_start_request(const middleware::Message& ms
         return;
     }
 
-    const std::string job_name = sanitize_job_name(req.job_name);
+    std::string job_name;
+    if(req.record_video && req.record_kind == 1) {
+        /* 空闲清粉 H264：独立作业名，避免蹭到上次打印目录。 */
+        const auto now = std::chrono::system_clock::now();
+        const std::time_t t = std::chrono::system_clock::to_time_t(now);
+        std::tm tm_buf{};
+        localtime_r(&t, &tm_buf);
+        char stamp[48]{};
+        std::snprintf(stamp, sizeof(stamp), "clean_%04d%02d%02d_%02d%02d%02d",
+                      tm_buf.tm_year + 1900, tm_buf.tm_mon + 1, tm_buf.tm_mday,
+                      tm_buf.tm_hour, tm_buf.tm_min, tm_buf.tm_sec);
+        job_name = stamp;
+    } else {
+        job_name = sanitize_job_name(req.job_name);
+    }
     std::snprintf(clean_test_job_name_, sizeof(clean_test_job_name_), "%s",
                   job_name.c_str());
     make_clean_test_session_id(clean_test_session_id_, sizeof(clean_test_session_id_));
@@ -5072,9 +5094,6 @@ void GlavoService::handle_clean_test_start_request(const middleware::Message& ms
 
     clean_test_active_ = true;
     debug_tx(frame, n);
-    /* 录像由请求方决定：Purify 路径带 record_video=1 照旧全程录；控制页手动清粉给 0，
-     * 于是不建会话、不写 config.json，结束回执改由 on_clean_test_done() 的
-     * !video_started 分支直接发。调试开关仅保留状态回读，不再门控。 */
     if(req.record_video) {
         notify_clean_video_start(req);
         clean_video_session_started_ = true;
@@ -5603,7 +5622,7 @@ void GlavoService::usb_hotplug_loop()
  * 调试页手动控制：UI_Debug_* → serial_debug 组帧 → McuLink 串口下发
  *
  * 模式统一：读 Inline POD → serial_debug_build_* → debug_tx（可靠串口队列）。
- * 另有一组“软件开关”不经串口：Print H264 连续录、清粉录像状态回读、环境模拟；
+ * 另有一组“软件开关”不经串口：Print H264 连续录（默认开）、环境模拟等；
  * 它们改成员变量 / McuLink / PrintVideoNotify，并 publish 状态给 UI。
  * 振镜（以太网 TCP）、回粉电机后端逻辑预留，故不订阅、不下发。
  * ============================================================================ */
@@ -6355,37 +6374,6 @@ void GlavoService::handle_debug_print_h264_record_get(const middleware::Message&
     publish_debug_print_h264_record_state();
 }
 
-void GlavoService::publish_debug_clean_record_state()
-{
-    middleware::DebugOnOffPayload p{};
-    p.on = clean_video_record_on_ ? 1 : 0;
-    middleware::Message ntf(
-        middleware::MsgType::GLAVO_Debug_Clean_Record_Ntf,
-        middleware::ModuleId::APP_GLAVO,
-        middleware::ModuleId::UI);
-    ntf.payload = middleware::MsgPayload::from_bytes(
-        reinterpret_cast<const uint8_t*>(&p), sizeof(p));
-    (void)publish_async(ntf);
-}
-
-void GlavoService::handle_debug_clean_record_set(const middleware::Message& msg)
-{
-    middleware::DebugOnOffPayload p{};
-    if(!read_inline_pod(msg.payload, p)) {
-        return;
-    }
-    clean_video_record_on_ = (p.on != 0);
-    UPC_LOG_GLAVO_SERVICE(Info, "debug clean_video_record=%d",
-                          clean_video_record_on_ ? 1 : 0);
-    publish_debug_clean_record_state();
-}
-
-void GlavoService::handle_debug_clean_record_get(const middleware::Message& msg)
-{
-    (void)msg;
-    publish_debug_clean_record_state();
-}
-
 void GlavoService::publish_debug_env_sim_state()
 {
     middleware::DebugOnOffPayload p{};
@@ -6502,6 +6490,72 @@ void GlavoService::handle_debug_skip_o2_gate_get(const middleware::Message& msg)
 {
     (void)msg;
     publish_debug_skip_o2_gate_state();
+}
+
+void GlavoService::publish_debug_powder_low_check_state()
+{
+    middleware::DebugOnOffPayload p{};
+    p.on = powder_low_check_on_ ? 1 : 0;
+    middleware::Message ntf(
+        middleware::MsgType::GLAVO_Debug_Powder_Low_Check_Ntf,
+        middleware::ModuleId::APP_GLAVO,
+        middleware::ModuleId::UI);
+    ntf.payload = middleware::MsgPayload::from_bytes(
+        reinterpret_cast<const uint8_t*>(&p), sizeof(p));
+    if(!publish_async(ntf)) {
+        UPC_LOG_GLAVO_SERVICE(Warn, "GLAVO_Debug_Powder_Low_Check_Ntf publish_async failed");
+    }
+}
+
+void GlavoService::handle_debug_powder_low_check_set(const middleware::Message& msg)
+{
+    middleware::DebugOnOffPayload p{};
+    if(!read_inline_pod(msg.payload, p)) {
+        UPC_LOG_GLAVO_SERVICE(Warn, "invalid UI_Debug_Powder_Low_Check_Set_Ntf payload");
+        return;
+    }
+    powder_low_check_on_ = (p.on != 0);
+    UPC_LOG_GLAVO_SERVICE(Info, "powder_low_check=%d", powder_low_check_on_ ? 1 : 0);
+    publish_debug_powder_low_check_state();
+}
+
+void GlavoService::handle_debug_powder_low_check_get(const middleware::Message& msg)
+{
+    (void)msg;
+    publish_debug_powder_low_check_state();
+}
+
+void GlavoService::publish_debug_door_pm_check_state()
+{
+    middleware::DebugOnOffPayload p{};
+    p.on = door_real_open_enabled_ ? 1 : 0;
+    middleware::Message ntf(
+        middleware::MsgType::GLAVO_Debug_Door_Pm_Check_Ntf,
+        middleware::ModuleId::APP_GLAVO,
+        middleware::ModuleId::UI);
+    ntf.payload = middleware::MsgPayload::from_bytes(
+        reinterpret_cast<const uint8_t*>(&p), sizeof(p));
+    if(!publish_async(ntf)) {
+        UPC_LOG_GLAVO_SERVICE(Warn, "GLAVO_Debug_Door_Pm_Check_Ntf publish_async failed");
+    }
+}
+
+void GlavoService::handle_debug_door_pm_check_set(const middleware::Message& msg)
+{
+    middleware::DebugOnOffPayload p{};
+    if(!read_inline_pod(msg.payload, p)) {
+        UPC_LOG_GLAVO_SERVICE(Warn, "invalid UI_Debug_Door_Pm_Check_Set_Ntf payload");
+        return;
+    }
+    door_real_open_enabled_ = (p.on != 0);
+    UPC_LOG_GLAVO_SERVICE(Info, "door_pm_check=%d", door_real_open_enabled_ ? 1 : 0);
+    publish_debug_door_pm_check_state();
+}
+
+void GlavoService::handle_debug_door_pm_check_get(const middleware::Message& msg)
+{
+    (void)msg;
+    publish_debug_door_pm_check_state();
 }
 
 void GlavoService::publish_debug_skip_outer_door_state()
