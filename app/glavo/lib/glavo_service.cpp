@@ -36,7 +36,7 @@
  * 打印主状态机（读代码时按此顺序跟）
  * =============================================================================
  *   Prepare  UI_Print_Prepare_Req
- *            → USB 复制到本地（若需要）+ 单趟轻量扫行数/层数 + 写 config.json
+ *            → USB 复制到本地（若需要）+ 取总层数（Snowpath 头 / 否则扫 M3000）+ 写 config.json
  *            → prepare_ready_ / prepared_local_path_
  *   Start    UI_Print_Start_Req（必须先 Prepare 成功）
  *            → 若上一作业仍在 terminate：deferred_print_start_，等 TerminateDone 再 launch
@@ -114,7 +114,8 @@ using ::upc::gcode_manifest_remove_at;
  * 进度映射约定（与 send_print_progress 配套）：
  *   打印中按作业类型二选一：
  *   - 纯层段（首选，layer_progress_mode_）：已完成层/总层 → 1–98 台阶。
- *     总层 = Prepare 预扫的 M3000 计数；已完成层 = 换层 Snap 计数。层内静止。
+ *     总层 = Prepare 得到的 layer_count（Snowpath 头 Total layers、清单缓存或
+ *     M3000 预扫）；已完成层 = 换层 Snap 计数。层内静止。
  *   - 包段（回退：OVF / 无 M3000 / 关闭 Layer Snap）：sent/denom → 0–95，
  *     再与层锚点 7:3 融合（见 fuse_send_and_layer_progress_95）。
  *   两者共用尾段：
@@ -398,12 +399,112 @@ int progress_denominator(int sent_packets)
     return fallback;
 }
 
+/** Snowpath 切片文件头第一行，用来确认后面的 Total layers 可以当真。 */
+constexpr std::string_view kSnowpathGcodeSignature = "; SLM GCode - Snowpath";
+/** 文件头独立注释行，数值等于实际层数（也等于 M3000 条数）。 */
+constexpr std::string_view kSnowpathTotalLayersPrefix = "; Total layers:";
+/** 头部注释最多看这么多行；Total layers 在大段 JSON 之前，正常第 3 行就停。 */
+constexpr int kSnowpathHeaderLineCap = 32;
+
+std::string_view trim_ascii_ws(std::string_view text)
+{
+    while(!text.empty() &&
+          std::isspace(static_cast<unsigned char>(text.front()))) {
+        text.remove_prefix(1);
+    }
+    while(!text.empty() &&
+          std::isspace(static_cast<unsigned char>(text.back()))) {
+        text.remove_suffix(1);
+    }
+    return text;
+}
+
+/**
+ * @brief 解析 `; Total layers: <正整数>`，行尾只允许空白
+ * @return 不是这行、数值为 0 或溢出时返回 false
+ */
+bool parse_snowpath_total_layers_line(std::string_view line, uint32_t* out_layers)
+{
+    line = trim_ascii_ws(line);
+    if(line.size() < kSnowpathTotalLayersPrefix.size() ||
+       line.substr(0, kSnowpathTotalLayersPrefix.size()) != kSnowpathTotalLayersPrefix) {
+        return false;
+    }
+    line.remove_prefix(kSnowpathTotalLayersPrefix.size());
+    line = trim_ascii_ws(line);
+    if(line.empty()) {
+        return false;
+    }
+
+    uint32_t value = 0;
+    for(char ch : line) {
+        if(ch < '0' || ch > '9') {
+            return false;
+        }
+        const uint32_t digit = static_cast<uint32_t>(ch - '0');
+        if(value > (UINT32_MAX - digit) / 10U) {
+            return false;
+        }
+        value = value * 10U + digit;
+    }
+    if(value == 0) {
+        return false;
+    }
+    *out_layers = value;
+    return true;
+}
+
+/**
+ * @brief 只读 Snowpath 文件头，取出 Total layers
+ *
+ * 第一行必须是 `; SLM GCode - Snowpath`。随后只扫注释行，命中
+ * `; Total layers:` 即返回，不读 JSON 里的 export_layer_count，也不扫全文。
+ * 认不出时返回 false，调用方再走 M3000 整文件扫描。
+ *
+ * @param path       G-code 绝对路径
+ * @param out_layers 成功时为大于 0 的层数
+ */
+bool try_read_snowpath_total_layers(const std::string& path, uint32_t* out_layers)
+{
+    *out_layers = 0;
+
+    std::ifstream in(path);
+    if(!in) {
+        return false;
+    }
+
+    std::string line;
+    if(!std::getline(in, line) ||
+       trim_ascii_ws(line) != kSnowpathGcodeSignature) {
+        return false;
+    }
+
+    for(int i = 1; i < kSnowpathHeaderLineCap && std::getline(in, line); ++i) {
+        const std::string_view trimmed = trim_ascii_ws(line);
+        if(trimmed.empty()) {
+            continue;
+        }
+        if(trimmed.front() != ';') {
+            return false;
+        }
+        uint32_t layers = 0;
+        if(parse_snowpath_total_layers_line(trimmed, &layers)) {
+            *out_layers = layers;
+            return true;
+        }
+        if(trimmed == "; snowpath_meta_end") {
+            return false;
+        }
+    }
+    return false;
+}
+
 /**
  * @brief 单趟扫描 G-code：同时统计总行数与层标记数（命令 token: M3000）
  *
- * Prepare 两个数都要：行数作为 total_lines hint 交给解析器（回退路径的进度分母
- * 外推靠它），M3000 数作为纯层进度的分母。合并成一趟读，避免大文件在
- * open_file 数换行与层标记扫描里被整读两遍。
+ * 仅在文件头给不出 Total layers 时使用。行数作为 total_lines hint 交给解析器
+ * （回退路径的进度分母外推靠它），M3000 数作为纯层进度的分母。合并成一趟读，
+ * 避免大文件在 open_file 数换行与层标记扫描里被整读两遍。
  *
  * 行数语义与 GcodeWorker 内的 count_file_newlines / fgets 一致：末行无换行仍计
  * 一行，空文件为 0。
@@ -1881,7 +1982,7 @@ bool GlavoService::copy_usb_to_local(const std::string& src, const std::string& 
  * 打印流程：准备、启动、终止与进度
  *
  * Prepare / Start 拆开的原因：
- *   - Prepare 可能做 USB 拷贝 + 扫行数 + 写 manifest（偏慢、可失败）
+ *   - Prepare 可能做 USB 拷贝 + 读文件头或扫层数 + 写 manifest（偏慢、可失败）
  *   - Start 才真正开解析线程并让 McuLink 开始吃 RingBuffer
  *   - UI 可在 Prepare 成功后再走门控/清粉，再发 Start
  *
@@ -1982,23 +2083,33 @@ bool GlavoService::run_print_prepare(middleware::PrintFileSource source, uint32_
             }
         }
     }
-    /* G-code：仅在尚无总层数时扫 M3000（兼带行数 hint）。
-     * 3MF 导入已写入 Metadata.layers 时跳过整文件扫描，走纯层进度；
-     * 此时 open_file(hint=0) 也不数换行，line_count 保持 0 不写回清单。
-     * 无层数且无行数缓存时，open_file 自行数换行并写回 line_count。OVF 不扫。 */
+    /* G-code：尚无总层数时，先读 Snowpath 文件头的 Total layers。
+     * 读到就走纯层进度，不扫全文、不数行。3MF 导入已写入 Metadata.layers
+     * 时同样跳过。两者 open_file(hint=0) 都不数换行，line_count 保持 0
+     * 不写回清单。头对不上再单趟扫 M3000（兼带行数 hint）。无层数且无行数
+     * 缓存时，open_file 自行数换行并写回 line_count。OVF 不扫。 */
     const bool m3000_candidate = is_m3000_scan_candidate(local_path_out);
     if(m3000_candidate && layer_count == 0) {
-        uint32_t scanned_lines  = 0;
-        uint32_t scanned_layers = 0;
-        if(scan_gcode_lines_and_layers(local_path_out,
-                                       &scanned_lines, &scanned_layers)) {
-            if(line_count == 0) {
-                line_count = scanned_lines;
-            }
-            layer_count = scanned_layers;
+        uint32_t header_layers = 0;
+        if(try_read_snowpath_total_layers(local_path_out, &header_layers)) {
+            layer_count = header_layers;
+            UPC_LOG_GLAVO_SERVICE(Info,
+                "prepare: snowpath header layers=%u path=%s",
+                static_cast<unsigned>(header_layers),
+                local_path_out.c_str());
         } else {
-            UPC_LOG_GLAVO_SERVICE(Warn, "prepare: gcode scan failed %s",
-                                  local_path_out.c_str());
+            uint32_t scanned_lines  = 0;
+            uint32_t scanned_layers = 0;
+            if(scan_gcode_lines_and_layers(local_path_out,
+                                           &scanned_lines, &scanned_layers)) {
+                if(line_count == 0) {
+                    line_count = scanned_lines;
+                }
+                layer_count = scanned_layers;
+            } else {
+                UPC_LOG_GLAVO_SERVICE(Warn, "prepare: gcode scan failed %s",
+                                      local_path_out.c_str());
+            }
         }
     }
 
@@ -2183,9 +2294,10 @@ void GlavoService::continue_print_after_optical_ready(const std::string& full_pa
     current_file_path_ = full_path;
     PrintJobState::instance().reset_job_counters();
 #if GLAVO_ENABLE_LAYER_SNAP
-    /* 层数以 Prepare 的单趟扫描为唯一来源（Start 必须在 Prepare 成功之后）。
-     * 这里不再补扫：文件本就没有 M3000 时补扫只是每次起印白读一遍全文，
-     * 扫不出来就按 0 处理，自动回退到包进度。 */
+    /* 层数以 Prepare 写入的 prepared_layer_count_ 为准（Snowpath 头、清单缓存
+     * 或 M3000 扫描）。Start 必须在 Prepare 成功之后，这里不再补扫：文件本就
+     * 没有层数时补扫只是每次起印白读一遍全文，扫不出来就按 0 处理，自动回退
+     * 到包进度。 */
     print_total_layers_ = prepared_layer_count_;
 #else
     /* 未开启换层 Snap 时没有层完成事件，层进度恒为 0，只能退化为纯包进度。 */
