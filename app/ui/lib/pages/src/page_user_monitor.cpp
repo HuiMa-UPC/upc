@@ -322,6 +322,8 @@ tab_t          g_tab           = TAB_JOB;
 phase_t        g_phase         = PHASE_IDLE;
 purify_stage_t g_purify        = PURIFY_IDLE;
 int            g_percent       = 0;
+/** 起印时清单预估分钟（duration_sec/60）；进度 remaining 为 0 时本地折算兜底。 */
+uint32_t       g_job_duration_min = 0;
 bool           g_printing      = false;
 bool           g_fullscreen    = false;
 bool           g_light_on      = true;  /* 上电六路舱灯默认全开；进页 Get 再对齐 */
@@ -350,6 +352,36 @@ bottom_mode_t bottom_mode(void);
  * ========================================================================== */
 
 inline bool metric_invalid(float v) { return std::isnan(v) || v < 0.0f; }
+
+/** 预估总分钟按剩余百分比向上取整；无预估或已 100% 为 0。 */
+uint32_t remaining_min_from_estimate(uint32_t duration_min, int percent)
+{
+    if(duration_min == 0) {
+        return 0;
+    }
+    if(percent < 0) {
+        percent = 0;
+    }
+    if(percent >= 100) {
+        return 0;
+    }
+    const uint32_t left = (duration_min * static_cast<uint32_t>(100 - percent) + 99u) / 100u;
+    return left > 0 ? left : 1u;
+}
+
+void job_time_set_remaining(uint32_t remaining_min, bool known)
+{
+    if(!g_job_time_val) {
+        return;
+    }
+    if(!known) {
+        lv_label_set_text(g_job_time_val, "--");
+        return;
+    }
+    char dur[32];
+    ui_user_format_duration_min(dur, sizeof(dur), remaining_min);
+    lv_label_set_text(g_job_time_val, dur);
+}
 
 bool phase_running(void)
 {
@@ -2983,8 +3015,8 @@ void apply_phase(void)
             lv_obj_add_flag(g_job_divider, LV_OBJ_FLAG_HIDDEN);
         }
     }
-    /* 两列语义：打印中给剩余时间 + 耗材占位；结束态才有实际耗时与耗材。
-     * caption 照稿写 Time used / Total Cons.，口径仍是原来那套。 */
+    /* 两列语义：打印中给剩余时间（清单预估 × 剩余进度）+ 耗材占位；
+     * 结束态才有实际耗时与耗材。caption 照稿写 Time used / Total Cons.。 */
     if(g_job_time_cap) {
         lv_label_set_text(g_job_time_cap, finished ? "Time used" : "Time left");
     }
@@ -3575,15 +3607,8 @@ void page_user_monitor_enter_printing_mode(const control_file_t *file)
         lv_label_set_text(g_job_extra, "");
         lv_obj_add_flag(g_job_extra, LV_OBJ_FLAG_HIDDEN);
     }
-    if(g_job_time_val) {
-        if(file) {
-            char dur[32];
-            ui_user_format_duration_min(dur, sizeof(dur), file->duration_min);
-            lv_label_set_text(g_job_time_val, dur);
-        } else {
-            lv_label_set_text(g_job_time_val, "--");
-        }
-    }
+    g_job_duration_min = file ? file->duration_min : 0;
+    job_time_set_remaining(g_job_duration_min, g_job_duration_min > 0);
     if(g_job_cons_val)  lv_label_set_text(g_job_cons_val, "--");
     if(g_job_cons_unit) lv_obj_add_flag(g_job_cons_unit, LV_OBJ_FLAG_HIDDEN);
 
@@ -3630,6 +3655,7 @@ void page_user_monitor_exit_printing_mode(void)
     g_phase       = PHASE_IDLE;
     g_purify      = PURIFY_IDLE;
     g_percent     = 0;
+    g_job_duration_min = 0;
     g_prep_title[0] = '\0';
     close_retrieve_dlg();
     apply_phase();
@@ -3664,11 +3690,12 @@ void page_user_monitor_printing_update(const control_progress_t *p)
             lv_obj_add_flag(g_job_extra, LV_OBJ_FLAG_HIDDEN);
         }
     }
-    if(g_job_time_val) {
-        char dur[32];
-        ui_user_format_duration_min(dur, sizeof(dur), p->remaining_minutes);
-        lv_label_set_text(g_job_time_val, dur);
+    uint32_t remain = p->remaining_minutes;
+    /* 旧 Glavo 把 remaining 写死 0：有清单预估时按进度本地折；两边都没有才 --。 */
+    if(remain == 0 && g_percent < 100) {
+        remain = remaining_min_from_estimate(g_job_duration_min, g_percent);
     }
+    job_time_set_remaining(remain, remain > 0 || g_percent >= 100);
 }
 
 void page_user_monitor_optical_path_update(uint8_t point_index, uint8_t point_total,

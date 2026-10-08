@@ -8,6 +8,13 @@
 namespace upc::xfr {
 
 /**
+ * 把上传包名收成 Local 可显示的 ASCII stem：只留 [A-Za-z0-9_-]，
+ * `+` / 空白改成 `_`。含非 ASCII（中文/日文等）时加 `model_<8hex>_` 前缀，
+ * 避免 UI 字体缺字乱码，也避免多个「*_0_transfer」撞名。
+ */
+std::string ascii_safe_transfer_stem(const std::string& raw_stem);
+
+/**
  * 传输 3MF 导入结果。
  *
  * 3MF 只作为 ZIP 容器；成功后 printable_name 指向已经落到

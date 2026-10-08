@@ -516,6 +516,7 @@ private:
     std::string prepared_local_path_;
     uint32_t    prepared_line_count_ = 0;
     uint32_t    prepared_layer_count_ = 0; /**< Prepare 阶段得到的总层数（清单或 M3000） */
+    uint32_t    prepared_duration_sec_ = 0; /**< 清单 duration_sec，3MF 的 print_time_s；0=无预估 */
     bool        prepare_ready_ = false;
     bool        prepared_parser_open_ = false; /**< Prepare 阶段已打开 parser 文件，可在 Start 复用。 */
 
@@ -544,6 +545,7 @@ private:
     std::mutex galvo_point_test_wait_mtx_;
     std::condition_variable galvo_point_test_wait_cv_;
     uint32_t print_total_layers_ = 0; /**< 当前作业层总数（纯层进度分母 / 回退时的层锚点分母） */
+    uint32_t print_duration_sec_ = 0; /**< 本作业预估总时长；进度折剩余分钟用，0=不报剩余 */
     /** 本作业是否走纯层台阶进度（G-code + 能数出 M3000 + 换层 Snap 已启用） */
     bool layer_progress_mode_ = false;
     int last_print_pct_     = -1;

@@ -7,7 +7,7 @@
 > 本文档定义 **Snowpath 客户端（PC 端切片软件 + 移动端 App）** 与 **打印机固件
 > （服务端 / Printer）** 之间，通过网络把「切片好的打印任务」无线发送到打印机的
 > 完整协议：设备发现、配对鉴权、传输数据格式、上传 / 打印 / 状态 REST 接口、
-> 错误码、安全模型与职责划分。**连接只要求客户端到打印机 `IP:8080` 网络可达
+> 错误码、安全模型与职责划分。**连接只要求客户端到打印机** `IP:8080` **网络可达
 > （不限同一局域网；mDNS 自动发现仅同网段有效，跨网用手动 IP），云端不对接
 > 打印机、不中转模型。**
 >
@@ -19,21 +19,22 @@
 
 ---
 
+
+
 ## 0. 一句话定位
 
 - **客户端 = 连接打印机的上位机**，最终**只有两类**：① **PC 端软件**（切片软件，
-  本仓库 `app_framework`）、② **移动端 App**。两类客户端**复用同一套本文协议**
-  （mDNS 发现 + HTTP REST + 传输 3mf 上传 + 打印控制 / 状态），地位对等。客户端
-  负责生成 / 持有「传输 3mf」（内嵌当前盘的一份已切片 G-code），作为 HTTP 客户端把
-  文件**分块上传**到打印机、下发开始打印指令、轮询打印状态。
+本仓库 `app_framework`）、② **移动端 App**。两类客户端**复用同一套本文协议**
+（mDNS 发现 + HTTP REST + 传输 3mf 上传 + 打印控制 / 状态），地位对等。客户端
+负责生成 / 持有「传输 3mf」（内嵌当前盘的一份已切片 G-code），作为 HTTP 客户端把
+文件**分块上传**到打印机、下发开始打印指令、轮询打印状态。
 - **服务端 = 打印机固件**：负责通过 mDNS 广播自己、处理 PIN 配对并颁发
-  Token、接收分块上传并校验落盘、执行打印、上报状态。
-- **整体数据流**：`发现/手动指定打印机 → (首次)PIN 配对拿 Token → 客户端持有
-  传输 3mf → 分块上传并整体校验 → 下发开始打印 → 轮询状态直到完成`。
+Token、接收分块上传并校验落盘、执行打印、上报状态。
+- **整体数据流**：`发现/手动指定打印机 → (首次)PIN 配对拿 Token → 客户端持有 传输 3mf → 分块上传并整体校验 → 下发开始打印 → 轮询状态直到完成`。
 
 > **【架构定调】** 模型 / G-code 到打印机的传输**永远是「客户端（PC / 移动端）
-> → 打印机」的直接网络连接**：**只要客户端能通过网络访问到打印机的 `IP:端口`
-> （默认 8080）即可**，**不限于同一局域网**（同网段、跨网段路由可达、VPN 打通、
+> → 打印机」的直接网络连接**：**只要客户端能通过网络访问到打印机的** `IP:端口`
+> **（默认 8080）即可**，**不限于同一局域网**（同网段、跨网段路由可达、VPN 打通、
 > 点对点可达等都行）。**云端不直接与打印机交互，也不向打印机传输 / 中转模型**
 > ——不存在「云 → 打印机」的模型下发 / 对象存储拉取路径。云端（如有）只承担与
 > 打印机传输无关的职责（账号、模型市场等），**不在本传输协议范围内**（云端
@@ -50,21 +51,27 @@
 
 ---
 
+
+
 ## 1. 术语与角色
 
-| 术语 | 含义 |
-| --- | --- |
-| **Client / App** | 连接打印机的上位机，**仅两类**：PC 端切片软件（本仓库 `app_framework`）与移动端 App，复用同一套本文协议 |
-| **Server / Printer** | 打印机固件，提供 mDNS + HTTP 服务端 |
-| **云端 / Cloud** | 账号、模型市场等服务，**不直接对接打印机、不参与模型传输**；其登录鉴权与模型接口见《WIFI-TRANSFER-CLOUD.md》 |
-| **Plate（盘）** | 一个打印床布局单元；当前每个传输包只发送一个盘 |
-| **传输 3mf** | ZIP 容器，内嵌当前盘的一份已切片 G-code（见 §5），上传单元 |
-| **PIN** | 打印机屏幕显示的一次性配对码（**【约定】4 位数字**），物理在场凭证 |
-| **Token** | 配对成功后固件颁发的长期访问令牌，后续请求免再输 PIN |
-| **Job（任务）** | 一次打印任务，服务端为每次上传 + 打印分配一个 `job_id` |
-| **SN** | 打印机序列号，设备唯一标识 |
+
+| 术语                   | 含义                                                                  |
+| -------------------- | ------------------------------------------------------------------- |
+| **Client / App**     | 连接打印机的上位机，**仅两类**：PC 端切片软件（本仓库 `app_framework`）与移动端 App，复用同一套本文协议   |
+| **Server / Printer** | 打印机固件，提供 mDNS + HTTP 服务端                                            |
+| **云端 / Cloud**       | 账号、模型市场等服务，**不直接对接打印机、不参与模型传输**；其登录鉴权与模型接口见《WIFI-TRANSFER-CLOUD.md》 |
+| **Plate（盘）**         | 一个打印床布局单元；当前每个传输包只发送一个盘                                             |
+| **传输 3mf**           | ZIP 容器，内嵌当前盘的一份已切片 G-code（见 §5），上传单元                                |
+| **PIN**              | 打印机屏幕显示的一次性配对码（**【约定】4 位数字**），物理在场凭证                                |
+| **Token**            | 配对成功后固件颁发的长期访问令牌，后续请求免再输 PIN                                        |
+| **Job（任务）**          | 一次打印任务，服务端为每次上传 + 打印分配一个 `job_id`                                   |
+| **SN**               | 打印机序列号，设备唯一标识                                                       |
+
 
 ---
+
+
 
 ## 2. 概览与架构
 
@@ -88,14 +95,15 @@
 ```
 
 - **传输层**：HTTP/1.1（明文）。**【约定】** 固定服务端口 `8080`，客户端只要
-  网络可达该 `IP:8080` 即可（不限同一局域网）。v1 不上 TLS，纯 HTTP + Token
-  鉴权即可（HTTPS 见 §12；跨公网等不可信链路建议后续启用 TLS）。
+网络可达该 `IP:8080` 即可（不限同一局域网）。v1 不上 TLS，纯 HTTP + Token
+鉴权即可（HTTPS 见 §12；跨公网等不可信链路建议后续启用 TLS）。
 - **数据编码**：控制类接口用 JSON（UTF-8）；文件上传用二进制 body +
-  `Content-Range` 分块。
-- **鉴权**：除发现与配对握手外，所有接口都需携带 `Authorization: Bearer
-  <token>`。
+`Content-Range` 分块。
+- **鉴权**：除发现与配对握手外，所有接口都需携带 `Authorization: Bearer <token>`。
 
 ---
+
+
 
 ## 3. 设备发现（mDNS / DNS-SD）
 
@@ -104,49 +112,61 @@
 > 直接连接——只要客户端到打印机**网络可达**，§4 配对与 §6 上传 / 打印 / 状态全部照常。
 > 即：**自动发现可能受限于局域网，但连接与传输只要求 IP 可达。**
 
+
+
 ### 3.1 服务类型与实例
 
 - **服务类型**：**【约定】** `_snowpod._tcp`（局域网 `.local` 域）。
 - **实例名**：**【约定】** 取打印机用户可读名，例如 `Snowpod-A1 (lab)`；冲突
-  时由 mDNS 标准自动追加 ` (2)`。
+时由 mDNS 标准自动追加  `(2)`。
 - **端口**：**【约定】** 固定 `8080`（SRV 记录照常给出，便于非默认部署，但
-  v1 客户端默认按 8080 连接）。
+v1 客户端默认按 8080 连接）。
 - **主机名**：**【约定】** `snowpod-<sn>.local`，**暴露 SN**——`sn` 同时用于
-  mDNS 区分设备与客户端 Token 存储键，不另设设备 id（局域网内可识别即可，
-  见 §9 隐私说明）。
+mDNS 区分设备与客户端 Token 存储键，不另设设备 id（局域网内可识别即可，
+见 §9 隐私说明）。
+
+
 
 ### 3.2 TXT 记录字段（键值，全部小写，**最小集**）
 
-| Key | 示例 | 含义 |
-| --- | --- | --- |
-| `ver` | `1` | 协议版本（本文件 = 1） |
-| `model` | `Snowpod A1` | 机型，UI 展示用 |
-| `sn` | `SP1A23456789` | 序列号，设备唯一键（重连 / 去重 / Token 存储键） |
-| `needpair` | `1` / `0` | 是否需要配对（`0` 表示本机已配过、可免 PIN） |
+
+| Key        | 示例             | 含义                             |
+| ---------- | -------------- | ------------------------------ |
+| `ver`      | `1`            | 协议版本（本文件 = 1）                  |
+| `model`    | `Snowpod A1`   | 机型，UI 展示用                      |
+| `sn`       | `SP1A23456789` | 序列号，设备唯一键（重连 / 去重 / Token 存储键） |
+| `needpair` | `1` / `0`      | 是否需要配对（`0` 表示本机已配过、可免 PIN）     |
+
 
 > **【约定】** TXT 仅这 4 个字段，固件版本 / 实时状态等不放进 TXT（需要时走
 > `GET /info`，见 §4.2.1），保持广播包精简。客户端以 `sn` 作为设备身份主键来
 > 匹配「已保存的 Token」，而非 IP（IP 会变）。
 
+
+
 ### 3.3 发现、下线与超时
 
 - **发现**：客户端启动「发送到打印机」流程时开始浏览 `_snowpod._tcp`，把每个
-  实例解析为 `{name, model, sn, host, port}` 填进打印机下拉（实时状态需要时再
-  按 `GET /info` 拉取）。
+实例解析为 `{name, model, sn, host, port}` 填进打印机下拉（实时状态需要时再
+按 `GET /info` 拉取）。
 - **下线**：收到 mDNS `goodbye`（TTL=0）或解析失败 → 从列表移除。
 - **超时**：**【约定】** 浏览 5s 无响应仍允许手动刷新；某设备 30s 未刷新 TXT
-  视为离线。
+视为离线。
 - **手动连接（非兜底，是平级入口）**：**【约定】** UI 在打印机下拉旁提供
-  「+ 手动添加」入口，输入 `IP[:端口]`（端口缺省即 8080），跳过 mDNS 直接走
-  §6 的 HTTP 接口。**只要该 `IP:端口` 网络可达即可**——适用于跨网段、VPN、
-  点对点等 mDNS 发现不到、但 IP 仍连得通的所有场景。
+「+ 手动添加」入口，输入 `IP[:端口]`（端口缺省即 8080），跳过 mDNS 直接走
+§6 的 HTTP 接口。**只要该** `IP:端口` **网络可达即可**——适用于跨网段、VPN、
+点对点等 mDNS 发现不到、但 IP 仍连得通的所有场景。
 
 > 上游可参考 `3rd/slice/slic3r/Utils/Bonjour.cpp` 的 mDNS 浏览实现作为客户端
 > 发现侧的落地参考。
 
 ---
 
+
+
 ## 4. 配对与鉴权（PIN → Token）
+
+
 
 ### 4.1 流程
 
@@ -170,7 +190,13 @@ sequenceDiagram
     end
 ```
 
+
+
+
+
 ### 4.2 端点定义
+
+
 
 #### 4.2.1 `GET /api/v1/info`（匿名，能力探测）
 
@@ -180,6 +206,8 @@ sequenceDiagram
 { "sn": "SP1A23456789", "model": "Snowpod A1", "fw": "1.4.2",
   "api_version": 1, "need_pair": true, "state": "idle" }
 ```
+
+
 
 #### 4.2.2 `POST /api/v1/pair/start`（匿名，开始配对）
 
@@ -195,9 +223,11 @@ sequenceDiagram
 { "pair_session": "9f2c…", "expires_in": 120 }
 ```
 
+
+
 #### 4.2.3 `POST /api/v1/pair/verify`（匿名，校验 PIN + 命名 + 颁发 Token）
 
-**【约定】** 设备命名一并在本端点完成（**不单设 `PUT /name` 端点**）：客户端
+**【约定】** 设备命名一并在本端点完成（**不单设** `PUT /name` **端点**）：客户端
 把用户在「成功命名」态填的设备名 `device_name` 随校验请求一起提交，固件校验
 PIN 通过后保存该别名并在响应里回带。
 
@@ -227,18 +257,22 @@ PIN 通过后保存该别名并在响应里回带。
 > `model`。`PrinterClient::pairVerify` 仍保留 `device_name` 参数，若未来需要
 > 让固件记录昵称，把命名步骤前置到 PIN 输入页一起提交即可零成本对齐。
 
+
+
 ### 4.3 Token 存储、免输与解除
 
 - **存储**：客户端按 `sn → token` 存入 OS keychain（与 `docs/ONLINE-MODELS.md`
-  的 token 存储一致原则，不落明文配置）。
+的 token 存储一致原则，不落明文配置）。
 - **免输**：下次发送，若本机已有该 `sn` 的有效 token，直接跳过 PIN 配对进入
-  §6 上传。
+§6 上传。
 - **失效**：任何业务接口返回 `401 AUTH_INVALID` → 客户端丢弃本地 token，回退
-  到 §4.1 重新配对。
+到 §4.1 重新配对。
 - **解除配对**：`POST /api/v1/pair/revoke`（带 Token）使当前 token 失效；
-  打印机端「设置 → 解除已配对设备」也应能单方作废。**【约定】** 固件按
-  `client_name` 保存多个 token（天然支持多客户端配对，无需客户端做 token
-  管理 UI）；客户端侧只需在收到 `401 AUTH_INVALID` 时丢弃本地 token 重新配对。
+打印机端「设置 → 解除已配对设备」也应能单方作废。**【约定】** 固件按
+`client_name` 保存多个 token（天然支持多客户端配对，无需客户端做 token
+管理 UI）；客户端侧只需在收到 `401 AUTH_INVALID` 时丢弃本地 token 重新配对。
+
+
 
 ### 4.4 与现有 PIN UI 的对齐
 
@@ -247,15 +281,19 @@ PIN 通过后保存该别名并在响应里回带。
 3s「搜索」后转成功，无任何网络请求。落地时需把：
 
 - 「搜索」态从 **假倒计时** 改成真正发 `pair/start` + 等待用户输入 + 发
-  `pair/verify`；
+`pair/verify`；
 - 「成功」态的「命名设备」**v1 仅作客户端本地显示名**：打印机出厂已知自己
-  的 `model`/`sn`，无需回传昵称，故 `pair/verify` 不带 `device_name`，名字按
-  `sn` 持久化于本地（详见 §4.2.3 的 v1 实现说明）；
+的 `model`/`sn`，无需回传昵称，故 `pair/verify` 不带 `device_name`，名字按
+`sn` 持久化于本地（详见 §4.2.3 的 v1 实现说明）；
 - `paired(pin)` 信号语义改为「已拿到 token」，再继续 §6 上传。
 
 ---
 
+
+
 ## 5. 传输数据格式（传输 3mf）
+
+
 
 ### 5.1 精确结构
 
@@ -269,14 +307,14 @@ PIN 通过后保存该别名并在响应里回带。
 ```
 
 - **G-code 条目**：正式路径为 `3D/*.gcode`；板端同时兼容早期草案曾约定的
-  `Metadata/*.gcode`。
+`Metadata/*.gcode`。
 - **单盘**：当前板端要求包内必须且只能有一份 G-code；没有或多于一份均拒绝，
-  不依赖 `/print/start` 的 `plate_id` 选盘。
+不依赖 `/print/start` 的 `plate_id` 选盘。
 - **完整性**：上传协议校验整包 SHA-256，解压再校验 ZIP CRC 和条目大小。实测
-  客户端样例不含 `.gcode.md5`，故本期不要求 MD5 条目。
+客户端样例不含 `.gcode.md5`，故本期不要求 MD5 条目。
 - **G-code 内容**：SLM 工艺文本，由 `SlicingOrchestrator::writeGCodeFile()` 经
-  `RSSlicer::emitGCodeLayer` 按层生成，文件头形如 `; SLM GCode - Snowpath`，
-  含层数 / 层高 / 扫描速度 / 各段激光功率等注释。
+`RSSlicer::emitGCodeLayer` 按层生成，文件头形如 `; SLM GCode - Snowpath`，
+含层数 / 层高 / 扫描速度 / 各段激光功率等注释。
 
 板端导入后，可打印体以 `<上传包名去后缀>.gcode` 落到 `/userdata/Gcode`，
 并更新 `/userdata/Gcode/config.json`。上传暂存在 `/userdata/transport` 的
@@ -292,25 +330,29 @@ GcodeWorker 打印，不再运行 snowslice。
 缩略图导入约定：
 
 - 优先使用与 G-code 同 stem 的 `Thumbnails/*.png`；包内只有一张 PNG 时
-  直接使用。多图且无法唯一匹配时按无图降级。
+直接使用。多图且无法唯一匹配时按无图降级。
 - PNG 仅作解码缓存，不落盘保留；板端生成
-  `/userdata/Gcode/thumb/*_small.rthm`（72×72）、`*_large.rthm`
-  （320×180）、`*_print.rthm`（100×100），并将绝对路径写入
-  `thumb_small`、`thumb_large`、`thumb_print`。RTHM 是项目自定义的
-  RGB565 文件格式；RGA 只负责加速 COVER 裁剪、缩放和像素格式转换，
-  不可用时由 CPU 兜底。
+`/userdata/Gcode/thumb/*_small.rthm`（72×72）、`*_large.rthm`
+（320×180）、`*_print.rthm`（100×100），并将绝对路径写入
+`thumb_small`、`thumb_large`、`thumb_print`。RTHM 是项目自定义的
+RGB565 文件格式；RGA 只负责加速 COVER 裁剪、缩放和像素格式转换，
+不可用时由 CPU 兜底。
 - 缺图、坏图或图片转换失败不影响 G-code 导入，三个缩略图字段留空并记录
-  `topic_xfr_upload.log` 告警。同名重传会清理不再有效的旧图；删除 Local
-  打印文件时同步删除其 RTHM（范围仅 `/userdata/Gcode/thumb`）。
+`topic_xfr_upload.log` 告警。同名重传会清理不再有效的旧图；删除 Local
+打印文件时同步删除其 RTHM（范围仅 `/userdata/Gcode/thumb`）。
+
+
 
 ### 5.2 与普通另存 3mf 的区别
 
-| | 普通工程 3mf（`save3mf`） | 传输 3mf（`saveTransfer3mf`） |
-| --- | --- | --- |
-| 模型 + 变换 + 多盘 + sidecar | ✅ | 当前实测传输包不包含 |
-| `3D/*.gcode` | ❌ 不含 | ✅ 当前只允许一份 |
-| 用途 | 工程存档 / 再编辑 | 发送到打印机执行 |
-| 落盘位置 | 用户选择的工程路径 | 缓存目录 `<Cache>/transfer/<工程名>_transfer.3mf` |
+
+|                        | 普通工程 3mf（`save3mf`） | 传输 3mf（`saveTransfer3mf`）                  |
+| ---------------------- | ------------------- | ------------------------------------------ |
+| 模型 + 变换 + 多盘 + sidecar | ✅                   | 当前实测传输包不包含                                 |
+| `3D/*.gcode`           | ❌ 不含                | ✅ 当前只允许一份                                  |
+| 用途                     | 工程存档 / 再编辑          | 发送到打印机执行                                   |
+| 落盘位置                   | 用户选择的工程路径           | 缓存目录 `<Cache>/transfer/<工程名>_transfer.3mf` |
+
 
 普通保存语义**不变**（不含 gcode）；传输 3mf 是独立新增产物。
 
@@ -321,6 +363,8 @@ GcodeWorker 打印，不再运行 snowslice。
 
 ---
 
+
+
 ## 6. 传输协议（HTTP REST）
 
 所有接口基路径 **【约定】** `/api/v1`；除 §4 配对外均需
@@ -328,10 +372,10 @@ GcodeWorker 打印，不再运行 snowslice。
 
 **【响应结构约定】** 所有接口遵循同一套返回规范：
 
-- **成功**：HTTP `200`，响应体直接返回该接口的数据对象，**没有统一的
-  `code` / `message` / `data` 外层包裹**；各字段即该接口自己的字段。例如
-  `/info` 返回 `sn/model/...`，`/print/status` 返回 `job_id/progress/...`，
-  `/print/pause` 返回 `job_id/state`。
+- **成功**：HTTP `200`，响应体直接返回该接口的数据对象，**没有统一的**
+`code` **/** `message` **/** `data` **外层包裹**；各字段即该接口自己的字段。例如
+`/info` 返回 `sn/model/...`，`/print/status` 返回 `job_id/progress/...`，
+`/print/pause` 返回 `job_id/state`。
 - **失败**：HTTP 为对应语义状态码（4xx / 5xx），响应体统一为：
 
 ```json
@@ -339,7 +383,9 @@ GcodeWorker 打印，不再运行 snowslice。
 ```
 
 - `code` 为机器可读错误码（见 §8.1），`message` 为可读描述。网络层失败
-  （没有 HTTP 响应）时无 body，客户端按 §8.2 的本地 / 传输层码处理。
+（没有 HTTP 响应）时无 body，客户端按 §8.2 的本地 / 传输层码处理。
+
+
 
 ### 6.1 上传（分块 + 断点续传 + 整体校验 + 原子落盘）
 
@@ -364,13 +410,15 @@ GcodeWorker 打印，不再运行 snowslice。
 ```
 
 - `offset` = 服务端**已收到的字节数**（断点续传基线）。新会话为 0；若客户端
-  用同一 `sha256` 重新 init，服务端可返回上次进度的 `offset` 实现跨重启续传
-  （**【约定】** 服务端以 `sha256` 作为去重 / 续传键）。
+用同一 `sha256` 重新 init，服务端可返回上次进度的 `offset` 实现跨重启续传
+（**【约定】** 服务端以 `sha256` 作为去重 / 续传键）。
 - `chunk_max` = 单块字节上限（**【约定】** 默认 4 MiB）。
 
 > **【约定】** 整文件完整性用 **SHA-256**（与 `FileDownloader` 一致，更强）；
 > 传输 3mf 内部还使用 ZIP CRC 校验解压内容；当前客户端样例没有单独的 MD5
 > 条目。
+
+
 
 #### 6.1.2 上传分块 `PUT /api/v1/upload/{upload_id}`
 
@@ -390,9 +438,10 @@ Body：该区间的原始字节。
 { "offset": 4194304 }      // 服务端当前已落盘的累计字节（= 下一块的 start）
 ```
 
-- 客户端按 `offset` 顺序推进；网络中断后重新 `upload/init`（或直接 `GET
-  upload/{id}/status`）拿最新 `offset` 续传。
+- 客户端按 `offset` 顺序推进；网络中断后重新 `upload/init`（或直接 `GET upload/{id}/status`）拿最新 `offset` 续传。
 - 服务端把分块写入 `<filename>.part`（**临时**），记录已收字节。
+
+
 
 #### 6.1.3 完成并校验 `POST /api/v1/upload/{upload_id}/complete`
 
@@ -403,6 +452,7 @@ Body：该区间的原始字节。
 ```
 
 服务端对 `.part` 整体算 SHA-256：
+
 - 匹配 → **原子 rename** `.part → 正式文件`，返回 `200`：
 
 ```json
@@ -410,6 +460,8 @@ Body：该区间的原始字节。
 ```
 
 - 不匹配 → 删除 `.part`，返回 `422 CHECKSUM_MISMATCH`，客户端需重传。
+
+
 
 #### 6.1.4 查询上传进度 `GET /api/v1/upload/{upload_id}/status`
 
@@ -420,6 +472,8 @@ Body：该区间的原始字节。
 > **进度**：客户端上传进度 = `已发送字节 / total`（续传时叠加初始 `offset`），
 > 与 `FileDownloader` 的进度叠加逻辑对称。
 
+
+
 ### 6.2 开始打印 `POST /api/v1/print/start`
 
 请求（指定已上传文件 + 盘号）：
@@ -429,7 +483,7 @@ Body：该区间的原始字节。
 ```
 
 - `plate_id` 为兼容旧客户端暂时保留；当前传输包只允许一份 G-code，本期完成
-  上传后只导入 Local 清单，真正打印由板端 UI 发起。
+上传后只导入 Local 清单，真正打印由板端 UI 发起。
 - 响应：
 
 ```json
@@ -437,6 +491,10 @@ Body：该区间的原始字节。
 ```
 
 - 错误：`409 PRINTER_BUSY`（已有任务在打印）；`404 FILE_NOT_FOUND`。
+- 设置页关掉「下发后自动打印」时仍 `200`，body 为
+  `{ "job_id": "", "state": "idle", "plate_id": 0 }`，文件已在 Local，不启动打印。
+
+
 
 ### 6.3 查询状态 / 进度 `GET /api/v1/print/status`
 
@@ -488,8 +546,7 @@ WebSocket / SSE 推送（列入 §12 未来可选）。轮询间隔建议 1–2 
 - `blower_error`：风机故障码。`0`=无故障，`1`=Hall 非法，`2`=Hall 错序，`3`=堵转，`4`=过流，`5`=欠压，`6`=过压，`7`=超速。
 - `error`：错误态时的可读原因；非 error 态为 `null`。
 
-`state` 取值 **【约定】**：`idle | uploading | printing | paused | finished |
-canceled | error`。
+`state` 取值 **【约定】**：`idle | uploading | printing | paused | finished | canceled | error`。
 
 ### 6.4 取消打印 `POST /api/v1/print/cancel`
 
@@ -500,6 +557,8 @@ canceled | error`。
 → 终止当前任务并清理，响应 `200 {"job_id":"j_9001","state":"canceled"}`。
 
 > **【约定】** 取消为终止动作，一旦执行不可恢复；仅临时停止请使用 §6.5 暂停打印 / §6.6 恢复打印。
+
+
 
 ### 6.5 暂停打印 `POST /api/v1/print/pause`
 
@@ -517,7 +576,9 @@ canceled | error`。
 ```
 
 - 错误：`404 JOB_NOT_FOUND`（任务不存在）；`409 JOB_NOT_PRINTING`（当前任务不是
-  `printing` 态，无法暂停）。
+`printing` 态，无法暂停）。
+
+
 
 ### 6.6 恢复打印 `POST /api/v1/print/resume`
 
@@ -535,7 +596,9 @@ canceled | error`。
 ```
 
 - 错误：`404 JOB_NOT_FOUND`（任务不存在）；`409 JOB_NOT_PRINTING`（当前任务不是
-  `paused` 态，无法恢复）。
+`paused` 态，无法恢复）。
+
+
 
 ### 6.7 拉取视频直播流地址 `GET /api/v1/video/live`
 
@@ -548,9 +611,11 @@ canceled | error`。
 ?cloud=1
 ```
 
-| 参数 | 类型 | 必填 | 说明 |
-| --- | --- | --- | --- |
-| `cloud` | int | 否 | `1` = 返回云端推流地址；`0` / 缺省 = 返回设备本地 / 局域网可直连地址 |
+
+| 参数      | 类型  | 必填  | 说明                                          |
+| ------- | --- | --- | ------------------------------------------- |
+| `cloud` | int | 否   | `1` = 返回云端推流地址；`0` / 缺省 = 返回设备本地 / 局域网可直连地址 |
+
 
 响应（存在直播推流）：
 
@@ -565,9 +630,11 @@ canceled | error`。
 ```
 
 - `state`：`living` = 存在直播推流，可取出 `living_url` 直接用于直播；`stop` =
-  暂无直播流，此时不返回 / 不保证 `living_url`。
+暂无直播流，此时不返回 / 不保证 `living_url`。
 - `living_url`：直播流 RTSP 地址，仅 `state=living` 时有效。
-- 鉴权：**匿名**（无需 Token）。设备直播按“开盒即用”的流媒体服务器处理，不参与 §4 配对鉴权。
+- 鉴权：**匿名**（无需 Token）。设备直播按“开盒即用”的流媒体服务器处理，不参与 §4 配对鉴权。 
+
+
 
 ### 6.8 查询打印历史任务 ID 列表 `GET /api/v1/print/history`
 
@@ -581,11 +648,13 @@ Authorization: Bearer <token>
 ?year=2026&month=9&day=11
 ```
 
-| 参数 | 类型 | 必填 | 说明 |
-| --- | --- | --- | --- |
-| `year` | int | 是 | 四位年，如 `2026` |
-| `month` | int | 是 | 月，`1`–`12` |
-| `day` | int | 是 | 日，`1`–`31` |
+
+| 参数      | 类型  | 必填  | 说明           |
+| ------- | --- | --- | ------------ |
+| `year`  | int | 是   | 四位年，如 `2026` |
+| `month` | int | 是   | 月，`1`–`12`   |
+| `day`   | int | 是   | 日，`1`–`31`   |
+
 
 响应（有记录）：
 
@@ -605,6 +674,8 @@ Authorization: Bearer <token>
 - 鉴权：需携带 `Authorization: Bearer <token>`。
 - 错误：`422 INVALID_DATE`（年/月/日非法或日期不存在，如 `month=13`、`day=32`）。
 
+
+
 ### 6.9 按任务查询延时摄影图片列表 `GET /api/v1/print/{job_id}/timelapse/images`
 
 选中某一打印历史记录后，按 `job_id` 分页拉取该任务的延时摄影图片 URL 列表；每条
@@ -619,16 +690,20 @@ GET /api/v1/print/j_9001/timelapse/images?page=1&page_size=50
 
 路径参数：
 
-| 参数 | 类型 | 必填 | 说明 |
-| --- | --- | --- | --- |
-| `job_id` | string | 是 | 打印任务 ID，来自 `print/history` 返回的 `job_ids`，如 `j_9001` |
+
+| 参数       | 类型     | 必填  | 说明                                                  |
+| -------- | ------ | --- | --------------------------------------------------- |
+| `job_id` | string | 是   | 打印任务 ID，来自 `print/history` 返回的 `job_ids`，如 `j_9001` |
+
 
 Query 参数（分页）：
 
-| 参数 | 类型 | 必填 | 默认 | 说明 |
-| --- | --- | --- | --- | --- |
-| `page` | int | 否 | `1` | 页码，从 1 开始 |
-| `page_size` | int | 否 | `50` | 每页条数，建议上限 `500`，服务端可截断 |
+
+| 参数          | 类型  | 必填  | 默认   | 说明                     |
+| ----------- | --- | --- | ---- | ---------------------- |
+| `page`      | int | 否   | `1`  | 页码，从 1 开始              |
+| `page_size` | int | 否   | `50` | 每页条数，建议上限 `500`，服务端可截断 |
+
 
 响应（已有图片，`ready`）：
 
@@ -688,6 +763,8 @@ mDNS 还是手动 IP 访问，图片地址都与当前可达主机一致；图�
 
 ---
 
+
+
 ## 7. 完整时序（端到端）
 
 ```mermaid
@@ -732,7 +809,11 @@ sequenceDiagram
     A->>U: 完成提示
 ```
 
+
+
 ---
+
+
 
 ## 8. 错误处理与状态码
 
@@ -742,67 +823,79 @@ HTTP 状态码用语义层（4xx 客户端 / 鉴权 / 校验，5xx 服务端）�
 
 ### 8.1 HTTP 业务错误码（body.code）
 
-| HTTP | code | 含义 / 客户端动作 |
-| --- | --- | --- |
-| 401 | `AUTH_INVALID` | Token 失效 → 丢弃本地 token，回到配对 |
-| 401 | `PAIR_BAD_PIN` | PIN 错 → 允许重试（达上限锁定会话） |
-| 410 | `PAIR_EXPIRED` | 配对会话超时 → 重新 `pair/start` |
-| 404 | `FILE_NOT_FOUND` | file_id 不存在 → 重新上传 |
-| 409 | `PRINTER_BUSY` | 打印机忙 → 提示用户稍后 |
-| 404 | `JOB_NOT_FOUND` | job_id 不存在 → 刷新任务状态 / 重新指定 |
-| 409 | `JOB_NOT_PRINTING` | 任务已结束或状态不允许暂停/恢复/取消 → 刷新任务状态 |
-| 413 | `FILE_TOO_LARGE` | 超出固件存储 → 提示，必要时减层/分盘 |
-| 422 | `CHECKSUM_MISMATCH` | 整文件 SHA-256 不符 → 重传 |
-| 422 | `INVALID_DATE` | 年/月/日非法或日期不存在（查询打印历史） → 校验查询参数 |
-| 507 | `DISK_FULL` | 固件磁盘满 → 提示清理 |
-| 503 | `PRINTER_NOT_READY` | 预热 / 维护中 → 稍后重试 |
+
+| HTTP | code                | 含义 / 客户端动作                     |
+| ---- | ------------------- | ------------------------------ |
+| 401  | `AUTH_INVALID`      | Token 失效 → 丢弃本地 token，回到配对     |
+| 401  | `PAIR_BAD_PIN`      | PIN 错 → 允许重试（达上限锁定会话）          |
+| 410  | `PAIR_EXPIRED`      | 配对会话超时 → 重新 `pair/start`       |
+| 404  | `FILE_NOT_FOUND`    | file_id 不存在 → 重新上传             |
+| 409  | `PRINTER_BUSY`      | 打印机忙 → 提示用户稍后                  |
+| 404  | `JOB_NOT_FOUND`     | job_id 不存在 → 刷新任务状态 / 重新指定     |
+| 409  | `JOB_NOT_PRINTING`  | 任务已结束或状态不允许暂停/恢复/取消 → 刷新任务状态   |
+| 413  | `FILE_TOO_LARGE`    | 超出固件存储 → 提示，必要时减层/分盘           |
+| 422  | `CHECKSUM_MISMATCH` | 整文件 SHA-256 不符 → 重传            |
+| 422  | `INVALID_DATE`      | 年/月/日非法或日期不存在（查询打印历史） → 校验查询参数 |
+| 507  | `DISK_FULL`         | 固件磁盘满 → 提示清理                   |
+| 503  | `PRINTER_NOT_READY` | 预热 / 维护中 → 稍后重试                |
+
+
+
 
 ### 8.2 客户端本地 / 传输层码（沿用 FileDownloader 约定）
 
-| code | 含义 |
-| --- | --- |
-| `>0` | 等于 HTTP 状态码（服务器拒绝 / 内容错误） |
-| `-1` | 网络断 / DNS / TLS 失败 |
-| `-2` | 本地 I/O 失败（读传输 3mf / 写临时） |
-| `-100` | 完整性校验失败（整包 SHA-256 或 ZIP CRC 不符） |
-| `-102` | 用户取消 |
+
+| code   | 含义                                             |
+| ------ | ---------------------------------------------- |
+| `>0`   | 等于 HTTP 状态码（服务器拒绝 / 内容错误）                      |
+| `-1`   | 网络断 / DNS / TLS 失败                             |
+| `-2`   | 本地 I/O 失败（读传输 3mf / 写临时）                       |
+| `-100` | 完整性校验失败（整包 SHA-256 或 ZIP CRC 不符）               |
+| `-102` | 用户取消                                           |
 | `-200` | **【约定】** 未切片 / 无可发送盘（`generateTransfer3mf` 失败） |
 
+
 ---
+
+
 
 ## 9. 安全
 
 - **Token 鉴权**：除发现 / 配对外，所有接口校验 `Bearer token`；失效即强制
-  重新配对。
+重新配对。
 - **PIN 物理在场**：PIN 仅显示在打印机屏幕，确保发起配对者**物理接触**该设备，
-  防止同网陌生人盲配；PIN 一次性、短时效（120 s）、错误次数上限。
+防止同网陌生人盲配；PIN 一次性、短时效（120 s）、错误次数上限。
 - **传输加密**：**【约定】** v1 **不上 TLS**，纯 HTTP + Token 鉴权。明文 HTTP
-  在不可信网络（公共 WiFi、跨公网链路等）上可被嗅探，这是 v1 为最小实现接受的
-  折中——**建议把无 TLS 的明文连接用在可信网络**；跨不可信链路应优先 VPN 或后续
-  HTTPS（固件自签证书 + 客户端 TOFU 固定指纹，列入 §12 未来增强）。
+在不可信网络（公共 WiFi、跨公网链路等）上可被嗅探，这是 v1 为最小实现接受的
+折中——**建议把无 TLS 的明文连接用在可信网络**；跨不可信链路应优先 VPN 或后续
+HTTPS（固件自签证书 + 客户端 TOFU 固定指纹，列入 §12 未来增强）。
 - **网络风险与缓解**：
   - 上传体积上限 + 频率限制，防止 DoS 塞满固件存储。
   - Token 仅授权打印相关操作，不暴露固件文件系统 / shell。
 - **隐私**：**【约定】** mDNS 通告与主机名**暴露 SN**（`sn` 既作设备区分键、
-  也作客户端 Token 存储键，不另设设备 id）。SN 经 mDNS 广播仅在**同网段**可见
-  （mDNS 不跨网段），作为最小实现接受的折中。
+也作客户端 Token 存储键，不另设设备 id）。SN 经 mDNS 广播仅在**同网段**可见
+（mDNS 不跨网段），作为最小实现接受的折中。
 
 ---
+
+
 
 ## 10. 客户端 vs 服务端职责划分
 
 > 「客户端」指 **PC 端软件**与**移动端 App** 两类,二者职责对等(下表通用)。
 > **云端不在本传输职责表内**：它不发现、不配对、不向打印机上传模型，与打印机无直接交互。
 
-| 能力 | 客户端（PC 端 / 移动端 App） | 服务端（固件） |
-| --- | --- | --- |
-| mDNS | 浏览 / 解析 | 广播 `_snowpod._tcp` + TXT |
-| 配对 | 输入 PIN、存 Token | 显示 PIN、校验、颁发 / 吊销 Token |
-| 传输 3mf | **生成**（已实现，§5/§11） | 接收 / 校验 / 提取单份 gcode |
-| 上传 | 分块 + 续传 + 整体 SHA-256 + 进度 | 落盘 `.part`、记录 offset、整体校验、原子 rename |
-| 单盘 gcode 校验 | 写入有效 ZIP 条目 | 解包时校验 ZIP CRC、大小和整包 SHA-256 |
-| 打印控制 | 下发 start / pause / resume / cancel | 执行运动控制、状态机 |
-| 状态 | 轮询展示进度 | 上报 progress / layer / temp / error |
+
+| 能力          | 客户端（PC 端 / 移动端 App）                | 服务端（固件）                             |
+| ----------- | ---------------------------------- | ----------------------------------- |
+| mDNS        | 浏览 / 解析                            | 广播 `_snowpod._tcp` + TXT            |
+| 配对          | 输入 PIN、存 Token                     | 显示 PIN、校验、颁发 / 吊销 Token             |
+| 传输 3mf      | **生成**（已实现，§5/§11）                 | 接收 / 校验 / 提取单份 gcode                |
+| 上传          | 分块 + 续传 + 整体 SHA-256 + 进度          | 落盘 `.part`、记录 offset、整体校验、原子 rename |
+| 单盘 gcode 校验 | 写入有效 ZIP 条目                        | 解包时校验 ZIP CRC、大小和整包 SHA-256         |
+| 打印控制        | 下发 start / pause / resume / cancel | 执行运动控制、状态机                          |
+| 状态          | 轮询展示进度                             | 上报 progress / layer / temp / error  |
+
 
 > **固件端落地要点**：服务端各项职责的**正确实现与优化建议**（mDNS 完整应答、
 > 多网卡只播可达接口、服务自启健壮性、TXT/端口对齐等，含可执行验证命令）见
@@ -810,53 +903,61 @@ HTTP 状态码用语义层（4xx 客户端 / 鉴权 / 校验，5xx 服务端）�
 
 ---
 
+
+
 ## 11. 现状与待办（落地映射，严格按当前代码）
+
+
 
 ### 11.1 已具备（仓库中已实现）
 
 - **传输 3mf 生成**：
-  - `ProjectIO::saveTransfer3mf(path, scene, QVector<PlateGcode>, errorOut,
-    processConfigJson, trussBlob)`（`app_framework/services/ProjectIO.cpp`）——
-    复用 `save3mf` 写基础工程，再用 `appendZipEntries` 追加
-    `3D/<project>.gcode`。含前置校验（空 gcode 直接失败、不产无 gcode 的
-    传输 3mf）。
+  - `ProjectIO::saveTransfer3mf(path, scene, QVector<PlateGcode>, errorOut, processConfigJson, trussBlob)`（`app_framework/services/ProjectIO.cpp`）——
+  复用 `save3mf` 写基础工程，再用 `appendZipEntries` 追加
+  `3D/<project>.gcode`。含前置校验（空 gcode 直接失败、不产无 gcode 的
+  传输 3mf）。
   - `struct ProjectIO::PlateGcode { int plateId; QByteArray gcode; }`。
   - `Layout::generateTransfer3mf(QString* errorOut)`
-    （`app_framework/viewport/Layout.cpp`）—— 收集已切片的盘（激活盘取 live
-    缓存 `m_layerPreview*`，其它盘取 `m_plateSliceCaches`），逐盘经
-    `writeGCodeFile()` 写到 `QTemporaryDir` 读字节，调 `saveTransfer3mf`，
-    产物落 `<CacheLocation>/transfer/<工程名>_transfer.3mf`，返回路径或空串。
+  （`app_framework/viewport/Layout.cpp`）—— 收集已切片的盘（激活盘取 live
+  缓存 `m_layerPreview*`，其它盘取 `m_plateSliceCaches`），逐盘经
+  `writeGCodeFile()` 写到 `QTemporaryDir` 读字节，调 `saveTransfer3mf`，
+  产物落 `<CacheLocation>/transfer/<工程名>_transfer.3mf`，返回路径或空串。
   - 当前一次发送只包含用户选中的一盘、一份 gcode。
 - **G-code 生成**：`SlicingOrchestrator::writeGCodeFile()` 经 `RSSlicer::emitGCodeLayer`
-  按层产出 SLM 文本（头 `; SLM GCode - Snowpath`）。
+按层产出 SLM 文本（头 `; SLM GCode - Snowpath`）。
 - **发送 / 配对 UI 壳**：
   - `SendPrintTaskDialog`（模型图 / 打印机 / 耗材下拉 / 发送按钮）——
-    下拉项目前是**硬编码占位**（`Snowpod A0/A1/A2`、`耗材-001…`）。
+  下拉项目前是**硬编码占位**（`Snowpod A0/A1/A2`、`耗材-001…`）。
   - 点「发送」→ `PrinterPairDialog`（4 位 PIN 四状态 UI）→ `paired` →
-    `Layout` 槽现在**已调用 `generateTransfer3mf`**，成功则弹出传输文件路径
-    占位提示（无真实上传）。
+  `Layout` 槽现在**已调用** `generateTransfer3mf`，成功则弹出传输文件路径
+  占位提示（无真实上传）。
 - **下载客户端范式（对称参考，可复用设计）**：
-  `app_framework/services/net/FileDownloader.{h,cpp}` —— HTTP Range 续传 +
-  SHA-256 边传边算 + `.part` 原子落盘 + 进度 + 错误码约定。上传客户端
-  （`FileUploader`）应镜像它。
+`app_framework/services/net/FileDownloader.{h,cpp}` —— HTTP Range 续传 +
+SHA-256 边传边算 + `.part` 原子落盘 + 进度 + 错误码约定。上传客户端
+（`FileUploader`）应镜像它。
+
+
 
 ### 11.2 占位 / 假实现（需替换）
 
 - `PrinterPairDialog` 的「搜索」是本地 `QTimer` 假倒计时，PIN `=="1234"` 即
-  成功，**无任何网络**。需替换为 §4 的 `pair/start` + `pair/verify` 真握手。
+成功，**无任何网络**。需替换为 §4 的 `pair/start` + `pair/verify` 真握手。
 - `SendPrintTaskDialog` 打印机 / 耗材下拉是写死列表，需接 mDNS 发现结果 /
-  耗材库。
+耗材库。
 - 发送成功后仅 `QMessageBox` 弹出传输文件路径，**没有真实上传 / 开始打印**。
+
+
 
 ### 11.3 待实现清单（建议分阶段）
 
 **阶段 A — 打通最小可用链路（HTTP 明文，IP 可达即可）**
+
 1. 客户端 `DeviceDiscovery`（mDNS 浏览 `_snowpod._tcp`，可参考
-   `3rd/slice/slic3r/Utils/Bonjour.cpp`），结果填 `SendPrintTaskDialog` 下拉。
+  `3rd/slice/slic3r/Utils/Bonjour.cpp`），结果填 `SendPrintTaskDialog` 下拉。
 2. 客户端 `PrinterClient`（REST）：`info / pair/start / pair/verify`，Token
-   按 `sn` 存 keychain；改造 `PrinterPairDialog` 走真握手。
+  按 `sn` 存 keychain；改造 `PrinterPairDialog` 走真握手。
 3. 客户端 `FileUploader`（镜像 `FileDownloader`）：`upload/init` → 分块 `PUT`
-   （Content-Range）→ `complete`（SHA-256）→ 进度 / 续传 / 取消。
+  （Content-Range）→ `complete`（SHA-256）→ 进度 / 续传 / 取消。
 4. 客户端 `print/start` + `print/status` 轮询，接进度 UI。
 5. 固件侧服务端：mDNS responder + 上述端点 + `.part` 落盘 / 校验 / 执行。
 
@@ -868,17 +969,19 @@ HTTP 状态码用语义层（4xx 客户端 / 鉴权 / 校验，5xx 服务端）�
 
 ---
 
+
+
 ## 12. 未来扩展（可选，非 v1）
 
 以下为本次定稿时被降级、留作后续迭代的更强方案，v1 一律不实现：
 
 1. **HTTPS / TLS**：固件自签证书 + 客户端首次配对 TOFU 固定证书指纹，加密
-   传输（替代 v1 的纯 HTTP，§2 / §9；跨公网等不可信链路尤其需要）。
+  传输（替代 v1 的纯 HTTP，§2 / §9；跨公网等不可信链路尤其需要）。
 2. **状态推送**：WebSocket / SSE 替代轮询，降低延迟与请求量（§6.3）。
-3. **`Metadata/print_manifest.json`**：传输 3mf 内汇总「盘列表 + 每盘 gcode
-   路径 + md5 + 预估时长 / 重量」，便于固件不解压全部即可索引（§5.1）。
+3. `Metadata/print_manifest.json`：传输 3mf 内汇总「盘列表 + 每盘 gcode
+  路径 + md5 + 预估时长 / 重量」，便于固件不解压全部即可索引（§5.1）。
 4. **Token 多客户端管理 UI**：客户端列出 / 吊销本机在各打印机上的配对
-   （v1 仅固件侧按 `client_name` 多 token 共存，客户端不做管理界面，§4.3）。
+  （v1 仅固件侧按 `client_name` 多 token 共存，客户端不做管理界面，§4.3）。
 5. **更丰富的 mDNS TXT**：如 `fw` / `state` 等（v1 走 `GET /info` 获取，§3.2）。
 
 > 注：将来即便引入**云端**（账号、模型市场等），**与打印机的模型 / G-code 传输
@@ -886,6 +989,8 @@ HTTP 状态码用语义层（4xx 客户端 / 鉴权 / 校验，5xx 服务端）�
 > 职责与打印机传输无关，不在本文范围。
 
 ---
+
+
 
 ## 13. 嵌入式 / 固件端优化建议（落地 checklist）
 
@@ -900,6 +1005,8 @@ HTTP 状态码用语义层（4xx 客户端 / 鉴权 / 校验，5xx 服务端）�
 > 故下列各条标注的是「**对自动发现是否有效**」：mDNS 类项只影响**同网段自动发现**，
 > 不影响手动 IP 直连；HTTP 服务本身对**任何网络可达的客户端**都生效。
 
+
+
 ### 13.1 mDNS 必须完整应答 SRV / TXT / A（本次真因，最高优先级）
 
 > **适用：仅影响「同网段 mDNS 自动发现」**。跨网段 / mDNS 不通时客户端走手动 IP
@@ -908,10 +1015,10 @@ HTTP 状态码用语义层（4xx 客户端 / 鉴权 / 校验，5xx 服务端）�
 **实测现象**：设备 `_snowpod._tcp.local` 的发现链路是「半残」的——
 
 - 对 PTR 浏览查询，固件 avahi **只回 PTR 一条**（报文 `AN=1, NS=0, AR=0`），
-  **未在 additional records 里捎带 SRV / TXT / A**；
+**未在 additional records 里捎带 SRV / TXT / A**；
 - 单独追问该实例的 `SRV` / `TXT` / `ANY`，**也不应答**；
-- 结果：标准 mDNS 客户端拿到 PTR（知道「有这么个实例」）却**永远凑不齐
-  `host:port`**，无法解析出可连接地址，UI 一直停在「正在搜索」。
+- 结果：标准 mDNS 客户端拿到 PTR（知道「有这么个实例」）却**永远凑不齐**
+`host:port`，无法解析出可连接地址，UI 一直停在「正在搜索」。
 
 **正确做法**：标准 DNS-SD（RFC 6763）要求，对服务实例的 PTR 应答**应当**在
 additional records 中附带该实例的 **SRV + TXT**（及 SRV target 的 **A/AAAA**），
@@ -936,10 +1043,10 @@ additional records 中附带该实例的 **SRV + TXT**（及 SRV target 的 **A/
 说明固件侧 avahi 异常，需排查：
 
 - **avahi 是否被裁剪 / 配置异常**：检查 `avahi-daemon.conf` 的
-  `publish-addresses=yes`（必须发布 A 记录）、`publish-hinfo`、是否启用了某种
-  **reflector / 代理**只转发了 PTR；确认守护进程版本完整、未用极简替代实现。
+`publish-addresses=yes`（必须发布 A 记录）、`publish-hinfo`、是否启用了某种
+**reflector / 代理**只转发了 PTR；确认守护进程版本完整、未用极简替代实现。
 - **主机名可解析**：`%h` 展开出的 `<主机名>.local` 必须能被 avahi 发布 A 记录
-  （即 SRV target 有对应 A），否则客户端仍解析不到地址。
+（即 SRV target 有对应 A），否则客户端仍解析不到地址。
 
 **验证方法（固件端自检 + 旁机交叉验证）**：
 
@@ -968,6 +1075,8 @@ curl http://192.168.66.183:8080/api/v1/info
 > PTR 时用「应答源 IP + 默认端口 8080」直接连），所以 PC 端即使遇到本问题也能用。
 > 但**手机 App / Bonjour / 第三方标准客户端不一定有兜底**，固件侧仍须从根上修正。
 
+
+
 ### 13.2 多网卡：只在可达接口发布，避免播不可达地址
 
 > **适用：影响「同网段 mDNS 自动发现」选址**。客户端已对多 A 记录择优可达地址，
@@ -990,11 +1099,13 @@ allow-interfaces=wlan0
 publish-addresses=yes
 ```
 
-- 至少**不要发布 `169.254.x` 链路本地地址**与无打印服务的接口地址；
+- 至少**不要发布** `169.254.x` **链路本地地址**与无打印服务的接口地址；
 - 若设备会在多个网络间切换，按「当前实际联网且承载 8080 服务的接口」动态发布。
 
 > 客户端侧已对多 A 记录做「优先选与本机同子网的可达地址」的择优，但固件**不发布
 > 不可达地址**能从源头消除歧义，也利于其它客户端。
+
+
 
 ### 13.3 服务 / 守护进程：开机自启 + 崩溃自愈
 
@@ -1002,7 +1113,7 @@ publish-addresses=yes
 > **随时可被网络可达的客户端发现 / 连接**，与是否同网段、是否引入云端无关。
 
 - **HTTP 服务（8080）** 与 **mDNS（avahi-daemon）** 必须**开机自启**，并在异常退出后
-  **自动重启**，确保设备上电即可被发现（同网段）与连接（任何 IP 可达的客户端）。
+**自动重启**，确保设备上电即可被发现（同网段）与连接（任何 IP 可达的客户端）。
 - buildroot 环境用 init 脚本（`/etc/init.d/SxxRongsu`）或 systemd unit：
 
 ```ini
@@ -1022,17 +1133,18 @@ systemctl enable --now rongsu-printd      # 确保 HTTP 服务自启
 
 - 守护应做**端口占用检测 / 单实例**，避免重启后 8080 被旧进程占用而起不来。
 
+
+
 ### 13.4 TXT / 端口 / 字段与 spec 对齐
 
 > **适用：始终需要**。端口固定 8080 与字段命名对**任何网络可达的客户端**都生效；
 > mDNS TXT 细节仅同网段自动发现用到。与云端无关。
 
-- **端口固定 8080**（§3.1 / §6），勿随机化；TXT 至少含 `ver / model / sn /
-  needpair`（§3.2），键名**全小写**且与本文一致。
-- **mDNS TXT 与 `GET /api/v1/info` 必须一致**：例如 `needpair=1` 应对应
-  `info.need_pair=true`；`model` / `sn` 两处取值相同（§3.2 / §4.2.1）。
+- **端口固定 8080**（§3.1 / §6），勿随机化；TXT 至少含 `ver / model / sn / needpair`（§3.2），键名**全小写**且与本文一致。
+- **mDNS TXT 与** `GET /api/v1/info` **必须一致**：例如 `needpair=1` 应对应
+`info.need_pair=true`；`model` / `sn` 两处取值相同（§3.2 / §4.2.1）。
 - 配对、上传、打印、状态各端点的 JSON 字段命名、`Authorization: Bearer <token>`
-  鉴权、错误码 `body.code` 一律按 §4 / §6 / §8，勿自创变体。
+鉴权、错误码 `body.code` 一律按 §4 / §6 / §8，勿自创变体。
 
 ```sh
 # 自检:TXT 的 needpair 与 info.need_pair 是否一致
@@ -1046,12 +1158,17 @@ curl -s http://<ip>:8080/api/v1/info     # 看 need_pair / model / sn 是否对�
 
 ---
 
+
+
 ## 附录 A：版本
 
-| 版本 | 日期 | 变更 |
-| --- | --- | --- |
-| v1 (draft) | 2026-06-24 | 首版：发现 / 配对 / 传输 3mf / 上传 / 打印 / 状态 协议定义；现状映射 |
-| v1 (定稿) | 2026-06-24 | 将早期全部「待定项」定为最小 v1 方案：端口固定 8080、TXT 最小集（model/sn/ver/needpair）、暴露 SN、命名并入 `pair/verify`、状态仅轮询、仅保留 cancel（去 pause/resume）、不写 manifest、不上 TLS；被降级方案统一收入 §12 |
-| v1.1 (固件优化) | 2026-06-29 | 新增「§13 嵌入式 / 固件端优化建议」：基于真机排查（`Rongsu A1`），重点要求 mDNS 完整应答 SRV/TXT/A（本次「一直搜索中」真因）、多网卡只播可达接口、服务开机自启 / 崩溃自愈、TXT/端口/字段与 spec 对齐，并附 avahi-browse / dns-sd / curl 验证命令；§10 职责表补交叉引用指向 §13 |
-| v1.1 (云端标注) | 2026-06-29 | §13 增加「适用范围」说明与各子节局域网 / 云端适用性括注（mDNS 类仅局域网、自启自愈两端通用且云端更关键、设备身份云端注册需一致），并加「云端模式固件职责另行补充」占位 |
+
+| 版本          | 日期         | 变更                                                                                                                                                                                          |
+| ----------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| v1 (draft)  | 2026-06-24 | 首版：发现 / 配对 / 传输 3mf / 上传 / 打印 / 状态 协议定义；现状映射                                                                                                                                                |
+| v1 (定稿)     | 2026-06-24 | 将早期全部「待定项」定为最小 v1 方案：端口固定 8080、TXT 最小集（model/sn/ver/needpair）、暴露 SN、命名并入 `pair/verify`、状态仅轮询、仅保留 cancel（去 pause/resume）、不写 manifest、不上 TLS；被降级方案统一收入 §12                                    |
+| v1.1 (固件优化) | 2026-06-29 | 新增「§13 嵌入式 / 固件端优化建议」：基于真机排查（`Rongsu A1`），重点要求 mDNS 完整应答 SRV/TXT/A（本次「一直搜索中」真因）、多网卡只播可达接口、服务开机自启 / 崩溃自愈、TXT/端口/字段与 spec 对齐，并附 avahi-browse / dns-sd / curl 验证命令；§10 职责表补交叉引用指向 §13          |
+| v1.1 (云端标注) | 2026-06-29 | §13 增加「适用范围」说明与各子节局域网 / 云端适用性括注（mDNS 类仅局域网、自启自愈两端通用且云端更关键、设备身份云端注册需一致），并加「云端模式固件职责另行补充」占位                                                                                                   |
 | v1.2 (架构定调) | 2026-06-29 | 仅 PC 端 + 移动端经网络直连打印机（IP 可达即可，不限局域网；mDNS 仅局域网发现，跨网用手动 IP），云端不直接对接打印机、不中转模型；据此校正 §0 / §1 / §2 / §3 / §9 / §11 / §13 中「局域网」措辞为「网络可达」口径，并把 §13 子节标注从「局域网 / 云端适用性」改为「是否影响同网段自动发现」、移除「云端模式固件职责占位」 |
+
+

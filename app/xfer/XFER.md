@@ -36,14 +36,18 @@
   `UI_Print_Prepare_Req` → `UI_Print_Start_Req`（等 Prepare 回包，最多 5s）。
   成功回 `200 {"state":"printing"}`。已在打印中 `409 PRINTER_BUSY`；
   清单对不上 `404 FILE_NOT_FOUND`；Prepare 失败 `500` / 超时 `504`。
-  板端 Skip / Keep Z / 外门确认仍走 Glavo 原门控。`GET /print/status` 仍以
-  Glavo 打印态为准。
-- `POST /print/cancel` / `/print/pause` / `/print/resume`：body 仅 `job_id`
-  （与 6.3 相同：优先 `frames_dir`，打印中多为 `tmp`，也认 6.2 的 `j_*`）。
+  设置页 Advanced Print **Auto Print After Transfer** 默认关（`UPC_XFR_AUTO_PRINT_FILE`
+  缺文件或非 `'1'`）。关掉时 `print/start` 回 `200 {"state":"idle"}`，**不向 Glavo 起印**；
+  上传与 Local 清单不受影响。打开后仍回 `200 {"state":"printing"}`。板端 Skip / Keep Z /
+  外门确认仍走 Glavo 原门控。`GET /print/status` 仍以 Glavo 打印态为准。
+- `POST /print/cancel` / `/print/stop` / `/print/pause` / `/print/resume`：body 仅 `job_id`
+  （与 6.3 相同：优先 `frames_dir`，打印中多为 `tmp`，也认 6.2 的 `j_*`；
+  延时摄影清单到达后仍保留原来的 `j_*`，避免切片软件 cancel 404）。
   校验后向 Glavo 发与 UI 相同的 Terminate/Pause/Resume，等回包再 `200`。
   `job_id` 对不上 `404 JOB_NOT_FOUND`；态不对 `409 JOB_NOT_PRINTING`；
-  3s 无回包 `504 GLAVO_TIMEOUT`。取消允许 `printing`/`paused`；暂停仅
-  `printing`；恢复仅 `paused`（氧未落下仍暂停则 `409`）。
+  取消等回包最多 15s，超时仍 `200 canceled`（Terminate 已发出）。
+  取消允许会话已起或 `printing`/`paused`；暂停仅 `printing`；恢复仅 `paused`
+  （氧未落下仍暂停则 `409`）。
 - `GET /print/history?year=&month=&day=`：按打印机本地日期返回当天 `job_ids`
   （= `/userdata/media/video/config.json` 的 `frames_dir`，升序）
 - `GET /print/{job_id}/timelapse/images`：分页返回该任务延时摄影 JPEG URL 列表
@@ -69,6 +73,7 @@
 - `UPC_XFR_STORAGE_DIR`（默认 `/userdata/transport`）
 - `UPC_XFR_GCODE_DIR`（默认 `UPC_LOCAL_GCODE_DIR`，即 `/userdata/Gcode`）
 - `UPC_XFR_TOKEN_FILE`（默认 `/userdata/transport/.xfr_tokens`）
+- `UPC_XFR_AUTO_PRINT_FILE`（默认 `/userdata/transport/auto_print`；仅首字节 `1`=下发后自动起印，缺文件=关）
 - `UPC_XFR_REQUIRE_AUTH`（默认 `1`）
 - `UPC_XFR_CHUNK_MAX`（默认 `4194304`）
 - `UPC_DEVICE_SN` / `UPC_DEVICE_MODEL`
@@ -89,8 +94,9 @@
 - 包内必须且只能有一份 `.gcode`。
 - 3MF 压缩包最大 512 MiB，解压后的 G-code 最大 1 GiB，压缩比最大 200。
 - G-code 路径为 `3D/*.gcode`；兼容早期草案的 `Metadata/*.gcode`。
-- 输出名取上传包名去掉 `.3mf` 后加 `.gcode`，例如
-  `竖放_0_transfer.gcode`。
+- 输出名取上传包名去掉 `.3mf` 后的 ASCII stem 再加 `.gcode`。只保留
+  `[A-Za-z0-9_-]`；含中文/日文等非 ASCII 时变成
+  `model_<8hex>_<残留ASCII>.gcode`，避免 UI 缺字乱码。
 - 上传暂存目录为 `/userdata/transport`（分块 `.part.*` 与完整 `.3mf`）；
   导入成功后**删除**原 3MF。可打印文件落到 `/userdata/Gcode`，并写入
   `/userdata/Gcode/config.json`。
@@ -102,9 +108,13 @@
   `/userdata/Gcode/thumb/*_small.rthm`（72×72）、
   `*_large.rthm`（320×180）、`*_print.rthm`（100×100），绝对路径分别写入
   manifest 的 `thumb_small` / `thumb_large` / `thumb_print`。
-- PNG 解码使用 libpng，长边只抽到最大目标边（当前 320）。UI 只要
-  72 / 320×180 / 100，不保留源 PNG，也不按预览原图清晰度解码。
-  COVER 居中裁剪后优先走 RGA（dma32 + `importbuffer_fd`，禁止
+- PNG 解码使用 libpng，长边抽到 1280（大于目标 320，给留白裁切留像素）。
+  Snowpath 预览四周常是大片底色，模型只占画布中心一小块：先抹掉青绿支撑色
+  （旧灰底预览；蓝底同色支撑与模型分不开，不在板端滤），再按四角底色
+  抠内容框（约 10% 边），再按目标比例 CONTAIN 放进 72 / 320×180 / 100
+  （整模可见；比例不同时用原底色补边，避免竖模被 16:9 COVER 切掉头脚）。
+  四角颜色不一致或内容过小则退回整图。不保留源 PNG。
+  缩放优先走 RGA（dma32 + `importbuffer_fd`，禁止
   `wrapbuffer_virtualaddr`：RK3568 RGA2 无 IOMMU，普通堆虚地址会整进程
   退出）。超过 RGA2 的 8 倍缩放时先落到中间尺寸再出目标图；dma-heap /
   导入 / 硬件失败回退 CPU。缺图、图片损坏或转换失败只记录告警，G-code

@@ -148,6 +148,9 @@ HttpResponse XfrService::on_request(const HttpRequest& req)
     if (req.method == "POST" && path == "/api/v1/print/cancel") {
         return handle_print_cancel(req);
     }
+    if (req.method == "POST" && path == "/api/v1/print/stop") {
+        return handle_print_cancel(req);
+    }
     if (req.method == "POST" && path == "/api/v1/print/pause") {
         return handle_print_pause(req);
     }
@@ -510,6 +513,16 @@ HttpResponse XfrService::handle_print_start(const HttpRequest& req)
     const uint32_t plate_id = static_cast<uint32_t>(plate_id_u64);
     std::string file_id;
     (void)json_get_string(body, "file_id", &file_id);
+
+    /* 设置页关掉后：上传/清单仍走，回 200 idle 不向 Glavo 起印（切片软件把非 200 当发送失败）。 */
+    if (!auto_print_after_transfer_enabled()) {
+        UPC_LOG_XFR_SERVICE(Info, "print/start ignored: auto print after transfer off");
+        HttpResponse idle;
+        idle.status = 200;
+        idle.body = std::string("{\"job_id\":\"\",\"state\":\"idle\",\"plate_id\":") +
+                    std::to_string(plate_id) + "}";
+        return idle;
+    }
 
     const uint64_t now_ms = static_cast<uint64_t>(
         std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -1013,7 +1026,8 @@ HttpResponse XfrService::handle_print_control(const HttpRequest& req, PrintCtrlK
                 ok_state = "printing";
                 break;
             case PrintCtrlKind::Cancel:
-                if (glavo_phase_ != GlavoPhase::Printing &&
+                if (!print_session_active_ &&
+                    glavo_phase_ != GlavoPhase::Printing &&
                     glavo_phase_ != GlavoPhase::Paused) {
                     return err(409, "JOB_NOT_PRINTING", "job is not active");
                 }
@@ -1031,7 +1045,8 @@ HttpResponse XfrService::handle_print_control(const HttpRequest& req, PrintCtrlK
         return err(500, "INTERNAL", "publish print control failed");
     }
 
-    constexpr auto kCtrlTimeout = std::chrono::milliseconds(3000);
+    /* 终止要等振镜 abort / 准备线程 join，3s 经常 504；切片软件会当成停印失败。 */
+    constexpr auto kCtrlTimeout = std::chrono::milliseconds(15000);
     const bool got = wait_print_ctrl_done(kCtrlTimeout);
 
     std::string rsp_job = job_id;
@@ -1051,6 +1066,15 @@ HttpResponse XfrService::handle_print_control(const HttpRequest& req, PrintCtrlK
         return err(409, "JOB_NOT_PRINTING", "resume blocked (still paused)");
     }
     if (!got) {
+        /* Cancel 已发给 Glavo：超时也按已接受处理，避免切片软件重试/用户以为没停。 */
+        if (kind == PrintCtrlKind::Cancel) {
+            UPC_LOG_XFR_SERVICE(Warn, "print/cancel: glavo rsp timeout, treat as accepted");
+            HttpResponse late;
+            late.status = 200;
+            late.body = std::string("{\"job_id\":\"") + json_escape(rsp_job) +
+                        "\",\"state\":\"canceled\"}";
+            return late;
+        }
         return err(504, "GLAVO_TIMEOUT", "print control timed out");
     }
 
@@ -1156,11 +1180,15 @@ bool XfrService::read_progress_percent_file(const std::string& path, uint32_t* o
 
 std::string XfrService::output_ovf_name(const std::string& input_name)
 {
-    const std::size_t dot = input_name.rfind('.');
-    if (dot == std::string::npos) {
-        return input_name + "_out.ovf";
+    std::string base = std::filesystem::path(input_name).filename().string();
+    const std::size_t dot = base.rfind('.');
+    if (dot != std::string::npos) {
+        base.resize(dot);
     }
-    return input_name.substr(0, dot) + "_out" + input_name.substr(dot);
+    if (base.empty()) {
+        base = "transfer";
+    }
+    return ascii_safe_transfer_stem(base) + "_out.ovf";
 }
 
 bool XfrService::run_snowslice_build(const std::string& input_ovf_path,
@@ -1553,7 +1581,7 @@ void XfrService::on_print_ipc(const middleware::Message& msg)
             }
             if (p.has_entry != 0 && p.frames_dir[0] != '\0') {
                 active_frames_dir_ = p.frames_dir;
-                print_job_id_ = active_frames_dir_;
+                /* 不覆盖 print_job_id_（切片软件可能仍用起印时的 j_* 来 cancel）。 */
             }
             if (p.aborted != 0) {
                 glavo_phase_ = GlavoPhase::Canceled;

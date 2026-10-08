@@ -2007,7 +2007,9 @@ void GlavoService::clear_prepare_session()
     prepared_local_path_.clear();
     prepared_line_count_ = 0;
     prepared_layer_count_ = 0;
+    prepared_duration_sec_ = 0;
     print_total_layers_ = 0;
+    print_duration_sec_ = 0;
     layer_progress_mode_ = false;
     prepare_ready_ = false;
     /* 光路检测的"本轮已通过"随 prepare 会话一起作废，保证每次起印都重新检测。
@@ -2156,11 +2158,13 @@ bool GlavoService::run_print_prepare(middleware::PrintFileSource source, uint32_
     prepared_local_path_ = local_path_out;
     prepared_line_count_ = line_count;
     prepared_layer_count_ = layer_count;
+    prepared_duration_sec_ = duration_sec;
     prepare_ready_ = true;
     UPC_LOG_GLAVO_SERVICE(Info,
-        "prepare stats: lines=%u layers=%u path=%s",
+        "prepare stats: lines=%u layers=%u duration_sec=%u path=%s",
         static_cast<unsigned>(prepared_line_count_),
         static_cast<unsigned>(prepared_layer_count_),
+        static_cast<unsigned>(prepared_duration_sec_),
         local_path_out.c_str());
     return true;
 }
@@ -2243,6 +2247,7 @@ void GlavoService::handle_parser_exit(const middleware::Message& msg)
  */
 void GlavoService::launch_print_from_prepared(const std::string& full_path)
 {
+    print_duration_sec_ = prepared_duration_sec_;
     ignore_powder_low_for_current_print_ = false;
     o2_auto_paused_ = false;
     outer_door_confirm_waiting_ = false;
@@ -2303,6 +2308,7 @@ void GlavoService::continue_print_after_optical_ready(const std::string& full_pa
     /* 未开启换层 Snap 时没有层完成事件，层进度恒为 0，只能退化为纯包进度。 */
     print_total_layers_ = 0;
 #endif
+    print_duration_sec_ = prepared_duration_sec_;
     /* 纯层台阶进度只用于「能数出 M3000 且有换层 Snap」的作业；OVF / 无层标记 /
      * 关闭 Snap 时 print_total_layers_ 为 0，自动回退到包进度 + 排空。 */
     layer_progress_mode_ = (print_total_layers_ > 0) &&
@@ -2669,6 +2675,27 @@ void GlavoService::handle_print_powder_low_ignore(const middleware::Message& msg
     UPC_LOG_GLAVO_SERVICE(Warn, "powder_low_ignore enabled for current print");
 }
 
+/** 清单预估时长按剩余百分比向上取整到分钟；无预估或已 100% 为 0。 */
+static uint32_t remaining_minutes_from_estimate(uint32_t duration_sec, int32_t progress_percent)
+{
+    if(duration_sec == 0) {
+        return 0;
+    }
+    int32_t pct = progress_percent;
+    if(pct < 0) {
+        pct = 0;
+    }
+    if(pct >= 100) {
+        return 0;
+    }
+    uint64_t left_sec = (static_cast<uint64_t>(duration_sec) *
+                         static_cast<uint64_t>(100 - pct) + 99ULL) / 100ULL;
+    if(left_sec == 0) {
+        left_sec = 1;
+    }
+    return static_cast<uint32_t>((left_sec + 59ULL) / 60ULL);
+}
+
 /** @brief 重置进度推送的去重状态（百分比 / cache rate / 推送时刻） */
 void GlavoService::reset_print_progress_state()
 {
@@ -2798,7 +2825,11 @@ void GlavoService::send_print_progress(bool force_complete)
 
     middleware::PrintProgressPayload p{};
     p.progress_percent  = pct;
-    p.remaining_minutes = 0;
+    {
+        const uint32_t duration_sec = print_duration_sec_ > 0
+            ? print_duration_sec_ : prepared_duration_sec_;
+        p.remaining_minutes = remaining_minutes_from_estimate(duration_sec, pct);
+    }
     p.pm25_indoor       = env.valid ? env.pm25_indoor : 0.f;
     p.pm25_cabin        = env.valid ? env.pm25_cabin : 0.f;
     /* 舱温优先 SOC AHT20（未采过是 -1）。旧路径把 -1 当成有效值写进进度，
@@ -3152,7 +3183,7 @@ void GlavoService::handle_cloud_result_dismiss(const middleware::Message& msg)
     }
 }
 
-/** @brief 向 Xfr 推送 GLAVO_Print_State_Ntf（开始打印/打印结束状态边沿） */
+/** @brief 向 UI / Xfr 推送 GLAVO_Print_State_Ntf（开始打印/打印结束状态边沿） */
 void GlavoService::publish_print_state_ntf(uint32_t mode)
 {
     middleware::PrintStateNtfPayload p{};
@@ -3162,16 +3193,22 @@ void GlavoService::publish_print_state_ntf(uint32_t mode)
         std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::system_clock::now().time_since_epoch()).count());
 
-    middleware::Message ntf(middleware::MsgType::GLAVO_Print_State_Ntf,
-        static_cast<middleware::ModuleId>(module_id()),
-        middleware::ModuleId::APP_XFR);
-    ntf.payload = middleware::MsgPayload::from_bytes(
-        reinterpret_cast<const uint8_t*>(&p), sizeof(p));
-    if(!publish_async(ntf)) {
-        UPC_LOG_GLAVO_SERVICE(Warn,
-            "print_state_ntf publish failed mode=%u target=%u",
-            mode, static_cast<unsigned>(middleware::ModuleId::APP_XFR));
-    }
+    /* 双发 UI + Xfr：桌面 /print/status 要边沿；Snowpath 起印时 UI 也要进打印页
+     * （停印钮、外门/放板确认都看 CONTROL_STATE_PRINTING）。 */
+    auto send_to = [&](middleware::ModuleId target) {
+        middleware::Message ntf(middleware::MsgType::GLAVO_Print_State_Ntf,
+            static_cast<middleware::ModuleId>(module_id()),
+            target);
+        ntf.payload = middleware::MsgPayload::from_bytes(
+            reinterpret_cast<const uint8_t*>(&p), sizeof(p));
+        if(!publish_async(ntf)) {
+            UPC_LOG_GLAVO_SERVICE(Warn,
+                "print_state_ntf publish failed mode=%u target=%u",
+                mode, static_cast<unsigned>(target));
+        }
+    };
+    send_to(middleware::ModuleId::UI);
+    send_to(middleware::ModuleId::APP_XFR);
 }
 
 void GlavoService::publish_device_event(middleware::DeviceEventCode code,

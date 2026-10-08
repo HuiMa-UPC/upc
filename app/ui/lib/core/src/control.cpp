@@ -49,6 +49,8 @@ lv_obj_t *g_overlay = nullptr;
 control_state_t g_state = CONTROL_STATE_IDLE;
 ui_modal_dialog_t *g_current_dlg = nullptr;
 control_file_t g_active_file = {};
+/** Snowpath 已向 Glavo 发过 Start：跟进打印页时只挂进度回调，不再 send_print_start。 */
+bool g_follow_existing_print = false;
 
 /* Camera 的 manifest 通知早于本侧进入 PRINT_DONE 时的暂存位（见 on_print_video_manifest） */
 control_print_result_t g_print_result = {};
@@ -365,6 +367,7 @@ lv_obj_t *make_round_icon_btn(lv_obj_t *parent, const char *symbol, lv_event_cb_
 
 void on_powder_low_async(void *user);
 void on_print_start_rejected_async(void *user);
+void on_remote_print_started_async(void *user);
 void on_outer_door_confirm_req_async(void *user);
 void on_plate_place_confirm_req_async(void *user);
 void close_powder_dlg(void);
@@ -595,6 +598,7 @@ void start_print_peer_watch(void)
 ui_xfr_pin_dialog_t *g_xfr_pin_dlg = nullptr;
 ui_xfr_recv_dialog_t *g_xfr_recv_dlg = nullptr;
 char g_xfr_recv_name[128] = {0};
+char g_last_xfr_file[128] = {0}; /**< 最近一次 WiFi 落到 Local 的文件名，供远程起印填 Job 卡 */
 
 bool xfr_progress_state_active(uint8_t state)
 {
@@ -809,6 +813,14 @@ void wire_msg_proxy()
         lv_async_call(on_print_start_rejected_async, nullptr);
     });
 
+    /* Snowpath 起印不经本机 PREPARE_WAIT：跟进打印页，否则停印钮和外门/放板确认都被丢掉。 */
+    proxy.register_print_state([](uint32_t mode) {
+        if(mode != static_cast<uint32_t>(middleware::UserHomeStatus::Printing)) {
+            return;
+        }
+        lv_async_call(on_remote_print_started_async, nullptr);
+    });
+
     proxy.register_outer_door_confirm_req([]() {
         lv_async_call(on_outer_door_confirm_req_async, nullptr);
     });
@@ -846,6 +858,7 @@ void wire_msg_proxy()
 
     proxy.register_xfr_file_received([](const middleware::XfrFileReceivedPayload& p) {
         close_xfr_recv_dlg();
+        std::snprintf(g_last_xfr_file, sizeof(g_last_xfr_file), "%s", p.file_name);
         char msg[180];
         std::snprintf(msg, sizeof(msg), "File received: %s", p.file_name);
         ui_toast_show(msg, user_color_status_ok, 2200);
@@ -855,6 +868,9 @@ void wire_msg_proxy()
     });
 
     proxy.register_xfr_transfer_progress([](const middleware::XfrTransferProgressPayload& p) {
+        if(p.file_name[0] != '\0') {
+            std::snprintf(g_last_xfr_file, sizeof(g_last_xfr_file), "%s", p.file_name);
+        }
         const bool active = xfr_progress_state_active(p.state);
         if(active) {
             if(!g_xfr_recv_dlg || std::strcmp(g_xfr_recv_name, p.file_name) != 0) {
@@ -958,11 +974,16 @@ const control_file_t *backend_get_file(size_t index)
     return index < files.size() ? &files[index] : nullptr;
 }
 
-void backend_start_job(const control_file_t *file, ProgressCb prog_cb, DoneCb done_cb, void *u)
+void backend_attach_job(ProgressCb prog_cb, DoneCb done_cb, void *u)
 {
     g_job_prog_cb = prog_cb;
     g_job_done_cb = done_cb;
     g_job_u = u;
+}
+
+void backend_start_job(const control_file_t *file, ProgressCb prog_cb, DoneCb done_cb, void *u)
+{
+    backend_attach_job(prog_cb, done_cb, u);
 
     const uint32_t file_index = file ? file->index : 0;
     ui::UiMsgProxy::instance().send_print_start(
@@ -2011,6 +2032,38 @@ void on_print_start_rejected_async(void * /*user*/)
     finish_printing(false);
 }
 
+/** Snowpath / 本机以外的起印：把 Job 卡填成刚落到 Local 的那份文件。 */
+void fill_active_file_from_last_xfr(void)
+{
+    if(g_last_xfr_file[0] == '\0') {
+        g_active_file = {};
+        return;
+    }
+    load_local_files_from_config();
+    for(const auto &f : g_files) {
+        if(std::strcmp(f.name, g_last_xfr_file) == 0) {
+            g_active_file = f;
+            return;
+        }
+    }
+    control_file_t f = {};
+    std::snprintf(f.name, sizeof(f.name), "%s", g_last_xfr_file);
+    g_active_file = f;
+}
+
+/** 切片软件起印：UI 还在待机时跟进打印页，才能出停印钮并接住外门/放板确认。 */
+void on_remote_print_started_async(void * /*user*/)
+{
+    if(g_state == CONTROL_STATE_PRINTING || g_state == CONTROL_STATE_PRINT_DONE) {
+        return;
+    }
+    close_xfr_pin_dlg();
+    close_xfr_recv_dlg();
+    fill_active_file_from_last_xfr();
+    g_follow_existing_print = true;
+    enter_state(CONTROL_STATE_PRINTING);
+}
+
 /* ---- 起印前外门确认（无超时；Confirm 再检门，Cancel 跳过外门检测） ---- */
 ui_modal_dialog_t *g_outer_door_confirm_dlg = nullptr;
 
@@ -2920,10 +2973,15 @@ void enter_state(control_state_t s)
         /* **打印界面在监控页**（稿 6338:27240 一族），不是首页。改版前这里切的是
          * "user_home"，浮层挂在首页上；现在整套搬到了监控页，所以直接切过去。 */
         ui::PageManager::instance().switch_to("user_monitor");
-        backend_start_job(&g_active_file,
-                                     pf_on_print_progress,
-                                     pf_on_print_done,
-                                     nullptr);
+        if(g_follow_existing_print) {
+            g_follow_existing_print = false;
+            backend_attach_job(pf_on_print_progress, pf_on_print_done, nullptr);
+        } else {
+            backend_start_job(&g_active_file,
+                              pf_on_print_progress,
+                              pf_on_print_done,
+                              nullptr);
+        }
         page_user_monitor_enter_printing_mode(&g_active_file);
         start_print_peer_watch();
         break;

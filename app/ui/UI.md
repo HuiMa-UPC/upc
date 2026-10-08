@@ -1671,6 +1671,8 @@ Manual 的电源钮与调试页 Fan 开关都读它，所以在哪边开关、�
 ```
 选文件 Confirm Print → 二次确认 → enter_state(PRINTING)
   → switch_to("user_monitor") + page_user_monitor_enter_printing_mode()
+Snowpath `print/start`：Glavo 双发 `GLAVO_Print_State_Ntf(Printing)` → UI 同样
+  `enter_state(PRINTING)`。不跟进的话停印钮不出现，外门/放板确认也被丢掉，只能强制关机。
   → 起印先将 Z 绝对走到 −10 mm（±1 mm 内视为已到位），与 Skip Plate Present 无关；未到位中止并报 Z did not reach print height，不报成基板读码失败。Z settle / 挡门读码等阻塞等待在 Glavo 准备线程，不堵业务线程（开门与 Manual Z 仍可响应；准备收 Z 期间 Manual Z 丢弃）
   → 进度推送 page_user_monitor_printing_update()
   → 起印环境检查 `APP_Print_Prep_Progress_Ntf` → page_user_monitor_print_prep_update()
@@ -1732,8 +1734,9 @@ Cancel **放在 body 里而不是 footer**：footer 自带 `USER_PAD_SM` 的 pad
 画了完成态。终止态沿用同一张卡，标题换 `Print terminated`、副标题换 `Job stopped. …`——不然
 Job 卡写着 Print Terminated，弹窗却说 complete。
 
-**Job 卡两个数字沿用原口径**，不按稿上的示例数字改：打印中是剩余时间 + 耗材 `--`（打印中
-拿不到用量），结束后才换成实际耗时（H:MM:SS）与 manifest 的 `material_g`。caption 照稿写
+**Job 卡两个数字沿用原口径**，不按稿上的示例数字改：打印中 Time left 按清单 `duration_sec`
+（3MF 的 `print_time_s`）与进度线性折剩余分钟，无预估显示 `--`；耗材仍是 `--`（打印中
+拿不到用量）。结束后才换成实际耗时（H:MM:SS）与 manifest 的 `material_g`。caption 照稿写
 `Time left` / `Time used` 与 `Total Cons.`。
 
 **缩略图的进度填充是模拟的**：后端还没有切片预览图，Job 卡里放的是文件列表那张静态缩略图
@@ -2351,6 +2354,7 @@ Storage / Advanced Print / Privacy & Security / About / Debug。
   另有 **Keep Z Position**（默认关：打开后整个打印会话绝对不动 Z——不起印 −10、跳过测高与
   工作高度抬升、开关内门前不降 Z、终止/失败收尾不改 Z，Manual/调试 Z 点动与 Home 也丢弃），
   以及 **Transfer Box**（默认开，与调试页同一枚本地开关：取件后走转运盒三步，自检阶段终止的除外；关掉则开门即回 IDLE），
+  以及 **Auto Print After Transfer**（默认关，落盘 `/userdata/transport/auto_print`：开则切片软件 `print/start` 回 `printing` 并起印；关则只保留下发，Xfr 回 `200 {"state":"idle"}`），
   以及 Height Calibration 的 Start，
   参数与调试页 Laser 卡相同（-5…12 mm，步长 1）。
   测高开关默认开，仅本次 Glavo 进程有效。
