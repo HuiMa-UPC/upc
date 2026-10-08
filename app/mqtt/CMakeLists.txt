@@ -9,6 +9,7 @@ add_executable(rongsu_mqtt
     ${MQTT_LIB_DIR}/mqtt_service_soc_ota.cpp
     ${MQTT_LIB_DIR}/mqtt_service_log_collect.cpp
     ${MQTT_LIB_DIR}/mqtt_service_alarm.cpp
+    ${MQTT_LIB_DIR}/mqtt_service_print_job.cpp
     ${MQTT_LIB_DIR}/mqtt_config.cpp
     ${MQTT_LIB_DIR}/device_auth_http.cpp
     ${MQTT_LIB_DIR}/device_activation.cpp

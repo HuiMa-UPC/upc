@@ -52,6 +52,10 @@ struct MqttConfig {
     [[nodiscard]] std::string topic_log_collect_progress() const;
     [[nodiscard]] std::string topic_alarm_report() const;
     [[nodiscard]] std::string topic_alarm_ack() const;
+    [[nodiscard]] std::string topic_print_job_request() const;
+    [[nodiscard]] std::string topic_print_job_ack() const;
+    [[nodiscard]] std::string topic_print_task_report() const;
+    [[nodiscard]] std::string topic_print_thumbnail_ack() const;
 };
 
 MqttConfig load_mqtt_config();

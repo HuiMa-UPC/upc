@@ -199,6 +199,8 @@ GcodeManifestEntry parse_object(const std::string& obj)
     parse_string_field(obj, "thumb_small", e.thumb_small);
     parse_string_field(obj, "thumb_large", e.thumb_large);
     parse_string_field(obj, "thumb_print", e.thumb_print);
+    parse_string_field(obj, "cloud_job_id", e.cloud_job_id);
+    parse_string_field(obj, "cloud_req_id", e.cloud_req_id);
     return e;
 }
 
@@ -269,7 +271,9 @@ bool gcode_manifest_save(const std::string& path,
             << "      \"mtime\": " << e.mtime << ",\n"
             << "      \"thumb_small\": \"" << json_escape(e.thumb_small) << "\",\n"
             << "      \"thumb_large\": \"" << json_escape(e.thumb_large) << "\",\n"
-            << "      \"thumb_print\": \"" << json_escape(e.thumb_print) << "\"\n"
+            << "      \"thumb_print\": \"" << json_escape(e.thumb_print) << "\",\n"
+            << "      \"cloud_job_id\": \"" << json_escape(e.cloud_job_id) << "\",\n"
+            << "      \"cloud_req_id\": \"" << json_escape(e.cloud_req_id) << "\"\n"
             << "    }";
         if(i + 1 < entries.size()) {
             out << ",";
@@ -303,6 +307,8 @@ void gcode_manifest_upsert(std::vector<GcodeManifestEntry>& entries,
             const std::string old_small = e.thumb_small;
             const std::string old_large = e.thumb_large;
             const std::string old_print = e.thumb_print;
+            const std::string old_cloud_job_id = e.cloud_job_id;
+            const std::string old_cloud_req_id = e.cloud_req_id;
             const uint32_t old_layer_count = e.layer_count;
             const uint32_t old_duration_sec = e.duration_sec;
             e = item;
@@ -318,6 +324,11 @@ void gcode_manifest_upsert(std::vector<GcodeManifestEntry>& entries,
             if(e.duration_sec == 0 && old_duration_sec > 0) {
                 e.duration_sec = old_duration_sec;
             }
+            /* 准备/OVF 不带云端任务号。空着表示保留导入时写下的 id，
+             * 避免后写的清单把 cloud_job_id / cloud_req_id 盖掉。
+             * 新的 3MF 导入是整条替换，不走这里。 */
+            if(e.cloud_job_id.empty()) e.cloud_job_id = old_cloud_job_id;
+            if(e.cloud_req_id.empty()) e.cloud_req_id = old_cloud_req_id;
             return;
         }
     }

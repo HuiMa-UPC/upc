@@ -37,6 +37,8 @@ struct GcodeManifestEntry {
     std::string thumb_small;  /**< Local 列表小缩略图（建议 .rthm 绝对路径） */
     std::string thumb_large;  /**< Local 详情大缩略图（建议 .rthm 绝对路径） */
     std::string thumb_print;  /**< 打印态卡片缩略图（建议 .rthm 绝对路径） */
+    std::string cloud_job_id; /**< 云端 print_job 的 32 位十六进制；空=这次导入还没拿到或不上报 */
+    std::string cloud_req_id; /**< 本次导入的 req_id。同一次加载复用，新的 3MF 导入会换成新值 */
 };
 
 /** 从 path 读取 config.json；文件不存在返回空列表（仍返回 true） */
