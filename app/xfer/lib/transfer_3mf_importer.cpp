@@ -569,6 +569,75 @@ bool extract_entry(std::ifstream& in,
     return true;
 }
 
+uint32_t fnv1a32(const std::string& text)
+{
+    uint32_t hash = 2166136261u;
+    for(unsigned char c : text) {
+        hash ^= static_cast<uint32_t>(c);
+        hash *= 16777619u;
+    }
+    return hash;
+}
+
+} // namespace
+
+std::string ascii_safe_transfer_stem(const std::string& raw_stem)
+{
+    std::string out;
+    out.reserve(raw_stem.size());
+    bool stripped_non_ascii = false;
+    bool last_us = false;
+    const auto push_us = [&]() {
+        if(!out.empty() && !last_us) {
+            out.push_back('_');
+            last_us = true;
+        }
+    };
+    for(size_t i = 0; i < raw_stem.size();) {
+        const unsigned char c = static_cast<unsigned char>(raw_stem[i]);
+        if(c < 0x80u) {
+            const char ch = static_cast<char>(c);
+            if((ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') ||
+               (ch >= '0' && ch <= '9') || ch == '-' || ch == '_') {
+                out.push_back(ch);
+                last_us = (ch == '_');
+            } else {
+                push_us();
+            }
+            ++i;
+            continue;
+        }
+        stripped_non_ascii = true;
+        push_us();
+        if((c & 0xF8u) == 0xF0u) {
+            i += 4;
+        } else if((c & 0xF0u) == 0xE0u) {
+            i += 3;
+        } else if((c & 0xE0u) == 0xC0u) {
+            i += 2;
+        } else {
+            ++i;
+        }
+    }
+    while(!out.empty() && (out.front() == '_' || out.front() == '-')) {
+        out.erase(out.begin());
+    }
+    while(!out.empty() && (out.back() == '_' || out.back() == '-')) {
+        out.pop_back();
+    }
+    if(out.empty()) {
+        out = "transfer";
+    }
+    if(stripped_non_ascii) {
+        char hex[9] = {};
+        std::snprintf(hex, sizeof(hex), "%08x", fnv1a32(raw_stem));
+        out = std::string("model_") + hex + "_" + out;
+    }
+    return out;
+}
+
+namespace {
+
 std::string output_gcode_name(const std::string& package_name)
 {
     std::string base = std::filesystem::path(package_name).filename().string();
@@ -579,13 +648,7 @@ std::string output_gcode_name(const std::string& package_name)
     if(base.empty()) {
         base = "transfer";
     }
-    for(char& c : base) {
-        const unsigned char uc = static_cast<unsigned char>(c);
-        if(c == '/' || c == '\\' || uc < 0x20 || c == ':') {
-            c = '_';
-        }
-    }
-    return base + ".gcode";
+    return ascii_safe_transfer_stem(base) + ".gcode";
 }
 
 const ZipEntry* select_named_sidecar_entry(

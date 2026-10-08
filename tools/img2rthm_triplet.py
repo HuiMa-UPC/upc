@@ -53,7 +53,96 @@ def rgb888_to_rgb565_le(r: int, g: int, b: int) -> bytes:
     return struct.pack("<H", value)
 
 
-def resize_cover(img: Image.Image, width: int, height: int) -> Image.Image:
+def _is_cyan_support(r: int, g: int, b: int, a: int) -> bool:
+    if a <= 16:
+        return False
+    mx = max(r, g, b)
+    mn = min(r, g, b)
+    if mx < 40 or (mx - mn) * 255 // mx < 40:
+        return False
+    if r >= g or r >= b or g < 50:
+        return False
+    if abs(g - b) > 40 or b > g + 30:
+        return False
+    return True
+
+
+def erase_support_tint(img: Image.Image) -> Image.Image:
+    """Paint old Snowpath teal/cyan supports with the canvas background."""
+    rgba = img.convert("RGBA")
+    w, h = rgba.size
+    if w == 0 or h == 0:
+        return img
+    pix = rgba.load()
+    corners = [pix[0, 0], pix[w - 1, 0], pix[0, h - 1], pix[w - 1, h - 1]]
+    bg = tuple(sum(c[i] for c in corners) // 4 for i in range(4))
+    if any(abs(c[i] - bg[i]) > 24 for c in corners for i in range(4)):
+        return img
+    changed = False
+    for y in range(h):
+        for x in range(w):
+            r, g, b, a = pix[x, y]
+            if _is_cyan_support(r, g, b, a):
+                pix[x, y] = bg
+                changed = True
+    return rgba if changed else img
+
+
+def trim_empty_canvas(img: Image.Image) -> Image.Image:
+    """Crop uniform corner-color / transparent padding (Snowpath 3MF thumbs)."""
+    rgba = img.convert("RGBA")
+    w, h = rgba.size
+    if w == 0 or h == 0:
+        return img
+    pix = rgba.load()
+    corners = [pix[0, 0], pix[w - 1, 0], pix[0, h - 1], pix[w - 1, h - 1]]
+    bg = tuple(sum(c[i] for c in corners) // 4 for i in range(4))
+    if any(
+        abs(c[i] - bg[i]) > 24
+        for c in corners
+        for i in range(4)
+    ):
+        return img
+
+    color_tol = 18
+    alpha_tol = 16
+    minx, miny, maxx, maxy = w, h, -1, -1
+    for y in range(h):
+        for x in range(w):
+            r, g, b, a = pix[x, y]
+            if bg[3] <= alpha_tol:
+                is_bg = a <= alpha_tol
+            elif a <= alpha_tol:
+                is_bg = True
+            else:
+                is_bg = (
+                    abs(r - bg[0]) <= color_tol
+                    and abs(g - bg[1]) <= color_tol
+                    and abs(b - bg[2]) <= color_tol
+                )
+            if is_bg:
+                continue
+            minx = min(minx, x)
+            miny = min(miny, y)
+            maxx = max(maxx, x)
+            maxy = max(maxy, y)
+    if maxx < minx or maxy < miny:
+        return img
+    raw_w = maxx - minx + 1
+    raw_h = maxy - miny + 1
+    if raw_w < 8 or raw_h < 8:
+        return img
+    pad = max(4, max(raw_w, raw_h) // 10)
+    box = (
+        max(0, minx - pad),
+        max(0, miny - pad),
+        min(w, maxx + 1 + pad),
+        min(h, maxy + 1 + pad),
+    )
+    return img.crop(box)
+
+
+def resize_contain(img: Image.Image, width: int, height: int) -> Image.Image:
     src_w, src_h = img.size
     if src_w <= 0 or src_h <= 0:
         raise ValueError("invalid source image size")
@@ -62,18 +151,21 @@ def resize_cover(img: Image.Image, width: int, height: int) -> Image.Image:
     dst_ratio = width / height
 
     if src_ratio > dst_ratio:
-        new_h = height
-        new_w = max(1, int(round(height * src_ratio)))
-    else:
         new_w = width
         new_h = max(1, int(round(width / src_ratio)))
+    else:
+        new_h = height
+        new_w = max(1, int(round(height * src_ratio)))
 
     # Pillow < 9.1 没有 Image.Resampling；两种写法的 LANCZOS 值相同。
     resampling = getattr(Image, "Resampling", Image)
     resized = img.resize((new_w, new_h), resampling.LANCZOS)
-    ox = max(0, (new_w - width) // 2)
-    oy = max(0, (new_h - height) // 2)
-    return resized.crop((ox, oy, ox + width, oy + height))
+    corner = img.convert("RGBA").getpixel((0, 0))[:3]
+    canvas = Image.new("RGB", (width, height), corner)
+    ox = max(0, (width - new_w) // 2)
+    oy = max(0, (height - new_h) // 2)
+    canvas.paste(resized.convert("RGB"), (ox, oy))
+    return canvas
 
 
 def encode_rgb565_data(img: Image.Image) -> bytes:
@@ -142,8 +234,9 @@ def main() -> None:
 
     outputs = {}
     with Image.open(in_path) as img:
+        filled = trim_empty_canvas(erase_support_tint(img))
         for key, (w, h) in THUMB_SPECS.items():
-            prepared = resize_cover(img, w, h)
+            prepared = resize_contain(filled, w, h)
             data = encode_rgb565_data(prepared)
             out_path = out_dir / f"{base_name}_{key}.rthm"
             write_rthm(out_path, w, h, data)

@@ -231,6 +231,15 @@ void UiMsgProxy::init()
         }));
 
     subs_.push_back(bus.subscribe(
+        middleware::MsgType::GLAVO_Print_State_Ntf, middleware::ModuleId::UI,
+        [this](const middleware::Message& msg) {
+            middleware::PrintStateNtfPayload p{};
+            if(print_state_cb_ && read_inline_pod(msg, p)) {
+                print_state_cb_(p.mode);
+            }
+        }));
+
+    subs_.push_back(bus.subscribe(
         middleware::MsgType::GLAVO_Outer_Door_Confirm_Req, middleware::ModuleId::UI,
         [this](const middleware::Message&) {
             if(outer_door_confirm_req_cb_) {
@@ -1079,6 +1088,11 @@ void UiMsgProxy::register_print_prep_progress(PrintPrepProgressCb cb)
 void UiMsgProxy::register_print_start_rejected(PrintStartRejectedCb cb)
 {
     print_start_rejected_cb_ = std::move(cb);
+}
+
+void UiMsgProxy::register_print_state(PrintStateCb cb)
+{
+    print_state_cb_ = std::move(cb);
 }
 
 void UiMsgProxy::register_outer_door_confirm_req(OuterDoorConfirmReqCb cb)

@@ -34,6 +34,7 @@ using PrintPowderLowCb = std::function<void()>;
 using OpticalPathProgressCb = std::function<void(const middleware::OpticalPathProgressPayload&)>;
 using PrintPrepProgressCb = std::function<void(const middleware::PrintPrepProgressPayload&)>;
 using PrintStartRejectedCb = std::function<void(const middleware::PrintStartRejectedPayload&)>;
+using PrintStateCb = std::function<void(uint32_t mode)>;
 using OuterDoorConfirmReqCb = std::function<void()>;
 using PlatePlaceConfirmReqCb = std::function<void()>;
 using SupplyStatusCb   = std::function<void(const middleware::SupplyStatusPayload&)>;
@@ -154,6 +155,8 @@ public:
     void register_print_prep_progress(PrintPrepProgressCb cb);
     /** 起印被后端拒绝（光路/测高/TCP/关内门等）：UI 跳终止结果页。 */
     void register_print_start_rejected(PrintStartRejectedCb cb);
+    /** Snowpath / 本机起印边沿：`mode` 复用 UserHomeStatus（2=Printing）。 */
+    void register_print_state(PrintStateCb cb);
     /** 起印前外门未关：弹确认窗；Confirm/Cancel 后 send_outer_door_confirm。 */
     void register_outer_door_confirm_req(OuterDoorConfirmReqCb cb);
     /** @param skip false=Confirm 后再检门；true=Cancel 跳过外门检测。 */
@@ -296,6 +299,7 @@ private:
     OpticalPathProgressCb optical_path_progress_cb_;
     PrintPrepProgressCb print_prep_progress_cb_;
     PrintStartRejectedCb print_start_rejected_cb_;
+    PrintStateCb print_state_cb_;
     OuterDoorConfirmReqCb outer_door_confirm_req_cb_;
     PlatePlaceConfirmReqCb plate_place_confirm_req_cb_;
     SupplyStatusCb   supply_status_cb_;
