@@ -256,6 +256,28 @@ private:
     void handle_rtsp_rsp(const middleware::Message& msg, const char* expect_cmd);
     bool track_pending_ack(const std::string& req_id, const std::string& cmd);
     bool start_log_collect(LogCollectCommand cmd);
+    void start_print_job_worker();
+    void stop_print_job_worker();
+    void enqueue_existing_print_jobs();
+    void print_job_worker_loop();
+    /** @return 0 结束，1 计入一次失败后重试，2 MQTT 未连上，不计次数。 */
+    int process_print_job_staging(const std::string& staging_dir);
+    void on_print_job_report(const middleware::Message& msg);
+    void handle_print_job_ack(const std::string& payload);
+    void subscribe_print_job_ack();
+    bool publish_mqtt_qos1(const std::string& topic, const std::string& payload);
+    std::string build_uplink_json(const char* type,
+                                  const std::string& req_id,
+                                  const std::string& data_json);
+    bool request_print_job_ack(const std::string& req_id,
+                               std::string& job_id,
+                               std::string& upload_url,
+                               std::string& object_key,
+                               int64_t& expires_at);
+    bool bind_cloud_job_id(const std::string& gcode_name,
+                           const std::string& req_id,
+                           const std::string& job_id);
+    void notify_glavo_print_job(const std::string& req_id, const std::string& job_id);
     void run_log_collect_task(LogCollectCommand cmd);
     void publish_log_collect_error(const LogCollectCommand& cmd, const char* reason);
     void publish_log_collect_accepted(const LogCollectCommand& cmd,
@@ -512,6 +534,21 @@ private:
     std::thread log_collect_thread_;
     bool log_collect_running_ = false;
     uint64_t last_log_collect_attempt_ms_ = 0;
+
+    /* 云端打印任务上报。和切片 HTTP、开打无关；放弃时只删暂存目录。 */
+    std::mutex print_job_mtx_;
+    std::condition_variable print_job_cv_;
+    std::thread print_job_thread_;
+    std::atomic<bool> print_job_stop_{false};
+    std::vector<std::string> print_job_queue_;
+    std::mutex print_job_ack_mtx_;
+    std::condition_variable print_job_ack_cv_;
+    std::string print_job_wait_req_;
+    bool print_job_ack_ready_ = false;
+    std::string print_job_ack_job_id_;
+    std::string print_job_ack_upload_url_;
+    std::string print_job_ack_object_key_;
+    int64_t print_job_ack_expires_ = 0;
 
     std::atomic<uint32_t> seq_{0};
 

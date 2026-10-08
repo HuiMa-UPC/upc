@@ -152,6 +152,26 @@ std::string MqttConfig::topic_alarm_ack() const
     return topic_prefix() + "alarm/ack";
 }
 
+std::string MqttConfig::topic_print_job_request() const
+{
+    return topic_prefix() + "print_job/request";
+}
+
+std::string MqttConfig::topic_print_job_ack() const
+{
+    return topic_prefix() + "print_job/ack";
+}
+
+std::string MqttConfig::topic_print_task_report() const
+{
+    return topic_prefix() + "print_task/report";
+}
+
+std::string MqttConfig::topic_print_thumbnail_ack() const
+{
+    return topic_prefix() + "print_thumbnail/ack";
+}
+
 //桌面调试
 // "SNOWPOD-050986DC98001000";
 // "bacff0d7cc54115f6c268e4eabc5538670346c2a084037079796f50abd52e985"

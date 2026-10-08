@@ -29,6 +29,10 @@ struct Transfer3mfImportResult {
     uint64_t printable_size = 0;
     uint32_t line_count = 0;
     uint32_t layer_count = 0;
+    /** Metadata JSON 原文。云端 plate_meta 原样透传，导入失败时为空。 */
+    std::string plate_meta_json;
+    /** 留到云端上报的原始 PNG。导入失败时已删除；成功后由 Xfr 挪进暂存目录。 */
+    std::string thumbnail_png_path;
 };
 
 /**

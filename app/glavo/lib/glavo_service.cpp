@@ -1035,6 +1035,7 @@ bool GlavoService::start()
         /* 消息中心：MCU 报警复位 + 快照请求 */
         middleware::MsgType::UI_Alarm_Reset_Ntf,
         middleware::MsgType::UI_Alarm_Snapshot_Ntf,
+        middleware::MsgType::MQTT_Print_Job_Id_Ntf,
     };
     for(middleware::MsgType t : k_subs) {
         subscribe(t, [this](const middleware::Message& msg) { on_message(msg); });
@@ -1432,6 +1433,9 @@ void GlavoService::handle_message(const middleware::Message& msg)
             break;
         case middleware::MsgType::UI_Cloud_Result_Dismiss_Ntf:
             handle_cloud_result_dismiss(msg);
+            break;
+        case middleware::MsgType::MQTT_Print_Job_Id_Ntf:
+            handle_print_job_id(msg);
             break;
         case middleware::MsgType::UI_Print_Pause_Req:
             handle_print_pause(msg);
@@ -2146,9 +2150,9 @@ bool GlavoService::run_print_prepare(middleware::PrintFileSource source, uint32_
     entry.material_g  = 0.f;
     entry.mtime       = static_cast<int64_t>(st.st_mtime);
 
-    if(source == middleware::PrintFileSource::Usb) {
-        gcode_manifest_load(local_config_path(), local_manifest_);
-    }
+    /* 先读盘再 upsert。切片导入写入的 cloud_job_id / cloud_req_id 只在盘上，
+     * 用开机时的内存清单直接保存会把它们盖掉。 */
+    gcode_manifest_load(local_config_path(), local_manifest_);
     gcode_manifest_upsert(local_manifest_, entry);
     if(!gcode_manifest_save(local_config_path(), local_manifest_)) {
         UPC_LOG_GLAVO_SERVICE(Warn, "prepare: config save failed");
@@ -3047,6 +3051,37 @@ void GlavoService::cloud_publish()
                           cloud_layer_, cloud_total_layers_, cloud_progress_pct_);
 }
 
+void GlavoService::handle_print_job_id(const middleware::Message& msg)
+{
+    middleware::PrintJobIdNtfPayload payload{};
+    if(!read_inline_pod(msg.payload, payload)) {
+        return;
+    }
+    payload.req_id[sizeof(payload.req_id) - 1] = '\0';
+    payload.job_id[sizeof(payload.job_id) - 1] = '\0';
+    /* 结果页已经挂起，或已经回到 idle：不再补一帧 printing。 */
+    if(std::strcmp(cloud_mode_, "printing") != 0 || cloud_result_hold_) {
+        return;
+    }
+    if(cloud_job_id_[0] != '\0' || std::strlen(payload.job_id) != 32) {
+        return;
+    }
+
+    std::vector<GcodeManifestEntry> entries;
+    if(!gcode_manifest_load(local_config_path(), entries)) {
+        return;
+    }
+    for(const GcodeManifestEntry& entry : entries) {
+        if(entry.cloud_req_id != payload.req_id || entry.name != cloud_print_name_) {
+            continue;
+        }
+        std::snprintf(cloud_job_id_, sizeof(cloud_job_id_), "%s", payload.job_id);
+        cloud_job_valid_ = true;
+        cloud_publish();
+        return;
+    }
+}
+
 void GlavoService::cloud_begin_print(const std::string& path)
 {
     cloud_dismiss_pending_ = false;
@@ -3054,8 +3089,23 @@ void GlavoService::cloud_begin_print(const std::string& path)
     const auto slash = path.find_last_of('/');
     const std::string base =
         (slash == std::string::npos) ? path : path.substr(slash + 1);
-    std::snprintf(cloud_job_id_, sizeof(cloud_job_id_), "%s", base.c_str());
-    cloud_job_valid_ = true;
+    cloud_print_name_ = base;
+    /* job_id 只用云端的 32 位十六进制。还没拿到就让 state.job 空着，
+     * 不能拿 G-code 文件名去顶。 */
+    cloud_job_id_[0] = '\0';
+    cloud_job_valid_ = false;
+    std::vector<GcodeManifestEntry> cloud_entries;
+    if(gcode_manifest_load(local_config_path(), cloud_entries)) {
+        for(const GcodeManifestEntry& entry : cloud_entries) {
+            if(entry.name != base || entry.cloud_job_id.size() != 32) {
+                continue;
+            }
+            std::snprintf(cloud_job_id_, sizeof(cloud_job_id_), "%s",
+                          entry.cloud_job_id.c_str());
+            cloud_job_valid_ = true;
+            break;
+        }
+    }
     cloud_layer_ = 0;
     cloud_total_layers_ = prepared_layer_count_;
     cloud_progress_pct_ = 0;
@@ -3159,6 +3209,7 @@ void GlavoService::cloud_release_to_idle()
     cloud_dismiss_pending_ = false;
     cloud_job_valid_ = false;
     cloud_job_id_[0] = '\0';
+    cloud_print_name_.clear();
     cloud_layer_ = 0;
     cloud_total_layers_ = 0;
     cloud_progress_pct_ = 0;

@@ -2,6 +2,7 @@
 
 #include "media_paths.hpp"
 #include "msg_port.hpp"
+#include "xfr_paths.hpp"
 #include "parser_manager.hpp"
 #include "print_history_manifest.hpp"
 #include "rs_log.hpp"
@@ -69,6 +70,127 @@ bool read_inline_pod_bytes(const middleware::MsgPayload& payload,
 }
 
 } // namespace
+
+/** 32 位小写十六进制 req_id。重试必须沿用同一次导入的这个值。 */
+std::string make_cloud_req_id()
+{
+    std::string id;
+    {
+        std::ifstream in("/proc/sys/kernel/random/uuid");
+        std::getline(in, id);
+    }
+    id.erase(std::remove(id.begin(), id.end(), '-'), id.end());
+    for(char& c : id) {
+        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    }
+    const bool hex32 = id.size() == 32 &&
+        std::all_of(id.begin(), id.end(), [](unsigned char c) {
+            return std::isxdigit(c) != 0;
+        });
+    if(hex32) {
+        return id;
+    }
+    char buf[33];
+    const unsigned long long now = static_cast<unsigned long long>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count());
+    std::snprintf(buf, sizeof(buf), "%032llx", now & 0xffffffffffffffffULL);
+    return std::string(buf);
+}
+
+bool write_exact_file(const std::filesystem::path& path, const std::string& text)
+{
+    std::ofstream out(path, std::ios::binary | std::ios::trunc);
+    if(!out) {
+        return false;
+    }
+    out.write(text.data(), static_cast<std::streamsize>(text.size()));
+    return static_cast<bool>(out);
+}
+
+/**
+ * 导入已经成功之后才调用。只把云端要用的小缓存放进暂存目录并通知 MQTT。
+ * 不等待云端回包，失败也不影响即将返回的 HTTP 200。
+ */
+void stage_cloud_print_job(const Transfer3mfImportResult& imported,
+                           const std::string& model_name)
+{
+    std::error_code ec;
+    const auto drop_hold = [&]() {
+        if(!imported.thumbnail_png_path.empty()) {
+            std::filesystem::remove(imported.thumbnail_png_path, ec);
+        }
+    };
+
+    const std::string req_id = make_cloud_req_id();
+    const std::filesystem::path dir =
+        std::filesystem::path(UPC_PRINT_JOB_STAGING_DIR) / req_id;
+    std::filesystem::create_directories(dir, ec);
+    if(ec) {
+        UPC_LOG_XFR_SERVICE(Warn, "print job stage mkdir failed req=%s err=%s",
+                            req_id.c_str(), ec.message().c_str());
+        drop_hold();
+        return;
+    }
+
+    if(!write_exact_file(dir / "plate_meta.json", imported.plate_meta_json) ||
+       !write_exact_file(dir / "model_name", model_name) ||
+       !write_exact_file(dir / "gcode_name", imported.printable_name)) {
+        UPC_LOG_XFR_SERVICE(Warn, "print job stage write failed req=%s", req_id.c_str());
+        std::filesystem::remove_all(dir, ec);
+        drop_hold();
+        return;
+    }
+
+    if(!imported.thumbnail_png_path.empty()) {
+        std::filesystem::rename(imported.thumbnail_png_path, dir / "thumb.png", ec);
+        if(ec) {
+            UPC_LOG_XFR_SERVICE(Warn, "print job stage png move failed req=%s err=%s",
+                                req_id.c_str(), ec.message().c_str());
+            std::filesystem::remove(imported.thumbnail_png_path, ec);
+        }
+    }
+
+    std::vector<GcodeManifestEntry> manifest;
+    if(!gcode_manifest_load(UPC_LOCAL_GCODE_CONFIG, manifest)) {
+        UPC_LOG_XFR_SERVICE(Warn, "print job manifest load failed req=%s", req_id.c_str());
+    } else {
+        bool found = false;
+        for(GcodeManifestEntry& entry : manifest) {
+            if(entry.name != imported.printable_name) {
+                continue;
+            }
+            entry.cloud_req_id = req_id;
+            entry.cloud_job_id.clear();
+            found = true;
+            break;
+        }
+        if(!found) {
+            UPC_LOG_XFR_SERVICE(Warn, "print job manifest entry missing gcode=%s",
+                                imported.printable_name.c_str());
+        } else if(!gcode_manifest_save(UPC_LOCAL_GCODE_CONFIG, manifest)) {
+            UPC_LOG_XFR_SERVICE(Warn, "print job manifest save failed req=%s", req_id.c_str());
+        }
+    }
+
+    middleware::PrintJobReportNtfPayload payload{};
+    std::snprintf(payload.staging_dir, sizeof(payload.staging_dir), "%s",
+                  dir.string().c_str());
+    middleware::Message msg(middleware::MsgType::XFR_Print_Job_Report_Ntf,
+                            middleware::ModuleId::APP_XFR,
+                            middleware::ModuleId::APP_MQTT);
+    msg.payload = middleware::MsgPayload::from_bytes(
+        reinterpret_cast<const uint8_t*>(&payload), sizeof(payload));
+    if(!middleware::MsgPort::instance().publish_async(msg)) {
+        /* 进程重启后 MQTT 会扫暂存目录，这次通知丢了也不删缓存。 */
+        UPC_LOG_XFR_SERVICE(Warn, "print job notify mqtt failed req=%s", req_id.c_str());
+    } else {
+        UPC_LOG_XFR_SERVICE(Info, "print job staged req=%s gcode=%s model=%s png=%d",
+                            req_id.c_str(), imported.printable_name.c_str(),
+                            model_name.c_str(),
+                            std::filesystem::exists(dir / "thumb.png") ? 1 : 0);
+    }
+}
 
 XfrService::XfrService(const XfrConfig& cfg)
     : cfg_(cfg),
@@ -414,6 +536,8 @@ HttpResponse XfrService::handle_upload_complete(const HttpRequest& req, const st
             last_printable_name_ = imported.printable_name;
         }
         notify_file_received(imported.printable_name, imported.printable_size);
+        /* 云端上报独立于这次 HTTP 应答：只落暂存并通知 MQTT，不等回包。 */
+        stage_cloud_print_job(imported, r.file_name);
         UPC_LOG_XFR_SERVICE(Info,
             "upload complete accepted 3mf=%s gcode=%s size=%llu lines=%u layers=%u",
             r.file_name.c_str(), imported.printable_name.c_str(),

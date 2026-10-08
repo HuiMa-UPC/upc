@@ -3,6 +3,7 @@
 
 #include "gcode_manifest.hpp"
 #include "rs_log.hpp"
+#include "xfr_paths.hpp"
 
 #include <zlib.h>
 
@@ -925,6 +926,23 @@ Transfer3mfImportResult Transfer3mfImporter::import_file(
         std::filesystem::remove(meta_staged, ec);
         return fail(422, "3MF_META_INVALID", detail);
     }
+    /* 云端要整份 JSON，不能只留已经解析出的层数和时长。读完再删临时文件。 */
+    std::string plate_meta_text;
+    {
+        std::ifstream meta_in(meta_staged.string(), std::ios::binary);
+        if(meta_in) {
+            plate_meta_text.assign(std::istreambuf_iterator<char>(meta_in),
+                                   std::istreambuf_iterator<char>());
+        }
+    }
+    std::string cloud_png_hold;
+    const auto drop_cloud_png_hold = [&]() {
+        if(cloud_png_hold.empty()) {
+            return;
+        }
+        std::filesystem::remove(cloud_png_hold, ec);
+        cloud_png_hold.clear();
+    };
     std::filesystem::remove(meta_staged, ec);
 
     const std::string asset_stem =
@@ -965,6 +983,27 @@ Transfer3mfImportResult Transfer3mfImporter::import_file(
                           png_staged.string(), thumbnail_targets, &thumbnail_reason)) {
                     std::filesystem::remove(png_staged, ec);
                 } else {
+                    /* 先留一份原始 PNG 给云端上报。RTHM 不依赖这份拷贝。 */
+                    std::error_code hold_ec;
+                    std::filesystem::create_directories(UPC_PRINT_JOB_STAGING_DIR, hold_ec);
+                    if(!hold_ec) {
+                        const std::filesystem::path hold =
+                            std::filesystem::path(UPC_PRINT_JOB_STAGING_DIR) /
+                            (".hold-" + asset_stem + "-" +
+                             std::to_string(static_cast<long long>(std::time(nullptr))) +
+                             ".png");
+                        std::filesystem::copy_file(
+                            png_staged, hold,
+                            std::filesystem::copy_options::overwrite_existing,
+                            hold_ec);
+                        if(!hold_ec) {
+                            cloud_png_hold = hold.string();
+                        } else {
+                            UPC_LOG_XFR_SERVICE(Warn,
+                                "3mf cloud png hold failed reason=%s",
+                                hold_ec.message().c_str());
+                        }
+                    }
                     /* PNG 只作解码缓存，RTHM 生成后立即删除。 */
                     std::filesystem::remove(png_staged, ec);
                     thumbnails_ready = true;
@@ -984,6 +1023,7 @@ Transfer3mfImportResult Transfer3mfImporter::import_file(
 
     std::vector<GcodeManifestEntry> manifest;
     if(!gcode_manifest_load(UPC_LOCAL_GCODE_CONFIG, manifest)) {
+        drop_cloud_png_hold();
         std::filesystem::remove(gcode_staged, ec);
         std::filesystem::remove(png_staged, ec);
         for(const TransferThumbnailTarget& target : thumbnail_targets) {
@@ -1026,6 +1066,7 @@ Transfer3mfImportResult Transfer3mfImporter::import_file(
         std::filesystem::path(UPC_LOCAL_GCODE_CONFIG).string() + ".importing";
     std::filesystem::remove(staged_manifest, ec);
     if(!gcode_manifest_save(staged_manifest.string(), manifest)) {
+        drop_cloud_png_hold();
         std::filesystem::remove(gcode_staged, ec);
         std::filesystem::remove(png_staged, ec);
         for(const TransferThumbnailTarget& target : thumbnail_targets) {
@@ -1046,10 +1087,12 @@ Transfer3mfImportResult Transfer3mfImporter::import_file(
             thumbnail_targets[2].path, print_final, backup_path(print_final)});
     }
     if(!install_assets(&assets, &detail)) {
+        drop_cloud_png_hold();
         std::filesystem::remove(staged_manifest, ec);
         return fail(500, "3MF_IO_ERROR", detail);
     }
     if(std::rename(staged_manifest.string().c_str(), UPC_LOCAL_GCODE_CONFIG) != 0) {
+        drop_cloud_png_hold();
         rollback_assets(&assets);
         std::filesystem::remove(staged_manifest, ec);
         return fail(500, "3MF_MANIFEST_ERROR", "cannot install G-code manifest");
@@ -1088,6 +1131,8 @@ Transfer3mfImportResult Transfer3mfImporter::import_file(
     result.printable_size = gcode_size;
     result.line_count = 0;
     result.layer_count = layer_count;
+    result.plate_meta_json = std::move(plate_meta_text);
+    result.thumbnail_png_path = std::move(cloud_png_hold);
     return result;
 }
 
