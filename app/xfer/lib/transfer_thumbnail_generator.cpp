@@ -320,7 +320,7 @@ ContentBox full_box(const DecodedPng& src, const uint8_t bg[4])
 }
 
 /**
- * Snowpath Thumbnails/*.png 把模型画在大画布正中，四周是均匀底色或透明。
+ * Snowpath 的 Thumbnails png 把模型画在大画布正中，四周是均匀底色或透明。
  * 四角颜色一致才抠内容；检测失败或内容过小则退回整图，避免误裁。
  */
 ContentBox find_content_box(const DecodedPng& src)

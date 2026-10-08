@@ -128,10 +128,8 @@ void MediaService::shutdown()
 void MediaService::tick()
 {
     const uint64_t now = monotonic_ms();
-    bool stream_up = false;
     {
         std::lock_guard<std::mutex> lock(state_mtx_);
-        stream_up = stream_up_;
         if(!stream_up_) {
             if(start_req_sent_ && now - last_start_req_ms_ < kStartRetryMs) {
                 return;

@@ -1367,60 +1367,6 @@ void try_resume_pending_purify(void)
     start_purify_now();
 }
 
-void on_purify_door_confirm_ok(lv_event_t * /*e*/)
-{
-    sync_outer_door_from_snap();
-    if(g_outer_door_open) {
-        ui_toast_show("Close the outer door fully", ui_color_danger, 1800);
-        return;
-    }
-    start_purify_now();
-}
-
-void on_purify_door_confirm_cancel(lv_event_t * /*e*/)
-{
-    g_pending_purify = false;
-    close_purify_door_dlg();
-}
-
-/** Manual 吹粉须外门关：未关则弹确认，关到位后再开。 */
-void show_purify_door_dlg(void)
-{
-    if(g_purify_door_dlg) {
-        return;
-    }
-    ui_modal_dialog_cfg_t cfg =
-        ui_modal_dialog_cfg_user("Close the outer door", USER_DLG_W, true);
-    cfg.light_theme = true;
-    cfg.with_close_btn = false;
-    g_purify_door_dlg = ui_modal_dialog_open(lv_layer_top(), &cfg);
-    if(!g_purify_door_dlg) {
-        return;
-    }
-    lv_obj_t *sub = ui_user_make_body_label(
-        g_purify_door_dlg->body,
-        "Powder cleaning needs the outer door closed. Close it fully, then confirm.");
-    lv_label_set_long_mode(sub, LV_LABEL_LONG_MODE_WRAP);
-    lv_obj_set_width(sub, LV_PCT(100));
-    lv_obj_set_style_text_align(sub, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_flex_flow(g_purify_door_dlg->footer, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_style_pad_row(g_purify_door_dlg->footer, USER_PAD, 0);
-    lv_obj_set_flex_align(g_purify_door_dlg->footer, LV_FLEX_ALIGN_START,
-                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_t *ok = ui_user_make_confirm_footer_btn(
-        g_purify_door_dlg->footer, "Confirm",
-        true, user_light_nav_on, true,
-        on_purify_door_confirm_ok, nullptr);
-    lv_obj_set_flex_grow(ok, 0);
-    lv_obj_set_width(ok, LV_PCT(100));
-    lv_obj_t *cancel = ui_user_make_confirm_footer_btn(
-        g_purify_door_dlg->footer, "Cancel",
-        false, user_light_nav_on, true,
-        on_purify_door_confirm_cancel, nullptr);
-    lv_obj_set_flex_grow(cancel, 0);
-    lv_obj_set_width(cancel, LV_PCT(100));
-}
-
 /** 按钮里那枚图标。make_round_btn() / make_flat_btn() / make_plate_btn() 建的都是
  *  「按钮 → 图标盒 → 图」三层，图标盒是按钮的第一个子节点。 */
 lv_obj_t *btn_icon_img(lv_obj_t *btn)
