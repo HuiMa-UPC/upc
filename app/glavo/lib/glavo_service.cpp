@@ -774,7 +774,7 @@ uint32_t GlavoService::module_id() noexcept
  * @brief 初始化：装配置、挂回调、起 WiFi 管理器；**不起** worker（需再调 start）
  *
  * 顺序要点：
- * 1) cal.csv 覆盖门控/ACK/PM2.5/延时帧率/H264 码率等运行时开关
+ * 1) cal.csv 覆盖 ACK/PM2.5/延时帧率/H264 码率等运行时开关
  * 2) Parser → RingBuffer sink 绑定到 McuLink（解析产物才能下发）
  * 3) McuLink 各类回调只「入队/置 pending」，真正业务进 worker_loop
  * 4) WifiManager::init 会拉起其后台线程（生命周期到 stop）

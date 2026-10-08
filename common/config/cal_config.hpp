@@ -9,10 +9,6 @@ namespace upc::config {
 struct CalConfigOptions {
     bool has_config_section = false;
 
-    /** 仍解析 `GLAVO_DOOR_REAL_OPEN_ENABLE`，Glavo 不再用它门控开门前 PM。 */
-    bool has_glavo_door_real_open_enable = false;
-    bool glavo_door_real_open_enable = false;
-
     bool has_glavo_serial_ack_enable = false;
     bool glavo_serial_ack_enable = false;
 
