@@ -2047,7 +2047,9 @@ void fill_active_file_from_last_xfr(void)
         }
     }
     control_file_t f = {};
-    std::snprintf(f.name, sizeof(f.name), "%s", g_last_xfr_file);
+    /* 清单文件名是 64 字节，远程名最长 127。对不齐时只留能放下的前缀。 */
+    std::memcpy(f.name, g_last_xfr_file, sizeof(f.name) - 1);
+    f.name[sizeof(f.name) - 1] = '\0';
     g_active_file = f;
 }
 

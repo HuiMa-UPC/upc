@@ -30,7 +30,7 @@ struct GcodeManifestEntry {
     std::string name;
     uint32_t    file_size    = 0;
     uint32_t    line_count   = 0;
-    uint32_t    layer_count  = 0; /**< 总层数：3MF 来自 Metadata.json 的 layers；其它可来自 M3000（0=未知或无） */
+    uint32_t    layer_count  = 0; /**< 总层数：3MF 来自 Metadata.json 的 layers；Snowpath G-code 来自文件头 Total layers；其它可来自 M3000（0=未知或无） */
     uint32_t    duration_sec = 0;
     float       material_g   = 0.f;
     int64_t     mtime        = 0;
