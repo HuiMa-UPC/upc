@@ -36,8 +36,10 @@
   `UI_Print_Prepare_Req` → `UI_Print_Start_Req`（等 Prepare 回包，最多 5s）。
   成功回 `200 {"state":"printing"}`。已在打印中 `409 PRINTER_BUSY`；
   清单对不上 `404 FILE_NOT_FOUND`；Prepare 失败 `500` / 超时 `504`。
-  板端 Skip / Keep Z / 外门确认仍走 Glavo 原门控。`GET /print/status` 仍以
-  Glavo 打印态为准。
+  设置页 Advanced Print **Auto Print After Transfer** 默认关（`UPC_XFR_AUTO_PRINT_FILE`
+  缺文件或非 `'1'`）。关掉时 `print/start` 回 `200 {"state":"idle"}`，**不向 Glavo 起印**；
+  上传与 Local 清单不受影响。打开后仍回 `200 {"state":"printing"}`。板端 Skip / Keep Z /
+  外门确认仍走 Glavo 原门控。`GET /print/status` 仍以 Glavo 打印态为准。
 - `POST /print/cancel` / `/print/stop` / `/print/pause` / `/print/resume`：body 仅 `job_id`
   （与 6.3 相同：优先 `frames_dir`，打印中多为 `tmp`，也认 6.2 的 `j_*`；
   延时摄影清单到达后仍保留原来的 `j_*`，避免切片软件 cancel 404）。
@@ -71,6 +73,7 @@
 - `UPC_XFR_STORAGE_DIR`（默认 `/userdata/transport`）
 - `UPC_XFR_GCODE_DIR`（默认 `UPC_LOCAL_GCODE_DIR`，即 `/userdata/Gcode`）
 - `UPC_XFR_TOKEN_FILE`（默认 `/userdata/transport/.xfr_tokens`）
+- `UPC_XFR_AUTO_PRINT_FILE`（默认 `/userdata/transport/auto_print`；仅首字节 `1`=下发后自动起印，缺文件=关）
 - `UPC_XFR_REQUIRE_AUTH`（默认 `1`）
 - `UPC_XFR_CHUNK_MAX`（默认 `4194304`）
 - `UPC_DEVICE_SN` / `UPC_DEVICE_MODEL`

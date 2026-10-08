@@ -514,6 +514,16 @@ HttpResponse XfrService::handle_print_start(const HttpRequest& req)
     std::string file_id;
     (void)json_get_string(body, "file_id", &file_id);
 
+    /* 设置页关掉后：上传/清单仍走，回 200 idle 不向 Glavo 起印（切片软件把非 200 当发送失败）。 */
+    if (!auto_print_after_transfer_enabled()) {
+        UPC_LOG_XFR_SERVICE(Info, "print/start ignored: auto print after transfer off");
+        HttpResponse idle;
+        idle.status = 200;
+        idle.body = std::string("{\"job_id\":\"\",\"state\":\"idle\",\"plate_id\":") +
+                    std::to_string(plate_id) + "}";
+        return idle;
+    }
+
     const uint64_t now_ms = static_cast<uint64_t>(
         std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::steady_clock::now().time_since_epoch())

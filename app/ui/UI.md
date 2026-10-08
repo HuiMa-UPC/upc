@@ -2354,6 +2354,7 @@ Storage / Advanced Print / Privacy & Security / About / Debug。
   另有 **Keep Z Position**（默认关：打开后整个打印会话绝对不动 Z——不起印 −10、跳过测高与
   工作高度抬升、开关内门前不降 Z、终止/失败收尾不改 Z，Manual/调试 Z 点动与 Home 也丢弃），
   以及 **Transfer Box**（默认开，与调试页同一枚本地开关：取件后走转运盒三步，自检阶段终止的除外；关掉则开门即回 IDLE），
+  以及 **Auto Print After Transfer**（默认关，落盘 `/userdata/transport/auto_print`：开则切片软件 `print/start` 回 `printing` 并起印；关则只保留下发，Xfr 回 `200 {"state":"idle"}`），
   以及 Height Calibration 的 Start，
   参数与调试页 Laser 卡相同（-5…12 mm，步长 1）。
   测高开关默认开，仅本次 Glavo 进程有效。

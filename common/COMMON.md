@@ -456,7 +456,7 @@ rongsu_broker ──listen──► /tmp/upc_broker.sock ◄── UI / Glavo / 
 | `common/fs_manifest/image_paths.hpp` | `UPC_IMAGE_ROOT`（soc/mcu/galvo/tmp OTA 落盘） | 平台 / MQTT / Glavo |
 | `common/fs_manifest/ota_image_pair.*` / [OTA_IMAGE.md](fs_manifest/OTA_IMAGE.md) | MCU/Galvo AB 文件名与最高版本选取 | 平台 / MQTT / Glavo |
 | `common/fs_manifest/message_paths.hpp` | `UPC_MESSAGE_DIR`（报警历史 jsonl） | 平台 / UI |
-| `common/fs_manifest/xfr_paths.hpp` | `UPC_XFR_STORAGE_DIR`（局域网上传暂存与 token） | 平台 / Xfer |
+| `common/fs_manifest/xfr_paths.hpp` | `UPC_XFR_STORAGE_DIR`（局域网上传暂存与 token）；`UPC_XFR_AUTO_PRINT_FILE`（设置页「下发后自动打印」，缺文件=关，仅 `'1'`=开） | 平台 / Xfer / UI |
 | `common/config/cal_config.hpp` | `UPC_CAL_PATH`（默认 `/userdata/CAL/cal.csv`） | 平台 / Glavo / Media / UI / Xfer |
 | `common/nv12_copy.hpp` | `upc::copy_nv12_tight`：带 stride 的 NV12 拷成紧凑缓冲（Media / Visual 共用） | 平台 / Media / Visual |
 | `app/glavo/lib/device_config.hpp` | `GLAVO_O2_CAL_JSON_PATH`（默认 `/userdata/CAL/o2_cal.json`）氧 K 标定 | Glavo |

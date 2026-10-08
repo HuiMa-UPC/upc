@@ -491,6 +491,8 @@ Body：该区间的原始字节。
 ```
 
 - 错误：`409 PRINTER_BUSY`（已有任务在打印）；`404 FILE_NOT_FOUND`。
+- 设置页关掉「下发后自动打印」时仍 `200`，body 为
+  `{ "job_id": "", "state": "idle", "plate_id": 0 }`，文件已在 Local，不启动打印。
 
 
 

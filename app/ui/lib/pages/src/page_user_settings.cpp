@@ -13,6 +13,7 @@
 #include "control.hpp"
 #include "msg_runtime.hpp"
 #include "config/cal_config.hpp"
+#include "xfr_paths.hpp"
 
 #include <cstdint>
 #include <cstdio>
@@ -44,6 +45,7 @@
  *   - Display & Sound：LCD 背光滑条（sysfs `/sys/class/backlight`，1~100%）。
  *   - Advanced Print：打印前门控，默认开，与调试页同一套 Glavo 开关；
  *     Transfer Box 与调试页同一枚本地开关，默认开（取件后走转运盒三步，自检阶段终止的除外）；
+ *     Auto Print After Transfer 默认关（落盘，Xfr 读）：关则切片软件只下发、print/start 回 idle；
  *     Calibration 内的 Work Height 是测高收到约 1mm 后再向上补的目标高度；
  *     Height Calibration 的 Start 与调试页 Laser 卡相同。
  *   - 子导航图标暂用 LV_SYMBOL 占位，待 SVG 资源到位再替换。
@@ -369,6 +371,7 @@ lv_obj_t *g_gate_powder = nullptr;
 lv_obj_t *g_gate_pm25 = nullptr;
 lv_obj_t *g_gate_hold_z = nullptr;
 lv_obj_t *g_gate_transfer = nullptr;
+lv_obj_t *g_gate_auto_print = nullptr;
 lv_obj_t *g_height_calib_lbl = nullptr;
 lv_obj_t *g_plate_work_z_ta = nullptr;
 /** 回读改开关时挡住 VALUE_CHANGED，避免再发一帧 Set。 */
@@ -386,6 +389,7 @@ enum class PrintGate : uint8_t {
     DoorPm,
     HoldPrepZ,
     TransferBox,
+    AutoPrint,
 };
 
 void apply_dev_entry_visibility(void);
@@ -2121,6 +2125,16 @@ void on_print_gate_changed(lv_event_t *e)
     case PrintGate::DoorPm:       proxy.send_door_pm_check_set(on); break;
     case PrintGate::HoldPrepZ:    proxy.send_hold_prep_z_set(on); break;
     case PrintGate::TransferBox:  control_set_transfer_box_flow(on); break;
+    case PrintGate::AutoPrint:
+        if(!upc::xfr::set_auto_print_after_transfer(on)) {
+            set_gate_switch(g_gate_auto_print, !on);
+            ui_toast_show("Failed to save setting", user_color_status_err, 2000);
+            break;
+        }
+        ui_toast_show(on ? "Slicer will auto-start print"
+                         : "Transfer only, no auto-start",
+                      user_color_accent, 1800);
+        break;
     }
 }
 
@@ -2174,6 +2188,7 @@ void build_print_detail(lv_obj_t *parent)
     g_gate_outer = g_gate_inner = g_gate_plate = g_gate_plate_height = nullptr;
     g_gate_optical = g_gate_height = g_gate_o2 = g_gate_powder = g_gate_pm25 = g_gate_hold_z = nullptr;
     g_gate_transfer = nullptr;
+    g_gate_auto_print = nullptr;
     g_height_calib_lbl = nullptr;
     g_plate_work_z_ta = nullptr;
 
@@ -2214,6 +2229,28 @@ void build_print_detail(lv_obj_t *parent)
     g_gate_hold_z = make_gate_row(card, "Keep Z Position", PrintGate::HoldPrepZ, false, false);
     g_gate_transfer = make_gate_row(card, "Transfer Box", PrintGate::TransferBox, true,
                                     control_transfer_box_flow_enabled());
+
+    lv_obj_t *sec_xfr = lv_obj_create(parent);
+    lv_obj_remove_style_all(sec_xfr);
+    lv_obj_set_width(sec_xfr, LV_PCT(100));
+    lv_obj_set_height(sec_xfr, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(sec_xfr, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_row(sec_xfr, USER_PAD_SM, 0);
+    lv_obj_set_style_bg_opa(sec_xfr, LV_OPA_TRANSP, 0);
+    lv_obj_clear_flag(sec_xfr, LV_OBJ_FLAG_SCROLLABLE);
+    make_caption(sec_xfr, "Wi-Fi Transfer");
+
+    lv_obj_t *xcard = lv_obj_create(sec_xfr);
+    lv_obj_remove_style_all(xcard);
+    lv_obj_set_width(xcard, LV_PCT(100));
+    lv_obj_set_height(xcard, LV_SIZE_CONTENT);
+    apply_card_style(xcard);
+    lv_obj_set_style_pad_all(xcard, 0, 0);
+    lv_obj_set_flex_flow(xcard, LV_FLEX_FLOW_COLUMN);
+    lv_obj_clear_flag(xcard, LV_OBJ_FLAG_SCROLLABLE);
+    g_gate_auto_print = make_gate_row(xcard, "Auto Print After Transfer",
+                                      PrintGate::AutoPrint, true,
+                                      upc::xfr::auto_print_after_transfer_enabled());
 
     lv_obj_t *sec2 = lv_obj_create(parent);
     lv_obj_remove_style_all(sec2);
@@ -2331,6 +2368,7 @@ void show_detail(NavId id)
     g_gate_outer = g_gate_inner = g_gate_plate = g_gate_plate_height = nullptr;
     g_gate_optical = g_gate_height = g_gate_o2 = g_gate_powder = g_gate_pm25 = g_gate_hold_z = nullptr;
     g_gate_transfer = nullptr;
+    g_gate_auto_print = nullptr;
     g_height_calib_lbl = nullptr;
     g_plate_work_z_ta = nullptr;
     clear_print_gate_observers();
@@ -2572,6 +2610,7 @@ void page_user_settings_refresh(bool /*force*/)
         bind_print_gate_observers();
         request_print_gate_state();
         set_gate_switch(g_gate_transfer, control_transfer_box_flow_enabled());
+        set_gate_switch(g_gate_auto_print, upc::xfr::auto_print_after_transfer_enabled());
     }
 }
 
@@ -2598,6 +2637,7 @@ lv_obj_t *page_user_settings_create(lv_obj_t *parent)
     g_gate_outer = g_gate_inner = g_gate_plate = g_gate_plate_height = nullptr;
     g_gate_optical = g_gate_height = g_gate_o2 = g_gate_powder = g_gate_pm25 = g_gate_hold_z = nullptr;
     g_gate_transfer = nullptr;
+    g_gate_auto_print = nullptr;
     g_height_calib_lbl = nullptr;
     g_plate_work_z_ta = nullptr;
     clear_print_gate_observers();
