@@ -157,11 +157,6 @@
 /* -------------------------------------------------------------------------- */
 /* 门控                                                                         */
 /* -------------------------------------------------------------------------- */
-/** 门控：0=跳过 PM2.5 检测与吹粉，开门指令仍下发；1=先检测，超标则吹粉后再开门 */
-#ifndef GLAVO_DOOR_REAL_OPEN_ENABLE
-#define GLAVO_DOOR_REAL_OPEN_ENABLE  1
-#endif
-
 /** 真实开门请求等待 MCU 结果超时（毫秒）；单次轮询上限，UI 另有限次重试 */
 #ifndef GLAVO_DOOR_OPEN_TIMEOUT_MS
 #define GLAVO_DOOR_OPEN_TIMEOUT_MS  1000

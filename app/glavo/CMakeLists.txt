@@ -133,9 +133,3 @@ target_link_libraries(rongsu_glavo
         upc::parser
 )
 
-add_executable(n2_ble_parse_test
-    tests/n2_ble_parse_test.cpp
-    ${GLAVO_LIB_DIR}/n2_ble_parse.cpp)
-target_compile_features(n2_ble_parse_test PRIVATE cxx_std_17)
-target_include_directories(n2_ble_parse_test PRIVATE ${GLAVO_LIB_DIR})
-

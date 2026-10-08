@@ -51,7 +51,7 @@ UI → GlavoService（工作线程）→ ParserManager → RingBuffer → McuLin
 |------|------|
 | `Fs_DirOpen_Req` | **仅 USB** 扫盘；非 Usb 源忽略并回空列表 |
 | `Fs_Delete_Ntf` | 删除 Local 文件（磁盘 + config.json） |
-| `UI_Print_Prepare_Req` | 轻量预处理（USB 复制；清单无 `layer_count` 时才单趟扫 `M3000`；打开解析器并写 config.json）。已有总层数时不数行、不把 `get_total_lines()` 写回 `line_count`；Start 不再补扫 |
+| `UI_Print_Prepare_Req` | 轻量预处理（USB 复制；清单无 `layer_count` 时先读 Snowpath 文件头 `; Total layers:`，对不上再单趟扫 `M3000`；打开解析器并写 config.json）。头或清单已给出总层数时不数行、不把 `get_total_lines()` 写回 `line_count`；Start 不再补扫 |
 | `UI_Parser_Exit_Ntf` | 取消解析（stop_parse + 清会话） |
 | `UI_Print_Start_Req` | 置打印态 → **起印前半段**（Z→−10 / 外门 / 关内门 → **图案在位**，默认开）→ 光路 → 测高（**Plate by Height** 开时粗测 `H-1>3` 判断在位，默认关）。两种在位互斥，无板都弹放板窗。Keep Z 开则整段测高跳过。 |
 | ↑ 起印失败 | 打印态在 `launch_print_from_prepared` 最前面就置（检测那十几秒 UI 已在打印页），所以「运动还没开始就失败」的分支**一律走 `abort_print_start()`** 回滚，否则 UI 停在打印页 0%；失败时 SOC 舱灯全开，并按 Manual Top 路径把 Z 绝对回 **1.00 mm**（已在 Home 则空操作）。**Keep Z Position** 开则不发这次回零 |
@@ -134,7 +134,7 @@ MCU 串口 OTA 是停等协议（规则 [MCU_OTA丢包重传机制.md](../../doc
 
 | 策略 | 适用 | 打印中区间 | 说明 |
 |------|------|-----------|------|
-| 纯层台阶（首选） | G-code 且 `layer_count>0`，且 `GLAVO_ENABLE_LAYER_SNAP=1` | `1–98` | `已完成层 / 总层`。总层 = 清单 `layer_count`（3MF 来自 Metadata.layers；其它可来自 Prepare 预扫的 `M3000`）；已完成层 = 换层 Snap 计数。层内静止，打完一层跳一格 |
+| 纯层台阶（首选） | G-code 且 `layer_count>0`，且 `GLAVO_ENABLE_LAYER_SNAP=1` | `1–98` | `已完成层 / 总层`。总层 = 清单 `layer_count`（3MF 来自 Metadata.layers；Snowpath G-code 来自文件头 `Total layers`；其它可来自 Prepare 预扫的 `M3000`）；已完成层 = 换层 Snap 计数。层内静止，打完一层跳一格 |
 | 包进度（回退） | OVF / 无 `M3000` 的 G-code / 关闭 Layer Snap | `0–95` | `sent_packets / denom`，再与层锚点 7:3 融合（`fuse_send_and_layer_progress_95`） |
 
 两者共用尾段：`95–99` 按 MCU cmd/data cache 占用估排空，`100` 只跟 `force_complete` / `job_completed`。
