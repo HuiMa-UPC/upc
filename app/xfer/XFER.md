@@ -38,12 +38,14 @@
   清单对不上 `404 FILE_NOT_FOUND`；Prepare 失败 `500` / 超时 `504`。
   板端 Skip / Keep Z / 外门确认仍走 Glavo 原门控。`GET /print/status` 仍以
   Glavo 打印态为准。
-- `POST /print/cancel` / `/print/pause` / `/print/resume`：body 仅 `job_id`
-  （与 6.3 相同：优先 `frames_dir`，打印中多为 `tmp`，也认 6.2 的 `j_*`）。
+- `POST /print/cancel` / `/print/stop` / `/print/pause` / `/print/resume`：body 仅 `job_id`
+  （与 6.3 相同：优先 `frames_dir`，打印中多为 `tmp`，也认 6.2 的 `j_*`；
+  延时摄影清单到达后仍保留原来的 `j_*`，避免切片软件 cancel 404）。
   校验后向 Glavo 发与 UI 相同的 Terminate/Pause/Resume，等回包再 `200`。
   `job_id` 对不上 `404 JOB_NOT_FOUND`；态不对 `409 JOB_NOT_PRINTING`；
-  3s 无回包 `504 GLAVO_TIMEOUT`。取消允许 `printing`/`paused`；暂停仅
-  `printing`；恢复仅 `paused`（氧未落下仍暂停则 `409`）。
+  取消等回包最多 15s，超时仍 `200 canceled`（Terminate 已发出）。
+  取消允许会话已起或 `printing`/`paused`；暂停仅 `printing`；恢复仅 `paused`
+  （氧未落下仍暂停则 `409`）。
 - `GET /print/history?year=&month=&day=`：按打印机本地日期返回当天 `job_ids`
   （= `/userdata/media/video/config.json` 的 `frames_dir`，升序）
 - `GET /print/{job_id}/timelapse/images`：分页返回该任务延时摄影 JPEG URL 列表

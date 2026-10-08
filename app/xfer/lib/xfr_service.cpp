@@ -148,6 +148,9 @@ HttpResponse XfrService::on_request(const HttpRequest& req)
     if (req.method == "POST" && path == "/api/v1/print/cancel") {
         return handle_print_cancel(req);
     }
+    if (req.method == "POST" && path == "/api/v1/print/stop") {
+        return handle_print_cancel(req);
+    }
     if (req.method == "POST" && path == "/api/v1/print/pause") {
         return handle_print_pause(req);
     }
@@ -1013,7 +1016,8 @@ HttpResponse XfrService::handle_print_control(const HttpRequest& req, PrintCtrlK
                 ok_state = "printing";
                 break;
             case PrintCtrlKind::Cancel:
-                if (glavo_phase_ != GlavoPhase::Printing &&
+                if (!print_session_active_ &&
+                    glavo_phase_ != GlavoPhase::Printing &&
                     glavo_phase_ != GlavoPhase::Paused) {
                     return err(409, "JOB_NOT_PRINTING", "job is not active");
                 }
@@ -1031,7 +1035,8 @@ HttpResponse XfrService::handle_print_control(const HttpRequest& req, PrintCtrlK
         return err(500, "INTERNAL", "publish print control failed");
     }
 
-    constexpr auto kCtrlTimeout = std::chrono::milliseconds(3000);
+    /* 终止要等振镜 abort / 准备线程 join，3s 经常 504；切片软件会当成停印失败。 */
+    constexpr auto kCtrlTimeout = std::chrono::milliseconds(15000);
     const bool got = wait_print_ctrl_done(kCtrlTimeout);
 
     std::string rsp_job = job_id;
@@ -1051,6 +1056,15 @@ HttpResponse XfrService::handle_print_control(const HttpRequest& req, PrintCtrlK
         return err(409, "JOB_NOT_PRINTING", "resume blocked (still paused)");
     }
     if (!got) {
+        /* Cancel 已发给 Glavo：超时也按已接受处理，避免切片软件重试/用户以为没停。 */
+        if (kind == PrintCtrlKind::Cancel) {
+            UPC_LOG_XFR_SERVICE(Warn, "print/cancel: glavo rsp timeout, treat as accepted");
+            HttpResponse late;
+            late.status = 200;
+            late.body = std::string("{\"job_id\":\"") + json_escape(rsp_job) +
+                        "\",\"state\":\"canceled\"}";
+            return late;
+        }
         return err(504, "GLAVO_TIMEOUT", "print control timed out");
     }
 
@@ -1557,7 +1571,7 @@ void XfrService::on_print_ipc(const middleware::Message& msg)
             }
             if (p.has_entry != 0 && p.frames_dir[0] != '\0') {
                 active_frames_dir_ = p.frames_dir;
-                print_job_id_ = active_frames_dir_;
+                /* 不覆盖 print_job_id_（切片软件可能仍用起印时的 j_* 来 cancel）。 */
             }
             if (p.aborted != 0) {
                 glavo_phase_ = GlavoPhase::Canceled;

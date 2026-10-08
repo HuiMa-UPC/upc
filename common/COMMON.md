@@ -194,7 +194,7 @@ scripts/rongsu.sh start   # glavo + rongsu_camera → ui
 | `GLAVO_Outer_Door_Confirm_Req` | — | Glavo→UI | Empty | `register_outer_door_confirm_req` | 起印前外门未关：弹窗 Confirm / Cancel（无超时） |
 | `UI_Outer_Door_Confirm_Rsp` | — | UI→Glavo | `OuterDoorConfirmRspPayload` | `send_outer_door_confirm` | Confirm：`skip=0`，Glavo 再读门，仍开则再次 Req；Cancel：`skip=1`，不检门，直接进内门套件 |
 | `APP_Print_Terminate_Rsp` | `GLAVO_Print_Terminate_Rsp` | Glavo→UI **与** Xfr | Empty | `register_print_terminate_done` | — |
-| `GLAVO_Print_State_Ntf` | — | Glavo→Xfr | `PrintStateNtfPayload`（`mode` 复用 `UserHomeStatus`：`2`=开始打印 / `0`=打印结束；`since_ms`=进入该 mode 的 Unix ms） | — | 打印状态边沿：开始打印/打印结束各推一次，只同步桌面端 `/print/status`。云端 `state` 不看这条 |
+| `GLAVO_Print_State_Ntf` | — | Glavo→UI **与** Xfr | `PrintStateNtfPayload`（`mode` 复用 `UserHomeStatus`：`2`=开始打印 / `0`=打印结束；`since_ms`=进入该 mode 的 Unix ms） | `register_print_state` | 打印状态边沿：开始打印/打印结束各推一次。UI 在 Snowpath 起印时据此进打印页（停印钮、外门/放板确认）；Xfr 同步桌面 `/print/status`。云端 `state` 不看这条 |
 | `GLAVO_Cloud_State_Ntf` | — | Glavo→MQTT | `CloudStateNtfPayload` | — | 云端 `state`：`idle`（`ready`/`not_ready`）与 `printing` 子状态（准备各步、`layer_printing`、`paused`/`paused_oxygen`、`finished`/`canceled`/`aborted`）。`job` 只在 printing 时带；`layer` 为已完成层。结果页未收掉前停在终态子状态 |
 | `UI_Cloud_Result_Dismiss_Ntf` | — | UI→Glavo | Empty | `send_cloud_result_dismiss` | 打印占用结束（结果页取件回待机，或结果页还没出就已经离开）时发。Glavo 把云端 state 从 `finished`/`canceled`/`aborted` 收回 `idle` |
 | `APP_N2_Status_Ntf` | `0x1620` | Glavo→UI | `N2StatusPayload` | v1 不订阅 | 制氮机 BLE 快照（在线/浓度/STATE/seq）；无 BlueZ 时空跑 |

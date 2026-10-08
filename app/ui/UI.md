@@ -1671,6 +1671,8 @@ Manual 的电源钮与调试页 Fan 开关都读它，所以在哪边开关、�
 ```
 选文件 Confirm Print → 二次确认 → enter_state(PRINTING)
   → switch_to("user_monitor") + page_user_monitor_enter_printing_mode()
+Snowpath `print/start`：Glavo 双发 `GLAVO_Print_State_Ntf(Printing)` → UI 同样
+  `enter_state(PRINTING)`。不跟进的话停印钮不出现，外门/放板确认也被丢掉，只能强制关机。
   → 起印先将 Z 绝对走到 −10 mm（±1 mm 内视为已到位），与 Skip Plate Present 无关；未到位中止并报 Z did not reach print height，不报成基板读码失败。Z settle / 挡门读码等阻塞等待在 Glavo 准备线程，不堵业务线程（开门与 Manual Z 仍可响应；准备收 Z 期间 Manual Z 丢弃）
   → 进度推送 page_user_monitor_printing_update()
   → 起印环境检查 `APP_Print_Prep_Progress_Ntf` → page_user_monitor_print_prep_update()

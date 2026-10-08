@@ -412,7 +412,7 @@ enum class MsgType : uint32_t {
     UI_Print_Powder_Low_Ignore_Req, /**< Empty：本次打印忽略缺粉自动暂停与缺粉通知 */
     APP_Print_Pause_Rsp,      /**< [GLAVO_Print_Pause_Rsp] PrintPauseStatePayload：暂停/恢复响应（Pause/Resume Req 共用） */
     APP_Print_Powder_Low_Ntf, /**< Empty：粉量传感器 bit0/bit1 同时为 0，触发一次缺粉通知 */
-    GLAVO_Print_State_Ntf = 0x104C, /**< [GLAVO→Xfr] PrintStateNtfPayload：开始打印/打印结束状态边沿（桌面 /print/status） */
+    GLAVO_Print_State_Ntf = 0x104C, /**< [GLAVO→UI 与 Xfr] PrintStateNtfPayload：开始打印/打印结束状态边沿（UI 跟进打印页；桌面 /print/status） */
     /* 打印前光路检测（优先级高于首层检测）：UI 已进打印页，运动尚未开始。
      * 追加在 GLAVO_Print_State_Ntf 之后，避免挪动上面那段的隐式编号。 */
     APP_OpticalPath_Progress_Ntf,   /**< OpticalPathProgressPayload：光路检测逐点进度（打印卡徽标行） */
@@ -1101,7 +1101,8 @@ struct PrintProgressPayload {
 /** GLAVO_Print_State_Ntf 载荷：开始打印/打印结束状态边沿（Inline）。
  *  mode 取值复用 UserHomeStatus：Printing=2 表示开始打印，Idle=0 表示打印结束。
  *  since_ms 为进入该 mode 的 Unix 毫秒时间戳（Glavo 侧填写）。
- *  只给 Xfr 的 /print/status。云端 state 走 GLAVO_Cloud_State_Ntf。 */
+ *  双发 UI 与 Xfr：UI 据此跟进打印页（停印/外门确认）；Xfr 写 /print/status。
+ *  云端 state 走 GLAVO_Cloud_State_Ntf。 */
 struct PrintStateNtfPayload {
     uint32_t mode;       /**< UserHomeStatus：2=Printing 开始打印 / 0=Idle 打印结束 */
     uint32_t reserved;

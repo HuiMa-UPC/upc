@@ -3071,7 +3071,7 @@ void GlavoService::handle_cloud_result_dismiss(const middleware::Message& msg)
     }
 }
 
-/** @brief 向 Xfr 推送 GLAVO_Print_State_Ntf（开始打印/打印结束状态边沿） */
+/** @brief 向 UI / Xfr 推送 GLAVO_Print_State_Ntf（开始打印/打印结束状态边沿） */
 void GlavoService::publish_print_state_ntf(uint32_t mode)
 {
     middleware::PrintStateNtfPayload p{};
@@ -3081,16 +3081,22 @@ void GlavoService::publish_print_state_ntf(uint32_t mode)
         std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::system_clock::now().time_since_epoch()).count());
 
-    middleware::Message ntf(middleware::MsgType::GLAVO_Print_State_Ntf,
-        static_cast<middleware::ModuleId>(module_id()),
-        middleware::ModuleId::APP_XFR);
-    ntf.payload = middleware::MsgPayload::from_bytes(
-        reinterpret_cast<const uint8_t*>(&p), sizeof(p));
-    if(!publish_async(ntf)) {
-        UPC_LOG_GLAVO_SERVICE(Warn,
-            "print_state_ntf publish failed mode=%u target=%u",
-            mode, static_cast<unsigned>(middleware::ModuleId::APP_XFR));
-    }
+    /* 双发 UI + Xfr：桌面 /print/status 要边沿；Snowpath 起印时 UI 也要进打印页
+     * （停印钮、外门/放板确认都看 CONTROL_STATE_PRINTING）。 */
+    auto send_to = [&](middleware::ModuleId target) {
+        middleware::Message ntf(middleware::MsgType::GLAVO_Print_State_Ntf,
+            static_cast<middleware::ModuleId>(module_id()),
+            target);
+        ntf.payload = middleware::MsgPayload::from_bytes(
+            reinterpret_cast<const uint8_t*>(&p), sizeof(p));
+        if(!publish_async(ntf)) {
+            UPC_LOG_GLAVO_SERVICE(Warn,
+                "print_state_ntf publish failed mode=%u target=%u",
+                mode, static_cast<unsigned>(target));
+        }
+    };
+    send_to(middleware::ModuleId::UI);
+    send_to(middleware::ModuleId::APP_XFR);
 }
 
 void GlavoService::publish_device_event(middleware::DeviceEventCode code,
