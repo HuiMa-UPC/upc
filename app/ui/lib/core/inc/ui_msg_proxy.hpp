@@ -242,6 +242,7 @@ public:
     void register_xfr_pair_pin(XfrPairPinCb cb);
     void register_xfr_file_received(XfrFileReceivedCb cb);
     void register_xfr_transfer_progress(XfrTransferProgressCb cb);
+    void send_xfr_transfer_cancel(); /**< UI_Xfr_Transfer_Cancel_Ntf → APP_XFR */
     /** GLAVO_USB_Hotplug_Ntf：多路监听（文件页 USB 列表、设置页格式化钮各注册一次，互不覆盖）。 */
     void add_usb_hotplug_listener(UsbHotplugCb cb);
     /** SD 卡挂载变化。**后端未实现**，回调目前永远不会被触发。 */

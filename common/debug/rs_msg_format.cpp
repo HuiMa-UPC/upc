@@ -194,6 +194,8 @@ const char* upc_msg_type_name(MsgType type) {
         case MsgType::GLAVO_Wifi_Connect_Rsp: return "GLAVO_Wifi_Connect_Rsp";
         case MsgType::XFR_Pair_Pin_Ntf: return "XFR_Pair_Pin_Ntf";
         case MsgType::XFR_File_Received_Ntf: return "XFR_File_Received_Ntf";
+        case MsgType::XFR_Transfer_Progress_Ntf: return "XFR_Transfer_Progress_Ntf";
+        case MsgType::UI_Xfr_Transfer_Cancel_Ntf: return "UI_Xfr_Transfer_Cancel_Ntf";
         case MsgType::UI_Debug_Axis_Jog_Ntf: return "UI_Debug_Axis_Jog_Ntf";
         case MsgType::UI_Debug_Axis_Hold_Stop_Ntf: return "UI_Debug_Axis_Hold_Stop_Ntf";
         case MsgType::UI_Debug_Axis_SetZero_Ntf: return "UI_Debug_Axis_SetZero_Ntf";

@@ -2107,18 +2107,14 @@ RETRIEVE → 取件弹窗滑到底 → DOOR_OPENING（PM2.5/清粉 → 开门）
 `Finished/Error/Idle` 自动收窗。`XFR_File_Received_Ntf` 仍保留原有 toast 和
 本地文件列表刷新逻辑。
 
-两处已知遗留（缺契约，非实现疏漏）：
+已知遗留：
 
-- **取消按钮只关 UI**。UI→XFR 方向目前一条消息都没有，点 `Cancel Pairing` 之后
-  后端配对会话仍然存活，手机那时候依然能配对成功。
+- **PIN 取消只关 UI**。点 `Cancel Pairing` 之后后端配对会话仍然存活，手机那时
+  候依然能配对成功。PIN 弹窗只能手动关：`XfrPairPinPayload.expires_s` 没有使用，
+  PIN 过期不会自动收窗；弹窗遮罩会吞掉全屏点击，无人处理时会一直挡着（含打印中）。
 
-  接收弹窗上这个洞还要更深一层：**「Cancel Transfer」按下去等于没按**。进度回调的逻辑是
-  「只要状态是 `Uploading/Slicing` 且当前没开着窗，就开一个」，而取消只是把 `g_xfr_recv_dlg`
-  清空、后端并不知情、进度照推——于是下一条推送到达时窗又开回来了，推得多快就弹回得多快。
-  修它不需要动协议（记下被取消的文件名、传完或出错前不再开窗即可），但本轮按「等后端出
-  取消契约时一并做」处理，没有实现。PIN 弹窗没有这个问题：它只在收到新 PIN 通知时开窗。
-- **PIN 弹窗只能手动关**。`XfrPairPinPayload.expires_s` 没有使用，PIN 过期不会自动
-  收窗；弹窗遮罩会吞掉全屏点击，无人处理时会一直挡着（含打印中）。
+接收弹窗 `Cancel Transfer` 会发 `UI_Xfr_Transfer_Cancel_Ntf`，并靠
+`transfer_epoch` 挡住同一次传输的进度重开；新的 `upload/init` 换 epoch 后才再弹。
 
 文案统一用英文：CJK 子集字库 `assets/src/lv_font_cjk_data.c` 只覆盖调试测试页用字
 （403 字），缺稿上的「备 / 码 / 消」，且只有单一 18px 字号。

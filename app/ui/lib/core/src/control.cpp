@@ -598,6 +598,9 @@ void start_print_peer_watch(void)
 ui_xfr_pin_dialog_t *g_xfr_pin_dlg = nullptr;
 ui_xfr_recv_dialog_t *g_xfr_recv_dlg = nullptr;
 char g_xfr_recv_name[128] = {0};
+uint8_t g_xfr_recv_epoch = 0;
+uint8_t g_xfr_recv_cancel_epoch = 0;
+bool g_xfr_recv_user_cancel = false;
 char g_last_xfr_file[128] = {0}; /**< 最近一次 WiFi 落到 Local 的文件名，供远程起印填 Job 卡 */
 
 bool xfr_progress_state_active(uint8_t state)
@@ -620,7 +623,6 @@ void close_xfr_recv_dlg(void)
         ui_xfr_recv_dialog_close(g_xfr_recv_dlg);
         g_xfr_recv_dlg = nullptr;
     }
-    g_xfr_recv_name[0] = '\0';
 }
 
 /* 只关 UI。取消配对目前没有契约，后端配对会话仍然存活，手机此时依然能配对成功。 */
@@ -629,9 +631,11 @@ void on_xfr_pin_cancel(void * /*user*/)
     close_xfr_pin_dlg();
 }
 
-/* 只关 UI。取消传输目前没有契约，后端上传/切片任务不受影响。 */
 void on_xfr_recv_cancel(void * /*user*/)
 {
+    g_xfr_recv_user_cancel = true;
+    g_xfr_recv_cancel_epoch = g_xfr_recv_epoch;
+    ui::UiMsgProxy::instance().send_xfr_transfer_cancel();
     close_xfr_recv_dlg();
 }
 
@@ -857,6 +861,8 @@ void wire_msg_proxy()
     });
 
     proxy.register_xfr_file_received([](const middleware::XfrFileReceivedPayload& p) {
+        g_xfr_recv_user_cancel = false;
+        g_xfr_recv_name[0] = '\0';
         close_xfr_recv_dlg();
         std::snprintf(g_last_xfr_file, sizeof(g_last_xfr_file), "%s", p.file_name);
         char msg[180];
@@ -871,8 +877,18 @@ void wire_msg_proxy()
         if(p.file_name[0] != '\0') {
             std::snprintf(g_last_xfr_file, sizeof(g_last_xfr_file), "%s", p.file_name);
         }
+        if(p.transfer_epoch != 0) {
+            g_xfr_recv_epoch = p.transfer_epoch;
+        }
+        if(g_xfr_recv_user_cancel && p.transfer_epoch != 0 &&
+           p.transfer_epoch != g_xfr_recv_cancel_epoch) {
+            g_xfr_recv_user_cancel = false;
+        }
         const bool active = xfr_progress_state_active(p.state);
         if(active) {
+            if(g_xfr_recv_user_cancel) {
+                return;
+            }
             if(!g_xfr_recv_dlg || std::strcmp(g_xfr_recv_name, p.file_name) != 0) {
                 close_xfr_recv_dlg();
                 std::snprintf(g_xfr_recv_name, sizeof(g_xfr_recv_name), "%s", p.file_name);
@@ -889,9 +905,12 @@ void wire_msg_proxy()
                                             static_cast<int32_t>(p.progress_percent));
             close_xfr_recv_dlg();
         }
-        if(p.state == static_cast<uint8_t>(middleware::XfrTransferState::Error)) {
+        if(p.state == static_cast<uint8_t>(middleware::XfrTransferState::Error) &&
+           !g_xfr_recv_user_cancel) {
             ui_toast_show("Transfer failed", user_color_status_err, 2200);
         }
+        g_xfr_recv_user_cancel = false;
+        g_xfr_recv_name[0] = '\0';
     });
 
     proxy.add_usb_hotplug_listener([](const middleware::UsbHotplugPayload& p) {
@@ -914,6 +933,8 @@ void backend_reset_session()
     g_pm25_high = false;
     g_purify_progress = 0;
     page_user_files_reset();
+    g_xfr_recv_user_cancel = false;
+    g_xfr_recv_name[0] = '\0';
     close_xfr_recv_dlg();
     ui::UiMsgProxy::instance().send_supply_status();
 }
