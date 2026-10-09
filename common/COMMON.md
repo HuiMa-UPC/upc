@@ -197,6 +197,8 @@ scripts/rongsu.sh start   # glavo + rongsu_camera → ui
 | `GLAVO_Print_State_Ntf` | — | Glavo→UI **与** Xfr | `PrintStateNtfPayload`（`mode` 复用 `UserHomeStatus`：`2`=开始打印 / `0`=打印结束；`since_ms`=进入该 mode 的 Unix ms） | `register_print_state` | 打印状态边沿：开始打印/打印结束各推一次。UI 在 Snowpath 起印时据此进打印页（停印钮、外门/放板确认）；Xfr 同步桌面 `/print/status`。云端 `state` 不看这条 |
 | `GLAVO_Cloud_State_Ntf` | — | Glavo→MQTT | `CloudStateNtfPayload` | — | 云端 `state`：`idle`（`ready`/`not_ready`）与 `printing` 子状态（准备各步、`layer_printing`、`paused`/`paused_oxygen`、`finished`/`canceled`/`aborted`）。`job` 只在 printing 时带；`layer` 为已完成层。结果页未收掉前停在终态子状态 |
 | `UI_Cloud_Result_Dismiss_Ntf` | — | UI→Glavo | Empty | `send_cloud_result_dismiss` | 打印占用结束（结果页取件回待机，或结果页还没出就已经离开）时发。Glavo 把云端 state 从 `finished`/`canceled`/`aborted` 收回 `idle` |
+| `XFR_Print_Job_Report_Ntf` | — | Xfr→MQTT | `PrintJobReportNtfPayload` | — | 3MF 导入成功后通知 MQTT 消化 `/userdata/snowpod/print-job/<req_id>`。不挡切片传输，也不挡开打 |
+| `MQTT_Print_Job_Id_Ntf` | — | MQTT→Glavo | `PrintJobIdNtfPayload` | — | 云端 `job_id` 已按 `req_id` 写入清单。Glavo 仅在当前这次打印仍是 `printing` 且结果页还没挂起时，把 32 位十六进制补进 `state.job` |
 | `APP_N2_Status_Ntf` | `0x1620` | Glavo→UI | `N2StatusPayload` | v1 不订阅 | 制氮机 BLE 快照（在线/浓度/STATE/seq）；无 BlueZ 时空跑 |
 | `UI_Supply_Status_Req` | — | UI→Glavo | Empty | `send_supply_status` | stub |
 | `APP_Supply_Status_Rsp` | `GLAVO_Supply_Status_Rsp` | Glavo→UI | `SupplyStatusPayload` | `register_supply_status` | — |

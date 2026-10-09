@@ -932,11 +932,13 @@ bool MqttService::init()
         cfg_.heartbeat_interval_sec,
         credentials_ready_ ? "ready" : "activation-required");
 
+    start_print_job_worker();
     return true;
 }
 
 void MqttService::shutdown()
 {
+    stop_print_job_worker();
     join_activation_thread();
     join_rotation_thread();
     {
@@ -1047,6 +1049,10 @@ void MqttService::subscribe_messages()
         middleware::MsgType::APP_Mqtt_Rtsp_Stop_Rsp,
         middleware::ModuleId::APP_MQTT,
         [this](const middleware::Message& msg) { on_rtsp_stop_rsp(msg); }));
+    subs_.push_back(bus.subscribe(
+        middleware::MsgType::XFR_Print_Job_Report_Ntf,
+        middleware::ModuleId::APP_MQTT,
+        [this](const middleware::Message& msg) { on_print_job_report(msg); }));
 }
 
 bool MqttService::ensure_mqtt_connected()
@@ -1250,6 +1256,8 @@ bool MqttService::connect_mqtt()
         disconnect_mqtt();
         return false;
     }
+    /* print_job/ack 订不上只影响云端任务展示，不能把整条连接拆掉。 */
+    subscribe_print_job_ack();
 
     UPC_LOG_MQTT_SERVICE(Info, "MQTT connected uri=%s", cfg_.broker_uri.c_str());
 
@@ -1625,6 +1633,8 @@ int MqttService::on_message_arrived(void* context, char* topic_name,
             self->handle_ota_manifest_response(payload);
         } else if(topic == self->cfg_.topic_alarm_ack()) {
             self->handle_alarm_ack(payload);
+        } else if(topic == self->cfg_.topic_print_job_ack()) {
+            self->handle_print_job_ack(payload);
         } else {
             UPC_LOG_MQTT_SERVICE(Debug, "MQTT RX ignored topic=%s", topic.c_str());
         }

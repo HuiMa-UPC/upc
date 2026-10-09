@@ -206,6 +206,18 @@ void serial_log_rx_frame(const uint8_t* frame, size_t len)
     }
 
     if(serial_frame_is_sensor_report(frame, len)) {
+        /* 1ST 解析会把短于 25 字节的帧先记成 TOO_SHORT，不能拿去标记同端口的其它 TLV。
+         * 0x02 才是环境帧；0x04 激光 3ST 由后面的 laser(3ST) 打印。 */
+        const uint8_t tlv = (len >= 8) ? frame[7] : 0;
+        if(len >= 8 && tlv != 0x02) {
+            if(tlv == 0x04) {
+                return;
+            }
+            UPC_LOG_MCU_LINK_TO(SerialSensor, Warn,
+                "RX 0x9B reject tlv=0x%02X len=%zu",
+                static_cast<unsigned>(tlv), len);
+            return;
+        }
         UPC_LOG_MCU_LINK_TO(SerialSensor, Warn, "RX SENSOR FAIL len=%zu err=%s",
             len, serial_sensor_err_string(serr));
         return;

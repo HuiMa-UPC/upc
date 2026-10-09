@@ -472,6 +472,8 @@ private:
     void cloud_publish();
     [[nodiscard]] const char* cloud_first_substate() const;
     void handle_cloud_result_dismiss(const middleware::Message& msg);
+    /** 云端 job_id 晚到：只在这次打印还在进行、结果页还没挂起时补上。 */
+    void handle_print_job_id(const middleware::Message& msg);
     void set_print_running(bool on);
     void publish_device_event(middleware::DeviceEventCode code,
                               middleware::DeviceEventSeverity severity,
@@ -672,6 +674,8 @@ private:
     char cloud_substate_[32] = "not_ready";
     char cloud_job_id_[64] = {};
     bool cloud_job_valid_ = false;
+    /** 当前这次打印的 G-code 文件名。用来对上导入时记下的 cloud_req_id。 */
+    std::string cloud_print_name_;
     bool cloud_result_hold_ = false;
     /** UI 已离开打印占用，但终态还没到：到了就直接回 idle，不再挂结果页。 */
     bool cloud_dismiss_pending_ = false;

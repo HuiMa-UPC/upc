@@ -304,6 +304,8 @@ const char* upc_msg_type_name(MsgType type) {
         case MsgType::UI_Debug_Plate_By_Height_Set_Ntf: return "UI_Debug_Plate_By_Height_Set_Ntf";
         case MsgType::UI_Debug_Plate_By_Height_Get_Ntf: return "UI_Debug_Plate_By_Height_Get_Ntf";
         case MsgType::GLAVO_Debug_Plate_By_Height_Ntf: return "GLAVO_Debug_Plate_By_Height_Ntf";
+        case MsgType::XFR_Print_Job_Report_Ntf: return "XFR_Print_Job_Report_Ntf";
+        case MsgType::MQTT_Print_Job_Id_Ntf: return "MQTT_Print_Job_Id_Ntf";
         default: return "Msg";
     }
 }

@@ -25,6 +25,16 @@
 #define UPC_XFR_AUTO_PRINT_FILE  UPC_XFR_STORAGE_DIR "/auto_print"
 #endif
 
+/**
+ * 云端打印任务上报的暂存目录。
+ * 3MF 导入成功后把 plate_meta、3MF 文件名、G-code 名和可选 PNG 放在
+ * `/userdata/snowpod/print-job/<req_id>/`，由 rongsu_mqtt 后台上报。
+ * 上报成功或放弃后只删除这个子目录，不动 G-code 和 RTHM。
+ */
+#ifndef UPC_PRINT_JOB_STAGING_DIR
+#define UPC_PRINT_JOB_STAGING_DIR  "/userdata/snowpod/print-job"
+#endif
+
 #include <cstdio>
 #include <sys/stat.h>
 
