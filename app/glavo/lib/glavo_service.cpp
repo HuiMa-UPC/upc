@@ -864,7 +864,6 @@ bool GlavoService::init()
         }
         return pass;
     });
-    configure_optical_path_check();
     configure_plate_height();
     McuLink::instance().set_ota_status_callback(
         [this](const middleware::McuOtaStatusPayload& st) {
@@ -999,9 +998,6 @@ bool GlavoService::start()
         middleware::MsgType::UI_Debug_FirstLayer_Visual_Check_Get_Ntf,
         middleware::MsgType::APP_Visual_FirstLayer_Check_Rsp,
         middleware::MsgType::APP_Visual_FirstLayer_Reference_Ready_Rsp,
-        /* 打印前光路检测：调试开关 + Visual 单点识别回包 */
-        middleware::MsgType::UI_Debug_OpticalPath_Check_Set_Ntf,
-        middleware::MsgType::UI_Debug_OpticalPath_Check_Get_Ntf,
         middleware::MsgType::UI_Debug_PlateHeight_Adj_Set_Ntf,
         middleware::MsgType::UI_Debug_PlateHeight_Adj_Get_Ntf,
         middleware::MsgType::UI_Debug_Hold_Prep_Z_Set_Ntf,
@@ -1010,10 +1006,6 @@ bool GlavoService::start()
         middleware::MsgType::UI_Debug_Plate_Work_Z_Get_Ntf,
         middleware::MsgType::UI_Debug_InnerDoor_Occlusion_Set_Ntf,
         middleware::MsgType::UI_Debug_InnerDoor_Occlusion_Get_Ntf,
-        middleware::MsgType::UI_Debug_Plate_Present_Set_Ntf,
-        middleware::MsgType::UI_Debug_Plate_Present_Get_Ntf,
-        middleware::MsgType::UI_Debug_Plate_By_Height_Set_Ntf,
-        middleware::MsgType::UI_Debug_Plate_By_Height_Get_Ntf,
         middleware::MsgType::UI_Debug_Soc_Led_Set_Ntf,
         middleware::MsgType::UI_Debug_Soc_Led_Get_Ntf,
         middleware::MsgType::UI_Debug_Cabin_Pm_Valve_Set_Ntf,
@@ -1022,9 +1014,7 @@ bool GlavoService::start()
         middleware::MsgType::UI_Debug_Status_Led_Get_Ntf,
         middleware::MsgType::UI_Debug_Spi_Pm25_Lcd_Set_Ntf,
         middleware::MsgType::UI_Debug_Spi_Pm25_Lcd_Get_Ntf,
-        middleware::MsgType::APP_Visual_OpticalPath_Point_Check_Rsp,
         middleware::MsgType::APP_Visual_InnerDoor_Occlusion_Rsp,
-        middleware::MsgType::APP_Visual_Plate_Present_Rsp,
         middleware::MsgType::APP_Visual_Laser_Spot_Measure_Rsp,
         middleware::MsgType::UI_Glavo_Height_Calib_Start_Req,
 
@@ -1053,12 +1043,9 @@ bool GlavoService::start()
     publish_debug_skip_outer_door_state();
     publish_debug_o2_calib_state();
     publish_debug_first_layer_visual_check_state();
-    publish_debug_optical_path_check_state();
     publish_debug_plate_height_adj_state();
     publish_debug_hold_prep_z_state();
     publish_debug_inner_door_occlusion_state();
-    publish_debug_plate_present_state();
-    publish_debug_plate_by_height_state();
     publish_debug_soc_led_state();
     publish_debug_cabin_pm_valve_state();
     publish_debug_test_image_state();
@@ -1106,7 +1093,6 @@ bool GlavoService::stop()
     wakeup_laser_spot_wait();
     height_calib_.abort();
     plate_height_.abort();
-    optical_path_check_.abort();
     stop_print_job();
     clear_test_image_session();
     stop_clean_worker();
@@ -1144,7 +1130,6 @@ void GlavoService::on_message(const middleware::Message& msg)
     if(msg.type == middleware::MsgType::UI_Print_Terminate_Req) {
         print_prep_abort_.store(true);
         occlusion_exchange_.notify_abort();
-        plate_present_exchange_.notify_abort();
     }
 
     /* 舱检 Rsp 必须在 IPC 回调线程投递：准备线程上的挡门/读码等 CV，
@@ -1153,11 +1138,6 @@ void GlavoService::on_message(const middleware::Message& msg)
         handle_visual_occlusion_rsp(msg);
         return;
     }
-    if(msg.type == middleware::MsgType::APP_Visual_Plate_Present_Rsp) {
-        handle_visual_plate_present_rsp(msg);
-        return;
-    }
-
     /* Manual/调试连点：套件进行中或已有一条开/关在队里则丢弃，避免排第二次。 */
     if(msg.type == middleware::MsgType::UI_Debug_Recycle_Motor_Ntf) {
         middleware::DebugMotorPayload p{};
@@ -1244,7 +1224,6 @@ void GlavoService::worker_loop()
                 return !worker_running_.load() ||
                        clean_test_done_pending_.load() ||
                        transport_result_pending_.load() ||
-                       optical_path_done_pending_.load() ||
                        plate_height_done_pending_.load() ||
                        early_print_prep_done_pending_.load() ||
                        !worker_queue_.empty() ||
@@ -1285,15 +1264,6 @@ void GlavoService::worker_loop()
                 lock.lock();
             }
 
-            /* 光路检测线程只置位；起印续跑 / 阻断报警都回到本线程串行执行。 */
-            if(optical_path_done_pending_.load() &&
-               state() == ServiceState::Running) {
-                optical_path_done_pending_.store(false);
-                lock.unlock();
-                on_optical_path_check_done();
-                lock.lock();
-            }
-
             if(plate_height_done_pending_.load() &&
                state() == ServiceState::Running) {
                 plate_height_done_pending_.store(false);
@@ -1302,7 +1272,7 @@ void GlavoService::worker_loop()
                 lock.lock();
             }
 
-            /* 起印前半段线程只置位；续跑光路/测高或 abort 回到本线程。 */
+            /* 起印前半段线程只置位；续跑测高或 abort 回到本线程。 */
             if(early_print_prep_done_pending_.load() &&
                state() == ServiceState::Running) {
                 early_print_prep_done_pending_.store(false);
@@ -1393,7 +1363,6 @@ void GlavoService::stop_early_print_prep_worker()
 {
     print_prep_abort_.store(true);
     occlusion_exchange_.notify_abort();
-    plate_present_exchange_.notify_abort();
     if(early_print_prep_thread_.joinable()) {
         early_print_prep_thread_.join();
     }
@@ -1667,12 +1636,6 @@ void GlavoService::handle_message(const middleware::Message& msg)
         case middleware::MsgType::APP_Visual_FirstLayer_Reference_Ready_Rsp:
             handle_visual_first_layer_reference_ready_rsp(msg);
             break;
-        case middleware::MsgType::UI_Debug_OpticalPath_Check_Set_Ntf:
-            handle_debug_optical_path_check_set(msg);
-            break;
-        case middleware::MsgType::UI_Debug_OpticalPath_Check_Get_Ntf:
-            handle_debug_optical_path_check_get(msg);
-            break;
         case middleware::MsgType::UI_Debug_PlateHeight_Adj_Set_Ntf:
             handle_debug_plate_height_adj_set(msg);
             break;
@@ -1697,18 +1660,6 @@ void GlavoService::handle_message(const middleware::Message& msg)
         case middleware::MsgType::UI_Debug_InnerDoor_Occlusion_Get_Ntf:
             handle_debug_inner_door_occlusion_get(msg);
             break;
-        case middleware::MsgType::UI_Debug_Plate_Present_Set_Ntf:
-            handle_debug_plate_present_set(msg);
-            break;
-        case middleware::MsgType::UI_Debug_Plate_Present_Get_Ntf:
-            handle_debug_plate_present_get(msg);
-            break;
-        case middleware::MsgType::UI_Debug_Plate_By_Height_Set_Ntf:
-            handle_debug_plate_by_height_set(msg);
-            break;
-        case middleware::MsgType::UI_Debug_Plate_By_Height_Get_Ntf:
-            handle_debug_plate_by_height_get(msg);
-            break;
         case middleware::MsgType::UI_Debug_Soc_Led_Set_Ntf:
             handle_debug_soc_led_set(msg);
             break;
@@ -1732,9 +1683,6 @@ void GlavoService::handle_message(const middleware::Message& msg)
             break;
         case middleware::MsgType::UI_Debug_Spi_Pm25_Lcd_Get_Ntf:
             handle_debug_spi_pm25_lcd_get(msg);
-            break;
-        case middleware::MsgType::APP_Visual_OpticalPath_Point_Check_Rsp:
-            handle_visual_optical_path_point_rsp(msg);
             break;
         case middleware::MsgType::APP_Visual_Laser_Spot_Measure_Rsp:
             handle_laser_spot_measure_rsp(msg);
@@ -2016,10 +1964,6 @@ void GlavoService::clear_prepare_session()
     print_duration_sec_ = 0;
     layer_progress_mode_ = false;
     prepare_ready_ = false;
-    /* 光路检测的"本轮已通过"随 prepare 会话一起作废，保证每次起印都重新检测。
-     * 注意不能放在 stop_print_job() 里：handle_print_start 自己会先调它一次，
-     * 那样刚检完就被清掉，会陷入"检测→起印→再检测"的死循环。 */
-    optical_path_check_.reset_passed();
 }
 
 /**
@@ -2181,7 +2125,7 @@ void GlavoService::handle_print_prepare(const middleware::Message& msg)
     rsp.ok = 0;
 
     if(test_image_active_ || test_image_desired_ ||
-       galvo_point_test_active_.load() || optical_path_check_.active() || plate_height_.active() || height_calib_.active()) {
+       galvo_point_test_active_.load() || plate_height_.active() || height_calib_.active()) {
         UPC_LOG_GLAVO_SERVICE(Warn, "print_prepare rejected: debug motion test active");
         middleware::Message out(middleware::MsgType::APP_Print_Prepare_Rsp,
             static_cast<middleware::ModuleId>(module_id()), msg.sender_id);
@@ -2238,13 +2182,13 @@ void GlavoService::handle_parser_exit(const middleware::Message& msg)
  * @brief 在已 Prepare 的路径上真正启动一次打印作业
  *
  * 调用前须保证：prepare_ready_、路径有效，且 McuLink 不在 terminate 清理中。
- * 步骤：置打印态 → 起印前半段独立线程（Z→−10 / 外门 / 关内门 / 读码）→
- *      光路检测 gate（若开）→ 基板测高 gate（`Plate Height Adj` 开且有 LUT 才跑）→
+ * 步骤：置打印态 → 起印前半段独立线程（Z→−10 / 外门 / 关内门）→
+ *      基板测高（`Vision Check` 开且有 LUT：粗测光路、在位、调高）→
  *      open_file(带行数 hint) → 重置计数/进度 → start_parse →
  *      首层参考图 gate → 通知 Media 录像会话 → begin_sending。
  *
  * print_running_ 在最前面就置位（而非等 parser 就绪），原因有两条：
- *   1) 测高/光路/前半段那几十秒 UI 已在打印页，后端状态必须与之一致；
+ *   1) 测高和前半段那几十秒 UI 已在打印页，后端状态必须与之一致；
  *   2) handle_print_terminate 靠 print_running_ 判断要不要接终止请求，
  *      置晚了检测期间的用户终止会被它的 early return 吞掉。
  * open_file 失败分支会把它落回 false。
@@ -2264,18 +2208,18 @@ void GlavoService::launch_print_from_prepared(const std::string& full_path)
 
     (void)apply_red_always_mode("print_start");
 
-    /* 每次起印：前半段（Z→−10 → 外门 → 关内门 → 读码）在 early_print_prep_thread_
-     * 跑，不堵 worker；完成后回灌再进光路/测高。氧门/首层在 begin_sending 之后。 */
+    /* 每次起印：前半段（Z→−10 → 外门 → 关内门）在 early_print_prep_thread_
+     * 跑，不堵 worker；完成后回灌再进测高。氧门/首层在 begin_sending 之后。 */
     (void)begin_early_print_prep(EarlyPrintPrepPhase::FromLaunch);
 }
 
 /**
- * @brief 光路/测高放行后的起印后半段
+ * @brief 测高放行后的起印后半段
  *
- * 与 launch_print_from_prepared 拆开是为了让光路检测能在中间异步等十几秒，
+ * 与 launch_print_from_prepared 拆开是为了让测高能在中间异步等，
  * 而 open/parse/首层 gate 这些步骤仍在 worker 线程串行执行。
  */
-void GlavoService::continue_print_after_optical_ready(const std::string& full_path)
+void GlavoService::continue_print_after_checks(const std::string& full_path)
 {
     bool parser_ready = false;
     if(prepared_parser_open_) {
@@ -2391,7 +2335,7 @@ void GlavoService::handle_print_start(const middleware::Message& msg)
     }
 
     if(test_image_active_ || test_image_desired_ ||
-       galvo_point_test_active_.load() || optical_path_check_.active() || plate_height_.active() || height_calib_.active()) {
+       galvo_point_test_active_.load() || plate_height_.active() || height_calib_.active()) {
         UPC_LOG_GLAVO_SERVICE(Warn, "print_start rejected: debug motion test active");
         return;
     }
@@ -2440,7 +2384,6 @@ void GlavoService::stop_print_job()
 void GlavoService::finish_prep_user_terminate(const char* red_reason,
                                               const char* z_reason)
 {
-    deferred_optical_check_ = false;
     deferred_plate_height_ = false;
     deferred_print_start_ = false;
     (void)apply_red_laser_mode(true, red_reason ? red_reason : "user_terminate");
@@ -2491,24 +2434,15 @@ void GlavoService::handle_print_terminate(const middleware::Message& msg)
     if(early_print_prep_thread_.joinable()) {
         early_print_prep_thread_.join();
     }
-    /* 光路检测阶段：运动与录像都还没开始，不能走下面那套 abort 流程
+    /* 测高阶段：运动与录像都还没开始，不能走下面那套 abort 流程
      * （on_print_abort / request_terminate 都对着一个不存在的作业）。
-     * 只需打断检测线程、落回红光安全态、清会话。 */
+     * 只需打断测高线程、落回红光安全态、清会话。 */
     if(plate_height_.active() || deferred_plate_height_) {
         wakeup_laser_spot_wait();
         plate_height_.abort();
         plate_height_done_pending_.store(false);
         finish_prep_user_terminate("user_terminate_during_height", "plate_height");
         UPC_LOG_GLAVO_SERVICE(Info, "print_terminate during plate height");
-        return;
-    }
-    if(optical_path_check_.active() || deferred_optical_check_) {
-        /* abort() 会 join 检测线程，返回时那一轮的 Visual 会话 Stop 已经发过，
-         * 且它的 on_done 因 generation 作废不会再回灌，故只需清掉挂起位。 */
-        optical_path_check_.abort();
-        optical_path_done_pending_.store(false);
-        finish_prep_user_terminate("user_terminate_during_optical", "optical");
-        UPC_LOG_GLAVO_SERVICE(Info, "print_terminate during optical path check");
         return;
     }
     /* 关内门套件 / 参考图等开扫前阶段：尚无 TCP 作业，勿走 request_terminate。 */
@@ -2594,7 +2528,6 @@ void GlavoService::handle_print_pause(const middleware::Message& msg)
     }
     /* 检测阶段没有正式运动包，暂停钮在 UI 上已灰；这里再挡一层。 */
     if(plate_height_.active() || deferred_plate_height_ ||
-       optical_path_check_.active() || deferred_optical_check_ ||
        early_print_prep_active_.load()) {
         UPC_LOG_GLAVO_SERVICE(Debug, "print_pause ignored: pre-print gate");
         publish_print_pause_done(false);
@@ -2977,7 +2910,7 @@ const char* cloud_substate_for_prep(middleware::PrintPrepStep step)
 
 const char* GlavoService::cloud_first_substate() const
 {
-    /* 与起印实际顺序一致：外门 → 内门 → 图案在位（若开）→ 光路 → 测高（若开则粗测判断在位）→ 氧门 → 首层。
+    /* 与起印实际顺序一致：外门 → 内门 → 测高（光路、在位、调高）→ 氧门 → 首层。
      * 调试开关跳过的步不报。全跳过则直接送层。 */
     if(!skip_outer_door_on_) {
         const EnvSnapshotCache env = McuLink::instance().env_snapshot();
@@ -2989,12 +2922,6 @@ const char* GlavoService::cloud_first_substate() const
         if(!inner.has_value() || *inner) {
             return "closing_inner_door";
         }
-    }
-    if(plate_present_on_) {
-        return "checking_build_plate";
-    }
-    if(optical_path_check_on_ && !optical_path_check_.passed()) {
-        return "optical_path";
     }
     if(plate_height_adj_on_) {
         return "plate_leveling";
@@ -3413,122 +3340,6 @@ void GlavoService::handle_visual_first_layer_check_rsp(const middleware::Message
     }
 }
 
-/* ============================================================================
- * 打印前光路检测（优先级高于首层检测）
- *
- * UI 时序：Confirm Print → Prepare → UI 进打印页（相机预览已起）→ 本检测
- *          → 通过则继续正式打印；失败则报警 + UI 跳终止结果页。
- * 详见 optical_path_check.hpp 的模块头注释与 doc/视觉协作-光路检测.md。
- * ============================================================================ */
-
-void GlavoService::configure_optical_path_check()
-{
-    optical_path_check_.configure(
-        /* send_motion */
-        [](const uint8_t* subpacket) {
-            return McuLink::instance().send_debug_motion_subpacket(subpacket);
-        },
-        /* apply_red_always */
-        [this]() { return apply_red_always_mode("optical_path_start"); },
-        /* publish_check_req */
-        [this](const middleware::VisualOpticalPathCheckReqPayload& req) {
-            middleware::Message msg(
-                middleware::MsgType::GLAVO_Visual_OpticalPath_Point_Check_Req,
-                middleware::ModuleId::APP_GLAVO,
-                middleware::ModuleId::APP_VISUAL);
-            msg.payload = middleware::MsgPayload::from_bytes(
-                reinterpret_cast<const uint8_t*>(&req), sizeof(req));
-            return publish_async(msg);
-        },
-        /* publish_progress */
-        [this](const middleware::OpticalPathProgressPayload& p) {
-            publish_optical_path_progress(p);
-            if(p.state != static_cast<uint8_t>(
-                   middleware::OpticalPathPointState::Complete) &&
-               p.state != static_cast<uint8_t>(
-                   middleware::OpticalPathPointState::Failed)) {
-                publish_print_prep_progress(middleware::PrintPrepStep::OpticalPath,
-                                            p.point_index, p.point_total);
-            }
-        },
-        /* publish_session */
-        [this](bool active) { publish_optical_path_visual_session(active); },
-        /* on_done：检测线程上下文，只置 pending + 唤醒 worker，不碰打印会话 */
-        [this](const OpticalPathCheckResult& result) {
-            optical_path_done_passed_.store(result.passed);
-            optical_path_failed_point_.store(result.failed_point_index);
-            optical_path_done_pending_.store(true);
-            worker_cv_.notify_one();
-        });
-}
-
-bool GlavoService::begin_optical_path_gate()
-{
-    if(!optical_path_check_on_ || optical_path_check_.passed()) {
-        return false;
-    }
-
-    /* 上一作业还在 terminate 清理时，McuLink 会拒发调试运动包，整轮会被误判成
-     * 光路异常。此处挂起，等 TerminateDone/PrintError 再起检测。 */
-    auto& link = McuLink::instance();
-    if(link.is_sending() || link.is_terminate_pending()) {
-        deferred_optical_check_ = true;
-        link.request_terminate();
-        UPC_LOG_GLAVO_SERVICE(Info,
-            "optical path deferred until terminate done sending=%d terminate=%d",
-            link.is_sending() ? 1 : 0,
-            link.is_terminate_pending() ? 1 : 0);
-        return true;
-    }
-
-    deferred_optical_check_ = false;
-    optical_path_done_pending_.store(false);
-    publish_print_prep_progress(middleware::PrintPrepStep::OpticalPath, 0, 5);
-    set_cabin_light(false);
-    if(!optical_path_check_.start(galvo_motion_calibration_snapshot())) {
-        /* 起不起来不能默默放行（fail-closed），按检测失败阻断本次打印。 */
-        UPC_LOG_GLAVO_SERVICE(Error, "optical path start failed; blocking print");
-        abort_print_for_optical_path(kNoFailedPoint);
-        return true;
-    }
-    publish_device_event(middleware::DeviceEventCode::OpticalPathCheckStarted,
-                         middleware::DeviceEventSeverity::Info, true);
-    UPC_LOG_GLAVO_SERVICE(Info, "optical path check started");
-    return true;
-}
-
-void GlavoService::on_optical_path_check_done()
-{
-    /* 检测线程刚好在用户终止的同一瞬间跑完时，pending 会带着一份过期结论进来。
-     * 打印会话已经被终止路径拆掉了，这里必须重新确认还在打印态。 */
-    if(!print_running_.load()) {
-        UPC_LOG_GLAVO_SERVICE(Warn,
-            "optical path result dropped: print no longer active");
-        return;
-    }
-
-    if(!optical_path_done_passed_.load()) {
-        abort_print_for_optical_path(optical_path_failed_point_.load());
-        return;
-    }
-
-    publish_device_event(middleware::DeviceEventCode::OpticalPathCheckPassed,
-                         middleware::DeviceEventSeverity::Info, true);
-    if(prepared_local_path_.empty()) {
-        /* 走 abort_print_start 而不是 publish_terminate_done：0% 进度下 UI 的
-         * try_exit_print_preview 会被 print_ready_to_exit 挡住，退不出打印页。 */
-        UPC_LOG_GLAVO_SERVICE(Warn,
-            "optical path passed but prepared path is gone; abort print start");
-        abort_print_start(middleware::PrintStartRejectReason::FileOpenFail, 0);
-        return;
-    }
-    UPC_LOG_GLAVO_SERVICE(Info, "optical path passed; continue to plate height");
-    if(begin_plate_height_gate()) {
-        return;
-    }
-    continue_after_static_print_prep();
-}
-
 /**
  * @brief 「运动还没开始就起印失败」的统一收尾
  *
@@ -3547,7 +3358,6 @@ void GlavoService::abort_print_start(middleware::PrintStartRejectReason reason,
     /* 环境检查失败：舱灯全开（SOC 六路）。 */
     set_cabin_light(true);
     /* 挂起标志一并作废，避免 TerminateDone 迟到时又把这一单捡起来重跑。 */
-    deferred_optical_check_ = false;
     deferred_plate_height_ = false;
     deferred_print_start_ = false;
     outer_door_confirm_waiting_ = false;
@@ -3571,28 +3381,12 @@ void GlavoService::abort_print_start(middleware::PrintStartRejectReason reason,
                           static_cast<unsigned>(detail));
 }
 
-void GlavoService::abort_print_for_optical_path(uint8_t failed_point_index)
+void GlavoService::abort_print_for_optical_path()
 {
-    /* 不在这里补发 Visual 会话 Stop：整轮跑过的话 OpticalPathCheck::run() 收尾时
-     * 已经发过；start() 就失败的话根本没发过 Start，也没什么要关。 */
+    /* 粗测 8 点没看全光斑。测高线程自己停视觉会话。 */
     publish_device_event(middleware::DeviceEventCode::OpticalPathCheckFail,
                          middleware::DeviceEventSeverity::Critical, true);
-    abort_print_start(middleware::PrintStartRejectReason::OpticalPathFail,
-                      failed_point_index);
-}
-
-void GlavoService::publish_optical_path_progress(
-    const middleware::OpticalPathProgressPayload& payload)
-{
-    middleware::Message ntf(middleware::MsgType::APP_OpticalPath_Progress_Ntf,
-        static_cast<middleware::ModuleId>(module_id()),
-        middleware::ModuleId::UI);
-    ntf.payload = middleware::MsgPayload::from_bytes(
-        reinterpret_cast<const uint8_t*>(&payload), sizeof(payload));
-    if(!publish_async(ntf)) {
-        UPC_LOG_GLAVO_SERVICE(Warn, "optical path progress publish failed point=%u",
-                              static_cast<unsigned>(payload.point_index));
-    }
+    abort_print_start(middleware::PrintStartRejectReason::OpticalPathFail, 0xff);
 }
 
 void GlavoService::reset_print_prep_plan()
@@ -3613,14 +3407,8 @@ void GlavoService::reset_print_prep_plan()
             ++prep_step_total_; /* InnerDoor */
         }
     }
-    if(plate_present_on_) {
-        ++prep_step_total_; /* 光路前的图案在位 */
-    }
-    if(optical_path_check_on_ && !optical_path_check_.passed()) {
-        ++prep_step_total_;
-    }
     if(plate_height_adj_on_) {
-        ++prep_step_total_; /* 测高；plate_by_height_on_ 时粗测顺带判断有没有基板 */
+        ++prep_step_total_; /* 测高：粗测光路、在位、调高 */
     }
     if(print_prep_needs_oxygen()) {
         ++prep_step_total_; /* Oxygen：开扫后 CONDITION_OK→等氧 */
@@ -3629,13 +3417,10 @@ void GlavoService::reset_print_prep_plan()
         ++prep_step_total_; /* FirstLayer：参考图 + 首层比对 */
     }
     UPC_LOG_GLAVO_SERVICE(Info,
-        "print prep plan steps=%u skip_outer=%d optical=%d plate_h=%d pattern=%d by_height=%d oxygen=%d first_layer=%d",
+        "print prep plan steps=%u skip_outer=%d plate_h=%d oxygen=%d first_layer=%d",
         static_cast<unsigned>(prep_step_total_),
         skip_outer_door_on_ ? 1 : 0,
-        (optical_path_check_on_ && !optical_path_check_.passed()) ? 1 : 0,
         plate_height_adj_on_ ? 1 : 0,
-        plate_present_on_ ? 1 : 0,
-        plate_by_height_on_ ? 1 : 0,
         print_prep_needs_oxygen() ? 1 : 0,
         print_prep_needs_first_layer() ? 1 : 0);
 }
@@ -3661,7 +3446,7 @@ void GlavoService::continue_after_static_print_prep()
     if(!print_prep_needs_oxygen() && !print_prep_needs_first_layer()) {
         publish_print_prep_progress(middleware::PrintPrepStep::Ready);
     }
-    continue_print_after_optical_ready(prepared_local_path_);
+    continue_print_after_checks(prepared_local_path_);
 }
 
 void GlavoService::on_print_prep_oxygen_gate_passed()
@@ -3727,19 +3512,6 @@ void GlavoService::publish_print_prep_progress(middleware::PrintPrepStep step,
     }
     if(const char* sub = cloud_substate_for_prep(step)) {
         cloud_set_substate(sub);
-    }
-}
-
-void GlavoService::publish_optical_path_visual_session(bool active)
-{
-    middleware::Message ntf(
-        active ? middleware::MsgType::GLAVO_Visual_OpticalPath_Session_Start_Ntf
-               : middleware::MsgType::GLAVO_Visual_OpticalPath_Session_Stop_Ntf,
-        middleware::ModuleId::APP_GLAVO,
-        middleware::ModuleId::APP_VISUAL);
-    if(!publish_async(ntf)) {
-        UPC_LOG_GLAVO_SERVICE(Warn, "optical path session publish failed active=%d",
-                              active ? 1 : 0);
     }
 }
 
@@ -3819,11 +3591,18 @@ void GlavoService::send_z_home_with_retract()
 
 bool GlavoService::wait_z_settled(float target_mm, float tolerance_mm, int timeout_ms)
 {
+    /* 位置缓存大约 500ms 才更新一次。同一序号连读不算停稳，否则回零路过目标的
+     * 一帧会被当成已经到位。连续两帧新上报都在容差内、且两帧相差不超过 0.15mm
+     * 才返回。 */
     const auto deadline = std::chrono::steady_clock::now() +
                           std::chrono::milliseconds(timeout_ms);
-    int settled_count = 0;
-    constexpr int kSettledNeed = 3;
+    constexpr int kSettledReports = 2;
+    constexpr float kZStillMm = 0.15f;
     constexpr int kPollIntervalMs = 100;
+    uint32_t seen_seq = 0;
+    float prev_z = 0.0f;
+    int streak = 0;
+    float last_z = 0.0f;
     while(true) {
         if(print_prep_abort_.load() ||
            height_calib_.cancel_requested() || plate_height_.cancel_requested()) {
@@ -3834,19 +3613,30 @@ bool GlavoService::wait_z_settled(float target_mm, float tolerance_mm, int timeo
             UPC_LOG_GLAVO_SERVICE(Warn, "wait_z_settled aborted: Z axis motion error");
             return false;
         }
-        const float z = McuLink::instance().get_z_pos_mm();
-        if(std::fabs(z - target_mm) <= tolerance_mm) {
-            ++settled_count;
-            if(settled_count >= kSettledNeed) {
-                return true;
+        float z = 0.0f;
+        uint32_t seq = 0;
+        McuLink::instance().get_z_pos_sample(z, seq);
+        last_z = z;
+        if(seq != 0 && seq != seen_seq) {
+            seen_seq = seq;
+            const bool in_tol = std::fabs(z - target_mm) <= tolerance_mm;
+            const bool still = streak > 0 && std::fabs(z - prev_z) <= kZStillMm;
+            if(in_tol && still) {
+                ++streak;
+                if(streak >= kSettledReports) {
+                    return true;
+                }
+            } else if(in_tol) {
+                streak = 1;
+            } else {
+                streak = 0;
             }
-        } else {
-            settled_count = 0;
+            prev_z = z;
         }
         if(std::chrono::steady_clock::now() >= deadline) {
             UPC_LOG_GLAVO_SERVICE(Warn,
                 "wait_z_settled timeout: target=%.2f actual=%.2f tol=%.2f",
-                static_cast<double>(target_mm), static_cast<double>(z),
+                static_cast<double>(target_mm), static_cast<double>(last_z),
                 static_cast<double>(tolerance_mm));
             return false;
         }
@@ -3964,6 +3754,7 @@ void GlavoService::configure_plate_height()
         }
     };
     auto z_home_retract = [this]() { send_z_home_with_retract(); };
+    auto z_home = [this]() { send_z_home(); };
     auto z_inc = [this](float d) { send_z_inc(d); };
     auto wait_z = [this](float target, float tol, int ms) {
         return wait_z_settled(target, tol, ms);
@@ -3983,13 +3774,15 @@ void GlavoService::configure_plate_height()
         });
 
     plate_height_.configure(
-        move_galvo, keep_cabin_dark, z_home_retract, z_inc, wait_z, spot,
+        move_galvo, keep_cabin_dark, z_home, z_inc, wait_z, spot,
         [this](bool active) { publish_plate_height_visual_session(active); },
         [this](const PlateHeightMeasureResult& result) {
             bool ok = result.ok;
             plate_height_absent_.store(result.plate_absent);
+            plate_height_optical_fail_.store(result.optical_fail);
             /* 现有测高已把 Z 收到约 1mm。这一步只在成功之后补 (目标-1) mm，不改测高本身。 */
-            if(ok && !result.plate_absent && !apply_plate_work_z_lift()) {
+            if(ok && !result.plate_absent && !result.optical_fail &&
+               !apply_plate_work_z_lift()) {
                 ok = false;
             }
             plate_height_done_ok_.store(ok);
@@ -4043,7 +3836,8 @@ bool GlavoService::begin_plate_height_gate()
     publish_print_prep_progress(middleware::PrintPrepStep::PlateHeight);
     set_cabin_light(false);
     plate_height_absent_.store(false);
-    if(!plate_height_.start(galvo_motion_calibration_snapshot(), plate_by_height_on_)) {
+    plate_height_optical_fail_.store(false);
+    if(!plate_height_.start(galvo_motion_calibration_snapshot())) {
         UPC_LOG_GLAVO_SERVICE(Error, "plate height start failed; blocking print");
         publish_device_event(middleware::DeviceEventCode::PlateHeightBlocked,
                              middleware::DeviceEventSeverity::Error, true);
@@ -4059,6 +3853,12 @@ void GlavoService::on_plate_height_done()
     if(!print_running_.load()) {
         UPC_LOG_GLAVO_SERVICE(Warn,
             "plate height result dropped: print no longer active");
+        return;
+    }
+    if(plate_height_optical_fail_.load()) {
+        UPC_LOG_GLAVO_SERVICE(Error,
+            "coarse height missed a spot; optical path failed");
+        abort_print_for_optical_path();
         return;
     }
     if(plate_height_absent_.load()) {
@@ -4103,7 +3903,7 @@ void GlavoService::handle_height_calib_start_req(const middleware::Message& msg)
     };
 
     if(print_running_.load() || plate_height_.active() ||
-       optical_path_check_.active() || galvo_point_test_active_.load() ||
+       galvo_point_test_active_.load() ||
        test_image_active_ || test_image_desired_ ||
        McuLink::instance().is_sending() ||
        McuLink::instance().is_terminate_pending()) {
@@ -4177,62 +3977,6 @@ void GlavoService::publish_print_start_rejected(
     };
     send_to(middleware::ModuleId::UI);
     send_to(middleware::ModuleId::APP_XFR);
-}
-
-void GlavoService::handle_visual_optical_path_point_rsp(
-    const middleware::Message& msg)
-{
-    middleware::VisualOpticalPathCheckRspPayload rsp{};
-    if(!read_inline_pod(msg.payload, rsp)) {
-        UPC_LOG_GLAVO_SERVICE(Warn, "optical path rsp invalid payload");
-        return;
-    }
-    optical_path_check_.on_point_rsp(rsp);
-}
-
-void GlavoService::publish_debug_optical_path_check_state()
-{
-    middleware::DebugOnOffPayload p{};
-    p.on = optical_path_check_on_ ? 1 : 0;
-    middleware::Message ntf(
-        middleware::MsgType::GLAVO_Debug_OpticalPath_Check_Ntf,
-        middleware::ModuleId::APP_GLAVO,
-        middleware::ModuleId::UI);
-    ntf.payload = middleware::MsgPayload::from_bytes(
-        reinterpret_cast<const uint8_t*>(&p), sizeof(p));
-    if(!publish_async(ntf)) {
-        UPC_LOG_GLAVO_SERVICE(Warn, "optical path check state publish failed");
-    }
-}
-
-void GlavoService::handle_debug_optical_path_check_set(
-    const middleware::Message& msg)
-{
-    middleware::DebugOnOffPayload p{};
-    if(!read_inline_pod(msg.payload, p)) {
-        return;
-    }
-    if(optical_path_check_.active()) {
-        UPC_LOG_GLAVO_SERVICE(Warn,
-            "optical path switch rejected: check in progress");
-        publish_debug_optical_path_check_state();
-        return;
-    }
-    optical_path_check_on_ = (p.on != 0);
-    /* 关掉开关时把"本轮已通过"一并清掉，避免下次开启后沿用旧结论。 */
-    if(!optical_path_check_on_) {
-        optical_path_check_.reset_passed();
-    }
-    UPC_LOG_GLAVO_SERVICE(Info, "debug optical_path_check=%d",
-                          optical_path_check_on_ ? 1 : 0);
-    publish_debug_optical_path_check_state();
-}
-
-void GlavoService::handle_debug_optical_path_check_get(
-    const middleware::Message& msg)
-{
-    (void)msg;
-    publish_debug_optical_path_check_state();
 }
 
 void GlavoService::publish_debug_plate_height_adj_state()
@@ -4413,88 +4157,6 @@ void GlavoService::handle_debug_inner_door_occlusion_get(
 {
     (void)msg;
     publish_debug_inner_door_occlusion_state();
-}
-
-void GlavoService::publish_debug_plate_present_state()
-{
-    middleware::DebugOnOffPayload p{};
-    p.on = plate_present_on_ ? 1 : 0;
-    middleware::Message ntf(
-        middleware::MsgType::GLAVO_Debug_Plate_Present_Ntf,
-        middleware::ModuleId::APP_GLAVO,
-        middleware::ModuleId::UI);
-    ntf.payload = middleware::MsgPayload::from_bytes(
-        reinterpret_cast<const uint8_t*>(&p), sizeof(p));
-    if(!publish_async(ntf)) {
-        UPC_LOG_GLAVO_SERVICE(Warn,
-            "GLAVO_Debug_Plate_Present_Ntf publish_async failed");
-    }
-}
-
-void GlavoService::handle_debug_plate_present_set(
-    const middleware::Message& msg)
-{
-    middleware::DebugOnOffPayload p{};
-    if(!read_inline_pod(msg.payload, p)) {
-        return;
-    }
-    plate_present_on_ = (p.on != 0);
-    if(plate_present_on_) {
-        plate_by_height_on_ = false;
-    }
-    UPC_LOG_GLAVO_SERVICE(Info, "plate by pattern=%d by height=%d",
-                          plate_present_on_ ? 1 : 0,
-                          plate_by_height_on_ ? 1 : 0);
-    publish_debug_plate_present_state();
-    publish_debug_plate_by_height_state();
-}
-
-void GlavoService::handle_debug_plate_present_get(
-    const middleware::Message& msg)
-{
-    (void)msg;
-    publish_debug_plate_present_state();
-}
-
-void GlavoService::publish_debug_plate_by_height_state()
-{
-    middleware::DebugOnOffPayload p{};
-    p.on = plate_by_height_on_ ? 1 : 0;
-    middleware::Message ntf(
-        middleware::MsgType::GLAVO_Debug_Plate_By_Height_Ntf,
-        middleware::ModuleId::APP_GLAVO,
-        middleware::ModuleId::UI);
-    ntf.payload = middleware::MsgPayload::from_bytes(
-        reinterpret_cast<const uint8_t*>(&p), sizeof(p));
-    if(!publish_async(ntf)) {
-        UPC_LOG_GLAVO_SERVICE(Warn,
-            "GLAVO_Debug_Plate_By_Height_Ntf publish_async failed");
-    }
-}
-
-void GlavoService::handle_debug_plate_by_height_set(
-    const middleware::Message& msg)
-{
-    middleware::DebugOnOffPayload p{};
-    if(!read_inline_pod(msg.payload, p)) {
-        return;
-    }
-    plate_by_height_on_ = (p.on != 0);
-    if(plate_by_height_on_) {
-        plate_present_on_ = false;
-    }
-    UPC_LOG_GLAVO_SERVICE(Info, "plate by pattern=%d by height=%d",
-                          plate_present_on_ ? 1 : 0,
-                          plate_by_height_on_ ? 1 : 0);
-    publish_debug_plate_by_height_state();
-    publish_debug_plate_present_state();
-}
-
-void GlavoService::handle_debug_plate_by_height_get(
-    const middleware::Message& msg)
-{
-    (void)msg;
-    publish_debug_plate_by_height_state();
 }
 
 void GlavoService::publish_debug_soc_led_state()
@@ -4679,7 +4341,6 @@ void GlavoService::on_mcu_link_event(McuLinkEvent ev)
             }
             UPC_LOG_GLAVO_SERVICE(Info, "tcp_job_event: PrintCompleted");
             deferred_print_start_ = false;
-            deferred_optical_check_ = false;
             deferred_plate_height_ = false;
             PrintVideoNotify::instance().on_print_finish();
             send_print_progress(true);
@@ -4714,25 +4375,8 @@ void GlavoService::on_mcu_link_event(McuLinkEvent ev)
             } else {
                 UPC_LOG_GLAVO_SERVICE(Warn, "tcp_job_event: PrintError");
             }
-            /* 光路/测高被 terminate 清理挡住过：清理完毕后按同一顺序补起。
+            /* 测高被 terminate 清理挡住过：清理完毕后再起。
              * 走 gate 而不是 launch_*，因为打印态与 PrintState_Ntf 已经发过。 */
-            if(deferred_optical_check_) {
-                deferred_optical_check_ = false;
-                if(print_running_.load() && prepare_ready_ &&
-                   !prepared_local_path_.empty()) {
-                    UPC_LOG_GLAVO_SERVICE(Info,
-                        "optical path resume after terminate path=%s",
-                        prepared_local_path_.c_str());
-                    if(begin_optical_path_gate()) {
-                        break;
-                    }
-                    if(begin_plate_height_gate()) {
-                        break;
-                    }
-                    continue_print_after_optical_ready(prepared_local_path_);
-                    break;
-                }
-            }
             if(deferred_plate_height_) {
                 deferred_plate_height_ = false;
                 if(print_running_.load() && prepare_ready_ &&
@@ -4743,7 +4387,7 @@ void GlavoService::on_mcu_link_event(McuLinkEvent ev)
                     if(begin_plate_height_gate()) {
                         break;
                     }
-                    continue_print_after_optical_ready(prepared_local_path_);
+                    continue_print_after_checks(prepared_local_path_);
                     break;
                 }
             }
@@ -6106,9 +5750,9 @@ bool GlavoService::apply_red_always_mode(const char* reason)
 /** @brief 调试红光开关：下发 TCP CMD=0x0A（Stop=0, Pause=0, RedLaser=on/off） */
 void GlavoService::handle_debug_galvo_red_light(const middleware::Message& msg)
 {
-    if(galvo_point_test_active_.load() || optical_path_check_.active() || plate_height_.active() || height_calib_.active()) {
+    if(galvo_point_test_active_.load() || plate_height_.active() || height_calib_.active()) {
         UPC_LOG_GLAVO_SERVICE(Warn,
-            "red/laser switch rejected: point test or optical path check active");
+            "red/laser switch rejected: point test or plate height active");
         return;
     }
     middleware::DebugOnOffPayload p{};
@@ -6121,10 +5765,10 @@ void GlavoService::handle_debug_galvo_red_light(const middleware::Message& msg)
 /** @brief 调试红光常亮：入队 0x12，drain 后再 TCP Red=3 */
 void GlavoService::handle_debug_galvo_red_always(const middleware::Message& /*msg*/)
 {
-    if(galvo_point_test_active_.load() || optical_path_check_.active() ||
+    if(galvo_point_test_active_.load() ||
        plate_height_.active() || height_calib_.active()) {
         UPC_LOG_GLAVO_SERVICE(Warn,
-            "red-always switch rejected: point test or optical path check active");
+            "red-always switch rejected: point test or plate height active");
         return;
     }
     (void)apply_red_always_mode("debug_red_always");
@@ -6192,15 +5836,14 @@ void GlavoService::handle_debug_galvo_point_test_start(
 {
     (void)msg;
     if(print_running_.load() || test_image_active_ || test_image_desired_ ||
-       optical_path_check_.active() || plate_height_.active() ||
+       plate_height_.active() ||
        height_calib_.active() ||
        McuLink::instance().is_sending() ||
        McuLink::instance().is_terminate_pending()) {
         UPC_LOG_GLAVO_SERVICE(Warn,
-            "point test rejected print=%d test_image=%d optical=%d sending=%d terminate=%d",
+            "point test rejected print=%d test_image=%d sending=%d terminate=%d",
             print_running_.load() ? 1 : 0,
             (test_image_active_ || test_image_desired_) ? 1 : 0,
-            optical_path_check_.active() ? 1 : 0,
             McuLink::instance().is_sending() ? 1 : 0,
             McuLink::instance().is_terminate_pending() ? 1 : 0);
         publish_debug_galvo_point_test_state();
@@ -6290,7 +5933,7 @@ void GlavoService::handle_debug_galvo_param_save(const middleware::Message& msg)
     }
 
     if(print_running_.load() || test_image_active_ || test_image_desired_ ||
-       galvo_point_test_active_.load() || optical_path_check_.active() || plate_height_.active() || height_calib_.active()) {
+       galvo_point_test_active_.load() || plate_height_.active() || height_calib_.active()) {
         UPC_LOG_GLAVO_SERVICE(Warn,
             "galvo_param_save rejected: print/debug motion test busy");
         return;
@@ -6409,7 +6052,7 @@ void GlavoService::handle_debug_test_image_set(const middleware::Message& msg)
     }
 
     if(print_running_.load() || galvo_point_test_active_.load() ||
-       optical_path_check_.active() || plate_height_.active() ||
+plate_height_.active() ||
        height_calib_.active()) {
         UPC_LOG_GLAVO_SERVICE(Warn,
             "test image rejected: formal print or point test running");
@@ -6921,7 +6564,7 @@ EarlyPrintPrepResult GlavoService::run_early_print_prep(EarlyPrintPrepPhase phas
     if(print_prep_abort_.load()) {
         return EarlyPrintPrepResult::Aborted;
     }
-    return begin_plate_present_gate();
+    return EarlyPrintPrepResult::Continue;
 }
 
 void GlavoService::on_early_print_prep_done()
@@ -6935,9 +6578,6 @@ void GlavoService::on_early_print_prep_done()
         early_print_prep_result_.load());
     switch(result) {
     case EarlyPrintPrepResult::Continue:
-        if(begin_optical_path_gate()) {
-            return;
-        }
         if(begin_plate_height_gate()) {
             return;
         }
@@ -7063,7 +6703,7 @@ bool GlavoService::ensure_z_at_plate_safe()
         return true;
     }
     const float z = McuLink::instance().get_z_pos_mm();
-    /* 目标 −10±1：偏高则降、偏低则抬，双侧都绝对到位。与读码开关无关。 */
+    /* 目标 −10±1：偏高则降、偏低则抬，双侧都绝对到位。 */
     if(std::fabs(z - kPlateSafeZMm) <= kPlateSafeZTolMm) {
         UPC_LOG_GLAVO_SERVICE(Info,
             "plate safe Z already ok z=%.3f target=%.1f tol=%.1f",
@@ -7095,29 +6735,6 @@ void GlavoService::publish_plate_place_confirm_req()
     if(!publish_async(ntf)) {
         UPC_LOG_GLAVO_SERVICE(Warn, "GLAVO_Plate_Place_Confirm_Req publish_async failed");
     }
-}
-
-void GlavoService::handle_visual_plate_present_rsp(const middleware::Message& msg)
-{
-    middleware::VisualCabinCheckRspPayload rsp{};
-    if(!read_cabin_reply(msg, middleware::MsgType::APP_Visual_Plate_Present_Rsp, rsp)) {
-        UPC_LOG_GLAVO_SERVICE(Warn, "plate present rsp invalid payload");
-        return;
-    }
-    if(!plate_present_exchange_.accept(rsp)) {
-        UPC_LOG_GLAVO_SERVICE(Warn,
-            "plate present stale/duplicate rsp dropped session=%u req=%u result=%u",
-            static_cast<unsigned>(rsp.session_id),
-            static_cast<unsigned>(rsp.request_id),
-            static_cast<unsigned>(rsp.result));
-        return;
-    }
-    UPC_LOG_GLAVO_SERVICE(Info,
-        "plate present rsp session=%u req=%u result=%u frame=%u",
-        static_cast<unsigned>(rsp.session_id),
-        static_cast<unsigned>(rsp.request_id),
-        static_cast<unsigned>(rsp.result),
-        static_cast<unsigned>(rsp.frame_seq));
 }
 
 void GlavoService::prompt_absent_plate()
@@ -7155,115 +6772,6 @@ void GlavoService::prompt_absent_plate()
 }
 
 
-middleware::PlatePresentResult GlavoService::run_plate_present_round()
-{
-    set_cabin_light(true);
-    const uint8_t led_mask = SocSensors::instance().cabin_led_mask();
-
-    const uint32_t session_id = next_cabin_id(cabin_session_seq_);
-    publish_cabin_visual_session(session_id, true);
-
-    constexpr auto kWarmup = std::chrono::milliseconds(1500);
-    constexpr uint32_t kWindowMs = 25000;
-    constexpr uint32_t kPlateNoFrameWaitMs = 8000;
-    {
-        int left_ms = static_cast<int>(kWarmup.count());
-        constexpr int kSliceMs = 50;
-        while(left_ms > 0) {
-            if(print_prep_abort_.load()) {
-                publish_cabin_visual_session(session_id, false);
-                return middleware::PlatePresentResult::Unknown;
-            }
-            const int slice = left_ms > kSliceMs ? kSliceMs : left_ms;
-            std::this_thread::sleep_for(std::chrono::milliseconds(slice));
-            left_ms -= slice;
-        }
-    }
-
-    const uint32_t request_id = next_cabin_id(plate_present_request_seq_);
-    middleware::VisualCabinCheckReqPayload req{};
-    req.session_id = session_id;
-    req.request_id = request_id;
-    req.timeout_ms = kWindowMs;
-    req.cabin_led_mask = led_mask;
-    req.mode = static_cast<uint8_t>(middleware::CabinCheckMode::Snapshot);
-
-    middleware::Message out(
-        middleware::MsgType::GLAVO_Visual_Plate_Present_Req,
-        middleware::ModuleId::APP_GLAVO,
-        middleware::ModuleId::APP_VISUAL);
-    out.payload = middleware::MsgPayload::from_bytes(
-        reinterpret_cast<const uint8_t*>(&req), sizeof(req));
-    uint8_t result = static_cast<uint8_t>(
-        middleware::PlatePresentResult::Unknown);
-    const auto status = plate_present_exchange_.request(
-        session_id, request_id,
-        std::chrono::milliseconds(kPlateNoFrameWaitMs + kWindowMs + 2000u),
-        print_prep_abort_, [this, &out]() { return publish_async(out); }, result);
-    if(status == CabinExchangeStatus::PublishFailed) {
-        UPC_LOG_GLAVO_SERVICE(Warn,
-            "plate present req publish failed session=%u req=%u",
-            static_cast<unsigned>(session_id),
-            static_cast<unsigned>(request_id));
-    }
-    publish_cabin_visual_session(session_id, false);
-
-    UPC_LOG_GLAVO_SERVICE(Info, "plate qr round result=%u",
-                          static_cast<unsigned>(result));
-    return static_cast<middleware::PlatePresentResult>(result);
-}
-
-EarlyPrintPrepResult GlavoService::begin_plate_present_gate()
-{
-    if(!plate_present_on_) {
-        return EarlyPrintPrepResult::Continue;
-    }
-    if(print_prep_abort_.load() || !print_running_.load()) {
-        return EarlyPrintPrepResult::Aborted;
-    }
-    publish_print_prep_progress(middleware::PrintPrepStep::PlatePresent);
-
-    const auto result = run_plate_present_round();
-    if(print_prep_abort_.load()) {
-        return EarlyPrintPrepResult::Aborted;
-    }
-    if(result == middleware::PlatePresentResult::QrAbsentSceneOk) {
-        UPC_LOG_GLAVO_SERVICE(Info, "plate present: build plate detected");
-        return EarlyPrintPrepResult::Continue;
-    }
-    if(result == middleware::PlatePresentResult::QrFound) {
-        plate_place_confirm_waiting_ = true;
-        inner_door_close_pending_outer_.store(false);
-        UPC_LOG_GLAVO_SERVICE(Info,
-            "plate present: pattern found (no plate); auto-open inner then outer");
-        if(!run_inner_door_motion_kit(true, true, InnerDoorZMotion::PlateSafeStay)) {
-            if(print_prep_abort_.load()) {
-                return EarlyPrintPrepResult::Aborted;
-            }
-            UPC_LOG_GLAVO_SERVICE(Warn,
-                "plate present: auto open inner door failed; still prompt place");
-        }
-        if(print_prep_abort_.load()) {
-            return EarlyPrintPrepResult::Aborted;
-        }
-        if(!skip_outer_door_on_) {
-            if(!McuLink::instance().request_open_door_once()) {
-                UPC_LOG_GLAVO_SERVICE(Warn,
-                    "plate present: auto open outer door send failed");
-            }
-        }
-        publish_device_event(middleware::DeviceEventCode::PlateAbsentNeedPlace,
-                             middleware::DeviceEventSeverity::Info, true);
-        publish_plate_place_confirm_req();
-        UPC_LOG_GLAVO_SERVICE(Info,
-            "plate present: waiting UI place confirm after auto-open doors");
-        return EarlyPrintPrepResult::WaitPlatePlace;
-    }
-
-    UPC_LOG_GLAVO_SERVICE(Error, "plate present: unknown/timeout");
-    return EarlyPrintPrepResult::FailPlatePresent;
-}
-
 void GlavoService::continue_print_after_plate_place_confirm()
 {
     if(!print_running_.load()) {
@@ -7271,7 +6779,7 @@ void GlavoService::continue_print_after_plate_place_confirm()
             "plate place continue dropped: print no longer active");
         return;
     }
-    /* Confirm 后关内门，再从光路（已通过则跳过）进入测高并重新粗测。 */
+    /* Confirm 后关内门，再整段重做测高（回零、8 点光路、在位、调高）。 */
     (void)begin_early_print_prep(EarlyPrintPrepPhase::AfterPlatePlace);
 }
 
@@ -7716,7 +7224,7 @@ void GlavoService::on_outer_door_closed_edge()
         UPC_LOG_GLAVO_SERVICE(Info, "outer door closed edge deferred: sending");
         return;
     }
-    if(optical_path_check_.active() || plate_height_.active() ||
+    if(plate_height_.active() ||
        height_calib_.active() || galvo_point_test_active_.load() ||
        early_print_prep_active_.load()) {
         inner_door_close_pending_outer_.store(true);
@@ -7793,7 +7301,7 @@ void GlavoService::handle_debug_o2_calib_req(const middleware::Message& msg)
     out.ok = 0;
 
     if(print_running_.load() || plate_height_.active() ||
-       optical_path_check_.active() || galvo_point_test_active_.load() ||
+       galvo_point_test_active_.load() ||
        test_image_active_ || test_image_desired_ ||
        height_calib_.active() ||
        McuLink::instance().is_sending() ||

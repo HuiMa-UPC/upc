@@ -371,8 +371,6 @@ void VisualService::subscribe_messages()
         middleware::ModuleId::APP_VISUAL, [this](const middleware::Message& msg) { on_cabin_session_stop(msg); }));
     subs_.push_back(bus.subscribe(middleware::MsgType::GLAVO_Visual_InnerDoor_Occlusion_Req,
         middleware::ModuleId::APP_VISUAL, [this](const middleware::Message& msg) { on_cabin_check_req(msg, true); }));
-    subs_.push_back(bus.subscribe(middleware::MsgType::GLAVO_Visual_Plate_Present_Req,
-        middleware::ModuleId::APP_VISUAL, [this](const middleware::Message& msg) { on_cabin_check_req(msg, false); }));
     subs_.push_back(bus.subscribe(
         middleware::MsgType::APP_Visual_Camera_Stream_Start_Rsp,
         middleware::ModuleId::APP_VISUAL,
@@ -393,24 +391,6 @@ void VisualService::subscribe_messages()
         middleware::MsgType::GLAVO_Visual_FirstLayer_Check_Req,
         middleware::ModuleId::APP_VISUAL,
         [this](const middleware::Message& msg) { on_first_layer_check_req(msg); }));
-    subs_.push_back(bus.subscribe(
-        middleware::MsgType::GLAVO_Visual_OpticalPath_Session_Start_Ntf,
-        middleware::ModuleId::APP_VISUAL,
-        [this](const middleware::Message& msg) {
-            on_optical_path_session_start(msg);
-        }));
-    subs_.push_back(bus.subscribe(
-        middleware::MsgType::GLAVO_Visual_OpticalPath_Session_Stop_Ntf,
-        middleware::ModuleId::APP_VISUAL,
-        [this](const middleware::Message& msg) {
-            on_optical_path_session_stop(msg);
-        }));
-    subs_.push_back(bus.subscribe(
-        middleware::MsgType::GLAVO_Visual_OpticalPath_Point_Check_Req,
-        middleware::ModuleId::APP_VISUAL,
-        [this](const middleware::Message& msg) {
-            on_optical_path_point_check_req(msg);
-        }));
     subs_.push_back(bus.subscribe(
         middleware::MsgType::GLAVO_Visual_PlateHeight_Session_Start_Ntf,
         middleware::ModuleId::APP_VISUAL,

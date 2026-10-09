@@ -414,7 +414,7 @@ void style_cjk_dropdown(lv_obj_t *dd) {
     lv_obj_set_style_bg_color(dd, user_light_more_bg, 0);
     lv_obj_set_style_border_width(dd, 2, 0);
     lv_obj_set_style_border_color(dd, user_light_accent, 0);
-    lv_obj_set_style_text_color(dd, lv_color_white(), 0);
+    lv_obj_set_style_text_color(dd, user_light_text, 0);
     /* 默认下拉箭头用的是 FontAwesome 符号，子集字体没有→显示方块；
      * 改用子集字体内含的 ▼(U+25BC) 作为下拉箭头 */
     lv_dropdown_set_symbol(dd, "▼");
@@ -423,8 +423,11 @@ void style_cjk_dropdown(lv_obj_t *dd) {
     if(list) {
         lv_obj_set_style_text_font(list, user_font_cjk(), 0);
         lv_obj_set_style_bg_color(list, user_light_card, 0);
-        lv_obj_set_style_text_color(list, lv_color_white(), 0);
+        lv_obj_set_style_text_color(list, user_light_text, 0);
         lv_obj_set_style_border_color(list, user_light_accent, 0);
+        /* 选中项自己给强调蓝底配白字，不依赖主题默认值（主题那套是按深色档配的） */
+        lv_obj_set_style_bg_color(list, user_light_accent, LV_PART_SELECTED | LV_STATE_CHECKED);
+        lv_obj_set_style_text_color(list, lv_color_white(), LV_PART_SELECTED | LV_STATE_CHECKED);
     }
 }
 
@@ -439,7 +442,7 @@ lv_obj_t *make_num_ta(lv_obj_t *parent, const char *init, int32_t w) {
     lv_obj_set_style_bg_color(ta, user_light_more_bg, 0);
     lv_obj_set_style_border_width(ta, 2, 0);
     lv_obj_set_style_border_color(ta, user_light_accent, 0);
-    lv_obj_set_style_text_color(ta, lv_color_white(), 0);
+    lv_obj_set_style_text_color(ta, user_light_text, 0);
     lv_obj_set_style_pad_ver(ta, USER_PAD_SM / 2, 0);
     ui_keyboard_attach(ta, LV_KEYBOARD_MODE_NUMBER);
     return ta;
@@ -453,12 +456,14 @@ constexpr int32_t kColRunW    = 100;
 constexpr int32_t kColFuncGrow = 5;
 constexpr int32_t kColStatGrow = 3;
 
-/* 测试页所有文字统一白色（按需求），忽略传入的 color 形参 */
-lv_obj_t *make_cjk_label(lv_obj_t *parent, const char *txt, const lv_color_t) {
+/* 文字颜色按调用方传入：表头强调蓝、说明与序号 / 状态列浅灰、循环与任务状态墨色。
+ * 调试页还是深色档时这里统一写死白色、忽略形参；调试页翻浅之后白字压在浅底上看不见，
+ * 改回用形参（调用方给的本来就是浅色档的色）。 */
+lv_obj_t *make_cjk_label(lv_obj_t *parent, const char *txt, lv_color_t color) {
     lv_obj_t *l = lv_label_create(parent);
     lv_label_set_text(l, txt);
     lv_obj_set_style_text_font(l, user_font_cjk(), 0);
-    lv_obj_set_style_text_color(l, lv_color_white(), 0);
+    lv_obj_set_style_text_color(l, color, 0);
     return l;
 }
 
