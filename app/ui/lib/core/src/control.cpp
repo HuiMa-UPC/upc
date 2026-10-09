@@ -2374,7 +2374,7 @@ void show_print_confirm_dialog(void)
         lv_obj_t *pimg = lv_image_create(preview);
         lv_image_set_src(pimg, file->thumb_large_src);
         lv_obj_set_size(pimg, LV_PCT(100), LV_PCT(100));
-        lv_image_set_inner_align(pimg, LV_IMAGE_ALIGN_CONTAIN);
+        lv_image_set_inner_align(pimg, LV_IMAGE_ALIGN_COVER);
         lv_obj_center(pimg);
         lv_obj_remove_flag(pimg, LV_OBJ_FLAG_CLICKABLE);
     } else {
