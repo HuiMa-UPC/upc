@@ -4,8 +4,8 @@
 /**
  * @file plate_height_measure.hpp
  * @brief 打印前测高一次做完三件事：粗测 8 点光路、H>3 在位、再调高度。
- *        粗测必须 8 个点都看到光斑，少一个即光路失败。精测仍可跳过个别点。
- *        回零直接发 Z Home，不再先相对下降；开始关灯；结束不开舱灯。
+ *        粗测扫满 8 点，至少 5 个看到光斑即光路通过，看不到的跳过。
+ *        精测仍可跳过个别点。回零直接发 Z Home，不再先相对下降；开始关灯；结束不开舱灯。
  */
 
 #include "galvo_motion_encode.hpp"
@@ -24,7 +24,7 @@ struct PlateHeightMeasureResult {
     bool   flatness_warn = false;
     /** 粗测 H 不超过门限：没放基板。此时未做粗调 AXIS_INC。 */
     bool   plate_absent = false;
-    /** 粗测 8 点里有点没看到光斑。不算没板，也不算查表失败。 */
+    /** 粗测看到光斑的点数少于 5。不算没板，也不算查表失败。 */
     bool   optical_fail = false;
     float  h_med_mm = 0.0f;
 };
@@ -62,7 +62,7 @@ public:
     }
 
 private:
-    /** 粗测 require_all 时：没光斑是光路失败，有光斑但查表 NaN 是测高失败。 */
+    /** min_spots>0：看到的光斑少于该数是光路失败；看到了但有效查表不足该数是测高失败。 */
     enum class ScanStop { Ok, Aborted, Optical, Lookup };
 
     struct Scan {
@@ -73,7 +73,7 @@ private:
     };
 
     void run(GalvoMotionCalibration cal);
-    Scan scan(const HeightLut2d& lut, const char* tag, bool require_all);
+    Scan scan(const HeightLut2d& lut, const char* tag, int min_spots);
 
     HeightMoveGalvoFn move_galvo_;
     HeightSessionLightFn set_session_light_;

@@ -1,7 +1,7 @@
 {
   "roi_quad": [[0,0], [1079,0], [1079,1279], [0,1279]],
-  "fixed_thresh": 250,
-  "min_area": 2,
+  "fixed_thresh": 240,
+  "min_area": 0,
   "max_area": 200,
   "lut_path": "/userdata/visual/height_lut.txt",
   "enable_clahe": false,

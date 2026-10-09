@@ -46,7 +46,7 @@
 | 符号 | 路径 | 一句话 |
 |------|------|--------|
 | `GlavoService` | `glavo_service.*` | IPC 业务编排 + 工作线程（打印/USB 目录/门控）；`init()` 绑定 RingBuffer → `McuLink` |
-| `HeightLut2d` / `HeightCalibration` / `PlateHeightMeasure` | `height_points.hpp` `height_lut_2d.*` `height_calibration.*` `plate_height_measure.*` | 高度校准与打印前测高（粗测 8 点同时做光路和在位） |
+| `HeightLut2d` / `HeightCalibration` / `PlateHeightMeasure` | `height_points.hpp` `height_lut_2d.*` `height_calibration.*` `plate_height_measure.*` | 高度校准与打印前测高（粗测 8 点，至少 5 点有光斑才算光路通过，同时做在位） |
 | `galvo_motion_encode` | `galvo_motion_encode.*` | 调试运动包编码 + 五点坐标（点位测试） |
 | `gcode_manifest` | `common/fs_manifest/gcode_manifest.*` | Local `UPC_LOCAL_GCODE_DIR/config.json`（UI 读列表，Glavo Prepare/Delete 写） |
 | `print_history_manifest` | `common/fs_manifest/print_history_manifest.*` | `UPC_VIDEO_CONFIG`（Media upsert 写；UI 历史页读，删除后重写） |

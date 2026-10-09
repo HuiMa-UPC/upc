@@ -67,7 +67,7 @@ void PlateHeightMeasure::abort()
 }
 
 PlateHeightMeasure::Scan PlateHeightMeasure::scan(
-    const HeightLut2d& lut, const char* tag, bool require_all)
+    const HeightLut2d& lut, const char* tag, int min_spots)
 {
     Scan out;
     out.h_med = std::nanf("");
@@ -76,6 +76,7 @@ PlateHeightMeasure::Scan PlateHeightMeasure::scan(
 
     std::vector<float> hs;
     hs.reserve(static_cast<std::size_t>(kHeightMeasureCount));
+    int seen = 0;
     for(const auto& pt : kHeightMeasurePoints) {
         float ix = 0.0f;
         float iy = 0.0f;
@@ -86,27 +87,14 @@ PlateHeightMeasure::Scan PlateHeightMeasure::scan(
             break;
         }
         if(rc != HeightSpotRc::Ok) {
-            if(require_all) {
-                UPC_LOG_GLAVO_SERVICE(Error,
-                    "measure[%s]: optical miss (%.1f,%.1f) rc=%d",
-                    tag, pt.x, pt.y, static_cast<int>(rc));
-                out.stop = ScanStop::Optical;
-                break;
-            }
             UPC_LOG_GLAVO_SERVICE(Warn,
                 "measure[%s]: spot skip (%.1f,%.1f) rc=%d",
                 tag, pt.x, pt.y, static_cast<int>(rc));
             continue;
         }
+        ++seen;
         const float h = lut.lookup(pt.x, pt.y, ix, iy);
         if(std::isnan(h)) {
-            if(require_all) {
-                UPC_LOG_GLAVO_SERVICE(Error,
-                    "measure[%s]: lookup nan (%.1f,%.1f) ix=%.3f iy=%.3f",
-                    tag, pt.x, pt.y, static_cast<double>(ix), static_cast<double>(iy));
-                out.stop = ScanStop::Lookup;
-                break;
-            }
             UPC_LOG_GLAVO_SERVICE(Warn,
                 "measure[%s]: lookup nan (%.1f,%.1f) ix=%.3f iy=%.3f, skip",
                 tag, pt.x, pt.y, static_cast<double>(ix), static_cast<double>(iy));
@@ -122,6 +110,20 @@ PlateHeightMeasure::Scan PlateHeightMeasure::scan(
     const int n = static_cast<int>(hs.size());
     out.n = n;
     if(out.stop != ScanStop::Ok) {
+        return out;
+    }
+    if(min_spots > 0 && seen < min_spots) {
+        UPC_LOG_GLAVO_SERVICE(Error,
+            "measure[%s]: optical miss seen=%d/%d need=%d",
+            tag, seen, kHeightMeasureCount, min_spots);
+        out.stop = ScanStop::Optical;
+        return out;
+    }
+    if(min_spots > 0 && n < min_spots) {
+        UPC_LOG_GLAVO_SERVICE(Error,
+            "measure[%s]: lookup short valid=%d seen=%d need=%d",
+            tag, n, seen, min_spots);
+        out.stop = ScanStop::Lookup;
         return out;
     }
     if(n == 0) {
@@ -192,7 +194,7 @@ void PlateHeightMeasure::run(GalvoMotionCalibration cal)
                 static_cast<double>(kFineLutMaxMm));
         }
 
-        const Scan coarse = scan(lut_coarse, "coarse", true);
+        const Scan coarse = scan(lut_coarse, "coarse", kHeightOpticalMinSpots);
         if(abort_requested_.load() || coarse.stop == ScanStop::Aborted) {
             break;
         }
@@ -203,7 +205,7 @@ void PlateHeightMeasure::run(GalvoMotionCalibration cal)
         if(coarse.stop == ScanStop::Lookup || std::isnan(coarse.h_med)) {
             break;
         }
-        /* 8 点都有光斑且都能查表。H 大于门限才当有基板，否则停在这里通知 UI。 */
+        /* 粗测至少 5 点有光斑且能查表。H 大于门限才当有基板，否则停在这里通知 UI。 */
         {
             UPC_LOG_GLAVO_SERVICE(Info,
                 "plate present from coarse H=%.3f threshold=%.3f",
@@ -255,7 +257,7 @@ void PlateHeightMeasure::run(GalvoMotionCalibration cal)
             if(abort_requested_.load()) {
                 break;
             }
-            const Scan s = scan(fine, "fine", false);
+            const Scan s = scan(fine, "fine", 0);
             if(abort_requested_.load()) {
                 break;
             }

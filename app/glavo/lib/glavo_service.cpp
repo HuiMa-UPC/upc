@@ -3383,7 +3383,7 @@ void GlavoService::abort_print_start(middleware::PrintStartRejectReason reason,
 
 void GlavoService::abort_print_for_optical_path()
 {
-    /* 粗测 8 点没看全光斑。测高线程自己停视觉会话。 */
+    /* 粗测看到光斑的点数少于 5。测高线程自己停视觉会话。 */
     publish_device_event(middleware::DeviceEventCode::OpticalPathCheckFail,
                          middleware::DeviceEventSeverity::Critical, true);
     abort_print_start(middleware::PrintStartRejectReason::OpticalPathFail, 0xff);
@@ -6779,7 +6779,7 @@ void GlavoService::continue_print_after_plate_place_confirm()
             "plate place continue dropped: print no longer active");
         return;
     }
-    /* Confirm 后关内门，再整段重做测高（回零、8 点光路、在位、调高）。 */
+    /* Confirm 后关内门，再整段重做测高（回零、8 点里至少 5 点光路、在位、调高）。 */
     (void)begin_early_print_prep(EarlyPrintPrepPhase::AfterPlatePlace);
 }
 
