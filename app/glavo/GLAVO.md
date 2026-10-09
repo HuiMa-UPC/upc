@@ -11,13 +11,12 @@
 | `lib/glavo_service.*` | IPC 业务 + 工作线程 + 订阅/发布（USB 目录/打印/门控/进度）；`init()` 内绑定 RingBuffer → `McuLink` |
 | `lib/mcu_link.*` | TCP 运动下发 + 串口握手/传感器/换层 Snap 触发；RX 侧解析 MCU 报警单条上报（0xA3/0x20）与快照分片（0xA3/0x81），攒齐后并入 SOC 1120：slot 分片 `GLAVO_Alarm_Snapshot_Ntf`→UI，完整位图 `GLAVO_Alarm_Cloud_Snapshot_Ntf`→MQTT；单报 `GLAVO_Alarm_Report_Ntf` 双发 UI+MQTT。调试页 Alarm Inject 只向 MQTT 补单报。MCU 同源 1120 丢弃（SOC 氧门独占） |
 | `lib/print_video_notify.*` | 换层 Snap / 录像会话 → Media（经 UI Hub） |
-| `lib/optical_path_check.*` | 打印前光路检测状态机（独立线程，结果回灌 worker） |
-| `lib/glavo_service.*`（early print prep） | 起印前半段 Z/外门/内门独立线程。基板在位二选一：图案检测在光路前（默认开）；粗测 `H-1>3` 在光路后（默认关）。无板都弹放板窗 |
+| `lib/glavo_service.*`（early print prep） | 起印前半段 Z/外门/内门独立线程。关内门后进入测高：粗测 8 点光路、`H-1>3` 在位、再调高度。无板弹放板窗 |
 | `lib/height_points.hpp` | 测高/校准共用 8 点、Z 零点偏置、门限、单点采样。单点等光斑盖住 Visual 的 8s 等新帧 + 1.5s 认斑 |
 | `lib/height_lut_2d.*` | 8 点二维高度 LUT |
 | `lib/height_calibration.*` | 调试页高度校准（关舱灯 + Red_On → 回零先下降 20mm → 写 LUT → 开舱灯，红光保持） |
-| `lib/plate_height_measure.*` | 打印前两步测高调 Z（开关默认开；光路之后；回零先下降 20mm；期间 SOC 舱灯全关，测高结束保持关；失败阻断起印） |
-| `lib/galvo_motion_encode.*` | 调试运动包编码 + 五点坐标（点位测试与光路检测共用） |
+| `lib/plate_height_measure.*` | 打印前测高（开关默认开）。回零直接发 Z Home。粗测 8 点必须都看到光斑，否则光路失败阻断；接着 `H-1>3` 判断在位，有板再调 Z。期间 SOC 舱灯全关，结束保持关 |
+| `lib/galvo_motion_encode.*` | 调试运动包编码 + 五点坐标（点位测试） |
 | `lib/soc_sensors.*` | SOC 本地：舱内外 PMSA UART、AHT20（≥2s）、双路 CPM121、IIO 氧气（须 `/run/o2_ready`；V=raw×3.3/2^31，100Ω；K 读 `/userdata/CAL/o2_cal.json` 缺省≈655）。链路启动即周期采集。六路舱灯进程启动即默认全开。六路舱灯/`fa_valve` sysfs 调试可随时写。开门前 PM 判定与持续吹风不开关阀。背光不在本模块。 |
 | `lib/spi_status_led.*` | SPI 灯效板：`/dev/spidev1.0` 40 颗 WS 单色。CONDITION+ACTIVE 红，`print_running_` 橙，空闲蓝。进程启动即打开（不等串口）。业务路径只改状态排队；专用 led 线程做 open/ioctl，避免堵 McuLink 串口线程。 |
 | `lib/spi_pm25_lcd.*` | ST7735 SPI 小屏：按 fbdev name `st7735rdrmfb` 打开，常显 3~5 µg/m³ 缓变模拟 PM2.5（舱外 PMSA 暂不可靠；布局自 `doc/spilcd`）。`arm_soc_peripherals` 启动；`poll_soc_env_tick` 刷值；无效显示 `--`。同一个值也作 `pm25_indoor` 推首页/监控页（Home PM2.5）与 MQTT `chamber_ext`。 |
@@ -53,15 +52,14 @@ UI → GlavoService（工作线程）→ ParserManager → RingBuffer → McuLin
 | `Fs_Delete_Ntf` | 删除 Local 文件（磁盘 + config.json） |
 | `UI_Print_Prepare_Req` | 轻量预处理（USB 复制；清单无 `layer_count` 时先读 Snowpath 文件头 `; Total layers:`，对不上再单趟扫 `M3000`；打开解析器并写 config.json）。头或清单已给出总层数时不数行、不把 `get_total_lines()` 写回 `line_count`；Start 不再补扫 |
 | `UI_Parser_Exit_Ntf` | 取消解析（stop_parse + 清会话） |
-| `UI_Print_Start_Req` | 置打印态 → **起印前半段**（Z→−10 / 外门 / 关内门 → **图案在位**，默认开）→ 光路 → 测高（**Plate by Height** 开时粗测 `H-1>3` 判断在位，默认关）。两种在位互斥，无板都弹放板窗。Keep Z 开则整段测高跳过。 |
+| `UI_Print_Start_Req` | 置打印态 → **起印前半段**（Z→−10 / 外门 / 关内门）→ 测高一次做完光路、在位、调高。粗测 8 点必须都看到光斑，少一个发 `OpticalPathFail`。`H-1>3` 才算有板，否则弹放板窗。Keep Z 或 Plate Height Adj 关则整段测高跳过。 |
 | ↑ 起印失败 | 打印态在 `launch_print_from_prepared` 最前面就置（检测那十几秒 UI 已在打印页），所以「运动还没开始就失败」的分支**一律走 `abort_print_start()`** 回滚，否则 UI 停在打印页 0%；失败时 SOC 舱灯全开，并按 Manual Top 路径把 Z 绝对回 **1.00 mm**（已在 Home 则空操作）。**Keep Z Position** 开则不发这次回零 |
 | `UI_Print_Terminate_Req` | 外门确认/起印前半段线程/关内门套件/光路/测高/开扫前 Prepare，以及尚未 `Ready` 的氧门/首层：打断挂起、回红光安全态，**先** `TerminateDone` 让 UI 进结束页，再发 Z 绝对到 **−10 mm**（`send_z_goto_abs`，不等到位）。**Keep Z Position** 开则这一步不发。准备线程等待可被 `print_prep_abort_` 立刻打断。已 `Ready` 出光后则 `stop_parse` + `request_terminate` + `on_print_abort`，不再动 Z。终止时内门保持当前态 |
 | `UI_Print_Pause_Req` | `set_user_dispatch_paused(true)`，仅停 TCP 运动下发 |
 | `UI_Print_Resume_Req` | `set_user_dispatch_paused(false)`，恢复 TCP 运动下发 |
 | `UI_Debug_TestImage_Set_Ntf` | 红光循环打印 `GLAVO_TEST_GCODE_PATH`（默认 `/userdata/test/test.gcode`）；无录像/延时/换层握手/首页打印态；Off 仅 `request_terminate`，不切激光 |
 | `UI_Debug_Galvo_AbsMove_Ntf` | 调试页 Abs X/Y + Move：snowx 口径单点 TCP 运动包（`send_galvo_abs_pos`）；打印中拒绝 |
-| `UI_Debug_OpticalPath_Check_Set_Ntf` | 打印前光路检测开关（仅本次运行，**默认开**；调试页 **Skip Optical Path Chk** 按下后关）。开则 Confirm Print 后、出光前逐点等视觉识别；失败阻断并 `APP_Print_Start_Rejected_Ntf`；期间 SOC 舱灯全关，通过后全开 |
-| `UI_Debug_PlateHeight_Adj_Set_Ntf` | 打印前基板测高调 Z（仅本次运行，默认开）。开则光路之后测 8 点并 AXIS_INC；**无 LUT 或失败阻断起印**（`PlateHeightFail`）。设置页 Advanced Print 与调试页共用这一开关。测高成功、Z 收到约 1mm 之后，再按 `UI_Debug_Plate_Work_Z_Set_Ntf` 的目标补 `(target-1)` mm（正值向上，默认 1 不补） |
+| `UI_Debug_PlateHeight_Adj_Set_Ntf` | 打印前测高总开关（仅本次运行，默认开）。开则关内门后做粗测光路、在位和调 Z；**无 LUT、查表失败或精测失败阻断起印**（`PlateHeightFail`）。8 点没看全光斑是 `OpticalPathFail`。设置页 Advanced Print 与调试页共用这一开关。测高成功、Z 收到约 1mm 之后，再按 `UI_Debug_Plate_Work_Z_Set_Ntf` 的目标补 `(target-1)` mm（正值向上，默认 1 不补） |
 | `UI_Debug_Skip_Outer_Door_Set_Ntf` | 跳过外门检测+关内门套件（仅本次运行，**默认关=要做**）；开则不检门、不开→关边沿也不跑套件 |
 | `UI_Debug_Hold_Prep_Z_Set_Ntf` | 保持当前 Z（仅本次运行，**默认关**）。开则整个打印会话（`print_running_`）内绝对不动 Z：不起印 −10、跳过测高与工作高度抬升、内门套件前不降 Z、准备终止/起印失败不回 Z，Manual/调试 Z 点动与 Home 一律丢弃。会话结束后可再动 Z |
 | `UI_Debug_Galvo_Param_Save_Ntf` | 写 `cal.csv` 第 4 行中心偏移 + `ParserContext::load_calibration`；打印/任一振镜测试进行中拒绝 |

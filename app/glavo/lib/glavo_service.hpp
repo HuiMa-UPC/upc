@@ -5,7 +5,6 @@
 
 #include "gcode_manifest.hpp"
 #include "mcu_link.hpp"
-#include "optical_path_check.hpp"
 #include "height_calibration.hpp"
 #include "plate_height_measure.hpp"
 #include "wifi_manager.hpp"
@@ -27,21 +26,21 @@
 
 namespace upc::glavo {
 
-/** 起印前半段（Z→−10 / 外门 / 关内门 / 读码）跑在独立线程，结果回灌 worker。 */
+/** 起印前半段（Z→−10 / 外门 / 关内门）跑在独立线程，结果回灌 worker。 */
 enum class EarlyPrintPrepPhase : uint8_t {
-    FromLaunch = 0,      /**< Z + 外门 + 内门 + 读码 */
-    AfterOuterDoor = 1,  /**< 外门确认后：内门 + 读码 */
-    AfterPlatePlace = 2, /**< 放板确认后：再关内门，然后重做测高判断 */
+    FromLaunch = 0,      /**< Z + 外门 + 内门 */
+    AfterOuterDoor = 1,  /**< 外门确认后：关内门 */
+    AfterPlatePlace = 2, /**< 放板确认后：再关内门，然后重做测高 */
     PromptAbsent = 3,    /**< 粗测无板：开门并弹放板窗，不堵 worker */
 };
 
 enum class EarlyPrintPrepResult : uint8_t {
-    Continue = 0,         /**< 可进光路/测高 */
+    Continue = 0,         /**< 可进测高（光路、在位、调高） */
     WaitOuterDoor = 1,    /**< 已挂起等 UI 外门确认 */
     WaitPlatePlace = 2,   /**< 已挂起等 UI 放板确认 */
     FailZ = 3,            /**< Z 未到 −10 */
     FailInnerDoor = 4,    /**< 关内门套件失败 */
-    FailPlatePresent = 5, /**< 读码 unknown/超时 */
+    FailPlatePresent = 5, /**< 历史读码失败码，当前流程不再产生 */
     Aborted = 6,          /**< 用户终止打断 */
 };
 
@@ -75,10 +74,10 @@ private:
     /** @brief 在已 prepare 的路径上真正 open/parse/begin（供起印与延迟起印共用） */
     void launch_print_from_prepared(const std::string& full_path);
     /**
-     * @brief 光路检测放行后的起印后半段：open/parse + 首层参考图 gate
-     * @note 从 launch_print_from_prepared 拆出，供检测通过后由 worker 续跑。
+     * @brief 测高放行后的起印后半段：open/parse + 首层参考图 gate
+     * @note 从 launch_print_from_prepared 拆出，供测高通过后由 worker 续跑。
      */
-    void continue_print_after_optical_ready(const std::string& full_path);
+    void continue_print_after_checks(const std::string& full_path);
     void begin_print_motion_after_reference_ready();
     void handle_visual_first_layer_reference_ready_rsp(
         const middleware::Message& msg);
@@ -198,8 +197,6 @@ private:
     void handle_debug_alarm_inject(const middleware::Message& msg);
     void handle_debug_first_layer_visual_check_set(const middleware::Message& msg);
     void handle_debug_first_layer_visual_check_get(const middleware::Message& msg);
-    void handle_debug_optical_path_check_set(const middleware::Message& msg);
-    void handle_debug_optical_path_check_get(const middleware::Message& msg);
     void handle_debug_plate_height_adj_set(const middleware::Message& msg);
     void handle_debug_plate_height_adj_get(const middleware::Message& msg);
     void handle_debug_hold_prep_z_set(const middleware::Message& msg);
@@ -211,11 +208,6 @@ private:
     bool apply_plate_work_z_lift();
     void handle_debug_inner_door_occlusion_set(const middleware::Message& msg);
     void handle_debug_inner_door_occlusion_get(const middleware::Message& msg);
-    void handle_debug_plate_present_set(const middleware::Message& msg);
-    void handle_debug_plate_present_get(const middleware::Message& msg);
-    void handle_debug_plate_by_height_set(const middleware::Message& msg);
-    void handle_debug_plate_by_height_get(const middleware::Message& msg);
-    void publish_debug_plate_by_height_state();
     void handle_debug_soc_led_set(const middleware::Message& msg);
     void handle_debug_soc_led_get(const middleware::Message& msg);
     void handle_debug_cabin_pm_valve_set(const middleware::Message& msg);
@@ -224,10 +216,8 @@ private:
     void handle_debug_status_led_get(const middleware::Message& msg);
     void handle_debug_spi_pm25_lcd_set(const middleware::Message& msg);
     void handle_debug_spi_pm25_lcd_get(const middleware::Message& msg);
-    void handle_visual_optical_path_point_rsp(const middleware::Message& msg);
     /** @brief 舱检挡门 Rsp：在 on_message 里直接投递，避免套件阻塞 worker 时死锁。 */
     void handle_visual_occlusion_rsp(const middleware::Message& msg);
-    void handle_visual_plate_present_rsp(const middleware::Message& msg);
     void handle_height_calib_start_req(const middleware::Message& msg);
     void handle_laser_spot_measure_rsp(const middleware::Message& msg);
     void publish_debug_print_h264_record_state();
@@ -250,11 +240,9 @@ private:
     void publish_debug_first_layer_visual_check_state();
     void publish_debug_test_image_state();
     void publish_debug_galvo_point_test_state();
-    void publish_debug_optical_path_check_state();
     void publish_debug_plate_height_adj_state();
     void publish_debug_hold_prep_z_state();
     void publish_debug_inner_door_occlusion_state();
-    void publish_debug_plate_present_state();
     void publish_debug_soc_led_state();
     void publish_debug_cabin_pm_valve_state();
     void publish_debug_status_led_state();
@@ -262,9 +250,7 @@ private:
     /** @brief 停止并回收点位测试线程；仅用于服务退出。 */
     void stop_galvo_point_test_worker();
 
-    /* ---- 打印前光路检测（优先级高于首层检测） ---- */
-    /** @brief 注册 OpticalPathCheck 的依赖回调；init 阶段调用一次。 */
-    void configure_optical_path_check();
+    /** @brief 注册测高依赖；init 阶段调用一次。测高内含光路与在位。 */
     void configure_plate_height();
     bool begin_plate_height_gate();
     void on_plate_height_done();
@@ -276,7 +262,7 @@ private:
     void set_cabin_light(bool on);
     void send_z_inc(float delta_mm);
     void send_z_home();
-    /** 校准/测高回零：AXIS_INC 下降 kHeightHomeRetractMm，短等后发 Home。 */
+    /** 高度校准回零：AXIS_INC 下降 kHeightHomeRetractMm，短等后发 Home。打印前测高不走这里。 */
     void send_z_home_with_retract();
     bool wait_z_settled(float target_mm, float tolerance_mm, int timeout_ms);
     bool request_laser_spot_measure_sync(float& out_x, float& out_y, int timeout_ms);
@@ -289,7 +275,7 @@ private:
      *         false=已关或跳过，可继续关内门套件
      */
     bool begin_outer_door_gate();
-    /** @brief 外门闸通过后：关内门套件 → 光路/测高 → 起印后半段。 */
+    /** @brief 外门闸通过后：关内门套件 → 测高 → 起印后半段。 */
     void continue_print_after_outer_door_ready();
     /**
      * @brief 内门套件动 Z 的方式。挡门只决定是否跳过整套，不决定动不动 Z。
@@ -337,7 +323,7 @@ private:
     void publish_outer_door_confirm_req();
     void publish_plate_place_confirm_req();
     /**
-     * @brief 每次起印：Z 绝对到位 −10 mm（公差 ±1；偏低也抬回）。与基板读码开关无关。
+     * @brief 每次起印：Z 绝对到位 −10 mm（公差 ±1；偏低也抬回）。
      * @return false=终止或到位失败（不在此 abort；由 early prep 回灌 worker 处理）
      */
     bool ensure_z_at_plate_safe();
@@ -356,28 +342,18 @@ private:
      */
     void finish_prep_user_terminate(const char* red_reason, const char* z_reason);
     /**
-     * @brief 启动起印前半段线程（Z/外门/内门/读码）；立即返回，结果经 pending 回灌。
+     * @brief 启动起印前半段线程（Z/外门/内门）；立即返回，结果经 pending 回灌。
      * @return 恒为 true（异步挂起；调用方须 return）
      */
     bool begin_early_print_prep(EarlyPrintPrepPhase phase);
     /** @brief 准备线程体内：按 phase 串行跑阻塞步骤，不碰 abort_print_start。 */
     EarlyPrintPrepResult run_early_print_prep(EarlyPrintPrepPhase phase);
-    /** @brief 准备线程结果回灌 worker：续跑光路/测高，或 abort / 保持 UI 挂起。 */
+    /** @brief 准备线程结果回灌 worker：续跑测高，或 abort / 保持 UI 挂起。 */
     void on_early_print_prep_done();
-    /** 光路前：底板图案判断有没有基板。关则直接继续。 */
-    EarlyPrintPrepResult begin_plate_present_gate();
-    middleware::PlatePresentResult run_plate_present_round();
     /** 粗测判定无基板：开门并弹现有放板窗。 */
     void prompt_absent_plate();
     /** @brief 无板 Confirm 后再检：外门已关 → 关内门 → 重做测高。 */
     void continue_print_after_plate_place_confirm();
-    /**
-     * @brief 起印前的光路检测 gate
-     * @return true=已起一轮检测，调用方须立即 return 等回灌；false=无需检测，继续测高/起印
-     */
-    bool begin_optical_path_gate();
-    /** @brief 检测线程结果回灌 worker 后的处理（续跑起印或阻断并报警）。 */
-    void on_optical_path_check_done();
     /**
      * @brief 「运动还没开始就起印失败」的统一收尾
      *
@@ -385,11 +361,8 @@ private:
      * prepare 会话（本地副本 + 行数缓存）保留，便于重试时跳过复制与扫描。
      */
     void abort_print_start(middleware::PrintStartRejectReason reason, uint8_t detail);
-    /** @brief 光路检测失败：先推 Critical 告警，再走 abort_print_start。 */
-    void abort_print_for_optical_path(uint8_t failed_point_index);
-    void publish_optical_path_progress(
-        const middleware::OpticalPathProgressPayload& payload);
-    void publish_optical_path_visual_session(bool active);
+    /** @brief 粗测没看全 8 个光斑：先推 Critical 告警，再走 abort_print_start。 */
+    void abort_print_for_optical_path();
     /** @brief 起印前规划本趟实际环境检查步数（跳过的不计）。 */
     void reset_print_prep_plan();
     /**
@@ -404,7 +377,7 @@ private:
     /** @brief 本趟是否会跑首层视觉（含参考图）。 */
     [[nodiscard]] bool print_prep_needs_first_layer() const;
     /**
-     * @brief 外门/内门/光路/测高结束后进入开扫后半段。
+     * @brief 外门/内门/测高结束后进入开扫后半段。
      *        若后面还有氧门/首层则不发 Ready；否则发 Ready 再 continue。
      */
     void continue_after_static_print_prep();
@@ -573,7 +546,7 @@ private:
     std::thread transfer_demo_worker_;
     std::atomic<bool> transfer_demo_busy_{false};
     /**
-     * 起印前半段（Z settle / 挡门视觉 / 读码视觉）独立线程，仿光路/测高：
+     * 起印前半段（Z settle / 外门 / 关内门）独立线程，仿测高：
      * 线程侧只置 early_print_prep_done_pending_，abort/续跑一律回 worker。
      */
     std::thread early_print_prep_thread_;
@@ -596,31 +569,13 @@ private:
     bool first_layer_visual_check_on_ = false; /**< 首层视觉检测开关（仅本次运行） */
     bool first_layer_visual_session_active_ = false; /**< Visual Camera/定位预热会话状态 */
     bool first_layer_reference_waiting_ = false; /**< 等待Visual锁定本次打印裸板B0 */
-    /* ---- 打印前光路检测 ---- */
-    bool optical_path_check_on_ = true; /**< 光路检测开关（仅本次运行，默认开；调试页 Skip Optical Path Chk 按下后关） */
-    bool plate_height_adj_on_ = true; /**< 打印前测高调 Z（仅本次运行，默认开） */
+    /** 打印前测高总开关（仅本次运行，默认开）。关或 Keep Z 则光路、在位、调高一起跳过。 */
+    bool plate_height_adj_on_ = true;
     /** 测高收尾后的目标高度 mm。相对回零停点 1mm 再向上补差值。默认 1：不额外移动。 */
     float plate_work_z_mm_ = 1.0f;
-    /** 准备阶段保持当前 Z（仅本次运行，默认关）。开则不起印降到 −10、内门前不降 Z、终止/失败收尾也不改 Z；基板测高仍动 Z。 */
+    /** 准备阶段保持当前 Z（仅本次运行，默认关）。开则不起印降到 −10、内门前不降 Z、终止/失败收尾也不改 Z，整段测高（光路、在位、调高）也不跑。 */
     bool hold_prep_z_on_ = false;
     bool inner_door_occlusion_on_ = false; /**< 内门视觉挡门（仅本次运行，默认关；设置页 Inner Door Vision / 调试页 Skip 可改） */
-    /** 光路前用底板图案判断有没有基板（仅本次运行，默认开）。与高度判断互斥。 */
-    bool plate_present_on_ = true;
-    /** 光路后用粗测 H-1>3 判断有没有基板（仅本次运行，默认关）。与图案判断互斥。 */
-    bool plate_by_height_on_ = false;
-    OpticalPathCheck optical_path_check_;
-    /**
-     * 检测线程结果回灌 worker 的 pending 位（与 clean_test_done_pending_ 同款）。
-     * 线程侧只置位 + notify，起印续跑一律回到 worker 串行执行。
-     */
-    std::atomic<bool> optical_path_done_pending_{false};
-    std::atomic<bool> optical_path_done_passed_{false};
-    std::atomic<uint8_t> optical_path_failed_point_{kNoFailedPoint};
-    /**
-     * 上一作业仍在 terminate 清理时，运动包会被 McuLink 拒发而误报光路异常。
-     * 此时置位，等 TerminateDone/PrintError 再起检测（仿 deferred_print_start_）。
-     */
-    bool deferred_optical_check_ = false;
     HeightCalibration height_calib_;
     PlateHeightMeasure plate_height_;
     std::mutex laser_spot_mtx_;
@@ -630,6 +585,7 @@ private:
     std::atomic<bool> plate_height_done_pending_{false};
     std::atomic<bool> plate_height_done_ok_{false};
     std::atomic<bool> plate_height_absent_{false};
+    std::atomic<bool> plate_height_optical_fail_{false};
     std::atomic<bool> plate_height_flatness_warn_{false};
     bool deferred_plate_height_ = false;
     std::string plate_height_resume_path_;
@@ -660,9 +616,6 @@ private:
     std::atomic<uint32_t> cabin_session_seq_{1};
     CabinVisualExchange occlusion_exchange_;
     std::atomic<uint32_t> occlusion_request_seq_{1};
-    /* ---- 舱检读码：同挡门，Rsp 在 IPC 回调直投 ---- */
-    CabinVisualExchange plate_present_exchange_;
-    std::atomic<uint32_t> plate_present_request_seq_{1};
     /** 起印环境检查进度：本趟总步数 / 当前已进入步序号 / 上一次推送的 step */
     uint8_t prep_step_total_ = 0;
     uint8_t prep_step_index_ = 0;

@@ -187,7 +187,7 @@ public:
     /**
      * @brief 调试专用：直接下发一个已编码的 11 字节运动子包
      * @note 仅允许在无打印/测试图运动流、无终止清理时调用。
-     *       光路自检 / 点位测试走这条；测高与高度校准不要用。
+     *       调试页点位测试走这条；测高与高度校准不要用。
      */
     bool send_debug_motion_subpacket(const uint8_t subpacket[11]);
     /**

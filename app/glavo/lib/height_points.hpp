@@ -5,7 +5,7 @@
  * @file height_points.hpp
  * @brief 基板测高 / 高度校准共用点表、门限与单点采样。
  *
- * 与光路检测 kGalvoTestPoints（中心+四角）分开：测高 8 点 y≥0。
+ * 与调试页点位测试 kGalvoTestPoints（中心+四角）分开：测高 8 点 y≥0。
  * 改点表必须重新校准。
  */
 
@@ -49,7 +49,7 @@ constexpr float kHeightZHomeMm = 1.0f;
 /** 回零后粗测：H - 1 > 此值视为有基板（mm）。 */
 constexpr float kPlatePresentMinAboveHomeMm = 3.0f;
 
-/** 校准/测高每次回零先相对下降（负向 AXIS_INC），再 Home。Z 无绝对编码器。 */
+/** 高度校准回零先相对下降（负向 AXIS_INC），再 Home。打印前测高直接 Home。Z 无绝对编码器。 */
 constexpr float kHeightHomeRetractMm = 20.0f;
 /** 下降行程等待：编码器在动则提前到点，否则超时后仍发 Home。 */
 constexpr int kHeightHomeRetractWaitMs = 8000;
