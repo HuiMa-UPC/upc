@@ -40,7 +40,6 @@ enum class EarlyPrintPrepResult : uint8_t {
     WaitPlatePlace = 2,   /**< 已挂起等 UI 放板确认 */
     FailZ = 3,            /**< Z 未到 −10 */
     FailInnerDoor = 4,    /**< 关内门套件失败 */
-    FailPlatePresent = 5, /**< 历史读码失败码，当前流程不再产生 */
     Aborted = 6,          /**< 用户终止打断 */
 };
 

@@ -4,7 +4,6 @@
 #include "first_layer_detector.hpp"
 #include "ipc_dma_frame_ring.hpp"
 #include "msg_port.hpp"
-#include "red_dot_detector.hpp"
 #include "plate_height_pipeline.hpp"
 #include "cabin_detector.hpp"
 
@@ -28,7 +27,7 @@ namespace upc::visual {
  * 3) 后台线程消费并释放帧槽，并缓存最新紧凑 NV12 原图
  * 4) 收到 Glavo 首层检测请求时，使用 Y 平面运行模型并回传 0/1 结果
  *
- * 四类会话共用同一路取流（首层 / 光路 / 测高 / 舱内检测）。取流的起停按
+ * 三类会话共用同一路取流（首层 / 测高 / 舱内检测）。取流的起停按
  * 「任一会话激活即保持」处理，任一会话单独结束不得把流拆掉，
  * 见 any_session_active_locked() 与 release_stream_if_idle()。
  */
@@ -102,32 +101,6 @@ private:
     /** 处理 GLAVO_Visual_FirstLayer_Check_Req，回传检测结果。 */
     void on_first_layer_check_req(const middleware::Message& msg);
 
-    /* ---- 打印前光路检测 ---- */
-    void on_optical_path_session_start(const middleware::Message& msg);
-    void on_optical_path_session_stop(const middleware::Message& msg);
-    void start_optical_path_session(const char* reason);
-    void stop_optical_path_session(const char* reason);
-    /** 处理 GLAVO_Visual_OpticalPath_Point_Check_Req：起一条取点线程做窗口轮询。 */
-    void on_optical_path_point_check_req(const middleware::Message& msg);
-    /**
-     * 单点判定窗口轮询体（跑在 optical_point_thread_ 上）。
-     * 先等快照就绪（最多约 8s），再在 timeout_ms 内逐帧调 RedDotDetector。
-     * 空快照不计入「没找到红点」。命中即回包；无帧回 fail_code=1，有帧未找到回 0。
-     * 必须另起线程：消息分发跑在 main.cpp 的主循环里（port.process + tick），
-     * 在回调里阻塞会连 tick 与起流应答一起卡住。
-     */
-    void run_optical_point_window(
-        const middleware::VisualOpticalPathCheckReqPayload& req);
-    /**
-     * @param fail_code result=0 时写入 reserved[0]：1=整段无快照，0=检测器已跑仍未找到。
-     */
-    void send_optical_path_point_rsp(
-        const middleware::VisualOpticalPathCheckReqPayload& req,
-        const RedDotDetection& detection,
-        uint8_t fail_code);
-    /** 回收取点线程。 */
-    void stop_optical_point_thread();
-
     void on_cabin_session_start(const middleware::Message& msg);
     void on_cabin_session_stop(const middleware::Message& msg);
     void on_cabin_check_req(const middleware::Message& msg, bool door);
@@ -172,9 +145,6 @@ private:
     uint64_t last_reference_capture_attempt_ms_ = 0;
     uint64_t last_reference_failure_report_ms_ = 0;
     std::string last_reference_failure_reason_;
-    /** 光路检测会话：与首层会话独立开关，共用同一路取流。 */
-    bool optical_path_session_active_ = false;
-    uint64_t optical_path_session_id_ = 0;
     bool plate_height_session_active_ = false;
     uint64_t plate_height_session_id_ = 0;
     bool cabin_session_active_ = false;
@@ -221,14 +191,9 @@ private:
     std::mutex rejected_diagnostic_mtx_;
     RejectedDiagnosticCandidate latest_rejected_diagnostic_;
 
-    /** 红点识别器（算法桩，见 red_dot_detector.hpp）。 */
-    RedDotDetector red_dot_detector_;
     /** 测高/校准光斑取样线程。Glavo 逐点串行，同一时刻只有一条。 */
     std::thread laser_spot_thread_;
     std::atomic<bool> laser_spot_abort_{false};
-    /** 单点判定窗口轮询线程；Glavo 逐点串行，同一时刻只有一条。 */
-    std::thread optical_point_thread_;
-    std::atomic<bool> optical_point_abort_{false};
 
     CabinDetector cabin_detector_;
     std::thread cabin_thread_;

@@ -52,7 +52,7 @@ UI → GlavoService（工作线程）→ ParserManager → RingBuffer → McuLin
 | `Fs_Delete_Ntf` | 删除 Local 文件（磁盘 + config.json） |
 | `UI_Print_Prepare_Req` | 轻量预处理（USB 复制；清单无 `layer_count` 时先读 Snowpath 文件头 `; Total layers:`，对不上再单趟扫 `M3000`；打开解析器并写 config.json）。头或清单已给出总层数时不数行、不把 `get_total_lines()` 写回 `line_count`；Start 不再补扫 |
 | `UI_Parser_Exit_Ntf` | 取消解析（stop_parse + 清会话） |
-| `UI_Print_Start_Req` | 置打印态 → **起印前半段**（Z→−10 / 外门 / 关内门）→ 测高一次做完光路、在位、调高。粗测 8 点里至少 5 个看到光斑，不足发 `OpticalPathFail`。`H>3` 才算有板，否则弹放板窗。Keep Z 或 Vision Check 关则整段测高跳过。 |
+| `UI_Print_Start_Req` | 置打印态 → **起印前半段**（Z→−10 / 外门 / 关内门）→ 测高一次做完光路、在位、调高。粗测 8 点里至少 5 个看到光斑，不足发 `OpticalPathFail`。`H>3` 才算有板，否则弹放板窗。放板不另占准备进度步，Job 卡停在 Vision check。Keep Z 或 Vision Check 关则整段测高跳过。 |
 | ↑ 起印失败 | 打印态在 `launch_print_from_prepared` 最前面就置（检测那十几秒 UI 已在打印页），所以「运动还没开始就失败」的分支**一律走 `abort_print_start()`** 回滚，否则 UI 停在打印页 0%；失败时 SOC 舱灯全开，并按 Manual Top 路径把 Z 绝对回 **1.00 mm**（已在 Home 则空操作）。**Keep Z Position** 开则不发这次回零 |
 | `UI_Print_Terminate_Req` | 外门确认/起印前半段线程/关内门套件/光路/测高/开扫前 Prepare，以及尚未 `Ready` 的氧门/首层：打断挂起、回红光安全态，**先** `TerminateDone` 让 UI 进结束页，再发 Z 绝对到 **−10 mm**（`send_z_goto_abs`，不等到位）。**Keep Z Position** 开则这一步不发。准备线程等待可被 `print_prep_abort_` 立刻打断。已 `Ready` 出光后则 `stop_parse` + `request_terminate` + `on_print_abort`，不再动 Z。终止时内门保持当前态 |
 | `UI_Print_Pause_Req` | `set_user_dispatch_paused(true)`，仅停 TCP 运动下发 |

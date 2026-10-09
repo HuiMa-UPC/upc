@@ -6597,11 +6597,6 @@ void GlavoService::on_early_print_prep_done()
                              middleware::DeviceEventSeverity::Error, true);
         abort_print_start(middleware::PrintStartRejectReason::InnerDoorSeqFail, 0);
         return;
-    case EarlyPrintPrepResult::FailPlatePresent:
-        publish_device_event(middleware::DeviceEventCode::PlatePresentFail,
-                             middleware::DeviceEventSeverity::Error, true);
-        abort_print_start(middleware::PrintStartRejectReason::PlatePresentFail, 0);
-        return;
     case EarlyPrintPrepResult::Aborted:
         UPC_LOG_GLAVO_SERVICE(Info,
             "early print prep aborted; terminate handler owns cleanup");
@@ -6763,7 +6758,8 @@ void GlavoService::prompt_absent_plate()
                 "plate absent: auto open outer door send failed");
         }
     }
-    publish_print_prep_progress(middleware::PrintPrepStep::PlatePresent);
+    /* 不另发 PlatePresent。测高计划里没有这一步，新步骤号会把进度条提前吃掉
+     * 氧门或首层。放板窗和下面这条事件已经说明要放板，Job 卡继续停在 Vision check。 */
     publish_device_event(middleware::DeviceEventCode::PlateAbsentNeedPlace,
                          middleware::DeviceEventSeverity::Info, true);
     publish_plate_place_confirm_req();

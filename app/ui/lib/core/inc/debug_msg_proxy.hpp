@@ -42,12 +42,10 @@ using DebugClearanceCb = std::function<void(bool active)>;
 using DebugO2CalibCb =
     std::function<void(const middleware::DebugO2CalibRspPayload&)>;
 using DebugFirstLayerVisualCheckCb = std::function<void(bool)>;
-using DebugOpticalPathCheckCb = std::function<void(bool)>;
 using DebugPlateHeightAdjCb = std::function<void(bool)>;
 using DebugPlateWorkZCb = std::function<void(float)>;
 using DebugHoldPrepZCb = std::function<void(bool)>;
 using DebugInnerDoorOcclusionCb = std::function<void(bool)>;
-using DebugPlatePresentCb = std::function<void(bool)>;
 using DebugSocLedCb = std::function<void(uint8_t mask)>;
 using DebugCabinPmValveCb = std::function<void(bool)>;
 using DebugStatusLedCb =
@@ -134,25 +132,17 @@ public:
     void send_alarm_inject(const middleware::AlarmReportPayload& p);
     void send_first_layer_visual_check_set(bool on);
     void request_first_layer_visual_check_state();
-    void send_optical_path_check_set(bool on);
-    void request_optical_path_check_state();
     void send_plate_height_adj_set(bool on);
     void request_plate_height_adj_state();
     /** 测高收到约 1mm 后的目标高度。默认 1 不额外移动。 */
     void send_plate_work_z_set(float target_mm);
     void request_plate_work_z_state();
     void register_plate_work_z(DebugPlateWorkZCb cb);
-    /** on=1：打印准备不改 Z（默认关）。基板测高仍动 Z。 */
+    /** on=1：打印准备不改 Z（默认关）。整段测高（光路、在位、调高）也不跑。 */
     void send_hold_prep_z_set(bool on);
     void request_hold_prep_z_state();
     void send_inner_door_occlusion_set(bool on);
     void request_inner_door_occlusion_state();
-    void send_plate_present_set(bool on);
-    void request_plate_present_state();
-    /** 光路后用粗测高度判断基板在位。与图案判断互斥。 */
-    void send_plate_by_height_set(bool on);
-    void request_plate_by_height_state();
-    void register_plate_by_height(DebugPlatePresentCb cb);
     /** 六路舱灯 / 舱内 PM 阀：sysfs 直控，不看 MCU 版本 */
     void send_soc_led_set(uint8_t channel, bool on);
     void request_soc_led_state();
@@ -197,10 +187,8 @@ public:
     void register_clearance_state(DebugClearanceCb cb);
     void register_o2_calib(DebugO2CalibCb cb);
     void register_first_layer_visual_check(DebugFirstLayerVisualCheckCb cb);
-    void register_optical_path_check(DebugOpticalPathCheckCb cb);
     void register_plate_height_adj(DebugPlateHeightAdjCb cb);
     void register_inner_door_occlusion(DebugInnerDoorOcclusionCb cb);
-    void register_plate_present(DebugPlatePresentCb cb);
     void register_soc_led(DebugSocLedCb cb);
     void register_cabin_pm_valve(DebugCabinPmValveCb cb);
     void register_status_led(DebugStatusLedCb cb);
@@ -218,8 +206,6 @@ public:
     void set_settings_print_gate_observers(
         DebugSkipOuterDoorCb skip_outer,
         DebugInnerDoorOcclusionCb inner_occlusion,
-        DebugPlatePresentCb plate_present,
-        DebugOpticalPathCheckCb optical_path,
         DebugPlateHeightAdjCb plate_height,
         DebugSkipO2GateCb skip_o2,
         DebugHeightCalibProgressCb height_calib,
@@ -300,22 +286,17 @@ private:
     DebugClearanceCb clearance_cb_;
     DebugO2CalibCb o2_calib_cb_;
     DebugFirstLayerVisualCheckCb first_layer_visual_check_cb_;
-    DebugOpticalPathCheckCb optical_path_check_cb_;
     DebugPlateHeightAdjCb plate_height_adj_cb_;
     DebugPlateWorkZCb plate_work_z_cb_;
     DebugInnerDoorOcclusionCb inner_door_occlusion_cb_;
-    DebugPlatePresentCb plate_present_cb_;
     /** 设置页 Advanced Print，与上面的调试页回调并列，互不覆盖。 */
     DebugSkipO2GateCb settings_skip_o2_cb_;
     DebugPowderLowCheckCb settings_powder_low_cb_;
     DebugDoorPmCheckCb settings_door_pm_cb_;
     DebugSkipOuterDoorCb settings_skip_outer_cb_;
-    DebugOpticalPathCheckCb settings_optical_cb_;
     DebugPlateHeightAdjCb settings_plate_height_cb_;
     DebugHoldPrepZCb settings_hold_prep_z_cb_;
     DebugInnerDoorOcclusionCb settings_inner_occl_cb_;
-    DebugPlatePresentCb settings_plate_present_cb_;
-    DebugPlatePresentCb plate_by_height_cb_;
     DebugHeightCalibProgressCb settings_height_calib_cb_;
     DebugSocLedCb soc_led_cb_;
     DebugCabinPmValveCb cabin_pm_valve_cb_;

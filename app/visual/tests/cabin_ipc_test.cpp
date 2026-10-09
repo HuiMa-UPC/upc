@@ -341,25 +341,25 @@ int main() {
         h.shared->mode=1;
         request(3,false,1000,63,0,2); CHECK(response(3,false).result==0); // black is not plate present
 
-        // A legacy visual session has priority: cancel cabin with unknown, but
-        // never stop the legacy stream when an old cabin Stop subsequently arrives.
+        // Plate height has priority: cancel cabin with unknown, but
+        // never stop the height stream when an old cabin Stop subsequently arrives.
         h.shared->mode=0;
         request(4,true,2000,63,1,2); pump_for(80);
-        Message optical_start(MsgType::GLAVO_Visual_OpticalPath_Session_Start_Ntf,
-                              ModuleId::APP_GLAVO,ModuleId::APP_VISUAL);
-        CHECK(port.publish_async(optical_start));
+        Message height_start(MsgType::GLAVO_Visual_PlateHeight_Session_Start_Ntf,
+                             ModuleId::APP_GLAVO,ModuleId::APP_VISUAL);
+        CHECK(port.publish_async(height_start));
         CHECK(response(4,true).result==0);
         pump_for(100);
-        const auto optical_stops=h.shared->stops.load();
+        const auto height_stops=h.shared->stops.load();
         send(MsgType::GLAVO_Visual_Cabin_Session_Stop_Ntf,VisualCabinSessionPayload{2});
         pump_for(100); CHECK(responses.empty());
-        CHECK(h.shared->stops==optical_stops);
+        CHECK(h.shared->stops==height_stops);
         send(MsgType::GLAVO_Visual_Cabin_Session_Start_Ntf,VisualCabinSessionPayload{3});
-        request(1,true,300,63,1,3); CHECK(response(1,true).result==0); // busy with legacy
-        Message optical_stop(MsgType::GLAVO_Visual_OpticalPath_Session_Stop_Ntf,
-                             ModuleId::APP_GLAVO,ModuleId::APP_VISUAL);
-        CHECK(port.publish_async(optical_stop));
-        wait_until([&] { return h.shared->stops>optical_stops; });
+        request(1,true,300,63,1,3); CHECK(response(1,true).result==0); // busy with plate height
+        Message height_stop(MsgType::GLAVO_Visual_PlateHeight_Session_Stop_Ntf,
+                            ModuleId::APP_GLAVO,ModuleId::APP_VISUAL);
+        CHECK(port.publish_async(height_stop));
+        wait_until([&] { return h.shared->stops>height_stops; });
 
         // Keep receiving IPC and frames but withhold periodic result drainage.
         // Stop must discard any positive result queued by the detector worker.

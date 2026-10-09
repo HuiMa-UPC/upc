@@ -40,12 +40,6 @@ void page_user_monitor_enter_printing_mode(const control_file_t *file);
 void page_user_monitor_exit_printing_mode(void);
 void page_user_monitor_printing_update(const control_progress_t *p);
 /**
- * 光路检测逐点进度。右侧 n/5 与 Complete→Printing 兼容回落；
- * Job 卡标题与总进度条由 `page_user_monitor_print_prep_update` 驱动。
- */
-void page_user_monitor_optical_path_update(uint8_t point_index, uint8_t point_total,
-                                           uint8_t state);
-/**
  * 起印环境检查进度。按实际会跑的步骤更新 Job 卡标题与进度条；
  * `step=Ready` 切回 Printing 并把条复位到 0%（与打印层进度分开）。
  * Prepare 阶段不驱动缩略图蒙版。跳过的步骤后端不推，UI 直接看到下一步。

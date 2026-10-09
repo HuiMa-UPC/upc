@@ -44,7 +44,7 @@ add_test(NAME cabin_bundled_profile_tests COMMAND cabin_bundled_profile_tests)
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     add_subdirectory(../../../common ${CMAKE_CURRENT_BINARY_DIR}/common)
     add_executable(cabin_ipc_test cabin_ipc_test.cpp
-        ../lib/first_layer_detector.cpp ../lib/red_dot_detector.cpp
+        ../lib/first_layer_detector.cpp
         ../lib/plate_height_pipeline.cpp ../lib/cabin_detector.cpp ../lib/cabin_profile.cpp
         ../lib/visual_cabin_service.cpp ../lib/visual_service.cpp)
     upc_embed_cabin_profile(cabin_ipc_test)
