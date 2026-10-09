@@ -49,6 +49,8 @@ struct MqttConfig {
     [[nodiscard]] std::string topic_ota_manifest_req() const;
     [[nodiscard]] std::string topic_ota_manifest_resp() const;
     [[nodiscard]] std::string topic_ota_progress() const;
+    [[nodiscard]] std::string topic_ota_check() const;
+    [[nodiscard]] std::string topic_ota_check_ack() const;
     [[nodiscard]] std::string topic_log_collect_progress() const;
     [[nodiscard]] std::string topic_alarm_report() const;
     [[nodiscard]] std::string topic_alarm_ack() const;

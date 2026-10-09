@@ -1064,7 +1064,7 @@ pending 自动解除——正好顺带验超时路径。
 | `user_home` | `page_user_home.*` | 首页待机（浅色档）：设备图 + 问候语 + HOME 空气质量卡 + 四宫格 + 余量胶囊 + 左下 PRINT + 右下开门滑块。打印态与待机监控在 `user_monitor` |
 | `user_monitor` | `page_user_monitor.*` | 监控页（侧栏第 2 格，浅色档）：左摄像头 + 右栏三 Tab（Job / Status / Manual）+ 全屏切换 + 取件弹窗。打印流程的落点。见「监控页」一节 |
 | `user_history` | `page_user_history.*` | 打印历史：三 Tab + Storage 条 + 日期分组卡片 + 管理态批量删除 + 左滑删除 |
-| `user_settings` | `page_user_settings.*` | 设置（浅色档）：8 项左导航 + 右栏白卡版式。Network（Wi-Fi 开关/列表/子页）、Display & Brightness（背光滑条 + 熄屏选择子页，占位）、Storage（容量 + 格式化 + 文件管理，仅前端）、About（版本 + Galvo/MCU OTA）、Debug 密码弹窗。按稿 6089:11322 / 6235:91450 / 6240:92007 / 6251:94362 实现 |
+| `user_settings` | `page_user_settings.*` | 设置（浅色档）：8 项左导航 + 右栏白卡版式。Network（Wi-Fi 开关/列表/子页）、Display & Brightness（背光滑条 + 熄屏选择子页，占位）、Storage（容量 + 格式化 + 文件管理，仅前端）、About（版本 + Check for Update + Galvo/MCU OTA）、Debug 密码弹窗。按稿 6089:11322 / 6235:91450 / 6240:92007 / 6251:94362 实现 |
 | `user_message` | `page_user_message.*` | 消息中心（浅色档）：四 Tab（含临时的 Unresolved，按到达序汇总未处理报警）+ All read 浮层顶栏 + 日期分组混排列表（MCU 报警 + 设备事件）+ 初始 10 条与底部 Load More + 左滑删除历史 + 右侧 632 详情抽屉（Reset 三态）。按稿 6230:89616 / 6091:13405 / 6091:13612 / 6091:13847 实现 |
 | `user_debug` | `page_user_debug.*` | 调试控制台（浅色档，与主页同白/淡色）；Move 页 Z 卡点击步距按 **μm** 输入，`on_jog_click` 乘 `AxisCfg::step_scale`（Z=0.001）转 mm 再发 `send_axis_jog`（契约 value 为 mm；Test 页与监控页 Manual 直接传 mm，不经此换算）；Move 页振镜卡 Abs X/Y + Move 走 `send_galvo_abs_pos`；Other 页按 Process / Cabin / Print Gates / Media & Sim / Inject 分组。Print Gates 含 **Skip Optical Path Chk**（默认关=要做光路）、**Skip Plate Prompt**（默认开）、**Clearance Mask**（默认开：外门补关时监控页盖遮罩，纯本地、不落盘，见「外门补关遮罩」）。`Galvo Point Test` 在 Print Gates，按当前校准表依次显示中心和四角红光点，与正式打印及 Test image 双向互斥。O2 Calib 在左列：输入参考浓度后点圆钮写 `/userdata/CAL/o2_cal.json`；失败 toast 提示、标签仍显示原 K。左列 Fan 开关的勾选态跟 `DebugMsgProxy::fan_on()` 走（与监控页 Manual 共用一份，见「风扇开关态：proxy 常驻缓存，两页共用」），进页先按缓存对齐。Media & Sim 的 **Sys HUD** 打开后，`ui_sys_hud` 在 `lv_layer_sys` 右上角红字显示 CPU 温 / 整机与本进程占用 / 内存（`upc_sys_monitor_sample` 读本机 `/proc` 与 thermal sysfs，不经 IPC），不进布局、不可点，仅本次运行。同组 **Chroma Green** 打开后，`ui_chroma_green` 在 `lv_layer_sys` 铺满纯绿 `#00FF00`（压住业务 UI 与 Sys HUD），中心与四角各一黑色十字作对齐参考，便于后期抠图；再点绿幕任意处关闭并把开关弹回 Off，仅本次运行。顶部传感器条末格 **Zone4** 进页后约 1Hz 读 `thermal_zone4`（同 `sample().zone4_temp_c`），退页停定时器；传感器条下方另有 **Powder IR** 八路料位红外（A1/A2/A3/B1/B2/B3/L/R，`powder_ir_bits`：Blk=遮挡有粉、Clr=受光无粉） |
 | `user_timelapse` | `page_user_timelapse.*` | 延时摄影播放器（隐藏页，历史缩略图进入；全屏 `lv_layer_top`） |
@@ -2342,7 +2342,7 @@ Storage / Advanced Print / Privacy & Security / About / Debug。
   不同，所以不能只切 `bg_opa`；
 - **只有选中项出右箭头**（旧版恒出）。Debug 是例外：它跳开发者页、稿上给的是外链
   箭头 ↗，LVGL 符号字库没有斜向箭头，退而用同向的 ›。**日常隐藏**（不占导航位、点不到）。
-  About 里连点 **Software Version** 右侧版本号三次（两次间隔超过 2s 重新计数），弹出开发者
+  About 里 **Check for Update** 行右侧是检查按钮：先补心跳再问云端，有新版本弹窗确认后下载，已最新则 toast。连点 **Software Version** 右侧版本号三次（两次间隔超过 2s 重新计数），弹出开发者
   密码框，输 `888` 后本次运行才显示左栏 Debug 和 About 里的 Galvo OTA / MCU OTA；再点 Debug
   直接进调试页，不再要第二次密码。重启 App 后重新隐藏；
 - 选中与否的字重差（SemiBold / Regular）Montserrat 追不了，只落地不透明度差

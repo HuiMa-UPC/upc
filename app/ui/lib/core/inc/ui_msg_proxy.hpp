@@ -60,6 +60,8 @@ using McuVersionCb     = std::function<void(const middleware::McuVersionPayload&
 using GalvoVersionCb   = std::function<void(const middleware::GalvoVersionPayload&)>;
 using OtaNotifyCb      = std::function<void(const middleware::OtaNotifyPayload&)>;
 using OtaProgressCb    = std::function<void(const middleware::OtaProgressPayload&)>;
+using OtaCheckResultCb = std::function<void(const middleware::OtaCheckResultPayload&)>;
+using OtaCheckApplyRspCb = std::function<void(const middleware::OtaCheckApplyRspPayload&)>;
 using SocOtaReadyCb    = std::function<void(const middleware::SocOtaReadyPayload&)>;
 using SocOtaApplyRspCb = std::function<void(const middleware::SocOtaApplyRspPayload&)>;
 using DeviceEventCb    = std::function<void(const middleware::DeviceEventPayload&)>;
@@ -195,6 +197,13 @@ public:
     void register_ota_notify(OtaNotifyCb cb);       /**< MQTT_Ota_Notify_Ntf */
     void register_ota_progress(OtaProgressCb cb);   /**< APP_Mqtt_Ota_Progress_Ntf */
 
+    /** 设置页主动检查更新：UI_Ota_Check_Req / APP_Ota_Check_Rsp。 */
+    void send_ota_check();
+    void register_ota_check_result(OtaCheckResultCb cb);
+    /** 用户确认或放弃检查到的版本。 */
+    void send_ota_check_apply(bool approve, const char* next_release_version);
+    void register_ota_check_apply_rsp(OtaCheckApplyRspCb cb);
+
     /** SOC 全包升级：固件就绪后由用户决定重启时机（"稍后"不发消息，直接关窗）。 */
     void send_soc_ota_apply(middleware::SocOtaApplyAction action);
     void register_soc_ota_ready(SocOtaReadyCb cb);      /**< APP_Soc_Ota_Ready_Ntf */
@@ -322,6 +331,8 @@ private:
     GalvoVersionCb galvo_version_cb_;
     OtaNotifyCb ota_notify_cb_;
     OtaProgressCb ota_progress_cb_;
+    OtaCheckResultCb ota_check_result_cb_;
+    OtaCheckApplyRspCb ota_check_apply_rsp_cb_;
     SocOtaReadyCb soc_ota_ready_cb_;
     SocOtaApplyRspCb soc_ota_apply_rsp_cb_;
     DeviceEventCb device_event_cb_;
