@@ -261,6 +261,10 @@ scripts/rongsu.sh start   # glavo + rongsu_camera → ui
 | `APP_Soc_Ota_Ready_Ntf` | — | MQTT→UI | `SocOtaReadyPayload` | `register_soc_ota_ready` | SOC 固件已就绪（进度已 100%），UI 切成"是否重启升级"弹窗，`kind` 区分全包 `.img` 与应用层 A/B。下载完成时发一次；开机后 MQTT **首次连上云端**再补发一次（比 UI 先起，早发会丢） |
 | `UI_Soc_Ota_Apply_Req` | — | UI→MQTT | `SocOtaApplyReqPayload` | `send_soc_ota_apply` | `RebootNow`：全包写 misc 分区后重启进 recovery，应用层切槽后重启；`Discard` 删已落盘固件释放空间。"稍后"不发消息（状态已持久化，下次开机重提示） |
 | `APP_Soc_Ota_Apply_Rsp` | — | MQTT→UI | `SocOtaApplyRspPayload` | `register_soc_ota_apply_rsp` | 处置结果；`RebootNow` 成功时设备已重启，UI 收不到本条 |
+| `UI_Ota_Check_Req` | — | UI→MQTT | Empty | `send_ota_check` | 设置页 About「Check for Update」。先发心跳 `v=3`（`release_version`），再发 `ota/check`（`data` 为空） |
+| `APP_Ota_Check_Rsp` | — | MQTT→UI | `OtaCheckResultPayload` | `register_ota_check_result` | `ota/check_ack` 三态：有更新 / `OTA_NO_UPDATE` / 重试后仍 `OTA_VERSION_NOT_READY`；另有超时与忙碌 |
+| `UI_Ota_Check_Apply_Req` | — | UI→MQTT | `OtaCheckApplyReqPayload` | `send_ota_check_apply` | 用户确认后按 check_ack 的 `components` 下载，不再走 manifest 请求 |
+| `APP_Ota_Check_Apply_Rsp` | — | MQTT→UI | `OtaCheckApplyRspPayload` | `register_ota_check_apply_rsp` | 已开始下载、用户取消，或没有可安装的检查结果 |
 | `XFR_Transfer_Progress_Ntf` | — | XFR→UI | `XfrTransferProgressPayload` | `register_xfr_transfer_progress` | WiFi 传输阶段进度（Uploading/Slicing/Finished/Error）；`progress_percent` 上传按字节 0..100；`transfer_epoch` 区分新任务 |
 | `UI_Xfr_Transfer_Cancel_Ntf` | — | UI→XFR | Empty | `send_xfr_transfer_cancel` | 接收弹窗 Cancel：中止当前上传会话并拒绝后续分块；后处理未提交则丢弃 |
 | `UI_Mcu_Ota_Start_Req` / `UI_Mcu_Ota_Cancel_Ntf` / `APP_Mcu_Ota_Status_Ntf` | — | UI/MQTT↔Glavo | `McuOtaStatusPayload` | `send_mcu_ota_start` / `send_mcu_ota_cancel` / `register_mcu_ota_status` | Galvo 以太网 OTA（`/userdata/image/galvo`，AB 对规则见 [OTA_IMAGE.md](fs_manifest/OTA_IMAGE.md)）。状态 Glavo 双发 UI 与 MQTT |

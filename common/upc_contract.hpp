@@ -642,6 +642,11 @@ enum class MsgType : uint32_t {
     APP_Soc_Ota_Ready_Ntf,                  /**< SocOtaReadyPayload：固件已就绪，UI 弹窗问是否重启 */
     UI_Soc_Ota_Apply_Req,                   /**< SocOtaApplyReqPayload：立即重启升级 / 放弃并删除 */
     APP_Soc_Ota_Apply_Rsp,                  /**< SocOtaApplyRspPayload：处置结果（成功重启则收不到） */
+    // ---- UI ↔ MQTT：主动检查更新（ota/check + ota/check_ack） ----
+    UI_Ota_Check_Req,                       /**< Empty：设置页检查更新；先补心跳 v3 再发 ota/check */
+    APP_Ota_Check_Rsp,                      /**< OtaCheckResultPayload：三态结果 */
+    UI_Ota_Check_Apply_Req,                 /**< OtaCheckApplyReqPayload：用户确认后按 check_ack 的 components 下载 */
+    APP_Ota_Check_Apply_Rsp,                /**< OtaCheckApplyRspPayload：是否已开始下载 */
 
     // ---- UI ↔ GLAVO：MCU 固件版本查询（串口 PORT_GENERAL_TASK 0xA2 / CMD_PROJECT_INFO 0x10） ----
     UI_Mcu_Version_Ntf = 0x1500, /**< Empty：进入 Settings/About 页时查询一次 */
@@ -756,6 +761,10 @@ inline constexpr bool is_ipc_reliable_msg_type(MsgType type) noexcept
     case MsgType::APP_Mqtt_Ota_Progress_Ntf:
     case MsgType::APP_Soc_Ota_Ready_Ntf:
     case MsgType::APP_Soc_Ota_Apply_Rsp:
+    case MsgType::UI_Ota_Check_Req:
+    case MsgType::APP_Ota_Check_Rsp:
+    case MsgType::UI_Ota_Check_Apply_Req:
+    case MsgType::APP_Ota_Check_Apply_Rsp:
     case MsgType::GLAVO_Alarm_Report_Ntf:
     case MsgType::GLAVO_Alarm_Reset_Result_Ntf:
     case MsgType::GLAVO_Alarm_Cloud_Snapshot_Ntf:
@@ -1728,6 +1737,42 @@ struct SocOtaApplyRspPayload {
     uint8_t result;             /**< SocOtaApplyResult */
     uint8_t reserved[2];
     char    reason[64];         /**< 失败详情；成功为空串 */
+};
+
+/** APP_Ota_Check_Rsp：ota/check_ack 三态，外加设备侧超时/忙碌 */
+enum class OtaCheckResult : uint8_t {
+    UpdateAvailable = 0, /**< next_release_version 非空，待用户确认后下载 */
+    UpToDate        = 1, /**< error.code = OTA_NO_UPDATE */
+    NotReady        = 2, /**< 补心跳重试后仍是 OTA_VERSION_NOT_READY */
+    Failed          = 3, /**< 超时、未连接或其它错误 */
+    Busy            = 4, /**< 已有检查或升级在进行 */
+};
+
+struct OtaCheckResultPayload {
+    uint8_t result;             /**< OtaCheckResult */
+    uint8_t reserved[3];
+    char    next_release_version[32]; /**< 仅 UpdateAvailable 有值 */
+    char    message[64];        /**< 给人看的短说明；可为空串 */
+};
+
+/** UI_Ota_Check_Apply_Req：用户对检查结果的确认/取消 */
+struct OtaCheckApplyReqPayload {
+    uint8_t approve;            /**< 1=按已缓存的 components 开始下载；0=放弃 */
+    uint8_t reserved[3];
+    char    next_release_version[32]; /**< 回显检查结果里的版本，避免确认到过期结果 */
+};
+
+/** APP_Ota_Check_Apply_Rsp */
+enum class OtaCheckApplyResult : uint8_t {
+    Started   = 0,
+    Cancelled = 1,
+    Rejected  = 2,
+};
+
+struct OtaCheckApplyRspPayload {
+    uint8_t result;             /**< OtaCheckApplyResult */
+    uint8_t reserved[3];
+    char    reason[64];
 };
 
 /**

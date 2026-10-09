@@ -619,12 +619,12 @@ bool MqttService::publish_cloud_state(bool force)
     return true;
 }
 
-bool MqttService::publish_heartbeat()
+bool MqttService::publish_heartbeat(bool force)
 {
     const uint64_t now = monotonic_ms();
     const uint64_t interval_ms =
         static_cast<uint64_t>(cfg_.heartbeat_interval_sec) * 1000ULL;
-    if(last_heartbeat_pub_ms_ != 0 &&
+    if(!force && last_heartbeat_pub_ms_ != 0 &&
        now - last_heartbeat_pub_ms_ < interval_ms) {
         return false;
     }
@@ -656,10 +656,16 @@ bool MqttService::publish_heartbeat()
     const char* network_type = wifi_connected ? "wifi" : "none";
     const std::string escaped_device = json_escape(cfg_.device_id);
     const std::string escaped_boot = json_escape(boot_id_);
-    const std::string soc_fw = (env_sim_on && !soc_override.empty())
+    const std::string soc_fw_raw = (env_sim_on && !soc_override.empty())
         ? soc_override
         : std::string(UPC_SW_VERSION);
-    const std::string escaped_soc_fw = json_escape(soc_fw);
+    const std::string soc_fw = data_plane_version(soc_fw_raw);
+    const std::string escaped_soc_fw = json_escape(soc_fw.empty() ? "unknown" : soc_fw);
+    /* 整机版本是 check-update 的对账锚，只上报纯数字点分；没有合法版本时发 null。 */
+    const std::string release_ver = numeric_release_version(UPC_SW_VERSION);
+    const std::string release_json = release_ver.empty()
+        ? std::string("null")
+        : ("\"" + json_escape(release_ver) + "\"");
     const std::string escaped_mcu_fw = json_escape(
         mcu_valid ? format_mcu_version(mcu_ver) : std::string("unknown"));
     const std::string escaped_galvo_fw = json_escape(
@@ -668,14 +674,15 @@ bool MqttService::publish_heartbeat()
     char payload[1024];
     std::snprintf(payload, sizeof(payload),
         "{"
-        "\"v\":1,"
+        "\"v\":3,"
         "\"type\":\"heartbeat\","
         "\"device_id\":\"%s\","
         "\"ts\":%lld,"
         "\"seq\":%u,"
+        "\"boot_id\":\"%s\","
         "\"data\":{"
-            "\"boot_id\":\"%s\","
             "\"uptime_s\":%lld,"
+            "\"release_version\":%s,"
             "\"firmwares\":["
                 "{\"firmware_type\":\"soc\",\"version\":\"%s\"},"
                 "{\"firmware_type\":\"mcu\",\"version\":\"%s\"},"
@@ -690,6 +697,7 @@ bool MqttService::publish_heartbeat()
         seq,
         escaped_boot.c_str(),
         uptime_s,
+        release_json.c_str(),
         escaped_soc_fw.c_str(),
         escaped_mcu_fw.c_str(),
         escaped_galvo_fw.c_str(),

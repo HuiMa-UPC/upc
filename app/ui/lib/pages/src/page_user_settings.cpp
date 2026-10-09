@@ -1427,6 +1427,13 @@ void on_sw_version_click(lv_event_t * /*e*/)
     }
 }
 
+/** About「Check for Update」：发检查请求。有无新版本的弹窗/提示在 ui_app。 */
+void on_check_update_click(lv_event_t * /*e*/)
+{
+    ui_toast_show("Checking for updates...", user_color_accent, 1500);
+    ui::UiMsgProxy::instance().send_ota_check();
+}
+
 /** About 只读行：[标题 ... 值(dim)]，返回值标签供异步刷新用 */
 lv_obj_t *about_add_row(lv_obj_t *card, const char *label, const char *value)
 {
@@ -1449,6 +1456,8 @@ void build_about_detail(lv_obj_t *parent)
     lv_obj_add_flag(sw_ver, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_set_ext_click_area(sw_ver, 16);
     lv_obj_add_event_cb(sw_ver, on_sw_version_click, LV_EVENT_CLICKED, nullptr);
+    /* 主动检查更新：按钮在行右侧。结果弹窗在 ui_app，不绑本页生命周期。 */
+    ui_user_make_setting_row(card, "Check for Update", "Check", on_check_update_click);
     about_add_row(card, "Device Model",     about_device_model_text());
     /* MCU 版本由串口异步返回：先填缓存（首次为 "--"），应答/超时后由 mcu_ver_* 刷新 */
     g_mcu_ver_lbl = about_add_row(card, "MCU Version", g_mcu_ver_text);

@@ -137,6 +137,16 @@ std::string MqttConfig::topic_ota_progress() const
     return topic_prefix() + "ota/progress";
 }
 
+std::string MqttConfig::topic_ota_check() const
+{
+    return topic_prefix() + "ota/check";
+}
+
+std::string MqttConfig::topic_ota_check_ack() const
+{
+    return topic_prefix() + "ota/check_ack";
+}
+
 std::string MqttConfig::topic_log_collect_progress() const
 {
     return topic_prefix() + "log_collect/progress";

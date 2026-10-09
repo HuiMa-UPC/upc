@@ -465,6 +465,27 @@ void UiMsgProxy::init()
         }));
 
     subs_.push_back(bus.subscribe(
+        middleware::MsgType::APP_Ota_Check_Rsp, middleware::ModuleId::UI,
+        [this](const middleware::Message& msg) {
+            middleware::OtaCheckResultPayload p{};
+            if (ota_check_result_cb_ && read_inline_pod(msg, p)) {
+                p.next_release_version[sizeof(p.next_release_version) - 1] = '\0';
+                p.message[sizeof(p.message) - 1] = '\0';
+                ota_check_result_cb_(p);
+            }
+        }));
+
+    subs_.push_back(bus.subscribe(
+        middleware::MsgType::APP_Ota_Check_Apply_Rsp, middleware::ModuleId::UI,
+        [this](const middleware::Message& msg) {
+            middleware::OtaCheckApplyRspPayload p{};
+            if (ota_check_apply_rsp_cb_ && read_inline_pod(msg, p)) {
+                p.reason[sizeof(p.reason) - 1] = '\0';
+                ota_check_apply_rsp_cb_(p);
+            }
+        }));
+
+    subs_.push_back(bus.subscribe(
         middleware::MsgType::APP_Soc_Ota_Apply_Rsp, middleware::ModuleId::UI,
         [this](const middleware::Message& msg) {
             middleware::SocOtaApplyRspPayload p{};
@@ -747,6 +768,37 @@ void UiMsgProxy::register_ota_notify(OtaNotifyCb cb)
 void UiMsgProxy::register_ota_progress(OtaProgressCb cb)
 {
     ota_progress_cb_ = std::move(cb);
+}
+
+void UiMsgProxy::send_ota_check()
+{
+    middleware::Message msg(middleware::MsgType::UI_Ota_Check_Req,
+                            middleware::ModuleId::UI,
+                            middleware::ModuleId::APP_MQTT);
+    middleware::MsgPort::instance().publish_async(msg);
+}
+
+void UiMsgProxy::register_ota_check_result(OtaCheckResultCb cb)
+{
+    ota_check_result_cb_ = std::move(cb);
+}
+
+void UiMsgProxy::send_ota_check_apply(bool approve, const char* next_release_version)
+{
+    middleware::OtaCheckApplyReqPayload payload{};
+    payload.approve = approve ? uint8_t(1) : uint8_t(0);
+    if(next_release_version && next_release_version[0]) {
+        std::snprintf(payload.next_release_version,
+                      sizeof(payload.next_release_version),
+                      "%s", next_release_version);
+    }
+    publish_pod(middleware::MsgType::UI_Ota_Check_Apply_Req,
+                middleware::ModuleId::APP_MQTT, payload);
+}
+
+void UiMsgProxy::register_ota_check_apply_rsp(OtaCheckApplyRspCb cb)
+{
+    ota_check_apply_rsp_cb_ = std::move(cb);
 }
 
 void UiMsgProxy::send_soc_ota_apply(middleware::SocOtaApplyAction action)
