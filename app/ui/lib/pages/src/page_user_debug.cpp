@@ -151,14 +151,10 @@ lv_obj_t *g_o2_calib_ref_ta = nullptr;      /**< 标定时参考氧浓度 % */
 bool      g_o2_calib_pending = false;       /**< 点击后等待 Rsp */
 lv_obj_t *g_first_layer_visual_btn = nullptr; /**< 其他控制：首层视觉检测开关按钮 */
 lv_obj_t *g_first_layer_visual_state_lbl = nullptr; /**< 其他控制：首层视觉检测状态文本 */
-lv_obj_t *g_optical_path_check_btn = nullptr; /**< 其他控制：Skip Optical Path Chk（按下=跳过光路） */
-lv_obj_t *g_optical_path_check_state_lbl = nullptr; /**< 其他控制：Skip Optical Path Chk 状态字 */
 lv_obj_t *g_plate_height_adj_btn = nullptr; /**< 其他控制：打印前基板测高开关按钮 */
 lv_obj_t *g_plate_height_adj_state_lbl = nullptr; /**< 其他控制：打印前基板测高状态文本 */
 lv_obj_t *g_inner_door_occlusion_btn = nullptr; /**< 其他控制：跳过内门视觉挡门 */
 lv_obj_t *g_inner_door_occlusion_state_lbl = nullptr;
-lv_obj_t *g_plate_present_btn = nullptr; /**< 其他控制：跳过基板在位读码 */
-lv_obj_t *g_plate_present_state_lbl = nullptr;
 lv_obj_t *g_soc_led_btn[middleware::kDebugSocLedCount] = {};
 lv_obj_t *g_soc_led_state_lbl[middleware::kDebugSocLedCount] = {};
 lv_obj_t *g_cabin_pm_valve_btn = nullptr;   /**< 其他控制：舱内 PM fa_valve */
@@ -3177,23 +3173,6 @@ void bind_debug_callbacks()
         lv_label_set_text(g_height_calib_lbl, buf);
     });
 
-    /* 载荷 on=1 表示执行光路。按钮是 Skip，回读时取反。 */
-    proxy.register_optical_path_check([](bool detect_on) {
-        const bool skip = !detect_on;
-        if(g_optical_path_check_btn) {
-            if(skip) {
-                lv_obj_add_state(g_optical_path_check_btn, LV_STATE_CHECKED);
-            } else {
-                lv_obj_clear_state(g_optical_path_check_btn, LV_STATE_CHECKED);
-            }
-        }
-        if(g_optical_path_check_state_lbl) {
-            lv_label_set_text(g_optical_path_check_state_lbl, skip ? "On" : "Off");
-            lv_obj_set_style_text_color(g_optical_path_check_state_lbl,
-                                        skip ? user_light_accent : user_light_icon_off, 0);
-        }
-    });
-
     proxy.register_plate_height_adj([](bool on) {
         if(g_plate_height_adj_btn) {
             if(on) {
@@ -3222,23 +3201,6 @@ void bind_debug_callbacks()
         if(g_inner_door_occlusion_state_lbl) {
             lv_label_set_text(g_inner_door_occlusion_state_lbl, skip ? "On" : "Off");
             lv_obj_set_style_text_color(g_inner_door_occlusion_state_lbl,
-                                        skip ? user_light_accent : user_light_icon_off, 0);
-        }
-    });
-
-    /* 载荷 on=1 表示执行读码。按钮是 Skip，回读时取反。 */
-    proxy.register_plate_present([](bool detect_on) {
-        const bool skip = !detect_on;
-        if(g_plate_present_btn) {
-            if(skip) {
-                lv_obj_add_state(g_plate_present_btn, LV_STATE_CHECKED);
-            } else {
-                lv_obj_clear_state(g_plate_present_btn, LV_STATE_CHECKED);
-            }
-        }
-        if(g_plate_present_state_lbl) {
-            lv_label_set_text(g_plate_present_state_lbl, skip ? "On" : "Off");
-            lv_obj_set_style_text_color(g_plate_present_state_lbl,
                                         skip ? user_light_accent : user_light_icon_off, 0);
         }
     });
@@ -3435,14 +3397,10 @@ void reset_globals()
     g_o2_calib_pending = false;
     g_first_layer_visual_btn = nullptr;
     g_first_layer_visual_state_lbl = nullptr;
-    g_optical_path_check_btn = nullptr;
-    g_optical_path_check_state_lbl = nullptr;
     g_plate_height_adj_btn = nullptr;
     g_plate_height_adj_state_lbl = nullptr;
     g_inner_door_occlusion_btn = nullptr;
     g_inner_door_occlusion_state_lbl = nullptr;
-    g_plate_present_btn = nullptr;
-    g_plate_present_state_lbl = nullptr;
     for(uint8_t i = 0; i < middleware::kDebugSocLedCount; ++i) {
         g_soc_led_btn[i] = nullptr;
         g_soc_led_state_lbl[i] = nullptr;
@@ -3526,10 +3484,8 @@ void page_user_debug_exit(void)
     proxy.register_inner_door_busy(nullptr);
     proxy.register_o2_calib(nullptr);
     proxy.register_first_layer_visual_check(nullptr);
-    proxy.register_optical_path_check(nullptr);
     proxy.register_plate_height_adj(nullptr);
     proxy.register_inner_door_occlusion(nullptr);
-    proxy.register_plate_present(nullptr);
     proxy.register_soc_led(nullptr);
     proxy.register_cabin_pm_valve(nullptr);
     proxy.register_status_led(nullptr);

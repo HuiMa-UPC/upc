@@ -210,7 +210,7 @@ lv_obj_t *g_job_thumb_icon = nullptr;
 lv_obj_t *g_job_name       = nullptr;
 lv_obj_t *g_job_badge      = nullptr;  /**< 状态行图标（转圈/三角/勾） */
 lv_obj_t *g_job_state      = nullptr;  /**< 状态词 */
-lv_obj_t *g_job_extra      = nullptr;  /**< 层号 / 光路检测点位，贴百分比左侧 */
+lv_obj_t *g_job_extra      = nullptr;  /**< 层号，贴百分比左侧 */
 lv_obj_t *g_job_percent    = nullptr;
 lv_obj_t *g_job_bar        = nullptr;
 lv_obj_t *g_job_divider    = nullptr;  /**< 完成态用它顶掉进度条（稿 6338:27946） */
@@ -3358,11 +3358,6 @@ void monitor_backend_init(void)
         apply_phase();
     });
 
-    ui::UiMsgProxy::instance().register_optical_path_progress(
-        [](const middleware::OpticalPathProgressPayload &p) {
-            page_user_monitor_optical_path_update(p.point_index, p.point_total, p.state);
-        });
-
     ui::UiMsgProxy::instance().register_print_prep_progress(
         [](const middleware::PrintPrepProgressPayload &p) {
             page_user_monitor_print_prep_update(p.step, p.step_index, p.step_total,
@@ -3644,34 +3639,6 @@ void page_user_monitor_printing_update(const control_progress_t *p)
     job_time_set_remaining(remain, remain > 0 || g_percent >= 100);
 }
 
-void page_user_monitor_optical_path_update(uint8_t point_index, uint8_t point_total,
-                                           uint8_t state)
-{
-    if(!g_printing || phase_finished()) {
-        return;
-    }
-    if(state == static_cast<uint8_t>(middleware::OpticalPathPointState::Complete)) {
-        /* 光路只是 Prepare 里的一步；后面还可能有测高/氧门/首层。
-         * 切 Printing 一律等 print_prep 的 Ready，这里只清右侧 n/5。 */
-        if(g_job_extra) {
-            lv_label_set_text(g_job_extra, "");
-            lv_obj_add_flag(g_job_extra, LV_OBJ_FLAG_HIDDEN);
-        }
-        return;
-    }
-    /* 标题与总进度由 print_prep 驱动；此处只补右侧 n/5，并保证仍在 PREPARING。 */
-    if(g_phase != PHASE_PREPARING) {
-        g_phase = PHASE_PREPARING;
-        apply_phase();
-    }
-    if(g_job_extra && point_total > 0) {
-        lv_label_set_text_fmt(g_job_extra, "%u/%u",
-                              static_cast<unsigned>(point_index) + 1u,
-                              static_cast<unsigned>(point_total));
-        lv_obj_remove_flag(g_job_extra, LV_OBJ_FLAG_HIDDEN);
-    }
-}
-
 void page_user_monitor_print_prep_update(uint8_t step, uint8_t step_index, uint8_t step_total,
                                          uint8_t sub_index, uint8_t sub_total)
 {
@@ -3708,9 +3675,6 @@ void page_user_monitor_print_prep_update(uint8_t step, uint8_t step_index, uint8
     case middleware::PrintPrepStep::InnerDoor:
         title = "Closing inner door...";
         break;
-    case middleware::PrintPrepStep::OpticalPath:
-        title = "Optical path check...";
-        break;
     case middleware::PrintPrepStep::PlateHeight:
         title = "Vision check...";
         break;
@@ -3719,9 +3683,6 @@ void page_user_monitor_print_prep_update(uint8_t step, uint8_t step_index, uint8
         break;
     case middleware::PrintPrepStep::FirstLayer:
         title = "First layer check...";
-        break;
-    case middleware::PrintPrepStep::PlatePresent:
-        title = "Checking build plate...";
         break;
     default:
         break;
@@ -3760,13 +3721,7 @@ void page_user_monitor_print_prep_update(uint8_t step, uint8_t step_index, uint8
     }
     /* Prepare 只驱动条与数字；缩略图蒙版表示打印层进度，环境检查阶段保持 0%。 */
 
-    if(step == static_cast<uint8_t>(middleware::PrintPrepStep::OpticalPath) &&
-       sub_total > 0 && g_job_extra) {
-        lv_label_set_text_fmt(g_job_extra, "%u/%u",
-                              static_cast<unsigned>(sub_index) + 1u,
-                              static_cast<unsigned>(sub_total));
-        lv_obj_remove_flag(g_job_extra, LV_OBJ_FLAG_HIDDEN);
-    } else if(g_job_extra) {
+    if(g_job_extra) {
         lv_label_set_text(g_job_extra, "");
         lv_obj_add_flag(g_job_extra, LV_OBJ_FLAG_HIDDEN);
     }

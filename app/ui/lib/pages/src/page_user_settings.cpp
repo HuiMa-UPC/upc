@@ -362,9 +362,6 @@ uint32_t g_sw_ver_tap_tick = 0;
 /** Advanced Print 门控。开=执行该项检测，和调试页同一条 Glavo 开关。 */
 lv_obj_t *g_gate_outer = nullptr;
 lv_obj_t *g_gate_inner = nullptr;
-lv_obj_t *g_gate_plate = nullptr;
-lv_obj_t *g_gate_plate_height = nullptr;
-lv_obj_t *g_gate_optical = nullptr;
 lv_obj_t *g_gate_height = nullptr;
 lv_obj_t *g_gate_o2 = nullptr;
 lv_obj_t *g_gate_powder = nullptr;
@@ -2011,9 +2008,8 @@ void set_gate_switch(lv_obj_t *sw, bool on)
 void clear_print_gate_observers(void)
 {
     ui::DebugMsgProxy::instance().set_settings_print_gate_observers(
-        {}, {}, {}, {}, {}, {}, {}, {}, {}, {});
+        {}, {}, {}, {}, {}, {}, {}, {});
     ui::DebugMsgProxy::instance().register_plate_work_z(nullptr);
-    ui::DebugMsgProxy::instance().register_plate_by_height(nullptr);
 }
 
 void apply_plate_work_z_text(float mm)
@@ -2053,8 +2049,6 @@ void bind_print_gate_observers(void)
     ui::DebugMsgProxy::instance().set_settings_print_gate_observers(
         [](bool skip_on) { set_gate_switch(g_gate_outer, !skip_on); },
         [](bool detect_on) { set_gate_switch(g_gate_inner, detect_on); },
-        [](bool) {},
-        [](bool) {},
         [](bool on) { set_gate_switch(g_gate_height, on); },
         [](bool skip_on) { set_gate_switch(g_gate_o2, !skip_on); },
         [](const middleware::HeightCalibProgressPayload& p) {
@@ -2173,8 +2167,8 @@ lv_obj_t *make_gate_row(lv_obj_t *card, const char *label, PrintGate gate,
 
 void build_print_detail(lv_obj_t *parent)
 {
-    g_gate_outer = g_gate_inner = g_gate_plate = g_gate_plate_height = nullptr;
-    g_gate_optical = g_gate_height = g_gate_o2 = g_gate_powder = g_gate_pm25 = g_gate_hold_z = nullptr;
+    g_gate_outer = g_gate_inner = g_gate_height = nullptr;
+    g_gate_o2 = g_gate_powder = g_gate_pm25 = g_gate_hold_z = nullptr;
     g_gate_transfer = nullptr;
     g_gate_auto_print = nullptr;
     g_height_calib_lbl = nullptr;
@@ -2349,8 +2343,8 @@ void show_detail(NavId id)
     g_mcu_ver_lbl = nullptr;
     g_galvo_ver_lbl = nullptr;
     g_bl_pct_lbl = nullptr;
-    g_gate_outer = g_gate_inner = g_gate_plate = g_gate_plate_height = nullptr;
-    g_gate_optical = g_gate_height = g_gate_o2 = g_gate_powder = g_gate_pm25 = g_gate_hold_z = nullptr;
+    g_gate_outer = g_gate_inner = g_gate_height = nullptr;
+    g_gate_o2 = g_gate_powder = g_gate_pm25 = g_gate_hold_z = nullptr;
     g_gate_transfer = nullptr;
     g_gate_auto_print = nullptr;
     g_height_calib_lbl = nullptr;
@@ -2618,8 +2612,8 @@ lv_obj_t *page_user_settings_create(lv_obj_t *parent)
     g_page       = nullptr;
     g_float_back = nullptr;
     g_mcu_ver_lbl = nullptr;
-    g_gate_outer = g_gate_inner = g_gate_plate = g_gate_plate_height = nullptr;
-    g_gate_optical = g_gate_height = g_gate_o2 = g_gate_powder = g_gate_pm25 = g_gate_hold_z = nullptr;
+    g_gate_outer = g_gate_inner = g_gate_height = nullptr;
+    g_gate_o2 = g_gate_powder = g_gate_pm25 = g_gate_hold_z = nullptr;
     g_gate_transfer = nullptr;
     g_gate_auto_print = nullptr;
     g_height_calib_lbl = nullptr;

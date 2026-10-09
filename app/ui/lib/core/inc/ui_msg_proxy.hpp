@@ -31,7 +31,6 @@ using PrintProgressCb  = std::function<void(const middleware::PrintProgressPaylo
 using PrintTerminateDoneCb = std::function<void()>;
 using PrintPauseDoneCb = std::function<void(bool paused)>;
 using PrintPowderLowCb = std::function<void()>;
-using OpticalPathProgressCb = std::function<void(const middleware::OpticalPathProgressPayload&)>;
 using PrintPrepProgressCb = std::function<void(const middleware::PrintPrepProgressPayload&)>;
 using PrintStartRejectedCb = std::function<void(const middleware::PrintStartRejectedPayload&)>;
 using PrintStateCb = std::function<void(uint32_t mode)>;
@@ -151,8 +150,6 @@ public:
      */
     void register_print_powder_low(PrintPowderLowCb cb);
 
-    /** 打印前光路检测逐点进度（打印卡徽标行）。 */
-    void register_optical_path_progress(OpticalPathProgressCb cb);
     /** 起印环境检查进度（Job 卡标题 + 进度条；跳过步不推）。 */
     void register_print_prep_progress(PrintPrepProgressCb cb);
     /** 起印被后端拒绝（光路/测高/TCP/关内门等）：UI 跳终止结果页。 */
@@ -305,7 +302,6 @@ private:
     PrintTerminateDoneCb print_terminate_done_cb_;
     PrintPauseDoneCb print_pause_done_cb_;
     PrintPowderLowCb print_powder_low_cb_;
-    OpticalPathProgressCb optical_path_progress_cb_;
     PrintPrepProgressCb print_prep_progress_cb_;
     PrintStartRejectedCb print_start_rejected_cb_;
     PrintStateCb print_state_cb_;
