@@ -32,7 +32,7 @@ void VisualService::on_cabin_session_start(const middleware::Message& msg) {
         // A replayed Start cannot revive a stopped/completed session.
         if(!cabin_session_start_allowed(cabin_session_id_,cabin_session_active_ || cabin_check_active_,
                                         cabin_stopped_ms_,req.session_id,monotonic_ms())) return;
-        if(first_layer_session_active_ || optical_path_session_active_ || plate_height_session_active_) {
+        if(first_layer_session_active_ || plate_height_session_active_) {
             UPC_LOG_VISUAL_SERVICE(Warn,"cabin inspect start rejected: another visual session active");
             return;
         }
@@ -101,7 +101,7 @@ void VisualService::on_cabin_check_req(const middleware::Message& msg, bool door
     {
         std::lock_guard<std::mutex> lock(state_mtx_);
         active = cabin_session_active_ && cabin_session_id_ == req.session_id &&
-            !first_layer_session_active_ && !optical_path_session_active_ && !plate_height_session_active_;
+            !first_layer_session_active_ && !plate_height_session_active_;
     }
     middleware::VisualCabinCheckRspPayload unknown{};
     unknown.session_id = req.session_id; unknown.request_id = req.request_id;
