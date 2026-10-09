@@ -1568,13 +1568,9 @@ void on_dbg_toggle(lv_event_t *e)
                  break;
         case 10: proxy.send_first_layer_visual_check_set(on);  /* 首层视觉检测（仅本次运行） */
                  break;
-        case 14: proxy.send_optical_path_check_set(!on);      /* Skip Optical Path Chk：按下跳过光路；载荷 on=1 仍表示执行（默认执行） */
-                 break;
-        case 15: proxy.send_plate_height_adj_set(on);          /* 打印前基板测高调 Z（仅本次运行，默认开） */
+        case 15: proxy.send_plate_height_adj_set(on);          /* 打印前测高（光路、在位、调高；仅本次运行，默认开） */
                  break;
         case 22: proxy.send_inner_door_occlusion_set(!on);    /* Skip Inner Door Occl：按下跳过挡门融合；载荷 on=1 仍表示执行（默认关=Skip 开） */
-                 break;
-        case 23: proxy.send_plate_present_set(!on);            /* Skip Plate Present：按下跳过读码；载荷 on=1 仍表示执行（默认执行） */
                  break;
         /* SOC 六路舱灯 / 舱内 PM 阀：sysfs 直控，不看 MCU 版本 */
         case 16: proxy.send_soc_led_set(c->arg, on);
@@ -2439,15 +2435,11 @@ void build_other_switches_column(lv_obj_t *parent)
                          on_transfer_demo_click, nullptr, nullptr);
     make_dbg_toggle(rowG1, "1st Layer Visual", "On", "Off", LV_SYMBOL_PLAY, false,
                     10, 0, true, 0, &g_first_layer_visual_btn, &g_first_layer_visual_state_lbl);
-    make_dbg_toggle(rowG1, "Plate Height Adj", "On", "Off", LV_SYMBOL_UP, true,
+    make_dbg_toggle(rowG1, "Vision Check", "On", "Off", LV_SYMBOL_UP, true,
                     15, 0, true, 0, &g_plate_height_adj_btn, &g_plate_height_adj_state_lbl);
     lv_obj_t *rowG2 = make_switch_grid_row(gate);
-    make_dbg_toggle(rowG2, "Skip Optical Path Chk", "On", "Off", LV_SYMBOL_EYE_OPEN, false,
-                    14, 0, true, 0, &g_optical_path_check_btn, &g_optical_path_check_state_lbl);
     make_dbg_toggle(rowG2, "Skip Inner Door Occl", "On", "Off", LV_SYMBOL_EYE_CLOSE, true,
                     22, 0, true, 0, &g_inner_door_occlusion_btn, &g_inner_door_occlusion_state_lbl);
-    make_dbg_toggle(rowG2, "Skip Plate Present", "On", "Off", LV_SYMBOL_OK, false,
-                    23, 0, true, 0, &g_plate_present_btn, &g_plate_present_state_lbl);
     make_dbg_toggle(rowG2, "Skip Plate Prompt", "On", "Off", LV_SYMBOL_NEXT,
                     control_skip_plate_prompt_enabled(), 24, 0);
     lv_obj_t *rowG3 = make_switch_grid_row(gate);
@@ -3501,10 +3493,8 @@ void page_user_debug_refresh(bool /*force*/)
     ui::DebugMsgProxy::instance().request_inner_door_busy();
     ui::DebugMsgProxy::instance().request_o2_calib_state();
     ui::DebugMsgProxy::instance().request_first_layer_visual_check_state();
-    ui::DebugMsgProxy::instance().request_optical_path_check_state();
     ui::DebugMsgProxy::instance().request_plate_height_adj_state();
     ui::DebugMsgProxy::instance().request_inner_door_occlusion_state();
-    ui::DebugMsgProxy::instance().request_plate_present_state();
     ui::DebugMsgProxy::instance().request_soc_led_state();
     ui::DebugMsgProxy::instance().request_cabin_pm_valve_state();
     ui::DebugMsgProxy::instance().request_status_led_state();

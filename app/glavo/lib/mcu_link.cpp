@@ -1497,7 +1497,8 @@ void McuLink::drain_serial_tx_queue()
 
 void McuLink::on_motion_pos_report(const serial_motion_pos_t& pos)
 {
-    z_pos_mm_cache_.store(pos.z_pos_mm, std::memory_order_relaxed);
+    z_pos_mm_cache_.store(pos.z_pos_mm, std::memory_order_release);
+    z_pos_seq_.fetch_add(1, std::memory_order_release);
     publish_debug_axis_ntf(pos);        /* 调试页三轴位置 + Z 工作坐标回读 */
 
     UPC_LOG_MCU_LINK(Info,
@@ -3220,7 +3221,21 @@ bool McuLink::send_tcp_emergency_ctrl_ex(uint8_t stop_code, uint8_t pause_code, 
 
 float McuLink::get_z_pos_mm() const noexcept
 {
-    return z_pos_mm_cache_.load(std::memory_order_relaxed);
+    return z_pos_mm_cache_.load(std::memory_order_acquire);
+}
+
+void McuLink::get_z_pos_sample(float& mm, uint32_t& seq) const noexcept
+{
+    uint32_t before = 0;
+    uint32_t after = 0;
+    float z = 0.0f;
+    do {
+        before = z_pos_seq_.load(std::memory_order_acquire);
+        z = z_pos_mm_cache_.load(std::memory_order_acquire);
+        after = z_pos_seq_.load(std::memory_order_acquire);
+    } while(before != after);
+    mm = z;
+    seq = after;
 }
 
 bool McuLink::mcu_1st_seen() const noexcept

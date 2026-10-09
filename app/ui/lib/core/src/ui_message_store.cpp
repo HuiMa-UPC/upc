@@ -98,7 +98,7 @@ const CatalogEntry kCatalog[] = {
     { (uint16_t)DeviceEventCode::FirstLayerVisualPassed, UI_MSG_SEV_INFO,
       "First layer passed", "Continuing normal printing" },
     { (uint16_t)DeviceEventCode::OpticalPathCheckStarted, UI_MSG_SEV_INFO,
-      "Optical path check", "Verifying red-dot visibility at five points" },
+      "Optical path check", "Verifying the red spot at all 8 height points" },
     { (uint16_t)DeviceEventCode::OpticalPathCheckPassed, UI_MSG_SEV_INFO,
       "Optical path passed", "Starting the print job" },
     { (uint16_t)DeviceEventCode::OpticalPathCheckFail, UI_MSG_SEV_CRITICAL,

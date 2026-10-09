@@ -1,6 +1,6 @@
 /**
  * @file galvo_motion_encode.cpp
- * @brief 振镜调试运动包编码实现（点位测试与光路检测共用）。
+ * @brief 振镜调试运动包编码实现（调试页点位测试）。
  */
 #include "galvo_motion_encode.hpp"
 

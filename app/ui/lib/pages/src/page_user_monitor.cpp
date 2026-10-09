@@ -3712,7 +3712,7 @@ void page_user_monitor_print_prep_update(uint8_t step, uint8_t step_index, uint8
         title = "Optical path check...";
         break;
     case middleware::PrintPrepStep::PlateHeight:
-        title = "Plate leveling...";
+        title = "Vision check...";
         break;
     case middleware::PrintPrepStep::Oxygen:
         title = "Checking oxygen...";

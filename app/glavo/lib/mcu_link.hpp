@@ -187,7 +187,7 @@ public:
     /**
      * @brief 调试专用：直接下发一个已编码的 11 字节运动子包
      * @note 仅允许在无打印/测试图运动流、无终止清理时调用。
-     *       光路自检 / 点位测试走这条；测高与高度校准不要用。
+     *       调试页点位测试走这条；测高与高度校准不要用。
      */
     bool send_debug_motion_subpacket(const uint8_t subpacket[11]);
     /**
@@ -209,6 +209,11 @@ public:
                             float speed_mm_min, int laser_on);
     /** @brief 最近一次 MCU 运动位置上报的 Z 实际位置（mm）。 */
     [[nodiscard]] float get_z_pos_mm() const noexcept;
+    /**
+     * @brief 最近一次 Z 上报及其序号。序号在每次 motion 上报后加一，0 表示还没收到。
+     *        读序号、位置、再读序号，两次序号一致才返回，避免读到半更新。
+     */
+    void get_z_pos_sample(float& mm, uint32_t& seq) const noexcept;
     /** @brief 是否已收到过 MCU 1ST 环境帧（串口已在报传感器）。 */
     [[nodiscard]] bool mcu_1st_seen() const noexcept;
     /**
@@ -676,6 +681,8 @@ private:
     std::deque<SerialReliableItem> serial_reliable_queue_;
     std::atomic<bool> serial_ack_enabled_{GLAVO_SERIAL_ACK_ENABLE != 0};
     std::atomic<float> z_pos_mm_cache_{0.0f};
+    /** 与 z_pos_mm_cache_ 配套：先写位置再加序号。 */
+    std::atomic<uint32_t> z_pos_seq_{0};
 
     EnvSnapshotCache env_cache_{};
     mutable std::mutex env_mtx_;

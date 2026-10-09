@@ -1677,7 +1677,7 @@ Snowpath `print/start`：Glavo 双发 `GLAVO_Print_State_Ntf(Printing)` → UI �
   → 进度推送 page_user_monitor_printing_update()
   → 起印环境检查 `APP_Print_Prep_Progress_Ntf` → page_user_monitor_print_prep_update()
        Job 卡标题随步切换（Checking outer door / Closing inner door /
-       Optical path check / Plate leveling / Checking oxygen / First layer check）；
+       Vision check / Checking oxygen / First layer check）；
        进度条按本趟实际步数均摊（跳过的步骤不推送，UI 直接看到下一步）；
        氧门与首层在开扫握手阶段仍属 Prepare；`step=Ready` 切回 Printing，
        条与百分数复位到 0%（Prepare 与打印是两套进度）
