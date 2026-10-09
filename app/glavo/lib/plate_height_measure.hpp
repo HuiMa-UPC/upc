@@ -3,7 +3,7 @@
 
 /**
  * @file plate_height_measure.hpp
- * @brief 打印前测高一次做完三件事：粗测 8 点光路、H-1 在位、再调高度。
+ * @brief 打印前测高一次做完三件事：粗测 8 点光路、H>3 在位、再调高度。
  *        粗测必须 8 个点都看到光斑，少一个即光路失败。精测仍可跳过个别点。
  *        回零直接发 Z Home，不再先相对下降；开始关灯；结束不开舱灯。
  */
@@ -22,7 +22,7 @@ struct PlateHeightMeasureResult {
     bool   ran = false;
     bool   ok = false;
     bool   flatness_warn = false;
-    /** 粗测 H-1 不超过门限：没放基板。此时未做粗调 AXIS_INC。 */
+    /** 粗测 H 不超过门限：没放基板。此时未做粗调 AXIS_INC。 */
     bool   plate_absent = false;
     /** 粗测 8 点里有点没看到光斑。不算没板，也不算查表失败。 */
     bool   optical_fail = false;
@@ -50,7 +50,7 @@ public:
                    DoneFn on_done);
 
     /**
-     * 调用前须已确认 LUT 可读。回零后的粗测始终用 H-1 判断有没有基板。
+     * 调用前须已确认 LUT 可读。回零后的粗测用 H>3 判断有没有基板。
      * @return false=已在跑或未配置
      */
     bool start(const GalvoMotionCalibration& cal);

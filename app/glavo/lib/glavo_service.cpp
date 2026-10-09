@@ -2183,7 +2183,7 @@ void GlavoService::handle_parser_exit(const middleware::Message& msg)
  *
  * 调用前须保证：prepare_ready_、路径有效，且 McuLink 不在 terminate 清理中。
  * 步骤：置打印态 → 起印前半段独立线程（Z→−10 / 外门 / 关内门）→
- *      基板测高（`Plate Height Adj` 开且有 LUT：粗测光路、在位、调高）→
+ *      基板测高（`Vision Check` 开且有 LUT：粗测光路、在位、调高）→
  *      open_file(带行数 hint) → 重置计数/进度 → start_parse →
  *      首层参考图 gate → 通知 Media 录像会话 → begin_sending。
  *
@@ -3591,11 +3591,18 @@ void GlavoService::send_z_home_with_retract()
 
 bool GlavoService::wait_z_settled(float target_mm, float tolerance_mm, int timeout_ms)
 {
+    /* 位置缓存大约 500ms 才更新一次。同一序号连读不算停稳，否则回零路过目标的
+     * 一帧会被当成已经到位。连续两帧新上报都在容差内、且两帧相差不超过 0.15mm
+     * 才返回。 */
     const auto deadline = std::chrono::steady_clock::now() +
                           std::chrono::milliseconds(timeout_ms);
-    int settled_count = 0;
-    constexpr int kSettledNeed = 3;
+    constexpr int kSettledReports = 2;
+    constexpr float kZStillMm = 0.15f;
     constexpr int kPollIntervalMs = 100;
+    uint32_t seen_seq = 0;
+    float prev_z = 0.0f;
+    int streak = 0;
+    float last_z = 0.0f;
     while(true) {
         if(print_prep_abort_.load() ||
            height_calib_.cancel_requested() || plate_height_.cancel_requested()) {
@@ -3606,19 +3613,30 @@ bool GlavoService::wait_z_settled(float target_mm, float tolerance_mm, int timeo
             UPC_LOG_GLAVO_SERVICE(Warn, "wait_z_settled aborted: Z axis motion error");
             return false;
         }
-        const float z = McuLink::instance().get_z_pos_mm();
-        if(std::fabs(z - target_mm) <= tolerance_mm) {
-            ++settled_count;
-            if(settled_count >= kSettledNeed) {
-                return true;
+        float z = 0.0f;
+        uint32_t seq = 0;
+        McuLink::instance().get_z_pos_sample(z, seq);
+        last_z = z;
+        if(seq != 0 && seq != seen_seq) {
+            seen_seq = seq;
+            const bool in_tol = std::fabs(z - target_mm) <= tolerance_mm;
+            const bool still = streak > 0 && std::fabs(z - prev_z) <= kZStillMm;
+            if(in_tol && still) {
+                ++streak;
+                if(streak >= kSettledReports) {
+                    return true;
+                }
+            } else if(in_tol) {
+                streak = 1;
+            } else {
+                streak = 0;
             }
-        } else {
-            settled_count = 0;
+            prev_z = z;
         }
         if(std::chrono::steady_clock::now() >= deadline) {
             UPC_LOG_GLAVO_SERVICE(Warn,
                 "wait_z_settled timeout: target=%.2f actual=%.2f tol=%.2f",
-                static_cast<double>(target_mm), static_cast<double>(z),
+                static_cast<double>(target_mm), static_cast<double>(last_z),
                 static_cast<double>(tolerance_mm));
             return false;
         }

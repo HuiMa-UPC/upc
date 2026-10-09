@@ -2206,7 +2206,7 @@ void build_print_detail(lv_obj_t *parent)
     g_gate_pm25 = make_gate_row(card, "PM2.5 Check", PrintGate::DoorPm, false);
     g_gate_inner = make_gate_row(card, "Inner Door Vision", PrintGate::InnerVision,
                                  false, false);
-    g_gate_height = make_gate_row(card, "Plate Height Adj", PrintGate::PlateHeight, false);
+    g_gate_height = make_gate_row(card, "Vision Check", PrintGate::PlateHeight, false);
     g_gate_o2 = make_gate_row(card, "Oxygen Check", PrintGate::Oxygen, false);
     g_gate_powder = make_gate_row(card, "Powder Low Check", PrintGate::PowderLow,
                                   false, false);

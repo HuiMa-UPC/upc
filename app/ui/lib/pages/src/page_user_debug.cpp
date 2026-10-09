@@ -2435,7 +2435,7 @@ void build_other_switches_column(lv_obj_t *parent)
                          on_transfer_demo_click, nullptr, nullptr);
     make_dbg_toggle(rowG1, "1st Layer Visual", "On", "Off", LV_SYMBOL_PLAY, false,
                     10, 0, true, 0, &g_first_layer_visual_btn, &g_first_layer_visual_state_lbl);
-    make_dbg_toggle(rowG1, "Plate Height Adj", "On", "Off", LV_SYMBOL_UP, true,
+    make_dbg_toggle(rowG1, "Vision Check", "On", "Off", LV_SYMBOL_UP, true,
                     15, 0, true, 0, &g_plate_height_adj_btn, &g_plate_height_adj_state_lbl);
     lv_obj_t *rowG2 = make_switch_grid_row(gate);
     make_dbg_toggle(rowG2, "Skip Inner Door Occl", "On", "Off", LV_SYMBOL_EYE_CLOSE, true,

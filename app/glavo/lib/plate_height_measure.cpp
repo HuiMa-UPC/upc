@@ -203,15 +203,13 @@ void PlateHeightMeasure::run(GalvoMotionCalibration cal)
         if(coarse.stop == ScanStop::Lookup || std::isnan(coarse.h_med)) {
             break;
         }
-        /* 8 点都有光斑且都能查表。H-1 大于门限才当有基板，否则停在这里通知 UI。 */
+        /* 8 点都有光斑且都能查表。H 大于门限才当有基板，否则停在这里通知 UI。 */
         {
-            const float above_home = coarse.h_med - kHeightZHomeMm;
             UPC_LOG_GLAVO_SERVICE(Info,
-                "plate present from coarse H=%.3f H-1=%.3f threshold=%.3f",
+                "plate present from coarse H=%.3f threshold=%.3f",
                 static_cast<double>(coarse.h_med),
-                static_cast<double>(above_home),
                 static_cast<double>(kPlatePresentMinAboveHomeMm));
-            if(!(above_home > kPlatePresentMinAboveHomeMm)) {
+            if(!(coarse.h_med > kPlatePresentMinAboveHomeMm)) {
                 result.plate_absent = true;
                 result.h_med_mm = coarse.h_med;
                 break;

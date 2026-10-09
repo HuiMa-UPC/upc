@@ -46,7 +46,7 @@ constexpr int kHeightZHomeTimeoutMs = 30000;
 /** MCU Z Home 停点(mm)。逻辑 0 = 此平面；wait_z 用 MCU 上报值须加此偏置。 */
 constexpr float kHeightZHomeMm = 1.0f;
 
-/** 回零后粗测：H - 1 > 此值视为有基板（mm）。 */
+/** 回零后粗测：逻辑高度 H 大于此值视为有基板（mm）。H 已相对 Z=1 平面，不再减 1。 */
 constexpr float kPlatePresentMinAboveHomeMm = 3.0f;
 
 /** 高度校准回零先相对下降（负向 AXIS_INC），再 Home。打印前测高直接 Home。Z 无绝对编码器。 */
