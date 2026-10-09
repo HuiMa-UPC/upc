@@ -285,6 +285,10 @@ const char* upc_msg_type_name(MsgType type) {
         case MsgType::MQTT_Ota_Notify_Ntf: return "MQTT_Ota_Notify_Ntf";
         case MsgType::UI_Ota_User_Decision_Req: return "UI_Ota_User_Decision_Req";
         case MsgType::APP_Mqtt_Ota_Progress_Ntf: return "APP_Mqtt_Ota_Progress_Ntf";
+        case MsgType::UI_Ota_Check_Req: return "UI_Ota_Check_Req";
+        case MsgType::APP_Ota_Check_Rsp: return "APP_Ota_Check_Rsp";
+        case MsgType::UI_Ota_Check_Apply_Req: return "UI_Ota_Check_Apply_Req";
+        case MsgType::APP_Ota_Check_Apply_Rsp: return "APP_Ota_Check_Apply_Rsp";
         case MsgType::UI_Debug_InnerDoor_Occlusion_Set_Ntf: return "UI_Debug_InnerDoor_Occlusion_Set_Ntf";
         case MsgType::UI_Debug_InnerDoor_Occlusion_Get_Ntf: return "UI_Debug_InnerDoor_Occlusion_Get_Ntf";
         case MsgType::UI_Debug_Plate_Present_Set_Ntf: return "UI_Debug_Plate_Present_Set_Ntf";
