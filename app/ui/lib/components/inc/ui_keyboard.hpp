@@ -42,7 +42,7 @@ typedef void (*ui_keyboard_visibility_cb_t)(bool shown, const lv_area_t *obstruc
  * @brief 注册键盘显隐回调（**单槽**，后注册的顶掉先注册的；传 NULL 注销）
  *
  * 给「弹窗被键盘挡住」这类需要让位的调用方用。弹窗关闭时务必注销，否则回调会打到
- * 已释放的对象上。目前只有设置页那两个密码弹窗在用。
+ * 已释放的对象上。目前只有设置页的输入类弹窗（两个密码框、添加隐藏网络）在用。
  */
 void ui_keyboard_set_visibility_cb(ui_keyboard_visibility_cb_t cb, void *user_data);
 

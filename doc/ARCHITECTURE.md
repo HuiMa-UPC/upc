@@ -36,7 +36,7 @@
 | `app/camera/` | [CAMERA.md](../app/camera/CAMERA.md) | 相机采集、SHM 预览、IPC Server |
 | `app/media/` | [MEDIA.md](../app/media/MEDIA.md) | 拍照/录像/延时封装 + 直播（云端 RTSP 推流、局域网 live555 RTSP Server；消费 Camera DMA 流） |
 | `app/xfer/` | [XFER.md](../app/xfer/XFER.md) | WiFi 发现、PIN 配对、HTTP 分块上传；OVF 走 snowslice，传输 3MF 提取单份 G-code + PNG/RTHM 缩略图 |
-| `app/visual/` | [VISUAL.md](../app/visual/VISUAL.md) | 视觉：Camera DMA 取帧、首层检测、打印前光路检测（红点桩） |
+| `app/visual/` | [VISUAL.md](../app/visual/VISUAL.md) | 视觉：Camera DMA 取帧、首层检测、测高光斑 |
 | `app/mqtt/` | — | MQTT 网关：激活/凭证轮换、环境遥测、报警上云（`alarm/report`+`alarm/ack`，契约 [soc-alarm-contract-v2.md](soc-alarm-contract-v2.md)）、`set_light`、云端 `start/stop_rtsp_push`→Media |
 | `app/parser/` | [PARSER.md](../app/parser/PARSER.md) | G-code/OVF 解析库（Glavo 链接） |
 | `app/protocol/` | [PROTOCOL.md](../app/protocol/PROTOCOL.md) | MCU 线协议（TCP `BE EF` + 串口 `5A A5`） |
@@ -46,9 +46,8 @@
 | 符号 | 路径 | 一句话 |
 |------|------|--------|
 | `GlavoService` | `glavo_service.*` | IPC 业务编排 + 工作线程（打印/USB 目录/门控）；`init()` 绑定 RingBuffer → `McuLink` |
-| `OpticalPathCheck` | `optical_path_check.*` | 打印前光路检测状态机（独立线程，结果回灌 worker） |
-| `HeightLut2d` / `HeightCalibration` / `PlateHeightMeasure` | `height_points.hpp` `height_lut_2d.*` `height_calibration.*` `plate_height_measure.*` | 高度校准与打印前测高 |
-| `galvo_motion_encode` | `galvo_motion_encode.*` | 调试运动包编码 + 五点坐标（点位测试与光路检测共用） |
+| `HeightLut2d` / `HeightCalibration` / `PlateHeightMeasure` | `height_points.hpp` `height_lut_2d.*` `height_calibration.*` `plate_height_measure.*` | 高度校准与打印前测高（粗测 8 点，至少 5 点有光斑才算光路通过，同时做在位） |
+| `galvo_motion_encode` | `galvo_motion_encode.*` | 调试运动包编码 + 五点坐标（点位测试） |
 | `gcode_manifest` | `common/fs_manifest/gcode_manifest.*` | Local `UPC_LOCAL_GCODE_DIR/config.json`（UI 读列表，Glavo Prepare/Delete 写） |
 | `print_history_manifest` | `common/fs_manifest/print_history_manifest.*` | `UPC_VIDEO_CONFIG`（Media upsert 写；UI 历史页读，删除后重写） |
 | `media_paths` | `common/fs_manifest/media_paths.hpp` | `UPC_MEDIA_ROOT`（默认 `/userdata/media`：photo/video/tmp + 首层视觉诊断图，各进程共用） |

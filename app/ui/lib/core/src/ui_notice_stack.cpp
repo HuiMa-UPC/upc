@@ -18,6 +18,16 @@ constexpr int kMaxRows  = 3;
 /** 右上角这块此刻是三态里的哪一个。深色档（打印态/监控态）不走这套，见 g_dark。 */
 enum Phase { PH_TOAST, PH_BELL, PH_PANEL };
 
+/** 容器四周给投影留的余量。三态的投影（0 2 6，见各 build_*）都画在控件外沿：左右各约 3、
+ *  上约 1、下约 5。LVGL 按父对象范围裁子对象，容器零内距时铃铛只剩左边那道投影（容器往左
+ *  还空着 328），toast / 面板与容器同宽，两侧和底边也被裁掉。所以容器四周垫一圈内距、宽度
+ *  补回、贴角偏移同步扣掉（见 reposition），屏上位置不变。
+ *  不用 OVERFLOW_VISIBLE：重绘区仍会被裁到容器范围内，容器外的旧投影擦不掉、留残影。 */
+int32_t shadow_room(void)
+{
+    return USER_PAD_SM / 2;
+}
+
 lv_obj_t *g_root       = nullptr;
 /** 面板展开时垫在它下面的全屏透明捕获层，吃掉落在面板外的那一下点击。 */
 lv_obj_t *g_catcher    = nullptr;
@@ -47,9 +57,11 @@ void reposition(void)
      *
      * 纵向的让位量才是按态给的：稿 4972:27560 里这栈在 y=104，而
      * 48(环境区顶) + 64(环境区高) + 8(间距) 正是 120——那张是旧稿的 32 起算，
-     * 换 48 之后整体跟着环境区一起下移，相对关系不变。 */
-    lv_obj_align(g_root, LV_ALIGN_TOP_RIGHT, -USER_HOME_EDGE_GAP,
-                 USER_HOME_EDGE_GAP + g_top_offset);
+     * 换 48 之后整体跟着环境区一起下移，相对关系不变。
+     *
+     * 上面说的都是内容的位置；容器四周还有一圈投影余量（shadow_room），对齐时扣掉。 */
+    lv_obj_align(g_root, LV_ALIGN_TOP_RIGHT, -USER_HOME_EDGE_GAP + shadow_room(),
+                 USER_HOME_EDGE_GAP + g_top_offset - shadow_room());
 }
 
 /* ---------------------------------------------------------------------------
@@ -358,9 +370,10 @@ void build_bell(void)
     lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, 0);
     lv_obj_set_style_bg_color(btn, user_light_text, LV_STATE_PRESSED);
     lv_obj_set_style_bg_opa(btn, LV_OPA_10, LV_STATE_PRESSED);
+    /* 投影与 toast / 面板同一套（稿 6230:89954：0 2 6 #0C1C61 @10%） */
     lv_obj_set_style_shadow_width(btn, 6, 0);
     lv_obj_set_style_shadow_ofs_y(btn, 2, 0);
-    lv_obj_set_style_shadow_color(btn, lv_color_hex(0x283184), 0);
+    lv_obj_set_style_shadow_color(btn, user_light_shadow, 0);
     lv_obj_set_style_shadow_opa(btn, 26, 0);
     lv_obj_clear_flag(btn, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_event_cb(btn, on_bell_click, LV_EVENT_CLICKED, nullptr);
@@ -652,9 +665,10 @@ lv_obj_t *ui_notice_stack_create(lv_obj_t *parent)
      * 在容器里右对齐，所以一个宽度够三态共用。**稿自己在两个 frame 里给了不同的值**：
      * 首页待机 5339:27299/27310 是 400，而打印态 4972:27560 的 5281:11797 是 416（与
      * stats-card 同宽）。本块是建在 shell_ 上的全局对象、两个态共用一个实例，只能取
-     * 一个值——这里以待机 frame 为准取 400。 */
-    lv_obj_set_width(g_root, USER_NOTICE_CARD_W);
+     * 一个值——这里以待机 frame 为准取 400。两侧另加投影余量，内容宽仍是 400。 */
+    lv_obj_set_width(g_root, USER_NOTICE_CARD_W + 2 * shadow_room());
     lv_obj_set_height(g_root, LV_SIZE_CONTENT);
+    lv_obj_set_style_pad_all(g_root, shadow_room(), 0);
     lv_obj_set_flex_flow(g_root, LV_FLEX_FLOW_COLUMN);
     /* 交叉轴靠右：铃铛（72）比 400 窄，要贴着右缘与 toast 对齐。 */
     lv_obj_set_flex_align(g_root, LV_FLEX_ALIGN_START,

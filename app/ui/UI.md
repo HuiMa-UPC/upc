@@ -7,7 +7,7 @@
 
 | 子目录 | 说明 |
 |--------|------|
-| `lib/core/` | PageManager、`UiMsgProxy`、`control`、摄像头预览、常驻设备信息条 + 共享设备状态、PM2.5 空气质量卡的数据与切换态（`ui_air_quality.*`，首页与监控页共用）、LCD 背光（`ui_backlight.*`，sysfs，不看 MCU 版本） |
+| `lib/core/` | PageManager、`UiMsgProxy`、`control`、摄像头预览、常驻设备信息条 + 共享设备状态、PM2.5 空气质量卡的数据与切换态（`ui_air_quality.*`，首页与监控页共用）、LCD 背光（`ui_backlight.*`，sysfs，不看 MCU 版本）、设置页偏好开关的落盘值（`ui_prefs.*`，见「设置页布局」） |
 | `lib/pages/` | 各 Tab 布局（`page_user_*`） |
 | `lib/components/` | 公用 LVGL 控件 |
 | `lib/assets/` | 图片、字库 |
@@ -290,7 +290,12 @@ git 历史**，别凭印象重写。
 | 组内：名字 ↔ 状态 | 16 | `USER_PAD_SM` |
 | 状态点 ↔ 状态字 | 8 | `USER_PAD_SM / 2` |
 | 状态点直径 | 8 | `USER_STATUS_DOT_SZ * 2 / 3`（三档 12/8/6）。**不动那个共享字段**：调试页、`ui_user_widgets`、侧栏红点、通知徽标都在用 |
-| 名字 / 状态字号 | 22 | `user_font_body()`（1280 档 24，最近的一档） |
+| 名字 / 状态字号 | 22 | `user_font_dlg_btn()`（1280 档正好 22，1024 档 18、1920 档 32）。早先用 `user_font_body()`（1280 档 24），那时还没有 22 号 |
+| Wi-Fi 图标 | 两道弧 + 扇形，约 20×15，黑 80%，图标位 32 宽 | `settings_icon_wifi`（与设置页 Wi-Fi 列表同一字形，路径只差平移），24 见方、左右各留 4；连上墨色、断开 `user_light_icon_off`。早先用 LVGL 自带的 `LV_SYMBOL_WIFI`（三道弧 + 圆点，24 号下约 30×20），形状大小都不对 |
+
+**文案**：设备名 `SnowPod A1`（`common/config/cal_config.hpp` 的 `kDeviceDisplayName`，大小写随稿、保留型号；
+Glavo 的环境快照带的也是它，只用于显示，与协议里的 `device_id` 无关）。待机显示绿色 `Stand-by`：
+开机初值 `IDLE` 与打完一单回来的 `READY` 界面上不区分（早先分别是灰 `Idle` 与绿 `Ready`，同一个待机态两种样子）。
 
 **本条一律走浅色配色**，不按页面分档——五个标签页现在全是浅底，不再有深色页要迁就。
 不过历史页、消息页、设置页与监控页都**不显示这条**（稿上顶部直接是 Tab 行或摄像头画面），
@@ -337,7 +342,7 @@ git 历史，布局代码还在那儿——当时刻意**没复用 `ui_device_st
   原先共用一个字段导致内容被压低 16。**只改一个字段解决不了**：把它整体降到 112，设备名那行
   会跟着上移 8。故拆成两个，各自按稿取值。
   - **设置页是例外**：它是两栏导航、没有 Tab 行，两栏各自的顶内距由页面自己给
-    （左栏 48、右栏 72，见「设置页布局」），全局字段一个都不用。
+    （左栏 48、右栏 56，见「设置页布局」），全局字段一个都不用。
 
 数据侧：`ui_device_state` 是设备名/联网/运行状态/环境指标的唯一来源。
 **页面不要自己 `register_env_update`** ——它是单槽的（`env_update_cb_ = std::move(cb)`），
@@ -349,7 +354,7 @@ git 历史，布局代码还在那儿——当时刻意**没复用 `ui_device_st
 被锁住（前端置位、环境推送不得覆盖）的状态：`Printing` / `Paused` /
 `Print Complete` / `Print Terminated` / `Air Purifying` / `Purify Complete`。
 后三个由打印态浮层的 `apply_print_phase()` 按 `g_print_phase` + `g_purify_stage`
-推过来，取件退出打印态时统一还原成 `Ready`。
+推过来，取件退出打印态时统一还原成 `READY`（与开机初值 `IDLE` 一样显示绿色 `Stand-by`）。
 
 ### 消息中心与通知三态（`ui_message_store` + `ui_notice_stack`）
 
@@ -422,7 +427,7 @@ EVENT 被两个时长各撤一次。而且它一直只对 INFO 生效——撤�
 | 态 | 何时 | 稿 |
 |---|---|---|
 | TOAST | store 里有 `visual == SHOWN` 的消息 | 6201:86044：白卡 400 宽、圆角 8、内距 16、32 徽标 + 18 白图标；右侧 24 见方、圆角 8、底 `#333145` @ 5% 的关闭方块（**只有底板是稿上的，里面那个叉借的是 `LV_SYMBOL_CLOSE` 字形**）；最多两张 |
-| BELL | 没有 toast 时的常态 | 72 见方、圆角 24、白底 + 40 的实心铃铛（按钮 72 配图标 40，故按 `USER_LIGHT_BTN_SZ * 5/9` 挑档得 60/40/32）；有「还需留意的事」就带红点，见下 |
+| BELL | 没有 toast 时的常态 | 72 见方、圆角 24、白底 + 40 的实心铃铛（按钮 72 配图标 40，故按 `USER_LIGHT_BTN_SZ * 5/9` 挑档得 60/40/32）；投影与 toast / 面板同一套（0 2 6 `#0C1C61` @10%，早先误用 `#283184`）；有「还需留意的事」就带红点，见下 |
 | PANEL | 点铃铛展开 | 6578:41549：与 toast 同宽（铺满容器）、圆角 24、内距 12、行距 8，投影与 toast 同一套（0 2 6 `#0C1C61` @10%）；条目按内容撑、下限 56（`USER_PANEL_ROW_H`）、圆角 12、内距 8，左侧 4×32 等级色竖条；底部「查看剩余 N 条」四周内距 16、行尾是 `ic_panel_chevron`（稿上 16 量到矢量本身，位图盒比矢量宽，所以右内距扣掉盒宽的 2/7） |
 
 三者占同一块地方（稿上它们的右缘都在 1232），任一时刻只有一个可见——**稿里那几层图层
@@ -432,6 +437,7 @@ EVENT 被两个时长各撤一次。而且它一直只对 INFO 生效——撤�
 |---|---|
 | 位置 | `shell_` 上的 `FLOATING`，与常驻设备信息条同级 → 压在页面之上、弹窗层之下 |
 | 对齐 | 贴右上角，退一个 `USER_HOME_EDGE_GAP`（稿 48）→ 铃铛落在稿的 (1160, 48)。**这个值同时管三处**：铃铛/toast/面板的右缘、右下开门滑块的右缘（稿上都是 1232）、以及首页打印态右上那块环境区（`build_env_wrap`，本栈就叠在它下方）。早先三处退的是 `USER_PAD_LG`（32），实机上铃铛比滑块往外多出 16、顶也高 16。纵向让位量按态给，见 `sync_notice_offset()` |
+| 投影余量 | 容器四周垫 `USER_PAD_SM / 2`（8）内距，宽度补回 16、贴角偏移扣掉 8，内容位置不变（`shadow_room()`）。三态投影都画在控件外沿（左右约 3、上 1、下 5），**LVGL 按父对象范围裁子对象**：早先容器零内距、高随内容，铃铛贴在它右上角，右 / 上 / 下三边投影全被裁，只剩左边一道（容器往左还空着 328），实机看着像左侧一道灰边；toast 与面板和容器同宽，两侧与底边也被裁。不用 `OVERFLOW_VISIBLE`：子对象的重绘区仍被裁到父对象范围内（`lv_obj_area_is_visible`），toast 收起时容器外那圈旧投影擦不掉 |
 | 宽度 | `USER_NOTICE_CARD_W` = **400@1280**（toast 那张卡的宽）。面板新稿与它同宽、`LV_PCT(100)` 铺满；铃铛 72 比它窄，靠容器的交叉轴 `FLEX_ALIGN_END` 右对齐，所以一个宽度够三态共用。**稿自己在两个 frame 里不一致**：待机 5339:27299/27310 是 400，打印态 4972:27560 的 5281:11797 是 416（与 stats-card 同宽）；本块是全局单例，只能取一个值，以待机 frame 为准 |
 | 标题 + 副标题字号 | toast 与面板两行都取 `user_font_text_sm()`（1280 档 16，面板「查看剩余」那行同号）。稿上每组二者**同号**、只靠字重（SemiBold / Regular）和 60% 透明度分层；Montserrat 只有一个字重，字重那半做不出来，只落地「同号 + 透明度」。面板条目超长**单行截断出省略号**、不随文案变高——v9 的 DOTS 不锁高度只会换行，所以两行都锁成一行高 |
 | 条数 | toast 最多两张；面板最多三条（新稿只画了两条，条数不跟稿），多出来的收进「View remaining N messages」（N=1 时单数），点进消息页 |
@@ -967,8 +973,9 @@ pending 自动解除——正好顺带验超时路径。
 > 自己的 `cols` 容器里，分隔线作为页根的另一个子节点浮在上面。
 
 - **顶部**：返回钮 72 见方、圆角 24（`USER_LIGHT_RADIUS`）、白卡 + 阴影，图标 48；
-  页签 256×72——**与设置页 Wi-Fi 开关是同一个 Figma 组件**（切换Tab / 6156:82872），
-  内距 2、段间 4、选中段白底圆角 14，改一边要顺带看另一边。
+  页签 256×72（切换Tab / 6156:82872），内距 2、段间 4、选中段白底圆角 14。旧版设置页的
+  Wi-Fi 开关分段是同一个 Figma 组件；设置页新稿把它换成了开关，那段代码改成了语言分段
+  （280 宽、深色选中块），两处已不共用样式。
 - **文件卡**：512×104、内距 16、白底圆角 16 + `0 2 6 rgba(12,28,97,.04)`；内部 gap 24 排
   [缩略图 64 圆角 8] [名称 24 / 指标 18]。**选中态是整块换成实色 `user_light_row_sel`
   (#EBEAEC)**，不是在白底上叠一层——叠色会把白透出来，出不来稿上那个灰度。注意别拿
@@ -976,10 +983,12 @@ pending 自动解除——正好顺带验超时路径。
 - **右栏**：512×640 的 column `space-between`。上组 gap 16 = 预览框（高 322、圆角 24、
   底 `rgba(51,49,69,.15)`，`thumb_large` 用 `LV_IMAGE_ALIGN_COVER` 铺满；无缩略图时出居中占位图标）+ 名称 24 + 指标 16（带
   `Est. time` / `Est. material` 标签，与列表行同源、只是多了标签）。
-- **按钮组**：`Confirm Print`（深色实底）在上、`Delete File`（实心红）在下，间距 24、
-  贴右栏底 776 → 608..680 / 704..776。**稿上只画了一枚、钉在 704**；删除钮是产品决定
-  加回来的（本机文件要能删），于是 704 那个槽位归了删除钮、主钮上移到 608。
-  **这是有意偏离稿，不是量错。** 未选文件时整个 `g_detail_body` 隐藏，两枚钮一起不见。
+- **按钮组**（稿 `6357:34689`）：同一行，`Delete File` 在左、`Confirm Print` 在右，各
+  248×72、缝 16、圆角 16，底边 768（右栏底内距 `detail_bot()` = 32）。`Delete File` 是
+  1px `#FF4242` 描边、无底色、红字，`Confirm Print` 是深墨实底白字，文字都是 22
+  （`user_font_dlg_btn()`）。两枚 `flex_grow` 均分：U 盘文件不能删、删除钮隐藏，确认打印
+  铺满整行 512（稿只画了本机文件那态，铺满是产品定的）。上一版是竖排两枚 512 宽、删除实心红。
+  未选文件时整个 `g_detail_body` 隐藏，两枚钮一起不见。
 - **空态**：稿上是左对齐贴右栏左缘，按产品决定改成在右栏内水平居中。
 - **U 盘未插**：列表区出 `No USB drive`（稿没画这态；「没插盘」和「插了没文件」是两回事，
   统一说 No print files 会让人以为盘是空的）。
@@ -1006,9 +1015,10 @@ pending 自动解除——正好顺带验超时路径。
   0x20–0x7F、0xB0、0x2022，U+2014 会渲染成豆腐块。
 - **1024 档的高度预算**：详情列 `pad_row` 用 `USER_PAD_SM`（不是 `USER_PAD`），且耗时/耗材
   由两行压成「图标 + caption + value」一行。再往这一列加东西前先算 600px 屏。
-- **按钮圆角**：稿里这套按钮组件是 8px@1280 的圆角矩形，不是全圆胶囊，用
-  `USER_BTN_RADIUS`（1024=6 / 1280=8 / 1920=12）。`Confirm Print` 借 `user_style_btn_primary()`
-  取主色与外发光，但要就地覆盖它的 `LV_RADIUS_CIRCLE`。
+- **按钮圆角**：两枚都是 16（`USER_HIST_CARD_RADIUS`，稿 6357:34689），样式在
+  `build_detail_panel()` 里自建。早先深色稿那套是 8px 圆角、`Confirm Print` 借
+  `user_style_btn_primary()` 取主色与外发光再覆盖掉它的全圆角；浅色稿改版后两样都不再用，
+  那个胶囊样式现在只剩调试页在用。
 
 > **已删除：打印板厚度选择**（`Plate Thickness` 标题 + `5mm/10mm` 分段 + 未选提示 +
 > `Confirm Print` 置灰联动，稿 4014:16631）。按产品要求整块去掉，`backend_start_job()`
@@ -1037,8 +1047,8 @@ pending 自动解除——正好顺带验超时路径。
 ### 按钮样式基线
 
 **这一节描述的是深色档弹窗按钮的基线。** 它原本是照选文件页详情列那两枚按钮对齐的，
-但那一页已按浅色新稿改版（按钮变成 512×72、圆角 16、深色实底 / 实心红，见「选文件页
-布局」），**不再是基准**；下面这套仍是各弹窗之间彼此对齐的依据，只是失去了那个参照物。
+但那一页已按浅色新稿改版（按钮变成并排两枚 248×72、圆角 16、红描边 / 深色实底，见
+「选文件页布局」），**不再是基准**；下面这套仍是各弹窗之间彼此对齐的依据，只是失去了那个参照物。
 
 - **几何**：高 `USER_DLG_FOOTER_BTN_H`（1024=51 / 1280=64 / 1920=96），圆角
   `USER_BTN_RADIUS`（6 / 8 / 12）。**弹窗里的按钮一律不用 `USER_DLG_RADIUS`**——那是卡片
@@ -1051,8 +1061,8 @@ pending 自动解除——正好顺带验超时路径。
   的 `filled=false`、`ui_user_make_footer_ghost_btn`、`ui_xfr_dialog` 的 `make_secondary_btn`）
   现在是同一套色值，区别只在满宽 / 等分 / 定宽。
 - **`user_style_btn_primary()` 是胶囊，不要改它**：调试页那几颗按钮还在原样用它的全圆
-  形状。用户层三处（选文件页 `Confirm Print`、设置页两个密码弹窗的 `Enter`/`Connect`）
-  只是借它的主色和外发光，都在调用点就地覆盖掉 `LV_RADIUS_CIRCLE`。历史页空态的
+  形状。选文件页 `Confirm Print` 随浅色稿改版后已不借它（自建深墨实底），设置页弹窗的页脚钮
+  另有 `make_dlg_btn()`，也不借它。历史页空态的
   `Start Print` 走的是另一条路：`ui_user_make_primary_pill_btn()`，那枚按稿就是渐变胶囊
   （首页左下那枚 `Start Print` 也走这个工厂，靠后两个参数 `width`/`spread` 换成定宽 +
   图标贴左文字贴右，见「首页待机布局」）。
@@ -1064,7 +1074,7 @@ pending 自动解除——正好顺带验超时路径。
 | `user_home` | `page_user_home.*` | 首页待机（浅色档）：设备图 + 问候语 + HOME 空气质量卡 + 四宫格 + 余量胶囊 + 左下 PRINT + 右下开门滑块。打印态与待机监控在 `user_monitor` |
 | `user_monitor` | `page_user_monitor.*` | 监控页（侧栏第 2 格，浅色档）：左摄像头 + 右栏三 Tab（Job / Status / Manual）+ 全屏切换 + 取件弹窗。打印流程的落点。见「监控页」一节 |
 | `user_history` | `page_user_history.*` | 打印历史：三 Tab + Storage 条 + 日期分组卡片 + 管理态批量删除 + 左滑删除 |
-| `user_settings` | `page_user_settings.*` | 设置（浅色档）：8 项左导航 + 右栏白卡版式。Network（Wi-Fi 开关/列表/子页）、Display & Brightness（背光滑条 + 熄屏选择子页，占位）、Storage（容量 + 格式化 + 文件管理，仅前端）、About（版本 + Check for Update + Galvo/MCU OTA）、Debug 密码弹窗。按稿 6089:11322 / 6235:91450 / 6240:92007 / 6251:94362 实现 |
+| `user_settings` | `page_user_settings.*` | 设置（浅色档）：左栏 Device Settings / Preferences / Nitrogen Generator / Storage / Privacy & Security / Advanced Print / About（+ 解锁后的 Debug），右栏「标题 + 副标题 + 行卡片」。Device Settings 下挂 Account / Wi-Fi / Display & Language 子页；Preferences 与 Privacy 的开关落盘（`ui_prefs`）；About 带 Check for Update；后端缺的功能只做界面。按稿 6403 / 6457 一族（`tools/pages/setting/neew`）实现，见「设置页布局」 |
 | `user_message` | `page_user_message.*` | 消息中心（浅色档）：四 Tab（含临时的 Unresolved，按到达序汇总未处理报警）+ All read 浮层顶栏 + 日期分组混排列表（MCU 报警 + 设备事件）+ 初始 10 条与底部 Load More + 左滑删除历史 + 右侧 632 详情抽屉（Reset 三态）。按稿 6230:89616 / 6091:13405 / 6091:13612 / 6091:13847 实现 |
 | `user_debug` | `page_user_debug.*` | 调试控制台（浅色档，与主页同白/淡色）；Move 页 Z 卡点击步距按 **μm** 输入，`on_jog_click` 乘 `AxisCfg::step_scale`（Z=0.001）转 mm 再发 `send_axis_jog`（契约 value 为 mm；Test 页与监控页 Manual 直接传 mm，不经此换算）；Move 页振镜卡 Abs X/Y + Move 走 `send_galvo_abs_pos`；Other 页按 Process / Cabin / Print Gates / Media & Sim / Inject 分组。Print Gates 含 **Skip Optical Path Chk**（默认关=要做光路）、**Skip Plate Prompt**（默认开）、**Clearance Mask**（默认开：外门补关时监控页盖遮罩，纯本地、不落盘，见「外门补关遮罩」）。`Galvo Point Test` 在 Print Gates，按当前校准表依次显示中心和四角红光点，与正式打印及 Test image 双向互斥。O2 Calib 在左列：输入参考浓度后点圆钮写 `/userdata/CAL/o2_cal.json`；失败 toast 提示、标签仍显示原 K。左列 Fan 开关的勾选态跟 `DebugMsgProxy::fan_on()` 走（与监控页 Manual 共用一份，见「风扇开关态：proxy 常驻缓存，两页共用」），进页先按缓存对齐。Media & Sim 的 **Sys HUD** 打开后，`ui_sys_hud` 在 `lv_layer_sys` 右上角红字显示 CPU 温 / 整机与本进程占用 / 内存（`upc_sys_monitor_sample` 读本机 `/proc` 与 thermal sysfs，不经 IPC），不进布局、不可点，仅本次运行。同组 **Chroma Green** 打开后，`ui_chroma_green` 在 `lv_layer_sys` 铺满纯绿 `#00FF00`（压住业务 UI 与 Sys HUD），中心与四角各一黑色十字作对齐参考，便于后期抠图；再点绿幕任意处关闭并把开关弹回 Off，仅本次运行。顶部传感器条末格 **Zone4** 进页后约 1Hz 读 `thermal_zone4`（同 `sample().zone4_temp_c`），退页停定时器；传感器条下方另有 **Powder IR** 八路料位红外（A1/A2/A3/B1/B2/B3/L/R，`powder_ir_bits`：Blk=遮挡有粉、Clr=受光无粉） |
 | `user_timelapse` | `page_user_timelapse.*` | 延时摄影播放器（隐藏页，历史缩略图进入；全屏 `lv_layer_top`） |
@@ -1568,6 +1578,12 @@ Tab 行的 cfg：`inset=2 / gap=4`（由稿的胶囊宽 114.667 反推：2+114.6
 也能进，结果页停在 Manual 上时这枚是 `RETRIEVE`，按 Tab 判会跳过取件弹窗直接发开门请求，吹粉也会
 被记成手动那一路（不录像、不进历史）。
 
+`BOTTOM_RUN` 的暂停钮按真实暂停态换图标（`set_pause_ui()`，后端回执也走这里）：运行中是两根白竖条
+（稿 6338:27240，1280 档 5×20、间距 9，按 `USER_PAD_SM` 折算，LVGL 图元直接画）；暂停中是实心圆角
+三角 `ic_play_solid_set`（稿 6345:33810，24 组 36/24/19，1280 档墨迹 16.9×23.3，1:1 不缩放）。稿上
+三角比按钮心右偏 1.43，是播放三角的视觉居中；生成时按按钮心裁窗，把这段偏移烤进了位图，代码里直接
+居中，**别再加偏移**。早先这里是 96 见方的手维护 `ic_play` 硬缩到 24，上屏只剩约 10×13、斜边带锯齿。
+
 #### 打印中的 Manual
 
 打印会话（`g_printing==true`：Preparing → 打印 / 暂停 → 出结果，直到 `RETRIEVE` 取件回待机）里
@@ -1673,11 +1689,11 @@ Manual 的电源钮与调试页 Fan 开关都读它，所以在哪边开关、�
   → switch_to("user_monitor") + page_user_monitor_enter_printing_mode()
 Snowpath `print/start`：Glavo 双发 `GLAVO_Print_State_Ntf(Printing)` → UI 同样
   `enter_state(PRINTING)`。不跟进的话停印钮不出现，外门/放板确认也被丢掉，只能强制关机。
-  → 起印先将 Z 绝对走到 −10 mm（±1 mm 内视为已到位），与 Skip Plate Present 无关；未到位中止并报 Z did not reach print height，不报成基板读码失败。Z settle / 挡门读码等阻塞等待在 Glavo 准备线程，不堵业务线程（开门与 Manual Z 仍可响应；准备收 Z 期间 Manual Z 丢弃）
+  → 起印先将 Z 绝对走到 −10 mm（±1 mm 内视为已到位）；未到位中止并报 Z did not reach print height。Z settle / 挡门等阻塞等待在 Glavo 准备线程，不堵业务线程（开门与 Manual Z 仍可响应；准备收 Z 期间 Manual Z 丢弃）
   → 进度推送 page_user_monitor_printing_update()
   → 起印环境检查 `APP_Print_Prep_Progress_Ntf` → page_user_monitor_print_prep_update()
        Job 卡标题随步切换（Checking outer door / Closing inner door /
-       Optical path check / Plate leveling / Checking oxygen / First layer check）；
+       Vision check / Checking oxygen / First layer check）；
        进度条按本趟实际步数均摊（跳过的步骤不推送，UI 直接看到下一步）；
        氧门与首层在开扫握手阶段仍属 Prepare；`step=Ready` 切回 Printing，
        条与百分数复位到 0%（Prepare 与打印是两套进度）
@@ -1691,8 +1707,7 @@ Snowpath `print/start`：Glavo 双发 `GLAVO_Print_State_Ntf(Printing)` → UI �
        外门开→关自动补关：先到 −100 mm 再关门，关完回到下降前高度
        上电不自动关内门
   → 准备阶段（含尚未 Ready 的氧门/首层）点终止：Z 绝对到 −10 mm；已 Ready 出光后的终止不动 Z
-  → 光路：prep 标题 + `page_user_monitor_optical_path_update()` 右侧 n/5
-  → 测高（失败/无 LUT 起印拒绝）
+  → Vision check：粗测 8 点光路、`H>3` 在位、再调高。无板弹放板窗，Job 卡标题停在 Vision check，不另占一步。失败或无 LUT 起印拒绝
   → Camera manifest → page_user_monitor_enter_print_result()
   → RETRIEVE → 取件弹窗滑到底 → control_print_result_collect() → 开门流程
 ```
@@ -1745,7 +1760,8 @@ Job 卡写着 Print Terminated，弹窗却说 complete。
 **只跟正式打印层进度**；起印 Prepare 阶段条会涨，蒙版保持全盖（0%）。
 
 **吹粉分两路 owner，别混**（`purify_owner()`）：打印结束后那次走 `UI_CLEAN_OWNER_PRINT_RESULT`
-（延时 JPEG 接续进同一条 timelapse；结果页自动开一轮，钮可停/再开；永远抽帧，无调试开关），
+（延时 JPEG 接续进同一条 timelapse；结果页自动开一轮——设置页 Preferences 关了 Auto Clean After Print
+则不自动开——钮可停/再开；永远抽帧，无调试开关），
 Manual / 空闲走 `UI_CLEAN_OWNER_MANUAL`（连续 H264，单独进 Print History；点开始录、MCU 完/再点停都保留可播）。
 判据是底部当前是不是 Manual 档（`bottom_mode() == BOTTOM_MANUAL`，即待机停在 Manual 上），**不看 Tab**：
 打印会话里 Manual 也能进，结果页停在 Manual 上点的吹粉仍算打印结果那一路。正常结束一律等 MCU 完成帧
@@ -1774,7 +1790,9 @@ Device/Light**。进页 `request_soc_led_state()`：mask≠0 钮亮，全 0 钮�
   → Axis_Jog `dir=0`；Glavo 读当前 MCU Z 后发 μm AXIS_INC，差值不到 0.05 mm 就不发）。这是一段
   **相对位移**，MCU 会跑完整段；再发一条相对位移（单击方向键）不会打断它。
 - **高亮 = 还在走**：点 Top / Bottom 即高亮（`#485DFF` 底 + 白色内容），一直留到到位、停住、被打断或
-  锁住。进页不高亮。常态是墨色 5% 底 + 墨色 50% 内容（稿 `#F5F4F5` / `#9494A2`）。
+  锁住。进页不高亮。常态是墨色 5% 底（稿 `#F5F4F5`）+ 墨色全色内容——稿 `6625:2585` 起图标与文字改成
+  `#333145`，上一版 `6534:35742` 是 `#9494A2`（墨色 50%），看上去像线条变细；两版的图标路径与字形
+  其实一样，资源不用重出。
 - **一键打断**（`plate_stop_if_moving()`）：高亮期间卡内五颗钮（Top、Bottom、上升、下降、复位）点一下
   都**只**发一次 Z 点动停止（`send_axis_hold_stop(Z)`）并取消高亮，**不执行自己的动作**，要再点一次。
   上升 / 下降长按也一样只停车，并 `lv_indev_wait_release()` 锁住这次触摸，不起点动。不当场改道：
@@ -1787,9 +1805,11 @@ Device/Light**。进页 `request_soc_led_state()`：mask≠0 钮亮，全 0 钮�
 - **按实时 Z 置灰**（不看是不是点 Top / Bottom 走过去的）：Z ≥ 0.95 mm 时 Top 与上升置灰，
   Z ≤ −99.95 mm 时 Bottom 与下降置灰，离开即恢复；复位回 Home（也是 +1 mm）之后、进页时本来就在
   顶部，同样置灰。0.05 与 Glavo `send_z_goto_abs()` 的死区相同，也小于点动一步 0.1 mm——点一下下降
-  就离开 Top 区间。复位钮不置灰；没收到过轴上报时都不置灰。置灰样式按稿（上升钮 stroke-opacity 0.3）：
-  上下钮图标压到墨色 30%、Top / Bottom 内容压到 20%，底色不动，摘掉 `CLICKABLE`，与下面「锁住」的
-  整体半透明区分开。
+  就离开 Top 区间。复位钮不置灰；没收到过轴上报时都不置灰。置灰样式按稿 `6625:2585`：Top / Bottom
+  的图标与文字压到 30%、底色不动；上升 / 下降钮整颗压到 30%（稿把底色与箭头包在同一个 opacity 0.3
+  里，底色 5% 淡到约 1.5%；上一版稿只淡箭头）。置灰都摘掉 `CLICKABLE`，与下面「锁住」的整体半透明
+  区分开——所以上下钮的「整颗淡」是分别压底色与图标，不用整体 opa。
+- 上下钮的 chevron 线宽见下文「Manual 页图标线宽」：稿上是 2.5，与当前统一值相同。
 - **锁住**（`plate_z_locked()`）：打印会话、外门补关 Z 下降 / 回位（`reserved[0]=1`）、一键取件准备中
   （`control_transfer_demo_pending()`）。五颗钮整体半透明不可点，顺手清高亮但不发停止（这几种情形
   都是 Glavo 在管 Z）。签名 `g_plate_ui_sig`，状态没变不重设样式（轴上报很密）。
@@ -1873,6 +1893,18 @@ Manual 的卡片在滚动区里，手指落在按钮、分段、输入框上再�
   + Send 发 `send_fan_duty`。开关态与状态字见「风扇开关态」一节。**吹粉进行中**（`PURIFY_RUNNING`
   或 `g_purify_busy`）电源钮与 Send 半透明不可点（`apply_fan_enabled()`，挂在 `apply_phase()`
   里）：清粉流程自己会开关风扇，手动关掉会打断它。
+- **电源钮图标是 28 组，不是圆钮通用的 24 组**（风扇与 Inner Door 两颗，稿墨迹 22.5×26、描边 2）：
+  `make_round_btn()` 默认按 `round_icon_sz()`（24）要图，这两颗另传 `power_icon_sz()`
+  （`USER_METRIC_ICON_SZ * 7 / 8`，三档 42/28/22，与 `ic_power_set` 逐档相等）。早先也按 24 要，
+  `ui_user_pick_icon()` 挑中最近的 22 再放大到 24，点采样把描边采得粗细不均、发虚，还比稿小一圈。
+- **Manual 页图标线宽统一 2.5**：Plate 上下 chevron、S 轴减 / 加 / 复位、两颗电源、回粉电机左右
+  chevron / ▷ / 暂停，共 10 枚资源（两颗电源共用一枚）。稿上多数就是 2.5，只有复位与电源是 2——
+  统一后这两枚比稿粗 0.5，其余 8 枚与稿一致（当前取 2.5，之前试过 3.33 / 2.8）。统一值是
+  `gen_home_metric_icons.py` 开头的 `MANUAL_STROKE`，暂停是两根填充条、条宽也直接取它。复位与电源的
+  墨迹本来就贴着裁窗边，线比稿粗时圆头会伸出原裁窗（实测会被削平），所以要按原中心把裁窗放大到不被削
+  的最小值、描边按同比例补偿，上屏线宽仍是统一值。2.5 时只有电源要放大（28→29.25，字形缩 4%），
+  复位原裁窗装得下。**改 `MANUAL_STROKE` 要连这两枚的裁窗一起重核**：脚本里的原则是裁窗刚好装下
+  墨迹，线一粗就可能出界。摄像头浮钮、吹粉、OPEN 门图标不在 Manual 卡里，仍按稿。
 - **Print Params**（稿「打印参数」）：`Layer (um)` 默认 50、`Balance`（平衡系数 ×1000）默认 1000，
   Send 一次下发两项（`send_print_layer_param`，值限幅 0..65535），与调试页同一条消息。后端没有回读。
 - **Return Motor**（稿上这里是 Sieve Motor，按需求换成调试页的回粉电机手动送瓶）：
@@ -1882,8 +1914,9 @@ Manual 的卡片在滚动区里，手指落在按钮、分段、输入框上再�
   稿上没有，但光看 `< >` 分不出哪边是 A 瓶。右上状态字 `Auto / To A / To B` 按本页最后发出的命令记：
   **协议没有回粉电机状态回读**，调试页与本页各记各的，互不同步。
 - 圆钮图标 `ic_chevron_left/right_set`、`ic_play_outline_set`、`ic_pause_set` 由
-  `tools/gen_home_metric_icons.py` 从稿里抠出（24 组，描边 2.5），**不是**把 Plate 的上下 chevron
-  转 90° 复用（那两枚描边 3.33333），也不复用实心的手维护 `ic_play`。
+  `tools/gen_home_metric_icons.py` 从稿里抠出（24 组，线宽见上面「Manual 页图标线宽」），**不是**把
+  Plate 的上下 chevron 转 90° 复用（两组线宽一致，但源坐标在稿的不同位置，各自对稿），也不复用打印
+  暂停钮那枚实心的 `ic_play_solid`。
 - **Retrieve**（稿 6534:35742 的 `356×82`，排在 Return Motor 下面，替掉了早先稿外的 Transfer 卡）：
   左标题、右一枚 120×48 蓝钮 `Run`（稿写「取件」），与 Inner Door 卡同一种横排。与调试页 Other →
   Print Gates → Transfer Demo 同一条 `control_transfer_demo_start()`：后台 Z→−100 → 关内门 → 开外门
@@ -1965,7 +1998,8 @@ Glavo Print_Terminate_Rsp / 进度 100% → control.cpp finish_printing()
 - **PRINT_DONE 期间** `control_is_printing()` 返回 true → PageManager 挡住 `user_files`，
   取件前不能开新任务。
 - 吹粉钮：进结果页 **Complete / 打印中终止** 自动下发 `UI_Clean_Test_Start_Req`
-  （`record_video=1`，仅清粉窗口抽帧接续 JPEG）。**Prepare 阶段终止不自动清粉**
+  （`record_video=1`，仅清粉窗口抽帧接续 JPEG）；设置页 Preferences 关了 Auto Clean After Print
+  （`ui_prefs_auto_clean()`）就不自动下发，钮照常可点。**Prepare 阶段终止不自动清粉**
   （作业未开扫），也不往消息中心推「Purify before collecting」，取件开门后不走转运盒
   （三处共用 `page_user_monitor_result_aborted_in_prep()`，进结果页时按 phase 记下）。钮再点 → `UI_Clean_Test_Close_Req`
   停风扇/停粉（`UI_CLEAN_EVT_STOPPED`）；再点又 Start。MCU 完成帧仍走
@@ -2290,63 +2324,174 @@ viewport 不一致，或 `scaled=0` 而屏宽 ≠ 流宽，就说明重采样又
   - **格子自己消费点击**：格子 `CLICKABLE` + 自带回调，格内图片加 `EVENT_BUBBLE` 让点击落到格子上（注意别照抄历史页缩略图那句 bubble 的用意——那里是要冒到卡片）。条本身与 overlay 都不可点，缝隙处的点击穿透到主图去切控件层。主图是 overlay 的**兄弟**而非父级，所以格子的点击不可能误伤主图。
   - 只有一张（或没有）照片时整条藏掉；离页 `release_strip()` 把各格像素还掉。
 
-### 设置页布局（浅色稿 6089 一族）
+### 设置页布局（浅色稿 6403 / 6457 / 6655 一族）
 
-对应稿：网络 `6089:11322`、显示与亮度 `6235:91450`、熄屏选择 `6240:92007`、
-存储管理 `6251:94362`、格式化弹窗 `6283:26740`。全页文案英文。
+对应稿 `tools/pages/setting/neew/image1..18`，全页文案英文（image18 稿上是中文，同样按英文做）：
 
-**这一版是从旧深色稿 `3238:14296` 整体改过来的，随稿去掉的东西别照旧规律找**：
-右侧上下翻页钮、`Device & Account` 那一项、**顶部常驻设备信息条**——**新稿都没画**，
-不是漏做。翻页钮删掉后 `USER_SCROLL_BTN_SZ` / `_GAP` / `USER_SETTINGS_GAP` /
-`USER_SETTINGS_GUTTER_R` 四个 theme 字段全工程无人再用，已一并清掉。
+| 帧 | 节点 | 内容 |
+|----|------|------|
+| image1 | `6403:1722` | Device Settings 主页 |
+| image2 | `6426:1914` | Wi-Fi 子页 |
+| image3 | `6462:17768` | 已连网络详情 |
+| image4 | `6423:51743` | Wi-Fi 密码弹窗 |
+| image5 | `6437:51952` | 添加隐藏网络弹窗 |
+| image6 | `6403:1867` | Display & Language |
+| image7 | `6448:54075` | Account（Coming soon） |
+| image8 | `6405:1754` | Preferences（三行的旧帧） |
+| image9 | `6438:52418` | 录像存储选择弹窗 |
+| image10 | `6438:52611` | 未检测到存储设备弹窗 |
+| image11 | `6444:53065` | Storage（无外部设备） |
+| image12 | `6443:52816` | Storage（插了 U 盘） |
+| image13 | `6444:53244` | 格式化确认弹窗 |
+| image14 | `6448:53385` | Privacy & Security |
+| image15 | `6448:53532` | About |
+| image16 | `6448:53673` | 导出日志弹窗 |
+| image17 | `6457:17430` | Preferences（四行；左栏几何以此帧为准） |
+| image18 | `6655:18619` | 熄屏时间选择（Display & Language 的子页） |
 
-**设备信息条必须排除，不是可选的美化**：左栏 8 项的高度预算
-`48 + 8×80 + 7×16 = 800` **正好等于屏高**，稿上末项 Debug 落在 y 720..800。
-设备条会给 `content_panel_` 加 `USER_CONTENT_TOP`（112）的顶内距，整页下推之后
-Debug 会整个掉出屏外。排除后不用补内距——左栏 48、右栏 72 是页面自己给的，
-本来就从内容区顶端量起（这点与历史页不同，那页的顶内距是随排除一起补的）。
+**稿内冲突的取舍**：image4/5/9/10/13 的左栏只有 5 项（没有制氮机），只取它们的弹窗；左栏几何
+（项高 / 项距）取最新的 image17；左栏**顺序**随多数帧，偏好在制氮机之前（见下文「导航」）。
+稿里还残留几样看不见的东西（选中项白卡上一枚白色箭头、Device Settings 那一项文字上的 4% 投影），
+照不画。
+
+**本页不显示常驻设备信息条**（同历史页 / 消息页，在 `apply_device_bar()` 的排除名单里）：
+稿上顶部没画；左栏 8 项全显时高 `48 + 8×72 + 7×10 = 694`，再被 `USER_CONTENT_TOP`（112）
+下推就会顶到屏底。左栏 48、右栏 56 的顶内距是页面自己给的，从屏顶量起。
 代价同历史页/消息页：本页看不到设备名与联机状态。
 
-**两栏几何**（1280 档，三张帧互相印证过）。与旧版最大的不同是
-**内距全落在各自栏里、`body` 零内距**，不再靠 body 的左内距/列间距/右留白凑：
+**两栏几何**（1280 档）：内距全落在各自栏里、`body` 零内距：
 
 ```
 左栏渐变带 364 = 32 + 左栏 300 + 32     ← build_subnav，USER_SETTINGS_NAV_W=300
-右栏       788 = 64 + 内容 660  + 64     ← g_detail，内容起点 (556, 72)
+右栏       788 = 64 + 内容 660  + 64     ← g_detail，内容起点 (556, 56)
                                  合计 1152（侧栏 128 之外的内容区）
 ```
 
-左栏那条底带是稿 `6240:92194` 的**竖向渐变** `#FAFAFA → #F4F4F4(50%) → #FAFAFA`。
-LVGL 的 `bg_grad` 只有两个色标、做不出中间那档，故拆成上下两半各一段渐变，接缝落在
-中点、正好与稿的 50% 色标重合（`user_light_rail_mid` 只此一处在用）。
+左栏那条底带是**竖向渐变** `#FAFAFA → #F4F4F4(50%) → #FAFAFA`（旧稿 `6240:92194` 起就有，
+新稿沿用），364×800 铺满整屏高，屏上 x 128..492。LVGL 的 `bg_grad` 只有两个色标
+（`LV_GRADIENT_MAX_STOPS 2`）、做不出中间那档，故拆成上下两半各一段渐变，接缝落在 y=400、
+正好与稿的 50% 色标重合（`user_light_rail_mid` 只此一处在用）。
 
-**右栏版式**：分区之间 48、分区内标题↔卡片 16；分区标题 22（`user_font_dlg_btn()`）；
-行卡片 = row / 内距 24 / 白底 + 1px 白 10% 描边 + `0 2 6 rgba(0,0,0,.04)` + 圆角 16，
-行内文字 20（`user_font_title()`）。卡片外观集中在 `apply_card_style()`，右栏所有行卡
-共用一份，与历史页/消息页卡片同款。
+> **左右 32、顶 48 的内距要放在导航列上，不能放在底带上**。两块渐变是底带的浮动子节点，
+> LVGL 的百分比尺寸与浮动定位都按父节点**内容区**算：内距放在底带上，渐变就只铺到导航列
+> 那 300×752，实机上露出两侧 32、顶上 48 的浅边，中点也下移到 y≈424（旧版一直是这样）。
+> 现在 1280 档底带零内距，导航列宽 300 + 2×32 自带内距；浮动子节点不计入内容宽，
+> 底带的 `LV_SIZE_CONTENT` 宽度仍是 364。
 
-> **右内距别在子页里改**。旧版 `build_network_detail()` 把 `pad_right` 加宽到 79 给
-> 悬浮翻页钮让位，`net_reset()` / `show_detail()` 又各自把它清零——钮删掉后这三处
-> 全成了错的，会把整页横向挤偏 15px。现在内距只由 `page_user_settings_create()`
-> 设一次，别的地方一律不碰。
+**右栏版式**（`make_page()` / `make_section()` / `make_list_card()` / `make_list_row()`）：
 
-**导航**（8 项，顺序即稿）：Account / Network & Connectivity / Display & Brightness /
-Storage / Advanced Print / Privacy & Security / About / Debug。
+- **页头**：一级页标题 28（`user_font_dlg_title()`）+ 副标题 20 @65%；子页标题前多一枚
+  24 见方返回箭头（间距 16），副标题与**标题文字**左对齐（x=596），不与箭头对齐。
+  标题行盒顶 y=56（字身中心 ≈71）、副标题 y=102、首张卡 y=160。网络详情页稿上没有副标题。
+  返回箭头的实际热区是右栏左上角约 104×102 的一整块（见「触摸命中区」表），不是箭头本身。
+- **纵向节奏**：页头底 → 内容 36；分区之间 48；分区标题（20 @65%）→ 卡 20。
+- **列表卡**：660 宽、圆角 16、纯白，无描边无投影（新稿只有 image6 两张卡、image18 一张带 4% 投影，
+  其余帧都没有，取多数）。卡零内距，内距落在每一行上（左右 24）；行间分隔线 1px 墨色 @8%、左右各
+  缩进 24，`make_row_base()` 在卡里已有行时自动补线。**例外**：熄屏时间那张选项卡按 image18
+  带淡投影、分隔线通栏 `#E5E7EB`（卡上打 `kCardFlushDivider` 标，`add_divider()` 认它），只这一张。
+- **淡投影** `add_soft_shadow()`：稿 `feOffset dy=2`、`stdDeviation=3`、黑 4%；LVGL 的
+  `shadow_width` 是边缘内外合计的渐变宽，按亮度圆钮那处的换算（σ5 → 12）取 8，下移 2。投影画在
+  对象外沿，LVGL 又按父对象范围裁子对象，**父对象得留出余量**：熄屏页的内容列与卡同宽同高，
+  所以四周垫 8、再用等量负外边距抵回（同页头扩热区的做法），卡位置不变。
+- **行**：带副标题 96；单行 80（About 卡一、Wi-Fi 开关行）或 76（网络列表、网络详情、熄屏入口行、
+  Advanced Print 门控）；熄屏时间选项行 68（字 20）；存储页外部设备那张单行卡 86。标题 22（`user_font_dlg_btn()`）、副标题
+  18 @55%、右侧值 18 @65%、行尾箭头墨色 @50%。文字一律单行截断（`label_one_line()`：LVGL 的
+  DOTS 只在文字高过标签时才生效，所以把标签高钉成一行）。
+- **开关** `make_pref_switch()`：72×40、圆钮 32 内缩 4，开 = 墨色实心、关 = 墨色 @8%；
+  Advanced Print 的门控开关也换成它。行右侧另垫一块满行高 × 144 的透明热区，点到就切换，
+  标题文字区不响应（见「触摸命中区」）。
+- **行尾描边小钮** `make_outline_btn()`：高 47、圆角 10、宽随文字。Format / Restore / Forget 是
+  红 `#FF4242` 描边配红字，Start / Add Hidden Network 是墨色 10% 描边。
+- **Coming soon 页**：页头 + 右栏整屏居中的「Coming soon...」（20 @50%，浮在 `g_detail` 上）。
+- 右栏 `g_detail` 一直可纵向滚动，装得下的页拖不动；Wi-Fi、存储、关于、Advanced Print 会超出一屏。
 
-- 项高 `USER_NAV_ITEM_H` = 80（稿 24 + 32 图标 + 24），项间距 16，首项顶 y=48；
-- **未选中无底、圆角 8；选中才是白卡**（圆角 16 + 白 10% 描边 + 那道投影）。两态圆角
-  不同，所以不能只切 `bg_opa`；
-- **只有选中项出右箭头**（旧版恒出）。Debug 是例外：它跳开发者页、稿上给的是外链
-  箭头 ↗，LVGL 符号字库没有斜向箭头，退而用同向的 ›。**日常隐藏**（不占导航位、点不到）。
-  About 里 **Check for Update** 行右侧是检查按钮：先补心跳再问云端，有新版本弹窗确认后下载，已最新则 toast。连点 **Software Version** 右侧版本号三次（两次间隔超过 2s 重新计数），弹出开发者
-  密码框，输 `888` 后本次运行才显示左栏 Debug 和 About 里的 Galvo OTA / MCU OTA；再点 Debug
-  直接进调试页，不再要第二次密码。重启 App 后重新隐藏；
-- 选中与否的字重差（SemiBold / Regular）Montserrat 追不了，只落地不透明度差
-  （50% → 100%，图标同步）；
-- `Device & Account` 去掉了，它装的 Galvo OTA / MCU OTA 两行**并进了 About**，但与左栏
-  Debug 一样默认不画，解锁后才出现；
-- Account / Privacy 走 `build_placeholder_detail()`。Advanced Print 列出打印前门控，
-  默认全开，和调试页同一套 Glavo 开关（外门、内门视觉、基板在位、光路、基板测高、氧浓度），
+> **右内距别在子页里改**。内距只由 `page_user_settings_create()` 设一次（56/64/24），
+> 页头与分区的间距由 `make_page()` 返回的内容列自己管，`g_detail` 不设行距。
+
+**导航**（`NavId` 顺序）：Device Settings / Preferences / Nitrogen Generator / Storage /
+Privacy & Security / Advanced Print / About / Debug。偏好在制氮机之前：稿上 10 帧都是这个顺序
+（含 Device Settings 主页 6403:1722），只有 image7（6448:54075）与 image17（6457:17430）两帧反过来；
+左栏几何取 image17，顺序**不随它**（第一版跟了 image17，上机对稿发现反了）。Advanced Print 是
+稿外保留的，排在 About 之前。默认选中 Device Settings。
+
+- 项高 72（`USER_NAV_ITEM_H * 9 / 10`）、项距 10（稿前两档 12、后三档 8，取误差最小的 10）、
+  首项顶 y=48。**不改 `USER_NAV_ITEM_H`**：选文件页的分段宽靠它算出 256；
+- 未选中无底；选中是白卡（圆角 16 + 1px 墨色 6% 描边 + 淡投影，见上文「淡投影」）。投影
+  image17 没画，image1 / image2 / image18 都有，取有（第一版随 image17 没加）。1280 档导航列
+  四周有内距、投影放得下；其余档位导航列零内距，投影两侧与上沿会被裁掉，只剩底边一道。
+  按下压一档墨色 @4%，选中项
+  按下仍保持白卡（`CHECKED | PRESSED` 单独给一份，否则单写的 `PRESSED` 会盖过白底）；
+- 文字与图标都是全墨色（旧版未选中压到 50%，新稿不压）；标签 20——稿上 22，但英文
+  `Nitrogen Generator` 在 22 号下约 206，超出可用宽 196 会被截断；
+- 不出箭头。Debug 是例外，保留一枚 ›（它跳开发者页、不进右栏），**日常隐藏**（不占导航位、
+  点不到）。About 里连点 **Firmware Version** 那一行三次（两次间隔超过 2s 重新计数），弹出
+  开发者密码框，输 `888` 后本次运行才显示左栏 Debug 和 About 里的 Galvo OTA / MCU OTA；再点
+  Debug 直接进调试页，不再要第二次密码。重启 App 后重新隐藏。稿上那行副标题「连续点击 5 次
+  进入调试模式」按需求不显示，行尾箭头也不画（这一行不跳转）。
+
+**页面树**：
+
+```
+Device Settings ─┬─ Account（Coming soon）
+                 ├─ Wi-Fi ─┬─ 已连网络详情（Disconnect / Forget Network / IP Address）
+                 │         ├─ Saved Networks（稿外保留）
+                 │         └─ Add Hidden Network 弹窗（只做界面）
+                 └─ Display & Language ── Sleep Timeout 选择
+Preferences ── Recording Storage 选择弹窗 / 未检测到存储设备弹窗
+Nitrogen Generator（Coming soon）
+Storage ── 格式化确认弹窗
+Privacy & Security ─┬─ Terms of Use（Coming soon）
+                    └─ Privacy Policy（Coming soon）
+Advanced Print（稿外保留）
+About ── Export Logs 弹窗 / 未检测到存储设备弹窗
+```
+
+Device Settings 的子页由 `DevSub` + `dev_show()` 切换（清空右栏重建）。`dev_show()` 只建页面、
+不发请求——推送触发的重建也走它；发请求的是 `enter_wifi_page()` 这类入口。
+
+**各页要点**：
+
+- **Device Settings**：一张卡三行。Wi-Fi 行副标题 Connected / Not connected / Off、右侧 SSID，
+  随 `GLAVO_Wifi_State_Ntf` 就地改字。账号行右侧稿上的「已登录」不画（账号功能还没有）。
+- **Wi-Fi**：第一张卡是开关行（替掉旧版 On/Off 分段）+ 已连网络行（Connected ›，点进详情）；
+  下面是 `Other Networks` 列表（Wi-Fi 字形 + SSID + ›；已保存的免密直连，否则弹密码框）、
+  `Saved Networks` 入口、右对齐的 `Add Hidden Network` 描边钮（稿 175×56 是按中文量的，英文字长，
+  宽度随文字）。Wi-Fi 关时开关卡以下整段隐藏。周期重扫（8s）只在这一页开。连接态 / 开关变化或
+  扫描列表签名变化时重建本页，**保住滚动位置**（`wifi_page_rebuild()`）。开关的 VALUE_CHANGED
+  里**不能重建**——会把正在派发事件的开关删掉；已连网络那一行随后由状态推送触发重建。旧版的
+  Advanced Settings 子页和「未连接网络点箭头进空页」已删，IP 本来就在已连网络详情里。
+- **Display & Language**：语言分段 280×72（底 @6%、内距 2、段间 4），选中段 136×68 深墨实块配
+  白字。固件只有英文，恒选 English；点「中文」提示 Coming soon。「中文」用 `user_font_cjk()`
+  （18 号，「中」「文」在子集里）。亮度卡 96 高：两枚 48 见方太阳盒（@4%）夹 492×8 轨道（间距 12），
+  填充段深墨、圆钮 28 带淡投影（LVGL 的圆钮按滑条高画，四边各补 10 才到 28）。**圆钮不出轨道**：
+  LVGL 滑条在两端时圆钮中心落在端点、半个圆钮伸出去，按稿 12 的间距会压到太阳盒（上机发现过）。
+  所以滑条本体左右各缩进半个圆钮（外面套一层左右内距 = 圆钮半径的 `zone`），自己不画底；轨道底色
+  单独一条，靠 `transform_width` 往两边各画出半个圆钮、视觉上仍是 492；左端补一段深色端头盖住填充
+  起点。**不能直接给滑条加左右内距**：填充段会跟着缩进，左端露出一截浅色。`zone` 与太阳盒同高
+  48，点在圆钮上下也找得到滑条（LVGL 找控件只往命中了父对象的子对象里找）。熄屏时间行进选择子页
+  （image18）：一张卡 7 行，行高 68、字 20；只有选中行行尾画 24 墨色圆底 + 白色小勾，其余行不画
+  （不是选择弹窗那种每行一枚圆钮）；点选后勾移过去、停在本页，回 Display & Language 走页头返回
+  箭头。选项**纯 UI 占位**，只存静态变量，不落盘、也不真的熄屏。
+  旧版那枚右下浮动返回钮已去掉，子页一律用页头的返回箭头。
+- **Preferences**：一张卡四行，三个开关 + Recording Storage。值：选中的设备在位就显示它；一个
+  外部设备都没有显示 No Storage Device；有设备但没选过（或选的那个拔了）显示 Not Selected。
+  点开：没设备弹提示类；有设备弹选择类，只列在位的设备，点选即生效并关窗（稿上没有按钮，
+  点遮罩也关）。
+- **Storage**：Internal Storage 卡（150 高：已用 22 / 总量 / 12 高用量条 / 剩余）+ Connected
+  External Storage（没有外部设备就整段不画）+ Format（内置一行 + 每个在位的外部设备一行）。
+  旧版的 SD 容量卡与 File Management 两行（原本只画不接）已删。插拔时整页重建、保住滚动位置。
+- **Privacy & Security**：Terms of Use / Privacy Policy 进 Coming soon 子页；Join User Experience
+  Program 开关落盘。
+- **About**：卡一 Device Model / Serial Number / Firmware Version / Check for Update / MCU Version /
+  Galvo Version（解锁后加两行 OTA）；卡二 Export Logs（选存储弹窗，Export 提示 Coming soon）、Factory Reset
+  （标题与副标题红字，`Restore` 红描边钮直接提示 Coming soon——稿上没有它的确认弹窗）。序列号读
+  设备 key 文件第一行（`/userdata/snowpod/key`，环境变量 `SNOWPOD_DEVICE_KEY_FILE` 可改，与 MQTT
+  的 device_id 同源），读不到显示 `--`。**Check for Update** 行右侧 Check 钮：先补心跳再问云端，
+  有新版本弹窗确认后下载，已最新则 toast（结果弹窗在 `ui_app`，不绑本页生命周期）。
+- **Advanced Print**：内容不变，补页头（`Advanced Print` / `Print gates and calibration`），分区
+  标题、行与开关换新样式。列出打印前门控，
+  默认全开，和调试页同一套 Glavo 开关（外门、PM2.5、内门视觉、Vision Check、氧浓度；Vision Check
+  即测高，光路与基板在位已并入其中，不再单列开关），
   另有 **Keep Z Position**（默认关：打开后整个打印会话绝对不动 Z——不起印 −10、跳过测高与
   工作高度抬升、开关内门前不降 Z、终止/失败收尾不改 Z，Manual/调试 Z 点动与 Home 也丢弃），
   以及 **Transfer Box**（默认开，与调试页同一枚本地开关：取件后走转运盒三步，自检阶段终止的除外；关掉则开门即回 IDLE），
@@ -2355,37 +2500,65 @@ Storage / Advanced Print / Privacy & Security / About / Debug。
   参数与调试页 Laser 卡相同（-5…12 mm，步长 1）。
   测高开关默认开，仅本次 Glavo 进程有效。
 
-**图标**：8 枚全部重出，`tools/gen_settings_icons.py` 从稿的整帧 SVG
-`tools/pages/setting/new/image1` **按坐标裁窗**取出，路径数据原样不动（同
-`gen_home_metric_icons.py` 里 `hist_*` 那批的做法）。旧版是共用一个 viewBox、
-墨迹只占图标盒 50%，新稿是 75%，裁窗一换就对了。
+**外部存储在位**（存储页列表、两个选择弹窗共用）：U 盘看 `GLAVO_USB_Hotplug_Ntf`（后端已实现），
+建页时先读 `UiMsgProxy::usb_mounted()`——代理从启动起就订阅着、缓存了最近一次；本页首次进入才建，
+不读缓存就得等下一次插拔。SD 卡看 `GLAVO_SdCard_Hotplug_Ntf` 或容量回执 `present=1`，两条后端都
+还没做，目前不会出现。**已知缺口**：Glavo 只在自己启动时和挂载变化时推 U 盘状态，若它比 UI 先起，
+开机前就插着的 U 盘要等一次插拔才认得到（契约里没有查询 U 盘当前态的消息）。U 盘容量查询后端
+未实现，显示 `--`。三个卷的后端缺口见 [doc/STORAGE_BACKEND_API.md](../../doc/STORAGE_BACKEND_API.md)。
 
-**各分区的特殊处**：
+**只做界面清单**（后端缺，按稿画出来；开关落盘，按钮提示 Coming soon）：
 
-- **Network**：Wi-Fi 开关分段 **256 宽**（稿 `6101:14231`，**不跟其余卡片一样满 660**），
-  高 `USER_SETTINGS_SEG_H`=72、内距 2、段间 4、圆角 16，选中段是白色实块、圆角 14
-  （= 16 − 2，两个圆角才同心）。宽度那 256 是 `USER_NAV_ITEM_H*16/5` 算出来的，
-  行高 80 之后正好，不用另给。
-- **Display & Brightness**：稿上滑条左右各一枚小/大太阳图标盒，工程没有那两个矢量
-  资源，用同尺寸的百分比标签顶上。滑条填充段是深色 `user_light_text`，**不是主色蓝**。
-- **熄屏选择子页**（`disp_show_sleep()`，照 `net_show_*` 那套状态机）：7 个选项在
-  **一整张卡**里、行间以分隔线断开（不是 7 张卡），选中项右侧蓝勾，**右下浮动返回钮**。
-  浮动返回钮**只有这一页用**，其余子页仍是顶部返回条（`make_subpage_header`），
-  两种并存是稿上就有的，别顺手统一。分隔线要压成浅色档的 `user_light_divider`，
-  `ui_user_make_divider_line()` 默认给的是深色档那个、压在白卡上太重。
-  选项**纯 UI 占位**：只存静态变量，不落盘、也不真的熄屏。
-- **Storage**：两张容量卡（并排、各 `flex_grow`，内距 20 / 行距 12）+ 格式化两行
-  （红描边白底钮；U 盘那行按 `add_usb_hotplug_listener` 置灰）+ 文件管理两行（只画不接）。
-  确认弹窗复用历史页那个 `light_theme` 的 496×231。**三个卷不是同一批**：概览是
-  Internal + SdCard，格式化是 Internal + UsbDisk。后端只实现了 Internal 的容量查询，
-  其余见 [doc/STORAGE_BACKEND_API.md](../../doc/STORAGE_BACKEND_API.md)。
+| 位置 | 项 | 缺什么 |
+|------|----|--------|
+| Wi-Fi | Add Hidden Network | WifiManager 连接时没设 `scan_ssid 1`，连不上不广播的网络 |
+| Display & Language | 语言切换 | 固件只有英文 |
+| Display & Language | 熄屏时间 | 没有背光超时策略（原本就是占位） |
+| Preferences | Auto Timelapse | 换层拍照是编译期 `GLAVO_ENABLE_LAYER_SNAP`，运行时改不了 |
+| Preferences | Recording Storage | 录像仍写内置存储 |
+| Privacy & Security | Join User Experience Program | 没有数据上报 |
+| Coming soon 页 | Account / Nitrogen Generator / Terms of Use / Privacy Policy | 功能与正文都没有 |
+| About | Export Logs / Factory Reset | 后端没有导出日志与恢复出厂 |
+| Storage | U 盘容量 / SD 检测 / 格式化 | 前端已按契约发请求，后端未实现 |
 
-#### 两个密码弹窗与键盘让位（稿 6423:51743 / 51893）
+**偏好落盘**（`core/ui_prefs.*`）：`/userdata/ui/prefs.conf`，一行一条 `key=value`，整份写临时文件
+再 rename；缺文件或缺键按默认值。`ui_app.cpp` 在 `ui_clean_state_init()` 之后调 `ui_prefs_init()`。
 
-Wi-Fi 连接密码与开发者密码共用一套外壳：`USER_WIFI_DLG_W`（稿 560，比 `USER_DLG_W` 宽 64
-——稿上输入框满宽 496 加两侧 32 内距）、白卡、SSID 居中作标题、下面一行左对齐灰字、满宽
-输入框、页脚两枚**等宽**钮（`Cancel` 是 `#333145 @10%` 底配深墨字，`Connect` 深墨实心配白字，
-见 `make_pwd_dlg_btn()`）。开发者密码那张没有稿，对齐 Wi-Fi 这张。
+| 键 | 默认 | 生效 |
+|----|------|------|
+| `auto_clean` | 1 | 结果页进场是否自动开一轮吹粉（`page_user_monitor_enter_print_result`）；关掉后底部吹粉钮照常可手动吹 |
+| `auto_timelapse` | 1 | 只存值 |
+| `auto_record` | 1 | 就是调试页 Print H264 Rec（打印期连续 H264 录像），两处写同一个值。稿上默认关，这里取开，与 Glavo 上电默认一致——关了 Print History 就不出打印视频 |
+| `record_storage` | `none` | `none` / `usb` / `sd`，只存值 |
+| `ux_program` | 1 | 只存值 |
+
+Glavo 不存 Print H264 Rec，每次启动回到上电默认（开）。工程里没有「对端连上」事件，所以
+`ui_prefs` 用 1s 定时器轮询 `MsgPort::peer_connected(APP_GLAVO)`，由断到连就把落盘值补发一次，
+Glavo 中途重启同样覆盖。
+
+**图标**：`tools/gen_settings_icons.py` 从稿的整帧 SVG **按坐标裁窗**取出，路径数据原样不动（同
+`gen_home_metric_icons.py` 里 `hist_*` 那批的做法）。左栏 6 枚取自 image17（各项纵向不等距，逐个
+给裁窗）；亮度大小太阳取自 image6；Wi-Fi 字形与返回箭头取自 image2；行尾箭头取自 image1；选中圆钮
+里的对勾取自 image9；熄屏页选中行的小勾 `check_sm` 取自 image18（勾宽约 9.5，比 image9 那枚的 16 小、
+线宽同为 2.5，缩放旧勾会把线压细，故单列一枚）。Debug 新稿没画，沿用旧稿 `tools/pages/setting/new/image1` 那枚。Advanced Print
+新稿也没画，而新稿给 Preferences 用的烧瓶正是旧稿 Advanced Print 那枚，两项同图会撞，故按同一套
+线宽手画了一枚「滑杆」。
+
+#### 弹窗与键盘让位（稿 6423:51743 / 6437:51952 / 6438:52418 / 6438:52611 / 6444:53244 / 6448:53673）
+
+外壳都是 `ui_modal_dialog` 的浅色档，`open_set_dialog()` 统一加副标题（20 @65% 居中）。两种宽度：
+
+- **560 宽、内距 32**（`USER_WIFI_DLG_W`）：Wi-Fi 密码、开发者密码、添加隐藏网络、两个选择类。
+  输入框满宽 496、高 64、圆角 14、底 @5%；页脚两枚等宽钮 236×72、圆角 12。
+- **496 宽、内距 24**（`USER_DLG_W`）：确认类（Cancel + 红色实心 Format，各 212×72）、提示类
+  （单个满宽 448×72 的 Got It）。
+
+正文行距统一 20（副标题 → 字段说明 → 输入框 → 下一个字段说明）。页脚钮走 `make_dlg_btn()`：
+Neutral（墨色 @10% 底配深墨字）/ Primary（深墨实心配白字）/ Danger（红实心配白字），不借
+`ui_user_make_confirm_footer_btn()`。选择类每个选项一块 496×98（选中 @8%、未选中 @4%）：名称 20 +
+可用容量 18 @55%，右侧 40 见方圆钮（选中墨色实心 + 白勾，未选中 1px 墨色 @50% 圈）。
+带输入框的建在 `lv_screen_active()`（键盘也在 screen 上，建在 `lv_layer_top()` 会把键盘压在下面），
+其余建在 `lv_layer_top()`。开发者密码那张没有稿，对齐 Wi-Fi 这张。
 
 **卡片要给键盘让位，而且方向不固定。** 稿上弹窗是屏幕居中的，但点输入框会弹键盘把它挡住。
 改稿前的做法是**静态**顶对齐（`LV_ALIGN_TOP_MID` + `USER_PAD_LG`），不管键盘在不在都贴着
@@ -2687,13 +2860,16 @@ Wi-Fi 连接密码与开发者密码共用一套外壳：`USER_WIFI_DLG_W`（稿
 它还顺带解决另一半问题：LVGL 在手指**移出对象**时发 `PRESS_LOST` 取消点击，小按钮上
 轻微的手指漂移就够触发，表现是「点了没反应」；外扩后「仍算在对象内」的范围一起变大。
 
-已落地两处（都是 1024 档暴露出来的，该档 `USER_BACK_BTN_H` 只有 40、`USER_HIST_TAB_H` 只有 32）：
+已落地的几处（前三处是 1024 档暴露出来的，该档 `USER_BACK_BTN_H` 只有 40、`USER_HIST_TAB_H` 只有 32；
+后两处是上机反馈的「不易命中」）：
 
 | 控件 | 原命中区 | 外扩量 | 原因 |
 |---|---|---|---|
 | 全屏浮层圆钮（播放器关闭/播放、相册关闭/左右箭头） | `user_media_btn_size()` 见方 | 不足 `UI_USER_MIN_TOUCH`(48) 时补足 | **三档视觉尺寸提到 96/66/60 后已全部超过 48，这条兜底不再触发**，留着是给日后新档位用 |
 | 历史页 / 消息页顶部 Tab 项 | 文字实宽 × `USER_HIST_TAB_H` | `USER_PAD_SM` | 项宽被写死成文字实宽（左右零内距），Tab 之间 `USER_PAD_LG` 全是死区 |
 | 延时播放器进度条 | 轨道 `2 × USER_PROGRESS_H`（24~40 高） | `UI_USER_MIN_TOUCH`(48) | 全屏播放时它是唯一定位手段，且是拖动而非点击，起手落偏一点就丢事件。**要同时改两处**：`bottom` 容器的 `pad_top` 让点能递归下来（`lv_indev_search_obj` 只看父节点原始 coords，不含 `ext_click_area`），slider 的 `ext_click_area` 让它自己认这些点 |
+| 设置页子页的返回箭头（`make_page()`） | 24 见方；原先外扩 16 被 30 高的标题行裁掉，实测只剩约 40×30、箭头左边零余量 | 右栏左上角一整块透明热区，约 104×102（从右栏左缘到标题文字前、从屏顶到副标题上沿） | 同上一条的坑：箭头贴在标题行左上角，外扩出去的部分不在父对象范围里。页头用负外边距 + 等量内距扩到右栏左上角（内容不动，百分比宽度会减掉外边距、自动补回），热区作为页头的 FLOATING 子节点先建、垫在箭头下层——点在箭头上仍由箭头接住、保留按下反馈；挂在页头里所以随 Wi-Fi 列表一起滚动。网络详情页没有副标题，页头额外往下伸 16、再用等量负下边距抵掉（flex 主轴计入外边距），热区一样大 |
+| 设置页开关（`make_pref_switch()`，Advanced Print 12 枚、Preferences 3、Privacy 1、Wi-Fi 总开关 1） | 72×40，外扩 8 后 88×56；行高 76 / 80 / 96，开关上下与右边到卡边都点不到 | 行右侧满行高 × 144（开关左边让出 48，一直到卡右缘） | 行里垫一块透明 FLOATING 按钮，先于开关建、垫在下层，点在开关上仍由开关接住；点到热区就代为切换开关、再补发 `VALUE_CHANGED`——门控 / 偏好 / Wi-Fi 三个回调都从事件目标读状态，下发与落盘照常；LVGL 9.5 的开关在 CHECKED 变化时自己走圆钮动画。左边文字区**不响应**，免得点标题误关打印前门控。热区先于开关建而不是挪到第 0 位：`list_row_title()` 认定行的第 0 个子节点是文字列 |
 
 **竖向偏差不能靠外扩解决,得改布局**：`ext_click_area` 是四边等量的，治不了不对称偏差。
 Tab 项原先照稿做「文字贴行顶 + 下划线贴行底」的绝对定位，那只在行高恰为稿值时成立；

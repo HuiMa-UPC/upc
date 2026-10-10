@@ -222,6 +222,11 @@ extern const lv_image_dsc_t ic_check_bold_24;
 extern const lv_image_dsc_t ic_check_bold_19;
 extern const lv_image_dsc_t *const ic_check_bold_set[];
 
+extern const lv_image_dsc_t ic_play_solid_36;
+extern const lv_image_dsc_t ic_play_solid_24;
+extern const lv_image_dsc_t ic_play_solid_19;
+extern const lv_image_dsc_t *const ic_play_solid_set[];
+
 extern const lv_image_dsc_t ic_chevron_left_36;
 extern const lv_image_dsc_t ic_chevron_left_24;
 extern const lv_image_dsc_t ic_chevron_left_19;
@@ -254,7 +259,6 @@ extern const lv_image_dsc_t ic_expand;
 extern const lv_image_dsc_t ic_alert;
 extern const lv_image_dsc_t ic_printer;
 extern const lv_image_dsc_t ic_purify;
-extern const lv_image_dsc_t ic_play;
 extern const lv_image_dsc_t ic_door_solid;
 extern const lv_image_dsc_t ic_photo;
 extern const lv_image_dsc_t ic_badge_spin;

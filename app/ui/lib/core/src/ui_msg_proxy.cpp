@@ -204,15 +204,6 @@ void UiMsgProxy::init()
         }));
 
     subs_.push_back(bus.subscribe(
-        middleware::MsgType::APP_OpticalPath_Progress_Ntf, middleware::ModuleId::UI,
-        [this](const middleware::Message& msg) {
-            middleware::OpticalPathProgressPayload p{};
-            if(optical_path_progress_cb_ && read_inline_pod(msg, p)) {
-                optical_path_progress_cb_(p);
-            }
-        }));
-
-    subs_.push_back(bus.subscribe(
         middleware::MsgType::APP_Print_Prep_Progress_Ntf, middleware::ModuleId::UI,
         [this](const middleware::Message& msg) {
             middleware::PrintPrepProgressPayload p{};
@@ -362,10 +353,11 @@ void UiMsgProxy::init()
         middleware::MsgType::GLAVO_USB_Hotplug_Ntf, middleware::ModuleId::UI,
         [this](const middleware::Message& msg) {
             middleware::UsbHotplugPayload p{};
-            if (usb_hotplug_cbs_.empty() || !read_inline_pod(msg, p)) {
+            if (!read_inline_pod(msg, p)) {
                 return;
             }
             p.mount_path[sizeof(p.mount_path) - 1] = '\0';
+            usb_mounted_ = (p.present != 0 && p.mounted != 0);
             for (const auto& cb : usb_hotplug_cbs_) {
                 if (cb) {
                     cb(p);
@@ -379,8 +371,12 @@ void UiMsgProxy::init()
         middleware::MsgType::GLAVO_SdCard_Hotplug_Ntf, middleware::ModuleId::UI,
         [this](const middleware::Message& msg) {
             middleware::UsbHotplugPayload p{};
-            if (sdcard_hotplug_cb_ && read_inline_pod(msg, p)) {
-                p.mount_path[sizeof(p.mount_path) - 1] = '\0';
+            if (!read_inline_pod(msg, p)) {
+                return;
+            }
+            p.mount_path[sizeof(p.mount_path) - 1] = '\0';
+            sdcard_mounted_ = (p.present != 0 && p.mounted != 0);
+            if (sdcard_hotplug_cb_) {
                 sdcard_hotplug_cb_(p);
             }
         }));
@@ -1133,11 +1129,6 @@ void UiMsgProxy::send_print_powder_low_ignore()
 void UiMsgProxy::register_print_powder_low(PrintPowderLowCb cb)
 {
     print_powder_low_cb_ = std::move(cb);
-}
-
-void UiMsgProxy::register_optical_path_progress(OpticalPathProgressCb cb)
-{
-    optical_path_progress_cb_ = std::move(cb);
 }
 
 void UiMsgProxy::register_print_prep_progress(PrintPrepProgressCb cb)

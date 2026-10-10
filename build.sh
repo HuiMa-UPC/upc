@@ -79,6 +79,13 @@ read_toolchain_compilers() {
 
 read_toolchain_compilers
 
+# 交叉编译必须用 SDK 自带的 pkg-config。宿主机的 libdrm 会给出 -I/usr/include，
+# aarch64-gcc 会直接拒绝这条路径。
+SDK_BIN="$(dirname "$CMAKE_C_COMPILER")"
+if [[ -x "$SDK_BIN/pkg-config" ]]; then
+    export PKG_CONFIG="$SDK_BIN/pkg-config"
+fi
+
 do_configure() {
     echo "==> cmake 配置: BUILD_DIR=$BUILD_DIR BUILD_TYPE=$BUILD_TYPE TOOLCHAIN=$TOOLCHAIN UPC_DEBUG=$UPC_DEBUG"
     cmake --no-warn-unused-cli -B "$BUILD_DIR" -S "$ROOT" -G "Unix Makefiles" \

@@ -10,6 +10,7 @@
 #include "control.hpp"
 #include "ui_message_store.hpp"
 #include "ui_alarm_state.hpp"
+#include "ui_prefs.hpp"
 #include "ui_sys_hud.hpp"
 #include "ui_chroma_green.hpp"
 #include "upc_sys_monitor.hpp"
@@ -151,14 +152,10 @@ lv_obj_t *g_o2_calib_ref_ta = nullptr;      /**< 标定时参考氧浓度 % */
 bool      g_o2_calib_pending = false;       /**< 点击后等待 Rsp */
 lv_obj_t *g_first_layer_visual_btn = nullptr; /**< 其他控制：首层视觉检测开关按钮 */
 lv_obj_t *g_first_layer_visual_state_lbl = nullptr; /**< 其他控制：首层视觉检测状态文本 */
-lv_obj_t *g_optical_path_check_btn = nullptr; /**< 其他控制：Skip Optical Path Chk（按下=跳过光路） */
-lv_obj_t *g_optical_path_check_state_lbl = nullptr; /**< 其他控制：Skip Optical Path Chk 状态字 */
 lv_obj_t *g_plate_height_adj_btn = nullptr; /**< 其他控制：打印前基板测高开关按钮 */
 lv_obj_t *g_plate_height_adj_state_lbl = nullptr; /**< 其他控制：打印前基板测高状态文本 */
 lv_obj_t *g_inner_door_occlusion_btn = nullptr; /**< 其他控制：跳过内门视觉挡门 */
 lv_obj_t *g_inner_door_occlusion_state_lbl = nullptr;
-lv_obj_t *g_plate_present_btn = nullptr; /**< 其他控制：跳过基板在位读码 */
-lv_obj_t *g_plate_present_state_lbl = nullptr;
 lv_obj_t *g_soc_led_btn[middleware::kDebugSocLedCount] = {};
 lv_obj_t *g_soc_led_state_lbl[middleware::kDebugSocLedCount] = {};
 lv_obj_t *g_cabin_pm_valve_btn = nullptr;   /**< 其他控制：舱内 PM fa_valve */
@@ -1552,7 +1549,7 @@ void on_dbg_toggle(lv_event_t *e)
         case 4: if(on) proxy.send_clean_test_start();          /* 开：启动清粉测试 */
                 else   proxy.send_clean_test_close();          /* 关：中止清粉 A2/42 TLV 0x02 */
                 break;
-        case 5: proxy.send_print_h264_record_set(on);          /* 打印期连续 H264 录像总开关（仅本次运行） */
+        case 5: ui_prefs_set_auto_record(on);                  /* 打印期连续 H264 录像总开关（落盘，= 设置页 Auto Recording） */
                 break;
         case 6: break; /* Clean Video Rec 已移除 */
                 break;
@@ -1568,13 +1565,9 @@ void on_dbg_toggle(lv_event_t *e)
                  break;
         case 10: proxy.send_first_layer_visual_check_set(on);  /* 首层视觉检测（仅本次运行） */
                  break;
-        case 14: proxy.send_optical_path_check_set(!on);      /* Skip Optical Path Chk：按下跳过光路；载荷 on=1 仍表示执行（默认执行） */
-                 break;
-        case 15: proxy.send_plate_height_adj_set(on);          /* 打印前基板测高调 Z（仅本次运行，默认开） */
+        case 15: proxy.send_plate_height_adj_set(on);          /* 打印前测高（光路、在位、调高；仅本次运行，默认开） */
                  break;
         case 22: proxy.send_inner_door_occlusion_set(!on);    /* Skip Inner Door Occl：按下跳过挡门融合；载荷 on=1 仍表示执行（默认关=Skip 开） */
-                 break;
-        case 23: proxy.send_plate_present_set(!on);            /* Skip Plate Present：按下跳过读码；载荷 on=1 仍表示执行（默认执行） */
                  break;
         /* SOC 六路舱灯 / 舱内 PM 阀：sysfs 直控，不看 MCU 版本 */
         case 16: proxy.send_soc_led_set(c->arg, on);
@@ -2439,15 +2432,11 @@ void build_other_switches_column(lv_obj_t *parent)
                          on_transfer_demo_click, nullptr, nullptr);
     make_dbg_toggle(rowG1, "1st Layer Visual", "On", "Off", LV_SYMBOL_PLAY, false,
                     10, 0, true, 0, &g_first_layer_visual_btn, &g_first_layer_visual_state_lbl);
-    make_dbg_toggle(rowG1, "Plate Height Adj", "On", "Off", LV_SYMBOL_UP, true,
+    make_dbg_toggle(rowG1, "Vision Check", "On", "Off", LV_SYMBOL_UP, true,
                     15, 0, true, 0, &g_plate_height_adj_btn, &g_plate_height_adj_state_lbl);
     lv_obj_t *rowG2 = make_switch_grid_row(gate);
-    make_dbg_toggle(rowG2, "Skip Optical Path Chk", "On", "Off", LV_SYMBOL_EYE_OPEN, false,
-                    14, 0, true, 0, &g_optical_path_check_btn, &g_optical_path_check_state_lbl);
     make_dbg_toggle(rowG2, "Skip Inner Door Occl", "On", "Off", LV_SYMBOL_EYE_CLOSE, true,
                     22, 0, true, 0, &g_inner_door_occlusion_btn, &g_inner_door_occlusion_state_lbl);
-    make_dbg_toggle(rowG2, "Skip Plate Present", "On", "Off", LV_SYMBOL_OK, false,
-                    23, 0, true, 0, &g_plate_present_btn, &g_plate_present_state_lbl);
     make_dbg_toggle(rowG2, "Skip Plate Prompt", "On", "Off", LV_SYMBOL_NEXT,
                     control_skip_plate_prompt_enabled(), 24, 0);
     lv_obj_t *rowG3 = make_switch_grid_row(gate);
@@ -2469,7 +2458,7 @@ void build_other_switches_column(lv_obj_t *parent)
     /* ---- 录像 / 模拟 ---- */
     lv_obj_t *media = make_section_card(col, "Media & Sim");
     lv_obj_t *rowM = make_switch_grid_row(media);
-    make_dbg_toggle(rowM, "Print H264 Rec", "On", "Off", LV_SYMBOL_PLAY, true,
+    make_dbg_toggle(rowM, "Print H264 Rec", "On", "Off", LV_SYMBOL_PLAY, ui_prefs_auto_record(),
                     5, 0, true, 0, &g_print_h264_btn, &g_print_h264_state_lbl);
     make_dbg_toggle(rowM, "Env Sim", "On", "Off", LV_SYMBOL_REFRESH, false,
                     7, 0, true, 0, &g_env_sim_btn, &g_env_sim_state_lbl);
@@ -3185,23 +3174,6 @@ void bind_debug_callbacks()
         lv_label_set_text(g_height_calib_lbl, buf);
     });
 
-    /* 载荷 on=1 表示执行光路。按钮是 Skip，回读时取反。 */
-    proxy.register_optical_path_check([](bool detect_on) {
-        const bool skip = !detect_on;
-        if(g_optical_path_check_btn) {
-            if(skip) {
-                lv_obj_add_state(g_optical_path_check_btn, LV_STATE_CHECKED);
-            } else {
-                lv_obj_clear_state(g_optical_path_check_btn, LV_STATE_CHECKED);
-            }
-        }
-        if(g_optical_path_check_state_lbl) {
-            lv_label_set_text(g_optical_path_check_state_lbl, skip ? "On" : "Off");
-            lv_obj_set_style_text_color(g_optical_path_check_state_lbl,
-                                        skip ? user_light_accent : user_light_icon_off, 0);
-        }
-    });
-
     proxy.register_plate_height_adj([](bool on) {
         if(g_plate_height_adj_btn) {
             if(on) {
@@ -3230,23 +3202,6 @@ void bind_debug_callbacks()
         if(g_inner_door_occlusion_state_lbl) {
             lv_label_set_text(g_inner_door_occlusion_state_lbl, skip ? "On" : "Off");
             lv_obj_set_style_text_color(g_inner_door_occlusion_state_lbl,
-                                        skip ? user_light_accent : user_light_icon_off, 0);
-        }
-    });
-
-    /* 载荷 on=1 表示执行读码。按钮是 Skip，回读时取反。 */
-    proxy.register_plate_present([](bool detect_on) {
-        const bool skip = !detect_on;
-        if(g_plate_present_btn) {
-            if(skip) {
-                lv_obj_add_state(g_plate_present_btn, LV_STATE_CHECKED);
-            } else {
-                lv_obj_clear_state(g_plate_present_btn, LV_STATE_CHECKED);
-            }
-        }
-        if(g_plate_present_state_lbl) {
-            lv_label_set_text(g_plate_present_state_lbl, skip ? "On" : "Off");
-            lv_obj_set_style_text_color(g_plate_present_state_lbl,
                                         skip ? user_light_accent : user_light_icon_off, 0);
         }
     });
@@ -3443,14 +3398,10 @@ void reset_globals()
     g_o2_calib_pending = false;
     g_first_layer_visual_btn = nullptr;
     g_first_layer_visual_state_lbl = nullptr;
-    g_optical_path_check_btn = nullptr;
-    g_optical_path_check_state_lbl = nullptr;
     g_plate_height_adj_btn = nullptr;
     g_plate_height_adj_state_lbl = nullptr;
     g_inner_door_occlusion_btn = nullptr;
     g_inner_door_occlusion_state_lbl = nullptr;
-    g_plate_present_btn = nullptr;
-    g_plate_present_state_lbl = nullptr;
     for(uint8_t i = 0; i < middleware::kDebugSocLedCount; ++i) {
         g_soc_led_btn[i] = nullptr;
         g_soc_led_state_lbl[i] = nullptr;
@@ -3501,10 +3452,8 @@ void page_user_debug_refresh(bool /*force*/)
     ui::DebugMsgProxy::instance().request_inner_door_busy();
     ui::DebugMsgProxy::instance().request_o2_calib_state();
     ui::DebugMsgProxy::instance().request_first_layer_visual_check_state();
-    ui::DebugMsgProxy::instance().request_optical_path_check_state();
     ui::DebugMsgProxy::instance().request_plate_height_adj_state();
     ui::DebugMsgProxy::instance().request_inner_door_occlusion_state();
-    ui::DebugMsgProxy::instance().request_plate_present_state();
     ui::DebugMsgProxy::instance().request_soc_led_state();
     ui::DebugMsgProxy::instance().request_cabin_pm_valve_state();
     ui::DebugMsgProxy::instance().request_status_led_state();
@@ -3536,10 +3485,8 @@ void page_user_debug_exit(void)
     proxy.register_inner_door_busy(nullptr);
     proxy.register_o2_calib(nullptr);
     proxy.register_first_layer_visual_check(nullptr);
-    proxy.register_optical_path_check(nullptr);
     proxy.register_plate_height_adj(nullptr);
     proxy.register_inner_door_occlusion(nullptr);
-    proxy.register_plate_present(nullptr);
     proxy.register_soc_led(nullptr);
     proxy.register_cabin_pm_valve(nullptr);
     proxy.register_status_led(nullptr);

@@ -7,12 +7,12 @@
 extern "C" {
 #endif
 
-/** 用户设置页：当前提供 "进入开发者模式"（带密码） 与若干占位项 */
+/** 用户设置页：左栏分类导航 + 右栏详情（稿 6403 / 6457 一族，页面树见 UI.md「设置页布局」） */
 lv_obj_t *page_user_settings_create(lv_obj_t *parent);
 
 void page_user_settings_refresh(bool force);
 
-/** 关闭密码对话框（页面 on_exit 时调用） */
+/** 离开设置页（页面 on_exit 时调用）：关掉本页所有弹窗，停 Wi-Fi 周期重扫与版本查询重发 */
 void page_user_settings_dismiss_dialog(void);
 
 #ifdef __cplusplus

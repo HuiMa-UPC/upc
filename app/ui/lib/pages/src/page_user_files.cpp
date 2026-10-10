@@ -14,7 +14,7 @@
 #include <string>
 
 /*
- * 选择文件页（稿 6240:92891 / 93026 / 93195）。
+ * 选择文件页（稿 6240:92891 / 93026 / 93195；右栏按钮组按 6357:34689）。
  *
  * 本文件是从 control.cpp 拆出来的——那边原本是 3600+ 行，把这一页的视图代码和打印
  * 状态机、开关门时序、转运盒流程挤在一起。拆分边界与两边的接口见
@@ -64,7 +64,8 @@ int32_t col_gap(void)    { return content_w() * 64 / 1152; }   /**< 稿 64：两
 int32_t detail_top(void) { return content_w() * 136 / 1152; }  /**< 稿 136：右栏内容顶 */
 int32_t preview_h(void)  { return content_w() * 322 / 1152; }  /**< 稿 322：预览框高 */
 int32_t btn_h(void)      { return content_w() * 72 / 1152; }   /**< 稿 72：按钮高 */
-int32_t detail_bot(void) { return content_w() * 24 / 1152; }   /**< 稿 800-776 = 24 */
+int32_t detail_bot(void) { return content_w() * 32 / 1152; }   /**< 稿 800-768 = 32：按钮组底边 */
+int32_t btn_gap(void)    { return content_w() * 16 / 1152; }   /**< 稿 16：删除 / 确认打印并排的缝 */
 
 /* ---- 前置声明 ---- */
 void rebuild_file_grid(void);
@@ -148,7 +149,7 @@ void update_detail_panel(const control_file_t *file)
         lv_label_set_text(g_detail_size_lbl, sz);
     }
 
-    /* 次按钮：仅本机显示“删除该文件”，USB 无次按钮 */
+    /* 次按钮：仅本机显示“删除该文件”，USB 无次按钮（确认打印随之铺满整行） */
     if(g_detail_secondary_btn) {
         if(is_usb) lv_obj_add_flag(g_detail_secondary_btn, LV_OBJ_FLAG_HIDDEN);
         else       lv_obj_clear_flag(g_detail_secondary_btn, LV_OBJ_FLAG_HIDDEN);
@@ -289,7 +290,7 @@ void seg_set_active(FileTab tab, bool animate)
         }
     }
     /* 稿上选中与否靠字重（SemiBold / Medium）分层，Montserrat 单字重追不了，
-     * 只落地不透明度那一半——同设置页 Wi-Fi 开关、消息页 Tab 的处理。 */
+     * 只落地不透明度那一半——同消息页 Tab 的处理。 */
     if(g_seg_lbl_local) {
         lv_obj_set_style_text_opa(g_seg_lbl_local,
             tab == FileTab::Local ? LV_OPA_COVER : LV_OPA_50, 0);
@@ -457,7 +458,7 @@ void rebuild_file_grid(void)
         /* 空态在列表区里居中，与右栏的 g_detail_hint 对称。标签自己纵向居中不了
          * （g_file_grid 是 FLEX_ALIGN_START 的列），套一层吃满剩余高度的容器来做。
          * 底部让出 detail_bot()，让这句与右栏那句落在同一条水平线上——两栏的可用
-         * 高度差正是右栏那 24 的底内距。
+         * 高度差正是右栏那 32 的底内距。
          *
          * U 盘那档单独给话术：稿上没画这态，但「没插盘」和「插了没文件」是两回事，
          * 一句 No print files 会让人以为盘是空的。 */
@@ -496,10 +497,9 @@ void rebuild_file_grid(void)
 /**
  * 本机 / USB 页签（稿 6240:93091）。
  *
- * **与设置页 Wi-Fi 开关是同一个 Figma 组件**（切换Tab / 6156:82872），规格一字不差：
- * 256×72、圆角 16、底 `rgba(51,49,69,.05)`、内距 2、段间 4，选中段白底圆角 14 加
- * 一道 `0 2 6 rgba(12,28,97,.04)`。改这里时顺带看一眼 page_user_settings.cpp 的
- * make_wifi_seg_toggle()，两边应当保持一致。
+ * Figma 组件「切换Tab」（6156:82872）：256×72、圆角 16、底 `rgba(51,49,69,.05)`、内距 2、
+ * 段间 4，选中段白底圆角 14 加一道 `0 2 6 rgba(12,28,97,.04)`。旧版设置页的 Wi-Fi 开关分段
+ * 也是它；设置页新稿换成了开关，语言分段是另一套样式（深色选中块），两处不再需要同步。
  */
 lv_obj_t *make_source_segment(lv_obj_t *parent)
 {
@@ -619,7 +619,7 @@ void make_detail_inline_kv(lv_obj_t *parent, const lv_image_dsc_t *icon,
 }
 
 /**
- * 右栏详情（稿 6240:93047）：512×640 的 column space-between。
+ * 右栏详情（稿 6240:93047，按钮组按 6357:34689）：512×632 的 column space-between。
  *
  * 上组贴顶 = 预览框（322 圆角 24）+ gap16 + 信息（名称 24 / 指标 16 带标签）；
  * 下组贴底 = 按钮组。空态只是把上下两组藏起来、露出居中的提示语。
@@ -741,23 +741,45 @@ void build_detail_panel(lv_obj_t *parent)
 
     /* ---- 下组：按钮，贴右栏底 ----
      *
-     * 稿 6240:93082 只画了一枚「确认打印」、钉在 y=704；**删除钮是产品决定加回来的**
-     * （本机文件要能删），按稿那个容器自带的 gap 24 竖排在主钮下方。于是 y=704 这个
-     * 槽位归了删除钮、主钮上移到 608——这是有意偏离稿，不是量错。 */
+     * 稿 6357:34689：删除在左、确认打印在右，同一行各 248×72、缝 16、圆角 16，底边 768。
+     * 两枚都 flex_grow 均分整行：U 盘文件不能删、删除钮隐藏时，确认打印自然铺满 512
+     * （产品定的，稿只画了本机文件那一态）。 */
     lv_obj_t *btns = lv_obj_create(g_detail_body);
     lv_obj_remove_style_all(btns);
     lv_obj_set_width(btns, LV_PCT(100));
     lv_obj_set_height(btns, LV_SIZE_CONTENT);
-    lv_obj_set_flex_flow(btns, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_style_pad_row(btns, USER_PAD, 0);            /* 稿 24 */
+    lv_obj_set_flex_flow(btns, LV_FLEX_FLOW_ROW);
+    lv_obj_set_style_pad_column(btns, btn_gap(), 0);       /* 稿 16 */
     lv_obj_set_style_bg_opa(btns, LV_OPA_TRANSP, 0);
     lv_obj_clear_flag(btns, LV_OBJ_FLAG_SCROLLABLE);
 
-    /* 主按钮：稿 512×72、圆角 16、实底 #333145、文字 20 白 */
+    /* 次按钮（左）：仅本机显示「删除该文件」（USB 在 update_detail_panel 隐藏）。
+     * 稿是 1px #FF4242 描边、无底色、红字 22；旧稿那版是实心红，新稿改成了描边。 */
+    g_detail_secondary_btn = lv_button_create(btns);
+    lv_obj_t *sec = g_detail_secondary_btn;
+    lv_obj_remove_style_all(sec);
+    lv_obj_set_flex_grow(sec, 1);
+    lv_obj_set_height(sec, btn_h());
+    lv_obj_set_style_radius(sec, USER_HIST_CARD_RADIUS, 0);
+    lv_obj_set_style_border_width(sec, 1, 0);
+    lv_obj_set_style_border_color(sec, user_color_status_err, 0);
+    lv_obj_set_style_bg_color(sec, user_color_status_err, 0);
+    lv_obj_set_style_bg_opa(sec, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_bg_opa(sec, 26, LV_STATE_PRESSED);    /* 按下铺一层 10% 红 */
+    lv_obj_clear_flag(sec, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_event_cb(sec, on_detail_secondary, LV_EVENT_CLICKED, nullptr);
+
+    g_detail_secondary_lbl = lv_label_create(sec);
+    lv_label_set_text(g_detail_secondary_lbl, "Delete File");
+    lv_obj_set_style_text_color(g_detail_secondary_lbl, user_color_status_err, 0);
+    lv_obj_set_style_text_font(g_detail_secondary_lbl, user_font_dlg_btn(), 0);   /* 稿 22 */
+    lv_obj_center(g_detail_secondary_lbl);
+
+    /* 主按钮（右）：稿 248×72、圆角 16、实底 #333145、文字 22 白 */
     g_detail_start_btn = lv_button_create(btns);
     lv_obj_t *btn_start = g_detail_start_btn;
     lv_obj_remove_style_all(btn_start);
-    lv_obj_set_width(btn_start, LV_PCT(100));
+    lv_obj_set_flex_grow(btn_start, 1);
     lv_obj_set_height(btn_start, btn_h());
     lv_obj_set_style_radius(btn_start, USER_HIST_CARD_RADIUS, 0);
     lv_obj_set_style_bg_color(btn_start, user_light_text, 0);
@@ -768,28 +790,8 @@ void build_detail_panel(lv_obj_t *parent)
     lv_obj_t *bl = lv_label_create(btn_start);
     lv_label_set_text(bl, "Confirm Print");
     lv_obj_set_style_text_color(bl, user_light_card, 0);
-    lv_obj_set_style_text_font(bl, user_font_title(), 0);   /* 稿 20 */
+    lv_obj_set_style_text_font(bl, user_font_dlg_btn(), 0);   /* 稿 22 */
     lv_obj_center(bl);
-
-    /* 次按钮：仅本机显示「删除该文件」（USB 无次按钮，在 update_detail_panel 隐藏）。
-     * 维持实心红——分量重、不容易漏看，这是产品选的。 */
-    g_detail_secondary_btn = lv_button_create(btns);
-    lv_obj_t *sec = g_detail_secondary_btn;
-    lv_obj_remove_style_all(sec);
-    lv_obj_set_width(sec, LV_PCT(100));
-    lv_obj_set_height(sec, btn_h());
-    lv_obj_set_style_bg_color(sec, user_color_status_err, 0);
-    lv_obj_set_style_bg_opa(sec, LV_OPA_COVER, 0);
-    lv_obj_set_style_bg_opa(sec, LV_OPA_80, LV_STATE_PRESSED);
-    lv_obj_set_style_radius(sec, USER_HIST_CARD_RADIUS, 0);
-    lv_obj_clear_flag(sec, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_add_event_cb(sec, on_detail_secondary, LV_EVENT_CLICKED, nullptr);
-
-    g_detail_secondary_lbl = lv_label_create(sec);
-    lv_label_set_text(g_detail_secondary_lbl, "Delete File");
-    lv_obj_set_style_text_color(g_detail_secondary_lbl, user_light_card, 0);
-    lv_obj_set_style_text_font(g_detail_secondary_lbl, user_font_title(), 0);
-    lv_obj_center(g_detail_secondary_lbl);
 }
 
 /**
@@ -914,16 +916,17 @@ lv_obj_t *show_file_select(lv_obj_t *parent)
 
     /* ============ 右栏：预览 + 信息 + 按钮组（含未选时的空态） ============
      *
-     * 稿 6240:93047 是 x736 y136 的 512×640、column space-between：上组（预览 +
-     * 名称 + 指标）贴顶，按钮组贴底。中间那两枚上下翻页圆钮与顶部的供应度条
-     * **新稿都没画**，已随稿去掉；两栏之间的分隔线保留（见 build_column_divider）。 */
+     * 稿 6240:93047 是 x736 y136、column space-between：上组（预览 + 名称 + 指标）贴顶，
+     * 按钮组贴底（6357:34689 起按钮组是一行、底边 768，栏高 512×632）。中间那两枚上下
+     * 翻页圆钮与顶部的供应度条**新稿都没画**，已随稿去掉；两栏之间的分隔线保留
+     * （见 build_column_divider）。 */
     lv_obj_t *right = lv_obj_create(cols);
     lv_obj_remove_style_all(right);
     lv_obj_set_height(right, LV_PCT(100));
     lv_obj_set_flex_grow(right, 1);
     lv_obj_set_flex_flow(right, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_style_pad_top(right, detail_top(), 0);       /* 稿 136 */
-    lv_obj_set_style_pad_bottom(right, detail_bot(), 0);    /* 稿 800-776 = 24 */
+    lv_obj_set_style_pad_bottom(right, detail_bot(), 0);    /* 稿 800-768 = 32 */
     lv_obj_set_style_bg_opa(right, LV_OPA_TRANSP, 0);
     lv_obj_clear_flag(right, LV_OBJ_FLAG_SCROLLABLE);
 

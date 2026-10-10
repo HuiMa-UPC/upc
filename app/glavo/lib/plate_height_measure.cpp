@@ -36,9 +36,8 @@ void PlateHeightMeasure::configure(HeightMoveGalvoFn move_galvo,
     on_done_ = std::move(on_done);
 }
 
-bool PlateHeightMeasure::start(const GalvoMotionCalibration& cal, bool check_presence)
+bool PlateHeightMeasure::start(const GalvoMotionCalibration& cal)
 {
-    check_presence_ = check_presence;
     if(!move_galvo_ || !set_session_light_ || !send_z_home_ || !send_z_inc_ ||
        !wait_z_ || !request_spot_ || !publish_session_ || !on_done_) {
         UPC_LOG_GLAVO_SERVICE(Error, "plate height start rejected: not configured");
@@ -68,7 +67,7 @@ void PlateHeightMeasure::abort()
 }
 
 PlateHeightMeasure::Scan PlateHeightMeasure::scan(
-    const HeightLut2d& lut, const char* tag)
+    const HeightLut2d& lut, const char* tag, int min_spots)
 {
     Scan out;
     out.h_med = std::nanf("");
@@ -77,12 +76,14 @@ PlateHeightMeasure::Scan PlateHeightMeasure::scan(
 
     std::vector<float> hs;
     hs.reserve(static_cast<std::size_t>(kHeightMeasureCount));
+    int seen = 0;
     for(const auto& pt : kHeightMeasurePoints) {
         float ix = 0.0f;
         float iy = 0.0f;
         const HeightSpotRc rc = sample_galvo_spot(
             move_galvo_, request_spot_, abort_requested_, pt.x, pt.y, ix, iy);
         if(rc == HeightSpotRc::Aborted) {
+            out.stop = ScanStop::Aborted;
             break;
         }
         if(rc != HeightSpotRc::Ok) {
@@ -91,6 +92,7 @@ PlateHeightMeasure::Scan PlateHeightMeasure::scan(
                 tag, pt.x, pt.y, static_cast<int>(rc));
             continue;
         }
+        ++seen;
         const float h = lut.lookup(pt.x, pt.y, ix, iy);
         if(std::isnan(h)) {
             UPC_LOG_GLAVO_SERVICE(Warn,
@@ -107,6 +109,23 @@ PlateHeightMeasure::Scan PlateHeightMeasure::scan(
 
     const int n = static_cast<int>(hs.size());
     out.n = n;
+    if(out.stop != ScanStop::Ok) {
+        return out;
+    }
+    if(min_spots > 0 && seen < min_spots) {
+        UPC_LOG_GLAVO_SERVICE(Error,
+            "measure[%s]: optical miss seen=%d/%d need=%d",
+            tag, seen, kHeightMeasureCount, min_spots);
+        out.stop = ScanStop::Optical;
+        return out;
+    }
+    if(min_spots > 0 && n < min_spots) {
+        UPC_LOG_GLAVO_SERVICE(Error,
+            "measure[%s]: lookup short valid=%d seen=%d need=%d",
+            tag, n, seen, min_spots);
+        out.stop = ScanStop::Lookup;
+        return out;
+    }
     if(n == 0) {
         UPC_LOG_GLAVO_SERVICE(Error, "measure[%s]: no valid points", tag);
         return out;
@@ -175,19 +194,24 @@ void PlateHeightMeasure::run(GalvoMotionCalibration cal)
                 static_cast<double>(kFineLutMaxMm));
         }
 
-        const Scan coarse = scan(lut_coarse, "coarse");
-        if(abort_requested_.load() || std::isnan(coarse.h_med)) {
+        const Scan coarse = scan(lut_coarse, "coarse", kHeightOpticalMinSpots);
+        if(abort_requested_.load() || coarse.stop == ScanStop::Aborted) {
             break;
         }
-        /* H 是回零后的粗测高度。H-1 大于门限才当有基板，否则停在这里通知 UI。 */
-        if(check_presence_) {
-            const float above_home = coarse.h_med - kHeightZHomeMm;
+        if(coarse.stop == ScanStop::Optical) {
+            result.optical_fail = true;
+            break;
+        }
+        if(coarse.stop == ScanStop::Lookup || std::isnan(coarse.h_med)) {
+            break;
+        }
+        /* 粗测至少 5 点有光斑且能查表。H 大于门限才当有基板，否则停在这里通知 UI。 */
+        {
             UPC_LOG_GLAVO_SERVICE(Info,
-                "plate present from coarse H=%.3f H-1=%.3f threshold=%.3f",
+                "plate present from coarse H=%.3f threshold=%.3f",
                 static_cast<double>(coarse.h_med),
-                static_cast<double>(above_home),
                 static_cast<double>(kPlatePresentMinAboveHomeMm));
-            if(!(above_home > kPlatePresentMinAboveHomeMm)) {
+            if(!(coarse.h_med > kPlatePresentMinAboveHomeMm)) {
                 result.plate_absent = true;
                 result.h_med_mm = coarse.h_med;
                 break;
@@ -233,7 +257,7 @@ void PlateHeightMeasure::run(GalvoMotionCalibration cal)
             if(abort_requested_.load()) {
                 break;
             }
-            const Scan s = scan(fine, "fine");
+            const Scan s = scan(fine, "fine", 0);
             if(abort_requested_.load()) {
                 break;
             }
