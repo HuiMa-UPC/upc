@@ -576,6 +576,7 @@ enum class MsgType : uint32_t {
     XFR_File_Received_Ntf,       /**< XfrFileReceivedPayload：接收文件完成通知 */
     XFR_Transfer_Progress_Ntf,   /**< XfrTransferProgressPayload：接收/切片进度通知 */
     GLAVO_USB_Hotplug_Ntf,       /**< UsbHotplugPayload：USB 挂载状态变化通知 */
+    UI_Xfr_Transfer_Cancel_Ntf,  /**< Empty：UI 取消当前 WiFi 上传/后处理；接在 USB 后以免挪动 0x1410 */
 
     // ---- UI ↔ GLAVO：清粉中断（风机停机） ----
     UI_Clean_Stop_Req = 0x1410,  /**< Empty：中断清粉并请求立即关风机 */
@@ -846,6 +847,10 @@ inline constexpr bool is_ipc_reliable_msg_type(MsgType type) noexcept
     case MsgType::MQTT_Print_Job_Id_Ntf:
         return true;
 
+    /* 取消上传是幂等命令：丢一条窗关了文件还在传，下一条进度又把窗弹回来。 */
+    case MsgType::UI_Xfr_Transfer_Cancel_Ntf:
+        return true;
+
     default:
         return false;
     }
@@ -988,8 +993,9 @@ enum class XfrTransferState : uint8_t {
 struct XfrTransferProgressPayload {
     char     file_name[128];      /**< 当前任务名（切片阶段优先展示目标 gcode） */
     uint8_t  state;               /**< XfrTransferState */
-    uint8_t  reserved[3];
-    uint32_t progress_percent;    /**< 0..100 */
+    uint8_t  transfer_epoch;      /**< 每次 upload/init 递增，UI 用来区分新传输与已取消的旧进度 */
+    uint8_t  reserved[2];
+    uint32_t progress_percent;    /**< 0..100；上传按字节 0..100，不再给板端切片预留空档 */
     uint64_t uploaded_bytes;      /**< 上传阶段已接收字节 */
     uint64_t total_bytes;         /**< 上传阶段总字节 */
 };

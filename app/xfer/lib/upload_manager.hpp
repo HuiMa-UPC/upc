@@ -54,6 +54,8 @@ public:
                                     const uint8_t* data,
                                     size_t len);
     UploadCompleteResult complete(const std::string& upload_id, const std::string& sha256);
+    /** 丢掉所有未完成会话和 .part 文件。已 rename 落盘的完整包不动。 */
+    void abort_all();
 
 private:
     struct UploadSession {
