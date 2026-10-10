@@ -981,7 +981,7 @@ pending 自动解除——正好顺带验超时路径。
   (#EBEAEC)**，不是在白底上叠一层——叠色会把白透出来，出不来稿上那个灰度。注意别拿
   `user_light_more_bg`(#f5f5f6) 顶替，那个是按下态用的，压在白卡上几乎看不出来。
 - **右栏**：512×640 的 column `space-between`。上组 gap 16 = 预览框（高 322、圆角 24、
-  底 `rgba(51,49,69,.15)`，无缩略图时出居中占位图标）+ 名称 24 + 指标 16（带
+  底 `rgba(51,49,69,.15)`，`thumb_large` 用 `LV_IMAGE_ALIGN_COVER` 铺满；无缩略图时出居中占位图标）+ 名称 24 + 指标 16（带
   `Est. time` / `Est. material` 标签，与列表行同源、只是多了标签）。
 - **按钮组**（稿 `6357:34689`）：同一行，`Delete File` 在左、`Confirm Print` 在右，各
   248×72、缝 16、圆角 16，底边 768（右栏底内距 `detail_bot()` = 32）。`Delete File` 是
@@ -1033,7 +1033,7 @@ pending 自动解除——正好顺带验超时路径。
 ——顶部那块满宽预览图做不进那个控件的四周内距里。翻浅色时按调用点扫 `ui_modal_dialog_open()`
 会漏掉这三处，改这一族记得单独过一遍。
 
-顶部预览取 `thumb_large`（与选文件页详情面板同源，二次确认该还是同一张图），判存用
+顶部预览取 `thumb_large`（与选文件页详情面板同源，二次确认该还是同一张图，同样 `COVER`），判存用
 `thumb_path_exists()` 现为 `ui_user_thumb_path_exists()`，取不到才出占位图标。**先前这里只建了占位、从不加载缩略图**，所以恒
 显示破图。
 
@@ -2141,18 +2141,14 @@ RETRIEVE → 取件弹窗滑到底 → DOOR_OPENING（PM2.5/清粉 → 开门）
 `Finished/Error/Idle` 自动收窗。`XFR_File_Received_Ntf` 仍保留原有 toast 和
 本地文件列表刷新逻辑。
 
-两处已知遗留（缺契约，非实现疏漏）：
+已知遗留：
 
-- **取消按钮只关 UI**。UI→XFR 方向目前一条消息都没有，点 `Cancel Pairing` 之后
-  后端配对会话仍然存活，手机那时候依然能配对成功。
+- **PIN 取消只关 UI**。点 `Cancel Pairing` 之后后端配对会话仍然存活，手机那时
+  候依然能配对成功。PIN 弹窗只能手动关：`XfrPairPinPayload.expires_s` 没有使用，
+  PIN 过期不会自动收窗；弹窗遮罩会吞掉全屏点击，无人处理时会一直挡着（含打印中）。
 
-  接收弹窗上这个洞还要更深一层：**「Cancel Transfer」按下去等于没按**。进度回调的逻辑是
-  「只要状态是 `Uploading/Slicing` 且当前没开着窗，就开一个」，而取消只是把 `g_xfr_recv_dlg`
-  清空、后端并不知情、进度照推——于是下一条推送到达时窗又开回来了，推得多快就弹回得多快。
-  修它不需要动协议（记下被取消的文件名、传完或出错前不再开窗即可），但本轮按「等后端出
-  取消契约时一并做」处理，没有实现。PIN 弹窗没有这个问题：它只在收到新 PIN 通知时开窗。
-- **PIN 弹窗只能手动关**。`XfrPairPinPayload.expires_s` 没有使用，PIN 过期不会自动
-  收窗；弹窗遮罩会吞掉全屏点击，无人处理时会一直挡着（含打印中）。
+接收弹窗 `Cancel Transfer` 会发 `UI_Xfr_Transfer_Cancel_Ntf`，并靠
+`transfer_epoch` 挡住同一次传输的进度重开；新的 `upload/init` 换 epoch 后才再弹。
 
 文案统一用英文：CJK 子集字库 `assets/src/lv_font_cjk_data.c` 只覆盖调试测试页用字
 （403 字），缺稿上的「备 / 码 / 消」，且只有单一 18px 字号。

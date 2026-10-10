@@ -693,7 +693,8 @@ void build_detail_panel(lv_obj_t *parent)
     lv_image_set_src(g_detail_preview_img, nullptr);
     lv_obj_set_size(g_detail_preview_img, LV_PCT(100), LV_PCT(100));
     lv_obj_align(g_detail_preview_img, LV_ALIGN_CENTER, 0, 0);
-    lv_image_set_inner_align(g_detail_preview_img, LV_IMAGE_ALIGN_CONTAIN);
+    /* 320×180 进稿 512×322：CONTAIN 上下会露出框底灰边，COVER 铺满。 */
+    lv_image_set_inner_align(g_detail_preview_img, LV_IMAGE_ALIGN_COVER);
     lv_obj_add_flag(g_detail_preview_img, LV_OBJ_FLAG_HIDDEN);
 
     /* 没有缩略图时的占位（USB 文件通常都没有） */

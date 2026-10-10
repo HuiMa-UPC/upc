@@ -413,6 +413,8 @@ HttpResponse XfrService::handle_upload_init(const HttpRequest& req)
         slice_progress_pct_ = 0;
         print_state_ = "uploading";
         transfer_name_ = filename;
+        transfer_cancelled_ = false;
+        transfer_epoch_ = static_cast<uint8_t>(transfer_epoch_ == 255 ? 1 : transfer_epoch_ + 1);
         /* 新传输开始：清掉上一趟打印的 finished/canceled/error，避免
          * GET /print/status 在上传期间仍回 canceled，Snowpath 弹「打印已取消」。 */
         if (glavo_phase_ != GlavoPhase::Printing &&
@@ -448,6 +450,9 @@ HttpResponse XfrService::handle_upload_put(const HttpRequest& req, const std::st
     uint64_t total = 0;
     if (!parse_content_range(content_range, &start, &end, &total)) {
         return err(400, "BAD_REQUEST", "invalid Content-Range");
+    }
+    if (is_transfer_cancelled()) {
+        return canceled_upload_rsp();
     }
     const UploadStatusResult r = upload_mgr_.append_chunk(upload_id,
                                                           start,
@@ -485,6 +490,9 @@ HttpResponse XfrService::handle_upload_complete(const HttpRequest& req, const st
     const std::string body = body_to_string(req);
     std::string sha256;
     (void)json_get_string(body, "sha256", &sha256);
+    if (is_transfer_cancelled()) {
+        return canceled_upload_rsp();
+    }
     const UploadCompleteResult r = upload_mgr_.complete(upload_id, sha256);
     if (!r.ok) {
         return err(r.http_status, r.err_code, r.err_msg);
@@ -504,6 +512,16 @@ HttpResponse XfrService::handle_upload_complete(const HttpRequest& req, const st
 
         const Transfer3mfImportResult imported =
             transfer_3mf_importer_.import_file(src_path, r.file_name);
+        if (is_transfer_cancelled()) {
+            if (imported.ok) {
+                discard_local_printable(imported.printable_name);
+            }
+            {
+                std::lock_guard<std::mutex> lk(print_state_mu_);
+                print_state_ = "error";
+            }
+            return canceled_upload_rsp();
+        }
         if (!imported.ok) {
             UPC_LOG_XFR_SERVICE(Error, "3mf import failed file=%s code=%s msg=%s",
                                 src_path.c_str(), imported.err_code.c_str(),
@@ -527,13 +545,21 @@ HttpResponse XfrService::handle_upload_complete(const HttpRequest& req, const st
 
         {
             std::lock_guard<std::mutex> lk(print_state_mu_);
-            upload_size_ = imported.printable_size;
-            upload_offset_ = imported.printable_size;
-            slice_progress_pct_ = 100;
-            print_state_ = "finished";
-            transfer_name_ = imported.printable_name;
-            last_file_id_ = r.file_id;
-            last_printable_name_ = imported.printable_name;
+            if (transfer_cancelled_) {
+                print_state_ = "error";
+            } else {
+                upload_size_ = imported.printable_size;
+                upload_offset_ = imported.printable_size;
+                slice_progress_pct_ = 100;
+                print_state_ = "finished";
+                transfer_name_ = imported.printable_name;
+                last_file_id_ = r.file_id;
+                last_printable_name_ = imported.printable_name;
+            }
+        }
+        if (is_transfer_cancelled()) {
+            discard_local_printable(imported.printable_name);
+            return canceled_upload_rsp();
         }
         notify_file_received(imported.printable_name, imported.printable_size);
         /* 云端上报独立于这次 HTTP 应答：只落暂存并通知 MQTT，不等回包。 */
@@ -570,7 +596,17 @@ HttpResponse XfrService::handle_upload_complete(const HttpRequest& req, const st
     }
 
     std::string slice_err;
-    if (!run_snowslice_build(src_path, dst_path, &slice_err)) {
+    if (is_transfer_cancelled() || !run_snowslice_build(src_path, dst_path, &slice_err)) {
+        if (is_transfer_cancelled()) {
+            std::error_code rm_ec;
+            std::filesystem::remove(dst_path, rm_ec);
+            {
+                std::lock_guard<std::mutex> lk(print_state_mu_);
+                print_state_ = "error";
+                transfer_name_ = output_name;
+            }
+            return canceled_upload_rsp();
+        }
         UPC_LOG_XFR_SERVICE(Error, "snowslice failed in=%s out=%s msg=%s",
                             src_path.c_str(), dst_path.c_str(), slice_err.c_str());
         {
@@ -579,6 +615,17 @@ HttpResponse XfrService::handle_upload_complete(const HttpRequest& req, const st
             transfer_name_ = output_name;
         }
         return err(500, "OVF_SLICE_FAILED", slice_err);
+    }
+
+    if (is_transfer_cancelled()) {
+        std::error_code rm_ec;
+        std::filesystem::remove(dst_path, rm_ec);
+        {
+            std::lock_guard<std::mutex> lk(print_state_mu_);
+            print_state_ = "error";
+            transfer_name_ = output_name;
+        }
+        return canceled_upload_rsp();
     }
 
     std::string preprocess_err;
@@ -764,16 +811,21 @@ uint32_t XfrService::calc_progress_percent(const std::string& state,
         ? 0.0
         : static_cast<double>(upload_offset) / static_cast<double>(upload_size);
     const double bounded_upload_ratio = std::min(1.0, std::max(0.0, upload_ratio));
-    const double bounded_slice_ratio =
-        std::min(1.0, std::max(0.0, static_cast<double>(slice_progress_pct) / 100.0));
+    const uint32_t upload_pct = static_cast<uint32_t>(
+        std::min(100, std::max(0, static_cast<int>(bounded_upload_ratio * 100.0 + 0.5))));
 
     if (state == "uploading") {
-        const int pct = static_cast<int>(0.05 * bounded_upload_ratio * 100.0 + 0.5);
-        return static_cast<uint32_t>(std::min(100, std::max(0, pct)));
+        return upload_pct;
     }
-    if (state == "slicing" || state == "printing" || state == "error") {
-        const int pct = static_cast<int>((0.05 + 0.95 * bounded_slice_ratio) * 100.0 + 0.5);
-        return static_cast<uint32_t>(std::min(100, std::max(0, pct)));
+    if (state == "slicing" || state == "printing") {
+        /* 3MF 后处理没有 snowslice 进度：上传走满后停在 100，避免条掉回 0。 */
+        if (slice_progress_pct > 0) {
+            return std::min(100U, slice_progress_pct);
+        }
+        return upload_pct;
+    }
+    if (state == "error") {
+        return upload_pct;
     }
     return 0U;
 }
@@ -791,6 +843,7 @@ void XfrService::publish_transfer_progress_if_needed()
     uint64_t upload_offset = 0;
     uint32_t slice_progress_pct = 0;
     std::string transfer_name;
+    uint8_t transfer_epoch = 0;
     {
         std::lock_guard<std::mutex> lk(print_state_mu_);
         state = print_state_;
@@ -798,6 +851,7 @@ void XfrService::publish_transfer_progress_if_needed()
         upload_offset = upload_offset_;
         slice_progress_pct = slice_progress_pct_;
         transfer_name = transfer_name_;
+        transfer_epoch = transfer_epoch_;
     }
 
     const uint32_t progress_percent = calc_progress_percent(
@@ -825,6 +879,7 @@ void XfrService::publish_transfer_progress_if_needed()
     middleware::XfrTransferProgressPayload payload{};
     std::strncpy(payload.file_name, transfer_name.c_str(), sizeof(payload.file_name) - 1);
     payload.state = state_code;
+    payload.transfer_epoch = transfer_epoch;
     payload.progress_percent = progress_percent;
     payload.uploaded_bytes = upload_offset;
     payload.total_bytes = upload_size;
@@ -1349,6 +1404,7 @@ bool XfrService::run_snowslice_build(const std::string& input_ovf_path,
         _exit(127);
     }
 
+    snowslice_pid_.store(pid);
     int status = 0;
     while (waitpid(pid, &status, 0) < 0) {
         if (errno == EINTR) {
@@ -1357,8 +1413,10 @@ bool XfrService::run_snowslice_build(const std::string& input_ovf_path,
         if (err_msg) {
             *err_msg = "waitpid snowslice failed";
         }
+        snowslice_pid_.store(-1);
         return false;
     }
+    snowslice_pid_.store(-1);
     if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
         std::ostringstream oss;
         oss << "snowslice exit abnormal";
@@ -1549,6 +1607,71 @@ void XfrService::notify_file_received(const std::string& name, uint64_t size) co
     middleware::MsgPort::instance().publish_async(msg);
 }
 
+HttpResponse XfrService::canceled_upload_rsp() const
+{
+    return err(409, "UPLOAD_CANCELED", "transfer canceled on printer");
+}
+
+bool XfrService::is_transfer_cancelled() const
+{
+    std::lock_guard<std::mutex> lk(print_state_mu_);
+    return transfer_cancelled_;
+}
+
+void XfrService::discard_local_printable(const std::string& printable_name)
+{
+    if (printable_name.empty()) {
+        return;
+    }
+    std::vector<upc::GcodeManifestEntry> entries;
+    if (!upc::gcode_manifest_load(UPC_LOCAL_GCODE_CONFIG, entries)) {
+        return;
+    }
+    for (size_t i = 0; i < entries.size(); ++i) {
+        if (entries[i].name != printable_name) {
+            continue;
+        }
+        std::error_code ec;
+        std::filesystem::remove(
+            std::string(UPC_LOCAL_GCODE_DIR) + "/" + printable_name, ec);
+        std::filesystem::remove(entries[i].thumb_small, ec);
+        std::filesystem::remove(entries[i].thumb_large, ec);
+        std::filesystem::remove(entries[i].thumb_print, ec);
+        (void)upc::gcode_manifest_remove_at(entries, i);
+        (void)upc::gcode_manifest_save(UPC_LOCAL_GCODE_CONFIG, entries);
+        UPC_LOG_XFR_SERVICE(Info, "discard canceled transfer file=%s",
+                            printable_name.c_str());
+        return;
+    }
+}
+
+void XfrService::abort_active_transfer()
+{
+    bool busy = false;
+    std::string name;
+    {
+        std::lock_guard<std::mutex> lk(print_state_mu_);
+        busy = (print_state_ == "uploading" || print_state_ == "slicing");
+        if (busy) {
+            transfer_cancelled_ = true;
+            print_state_ = "error";
+            last_progress_emit_at_ = {};
+            last_progress_state_ = 0xff;
+            name = transfer_name_;
+        }
+    }
+    if (!busy) {
+        return;
+    }
+    upload_mgr_.abort_all();
+    const pid_t slice_pid = snowslice_pid_.load();
+    if (slice_pid > 0) {
+        (void)kill(slice_pid, SIGTERM);
+    }
+    UPC_LOG_XFR_SERVICE(Info, "transfer canceled by UI name=%s", name.c_str());
+    publish_transfer_progress_if_needed();
+}
+
 void XfrService::subscribe_print_ipc()
 {
     auto& port = middleware::MsgPort::instance();
@@ -1565,6 +1688,10 @@ void XfrService::subscribe_print_ipc()
     add(middleware::MsgType::APP_Print_Start_Rejected_Ntf);
     add(middleware::MsgType::APP_Print_Video_Manifest_Ntf);
     add(middleware::MsgType::APP_Print_Prepare_Rsp);
+    subs_.push_back(port.subscribe(
+        middleware::MsgType::UI_Xfr_Transfer_Cancel_Ntf,
+        middleware::ModuleId::APP_XFR,
+        [this](const middleware::Message&) { abort_active_transfer(); }));
 }
 
 void XfrService::on_print_ipc(const middleware::Message& msg)
