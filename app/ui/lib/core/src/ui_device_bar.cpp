@@ -1,12 +1,13 @@
 #include "ui_device_bar.hpp"
 
+#include "settings_icons.h"
 #include "ui_device_state.hpp"
 #include "ui_theme.hpp"
 
 namespace {
 
 lv_obj_t *g_bar        = nullptr;
-lv_obj_t *g_lbl_wifi   = nullptr;
+lv_obj_t *g_img_wifi   = nullptr;
 lv_obj_t *g_lbl_name   = nullptr;
 lv_obj_t *g_dot_status = nullptr;
 lv_obj_t *g_lbl_status = nullptr;
@@ -37,7 +38,7 @@ lv_obj_t *make_group(lv_obj_t *parent, lv_obj_t **out_name,
 
     lv_obj_t *name = lv_label_create(grp);
     lv_obj_set_style_text_color(name, user_light_dev_name, 0);
-    lv_obj_set_style_text_font(name, user_font_body(), 0);   /* 稿 22 */
+    lv_obj_set_style_text_font(name, user_font_dlg_btn(), 0);   /* 稿 22 */
 
     /* 状态点与状态字自成一个小组：稿上它俩之间是 8，与上面那 16 不同。 */
     lv_obj_t *st = lv_obj_create(grp);
@@ -59,7 +60,7 @@ lv_obj_t *make_group(lv_obj_t *parent, lv_obj_t **out_name,
     lv_obj_remove_flag(dot, LV_OBJ_FLAG_CLICKABLE);
 
     lv_obj_t *status = lv_label_create(st);
-    lv_obj_set_style_text_font(status, user_font_body(), 0);   /* 稿 22 */
+    lv_obj_set_style_text_font(status, user_font_dlg_btn(), 0);   /* 稿 22 */
 
     if(out_name)   *out_name = name;
     if(out_dot)    *out_dot = dot;
@@ -72,11 +73,11 @@ void on_state_changed(const ui_device_snapshot_t *snap)
     if(!snap || !g_bar) {
         return;
     }
-    if(g_lbl_wifi) {
+    if(g_img_wifi) {
         /* 连上=正常深色，断开=灰暗，作为 WiFi 连接状态指示。
          * **两档都得是浅色档的值**：早先连上那档给的是 user_color_text（纯白），
          * 压在浅底上整个图标会消失。 */
-        lv_obj_set_style_text_color(g_lbl_wifi,
+        lv_obj_set_style_image_recolor(g_img_wifi,
             snap->wifi_connected ? user_light_text : user_light_icon_off, 0);
     }
     if(g_lbl_name) {
@@ -118,7 +119,7 @@ lv_obj_t *ui_device_bar_create(lv_obj_t *parent)
      * 那个字段仍被首页那条顶部占位带用着，不动它。 */
     lv_obj_set_style_pad_left(bar, USER_SIDEBAR_W + USER_PAD_LG, 0);
     lv_obj_set_style_pad_right(bar, USER_TOPBAR_PAD_HOR, 0);
-    /* 稿上 wifi 图标与设备组之间是 10.667，取 11。
+    /* 稿上 wifi 图标位与设备组之间是 10.667，取 10。
      * 组内那两档间距（16 / 8）另给，见 make_group()。 */
     lv_obj_set_style_pad_column(bar, USER_PAD_SM * 2 / 3, 0);
     lv_obj_set_style_bg_opa(bar, LV_OPA_TRANSP, 0);
@@ -126,13 +127,21 @@ lv_obj_t *ui_device_bar_create(lv_obj_t *parent)
     /* 去掉 lv_obj_create 默认带的 CLICKABLE：本条浮在页面之上且整屏宽，若可点
      * 会吃掉底下控件的触摸——首页那两颗顶栏按钮正好在它下面。LVGL 命中测试会
      * 跳过非可点对象继续往下找，所以这里只需保证条自身不可点；子控件都是
-     * label / 纯色块 / 去了 CLICKABLE 的容器。 */
+     * label / Wi-Fi 图标 / 纯色块 / 去了 CLICKABLE 的容器。 */
     lv_obj_remove_flag(bar, LV_OBJ_FLAG_CLICKABLE);
 
-    g_lbl_wifi = lv_label_create(bar);
-    lv_label_set_text(g_lbl_wifi, LV_SYMBOL_WIFI);
-    lv_obj_set_style_text_color(g_lbl_wifi, user_light_text, 0);
-    lv_obj_set_style_text_font(g_lbl_wifi, user_font_body(), 0);
+    /* Wi-Fi 字形：稿上是两道弧 + 扇形（约 20×15），与设置页 Wi-Fi 列表那枚是同一个字形
+     * （路径只差平移），直接用 settings_icon_wifi；LVGL 自带的 LV_SYMBOL_WIFI 是三道弧 + 圆点，
+     * 24 号下约 30×20，形状大小都不对。稿上图标位 32 宽、字形居中，A8 图 24 见方，
+     * 左右各留 4 才落到稿的 x 166..185，设备名起点随之到 202（稿 203）。 */
+    g_img_wifi = lv_image_create(bar);
+    lv_image_set_src(g_img_wifi, &settings_icon_wifi);
+    lv_obj_set_size(g_img_wifi, USER_PAD, USER_PAD);
+    lv_image_set_inner_align(g_img_wifi, LV_IMAGE_ALIGN_STRETCH);
+    lv_obj_set_style_margin_hor(g_img_wifi, USER_PAD_SM / 4, 0);
+    lv_obj_set_style_image_recolor_opa(g_img_wifi, LV_OPA_COVER, 0);
+    lv_obj_set_style_image_recolor(g_img_wifi, user_light_text, 0);
+    lv_obj_remove_flag(g_img_wifi, LV_OBJ_FLAG_CLICKABLE);
 
     make_group(bar, &g_lbl_name, &g_dot_status, &g_lbl_status);
 

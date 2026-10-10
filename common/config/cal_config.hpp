@@ -38,8 +38,9 @@ struct CalConfigOptions {
 /** 默认校准文件路径（部署路径） */
 constexpr const char* kCalDefaultPath = UPC_CAL_PATH;
 
-/** UI 顶栏等场景使用的设备显示名。 */
-inline constexpr const char* kDeviceDisplayName = "SNOWPOD A1";
+/** UI 顶栏等场景使用的设备显示名。大小写随首页稿 6230:89954（稿上是 SnowPod），保留型号 A1。
+ *  Glavo 的环境快照也带这个名字，只用于显示，与协议里的 device_id（SNOWPOD-xxxx）无关。 */
+inline constexpr const char* kDeviceDisplayName = "SnowPod A1";
 
 /** 读取 cal.csv 中 Config 段可选项。无 Config 段时返回 true 且 has_config_section=false。 */
 bool load_cal_config_options(const char* path, CalConfigOptions* out);
