@@ -23,19 +23,19 @@
 
 /**
  * @file page_user_history.cpp
- * @brief 打印历史页（对齐浅色设计稿 6122 一族），三列网格 + 长按多选。
+ * @brief 打印历史页（对齐浅色设计稿 6122 一族），三列网格 + Manage / 长按多选。
  *
  * 五个态与对应稿：
- *   Timelapse 网格   6122:79998
+ *   Timelapse 网格   6122:79998（2026-10-10 版 6357:35255 右上加回 Manage、底部加渐隐）
  *   Video 网格       6122:79784
  *   Photo 网格       6122:80163
  *   空态（三个 Tab） 6122:80392 / 6122:80601 / 6122:80532
- *   多选态           6073:73736
+ *   多选态           6073:73736（2026-10-10 版 6357:35153 删除条加投影、底部渐隐加高）
  *
  * 布局（顶部那条设备信息由外壳的常驻条 ui_device_bar 画，本页不自建 header；
  * content_panel_ 的 pad_top 已为它让出位置）：
  *   ┌ ─ ─ 常驻条：wifi 设备名 状态 ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┐
- *   │ **Timelapse**  Video  Photo                            Cancel（仅多选态）│
+ *   │ **Timelapse**  Video  Photo     [Manage]（常态）/ Select all  Cancel（多选态）│
  *   │ May 2026                                                            │
  *   │ ┌──────────────┐ ┌──────────────┐ ┌──────────────┐                 │
  *   │ │   缩略图 ▶   │ │   缩略图 ▶   │ │   缩略图 ▶   │  ← 三列等分       │
@@ -52,8 +52,10 @@
  *   Timelapse / Video —— 缩略图 + 中央播放钮 + 白色信息条（文件名 + meta 行）
  *   Photo             —— 纯缩略图，左上角压一枚时间戳，没有信息条，故整行更矮
  *
- * 多选由**长按**进入（LV_EVENT_LONG_PRESSED），三个 Tab 都支持，切 Tab 自动退出。
- * 进入后卡片右上角出复选框、选中的卡描一圈主色边，底部浮出「N selected + Delete」。
+ * 多选由右上 **Manage** 或**长按**卡片进入（LV_EVENT_LONG_PRESSED），三个 Tab 都支持，切 Tab
+ * 自动退出。Manage 在 6073 那版稿里去掉过、多选只剩长按一个入口，2026-10-10 稿又加了回来，
+ * 长按照留。进入后卡片右上角出复选框、选中的卡描一圈主色边，底部浮出「N selected + Delete」。
+ * 网格底边常驻一道白色渐隐，多选态加高、把删除条垫在一片白里（ui_user_make_bottom_fade）。
  *
  * 数据源：/userdata/media/video/config.json（common/fs_manifest/print_history_manifest）；
  * Photo 走 ui::album::scan()。
@@ -134,8 +136,10 @@ lv_obj_t *g_empty_title = nullptr;
 lv_obj_t *g_empty_sub   = nullptr;
 
 TabItem   g_tabs[kTabCount];
+lv_obj_t *g_btn_manage  = nullptr;  /**< Tab 行右侧「Manage」（仅常态可见，点了进多选） */
 lv_obj_t *g_btn_select_all = nullptr; /**< Tab 行右侧「Select all」（仅多选态可见） */
 lv_obj_t *g_btn_cancel  = nullptr;  /**< Tab 行右侧「Cancel」（仅多选态可见） */
+lv_obj_t *g_fade        = nullptr;  /**< 网格底边的白色渐隐（常态 / 多选态两档） */
 lv_obj_t *g_selbar      = nullptr;  /**< 底部多选浮条 */
 lv_obj_t *g_lbl_sel     = nullptr;  /**< 「N selected」 */
 lv_obj_t *g_btn_del     = nullptr;  /**< 浮条右侧「Delete」 */
@@ -661,10 +665,10 @@ void on_batch_del_confirm(lv_event_t * /*e*/)
         return;
     }
     if(!remove_cards_with_rollback(selected_cards)) {
-        ui_toast_show("Delete failed, retry later", user_color_status_err, 1500);
+        ui_toast_show("Delete failed, retry later", UI_TOAST_ERROR, 1500);
         return;
     }
-    ui_toast_show("Deleted", user_color_accent, 1200);
+    ui_toast_show("Deleted", UI_TOAST_SUCCESS, 1200);
     /* 批量删完退出管理模式，列表整表重建（延后到事件之外，避免删中卡片时 UAF） */
     set_manage_mode(false);
     mark_list_dirty();
@@ -826,7 +830,8 @@ void toggle_card_selection(HistoryCard *c)
 }
 
 /**
- * 长按卡片进多选（稿上多选没有别的入口，Manage 按钮整个去掉了）。
+ * 长按卡片进多选。6073 那版稿把 Manage 按钮整个去掉过、多选只剩这一个入口；2026-10-10 稿
+ * 把 Manage 加了回来（on_manage_enter），长按作为第二个入口保留。
  *
  * LVGL 在 LONG_PRESSED 之后照样会发 CLICKED，不挡的话手一松就顺势进了播放器；
  * 这里在卡上打个标记，由 card_click_cb 吃掉紧随的那一次。
@@ -870,7 +875,8 @@ void card_click_cb(lv_event_t *e)
     toggle_card_selection(c);
 }
 
-/** 按多选态刷新页面外观：Tab 行右侧的 Cancel、底部浮条、每张卡的复选框 */
+/** 按多选态刷新页面外观：Tab 行右侧的 Manage / Select all / Cancel、底部浮条与渐隐、
+ *  每张卡的复选框 */
 void apply_manage_ui(void)
 {
     for(lv_obj_t *btn : { g_btn_select_all, g_btn_cancel }) {
@@ -883,6 +889,15 @@ void apply_manage_ui(void)
             lv_obj_add_flag(btn, LV_OBJ_FLAG_HIDDEN);
         }
     }
+    /* Manage 与上面那两枚互斥：常态是它，多选态换成 Select all / Cancel */
+    if(g_btn_manage) {
+        if(g_manage) {
+            lv_obj_add_flag(g_btn_manage, LV_OBJ_FLAG_HIDDEN);
+        } else {
+            lv_obj_remove_flag(g_btn_manage, LV_OBJ_FLAG_HIDDEN);
+        }
+    }
+    ui_user_bottom_fade_set_manage(g_fade, g_manage);
     if(g_selbar) {
         if(g_manage) {
             lv_obj_remove_flag(g_selbar, LV_OBJ_FLAG_HIDDEN);
@@ -924,6 +939,12 @@ void set_manage_mode(bool on)
 void on_manage_cancel(lv_event_t * /*e*/)
 {
     set_manage_mode(false);
+}
+
+/** 右上 Manage（稿 6357:35255 / 6485:17511）：进多选，一张都不预先勾上。 */
+void on_manage_enter(lv_event_t * /*e*/)
+{
+    set_manage_mode(true);
 }
 
 /** 全选 / 全不选（稿 6251:94118 的 `Select all`）。
@@ -1080,21 +1101,8 @@ void make_tab_item(lv_obj_t *parent, int idx)
                           &g_tabs[idx].mark);
 }
 
-/** Tab 行右侧那种纯文字钮（主色、无底无框、常态隐藏），多选态下才现身。 */
-lv_obj_t *make_tab_text_btn(lv_obj_t *parent, const char *text, lv_event_cb_t cb)
-{
-    lv_obj_t *lbl = lv_label_create(parent);
-    lv_label_set_text(lbl, text);
-    lv_obj_set_style_text_color(lbl, user_light_accent, 0);
-    lv_obj_set_style_text_font(lbl, user_font_body(), 0);
-    /* 命中区外扩而不是加内距：内距会叠在行的 pad_column 上，两枚之间的视觉间距会从
-     * 稿的 44 涨到 80。同 ui_user_make_tab_item 的处理（那边也是零内距 + 外扩）。 */
-    lv_obj_set_ext_click_area(lbl, USER_PAD_SM);
-    lv_obj_add_flag(lbl, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_add_flag(lbl, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_add_event_cb(lbl, cb, LV_EVENT_CLICKED, nullptr);
-    return lbl;
-}
+/* Tab 行右侧那种纯文字钮（主色、无底无框、常态隐藏，多选态下才现身）与消息页共用，
+ * 见 ui_user_widgets 的 ui_user_make_tab_text_btn()。 */
 
 /** 顶部 Tab 行：左侧三个 Tab + 右侧 Select all / Cancel（仅多选态可见） */
 lv_obj_t *build_tab_row(lv_obj_t *parent)
@@ -1118,7 +1126,7 @@ lv_obj_t *build_tab_row(lv_obj_t *parent)
         make_tab_item(row, i);
     }
 
-    /* 弹簧：把 Cancel 推到行尾 */
+    /* 弹簧：把 Manage / Select all / Cancel 推到行尾 */
     lv_obj_t *spacer = lv_obj_create(row);
     lv_obj_remove_style_all(spacer);
     lv_obj_set_height(spacer, 1);
@@ -1126,67 +1134,24 @@ lv_obj_t *build_tab_row(lv_obj_t *parent)
     lv_obj_set_style_bg_opa(spacer, LV_OPA_TRANSP, 0);
     lv_obj_remove_flag(spacer, LV_OBJ_FLAG_CLICKABLE);
 
+    /* 常态右上那枚 Manage（稿 6357:35255 的 6485:17511）：白底卡片钮，内距 16/24，整钮高 60，
+     * 比 52 的 Tab 行高。行开 OVERFLOW_VISIBLE，免得上下沿与投影被行裁掉——溢出那几像素
+     * 落在页面的顶内距与网格的顶内距里，不压别的控件。多选态由 apply_manage_ui 藏起来。 */
+    g_btn_manage = ui_user_make_card_text_btn(row, "Manage", USER_PAD_SM, on_manage_enter);
+    lv_obj_add_flag(row, LV_OBJ_FLAG_OVERFLOW_VISIBLE);
+
     /* 多选态右上角那两枚（稿 6251:94118）：`Select all` + `Cancel`，都是主色文字、
      * 没有底与描边，右缘与内容区右缘齐。命中区靠内距撑到够点——光文字本身只有约
      * 60×30，比 UI_USER_MIN_TOUCH 小一圈。 */
-    g_btn_select_all = make_tab_text_btn(row, "Select all", on_manage_select_all);
-    g_btn_cancel     = make_tab_text_btn(row, "Cancel", on_manage_cancel);
+    g_btn_select_all = ui_user_make_tab_text_btn(row, "Select all", on_manage_select_all);
+    g_btn_cancel     = ui_user_make_tab_text_btn(row, "Cancel", on_manage_cancel);
 
     return row;
 }
 
-/**
- * 底部多选浮条（稿 6073:73736）：左「N selected」，右一颗红色 Delete。
- *
- * 稿上量到：条 x=160..1248（侧栏右缘 128 再让 32，右侧同样留 32）、y=688、高 80、
- * 圆角 24、内距 8；Delete 钮 140×64、圆角 16、#FF4242。条是浮层，压在网格之上，
- * 底下的卡片照常能滚。
- */
-lv_obj_t *build_sel_bar(lv_obj_t *parent)
-{
-    lv_obj_t *bar = lv_obj_create(parent);
-    lv_obj_remove_style_all(bar);
-    lv_obj_add_flag(bar, LV_OBJ_FLAG_FLOATING);
-    lv_obj_set_height(bar, USER_HIST_SELBAR_H);
-    lv_obj_set_flex_flow(bar, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(bar, LV_FLEX_ALIGN_SPACE_BETWEEN,
-                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_radius(bar, USER_LIGHT_RADIUS, 0);
-    lv_obj_set_style_bg_color(bar, user_light_card, 0);
-    lv_obj_set_style_bg_opa(bar, LV_OPA_COVER, 0);
-    lv_obj_set_style_pad_left(bar, USER_PAD, 0);
-    lv_obj_set_style_pad_right(bar, USER_PAD_SM / 2, 0);
-    lv_obj_clear_flag(bar, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_add_flag(bar, LV_OBJ_FLAG_HIDDEN);
-
-    g_lbl_sel = lv_label_create(bar);
-    lv_label_set_text(g_lbl_sel, "0 selected");
-    lv_obj_set_style_text_color(g_lbl_sel, user_light_text, 0);
-    lv_obj_set_style_text_font(g_lbl_sel, user_font_body(), 0);
-
-    g_btn_del = lv_button_create(bar);
-    lv_obj_remove_style_all(g_btn_del);
-    lv_obj_set_size(g_btn_del, USER_HIST_DEL_BTN_W, USER_HIST_DEL_BTN_H);
-    lv_obj_set_style_radius(g_btn_del, USER_HIST_CARD_RADIUS, 0);
-    lv_obj_set_style_bg_color(g_btn_del, user_color_status_err, 0);   /* 稿 #FF4242 */
-    lv_obj_set_style_bg_opa(g_btn_del, LV_OPA_COVER, 0);
-    lv_obj_set_style_bg_opa(g_btn_del, LV_OPA_80, LV_STATE_PRESSED);
-    lv_obj_add_event_cb(g_btn_del, on_manage_delete, LV_EVENT_CLICKED, nullptr);
-
-    lv_obj_t *lbl = lv_label_create(g_btn_del);
-    lv_label_set_text(lbl, "Delete");
-    lv_obj_set_style_text_color(lbl, user_light_card, 0);   /* 红底白字 */
-    lv_obj_set_style_text_font(lbl, user_font_body(), 0);
-    lv_obj_center(lbl);
-
-    /* 横向左右各让 USER_PAD_LG（稿：条 x=160..1248，侧栏右缘 128，两侧各 32），
-     * 竖向距页底同量。宽度现算而不是写 LV_PCT(100)：FLOATING 不吃 flex 布局，
-     * 百分比只会撑满父宽，让不出这两侧的边距。页面尺寸运行期不变，算一次即可。 */
-    lv_obj_update_layout(parent);
-    lv_obj_set_width(bar, lv_obj_get_content_width(parent) - USER_PAD_LG * 2);
-    lv_obj_align(bar, LV_ALIGN_BOTTOM_MID, 0, -USER_PAD_LG);
-    return bar;
-}
+/* 底部多选浮条（稿 6073:73736 / 2026-10-10 版 6357:35239）与消息页共用，构造与几何见
+ * ui_user_widgets 的 ui_user_make_sel_bar()——早先它就写在本文件里（build_sel_bar），
+ * 消息页加回管理态时挪了过去，顺带按新稿补了投影。 */
 
 /* ============================================================================
  *  网格卡片
@@ -2032,8 +1997,10 @@ lv_obj_t *page_user_history_create(lv_obj_t *parent)
     g_page           = nullptr;
     g_grid           = nullptr;
     g_empty          = nullptr;
+    g_btn_manage     = nullptr;
     g_btn_select_all = nullptr;
     g_btn_cancel     = nullptr;
+    g_fade           = nullptr;
     g_selbar         = nullptr;
     g_manage     = false;
     g_tab        = HistTab::Timelapse;
@@ -2097,8 +2064,9 @@ lv_obj_t *page_user_history_create(lv_obj_t *parent)
     g_grid = grid;
 
     g_empty  = build_empty(page);
-    /* 多选浮条最后建：要压在网格之上 */
-    g_selbar = build_sel_bar(page);
+    /* 底部渐隐与多选浮条最后建：都要压在网格之上，浮条再压在渐隐之上 */
+    g_fade   = ui_user_make_bottom_fade(page);
+    g_selbar = ui_user_make_sel_bar(page, on_manage_delete, &g_lbl_sel, &g_btn_del);
 
     apply_tab_style();
     /* 首次展示由 SimplePage::on_enter 触发 refresh；这里不再提前刷，避免首进双重建。 */

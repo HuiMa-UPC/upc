@@ -377,6 +377,147 @@ lv_obj_t *ui_user_make_confirm_footer_btn(lv_obj_t *footer, const char *text,
     return btn;
 }
 
+lv_obj_t *ui_user_make_card_text_btn(lv_obj_t *parent, const char *text, int32_t pad_ver,
+                                     lv_event_cb_t cb)
+{
+    lv_obj_t *btn = lv_button_create(parent);
+    lv_obj_remove_style_all(btn);
+    lv_obj_set_size(btn, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_set_style_radius(btn, USER_HIST_CARD_RADIUS, 0);    /* 稿 16 */
+    lv_obj_set_style_bg_color(btn, user_light_card, 0);
+    lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_color(btn, user_light_more_bg, LV_STATE_PRESSED);
+    /* 稿 0 2 6 rgba(0,0,0,0.04)：LVGL 的 shadow 只有一个「宽度」，取稿的模糊半径 6，
+     * 再按 ofs_y 2 下沉。与卡片同一档投影。 */
+    lv_obj_set_style_shadow_width(btn, 6, 0);
+    lv_obj_set_style_shadow_ofs_y(btn, 2, 0);
+    lv_obj_set_style_shadow_color(btn, lv_color_black(), 0);
+    lv_obj_set_style_shadow_opa(btn, 10, 0);
+    lv_obj_set_style_pad_hor(btn, USER_PAD, 0);                /* 稿 24 */
+    lv_obj_set_style_pad_ver(btn, pad_ver, 0);
+    lv_obj_clear_flag(btn, LV_OBJ_FLAG_SCROLLABLE);
+    if(cb) {
+        lv_obj_add_event_cb(btn, cb, LV_EVENT_CLICKED, nullptr);
+    }
+
+    lv_obj_t *lbl = lv_label_create(btn);
+    lv_label_set_text(lbl, text);
+    lv_obj_set_style_text_color(lbl, user_light_text, 0);
+    lv_obj_set_style_text_font(lbl, user_font_title(), 0);     /* 稿 20 */
+    lv_obj_center(lbl);
+    return btn;
+}
+
+lv_obj_t *ui_user_make_tab_text_btn(lv_obj_t *parent, const char *text, lv_event_cb_t cb)
+{
+    lv_obj_t *lbl = lv_label_create(parent);
+    lv_label_set_text(lbl, text);
+    lv_obj_set_style_text_color(lbl, user_light_accent, 0);
+    lv_obj_set_style_text_font(lbl, user_font_body(), 0);
+    /* 命中区外扩而不是加内距：内距会叠在行的 pad_column 上，两枚之间的视觉间距会从
+     * 稿的 44 涨到 80。同 ui_user_make_tab_item 的处理（那边也是零内距 + 外扩）。 */
+    lv_obj_set_ext_click_area(lbl, USER_PAD_SM);
+    lv_obj_add_flag(lbl, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_flag(lbl, LV_OBJ_FLAG_HIDDEN);
+    if(cb) {
+        lv_obj_add_event_cb(lbl, cb, LV_EVENT_CLICKED, nullptr);
+    }
+    return lbl;
+}
+
+lv_obj_t *ui_user_make_sel_bar(lv_obj_t *page, lv_event_cb_t on_delete,
+                               lv_obj_t **out_label, lv_obj_t **out_btn)
+{
+    lv_obj_t *bar = lv_obj_create(page);
+    lv_obj_remove_style_all(bar);
+    lv_obj_add_flag(bar, LV_OBJ_FLAG_FLOATING);
+    lv_obj_set_height(bar, USER_HIST_SELBAR_H);
+    lv_obj_set_flex_flow(bar, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(bar, LV_FLEX_ALIGN_SPACE_BETWEEN,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_radius(bar, USER_LIGHT_RADIUS, 0);
+    lv_obj_set_style_bg_color(bar, user_light_card, 0);
+    lv_obj_set_style_bg_opa(bar, LV_OPA_COVER, 0);
+    /* 稿 0 2 10 rgba(0,0,0,0.1)：LVGL 的 shadow 只有一个「宽度」，取稿的模糊 10，再按 ofs_y 2
+     * 下沉。条压在白卡与白色渐隐上，没有这道影子边界就看不出来。 */
+    lv_obj_set_style_shadow_width(bar, 10, 0);
+    lv_obj_set_style_shadow_ofs_y(bar, 2, 0);
+    lv_obj_set_style_shadow_color(bar, lv_color_black(), 0);
+    lv_obj_set_style_shadow_opa(bar, 26, 0);                  /* 稿 10% ≈ 26/255 */
+    lv_obj_set_style_pad_left(bar, USER_PAD, 0);
+    lv_obj_set_style_pad_right(bar, USER_PAD_SM / 2, 0);
+    lv_obj_clear_flag(bar, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(bar, LV_OBJ_FLAG_HIDDEN);
+
+    lv_obj_t *lbl = lv_label_create(bar);
+    lv_label_set_text(lbl, "0 selected");
+    lv_obj_set_style_text_color(lbl, user_light_text, 0);
+    lv_obj_set_style_text_font(lbl, user_font_body(), 0);
+
+    lv_obj_t *del = lv_button_create(bar);
+    lv_obj_remove_style_all(del);
+    lv_obj_set_size(del, USER_HIST_DEL_BTN_W, USER_HIST_DEL_BTN_H);
+    lv_obj_set_style_radius(del, USER_HIST_CARD_RADIUS, 0);
+    lv_obj_set_style_bg_color(del, user_color_status_err, 0);   /* 稿 #FF4242 */
+    lv_obj_set_style_bg_opa(del, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_opa(del, LV_OPA_80, LV_STATE_PRESSED);
+    if(on_delete) {
+        lv_obj_add_event_cb(del, on_delete, LV_EVENT_CLICKED, nullptr);
+    }
+
+    lv_obj_t *del_lbl = lv_label_create(del);
+    lv_label_set_text(del_lbl, "Delete");
+    lv_obj_set_style_text_color(del_lbl, user_light_card, 0);   /* 红底白字 */
+    lv_obj_set_style_text_font(del_lbl, user_font_body(), 0);
+    lv_obj_center(del_lbl);
+
+    /* 横向左右各让 USER_PAD_LG（稿：条 x=160..1248，侧栏右缘 128，两侧各 32），
+     * 竖向距页底同量。宽度现算而不是写 LV_PCT(100)：FLOATING 不吃 flex 布局，
+     * 百分比只会撑满父宽，让不出这两侧的边距。页面尺寸运行期不变，算一次即可。 */
+    lv_obj_update_layout(page);
+    lv_obj_set_width(bar, lv_obj_get_content_width(page) - USER_PAD_LG * 2);
+    lv_obj_align(bar, LV_ALIGN_BOTTOM_MID, 0, -USER_PAD_LG);
+
+    if(out_label) *out_label = lbl;
+    if(out_btn) *out_btn = del;
+    return bar;
+}
+
+lv_obj_t *ui_user_make_bottom_fade(lv_obj_t *page)
+{
+    lv_obj_t *fade = lv_obj_create(page);
+    lv_obj_remove_style_all(fade);
+    lv_obj_add_flag(fade, LV_OBJ_FLAG_FLOATING);
+    /* 不吃触摸也不滚：落在它上面的按压直接交给底下的列表 */
+    lv_obj_remove_flag(fade, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_remove_flag(fade, LV_OBJ_FLAG_SCROLLABLE);
+    /* FLOATING 不吃 flex，百分比按父宽算，正好是整条内容区（稿上 x=128 起、宽 1152） */
+    lv_obj_set_width(fade, LV_PCT(100));
+    /* 白→白的竖向渐变，只让不透明度从 0 走到 80%：两端同色，渐变的只是 opa */
+    lv_obj_set_style_bg_color(fade, lv_color_white(), 0);
+    lv_obj_set_style_bg_grad_color(fade, lv_color_white(), 0);
+    lv_obj_set_style_bg_grad_dir(fade, LV_GRAD_DIR_VER, 0);
+    lv_obj_set_style_bg_opa(fade, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_main_opa(fade, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_bg_grad_opa(fade, LV_OPA_80, 0);
+    lv_obj_set_style_bg_main_stop(fade, 0, 0);
+    ui_user_bottom_fade_set_manage(fade, false);
+    return fade;
+}
+
+void ui_user_bottom_fade_set_manage(lv_obj_t *fade, bool manage)
+{
+    if(!fade) {
+        return;
+    }
+    /* 高度按删除条高折（1280 档 80）：常态 60 = ×3/4、管理态 136 = ×17/10。渐变终点是
+     * 稿上那两档的 90% / 50%（LVGL 的 stop 是 0..255）。 */
+    lv_obj_set_height(fade, manage ? USER_HIST_SELBAR_H * 17 / 10
+                                   : USER_HIST_SELBAR_H * 3 / 4);
+    lv_obj_set_style_bg_grad_stop(fade, manage ? 128 : 230, 0);
+    lv_obj_align(fade, LV_ALIGN_BOTTOM_MID, 0, 0);
+}
+
 lv_obj_t *ui_user_make_metric_block(lv_obj_t *parent, const char *caption,
                                     lv_text_align_t text_align,
                                     lv_obj_t **out_value)

@@ -58,7 +58,7 @@ extern const lv_color_t user_color_status_err;
  *
  *  `user_light_shadow` 是稿上那一族投影的共同色（侧栏 4%、卡片 4%、浮层 10%），
  *  不透明度各处不同，由调用方给 `shadow_opa`，这里只出色相。 */
-extern const lv_color_t user_light_bg;        /**< 页面底 #fafafa */
+extern const lv_color_t user_light_bg;        /**< 页面底 #fafafa（首页、监控页自己铺 #f5f5f5） */
 extern const lv_color_t user_light_card;      /**< 白卡 #ffffff */
 /** 稿上那批「白玻璃」控件的底 #fcfcfc（首页左下相机方钮、右上铃铛、开门滑块轨道）。
  *  稿里它们都是 `#FCFCFC` 加一层 backdrop blur，LVGL 没有背景模糊，直接给不透明色；
@@ -88,6 +88,11 @@ extern const lv_color_t user_light_rail_mid;
 /** 选文件页选中行的实色底 #ebeaec（稿 6240:93110）。**比 user_light_more_bg 深一档**，
  *  后者（#f5f5f6）是按下态用的、拿来做选中态在白卡上几乎看不出来。 */
 extern const lv_color_t user_light_row_sel;
+/** 顶部 toast「错误提示」那枚图标的圆底 #ff3131（稿 6448:54043）。**文字仍是
+ *  user_color_status_err(#ff4242)**：稿上圆和字就是两个值，差一点点，照稿分开。 */
+extern const lv_color_t user_toast_err_dot;
+/** 顶部 toast「注意」的图标圆底与文字色 #ffac26（稿 6448:54059）。 */
+extern const lv_color_t user_toast_inform;
 
 /* ============================================================================
  *  尺寸 / 字体集合
@@ -395,22 +400,33 @@ typedef struct {
     int32_t user_home_grid_w;
     /** 问候语块顶距（稿 160@1280）。左缘走 USER_PAD_LG + 侧栏宽，与 HOME 卡同一条竖线。 */
     int32_t user_home_greet_top;
-    /** 设备渲染图的框宽 / 框高（稿 525 × 791@1280）。资源按档位出原生尺寸、运行时
-     *  1:1 不缩放，改这两个值必须同步改 tools/gen_home_bg.py 的 DEVICE_SIZES。
+    /** 设备图的框宽 / 框高（稿 6363:42468 的原生画框 420 × 633@1280）。资源按档位出原生
+     *  尺寸、运行时 1:1 不缩放，改这两个值必须同步改 tools/gen_home_bg.py 的 DEVICE_SIZES。
      *
-     *  **不是正方形**：上一版稿（6201:85912）是 700 见方、只有一个字段，新稿
-     *  （6230:89954）改成了竖长条，故拆成宽高两个。 */
+     *  **不是正方形**：更早的稿（6201:85912）是 700 见方、只有一个字段，6230:89954 起改成
+     *  了竖长条，故拆成宽高两个。上一版（6230:89954 的位图填充）框是 525 × 791，新图的
+     *  料桶在 420 × 633 原生尺寸下就与旧图的料桶一样大，**别按 525 × 791 去放大**——那样
+     *  料桶会大 1.25 倍（实机复现过）。 */
     int32_t user_home_dev_img_w;
     int32_t user_home_dev_img_h;
-    /** 设备图左缘 / 顶距（稿 772 / 89@1280，整屏坐标系）。稿上这张图右下两侧都是
-     *  出血的（772 + 525 = 1297 > 1280、89 + 791 = 880 > 800），超出部分由父节点裁掉，
-     *  不是画错了。图本身的下半截也已经在生成时淡成全透明，见 gen_home_bg.py 的
-     *  DEV_FADES。 */
+    /** 设备图左缘 / 顶距（812 / 203@1280，整屏坐标系）。新稿只给了图、没给摆放，这个位置是
+     *  拿新图的料桶去对旧图的料桶拟合出来的（重合度约 0.89）：余量胶囊在稿上钉在旧图的料桶
+     *  上，新图的料桶得落在同一处。拟合结果的右缘正好是 1232，与右下滑块、铃铛同线。
+     *  下方出血（203 + 633 = 836 > 800），超出部分由父节点裁掉；图的下半截本来就已淡成
+     *  全透明——淡出烤在矢量的渐变描边里，见 gen_home_bg.py 的文件头。
+     *  上一版是 (772, 89)、右下两侧都出血。 */
     int32_t user_home_dev_img_x;
     int32_t user_home_dev_img_y;
     /** 左下 PRINT 钮宽（稿 216@1280）。新稿把同一行左边那枚摄像机方钮删了（监控已移到
      *  侧栏），整行只剩它一枚，位置也从 x=260 挪回与 HOME 卡同一条竖线的 x=160。 */
     int32_t user_home_print_btn_w;
+    /** 同一颗钮在打印中换成白底 MONITOR 时的宽（稿 6683:34165 的 265@1280）。稿上两态都是
+     *  「内距 40/44 + 图标 + 间距 16 + 文字」按内容撑的；Montserrat 比稿面字体宽，按内容撑
+     *  会与稿差一截，所以两态各给定宽。 */
+    int32_t user_home_monitor_btn_w;
+    /** 打印结束、待取件时右下那颗 RETRIEVE 的宽（稿 6683:34027 的 360@1280，高同旋钮 84）。
+     *  它替掉开门滑块，右缘与滑块同线（都是 1232），竖向与旋钮、左下按钮齐（668..752）。 */
+    int32_t user_home_retrieve_btn_w;
     /** 首页待机右下那条开门滑块的轨道宽 / 高（稿 453 × 94@1280，旋钮上下各内缩 5）。
      *  **不与 user_door_slide_* 共用**：那一族是控制页与打印态那三条深色红渐变滑块，
      *  出自各自的稿、尺寸也不同（1280 档 400×80）。 */
@@ -423,12 +439,15 @@ typedef struct {
      *  滑块自己的底距要再减掉旋钮的内缩：稿上是**旋钮**与左下按钮上下对齐的
      *  （两者顶都在 668、底都在 752），而轨道比旋钮高出上下各 5。 */
     int32_t user_home_edge_gap;
-    /** 铃铛面板里单条消息的行高下限（稿 6578:41549 是 56@1280）。条目按内容撑、这里只
-     *  兜底：1024 档字号没跟着缩（仍是 16），两行字撑出来比本值高。面板里另外几处小尺寸
-     *  也从本值折算（左侧等级色竖条 4×32、「查看剩余」行尾箭头 14），见 ui_notice_stack.cpp。
-     *
-     *  面板宽不单开字段：新稿与 toast 同为 400，直接铺满通知栈容器（USER_NOTICE_CARD_W）。 */
+    /** 铃铛面板里单条消息的行高（稿 6578:41549 的 2026-10-10 版是 72@1280：上下内距 12 +
+     *  4×48 的色条；改版前那版是 56）。「查看剩余」那一行也是这个定高。条目按内容撑、这里
+     *  兜底：低档位字号没跟着等比缩，两行字撑出来可能比本值高。面板里另外几处小尺寸也从本值
+     *  折算（左侧等级色竖条 4×48、「查看剩余」行尾箭头 14），见 ui_notice_stack.cpp。 */
     int32_t user_panel_row_h;
+    /** 铃铛面板宽（稿 6578:41549 的 2026-10-10 版是 460@1280，(772,48) 起、右缘 1232）。
+     *  **比通知 toast 卡（USER_NOTICE_CARD_W，400）宽**：改版前两者同宽、共用一个字段，
+     *  新稿把面板单独加宽了。通知栈容器按本值给宽，toast 卡与铃铛在里面靠右对齐。 */
+    int32_t user_notice_panel_w;
 
     /* ---- 监控页（稿 6338:27240 打印态 / 6338:27049 待机态 / 6307:40977 Manual）---- */
     /** 右栏整条宽（稿 420@1280，屏上是 860..1280）。内容区 = 本值 − 2×USER_PAD_LG
@@ -668,10 +687,13 @@ int32_t user_media_play_size(void);
 #define USER_HOME_DEV_IMG_X         (g_ui->user_home_dev_img_x)
 #define USER_HOME_DEV_IMG_Y         (g_ui->user_home_dev_img_y)
 #define USER_HOME_PRINT_BTN_W       (g_ui->user_home_print_btn_w)
+#define USER_HOME_MONITOR_BTN_W     (g_ui->user_home_monitor_btn_w)
+#define USER_HOME_RETRIEVE_BTN_W    (g_ui->user_home_retrieve_btn_w)
 #define USER_HOME_SLIDE_W           (g_ui->user_home_slide_w)
 #define USER_HOME_SLIDE_H           (g_ui->user_home_slide_h)
 #define USER_HOME_EDGE_GAP          (g_ui->user_home_edge_gap)
 #define USER_PANEL_ROW_H            (g_ui->user_panel_row_h)
+#define USER_NOTICE_PANEL_W         (g_ui->user_notice_panel_w)
 #define USER_EMPTY_RING_SZ          (g_ui->user_empty_ring_sz)
 
 #define USER_MON_PANEL_W            (g_ui->user_mon_panel_w)

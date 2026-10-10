@@ -92,6 +92,12 @@ void control_start(const char *origin);
 void control_cancel(void);
 /** 打印占用中（PRINTING 或 PRINT_DONE）：期间禁止进文件页开新任务 */
 bool control_is_printing(void);
+/**
+ * 打印结果页已套上、还没取件（PRINT_DONE 且结果已显示）。与监控页底部出现 RETRIEVE
+ * 是同一时刻；PRINT_DONE 里等 Camera manifest 的那一小段还不算。首页据此把开门滑块换成
+ * RETRIEVE（稿 6683:34027）。
+ */
+bool control_print_result_ready(void);
 
 /* ---- 打印结果页（CONTROL_STATE_PRINT_DONE）的出口 ---- */
 /** 滑动取件：退出打印状态后走开门流程（PM2.5/清粉/开门；开完即收） */

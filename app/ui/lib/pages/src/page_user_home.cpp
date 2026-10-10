@@ -9,6 +9,7 @@
 #include "ui_air_quality.hpp"
 #include "ui_notice_stack.hpp"
 #include "page_manager.hpp"
+#include "page_user_monitor.hpp"
 
 #include <cmath>
 #include <cstdio>
@@ -30,6 +31,10 @@
  *   │                                   PRESSURE     │
  *   │ [PRINT]                     [滑动开门 >>>]     │ ← 都是浮动
  *   └────────────────────────────────────────────────┘
+ *
+ * 底部那一行随打印态切三种（page_user_home_sync_print_state）：待机 PRINT + 开门滑块；
+ * 打印中左下换成白底 MONITOR、滑块置灰（稿 6683:34165）；出结果待取件时滑块换成
+ * RETRIEVE（稿 6683:34027）。
  *
  * 环境快照与运行状态在 `core/ui_device_state`，本页作为观察者读取；顶栏左半边的
  * 设备名/状态由外壳的常驻条 `ui_device_bar` 画。本页那条带子只剩占位作用。
@@ -87,9 +92,24 @@ lv_obj_t *g_supply_pill_b  = nullptr;  /**< 右：2 号料桶余量（暂借 fil
 /* ---------- 页面容器 ---------- */
 ui_slide_unlock_t *g_door_slide = nullptr; /**< 首页"滑动开门"控件 */
 
+/* ---------- 底部那一行随打印态切的几颗（见 page_user_home_sync_print_state） ---------- */
+lv_obj_t *g_action_btn    = nullptr;  /**< 左下那颗：待机 PRINT，打印中 MONITOR */
+lv_obj_t *g_action_label  = nullptr;  /**< 它的文字 */
+lv_obj_t *g_action_folder = nullptr;  /**< PRINT 态的图标（文件夹，白） */
+lv_obj_t *g_action_camera = nullptr;  /**< MONITOR 态的图标（相机，#333145） */
+lv_obj_t *g_retrieve_btn  = nullptr;  /**< 右下 RETRIEVE：出结果待取件时替掉开门滑块 */
+
+/** 底部那一行的三种状态。 */
+enum HomePrintUi { HOME_UI_IDLE = 0, HOME_UI_RUNNING, HOME_UI_RESULT };
+
+/** 上次落地的 HomePrintUi；-1 表示还没落地或需要重刷（开门滑块 reset 会顺带解除禁用）。
+ *  sync 被频繁调用（环境推送每次都会走 refresh），没变就不碰控件。 */
+int g_print_ui_applied = -1;
+
 void on_files_click(lv_event_t *)
 {
-    /* 打印中（含 Prepare / 结果页）：PRINT 当作「回到打印监控页」，别再走选文件开新单。 */
+    /* 打印中（含 Prepare / 结果页）这颗钮显示为 MONITOR（稿 6683:34165），点了回打印
+     * 监控页，别再走选文件开新单。 */
     if(control_is_printing()) {
         ui::PageManager::instance().switch_to("user_monitor");
         return;
@@ -105,7 +125,18 @@ void door_slide_reset_cb(lv_timer_t *t)
     lv_timer_delete(t);
     if(g_door_slide) {
         ui_slide_unlock_reset(g_door_slide);
+        /* reset 会顺带解除禁用：这 700ms 里若进了打印态，要按当前态再置一次灰 */
+        g_print_ui_applied = -1;
+        page_user_home_sync_print_state();
     }
+}
+
+/** 右下 RETRIEVE：与监控页底部那颗 RETRIEVE 走同一条路——切过去直接弹取件弹窗。
+ *  吹粉中被 toast 拦下、自检阶段终止换文案，都在监控页那边处理。 */
+void on_retrieve_click(lv_event_t *)
+{
+    ui::PageManager::instance().switch_to("user_monitor");
+    page_user_monitor_request_retrieve();
 }
 
 void on_door_slide_unlocked(void * /*user_data*/)
@@ -594,11 +625,11 @@ lv_obj_t *make_supply_pill(lv_obj_t *parent, const lv_image_dsc_t *const *icon,
  *
  *  area 是**铺满整屏**的浮层（含状态栏区域与侧栏之下那条），用负偏移 + LV_HOR_RES 跨回
  *  本页根节点的 pad_left，与打印态/监控态的摄像头层同一套做法（见 build_printing_area）。
- *  稿上的坐标都是整屏坐标系（设备图 x=772、HOME 卡 x=160 都含侧栏那 128），所以这里必须
+ *  稿上的坐标都是整屏坐标系（设备图 x=812、HOME 卡 x=160 都含侧栏那 128），所以这里必须
  *  铺整屏才能直接照抄；若改回只铺内容区，所有 x 都要减去一个侧栏宽。
  *
- *  设备图右下两侧都是**出血**的（772 + 525 = 1297 > 1280、89 + 791 = 880 > 800），
- *  超出部分由 area 裁掉，稿本身就这样。 */
+ *  设备图下方是**出血**的（203 + 633 = 836 > 800），超出部分由 area 裁掉；图的下半截本来
+ *  就淡成了全透明。上一版的框 (772,89) 525×791 右下两侧都出血。 */
 lv_obj_t *build_main_area(lv_obj_t *parent)
 {
     lv_obj_t *area = lv_obj_create(parent);
@@ -607,7 +638,10 @@ lv_obj_t *build_main_area(lv_obj_t *parent)
     lv_obj_set_size(area, LV_HOR_RES, LV_PCT(100));
     lv_obj_set_pos(area, -USER_SIDEBAR_W, 0);
     lv_obj_set_style_pad_all(area, 0, 0);
-    lv_obj_set_style_bg_color(area, user_light_bg, 0);
+    /* 首页的稿（6578:41426 / 6683:34165 / 6683:34027）底色一直是 #F5F5F5，不是其余浅色页
+     * 那个 user_light_bg(#FAFAFA)：开门滑块轨道 #FCFCFC、四宫格白卡都靠这 5 级衬出来，
+     * 换成 #FAFAFA 轨道就和页面糊成一片。监控页同样自己铺 #f5f5f5。 */
+    lv_obj_set_style_bg_color(area, lv_color_hex(0xf5f5f5), 0);
     lv_obj_set_style_bg_opa(area, LV_OPA_COVER, 0);
     lv_obj_clear_flag(area, LV_OBJ_FLAG_SCROLLABLE);
 
@@ -624,15 +658,17 @@ lv_obj_t *build_main_area(lv_obj_t *parent)
     build_metric_grid(area);
 
     /* 两颗余量胶囊钉在设备图上。稿上给的是整屏坐标 (862,316) / (1077,368)，这里换算成
-     * 相对设备图左上角（772,89）的比例，换档位时跟着图一起缩放、不会飘离料盒。
-     * 分母是 1280 档的框宽/框高（525 × 791），改 USER_HOME_DEV_IMG_W/H 要同步改。
+     * 相对设备图左上角（812,203）的比例，换档位时跟着图一起缩放、不会飘离料盒。
+     * 分母是 1280 档的框宽/框高（420 × 633），改 USER_HOME_DEV_IMG_W/H/X/Y 要同步改。
+     * （上一版的框是 (772,89) 525×791，比例是 90/525、227/791 与 305/525、279/791；
+     * 换框时胶囊的屏上位置不变，只是比例跟着框重算。）
      * 图标的桶号要与钉的位置对上：A 在左桶、B 在右桶。 */
     make_supply_pill(area, ic_barrel_1_set,
-                     USER_HOME_DEV_IMG_X + USER_HOME_DEV_IMG_W *  90 / 525,
-                     USER_HOME_DEV_IMG_Y + USER_HOME_DEV_IMG_H * 227 / 791, &g_supply_pill_a);
+                     USER_HOME_DEV_IMG_X + USER_HOME_DEV_IMG_W *  50 / 420,
+                     USER_HOME_DEV_IMG_Y + USER_HOME_DEV_IMG_H * 113 / 633, &g_supply_pill_a);
     make_supply_pill(area, ic_barrel_2_set,
-                     USER_HOME_DEV_IMG_X + USER_HOME_DEV_IMG_W * 305 / 525,
-                     USER_HOME_DEV_IMG_Y + USER_HOME_DEV_IMG_H * 279 / 791, &g_supply_pill_b);
+                     USER_HOME_DEV_IMG_X + USER_HOME_DEV_IMG_W * 265 / 420,
+                     USER_HOME_DEV_IMG_Y + USER_HOME_DEV_IMG_H * 165 / 633, &g_supply_pill_b);
 
     return area;
 }
@@ -695,27 +731,26 @@ int32_t action_icon_sz(void)
 
 /** PRINT **不复用** ui_user_make_primary_pill_btn：那个组件是全圆胶囊、主色蓝底
  *  （历史页空态那枚还在用），而稿这里要的是圆角 24 的深色 #333145 底，两处已经不是
- *  同一枚按钮了。整行的来龙去脉见上面那段。 */
+ *  同一枚按钮了。整行的来龙去脉见上面那段。
+ *
+ *  打印中这颗钮换成白底 MONITOR（稿 6683:34165）：同一个对象，换底色、宽度、文字与
+ *  图标，点击逻辑不变（on_files_click 打印中本来就是回监控页）。两枚图标都在这里建好、
+ *  按态切 HIDDEN，flex 会跳过藏起来的那枚。外观切换在 page_user_home_sync_print_state()。
+ *
+ *  **钮直接挂在页根上，不要再套一层按内容撑的 row**。早先外面有一层（两枚按钮并排时
+ *  留下的），而 LVGL 按父对象范围裁子对象：row 与钮一样大，钮的投影（下沉 5、模糊 10）
+ *  被整个裁掉，只在圆角缺口里漏出一点灰、底下一刀切齐。深色 PRINT 上看不太出来，换成
+ *  白底 MONITOR 后很显眼。页根铺满整屏，投影落在它里面，不会被裁。 */
 lv_obj_t *build_action_tiles(lv_obj_t *parent)
 {
-    lv_obj_t *row = lv_obj_create(parent);
-    lv_obj_remove_style_all(row);
-    lv_obj_add_flag(row, LV_OBJ_FLAG_FLOATING);
-    lv_obj_set_size(row, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
-    lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(row, LV_FLEX_ALIGN_START,
-                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_column(row, USER_PAD_SM, 0);
-    lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, 0);
-    lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
-    /* 稿上这一行的左缘距侧栏 32（USER_PAD_LG，与上方卡片同一条竖线），底缘距屏底 48
+    lv_obj_t *print = lv_button_create(parent);
+    lv_obj_remove_style_all(print);
+    lv_obj_add_flag(print, LV_OBJ_FLAG_FLOATING);
+    /* 稿上这颗钮的左缘距侧栏 32（USER_PAD_LG，与上方卡片同一条竖线），底缘距屏底 48
      * （USER_HOME_EDGE_GAP）——**这两个值不一样，稿本身就不对称**。横向只退一个
      * USER_PAD_LG：本页根节点的 pad_left 已经让开侧栏，不用再补侧栏宽度
-     * （同 build_door_floating）。 */
-    lv_obj_align(row, LV_ALIGN_BOTTOM_LEFT, USER_PAD_LG, -USER_HOME_EDGE_GAP);
-
-    lv_obj_t *print = lv_button_create(row);
-    lv_obj_remove_style_all(print);
+     * （同 build_door_floating）。左下角对齐，PRINT ↔ MONITOR 换宽度时左缘不动。 */
+    lv_obj_align(print, LV_ALIGN_BOTTOM_LEFT, USER_PAD_LG, -USER_HOME_EDGE_GAP);
     lv_obj_set_size(print, USER_HOME_PRINT_BTN_W, USER_ACTION_BTN_SZ);
     lv_obj_set_style_radius(print, USER_LIGHT_RADIUS, 0);
     lv_obj_set_style_bg_color(print, user_light_nav_on, 0);
@@ -731,15 +766,70 @@ lv_obj_t *build_action_tiles(lv_obj_t *parent)
                           LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_clear_flag(print, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_event_cb(print, on_files_click, LV_EVENT_CLICKED, nullptr);
-    make_btn_icon(print, ui_user_pick_icon(ic_folder_set, action_icon_sz()),
-                  action_icon_sz());
+    g_action_folder = make_btn_icon(print, ui_user_pick_icon(ic_folder_set, action_icon_sz()),
+                                    action_icon_sz());
+    /* MONITOR 态的相机（稿 6683:34165 的 40 图标盒，2.5 描边线框）：深色字压在白底上，
+     * 颜色同文字。常态藏着。 */
+    g_action_camera = make_btn_icon(print, ui_user_pick_icon(ic_monitor_btn_set, action_icon_sz()),
+                                    action_icon_sz(), user_light_text);
+    lv_obj_add_flag(g_action_camera, LV_OBJ_FLAG_HIDDEN);
     lv_obj_t *plbl = lv_label_create(print);
     lv_label_set_text(plbl, "PRINT");
     lv_obj_set_style_text_color(plbl, lv_color_white(), 0);
     lv_obj_set_style_text_font(plbl, user_font_body(), 0);   /* 稿 24 */
     lv_obj_set_style_text_letter_space(plbl, 2, 0);   /* 稿 tracking 1.92 */
+    g_action_btn   = print;
+    g_action_label = plbl;
 
-    return row;
+    return print;
+}
+
+/* ---------------------------------------------------------------------------
+ *  右下的 RETRIEVE（稿 6683:34027 的 (872,668) 360×84）：
+ *    ┌──────────────────────────────┐
+ *    │        [门]   RETRIEVE         │
+ *    └──────────────────────────────┘
+ *  打印结束（完成 / 终止）、还没取件时替掉开门滑块。右缘与滑块同线（都退
+ *  USER_HOME_EDGE_GAP），竖向与旋钮、左下按钮齐——底缘同样退 USER_HOME_EDGE_GAP，
+ *  不用像滑块那样再扣旋钮内缩（它本身就是旋钮那么高）。
+ *
+ *  配色、投影、文字与 PRINT 同一套（#333145 底、白字、字距 2）；门图标是首页开门旋钮
+ *  那一枚（稿 32@1280，取 USER_ACTION_BTN_SZ * 8/21，与旋钮里同一档）。稿上这枚门的
+ *  墙厚 2.0、旋钮里那枚 2.5，差半个像素，共用一份资源。
+ * ------------------------------------------------------------------------- */
+lv_obj_t *build_retrieve_btn(lv_obj_t *parent)
+{
+    lv_obj_t *btn = lv_button_create(parent);
+    lv_obj_remove_style_all(btn);
+    lv_obj_add_flag(btn, LV_OBJ_FLAG_FLOATING);
+    lv_obj_set_size(btn, USER_HOME_RETRIEVE_BTN_W, USER_ACTION_BTN_SZ);
+    lv_obj_set_style_radius(btn, USER_LIGHT_RADIUS, 0);
+    lv_obj_set_style_bg_color(btn, user_light_nav_on, 0);
+    lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_color(btn, user_light_accent, LV_STATE_PRESSED);
+    lv_obj_set_style_shadow_width(btn, 10, 0);
+    lv_obj_set_style_shadow_ofs_y(btn, 5, 0);
+    lv_obj_set_style_shadow_color(btn, lv_color_hex(0xA1A1A1), 0);
+    lv_obj_set_style_shadow_opa(btn, LV_OPA_20, 0);
+    lv_obj_set_style_pad_column(btn, USER_PAD_SM, 0);         /* 稿 16 */
+    lv_obj_set_flex_flow(btn, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(btn, LV_FLEX_ALIGN_CENTER,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_clear_flag(btn, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_event_cb(btn, on_retrieve_click, LV_EVENT_CLICKED, nullptr);
+
+    const int32_t door_sz = USER_ACTION_BTN_SZ * 8 / 21;
+    make_btn_icon(btn, ui_user_pick_icon(ic_door_panel_set, door_sz), door_sz);
+    lv_obj_t *lbl = lv_label_create(btn);
+    lv_label_set_text(lbl, "RETRIEVE");
+    lv_obj_set_style_text_color(lbl, lv_color_white(), 0);
+    lv_obj_set_style_text_font(lbl, user_font_body(), 0);    /* 稿 24 */
+    lv_obj_set_style_text_letter_space(lbl, 2, 0);           /* 稿 tracking 1.92 */
+
+    lv_obj_align(btn, LV_ALIGN_BOTTOM_RIGHT, -USER_HOME_EDGE_GAP, -USER_HOME_EDGE_GAP);
+    lv_obj_add_flag(btn, LV_OBJ_FLAG_HIDDEN);
+    g_retrieve_btn = btn;
+    return btn;
 }
 
 /** 刷新左卡（PM2.5 空气质量）：按当前档（舱内/舱外，见 ui_air_quality）填
@@ -864,6 +954,60 @@ void page_user_home_refresh(bool /*force*/)
     update_grid_metric(g_cab_o2_val,   snap.oxygen_percent);
     update_grid_metric(g_cab_hum_val,  snap.humidity_percent);
     update_grid_metric(g_cab_prs_val,  snap.pressure_kpa);
+
+    page_user_home_sync_print_state();
+}
+
+void page_user_home_sync_print_state(void)
+{
+    if(!g_action_btn) {
+        return;   /* 页面还没建（control 在建页之前就可能切过状态） */
+    }
+    const int ui = control_print_result_ready() ? HOME_UI_RESULT
+                 : control_is_printing()        ? HOME_UI_RUNNING
+                                                : HOME_UI_IDLE;
+    if(ui == g_print_ui_applied) {
+        return;
+    }
+    g_print_ui_applied = ui;
+
+    /* 左下：待机是深底白字 PRINT + 文件夹；打印中（含出结果待取件）换成白底深字 MONITOR +
+     * 相机（稿 6683:34165），宽度各按稿。按下态：深底那态沿用主色，白底那态压一档浅灰。 */
+    const bool monitor = (ui != HOME_UI_IDLE);
+    lv_obj_set_width(g_action_btn, monitor ? USER_HOME_MONITOR_BTN_W : USER_HOME_PRINT_BTN_W);
+    lv_obj_set_style_bg_color(g_action_btn, monitor ? user_light_card : user_light_nav_on, 0);
+    lv_obj_set_style_bg_color(g_action_btn, monitor ? user_light_row_sel : user_light_accent,
+                              LV_STATE_PRESSED);
+    lv_label_set_text(g_action_label, monitor ? "MONITOR" : "PRINT");
+    lv_obj_set_style_text_color(g_action_label, monitor ? user_light_text : lv_color_white(), 0);
+    if(monitor) {
+        lv_obj_add_flag(g_action_folder, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_remove_flag(g_action_camera, LV_OBJ_FLAG_HIDDEN);
+    } else {
+        lv_obj_remove_flag(g_action_folder, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(g_action_camera, LV_OBJ_FLAG_HIDDEN);
+    }
+
+    /* 右下：待机是可用的开门滑块；打印中滑块置灰、拖不动（control_open_door_request()
+     * 本来就只在 IDLE 生效，置灰是让人一眼看出来）；出结果待取件时整条换成 RETRIEVE。 */
+    if(g_door_slide) {
+        lv_obj_t *root = ui_slide_unlock_get_root(g_door_slide);
+        if(root) {
+            if(ui == HOME_UI_RESULT) {
+                lv_obj_add_flag(root, LV_OBJ_FLAG_HIDDEN);
+            } else {
+                lv_obj_remove_flag(root, LV_OBJ_FLAG_HIDDEN);
+            }
+        }
+        ui_slide_unlock_set_enabled(g_door_slide, ui == HOME_UI_IDLE);
+    }
+    if(g_retrieve_btn) {
+        if(ui == HOME_UI_RESULT) {
+            lv_obj_remove_flag(g_retrieve_btn, LV_OBJ_FLAG_HIDDEN);
+        } else {
+            lv_obj_add_flag(g_retrieve_btn, LV_OBJ_FLAG_HIDDEN);
+        }
+    }
 }
 
 lv_obj_t *page_user_home_create(lv_obj_t *parent)
@@ -889,6 +1033,7 @@ lv_obj_t *page_user_home_create(lv_obj_t *parent)
     build_topbar(page);
 
     build_door_floating(page);
+    build_retrieve_btn(page);
     build_action_tiles(page);
 
     control_supply_add_observer(on_supply_changed);

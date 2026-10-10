@@ -19,6 +19,7 @@
 #include "home_metric_icons.h"
 
 #include "page_user_monitor.hpp"
+#include "page_user_home.hpp"
 #include "page_user_files.hpp"
 #include "page_manager.hpp"
 
@@ -145,6 +146,8 @@ void set_transfer_demo_pending(bool on)
     }
     g_transfer_demo_prep_pending = on;
     page_user_monitor_transfer_demo_changed();
+    /* 它也算进 control_is_printing()，首页底部一行跟着切 */
+    page_user_home_sync_print_state();
 }
 
 /** Prep 超时：按失败收尾（同 Rsp ok=0 那支）。晚到的 Rsp 会因 pending 已清被忽略。 */
@@ -156,7 +159,7 @@ void on_transfer_demo_timeout(lv_timer_t * /*timer*/)
     }
     set_transfer_demo_pending(false);
     g_door_origin = DoorFlowOrigin::PrintPrep;
-    ui_toast_show("Transfer demo timed out", user_color_status_err, 3000);
+    ui_toast_show("Transfer demo timed out", UI_TOAST_ERROR, 3000);
 }
 
 /* 选择文件页的视图代码已拆到 page_user_files.cpp，这里只留数据与流程。
@@ -671,7 +674,7 @@ void wire_msg_proxy()
             /* 传感器无效或门一直未开：停转圈，回退入口态，避免无限轮询。 */
             g_door_open_fail_count = 0;
             stop_door_timers();
-            ui_toast_show("Door did not open", user_color_status_err, 3000);
+            ui_toast_show("Door did not open", UI_TOAST_ERROR, 3000);
             if(g_door_origin == DoorFlowOrigin::PrintCollect) {
                 enter_state(CONTROL_STATE_PRINT_DONE);
                 page_user_monitor_reset_result_slide();
@@ -719,7 +722,7 @@ void wire_msg_proxy()
         set_transfer_demo_pending(false);
         if(!p.ok) {
             g_door_origin = DoorFlowOrigin::PrintPrep;
-            ui_toast_show("Transfer demo failed", user_color_status_err, 3000);
+            ui_toast_show("Transfer demo failed", UI_TOAST_ERROR, 3000);
             return;
         }
         ui_device_state_set_outer_door_open(true);
@@ -761,9 +764,9 @@ void wire_msg_proxy()
         }
         const auto reason = static_cast<middleware::FsDeleteResult>(p.reason);
         if(reason == middleware::FsDeleteResult::BusyPrinting) {
-            ui_toast_show("Cannot delete while printing", user_color_status_err, 2200);
+            ui_toast_show("Cannot delete while printing", UI_TOAST_INFORM, 2200);
         } else {
-            ui_toast_show("Delete failed", user_color_status_err, 2200);
+            ui_toast_show("Delete failed", UI_TOAST_ERROR, 2200);
         }
     });
 
@@ -777,7 +780,7 @@ void wire_msg_proxy()
         }
         close_prepare_dlg();
         if(!ok) {
-            ui_toast_show("Prepare failed", user_color_status_err, 2500);
+            ui_toast_show("Prepare failed", UI_TOAST_ERROR, 2500);
             enter_state(CONTROL_STATE_IDLE);
             return;
         }
@@ -867,7 +870,7 @@ void wire_msg_proxy()
         std::snprintf(g_last_xfr_file, sizeof(g_last_xfr_file), "%s", p.file_name);
         char msg[180];
         std::snprintf(msg, sizeof(msg), "File received: %s", p.file_name);
-        ui_toast_show(msg, user_color_status_ok, 2200);
+        ui_toast_show(msg, UI_TOAST_SUCCESS, 2200);
         if(page_user_files_active() && page_user_files_source() == FileTab::Local) {
             request_fs_dir_open(FileTab::Local);
         }
@@ -907,7 +910,7 @@ void wire_msg_proxy()
         }
         if(p.state == static_cast<uint8_t>(middleware::XfrTransferState::Error) &&
            !g_xfr_recv_user_cancel) {
-            ui_toast_show("Transfer failed", user_color_status_err, 2200);
+            ui_toast_show("Transfer failed", UI_TOAST_ERROR, 2200);
         }
         g_xfr_recv_user_cancel = false;
         g_xfr_recv_name[0] = '\0';
@@ -923,7 +926,7 @@ void wire_msg_proxy()
             return;
         }
         apply_files_list({});
-        ui_toast_show("USB removed", user_color_status_err, 1800);
+        ui_toast_show("USB removed", UI_TOAST_INFORM, 1800);
     });
 
 }
@@ -2019,7 +2022,7 @@ void on_powder_refilled(lv_event_t * /*e*/)
     /* 恢复请求发不出去时明确告知：作业仍停在后端的缺粉暂停态，需要重试，
      * 不能静默关窗让用户以为已经继续打印。 */
     if(!ui::UiMsgProxy::instance().send_print_resume()) {
-        ui_toast_show("Resume failed, please retry", user_color_status_err, 2200);
+        ui_toast_show("Resume failed, please retry", UI_TOAST_ERROR, 2200);
     }
 }
 
@@ -2248,7 +2251,7 @@ void on_print_confirm_ok(lv_event_t * /*e*/)
     }
     if(ui::DebugMsgProxy::instance().test_image_active() ||
        ui::DebugMsgProxy::instance().galvo_point_test_active()) {
-        ui_toast_show("Test mode active", user_color_status_err, 1800);
+        ui_toast_show("Test mode active", UI_TOAST_INFORM, 1800);
         return;
     }
     enter_state(CONTROL_STATE_PREPARE_WAIT);
@@ -2684,8 +2687,7 @@ void on_box_shutter_done(lv_event_t * /*e*/)
     if(g_state != CONTROL_STATE_TRANSFER_BOX) {
         return;
     }
-    ui_toast_show_icon("Transfer complete. Remove the box",
-                       user_color_status_ok, 3000, &ic_badge_check);
+    ui_toast_show("Transfer complete. Remove the box", UI_TOAST_SUCCESS, 3000);
     finish_after_door_open();
 }
 
@@ -2790,7 +2792,7 @@ void pf_on_print_done(void * /*u*/)
     if(g_state != CONTROL_STATE_PRINTING) {
         return;
     }
-    ui_toast_show("Print complete", user_color_status_ok, 2000);
+    ui_toast_show("Print complete", UI_TOAST_SUCCESS, 2000);
     /* 同 finish_printing：留在 PRINT_DONE 等 Camera 出片，不直接回 IDLE */
     enter_state(CONTROL_STATE_PRINT_DONE);
 }
@@ -2810,6 +2812,7 @@ void show_terminated_result_without_manifest(void)
     g_print_result_pending = false;
     page_user_monitor_enter_print_result(&g_print_result);
     g_print_result_shown = true;
+    page_user_home_sync_print_state();   /* 首页开门滑块换成 RETRIEVE */
 }
 
 /**
@@ -2887,6 +2890,7 @@ void on_print_video_manifest(const middleware::PrintVideoManifestPayload &p)
     }
     page_user_monitor_enter_print_result(&r);
     g_print_result_shown = true;
+    page_user_home_sync_print_state();   /* 首页开门滑块换成 RETRIEVE */
 }
 
 void on_terminate_cancel(lv_event_t * /*e*/)
@@ -2903,7 +2907,7 @@ void on_terminate_confirm(lv_event_t * /*e*/)
 void on_backend_action_fail(const char *message)
 {
     if(message && message[0]) {
-        ui_toast_show(message, user_color_status_err, 2500);
+        ui_toast_show(message, UI_TOAST_ERROR, 2500);
     }
     if(g_state != CONTROL_STATE_IDLE && g_state != CONTROL_STATE_PRINTING &&
        g_state != CONTROL_STATE_PRINT_DONE) {
@@ -3022,6 +3026,10 @@ void enter_state(control_state_t s)
         }
         break;
     }
+
+    /* 首页底部一行（PRINT/MONITOR、开门滑块/RETRIEVE）跟着打印态切。用户可能正停在首页
+     * 等打印结束，不能只靠进页时那次刷新；只动那几颗控件，不碰通知栈与侧栏。 */
+    page_user_home_sync_print_state();
 }
 
 /* 预确认完成 → 进入文件选择页（PageManager 隐藏页 "user_files"，状态保留）。
@@ -3205,6 +3213,11 @@ const char *control_section_target(const char *section)
 void control_cancel(void)
 {
     enter_state(CONTROL_STATE_IDLE);
+}
+
+bool control_print_result_ready(void)
+{
+    return g_state == CONTROL_STATE_PRINT_DONE && g_print_result_shown;
 }
 
 bool control_is_printing(void)

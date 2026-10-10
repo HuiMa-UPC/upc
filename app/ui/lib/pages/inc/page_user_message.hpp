@@ -12,8 +12,14 @@ lv_obj_t *page_user_message_create(lv_obj_t *parent);
 
 void page_user_message_refresh(bool force);
 
-/** 离页：关抽屉、收起左滑、停止观察者驱动的重建 */
+/** 离页：关抽屉、收起左滑、退出管理态、停止观察者驱动的重建 */
 void page_user_message_exit(void);
+
+/**
+ * 下次进页时落在 All Tab 顶部（首页铃铛面板点消息条 / 「查看剩余」时用）。调用方先调它
+ * 再 switch_to("user_message")；只作用于紧接着的那一次进页。
+ */
+void page_user_message_request_all_tab(void);
 
 #ifdef __cplusplus
 }

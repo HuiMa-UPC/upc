@@ -257,16 +257,16 @@ void apply_event_async(void *raw)
     if(p->active) {
         if(p->code == static_cast<uint16_t>(DeviceEventCode::FirstLayerReferenceRetrying)) {
             ui_toast_show("Reference capture failed, retrying...",
-                          user_color_status_err, 1800);
+                          UI_TOAST_INFORM, 1800);
         } else if(p->code == static_cast<uint16_t>(DeviceEventCode::FirstLayerReferenceReady)) {
             ui_toast_show("Reference captured, starting first-layer check",
-                          user_color_status_ok, 1800);
+                          UI_TOAST_SUCCESS, 1800);
         } else if(p->code == static_cast<uint16_t>(DeviceEventCode::FirstLayerVisualRecoat)) {
             ui_toast_show("First layer check failed, recoating...",
-                          user_color_status_err, 1800);
+                          UI_TOAST_INFORM, 1800);
         } else if(p->code == static_cast<uint16_t>(DeviceEventCode::FirstLayerVisualPassed)) {
             ui_toast_show("First layer check passed",
-                          user_color_status_ok, 1800);
+                          UI_TOAST_SUCCESS, 1800);
         }
     }
     if(p->active) {

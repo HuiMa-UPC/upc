@@ -14,7 +14,7 @@
 | `ui_board_anim` | 打印板插入动画 |
 | `ui_arc_spinner` | 圆弧加载动画 |
 | `ui_keyboard` | 全局软键盘 |
-| `ui_feedback` | Toast（`ui_toast_show_icon()` 可带前置图标）、二次确认框 |
+| `ui_feedback` | 顶部 Toast：`ui_toast_show(msg, UI_TOAST_SUCCESS / ERROR / INFORM, ms)` 三类白卡（2026-10-10 稿，按语义选类型，归类见 `doc/Toast样式归类清单.md`）；内容区左缘由 PageManager 经 `ui_toast_set_content_left()` 设 |
 
 ## 使用方式
 

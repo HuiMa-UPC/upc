@@ -6,6 +6,8 @@
 #include "ui_message_store.hpp"
 #include "ui_theme.hpp"
 #include "ui_user_widgets.hpp"
+#include "ui_feedback.hpp"
+#include "ui_modal_dialog.hpp"
 #include "home_metric_icons.h"
 
 #include <algorithm>
@@ -22,7 +24,7 @@
  * **本页不显示常驻设备条**：稿上顶部从屏顶起就是 Tab 行，设备条那条被不透明顶栏
  * 整条盖住，等价于不画，判据在 page_manager 的 show 那行（同历史页）。
  *
- *   ┌ All   Unresolved   Device   System                 [ All read ] ┐ ← 顶栏浮层
+ *   ┌ All   Unresolved   Device   System                   [ Manage ] ┐ ← 顶栏浮层
  *   │·····························································    │   y 0..124
  *   │ May 26, 2026                                                    │   y 140
  *   │ ┌──────────────────────────────────────────────────────────┐    │
@@ -63,9 +65,14 @@
  * AUTO/POWER_CYCLE/NONE/EVENT 无按钮只给处理指引。复位成功（MCU 回 NORMAL 帧）
  * 后条目自动转历史、抽屉自动关。
  *
- * **多选批量删除已按新稿整体去掉**（稿四张列表帧都没画），删除只剩左滑单条，
- * 且仍只对历史条目开放：当前报警要等 MCU 解除、设备事件跟随后端生命周期，都删不掉。
- * 右侧那两枚悬浮翻页钮同样按稿去掉，翻页靠底部 Load More。
+ * **多选批量删除**：6230 那版稿四张列表帧都没画、整体去掉过，2026-10-10 稿（6357:39342）
+ * 在右上加回 Manage（替掉原先只画不接逻辑的 All read），管理态照相册页做——右上换成
+ * Select all / Cancel，卡片左侧出复选框、选中描一圈主色环，底部浮出共用的删除条，删前
+ * 二次确认、删后弹 toast。删除仍只对历史条目开放：当前报警要等 MCU 解除、设备事件跟随后端
+ * 生命周期，都删不掉——管理态里它们左侧只有一个透明占位（卡片照样对齐），点了没反应。
+ * 勾选按「报警号 + 触发时刻」记（g_sel_keys），管理态期间列表照常重建也不丢。
+ * 常态下的左滑删除单条保留，管理态里关掉。右侧那两枚悬浮翻页钮按稿去掉，翻页靠底部
+ * Load More。
  *
  * 左滑删除复用 page_user_history 的手势模式（清 GESTURE_BUBBLE + translate_x）。
  * store / alarm_state 两路观察者都只置脏 + lv_async 重建（回调里可能正拿着
@@ -86,6 +93,11 @@ constexpr uint32_t kColorResolved = 0x37E47B; /**< 绿（Resolved 胶囊） */
 constexpr lv_opa_t kCardBorderOpa = 26;   /**< 稿 rgba(255,255,255,0.1) */
 constexpr uint32_t kDelGradA      = 0xFC3D3E;  /**< 删除钮渐变起（稿 139°） */
 constexpr uint32_t kDelGradB      = 0xFF6667;  /**< 删除钮渐变止 */
+
+/** 管理态选中卡的主色环宽。与相册页一样取 4（2px 时圆角那段是细弧、整条都是抗锯齿
+ *  混合色，角上淡一档且发毛）；但这里**整圈压在卡内**（outline_pad = −宽），不像相册页
+ *  露 3px 在外：卡片外面还套着 holder / wrap 两层同宽的壳，露在外面的会被它们裁掉。 */
+constexpr int32_t kSelRingW = 4;
 
 /** 列表一条的来源。 */
 enum class ItemSrc : uint8_t {
@@ -138,12 +150,16 @@ struct MsgItem {
     bool        deletable;  /**< 仅历史可左滑删除 */
 };
 
-/** 卡片运行时上下文（左滑状态 + 点击路由），new/delete 随卡片走。 */
+/** 卡片运行时上下文（左滑状态 + 点击路由 + 管理态勾选），new/delete 随卡片走。 */
 struct MsgCard {
     ItemSrc   src;
     uint16_t  code;
     int       hist_idx;
-    bool      deletable;    /**< 仅历史条目可左滑删 */
+    int64_t   ts_ms;        /**< AlarmHistory 的触发时刻，与 code 一起当删除键（下标会变） */
+    bool      deletable;    /**< 仅历史条目可左滑删 / 管理态可勾选 */
+    bool      selected;     /**< 管理态勾选态（建卡时按 g_sel_keys 恢复） */
+    lv_obj_t *check;        /**< 管理态复选框（不可删的条目是同尺寸的透明占位） */
+    lv_obj_t *check_mark;   /**< 复选框里的白勾；占位没有 */
     bool      open;         /**< 左滑展开态（松手吸附后的稳定态） */
     /* 跟手拖动的按压期状态，每次 PRESSED 重置 */
     int32_t   press_x;      /**< 按下点（屏幕坐标） */
@@ -164,6 +180,22 @@ bool      g_rebuild_queued = false;
 
 TabItem   g_tabs[kTabCount];
 MsgTab    g_tab        = MsgTab::All;
+/** 下次进页切回 All Tab 顶部（page_user_message_request_all_tab），进页时消费掉。 */
+bool      g_req_all_tab = false;
+
+/* ---- 管理态（2026-10-10 稿加回的多选批量删除） ---- */
+bool      g_manage         = false;
+lv_obj_t *g_btn_manage     = nullptr;  /**< Tab 行右侧「Manage」（仅常态可见） */
+lv_obj_t *g_btn_select_all = nullptr;  /**< Tab 行右侧「Select all」（仅管理态可见） */
+lv_obj_t *g_btn_cancel     = nullptr;  /**< Tab 行右侧「Cancel」（仅管理态可见） */
+lv_obj_t *g_fade           = nullptr;  /**< 列表底边的白色渐隐（常态 / 管理态两档） */
+lv_obj_t *g_selbar         = nullptr;  /**< 底部删除条（与相册页共用 ui_user_make_sel_bar） */
+lv_obj_t *g_lbl_sel        = nullptr;  /**< 删除条左侧「N selected」 */
+lv_obj_t *g_btn_del        = nullptr;  /**< 删除条右侧「Delete」 */
+ui_modal_dialog_t *g_del_dlg = nullptr;  /**< 批量删除二次确认 */
+/** 已勾选条目的键。勾选态记在这里而不是卡片上：管理态期间列表照常会重建（新报警到达、
+ *  Load More），卡片对象随之换掉，建卡时按它把勾选恢复回去。退出管理态时清空。 */
+std::vector<ui_alarm_history_key_t> g_sel_keys;
 
 /* ---- 分页：初始只建最近 kRowsPerPage 条，其余靠底部「查看更多」逐批放出 ----
  * collect_items() 已按 sort_ts 降序，所以"最近的"就是前 g_visible_limit 条。
@@ -184,6 +216,8 @@ void rebuild_list(void);
 void drawer_close(void);
 void drawer_sync(void);
 void apply_tab_style(void);
+void set_manage_mode(bool on);
+void toggle_card_selection(MsgCard *c);
 
 /* ============================================================================
  *  几何：稿是 1280×800，这里一律换算成 theme token，三档屏共用
@@ -556,8 +590,9 @@ void card_press_cb(lv_event_t *e)
     c->just_dragged = false;
     /* 兜底解除上一次的轴向排他（正常由 release 恢复，这里防万一漏掉） */
     lv_obj_add_flag(c->card, LV_OBJ_FLAG_SCROLL_CHAIN_VER);
-    if(!c->del_btn || !indev) {
-        c->drag_locked = true;   /* 不可删条目不参与拖动 */
+    /* 不可删条目不参与拖动；管理态里一律不拖——点卡是勾选，删除走底部删除条 */
+    if(g_manage || !c->del_btn || !indev) {
+        c->drag_locked = true;
         return;
     }
     lv_point_t p;
@@ -646,6 +681,8 @@ void del_click_cb(lv_event_t *e)
         /* 直接按下标删：观察者回调会 queue_rebuild，hist_idx 不会陈旧——
          * 除非同帧插了新历史，那也只是删错相邻一条的理论窗口，重建后自愈 */
         ui_alarm_history_delete_at(c->hist_idx);
+        /* 与管理态批量删除同一条提示（稿 6357:39342 的「消息已删除」） */
+        ui_toast_show("Deleted", UI_TOAST_SUCCESS, 1200);
     }
 }
 
@@ -655,6 +692,10 @@ void card_click_cb(lv_event_t *e)
     /* LVGL 释放时照发 CLICKED（拖动不会吞掉它），刚拖完这次必须挡掉，
      * 否则一松手就把刚拖开的卡片当成点击又关回去。 */
     if(c->just_dragged) {
+        return;
+    }
+    if(g_manage) {
+        toggle_card_selection(c);   /* 管理态：点卡就是勾选，不开抽屉；不可删的点了没反应 */
         return;
     }
     if(c->open) {
@@ -669,6 +710,303 @@ void card_click_cb(lv_event_t *e)
     g_drawer_code     = c->code;
     g_drawer_hist_idx = c->hist_idx;
     drawer_sync();
+}
+
+/* ============================================================================
+ *  管理态（右上 Manage → 多选批量删除，2026-10-10 稿 6357:39342）
+ *
+ *  照相册页那套做：右上 Manage 换成 Select all / Cancel，可删的卡左侧出复选框、选中描一圈
+ *  主色环，底部浮出共用删除条；删前二次确认，删后弹 toast 并退出管理态。只有历史条目
+ *  （已解除的报警、一次性事件）能勾选。
+ * ========================================================================= */
+
+/** 这张卡能不能勾选：与左滑删除同一判据，只有历史条目。 */
+bool card_selectable(const MsgCard *c)
+{
+    return c && c->deletable && c->src == ItemSrc::AlarmHistory;
+}
+
+bool key_selected(uint16_t code, int64_t ts_ms)
+{
+    for(const ui_alarm_history_key_t &k : g_sel_keys) {
+        if(k.code == code && k.ts_ms == ts_ms) {
+            return true;
+        }
+    }
+    return false;
+}
+
+void set_key_selected(uint16_t code, int64_t ts_ms, bool on)
+{
+    for(auto it = g_sel_keys.begin(); it != g_sel_keys.end(); ++it) {
+        if(it->code == code && it->ts_ms == ts_ms) {
+            if(!on) {
+                g_sel_keys.erase(it);
+            }
+            return;
+        }
+    }
+    if(on) {
+        g_sel_keys.push_back({ code, ts_ms });
+    }
+}
+
+/** 同步一张卡的勾选外观：复选框（主色底白勾 / 空心描边）+ 卡片内沿的主色环。
+ *  不可删的条目左侧是占位、没有勾，也不会被选中，直接跳过。 */
+void apply_card_selection(MsgCard *c)
+{
+    if(!c || !c->check_mark) {
+        return;
+    }
+    if(c->selected) {
+        lv_obj_set_style_bg_opa(c->check, LV_OPA_COVER, 0);
+        lv_obj_set_style_border_opa(c->check, LV_OPA_TRANSP, 0);
+        lv_obj_remove_flag(c->check_mark, LV_OBJ_FLAG_HIDDEN);
+    } else {
+        lv_obj_set_style_bg_opa(c->check, LV_OPA_TRANSP, 0);
+        lv_obj_set_style_border_opa(c->check, LV_OPA_30, 0);
+        lv_obj_add_flag(c->check_mark, LV_OBJ_FLAG_HIDDEN);
+    }
+    lv_obj_set_style_outline_width(c->card, c->selected ? kSelRingW : 0, 0);
+}
+
+int selected_count(void)
+{
+    int n = 0;
+    for(const MsgCard *c : g_cards) {
+        if(c->selected && card_selectable(c)) {
+            ++n;
+        }
+    }
+    return n;
+}
+
+int selectable_count(void)
+{
+    int n = 0;
+    for(const MsgCard *c : g_cards) {
+        if(card_selectable(c)) {
+            ++n;
+        }
+    }
+    return n;
+}
+
+/** 刷新删除条计数、Select all 文案与 Delete 可用态（未选中时置灰不可点）。
+ *  文案与判据同相册页的 refresh_sel_count()，两页说法一致。 */
+void refresh_sel_count(void)
+{
+    const int  n      = selected_count();
+    const int  total  = selectable_count();
+    const bool all_on = (total > 0 && n == total);
+
+    if(g_lbl_sel) {
+        char txt[32];
+        if(all_on) {
+            std::snprintf(txt, sizeof(txt), "All %d selected", n);
+        } else {
+            std::snprintf(txt, sizeof(txt), "%d selected", n);
+        }
+        lv_label_set_text(g_lbl_sel, txt);
+    }
+    if(g_btn_select_all) {
+        lv_label_set_text(g_btn_select_all, all_on ? "Deselect all" : "Select all");
+    }
+    if(g_btn_del) {
+        if(n > 0) {
+            lv_obj_clear_state(g_btn_del, LV_STATE_DISABLED);
+            lv_obj_set_style_bg_opa(g_btn_del, LV_OPA_COVER, 0);
+        } else {
+            lv_obj_add_state(g_btn_del, LV_STATE_DISABLED);
+            lv_obj_set_style_bg_opa(g_btn_del, LV_OPA_40, 0);
+        }
+    }
+}
+
+void toggle_card_selection(MsgCard *c)
+{
+    if(!card_selectable(c)) {
+        return;
+    }
+    c->selected = !c->selected;
+    set_key_selected(c->code, c->ts_ms, c->selected);
+    apply_card_selection(c);
+    refresh_sel_count();
+}
+
+/** 复选框自己也是热区（卡片那条路走 card_click_cb），两条都只切一次。 */
+void check_click_cb(lv_event_t *e)
+{
+    toggle_card_selection(static_cast<MsgCard *>(lv_event_get_user_data(e)));
+}
+
+/** 按管理态刷新：右上三枚钮、删除条与渐隐、每张卡左侧那一格。 */
+void apply_manage_ui(void)
+{
+    for(lv_obj_t *btn : { g_btn_select_all, g_btn_cancel }) {
+        if(!btn) {
+            continue;
+        }
+        if(g_manage) {
+            lv_obj_remove_flag(btn, LV_OBJ_FLAG_HIDDEN);
+        } else {
+            lv_obj_add_flag(btn, LV_OBJ_FLAG_HIDDEN);
+        }
+    }
+    if(g_btn_manage) {
+        if(g_manage) {
+            lv_obj_add_flag(g_btn_manage, LV_OBJ_FLAG_HIDDEN);
+        } else {
+            lv_obj_remove_flag(g_btn_manage, LV_OBJ_FLAG_HIDDEN);
+        }
+    }
+    if(g_selbar) {
+        if(g_manage) {
+            lv_obj_remove_flag(g_selbar, LV_OBJ_FLAG_HIDDEN);
+        } else {
+            lv_obj_add_flag(g_selbar, LV_OBJ_FLAG_HIDDEN);
+        }
+    }
+    ui_user_bottom_fade_set_manage(g_fade, g_manage);
+    for(MsgCard *c : g_cards) {
+        if(!c->check) {
+            continue;
+        }
+        if(g_manage) {
+            lv_obj_remove_flag(c->check, LV_OBJ_FLAG_HIDDEN);
+        } else {
+            lv_obj_add_flag(c->check, LV_OBJ_FLAG_HIDDEN);
+        }
+        apply_card_selection(c);
+    }
+    refresh_sel_count();
+}
+
+void close_del_dlg(void)
+{
+    if(g_del_dlg) {
+        ui_modal_dialog_close(g_del_dlg);
+        g_del_dlg = nullptr;
+    }
+}
+
+void set_manage_mode(bool on)
+{
+    if(g_manage == on) {
+        return;
+    }
+    g_manage = on;
+    if(on) {
+        reset_all_cards();   /* 收起没关的左滑：管理态里删除钮不该露着 */
+        drawer_close();
+    } else {
+        close_del_dlg();
+        g_sel_keys.clear();
+        for(MsgCard *c : g_cards) {
+            c->selected = false;
+        }
+    }
+    apply_manage_ui();
+}
+
+void on_manage_enter(lv_event_t * /*e*/)
+{
+    set_manage_mode(true);
+}
+
+void on_manage_cancel(lv_event_t * /*e*/)
+{
+    set_manage_mode(false);
+}
+
+/** 全选 / 全不选（同相册页）：已经全勾上时再点一次取消全选，文案由 refresh_sel_count()
+ *  翻成 Deselect all。「全部」指已建出来的卡片（Load More 之后的那批也算）。 */
+void on_manage_select_all(lv_event_t * /*e*/)
+{
+    const bool select_all = (selected_count() < selectable_count());
+    for(MsgCard *c : g_cards) {
+        if(!card_selectable(c)) {
+            continue;
+        }
+        c->selected = select_all;
+        set_key_selected(c->code, c->ts_ms, select_all);
+        apply_card_selection(c);
+    }
+    refresh_sel_count();
+}
+
+void on_batch_del_cancel(lv_event_t * /*e*/)
+{
+    close_del_dlg();
+}
+
+void on_batch_del_confirm(lv_event_t * /*e*/)
+{
+    close_del_dlg();
+
+    std::vector<ui_alarm_history_key_t> keys;
+    for(const MsgCard *c : g_cards) {
+        if(c->selected && card_selectable(c)) {
+            keys.push_back({ c->code, c->ts_ms });
+        }
+    }
+    if(keys.empty()) {
+        return;
+    }
+    /* 先退出管理态再删：删除会通知观察者排一次异步重建，那时已经是常态 */
+    set_manage_mode(false);
+    const int removed = ui_alarm_history_delete_keys(keys.data(), static_cast<int>(keys.size()));
+    if(removed > 0) {
+        ui_toast_show("Deleted", UI_TOAST_SUCCESS, 1200);
+    } else {
+        ui_toast_show("Delete failed", UI_TOAST_ERROR, 1500);
+    }
+}
+
+/** 批量删除二次确认：与相册页同一副浅色档弹窗（稿 6251:94239），只换了措辞。 */
+void open_batch_del_confirm(int count)
+{
+    if(g_del_dlg || count <= 0) {
+        return;
+    }
+    char title[48];
+    if(count > 1) {
+        std::snprintf(title, sizeof(title), "Delete %d messages?", count);
+    } else {
+        std::snprintf(title, sizeof(title), "%s", "Delete this message?");
+    }
+
+    ui_modal_dialog_cfg_t cfg = ui_modal_dialog_cfg_user(title, USER_DLG_W, true);
+    cfg.light_theme = true;
+    g_del_dlg = ui_modal_dialog_open(lv_layer_top(), &cfg);
+    if(!g_del_dlg) {
+        return;
+    }
+    lv_obj_t *body = ui_user_make_body_label(g_del_dlg->body, "This cannot be undone.");
+    lv_label_set_long_mode(body, LV_LABEL_LONG_MODE_WRAP);
+    lv_obj_set_width(body, LV_PCT(100));
+    lv_obj_set_style_text_align(body, LV_TEXT_ALIGN_CENTER, 0);
+    /* 正文配色与字号同相册页那张：user_light_text 50% / user_font_title()，理由见
+     * page_user_history.cpp 的 open_batch_del_confirm()。 */
+    lv_obj_set_style_text_color(body, user_light_text, 0);
+    lv_obj_set_style_text_opa(body, LV_OPA_50, 0);
+    lv_obj_set_style_text_font(body, user_font_title(), 0);
+
+    ui_user_make_confirm_footer_btn(g_del_dlg->footer, "Cancel", false,
+                                    user_color_panel_alt, true,
+                                    on_batch_del_cancel, nullptr);
+    ui_user_make_confirm_footer_btn(g_del_dlg->footer, "Delete", true,
+                                    user_color_status_err, true,
+                                    on_batch_del_confirm, nullptr);
+}
+
+void on_manage_delete(lv_event_t * /*e*/)
+{
+    const int n = selected_count();
+    if(n <= 0) {
+        return;
+    }
+    open_batch_del_confirm(n);
 }
 
 /* ============================================================================
@@ -1009,38 +1347,10 @@ void drawer_sync(void)
  *  列表构建
  * ========================================================================= */
 
-/**
- * 顶栏右侧那枚 `All read`（稿 6255:95773）：白底卡片钮，不是胶囊。
- *
- * **目前只画不接逻辑**——「进过一次消息页就全部标已读」的现有语义还在
- * page_user_message_refresh() 里，这枚钮的点击语义待产品定，定了再挂回调。
- */
-lv_obj_t *build_all_read_btn(lv_obj_t *parent)
-{
-    lv_obj_t *btn = lv_button_create(parent);
-    lv_obj_remove_style_all(btn);
-    lv_obj_set_size(btn, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
-    lv_obj_set_style_radius(btn, USER_HIST_CARD_RADIUS, 0);
-    lv_obj_set_style_bg_color(btn, user_light_card, 0);
-    lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, 0);
-    /* 稿 0 2 6 rgba(0,0,0,0.04)：LVGL 的 shadow 只有一个「宽度」，取稿的模糊半径 6，
-     * 再按 ofs_y 2 下沉。与卡片同一档投影。 */
-    lv_obj_set_style_shadow_width(btn, 6, 0);
-    lv_obj_set_style_shadow_ofs_y(btn, 2, 0);
-    lv_obj_set_style_shadow_color(btn, lv_color_black(), 0);
-    lv_obj_set_style_shadow_opa(btn, 10, 0);
-    lv_obj_set_style_pad_hor(btn, USER_PAD, 0);        /* 稿 24 */
-    lv_obj_set_style_pad_ver(btn, USER_PAD_SM, 0);     /* 稿 16 */
-    lv_obj_clear_flag(btn, LV_OBJ_FLAG_SCROLLABLE);
-
-    lv_obj_t *lbl = lv_label_create(btn);
-    lv_label_set_text(lbl, "All read");
-    lv_obj_set_style_text_color(lbl, user_light_text, 0);
-    /* 稿 22；与浅色档弹窗页脚钮同档，走 user_font_dlg_btn() */
-    lv_obj_set_style_text_font(lbl, user_font_dlg_btn(), 0);
-    lv_obj_center(lbl);
-    return btn;
-}
+/* 顶栏右侧原先是一枚 `All read`（稿 6255:95773，白底卡片钮），一直只画不接逻辑——
+ * 「进过一次消息页就全部标已读」的语义在 page_user_message_refresh() 里，这枚钮的点击
+ * 语义没定下来。2026-10-10 稿（6357:39342）在同一位置换成了 Manage，见 build_tab_row()。
+ * 白底卡片钮的构造与相册页的 Manage 共用 ui_user_make_card_text_btn()。 */
 
 /**
  * 选中与否只差不透明度，**没有下划线**（稿 6230:89690：选中 #333145 实色 SemiBold、
@@ -1074,6 +1384,7 @@ void on_tab_click(lv_event_t *e)
     g_tab = kTabOrder[idx];
     apply_tab_style();
     drawer_close();
+    set_manage_mode(false);           /* 切 Tab 退出管理态（同相册页） */
     reset_all_cards();                /* 切 Tab 收起没关的左滑 */
     g_visible_limit = kRowsPerPage;   /* 换了一批内容，展开进度不该带过去 */
     /* 换了一批内容，滚动位置没有沿用的意义，回到顶部 */
@@ -1093,7 +1404,8 @@ void make_tab_item(lv_obj_t *parent, int idx)
 }
 
 /**
- * 顶部 Tab 行：左侧 All / Unresolved / Device / System + 右侧一枚 All read。
+ * 顶部 Tab 行：左侧 All / Unresolved / Device / System + 右侧一枚 Manage（管理态换成
+ * Select all / Cancel）。
  *
  * 结构与历史页 `build_tab_row()` 同构。新稿把左右内距统一成了 48（见 content_pad_l），
  * 不再像旧稿那样 Tab 行与卡片列表各缩各的——右侧那套 112/160 是给悬浮翻页钮让位的，
@@ -1119,7 +1431,7 @@ lv_obj_t *build_tab_row(lv_obj_t *parent)
         make_tab_item(row, i);
     }
 
-    /* 弹簧：把 All read 推到行尾 */
+    /* 弹簧：把 Manage / Select all / Cancel 推到行尾 */
     lv_obj_t *spacer = lv_obj_create(row);
     lv_obj_remove_style_all(spacer);
     lv_obj_set_height(spacer, 1);
@@ -1127,7 +1439,14 @@ lv_obj_t *build_tab_row(lv_obj_t *parent)
     lv_obj_set_style_bg_opa(spacer, LV_OPA_TRANSP, 0);
     lv_obj_remove_flag(spacer, LV_OBJ_FLAG_CLICKABLE);
 
-    build_all_read_btn(row);
+    /* 右上那枚 Manage（稿 6357:39342 的 edit-btn）：白底卡片钮，内距 12/24（相册页那枚是
+     * 16/24，两张稿就不一样，各按各的）。管理态换成 Select all / Cancel，写法同相册页。
+     * 行开 OVERFLOW_VISIBLE：钮的投影会伸出 52 的 Tab 行，不开就被行裁掉一截。 */
+    g_btn_manage     = ui_user_make_card_text_btn(row, "Manage", USER_PAD_SM * 3 / 4,
+                                                  on_manage_enter);
+    g_btn_select_all = ui_user_make_tab_text_btn(row, "Select all", on_manage_select_all);
+    g_btn_cancel     = ui_user_make_tab_text_btn(row, "Cancel", on_manage_cancel);
+    lv_obj_add_flag(row, LV_OBJ_FLAG_OVERFLOW_VISIBLE);
     return row;
 }
 
@@ -1199,11 +1518,17 @@ void build_entry(lv_obj_t *parent, const MsgItem &it)
     ctx->code      = it.code;
     ctx->hist_idx  = it.hist_idx;
     ctx->deletable = it.deletable;
+    /* 管理态的删除键：历史条目的报警号 + 触发时刻（下标会随新历史插入整体后移） */
+    if(it.src == ItemSrc::AlarmHistory) {
+        const ui_alarm_history_entry_t *h = ui_alarm_history_at(it.hist_idx);
+        ctx->ts_ms = h ? h->ts_ms : 0;
+    }
+    /* 管理态期间列表照常会重建，勾选按键恢复（见 g_sel_keys） */
+    ctx->selected = g_manage && card_selectable(ctx) && key_selected(ctx->code, ctx->ts_ms);
     g_cards.push_back(ctx);
 
-    /* 整条：卡片 + 垫在它右侧空档里的删除钮。多选态没了，第一格不再有复选框，
-     * 但这层壳还留着——删除钮要浮在卡片之外（稿上钮在卡片右缘再外 32），得有个
-     * 不随卡片平移的父节点兜着。 */
+    /* 整条：管理态复选框 + 卡片 + 垫在卡片右侧空档里的删除钮。删除钮要浮在卡片之外
+     * （稿上钮在卡片右缘再外 32），得有个不随卡片平移的父节点兜着，就是这层壳。 */
     lv_obj_t *wrap = lv_obj_create(parent);
     lv_obj_remove_style_all(wrap);
     lv_obj_set_width(wrap, LV_PCT(100));
@@ -1211,11 +1536,40 @@ void build_entry(lv_obj_t *parent, const MsgItem &it)
     lv_obj_set_flex_flow(wrap, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(wrap, LV_FLEX_ALIGN_START,
                           LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    /* 复选框与卡片的间距；常态复选框藏着、flex 跳过它，这道间距也就不出现 */
+    lv_obj_set_style_pad_column(wrap, USER_PAD_SM, 0);
     lv_obj_set_style_bg_opa(wrap, LV_OPA_TRANSP, 0);
     lv_obj_clear_flag(wrap, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_event_cb(wrap, [](lv_event_t *e) {
         delete static_cast<MsgCard *>(lv_event_get_user_data(e));
     }, LV_EVENT_DELETE, ctx);
+
+    /* 管理态左侧那一格。复选框放卡片左侧，沿用改版前消息页多选态的位置（新稿没画管理态）。
+     * 每张卡都建、常态藏起来；不可删的条目只给同尺寸的透明占位，管理态里卡片照样对齐。 */
+    lv_obj_t *check = lv_obj_create(wrap);
+    lv_obj_remove_style_all(check);
+    lv_obj_set_size(check, USER_HIST_CHECK_SZ, USER_HIST_CHECK_SZ);
+    lv_obj_clear_flag(check, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(check, LV_OBJ_FLAG_HIDDEN);
+    if(card_selectable(ctx)) {
+        /* 24 见方、圆角 8，同相册页那枚（稿 6073:73736）。那枚压在深色缩略图上、描边是白的；
+         * 这里压在浅色页底上，未选中态的描边改用正文色 30%（apply_card_selection），不然看不见。 */
+        lv_obj_set_style_radius(check, USER_HIST_CARD_RADIUS / 2, 0);
+        lv_obj_set_style_border_width(check, 2, 0);
+        lv_obj_set_style_border_color(check, user_light_text, 0);
+        lv_obj_set_style_bg_color(check, user_light_accent, 0);
+        lv_obj_set_ext_click_area(check, USER_PAD_SM);
+        lv_obj_add_flag(check, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_event_cb(check, check_click_cb, LV_EVENT_CLICKED, ctx);
+        lv_obj_t *mark = ui_user_make_icon_img(
+            check, ui_user_pick_icon(ic_hist_check_set, USER_HIST_CHECK_SZ),
+            USER_HIST_CHECK_SZ, user_light_card);
+        lv_obj_center(mark);
+        ctx->check_mark = mark;
+    } else {
+        lv_obj_remove_flag(check, LV_OBJ_FLAG_CLICKABLE);
+    }
+    ctx->check = check;
 
     lv_obj_t *holder = lv_obj_create(wrap);
     lv_obj_remove_style_all(holder);
@@ -1279,6 +1633,10 @@ void build_entry(lv_obj_t *parent, const MsgItem &it)
     lv_obj_set_style_shadow_opa(card, 10, 0);   /* 稿 4% ≈ 10/255 */
     /* 按下压一档灰（不能改 bg_opa：那会让卡片按下时透出下层删除钮） */
     lv_obj_set_style_bg_color(card, user_light_more_bg, LV_STATE_PRESSED);
+    /* 管理态选中环：整圈压在卡内（理由见 kSelRingW），宽度由 apply_card_selection 开关 */
+    lv_obj_set_style_outline_color(card, user_light_accent, 0);
+    lv_obj_set_style_outline_pad(card, -kSelRingW, 0);
+    lv_obj_set_style_outline_width(card, 0, 0);
     lv_obj_set_style_pad_all(card, USER_PAD, 0);
     lv_obj_set_style_pad_column(card, USER_PAD, 0);
     lv_obj_set_flex_flow(card, LV_FLEX_FLOW_ROW);
@@ -1401,7 +1759,8 @@ void build_entry(lv_obj_t *parent, const MsgItem &it)
  * 的高度算出来，再按 `lv_obj_get_scroll_bottom()` 夹一下：删掉末尾几条后列表
  * 变矮，旧的滚动量会越界，直接 scroll_to 会把列表停在空白处。
  */
-void rebuild_list(void)
+/** 按当前 Tab 与 g_visible_limit 把卡片整表重建一遍（rebuild_list 的本体）。 */
+void rebuild_list_cards(void)
 {
     if(!g_list) {
         return;
@@ -1469,6 +1828,16 @@ void rebuild_list(void)
     }
 }
 
+void rebuild_list(void)
+{
+    rebuild_list_cards();
+    /* 新建的卡片复选框都是藏着的、勾选外观也没落：管理态里按当前态补一遍（计数也跟着刷，
+     * 列表变空时删除条要回到 0 selected）。 */
+    if(g_manage) {
+        apply_manage_ui();
+    }
+}
+
 /* ============================================================================
  *  观察者：置脏 + 异步重建（回调栈上可能正拿着将被删除的对象）
  * ========================================================================= */
@@ -1515,6 +1884,16 @@ void page_user_message_refresh(bool /*force*/)
     /* 进过一次这页就算全看过了：清未读、熄侧栏红点 */
     ui_message_mark_all_read();
     g_visible_limit = kRowsPerPage;   /* 每次进页都从最近 10 条重新看 */
+    /* 从首页铃铛面板进来的落在 All Tab 顶部。先滚回顶再重建：rebuild_list() 会沿用
+     * 当前滚动位置。 */
+    if(g_req_all_tab) {
+        g_req_all_tab = false;
+        g_tab = MsgTab::All;
+        apply_tab_style();
+        if(g_list) {
+            lv_obj_scroll_to_y(g_list, 0, LV_ANIM_OFF);
+        }
+    }
     rebuild_list();
 
     /* 撤掉 mark_all_read() 顺手排下的那次异步重建。
@@ -1531,7 +1910,13 @@ void page_user_message_exit(void)
 {
     g_active = false;
     drawer_close();
-    reset_all_cards();   /* 切页收起左滑，回来时是干净的常态 */
+    set_manage_mode(false);   /* 离页退出管理态，回来时是干净的常态 */
+    reset_all_cards();        /* 切页收起左滑 */
+}
+
+void page_user_message_request_all_tab(void)
+{
+    g_req_all_tab = true;
 }
 
 lv_obj_t *page_user_message_create(lv_obj_t *parent)
@@ -1560,7 +1945,9 @@ lv_obj_t *page_user_message_create(lv_obj_t *parent)
      * 出（build_group_title 给的，组与组之间也靠它），两处加起来正好是稿的 y=140。
      * 这里再加一次的话首组会掉到 156。 */
     lv_obj_set_style_pad_top(g_list, chrome_h(), 0);
-    lv_obj_set_style_pad_bottom(g_list, USER_PAD, 0);
+    /* 底部留出删除条的高 + 它与页底的间距（同相册页网格）：管理态下最后一张卡不会被条
+     * 压住，常态下滚到底时也不会落在底边那道渐隐里。 */
+    lv_obj_set_style_pad_bottom(g_list, USER_HIST_SELBAR_H + USER_PAD_LG * 2, 0);
     lv_obj_set_style_pad_row(g_list, USER_PAD_SM, 0);
     lv_obj_set_style_bg_opa(g_list, LV_OPA_TRANSP, 0);
     lv_obj_set_scroll_dir(g_list, LV_DIR_VER);
@@ -1594,6 +1981,11 @@ lv_obj_t *page_user_message_create(lv_obj_t *parent)
     lv_obj_add_flag(g_empty, LV_OBJ_FLAG_FLOATING);
     lv_obj_align(g_empty, LV_ALIGN_CENTER, 0, 0);
     lv_obj_add_flag(g_empty, LV_OBJ_FLAG_HIDDEN);
+
+    /* 底部渐隐与管理态删除条（与相册页共用）。都建在列表与顶栏之后、压在它们之上，
+     * 删除条再压在渐隐之上。 */
+    g_fade   = ui_user_make_bottom_fade(page);
+    g_selbar = ui_user_make_sel_bar(page, on_manage_delete, &g_lbl_sel, &g_btn_del);
 
     ui_message_add_observer(on_store_change);
     ui_alarm_add_observer(on_alarm_change);

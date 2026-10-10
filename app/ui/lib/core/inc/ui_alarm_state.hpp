@@ -147,6 +147,20 @@ const ui_alarm_history_entry_t *ui_alarm_history_at(int idx);
 /** 删除第 idx 条历史（消息页左滑删除），随手落盘。 */
 void ui_alarm_history_delete_at(int idx);
 
+/** 一条历史的稳定标识：报警号 + 触发时刻。下标会随新历史插入整体后移，不能当键。 */
+typedef struct {
+    uint16_t code;
+    int64_t  ts_ms;
+} ui_alarm_history_key_t;
+
+/**
+ * 批量删除历史（消息页管理态的 Delete）：按 code + ts_ms 匹配，命中的全删，**只落盘一次、
+ * 只通知一次观察者**——逐条调 delete_at 会写 N 遍文件、触发 N 轮重建。
+ * 匹配不到的键直接忽略（可能已被别处删掉）。
+ * @return 实际删掉的条数
+ */
+int ui_alarm_history_delete_keys(const ui_alarm_history_key_t *keys, int n);
+
 /** 注册观察者（上限 4 个，重复注册幂等）。 */
 void ui_alarm_add_observer(ui_alarm_observer_t cb);
 

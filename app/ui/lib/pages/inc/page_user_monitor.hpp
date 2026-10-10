@@ -57,6 +57,12 @@ void page_user_monitor_enter_print_result(const control_print_result_t *result);
  * 取件开门流程被取消时用：结果页一直没收起，但滑块停在解锁位，不复位就滑不了第二次。
  */
 void page_user_monitor_reset_result_slide(void);
+/**
+ * 首页 RETRIEVE（稿 6683:34027）的落点：调用方先切到本页，再调这个，直接弹出取件弹窗。
+ * 与本页底部那颗 RETRIEVE 走同一条路——吹粉中照样被 toast 拦下、自检阶段终止照样换文案。
+ * 不在结果态（`phase_finished()` 为假）时什么也不做。
+ */
+void page_user_monitor_request_retrieve(void);
 
 /**
  * 当前结果是否在自检（起印环境检查，Ready 之前）阶段终止：作业还没出光、舱里没有工件。
