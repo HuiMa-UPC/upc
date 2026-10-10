@@ -49,6 +49,9 @@ constexpr float kHeightZHomeMm = 1.0f;
 /** 回零后粗测：逻辑高度 H 大于此值视为有基板（mm）。H 已相对 Z=1 平面，不再减 1。 */
 constexpr float kPlatePresentMinAboveHomeMm = 3.0f;
 
+/** 粗测光路：8 点里至少这么多个看到光斑才通过，少于此数才算光路失败。 */
+constexpr int kHeightOpticalMinSpots = 5;
+
 /** 高度校准回零先相对下降（负向 AXIS_INC），再 Home。打印前测高直接 Home。Z 无绝对编码器。 */
 constexpr float kHeightHomeRetractMm = 20.0f;
 /** 下降行程等待：编码器在动则提前到点，否则超时后仍发 Home。 */

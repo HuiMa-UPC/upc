@@ -728,6 +728,15 @@ void VisualService::run_laser_spot_window()
         last_tried = frame_seq;
         cv::Mat gray(static_cast<int>(height), static_cast<int>(width), CV_8UC1,
                      nv12.data());
+        double min_val = 0.0;
+        double max_val = 0.0;
+        cv::Point max_at;
+        cv::minMaxLoc(gray, &min_val, &max_val, nullptr, &max_at);
+        UPC_LOG_VISUAL_SERVICE(Info,
+            "laser spot frame=%u max=%u at=%d,%d",
+            static_cast<unsigned>(frame_seq),
+            static_cast<unsigned>(max_val),
+            max_at.x, max_at.y);
         const LaserSpot spot = detect_laser_spot(
             gray, "/userdata/visual/plate_height_config.json");
         if(laser_spot_abort_.load()) {

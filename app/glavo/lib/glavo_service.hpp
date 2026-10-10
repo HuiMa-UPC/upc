@@ -360,7 +360,7 @@ private:
      * prepare 会话（本地副本 + 行数缓存）保留，便于重试时跳过复制与扫描。
      */
     void abort_print_start(middleware::PrintStartRejectReason reason, uint8_t detail);
-    /** @brief 粗测没看全 8 个光斑：先推 Critical 告警，再走 abort_print_start。 */
+    /** @brief 粗测看到光斑的点数少于 5：先推 Critical 告警，再走 abort_print_start。 */
     void abort_print_for_optical_path();
     /** @brief 起印前规划本趟实际环境检查步数（跳过的不计）。 */
     void reset_print_prep_plan();
