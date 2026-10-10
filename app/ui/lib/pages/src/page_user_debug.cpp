@@ -10,6 +10,7 @@
 #include "control.hpp"
 #include "ui_message_store.hpp"
 #include "ui_alarm_state.hpp"
+#include "ui_prefs.hpp"
 #include "ui_sys_hud.hpp"
 #include "ui_chroma_green.hpp"
 #include "upc_sys_monitor.hpp"
@@ -1548,7 +1549,7 @@ void on_dbg_toggle(lv_event_t *e)
         case 4: if(on) proxy.send_clean_test_start();          /* 开：启动清粉测试 */
                 else   proxy.send_clean_test_close();          /* 关：中止清粉 A2/42 TLV 0x02 */
                 break;
-        case 5: proxy.send_print_h264_record_set(on);          /* 打印期连续 H264 录像总开关（仅本次运行） */
+        case 5: ui_prefs_set_auto_record(on);                  /* 打印期连续 H264 录像总开关（落盘，= 设置页 Auto Recording） */
                 break;
         case 6: break; /* Clean Video Rec 已移除 */
                 break;
@@ -2457,7 +2458,7 @@ void build_other_switches_column(lv_obj_t *parent)
     /* ---- 录像 / 模拟 ---- */
     lv_obj_t *media = make_section_card(col, "Media & Sim");
     lv_obj_t *rowM = make_switch_grid_row(media);
-    make_dbg_toggle(rowM, "Print H264 Rec", "On", "Off", LV_SYMBOL_PLAY, true,
+    make_dbg_toggle(rowM, "Print H264 Rec", "On", "Off", LV_SYMBOL_PLAY, ui_prefs_auto_record(),
                     5, 0, true, 0, &g_print_h264_btn, &g_print_h264_state_lbl);
     make_dbg_toggle(rowM, "Env Sim", "On", "Off", LV_SYMBOL_REFRESH, false,
                     7, 0, true, 0, &g_env_sim_btn, &g_env_sim_state_lbl);

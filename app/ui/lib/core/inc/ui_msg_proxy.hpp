@@ -48,7 +48,7 @@ using XfrPairPinCb     = std::function<void(const middleware::XfrPairPinPayload&
 using XfrFileReceivedCb = std::function<void(const middleware::XfrFileReceivedPayload&)>;
 using XfrTransferProgressCb = std::function<void(const middleware::XfrTransferProgressPayload&)>;
 using UsbHotplugCb     = std::function<void(const middleware::UsbHotplugPayload&)>;
-/* 设置页存储管理（稿 6251:94362）。后三个的后端**尚未实现**，见
+/* 设置页 Storage（稿 6444:53065 / 6443:52816）。后三个的后端**尚未实现**，见
  * doc/STORAGE_BACKEND_API.md；UI 侧接线已就位，后端一上来就能通。 */
 using StorageUsageCb   = std::function<void(const middleware::StorageUsagePayload&)>;
 using StorageFormatProgressCb =
@@ -234,7 +234,7 @@ public:
     void send_wifi_disconnect(const char* ssid);   /**< 断开当前连接 */
     void send_wifi_info();
 
-    /* ---- 存储管理（设置页，稿 6251:94362）----
+    /* ---- 存储管理（设置页 Storage，稿 6444:53065 / 6443:52816）----
      * 容量那条 media 侧已实现（仅 Internal 卷）；格式化那条**后端未实现**，
      * 发出去暂时没人应答，UI 靠超时兜底。见 doc/STORAGE_BACKEND_API.md。 */
     void send_storage_usage(middleware::StorageVolume volume);
@@ -248,10 +248,14 @@ public:
     void register_xfr_pair_pin(XfrPairPinCb cb);
     void register_xfr_file_received(XfrFileReceivedCb cb);
     void register_xfr_transfer_progress(XfrTransferProgressCb cb);
-    /** GLAVO_USB_Hotplug_Ntf：多路监听（文件页 USB 列表、设置页格式化钮各注册一次，互不覆盖）。 */
+    /** GLAVO_USB_Hotplug_Ntf：多路监听（文件页 USB 列表、设置页外部存储各注册一次，互不覆盖）。 */
     void add_usb_hotplug_listener(UsbHotplugCb cb);
     /** SD 卡挂载变化。**后端未实现**，回调目前永远不会被触发。 */
     void register_sdcard_hotplug(UsbHotplugCb cb);
+    /** 最近一次 USB / SD 热插拔通知报的是否已挂载；没收到过为 false。Glavo 启动时会推一次
+     *  USB 当前态，所以晚于那一刻才建的页面（设置页）也能拿到插着的 U 盘，不必等下一次插拔。 */
+    bool usb_mounted() const { return usb_mounted_; }
+    bool sdcard_mounted() const { return sdcard_mounted_; }
     void register_storage_usage(StorageUsageCb cb);            /**< APP_Storage_Usage_Rsp */
     /** 格式化进度 / 终态。**后端未实现**，两个回调目前都不会被触发。 */
     void register_storage_format_progress(StorageFormatProgressCb cb);
@@ -320,6 +324,8 @@ private:
     XfrTransferProgressCb xfr_transfer_progress_cb_;
     std::vector<UsbHotplugCb> usb_hotplug_cbs_;
     UsbHotplugCb sdcard_hotplug_cb_;
+    bool usb_mounted_ = false;
+    bool sdcard_mounted_ = false;
     StorageUsageCb storage_usage_cb_;
     StorageFormatProgressCb storage_format_progress_cb_;
     StorageFormatResultCb storage_format_result_cb_;

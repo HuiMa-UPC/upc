@@ -302,7 +302,7 @@ scripts/rongsu.sh start   # glavo + rongsu_camera → ui
 | `UI_Debug_Laser_Power_Set_Ntf` | — | UI→Glavo | `DebugLaserPowerPayload` | `send_laser_power_set` | 激光手动功率 0–100 |
 | `UI_Debug_Laser_Power_Reset_Ntf` | — | UI→Glavo | Empty | `send_laser_power_reset` | 取消手动功率、恢复外控 |
 | `UI_Debug_Laser_AlarmReset_Ntf` | — | UI→Glavo | Empty | `send_laser_alarm_reset` | 激光器报警复位（1301） |
-| `UI_Debug_Print_H264_Record_Set_Ntf` | — | UI→Glavo | `DebugOnOffPayload` | `send_print_h264_record_set` | 调试页全局开关：打印期连续 H264 录像（仅本次运行，**默认开**；不影响空闲清粉 H264） |
+| `UI_Debug_Print_H264_Record_Set_Ntf` | — | UI→Glavo | `DebugOnOffPayload` | `send_print_h264_record_set` | 全局开关：打印期连续 H264 录像（不影响空闲清粉 H264）。Glavo 侧仅本次运行、**上电默认开**；UI 的调试页 Print H264 Rec 与设置页 Auto Recording 写同一个落盘值（`ui_prefs` 的 `auto_record`），并在 Glavo 由断到连时补发一次 |
 | `UI_Debug_Print_H264_Record_Get_Ntf` | — | UI→Glavo | Empty | `request_print_h264_record_state` | 查询当前“打印期连续 H264 录像”开关状态 |
 | `UI_Debug_Clean_Record_Set_Ntf` | — | UI→Glavo | `DebugOnOffPayload` | — | **已移除调试钮**；枚举保留勿挪位 |
 | `UI_Debug_Clean_Record_Get_Ntf` | — | UI→Glavo | Empty | — | **已移除调试钮**；枚举保留勿挪位 |

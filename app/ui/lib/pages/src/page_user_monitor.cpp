@@ -16,6 +16,7 @@
 #include "ui_clean_state.hpp"
 #include "ui_message_store.hpp"
 #include "ui_alarm_state.hpp"
+#include "ui_prefs.hpp"
 #include "ui_arc_spinner.hpp"
 #include "control.hpp"
 #include "home_metric_icons.h"
@@ -1378,6 +1379,11 @@ lv_obj_t *btn_icon_img(lv_obj_t *btn)
 /** 圆钮里图标的边长：稿 72 钮配 24 图标，即 USER_METRIC_ICON_SZ 的 3/4（三档 36/24/19）。 */
 int32_t round_icon_sz(void) { return USER_METRIC_ICON_SZ * 3 / 4; }
 
+/** 风扇 / Inner Door 电源钮里图标的边长：稿 72 钮配 28 图标（墨迹 22.5×26，比 24 组高一截），
+ *  即 USER_METRIC_ICON_SZ 的 7/8（三档 42/28/22）。必须与生成脚本的 MON_SIZES_28 逐档相等：
+ *  按 24 要图会挑中 22 那张再放大，点采样把细描边采得粗细不均。 */
+int32_t power_icon_sz(void) { return USER_METRIC_ICON_SZ * 7 / 8; }
+
 /** 圆钮亮灭两态：亮 = 蓝底白图标，灭 = 淡墨底深图标。Inner Door 与风扇电源共用。 */
 void set_round_btn_lit(lv_obj_t *btn, bool on)
 {
@@ -1558,8 +1564,8 @@ bool plate_z_locked(void)
 
 /**
  * Plate 卡按钮的可点与外观。锁住（plate_z_locked()）与本页其余锁住的控件一样整体半透明；
- * 到位置灰按稿只把内容压淡、底色不动（稿 6534:35742 上升钮 stroke-opacity 0.3）。两种都摘掉
- * CLICKABLE，按压落到卡上照样沿 scroll chain 滚页面。
+ * 到位置灰的配色由 paint_plate_btn() / paint_plate_flat_btn() 按稿 6625:2585 各自落。两种都
+ * 摘掉 CLICKABLE，按压落到卡上照样沿 scroll chain 滚页面。
  */
 void set_plate_btn_state(lv_obj_t *btn, bool locked, bool greyed)
 {
@@ -1569,8 +1575,9 @@ void set_plate_btn_state(lv_obj_t *btn, bool locked, bool greyed)
     }
 }
 
-/** Top / Bottom 的配色：高亮 = kPlateOn 底 + 白色内容；常态 = 墨色 5% 底 + 墨色 50% 内容
- *  （稿 #F5F4F5 / #9494A2），置灰时内容再压到 20%。 */
+/** Top / Bottom 的配色：高亮 = kPlateOn 底 + 白色内容；常态 = 墨色 5% 底（稿 #F5F4F5）+
+ *  墨色全色内容；到位置灰时图标与文字压到 30%、底色不动（稿 6625:2585）。上一版稿常态内容
+ *  是 #9494A2（墨色 50%），新稿改成了全墨色。 */
 void paint_plate_btn(lv_obj_t *btn, bool on, bool locked, bool greyed)
 {
     if(!btn) {
@@ -1582,7 +1589,7 @@ void paint_plate_btn(lv_obj_t *btn, bool on, bool locked, bool greyed)
     lv_obj_set_style_bg_color(btn, bg, LV_STATE_PRESSED);
     lv_obj_set_style_bg_opa(btn, on ? LV_OPA_80 : 40, LV_STATE_PRESSED);
     const lv_color_t fg     = on ? lv_color_white() : user_light_text;
-    const lv_opa_t   fg_opa = on ? LV_OPA_COVER : (greyed ? LV_OPA_20 : LV_OPA_50);
+    const lv_opa_t   fg_opa = (on || !greyed) ? LV_OPA_COVER : LV_OPA_30;
     if(lv_obj_t *img = btn_icon_img(btn)) {
         lv_obj_set_style_image_recolor(img, fg, 0);
         lv_obj_set_style_image_opa(img, fg_opa, 0);
@@ -1594,9 +1601,14 @@ void paint_plate_btn(lv_obj_t *btn, bool on, bool locked, bool greyed)
     set_plate_btn_state(btn, locked, greyed);
 }
 
-/** 上升 / 下降 / 复位三颗浅底钮：置灰时图标压到墨色 30%。 */
+/** 上升 / 下降 / 复位三颗浅底钮：到位置灰时整颗压到 30%——稿 6625:2585 把底色与箭头包在同一个
+ *  opacity 0.3 里，底色 5% 因此淡到约 1.5%（上一版稿只淡箭头）。不用整体 opa：锁住时
+ *  set_btn_enabled() 要用它压半透明。 */
 void paint_plate_flat_btn(lv_obj_t *btn, bool locked, bool greyed)
 {
+    if(btn) {
+        lv_obj_set_style_bg_opa(btn, greyed ? 4 : 13, 0);
+    }
     if(lv_obj_t *img = btn_icon_img(btn)) {
         lv_obj_set_style_image_opa(img, greyed ? LV_OPA_30 : LV_OPA_COVER, 0);
     }
@@ -2087,9 +2099,10 @@ lv_obj_t *make_plate_btn(lv_obj_t *parent, const lv_image_dsc_t *const *icon,
 
 /** Manual 里那种 72 圆钮（S 轴的 −/+/复位、风扇与 Inner Door 的电源、回粉电机三颗）。
  *  新稿从 64 改成 72，与摄像头浮钮同尺寸，直接用 USER_LIGHT_BTN_SZ（三档 108/72/58）。
- *  cb 为空时不挂 CLICKED：S 轴 −/+ 由调用方另挂 attach_jog_events()。ud 原样传给 cb。 */
+ *  cb 为空时不挂 CLICKED：S 轴 −/+ 由调用方另挂 attach_jog_events()。ud 原样传给 cb。
+ *  icon_sz 为 0 取 round_icon_sz()（24 组）；电源钮传 power_icon_sz()。 */
 lv_obj_t *make_round_btn(lv_obj_t *parent, const lv_image_dsc_t *const *icon,
-                         lv_event_cb_t cb, void *ud = nullptr)
+                         lv_event_cb_t cb, void *ud = nullptr, int32_t icon_sz = 0)
 {
     lv_obj_t *b = lv_button_create(parent);
     lv_obj_remove_style_all(b);
@@ -2102,7 +2115,7 @@ lv_obj_t *make_round_btn(lv_obj_t *parent, const lv_image_dsc_t *const *icon,
     if(cb) {
         lv_obj_add_event_cb(b, cb, LV_EVENT_CLICKED, ud);
     }
-    lv_obj_center(make_icon(b, icon, round_icon_sz(), user_light_text));
+    lv_obj_center(make_icon(b, icon, icon_sz > 0 ? icon_sz : round_icon_sz(), user_light_text));
     return b;
 }
 
@@ -2310,7 +2323,7 @@ void build_fan_card(lv_obj_t *parent)
     lv_label_set_text(g_fan_state, "--");
     lv_obj_set_style_text_font(g_fan_state, user_font_body(), 0);   /* 稿 24 */
     lv_obj_set_style_text_color(g_fan_state, user_light_text, 0);
-    g_fan_btn = make_round_btn(srow, ic_power_set, on_fan_power);
+    g_fan_btn = make_round_btn(srow, ic_power_set, on_fan_power, nullptr, power_icon_sz());
 
     make_divider(c);
 
@@ -2443,7 +2456,7 @@ void build_inner_door_card(lv_obj_t *parent)
     lv_obj_set_style_text_color(dl, user_light_text, 0);
     lv_obj_set_style_text_font(dl, user_font_title(), 0);   /* 与其余卡的表头同号 */
 
-    g_door_btn = make_round_btn(c3, ic_power_set, on_inner_door);
+    g_door_btn = make_round_btn(c3, ic_power_set, on_inner_door, nullptr, power_icon_sz());
 }
 
 /** 滚动区每移动一步都记下时刻：手指拖动与松手后的惯性阶段都会发 LV_EVENT_SCROLL。 */
@@ -2741,8 +2754,8 @@ lv_obj_t *build_bottom(lv_obj_t *parent)
     lv_obj_set_style_text_color(pl, lv_color_white(), 0);
     lv_obj_set_style_text_font(pl, user_font_title(), 0);
 
-    /* 暂停/恢复：稿上图标是两条竖杠（运行中）与一枚实心三角（暂停中），
-     * 都是纯几何，直接用 LVGL 图元画，不出图标资源。 */
+    /* 暂停/恢复：稿上图标是两条竖杠（运行中，6338:27240）与一枚实心圆角三角（暂停中，6345:33810）。
+     * 竖杠是纯几何，直接用 LVGL 图元画；三角带圆角，走生成的 ic_play_solid_set。 */
     g_btn_pause = lv_button_create(row);
     lv_obj_remove_style_all(g_btn_pause);
     lv_obj_set_flex_grow(g_btn_pause, 1);
@@ -2758,7 +2771,7 @@ lv_obj_t *build_bottom(lv_obj_t *parent)
     lv_obj_remove_style_all(g_pause_bars);
     lv_obj_set_size(g_pause_bars, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
     lv_obj_set_flex_flow(g_pause_bars, LV_FLEX_FLOW_ROW);
-    lv_obj_set_style_pad_column(g_pause_bars, USER_PAD_SM / 2, 0);   /* 稿 9 */
+    lv_obj_set_style_pad_column(g_pause_bars, USER_PAD_SM * 9 / 16, 0);   /* 稿 9 */
     lv_obj_set_style_bg_opa(g_pause_bars, LV_OPA_TRANSP, 0);
     lv_obj_center(g_pause_bars);
     for(int i = 0; i < 2; i++) {
@@ -2769,9 +2782,10 @@ lv_obj_t *build_bottom(lv_obj_t *parent)
         lv_obj_set_style_bg_color(b, lv_color_white(), 0);
         lv_obj_set_style_bg_opa(b, LV_OPA_COVER, 0);
     }
-    /* 恢复态那枚实心三角沿用手维护的单档 ic_play（不是多档 set，没有 _set 变体）。 */
-    g_pause_tri = ui_user_make_icon_img(g_btn_pause, &ic_play,
-                                        USER_METRIC_ICON_SZ * 3 / 4, lv_color_white());
+    /* 恢复态那枚实心三角：边长须落在 24 组的原生档（36/24/19）上才 1:1 不缩放，1280 档墨迹
+     * 16.9×23.3。稿上三角比按钮心右偏 1.43 的视觉居中已烤进位图，这里直接居中、别再加偏移。 */
+    g_pause_tri = make_icon(g_btn_pause, ic_play_solid_set, USER_METRIC_ICON_SZ * 3 / 4,
+                            lv_color_white());
     lv_obj_center(g_pause_tri);
     lv_obj_add_flag(g_pause_tri, LV_OBJ_FLAG_HIDDEN);
 
@@ -3819,8 +3833,9 @@ void page_user_monitor_enter_print_result(const control_print_result_t *result)
     apply_phase();
 
     /* Prepare 阶段终止：作业未真正开扫，不自动清粉。
-     * Complete / 打印中终止仍自动开一轮（带延时抽帧）；钮可再点停/再开。 */
-    if(aborted_during_prep) {
+     * Complete / 打印中终止仍自动开一轮（带延时抽帧）；钮可再点停/再开。
+     * 设置页 Preferences 关了 Auto Clean After Print 也不自动开，钮照常可手动吹。 */
+    if(aborted_during_prep || !ui_prefs_auto_clean()) {
         return;
     }
     g_purify_busy = true;
