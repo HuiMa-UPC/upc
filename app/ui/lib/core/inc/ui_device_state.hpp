@@ -26,8 +26,8 @@ extern "C" {
 /* 前四项与后端 EnvSnapshotPayload.status 数值对应（见 .cpp 里的强转），
  * 其后各项仅由前端在打印态/结果态本地置位，后端不会推送。 */
 typedef enum {
-    UI_DEVICE_STATUS_IDLE = 0,
-    UI_DEVICE_STATUS_READY,
+    UI_DEVICE_STATUS_IDLE = 0,         /**< 待机（开机初值；显示 Stand-by，状态点绿） */
+    UI_DEVICE_STATUS_READY,            /**< 打完一单回到待机（显示同 IDLE） */
     UI_DEVICE_STATUS_PRINTING,
     UI_DEVICE_STATUS_ERROR,
     UI_DEVICE_STATUS_PRINT_DONE,       /**< 打印完成（状态点绿） */

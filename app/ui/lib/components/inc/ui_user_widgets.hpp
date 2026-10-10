@@ -161,12 +161,6 @@ lv_obj_t *ui_user_make_status_dot(lv_obj_t *parent, bool ready);
 lv_obj_t *ui_user_make_supply_indicator(lv_obj_t *parent, const char *name,
                                         bool ready);
 
-/** 设置页列表行：左标题 + 右可选按钮。
- *  **浅色档专用**——设置页整屏已按新稿翻浅，这里的配色跟着换了，目前也只有它在用。
- *  要给深色页面复用的话得先把颜色参数化。 */
-lv_obj_t *ui_user_make_setting_row(lv_obj_t *parent, const char *label,
-                                   const char *btn_text, lv_event_cb_t btn_cb);
-
 /**
  * 分段选择控件（如 Wi-Fi 开/关、移动步长 0.01/0.1/1/10）。
  * 暗色胶囊容器内水平排布 count 段，选中段以浅白填充高亮。

@@ -8,14 +8,21 @@
 extern "C" {
 #endif
 
-extern const lv_image_dsc_t settings_icon_account;
-extern const lv_image_dsc_t settings_icon_network;
-extern const lv_image_dsc_t settings_icon_display;
+extern const lv_image_dsc_t settings_icon_device;
+extern const lv_image_dsc_t settings_icon_nitrogen;
+extern const lv_image_dsc_t settings_icon_prefs;
 extern const lv_image_dsc_t settings_icon_storage;
-extern const lv_image_dsc_t settings_icon_print;
 extern const lv_image_dsc_t settings_icon_privacy;
+extern const lv_image_dsc_t settings_icon_adv_print;
 extern const lv_image_dsc_t settings_icon_about;
 extern const lv_image_dsc_t settings_icon_debug;
+extern const lv_image_dsc_t settings_icon_sun_small;
+extern const lv_image_dsc_t settings_icon_sun_large;
+extern const lv_image_dsc_t settings_icon_wifi;
+extern const lv_image_dsc_t settings_icon_chev_left;
+extern const lv_image_dsc_t settings_icon_chev_right;
+extern const lv_image_dsc_t settings_icon_check;
+extern const lv_image_dsc_t settings_icon_check_sm;
 
 #ifdef __cplusplus
 }

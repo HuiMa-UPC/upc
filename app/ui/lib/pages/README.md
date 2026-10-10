@@ -8,7 +8,7 @@
 |------|------|
 | `page_user_home.*` | 首页：设备图、问候语、HOME 空气质量卡 + 四宫格、左下 PRINT、右下开门滑块 |
 | `page_user_monitor.*` | 监控 Tab：左摄像头 + 右栏三 Tab（Job / Status / Manual）+ 全屏切换。打印态界面在这里（改版前在首页浮层） |
-| `page_user_settings.*` | 设置：8 项左导航 + 右栏白卡（网络 / 显示与亮度 / 存储 / 关于 / 调试入口） |
+| `page_user_settings.*` | 设置：左导航（设备设置 / 偏好 / 制氮机 / 存储 / 隐私 / Advanced Print / 关于 / 解锁后的 Debug）+ 右栏「标题 + 副标题 + 行卡片」；设备设置下挂账号 / Wi-Fi / 显示与语言子页 |
 | `page_user_files.*` | 选文件：本机/USB 页签 + 文件列表 + 右栏预览与确认打印·删除。只做视图，数据与打印流程在 `core/control.*` |
 | `page_user_history.*` | 历史 Tab：三 Tab（只有 Print History 有数据）+ Storage 容量条与告警横幅 + 日期分组卡片 + 管理态多选批量删除 + 左滑删除 + 空态 |
 | `page_user_message.*` | 消息 Tab（浅色档）：四 Tab（含临时的 Unresolved，按到达序汇总未处理报警）+ All read 浮层顶栏 + 日期分组混排列表（MCU 报警当前/历史 + 设备事件）+ 底部 Load More 分页 + 左滑删除（仅历史/已解除）+ 右侧 632 详情抽屉（Reset 三态）；进页即把消息中心全部标已读、熄侧栏红点 |

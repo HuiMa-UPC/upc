@@ -482,7 +482,7 @@ enum class MsgType : uint32_t {
     UI_Debug_Laser_Power_Set_Ntf,   /**< DebugLaserPowerPayload：激光手动功率 */
     UI_Debug_Laser_Power_Reset_Ntf, /**< Empty：取消手动功率，恢复外控 */
     UI_Debug_Laser_AlarmReset_Ntf,  /**< Empty：激光器报警复位（固定 1301） */
-    UI_Debug_Print_H264_Record_Set_Ntf, /**< DebugOnOffPayload：打印期连续 H264 录像开关（仅本次运行） */
+    UI_Debug_Print_H264_Record_Set_Ntf, /**< DebugOnOffPayload：打印期连续 H264 录像开关（Glavo 侧仅本次运行；UI 落盘并在 Glavo 连上时补发） */
     UI_Debug_Print_H264_Record_Get_Ntf, /**< Empty：查询当前打印期连续 H264 录像开关状态 */
     UI_Debug_Clean_Record_Set_Ntf,      /**< 已移除调试钮；保留枚举勿挪位 */
     UI_Debug_Clean_Record_Get_Ntf,      /**< 已移除调试钮；保留枚举勿挪位 */

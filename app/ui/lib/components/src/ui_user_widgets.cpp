@@ -452,51 +452,6 @@ lv_obj_t *ui_user_make_supply_indicator(lv_obj_t *parent, const char *name,
 }
 
 
-lv_obj_t *ui_user_make_setting_row(lv_obj_t *parent, const char *label,
-                                   const char *btn_text, lv_event_cb_t btn_cb)
-{
-    lv_obj_t *row = lv_obj_create(parent);
-    lv_obj_remove_style_all(row);
-    lv_obj_set_width(row, LV_PCT(100));
-    lv_obj_set_height(row, LV_SIZE_CONTENT);
-    lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(row, LV_FLEX_ALIGN_SPACE_BETWEEN,
-                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_ver(row, USER_PAD_SM, 0);
-    lv_obj_set_style_pad_hor(row, USER_PAD_SM, 0);
-    lv_obj_set_style_border_width(row, 0, 0);
-    lv_obj_set_style_border_color(row, user_light_divider, 0);
-    lv_obj_set_style_border_side(row, LV_BORDER_SIDE_BOTTOM, 0);
-    lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, 0);
-
-    lv_obj_t *lbl = lv_label_create(row);
-    lv_label_set_text(lbl, label ? label : "");
-    lv_obj_set_style_text_color(lbl, user_light_text, 0);
-    lv_obj_set_style_text_font(lbl, user_font_title(), 0);
-
-    if(btn_text && btn_cb) {
-        /* 深描边幽灵钮：白底卡上用主文字色描边，不能用 user_style_btn_ghost()
-         * ——那个是深色档的白描边白字，翻浅之后整枚看不见。 */
-        lv_obj_t *btn = lv_button_create(row);
-        lv_obj_remove_style_all(btn);
-        lv_obj_set_size(btn, USER_BTN_PRIMARY_W, USER_BTN_PRIMARY_H);
-        lv_obj_set_style_radius(btn, USER_BTN_RADIUS, 0);
-        lv_obj_set_style_bg_opa(btn, LV_OPA_TRANSP, 0);
-        lv_obj_set_style_border_width(btn, 1, 0);
-        lv_obj_set_style_border_color(btn, user_light_text, 0);
-        lv_obj_set_style_border_opa(btn, LV_OPA_40, 0);
-        lv_obj_set_style_bg_color(btn, user_light_more_bg, LV_STATE_PRESSED);
-        lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, LV_STATE_PRESSED);
-        lv_obj_add_event_cb(btn, btn_cb, LV_EVENT_CLICKED, nullptr);
-        lv_obj_t *btn_lbl = lv_label_create(btn);
-        lv_label_set_text(btn_lbl, btn_text);
-        lv_obj_set_style_text_color(btn_lbl, user_light_text, 0);
-        lv_obj_set_style_text_font(btn_lbl, user_font_text(), 0);
-        lv_obj_center(btn_lbl);
-    }
-    return row;
-}
-
 /* ---------------------------------------------------------------------------
  *  分段选择控件
  *  选中态完全由各段按钮的 LV_STATE_CHECKED 样式驱动，切换时只改 state，

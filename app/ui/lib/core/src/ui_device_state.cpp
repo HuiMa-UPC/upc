@@ -137,7 +137,6 @@ void ui_device_state_add_observer(ui_device_state_observer_t cb)
 const char *ui_device_status_text(ui_device_status_t s)
 {
     switch(s) {
-    case UI_DEVICE_STATUS_READY:    return "Ready";
     case UI_DEVICE_STATUS_PRINTING: return "Printing";
     case UI_DEVICE_STATUS_ERROR:    return "Error";
     case UI_DEVICE_STATUS_PRINT_DONE:       return "Print Complete";
@@ -145,8 +144,10 @@ const char *ui_device_status_text(ui_device_status_t s)
     case UI_DEVICE_STATUS_PAUSED:           return "Paused";
     case UI_DEVICE_STATUS_PURIFYING:        return "Air Purifying";
     case UI_DEVICE_STATUS_PURIFY_DONE:      return "Purify Complete";
+    /* 待机：首页稿 6230:89954 写 Stand-by。开机是 IDLE、打完一单回来是 READY，界面上不区分 */
+    case UI_DEVICE_STATUS_READY:
     case UI_DEVICE_STATUS_IDLE:
-    default:                        return "Idle";
+    default:                        return "Stand-by";
     }
 }
 
@@ -159,14 +160,15 @@ lv_color_t ui_device_status_color(ui_device_status_t s)
     switch(s) {
     case UI_DEVICE_STATUS_PRINTING: return user_light_accent;
     case UI_DEVICE_STATUS_ERROR:    return ui_color_danger;
-    case UI_DEVICE_STATUS_READY:    return user_light_ok;
     case UI_DEVICE_STATUS_PRINT_DONE:       return user_light_ok;
     case UI_DEVICE_STATUS_PRINT_TERMINATED: return user_color_status_err;
     /* 暂停与吹粉都属于"设备还在这单活儿里"，跟 Printing 同用主色蓝 */
     case UI_DEVICE_STATUS_PAUSED:
     case UI_DEVICE_STATUS_PURIFYING:
     case UI_DEVICE_STATUS_PURIFY_DONE:      return user_light_accent;
+    /* 待机（IDLE / READY）一律绿：稿上 Stand-by 的点与字都是 #00C74E */
+    case UI_DEVICE_STATUS_READY:
     case UI_DEVICE_STATUS_IDLE:
-    default:                        return user_light_icon_off;
+    default:                        return user_light_ok;
     }
 }

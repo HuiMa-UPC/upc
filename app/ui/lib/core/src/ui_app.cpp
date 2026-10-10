@@ -26,6 +26,7 @@
 #include "ui_alarm_state.hpp"
 #include "ui_notice_stack.hpp"
 #include "ui_clean_state.hpp"
+#include "ui_prefs.hpp"
 #include "ui_modal_dialog.hpp"
 #include "ui_user_widgets.hpp"
 #include "ui_feedback.hpp"
@@ -342,6 +343,9 @@ void app_init(lv_obj_t* screen) {
     /* 清粉回执：接管两个单槽 Proxy 回调，再按发起方扇出给首页结果页与控制页。
      * 两个页面都在 on_create 里注册观察者，所以这里只要赶在建页之前。 */
     ui_clean_state_init();
+
+    /* 设置页偏好开关的落盘值；自动录像要在 Glavo 可达时补发，所以在 DebugMsgProxy 之后 */
+    ui_prefs_init();
 
     PageManager::instance().init(screen);
 
