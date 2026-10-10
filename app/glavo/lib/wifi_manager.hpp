@@ -12,8 +12,10 @@
  * wpa_supplicant 在开启时自动重连（依赖 SAVE_CONFIG 持久化 + update_config=1）。
  * 可用环境变量 UPC_WIFI_IFACE（默认 wlan0）、UPC_WPA_CTRL_DIR（默认 /var/run/wpa_supplicant）覆盖。
  *
- * 线程模型：一个后台线程，命令队列 + 周期轮询（空闲 3s；扫描/连接/等 IP 期间 400ms）。state/list 回调在该线程
- * 触发，内部只做 publish（MsgPort::publish_async 线程安全）。
+ * 线程模型：一个后台线程，命令队列 + 周期轮询（空闲 3s；扫描/连接/等 IP/断线确认期间 400ms）。
+ * 已连接后，wpa_state 短暂离开 COMPLETED 或 STATUS 偶发读失败会先按住上一份快照，连续约 3 秒
+ * 才向 UI 报断开；重新 COMPLETED 则立即报已连接。用户主动断开/关 WiFi 不走这段保持。
+ * state/list 回调在该线程触发，内部只做 publish（MsgPort::publish_async 线程安全）。
  */
 
 #include <cstdint>

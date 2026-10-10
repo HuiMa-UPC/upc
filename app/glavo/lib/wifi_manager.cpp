@@ -7,8 +7,9 @@
  * /var/run/wpa_supplicant/<iface> 控制 socket 收发命令。IP 获取默认交给系统
  * DHCP 客户端（如 dhcpcd）；当系统未接管时回退到 udhcpc。
  *
- * 线程模型：一个后台线程，命令队列 + 周期轮询（空闲 3s，扫描/连接/等 IP 期间 400ms）。命令由公开接口投递，
+ * 线程模型：一个后台线程，命令队列 + 周期轮询（空闲 3s；扫描/连接/等 IP/断线确认期间 400ms）。
  * 轮询里读 STATUS/SIGNAL_POLL/SCAN_RESULTS 并按需回调（state 变化才推、扫描列表变化才推）。
+ * 已连接后单次非 COMPLETED 或 STATUS 读失败不立刻报断开，避免扫描/漫游时界面闪断。
  * 回调在该线程触发，内部只做 publish（MsgPort::publish_async 线程安全）。
  */
 
@@ -41,11 +42,12 @@
  
  /* 轮询节奏：空闲用慢轮询省 CPU；扫描未出结果 / 连接中 / 已连上但还没拿到 IP 时
   * 切快轮询，否则这些"正在变化"的状态最坏要等一整个慢周期才到 UI。 */
- constexpr int kPollIdleMs     = 3000;
- constexpr int kPollBusyMs     = 400;
- constexpr int kScanWaitMs     = 8000;    /**< 等 wpa_supplicant 出扫描结果的上限 */
- constexpr int kStateRepushMs  = 15000;   /**< 状态心跳：无变化也重推一次，兜住丢包 */
- constexpr int kDhcpTimeoutSec = 8;
+constexpr int kPollIdleMs        = 3000;
+constexpr int kPollBusyMs        = 400;
+constexpr int kScanWaitMs        = 8000;  /**< 等 wpa_supplicant 出扫描结果的上限 */
+constexpr int kStateRepushMs     = 15000; /**< 状态心跳：无变化也重推一次，兜住丢包 */
+constexpr int kDhcpTimeoutSec    = 8;
+constexpr int kDisconnectHoldMs  = 3000;  /**< 已连上后，非 COMPLETED / 读失败持续这么久才报断开 */
  
  const char* wifi_iface()
  {
@@ -196,6 +198,15 @@ bool dhcpcd_running()
      bool        ctrl_fresh     = false;   /**< 控制连接刚建立，需补一次扫描 */
      bool        scan_pending   = false;   /**< SCAN 已下发，结果还没出来 */
      bool        waiting_for_ip = false;   /**< 已连上但 IPv4 还没到 */
+     /* 断线确认：已向 UI 报过已连接后，短暂掉线先沿用上一份快照。仅 worker 线程访问。 */
+     bool        link_up            = false;
+     bool        disconnect_armed   = false;
+     bool        user_drop          = false; /**< 用户主动断开/关 WiFi，残留 COMPLETED 不再画成已连接 */
+     std::string held_ssid;
+     std::string held_ip;
+     int         held_bars = 0;
+     std::chrono::steady_clock::time_point disconnect_since{};
+     std::chrono::steady_clock::time_point user_drop_since{};
      std::chrono::steady_clock::time_point scan_deadline{};
      std::chrono::steady_clock::time_point last_state_push{};
     bool        logged_system_dhcp = false;
@@ -222,6 +233,12 @@ bool dhcpcd_running()
  
      void poll_once();
      int  poll_interval_ms() const;
+     void copy_held(WifiSnapshot& s) const;
+     void confirm_link_down();
+     void note_user_drop();
+     void hold_on_status_lost(WifiSnapshot& s);
+     void hold_on_not_associated(WifiSnapshot& s, const std::string& wpa_state);
+     void apply_associated(WifiSnapshot& s, const std::string& ssid);
      void start_scan();
      void handle_cmd(const Command& c);
      void do_connect(const std::string& ssid, const std::string& pw);
@@ -241,10 +258,10 @@ bool dhcpcd_running()
      }
  };
  
- /* 有事在办（扫描/连接/等 IP）时用快轮询，其余时间慢轮询。 */
+ /* 有事在办（扫描/连接/等 IP/断线确认）时用快轮询，其余时间慢轮询。 */
  int WifiManager::Impl::poll_interval_ms() const
  {
-     const bool busy = scan_pending || connecting || waiting_for_ip;
+     const bool busy = scan_pending || connecting || waiting_for_ip || disconnect_armed;
      return busy ? kPollBusyMs : kPollIdleMs;
  }
  
@@ -306,8 +323,12 @@ bool dhcpcd_running()
      char buf[8192];
      size_t len = sizeof(buf) - 1;
      const int r = wpa_ctrl_request(ctrl, cmd, std::strlen(cmd), buf, &len, nullptr);
+     if(r == -2) {
+         /* 超时（wpa_ctrl_request 约定返回 -2）：socket 仍可用，不当成掉线。 */
+         return false;
+     }
      if(r < 0) {
-         /* 连接断了：关闭以便下次重开 */
+         /* send/recv 失败：关掉以便下次重开。是否报断开由 poll 的 3 秒确认决定。 */
          wpa_ctrl_close(ctrl);
          ctrl = nullptr;
          return false;
@@ -331,12 +352,14 @@ bool dhcpcd_running()
      case CmdType::Enable:
          enabled = c.flag;
          if(enabled) {
+             user_drop = false;
              request_ok("ENABLE_NETWORK all");
              request_ok("RECONNECT");
              start_scan();
          } else {
              request_ok("DISCONNECT");
              scan_pending = false;   /* 关 WiFi 后不再等扫描结果 */
+             note_user_drop();
          }
          force_state_push = true;
          break;
@@ -347,7 +370,10 @@ bool dhcpcd_running()
          do_connect(c.ssid, c.pw);
          break;
      case CmdType::Disconnect:
-         request_ok("DISCONNECT");
+         if(request_ok("DISCONNECT")) {
+             note_user_drop();
+             force_state_push = true;
+         }
          break;
      case CmdType::Forget: {
          const int id = find_network_id(c.ssid);
@@ -470,68 +496,200 @@ bool dhcpcd_running()
     }
  }
  
+ void WifiManager::Impl::copy_held(WifiSnapshot& s) const
+ {
+     s.connected   = true;
+     s.ssid        = held_ssid;
+     s.ip          = held_ip;
+     s.signal_bars = held_bars;
+ }
+
+ void WifiManager::Impl::confirm_link_down()
+ {
+     if(link_up || disconnect_armed) {
+         UPC_LOG_GLAVO_SERVICE(Info, "wifi: link down confirmed");
+     }
+     link_up          = false;
+     disconnect_armed = false;
+     held_ssid.clear();
+     held_ip.clear();
+     held_bars = 0;
+     dhcp_done_ssid.clear();
+ }
+
+ void WifiManager::Impl::note_user_drop()
+ {
+     user_drop       = true;
+     user_drop_since = std::chrono::steady_clock::now();
+     confirm_link_down();
+ }
+
+ /** 控制口暂时读不到。已连上时先沿用上一份快照，持续 kDisconnectHoldMs 才确认断开。 */
+ void WifiManager::Impl::hold_on_status_lost(WifiSnapshot& s)
+ {
+     if(!link_up) {
+         s.connected = false;
+         return;
+     }
+     const auto now = std::chrono::steady_clock::now();
+     if(!disconnect_armed) {
+         disconnect_armed = true;
+         disconnect_since = now;
+         UPC_LOG_GLAVO_SERVICE(Info, "wifi: status read failed, hold connected");
+     }
+     if(now - disconnect_since < std::chrono::milliseconds(kDisconnectHoldMs)) {
+         copy_held(s);
+         return;
+     }
+     confirm_link_down();
+     s.connected = false;
+ }
+
+ /**
+  * STATUS 读到了，但还不是 COMPLETED。从未连上则立即断开；
+  * 已经连上则按住 kDisconnectHoldMs，扫描/漫游的短暂离线不刷界面。
+  */
+ void WifiManager::Impl::hold_on_not_associated(WifiSnapshot& s,
+                                               const std::string& wpa_state)
+ {
+     if(!link_up) {
+         disconnect_armed = false;
+         s.connected = false;
+         dhcp_done_ssid.clear();
+         return;
+     }
+     const auto now = std::chrono::steady_clock::now();
+     if(!disconnect_armed) {
+         disconnect_armed = true;
+         disconnect_since = now;
+         UPC_LOG_GLAVO_SERVICE(Info,
+             "wifi: wpa_state=%s, hold connected",
+             wpa_state.empty() ? "-" : wpa_state.c_str());
+     }
+     if(now - disconnect_since < std::chrono::milliseconds(kDisconnectHoldMs)) {
+         copy_held(s);
+         return;
+     }
+     confirm_link_down();
+     s.connected = false;
+ }
+
+ void WifiManager::Impl::apply_associated(WifiSnapshot& s, const std::string& ssid)
+ {
+     disconnect_armed = false;
+     link_up          = true;
+     s.connected        = true;
+     s.ssid             = ssid;
+
+     std::string sp;
+     if(request("SIGNAL_POLL", sp)) {
+         const std::string rssi = kv_get(sp, "RSSI");
+         if(!rssi.empty()) {
+             s.signal_bars = dbm_to_bars(std::atoi(rssi.c_str()));
+         } else if(held_ssid == ssid) {
+             s.signal_bars = held_bars;
+         }
+     } else if(held_ssid == ssid) {
+         /* 信号读失败不算掉线，沿用上一格，避免 0 格来回推。 */
+         s.signal_bars = held_bars;
+     }
+
+     /* 只在 SSID 变化时重新 DHCP。断线确认前不会清 dhcp_done_ssid，
+      * 扫描/漫游抖动就不会 ip addr flush。 */
+     if(dhcp_done_ssid != s.ssid) {
+         run_dhcp();
+         dhcp_done_ssid = s.ssid;
+     }
+     s.ip = iface_ipv4();
+     if(s.ip.empty() && held_ssid == s.ssid && dhcp_done_ssid == s.ssid) {
+         s.ip = held_ip;
+     }
+     held_ssid = s.ssid;
+     held_ip   = s.ip;
+     held_bars = s.signal_bars;
+ }
+
  void WifiManager::Impl::poll_once()
  {
      WifiSnapshot s;
      s.enabled = enabled;
- 
+
+     /* 连接结果只认这一拍真实的 COMPLETED，不认断线确认期间沿用的旧快照。 */
+     bool        live_up = false;
+     std::string live_ssid;
+
      if(!ensure_ctrl()) {
          s.initialized  = false;
          scan_pending   = false;   /* 控制接口没就绪，无从等结果，回到慢轮询 */
          waiting_for_ip = false;
-         maybe_push_state(s);
-         return;
-     }
-     s.initialized = true;
- 
-     /* 控制连接刚建立（开机首次或掉线重连）：立刻扫一次，别等用户进设置页才发起，
-      * 否则第一次打开 WiFi 界面要干等一整轮扫描才有列表。 */
-     if(ctrl_fresh) {
-         ctrl_fresh = false;
-         if(enabled) {
-             start_scan();
+         if(user_drop || !enabled) {
+             s.connected = false;
+         } else {
+             hold_on_status_lost(s);
          }
-     }
- 
-     std::string status;
-     std::string wpa_state, ssid;
-     if(request("STATUS", status)) {
-         wpa_state = kv_get(status, "wpa_state");
-         ssid      = kv_get(status, "ssid");
-     }
-     s.connected = enabled && (wpa_state == "COMPLETED");
-     if(s.connected) {
-         s.ssid = ssid;
- 
-         std::string sp;
-         if(request("SIGNAL_POLL", sp)) {
-             const std::string rssi = kv_get(sp, "RSSI");
-             if(!rssi.empty()) {
-                 s.signal_bars = dbm_to_bars(std::atoi(rssi.c_str()));
+     } else {
+         s.initialized = true;
+
+         /* 控制连接刚建立（开机首次或掉线重连）：立刻扫一次，别等用户进设置页才发起，
+          * 否则第一次打开 WiFi 界面要干等一整轮扫描才有列表。
+          * 仍处于断线确认中的已连接不扫：部分网卡一 SCAN 就再掉一次。 */
+         if(ctrl_fresh) {
+             ctrl_fresh = false;
+             if(enabled && !link_up) {
+                 start_scan();
              }
          }
- 
-        /* 每连上一个"新" SSID 都重新做 DHCP（动态获取该网络网段的地址），
-         * 而不是仅在无 IP 时——否则切换 WiFi 后会一直沿用上一个网络的旧 IP。 */
-         if(dhcp_done_ssid != s.ssid) {
-             run_dhcp();
-             dhcp_done_ssid = s.ssid;
-             
+
+         if(!enabled) {
+             confirm_link_down();
+             s.connected = false;
+         } else {
+             std::string status;
+             if(!request("STATUS", status)) {
+                 if(user_drop) {
+                     s.connected = false;
+                 } else {
+                     hold_on_status_lost(s);
+                 }
+             } else {
+                 const std::string wpa_state = kv_get(status, "wpa_state");
+                 const std::string ssid      = kv_get(status, "ssid");
+                 const bool associated       = (wpa_state == "COMPLETED");
+                 if(user_drop) {
+                     const auto now = std::chrono::steady_clock::now();
+                     if(!associated) {
+                         user_drop = false;
+                         s.connected = false;
+                     } else if(now - user_drop_since >=
+                               std::chrono::milliseconds(kDisconnectHoldMs)) {
+                         /* DISCONNECT 没生效：退回真实关联，别把界面卡在断开。 */
+                         user_drop = false;
+                         live_up   = true;
+                         live_ssid = ssid;
+                         apply_associated(s, ssid);
+                     } else {
+                         s.connected = false;
+                     }
+                 } else if(associated) {
+                     live_up   = true;
+                     live_ssid = ssid;
+                     apply_associated(s, ssid);
+                 } else {
+                     hold_on_not_associated(s, wpa_state);
+                 }
+             }
          }
-         s.ip = iface_ipv4();
-     } else {
-         dhcp_done_ssid.clear();
      }
- 
+
      /* 拿到 IP 之前保持快轮询：DHCP（尤其系统 dhcpcd 接管时）要几秒才出地址，
       * 慢轮询会让设置页的 IP Address 迟迟不刷新。 */
      waiting_for_ip = s.connected && s.ip.empty();
- 
+
      maybe_push_state(s);
- 
+
      /* 连接结果判定：连上目标 SSID = 成功；超时未连上 = 失败（如密码错） */
      if(connecting) {
-         if(s.connected && s.ssid == connecting_ssid) {
+         if(live_up && live_ssid == connecting_ssid) {
              connecting = false;
              /* 成功：重新启用所有网络（避免 SELECT_NETWORK 把其它网络置 disabled
               * 被持久化，影响下次自动重连），再持久化到已保存列表。 */
