@@ -15,8 +15,9 @@
  * （`env_update_cb_ = std::move(cb)`），后注册的会静默顶掉前一个——那样首页的
  * 仪表盘会永远停在 "--"。所以订阅在本模块做一次，再扇出给多个观察者。
  *
- * WiFi 连接态另订 `GLAVO_Wifi_State_Ntf`：环境快照里虽然也带 wifi_connected，
- * 但那条只随 MCU 传感器上报发出，没接 MCU 时状态栏图标会一直停在初值。
+ * WiFi 连接态只订 `GLAVO_Wifi_State_Ntf`。环境快照里的 wifi 字段不写入本快照：
+ * 那条跟着传感器走，没接 MCU 时不发；即便在发，也和状态通知不是同一拍，后到的
+ * 旧「未连接」会把顶栏图标打灭。
  */
 
 #ifdef __cplusplus
