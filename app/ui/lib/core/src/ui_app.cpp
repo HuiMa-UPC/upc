@@ -154,18 +154,18 @@ void on_ota_check_result(const middleware::OtaCheckResultPayload& p)
         return;
     }
     if(result == middleware::OtaCheckResult::UpToDate) {
-        ui_toast_show("You're up to date", user_color_status_ok, 1800);
+        ui_toast_show("You're up to date", UI_TOAST_SUCCESS, 1800);
         return;
     }
     if(result == middleware::OtaCheckResult::Busy) {
         const bool updating = std::strstr(p.message, "progress") != nullptr;
         ui_toast_show(updating ? "An update is already in progress"
                                : "Already checking for updates",
-                      user_color_accent, 1800);
+                      UI_TOAST_INFORM, 1800);
         return;
     }
     ui_toast_show("Couldn't check for updates. Try again later.",
-                  user_color_status_err, 2200);
+                  UI_TOAST_ERROR, 2200);
 }
 
 void on_ota_check_apply_rsp(const middleware::OtaCheckApplyRspPayload& p)
@@ -175,7 +175,7 @@ void on_ota_check_apply_rsp(const middleware::OtaCheckApplyRspPayload& p)
         return;
     }
     ui_toast_show(p.reason[0] ? p.reason : "Update didn't start",
-                  user_color_status_err, 2200);
+                  UI_TOAST_ERROR, 2200);
 }
 
 void ota_decision_cb(lv_event_t* e)
@@ -284,14 +284,14 @@ void on_ota_progress(const middleware::OtaProgressPayload& p)
         if(std::strcmp(p.component, "soc") == 0) {
             return;
         }
-        ui_toast_show("OTA files ready", user_color_status_ok, 1800);
+        ui_toast_show("OTA files ready", UI_TOAST_SUCCESS, 1800);
         close_ota_progress();
     } else if(state == middleware::OtaProgressState::Failed) {
         close_ota_prompt();
         char err[128];
         std::snprintf(err, sizeof(err), "OTA failed: %s",
                       p.error_code[0] ? p.error_code : "unknown");
-        ui_toast_show(err, user_color_status_err, 2200);
+        ui_toast_show(err, UI_TOAST_ERROR, 2200);
         close_ota_progress();
     }
 }
@@ -310,7 +310,7 @@ void soc_ota_apply_cb(lv_event_t* e)
 
     if(action == middleware::SocOtaApplyAction::RebootNow && control_is_printing()) {
         ui_toast_show("Printing in progress, cannot reboot",
-                      user_color_status_err, 2200);
+                      UI_TOAST_INFORM, 2200);
         return;
     }
     UiMsgProxy::instance().send_soc_ota_apply(action);
@@ -378,14 +378,14 @@ void on_soc_ota_apply_rsp(const middleware::SocOtaApplyRspPayload& p)
         /* RebootNow 成功时设备正在重启，没必要提示；只回执删除结果。 */
         if(static_cast<middleware::SocOtaApplyAction>(p.action) ==
            middleware::SocOtaApplyAction::Discard) {
-            ui_toast_show("Update package removed", user_color_status_ok, 1800);
+            ui_toast_show("Update package removed", UI_TOAST_SUCCESS, 1800);
         }
         return;
     }
     char err[128];
     std::snprintf(err, sizeof(err), "Update failed: %s",
                   p.reason[0] ? p.reason : "unknown");
-    ui_toast_show(err, user_color_status_err, 2200);
+    ui_toast_show(err, UI_TOAST_ERROR, 2200);
 }
 
 } // namespace

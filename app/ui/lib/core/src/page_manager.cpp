@@ -149,9 +149,8 @@ void PageManager::apply_shell_style() {
         return;
     }
     lv_obj_set_style_bg_color(shell_, shell_light_ ? user_light_bg : user_color_bg, 0);
-    /* Toast 跟着一起切档。挂在这里而不是 set_shell_light()：那个函数档位没变就提前
-     * 返回，初始态（init() 建壳那次）会漏掉；这里是两条路径唯一的收口。 */
-    ui_toast_set_light(shell_light_);
+    /* Toast 早先也在这里跟着一起切深浅档；新稿的顶部 toast 只剩一档白卡（全屏视频页上
+     * 同样清楚），不再跟壳的底色走。它只关心内容区左缘，见 apply_device_bar()。 */
 }
 
 void PageManager::set_shell_light(bool on) {
@@ -399,6 +398,10 @@ void PageManager::apply_device_bar(const PageEntry& entry) {
                     page == "user_history" || page == "user_message" ||
                     page == "user_settings" || page == "user_files" ||
                     page == "user_debug");
+    /* 顶部 toast 在内容区里水平居中（稿 6357:39342：1280 档中心 x=704，即侧栏右侧那一段
+     * 的中线）。延时摄影与相册大图建在 lv_layer_top() 上整屏覆盖、看不到侧栏，按整屏居中。 */
+    const bool full_screen = (page == "user_timelapse" || page == "user_photo");
+    ui_toast_set_content_left(full_screen ? 0 : USER_SIDEBAR_W);
 }
 
 void PageManager::set_menu_badge(const std::string& page_name, bool on) {
@@ -459,7 +462,7 @@ void PageManager::switch_to(const std::string& name) {
      * 仅禁止再次进入"选文件"页，避免打印中重复触发开始打印流程。
      * （control_start() 另有 g_state!=IDLE 防重入作为双保险。） */
     if (control_is_printing() && name == "user_files") {
-        ui_toast_show("Printing in progress", user_color_accent, 2000);
+        ui_toast_show("Printing in progress", UI_TOAST_INFORM, 2000);
         return;
     }
 

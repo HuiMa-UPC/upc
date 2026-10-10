@@ -629,7 +629,7 @@ void on_mcu_ota_entry_click(lv_event_t *)
 /** 后端未接的入口统一提示（只做界面的项，清单见 UI.md）。 */
 void show_coming_soon(void)
 {
-    ui_toast_show("Coming soon", user_color_text_dim, 1500);
+    ui_toast_show("Coming soon", UI_TOAST_INFORM, 1500);
 }
 
 /** 透明排版容器：满宽、高随内容、不滚动、不吃点击（点击落到外层的行 / 按钮上）。 */
@@ -1696,7 +1696,7 @@ void wifi_apply_enabled(bool on)
 {
     g_wifi_on = on;                                    /* 记住开关意图，跨重建保持 */
     ui::UiMsgProxy::instance().send_wifi_enable(on);
-    ui_toast_show(on ? "Wi-Fi On" : "Wi-Fi Off", user_color_accent, 1200);
+    ui_toast_show(on ? "Wi-Fi On" : "Wi-Fi Off", UI_TOAST_SUCCESS, 1200);
     if(on) {
         ui::UiMsgProxy::instance().send_wifi_scan();   /* 开启后请求扫描 */
     } else {
@@ -1801,14 +1801,14 @@ void build_wifi_page(lv_obj_t *parent)
 void on_forget_network(lv_event_t *)
 {
     ui::UiMsgProxy::instance().send_wifi_forget(wifi_current_ssid()); /* 预留端口 */
-    ui_toast_show("Network forgotten", user_color_accent, 1500);
+    ui_toast_show("Network forgotten", UI_TOAST_SUCCESS, 1500);
     enter_wifi_page();
 }
 
 void on_disconnect_network(lv_event_t *)
 {
     ui::UiMsgProxy::instance().send_wifi_disconnect(wifi_current_ssid());
-    ui_toast_show("Disconnecting...", user_color_accent, 1500);
+    ui_toast_show("Disconnecting...", UI_TOAST_INFORM, 1500);
     enter_wifi_page();
 }
 
@@ -1817,7 +1817,7 @@ void on_forget_saved(lv_event_t *e)
     const char *ssid = static_cast<const char *>(lv_event_get_user_data(e));
     ui::UiMsgProxy::instance().send_wifi_forget(ssid);
     ui::UiMsgProxy::instance().send_wifi_saved_query();  /* 请求后端回推最新已保存列表 */
-    ui_toast_show("Network forgotten", user_color_accent, 1500);
+    ui_toast_show("Network forgotten", UI_TOAST_SUCCESS, 1500);
     dev_show(DEV_SAVED);   /* 先按当前缓存刷新，后端回推后再重建 */
 }
 
@@ -2310,7 +2310,7 @@ void on_fmt_confirm(lv_event_t *)
     cfm_close();
     ui::UiMsgProxy::instance().send_storage_format(g_fmt_target);
     /* 后端未实现，这条发出去不会有回执；toast 明说，免得用户以为在跑 */
-    ui_toast_show("Format requested (backend pending)", user_color_accent, 2500);
+    ui_toast_show("Format requested (backend pending)", UI_TOAST_INFORM, 2500);
 }
 
 /** 格式化二次确认（稿 6444:53244）：496 宽，Cancel + 红色 Format。 */
@@ -2612,12 +2612,12 @@ void on_print_gate_changed(lv_event_t *e)
     case PrintGate::AutoPrint:
         if(!upc::xfr::set_auto_print_after_transfer(on)) {
             set_gate_switch(g_gate_auto_print, !on);
-            ui_toast_show("Failed to save setting", user_color_status_err, 2000);
+            ui_toast_show("Failed to save setting", UI_TOAST_ERROR, 2000);
             break;
         }
         ui_toast_show(on ? "Slicer will auto-start print"
                          : "Transfer only, no auto-start",
-                      user_color_accent, 1800);
+                      UI_TOAST_SUCCESS, 1800);
         break;
     }
 }
@@ -2629,7 +2629,7 @@ void on_settings_height_calib_click(lv_event_t *)
     if(g_height_calib_lbl) {
         lv_label_set_text(g_height_calib_lbl, "Starting...");
     }
-    ui_toast_show("Height calibration started", user_light_accent, 1500);
+    ui_toast_show("Height calibration started", UI_TOAST_SUCCESS, 1500);
 }
 
 /** 门控行（单行 76）：标题 + 新稿开关，返回开关。 */
@@ -2719,7 +2719,7 @@ void on_sw_version_click(lv_event_t * /*e*/)
 /** About「Check for Update」：发检查请求。有无新版本的弹窗/提示在 ui_app。 */
 void on_check_update_click(lv_event_t * /*e*/)
 {
-    ui_toast_show("Checking for updates...", user_color_accent, 1500);
+    ui_toast_show("Checking for updates...", UI_TOAST_INFORM, 1500);
     ui::UiMsgProxy::instance().send_ota_check();
 }
 
@@ -3247,18 +3247,18 @@ lv_obj_t *page_user_settings_create(lv_obj_t *parent)
             char buf[48];
             std::snprintf(buf, sizeof(buf), "Formatting... %u%%",
                           static_cast<unsigned>(p.percent));
-            ui_toast_show(buf, user_color_accent, 1000);
+            ui_toast_show(buf, UI_TOAST_INFORM, 1000);
         });
     ui::UiMsgProxy::instance().register_storage_format_result(
         [](const middleware::StorageFormatRspPayload &p) {
             if(p.result == 0) {
-                ui_toast_show("Format complete", user_color_status_ok, 2000);
+                ui_toast_show("Format complete", UI_TOAST_SUCCESS, 2000);
                 if(g_selected == NAV_STORAGE) {
                     ui::UiMsgProxy::instance().send_storage_usage(
                         static_cast<middleware::StorageVolume>(p.volume));
                 }
             } else {
-                ui_toast_show("Format failed", ui_color_danger, 2500);
+                ui_toast_show("Format failed", UI_TOAST_ERROR, 2500);
             }
         });
 
@@ -3267,9 +3267,9 @@ lv_obj_t *page_user_settings_create(lv_obj_t *parent)
         [](bool ok, const char * /*ssid*/) {
             close_connecting_dialog();
             if(ok) {
-                ui_toast_show("Connected", user_color_status_ok, 1500);
+                ui_toast_show("Connected", UI_TOAST_SUCCESS, 1500);
             } else {
-                ui_toast_show("Connect failed", ui_color_danger, 2500);
+                ui_toast_show("Connect failed", UI_TOAST_ERROR, 2500);
             }
         });
 

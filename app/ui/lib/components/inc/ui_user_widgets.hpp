@@ -149,6 +149,53 @@ lv_obj_t *ui_user_make_confirm_footer_btn(lv_obj_t *footer, const char *text,
                                           bool light,
                                           lv_event_cb_t cb, void *user_data);
 
+/**
+ * Tab 行右侧那种白底卡片钮（相册页 / 消息页的 `Manage`，稿 6485:17511 / 6357:39398）：
+ * 白底 + 圆角 16 + 0 2 6 黑 4% 投影，左右内距 24，文字 SemiBold 20 #333145（字库只有一档
+ * 字重，落地 user_font_title()）。宽高都按内容撑。
+ *
+ * 两张稿的上下内距不一样（相册 16、消息 12，整钮高 60 / 52），由 pad_ver 各按各的稿给。
+ * 高于 Tab 行（USER_HIST_TAB_H）时会被行裁掉上下沿，调用方要给 Tab 行开 OVERFLOW_VISIBLE。
+ */
+lv_obj_t *ui_user_make_card_text_btn(lv_obj_t *parent, const char *text, int32_t pad_ver,
+                                     lv_event_cb_t cb);
+
+/**
+ * Tab 行右侧那种纯文字钮（管理态的 `Select all` / `Cancel`，稿 6251:94118 / 6357:35153）：
+ * 主色文字、无底无框，字号 user_font_body()。**建出来是隐藏的**，进管理态才现身。
+ * 返回的就是那个 label（文案可改，如 Select all ↔ Deselect all）。
+ */
+lv_obj_t *ui_user_make_tab_text_btn(lv_obj_t *parent, const char *text, lv_event_cb_t cb);
+
+/**
+ * 底部多选浮条（相册页 / 消息页的管理态共用，稿 6357:35239 / 6073:73736）：左「N selected」，
+ * 右一颗红色 Delete。条是浮层（FLOATING），压在列表之上，底下的卡片照常能滚。
+ *
+ * 稿上量到：条 x=160..1248（侧栏右缘 128 再让 32，右侧同样留 32）、y=688、高 80、
+ * 圆角 24、右内距 8；Delete 钮 140×64、圆角 16、#FF4242；投影 0 2 10 黑 10%
+ * （2026-10-10 稿新加，改版前没有投影）。
+ *
+ * @param page      页根：浮条挂在它上面，宽度按它的内容宽现算（两侧各让 USER_PAD_LG）
+ * @param on_delete Delete 的点击回调（user_data 为 NULL）
+ * @param out_label 回传左侧计数 label，文案由调用方刷新
+ * @param out_btn   回传 Delete 钮，可为 NULL；未选中时的置灰由调用方管
+ * @return 浮条本体。**建出来是隐藏的**，由调用方按管理态显隐
+ */
+lv_obj_t *ui_user_make_sel_bar(lv_obj_t *page, lv_event_cb_t on_delete,
+                               lv_obj_t **out_label, lv_obj_t **out_btn);
+
+/**
+ * 列表底部的白色渐隐（相册页 / 消息页共用，2026-10-10 稿）：铺满内容区宽、贴页底，
+ * 白色从全透明渐到 80%，让卡片滚到底边时淡出去。不吃触摸，底下的列表照常能点、能滚。
+ *
+ * 两档（见 ui_user_bottom_fade_set_manage）：常态 60 高、终点停在 90% 处（稿 6357:35374）；
+ * 管理态 136 高、终点停在 50% 处（稿 6357:35238），把删除条垫在一片白里。
+ * 调用方要在列表之后、删除条之前建它，z 序才对。
+ */
+lv_obj_t *ui_user_make_bottom_fade(lv_obj_t *page);
+/** 切渐隐的常态 / 管理态两档（高度与渐变终点），并重新贴底。fade 可为 NULL。 */
+void ui_user_bottom_fade_set_manage(lv_obj_t *fade, bool manage);
+
 /** 首页数值块：横线 + 标签 + 大数字；out_value 可接刷新指针 */
 lv_obj_t *ui_user_make_metric_block(lv_obj_t *parent, const char *caption,
                                     lv_text_align_t text_align,

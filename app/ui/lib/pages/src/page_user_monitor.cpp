@@ -603,7 +603,7 @@ void on_snapshot_click(lv_event_t * /*e*/)
         lv_obj_add_state(g_snap_btn, LV_STATE_DISABLED);
     }
     ui::CameraMsgProxy::instance().send_snapshot_req();
-    ui_toast_show("Capturing photo...", user_color_accent, 1200);
+    ui_toast_show("Capturing photo...", UI_TOAST_INFORM, 1200);
 }
 
 /** 开流。已出帧则只 reattach；半死/失败则 Stop→Start（见 ensure_running）。 */
@@ -1772,7 +1772,7 @@ void on_manual_jog(lv_event_t *e)
             const long step = std::labs(read_int_ta(g_s_step_ta, -kManualStepMax,
                                                     kManualStepMax));
             if(step == 0) {
-                ui_toast_show("Step must be at least 1 mm", ui_color_danger, 1800);
+                ui_toast_show("Step must be at least 1 mm", UI_TOAST_INFORM, 1800);
                 break;
             }
             proxy.send_axis_jog(axis, middleware::DebugJogMode::Click, dir,
@@ -1878,7 +1878,7 @@ void on_d_send(lv_event_t * /*e*/)
 {
     const long step = read_int_ta(g_d_step_ta, -kManualStepMax, kManualStepMax);
     if(step == 0) {
-        ui_toast_show("Step must be a non-zero whole number", ui_color_danger, 1800);
+        ui_toast_show("Step must be a non-zero whole number", UI_TOAST_INFORM, 1800);
         return;
     }
     ui::DebugMsgProxy::instance().send_axis_jog(middleware::DebugAxis::D,
@@ -2414,7 +2414,7 @@ void build_return_card(lv_obj_t *parent)
 void on_transfer_demo(lv_event_t * /*e*/)
 {
     if(!control_transfer_demo_start()) {
-        ui_toast_show("Retrieve unavailable", ui_color_danger, 1800);
+        ui_toast_show("Retrieve unavailable", UI_TOAST_INFORM, 1800);
     }
 }
 
@@ -2597,7 +2597,7 @@ void on_pause_click(lv_event_t * /*e*/)
         apply_phase();
         ui_toast_show(want_pause ? "Pause failed, please retry"
                                  : "Resume failed, please retry",
-                      ui_color_danger, 2000);
+                      UI_TOAST_ERROR, 2000);
     }
 }
 
@@ -2662,7 +2662,7 @@ void show_retrieve_dlg(void)
         return;
     }
     if(g_purify == PURIFY_RUNNING) {
-        ui_toast_show("Air purifying, please wait", user_color_accent, 1200);
+        ui_toast_show("Air purifying, please wait", UI_TOAST_INFORM, 1200);
         return;
     }
     const bool stopped = (g_phase == PHASE_TERMINATED);
@@ -3114,7 +3114,7 @@ void on_clean_state_event(ui_clean_event_t ev, ui_clean_owner_t owner)
     case UI_CLEAN_EVT_REJECTED:
         g_purify_busy = false;
         purify_stage_set(g_purify_done ? PURIFY_DONE : PURIFY_IDLE);
-        ui_toast_show("Powder cleaning is busy", ui_color_danger, 1800);
+        ui_toast_show("Powder cleaning is busy", UI_TOAST_INFORM, 1800);
         break;
     case UI_CLEAN_EVT_STOPPED:
         /* 用户中止：风扇停，按钮可再开。曾 MCU 成功过则徽标仍可留 Done（口罩提示）。 */
@@ -3387,9 +3387,9 @@ void monitor_backend_init(void)
             if(rsp.ok) {
                 char toast[160];
                 std::snprintf(toast, sizeof(toast), "Photo saved to %s", UPC_PHOTO_DIR);
-                ui_toast_show(toast, user_color_accent, 1500);
+                ui_toast_show(toast, UI_TOAST_SUCCESS, 1500);
             } else {
-                ui_toast_show("Photo save failed", ui_color_danger, 1500);
+                ui_toast_show("Photo save failed", UI_TOAST_ERROR, 1500);
             }
         });
 }
@@ -3849,6 +3849,14 @@ void page_user_monitor_reset_result_slide(void)
     if(g_retrieve_slide) {
         ui_slide_unlock_reset(g_retrieve_slide);
     }
+}
+
+void page_user_monitor_request_retrieve(void)
+{
+    if(!g_root || !phase_finished()) {
+        return;
+    }
+    show_retrieve_dlg();
 }
 
 bool page_user_monitor_result_aborted_in_prep(void)

@@ -252,6 +252,26 @@ extern const lv_image_dsc_t ic_panel_chevron_14;
 extern const lv_image_dsc_t ic_panel_chevron_11;
 extern const lv_image_dsc_t *const ic_panel_chevron_set[];
 
+extern const lv_image_dsc_t ic_monitor_btn_60;
+extern const lv_image_dsc_t ic_monitor_btn_40;
+extern const lv_image_dsc_t ic_monitor_btn_32;
+extern const lv_image_dsc_t *const ic_monitor_btn_set[];
+
+extern const lv_image_dsc_t ic_toast_ok_30;
+extern const lv_image_dsc_t ic_toast_ok_20;
+extern const lv_image_dsc_t ic_toast_ok_16;
+extern const lv_image_dsc_t *const ic_toast_ok_set[];
+
+extern const lv_image_dsc_t ic_toast_err_30;
+extern const lv_image_dsc_t ic_toast_err_20;
+extern const lv_image_dsc_t ic_toast_err_16;
+extern const lv_image_dsc_t *const ic_toast_err_set[];
+
+extern const lv_image_dsc_t ic_toast_warn_30;
+extern const lv_image_dsc_t ic_toast_warn_20;
+extern const lv_image_dsc_t ic_toast_warn_16;
+extern const lv_image_dsc_t *const ic_toast_warn_set[];
+
 /* 手维护图标（源矢量已丢失） */
 extern const lv_image_dsc_t ic_warning;
 extern const lv_image_dsc_t ic_layers;

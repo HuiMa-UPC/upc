@@ -941,6 +941,37 @@ void ui_alarm_history_delete_at(int idx)
     notify_observers();
 }
 
+int ui_alarm_history_delete_keys(const ui_alarm_history_key_t *keys, int n)
+{
+    if(!keys || n <= 0) {
+        return 0;
+    }
+    /* 原地压缩：不命中的往前挪，一遍扫完，次序（新→旧）不变 */
+    int kept = 0;
+    for(int i = 0; i < g_history_count; i++) {
+        bool hit = false;
+        for(int k = 0; k < n; k++) {
+            if(g_history[i].code == keys[k].code && g_history[i].ts_ms == keys[k].ts_ms) {
+                hit = true;
+                break;
+            }
+        }
+        if(!hit) {
+            if(kept != i) {
+                g_history[kept] = g_history[i];
+            }
+            kept++;
+        }
+    }
+    const int removed = g_history_count - kept;
+    if(removed > 0) {
+        g_history_count = kept;
+        history_save();
+        notify_observers();
+    }
+    return removed;
+}
+
 void ui_alarm_add_observer(ui_alarm_observer_t cb)
 {
     if(!cb) {

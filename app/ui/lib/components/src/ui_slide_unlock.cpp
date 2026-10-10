@@ -33,7 +33,8 @@ struct ui_slide_unlock_t {
      *  true，配色与提示字字号再由 ink 分。 */
     bool                  light;
     bool                  ink;       /**< 墨色档：渐变深轨道 + 白滑块，见 UI_SLIDE_THEME_INK */
-    /** 静止态提示字的不透明度。深色 / 浅色两档是 70%，墨色档稿上是满白。
+    /** 静止态提示字的不透明度。深色档 70%；浅色档（稿 6578:41426 / 6388:48980 都是
+     *  #333145 满色）与墨色档（满白）都是 100%。
      *  apply_progress() 按它往 0 淡出，所以不能写死在那里。 */
     lv_opa_t              hint_opa;
     int32_t               min_w;     /**< 红条最小宽（收拢成圆头） */
@@ -111,9 +112,13 @@ static void apply_progress(ui_slide_unlock_t *self, int32_t w)
     int32_t in_amt = t * 2 - 256;            /* 到底行的显现量：0 → 256 */
     if(in_amt < 0) in_amt = 0;
 
+    /* 禁用的 light 版式静止行压在 30%（稿 6683:34165，见 apply_enabled_look()）；
+     * 这里每次都会重写 text_opa，所以那一档必须在这里落、不能只在 set_enabled 里设一次。 */
+    const lv_opa_t rest_opa = (self->light && !self->enabled) ? static_cast<lv_opa_t>(LV_OPA_30)
+                                                              : self->hint_opa;
     if(self->hint) {
         lv_obj_set_style_text_opa(self->hint,
-            static_cast<lv_opa_t>(self->hint_opa * out_left / 256), 0);
+            static_cast<lv_opa_t>(rest_opa * out_left / 256), 0);
     }
     if(self->arrows) {
         /* chevron 是三条 lv_line，静止态 line_opa 50%，跟着文字一起淡出 */
@@ -155,6 +160,29 @@ static void set_fill_w(ui_slide_unlock_t *self, int32_t w)
 static void anim_fill_w(void *obj, int32_t v)
 {
     set_fill_w(static_cast<ui_slide_unlock_t *>(obj), v);
+}
+
+/* 可用 / 禁用的外观。
+ *
+ * light 版式（浅色 / 墨色两档）照稿 6683:34165 的置灰开门滑块：轨道原样，只把滑块与静止
+ * 提示字各压到 30%（稿上是那两组各自 opacity 0.3）。滑块的底色与投影一起压（建滑块时
+ * 两档投影都是 LV_OPA_20）；图标是白的、叠 30% 之后仍是白，不动；提示字那一半在
+ * apply_progress() 里落。都用分量级的 bg_opa / shadow_opa / text_opa 而不是对象级 opa，
+ * 理由同 apply_progress()。
+ *
+ * 深色玻璃档没有对应的稿，维持早先整条轨道 70% 的做法。 */
+static void apply_enabled_look(ui_slide_unlock_t *self)
+{
+    if(!self->light) {
+        lv_obj_set_style_opa(self->track, self->enabled ? LV_OPA_COVER : LV_OPA_70, 0);
+        return;
+    }
+    if(self->fill) {
+        const int32_t shadow_opa = LV_OPA_20;
+        lv_obj_set_style_bg_opa(self->fill, self->enabled ? LV_OPA_COVER : LV_OPA_30, 0);
+        lv_obj_set_style_shadow_opa(self->fill,
+            static_cast<lv_opa_t>(self->enabled ? shadow_opa : shadow_opa * 3 / 10), 0);
+    }
 }
 
 static void return_fill(ui_slide_unlock_t *self)
@@ -284,7 +312,7 @@ ui_slide_unlock_t *ui_slide_unlock_create(lv_obj_t *parent,
     self->accent = cfg->custom_accent ? cfg->accent_color : user_color_accent;
     self->light = (cfg->theme != UI_SLIDE_THEME_GLASS);
     self->ink   = (cfg->theme == UI_SLIDE_THEME_INK);
-    self->hint_opa = self->ink ? LV_OPA_COVER : LV_OPA_70;
+    self->hint_opa = self->light ? LV_OPA_COVER : LV_OPA_70;
     self->rest_text = cfg->hint_text ? cfg->hint_text : "SLIDE TO UNLOCK";
     self->vstate = -1;
     self->enabled = true;
@@ -362,13 +390,21 @@ ui_slide_unlock_t *ui_slide_unlock_create(lv_obj_t *parent,
             lv_obj_remove_flag(well, LV_OBJ_FLAG_CLICKABLE);
             lv_obj_remove_flag(well, LV_OBJ_FLAG_SCROLLABLE);
         } else if(self->light) {
+            /* 稿 6578:41426（首页）/ 6388:48980（放版弹窗）：#FCFCFC 实底 + 1px 白描边 +
+             * 投影 0 2 6 #283184 @10%。
+             * 底必须不透明：早先给的 90% 叠在 #FAFAFA 上，LVGL 混色是 >>8 截断，
+             * (252×229 + 250×26) >> 8 正好落回 250，轨道与页面一模一样，只剩下沿一道影子。
+             * 稿上那个 6 是 Figma 的 blur（stdDeviation 3），**不能直接当 shadow_width**：
+             * LVGL 的阴影是两遍 width/2 的盒式模糊（SHADOW_ENHANCE），三角核的标准差约
+             * width/4.9，照抄 6 只有稿上一半的晕、像贴边一道细线。σ 3 折成 15、下移 2，
+             * 都按轨道高（稿 94）缩放并四舍五入：三档 23 / 15 / 12、3 / 2 / 2。 */
             lv_obj_set_style_bg_color(track, user_light_glass, 0);
-            lv_obj_set_style_bg_opa(track, LV_OPA_90, 0);
+            lv_obj_set_style_bg_opa(track, LV_OPA_COVER, 0);
             lv_obj_set_style_border_width(track, 1, 0);
             lv_obj_set_style_border_color(track, lv_color_white(), 0);
             lv_obj_set_style_border_opa(track, LV_OPA_COVER, 0);
-            lv_obj_set_style_shadow_width(track, 6, 0);
-            lv_obj_set_style_shadow_ofs_y(track, 2, 0);
+            lv_obj_set_style_shadow_width(track, (track_h * 15 + 47) / 94, 0);
+            lv_obj_set_style_shadow_ofs_y(track, (track_h * 2 + 47) / 94, 0);
             lv_obj_set_style_shadow_color(track, lv_color_hex(0x283184), 0);
             lv_obj_set_style_shadow_opa(track, 26, 0);
         } else {
@@ -477,11 +513,14 @@ ui_slide_unlock_t *ui_slide_unlock_create(lv_obj_t *parent,
         lv_obj_set_style_shadow_opa(fill, LV_OPA_20, 0);
     } else if(self->light) {
         /* 浅色档是稿上那块深色 #333145 实底，没有渐变也没有发光描边——它压在白轨道上，
-         * 对比度本来就够，再加高光反而脏。 */
+         * 对比度本来就够，再加高光反而脏。
+         * 投影稿值 0 5 10 #A1A1A1 @20%（stdDeviation 5），换算同轨道那段：σ 5 折成 24、
+         * 下移 5，按 knob_sz/84 缩放：三档 36 / 24 / 19、8 / 5 / 4。轨道开了 clip_corner，
+         * 晕出不了轨道（稿上旋钮正下方会漏出下沿一点，差别很小）。 */
         lv_obj_set_style_bg_color(fill, user_light_nav_on, 0);
         lv_obj_set_style_bg_opa(fill, LV_OPA_COVER, 0);
-        lv_obj_set_style_shadow_width(fill, 10, 0);
-        lv_obj_set_style_shadow_ofs_y(fill, 5, 0);
+        lv_obj_set_style_shadow_width(fill, knob_sz * 2 / 7, 0);
+        lv_obj_set_style_shadow_ofs_y(fill, (knob_sz * 5 + 42) / 84, 0);
         lv_obj_set_style_shadow_color(fill, lv_color_hex(0xA1A1A1), 0);
         lv_obj_set_style_shadow_opa(fill, LV_OPA_20, 0);
     } else {
@@ -617,6 +656,7 @@ void ui_slide_unlock_reset(ui_slide_unlock_t *self)
     if(self->fill) {
         lv_obj_add_flag(self->fill, LV_OBJ_FLAG_CLICKABLE);
     }
+    apply_enabled_look(self);  /* reset 会把禁用态一并解除，外观跟着还原 */
     self->vstate = -1;         /* 强制重新应用可视状态 */
     return_fill(self);
 }
@@ -634,15 +674,18 @@ void ui_slide_unlock_set_enabled(ui_slide_unlock_t *self, bool enabled)
             lv_obj_remove_flag(self->fill, LV_OBJ_FLAG_CLICKABLE);
         }
     }
+    apply_enabled_look(self);
     if(enabled) {
-        lv_obj_set_style_opa(self->track, LV_OPA_COVER, 0);
+        /* 重走一遍静止态，让提示字从禁用的 30% 回到 hint_opa */
+        if(self->fill) {
+            set_fill_w(self, lv_obj_get_width(self->fill));
+        }
         return;
     }
     self->dragging = false;
     self->at_end = false;
     lv_anim_delete(self, anim_fill_w);
     set_fill_w(self, self->min_w);
-    lv_obj_set_style_opa(self->track, LV_OPA_70, 0);
 }
 
 void ui_slide_unlock_destroy(ui_slide_unlock_t *self)

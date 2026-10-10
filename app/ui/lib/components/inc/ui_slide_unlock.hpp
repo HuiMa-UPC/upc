@@ -42,7 +42,8 @@ typedef struct ui_slide_unlock_t ui_slide_unlock_t;
 typedef enum {
     /** 深色玻璃：黑 50% 全圆轨道 + 红渐变全圆滑块 + 三个 chevron（给暗背景画的）。 */
     UI_SLIDE_THEME_GLASS = 0,
-    /** 浅色：白 90% 轨道 + 深色 #333145 滑块 + 深色字（首页开门滑块、放版弹窗，稿 6060:69168）。 */
+    /** 浅色：#FCFCFC 实底轨道 + 深色 #333145 滑块 + 深色满色字（首页开门滑块、放版弹窗，
+     *  稿 6060:69168；轨道底、投影与字色按 6578:41426 / 6388:48980 校过）。 */
     UI_SLIDE_THEME_LIGHT,
     /** 墨色：#5A5872→#333145 横向渐变轨道 + **白**滑块 + 白字（监控页取件弹窗 6338:27929、
      *  请先开外门弹窗 6339:28971）。 */
@@ -85,10 +86,13 @@ ui_slide_unlock_t *ui_slide_unlock_create(lv_obj_t *parent,
 /** 取得控件根节点（用于布局对齐：lv_obj_align 等） */
 lv_obj_t *ui_slide_unlock_get_root(ui_slide_unlock_t *self);
 
-/** 复位：knob 弹回起点、重新可滑（用于可重复触发的场景，如首页开门） */
+/** 复位：knob 弹回起点、重新可滑（用于可重复触发的场景，如首页开门）。
+ *  **会顺带解除禁用**，调用方若仍需禁用要在之后再 set_enabled(false)。 */
 void ui_slide_unlock_reset(ui_slide_unlock_t *self);
 
-/** 启用/禁用滑动交互（禁用时不响应拖动） */
+/** 启用/禁用滑动交互（禁用时不响应拖动）。
+ *  禁用观感：浅色 / 墨色档轨道不动、滑块与静止提示字压到 30%（稿 6683:34165 打印中的
+ *  首页开门滑块）；深色玻璃档整条轨道 70%。 */
 void ui_slide_unlock_set_enabled(ui_slide_unlock_t *self, bool enabled);
 
 /**

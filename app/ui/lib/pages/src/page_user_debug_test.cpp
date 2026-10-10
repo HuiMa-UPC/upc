@@ -374,14 +374,16 @@ bool collect_snapshot() {
         const float param = read_ta_float(r->param_ta);
 
         if(is_jog_kind(kind) && read_ta_int(r->run_ta) <= 0) {
-            ui_toast_show("点动任务需填写>0的运行时间", user_light_notice_dot, 1800);
+            /* toast 的字库是 Montserrat、没有中文回退，本页其余中文标签走 user_font_cjk，
+             * toast 只能写英文。 */
+            ui_toast_show("Jog task needs a run time > 0", UI_TOAST_INFORM, 1800);
             return false;
         }
         g_snap.push_back(TaskSnap{ kind, param, read_ta_int(r->delay_ta),
                                    read_ta_int(r->run_ta), row });
     }
     if(g_snap.empty()) {
-        ui_toast_show("任务表为空，请先新增任务", user_light_notice_dot, 1800);
+        ui_toast_show("Task table is empty, add a task first", UI_TOAST_INFORM, 1800);
         return false;
     }
     return true;

@@ -36,7 +36,8 @@ const lv_color_t user_color_status_err = LV_COLOR_MAKE(0xff, 0x42, 0x42);
  * 目前只有首页待机态、侧栏和通知三态在用，详见 ui_theme.hpp 的说明。 */
 /* 稿值 #FAFAFA。首版浅色稿（6039:65949 那批）写的是 #F5F5F5，新稿三处页面帧
  * （历史 6251:94118 / 消息 6230:89616 / 6091:13847）一致改成了 #FAFAFA，跟新的。
- * 两者只差 5/255，首页与历史页翻上去看不出变化。 */
+ * 两者只差 5/255，但**首页与监控页的稿仍是 #F5F5F5**，两页各自铺底、不用本色：
+ * 首页的开门滑块轨道是 #FCFCFC，压在 #FAFAFA 上与页面分不出来（实机踩过）。 */
 const lv_color_t user_light_bg         = LV_COLOR_MAKE(0xfa, 0xfa, 0xfa);
 const lv_color_t user_light_card       = LV_COLOR_MAKE(0xff, 0xff, 0xff);
 const lv_color_t user_light_text       = LV_COLOR_MAKE(0x33, 0x31, 0x45);
@@ -54,6 +55,8 @@ const lv_color_t user_light_notice_dot = LV_COLOR_MAKE(0xfe, 0x68, 0x68);
 const lv_color_t user_light_rail_mid   = LV_COLOR_MAKE(0xf4, 0xf4, 0xf4);
 const lv_color_t user_light_row_sel    = LV_COLOR_MAKE(0xeb, 0xea, 0xec);
 const lv_color_t user_light_glass      = LV_COLOR_MAKE(0xfc, 0xfc, 0xfc);
+const lv_color_t user_toast_err_dot    = LV_COLOR_MAKE(0xff, 0x31, 0x31);
+const lv_color_t user_toast_inform     = LV_COLOR_MAKE(0xff, 0xac, 0x26);
 
 /* ============================================================================
  *  两套 profile 数据
@@ -238,15 +241,18 @@ static const ui_theme_t s_theme_1920 = {
     /* user_home_card_h       */ 450,
     /* user_home_grid_w       */ 510,
     /* user_home_greet_top    */ 240,
-    /* user_home_dev_img_w    */ 788,
-    /* user_home_dev_img_h    */ 1187,
-    /* user_home_dev_img_x    */ 1158,
-    /* user_home_dev_img_y    */ 134,
+    /* user_home_dev_img_w    */ 630,
+    /* user_home_dev_img_h    */ 950,
+    /* user_home_dev_img_x    */ 1218,
+    /* user_home_dev_img_y    */ 305,
     /* user_home_print_btn_w  */ 324,
+    /* user_home_monitor_btn_w */ 398,
+    /* user_home_retrieve_btn_w */ 540,
     /* user_home_slide_w      */ 680,
     /* user_home_slide_h      */ 141,
     /* user_home_edge_gap     */ 72,
-    /* user_panel_row_h       */ 84,
+    /* user_panel_row_h       */ 108,
+    /* user_notice_panel_w    */ 690,
 
     /* 监控页：1280 档取稿值，本档按 ×1.5 折算 */
     /* user_mon_panel_w       */ 630,
@@ -431,15 +437,18 @@ static const ui_theme_t s_theme_1280 = {
     /* user_home_card_h       */ 300,  /* 稿值（HOME 卡与四宫格等高） */
     /* user_home_grid_w       */ 340,  /* 稿值（扣 8 的间距后单卡 166 宽 146 高，与稿一致） */
     /* user_home_greet_top    */ 160,  /* 稿值 */
-    /* user_home_dev_img_w    */ 525,  /* 稿值 */
-    /* user_home_dev_img_h    */ 791,  /* 稿值 */
-    /* user_home_dev_img_x    */ 772,  /* 稿值（右侧出血，超出部分由父节点裁） */
-    /* user_home_dev_img_y    */ 89,   /* 稿值（下方同样出血） */
+    /* user_home_dev_img_w    */ 420,  /* 稿值（6363:42468 的原生画框） */
+    /* user_home_dev_img_h    */ 633,  /* 稿值 */
+    /* user_home_dev_img_x    */ 812,  /* 右缘 1232，与滑块 / 铃铛同线；按料桶对齐旧图拟合 */
+    /* user_home_dev_img_y    */ 203,  /* 同上（下方出血，超出部分由父节点裁） */
     /* user_home_print_btn_w  */ 216,  /* 稿值 */
+    /* user_home_monitor_btn_w */ 265, /* 稿值（6683:34165） */
+    /* user_home_retrieve_btn_w */ 360, /* 稿值（6683:34027） */
     /* user_home_slide_w      */ 453,  /* 稿值 */
     /* user_home_slide_h      */ 94,   /* 稿值（旋钮 84 上下各内缩 5） */
     /* user_home_edge_gap     */ 48,   /* 稿值（横向仍是 USER_PAD_LG 的 32，稿就不对称） */
-    /* user_panel_row_h       */ 56,   /* 稿值（6578:41549） */
+    /* user_panel_row_h       */ 72,   /* 稿值（6578:41549，2026-10-10 版；改版前 56） */
+    /* user_notice_panel_w    */ 460,  /* 稿值（同上） */
 
     /* 监控页（稿 6338:27240 一族），本档全取稿值 */
     /* user_mon_panel_w       */ 420,  /* 屏上 860..1280，内容区 420−2×32 = 356 */
@@ -628,15 +637,18 @@ static const ui_theme_t s_theme_1024 = {
     /* user_home_card_h       */ 240,
     /* user_home_grid_w       */ 272,
     /* user_home_greet_top    */ 128,
-    /* user_home_dev_img_w    */ 420,
-    /* user_home_dev_img_h    */ 633,
-    /* user_home_dev_img_x    */ 618,
-    /* user_home_dev_img_y    */ 71,
+    /* user_home_dev_img_w    */ 336,
+    /* user_home_dev_img_h    */ 506,
+    /* user_home_dev_img_x    */ 650,
+    /* user_home_dev_img_y    */ 162,
     /* user_home_print_btn_w  */ 173,
+    /* user_home_monitor_btn_w */ 212,
+    /* user_home_retrieve_btn_w */ 288,
     /* user_home_slide_w      */ 362,
     /* user_home_slide_h      */ 75,
     /* user_home_edge_gap     */ 38,
-    /* user_panel_row_h       */ 45,
+    /* user_panel_row_h       */ 58,
+    /* user_notice_panel_w    */ 368,
 
     /* 监控页：1280 档取稿值，本档按 ×0.8 折算。
      * panel_w 特意留得比 336（420×0.8）宽一点：本档 USER_PAD_LG 是 36（比 1280 档的 32

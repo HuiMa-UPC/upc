@@ -709,7 +709,7 @@ void page_user_timelapse_refresh(bool)
         hide_preview_chrome();
         return;
     } else if(g_mp4_path[0] != '\0') {
-        ui_toast_show("MP4 open failed, fallback JPEG", user_color_accent, 1200);
+        ui_toast_show("MP4 open failed, fallback JPEG", UI_TOAST_INFORM, 1200);
     }
 
     if(!load_sequence_frames()) {

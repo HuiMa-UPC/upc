@@ -428,7 +428,7 @@ void on_set_zero(lv_event_t *e)
     const uint8_t axis = static_cast<uint8_t>(
         reinterpret_cast<uintptr_t>(lv_event_get_user_data(e)));
     ui::DebugMsgProxy::instance().send_axis_set_zero(static_cast<DebugAxis>(axis));
-    ui_toast_show("Work zero set", user_light_accent, 1200);
+    ui_toast_show("Work zero set", UI_TOAST_SUCCESS, 1200);
 }
 
 /* ---- 顶部传感器条 ---- */
@@ -1007,12 +1007,12 @@ void on_red_always_click(lv_event_t *)
 void on_galvo_save(lv_event_t *)
 {
     if(galvo_save_busy()) {
-        ui_toast_show("Cannot save while printing", user_light_notice_dot, 1800);
+        ui_toast_show("Cannot save while printing", UI_TOAST_INFORM, 1800);
         update_galvo_save_enabled();
         return;
     }
     if(!g_galvo_center_valid) {
-        ui_toast_show("No center offset loaded", user_light_notice_dot, 1500);
+        ui_toast_show("No center offset loaded", UI_TOAST_INFORM, 1500);
         return;
     }
     ui::DebugMsgProxy::instance().send_galvo_param_save(
@@ -1022,7 +1022,7 @@ void on_galvo_save(lv_event_t *)
     /* Save 成功后以当前编辑值为“已保存”，供复位键回退 */
     g_galvo_saved_x = g_galvo_center_x;
     g_galvo_saved_y = g_galvo_center_y;
-    ui_toast_show("Saved", user_light_accent, 1200);
+    ui_toast_show("Saved", UI_TOAST_SUCCESS, 1200);
 }
 
 void on_test_image_changed(lv_event_t *e)
@@ -1037,7 +1037,7 @@ void on_test_image_changed(lv_event_t *e)
 void on_calib_click(lv_event_t *)
 {
     ui::DebugMsgProxy::instance().send_galvo_calib();
-    ui_toast_show("Calibration started", user_light_accent, 1500);
+    ui_toast_show("Calibration started", UI_TOAST_SUCCESS, 1500);
 }
 
 void on_height_calib_click(lv_event_t *)
@@ -1047,7 +1047,7 @@ void on_height_calib_click(lv_event_t *)
     if(g_height_calib_lbl) {
         lv_label_set_text(g_height_calib_lbl, "Starting...");
     }
-    ui_toast_show("Height calibration started", user_light_accent, 1500);
+    ui_toast_show("Height calibration started", UI_TOAST_SUCCESS, 1500);
 }
 
 /** @brief 振镜绝对坐标移动：读 Abs X/Y，发 UI_Debug_Galvo_AbsMove_Ntf。
@@ -1057,7 +1057,7 @@ void on_galvo_abs_move(lv_event_t *)
     const float x = read_ta_float(g_galvo_abs_x_ta);
     const float y = read_ta_float(g_galvo_abs_y_ta);
     ui::DebugMsgProxy::instance().send_galvo_abs_move(x, y, 0.0f, 1);
-    ui_toast_show("Galvo move sent", user_light_accent, 1200);
+    ui_toast_show("Galvo move sent", UI_TOAST_SUCCESS, 1200);
 }
 
 void on_galvo_point_test_click(lv_event_t *)
@@ -1070,14 +1070,14 @@ void on_galvo_point_test_click(lv_event_t *)
     if(control_is_printing() || test_image_on ||
        proxy.galvo_point_test_active() || g_galvo_point_test_pending) {
         ui_toast_show("Print or test mode active",
-                      user_light_notice_dot, 1800);
+                      UI_TOAST_INFORM, 1800);
         return;
     }
 
     g_galvo_point_test_pending = true;
     update_galvo_test_controls();
     ui::DebugMsgProxy::instance().start_galvo_point_test();
-    ui_toast_show("Galvo point test started", user_light_accent, 1500);
+    ui_toast_show("Galvo point test started", UI_TOAST_SUCCESS, 1500);
 }
 
 const char *o2_calib_err_text(uint8_t err)
@@ -1121,13 +1121,13 @@ void on_o2_calib_click(lv_event_t *)
     }
     if(control_is_printing()) {
         ui_toast_show("Cannot calib while printing",
-                      user_light_notice_dot, 1800);
+                      UI_TOAST_INFORM, 1800);
         return;
     }
     float ref = g_o2_calib_ref_ta ? read_ta_float(g_o2_calib_ref_ta) : 20.9f;
     if(!(ref > 0.f && ref < 100.f)) {
         ui_toast_show("Ref O2 must be 0–100%",
-                      user_light_notice_dot, 1800);
+                      UI_TOAST_INFORM, 1800);
         return;
     }
     g_o2_calib_pending = true;
@@ -1140,7 +1140,7 @@ void on_o2_calib_click(lv_event_t *)
         lv_obj_add_state(g_o2_calib_btn, LV_STATE_DISABLED);
     }
     ui::DebugMsgProxy::instance().send_o2_calib(ref);
-    ui_toast_show("O2 calib started", user_light_accent, 1200);
+    ui_toast_show("O2 calib started", UI_TOAST_SUCCESS, 1200);
 }
 
 lv_obj_t *make_galvo_readout(lv_obj_t *parent, const char *axis_name, lv_obj_t **out)
@@ -2363,7 +2363,7 @@ void build_status_led_rgb_card(lv_obj_t *parent)
 void on_transfer_demo_click(lv_event_t * /*e*/)
 {
     if(!control_transfer_demo_start()) {
-        ui_toast_show("Transfer demo unavailable", user_color_status_err, 1800);
+        ui_toast_show("Transfer demo unavailable", UI_TOAST_INFORM, 1800);
     }
 }
 
@@ -2628,14 +2628,14 @@ void on_laser_power_send(lv_event_t *)
 void on_laser_power_cancel(lv_event_t *)
 {
     ui::DebugMsgProxy::instance().send_laser_power_reset();
-    ui_toast_show("Power to external", user_light_accent, 1200);
+    ui_toast_show("Power to external", UI_TOAST_SUCCESS, 1200);
 }
 
 void on_laser_alarm_reset(lv_event_t *)
 {
     ui::DebugMsgProxy::instance().send_laser_alarm_reset();
     update_laser_alarms(0, g_laser_type_code);   /* 本地立即清空 Alarm 列表，后续以 MCU 上报为准 */
-    ui_toast_show("Alarm reset sent", user_light_accent, 1200);
+    ui_toast_show("Alarm reset sent", UI_TOAST_SUCCESS, 1200);
 }
 
 /* 值行：左标题 + 弹性留白 + 右白值 */
@@ -3132,10 +3132,10 @@ void bind_debug_callbacks()
                 char buf[64];
                 std::snprintf(buf, sizeof(buf), "O2 calib OK K=%.1f",
                               static_cast<double>(p.k));
-                ui_toast_show(buf, user_light_accent, 1800);
+                ui_toast_show(buf, UI_TOAST_SUCCESS, 1800);
             } else {
                 ui_toast_show(o2_calib_err_text(p.err),
-                              user_light_notice_dot, 2000);
+                              UI_TOAST_ERROR, 2000);
             }
         }
     });
@@ -3323,7 +3323,7 @@ void bind_debug_callbacks()
                 ui_user_segmented_set_selected(g_test_image_seg, want);
                 if(!on) {
                     ui_toast_show("Test file missing or busy",
-                                  user_light_notice_dot, 1800);
+                                  UI_TOAST_INFORM, 1800);
                 }
             }
         }
@@ -3336,7 +3336,7 @@ void bind_debug_callbacks()
         update_galvo_test_controls();
         if(!on && was_pending) {
             ui_toast_show("Point test unavailable",
-                          user_light_notice_dot, 1800);
+                          UI_TOAST_INFORM, 1800);
         }
     });
 }
