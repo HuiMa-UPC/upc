@@ -1749,10 +1749,9 @@ Cancel **放在 body 里而不是 footer**：footer 自带 `USER_PAD_SM` 的 pad
 画了完成态。终止态沿用同一张卡，标题换 `Print terminated`、副标题换 `Job stopped. …`——不然
 Job 卡写着 Print Terminated，弹窗却说 complete。
 
-**Job 卡两个数字沿用原口径**，不按稿上的示例数字改：打印中 Time left 按清单 `duration_sec`
-（3MF 的 `print_time_s`）与进度线性折剩余分钟，无预估显示 `--`；耗材仍是 `--`（打印中
-拿不到用量）。结束后才换成实际耗时（H:MM:SS）与 manifest 的 `material_g`。caption 照稿写
-`Time left` / `Time used` 与 `Total Cons.`。
+**Job 卡两个数字**：Time used 从起印就开始走秒表（H:MM:SS，200ms 刷新；暂停冻结、
+结束定格），不依赖 3MF `print_time_s`。耗材仍是 `--`（打印中拿不到用量）。结束后
+耗材改用 manifest 的 `material_g`。caption 照稿写 `Time used` 与 `Total Cons.`。
 
 **缩略图的进度填充是模拟的**：后端还没有切片预览图，Job 卡里放的是文件列表那张静态缩略图
 （`control_file_t::thumb_print`），上面再压一层齐色遮罩，高度 = (100 − 进度)%，从顶往下盖住
