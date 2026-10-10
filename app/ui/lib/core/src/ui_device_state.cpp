@@ -31,8 +31,7 @@ void apply_env(const middleware::EnvSnapshotPayload &p)
     if(!g_status_lock) {
         g_snap.status = static_cast<ui_device_status_t>(p.status);
     }
-    g_snap.wifi_connected = p.wifi_connected != 0;
-    g_snap.signal_bars    = p.signal_bars;
+    /* wifi_connected / signal_bars 不从这里写，见 apply_wifi_state。 */
     g_snap.pm25_indoor    = p.pm25_indoor;
     g_snap.pm25_cabin     = p.pm25_cabin;
     g_snap.temperature_c  = p.temperature_c;
@@ -48,9 +47,9 @@ void apply_env(const middleware::EnvSnapshotPayload &p)
     notify_observers();
 }
 
-/* WiFi 连接态直接跟 GLAVO_Wifi_State_Ntf 走。EnvSnapshotPayload 里虽然也带
- * wifi_connected，但那条只在 MCU 上报传感器时才发（没接 MCU 时根本不发），
- * 顶栏图标会一直停在初值。 */
+/* WiFi 连接态只跟 GLAVO_Wifi_State_Ntf。环境快照里虽然也带 wifi_connected，
+ * 但那条跟着传感器走：没接 MCU 时根本不发，顶栏会停在初值；即便在发，它和状态
+ * 通知也不是同一拍，后到的旧「未连接」会把图标打灭。所以 apply_env 不写这两个字段。 */
 void apply_wifi_state(const middleware::WifiStatePayload &p)
 {
     const bool connected = (p.connected != 0);
