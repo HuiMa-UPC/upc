@@ -101,8 +101,9 @@
 | `ui_alarm_catalog_*` | `ui_alarm_catalog.hpp` / `ui_alarm_catalog_gen.cpp` | 报警字典（生成物，改 `tools/gen_alarm_catalog.py` + `doc/alarm_catalog_en.csv`）；槽位映射不在此，是 `upc_contract.hpp` 里的固定公式 |
 | `ui_notice_stack_*` | `ui_notice_stack.*` | 右上通知三态：toast / 铃铛 / 面板互斥（**只在首页**；监控页不建铃铛与面板，靠画面左上的状态胶囊与阻塞弹窗，其余进消息中心），PageManager 持有 |
 | `ui_sys_hud_*` | `ui_sys_hud.*` | 调试红字蒙版（`lv_layer_sys` 右上角：CPU 温 / 整机与本进程占用 / 内存 used/total+rss；调试页 Media & Sim「Sys HUD」，`upc_sys_monitor_sample` 读本机 `/proc` 与 thermal sysfs，仅本次运行） |
-| `ui_backlight_*` | `ui_backlight.*` | LCD 背光 sysfs（设置页 Display），不经 Glavo、不看 MCU 版本 |
-| `app_init()` | `ui_app.*` | 主题、背光（`backlight_apply_saved`）、Proxy、`ui_device_state_init`、`ui_message_store_init`、`ui_alarm_state_init`、页面注册、control |
+| `ui_backlight_*` | `ui_backlight.*` | LCD 背光 sysfs（设置页 Display & Language），不经 Glavo、不看 MCU 版本 |
+| `ui_prefs_*` | `ui_prefs.*` | 设置页 Preferences / Privacy 开关的落盘值（`/userdata/ui/prefs.conf`）：完成后自动吹粉（结果页读）、自动录像（= 调试页 Print H264 Rec，Glavo 可达时补发）及三项只存值的开关 |
+| `app_init()` | `ui_app.*` | 主题、背光（`backlight_apply_saved`）、Proxy、`ui_device_state_init`、`ui_message_store_init`、`ui_alarm_state_init`、`ui_clean_state_init`、`ui_prefs_init`、页面注册、control |
 | `control_*` | `control.*` | 打印状态机（含 `CONTROL_STATE_PRINT_DONE` 结果页、`CONTROL_STATE_TRANSFER_BOX` 取件转运盒）+ overlay UI + 文件列表数据。**选文件页的视图已拆到 `page_user_files.*`**，两边经 `control_files_*` / `page_user_files_*` 通信 |
 | `VideoPlayer` | `video_player.*` | 延时视频 libav* 软解 → BGRX/RGB565 → lv_image（play/pause/seek；拖动预览缩小帧 + latest-wins） |
 | `PngScrubPreview` | `png_scrub_preview.*` | JPEG 序列拖动预览：后台 turbojpeg 解码缩放到小图 RGB565 |
@@ -117,7 +118,7 @@
 | `user_home` | `page_user_home.*` | 首页待机：设备图、问候语、HOME 空气质量卡（舱内/舱外 PM2.5）+ 四宫格、余量胶囊、左下 PRINT、右下开门滑块。**打印态浮层与待机监控层已搬到 `user_monitor`**，本文件里那两层留作存档、无调用方 |
 | `user_monitor` | `page_user_monitor.*` | 监控页（侧栏第 2 格）：左摄像头 + 右栏三 Tab（Job 打印任务 / Status 环境 / Manual 手动）+ 全屏切换 + 取件弹窗。**打印流程的落点**——选文件确认后 `control.cpp` 直接切到这里 |
 | `user_history` | `page_user_history.*` | 打印历史：三 Tab（Timelapse/Video/Photo）+ 按月分组的三列缩略图网格 + 长按多选批量删除 |
-| `user_settings` | `page_user_settings.*` | 设置列表 + 开发者密码弹窗 |
+| `user_settings` | `page_user_settings.*` | 设置（稿 6403 / 6457 一族）：Device Settings（账号 / Wi-Fi / 显示与语言）、Preferences、Nitrogen Generator、Storage、Privacy & Security、Advanced Print、About + 解锁后的 Debug 入口；后端缺的功能只做界面 |
 | `user_message` | `page_user_message.*` | 消息中心：日期分组混排列表（MCU 报警 + 设备事件）+ 左滑删除历史 + 详情抽屉（Reset 三态） |
 | `user_files` | `page_user_files.*` | 选文件页（隐藏页，首页 / 监控页的 PRINT 进入，侧栏高亮与返回键跟着入口分区走）：本机/USB 页签 + 文件列表 + 右栏预览/信息/确认打印·删除。**只做视图**，数据与打印流程在 `control.*` |
 | `user_timelapse` | `page_user_timelapse.*` | 延时摄影播放器（隐藏页，历史缩略图进入；全屏 `lv_layer_top`） |
