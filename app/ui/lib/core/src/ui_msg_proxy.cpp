@@ -704,6 +704,14 @@ void UiMsgProxy::register_xfr_transfer_progress(XfrTransferProgressCb cb)
     xfr_transfer_progress_cb_ = std::move(cb);
 }
 
+void UiMsgProxy::send_xfr_transfer_cancel()
+{
+    middleware::Message msg(middleware::MsgType::UI_Xfr_Transfer_Cancel_Ntf,
+                            middleware::ModuleId::UI,
+                            middleware::ModuleId::APP_XFR);
+    middleware::MsgPort::instance().publish_async(msg);
+}
+
 void UiMsgProxy::add_usb_hotplug_listener(UsbHotplugCb cb)
 {
     if (cb) {

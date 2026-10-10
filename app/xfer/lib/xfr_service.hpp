@@ -10,6 +10,7 @@
 #include "upload_manager.hpp"
 #include "xfr_config.hpp"
 
+#include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
@@ -81,6 +82,10 @@ private:
                                    uint64_t upload_offset,
                                    uint32_t slice_progress_pct) const;
     void publish_transfer_progress_if_needed();
+    void abort_active_transfer();
+    bool is_transfer_cancelled() const;
+    HttpResponse canceled_upload_rsp() const;
+    static void discard_local_printable(const std::string& printable_name);
 
     void notify_pair_pin(const std::string& pin, uint32_t expires_s) const;
     void notify_file_received(const std::string& name, uint64_t size) const;
@@ -112,6 +117,9 @@ private:
     uint64_t upload_offset_ = 0;
     uint32_t slice_progress_pct_ = 0;
     std::string transfer_name_;
+    bool transfer_cancelled_ = false;
+    uint8_t transfer_epoch_ = 0;
+    mutable std::atomic<int> snowslice_pid_{-1};
     std::chrono::steady_clock::time_point last_progress_emit_at_{};
     uint8_t  last_progress_state_ = 0xff;
     uint32_t last_progress_percent_ = 0xffffffffu;

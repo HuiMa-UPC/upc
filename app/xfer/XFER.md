@@ -28,6 +28,9 @@
 - `PUT /upload/{id}`：按 `Content-Range` 分块上传
 - `POST /upload/{id}/complete`：整文件 SHA-256 校验后按扩展名分流：
   `.ovf` 走 snowslice/OVF 预处理；`.3mf` 解出单个 `.gcode`；最后写入 `config.json`
+- 板端接收弹窗 `Cancel Transfer` → `UI_Xfr_Transfer_Cancel_Ntf`：丢掉未完成
+  `.part`、拒绝后续 `PUT`/`complete`（`409 UPLOAD_CANCELED`）；3MF 后处理若已
+  落盘则撤回清单项。进度条按上传字节 0..100，不再给 snowslice 预留空档。
 - `GET /upload/{id}/status`：查询断点续传进度
 - `GET /print/status`：桌面端轮询打印机状态/进度（传输态本地维护；打印态订阅
   Glavo/Media IPC 缓存）。传输完成对外为 `idle`；`finished` 仅表示打印完成。

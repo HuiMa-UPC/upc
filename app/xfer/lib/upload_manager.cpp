@@ -252,6 +252,16 @@ UploadCompleteResult UploadManager::complete(const std::string& upload_id,
     return out;
 }
 
+void UploadManager::abort_all()
+{
+    std::lock_guard<std::mutex> lk(mu_);
+    for (auto& kv : sessions_) {
+        std::error_code ec;
+        std::filesystem::remove(kv.second.part_path, ec);
+    }
+    sessions_.clear();
+}
+
 bool UploadManager::is_supported_filename(const std::string& filename)
 {
     const std::string lower = to_lower(filename);

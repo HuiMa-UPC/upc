@@ -265,7 +265,8 @@ scripts/rongsu.sh start   # glavo + rongsu_camera → ui
 | `APP_Ota_Check_Rsp` | — | MQTT→UI | `OtaCheckResultPayload` | `register_ota_check_result` | `ota/check_ack` 三态：有更新 / `OTA_NO_UPDATE` / 重试后仍 `OTA_VERSION_NOT_READY`；另有超时与忙碌 |
 | `UI_Ota_Check_Apply_Req` | — | UI→MQTT | `OtaCheckApplyReqPayload` | `send_ota_check_apply` | 用户确认后按 check_ack 的 `components` 下载，不再走 manifest 请求 |
 | `APP_Ota_Check_Apply_Rsp` | — | MQTT→UI | `OtaCheckApplyRspPayload` | `register_ota_check_apply_rsp` | 已开始下载、用户取消，或没有可安装的检查结果 |
-| `XFR_Transfer_Progress_Ntf` | — | XFR→UI | `XfrTransferProgressPayload` | `register_xfr_transfer_progress` | WiFi 传输阶段进度（Uploading/Slicing/Finished/Error） |
+| `XFR_Transfer_Progress_Ntf` | — | XFR→UI | `XfrTransferProgressPayload` | `register_xfr_transfer_progress` | WiFi 传输阶段进度（Uploading/Slicing/Finished/Error）；`progress_percent` 上传按字节 0..100；`transfer_epoch` 区分新任务 |
+| `UI_Xfr_Transfer_Cancel_Ntf` | — | UI→XFR | Empty | `send_xfr_transfer_cancel` | 接收弹窗 Cancel：中止当前上传会话并拒绝后续分块；后处理未提交则丢弃 |
 | `UI_Mcu_Ota_Start_Req` / `UI_Mcu_Ota_Cancel_Ntf` / `APP_Mcu_Ota_Status_Ntf` | — | UI/MQTT↔Glavo | `McuOtaStatusPayload` | `send_mcu_ota_start` / `send_mcu_ota_cancel` / `register_mcu_ota_status` | Galvo 以太网 OTA（`/userdata/image/galvo`，AB 对规则见 [OTA_IMAGE.md](fs_manifest/OTA_IMAGE.md)）。状态 Glavo 双发 UI 与 MQTT |
 | `UI_Serial_Mcu_Ota_Start_Req` / `UI_Serial_Mcu_Ota_Cancel_Ntf` / `APP_Serial_Mcu_Ota_Status_Ntf` | — | UI/MQTT↔Glavo | `McuOtaStatusPayload` | `send_serial_mcu_ota_start` / `send_serial_mcu_ota_cancel` / `register_serial_mcu_ota_status` | MCU 串口 OTA（`/userdata/image/mcu`，AB 对规则见 [OTA_IMAGE.md](fs_manifest/OTA_IMAGE.md)）。云端落盘后 MQTT 发 Start；状态双发 UI 与 MQTT |
 | `UI_Debug_Axis_Jog_Ntf` | — | UI→Glavo | `DebugAxisJogPayload` | `DebugMsgProxy::send_axis_jog` | **后端待实现** |
