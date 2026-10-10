@@ -188,8 +188,8 @@ scripts/rongsu.sh start   # glavo + rongsu_camera → ui
 | `UI_Print_Powder_Low_Ignore_Req` | — | UI→Glavo | Empty | `send_print_powder_low_ignore` | 当前打印会话忽略后续缺粉检测：不再自动暂停、不再推缺粉通知 |
 | `APP_Print_Pause_Rsp` | `GLAVO_Print_Pause_Rsp` | Glavo→UI **与** Xfr | `PrintPauseStatePayload` | `register_print_pause_done` | 暂停/恢复响应（paused=1/0；Pause/Resume Req 共用） |
 | `APP_Print_Powder_Low_Ntf` | — | Glavo→UI | Empty | `register_print_powder_low` | 打印中粉量位 bit0/bit1 同时为 0 时仅通知一次；UI 弹补粉弹窗 |
-| `APP_OpticalPath_Progress_Ntf` | — | Glavo→UI | `OpticalPathProgressPayload` | `register_optical_path_progress` | 打印前光路逐点（Job 卡右侧 n/5）；标题/总进度条由 `APP_Print_Prep_Progress_Ntf` 驱动；`state=3` Complete 只清 n/5，不切 Printing |
-| `APP_Print_Prep_Progress_Ntf` | — | Glavo→UI | `PrintPrepProgressPayload` | `register_print_prep_progress` | 起印环境检查进度：Job 卡标题（外门/内门/光路/测高/氧门/首层）+ 进度条；跳过的步骤不推、直接进下一步；氧门与首层在开扫握手阶段仍属 Prepare；`step=Ready` 后切 Printing 并从 0% 计打印进度 |
+| `APP_OpticalPath_Progress_Ntf` | — | — | `OpticalPathProgressPayload` | — | **已停用**。独立五点光路并进测高，Glavo 不再发，UI 不再订阅。枚举保留勿挪位 |
+| `APP_Print_Prep_Progress_Ntf` | — | Glavo→UI | `PrintPrepProgressPayload` | `register_print_prep_progress` | 起印环境检查进度：Job 卡标题（外门/内门/Vision check/氧门/首层）+ 进度条；跳过的步骤不推、直接进下一步。无板放板窗不另占一步，标题停在 Vision check。氧门与首层在开扫握手阶段仍属 Prepare；`step=Ready` 后切 Printing 并从 0% 计打印进度 |
 | `APP_Print_Start_Rejected_Ntf` | — | Glavo→UI | `PrintStartRejectedPayload` | `register_print_start_rejected` | 起印被拒（光路/测高失败、本地副本打不开、TCP 未连、关内门套件失败、Z 未到 −10、基板读码失败等）；UI 跳转 manifest 终止结果页。不可用 `APP_Print_Terminate_Rsp` 代替：0% 进度会被 UI 的 `print_ready_to_exit` 挡住 |
 | `GLAVO_Outer_Door_Confirm_Req` | — | Glavo→UI | Empty | `register_outer_door_confirm_req` | 起印前外门未关：弹窗 Confirm / Cancel（无超时） |
 | `UI_Outer_Door_Confirm_Rsp` | — | UI→Glavo | `OuterDoorConfirmRspPayload` | `send_outer_door_confirm` | Confirm：`skip=0`，Glavo 再读门，仍开则再次 Req；Cancel：`skip=1`，不检门，直接进内门套件 |
@@ -223,12 +223,12 @@ scripts/rongsu.sh start   # glavo + rongsu_camera → ui
 | `APP_Visual_FirstLayer_Reference_Ready_Rsp` | `0x1427` | Visual→Glavo | `VisualFirstLayerReferenceReadyPayload` | — | 同会话裸板 B0 采集回执；成功前禁止开始打印运动，失败则保守终止起印 |
 | `GLAVO_Visual_FirstLayer_Check_Req` | `0x1423` | Glavo→Visual | `VisualFirstLayerCheckReqPayload` | — | 触发首层视觉检测（检测前允许从 Camera 最新帧做拷贝/处理） |
 | `APP_Visual_FirstLayer_Check_Rsp` | `0x1424` | Visual→Glavo | `VisualFirstLayerCheckRspPayload` | — | 首层检测结果：`result=1` 继续打印，`result=0` 继续铺粉 |
-| `GLAVO_Visual_OpticalPath_Session_Start_Ntf` | `0x1428` | Glavo→Visual | Empty | — | 打印前光路检测开始，Visual 起流（与首层会话共用一路流） |
-| `GLAVO_Visual_OpticalPath_Session_Stop_Ntf` | `0x1429` | Glavo→Visual | Empty | — | 光路检测结束；三类会话都停才拆流 |
-| `GLAVO_Visual_OpticalPath_Point_Check_Req` | `0x142A` | Glavo→Visual | `VisualOpticalPathCheckReqPayload` | — | 单点红光识别；Visual 先等帧再在 `timeout_ms` 内认红点 |
-| `APP_Visual_OpticalPath_Point_Check_Rsp` | `0x142B` | Visual→Glavo | `VisualOpticalPathCheckRspPayload` | — | `result=1` 通过；`result=0` 且 `reserved[0]=1` 为无帧；`session_id`/`point_index` 须回显 |
-| `GLAVO_Visual_PlateHeight_Session_Start_Ntf` | `0x142C` | Glavo→Visual | Empty | — | 打印前测高 / 高度校准开始，Visual 起流（与首层、光路共用一路） |
-| `GLAVO_Visual_PlateHeight_Session_Stop_Ntf` | `0x142D` | Glavo→Visual | Empty | — | 测高/校准结束；三类会话都停才拆流 |
+| `GLAVO_Visual_OpticalPath_Session_Start_Ntf` | `0x1428` | — | Empty | — | **已停用**。Visual 不再订阅。测高会话负责这段取流。枚举保留勿挪位 |
+| `GLAVO_Visual_OpticalPath_Session_Stop_Ntf` | `0x1429` | — | Empty | — | **已停用**。枚举保留勿挪位 |
+| `GLAVO_Visual_OpticalPath_Point_Check_Req` | `0x142A` | — | `VisualOpticalPathCheckReqPayload` | — | **已停用**。粗测改走测高光斑。枚举保留勿挪位 |
+| `APP_Visual_OpticalPath_Point_Check_Rsp` | `0x142B` | — | `VisualOpticalPathCheckRspPayload` | — | **已停用**。枚举保留勿挪位 |
+| `GLAVO_Visual_PlateHeight_Session_Start_Ntf` | `0x142C` | Glavo→Visual | Empty | — | 打印前测高 / 高度校准开始，Visual 起流（与首层共用一路） |
+| `GLAVO_Visual_PlateHeight_Session_Stop_Ntf` | `0x142D` | Glavo→Visual | Empty | — | 测高/校准结束；首层、测高、舱检都停才拆流 |
 | `GLAVO_Visual_Laser_Spot_Measure_Req` | `0x142E` | Glavo→Visual | Empty | — | 请求当前帧激光质心（校准与测高）；Visual 不查 LUT |
 | `APP_Visual_Laser_Spot_Measure_Rsp` | `0x142F` | Visual→Glavo | `LaserSpotMeasureRspPayload` | — | `ok` + `laser_x/y` 像素质心 |
 | `GLAVO_Visual_Cabin_Session_Start_Ntf` | `0x1720` | Glavo→Visual | `VisualCabinSessionPayload` (4 B) | — | 指定非零 `session_id`，准备舱检取流；不自动开始算法（见 [CABIN_IPC_INTEGRATION.md](../doc/CABIN_IPC_INTEGRATION.md)） |
@@ -332,12 +332,12 @@ scripts/rongsu.sh start   # glavo + rongsu_camera → ui
 | `UI_Debug_Alarm_Inject_Ntf` | — | UI→Glavo | `AlarmReportPayload` | `send_alarm_inject` | 调试页 **Alarm Inject**：Glavo 转成 `GLAVO_Alarm_Report_Ntf` **只发 MQTT**（不上 UI，避免与本地 `[SIM]` 双弹；不改 MCU 快照）。关开关对 CONDITION 发 `state_mask=0` 模拟解除 |
 | `UI_Debug_FirstLayer_Visual_Check_Set_Ntf` | — | UI→Glavo | `DebugOnOffPayload` | `send_first_layer_visual_check_set` | 调试页开关：首层视觉检测（仅本次运行，默认关） |
 | `UI_Debug_FirstLayer_Visual_Check_Get_Ntf` | — | UI→Glavo | Empty | `request_first_layer_visual_check_state` | 查询当前“首层视觉检测”开关状态 |
-| `UI_Debug_OpticalPath_Check_Set_Ntf` | — | UI→Glavo | `DebugOnOffPayload` | `send_optical_path_check_set` | 调试页开关：打印前光路检测（仅本次运行，默认关） |
-| `UI_Debug_OpticalPath_Check_Get_Ntf` | — | UI→Glavo | Empty | `request_optical_path_check_state` | 查询当前“打印前光路检测”开关状态 |
+| `UI_Debug_OpticalPath_Check_Set_Ntf` | — | — | `DebugOnOffPayload` | — | **已停用**。光路并进 Vision Check（`UI_Debug_PlateHeight_Adj_Set_Ntf`）。枚举保留勿挪位 |
+| `UI_Debug_OpticalPath_Check_Get_Ntf` | — | — | Empty | — | **已停用**。枚举保留勿挪位 |
 | `UI_Debug_InnerDoor_Occlusion_Set_Ntf` | — | UI→Glavo | `DebugOnOffPayload` | `send_inner_door_occlusion_set` | 内门挡门融合：`on=1` 执行（仅本次运行，**默认关**）。设置页 **Inner Door Vision**；调试页 **Skip Inner Door Occl** 按下发 `on=0` |
 | `UI_Debug_InnerDoor_Occlusion_Get_Ntf` | — | UI→Glavo | Empty | `request_inner_door_occlusion_state` | 查询内门挡门融合是否执行 |
-| `UI_Debug_Plate_Present_Set_Ntf` | — | UI→Glavo | `DebugOnOffPayload` | `send_plate_present_set` | 基板在位读码：`on=1` 执行（仅本次运行，**默认开**）。调试页按钮是 **Skip Plate Present**，按下发 `on=0` |
-| `UI_Debug_Plate_Present_Get_Ntf` | — | UI→Glavo | Empty | `request_plate_present_state` | 查询基板读码是否执行 |
+| `UI_Debug_Plate_Present_Set_Ntf` | — | — | `DebugOnOffPayload` | — | **已停用**。在位改由测高粗测 `H>3` 判断，跟 Vision Check 一起开关。枚举保留勿挪位 |
+| `UI_Debug_Plate_Present_Get_Ntf` | — | — | Empty | — | **已停用**。枚举保留勿挪位 |
 | `UI_Debug_TestImage_Set_Ntf` | — | UI→Glavo | `DebugOnOffPayload` | `send_test_image_set` | 调试页 Test image：红光模式循环打印 `/userdata/test/test.gcode`；Off 仅 Stop，不切激光；无录像/延时/换层握手/首页打印态 |
 | `UI_Debug_TestImage_Get_Ntf` | — | UI→Glavo | Empty | `request_test_image_state` | 查询测试图循环打印实际状态 |
 | `GLAVO_Debug_Laser_Ntf` | — | Glavo→UI | `DebugLaserStatePayload` | `register_laser` | 激光器状态/报警/功率/温度 |
@@ -353,15 +353,15 @@ scripts/rongsu.sh start   # glavo + rongsu_camera → ui
 | `GLAVO_Debug_O2_Calib_Rsp` | — | Glavo→UI | `DebugO2CalibRspPayload` | `register_o2_calib` | 氧标定 Req 应答（ok/err/k/i_ua/o2）；成功不再另推 Ntf |
 | `GLAVO_Debug_O2_Calib_Ntf` | — | Glavo→UI | `DebugO2CalibRspPayload` | `register_o2_calib` | 进页 Get 回读当前 K（不改盘；i_ua=0；与 Rsp 同结构） |
 | `GLAVO_Debug_FirstLayer_Visual_Check_Ntf` | — | Glavo→UI | `DebugOnOffPayload` | `register_first_layer_visual_check` | 回读当前“首层视觉检测”开关状态 |
-| `GLAVO_Debug_OpticalPath_Check_Ntf` | — | Glavo→UI | `DebugOnOffPayload` | `register_optical_path_check` | 回读当前“打印前光路检测”开关状态 |
+| `GLAVO_Debug_OpticalPath_Check_Ntf` | — | — | `DebugOnOffPayload` | — | **已停用**。枚举保留勿挪位 |
 | `GLAVO_Debug_PlateHeight_Adj_Ntf` | — | Glavo→UI | `DebugOnOffPayload` | `register_plate_height_adj` | 回读当前“打印前基板测高”开关状态 |
 | `UI_Debug_Plate_Work_Z_Set_Ntf` | — | UI→Glavo | `DebugPlateWorkZPayload` | `send_plate_work_z_set` | 测高收到约 1mm 后再补 `(target_mm-1)` mm，正值向上。设置页 Calibration 上方输入框。仅本次运行，默认 1（不额外移动） |
 | `UI_Debug_Plate_Work_Z_Get_Ntf` | — | UI→Glavo | Empty | `request_plate_work_z_state` | 查询当前工作高度 |
 | `GLAVO_Debug_Plate_Work_Z_Ntf` | — | Glavo→UI | `DebugPlateWorkZPayload` | `register_plate_work_z` | 回读工作高度 |
 | `GLAVO_Debug_InnerDoor_Occlusion_Ntf` | — | Glavo→UI | `DebugOnOffPayload` | `register_inner_door_occlusion` | 回读挡门融合是否执行（`on=1` 执行）；UI 把 `on=0` 显示成 Skip 按下 |
-| `GLAVO_Debug_Plate_Present_Ntf` | — | Glavo→UI | `DebugOnOffPayload` | `register_plate_present` | 回读读码是否执行（`on=1` 执行）；UI 把 `on=0` 显示成 Skip 按下 |
-| `GLAVO_Plate_Place_Confirm_Req` | — | Glavo→UI | Empty | `register_plate_place_confirm_req` | 读码=无板：先自动开内门再开外门，再弹「放入基板并关好外门」；Cancel=`cancel=1` 阻断起印 |
-| `UI_Plate_Place_Confirm_Rsp` | — | UI→Glavo | `PlatePlaceConfirmRspPayload` | `send_plate_place_confirm` | Confirm：`cancel=0`，再检外门+内门+读码；Cancel：`cancel=1` 阻断 |
+| `GLAVO_Debug_Plate_Present_Ntf` | — | — | `DebugOnOffPayload` | — | **已停用**。枚举保留勿挪位 |
+| `GLAVO_Plate_Place_Confirm_Req` | — | Glavo→UI | Empty | `register_plate_place_confirm_req` | 粗测 `H>3` 判定无板：先自动开内门再开外门，再弹「放入基板并关好外门」；Cancel=`cancel=1` 阻断起印。不另占准备进度步 |
+| `UI_Plate_Place_Confirm_Rsp` | — | UI→Glavo | `PlatePlaceConfirmRspPayload` | `send_plate_place_confirm` | Confirm：`cancel=0`，再关内门并重做测高；Cancel：`cancel=1` 阻断 |
 | `GLAVO_Debug_Soc_Led_Ntf` | — | Glavo→UI | `DebugSocLedStatePayload` | `register_soc_led` | 回读六路舱灯开关位图（bit0=`lgt1l`…bit5=`lgt3r`） |
 | `GLAVO_Debug_Cabin_Pm_Valve_Ntf` | — | Glavo→UI | `DebugOnOffPayload` | `register_cabin_pm_valve` | 回读舱内 PM `fa_valve` 开关状态 |
 | `GLAVO_Debug_TestImage_Ntf` | — | Glavo→UI | `DebugOnOffPayload` | `register_test_image` | 回读测试图循环实际状态；文件缺失/与正式打印互斥失败时回 `on=0` |

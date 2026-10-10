@@ -1689,11 +1689,11 @@ Manual 的电源钮与调试页 Fan 开关都读它，所以在哪边开关、�
   → switch_to("user_monitor") + page_user_monitor_enter_printing_mode()
 Snowpath `print/start`：Glavo 双发 `GLAVO_Print_State_Ntf(Printing)` → UI 同样
   `enter_state(PRINTING)`。不跟进的话停印钮不出现，外门/放板确认也被丢掉，只能强制关机。
-  → 起印先将 Z 绝对走到 −10 mm（±1 mm 内视为已到位），与 Skip Plate Present 无关；未到位中止并报 Z did not reach print height，不报成基板读码失败。Z settle / 挡门读码等阻塞等待在 Glavo 准备线程，不堵业务线程（开门与 Manual Z 仍可响应；准备收 Z 期间 Manual Z 丢弃）
+  → 起印先将 Z 绝对走到 −10 mm（±1 mm 内视为已到位）；未到位中止并报 Z did not reach print height。Z settle / 挡门等阻塞等待在 Glavo 准备线程，不堵业务线程（开门与 Manual Z 仍可响应；准备收 Z 期间 Manual Z 丢弃）
   → 进度推送 page_user_monitor_printing_update()
   → 起印环境检查 `APP_Print_Prep_Progress_Ntf` → page_user_monitor_print_prep_update()
        Job 卡标题随步切换（Checking outer door / Closing inner door /
-       Optical path check / Plate leveling / Checking oxygen / First layer check）；
+       Vision check / Checking oxygen / First layer check）；
        进度条按本趟实际步数均摊（跳过的步骤不推送，UI 直接看到下一步）；
        氧门与首层在开扫握手阶段仍属 Prepare；`step=Ready` 切回 Printing，
        条与百分数复位到 0%（Prepare 与打印是两套进度）
@@ -1707,8 +1707,7 @@ Snowpath `print/start`：Glavo 双发 `GLAVO_Print_State_Ntf(Printing)` → UI �
        外门开→关自动补关：先到 −100 mm 再关门，关完回到下降前高度
        上电不自动关内门
   → 准备阶段（含尚未 Ready 的氧门/首层）点终止：Z 绝对到 −10 mm；已 Ready 出光后的终止不动 Z
-  → 光路：prep 标题 + `page_user_monitor_optical_path_update()` 右侧 n/5
-  → 测高（失败/无 LUT 起印拒绝）
+  → Vision check：粗测 8 点光路、`H>3` 在位、再调高。无板弹放板窗，Job 卡标题停在 Vision check，不另占一步。失败或无 LUT 起印拒绝
   → Camera manifest → page_user_monitor_enter_print_result()
   → RETRIEVE → 取件弹窗滑到底 → control_print_result_collect() → 开门流程
 ```
@@ -2495,7 +2494,8 @@ Device Settings 的子页由 `DevSub` + `dev_show()` 切换（清空右栏重建
   有新版本弹窗确认后下载，已最新则 toast（结果弹窗在 `ui_app`，不绑本页生命周期）。
 - **Advanced Print**：内容不变，补页头（`Advanced Print` / `Print gates and calibration`），分区
   标题、行与开关换新样式。列出打印前门控，
-  默认全开，和调试页同一套 Glavo 开关（外门、内门视觉、基板在位、光路、基板测高、氧浓度），
+  默认全开，和调试页同一套 Glavo 开关（外门、PM2.5、内门视觉、Vision Check、氧浓度；Vision Check
+  即测高，光路与基板在位已并入其中，不再单列开关），
   另有 **Keep Z Position**（默认关：打开后整个打印会话绝对不动 Z——不起印 −10、跳过测高与
   工作高度抬升、开关内门前不降 Z、终止/失败收尾不改 Z，Manual/调试 Z 点动与 Home 也丢弃），
   以及 **Transfer Box**（默认开，与调试页同一枚本地开关：取件后走转运盒三步，自检阶段终止的除外；关掉则开门即回 IDLE），
