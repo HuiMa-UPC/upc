@@ -158,6 +158,8 @@ private:
     void on_alarm_report(const middleware::Message& msg);
     void on_alarm_cloud_snapshot(const middleware::Message& msg);
     void on_ota_user_decision(const middleware::Message& msg);
+    void on_ota_check_req(const middleware::Message& msg);
+    void on_ota_check_apply(const middleware::Message& msg);
     void on_rtsp_start_rsp(const middleware::Message& msg);
     void on_rtsp_stop_rsp(const middleware::Message& msg);
     void cache_telemetry(const middleware::EnvSnapshotPayload& p);
@@ -186,7 +188,7 @@ private:
 
     bool publish_chamber_telemetry();
     bool publish_chamber_ext_telemetry();
-    bool publish_heartbeat();
+    bool publish_heartbeat(bool force = false);
     bool publish_cloud_state(bool force);
     void note_ota_cloud_state(const char* ota_state);
     void note_tcp_ready(bool ready);
@@ -256,6 +258,28 @@ private:
     void handle_rtsp_rsp(const middleware::Message& msg, const char* expect_cmd);
     bool track_pending_ack(const std::string& req_id, const std::string& cmd);
     bool start_log_collect(LogCollectCommand cmd);
+    void start_print_job_worker();
+    void stop_print_job_worker();
+    void enqueue_existing_print_jobs();
+    void print_job_worker_loop();
+    /** @return 0 结束，1 计入一次失败后重试，2 MQTT 未连上，不计次数。 */
+    int process_print_job_staging(const std::string& staging_dir);
+    void on_print_job_report(const middleware::Message& msg);
+    void handle_print_job_ack(const std::string& payload);
+    void subscribe_print_job_ack();
+    bool publish_mqtt_qos1(const std::string& topic, const std::string& payload);
+    std::string build_uplink_json(const char* type,
+                                  const std::string& req_id,
+                                  const std::string& data_json);
+    bool request_print_job_ack(const std::string& req_id,
+                               std::string& job_id,
+                               std::string& upload_url,
+                               std::string& object_key,
+                               int64_t& expires_at);
+    bool bind_cloud_job_id(const std::string& gcode_name,
+                           const std::string& req_id,
+                           const std::string& job_id);
+    void notify_glavo_print_job(const std::string& req_id, const std::string& job_id);
     void run_log_collect_task(LogCollectCommand cmd);
     void publish_log_collect_error(const LogCollectCommand& cmd, const char* reason);
     void publish_log_collect_accepted(const LogCollectCommand& cmd,
@@ -268,12 +292,30 @@ private:
     bool subscribe_ota_topics();
     void handle_ota_notify(const std::string& payload);
     void handle_ota_manifest_response(const std::string& payload);
+    void handle_ota_check_ack(const std::string& payload);
     bool parse_ota_notify(const std::string& payload, OtaNotify& out) const;
     bool parse_manifest_response(const std::string& payload,
                                  std::string& task_id,
                                  std::vector<OtaComponent>& components,
                                  std::string& err_code) const;
     bool publish_manifest_request(const std::string& task_id);
+    bool publish_ota_check(const std::string& req_id);
+    std::string make_ota_check_req_id();
+    bool parse_ota_check_ack(const std::string& payload,
+                             std::string& req_id,
+                             std::string& next_release_version,
+                             std::vector<OtaComponent>& components,
+                             std::string& error_code) const;
+    void publish_ota_check_result(middleware::OtaCheckResult result,
+                                  const std::string& version,
+                                  const char* message);
+    void publish_ota_check_apply_rsp(middleware::OtaCheckApplyResult result,
+                                     const char* reason);
+    void poll_ota_check();
+    /** 去掉展示用的前导 v/V 和两端空白。空结果表示没有可上报的文本。 */
+    static std::string data_plane_version(const std::string& raw);
+    /** 只保留纯数字点分版本；其它文本（含 unknown）返回空，心跳 release_version 发 null。 */
+    static std::string numeric_release_version(const std::string& raw);
     bool publish_ota_progress_cloud(const middleware::OtaProgressPayload& progress);
     void publish_ota_progress_ui(const middleware::OtaProgressPayload& progress);
     bool trigger_galvo_real_ota(const std::string& task_id, const std::string& component);
@@ -373,6 +415,7 @@ private:
     void soc_ota_pending_clear() const;
     void request_firmware_versions_force(bool need_mcu, bool need_galvo);
     void poll_ota_heartbeat_wait();
+    static std::string make_ota_check_task_id(const std::string& req_id);
     static bool parse_mcu_version_text(const std::string& text,
                                        middleware::McuVersionPayload& out);
     static bool parse_galvo_version_text(const std::string& text,
@@ -497,6 +540,20 @@ private:
 
     std::mutex ota_mtx_;
     OtaNotify pending_ota_notify_{};
+    /** ota/check 进行中的会话。components 只在用户确认前暂存，不落盘。 */
+    enum class OtaCheckPhase : uint8_t { Idle, WaitAck, RetryWait };
+    struct OtaCheckSession {
+        OtaCheckPhase phase = OtaCheckPhase::Idle;
+        std::string req_id;
+        int not_ready_retries = 0;
+        uint64_t deadline_ms = 0;
+        uint64_t retry_at_ms = 0;
+        bool offer_valid = false;
+        std::string offer_task_id;
+        std::string next_release_version;
+        std::vector<OtaComponent> components;
+    };
+    OtaCheckSession ota_check_{};
     std::thread ota_download_thread_;
     bool ota_download_running_ = false;
     /** 本次运行是否已补发过遗留固件提示，避免每次重连都弹一遍。 */
@@ -512,6 +569,21 @@ private:
     std::thread log_collect_thread_;
     bool log_collect_running_ = false;
     uint64_t last_log_collect_attempt_ms_ = 0;
+
+    /* 云端打印任务上报。和切片 HTTP、开打无关；放弃时只删暂存目录。 */
+    std::mutex print_job_mtx_;
+    std::condition_variable print_job_cv_;
+    std::thread print_job_thread_;
+    std::atomic<bool> print_job_stop_{false};
+    std::vector<std::string> print_job_queue_;
+    std::mutex print_job_ack_mtx_;
+    std::condition_variable print_job_ack_cv_;
+    std::string print_job_wait_req_;
+    bool print_job_ack_ready_ = false;
+    std::string print_job_ack_job_id_;
+    std::string print_job_ack_upload_url_;
+    std::string print_job_ack_object_key_;
+    int64_t print_job_ack_expires_ = 0;
 
     std::atomic<uint32_t> seq_{0};
 

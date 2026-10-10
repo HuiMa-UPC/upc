@@ -16,9 +16,8 @@ struct TransferThumbnailTarget {
 /**
  * 将传输 3MF 中提取的 PNG 转为 UI 可直接读取的三份 RGB565 RTHM。
  *
- * 几何规则与 tools/img2rthm_triplet.py 一致：先抹掉青绿支撑色（旧灰底预览），
- * 再去掉与四角底色接近的留白，按目标比例 CONTAIN。蓝底同色支撑与模型分不开，
- * 不能在板端滤，需要 Snowpath 导出不含支撑的 PNG。
+ * 几何规则：按四角底色去掉留白，再按目标比例 CONTAIN。
+ * 预览里的支撑色原样保留，不再在板端抹色。
  * 有 librga 时优先尝试 RGA；普通内存无法导入或硬件转换失败时自动走 CPU。
  */
 bool generate_transfer_thumbnail_triplet(

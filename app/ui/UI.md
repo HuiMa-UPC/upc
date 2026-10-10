@@ -1074,7 +1074,7 @@ pending 自动解除——正好顺带验超时路径。
 | `user_home` | `page_user_home.*` | 首页待机（浅色档）：设备图 + 问候语 + HOME 空气质量卡 + 四宫格 + 余量胶囊 + 左下 PRINT + 右下开门滑块。打印态与待机监控在 `user_monitor` |
 | `user_monitor` | `page_user_monitor.*` | 监控页（侧栏第 2 格，浅色档）：左摄像头 + 右栏三 Tab（Job / Status / Manual）+ 全屏切换 + 取件弹窗。打印流程的落点。见「监控页」一节 |
 | `user_history` | `page_user_history.*` | 打印历史：三 Tab + Storage 条 + 日期分组卡片 + 管理态批量删除 + 左滑删除 |
-| `user_settings` | `page_user_settings.*` | 设置（浅色档）：左栏 Device Settings / Preferences / Nitrogen Generator / Storage / Privacy & Security / Advanced Print / About（+ 解锁后的 Debug），右栏「标题 + 副标题 + 行卡片」。Device Settings 下挂 Account / Wi-Fi / Display & Language 子页；Preferences 与 Privacy 的开关落盘（`ui_prefs`）；后端缺的功能只做界面。按稿 6403 / 6457 一族（`tools/pages/setting/neew`）实现，见「设置页布局」 |
+| `user_settings` | `page_user_settings.*` | 设置（浅色档）：左栏 Device Settings / Preferences / Nitrogen Generator / Storage / Privacy & Security / Advanced Print / About（+ 解锁后的 Debug），右栏「标题 + 副标题 + 行卡片」。Device Settings 下挂 Account / Wi-Fi / Display & Language 子页；Preferences 与 Privacy 的开关落盘（`ui_prefs`）；About 带 Check for Update；后端缺的功能只做界面。按稿 6403 / 6457 一族（`tools/pages/setting/neew`）实现，见「设置页布局」 |
 | `user_message` | `page_user_message.*` | 消息中心（浅色档）：四 Tab（含临时的 Unresolved，按到达序汇总未处理报警）+ All read 浮层顶栏 + 日期分组混排列表（MCU 报警 + 设备事件）+ 初始 10 条与底部 Load More + 左滑删除历史 + 右侧 632 详情抽屉（Reset 三态）。按稿 6230:89616 / 6091:13405 / 6091:13612 / 6091:13847 实现 |
 | `user_debug` | `page_user_debug.*` | 调试控制台（浅色档，与主页同白/淡色）；Move 页 Z 卡点击步距按 **μm** 输入，`on_jog_click` 乘 `AxisCfg::step_scale`（Z=0.001）转 mm 再发 `send_axis_jog`（契约 value 为 mm；Test 页与监控页 Manual 直接传 mm，不经此换算）；Move 页振镜卡 Abs X/Y + Move 走 `send_galvo_abs_pos`；Other 页按 Process / Cabin / Print Gates / Media & Sim / Inject 分组。Print Gates 含 **Skip Optical Path Chk**（默认关=要做光路）、**Skip Plate Prompt**（默认开）、**Clearance Mask**（默认开：外门补关时监控页盖遮罩，纯本地、不落盘，见「外门补关遮罩」）。`Galvo Point Test` 在 Print Gates，按当前校准表依次显示中心和四角红光点，与正式打印及 Test image 双向互斥。O2 Calib 在左列：输入参考浓度后点圆钮写 `/userdata/CAL/o2_cal.json`；失败 toast 提示、标签仍显示原 K。左列 Fan 开关的勾选态跟 `DebugMsgProxy::fan_on()` 走（与监控页 Manual 共用一份，见「风扇开关态：proxy 常驻缓存，两页共用」），进页先按缓存对齐。Media & Sim 的 **Sys HUD** 打开后，`ui_sys_hud` 在 `lv_layer_sys` 右上角红字显示 CPU 温 / 整机与本进程占用 / 内存（`upc_sys_monitor_sample` 读本机 `/proc` 与 thermal sysfs，不经 IPC），不进布局、不可点，仅本次运行。同组 **Chroma Green** 打开后，`ui_chroma_green` 在 `lv_layer_sys` 铺满纯绿 `#00FF00`（压住业务 UI 与 Sys HUD），中心与四角各一黑色十字作对齐参考，便于后期抠图；再点绿幕任意处关闭并把开关弹回 Off，仅本次运行。顶部传感器条末格 **Zone4** 进页后约 1Hz 读 `thermal_zone4`（同 `sample().zone4_temp_c`），退页停定时器；传感器条下方另有 **Powder IR** 八路料位红外（A1/A2/A3/B1/B2/B3/L/R，`powder_ir_bits`：Blk=遮挡有粉、Clr=受光无粉） |
 | `user_timelapse` | `page_user_timelapse.*` | 延时摄影播放器（隐藏页，历史缩略图进入；全屏 `lv_layer_top`） |
@@ -2487,11 +2487,12 @@ Device Settings 的子页由 `DevSub` + `dev_show()` 切换（清空右栏重建
   旧版的 SD 容量卡与 File Management 两行（原本只画不接）已删。插拔时整页重建、保住滚动位置。
 - **Privacy & Security**：Terms of Use / Privacy Policy 进 Coming soon 子页；Join User Experience
   Program 开关落盘。
-- **About**：卡一 Device Model / Serial Number / Firmware Version / MCU Version / Galvo Version
-  （解锁后加两行 OTA）；卡二 Export Logs（选存储弹窗，Export 提示 Coming soon）、Factory Reset
+- **About**：卡一 Device Model / Serial Number / Firmware Version / Check for Update / MCU Version /
+  Galvo Version（解锁后加两行 OTA）；卡二 Export Logs（选存储弹窗，Export 提示 Coming soon）、Factory Reset
   （标题与副标题红字，`Restore` 红描边钮直接提示 Coming soon——稿上没有它的确认弹窗）。序列号读
   设备 key 文件第一行（`/userdata/snowpod/key`，环境变量 `SNOWPOD_DEVICE_KEY_FILE` 可改，与 MQTT
-  的 device_id 同源），读不到显示 `--`。
+  的 device_id 同源），读不到显示 `--`。**Check for Update** 行右侧 Check 钮：先补心跳再问云端，
+  有新版本弹窗确认后下载，已最新则 toast（结果弹窗在 `ui_app`，不绑本页生命周期）。
 - **Advanced Print**：内容不变，补页头（`Advanced Print` / `Print gates and calibration`），分区
   标题、行与开关换新样式。列出打印前门控，
   默认全开，和调试页同一套 Glavo 开关（外门、内门视觉、基板在位、光路、基板测高、氧浓度），

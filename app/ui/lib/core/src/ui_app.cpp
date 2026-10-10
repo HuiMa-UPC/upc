@@ -69,9 +69,11 @@ lv_obj_t* g_ota_screen = nullptr;
 ui_modal_dialog_t* g_ota_prompt_dlg = nullptr;
 ui_modal_dialog_t* g_ota_progress_dlg = nullptr;
 ui_modal_dialog_t* g_soc_ota_dlg = nullptr;
+ui_modal_dialog_t* g_ota_check_dlg = nullptr;
 lv_obj_t* g_ota_progress_bar = nullptr;
 lv_obj_t* g_ota_progress_label = nullptr;
 std::string g_ota_task_id;
+std::string g_ota_check_version;
 bool g_ota_required = false;
 
 void close_ota_prompt()
@@ -98,6 +100,82 @@ void close_ota_progress()
         g_ota_progress_bar = nullptr;
         g_ota_progress_label = nullptr;
     }
+}
+
+void close_ota_check_prompt()
+{
+    if(g_ota_check_dlg) {
+        ui_modal_dialog_close(g_ota_check_dlg);
+        g_ota_check_dlg = nullptr;
+    }
+}
+
+void ota_check_decision_cb(lv_event_t* e)
+{
+    const bool approve = reinterpret_cast<intptr_t>(lv_event_get_user_data(e)) != 0;
+    UiMsgProxy::instance().send_ota_check_apply(approve, g_ota_check_version.c_str());
+    close_ota_check_prompt();
+}
+
+void open_ota_check_prompt(const char* version)
+{
+    if(!g_ota_screen) {
+        return;
+    }
+    g_ota_check_version = version ? version : "";
+    close_ota_check_prompt();
+    ui_modal_dialog_cfg_t cfg = ui_modal_dialog_cfg_user("Software Update", USER_DLG_W, true);
+    cfg.light_theme = true;
+    g_ota_check_dlg = ui_modal_dialog_open(g_ota_screen, &cfg);
+    if(!g_ota_check_dlg) {
+        return;
+    }
+    char body[160];
+    std::snprintf(body, sizeof(body),
+                  "Version %s is available.\nInstall this update?",
+                  g_ota_check_version.empty() ? "unknown" : g_ota_check_version.c_str());
+    lv_obj_t* lbl = ui_user_make_body_label(g_ota_check_dlg->body, body);
+    lv_label_set_long_mode(lbl, LV_LABEL_LONG_MODE_WRAP);
+    lv_obj_set_width(lbl, LV_PCT(100));
+    lv_obj_set_style_text_align(lbl, LV_TEXT_ALIGN_CENTER, 0);
+    ui_user_make_confirm_footer_btn(g_ota_check_dlg->footer, "Cancel", false,
+                                    user_color_text_dim, true, ota_check_decision_cb,
+                                    reinterpret_cast<void*>(0));
+    ui_user_make_confirm_footer_btn(g_ota_check_dlg->footer, "Update", true,
+                                    user_color_accent, true, ota_check_decision_cb,
+                                    reinterpret_cast<void*>(1));
+}
+
+void on_ota_check_result(const middleware::OtaCheckResultPayload& p)
+{
+    const auto result = static_cast<middleware::OtaCheckResult>(p.result);
+    if(result == middleware::OtaCheckResult::UpdateAvailable) {
+        open_ota_check_prompt(p.next_release_version);
+        return;
+    }
+    if(result == middleware::OtaCheckResult::UpToDate) {
+        ui_toast_show("You're up to date", user_color_status_ok, 1800);
+        return;
+    }
+    if(result == middleware::OtaCheckResult::Busy) {
+        const bool updating = std::strstr(p.message, "progress") != nullptr;
+        ui_toast_show(updating ? "An update is already in progress"
+                               : "Already checking for updates",
+                      user_color_accent, 1800);
+        return;
+    }
+    ui_toast_show("Couldn't check for updates. Try again later.",
+                  user_color_status_err, 2200);
+}
+
+void on_ota_check_apply_rsp(const middleware::OtaCheckApplyRspPayload& p)
+{
+    const auto result = static_cast<middleware::OtaCheckApplyResult>(p.result);
+    if(result != middleware::OtaCheckApplyResult::Rejected) {
+        return;
+    }
+    ui_toast_show(p.reason[0] ? p.reason : "Update didn't start",
+                  user_color_status_err, 2200);
 }
 
 void ota_decision_cb(lv_event_t* e)
@@ -323,6 +401,8 @@ void app_init(lv_obj_t* screen) {
     UiMsgProxy::instance().init();
     UiMsgProxy::instance().register_ota_notify(on_ota_notify);
     UiMsgProxy::instance().register_ota_progress(on_ota_progress);
+    UiMsgProxy::instance().register_ota_check_result(on_ota_check_result);
+    UiMsgProxy::instance().register_ota_check_apply_rsp(on_ota_check_apply_rsp);
     UiMsgProxy::instance().register_soc_ota_ready(on_soc_ota_ready);
     UiMsgProxy::instance().register_soc_ota_apply_rsp(on_soc_ota_apply_rsp);
     CameraMsgProxy::instance().init();

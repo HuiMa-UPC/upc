@@ -228,39 +228,6 @@ bool pixel_is_background(const uint8_t* p, const uint8_t* bg)
            std::abs(static_cast<int>(p[2]) - static_cast<int>(bg[2])) <= kBgColorTol;
 }
 
-/**
- * 旧版 Snowpath 预览用青绿/青色画支撑柱，模型和浅灰底都不是这个色。
- * 新版蓝底预览里支撑和模型同是暗蓝，B 明显高于 G，这里故意不匹配，避免把莲花抹掉。
- */
-bool is_cyan_support(const uint8_t* p)
-{
-    const int r = p[0];
-    const int g = p[1];
-    const int b = p[2];
-    const int a = p[3];
-    if(a <= kBgAlphaTol) {
-        return false;
-    }
-    const int mx = std::max(r, std::max(g, b));
-    const int mn = std::min(r, std::min(g, b));
-    if(mx < 40) {
-        return false;
-    }
-    if((mx - mn) * 255 / mx < 40) {
-        return false;
-    }
-    if(r >= g || r >= b || g < 50) {
-        return false;
-    }
-    if(std::abs(g - b) > 40) {
-        return false;
-    }
-    if(b > g + 30) {
-        return false;
-    }
-    return true;
-}
-
 bool sample_background(const DecodedPng& src, uint8_t bg[4])
 {
     const uint8_t* corners[4] = {
@@ -289,24 +256,6 @@ bool sample_background(const DecodedPng& src, uint8_t bg[4])
         }
     }
     return true;
-}
-
-uint32_t erase_support_tint(DecodedPng* src, const uint8_t bg[4])
-{
-    uint32_t erased = 0;
-    const size_t pixels = static_cast<size_t>(src->width) * src->height;
-    for(size_t i = 0; i < pixels; ++i) {
-        uint8_t* p = src->rgba.data() + i * 4u;
-        if(pixel_is_background(p, bg) || !is_cyan_support(p)) {
-            continue;
-        }
-        p[0] = bg[0];
-        p[1] = bg[1];
-        p[2] = bg[2];
-        p[3] = bg[3] != 0 ? bg[3] : 255;
-        ++erased;
-    }
-    return erased;
 }
 
 ContentBox make_box(uint32_t x, uint32_t y, uint32_t w, uint32_t h, const uint8_t bg[4])
@@ -386,6 +335,20 @@ constexpr int kRgaSrcFormat = RK_FORMAT_RGBA_8888;
 constexpr int kRgaDstFormat = RK_FORMAT_RGB_565;
 /** RGA2 单趟缩放区间 1/8～8；72×72 相对 2048 源要先落到中间尺寸。 */
 constexpr uint32_t kRgaMaxScale = 8;
+/** librga importbuffer_fd 要和 dma-buf 实长一致；内核按页分配，申请值须 4K 对齐。 */
+constexpr size_t kRgaDmaPage = 4096;
+/** RGA2 RGBA/RGB565 的 vir_w 按 16 像素对齐，440 这种宽直接喂会 imcheck 失败。 */
+constexpr uint32_t kRgaStridePx = 16;
+
+size_t rga_dma_bytes(size_t need)
+{
+    return (need + kRgaDmaPage - 1u) & ~(kRgaDmaPage - 1u);
+}
+
+uint32_t rga_stride_px(uint32_t width)
+{
+    return (width + kRgaStridePx - 1u) & ~(kRgaStridePx - 1u);
+}
 
 bool rga_status_ok(IM_STATUS status)
 {
@@ -418,14 +381,14 @@ void align_even_rect(uint32_t src_w, uint32_t src_h,
 }
 
 bool rga_process(rga_buffer_handle_t src_handle, int src_w, int src_hgt,
-                 int src_fmt, const im_rect& src_rect,
+                 int src_stride, int src_fmt, const im_rect& src_rect,
                  rga_buffer_handle_t dst_handle, int dst_w, int dst_hgt,
-                 int dst_fmt)
+                 int dst_stride, int dst_fmt)
 {
     rga_buffer_t src = wrapbuffer_handle(
-        src_handle, src_w, src_hgt, src_fmt, src_w, src_hgt);
+        src_handle, src_w, src_hgt, src_fmt, src_stride, src_hgt);
     rga_buffer_t dst = wrapbuffer_handle(
-        dst_handle, dst_w, dst_hgt, dst_fmt, dst_w, dst_hgt);
+        dst_handle, dst_w, dst_hgt, dst_fmt, dst_stride, dst_hgt);
     rga_buffer_t pat{};
     const im_rect dst_rect{0, 0, dst_w, dst_hgt};
     const im_rect pat_rect{};
@@ -457,6 +420,7 @@ struct RgaThumbSource {
     rga_buffer_handle_t handle = 0;
     uint32_t width = 0;
     uint32_t height = 0;
+    uint32_t stride_px = 0;
 
     ~RgaThumbSource()
     {
@@ -472,6 +436,7 @@ struct RgaThumbSource {
         upc_ipc::dma_heap_free(dma);
         width = 0;
         height = 0;
+        stride_px = 0;
     }
 
     bool import(const DecodedPng& src)
@@ -482,33 +447,46 @@ struct RgaThumbSource {
            src.height > static_cast<uint32_t>(INT_MAX)) {
             return false;
         }
-        const size_t bytes = static_cast<size_t>(src.width) * src.height * 4u;
-        if(src.rgba.size() < bytes) {
+        const size_t packed = static_cast<size_t>(src.width) * src.height * 4u;
+        if(src.rgba.size() < packed) {
             return false;
         }
-        if(!upc_ipc::dma_heap_alloc(bytes, dma, upc_ipc::DmaHeapUsage::RgaDevice)) {
+        const uint32_t stride = rga_stride_px(src.width);
+        const size_t img_bytes = static_cast<size_t>(stride) * src.height * 4u;
+        const size_t alloc_bytes = rga_dma_bytes(img_bytes);
+        if(!upc_ipc::dma_heap_alloc(alloc_bytes, dma, upc_ipc::DmaHeapUsage::RgaDevice)) {
             UPC_LOG_XFR_SERVICE(Warn,
                 "3mf thumbnail rga src dma_heap alloc failed bytes=%zu (no RGA-safe heap)",
-                bytes);
+                alloc_bytes);
             return false;
         }
         dma_buf_sync(dma.fd, DMA_BUF_SYNC_START | DMA_BUF_SYNC_WRITE);
-        std::memcpy(dma.va, src.rgba.data(), bytes);
+        std::memset(dma.va, 0, alloc_bytes);
+        uint8_t* dst = static_cast<uint8_t*>(dma.va);
+        const size_t src_row = static_cast<size_t>(src.width) * 4u;
+        const size_t dst_row = static_cast<size_t>(stride) * 4u;
+        for(uint32_t y = 0; y < src.height; ++y) {
+            std::memcpy(dst + static_cast<size_t>(y) * dst_row,
+                        src.rgba.data() + static_cast<size_t>(y) * src_row,
+                        src_row);
+        }
         dma_buf_sync(dma.fd, DMA_BUF_SYNC_END | DMA_BUF_SYNC_WRITE);
 
-        handle = importbuffer_fd(dma.fd, static_cast<int>(bytes));
+        handle = importbuffer_fd(dma.fd, static_cast<int>(dma.size));
         if(handle == 0) {
             UPC_LOG_XFR_SERVICE(Warn,
                 "3mf thumbnail importbuffer_fd failed bytes=%zu heap=%s",
-                bytes, dma.heap_path ? dma.heap_path : "?");
+                dma.size, dma.heap_path ? dma.heap_path : "?");
             close();
             return false;
         }
         width = src.width;
         height = src.height;
+        stride_px = stride;
         UPC_LOG_XFR_SERVICE(Info,
-            "3mf thumbnail RGA src %ux%u heap=%s",
+            "3mf thumbnail RGA src %ux%u stride=%u heap=%s",
             static_cast<unsigned>(width), static_cast<unsigned>(height),
+            static_cast<unsigned>(stride_px),
             dma.heap_path ? dma.heap_path : "?");
         return true;
     }
@@ -550,21 +528,23 @@ struct RgaThumbSource {
         fit_x = (dst_w - fit_w) / 2u;
         fit_y = (dst_h - fit_h) / 2u;
 
-        const size_t fit_bytes = static_cast<size_t>(fit_w) * fit_h * 2u;
+        const uint32_t fit_stride = rga_stride_px(fit_w);
+        const size_t fit_img = static_cast<size_t>(fit_stride) * fit_h * 2u;
+        const size_t fit_alloc = rga_dma_bytes(fit_img);
         upc_ipc::DmaHeapBuffer dst_dma{};
-        if(!upc_ipc::dma_heap_alloc(fit_bytes, dst_dma,
+        if(!upc_ipc::dma_heap_alloc(fit_alloc, dst_dma,
                                     upc_ipc::DmaHeapUsage::RgaDevice)) {
             UPC_LOG_XFR_SERVICE(Warn,
                 "3mf thumbnail rga dst dma_heap alloc failed bytes=%zu",
-                fit_bytes);
+                fit_alloc);
             return false;
         }
         rga_buffer_handle_t dst_hnd =
-            importbuffer_fd(dst_dma.fd, static_cast<int>(fit_bytes));
+            importbuffer_fd(dst_dma.fd, static_cast<int>(dst_dma.size));
         if(dst_hnd == 0) {
             UPC_LOG_XFR_SERVICE(Warn,
                 "3mf thumbnail dest importbuffer_fd failed bytes=%zu heap=%s",
-                fit_bytes, dst_dma.heap_path ? dst_dma.heap_path : "?");
+                dst_dma.size, dst_dma.heap_path ? dst_dma.heap_path : "?");
             upc_ipc::dma_heap_free(dst_dma);
             return false;
         }
@@ -578,29 +558,31 @@ struct RgaThumbSource {
         if(!two_pass) {
             ok = rga_process(handle,
                              static_cast<int>(width), static_cast<int>(height),
-                             kRgaSrcFormat, crop,
+                             static_cast<int>(stride_px), kRgaSrcFormat, crop,
                              dst_hnd,
                              static_cast<int>(fit_w), static_cast<int>(fit_h),
-                             kRgaDstFormat);
+                             static_cast<int>(fit_stride), kRgaDstFormat);
         } else {
             uint32_t mid_w = (crop_w + kRgaMaxScale - 1u) / kRgaMaxScale;
             uint32_t mid_h = (crop_h + kRgaMaxScale - 1u) / kRgaMaxScale;
             mid_w = std::max(fit_w, (mid_w + 1u) & ~1u);
             mid_h = std::max(fit_h, (mid_h + 1u) & ~1u);
-            const size_t mid_bytes = static_cast<size_t>(mid_w) * mid_h * 2u;
+            const uint32_t mid_stride = rga_stride_px(mid_w);
+            const size_t mid_img = static_cast<size_t>(mid_stride) * mid_h * 2u;
+            const size_t mid_alloc = rga_dma_bytes(mid_img);
             upc_ipc::DmaHeapBuffer mid_dma{};
-            if(!upc_ipc::dma_heap_alloc(mid_bytes, mid_dma,
+            if(!upc_ipc::dma_heap_alloc(mid_alloc, mid_dma,
                                         upc_ipc::DmaHeapUsage::RgaDevice)) {
                 UPC_LOG_XFR_SERVICE(Warn,
                     "3mf thumbnail rga mid dma_heap alloc failed bytes=%zu",
-                    mid_bytes);
+                    mid_alloc);
             } else {
                 rga_buffer_handle_t mid_hnd =
-                    importbuffer_fd(mid_dma.fd, static_cast<int>(mid_bytes));
+                    importbuffer_fd(mid_dma.fd, static_cast<int>(mid_dma.size));
                 if(mid_hnd == 0) {
                     UPC_LOG_XFR_SERVICE(Warn,
                         "3mf thumbnail mid importbuffer_fd failed bytes=%zu heap=%s",
-                        mid_bytes, mid_dma.heap_path ? mid_dma.heap_path : "?");
+                        mid_dma.size, mid_dma.heap_path ? mid_dma.heap_path : "?");
                 } else {
                     const im_rect mid_full{
                         0, 0,
@@ -608,18 +590,22 @@ struct RgaThumbSource {
                     ok = rga_process(handle,
                                      static_cast<int>(width),
                                      static_cast<int>(height),
+                                     static_cast<int>(stride_px),
                                      kRgaSrcFormat, crop,
                                      mid_hnd,
                                      static_cast<int>(mid_w),
                                      static_cast<int>(mid_h),
+                                     static_cast<int>(mid_stride),
                                      kRgaDstFormat) &&
                          rga_process(mid_hnd,
                                      static_cast<int>(mid_w),
                                      static_cast<int>(mid_h),
+                                     static_cast<int>(mid_stride),
                                      kRgaDstFormat, mid_full,
                                      dst_hnd,
                                      static_cast<int>(fit_w),
                                      static_cast<int>(fit_h),
+                                     static_cast<int>(fit_stride),
                                      kRgaDstFormat);
                     releasebuffer_handle(mid_hnd);
                 }
@@ -629,9 +615,15 @@ struct RgaThumbSource {
 
         if(ok) {
             dma_buf_sync(dst_dma.fd, DMA_BUF_SYNC_START | DMA_BUF_SYNC_READ);
-            std::vector<uint8_t> fitted(
-                static_cast<const uint8_t*>(dst_dma.va),
-                static_cast<const uint8_t*>(dst_dma.va) + fit_bytes);
+            std::vector<uint8_t> fitted(static_cast<size_t>(fit_w) * fit_h * 2u);
+            const uint8_t* src_va = static_cast<const uint8_t*>(dst_dma.va);
+            const size_t src_row = static_cast<size_t>(fit_stride) * 2u;
+            const size_t dst_row = static_cast<size_t>(fit_w) * 2u;
+            for(uint32_t y = 0; y < fit_h; ++y) {
+                std::memcpy(fitted.data() + static_cast<size_t>(y) * dst_row,
+                            src_va + static_cast<size_t>(y) * src_row,
+                            dst_row);
+            }
             dma_buf_sync(dst_dma.fd, DMA_BUF_SYNC_END | DMA_BUF_SYNC_READ);
             if(fit_w == dst_w && fit_h == dst_h) {
                 rgb565->swap(fitted);
@@ -763,17 +755,6 @@ bool generate_transfer_thumbnail_triplet(
     DecodedPng decoded;
     if(!decode_png_rgba(png_path, decode_edge, &decoded, error)) {
         return false;
-    }
-    uint8_t canvas_bg[4] = {255, 255, 255, 255};
-    if(sample_background(decoded, canvas_bg)) {
-        const uint32_t erased = erase_support_tint(&decoded, canvas_bg);
-        if(erased > 0u) {
-            UPC_LOG_XFR_SERVICE(Info,
-                "3mf thumbnail erase support-tint pixels=%u src=%ux%u",
-                static_cast<unsigned>(erased),
-                static_cast<unsigned>(decoded.width),
-                static_cast<unsigned>(decoded.height));
-        }
     }
     const ContentBox content = find_content_box(decoded);
     if(content.x != 0u || content.y != 0u ||

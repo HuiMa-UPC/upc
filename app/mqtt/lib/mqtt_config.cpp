@@ -137,6 +137,16 @@ std::string MqttConfig::topic_ota_progress() const
     return topic_prefix() + "ota/progress";
 }
 
+std::string MqttConfig::topic_ota_check() const
+{
+    return topic_prefix() + "ota/check";
+}
+
+std::string MqttConfig::topic_ota_check_ack() const
+{
+    return topic_prefix() + "ota/check_ack";
+}
+
 std::string MqttConfig::topic_log_collect_progress() const
 {
     return topic_prefix() + "log_collect/progress";
@@ -150,6 +160,26 @@ std::string MqttConfig::topic_alarm_report() const
 std::string MqttConfig::topic_alarm_ack() const
 {
     return topic_prefix() + "alarm/ack";
+}
+
+std::string MqttConfig::topic_print_job_request() const
+{
+    return topic_prefix() + "print_job/request";
+}
+
+std::string MqttConfig::topic_print_job_ack() const
+{
+    return topic_prefix() + "print_job/ack";
+}
+
+std::string MqttConfig::topic_print_task_report() const
+{
+    return topic_prefix() + "print_task/report";
+}
+
+std::string MqttConfig::topic_print_thumbnail_ack() const
+{
+    return topic_prefix() + "print_thumbnail/ack";
 }
 
 //桌面调试

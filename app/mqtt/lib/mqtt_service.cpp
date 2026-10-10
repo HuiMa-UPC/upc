@@ -932,11 +932,13 @@ bool MqttService::init()
         cfg_.heartbeat_interval_sec,
         credentials_ready_ ? "ready" : "activation-required");
 
+    start_print_job_worker();
     return true;
 }
 
 void MqttService::shutdown()
 {
+    stop_print_job_worker();
     join_activation_thread();
     join_rotation_thread();
     {
@@ -972,6 +974,7 @@ void MqttService::tick()
     }
     poll_rotation();
     if(!ensure_mqtt_connected()) {
+        poll_ota_check();
         return;
     }
 
@@ -981,6 +984,7 @@ void MqttService::tick()
     (void)publish_chamber_ext_telemetry();
     (void)publish_heartbeat();
     poll_ota_heartbeat_wait();
+    poll_ota_check();
     expire_pending_acks();
 
     const uint64_t now_alarm = monotonic_ms();
@@ -1036,6 +1040,14 @@ void MqttService::subscribe_messages()
         middleware::ModuleId::APP_MQTT,
         [this](const middleware::Message& msg) { on_ota_user_decision(msg); }));
     subs_.push_back(bus.subscribe(
+        middleware::MsgType::UI_Ota_Check_Req,
+        middleware::ModuleId::APP_MQTT,
+        [this](const middleware::Message& msg) { on_ota_check_req(msg); }));
+    subs_.push_back(bus.subscribe(
+        middleware::MsgType::UI_Ota_Check_Apply_Req,
+        middleware::ModuleId::APP_MQTT,
+        [this](const middleware::Message& msg) { on_ota_check_apply(msg); }));
+    subs_.push_back(bus.subscribe(
         middleware::MsgType::UI_Soc_Ota_Apply_Req,
         middleware::ModuleId::APP_MQTT,
         [this](const middleware::Message& msg) { on_soc_ota_apply(msg); }));
@@ -1047,6 +1059,10 @@ void MqttService::subscribe_messages()
         middleware::MsgType::APP_Mqtt_Rtsp_Stop_Rsp,
         middleware::ModuleId::APP_MQTT,
         [this](const middleware::Message& msg) { on_rtsp_stop_rsp(msg); }));
+    subs_.push_back(bus.subscribe(
+        middleware::MsgType::XFR_Print_Job_Report_Ntf,
+        middleware::ModuleId::APP_MQTT,
+        [this](const middleware::Message& msg) { on_print_job_report(msg); }));
 }
 
 bool MqttService::ensure_mqtt_connected()
@@ -1250,6 +1266,8 @@ bool MqttService::connect_mqtt()
         disconnect_mqtt();
         return false;
     }
+    /* print_job/ack 订不上只影响云端任务展示，不能把整条连接拆掉。 */
+    subscribe_print_job_ack();
 
     UPC_LOG_MQTT_SERVICE(Info, "MQTT connected uri=%s", cfg_.broker_uri.c_str());
 
@@ -1299,9 +1317,17 @@ bool MqttService::subscribe_ota_topics()
                              rc_manifest, manifest_topic.c_str());
         return false;
     }
+    const std::string check_ack_topic = cfg_.topic_ota_check_ack();
+    const int rc_check = MQTTClient_subscribe(client_, check_ack_topic.c_str(), 1);
+    if(rc_check != MQTTCLIENT_SUCCESS) {
+        UPC_LOG_MQTT_SERVICE_TO(MqttOta, Error, "MQTT subscribe ota check_ack failed rc=%d topic=%s",
+                             rc_check, check_ack_topic.c_str());
+        return false;
+    }
     ota_subscribed_ = true;
-    UPC_LOG_MQTT_SERVICE_TO(MqttOta, Info, "MQTT subscribed ota topics notify=%s manifest=%s",
-                         notify_topic.c_str(), manifest_topic.c_str());
+    UPC_LOG_MQTT_SERVICE_TO(MqttOta, Info,
+                         "MQTT subscribed ota topics notify=%s manifest=%s check_ack=%s",
+                         notify_topic.c_str(), manifest_topic.c_str(), check_ack_topic.c_str());
     return true;
 }
 
@@ -1623,8 +1649,12 @@ int MqttService::on_message_arrived(void* context, char* topic_name,
             self->handle_ota_notify(payload);
         } else if(topic == self->cfg_.topic_ota_manifest_resp()) {
             self->handle_ota_manifest_response(payload);
+        } else if(topic == self->cfg_.topic_ota_check_ack()) {
+            self->handle_ota_check_ack(payload);
         } else if(topic == self->cfg_.topic_alarm_ack()) {
             self->handle_alarm_ack(payload);
+        } else if(topic == self->cfg_.topic_print_job_ack()) {
+            self->handle_print_job_ack(payload);
         } else {
             UPC_LOG_MQTT_SERVICE(Debug, "MQTT RX ignored topic=%s", topic.c_str());
         }
@@ -1690,6 +1720,51 @@ int MqttService::bars_to_rssi_dbm(int bars, bool connected)
         return -78;
     }
     return -90;
+}
+
+std::string MqttService::data_plane_version(const std::string& raw)
+{
+    size_t begin = 0;
+    while(begin < raw.size() &&
+          std::isspace(static_cast<unsigned char>(raw[begin]))) {
+        ++begin;
+    }
+    size_t end = raw.size();
+    while(end > begin &&
+          std::isspace(static_cast<unsigned char>(raw[end - 1]))) {
+        --end;
+    }
+    if(begin < end && (raw[begin] == 'v' || raw[begin] == 'V')) {
+        ++begin;
+        while(begin < end &&
+              std::isspace(static_cast<unsigned char>(raw[begin]))) {
+            ++begin;
+        }
+    }
+    if(begin >= end) {
+        return {};
+    }
+    return raw.substr(begin, end - begin);
+}
+
+std::string MqttService::numeric_release_version(const std::string& raw)
+{
+    const std::string v = data_plane_version(raw);
+    if(v.empty()) {
+        return {};
+    }
+    bool saw_digit = false;
+    for(char c : v) {
+        if(std::isdigit(static_cast<unsigned char>(c))) {
+            saw_digit = true;
+            continue;
+        }
+        if(c == '.') {
+            continue;
+        }
+        return {};
+    }
+    return saw_digit ? v : std::string{};
 }
 
 std::string MqttService::format_mcu_version(const middleware::McuVersionPayload& p)

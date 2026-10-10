@@ -118,6 +118,8 @@ bool MqttService::publish_manifest_request(const std::string& task_id)
     const std::string galvo_version = galvo_valid ? format_galvo_version(galvo.fw_version_le)
                                                   : "unknown";
     const std::string req_id = std::string("manifest-") + task_id;
+    const std::string soc_ver = numeric_release_version(UPC_SW_VERSION);
+    const std::string soc_report = soc_ver.empty() ? std::string("unknown") : soc_ver;
     const uint32_t seq = ++seq_;
     const long long ts = static_cast<long long>(unix_ms());
     char payload[1024];
@@ -143,7 +145,7 @@ bool MqttService::publish_manifest_request(const std::string& task_id)
         seq,
         json_escape(req_id).c_str(),
         json_escape(task_id).c_str(),
-        json_escape(UPC_SW_VERSION).c_str(),
+        json_escape(soc_report).c_str(),
         json_escape(mcu_version).c_str(),
         json_escape(galvo_version).c_str());
     const std::string topic = cfg_.topic_ota_manifest_req();
@@ -1062,6 +1064,415 @@ bool MqttService::parse_manifest_response(const std::string& payload,
         components.push_back(std::move(c));
     }
     return !task_id.empty();
+}
+
+namespace {
+
+constexpr uint64_t kOtaCheckAckTimeoutMs = 20000;
+constexpr uint64_t kOtaCheckRetryDelayMs = 5000;
+
+} // namespace
+
+void MqttService::publish_ota_check_result(middleware::OtaCheckResult result,
+                                           const std::string& version,
+                                           const char* message)
+{
+    middleware::OtaCheckResultPayload p{};
+    p.result = static_cast<uint8_t>(result);
+    if(!version.empty()) {
+        std::snprintf(p.next_release_version, sizeof(p.next_release_version),
+                      "%s", version.c_str());
+    }
+    if(message && message[0]) {
+        std::snprintf(p.message, sizeof(p.message), "%s", message);
+    }
+    middleware::Message msg(middleware::MsgType::APP_Ota_Check_Rsp,
+                            middleware::ModuleId::APP_MQTT,
+                            middleware::ModuleId::UI);
+    msg.payload = middleware::MsgPayload::from_bytes(
+        reinterpret_cast<const uint8_t*>(&p), sizeof(p));
+    (void)middleware::MsgPort::instance().publish_async(msg);
+}
+
+void MqttService::publish_ota_check_apply_rsp(middleware::OtaCheckApplyResult result,
+                                              const char* reason)
+{
+    middleware::OtaCheckApplyRspPayload p{};
+    p.result = static_cast<uint8_t>(result);
+    if(reason && reason[0]) {
+        std::snprintf(p.reason, sizeof(p.reason), "%s", reason);
+    }
+    middleware::Message msg(middleware::MsgType::APP_Ota_Check_Apply_Rsp,
+                            middleware::ModuleId::APP_MQTT,
+                            middleware::ModuleId::UI);
+    msg.payload = middleware::MsgPayload::from_bytes(
+        reinterpret_cast<const uint8_t*>(&p), sizeof(p));
+    (void)middleware::MsgPort::instance().publish_async(msg);
+}
+
+std::string MqttService::make_ota_check_req_id()
+{
+    const uint32_t seq = ++seq_;
+    char buf[48];
+    std::snprintf(buf, sizeof(buf), "check-%u-%lld",
+                  seq, static_cast<long long>(unix_ms()));
+    return std::string(buf);
+}
+
+std::string MqttService::make_ota_check_task_id(const std::string& req_id)
+{
+    constexpr size_t kMax = sizeof(middleware::OtaProgressPayload::task_id) - 1;
+    if(req_id.size() <= kMax) {
+        return req_id;
+    }
+    return req_id.substr(0, kMax);
+}
+
+bool MqttService::publish_ota_check(const std::string& req_id)
+{
+    const uint32_t seq = ++seq_;
+    const long long ts = static_cast<long long>(unix_ms());
+    char payload[512];
+    std::snprintf(payload, sizeof(payload),
+        "{"
+        "\"v\":1,"
+        "\"type\":\"ota_check\","
+        "\"device_id\":\"%s\","
+        "\"ts\":%lld,"
+        "\"seq\":%u,"
+        "\"req_id\":\"%s\","
+        "\"data\":{}"
+        "}",
+        json_escape(cfg_.device_id).c_str(),
+        ts,
+        seq,
+        json_escape(req_id).c_str());
+
+    const std::string topic = cfg_.topic_ota_check();
+    MQTTClient_message msg = MQTTClient_message_initializer;
+    msg.payload = payload;
+    msg.payloadlen = static_cast<int>(std::strlen(payload));
+    msg.qos = cfg_.qos_ack;
+    msg.retained = 0;
+    debug_log_mqtt_frame("TX", topic, msg.payload,
+                         static_cast<size_t>(msg.payloadlen),
+                         msg.qos, msg.retained);
+
+    MQTTClient_deliveryToken token{};
+    const int rc = MQTTClient_publishMessage(client_, topic.c_str(), &msg, &token);
+    if(rc != MQTTCLIENT_SUCCESS) {
+        UPC_LOG_MQTT_SERVICE_TO(MqttOta, Warn, "publish ota check failed rc=%d", rc);
+        mqtt_connected_ = false;
+        cmd_subscribed_ = false;
+        ota_subscribed_ = false;
+        return false;
+    }
+    UPC_LOG_MQTT_SERVICE_TO(MqttOta, Info, "ota check sent req_id=%s token=%d",
+                         req_id.c_str(), static_cast<int>(token));
+    return true;
+}
+
+bool MqttService::parse_ota_check_ack(const std::string& payload,
+                                      std::string& req_id,
+                                      std::string& next_release_version,
+                                      std::vector<OtaComponent>& components,
+                                      std::string& error_code) const
+{
+    req_id.clear();
+    next_release_version.clear();
+    components.clear();
+    error_code.clear();
+    (void)json_extract_string(payload, "req_id", req_id);
+
+    std::string error_obj;
+    if(json_extract_object(payload, "error", error_obj)) {
+        (void)json_extract_string(error_obj, "code", error_code);
+    }
+
+    std::string data;
+    if(!json_extract_object(payload, "data", data)) {
+        return !req_id.empty() || !error_code.empty();
+    }
+    (void)json_extract_string(data, "next_release_version", next_release_version);
+    if(next_release_version.empty()) {
+        (void)json_extract_string(data, "nextReleaseVersion", next_release_version);
+    }
+
+    std::vector<std::string> objs;
+    if(!json_extract_array_objects(data, "components", objs)) {
+        return true;
+    }
+    for(const std::string& obj : objs) {
+        OtaComponent c{};
+        if(!json_extract_string(obj, "component", c.component) || c.component.empty()) {
+            continue;
+        }
+        (void)json_extract_string(obj, "version", c.version);
+        (void)json_extract_string(obj, "url", c.url);
+        (void)json_extract_string(obj, "sha256", c.sha256);
+        (void)json_extract_string(obj, "file_name", c.file_name);
+        if(c.file_name.empty()) {
+            (void)json_extract_string(obj, "filename", c.file_name);
+        }
+        int64_t size_bytes = 0;
+        if(!json_extract_int64(obj, "size_bytes", size_bytes)) {
+            (void)json_extract_int64(obj, "sizeBytes", size_bytes);
+        }
+        if(size_bytes > 0) {
+            c.size_bytes = static_cast<uint64_t>(size_bytes);
+        }
+        if(c.url.empty()) {
+            continue;
+        }
+        if(c.file_name.empty()) {
+            ParsedUrl parsed{};
+            if(parse_url(c.url, parsed)) {
+                c.file_name = basename_from_url_path(parsed.path);
+            }
+        }
+        components.push_back(std::move(c));
+    }
+    return true;
+}
+
+void MqttService::on_ota_check_req(const middleware::Message&)
+{
+    const std::string req_id = make_ota_check_req_id();
+    bool downloading = false;
+    bool checking = false;
+    {
+        std::lock_guard<std::mutex> lock(ota_mtx_);
+        downloading = ota_download_running_;
+        checking = ota_check_.phase != OtaCheckPhase::Idle;
+        if(!downloading && !checking) {
+            ota_check_ = OtaCheckSession{};
+            ota_check_.phase = OtaCheckPhase::WaitAck;
+            ota_check_.req_id = req_id;
+            ota_check_.deadline_ms = monotonic_ms() + kOtaCheckAckTimeoutMs;
+        }
+    }
+    if(downloading) {
+        publish_ota_check_result(middleware::OtaCheckResult::Busy, {},
+                                 "update in progress");
+        return;
+    }
+    if(checking) {
+        publish_ota_check_result(middleware::OtaCheckResult::Busy, {},
+                                 "check in progress");
+        return;
+    }
+
+    auto fail = [this, &req_id](const char* why) {
+        {
+            std::lock_guard<std::mutex> lock(ota_mtx_);
+            if(ota_check_.req_id != req_id) {
+                return;
+            }
+            ota_check_.phase = OtaCheckPhase::Idle;
+            ota_check_.offer_valid = false;
+            ota_check_.components.clear();
+            ota_check_.req_id.clear();
+        }
+        publish_ota_check_result(middleware::OtaCheckResult::Failed, {}, why);
+    };
+
+    if(!mqtt_connected_ || !client_ || !MQTTClient_isConnected(client_)) {
+        fail("not connected");
+        return;
+    }
+    if(!publish_heartbeat(true)) {
+        fail("heartbeat failed");
+        return;
+    }
+    if(!publish_ota_check(req_id)) {
+        fail("check publish failed");
+        return;
+    }
+}
+
+void MqttService::handle_ota_check_ack(const std::string& payload)
+{
+    std::string req_id;
+    std::string version;
+    std::string err;
+    std::vector<OtaComponent> components;
+    if(!parse_ota_check_ack(payload, req_id, version, components, err)) {
+        UPC_LOG_MQTT_SERVICE_TO(MqttOta, Warn, "invalid ota check_ack");
+        return;
+    }
+
+    middleware::OtaCheckResult result = middleware::OtaCheckResult::Failed;
+    std::string notify_version;
+    std::string notify_message;
+    bool notify = false;
+    {
+        std::lock_guard<std::mutex> lock(ota_mtx_);
+        if(ota_check_.phase != OtaCheckPhase::WaitAck ||
+           req_id.empty() || req_id != ota_check_.req_id) {
+            UPC_LOG_MQTT_SERVICE_TO(MqttOta, Debug,
+                "ignore ota check_ack req_id=%s phase=%d",
+                req_id.c_str(), static_cast<int>(ota_check_.phase));
+            return;
+        }
+        if(err == "OTA_VERSION_NOT_READY" && ota_check_.not_ready_retries < 1) {
+            ota_check_.phase = OtaCheckPhase::RetryWait;
+            ota_check_.not_ready_retries = 1;
+            ota_check_.retry_at_ms = monotonic_ms() + kOtaCheckRetryDelayMs;
+            ota_check_.deadline_ms = ota_check_.retry_at_ms + kOtaCheckAckTimeoutMs;
+            UPC_LOG_MQTT_SERVICE_TO(MqttOta, Info,
+                "ota check version not ready, retry after heartbeat req_id=%s",
+                req_id.c_str());
+            return;
+        }
+        if(err == "OTA_VERSION_NOT_READY") {
+            result = middleware::OtaCheckResult::NotReady;
+            notify_message = "version not ready";
+        } else if(err == "OTA_NO_UPDATE") {
+            result = middleware::OtaCheckResult::UpToDate;
+            notify_message = "up to date";
+        } else if(!err.empty()) {
+            result = middleware::OtaCheckResult::Failed;
+            notify_message = err;
+        } else if(!version.empty() && !components.empty()) {
+            result = middleware::OtaCheckResult::UpdateAvailable;
+            notify_version = version;
+            ota_check_.offer_valid = true;
+            ota_check_.next_release_version = version;
+            ota_check_.offer_task_id = make_ota_check_task_id(req_id);
+            ota_check_.components = std::move(components);
+        } else {
+            result = middleware::OtaCheckResult::UpToDate;
+            notify_message = "up to date";
+        }
+        ota_check_.phase = OtaCheckPhase::Idle;
+        ota_check_.req_id.clear();
+        if(result != middleware::OtaCheckResult::UpdateAvailable) {
+            ota_check_.offer_valid = false;
+            ota_check_.components.clear();
+            ota_check_.next_release_version.clear();
+            ota_check_.offer_task_id.clear();
+        }
+        notify = true;
+    }
+    if(notify) {
+        publish_ota_check_result(result, notify_version, notify_message.c_str());
+    }
+}
+
+void MqttService::poll_ota_check()
+{
+    bool timeout = false;
+    bool retry = false;
+    {
+        std::lock_guard<std::mutex> lock(ota_mtx_);
+        if(ota_check_.phase == OtaCheckPhase::Idle) {
+            return;
+        }
+        const uint64_t now = monotonic_ms();
+        if(ota_check_.phase == OtaCheckPhase::WaitAck &&
+           now >= ota_check_.deadline_ms) {
+            ota_check_.phase = OtaCheckPhase::Idle;
+            ota_check_.req_id.clear();
+            ota_check_.offer_valid = false;
+            ota_check_.components.clear();
+            timeout = true;
+        } else if(ota_check_.phase == OtaCheckPhase::RetryWait &&
+                  now >= ota_check_.retry_at_ms) {
+            const bool connected = mqtt_connected_ && client_ &&
+                                   MQTTClient_isConnected(client_);
+            if(connected) {
+                retry = true;
+            } else if(now >= ota_check_.deadline_ms) {
+                ota_check_.phase = OtaCheckPhase::Idle;
+                ota_check_.req_id.clear();
+                timeout = true;
+            }
+        }
+    }
+    if(timeout) {
+        publish_ota_check_result(middleware::OtaCheckResult::Failed, {}, "timeout");
+        return;
+    }
+    if(!retry) {
+        return;
+    }
+    const std::string req_id = make_ota_check_req_id();
+    {
+        std::lock_guard<std::mutex> lock(ota_mtx_);
+        if(ota_check_.phase != OtaCheckPhase::RetryWait) {
+            return;
+        }
+        ota_check_.phase = OtaCheckPhase::WaitAck;
+        ota_check_.req_id = req_id;
+        ota_check_.deadline_ms = monotonic_ms() + kOtaCheckAckTimeoutMs;
+    }
+    auto fail_retry = [this, &req_id](const char* why) {
+        {
+            std::lock_guard<std::mutex> lock(ota_mtx_);
+            if(ota_check_.phase != OtaCheckPhase::WaitAck ||
+               ota_check_.req_id != req_id) {
+                return false;
+            }
+            ota_check_.phase = OtaCheckPhase::Idle;
+            ota_check_.req_id.clear();
+        }
+        publish_ota_check_result(middleware::OtaCheckResult::Failed, {}, why);
+        return true;
+    };
+    if(!publish_heartbeat(true)) {
+        (void)fail_retry("heartbeat failed");
+        return;
+    }
+    if(!publish_ota_check(req_id)) {
+        (void)fail_retry("check publish failed");
+    }
+}
+
+void MqttService::on_ota_check_apply(const middleware::Message& msg)
+{
+    middleware::OtaCheckApplyReqPayload p{};
+    if(!read_inline_pod(msg.payload, p)) {
+        publish_ota_check_apply_rsp(middleware::OtaCheckApplyResult::Rejected,
+                                    "invalid payload");
+        return;
+    }
+    p.next_release_version[sizeof(p.next_release_version) - 1] = '\0';
+
+    if(p.approve == 0) {
+        std::lock_guard<std::mutex> lock(ota_mtx_);
+        ota_check_.offer_valid = false;
+        ota_check_.components.clear();
+        ota_check_.next_release_version.clear();
+        ota_check_.offer_task_id.clear();
+        publish_ota_check_apply_rsp(middleware::OtaCheckApplyResult::Cancelled,
+                                    nullptr);
+        return;
+    }
+
+    std::string task_id;
+    std::vector<OtaComponent> components;
+    {
+        std::lock_guard<std::mutex> lock(ota_mtx_);
+        const bool version_ok = p.next_release_version[0] == '\0' ||
+            ota_check_.next_release_version == p.next_release_version;
+        if(!ota_check_.offer_valid || ota_check_.components.empty() || !version_ok) {
+            publish_ota_check_apply_rsp(middleware::OtaCheckApplyResult::Rejected,
+                                        "no update pending");
+            return;
+        }
+        if(ota_download_running_) {
+            publish_ota_check_apply_rsp(middleware::OtaCheckApplyResult::Rejected,
+                                        "update in progress");
+            return;
+        }
+        task_id = ota_check_.offer_task_id;
+        components = ota_check_.components;
+        ota_check_.offer_valid = false;
+        ota_check_.components.clear();
+    }
+
+    publish_ota_check_apply_rsp(middleware::OtaCheckApplyResult::Started, nullptr);
+    start_manifest_download(std::move(task_id), std::move(components));
 }
 
 } // namespace upc::mqtt

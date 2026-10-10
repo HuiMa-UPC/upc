@@ -109,15 +109,15 @@
   `*_large.rthm`（320×180）、`*_print.rthm`（100×100），绝对路径分别写入
   manifest 的 `thumb_small` / `thumb_large` / `thumb_print`。
 - PNG 解码使用 libpng，长边抽到 1280（大于目标 320，给留白裁切留像素）。
-  Snowpath 预览四周常是大片底色，模型只占画布中心一小块：先抹掉青绿支撑色
-  （旧灰底预览；蓝底同色支撑与模型分不开，不在板端滤），再按四角底色
-  抠内容框（约 10% 边），再按目标比例 CONTAIN 放进 72 / 320×180 / 100
+  Snowpath 预览四周常是大片底色，模型只占画布中心一小块：按四角底色
+  抠内容框（约 10% 边），支撑色原样保留。再按目标比例 CONTAIN
+  放进 72 / 320×180 / 100
   （整模可见；比例不同时用原底色补边，避免竖模被 16:9 COVER 切掉头脚）。
   四角颜色不一致或内容过小则退回整图。不保留源 PNG。
-  缩放优先走 RGA（dma32 + `importbuffer_fd`，禁止
-  `wrapbuffer_virtualaddr`：RK3568 RGA2 无 IOMMU，普通堆虚地址会整进程
-  退出）。超过 RGA2 的 8 倍缩放时先落到中间尺寸再出目标图；dma-heap /
-  导入 / 硬件失败回退 CPU。缺图、图片损坏或转换失败只记录告警，G-code
+  缩放优先走 RGA（dma32/CMA + `importbuffer_fd`，申请长度 4K 对齐、vir_w
+  16 像素对齐；禁止 `wrapbuffer_virtualaddr`：RK3568 RGA2 无 IOMMU，普通堆
+  虚地址会整进程退出）。超过 RGA2 的 8 倍缩放时先落到中间尺寸再出目标图；
+  dma-heap / 导入 / 硬件失败回退 CPU。缺图、图片损坏或转换失败只记录告警，G-code
   仍正常导入，三个 manifest 字段留空。
 - G-code、三份 RTHM 与 manifest 通过临时文件 + rename 提交；
   同名重传会替换旧资产。删除 Local 文件时同步删除对应 RTHM，

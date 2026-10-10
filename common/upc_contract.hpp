@@ -641,6 +641,11 @@ enum class MsgType : uint32_t {
     APP_Soc_Ota_Ready_Ntf,                  /**< SocOtaReadyPayload：固件已就绪，UI 弹窗问是否重启 */
     UI_Soc_Ota_Apply_Req,                   /**< SocOtaApplyReqPayload：立即重启升级 / 放弃并删除 */
     APP_Soc_Ota_Apply_Rsp,                  /**< SocOtaApplyRspPayload：处置结果（成功重启则收不到） */
+    // ---- UI ↔ MQTT：主动检查更新（ota/check + ota/check_ack） ----
+    UI_Ota_Check_Req,                       /**< Empty：设置页检查更新；先补心跳 v3 再发 ota/check */
+    APP_Ota_Check_Rsp,                      /**< OtaCheckResultPayload：三态结果 */
+    UI_Ota_Check_Apply_Req,                 /**< OtaCheckApplyReqPayload：用户确认后按 check_ack 的 components 下载 */
+    APP_Ota_Check_Apply_Rsp,                /**< OtaCheckApplyRspPayload：是否已开始下载 */
 
     // ---- UI ↔ GLAVO：MCU 固件版本查询（串口 PORT_GENERAL_TASK 0xA2 / CMD_PROJECT_INFO 0x10） ----
     UI_Mcu_Version_Ntf = 0x1500, /**< Empty：进入 Settings/About 页时查询一次 */
@@ -718,6 +723,9 @@ enum class MsgType : uint32_t {
     UI_Debug_Plate_By_Height_Set_Ntf,     /**< DebugOnOffPayload：on=1 粗测 H-1>3 判断在位（默认关） */
     UI_Debug_Plate_By_Height_Get_Ntf,     /**< Empty：查询高度在位判断开关 */
     GLAVO_Debug_Plate_By_Height_Ntf,      /**< DebugOnOffPayload：回读高度在位判断开关 */
+    /* 云端打印任务：切片导入后后台上报，不挡传输和开打（枚举只准末尾追加） */
+    XFR_Print_Job_Report_Ntf,             /**< PrintJobReportNtfPayload：暂存目录，Xfr→MQTT */
+    MQTT_Print_Job_Id_Ntf,                /**< PrintJobIdNtfPayload：32 位 job_id，MQTT→Glavo */
 };
 
 enum class MsgPriority : uint8_t {
@@ -752,6 +760,10 @@ inline constexpr bool is_ipc_reliable_msg_type(MsgType type) noexcept
     case MsgType::APP_Mqtt_Ota_Progress_Ntf:
     case MsgType::APP_Soc_Ota_Ready_Ntf:
     case MsgType::APP_Soc_Ota_Apply_Rsp:
+    case MsgType::UI_Ota_Check_Req:
+    case MsgType::APP_Ota_Check_Rsp:
+    case MsgType::UI_Ota_Check_Apply_Req:
+    case MsgType::APP_Ota_Check_Apply_Rsp:
     case MsgType::GLAVO_Alarm_Report_Ntf:
     case MsgType::GLAVO_Alarm_Reset_Result_Ntf:
     case MsgType::GLAVO_Alarm_Cloud_Snapshot_Ntf:
@@ -830,6 +842,8 @@ inline constexpr bool is_ipc_reliable_msg_type(MsgType type) noexcept
     case MsgType::UI_Outer_Door_Confirm_Rsp:
     case MsgType::UI_Cloud_Result_Dismiss_Ntf:
     case MsgType::GLAVO_Cloud_State_Ntf:
+    case MsgType::XFR_Print_Job_Report_Ntf:
+    case MsgType::MQTT_Print_Job_Id_Ntf:
         return true;
 
     default:
@@ -1132,6 +1146,21 @@ struct CloudStateNtfPayload {
     char     job_id[64];
 };
 static_assert(sizeof(CloudStateNtfPayload) <= 256, "CloudStateNtfPayload inline");
+
+/** XFR_Print_Job_Report_Ntf：导入成功后的云端上报暂存目录（Inline）。
+ *  目录里是 req_id 对应的 plate_meta、模型名和可选 PNG。MQTT 后台消化，失败只删这份缓存。 */
+struct PrintJobReportNtfPayload {
+    char staging_dir[192];
+};
+static_assert(sizeof(PrintJobReportNtfPayload) <= 256, "PrintJobReportNtfPayload inline");
+
+/** MQTT_Print_Job_Id_Ntf：云端 job_id 已落到清单（Inline）。
+ *  req_id / job_id 都是 32 位十六进制。Glavo 只在仍处于 printing 且还没挂结果页时补上。 */
+struct PrintJobIdNtfPayload {
+    char req_id[40];
+    char job_id[40];
+};
+static_assert(sizeof(PrintJobIdNtfPayload) <= 256, "PrintJobIdNtfPayload inline");
 
 /** APP_N2_Status_Ntf：制氮机 ESP BLE ASCII 解析后的快照（Inline）。
  *  state：0=UNKNOWN 1=WARMUP 2=BUILD 3=RUN 4=SAFE。
@@ -1702,6 +1731,42 @@ struct SocOtaApplyRspPayload {
     uint8_t result;             /**< SocOtaApplyResult */
     uint8_t reserved[2];
     char    reason[64];         /**< 失败详情；成功为空串 */
+};
+
+/** APP_Ota_Check_Rsp：ota/check_ack 三态，外加设备侧超时/忙碌 */
+enum class OtaCheckResult : uint8_t {
+    UpdateAvailable = 0, /**< next_release_version 非空，待用户确认后下载 */
+    UpToDate        = 1, /**< error.code = OTA_NO_UPDATE */
+    NotReady        = 2, /**< 补心跳重试后仍是 OTA_VERSION_NOT_READY */
+    Failed          = 3, /**< 超时、未连接或其它错误 */
+    Busy            = 4, /**< 已有检查或升级在进行 */
+};
+
+struct OtaCheckResultPayload {
+    uint8_t result;             /**< OtaCheckResult */
+    uint8_t reserved[3];
+    char    next_release_version[32]; /**< 仅 UpdateAvailable 有值 */
+    char    message[64];        /**< 给人看的短说明；可为空串 */
+};
+
+/** UI_Ota_Check_Apply_Req：用户对检查结果的确认/取消 */
+struct OtaCheckApplyReqPayload {
+    uint8_t approve;            /**< 1=按已缓存的 components 开始下载；0=放弃 */
+    uint8_t reserved[3];
+    char    next_release_version[32]; /**< 回显检查结果里的版本，避免确认到过期结果 */
+};
+
+/** APP_Ota_Check_Apply_Rsp */
+enum class OtaCheckApplyResult : uint8_t {
+    Started   = 0,
+    Cancelled = 1,
+    Rejected  = 2,
+};
+
+struct OtaCheckApplyRspPayload {
+    uint8_t result;             /**< OtaCheckApplyResult */
+    uint8_t reserved[3];
+    char    reason[64];
 };
 
 /**

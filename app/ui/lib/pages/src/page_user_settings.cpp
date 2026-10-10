@@ -2746,6 +2746,13 @@ void on_sw_version_click(lv_event_t * /*e*/)
     }
 }
 
+/** About「Check for Update」：发检查请求。有无新版本的弹窗/提示在 ui_app。 */
+void on_check_update_click(lv_event_t * /*e*/)
+{
+    ui_toast_show("Checking for updates...", user_color_accent, 1500);
+    ui::UiMsgProxy::instance().send_ota_check();
+}
+
 /* 导出日志只做界面：选好存储点 Export 只提示 Coming soon。 */
 void on_export_confirm(lv_event_t *)
 {
@@ -2783,7 +2790,7 @@ void on_export_logs_click(lv_event_t *)
 void on_factory_reset_click(lv_event_t *) { show_coming_soon(); }
 
 /**
- * 卡一：设备型号 / 序列号 / 固件版本 / MCU 版本 / 振镜版本（单行 80）；解锁后多两行 OTA。
+ * 卡一：设备型号 / 序列号 / 固件版本 / 检查更新 / MCU 版本 / 振镜版本（单行 80）；解锁后多两行 OTA。
  * 卡二：导出日志 / 恢复出厂（红字 + 红描边 Restore）。
  * 稿上固件版本下的「连续点击 5 次进入调试模式」按需求不显示，行尾箭头也不画——
  * 这一行不跳转，入口保持不显眼。
@@ -2802,6 +2809,9 @@ void build_about_detail(lv_obj_t *parent)
     row = make_list_row(card, "Firmware Version", nullptr, SET_ROW_H, on_sw_version_click);
     lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, LV_STATE_PRESSED);
     row_add_value(row, UPC_SW_VERSION);
+    /* 主动检查更新：按钮在行右侧。结果弹窗在 ui_app，不绑本页生命周期。 */
+    row = make_list_row(card, "Check for Update", nullptr, SET_ROW_H);
+    make_outline_btn(row, "Check", false, on_check_update_click);
     /* MCU 版本由串口异步返回：先填缓存（首次为 "--"），应答/超时后由 mcu_ver_* 刷新 */
     row = make_list_row(card, "MCU Version", nullptr, SET_ROW_H);
     g_mcu_ver_lbl = row_add_value(row, g_mcu_ver_text);
