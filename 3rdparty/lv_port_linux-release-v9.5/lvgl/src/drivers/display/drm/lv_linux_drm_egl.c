@@ -10,11 +10,14 @@
 
 #if LV_USE_LINUX_DRM && LV_LINUX_DRM_USE_EGL
 
+#include <errno.h>
 #include <fcntl.h>
+#include <stdio.h>
 #include <string.h>
 #include <xf86drmMode.h>
 #include <stdlib.h>
 #include <stdint.h>
+#include <stdbool.h>
 #include <gbm.h>
 #include <drm/drm_fourcc.h>
 #include <xf86drm.h>
@@ -62,6 +65,10 @@ static drmModeCrtc * drm_get_crtc(lv_drm_ctx_t * ctx);
 static void drm_on_page_flip(int fd, unsigned int frame, unsigned int sec, unsigned int usec, void * data);
 static drm_fb_state_t * drm_fb_state_create(lv_drm_ctx_t * ctx, struct gbm_bo * bo);
 static void drm_fb_state_destroy_cb(struct gbm_bo * bo, void * data);
+static int drm_do_page_flip(lv_drm_ctx_t * ctx, int timeout_ms);
+static void drm_drop_in_flight_flip(lv_drm_ctx_t * ctx, const char * why);
+static bool drm_wait_flip_idle(lv_drm_ctx_t * ctx, int timeout_ms);
+static bool drm_wait_free_buffer(lv_drm_ctx_t * ctx, int timeout_ms);
 static void drm_flip_cb(void * driver_data, bool vsync);
 
 static void * drm_create_window(void * driver_data, const lv_egl_native_window_properties_t * properties);
@@ -76,6 +83,11 @@ static inline void set_viewport(lv_display_t * display);
 /**********************
  *      MACROS
  **********************/
+
+/** 等 page-flip / 空 GBM 缓冲的单次 select 上限。超过就放弃这一帧，把主线程还给 LVGL。 */
+#define DRM_FLIP_WAIT_MS 100
+/** fd 一直可读但完不成翻页时，最多空转这么多次就 abort，避免打满一核。 */
+#define DRM_FLIP_MAX_WAKES 8
 
 /**********************
  *   GLOBAL FUNCTIONS
@@ -321,30 +333,111 @@ static void drm_fb_state_destroy_cb(struct gbm_bo * bo, void * data)
 
 static int drm_do_page_flip(lv_drm_ctx_t * ctx, int timeout_ms)
 {
-    fd_set fds;
-    FD_ZERO(&fds);
-    FD_SET(ctx->fd, &fds);
-
     drmEventContext event_ctx;
     lv_memset(&event_ctx, 0, sizeof(event_ctx));
     event_ctx.version = 2;
     event_ctx.page_flip_handler = drm_on_page_flip;
 
-    struct timeval timeout;
     int status;
-    if(timeout_ms >= 0) {
-        timeout.tv_sec = timeout_ms / 1000;
-        timeout.tv_usec = (timeout_ms % 1000) * 1000;
-        status = select(ctx->fd + 1, &fds, NULL, NULL, &timeout);
-    }
-    else {
-        status = select(ctx->fd + 1, &fds, NULL, NULL, NULL);
+    for(;;) {
+        fd_set fds;
+        FD_ZERO(&fds);
+        FD_SET(ctx->fd, &fds);
+
+        if(timeout_ms >= 0) {
+            struct timeval timeout;
+            timeout.tv_sec = timeout_ms / 1000;
+            timeout.tv_usec = (timeout_ms % 1000) * 1000;
+            status = select(ctx->fd + 1, &fds, NULL, NULL, &timeout);
+        }
+        else {
+            status = select(ctx->fd + 1, &fds, NULL, NULL, NULL);
+        }
+
+        if(status < 0 && errno == EINTR) {
+            continue;
+        }
+        break;
     }
 
-    if(status == 1) {
+    if(status > 0) {
         drmHandleEvent(ctx->fd, &event_ctx);
     }
     return status;
+}
+
+/**
+ * 放弃尚未完成的 page-flip，把 in-flight 缓冲还回 GBM。
+ * 屏幕可能停在旧帧；下一帧会重新 PageFlip。stderr 进 topic_boot_lifecycle.log。
+ */
+static void drm_drop_in_flight_flip(lv_drm_ctx_t * ctx, const char * why)
+{
+    if(!ctx || !ctx->gbm_bo_flipped) {
+        return;
+    }
+    fprintf(stderr, "drm_egl flip abort: %s\n", why ? why : "?");
+    gbm_surface_release_buffer(ctx->gbm_surface, ctx->gbm_bo_flipped);
+    ctx->gbm_bo_flipped = NULL;
+}
+
+/** 等到 gbm_bo_flipped 清空；超时 / 无进展则 abort。 */
+static bool drm_wait_flip_idle(lv_drm_ctx_t * ctx, int timeout_ms)
+{
+    if(!ctx->gbm_bo_flipped) {
+        return true;
+    }
+
+    int wakes = 0;
+    while(ctx->gbm_bo_flipped) {
+        const int status = drm_do_page_flip(ctx, timeout_ms);
+        if(status < 0) {
+            drm_drop_in_flight_flip(ctx, strerror(errno));
+            return false;
+        }
+        if(status == 0) {
+            drm_drop_in_flight_flip(ctx, "timeout");
+            return false;
+        }
+        /* select 返回可读，但不是 page-flip：fd 卡在可读态时会空转。 */
+        if(ctx->gbm_bo_flipped && ++wakes > DRM_FLIP_MAX_WAKES) {
+            drm_drop_in_flight_flip(ctx, "no page flip");
+            return false;
+        }
+    }
+    return true;
+}
+
+/** 等到 GBM 有空缓冲可供下一帧 GL 使用。 */
+static bool drm_wait_free_buffer(lv_drm_ctx_t * ctx, int timeout_ms)
+{
+    int wakes = 0;
+    while(!gbm_surface_has_free_buffers(ctx->gbm_surface)) {
+        if(!ctx->gbm_bo_flipped) {
+            /* 没有在飞翻页却仍无空位：状态已坏，松开 pending 让主循环继续。 */
+            fprintf(stderr, "drm_egl flip abort: no free buffer without in-flight flip\n");
+            if(ctx->gbm_bo_pending) {
+                gbm_surface_release_buffer(ctx->gbm_surface, ctx->gbm_bo_pending);
+                ctx->gbm_bo_pending = NULL;
+            }
+            return false;
+        }
+
+        const int status = drm_do_page_flip(ctx, timeout_ms);
+        if(status < 0) {
+            drm_drop_in_flight_flip(ctx, strerror(errno));
+            return false;
+        }
+        if(status == 0) {
+            drm_drop_in_flight_flip(ctx, "timeout waiting free buffer");
+            return false;
+        }
+        if(!gbm_surface_has_free_buffers(ctx->gbm_surface) &&
+           ++wakes > DRM_FLIP_MAX_WAKES) {
+            drm_drop_in_flight_flip(ctx, "no free buffer");
+            return false;
+        }
+    }
+    return true;
 }
 
 static void drm_on_page_flip(int fd, unsigned int frame, unsigned int sec, unsigned int usec, void * data)
@@ -354,6 +447,12 @@ static void drm_on_page_flip(int fd, unsigned int frame, unsigned int sec, unsig
     LV_UNUSED(sec);
     LV_UNUSED(usec);
     lv_drm_ctx_t * ctx = (lv_drm_ctx_t *) data;
+
+    /* timeout abort 已把 flipped 还回 GBM；迟到的完成事件必须忽略，
+     * 否则会把仍在扫的 presented 误释放掉。 */
+    if(!ctx->gbm_bo_flipped) {
+        return;
+    }
 
     if(ctx->gbm_bo_presented) {
         gbm_surface_release_buffer(ctx->gbm_surface, ctx->gbm_bo_presented);
@@ -424,9 +523,12 @@ static drm_fb_state_t * drm_fb_state_create(lv_drm_ctx_t * ctx, struct gbm_bo * 
 static void drm_flip_cb(void * driver_data, bool vsync)
 {
     lv_drm_ctx_t * ctx = (lv_drm_ctx_t *) driver_data;
+    /* 不论时 vsync 恒为 false；上一发未完成时不能只非阻塞探一次，否则会占死 GBM。 */
+    LV_UNUSED(vsync);
 
     if(ctx->gbm_bo_pending) {
         gbm_surface_release_buffer(ctx->gbm_surface, ctx->gbm_bo_pending);
+        ctx->gbm_bo_pending = NULL;
     }
     ctx->gbm_bo_pending = gbm_surface_lock_front_buffer(ctx->gbm_surface);
 
@@ -436,19 +538,15 @@ static void drm_flip_cb(void * driver_data, bool vsync)
     }
 
     drm_fb_state_t * pending_fb = drm_fb_state_create(ctx, ctx->gbm_bo_pending);
-
-    if(!ctx->gbm_bo_pending || !pending_fb) {
+    if(!pending_fb) {
         LV_LOG_ERROR("Failed to get gbm front buffer");
+        gbm_surface_release_buffer(ctx->gbm_surface, ctx->gbm_bo_pending);
+        ctx->gbm_bo_pending = NULL;
         return;
     }
 
-    if(vsync) {
-        while(ctx->gbm_bo_flipped && drm_do_page_flip(ctx, -1) >= 0)
-            continue;
-    }
-    else {
-        drm_do_page_flip(ctx, 0);
-    }
+    /* 有界等待上一发翻页完成；失败则 drop in-flight，避免主线程卡死。 */
+    (void)drm_wait_flip_idle(ctx, DRM_FLIP_WAIT_MS);
 
     if(!ctx->gbm_bo_flipped) {
         if(!ctx->crtc_isset) {
@@ -456,34 +554,39 @@ static void drm_flip_cb(void * driver_data, bool vsync)
                                         &(ctx->drm_connector->connector_id), 1, ctx->drm_mode);
             if(status < 0) {
                 LV_LOG_ERROR("Failed to set crtc: %d", status);
+                gbm_surface_release_buffer(ctx->gbm_surface, ctx->gbm_bo_pending);
+                ctx->gbm_bo_pending = NULL;
                 return;
             }
             ctx->crtc_isset = true;
-            if(ctx->gbm_bo_presented)
+            if(ctx->gbm_bo_presented) {
                 gbm_surface_release_buffer(ctx->gbm_surface, ctx->gbm_bo_presented);
+            }
             ctx->gbm_bo_presented = ctx->gbm_bo_pending;
             ctx->gbm_bo_flipped = NULL;
             ctx->gbm_bo_pending = NULL;
             return;
         }
 
-
         uint32_t flip_flags = DRM_MODE_PAGE_FLIP_EVENT;
         int status = drmModePageFlip(ctx->fd, ctx->drm_encoder->crtc_id, pending_fb->fb_id, flip_flags, ctx);
         if(status < 0) {
             LV_LOG_ERROR("Failed to enqueue page flip: %d", status);
+            gbm_surface_release_buffer(ctx->gbm_surface, ctx->gbm_bo_pending);
+            ctx->gbm_bo_pending = NULL;
             return;
         }
         ctx->gbm_bo_flipped = ctx->gbm_bo_pending;
         ctx->gbm_bo_pending = NULL;
     }
-
-    /* We need to ensure our surface has a free buffer, otherwise GL will
-     * have no buffer to render on. */
-    while(!gbm_surface_has_free_buffers(ctx->gbm_surface) &&
-          drm_do_page_flip(ctx, -1) >= 0) {
-        continue;
+    else if(ctx->gbm_bo_pending) {
+        /* 上一发仍在飞（防御分支）：丢掉本帧，避免三块 GBM 被占死。 */
+        gbm_surface_release_buffer(ctx->gbm_surface, ctx->gbm_bo_pending);
+        ctx->gbm_bo_pending = NULL;
     }
+
+    /* 保证下一帧 GL 有空缓冲；同样有超时，不再 select(-1) 无限等。 */
+    (void)drm_wait_free_buffer(ctx, DRM_FLIP_WAIT_MS);
 }
 
 static lv_result_t drm_device_init(lv_drm_ctx_t * ctx, const char * path)
