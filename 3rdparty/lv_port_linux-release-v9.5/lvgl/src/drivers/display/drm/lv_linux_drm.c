@@ -13,6 +13,7 @@
 #include <fcntl.h>
 #include <poll.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <sys/mman.h>
 #include <time.h>
 #include <unistd.h>
@@ -113,6 +114,7 @@ static uint32_t tick_get_cb(void);
 
 static int drm_setup_buffers(drm_dev_t * drm_dev);
 static int drm_dmabuf_set_plane(drm_dev_t * drm_dev, drm_buffer_t * buf);
+static void drm_drop_pending_flip(drm_dev_t * drm_dev, const char * why);
 static void drm_flush_wait(lv_display_t * drm_dev);
 static void drm_flush(lv_display_t * disp, const lv_area_t * area, uint8_t * px_map);
 static void drm_dmabuf_set_active_buf(lv_event_t * event);
@@ -457,6 +459,10 @@ static int drm_dmabuf_set_plane(drm_dev_t * drm_dev, drm_buffer_t * buf)
 
 #endif
 
+    /* 上一发翻页还没完成就再 commit，会把 req 指针盖掉，完成回调释放的是新请求。 */
+    if(drm_dev->req) {
+        drm_drop_pending_flip(drm_dev, "commit while flip pending");
+    }
     drm_dev->req = drmModeAtomicAlloc();
 
     /* On first Atomic commit, do a modeset */
@@ -1041,24 +1047,59 @@ static int drm_setup_buffers(drm_dev_t * drm_dev)
     return 0;
 }
 
+/**
+ * 放弃尚未等到的 page-flip。
+ * page_flip_handler 只在 req 非空时释放，这里先释放再置空，晚到的事件不会二次 free。
+ * 放弃后主线程可以回到 LVGL；下一帧会重新 commit。
+ */
+static void drm_drop_pending_flip(drm_dev_t * drm_dev, const char * why)
+{
+    if(!drm_dev || !drm_dev->req) return;
+    fprintf(stderr, "drm_flush_wait abort: %s\n", why ? why : "?");
+    drmModeAtomicFree(drm_dev->req);
+    drm_dev->req = NULL;
+}
+
 static void drm_flush_wait(lv_display_t * disp)
 {
     drm_dev_t * drm_dev = lv_display_get_driver_data(disp);
+    if(!drm_dev || !drm_dev->req) return;
 
     struct pollfd pfd;
     pfd.fd = drm_dev->fd;
     pfd.events = POLLIN;
 
+    /*
+     * 一次翻页最多等几个 vblank（100ms）。
+     * poll 在 POLLERR/POLLHUP 上会立刻返回，若不看 revents、也不拆 req，
+     * 这个 while 会把 UI 主线程空转到进程被杀掉。
+     */
+    int wakes = 0;
     while(drm_dev->req) {
         int ret;
         do {
-            ret = poll(&pfd, 1, -1);
+            pfd.revents = 0;
+            ret = poll(&pfd, 1, 100);
         } while(ret == -1 && errno == EINTR);
 
-        if(ret > 0)
-            drmHandleEvent(drm_dev->fd, &drm_dev->drm_event_ctx);
-        else {
-            LV_LOG_ERROR("poll failed: %s", strerror(errno));
+        if(ret < 0) {
+            drm_drop_pending_flip(drm_dev, strerror(errno));
+            return;
+        }
+        if(ret == 0) {
+            drm_drop_pending_flip(drm_dev, "timeout");
+            return;
+        }
+        if(pfd.revents & (POLLERR | POLLHUP | POLLNVAL)) {
+            drm_drop_pending_flip(drm_dev, "fd error");
+            return;
+        }
+
+        drmHandleEvent(drm_dev->fd, &drm_dev->drm_event_ctx);
+
+        /* 读到的不是 page-flip，req 还在，fd 却一直可读。 */
+        if(drm_dev->req && ++wakes > 8) {
+            drm_drop_pending_flip(drm_dev, "no page flip");
             return;
         }
     }
